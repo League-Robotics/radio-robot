@@ -1,11 +1,11 @@
 ---
-id: "002"
-title: "Control Layer and Core Motion Commands"
-status: open
+id: '002'
+title: Control Layer and Core Motion Commands
+status: done
 branch: sprint/002-control-layer-and-core-motion-commands
 use-cases: []
 issues:
-  - plan-c-port-of-radio-robot-firmware
+- plan-c-port-of-radio-robot-firmware
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -130,5 +130,9 @@ Before tickets can be created, all of the following must be true:
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 001 | Implement MotorController | — |
+| 002 | Implement Odometry | — |
+| 003 | Implement CommandProcessor | 001, 002 |
+| 004 | Wire CommandProcessor into Robot and build verification | 003 |
 
 Tickets execute serially in the order listed.

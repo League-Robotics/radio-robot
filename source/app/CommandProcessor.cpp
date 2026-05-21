@@ -1,0 +1,536 @@
+// CommandProcessor.cpp — wire-protocol parser and drive-mode state machine.
+// C++ port of command.ts::handleCommand() and command.ts::tick().
+//
+// All speeds in mm/s, all distances in mm. Integer protocol, no floats on wire.
+// Commands use sign-prefixed numbers as delimiters (no spaces) to fit within
+// the 19-character radio relay limit.
+
+#include "CommandProcessor.h"
+#include <cstring>
+#include <cstdio>
+#include <cstdlib>
+#include <cctype>
+
+// ---------------------------------------------------------------------------
+// Constructor
+// ---------------------------------------------------------------------------
+
+CommandProcessor::CommandProcessor()
+    : _motor(nullptr)
+    , _mc(nullptr)
+    , _odo(nullptr)
+    , _otos(nullptr)
+    , _line(nullptr)
+    , _color(nullptr)
+    , _gripper(nullptr)
+    , _portio(nullptr)
+    , _mode(DriveMode::IDLE)
+    , _lastSMs(0)
+    , _tgtL(0.0f)
+    , _tgtR(0.0f)
+    , _tEndMs(0)
+    , _dEncStartL(0)
+    , _dEncStartR(0)
+    , _dTargetMm(0)
+    , _dTimeoutMs(0)
+    , _encTickCount(0)
+    , _lastTickMs(0)
+    , _currentTimeMs(0)
+    , _prevOdoEncL(0)
+    , _prevOdoEncR(0)
+{
+    params.mmPerDegL      = 0.487f;
+    params.mmPerDegR      = 0.481f;
+    params.distScale      = 0.94f;
+    params.turnScale      = 1.07f;
+    params.minSpeedMms    = 50;
+    params.tickMs         = 20;
+    params.sTimeoutMs     = 200;
+    params.encReportEvery = 2;
+    params.trackwidthMm   = 120.0f;
+}
+
+// ---------------------------------------------------------------------------
+// init
+// ---------------------------------------------------------------------------
+
+void CommandProcessor::init(NezhaV2*         motor,
+                             MotorController* mc,
+                             Odometry*        odo,
+                             OtosSensor*      otos,
+                             LineSensor*      line,
+                             ColorSensor*     color,
+                             GripperServo*    gripper,
+                             PortIO*          portio)
+{
+    _motor   = motor;
+    _mc      = mc;
+    _odo     = odo;
+    _otos    = otos;
+    _line    = line;
+    _color   = color;
+    _gripper = gripper;
+    _portio  = portio;
+}
+
+// ---------------------------------------------------------------------------
+// Static helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse sign-prefixed integer arguments from a string.
+ * Example: "+200-150"  -> out[0]=200, out[1]=-150, returns 2
+ * Example: "+200+200+1000" -> out[0]=200, out[1]=200, out[2]=1000, returns 3
+ */
+int CommandProcessor::parseSignedArgs(const char* s, int32_t* out, int maxArgs)
+{
+    int    count    = 0;
+    bool   inNum    = false;
+    bool   negative = false;
+    int32_t accum   = 0;
+
+    for (const char* p = s; *p != '\0' && count < maxArgs; ++p) {
+        char ch = *p;
+        if (ch == '+' || ch == '-') {
+            if (inNum) {
+                out[count++] = negative ? -accum : accum;
+            }
+            inNum    = true;
+            negative = (ch == '-');
+            accum    = 0;
+        } else if (ch >= '0' && ch <= '9') {
+            if (inNum) {
+                accum = accum * 10 + (ch - '0');
+            }
+            // digits before any sign are ignored (shouldn't occur in protocol)
+        }
+    }
+    if (inNum && count < maxArgs) {
+        out[count++] = negative ? -accum : accum;
+    }
+    return count;
+}
+
+int CommandProcessor::clampInt(int v, int lo, int hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+int CommandProcessor::clampMinSpeed(int mms, int minSpeedMms)
+{
+    if (mms == 0) return 0;
+    if (mms > 0 && mms < minSpeedMms) return minSpeedMms;
+    if (mms < 0 && mms > -minSpeedMms) return -minSpeedMms;
+    return mms;
+}
+
+// ---------------------------------------------------------------------------
+// Private helpers
+// ---------------------------------------------------------------------------
+
+void CommandProcessor::fullStop(ReplyFn replyFn, void* ctx)
+{
+    _mc->stop();
+    _mode         = DriveMode::IDLE;
+    _tgtL         = 0.0f;
+    _tgtR         = 0.0f;
+    _encTickCount = 0;
+    (void)replyFn;
+    (void)ctx;
+}
+
+void CommandProcessor::reportEncoders(ReplyFn replyFn, void* ctx)
+{
+    int32_t l, r;
+    _mc->getEncoderPositions(l, r);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "ENC%+d%+d", (int)l, (int)r);
+    replyFn(buf, ctx);
+}
+
+void CommandProcessor::reportOdo(ReplyFn replyFn, void* ctx)
+{
+    int32_t x, y, h;
+    _odo->getPose(x, y, h);
+    char buf[48];
+    snprintf(buf, sizeof(buf), "SO%+d%+d%+d", (int)x, (int)y, (int)h);
+    replyFn(buf, ctx);
+}
+
+// ---------------------------------------------------------------------------
+// process — command dispatch
+// ---------------------------------------------------------------------------
+
+void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
+{
+    // Copy to local uppercase buffer (128 bytes max, NUL-terminated)
+    char buf[128];
+    int  len = 0;
+    for (const char* p = line; *p != '\0' && len < 127; ++p) {
+        char ch = *p;
+        // Skip leading/trailing whitespace during copy
+        if ((unsigned char)ch < 0x21 && len == 0) continue;  // skip leading whitespace
+        buf[len++] = (char)toupper((unsigned char)ch);
+    }
+    // Trim trailing whitespace
+    while (len > 0 && (unsigned char)buf[len - 1] < 0x21) --len;
+    buf[len] = '\0';
+
+    if (len == 0) return;
+
+    // ── X or STOP — full stop ───────────────────────────────────────────────
+    if ((len == 1 && buf[0] == 'X') ||
+        (len == 4 && memcmp(buf, "STOP", 4) == 0)) {
+        fullStop(replyFn, ctx);
+        replyFn("ACK:X", ctx);
+        return;
+    }
+
+    // ── S<L><R> — streaming drive ───────────────────────────────────────────
+    // Must start with 'S' followed by '+' or '-' (not "SO", "SZ", "SI")
+    if (buf[0] == 'S' && len > 1 && (buf[1] == '+' || buf[1] == '-')) {
+        int32_t args[2] = {0, 0};
+        int n = parseSignedArgs(buf + 1, args, 2);
+        if (n < 2) {
+            char errbuf[140];
+            snprintf(errbuf, sizeof(errbuf), "ERR:%s", buf);
+            replyFn(errbuf, ctx);
+            return;
+        }
+        int leftMms  = clampMinSpeed((int)args[0], (int)params.minSpeedMms);
+        int rightMms = clampMinSpeed((int)args[1], (int)params.minSpeedMms);
+
+        if (_mode != DriveMode::STREAMING) {
+            _mc->resetIntegrators();
+        }
+        _mc->setTarget((float)leftMms, (float)rightMms);
+        _tgtL    = (float)leftMms;
+        _tgtR    = (float)rightMms;
+        _mode    = DriveMode::STREAMING;
+        _lastSMs = _currentTimeMs;
+
+        char reply[48];
+        snprintf(reply, sizeof(reply), "ACK:S %d %d", leftMms, rightMms);
+        replyFn(reply, ctx);
+        return;
+    }
+
+    // ── T<L><R><ms> — timed drive ──────────────────────────────────────────
+    if (buf[0] == 'T' && len > 1) {
+        int32_t args[3] = {0, 0, 0};
+        int n = parseSignedArgs(buf + 1, args, 3);
+        if (n < 3) {
+            char errbuf[140];
+            snprintf(errbuf, sizeof(errbuf), "ERR:%s", buf);
+            replyFn(errbuf, ctx);
+            return;
+        }
+        int leftMms    = (int)args[0];
+        int rightMms   = (int)args[1];
+        int durationMs = clampInt((int)args[2], 1, 5000);
+
+        _mc->resetIntegrators();
+        _mc->setTarget((float)leftMms, (float)rightMms);
+        _tgtL   = (float)leftMms;
+        _tgtR   = (float)rightMms;
+        _tEndMs = _lastTickMs + (uint32_t)durationMs;
+        _mode   = DriveMode::TIMED;
+
+        char reply[64];
+        snprintf(reply, sizeof(reply), "ACK:T %d %d %d", leftMms, rightMms, durationMs);
+        replyFn(reply, ctx);
+        return;
+    }
+
+    // ── D<L><R><mm> — distance drive ───────────────────────────────────────
+    if (buf[0] == 'D' && len > 1) {
+        int32_t args[3] = {0, 0, 0};
+        int n = parseSignedArgs(buf + 1, args, 3);
+        if (n < 3) {
+            char errbuf[140];
+            snprintf(errbuf, sizeof(errbuf), "ERR:%s", buf);
+            replyFn(errbuf, ctx);
+            return;
+        }
+        int leftMms  = (int)args[0];
+        int rightMms = (int)args[1];
+        int targetMm = abs((int)args[2]);
+        if (targetMm < 1) targetMm = 1;
+
+        _mc->resetIntegrators();
+        _mc->setTarget((float)leftMms, (float)rightMms);
+        _tgtL = (float)leftMms;
+        _tgtR = (float)rightMms;
+        _mc->resetEncoderAccumulators();
+        _mc->getEncoderPositions(_dEncStartL, _dEncStartR);
+        _dTargetMm  = targetMm;
+        _dTimeoutMs = _lastTickMs + 5000;
+        _mode       = DriveMode::DISTANCE;
+
+        char reply[64];
+        snprintf(reply, sizeof(reply), "ACK:D %d %d %d", leftMms, rightMms, targetMm);
+        replyFn(reply, ctx);
+        return;
+    }
+
+    // ── ENC — query encoder positions ──────────────────────────────────────
+    if (len == 3 && memcmp(buf, "ENC", 3) == 0) {
+        reportEncoders(replyFn, ctx);
+        return;
+    }
+
+    // ── EZ — zero encoders ─────────────────────────────────────────────────
+    if (len == 2 && memcmp(buf, "EZ", 2) == 0) {
+        _mc->resetEncoderAccumulators();
+        replyFn("ACK:EZ", ctx);
+        return;
+    }
+
+    // ── SO — query odometry pose ────────────────────────────────────────────
+    if (len == 2 && memcmp(buf, "SO", 2) == 0) {
+        reportOdo(replyFn, ctx);
+        return;
+    }
+
+    // ── SZ — zero odometry ─────────────────────────────────────────────────
+    if (len == 2 && memcmp(buf, "SZ", 2) == 0) {
+        _odo->zero();
+        replyFn("ACK:SZ", ctx);
+        return;
+    }
+
+    // ── SI<x><y><h> — set odometry pose ────────────────────────────────────
+    if (len > 2 && memcmp(buf, "SI", 2) == 0) {
+        int32_t args[3] = {0, 0, 0};
+        int n = parseSignedArgs(buf + 2, args, 3);
+        if (n < 3) {
+            char errbuf[140];
+            snprintf(errbuf, sizeof(errbuf), "ERR:%s", buf);
+            replyFn(errbuf, ctx);
+            return;
+        }
+        _odo->setPose(args[0], args[1], args[2]);
+        char reply[64];
+        snprintf(reply, sizeof(reply), "ACK:SI %d %d %d",
+                 (int)args[0], (int)args[1], (int)args[2]);
+        replyFn(reply, ctx);
+        return;
+    }
+
+    // ── K — calibration dump or setter ─────────────────────────────────────
+    if (buf[0] == 'K') {
+        // K alone — dump all params
+        if (len == 1) {
+            char kbuf[32];
+            snprintf(kbuf, sizeof(kbuf), "K:KML:%+d", (int)(params.mmPerDegL * 1000.0f + 0.5f));
+            replyFn(kbuf, ctx);
+            snprintf(kbuf, sizeof(kbuf), "K:KMR:%+d", (int)(params.mmPerDegR * 1000.0f + 0.5f));
+            replyFn(kbuf, ctx);
+            if (_mc) {
+                snprintf(kbuf, sizeof(kbuf), "K:KFF:%+d", (int)(_mc->gains.kFF * 1000.0f + 0.5f));
+                replyFn(kbuf, ctx);
+                snprintf(kbuf, sizeof(kbuf), "K:KSP:%+d", (int)(_mc->gains.kP * 1000.0f + 0.5f));
+                replyFn(kbuf, ctx);
+                snprintf(kbuf, sizeof(kbuf), "K:KSI:%+d", (int)(_mc->gains.kI * 1000.0f + 0.5f));
+                replyFn(kbuf, ctx);
+                snprintf(kbuf, sizeof(kbuf), "K:KIC:%+d", (int)(_mc->gains.iClamp));
+                replyFn(kbuf, ctx);
+                snprintf(kbuf, sizeof(kbuf), "K:KSR:%+d", (int)(_mc->gains.kRatio * 1000.0f + 0.5f));
+                replyFn(kbuf, ctx);
+            } else {
+                replyFn("K:KFF:+150", ctx);
+                replyFn("K:KSP:+50", ctx);
+                replyFn("K:KSI:+200", ctx);
+                replyFn("K:KIC:+60", ctx);
+                replyFn("K:KSR:+10", ctx);
+            }
+            snprintf(kbuf, sizeof(kbuf), "K:KSM:%+d", (int)params.minSpeedMms);
+            replyFn(kbuf, ctx);
+            snprintf(kbuf, sizeof(kbuf), "K:KSS:%+d", (int)params.sTimeoutMs);
+            replyFn(kbuf, ctx);
+            snprintf(kbuf, sizeof(kbuf), "K:KTR:%+d", (int)params.tickMs);
+            replyFn(kbuf, ctx);
+            snprintf(kbuf, sizeof(kbuf), "K:KER:%+d", (int)params.encReportEvery);
+            replyFn(kbuf, ctx);
+            snprintf(kbuf, sizeof(kbuf), "K:KSD:%+d", (int)(params.distScale * 100.0f + 0.5f));
+            replyFn(kbuf, ctx);
+            snprintf(kbuf, sizeof(kbuf), "K:KST:%+d", (int)(params.turnScale * 100.0f + 0.5f));
+            replyFn(kbuf, ctx);
+            return;
+        }
+
+        // K setter — must be at least 4 chars: K + 2-char key + at least one sign/digit
+        if (len >= 4) {
+            // Extract 2-char key (chars 1..2) and parse 1 arg from chars 3+
+            char key[3] = { buf[1], buf[2], '\0' };
+            int32_t args[1] = {0};
+            int n = parseSignedArgs(buf + 3, args, 1);
+            if (n < 1) {
+                char errbuf[140];
+                snprintf(errbuf, sizeof(errbuf), "ERR:%s", buf);
+                replyFn(errbuf, ctx);
+                return;
+            }
+            int v = (int)args[0];
+            char reply[48];
+
+            if (memcmp(key, "ML", 2) == 0) {
+                params.mmPerDegL = v / 1000.0f;
+                snprintf(reply, sizeof(reply), "ACK:KML %d", (int)(params.mmPerDegL * 1000.0f + 0.5f));
+                replyFn(reply, ctx);
+                return;
+            }
+            if (memcmp(key, "MR", 2) == 0) {
+                params.mmPerDegR = v / 1000.0f;
+                snprintf(reply, sizeof(reply), "ACK:KMR %d", (int)(params.mmPerDegR * 1000.0f + 0.5f));
+                replyFn(reply, ctx);
+                return;
+            }
+            if (_mc) {
+                if (memcmp(key, "FF", 2) == 0) {
+                    _mc->gains.kFF = v / 1000.0f;
+                    snprintf(reply, sizeof(reply), "ACK:KFF %d", (int)(_mc->gains.kFF * 1000.0f + 0.5f));
+                    replyFn(reply, ctx);
+                    return;
+                }
+                if (memcmp(key, "SP", 2) == 0) {
+                    _mc->gains.kP = v / 1000.0f;
+                    snprintf(reply, sizeof(reply), "ACK:KSP %d", (int)(_mc->gains.kP * 1000.0f + 0.5f));
+                    replyFn(reply, ctx);
+                    return;
+                }
+                if (memcmp(key, "SI", 2) == 0) {
+                    _mc->gains.kI = v / 1000.0f;
+                    snprintf(reply, sizeof(reply), "ACK:KSI %d", (int)(_mc->gains.kI * 1000.0f + 0.5f));
+                    replyFn(reply, ctx);
+                    return;
+                }
+                if (memcmp(key, "IC", 2) == 0) {
+                    _mc->gains.iClamp = (float)v;
+                    snprintf(reply, sizeof(reply), "ACK:KIC %d", (int)_mc->gains.iClamp);
+                    replyFn(reply, ctx);
+                    return;
+                }
+                if (memcmp(key, "SR", 2) == 0) {
+                    _mc->gains.kRatio = v / 1000.0f;
+                    snprintf(reply, sizeof(reply), "ACK:KSR %d", (int)(_mc->gains.kRatio * 1000.0f + 0.5f));
+                    replyFn(reply, ctx);
+                    return;
+                }
+            }
+            if (memcmp(key, "SM", 2) == 0) {
+                params.minSpeedMms = v < 0 ? 0 : v;
+                snprintf(reply, sizeof(reply), "ACK:KSM %d", (int)params.minSpeedMms);
+                replyFn(reply, ctx);
+                return;
+            }
+            if (memcmp(key, "SS", 2) == 0) {
+                params.sTimeoutMs = clampInt(v, 50, 5000);
+                snprintf(reply, sizeof(reply), "ACK:KSS %d", (int)params.sTimeoutMs);
+                replyFn(reply, ctx);
+                return;
+            }
+            if (memcmp(key, "TR", 2) == 0) {
+                params.tickMs = clampInt(v, 5, 100);
+                snprintf(reply, sizeof(reply), "ACK:KTR %d", (int)params.tickMs);
+                replyFn(reply, ctx);
+                return;
+            }
+            if (memcmp(key, "ER", 2) == 0) {
+                params.encReportEvery = clampInt(v, 1, 20);
+                snprintf(reply, sizeof(reply), "ACK:KER %d", (int)params.encReportEvery);
+                replyFn(reply, ctx);
+                return;
+            }
+            if (memcmp(key, "SD", 2) == 0) {
+                params.distScale = v / 100.0f;
+                snprintf(reply, sizeof(reply), "ACK:KSD %d", (int)(params.distScale * 100.0f + 0.5f));
+                replyFn(reply, ctx);
+                return;
+            }
+            if (memcmp(key, "ST", 2) == 0) {
+                params.turnScale = v / 100.0f;
+                snprintf(reply, sizeof(reply), "ACK:KST %d", (int)(params.turnScale * 100.0f + 0.5f));
+                replyFn(reply, ctx);
+                return;
+            }
+        }
+
+        // Unrecognized K sub-command
+        char errbuf[140];
+        snprintf(errbuf, sizeof(errbuf), "ERR:%s", buf);
+        replyFn(errbuf, ctx);
+        return;
+    }
+
+    // ── Default — unrecognized command ─────────────────────────────────────
+    char errbuf[140];
+    snprintf(errbuf, sizeof(errbuf), "ERR:%s", buf);
+    replyFn(errbuf, ctx);
+}
+
+// ---------------------------------------------------------------------------
+// tick — drive-mode state machine
+// ---------------------------------------------------------------------------
+
+void CommandProcessor::tick(uint32_t now_ms, ReplyFn replyFn, void* ctx)
+{
+    // Throttle to tickMs cadence
+    if ((now_ms - _lastTickMs) < (uint32_t)params.tickMs) return;
+
+    float dt_s    = (float)(now_ms - _lastTickMs) / 1000.0f;
+    _lastTickMs   = now_ms;
+    _currentTimeMs = now_ms;
+
+    // Run motor controller and update odometry
+    if (_mode != DriveMode::IDLE) {
+        _mc->tick(dt_s);
+
+        // Update odometry from encoder deltas
+        int32_t encL, encR;
+        _mc->getEncoderPositions(encL, encR);
+        float dL = (float)(encL - _prevOdoEncL);
+        float dR = (float)(encR - _prevOdoEncR);
+        _prevOdoEncL = encL;
+        _prevOdoEncR = encR;
+        _odo->update(dL, dR, params.trackwidthMm);
+    }
+
+    // S-mode watchdog
+    if (_mode == DriveMode::STREAMING) {
+        if ((now_ms - _lastSMs) > (uint32_t)params.sTimeoutMs) {
+            fullStop(replyFn, ctx);
+            replyFn("LOG:SAFETY_STOP", ctx);
+        }
+    }
+
+    // T-mode: stop when deadline reached
+    if (_mode == DriveMode::TIMED && now_ms >= _tEndMs) {
+        fullStop(replyFn, ctx);
+        reportOdo(replyFn, ctx);
+        replyFn("ACK:T+DONE", ctx);
+    }
+
+    // D-mode: stop when average encoder travel >= target, or on timeout
+    if (_mode == DriveMode::DISTANCE) {
+        int32_t l, r;
+        _mc->getEncoderPositions(l, r);
+        int32_t traveled = (abs(l - _dEncStartL) + abs(r - _dEncStartR)) / 2;
+        if (traveled >= _dTargetMm || now_ms >= _dTimeoutMs) {
+            fullStop(replyFn, ctx);
+            reportOdo(replyFn, ctx);
+            replyFn("ACK:D+DONE", ctx);
+        }
+    }
+
+    // Streaming encoder output every encReportEvery ticks
+    if (_mode != DriveMode::IDLE) {
+        _encTickCount++;
+        if (_encTickCount >= params.encReportEvery) {
+            reportEncoders(replyFn, ctx);
+            _encTickCount = 0;
+        }
+    }
+}
