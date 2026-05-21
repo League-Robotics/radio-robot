@@ -559,7 +559,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
 
     // ── OL — linear scalar get/set ─────────────────────────────────────────
     if (len >= 2 && buf[0] == 'O' && buf[1] == 'L') {
-        if (!_otos) { char e[32]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return; }
+        if (!_otos) { char e[140]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return; }
         if (len == 2) {
             char r[16];
             snprintf(r, sizeof(r), "OL%+d", (int)_otos->getLinearScalar());
@@ -581,7 +581,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
 
     // ── OA — angular scalar get/set ────────────────────────────────────────
     if (len >= 2 && buf[0] == 'O' && buf[1] == 'A') {
-        if (!_otos) { char e[32]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return; }
+        if (!_otos) { char e[140]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return; }
         if (len == 2) {
             char r[16];
             snprintf(r, sizeof(r), "OA%+d", (int)_otos->getAngularScalar());
