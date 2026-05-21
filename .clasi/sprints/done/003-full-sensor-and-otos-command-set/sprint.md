@@ -1,11 +1,11 @@
 ---
-id: "003"
-title: "Full Sensor and OTOS Command Set"
-status: open
+id: '003'
+title: Full Sensor and OTOS Command Set
+status: done
 branch: sprint/003-full-sensor-and-otos-command-set
 use-cases: []
 issues:
-  - plan-c-port-of-radio-robot-firmware
+- plan-c-port-of-radio-robot-firmware
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -134,5 +134,7 @@ Before tickets can be created, all of the following must be true:
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 001 | Add OTOS and sensor command handlers to CommandProcessor | — |
+| 002 | Build verification and deploy | 001 |
 
 Tickets execute serially in the order listed.

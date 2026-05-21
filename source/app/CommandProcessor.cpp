@@ -6,6 +6,11 @@
 // the 19-character radio relay limit.
 
 #include "CommandProcessor.h"
+#include "OtosSensor.h"
+#include "LineSensor.h"
+#include "ColorSensor.h"
+#include "GripperServo.h"
+#include "PortIO.h"
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -38,6 +43,7 @@ CommandProcessor::CommandProcessor()
     , _currentTimeMs(0)
     , _prevOdoEncL(0)
     , _prevOdoEncR(0)
+    , _currentGripperAngle(0)
 {
     params.mmPerDegL      = 0.487f;
     params.mmPerDegR      = 0.481f;
@@ -465,6 +471,230 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
         return;
     }
 
+    // ── OI — OTOS init only ────────────────────────────────────────────────
+    if (len == 2 && memcmp(buf, "OI", 2) == 0) {
+        if (!_otos) { replyFn("ERR:OI", ctx); return; }
+        _otos->begin();
+        _otos->init();
+        replyFn("ACK:OI", ctx);
+        return;
+    }
+
+    // ── OK — calibrate IMU ─────────────────────────────────────────────────
+    if (buf[0] == 'O' && len >= 2 && buf[1] == 'K') {
+        if (!_otos) { replyFn("ERR:OK", ctx); return; }
+        int samples = 255;
+        if (len > 2) {
+            int32_t args[1] = {0};
+            int n = parseSignedArgs(buf + 2, args, 1);
+            if (n >= 1) {
+                samples = clampInt((int)args[0], 1, 255);
+            }
+        }
+        _otos->calibrateImu((uint8_t)samples);
+        replyFn("ACK:OK", ctx);
+        return;
+    }
+
+    // ── OZ — reset tracking ────────────────────────────────────────────────
+    if (len == 2 && memcmp(buf, "OZ", 2) == 0) {
+        if (!_otos) { replyFn("ERR:OZ", ctx); return; }
+        _otos->resetTracking();
+        replyFn("ACK:OZ", ctx);
+        return;
+    }
+
+    // ── OR — get velocity ──────────────────────────────────────────────────
+    if (len == 2 && memcmp(buf, "OR", 2) == 0) {
+        if (!_otos) { replyFn("ERR:OR", ctx); return; }
+        int16_t vx = 0, vy = 0, vh = 0;
+        _otos->getVelocityRaw(vx, vy, vh);
+        int32_t vx_mms  = (int32_t)(vx * 0.153f);
+        int32_t vy_mms  = (int32_t)(vy * 0.153f);
+        int32_t vh_cdps = (int32_t)(vh * 6.1f);
+        vx_mms  = clampInt((int)vx_mms,  -9999,  9999);
+        vy_mms  = clampInt((int)vy_mms,  -9999,  9999);
+        vh_cdps = clampInt((int)vh_cdps, -99999, 99999);
+        char r[48];
+        snprintf(r, sizeof(r), "OR%+d%+d%+d", (int)vx_mms, (int)vy_mms, (int)vh_cdps);
+        replyFn(r, ctx);
+        return;
+    }
+
+    // ── OP — get position ──────────────────────────────────────────────────
+    if (len == 2 && memcmp(buf, "OP", 2) == 0) {
+        if (!_otos) { replyFn("ERR:OP", ctx); return; }
+        int16_t x = 0, y = 0, h = 0;
+        _otos->getPositionRaw(x, y, h);
+        int32_t x_mm   = (int32_t)(x * 0.305f);
+        int32_t y_mm   = (int32_t)(y * 0.305f);
+        int32_t h_cdeg = (int32_t)(h * 0.549f);
+        x_mm   = clampInt((int)x_mm,   -9999,  9999);
+        y_mm   = clampInt((int)y_mm,   -9999,  9999);
+        h_cdeg = clampInt((int)h_cdeg, -18000, 18000);
+        char r[48];
+        snprintf(r, sizeof(r), "OP%+d%+d%+d", (int)x_mm, (int)y_mm, (int)h_cdeg);
+        replyFn(r, ctx);
+        return;
+    }
+
+    // ── OV — set position ──────────────────────────────────────────────────
+    if (len > 2 && buf[0] == 'O' && buf[1] == 'V') {
+        if (!_otos) { replyFn("ERR:OV", ctx); return; }
+        int32_t args[3] = {0, 0, 0};
+        int n = parseSignedArgs(buf + 2, args, 3);
+        if (n < 3) {
+            char errbuf[140];
+            snprintf(errbuf, sizeof(errbuf), "ERR:%s", buf);
+            replyFn(errbuf, ctx);
+            return;
+        }
+        int16_t xr = (int16_t)(args[0] / 0.305f);
+        int16_t yr = (int16_t)(args[1] / 0.305f);
+        int16_t hr = (int16_t)(args[2] / 0.549f);
+        _otos->setPositionRaw(xr, yr, hr);
+        replyFn("ACK:OV", ctx);
+        return;
+    }
+
+    // ── OL — linear scalar get/set ─────────────────────────────────────────
+    if (len >= 2 && buf[0] == 'O' && buf[1] == 'L') {
+        if (!_otos) { char e[140]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return; }
+        if (len == 2) {
+            char r[16];
+            snprintf(r, sizeof(r), "OL%+d", (int)_otos->getLinearScalar());
+            replyFn(r, ctx);
+        } else {
+            int32_t args[1] = {0};
+            int n = parseSignedArgs(buf + 2, args, 1);
+            if (n < 1) {
+                char e[140]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return;
+            }
+            int v = clampInt((int)args[0], -128, 127);
+            _otos->setLinearScalar((int8_t)v);
+            char r[32];
+            snprintf(r, sizeof(r), "ACK:OL %d", v);
+            replyFn(r, ctx);
+        }
+        return;
+    }
+
+    // ── OA — angular scalar get/set ────────────────────────────────────────
+    if (len >= 2 && buf[0] == 'O' && buf[1] == 'A') {
+        if (!_otos) { char e[140]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return; }
+        if (len == 2) {
+            char r[16];
+            snprintf(r, sizeof(r), "OA%+d", (int)_otos->getAngularScalar());
+            replyFn(r, ctx);
+        } else {
+            int32_t args[1] = {0};
+            int n = parseSignedArgs(buf + 2, args, 1);
+            if (n < 1) {
+                char e[140]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return;
+            }
+            int v = clampInt((int)args[0], -128, 127);
+            _otos->setAngularScalar((int8_t)v);
+            char r[32];
+            snprintf(r, sizeof(r), "ACK:OA %d", v);
+            replyFn(r, ctx);
+        }
+        return;
+    }
+
+    // ── O — OTOS init + calibrate shortcut ────────────────────────────────
+    if (len == 1 && buf[0] == 'O') {
+        if (!_otos) { replyFn("ERR:O", ctx); return; }
+        _otos->begin();
+        _otos->init();
+        _otos->calibrateImu(255);
+        replyFn("ACK:O", ctx);
+        return;
+    }
+
+    // ── LS — line sensor ───────────────────────────────────────────────────
+    if (len == 2 && memcmp(buf, "LS", 2) == 0) {
+        if (!_line) { replyFn("ERR:LS", ctx); return; }
+        uint16_t out[4] = {0, 0, 0, 0};
+        _line->readValues(out);
+        char r[48];
+        snprintf(r, sizeof(r), "LS%+d%+d%+d%+d",
+                 (int)out[0], (int)out[1], (int)out[2], (int)out[3]);
+        replyFn(r, ctx);
+        return;
+    }
+
+    // ── CS — color sensor ──────────────────────────────────────────────────
+    if (len == 2 && memcmp(buf, "CS", 2) == 0) {
+        if (!_color) { replyFn("ERR:CS", ctx); return; }
+        uint16_t cr = 0, cg = 0, cb = 0, cc = 0;
+        _color->readRGBC(cr, cg, cb, cc);
+        char rbuf[48];
+        snprintf(rbuf, sizeof(rbuf), "CS%+d%+d%+d%+d",
+                 (int)cr, (int)cg, (int)cb, (int)cc);
+        replyFn(rbuf, ctx);
+        return;
+    }
+
+    // ── G — gripper ────────────────────────────────────────────────────────
+    if (buf[0] == 'G' && (len == 1 || buf[1] == '+' || buf[1] == '-')) {
+        if (len == 1) {
+            // Query current angle
+            if (!_gripper) { replyFn("ERR:G", ctx); return; }
+            char r[16];
+            snprintf(r, sizeof(r), "G%+d", (int)_currentGripperAngle);
+            replyFn(r, ctx);
+        } else {
+            // Set angle
+            int32_t args[1] = {0};
+            int n = parseSignedArgs(buf + 1, args, 1);
+            if (n < 1) { replyFn("ERR:G", ctx); return; }
+            if (!_gripper) { replyFn("ERR:G", ctx); return; }
+            int deg = clampInt((int)args[0], 0, 180);
+            _gripper->setAngle((uint8_t)deg);
+            _currentGripperAngle = deg;
+            char r[24];
+            snprintf(r, sizeof(r), "ACK:G %d", deg);
+            replyFn(r, ctx);
+        }
+        return;
+    }
+
+    // ── PA — analog port read ──────────────────────────────────────────────
+    if (len >= 3 && buf[0] == 'P' && buf[1] == 'A' &&
+        (buf[2] == '+' || buf[2] == '-')) {
+        if (!_portio) { char e[140]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return; }
+        int32_t args[1] = {0};
+        int n = parseSignedArgs(buf + 2, args, 1);
+        if (n < 1) {
+            char e[140]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return;
+        }
+        int val = _portio->readAnalog((uint8_t)args[0]);
+        char r[32];
+        snprintf(r, sizeof(r), "PA%+d%+d", (int)args[0], val);
+        replyFn(r, ctx);
+        return;
+    }
+
+    // ── P — digital port I/O ──────────────────────────────────────────────
+    if (buf[0] == 'P' && len > 1 && (buf[1] == '+' || buf[1] == '-')) {
+        if (!_portio) { char e[140]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return; }
+        int32_t args[2] = {0, 0};
+        int n = parseSignedArgs(buf + 1, args, 2);
+        if (n < 1) {
+            char e[140]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return;
+        }
+        char r[32];
+        if (n >= 2) {
+            _portio->setDigital((uint8_t)args[0], args[1] != 0);
+            snprintf(r, sizeof(r), "ACK:P %d %d", (int)args[0], args[1] != 0 ? 1 : 0);
+        } else {
+            int val = _portio->readDigital((uint8_t)args[0]);
+            snprintf(r, sizeof(r), "P%+d%+d", (int)args[0], val);
+        }
+        replyFn(r, ctx);
+        return;
+    }
+
     // ── Default — unrecognized command ─────────────────────────────────────
     char errbuf[140];
     snprintf(errbuf, sizeof(errbuf), "ERR:%s", buf);
@@ -530,6 +760,22 @@ void CommandProcessor::tick(uint32_t now_ms, ReplyFn replyFn, void* ctx)
         _encTickCount++;
         if (_encTickCount >= params.encReportEvery) {
             reportEncoders(replyFn, ctx);
+            if (_color) {
+                uint16_t sr, sg, sb, sc;
+                _color->readRGBC(sr, sg, sb, sc);
+                char sbuf[48];
+                snprintf(sbuf, sizeof(sbuf), "CS%+d%+d%+d%+d",
+                         (int)sr, (int)sg, (int)sb, (int)sc);
+                replyFn(sbuf, ctx);
+            }
+            if (_line) {
+                uint16_t lo[4] = {0, 0, 0, 0};
+                _line->readValues(lo);
+                char sbuf[48];
+                snprintf(sbuf, sizeof(sbuf), "LS%+d%+d%+d%+d",
+                         (int)lo[0], (int)lo[1], (int)lo[2], (int)lo[3]);
+                replyFn(sbuf, ctx);
+            }
             _encTickCount = 0;
         }
     }

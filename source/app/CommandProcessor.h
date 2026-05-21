@@ -102,6 +102,9 @@ private:
     int32_t   _prevOdoEncL;
     int32_t   _prevOdoEncR;
 
+    // Gripper state
+    int32_t   _currentGripperAngle;  // last angle sent to gripper (degrees, 0..180)
+
     // Internal helpers
     static int  parseSignedArgs(const char* s, int32_t* out, int maxArgs);
     static int  clampInt(int v, int lo, int hi);
