@@ -1,4 +1,4 @@
-#include "hal/GripperServo.h"
+#include "GripperServo.h"
 
 GripperServo::GripperServo(MicroBitPin& pin)
     : _pin(pin)

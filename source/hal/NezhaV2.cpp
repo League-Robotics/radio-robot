@@ -1,4 +1,4 @@
-#include "hal/NezhaV2.h"
+#include "NezhaV2.h"
 
 // ---------------------------------------------------------------------------
 // I2C wire protocol constants (verified against PlanetX pxt-nezha2/main.ts)
@@ -47,7 +47,7 @@ void NezhaV2::setPwm(int8_t leftPct, int8_t rightPct)
     if (leftPct == 0) {
         // Zero speed: send the explicit stop command.
         uint8_t stopBuf[8] = {0xFF, 0xF9, LEFT_MOTOR, 0x00, 0x5F, 0x00, 0xF5, 0x00};
-        _i2c.write((ADDR << 1), (const char*)stopBuf, 8, false);
+        _i2c.write((ADDR << 1), (uint8_t*)stopBuf, 8, false);
     } else {
         uint8_t dir   = (leftPct > 0) ? DIR_CW : DIR_CCW;
         uint8_t speed = (leftPct > 0) ? (uint8_t)leftPct : (uint8_t)(-leftPct);
@@ -59,7 +59,7 @@ void NezhaV2::setPwm(int8_t leftPct, int8_t rightPct)
     int8_t rightEffective = (int8_t)(RIGHT_FWD * rightPct);  // flip the sign
     if (rightEffective == 0) {
         uint8_t stopBuf[8] = {0xFF, 0xF9, RIGHT_MOTOR, 0x00, 0x5F, 0x00, 0xF5, 0x00};
-        _i2c.write((ADDR << 1), (const char*)stopBuf, 8, false);
+        _i2c.write((ADDR << 1), (uint8_t*)stopBuf, 8, false);
     } else {
         uint8_t dir   = (rightEffective > 0) ? DIR_CW : DIR_CCW;
         uint8_t speed = (rightEffective > 0) ? (uint8_t)rightEffective
@@ -105,7 +105,7 @@ void NezhaV2::writeMotorCmd(uint8_t motorId, uint8_t direction, uint8_t speed)
         0xF5,
         0x00
     };
-    _i2c.write((ADDR << 1), (const char*)buf, 8, false);
+    _i2c.write((ADDR << 1), (uint8_t*)buf, 8, false);
 }
 
 int32_t NezhaV2::readEncoderRaw(uint8_t motorId) const
@@ -118,11 +118,11 @@ int32_t NezhaV2::readEncoderRaw(uint8_t motorId) const
         0x00, 0xF5,
         0x00
     };
-    _i2c.write((ADDR << 1), (const char*)cmd, 8, false);
+    _i2c.write((ADDR << 1), (uint8_t*)cmd, 8, false);
 
     // Read 4 bytes (signed int32, little-endian).
     uint8_t resp[4] = {0, 0, 0, 0};
-    _i2c.read((ADDR << 1), (char*)resp, 4, false);
+    _i2c.read((ADDR << 1), (uint8_t*)resp, 4, false);
 
     int32_t raw = (int32_t)(
         ((uint32_t)resp[3] << 24) |

@@ -1,4 +1,4 @@
-#include "hal/ColorSensor.h"
+#include "ColorSensor.h"
 
 ColorSensor::ColorSensor(MicroBitI2C& i2c)
     : _i2c(i2c)
@@ -95,14 +95,14 @@ void ColorSensor::initApds()
 void ColorSensor::writeReg8(uint8_t addr, uint8_t reg, uint8_t val)
 {
     uint8_t buf[2] = {reg, val};
-    _i2c.write((addr << 1), (const char*)buf, 2, false);
+    _i2c.write((addr << 1), (uint8_t*)buf, 2, false);
 }
 
 uint8_t ColorSensor::readReg8(uint8_t addr, uint8_t reg) const
 {
     uint8_t result = 0;
-    _i2c.write((addr << 1), (const char*)&reg, 1, false);
-    _i2c.read((addr << 1), (char*)&result, 1, false);
+    _i2c.write((addr << 1), (uint8_t*)&reg, 1, false);
+    _i2c.read((addr << 1), (uint8_t*)&result, 1, false);
     return result;
 }
 
@@ -110,7 +110,7 @@ uint16_t ColorSensor::readReg16(uint8_t addr, uint8_t regLo) const
 {
     // Read two consecutive bytes: [regLo, regLo+1] → little-endian uint16.
     uint8_t raw[2] = {0, 0};
-    _i2c.write((addr << 1), (const char*)&regLo, 1, false);
-    _i2c.read((addr << 1), (char*)raw, 2, false);
+    _i2c.write((addr << 1), (uint8_t*)&regLo, 1, false);
+    _i2c.read((addr << 1), (uint8_t*)raw, 2, false);
     return (uint16_t)(raw[0] | ((uint16_t)raw[1] << 8));
 }

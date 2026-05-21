@@ -17,7 +17,7 @@
  */
 class Radio {
 public:
-    explicit Radio(MicroBitRadio& radio, MicroBitMessageBus& bus);
+    explicit Radio(MicroBitRadio& radio, MessageBus& bus);
 
     // setGroup(10), enable(), setTransmitPower(7), register ISR.
     void begin();
@@ -31,7 +31,7 @@ public:
 
 private:
     MicroBitRadio&      _radio;
-    MicroBitMessageBus& _bus;
+    MessageBus& _bus;
 
     static constexpr int SLOTS    = 4;
     static constexpr int SLOT_LEN = 64;

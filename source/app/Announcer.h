@@ -1,7 +1,7 @@
 #pragma once
 #include "MicroBit.h"
-#include "hal/SerialPort.h"
-#include "hal/Radio.h"
+#include "SerialPort.h"
+#include "Radio.h"
 
 /**
  * Announcer — builds and emits the DEVICE: announcement string.

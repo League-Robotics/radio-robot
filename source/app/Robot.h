@@ -1,15 +1,15 @@
 #pragma once
 #include "MicroBit.h"
-#include "types/Config.h"
-#include "hal/NezhaV2.h"
-#include "hal/OtosSensor.h"
-#include "hal/LineSensor.h"
-#include "hal/ColorSensor.h"
-#include "hal/GripperServo.h"
-#include "hal/PortIO.h"
-#include "hal/SerialPort.h"
-#include "hal/Radio.h"
-#include "app/Announcer.h"
+#include "Config.h"
+#include "NezhaV2.h"
+#include "OtosSensor.h"
+#include "LineSensor.h"
+#include "ColorSensor.h"
+#include "GripperServo.h"
+#include "PortIO.h"
+#include "SerialPort.h"
+#include "Radio.h"
+#include "Announcer.h"
 
 /**
  * Robot — top-level object that owns all firmware subsystems.

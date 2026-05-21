@@ -3,7 +3,7 @@
 
 Radio* Radio::_instance = nullptr;
 
-Radio::Radio(MicroBitRadio& radio, MicroBitMessageBus& bus)
+Radio::Radio(MicroBitRadio& radio, MessageBus& bus)
     : _radio(radio), _bus(bus), _head(0), _tail(0)
 {
     memset(_ring, 0, sizeof(_ring));

@@ -1,4 +1,4 @@
-#include "hal/PortIO.h"
+#include "PortIO.h"
 
 PortIO::PortIO(MicroBitIO& io)
     : _io(io)

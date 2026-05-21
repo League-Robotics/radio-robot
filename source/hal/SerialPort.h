@@ -11,7 +11,7 @@
  */
 class SerialPort {
 public:
-    explicit SerialPort(MicroBitSerial& serial);
+    explicit SerialPort(NRF52Serial& serial);
 
     // Configure buffers (256 bytes each) and set baud rate to 115200.
     // Must be called once before readLine() / send() / sendf().
@@ -26,7 +26,7 @@ public:
     void sendf(const char* fmt, ...);  // snprintf into 128-byte stack buffer
 
 private:
-    MicroBitSerial& _serial;
+    NRF52Serial& _serial;
     char     _rxBuf[128];
     uint16_t _rxLen;
 };

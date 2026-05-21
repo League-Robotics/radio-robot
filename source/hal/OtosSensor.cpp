@@ -1,4 +1,4 @@
-#include "hal/OtosSensor.h"
+#include "OtosSensor.h"
 
 OtosSensor::OtosSensor(MicroBitI2C& i2c)
     : _i2c(i2c)
@@ -75,22 +75,22 @@ void OtosSensor::setAngularScalar(int8_t val)
 void OtosSensor::writeReg8(uint8_t reg, uint8_t val)
 {
     uint8_t buf[2] = {reg, val};
-    _i2c.write((ADDR << 1), (const char*)buf, 2, false);
+    _i2c.write((ADDR << 1), (uint8_t*)buf, 2, false);
 }
 
 uint8_t OtosSensor::readReg8(uint8_t reg) const
 {
     uint8_t result = 0;
-    _i2c.write((ADDR << 1), (const char*)&reg, 1, false);
-    _i2c.read((ADDR << 1), (char*)&result, 1, false);
+    _i2c.write((ADDR << 1), (uint8_t*)&reg, 1, false);
+    _i2c.read((ADDR << 1), (uint8_t*)&result, 1, false);
     return result;
 }
 
 void OtosSensor::readXYH(uint8_t startReg, int16_t& x, int16_t& y, int16_t& h) const
 {
     uint8_t raw[6] = {0};
-    _i2c.write((ADDR << 1), (const char*)&startReg, 1, false);
-    _i2c.read((ADDR << 1), (char*)raw, 6, false);
+    _i2c.write((ADDR << 1), (uint8_t*)&startReg, 1, false);
+    _i2c.read((ADDR << 1), (uint8_t*)raw, 6, false);
     x = (int16_t)(raw[0] | ((uint16_t)raw[1] << 8));
     y = (int16_t)(raw[2] | ((uint16_t)raw[3] << 8));
     h = (int16_t)(raw[4] | ((uint16_t)raw[5] << 8));
@@ -106,5 +106,5 @@ void OtosSensor::writeXYH(uint8_t startReg, int16_t x, int16_t y, int16_t h)
     buf[4] = (uint8_t)((y >> 8) & 0xFF);
     buf[5] = (uint8_t)(h & 0xFF);
     buf[6] = (uint8_t)((h >> 8) & 0xFF);
-    _i2c.write((ADDR << 1), (const char*)buf, 7, false);
+    _i2c.write((ADDR << 1), (uint8_t*)buf, 7, false);
 }

@@ -2,16 +2,16 @@
 #include <string.h>
 #include <stdio.h>
 
-SerialPort::SerialPort(MicroBitSerial& serial)
+SerialPort::SerialPort(NRF52Serial& serial)
     : _serial(serial), _rxLen(0)
 {
     memset(_rxBuf, 0, sizeof(_rxBuf));
 }
 
 void SerialPort::begin() {
-    _serial.setRxBufferSize(256);
-    _serial.setTxBufferSize(256);
-    _serial.init(115200);
+    _serial.setRxBufferSize(255);
+    _serial.setTxBufferSize(255);
+    _serial.setBaud(115200);
 }
 
 bool SerialPort::readLine(char* buf, uint16_t len) {

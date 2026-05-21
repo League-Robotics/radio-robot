@@ -1,6 +1,6 @@
 #pragma once
 #include "MicroBit.h"
-#include "types/Config.h"
+#include "Config.h"
 
 /**
  * NezhaV2 — I2C driver for the PlanetX Nezha V2 motor controller.
