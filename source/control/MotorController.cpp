@@ -8,7 +8,8 @@ MotorController::MotorController(NezhaV2& motor, const CalibParams& cal)
       _cmdRatio(1.0f), _fasterIsRight(false),
       _tgtLMms(0.0f), _tgtRMms(0.0f),
       _prevEncL(0), _prevEncR(0),
-      _actualVelL(0.0f), _actualVelR(0.0f)
+      _actualVelL(0.0f), _actualVelR(0.0f),
+      _encLMm(0.0f), _encRMm(0.0f)
 {
     gains.kFF     = 0.15f;
     gains.kP      = 0.05f;
@@ -101,9 +102,11 @@ void MotorController::tick(float dt_s)
 {
     if (dt_s <= 0.0f) return;
 
-    // Step 1: Read encoder positions (mm)
+    // Step 1: Read encoder positions (mm) and cache for getEncoderPositions()
     float encLMm = encoderMm(true);
     float encRMm = encoderMm(false);
+    _encLMm = encLMm;
+    _encRMm = encRMm;
 
     // Update velocity for getActualVelocity()
     _actualVelL = (encLMm - static_cast<float>(_prevEncL)) / dt_s;
@@ -123,9 +126,12 @@ void MotorController::tick(float dt_s)
     float fasterDelta = _fasterIsRight ? fabsf(fDR) : fabsf(fDL);
     float slowerDelta  = _fasterIsRight ? fabsf(fDL) : fabsf(fDR);
 
-    // Step 3: Normalized error
-    float expected = slowerDelta * _cmdRatio;
-    float normErr  = (expected - fasterDelta) / fmaxf(1.0f, expected);
+    // Step 3: Normalized error.
+    float expected     = slowerDelta * _cmdRatio;
+    float tgtSlowerAbs = _fasterIsRight ? fabsf(_tgtLMms) : fabsf(_tgtRMms);
+    float tgtFasterAbs = _fasterIsRight ? fabsf(_tgtRMms) : fabsf(_tgtLMms);
+    float denomFloor   = fmaxf(tgtFasterAbs, 1.0f);
+    float normErr      = (expected - fasterDelta) / fmaxf(denomFloor, expected);
 
     // Step 4: PID update
     float correction = _pid.update(normErr, dt_s);
@@ -133,8 +139,6 @@ void MotorController::tick(float dt_s)
     // Step 5: Feed-forward base PWM
     float scaleL = (_tgtLMms >= 0.0f) ? _cal.kScaleLF : _cal.kScaleLB;
     float scaleR = (_tgtRMms >= 0.0f) ? _cal.kScaleRF : _cal.kScaleRB;
-    float tgtFasterAbs = _fasterIsRight ? fabsf(_tgtRMms) : fabsf(_tgtLMms);
-    float tgtSlowerAbs = _fasterIsRight ? fabsf(_tgtLMms) : fabsf(_tgtRMms);
     float scaleFaster  = _fasterIsRight ? scaleR : scaleL;
     float scaleSlower  = _fasterIsRight ? scaleL : scaleR;
     float baseFaster = _cal.kFF * tgtFasterAbs * scaleFaster;
@@ -145,8 +149,17 @@ void MotorController::tick(float dt_s)
     float adj = (excess > 0.0f) ? (-_cal.kAdjGain * excess * baseFaster) : 0.0f;
 
     // Step 7: Compute and clamp final PWM
-    float uFaster = clamp(baseFaster + correction, 0.0f, 100.0f);
-    float uSlower = clamp(baseSlower + adj,        0.0f, 100.0f);
+    float rawFaster = baseFaster + correction;
+    float uFaster = clamp(rawFaster, 0.0f, 100.0f);
+    // When faster wheel is pegged at floor, redirect overflow to boost slower wheel.
+    float fasterOverflow = fminf(rawFaster, 0.0f);
+    float adjBoost = -fasterOverflow
+                     * (baseSlower / fmaxf(baseFaster, 1.0f))
+                     / fmaxf(_cmdRatio, 1.0f);
+    // Proportional slower-wheel boost: boosts slower when faster over-runs.
+    // Drives normErr toward 0 from the slower side; gain tuned so equilibrium is at ratio≈cmdRatio.
+    float propBoost = (normErr < 0.0f) ? (-3.0f * normErr * baseSlower) : 0.0f;
+    float uSlower = clamp(baseSlower + adj + adjBoost + propBoost, 0.0f, 100.0f);
 
     // Apply direction signs
     float uL, uR;
@@ -169,8 +182,8 @@ void MotorController::getActualVelocity(float& leftMms, float& rightMms) const
 
 void MotorController::getEncoderPositions(int32_t& leftMm, int32_t& rightMm) const
 {
-    leftMm  = _motor.readEncoder(true,  _cal);
-    rightMm = _motor.readEncoder(false, _cal);
+    leftMm  = static_cast<int32_t>(_encLMm);
+    rightMm = static_cast<int32_t>(_encRMm);
 }
 
 void MotorController::resetEncoderAccumulators()

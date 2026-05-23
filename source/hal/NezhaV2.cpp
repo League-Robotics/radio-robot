@@ -85,8 +85,8 @@ void NezhaV2::resetEncoders()
 {
     // Mirror TypeScript resetRelAngleValue(): snapshot the current raw
     // angle into the software offset so that subsequent reads return zero.
-    _encOffset[LEFT_MOTOR  - 1] = readEncoderRaw(LEFT_MOTOR);
-    _encOffset[RIGHT_MOTOR - 1] = readEncoderRaw(RIGHT_MOTOR);
+    _encOffset[LEFT_MOTOR  - 1] += readEncoderRaw(LEFT_MOTOR);
+    _encOffset[RIGHT_MOTOR - 1] += readEncoderRaw(RIGHT_MOTOR);
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +110,9 @@ void NezhaV2::writeMotorCmd(uint8_t motorId, uint8_t direction, uint8_t speed)
 
 int32_t NezhaV2::readEncoderRaw(uint8_t motorId) const
 {
-    // Send encoder-read command.
+    // Vendor pxt-nezha2 readAngle() requires a 4ms delay before and after
+    // the write command before reading; omitting these causes corrupt reads.
+    fiber_sleep(4);
     uint8_t cmd[8] = {
         0xFF, 0xF9,
         motorId,
@@ -119,6 +121,7 @@ int32_t NezhaV2::readEncoderRaw(uint8_t motorId) const
         0x00
     };
     _i2c.write((ADDR << 1), (uint8_t*)cmd, 8, false);
+    fiber_sleep(4);
 
     // Read 4 bytes (signed int32, little-endian).
     uint8_t resp[4] = {0, 0, 0, 0};

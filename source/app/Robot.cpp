@@ -71,6 +71,5 @@ void Robot::run() {
             }
         }
         _cmd.tick(uBit.systemTime(), serialReply, &_serial);
-        uBit.sleep(20);
     }
 }
