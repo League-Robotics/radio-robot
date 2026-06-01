@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Package Scaffold
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 depends-on: []
@@ -22,19 +22,19 @@ on the developer's PATH. No real logic yet — just the scaffold and entry point
 
 ## Acceptance Criteria
 
-- [ ] `mbdeploy/pyproject.toml` exists with `name = "mbdeploy"`, hatchling build
+- [x] `mbdeploy/pyproject.toml` exists with `name = "mbdeploy"`, hatchling build
   backend, `requires-python = ">=3.10"`, `dependencies = ["pyocd>=0.44.1",
   "pyserial>=3.5"]`, and `[project.scripts] mbdeploy = "mbdeploy.cli:main"`.
-- [ ] `mbdeploy/src/mbdeploy/__init__.py` exists (may be empty or contain version).
-- [ ] `mbdeploy/src/mbdeploy/cli.py` exists with a `main()` function that sets up
+- [x] `mbdeploy/src/mbdeploy/__init__.py` exists (may be empty or contain version).
+- [x] `mbdeploy/src/mbdeploy/cli.py` exists with a `main()` function that sets up
   argparse with four subcommands (`build`, `deploy`, `list`, `probe`) and exits
   cleanly (subcommands may be stubs that print "not implemented" for now).
-- [ ] `mbdeploy/src/mbdeploy/devices.py` exists as an empty stub module.
-- [ ] `mbdeploy/src/mbdeploy/builder.py` exists as an empty stub module.
-- [ ] `mbdeploy/README.md` exists with basic description and install instructions.
-- [ ] `pipx install --editable ./mbdeploy` exits 0.
-- [ ] `mbdeploy --help` exits 0 and lists all four subcommands in its output.
-- [ ] `mbdeploy build --help`, `mbdeploy deploy --help`, `mbdeploy list --help`,
+- [x] `mbdeploy/src/mbdeploy/devices.py` exists as an empty stub module.
+- [x] `mbdeploy/src/mbdeploy/builder.py` exists as an empty stub module.
+- [x] `mbdeploy/README.md` exists with basic description and install instructions.
+- [x] `pipx install --editable ./mbdeploy` exits 0.
+- [x] `mbdeploy --help` exits 0 and lists all four subcommands in its output.
+- [x] `mbdeploy build --help`, `mbdeploy deploy --help`, `mbdeploy list --help`,
   `mbdeploy probe --help` all exit 0 without error.
 
 ## Implementation Plan
