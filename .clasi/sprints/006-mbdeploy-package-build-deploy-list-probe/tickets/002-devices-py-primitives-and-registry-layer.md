@@ -1,7 +1,7 @@
 ---
 id: '002'
-title: "devices.py — Primitives and Registry Layer"
-status: open
+title: "devices.py \u2014 Primitives and Registry Layer"
+status: done
 use-cases:
 - SUC-002
 - SUC-003
@@ -28,33 +28,33 @@ the package — all other modules delegate here.
 
 ### Primitives (ported from `scripts/lib/device_link.py`)
 
-- [ ] `flashable_probes() -> list[dict[str, str]]` returns `[{uid, description}]`
+- [x] `flashable_probes() -> list[dict[str, str]]` returns `[{uid, description}]`
   using `ConnectHelper.get_all_connected_probes()` with a `pyocd list` CLI fallback.
-- [ ] `port_serial_map(known: set[str] | None = None) -> dict[str, str]` returns
+- [x] `port_serial_map(known: set[str] | None = None) -> dict[str, str]` returns
   `{uid: "/dev/cu.*"}` via `ioreg -r -c IOUSBHostDevice -l` on macOS; returns `{}`
   on non-macOS or if `ioreg` is unavailable.
-- [ ] `probe_type(port: str, timeout_s: float = 1.6) -> dict | None` opens the
+- [x] `probe_type(port: str, timeout_s: float = 1.6) -> dict | None` opens the
   serial port at 115200 baud with DTR/RTS False, sends `HELLO\n`, returns
   `{role, common_name, device_name, serial, raw}` from the first `DEVICE:` line,
   or `None` on timeout/busy/no-announcement.
-- [ ] `is_relay(role: str | None) -> bool` returns True if `role` contains `RELAY`
+- [x] `is_relay(role: str | None) -> bool` returns True if `role` contains `RELAY`
   or `BRIDGE` (case-insensitive); returns False for None or empty.
-- [ ] `is_robot` is NOT present (removed — not needed in the generic package).
+- [x] `is_robot` is NOT present (removed — not needed in the generic package).
 
 ### Registry Layer
 
-- [ ] `load_devices(config_path: Path) -> dict[str, dict]` reads the registry
+- [x] `load_devices(config_path: Path) -> dict[str, dict]` reads the registry
   JSON; returns `{}` on missing or invalid file.
-- [ ] `save_devices(devices: dict[str, dict], config_path: Path) -> None` writes
+- [x] `save_devices(devices: dict[str, dict], config_path: Path) -> None` writes
   the registry; creates parent directory if needed.
-- [ ] `assign_enum(devices: dict[str, dict], uid: str) -> int` returns the existing
+- [x] `assign_enum(devices: dict[str, dict], uid: str) -> int` returns the existing
   enum for `uid` if present, or `max(existing enums) + 1` (minimum 1) for a new UID.
-- [ ] `probe_all(config_path: Path) -> list[dict]` joins `flashable_probes()` +
+- [x] `probe_all(config_path: Path) -> list[dict]` joins `flashable_probes()` +
   `port_serial_map()`, probes each port via `probe_type()`, merges announcement fields
   and enum into the registry, preserves prior announcement on a busy/silent port
   (does not clear existing `role`/`common_name` etc.), never deletes entries, saves
   registry, returns the updated list of device dicts.
-- [ ] `resolve_target(token: str, devices: dict[str, dict]) -> dict` resolves using
+- [x] `resolve_target(token: str, devices: dict[str, dict]) -> dict` resolves using
   this precedence:
   1. Pure digits → match by `enum` field
   2. Starts with `/dev/` or contains `/` → match by `port` field
@@ -81,11 +81,11 @@ Every entry written by `probe_all` must have these keys (blank/None for unknown)
 }
 ```
 
-- [ ] `port` is always refreshed from the current `port_serial_map()` result
+- [x] `port` is always refreshed from the current `port_serial_map()` result
   even if HELLO probe fails.
-- [ ] If `probe_type` returns `None`, existing `announcement`/`role`/`common_name`/
+- [x] If `probe_type` returns `None`, existing `announcement`/`role`/`common_name`/
   `device_name`/`serial` fields are preserved unchanged.
-- [ ] A board with no serial port in the map still gets an entry with `port: null`.
+- [x] A board with no serial port in the map still gets an entry with `port: null`.
 
 ## Implementation Plan
 
