@@ -81,8 +81,8 @@ Or use the justfile recipe:
     mbdeploy list                # list connected micro:bit devices (UID, port, name)
     mbdeploy probe               # write/update config/devices.json with connected devices
     mbdeploy deploy              # auto-detect the robot and flash MICROBIT.hex
-    mbdeploy deploy --list       # same as 'list'
-    mbdeploy deploy --uid <UID>  # flash a specific board by UID
+    mbdeploy deploy 1            # flash the device with enum 1 (see 'mbdeploy list')
+    mbdeploy deploy --build 1    # build first, then flash device 1
 ```
 
 ### Target selectors
