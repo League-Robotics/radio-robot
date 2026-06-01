@@ -10,6 +10,12 @@ from pathlib import Path
 
 from mbdeploy import __version__
 
+# Invoke pyocd through the running interpreter rather than as a bare PATH
+# lookup. mbdeploy is typically installed via pipx into an isolated venv, so
+# pyocd (a declared dependency) is importable here but its console script is
+# not on PATH. This mirrors the pattern already used in devices.py.
+_PYOCD = [sys.executable, "-m", "pyocd"]
+
 
 # ---------------------------------------------------------------------------
 # Default paths
@@ -184,7 +190,7 @@ def _cmd_deploy(args: argparse.Namespace) -> int:
 
     # --- flash ---
     flash_cmd = [
-        "pyocd", "flash",
+        *_PYOCD, "flash",
         "-t", target_mcu,
         "--uid", uid,
         hex_path,
@@ -194,7 +200,7 @@ def _cmd_deploy(args: argparse.Namespace) -> int:
         return rc
 
     reset_cmd = [
-        "pyocd", "reset",
+        *_PYOCD, "reset",
         "-t", target_mcu,
         "--uid", uid,
     ]
