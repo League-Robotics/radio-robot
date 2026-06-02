@@ -1,12 +1,12 @@
 ---
-id: "002"
-title: "Add BodyKinematics module with inverse/forward maps and saturation scaling"
-status: open
+id: '002'
+title: Add BodyKinematics module with inverse/forward maps and saturation scaling
+status: done
 use-cases:
 - SUC-002
 depends-on: []
-github-issue: ""
-issue: ""
+github-issue: ''
+issue: ''
 completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -26,22 +26,22 @@ This module is the foundation for Ticket 003 (`VelocityController`) and Sprint
 
 ## Acceptance Criteria
 
-- [ ] `source/control/BodyKinematics.h` and `.cpp` created.
-- [ ] `BodyKinematics::inverse(v, omega, b, vL_out, vR_out)` implements
+- [x] `source/control/BodyKinematics.h` and `.cpp` created.
+- [x] `BodyKinematics::inverse(v, omega, b, vL_out, vR_out)` implements
   `vL = v - omega*(b/2)`, `vR = v + omega*(b/2)`.
-- [ ] `BodyKinematics::forward(vL, vR, b, v_out, omega_out)` implements
+- [x] `BodyKinematics::forward(vL, vR, b, v_out, omega_out)` implements
   `v = (vR+vL)/2`, `omega = (vR-vL)/b`.
-- [ ] `BodyKinematics::saturate(vL, vR, vWheelMax, steerHeadroom, vL_out, vR_out)`
+- [x] `BodyKinematics::saturate(vL, vR, vWheelMax, steerHeadroom, vL_out, vR_out)`
   scales both wheel speeds by `s = (vWheelMax - steerHeadroom) / max(|vL|, |vR|)`
   when `max(|vL|, |vR|) > (vWheelMax - steerHeadroom)`; passes through
   unchanged otherwise.
-- [ ] New `RobotConfig` fields: `vWheelMax` (default 400.0 mm/s),
+- [x] New `RobotConfig` fields: `vWheelMax` (default 400.0 mm/s),
   `steerHeadroom` (default 20.0 mm/s).
-- [ ] Unit tests: inverse then forward round-trip returns original `(v, ω)`;
+- [x] Unit tests: inverse then forward round-trip returns original `(v, ω)`;
   saturation with `vL=300, vR=500, vWheelMax=400, headroom=20` scales both by
   `380/500 = 0.76`; curvature `κ = (vR-vL)/(b*(vR+vL)/2)` is preserved after
   scaling.
-- [ ] No heap allocation; all functions are pure (no internal state).
+- [x] No heap allocation; all functions are pure (no internal state).
 
 ## Implementation Plan
 

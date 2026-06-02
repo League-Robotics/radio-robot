@@ -45,6 +45,12 @@ struct RobotConfig {
     float ratioPidKd;
     float ratioPidMax;
 
+    // Wheel saturation ceiling and steering headroom (docs/kinematics-model.md §1.7).
+    // Effective ceiling = vWheelMax - steerHeadroom.
+    // SET/GET key strings use dotted form: "vWheelMax", "steerHeadroom".
+    float vWheelMax;      // absolute wheel speed ceiling, mm/s (default 400.0)
+    float steerHeadroom;  // headroom below vWheelMax reserved for steering, mm/s (default 20.0)
+
     // Go-to tolerances
     float turnThresholdMm;
     float doneTolMm;
@@ -88,6 +94,8 @@ inline RobotConfig defaultRobotConfig() {
     p.ratioPidKi      = 0.0f;
     p.ratioPidKd      = 0.0f;
     p.ratioPidMax     = 30.0f;
+    p.vWheelMax       = 400.0f;
+    p.steerHeadroom   = 20.0f;
     p.turnThresholdMm = 50.0f;
     p.doneTolMm       = 5.0f;
     p.distScale       = 0.94f;
