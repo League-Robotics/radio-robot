@@ -1,7 +1,7 @@
 ---
 id: 009
 title: Protocol v2 and Host Controller Migration
-status: planning-docs
+status: done
 branch: sprint/009-protocol-v2-and-host-controller-migration
 use-cases:
 - SUC-001
