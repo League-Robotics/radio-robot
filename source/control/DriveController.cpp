@@ -196,7 +196,7 @@ void DriveController::tick(uint32_t now_ms, ReplyFn fn, void* ctx)
     // T-mode: stop when deadline reached
     if (_mode == DriveMode::TIMED && now_ms >= _tEndMs) {
         fullStop(dfn, dct);
-        dfn("EVT done cmd=T", dct);
+        dfn("EVT done T", dct);
     }
 
     // D-mode: stop when average encoder travel >= target, or on timeout
@@ -206,7 +206,7 @@ void DriveController::tick(uint32_t now_ms, ReplyFn fn, void* ctx)
         int32_t traveled = (abs(l - _dEncStartL) + abs(r - _dEncStartR)) / 2;
         if (traveled >= _dTargetMm || now_ms >= _dTimeoutMs) {
             fullStop(dfn, dct);
-            dfn("EVT done cmd=D", dct);
+            dfn("EVT done D", dct);
         }
     }
 
@@ -245,7 +245,7 @@ void DriveController::tick(uint32_t now_ms, ReplyFn fn, void* ctx)
             if (doneL && doneR) {
                 fullStop(dfn, dct);
                 _gPhase = GPhase::IDLE;
-                dfn("EVT done cmd=G", dct);
+                dfn("EVT done G", dct);
             }
         }
     }

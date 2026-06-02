@@ -602,7 +602,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     // Reply: OK help <verb list>
     if (strcmp(verb, "HELP") == 0) {
         replyOK(rbuf, sizeof(rbuf), "help",
-                "PING ECHO ID VER HELP SET GET STREAM SNAP S T D G STOP GRIP ZERO",
+                "PING ECHO ID VER HELP SET GET STREAM SNAP S T D G STOP GRIP ZERO OI OZ OR OP OV OL OA P PA",
                 corr_id, replyFn, ctx);
         return;
     }
@@ -718,6 +718,351 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     if (strcmp(verb, "SNAP") == 0) {
         _robot.config().tlmSnapPending = true;
         replyOK(rbuf, sizeof(rbuf), "snap", nullptr, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── S — streaming velocity ────────────────────────────────────────────────
+    // S <l> <r>  → OK drive l=<l> r=<r>
+    // Watchdog reset is implicit: DriveController::beginStream() updates _lastSMs.
+    if (strcmp(verb, "S") == 0) {
+        if (ntok < 3) {
+            replyErr(rbuf, sizeof(rbuf), "badarg", nullptr, corr_id, replyFn, ctx);
+            return;
+        }
+        int l = atoi(tokens[1]);
+        int r = atoi(tokens[2]);
+        // Range check: cap at ±1000 mm/s (hardware limit)
+        if (l < -1000 || l > 1000) {
+            replyErr(rbuf, sizeof(rbuf), "range", "l", corr_id, replyFn, ctx);
+            return;
+        }
+        if (r < -1000 || r > 1000) {
+            replyErr(rbuf, sizeof(rbuf), "range", "r", corr_id, replyFn, ctx);
+            return;
+        }
+        _robot.streamDrive((int32_t)l, (int32_t)r, replyFn, ctx);
+        char body[32];
+        snprintf(body, sizeof(body), "l=%d r=%d", l, r);
+        replyOK(rbuf, sizeof(rbuf), "drive", body, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── T — timed drive ───────────────────────────────────────────────────────
+    // T <l> <r> <ms>  → OK drive l=<l> r=<r> ms=<ms>; later EVT done T
+    if (strcmp(verb, "T") == 0) {
+        if (ntok < 4) {
+            replyErr(rbuf, sizeof(rbuf), "badarg", nullptr, corr_id, replyFn, ctx);
+            return;
+        }
+        int l  = atoi(tokens[1]);
+        int r  = atoi(tokens[2]);
+        int ms = atoi(tokens[3]);
+        if (l < -1000 || l > 1000) {
+            replyErr(rbuf, sizeof(rbuf), "range", "l", corr_id, replyFn, ctx);
+            return;
+        }
+        if (r < -1000 || r > 1000) {
+            replyErr(rbuf, sizeof(rbuf), "range", "r", corr_id, replyFn, ctx);
+            return;
+        }
+        if (ms < 1 || ms > 30000) {
+            replyErr(rbuf, sizeof(rbuf), "range", "ms", corr_id, replyFn, ctx);
+            return;
+        }
+        _robot.timedDrive((int32_t)l, (int32_t)r, (uint32_t)ms, replyFn, ctx);
+        char body[48];
+        snprintf(body, sizeof(body), "l=%d r=%d ms=%d", l, r, ms);
+        replyOK(rbuf, sizeof(rbuf), "drive", body, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── D — distance drive ────────────────────────────────────────────────────
+    // D <l> <r> <mm>  → OK drive l=<l> r=<r> mm=<mm>; later EVT done D
+    if (strcmp(verb, "D") == 0) {
+        if (ntok < 4) {
+            replyErr(rbuf, sizeof(rbuf), "badarg", nullptr, corr_id, replyFn, ctx);
+            return;
+        }
+        int l  = atoi(tokens[1]);
+        int r  = atoi(tokens[2]);
+        int mm = atoi(tokens[3]);
+        if (l < -1000 || l > 1000) {
+            replyErr(rbuf, sizeof(rbuf), "range", "l", corr_id, replyFn, ctx);
+            return;
+        }
+        if (r < -1000 || r > 1000) {
+            replyErr(rbuf, sizeof(rbuf), "range", "r", corr_id, replyFn, ctx);
+            return;
+        }
+        if (mm < 1 || mm > 10000) {
+            replyErr(rbuf, sizeof(rbuf), "range", "mm", corr_id, replyFn, ctx);
+            return;
+        }
+        _robot.distanceDrive((int32_t)l, (int32_t)r, (int32_t)mm, replyFn, ctx);
+        char body[48];
+        snprintf(body, sizeof(body), "l=%d r=%d mm=%d", l, r, mm);
+        replyOK(rbuf, sizeof(rbuf), "drive", body, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── G — go-to XY ─────────────────────────────────────────────────────────
+    // G <x> <y> <speed>  → OK goto x=<x> y=<y> speed=<speed>; later EVT done G
+    if (strcmp(verb, "G") == 0) {
+        if (ntok < 4) {
+            replyErr(rbuf, sizeof(rbuf), "badarg", nullptr, corr_id, replyFn, ctx);
+            return;
+        }
+        int x     = atoi(tokens[1]);
+        int y     = atoi(tokens[2]);
+        int speed = atoi(tokens[3]);
+        if (x < -10000 || x > 10000) {
+            replyErr(rbuf, sizeof(rbuf), "range", "x", corr_id, replyFn, ctx);
+            return;
+        }
+        if (y < -10000 || y > 10000) {
+            replyErr(rbuf, sizeof(rbuf), "range", "y", corr_id, replyFn, ctx);
+            return;
+        }
+        if (speed < 1 || speed > 1000) {
+            replyErr(rbuf, sizeof(rbuf), "range", "speed", corr_id, replyFn, ctx);
+            return;
+        }
+        _robot.goTo((float)x, (float)y, (float)speed, replyFn, ctx);
+        char body[64];
+        snprintf(body, sizeof(body), "x=%d y=%d speed=%d", x, y, speed);
+        replyOK(rbuf, sizeof(rbuf), "goto", body, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── STOP — stop motors immediately ───────────────────────────────────────
+    // STOP  → OK stop
+    if (strcmp(verb, "STOP") == 0) {
+        _robot.stop();
+        replyOK(rbuf, sizeof(rbuf), "stop", nullptr, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── GRIP — gripper control ────────────────────────────────────────────────
+    // GRIP <deg>  → OK grip deg=<deg>
+    // GRIP        → OK grip deg=<current>
+    if (strcmp(verb, "GRIP") == 0) {
+        int32_t deg;
+        if (ntok >= 2) {
+            deg = (int32_t)atoi(tokens[1]);
+            if (deg < 0 || deg > 180) {
+                replyErr(rbuf, sizeof(rbuf), "range", "deg", corr_id, replyFn, ctx);
+                return;
+            }
+            _robot.setGripperAngle(deg);
+        } else {
+            deg = _robot.gripperAngle();
+        }
+        char body[24];
+        snprintf(body, sizeof(body), "deg=%d", (int)deg);
+        replyOK(rbuf, sizeof(rbuf), "grip", body, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── ZERO — zero encoders and/or odometry ─────────────────────────────────
+    // ZERO enc         → OK zero enc
+    // ZERO pose        → OK zero pose
+    // ZERO enc pose    → OK zero enc pose
+    if (strcmp(verb, "ZERO") == 0) {
+        if (ntok < 2) {
+            replyErr(rbuf, sizeof(rbuf), "badarg", nullptr, corr_id, replyFn, ctx);
+            return;
+        }
+        bool doEnc  = false;
+        bool doPose = false;
+        for (int i = 1; i < ntok; ++i) {
+            if (strcmp(tokens[i], "enc") == 0)  doEnc  = true;
+            if (strcmp(tokens[i], "pose") == 0) doPose = true;
+        }
+        if (!doEnc && !doPose) {
+            replyErr(rbuf, sizeof(rbuf), "badarg", nullptr, corr_id, replyFn, ctx);
+            return;
+        }
+        if (doEnc)  _robot.zeroEncoders();
+        if (doPose) _robot.zeroOdometry();
+        // Build body: "enc", "pose", or "enc pose"
+        char body[16];
+        if (doEnc && doPose)       snprintf(body, sizeof(body), "enc pose");
+        else if (doEnc)            snprintf(body, sizeof(body), "enc");
+        else                       snprintf(body, sizeof(body), "pose");
+        replyOK(rbuf, sizeof(rbuf), "zero", body, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── OI — OTOS init ────────────────────────────────────────────────────────
+    // OI  → OK oi
+    if (strcmp(verb, "OI") == 0) {
+        OtosSensor* otos = _robot.otos();
+        if (!otos) {
+            replyErr(rbuf, sizeof(rbuf), "nodev", "oi", corr_id, replyFn, ctx);
+            return;
+        }
+        otos->init();
+        replyOK(rbuf, sizeof(rbuf), "oi", nullptr, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── OZ — OTOS zero (reset tracking) ──────────────────────────────────────
+    // OZ  → OK oz
+    if (strcmp(verb, "OZ") == 0) {
+        OtosSensor* otos = _robot.otos();
+        if (!otos) {
+            replyErr(rbuf, sizeof(rbuf), "nodev", "oz", corr_id, replyFn, ctx);
+            return;
+        }
+        otos->setPositionRaw(0, 0, 0);
+        replyOK(rbuf, sizeof(rbuf), "oz", nullptr, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── OR — OTOS reset tracking ──────────────────────────────────────────────
+    // OR  → OK or
+    if (strcmp(verb, "OR") == 0) {
+        OtosSensor* otos = _robot.otos();
+        if (!otos) {
+            replyErr(rbuf, sizeof(rbuf), "nodev", "or", corr_id, replyFn, ctx);
+            return;
+        }
+        otos->resetTracking();
+        replyOK(rbuf, sizeof(rbuf), "or", nullptr, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── OP — OTOS read position ───────────────────────────────────────────────
+    // OP  → OK pos x=<x> y=<y> h=<h>
+    if (strcmp(verb, "OP") == 0) {
+        OtosSensor* otos = _robot.otos();
+        if (!otos) {
+            replyErr(rbuf, sizeof(rbuf), "nodev", "op", corr_id, replyFn, ctx);
+            return;
+        }
+        int16_t ox = 0, oy = 0, oh = 0;
+        otos->getPositionRaw(ox, oy, oh);
+        char body[48];
+        snprintf(body, sizeof(body), "x=%d y=%d h=%d", (int)ox, (int)oy, (int)oh);
+        replyOK(rbuf, sizeof(rbuf), "pos", body, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── OV — OTOS set position ────────────────────────────────────────────────
+    // OV <x> <y> <h>  → OK setpos x=<x> y=<y> h=<h>
+    if (strcmp(verb, "OV") == 0) {
+        OtosSensor* otos = _robot.otos();
+        if (!otos) {
+            replyErr(rbuf, sizeof(rbuf), "nodev", "ov", corr_id, replyFn, ctx);
+            return;
+        }
+        if (ntok < 4) {
+            replyErr(rbuf, sizeof(rbuf), "badarg", nullptr, corr_id, replyFn, ctx);
+            return;
+        }
+        int16_t ox = (int16_t)atoi(tokens[1]);
+        int16_t oy = (int16_t)atoi(tokens[2]);
+        int16_t oh = (int16_t)atoi(tokens[3]);
+        otos->setPositionRaw(ox, oy, oh);
+        char body[48];
+        snprintf(body, sizeof(body), "x=%d y=%d h=%d", (int)ox, (int)oy, (int)oh);
+        replyOK(rbuf, sizeof(rbuf), "setpos", body, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── OL — OTOS linear scalar ───────────────────────────────────────────────
+    // OL        → OK linear scalar=<val>
+    // OL <val>  → OK linear scalar=<val>
+    if (strcmp(verb, "OL") == 0) {
+        OtosSensor* otos = _robot.otos();
+        if (!otos) {
+            replyErr(rbuf, sizeof(rbuf), "nodev", "ol", corr_id, replyFn, ctx);
+            return;
+        }
+        if (ntok >= 2) {
+            int8_t val = (int8_t)atoi(tokens[1]);
+            otos->setLinearScalar(val);
+        }
+        int8_t val = otos->getLinearScalar();
+        char body[24];
+        snprintf(body, sizeof(body), "scalar=%d", (int)val);
+        replyOK(rbuf, sizeof(rbuf), "linear", body, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── OA — OTOS angular scalar ──────────────────────────────────────────────
+    // OA        → OK angular scalar=<val>
+    // OA <val>  → OK angular scalar=<val>
+    if (strcmp(verb, "OA") == 0) {
+        OtosSensor* otos = _robot.otos();
+        if (!otos) {
+            replyErr(rbuf, sizeof(rbuf), "nodev", "oa", corr_id, replyFn, ctx);
+            return;
+        }
+        if (ntok >= 2) {
+            int8_t val = (int8_t)atoi(tokens[1]);
+            otos->setAngularScalar(val);
+        }
+        int8_t val = otos->getAngularScalar();
+        char body[24];
+        snprintf(body, sizeof(body), "scalar=%d", (int)val);
+        replyOK(rbuf, sizeof(rbuf), "angular", body, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── P — digital port read/write ───────────────────────────────────────────
+    // P <port>        → OK port p=<port> v=<val>  (read)
+    // P <port> <val>  → OK port p=<port> v=<val>  (write)
+    if (strcmp(verb, "P") == 0) {
+        if (ntok < 2) {
+            replyErr(rbuf, sizeof(rbuf), "badarg", nullptr, corr_id, replyFn, ctx);
+            return;
+        }
+        int port = atoi(tokens[1]);
+        if (port < 1 || port > 4) {
+            replyErr(rbuf, sizeof(rbuf), "range", "port", corr_id, replyFn, ctx);
+            return;
+        }
+        int val;
+        if (ntok >= 3) {
+            val = atoi(tokens[2]);
+            _robot.portIO().setDigital((uint8_t)port, val != 0);
+        } else {
+            val = _robot.portIO().readDigital((uint8_t)port);
+        }
+        char body[24];
+        snprintf(body, sizeof(body), "p=%d v=%d", port, val);
+        replyOK(rbuf, sizeof(rbuf), "port", body, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── PA — analog port read/write ───────────────────────────────────────────
+    // PA <port>        → OK aport p=<port> v=<val>  (read)
+    // PA <port> <val>  → OK aport p=<port> v=<val>  (write)
+    if (strcmp(verb, "PA") == 0) {
+        if (ntok < 2) {
+            replyErr(rbuf, sizeof(rbuf), "badarg", nullptr, corr_id, replyFn, ctx);
+            return;
+        }
+        int port = atoi(tokens[1]);
+        if (port < 1 || port > 4) {
+            replyErr(rbuf, sizeof(rbuf), "range", "port", corr_id, replyFn, ctx);
+            return;
+        }
+        int val;
+        if (ntok >= 3) {
+            val = atoi(tokens[2]);
+            if (val < 0 || val > 1023) {
+                replyErr(rbuf, sizeof(rbuf), "range", "val", corr_id, replyFn, ctx);
+                return;
+            }
+            _robot.portIO().setAnalog((uint8_t)port, (uint16_t)val);
+        } else {
+            val = _robot.portIO().readAnalog((uint8_t)port);
+        }
+        char body[24];
+        snprintf(body, sizeof(body), "p=%d v=%d", port, val);
+        replyOK(rbuf, sizeof(rbuf), "aport", body, corr_id, replyFn, ctx);
         return;
     }
 

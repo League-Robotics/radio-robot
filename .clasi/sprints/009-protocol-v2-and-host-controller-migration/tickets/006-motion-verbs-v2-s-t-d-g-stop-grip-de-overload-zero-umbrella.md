@@ -1,9 +1,11 @@
 ---
-id: "006"
-title: "Motion verbs v2: S, T, D, G, STOP, GRIP de-overload, ZERO umbrella"
-status: open
-use-cases: [SUC-006]
-depends-on: ["002"]
+id: '006'
+title: 'Motion verbs v2: S, T, D, G, STOP, GRIP de-overload, ZERO umbrella'
+status: done
+use-cases:
+- SUC-006
+depends-on:
+- '002'
 issue: protocol-v2-raw250-hard-break.md
 completes_issue: false
 ---
@@ -68,22 +70,22 @@ in `DriveController.cpp`.
 
 ## Acceptance Criteria
 
-- [ ] `S 200 150` → `OK drive l=200 r=150`; robot moves.
-- [ ] `T 200 150 1000` → `OK drive l=200 r=150 ms=1000`; then `EVT done T` after ~1 s.
-- [ ] `D 200 200 300` → `OK drive l=200 r=200 mm=300`; then `EVT done D`.
-- [ ] `G 300 0 200` → `OK goto x=300 y=0 speed=200`; then `EVT done G`.
-- [ ] `STOP` → `OK stop`; motors stop immediately.
-- [ ] `GRIP 90` → `OK grip deg=90`; `GRIP` → `OK grip deg=90`.
-- [ ] `ZERO enc` → `OK zero enc`; encoders read 0 on next query.
-- [ ] `ZERO pose` → `OK zero pose`; odometry reads 0,0,0.
-- [ ] `ZERO enc pose` → both zeroed.
-- [ ] `#id` correlation echoed on all synchronous responses.
-- [ ] `EVT` responses carry no `#id` (async).
-- [ ] `ERR badarg` on wrong arg count; `ERR range <field>` on out-of-range.
-- [ ] OTOS/port commands reply with `OK`/`ERR` prefix (no bare `ACK:`).
-- [ ] `EVT safety_stop` replaces old `SAFETY_STOP` text.
-- [ ] `EVT done T/D/G` replaces old `T+DONE`/`D+DONE`/`G+DONE` text.
-- [ ] [BENCH] Commands drive the physical robot; `EVT done` arrives on completion.
+- [x] `S 200 150` → `OK drive l=200 r=150`; robot moves.
+- [x] `T 200 150 1000` → `OK drive l=200 r=150 ms=1000`; then `EVT done T` after ~1 s.
+- [x] `D 200 200 300` → `OK drive l=200 r=200 mm=300`; then `EVT done D`.
+- [x] `G 300 0 200` → `OK goto x=300 y=0 speed=200`; then `EVT done G`.
+- [x] `STOP` → `OK stop`; motors stop immediately.
+- [x] `GRIP 90` → `OK grip deg=90`; `GRIP` → `OK grip deg=90`.
+- [x] `ZERO enc` → `OK zero enc`; encoders read 0 on next query.
+- [x] `ZERO pose` → `OK zero pose`; odometry reads 0,0,0.
+- [x] `ZERO enc pose` → both zeroed.
+- [x] `#id` correlation echoed on all synchronous responses.
+- [x] `EVT` responses carry no `#id` (async).
+- [x] `ERR badarg` on wrong arg count; `ERR range <field>` on out-of-range.
+- [x] OTOS/port commands reply with `OK`/`ERR` prefix (no bare `ACK:`).
+- [x] `EVT safety_stop` replaces old `SAFETY_STOP` text.
+- [x] `EVT done T/D/G` replaces old `T+DONE`/`D+DONE`/`G+DONE` text.
+- [x] [BENCH] Commands drive the physical robot; `EVT done` arrives on completion.
 
 ## Implementation Plan
 
