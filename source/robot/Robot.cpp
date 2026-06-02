@@ -66,20 +66,21 @@ void Robot::streamDrive(int32_t leftMms, int32_t rightMms, ReplyFn fn, void* ctx
 }
 
 void Robot::timedDrive(int32_t leftMms, int32_t rightMms, uint32_t durationMs,
-                       ReplyFn fn, void* ctx)
+                       ReplyFn fn, void* ctx, const char* corr_id)
 {
-    _dc.beginTimed((float)leftMms, (float)rightMms, durationMs, _uBit.systemTime(), fn, ctx);
+    _dc.beginTimed((float)leftMms, (float)rightMms, durationMs, _uBit.systemTime(), fn, ctx, corr_id);
 }
 
 void Robot::distanceDrive(int32_t leftMms, int32_t rightMms, int32_t targetMm,
-                          ReplyFn fn, void* ctx)
+                          ReplyFn fn, void* ctx, const char* corr_id)
 {
-    _dc.beginDistance((float)leftMms, (float)rightMms, targetMm, _uBit.systemTime(), fn, ctx);
+    _dc.beginDistance((float)leftMms, (float)rightMms, targetMm, _uBit.systemTime(), fn, ctx, corr_id);
 }
 
-void Robot::goTo(float tx, float ty, float speedMms, ReplyFn fn, void* ctx)
+void Robot::goTo(float tx, float ty, float speedMms, ReplyFn fn, void* ctx,
+                 const char* corr_id)
 {
-    _dc.beginGoTo(tx, ty, speedMms, _uBit.systemTime(), fn, ctx);
+    _dc.beginGoTo(tx, ty, speedMms, _uBit.systemTime(), fn, ctx, corr_id);
 }
 
 // ---------------------------------------------------------------------------

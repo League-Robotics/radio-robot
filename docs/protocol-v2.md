@@ -46,7 +46,9 @@ Rules:
 - A trailing `#<digits>` token (decimal digits only, no letters) is
   extracted as the *correlation id* and is not counted as a positional
   argument.  The firmware echoes it in every synchronous response for
-  that command.  EVT (async event) responses never carry a correlation id.
+  that command.  Async `EVT done T/D/G` and `EVT safety_stop` events
+  also echo the `#id` when the originating drive command carried one;
+  bare events (no originating id) carry no `#id`.
 - A `key=value` token with an empty key (starts with `=`) is rejected
   with `ERR badarg missing key`.
 - A `key=value` token with an empty value (ends with `=`) is valid; the
@@ -79,11 +81,15 @@ OK <verb> [<body>] [#<corr_id>]
 ERR <code> [<detail>] [#<corr_id>]
 ```
 
-**EVT format (no correlation id):**
+**EVT format:**
 
 ```
-EVT <name> [<body>]
+EVT <name> [<body>] [#<corr_id>]
 ```
+
+`#<corr_id>` is present on `EVT done T/D/G` and `EVT safety_stop` only when
+the originating T/D/G command carried a `#id`.  Uncorrelated drives produce
+bare events with no `#id`.
 
 ---
 
@@ -122,8 +128,10 @@ Rules:
 - The id must consist of decimal digits only (no letters or other chars).
 - If the last token begins with `#` but contains non-digit characters it
   is treated as a positional argument, not a correlation id.
-- `EVT` events (async completions) are never correlated — they carry no
-  `#id` even if the triggering command included one.
+- `EVT done T/D/G` and `EVT safety_stop` echo the `#id` of the originating
+  T, D, or G command when that command carried one.  S-mode watchdog
+  (`EVT safety_stop`) echoes the `#id` of the S command that established
+  the session, if any.  Commands with no `#id` produce bare events.
 - Multiple `ERR` lines from a single `SET` command (one per bad key) each
   carry the correlation id.
 
@@ -489,19 +497,37 @@ recorded within `max_age_s` seconds.
 
 Motion commands are asynchronous: the firmware returns `OK …` immediately
 (acknowledging the command parameters) and later sends an `EVT done …`
-or `EVT safety_stop` when the drive ends.  There is no per-drive
-correlation id on the EVT.
+or `EVT safety_stop` when the drive ends.
+
+When the originating T, D, or G command carried a `#id`, that id is echoed
+on the asynchronous completion event.  Commands issued without a `#id`
+produce bare events with no `#id`.
 
 ### EVT Completion Events
 
-| Event               | Emitted when                                          |
-|---------------------|-------------------------------------------------------|
-| `EVT done T`        | Timed drive elapsed                                   |
-| `EVT done D`        | Distance drive target reached (or 5-second timeout)   |
-| `EVT done G`        | Go-to arc completed within `doneTol` mm               |
-| `EVT safety_stop`   | S-mode watchdog expired (no S command within `sTimeout` ms) |
+| Event                  | Emitted when                                          |
+|------------------------|-------------------------------------------------------|
+| `EVT done T [#id]`     | Timed drive elapsed                                   |
+| `EVT done D [#id]`     | Distance drive target reached (or 5-second timeout)   |
+| `EVT done G [#id]`     | Go-to arc completed within `doneTol` mm               |
+| `EVT safety_stop [#id]`| S-mode watchdog expired (no S command within `sTimeout` ms) |
 
-EVT messages carry no `#id`.
+`[#id]` is present only when the originating command carried one.  Example:
+
+```
+T 200 200 1000 #12
+OK drive l=200 r=200 ms=1000 #12
+… (later) …
+EVT done T #12
+```
+
+Bare form (no corr id):
+
+```
+T 200 200 1000
+OK drive l=200 r=200 ms=1000
+EVT done T
+```
 
 ### S — Streaming (Watchdog) Drive
 
@@ -533,7 +559,7 @@ OK drive l=-100 r=100
 T <l> <r> <ms> [#id]
 → OK drive l=<l> r=<r> ms=<ms> [#id]
   … (later, asynchronously) …
-  EVT done T
+  EVT done T [#id]
 ```
 
 Drives at the given speeds for `ms` milliseconds (1 … 30 000).
@@ -546,6 +572,10 @@ Example:
 T 200 200 1000
 OK drive l=200 r=200 ms=1000
 EVT done T
+
+T 200 200 1000 #12
+OK drive l=200 r=200 ms=1000 #12
+EVT done T #12
 ```
 
 ### D — Distance Drive
@@ -554,7 +584,7 @@ EVT done T
 D <l> <r> <mm> [#id]
 → OK drive l=<l> r=<r> mm=<mm> [#id]
   … (later, asynchronously) …
-  EVT done D
+  EVT done D [#id]
 ```
 
 Drives at the given speeds until the average of the absolute encoder
@@ -569,6 +599,10 @@ Example:
 D 200 200 300
 OK drive l=200 r=200 mm=300
 EVT done D
+
+D 200 200 300 #5
+OK drive l=200 r=200 mm=300 #5
+EVT done D #5
 ```
 
 ### G — Go-To (relative XY)
@@ -577,7 +611,7 @@ EVT done D
 G <x> <y> <speed> [#id]
 → OK goto x=<x> y=<y> speed=<speed> [#id]
   … (later, asynchronously) …
-  EVT done G
+  EVT done G [#id]
 ```
 
 Navigate to the relative XY point `(x, y)` (mm) at the given
@@ -597,6 +631,10 @@ Example:
 G 300 0 200
 OK goto x=300 y=0 speed=200
 EVT done G
+
+G 300 0 200 #7
+OK goto x=300 y=0 speed=200 #7
+EVT done G #7
 ```
 
 ### STOP
@@ -852,12 +890,23 @@ TLM t=12345 mode=I enc=0,0 pose=0,0,0 line=120,340,330,118 color=21,30,18,80
 
 ### Motion End-to-End
 
+Without correlation id:
+
 ```
 D 200 200 300
 OK drive l=200 r=200 mm=300
 TLM t=12400 mode=D enc=45,44 pose=45,0,0
 TLM t=12420 mode=D enc=89,88 pose=89,0,0
 EVT done D
+```
+
+With correlation id (host can match completion to originating request):
+
+```
+D 200 200 300 #5
+OK drive l=200 r=200 mm=300 #5
+TLM t=12400 mode=D enc=45,44 pose=45,0,0
+EVT done D #5
 ```
 
 ### Clock-Sync Alignment

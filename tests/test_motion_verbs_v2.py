@@ -171,12 +171,20 @@ class TestTCommand:
         assert kv["ms"] == "1000"
 
     def test_t_completion_evt_format(self) -> None:
-        """After ~ms, DriveController emits EVT done T (no #id, no cmd=)."""
+        """After ~ms, DriveController emits EVT done T (no #id when not correlated)."""
         line = "EVT done T"
         name, body = parse_evt(line)
         assert name == "done"
         assert body == "T"
         assert "#" not in line
+
+    def test_t_completion_evt_with_corr_id(self) -> None:
+        """T 200 200 1000 #12 → EVT done T #12 (corr id echoed on completion)."""
+        line = "EVT done T #12"
+        name, body = parse_evt(line)
+        assert name == "done"
+        assert "T" in body
+        assert "#12" in line
 
     def test_t_completion_no_cmd_prefix(self) -> None:
         """EVT completion is 'EVT done T', NOT 'EVT done cmd=T'."""
@@ -198,14 +206,21 @@ class TestTCommand:
         assert "ms" in detail
 
     def test_t_with_corr_id(self) -> None:
-        """T 200 150 1000 #5 → OK drive ... #5 (synchronous reply only)."""
+        """T 200 150 1000 #5 → OK drive ... #5 (synchronous reply)."""
         resp = self._make_t_ok(200, 150, 1000, corr_id="5")
         assert resp.endswith("#5")
 
-    def test_t_evt_no_corr_id(self) -> None:
-        """EVT done T has no #id (async event)."""
+    def test_t_evt_no_corr_id_when_not_supplied(self) -> None:
+        """EVT done T has no #id when T command had no #id."""
         line = "EVT done T"
         assert "#" not in line
+
+    def test_t_evt_corr_id_when_supplied(self) -> None:
+        """EVT done T #12 when T command carried #12."""
+        line = "EVT done T #12"
+        name, body = parse_evt(line)
+        assert name == "done"
+        assert "#12" in line
 
 
 # ---------------------------------------------------------------------------
@@ -482,48 +497,50 @@ class TestZeroCommand:
 # ---------------------------------------------------------------------------
 
 class TestEvtFormat:
-    """Validate async EVT event format."""
+    """Validate async EVT event format — bare (no corr id) and correlated cases."""
 
-    def test_safety_stop_no_id(self) -> None:
-        """EVT safety_stop has no #id."""
+    # --- Bare events (no originating #id) ---
+
+    def test_safety_stop_bare_no_id(self) -> None:
+        """EVT safety_stop (uncorrelated) has no #id."""
         line = "EVT safety_stop"
         assert "#" not in line
 
-    def test_done_t_no_id(self) -> None:
-        """EVT done T has no #id."""
+    def test_done_t_bare_no_id(self) -> None:
+        """EVT done T (uncorrelated) has no #id."""
         line = "EVT done T"
         assert "#" not in line
 
-    def test_done_d_no_id(self) -> None:
-        """EVT done D has no #id."""
+    def test_done_d_bare_no_id(self) -> None:
+        """EVT done D (uncorrelated) has no #id."""
         line = "EVT done D"
         assert "#" not in line
 
-    def test_done_g_no_id(self) -> None:
-        """EVT done G has no #id."""
+    def test_done_g_bare_no_id(self) -> None:
+        """EVT done G (uncorrelated) has no #id."""
         line = "EVT done G"
         assert "#" not in line
 
     def test_done_t_format(self) -> None:
-        """EVT done T: name=done, body=T."""
+        """EVT done T: name=done, body starts with T."""
         name, body = parse_evt("EVT done T")
         assert name == "done"
         assert body == "T"
 
     def test_done_d_format(self) -> None:
-        """EVT done D: name=done, body=D."""
+        """EVT done D: name=done, body starts with D."""
         name, body = parse_evt("EVT done D")
         assert name == "done"
         assert body == "D"
 
     def test_done_g_format(self) -> None:
-        """EVT done G: name=done, body=G."""
+        """EVT done G: name=done, body starts with G."""
         name, body = parse_evt("EVT done G")
         assert name == "done"
         assert body == "G"
 
     def test_safety_stop_format(self) -> None:
-        """EVT safety_stop: name=safety_stop, no body."""
+        """EVT safety_stop: name=safety_stop, no body (bare)."""
         name, body = parse_evt("EVT safety_stop")
         assert name == "safety_stop"
         assert body == ""
@@ -532,6 +549,45 @@ class TestEvtFormat:
         """None of the EVT done X completions use 'cmd=' prefix."""
         for line in ["EVT done T", "EVT done D", "EVT done G"]:
             assert "cmd=" not in line, f"Legacy cmd= found in {line!r}"
+
+    # --- Correlated events (originating command carried #id) ---
+
+    def test_done_t_with_corr_id(self) -> None:
+        """EVT done T #12 — corr id echoed when T #12 was used."""
+        line = "EVT done T #12"
+        name, body = parse_evt(line)
+        assert name == "done"
+        assert "T" in body
+        assert "#12" in line
+
+    def test_done_d_with_corr_id(self) -> None:
+        """EVT done D #5 — corr id echoed when D #5 was used."""
+        line = "EVT done D #5"
+        name, body = parse_evt(line)
+        assert name == "done"
+        assert "D" in body
+        assert "#5" in line
+
+    def test_done_g_with_corr_id(self) -> None:
+        """EVT done G #99 — corr id echoed when G #99 was used."""
+        line = "EVT done G #99"
+        name, body = parse_evt(line)
+        assert name == "done"
+        assert "G" in body
+        assert "#99" in line
+
+    def test_safety_stop_with_corr_id(self) -> None:
+        """EVT safety_stop #3 — corr id echoed when active S had #3."""
+        line = "EVT safety_stop #3"
+        name, body = parse_evt(line)
+        assert name == "safety_stop"
+        assert "#3" in line
+
+    def test_corr_id_format_is_hash_digits(self) -> None:
+        """Correlated EVT id uses '#' followed by decimal digits only."""
+        import re
+        for line in ["EVT done T #12", "EVT done D #5", "EVT done G #99", "EVT safety_stop #3"]:
+            assert re.search(r"#\d+$", line), f"Malformed corr id in {line!r}"
 
 
 # ---------------------------------------------------------------------------

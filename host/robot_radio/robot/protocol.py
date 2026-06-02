@@ -15,10 +15,13 @@ Requests:
 Responses:
   OK   — command accepted:       "OK pong t=12345"
   ERR  — rejected:               "ERR badarg missing key"
-  EVT  — async event:            "EVT done T", "EVT safety_stop"
+  EVT  — async event:            "EVT done T", "EVT done T #12", "EVT safety_stop"
   TLM  — telemetry frame:        "TLM t=12345 enc=1024,1019 pose=350,-12,1780"
   CFG  — config dump:            "CFG ml=0.487 mr=0.481 ..."
   ID   — identity/capabilities:  "ID model=Nezha2 name=GUTOV ..."
+
+EVT done T/D/G and EVT safety_stop carry a trailing '#<id>' when the
+originating T/D/G command included one.  Bare events (no id) are unchanged.
 """
 
 from __future__ import annotations
@@ -583,10 +586,15 @@ class NezhaProtocol:
     # Blocking drive helpers (wait for EVT done or safety_stop)
     # ------------------------------------------------------------------
 
-    def wait_for_evt_done(self, verb: str, timeout_ms: int) -> str:
+    def wait_for_evt_done(self, verb: str, timeout_ms: int,
+                          corr_id: str | None = None) -> str:
         """Block until 'EVT done <verb>' or 'EVT safety_stop' arrives.
 
         Returns the outcome string: "done", "safety_stop", or "timeout".
+
+        If ``corr_id`` is provided, only EVT lines carrying that id (or bare
+        EVT lines without any id) are accepted.  This lets the host distinguish
+        completions when multiple correlated drives are in flight.
         """
         deadline = time.time() + timeout_ms / 1000.0
         while time.time() < deadline:
@@ -595,6 +603,12 @@ class NezhaProtocol:
                 if r is None:
                     continue
                 if r.tag == "EVT":
+                    # When a corr_id filter is specified, skip EVT lines that
+                    # carry a *different* id.  Bare EVT lines (r.corr_id None)
+                    # are always accepted.
+                    if corr_id is not None and r.corr_id is not None:
+                        if r.corr_id != corr_id:
+                            continue
                     if r.tokens and r.tokens[0] == "done":
                         # Accept if verb matches or no verb given in EVT.
                         if len(r.tokens) < 2 or r.tokens[1] == verb:

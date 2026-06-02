@@ -60,10 +60,11 @@ public:
     void stop();
     void streamDrive(int32_t leftMms, int32_t rightMms, ReplyFn fn, void* ctx);
     void timedDrive(int32_t leftMms, int32_t rightMms, uint32_t durationMs,
-                    ReplyFn fn, void* ctx);
+                    ReplyFn fn, void* ctx, const char* corr_id = nullptr);
     void distanceDrive(int32_t leftMms, int32_t rightMms, int32_t targetMm,
-                       ReplyFn fn, void* ctx);
-    void goTo(float tx, float ty, float speedMms, ReplyFn fn, void* ctx);
+                       ReplyFn fn, void* ctx, const char* corr_id = nullptr);
+    void goTo(float tx, float ty, float speedMms, ReplyFn fn, void* ctx,
+              const char* corr_id = nullptr);
 
     // ---------------------------------------------------------------------------
     // Non-drive action methods

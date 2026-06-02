@@ -27,14 +27,16 @@ public:
 
     // Entry points — called from Robot drive methods.
     // Each captures fn/ctx as the originating reply sink for async completions.
+    // corr_id: originating command correlation id (digits only, no '#');
+    //          nullptr or empty string when no id was supplied.
     void beginStream(float leftMms, float rightMms, uint32_t now_ms,
                      ReplyFn fn, void* ctx);
     void beginTimed(float leftMms, float rightMms, uint32_t durationMs, uint32_t now_ms,
-                    ReplyFn fn, void* ctx);
+                    ReplyFn fn, void* ctx, const char* corr_id = nullptr);
     void beginDistance(float leftMms, float rightMms, int32_t targetMm, uint32_t now_ms,
-                       ReplyFn fn, void* ctx);
+                       ReplyFn fn, void* ctx, const char* corr_id = nullptr);
     void beginGoTo(float tx, float ty, float speedMms, uint32_t now_ms,
-                   ReplyFn fn, void* ctx);
+                   ReplyFn fn, void* ctx, const char* corr_id = nullptr);
     void stop(uint32_t now_ms, ReplyFn fn, void* ctx);
 
     // Advance all state machines. Call once per main-loop iteration.
@@ -57,6 +59,11 @@ private:
     // channel that originated the drive command.
     ReplyFn  _driveFn;
     void*    _driveCtx;
+
+    // Originating command correlation id (digits only, no '#').
+    // Stored when T/D/G begin; appended to EVT done and EVT safety_stop.
+    // Empty string when no id was supplied.
+    char     _corrId[16];
 
     // S-mode watchdog
     uint32_t _lastSMs;

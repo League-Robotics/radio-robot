@@ -497,28 +497,67 @@ class TestResponseParsing:
 class TestEVTDone:
     """Verify EVT done / EVT safety_stop are parsed correctly."""
 
+    # --- Bare EVT (no corr id) ---
+
     def test_evt_done_T(self) -> None:
         r = parse_response("EVT done T")
         assert r is not None
         assert r.tag == "EVT"
         assert r.tokens[0] == "done"
         assert r.tokens[1] == "T"
+        assert r.corr_id is None
 
     def test_evt_done_D(self) -> None:
         r = parse_response("EVT done D")
         assert r is not None
         assert r.tokens == ["done", "D"]
+        assert r.corr_id is None
 
     def test_evt_done_G(self) -> None:
         r = parse_response("EVT done G")
         assert r is not None
         assert r.tokens == ["done", "G"]
+        assert r.corr_id is None
 
     def test_evt_safety_stop(self) -> None:
         r = parse_response("EVT safety_stop")
         assert r is not None
         assert r.tag == "EVT"
         assert r.tokens == ["safety_stop"]
+        assert r.corr_id is None
+
+    # --- Correlated EVT (originating command carried #id) ---
+
+    def test_evt_done_T_with_corr_id(self) -> None:
+        """EVT done T #12 — parse_response extracts corr_id='12'."""
+        r = parse_response("EVT done T #12")
+        assert r is not None
+        assert r.tag == "EVT"
+        assert r.tokens == ["done", "T"]
+        assert r.corr_id == "12"
+
+    def test_evt_done_D_with_corr_id(self) -> None:
+        """EVT done D #5 — corr_id extracted."""
+        r = parse_response("EVT done D #5")
+        assert r is not None
+        assert r.tokens == ["done", "D"]
+        assert r.corr_id == "5"
+
+    def test_evt_done_G_with_corr_id(self) -> None:
+        """EVT done G #99 — corr_id extracted."""
+        r = parse_response("EVT done G #99")
+        assert r is not None
+        assert r.tokens == ["done", "G"]
+        assert r.corr_id == "99"
+
+    def test_evt_safety_stop_with_corr_id(self) -> None:
+        """EVT safety_stop #3 — corr_id extracted."""
+        r = parse_response("EVT safety_stop #3")
+        assert r is not None
+        assert r.tokens == ["safety_stop"]
+        assert r.corr_id == "3"
+
+    # --- wait_for_evt_done ---
 
     def test_wait_for_evt_done_returns_done(self) -> None:
         proto, conn = _proto()
@@ -537,6 +576,37 @@ class TestEVTDone:
         conn.read_lines.return_value = []  # no replies ever
         outcome = proto.wait_for_evt_done("T", timeout_ms=10)  # very short
         assert outcome == "timeout"
+
+    def test_wait_for_evt_done_with_matching_corr_id(self) -> None:
+        """wait_for_evt_done accepts EVT done T #12 when corr_id='12'."""
+        proto, conn = _proto()
+        conn.read_lines.return_value = ["EVT done T #12"]
+        outcome = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="12")
+        assert outcome == "done"
+
+    def test_wait_for_evt_done_skips_wrong_corr_id(self) -> None:
+        """wait_for_evt_done skips EVT done T #99 when waiting for corr_id='12'."""
+        import itertools
+        proto, conn = _proto()
+        # Always return the wrong id — the filter should skip it and we time out.
+        conn.read_lines.side_effect = itertools.repeat(["EVT done T #99"])
+        outcome = proto.wait_for_evt_done("T", timeout_ms=20, corr_id="12")
+        # Should not accept the wrong id → times out.
+        assert outcome == "timeout"
+
+    def test_wait_for_evt_done_accepts_bare_evt_when_filtering(self) -> None:
+        """Bare EVT done T (no id) is accepted even when a corr_id filter is set."""
+        proto, conn = _proto()
+        conn.read_lines.return_value = ["EVT done T"]
+        outcome = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="12")
+        assert outcome == "done"
+
+    def test_wait_for_evt_done_corr_id_safety_stop(self) -> None:
+        """EVT safety_stop #5 is accepted when waiting for corr_id='5'."""
+        proto, conn = _proto()
+        conn.read_lines.return_value = ["EVT safety_stop #5"]
+        outcome = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="5")
+        assert outcome == "safety_stop"
 
 
 # ===========================================================================

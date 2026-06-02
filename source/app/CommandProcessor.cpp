@@ -769,7 +769,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
             replyErr(rbuf, sizeof(rbuf), "range", "ms", corr_id, replyFn, ctx);
             return;
         }
-        _robot.timedDrive((int32_t)l, (int32_t)r, (uint32_t)ms, replyFn, ctx);
+        _robot.timedDrive((int32_t)l, (int32_t)r, (uint32_t)ms, replyFn, ctx, corr_id);
         char body[48];
         snprintf(body, sizeof(body), "l=%d r=%d ms=%d", l, r, ms);
         replyOK(rbuf, sizeof(rbuf), "drive", body, corr_id, replyFn, ctx);
@@ -798,7 +798,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
             replyErr(rbuf, sizeof(rbuf), "range", "mm", corr_id, replyFn, ctx);
             return;
         }
-        _robot.distanceDrive((int32_t)l, (int32_t)r, (int32_t)mm, replyFn, ctx);
+        _robot.distanceDrive((int32_t)l, (int32_t)r, (int32_t)mm, replyFn, ctx, corr_id);
         char body[48];
         snprintf(body, sizeof(body), "l=%d r=%d mm=%d", l, r, mm);
         replyOK(rbuf, sizeof(rbuf), "drive", body, corr_id, replyFn, ctx);
@@ -827,7 +827,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
             replyErr(rbuf, sizeof(rbuf), "range", "speed", corr_id, replyFn, ctx);
             return;
         }
-        _robot.goTo((float)x, (float)y, (float)speed, replyFn, ctx);
+        _robot.goTo((float)x, (float)y, (float)speed, replyFn, ctx, corr_id);
         char body[64];
         snprintf(body, sizeof(body), "x=%d y=%d speed=%d", x, y, speed);
         replyOK(rbuf, sizeof(rbuf), "goto", body, corr_id, replyFn, ctx);
