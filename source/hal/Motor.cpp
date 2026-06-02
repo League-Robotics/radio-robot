@@ -162,6 +162,146 @@ int32_t Motor::readSpeedRaw() const
     return (int32_t)raw;
 }
 
+// ---------------------------------------------------------------------------
+// Additional vendor register wrappers (ticket 008-004)
+// ---------------------------------------------------------------------------
+
+void Motor::timedMove(uint8_t dir, int16_t value, uint8_t mode)
+{
+    // Frame verified against pxt-nezha2/main.ts __move():
+    //   buf[0]=0xFF, buf[1]=0xF9, buf[2]=motorId, buf[3]=direction,
+    //   buf[4]=0x70, buf[5]=(value>>8)&0xFF, buf[6]=mode, buf[7]=(value>>0)&0xFF
+    //
+    // value is encoded big-endian with mode interleaved at buf[6].
+    // This layout is NOT a standard little-endian int16; it matches the vendor
+    // TypeScript byte-for-byte.
+    uint8_t buf[8] = {
+        0xFF, 0xF9,
+        _motorId,
+        dir,
+        0x70,
+        (uint8_t)((uint16_t)value >> 8),    // high byte
+        mode,                                // mode at buf[6]
+        (uint8_t)((uint16_t)value & 0xFF)   // low byte at buf[7]
+    };
+    _i2c.write((ADDR << 1), (uint8_t*)buf, 8, false);
+}
+
+void Motor::moveToAngle(uint16_t angle, uint8_t mode)
+{
+    // Clamp to 0-359 (mirrors vendor TS: angle %= 360).
+    angle = angle % 360;
+
+    // Frame verified against pxt-nezha2/main.ts moveToAbsAngle():
+    //   buf[0]=0xFF, buf[1]=0xF9, buf[2]=motorId, buf[3]=0x00,
+    //   buf[4]=0x5D, buf[5]=(angle>>8)&0xFF, buf[6]=turnMode, buf[7]=(angle>>0)&0xFF
+    //
+    // Same interleaved layout as 0x70: high byte at [5], mode at [6], low byte at [7].
+    uint8_t buf[8] = {
+        0xFF, 0xF9,
+        _motorId,
+        0x00,
+        0x5D,
+        (uint8_t)(angle >> 8),    // high byte
+        mode,                     // ServoMotionMode at buf[6]
+        (uint8_t)(angle & 0xFF)   // low byte at buf[7]
+    };
+    _i2c.write((ADDR << 1), (uint8_t*)buf, 8, false);
+
+    // BUG-CRITICAL: 4 ms post-write busy-wait (no task/fiber interleave).
+    //
+    // Vendor comment: "等待不能删除，且禁止有其他任务插入，否则有BUG"
+    // Translation: "The wait cannot be deleted and no other tasks are
+    // allowed to interleave, otherwise there will be a BUG."
+    //
+    // We use a busy-wait (spin on system_timer_current_time_us()) rather
+    // than fiber_sleep(4).  fiber_sleep() yields control to the CODAL
+    // scheduler, which can dispatch another fiber that issues its own I2C
+    // write before the chip has finished processing the 0x5D command —
+    // exactly the interleave the vendor warns against.  The busy-wait
+    // holds the CPU for ~4 ms with no scheduler switch, guaranteeing the
+    // 0x5D command completes in isolation.
+    uint64_t deadline = system_timer_current_time_us() + 4000;  // 4 ms
+    while (system_timer_current_time_us() < deadline) {
+        // busy-wait — intentionally does not yield
+    }
+}
+
+void Motor::resetHome()
+{
+    // Frame verified against pxt-nezha2/main.ts reset():
+    //   [0xFF, 0xF9, motorId, 0x00, 0x1D, 0x00, 0xF5, 0x00]
+    //
+    // The vendor also resets relativeAngularArr[motor-1] = 0 and calls
+    // motorDelay(1, Second) to allow the motor to physically reach home.
+    // Callers should wait ≥1 s before issuing further move commands.
+    uint8_t buf[8] = {
+        0xFF, 0xF9,
+        _motorId,
+        0x00, 0x1D,
+        0x00, 0xF5,
+        0x00
+    };
+    _i2c.write((ADDR << 1), (uint8_t*)buf, 8, false);
+}
+
+void Motor::setGlobalSpeed(uint8_t speed)
+{
+    // Frame verified against pxt-nezha2/main.ts setServoSpeed():
+    //   speedEnc = speed * 9   (0–900 for speed 0–100%)
+    //   [0xFF, 0xF9, 0x00, 0x00, 0x77, speedEncHigh, 0x00, speedEncLow]
+    //
+    // motorId (buf[2]) is 0x00 — this is a board-global command affecting
+    // all motor channels.  buf[6] is 0x00, not 0xF5.
+    if (speed > 100) speed = 100;
+    uint16_t speedEnc = (uint16_t)speed * 9;   // 0–900
+
+    uint8_t buf[8] = {
+        0xFF, 0xF9,
+        0x00,                              // board-global, not per-motor
+        0x00,
+        0x77,
+        (uint8_t)(speedEnc >> 8),          // high byte
+        0x00,                              // buf[6] = 0x00 per vendor TS
+        (uint8_t)(speedEnc & 0xFF)         // low byte
+    };
+    _i2c.write((ADDR << 1), (uint8_t*)buf, 8, false);
+}
+
+bool Motor::readVersion(uint8_t& maj, uint8_t& min, uint8_t& patch)
+{
+    // Frame verified against pxt-nezha2/main.ts readVersion():
+    //   Write: [0xFF, 0xF9, 0x00, 0x00, 0x88, 0x00, 0x00, 0x00]
+    //   Read:  3 bytes [major, minor, patch]
+    //
+    // motorId (buf[2]) is 0x00 — board-global command.
+    // buf[6] is 0x00 (NOT 0xF5 as used in motor-specific read commands).
+    // No pre/post delay in the vendor TS for this command.
+    uint8_t cmd[8] = {
+        0xFF, 0xF9,
+        0x00, 0x00,
+        0x88,
+        0x00, 0x00, 0x00
+    };
+    int writeResult = _i2c.write((ADDR << 1), (uint8_t*)cmd, 8, false);
+    if (writeResult != MICROBIT_OK) {
+        maj = min = patch = 0;
+        return false;
+    }
+
+    uint8_t resp[3] = {0, 0, 0};
+    int readResult = _i2c.read((ADDR << 1), (uint8_t*)resp, 3, false);
+    if (readResult != MICROBIT_OK) {
+        maj = min = patch = 0;
+        return false;
+    }
+
+    maj   = resp[0];
+    min   = resp[1];
+    patch = resp[2];
+    return true;
+}
+
 bool Motor::readSpeed(float& mmPerSec, const RobotConfig& cfg) const
 {
     int32_t raw = readSpeedRaw();

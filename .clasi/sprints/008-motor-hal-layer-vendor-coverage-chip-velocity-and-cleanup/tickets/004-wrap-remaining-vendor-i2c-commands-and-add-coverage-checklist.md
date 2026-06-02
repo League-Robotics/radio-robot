@@ -1,11 +1,13 @@
 ---
-id: "004"
-title: "Wrap remaining vendor I2C commands and add coverage checklist"
-status: open
-use-cases: [SUC-004]
-depends-on: ['002']
-github-issue: ""
-issue: "nezha-full-vendor-i2c-coverage.md"
+id: '004'
+title: Wrap remaining vendor I2C commands and add coverage checklist
+status: done
+use-cases:
+- SUC-004
+depends-on:
+- '002'
+github-issue: ''
+issue: nezha-full-vendor-i2c-coverage.md
 completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -35,25 +37,26 @@ them for completeness and diagnostic use, but do not wire them into
 
 ## Acceptance Criteria
 
-- [ ] `Motor::timedMove(uint8_t mode, int16_t value, uint8_t dir)` wraps
+- [x] `Motor::timedMove(uint8_t mode, int16_t value, uint8_t dir)` wraps
   `0x70`; correct frame bytes confirmed.
-- [ ] `Motor::moveToAngle(uint16_t angle, uint8_t mode)` wraps `0x5D`;
+- [x] `Motor::moveToAngle(uint16_t angle, uint8_t mode)` wraps `0x5D`;
   4 ms post-write delay present; code comment documents task-interleave
   resolution.
-- [ ] `Motor::resetHome()` wraps `0x1D`.
-- [ ] `Motor::setGlobalSpeed(uint8_t speed)` wraps `0x77` (speed×9 →
+- [x] `Motor::resetHome()` wraps `0x1D`.
+- [x] `Motor::setGlobalSpeed(uint8_t speed)` wraps `0x77` (speed×9 →
   0–900 encoding).
-- [ ] `bool Motor::readVersion(uint8_t& maj, uint8_t& min, uint8_t& patch)`
+- [x] `bool Motor::readVersion(uint8_t& maj, uint8_t& min, uint8_t& patch)`
   wraps `0x88`; returns true on success.
-- [ ] Coverage checklist table in `Motor.h` shows all 9 vendor registers
+- [x] Coverage checklist table in `Motor.h` shows all 9 vendor registers
   with their HAL method names (green = wrapped, cross-ref for `0x47`).
-- [ ] Unit verification: for each new method, construct the expected frame
+- [x] Unit verification: for each new method, construct the expected frame
   bytes on paper (or via a host-side test) and confirm they match the
   vendor `main.ts` encoding.
 - [ ] `readVersion()` returns a plausible (non-zero) version on hardware.
-- [ ] `python3 build.py` succeeds; RAM line reported and within budget.
+  (Bench validation — requires hardware)
+- [x] `python3 build.py` succeeds; RAM line reported and within budget.
 - [ ] Bench: `readVersion()` returns a valid version string; no I2C bus
-  lockup after calling each new method once.
+  lockup after calling each new method once. (Bench validation — requires hardware)
 
 ## Implementation Plan
 
