@@ -116,7 +116,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
         int32_t args[2] = {0, 0};
         int n = parseSignedArgs(buf + 1, args, 2);
         if (n < 2) {
-            char errbuf[140];
+            char errbuf[264];
             snprintf(errbuf, sizeof(errbuf), "ERR:%s", buf);
             replyFn(errbuf, ctx);
             return;
@@ -138,7 +138,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
         int32_t args[3] = {0, 0, 0};
         int n = parseSignedArgs(buf + 1, args, 3);
         if (n < 3) {
-            char errbuf[140];
+            char errbuf[264];
             snprintf(errbuf, sizeof(errbuf), "ERR:%s", buf);
             replyFn(errbuf, ctx);
             return;
@@ -160,7 +160,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
         int32_t args[3] = {0, 0, 0};
         int n = parseSignedArgs(buf + 1, args, 3);
         if (n < 3) {
-            char errbuf[140];
+            char errbuf[264];
             snprintf(errbuf, sizeof(errbuf), "ERR:%s", buf);
             replyFn(errbuf, ctx);
             return;
@@ -216,7 +216,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
         int32_t args[3] = {0, 0, 0};
         int n = parseSignedArgs(buf + 2, args, 3);
         if (n < 3) {
-            char errbuf[140];
+            char errbuf[264];
             snprintf(errbuf, sizeof(errbuf), "ERR:%s", buf);
             replyFn(errbuf, ctx);
             return;
@@ -285,7 +285,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
             int32_t args[1] = {0};
             int n = parseSignedArgs(buf + 3, args, 1);
             if (n < 1) {
-                char errbuf[140];
+                char errbuf[264];
                 snprintf(errbuf, sizeof(errbuf), "ERR:%s", buf);
                 replyFn(errbuf, ctx);
                 return;
@@ -409,7 +409,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
             }
         }
 
-        char errbuf[140];
+        char errbuf[264];
         snprintf(errbuf, sizeof(errbuf), "ERR:%s", buf);
         replyFn(errbuf, ctx);
         return;
@@ -494,7 +494,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
         int32_t args[3] = {0, 0, 0};
         int n = parseSignedArgs(buf + 2, args, 3);
         if (n < 3) {
-            char errbuf[140];
+            char errbuf[264];
             snprintf(errbuf, sizeof(errbuf), "ERR:%s", buf);
             replyFn(errbuf, ctx);
             return;
@@ -510,7 +510,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     // ── OL — linear scalar get/set ─────────────────────────────────────────
     if (len >= 2 && buf[0] == 'O' && buf[1] == 'L') {
         OtosSensor* otos = _robot.otos();
-        if (!otos) { char e[140]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return; }
+        if (!otos) { char e[264]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return; }
         if (len == 2) {
             char r[16];
             snprintf(r, sizeof(r), "OL%+d", (int)otos->getLinearScalar());
@@ -519,7 +519,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
             int32_t args[1] = {0};
             int n = parseSignedArgs(buf + 2, args, 1);
             if (n < 1) {
-                char e[140]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return;
+                char e[264]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return;
             }
             int v = clampInt((int)args[0], -128, 127);
             otos->setLinearScalar((int8_t)v);
@@ -533,7 +533,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     // ── OA — angular scalar get/set ────────────────────────────────────────
     if (len >= 2 && buf[0] == 'O' && buf[1] == 'A') {
         OtosSensor* otos = _robot.otos();
-        if (!otos) { char e[140]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return; }
+        if (!otos) { char e[264]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return; }
         if (len == 2) {
             char r[16];
             snprintf(r, sizeof(r), "OA%+d", (int)otos->getAngularScalar());
@@ -542,7 +542,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
             int32_t args[1] = {0};
             int n = parseSignedArgs(buf + 2, args, 1);
             if (n < 1) {
-                char e[140]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return;
+                char e[264]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return;
             }
             int v = clampInt((int)args[0], -128, 127);
             otos->setAngularScalar((int8_t)v);
@@ -631,7 +631,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
             return;
         }
 
-        char errbuf[140];
+        char errbuf[264];
         snprintf(errbuf, sizeof(errbuf), "ERR:%s", buf);
         replyFn(errbuf, ctx);
         return;
@@ -644,7 +644,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
         int32_t args[1] = {0};
         int n = parseSignedArgs(buf + 2, args, 1);
         if (n < 1) {
-            char e[140]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return;
+            char e[264]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return;
         }
         int val = portio.readAnalog((uint8_t)args[0]);
         char r[32];
@@ -659,7 +659,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
         int32_t args[2] = {0, 0};
         int n = parseSignedArgs(buf + 1, args, 2);
         if (n < 1) {
-            char e[140]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return;
+            char e[264]; snprintf(e, sizeof(e), "ERR:%s", buf); replyFn(e, ctx); return;
         }
         char r[32];
         if (n >= 2) {
@@ -674,7 +674,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     }
 
     // ── Default — unrecognized command ─────────────────────────────────────
-    char errbuf[140];
+    char errbuf[264];
     snprintf(errbuf, sizeof(errbuf), "ERR:%s", buf);
     replyFn(errbuf, ctx);
 }
