@@ -31,6 +31,7 @@ Robot::Robot(MicroBitI2C&    i2c,
       _portio(io),
       _mc(_motor, _config),
       _odo(),
+      _dc(_mc, _odo, _config),
       _cmd()
 {
     // uBit.init() was called by main.cpp before constructing Robot.
@@ -50,15 +51,42 @@ Robot::Robot(MicroBitI2C&    i2c,
     // Emit initial announcement so the host can detect the device.
     _announcer.announce();
 
-    // Wire hardware pointers into the command processor.
-    _cmd.init(&_motor, &_mc, &_odo,
-              _otosPresent ? &_otos : nullptr,
-              _linePresent ? &_line : nullptr,
-              _colorPresent ? &_color : nullptr,
-              _gripperPresent ? &_gripper : nullptr,
-              &_portio);
-    _cmd.setConfig(&_config);
+    // Wire Robot back-pointer into the command processor.
+    _cmd.setRobot(this);
 }
+
+// ---------------------------------------------------------------------------
+// Drive action methods — delegate to DriveController
+// ---------------------------------------------------------------------------
+
+void Robot::stop()
+{
+    uint32_t now_ms = _uBit.systemTime();
+    // stop() with no reply fn: use a no-op sink
+    _dc.stop(now_ms, [](const char*, void*){}, nullptr);
+}
+
+void Robot::streamDrive(int32_t leftMms, int32_t rightMms)
+{
+    _dc.beginStream((float)leftMms, (float)rightMms, _uBit.systemTime());
+}
+
+void Robot::timedDrive(int32_t leftMms, int32_t rightMms, uint32_t durationMs)
+{
+    _dc.beginTimed((float)leftMms, (float)rightMms, durationMs, _uBit.systemTime());
+}
+
+void Robot::distanceDrive(int32_t leftMms, int32_t rightMms, int32_t targetMm)
+{
+    _dc.beginDistance((float)leftMms, (float)rightMms, targetMm, _uBit.systemTime());
+}
+
+void Robot::goTo(float tx, float ty, float speedMms)
+{
+    _dc.beginGoTo(tx, ty, speedMms, _uBit.systemTime());
+}
+
+// ---------------------------------------------------------------------------
 
 void Robot::run() {
     while (true) {

@@ -12,6 +12,7 @@
 #include "Announcer.h"
 #include "MotorController.h"
 #include "Odometry.h"
+#include "DriveController.h"
 #include "CommandProcessor.h"
 
 /**
@@ -43,6 +44,24 @@ public:
 
     void run();  // Never returns; enters tick loop
 
+    // Drive action methods — delegate to DriveController.
+    void stop();
+    void streamDrive(int32_t leftMms, int32_t rightMms);
+    void timedDrive(int32_t leftMms, int32_t rightMms, uint32_t durationMs);
+    void distanceDrive(int32_t leftMms, int32_t rightMms, int32_t targetMm);
+    void goTo(float tx, float ty, float speedMms);
+
+    // Component accessors — used by CommandProcessor for K* setters.
+    RobotConfig&     config()          { return _config; }
+    MotorController& motor()           { return _mc; }
+    DriveController& driveController() { return _dc; }
+    Odometry&        odometry()        { return _odo; }
+    OtosSensor*      otos()            { return _otosPresent  ? &_otos  : nullptr; }
+    LineSensor*      lineSensor()      { return _linePresent  ? &_line  : nullptr; }
+    ColorSensor*     colorSensor()     { return _colorPresent ? &_color : nullptr; }
+    GripperServo*    gripper()         { return _gripperPresent ? &_gripper : nullptr; }
+    PortIO&          portIO()          { return _portio; }
+
 private:
     // Reference to the CODAL singleton — used for systemTime() in run().
     MicroBit& _uBit;
@@ -65,9 +84,10 @@ private:
     bool         _gripperPresent;
     PortIO       _portio;
 
-    // Control layer — declared after _motor and _cal to ensure correct init order.
+    // Control layer — declared after _motor and _config to ensure correct init order.
     MotorController  _mc;
     Odometry         _odo;
+    DriveController  _dc;
     CommandProcessor _cmd;
 
     char _buf[256];  // shared tick-loop scratch buffer (holds a 250-byte RAW250 message)
