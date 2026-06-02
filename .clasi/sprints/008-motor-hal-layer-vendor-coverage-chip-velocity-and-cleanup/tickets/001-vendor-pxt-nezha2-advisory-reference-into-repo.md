@@ -1,8 +1,9 @@
 ---
 id: '001'
 title: Vendor pxt-nezha2 advisory reference into repo
-status: open
-use-cases: [SUC-001]
+status: done
+use-cases:
+- SUC-001
 depends-on: []
 github-issue: ''
 issue: nezha-full-vendor-i2c-coverage.md
@@ -28,15 +29,16 @@ Source:
 
 ## Acceptance Criteria
 
-- [ ] `vendor/pxt-nezha2/main.ts` is present in `radio-robot-c`.
-- [ ] `vendor/pxt-nezha2/test.ts` is present (if it exists in the source).
-- [ ] `vendor/pxt-nezha2/README` (or `README.md`) explains advisory-only
+- [x] `vendor/pxt-nezha2/main.ts` is present in `radio-robot-c`.
+- [x] `vendor/pxt-nezha2/test.ts` is present (if it exists in the source).
+- [x] `vendor/pxt-nezha2/README` (or `README.md`) explains advisory-only
   status and identifies the authoritative source path.
-- [ ] `vendor/pxt-nezha2/` is not referenced in `codal.json`,
+- [x] `vendor/pxt-nezha2/` is not referenced in `codal.json`,
   `CMakeLists.txt`, or any build file — the TypeScript must never be
   compiled.
-- [ ] `python3 build.py` produces `MICROBIT.hex` without errors; report the
+- [x] `python3 build.py` produces `MICROBIT.hex` without errors; report the
   RAM line from build output as a baseline for subsequent tickets.
+  **RAM baseline: 120768 B / 122816 B = 98.33%**
 
 ## Implementation Plan
 
