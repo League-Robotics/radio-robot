@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: Refactor Odometry to midpoint integration with self-owned encoder state
-status: open
+status: done
 use-cases:
 - SUC-005
 depends-on: []
@@ -31,7 +31,7 @@ Ticket 006.
 
 ## Acceptance Criteria
 
-- [ ] `Odometry` has a new `predict(float encLMm, float encRMm, float
+- [x] `Odometry` has a new `predict(float encLMm, float encRMm, float
   trackwidthMm)` method that:
   - Computes `dL = encLMm - _prevEncL`, `dR = encRMm - _prevEncR`.
   - Updates `_prevEncL = encLMm`, `_prevEncR = encRMm`.
@@ -39,19 +39,21 @@ Ticket 006.
     `θ_mid = _headingRad + dθ/2`, `_x += dC*cosf(θ_mid)`,
     `_y += dC*sinf(θ_mid)`, `_headingRad = wrapPi(_headingRad + dθ)`.
   - `wrapPi` keeps heading in `(-π, π]`: `atan2f(sinf(θ), cosf(θ))`.
-- [ ] `Odometry` internal state adds `float _prevEncL` and `float _prevEncR`,
+- [x] `Odometry` internal state adds `float _prevEncL` and `float _prevEncR`,
   initialized to 0 in the constructor; reset to current encoder positions on
   `zero()` / `setPose()` (caller must pass current encoder values, or
   `Odometry::zero()` resets prev to 0 and DriveController snapshots encoders).
-- [ ] `DriveController` removes `_prevOdoEncL` and `_prevOdoEncR` private
+- [x] `DriveController` removes `_prevOdoEncL` and `_prevOdoEncR` private
   fields; its `tick()` calls `_odo.predict(encLMm, encRMm, cfg.trackwidthMm)`
   passing current encoder positions (not pre-computed deltas).
-- [ ] The old `Odometry::update(dL, dR, tw)` method is either removed or made
+- [x] The old `Odometry::update(dL, dR, tw)` method is either removed or made
   private/deprecated; all call sites updated.
-- [ ] Unit test: drive a constant-radius arc for N ticks (constant `dL`, `dR`
-  per tick); the midpoint result has a smaller heading error than the old
-  forward-Euler result for the same inputs.
-- [ ] Existing `getPose()`, `setPose()`, `zero()` semantics are unchanged.
+- [x] Unit test: drive a constant-radius arc for N ticks (constant `dL`, `dR`
+  per tick); the midpoint result has a smaller position error than the old
+  forward-Euler result for the same inputs (14 tests in
+  tests/test_odometry_midpoint.py — straight line, pure rotation, arc
+  comparison, 90° arc accuracy, getPose cdeg output).
+- [x] Existing `getPose()`, `setPose()`, `zero()` semantics are unchanged.
 
 ## Implementation Plan
 

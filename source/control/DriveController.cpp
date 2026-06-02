@@ -42,8 +42,6 @@ DriveController::DriveController(MotorController& mc, Odometry& odo, const Robot
     , _gArcStartR(0.0f)
     , _lastTickMs(0)
     , _currentTimeMs(0)
-    , _prevOdoEncL(0)
-    , _prevOdoEncR(0)
 {
 }
 
@@ -191,11 +189,8 @@ void DriveController::tick(uint32_t now_ms, ReplyFn fn, void* ctx)
 
         int32_t encL, encR;
         _mc.getEncoderPositions(encL, encR);
-        float dL = (float)(encL - _prevOdoEncL);
-        float dR = (float)(encR - _prevOdoEncR);
-        _prevOdoEncL = encL;
-        _prevOdoEncR = encR;
-        _odo.update(dL, dR, _cfg.trackwidthMm);
+        _odo.predict(static_cast<float>(encL), static_cast<float>(encR),
+                     _cfg.trackwidthMm);
     }
 
     // Convenience: drive sink (for async completions) vs active sink (for streaming).

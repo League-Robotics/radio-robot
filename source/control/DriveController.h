@@ -98,10 +98,6 @@ private:
     // Updated at top of tick()
     uint32_t _currentTimeMs;
 
-    // Previous encoder positions for odometry delta computation
-    int32_t _prevOdoEncL;
-    int32_t _prevOdoEncR;
-
     // Internal helpers
     void fullStop(ReplyFn fn, void* ctx);
 
