@@ -1,9 +1,11 @@
 ---
-id: "004"
-title: "SET/GET named-key config registry (replaces K* commands)"
-status: open
-use-cases: [SUC-003]
-depends-on: ["002"]
+id: '004'
+title: SET/GET named-key config registry (replaces K* commands)
+status: done
+use-cases:
+- SUC-003
+depends-on:
+- '002'
 issue: protocol-v2-raw250-hard-break.md
 completes_issue: false
 ---
@@ -62,15 +64,15 @@ After `SET` of PID params (`pid.kp/ki/kd/max`), call `MotorController::updatePid
 
 ## Acceptance Criteria
 
-- [ ] `GET` (no args) returns all config params in one `CFG` line that fits in 512-byte buffer.
-- [ ] `GET ml pid.kp` returns only those two keys.
-- [ ] `SET ml=0.487 mr=0.481 tw=120` — all three keys applied; confirmed by subsequent `GET`.
-- [ ] `SET pid.kp=2.5` calls `MotorController::updatePidGains()`.
-- [ ] `SET badkey=1` → `ERR badkey badkey`; valid keys in the same command are still applied.
-- [ ] Integer params (`tw`, `minSpeed`, `sTimeout`, `tick`) formatted without decimal point in `GET`.
-- [ ] Float params formatted with 3 decimal places (e.g. `ml=0.487`).
-- [ ] No `K*` commands remain in the firmware.
-- [ ] `#id` correlation works: `GET ml #9` → `CFG ml=0.487 #9`.
+- [x] `GET` (no args) returns all config params in one `CFG` line that fits in 512-byte buffer.
+- [x] `GET ml pid.kp` returns only those two keys.
+- [x] `SET ml=0.487 mr=0.481 tw=120` — all three keys applied; confirmed by subsequent `GET`.
+- [x] `SET pid.kp=2.5` calls `MotorController::updatePidGains()`.
+- [x] `SET badkey=1` → `ERR badkey badkey`; valid keys in the same command are still applied.
+- [x] Integer params (`tw`, `minSpeed`, `sTimeout`, `tick`) formatted without decimal point in `GET`.
+- [x] Float params formatted with 3 decimal places (e.g. `ml=0.487`).
+- [x] No `K*` commands remain in the firmware.
+- [x] `#id` correlation works: `GET ml #9` → `CFG ml=0.487 #9`.
 
 ## Implementation Plan
 

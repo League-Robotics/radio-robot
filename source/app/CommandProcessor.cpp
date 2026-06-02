@@ -4,6 +4,9 @@
 // correlation, OK/ERR/EVT/TLM/CFG/ID response taxonomy.
 // Legacy packed parsing (parseSignedArgs, K*, S+/T+/D+, etc.) removed.
 // Announcer removed; HELLO returns ERR unknown.
+//
+// Sprint 009, Ticket 004: SET/GET named-key config registry.
+// Static kRegistry[] maps friendly key names to RobotConfig fields.
 
 #include "CommandProcessor.h"
 #include "Robot.h"
@@ -21,6 +24,66 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cctype>
+
+// ---------------------------------------------------------------------------
+// Config registry — maps friendly key names to RobotConfig field offsets.
+// ---------------------------------------------------------------------------
+
+enum ConfigFieldType {
+    CFG_FLOAT,        // float field, wire format: %.3f
+    CFG_INT,          // int32_t field, wire format: %d
+    CFG_FLOAT_AS_INT  // float field stored as integer magnitude, wire format: %d
+};
+
+struct ConfigEntry {
+    const char*    key;
+    ConfigFieldType type;
+    size_t         offset;  // offsetof(RobotConfig, field)
+};
+
+// Helper macros so the table stays readable.
+#define CFG_F(k, field)  { k, CFG_FLOAT,        offsetof(RobotConfig, field) }
+#define CFG_I(k, field)  { k, CFG_INT,           offsetof(RobotConfig, field) }
+#define CFG_FI(k, field) { k, CFG_FLOAT_AS_INT,  offsetof(RobotConfig, field) }
+
+static const ConfigEntry kRegistry[] = {
+    // Encoder calibration (mm per degree of motor rotation)
+    CFG_F("ml",         mmPerDegL),
+    CFG_F("mr",         mmPerDegR),
+    // Feed-forward and motor scale factors
+    CFG_F("kff",        kFF),
+    CFG_F("klf",        kScaleLF),
+    CFG_F("klb",        kScaleLB),
+    CFG_F("krf",        kScaleRF),
+    CFG_F("krb",        kScaleRB),
+    // Slower-wheel adjustment
+    CFG_F("adjThr",     kAdjThreshold),
+    CFG_F("adjGain",    kAdjGain),
+    // Geometry — stored as float, displayed as integer (mm)
+    CFG_FI("tw",        trackwidthMm),
+    // Ratio PID gains
+    CFG_F("pid.kp",     ratioPidKp),
+    CFG_F("pid.ki",     ratioPidKi),
+    CFG_F("pid.kd",     ratioPidKd),
+    CFG_F("pid.max",    ratioPidMax),
+    // Go-to tolerances — stored as float, displayed as integer (mm)
+    CFG_FI("turnThr",   turnThresholdMm),
+    CFG_FI("doneTol",   doneTolMm),
+    // Command scaling
+    CFG_F("distScale",  distScale),
+    CFG_F("turnScale",  turnScale),
+    // Timing and speed (int32_t fields)
+    CFG_I("minSpeed",   minSpeedMms),
+    CFG_I("sTimeout",   sTimeoutMs),
+    CFG_I("tick",       tickMs),
+    CFG_I("tlmPeriod",  tlmPeriodMs),
+};
+
+#undef CFG_F
+#undef CFG_I
+#undef CFG_FI
+
+static constexpr int kRegistryCount = (int)(sizeof(kRegistry) / sizeof(kRegistry[0]));
 
 // ---------------------------------------------------------------------------
 // Constructor
@@ -205,6 +268,187 @@ void CommandProcessor::replyEvt(char* buf, int size,
 }
 
 // ---------------------------------------------------------------------------
+// Registry helpers — append one key=value pair to a string buffer.
+// Returns the number of characters written (not counting the NUL).
+// ---------------------------------------------------------------------------
+
+static int appendKeyValue(char* buf, int remaining, const ConfigEntry& entry,
+                          const RobotConfig& cfg)
+{
+    if (remaining <= 1) return 0;
+
+    const char* base = reinterpret_cast<const char*>(&cfg);
+    int written = 0;
+
+    switch (entry.type) {
+    case CFG_FLOAT: {
+        const float v = *reinterpret_cast<const float*>(base + entry.offset);
+        written = snprintf(buf, (size_t)remaining, "%s=%.3f", entry.key, (double)v);
+        break;
+    }
+    case CFG_INT: {
+        const int32_t v = *reinterpret_cast<const int32_t*>(base + entry.offset);
+        written = snprintf(buf, (size_t)remaining, "%s=%d", entry.key, (int)v);
+        break;
+    }
+    case CFG_FLOAT_AS_INT: {
+        const float v = *reinterpret_cast<const float*>(base + entry.offset);
+        written = snprintf(buf, (size_t)remaining, "%s=%d", entry.key, (int)v);
+        break;
+    }
+    }
+
+    if (written < 0 || written >= remaining) return remaining - 1;
+    return written;
+}
+
+// ---------------------------------------------------------------------------
+// handleGet — build CFG response line from named keys (or all keys).
+// tokens[1..ntok-1] are the requested keys; empty = all keys.
+// ---------------------------------------------------------------------------
+
+static void handleGet(char** tokens, int ntok, const RobotConfig& cfg,
+                      char* rbuf, int rbufSize, const char* corr_id,
+                      ReplyFn replyFn, void* ctx)
+{
+    // Build: "CFG key=val key=val ... [#id]"
+    char line[512];
+    int pos = 0;
+    int rem = (int)sizeof(line);
+
+    // Write the "CFG " prefix.
+    int n = snprintf(line + pos, (size_t)rem, "CFG");
+    if (n > 0 && n < rem) { pos += n; rem -= n; }
+
+    bool anyKey = (ntok <= 1);  // no args → dump all
+
+    if (anyKey) {
+        // Dump all registry entries.
+        for (int i = 0; i < kRegistryCount && rem > 2; ++i) {
+            line[pos++] = ' '; --rem;
+            int w = appendKeyValue(line + pos, rem, kRegistry[i], cfg);
+            pos += w; rem -= w;
+        }
+    } else {
+        // Dump only the requested keys.
+        for (int t = 1; t < ntok && rem > 2; ++t) {
+            const char* reqKey = tokens[t];
+            bool found = false;
+            for (int i = 0; i < kRegistryCount; ++i) {
+                if (strcmp(kRegistry[i].key, reqKey) == 0) {
+                    line[pos++] = ' '; --rem;
+                    int w = appendKeyValue(line + pos, rem, kRegistry[i], cfg);
+                    pos += w; rem -= w;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                // Unknown key in GET — reply with ERR for that key but continue.
+                CommandProcessor::replyErr(rbuf, rbufSize,
+                                           "badkey", reqKey, corr_id,
+                                           replyFn, ctx);
+            }
+        }
+    }
+
+    // Append correlation id if present.
+    if (corr_id && corr_id[0] != '\0' && rem > 3) {
+        int w = snprintf(line + pos, (size_t)rem, " #%s", corr_id);
+        if (w > 0 && w < rem) { pos += w; rem -= w; }
+    }
+
+    line[pos] = '\0';
+    replyFn(line, ctx);
+}
+
+// ---------------------------------------------------------------------------
+// handleSet — apply key=value pairs to RobotConfig.
+// Emits "OK set <applied>" and "ERR badkey <key>" per unknown key.
+// Calls updatePidGains() if any PID param was applied.
+// ---------------------------------------------------------------------------
+
+static void handleSet(KVPair* kvs, int nkv, RobotConfig& cfg,
+                      MotorController& mc,
+                      char* rbuf, int rbufSize, const char* corr_id,
+                      ReplyFn replyFn, void* ctx)
+{
+    // Build "OK set <applied keys>" body.
+    char applied[480];
+    int apos = 0;
+    int arem = (int)sizeof(applied);
+
+    bool pidChanged = false;
+
+    for (int i = 0; i < nkv; ++i) {
+        if (!kvs[i].key) continue;  // already rejected by pre-scan
+
+        const char* k = kvs[i].key;
+        const char* v = kvs[i].value;
+
+        // Find in registry.
+        const ConfigEntry* entry = nullptr;
+        for (int r = 0; r < kRegistryCount; ++r) {
+            if (strcmp(kRegistry[r].key, k) == 0) {
+                entry = &kRegistry[r];
+                break;
+            }
+        }
+
+        if (!entry) {
+            // Unknown key — emit ERR and continue processing remaining keys.
+            CommandProcessor::replyErr(rbuf, rbufSize,
+                                       "badkey", k, corr_id, replyFn, ctx);
+            continue;
+        }
+
+        // Write through to RobotConfig.
+        char* base = reinterpret_cast<char*>(&cfg);
+        switch (entry->type) {
+        case CFG_FLOAT: {
+            float fv = (float)atof(v);
+            memcpy(base + entry->offset, &fv, sizeof(float));
+            break;
+        }
+        case CFG_INT: {
+            int32_t iv = (int32_t)atoi(v);
+            memcpy(base + entry->offset, &iv, sizeof(int32_t));
+            break;
+        }
+        case CFG_FLOAT_AS_INT: {
+            float fv = (float)atoi(v);
+            memcpy(base + entry->offset, &fv, sizeof(float));
+            break;
+        }
+        }
+
+        // Track PID changes so we can call updatePidGains() once at the end.
+        if (strcmp(k, "pid.kp") == 0 || strcmp(k, "pid.ki") == 0 ||
+            strcmp(k, "pid.kd") == 0 || strcmp(k, "pid.max") == 0) {
+            pidChanged = true;
+        }
+
+        // Append to applied list.
+        if (apos > 0 && arem > 1) { applied[apos++] = ' '; --arem; }
+        int w = snprintf(applied + apos, (size_t)arem, "%s=%s", k, v);
+        if (w > 0 && w < arem) { apos += w; arem -= w; }
+    }
+
+    // Update PID gains in MotorController if any PID param changed.
+    if (pidChanged) {
+        mc.updatePidGains(cfg.ratioPidKp, cfg.ratioPidKi,
+                          cfg.ratioPidKd, cfg.ratioPidMax);
+    }
+
+    // Emit OK set only if at least one key was applied.
+    if (apos > 0) {
+        applied[apos] = '\0';
+        CommandProcessor::replyOK(rbuf, rbufSize, "set", applied, corr_id,
+                                  replyFn, ctx);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // process — v2 command dispatch
 // ---------------------------------------------------------------------------
 
@@ -360,6 +604,34 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
         replyOK(rbuf, sizeof(rbuf), "help",
                 "PING ECHO ID VER HELP SET GET STREAM SNAP S T D G STOP GRIP ZERO",
                 corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── GET ──────────────────────────────────────────────────────────────────
+    // GET                → CFG <all key=value pairs>
+    // GET ml pid.kp      → CFG ml=0.487 pid.kp=2.0
+    // GET ml #9          → CFG ml=0.487 #9
+    if (strcmp(verb, "GET") == 0) {
+        // Positional args (tokens[1..]) are the requested keys.
+        // parseKV() would consume tokens that contain '='; GET only uses plain
+        // key names, so pass the raw token list directly.
+        handleGet(tokens, ntok, _robot.config(), rbuf, sizeof(rbuf),
+                  corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── SET ──────────────────────────────────────────────────────────────────
+    // SET ml=0.487 pid.kp=2.0  → OK set ml=0.487 pid.kp=2.0
+    // SET badkey=99             → ERR badkey badkey
+    // SET ml=0.487 bad=1        → OK set ml=0.487   (+ ERR badkey bad)
+    if (strcmp(verb, "SET") == 0) {
+        if (nkv == 0) {
+            replyErr(rbuf, sizeof(rbuf), "badarg", "no key=value pairs", corr_id,
+                     replyFn, ctx);
+            return;
+        }
+        handleSet(kvs, nkv, _robot.config(), _robot.motor(),
+                  rbuf, sizeof(rbuf), corr_id, replyFn, ctx);
         return;
     }
 

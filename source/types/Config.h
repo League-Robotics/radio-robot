@@ -62,6 +62,9 @@ struct RobotConfig {
     int32_t tickMs;
     int32_t sTimeoutMs;
     int32_t encReportEvery;
+
+    // Telemetry streaming period in ms (0 = off). Set via STREAM command.
+    int32_t tlmPeriodMs;
 };
 
 inline RobotConfig defaultRobotConfig() {
@@ -92,6 +95,7 @@ inline RobotConfig defaultRobotConfig() {
     p.tickMs          = 20;
     p.sTimeoutMs      = 200;
     p.encReportEvery  = 2;
+    p.tlmPeriodMs     = 0;
     return p;
 }
 
