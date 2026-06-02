@@ -16,7 +16,6 @@ Robot::Robot(MicroBitI2C&    i2c,
       _motorR(i2c, 1, _config.fwdSignR),   // M1, right wheel
       _serial(serial),
       _radio(radio, messageBus),
-      _announcer(uBit, _serial, _radio),
       _otos(i2c),
       _otosPresent(false),
       _line(i2c),
@@ -44,12 +43,8 @@ Robot::Robot(MicroBitI2C&    i2c,
     _colorPresent = _color.begin();
     _gripperPresent = true;  // servo always available on P1
 
-    // Register sensor streaming callback with DriveController so that CS/LS
-    // readings are emitted alongside encoder reports during active drives.
-    _dc.setSensorReporter(Robot::sensorReport, this);
-
-    // Emit initial announcement so the host can detect the device.
-    _announcer.announce();
+    // Sensor streaming callback removed in Sprint 009 (ticket 002).
+    // Telemetry will be consolidated into a single TLM frame in ticket 004.
 }
 
 // ---------------------------------------------------------------------------
@@ -129,34 +124,6 @@ Robot::Pose Robot::getPose() const
     Pose p{};
     _odo.getPose(p.x_mm, p.y_mm, p.h_cdeg);
     return p;
-}
-
-// ---------------------------------------------------------------------------
-// Sensor streaming callback — invoked by DriveController during drive ticks.
-// Emits CS and LS readings (if sensors present) through the active reply sink.
-// ---------------------------------------------------------------------------
-
-void Robot::sensorReport(ReplyFn fn, void* ctx, void* sensorCtx)
-{
-    Robot* self = static_cast<Robot*>(sensorCtx);
-
-    if (self->_colorPresent) {
-        uint16_t cr = 0, cg = 0, cb = 0, cc = 0;
-        self->_color.readRGBC(cr, cg, cb, cc);
-        char buf[48];
-        snprintf(buf, sizeof(buf), "CS%+d%+d%+d%+d",
-                 (int)cr, (int)cg, (int)cb, (int)cc);
-        fn(buf, ctx);
-    }
-
-    if (self->_linePresent) {
-        uint16_t out[4] = {0, 0, 0, 0};
-        self->_line.readValues(out);
-        char buf[48];
-        snprintf(buf, sizeof(buf), "LS%+d%+d%+d%+d",
-                 (int)out[0], (int)out[1], (int)out[2], (int)out[3]);
-        fn(buf, ctx);
-    }
 }
 
 // ---------------------------------------------------------------------------

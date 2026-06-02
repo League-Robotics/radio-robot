@@ -1,9 +1,15 @@
 ---
-id: "002"
-title: "Parser core v2: tokenizer, verb-only uppercasing, #id correlation, OK/ERR/EVT taxonomy, hard-remove legacy"
-status: open
-use-cases: [SUC-002, SUC-003, SUC-004, SUC-006]
-depends-on: ["001"]
+id: '002'
+title: 'Parser core v2: tokenizer, verb-only uppercasing, #id correlation, OK/ERR/EVT
+  taxonomy, hard-remove legacy'
+status: done
+use-cases:
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-006
+depends-on:
+- '001'
 issue: protocol-v2-raw250-hard-break.md
 completes_issue: false
 ---
@@ -52,16 +58,16 @@ needed to prove the parser works end-to-end with a single test command.
 
 ## Acceptance Criteria
 
-- [ ] `process()` tokenizes on whitespace; only the verb token is upper-cased.
-- [ ] `#7` in `UNKNOWNCMD arg1 #7` → response echoes `#7`.
-- [ ] `key=value` tokens are parsed correctly; `=` without a key or value yields `ERR badarg`.
-- [ ] `replyOK`, `replyErr`, `replyEvt` helpers produce correctly prefixed lines.
-- [ ] All legacy command handlers are deleted; `parseSignedArgs()` is deleted.
-- [ ] `Announcer` class is deleted; `main.cpp` no longer constructs it; `Robot.h` no longer holds it.
-- [ ] `Protocol.h` has v2 tag constants and no v1 constants.
-- [ ] Unrecognized verb → `ERR unknown <verb>`.
-- [ ] Firmware builds without error or warning.
-- [ ] Serial test: send `HELLO` → `ERR unknown HELLO` (legacy gone); send `FOO #3` → `ERR unknown FOO #3`.
+- [x] `process()` tokenizes on whitespace; only the verb token is upper-cased.
+- [x] `#7` in `UNKNOWNCMD arg1 #7` → response echoes `#7`.
+- [x] `key=value` tokens are parsed correctly; `=` without a key or value yields `ERR badarg`.
+- [x] `replyOK`, `replyErr`, `replyEvt` helpers produce correctly prefixed lines.
+- [x] All legacy command handlers are deleted; `parseSignedArgs()` is deleted.
+- [x] `Announcer` class is deleted; `main.cpp` no longer constructs it; `Robot.h` no longer holds it.
+- [x] `Protocol.h` has v2 tag constants and no v1 constants.
+- [x] Unrecognized verb → `ERR unknown <verb>`.
+- [x] Firmware builds without error or warning.
+- [ ] Serial test: send `HELLO` → `ERR unknown HELLO` (legacy gone); send `FOO #3` → `ERR unknown FOO #3`. [DEFERRED — bench test at sprint end per stakeholder process]
 
 ## Implementation Plan
 

@@ -57,8 +57,7 @@ int main() {
         while (serial.readLine(buf, sizeof(buf))) {
             activeFn  = serialReply;
             activeCtx = &serial;
-            if (!robot.announcer().handle(buf, serialReply, &serial))
-                cmd.process(buf, serialReply, &serial);
+            cmd.process(buf, serialReply, &serial);
         }
 
         // Drain radio — commands arrive via the RadioRelay; replies must
@@ -66,8 +65,7 @@ int main() {
         while (radio.poll(buf, sizeof(buf))) {
             activeFn  = radioReply;
             activeCtx = &radio;
-            if (!robot.announcer().handle(buf, radioReply, &radio))
-                cmd.process(buf, radioReply, &radio);
+            cmd.process(buf, radioReply, &radio);
         }
 
         // Advance drive state machines; completions go to the active sink.

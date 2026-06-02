@@ -9,7 +9,6 @@
 #include "PortIO.h"
 #include "SerialPort.h"
 #include "Radio.h"
-#include "Announcer.h"
 #include "MotorController.h"
 #include "Odometry.h"
 #include "DriveController.h"
@@ -51,8 +50,7 @@ public:
     // Advance all subsystems by one tick. Call from main loop each iteration.
     // now_ms: current system time (uBit.systemTime()).
     // fn/ctx: reply sink for the active channel (used for streaming telemetry).
-    // Per-drive async completions (T+DONE, D+DONE, G+DONE, SAFETY_STOP) use
-    // the sink that was captured when the drive command began.
+    // Per-drive async completions use the sink captured when the drive began.
     void tick(uint32_t now_ms, ReplyFn fn, void* ctx);
 
     // ---------------------------------------------------------------------------
@@ -85,13 +83,11 @@ public:
     int32_t gripperAngle() const { return _currentGripperAngle; }
 
     // ---------------------------------------------------------------------------
-    // Component accessors — used by CommandProcessor for K*/O* setters
-    // and by main.cpp to obtain the HAL objects needed by reply sinks.
+    // Component accessors — used by CommandProcessor and main.cpp.
     // ---------------------------------------------------------------------------
     RobotConfig&     config()          { return _config; }
     SerialPort&      serialPort()      { return _serial; }
     Radio&           radioPort()       { return _radio; }
-    Announcer&       announcer()       { return _announcer; }
     MotorController& motor()           { return _mc; }
     DriveController& driveController() { return _dc; }
     Odometry&        odometry()        { return _odo; }
@@ -102,10 +98,6 @@ public:
     PortIO&          portIO()          { return _portio; }
 
 private:
-    // Sensor streaming callback registered with DriveController
-    static void sensorReport(ReplyFn fn, void* ctx, void* sensorCtx);
-
-
     // Reference to the CODAL singleton — used by drive action helpers for systemTime().
     MicroBit& _uBit;
 
@@ -122,7 +114,6 @@ private:
     Motor      _motorR;   // M1, right wheel
     SerialPort _serial;
     Radio      _radio;
-    Announcer  _announcer;
 
     // Optional subsystems (_*Present tracks hardware availability)
     OtosSensor   _otos;
