@@ -42,7 +42,28 @@ representation; wheel mm/s targets are set ad hoc by the command handlers.
 ## Config additions (RobotConfig)
 
 `vel.kP`, `vel.kI`, `vel.kFF` (per wheel ok), `minWheelMms` (deadband),
-`vWheelMax`, `steerHeadroom`, `lapsToMm` (if velocity sourced from chip).
+`vWheelMax`, `steerHeadroom`. **No velocity-scale field** — see chip-velocity note.
+
+## Chip-velocity conversion fix (folded in from sprint 008, ticket 003)
+
+Sprint 008 shipped `Motor::readSpeed` (0x47) but its mm/s conversion is wrong and
+carries a bogus `RobotConfig::lapsToMmScale` (default `1980`, ~11× off). It only
+feeds telemetry today (PWM never uses it; encoder-delta fallback), so it's
+harmless until this layer consumes it — fix it here:
+
+- The 0x47 raw value is the chip's **angular velocity in the same angular unit as
+  the 0x46 angle register** (tenths of a degree). So velocity reuses the **already-
+  calibrated `mmPerDegL/R`** — there is **no separate velocity calibration**:
+  `mm/s = (raw / 10) · mmPerDeg · sign`, exactly mirroring `readEncoder`'s
+  `(rawTenths/10) · mmPerDeg`.
+- **Delete `lapsToMmScale`** from `RobotConfig`; drop the `floor(raw/3.6)*0.01`
+  laps/s path (it also quantizes to 3.6°/s steps).
+- **Bench-confirm the ×1 vs ÷10 unit factor** (vendor `readSpeed` formula reads as
+  *whole* °/s, which would contradict the tenths 0x46 register — likely a vendor
+  bug): command a steady speed, compare `raw·mmPerDeg` vs encoder-delta mm/s; if
+  ~10× high it's tenths → divide by 10. This is a confirmation, not a calibration.
+- Add a velocity-readout serial command (e.g. `V` → per-wheel mm/s + source flag)
+  to make the bench check and PID tuning observable from the host.
 
 ## Verification
 
