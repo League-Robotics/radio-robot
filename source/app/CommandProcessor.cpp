@@ -48,35 +48,45 @@ struct ConfigEntry {
 
 static const ConfigEntry kRegistry[] = {
     // Encoder calibration (mm per degree of motor rotation)
-    CFG_F("ml",         mmPerDegL),
-    CFG_F("mr",         mmPerDegR),
+    CFG_F("ml",           mmPerDegL),
+    CFG_F("mr",           mmPerDegR),
     // Feed-forward and motor scale factors
-    CFG_F("kff",        kFF),
-    CFG_F("klf",        kScaleLF),
-    CFG_F("klb",        kScaleLB),
-    CFG_F("krf",        kScaleRF),
-    CFG_F("krb",        kScaleRB),
+    CFG_F("kff",          kFF),
+    CFG_F("klf",          kScaleLF),
+    CFG_F("klb",          kScaleLB),
+    CFG_F("krf",          kScaleRF),
+    CFG_F("krb",          kScaleRB),
     // Slower-wheel adjustment
-    CFG_F("adjThr",     kAdjThreshold),
-    CFG_F("adjGain",    kAdjGain),
+    CFG_F("adjThr",       kAdjThreshold),
+    CFG_F("adjGain",      kAdjGain),
     // Geometry — stored as float, displayed as integer (mm)
-    CFG_FI("tw",        trackwidthMm),
+    CFG_FI("tw",          trackwidthMm),
     // Ratio PID gains
-    CFG_F("pid.kp",     ratioPidKp),
-    CFG_F("pid.ki",     ratioPidKi),
-    CFG_F("pid.kd",     ratioPidKd),
-    CFG_F("pid.max",    ratioPidMax),
+    CFG_F("pid.kp",       ratioPidKp),
+    CFG_F("pid.ki",       ratioPidKi),
+    CFG_F("pid.kd",       ratioPidKd),
+    CFG_F("pid.max",      ratioPidMax),
+    // Velocity loop gains (Sprint 010).
+    // C++ field names use flat camel-case; SET/GET key strings use dotted form.
+    //   velKp  ↔ "vel.kP"   velKi  ↔ "vel.kI"   velKff ↔ "vel.kFF"
+    CFG_F("vel.kP",       velKp),
+    CFG_F("vel.kI",       velKi),
+    CFG_F("vel.kFF",      velKff),
+    // Velocity deadband and wheel speed ceiling (Sprint 010)
+    CFG_F("minWheelMms",  minWheelMms),
+    CFG_F("vWheelMax",    vWheelMax),
+    CFG_F("steerHeadroom",steerHeadroom),
     // Go-to tolerances — stored as float, displayed as integer (mm)
-    CFG_FI("turnThr",   turnThresholdMm),
-    CFG_FI("doneTol",   doneTolMm),
+    CFG_FI("turnThr",     turnThresholdMm),
+    CFG_FI("doneTol",     doneTolMm),
     // Command scaling
-    CFG_F("distScale",  distScale),
-    CFG_F("turnScale",  turnScale),
+    CFG_F("distScale",    distScale),
+    CFG_F("turnScale",    turnScale),
     // Timing and speed (int32_t fields)
-    CFG_I("minSpeed",   minSpeedMms),
-    CFG_I("sTimeout",   sTimeoutMs),
-    CFG_I("tick",       tickMs),
-    CFG_I("tlmPeriod",  tlmPeriodMs),
+    CFG_I("minSpeed",     minSpeedMms),
+    CFG_I("sTimeout",     sTimeoutMs),
+    CFG_I("tick",         tickMs),
+    CFG_I("tlmPeriod",    tlmPeriodMs),
 };
 
 #undef CFG_F
