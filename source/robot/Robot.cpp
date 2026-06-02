@@ -29,7 +29,7 @@ Robot::Robot(MicroBitI2C&    i2c,
       _portio(io),
       _mc(_motorL, _motorR, _config),
       _odo(),
-      _dc(_mc, _odo, _config)
+      _dc(_mc, _odo, _config)  // OTOS pointer set below after hardware probe
 {
     // uBit.init() was called by main.cpp before constructing Robot.
     // All CODAL peripherals are ready; begin subsystem initialisation now.
@@ -39,7 +39,10 @@ Robot::Robot(MicroBitI2C&    i2c,
 
     // Probe optional sensors; mark absent if hardware not connected.
     _otosPresent = _otos.begin();
-    if (_otosPresent) _otos.init();
+    if (_otosPresent) {
+        _otos.init();
+        _dc.setOtos(&_otos);  // wire OTOS into DriveController for fusion
+    }
 
     _linePresent  = _line.readValues(nullptr);  // probe: returns false on I2C error
     _colorPresent = _color.begin();

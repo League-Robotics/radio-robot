@@ -61,6 +61,15 @@ struct RobotConfig {
     float velKff;         // feed-forward coefficient: FF = velKff * |setpoint|
     float minWheelMms;    // deadband: integrator frozen below this |speed| (default 20.0 mm/s)
 
+    // OTOS complementary fusion parameters (docs/kinematics-model.md §2.4).
+    // C++ field names use flat camel-case; SET/GET key strings match exactly.
+    //   alphaPos  — position blend gain, fraction of OTOS correction per slow tick (default 0.15)
+    //   alphaYaw  — heading blend gain, fraction of OTOS correction per slow tick (default 0.10)
+    //   otosGate  — outlier rejection threshold in mm; samples beyond this distance are dropped (default 50.0)
+    float alphaPos;    // OTOS position blend gain [0, 1]
+    float alphaYaw;    // OTOS heading blend gain [0, 1]
+    float otosGate;    // outlier rejection distance threshold, mm
+
     // Go-to tolerances
     float turnThresholdMm;
     float doneTolMm;
@@ -106,6 +115,9 @@ inline RobotConfig defaultRobotConfig() {
     p.ratioPidMax     = 30.0f;
     p.vWheelMax       = 400.0f;
     p.steerHeadroom   = 20.0f;
+    p.alphaPos        = 0.15f;
+    p.alphaYaw        = 0.10f;
+    p.otosGate        = 50.0f;
     p.velKp           = 0.3f;
     p.velKi           = 0.05f;
     p.velKff          = 0.15f;

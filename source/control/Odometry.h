@@ -18,6 +18,8 @@
  *   x += dC·cos(θ_mid) ;  y += dC·sin(θ_mid) ;  θ = wrapπ(θ + dθ)
  *
  * Sprint 010, Ticket 005.
+ * Sprint 010, Ticket 006: adds correct() for OTOS complementary fusion
+ * (predict/correct interface per docs/kinematics-model.md §2.4).
  */
 class Odometry {
 public:
@@ -29,6 +31,25 @@ public:
     // Computes dL/dR against stored _prevEncL/_prevEncR, updates them,
     // then advances pose using midpoint heading.
     void predict(float encLMm, float encRMm, float trackwidthMm);
+
+    // OTOS complementary correction — correct step of predict/correct.
+    // (docs/kinematics-model.md §2.4; EKF upgrade path replaces this later.)
+    //
+    // Outlier gate: if distance(otos, predicted) > otosGate, the sample is
+    // rejected; _otosRejected is incremented and pose is unchanged.
+    //
+    // If accepted:
+    //   _x        += alphaPos * (x_otos - _x)
+    //   _y        += alphaPos * (y_otos - _y)
+    //   _heading  += alphaYaw * wrapπ(θ_otos - _heading)   [angle-wrap safe]
+    //
+    // alphaPos, alphaYaw: blend gains in [0, 1] (from RobotConfig).
+    // otosGate: rejection distance threshold in mm (from RobotConfig).
+    void correct(float x_otos, float y_otos, float theta_otos_rad,
+                 float alphaPos, float alphaYaw, float otosGate);
+
+    // Telemetry: number of OTOS samples rejected by the outlier gate since boot.
+    uint32_t otosRejectedCount() const { return _otosRejected; }
 
     // Legacy forward-Euler integrate (deprecated; prefer predict()).
     // dL_mm, dR_mm: signed mm traveled by left and right wheels this tick.
@@ -51,12 +72,14 @@ public:
     void zero();
 
 private:
-    float _x;          // mm, float internal
-    float _y;          // mm, float internal
-    float _headingRad; // radians
+    float    _x;          // mm, float internal
+    float    _y;          // mm, float internal
+    float    _headingRad; // radians
 
-    float _prevEncL;   // last encoder snapshot, mm (owned by Odometry)
-    float _prevEncR;   // last encoder snapshot, mm (owned by Odometry)
+    float    _prevEncL;   // last encoder snapshot, mm (owned by Odometry)
+    float    _prevEncR;   // last encoder snapshot, mm (owned by Odometry)
+
+    uint32_t _otosRejected; // count of OTOS samples rejected by outlier gate
 
     // Wrap heading to (-π, π] using atan2f identity.
     static float wrapPi(float theta);

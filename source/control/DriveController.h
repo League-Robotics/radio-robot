@@ -6,14 +6,17 @@
 
 class MotorController;
 class Odometry;
+class OtosSensor;
 
 /**
  * DriveController — owns and advances the S/T/D/G drive state machines,
  * S-mode watchdog, and odometry delta tracking.
  *
  * Calls MotorController for wheel control and reads Odometry for pose.
- * Does not own sensors. Does not parse commands. Does not emit telemetry —
- * telemetry is assembled by Robot::tick() into a unified TLM frame.
+ * Calls Odometry::correct() on each slow-cadence OTOS sample when an
+ * OtosSensor is connected (architecture: DC reads otos → Odo::correct).
+ * Does not parse commands. Does not emit telemetry — telemetry is
+ * assembled by Robot::tick() into a unified TLM frame.
  * Emits EVT completions (done, safety_stop) through the captured reply sink.
  *
  * Per-drive sink capture: each begin*() captures the originating reply
@@ -23,7 +26,12 @@ class Odometry;
  */
 class DriveController {
 public:
-    DriveController(MotorController& mc, Odometry& odo, const RobotConfig& cfg);
+    // otos may be nullptr if the OTOS sensor is not connected; correct() is skipped silently.
+    DriveController(MotorController& mc, Odometry& odo, const RobotConfig& cfg,
+                    OtosSensor* otos = nullptr);
+
+    // Set or clear the OTOS sensor pointer (called by Robot after hardware probe).
+    void setOtos(OtosSensor* otos) { _otos = otos; }
 
     // Entry points — called from Robot drive methods.
     // Each captures fn/ctx as the originating reply sink for async completions.
@@ -50,6 +58,7 @@ private:
     MotorController&   _mc;
     Odometry&          _odo;
     const RobotConfig& _cfg;
+    OtosSensor*        _otos;  // nullable; nullptr when OTOS not connected
 
     // Drive mode
     DriveMode _mode;
@@ -97,6 +106,11 @@ private:
 
     // Updated at top of tick()
     uint32_t _currentTimeMs;
+
+    // Slow-cadence OTOS polling: run correct() every kOtosSlowMs milliseconds.
+    // OTOS is the slow optical sensor; predict() runs every fast tick.
+    static constexpr uint32_t kOtosSlowMs = 100; // 10 Hz OTOS correction cadence
+    uint32_t _lastOtosMs;  // timestamp of last OTOS correct() call
 
     // Internal helpers
     void fullStop(ReplyFn fn, void* ctx);

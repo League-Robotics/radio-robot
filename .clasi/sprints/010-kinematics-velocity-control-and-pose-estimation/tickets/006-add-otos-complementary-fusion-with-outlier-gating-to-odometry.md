@@ -1,13 +1,13 @@
 ---
-id: "006"
-title: "Add OTOS complementary fusion with outlier gating to Odometry"
-status: open
+id: '006'
+title: Add OTOS complementary fusion with outlier gating to Odometry
+status: done
 use-cases:
 - SUC-006
 depends-on:
-- "010-005"
-github-issue: ""
-issue: ""
+- 010-005
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -29,24 +29,24 @@ registry.
 
 ## Acceptance Criteria
 
-- [ ] `Odometry::correct(float x_otos, float y_otos, float θ_otos_rad,
+- [x] `Odometry::correct(float x_otos, float y_otos, float θ_otos_rad,
   float alphaPos, float alphaYaw, float otosGate)` method added:
   - Outlier gate: if `sqrtf((x_otos-_x)^2 + (y_otos-_y)^2) > otosGate`,
     reject the sample; increment `_otosRejected` counter; return without
     modifying pose.
   - If accepted: `_x += alphaPos*(x_otos - _x)`, same for `_y`;
     `_headingRad += alphaYaw * wrapPi(θ_otos_rad - _headingRad)`.
-- [ ] `Odometry` exposes `uint32_t otosRejectedCount() const` for telemetry.
-- [ ] `DriveController::tick()` calls `_odo.correct(...)` when an OTOS sample
+- [x] `Odometry` exposes `uint32_t otosRejectedCount() const` for telemetry.
+- [x] `DriveController::tick()` calls `_odo.correct(...)` when an OTOS sample
   is fresh (poll `_otos->getPositionRaw()` on the slow cadence, convert LSB →
   mm and LSB → radians using OtosSensor conversion constants, then call
   `correct()`). If OTOS is null (not connected), skip silently.
-- [ ] New `RobotConfig` fields: `alphaPos` (default 0.15), `alphaYaw` (default
+- [x] New `RobotConfig` fields: `alphaPos` (default 0.15), `alphaYaw` (default
   0.10), `otosGate` (default 50.0 mm). Added to `Config.h` and
   `defaultRobotConfig()`.
-- [ ] `kRegistry[]` entries added: `alphaPos`, `alphaYaw`, `otosGate`
+- [x] `kRegistry[]` entries added: `alphaPos`, `alphaYaw`, `otosGate`
   (CFG_FLOAT).
-- [ ] Unit test for `correct()`: verify that a sample within gate is blended
+- [x] Unit test for `correct()`: verify that a sample within gate is blended
   with correct α fraction; a sample outside gate leaves pose unchanged and
   increments the rejected counter.
 - [ ] [BENCH] Drive a square loop (~1 m sides); compare encoder-only vs

@@ -76,6 +76,10 @@ static const ConfigEntry kRegistry[] = {
     CFG_F("minWheelMms",  minWheelMms),
     CFG_F("vWheelMax",    vWheelMax),
     CFG_F("steerHeadroom",steerHeadroom),
+    // OTOS complementary fusion (Sprint 010, Ticket 006)
+    CFG_F("alphaPos",     alphaPos),
+    CFG_F("alphaYaw",     alphaYaw),
+    CFG_F("otosGate",     otosGate),
     // Go-to tolerances — stored as float, displayed as integer (mm)
     CFG_FI("turnThr",     turnThresholdMm),
     CFG_FI("doneTol",     doneTolMm),

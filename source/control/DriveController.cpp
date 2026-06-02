@@ -7,6 +7,7 @@
 #include "DriveController.h"
 #include "MotorController.h"
 #include "Odometry.h"
+#include "OtosSensor.h"
 #include <cstdio>
 #include <cmath>
 #include <cstdlib>
@@ -16,10 +17,12 @@
 // Constructor
 // ---------------------------------------------------------------------------
 
-DriveController::DriveController(MotorController& mc, Odometry& odo, const RobotConfig& cfg)
+DriveController::DriveController(MotorController& mc, Odometry& odo, const RobotConfig& cfg,
+                                 OtosSensor* otos)
     : _mc(mc)
     , _odo(odo)
     , _cfg(cfg)
+    , _otos(otos)
     , _mode(DriveMode::IDLE)
     , _driveFn(nullptr)
     , _driveCtx(nullptr)
@@ -42,6 +45,7 @@ DriveController::DriveController(MotorController& mc, Odometry& odo, const Robot
     , _gArcStartR(0.0f)
     , _lastTickMs(0)
     , _currentTimeMs(0)
+    , _lastOtosMs(0)
 {
 }
 
@@ -183,7 +187,7 @@ void DriveController::tick(uint32_t now_ms, ReplyFn fn, void* ctx)
     _lastTickMs     = now_ms;
     _currentTimeMs  = now_ms;
 
-    // Run motor controller and update odometry
+    // Run motor controller and update odometry (fast cadence: every tick)
     if (_mode != DriveMode::IDLE) {
         _mc.tick(dt_s);
 
@@ -191,6 +195,24 @@ void DriveController::tick(uint32_t now_ms, ReplyFn fn, void* ctx)
         _mc.getEncoderPositions(encL, encR);
         _odo.predict(static_cast<float>(encL), static_cast<float>(encR),
                      _cfg.trackwidthMm);
+    }
+
+    // OTOS complementary correction (slow cadence: every kOtosSlowMs).
+    // OtosSensor conversion constants (from OtosSensor.h register map comments):
+    //   Position: 1 LSB = 0.305 mm  → x_mm = raw_x * 0.305
+    //   Heading:  1 LSB = 0.00549°  → θ_rad = raw_h * 0.00549 * (π/180)
+    // Runs even when IDLE so that the pose is corrected during pauses.
+    if (_otos != nullptr && (now_ms - _lastOtosMs) >= kOtosSlowMs) {
+        _lastOtosMs = now_ms;
+        int16_t rx = 0, ry = 0, rh = 0;
+        _otos->getPositionRaw(rx, ry, rh);
+        constexpr float kPosMmPerLsb  = 0.305f;
+        constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);
+        float x_mm   = static_cast<float>(rx) * kPosMmPerLsb;
+        float y_mm   = static_cast<float>(ry) * kPosMmPerLsb;
+        float h_rad  = static_cast<float>(rh) * kHdgRadPerLsb;
+        _odo.correct(x_mm, y_mm, h_rad,
+                     _cfg.alphaPos, _cfg.alphaYaw, _cfg.otosGate);
     }
 
     // Convenience: drive sink (for async completions) vs active sink (for streaming).

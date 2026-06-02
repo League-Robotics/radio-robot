@@ -4,6 +4,7 @@
 Odometry::Odometry()
     : _x(0.0f), _y(0.0f), _headingRad(0.0f)
     , _prevEncL(0.0f), _prevEncR(0.0f)
+    , _otosRejected(0)
 {
 }
 
@@ -25,6 +26,33 @@ void Odometry::predict(float encLMm, float encRMm, float trackwidthMm)
     _x          += dCenter * cosf(thetaMid);
     _y          += dCenter * sinf(thetaMid);
     _headingRad  = wrapPi(_headingRad + dTheta);
+}
+
+// ---------------------------------------------------------------------------
+// correct — OTOS complementary correction (docs/kinematics-model.md §2.4)
+// ---------------------------------------------------------------------------
+
+void Odometry::correct(float x_otos, float y_otos, float theta_otos_rad,
+                       float alphaPos, float alphaYaw, float otosGate)
+{
+    // Outlier gate: reject if OTOS position disagrees with predicted pose
+    // by more than the gate threshold.
+    float dx = x_otos - _x;
+    float dy = y_otos - _y;
+    float dist = sqrtf(dx * dx + dy * dy);
+    if (dist > otosGate) {
+        ++_otosRejected;
+        return;
+    }
+
+    // Accepted: complementary blend of position.
+    _x += alphaPos * dx;
+    _y += alphaPos * dy;
+
+    // Heading blend: angle-wrap-safe — blend on the angular difference,
+    // not on the raw angle, to avoid crossing the ±π discontinuity.
+    float dh = wrapPi(theta_otos_rad - _headingRad);
+    _headingRad = wrapPi(_headingRad + alphaYaw * dh);
 }
 
 // ---------------------------------------------------------------------------
