@@ -1,9 +1,15 @@
 ---
-id: "008"
-title: "Host controller migration: copy robot_radio into repo, rewrite protocol layer for v2"
-status: open
-use-cases: [SUC-007]
-depends-on: ["003", "004", "005", "006"]
+id: 008
+title: 'Host controller migration: copy robot_radio into repo, rewrite protocol layer
+  for v2'
+status: done
+use-cases:
+- SUC-007
+depends-on:
+- '003'
+- '004'
+- '005'
+- '006'
 issue: protocol-v2-raw250-hard-break.md
 completes_issue: false
 ---
@@ -64,16 +70,16 @@ and `[tool.uv.workspace]` or similar so `uv pip install -e host/` works.
 
 ## Acceptance Criteria
 
-- [ ] `host/robot_radio/` exists in this repo; `host/pyproject.toml` (or `setup.py`) makes it installable.
-- [ ] `NezhaProtocol.drive(200, 150)` sends `S 200 150\n` (no sign prefix, no packing).
-- [ ] `NezhaProtocol.stop()` sends `STOP\n`.
-- [ ] `NezhaProtocol.get_config()` sends `GET\n` and parses the `CFG …` response into a dict.
-- [ ] `NezhaProtocol.set_config(ml=0.487)` sends `SET ml=0.487\n` and parses `OK set …`.
-- [ ] `NezhaProtocol.ping()` sends `PING\n` and parses `OK pong t=<n>` → returns `(t_robot_ms, rtt_ms)`.
-- [ ] `TLMFrame` dataclass parses `TLM t=… enc=… pose=…` correctly.
-- [ ] `EVT done T/D/G` parsed correctly by blocking drive wrappers.
-- [ ] `EVT safety_stop` parsed and surfaces appropriately.
-- [ ] All v1 `_sign()` calls and sign-prefix parsing removed.
+- [x] `host/robot_radio/` exists in this repo; `host/pyproject.toml` (or `setup.py`) makes it installable.
+- [x] `NezhaProtocol.drive(200, 150)` sends `S 200 150\n` (no sign prefix, no packing).
+- [x] `NezhaProtocol.stop()` sends `STOP\n`.
+- [x] `NezhaProtocol.get_config()` sends `GET\n` and parses the `CFG …` response into a dict.
+- [x] `NezhaProtocol.set_config(ml=0.487)` sends `SET ml=0.487\n` and parses `OK set …`.
+- [x] `NezhaProtocol.ping()` sends `PING\n` and parses `OK pong t=<n>` → returns `(t_robot_ms, rtt_ms)`.
+- [x] `TLMFrame` dataclass parses `TLM t=… enc=… pose=…` correctly.
+- [x] `EVT done T/D/G` parsed correctly by blocking drive wrappers.
+- [x] `EVT safety_stop` parsed and surfaces appropriately.
+- [x] All v1 `_sign()` calls and sign-prefix parsing removed.
 - [ ] [BENCH] Host controller drives robot end-to-end over the relay using v2 (full workflow: connect, `ID`, `SET` a config key, `STREAM 40`, observe TLM frames, drive `T 200 200 1000`, observe `EVT done T`).
 
 ## Implementation Plan
