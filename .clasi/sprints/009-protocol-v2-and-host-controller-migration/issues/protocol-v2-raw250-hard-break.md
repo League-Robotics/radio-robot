@@ -1,6 +1,8 @@
 ---
-status: pending
+status: in-progress
 sprint: 009
+tickets:
+- 009-001
 ---
 
 # Protocol v2: RAW250 Text Redesign (Hard Break) + Host Controller Migration
