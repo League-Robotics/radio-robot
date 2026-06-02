@@ -1,9 +1,15 @@
 ---
 id: '007'
 title: Firmware Architecture Foundation
-status: planning-docs
+status: done
 branch: sprint/007-firmware-architecture-foundation
-use-cases: ["SUC-001", "SUC-002", "SUC-003", "SUC-004", "SUC-005", "SUC-006"]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+- SUC-006
 issues:
 - firmware-architecture-refactor.md
 ---
