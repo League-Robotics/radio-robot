@@ -82,6 +82,9 @@ public:
     // Current gripper angle (set by setGripperAngle / G command)
     int32_t gripperAngle() const { return _currentGripperAngle; }
 
+    // Robot system time in milliseconds since boot (uBit.systemTime()).
+    uint32_t systemTime() const { return _uBit.systemTime(); }
+
     // ---------------------------------------------------------------------------
     // Component accessors — used by CommandProcessor and main.cpp.
     // ---------------------------------------------------------------------------

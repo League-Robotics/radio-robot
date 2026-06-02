@@ -7,6 +7,7 @@
 
 #include "CommandProcessor.h"
 #include "Robot.h"
+#include "MicroBitDevice.h"
 #include "OtosSensor.h"
 #include "LineSensor.h"
 #include "ColorSensor.h"
@@ -236,11 +237,131 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     }
 
     // ── Dispatch on verb ─────────────────────────────────────────────────────
-    // Tickets 003–006 add cases here. This ticket provides the skeleton:
-    // unrecognized verbs fall through to the ERR unknown handler below.
 
-    // (No command verbs are implemented in this ticket — tickets 003-006
-    //  add PING/ECHO/ID/VER/HELP, SET/GET, TLM/STREAM/SNAP, and motion.)
+    // ── PING ─────────────────────────────────────────────────────────────────
+    // Reply: OK pong t=<robot_ms>  (clock-sync probe; t MUST be robot clock)
+    if (strcmp(verb, "PING") == 0) {
+        uint32_t t = _robot.systemTime();
+        char body[32];
+        snprintf(body, sizeof(body), "t=%lu", (unsigned long)t);
+        replyOK(rbuf, sizeof(rbuf), "pong", body, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── ECHO ─────────────────────────────────────────────────────────────────
+    // Reply: OK echo <payload>  — payload is everything after the verb token,
+    // preserving case and spacing exactly (extracted from raw line, not tokens).
+    if (strcmp(verb, "ECHO") == 0) {
+        // Find the payload by skipping past the verb in the original line.
+        // line is the original (immutable) parameter; workBuf is our copy.
+        // We need to locate the content after "ECHO" in the raw line.
+        const char* p = line;
+        // Skip leading whitespace.
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') ++p;
+        // Skip the verb token (any run of non-whitespace).
+        while (*p != '\0' && *p != ' ' && *p != '\t') ++p;
+        // Skip exactly one whitespace separator (if present).
+        if (*p == ' ' || *p == '\t') ++p;
+        // p now points at the payload (may be empty).
+
+        // If a corr_id was found, we must strip the trailing "#<id>" from
+        // the payload. The parseTokens() pass already removed it from tokens
+        // but the raw line still has it. Strip it now.
+        char payload[512];
+        int plen = 0;
+        const char* q = p;
+        while (*q != '\0' && *q != '\r' && *q != '\n') {
+            payload[plen++] = *q++;
+            if (plen >= (int)(sizeof(payload) - 1)) break;
+        }
+        payload[plen] = '\0';
+
+        // Trim trailing whitespace.
+        while (plen > 0 && (payload[plen-1] == ' ' || payload[plen-1] == '\t')) {
+            payload[--plen] = '\0';
+        }
+
+        // Strip trailing corr_id token ("#<digits>") if present.
+        if (corr_id[0] != '\0') {
+            // The corr_id token is "#" + corr_id digits at the very end.
+            // Look for " #<corr_id>" suffix and remove it.
+            char suffix[20];
+            snprintf(suffix, sizeof(suffix), " #%s", corr_id);
+            int slen = (int)strlen(suffix);
+            if (plen >= slen && strcmp(payload + plen - slen, suffix) == 0) {
+                plen -= slen;
+                payload[plen] = '\0';
+            }
+        }
+
+        replyOK(rbuf, sizeof(rbuf), "echo", payload, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── ID ───────────────────────────────────────────────────────────────────
+    // Reply: ID model=Nezha2 name=<name> serial=<serial> fw=<ver> proto=2
+    //        caps=<present subsystems>
+    // Tag is "ID", not "OK" — this uses a custom snprintf path.
+    if (strcmp(verb, "ID") == 0) {
+        // Robot friendly name and serial number from CODAL.
+        // microbit_friendly_name() returns a pointer to a static buffer (5 chars).
+        // microbit_serial_number() returns a uint32_t hardware ID.
+        const char* name   = microbit_friendly_name();
+        uint32_t    serial = microbit_serial_number();
+
+        // Build caps= string from runtime-present subsystems.
+        char caps[64];
+        caps[0] = '\0';
+        bool first = true;
+        auto addCap = [&](const char* cap) {
+            if (!first) {
+                int n = (int)strlen(caps);
+                caps[n] = ','; caps[n+1] = '\0';
+            }
+            // strncat safe: caps is 64 bytes, max total caps length is ~50.
+            int rem = (int)(sizeof(caps) - strlen(caps) - 1);
+            if (rem > 0) strncat(caps, cap, (size_t)rem);
+            first = false;
+        };
+        if (_robot.otos())        addCap("otos");
+        if (_robot.lineSensor())  addCap("line");
+        if (_robot.colorSensor()) addCap("color");
+        if (_robot.servo())       addCap("gripper");
+        // portio is always present.
+        addCap("portio");
+
+        if (corr_id[0] != '\0') {
+            snprintf(rbuf, sizeof(rbuf),
+                     "ID model=Nezha2 name=%s serial=%lu fw=%s proto=%d caps=%s #%s",
+                     name, (unsigned long)serial, FIRMWARE_VERSION, PROTO_VERSION,
+                     caps, corr_id);
+        } else {
+            snprintf(rbuf, sizeof(rbuf),
+                     "ID model=Nezha2 name=%s serial=%lu fw=%s proto=%d caps=%s",
+                     name, (unsigned long)serial, FIRMWARE_VERSION, PROTO_VERSION,
+                     caps);
+        }
+        replyFn(rbuf, ctx);
+        return;
+    }
+
+    // ── VER ──────────────────────────────────────────────────────────────────
+    // Reply: OK ver fw=<ver> proto=2
+    if (strcmp(verb, "VER") == 0) {
+        char body[64];
+        snprintf(body, sizeof(body), "fw=%s proto=%d", FIRMWARE_VERSION, PROTO_VERSION);
+        replyOK(rbuf, sizeof(rbuf), "ver", body, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── HELP ─────────────────────────────────────────────────────────────────
+    // Reply: OK help <verb list>
+    if (strcmp(verb, "HELP") == 0) {
+        replyOK(rbuf, sizeof(rbuf), "help",
+                "PING ECHO ID VER HELP SET GET STREAM SNAP S T D G STOP GRIP ZERO",
+                corr_id, replyFn, ctx);
+        return;
+    }
 
     // ── Fallback — unrecognized verb ─────────────────────────────────────────
     replyErr(rbuf, sizeof(rbuf), "unknown", verb, corr_id, replyFn, ctx);

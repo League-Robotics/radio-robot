@@ -1,9 +1,12 @@
 ---
-id: "003"
-title: "PING, ECHO, ID, VER, HELP commands"
-status: open
-use-cases: [SUC-001, SUC-002]
-depends-on: ["002"]
+id: '003'
+title: PING, ECHO, ID, VER, HELP commands
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+depends-on:
+- '002'
 issue: protocol-v2-raw250-hard-break.md
 completes_issue: false
 ---
@@ -25,14 +28,14 @@ Implement the five liveness/identity/diagnostic commands in `CommandProcessor`:
 
 ## Acceptance Criteria
 
-- [ ] `PING` → `OK pong t=<ms>` where `<ms>` is `uBit.systemTime()` at the moment of handling.
-- [ ] `PING #5` → `OK pong t=<ms> #5` (correlation echoed).
-- [ ] `ECHO hello world` → `OK echo hello world` (payload preserved, case preserved).
-- [ ] `ECHO` of a 200-byte ASCII payload → `OK echo <payload>` intact (no truncation).
-- [ ] `ID` → contains `proto=2` and non-empty `caps=` field.
-- [ ] `VER` → contains `proto=2`.
-- [ ] `HELP` → non-empty; lists at least `PING ECHO ID VER HELP SET GET STREAM SNAP S T D G STOP GRIP ZERO`.
-- [ ] [BENCH] `ECHO` of 200-byte payload round-trips intact over the relay (fragmentation both directions). Mark if bench unavailable.
+- [x] `PING` → `OK pong t=<ms>` where `<ms>` is `uBit.systemTime()` at the moment of handling.
+- [x] `PING #5` → `OK pong t=<ms> #5` (correlation echoed).
+- [x] `ECHO hello world` → `OK echo hello world` (payload preserved, case preserved).
+- [x] `ECHO` of a 200-byte ASCII payload → `OK echo <payload>` intact (no truncation).
+- [x] `ID` → contains `proto=2` and non-empty `caps=` field.
+- [x] `VER` → contains `proto=2`.
+- [x] `HELP` → non-empty; lists at least `PING ECHO ID VER HELP SET GET STREAM SNAP S T D G STOP GRIP ZERO`.
+- [ ] [BENCH] `ECHO` of 200-byte payload round-trips intact over the relay (fragmentation both directions). DEFERRED — bench test at sprint end.
 
 ## Implementation Plan
 
