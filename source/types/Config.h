@@ -18,26 +18,12 @@ struct RobotConfig {
     int8_t fwdSignL;
     int8_t fwdSignR;
 
-    // Encoder calibration (mm per degree of motor rotation)
+    // Encoder calibration (mm per degree of motor rotation).
+    // Also used by Motor::readSpeed() for chip-native velocity conversion:
+    //   mm/s = (raw / kUnitFactor) * mmPerDeg * sign
+    // (kUnitFactor is a named constant in Motor.cpp; see readSpeed() comment.)
     float mmPerDegL;
     float mmPerDegR;
-
-    /**
-     * lapsToMmScale — converts chip-native velocity (laps/s from register 0x47)
-     * to mm/s.  Formula: mm_per_sec = floor(raw/3.6)*0.01 * lapsToMmScale.
-     *
-     * This constant is PROVISIONAL and must be pinned empirically:
-     *   1. Drive at PWM 20, 50, 80 (forward and reverse) on each wheel.
-     *   2. For each run, record chip_mmps and encoder_mmps.
-     *   3. Set lapsToMmScale = encoder_mmps / (floor(raw/3.6)*0.01) at mid-range.
-     *   4. Confirm monotonicity, correct sign, and that chip/encoder agree
-     *      within acceptable tolerance before trusting chip velocity in control.
-     *
-     * Theoretical estimate based on wheel circumference ≈ 200 mm (63.7 mm dia)
-     * and typical gear ratio: ~1980 mm/lap — actual value TBD from bench data.
-     * The default of 1980.0 is a starting estimate only.
-     */
-    float lapsToMmScale;
 
     // Feed-forward and motor scale factors
     float kFF;
@@ -90,8 +76,6 @@ inline RobotConfig defaultRobotConfig() {
     p.fwdSignR        = -1;
     p.mmPerDegL       = 0.487f;
     p.mmPerDegR       = 0.481f;
-    // PROVISIONAL — see lapsToMmScale field comment above for bench-tuning procedure.
-    p.lapsToMmScale   = 1980.0f;
     p.kFF             = 0.15f;
     p.kScaleLF        = 1.0f;
     p.kScaleLB        = 1.0f;

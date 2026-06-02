@@ -61,18 +61,18 @@ public:
      *
      * Issues a readSpeed command (register 0x47) and converts the raw uint16
      * reading to mm/s using:
-     *   laps_per_sec = floor(raw / 3.6) * 0.01
-     *   mm_per_sec   = laps_per_sec * cfg.lapsToMmScale * _lastDir
+     *   mm/s = (raw / kUnitFactor) * mmPerDeg * _lastDir
+     *
+     * where mmPerDeg = cfg.mmPerDegL (M2/left) or cfg.mmPerDegR (M1/right),
+     * mirroring readEncoder()'s wheel-selection and calibration.
+     *
+     * kUnitFactor is a named constant in Motor.cpp (default 10.0 = tenths of
+     * degrees/s, consistent with the 0x46 angle register).  After bench
+     * confirmation, change kUnitFactor to 1.0 if raw is whole degrees/s.
      *
      * Sign convention: the chip reports unsigned magnitude only. Direction is
      * inferred from _lastDir (set by the most recent setSpeed() call). When
      * the motor is stopped (_lastDir == 0), velocity is reported as 0.
-     *
-     * IMPORTANT: cfg.lapsToMmScale is an empirically-pinned constant. The
-     * default value in defaultRobotConfig() is provisional and must be
-     * confirmed against bench measurements (drive at multiple PWM values,
-     * compare chip mm/s to encoder-derived mm/s, adjust until they agree).
-     * See SUC-003 bench log acceptance criterion.
      *
      * Returns true on success; false if the I2C transaction fails (caller
      * should fall back to encoder-delta velocity).

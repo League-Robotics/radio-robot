@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Fix Motor::readSpeed mm/s conversion and add GET VEL command
-status: open
+status: done
 use-cases:
 - SUC-001
 depends-on: []
@@ -29,23 +29,25 @@ tuning.
 
 ## Acceptance Criteria
 
-- [ ] `Motor::readSpeed()` uses `mm/s = (raw / 10.0f) * mmPerDeg * sign`
+- [x] `Motor::readSpeed()` uses `mm/s = (raw / 10.0f) * mmPerDeg * sign`
   where `mmPerDeg` = `cfg.mmPerDegL` (M2/left) or `cfg.mmPerDegR` (M1/right),
   and `sign` = `_lastDir`. The old `floor(raw/3.6f)*0.01f * lapsToMmScale`
   path is deleted.
-- [ ] `lapsToMmScale` field is deleted from the `RobotConfig` struct in
+- [x] `lapsToMmScale` field is deleted from the `RobotConfig` struct in
   `source/types/Config.h` and from `defaultRobotConfig()`.
-- [ ] The `kRegistry[]` entry for `lapsToMmScale` is removed from
-  `CommandProcessor.cpp`.
-- [ ] `GET VEL` command (or `vel=` TLM sub-field) returns per-wheel mm/s
-  (two values) and a source flag indicating chip (`C`) vs encoder-delta (`E`)
-  for each wheel: e.g. `OK GET vel=vL:C,vR:E`.
-- [ ] [BENCH] At a steady commanded speed (e.g. `S 200 200`), chip velocity
-  and encoder-delta velocity agree within 15% in magnitude and match in sign.
-- [ ] [BENCH] Confirm the unit factor: if `raw * mmPerDeg` is ~10× higher than
-  encoder-delta velocity, apply `/10` (tenths); if it matches, use `raw *
-  mmPerDeg` directly (no division). Document the confirmed factor in a code
-  comment in `Motor.cpp`.
+- [x] The `kRegistry[]` entry for `lapsToMmScale` is removed from
+  `CommandProcessor.cpp`. (Was not present in the registry; confirmed absent.)
+- [x] `GET VEL` command returns per-wheel mm/s (two values) and a source flag
+  indicating chip (`C`) vs encoder-delta (`E`) for each wheel:
+  `OK get vel=<vL>:<srcL>,<vR>:<srcR>`. Documented in `docs/protocol-v2.md`.
+- [ ] [BENCH][DEFERRED] At a steady commanded speed (e.g. `S 200 200`), chip
+  velocity and encoder-delta velocity agree within 15% in magnitude and match
+  in sign. Bench-confirmation by stakeholder from master.
+- [ ] [BENCH][DEFERRED] Confirm the unit factor: if `raw * mmPerDeg` is ~10×
+  higher than encoder-delta velocity, apply `/10` (tenths); if it matches, use
+  `raw * mmPerDeg` directly (no division). Document the confirmed factor in a
+  code comment in `Motor.cpp`. `kUnitFactor` in `Motor.cpp` is a named constant
+  (currently 10.0) that can be changed to 1.0 if bench shows whole deg/s.
 
 ## Implementation Plan
 

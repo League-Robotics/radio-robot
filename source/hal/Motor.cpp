@@ -311,14 +311,32 @@ bool Motor::readSpeed(float& mmPerSec, const RobotConfig& cfg) const
         return false;
     }
 
-    // Convert raw uint16 to laps/s using the vendor formula:
-    //   laps_per_sec = floor(raw / 3.6) * 0.01
+    // Convert register 0x47 raw value to mm/s.
     //
-    // cfg.lapsToMmScale converts laps/s to mm/s. This constant is
-    // empirically pinned from bench measurements (see SUC-003 bench log).
-    // The default in defaultRobotConfig() is provisional pending calibration.
-    float lapsPerSec = floorf((float)raw / 3.6f) * 0.01f;
-    float magnitude  = lapsPerSec * cfg.lapsToMmScale;
+    // The 0x47 register reports angular velocity in the SAME unit as the
+    // 0x46 angle register: tenths of degrees.  This mirrors readEncoder(),
+    // which converts 0x46 raw via: mm = (raw / 10.0) * mmPerDeg * fwdSign.
+    //
+    // Therefore: mm/s = (raw / 10.0) * mmPerDeg * sign
+    //
+    // motorId 2 = M2 = left wheel; use mmPerDegL.
+    // motorId 1 = M1 = right wheel; use mmPerDegR.
+    //
+    // BENCH-CONFIRM REQUIRED: The vendor TypeScript formula treats the raw
+    // value as whole degrees/s (not tenths), which contradicts the 0x46
+    // register documentation.  The /10 (tenths) interpretation is used here
+    // because it is consistent with the 0x46 register unit.
+    //
+    // To verify: drive at a steady speed (e.g. S 200 200), compare
+    // readSpeed() mm/s to encoder-delta mm/s:
+    //   - If readSpeed is ~10× encoder-delta → /10 is correct (keep kUnitFactor = 10.0f)
+    //   - If readSpeed matches encoder-delta  → raw is whole deg/s (set kUnitFactor = 1.0f)
+    //
+    // Change kUnitFactor to flip the interpretation after bench confirmation.
+    static constexpr float kUnitFactor = 10.0f;  // BENCH-CONFIRM: 10.0 = tenths; 1.0 = whole deg/s
+
+    float mmPerDeg = (_motorId == 2) ? cfg.mmPerDegL : cfg.mmPerDegR;
+    float magnitude = ((float)raw / kUnitFactor) * mmPerDeg;
 
     // Apply direction sign: the chip returns unsigned speed only.
     // _lastDir is +1 (forward), -1 (reverse), or 0 (stopped).

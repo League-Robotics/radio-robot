@@ -602,7 +602,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     // Reply: OK help <verb list>
     if (strcmp(verb, "HELP") == 0) {
         replyOK(rbuf, sizeof(rbuf), "help",
-                "PING ECHO ID VER HELP SET GET STREAM SNAP S T D G STOP GRIP ZERO OI OZ OR OP OV OL OA P PA",
+                "PING ECHO ID VER HELP SET GET GET VEL STREAM SNAP S T D G STOP GRIP ZERO OI OZ OR OP OV OL OA P PA",
                 corr_id, replyFn, ctx);
         return;
     }
@@ -611,7 +611,24 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     // GET                → CFG <all key=value pairs>
     // GET ml pid.kp      → CFG ml=0.487 pid.kp=2.0
     // GET ml #9          → CFG ml=0.487 #9
+    // GET VEL            → OK get vel=<vL>:<src>,<vR>:<src>
+    //                      Reports per-wheel measured velocity (mm/s) and source
+    //                      flag: 'C' = chip (register 0x47), 'E' = encoder-delta.
+    //                      Used for bench confirmation and PID tuning.
     if (strcmp(verb, "GET") == 0) {
+        // Special case: GET VEL — velocity readout (not a config key).
+        if (ntok >= 2 && strcmp(tokens[1], "VEL") == 0) {
+            float vL = 0.0f, vR = 0.0f;
+            bool chipL = false, chipR = false;
+            _robot.motor().getActualVelocity(vL, vR);
+            _robot.motor().getVelocitySourceFlags(chipL, chipR);
+            char body[48];
+            snprintf(body, sizeof(body), "vel=%d:%c,%d:%c",
+                     (int)vL, chipL ? 'C' : 'E',
+                     (int)vR, chipR ? 'C' : 'E');
+            replyOK(rbuf, sizeof(rbuf), "get", body, corr_id, replyFn, ctx);
+            return;
+        }
         // Positional args (tokens[1..]) are the requested keys.
         // parseKV() would consume tokens that contain '='; GET only uses plain
         // key names, so pass the raw token list directly.

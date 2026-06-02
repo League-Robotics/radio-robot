@@ -271,6 +271,46 @@ GET badkey
 ERR badkey badkey
 ```
 
+### GET VEL — Velocity Readout
+
+```
+GET VEL [#id]
+→ OK get vel=<vL>:<srcL>,<vR>:<srcR> [#id]
+```
+
+Returns the per-wheel measured velocity in mm/s (integer) and the velocity
+source flag for each wheel.  Source flags:
+
+- `C` — chip velocity from register 0x47 (`Motor::readSpeed`), corrected to
+  mm/s via `(raw / 10.0) * mmPerDeg * sign`.
+- `E` — encoder-delta fallback (used when chip I2C read fails or the chip
+  reading fails the 2× implausibility gate).
+
+`vL` and `vR` are the last values computed by `MotorController::tick()`.
+They reflect the velocity at the most recent tick, not at command time.
+If `tick()` has never run (e.g., before any drive command), both values
+are 0.
+
+Used for bench confirmation of the `readSpeed` unit factor and PID tuning.
+To bench-confirm: drive at a steady speed (`S 200 200`), then poll `GET VEL`
+and compare chip vs. encoder-derived velocity.  If chip velocity is ~10× the
+encoder velocity, the `/10` (tenths) interpretation is correct.  If they
+match, the raw register is whole degrees/s — change `kUnitFactor` in
+`Motor.cpp` from `10.0` to `1.0`.
+
+Example:
+
+```
+GET VEL
+OK get vel=198:C,201:C
+
+GET VEL #5
+OK get vel=0:E,0:E #5
+```
+
+In the first example, both wheels read chip velocity (~198–201 mm/s forward).
+In the second (motors stopped, chip read failed), both fall back to encoder-delta.
+
 ### SET
 
 ```
@@ -411,7 +451,7 @@ clear, or whose hardware is absent, are omitted.
 | `mode`   | single character            | `I`=idle, `S`=streaming, `T`=timed, `D`=distance, `G`=go-to |
 | `enc`    | `%d,%d`                     | Left and right encoder accumulated distance in mm        |
 | `pose`   | `%d,%d,%d`                  | x mm, y mm, heading in centi-degrees                     |
-| `vel`    | `%d,%d`                     | Left and right actual velocity in mm/s (deferred Sprint 010) |
+| `vel`    | `%d,%d`                     | Left and right actual velocity in mm/s (from `MotorController::getActualVelocity()`) |
 | `line`   | `%u,%u,%u,%u`               | Four greyscale channels (raw ADC counts)                 |
 | `color`  | `%u,%u,%u,%u`               | R, G, B, clear channels (raw ADC counts)                 |
 
@@ -424,10 +464,10 @@ variable send latency.
 `pose=` values come from `OtosSensor::getPositionRaw()`.  Otherwise
 they come from the dead-reckoning odometry integrator.
 
-**`vel=` field.** The field bitmask bit is defined (`TLM_FIELD_VEL =
-0x04`) and the STREAM fields parser recognises `vel`, but the
-`MotorController::getActualVelocity()` data path is deferred to Sprint
-010.  The field will be absent from TLM frames until that sprint lands.
+**`vel=` field.** The field bitmask bit is `TLM_FIELD_VEL = 0x04`.  The
+field is populated from `MotorController::getActualVelocity()` (landed in
+Sprint 010).  Values reflect the last `tick()` measurement; see `GET VEL`
+for per-wheel source flags (`C` = chip, `E` = encoder-delta).
 
 Example:
 
