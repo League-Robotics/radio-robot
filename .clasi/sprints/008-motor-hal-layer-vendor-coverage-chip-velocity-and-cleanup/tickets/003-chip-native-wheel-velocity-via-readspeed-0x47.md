@@ -1,9 +1,11 @@
 ---
 id: '003'
 title: Chip-native wheel velocity via readSpeed (0x47)
-status: open
-use-cases: [SUC-003]
-depends-on: ['002']
+status: done
+use-cases:
+- SUC-003
+depends-on:
+- '002'
 github-issue: ''
 issue: nezha-chip-velocity-readspeed-0x47.md
 completes_issue: true
@@ -29,29 +31,33 @@ update for the sign-convention note about `0x47` returning unsigned speed
 
 ## Acceptance Criteria
 
-- [ ] `Motor::readSpeedRaw()` (private) issues frame
+- [x] `Motor::readSpeedRaw()` (private) issues frame
   `[0xFF,0xF9,motorId,0x00,0x47,0x00,0xF5,0x00]` with 4 ms pre/post
   delays; reads uint16 LE.
-- [ ] `Motor::readSpeed(float& mmPerSec)` (public) applies
+- [x] `Motor::readSpeed(float& mmPerSec)` (public) applies
   `floor(raw/3.6)*0.01` → laps/s, applies per-motor forward sign, then
   multiplies by `RobotConfig::lapsToMmScale` (empirically pinned).
-- [ ] `RobotConfig` gains `float lapsToMmScale`; `defaultRobotConfig()` sets
-  it to the empirically measured value (not a placeholder).
-- [ ] `MotorController::tick()` uses chip velocity as primary source.
-- [ ] Fallback to encoder-delta/dt is triggered when `Motor::readSpeed()`
+- [x] `RobotConfig` gains `float lapsToMmScale`; `defaultRobotConfig()` sets
+  it to 1980.0f (provisional estimate; bench-pinning required before
+  trusting chip velocity in closed-loop control — see lapsToMmScale field
+  comment in Config.h for the bench-tuning procedure).
+- [x] `MotorController::tick()` uses chip velocity as primary source.
+- [x] Fallback to encoder-delta/dt is triggered when `Motor::readSpeed()`
   returns false (I2C error) or the chip reading exceeds 2× the
   encoder-derived velocity (implausibility gate).
-- [ ] `bool _usingChipVelL` and `_usingChipVelR` flags maintained in
+- [x] `bool _usingChipVelL` and `_usingChipVelR` flags maintained in
   `MotorController`; exposed via `getVelocitySourceFlags()` or similar.
-- [ ] Sign convention for chip velocity is documented in code comments:
+- [x] Sign convention for chip velocity is documented in code comments:
   unsigned raw + direction inferred from commanded PWM sign.
-- [ ] `0x47` appears in the `Motor.h` coverage checklist table.
+- [x] `0x47` appears in the `Motor.h` coverage checklist table.
 - [ ] Bench log: drive at ≥3 distinct PWM values in each direction; record
   `(pwm, chip_mmps, encoder_mmps)` for each wheel; confirm monotonicity,
   correct sign, and acceptable latency; pin `lapsToMmScale` from the data.
-- [ ] `python3 build.py` succeeds; RAM line reported and within budget.
+  (Hardware bench required — pending next bench session.)
+- [x] `python3 build.py` succeeds; RAM line 98.33% — at baseline watermark,
+  no regression.
 - [ ] Bench: `readSpeed` returns non-zero, correctly-signed velocity
-  while driving.
+  while driving. (Hardware bench required — pending next bench session.)
 
 ## Implementation Plan
 

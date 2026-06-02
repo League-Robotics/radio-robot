@@ -32,6 +32,7 @@
  *   0x5F     | setSpeed(0) (stop) | 008
  *   0x46     | readEncoderRaw()   | 008
  *   (offset) | resetEncoder()     | 008
+ *   0x47     | readSpeedRaw()     | 008
  */
 class Motor {
 public:
@@ -39,6 +40,7 @@ public:
 
     // Set speed as signed percentage (-100..100). Positive = logical forward.
     // fwdSign is applied internally to map logical direction to chip direction.
+    // Stores the commanded direction in _lastDir for readSpeed() sign inference.
     void    setSpeed(int8_t pct);
 
     // Read cumulative encoder in mm using calibration from cfg.
@@ -49,10 +51,37 @@ public:
     // matches chip TypeScript resetRelAngleValue() behaviour).
     void    resetEncoder();
 
+    /**
+     * readSpeed — read chip-native wheel velocity.
+     *
+     * Issues a readSpeed command (register 0x47) and converts the raw uint16
+     * reading to mm/s using:
+     *   laps_per_sec = floor(raw / 3.6) * 0.01
+     *   mm_per_sec   = laps_per_sec * cfg.lapsToMmScale * _lastDir
+     *
+     * Sign convention: the chip reports unsigned magnitude only. Direction is
+     * inferred from _lastDir (set by the most recent setSpeed() call). When
+     * the motor is stopped (_lastDir == 0), velocity is reported as 0.
+     *
+     * IMPORTANT: cfg.lapsToMmScale is an empirically-pinned constant. The
+     * default value in defaultRobotConfig() is provisional and must be
+     * confirmed against bench measurements (drive at multiple PWM values,
+     * compare chip mm/s to encoder-derived mm/s, adjust until they agree).
+     * See SUC-003 bench log acceptance criterion.
+     *
+     * Returns true on success; false if the I2C transaction fails (caller
+     * should fall back to encoder-delta velocity).
+     */
+    bool readSpeed(float& mmPerSec, const RobotConfig& cfg) const;
+
 private:
     MicroBitI2C& _i2c;
     uint8_t      _motorId;  // 1=M1/right, 2=M2/left
     int8_t       _fwdSign;  // +1 or -1
+
+    // Commanded direction: +1 = logical forward, -1 = logical reverse, 0 = stopped.
+    // Set by setSpeed(); read by readSpeed() to apply sign to the unsigned chip reading.
+    int8_t _lastDir;
 
     static constexpr uint8_t ADDR    = 0x10;
     static constexpr uint8_t DIR_CW  = 1;   // positive speed from chip perspective
@@ -67,4 +96,8 @@ private:
     // Read raw cumulative encoder from chip for this motor (tenths of degrees,
     // minus the software offset).
     int32_t readEncoderRaw() const;
+
+    // Read raw speed from chip register 0x47 (uint16 LE, unsigned magnitude).
+    // Returns -1 on I2C error.
+    int32_t readSpeedRaw() const;
 };

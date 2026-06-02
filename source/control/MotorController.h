@@ -60,6 +60,15 @@ public:
     // Read actual wheel velocities in mm/s (encoder delta since last tick).
     void getActualVelocity(float& leftMms, float& rightMms) const;
 
+    /**
+     * getVelocitySourceFlags — report which velocity source is live per wheel.
+     *
+     * leftChip  = true if chip readSpeed (0x47) is the active source for left wheel.
+     * rightChip = true if chip readSpeed (0x47) is the active source for right wheel.
+     * false = encoder-delta fallback is in use (I2C error or implausibility gate).
+     */
+    void getVelocitySourceFlags(bool& leftChip, bool& rightChip) const;
+
     // Read cumulative encoder positions in mm (sum since last resetEncoderAccumulators()).
     void getEncoderPositions(int32_t& leftMm, int32_t& rightMm) const;
 
@@ -87,6 +96,10 @@ private:
     float   _actualVelR;
     float   _encLMm;     // current encoder position (mm), updated in tick()
     float   _encRMm;
+
+    // Velocity source flags: true = chip readSpeed (0x47), false = encoder-delta fallback.
+    bool _usingChipVelL;
+    bool _usingChipVelR;
 
     // Read encoder and convert to mm.
     float encoderMm(bool left);
