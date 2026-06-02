@@ -1,8 +1,9 @@
 ---
 id: '002'
 title: Rename NezhaV2 to Motor and split to one-per-motor
-status: open
-use-cases: [SUC-002]
+status: done
+use-cases:
+- SUC-002
 depends-on: []
 github-issue: ''
 issue: source-fixme-cleanup.md
@@ -39,20 +40,21 @@ Changes:
 
 ## Acceptance Criteria
 
-- [ ] `source/hal/NezhaV2.{h,cpp}` deleted; `source/hal/Motor.{h,cpp}` exists.
-- [ ] `Motor` constructor signature: `Motor(MicroBitI2C&, uint8_t motorId, int8_t fwdSign)`.
-- [ ] `Motor` owns a single `int32_t _encOffset` (not an array of 4).
-- [ ] `LEFT_FWD` and `RIGHT_FWD` constants removed from `Motor`.
-- [ ] `RobotConfig` has `int8_t fwdSignL` (default +1) and `int8_t fwdSignR`
+- [x] `source/hal/NezhaV2.{h,cpp}` deleted; `source/hal/Motor.{h,cpp}` exists.
+- [x] `Motor` constructor signature: `Motor(MicroBitI2C&, uint8_t motorId, int8_t fwdSign)`.
+- [x] `Motor` owns a single `int32_t _encOffset` (not an array of 4).
+- [x] `LEFT_FWD` and `RIGHT_FWD` constants removed from `Motor`.
+- [x] `RobotConfig` has `int8_t fwdSignL` (default +1) and `int8_t fwdSignR`
   (default -1); `defaultRobotConfig()` sets them.
-- [ ] `Robot` constructs two `Motor` instances; `NezhaV2 _motor` member removed.
-- [ ] `MotorController` constructor: `MotorController(Motor& left, Motor& right,
+- [x] `Robot` constructs two `Motor` instances; `NezhaV2 _motor` member removed.
+- [x] `MotorController` constructor: `MotorController(Motor& left, Motor& right,
   const RobotConfig& cal)`.
-- [ ] All `NezhaV2` includes and references replaced with `Motor` throughout.
-- [ ] `python3 build.py` produces `MICROBIT.hex` without errors.
-- [ ] RAM line reported from build output; must be <= prior baseline from ticket 001.
+- [x] All `NezhaV2` includes and references replaced with `Motor` throughout.
+- [x] `python3 build.py` produces `MICROBIT.hex` without errors.
+- [x] RAM line reported from build output; must be <= prior baseline from ticket 001.
+  RAM: 120768 B / 122816 B = 98.33% — exactly at baseline, no regression.
 - [ ] Bench: wheels drive forward/backward; encoders read correctly (sign and magnitude
-  match pre-refactor behavior).
+  match pre-refactor behavior). (Requires hardware bench — deferred to deployment.)
 
 ## Implementation Plan
 

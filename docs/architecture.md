@@ -19,7 +19,7 @@ No heap allocation occurs in any layer during normal operation.
 │  RatioPidController · Odometry                      │
 ├─────────────────────────────────────────────────────┤
 │  HAL Layer          (source/hal/)                   │
-│  NezhaV2 · OtosSensor · LineSensor · ColorSensor   │
+│  Motor · OtosSensor · LineSensor · ColorSensor      │
 │  GripperServo · PortIO · SerialPort · Radio         │
 ├─────────────────────────────────────────────────────┤
 │  Types              (source/types/)                 │
@@ -52,10 +52,13 @@ No logic; eliminates magic strings throughout CommandProcessor.
 Thin wrappers over CODAL hardware. Each class receives its hardware reference at construction
 (dependency injection). No cross-HAL dependencies.
 
-**`NezhaV2`** — Nezha V2 motor driver over I2C.
-- `setPwm(leftPct, rightPct)` — raw PWM (-100..100) to M2 (left) and M1 (right)
-- `readEncoder(isLeft, cfg)` → mm — applies LEFT_FWD_SIGN/RIGHT_FWD_SIGN so forward is always positive; uses `RobotConfig.mmPerDegL/R`
-- `resetEncoders()`
+**`Motor`** — Single-channel Nezha V2 motor driver over I2C.
+- Constructed with `(MicroBitI2C&, uint8_t motorId, int8_t fwdSign)`.
+  motorId: 1=M1/right, 2=M2/left. fwdSign: +1 or -1 from `RobotConfig`.
+- `setSpeed(pct)` — signed PWM (-100..100). Positive = logical forward; `fwdSign` applied internally.
+- `readEncoder(cfg)` → mm — uses `cfg.mmPerDegL` (M2) or `cfg.mmPerDegR` (M1); `fwdSign` ensures forward = positive.
+- `resetEncoder()` — software encoder zero for this motor's channel.
+- `Robot` owns two `Motor` instances: `_motorL` (M2, fwdSign=+1) and `_motorR` (M1, fwdSign=−1).
 
 **`OtosSensor`** — SparkFun OTOS optical odometry at I2C 0x17.
 - Burst I2C read/write for position (REG 0x20) and velocity (REG 0x26)
@@ -210,7 +213,8 @@ graph TD
     end
 
     subgraph hal["HAL Layer"]
-        NezhaV2
+        MotorL["Motor (left, M2)"]
+        MotorR["Motor (right, M1)"]
         OtosSensor
         LineSensor
         ColorSensor
@@ -239,7 +243,8 @@ graph TD
     Robot --> Ann
     Robot --> SerialPort
     Robot --> Radio
-    Robot --> NezhaV2
+    Robot --> MotorL
+    Robot --> MotorR
     Robot -.->|optional| OtosSensor
     Robot -.->|optional| LineSensor
     Robot -.->|optional| ColorSensor
@@ -253,7 +258,8 @@ graph TD
     DC -->|drives wheels| MotorController
     DC -->|reads pose| Odometry
     DC -->|reads params| Config
-    MotorController -->|wheel PWM| NezhaV2
+    MotorController -->|left setSpeed| MotorL
+    MotorController -->|right setSpeed| MotorR
     MotorController -->|reads calib| Config
     MotorController --> RatioPID
 

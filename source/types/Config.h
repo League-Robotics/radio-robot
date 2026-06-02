@@ -2,6 +2,12 @@
 #include <stdint.h>
 
 struct RobotConfig {
+    // Motor forward-direction signs: +1 = CW is forward, -1 = CCW is forward.
+    // fwdSignL: left wheel (M2), default +1.
+    // fwdSignR: right wheel (M1), default -1 (motor mounted mirrored).
+    int8_t fwdSignL;
+    int8_t fwdSignR;
+
     // Encoder calibration (mm per degree of motor rotation)
     float mmPerDegL;
     float mmPerDegR;
@@ -43,6 +49,8 @@ struct RobotConfig {
 
 inline RobotConfig defaultRobotConfig() {
     RobotConfig p{};
+    p.fwdSignL        = +1;
+    p.fwdSignR        = -1;
     p.mmPerDegL       = 0.487f;
     p.mmPerDegR       = 0.481f;
     p.kFF             = 0.15f;

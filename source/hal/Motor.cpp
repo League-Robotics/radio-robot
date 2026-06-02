@@ -1,4 +1,4 @@
-#include "NezhaV2.h"
+#include "Motor.h"
 
 // ---------------------------------------------------------------------------
 // I2C wire protocol constants (verified against PlanetX pxt-nezha2/main.ts)
@@ -21,84 +21,67 @@
 //   Read:  4 bytes, signed int32 little-endian, units = tenths of degrees
 // ---------------------------------------------------------------------------
 
-NezhaV2::NezhaV2(MicroBitI2C& i2c)
-    : _i2c(i2c)
+Motor::Motor(MicroBitI2C& i2c, uint8_t motorId, int8_t fwdSign)
+    : _i2c(i2c), _motorId(motorId), _fwdSign(fwdSign), _encOffset(0)
 {
-    _encOffset[0] = 0;
-    _encOffset[1] = 0;
-    _encOffset[2] = 0;
-    _encOffset[3] = 0;
 }
 
 // ---------------------------------------------------------------------------
 // Public interface
 // ---------------------------------------------------------------------------
 
-void NezhaV2::setPwm(int8_t leftPct, int8_t rightPct)
+void Motor::setSpeed(int8_t pct)
 {
     // Clamp to [-100, 100].
-    if (leftPct  >  100) leftPct  =  100;
-    if (leftPct  < -100) leftPct  = -100;
-    if (rightPct >  100) rightPct =  100;
-    if (rightPct < -100) rightPct = -100;
+    if (pct >  100) pct =  100;
+    if (pct < -100) pct = -100;
 
-    // Left wheel is M2 (LEFT_MOTOR).  Positive leftPct = forward = CW.
-    // Apply LEFT_FWD (+1) sign — no inversion needed.
-    if (leftPct == 0) {
+    // Apply fwdSign: positive pct = logical forward; fwdSign maps that to
+    // the chip's CW/CCW convention.  For the right wheel, fwdSign = -1 so
+    // that a positive command results in CCW chip rotation (physical forward).
+    int16_t effective = (int16_t)_fwdSign * (int16_t)pct;
+
+    if (effective == 0) {
         // Zero speed: send the explicit stop command.
-        uint8_t stopBuf[8] = {0xFF, 0xF9, LEFT_MOTOR, 0x00, 0x5F, 0x00, 0xF5, 0x00};
+        uint8_t stopBuf[8] = {0xFF, 0xF9, _motorId, 0x00, 0x5F, 0x00, 0xF5, 0x00};
         _i2c.write((ADDR << 1), (uint8_t*)stopBuf, 8, false);
     } else {
-        uint8_t dir   = (leftPct > 0) ? DIR_CW : DIR_CCW;
-        uint8_t speed = (leftPct > 0) ? (uint8_t)leftPct : (uint8_t)(-leftPct);
-        writeMotorCmd(LEFT_MOTOR, dir, speed);
-    }
-
-    // Right wheel is M1 (RIGHT_MOTOR).  RIGHT_FWD = -1 means positive rightPct
-    // argument means "forward" but the physical motor must spin CCW to go forward.
-    int8_t rightEffective = (int8_t)(RIGHT_FWD * rightPct);  // flip the sign
-    if (rightEffective == 0) {
-        uint8_t stopBuf[8] = {0xFF, 0xF9, RIGHT_MOTOR, 0x00, 0x5F, 0x00, 0xF5, 0x00};
-        _i2c.write((ADDR << 1), (uint8_t*)stopBuf, 8, false);
-    } else {
-        uint8_t dir   = (rightEffective > 0) ? DIR_CW : DIR_CCW;
-        uint8_t speed = (rightEffective > 0) ? (uint8_t)rightEffective
-                                              : (uint8_t)(-rightEffective);
-        writeMotorCmd(RIGHT_MOTOR, dir, speed);
+        uint8_t dir   = (effective > 0) ? DIR_CW : DIR_CCW;
+        uint8_t speed = (effective > 0) ? (uint8_t)effective : (uint8_t)(-effective);
+        writeMotorCmd(dir, speed);
     }
 }
 
-int32_t NezhaV2::readEncoder(bool leftWheel, const RobotConfig& cfg) const
+int32_t Motor::readEncoder(const RobotConfig& cfg) const
 {
-    uint8_t motorId = leftWheel ? LEFT_MOTOR : RIGHT_MOTOR;
-    int32_t raw     = readEncoderRaw(motorId);   // tenths of degrees
+    // motorId 2 = M2 = left wheel; use mmPerDegL.
+    // motorId 1 = M1 = right wheel; use mmPerDegR.
+    float mmPerDeg = (_motorId == 2) ? cfg.mmPerDegL : cfg.mmPerDegR;
 
+    int32_t raw = readEncoderRaw();   // tenths of degrees
     // Mirror TypeScript: (raw / 10.0) * mmPerDeg * fwdSign
-    float degF = raw / 10.0f;
-    float mmF  = degF
-                 * (leftWheel ? cfg.mmPerDegL : cfg.mmPerDegR)
-                 * (leftWheel ? (float)LEFT_FWD : (float)RIGHT_FWD);
+    float degF  = raw / 10.0f;
+    float mmF   = degF * mmPerDeg * (float)_fwdSign;
     return (int32_t)mmF;
 }
 
-void NezhaV2::resetEncoders()
+void Motor::resetEncoder()
 {
     // Mirror TypeScript resetRelAngleValue(): snapshot the current raw
     // angle into the software offset so that subsequent reads return zero.
-    _encOffset[LEFT_MOTOR  - 1] += readEncoderRaw(LEFT_MOTOR);
-    _encOffset[RIGHT_MOTOR - 1] += readEncoderRaw(RIGHT_MOTOR);
+    _encOffset += readEncoderRaw();
 }
 
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
 
-void NezhaV2::writeMotorCmd(uint8_t motorId, uint8_t direction, uint8_t speed)
+void Motor::writeMotorCmd(uint8_t direction, uint8_t speed)
 {
     uint8_t buf[8] = {
         0xFF,
         0xF9,
-        motorId,
+        _motorId,
         direction,
         0x60,
         speed,
@@ -108,14 +91,14 @@ void NezhaV2::writeMotorCmd(uint8_t motorId, uint8_t direction, uint8_t speed)
     _i2c.write((ADDR << 1), (uint8_t*)buf, 8, false);
 }
 
-int32_t NezhaV2::readEncoderRaw(uint8_t motorId) const
+int32_t Motor::readEncoderRaw() const
 {
     // Vendor pxt-nezha2 readAngle() requires a 4ms delay before and after
     // the write command before reading; omitting these causes corrupt reads.
     fiber_sleep(4);
     uint8_t cmd[8] = {
         0xFF, 0xF9,
-        motorId,
+        _motorId,
         0x00, 0x46,
         0x00, 0xF5,
         0x00
@@ -134,6 +117,6 @@ int32_t NezhaV2::readEncoderRaw(uint8_t motorId) const
         ((uint32_t)resp[0])
     );
 
-    // Subtract the software offset captured at last resetEncoders() call.
-    return raw - _encOffset[motorId - 1];
+    // Subtract the software offset captured at last resetEncoder() call.
+    return raw - _encOffset;
 }

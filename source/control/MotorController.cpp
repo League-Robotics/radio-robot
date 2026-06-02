@@ -1,8 +1,8 @@
 #include "MotorController.h"
 #include <math.h>
 
-MotorController::MotorController(NezhaV2& motor, const RobotConfig& cal)
-    : _motor(motor), _cal(cal),
+MotorController::MotorController(Motor& left, Motor& right, const RobotConfig& cal)
+    : _motorL(left), _motorR(right), _cal(cal),
       _pid(cal.ratioPidKp, cal.ratioPidKi, cal.ratioPidKd, cal.ratioPidMax),
       _cmdEncStartL(0.0f), _cmdEncStartR(0.0f),
       _cmdRatio(1.0f), _fasterIsRight(false),
@@ -20,7 +20,7 @@ MotorController::MotorController(NezhaV2& motor, const RobotConfig& cal)
 
 float MotorController::encoderMm(bool left)
 {
-    return static_cast<float>(_motor.readEncoder(left, _cal));
+    return static_cast<float>(left ? _motorL.readEncoder(_cal) : _motorR.readEncoder(_cal));
 }
 
 void MotorController::setTarget(float leftMms, float rightMms)
@@ -85,7 +85,8 @@ void MotorController::stop()
     _pid.reset();
     _cmdEncStartL = encoderMm(true);
     _cmdEncStartR = encoderMm(false);
-    _motor.setPwm(0, 0);
+    _motorL.setSpeed(0);
+    _motorR.setSpeed(0);
 }
 
 void MotorController::resetIntegrators()
@@ -116,7 +117,8 @@ void MotorController::tick(float dt_s)
 
     // If no drive command active, ensure motors are stopped
     if (_tgtLMms == 0.0f && _tgtRMms == 0.0f) {
-        _motor.setPwm(0, 0);
+        _motorL.setSpeed(0);
+        _motorR.setSpeed(0);
         return;
     }
 
@@ -171,7 +173,8 @@ void MotorController::tick(float dt_s)
         uR = (_tgtRMms >= 0.0f) ?  uSlower : -uSlower;
     }
 
-    _motor.setPwm(static_cast<int8_t>(roundf(uL)), static_cast<int8_t>(roundf(uR)));
+    _motorL.setSpeed(static_cast<int8_t>(roundf(uL)));
+    _motorR.setSpeed(static_cast<int8_t>(roundf(uR)));
 }
 
 void MotorController::getActualVelocity(float& leftMms, float& rightMms) const
@@ -188,7 +191,8 @@ void MotorController::getEncoderPositions(int32_t& leftMm, int32_t& rightMm) con
 
 void MotorController::resetEncoderAccumulators()
 {
-    _motor.resetEncoders();
+    _motorL.resetEncoder();
+    _motorR.resetEncoder();
     _prevEncL = 0;
     _prevEncR = 0;
 }

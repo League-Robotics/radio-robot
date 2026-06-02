@@ -1,7 +1,7 @@
 #pragma once
 #include "MicroBit.h"
 #include "Config.h"
-#include "NezhaV2.h"
+#include "Motor.h"
 #include "OtosSensor.h"
 #include "LineSensor.h"
 #include "ColorSensor.h"
@@ -112,12 +112,17 @@ private:
     // Gripper angle tracking (owned here so CommandProcessor is stateless)
     int32_t _currentGripperAngle;
 
+    // RobotConfig must be declared before Motor so fwdSign values are
+    // available when the Motor constructors run (C++ initializes members
+    // in declaration order).
+    RobotConfig _config;
+
     // Required subsystems (constructed from received references)
-    NezhaV2    _motor;
+    Motor      _motorL;   // M2, left wheel
+    Motor      _motorR;   // M1, right wheel
     SerialPort _serial;
     Radio      _radio;
     Announcer  _announcer;
-    RobotConfig _config;
 
     // Optional subsystems (_*Present tracks hardware availability)
     OtosSensor   _otos;
@@ -130,7 +135,7 @@ private:
     bool         _gripperPresent;
     PortIO       _portio;
 
-    // Control layer — declared after _motor and _config to ensure correct init order.
+    // Control layer — declared after _motorL/_motorR and _config to ensure correct init order.
     MotorController  _mc;
     Odometry         _odo;
     DriveController  _dc;

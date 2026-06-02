@@ -1,6 +1,6 @@
 #pragma once
 #include "MicroBit.h"
-#include "NezhaV2.h"
+#include "Motor.h"
 #include "Config.h"
 #include "RatioPidController.h"
 
@@ -15,7 +15,7 @@
  */
 class MotorController {
 public:
-    explicit MotorController(NezhaV2& motor, const RobotConfig& cal);
+    MotorController(Motor& left, Motor& right, const RobotConfig& cal);
 
     // Gains — public so CommandProcessor can update via K-commands.
     // Defaults: kFF=0.15, kP=0.05, kI=0.20, iClamp=60, kRatio=0.01
@@ -54,7 +54,7 @@ public:
     void updatePidGains(float kP, float kI, float kD, float iClamp);
 
     // Run one control tick. dt_s is elapsed seconds since last tick.
-    // Reads encoders, runs ratio PID + FF, clamps output, calls NezhaV2::setPwm().
+    // Reads encoders, runs ratio PID + FF, clamps output, calls Motor::setSpeed().
     void tick(float dt_s);
 
     // Read actual wheel velocities in mm/s (encoder delta since last tick).
@@ -63,11 +63,12 @@ public:
     // Read cumulative encoder positions in mm (sum since last resetEncoderAccumulators()).
     void getEncoderPositions(int32_t& leftMm, int32_t& rightMm) const;
 
-    // Zero encoder accumulators — delegates to NezhaV2::resetEncoders().
+    // Zero encoder accumulators — delegates to Motor::resetEncoder() for each wheel.
     void resetEncoderAccumulators();
 
 private:
-    NezhaV2&           _motor;
+    Motor&             _motorL;
+    Motor&             _motorR;
     const RobotConfig& _cal;
 
     // Ratio PID state
