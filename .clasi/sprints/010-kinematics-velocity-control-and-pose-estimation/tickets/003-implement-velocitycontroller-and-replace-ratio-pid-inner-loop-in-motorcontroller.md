@@ -1,14 +1,14 @@
 ---
-id: "003"
-title: "Implement VelocityController and replace ratio PID inner loop in MotorController"
-status: open
+id: '003'
+title: Implement VelocityController and replace ratio PID inner loop in MotorController
+status: done
 use-cases:
 - SUC-003
 depends-on:
-- "010-001"
-- "010-002"
-github-issue: ""
-issue: ""
+- 010-001
+- 010-002
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -29,28 +29,28 @@ Ticket 002 (`BodyKinematics` providing the `(vL, vR)` setpoints).
 
 ## Acceptance Criteria
 
-- [ ] `source/control/VelocityController.h` and `.cpp` created.
-- [ ] `VelocityController` holds: `kP`, `kI`, `kFF` gains; integrator state;
+- [x] `source/control/VelocityController.h` and `.cpp` created.
+- [x] `VelocityController` holds: `kP`, `kI`, `kFF` gains; integrator state;
   `iMax` clamp; `minWheelMms` deadband; `reset()` method.
-- [ ] `VelocityController::update(setpoint, measured, dt_s) → float pwmPct`
+- [x] `VelocityController::update(setpoint, measured, dt_s) → float pwmPct`
   computes `pwm = kFF*|sp| + kP*err + I`; anti-windup freezes integrator
   when output is rail-limited (|pwm| >= 100); deadband suppresses integrator
   accumulation below `minWheelMms`; output clamped to ±100.
-- [ ] `MotorController` holds two `VelocityController` instances (`_vcL`,
+- [x] `MotorController` holds two `VelocityController` instances (`_vcL`,
   `_vcR`).
-- [ ] `MotorController.tick()` uses `_vcL.update(tgtL, measuredL, dt)` and
+- [x] `MotorController.tick()` uses `_vcL.update(tgtL, measuredL, dt)` and
   `_vcR.update(tgtR, measuredR, dt)` for the PWM computation. The old ratio
   PID path (`_pid.update()`, `_cmdRatio`, `kAdj*`) is not called in normal
   drive.
-- [ ] `RatioPidController` class is retained (compile passes) but bypassed —
+- [x] `RatioPidController` class is retained (compile passes) but bypassed —
   no active calls from `MotorController.tick()`.
-- [ ] New `RobotConfig` fields: `velKp` (key `vel.kP`, default 0.3),
+- [x] New `RobotConfig` fields: `velKp` (key `vel.kP`, default 0.3),
   `velKi` (key `vel.kI`, default 0.05), `velKff` (key `vel.kFF`, default
   0.15), `minWheelMms` (default 20.0 mm/s). Added to `Config.h` and
   `defaultRobotConfig()`.
-- [ ] [BENCH] Command `S 200 200` (straight); measured per-wheel mm/s tracks
+- [ ] [BENCH-DEFERRED] Command `S 200 200` (straight); measured per-wheel mm/s tracks
   the 200 mm/s setpoint within ±30 mm/s at steady state.
-- [ ] [BENCH] Command a turning arc (e.g. `S 100 200`); robot holds arc
+- [ ] [BENCH-DEFERRED] Command a turning arc (e.g. `S 100 200`); robot holds arc
   without drifting off it under load.
 
 ## Implementation Plan

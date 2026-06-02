@@ -51,6 +51,16 @@ struct RobotConfig {
     float vWheelMax;      // absolute wheel speed ceiling, mm/s (default 400.0)
     float steerHeadroom;  // headroom below vWheelMax reserved for steering, mm/s (default 20.0)
 
+    // Velocity controller gains (docs/kinematics-model.md §2.1).
+    // C++ struct members cannot contain dots; SET/GET key strings use dotted form.
+    //   velKp  ↔ key "vel.kP"   (default 0.3)
+    //   velKi  ↔ key "vel.kI"   (default 0.05)
+    //   velKff ↔ key "vel.kFF"  (default 0.15)
+    float velKp;          // proportional gain for per-wheel velocity loop
+    float velKi;          // integral gain for per-wheel velocity loop
+    float velKff;         // feed-forward coefficient: FF = velKff * |setpoint|
+    float minWheelMms;    // deadband: integrator frozen below this |speed| (default 20.0 mm/s)
+
     // Go-to tolerances
     float turnThresholdMm;
     float doneTolMm;
@@ -96,6 +106,10 @@ inline RobotConfig defaultRobotConfig() {
     p.ratioPidMax     = 30.0f;
     p.vWheelMax       = 400.0f;
     p.steerHeadroom   = 20.0f;
+    p.velKp           = 0.3f;
+    p.velKi           = 0.05f;
+    p.velKff          = 0.15f;
+    p.minWheelMms     = 20.0f;
     p.turnThresholdMm = 50.0f;
     p.doneTolMm       = 5.0f;
     p.distScale       = 0.94f;
