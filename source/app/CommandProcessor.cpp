@@ -3,7 +3,10 @@
 // Sprint 009, Ticket 002: v2 tokenizer, verb-only uppercasing, #id
 // correlation, OK/ERR/EVT/TLM/CFG/ID response taxonomy.
 // Legacy packed parsing (parseSignedArgs, K*, S+/T+/D+, etc.) removed.
-// Announcer removed; HELLO returns ERR unknown.
+//
+// OOP change: HELLO restored as a raw DEVICE: identification banner
+// (NEZHA2 role, not RADIOBRIDGE/RELAY) so mbdeploy probe_type() can
+// identify this robot. Banner is also emitted once at boot via main.cpp.
 //
 // Sprint 009, Ticket 004: SET/GET named-key config registry.
 // Static kRegistry[] maps friendly key names to RobotConfig fields.
@@ -501,6 +504,22 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     }
 
     // ── Dispatch on verb ─────────────────────────────────────────────────────
+
+    // ── HELLO ────────────────────────────────────────────────────────────────
+    // Reply: DEVICE:NEZHA2:robot:<friendly_name>:<serial>
+    // Raw identification banner — NOT wrapped in OK taxonomy.
+    // Emitted at boot and on demand so mbdeploy probe_type() can identify us.
+    // Format matches announce.md: DEVICE:<role>:<common_name>:<device_name>:<serial>
+    // serial printed as decimal uint32 (%lu), same source as ID command.
+    if (strcmp(verb, "HELLO") == 0) {
+        const char* name   = microbit_friendly_name();
+        uint32_t    serial = microbit_serial_number();
+        char banner[64];
+        snprintf(banner, sizeof(banner),
+                 "DEVICE:NEZHA2:robot:%s:%lu", name, (unsigned long)serial);
+        replyFn(banner, ctx);
+        return;
+    }
 
     // ── PING ─────────────────────────────────────────────────────────────────
     // Reply: OK pong t=<robot_ms>  (clock-sync probe; t MUST be robot clock)

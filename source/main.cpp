@@ -50,6 +50,10 @@ int main() {
     ReplyFn activeFn  = serialReply;
     void*   activeCtx = &serial;
 
+    // Emit DEVICE: identification banner once at boot (announce.md §"at boot").
+    // Uses the same HELLO handler so there is a single source of the banner string.
+    cmd.process("HELLO", serialReply, &serial);
+
     char buf[512];
 
     while (true) {
