@@ -81,8 +81,14 @@ static const ConfigEntry kRegistry[] = {
     CFG_F("alphaYaw",     alphaYaw),
     CFG_F("otosGate",     otosGate),
     // Go-to tolerances — stored as float, displayed as integer (mm)
+    // Legacy keys retained for backward compatibility.
     CFG_FI("turnThr",     turnThresholdMm),
     CFG_FI("doneTol",     doneTolMm),
+    // Pose-control tunables (Sprint 011)
+    CFG_F ("aMax",        aMax),
+    CFG_F ("aDecel",      aDecel),
+    CFG_FI("turnGate",    turnInPlaceGate),   // wire: integer degrees; DriveController converts to radians at use-site
+    CFG_FI("arriveTol",   arriveTolMm),       // wire: integer mm
     // Command scaling
     CFG_F("distScale",    distScale),
     CFG_F("turnScale",    turnScale),
@@ -616,7 +622,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     // Reply: OK help <verb list>
     if (strcmp(verb, "HELP") == 0) {
         replyOK(rbuf, sizeof(rbuf), "help",
-                "PING ECHO ID VER HELP SET GET GET VEL STREAM SNAP S T D G STOP GRIP ZERO OI OZ OR OP OV OL OA P PA",
+                "PING ECHO ID VER HELP SET GET GET VEL STREAM SNAP S T D G VW STOP GRIP ZERO OI OZ OR OP OV OL OA P PA",
                 corr_id, replyFn, ctx);
         return;
     }
@@ -862,6 +868,34 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
         char body[64];
         snprintf(body, sizeof(body), "x=%d y=%d speed=%d", x, y, speed);
         replyOK(rbuf, sizeof(rbuf), "goto", body, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── VW — body-twist velocity drive (watchdogged) ─────────────────────────
+    // VW <v> <omega_mrads> [#id]  → OK vw v=<v> omega=<omega_mrads> [#id]
+    // Converts (v mm/s, omega mrad/s) → wheel setpoints via BodyKinematics::inverse()
+    // then enters STREAMING mode — same watchdog/safety_stop as S command.
+    // omega on wire: milli-radians/s (integer); converted to rad/s at firmware boundary.
+    if (strcmp(verb, "VW") == 0) {
+        if (ntok < 3) {
+            replyErr(rbuf, sizeof(rbuf), "badarg", nullptr, corr_id, replyFn, ctx);
+            return;
+        }
+        int v     = atoi(tokens[1]);
+        int omega = atoi(tokens[2]);
+        if (v < -1000 || v > 1000) {
+            replyErr(rbuf, sizeof(rbuf), "range", "v", corr_id, replyFn, ctx);
+            return;
+        }
+        if (omega < -3142 || omega > 3142) {
+            replyErr(rbuf, sizeof(rbuf), "range", "omega", corr_id, replyFn, ctx);
+            return;
+        }
+        float omega_rads = (float)omega / 1000.0f;  // mrad/s → rad/s
+        _robot.velocityDrive((float)v, omega_rads, replyFn, ctx, corr_id);
+        char body[32];
+        snprintf(body, sizeof(body), "v=%d omega=%d", v, omega);
+        replyOK(rbuf, sizeof(rbuf), "vw", body, corr_id, replyFn, ctx);
         return;
     }
 

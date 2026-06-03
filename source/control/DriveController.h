@@ -39,6 +39,13 @@ public:
     //          nullptr or empty string when no id was supplied.
     void beginStream(float leftMms, float rightMms, uint32_t now_ms,
                      ReplyFn fn, void* ctx);
+    // VW command entry point: converts (v, ω) body-twist to (vL, vR) via
+    // BodyKinematics::inverse() + saturate(), then delegates to beginStream()
+    // so the existing STREAMING watchdog handles keepalive/safety_stop.
+    // corr_id: originating correlation id (digits only, no '#'); stored for
+    //          EVT safety_stop when the watchdog fires.
+    void beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
+                       ReplyFn fn, void* ctx, const char* corr_id = nullptr);
     void beginTimed(float leftMms, float rightMms, uint32_t durationMs, uint32_t now_ms,
                     ReplyFn fn, void* ctx, const char* corr_id = nullptr);
     void beginDistance(float leftMms, float rightMms, int32_t targetMm, uint32_t now_ms,
@@ -91,15 +98,12 @@ private:
     uint32_t _dTimeoutMs;
 
     // G go-to state machine
-    enum class GPhase { IDLE, PRE_ROTATE, ARC };
+    enum class GPhase { IDLE, PRE_ROTATE, PURSUE };
     GPhase _gPhase;
-    float  _gTargetX;
-    float  _gTargetY;
+    float  _gTargetXWorld;  // goal x in world frame (mm), set at beginGoTo()
+    float  _gTargetYWorld;  // goal y in world frame (mm), set at beginGoTo()
     float  _gSpeed;
-    float  _gArcLeftMm;
-    float  _gArcRightMm;
-    float  _gArcStartL;
-    float  _gArcStartR;
+    float  _vRamped;        // current ramped speed (mm/s); reset to 0 at beginGoTo() and PRE_ROTATE→PURSUE
 
     // Tick timing
     uint32_t _lastTickMs;
@@ -114,7 +118,5 @@ private:
 
     // Internal helpers
     void fullStop(ReplyFn fn, void* ctx);
-
-    static void computeArc(float tx, float ty, float trackwidthMm,
-                           float& leftMm, float& rightMm);
+    void getPoseFloat(float& x, float& y, float& h_rad) const;
 };

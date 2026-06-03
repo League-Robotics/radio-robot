@@ -70,9 +70,19 @@ struct RobotConfig {
     float alphaYaw;    // OTOS heading blend gain [0, 1]
     float otosGate;    // outlier rejection distance threshold, mm
 
-    // Go-to tolerances
+    // Go-to tolerances (legacy, retained for backward compatibility)
     float turnThresholdMm;
     float doneTolMm;
+
+    // Pose-control tunables (Sprint 011)
+    // aMax: acceleration limit, mm/s²
+    // aDecel: deceleration limit for v_cap, mm/s²
+    // turnInPlaceGate: bearing threshold for in-place rotate, degrees on wire (default 45.0°)
+    // arriveTolMm: go-to arrival tolerance, mm (float field, integer mm on wire)
+    float aMax;
+    float aDecel;
+    float turnInPlaceGate;
+    float arriveTolMm;
 
     // Command scaling
     float   distScale;
@@ -124,6 +134,10 @@ inline RobotConfig defaultRobotConfig() {
     p.minWheelMms     = 20.0f;
     p.turnThresholdMm = 50.0f;
     p.doneTolMm       = 5.0f;
+    p.aMax            = 300.0f;
+    p.aDecel          = 250.0f;
+    p.turnInPlaceGate = 45.0f;
+    p.arriveTolMm     = 5.0f;
     p.distScale       = 0.94f;
     p.turnScale       = 1.07f;
     p.minSpeedMms     = 50;

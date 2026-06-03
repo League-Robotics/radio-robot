@@ -1,6 +1,11 @@
 ---
-status: pending
+status: done
 sprint: '011'
+tickets:
+- '002'
+- '003'
+- '004'
+- '005'
 ---
 
 # Kinematics: Pose Control (pursuit-arc go-to + accel/decel + turn-in-place gate)
