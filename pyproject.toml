@@ -1,6 +1,6 @@
 [project]
 name = "microbit-v2-samples-tools"
-version = "0.20260603.6"
+version = "0.20260603.7"
 description = "Utility scripts for building and deploying microbit-v2-samples"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -36,10 +36,11 @@ members = [
 # imports modules that allocate huge grids and open animation loops. That can
 # exhaust memory on a small machine. Keep collection scoped and never descend
 # into vendored sims, the build tree, or the venv.
-# Only host/tests here. mbdeploy is a workspace member with its own test
-# setup (run via mbdeploy/.venv); collecting it from the repo root collides on
-# the duplicate top-level `tests` package name.
-testpaths = ["host/tests"]
+# host/tests (library) + tests/ (firmware-logic suite, 600+ tests). Excludes
+# mbdeploy, a workspace member with its own test setup (run via mbdeploy/.venv);
+# collecting it from the repo root collides on the duplicate `tests` package
+# name. vendor/ sims are excluded via norecursedirs below.
+testpaths = ["host/tests", "tests"]
 norecursedirs = [
     "vendor", "build", ".venv", "node_modules",
     "*.egg", ".*", "dist", "{arch}", "__pycache__",
