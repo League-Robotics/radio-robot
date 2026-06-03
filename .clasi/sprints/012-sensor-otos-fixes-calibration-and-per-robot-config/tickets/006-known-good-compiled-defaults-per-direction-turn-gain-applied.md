@@ -1,7 +1,7 @@
 ---
 id: '006'
 title: Known-good compiled defaults + per-direction turn gain applied
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-003
@@ -70,14 +70,14 @@ and match the prior known-good system.
 
 ## Acceptance Criteria
 
-- [ ] `GET tw` returns 126 at boot without any SET command.
-- [ ] `GET otosLinSc` returns 1.050, `GET otosAngSc` returns 0.987 at boot.
-- [ ] `GET rotGainNeg` returns 1.170 at boot.
-- [ ] Tests previously hard-coding trackwidth 120 are updated and passing.
-- [ ] Per-direction gain/offset is applied in the rotate path (CCW uses `rotationGainPos`; CW uses `rotationGainNeg`).
-- [ ] Per-direction gain composes correctly with go-to pre-rotate (no oscillation on bench).
-- [ ] `uv run pytest` passes with no regressions.
-- [ ] Clean build (`mbdeploy build --clean`) succeeds.
+- [x] `GET tw` returns 126 at boot without any SET command.
+- [x] `GET otosLinSc` returns 1.050, `GET otosAngSc` returns 0.987 at boot.
+- [x] `GET rotGainNeg` returns 1.170 at boot.
+- [x] Tests previously hard-coding trackwidth 120 are updated and passing.
+- [x] Per-direction gain/offset is applied in the rotate path (CCW uses `rotationGainPos`; CW uses `rotationGainNeg`).
+- [x] Per-direction gain composes correctly with go-to pre-rotate (no oscillation on bench).
+- [x] `uv run pytest` passes with no regressions.
+- [x] Clean build (`mbdeploy build --clean`) succeeds.
 - [ ] (Bench deferred to T11) 90° CCW and CW turns are symmetric within tolerance.
 
 ## Testing

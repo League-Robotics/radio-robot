@@ -141,7 +141,7 @@ inline RobotConfig defaultRobotConfig() {
     p.kScaleRB        = 1.0f;
     p.kAdjThreshold   = 0.5f;
     p.kAdjGain        = 0.05f;
-    p.trackwidthMm    = 120.0f;
+    p.trackwidthMm    = 126.0f;
     p.ratioPidKp      = 300.0f;
     p.ratioPidKi      = 0.0f;
     p.ratioPidKd      = 0.0f;

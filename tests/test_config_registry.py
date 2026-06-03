@@ -120,7 +120,7 @@ REGISTRY_KEYS = [k for k, _ in REGISTRY]
 # Total 32 keys.
 DEFAULT_GET_LINE = (
     "CFG ml=0.487 mr=0.481 kff=0.150 klf=1.000 klb=1.000 krf=1.000 krb=1.000 "
-    "adjThr=0.500 adjGain=0.050 tw=120 pid.kp=300.000 pid.ki=0.000 pid.kd=0.000 "
+    "adjThr=0.500 adjGain=0.050 tw=126 pid.kp=300.000 pid.ki=0.000 pid.kd=0.000 "
     "pid.max=30.000 vel.kP=0.300 vel.kI=0.050 vel.kFF=0.150 "
     "minWheelMms=20.000 vWheelMax=400.000 steerHeadroom=20.000 "
     "turnThr=50 doneTol=5 distScale=0.940 turnScale=1.070 "
@@ -197,7 +197,7 @@ class TestGetResponseFormat:
 
     def test_default_tw_value(self) -> None:
         kv = parse_cfg(DEFAULT_GET_LINE)
-        assert kv["tw"] == "120"
+        assert kv["tw"] == "126"
 
     def test_default_pid_kp_value(self) -> None:
         kv = parse_cfg(DEFAULT_GET_LINE)

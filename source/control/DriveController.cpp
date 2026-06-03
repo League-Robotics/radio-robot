@@ -178,9 +178,34 @@ void DriveController::beginGoTo(float tx, float ty, float speedMms, uint32_t now
 
     if (bearing > gateRad) {
         // Target is beside or behind the robot — pre-rotate in place first.
+        //
+        // Per-direction feedforward gain (012-006):
+        //   turnSign > 0 → CCW (positive heading), use rotationGainPos / rotationOffsetDeg.
+        //   turnSign < 0 → CW  (negative heading), use rotationGainNeg / rotationOffsetDegNeg.
+        //
+        // We apply the gain as a wheel-speed scalar on the initial feedforward command.
+        // The per-direction gain corrects for mechanical asymmetry (e.g. the CW direction
+        // under-rotates relative to CCW at equal wheel speeds). Dividing the commanded speed
+        // by the gain means a mechanically "weak" direction spins proportionally faster,
+        // delivering the same effective heading change per second as the stronger direction.
+        //
+        // Oscillation safety: this is a FEEDFORWARD correction applied once at command time.
+        // PRE_ROTATE termination is determined by the OTOS-corrected bearing in tick(), so
+        // the closed-loop heading accuracy is unaffected. No feedback path runs through the
+        // gain, so there is no risk of oscillation or double-correction.
+        //
+        // The rotationOffsetDeg / rotationOffsetDegNeg fields represent a fixed startup-loss
+        // angle (dead-band). In an open-loop model the correction is (target - offset) / gain.
+        // Here, since the bearing gate (not a fixed target angle) terminates the turn, there
+        // is no fixed target to subtract the offset from. The offset is therefore stored for
+        // future open-loop callers and is NOT applied here; the closed-loop bearing gate
+        // provides equivalent compensation.
         float turnSign = (ty >= 0.0f) ? 1.0f : -1.0f;
-        float rawL = -turnSign * _gSpeed;
-        float rawR =  turnSign * _gSpeed;
+        float dirGain  = (turnSign > 0.0f) ? _cfg.rotationGainPos : _cfg.rotationGainNeg;
+        // Guard against divide-by-zero or degenerate gain values.
+        if (dirGain < 0.05f) dirGain = 0.05f;
+        float rawL = -turnSign * (_gSpeed / dirGain);
+        float rawR =  turnSign * (_gSpeed / dirGain);
         float sL, sR;
         BodyKinematics::saturate(rawL, rawR, _cfg.vWheelMax, _cfg.steerHeadroom, sL, sR);
         _mc.startDriveClean(sL, sR);
