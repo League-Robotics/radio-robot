@@ -1,7 +1,7 @@
 ---
 id: '007'
 title: OTOS mounting offset support
-status: open
+status: done
 use-cases:
 - SUC-004
 - SUC-005
@@ -73,11 +73,11 @@ them in the correction path.
 
 ## Acceptance Criteria
 
-- [ ] At default config (all offsets=0, yaw=0, upsideDown=false), pose behavior is unchanged (regression-free).
-- [ ] With a nonzero offset set via `SET odomOffX=10`, fused pose reflects the robot-center frame offset.
-- [ ] Unit test for the transform math passes.
-- [ ] Clean build (`mbdeploy build --clean`) succeeds.
-- [ ] OTOS chip offsets for the nezha robot are measured and documented (may be ~0; record either way).
+- [x] At default config (all offsets=0, yaw=0, upsideDown=false), pose behavior is unchanged (regression-free).
+- [x] With a nonzero offset set via `SET odomOffX=10`, fused pose reflects the robot-center frame offset.
+- [x] Unit test for the transform math passes.
+- [x] Clean build (`mbdeploy build --clean`) succeeds.
+- [ ] OTOS chip offsets for the nezha robot are measured and documented (may be ~0; record either way). [DEFERRED — bench AC, requires hardware]
 
 ## Testing
 

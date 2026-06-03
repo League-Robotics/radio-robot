@@ -262,9 +262,34 @@ void DriveController::tick(uint32_t now_ms, ReplyFn fn, void* ctx)
         _otos->getPositionRaw(rx, ry, rh);
         constexpr float kPosMmPerLsb  = 0.305f;
         constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);
-        float x_mm   = static_cast<float>(rx) * kPosMmPerLsb;
-        float y_mm   = static_cast<float>(ry) * kPosMmPerLsb;
-        float h_rad  = static_cast<float>(rh) * kHdgRadPerLsb;
+
+        // OTOS chip-frame → robot-center frame transform (012-007).
+        // Mirrors poseRobotFrame() from the prior TypeScript system (src/otos.ts).
+        //
+        // Step 1: Scale raw LSBs to chip-frame engineering units.
+        float xF = static_cast<float>(rx) * kPosMmPerLsb;
+        float yF = static_cast<float>(ry) * kPosMmPerLsb;
+        float hF = static_cast<float>(rh) * kHdgRadPerLsb;
+
+        // Step 2: If chip is mounted upside-down (Z-axis flipped), negate x, y, heading.
+        if (_cfg.odomUpsideDown) {
+            xF = -xF;
+            yF = -yF;
+            hF = -hF;
+        }
+
+        // Step 3: Rotate chip frame by -odomYawDeg into robot frame, then subtract
+        // the mounting offset so the reported pose is the robot rotation center.
+        // At defaults (yaw=0, offX=0, offY=0): identity — x_mm=xF, y_mm=yF.
+        float angRad = -_cfg.odomYawDeg * (3.14159265f / 180.0f);
+        float c = cosf(angRad);
+        float s = sinf(angRad);
+        float x_mm = c * xF - s * yF - _cfg.odomOffX;
+        float y_mm = s * xF + c * yF - _cfg.odomOffY;
+
+        // Step 4: Heading correction — chip heading + yaw offset gives robot heading.
+        float h_rad = hF + _cfg.odomYawDeg * (3.14159265f / 180.0f);
+
         _odo.correct(x_mm, y_mm, h_rad,
                      _cfg.alphaPos, _cfg.alphaYaw, _cfg.otosGate);
     }
