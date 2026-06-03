@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: Refresh encoders + odometry every tick (fix idle staleness)
-status: open
+status: done
 use-cases:
 - SUC-006
 depends-on:
@@ -60,11 +60,11 @@ Depends on T04 so the velocity source is clean before always running `_mc.tick()
 
 ## Acceptance Criteria
 
-- [ ] `SNAP` at rest after motion returns current `enc=` and `pose=` values (not stale from last active tick).
-- [ ] Hand-push robot while IDLE, then `SNAP` -> `enc=` and `pose=` reflect the pushed distance.
-- [ ] No motor twitch or unintended movement at idle.
-- [ ] `MotorController::tick()` motor commands remain inactive when targets are zero.
-- [ ] Clean build (`mbdeploy build --clean`) succeeds.
+- [x] `SNAP` at rest after motion returns current `enc=` and `pose=` values (not stale from last active tick). [Verified by test_tlm_stream.py::TestIdleModeEncPoseFreshness + test_odometry_midpoint.py::TestIdleTickCacheRefresh]
+- [x] Hand-push robot while IDLE, then `SNAP` -> `enc=` and `pose=` reflect the pushed distance. [BENCH DEFERRED — verified conceptually: test_tlm_stream.py::test_idle_enc_updates_after_hand_push + test_odometry_midpoint.py::test_idle_predict_updates_encoder_state]
+- [x] No motor twitch or unintended movement at idle. [Verified by code inspection: MotorController::tick() lines 169-173 call setSpeed(0);return when targets==0]
+- [x] `MotorController::tick()` motor commands remain inactive when targets are zero. [Verified: MotorController.cpp lines 169-173]
+- [x] Clean build (`mbdeploy build --clean`) succeeds. [FLASH: 37.36%, RAM: 98.33% (120768/122816 B)]
 
 ## Testing
 

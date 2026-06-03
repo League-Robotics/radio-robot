@@ -215,15 +215,16 @@ void DriveController::tick(uint32_t now_ms, ReplyFn fn, void* ctx)
     _lastTickMs     = now_ms;
     _currentTimeMs  = now_ms;
 
-    // Run motor controller and update odometry (fast cadence: every tick)
-    if (_mode != DriveMode::IDLE) {
-        _mc.tick(dt_s);
+    // Run motor controller and update odometry (fast cadence: every tick).
+    // Always runs — even at IDLE — so encoder caches and odometry are never stale.
+    // MotorController::tick() already no-ops motor commands when targets are zero
+    // (_tgtLMms == 0 && _tgtRMms == 0 → setSpeed(0); return), so no motor twitch.
+    _mc.tick(dt_s);
 
-        int32_t encL, encR;
-        _mc.getEncoderPositions(encL, encR);
-        _odo.predict(static_cast<float>(encL), static_cast<float>(encR),
-                     _cfg.trackwidthMm);
-    }
+    int32_t encL, encR;
+    _mc.getEncoderPositions(encL, encR);
+    _odo.predict(static_cast<float>(encL), static_cast<float>(encR),
+                 _cfg.trackwidthMm);
 
     // OTOS complementary correction (slow cadence: every kOtosSlowMs).
     // OtosSensor conversion constants (from OtosSensor.h register map comments):
