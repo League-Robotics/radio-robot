@@ -472,8 +472,8 @@ for per-wheel source flags (`C` = chip, `E` = encoder-delta).
 Example:
 
 ```
-TLM t=12345 mode=S enc=1024,1019 pose=350,-12,1780 line=120,340,330,118 color=21,30,18,80
-TLM t=12400 mode=I enc=1024,1019 pose=350,-12,1780
+TLM t=12345 mode=S enc=1024,1019 pose=350,-12,1780 vel=198,201 line=120,340,330,118 color=21,30,18,80
+TLM t=12400 mode=I enc=1024,1019 pose=350,-12,1780 vel=0,0
 ```
 
 ---

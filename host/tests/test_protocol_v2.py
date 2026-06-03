@@ -188,9 +188,16 @@ class TestParseTLM:
         assert frame.enc == (-50, -48)
 
     def test_vel_field(self) -> None:
+        # vel= is 2-value format: vL_mmps, vR_mmps (Sprint 010, Ticket 007)
+        frame = parse_tlm("TLM t=100 vel=200,195")
+        assert frame is not None
+        assert frame.vel == (200, 195)
+
+    def test_vel_field_old_3value_ignored(self) -> None:
+        # A 3-value vel= (old format) is not parsed — vel stays None.
         frame = parse_tlm("TLM t=100 vel=200,0,15")
         assert frame is not None
-        assert frame.vel == (200, 0, 15)
+        assert frame.vel is None
 
     def test_non_tlm_returns_none(self) -> None:
         assert parse_tlm("OK stop") is None
@@ -684,14 +691,15 @@ class TestTLMFrameEdgeCases:
         assert frame.enc == (100, 95)
 
     def test_tlm_all_fields(self) -> None:
-        line = "TLM t=12345 mode=T enc=1024,1019 pose=350,-12,1780 vel=200,0,15 line=120,340,330,118 color=21,30,18,80"
+        # vel= uses 2-value format vL,vR (Sprint 010, Ticket 007)
+        line = "TLM t=12345 mode=T enc=1024,1019 pose=350,-12,1780 vel=200,195 line=120,340,330,118 color=21,30,18,80"
         frame = parse_tlm(line)
         assert frame is not None
         assert frame.t == 12345
         assert frame.mode == "T"
         assert frame.enc == (1024, 1019)
         assert frame.pose == (350, -12, 1780)
-        assert frame.vel == (200, 0, 15)
+        assert frame.vel == (200, 195)
         assert frame.line == (120, 340, 330, 118)
         assert frame.color == (21, 30, 18, 80)
 

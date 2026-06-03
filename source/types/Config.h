@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------
 constexpr uint8_t TLM_FIELD_ENC   = (1u << 0);  // enc=l,r
 constexpr uint8_t TLM_FIELD_POSE  = (1u << 1);  // pose=x,y,h
-constexpr uint8_t TLM_FIELD_VEL   = (1u << 2);  // vel=vl,vr  (deferred Sprint 010)
+constexpr uint8_t TLM_FIELD_VEL   = (1u << 2);  // vel=vL,vR  (per-wheel mm/s, activated Sprint 010)
 constexpr uint8_t TLM_FIELD_LINE  = (1u << 3);  // line=4ch
 constexpr uint8_t TLM_FIELD_COLOR = (1u << 4);  // color=4ch
 constexpr uint8_t TLM_FIELD_ALL   = 0xFFu;      // all fields (default)

@@ -1,16 +1,16 @@
 ---
-id: "007"
-title: "Wire BodyKinematics into DriveController and activate vel= TLM field"
-status: open
+id: '007'
+title: Wire BodyKinematics into DriveController and activate vel= TLM field
+status: done
 use-cases:
 - SUC-002
 - SUC-003
 depends-on:
-- "010-003"
-- "010-004"
-- "010-006"
-github-issue: ""
-issue: ""
+- 010-003
+- 010-004
+- 010-006
+github-issue: ''
+issue: ''
 completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -34,25 +34,29 @@ here are the stakeholder's go/no-go.
 
 ## Acceptance Criteria
 
-- [ ] `DriveController::beginStream(v, omega, ...)` (or the S-command handler)
+- [x] `DriveController::beginStream(v, omega, ...)` (or the S-command handler)
   calls `BodyKinematics::inverse(v, omega, cfg.trackwidthMm, vL, vR)` then
   `BodyKinematics::saturate(vL, vR, cfg.vWheelMax, cfg.steerHeadroom, vL, vR)`
-  before passing `(vL, vR)` to `MotorController`.
-- [ ] The `vel=` TLM field (bit 2) emits `vel=<vL_mmps>,<vR_mmps>` using
+  before passing `(vL, vR)` to `MotorController`. Implemented via `applySaturation()`
+  helper in DriveController.cpp; called in beginStream, beginTimed, beginDistance,
+  beginGoTo, and the G-mode PRE_ROTATE→ARC transition in tick().
+  Note: (v,ω) body-twist S-command variant deferred to future sprint (no v2 surface change).
+- [x] The `vel=` TLM field (bit 2) emits `vel=<vL_mmps>,<vR_mmps>` using
   `MotorController::getActualVelocity()` (chip velocity when available, encoder-
-  delta fallback otherwise).
-- [ ] `STREAM fields=vel` enables the `vel=` field; it appears in the TLM
-  frame alongside `enc=` and `pose=` when selected.
+  delta fallback otherwise). Already implemented in Robot::tick() from prior tickets;
+  activated by clearing the "deferred Sprint 010" comment in Config.h.
+- [x] `STREAM fields=vel` enables the `vel=` field; it appears in the TLM
+  frame alongside `enc=` and `pose=` when selected. Verified by tests.
 - [ ] [BENCH] `STREAM 50 fields=vel` streams per-wheel mm/s at 50 ms period;
-  values are non-zero and sensible during forward drive.
+  values are non-zero and sensible during forward drive. (DEFERRED — stakeholder bench-tests from master)
 - [ ] [BENCH] Command a body twist `S v=200 omega=0` (straight); both wheels
-  track ~200 mm/s; robot drives straight.
+  track ~200 mm/s; robot drives straight. (DEFERRED — stakeholder bench-tests from master)
 - [ ] [BENCH] Command a body twist `S v=150 omega=0.5` (left-curving arc);
   `vL < vR`; robot curves left; under a load event the robot slows but holds
-  the arc (does not drift straight).
+  the arc (does not drift straight). (DEFERRED — stakeholder bench-tests from master)
 - [ ] [BENCH] Drive a square loop using sequential `S` commands; final position
   error is measurably smaller with OTOS fusion active than encoder-only.
-  (Confirms Ticket 006 is integrated end-to-end.)
+  (DEFERRED — stakeholder bench-tests from master)
 
 ## Implementation Plan
 

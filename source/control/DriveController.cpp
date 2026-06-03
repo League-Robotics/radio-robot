@@ -3,11 +3,16 @@
 //
 // Transplanted from CommandProcessor.cpp (Sprint 007, Ticket 003).
 // All speeds in mm/s; distances in mm.
+//
+// Sprint 010, Ticket 007: All wheel setpoints routed through
+// BodyKinematics::saturate() before reaching MotorController, preserving
+// arc curvature when commanded speeds exceed vWheelMax - steerHeadroom.
 
 #include "DriveController.h"
 #include "MotorController.h"
 #include "Odometry.h"
 #include "OtosSensor.h"
+#include "BodyKinematics.h"
 #include <cstdio>
 #include <cmath>
 #include <cstdlib>
@@ -50,16 +55,30 @@ DriveController::DriveController(MotorController& mc, Odometry& odo, const Robot
 }
 
 // ---------------------------------------------------------------------------
+// Internal: apply curvature-preserving saturation to a wheel-speed pair.
+// Routes through BodyKinematics::saturate() using config ceiling.
+// ---------------------------------------------------------------------------
+
+static void applySaturation(float vL, float vR,
+                             const RobotConfig& cfg,
+                             float& vL_out, float& vR_out)
+{
+    BodyKinematics::saturate(vL, vR, cfg.vWheelMax, cfg.steerHeadroom, vL_out, vR_out);
+}
+
+// ---------------------------------------------------------------------------
 // Entry points
 // ---------------------------------------------------------------------------
 
 void DriveController::beginStream(float leftMms, float rightMms, uint32_t now_ms,
                                    ReplyFn fn, void* ctx)
 {
-    _mc.startDrive(leftMms, rightMms);
-    _mc.setTarget(leftMms, rightMms);
-    _tgtL    = leftMms;
-    _tgtR    = rightMms;
+    float sL, sR;
+    applySaturation(leftMms, rightMms, _cfg, sL, sR);
+    _mc.startDrive(sL, sR);
+    _mc.setTarget(sL, sR);
+    _tgtL    = sL;
+    _tgtR    = sR;
     _mode    = DriveMode::STREAMING;
     _lastSMs = now_ms;
     _driveFn  = fn;
@@ -70,10 +89,12 @@ void DriveController::beginTimed(float leftMms, float rightMms,
                                   uint32_t durationMs, uint32_t now_ms,
                                   ReplyFn fn, void* ctx, const char* corr_id)
 {
-    _mc.startDriveClean(leftMms, rightMms);
-    _mc.setTarget(leftMms, rightMms);
-    _tgtL     = leftMms;
-    _tgtR     = rightMms;
+    float sL, sR;
+    applySaturation(leftMms, rightMms, _cfg, sL, sR);
+    _mc.startDriveClean(sL, sR);
+    _mc.setTarget(sL, sR);
+    _tgtL     = sL;
+    _tgtR     = sR;
     _tEndMs   = _lastTickMs + durationMs;
     _mode     = DriveMode::TIMED;
     _driveFn  = fn;
@@ -91,10 +112,12 @@ void DriveController::beginDistance(float leftMms, float rightMms,
                                      int32_t targetMm, uint32_t now_ms,
                                      ReplyFn fn, void* ctx, const char* corr_id)
 {
-    _mc.startDriveClean(leftMms, rightMms);
-    _mc.setTarget(leftMms, rightMms);
-    _tgtL = leftMms;
-    _tgtR = rightMms;
+    float sL, sR;
+    applySaturation(leftMms, rightMms, _cfg, sL, sR);
+    _mc.startDriveClean(sL, sR);
+    _mc.setTarget(sL, sR);
+    _tgtL = sL;
+    _tgtR = sR;
     _mc.resetEncoderAccumulators();
     _mc.getEncoderPositions(_dEncStartL, _dEncStartR);
     _dTargetMm  = targetMm;
@@ -125,10 +148,14 @@ void DriveController::beginGoTo(float tx, float ty, float speedMms, uint32_t now
     if (fabsf(angleDeg) > kgt) {
         // Pre-rotate phase: rotate in place to face target
         float turnSign = (ty >= 0.0f) ? 1.0f : -1.0f;
-        _mc.startDriveClean(-turnSign * speedMms, turnSign * speedMms);
-        _mc.setTarget(-turnSign * speedMms, turnSign * speedMms);
-        _tgtL = -turnSign * speedMms;
-        _tgtR =  turnSign * speedMms;
+        float rawL = -turnSign * speedMms;
+        float rawR =  turnSign * speedMms;
+        float sL, sR;
+        applySaturation(rawL, rawR, _cfg, sL, sR);
+        _mc.startDriveClean(sL, sR);
+        _mc.setTarget(sL, sR);
+        _tgtL = sL;
+        _tgtR = sR;
         float tw     = _cfg.trackwidthMm;
         _gArcLeftMm  = -turnSign * (tw / 2.0f) * fabsf(angleRad);
         _gArcRightMm =  turnSign * (tw / 2.0f) * fabsf(angleRad);
@@ -144,10 +171,12 @@ void DriveController::beginGoTo(float tx, float ty, float speedMms, uint32_t now
         float maxArc   = fmaxf(fabsf(_gArcLeftMm), fabsf(_gArcRightMm));
         float leftSpd  = (maxArc > 0.001f) ? (speedMms * _gArcLeftMm  / maxArc) : speedMms;
         float rightSpd = (maxArc > 0.001f) ? (speedMms * _gArcRightMm / maxArc) : speedMms;
-        _mc.startDriveClean(leftSpd, rightSpd);
-        _mc.setTarget(leftSpd, rightSpd);
-        _tgtL = leftSpd;
-        _tgtR = rightSpd;
+        float sL, sR;
+        applySaturation(leftSpd, rightSpd, _cfg, sL, sR);
+        _mc.startDriveClean(sL, sR);
+        _mc.setTarget(sL, sR);
+        _tgtL = sL;
+        _tgtR = sR;
         int32_t el, er;
         _mc.getEncoderPositions(el, er);
         _gArcStartL = (float)el;
@@ -279,10 +308,12 @@ void DriveController::tick(uint32_t now_ms, ReplyFn fn, void* ctx)
                 float maxArc   = fmaxf(fabsf(_gArcLeftMm), fabsf(_gArcRightMm));
                 float leftSpd  = (maxArc > 0.001f) ? (_gSpeed * _gArcLeftMm  / maxArc) : _gSpeed;
                 float rightSpd = (maxArc > 0.001f) ? (_gSpeed * _gArcRightMm / maxArc) : _gSpeed;
-                _mc.startDriveClean(leftSpd, rightSpd);
-                _mc.setTarget(leftSpd, rightSpd);
-                _tgtL = leftSpd;
-                _tgtR = rightSpd;
+                float sL, sR;
+                applySaturation(leftSpd, rightSpd, _cfg, sL, sR);
+                _mc.startDriveClean(sL, sR);
+                _mc.setTarget(sL, sR);
+                _tgtL = sL;
+                _tgtR = sR;
                 _gArcStartL = (float)el;
                 _gArcStartR = (float)er;
                 _gPhase = GPhase::ARC;
