@@ -12,7 +12,7 @@
     "i2c_addresses": {}
   },
   "vision": {
-    "robot_tag_id": 1,
+    "robot_tag_id": 100,
     "tag_offset_mm": {
       "x": 0.0,
       "y": 0.0,
