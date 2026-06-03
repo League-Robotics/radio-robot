@@ -1,7 +1,7 @@
 ---
 id: '012'
 title: Sensor/OTOS Fixes, Calibration and Per-Robot Config
-status: planning-docs
+status: done
 branch: sprint/012-sensor-otos-fixes-calibration-and-per-robot-config
 use-cases:
 - SUC-001
