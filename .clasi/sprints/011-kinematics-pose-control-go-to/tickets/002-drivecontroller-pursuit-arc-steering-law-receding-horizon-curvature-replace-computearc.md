@@ -2,12 +2,12 @@
 id: '002'
 title: 'DriveController: pursuit-arc steering law (receding-horizon curvature, replace
   computeArc)'
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-002
 depends-on:
-- "011-001"
+- 011-001
 github-issue: ''
 issue: kinematics-pose-control-goto.md
 completes_issue: false
@@ -103,19 +103,19 @@ void DriveController::getPoseFloat(float& x, float& y, float& h_rad) const {
 
 ## Acceptance Criteria
 
-- [ ] `computeArc()` deleted from header and implementation; no other file
+- [x] `computeArc()` deleted from header and implementation; no other file
   references it. [compilation]
-- [ ] `GPhase::ARC` renamed to `GPhase::PURSUE` throughout. [compilation]
-- [ ] Unit test: goal `(dx=300, dy=0)` straight ahead → `κ = 0`, `ω = 0`,
+- [x] `GPhase::ARC` renamed to `GPhase::PURSUE` throughout. [compilation]
+- [x] Unit test: goal `(dx=300, dy=0)` straight ahead → `κ = 0`, `ω = 0`,
   `vL = vR = _gSpeed`. [unit]
-- [ ] Unit test: goal `(dx=100, dy=100)` (45° left) → `κ = 2·100/(100²+100²) = 0.01`,
+- [x] Unit test: goal `(dx=100, dy=100)` (45° left) → `κ = 2·100/(100²+100²) = 0.01`,
   `ω = _gSpeed · 0.01`. [unit]
-- [ ] Unit test: goal `(dx=0, dy=100)` (90° left) → `κ = 2·100/10000 = 0.02`. [unit]
-- [ ] Unit test: goal `(dx=0, dy=0)` → `d2 ≤ 0.1` guard fires, `κ = 0`, no
+- [x] Unit test: goal `(dx=0, dy=100)` (90° left) → `κ = 2·100/10000 = 0.02`. [unit]
+- [x] Unit test: goal `(dx=0, dy=0)` → `d2 ≤ 0.1` guard fires, `κ = 0`, no
   divide-by-zero. [unit]
 - [ ] Bench (informational — no arrival yet): `G 300 0 200` drives robot
-  approximately straight forward; `G 300 100 200` causes leftward curve. [bench]
-- [ ] All existing tests pass.
+  approximately straight forward; `G 300 100 200` causes leftward curve. [bench — DEFERRED, no arrival detection yet]
+- [x] All existing tests pass.
 
 ## Implementation Plan
 

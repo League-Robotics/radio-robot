@@ -91,15 +91,11 @@ private:
     uint32_t _dTimeoutMs;
 
     // G go-to state machine
-    enum class GPhase { IDLE, PRE_ROTATE, ARC };
+    enum class GPhase { IDLE, PRE_ROTATE, PURSUE };
     GPhase _gPhase;
-    float  _gTargetX;
-    float  _gTargetY;
+    float  _gTargetXWorld;  // goal x in world frame (mm), set at beginGoTo()
+    float  _gTargetYWorld;  // goal y in world frame (mm), set at beginGoTo()
     float  _gSpeed;
-    float  _gArcLeftMm;
-    float  _gArcRightMm;
-    float  _gArcStartL;
-    float  _gArcStartR;
 
     // Tick timing
     uint32_t _lastTickMs;
@@ -114,7 +110,5 @@ private:
 
     // Internal helpers
     void fullStop(ReplyFn fn, void* ctx);
-
-    static void computeArc(float tx, float ty, float trackwidthMm,
-                           float& leftMm, float& rightMm);
+    void getPoseFloat(float& x, float& y, float& h_rad) const;
 };

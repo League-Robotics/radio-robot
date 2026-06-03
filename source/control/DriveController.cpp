@@ -41,13 +41,9 @@ DriveController::DriveController(MotorController& mc, Odometry& odo, const Robot
     , _dTargetMm(0)
     , _dTimeoutMs(0)
     , _gPhase(GPhase::IDLE)
-    , _gTargetX(0.0f)
-    , _gTargetY(0.0f)
+    , _gTargetXWorld(0.0f)
+    , _gTargetYWorld(0.0f)
     , _gSpeed(0.0f)
-    , _gArcLeftMm(0.0f)
-    , _gArcRightMm(0.0f)
-    , _gArcStartL(0.0f)
-    , _gArcStartR(0.0f)
     , _lastTickMs(0)
     , _currentTimeMs(0)
     , _lastOtosMs(0)
@@ -137,54 +133,15 @@ void DriveController::beginDistance(float leftMms, float rightMms,
 void DriveController::beginGoTo(float tx, float ty, float speedMms, uint32_t now_ms,
                                  ReplyFn fn, void* ctx, const char* corr_id)
 {
-    _gTargetX = tx;
-    _gTargetY = ty;
-    _gSpeed   = speedMms;
-
-    float angleRad = atan2f(ty, tx);
-    float kgt      = _cfg.turnThresholdMm;
-    float angleDeg = angleRad * 57.2957795f;
-
-    if (fabsf(angleDeg) > kgt) {
-        // Pre-rotate phase: rotate in place to face target
-        float turnSign = (ty >= 0.0f) ? 1.0f : -1.0f;
-        float rawL = -turnSign * speedMms;
-        float rawR =  turnSign * speedMms;
-        float sL, sR;
-        applySaturation(rawL, rawR, _cfg, sL, sR);
-        _mc.startDriveClean(sL, sR);
-        _mc.setTarget(sL, sR);
-        _tgtL = sL;
-        _tgtR = sR;
-        float tw     = _cfg.trackwidthMm;
-        _gArcLeftMm  = -turnSign * (tw / 2.0f) * fabsf(angleRad);
-        _gArcRightMm =  turnSign * (tw / 2.0f) * fabsf(angleRad);
-        int32_t el, er;
-        _mc.getEncoderPositions(el, er);
-        _gArcStartL = (float)el;
-        _gArcStartR = (float)er;
-        _gPhase = GPhase::PRE_ROTATE;
-    } else {
-        // Arc phase directly (shallow angle)
-        float tw = _cfg.trackwidthMm;
-        computeArc(tx, ty, tw, _gArcLeftMm, _gArcRightMm);
-        float maxArc   = fmaxf(fabsf(_gArcLeftMm), fabsf(_gArcRightMm));
-        float leftSpd  = (maxArc > 0.001f) ? (speedMms * _gArcLeftMm  / maxArc) : speedMms;
-        float rightSpd = (maxArc > 0.001f) ? (speedMms * _gArcRightMm / maxArc) : speedMms;
-        float sL, sR;
-        applySaturation(leftSpd, rightSpd, _cfg, sL, sR);
-        _mc.startDriveClean(sL, sR);
-        _mc.setTarget(sL, sR);
-        _tgtL = sL;
-        _tgtR = sR;
-        int32_t el, er;
-        _mc.getEncoderPositions(el, er);
-        _gArcStartL = (float)el;
-        _gArcStartR = (float)er;
-        _gPhase = GPhase::ARC;
-    }
-
-    _mode     = DriveMode::GO_TO;
+    // Store goal in world frame by transforming robot-relative (tx, ty)
+    // using the current odometry pose.
+    float x, y, h_rad;
+    getPoseFloat(x, y, h_rad);
+    _gTargetXWorld = x + tx * cosf(h_rad) - ty * sinf(h_rad);
+    _gTargetYWorld = y + tx * sinf(h_rad) + ty * cosf(h_rad);
+    _gSpeed  = speedMms;
+    _gPhase  = GPhase::PURSUE;
+    _mode    = DriveMode::GO_TO;
     _driveFn  = fn;
     _driveCtx = ctx;
     if (corr_id && corr_id[0] != '\0') {
@@ -291,43 +248,27 @@ void DriveController::tick(uint32_t now_ms, ReplyFn fn, void* ctx)
 
     // G-mode: advance go-to state machine
     if (_mode == DriveMode::GO_TO) {
-        int32_t el, er;
-        _mc.getEncoderPositions(el, er);
-        float kgd = _cfg.doneTolMm;
+        if (_gPhase == GPhase::PURSUE) {
+            float x, y, h_rad;
+            getPoseFloat(x, y, h_rad);
 
-        if (_gPhase == GPhase::PRE_ROTATE) {
-            float dL      = fabsf((float)el - _gArcStartL);
-            float dR      = fabsf((float)er - _gArcStartR);
-            float targetL = fabsf(_gArcLeftMm);
-            float targetR = fabsf(_gArcRightMm);
-            bool doneL = dL >= targetL - kgd;
-            bool doneR = dR >= targetR - kgd;
-            if (doneL && doneR) {
-                float tw = _cfg.trackwidthMm;
-                computeArc(_gTargetX, _gTargetY, tw, _gArcLeftMm, _gArcRightMm);
-                float maxArc   = fmaxf(fabsf(_gArcLeftMm), fabsf(_gArcRightMm));
-                float leftSpd  = (maxArc > 0.001f) ? (_gSpeed * _gArcLeftMm  / maxArc) : _gSpeed;
-                float rightSpd = (maxArc > 0.001f) ? (_gSpeed * _gArcRightMm / maxArc) : _gSpeed;
-                float sL, sR;
-                applySaturation(leftSpd, rightSpd, _cfg, sL, sR);
-                _mc.startDriveClean(sL, sR);
-                _mc.setTarget(sL, sR);
-                _tgtL = sL;
-                _tgtR = sR;
-                _gArcStartL = (float)el;
-                _gArcStartR = (float)er;
-                _gPhase = GPhase::ARC;
-            }
-        } else if (_gPhase == GPhase::ARC) {
-            float dL = (float)el - _gArcStartL;
-            float dR = (float)er - _gArcStartR;
-            bool doneL = fabsf(dL - _gArcLeftMm)  <= kgd;
-            bool doneR = fabsf(dR - _gArcRightMm) <= kgd;
-            if (doneL && doneR) {
-                fullStop(dfn, dct);
-                _gPhase = GPhase::IDLE;
-                emitEvt("EVT done G");
-            }
+            // World-frame offset → robot frame
+            float dxW = _gTargetXWorld - x;
+            float dyW = _gTargetYWorld - y;
+            float dx  =  dxW * cosf(h_rad) + dyW * sinf(h_rad);  // forward in robot frame
+            float dy  = -dxW * sinf(h_rad) + dyW * cosf(h_rad);  // left in robot frame
+
+            float d2    = dx * dx + dy * dy;
+            float kappa = (d2 > 0.1f) ? (2.0f * dy / d2) : 0.0f;  // κ = 2dy/(dx²+dy²)
+
+            float v     = _gSpeed;    // ticket 004 replaces with trapezoidal v
+            float omega = v * kappa;
+
+            float vL, vR;
+            BodyKinematics::inverse(v, omega, _cfg.trackwidthMm, vL, vR);
+            float sL, sR;
+            BodyKinematics::saturate(vL, vR, _cfg.vWheelMax, _cfg.steerHeadroom, sL, sR);
+            _mc.setTarget(sL, sR);
         }
     }
 }
@@ -347,26 +288,16 @@ void DriveController::fullStop(ReplyFn fn, void* ctx)
 }
 
 /**
- * Compute differential arc wheel distances for a relative XY target.
- * Robot starts at (0,0,0). Heading=0 is forward (+X direction).
+ * Read the current odometry pose and convert to floating-point values.
  *
- * @param tx           Target X in mm (forward from robot)
- * @param ty           Target Y in mm (left from robot)
- * @param trackwidthMm Distance between wheel contact patches in mm
- * @param leftMm       Output: left wheel distance in mm (signed)
- * @param rightMm      Output: right wheel distance in mm (signed)
+ * @param x      Output: x position in mm (float)
+ * @param y      Output: y position in mm (float)
+ * @param h_rad  Output: heading in radians
  */
-void DriveController::computeArc(float tx, float ty, float trackwidthMm,
-                                  float& leftMm, float& rightMm)
-{
-    float W = trackwidthMm;
-    if (fabsf(ty) < 0.001f) {
-        leftMm  = tx;
-        rightMm = tx;
-        return;
-    }
-    float R     = (tx * tx + ty * ty) / (2.0f * ty);
-    float alpha = atan2f(ty, tx + R);
-    leftMm  = (R - W / 2.0f) * alpha;
-    rightMm = (R + W / 2.0f) * alpha;
+void DriveController::getPoseFloat(float& x, float& y, float& h_rad) const {
+    int32_t xi, yi, hi;
+    _odo.getPose(xi, yi, hi);
+    x     = static_cast<float>(xi);
+    y     = static_cast<float>(yi);
+    h_rad = static_cast<float>(hi) * (3.14159265f / 18000.0f);  // cdeg → rad
 }
