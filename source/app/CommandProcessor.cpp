@@ -48,35 +48,49 @@ struct ConfigEntry {
 
 static const ConfigEntry kRegistry[] = {
     // Encoder calibration (mm per degree of motor rotation)
-    CFG_F("ml",         mmPerDegL),
-    CFG_F("mr",         mmPerDegR),
+    CFG_F("ml",           mmPerDegL),
+    CFG_F("mr",           mmPerDegR),
     // Feed-forward and motor scale factors
-    CFG_F("kff",        kFF),
-    CFG_F("klf",        kScaleLF),
-    CFG_F("klb",        kScaleLB),
-    CFG_F("krf",        kScaleRF),
-    CFG_F("krb",        kScaleRB),
+    CFG_F("kff",          kFF),
+    CFG_F("klf",          kScaleLF),
+    CFG_F("klb",          kScaleLB),
+    CFG_F("krf",          kScaleRF),
+    CFG_F("krb",          kScaleRB),
     // Slower-wheel adjustment
-    CFG_F("adjThr",     kAdjThreshold),
-    CFG_F("adjGain",    kAdjGain),
+    CFG_F("adjThr",       kAdjThreshold),
+    CFG_F("adjGain",      kAdjGain),
     // Geometry — stored as float, displayed as integer (mm)
-    CFG_FI("tw",        trackwidthMm),
+    CFG_FI("tw",          trackwidthMm),
     // Ratio PID gains
-    CFG_F("pid.kp",     ratioPidKp),
-    CFG_F("pid.ki",     ratioPidKi),
-    CFG_F("pid.kd",     ratioPidKd),
-    CFG_F("pid.max",    ratioPidMax),
+    CFG_F("pid.kp",       ratioPidKp),
+    CFG_F("pid.ki",       ratioPidKi),
+    CFG_F("pid.kd",       ratioPidKd),
+    CFG_F("pid.max",      ratioPidMax),
+    // Velocity loop gains (Sprint 010).
+    // C++ field names use flat camel-case; SET/GET key strings use dotted form.
+    //   velKp  ↔ "vel.kP"   velKi  ↔ "vel.kI"   velKff ↔ "vel.kFF"
+    CFG_F("vel.kP",       velKp),
+    CFG_F("vel.kI",       velKi),
+    CFG_F("vel.kFF",      velKff),
+    // Velocity deadband and wheel speed ceiling (Sprint 010)
+    CFG_F("minWheelMms",  minWheelMms),
+    CFG_F("vWheelMax",    vWheelMax),
+    CFG_F("steerHeadroom",steerHeadroom),
+    // OTOS complementary fusion (Sprint 010, Ticket 006)
+    CFG_F("alphaPos",     alphaPos),
+    CFG_F("alphaYaw",     alphaYaw),
+    CFG_F("otosGate",     otosGate),
     // Go-to tolerances — stored as float, displayed as integer (mm)
-    CFG_FI("turnThr",   turnThresholdMm),
-    CFG_FI("doneTol",   doneTolMm),
+    CFG_FI("turnThr",     turnThresholdMm),
+    CFG_FI("doneTol",     doneTolMm),
     // Command scaling
-    CFG_F("distScale",  distScale),
-    CFG_F("turnScale",  turnScale),
+    CFG_F("distScale",    distScale),
+    CFG_F("turnScale",    turnScale),
     // Timing and speed (int32_t fields)
-    CFG_I("minSpeed",   minSpeedMms),
-    CFG_I("sTimeout",   sTimeoutMs),
-    CFG_I("tick",       tickMs),
-    CFG_I("tlmPeriod",  tlmPeriodMs),
+    CFG_I("minSpeed",     minSpeedMms),
+    CFG_I("sTimeout",     sTimeoutMs),
+    CFG_I("tick",         tickMs),
+    CFG_I("tlmPeriod",    tlmPeriodMs),
 };
 
 #undef CFG_F
@@ -602,7 +616,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     // Reply: OK help <verb list>
     if (strcmp(verb, "HELP") == 0) {
         replyOK(rbuf, sizeof(rbuf), "help",
-                "PING ECHO ID VER HELP SET GET STREAM SNAP S T D G STOP GRIP ZERO OI OZ OR OP OV OL OA P PA",
+                "PING ECHO ID VER HELP SET GET GET VEL STREAM SNAP S T D G STOP GRIP ZERO OI OZ OR OP OV OL OA P PA",
                 corr_id, replyFn, ctx);
         return;
     }
@@ -611,7 +625,24 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     // GET                → CFG <all key=value pairs>
     // GET ml pid.kp      → CFG ml=0.487 pid.kp=2.0
     // GET ml #9          → CFG ml=0.487 #9
+    // GET VEL            → OK get vel=<vL>:<src>,<vR>:<src>
+    //                      Reports per-wheel measured velocity (mm/s) and source
+    //                      flag: 'C' = chip (register 0x47), 'E' = encoder-delta.
+    //                      Used for bench confirmation and PID tuning.
     if (strcmp(verb, "GET") == 0) {
+        // Special case: GET VEL — velocity readout (not a config key).
+        if (ntok >= 2 && strcmp(tokens[1], "VEL") == 0) {
+            float vL = 0.0f, vR = 0.0f;
+            bool chipL = false, chipR = false;
+            _robot.motor().getActualVelocity(vL, vR);
+            _robot.motor().getVelocitySourceFlags(chipL, chipR);
+            char body[48];
+            snprintf(body, sizeof(body), "vel=%d:%c,%d:%c",
+                     (int)vL, chipL ? 'C' : 'E',
+                     (int)vR, chipR ? 'C' : 'E');
+            replyOK(rbuf, sizeof(rbuf), "get", body, corr_id, replyFn, ctx);
+            return;
+        }
         // Positional args (tokens[1..]) are the requested keys.
         // parseKV() would consume tokens that contain '='; GET only uses plain
         // key names, so pass the raw token list directly.

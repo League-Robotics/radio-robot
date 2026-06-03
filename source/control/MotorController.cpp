@@ -3,6 +3,8 @@
 
 MotorController::MotorController(Motor& left, Motor& right, const RobotConfig& cal)
     : _motorL(left), _motorR(right), _cal(cal),
+      _vcL(cal.velKff, cal.velKp, cal.velKi, 60.0f, cal.minWheelMms),
+      _vcR(cal.velKff, cal.velKp, cal.velKi, 60.0f, cal.minWheelMms),
       _pid(cal.ratioPidKp, cal.ratioPidKi, cal.ratioPidKd, cal.ratioPidMax),
       _cmdEncStartL(0.0f), _cmdEncStartR(0.0f),
       _cmdRatio(1.0f), _fasterIsRight(false),
@@ -41,6 +43,8 @@ void MotorController::startDriveClean(float leftMms, float rightMms)
     _cmdEncStartL = encoderMm(true);
     _cmdEncStartR = encoderMm(false);
     _pid.reset();
+    _vcL.reset();
+    _vcR.reset();
 }
 
 void MotorController::startDrive(float leftMms, float rightMms)
@@ -84,6 +88,8 @@ void MotorController::stop()
     _tgtLMms = 0.0f;
     _tgtRMms = 0.0f;
     _pid.reset();
+    _vcL.reset();
+    _vcR.reset();
     _cmdEncStartL = encoderMm(true);
     _cmdEncStartR = encoderMm(false);
     _motorL.setSpeed(0);
@@ -93,6 +99,8 @@ void MotorController::stop()
 void MotorController::resetIntegrators()
 {
     _pid.reset();
+    _vcL.reset();
+    _vcR.reset();
 }
 
 void MotorController::updatePidGains(float kP, float kI, float kD, float iClamp)
@@ -147,56 +155,11 @@ void MotorController::tick(float dt_s)
         return;
     }
 
-    // Step 2: Cumulative deltas since command start
-    float fDL = encLMm - _cmdEncStartL;
-    float fDR = encRMm - _cmdEncStartR;
-    float fasterDelta = _fasterIsRight ? fabsf(fDR) : fabsf(fDL);
-    float slowerDelta  = _fasterIsRight ? fabsf(fDL) : fabsf(fDR);
-
-    // Step 3: Normalized error.
-    float expected     = slowerDelta * _cmdRatio;
-    float tgtSlowerAbs = _fasterIsRight ? fabsf(_tgtLMms) : fabsf(_tgtRMms);
-    float tgtFasterAbs = _fasterIsRight ? fabsf(_tgtRMms) : fabsf(_tgtLMms);
-    float denomFloor   = fmaxf(tgtFasterAbs, 1.0f);
-    float normErr      = (expected - fasterDelta) / fmaxf(denomFloor, expected);
-
-    // Step 4: PID update
-    float correction = _pid.update(normErr, dt_s);
-
-    // Step 5: Feed-forward base PWM
-    float scaleL = (_tgtLMms >= 0.0f) ? _cal.kScaleLF : _cal.kScaleLB;
-    float scaleR = (_tgtRMms >= 0.0f) ? _cal.kScaleRF : _cal.kScaleRB;
-    float scaleFaster  = _fasterIsRight ? scaleR : scaleL;
-    float scaleSlower  = _fasterIsRight ? scaleL : scaleR;
-    float baseFaster = _cal.kFF * tgtFasterAbs * scaleFaster;
-    float baseSlower = _cal.kFF * tgtSlowerAbs * scaleSlower;
-
-    // Step 6: Slower-wheel adjustment
-    float excess = _pid.integral - _cal.kAdjThreshold;
-    float adj = (excess > 0.0f) ? (-_cal.kAdjGain * excess * baseFaster) : 0.0f;
-
-    // Step 7: Compute and clamp final PWM
-    float rawFaster = baseFaster + correction;
-    float uFaster = clamp(rawFaster, 0.0f, 100.0f);
-    // When faster wheel is pegged at floor, redirect overflow to boost slower wheel.
-    float fasterOverflow = fminf(rawFaster, 0.0f);
-    float adjBoost = -fasterOverflow
-                     * (baseSlower / fmaxf(baseFaster, 1.0f))
-                     / fmaxf(_cmdRatio, 1.0f);
-    // Proportional slower-wheel boost: boosts slower when faster over-runs.
-    // Drives normErr toward 0 from the slower side; gain tuned so equilibrium is at ratio≈cmdRatio.
-    float propBoost = (normErr < 0.0f) ? (-3.0f * normErr * baseSlower) : 0.0f;
-    float uSlower = clamp(baseSlower + adj + adjBoost + propBoost, 0.0f, 100.0f);
-
-    // Apply direction signs
-    float uL, uR;
-    if (_fasterIsRight) {
-        uL = (_tgtLMms >= 0.0f) ?  uSlower : -uSlower;
-        uR = (_tgtRMms >= 0.0f) ?  uFaster : -uFaster;
-    } else {
-        uL = (_tgtLMms >= 0.0f) ?  uFaster : -uFaster;
-        uR = (_tgtRMms >= 0.0f) ?  uSlower : -uSlower;
-    }
+    // Step 2: Per-wheel velocity PID (Sprint 010 inner loop).
+    // VelocityController::update(setpoint, measured, dt_s) → PWM% in [-100, +100].
+    // Each wheel is controlled independently — no ratio cross-coupling.
+    float uL = _vcL.update(_tgtLMms, _actualVelL, dt_s);
+    float uR = _vcR.update(_tgtRMms, _actualVelR, dt_s);
 
     _motorL.setSpeed(static_cast<int8_t>(roundf(uL)));
     _motorR.setSpeed(static_cast<int8_t>(roundf(uR)));

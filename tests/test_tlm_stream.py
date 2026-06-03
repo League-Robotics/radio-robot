@@ -180,11 +180,11 @@ class TestTlmFrameFormat:
         """Fields appear in canonical order: t, mode, enc, pose, vel, line, color."""
         frame = make_tlm(
             t=1, mode="S",
-            enc=(1, 2), pose=(3, 4, 5),
+            enc=(1, 2), pose=(3, 4, 5), vel=(200, 195),
             line=(10, 20, 30, 40), color=(1, 2, 3, 4),
         )
         # Find the positions of each field in the wire string.
-        fields_in_order = ["t=", "mode=", "enc=", "pose=", "line=", "color="]
+        fields_in_order = ["t=", "mode=", "enc=", "pose=", "vel=", "line=", "color="]
         positions = [frame.find(f) for f in fields_in_order]
         for i in range(len(positions) - 1):
             assert positions[i] < positions[i + 1], (
@@ -196,6 +196,7 @@ class TestTlmFrameFormat:
         frame = make_tlm(
             t=99999, mode="S",
             enc=(99999, 99999), pose=(99999, -9999, 36000),
+            vel=(999, -999),
             line=(999, 999, 999, 999), color=(65535, 65535, 65535, 65535),
         )
         assert len(frame) < 128, f"Frame too long: {len(frame)} bytes"
@@ -267,13 +268,14 @@ class TestTlmFieldGating:
     def test_all_fields_default(self) -> None:
         """All fields present with default TLM_FIELD_ALL mask."""
         frame = make_tlm(
-            t=1, enc=(1, 2), pose=(3, 4, 5),
+            t=1, enc=(1, 2), pose=(3, 4, 5), vel=(200, 195),
             line=(10, 20, 30, 40), color=(1, 2, 3, 4),
             tlm_fields=TLM_FIELD_ALL,
         )
         kv = parse_tlm(frame)
         assert "enc" in kv
         assert "pose" in kv
+        assert "vel" in kv
         assert "line" in kv
         assert "color" in kv
 
@@ -289,8 +291,18 @@ class TestTlmFieldGating:
         assert "line" not in kv
         assert "color" not in kv
 
-    def test_vel_field_absent_by_default(self) -> None:
-        """vel= field is not emitted (deferred to Sprint 010) even with ALL mask."""
+    def test_vel_field_present_when_set(self) -> None:
+        """vel= field is emitted when TLM_FIELD_VEL is set and vel data provided."""
+        frame = make_tlm(t=1, vel=(200, 195), tlm_fields=TLM_FIELD_VEL)
+        assert "vel=" in frame
+
+    def test_vel_field_absent_when_bit_clear(self) -> None:
+        """vel= field is not emitted when TLM_FIELD_VEL bit is not set."""
+        frame = make_tlm(t=1, vel=(200, 195), tlm_fields=TLM_FIELD_ENC)
+        assert "vel=" not in frame
+
+    def test_vel_field_absent_when_no_data(self) -> None:
+        """vel= field is not emitted when vel=None even with ALL mask."""
         frame = make_tlm(t=1, vel=None, tlm_fields=TLM_FIELD_ALL)
         assert "vel=" not in frame
 

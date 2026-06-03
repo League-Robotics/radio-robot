@@ -1,6 +1,12 @@
 ---
-status: pending
+status: done
 sprint: '010'
+tickets:
+- '001'
+- '002'
+- '003'
+- '004'
+- '007'
 ---
 
 # Kinematics: Velocity-Control Layer (per-wheel PID + body kinematics + saturation)

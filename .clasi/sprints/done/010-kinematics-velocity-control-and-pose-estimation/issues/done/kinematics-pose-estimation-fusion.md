@@ -1,6 +1,9 @@
 ---
-status: pending
+status: done
 sprint: '010'
+tickets:
+- '005'
+- '006'
 ---
 
 # Kinematics: Pose Estimation (midpoint odometry + OTOS complementary fusion)

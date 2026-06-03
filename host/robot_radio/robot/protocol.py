@@ -44,12 +44,13 @@ class TLMFrame:
     All fields are optional — only sensors present in the frame are populated.
     ``t`` is the robot clock in milliseconds at sensor-sample time.
     ``pose`` heading is in centi-degrees (integer), positions in mm.
+    ``vel`` is per-wheel measured speed in mm/s (chip-preferred, encoder fallback).
     """
     t: int | None = None
     mode: str | None = None
     enc: tuple[int, int] | None = None          # (left_mm, right_mm)
     pose: tuple[int, int, int] | None = None    # (x_mm, y_mm, heading_cdeg)
-    vel: tuple[int, int, int] | None = None     # (vx, vy, omega) — optional
+    vel: tuple[int, int] | None = None          # (vL_mmps, vR_mmps) — per-wheel mm/s
     line: tuple[int, int, int, int] | None = None   # (g1, g2, g3, g4)
     color: tuple[int, int, int, int] | None = None  # (r, g, b, c)
 
@@ -158,8 +159,8 @@ def parse_tlm(line: str) -> TLMFrame | None:
     if "vel" in kv:
         try:
             parts = kv["vel"].split(",")
-            if len(parts) == 3:
-                frame.vel = (int(parts[0]), int(parts[1]), int(parts[2]))
+            if len(parts) == 2:
+                frame.vel = (int(parts[0]), int(parts[1]))
         except ValueError:
             pass
 

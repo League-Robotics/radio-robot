@@ -3,13 +3,17 @@
 #include "Motor.h"
 #include "Config.h"
 #include "RatioPidController.h"
+#include "VelocityController.h"
 
 /**
- * MotorController — cumulative-distance ratio PID wheel speed control.
+ * MotorController — per-wheel velocity PID wheel speed control.
  *
- * Sprint 4 replaces the PI+FF tick() body with a ratio PID algorithm that
- * tracks cumulative encoder distance since the command started and keeps
- * the ratio of left:right distance equal to the ratio of commanded speeds.
+ * Inner loop is VelocityController (PI+FF) — one instance per wheel.
+ * RatioPidController is retained but bypassed (not called in normal drive).
+ *
+ * Sprint 010 replaces the cumulative-distance ratio PID inner loop with
+ * two independent VelocityController instances (_vcL, _vcR) that track
+ * per-wheel mm/s setpoints. See docs/kinematics-model.md §2.1.
  *
  * Thread safety: single-threaded tick loop only.
  */
@@ -80,12 +84,19 @@ private:
     Motor&             _motorR;
     const RobotConfig& _cal;
 
-    // Ratio PID state
+    // Per-wheel velocity controllers (PI + feed-forward). Sprint 010 inner loop.
+    VelocityController _vcL;
+    VelocityController _vcR;
+
+    // RatioPidController retained for compile compatibility; bypassed in normal drive.
     RatioPidController _pid;
+
+    // Ratio-PID bookkeeping fields — retained but unused in velocity-loop path.
     float _cmdEncStartL;     // encoder mm snapshot at command start (left)
     float _cmdEncStartR;     // encoder mm snapshot at command start (right)
     float _cmdRatio;         // |fasterSpeed| / |slowerSpeed|, always >= 1.0
     bool  _fasterIsRight;    // true if right wheel is the commanded-faster wheel
+
     float _tgtLMms;          // current speed targets in mm/s
     float _tgtRMms;
 

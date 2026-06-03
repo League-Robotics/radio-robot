@@ -3,8 +3,61 @@
 
 Odometry::Odometry()
     : _x(0.0f), _y(0.0f), _headingRad(0.0f)
+    , _prevEncL(0.0f), _prevEncR(0.0f)
+    , _otosRejected(0)
 {
 }
+
+// ---------------------------------------------------------------------------
+// predict — midpoint (exact-arc) integration (docs/kinematics-model.md §2.4)
+// ---------------------------------------------------------------------------
+
+void Odometry::predict(float encLMm, float encRMm, float trackwidthMm)
+{
+    float dL = encLMm - _prevEncL;
+    float dR = encRMm - _prevEncR;
+    _prevEncL = encLMm;
+    _prevEncR = encRMm;
+
+    float dCenter   = (dL + dR) * 0.5f;
+    float dTheta    = (dR - dL) / trackwidthMm;
+    float thetaMid  = _headingRad + dTheta * 0.5f;
+
+    _x          += dCenter * cosf(thetaMid);
+    _y          += dCenter * sinf(thetaMid);
+    _headingRad  = wrapPi(_headingRad + dTheta);
+}
+
+// ---------------------------------------------------------------------------
+// correct — OTOS complementary correction (docs/kinematics-model.md §2.4)
+// ---------------------------------------------------------------------------
+
+void Odometry::correct(float x_otos, float y_otos, float theta_otos_rad,
+                       float alphaPos, float alphaYaw, float otosGate)
+{
+    // Outlier gate: reject if OTOS position disagrees with predicted pose
+    // by more than the gate threshold.
+    float dx = x_otos - _x;
+    float dy = y_otos - _y;
+    float dist = sqrtf(dx * dx + dy * dy);
+    if (dist > otosGate) {
+        ++_otosRejected;
+        return;
+    }
+
+    // Accepted: complementary blend of position.
+    _x += alphaPos * dx;
+    _y += alphaPos * dy;
+
+    // Heading blend: angle-wrap-safe — blend on the angular difference,
+    // not on the raw angle, to avoid crossing the ±π discontinuity.
+    float dh = wrapPi(theta_otos_rad - _headingRad);
+    _headingRad = wrapPi(_headingRad + alphaYaw * dh);
+}
+
+// ---------------------------------------------------------------------------
+// update — legacy forward-Euler (deprecated; callers should use predict())
+// ---------------------------------------------------------------------------
 
 void Odometry::update(float dL_mm, float dR_mm, float trackwidthMm)
 {
@@ -32,9 +85,20 @@ void Odometry::setPose(int32_t x_mm, int32_t y_mm, int32_t h_cdeg)
     _x          = static_cast<float>(x_mm);
     _y          = static_cast<float>(y_mm);
     _headingRad = static_cast<float>(h_cdeg) * CDEG_TO_RAD;
+    _prevEncL   = 0.0f;
+    _prevEncR   = 0.0f;
 }
 
 void Odometry::zero()
 {
     setPose(0, 0, 0);
+}
+
+// ---------------------------------------------------------------------------
+// wrapPi — keep heading in (-π, π]
+// ---------------------------------------------------------------------------
+
+float Odometry::wrapPi(float theta)
+{
+    return atan2f(sinf(theta), cosf(theta));
 }

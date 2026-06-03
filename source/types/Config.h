@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------
 constexpr uint8_t TLM_FIELD_ENC   = (1u << 0);  // enc=l,r
 constexpr uint8_t TLM_FIELD_POSE  = (1u << 1);  // pose=x,y,h
-constexpr uint8_t TLM_FIELD_VEL   = (1u << 2);  // vel=vl,vr  (deferred Sprint 010)
+constexpr uint8_t TLM_FIELD_VEL   = (1u << 2);  // vel=vL,vR  (per-wheel mm/s, activated Sprint 010)
 constexpr uint8_t TLM_FIELD_LINE  = (1u << 3);  // line=4ch
 constexpr uint8_t TLM_FIELD_COLOR = (1u << 4);  // color=4ch
 constexpr uint8_t TLM_FIELD_ALL   = 0xFFu;      // all fields (default)
@@ -18,26 +18,12 @@ struct RobotConfig {
     int8_t fwdSignL;
     int8_t fwdSignR;
 
-    // Encoder calibration (mm per degree of motor rotation)
+    // Encoder calibration (mm per degree of motor rotation).
+    // Also used by Motor::readSpeed() for chip-native velocity conversion:
+    //   mm/s = (raw / kUnitFactor) * mmPerDeg * sign
+    // (kUnitFactor is a named constant in Motor.cpp; see readSpeed() comment.)
     float mmPerDegL;
     float mmPerDegR;
-
-    /**
-     * lapsToMmScale — converts chip-native velocity (laps/s from register 0x47)
-     * to mm/s.  Formula: mm_per_sec = floor(raw/3.6)*0.01 * lapsToMmScale.
-     *
-     * This constant is PROVISIONAL and must be pinned empirically:
-     *   1. Drive at PWM 20, 50, 80 (forward and reverse) on each wheel.
-     *   2. For each run, record chip_mmps and encoder_mmps.
-     *   3. Set lapsToMmScale = encoder_mmps / (floor(raw/3.6)*0.01) at mid-range.
-     *   4. Confirm monotonicity, correct sign, and that chip/encoder agree
-     *      within acceptable tolerance before trusting chip velocity in control.
-     *
-     * Theoretical estimate based on wheel circumference ≈ 200 mm (63.7 mm dia)
-     * and typical gear ratio: ~1980 mm/lap — actual value TBD from bench data.
-     * The default of 1980.0 is a starting estimate only.
-     */
-    float lapsToMmScale;
 
     // Feed-forward and motor scale factors
     float kFF;
@@ -58,6 +44,31 @@ struct RobotConfig {
     float ratioPidKi;
     float ratioPidKd;
     float ratioPidMax;
+
+    // Wheel saturation ceiling and steering headroom (docs/kinematics-model.md §1.7).
+    // Effective ceiling = vWheelMax - steerHeadroom.
+    // SET/GET key strings use dotted form: "vWheelMax", "steerHeadroom".
+    float vWheelMax;      // absolute wheel speed ceiling, mm/s (default 400.0)
+    float steerHeadroom;  // headroom below vWheelMax reserved for steering, mm/s (default 20.0)
+
+    // Velocity controller gains (docs/kinematics-model.md §2.1).
+    // C++ struct members cannot contain dots; SET/GET key strings use dotted form.
+    //   velKp  ↔ key "vel.kP"   (default 0.3)
+    //   velKi  ↔ key "vel.kI"   (default 0.05)
+    //   velKff ↔ key "vel.kFF"  (default 0.15)
+    float velKp;          // proportional gain for per-wheel velocity loop
+    float velKi;          // integral gain for per-wheel velocity loop
+    float velKff;         // feed-forward coefficient: FF = velKff * |setpoint|
+    float minWheelMms;    // deadband: integrator frozen below this |speed| (default 20.0 mm/s)
+
+    // OTOS complementary fusion parameters (docs/kinematics-model.md §2.4).
+    // C++ field names use flat camel-case; SET/GET key strings match exactly.
+    //   alphaPos  — position blend gain, fraction of OTOS correction per slow tick (default 0.15)
+    //   alphaYaw  — heading blend gain, fraction of OTOS correction per slow tick (default 0.10)
+    //   otosGate  — outlier rejection threshold in mm; samples beyond this distance are dropped (default 50.0)
+    float alphaPos;    // OTOS position blend gain [0, 1]
+    float alphaYaw;    // OTOS heading blend gain [0, 1]
+    float otosGate;    // outlier rejection distance threshold, mm
 
     // Go-to tolerances
     float turnThresholdMm;
@@ -90,8 +101,6 @@ inline RobotConfig defaultRobotConfig() {
     p.fwdSignR        = -1;
     p.mmPerDegL       = 0.487f;
     p.mmPerDegR       = 0.481f;
-    // PROVISIONAL — see lapsToMmScale field comment above for bench-tuning procedure.
-    p.lapsToMmScale   = 1980.0f;
     p.kFF             = 0.15f;
     p.kScaleLF        = 1.0f;
     p.kScaleLB        = 1.0f;
@@ -104,6 +113,15 @@ inline RobotConfig defaultRobotConfig() {
     p.ratioPidKi      = 0.0f;
     p.ratioPidKd      = 0.0f;
     p.ratioPidMax     = 30.0f;
+    p.vWheelMax       = 400.0f;
+    p.steerHeadroom   = 20.0f;
+    p.alphaPos        = 0.15f;
+    p.alphaYaw        = 0.10f;
+    p.otosGate        = 50.0f;
+    p.velKp           = 0.3f;
+    p.velKi           = 0.05f;
+    p.velKff          = 0.15f;
+    p.minWheelMms     = 20.0f;
     p.turnThresholdMm = 50.0f;
     p.doneTolMm       = 5.0f;
     p.distScale       = 0.94f;

@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""test_config_registry.py — Unit tests for SET/GET config registry (009-004).
+"""test_config_registry.py — Unit tests for SET/GET config registry.
+
+Covers sprint 009-004 (original 22 keys) and sprint 010-004 (6 new
+velocity/saturation tunables: vel.kP, vel.kI, vel.kFF, minWheelMms,
+vWheelMax, steerHeadroom).
 
 These tests validate:
-  - GET response format: CFG prefix, all 22 keys present, correct value format
+  - GET response format: CFG prefix, all 28 keys present, correct value format
   - GET subset: only requested keys returned
   - SET value parsing: float, integer, float-as-int
   - Error paths: badkey, missing key=value in SET
@@ -10,6 +14,7 @@ These tests validate:
   - Response length under 512 bytes for full GET dump
   - Integer params formatted without decimal point
   - Float params formatted with 3 decimal places
+  - lapsToMmScale is absent from the registry
 
 The tests simulate the wire protocol by parsing expected response strings,
 verifying format without requiring a connected robot.
@@ -53,39 +58,52 @@ def is_int_formatted(val: str) -> bool:
 # ---------------------------------------------------------------------------
 
 # (key, type) where type is 'float', 'int', or 'float_as_int'
+# Mirrors kRegistry[] in CommandProcessor.cpp — 28 entries as of Sprint 010-004.
 REGISTRY = [
-    ("ml",        "float"),
-    ("mr",        "float"),
-    ("kff",       "float"),
-    ("klf",       "float"),
-    ("klb",       "float"),
-    ("krf",       "float"),
-    ("krb",       "float"),
-    ("adjThr",    "float"),
-    ("adjGain",   "float"),
-    ("tw",        "float_as_int"),
-    ("pid.kp",    "float"),
-    ("pid.ki",    "float"),
-    ("pid.kd",    "float"),
-    ("pid.max",   "float"),
-    ("turnThr",   "float_as_int"),
-    ("doneTol",   "float_as_int"),
-    ("distScale", "float"),
-    ("turnScale", "float"),
-    ("minSpeed",  "int"),
-    ("sTimeout",  "int"),
-    ("tick",      "int"),
-    ("tlmPeriod", "int"),
+    # Original 22 keys (Sprint 009-004)
+    ("ml",            "float"),
+    ("mr",            "float"),
+    ("kff",           "float"),
+    ("klf",           "float"),
+    ("klb",           "float"),
+    ("krf",           "float"),
+    ("krb",           "float"),
+    ("adjThr",        "float"),
+    ("adjGain",       "float"),
+    ("tw",            "float_as_int"),
+    ("pid.kp",        "float"),
+    ("pid.ki",        "float"),
+    ("pid.kd",        "float"),
+    ("pid.max",       "float"),
+    # New keys added Sprint 010-004: velocity/saturation tunables
+    ("vel.kP",        "float"),
+    ("vel.kI",        "float"),
+    ("vel.kFF",       "float"),
+    ("minWheelMms",   "float"),
+    ("vWheelMax",     "float"),
+    ("steerHeadroom", "float"),
+    # Remaining original keys
+    ("turnThr",       "float_as_int"),
+    ("doneTol",       "float_as_int"),
+    ("distScale",     "float"),
+    ("turnScale",     "float"),
+    ("minSpeed",      "int"),
+    ("sTimeout",      "int"),
+    ("tick",          "int"),
+    ("tlmPeriod",     "int"),
 ]
 
 REGISTRY_KEYS = [k for k, _ in REGISTRY]
 
 # Default RobotConfig values as written to the wire by GET.
 # These match defaultRobotConfig() in Config.h + expected %.3f / %d formatting.
+# Sprint 010-004 adds 6 new keys after pid.max; total 28 keys, ~336 bytes.
 DEFAULT_GET_LINE = (
     "CFG ml=0.487 mr=0.481 kff=0.150 klf=1.000 klb=1.000 krf=1.000 krb=1.000 "
     "adjThr=0.500 adjGain=0.050 tw=120 pid.kp=300.000 pid.ki=0.000 pid.kd=0.000 "
-    "pid.max=30.000 turnThr=50 doneTol=5 distScale=0.940 turnScale=1.070 "
+    "pid.max=30.000 vel.kP=0.300 vel.kI=0.050 vel.kFF=0.150 "
+    "minWheelMms=20.000 vWheelMax=400.000 steerHeadroom=20.000 "
+    "turnThr=50 doneTol=5 distScale=0.940 turnScale=1.070 "
     "minSpeed=50 sTimeout=200 tick=20 tlmPeriod=0"
 )
 
@@ -97,8 +115,8 @@ DEFAULT_GET_LINE = (
 class TestRegistrySpec:
     """Validate the registry spec itself is consistent."""
 
-    def test_all_22_keys_present(self) -> None:
-        assert len(REGISTRY) == 22, f"Expected 22 registry entries, got {len(REGISTRY)}"
+    def test_all_28_keys_present(self) -> None:
+        assert len(REGISTRY) == 28, f"Expected 28 registry entries, got {len(REGISTRY)}"
 
     def test_key_names_unique(self) -> None:
         keys = [k for k, _ in REGISTRY]
@@ -182,11 +200,114 @@ class TestGetResponseFormat:
         )
 
     def test_response_length_reasonable(self) -> None:
-        """Confirm the response is in the expected range (~200-400 bytes)."""
+        """Confirm the response is in the expected range (~250-450 bytes).
+        Sprint 010-004 added 6 keys raising the floor from ~238 to ~336 bytes.
+        """
         length = len(DEFAULT_GET_LINE)
-        assert 100 < length < 450, (
-            f"GET response length {length} is outside expected range 100-450"
+        assert 250 < length < 450, (
+            f"GET response length {length} is outside expected range 250-450"
         )
+
+
+class TestVelocityTunables:
+    """Sprint 010-004: new velocity/saturation keys in kRegistry[]."""
+
+    def test_vel_kP_present_in_full_get(self) -> None:
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert "vel.kP" in kv, "vel.kP missing from GET dump"
+
+    def test_vel_kI_present_in_full_get(self) -> None:
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert "vel.kI" in kv, "vel.kI missing from GET dump"
+
+    def test_vel_kFF_present_in_full_get(self) -> None:
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert "vel.kFF" in kv, "vel.kFF missing from GET dump"
+
+    def test_minWheelMms_present_in_full_get(self) -> None:
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert "minWheelMms" in kv, "minWheelMms missing from GET dump"
+
+    def test_vWheelMax_present_in_full_get(self) -> None:
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert "vWheelMax" in kv, "vWheelMax missing from GET dump"
+
+    def test_steerHeadroom_present_in_full_get(self) -> None:
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert "steerHeadroom" in kv, "steerHeadroom missing from GET dump"
+
+    def test_vel_kP_default_value(self) -> None:
+        """vel.kP default is 0.3 → formatted as 0.300."""
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert kv["vel.kP"] == "0.300", f"vel.kP expected '0.300', got {kv['vel.kP']!r}"
+
+    def test_vel_kI_default_value(self) -> None:
+        """vel.kI default is 0.05 → formatted as 0.050."""
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert kv["vel.kI"] == "0.050", f"vel.kI expected '0.050', got {kv['vel.kI']!r}"
+
+    def test_vel_kFF_default_value(self) -> None:
+        """vel.kFF default is 0.15 → formatted as 0.150."""
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert kv["vel.kFF"] == "0.150", f"vel.kFF expected '0.150', got {kv['vel.kFF']!r}"
+
+    def test_minWheelMms_default_value(self) -> None:
+        """minWheelMms default is 20.0 → formatted as 20.000."""
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert kv["minWheelMms"] == "20.000", (
+            f"minWheelMms expected '20.000', got {kv['minWheelMms']!r}"
+        )
+
+    def test_vWheelMax_default_value(self) -> None:
+        """vWheelMax default is 400.0 → formatted as 400.000."""
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert kv["vWheelMax"] == "400.000", (
+            f"vWheelMax expected '400.000', got {kv['vWheelMax']!r}"
+        )
+
+    def test_steerHeadroom_default_value(self) -> None:
+        """steerHeadroom default is 20.0 → formatted as 20.000."""
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert kv["steerHeadroom"] == "20.000", (
+            f"steerHeadroom expected '20.000', got {kv['steerHeadroom']!r}"
+        )
+
+    def test_velocity_keys_are_float_formatted(self) -> None:
+        """All six new keys are floats with 3 decimal places."""
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        for key in ("vel.kP", "vel.kI", "vel.kFF", "minWheelMms", "vWheelMax", "steerHeadroom"):
+            assert is_float_formatted(kv[key]), (
+                f"Key {key!r} value {kv[key]!r} not formatted as %.3f"
+            )
+
+    def test_set_vel_kP_round_trip(self) -> None:
+        """SET vel.kP=0.4 → OK set vel.kP=0.4; GET vel.kP → CFG vel.kP=0.400."""
+        # Simulate SET round-trip response format.
+        ok_line = "OK set vel.kP=0.4"
+        assert ok_line.startswith("OK set")
+        assert "vel.kP=0.4" in ok_line
+        # Simulate GET response after SET.
+        get_line = "CFG vel.kP=0.400"
+        kv = parse_cfg(get_line)
+        assert kv["vel.kP"] == "0.400"
+
+    def test_set_vWheelMax_round_trip(self) -> None:
+        """SET vWheelMax=350 → OK set vWheelMax=350; GET vWheelMax → CFG vWheelMax=350.000."""
+        ok_line = "OK set vWheelMax=350"
+        assert ok_line.startswith("OK set")
+        assert "vWheelMax=350" in ok_line
+        # vWheelMax is CFG_FLOAT, so GET shows %.3f
+        get_line = "CFG vWheelMax=350.000"
+        kv = parse_cfg(get_line)
+        assert kv["vWheelMax"] == "350.000"
+
+    def test_lapsToMmScale_absent(self) -> None:
+        """lapsToMmScale must not appear in the registry (deleted in Ticket 001)."""
+        for key, _ in REGISTRY:
+            assert key != "lapsToMmScale", "lapsToMmScale is still in the registry"
+        # Also confirm it's not in the default GET dump.
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert "lapsToMmScale" not in kv, "lapsToMmScale appears in GET dump"
 
 
 class TestGetSubset:
