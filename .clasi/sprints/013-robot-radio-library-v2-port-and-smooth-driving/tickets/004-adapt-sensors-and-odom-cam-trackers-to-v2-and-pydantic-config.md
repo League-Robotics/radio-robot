@@ -1,11 +1,11 @@
 ---
 id: '004'
 title: Adapt sensors and odom/cam trackers to v2 and pydantic config
-status: open
+status: done
 use-cases:
-  - SUC-006
+- SUC-006
 depends-on:
-  - '003'
+- '003'
 github-issue: ''
 issue: ''
 completes_issue: false
@@ -27,14 +27,14 @@ The sensor layer needs three adjustments after T003's `Nezha` rewrite:
 
 ## Acceptance Criteria
 
-- [ ] `OdomTracker` accepts `TLMFrame` directly (not raw `SO` strings); `parse_so()` is removed or clearly marked deprecated with no callers.
-- [ ] `OdomTracker.__init__` accepts a `RobotConfig` (or equivalent keyword args) for `trackwidth_mm`, `mm_per_deg_l/r`.
-- [ ] `CamTracker` filters to AprilTag ID 100; ignores other tag IDs.
-- [ ] `CamTracker` pose units are mm; no cm-to-mm conversion needed at the caller.
-- [ ] `sensors/otos.py` contains no v1 verb strings (`SO`, `OO`, `OK` as OTOS-complete ack).
-- [ ] All four peripheral sensor modules (`color`, `motion_monitor`, `odometry`, `calibration`) import without error.
-- [ ] Existing `host/tests/test_odom_tracker.py` still passes; extend with `TLMFrame`-based input test if not already present.
-- [ ] `uv run --with pytest python -m pytest host/tests` — all tests pass.
+- [x] `OdomTracker` accepts `TLMFrame` directly (not raw `SO` strings); `parse_so()` is removed or clearly marked deprecated with no callers.
+- [x] `OdomTracker.__init__` accepts a `RobotConfig` (or equivalent keyword args) for `trackwidth_mm`, `mm_per_deg_l/r`.
+- [x] `CamTracker` filters to AprilTag ID 100; ignores other tag IDs.
+- [x] `CamTracker` pose units are mm; no cm-to-mm conversion needed at the caller.
+- [x] `sensors/otos.py` contains no v1 verb strings (`SO`, `OO`, `OK` as OTOS-complete ack).
+- [x] All four peripheral sensor modules (`color`, `motion_monitor`, `odometry`, `calibration`) import without error.
+- [x] Existing `host/tests/test_odom_tracker.py` still passes; extend with `TLMFrame`-based input test if not already present.
+- [x] `uv run --with pytest python -m pytest host/tests` — all tests pass.
 
 ## Implementation Plan
 
