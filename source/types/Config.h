@@ -176,7 +176,7 @@ inline RobotConfig defaultRobotConfig() {
     p.turnScale       = 1.07f;
     p.minSpeedMms     = 50;
     p.tickMs          = 20;
-    p.sTimeoutMs      = 200;
+    p.sTimeoutMs      = 500;   // 500 ms: allows relay-link jitter without cutting motors
     p.tlmPeriodMs     = 0;
     p.tlmFields       = 0xFF;
     p.tlmSnapPending  = false;

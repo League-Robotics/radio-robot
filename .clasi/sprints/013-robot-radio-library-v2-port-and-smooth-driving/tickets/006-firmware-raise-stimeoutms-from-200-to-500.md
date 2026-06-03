@@ -1,10 +1,10 @@
 ---
 id: '006'
 title: 'Firmware: raise sTimeoutMs from 200 to 500'
-status: open
+status: done
 use-cases:
-  - SUC-004
-  - SUC-008
+- SUC-004
+- SUC-008
 depends-on: []
 github-issue: ''
 issue: ''
@@ -32,8 +32,8 @@ This ticket has no dependency on the host library tickets (T001–T005) and can 
 
 ## Acceptance Criteria
 
-- [ ] `source/types/Config.h` diff shows `sTimeoutMs` changed from `200` to `500`.
-- [ ] Code review of `source/control/DriveController.cpp` confirms the streaming watchdog check uses `_config.sTimeoutMs` (not a literal `200` or `200u`).
+- [x] `source/types/Config.h` diff shows `sTimeoutMs` changed from `200` to `500`.
+- [x] Code review of `source/control/DriveController.cpp` confirms the streaming watchdog check uses `_config.sTimeoutMs` (not a literal `200` or `200u`).
 - [ ] Firmware builds clean: `mbdeploy build --clean` exits 0 with no warnings introduced.
 - [ ] (Bench — stakeholder) `GET sTimeout` returns `500` on the robot after reflash.
 
