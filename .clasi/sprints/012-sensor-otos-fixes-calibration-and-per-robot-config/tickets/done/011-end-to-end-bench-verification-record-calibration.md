@@ -1,7 +1,7 @@
 ---
 id: '011'
 title: End-to-end bench verification + record calibration
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-002
@@ -19,8 +19,8 @@ depends-on:
 - '005'
 - '006'
 - '007'
-- '008'
-- '009'
+- 008
+- 009
 - '010'
 github-issue: ''
 issue: sprint-12-sensor-otos-fixes-calibration-per-robot-config.md

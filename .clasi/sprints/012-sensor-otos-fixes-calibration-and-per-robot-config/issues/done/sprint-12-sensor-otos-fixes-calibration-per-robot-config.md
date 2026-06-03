@@ -1,8 +1,18 @@
 ---
-status: in-progress
+status: done
 sprint: '012'
 tickets:
-- 012-001
+- '001'
+- '002'
+- '003'
+- '004'
+- '005'
+- '006'
+- '007'
+- 008
+- 009
+- '010'
+- '011'
 ---
 
 # Sprint 12 — Sensor/OTOS Fixes, Calibration & Per-Robot Config
