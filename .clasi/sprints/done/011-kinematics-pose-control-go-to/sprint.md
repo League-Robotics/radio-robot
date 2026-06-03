@@ -1,7 +1,7 @@
 ---
 id: '011'
 title: 'Kinematics: Pose Control (Go-To)'
-status: planning-docs
+status: done
 branch: sprint/011-kinematics-pose-control-go-to
 use-cases:
 - SUC-001
