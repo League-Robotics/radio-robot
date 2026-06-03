@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# dotconfig version_bump hook.
+#
+# Fires after `dotconfig version bump` writes the new project version. Keeps the
+# firmware-reported version (source/types/Protocol.h FIRMWARE_VERSION) in sync
+# with the dotconfig/package version, so the robot's ID / VER / DEVICE banner
+# always reports the real build version instead of a hand-edited stale string.
+#
+# Args (from dotconfig): <project_dir> <old_version> <new_version>
+set -euo pipefail
+
+PROJECT_DIR="$1"
+NEW_VERSION="$3"
+HEADER="$PROJECT_DIR/source/types/Protocol.h"
+
+[ -f "$HEADER" ] || exit 0
+
+# Replace the quoted version in the `FIRMWARE_VERSION = "..."` line, in place,
+# portably (no GNU/BSD `sed -i` divergence).
+tmp="$(mktemp)"
+sed -E "s/(FIRMWARE_VERSION[[:space:]]*=[[:space:]]*\")[^\"]*(\")/\1${NEW_VERSION}\2/" \
+    "$HEADER" > "$tmp" && mv "$tmp" "$HEADER"
+
+echo "version_bump hook: FIRMWARE_VERSION -> \"$NEW_VERSION\" in source/types/Protocol.h"
