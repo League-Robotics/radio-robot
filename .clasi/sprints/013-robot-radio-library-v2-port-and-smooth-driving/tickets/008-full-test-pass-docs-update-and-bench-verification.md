@@ -1,18 +1,18 @@
 ---
-id: '008'
+id: 008
 title: Full test pass, docs update, and bench verification
-status: open
+status: in-progress
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-003
-  - SUC-004
-  - SUC-007
-  - SUC-008
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-007
+- SUC-008
 depends-on:
-  - '005'
-  - '006'
-  - '007'
+- '005'
+- '006'
+- '007'
 github-issue: ''
 issue: plan-port-v2-update-the-robot-radio-package-new-sprint.md
 completes_issue: true
@@ -34,15 +34,26 @@ The bench verification steps (3 and 4) require the stakeholder to be at the benc
 ## Acceptance Criteria
 
 **Automated (CI-runnable)**:
-- [ ] `uv run --with pytest python -m pytest host/tests` — all tests green, no skips.
-- [ ] `uv run python -c "from robot_radio.robot import Nezha, NezhaProtocol; from robot_radio import nav, path, controllers, kinematics"` exits 0.
-- [ ] `host/robot_radio/README.md` (or equivalent) documents: import path, test command (`uv run --with pytest python -m pytest host/tests`), calibration run (`uv run python tests/calibrate/calibrate_linear.py`), and note that `calib_common.py` has been removed.
+- [x] `uv run --with pytest python -m pytest host/tests` — all tests green, no skips. (409 passed in 0.99s)
+- [x] `uv run python -c "import sys; sys.path.insert(0, 'host'); from robot_radio.robot import Nezha, NezhaProtocol; from robot_radio import nav, path, controllers, kinematics"` exits 0. (Note: `host/` must be on sys.path since robot_radio is a host sub-package.)
+- [x] `host/robot_radio/README.md` created; documents: import path, test command, calibration run (`uv run python tests/calibrate/calibrate_linear.py`), smooth-driving guidance, pytest scope guardrail, and note that `calib_common.py` has been removed. Root `README.md` and `tests/calibrate/README.md` also updated.
 
 **Bench (stakeholder-run)**:
 - [ ] Firmware flashed with `sTimeoutMs=500`: `GET sTimeout` returns `500`.
+
+> STAKEHOLDER BENCH STEP — pending
+
 - [ ] Blocking drive: `nezha.speed_for_distance(200, 500)` completes smoothly (no `EVT safety_stop` in log).
+
+> STAKEHOLDER BENCH STEP — pending
+
 - [ ] Stream drive: `stream_drive(200, 200)` for 3 seconds completes smoothly (no `EVT safety_stop`).
+
+> STAKEHOLDER BENCH STEP — pending
+
 - [ ] `uv run python tests/calibrate/calibrate_linear.py` connects to robot, activates laser, drives 900 mm blocking `D`, reads camera + encoder + OTOS, accepts tape input, writes `tovez.json` — no crashes or raw serial errors.
+
+> STAKEHOLDER BENCH STEP — pending
 
 ## Implementation Plan
 
