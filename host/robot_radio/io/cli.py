@@ -200,7 +200,7 @@ def _make_robot(args) -> tuple[QBotPro, SerialConnection, dict]:
 
     Calibration freshness check (warm-path speedup):
     After connecting, reads the firmware's current OL register via
-    ``proto.query_ol()`` (one fast round-trip, ~tens of ms) and compares it
+    ``proto.otos_get_linear_scalar()`` (one fast round-trip, ~tens of ms) and compares it
     against the config-derived expected value.  If they match, calibration
     was already pushed this session and the push is skipped.  If they don't
     match (including ``None`` on timeout, which happens when the robot was
@@ -330,13 +330,13 @@ def _make_robot(args) -> tuple[QBotPro, SerialConnection, dict]:
     # Query firmware's current OL value via proto (fast round-trip).
     proto = getattr(robot, "_proto", None)
     if proto is not None and expected_ol is not None:
-        actual_ol = proto.query_ol()
+        actual_ol = proto.otos_get_linear_scalar()
         _log(f"freshness check: firmware OL={actual_ol}, expected OL={expected_ol}")
         if actual_ol is None:
             # First query returned None — transient miss (port not fully settled
             # after a cache-hit open, or relay garbling).  Retry once before
             # concluding the firmware is uncalibrated and re-pushing.
-            actual_ol = proto.query_ol()
+            actual_ol = proto.otos_get_linear_scalar()
             _log(f"freshness check retry: firmware OL={actual_ol}, expected OL={expected_ol}")
         if actual_ol != expected_ol:
             # Mismatch (including None after retry): firmware was power-cycled
