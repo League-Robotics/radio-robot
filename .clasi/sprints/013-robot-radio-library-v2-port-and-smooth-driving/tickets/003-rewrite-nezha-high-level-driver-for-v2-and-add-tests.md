@@ -1,13 +1,13 @@
 ---
 id: '003'
 title: Rewrite Nezha high-level driver for v2 and add tests
-status: open
+status: done
 use-cases:
-  - SUC-002
-  - SUC-003
-  - SUC-004
+- SUC-002
+- SUC-003
+- SUC-004
 depends-on:
-  - '002'
+- '002'
 github-issue: ''
 issue: ''
 completes_issue: false
@@ -35,16 +35,16 @@ Confirm `robot/robot.py` imports and exposes the updated `Nezha` without error.
 
 ## Acceptance Criteria
 
-- [ ] `connect()` sends `PING` then `ID`; raises `RobotNotFoundError` (or equivalent) if either times out.
-- [ ] `speed_for_time(spd, ms)` sends `T l r ms` (v2 format) and blocks until `EVT done T`.
-- [ ] `speed_for_distance(spd, mm)` uses a hop loop with `D l r hop_mm` + `wait_for_evt_done("D")` for each hop.
-- [ ] `go_to(x, y, spd)` sends `G x y spd` and blocks until `EVT done G`.
-- [ ] `stream_drive(l, r)` resends `S l r` at ≤150 ms intervals (30 % of 500 ms watchdog).
-- [ ] `stop()` sends `STOP`.
-- [ ] `NezhaState.encoders`, `.otos_pose`, `.heading_rad` are updated from `TLMFrame` fields.
-- [ ] Heading is stored as radians (centidegrees from TLM are converted: `cdeg / 18000.0 * math.pi`).
-- [ ] No v1 command strings in `nezha.py` (`S+`, `T+`, `D+`, sign-prefix formatting).
-- [ ] `uv run --with pytest python -m pytest host/tests` — all tests pass.
+- [x] `connect()` sends `PING` then `ID`; raises `RobotNotFoundError` (or equivalent) if either times out.
+- [x] `speed_for_time(spd, ms)` sends `T l r ms` (v2 format) and blocks until `EVT done T`.
+- [x] `speed_for_distance(spd, mm)` uses a hop loop with `D l r hop_mm` + `wait_for_evt_done("D")` for each hop.
+- [x] `go_to(x, y, spd)` sends `G x y spd` and blocks until `EVT done G`.
+- [x] `stream_drive(l, r)` resends `S l r` at ≤150 ms intervals (30 % of 500 ms watchdog).
+- [x] `stop()` sends `STOP`.
+- [x] `NezhaState.encoders`, `.otos_pose`, `.heading_rad` are updated from `TLMFrame` fields.
+- [x] Heading is stored as radians (centidegrees from TLM are converted: `cdeg / 18000.0 * math.pi`).
+- [x] No v1 command strings in `nezha.py` (`S+`, `T+`, `D+`, sign-prefix formatting).
+- [x] `uv run --with pytest python -m pytest host/tests` — all tests pass.
 
 ## Implementation Plan
 
