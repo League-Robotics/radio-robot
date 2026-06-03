@@ -28,3 +28,19 @@ aprilcam = { path = "/Volumes/Proj/proj/RobotProjects/AprilTags", editable = tru
 members = [
     "mbdeploy",
 ]
+
+[tool.pytest.ini_options]
+# Pin where tests live. Without this, a bare `pytest` from the repo root
+# recursively collects EVERYTHING — including vendor/PythonRobotics (90+
+# matplotlib/numpy path-planning *simulation* test files), whose collection
+# imports modules that allocate huge grids and open animation loops. That can
+# exhaust memory on a small machine. Keep collection scoped and never descend
+# into vendored sims, the build tree, or the venv.
+# Only host/tests here. mbdeploy is a workspace member with its own test
+# setup (run via mbdeploy/.venv); collecting it from the repo root collides on
+# the duplicate top-level `tests` package name.
+testpaths = ["host/tests"]
+norecursedirs = [
+    "vendor", "build", ".venv", "node_modules",
+    "*.egg", ".*", "dist", "{arch}", "__pycache__",
+]
