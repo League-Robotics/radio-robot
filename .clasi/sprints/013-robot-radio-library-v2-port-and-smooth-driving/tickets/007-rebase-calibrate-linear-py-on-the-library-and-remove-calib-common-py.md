@@ -1,12 +1,12 @@
 ---
 id: '007'
 title: Rebase calibrate_linear.py on the library and remove calib_common.py
-status: open
+status: done
 use-cases:
-  - SUC-007
+- SUC-007
 depends-on:
-  - '003'
-  - '004'
+- '003'
+- '004'
 github-issue: ''
 issue: ''
 completes_issue: false
@@ -28,15 +28,15 @@ The existing calibration behavior is preserved:
 
 ## Acceptance Criteria
 
-- [ ] `tests/calibrate/calibrate_linear.py` imports no raw serial module (no `serial`, `SerialConnection` directly, no `calib_common`).
-- [ ] All robot calls in the script go through `Nezha` or `NezhaProtocol`.
-- [ ] `tests/calibrate/calib_common.py` does not exist (deleted, git removed).
-- [ ] Laser activation uses `protocol.port(4, 1)` / `protocol.port(4, 0)`.
-- [ ] Drive uses `protocol.distance(l, r, mm)` + `protocol.wait_for_evt_done("D")` (or equivalent `Nezha` method).
-- [ ] Calibration push uses `protocol.set_param("ml", ...)`, `protocol.set_param("mr", ...)`, `protocol.otos_set_linear_scalar(n)`.
-- [ ] `data/robots/tovez.json` write path uses `RobotConfig` from `host/robot_radio/config/robot_config.py`.
-- [ ] `uv run --with pytest python -m pytest host/tests` — all tests pass.
-- [ ] New test `host/tests/test_calibrate_linear.py` covers: calibration math, JSON write path, no raw serial imports.
+- [x] `tests/calibrate/calibrate_linear.py` imports no raw serial module (no `serial`, `SerialConnection` directly, no `calib_common`).
+- [x] All robot calls in the script go through `Nezha` or `NezhaProtocol`.
+- [x] `tests/calibrate/calib_common.py` does not exist (deleted, git removed).
+- [x] Laser activation uses `protocol.port(4, 1)` / `protocol.port(4, 0)`.
+- [x] Drive uses `protocol.distance(l, r, mm)` + `protocol.wait_for_evt_done("D")` (or equivalent `Nezha` method).
+- [x] Calibration push uses `protocol.set_param("ml", ...)`, `protocol.set_param("mr", ...)`, `protocol.otos_set_linear_scalar(n)`.
+- [x] `data/robots/tovez.json` write path uses `RobotConfig` from `host/robot_radio/config/robot_config.py`.
+- [x] `uv run --with pytest python -m pytest host/tests` — all tests pass.
+- [x] New test `host/tests/test_calibrate_linear.py` covers: calibration math, JSON write path, no raw serial imports.
 
 ## Implementation Plan
 

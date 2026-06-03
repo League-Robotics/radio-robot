@@ -41,6 +41,8 @@ Options: `--distance MM` `--speed MMPS` `--port DEV` `--no-write`
 `--field "W H"` (mm; refuses any drive whose predicted end leaves the field —
 a guard against driving into a wall).
 
-## `calib_common.py`
-Shared helpers: `Relay` (RAW250 handshake + v2 commands), `Cam` (aprilcam
-tag-100 ground truth with retry/reconnect), and per-robot config load/save.
+## Library
+`calibrate_linear.py` uses the `robot_radio` library directly:
+- `robot_radio.robot.nezha.Nezha` + `NezhaProtocol` — all robot commands
+- `robot_radio.config.robot_config.load_robot_config` — reads `data/robots/tovez.json`
+- `aprilcam` — overhead camera ground truth (internal `_Cam` helper)
