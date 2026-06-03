@@ -81,8 +81,14 @@ static const ConfigEntry kRegistry[] = {
     CFG_F("alphaYaw",     alphaYaw),
     CFG_F("otosGate",     otosGate),
     // Go-to tolerances — stored as float, displayed as integer (mm)
+    // Legacy keys retained for backward compatibility.
     CFG_FI("turnThr",     turnThresholdMm),
     CFG_FI("doneTol",     doneTolMm),
+    // Pose-control tunables (Sprint 011)
+    CFG_F ("aMax",        aMax),
+    CFG_F ("aDecel",      aDecel),
+    CFG_FI("turnGate",    turnInPlaceGate),   // wire: integer degrees; DriveController converts to radians at use-site
+    CFG_FI("arriveTol",   arriveTolMm),       // wire: integer mm
     // Command scaling
     CFG_F("distScale",    distScale),
     CFG_F("turnScale",    turnScale),
@@ -616,7 +622,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     // Reply: OK help <verb list>
     if (strcmp(verb, "HELP") == 0) {
         replyOK(rbuf, sizeof(rbuf), "help",
-                "PING ECHO ID VER HELP SET GET GET VEL STREAM SNAP S T D G STOP GRIP ZERO OI OZ OR OP OV OL OA P PA",
+                "PING ECHO ID VER HELP SET GET GET VEL STREAM SNAP S T D G VW STOP GRIP ZERO OI OZ OR OP OV OL OA P PA",
                 corr_id, replyFn, ctx);
         return;
     }

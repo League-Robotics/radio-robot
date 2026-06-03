@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """test_config_registry.py — Unit tests for SET/GET config registry.
 
-Covers sprint 009-004 (original 22 keys) and sprint 010-004 (6 new
+Covers sprint 009-004 (original 22 keys), sprint 010-004 (6 new
 velocity/saturation tunables: vel.kP, vel.kI, vel.kFF, minWheelMms,
-vWheelMax, steerHeadroom).
+vWheelMax, steerHeadroom), and sprint 011-001 (4 new pose-control tunables:
+aMax, aDecel, turnGate, arriveTol).
 
 These tests validate:
-  - GET response format: CFG prefix, all 28 keys present, correct value format
+  - GET response format: CFG prefix, all 32 keys present, correct value format
   - GET subset: only requested keys returned
   - SET value parsing: float, integer, float-as-int
   - Error paths: badkey, missing key=value in SET
@@ -58,7 +59,7 @@ def is_int_formatted(val: str) -> bool:
 # ---------------------------------------------------------------------------
 
 # (key, type) where type is 'float', 'int', or 'float_as_int'
-# Mirrors kRegistry[] in CommandProcessor.cpp — 28 entries as of Sprint 010-004.
+# Mirrors kRegistry[] in CommandProcessor.cpp — 32 entries as of Sprint 011-001.
 REGISTRY = [
     # Original 22 keys (Sprint 009-004)
     ("ml",            "float"),
@@ -82,7 +83,7 @@ REGISTRY = [
     ("minWheelMms",   "float"),
     ("vWheelMax",     "float"),
     ("steerHeadroom", "float"),
-    # Remaining original keys
+    # Remaining original keys (legacy, retained for backward compatibility)
     ("turnThr",       "float_as_int"),
     ("doneTol",       "float_as_int"),
     ("distScale",     "float"),
@@ -91,20 +92,27 @@ REGISTRY = [
     ("sTimeout",      "int"),
     ("tick",          "int"),
     ("tlmPeriod",     "int"),
+    # New keys added Sprint 011-001: pose-control tunables
+    ("aMax",          "float"),
+    ("aDecel",        "float"),
+    ("turnGate",      "float_as_int"),   # wire: integer degrees
+    ("arriveTol",     "float_as_int"),   # wire: integer mm
 ]
 
 REGISTRY_KEYS = [k for k, _ in REGISTRY]
 
 # Default RobotConfig values as written to the wire by GET.
 # These match defaultRobotConfig() in Config.h + expected %.3f / %d formatting.
-# Sprint 010-004 adds 6 new keys after pid.max; total 28 keys, ~336 bytes.
+# Sprint 010-004 adds 6 new keys after pid.max; sprint 011-001 adds 4 more.
+# Total 32 keys.
 DEFAULT_GET_LINE = (
     "CFG ml=0.487 mr=0.481 kff=0.150 klf=1.000 klb=1.000 krf=1.000 krb=1.000 "
     "adjThr=0.500 adjGain=0.050 tw=120 pid.kp=300.000 pid.ki=0.000 pid.kd=0.000 "
     "pid.max=30.000 vel.kP=0.300 vel.kI=0.050 vel.kFF=0.150 "
     "minWheelMms=20.000 vWheelMax=400.000 steerHeadroom=20.000 "
     "turnThr=50 doneTol=5 distScale=0.940 turnScale=1.070 "
-    "minSpeed=50 sTimeout=200 tick=20 tlmPeriod=0"
+    "minSpeed=50 sTimeout=200 tick=20 tlmPeriod=0 "
+    "aMax=300.000 aDecel=250.000 turnGate=45 arriveTol=5"
 )
 
 
@@ -115,8 +123,8 @@ DEFAULT_GET_LINE = (
 class TestRegistrySpec:
     """Validate the registry spec itself is consistent."""
 
-    def test_all_28_keys_present(self) -> None:
-        assert len(REGISTRY) == 28, f"Expected 28 registry entries, got {len(REGISTRY)}"
+    def test_all_32_keys_present(self) -> None:
+        assert len(REGISTRY) == 32, f"Expected 32 registry entries, got {len(REGISTRY)}"
 
     def test_key_names_unique(self) -> None:
         keys = [k for k, _ in REGISTRY]
@@ -200,12 +208,13 @@ class TestGetResponseFormat:
         )
 
     def test_response_length_reasonable(self) -> None:
-        """Confirm the response is in the expected range (~250-450 bytes).
+        """Confirm the response is in the expected range (~250-510 bytes).
         Sprint 010-004 added 6 keys raising the floor from ~238 to ~336 bytes.
+        Sprint 011-001 added 4 more keys raising the floor to ~390 bytes.
         """
         length = len(DEFAULT_GET_LINE)
-        assert 250 < length < 450, (
-            f"GET response length {length} is outside expected range 250-450"
+        assert 250 < length < 510, (
+            f"GET response length {length} is outside expected range 250-510"
         )
 
 
@@ -308,6 +317,137 @@ class TestVelocityTunables:
         # Also confirm it's not in the default GET dump.
         kv = parse_cfg(DEFAULT_GET_LINE)
         assert "lapsToMmScale" not in kv, "lapsToMmScale appears in GET dump"
+
+
+class TestPoseControlTunables:
+    """Sprint 011-001: new pose-control keys in kRegistry[]."""
+
+    def test_aMax_present_in_full_get(self) -> None:
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert "aMax" in kv, "aMax missing from GET dump"
+
+    def test_aDecel_present_in_full_get(self) -> None:
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert "aDecel" in kv, "aDecel missing from GET dump"
+
+    def test_turnGate_present_in_full_get(self) -> None:
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert "turnGate" in kv, "turnGate missing from GET dump"
+
+    def test_arriveTol_present_in_full_get(self) -> None:
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert "arriveTol" in kv, "arriveTol missing from GET dump"
+
+    def test_aMax_default_value(self) -> None:
+        """aMax default is 300.0 → formatted as 300.000."""
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert kv["aMax"] == "300.000", f"aMax expected '300.000', got {kv['aMax']!r}"
+
+    def test_aDecel_default_value(self) -> None:
+        """aDecel default is 250.0 → formatted as 250.000."""
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert kv["aDecel"] == "250.000", f"aDecel expected '250.000', got {kv['aDecel']!r}"
+
+    def test_turnGate_default_value(self) -> None:
+        """turnGate default is 45.0° → formatted as integer 45."""
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert kv["turnGate"] == "45", f"turnGate expected '45', got {kv['turnGate']!r}"
+
+    def test_arriveTol_default_value(self) -> None:
+        """arriveTol default is 5.0 mm → formatted as integer 5."""
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert kv["arriveTol"] == "5", f"arriveTol expected '5', got {kv['arriveTol']!r}"
+
+    def test_aMax_is_float_formatted(self) -> None:
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert is_float_formatted(kv["aMax"]), (
+            f"aMax value {kv['aMax']!r} not formatted as %.3f"
+        )
+
+    def test_aDecel_is_float_formatted(self) -> None:
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert is_float_formatted(kv["aDecel"]), (
+            f"aDecel value {kv['aDecel']!r} not formatted as %.3f"
+        )
+
+    def test_turnGate_is_int_formatted(self) -> None:
+        """turnGate is CFG_FI — wire format is integer degrees."""
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert is_int_formatted(kv["turnGate"]), (
+            f"turnGate value {kv['turnGate']!r} has unexpected decimal"
+        )
+
+    def test_arriveTol_is_int_formatted(self) -> None:
+        """arriveTol is CFG_FI — wire format is integer mm."""
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert is_int_formatted(kv["arriveTol"]), (
+            f"arriveTol value {kv['arriveTol']!r} has unexpected decimal"
+        )
+
+    def test_set_aMax_round_trip(self) -> None:
+        """SET aMax=400 → OK set aMax=400; GET aMax → CFG aMax=400.000."""
+        ok_line = "OK set aMax=400"
+        assert ok_line.startswith("OK set")
+        assert "aMax=400" in ok_line
+        get_line = "CFG aMax=400.000"
+        kv = parse_cfg(get_line)
+        assert kv["aMax"] == "400.000"
+
+    def test_set_aDecel_round_trip(self) -> None:
+        """SET aDecel=300 → OK set aDecel=300; GET aDecel → CFG aDecel=300.000."""
+        ok_line = "OK set aDecel=300"
+        assert ok_line.startswith("OK set")
+        assert "aDecel=300" in ok_line
+        get_line = "CFG aDecel=300.000"
+        kv = parse_cfg(get_line)
+        assert kv["aDecel"] == "300.000"
+
+    def test_set_turnGate_round_trip(self) -> None:
+        """SET turnGate=60 → OK set turnGate=60; GET turnGate → CFG turnGate=60 (integer)."""
+        ok_line = "OK set turnGate=60"
+        assert ok_line.startswith("OK set")
+        assert "turnGate=60" in ok_line
+        get_line = "CFG turnGate=60"
+        kv = parse_cfg(get_line)
+        assert kv["turnGate"] == "60"
+        assert is_int_formatted(kv["turnGate"])
+
+    def test_set_arriveTol_round_trip(self) -> None:
+        """SET arriveTol=10 → OK set arriveTol=10; GET arriveTol → CFG arriveTol=10."""
+        ok_line = "OK set arriveTol=10"
+        assert ok_line.startswith("OK set")
+        assert "arriveTol=10" in ok_line
+        get_line = "CFG arriveTol=10"
+        kv = parse_cfg(get_line)
+        assert kv["arriveTol"] == "10"
+        assert is_int_formatted(kv["arriveTol"])
+
+    def test_legacy_turnThr_still_present(self) -> None:
+        """Legacy turnThr key must still be in the registry (backward compat)."""
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert "turnThr" in kv, "Legacy turnThr key missing from GET dump"
+
+    def test_legacy_doneTol_still_present(self) -> None:
+        """Legacy doneTol key must still be in the registry (backward compat)."""
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert "doneTol" in kv, "Legacy doneTol key missing from GET dump"
+
+    def test_set_bad_key_still_returns_err(self) -> None:
+        """SET badkey=1 still returns ERR badkey badkey (no regression)."""
+        err_line = "ERR badkey badkey"
+        assert err_line == "ERR badkey badkey"
+
+    def test_full_get_32_keys(self) -> None:
+        """Full GET dump has exactly 32 keys (28 existing + 4 new)."""
+        kv = parse_cfg(DEFAULT_GET_LINE)
+        assert len(kv) == 32, f"Expected 32 keys in full GET, got {len(kv)}"
+
+    def test_get_dump_under_512_bytes_with_new_keys(self) -> None:
+        """Confirm the 32-key GET dump still fits in the 512-byte firmware buffer."""
+        length = len(DEFAULT_GET_LINE.encode("utf-8"))
+        assert length < 512, (
+            f"GET response is {length} bytes — exceeds 512-byte buffer limit"
+        )
 
 
 class TestGetSubset:

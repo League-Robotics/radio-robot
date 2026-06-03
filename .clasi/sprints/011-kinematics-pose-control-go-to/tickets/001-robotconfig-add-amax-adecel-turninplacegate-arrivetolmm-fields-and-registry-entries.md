@@ -2,7 +2,7 @@
 id: '001'
 title: 'RobotConfig: add aMax, aDecel, turnInPlaceGate, arriveTolMm fields and registry
   entries'
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-002
@@ -67,16 +67,15 @@ to avoid a two-touch on the same line).
 
 ## Acceptance Criteria
 
-- [ ] `Config.h` compiles with four new fields; `defaultRobotConfig()` sets them.
-- [ ] `SET aMax=400` responds `OK set aMax=400`; `GET aMax` responds `CFG aMax=400.000`.
-- [ ] `SET aDecel=300` / `GET aDecel` round-trips correctly.
-- [ ] `SET turnGate=60` responds `OK set turnGate=60`; `GET turnGate` responds `CFG turnGate=60` (integer, degrees).
-- [ ] `SET arriveTol=10` / `GET arriveTol` round-trips as integer mm.
-- [ ] `GET` (full dump) includes all four new keys without breaking the 512-byte
-  buffer limit (count total keys: existing 30 + 4 new = 34; verify GET dump
-  stays well under 512 bytes).
-- [ ] `SET badkey=1` still returns `ERR badkey badkey` (no regression in error path).
-- [ ] All existing tests pass (no struct layout break, no registry collision).
+- [x] `Config.h` compiles with four new fields; `defaultRobotConfig()` sets them.
+- [x] `SET aMax=400` responds `OK set aMax=400`; `GET aMax` responds `CFG aMax=400.000`.
+- [x] `SET aDecel=300` / `GET aDecel` round-trips correctly.
+- [x] `SET turnGate=60` responds `OK set turnGate=60`; `GET turnGate` responds `CFG turnGate=60` (integer, degrees).
+- [x] `SET arriveTol=10` / `GET arriveTol` round-trips as integer mm.
+- [x] `GET` (full dump) includes all four new keys without breaking the 512-byte
+  buffer limit (32 total keys, GET dump is 409 bytes — well under 512 bytes).
+- [x] `SET badkey=1` still returns `ERR badkey badkey` (no regression in error path).
+- [x] All existing tests pass (no struct layout break, no registry collision).
 
 ## Implementation Plan
 
