@@ -100,6 +100,17 @@ static const ConfigEntry kRegistry[] = {
     CFG_I("sTimeout",     sTimeoutMs),
     CFG_I("tick",         tickMs),
     CFG_I("tlmPeriod",    tlmPeriodMs),
+    // OTOS calibration and turn asymmetry (Sprint 012)
+    CFG_F("otosLinSc",    otosLinearScale),
+    CFG_F("otosAngSc",    otosAngularScale),
+    CFG_F("rotGainPos",   rotationGainPos),
+    CFG_F("rotGainNeg",   rotationGainNeg),
+    CFG_F("rotOffPos",    rotationOffsetDeg),
+    CFG_F("rotOffNeg",    rotationOffsetDegNeg),
+    CFG_F("rotSlip",      rotationalSlip),
+    CFG_F("odomOffX",     odomOffX),
+    CFG_F("odomOffY",     odomOffY),
+    CFG_F("odomYaw",      odomYawDeg),
 };
 
 #undef CFG_F
@@ -335,7 +346,11 @@ static void handleGet(char** tokens, int ntok, const RobotConfig& cfg,
                       ReplyFn replyFn, void* ctx)
 {
     // Build: "CFG key=val key=val ... [#id]"
-    char line[512];
+    // Sprint 012: buffer expanded from 512 to 768 to accommodate 10 new config
+    // keys (otosLinSc, otosAngSc, rotGainPos/Neg, rotOffPos/Neg, rotSlip,
+    // odomOffX/Y, odomYaw) which add ~156 bytes to the full GET dump.
+    // Stack-local buffer; no heap impact.
+    char line[768];
     int pos = 0;
     int rem = (int)sizeof(line);
 
