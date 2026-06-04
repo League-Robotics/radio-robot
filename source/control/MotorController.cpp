@@ -128,9 +128,14 @@ void MotorController::tick(float dt_s)
     // Falls back to encoder-delta if:
     //   (a) I2C read fails (readSpeed returns false), or
     //   (b) chip reading fails the two-sided plausibility gate (see below).
+    // THROB FIX (013): do NOT read the chip 0x47 speed register every tick.
+    // readSpeedRaw() blocks ~12 ms (fiber_sleep 4+8) per wheel AND the flaky
+    // register intermittently times out/retries, stalling the control loop for
+    // hundreds of ms -> motor refresh is starved -> visible pulsing. Use the
+    // encoder-delta velocity (computed above) as the sole feedback source.
     float chipVelL = 0.0f, chipVelR = 0.0f;
-    bool chipOkL = _motorL.readSpeed(chipVelL, _cal);
-    bool chipOkR = _motorR.readSpeed(chipVelR, _cal);
+    bool chipOkL = false;
+    bool chipOkR = false;
 
     // Implausibility gate: reject chip reading if it is more than 2× encoder velocity
     // (too-high / noise) OR less than 0.5× encoder velocity when the wheel is clearly
