@@ -1,6 +1,6 @@
 ---
 sprint: '013'
-status: draft
+status: final
 ---
 
 # Architecture Update — Sprint 013: robot_radio Library: v2 Port and Smooth Driving

@@ -1,7 +1,7 @@
 ---
 id: 008
 title: Full test pass, docs update, and bench verification
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 - SUC-002

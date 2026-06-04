@@ -1,19 +1,19 @@
 ---
 id: '013'
 title: 'robot_radio Library: v2 Port and Smooth Driving'
-status: planning-docs
+status: done
 branch: sprint/013-robot-radio-library-v2-port-and-smooth-driving
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-003
-  - SUC-004
-  - SUC-005
-  - SUC-006
-  - SUC-007
-  - SUC-008
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+- SUC-006
+- SUC-007
+- SUC-008
 issues:
-  - plan-port-v2-update-the-robot-radio-package-new-sprint.md
+- plan-port-v2-update-the-robot-radio-package-new-sprint.md
 ---
 
 # Sprint 013: robot_radio Library: v2 Port and Smooth Driving
