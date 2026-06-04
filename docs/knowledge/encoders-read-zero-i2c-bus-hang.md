@@ -26,16 +26,19 @@ return zeros. Bisection matrix:
 | all three | ❌ `0 0` |
 
 Each device works alone; only the **0x43 + 0x17 combination** wedges the bus. It is **not**
-bus loading (line+OTOS, a pair, is fine) and **not** our firmware's read protocol:
-- Rewriting the color read to match the upstream PlanetX driver exactly (single-byte-per-register
-  transactions + init-once/settle/retry, `vendor/pxt-planetx/basic.ts`) did **not** fix it.
-- **Fully disabling the color sensor in firmware** — no boot probe, no polling, *zero* I2C
-  traffic to 0x43 (compile-time `DISABLE_COLOR_SENSOR`) — **also did not fix it**: with both
-  modules physically on the bus, encoders still read 0.
+bus loading (line+OTOS, a pair, is fine) and **not** our firmware's reads — proven from BOTH
+sides with compile-time toggles, all with both modules physically plugged:
+- Rewriting the color read to match upstream (single-byte + init/settle/retry) — **still 0**.
+- `DISABLE_COLOR_SENSOR` (zero I2C to 0x43, OTOS still read) — **still 0**.
+- `DISABLE_OTOS_SENSOR` (zero I2C to 0x17, color still read) — **still 0**.
 
-So it is the **physical coexistence** of the two modules on the same bus, independent of any
-firmware access — a definitively **electrical / chip-level I2C conflict** (bus contention /
-pull-up / clock-stretch between those two specific boards). Firmware cannot resolve it.
+Disabling *either* chip's firmware access does not help; only their **physical coexistence**
+on the bus matters. Definitively an **electrical / chip-level I2C conflict** between those two
+specific boards (bus contention / pull-up / clock-stretch) — firmware cannot resolve it.
+
+**Per-unit:** a *different* robot build ran all three sensors fine under stock MakeCode (which,
+note, never reads the OTOS). So this is specific to **this unit's bus wiring** (pull-ups / lead
+length / module quality), not universal — another build may carry all three.
 
 ## Recovery (the important operational habit)
 
