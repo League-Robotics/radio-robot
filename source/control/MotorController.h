@@ -5,6 +5,7 @@
 #include "RatioPidController.h"
 #include "VelocityController.h"
 #include "RobotState.h"
+#include <stdint.h>
 
 /**
  * MotorController — per-wheel velocity PID wheel speed control.
@@ -59,18 +60,34 @@ public:
     void updatePidGains(float kP, float kI, float kD, float iClamp);
 
     /**
-     * controlTick — cooperative-loop control step (014-003).
+     * controlTick — cooperative-loop control step (014-003 / 014-007).
      *
-     * Reads encoder positions from inputs.encLMm/R (written by
-     * Robot::controlCollect before this call), computes per-wheel
-     * encoder-delta velocity, writes inputs.velLMms/R, runs the two
-     * VelocityController instances, writes cmds.pwmL/R, and calls
-     * Motor::setSpeed().
+     * Per-wheel zero-order-hold velocity (014-007 ZOH fix):
+     *   refreshedWheel: 0 = none (first iteration / sync fallback),
+     *                   1 = left wheel was just collected,
+     *                   2 = right wheel was just collected.
      *
-     * dt_s must be > 0; the caller (Robot::controlCollect) is responsible
-     * for guarding against zero or negative dt.
+     * For the refreshed wheel only: computes velocity as
+     *   (inputs.encWMm - _prevEncW) / elapsed_s
+     * using per-wheel timestamps for the correct elapsed time, then
+     * writes inputs.velWMms and updates _prevEncW / _prevTimeMsW.
+     *
+     * For the other wheel: leaves inputs.velWMms unchanged (ZOH).
+     *
+     * Then runs PID for BOTH wheels using the held inputs.velLMms/velRMms,
+     * writes cmds.pwmL/R, and calls Motor::setSpeed().
+     *
+     * now_ms: current system time in milliseconds (for per-wheel dt).
      */
-    void controlTick(HardwareState& inputs, MotorCommands& cmds, float dt_s);
+    void controlTick(HardwareState& inputs, MotorCommands& cmds,
+                     uint32_t now_ms, int refreshedWheel);
+
+    /**
+     * setCommandsRef — bind the authoritative MotorCommands struct so that
+     * setTarget / startDrive / stop can write tgtLMms/R directly (014-007).
+     * Must be called before the first setTarget (Robot constructor does this).
+     */
+    void setCommandsRef(MotorCommands* cmds) { _cmds = cmds; }
 
     /**
      * getVelocitySourceFlags — always returns false for both wheels.
@@ -106,13 +123,21 @@ private:
     float _cmdRatio;         // |fasterSpeed| / |slowerSpeed|, always >= 1.0
     bool  _fasterIsRight;    // true if right wheel is the commanded-faster wheel
 
-    float _tgtLMms;          // current speed targets in mm/s
-    float _tgtRMms;
+    // Pointer to the authoritative MotorCommands (set by Robot via setCommandsRef).
+    // setTarget / startDrive / stop write tgtLMms/R here directly (014-007).
+    MotorCommands* _cmds;
 
     // Previous encoder snapshots — intermediate compute state for velocity differentiation.
     // These are NOT robot state (they are algorithm state private to MotorController).
-    float   _prevEncL;   // mm at start of last controlTick (float — high-res for velocity)
-    float   _prevEncR;
+    float    _prevEncL;   // mm at start of last controlTick for left wheel
+    float    _prevEncR;   // mm at start of last controlTick for right wheel
+
+    // Per-wheel timing for ZOH velocity computation (014-007).
+    // lastUpdMs is 0 until the first valid reading (first-sample guard).
+    uint32_t _prevTimeMsL;  // system time (ms) of last left-wheel collect
+    uint32_t _prevTimeMsR;  // system time (ms) of last right-wheel collect
+    bool     _hasTimestampL;
+    bool     _hasTimestampR;
 
     // clamp helper
     static float clamp(float v, float lo, float hi);

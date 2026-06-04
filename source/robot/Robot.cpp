@@ -69,6 +69,10 @@ Robot::Robot(MicroBitI2C&    i2c,
     // can read pose fields (Odometry::getPose reads the struct).
     _dc.setHardwareState(&_state.inputs);
 
+    // Bind the authoritative MotorCommands so MotorController::setTarget() /
+    // startDrive() / stop() write tgtLMms/R directly (014-007).
+    _mc.setCommandsRef(&_state.commands);
+
     // Unified TLM frame assembled in Robot::tick() — Sprint 009 ticket 005.
     // Streaming period controlled by RobotConfig::tlmPeriodMs.
 }
@@ -165,42 +169,6 @@ Robot::Pose Robot::getPose() const
 }
 
 // ---------------------------------------------------------------------------
-// controlTick — control fiber entry point (013-010 / 014-005).
-//
-// Runs at a fixed period (RobotConfig::controlPeriodMs, default 10 ms).
-// Only the PID/motor/odometry path runs here.  No serial/radio I/O except
-// the inline EVT completions emitted by driveAdvance() — safe in the single
-// cooperative main loop (no fiber boundary).
-//
-// Phase order:
-//   1. controlCollect  — encoder I2C reads + PID
-//   2. odometryPredict — dead-reckoning from encoder delta
-//   3. otosCorrect     — OTOS complementary correction at slow cadence
-//      (sole OTOS correction path; DriveController no longer has this block)
-//   4. driveAdvance    — S/T/D/G state machines + inline EVT emission
-//
-// The cooperative-loop split (ticket 006) will later call these as separate
-// LoopScheduler task slots.
-// ---------------------------------------------------------------------------
-
-void Robot::controlTick(uint32_t now_ms)
-{
-    // 1. Collect encoder readings + run motor PID.
-    controlCollect(now_ms);
-
-    // 2. Dead-reckoning update: reads encLMm/R from _state.inputs,
-    //    writes poseX/Y/Hrad.
-    odometryPredict();
-
-    // 3. OTOS complementary correction (slow cadence, 100 ms).
-    //    This is the sole OTOS correction path (014-005).
-    otosCorrect(now_ms);
-
-    // 4. Advance drive-mode state machines; emit EVT completions inline.
-    driveAdvance(now_ms);
-}
-
-// ---------------------------------------------------------------------------
 // controlCollect — collect encoder readings and run the motor PID (014-003).
 //
 // 1. Calls Motor::collectEncoder() for each wheel and converts the raw
@@ -236,14 +204,15 @@ void Robot::controlCollect(uint32_t now_ms)
     _motorR.requestEncoder();
     _state.inputs.encRMm = _motorR.readEncoderMmF(_config);
 
-    // Compute dt_s; guard against zero on the first call.
-    float dt_s = 0.0f;
-    if (_lastControlMs != 0) {
-        dt_s = static_cast<float>(now_ms - _lastControlMs) / 1000.0f;
-    }
+    // Run PID + PWM via the new ZOH-aware signature.
+    // In the sync (non-split-phase) path both wheels are updated on the same
+    // tick, so there is no alternation. We pass refreshedWheel=0 (none) so
+    // velocity is NOT recomputed from these synchronous reads (the reads happen
+    // inside readEncoderMmF above, without proper inter-request delay, making
+    // the delta unreliable). Velocity holds at zero until the LoopScheduler
+    // split-phase path takes over.
     _lastControlMs = now_ms;
-
-    _mc.controlTick(_state.inputs, _state.commands, dt_s);
+    _mc.controlTick(_state.inputs, _state.commands, now_ms, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -378,38 +347,78 @@ void Robot::controlCollectSplitPhase(uint32_t now_ms, int pendingWheel)
         _state.inputs.encRMm = _motorR.readEncoderMmF(_config);
     }
     // pendingWheel == 0: first iteration — skip collect; encoder fields remain
-    // 0-initialised from defaultInputs(). PID still runs (warm-up on zero delta).
+    // 0-initialised from defaultInputs(). PID runs with ZOH velocity = 0 on
+    // first tick (refreshedWheel=0 suppresses velocity update).
 
-    float dt_s = 0.0f;
-    if (_lastControlMs != 0) {
-        dt_s = static_cast<float>(now_ms - _lastControlMs) / 1000.0f;
-    }
     _lastControlMs = now_ms;
 
-    _mc.controlTick(_state.inputs, _state.commands, dt_s);
+    // Pass the pendingWheel that was just COLLECTED as refreshedWheel so that
+    // MotorController updates that wheel's per-wheel velocity using the correct
+    // elapsed time since the last collect for that wheel.
+    _mc.controlTick(_state.inputs, _state.commands, now_ms, pendingWheel);
 }
 
 // ---------------------------------------------------------------------------
-// telemetryTick — comms+telemetry path (013-010 / 014-005).
+// lineRead — read 4-channel line sensor into HardwareState (014-007).
 //
-// Assembles and emits one unified TLM frame when the configured period has
-// elapsed, or immediately if a SNAP was requested.
-//
-// EVT completions (done T/D/G, safety_stop) are now emitted inline by
-// driveAdvance() via the captured per-drive reply sink — no drain step here.
-//
-// Reads only cached encoder/velocity snapshots from MotorController (which
-// the control fiber updates).  Line/color I2C is safe here because Motor
-// I2C is now atomic (busy-wait prevents interleave).
+// Writes _state.inputs.line[0..3]; updates lineVS.lastUpdMs and sets
+// lineVS.valid on success.  No-op if line sensor is absent.
 // ---------------------------------------------------------------------------
 
-void Robot::telemetryTick(uint32_t now_ms, ReplyFn fn, void* ctx)
+void Robot::lineRead()
 {
-    // TLM assembly ---------------------------------------------------------
-    // Emit one unified TLM frame when the configured period has elapsed, or
-    // immediately if a SNAP was requested.  t= is stamped at sensor-read time,
-    // not at snprintf time, to avoid send-latency bias.
+    if (!_linePresent) return;
+    if (_line.readValues(_state.inputs.line)) {
+        _state.inputs.lineVS.lastUpdMs = _uBit.systemTime();
+        _state.inputs.lineVS.valid     = true;
+    }
+}
 
+// ---------------------------------------------------------------------------
+// colorRead — non-blocking RGBC poll into HardwareState (014-007).
+//
+// Writes _state.inputs.colorR/G/B/C; updates colorVS.lastUpdMs and sets
+// colorVS.valid on success.  No-op if color sensor is absent.
+// ---------------------------------------------------------------------------
+
+void Robot::colorRead()
+{
+    if (!_colorPresent) return;
+    if (_color.pollRGBC(_state.inputs.colorR,
+                        _state.inputs.colorG,
+                        _state.inputs.colorB,
+                        _state.inputs.colorC)) {
+        _state.inputs.colorVS.lastUpdMs = _uBit.systemTime();
+        _state.inputs.colorVS.valid     = true;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// portsRead — read digital and analogue GPIO ports into HardwareState (014-007).
+// ---------------------------------------------------------------------------
+
+void Robot::portsRead()
+{
+    for (uint8_t i = 0; i < 4; ++i) {
+        _state.inputs.digitalIn[i] = (_portio.readDigital(i) != 0);
+        _state.inputs.analogIn[i]  = (int16_t)_portio.readAnalog(i);
+    }
+    _state.inputs.portsVS.lastUpdMs = _uBit.systemTime();
+    _state.inputs.portsVS.valid     = true;
+}
+
+// ---------------------------------------------------------------------------
+// telemetryEmit — assemble and emit the unified TLM frame (014-007).
+//
+// Replaces telemetryTick (now removed).  Reads ALL sensor data from
+// _state.inputs (snapshots written by the sensor task entry points —
+// lineRead, colorRead, portsRead, controlCollect).  No direct I2C calls.
+//
+// Emits when tlmPeriodMs has elapsed or a SNAP is pending.
+// ---------------------------------------------------------------------------
+
+void Robot::telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx)
+{
     bool snapPending = _config.tlmSnapPending;
     bool periodic    = (_config.tlmPeriodMs > 0) &&
                        ((now_ms - _lastTlmMs) >= (uint32_t)_config.tlmPeriodMs);
@@ -421,44 +430,37 @@ void Robot::telemetryTick(uint32_t now_ms, ReplyFn fn, void* ctx)
         _config.tlmPeriodMs = 20;
     }
 
-    // ----- 1. Capture timestamp at sensor-read time -------------------------
+    // ----- 1. Capture timestamp -----------------------------------------------
     uint32_t t_sample = _uBit.systemTime();
 
-    // ----- 2. Read encoder positions ----------------------------------------
-    int32_t encL = 0, encR = 0;
-    _mc.getEncoderPositions(encL, encR);
+    // ----- 2. Encoder positions from HardwareState snapshot -------------------
+    int32_t encL = static_cast<int32_t>(_state.inputs.encLMm);
+    int32_t encR = static_cast<int32_t>(_state.inputs.encRMm);
 
-    // ----- 3. Read pose — always fused odometry (mm, mm, centidegrees) ------
-    // Authoritative pose now lives in _state.inputs.poseX/Y/Hrad (014-004).
+    // ----- 3. Pose from HardwareState -----------------------------------------
     int32_t pose_x = 0, pose_y = 0, pose_h = 0;
     if (_config.tlmFields & TLM_FIELD_POSE) {
         Odometry::getPose(_state.inputs, pose_x, pose_y, pose_h);
     }
 
-    // ----- 4. Read line sensor (if present and field requested) --------------
-    uint16_t lineVals[4] = {0, 0, 0, 0};
-    bool haveLine = false;
-    if (_linePresent && (_config.tlmFields & TLM_FIELD_LINE)) {
-        haveLine = _line.readValues(lineVals);
-    }
+    // ----- 4. Line from HardwareState snapshot --------------------------------
+    bool haveLine = _linePresent && _state.inputs.lineVS.valid &&
+                    (_config.tlmFields & TLM_FIELD_LINE);
 
-    // ----- 5. Read color sensor (if present and field requested) -------------
-    uint16_t colorR = 0, colorG = 0, colorB = 0, colorC = 0;
-    bool haveColor = false;
-    if (_colorPresent && (_config.tlmFields & TLM_FIELD_COLOR)) {
-        haveColor = _color.pollRGBC(colorR, colorG, colorB, colorC);
-    }
+    // ----- 5. Color from HardwareState snapshot -------------------------------
+    bool haveColor = _colorPresent && _state.inputs.colorVS.valid &&
+                     (_config.tlmFields & TLM_FIELD_COLOR);
 
-    // ----- 6. Read velocity from HardwareState (encoder-delta, always available) ----
+    // ----- 6. Velocity from HardwareState -------------------------------------
     float velL = 0.0f, velR = 0.0f;
     bool haveVel = false;
     if (_config.tlmFields & TLM_FIELD_VEL) {
-        velL = _state.inputs.velLMms;
-        velR = _state.inputs.velRMms;
+        velL    = _state.inputs.velLMms;
+        velR    = _state.inputs.velRMms;
         haveVel = true;
     }
 
-    // ----- 7. Determine drive mode character ---------------------------------
+    // ----- 7. Drive mode character --------------------------------------------
     char modeChar = 'I';
     switch (_dc.mode()) {
         case DriveMode::STREAMING: modeChar = 'S'; break;
@@ -468,52 +470,50 @@ void Robot::telemetryTick(uint32_t now_ms, ReplyFn fn, void* ctx)
         default:                   modeChar = 'I'; break;
     }
 
-    // ----- 8. Assemble TLM line (~90 bytes) ----------------------------------
+    // ----- 8. Assemble TLM line -----------------------------------------------
     char tlmBuf[128];
     int  pos = 0;
     int  rem = (int)sizeof(tlmBuf);
 
-    // TLM header: tag + timestamp + mode
     int n = snprintf(tlmBuf + pos, (size_t)rem,
                      "TLM t=%lu mode=%c",
                      (unsigned long)t_sample, modeChar);
     if (n > 0 && n < rem) { pos += n; rem -= n; }
 
-    // enc= field
     if (_config.tlmFields & TLM_FIELD_ENC) {
         n = snprintf(tlmBuf + pos, (size_t)rem, " enc=%d,%d", (int)encL, (int)encR);
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
 
-    // pose= field (always emitted when requested; odometry is always available)
     if (_config.tlmFields & TLM_FIELD_POSE) {
         n = snprintf(tlmBuf + pos, (size_t)rem,
                      " pose=%d,%d,%d", (int)pose_x, (int)pose_y, (int)pose_h);
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
 
-    // vel= field
     if (haveVel) {
         n = snprintf(tlmBuf + pos, (size_t)rem,
                      " vel=%d,%d", (int)velL, (int)velR);
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
 
-    // line= field
     if (haveLine) {
         n = snprintf(tlmBuf + pos, (size_t)rem,
                      " line=%u,%u,%u,%u",
-                     (unsigned)lineVals[0], (unsigned)lineVals[1],
-                     (unsigned)lineVals[2], (unsigned)lineVals[3]);
+                     (unsigned)_state.inputs.line[0],
+                     (unsigned)_state.inputs.line[1],
+                     (unsigned)_state.inputs.line[2],
+                     (unsigned)_state.inputs.line[3]);
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
 
-    // color= field
     if (haveColor) {
         n = snprintf(tlmBuf + pos, (size_t)rem,
                      " color=%u,%u,%u,%u",
-                     (unsigned)colorR, (unsigned)colorG,
-                     (unsigned)colorB, (unsigned)colorC);
+                     (unsigned)_state.inputs.colorR,
+                     (unsigned)_state.inputs.colorG,
+                     (unsigned)_state.inputs.colorB,
+                     (unsigned)_state.inputs.colorC);
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
 

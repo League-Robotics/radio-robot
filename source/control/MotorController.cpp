@@ -8,8 +8,10 @@ MotorController::MotorController(Motor& left, Motor& right, const RobotConfig& c
       _pid(cal.ratioPidKp, cal.ratioPidKi, cal.ratioPidKd, cal.ratioPidMax),
       _cmdEncStartL(0.0f), _cmdEncStartR(0.0f),
       _cmdRatio(1.0f), _fasterIsRight(false),
-      _tgtLMms(0.0f), _tgtRMms(0.0f),
-      _prevEncL(0.0f), _prevEncR(0.0f)
+      _cmds(nullptr),
+      _prevEncL(0.0f), _prevEncR(0.0f),
+      _prevTimeMsL(0), _prevTimeMsR(0),
+      _hasTimestampL(false), _hasTimestampR(false)
 {
     gains.kFF     = 0.15f;
     gains.kP      = 0.05f;
@@ -20,14 +22,18 @@ MotorController::MotorController(Motor& left, Motor& right, const RobotConfig& c
 
 void MotorController::setTarget(float leftMms, float rightMms)
 {
-    _tgtLMms = leftMms;
-    _tgtRMms = rightMms;
+    if (_cmds) {
+        _cmds->tgtLMms = leftMms;
+        _cmds->tgtRMms = rightMms;
+    }
 }
 
 void MotorController::startDriveClean(float leftMms, float rightMms)
 {
-    _tgtLMms = leftMms;
-    _tgtRMms = rightMms;
+    if (_cmds) {
+        _cmds->tgtLMms = leftMms;
+        _cmds->tgtRMms = rightMms;
+    }
     _fasterIsRight = (fabsf(rightMms) >= fabsf(leftMms));
     float fasterAbs = _fasterIsRight ? fabsf(rightMms) : fabsf(leftMms);
     float slowerAbs = _fasterIsRight ? fabsf(leftMms)  : fabsf(rightMms);
@@ -41,8 +47,10 @@ void MotorController::startDriveClean(float leftMms, float rightMms)
 
 void MotorController::startDrive(float leftMms, float rightMms)
 {
-    _tgtLMms = leftMms;
-    _tgtRMms = rightMms;
+    if (_cmds) {
+        _cmds->tgtLMms = leftMms;
+        _cmds->tgtRMms = rightMms;
+    }
 
     bool newFasterIsRight = (fabsf(rightMms) >= fabsf(leftMms));
     float newFasterAbs = newFasterIsRight ? fabsf(rightMms) : fabsf(leftMms);
@@ -77,8 +85,10 @@ void MotorController::startDrive(float leftMms, float rightMms)
 
 void MotorController::stop()
 {
-    _tgtLMms = 0.0f;
-    _tgtRMms = 0.0f;
+    if (_cmds) {
+        _cmds->tgtLMms = 0.0f;
+        _cmds->tgtRMms = 0.0f;
+    }
     _pid.reset();
     _vcL.reset();
     _vcR.reset();
@@ -100,31 +110,50 @@ void MotorController::updatePidGains(float kP, float kI, float kD, float iClamp)
     _pid.updateGains(kP, kI, kD, iClamp);
 }
 
-void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds, float dt_s)
+void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
+                                    uint32_t now_ms, int refreshedWheel)
 {
-    if (dt_s <= 0.0f) return;
+    // Per-wheel zero-order-hold velocity update (014-007 ZOH fix).
+    //
+    // Only the refreshed wheel's velocity is recomputed this tick, using the
+    // true elapsed time since the last collect for that wheel.  The other
+    // wheel's velocity is held from the previous tick (ZOH — not zeroed).
+    //
+    // refreshedWheel: 0 = none (first iteration or sync fallback — skip all
+    //                            velocity updates so both wheels start at 0),
+    //                 1 = left wheel was just collected,
+    //                 2 = right wheel was just collected.
 
-    // Transitional stub (014-003): mirror the private targets into cmds so the
-    // VelocityController reads from the authoritative MotorCommands struct.
-    // Ticket 007 removes _tgtLMms/R and has the command processor write
-    // cmds.tgtLMms/R directly; at that point this sync block is deleted.
-    cmds.tgtLMms = _tgtLMms;
-    cmds.tgtRMms = _tgtRMms;
+    if (refreshedWheel == 1) {
+        // Left wheel was just collected.
+        float encLMm = inputs.encLMm;
+        if (_hasTimestampL) {
+            float elapsed_s = static_cast<float>(now_ms - _prevTimeMsL) / 1000.0f;
+            if (elapsed_s > 0.0f) {
+                inputs.velLMms = (encLMm - _prevEncL) / elapsed_s;
+            }
+        }
+        _prevEncL      = encLMm;
+        _prevTimeMsL   = now_ms;
+        _hasTimestampL = true;
+        // Right wheel: ZOH — leave inputs.velRMms unchanged.
+    } else if (refreshedWheel == 2) {
+        // Right wheel was just collected.
+        float encRMm = inputs.encRMm;
+        if (_hasTimestampR) {
+            float elapsed_s = static_cast<float>(now_ms - _prevTimeMsR) / 1000.0f;
+            if (elapsed_s > 0.0f) {
+                inputs.velRMms = (encRMm - _prevEncR) / elapsed_s;
+            }
+        }
+        _prevEncR      = encRMm;
+        _prevTimeMsR   = now_ms;
+        _hasTimestampR = true;
+        // Left wheel: ZOH — leave inputs.velLMms unchanged.
+    }
+    // refreshedWheel == 0: first iteration or no collect — both velocities held at 0.
 
-    // Step 1: Read encoder positions (mm) from HardwareState — written by
-    // Robot::controlCollect() before this call.
-    float encLMm = inputs.encLMm;
-    float encRMm = inputs.encRMm;
-
-    // Encoder-delta velocity — sole feedback source (chip readSpeed disabled in 013).
-    float encVelL = (encLMm - _prevEncL) / dt_s;
-    float encVelR = (encRMm - _prevEncR) / dt_s;
-    _prevEncL = encLMm;   // float — no 1 mm truncation (was a velocity-throb source)
-    _prevEncR = encRMm;
-
-    // Write derived velocities back to HardwareState.
-    inputs.velLMms = encVelL;
-    inputs.velRMms = encVelR;
+    // PID runs for BOTH wheels using the held (ZOH) velocities.
 
     // If no drive command active, ensure motors are stopped.
     if (cmds.tgtLMms == 0.0f && cmds.tgtRMms == 0.0f) {
@@ -135,8 +164,14 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds, fl
         return;
     }
 
-    // Step 2: Per-wheel velocity PID (Sprint 010 inner loop).
-    // VelocityController::update(setpoint, measured, dt_s) → PWM% in [-100, +100].
+    // PID integrator dt: use the configured control period.
+    // The velocity update above already uses the true per-wheel elapsed time for
+    // the derivative; the integrator uses the nominal period so integral windup
+    // is well-bounded and independent of measurement timing jitter.
+    float dt_s = static_cast<float>(_cal.controlPeriodMs) / 1000.0f;
+    if (dt_s <= 0.0f) return;
+
+    // Per-wheel velocity PID (Sprint 010 inner loop).
     float uL = _vcL.update(cmds.tgtLMms, inputs.velLMms, dt_s);
     float uR = _vcR.update(cmds.tgtRMms, inputs.velRMms, dt_s);
 
@@ -170,6 +205,10 @@ void MotorController::resetEncoderAccumulators()
     _motorR.resetEncoder();
     _prevEncL = 0.0f;
     _prevEncR = 0.0f;
+    _hasTimestampL = false;
+    _hasTimestampR = false;
+    _prevTimeMsL   = 0;
+    _prevTimeMsR   = 0;
 }
 
 float MotorController::clamp(float v, float lo, float hi)

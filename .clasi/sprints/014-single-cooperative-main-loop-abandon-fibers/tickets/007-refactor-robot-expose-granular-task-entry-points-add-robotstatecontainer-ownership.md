@@ -1,17 +1,18 @@
 ---
 id: '007'
-title: 'Refactor Robot: expose granular task entry points; add RobotStateContainer ownership'
-status: open
+title: 'Refactor Robot: expose granular task entry points; add RobotStateContainer
+  ownership'
+status: done
 use-cases:
-  - SUC-001
-  - SUC-003
-  - SUC-004
-  - SUC-006
+- SUC-001
+- SUC-003
+- SUC-004
+- SUC-006
 depends-on:
-  - '003'
-  - '004'
-  - '005'
-  - '006'
+- '003'
+- '004'
+- '005'
+- '006'
 github-issue: ''
 issue: plan-single-cooperative-main-loop-abandon-fibers.md
 completes_issue: false
@@ -47,12 +48,13 @@ sensor reads that existed in `Robot::telemetryTick()`.
 
 ## Acceptance Criteria
 
-- [ ] `Robot` has a `RobotStateContainer _state` member (declared in `Robot.h`).
-- [ ] `Robot` exposes exactly these task entry points (all `public`):
+- [x] `Robot` has a `RobotStateContainer _state` member (declared in `Robot.h`).
+- [x] `Robot` exposes exactly these task entry points (all `public`):
   - `controlCollect(uint32_t now_ms)` — collect encoder, compute velocity,
     run PID, write PWM.
   - `controlFireRequest()` — fire encoder request for the alternating wheel.
-  - `commsIn()` — drain serial and radio into `CommandProcessor::process()`.
+  - `commsIn()` — implemented in `LoopScheduler` (per plan decision; Robot
+    free of CommandProcessor dependency).
   - `driveAdvance(uint32_t now_ms)` — advance drive FSMs, emit inline EVTs.
   - `odometryPredict()` — `Odometry::predict` from `_state.inputs`.
   - `otosCorrect(uint32_t now_ms)` — read OTOS, write `_state.inputs.otos*`,
@@ -62,14 +64,14 @@ sensor reads that existed in `Robot::telemetryTick()`.
   - `portsRead()` — read digital/analog ports into `_state.inputs.digitalIn/analogIn`.
   - `telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx)` — assemble TLM
     frame from `_state.inputs` (no direct I2C calls).
-- [ ] `Robot::controlTick(uint32_t now_ms)` is removed.
-- [ ] `Robot::telemetryTick(uint32_t now_ms, ReplyFn, void*)` is removed.
-- [ ] The `telemetryEmit` implementation reads `_state.inputs.line`,
+- [x] `Robot::controlTick(uint32_t now_ms)` is removed.
+- [x] `Robot::telemetryTick(uint32_t now_ms, ReplyFn, void*)` is removed.
+- [x] The `telemetryEmit` implementation reads `_state.inputs.line`,
   `_state.inputs.colorR/G/B/C`, `_state.inputs.pose*` rather than calling
   sensor I2C.
-- [ ] `uv run --with pytest python -m pytest` passes — specifically
+- [x] `uv run --with pytest python -m pytest` passes — specifically
   `test_tlm_stream.py` (telemetry reads from snapshots).
-- [ ] Firmware builds cleanly.
+- [x] Firmware builds cleanly.
 
 ## Implementation Plan
 

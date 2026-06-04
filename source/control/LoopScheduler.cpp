@@ -3,9 +3,6 @@
 #include "CommandProcessor.h"
 #include "SerialPort.h"
 #include "Radio.h"
-#include "LineSensor.h"
-#include "ColorSensor.h"
-#include "PortIO.h"
 #include "RobotState.h"
 
 // ---------------------------------------------------------------------------
@@ -86,50 +83,30 @@ static void runOtosCorrect(LoopScheduler& sched, uint32_t now)
     sched.robot().otosCorrect(now);
 }
 
-// line-read: read the 4-channel line sensor into HardwareState::line[].
-static void runLineRead(LoopScheduler& sched, uint32_t now)
+// line-read: delegate to Robot::lineRead() task entry point (014-007).
+static void runLineRead(LoopScheduler& sched, uint32_t /*now*/)
 {
-    LineSensor* ls = sched.robot().lineSensor();
-    if (!ls) return;
-
-    HardwareState& inputs = sched.robot().stateMut().inputs;
-    if (ls->readValues(inputs.line)) {
-        inputs.lineVS.lastUpdMs = now;
-        inputs.lineVS.valid     = true;
-    }
+    sched.robot().lineRead();
 }
 
-// color-read: non-blocking poll of the RGBC color sensor.
-static void runColorRead(LoopScheduler& sched, uint32_t now)
+// color-read: delegate to Robot::colorRead() task entry point (014-007).
+static void runColorRead(LoopScheduler& sched, uint32_t /*now*/)
 {
-    ColorSensor* cs = sched.robot().colorSensor();
-    if (!cs) return;
-
-    HardwareState& inputs = sched.robot().stateMut().inputs;
-    if (cs->pollRGBC(inputs.colorR, inputs.colorG, inputs.colorB, inputs.colorC)) {
-        inputs.colorVS.lastUpdMs = now;
-        inputs.colorVS.valid     = true;
-    }
+    sched.robot().colorRead();
 }
 
-// ports-read: read digital and analogue GPIO ports.
-static void runPortsRead(LoopScheduler& sched, uint32_t now)
+// ports-read: delegate to Robot::portsRead() task entry point (014-007).
+static void runPortsRead(LoopScheduler& sched, uint32_t /*now*/)
 {
-    PortIO&        ports  = sched.robot().portIO();
-    HardwareState& inputs = sched.robot().stateMut().inputs;
-
-    for (uint8_t i = 0; i < 4; ++i) {
-        inputs.digitalIn[i] = (ports.readDigital(i) != 0);
-        inputs.analogIn[i]  = (int16_t)ports.readAnalog(i);
-    }
-    inputs.portsVS.lastUpdMs = now;
-    inputs.portsVS.valid     = true;
+    sched.robot().portsRead();
 }
 
-// telemetry-emit: assemble and send the unified TLM frame.
+// telemetry-emit: assemble and send the unified TLM frame from _state.inputs
+// snapshots (no direct sensor I2C calls — reads from HardwareState written by
+// lineRead, colorRead, controlCollect task entry points).
 static void runTelemetryEmit(LoopScheduler& sched, uint32_t now)
 {
-    sched.robot().telemetryTick(now, sched.activeFn, sched.activeCtx);
+    sched.robot().telemetryEmit(now, sched.activeFn, sched.activeCtx);
 }
 
 // ---------------------------------------------------------------------------

@@ -48,19 +48,6 @@ public:
           MessageBus&     messageBus,
           MicroBit&       uBit);
 
-    // ---------------------------------------------------------------------------
-    // Two-fiber split (013-010):
-    //   controlTick  — run from the high-priority control fiber only.
-    //                  Executes encoder reads → PID → setSpeed + drive-mode
-    //                  state machines.  No serial/radio I/O.
-    //   telemetryTick — run from the comms+telemetry fiber.  Drains pending
-    //                  EVT completions from DriveController, then assembles
-    //                  and emits the unified TLM frame.  Reads only cached
-    //                  encoder/velocity values; line/color I2C is safe here
-    //                  because Motor I2C is now atomic (busy-wait).
-    // ---------------------------------------------------------------------------
-    void controlTick(uint32_t now_ms);
-    void telemetryTick(uint32_t now_ms, ReplyFn fn, void* ctx);
 
     // ---------------------------------------------------------------------------
     // Split-phase encoder control API (014-006 — used by LoopScheduler).
@@ -104,6 +91,25 @@ public:
     void odometryPredict();
     void otosCorrect(uint32_t now_ms);
     void driveAdvance(uint32_t now_ms);
+
+    // ---------------------------------------------------------------------------
+    // Sensor read task entry points (014-007).
+    //
+    //   lineRead()   — read 4-channel line sensor into _state.inputs.line[];
+    //                  updates lineVS.lastUpdMs and sets lineVS.valid.
+    //   colorRead()  — non-blocking RGBC poll into _state.inputs.colorR/G/B/C;
+    //                  updates colorVS.lastUpdMs and sets colorVS.valid.
+    //   portsRead()  — read digital/analog GPIO into _state.inputs.digitalIn/analogIn;
+    //                  updates portsVS.lastUpdMs and sets portsVS.valid.
+    //
+    // telemetryEmit — assemble the unified TLM frame from _state.inputs (no
+    //                 direct sensor I2C calls) and emit via fn/ctx.
+    //                 Respects tlmPeriodMs gating and SNAP flag.
+    // ---------------------------------------------------------------------------
+    void lineRead();
+    void colorRead();
+    void portsRead();
+    void telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx);
 
     // ---------------------------------------------------------------------------
     // Drive action methods — delegate to DriveController.
