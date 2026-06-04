@@ -1744,7 +1744,7 @@ def _snap_tlm(conn: SerialConnection):
                 # The RAW250 relay can concatenate replies WITHOUT newline
                 # separators ("OK snapTLM t=..."); re-parse from "TLM".
                 frame = _parse_tlm(raw[raw.index("TLM"):])
-            if frame is not None and (frame.enc is not None or frame.pose is not None):
+            if frame is not None:
                 return frame
     return None
 
