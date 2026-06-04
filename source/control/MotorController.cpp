@@ -9,21 +9,13 @@ MotorController::MotorController(Motor& left, Motor& right, const RobotConfig& c
       _cmdEncStartL(0.0f), _cmdEncStartR(0.0f),
       _cmdRatio(1.0f), _fasterIsRight(false),
       _tgtLMms(0.0f), _tgtRMms(0.0f),
-      _prevEncL(0), _prevEncR(0),
-      _actualVelL(0.0f), _actualVelR(0.0f),
-      _encLMm(0.0f), _encRMm(0.0f),
-      _usingChipVelL(false), _usingChipVelR(false)
+      _prevEncL(0.0f), _prevEncR(0.0f)
 {
     gains.kFF     = 0.15f;
     gains.kP      = 0.05f;
     gains.kI      = 0.20f;
     gains.iClamp  = 60.0f;
     gains.kRatio  = 0.01f;
-}
-
-float MotorController::encoderMm(bool left)
-{
-    return left ? _motorL.readEncoderMmF(_cal) : _motorR.readEncoderMmF(_cal);
 }
 
 void MotorController::setTarget(float leftMms, float rightMms)
@@ -40,8 +32,8 @@ void MotorController::startDriveClean(float leftMms, float rightMms)
     float fasterAbs = _fasterIsRight ? fabsf(rightMms) : fabsf(leftMms);
     float slowerAbs = _fasterIsRight ? fabsf(leftMms)  : fabsf(rightMms);
     _cmdRatio = (slowerAbs > 0.0f) ? (fasterAbs / slowerAbs) : 1.0f;
-    _cmdEncStartL = encoderMm(true);
-    _cmdEncStartR = encoderMm(false);
+    _cmdEncStartL = _motorL.readEncoderMmF(_cal);
+    _cmdEncStartR = _motorR.readEncoderMmF(_cal);
     _pid.reset();
     _vcL.reset();
     _vcR.reset();
@@ -57,8 +49,8 @@ void MotorController::startDrive(float leftMms, float rightMms)
     float newSlowerAbs = newFasterIsRight ? fabsf(leftMms)  : fabsf(rightMms);
     float newRatio = (newSlowerAbs > 0.0f) ? (newFasterAbs / newSlowerAbs) : 1.0f;
 
-    float curL = encoderMm(true);
-    float curR = encoderMm(false);
+    float curL = _motorL.readEncoderMmF(_cal);
+    float curR = _motorR.readEncoderMmF(_cal);
     float curFaster   = newFasterIsRight ? curR : curL;
     float curSlower   = newFasterIsRight ? curL : curR;
     float startFaster = newFasterIsRight ? _cmdEncStartR : _cmdEncStartL;
@@ -90,8 +82,8 @@ void MotorController::stop()
     _pid.reset();
     _vcL.reset();
     _vcR.reset();
-    _cmdEncStartL = encoderMm(true);
-    _cmdEncStartR = encoderMm(false);
+    _cmdEncStartL = _motorL.readEncoderMmF(_cal);
+    _cmdEncStartR = _motorR.readEncoderMmF(_cal);
     _motorL.setSpeed(0);
     _motorR.setSpeed(0);
 }
@@ -108,70 +100,36 @@ void MotorController::updatePidGains(float kP, float kI, float kD, float iClamp)
     _pid.updateGains(kP, kI, kD, iClamp);
 }
 
-void MotorController::tick(float dt_s)
+void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds, float dt_s)
 {
     if (dt_s <= 0.0f) return;
 
-    // Step 1: Read encoder positions (mm) and cache for getEncoderPositions()
-    float encLMm = encoderMm(true);
-    float encRMm = encoderMm(false);
-    _encLMm = encLMm;
-    _encRMm = encRMm;
+    // Transitional stub (014-003): mirror the private targets into cmds so the
+    // VelocityController reads from the authoritative MotorCommands struct.
+    // Ticket 007 removes _tgtLMms/R and has the command processor write
+    // cmds.tgtLMms/R directly; at that point this sync block is deleted.
+    cmds.tgtLMms = _tgtLMms;
+    cmds.tgtRMms = _tgtRMms;
 
-    // Encoder-delta velocity (fallback / implausibility reference)
+    // Step 1: Read encoder positions (mm) from HardwareState — written by
+    // Robot::controlCollect() before this call.
+    float encLMm = inputs.encLMm;
+    float encRMm = inputs.encRMm;
+
+    // Encoder-delta velocity — sole feedback source (chip readSpeed disabled in 013).
     float encVelL = (encLMm - _prevEncL) / dt_s;
     float encVelR = (encRMm - _prevEncR) / dt_s;
     _prevEncL = encLMm;   // float — no 1 mm truncation (was a velocity-throb source)
     _prevEncR = encRMm;
 
-    // Chip-native velocity (primary source via register 0x47).
-    // Falls back to encoder-delta if:
-    //   (a) I2C read fails (readSpeed returns false), or
-    //   (b) chip reading fails the two-sided plausibility gate (see below).
-    // THROB FIX (013): do NOT read the chip 0x47 speed register every tick.
-    // readSpeedRaw() blocks ~12 ms (fiber_sleep 4+8) per wheel AND the flaky
-    // register intermittently times out/retries, stalling the control loop for
-    // hundreds of ms -> motor refresh is starved -> visible pulsing. Use the
-    // encoder-delta velocity (computed above) as the sole feedback source.
-    float chipVelL = 0.0f, chipVelR = 0.0f;
-    bool chipOkL = false;
-    bool chipOkR = false;
+    // Write derived velocities back to HardwareState.
+    inputs.velLMms = encVelL;
+    inputs.velRMms = encVelR;
 
-    // Implausibility gate: reject chip reading if it is more than 2× encoder velocity
-    // (too-high / noise) OR less than 0.5× encoder velocity when the wheel is clearly
-    // moving (too-low / stuck register).
-    //
-    // The "stuck ~30 mm/s" symptom (register 0x47 returning a stale low value while
-    // encoder-delta reports ~140 mm/s) is caught by the tooLow branch.
-    //
-    // Guard: only apply when |encVel| > minWheelMms so we don't misfire at near-zero
-    // speeds where encoder-delta is itself noisy and the ratio is unreliable.
-    {
-        float floor = _cal.minWheelMms;
-        bool tooHighL = fabsf(chipVelL) > 2.0f * fabsf(encVelL);
-        bool tooLowL  = (fabsf(encVelL) > floor) &&
-                        (fabsf(chipVelL) < 0.5f * fabsf(encVelL));
-        if (chipOkL && fabsf(encVelL) > 0.0f && (tooHighL || tooLowL)) {
-            chipOkL = false;
-        }
-    }
-    {
-        float floor = _cal.minWheelMms;
-        bool tooHighR = fabsf(chipVelR) > 2.0f * fabsf(encVelR);
-        bool tooLowR  = (fabsf(encVelR) > floor) &&
-                        (fabsf(chipVelR) < 0.5f * fabsf(encVelR));
-        if (chipOkR && fabsf(encVelR) > 0.0f && (tooHighR || tooLowR)) {
-            chipOkR = false;
-        }
-    }
-
-    _usingChipVelL = chipOkL;
-    _usingChipVelR = chipOkR;
-    _actualVelL = chipOkL ? chipVelL : encVelL;
-    _actualVelR = chipOkR ? chipVelR : encVelR;
-
-    // If no drive command active, ensure motors are stopped
-    if (_tgtLMms == 0.0f && _tgtRMms == 0.0f) {
+    // If no drive command active, ensure motors are stopped.
+    if (cmds.tgtLMms == 0.0f && cmds.tgtRMms == 0.0f) {
+        cmds.pwmL = 0;
+        cmds.pwmR = 0;
         _motorL.setSpeed(0);
         _motorR.setSpeed(0);
         return;
@@ -179,38 +137,39 @@ void MotorController::tick(float dt_s)
 
     // Step 2: Per-wheel velocity PID (Sprint 010 inner loop).
     // VelocityController::update(setpoint, measured, dt_s) → PWM% in [-100, +100].
-    // Each wheel is controlled independently — no ratio cross-coupling.
-    float uL = _vcL.update(_tgtLMms, _actualVelL, dt_s);
-    float uR = _vcR.update(_tgtRMms, _actualVelR, dt_s);
+    float uL = _vcL.update(cmds.tgtLMms, inputs.velLMms, dt_s);
+    float uR = _vcR.update(cmds.tgtRMms, inputs.velRMms, dt_s);
 
+    cmds.pwmL = static_cast<int16_t>(roundf(uL));
+    cmds.pwmR = static_cast<int16_t>(roundf(uR));
     _motorL.setSpeed(static_cast<int8_t>(roundf(uL)));
     _motorR.setSpeed(static_cast<int8_t>(roundf(uR)));
 }
 
-void MotorController::getActualVelocity(float& leftMms, float& rightMms) const
-{
-    leftMms  = _actualVelL;
-    rightMms = _actualVelR;
-}
-
 void MotorController::getVelocitySourceFlags(bool& leftChip, bool& rightChip) const
 {
-    leftChip  = _usingChipVelL;
-    rightChip = _usingChipVelR;
+    // The chip readSpeed (0x47) path was disabled in sprint 013 (motor throb fix).
+    // Encoder-delta is the sole velocity source. Always report false.
+    leftChip  = false;
+    rightChip = false;
 }
 
 void MotorController::getEncoderPositions(int32_t& leftMm, int32_t& rightMm) const
 {
-    leftMm  = static_cast<int32_t>(_encLMm);
-    rightMm = static_cast<int32_t>(_encRMm);
+    // Read directly from the motor hardware. These are synchronous I2C reads
+    // (legacy blocking path, same as before the split-phase API). Used by
+    // DriveController for D-mode distance tracking until ticket 007 migrates
+    // that path to HardwareState.
+    leftMm  = _motorL.readEncoder(_cal);
+    rightMm = _motorR.readEncoder(_cal);
 }
 
 void MotorController::resetEncoderAccumulators()
 {
     _motorL.resetEncoder();
     _motorR.resetEncoder();
-    _prevEncL = 0;
-    _prevEncR = 0;
+    _prevEncL = 0.0f;
+    _prevEncR = 0.0f;
 }
 
 float MotorController::clamp(float v, float lo, float hi)

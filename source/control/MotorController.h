@@ -4,6 +4,7 @@
 #include "Config.h"
 #include "RatioPidController.h"
 #include "VelocityController.h"
+#include "RobotState.h"
 
 /**
  * MotorController — per-wheel velocity PID wheel speed control.
@@ -57,19 +58,27 @@ public:
     // Update PID gains at runtime (called by K-command setters).
     void updatePidGains(float kP, float kI, float kD, float iClamp);
 
-    // Run one control tick. dt_s is elapsed seconds since last tick.
-    // Reads encoders, runs ratio PID + FF, clamps output, calls Motor::setSpeed().
-    void tick(float dt_s);
-
-    // Read actual wheel velocities in mm/s (encoder delta since last tick).
-    void getActualVelocity(float& leftMms, float& rightMms) const;
+    /**
+     * controlTick — cooperative-loop control step (014-003).
+     *
+     * Reads encoder positions from inputs.encLMm/R (written by
+     * Robot::controlCollect before this call), computes per-wheel
+     * encoder-delta velocity, writes inputs.velLMms/R, runs the two
+     * VelocityController instances, writes cmds.pwmL/R, and calls
+     * Motor::setSpeed().
+     *
+     * dt_s must be > 0; the caller (Robot::controlCollect) is responsible
+     * for guarding against zero or negative dt.
+     */
+    void controlTick(HardwareState& inputs, MotorCommands& cmds, float dt_s);
 
     /**
-     * getVelocitySourceFlags — report which velocity source is live per wheel.
+     * getVelocitySourceFlags — always returns false for both wheels.
      *
-     * leftChip  = true if chip readSpeed (0x47) is the active source for left wheel.
-     * rightChip = true if chip readSpeed (0x47) is the active source for right wheel.
-     * false = encoder-delta fallback is in use (I2C error or implausibility gate).
+     * The chip readSpeed (0x47) path was disabled in sprint 013 to fix
+     * motor throb. The encoder-delta fallback is the sole velocity source.
+     * Method retained for CommandProcessor wire-format compatibility until
+     * ticket 007 migrates callers to Robot::state().
      */
     void getVelocitySourceFlags(bool& leftChip, bool& rightChip) const;
 
@@ -100,20 +109,10 @@ private:
     float _tgtLMms;          // current speed targets in mm/s
     float _tgtRMms;
 
-    // Cached encoder readings from the most recent tick() call.
-    float   _prevEncL;   // mm at start of last tick (float — high-res for velocity)
+    // Previous encoder snapshots — intermediate compute state for velocity differentiation.
+    // These are NOT robot state (they are algorithm state private to MotorController).
+    float   _prevEncL;   // mm at start of last controlTick (float — high-res for velocity)
     float   _prevEncR;
-    float   _actualVelL; // mm/s computed in tick()
-    float   _actualVelR;
-    float   _encLMm;     // current encoder position (mm), updated in tick()
-    float   _encRMm;
-
-    // Velocity source flags: true = chip readSpeed (0x47), false = encoder-delta fallback.
-    bool _usingChipVelL;
-    bool _usingChipVelR;
-
-    // Read encoder and convert to mm.
-    float encoderMm(bool left);
 
     // clamp helper
     static float clamp(float v, float lo, float hi);

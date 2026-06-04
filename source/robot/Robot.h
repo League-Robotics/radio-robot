@@ -12,6 +12,7 @@
 #include "MotorController.h"
 #include "Odometry.h"
 #include "DriveController.h"
+#include "RobotState.h"
 
 /**
  * Robot — top-level object that owns all firmware subsystems.
@@ -98,6 +99,13 @@ public:
     uint32_t systemTime() const { return _uBit.systemTime(); }
 
     // ---------------------------------------------------------------------------
+    // ---------------------------------------------------------------------------
+    // State accessor — returns the authoritative robot state container (014-003).
+    // HardwareState::enc*/vel* are written each tick by controlCollect().
+    // MotorCommands::tgt*/pwm* are written each tick by MotorController::controlTick().
+    // ---------------------------------------------------------------------------
+    const RobotStateContainer& state() const { return _state; }
+
     // Component accessors — used by CommandProcessor and main.cpp.
     // ---------------------------------------------------------------------------
     RobotConfig&     config()          { return _config; }
@@ -148,4 +156,18 @@ private:
     MotorController  _mc;
     Odometry         _odo;
     DriveController  _dc;
+
+    // Authoritative robot state container (014-003).
+    // Owned here; written each control tick by controlCollect().
+    RobotStateContainer _state;
+
+    // Timestamp of the most recent controlCollect() call, used to compute dt_s.
+    uint32_t _lastControlMs;
+
+    // ---------------------------------------------------------------------------
+    // controlCollect — collect encoder readings, convert to mm, write
+    // _state.inputs.enc*, then call _mc.controlTick(_state.inputs, _state.commands, dt_s).
+    // Called from controlTick() in the cooperative-loop path (014-003).
+    // ---------------------------------------------------------------------------
+    void controlCollect(uint32_t now_ms);
 };

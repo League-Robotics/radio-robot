@@ -30,7 +30,9 @@ Robot::Robot(MicroBitI2C&    i2c,
       _portio(io),
       _mc(_motorL, _motorR, _config),
       _odo(),
-      _dc(_mc, _odo, _config)  // OTOS pointer set below after hardware probe
+      _dc(_mc, _odo, _config),  // OTOS pointer set below after hardware probe
+      _state(defaultInputs(_config)),
+      _lastControlMs(0)
 {
     // uBit.init() was called by main.cpp before constructing Robot.
     // All CODAL peripherals are ready; begin subsystem initialisation now.
@@ -160,7 +162,58 @@ Robot::Pose Robot::getPose() const
 
 void Robot::controlTick(uint32_t now_ms)
 {
+    // Stub: collect encoder readings + run motor PID, then advance drive state machines.
+    // The cooperative-loop split (ticket 006) will later call these from the LoopScheduler
+    // at the correct phase; until then controlTick() preserves the original call site in
+    // main.cpp unchanged.
+    controlCollect(now_ms);
     _dc.controlTick(now_ms);
+}
+
+// ---------------------------------------------------------------------------
+// controlCollect — collect encoder readings and run the motor PID (014-003).
+//
+// 1. Calls Motor::collectEncoder() for each wheel and converts the raw
+//    tenths-of-degrees reading to mm using the calibration scalars.
+// 2. Writes the results to _state.inputs.encLMm / encRMm.
+// 3. Computes dt_s from _lastControlMs; calls
+//    _mc.controlTick(_state.inputs, _state.commands, dt_s).
+//
+// NOTE: Motor::collectEncoder() reads back the response to a prior
+// Motor::requestEncoder() call.  In this stub path the requestEncoder()
+// call that satisfies the split-phase contract is the synchronous read
+// inside Motor::collectEncoder() itself (legacy path — no delay, same as
+// before).  Correct split-phase timing is wired by the LoopScheduler in
+// ticket 006; functional encoder reads are verified at bench in ticket 009.
+// ---------------------------------------------------------------------------
+
+void Robot::controlCollect(uint32_t now_ms)
+{
+    // Collect encoder readings using the split-phase API.
+    //
+    // In the stub path (before the LoopScheduler in ticket 006), we call
+    // requestEncoder() immediately followed by collectEncoder() on each wheel
+    // via readEncoderMmF() (which calls collectEncoder() internally).  This is
+    // equivalent to the old readEncoderRaw() synchronous I2C transaction
+    // (write then immediate read, no inter-transaction delay).
+    //
+    // The LoopScheduler in ticket 006 will insert the required ≥ one-loop-period
+    // delay between the request and collect phases by alternating wheels across
+    // ticks.  Until then, functional encoder reads are not guaranteed — build
+    // correctness is the gate here; bench correctness is ticket 009.
+    _motorL.requestEncoder();
+    _state.inputs.encLMm = _motorL.readEncoderMmF(_config);
+    _motorR.requestEncoder();
+    _state.inputs.encRMm = _motorR.readEncoderMmF(_config);
+
+    // Compute dt_s; guard against zero on the first call.
+    float dt_s = 0.0f;
+    if (_lastControlMs != 0) {
+        dt_s = static_cast<float>(now_ms - _lastControlMs) / 1000.0f;
+    }
+    _lastControlMs = now_ms;
+
+    _mc.controlTick(_state.inputs, _state.commands, dt_s);
 }
 
 // ---------------------------------------------------------------------------
@@ -225,11 +278,12 @@ void Robot::telemetryTick(uint32_t now_ms, ReplyFn fn, void* ctx)
         haveColor = _color.pollRGBC(colorR, colorG, colorB, colorC);
     }
 
-    // ----- 6. Read velocity (encoder-delta, always available) ----------------
+    // ----- 6. Read velocity from HardwareState (encoder-delta, always available) ----
     float velL = 0.0f, velR = 0.0f;
     bool haveVel = false;
     if (_config.tlmFields & TLM_FIELD_VEL) {
-        _mc.getActualVelocity(velL, velR);
+        velL = _state.inputs.velLMms;
+        velR = _state.inputs.velRMms;
         haveVel = true;
     }
 

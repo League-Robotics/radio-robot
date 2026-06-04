@@ -1,13 +1,13 @@
 ---
 id: '003'
 title: Refactor MotorController onto RobotState structs
-status: open
+status: done
 use-cases:
-  - SUC-001
-  - SUC-003
+- SUC-001
+- SUC-003
 depends-on:
-  - '001'
-  - '002'
+- '001'
+- '002'
 github-issue: ''
 issue: plan-single-cooperative-main-loop-abandon-fibers.md
 completes_issue: false
@@ -48,15 +48,15 @@ before calling `MotorController::controlTick()`.
 
 ## Acceptance Criteria
 
-- [ ] `MotorController` has no `_encLMm`, `_encRMm`, `_actualVelL`,
+- [x] `MotorController` has no `_encLMm`, `_encRMm`, `_actualVelL`,
   `_actualVelR`, `_usingChipVelL`, `_usingChipVelR` private fields.
-- [ ] `MotorController::controlTick(HardwareState&, MotorCommands&, float)`
+- [x] `MotorController::controlTick(HardwareState&, MotorCommands&, float)`
   reads `inputs.encLMm/R`, writes `inputs.velLMms/R`, runs `VelocityController`
   ×2, writes `cmds.pwmL/R`, and calls `Motor::setSpeed()`.
-- [ ] `MotorController::tick(float)` (old signature) is removed.
-- [ ] `encoderMm()` private helper is removed.
-- [ ] Firmware builds cleanly; `main.cpp` continues to compile without changes.
-- [ ] `uv run --with pytest python -m pytest` passes — specifically
+- [x] `MotorController::tick(float)` (old signature) is removed.
+- [x] `encoderMm()` private helper is removed.
+- [x] Firmware builds cleanly; `main.cpp` continues to compile without changes.
+- [x] `uv run --with pytest python -m pytest` passes — specifically
   `test_readspeed_and_get_vel.py`, `test_vw_command.py`,
   `test_saturation_wiring.py`.
 

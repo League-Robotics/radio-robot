@@ -673,14 +673,14 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     if (strcmp(verb, "GET") == 0) {
         // Special case: GET VEL — velocity readout (not a config key).
         if (ntok >= 2 && strcmp(tokens[1], "VEL") == 0) {
-            float vL = 0.0f, vR = 0.0f;
-            bool chipL = false, chipR = false;
-            _robot.motor().getActualVelocity(vL, vR);
-            _robot.motor().getVelocitySourceFlags(chipL, chipR);
+            // Read velocities from HardwareState (written by controlCollect each tick).
+            // Chip readSpeed (0x47) is disabled (sprint 013 throb fix), so source
+            // is always encoder-delta ('E') for both wheels.
+            float vL = _robot.state().inputs.velLMms;
+            float vR = _robot.state().inputs.velRMms;
             char body[48];
-            snprintf(body, sizeof(body), "vel=%d:%c,%d:%c",
-                     (int)vL, chipL ? 'C' : 'E',
-                     (int)vR, chipR ? 'C' : 'E');
+            snprintf(body, sizeof(body), "vel=%d:E,%d:E",
+                     (int)vL, (int)vR);
             replyOK(rbuf, sizeof(rbuf), "get", body, corr_id, replyFn, ctx);
             return;
         }

@@ -326,9 +326,9 @@ void DriveController::controlTick(uint32_t now_ms)
     _lastTickMs     = now_ms;
     _currentTimeMs  = now_ms;
 
-    // Run motor controller and update odometry (fast cadence: every tick).
-    // Always runs — even at IDLE — so encoder caches and odometry are never stale.
-    _mc.tick(dt_s);
+    // Motor controller tick is now called by Robot::controlCollect() before
+    // DriveController::controlTick() is reached (014-003). Encoder positions
+    // are read from hardware directly via getEncoderPositions() for odometry.
 
     int32_t encL, encR;
     _mc.getEncoderPositions(encL, encR);
