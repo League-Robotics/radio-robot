@@ -1,11 +1,11 @@
 ---
 id: '002'
 title: Split Motor encoder I/O into requestEncoder / collectEncoder (remove busy-waits)
-status: open
+status: done
 use-cases:
-  - SUC-002
+- SUC-002
 depends-on:
-  - '001'
+- '001'
 github-issue: ''
 issue: plan-single-cooperative-main-loop-abandon-fibers.md
 completes_issue: false
@@ -40,16 +40,16 @@ level) is left intact and unchanged.
 
 ## Acceptance Criteria
 
-- [ ] `Motor::requestEncoder()` issues the `0x46` write and returns without any
+- [x] `Motor::requestEncoder()` issues the `0x46` write and returns without any
   busy-wait or `fiber_sleep`.
-- [ ] `Motor::collectEncoder()` issues the 4-byte read and returns the signed
+- [x] `Motor::collectEncoder()` issues the 4-byte read and returns the signed
   int32 (raw tenths of degrees minus `_encOffset`), without any busy-wait or
   `fiber_sleep`.
-- [ ] Both `system_timer_current_time_us` busy-wait spin loops in
+- [x] Both `system_timer_current_time_us` busy-wait spin loops in
   `readEncoderRaw()` are deleted.
-- [ ] `readEncoderMmF()` and `readEncoder()` are updated to call
+- [x] `readEncoderMmF()` and `readEncoder()` are updated to call
   `collectEncoder()` with a comment noting the split-phase contract.
-- [ ] Firmware builds cleanly with no new errors. (At this stage
+- [x] Firmware builds cleanly with no new errors. (At this stage
   `MotorController` still calls the old encoder path — the build must not
   break between tickets.)
 

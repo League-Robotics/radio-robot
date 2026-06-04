@@ -30,7 +30,7 @@
  *   ---------|----------------------------------------|--------|-------
  *   0x60     | setSpeed()  — run motor at PWM %        | 008    | wrapped
  *   0x5F     | setSpeed(0) — stop motor                | 008    | wrapped
- *   0x46     | readEncoderRaw() / readEncoder()        | 008    | wrapped
+ *   0x46     | requestEncoder() / collectEncoder()     | 014    | split-phase
  *   (sw)     | resetEncoder()  — software offset zero  | 008    | wrapped
  *   0x47     | readSpeedRaw()  / readSpeed()           | 008    | wrapped
  *   0x70     | timedMove()  — timed/distance/turn move | 008    | wrapped
@@ -60,6 +60,28 @@ public:
     // Zero this motor's encoder accumulator (software offset reset,
     // matches chip TypeScript resetRelAngleValue() behaviour).
     void    resetEncoder();
+
+    /**
+     * requestEncoder — split-phase encoder I/O, phase 1.
+     *
+     * Issues the 0x46 write command and returns immediately (no busy-wait,
+     * no fiber_sleep). The caller must ensure at least one full loop period
+     * elapses before calling collectEncoder() — the cooperative loop's idle
+     * sleep provides this guarantee. Only one wheel's request may be in
+     * flight at a time; the LoopScheduler alternates wheels across ticks.
+     */
+    void requestEncoder();
+
+    /**
+     * collectEncoder — split-phase encoder I/O, phase 2.
+     *
+     * Reads back the 4-byte response issued by a prior requestEncoder() call
+     * and returns the signed int32 (raw tenths of degrees minus _encOffset).
+     * No busy-wait, no fiber_sleep. The caller is responsible for satisfying
+     * the vendor's required inter-transaction delay (≥ one loop period,
+     * supplied by the cooperative scheduler's idle sleep).
+     */
+    int32_t collectEncoder() const;
 
     /**
      * readSpeed — read chip-native wheel velocity.
@@ -183,8 +205,10 @@ private:
     // Write an 8-byte motor command to the chip.
     void    writeMotorCmd(uint8_t direction, uint8_t speed);
 
-    // Read raw cumulative encoder from chip for this motor (tenths of degrees,
-    // minus the software offset).
+    // Legacy synchronous encoder read (write + immediate read, no busy-wait).
+    // Retained for resetEncoder() and any callers not yet on the split-phase
+    // requestEncoder()/collectEncoder() API. Ticket 003 will migrate all
+    // callers; this method can be removed after that.
     int32_t readEncoderRaw() const;
 
     // Read raw speed from chip register 0x47 (uint16 LE, unsigned magnitude).
