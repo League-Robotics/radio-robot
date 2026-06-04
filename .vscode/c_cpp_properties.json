@@ -9,11 +9,12 @@
                 "${workspaceFolder}/build/libraries/**"
             ],
             "defines": ["NRF52833_XXAA"],
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json",
             "compilerPath": "/opt/homebrew/bin/arm-none-eabi-g++",
             "compilerArgs": ["-DNRF52833_XXAA"],
             "cStandard": "c11",
             "cppStandard": "c++11",
-            "intelliSenseMode": "macos-gcc-arm"
+            "intelliSenseMode": "gcc-arm"
         }
     ],
     "version": 4

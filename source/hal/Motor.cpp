@@ -70,6 +70,16 @@ int32_t Motor::readEncoder(const RobotConfig& cfg) const
     return (int32_t)mmF;
 }
 
+float Motor::readEncoderMmF(const RobotConfig& cfg) const
+{
+    // Same as readEncoder() but returns full float resolution (no truncation to
+    // whole mm). The velocity loop differentiates position, so 1 mm truncation
+    // becomes ±~17 mm/s quantization noise at the ~58 ms loop rate.
+    float mmPerDeg = (_motorId == 2) ? cfg.mmPerDegL : cfg.mmPerDegR;
+    int32_t raw = readEncoderRaw();   // tenths of degrees
+    return (raw / 10.0f) * mmPerDeg * (float)_fwdSign;
+}
+
 void Motor::resetEncoder()
 {
     // Mirror TypeScript resetRelAngleValue(): snapshot the current raw

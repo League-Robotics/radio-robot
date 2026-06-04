@@ -23,7 +23,7 @@ MotorController::MotorController(Motor& left, Motor& right, const RobotConfig& c
 
 float MotorController::encoderMm(bool left)
 {
-    return static_cast<float>(left ? _motorL.readEncoder(_cal) : _motorR.readEncoder(_cal));
+    return left ? _motorL.readEncoderMmF(_cal) : _motorR.readEncoderMmF(_cal);
 }
 
 void MotorController::setTarget(float leftMms, float rightMms)
@@ -119,10 +119,10 @@ void MotorController::tick(float dt_s)
     _encRMm = encRMm;
 
     // Encoder-delta velocity (fallback / implausibility reference)
-    float encVelL = (encLMm - static_cast<float>(_prevEncL)) / dt_s;
-    float encVelR = (encRMm - static_cast<float>(_prevEncR)) / dt_s;
-    _prevEncL = static_cast<int32_t>(encLMm);
-    _prevEncR = static_cast<int32_t>(encRMm);
+    float encVelL = (encLMm - _prevEncL) / dt_s;
+    float encVelR = (encRMm - _prevEncR) / dt_s;
+    _prevEncL = encLMm;   // float — no 1 mm truncation (was a velocity-throb source)
+    _prevEncR = encRMm;
 
     // Chip-native velocity (primary source via register 0x47).
     // Falls back to encoder-delta if:
