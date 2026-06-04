@@ -40,4 +40,5 @@ private:
     void     writeReg8(uint8_t addr, uint8_t reg, uint8_t val);
     uint8_t  readReg8(uint8_t addr, uint8_t reg) const;
     uint16_t readReg16(uint8_t addr, uint8_t regLo) const;
+    uint16_t readReg16Alt(uint8_t regLo) const;  // alt-chip single-byte protocol
 };
