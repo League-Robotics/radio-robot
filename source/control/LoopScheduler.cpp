@@ -496,7 +496,7 @@ void LoopScheduler::run_all()
         // --- LOW-PRIORITY TASKS — explicit, in order, each guarded + timed --
         // Reorder / comment-out / toggle (_table[i].run = false) freely.
         _runStep(_table[0], now);   // comms-in
-        _runStep(_table[1], now);   // drive-advance
+        _runStep(_table[1], now);   // drive-advance (watchdog / ESC stop)
         _runStep(_table[2], now);   // odometry-predict
         _runStep(_table[3], now);   // otos-correct
         _runStep(_table[4], now);   // line-read

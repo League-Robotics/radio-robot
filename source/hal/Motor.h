@@ -224,6 +224,13 @@ private:
     // Set by setSpeed(); read by readSpeed() to apply sign to the unsigned chip reading.
     int8_t _lastDir;
 
+    // Last PWM% written to the Nezha. setSpeed() skips the I2C write when the
+    // command is unchanged, so the controller is never hammered at the ~100 Hz
+    // control-loop rate (that write rate wedges the encoder reads). Sentinel
+    // sentinel -128 (outside valid ±100) forces the first write. See
+    // docs/knowledge encoder-wedge note.
+    int8_t _lastWrittenPct = -128;
+
     static constexpr uint8_t ADDR    = 0x10;
     static constexpr uint8_t DIR_CW  = 1;   // positive speed from chip perspective
     static constexpr uint8_t DIR_CCW = 2;   // negative speed from chip perspective

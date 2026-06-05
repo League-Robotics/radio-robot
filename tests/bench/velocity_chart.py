@@ -7,13 +7,12 @@ plots in a window:
   - Right wheel velocity (mm/s) strip chart
   - Phase plot: vR vs vL with reference line and current-point dot
 
+SPACE — connect to robot and start wheels / disconnect and stop wheels.
+Each press opens a fresh serial connection, making it resilient to robot
+reboots and encoder wedge states.
+
 Usage:
     uv run python tests/bench/velocity_chart.py [--port DEV] [--speed MMPS] [--window S]
-
-Options:
-    --port PORT     Serial port (auto-detect if omitted)
-    --speed MMPS    Wheel speed mm/s for both wheels (default: 200)
-    --window S      Rolling window seconds (default: 8.0)
 """
 
 import argparse
@@ -23,9 +22,6 @@ import sys
 import threading
 import time
 
-# ---------------------------------------------------------------------------
-# CLI — parse before any hardware or matplotlib imports
-# ---------------------------------------------------------------------------
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Real-time robot velocity charts")
@@ -38,117 +34,151 @@ def _parse_args() -> argparse.Namespace:
 
 
 # ---------------------------------------------------------------------------
-# Telemetry streaming thread
+# Streaming worker — one instance per SPACE-start; torn down on SPACE-stop.
 # ---------------------------------------------------------------------------
 
 def _stream_worker(
     port: str,
     speed: int,
     data_queue: "queue.Queue[tuple[float, int, int]]",
-    stop_event: threading.Event,
-    proto_holder: list,  # [proto] written after connect so main can send STOP
+    stop_event: threading.Event,   # set externally to tear down
+    status_queue: "queue.Queue[str]",  # push status strings to main thread
 ) -> None:
-    """Daemon thread: connect, stream_drive, push (t, vL, vR) tuples into queue."""
+    """Open a fresh serial connection, connect, drive, push (t,vL,vR) tuples."""
     from robot_radio.io.serial_conn import SerialConnection
     from robot_radio.robot.protocol import NezhaProtocol, parse_tlm
-    from robot_radio.robot.nezha import Nezha, RobotNotFoundError
+    from robot_radio.robot.nezha import Nezha
 
-    conn = SerialConnection(port=port)
-    conn.connect()
-
-    proto = NezhaProtocol(conn)
-    nezha = Nezha(proto)
-    proto_holder.append(proto)
-
+    conn = None
     try:
-        identity = nezha.connect()
-        print(f"  robot: ALIVE — {identity}")
-    except RobotNotFoundError as exc:
-        print(f"\n  FATAL: {exc}")
-        stop_event.set()
-        return
+        conn = SerialConnection(port=port, mode="direct")
+        conn.connect(skip_ping=True)
 
-    speeds = [speed, speed]
-    try:
-        for resp in nezha.stream_drive(speeds, period_ms=40, watchdog_ms=500):
+        proto = NezhaProtocol(conn)
+        nezha = Nezha(proto)
+
+        # Retry PING until robot answers (may need up to ~9 s after port reset).
+        status_queue.put("CONNECTING")
+        deadline = time.monotonic() + 12.0
+        identity = None
+        while time.monotonic() < deadline and not stop_event.is_set():
+            try:
+                identity = nezha.connect()
+                break
+            except Exception:
+                time.sleep(0.4)
+
+        if identity is None or stop_event.is_set():
+            status_queue.put("FAILED")
+            return
+
+        # Widen the firmware S-watchdog to 10 s. The matplotlib render loop and
+        # this worker share the GIL; the GUI can hold it for a couple seconds at
+        # a time, slipping the keepalive past a shorter watchdog and tripping a
+        # spurious safety_stop (the chart freezes). A 10 s firmware timeout with
+        # frequent (~300 ms) host keepalives is robust to those GUI stalls.
+        try:
+            proto.send("SET sTimeout=10000", 300)
+        except Exception:
+            pass
+
+        status_queue.put(f"RUNNING — {identity.get('name', '?')}")
+        speeds = [speed, speed]
+
+        # period_ms=100 (10 Hz) keeps serial load light. At 40 ms, a GUI stall
+        # that stops draining serial overflows the firmware's 255-byte TX buffer
+        # and hangs it. 10 Hz is plenty for a live chart.
+        # watchdog_ms=1000 → host keepalive every ~300 ms; combined with the 10 s
+        # firmware watchdog set above, survives multi-second GUI/GIL stalls.
+        for resp in nezha.stream_drive(speeds, period_ms=100, watchdog_ms=1000):
             if stop_event.is_set():
                 break
             if resp.tag == "TLM":
                 tlm = parse_tlm(resp.raw)
                 if tlm and tlm.vel is not None:
-                    vL, vR = tlm.vel
-                    data_queue.put((time.monotonic(), vL, vR))
+                    data_queue.put((time.monotonic(), tlm.vel[0], tlm.vel[1]))
+
+    except OSError as exc:
+        if exc.errno == 6:   # Device not configured — robot power-cycled
+            status_queue.put("DISCONNECTED — power cycle detected, press SPACE to reconnect")
+        else:
+            status_queue.put(f"ERROR: {exc}")
     except Exception as exc:
-        print(f"\n  stream error: {exc}", file=sys.stderr)
+        status_queue.put(f"ERROR: {exc}")
     finally:
-        try:
-            proto.stop()
-            proto.stream(0)
-        except Exception:
-            pass
-        try:
-            conn.disconnect()
-        except Exception:
-            pass
-        stop_event.set()
+        status_queue.put("STOPPED")
+        if conn is not None:
+            try:
+                # Best-effort stop before closing.
+                from robot_radio.robot.protocol import NezhaProtocol
+                proto = NezhaProtocol(conn)
+                proto.stop()
+                proto.stream(0)
+            except Exception:
+                pass
+            try:
+                conn.disconnect()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
-# Main — matplotlib animation
+# Main — matplotlib window + spacebar connection control
 # ---------------------------------------------------------------------------
 
 def main() -> int:
     args = _parse_args()
 
-    # Resolve port.
     if args.port is None:
         from robot_radio.io.serial_conn import list_serial_ports
         ports = list_serial_ports()
         if not ports:
-            print("  ERROR: no USB modem serial ports found.")
+            print("ERROR: no USB modem serial ports found.")
             return 2
         port = ports[0]
     else:
         port = args.port
-    print(f"  port: {port}")
-    print(f"  speed: {args.speed} mm/s   window: {args.window} s")
+    print(f"  port: {port}   speed: {args.speed} mm/s   window: {args.window} s")
+    print("  Press SPACE in the plot window to connect/disconnect.")
 
     import matplotlib
-    matplotlib.use("TkAgg")          # works headless-safe on macOS + Linux
+    import platform
+    # TkAgg crashes on macOS when daemon threads + numpy interact during teardown.
+    # MacOSX (AppKit) backend is stable on macOS; TkAgg is fine on Linux.
+    if platform.system() == "Darwin":
+        matplotlib.use("MacOSX")
+    else:
+        matplotlib.use("TkAgg")
     import matplotlib.pyplot as plt
-    import matplotlib.animation as animation
+    import matplotlib.gridspec as gridspec
     import numpy as np
 
     plt.style.use("dark_background")
 
     window_s = args.window
-    maxlen = int(window_s * 50)      # 50 samples/s headroom
+    maxlen   = int(window_s * 50)
     cmd_speed = args.speed
 
-    # Rolling buffers: absolute monotonic timestamps + velocities.
-    times_buf:  "collections.deque[float]" = collections.deque(maxlen=maxlen)
-    vL_buf:     "collections.deque[int]"   = collections.deque(maxlen=maxlen)
-    vR_buf:     "collections.deque[int]"   = collections.deque(maxlen=maxlen)
+    times_buf: "collections.deque[float]" = collections.deque(maxlen=maxlen)
+    vL_buf:    "collections.deque[int]"   = collections.deque(maxlen=maxlen)
+    vR_buf:    "collections.deque[int]"   = collections.deque(maxlen=maxlen)
 
-    data_queue: "queue.Queue[tuple[float, int, int]]" = queue.Queue()
-    stop_event = threading.Event()
-    proto_holder: list = []
+    data_queue:   "queue.Queue[tuple[float,int,int]]" = queue.Queue()
+    status_queue: "queue.Queue[str]"                  = queue.Queue()
 
-    worker = threading.Thread(
-        target=_stream_worker,
-        args=(port, args.speed, data_queue, stop_event, proto_holder),
-        daemon=True,
-    )
-    worker.start()
+    # Worker state — replaced on each SPACE-start.
+    worker_state = {"thread": None, "stop": None}
 
-    # ------------------------------------------------------------------
-    # Figure layout: 3 stacked panels, portrait
-    # ------------------------------------------------------------------
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(7, 9))
-    fig.suptitle("Robot wheel velocity", color="white", fontsize=12)
-    fig.tight_layout(pad=2.5)
+    # ---- figure ----
+    fig = plt.figure(figsize=(12, 7))
+    title_text = fig.suptitle("Robot wheel velocity  [SPACE = connect]",
+                               color="white", fontsize=12)
+    gs  = gridspec.GridSpec(2, 2, figure=fig, width_ratios=[1, 1.2],
+                            hspace=0.45, wspace=0.35)
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax2 = fig.add_subplot(gs[1, 0])
+    ax3 = fig.add_subplot(gs[:, 1])
 
-    # Strip chart common styling
     for ax, label in ((ax1, "Left wheel velocity (mm/s)"),
                       (ax2, "Right wheel velocity (mm/s)")):
         ax.set_title(label, fontsize=10)
@@ -158,7 +188,6 @@ def main() -> int:
         ax.set_ylim(-350, 350)
         ax.grid(True, alpha=0.3)
 
-    # Command speed reference lines (dashed)
     ax1.axhline(cmd_speed, color="yellow", linestyle="--", linewidth=1.0,
                 alpha=0.7, label=f"cmd={cmd_speed}")
     ax2.axhline(cmd_speed, color="yellow", linestyle="--", linewidth=1.0,
@@ -166,11 +195,9 @@ def main() -> int:
     ax1.legend(fontsize=7, loc="upper right")
     ax2.legend(fontsize=7, loc="upper right")
 
-    # Velocity line artists
     (line_vL,) = ax1.plot([], [], color="deepskyblue", linewidth=1.2)
-    (line_vR,) = ax2.plot([], [], color="tomato", linewidth=1.2)
+    (line_vR,) = ax2.plot([], [], color="tomato",      linewidth=1.2)
 
-    # Phase plot (ax3)
     ax3.set_title("Phase plot: vR vs vL (mm/s)", fontsize=10)
     ax3.set_xlabel("vL (mm/s)", fontsize=8)
     ax3.set_ylabel("vR (mm/s)", fontsize=8)
@@ -178,23 +205,55 @@ def main() -> int:
     ax3.set_ylim(-350, 350)
     ax3.set_aspect("equal")
     ax3.grid(True, alpha=0.3)
-
-    # Reference line: slope = cmd_vR / cmd_vL = 1.0 for equal speeds
-    ref_x = np.array([-350, 350])
-    ref_slope = 1.0  # cmd_vR / cmd_vL
-    ax3.plot(ref_x, ref_slope * ref_x, color="dodgerblue", linestyle="--",
+    ax3.plot([-350, 350], [-350, 350], color="dodgerblue", linestyle="--",
              linewidth=1.0, alpha=0.8, label="vR=vL (reference)")
     ax3.legend(fontsize=7, loc="upper left")
 
-    # Phase trace and current-point artists
-    (phase_trace,) = ax3.plot([], [], color="grey", linewidth=0.8, alpha=0.6)
+    (phase_trace,) = ax3.plot([], [], color="grey",  linewidth=0.8, alpha=0.6)
     (phase_dot,)   = ax3.plot([], [], "o", color="red", markersize=8)
 
-    # ------------------------------------------------------------------
-    # Animation update
-    # ------------------------------------------------------------------
+    # ---- spacebar handler ----
+    def _on_key(event):
+        if event.key != " ":
+            return
+        th = worker_state["thread"]
+        if th is not None and th.is_alive():
+            # Disconnect: stop the running worker.
+            worker_state["stop"].set()
+            title_text.set_text("Robot wheel velocity  [SPACE = connect]")
+        else:
+            # Connect: fresh stop event + fresh thread.
+            stop_ev = threading.Event()
+            worker_state["stop"]   = stop_ev
+            worker_state["thread"] = threading.Thread(
+                target=_stream_worker,
+                args=(port, args.speed, data_queue, stop_ev, status_queue),
+                daemon=True,
+            )
+            worker_state["thread"].start()
+            title_text.set_text("Robot wheel velocity  [connecting…]")
+        fig.canvas.draw_idle()
+
+    fig.canvas.mpl_connect("key_press_event", _on_key)
+
+    # ---- animation update ----
     def _update(_frame):
-        # Drain queue into rolling buffers.
+        # Consume status messages from worker.
+        while not status_queue.empty():
+            msg = status_queue.get_nowait()
+            if msg.startswith("RUNNING"):
+                title_text.set_text(
+                    f"Robot wheel velocity  ▶ {msg}  [SPACE = disconnect]")
+            elif msg.startswith("DISCONNECTED"):
+                title_text.set_text(
+                    f"Robot wheel velocity  ⚡ {msg}")
+            elif msg in ("STOPPED", "FAILED", "CONNECTING"):
+                pass
+            elif msg.startswith("ERROR"):
+                title_text.set_text(
+                    f"Robot wheel velocity  ⚠ {msg}  [SPACE = retry]")
+
+        # Drain data queue into buffers.
         try:
             while True:
                 t, vl, vr = data_queue.get_nowait()
@@ -207,45 +266,36 @@ def main() -> int:
         if not times_buf:
             return line_vL, line_vR, phase_trace, phase_dot
 
-        # Build relative time axis (0 = oldest in window, window_s = now).
-        t_arr = np.array(times_buf)
+        t_arr  = np.array(times_buf)
         vl_arr = np.array(vL_buf)
         vr_arr = np.array(vR_buf)
-
-        now = t_arr[-1]
-        rel = t_arr - (now - window_s)  # oldest anchor at 0
-        rel = np.clip(rel, 0, window_s)
+        now    = t_arr[-1]
+        rel    = np.clip(t_arr - (now - window_s), 0, window_s)
 
         line_vL.set_data(rel, vl_arr)
         line_vR.set_data(rel, vr_arr)
-
-        # Phase plot
         phase_trace.set_data(vl_arr, vr_arr)
         phase_dot.set_data([vl_arr[-1]], [vr_arr[-1]])
 
         return line_vL, line_vR, phase_trace, phase_dot
 
-    anim = animation.FuncAnimation(
-        fig, _update,
-        interval=33,
-        blit=True,
-        cache_frame_data=False,
-    )
+    plt.ion()
+    plt.show(block=False)
 
     try:
-        plt.show()
+        while plt.fignum_exists(fig.number):
+            _update(None)
+            fig.canvas.draw_idle()
+            fig.canvas.flush_events()
+            time.sleep(0.033)
     except KeyboardInterrupt:
         pass
     finally:
-        stop_event.set()
-        # Attempt graceful motor stop via proto if available.
-        if proto_holder:
-            try:
-                proto_holder[0].stream(0)
-                proto_holder[0].stop()
-            except Exception:
-                pass
-        worker.join(timeout=2.0)
+        if worker_state["stop"] is not None:
+            worker_state["stop"].set()
+        th = worker_state["thread"]
+        if th is not None:
+            th.join(timeout=2.0)
         plt.close("all")
 
     return 0

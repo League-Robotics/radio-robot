@@ -340,23 +340,30 @@ void Robot::controlCollectSplitPhase(uint32_t now_ms, int pendingWheel)
     // On pendingWheel == 0 (first iteration): no read; encoders remain
     // 0-initialised and refreshedWheel=0 suppresses velocity update.
 
-    if (pendingWheel == 1) {
-        // Refresh left wheel using the full atomic read (pre-delay + write +
-        // post-delay + read), matching the sprint 013 readEncoderRaw() timing.
-        _state.inputs.encLMm = _motorL.readEncoderMmFAtomic(_config);
-    } else if (pendingWheel == 2) {
-        // Refresh right wheel.
-        _state.inputs.encRMm = _motorR.readEncoderMmFAtomic(_config);
+    // DEBUG (sprint 014 — encoder-wedge isolation): only read the encoder while
+    // actively driving. Reading the Nezha encoder at ~100 Hz while the motor is
+    // idle/stopped wedges the I2C reads (they freeze at a constant). Reads while
+    // driving are fine (proven: 8 s continuous drive counts cleanly). When idle
+    // we skip the read entirely and pass refreshedWheel=0 (no velocity update).
+    bool driving = (_state.commands.tgtLMms != 0.0f ||
+                    _state.commands.tgtRMms != 0.0f);
+    int refreshed = 0;
+    if (driving) {
+        if (pendingWheel == 1) {
+            _state.inputs.encLMm = _motorL.readEncoderMmFAtomic(_config);
+            refreshed = 1;
+        } else if (pendingWheel == 2) {
+            _state.inputs.encRMm = _motorR.readEncoderMmFAtomic(_config);
+            refreshed = 2;
+        }
     }
-    // pendingWheel == 0: first iteration — skip; encoder fields remain
-    // 0-initialised from defaultInputs(). PID runs with ZOH velocity = 0.
 
     _lastControlMs = now_ms;
 
-    // Pass the pendingWheel that was just READ as refreshedWheel so that
-    // MotorController updates that wheel's per-wheel velocity using the correct
-    // elapsed time since the last collect for that wheel.
-    _mc.controlTick(_state.inputs, _state.commands, now_ms, pendingWheel);
+    // refreshed = the wheel just READ (or 0 when idle/first iter) so
+    // MotorController updates that wheel's per-wheel velocity with the correct
+    // elapsed time since its last collect.
+    _mc.controlTick(_state.inputs, _state.commands, now_ms, refreshed);
 }
 
 // ---------------------------------------------------------------------------

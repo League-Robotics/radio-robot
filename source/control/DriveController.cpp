@@ -309,6 +309,9 @@ void DriveController::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
     (void)cmds;
 
     // S-mode watchdog — emit EVT safety_stop when keepalive times out.
+    // (Re-enabled after the encoder-wedge fix: Motor::setSpeed is now
+    // write-on-change, so fullStop()'s 0x5F stop is sent once instead of being
+    // spammed every tick — which was what wedged the encoder.)
     if (_mode == DriveMode::STREAMING) {
         if ((now_ms - _lastSMs) > (uint32_t)_cfg.sTimeoutMs) {
             fullStop(nullptr, nullptr);

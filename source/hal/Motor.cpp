@@ -37,15 +37,28 @@ void Motor::setSpeed(int8_t pct)
     if (pct >  100) pct =  100;
     if (pct < -100) pct = -100;
 
+    // Write-on-change: skip the I2C write if the command is unchanged. The
+    // control loop calls setSpeed() every tick (~100 Hz); writing the Nezha
+    // that fast wedges its encoder reads (the read freezes at a constant while
+    // the wheels keep spinning). Writing only on a real change keeps the
+    // controller healthy. See docs/knowledge encoder-wedge note.
+    if (pct == _lastWrittenPct) {
+        return;
+    }
+    _lastWrittenPct = pct;
+
     // Apply fwdSign: positive pct = logical forward; fwdSign maps that to
     // the chip's CW/CCW convention.  For the right wheel, fwdSign = -1 so
     // that a positive command results in CCW chip rotation (physical forward).
     int16_t effective = (int16_t)_fwdSign * (int16_t)pct;
 
     if (effective == 0) {
-        // Zero speed: send the explicit stop command.
-        uint8_t stopBuf[8] = {0xFF, 0xF9, _motorId, 0x00, 0x5F, 0x00, 0xF5, 0x00};
-        _i2c.write((ADDR << 1), (uint8_t*)stopBuf, 8, false);
+        // Zero speed: COAST via the 0x60 move command with speed 0 — NOT the
+        // 0x5F "shutdown" command. 0x5F shuts the Nezha controller down and
+        // wedges subsequent encoder reads (they freeze at a constant). The old
+        // firmware used 0x60-speed-0 to coast and reserved 0x5F for a final
+        // program-end stop. See docs/knowledge encoder-wedge note.
+        writeMotorCmd(DIR_CW, 0);
         _lastDir = 0;
     } else {
         uint8_t dir   = (effective > 0) ? DIR_CW : DIR_CCW;
@@ -113,7 +126,7 @@ int32_t Motor::readEncoderAtomic() const
     // a competing I2C transaction during the window.
     //
     // Cost: ~8 ms per call — acceptable for one-off operations.
-    static constexpr uint32_t kDelayUs = 4000;  // 4 ms each phase
+    static constexpr uint32_t kDelayUs = 4000;  // 4 ms each phase (vendor requirement)
 
     // Pre-write bus-idle delay.
     {

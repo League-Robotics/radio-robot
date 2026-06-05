@@ -1,6 +1,14 @@
 #include "MotorController.h"
 #include <math.h>
 
+// DEBUG (sprint 014 — encoder-wedge isolation): when 1, controlTick() bypasses
+// the velocity PID and drives the wheels OPEN-LOOP at a fixed PWM proportional
+// to the commanded velocity (feedforward only). The motor command does NOT
+// react to measured velocity, so an encoder reading 0 cannot make the PID slam
+// the PWM. Isolates whether PID feedback perpetuates the wedge.
+// Set back to 0 to restore closed-loop PID.
+#define PID_BYPASS 0
+
 MotorController::MotorController(Motor& left, Motor& right, const RobotConfig& cal)
     : _motorL(left), _motorR(right), _cal(cal),
       _vcL(cal.velKff, cal.velKp, cal.velKi, 60.0f, cal.minWheelMms),
@@ -38,10 +46,10 @@ void MotorController::startDriveClean(float leftMms, float rightMms)
     float fasterAbs = _fasterIsRight ? fabsf(rightMms) : fabsf(leftMms);
     float slowerAbs = _fasterIsRight ? fabsf(leftMms)  : fabsf(rightMms);
     _cmdRatio = (slowerAbs > 0.0f) ? (fasterAbs / slowerAbs) : 1.0f;
-    // Use atomic reads (request → 4 ms wait → collect) so the snapshots are
-    // valid when called outside the split-phase control tick.
-    _cmdEncStartL = _motorL.readEncoderMmFAtomic(_cal);
-    _cmdEncStartR = _motorR.readEncoderMmFAtomic(_cal);
+    // Use the control loop's cached encoder values (not a fresh atomic read,
+    // which wedges the Nezha encoder — see encoder-wedge note).
+    _cmdEncStartL = _prevEncL;
+    _cmdEncStartR = _prevEncR;
     _pid.reset();
     _vcL.reset();
     _vcR.reset();
@@ -59,9 +67,12 @@ void MotorController::startDrive(float leftMms, float rightMms)
     float newSlowerAbs = newFasterIsRight ? fabsf(leftMms)  : fabsf(rightMms);
     float newRatio = (newSlowerAbs > 0.0f) ? (newFasterAbs / newSlowerAbs) : 1.0f;
 
-    // Use atomic reads for valid position snapshots outside the control tick.
-    float curL = _motorL.readEncoderMmFAtomic(_cal);
-    float curR = _motorR.readEncoderMmFAtomic(_cal);
+    // Use the control loop's cached encoder values (updated every tick) — NOT a
+    // fresh atomic read. Firing an atomic 0x46 read from this comms-path call,
+    // butted against the control task's own reads / the 0x5F stop, wedges the
+    // Nezha encoder. See docs/knowledge encoder-wedge note.
+    float curL = _prevEncL;
+    float curR = _prevEncR;
     float curFaster   = newFasterIsRight ? curR : curL;
     float curSlower   = newFasterIsRight ? curL : curR;
     float startFaster = newFasterIsRight ? _cmdEncStartR : _cmdEncStartL;
@@ -95,9 +106,10 @@ void MotorController::stop()
     _pid.reset();
     _vcL.reset();
     _vcR.reset();
-    // Use atomic reads for valid position snapshots outside the control tick.
-    _cmdEncStartL = _motorL.readEncoderMmFAtomic(_cal);
-    _cmdEncStartR = _motorR.readEncoderMmFAtomic(_cal);
+    // Use the control loop's cached encoder values (not a fresh atomic read,
+    // which — butted against the 0x5F stop below — wedges the Nezha encoder).
+    _cmdEncStartL = _prevEncL;
+    _cmdEncStartR = _prevEncR;
     _motorL.setSpeed(0);
     _motorR.setSpeed(0);
 }
@@ -167,6 +179,28 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
         _motorR.setSpeed(0);
         return;
     }
+
+#if PID_BYPASS
+    // DEBUG: open-loop feedforward — PWM% = target_mm_s * velKff, clamped ±100.
+    // setSpeed() itself is write-on-change (Motor level), so just call it every
+    // tick unconditionally — no local change-tracking here (a stale static was
+    // skipping the restart write after a stop).
+    {
+        float ffL = cmds.tgtLMms * _cal.velKff;
+        float ffR = cmds.tgtRMms * _cal.velKff;
+        if (ffL >  100.0f) ffL =  100.0f;
+        if (ffL < -100.0f) ffL = -100.0f;
+        if (ffR >  100.0f) ffR =  100.0f;
+        if (ffR < -100.0f) ffR = -100.0f;
+        int8_t pL = (int8_t)roundf(ffL);
+        int8_t pR = (int8_t)roundf(ffR);
+        cmds.pwmL = pL;
+        cmds.pwmR = pR;
+        _motorL.setSpeed(pL);
+        _motorR.setSpeed(pR);
+        return;
+    }
+#endif
 
     // PID integrator dt: use the configured control period.
     // The velocity update above already uses the true per-wheel elapsed time for
