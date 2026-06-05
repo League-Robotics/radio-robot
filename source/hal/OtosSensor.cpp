@@ -11,12 +11,17 @@ OtosSensor::OtosSensor(MicroBitI2C& i2c)
 
 bool OtosSensor::begin()
 {
+    // Detect via product-ID read.
     uint8_t id = readReg8(REG_PRODUCT_ID);
-    return id == EXPECTED_PRODUCT_ID;
+    _initialized = (id == EXPECTED_PRODUCT_ID);
+    // init() is gated on is_initialized(), so it only writes when detected.
+    init();
+    return _initialized;
 }
 
 void OtosSensor::init()
 {
+    if (!is_initialized()) return;
     // Enable all signal processing: LUT | Accel | Rotation | Variance = 0x0F.
     writeReg8(REG_SIGNAL_PROCESS_CFG, 0x0F);
     // Reset Kalman tracking (bit 0 = 1).
@@ -25,46 +30,55 @@ void OtosSensor::init()
 
 void OtosSensor::calibrateImu(uint8_t samples)
 {
+    if (!is_initialized()) return;
     writeReg8(REG_IMU_CALIBRATION, samples);
 }
 
 void OtosSensor::resetTracking()
 {
+    if (!is_initialized()) return;
     writeReg8(REG_RESET, 0x01);
 }
 
 void OtosSensor::getPositionRaw(int16_t& x, int16_t& y, int16_t& h) const
 {
+    if (!is_initialized()) { x = 0; y = 0; h = 0; return; }
     readXYH(REG_POSITION_XL, x, y, h);
 }
 
 void OtosSensor::setPositionRaw(int16_t x, int16_t y, int16_t h)
 {
+    if (!is_initialized()) return;
     writeXYH(REG_POSITION_XL, x, y, h);
 }
 
 void OtosSensor::getVelocityRaw(int16_t& x, int16_t& y, int16_t& h) const
 {
+    if (!is_initialized()) { x = 0; y = 0; h = 0; return; }
     readXYH(REG_VELOCITY_XL, x, y, h);
 }
 
 int8_t OtosSensor::getLinearScalar() const
 {
+    if (!is_initialized()) return 0;
     return (int8_t)readReg8(REG_LINEAR_SCALAR);
 }
 
 void OtosSensor::setLinearScalar(int8_t val)
 {
+    if (!is_initialized()) return;
     writeReg8(REG_LINEAR_SCALAR, (uint8_t)val);
 }
 
 int8_t OtosSensor::getAngularScalar() const
 {
+    if (!is_initialized()) return 0;
     return (int8_t)readReg8(REG_ANGULAR_SCALAR);
 }
 
 void OtosSensor::setAngularScalar(int8_t val)
 {
+    if (!is_initialized()) return;
     writeReg8(REG_ANGULAR_SCALAR, (uint8_t)val);
 }
 
@@ -81,6 +95,7 @@ void OtosSensor::writeReg8(uint8_t reg, uint8_t val)
 uint8_t OtosSensor::readReg8(uint8_t reg) const
 {
     uint8_t result = 0;
+    // repeated=true → no STOP after the register write (repeated-start read).
     _i2c.write((ADDR << 1), (uint8_t*)&reg, 1, false);
     _i2c.read((ADDR << 1), (uint8_t*)&result, 1, false);
     return result;
@@ -89,6 +104,7 @@ uint8_t OtosSensor::readReg8(uint8_t reg) const
 void OtosSensor::readXYH(uint8_t startReg, int16_t& x, int16_t& y, int16_t& h) const
 {
     uint8_t raw[6] = {0};
+    // repeated=true → no STOP after the register write (repeated-start read).
     _i2c.write((ADDR << 1), (uint8_t*)&startReg, 1, false);
     _i2c.read((ADDR << 1), (uint8_t*)raw, 6, false);
     x = (int16_t)(raw[0] | ((uint16_t)raw[1] << 8));

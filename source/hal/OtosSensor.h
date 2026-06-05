@@ -1,5 +1,6 @@
 #pragma once
 #include "MicroBit.h"
+#include "Sensor.h"
 #include <stdint.h>
 
 /**
@@ -19,14 +20,18 @@
  *   0x20  POSITION_XL     (6 bytes, same format)
  *   0x26  VELOCITY_XL     (6 bytes)
  */
-class OtosSensor {
+class OtosSensor : public Sensor {
 public:
     explicit OtosSensor(MicroBitI2C& i2c);
 
-    // Returns false if PRODUCT_ID != 0x5F (sensor not connected or wrong device).
-    bool begin();
+    // Detect (read PRODUCT_ID) and, if found, initialize signal processing +
+    // reset Kalman tracking.  Sets _initialized = (id == EXPECTED_PRODUCT_ID).
+    // Returns _initialized.
+    bool begin() override;
 
-    // Enable all signal processing (0x0F) and reset Kalman tracking.
+    // Re-run device init: enable all signal processing (0x0F) and reset Kalman
+    // tracking.  Called by begin() after detection; also exposed for the OI
+    // command.  No-op if not initialized.
     void init();
 
     // Write N to REG_IMU_CALIBRATION. Calibration runs asynchronously.

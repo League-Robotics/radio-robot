@@ -3,7 +3,6 @@
 ColorSensor::ColorSensor(MicroBitI2C& i2c)
     : _i2c(i2c)
     , _isAlt(false)
-    , _inited(false)
 {
 }
 
@@ -30,7 +29,7 @@ bool ColorSensor::begin()
     }
     if (altFound) {
         _isAlt = true;
-        _inited = true;
+        _initialized = true;
         return true;
     }
 
@@ -47,13 +46,13 @@ bool ColorSensor::begin()
 
     _isAlt = false;
     initApds();
-    _inited = true;
+    _initialized = true;
     return true;
 }
 
 bool ColorSensor::pollRGBC(uint16_t& r, uint16_t& g, uint16_t& b, uint16_t& c)
 {
-    if (!_inited) return false;
+    if (!is_initialized()) return false;
     if (_isAlt) {
         // Alt chip: check if data ready by reading clear channel; non-zero = ready.
         // Use two single-byte reads per 16-bit value, mirroring upstream protocol.
@@ -76,7 +75,7 @@ bool ColorSensor::pollRGBC(uint16_t& r, uint16_t& g, uint16_t& b, uint16_t& c)
 
 bool ColorSensor::readRGBC(uint16_t& r, uint16_t& g, uint16_t& b, uint16_t& c)
 {
-    if (!_inited) return false;
+    if (!is_initialized()) return false;
 
     if (_isAlt) {
         // Alt chip: blocking 100 ms integration delay then read.

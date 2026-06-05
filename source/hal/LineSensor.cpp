@@ -16,7 +16,20 @@ LineSensor::LineSensor(MicroBitI2C& i2c)
 // Public interface
 // ---------------------------------------------------------------------------
 
+bool LineSensor::begin()
+{
+    // Probe: a successful 4-channel raw read means the device is present.
+    _initialized = readRaw(nullptr);
+    return _initialized;
+}
+
 bool LineSensor::readValues(uint16_t out[4]) const
+{
+    if (!is_initialized()) return false;
+    return readRaw(out);
+}
+
+bool LineSensor::readRaw(uint16_t out[4]) const
 {
     for (uint8_t ch = 0; ch < 4; ch++) {
         // Write the channel index byte.

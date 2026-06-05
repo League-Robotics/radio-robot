@@ -126,7 +126,9 @@ LoopScheduler::LoopScheduler(Robot& robot, CommandProcessor& cmd, MicroBit& uBit
       _uBit(uBit),
       _cursor(0),
       _pendingWheel(0),
-      _controlDeadline(0)
+      _controlDeadline(0),
+      _controlRuns(0),
+      _controlTotalUs(0)
 {
     const RobotConfig& cfg = robot.config();
 
@@ -217,6 +219,22 @@ LoopScheduler::LoopScheduler(Robot& robot, CommandProcessor& cmd, MicroBit& uBit
         defaultDue,
         runTelemetryEmit
     };
+
+    // Defaults for the run-control flags + timing stats on every task.
+    // (The 6-field aggregate initialisers above leave these zero-initialised;
+    // set the intended defaults here: armed, re-armed every pass, not one-shot.)
+    for (int i = 0; i < kNumTasks; ++i) {
+        _table[i].run         = true;
+        _table[i].run_always  = true;
+        _table[i].run_once    = false;
+        _table[i].runs        = 0;
+        _table[i].totalTimeUs = 0;
+    }
+
+    // All tasks default to run=true.  Disabling a sensor is done by commenting
+    // its begin() line in the Robot constructor (its reads then skip via
+    // Sensor::is_initialized()); the "DBG LOOP <x> 0/1" command still toggles
+    // tasks at runtime.
 }
 
 // ---------------------------------------------------------------------------
@@ -277,7 +295,7 @@ void LoopScheduler::controlFireRequest()
 }
 
 // ---------------------------------------------------------------------------
-// run — the cooperative main loop. Never returns.
+// run_tasks — the production cooperative main loop. Never returns.
 //
 // Iteration structure (fix[014]: atomic per-tick encoder read):
 //
@@ -309,7 +327,7 @@ void LoopScheduler::controlFireRequest()
 //      at a 10 ms control period.  Raise controlPeriodMs if the sweep needs room.
 // ---------------------------------------------------------------------------
 
-void LoopScheduler::run()
+void LoopScheduler::run_tasks()
 {
     // Seed controlDeadline so the first iteration's sleep fires promptly.
     _controlDeadline = _uBit.systemTime();
@@ -360,7 +378,7 @@ void LoopScheduler::run()
             }
 
             // Run the task.
-            t.run(*this, now);
+            t.runFn(*this, now);
             t.lastRunMs = now;
 
             // Post-task deadline re-check: bail if control is due.
@@ -382,6 +400,107 @@ void LoopScheduler::run()
         // ------------------------------------------------------------------
         // 4. IDLE SLEEP until the control deadline.
         // ------------------------------------------------------------------
+        now = _uBit.systemTime();
+        if (now < _controlDeadline) {
+            _uBit.sleep(_controlDeadline - now);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// _runStep — run one task with the run-flag guard + per-task timing.
+//
+// Skips entirely if t.run == false.  Otherwise times t.runFn with the
+// microsecond timer, accumulates t.runs / t.totalTimeUs (for averaging), and
+// — if the task is one-shot (run_once && !run_always) — disarms it (run=false)
+// so it won't run again.
+// ---------------------------------------------------------------------------
+
+void LoopScheduler::_runStep(Task& t, uint32_t now)
+{
+    if (!t.run) {
+        return;
+    }
+    uint64_t t0 = system_timer_current_time_us();
+    t.runFn(*this, now);
+    uint64_t t1 = system_timer_current_time_us();
+
+    t.totalTimeUs += (uint32_t)(t1 - t0);
+    t.runs++;
+    t.lastRunMs = now;
+
+    if (t.run_once && !t.run_always) {
+        t.run = false;   // one-shot: disarm after a single run
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Debug/testing task control (DBG LOOP command).
+// ---------------------------------------------------------------------------
+
+bool LoopScheduler::setTaskRun(int idx, bool run)
+{
+    if (idx < 0 || idx >= kNumTasks) {
+        return false;
+    }
+    _table[idx].run = run;
+    return true;
+}
+
+const Task* LoopScheduler::taskAt(int idx) const
+{
+    if (idx < 0 || idx >= kNumTasks) {
+        return nullptr;
+    }
+    return &_table[idx];
+}
+
+// ---------------------------------------------------------------------------
+// run_all — explicit testing loop. Never returns.
+//
+// Unlike run_tasks(), this does NOT iterate the table or apply budget/due
+// gating.  Every task is called EXPLICITLY, in a visible fixed order, each
+// guarded by its Task::run flag and individually timed.  This makes it trivial
+// to reorder steps, toggle them (set t.run / t.run_always / t.run_once), and
+// read off per-task averages (totalTimeUs / runs).
+//
+// The control task (split-phase encoder collect → PID → PWM) is special (not a
+// Task entry); it always runs first and is timed into _controlRuns/_controlTotalUs.
+// ---------------------------------------------------------------------------
+
+void LoopScheduler::run_all()
+{
+    _controlDeadline = _uBit.systemTime();
+
+    while (true) {
+        uint32_t now = _uBit.systemTime();
+
+        // --- CONTROL TASK (always first; the metronome) — timed -------------
+        {
+            uint64_t c0 = system_timer_current_time_us();
+            controlCollect(now);
+            uint64_t c1 = system_timer_current_time_us();
+            _controlTotalUs += (uint32_t)(c1 - c0);
+            _controlRuns++;
+        }
+        now = _uBit.systemTime();
+        _controlDeadline = now + (uint32_t)_robot.config().controlPeriodMs;
+
+        // --- LOW-PRIORITY TASKS — explicit, in order, each guarded + timed --
+        // Reorder / comment-out / toggle (_table[i].run = false) freely.
+        _runStep(_table[0], now);   // comms-in
+        _runStep(_table[1], now);   // drive-advance
+        _runStep(_table[2], now);   // odometry-predict
+        _runStep(_table[3], now);   // otos-correct
+        _runStep(_table[4], now);   // line-read
+        _runStep(_table[5], now);   // color-read
+        _runStep(_table[6], now);   // ports-read
+        _runStep(_table[7], now);   // telemetry-emit
+
+        // --- advance L/R wheel alternation for next tick's collect ----------
+        _advancePendingWheel();
+
+        // --- idle sleep until the control deadline --------------------------
         now = _uBit.systemTime();
         if (now < _controlDeadline) {
             _uBit.sleep(_controlDeadline - now);

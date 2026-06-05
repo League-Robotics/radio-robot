@@ -1,5 +1,6 @@
 #pragma once
 #include "MicroBit.h"
+#include "Sensor.h"
 #include <stdint.h>
 
 /**
@@ -11,12 +12,13 @@
  *
  * begin() probes 0x43 first; if the probe fails, initialises APDS9960 at 0x39.
  */
-class ColorSensor {
+class ColorSensor : public Sensor {
 public:
     explicit ColorSensor(MicroBitI2C& i2c);
 
     // Auto-detect chip variant. Returns false if neither 0x43 nor 0x39 responds.
-    bool begin();
+    // Sets _initialized to the result.
+    bool begin() override;
 
     // Fills r, g, b, c with 16-bit raw counts. Blocks up to ~250 ms.
     bool readRGBC(uint16_t& r, uint16_t& g, uint16_t& b, uint16_t& c);
@@ -29,7 +31,6 @@ public:
 private:
     MicroBitI2C& _i2c;
     bool _isAlt;
-    bool _inited;
 
     static constexpr uint8_t ADDR_APDS = 0x39;
     static constexpr uint8_t ADDR_ALT  = 0x43;

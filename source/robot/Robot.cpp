@@ -5,40 +5,6 @@
 #include <cstdio>
 #include <cmath>
 
-// ---------------------------------------------------------------------------
-// DIAGNOSTIC TOGGLE (Sprint 014) — OTOS <-> color I2C bus-conflict test.
-//
-// When set to 1, the firmware NEVER drives any I2C traffic to the OTOS:
-// boot detection (OtosSensor::begin, which reads REG_PRODUCT_ID at 0x17) is
-// skipped and _otosPresent is forced false, so init/setLinearScalar/
-// setAngularScalar never run; and Robot::otosCorrect() early-returns before
-// any I2C transaction (getPositionRaw at 0x17).  The OTOS can stay physically
-// on the bus while remaining completely untouched by firmware, so we can
-// isolate whether our ACTIVE OTOS reads (vs a passive electrical conflict)
-// are what wedge the bus / break encoder reads when the color sensor (0x43)
-// and OTOS (0x17) are connected together.
-//
-// Leave color, line, encoders, motors, ports, etc. fully active.  Set back
-// to 0 to restore normal OTOS behaviour.
-// ---------------------------------------------------------------------------
-#define DISABLE_OTOS_SENSOR 1
-
-// DIAGNOSTIC TOGGLE (Sprint 014) — color <-> OTOS I2C bus-conflict test.
-//
-// When set to 1, the firmware NEVER drives any I2C traffic to the color
-// sensor: boot detection (ColorSensor::begin, which probes 0x43 then the
-// APDS 0x39 fallback) is skipped and _colorPresent is forced false, and the
-// runtime color-read poll early-returns before any I2C transaction.  The
-// color sensor can stay physically on the bus while remaining completely
-// untouched by firmware, so we can isolate whether ACTIVE color reads (vs a
-// passive electrical conflict) are what break encoder reads when the color
-// sensor (0x43) and OTOS (0x17) are connected together.
-//
-// Leave OTOS, line, encoders, ports, etc. fully active.  Set back to 0 to
-// restore normal color-sensor behaviour.
-// ---------------------------------------------------------------------------
-#define DISABLE_COLOR_SENSOR 1
-
 Robot::Robot(MicroBitI2C&    i2c,
              NRF52Serial&    serial,
              MicroBitRadio&  radio,
@@ -46,6 +12,7 @@ Robot::Robot(MicroBitI2C&    i2c,
              MessageBus&     messageBus,
              MicroBit&       uBit)
     : _uBit(uBit),
+      _i2c(i2c),
       _currentGripperAngle(0),
       _config(defaultRobotConfig()),
       _lastTlmMs(0),
@@ -54,11 +21,8 @@ Robot::Robot(MicroBitI2C&    i2c,
       _serial(serial),
       _radio(radio, messageBus),
       _otos(i2c),
-      _otosPresent(false),
       _line(i2c),
-      _linePresent(false),
       _color(i2c),
-      _colorPresent(false),
       _servo(io.P1),
       _gripperPresent(false),
       _portio(io),
@@ -75,15 +39,14 @@ Robot::Robot(MicroBitI2C&    i2c,
     _serial.begin();
     _radio.begin();
 
-    // Probe optional sensors; mark absent if hardware not connected.
-#if DISABLE_OTOS_SENSOR
-    // Diagnostic: skip OTOS detection entirely — no I2C probe/read of 0x17.
-    _otosPresent = false;
-#else
-    _otosPresent = _otos.begin();
-#endif
-    if (_otosPresent) {
-        _otos.init();
+    // Sensor initialization — comment out a line to disable that sensor.
+    // Each begin() detects + initializes its device and sets is_initialized();
+    // a disabled sensor's reads then skip via is_initialized() guards.
+    _otos.begin();
+    _line.begin();
+    _color.begin();
+
+    if (_otos.is_initialized()) {
         // OTOS correction is handled by Robot::otosCorrect() exclusively (014-005).
         // DriveController no longer holds the OtosSensor pointer.
 
@@ -100,13 +63,6 @@ Robot::Robot(MicroBitI2C&    i2c,
         _otos.setAngularScalar(scaleToInt8(_config.otosAngularScale));
     }
 
-    _linePresent  = _line.readValues(nullptr);  // probe: returns false on I2C error
-#if DISABLE_COLOR_SENSOR
-    // Diagnostic: skip color detection entirely — no I2C probe of 0x43/0x39.
-    _colorPresent = false;
-#else
-    _colorPresent = _color.begin();
-#endif
     _gripperPresent = true;  // servo always available on P1
 
     // Bind authoritative HardwareState into DriveController so getPoseFloat()
@@ -304,13 +260,7 @@ void Robot::driveAdvance(uint32_t now_ms)
 
 void Robot::otosCorrect(uint32_t now_ms)
 {
-#if DISABLE_OTOS_SENSOR
-    // Diagnostic: never issue OTOS I2C (getPositionRaw at 0x17) from the
-    // runtime correction task.
-    (void)now_ms;
-    return;
-#endif
-    if (!_otosPresent) return;
+    if (!_otos.is_initialized()) return;
 
     // Slow cadence gate: run correction at ~10 Hz (every kOtosSlowMs ms).
     // When called from a dedicated LoopScheduler slot (ticket 006), the
@@ -432,7 +382,7 @@ void Robot::controlCollectSplitPhase(uint32_t now_ms, int pendingWheel)
 
 void Robot::lineRead()
 {
-    if (!_linePresent) return;
+    if (!_line.is_initialized()) return;
     if (_line.readValues(_state.inputs.line)) {
         _state.inputs.lineVS.lastUpdMs = _uBit.systemTime();
         _state.inputs.lineVS.valid     = true;
@@ -448,11 +398,7 @@ void Robot::lineRead()
 
 void Robot::colorRead()
 {
-#if DISABLE_COLOR_SENSOR
-    // Diagnostic: never issue color-sensor I2C from the runtime poll task.
-    return;
-#endif
-    if (!_colorPresent) return;
+    if (!_color.is_initialized()) return;
     if (_color.pollRGBC(_state.inputs.colorR,
                         _state.inputs.colorG,
                         _state.inputs.colorB,
@@ -474,6 +420,37 @@ void Robot::portsRead()
     }
     _state.inputs.portsVS.lastUpdMs = _uBit.systemTime();
     _state.inputs.portsVS.valid     = true;
+}
+
+// ---------------------------------------------------------------------------
+// dbgI2C — DBG I2C diagnostic probe.
+//
+// Reads one byte from each device (write reg pointer, then read 1 byte) and
+// reports the CODAL return codes (0 = MICROBIT_OK) and the byte.  The motor
+// (0x10) is probed both first AND last: if reading OTOS (0x17) or color (0x43)
+// in between wedges the TWIM, the final motor read will error / return garbage,
+// pinpointing which read breaks the bus and whether it errors vs returns zeros.
+// ---------------------------------------------------------------------------
+void Robot::dbgI2C(ReplyFn fn, void* ctx)
+{
+    static const struct { const char* name; uint8_t addr; uint8_t reg; } kDevs[] = {
+        { "motor",  0x10, 0x00 },
+        { "line",   0x1A, 0x00 },
+        { "otos",   0x17, 0x00 },   // OTOS PRODUCT_ID (expect 0x5F)
+        { "color",  0x43, 0xA4 },
+        { "apds",   0x39, 0x92 },   // APDS9960 ID
+        { "motor2", 0x10, 0x00 },   // re-probe motor to see if it got wedged
+    };
+    char line[96];
+    for (unsigned i = 0; i < sizeof(kDevs) / sizeof(kDevs[0]); ++i) {
+        uint8_t reg = kDevs[i].reg;
+        uint8_t val = 0;
+        int wr = _i2c.write((kDevs[i].addr << 1), (uint8_t*)&reg, 1, false);
+        int rd = _i2c.read((kDevs[i].addr << 1), (uint8_t*)&val, 1, false);
+        snprintf(line, sizeof(line), "I2C %s 0x%02X wr=%d rd=%d b=0x%02X",
+                 kDevs[i].name, (unsigned)kDevs[i].addr, wr, rd, (unsigned)val);
+        fn(line, ctx);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -513,11 +490,11 @@ void Robot::telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx)
     }
 
     // ----- 4. Line from HardwareState snapshot --------------------------------
-    bool haveLine = _linePresent && _state.inputs.lineVS.valid &&
+    bool haveLine = _line.is_initialized() && _state.inputs.lineVS.valid &&
                     (_config.tlmFields & TLM_FIELD_LINE);
 
     // ----- 5. Color from HardwareState snapshot -------------------------------
-    bool haveColor = _colorPresent && _state.inputs.colorVS.valid &&
+    bool haveColor = _color.is_initialized() && _state.inputs.colorVS.valid &&
                      (_config.tlmFields & TLM_FIELD_COLOR);
 
     // ----- 6. Velocity from HardwareState -------------------------------------

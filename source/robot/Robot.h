@@ -111,6 +111,11 @@ public:
     void portsRead();
     void telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx);
 
+    // DBG I2C diagnostic — probe each device address once (write reg + read 1
+    // byte) and report the CODAL return codes + byte via fn/ctx, so we can see
+    // whether a read errors / wedges the TWIM (vs returning zero data).
+    void dbgI2C(ReplyFn fn, void* ctx);
+
     // ---------------------------------------------------------------------------
     // Drive action methods — delegate to DriveController.
     // fn/ctx: originating reply sink captured for async completions.
@@ -164,15 +169,17 @@ public:
     MotorController& motor()           { return _mc; }
     DriveController& driveController() { return _dc; }
     Odometry&        odometry()        { return _odo; }
-    OtosSensor*      otos()            { return _otosPresent  ? &_otos  : nullptr; }
-    LineSensor*      lineSensor()      { return _linePresent  ? &_line  : nullptr; }
-    ColorSensor*     colorSensor()     { return _colorPresent ? &_color : nullptr; }
+    OtosSensor*      otos()            { return _otos.is_initialized()  ? &_otos  : nullptr; }
+    LineSensor*      lineSensor()      { return _line.is_initialized()  ? &_line  : nullptr; }
+    ColorSensor*     colorSensor()     { return _color.is_initialized() ? &_color : nullptr; }
     Servo*           servo()            { return _gripperPresent ? &_servo   : nullptr; }
     PortIO&          portIO()          { return _portio; }
 
 private:
     // Reference to the CODAL singleton — used by drive action helpers for systemTime().
     MicroBit&  _uBit;
+    // Raw I2C bus reference — used only by dbgI2C() for the DBG I2C probe.
+    MicroBitI2C& _i2c;
 
     // Gripper angle tracking (owned here so CommandProcessor is stateless)
     int32_t _currentGripperAngle;
@@ -191,13 +198,11 @@ private:
     SerialPort _serial;
     Radio      _radio;
 
-    // Optional subsystems (_*Present tracks hardware availability)
+    // Optional subsystems.  I2C sensors derive from Sensor; their
+    // is_initialized() reports hardware availability (set by begin()).
     OtosSensor   _otos;
-    bool         _otosPresent;
     LineSensor   _line;
-    bool         _linePresent;
     ColorSensor  _color;
-    bool         _colorPresent;
     Servo        _servo;
     bool         _gripperPresent;
     PortIO       _portio;
