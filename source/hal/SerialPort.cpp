@@ -10,6 +10,10 @@ SerialPort::SerialPort(NRF52Serial& serial)
 
 void SerialPort::begin() {
     _serial.setRxBufferSize(255);
+    // TX buffer size is a uint8_t in CODAL — 255 is the max (1024 wraps to 0!).
+    // Bursts must therefore fit in 255 bytes: keep replies to a single line and
+    // don't fire many sends back-to-back (the firmware blocks/loses output when
+    // the TX buffer can't absorb a burst).
     _serial.setTxBufferSize(255);
     _serial.setBaud(115200);
 }

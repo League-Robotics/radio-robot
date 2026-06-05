@@ -818,6 +818,12 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
                 replyErr(rbuf, sizeof(rbuf), "noimpl", "no scheduler", corr_id, replyFn, ctx);
                 return;
             }
+            // DBG LOOP RESET — zero all timing stats for a fresh window.
+            if (ntok >= 3 && strcmp(tokens[2], "RESET") == 0) {
+                _sched->resetStats();
+                replyOK(rbuf, sizeof(rbuf), "dbg", "loop reset", corr_id, replyFn, ctx);
+                return;
+            }
             // DBG LOOP <x> <state> — set task x run flag.
             if (ntok >= 4) {
                 int x = atoi(tokens[2]);
@@ -831,19 +837,36 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
                 replyOK(rbuf, sizeof(rbuf), "dbg", body, corr_id, replyFn, ctx);
                 return;
             }
-            // DBG LOOP — list every task with its run flag and timing stats.
-            int n = _sched->numTasks();
-            for (int i = 0; i < n; ++i) {
-                const Task* t = _sched->taskAt(i);
-                if (t == nullptr) continue;
-                unsigned long avg = (t->runs > 0)
-                                  ? (unsigned long)(t->totalTimeUs / t->runs) : 0UL;
-                char line[96];
-                snprintf(line, sizeof(line),
-                         "LOOP %d %s run=%d n=%lu avgUs=%lu",
-                         i, t->name, t->run ? 1 : 0,
-                         (unsigned long)t->runs, avg);
-                replyFn(line, ctx);
+            // DBG LOOP — emit ALL timing as ONE compact line (sending ~10
+            // separate lines overflows the 255-byte serial TX buffer and faults
+            // the firmware). avgUs are per-iteration: ctl=control/PID task;
+            // cyc=full loop period incl. idle sleep; wrk=work excl. sleep;
+            // t0..t7 = the 8 low-priority tasks in table order (comms-in,
+            // drive-advance, odometry-predict, otos-correct, line-read,
+            // color-read, ports-read, telemetry-emit).
+            {
+                unsigned long cr = (unsigned long)_sched->controlRuns();
+                unsigned long lr = (unsigned long)_sched->loopRuns();
+                auto avgUs = [](const Task* t) -> unsigned long {
+                    return (t && t->runs > 0)
+                         ? (unsigned long)(t->totalTimeUs / t->runs) : 0UL;
+                };
+                char buf[200];
+                // Single snprintf, fixed args — no incremental offset math, no
+                // loop, one send. Output ~110 chars, well under buf and the
+                // 255-byte TX buffer.
+                snprintf(buf, sizeof(buf),
+                    "LOOP ctl=%lu cyc=%lu wrk=%lu loops=%lu "
+                    "t0=%lu t1=%lu t2=%lu t3=%lu t4=%lu t5=%lu t6=%lu t7=%lu",
+                    cr ? (unsigned long)(_sched->controlTotalUs() / cr) : 0UL,
+                    lr ? (unsigned long)(_sched->loopTotalUs() / lr) : 0UL,
+                    lr ? (unsigned long)(_sched->loopWorkTotalUs() / lr) : 0UL,
+                    lr,
+                    avgUs(_sched->taskAt(0)), avgUs(_sched->taskAt(1)),
+                    avgUs(_sched->taskAt(2)), avgUs(_sched->taskAt(3)),
+                    avgUs(_sched->taskAt(4)), avgUs(_sched->taskAt(5)),
+                    avgUs(_sched->taskAt(6)), avgUs(_sched->taskAt(7)));
+                replyFn(buf, ctx);
             }
             replyOK(rbuf, sizeof(rbuf), "dbg", "loop", corr_id, replyFn, ctx);
             return;

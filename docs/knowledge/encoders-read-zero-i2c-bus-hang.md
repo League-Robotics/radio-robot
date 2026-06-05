@@ -1,64 +1,41 @@
-# Encoders read zero when color + OTOS are both read — a FIRMWARE bug
+# Encoders/sensors read zero — RESOLVED (it was sensor-detection placement)
 
-**Status:** open. **This is NOT an electrical / signal-integrity / "marginal bus" problem.**
-An earlier version of this note concluded "electrical" — that was wrong (see below).
+**Status: SOLVED.** All three sensors (OTOS 0x17, line 0x1A, color 0x43) + encoders read
+reliably together. Verified telemetry:
+`TLM enc=58,57 pose=... line=51,98,155,218 color=216,392,351,1099`.
 
-## Symptom
+## What it actually was
 
-Encoder position + velocity read 0 while the motors still run (wheels spin, often fast
-because the velocity loop sees 0 and saturates PWM). On the wire: `ENC 0 0  VEL 0 0`. It
-happens once the firmware **reads** both the color sensor (0x43) and the OTOS (0x17) — and
-even the boot-time *detection* read of one while the other is present can trigger it,
-leaving the bus such that the motor encoder read (0x10) also returns 0.
+NOT an electrical/"marginal bus" problem (the HAL/I2C code was correct all along), and NOT a
+color↔OTOS device conflict. The root cause was **where sensor detection (`begin()`) ran**:
 
-## Why it is a FIRMWARE bug, not hardware (decisive evidence)
+1. **Detecting in the boot constructor** read the line/color chips **before they had powered
+   up** (the chips need ~seconds after a cold power-on). Those failed reads marked the sensors
+   absent and could leave the bus stuck.
+2. **Detecting inside the cooperative loop** froze the loop during each sensor's retry, so the
+   encoder task didn't run between attempts and the reads failed.
+3. **Color detection must re-assert its wake registers each retry.** The old PlanetX
+   `initColor` writes `0x81=0xCA, 0x80=0x17` *inside* every retry iteration (20×, 50 ms apart)
+   so a chip that wasn't ready on the first try gets re-woken once it powers up. A wake-once
+   version fails to detect a cold chip.
 
-- **Commercial plug-and-play hardware** (micro:bit V2 + Nezha motor board + SparkFun OTOS +
-  PlanetX color/line). Nothing exotic.
-- **The old MakeCode/pxt firmware reads ALL sensors — OTOS + color + line — flawlessly on the
-  exact same hardware.** Source: `/Volumes/Proj/proj/league-projects/scratch/radio-robot/src`.
-- With **our** firmware, all three sensors physically present but **sensor reads OFF** →
-  encoders count perfectly. So *presence* is fine; our *reads* are the trigger.
+## The fix (current architecture)
 
-So the defect is in **how our CODAL firmware performs I2C**, not in the bus. It is fully
-solvable — the old code is the proof and the reference.
+- **Devices are constructed in `main()`** on `uBit.i2c`/`uBit.io` (Motor×2, OtosSensor,
+  LineSensor, ColorSensor, Servo, PortIO), and `Robot` is built **from those objects + a
+  `Communicator`** — `Robot` no longer takes `i2c`/serial/radio/`MicroBit`.
+- **`begin()` is called explicitly, straight-line, in `main()` before the loop starts**, after
+  a short settle (`uBit.sleep(2500)`) so the chips are powered. Comment out a `begin()` to
+  disable that device (its reads then skip via `is_initialized()`).
+- Color/line `begin()` retry internally (color re-wakes each retry, exact port of `initColor`).
+- Reads are gated on `is_initialized()`; `begin()` is the only thing that sets it.
 
-## Bisection (our firmware)
+## The red herring that cost the most time
 
-Using the `run_all` loop + `DBG LOOP <x> <state>` task toggles (LoopScheduler):
-- All three present, **read none** → encoders count. ✅
-- Enable the **OTOS read** (with color present) → wedged. ❌
-- Enable the **color read** (with OTOS present) → wedged. ❌ (symmetric)
-- Either chip alone, fully read → fine.
-
-So reading *either* chip while *both* are present wedges subsequent reads; reading neither is
-fine. Boot detection reads both, so it can wedge from boot (intermittently), which also makes
-OTOS/color fail to appear in `ID … caps=…`.
-
-## Tried and did NOT fix it (so these are not the cause)
-
-- Matching the upstream PlanetX single-byte color read protocol.
-- Setting the I2C bus to 100 kHz (`uBit.i2c.setFrequency(100000)`) — note: not confirmed the
-  call actually changed the bus clock.
-- Switching OTOS + color register reads to repeated-start (write with `repeated=true`, no STOP
-  between write-reg and read).
-
-## Where to look next (firmware)
-
-The difference is our CODAL `MicroBitI2C` usage vs the MakeCode/pxt runtime's I2C path. Suspects:
-- CODAL nRF52 **TWIM** handling of back-to-back transactions across multiple device addresses
-  (motor 0x10 → otos 0x17 → color 0x43) — a driver-level hang/lockup that needs a re-init or
-  different sequencing, which the slower pxt runtime never trips.
-- Which I2C **instance/bus** we use (`uBit.i2c`) and how it's configured vs the old code.
-- Compare the exact old-code I2C call sequence/ordering and replicate it.
-
-## Recovery while wedged
-
-A full power-down (battery + USB) clears the wedged state; a micro:bit-only reset/reflash does
-not (the battery keeps the peripheral side powered). This is a *recovery* note, not a diagnosis.
-
-## Tooling
-
-`LoopScheduler::run_all()` runs every task explicitly with per-task `run`/`run_always`/`run_once`
-flags and timing (`runs`/`totalTimeUs`); `DBG LOOP <x> <0|1>` toggles a task at runtime and
-`DBG LOOP` lists them. Use it to bisect which read triggers the fault without rebuilding.
+A wedged bus (a slave holding SDA) **persists across micro:bit reflashes** because the robot's
+battery keeps the peripheral side powered. Once any early test wedged the bus, *every*
+subsequent reflash-and-test ran on the still-wedged bus and failed identically — which looked
+exactly like a deterministic code bug. **Rule: when debugging I2C, do a FULL power-down
+(battery + USB) to guarantee a clean bus; a reflash is not enough.** A minimal bare-metal
+bring-up `main` (construct sensors, `begin()`, read in a plain loop — no scheduler/Robot) on a
+freshly power-cycled bus is what finally proved the HAL was correct.

@@ -130,7 +130,10 @@ LoopScheduler::LoopScheduler(Robot& robot, CommandProcessor& cmd,
       _pendingWheel(0),
       _controlDeadline(0),
       _controlRuns(0),
-      _controlTotalUs(0)
+      _controlTotalUs(0),
+      _loopRuns(0),
+      _loopTotalUs(0),
+      _loopWorkTotalUs(0)
 {
     const RobotConfig& cfg = robot.config();
 
@@ -474,6 +477,7 @@ void LoopScheduler::run_all()
     _controlDeadline = _uBit.systemTime();
 
     while (true) {
+        uint64_t iter0 = system_timer_current_time_us();   // loop-period start
         uint32_t now = _uBit.systemTime();
 
         // --- CONTROL TASK (always first; the metronome) — timed -------------
@@ -503,10 +507,35 @@ void LoopScheduler::run_all()
         // --- advance L/R wheel alternation for next tick's collect ----------
         _advancePendingWheel();
 
+        // Work time for this iteration (control + sweep, before idle sleep).
+        uint64_t work1 = system_timer_current_time_us();
+        _loopWorkTotalUs += (uint32_t)(work1 - iter0);
+
         // --- idle sleep until the control deadline --------------------------
         now = _uBit.systemTime();
         if (now < _controlDeadline) {
             _uBit.sleep(_controlDeadline - now);
         }
+
+        // Full iteration period (incl. idle sleep) = the loop cycle time.
+        uint64_t iter1 = system_timer_current_time_us();
+        _loopTotalUs += (uint32_t)(iter1 - iter0);
+        _loopRuns++;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// resetStats — zero all timing counters so DBG LOOP reports a fresh window.
+// ---------------------------------------------------------------------------
+void LoopScheduler::resetStats()
+{
+    _controlRuns = 0;
+    _controlTotalUs = 0;
+    _loopRuns = 0;
+    _loopTotalUs = 0;
+    _loopWorkTotalUs = 0;
+    for (int i = 0; i < kNumTasks; ++i) {
+        _table[i].runs = 0;
+        _table[i].totalTimeUs = 0;
     }
 }

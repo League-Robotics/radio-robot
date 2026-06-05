@@ -104,6 +104,18 @@ public:
     // Returns nullptr if idx is out of range.
     const Task* taskAt(int idx) const;
 
+    // Control-task (PID metronome) timing — it is not a Task entry.
+    uint32_t controlRuns()     const { return _controlRuns; }
+    uint32_t controlTotalUs()  const { return _controlTotalUs; }
+    // Whole-loop timing: full iteration incl. idle sleep (the cycle period) and
+    // work-only (excl. idle sleep). Averages = totalUs / loopRuns.
+    uint32_t loopRuns()        const { return _loopRuns; }
+    uint32_t loopTotalUs()     const { return _loopTotalUs; }
+    uint32_t loopWorkTotalUs() const { return _loopWorkTotalUs; }
+    // Zero all timing stats (control, loop, and every task) — for sampling a
+    // steady-state window (DBG LOOP RESET).
+    void resetStats();
+
     // ---------------------------------------------------------------------------
     // Accessors used by Task::run() lambdas.
     // ---------------------------------------------------------------------------
@@ -150,6 +162,11 @@ private:
     // its stats live here rather than in the table). Average = us/runs.
     uint32_t _controlRuns;
     uint32_t _controlTotalUs;
+
+    // Whole-loop iteration timing.
+    uint32_t _loopRuns;
+    uint32_t _loopTotalUs;       // full iteration incl. idle sleep (cycle period)
+    uint32_t _loopWorkTotalUs;   // work per iteration excl. idle sleep
 
     // ---------------------------------------------------------------------------
     // Private helpers that implement the split-phase control logic.
