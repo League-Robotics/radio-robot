@@ -2,67 +2,65 @@
 #include "LineSensor.h"
 #include "ColorSensor.h"
 #include "DriveController.h"
+#include "MicroBit.h"
 #include <cstdio>
 #include <cmath>
 
-Robot::Robot(MicroBitI2C&    i2c,
-             NRF52Serial&    serial,
-             MicroBitRadio&  radio,
-             MicroBitIO&     io,
-             MessageBus&     messageBus,
-             MicroBit&       uBit)
-    : _uBit(uBit),
-      _currentGripperAngle(0),
-      _config(defaultRobotConfig()),
+Robot::Robot(Motor&        motorL,
+             Motor&        motorR,
+             OtosSensor&   otos,
+             LineSensor&   line,
+             ColorSensor&  color,
+             Servo&        gripper,
+             PortIO&       portio,
+             Communicator& comm,
+             const RobotConfig& cfg)
+    : _currentGripperAngle(0),
+      _config(cfg),
       _lastTlmMs(0),
-      _motorL(i2c, 2, _config.fwdSignL),  // M2, left wheel
-      _motorR(i2c, 1, _config.fwdSignR),   // M1, right wheel
-      _serial(serial),
-      _radio(radio, messageBus),
-      _otos(i2c),
-      _otosPresent(false),
-      _line(i2c),
-      _linePresent(false),
-      _color(i2c),
-      _colorPresent(false),
-      _servo(io.P1),
+      _motorL(motorL),
+      _motorR(motorR),
+      _otos(otos),
+      _line(line),
+      _color(color),
+      _servo(gripper),
       _gripperPresent(false),
-      _portio(io),
+      _portio(portio),
+      _comm(comm),
       _mc(_motorL, _motorR, _config),
       _odo(),
-      _dc(_mc, _odo, _config)  // OTOS pointer set below after hardware probe
+      _dc(_mc, _odo, _config),
+      _state(defaultInputs(_config)),
+      _lastControlMs(0),
+      _lastOtosMs(0)
 {
-    // uBit.init() was called by main.cpp before constructing Robot.
-    // All CODAL peripherals are ready; begin subsystem initialisation now.
+    // Devices are fully initialised before this constructor runs (main.cpp calls
+    // uBit.init() and device begin() before constructing Robot).
 
-    _serial.begin();
-    _radio.begin();
-
-    // Probe optional sensors; mark absent if hardware not connected.
-    _otosPresent = _otos.begin();
-    if (_otosPresent) {
-        _otos.init();
-        _dc.setOtos(&_otos);  // wire OTOS into DriveController for fusion
-
-        // Apply calibration scalars from config at boot.
-        // Formula: scalar = clamp(round((scale - 1.0) / 0.001), -127, 127).
-        // E.g. otosLinearScale=1.05 → +50; otosAngularScale=0.987 → -13.
-        auto scaleToInt8 = [](float scale) -> int8_t {
-            float raw = roundf((scale - 1.0f) / 0.001f);
-            if (raw > 127.0f) raw = 127.0f;
-            if (raw < -127.0f) raw = -127.0f;
-            return static_cast<int8_t>(raw);
-        };
-        _otos.setLinearScalar(scaleToInt8(_config.otosLinearScale));
-        _otos.setAngularScalar(scaleToInt8(_config.otosAngularScale));
-    }
-
-    _linePresent  = _line.readValues(nullptr);  // probe: returns false on I2C error
-    _colorPresent = _color.begin();
     _gripperPresent = true;  // servo always available on P1
+
+    // Bind authoritative HardwareState into DriveController so getPoseFloat()
+    // can read pose fields (Odometry::getPose reads the struct).
+    _dc.setHardwareState(&_state.inputs);
+
+    // Bind the authoritative MotorCommands so MotorController::setTarget() /
+    // startDrive() / stop() write tgtLMms/R directly (014-007).
+    _mc.setCommandsRef(&_state.commands);
 
     // Unified TLM frame assembled in Robot::tick() — Sprint 009 ticket 005.
     // Streaming period controlled by RobotConfig::tlmPeriodMs.
+}
+
+// ---------------------------------------------------------------------------
+// systemTime — robot system time in milliseconds since boot.
+//
+// Uses the CODAL free function system_timer_current_time() (ms resolution),
+// declared in codal-core/inc/driver-models/Timer.h, available via MicroBit.h.
+// ---------------------------------------------------------------------------
+
+uint32_t Robot::systemTime() const
+{
+    return (uint32_t)system_timer_current_time();
 }
 
 // ---------------------------------------------------------------------------
@@ -71,38 +69,43 @@ Robot::Robot(MicroBitI2C&    i2c,
 
 void Robot::stop()
 {
-    uint32_t now_ms = _uBit.systemTime();
+    uint32_t now_ms = systemTime();
     // stop() with no reply fn: use a no-op sink
     _dc.stop(now_ms, [](const char*, void*){}, nullptr);
 }
 
 void Robot::streamDrive(int32_t leftMms, int32_t rightMms, ReplyFn fn, void* ctx)
 {
-    _dc.beginStream((float)leftMms, (float)rightMms, _uBit.systemTime(), fn, ctx);
+    _dc.beginStream((float)leftMms, (float)rightMms, systemTime(),
+                    _state.target, fn, ctx);
 }
 
 void Robot::velocityDrive(float v_mms, float omega_rads, ReplyFn fn, void* ctx,
                            const char* corr_id)
 {
-    _dc.beginVelocity(v_mms, omega_rads, _uBit.systemTime(), fn, ctx, corr_id);
+    _dc.beginVelocity(v_mms, omega_rads, systemTime(),
+                      _state.target, fn, ctx, corr_id);
 }
 
 void Robot::timedDrive(int32_t leftMms, int32_t rightMms, uint32_t durationMs,
                        ReplyFn fn, void* ctx, const char* corr_id)
 {
-    _dc.beginTimed((float)leftMms, (float)rightMms, durationMs, _uBit.systemTime(), fn, ctx, corr_id);
+    _dc.beginTimed((float)leftMms, (float)rightMms, durationMs, systemTime(),
+                   _state.target, fn, ctx, corr_id);
 }
 
 void Robot::distanceDrive(int32_t leftMms, int32_t rightMms, int32_t targetMm,
                           ReplyFn fn, void* ctx, const char* corr_id)
 {
-    _dc.beginDistance((float)leftMms, (float)rightMms, targetMm, _uBit.systemTime(), fn, ctx, corr_id);
+    _dc.beginDistance((float)leftMms, (float)rightMms, targetMm, systemTime(),
+                      _state.target, fn, ctx, corr_id);
 }
 
 void Robot::goTo(float tx, float ty, float speedMms, ReplyFn fn, void* ctx,
                  const char* corr_id)
 {
-    _dc.beginGoTo(tx, ty, speedMms, _uBit.systemTime(), fn, ctx, corr_id);
+    _dc.beginGoTo(tx, ty, speedMms, systemTime(),
+                  _state.target, fn, ctx, corr_id);
 }
 
 // ---------------------------------------------------------------------------
@@ -125,12 +128,12 @@ void Robot::zeroEncoders()
 
 void Robot::setPose(int32_t x_mm, int32_t y_mm, int32_t h_cdeg)
 {
-    _odo.setPose(x_mm, y_mm, h_cdeg);
+    _odo.setPose(_state.inputs, x_mm, y_mm, h_cdeg);
 }
 
 void Robot::zeroOdometry()
 {
-    _odo.zero();
+    _odo.zero(_state.inputs);
 }
 
 // ---------------------------------------------------------------------------
@@ -147,45 +150,283 @@ Robot::EncoderReading Robot::getEncoders() const
 Robot::Pose Robot::getPose() const
 {
     Pose p{};
-    _odo.getPose(p.x_mm, p.y_mm, p.h_cdeg);
+    Odometry::getPose(_state.inputs, p.x_mm, p.y_mm, p.h_cdeg);
     return p;
 }
 
 // ---------------------------------------------------------------------------
-// controlTick — control fiber entry point (013-010).
+// controlCollect — collect encoder readings and run the motor PID (014-003).
 //
-// Runs at a fixed period (RobotConfig::controlPeriodMs, default 10 ms).
-// Only the PID/motor/odometry path runs here.  No serial/radio I/O.
+// 1. Calls Motor::collectEncoder() for each wheel and converts the raw
+//    tenths-of-degrees reading to mm using the calibration scalars.
+// 2. Writes the results to _state.inputs.encLMm / encRMm.
+// 3. Computes dt_s from _lastControlMs; calls
+//    _mc.controlTick(_state.inputs, _state.commands, dt_s).
+//
+// NOTE: Motor::collectEncoder() reads back the response to a prior
+// Motor::requestEncoder() call.  In this stub path the requestEncoder()
+// call that satisfies the split-phase contract is the synchronous read
+// inside Motor::collectEncoder() itself (legacy path — no delay, same as
+// before).  Correct split-phase timing is wired by the LoopScheduler in
+// ticket 006; functional encoder reads are verified at bench in ticket 009.
 // ---------------------------------------------------------------------------
 
-void Robot::controlTick(uint32_t now_ms)
+void Robot::controlCollect(uint32_t now_ms)
 {
-    _dc.controlTick(now_ms);
+    // Collect encoder readings using the split-phase API.
+    //
+    // In the stub path (before the LoopScheduler in ticket 006), we call
+    // requestEncoder() immediately followed by collectEncoder() on each wheel
+    // via readEncoderMmF() (which calls collectEncoder() internally).  This is
+    // equivalent to the old readEncoderRaw() synchronous I2C transaction
+    // (write then immediate read, no inter-transaction delay).
+    //
+    // The LoopScheduler in ticket 006 will insert the required ≥ one-loop-period
+    // delay between the request and collect phases by alternating wheels across
+    // ticks.  Until then, functional encoder reads are not guaranteed — build
+    // correctness is the gate here; bench correctness is ticket 009.
+    _motorL.requestEncoder();
+    _state.inputs.encLMm = _motorL.readEncoderMmF(_config);
+    _motorR.requestEncoder();
+    _state.inputs.encRMm = _motorR.readEncoderMmF(_config);
+
+    // Run PID + PWM via the new ZOH-aware signature.
+    // In the sync (non-split-phase) path both wheels are updated on the same
+    // tick, so there is no alternation. We pass refreshedWheel=0 (none) so
+    // velocity is NOT recomputed from these synchronous reads (the reads happen
+    // inside readEncoderMmF above, without proper inter-request delay, making
+    // the delta unreliable). Velocity holds at zero until the LoopScheduler
+    // split-phase path takes over.
+    _lastControlMs = now_ms;
+    _mc.controlTick(_state.inputs, _state.commands, now_ms, 0);
 }
 
 // ---------------------------------------------------------------------------
-// telemetryTick — comms+telemetry fiber entry point (013-010).
+// odometryPredict — dead-reckoning update task entry point (014-004).
 //
-// 1. Drain any pending EVT completions from DriveController (safety_stop,
-//    done T/D/G) and emit them via fn/ctx.
-// 2. Assemble and emit one unified TLM frame when the configured period has
-//    elapsed, or immediately if a SNAP was requested.
+// Reads _state.inputs.encLMm / encRMm (written by controlCollect() this tick)
+// and applies midpoint (exact-arc) integration into _state.inputs.poseX/Y/Hrad.
 //
-// Reads only cached encoder/velocity snapshots from MotorController (which
-// the control fiber updates).  Line/color I2C is safe here because Motor
-// I2C is now atomic (busy-wait prevents interleave).
+// This is the cooperative-loop task slot for odometry predict.  The LoopScheduler
+// (ticket 006) will call this at the correct phase; until then controlTick() calls
+// it directly after controlCollect().
 // ---------------------------------------------------------------------------
 
-void Robot::telemetryTick(uint32_t now_ms, ReplyFn fn, void* ctx)
+void Robot::odometryPredict()
 {
-    // 1. Drain EVT completions enqueued by the control fiber.
-    _dc.drainEvents(fn, ctx);
+    _odo.predict(_state.inputs, _config.trackwidthMm);
+}
 
-    // 2. TLM assembly ---------------------------------------------------------
-    // Emit one unified TLM frame when the configured period has elapsed, or
-    // immediately if a SNAP was requested.  t= is stamped at sensor-read time,
-    // not at snprintf time, to avoid send-latency bias.
+// ---------------------------------------------------------------------------
+// driveAdvance — drive state machine task entry point (014-005).
+//
+// Delegates to DriveController::driveAdvance(), passing the authoritative
+// state structs.  EVT completions (done T/D/G, safety_stop) are emitted
+// inline via _state.target.replyFn / replyCtx / corrId.
+// ---------------------------------------------------------------------------
 
+void Robot::driveAdvance(uint32_t now_ms)
+{
+    _dc.driveAdvance(_state.inputs, _state.commands, _state.target, now_ms);
+}
+
+// ---------------------------------------------------------------------------
+// otosCorrect — OTOS complementary correction task entry point (014-004/005).
+//
+// If OTOS is present, reads raw position from hardware, converts LSB → mm/rad,
+// applies the mounting-offset transform, writes _state.inputs.otosX/Y/H,
+// updates otos.lastUpdMs, and calls Odometry::correct() on the struct.
+//
+// This is the SOLE OTOS correction path (014-005).  DriveController no longer
+// has an OTOS block — it was removed in ticket 005.
+// Called from controlTick() at the slow cadence (every ~100 ms via the
+// kOtosSlowMs gate inside this method).  Ticket 006 will move it to a
+// dedicated LoopScheduler task slot.
+// ---------------------------------------------------------------------------
+
+void Robot::otosCorrect(uint32_t now_ms)
+{
+    if (!_otos.is_initialized()) return;
+
+    // Slow cadence gate: run correction at ~10 Hz (every kOtosSlowMs ms).
+    // When called from a dedicated LoopScheduler slot (ticket 006), the
+    // scheduler enforces the cadence and this gate can be removed.
+    if ((now_ms - _lastOtosMs) < kOtosSlowMs) return;
+    _lastOtosMs = now_ms;
+
+    int16_t rx = 0, ry = 0, rh = 0;
+    _otos.getPositionRaw(rx, ry, rh);
+
+    constexpr float kPosMmPerLsb  = 0.305f;
+    constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);
+
+    float xF = static_cast<float>(rx) * kPosMmPerLsb;
+    float yF = static_cast<float>(ry) * kPosMmPerLsb;
+    float hF = static_cast<float>(rh) * kHdgRadPerLsb;
+
+    if (_config.odomUpsideDown) {
+        xF = -xF;
+        yF = -yF;
+        hF = -hF;
+    }
+
+    float angRad = -_config.odomYawDeg * (3.14159265f / 180.0f);
+    float c = cosf(angRad);
+    float s = sinf(angRad);
+
+    _state.inputs.otosX = c * xF - s * yF - _config.odomOffX;
+    _state.inputs.otosY = s * xF + c * yF - _config.odomOffY;
+    _state.inputs.otosH = hF + _config.odomYawDeg * (3.14159265f / 180.0f);
+    _state.inputs.otos.lastUpdMs = now_ms;
+    _state.inputs.otos.valid     = true;
+
+    _odo.correct(_state.inputs,
+                 _state.inputs.otosX,
+                 _state.inputs.otosY,
+                 _state.inputs.otosH,
+                 _config.alphaPos, _config.alphaYaw, _config.otosGate);
+}
+
+// ---------------------------------------------------------------------------
+// controlFireRequest — fire the encoder request for the specified wheel (014-006).
+//
+// pendingWheel: 1 = left (M2), 2 = right (M1).
+// Called by LoopScheduler as the LAST I2C operation before the idle sleep,
+// keeping the motor's pending-read window free of other I2C traffic.
+// ---------------------------------------------------------------------------
+
+void Robot::controlFireRequest(int pendingWheel)
+{
+    if (pendingWheel == 1) {
+        _motorL.requestEncoder();
+    } else if (pendingWheel == 2) {
+        _motorR.requestEncoder();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// controlCollectSplitPhase — split-phase COLLECT for the cooperative loop (014-006).
+//
+// Reads back the encoder from the wheel indicated by pendingWheel (1=left,
+// 2=right) using Motor::collectEncoder() + conversion, writes the result into
+// _state.inputs.enc{L,R}Mm, then calls _mc.controlTick() for PID + PWM.
+//
+// If pendingWheel == 0 (first iteration, no prior request has been fired),
+// the collect step is skipped — only the PID/PWM path runs so the motor
+// controllers are warm before the first valid encoder reading arrives.
+//
+// The idle sleep in LoopScheduler::run() supplies the ≥ one-loop-period delay
+// required between the requestEncoder() write and this collectEncoder() read.
+// ---------------------------------------------------------------------------
+
+void Robot::controlCollectSplitPhase(uint32_t now_ms, int pendingWheel)
+{
+    // Atomic per-tick encoder read (fix[014]: restores closed-loop velocity).
+    //
+    // Root cause: the split-phase design fired requestEncoder() at the END of
+    // tick N, slept ~10 ms (the control period), then called collectEncoder()
+    // at the TOP of tick N+1.  The Nezha V2 chip's 0x46 response window is only
+    // ~4 ms (vendor-documented); the ~10 ms cross-iteration gap causes
+    // collectEncoder() to always return a stale/zero value, leaving enc=0,0
+    // throughout a drive and saturating the velocity PID to constant PWM.
+    //
+    // Fix: call readEncoderMmFAtomic() which uses the full vendor timing:
+    //   4ms pre-write bus-idle → 0x46 write → 4ms post-write settle → read 4B
+    // (matches sprint 013 readEncoderRaw() which had both delays and worked).
+    //
+    // Cost: ~8 ms per tick.  controlPeriodMs must be ≥ 10 ms.  Alternating L/R
+    // refreshes each wheel at half the control rate (~5 Hz at 10 ms).
+    //
+    // On pendingWheel == 0 (first iteration): no read; encoders remain
+    // 0-initialised and refreshedWheel=0 suppresses velocity update.
+
+    // DEBUG (sprint 014 — encoder-wedge isolation): only read the encoder while
+    // actively driving. Reading the Nezha encoder at ~100 Hz while the motor is
+    // idle/stopped wedges the I2C reads (they freeze at a constant). Reads while
+    // driving are fine (proven: 8 s continuous drive counts cleanly). When idle
+    // we skip the read entirely and pass refreshedWheel=0 (no velocity update).
+    bool driving = (_state.commands.tgtLMms != 0.0f ||
+                    _state.commands.tgtRMms != 0.0f);
+    int refreshed = 0;
+    if (driving) {
+        if (pendingWheel == 1) {
+            _state.inputs.encLMm = _motorL.readEncoderMmFAtomic(_config);
+            refreshed = 1;
+        } else if (pendingWheel == 2) {
+            _state.inputs.encRMm = _motorR.readEncoderMmFAtomic(_config);
+            refreshed = 2;
+        }
+    }
+
+    _lastControlMs = now_ms;
+
+    // refreshed = the wheel just READ (or 0 when idle/first iter) so
+    // MotorController updates that wheel's per-wheel velocity with the correct
+    // elapsed time since its last collect.
+    _mc.controlTick(_state.inputs, _state.commands, now_ms, refreshed);
+}
+
+// ---------------------------------------------------------------------------
+// lineRead — read 4-channel line sensor into HardwareState (014-007).
+//
+// Writes _state.inputs.line[0..3]; updates lineVS.lastUpdMs and sets
+// lineVS.valid on success.  No-op if line sensor is absent.
+// ---------------------------------------------------------------------------
+
+void Robot::lineRead()
+{
+    if (!_line.is_initialized()) return;
+    if (_line.readValues(_state.inputs.line)) {
+        _state.inputs.lineVS.lastUpdMs = systemTime();
+        _state.inputs.lineVS.valid     = true;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// colorRead — non-blocking RGBC poll into HardwareState (014-007).
+//
+// Writes _state.inputs.colorR/G/B/C; updates colorVS.lastUpdMs and sets
+// colorVS.valid on success.  No-op if color sensor is absent.
+// ---------------------------------------------------------------------------
+
+void Robot::colorRead()
+{
+    if (!_color.is_initialized()) return;
+    if (_color.pollRGBC(_state.inputs.colorR,
+                        _state.inputs.colorG,
+                        _state.inputs.colorB,
+                        _state.inputs.colorC)) {
+        _state.inputs.colorVS.lastUpdMs = systemTime();
+        _state.inputs.colorVS.valid     = true;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// portsRead — read digital and analogue GPIO ports into HardwareState (014-007).
+// ---------------------------------------------------------------------------
+
+void Robot::portsRead()
+{
+    for (uint8_t i = 0; i < 4; ++i) {
+        _state.inputs.digitalIn[i] = (_portio.readDigital(i) != 0);
+        _state.inputs.analogIn[i]  = (int16_t)_portio.readAnalog(i);
+    }
+    _state.inputs.portsVS.lastUpdMs = systemTime();
+    _state.inputs.portsVS.valid     = true;
+}
+
+// ---------------------------------------------------------------------------
+// telemetryEmit — assemble and emit the unified TLM frame (014-007).
+//
+// Replaces telemetryTick (now removed).  Reads ALL sensor data from
+// _state.inputs (snapshots written by the sensor task entry points —
+// lineRead, colorRead, portsRead, controlCollect).  No direct I2C calls.
+//
+// Emits when tlmPeriodMs has elapsed or a SNAP is pending.
+// ---------------------------------------------------------------------------
+
+void Robot::telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx)
+{
     bool snapPending = _config.tlmSnapPending;
     bool periodic    = (_config.tlmPeriodMs > 0) &&
                        ((now_ms - _lastTlmMs) >= (uint32_t)_config.tlmPeriodMs);
@@ -197,43 +438,37 @@ void Robot::telemetryTick(uint32_t now_ms, ReplyFn fn, void* ctx)
         _config.tlmPeriodMs = 20;
     }
 
-    // ----- 1. Capture timestamp at sensor-read time -------------------------
-    uint32_t t_sample = _uBit.systemTime();
+    // ----- 1. Capture timestamp -----------------------------------------------
+    uint32_t t_sample = systemTime();
 
-    // ----- 2. Read encoder positions ----------------------------------------
-    int32_t encL = 0, encR = 0;
-    _mc.getEncoderPositions(encL, encR);
+    // ----- 2. Encoder positions from HardwareState snapshot -------------------
+    int32_t encL = static_cast<int32_t>(_state.inputs.encLMm);
+    int32_t encR = static_cast<int32_t>(_state.inputs.encRMm);
 
-    // ----- 3. Read pose — always fused odometry (mm, mm, centidegrees) ------
-    // Raw OTOS LSB is available via the OP command for debug cross-check only.
+    // ----- 3. Pose from HardwareState -----------------------------------------
     int32_t pose_x = 0, pose_y = 0, pose_h = 0;
     if (_config.tlmFields & TLM_FIELD_POSE) {
-        _odo.getPose(pose_x, pose_y, pose_h);
+        Odometry::getPose(_state.inputs, pose_x, pose_y, pose_h);
     }
 
-    // ----- 4. Read line sensor (if present and field requested) --------------
-    uint16_t lineVals[4] = {0, 0, 0, 0};
-    bool haveLine = false;
-    if (_linePresent && (_config.tlmFields & TLM_FIELD_LINE)) {
-        haveLine = _line.readValues(lineVals);
-    }
+    // ----- 4. Line from HardwareState snapshot --------------------------------
+    bool haveLine = _line.is_initialized() && _state.inputs.lineVS.valid &&
+                    (_config.tlmFields & TLM_FIELD_LINE);
 
-    // ----- 5. Read color sensor (if present and field requested) -------------
-    uint16_t colorR = 0, colorG = 0, colorB = 0, colorC = 0;
-    bool haveColor = false;
-    if (_colorPresent && (_config.tlmFields & TLM_FIELD_COLOR)) {
-        haveColor = _color.pollRGBC(colorR, colorG, colorB, colorC);
-    }
+    // ----- 5. Color from HardwareState snapshot -------------------------------
+    bool haveColor = _color.is_initialized() && _state.inputs.colorVS.valid &&
+                     (_config.tlmFields & TLM_FIELD_COLOR);
 
-    // ----- 6. Read velocity (encoder-delta, always available) ----------------
+    // ----- 6. Velocity from HardwareState -------------------------------------
     float velL = 0.0f, velR = 0.0f;
     bool haveVel = false;
     if (_config.tlmFields & TLM_FIELD_VEL) {
-        _mc.getActualVelocity(velL, velR);
+        velL    = _state.inputs.velLMms;
+        velR    = _state.inputs.velRMms;
         haveVel = true;
     }
 
-    // ----- 7. Determine drive mode character ---------------------------------
+    // ----- 7. Drive mode character --------------------------------------------
     char modeChar = 'I';
     switch (_dc.mode()) {
         case DriveMode::STREAMING: modeChar = 'S'; break;
@@ -243,52 +478,50 @@ void Robot::telemetryTick(uint32_t now_ms, ReplyFn fn, void* ctx)
         default:                   modeChar = 'I'; break;
     }
 
-    // ----- 8. Assemble TLM line (~90 bytes) ----------------------------------
+    // ----- 8. Assemble TLM line -----------------------------------------------
     char tlmBuf[128];
     int  pos = 0;
     int  rem = (int)sizeof(tlmBuf);
 
-    // TLM header: tag + timestamp + mode
     int n = snprintf(tlmBuf + pos, (size_t)rem,
                      "TLM t=%lu mode=%c",
                      (unsigned long)t_sample, modeChar);
     if (n > 0 && n < rem) { pos += n; rem -= n; }
 
-    // enc= field
     if (_config.tlmFields & TLM_FIELD_ENC) {
         n = snprintf(tlmBuf + pos, (size_t)rem, " enc=%d,%d", (int)encL, (int)encR);
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
 
-    // pose= field (always emitted when requested; odometry is always available)
     if (_config.tlmFields & TLM_FIELD_POSE) {
         n = snprintf(tlmBuf + pos, (size_t)rem,
                      " pose=%d,%d,%d", (int)pose_x, (int)pose_y, (int)pose_h);
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
 
-    // vel= field
     if (haveVel) {
         n = snprintf(tlmBuf + pos, (size_t)rem,
                      " vel=%d,%d", (int)velL, (int)velR);
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
 
-    // line= field
     if (haveLine) {
         n = snprintf(tlmBuf + pos, (size_t)rem,
                      " line=%u,%u,%u,%u",
-                     (unsigned)lineVals[0], (unsigned)lineVals[1],
-                     (unsigned)lineVals[2], (unsigned)lineVals[3]);
+                     (unsigned)_state.inputs.line[0],
+                     (unsigned)_state.inputs.line[1],
+                     (unsigned)_state.inputs.line[2],
+                     (unsigned)_state.inputs.line[3]);
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
 
-    // color= field
     if (haveColor) {
         n = snprintf(tlmBuf + pos, (size_t)rem,
                      " color=%u,%u,%u,%u",
-                     (unsigned)colorR, (unsigned)colorG,
-                     (unsigned)colorB, (unsigned)colorC);
+                     (unsigned)_state.inputs.colorR,
+                     (unsigned)_state.inputs.colorG,
+                     (unsigned)_state.inputs.colorB,
+                     (unsigned)_state.inputs.colorC);
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
 

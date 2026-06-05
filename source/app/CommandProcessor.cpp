@@ -22,6 +22,7 @@
 #include "MotorController.h"
 #include "Odometry.h"
 #include "DriveController.h"
+#include "LoopScheduler.h"
 #include "Config.h"
 #include <cstring>
 #include <cstdio>
@@ -101,6 +102,12 @@ static const ConfigEntry kRegistry[] = {
     CFG_I("tick",         tickMs),
     CFG_I("ctrlPeriod",   controlPeriodMs),
     CFG_I("tlmPeriod",    tlmPeriodMs),
+    // Sensor lag budgets (ms) for the cooperative scheduler's low-priority tasks.
+    // SET lag.* N updates cfg.lag*Ms; LoopScheduler syncs task periodMs live.
+    CFG_I("lag.otos",     lagOtosMs),
+    CFG_I("lag.line",     lagLineMs),
+    CFG_I("lag.color",    lagColorMs),
+    CFG_I("lag.ports",    lagPortsMs),
     // OTOS calibration and turn asymmetry (Sprint 012)
     CFG_F("otosLinSc",    otosLinearScale),
     CFG_F("otosAngSc",    otosAngularScale),
@@ -673,14 +680,14 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     if (strcmp(verb, "GET") == 0) {
         // Special case: GET VEL — velocity readout (not a config key).
         if (ntok >= 2 && strcmp(tokens[1], "VEL") == 0) {
-            float vL = 0.0f, vR = 0.0f;
-            bool chipL = false, chipR = false;
-            _robot.motor().getActualVelocity(vL, vR);
-            _robot.motor().getVelocitySourceFlags(chipL, chipR);
+            // Read velocities from HardwareState (written by controlCollect each tick).
+            // Chip readSpeed (0x47) is disabled (sprint 013 throb fix), so source
+            // is always encoder-delta ('E') for both wheels.
+            float vL = _robot.state().inputs.velLMms;
+            float vR = _robot.state().inputs.velRMms;
             char body[48];
-            snprintf(body, sizeof(body), "vel=%d:%c,%d:%c",
-                     (int)vL, chipL ? 'C' : 'E',
-                     (int)vR, chipR ? 'C' : 'E');
+            snprintf(body, sizeof(body), "vel=%d:E,%d:E",
+                     (int)vL, (int)vR);
             replyOK(rbuf, sizeof(rbuf), "get", body, corr_id, replyFn, ctx);
             return;
         }
@@ -793,24 +800,78 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
         return;
     }
 
-    // ── VS — per-tick velocity statistics (throb diagnosis) ───────────────────
-    // VS 0  → reset accumulators → OK vs reset
-    // VS    → OK vs n=<N> mL=<mean> sL=<sd> minL=<> maxL=<> mR=<> sR=<> minR=<> maxR=<>
-    // All integers (mm/s) — measured at the real loop rate, no radio aliasing.
-    if (strcmp(verb, "VS") == 0) {
-        if (ntok >= 2 && atoi(tokens[1]) == 0) {
-            _robot.motor().resetVelStats();
-            replyOK(rbuf, sizeof(rbuf), "vs", "reset", corr_id, replyFn, ctx);
+    // ── DBG — debug/testing controls ──────────────────────────────────────────
+    // DBG LOOP <x> <state>  → set scheduler task x run flag (0/1).
+    //                         Takes effect in LoopScheduler::run_all().
+    // DBG LOOP              → list tasks: "LOOP <idx> <name> run=<0|1> n=<runs> avgUs=<us>"
+    if (strcmp(verb, "DBG") == 0) {
+        if (ntok < 2) {
+            replyErr(rbuf, sizeof(rbuf), "badarg", "dbg subcommand", corr_id, replyFn, ctx);
             return;
         }
-        int32_t n, mL, sL, lL, hL, mR, sR, lR, hR;
-        _robot.motor().getVelStats(n, mL, sL, lL, hL, mR, sR, lR, hR);
-        char body[128];
-        snprintf(body, sizeof(body),
-                 "n=%d mL=%d sL=%d minL=%d maxL=%d mR=%d sR=%d minR=%d maxR=%d",
-                 (int)n, (int)mL, (int)sL, (int)lL, (int)hL,
-                 (int)mR, (int)sR, (int)lR, (int)hR);
-        replyOK(rbuf, sizeof(rbuf), "vs", body, corr_id, replyFn, ctx);
+        // Only the verb is auto-uppercased; normalise the subcommand here.
+        for (char* c = tokens[1]; *c != '\0'; ++c) {
+            *c = (char)toupper((unsigned char)*c);
+        }
+        if (strcmp(tokens[1], "LOOP") == 0) {
+            if (_sched == nullptr) {
+                replyErr(rbuf, sizeof(rbuf), "noimpl", "no scheduler", corr_id, replyFn, ctx);
+                return;
+            }
+            // DBG LOOP RESET — zero all timing stats for a fresh window.
+            if (ntok >= 3 && strcmp(tokens[2], "RESET") == 0) {
+                _sched->resetStats();
+                replyOK(rbuf, sizeof(rbuf), "dbg", "loop reset", corr_id, replyFn, ctx);
+                return;
+            }
+            // DBG LOOP <x> <state> — set task x run flag.
+            if (ntok >= 4) {
+                int x = atoi(tokens[2]);
+                int s = atoi(tokens[3]);
+                if (!_sched->setTaskRun(x, s != 0)) {
+                    replyErr(rbuf, sizeof(rbuf), "badarg", "task index", corr_id, replyFn, ctx);
+                    return;
+                }
+                char body[40];
+                snprintf(body, sizeof(body), "loop %d run=%d", x, (s != 0) ? 1 : 0);
+                replyOK(rbuf, sizeof(rbuf), "dbg", body, corr_id, replyFn, ctx);
+                return;
+            }
+            // DBG LOOP — emit ALL timing as ONE compact line (sending ~10
+            // separate lines overflows the 255-byte serial TX buffer and faults
+            // the firmware). avgUs are per-iteration: ctl=control/PID task;
+            // cyc=full loop period incl. idle sleep; wrk=work excl. sleep;
+            // t0..t7 = the 8 low-priority tasks in table order (comms-in,
+            // drive-advance, odometry-predict, otos-correct, line-read,
+            // color-read, ports-read, telemetry-emit).
+            {
+                unsigned long cr = (unsigned long)_sched->controlRuns();
+                unsigned long lr = (unsigned long)_sched->loopRuns();
+                auto avgUs = [](const Task* t) -> unsigned long {
+                    return (t && t->runs > 0)
+                         ? (unsigned long)(t->totalTimeUs / t->runs) : 0UL;
+                };
+                char buf[200];
+                // Single snprintf, fixed args — no incremental offset math, no
+                // loop, one send. Output ~110 chars, well under buf and the
+                // 255-byte TX buffer.
+                snprintf(buf, sizeof(buf),
+                    "LOOP ctl=%lu cyc=%lu wrk=%lu loops=%lu "
+                    "t0=%lu t1=%lu t2=%lu t3=%lu t4=%lu t5=%lu t6=%lu t7=%lu",
+                    cr ? (unsigned long)(_sched->controlTotalUs() / cr) : 0UL,
+                    lr ? (unsigned long)(_sched->loopTotalUs() / lr) : 0UL,
+                    lr ? (unsigned long)(_sched->loopWorkTotalUs() / lr) : 0UL,
+                    lr,
+                    avgUs(_sched->taskAt(0)), avgUs(_sched->taskAt(1)),
+                    avgUs(_sched->taskAt(2)), avgUs(_sched->taskAt(3)),
+                    avgUs(_sched->taskAt(4)), avgUs(_sched->taskAt(5)),
+                    avgUs(_sched->taskAt(6)), avgUs(_sched->taskAt(7)));
+                replyFn(buf, ctx);
+            }
+            replyOK(rbuf, sizeof(rbuf), "dbg", "loop", corr_id, replyFn, ctx);
+            return;
+        }
+        replyErr(rbuf, sizeof(rbuf), "badarg", "dbg subcommand", corr_id, replyFn, ctx);
         return;
     }
 

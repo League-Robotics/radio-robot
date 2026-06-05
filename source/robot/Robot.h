@@ -1,5 +1,4 @@
 #pragma once
-#include "MicroBit.h"
 #include "Config.h"
 #include "Motor.h"
 #include "OtosSensor.h"
@@ -7,29 +6,32 @@
 #include "ColorSensor.h"
 #include "Servo.h"
 #include "PortIO.h"
-#include "SerialPort.h"
-#include "Radio.h"
+#include "Communicator.h"
 #include "MotorController.h"
 #include "Odometry.h"
 #include "DriveController.h"
+#include "RobotState.h"
 
 /**
  * Robot — top-level object that owns all firmware subsystems.
  *
- * MicroBit uBit now lives in main.cpp as a file-scope static. Robot
- * receives references to the CODAL peripherals it needs so that hardware
- * ownership is explicit and Robot is a pure abstraction layer.
+ * Devices (Motor, OtosSensor, LineSensor, ColorSensor, Servo, PortIO) and the
+ * Communicator are constructed in main() as statics and passed in by reference.
+ * Robot holds REFERENCES to them — it does NOT own or construct them.
  *
- * Construction order is preserved: main.cpp calls uBit.init() before
- * constructing Robot, so all CODAL peripherals are fully initialised
- * when the subsystem constructors run.
+ * The control layer (MotorController, Odometry, DriveController,
+ * RobotStateContainer) is still owned here.  RobotConfig is held as an owned
+ * COPY initialised from the cfg argument (runtime SET commands mutate it).
+ *
+ * begin() for each device is called explicitly in main() before constructing
+ * Robot, so a device can be disabled by commenting out its begin() call.
  *
  * Usage (main.cpp):
- *   static MicroBit uBit;
- *   uBit.init();
- *   static Robot robot(uBit.i2c, uBit.serial, uBit.radio, uBit.io,
- *                      uBit.messageBus, uBit);
- *   // then run the visible main loop — see main.cpp.
+ *   static Motor motorL(uBit.i2c, 2, cfg.fwdSignL);
+ *   static Communicator comm(uBit.serial, uBit.radio, uBit.messageBus);
+ *   comm.begin();
+ *   otos.begin();
+ *   static Robot robot(motorL, motorR, otos, line, color, gripper, portio, comm, cfg);
  */
 class Robot {
 public:
@@ -40,26 +42,78 @@ public:
     struct EncoderReading { int32_t leftMm; int32_t rightMm; };
     struct Pose           { int32_t x_mm; int32_t y_mm; int32_t h_cdeg; };
 
-    Robot(MicroBitI2C&    i2c,
-          NRF52Serial&    serial,
-          MicroBitRadio&  radio,
-          MicroBitIO&     io,
-          MessageBus&     messageBus,
-          MicroBit&       uBit);
+    Robot(Motor&        motorL,
+          Motor&        motorR,
+          OtosSensor&   otos,
+          LineSensor&   line,
+          ColorSensor&  color,
+          Servo&        gripper,
+          PortIO&       portio,
+          Communicator& comm,
+          const RobotConfig& cfg);
+
 
     // ---------------------------------------------------------------------------
-    // Two-fiber split (013-010):
-    //   controlTick  — run from the high-priority control fiber only.
-    //                  Executes encoder reads → PID → setSpeed + drive-mode
-    //                  state machines.  No serial/radio I/O.
-    //   telemetryTick — run from the comms+telemetry fiber.  Drains pending
-    //                  EVT completions from DriveController, then assembles
-    //                  and emits the unified TLM frame.  Reads only cached
-    //                  encoder/velocity values; line/color I2C is safe here
-    //                  because Motor I2C is now atomic (busy-wait).
+    // Split-phase encoder control API (014-006 — used by LoopScheduler).
+    //
+    //   controlCollect(now_ms)
+    //     Collects encoder readings (using the synchronous stub path; the
+    //     LoopScheduler adds the inter-iteration delay via idle sleep), computes
+    //     dt_s, then calls _mc.controlTick() to run PID and write PWM.
+    //     Exposed public so LoopScheduler can drive the control task.
+    //
+    //   controlFireRequest(pendingWheel)
+    //     Fires the encoder request for the wheel identified by pendingWheel
+    //     (1 = left, 2 = right). Called LAST before the idle sleep to keep the
+    //     motor's pending-read window free of other I2C.
+    //     Returns the wheel that was just requested (same as pendingWheel).
+    //
+    //   controlCollectSplitPhase(now_ms, pendingWheel)
+    //     Proper split-phase collect: reads back the encoder from the wheel
+    //     identified by pendingWheel (1=left, 2=right), writes
+    //     _state.inputs.enc{L,R}Mm, then calls _mc.controlTick().
+    //     Skipped if pendingWheel == 0 (first-iteration guard — no request
+    //     has been fired yet so there is nothing to collect).
     // ---------------------------------------------------------------------------
-    void controlTick(uint32_t now_ms);
-    void telemetryTick(uint32_t now_ms, ReplyFn fn, void* ctx);
+    void controlCollect(uint32_t now_ms);
+    void controlFireRequest(int pendingWheel);
+    void controlCollectSplitPhase(uint32_t now_ms, int pendingWheel);
+
+    // ---------------------------------------------------------------------------
+    // Cooperative-loop task entry points (014-004 / 014-005).
+    //
+    //   odometryPredict() — apply midpoint dead-reckoning from _state.inputs.encLMm/R
+    //                       into _state.inputs.poseX/Y/Hrad.  Called once per
+    //                       odometry-predict task slot (ticket 006 wires the scheduler).
+    //   otosCorrect(now_ms) — read OTOS hardware, write _state.inputs.otosX/Y/H,
+    //                         apply complementary correction to pose.  Called at the
+    //                         slow cadence (100 ms).  Sole OTOS correction path —
+    //                         DriveController no longer has an OTOS block (014-005).
+    //   driveAdvance(now_ms) — advance S/T/D/G state machines; emit EVT completions
+    //                          inline via the captured per-drive reply sink.
+    // ---------------------------------------------------------------------------
+    void odometryPredict();
+    void otosCorrect(uint32_t now_ms);
+    void driveAdvance(uint32_t now_ms);
+
+    // ---------------------------------------------------------------------------
+    // Sensor read task entry points (014-007).
+    //
+    //   lineRead()   — read 4-channel line sensor into _state.inputs.line[];
+    //                  updates lineVS.lastUpdMs and sets lineVS.valid.
+    //   colorRead()  — non-blocking RGBC poll into _state.inputs.colorR/G/B/C;
+    //                  updates colorVS.lastUpdMs and sets colorVS.valid.
+    //   portsRead()  — read digital/analog GPIO into _state.inputs.digitalIn/analogIn;
+    //                  updates portsVS.lastUpdMs and sets portsVS.valid.
+    //
+    // telemetryEmit — assemble the unified TLM frame from _state.inputs (no
+    //                 direct sensor I2C calls) and emit via fn/ctx.
+    //                 Respects tlmPeriodMs gating and SNAP flag.
+    // ---------------------------------------------------------------------------
+    void lineRead();
+    void colorRead();
+    void portsRead();
+    void telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx);
 
     // ---------------------------------------------------------------------------
     // Drive action methods — delegate to DriveController.
@@ -94,28 +148,33 @@ public:
     // Current gripper angle (set by setGripperAngle / G command)
     int32_t gripperAngle() const { return _currentGripperAngle; }
 
-    // Robot system time in milliseconds since boot (uBit.systemTime()).
-    uint32_t systemTime() const { return _uBit.systemTime(); }
+    // Robot system time in milliseconds since boot.
+    // Uses the CODAL free function system_timer_current_time() (declared in
+    // codal-core Timer.h, pulled in via MicroBit.h headers).
+    uint32_t systemTime() const;
 
     // ---------------------------------------------------------------------------
+    // State accessor — returns the authoritative robot state container (014-003).
+    // HardwareState::enc*/vel* are written each tick by controlCollect().
+    // MotorCommands::tgt*/pwm* are written each tick by MotorController::controlTick().
+    // ---------------------------------------------------------------------------
+    const RobotStateContainer& state() const { return _state; }
+    RobotStateContainer&       stateMut()    { return _state; }  // mutable accessor for LoopScheduler tasks
+
     // Component accessors — used by CommandProcessor and main.cpp.
     // ---------------------------------------------------------------------------
     RobotConfig&     config()          { return _config; }
-    SerialPort&      serialPort()      { return _serial; }
-    Radio&           radioPort()       { return _radio; }
+    Communicator&    comm()            { return _comm; }
     MotorController& motor()           { return _mc; }
     DriveController& driveController() { return _dc; }
     Odometry&        odometry()        { return _odo; }
-    OtosSensor*      otos()            { return _otosPresent  ? &_otos  : nullptr; }
-    LineSensor*      lineSensor()      { return _linePresent  ? &_line  : nullptr; }
-    ColorSensor*     colorSensor()     { return _colorPresent ? &_color : nullptr; }
-    Servo*           servo()            { return _gripperPresent ? &_servo   : nullptr; }
+    OtosSensor*      otos()            { return _otos.is_initialized()  ? &_otos  : nullptr; }
+    LineSensor*      lineSensor()      { return _line.is_initialized()  ? &_line  : nullptr; }
+    ColorSensor*     colorSensor()     { return _color.is_initialized() ? &_color : nullptr; }
+    Servo*           servo()           { return _gripperPresent ? &_servo   : nullptr; }
     PortIO&          portIO()          { return _portio; }
 
 private:
-    // Reference to the CODAL singleton — used by drive action helpers for systemTime().
-    MicroBit& _uBit;
-
     // Gripper angle tracking (owned here so CommandProcessor is stateless)
     int32_t _currentGripperAngle;
 
@@ -127,25 +186,35 @@ private:
     // TLM streaming state — managed by tick(); period/fields/snap set via config().
     uint32_t _lastTlmMs;    // timestamp of last emitted TLM frame
 
-    // Required subsystems (constructed from received references)
-    Motor      _motorL;   // M2, left wheel
-    Motor      _motorR;   // M1, right wheel
-    SerialPort _serial;
-    Radio      _radio;
-
-    // Optional subsystems (_*Present tracks hardware availability)
-    OtosSensor   _otos;
-    bool         _otosPresent;
-    LineSensor   _line;
-    bool         _linePresent;
-    ColorSensor  _color;
-    bool         _colorPresent;
-    Servo        _servo;
+    // Device references (constructed externally in main(), passed in as refs).
+    Motor&       _motorL;   // M2, left wheel
+    Motor&       _motorR;   // M1, right wheel
+    OtosSensor&  _otos;
+    LineSensor&  _line;
+    ColorSensor& _color;
+    Servo&       _servo;
     bool         _gripperPresent;
-    PortIO       _portio;
+    PortIO&      _portio;
 
-    // Control layer — declared after _motorL/_motorR and _config to ensure correct init order.
+    // Communications (owns SerialPort + Radio; begin() called in main() before Robot).
+    Communicator& _comm;
+
+    // Control layer — declared after device refs to ensure correct init order.
     MotorController  _mc;
     Odometry         _odo;
     DriveController  _dc;
+
+    // Authoritative robot state container (014-003).
+    // Owned here; written each control tick by controlCollect().
+    RobotStateContainer _state;
+
+    // Timestamp of the most recent controlCollect() call, used to compute dt_s.
+    uint32_t _lastControlMs;
+
+    // Slow-cadence OTOS polling: run otosCorrect() every kOtosSlowMs milliseconds.
+    // Matches the cadence previously tracked by DriveController::_lastOtosMs (014-005).
+    static constexpr uint32_t kOtosSlowMs = 100;  // 10 Hz OTOS correction cadence
+    uint32_t _lastOtosMs;
+
+    // (controlCollect is now public — see the split-phase encoder control API above.)
 };

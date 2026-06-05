@@ -30,7 +30,7 @@
  *   ---------|----------------------------------------|--------|-------
  *   0x60     | setSpeed()  — run motor at PWM %        | 008    | wrapped
  *   0x5F     | setSpeed(0) — stop motor                | 008    | wrapped
- *   0x46     | readEncoderRaw() / readEncoder()        | 008    | wrapped
+ *   0x46     | requestEncoder() / collectEncoder()     | 014    | split-phase
  *   (sw)     | resetEncoder()  — software offset zero  | 008    | wrapped
  *   0x47     | readSpeedRaw()  / readSpeed()           | 008    | wrapped
  *   0x70     | timedMove()  — timed/distance/turn move | 008    | wrapped
@@ -60,6 +60,28 @@ public:
     // Zero this motor's encoder accumulator (software offset reset,
     // matches chip TypeScript resetRelAngleValue() behaviour).
     void    resetEncoder();
+
+    /**
+     * requestEncoder — split-phase encoder I/O, phase 1.
+     *
+     * Issues the 0x46 write command and returns immediately (no busy-wait,
+     * no fiber_sleep). The caller must ensure at least one full loop period
+     * elapses before calling collectEncoder() — the cooperative loop's idle
+     * sleep provides this guarantee. Only one wheel's request may be in
+     * flight at a time; the LoopScheduler alternates wheels across ticks.
+     */
+    void requestEncoder();
+
+    /**
+     * collectEncoder — split-phase encoder I/O, phase 2.
+     *
+     * Reads back the 4-byte response issued by a prior requestEncoder() call
+     * and returns the signed int32 (raw tenths of degrees minus _encOffset).
+     * No busy-wait, no fiber_sleep. The caller is responsible for satisfying
+     * the vendor's required inter-transaction delay (≥ one loop period,
+     * supplied by the cooperative scheduler's idle sleep).
+     */
+    int32_t collectEncoder() const;
 
     /**
      * readSpeed — read chip-native wheel velocity.
@@ -164,6 +186,35 @@ public:
      */
     bool readVersion(uint8_t& maj, uint8_t& min, uint8_t& patch);
 
+    /**
+     * readEncoderAtomic — safe single-shot encoder read (raw tenths-of-degrees).
+     *
+     * Implements the full vendor pxt-nezha2 readAngle() timing (sprint 013
+     * readEncoderRaw() pattern):
+     *   4 ms pre-write bus-idle → 0x46 write → 4 ms post-write settle → read 4 bytes.
+     *
+     * Both delays are required (confirmed by sprint 013 bench):
+     *   - pre-write: allows the I2C bus to idle after the previous transaction.
+     *   - post-write: allows the chip to prepare its 4-byte response.
+     * Busy-wait is used (NOT fiber_sleep) so the CODAL scheduler cannot
+     * dispatch a competing I2C transaction during the window.
+     *
+     * Returns raw tenths-of-degrees minus the software offset (_encOffset).
+     *
+     * Use for: resetEncoder(), any one-off read outside the control tick.
+     * Cost: ~8 ms (two 4ms delays).
+     */
+    int32_t readEncoderAtomic() const;
+
+    /**
+     * readEncoderMmFAtomic — safe single-shot encoder read in mm (float).
+     *
+     * Same as readEncoderAtomic() but converts to mm using calibration from cfg.
+     * Use for: startDrive(), startDriveClean(), stop() — any position snapshot
+     * outside the normal control tick.  Cost: ~8 ms.
+     */
+    float readEncoderMmFAtomic(const RobotConfig& cfg) const;
+
 private:
     MicroBitI2C& _i2c;
     uint8_t      _motorId;  // 1=M1/right, 2=M2/left
@@ -172,6 +223,13 @@ private:
     // Commanded direction: +1 = logical forward, -1 = logical reverse, 0 = stopped.
     // Set by setSpeed(); read by readSpeed() to apply sign to the unsigned chip reading.
     int8_t _lastDir;
+
+    // Last PWM% written to the Nezha. setSpeed() skips the I2C write when the
+    // command is unchanged, so the controller is never hammered at the ~100 Hz
+    // control-loop rate (that write rate wedges the encoder reads). Sentinel
+    // sentinel -128 (outside valid ±100) forces the first write. See
+    // docs/knowledge encoder-wedge note.
+    int8_t _lastWrittenPct = -128;
 
     static constexpr uint8_t ADDR    = 0x10;
     static constexpr uint8_t DIR_CW  = 1;   // positive speed from chip perspective
@@ -183,8 +241,9 @@ private:
     // Write an 8-byte motor command to the chip.
     void    writeMotorCmd(uint8_t direction, uint8_t speed);
 
-    // Read raw cumulative encoder from chip for this motor (tenths of degrees,
-    // minus the software offset).
+    // Legacy synchronous encoder read (write + immediate read, no busy-wait).
+    // No longer used by resetEncoder() (replaced by readEncoderAtomic()).
+    // Retained for reference; can be removed once confirmed unnecessary.
     int32_t readEncoderRaw() const;
 
     // Read raw speed from chip register 0x47 (uint16 LE, unsigned magnitude).

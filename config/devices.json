@@ -4,7 +4,7 @@
     "common_name": "relay",
     "device_name": "getez",
     "enum": 1,
-    "port": "/dev/cu.usbmodem21421302",
+    "port": "/dev/cu.usbmodem214402",
     "role": "RADIOBRIDGE",
     "serial": "1784514240",
     "uid": "990636020005282017449eac613c0332000000006e052820"
@@ -14,7 +14,7 @@
     "common_name": "robot",
     "device_name": "tovez",
     "enum": 2,
-    "port": "/dev/cu.usbmodem21421102",
+    "port": "/dev/cu.usbmodem2121102",
     "role": "NEZHA2",
     "serial": "2314287040",
     "uid": "9906360200052820a8fdb5e413abb276000000006e052820"

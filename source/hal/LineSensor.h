@@ -1,5 +1,6 @@
 #pragma once
 #include "MicroBit.h"
+#include "Sensor.h"
 #include <stdint.h>
 
 /**
@@ -22,9 +23,13 @@
  *   Higher alpha means more smoothing (output lags behind input more).
  *   EMA formula: ema = alpha * ema_prev + (1 - alpha) * new_sample
  */
-class LineSensor {
+class LineSensor : public Sensor {
 public:
     explicit LineSensor(MicroBitI2C& i2c);
+
+    // Probe the sensor (read all 4 channels); set _initialized to the result.
+    // Returns _initialized.
+    bool begin() override;
 
     // Fills out[0..3] with raw grayscale values (0=white, 255=black approx).
     // Returns false on I2C error. out may be nullptr (probe use).
@@ -53,6 +58,10 @@ public:
 private:
     MicroBitI2C& _i2c;
     static constexpr uint8_t ADDR = 0x1A;
+
+    // Low-level 4-channel raw read (ungated); used by begin()'s probe and by
+    // the gated readValues().  out may be nullptr (probe use).
+    bool readRaw(uint16_t out[4]) const;
 
     // Per-channel calibration bounds. Defaults: min=0, max=255.
     uint16_t _calMin[4];

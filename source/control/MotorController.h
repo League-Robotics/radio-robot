@@ -4,6 +4,8 @@
 #include "Config.h"
 #include "RatioPidController.h"
 #include "VelocityController.h"
+#include "RobotState.h"
+#include <stdint.h>
 
 /**
  * MotorController — per-wheel velocity PID wheel speed control.
@@ -57,19 +59,43 @@ public:
     // Update PID gains at runtime (called by K-command setters).
     void updatePidGains(float kP, float kI, float kD, float iClamp);
 
-    // Run one control tick. dt_s is elapsed seconds since last tick.
-    // Reads encoders, runs ratio PID + FF, clamps output, calls Motor::setSpeed().
-    void tick(float dt_s);
-
-    // Read actual wheel velocities in mm/s (encoder delta since last tick).
-    void getActualVelocity(float& leftMms, float& rightMms) const;
+    /**
+     * controlTick — cooperative-loop control step (014-003 / 014-007).
+     *
+     * Per-wheel zero-order-hold velocity (014-007 ZOH fix):
+     *   refreshedWheel: 0 = none (first iteration / sync fallback),
+     *                   1 = left wheel was just collected,
+     *                   2 = right wheel was just collected.
+     *
+     * For the refreshed wheel only: computes velocity as
+     *   (inputs.encWMm - _prevEncW) / elapsed_s
+     * using per-wheel timestamps for the correct elapsed time, then
+     * writes inputs.velWMms and updates _prevEncW / _prevTimeMsW.
+     *
+     * For the other wheel: leaves inputs.velWMms unchanged (ZOH).
+     *
+     * Then runs PID for BOTH wheels using the held inputs.velLMms/velRMms,
+     * writes cmds.pwmL/R, and calls Motor::setSpeed().
+     *
+     * now_ms: current system time in milliseconds (for per-wheel dt).
+     */
+    void controlTick(HardwareState& inputs, MotorCommands& cmds,
+                     uint32_t now_ms, int refreshedWheel);
 
     /**
-     * getVelocitySourceFlags — report which velocity source is live per wheel.
+     * setCommandsRef — bind the authoritative MotorCommands struct so that
+     * setTarget / startDrive / stop can write tgtLMms/R directly (014-007).
+     * Must be called before the first setTarget (Robot constructor does this).
+     */
+    void setCommandsRef(MotorCommands* cmds) { _cmds = cmds; }
+
+    /**
+     * getVelocitySourceFlags — always returns false for both wheels.
      *
-     * leftChip  = true if chip readSpeed (0x47) is the active source for left wheel.
-     * rightChip = true if chip readSpeed (0x47) is the active source for right wheel.
-     * false = encoder-delta fallback is in use (I2C error or implausibility gate).
+     * The chip readSpeed (0x47) path was disabled in sprint 013 to fix
+     * motor throb. The encoder-delta fallback is the sole velocity source.
+     * Method retained for CommandProcessor wire-format compatibility until
+     * ticket 007 migrates callers to Robot::state().
      */
     void getVelocitySourceFlags(bool& leftChip, bool& rightChip) const;
 
@@ -97,23 +123,21 @@ private:
     float _cmdRatio;         // |fasterSpeed| / |slowerSpeed|, always >= 1.0
     bool  _fasterIsRight;    // true if right wheel is the commanded-faster wheel
 
-    float _tgtLMms;          // current speed targets in mm/s
-    float _tgtRMms;
+    // Pointer to the authoritative MotorCommands (set by Robot via setCommandsRef).
+    // setTarget / startDrive / stop write tgtLMms/R here directly (014-007).
+    MotorCommands* _cmds;
 
-    // Cached encoder readings from the most recent tick() call.
-    float   _prevEncL;   // mm at start of last tick (float — high-res for velocity)
-    float   _prevEncR;
-    float   _actualVelL; // mm/s computed in tick()
-    float   _actualVelR;
-    float   _encLMm;     // current encoder position (mm), updated in tick()
-    float   _encRMm;
+    // Previous encoder snapshots — intermediate compute state for velocity differentiation.
+    // These are NOT robot state (they are algorithm state private to MotorController).
+    float    _prevEncL;   // mm at start of last controlTick for left wheel
+    float    _prevEncR;   // mm at start of last controlTick for right wheel
 
-    // Velocity source flags: true = chip readSpeed (0x47), false = encoder-delta fallback.
-    bool _usingChipVelL;
-    bool _usingChipVelR;
-
-    // Read encoder and convert to mm.
-    float encoderMm(bool left);
+    // Per-wheel timing for ZOH velocity computation (014-007).
+    // lastUpdMs is 0 until the first valid reading (first-sample guard).
+    uint32_t _prevTimeMsL;  // system time (ms) of last left-wheel collect
+    uint32_t _prevTimeMsR;  // system time (ms) of last right-wheel collect
+    bool     _hasTimestampL;
+    bool     _hasTimestampR;
 
     // clamp helper
     static float clamp(float v, float lo, float hi);

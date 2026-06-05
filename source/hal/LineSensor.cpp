@@ -16,7 +16,29 @@ LineSensor::LineSensor(MicroBitI2C& i2c)
 // Public interface
 // ---------------------------------------------------------------------------
 
+bool LineSensor::begin()
+{
+    // Probe with retry: a successful 4-channel raw read means present.  Retry
+    // with a settle pause so a sensor still powering up after a cold boot is
+    // caught once it answers (the old firmware read it lazily at runtime).
+    for (int i = 0; i < 20; i++) {
+        if (readRaw(nullptr)) {
+            _initialized = true;
+            return true;
+        }
+        fiber_sleep(50);
+    }
+    _initialized = false;
+    return false;
+}
+
 bool LineSensor::readValues(uint16_t out[4]) const
+{
+    if (!is_initialized()) return false;
+    return readRaw(out);
+}
+
+bool LineSensor::readRaw(uint16_t out[4]) const
 {
     for (uint8_t ch = 0; ch < 4; ch++) {
         // Write the channel index byte.
