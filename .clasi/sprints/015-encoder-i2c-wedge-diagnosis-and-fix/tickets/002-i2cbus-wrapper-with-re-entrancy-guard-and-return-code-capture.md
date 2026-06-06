@@ -1,13 +1,13 @@
 ---
-id: "002"
-title: "I2CBus wrapper with re-entrancy guard and return-code capture"
-status: open
+id: '002'
+title: I2CBus wrapper with re-entrancy guard and return-code capture
+status: done
 use-cases:
-  - SUC-002
-  - SUC-004
+- SUC-002
+- SUC-004
 depends-on: []
-github-issue: ""
-issue: ""
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -36,7 +36,7 @@ assumption instead of asserting it.
 
 ## Acceptance Criteria
 
-- [ ] `source/hal/I2CBus.h` declares the class with:
+- [x] `source/hal/I2CBus.h` declares the class with:
   - `I2CBus(MicroBitI2C& bus)` constructor.
   - `int write(uint16_t address, uint8_t* data, int len, bool repeated)` --
     returns the CODAL status int.
@@ -48,19 +48,19 @@ assumption instead of asserting it.
   - `uint32_t reentryViolations()` -- total re-entrancy violation count.
   - `uint16_t reentryInFlightAddr()` and `uint16_t reentryNewAddr()` -- addresses
     captured at the most recent violation.
-- [ ] `write()` and `read()` check/set `_inUse` atomically via
+- [x] `write()` and `read()` check/set `_inUse` atomically via
   `target_disable_irq()`/`target_enable_irq()` around the flag access only
   (NOT around the full I2C transaction).
-- [ ] On re-entrancy, violation counter increments and address pair is captured;
+- [x] On re-entrancy, violation counter increments and address pair is captured;
   transaction proceeds (guard is diagnostic, not blocking).
-- [ ] `Motor`, `OtosSensor`, `LineSensor`, `ColorSensor` constructors take
+- [x] `Motor`, `OtosSensor`, `LineSensor`, `ColorSensor` constructors take
   `I2CBus&` instead of `MicroBitI2C&`; stored field type updated accordingly.
   All `_i2c.write()` / `_i2c.read()` call sites are unchanged in logic.
-- [ ] `source/main.cpp`: one `static I2CBus bus(uBit.i2c)` constructed before
+- [x] `source/main.cpp`: one `static I2CBus bus(uBit.i2c)` constructed before
   device objects; all four device constructors receive `bus`.
-- [ ] Build passes clean: `python3 build.py --clean` with zero errors and zero
+- [x] Build passes clean: `python3 build.py --clean` with zero errors and zero
   warnings introduced by this ticket.
-- [ ] Host test suite passes: `uv run --with pytest python -m pytest` (no
+- [x] Host test suite passes: `uv run --with pytest python -m pytest` (no
   regressions).
 
 ## Implementation Plan

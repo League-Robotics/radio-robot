@@ -3,6 +3,7 @@
 #include "CommandProcessor.h"
 #include "LoopScheduler.h"
 #include "Communicator.h"
+#include "I2CBus.h"
 #include "Motor.h"
 #include "OtosSensor.h"
 #include "LineSensor.h"
@@ -61,12 +62,17 @@ int main() {
 
     // -----------------------------------------------------------------------
     // 3. Devices (singletons) on the buses.
+    //
+    // I2CBus sits between uBit.i2c and every device so per-device transaction
+    // counts, error rates, and re-entrancy violations are observable via the
+    // DBG I2C command (ticket 015-003) without altering any transaction semantics.
     // -----------------------------------------------------------------------
-    static Motor        motorL(uBit.i2c, 2, cfg.fwdSignL);   // M2 left
-    static Motor        motorR(uBit.i2c, 1, cfg.fwdSignR);   // M1 right
-    static OtosSensor   otos(uBit.i2c, cfg);
-    static LineSensor   line(uBit.i2c);
-    static ColorSensor  color(uBit.i2c);
+    static I2CBus       bus(uBit.i2c);
+    static Motor        motorL(bus, 2, cfg.fwdSignL);   // M2 left
+    static Motor        motorR(bus, 1, cfg.fwdSignR);   // M1 right
+    static OtosSensor   otos(bus, cfg);
+    static LineSensor   line(bus);
+    static ColorSensor  color(bus);
     static Servo        gripper(uBit.io.P1);
     static PortIO       portio(uBit.io);
 
