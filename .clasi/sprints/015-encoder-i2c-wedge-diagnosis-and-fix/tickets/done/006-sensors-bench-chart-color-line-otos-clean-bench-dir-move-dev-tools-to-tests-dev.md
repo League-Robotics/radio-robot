@@ -2,7 +2,7 @@
 id: '006'
 title: Sensors bench chart (color/line/OTOS) + clean bench dir (move dev tools to
   tests/dev)
-status: in-progress
+status: done
 use-cases: []
 depends-on: []
 github-issue: ''
