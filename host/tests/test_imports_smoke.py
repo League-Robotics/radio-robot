@@ -9,7 +9,7 @@ Environment assumptions (root .venv via ``uv run --with pytest``):
   - numpy:    present (calibrate dep group → aprilcam)
   - aprilcam: present (calibrate dep group)
   - cv2:      present (pulled in by aprilcam at aprilcam import time)
-  - wpimath:  NOT present
+  - wpimath:  present (robotpy-wpimath dependency of robot-radio)
 
 Classes that import cleanly in this environment:
   nav: Pose, Waypoint, NavParams, align_otos_to_camera (pose_align)
@@ -21,9 +21,10 @@ Classes that import cleanly in this environment:
                StanleyController
   kinematics: (package-level __init__ only — no wpimath required)
 
-Classes behind wpimath (ImportError on access, not AttributeError):
-  controllers.LTVController — ``robot_radio.controllers.ltv`` fails to load
-  kinematics.DifferentialDriveKinematics — ``robot_radio.kinematics.differential_drive`` fails
+Classes behind wpimath (now import cleanly — robotpy-wpimath is installed —
+but still LAZILY, so a bare subpackage import must not eagerly pull them):
+  controllers.LTVController — ``robot_radio.controllers.ltv``
+  kinematics.DifferentialDriveKinematics — ``robot_radio.kinematics.differential_drive``
 
 CRITICAL: Do NOT import anything from vendor/PythonRobotics.
 Do NOT import robot_radio.nav.navigator here — it pulls in aprilcam → cv2
@@ -209,26 +210,18 @@ class TestControllersImports:
     def test_controllers_stanley_imports(self):
         _fresh_import("robot_radio.controllers.stanley")
 
-    def test_controllers_ltv_raises_import_error(self):
-        """Importing ltv requires wpimath, which is not installed.
-
-        The error must be a clear ImportError naming 'wpimath', not a
-        confusing AttributeError.
-        """
-        # Remove cached module to force a fresh attempt
+    def test_controllers_ltv_imports(self):
+        """ltv requires wpimath, now installed (robotpy-wpimath) — imports clean."""
+        # Remove cached module to force a fresh import.
         sys.modules.pop("robot_radio.controllers.ltv", None)
 
-        with pytest.raises(ImportError, match="wpimath"):
-            import robot_radio.controllers.ltv  # noqa: F401
+        importlib.import_module("robot_radio.controllers.ltv")
 
-    def test_controllers_ltv_via_getattr_raises_import_error(self):
-        """Accessing LTVController via the package __getattr__ must also
-        raise ImportError (not AttributeError) so callers see a clear message.
-        """
+    def test_controllers_ltv_via_getattr_returns_class(self):
+        """Accessing LTVController via the package __getattr__ returns the class."""
         import robot_radio.controllers as ctrl
 
-        with pytest.raises(ImportError, match="wpimath"):
-            _ = ctrl.LTVController
+        assert ctrl.LTVController is not None
 
 
 # ---------------------------------------------------------------------------
@@ -247,19 +240,17 @@ class TestKinematicsImports:
         """Package __init__ has no eager imports, so this is always safe."""
         _fresh_import("robot_radio.kinematics")
 
-    def test_kinematics_differential_drive_raises_import_error(self):
-        """differential_drive.py requires wpimath — must raise ImportError."""
+    def test_kinematics_differential_drive_imports(self):
+        """differential_drive.py requires wpimath, now installed — imports clean."""
         sys.modules.pop("robot_radio.kinematics.differential_drive", None)
 
-        with pytest.raises(ImportError, match="wpimath"):
-            import robot_radio.kinematics.differential_drive  # noqa: F401
+        importlib.import_module("robot_radio.kinematics.differential_drive")
 
-    def test_kinematics_via_getattr_raises_import_error(self):
-        """DifferentialDriveKinematics via __getattr__ must raise ImportError."""
+    def test_kinematics_via_getattr_returns_class(self):
+        """DifferentialDriveKinematics via __getattr__ returns the class."""
         import robot_radio.kinematics as kinem
 
-        with pytest.raises(ImportError, match="wpimath"):
-            _ = kinem.DifferentialDriveKinematics
+        assert kinem.DifferentialDriveKinematics is not None
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +261,9 @@ class TestKinematicsImports:
 class TestLazyGuarantee:
     """Importing the four subpackages must not pull heavy optional deps.
 
-    wpimath must never appear (it's not installed).
+    The wpimath-backed submodules must never load eagerly (wpimath IS now
+    installed, so we assert the guarded submodules stay deferred rather than
+    wpimath's absence from sys.modules).
     matplotlib must never appear (the package contains no matplotlib calls).
 
     cv2 / aprilcam: these ARE available via the calibrate dep group.
@@ -278,18 +271,34 @@ class TestLazyGuarantee:
     appear after a nav-only import.  However, once aprilcam has been
     imported by any earlier test in the session, 'aprilcam' and 'cv2'
     will already be in sys.modules.  We only assert the packages we
-    control are not pulling in wpimath or matplotlib.
+    control are not pulling in the wpimath-backed submodules or matplotlib.
     """
 
-    def test_no_wpimath_after_subpackage_imports(self):
+    def test_wpimath_backed_submodules_stay_lazy(self):
+        """Bare subpackage imports must not eagerly load the wpimath-backed
+        submodules.  wpimath is installed now, so checking its presence in
+        sys.modules is meaningless (an earlier test may have loaded it); we
+        instead assert the lazy __getattr__ keeps the guarded submodules
+        deferred until first access.
+        """
+        for mod in (
+            "robot_radio.kinematics.differential_drive",
+            "robot_radio.controllers.ltv",
+        ):
+            sys.modules.pop(mod, None)
+
         import robot_radio.nav       # noqa: F401
         import robot_radio.path      # noqa: F401
         import robot_radio.controllers  # noqa: F401
         import robot_radio.kinematics   # noqa: F401
 
-        assert "wpimath" not in sys.modules, (
-            "wpimath appeared in sys.modules after subpackage imports — "
-            "a wpimath import must be guarded by lazy __getattr__"
+        assert "robot_radio.kinematics.differential_drive" not in sys.modules, (
+            "kinematics.differential_drive loaded eagerly — it must stay behind "
+            "the lazy __getattr__ so a bare subpackage import is wpimath-free"
+        )
+        assert "robot_radio.controllers.ltv" not in sys.modules, (
+            "controllers.ltv loaded eagerly — it must stay behind the lazy "
+            "__getattr__ so a bare subpackage import is wpimath-free"
         )
 
     def test_no_matplotlib_after_subpackage_imports(self):

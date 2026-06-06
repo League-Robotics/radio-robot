@@ -319,51 +319,67 @@ void Robot::controlFireRequest(int pendingWheel)
 // required between the requestEncoder() write and this collectEncoder() read.
 // ---------------------------------------------------------------------------
 
-void Robot::controlCollectSplitPhase(uint32_t now_ms, int pendingWheel)
+void Robot::controlCollectSplitPhase(uint32_t now_ms, int /*pendingWheel*/)
 {
-    // Atomic per-tick encoder read (fix[014]: restores closed-loop velocity).
+    // WedgeTest-proven pattern (sprint 015): read BOTH encoders every tick,
+    // right motor (M1) first, then left (M2). Write-on-change is already
+    // handled by Motor::setSpeed(). Single re-read on implausible delta.
     //
-    // Root cause: the split-phase design fired requestEncoder() at the END of
-    // tick N, slept ~10 ms (the control period), then called collectEncoder()
-    // at the TOP of tick N+1.  The Nezha V2 chip's 0x46 response window is only
-    // ~4 ms (vendor-documented); the ~10 ms cross-iteration gap causes
-    // collectEncoder() to always return a stale/zero value, leaving enc=0,0
-    // throughout a drive and saturating the velocity PID to constant PWM.
+    // Cost: ~8 ms (2 × 4 ms post-write settle). controlPeriodMs must be ≥ 10 ms.
     //
-    // Fix: call readEncoderMmFAtomic() which uses the full vendor timing:
-    //   4ms pre-write bus-idle → 0x46 write → 4ms post-write settle → read 4B
-    // (matches sprint 013 readEncoderRaw() which had both delays and worked).
-    //
-    // Cost: ~8 ms per tick.  controlPeriodMs must be ≥ 10 ms.  Alternating L/R
-    // refreshes each wheel at half the control rate (~5 Hz at 10 ms).
-    //
-    // On pendingWheel == 0 (first iteration): no read; encoders remain
-    // 0-initialised and refreshedWheel=0 suppresses velocity update.
-
-    // DEBUG (sprint 014 — encoder-wedge isolation): only read the encoder while
-    // actively driving. Reading the Nezha encoder at ~100 Hz while the motor is
-    // idle/stopped wedges the I2C reads (they freeze at a constant). Reads while
-    // driving are fine (proven: 8 s continuous drive counts cleanly). When idle
-    // we skip the read entirely and pass refreshedWheel=0 (no velocity update).
+    // Previous alternating-one-per-tick design (~5 Hz per wheel) wedged within
+    // ~165 ticks: each wedge caused the velocity PID to saturate and jerk.
+    // WedgeTest ran 10 min / 165 cycles with ZERO wedges using this pattern.
     bool driving = (_state.commands.tgtLMms != 0.0f ||
                     _state.commands.tgtRMms != 0.0f);
-    int refreshed = 0;
     if (driving) {
-        if (pendingWheel == 1) {
-            _state.inputs.encLMm = _motorL.readEncoderMmFAtomic(_config);
-            refreshed = 1;
-        } else if (pendingWheel == 2) {
-            _state.inputs.encRMm = _motorR.readEncoderMmFAtomic(_config);
-            refreshed = 2;
+        // Outlier threshold matches WedgeTest's proven JUMP=4000 raw tenths-of-
+        // degrees: 400° × ~0.484 mm/deg ≈ 194 mm. Rounded to 150 mm. A bad read
+        // triggers up to kRetries re-reads; if any is sane → use it; if ALL fail →
+        // hold the old stored value so the outlier baseline stays correct next tick.
+        //
+        // 150 mm (not the earlier 15 mm) is deliberate: at top speed (~400 mm/s)
+        // a single tick with scheduler jitter can legitimately move 20-40 mm, so a
+        // tight threshold trips on NORMAL fast driving — spurious re-reads add bus
+        // traffic and stale "hold-old" velocity, which is itself a PID-stutter
+        // source. Real garbage reads (seen: 49437 mm) clear 150 mm by 100×.
+        static constexpr float kMaxDeltaMm = 150.0f;
+        static constexpr int   kRetries    = 2;
+
+        // Right (M1) first — proven ordering from WedgeTest.
+        {
+            float newR = _motorR.readEncoderMmFSettle(_config);
+            float dR   = newR - _state.inputs.encRMm;
+            if (dR > kMaxDeltaMm || dR < -kMaxDeltaMm) {
+                newR = _state.inputs.encRMm;             // default: hold old
+                for (int k = 0; k < kRetries; ++k) {
+                    float r2  = _motorR.readEncoderMmFSettle(_config);
+                    float dr2 = r2 - _state.inputs.encRMm;
+                    if (dr2 <= kMaxDeltaMm && dr2 >= -kMaxDeltaMm) { newR = r2; break; }
+                }
+            }
+            _state.inputs.encRMm = newR;
+        }
+
+        // Left (M2) second.
+        {
+            float newL = _motorL.readEncoderMmFSettle(_config);
+            float dL   = newL - _state.inputs.encLMm;
+            if (dL > kMaxDeltaMm || dL < -kMaxDeltaMm) {
+                newL = _state.inputs.encLMm;             // default: hold old
+                for (int k = 0; k < kRetries; ++k) {
+                    float r2  = _motorL.readEncoderMmFSettle(_config);
+                    float dr2 = r2 - _state.inputs.encLMm;
+                    if (dr2 <= kMaxDeltaMm && dr2 >= -kMaxDeltaMm) { newL = r2; break; }
+                }
+            }
+            _state.inputs.encLMm = newL;
         }
     }
-
+    _prevDriving = driving;
     _lastControlMs = now_ms;
-
-    // refreshed = the wheel just READ (or 0 when idle/first iter) so
-    // MotorController updates that wheel's per-wheel velocity with the correct
-    // elapsed time since its last collect.
-    _mc.controlTick(_state.inputs, _state.commands, now_ms, refreshed);
+    // refreshedWheel=3: both wheels updated; 0: idle, no velocity update.
+    _mc.controlTick(_state.inputs, _state.commands, now_ms, driving ? 3 : 0);
 }
 
 // ---------------------------------------------------------------------------

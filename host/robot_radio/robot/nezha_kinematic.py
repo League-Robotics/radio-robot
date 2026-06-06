@@ -114,7 +114,7 @@ class NezhaKinematic(NezhaState):
         """
         with self._lock:
             enc = self.encoders
-            otos = self.otos_pose
+            heading_rad = self.heading_rad
             dt = self.dt_s
 
         # Cumulative mm → cumulative metres relative to last anchor
@@ -126,8 +126,11 @@ class NezhaKinematic(NezhaState):
         right_delta_m = (enc[1] - self._prev_encoders[1]) / 1000.0
         self._prev_encoders = enc
 
-        # OTOS yaw is CCW-positive degrees; WPILib Rotation2d needs CCW-positive radians
-        heading = Rotation2d(math.radians(otos[2]))
+        # NezhaState stores the TLM pose heading as centi-degrees in
+        # otos_pose[2]; self.heading_rad is the base class's correct
+        # CCW-positive radians conversion (cdeg / 18000 * pi). WPILib
+        # Rotation2d needs CCW-positive radians.
+        heading = Rotation2d(heading_rad)
         self._odometry.update(heading, left_total_m, right_total_m)
 
         if dt > 0:

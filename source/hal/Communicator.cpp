@@ -6,8 +6,8 @@ Communicator::Communicator(NRF52Serial& serial, MicroBitRadio& radio, MessageBus
 {
 }
 
-void Communicator::begin()
+void Communicator::begin(int channel)
 {
     _serial.begin();
-    _radio.begin();
+    _radio.begin(channel);
 }

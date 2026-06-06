@@ -216,6 +216,18 @@ public:
      */
     float readEncoderMmFAtomic(const RobotConfig& cfg) const;
 
+    /**
+     * readEncoderMmFSettle — control-loop encoder read in mm (float).
+     *
+     * Skips the 4 ms pre-write bus-idle; uses only the 4 ms post-write settle.
+     * Safe in the fixed-rate control loop: the loop's natural inter-tick idle
+     * provides the bus recovery time that the pre-idle would supply. Cost: ~4 ms.
+     *
+     * Use for: controlCollectSplitPhase() — both-encoder read every tick.
+     * Do NOT use for one-off reads (use readEncoderMmFAtomic instead).
+     */
+    float readEncoderMmFSettle(const RobotConfig& cfg) const;
+
 private:
     I2CBus& _i2c;
     uint8_t      _motorId;  // 1=M1/right, 2=M2/left
@@ -231,6 +243,11 @@ private:
     // sentinel -128 (outside valid ±100) forces the first write. See
     // docs/knowledge encoder-wedge note.
     int8_t _lastWrittenPct = -128;
+
+    // Timestamp (us) of the last actual 0x60 write, for the write-rate limit in
+    // setSpeed(). Throttling 0x60 writes keeps the bus read-dominated, which is
+    // what stops the encoder-readback wedge. See setSpeed() + encoder-wedge note.
+    uint64_t _lastWriteUs = 0;
 
     static constexpr uint8_t ADDR    = 0x10;
     static constexpr uint8_t DIR_CW  = 1;   // positive speed from chip perspective

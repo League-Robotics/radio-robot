@@ -211,6 +211,14 @@ private:
     // Timestamp of the most recent controlCollect() call, used to compute dt_s.
     uint32_t _lastControlMs;
 
+    // True if the previous control tick was actively driving. Used to suppress
+    // the encoder read on the FIRST driving tick after a stop: on that tick the
+    // 0x46 read would fire before this tick's 0x60 motor command, i.e. a read
+    // while the Nezha chip is still physically stopped — the condition that
+    // wedges its encoder readback (caught via stand_soak: wedge onset is the
+    // first read on a stop→drive transition). One skipped read costs nothing.
+    bool _prevDriving = false;
+
     // Slow-cadence OTOS polling: run otosCorrect() every kOtosSlowMs milliseconds.
     // Matches the cadence previously tracked by DriveController::_lastOtosMs (014-005).
     static constexpr uint32_t kOtosSlowMs = 100;  // 10 Hz OTOS correction cadence

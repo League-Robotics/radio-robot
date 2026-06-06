@@ -1,0 +1,28 @@
+-> DBG WEDGE 3 0 4000 on /dev/cu.usbmodem2121102
+
+OK dbg wedge start
+WEDGETEST start mode=3 (alt-read(fw-mimic)) bus=-1kHz settle=4000us (any byte stops)
+WT it=0 cyc=0 fwd L=5 R=0 sL=0 sR=0
+WT it=8 cyc=0 fwd L=580 R=463 sL=0 sR=0
+WT it=16 cyc=0 fwd L=1408 R=1263 sL=0 sR=0
+WT it=24 cyc=0 fwd L=2330 R=2147 sL=0 sR=0
+WT it=32 cyc=0 fwd L=3230 R=3027 sL=0 sR=0
+WT it=40 cyc=0 fwd L=4141 R=3908 sL=0 sR=0
+WT it=48 cyc=0 fwd L=5047 R=4797 sL=0 sR=0
+WT it=56 cyc=0 fwd L=5977 R=5672 sL=0 sR=0
+WT it=64 cyc=0 fwd L=6883 R=6552 sL=0 sR=0
+WT it=72 cyc=0 fwd L=7786 R=7433 sL=0 sR=0
+WT it=80 cyc=0 fwd L=8694 R=8325 sL=0 sR=0
+WT it=88 cyc=0 fwd L=9619 R=9205 sL=0 sR=0
+WT it=96 cyc=0 coast L=10391 R=10013 sL=0 sR=0
+WT it=104 cyc=0 coast L=10816 R=10527 sL=0 sR=0
+WT it=112 cyc=0 coast L=10925 R=10775 sL=0 sR=0
+WT it=120 cyc=0 back L=10602 R=10588 sL=0 sR=0
+WT it=128 cyc=0 back L=9883 R=9850 sL=0 sR=0
+WT it=136 cyc=0 back L=9025 R=8980 sL=0 sR=0
+WT it=144 cyc=0 back L=8113 R=8102 sL=0 sR=0
+WT it=152 cyc=0 back L=7202 R=7208 sL=0 sR=0
+WT it=160 cyc=0 back L=6294 R=6330 sL=0 sR=0
+WT WEDGE-JUMP wheel=R at it=165 cyc=0 phase=back val=0 d=-5883
+
+[done after 2.0s]

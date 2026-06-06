@@ -5,6 +5,7 @@ requires-python = ">=3.10"
 dependencies = [
     "pydantic>=2.13.4",
     "pyserial>=3.5",
+    "robotpy-wpimath>=2024",
 ]
 
 # `rogo` CLI entry point (relay-aware robot control: drive, turn, goto, config,

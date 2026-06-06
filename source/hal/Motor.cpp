@@ -45,6 +45,33 @@ void Motor::setSpeed(int8_t pct)
     if (pct == _lastWrittenPct) {
         return;
     }
+
+    // Write-rate limit (sprint 015 — wedge root cause). The velocity PID emits
+    // a slightly different PWM EVERY 10 ms tick, so plain write-on-change does
+    // NOT suppress writes — the chip gets a fresh 0x60 write nearly every tick,
+    // interleaved between the two 0x46 encoder reads. That high-frequency
+    // write/read interleave is exactly what wedges the Nezha encoder readback
+    // (proven: the WedgeTest harness holds a CONSTANT speed so its writes are
+    // suppressed for 40-tick stretches → zero wedges over 10 min; the alternating
+    // production path wedged in ~165 ticks). We throttle 0x60 writes to
+    // kMinWriteIntervalUs so the bus is dominated by reads, matching WedgeTest —
+    // BUT a stop (pct == 0) or a direction reversal is always written immediately
+    // for safety/responsiveness. Between throttled writes the chip simply holds
+    // the last 0x60 command (the wheels keep spinning), and the next allowed
+    // write applies the freshest PID output.
+    static constexpr uint32_t kMinWriteIntervalUs = 40000;   // 40 ms ≈ 25 Hz max
+    bool stopping = (pct == 0);
+    bool reversal = (pct != 0 && _lastWrittenPct != 0 &&
+                     ((pct > 0) != (_lastWrittenPct > 0)));
+    uint64_t nowUs = system_timer_current_time_us();
+    if (!stopping && !reversal &&
+        (nowUs - _lastWriteUs) < kMinWriteIntervalUs) {
+        // Too soon since the last write and not a stop/reversal — suppress.
+        // _lastWrittenPct is deliberately NOT updated, so the next tick still
+        // sees a change and writes the latest PID output once the interval ends.
+        return;
+    }
+    _lastWriteUs    = nowUs;
     _lastWrittenPct = pct;
 
     // Apply fwdSign: positive pct = logical forward; fwdSign maps that to
@@ -231,6 +258,26 @@ float Motor::readEncoderMmFAtomic(const RobotConfig& cfg) const
     // readEncoderAtomic() so it is safe outside the control tick.
     float mmPerDeg = (_motorId == 2) ? cfg.mmPerDegL : cfg.mmPerDegR;
     int32_t raw = readEncoderAtomic();  // tenths of degrees minus offset
+    return (raw / 10.0f) * mmPerDeg * (float)_fwdSign;
+}
+
+float Motor::readEncoderMmFSettle(const RobotConfig& cfg) const
+{
+    // Settle-only encoder read — skips the 4 ms pre-write bus-idle used by
+    // readEncoderAtomic(). The fixed-rate control loop leaves the bus naturally
+    // idle between ticks, so the pre-idle is redundant there. Cost: ~4 ms.
+    static constexpr uint32_t kSettleUs = 4000;
+    uint8_t cmd[8] = { 0xFF, 0xF9, _motorId, 0x00, 0x46, 0x00, 0xF5, 0x00 };
+    _i2c.write((ADDR << 1), (uint8_t*)cmd, 8, false);
+    uint64_t deadline = system_timer_current_time_us() + kSettleUs;
+    while (system_timer_current_time_us() < deadline) {}
+    uint8_t resp[4] = { 0, 0, 0, 0 };
+    _i2c.read((ADDR << 1), (uint8_t*)resp, 4, false);
+    int32_t raw = (int32_t)(
+        ((uint32_t)resp[3] << 24) | ((uint32_t)resp[2] << 16) |
+        ((uint32_t)resp[1] <<  8) | (uint32_t)resp[0]);
+    raw -= _encOffset;
+    float mmPerDeg = (_motorId == 2) ? cfg.mmPerDegL : cfg.mmPerDegR;
     return (raw / 10.0f) * mmPerDeg * (float)_fwdSign;
 }
 

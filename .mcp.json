@@ -5,6 +5,12 @@
       "args": [
         "mcp"
       ]
+    },
+    "aprilcam": {
+      "command": "aprilcam",
+      "args": [
+        "mcp"
+      ]
     }
   }
 }

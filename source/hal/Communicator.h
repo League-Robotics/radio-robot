@@ -21,7 +21,8 @@ public:
     Communicator(NRF52Serial& serial, MicroBitRadio& radio, MessageBus& bus);
 
     // Call once in main() after uBit.init(): enables serial + radio.
-    void begin();
+    // `channel` is the nRF frequency band (0..83) for the radio; group is 10.
+    void begin(int channel = 0);
 
     // Accessors for the two comms HAL objects.
     SerialPort& serial() { return _serial; }

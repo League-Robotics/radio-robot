@@ -12,12 +12,90 @@
 #include "PortIO.h"
 #include "Config.h"
 #include "Icons.h"
+#include "RadioChannel.h"
 
 // ---------------------------------------------------------------------------
 // MicroBit uBit singleton — file-scope so CODAL peripherals are fully
 // initialised before any device is constructed in main().
 // ---------------------------------------------------------------------------
 static MicroBit uBit;
+
+// ---------------------------------------------------------------------------
+// bootSelectRadioChannel — resolve the radio channel at boot, with display.
+//
+// Loads the persisted channel (default 0), shown as a single base-36 character
+// (0-9 then A-Z, so channel 10 = 'A').
+//
+//   * Normal boot (A+B not both held): flash the channel character briefly,
+//     then the heart. Returns the stored channel unchanged.
+//   * Edit boot (hold A+B at power-on): the channel character stays on the LED
+//     while you press A (−1) / B (+1); each press updates the character in
+//     place (clamped 0..35). After ~5 s with no input it saves if changed,
+//     flashes a checkmark, then shows the heart.
+//
+// The `RF` command (USB serial) is the precise/scripted path. Either way the
+// display ends on the boot heart.
+// ---------------------------------------------------------------------------
+static int bootSelectRadioChannel(MicroBit& uBit)
+{
+    int channel = radiochan::load(uBit.storage);
+
+    // Enter edit mode only when BOTH buttons are held at boot. Any other case
+    // (nothing held, or a single button) is a normal boot: flash the channel
+    // character, then the heart.
+    if (!(uBit.buttonA.isPressed() && uBit.buttonB.isPressed())) {
+        uBit.display.printCharAsync(radiochan::toChar(channel));
+        uBit.sleep(900);
+        uBit.display.printAsync(icons::boot());
+        return channel;
+    }
+
+    // Edit mode — show the channel statically and keep it on as buttons change it.
+    const int original = channel;
+    uBit.display.printCharAsync(radiochan::toChar(channel));
+
+    // Wait for the boot-held button(s) to be released before honoring input.
+    // Otherwise holding A or B (or A+B) to ENTER edit mode is immediately read
+    // as a step or as the A+B confirm, and we exit before you can adjust.
+    while (uBit.buttonA.isPressed() || uBit.buttonB.isPressed()) {
+        uBit.sleep(20);
+    }
+
+    bool prevA = false, prevB = false;        // buttons are now released
+    uint32_t lastInputMs = uBit.systemTime(); // start the idle timer after release
+
+    while (uBit.systemTime() - lastInputMs < 5000) {
+        bool a = uBit.buttonA.isPressed();
+        bool b = uBit.buttonB.isPressed();
+
+        // Confirm + exit on a simultaneous A+B press.
+        if (a && b) {
+            break;
+        }
+        // Rising-edge detect so one press = one step; redraw the character in place.
+        if (a && !prevA) {
+            channel = radiochan::clamp(channel - 1);
+            uBit.display.printCharAsync(radiochan::toChar(channel));
+            lastInputMs = uBit.systemTime();
+        } else if (b && !prevB) {
+            channel = radiochan::clamp(channel + 1);
+            uBit.display.printCharAsync(radiochan::toChar(channel));
+            lastInputMs = uBit.systemTime();
+        }
+        prevA = a;
+        prevB = b;
+        uBit.sleep(20);
+    }
+
+    if (channel != original) {
+        radiochan::save(uBit.storage, channel);
+    }
+    // Confirm: flash a checkmark, then settle on the heart.
+    uBit.display.printAsync(icons::tick());
+    uBit.sleep(900);
+    uBit.display.printAsync(icons::boot());
+    return channel;
+}
 
 // ---------------------------------------------------------------------------
 // serialReply — thin adapter used for the boot HELLO banner.
@@ -52,8 +130,10 @@ static void serialReply(const char* msg, void* ctx)
 int main() {
     uBit.init();
 
-    // Heart on the LED matrix — "powered and ready" (non-blocking).
-    uBit.display.printAsync(icons::boot());
+    // Radio channel: load persisted channel (default 0); hold A/B at boot to
+    // edit it. Resolved BEFORE the radio starts so it comes up on the right band.
+    // Flashes the channel character then the heart (handles its own display).
+    int rfChannel = bootSelectRadioChannel(uBit);
 
     // -----------------------------------------------------------------------
     // 2. Config (needed by Motor constructor for fwdSign values).
@@ -68,6 +148,19 @@ int main() {
     // DBG I2C command (ticket 015-003) without altering any transaction semantics.
     // -----------------------------------------------------------------------
     static I2CBus       bus(uBit.i2c);
+
+    // I2C bus speed — 100 kHz (uBit.init() defaults to 400 kHz).
+    //
+    // The Nezha V2 motor controller's encoder readback (0x46) wedges — freezes
+    // at a constant while the wheels keep spinning — under fast, frequently
+    // interleaved 0x60-write / 0x46-read traffic at 400 kHz. The WedgeTest bench
+    // harness (DBG WEDGE) proved that dropping the bus to 100 kHz, reading BOTH
+    // encoders every tick (M1 first), and writing motors only on change runs
+    // 10 min / zero wedges. 400 kHz wedged within ~165 ticks. The other sensors
+    // (OTOS/line/color) are speed-agnostic for correctness, so 100 kHz is safe
+    // bus-wide. See docs/knowledge encoder-wedge note + WedgeTest.cpp.
+    uBit.i2c.setFrequency(100000);
+
     static Motor        motorL(bus, 2, cfg.fwdSignL);   // M2 left
     static Motor        motorR(bus, 1, cfg.fwdSignR);   // M1 right
     static OtosSensor   otos(bus, cfg);
@@ -80,7 +173,7 @@ int main() {
     // 4. Communications — begin() enables serial + radio.
     // -----------------------------------------------------------------------
     static Communicator comm(uBit.serial, uBit.radio, uBit.messageBus);
-    comm.begin();
+    comm.begin(rfChannel);
 
     // -----------------------------------------------------------------------
     // 5. Device initialisation — comment a line out to disable that device.

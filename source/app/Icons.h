@@ -23,8 +23,19 @@ namespace icons {
         return MicroBitImage(5, 5, px);
     }
 
+    /// Classic 5x5 checkmark/tick — "saved / confirmed" cue.
+    inline MicroBitImage tick() {
+        static const uint8_t px[25] = {
+              0,   0,   0,   0,   0,
+              0,   0,   0,   0, 255,
+              0,   0,   0, 255,   0,
+            255,   0, 255,   0,   0,
+              0, 255,   0,   0,   0,
+        };
+        return MicroBitImage(5, 5, px);
+    }
+
     // Add more named icons here as needed, e.g.:
     //   inline MicroBitImage sad() { ... }
-    //   inline MicroBitImage tick() { ... }
 
 } // namespace icons

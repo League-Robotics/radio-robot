@@ -1,0 +1,64 @@
+Warning: firmware not calibrated — running sync cal automatically.
+seed=3  budget=8 min  sTimeout=1500ms
+Connecting (relay, pushes calibration) …
+I2C start: (no I2C line)
+
+  [ 0.4m] #10 enc=L1101 R758  ok
+  [ 0.8m] #20 enc=L2311 R1611  ok
+
+================================================================
+  ANOMALY after 25 maneuvers (1.1 min): absurd velocity vL=0 vR=-6662 mm/s (dt=402ms)
+  commanded wheels at glitch: L-180 R-180
+  I2C now: (no I2C line)
+  --- recent OV / stream events (elapsed s) ---
+       53.1s  stream(20ms,enc,pose,vel,color)
+       53.5s  stream(100ms,enc)
+       53.9s  OV(-130,-160,4539)
+       54.4s  stream(50ms,enc,vel)
+       54.9s  stream(20ms,enc,pose)
+       57.7s  stream(0ms,enc)
+       58.2s  OV(-3,-364,23374)
+       58.7s  OV(89,-393,1925)
+       60.0s  OV(293,-12,31843)
+       60.0s  OV(514,-74,7810)
+       60.5s  stream(0ms,enc,pose,vel,line)
+       61.0s  OV(166,294,24145)
+       61.5s  stream(50ms,enc,pose,vel)
+       62.0s  stream(200ms,enc,pose,line,vel,color)
+       65.1s  OV(2,294,11926)
+       65.1s  OV(330,-274,7092)
+  --- last raw encoder reads (t_ms, encL, encR, vL, vR, cmdL, cmdR) ---
+     (98421, 2930, 2217, 0, 0, 0, 0)
+     (98441, 2930, 2217, 0, 0, 0, 0)
+     (98461, 2930, 2217, 0, 0, 0, 0)
+     (102349, 3030, 2345, 26, 33, 60, 60)
+     (102427, 3034, 2350, 51, 64, 60, 60)
+     (102507, 3038, 2354, 50, 50, 60, 60)
+     (102588, 3043, 2358, 62, 49, 60, 60)
+     (102668, 3047, 2363, 50, 62, 60, 60)
+     (102747, 3052, 2367, 63, 51, 60, 60)
+     (102948, 3066, 2376, 70, 45, 60, 60)
+     (103187, 3079, 2390, 54, 59, 0, 0)
+     (103387, 3089, 2403, 50, 65, 0, 0)
+     (103587, 3103, 2412, 70, 45, 0, 0)
+     (103787, 3112, 2425, 45, 65, 0, 0)
+     (103988, 3126, 2434, 70, 45, 0, 0)
+     (104188, 3134, 2447, 40, 65, 0, 0)
+     (104389, 3143, 2452, 45, 25, 0, 0)
+     (104589, 3143, 2452, 0, 0, 0, 0)
+     (104789, 3143, 2452, 0, 0, 0, 0)
+     (104989, 3143, 2452, 0, 0, 0, 0)
+     (105189, 3143, 2452, 0, 0, 0, 0)
+     (105389, 3143, 2452, 0, 0, 0, 0)
+     (105589, 3143, 2452, 0, 0, 0, 0)
+     (105991, 3143, -226, 0, -6662, -180, -180)
+  --- last maneuvers ---
+     #0018 fwd  L+220 R+220 1.5s clean   
+     #0019 back L -90 R -90 1.5s coast   
+     #0020 arc  L+150 R+195 1.0s clean   
+     #0021 fwd  L+150 R+150 1.5s coast    stream(200ms,enc,vel,pose,color)
+     #0022 fwd  L+120 R+120 2.0s watchdog
+     #0023 arc  L +30 R +60 1.0s clean   
+     #0024 fwd  L +60 R +60 2.0s watchdog OV(293,-12,31843)
+     #0025 back L-180 R-180 2.0s clean    OV(2,294,11926)  <<< glitch during drive
+================================================================

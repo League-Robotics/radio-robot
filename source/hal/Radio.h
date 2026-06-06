@@ -32,9 +32,19 @@ class Radio {
 public:
     explicit Radio(MicroBitRadio& radio, MessageBus& bus);
 
-    // enable(), setFrequencyBand(0), setGroup(10), setTransmitPower(7),
-    // register the datagram ISR.
-    void begin();
+    // enable(), setFrequencyBand(channel), setGroup(10), setTransmitPower(7),
+    // register the datagram ISR.  `channel` is the nRF frequency band (0..83);
+    // the group is always 10 to match the RadioRelay.
+    void begin(int channel = 0);
+
+    // Re-tune to a new channel (frequency band) at runtime. Group is unchanged.
+    // Returns MICROBIT_OK on success, or a CODAL error on an invalid band.
+    // NOTE: re-tuning over the radio drops the link (the relay stays on the old
+    // channel) — the caller must send any reply BEFORE calling this.
+    int setChannel(int channel);
+
+    // The channel (frequency band) currently in use.
+    int channel() const { return _channel; }
 
     // Non-blocking. Returns true and fills buf (NUL-terminated) when a complete
     // reassembled message is ready.
@@ -46,6 +56,7 @@ public:
 private:
     MicroBitRadio& _radio;
     MessageBus&    _bus;
+    int            _channel = 0;   // nRF frequency band in use (group is always 10)
 
     // RadioRelay §5 fragment framing.
     static constexpr uint8_t FLAG_START = 0x01;

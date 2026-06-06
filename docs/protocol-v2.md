@@ -718,6 +718,45 @@ OK vw v=200 omega=300 #7
 EVT safety_stop #7
 ```
 
+### RF — Radio Channel
+
+```
+RF              → OK rf chan=<n> group=10        (query)
+RF <n> [#id]    → OK rf chan=<n> group=10 [#id]  (set + persist)
+```
+
+Gets or sets the radio **channel** (frequency band).  The radio **group is
+always 10** and cannot be changed.  Channel range is `0 … 35`; out of range
+returns `ERR range chan`.  The channel renders as a single base-36 character
+on the LED matrix (`0`-`9` then `A`-`Z`, so channel 10 = `A`).
+
+The channel is **persisted** in the micro:bit's flash key-value store, so it
+survives power cycles.  On boot the firmware loads the stored channel (default
+`0`), **flashes the channel character** then the heart, and starts the radio
+on it.
+
+**Setting the channel over the radio drops the link.**  When `RF <n>` re-tunes,
+the relay is still on the old channel and can no longer hear the robot.  The
+`OK` reply is sent on the *old* channel before re-tuning (so you do see it), but
+all subsequent traffic is on the new channel.  Change the channel either:
+
+- over **USB serial** (`RF <n>` on the direct port), or
+- with the **on-board buttons at boot**: hold `A`+`B` together while powering
+  on to enter edit mode — release, then the channel character stays on the LED
+  while you press `A` (−1) / `B` (+1); after ~5 s with no input it saves,
+  flashes a checkmark, then shows the heart.
+
+Example:
+
+```
+RF
+OK rf chan=0 group=10
+
+RF 7
+OK rf chan=7 group=10
+… (robot is now on channel 7; relay must also move to channel 7) …
+```
+
 ### STOP
 
 ```

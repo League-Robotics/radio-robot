@@ -203,6 +203,38 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
             }
         }
         // Left wheel: ZOH — leave inputs.velLMms unchanged.
+    } else if (refreshedWheel == 3) {
+        // Both wheels updated this tick (WedgeTest pattern — sprint 015).
+        float encLMm = inputs.encLMm;
+        if (!_hasTimestampL) {
+            _prevEncL = encLMm; _prevTimeMsL = now_ms; _hasTimestampL = true;
+        } else {
+            float elapsed_s = static_cast<float>(now_ms - _prevTimeMsL) / 1000.0f;
+            if (elapsed_s > 0.0f) {
+                float rawV = (encLMm - _prevEncL) / elapsed_s;
+                if (fabsf(rawV) <= kMaxPlausibleMmps) {
+                    float a = _cal.velFiltAlpha;
+                    inputs.velLMms = a * rawV + (1.0f - a) * inputs.velLMms;
+                    _prevEncL    = encLMm;
+                    _prevTimeMsL = now_ms;
+                }
+            }
+        }
+        float encRMm = inputs.encRMm;
+        if (!_hasTimestampR) {
+            _prevEncR = encRMm; _prevTimeMsR = now_ms; _hasTimestampR = true;
+        } else {
+            float elapsed_s = static_cast<float>(now_ms - _prevTimeMsR) / 1000.0f;
+            if (elapsed_s > 0.0f) {
+                float rawV = (encRMm - _prevEncR) / elapsed_s;
+                if (fabsf(rawV) <= kMaxPlausibleMmps) {
+                    float a = _cal.velFiltAlpha;
+                    inputs.velRMms = a * rawV + (1.0f - a) * inputs.velRMms;
+                    _prevEncR    = encRMm;
+                    _prevTimeMsR = now_ms;
+                }
+            }
+        }
     }
     // refreshedWheel == 0: first iteration or no collect — both velocities held at 0.
 
@@ -224,8 +256,8 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
     // See: .clasi/issues/residual-motor-encoder-wedge-after-stop.md
     // -------------------------------------------------------------------------
     {
-        // Left-wheel check — only when left was just collected.
-        if (refreshedWheel == 1) {
+        // Left-wheel check — when left (or both) was just collected.
+        if (refreshedWheel == 1 || refreshedWheel == 3) {
             float encL = inputs.encLMm;
             if (cmds.tgtLMms != 0.0f) {
                 if (_wedgePrevValidL && encL == _wedgePrevEncL) {
@@ -262,8 +294,8 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
             }
         }
 
-        // Right-wheel check — only when right was just collected.
-        if (refreshedWheel == 2) {
+        // Right-wheel check — when right (or both) was just collected.
+        if (refreshedWheel == 2 || refreshedWheel == 3) {
             float encR = inputs.encRMm;
             if (cmds.tgtRMms != 0.0f) {
                 if (_wedgePrevValidR && encR == _wedgePrevEncR) {

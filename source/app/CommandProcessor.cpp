@@ -21,7 +21,11 @@
 #include "PortIO.h"
 #include "MotorController.h"
 #include "Odometry.h"
+#include "WedgeTest.h"
 #include "DriveController.h"
+#include "LoopScheduler.h"
+#include "Communicator.h"
+#include "RadioChannel.h"
 #include "LoopScheduler.h"
 #include "I2CBus.h"
 #include "Config.h"
@@ -667,7 +671,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     // Reply: OK help <verb list>
     if (strcmp(verb, "HELP") == 0) {
         replyOK(rbuf, sizeof(rbuf), "help",
-                "PING ECHO ID VER HELP SET GET GET VEL STREAM SNAP S T D G VW STOP GRIP ZERO OI OZ OR OP OV OL OA P PA",
+                "PING ECHO ID VER HELP SET GET GET VEL STREAM SNAP S T D G VW RF STOP GRIP ZERO OI OZ OR OP OV OL OA P PA",
                 corr_id, replyFn, ctx);
         return;
     }
@@ -933,7 +937,91 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
             replyOK(rbuf, sizeof(rbuf), "dbg", "i2c", corr_id, replyFn, ctx);
             return;
         }
+        // ── DBG WEDGE — run the self-contained encoder-wedge harness ──────────
+        // Hands raw i2c + serial to runWedgeTest(), which takes over the robot
+        // and NEVER returns until the bug trips or a serial byte arrives. The
+        // cooperative loop is suspended for the duration (intended).
+        if (strcmp(tokens[1], "WEDGE") == 0) {
+            if (_sched == nullptr) {
+                replyErr(rbuf, sizeof(rbuf), "noimpl", "no scheduler", corr_id, replyFn, ctx);
+                return;
+            }
+            int wrate = (ntok >= 3) ? atoi(tokens[2]) : 50;   // loop rate in Hz
+            replyOK(rbuf, sizeof(rbuf), "dbg", "wedge start", corr_id, replyFn, ctx);
+            runWedgeTest(_sched->uBit(), wrate);   // blocks until wedge or stop byte
+            replyOK(rbuf, sizeof(rbuf), "dbg", "wedge end", corr_id, replyFn, ctx);
+            return;
+        }
         replyErr(rbuf, sizeof(rbuf), "badarg", "dbg subcommand", corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── I2CW — raw I2C write (diagnostic) ─────────────────────────────────────
+    // I2CW <addr7-hex> <byte-hex> [byte-hex ...]
+    //   Writes the given bytes to the 7-bit device address (hex). Up to 24 bytes.
+    //   Reply: OK i2cw addr=0xNN n=<len> status=<codal>
+    // Lets the bus be poked live from the serial port (e.g. replay the Nezha
+    // controller wake sequence to recover a wedged encoder) without a reflash.
+    if (strcmp(verb, "I2CW") == 0) {
+        if (_i2cBus == nullptr) {
+            replyErr(rbuf, sizeof(rbuf), "noimpl", "no i2c bus", corr_id, replyFn, ctx);
+            return;
+        }
+        if (ntok < 3) {
+            replyErr(rbuf, sizeof(rbuf), "badarg", "usage: I2CW <addr> <byte>...",
+                     corr_id, replyFn, ctx);
+            return;
+        }
+        uint8_t addr7 = (uint8_t)strtol(tokens[1], nullptr, 16);
+        uint8_t data[24];
+        int len = 0;
+        for (int i = 2; i < ntok && len < (int)sizeof(data); ++i) {
+            data[len++] = (uint8_t)strtol(tokens[i], nullptr, 16);
+        }
+        int status = _i2cBus->write((uint16_t)(addr7 << 1), data, len);
+        char body[48];
+        snprintf(body, sizeof(body), "addr=0x%02X n=%d status=%d", addr7, len, status);
+        replyOK(rbuf, sizeof(rbuf), "i2cw", body, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── I2CR — raw I2C read (diagnostic) ──────────────────────────────────────
+    // I2CR <addr7-hex> <count> [reg-hex]
+    //   Reads <count> bytes (1..16) from the 7-bit device address (hex). If a
+    //   register byte is given, it is written first with a repeated-start.
+    //   Reply: OK i2cr addr=0xNN n=<count> wstatus=<s> status=<s> data=AA,BB,...
+    if (strcmp(verb, "I2CR") == 0) {
+        if (_i2cBus == nullptr) {
+            replyErr(rbuf, sizeof(rbuf), "noimpl", "no i2c bus", corr_id, replyFn, ctx);
+            return;
+        }
+        if (ntok < 3) {
+            replyErr(rbuf, sizeof(rbuf), "badarg", "usage: I2CR <addr> <count> [reg]",
+                     corr_id, replyFn, ctx);
+            return;
+        }
+        uint8_t addr7 = (uint8_t)strtol(tokens[1], nullptr, 16);
+        int count = atoi(tokens[2]);
+        if (count < 1 || count > 16) {
+            replyErr(rbuf, sizeof(rbuf), "range", "count", corr_id, replyFn, ctx);
+            return;
+        }
+        int wstatus = 0;
+        if (ntok >= 4) {
+            uint8_t reg = (uint8_t)strtol(tokens[3], nullptr, 16);
+            wstatus = _i2cBus->write((uint16_t)(addr7 << 1), &reg, 1, true);
+        }
+        uint8_t buf[16];
+        int status = _i2cBus->read((uint16_t)(addr7 << 1), buf, count);
+        char body[120];
+        int pos = snprintf(body, sizeof(body),
+                           "addr=0x%02X n=%d wstatus=%d status=%d data=",
+                           addr7, count, wstatus, status);
+        for (int i = 0; i < count && pos < (int)sizeof(body) - 4; ++i) {
+            pos += snprintf(body + pos, (size_t)((int)sizeof(body) - pos),
+                            "%s%02X", i ? "," : "", buf[i]);
+        }
+        replyOK(rbuf, sizeof(rbuf), "i2cr", body, corr_id, replyFn, ctx);
         return;
     }
 
@@ -1075,6 +1163,47 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
         char body[32];
         snprintf(body, sizeof(body), "v=%d omega=%d", v, omega);
         replyOK(rbuf, sizeof(rbuf), "vw", body, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── RF — radio channel (frequency band); group is always 10 ──────────────
+    // RF        → OK rf chan=<n> group=10        (query)
+    // RF <n>    → OK rf chan=<n> group=10        (set + persist, 0..83)
+    //
+    // The channel persists in flash (uBit.storage) and is applied immediately.
+    // WARNING: re-tuning over the radio drops the link the instant it takes
+    // effect (the relay stays on the old channel) — send `RF <n>` over USB
+    // serial, or set the channel with the on-board buttons at boot. The OK
+    // reply is sent BEFORE re-tuning so it still reaches the host on the old
+    // channel; the new channel takes effect right after.
+    if (strcmp(verb, "RF") == 0) {
+        if (_sched == nullptr) {
+            replyErr(rbuf, sizeof(rbuf), "noradio", nullptr, corr_id, replyFn, ctx);
+            return;
+        }
+        Radio& radio = _sched->comm().radio();
+
+        if (ntok < 2) {
+            // Query.
+            char body[32];
+            snprintf(body, sizeof(body), "chan=%d group=%d",
+                     radio.channel(), radiochan::kGroup);
+            replyOK(rbuf, sizeof(rbuf), "rf", body, corr_id, replyFn, ctx);
+            return;
+        }
+
+        int ch = atoi(tokens[1]);
+        if (ch < radiochan::kMin || ch > radiochan::kMax) {
+            replyErr(rbuf, sizeof(rbuf), "range", "chan", corr_id, replyFn, ctx);
+            return;
+        }
+
+        // Persist first, then reply on the OLD channel, then re-tune.
+        radiochan::save(_sched->uBit().storage, ch);
+        char body[32];
+        snprintf(body, sizeof(body), "chan=%d group=%d", ch, radiochan::kGroup);
+        replyOK(rbuf, sizeof(rbuf), "rf", body, corr_id, replyFn, ctx);
+        radio.setChannel(ch);
         return;
     }
 

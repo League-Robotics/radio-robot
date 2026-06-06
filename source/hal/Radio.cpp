@@ -11,16 +11,25 @@ Radio::Radio(MicroBitRadio& radio, MessageBus& bus)
     memset(_msg, 0, sizeof(_msg));
 }
 
-void Radio::begin() {
+void Radio::begin(int channel) {
     _instance = this;
+    _channel = channel;
     _radio.enable();
-    // Match the RadioRelay defaults: channel (frequency band) 0, group 10.
+    // Match the RadioRelay: configurable channel (frequency band), group 10.
     // CODAL does not default to band 0, so this must be set explicitly or the
     // robot and relay sit on different frequencies and never hear each other.
-    _radio.setFrequencyBand(0);
+    _radio.setFrequencyBand(channel);
     _radio.setGroup(10);
     _radio.setTransmitPower(7);
     _bus.listen(DEVICE_ID_RADIO, MICROBIT_RADIO_EVT_DATAGRAM, onData);
+}
+
+int Radio::setChannel(int channel) {
+    int rc = _radio.setFrequencyBand(channel);
+    if (rc == MICROBIT_OK) {
+        _channel = channel;
+    }
+    return rc;
 }
 
 // Reassemble §5 fragments in place. Runs in the radio datagram ISR context.

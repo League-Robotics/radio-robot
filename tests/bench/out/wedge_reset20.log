@@ -1,0 +1,11 @@
+-> DBG WEDGE 2 0 4000 0 20 on /dev/cu.usbmodem2121102
+
+OK dbg wedge start
+WEDGETEST start mode=2 (read-both-M1-first) bus=-1kHz settle=4000us gap=0us resetEvery=20 (any byte stops)
+WT it=0 cyc=0 fwd L=30 R=2 sL=0 sR=0
+WT it=8 cyc=0 fwd L=1288 R=1233 sL=0 sR=0
+WT it=16 cyc=0 fwd L=2827 R=2800 sL=0 sR=0
+WT it=24 cyc=0 fwd L=-1192 R=647 sL=0 sR=0
+WT WEDGE-FROZEN wheel=R at it=32 cyc=0 phase=fwd val=647 d=0
+
+[done after 0.8s]
