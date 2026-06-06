@@ -337,22 +337,31 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
     float dt_s = static_cast<float>(_cal.controlPeriodMs) / 1000.0f;
     if (dt_s <= 0.0f) return;
 
-    // Per-wheel velocity PID (Sprint 010 inner loop).
-    float uL = _vcL.update(cmds.tgtLMms, inputs.velLMms, dt_s);
-    float uR = _vcR.update(cmds.tgtRMms, inputs.velRMms, dt_s);
+    // Cross-wheel coupling — "slowest wheel governs" (015). Computed BEFORE the
+    // per-wheel PID by adjusting the effective setpoints (not the PWM), so the
+    // per-wheel PID does the work and there is no fighting. The wheel that is
+    // ACHIEVING more of its target is slaved to the slower wheel's actual speed
+    // at the commanded ratio: disturbing one wheel pulls the other onto the
+    // ratio line, and a fully-held wheel (vel -> 0) drags the other to 0. A
+    // deadband lets the per-wheel PID absorb LIGHT touches (point doesn't move);
+    // only a real, sustained discrepancy couples. SET sync=0 -> independent.
+    float effTgtL = cmds.tgtLMms;
+    float effTgtR = cmds.tgtRMms;
+    if (_cal.syncGain > 0.0f && cmds.tgtLMms != 0.0f && cmds.tgtRMms != 0.0f) {
+        float ratio = cmds.tgtRMms / cmds.tgtLMms;        // commanded vR/vL
+        float achL  = inputs.velLMms / cmds.tgtLMms;      // fraction-of-target each wheel does
+        float achR  = inputs.velRMms / cmds.tgtRMms;
+        const float deadband = 0.08f;                     // ignore light-touch differences
+        if (achL - achR > deadband) {
+            effTgtL = inputs.velRMms / ratio;             // left ahead -> follow right
+        } else if (achR - achL > deadband) {
+            effTgtR = inputs.velLMms * ratio;             // right ahead -> follow left
+        }
+    }
 
-    // Cross-wheel ratio coupling (015): pull the wheels onto the commanded ratio
-    // line so disturbing one wheel slows the other (keeps the phase-plot point on
-    // the diagonal). syncErr > 0 means the right wheel is slower than the ratio
-    // demands; we then push right harder and slow left, and vice-versa. A light
-    // touch yields a small syncErr (absorbed by the per-wheel PID); a hard/held
-    // wheel yields a large syncErr that pulls both wheels down together.
-    // syncGain = 0 restores fully-independent per-wheel control.
-    float ratio   = (cmds.tgtLMms != 0.0f) ? (cmds.tgtRMms / cmds.tgtLMms) : 1.0f;
-    float syncErr = (inputs.velLMms * ratio) - inputs.velRMms;
-    float corr    = _cal.syncGain * syncErr;
-    uR += corr;
-    uL -= corr;
+    // Per-wheel velocity PID (Sprint 010 inner loop) on the (possibly coupled) targets.
+    float uL = _vcL.update(effTgtL, inputs.velLMms, dt_s);
+    float uR = _vcR.update(effTgtR, inputs.velRMms, dt_s);
 
     cmds.pwmL = static_cast<int16_t>(roundf(uL));
     cmds.pwmR = static_cast<int16_t>(roundf(uR));
