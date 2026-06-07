@@ -1,0 +1,4 @@
+name: radio-robot
+title: Radio Robot
+blurb: C++ CODAL firmware and Python host library for the DFRobot QBot Pro (micro:bit V2 + Nezha V2), driven over serial and micro:bit radio.
+order: 100

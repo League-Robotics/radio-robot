@@ -43,6 +43,10 @@ def main() -> int:
     p.add_argument("--stimeout", type=int, default=1500, help="firmware S-watchdog ms")
     p.add_argument("--set", dest="sets", action="append", default=[], metavar="K=V",
                    help="SET override applied on connect (repeatable), e.g. --set encAtomic=1")
+    p.add_argument("--no-perturb", action="store_true",
+                   help="drop ALL bus/comms perturbation: no OV pose-writes, no mid-drive "
+                        "stream toggles, stream only enc (minimal, for detection). Isolates "
+                        "whether the telemetry/OV load is what triggers the wedge.")
     args = p.parse_args()
 
     rng = random.Random(args.seed)
@@ -172,7 +176,7 @@ def main() -> int:
                 proto.drive(cur_cmd[0], cur_cmd[1])
                 last = now
             # ~every 0.4s of driving, perturb the bus while wheels are moving.
-            if now - last_perturb >= 0.4:
+            if (not args.no_perturb) and now - last_perturb >= 0.4:
                 last_perturb = now
                 if rng.random() < 0.6:
                     ov_write()
@@ -194,7 +198,7 @@ def main() -> int:
             print(f"  SET {kv} -> {r.get('responses', ['?'])[-1]}")
         proto.send("OI", 400)
         proto.zero_encoders()
-        set_stream(50, FIELD_POOL)
+        set_stream(50, [] if args.no_perturb else FIELD_POOL)   # enc-only stream if no-perturb
         time.sleep(0.2)
         pump(60)
         print(f"I2C start: {dbg_i2c()}\n")
@@ -204,11 +208,12 @@ def main() -> int:
         while time.monotonic() < deadline and anomaly[0] is None:
             n += 1
             extra = ""
-            if n % 7 == 0:
-                set_stream(rng.choice(PERIODS), rng.sample(FIELD_POOL, rng.randint(0, 4)))
-                extra += " " + events[-1][1]
-            if rng.random() < 0.35:
-                ov_write(); extra += " " + events[-1][1]
+            if not args.no_perturb:
+                if n % 7 == 0:
+                    set_stream(rng.choice(PERIODS), rng.sample(FIELD_POOL, rng.randint(0, 4)))
+                    extra += " " + events[-1][1]
+                if rng.random() < 0.35:
+                    ov_write(); extra += " " + events[-1][1]
 
             kind, l, r, dur, stop = gen()
             cur_cmd[0], cur_cmd[1] = l, r
