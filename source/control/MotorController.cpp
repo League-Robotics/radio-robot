@@ -13,8 +13,8 @@
 
 MotorController::MotorController(Motor& left, Motor& right, const RobotConfig& cal)
     : _motorL(left), _motorR(right), _cal(cal),
-      _vcL(cal.velKff, cal.velKp, cal.velKi, 60.0f, cal.minWheelMms),
-      _vcR(cal.velKff, cal.velKp, cal.velKi, 60.0f, cal.minWheelMms),
+      _vcL(cal.velKff, cal.velKp, cal.velKi, cal.velIMax, cal.minWheelMms, cal.velKaw),
+      _vcR(cal.velKff, cal.velKp, cal.velKi, cal.velIMax, cal.minWheelMms, cal.velKaw),
       _pid(cal.ratioPidKp, cal.ratioPidKi, cal.ratioPidKd, cal.ratioPidMax),
       _cmdEncStartL(0.0f), _cmdEncStartR(0.0f),
       _cmdRatio(1.0f), _fasterIsRight(false),
@@ -22,6 +22,7 @@ MotorController::MotorController(Motor& left, Motor& right, const RobotConfig& c
       _prevEncL(0.0f), _prevEncR(0.0f),
       _prevTimeMsL(0), _prevTimeMsR(0),
       _hasTimestampL(false), _hasTimestampR(false),
+      _lastPidMs(0), _hasPidTick(false),
       _wedgePrevEncL(0.0f), _wedgePrevEncR(0.0f),
       _wedgePrevValidL(false), _wedgePrevValidR(false),
       _stuckCountL(0), _stuckCountR(0),
@@ -142,6 +143,21 @@ void MotorController::resetIntegrators()
 void MotorController::updatePidGains(float kP, float kI, float kD, float iClamp)
 {
     _pid.updateGains(kP, kI, kD, iClamp);
+}
+
+void MotorController::updateVelGains(const RobotConfig& cal)
+{
+    // Push the (possibly SET-modified) per-wheel velocity gains into both live
+    // VelocityControllers. Without this, SET vel.kP/kI/kFF/iMax/kAw only changed
+    // the config struct, not the running controllers (which hold copies made at
+    // construction). velFiltAlpha and syncGain are read from _cal each tick so
+    // they do not need pushing here.
+    _vcL.kFF = cal.velKff;  _vcR.kFF = cal.velKff;
+    _vcL.kP  = cal.velKp;   _vcR.kP  = cal.velKp;
+    _vcL.kI  = cal.velKi;   _vcR.kI  = cal.velKi;
+    _vcL.iMax = cal.velIMax; _vcR.iMax = cal.velIMax;
+    _vcL.kAw  = cal.velKaw;  _vcR.kAw  = cal.velKaw;
+    _vcL.minWheelMms = cal.minWheelMms; _vcR.minWheelMms = cal.minWheelMms;
 }
 
 void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
@@ -362,11 +378,23 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
     }
 #endif
 
-    // PID integrator dt: use the configured control period.
-    // The velocity update above already uses the true per-wheel elapsed time for
-    // the derivative; the integrator uses the nominal period so integral windup
-    // is well-bounded and independent of measurement timing jitter.
-    float dt_s = static_cast<float>(_cal.controlPeriodMs) / 1000.0f;
+    // PID integrator dt: the ACTUAL elapsed control-tick time, not the nominal
+    // controlPeriodMs. The real loop runs at ~24 ms (10 ms nominal + 2x4 ms
+    // encoder settle + bus time), so using the 10 ms nominal made kI accumulate
+    // at ~0.4x strength and never close the steady-state error (wheels held ~190
+    // of a 200 mm/s command). Clamp the measured delta to [5, 50] ms so a stalled
+    // or first tick can't spike the integrator (preserves windup bounding).
+    float dt_s;
+    if (_hasPidTick) {
+        int32_t dms = static_cast<int32_t>(now_ms - _lastPidMs);
+        if (dms < 5)  dms = 5;
+        if (dms > 50) dms = 50;
+        dt_s = static_cast<float>(dms) / 1000.0f;
+    } else {
+        dt_s = static_cast<float>(_cal.controlPeriodMs) / 1000.0f;
+        _hasPidTick = true;
+    }
+    _lastPidMs = now_ms;
     if (dt_s <= 0.0f) return;
 
     // Cross-wheel coupling — "slowest wheel governs" (015). Computed BEFORE the

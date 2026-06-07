@@ -495,6 +495,8 @@ void LoopScheduler::run_all()
 
         // --- LOW-PRIORITY TASKS — explicit, in order, each guarded + timed --
         // Reorder / comment-out / toggle (_table[i].run = false) freely.
+        // FIXME why is `now` not updated between steps here?  Should it be?  (Some steps use it, some don't.)
+        // it's very stale by the time we get to step 7/8, which use it for telemetry timestamps.  Maybe update it at the top of each step?
         _runStep(_table[0], now);   // comms-in
         _runStep(_table[1], now);   // drive-advance (watchdog / ESC stop)
         _runStep(_table[2], now);   // odometry-predict

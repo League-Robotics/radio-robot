@@ -63,6 +63,10 @@ public:
     // Update PID gains at runtime (called by K-command setters).
     void updatePidGains(float kP, float kI, float kD, float iClamp);
 
+    // Push per-wheel velocity gains (vel.kP/kI/kFF/iMax/kAw/minWheel) from config
+    // into the live VelocityControllers after a SET. (filt/sync are read per-tick.)
+    void updateVelGains(const RobotConfig& cal);
+
     /**
      * controlTick — cooperative-loop control step (014-003 / 014-007).
      *
@@ -168,6 +172,14 @@ private:
     uint32_t _prevTimeMsR;  // system time (ms) of last right-wheel collect
     bool     _hasTimestampL;
     bool     _hasTimestampR;
+
+    // PID integrator dt: actual elapsed control-tick time (ms). The loop runs at
+    // ~24 ms (10 ms nominal + 2x4 ms encoder settle + bus), NOT the nominal
+    // controlPeriodMs, so using the nominal value made kI act at ~0.4x strength
+    // and never close the steady-state error. Use the measured delta, clamped to
+    // a sane window so a stalled tick can't spike the integrator.
+    uint32_t _lastPidMs;     // system time (ms) of last controlTick PID update
+    bool     _hasPidTick;    // false until the first PID tick
 
     // -------------------------------------------------------------------------
     // Encoder-wedge detector (015-003)

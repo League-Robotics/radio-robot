@@ -9,6 +9,16 @@
     "serial": "1784514240",
     "uid": "990636020005282017449eac613c0332000000006e052820"
   },
+  "99063602000528204f02a3519fdba0c7000000006e052820": {
+    "announcement": "DEVICE:RADIOBRIDGE:relay:gozop:4267970133",
+    "common_name": "relay",
+    "device_name": "gozop",
+    "enum": 3,
+    "port": "/dev/cu.usbmodem212202",
+    "role": "RADIOBRIDGE",
+    "serial": "4267970133",
+    "uid": "99063602000528204f02a3519fdba0c7000000006e052820"
+  },
   "9906360200052820a8fdb5e413abb276000000006e052820": {
     "announcement": "DEVICE:NEZHA2:robot:tovez:2314287040",
     "common_name": "robot",

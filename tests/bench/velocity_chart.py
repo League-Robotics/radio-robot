@@ -30,6 +30,14 @@ def _parse_args() -> argparse.Namespace:
                    help="Wheel speed mm/s (default 200)")
     p.add_argument("--window", type=float, default=8.0,
                    help="Rolling window seconds (default 8)")
+    p.add_argument("--headless", type=float, default=None, metavar="SECS",
+                   help="No GUI: run the stream worker for SECS seconds and "
+                        "print the collected (vL,vR) samples + summary. Used to "
+                        "diagnose the direct-path drive without a SPACE press.")
+    p.add_argument("--set", dest="sets", action="append", default=[], metavar="K=V",
+                   help="Apply a SET override on connect (repeatable), e.g. "
+                        "--set sync=1 --set vel.kP=0.2. Lets you grab-test gains/"
+                        "coupling live without reflashing.")
     return p.parse_args()
 
 
@@ -43,6 +51,7 @@ def _stream_worker(
     data_queue: "queue.Queue[tuple[float, int, int]]",
     stop_event: threading.Event,   # set externally to tear down
     status_queue: "queue.Queue[str]",  # push status strings to main thread
+    sets: "list[str] | None" = None,   # extra "key=value" SET overrides on connect
 ) -> None:
     """Open a fresh serial connection, connect, drive, push (t,vL,vR) tuples.
 
@@ -100,6 +109,42 @@ def _stream_worker(
             conn._ser.reset_input_buffer()
         except Exception:
             pass
+
+        # 1b. Push calibration — REQUIRED for the wheels to actually drive.
+        #     Opening the serial port pulses DTR and resets the micro:bit, so the
+        #     robot boots UNCALIBRATED every connect. An uncalibrated robot ACKs
+        #     "S <l> <r>" ("OK drive ...") but produces no motor output — the
+        #     wheels never turn and the encoders read a constant 0, which looks
+        #     exactly like an encoder failure. _make_robot/rogo push this on every
+        #     connect; this custom worker must too.
+        try:
+            from robot_radio.io.cli import _push_calibration
+            _push_calibration(conn)
+            status_queue.put("calibration pushed")
+        except Exception as exc:
+            status_queue.put(f"WARN: calibration push failed: {exc}")
+
+        # 1c. Zero the encoders — REQUIRED before driving on a fresh connection.
+        #     A freshly-booted Nezha (every serial reconnect pulses DTR and
+        #     resets the micro:bit) has its encoder READBACK frozen at 0 until a
+        #     ZERO enc (vendor 0x1D zero-position) re-initialises it. Without
+        #     this, "S <l> <r>" is ACKed but the encoders read a constant 0, the
+        #     firmware's wedge detector fires (EVT enc_wedged ... n=10), and the
+        #     wheels never spin up. enc_watch / rogo do this; the chart must too.
+        try:
+            proto.zero_encoders()
+        except Exception as exc:
+            status_queue.put(f"WARN: zero encoders failed: {exc}")
+
+        # 1d. Apply any live SET overrides (e.g. sync=1, vel.kP=0.2) so gains /
+        #     coupling can be grab-tested without reflashing. These persist on the
+        #     firmware until reboot.
+        for kv in (sets or []):
+            try:
+                r = proto.send(f"SET {kv}", 250)
+                status_queue.put(f"SET {kv} -> {r.get('responses', ['?'])[-1]}")
+            except Exception as exc:
+                status_queue.put(f"WARN: SET {kv} failed: {exc}")
 
         # 2. Generous firmware S-watchdog (10 s). The host sends S every 150 ms,
         #    well within the window even during multi-second GUI/GIL stalls.
@@ -187,6 +232,52 @@ def main() -> int:
     else:
         port = args.port
     print(f"  port: {port}   speed: {args.speed} mm/s   window: {args.window} s")
+
+    # ---- headless diagnostic: run the worker, print samples, exit (no GUI) ----
+    if args.headless is not None:
+        data_q: "queue.Queue[tuple[float,int,int]]" = queue.Queue()
+        status_q: "queue.Queue[str]" = queue.Queue()
+        stop_ev = threading.Event()
+        th = threading.Thread(
+            target=_stream_worker,
+            args=(port, args.speed, data_q, stop_ev, status_q, args.sets),
+            daemon=True,
+        )
+        th.start()
+        t_end = time.monotonic() + args.headless
+        samples: list[tuple[float, int, int]] = []
+        t0 = None
+        while time.monotonic() < t_end:
+            try:
+                while True:
+                    samples.append(data_q.get_nowait())
+            except queue.Empty:
+                pass
+            try:
+                while True:
+                    print(f"  [status] {status_q.get_nowait()}")
+            except queue.Empty:
+                pass
+            time.sleep(0.1)
+        stop_ev.set()
+        th.join(timeout=3.0)
+        print(f"\n  collected {len(samples)} velocity samples")
+        if samples:
+            t0 = samples[0][0]
+            for ts, vl, vr in samples[::max(1, len(samples) // 30)]:
+                print(f"    t={ts - t0:5.2f}s  vL={vl:>5}  vR={vr:>5} mm/s")
+            vls = [s[1] for s in samples]
+            vrs = [s[2] for s in samples]
+            nonzero = sum(1 for s in samples if s[1] != 0 or s[2] != 0)
+            print(f"  vL range [{min(vls)}, {max(vls)}]  vR range [{min(vrs)}, {max(vrs)}]")
+            print(f"  nonzero samples: {nonzero}/{len(samples)}")
+            print("  >>> WHEELS DROVE (firmware vel field works on this path)"
+                  if nonzero else
+                  "  >>> ALL ZERO — wheels not driving on this path (vel field stayed 0)")
+        else:
+            print("  no samples — robot never streamed vel (check connection/fields)")
+        return 0
+
     print("  Press SPACE in the plot window to connect/disconnect.")
 
     import matplotlib
@@ -275,7 +366,7 @@ def main() -> int:
             worker_state["stop"]   = stop_ev
             worker_state["thread"] = threading.Thread(
                 target=_stream_worker,
-                args=(port, args.speed, data_queue, stop_ev, status_queue),
+                args=(port, args.speed, data_queue, stop_ev, status_queue, args.sets),
                 daemon=True,
             )
             worker_state["thread"].start()

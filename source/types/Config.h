@@ -60,6 +60,10 @@ struct RobotConfig {
     float velKi;          // integral gain for per-wheel velocity loop
     float velKff;         // feed-forward coefficient: FF = velKff * |setpoint|
     float minWheelMms;    // deadband: integrator frozen below this |speed| (default 20.0 mm/s)
+    float velIMax;        // integrator clamp (PWM%, ±). SET "vel.iMax". Bounds windup.
+    float velKaw;         // back-calc anti-windup gain (1/s). SET "vel.kAw". Bleeds the
+                          // integrator while the output is saturated so a held wheel
+                          // can't wind up → overshoot + slow recovery on release.
     // Velocity EMA filter + cross-wheel ratio coupling (SET keys "vel.filt", "sync").
     //   velFiltAlpha ↔ "vel.filt" : EMA weight on each new velocity sample
     //                  (1.0 = no filtering, lower = smoother/laggier; default 0.4)
@@ -192,10 +196,22 @@ inline RobotConfig defaultRobotConfig() {
     p.velKi           = 0.05f;
     p.velKff          = 0.15f;
     p.minWheelMms     = 20.0f;
-    p.velFiltAlpha    = 0.3f;
-    p.syncGain        = 1.0f;   // cross-coupling ON (slowest-wheel-governs with a
-                                // deadband). Safe now that velocity is clean
-                                // (outlier-rejected + EMA). SET sync=0 to disable.
+    p.velIMax         = 20.0f;   // was an inline 60.0f; tighter clamp bounds windup
+                                 // (steady-state integral at 200mm/s is only ~3%).
+    p.velKaw          = 3.0f;    // back-calc anti-windup (Tt≈0.33s). 0 = freeze-only.
+    p.velFiltAlpha    = 0.15f;  // heavier EMA — encoder-delta velocity is noisy
+                                // (~1mm/24ms quantization). 0.3 left a ripple the
+                                // kP term fed back into PWM.
+    p.syncGain        = 1.0f;   // cross-coupling ON (slowest-wheel-governs): grab
+                                // one wheel and both slow together so the robot
+                                // tracks straight. The old jitter (sd ~39, mean
+                                // dragged to ~120) was NOT the coupling itself — it
+                                // was the coupling amplifying the NOISY per-tick
+                                // velocity it was fed. Now that the velocity feed is
+                                // clean (velFiltAlpha 0.15 + actual-elapsed PID dt),
+                                // coupling is stable: steady-state holds ~190-194 sd
+                                // ~2, and a grab rides the vR=vL diagonal. Bench +
+                                // grab-test confirmed. SET sync=0 for independent.
     p.turnThresholdMm = 50.0f;
     p.doneTolMm       = 5.0f;
     p.aMax            = 300.0f;

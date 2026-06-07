@@ -7,9 +7,9 @@
 #include <math.h>
 
 VelocityController::VelocityController(float kFF_, float kP_, float kI_,
-                                         float iMax_, float minWheelMms_)
+                                         float iMax_, float minWheelMms_, float kAw_)
     : kFF(kFF_), kP(kP_), kI(kI_), iMax(iMax_), minWheelMms(minWheelMms_),
-      integral(0.0f)
+      kAw(kAw_), integral(0.0f)
 {
 }
 
@@ -25,24 +25,26 @@ float VelocityController::update(float setpoint, float measured, float dt_s)
     float spSign = (setpoint >= 0.0f) ? 1.0f : -1.0f;
     float ff     = kFF * spAbs;
 
-    // Compute raw output before clamping (to detect rail saturation for anti-windup).
+    // Raw (pre-clamp) command, then the actual rail-limited output.
     float rawPwm = spSign * ff + kP * err + integral;
+    float output = clamp(rawPwm, -100.0f, 100.0f);
 
-    // Anti-windup: freeze integrator when output is rail-limited.
-    bool saturated = (rawPwm >= 100.0f) || (rawPwm <= -100.0f);
-
-    // Deadband: freeze integrator when commanded speed is below threshold.
+    // Deadband: don't accumulate at very low commanded speed.
     bool inDeadband = (spAbs < minWheelMms);
 
-    if (!saturated && !inDeadband) {
-        integral += kI * err * dt_s;
+    if (!inDeadband) {
+        // Integrate with BACK-CALCULATION anti-windup. The (output - rawPwm) term
+        // is zero unless the output is saturated; when it is, it bleeds the
+        // integrator back toward the un-saturated value at rate kAw. This stops a
+        // load disturbance (e.g. a held wheel) from winding the integral up and
+        // causing overshoot + a long slow recovery when the load is released.
+        // kAw = 0 reduces to plain integration (with the clamp below as the only
+        // bound — the legacy behaviour).
+        integral += (kI * err + kAw * (output - rawPwm)) * dt_s;
         integral = clamp(integral, -iMax, iMax);
     }
 
-    // Recompute output with (possibly updated) integrator.
-    float output = spSign * ff + kP * err + integral;
-
-    return clamp(output, -100.0f, 100.0f);
+    return output;
 }
 
 void VelocityController::reset()

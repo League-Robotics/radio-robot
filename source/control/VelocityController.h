@@ -30,8 +30,14 @@ public:
      * @param kI         Integral gain
      * @param iMax       Integrator anti-windup clamp (PWM% units, symmetric ±)
      * @param minWheelMms Low-speed deadband: integrator frozen below this |setpoint|
+     * @param kAw        Back-calculation anti-windup gain (1/s). When the output
+     *                   saturates, the integrator is bled toward the un-saturated
+     *                   value at this rate, so a load disturbance can't wind the
+     *                   integral up and cause overshoot + slow recovery on release.
+     *                   0 = legacy freeze-only behaviour.
      */
-    VelocityController(float kFF, float kP, float kI, float iMax, float minWheelMms);
+    VelocityController(float kFF, float kP, float kI, float iMax, float minWheelMms,
+                       float kAw = 0.0f);
 
     /**
      * update — compute one control tick.
@@ -52,6 +58,7 @@ public:
     float kI;
     float iMax;
     float minWheelMms;
+    float kAw;       // back-calculation anti-windup gain (1/s); 0 = freeze-only
 
     float integral;  // integrator state (public for inspection/testing)
 

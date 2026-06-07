@@ -81,6 +81,8 @@ static const ConfigEntry kRegistry[] = {
     CFG_F("vel.kP",       velKp),
     CFG_F("vel.kI",       velKi),
     CFG_F("vel.kFF",      velKff),
+    CFG_F("vel.iMax",     velIMax),        // integrator clamp (PWM%)
+    CFG_F("vel.kAw",      velKaw),         // back-calc anti-windup gain (1/s)
     CFG_F("vel.filt",     velFiltAlpha),   // velocity EMA weight (smoothing)
     CFG_F("sync",         syncGain),       // cross-wheel ratio coupling gain
     // Velocity deadband and wheel speed ceiling (Sprint 010)
@@ -432,6 +434,7 @@ static void handleSet(KVPair* kvs, int nkv, RobotConfig& cfg,
     int arem = (int)sizeof(applied);
 
     bool pidChanged = false;
+    bool velChanged = false;
 
     for (int i = 0; i < nkv; ++i) {
         if (!kvs[i].key) continue;  // already rejected by pre-scan
@@ -481,6 +484,14 @@ static void handleSet(KVPair* kvs, int nkv, RobotConfig& cfg,
             pidChanged = true;
         }
 
+        // Per-wheel velocity gains must be pushed into the live controllers
+        // (they hold copies made at construction). filt/sync are read per-tick.
+        if (strcmp(k, "vel.kP") == 0 || strcmp(k, "vel.kI") == 0 ||
+            strcmp(k, "vel.kFF") == 0 || strcmp(k, "vel.iMax") == 0 ||
+            strcmp(k, "vel.kAw") == 0 || strcmp(k, "minWheelMms") == 0) {
+            velChanged = true;
+        }
+
         // Append to applied list.
         if (apos > 0 && arem > 1) { applied[apos++] = ' '; --arem; }
         int w = snprintf(applied + apos, (size_t)arem, "%s=%s", k, v);
@@ -491,6 +502,9 @@ static void handleSet(KVPair* kvs, int nkv, RobotConfig& cfg,
     if (pidChanged) {
         mc.updatePidGains(cfg.ratioPidKp, cfg.ratioPidKi,
                           cfg.ratioPidKd, cfg.ratioPidMax);
+    }
+    if (velChanged) {
+        mc.updateVelGains(cfg);
     }
 
     // Emit OK set only if at least one key was applied.
