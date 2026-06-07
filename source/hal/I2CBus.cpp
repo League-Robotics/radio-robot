@@ -1,5 +1,7 @@
 #include "I2CBus.h"
 #include "codal_target_hal.h"   // target_disable_irq() / target_enable_irq()
+#include "MicroBit.h"           // system_timer_current_time_us()
+#include <cstdio>
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -13,12 +15,18 @@ I2CBus::I2CBus(MicroBitI2C& bus)
     , _reentryInFlightAddr(0)
     , _reentryNewAddr(0)
     , _deviceCount(0)
+    , _logHead(0)
+    , _logTotal(0)
+    , _logOn(false)
 {
     for (int i = 0; i < kMaxDevices; ++i) {
         _devices[i].addr     = 0;
         _devices[i].txnCount = 0;
         _devices[i].errCount = 0;
         _devices[i].lastErr  = 0;
+    }
+    for (int i = 0; i < kLogSize; ++i) {
+        _log[i] = TxnLog{0, 0, 0, 0, 0, 0, 0};
     }
 }
 
@@ -57,6 +65,7 @@ int I2CBus::write(uint16_t address, uint8_t* data, int len, bool repeated)
     }
 
     record(addr7, status);
+    logTxn(addr7, 0, len, data, status);
     return status;
 }
 
@@ -85,7 +94,48 @@ int I2CBus::read(uint16_t address, uint8_t* data, int len, bool repeated)
     }
 
     record(addr7, status);
+    logTxn(addr7, 1, len, data, status);
     return status;
+}
+
+// ---------------------------------------------------------------------------
+// Transaction log (diagnostic ring buffer)
+// ---------------------------------------------------------------------------
+
+void I2CBus::logTxn(uint16_t addr7, uint8_t rw, int len, const uint8_t* data, int status)
+{
+    if (!_logOn) return;
+    TxnLog& e = _log[_logHead];
+    e.t_us   = (uint32_t)system_timer_current_time_us();
+    e.addr   = addr7;
+    e.rw     = rw;
+    e.len    = (uint8_t)(len > 255 ? 255 : (len < 0 ? 0 : len));
+    e.b0     = (data && len > 0) ? data[0] : 0;
+    e.b1     = (data && len > 1) ? data[1] : 0;
+    e.status = (int16_t)status;
+    _logHead = (_logHead + 1) % kLogSize;
+    ++_logTotal;
+}
+
+void I2CBus::dumpRecent(void (*fn)(const char*, void*), void* ctx) const
+{
+    if (!fn || !ctx) return;
+    // Walk the ring oldest→newest. If we've wrapped, oldest is at _logHead;
+    // otherwise the buffer filled 0.._logHead-1.
+    int count = (_logTotal < (uint32_t)kLogSize) ? (int)_logTotal : kLogSize;
+    int start = (_logTotal < (uint32_t)kLogSize) ? 0 : _logHead;
+    char line[96];
+    uint32_t prev_us = 0;
+    for (int i = 0; i < count; ++i) {
+        const TxnLog& e = _log[(start + i) % kLogSize];
+        uint32_t dt = (i == 0) ? 0 : (e.t_us - prev_us);   // us since previous txn
+        prev_us = e.t_us;
+        snprintf(line, sizeof(line),
+                 "I2CLOG +%luus 0x%02X %s len=%u b=%02X,%02X st=%d\r\n",
+                 (unsigned long)dt, (unsigned)e.addr, e.rw ? "RD" : "WR",
+                 (unsigned)e.len, (unsigned)e.b0, (unsigned)e.b1, (int)e.status);
+        fn(line, ctx);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +185,9 @@ void I2CBus::resetStats()
         _devices[i].lastErr  = 0;
     }
     _deviceCount = 0;
+
+    _logHead  = 0;
+    _logTotal = 0;
 }
 
 // ---------------------------------------------------------------------------

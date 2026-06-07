@@ -112,6 +112,8 @@ def main() -> int:
 
     def pump(duration_ms=20):
         for line in proto.read_lines(duration_ms=duration_ms):
+            if "I2CLOG" in line or "enc_wedged" in line:
+                print(line.strip())   # surface the firmware EVT + I2C ring dump
             if "enc_wedged" in line and anomaly[0] is None:
                 anomaly[0] = {"reason": "EVT enc_wedged (firmware latch)",
                               "t_ms": -1, "cmd": tuple(cur_cmd)}
@@ -250,13 +252,21 @@ def main() -> int:
 
         for _ in range(3):
             proto.stop(); time.sleep(0.05)
-        proto.stream(0)
+        proto.stream(0); time.sleep(0.2); pump(40)   # quiet the bus before the dump
 
         el = time.monotonic() - t_start
         print("\n" + "=" * 64)
         if anomaly[0]:
             a = anomaly[0]
             print(f"  ANOMALY after {n} maneuvers ({el/60:.1f} min): {a['reason']}")
+            # Fetch the I2C transaction ring FROZEN at the wedge (telemetry is now
+            # off, so the dump arrives clean). Shows the exact bus sequence.
+            print("  --- I2CLOG (ring frozen at the wedge, oldest→newest) ---")
+            r = proto.send("DBG I2CLOG", 1000)
+            for ln in r.get("responses", []):
+                s = ln.strip()
+                if s.startswith("I2CLOG"):
+                    print("     " + s)
             print(f"  commanded wheels at glitch: L{a['cmd'][0]} R{a['cmd'][1]}")
             print(f"  I2C now: {dbg_i2c()}")
             print("  --- recent OV / stream events (elapsed s) ---")

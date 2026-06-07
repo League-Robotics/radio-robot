@@ -95,6 +95,20 @@ public:
     /** Reset all counters and violation state to zero. */
     void resetStats();
 
+    // -----------------------------------------------------------------------
+    // Transaction log (diagnostic) — a ring buffer of the most recent
+    // transactions (addr, R/W, len, first 2 bytes, status, timestamp). Dumped
+    // when a wedge is detected to show EXACTLY what was on the bus and in what
+    // order around the lockup (e.g. a sensor transaction landing between the
+    // motor's 0x60 write and its 0x46 read).
+    // -----------------------------------------------------------------------
+
+    /** Dump the recent transaction ring (chronological) via fn/ctx. */
+    void dumpRecent(void (*fn)(const char*, void*), void* ctx) const;
+
+    /** Enable/disable transaction logging (off by default). */
+    void setLogging(bool on) { _logOn = on; }
+
 private:
     // Maximum number of distinct devices tracked (including the "other" bucket
     // at index kMaxDevices-1).
@@ -121,6 +135,24 @@ private:
     // Per-device slot table.
     DeviceSlot _devices[kMaxDevices];
     int        _deviceCount;
+
+    // Transaction log ring buffer.
+    struct TxnLog {
+        uint32_t t_us;     // timestamp (us)
+        uint16_t addr;     // 7-bit device address
+        uint8_t  rw;       // 0 = write, 1 = read
+        uint8_t  len;      // transfer length
+        uint8_t  b0, b1;   // first two data bytes (command/result)
+        int16_t  status;   // CODAL status
+    };
+    static constexpr int kLogSize = 28;
+    TxnLog   _log[kLogSize];
+    int      _logHead;     // next slot to write
+    uint32_t _logTotal;    // total logged (for chronological ordering)
+    bool     _logOn;
+
+    // Append one transaction to the ring (no-op if logging off).
+    void logTxn(uint16_t addr7, uint8_t rw, int len, const uint8_t* data, int status);
 
     // -----------------------------------------------------------------------
     // Private helpers

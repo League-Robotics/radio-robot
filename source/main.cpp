@@ -206,6 +206,7 @@ int main() {
     // are emitted with bus stats and go to the active serial/radio channel.
     robot.motor().setI2CBus(&bus);
     robot.motor().setEvtSink(&sched.activeFn, &sched.activeCtx);
+    bus.setLogging(true);   // arm the I2C transaction ring buffer; dumped on enc_wedged
 
     sched.run_blocks();
 

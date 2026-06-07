@@ -952,6 +952,23 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
             replyOK(rbuf, sizeof(rbuf), "dbg", "i2c", corr_id, replyFn, ctx);
             return;
         }
+        // ── DBG I2CLOG — dump the I2C transaction ring buffer ─────────────────
+        // The ring is FROZEN on the last enc_wedged, so this shows the exact
+        // transaction sequence (addr/RW/bytes/timing) leading into the wedge.
+        // Dump it (when telemetry is quiet so it doesn't collide), then re-arm.
+        if (strcmp(tokens[1], "I2CLOG") == 0) {
+            if (_i2cBus == nullptr) {
+                replyErr(rbuf, sizeof(rbuf), "noimpl", "no i2c bus", corr_id, replyFn, ctx);
+                return;
+            }
+            _i2cBus->dumpRecent(replyFn, ctx);
+            if (ntok >= 3 && strcmp(tokens[2], "ARM") == 0) {
+                _i2cBus->resetStats();
+                _i2cBus->setLogging(true);   // re-arm for the next episode
+            }
+            replyOK(rbuf, sizeof(rbuf), "dbg", "i2clog", corr_id, replyFn, ctx);
+            return;
+        }
         // ── DBG WEDGE — run the self-contained encoder-wedge harness ──────────
         // Hands raw i2c + serial to runWedgeTest(), which takes over the robot
         // and NEVER returns until the bug trips or a serial byte arrives. The
