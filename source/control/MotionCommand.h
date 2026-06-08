@@ -79,6 +79,17 @@ public:
     void setStopStyle(StopStyle s);
 
     /**
+     * setDoneEvt — override the EVT name emitted on normal completion.
+     *
+     * Default is "EVT done". VW sets this to "EVT safety_stop" so that
+     * keepalive-loss termination preserves the existing wire contract.
+     * The label is copied; up to 23 chars + NUL.
+     *
+     * @param label  Full EVT string prefix, e.g. "EVT safety_stop".
+     */
+    void setDoneEvt(const char* label);
+
+    /**
      * armTime — re-arm the t0Ms baseline of the first TIME stop condition.
      *
      * Used by setTarget when a VW keepalive packet arrives to reset the
@@ -173,6 +184,9 @@ private:
 
     /** Absolute SOFT-stop deadline: 3000 ms after a stop fires. */
     static constexpr uint32_t kSoftDeadlineMs = 3000;
+
+    /** EVT label emitted on normal (non-cancel) completion. Default "EVT done". */
+    char        _doneEvtLabel[24]    = "EVT done";
 
     /**
      * emitEvt — build and emit an EVT message via the captured reply sink.

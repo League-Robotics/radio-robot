@@ -1208,11 +1208,18 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
         return;
     }
 
-    // ── VW — body-twist velocity drive (watchdogged) ─────────────────────────
+    // ── VW — body-twist velocity drive (watchdogged, MotionCommand-based) ────
     // VW <v> <omega_mrads> [#id]  → OK vw v=<v> omega=<omega_mrads> [#id]
-    // Converts (v mm/s, omega mrad/s) → wheel setpoints via BodyKinematics::inverse()
-    // then enters STREAMING mode — same watchdog/safety_stop as S command.
-    // omega on wire: milli-radians/s (integer); converted to rad/s at firmware boundary.
+    // Converts (v mm/s, omega mrad/s) to body twist; configures a MotionCommand
+    // with a TIME stop condition at sTimeoutMs (keepalive watchdog).
+    // omega on wire: milli-radians/s (integer); converted to rad/s at boundary.
+    //
+    // Re-sent VW packets act as keepalives:
+    //   - If a VW MotionCommand is already active, call setTarget to update
+    //     the target and re-arm the TIME baseline without restarting the ramp.
+    //   - Otherwise, start a fresh MotionCommand via beginVelocity.
+    //
+    // On keepalive loss: TIME condition fires → SOFT ramp to zero → EVT safety_stop.
     if (strcmp(verb, "VW") == 0) {
         if (ntok < 3) {
             replyErr(rbuf, sizeof(rbuf), "badarg", nullptr, corr_id, replyFn, ctx);
@@ -1229,7 +1236,19 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
             return;
         }
         float omega_rads = (float)omega / 1000.0f;  // mrad/s → rad/s
-        _robot.driveController.beginVelocity((float)v, omega_rads, _robot.systemTime(), _robot.state.target, replyFn, ctx, corr_id);
+        uint32_t now = _robot.systemTime();
+
+        if (_robot.driveController.hasActiveCommand()) {
+            // Keepalive re-send: update target and re-arm TIME baseline.
+            // This avoids resetting the profiler ramp on every VW packet.
+            _robot.driveController.activeCmd().setTarget((float)v, omega_rads);
+        } else {
+            // New VW command: configure MotionCommand from scratch.
+            _robot.driveController.beginVelocity((float)v, omega_rads, now,
+                                                 _robot.state.target,
+                                                 replyFn, ctx, corr_id);
+        }
+
         char body[32];
         snprintf(body, sizeof(body), "v=%d omega=%d", v, omega);
         replyOK(rbuf, sizeof(rbuf), "vw", body, corr_id, replyFn, ctx);

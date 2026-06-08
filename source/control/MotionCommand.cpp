@@ -34,6 +34,17 @@ void MotionCommand::configure(float v_mms, float omega_rads, BodyVelocityControl
     _softDeadlineMs  = 0;
     _now_ms          = 0;
     _baseline        = MotionBaseline{};
+    // Reset done EVT label to default; caller must call setDoneEvt() after
+    // configure() to override it for the new command.
+    strncpy(_doneEvtLabel, "EVT done", sizeof(_doneEvtLabel) - 1);
+    _doneEvtLabel[sizeof(_doneEvtLabel) - 1] = '\0';
+}
+
+void MotionCommand::setDoneEvt(const char* label)
+{
+    if (!label) return;
+    strncpy(_doneEvtLabel, label, sizeof(_doneEvtLabel) - 1);
+    _doneEvtLabel[sizeof(_doneEvtLabel) - 1] = '\0';
 }
 
 bool MotionCommand::addStop(const StopCondition& c)
@@ -131,7 +142,7 @@ bool MotionCommand::tick(const HardwareState& inputs, uint32_t now_ms, float dt_
         if (converged || deadline_hit) {
             _active   = false;
             _stopping = false;
-            emitEvt("EVT done");
+            emitEvt(_doneEvtLabel);
         }
         return _active;
     }
@@ -158,7 +169,7 @@ bool MotionCommand::tick(const HardwareState& inputs, uint32_t now_ms, float dt_
             if (_bvc) _bvc->reset();
             _active   = false;
             _stopping = false;
-            emitEvt("EVT done");
+            emitEvt(_doneEvtLabel);
         } else {
             // SOFT: ramp to (0, 0) over up to kSoftDeadlineMs.
             _stopping       = true;
