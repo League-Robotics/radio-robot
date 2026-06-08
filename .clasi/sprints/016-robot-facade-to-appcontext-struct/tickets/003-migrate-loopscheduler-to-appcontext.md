@@ -1,13 +1,13 @@
 ---
 id: '003'
 title: Migrate LoopScheduler to AppContext
-status: open
+status: done
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-006
+- SUC-001
+- SUC-002
+- SUC-006
 depends-on:
-  - '002'
+- '002'
 github-issue: ''
 issue: ''
 completes_issue: false
@@ -99,21 +99,21 @@ The old `Robot robot(...)` and its `cmd(robot)` wiring remain until T005
 
 ## Acceptance Criteria
 
-- [ ] `LoopScheduler.h` uses `AppContext&` for the robot reference; no
+- [x] `LoopScheduler.h` uses `AppContext&` for the robot reference; no
       `class Robot;` forward declaration remains.
-- [ ] `LoopScheduler.cpp` includes `AppContext.h` (not `Robot.h`).
-- [ ] All eight task functions (`runCommsIn`, `runDriveAdvance`,
+- [x] `LoopScheduler.cpp` includes `AppContext.h` (not `Robot.h`).
+- [x] All eight task functions (`runCommsIn`, `runDriveAdvance`,
       `runOdometryPredict`, `runOtosCorrect`, `runLineRead`, `runColorRead`,
       `runPortsRead`, `runTelemetryEmit`) compile against `AppContext`.
-- [ ] `run_blocks` in `LoopScheduler.cpp` drives through AppContext for all
+- [x] `run_blocks` in `LoopScheduler.cpp` drives through AppContext for all
       control/sensor/telemetry tasks.
-- [ ] `main.cpp` passes `appCtx` to `LoopScheduler`; post-wiring uses
+- [x] `main.cpp` passes `appCtx` to `LoopScheduler`; post-wiring uses
       `appCtx.motorController` directly.
-- [ ] `Robot robot(...)` still exists in `main.cpp` and is passed to
+- [x] `Robot robot(...)` still exists in `main.cpp` and is passed to
       `CommandProcessor cmd(robot)` — CommandProcessor not yet migrated.
-- [ ] Clean build: `python3 build.py` passes.
-- [ ] Host unit tests pass: `uv run --with pytest python -m pytest`.
-- [ ] On-robot smoke test: `PING` responds; `S 200 200` drives (via AppContext
+- [x] Clean build: `python3 build.py` passes.
+- [x] Host unit tests pass: `uv run --with pytest python -m pytest`.
+- [ ] DEFERRED (bench): On-robot smoke test: `PING` responds; `S 200 200` drives (via AppContext
       control path); `STOP` halts. Telemetry stream works (`STREAM 40`).
 
 ## Implementation Plan

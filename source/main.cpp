@@ -191,9 +191,9 @@ int main() {
     //    MicroBit refs; those are fully encapsulated by the device objects).
     // -----------------------------------------------------------------------
     static Robot            robot(motorL, motorR, otos, line, color, gripper, portio, comm, cfg);
-    // T002: AppContext validation — unused until T003-T005 migrate callers.
+    // T003: AppContext is now the primary scheduler input; Robot kept for
+    // CommandProcessor until T005 migrates it.
     static AppContext appCtx(motorL, motorR, otos, line, color, gripper, portio, cfg);
-    (void)appCtx;  // suppress unused-variable warning
     static CommandProcessor cmd(robot);
 
     // DEVICE: identification banner once at boot over serial.
@@ -202,14 +202,14 @@ int main() {
     // -----------------------------------------------------------------------
     // 7. Run the cooperative main loop — never returns.
     // -----------------------------------------------------------------------
-    static LoopScheduler sched(robot, cmd, comm, uBit);
+    static LoopScheduler sched(appCtx, cmd, comm, uBit);
     cmd.setScheduler(&sched);             // enable DBG LOOP <x> <state> task toggling
     cmd.setI2CBus(&bus);                  // enable DBG I2C stats dump (015-003)
 
     // Wire the I2CBus and EVT sink into MotorController so enc_wedged events
     // are emitted with bus stats and go to the active serial/radio channel.
-    robot.motor().setI2CBus(&bus);
-    robot.motor().setEvtSink(&sched.activeFn, &sched.activeCtx);
+    appCtx.motorController.setI2CBus(&bus);
+    appCtx.motorController.setEvtSink(&sched.activeFn, &sched.activeCtx);
 
     sched.run_blocks();
 

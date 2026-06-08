@@ -1,5 +1,5 @@
 #include "LoopScheduler.h"
-#include "Robot.h"
+#include "AppContext.h"
 #include "CommandProcessor.h"
 #include "Communicator.h"
 #include "SerialPort.h"
@@ -78,14 +78,16 @@ static void runCommsIn(LoopScheduler& sched, uint32_t /*now*/)
 // EVT completions inline via the captured reply sink in TargetState.
 static void runDriveAdvance(LoopScheduler& sched, uint32_t now)
 {
-    sched.robot().driveAdvance(now);
+    AppContext& r = sched.robot();
+    r.driveController.driveAdvance(r.state.inputs, r.state.commands, r.state.target, now);
 }
 
 // odometry-predict: apply midpoint dead-reckoning from enc{L,R}Mm into
 // poseX/Y/Hrad in HardwareState.
 static void runOdometryPredict(LoopScheduler& sched, uint32_t /*now*/)
 {
-    sched.robot().odometryPredict();
+    AppContext& r = sched.robot();
+    r.odometry.predict(r.state.inputs, r.config.trackwidthMm);
 }
 
 // otos-correct: read OTOS hardware and apply complementary fusion correction.
@@ -129,7 +131,7 @@ static void runTelemetryEmit(LoopScheduler& sched, uint32_t now)
 // can be changed at runtime by the command processor (SET lag.*).
 // ---------------------------------------------------------------------------
 
-LoopScheduler::LoopScheduler(Robot& robot, CommandProcessor& cmd,
+LoopScheduler::LoopScheduler(AppContext& robot, CommandProcessor& cmd,
                              Communicator& comm, MicroBit& uBit)
     : activeFn(nullptr),
       activeTlmFn(nullptr),
@@ -147,7 +149,7 @@ LoopScheduler::LoopScheduler(Robot& robot, CommandProcessor& cmd,
       _loopTotalUs(0),
       _loopWorkTotalUs(0)
 {
-    const RobotConfig& cfg = robot.config();
+    const RobotConfig& cfg = robot.config;
 
     // -----------------------------------------------------------------------
     // Task table — 8 low-priority tasks in priority order.
@@ -302,10 +304,10 @@ void LoopScheduler::_advancePendingWheel()
 void LoopScheduler::controlFireRequest()
 {
     if (_pendingWheel == 1) {
-        _robot.controlFireRequest(2);
+        _robot.motorR.requestEncoder();
         _pendingWheel = 2;
     } else {
-        _robot.controlFireRequest(1);
+        _robot.motorL.requestEncoder();
         _pendingWheel = 1;
     }
 }
@@ -358,7 +360,7 @@ void LoopScheduler::run_tasks()
 
         // Set the deadline for the NEXT control iteration.
         now = _uBit.systemTime();
-        _controlDeadline = now + (uint32_t)_robot.config().controlPeriodMs;
+        _controlDeadline = now + (uint32_t)_robot.config.controlPeriodMs;
 
         // ------------------------------------------------------------------
         // 2. LOW-PRIORITY SWEEP (round-robin, persistent cursor).
@@ -367,7 +369,7 @@ void LoopScheduler::run_tasks()
         // STREAM commands take effect without a reboot.
         // _table indices: 3=otos-correct, 4=line-read, 5=color-read, 6=ports-read,
         //                 7=telemetry-emit.
-        const RobotConfig& cfg = _robot.config();
+        const RobotConfig& cfg = _robot.config;
         _table[3].periodMs = cfg.lagOtosMs;
         _table[4].periodMs = cfg.lagLineMs;
         _table[5].periodMs = cfg.lagColorMs;
@@ -501,7 +503,7 @@ void LoopScheduler::run_all()
             _controlRuns++;
         }
         now = _uBit.systemTime();
-        _controlDeadline = now + (uint32_t)_robot.config().controlPeriodMs;
+        _controlDeadline = now + (uint32_t)_robot.config.controlPeriodMs;
 
         // (Sensor detection is done once in main() before this loop starts.)
 
@@ -590,7 +592,7 @@ void LoopScheduler::run_blocks()
     uint32_t controlDeadline = 0;
 
     while (true) {
-        const RobotConfig& cfg = _robot.config();
+        const RobotConfig& cfg = _robot.config;
         uint32_t now = _uBit.systemTime();
 
         // ===== CONTROL: read BOTH encoders (M1 first) → PID → setSpeed =======
@@ -613,12 +615,12 @@ void LoopScheduler::run_blocks()
         // ===== DRIVE: advance the drive state machine + S-watchdog ===========
         if (enDrive) {
             now = _uBit.systemTime();
-            _robot.driveAdvance(now);
+            _robot.driveController.driveAdvance(_robot.state.inputs, _robot.state.commands, _robot.state.target, now);
         }
 
         // ===== ODOMETRY: dead-reckon pose from the latest encoder deltas =====
         if (enOdom) {
-            _robot.odometryPredict();
+            _robot.odometry.predict(_robot.state.inputs, _robot.config.trackwidthMm);
         }
 
         // ===== OTOS: timed I2C pose read + fusion ============================

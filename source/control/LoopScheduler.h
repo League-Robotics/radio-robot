@@ -3,7 +3,7 @@
 #include "Protocol.h"
 
 // Forward declarations to avoid pulling in the full header graph.
-class Robot;
+struct AppContext;
 class CommandProcessor;
 class Communicator;
 
@@ -82,7 +82,7 @@ struct Task {
 // ---------------------------------------------------------------------------
 class LoopScheduler {
 public:
-    LoopScheduler(Robot& robot, CommandProcessor& cmd, Communicator& comm, MicroBit& uBit);
+    LoopScheduler(AppContext& robot, CommandProcessor& cmd, Communicator& comm, MicroBit& uBit);
 
     // Production cooperative main loop: priority task table, budget gating,
     // round-robin sweep. Never returns. (Was run().)
@@ -127,7 +127,7 @@ public:
     // ---------------------------------------------------------------------------
     // Accessors used by Task::run() lambdas.
     // ---------------------------------------------------------------------------
-    Robot&            robot() { return _robot; }
+    AppContext&        robot() { return _robot; }
     CommandProcessor& cmd()   { return _cmd;   }
     Communicator&     comm()  { return _comm;  }
     MicroBit&         uBit()  { return _uBit;  }
@@ -139,7 +139,7 @@ public:
     void*    activeCtx;
 
 private:
-    Robot&            _robot;
+    AppContext&        _robot;
     CommandProcessor& _cmd;
     Communicator&     _comm;
     MicroBit&         _uBit;
