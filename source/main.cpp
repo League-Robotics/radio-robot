@@ -1,5 +1,6 @@
 #include "MicroBit.h"
 #include "Robot.h"
+#include "AppContext.h"
 #include "CommandProcessor.h"
 #include "LoopScheduler.h"
 #include "Communicator.h"
@@ -190,6 +191,9 @@ int main() {
     //    MicroBit refs; those are fully encapsulated by the device objects).
     // -----------------------------------------------------------------------
     static Robot            robot(motorL, motorR, otos, line, color, gripper, portio, comm, cfg);
+    // T002: AppContext validation — unused until T003-T005 migrate callers.
+    static AppContext appCtx(motorL, motorR, otos, line, color, gripper, portio, cfg);
+    (void)appCtx;  // suppress unused-variable warning
     static CommandProcessor cmd(robot);
 
     // DEVICE: identification banner once at boot over serial.
