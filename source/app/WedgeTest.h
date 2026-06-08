@@ -34,8 +34,8 @@
 
 #include "MicroBit.h"
 
-class Robot;   // forward decl — real-control mode drives through it
+struct AppContext;   // forward decl — real-control mode drives through it
 
 void runWedgeTest(MicroBit& uBit, int rateHz = 50, int writeMs = 40,
                   int busKHz = 400, int dither = 3, int reg = 0x46, int sensors = 0,
-                  int realCtrl = 0, Robot* robot = nullptr);
+                  int realCtrl = 0, AppContext* robot = nullptr);
