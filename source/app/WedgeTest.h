@@ -26,7 +26,7 @@
 //            uBit.i2c path. THIS is the suspected toggle: the raw path never
 //            wedged; the real PID (high spin-up PWM, write-every-tick via the
 //            I2CBus wrapper) is what production does. Phase l/r are mm/s in this
-//            mode, raw PWM otherwise. Requires a non-null Robot*.
+//            mode, raw PWM otherwise. Requires a non-null AppContext*.
 //
 // A mode-independent wedge check reads 0x46 position once a second and trips
 // WEDGE-POS-FROZEN if the robot was driven but position did not advance — so it

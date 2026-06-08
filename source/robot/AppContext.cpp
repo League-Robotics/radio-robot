@@ -48,7 +48,7 @@ uint32_t AppContext::systemTime() const
 // Reads both encoders, applies the speed-scaled outlier filter, writes
 // state.inputs.enc{L,R}Mm, then calls motorController.controlTick() for PID+PWM.
 //
-// Copied verbatim from Robot::controlCollectSplitPhase with mechanical
+// Migrated from the original Robot controlCollectSplitPhase with mechanical
 // member-name substitutions (_state → state, _mc → motorController,
 // _motorL → motorL, _motorR → motorR, _config → config).
 // ---------------------------------------------------------------------------

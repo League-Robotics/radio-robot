@@ -96,19 +96,19 @@ static void runOtosCorrect(LoopScheduler& sched, uint32_t now)
     sched.robot().otosCorrect(now);
 }
 
-// line-read: delegate to Robot::lineRead() task entry point (014-007).
+// line-read: delegate to AppContext::lineRead() task entry point (014-007).
 static void runLineRead(LoopScheduler& sched, uint32_t /*now*/)
 {
     sched.robot().lineRead();
 }
 
-// color-read: delegate to Robot::colorRead() task entry point (014-007).
+// color-read: delegate to AppContext::colorRead() task entry point (014-007).
 static void runColorRead(LoopScheduler& sched, uint32_t /*now*/)
 {
     sched.robot().colorRead();
 }
 
-// ports-read: delegate to Robot::portsRead() task entry point (014-007).
+// ports-read: delegate to AppContext::portsRead() task entry point (014-007).
 static void runPortsRead(LoopScheduler& sched, uint32_t /*now*/)
 {
     sched.robot().portsRead();
@@ -256,7 +256,7 @@ LoopScheduler::LoopScheduler(AppContext& robot, CommandProcessor& cmd,
 }
 
 // ---------------------------------------------------------------------------
-// controlCollect — private, wraps Robot::controlCollectSplitPhase.
+// controlCollect — private, wraps AppContext::controlCollectSplitPhase.
 //
 // In the proper split-phase path (when _pendingWheel != 0), this collects
 // the encoder from the wheel that was requested at the end of the PREVIOUS
@@ -298,7 +298,7 @@ void LoopScheduler::_advancePendingWheel()
 //
 // The encoder request is now issued atomically at the TOP of the tick inside
 // controlCollect(), so this method is no longer called by run().  Retained
-// to avoid breaking Robot::controlFireRequest() linkage.
+// for API compatibility (AppContext no longer has controlFireRequest).
 // ---------------------------------------------------------------------------
 
 void LoopScheduler::controlFireRequest()
@@ -598,7 +598,7 @@ void LoopScheduler::run_blocks()
         // ===== CONTROL: read BOTH encoders (M1 first) → PID → setSpeed =======
         // Runs every iteration; the idle sleep at the bottom paces the loop to
         // cfg.controlPeriodMs. This is the WedgeTest-proven read-both pattern
-        // (Robot::controlCollectSplitPhase): right/M1 encoder first, then left,
+        // (AppContext::controlCollectSplitPhase): right/M1 encoder first, then left,
         // with outlier rejection, then the per-wheel velocity PID writes PWM.
         if (enControl) {
             controlCollect(now);

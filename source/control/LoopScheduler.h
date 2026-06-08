@@ -192,7 +192,7 @@ private:
     void _advancePendingWheel();
 
     // Retained for API compatibility — fires an encoder request for the given
-    // wheel via Robot::controlFireRequest().  No longer called by run() since
+    // wheel directly via motorL/motorR.  No longer called by run() since
     // the request is now issued atomically at the top of the tick.
     void controlFireRequest();
 

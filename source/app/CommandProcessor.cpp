@@ -521,7 +521,7 @@ static void handleSet(KVPair* kvs, int nkv, RobotConfig& cfg,
 
 void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
 {
-    // Telemetry streaming is gated purely on motors-running (see Robot::
+    // Telemetry streaming is gated purely on motors-running (see AppContext::
     // telemetryEmit): stream while driving, silent when stopped. To read while
     // stopped, the host REQUESTS a frame (SNAP) — a synchronous command-response,
     // so commands don't need to keep the stream alive.
