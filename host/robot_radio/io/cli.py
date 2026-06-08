@@ -456,6 +456,28 @@ def _push_calibration(conn: SerialConnection) -> None:
         else:
             _log("push calibration: odom offsets all zero — skipping SET odomOff*")
 
+    # ── Step 9: velocity-loop PID + cross-wheel coupling (SET keys) ───────
+    # PID/tuning params live in the robot config (control section), not
+    # hard-coded. Each non-None value is pushed; None keeps the firmware
+    # default. Persisted in firmware RAM until power-cycle, then re-pushed by
+    # the open-robot freshness check (same as the OTOS/encoder calibration).
+    ctrl = getattr(cfg, "control", None)
+    if ctrl is not None:
+        ctrl_sets = [
+            ("vel.kP",      getattr(ctrl, "vel_kp",        None)),
+            ("vel.kI",      getattr(ctrl, "vel_ki",        None)),
+            ("vel.kFF",     getattr(ctrl, "vel_kff",       None)),
+            ("vel.iMax",    getattr(ctrl, "vel_imax",      None)),
+            ("vel.kAw",     getattr(ctrl, "vel_kaw",       None)),
+            ("vel.filt",    getattr(ctrl, "vel_filt",      None)),
+            ("sync",        getattr(ctrl, "sync",          None)),
+            ("minWheelMms", getattr(ctrl, "min_wheel_mms", None)),
+        ]
+        for key, val in ctrl_sets:
+            if val is not None:
+                _log(f"push calibration: SET {key}={val:g}")
+                conn.send(f"SET {key}={val:g}", read_ms=200)
+
 
 def cmd_sync_pose(args):
     """Seed the robot's OTOS odometer with its current daemon world pose.

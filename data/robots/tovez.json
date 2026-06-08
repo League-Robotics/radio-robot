@@ -69,5 +69,14 @@
     "rotation_offset_deg": 0.0,
     "rotation_gain_neg": 1.17,
     "rotation_offset_deg_neg": 0.0
+  },
+  "control": {
+    "vel_kp": 0.3,
+    "vel_ki": 0.5,
+    "vel_kff": 0.15,
+    "vel_imax": 20.0,
+    "vel_kaw": 3.0,
+    "vel_filt": 0.15,
+    "sync": 1.0
   }
 }

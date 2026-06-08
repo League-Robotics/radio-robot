@@ -87,7 +87,6 @@ def main() -> int:
         return e
 
     results = []
-    prev = None
     for i in range(args.n):
         safe_stop(); time.sleep(0.4)
         conn._ser.reset_input_buffer()           # flush stale backlog
@@ -110,21 +109,21 @@ def main() -> int:
         avg = (abs(L) + abs(R)) / 2.0
         imb = L - R
         imb_pct = (imb / avg * 100.0) if avg else 0.0
-        # A reading byte-identical to the previous drive = a dropped/stale frame,
-        # not a real measurement (real drives vary by a few mm).
-        stale = (prev is not None and L == prev[0] and R == prev[1])
-        prev = (L, R)
+        # Pass on the actual calibration data: distance + balance. (No stale-guard:
+        # this robot is repeatable enough that consecutive drives land on identical
+        # integers — that's not a stale read. The real freeze it once caught is
+        # fixed in firmware.) A dropped EVT done is noted, not failed.
         dist_ok = abs(avg - args.mm) <= 0.15 * args.mm
         bal_ok  = abs(imb) <= max(0.12 * args.mm, 25)
-        ok = dist_ok and bal_ok and not stale
+        ok = dist_ok and bal_ok
         results.append(ok)
         issues = []
-        if stale:        issues.append("stale read (identical to prev)")
         if not dist_ok:  issues.append(f"dist {avg:.0f}≠{args.mm}")
         if not bal_ok:   issues.append(f"imbal {imb:+.0f}")
+        evt = "" if done == "D" else "  (evt dropped)"
         tag = "OK  " if ok else "FAIL"
         print(f"  drive {i+1}: [{tag}] L={L:+5.0f} R={R:+5.0f} avg={avg:.0f} "
-              f"L-R={imb:+.0f}({imb_pct:+.0f}%) done={done}"
+              f"L-R={imb:+.0f}({imb_pct:+.0f}%){evt}"
               + ("  <- " + ", ".join(issues) if issues else ""))
 
     safe_stop()

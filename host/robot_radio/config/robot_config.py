@@ -143,6 +143,25 @@ class CalibrationConfig(BaseModel):
         return max(-128, min(127, round((self.otos_linear_scale - 1.0) / 0.001)))
 
 
+class ControlConfig(BaseModel):
+    """Velocity-loop PID + cross-wheel coupling tuning for this robot.
+
+    These are runtime-configurable firmware parameters (SET vel.kP / vel.kI /
+    vel.kFF / vel.iMax / vel.kAw / vel.filt / sync). They live in the robot
+    config (not hard-coded) and are pushed by _push_calibration; the firmware
+    holds them in RAM until a power-cycle, after which the open-robot freshness
+    check re-pushes them. When a field is None, the firmware default is kept.
+    """
+    vel_kp:        Optional[float] = None   # → SET vel.kP
+    vel_ki:        Optional[float] = None   # → SET vel.kI
+    vel_kff:       Optional[float] = None   # → SET vel.kFF
+    vel_imax:      Optional[float] = None   # → SET vel.iMax  (integrator clamp, PWM%)
+    vel_kaw:       Optional[float] = None   # → SET vel.kAw   (anti-windup gain, 1/s)
+    vel_filt:      Optional[float] = None   # → SET vel.filt  (velocity EMA weight)
+    sync:          Optional[float] = None   # → SET sync      (cross-wheel coupling)
+    min_wheel_mms: Optional[float] = None   # → SET minWheelMms (low-speed deadband)
+
+
 # ---------------------------------------------------------------------------
 # Root config model
 # ---------------------------------------------------------------------------
@@ -159,6 +178,7 @@ class RobotConfig(BaseModel):
     gripper: GripperConfig = GripperConfig()
     peripherals: PeripheralsConfig = PeripheralsConfig()
     calibration: CalibrationConfig = CalibrationConfig()
+    control: ControlConfig = ControlConfig()
 
     # Derived field — not stored in JSON, computed after load
     mm_per_tick: Optional[float] = None

@@ -162,6 +162,21 @@
           "description": "Linear correction offset (deg) for CW (negative) turns. Falls back to rotation_offset_deg when null."
         }
       }
+    },
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Velocity-loop PID + cross-wheel coupling tuning (pushed via SET vel.* / sync; firmware default kept when a field is null).",
+      "properties": {
+        "vel_kp":        { "type": ["number", "null"], "description": "Velocity PID proportional gain (SET vel.kP)." },
+        "vel_ki":        { "type": ["number", "null"], "description": "Velocity PID integral gain (SET vel.kI)." },
+        "vel_kff":       { "type": ["number", "null"], "description": "Velocity feed-forward coefficient (SET vel.kFF)." },
+        "vel_imax":      { "type": ["number", "null"], "description": "Integrator anti-windup clamp, PWM% (SET vel.iMax)." },
+        "vel_kaw":       { "type": ["number", "null"], "description": "Back-calculation anti-windup gain, 1/s (SET vel.kAw)." },
+        "vel_filt":      { "type": ["number", "null"], "description": "Velocity EMA smoothing weight (SET vel.filt)." },
+        "sync":          { "type": ["number", "null"], "description": "Cross-wheel ratio coupling gain (SET sync)." },
+        "min_wheel_mms": { "type": ["number", "null"], "description": "Low-speed integrator deadband, mm/s (SET minWheelMms)." }
+      }
     }
   },
 
