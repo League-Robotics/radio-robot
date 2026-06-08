@@ -235,6 +235,7 @@ int AppContext::buildTlmFrame(char* buf, int len)
         case DriveMode::TIMED:     modeChar = 'T'; break;
         case DriveMode::DISTANCE:  modeChar = 'D'; break;
         case DriveMode::GO_TO:     modeChar = 'G'; break;
+        case DriveMode::VELOCITY:  modeChar = 'V'; break;
         default:                   modeChar = 'I'; break;
     }
 

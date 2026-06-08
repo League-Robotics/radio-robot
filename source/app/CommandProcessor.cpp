@@ -102,6 +102,12 @@ static const ConfigEntry kRegistry[] = {
     CFG_F ("aDecel",      aDecel),
     CFG_FI("turnGate",    turnInPlaceGate),   // wire: integer degrees; DriveController converts to radians at use-site
     CFG_FI("arriveTol",   arriveTolMm),       // wire: integer mm
+    // Body motion limits (Sprint 017 — BodyVelocityController)
+    CFG_F("vBodyMax",    vBodyMax),           // body forward speed ceiling, mm/s
+    CFG_F("yawRateMax",  yawRateMax),         // yaw rate ceiling, deg/s
+    CFG_F("yawAccMax",   yawAccMax),          // yaw acceleration limit, deg/s²
+    CFG_F("jMax",        jMax),               // linear jerk limit, mm/s³ (0=trapezoid)
+    CFG_F("yawJerkMax",  yawJerkMax),         // yaw jerk limit, deg/s³   (0=trapezoid)
     // Command scaling
     CFG_F("distScale",    distScale),
     CFG_F("turnScale",    turnScale),
@@ -691,7 +697,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     // Reply: OK help <verb list>
     if (strcmp(verb, "HELP") == 0) {
         replyOK(rbuf, sizeof(rbuf), "help",
-                "PING ECHO ID VER HELP SET GET GET VEL STREAM SNAP S T D G VW RF STOP GRIP ZERO OI OZ OR OP OV OL OA P PA",
+                "PING ECHO ID VER HELP SET GET GET VEL STREAM SNAP S T D G VW RF X STOP GRIP ZERO OI OZ OR OP OV OL OA P PA",
                 corr_id, replyFn, ctx);
         return;
     }
@@ -1202,11 +1208,18 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
         return;
     }
 
-    // ── VW — body-twist velocity drive (watchdogged) ─────────────────────────
+    // ── VW — body-twist velocity drive (watchdogged, MotionCommand-based) ────
     // VW <v> <omega_mrads> [#id]  → OK vw v=<v> omega=<omega_mrads> [#id]
-    // Converts (v mm/s, omega mrad/s) → wheel setpoints via BodyKinematics::inverse()
-    // then enters STREAMING mode — same watchdog/safety_stop as S command.
-    // omega on wire: milli-radians/s (integer); converted to rad/s at firmware boundary.
+    // Converts (v mm/s, omega mrad/s) to body twist; configures a MotionCommand
+    // with a TIME stop condition at sTimeoutMs (keepalive watchdog).
+    // omega on wire: milli-radians/s (integer); converted to rad/s at boundary.
+    //
+    // Re-sent VW packets act as keepalives:
+    //   - If a VW MotionCommand is already active, call setTarget to update
+    //     the target and re-arm the TIME baseline without restarting the ramp.
+    //   - Otherwise, start a fresh MotionCommand via beginVelocity.
+    //
+    // On keepalive loss: TIME condition fires → SOFT ramp to zero → EVT safety_stop.
     if (strcmp(verb, "VW") == 0) {
         if (ntok < 3) {
             replyErr(rbuf, sizeof(rbuf), "badarg", nullptr, corr_id, replyFn, ctx);
@@ -1223,7 +1236,19 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
             return;
         }
         float omega_rads = (float)omega / 1000.0f;  // mrad/s → rad/s
-        _robot.driveController.beginVelocity((float)v, omega_rads, _robot.systemTime(), _robot.state.target, replyFn, ctx, corr_id);
+        uint32_t now = _robot.systemTime();
+
+        if (_robot.driveController.hasActiveCommand()) {
+            // Keepalive re-send: update target and re-arm TIME baseline.
+            // This avoids resetting the profiler ramp on every VW packet.
+            _robot.driveController.activeCmd().setTarget((float)v, omega_rads);
+        } else {
+            // New VW command: configure MotionCommand from scratch.
+            _robot.driveController.beginVelocity((float)v, omega_rads, now,
+                                                 _robot.state.target,
+                                                 replyFn, ctx, corr_id);
+        }
+
         char body[32];
         snprintf(body, sizeof(body), "v=%d omega=%d", v, omega);
         replyOK(rbuf, sizeof(rbuf), "vw", body, corr_id, replyFn, ctx);
@@ -1271,10 +1296,23 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
         return;
     }
 
-    // ── STOP — stop motors immediately ───────────────────────────────────────
+    // ── X — cancel active MotionCommand (hard stop) ──────────────────────────
+    // X  → OK x
+    // If a MotionCommand (e.g. VW) is active, HARD-cancels it: ramp zeroed,
+    // MotionCommand emits EVT cancelled, mode goes IDLE. If no command is
+    // active, _mc.stop() is still called (motor safety) but no EVT is emitted.
+    if (strcmp(verb, "X") == 0) {
+        { uint32_t now = _robot.systemTime(); _robot.driveController.cancel(now, replyFn, ctx); }
+        replyOK(rbuf, sizeof(rbuf), "x", nullptr, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── STOP — stop motors immediately (alias for X; preserved for backward compat) ─
     // STOP  → OK stop
+    // Routes through DriveController::cancel() just like X so any active
+    // MotionCommand is torn down cleanly. Replies OK stop (not OK x).
     if (strcmp(verb, "STOP") == 0) {
-        { uint32_t now = _robot.systemTime(); _robot.driveController.stop(now, [](const char*, void*){}, nullptr); }
+        { uint32_t now = _robot.systemTime(); _robot.driveController.cancel(now, replyFn, ctx); }
         replyOK(rbuf, sizeof(rbuf), "stop", nullptr, corr_id, replyFn, ctx);
         return;
     }

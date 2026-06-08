@@ -11,11 +11,17 @@
 // Sprint 014, Ticket 005: EVT ring buffer removed.  Completions emitted
 // inline via target.replyFn / target.replyCtx / target.corrId.
 // OTOS correction removed — handled by AppContext::otosCorrect() exclusively.
+//
+// Sprint 017, Ticket 004: VW migrated from STREAMING path onto MotionCommand.
+// _bvc and _activeCmd added as value members.  beginVelocity now configures
+// a MotionCommand with a TIME stop condition (keepalive watchdog at sTimeoutMs).
+// driveAdvance ticks _activeCmd when active; STREAMING watchdog fires only for S.
 
 #include "DriveController.h"
 #include "MotorController.h"
 #include "Odometry.h"
 #include "BodyKinematics.h"
+#include "StopCondition.h"
 #include <cstdio>
 #include <cmath>
 #include <cstdlib>
@@ -30,6 +36,8 @@ DriveController::DriveController(MotorController& mc, Odometry& odo, const Robot
     , _odo(odo)
     , _cfg(cfg)
     , _hwState(nullptr)
+    , _bvc(mc, cfg)     // _bvc must be initialised before _activeCmd (declaration order)
+    , _activeCmd()
     , _mode(DriveMode::IDLE)
     , _lastSMs(0)
     , _tgtL(0.0f)
@@ -120,20 +128,30 @@ void DriveController::beginVelocity(float v_mms, float omega_rads, uint32_t now_
                                      TargetState& target, ReplyFn fn, void* ctx,
                                      const char* corr_id)
 {
-    // Convert body-twist (v, ω) → individual wheel speeds, then saturate.
-    float vL, vR;
-    BodyKinematics::inverse(v_mms, omega_rads, _cfg.trackwidthMm, vL, vR);
-    float sL, sR;
-    BodyKinematics::saturate(vL, vR, _cfg.vWheelMax, _cfg.steerHeadroom, sL, sR);
-    // Delegate to the existing STREAMING path (keeps watchdog logic in one place).
-    beginStream(sL, sR, now_ms, target, fn, ctx);
-    // Store corr_id so the watchdog EVT safety_stop echoes it.
-    if (corr_id && corr_id[0] != '\0') {
-        strncpy(target.corrId, corr_id, sizeof(target.corrId) - 1);
-        target.corrId[sizeof(target.corrId) - 1] = '\0';
-    } else {
-        target.corrId[0] = '\0';
-    }
+    // Configure a fresh MotionCommand for body-twist (v, ω) with:
+    //   - TIME stop condition at sTimeoutMs (keepalive watchdog).
+    //   - SOFT stop style (ramp to zero before completing).
+    //   - EVT "EVT safety_stop" on completion (preserves wire contract).
+    //   - Reply sink for async EVT delivery.
+    _activeCmd.configure(v_mms, omega_rads, &_bvc);
+    _activeCmd.addStop(makeTimeStop((float)_cfg.sTimeoutMs));
+    _activeCmd.setReplySink(fn, ctx, corr_id);
+    _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
+    // Override done EVT to preserve the VW keepalive-loss wire contract.
+    _activeCmd.setDoneEvt("EVT safety_stop");
+
+    // Snapshot hardware state for MotionBaseline; use _hwState if available.
+    HardwareState emptyState{};
+    const HardwareState& inputs = _hwState ? *_hwState : emptyState;
+    _activeCmd.start(inputs, now_ms);
+
+    // Set mode to VELOCITY — distinct from STREAMING so the S-mode watchdog
+    // branch in driveAdvance does NOT fire for VW.
+    _mode = DriveMode::VELOCITY;
+
+    // Do NOT write to target.replyFn for VW — the reply sink is captured by
+    // _activeCmd.  target is updated only for the TLM mode field.
+    target.mode = DriveMode::VELOCITY;
 }
 
 void DriveController::beginTimed(float leftMms, float rightMms,
@@ -279,8 +297,22 @@ void DriveController::beginGoTo(float tx, float ty, float speedMms, uint32_t now
 
 void DriveController::stop(uint32_t now_ms, ReplyFn fn, void* ctx)
 {
+    // Cancel any active MotionCommand before calling fullStop().
+    if (_activeCmd.active()) {
+        _activeCmd.cancel(MotionCommand::StopStyle::HARD);
+    }
     fullStop(fn, ctx);
     (void)now_ms;
+}
+
+void DriveController::cancel(uint32_t now_ms, ReplyFn fn, void* ctx)
+{
+    _activeCmd.cancel(MotionCommand::StopStyle::HARD);
+    _mc.stop();
+    _mode = DriveMode::IDLE;
+    (void)now_ms;
+    (void)fn;
+    (void)ctx;
 }
 
 // ---------------------------------------------------------------------------
@@ -313,13 +345,28 @@ void DriveController::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
 
     // Motor controller tick and odometry predict are called by AppContext::controlCollectSplitPhase()
     // and odometry.predict() before driveAdvance() is reached (014-003/004).
-    (void)inputs;
     (void)cmds;
+
+    // ── MotionCommand tick (VW / future MotionCommand-based verbs) ─────────────
+    // When a MotionCommand is active, tick it exactly once and return early.
+    // The old S/T/D/G if-chain runs ONLY when no MotionCommand is active.
+    // This also prevents the STREAMING watchdog branch below from firing for VW.
+    if (_activeCmd.active()) {
+        bool still_running = _activeCmd.tick(inputs, now_ms, dt_s);
+        if (!still_running) {
+            // MotionCommand terminated; go IDLE.
+            _mode = DriveMode::IDLE;
+            target.mode = DriveMode::IDLE;
+        }
+        return;
+    }
 
     // S-mode watchdog — emit EVT safety_stop when keepalive times out.
     // (Re-enabled after the encoder-wedge fix: Motor::setSpeed is now
     // write-on-change, so fullStop()'s 0x5F stop is sent once instead of being
     // spammed every tick — which was what wedged the encoder.)
+    // Guarded by _mode == STREAMING so VW (VELOCITY) does NOT trigger this.
+    (void)inputs;
     if (_mode == DriveMode::STREAMING) {
         // Wraparound/ordering-SAFE elapsed time. _lastSMs can be a hair AHEAD of
         // now_ms: the scheduler samples now_ms at the top of the loop, but the

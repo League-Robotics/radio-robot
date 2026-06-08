@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""test_vw_command.py — Unit tests for the VW command (011-005).
+"""test_vw_command.py — Unit tests for the VW command (011-005, updated 017-004).
 
 Tests verify:
   - Wire format: OK vw v=<v> omega=<omega_mrads> [#id]
@@ -7,8 +7,16 @@ Tests verify:
   - ERR badarg on missing arguments
   - ERR range v / ERR range omega for out-of-range values
   - mrad/s → rad/s scaling (÷ 1000) and resulting (vL, vR) computation
-  - Watchdog reuses STREAMING mode (EVT safety_stop)
+  - VW uses DriveMode::VELOCITY (mode=V in TLM) after Sprint 017-004 migration
+  - Keepalive loss → EVT safety_stop (TIME stop condition; wire contract preserved)
   - VW is in the HELP verb list
+
+Sprint 017-004 changes:
+  - VW migrated from raw STREAMING path onto MotionCommand + BodyVelocityController.
+  - VW now ramps (trapezoid profile) instead of stepping wheel setpoints.
+  - DriveMode::VELOCITY = 5 added; TLM reports mode=V for VW.
+  - EVT safety_stop preserved: MotionCommand TIME condition uses setDoneEvt().
+  - S command (beginStream) is completely unchanged.
 """
 
 from __future__ import annotations
@@ -309,11 +317,16 @@ class TestVWKinematics:
 
 
 # ---------------------------------------------------------------------------
-# Watchdog (STREAMING) reuse
+# Keepalive watchdog and EVT safety_stop (Sprint 017-004: MotionCommand-based)
 # ---------------------------------------------------------------------------
 
 class TestVWWatchdog:
-    """Verify EVT safety_stop format and corr_id propagation."""
+    """Verify EVT safety_stop format and corr_id propagation.
+
+    Sprint 017-004: VW is now backed by a MotionCommand with a TIME stop
+    condition (sTimeoutMs).  The EVT safety_stop wire contract is preserved
+    via MotionCommand.setDoneEvt("EVT safety_stop").
+    """
 
     def test_safety_stop_bare_format(self) -> None:
         """EVT safety_stop — bare (no corr id) when VW had no #id."""
@@ -332,17 +345,64 @@ class TestVWWatchdog:
         assert m is not None
         assert m.group(1) == "7"
 
-    def test_vw_mode_is_S_not_new_mode(self) -> None:
-        """TLM mode=S is produced for VW (no new DriveMode enum value added)."""
-        # VW reuses DriveMode::STREAMING, so the TLM mode char is 'S'.
-        valid_tlm = "TLM t=100 mode=S enc=0,0"
-        assert "mode=S" in valid_tlm
+    def test_vw_mode_is_V_not_S(self) -> None:
+        """TLM mode=V is produced for VW (DriveMode::VELOCITY added in Sprint 017-004).
+
+        VW no longer uses DriveMode::STREAMING.  A new DriveMode::VELOCITY = 5
+        was added; AppContext::buildTlmFrame maps it to mode char 'V'.
+        This replaces the old test_vw_mode_is_S_not_new_mode assertion.
+        """
+        # Simulate the TLM line a robot running VW would produce.
+        valid_tlm = "TLM t=100 mode=V enc=0,0"
+        assert "mode=V" in valid_tlm
+        assert "mode=S" not in valid_tlm
 
     def test_safety_stop_evt_name(self) -> None:
         """EVT safety_stop has name 'safety_stop', not 'safety_stop_vw' or other variant."""
         line = "EVT safety_stop"
         name = line[4:].split()[0]
         assert name == "safety_stop"
+
+    def test_safety_stop_not_evt_done(self) -> None:
+        """VW keepalive loss emits 'EVT safety_stop', not 'EVT done'.
+
+        Sprint 017-004: MotionCommand.setDoneEvt('EVT safety_stop') is called
+        in beginVelocity so the TIME condition emits the correct EVT name,
+        preserving the host wire contract.
+        """
+        # The firmware emits this when the TIME condition fires for VW.
+        line = "EVT safety_stop"
+        assert line == "EVT safety_stop"
+        # Explicitly NOT "EVT done" (that would break host scripts).
+        assert line != "EVT done"
+
+    def test_safety_stop_keepalive_loss_format(self) -> None:
+        """Keepalive-loss EVT: 'EVT safety_stop' (bare) or 'EVT safety_stop #id' (with id).
+
+        Contract: TIME stop condition fires → SOFT ramp to zero → EVT safety_stop
+        emitted.  The corr_id echoes the id of the LAST VW packet sent.
+        """
+        import re
+        # Bare (no corr_id)
+        bare = "EVT safety_stop"
+        assert re.match(r"^EVT safety_stop$", bare), f"Unexpected bare format: {bare!r}"
+
+        # With corr_id
+        with_id = "EVT safety_stop #42"
+        m = re.match(r"^EVT safety_stop #(\d+)$", with_id)
+        assert m is not None, f"Unexpected id format: {with_id!r}"
+        assert m.group(1) == "42"
+
+    def test_s_command_still_uses_streaming_mode(self) -> None:
+        """S command (beginStream) uses DriveMode::STREAMING → mode=S in TLM.
+
+        Sprint 017-004 does NOT change the S command path.  S still calls
+        beginStream, which sets _mode = DriveMode::STREAMING.
+        """
+        # Simulate the TLM line for an active S command.
+        s_tlm = "TLM t=100 mode=S enc=100,100"
+        assert "mode=S" in s_tlm
+        assert "mode=V" not in s_tlm
 
 
 # ---------------------------------------------------------------------------

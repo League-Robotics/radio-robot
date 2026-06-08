@@ -971,3 +971,155 @@ class TestWireFormatExamples:
         grip_verb, _ = parse_ok(grip_line)
         assert g_verb == "goto"
         assert grip_verb == "grip"
+
+
+# ---------------------------------------------------------------------------
+# X — cancel active MotionCommand (hard stop)  [017-005]
+# ---------------------------------------------------------------------------
+
+class TestXCommand:
+    """Tests for the X cancel verb (017-005).
+
+    X is the canonical cancel verb: calls DriveController::cancel(), which
+    HARD-cancels any active MotionCommand (VW etc.) and calls _mc.stop().
+    If no command is active, _mc.stop() is still called for motor safety.
+    Reply is always OK x.
+    STOP is an alias: same teardown path, but replies OK stop.
+    """
+
+    def test_x_ok_format(self) -> None:
+        """X → OK x (no body)."""
+        line = "OK x"
+        verb, body = parse_ok(line)
+        assert verb == "x"
+        assert body == ""
+
+    def test_x_ok_not_stop(self) -> None:
+        """X reply verb is 'x', not 'stop' or 'cancel'."""
+        line = "OK x"
+        verb, _ = parse_ok(line)
+        assert verb == "x"
+        assert verb != "stop"
+        assert verb != "cancel"
+
+    def test_x_with_corr_id(self) -> None:
+        """X #5 → OK x #5."""
+        line = "OK x #5"
+        assert line.endswith("#5")
+        assert "x" in line
+
+    def test_x_no_body(self) -> None:
+        """X response has no key=value body."""
+        line = "OK x"
+        _, body = parse_ok(line)
+        assert "=" not in body
+
+    def test_x_evt_cancelled_format_when_active(self) -> None:
+        """When a MotionCommand is active, X causes EVT cancelled #<id>.
+
+        MotionCommand::cancel(HARD) emits 'EVT cancelled' (with corr_id if any).
+        The EVT is emitted asynchronously from DriveController::cancel().
+        """
+        line = "EVT cancelled"
+        name, body = parse_evt(line)
+        assert name == "cancelled"
+
+    def test_x_evt_cancelled_with_id(self) -> None:
+        """EVT cancelled #7 format when the active command had corr_id 7."""
+        line = "EVT cancelled #7"
+        name, body = parse_evt(line)
+        assert name == "cancelled"
+        assert "#7" in line
+
+    def test_stop_still_replies_ok_stop(self) -> None:
+        """STOP → OK stop (wire contract preserved; teardown now via cancel())."""
+        line = "OK stop"
+        verb, body = parse_ok(line)
+        assert verb == "stop"
+        assert body == ""
+
+    def test_stop_and_x_same_teardown_different_reply(self) -> None:
+        """X and STOP both cancel active commands; differ only in reply verb."""
+        x_line = "OK x"
+        stop_line = "OK stop"
+        x_verb, _ = parse_ok(x_line)
+        stop_verb, _ = parse_ok(stop_line)
+        assert x_verb == "x"
+        assert stop_verb == "stop"
+
+    def test_x_in_help_response(self) -> None:
+        """X must appear in the HELP verb list (added in 017-005)."""
+        help_body = (
+            "PING ECHO ID VER HELP SET GET GET VEL STREAM SNAP S T D G VW RF "
+            "X STOP GRIP ZERO OI OZ OR OP OV OL OA P PA"
+        )
+        assert "X" in help_body.split()
+
+    def test_x_in_help_between_rf_and_stop(self) -> None:
+        """X appears between RF and STOP in the HELP list."""
+        verbs = (
+            "PING ECHO ID VER HELP SET GET GET VEL STREAM SNAP S T D G VW RF "
+            "X STOP GRIP ZERO OI OZ OR OP OV OL OA P PA"
+        ).split()
+        rf_idx = verbs.index("RF")
+        x_idx = verbs.index("X")
+        stop_idx = verbs.index("STOP")
+        assert rf_idx < x_idx < stop_idx
+
+
+# ---------------------------------------------------------------------------
+# cancel() host method (NezhaProtocol) — 017-005
+# ---------------------------------------------------------------------------
+
+class TestCancelHostMethod:
+    """Tests for NezhaProtocol.cancel() — sends X via send_fast (fire-and-forget)."""
+
+    def test_cancel_sends_X_via_send_fast(self) -> None:
+        """cancel() sends 'X' via send_fast, not via send."""
+        from unittest.mock import MagicMock
+        from robot_radio.robot.protocol import NezhaProtocol
+
+        mock_conn = MagicMock()
+        proto = NezhaProtocol(mock_conn)
+        proto.cancel()
+
+        mock_conn.send_fast.assert_called_once_with("X")
+        mock_conn.send.assert_not_called()
+
+    def test_cancel_does_not_block(self) -> None:
+        """cancel() is fire-and-forget: send_fast is used (no read_ms wait)."""
+        from unittest.mock import MagicMock
+        from robot_radio.robot.protocol import NezhaProtocol
+
+        mock_conn = MagicMock()
+        proto = NezhaProtocol(mock_conn)
+        proto.cancel()
+
+        # Confirm send_fast was called (not the blocking send method).
+        assert mock_conn.send_fast.call_count == 1
+        # send() would imply a blocking read — must NOT be used for cancel.
+        assert mock_conn.send.call_count == 0
+
+    def test_cancel_x_string_content(self) -> None:
+        """cancel() sends exactly 'X' (no extra args, no #id)."""
+        from unittest.mock import MagicMock
+        from robot_radio.robot.protocol import NezhaProtocol
+
+        mock_conn = MagicMock()
+        proto = NezhaProtocol(mock_conn)
+        proto.cancel()
+
+        args, _ = mock_conn.send_fast.call_args
+        assert args[0] == "X"
+
+    def test_stop_sends_STOP_not_X(self) -> None:
+        """stop() still sends 'STOP' (not 'X') — wire contract preserved."""
+        from unittest.mock import MagicMock
+        from robot_radio.robot.protocol import NezhaProtocol
+
+        mock_conn = MagicMock()
+        proto = NezhaProtocol(mock_conn)
+        proto.stop()
+
+        args, _ = mock_conn.send_fast.call_args
+        assert args[0] == "STOP"

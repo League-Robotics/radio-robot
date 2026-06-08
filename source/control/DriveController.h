@@ -5,6 +5,8 @@
 #include "Config.h"
 #include "Protocol.h"
 #include "RobotState.h"
+#include "BodyVelocityController.h"
+#include "MotionCommand.h"
 
 class MotorController;
 class Odometry;
@@ -50,6 +52,9 @@ public:
                      TargetState& target, ReplyFn fn, void* ctx);
     // VW command entry point: converts (v, ω) body-twist to (vL, vR) via
     // BodyKinematics::inverse() + saturate(), then delegates to beginStream().
+    // VW command entry point: configures a MotionCommand with a TIME stop condition
+    // (keepalive watchdog) and the BodyVelocityController, then starts it.
+    // Does NOT delegate to beginStream(); VW is now VELOCITY mode.
     void beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
                        TargetState& target, ReplyFn fn, void* ctx,
                        const char* corr_id = nullptr);
@@ -63,6 +68,18 @@ public:
                    TargetState& target, ReplyFn fn, void* ctx,
                    const char* corr_id = nullptr);
     void stop(uint32_t now_ms, ReplyFn fn, void* ctx);
+
+    // Cancel the active MotionCommand (HARD stop) and go IDLE.
+    // Used by the X verb and STOP handler when a VW command is active.
+    void cancel(uint32_t now_ms, ReplyFn fn, void* ctx);
+
+    // Query whether a MotionCommand is currently active (running or soft-stopping).
+    // Used by CommandProcessor to distinguish new VW vs keepalive VW.
+    bool hasActiveCommand() const { return _activeCmd.active(); }
+
+    // Access the active MotionCommand for keepalive re-arm (setTarget).
+    // Only call when hasActiveCommand() returns true.
+    MotionCommand& activeCmd() { return _activeCmd; }
 
     // Cooperative-loop task entry point (014-005).
     //
@@ -80,6 +97,13 @@ private:
     Odometry&          _odo;
     const RobotConfig& _cfg;
     HardwareState*     _hwState;  // authoritative state; set by setHardwareState()
+
+    // MotionCommand subsystem (Sprint 017).
+    // _bvc MUST be declared before _activeCmd: DriveController's constructor
+    // passes &_bvc to _activeCmd.configure(), so _bvc must be fully constructed
+    // first.  Do not reorder.
+    BodyVelocityController _bvc;        // body-level (v,ω) profiler
+    MotionCommand          _activeCmd;  // the single active MotionCommand (VW, …)
 
     // Drive mode
     DriveMode _mode;

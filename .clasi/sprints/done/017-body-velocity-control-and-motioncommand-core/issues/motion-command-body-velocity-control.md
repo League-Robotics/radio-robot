@@ -1,8 +1,15 @@
 ---
-status: pending
+status: in-progress
 supersedes:
-  - velocity-profiler-arc-r-command.md
-  - body-velocity-controller.md
+- velocity-profiler-arc-r-command.md
+- body-velocity-controller.md
+sprint: '017'
+tickets:
+- 017-001
+- 017-002
+- 017-003
+- 017-004
+- 017-005
 ---
 
 # MotionCommand + body velocity control — `(v, ω)` twist, profiled ramp, pluggable stop conditions
