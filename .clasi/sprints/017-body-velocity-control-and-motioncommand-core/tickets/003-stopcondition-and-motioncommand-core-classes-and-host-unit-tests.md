@@ -1,13 +1,13 @@
 ---
 id: '003'
 title: "StopCondition and MotionCommand \u2014 core classes and host unit tests"
-status: open
+status: done
 use-cases:
-  - SUC-003
-  - SUC-004
-  - SUC-006
+- SUC-003
+- SUC-004
+- SUC-006
 depends-on:
-  - '002'
+- '002'
 github-issue: ''
 issue: motion-command-body-velocity-control.md
 completes_issue: false
@@ -39,10 +39,10 @@ SOFT/HARD teardown sub-phases.
 
 ### StopCondition
 
-- [ ] `MotionBaseline` struct: `t0Ms`, `enc0Mm`, `heading0Rad`, `pose0X`, `pose0Y`.
-- [ ] `StopCondition` with `Kind` enum (NONE, TIME, DISTANCE, HEADING, POSITION, SENSOR),
+- [x] `MotionBaseline` struct: `t0Ms`, `enc0Mm`, `heading0Rad`, `pose0X`, `pose0Y`.
+- [x] `StopCondition` with `Kind` enum (NONE, TIME, DISTANCE, HEADING, POSITION, SENSOR),
   `Cmp` enum (GE, LE), fields `a`, `b`, `ax`, `sensor`, `cmp`.
-- [ ] `evaluate()` implements each Kind per architecture-update.md:
+- [x] `evaluate()` implements each Kind per architecture-update.md:
   - NONE: always false.
   - TIME: `now_ms - base.t0Ms >= a`.
   - DISTANCE: `|(s.encLMm + s.encRMm) * 0.5 - base.enc0Mm| >= a` (raw encoder sum).
@@ -52,47 +52,47 @@ SOFT/HARD teardown sub-phases.
 
 ### MotionCommand
 
-- [ ] `configure(v, omega, bvc*)` — store target and BVC pointer; clear stop array and
+- [x] `configure(v, omega, bvc*)` — store target and BVC pointer; clear stop array and
   active flag.
-- [ ] `addStop(const StopCondition&)` — append; returns false if full; assert in debug.
-- [ ] `setReplySink(fn, ctx, corrId)`.
-- [ ] `setStopStyle(StopStyle)` — default SOFT.
-- [ ] `armTime(now_ms)` — bumps `t0Ms` in the first TIME condition baseline.
-- [ ] `start(inputs, now_ms)` — snapshot `MotionBaseline`; call `bvc->setTarget(v, omega)`.
-- [ ] `setTarget(v, omega)` — update target + call `bvc->setTarget`; re-arm TIME condition.
-- [ ] `tick(inputs, now_ms, dt_s)` — advance BVC; evaluate stops; handle teardown;
+- [x] `addStop(const StopCondition&)` — append; returns false if full; assert in debug.
+- [x] `setReplySink(fn, ctx, corrId)`.
+- [x] `setStopStyle(StopStyle)` — default SOFT.
+- [x] `armTime(now_ms)` — bumps `t0Ms` in the first TIME condition baseline.
+- [x] `start(inputs, now_ms)` — snapshot `MotionBaseline`; call `bvc->setTarget(v, omega)`.
+- [x] `setTarget(v, omega)` — update target + call `bvc->setTarget`; re-arm TIME condition.
+- [x] `tick(inputs, now_ms, dt_s)` — advance BVC; evaluate stops; handle teardown;
   emit EVT; return `active()`.
-- [ ] `cancel(StopStyle)` — HARD: emit `EVT cancelled`, go IDLE immediately.
-- [ ] `active()` — true while running or during SOFT-stop ramp.
-- [ ] SOFT-stop absolute deadline: 3000 ms after stop-fire, force IDLE + emit EVT.
-- [ ] `kMaxStopConds = 4` constant.
+- [x] `cancel(StopStyle)` — HARD: emit `EVT cancelled`, go IDLE immediately.
+- [x] `active()` — true while running or during SOFT-stop ramp.
+- [x] SOFT-stop absolute deadline: 3000 ms after stop-fire, force IDLE + emit EVT.
+- [x] `kMaxStopConds = 4` constant.
 
 ### Host unit tests — `tests/dev/test_stop_condition.py`
 
-- [ ] TIME fires at threshold, not one tick before.
-- [ ] DISTANCE fires when `|enc_avg - enc0| >= threshold`; not one mm short.
-- [ ] HEADING fires within eps of target heading delta.
-- [ ] POSITION fires within radius; not just outside.
-- [ ] SENSOR GE fires when value >= threshold; LE fires when value <= threshold.
-- [ ] NONE always returns false.
-- [ ] OR-across-array: two conditions; first fires; second not yet satisfied.
-- [ ] Zero-condition command: no self-termination.
+- [x] TIME fires at threshold, not one tick before.
+- [x] DISTANCE fires when `|enc_avg - enc0| >= threshold`; not one mm short.
+- [x] HEADING fires within eps of target heading delta.
+- [x] POSITION fires within radius; not just outside.
+- [x] SENSOR GE fires when value >= threshold; LE fires when value <= threshold.
+- [x] NONE always returns false.
+- [x] OR-across-array: two conditions; first fires; second not yet satisfied.
+- [x] Zero-condition command: no self-termination.
 
 ### Host unit tests — `tests/dev/test_motion_command.py`
 
-- [ ] SOFT teardown: on stop-fire, `(0,0)` targeted; active stays true during ramp;
+- [x] SOFT teardown: on stop-fire, `(0,0)` targeted; active stays true during ramp;
   `EVT done` emitted when BVC mock `atTarget()` returns true.
-- [ ] SOFT absolute deadline: if BVC never reaches zero, EVT emitted after 3 s.
-- [ ] HARD cancel: `EVT cancelled` on same tick; `active()` false immediately.
-- [ ] `active()` false after full termination.
-- [ ] Recycled command (`configure` + `start` called twice): baseline resets; no residue
+- [x] SOFT absolute deadline: if BVC never reaches zero, EVT emitted after 3 s.
+- [x] HARD cancel: `EVT cancelled` on same tick; `active()` false immediately.
+- [x] `active()` false after full termination.
+- [x] Recycled command (`configure` + `start` called twice): baseline resets; no residue
   from prior run.
-- [ ] `armTime`: TIME condition not re-fired within new `sTimeoutMs` window.
+- [x] `armTime`: TIME condition not re-fired within new `sTimeoutMs` window.
 
 ### Build and regression
 
-- [ ] Clean build: `python3 build.py --clean` completes without errors.
-- [ ] Host baseline: `uv run --with pytest python -m pytest -q` at 1035/8.
+- [x] Clean build: `python3 build.py --clean` completes without errors.
+- [x] Host baseline: `uv run --with pytest python -m pytest -q` at 1035/8.
 
 ## Implementation Plan
 
