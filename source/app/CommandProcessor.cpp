@@ -110,7 +110,6 @@ static const ConfigEntry kRegistry[] = {
     CFG_I("sTimeout",     sTimeoutMs),
     CFG_I("tick",         tickMs),
     CFG_I("ctrlPeriod",   controlPeriodMs),
-    CFG_I("encAtomic",    encAtomic),       // 0=settle read, 1=atomic read (anti-wedge A/B)
     CFG_I("tlmPeriod",    tlmPeriodMs),
     // Sensor lag budgets (ms) for the cooperative scheduler's low-priority tasks.
     // SET lag.* N updates cfg.lag*Ms; LoopScheduler syncs task periodMs live.
@@ -952,21 +951,37 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
             replyOK(rbuf, sizeof(rbuf), "dbg", "i2c", corr_id, replyFn, ctx);
             return;
         }
-        // ── DBG I2CLOG — dump the I2C transaction ring buffer ─────────────────
-        // The ring is FROZEN on the last enc_wedged, so this shows the exact
-        // transaction sequence (addr/RW/bytes/timing) leading into the wedge.
-        // Dump it (when telemetry is quiet so it doesn't collide), then re-arm.
+        // ── DBG I2CLOG [ARM] — dump the I2C transaction ring buffer ───────────
+        // Diagnostic tool (OFF by default — zero overhead unless armed). Usage:
+        //   DBG I2CLOG ARM   → reset + start logging every transaction
+        //   <reproduce>      → drive / exercise the bus
+        //   DBG I2CLOG       → dump the recent ring (one line, addr/RW/byte/dt)
+        // Dump when telemetry is quiet so it doesn't garble the async serial TX.
         if (strcmp(tokens[1], "I2CLOG") == 0) {
             if (_i2cBus == nullptr) {
                 replyErr(rbuf, sizeof(rbuf), "noimpl", "no i2c bus", corr_id, replyFn, ctx);
                 return;
             }
-            _i2cBus->dumpRecent(replyFn, ctx);
             if (ntok >= 3 && strcmp(tokens[2], "ARM") == 0) {
                 _i2cBus->resetStats();
-                _i2cBus->setLogging(true);   // re-arm for the next episode
+                _i2cBus->setLogging(true);
+            } else {
+                _i2cBus->dumpRecent(replyFn, ctx);
             }
             replyOK(rbuf, sizeof(rbuf), "dbg", "i2clog", corr_id, replyFn, ctx);
+            return;
+        }
+        // ── DBG IRQGUARD [0|1] — mask IRQs for the FULL I2C transaction ────────
+        // nRF52 TWIM errata fix: with no arg, reports state; with 0/1, toggles.
+        if (strcmp(tokens[1], "IRQGUARD") == 0) {
+            if (_i2cBus == nullptr) {
+                replyErr(rbuf, sizeof(rbuf), "noimpl", "no i2c bus", corr_id, replyFn, ctx);
+                return;
+            }
+            if (ntok >= 3) _i2cBus->setIrqGuard(atoi(tokens[2]) != 0);
+            char msg[24];
+            snprintf(msg, sizeof(msg), "irqguard=%d", _i2cBus->irqGuard() ? 1 : 0);
+            replyOK(rbuf, sizeof(rbuf), "dbg", msg, corr_id, replyFn, ctx);
             return;
         }
         // ── DBG WEDGE — run the self-contained encoder-wedge harness ──────────

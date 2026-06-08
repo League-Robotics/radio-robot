@@ -97,10 +97,9 @@ public:
 
     // -----------------------------------------------------------------------
     // Transaction log (diagnostic) — a ring buffer of the most recent
-    // transactions (addr, R/W, len, first 2 bytes, status, timestamp). Dumped
-    // when a wedge is detected to show EXACTLY what was on the bus and in what
-    // order around the lockup (e.g. a sensor transaction landing between the
-    // motor's 0x60 write and its 0x46 read).
+    // transactions (addr, R/W, len, first 2 bytes, status, timestamp). OFF by
+    // default (zero overhead); armed/dumped on demand via DBG I2CLOG [ARM] to
+    // inspect exactly what was on the bus and in what order (addr/RW/byte/dt).
     // -----------------------------------------------------------------------
 
     /** Dump the recent transaction ring (chronological) via fn/ctx. */
@@ -108,6 +107,14 @@ public:
 
     /** Enable/disable transaction logging (off by default). */
     void setLogging(bool on) { _logOn = on; }
+
+    /** IRQ-guard the FULL transaction (not just the _inUse flag). The nRF52 TWIM
+     *  has a silicon errata (see NRF52I2C::waitForStop) that strikes "under
+     *  higher levels of background interrupt load"; masking interrupts for the
+     *  duration of each transaction removes that load. Default ON. Toggle live
+     *  via DBG IRQGUARD to A/B against the wedge. */
+    void setIrqGuard(bool on) { _irqGuard = on; }
+    bool irqGuard() const { return _irqGuard; }
 
 private:
     // Maximum number of distinct devices tracked (including the "other" bucket
@@ -145,11 +152,12 @@ private:
         uint8_t  b0, b1;   // first two data bytes (command/result)
         int16_t  status;   // CODAL status
     };
-    static constexpr int kLogSize = 28;
+    static constexpr int kLogSize = 24;
     TxnLog   _log[kLogSize];
     int      _logHead;     // next slot to write
     uint32_t _logTotal;    // total logged (for chronological ordering)
     bool     _logOn;
+    bool     _irqGuard;    // mask IRQs for the full transaction (TWIM errata fix)
 
     // Append one transaction to the ring (no-op if logging off).
     void logTxn(uint16_t addr7, uint8_t rw, int len, const uint8_t* data, int status);

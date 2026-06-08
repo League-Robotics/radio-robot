@@ -7,6 +7,13 @@
 This documents the full diagnostic arc of a problem that consumed most of a day. It is
 written as a narrative so future debugging sessions can recognize the pattern early.
 
+> **Note (2026-06-07):** this doc covers the **cold-boot detection** wedge
+> (`begin()` placement / battery-backed bus). The separate **driving wedge** — the
+> encoder readback freezing *while driving* — was later root-caused to the **nRF52
+> TWIM I2C silicon errata under background interrupt load**, fixed by IRQ-masking
+> each transaction. See
+> [encoder-wedge-nrf52-twim-irq-load-errata.md](encoder-wedge-nrf52-twim-irq-load-errata.md).
+
 ---
 
 ## The symptom

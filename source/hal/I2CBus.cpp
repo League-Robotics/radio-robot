@@ -18,6 +18,7 @@ I2CBus::I2CBus(MicroBitI2C& bus)
     , _logHead(0)
     , _logTotal(0)
     , _logOn(false)
+    , _irqGuard(true)
 {
     for (int i = 0; i < kMaxDevices; ++i) {
         _devices[i].addr     = 0;
@@ -38,15 +39,15 @@ int I2CBus::write(uint16_t address, uint8_t* data, int len, bool repeated)
 {
     // address is the 8-bit wire address (7-bit addr << 1).
     uint16_t addr7 = (uint16_t)(address >> 1);
+    const bool guard = _irqGuard;
 
-    // --- Re-entrancy guard: atomic check-and-set ---
-    // Disable IRQs for the MINIMUM window needed to check+set the flag.
-    // The full I2C transaction is NOT inside the critical section — only
-    // the 3-instruction flag read-modify-write is.
+    // Always mask IRQs for the flag check-and-set. When _irqGuard is on we KEEP
+    // them masked through the whole _bus transaction (nRF52 TWIM errata fix —
+    // see I2CBus.h / NRF52I2C::waitForStop); when off, we re-enable before the
+    // transaction (original narrow-guard behaviour).
     target_disable_irq();
     bool alreadyInUse = _inUse;
     if (alreadyInUse) {
-        // Capture violation: keep the existing _inFlightAddr, record new addr.
         ++_reentryViolations;
         _reentryInFlightAddr = _inFlightAddr;
         _reentryNewAddr      = (uint16_t)address;
@@ -54,15 +55,14 @@ int I2CBus::write(uint16_t address, uint8_t* data, int len, bool repeated)
         _inUse        = true;
         _inFlightAddr = (uint16_t)address;
     }
-    target_enable_irq();
-    // --- End critical section ---
+    if (!guard) target_enable_irq();
 
     int status = _bus.write(address, data, len, repeated);
 
-    // Clear the flag only if we were the one who set it.
     if (!alreadyInUse) {
         _inUse = false;
     }
+    if (guard) target_enable_irq();
 
     record(addr7, status);
     logTxn(addr7, 0, len, data, status);
@@ -72,8 +72,8 @@ int I2CBus::write(uint16_t address, uint8_t* data, int len, bool repeated)
 int I2CBus::read(uint16_t address, uint8_t* data, int len, bool repeated)
 {
     uint16_t addr7 = (uint16_t)(address >> 1);
+    const bool guard = _irqGuard;
 
-    // --- Re-entrancy guard: atomic check-and-set ---
     target_disable_irq();
     bool alreadyInUse = _inUse;
     if (alreadyInUse) {
@@ -84,14 +84,14 @@ int I2CBus::read(uint16_t address, uint8_t* data, int len, bool repeated)
         _inUse        = true;
         _inFlightAddr = (uint16_t)address;
     }
-    target_enable_irq();
-    // --- End critical section ---
+    if (!guard) target_enable_irq();
 
     int status = _bus.read(address, data, len, repeated);
 
     if (!alreadyInUse) {
         _inUse = false;
     }
+    if (guard) target_enable_irq();
 
     record(addr7, status);
     logTxn(addr7, 1, len, data, status);
@@ -110,7 +110,12 @@ void I2CBus::logTxn(uint16_t addr7, uint8_t rw, int len, const uint8_t* data, in
     e.addr   = addr7;
     e.rw     = rw;
     e.len    = (uint8_t)(len > 255 ? 255 : (len < 0 ? 0 : len));
-    e.b0     = (data && len > 0) ? data[0] : 0;
+    // For a Nezha WRITE the meaningful byte is the command at frame byte[4]
+    // ("FF F9 id dir <CMD> ..." — 0x46=read-angle-request, 0x60=move, 0x47=read-
+    // speed). The header byte[0] is always 0xFF, useless. For a READ, byte[0] is
+    // the low data byte. So log byte[4] on writes, byte[0] on reads.
+    e.b0     = (rw == 0 && len > 4 && data) ? data[4]
+             : (data && len > 0) ? data[0] : 0;
     e.b1     = (data && len > 1) ? data[1] : 0;
     e.status = (int16_t)status;
     _logHead = (_logHead + 1) % kLogSize;
@@ -124,18 +129,24 @@ void I2CBus::dumpRecent(void (*fn)(const char*, void*), void* ctx) const
     // otherwise the buffer filled 0.._logHead-1.
     int count = (_logTotal < (uint32_t)kLogSize) ? (int)_logTotal : kLogSize;
     int start = (_logTotal < (uint32_t)kLogSize) ? 0 : _logHead;
-    char line[96];
+    // Emit the WHOLE ring as ONE line — multiple lines overflow the async serial
+    // TX buffer (~255 B) and garble. One ≤255-char line (like DBG I2C) is safe.
+    // Token: <addr><R/W><b0>.<dt_us>  e.g. "10W60.0 10R46.4012 43RA6.250"
+    char line[256];
     uint32_t prev_us = 0;
+    int pos = snprintf(line, sizeof(line), "I2CLOG ");
     for (int i = 0; i < count; ++i) {
         const TxnLog& e = _log[(start + i) % kLogSize];
-        uint32_t dt = (i == 0) ? 0 : (e.t_us - prev_us);   // us since previous txn
+        uint32_t dt = (i == 0) ? 0 : (e.t_us - prev_us);
         prev_us = e.t_us;
-        snprintf(line, sizeof(line),
-                 "I2CLOG +%luus 0x%02X %s len=%u b=%02X,%02X st=%d\r\n",
-                 (unsigned long)dt, (unsigned)e.addr, e.rw ? "RD" : "WR",
-                 (unsigned)e.len, (unsigned)e.b0, (unsigned)e.b1, (int)e.status);
-        fn(line, ctx);
+        int w = snprintf(line + pos, sizeof(line) - pos, "%02X%c%02X.%lu ",
+                         (unsigned)e.addr, e.rw ? 'R' : 'W',
+                         (unsigned)e.b0, (unsigned long)dt);
+        if (w <= 0 || w >= (int)sizeof(line) - pos) break;   // out of room
+        pos += w;
     }
+    snprintf(line + pos, sizeof(line) - pos, "\r\n");
+    fn(line, ctx);
 }
 
 // ---------------------------------------------------------------------------

@@ -43,6 +43,12 @@ def main() -> int:
     p.add_argument("--stimeout", type=int, default=1500, help="firmware S-watchdog ms")
     p.add_argument("--set", dest="sets", action="append", default=[], metavar="K=V",
                    help="SET override applied on connect (repeatable), e.g. --set encAtomic=1")
+    p.add_argument("--dbg", dest="dbgs", action="append", default=[], metavar="ARGS",
+                   help="DBG command sent on connect (repeatable), e.g. --dbg 'IRQGUARD 0'")
+    p.add_argument("--endurance", action="store_true",
+                   help="endurance verdict: ONLY a persistent wedge (firmware EVT "
+                        "enc_wedged) is fatal; host-side transient blips are counted "
+                        "and driven through. Use to verify the wedge fix over a long run.")
     p.add_argument("--no-perturb", action="store_true",
                    help="drop ALL bus/comms perturbation: no OV pose-writes, no mid-drive "
                         "stream toggles, stream only enc (minimal, for detection). Isolates "
@@ -71,6 +77,7 @@ def main() -> int:
     cur_cmd = [0, 0]                     # currently commanded wheel speeds
     prev = [None]                        # (t_ms, encL, encR) of previous reading
     frozen_run = [0]
+    transients = [0]   # endurance mode: count of recoverable blips (non-fatal)
     reads = collections.deque(maxlen=40)  # recent (t_ms, eL, eR, vL, vR, cmdL, cmdR)
     events = collections.deque(maxlen=16)  # recent (elapsed, "OV..."/"stream...")
     anomaly = [None]                     # dict on first glitch
@@ -105,9 +112,18 @@ def main() -> int:
                     reason = f"frozen — {frozen_run[0]} identical reads while driving"
             else:
                 frozen_run[0] = 0
-            if reason and anomaly[0] is None:
-                anomaly[0] = {"reason": reason, "t_ms": t_ms,
-                              "cmd": (cmdL, cmdR)}
+            if reason:
+                if args.endurance:
+                    # Endurance verdict: host-side detectors only catch transients
+                    # (recoverable blips). The PERSISTENT wedge — the actual bug —
+                    # is signalled by the firmware EVT enc_wedged (n=10), handled
+                    # in pump(). So here we just COUNT transients and keep driving.
+                    transients[0] += 1
+                    if transients[0] <= 8 or transients[0] % 25 == 0:
+                        print(f"  [transient #{transients[0]}] {reason} (t={t_ms})")
+                elif anomaly[0] is None:
+                    anomaly[0] = {"reason": reason, "t_ms": t_ms,
+                                  "cmd": (cmdL, cmdR)}
         prev[0] = (t_ms, eL, eR)
 
     def pump(duration_ms=20):
@@ -198,6 +214,9 @@ def main() -> int:
         for kv in args.sets:
             r = proto.send(f"SET {kv}", 300)
             print(f"  SET {kv} -> {r.get('responses', ['?'])[-1]}")
+        for dc in args.dbgs:
+            r = proto.send(f"DBG {dc}", 300)
+            print(f"  DBG {dc} -> {r.get('responses', ['?'])[-1]}")
         proto.send("OI", 400)
         proto.zero_encoders()
         set_stream(50, [] if args.no_perturb else FIELD_POOL)   # enc-only stream if no-perturb
@@ -279,7 +298,10 @@ def main() -> int:
             for h in history[-8:]:
                 print("     " + h)
         else:
-            print(f"  NO ANOMALY in {n} maneuvers over {el/60:.1f} min — looks clean.")
+            tag = "NO PERSISTENT WEDGE" if args.endurance else "NO ANOMALY"
+            print(f"  {tag} in {n} maneuvers over {el/60:.1f} min — looks clean.")
+            if args.endurance:
+                print(f"  recoverable transients (non-fatal): {transients[0]}")
             print(f"  I2C now: {dbg_i2c()}")
         print("=" * 64)
     finally:

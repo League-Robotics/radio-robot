@@ -306,10 +306,6 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
                              (unsigned long)reentryN,
                              lastErrV);
                     (*_evtFn)(evtBuf, *_evtCtx);
-                    // FREEZE the I2C transaction ring at the wedge moment (don't
-                    // dump inline — that collides with the live TLM stream on the
-                    // async serial). Retrieve it cleanly later via DBG I2CLOG.
-                    if (_i2cBus) _i2cBus->setLogging(false);
                 }
             }
         }
@@ -346,7 +342,6 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
                              (unsigned long)reentryN,
                              lastErrV);
                     (*_evtFn)(evtBuf, *_evtCtx);
-                    if (_i2cBus) _i2cBus->setLogging(false);   // freeze ring; dump via DBG I2CLOG
                 }
             }
         }
