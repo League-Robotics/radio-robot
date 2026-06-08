@@ -185,6 +185,9 @@ private:
 
     // TLM streaming state — managed by tick(); period/fields/snap set via config().
     uint32_t _lastTlmMs;    // timestamp of last emitted TLM frame
+    uint32_t _lastActiveMs; // last time a drive was active (mode != IDLE); the
+                            // periodic stream auto-stops after an idle grace so it
+                            // doesn't flood the link forever and block reconnect.
 
     // Device references (constructed externally in main(), passed in as refs).
     Motor&       _motorL;   // M2, left wheel

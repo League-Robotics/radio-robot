@@ -18,6 +18,7 @@ Robot::Robot(Motor&        motorL,
     : _currentGripperAngle(0),
       _config(cfg),
       _lastTlmMs(0),
+      _lastActiveMs(0),
       _motorL(motorL),
       _motorR(motorR),
       _otos(otos),
@@ -457,8 +458,18 @@ void Robot::portsRead()
 
 void Robot::telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx)
 {
+    // Auto-stop the periodic stream when the robot has been idle (not driving)
+    // longer than a short grace. The grace lets a just-finished drive's final
+    // state reach the host (the bench reads the encoder right after a drive);
+    // after that, streaming stops so it doesn't flood the link forever — that
+    // flood buries the DEVICE: handshake line and makes reconnect fail. A one-shot
+    // SNAP still works any time (an explicit request, below).
+    static constexpr uint32_t kIdleStopMs = 1500;
+    if (_dc.mode() != DriveMode::IDLE) _lastActiveMs = now_ms;
+    bool idleTooLong = (now_ms - _lastActiveMs) > kIdleStopMs;
+
     bool snapPending = _config.tlmSnapPending;
-    bool periodic    = (_config.tlmPeriodMs > 0) &&
+    bool periodic    = (_config.tlmPeriodMs > 0) && !idleTooLong &&
                        ((now_ms - _lastTlmMs) >= (uint32_t)_config.tlmPeriodMs);
 
     if (!snapPending && !periodic) return;
