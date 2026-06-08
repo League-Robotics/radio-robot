@@ -6,8 +6,8 @@
 /**
  * Communicator — owns both communication wrappers (serial + radio).
  *
- * Constructed in main() with the CODAL peripherals; Robot and LoopScheduler
- * receive a reference so they never see raw NRF52Serial / MicroBitRadio.
+ * Constructed in main() with the CODAL peripherals; LoopScheduler and
+ * CommandProcessor receive a reference so they never see raw NRF52Serial / MicroBitRadio.
  *
  * begin() enables both channels.  Call it once in main() before starting the
  * cooperative loop.

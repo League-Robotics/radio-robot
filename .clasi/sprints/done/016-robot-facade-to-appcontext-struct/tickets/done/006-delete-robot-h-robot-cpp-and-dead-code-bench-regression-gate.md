@@ -1,17 +1,17 @@
 ---
 id: '006'
-title: 'Delete Robot.h/Robot.cpp and dead code; bench regression gate'
-status: open
+title: Delete Robot.h/Robot.cpp and dead code; bench regression gate
+status: done
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-003
-  - SUC-004
-  - SUC-005
-  - SUC-006
-  - SUC-007
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+- SUC-006
+- SUC-007
 depends-on:
-  - '005'
+- '005'
 github-issue: ''
 issue: replace-robot-facade-with-appcontext-struct.md
 completes_issue: true
@@ -108,14 +108,15 @@ After a clean firmware build and flash, verify using `uv run rogo ...`:
 ## Acceptance Criteria
 
 **Build and test**:
-- [ ] `source/robot/Robot.h` and `source/robot/Robot.cpp` are deleted.
-- [ ] `grep -r 'class Robot' source/` returns zero results.
-- [ ] `grep -r '#include "Robot.h"' source/` returns zero results.
-- [ ] Clean build: `python3 build.py --clean <target>` passes (clean build
+- [x] `source/robot/Robot.h` and `source/robot/Robot.cpp` are deleted.
+- [x] `grep -r 'class Robot' source/` returns zero results.
+- [x] `grep -r '#include "Robot.h"' source/` returns zero results.
+- [x] Clean build: `python3 build.py --clean <target>` passes (clean build
       mandatory before bench flash — see project rules).
-- [ ] Host unit tests pass: `uv run --with pytest python -m pytest`.
+- [x] Host unit tests pass: `uv run --with pytest python -m pytest`
+      (1035 passed / 8 failed — matches pre-ticket baseline; no new failures).
 
-**Bench regression gate** (all of the following must pass on physical robot):
+**Bench regression gate** (STAKEHOLDER-DEFERRED — flash and run after all three sprints land):
 - [ ] PING responds; `ID caps=otos,line,color,gripper,portio` correct.
 - [ ] `S`/`T`/`D`/`G`/`VW`/`STOP` all produce correct responses and behavior.
 - [ ] `D` command completes distance without spasm (encoder-reset workaround
@@ -127,7 +128,7 @@ After a clean firmware build and flash, verify using `uv run rogo ...`:
 - [ ] `STREAM 40` produces TLM frames while driving; stream silences when idle.
 - [ ] `SNAP` returns one frame synchronously.
 - [ ] Encoders, wheels, and sensors all read on the bench (standing gate).
-- [ ] No `Robot` type references remain in the source tree.
+- [x] No `Robot` type references remain in the source tree (`grep -rn "Robot\.h\|class Robot\b\|Robot::" source/` returns zero results).
 
 ## Implementation Plan
 

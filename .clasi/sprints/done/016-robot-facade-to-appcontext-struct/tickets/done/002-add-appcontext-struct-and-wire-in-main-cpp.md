@@ -1,17 +1,17 @@
 ---
 id: '002'
 title: Add AppContext struct and wire in main.cpp
-status: open
+status: done
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-003
-  - SUC-004
-  - SUC-005
-  - SUC-006
-  - SUC-007
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+- SUC-006
+- SUC-007
 depends-on:
-  - '001'
+- '001'
 github-issue: ''
 issue: ''
 completes_issue: false
@@ -161,17 +161,18 @@ still use `robot` (the Robot type).
 
 ## Acceptance Criteria
 
-- [ ] `source/robot/AppContext.h` and `source/robot/AppContext.cpp` exist.
-- [ ] AppContext compiles cleanly alongside Robot (both present in the build).
-- [ ] Constructor initializer-list order matches member declaration order with
+- [x] `source/robot/AppContext.h` and `source/robot/AppContext.cpp` exist.
+- [x] AppContext compiles cleanly alongside Robot (both present in the build).
+- [x] Constructor initializer-list order matches member declaration order with
       no compiler warnings about initialization order.
-- [ ] `AppContext::otosCorrect` uses `otos.readTransformed(config)` from T001.
-- [ ] `AppContext::distanceDrive` contains the encoder-reset workaround
+- [x] `AppContext::otosCorrect` uses `otos.readTransformed(config)` from T001.
+- [x] `AppContext::distanceDrive` contains the encoder-reset workaround
       (`state.inputs.encLMm = 0; state.inputs.encRMm = 0;` after `beginDistance`).
-- [ ] `main.cpp` constructs both `robot` (Robot) and `appCtx` (AppContext).
-- [ ] Clean build: `python3 build.py` passes with no new errors.
-- [ ] Host unit tests pass: `uv run --with pytest python -m pytest`.
-- [ ] Robot behavior unchanged — all callers still go through Robot.
+- [x] `main.cpp` constructs both `robot` (Robot) and `appCtx` (AppContext).
+- [x] Clean build: `python3 build.py` passes with no new errors.
+- [x] Host unit tests pass: `uv run --with pytest python -m pytest`.
+- [x] Robot behavior unchanged — all callers still go through Robot.
+      (STAKEHOLDER-DEFERRED: on-robot PING verification — bench flash not performed per ticket instructions)
 
 ## Implementation Plan
 

@@ -21,7 +21,7 @@
 
 #include "WedgeTest.h"
 #include "MicroBit.h"
-#include "Robot.h"             // real-control mode drives through the production stack
+#include "AppContext.h"        // real-control mode drives through the production stack
 #include "MotorController.h"
 #include <cstdio>
 #include <cstdint>
@@ -148,7 +148,7 @@ constexpr int NPH = (int)(sizeof(PHASES) / sizeof(PHASES[0]));
 }  // namespace
 
 void runWedgeTest(MicroBit& uBit, int rateHz, int writeMs, int busKHz, int dither,
-                  int reg, int sensors, int realCtrl, Robot* robot)
+                  int reg, int sensors, int realCtrl, AppContext* robot)
 {
     MicroBitI2C& i2c = uBit.i2c;
     char line[240];
@@ -222,11 +222,12 @@ void runWedgeTest(MicroBit& uBit, int rateHz, int writeMs, int busKHz, int dithe
             // rate-limit, via the I2CBus wrapper) → read BOTH encoders (M1 first)
             // with outlier rejection. This is what the soak does that the raw
             // path here does not. Phase l/r are mm/s in this mode.
-            robot->motor().setTarget((float)ph.l, (float)ph.r);
+            robot->motorController.setTarget((float)ph.l, (float)ph.r);
             if (useSensors) sensorTraffic(i2c, ticks);
             robot->controlCollectSplitPhase(now, 0);
-            Robot::EncoderReading er = robot->getEncoders();
-            eR = er.rightMm; eL = er.leftMm;
+            int32_t encL = 0, encR = 0;
+            robot->motorController.getEncoderPositions(encL, encR);
+            eR = encR; eL = encL;
         } else {
             // === RAW fixed-PWM path (the established-clean baseline) ==========
             // Mimic a PID-ish write rate by dithering the commanded PWM each tick
@@ -266,8 +267,8 @@ void runWedgeTest(MicroBit& uBit, int rateHz, int writeMs, int busKHz, int dithe
         // at 40 to distinguish a real latch from a transient freeze that recovers.
         int fwStuck = 0;
         if (useReal && robot) {
-            int sL = robot->motor().stuckCountL();
-            int sR = robot->motor().stuckCountR();
+            int sL = robot->motorController.stuckCountL();
+            int sR = robot->motorController.stuckCountR();
             fwStuck = (sL > sR) ? sL : sR;
             if (fwStuck > fwStuckMax) fwStuckMax = fwStuck;
         }
@@ -296,8 +297,9 @@ void runWedgeTest(MicroBit& uBit, int rateHz, int writeMs, int busKHz, int dithe
             // into that path); a direct 0x46 read in the raw path.
             int32_t posR, posL;
             if (useReal) {
-                Robot::EncoderReading er = robot->getEncoders();
-                posR = er.rightMm; posL = er.leftMm;
+                int32_t posLtmp = 0, posRtmp = 0;
+                robot->motorController.getEncoderPositions(posLtmp, posRtmp);
+                posR = posRtmp; posL = posLtmp;
             } else {
                 posR = readEnc(i2c, M_RIGHT, 0x46);
                 posL = readEnc(i2c, M_LEFT, 0x46);

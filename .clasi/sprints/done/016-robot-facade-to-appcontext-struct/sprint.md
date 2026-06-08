@@ -1,7 +1,7 @@
 ---
 id: '016'
 title: Robot facade to AppContext struct
-status: ticketing
+status: done
 branch: sprint/016-robot-facade-to-appcontext-struct
 use-cases:
 - SUC-001

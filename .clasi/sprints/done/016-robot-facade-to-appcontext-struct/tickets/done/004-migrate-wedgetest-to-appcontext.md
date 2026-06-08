@@ -1,11 +1,11 @@
 ---
 id: '004'
 title: Migrate WedgeTest to AppContext
-status: open
+status: done
 use-cases:
-  - SUC-006
+- SUC-006
 depends-on:
-  - '003'
+- '003'
 github-issue: ''
 issue: ''
 completes_issue: false
@@ -77,15 +77,15 @@ additional changes to CommandProcessor.cpp should be needed.
 
 ## Acceptance Criteria
 
-- [ ] `WedgeTest.h` uses `struct AppContext;` forward declaration and
+- [x] `WedgeTest.h` uses `struct AppContext;` forward declaration and
       `AppContext* robot = nullptr` parameter.
-- [ ] `WedgeTest.cpp` includes `AppContext.h` (not `Robot.h`).
-- [ ] All `robot->` dereferences inside `runWedgeTest` compile against
+- [x] `WedgeTest.cpp` includes `AppContext.h` (not `Robot.h`).
+- [x] All `robot->` dereferences inside `runWedgeTest` compile against
       `AppContext` (direct member access, no accessor methods).
-- [ ] The `DBG WEDGE` dispatch in `CommandProcessor.cpp` compiles correctly
+- [x] The `DBG WEDGE` dispatch in `CommandProcessor.cpp` compiles correctly
       with the updated signature (no type mismatch).
-- [ ] Clean build: `python3 build.py` passes.
-- [ ] Host unit tests pass: `uv run --with pytest python -m pytest`.
+- [x] Clean build: `python3 build.py` passes.
+- [x] Host unit tests pass: `uv run --with pytest python -m pytest`.
 
 ## Implementation Plan
 

@@ -10,7 +10,7 @@
 //
 // Sprint 014, Ticket 005: EVT ring buffer removed.  Completions emitted
 // inline via target.replyFn / target.replyCtx / target.corrId.
-// OTOS correction removed — handled by Robot::otosCorrect() exclusively.
+// OTOS correction removed — handled by AppContext::otosCorrect() exclusively.
 
 #include "DriveController.h"
 #include "MotorController.h"
@@ -297,8 +297,8 @@ void DriveController::stop(uint32_t now_ms, ReplyFn fn, void* ctx)
 // there is no fiber boundary in the single cooperative main loop (014-005).
 //
 // NOTE: OTOS correction is NOT done here.  It is the sole responsibility of
-// Robot::otosCorrect() called at the slow cadence in Robot::controlTick()
-// (ticket 005 wires this; ticket 006 will move it to a scheduler task).
+// AppContext::otosCorrect() called at the slow cadence in LoopScheduler
+// (ticket 005 wired this; ticket 006 moved it to the scheduler task).
 // ---------------------------------------------------------------------------
 
 void DriveController::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
@@ -311,8 +311,8 @@ void DriveController::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
     _lastTickMs     = now_ms;
     _currentTimeMs  = now_ms;
 
-    // Motor controller tick and odometry predict are called by Robot::controlCollect()
-    // and Robot::odometryPredict() before driveAdvance() is reached (014-003/004).
+    // Motor controller tick and odometry predict are called by AppContext::controlCollectSplitPhase()
+    // and odometry.predict() before driveAdvance() is reached (014-003/004).
     (void)inputs;
     (void)cmds;
 

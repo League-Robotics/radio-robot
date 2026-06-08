@@ -7,6 +7,15 @@
 struct RobotConfig;   // fwd decl — begin() applies the OTOS scalars from config
 
 /**
+ * OtosPose — robot-frame position and heading returned by readTransformed().
+ *
+ * x, y: position in mm; h: heading in radians.
+ * Flip and mounting-offset rotation already applied (uses cfg.odomUpsideDown
+ * and cfg.odomYawDeg).  Mounting offsets (cfg.odomOffX/Y) are subtracted.
+ */
+struct OtosPose { float x, y, h; };
+
+/**
  * OtosSensor — I2C driver for the SparkFun Optical Tracking Odometry Sensor (OTOS).
  *
  * I2C address: 0x17 (7-bit).
@@ -42,6 +51,13 @@ public:
 
     // Write 0x01 to REG_RESET (resets Kalman filters, not position).
     void resetTracking();
+
+    // Read the raw position registers, convert LSBs to mm/rad, apply the
+    // upside-down flip and mounting-offset rotation from cfg, and return the
+    // result as an OtosPose.  Does NOT write to HardwareState or call
+    // odometry.correct — those steps remain with the caller (AppContext::otosCorrect).
+    // Returns {0,0,0} if not initialized.
+    OtosPose readTransformed(const RobotConfig& cfg) const;
 
     void getPositionRaw(int16_t& x, int16_t& y, int16_t& h) const;
     void setPositionRaw(int16_t x, int16_t y, int16_t h);
