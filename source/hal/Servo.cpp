@@ -12,6 +12,7 @@ Servo::Servo(MicroBitPin& pin, uint16_t maxDegrees)
 
 void Servo::setAngle(uint8_t degrees)
 {
-    uint16_t clamped = (degrees > _maxDegrees) ? _maxDegrees : degrees;
+    uint8_t clamped = (degrees > _maxDegrees) ? (uint8_t)_maxDegrees : degrees;
     _pin.setServoValue((int)clamped);
+    _currentAngle = (int16_t)clamped;
 }

@@ -14,9 +14,15 @@ public:
     explicit Servo(MicroBitPin& pin, uint16_t maxDegrees = 180);
 
     // Set servo angle. Clamps to [0, maxDegrees] before driving the pin.
+    // Records the clamped value; retrieve it with currentAngle().
     void setAngle(uint8_t degrees);
+
+    // Return the last clamped angle passed to setAngle(). Defaults to 0 before
+    // any setAngle() call.
+    int16_t currentAngle() const { return _currentAngle; }
 
 private:
     MicroBitPin& _pin;
     uint16_t     _maxDegrees;
+    int16_t      _currentAngle = 0;
 };

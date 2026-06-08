@@ -1,11 +1,11 @@
 ---
 id: '001'
 title: 'HAL additions: OtosSensor::readTransformed and Servo angle tracking'
-status: open
+status: done
 use-cases:
-  - SUC-003
-  - SUC-004
-  - SUC-006
+- SUC-003
+- SUC-004
+- SUC-006
 depends-on: []
 github-issue: ''
 issue: replace-robot-facade-with-appcontext-struct.md
@@ -89,20 +89,34 @@ int16_t currentAngle() const { return _currentAngle; }
 
 ## Acceptance Criteria
 
-- [ ] `OtosSensor.h` declares `struct OtosPose { float x, y, h; }` and
+- [x] `OtosSensor.h` declares `struct OtosPose { float x, y, h; }` and
       `OtosPose readTransformed(const RobotConfig& cfg) const`.
-- [ ] `OtosSensor::readTransformed` produces identical numerical results to
+- [x] `OtosSensor::readTransformed` produces identical numerical results to
       the corresponding block in `Robot::otosCorrect` for the same raw sensor
-      values (verify by inspection or unit test if a test harness exists).
-- [ ] `Servo.h` declares `int16_t currentAngle() const`.
-- [ ] `Servo::setAngle` records the clamped angle in `_currentAngle`.
-- [ ] `Servo::currentAngle()` returns the last clamped angle set (default 0
+      values (verified by inspection: same constants, same flip, same rotation
+      formula, same offset subtraction — method body is a direct extract).
+- [x] `Servo.h` declares `int16_t currentAngle() const`.
+- [x] `Servo::setAngle` records the clamped angle in `_currentAngle`.
+- [x] `Servo::currentAngle()` returns the last clamped angle set (default 0
       before any `setAngle` call).
-- [ ] Clean build: `python3 build.py` passes with no new errors or warnings.
-- [ ] Host unit tests pass: `uv run --with pytest python -m pytest`.
-- [ ] Grep verification complete: `setPose`, `getPose`, `noteActivity`,
-      `controlCollect` (synchronous stub) all confirmed zero callers or
-      noted with caller list for Ticket 006.
+- [x] Clean build: `python3 build.py` passes with no new errors or warnings.
+      (Pre-existing library warnings present; no new warnings introduced.)
+- [x] Host unit tests pass: `uv run --with pytest python -m pytest`.
+      (1035 pass; 8 pre-existing failures in test_push_calibration /
+      test_robot_config / test_sensors_v2 unrelated to this ticket —
+      confirmed identical failures before and after these changes.)
+- [x] Grep verification complete:
+      - `Robot::setPose` / `Robot::getPose`: zero callers outside the class
+        (`grep -rn "\.setPose\|->setPose" source/` and `->getPose` hit only
+        `_odo.setPose(...)` inside Robot.cpp itself and Odometry.cpp
+        implementations — no external callers). Safe to delete in T006.
+      - `Robot::noteActivity`: defined only in Robot.h (inline); zero callers
+        in source/ (`grep -rn "noteActivity" source/` returns only Robot.h).
+        Safe to omit from AppContext in T002.
+      - `Robot::controlCollect` (synchronous stub): zero callers in source/
+        outside the class itself. `LoopScheduler::controlCollect` is a private
+        LoopScheduler method that calls `controlCollectSplitPhase`, NOT the
+        Robot sync stub. Safe to drop from AppContext in T002.
 
 ## Implementation Plan
 

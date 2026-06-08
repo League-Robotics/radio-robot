@@ -57,6 +57,37 @@ void OtosSensor::resetTracking()
     writeReg8(REG_RESET, 0x01);
 }
 
+OtosPose OtosSensor::readTransformed(const RobotConfig& cfg) const
+{
+    if (!is_initialized()) return {0.0f, 0.0f, 0.0f};
+
+    int16_t rx = 0, ry = 0, rh = 0;
+    readXYH(REG_POSITION_XL, rx, ry, rh);
+
+    constexpr float kPosMmPerLsb  = 0.305f;
+    constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);
+
+    float xF = static_cast<float>(rx) * kPosMmPerLsb;
+    float yF = static_cast<float>(ry) * kPosMmPerLsb;
+    float hF = static_cast<float>(rh) * kHdgRadPerLsb;
+
+    if (cfg.odomUpsideDown) {
+        xF = -xF;
+        yF = -yF;
+        hF = -hF;
+    }
+
+    float angRad = -cfg.odomYawDeg * (3.14159265f / 180.0f);
+    float c = cosf(angRad);
+    float s = sinf(angRad);
+
+    OtosPose pose;
+    pose.x = c * xF - s * yF - cfg.odomOffX;
+    pose.y = s * xF + c * yF - cfg.odomOffY;
+    pose.h = hF + cfg.odomYawDeg * (3.14159265f / 180.0f);
+    return pose;
+}
+
 void OtosSensor::getPositionRaw(int16_t& x, int16_t& y, int16_t& h) const
 {
     if (!is_initialized()) { x = 0; y = 0; h = 0; return; }
