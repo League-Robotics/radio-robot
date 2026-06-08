@@ -57,7 +57,7 @@ from robot_radio.config.robot_config import load_robot_config, RobotConfig
 # ---------------------------------------------------------------------------
 
 DEFAULT_DISTANCE_MM = 900     # 90 cm
-DEFAULT_SPEED_MMPS = 200
+DEFAULT_SPEED_MMPS = 80       # slow: D drives straighter/cleaner at low speed
 ROBOT_TAG = 100               # tovez wears AprilTag 100
 LASER_PORT_DEFAULT = 4        # J4 digital port — the line laser
 
@@ -182,6 +182,26 @@ def _snap_enc(proto: NezhaProtocol) -> tuple[int, int] | None:
         if frame and frame.enc is not None:
             return frame.enc
     return None
+
+
+def _read_latest_tlm(conn, ms: int = 400):
+    """Drain streamed TLM lines for up to `ms` and return the most recent frame.
+
+    Requires streaming enabled (proto.stream). Used instead of SNAP/OP, which are
+    unreliable for one-shot reads here: SNAP only *flags* tlmSnapPending and the
+    frame is emitted later by the telemetry block (which the loop runs ONLY when
+    streaming is on), and the firmware OP reply is raw-LSB ("OK rawpos"), not the
+    mm "OK pos" that otos_get_position() expects. The streamed TLM carries both
+    enc (mm) and pose (mm) directly.
+    """
+    latest = None
+    deadline = time.monotonic() + ms / 1000.0
+    while time.monotonic() < deadline:
+        for raw in conn.read_lines(duration_ms=50):
+            f = parse_tlm(raw)
+            if f is not None:
+                latest = f
+    return latest
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +359,16 @@ def main() -> int:
             print(f"  pushed: ml={ml:.5f} mr={mr:.5f}  OL={otos_int8:+d} "
                   f"(readback {rb:+d})")
 
+        # Enable TLM streaming so enc + pose are readable each round (see
+        # _read_latest_tlm — SNAP/OP one-shots are unreliable here). Generous
+        # S-watchdog so the ramped S-drive's ~25 Hz keepalives never trip it.
+        try:
+            proto.send("SET sTimeout=10000", 300)
+            proto.stream_fields("enc,pose,vel")
+        except Exception:
+            pass
+        proto.stream(50)
+
         # Laser on for floor marking.
         proto.port_write(laser_port, True)
         laser_on = True
@@ -376,8 +406,9 @@ def main() -> int:
             proto.otos_zero()
             proto.zero_encoders()
             time.sleep(0.3)
-            enc0 = _snap_enc(proto)
-            op0 = proto.otos_get_position()   # (x_mm, y_mm, h_cdeg) or None
+            tlm0 = _read_latest_tlm(conn)
+            enc0 = tlm0.enc if tlm0 else None
+            op0  = tlm0.pose if tlm0 else None   # (x_mm, y_mm, h_cdeg) — fused pose
 
             # ---- drive (one deliberate blocking command) --------------------
             print(f"  driving {args.distance} mm…")
@@ -388,8 +419,9 @@ def main() -> int:
             time.sleep(0.4)
 
             # ---- after reads -----------------------------------------------
-            enc1 = _snap_enc(proto)
-            op1 = proto.otos_get_position()
+            tlm1 = _read_latest_tlm(conn)
+            enc1 = tlm1.enc if tlm1 else None
+            op1  = tlm1.pose if tlm1 else None
             c1 = cam.pose()
 
             # ---- distances -------------------------------------------------
@@ -414,13 +446,41 @@ def main() -> int:
             else:
                 print("  VISION (camera) actual : (tag lost — no validation)")
             if enc_mm is not None:
-                print(f"  ENCODERS think         : {enc_mm:.1f} mm")
+                diff = dL - dR
+                dpct = (diff / enc_mm * 100.0) if enc_mm else 0.0
+                print(f"  ENCODERS think         : {enc_mm:.1f} mm  "
+                      f"(L={dL:.1f}  R={dR:.1f}  L−R={diff:+.1f} mm = {dpct:+.1f}%)")
             else:
                 print("  ENCODERS think         : (no enc)")
             if otos_mm is not None:
                 print(f"  OTOS thinks            : {otos_mm:.1f} mm")
             else:
                 print("  OTOS thinks            : (no OTOS)")
+
+            # ---- straightness / curve diagnostics --------------------------
+            # If the encoders are L≈R (loop balanced reported mm) yet the robot
+            # physically curved (camera/OTOS heading change, lateral offset),
+            # the per-wheel mm/deg calibration is asymmetric: equal reported-mm/s
+            # = unequal DEGREES/s = unequal physical speed = curve, invisible in
+            # the (calibrated) encoder mm. Compare the curve to the ml/mr ratio.
+            cam_dh = lateral = otos_dh = None
+            if c0 is not None and c1 is not None and len(c0) >= 3 and len(c1) >= 3:
+                cam_dh = math.degrees(c1[2] - c0[2])
+                hx, hy = math.cos(c0[2]), math.sin(c0[2])
+                ex = (c1[0] - c0[0]) * 10.0      # cm → mm
+                ey = (c1[1] - c0[1]) * 10.0
+                lateral = -hy * ex + hx * ey      # +left / −right of start heading
+            if op0 is not None and op1 is not None:
+                otos_dh = (op1[2] - op0[2]) / 100.0   # centideg → deg
+            sline = "  STRAIGHTNESS           : "
+            bits = []
+            if lateral is not None:
+                bits.append(f"camera lateral={lateral:+.1f} mm  camΔh={cam_dh:+.2f}°")
+            if otos_dh is not None:
+                bits.append(f"otosΔh={otos_dh:+.2f}°")
+            print(sline + ("   ".join(bits) if bits else "(no camera/OTOS)"))
+            print(f"  CALIB mm/deg           : ml={ml:.4f}  mr={mr:.4f}  "
+                  f"mr/ml={mr/ml:.4f}  (≠1 ⇒ equal-mm/s curves; not encoder-visible)")
 
             # ---- ground truth: the TAPE MEASURE is definitive --------------
             try:
@@ -480,12 +540,28 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\n  interrupted.")
     finally:
-        proto.stop()
+        # Turn the laser OFF first, in its own guard — a failure in
+        # stop()/disconnect() must never leave it lit after the program exits.
         if laser_on:
-            proto.port_write(laser_port, False)
-        conn.disconnect()
+            try:
+                proto.port_write(laser_port, False)
+                proto.port_write(laser_port, False)   # re-send to be sure it lands
+                print(f"  Laser OFF (port {laser_port}).")
+            except Exception as exc:
+                print(f"  WARN: laser off failed: {exc}")
+        try:
+            proto.stop()
+        except Exception:
+            pass
+        try:
+            conn.disconnect()
+        except Exception:
+            pass
         if cam is not None:
-            cam.close()
+            try:
+                cam.close()
+            except Exception:
+                pass
 
     # No usable session if the robot never came up — skip summary/persist.
     if cam is None:

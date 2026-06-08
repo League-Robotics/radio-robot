@@ -99,6 +99,16 @@ void Robot::distanceDrive(int32_t leftMms, int32_t rightMms, int32_t targetMm,
 {
     _dc.beginDistance((float)leftMms, (float)rightMms, targetMm, systemTime(),
                       _state.target, fn, ctx, corr_id);
+    // beginDistance reset the encoder accumulator to 0. The control loop's outlier
+    // filter compares each new read to the stored encLMm/encRMm — so unless we
+    // also zero those, the ~target→0 reset looks like a giant backward outlier and
+    // gets REJECTED, freezing encLMm at the previous drive's value for the whole
+    // drive. That stale value then (a) corrupts telemetry and (b) feeds the
+    // velocity loop ~0 velocity → it over-drives → spasm. Reset the filter
+    // baseline here so post-reset reads track cleanly. (Distance itself uses a
+    // fresh getEncoderPositions read, so this only fixes the filtered cache.)
+    _state.inputs.encLMm = 0.0f;
+    _state.inputs.encRMm = 0.0f;
 }
 
 void Robot::goTo(float tx, float ty, float speedMms, ReplyFn fn, void* ctx,
@@ -333,17 +343,21 @@ void Robot::controlCollectSplitPhase(uint32_t now_ms, int /*pendingWheel*/)
     bool driving = (_state.commands.tgtLMms != 0.0f ||
                     _state.commands.tgtRMms != 0.0f);
     if (driving) {
-        // Outlier threshold matches WedgeTest's proven JUMP=4000 raw tenths-of-
-        // degrees: 400° × ~0.484 mm/deg ≈ 194 mm. Rounded to 150 mm. A bad read
-        // triggers up to kRetries re-reads; if any is sane → use it; if ALL fail →
-        // hold the old stored value so the outlier baseline stays correct next tick.
+        // Outlier threshold SCALES with commanded speed. A legit tick can't move
+        // much more than (target speed × a worst-case ~200 ms scheduler tick), so
+        // the gate is max(40 mm floor, |target mm/s| × 0.2). A bad read triggers up
+        // to kRetries re-reads; if any is sane → use it; if ALL fail → hold the old
+        // stored value so the outlier baseline stays correct next tick.
         //
-        // 150 mm (not the earlier 15 mm) is deliberate: at top speed (~400 mm/s)
-        // a single tick with scheduler jitter can legitimately move 20-40 mm, so a
-        // tight threshold trips on NORMAL fast driving — spurious re-reads add bus
-        // traffic and stale "hold-old" velocity, which is itself a PID-stutter
-        // source. Real garbage reads (seen: 49437 mm) clear 150 mm by 100×.
-        static constexpr float kMaxDeltaMm = 150.0f;
+        // Why scaled, not a fixed 150 mm: at slow calibration speeds (~80 mm/s) a
+        // legit tick is <10 mm, but the chip still occasionally returns ~149 mm
+        // garbage reads — which slipped UNDER a fixed 150 mm gate, fed the velocity
+        // loop a huge spurious velocity, and spasmed the motor. Scaling keeps the
+        // gate tight when slow (rejects those) and wide when fast (~80 mm at
+        // 400 mm/s) so normal fast driving isn't tripped.
+        const float kMaxDeltaMm = fmaxf(40.0f,
+            fmaxf(fabsf((float)_state.commands.tgtLMms),
+                  fabsf((float)_state.commands.tgtRMms)) * 0.2f);
         static constexpr int   kRetries    = 2;
 
         // Right (M1) first — proven ordering from WedgeTest.

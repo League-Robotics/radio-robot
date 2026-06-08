@@ -38,14 +38,33 @@ bool SerialPort::readLine(char* buf, uint16_t len) {
 
 void SerialPort::send(const char* msg) {
     // ASYNC: queue what fits in the TX buffer and return IMMEDIATELY. Never block
-    // the cooperative loop waiting for the host to drain the buffer. The default
-    // (SYNC_SLEEP) fiber-sleeps until the buffer has room — under a telemetry
-    // flood (host not reading fast enough) that stalls the whole loop, which
-    // starves the S-keepalive (→ watchdog safety_stop = the velocity "notches" /
-    // momentary stops) and, if the reader stops entirely, hard-hangs the firmware.
-    // Trade-off: under flood a telemetry frame may be dropped (host just sees a
-    // truncated line and skips it) — acceptable; a stalled control loop is not.
+    // the cooperative loop. Used for the TELEMETRY flood — under a flood (host not
+    // reading fast enough, or the IRQ-guard stalling the TX drain during a drive)
+    // a frame may be dropped (host sees a truncated line and skips it). Acceptable
+    // for telemetry; a stalled control loop is not. For rare must-arrive lines
+    // (command replies, EVT done) use sendReliable() instead.
     _serial.send(ManagedString(msg) + ManagedString("\r\n"), ASYNC);
+}
+
+void SerialPort::sendReliable(const char* msg) {
+    // Like send(), but waits (bounded) for TX-buffer room so the WHOLE line fits
+    // before handing it to the ASYNC path — so a momentarily-full buffer doesn't
+    // silently drop it (a lost EVT done, a truncated reply). ONLY for rare lines
+    // (replies, EVT) — never the telemetry stream: the wait would stall the
+    // control loop every tick when the buffer is under pressure during a drive.
+    //
+    // When the host is reading (the normal case) the buffer drains in well under
+    // 1 ms, so there is effectively no wait. The 5 ms cap means a dead/absent
+    // reader can NOT hang the loop: we fall through and send anyway, dropping the
+    // overflow exactly as pure ASYNC would.
+    ManagedString s = ManagedString(msg) + ManagedString("\r\n");
+    const int len = s.length();
+    const uint64_t deadlineUs = system_timer_current_time_us() + 5000;
+    while ((250 - _serial.txBufferedSize()) < len &&
+           system_timer_current_time_us() < deadlineUs) {
+        // spin briefly; the UART's DMA drains the buffer in the background
+    }
+    _serial.send(s, ASYNC);
 }
 
 void SerialPort::sendf(const char* fmt, ...) {

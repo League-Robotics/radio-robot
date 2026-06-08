@@ -134,7 +134,8 @@ public:
 
     // Active reply sink — updated each time a command is dispatched so that
     // telemetry and event completions go back over the originating channel.
-    ReplyFn  activeFn;
+    ReplyFn  activeFn;       // command replies + EVT (reliable send)
+    ReplyFn  activeTlmFn;    // telemetry stream (ASYNC, drop-tolerant)
     void*    activeCtx;
 
 private:

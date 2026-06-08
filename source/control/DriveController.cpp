@@ -177,7 +177,15 @@ void DriveController::beginDistance(float leftMms, float rightMms,
     _mc.resetEncoderAccumulators();
     _mc.getEncoderPositions(_dEncStartL, _dEncStartR);
     _dTargetMm  = targetMm;
-    _dTimeoutMs = _lastTickMs + 5000;
+    // Timeout scales with the expected drive time (distance / speed), not a
+    // fixed 5 s — otherwise a slow or long drive (e.g. 900 mm @ 80 mm/s = 11 s)
+    // is cut off early and never reaches its target. 2x nominal + 2 s margin.
+    {
+        float spdMax = fmaxf(fabsf(sL), fabsf(sR));
+        if (spdMax < 1.0f) spdMax = 1.0f;
+        uint32_t nominalMs = (uint32_t)(((float)targetMm / spdMax) * 1000.0f);
+        _dTimeoutMs = _lastTickMs + nominalMs * 2u + 2000u;
+    }
     _mode       = DriveMode::DISTANCE;
 
     target.mode              = DriveMode::DISTANCE;
@@ -333,7 +341,11 @@ void DriveController::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
         emitEvt("EVT done T", target);
     }
 
-    // D-mode: stop when average encoder travel >= target, or on timeout.
+    // D-mode: stop when average encoder travel >= target, or on timeout. Uses a
+    // fresh atomic read (NOT the filtered control-loop encLMm): the filtered
+    // value can STALL when the outlier filter holds a run of glitchy reads, which
+    // makes D fail to reach target and not stop (runaway). The fresh read always
+    // tracks the real wheel, so D completes reliably.
     if (_mode == DriveMode::DISTANCE) {
         int32_t l, r;
         _mc.getEncoderPositions(l, r);

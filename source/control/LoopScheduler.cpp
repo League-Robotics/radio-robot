@@ -13,7 +13,16 @@
 // signature to the HAL send() methods on SerialPort and Radio.
 // ---------------------------------------------------------------------------
 
+// Command replies AND drive-completion EVTs (via TargetState::replyFn) route here
+// — must-arrive lines, so they use the bounded-wait sendReliable() that won't be
+// silently dropped by a momentarily-full TX buffer.
 static void serialReply(const char* msg, void* ctx)
+{
+    static_cast<SerialPort*>(ctx)->sendReliable(msg);
+}
+
+// Telemetry flood routes here — pure ASYNC, drop-tolerant, never stalls the loop.
+static void serialReplyTlm(const char* msg, void* ctx)
 {
     static_cast<SerialPort*>(ctx)->send(msg);
 }
@@ -51,14 +60,16 @@ static void runCommsIn(LoopScheduler& sched, uint32_t /*now*/)
     char buf[512];
 
     while (serial.readLine(buf, sizeof(buf))) {
-        sched.activeFn  = serialReply;
-        sched.activeCtx = &serial;
+        sched.activeFn    = serialReply;
+        sched.activeTlmFn = serialReplyTlm;   // telemetry stays ASYNC/drop-tolerant
+        sched.activeCtx   = &serial;
         cmd.process(buf, serialReply, &serial);
     }
 
     while (radio.poll(buf, sizeof(buf))) {
-        sched.activeFn  = radioReply;
-        sched.activeCtx = &radio;
+        sched.activeFn    = radioReply;
+        sched.activeTlmFn = radioReply;
+        sched.activeCtx   = &radio;
         cmd.process(buf, radioReply, &radio);
     }
 }
@@ -106,7 +117,7 @@ static void runPortsRead(LoopScheduler& sched, uint32_t /*now*/)
 // lineRead, colorRead, controlCollect task entry points).
 static void runTelemetryEmit(LoopScheduler& sched, uint32_t now)
 {
-    sched.robot().telemetryEmit(now, sched.activeFn, sched.activeCtx);
+    sched.robot().telemetryEmit(now, sched.activeTlmFn, sched.activeCtx);
 }
 
 // ---------------------------------------------------------------------------
@@ -121,6 +132,7 @@ static void runTelemetryEmit(LoopScheduler& sched, uint32_t now)
 LoopScheduler::LoopScheduler(Robot& robot, CommandProcessor& cmd,
                              Communicator& comm, MicroBit& uBit)
     : activeFn(nullptr),
+      activeTlmFn(nullptr),
       activeCtx(nullptr),
       _robot(robot),
       _cmd(cmd),
@@ -645,7 +657,7 @@ void LoopScheduler::run_blocks()
         now = _uBit.systemTime();
         if (enTlm && cfg.tlmPeriodMs > 0 &&
             (int32_t)(now - lastTlm) >= (int32_t)cfg.tlmPeriodMs) {
-            _robot.telemetryEmit(now, activeFn, activeCtx);
+            _robot.telemetryEmit(now, activeTlmFn, activeCtx);
             lastTlm = now;
         }
 

@@ -22,7 +22,8 @@ public:
     // newline stripped. len includes the NUL terminator.
     bool readLine(char* buf, uint16_t len);
 
-    void send(const char* msg);
+    void send(const char* msg);          // ASYNC, drop-on-full — for telemetry
+    void sendReliable(const char* msg);  // bounded-wait for room — for replies/EVT
     void sendf(const char* fmt, ...);  // snprintf into 256-byte stack buffer
 
 private:
