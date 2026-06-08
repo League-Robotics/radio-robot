@@ -1,13 +1,13 @@
 ---
 id: '002'
-title: "BodyVelocityController — trapezoid profiler and host unit tests"
-status: open
+title: "BodyVelocityController \u2014 trapezoid profiler and host unit tests"
+status: done
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-006
+- SUC-001
+- SUC-002
+- SUC-006
 depends-on:
-  - '001'
+- '001'
 github-issue: ''
 issue: motion-command-body-velocity-control.md
 completes_issue: false
@@ -39,43 +39,44 @@ and algorithm.
 ## Acceptance Criteria
 
 ### Class interface
-- [ ] `BodyVelocityController(MotorController& mc, const RobotConfig& cfg)` constructor.
-- [ ] `void setTarget(float v_mms, float omega_rads)` — update commanded twist.
-- [ ] `bool advance(float dt_s)` — ramp one step; returns true while still ramping;
+- [x] `BodyVelocityController(MotorController& mc, const RobotConfig& cfg)` constructor.
+- [x] `void setTarget(float v_mms, float omega_rads)` — update commanded twist.
+- [x] `bool advance(float dt_s)` — ramp one step; returns true while still ramping;
   writes wheel targets via `mc.setTarget(sL, sR)`.
-- [ ] `void reset()` — zero `_v`, `_omega`, `_vTgt`, `_omegaTgt`; does not call
+- [x] `void reset()` — zero `_v`, `_omega`, `_vTgt`, `_omegaTgt`; does not call
   `MotorController::stop()` (no brake).
-- [ ] `void seedCurrent(float v_mms, float omega_rads)` — set `_v`/`_omega` to the
+- [x] `void seedCurrent(float v_mms, float omega_rads)` — set `_v`/`_omega` to the
   given values (handoff without a lurch).
-- [ ] `float currentV()`, `currentOmega()`, `targetV()`, `targetOmega()`, `bool atTarget()`.
+- [x] `float currentV()`, `currentOmega()`, `targetV()`, `targetOmega()`, `bool atTarget()`.
 
 ### Per-tick math (ordering invariant)
-- [ ] Linear ramp: asymmetric acceleration (`aMax` accelerating, `aDecel` decelerating).
-- [ ] Target clamped to `[-vBodyMax, +vBodyMax]` before ramping.
-- [ ] Yaw ramp: `yawAccMax` (deg/s²) converted to rad/s² at use site; rate clamped to
+- [x] Linear ramp: asymmetric acceleration (`aMax` accelerating, `aDecel` decelerating).
+- [x] Target clamped to `[-vBodyMax, +vBodyMax]` before ramping.
+- [x] Yaw ramp: `yawAccMax` (deg/s²) converted to rad/s² at use site; rate clamped to
   `[-yawRateMax_rad, +yawRateMax_rad]`.
-- [ ] Ordering invariant: `profile → inverse → saturate → setTarget` on every advance call.
-- [ ] `jMax == 0` (default): pure trapezoid (S-curve path not taken; TODO comment left).
+- [x] Ordering invariant: `profile → inverse → saturate → setTarget` on every advance call.
+- [x] `jMax == 0` (default): pure trapezoid (S-curve path not taken; TODO comment left).
 
 ### Host unit tests (`tests/dev/test_body_velocity_controller.py`)
-- [ ] **Linear ramp slope**: step `v` 0→300 mm/s, dt=0.01 s; each tick advances by
+- [x] **Linear ramp slope**: step `v` 0→300 mm/s, dt=0.01 s; each tick advances by
   `aMax * dt` until target reached.
-- [ ] **Decel slope**: step `v` 300→0 mm/s; slope = `aDecel`.
-- [ ] **Yaw ramp slope**: step `omega` 0→`yawRateMax`; slope = `yawAccMax_rad * dt`.
-- [ ] **Spin-in-place** (`v=0, omega>0`): resulting wheel targets `sL != 0` and `sR != 0`.
-- [ ] **Straight** (`omega=0`): resulting `sL == sR` within float tolerance.
-- [ ] **vBodyMax clamp**: target `v=600`, `vBodyMax=400`; live `_v` never exceeds 400.
-- [ ] **yawRateMax clamp**: target `omega` above limit; live `_omega` never exceeds limit.
-- [ ] **atTarget()**: false while ramping, true once within epsilon of target.
-- [ ] **reset()**: after driving, `reset()` → `currentV()==0` and `currentOmega()==0`.
-- [ ] **seedCurrent()**: seeds `_v`/`_omega`; next `advance` ramps from seeded values,
+- [x] **Decel slope**: step `v` 300→0 mm/s; slope = `aDecel`.
+- [x] **Yaw ramp slope**: step `omega` 0→`yawRateMax`; slope = `yawAccMax_rad * dt`.
+- [x] **Spin-in-place** (`v=0, omega>0`): resulting wheel targets `sL != 0` and `sR != 0`.
+- [x] **Straight** (`omega=0`): resulting `sL == sR` within float tolerance.
+- [x] **vBodyMax clamp**: target `v=600`, `vBodyMax=400`; live `_v` never exceeds 400.
+- [x] **yawRateMax clamp**: target `omega` above limit; live `_omega` never exceeds limit.
+- [x] **atTarget()**: false while ramping, true once within epsilon of target.
+- [x] **reset()**: after driving, `reset()` → `currentV()==0` and `currentOmega()==0`.
+- [x] **seedCurrent()**: seeds `_v`/`_omega`; next `advance` ramps from seeded values,
   not from zero.
-- [ ] **Wheel math**: verify `(sL, sR)` from `advance` matches manual Python computation
+- [x] **Wheel math**: verify `(sL, sR)` from `advance` matches manual Python computation
   of `inverse(v, omega, tw)` then `saturate(vL, vR, vWheelMax, headroom)`.
 
 ### Build and regression
-- [ ] Clean build: `python3 build.py --clean` completes without errors.
-- [ ] Host test baseline: `uv run --with pytest python -m pytest -q` at 1035/8.
+- [x] Clean build: `python3 build.py --clean` completes without errors.
+- [x] Host test baseline: `uv run --with pytest python -m pytest -q` at 1096 pass / 8 fail
+  (32 new tests added; same 8 pre-existing calibration-drift failures).
 
 ## Implementation Plan
 
