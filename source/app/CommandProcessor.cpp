@@ -697,7 +697,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     // Reply: OK help <verb list>
     if (strcmp(verb, "HELP") == 0) {
         replyOK(rbuf, sizeof(rbuf), "help",
-                "PING ECHO ID VER HELP SET GET GET VEL STREAM SNAP S T D G VW RF STOP GRIP ZERO OI OZ OR OP OV OL OA P PA",
+                "PING ECHO ID VER HELP SET GET GET VEL STREAM SNAP S T D G VW RF X STOP GRIP ZERO OI OZ OR OP OV OL OA P PA",
                 corr_id, replyFn, ctx);
         return;
     }
@@ -1296,10 +1296,23 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
         return;
     }
 
-    // ── STOP — stop motors immediately ───────────────────────────────────────
+    // ── X — cancel active MotionCommand (hard stop) ──────────────────────────
+    // X  → OK x
+    // If a MotionCommand (e.g. VW) is active, HARD-cancels it: ramp zeroed,
+    // MotionCommand emits EVT cancelled, mode goes IDLE. If no command is
+    // active, _mc.stop() is still called (motor safety) but no EVT is emitted.
+    if (strcmp(verb, "X") == 0) {
+        { uint32_t now = _robot.systemTime(); _robot.driveController.cancel(now, replyFn, ctx); }
+        replyOK(rbuf, sizeof(rbuf), "x", nullptr, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── STOP — stop motors immediately (alias for X; preserved for backward compat) ─
     // STOP  → OK stop
+    // Routes through DriveController::cancel() just like X so any active
+    // MotionCommand is torn down cleanly. Replies OK stop (not OK x).
     if (strcmp(verb, "STOP") == 0) {
-        { uint32_t now = _robot.systemTime(); _robot.driveController.stop(now, [](const char*, void*){}, nullptr); }
+        { uint32_t now = _robot.systemTime(); _robot.driveController.cancel(now, replyFn, ctx); }
         replyOK(rbuf, sizeof(rbuf), "stop", nullptr, corr_id, replyFn, ctx);
         return;
     }

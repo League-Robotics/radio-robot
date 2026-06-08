@@ -1,11 +1,11 @@
 ---
 id: '005'
 title: X cancel verb and host cancel() wrapper
-status: open
+status: done
 use-cases:
-  - SUC-003
+- SUC-003
 depends-on:
-  - '004'
+- '004'
 github-issue: ''
 issue: motion-command-body-velocity-control.md
 completes_issue: false
@@ -35,34 +35,34 @@ backward compatibility.
 
 ### Firmware
 
-- [ ] New `X` verb in `CommandProcessor::process`:
+- [x] New `X` verb in `CommandProcessor::process`:
   - Calls `_robot.driveController.cancel(now_ms, replyFn, ctx)`.
   - Replies `OK x` (or `OK cancel` — pick one consistent name; `OK x` is simpler).
   - If no command is active, cancels cleanly (no-op beyond `_mc.stop()` idempotency).
-- [ ] `STOP` verb updated to call `_robot.driveController.cancel(now_ms, replyFn, ctx)`
+- [x] `STOP` verb updated to call `_robot.driveController.cancel(now_ms, replyFn, ctx)`
   instead of `driveController.stop(...)`. Still replies `OK stop`.
-- [ ] `HELP` verb response updated to include `X` in the verb list.
-- [ ] `EVT cancelled` emitted by `MotionCommand::cancel(HARD)` on the cancel tick.
-- [ ] If no MotionCommand is active when `X`/`STOP` arrives: `_mc.stop()` is still called
+- [x] `HELP` verb response updated to include `X` in the verb list.
+- [x] `EVT cancelled` emitted by `MotionCommand::cancel(HARD)` on the cancel tick.
+- [x] If no MotionCommand is active when `X`/`STOP` arrives: `_mc.stop()` is still called
   (motors halt); no `EVT cancelled` emitted (no active command to cancel).
-- [ ] `S` command is not affected: STOP still stops it; X stops it via `_mc.stop()`.
+- [x] `S` command is not affected: STOP still stops it; X stops it via `_mc.stop()`.
 
 ### Host wrapper
 
-- [ ] `NezhaProtocol.cancel()` method in `protocol.py`:
+- [x] `NezhaProtocol.cancel()` method in `protocol.py`:
   - Sends `X\n` via `send_fast` (fire-and-forget, like `vw`).
   - Docstring: "Cancel the active motion command. Sends X (hard stop)."
 
 ### Tests
 
-- [ ] `test_motion_verbs_v2.py` or new test file: `X` sends `X\n` and receives `OK x`
+- [x] `test_motion_verbs_v2.py` or new test file: `X` sends `X\n` and receives `OK x`
   (or `OK cancel`; match the firmware implementation).
-- [ ] `STOP` test: still receives `OK stop` and halts motion (existing test passes).
-- [ ] `cancel()` host method test: mock conn asserts `X\n` is sent via `send_fast`.
-- [ ] All existing tests: `uv run --with pytest python -m pytest -q` at 1035/8.
+- [x] `STOP` test: still receives `OK stop` and halts motion (existing test passes).
+- [x] `cancel()` host method test: mock conn asserts `X\n` is sent via `send_fast`.
+- [x] All existing tests: `uv run --with pytest python -m pytest -q` at 1179/8 (14 new tests added; 8 pre-existing failures unchanged).
 
 ### Build
-- [ ] Clean build: `python3 build.py --clean` completes without errors.
+- [x] Clean build: `python3 build.py --clean` completes without errors.
 
 ## Implementation Plan
 

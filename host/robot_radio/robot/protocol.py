@@ -381,6 +381,10 @@ class NezhaProtocol:
         """Stop motors immediately (STOP command)."""
         self._conn.send_fast("STOP")
 
+    def cancel(self) -> None:
+        """Cancel the active motion command (hard stop). Sends X."""
+        self._conn.send_fast("X")
+
     def vw(self, v_mms: int, omega_mrads: int,
            corr_id: str | None = None) -> None:
         """Send VW keepalive — sets body-twist velocity, resets watchdog.
