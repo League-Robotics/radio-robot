@@ -15,6 +15,7 @@
 #include "control/RobotState.h"
 #include "control/MotionController.h"
 #include "control/MotionCommand.h"
+#include "control/HaltController.h"
 #include "types/CommandTypes.h"
 
 #include <cstring>
@@ -143,6 +144,18 @@ void sim_tick(void* h, uint32_t now_ms)
                                            storeReply, &s->replyStore);
                 s->cmd.process("X", storeReply, &s->replyStore);
             }
+        }
+    }
+
+    // HaltController — evaluate user-registered named stop conditions.
+    // Mirrors LoopScheduler run_blocks() halt block.
+    {
+        HaltAction ha = s->robot.haltController.evaluate(
+            s->robot.state.inputs, now_ms, storeReply, &s->replyStore);
+        if (ha == HaltAction::HARD) {
+            s->cmd.process("X", storeReply, &s->replyStore);
+        } else if (ha == HaltAction::SOFT) {
+            s->cmd.process("X soft", storeReply, &s->replyStore);
         }
     }
 }

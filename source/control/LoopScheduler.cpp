@@ -5,6 +5,7 @@
 #include "SerialPort.h"
 #include "Radio.h"
 #include "RobotState.h"
+#include "HaltController.h"
 
 // ---------------------------------------------------------------------------
 // Reply-sink adapters.
@@ -162,6 +163,22 @@ void LoopScheduler::run_blocks()
                                                "safety_stop", "",
                                                activeFn, activeCtx);
                     _cmd.process("X", activeFn, activeCtx);
+                }
+            }
+        }
+
+        // ===== HALT CONDITIONS: evaluate user-registered stop conditions =====
+        // Runs after the watchdog check, before the motion tick.
+        // When a condition fires: emit EVT halt id=<n>, dispatch X or X soft.
+        {
+            now = _uBit.systemTime();
+            if (activeFn != nullptr) {
+                HaltAction ha = _robot.haltController.evaluate(
+                    _robot.state.inputs, now, activeFn, activeCtx);
+                if (ha == HaltAction::HARD) {
+                    _cmd.process("X", activeFn, activeCtx);
+                } else if (ha == HaltAction::SOFT) {
+                    _cmd.process("X soft", activeFn, activeCtx);
                 }
             }
         }

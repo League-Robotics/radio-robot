@@ -16,6 +16,7 @@
 #include "Protocol.h"
 #include "../types/CommandTypes.h"
 #include "../robot/ConfigRegistry.h"
+#include "../control/HaltController.h"
 
 // Forward declarations — keeps the header-graph shallow.
 class DebugCommandable;
@@ -80,6 +81,7 @@ struct Robot {
     MotionController    motionController;  // (motorController, odometry, config)
     PortController      portController;    // (portio)
     ServoController     servoController;   // (gripper)
+    HaltController      haltController;    // user-facing named stop-condition registry
 
     // ---- Constructor ----
     explicit Robot(Hardware& hal, const RobotConfig& cfg);

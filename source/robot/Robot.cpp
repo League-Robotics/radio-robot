@@ -577,14 +577,18 @@ static ParseResult parseZero(const char* const* tokens, int ntokens,
         r.err = { "badarg", nullptr };
         return r;
     }
-    // Check that at least one valid arg is present.
+    // Accept enc, pose, T, D. At least one must be present.
     bool hasEnc  = false;
     bool hasPose = false;
+    bool hasT    = false;
+    bool hasD    = false;
     for (int i = 0; i < ntokens; ++i) {
         if (strcmp(tokens[i], "enc")  == 0) hasEnc  = true;
         if (strcmp(tokens[i], "pose") == 0) hasPose = true;
+        if (strcmp(tokens[i], "T")    == 0) hasT    = true;
+        if (strcmp(tokens[i], "D")    == 0) hasD    = true;
     }
-    if (!hasEnc && !hasPose) {
+    if (!hasEnc && !hasPose && !hasT && !hasD) {
         r.ok = false;
         r.err = { "badarg", nullptr };
         return r;
@@ -609,20 +613,44 @@ static void handleZero(const ArgList& args, const char* corrId,
                         ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
     Robot* robot = ctxFrom(handlerCtx).robot;
+
     bool doEnc  = false;
     bool doPose = false;
+    bool doT    = false;
+    bool doD    = false;
     for (int i = 0; i < args.count; ++i) {
         if (strcmp(args.args[i].sval, "enc")  == 0) doEnc  = true;
         if (strcmp(args.args[i].sval, "pose") == 0) doPose = true;
+        if (strcmp(args.args[i].sval, "T")    == 0) doT    = true;
+        if (strcmp(args.args[i].sval, "D")    == 0) doD    = true;
     }
     if (doEnc)  robot->motorController.resetEncoderAccumulators();
     if (doPose) robot->odometry.zero(robot->state.inputs);
+    // ZERO T — set timer baseline for HaltController TIME conditions.
+    if (doT) {
+        robot->haltController.setTimerBaseline(robot->systemTime());
+    }
+    // ZERO D — set distance baseline for HaltController DISTANCE conditions.
+    if (doD) {
+        float enc_avg = (robot->state.inputs.encLMm + robot->state.inputs.encRMm) * 0.5f;
+        robot->haltController.setDistBaseline(enc_avg);
+    }
 
+    // Build response body listing what was zeroed.
     char rbuf[64];
-    char body[16];
-    if (doEnc && doPose)       snprintf(body, sizeof(body), "enc pose");
-    else if (doEnc)            snprintf(body, sizeof(body), "enc");
-    else                       snprintf(body, sizeof(body), "pose");
+    char body[32];
+    int  bpos = 0;
+    int  brem = (int)sizeof(body);
+    auto append = [&](const char* tok) {
+        int n = snprintf(body + bpos, (size_t)brem, "%s%s",
+                         bpos > 0 ? " " : "", tok);
+        if (n > 0 && n < brem) { bpos += n; brem -= n; }
+    };
+    if (doEnc)  append("enc");
+    if (doPose) append("pose");
+    if (doT)    append("T");
+    if (doD)    append("D");
+    body[bpos] = '\0';
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "zero", body, corrId, replyFn, replyCtx);
 }
 
@@ -902,6 +930,216 @@ static void handleKeepalive(const ArgList& /*args*/, const char* corrId,
                                corrId, replyFn, replyCtx);
 }
 
+// ---------------------------------------------------------------------------
+// HALT — user-facing named stop-condition commands.
+//
+// Wire formats:
+//   HALT TIME <ms>          → OK HALT id=<n>
+//   HALT TIME <ms> SOFT     → OK HALT id=<n>
+//   HALT DIST <mm>          → OK HALT id=<n>
+//   HALT DIST <mm> SOFT     → OK HALT id=<n>
+//   HALT LINE ANY <GE|LE> <threshold>       → OK HALT id=<n>
+//   HALT LINE ANY <GE|LE> <threshold> SOFT  → OK HALT id=<n>
+//   HALT CLEAR              → OK HALT cleared=<count>
+//   HALT LIST               → one "OK HALT id=<n> str=..." line per entry + OK HALT list
+//
+// parseFn: passes tokens as STR args (first arg is the sub-verb: TIME, DIST,
+// LINE, CLEAR, LIST). Handler dispatches on args[0].sval.
+// ---------------------------------------------------------------------------
+
+static ParseResult parseHalt(const char* const* tokens, int ntokens,
+                              const KVPair* /*kvs*/, int /*nkv*/)
+{
+    ParseResult r;
+    if (ntokens < 1) {
+        r.ok = false;
+        r.err = { "badarg", "usage: HALT TIME|DIST|LINE|CLEAR|LIST ..." };
+        return r;
+    }
+    // Validate sub-verb.
+    const char* sv = tokens[0];
+    if (strcmp(sv, "TIME") != 0 && strcmp(sv, "DIST") != 0 &&
+        strcmp(sv, "LINE") != 0 && strcmp(sv, "CLEAR") != 0 &&
+        strcmp(sv, "LIST") != 0) {
+        r.ok = false;
+        r.err = { "badarg", "usage: HALT TIME|DIST|LINE|CLEAR|LIST ..." };
+        return r;
+    }
+    // Pass all tokens as STR args.
+    int n = (ntokens > MAX_ARGS) ? MAX_ARGS : ntokens;
+    r.ok = true;
+    r.args.count = n;
+    for (int i = 0; i < n; ++i) {
+        r.args.args[i].type = ArgType::STR;
+        r.args.args[i].ival = 0;
+        r.args.args[i].fval = 0.0f;
+        int j = 0;
+        for (; tokens[i][j] != '\0' && j < (int)sizeof(r.args.args[i].sval) - 1; ++j)
+            r.args.args[i].sval[j] = tokens[i][j];
+        r.args.args[i].sval[j] = '\0';
+    }
+    return r;
+}
+
+static void handleHalt(const ArgList& args, const char* corrId,
+                        ReplyFn replyFn, void* replyCtx, void* handlerCtx)
+{
+    Robot* robot = ctxFrom(handlerCtx).robot;
+    char rbuf[128];
+
+    if (args.count < 1) {
+        CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg",
+                                   "usage: HALT TIME|DIST|LINE|CLEAR|LIST ...",
+                                   corrId, replyFn, replyCtx);
+        return;
+    }
+
+    const char* sv = args.args[0].sval;
+
+    // ---- CLEAR ----
+    if (strcmp(sv, "CLEAR") == 0) {
+        int n = robot->haltController.clear();
+        char body[32];
+        snprintf(body, sizeof(body), "cleared=%d", n);
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "HALT", body,
+                                   corrId, replyFn, replyCtx);
+        return;
+    }
+
+    // ---- LIST ----
+    if (strcmp(sv, "LIST") == 0) {
+        robot->haltController.list(replyFn, replyCtx);
+        char body[32];
+        snprintf(body, sizeof(body), "list count=%d",
+                 robot->haltController.count());
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "HALT", body,
+                                   corrId, replyFn, replyCtx);
+        return;
+    }
+
+    // ---- TIME ----
+    if (strcmp(sv, "TIME") == 0) {
+        if (args.count < 2) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg",
+                                       "usage: HALT TIME <ms> [SOFT]",
+                                       corrId, replyFn, replyCtx);
+            return;
+        }
+        float ms = (float)atof(args.args[1].sval);
+        StopStyle style = StopStyle::HARD;
+        if (args.count >= 3 && strcmp(args.args[2].sval, "SOFT") == 0)
+            style = StopStyle::SOFT;
+
+        StopCondition cond = makeTimeStop(ms);
+        // Build a label string for HALT LIST.
+        char label[40];
+        snprintf(label, sizeof(label), "TIME %g%s", ms,
+                 style == StopStyle::SOFT ? " SOFT" : "");
+        int id = robot->haltController.add(cond, style, label);
+        if (id < 0) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
+                                       "halt table full (max 8)",
+                                       corrId, replyFn, replyCtx);
+            return;
+        }
+        char body[32];
+        snprintf(body, sizeof(body), "id=%d", id);
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "HALT", body,
+                                   corrId, replyFn, replyCtx);
+        return;
+    }
+
+    // ---- DIST ----
+    if (strcmp(sv, "DIST") == 0) {
+        if (args.count < 2) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg",
+                                       "usage: HALT DIST <mm> [SOFT]",
+                                       corrId, replyFn, replyCtx);
+            return;
+        }
+        float mm = (float)atof(args.args[1].sval);
+        StopStyle style = StopStyle::HARD;
+        if (args.count >= 3 && strcmp(args.args[2].sval, "SOFT") == 0)
+            style = StopStyle::SOFT;
+
+        StopCondition cond = makeDistanceStop(mm);
+        char label[40];
+        snprintf(label, sizeof(label), "DIST %g%s", mm,
+                 style == StopStyle::SOFT ? " SOFT" : "");
+        int id = robot->haltController.add(cond, style, label);
+        if (id < 0) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
+                                       "halt table full (max 8)",
+                                       corrId, replyFn, replyCtx);
+            return;
+        }
+        char body[32];
+        snprintf(body, sizeof(body), "id=%d", id);
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "HALT", body,
+                                   corrId, replyFn, replyCtx);
+        return;
+    }
+
+    // ---- LINE ANY ----
+    // Wire: HALT LINE ANY <GE|LE> <threshold> [SOFT]
+    if (strcmp(sv, "LINE") == 0) {
+        // args: [0]=LINE [1]=ANY [2]=GE|LE [3]=threshold [4]=SOFT?
+        if (args.count < 4 ||
+            strcmp(args.args[1].sval, "ANY") != 0) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg",
+                                       "usage: HALT LINE ANY GE|LE <threshold> [SOFT]",
+                                       corrId, replyFn, replyCtx);
+            return;
+        }
+        const char* opStr = args.args[2].sval;
+        StopCondition::Cmp op;
+        if (strcmp(opStr, "GE") == 0) {
+            op = StopCondition::Cmp::GE;
+        } else if (strcmp(opStr, "LE") == 0) {
+            op = StopCondition::Cmp::LE;
+        } else {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg",
+                                       "op must be GE or LE",
+                                       corrId, replyFn, replyCtx);
+            return;
+        }
+        float threshold = (float)atof(args.args[3].sval);
+        StopStyle style = StopStyle::HARD;
+        if (args.count >= 5 && strcmp(args.args[4].sval, "SOFT") == 0)
+            style = StopStyle::SOFT;
+
+        StopCondition cond = makeLineAnyStop(threshold, op);
+        // Build label: "LINE ANY GE <thr>" or "LINE ANY LE <thr> SOFT".
+        // Use fixed 2-char op abbreviation and integer threshold to keep
+        // label within StopEntry.str[40] and silence -Wformat-truncation.
+        char label[40];
+        {
+            const char* opAbbrev = (op == StopCondition::Cmp::GE) ? "GE" : "LE";
+            const char* softSfx  = (style == StopStyle::SOFT) ? " SOFT" : "";
+            // "LINE ANY GE 65535 SOFT" = 22 chars — fits comfortably.
+            snprintf(label, sizeof(label), "LINE ANY %.2s %d%s",
+                     opAbbrev, (int)threshold, softSfx);
+        }
+        int id = robot->haltController.add(cond, style, label);
+        if (id < 0) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
+                                       "halt table full (max 8)",
+                                       corrId, replyFn, replyCtx);
+            return;
+        }
+        char body[32];
+        snprintf(body, sizeof(body), "id=%d", id);
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "HALT", body,
+                                   corrId, replyFn, replyCtx);
+        return;
+    }
+
+    // Unknown sub-verb (should not reach here after parseHalt validation).
+    CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg",
+                               "usage: HALT TIME|DIST|LINE|CLEAR|LIST ...",
+                               corrId, replyFn, replyCtx);
+}
+
 }  // anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -941,7 +1179,8 @@ std::vector<CommandDescriptor> Robot::buildCommandTable(
     cmds.push_back(makeCmd("VER",      parseVer,       handleVer,       sysCtxPtr, "badarg")); // report firmware version
     cmds.push_back(makeCmd("HELP",     parseHelp,      handleHelp,      sysCtxPtr, "badarg")); // list available commands
     cmds.push_back(makeCmd("SNAP",     parseSnap,      handleSnap,      sysCtxPtr, "badarg")); // emit one TLM frame on demand
-    cmds.push_back(makeCmd("ZERO",     parseZero,      handleZero,      sysCtxPtr, "badarg")); // zero encoders
+    cmds.push_back(makeCmd("ZERO",     parseZero,      handleZero,      sysCtxPtr, "badarg")); // zero encoders/pose/halt-baselines
+    cmds.push_back(makeCmd("HALT",     parseHalt,      handleHalt,      sysCtxPtr, "badarg")); // named stop-condition registry
     cmds.push_back(makeCmd("STREAM",   parseStream,    handleStream,    sysCtxPtr, "badarg")); // start/stop periodic TLM stream
     cmds.push_back(makeCmd("RF",       parseRf,        handleRf,        sysCtxPtr, "badarg")); // set radio channel
     cmds.push_back(makeCmd("+",        parseKeepalive, handleKeepalive, sysCtxPtr, "badarg")); // keepalive: reset watchdog

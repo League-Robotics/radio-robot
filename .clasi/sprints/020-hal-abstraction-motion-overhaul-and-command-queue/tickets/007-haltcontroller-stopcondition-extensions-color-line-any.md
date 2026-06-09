@@ -1,13 +1,13 @@
 ---
 id: '007'
 title: HaltController + StopCondition extensions (COLOR, LINE_ANY)
-status: open
+status: done
 use-cases:
-  - SUC-009
-  - SUC-010
-  - SUC-011
+- SUC-009
+- SUC-010
+- SUC-011
 depends-on:
-  - 020-006
+- 020-006
 github-issue: ''
 issue: issue-motion-system-overhaul.md
 completes_issue: false
@@ -27,23 +27,23 @@ the MotionCommand tick. When a halt fires, it calls `cmd.process("X", ...)` or
 
 ## Acceptance Criteria
 
-- [ ] `source/control/HaltController.h/.cpp` created with `StopEntry` array (capacity 8), auto-incrementing ID, `_timerBaselineMs`, `_distBaselineMm`.
-- [ ] `HaltController::evaluate(const HardwareState& s, uint32_t now_ms)` returns `HaltAction::NONE`, `HaltAction::HARD`, or `HaltAction::SOFT`.
-- [ ] `evaluate()` emits `EVT halt id=<n>` via a callback before returning the action; clears all conditions when any fires.
-- [ ] `HaltController::add(StopCondition, StopStyle)` returns assigned ID; `remove(id)`, `clear()`, `info(id)`, `list()` methods present.
-- [ ] `StopCondition::Kind::COLOR` added: fires when color sensor reading is within HSV distance of target; uses new `float ay` field for hue distance component.
-- [ ] `StopCondition::Kind::LINE_ANY` added: fires when any of `line[0..3]` satisfies the condition (short-circuit OR).
-- [ ] `makeColorStop` and `makeLineAnyStop` factory helpers added to `StopCondition.h`.
-- [ ] `LoopScheduler` has `HaltController haltController` member; `evaluate()` called after watchdog check each tick; result dispatches `cmd.process("X")` or `cmd.process("X soft")`.
-- [ ] `Robot` has `HaltController haltController` member (or LoopScheduler owns it and Robot exposes reference — choose one; document in commit).
-- [ ] `ZERO T` and `ZERO D` command variants wired: `ZERO T` calls `haltController.setTimerBaseline(now_ms)`; `ZERO D` calls `haltController.setDistBaseline(enc_avg)`.
+- [x] `source/control/HaltController.h/.cpp` created with `StopEntry` array (capacity 8), auto-incrementing ID, `_timerBaselineMs`, `_distBaselineMm`.
+- [x] `HaltController::evaluate(const HardwareState& s, uint32_t now_ms)` returns `HaltAction::NONE`, `HaltAction::HARD`, or `HaltAction::SOFT`.
+- [x] `evaluate()` emits `EVT halt id=<n>` via a callback before returning the action; clears all conditions when any fires.
+- [x] `HaltController::add(StopCondition, StopStyle)` returns assigned ID; `remove(id)`, `clear()`, `info(id)`, `list()` methods present.
+- [x] `StopCondition::Kind::COLOR` added: fires when color sensor reading is within HSV distance of target; uses new `float ay` field for hue distance component.
+- [x] `StopCondition::Kind::LINE_ANY` added: fires when any of `line[0..3]` satisfies the condition (short-circuit OR).
+- [x] `makeColorStop` and `makeLineAnyStop` factory helpers added to `StopCondition.h`.
+- [x] `LoopScheduler` calls `_robot.haltController.evaluate()` after watchdog check each tick; result dispatches `cmd.process("X")` or `cmd.process("X soft")`. Design decision: `HaltController` is owned by `Robot` (not LoopScheduler) so it is reachable from both firmware (LoopScheduler calls `_robot.haltController`) and host sim (sim_api calls `robot.haltController`). LoopScheduler.h is CODAL-only and cannot be included in HOST_BUILD, so placing the member on Robot avoids the dependency.
+- [x] `Robot` has `HaltController haltController` member (chosen over LoopScheduler — see above).
+- [x] `ZERO T` and `ZERO D` command variants wired: `ZERO T` calls `haltController.setTimerBaseline(now_ms)`; `ZERO D` calls `haltController.setDistBaseline(enc_avg)`.
 - [ ] Bench: `ZERO T; VW v=300 w=0; HALT TIME 1500` → `EVT halt id=0` fires at ~1500 ms.
 - [ ] Bench: `ZERO D; VW v=300 w=0; HALT DIST 400` → `EVT halt id=0` fires at ~400 mm encoder average.
 - [ ] Bench: `HALT CLEAR` while driving → conditions cleared, motor continues.
 - [ ] Bench: `HALT DIST 500 SOFT` → robot ramps to zero (soft stop); `EVT halt id=<n>` received.
 - [ ] Bench: `HALT LINE ANY GE 200` → fires when any line sensor >= 200.
-- [ ] `python3 build.py --clean` passes.
-- [ ] `uv run --with pytest python -m pytest` passes.
+- [x] `python3 build.py --clean` passes.
+- [x] `uv run --with pytest python -m pytest` passes (36/36, including 10 new HALT host tests).
 
 ## Implementation Plan
 
