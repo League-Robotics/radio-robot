@@ -364,6 +364,66 @@ void DriveController::beginGoTo(float tx, float ty, float speedMms, uint32_t now
     }
 }
 
+void DriveController::beginTurn(float headingCdeg, float epsCdeg, uint32_t now_ms,
+                                TargetState& target, ReplyFn fn, void* ctx,
+                                const char* corr_id)
+{
+    // Convert centidegrees → radians for the absolute target heading.
+    // 1 cdeg = π/18000 rad (same conversion as getPoseFloat uses for poseHrad).
+    const float kCdegToRad = 3.14159265f / 18000.0f;
+    float theta_rad = headingCdeg * kCdegToRad;
+    float eps_rad   = epsCdeg   * kCdegToRad;
+
+    // Read current heading from HardwareState (in radians, via poseHrad).
+    // poseHrad is stored as a float in radians in HardwareState (set by Odometry).
+    float currentHeadingRad = 0.0f;
+    if (_hwState != nullptr) {
+        currentHeadingRad = _hwState->poseHrad;
+    }
+
+    // Compute shortest-path delta: wrap_angle gives the signed angle in (-π, π].
+    // delta > 0 ⇒ CCW (positive ω); delta < 0 ⇒ CW (negative ω).
+    // Use inline atan2f(sinf, cosf) pattern matching StopCondition.cpp::wrap_angle.
+    float diff       = theta_rad - currentHeadingRad;
+    float delta_rad  = atan2f(sinf(diff), cosf(diff));   // wrap to (-π, π]
+    float omega_sign = (delta_rad >= 0.0f) ? 1.0f : -1.0f;
+
+    // ω magnitude from yawRateMax (deg/s → rad/s).
+    const float kDegToRad = 3.14159265f / 180.0f;
+    float omega = omega_sign * _cfg.yawRateMax * kDegToRad;
+
+    // HEADING stop uses a delta from the baseline heading captured at start().
+    // The baseline is heading0Rad = currentHeadingRad at start() time.
+    // makeHeadingStop(delta_rad, eps_rad) stores delta_rad as 'a' and eps_rad as 'b'.
+    // evaluate() checks: |wrap(current - heading0 - a)| < b
+    //   = |wrap((currentHeadingRad + delta_rad) - currentHeadingRad - delta_rad)| < eps
+    //   = |wrap(0)| < eps → fires when robot has rotated by delta_rad from baseline.
+    // This matches the absolute target theta_rad exactly (since delta_rad = theta_rad - baseline).
+
+    // Configure a fresh MotionCommand with:
+    //   - target twist (0, ω): spin-in-place.
+    //   - HEADING stop condition.
+    //   - SOFT stop style (BVC ramps ω down before completion).
+    //   - EVT "EVT done TURN" on arrival.
+    //   - Reply sink for async EVT delivery.
+    _activeCmd.configure(0.0f, omega, &_bvc);
+    _activeCmd.addStop(makeHeadingStop(delta_rad, eps_rad));
+    _activeCmd.setReplySink(fn, ctx, corr_id);
+    _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
+    _activeCmd.setDoneEvt("EVT done TURN");
+
+    // Snapshot hardware state for MotionBaseline (captures heading0Rad at start time).
+    HardwareState emptyState{};
+    const HardwareState& inputs = _hwState ? *_hwState : emptyState;
+    _activeCmd.start(inputs, now_ms);
+
+    // VELOCITY mode — distinct from STREAMING so S-mode watchdog does not fire.
+    _mode = DriveMode::VELOCITY;
+
+    // Update target mode; reply sink captured by _activeCmd (not target.replyFn).
+    target.mode = DriveMode::VELOCITY;
+}
+
 void DriveController::stop(uint32_t now_ms, ReplyFn fn, void* ctx)
 {
     // Cancel any active MotionCommand before calling fullStop().

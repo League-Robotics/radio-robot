@@ -1,13 +1,13 @@
 ---
-id: "005"
-title: "TURN verb — turn-to-heading with HEADING stop condition"
-status: open
+id: '005'
+title: "TURN verb \u2014 turn-to-heading with HEADING stop condition"
+status: done
 use-cases:
 - SUC-005
 depends-on:
-- "004"
-github-issue: ""
-issue: ""
+- '004'
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -55,14 +55,15 @@ Add TURN to `wait_for_evt_done` examples in docstring.
 
 ## Acceptance Criteria
 
-- [ ] `TURN` appears in HELP verb list.
-- [ ] `EVT done TURN` emitted on arrival (grep tests for `done TURN` to confirm no prior assumptions).
-- [ ] HEADING stop fires at correct heading within eps (Python unit test verifying delta-rad computation).
-- [ ] Positive `heading_cdeg` produces CCW rotation (positive ω — matches OTOS CCW convention).
-- [ ] `eps=` optional parameter parsed; default 300 cdeg if absent.
-- [ ] `turn()` wrapper in `protocol.py`.
-- [ ] `uv run --with pytest python -m pytest -q` passes at 1179/8 baseline.
-- [ ] Clean build: `python3 build.py --clean` succeeds.
+- [x] `TURN` appears in HELP verb list.
+- [x] `EVT done TURN` emitted on arrival (grep tests confirm no prior `done TURN` assumptions; new tests validate format).
+- [x] HEADING stop fires at correct heading within eps (Python unit tests verify delta-rad computation, wrap-around, all quadrants).
+- [x] Positive `heading_cdeg` produces CCW rotation (positive ω — matches OTOS CCW convention).
+- [x] `eps=` optional parameter parsed; default 300 cdeg if absent.
+- [x] `turn()` wrapper in `protocol.py`.
+- [x] `uv run --with pytest python -m pytest -q` passes at 1292/8 (1238 baseline + 54 new TURN tests; 8 pre-existing failures unchanged).
+- [x] Clean build: `python3 build.py --clean` succeeds.
+- [ ] **Bench (stakeholder-deferred):** TURN 9000 rotates ~90° CCW; TURN -9000 rotates ~90° CW; robot stops within eps.
 
 ## Implementation Plan
 

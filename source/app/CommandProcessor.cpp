@@ -697,7 +697,7 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     // Reply: OK help <verb list>
     if (strcmp(verb, "HELP") == 0) {
         replyOK(rbuf, sizeof(rbuf), "help",
-                "PING ECHO ID VER HELP SET GET GET VEL STREAM SNAP S T D G R VW RF X STOP GRIP ZERO OI OZ OR OP OV OL OA P PA",
+                "PING ECHO ID VER HELP SET GET GET VEL STREAM SNAP S T D G R TURN VW RF X STOP GRIP ZERO OI OZ OR OP OV OL OA P PA",
                 corr_id, replyFn, ctx);
         return;
     }
@@ -1235,6 +1235,47 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
         char body[48];
         snprintf(body, sizeof(body), "speed=%d radius=%d", speed, radius);
         replyOK(rbuf, sizeof(rbuf), "arc", body, corr_id, replyFn, ctx);
+        return;
+    }
+
+    // ── TURN — rotate to absolute heading (MotionCommand-based, HEADING stop) ──
+    // TURN <heading_cdeg> [eps=<cdeg>] [#id]
+    //   heading_cdeg: integer, target heading in centidegrees (range ±18000 = ±180°).
+    //   eps=<cdeg>: optional tolerance in centidegrees (default 300 = 3°; range 10–1800).
+    //   Reply: OK turn heading=<cdeg> eps=<cdeg> [#id]
+    //   Async completion: EVT done TURN [#id]
+    // Positive heading ⇒ CCW rotation (positive ω, matches OTOS CCW convention).
+    // Shortest-path sign computed at begin; SOFT stop (BVC ramps ω to zero on arrival).
+    if (strcmp(verb, "TURN") == 0) {
+        if (ntok < 2) {
+            replyErr(rbuf, sizeof(rbuf), "badarg", nullptr, corr_id, replyFn, ctx);
+            return;
+        }
+        int heading_cdeg = atoi(tokens[1]);
+        if (heading_cdeg < -18000 || heading_cdeg > 18000) {
+            replyErr(rbuf, sizeof(rbuf), "range", "heading", corr_id, replyFn, ctx);
+            return;
+        }
+
+        // Parse optional eps=<cdeg> keyword argument; default 300 cdeg (3°).
+        int eps_cdeg = 300;
+        for (int i = 0; i < nkv; ++i) {
+            if (kvs[i].key && strcmp(kvs[i].key, "eps") == 0) {
+                eps_cdeg = atoi(kvs[i].value);
+                if (eps_cdeg < 10 || eps_cdeg > 1800) {
+                    replyErr(rbuf, sizeof(rbuf), "range", "eps", corr_id, replyFn, ctx);
+                    return;
+                }
+                break;
+            }
+        }
+
+        uint32_t now = _robot.systemTime();
+        _robot.driveController.beginTurn((float)heading_cdeg, (float)eps_cdeg, now,
+                                         _robot.state.target, replyFn, ctx, corr_id);
+        char body[48];
+        snprintf(body, sizeof(body), "heading=%d eps=%d", heading_cdeg, eps_cdeg);
+        replyOK(rbuf, sizeof(rbuf), "turn", body, corr_id, replyFn, ctx);
         return;
     }
 

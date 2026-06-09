@@ -77,6 +77,16 @@ public:
     void beginGoTo(float tx, float ty, float speedMms, uint32_t now_ms,
                    TargetState& target, ReplyFn fn, void* ctx,
                    const char* corr_id = nullptr);
+
+    // TURN command entry point: rotate to an absolute heading using HEADING stop condition.
+    // headingCdeg: target heading in centidegrees (same unit as TLM pose field); range ±18000.
+    // epsCdeg: heading tolerance in centidegrees; default 300 cdeg (3°).
+    // Sign convention: positive headingCdeg ⇒ CCW (positive ω), matching OTOS CCW convention.
+    // Omega magnitude from yawRateMax (deg/s → rad/s). Shortest-path sign computed at start.
+    // EVT "EVT done TURN" on arrival within eps. SOFT stop style.
+    void beginTurn(float headingCdeg, float epsCdeg, uint32_t now_ms,
+                   TargetState& target, ReplyFn fn, void* ctx,
+                   const char* corr_id = nullptr);
     void stop(uint32_t now_ms, ReplyFn fn, void* ctx);
 
     // Cancel the active MotionCommand (HARD stop) and go IDLE.

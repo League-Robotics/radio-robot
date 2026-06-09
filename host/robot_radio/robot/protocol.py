@@ -463,6 +463,34 @@ class NezhaProtocol:
         resp = self._conn.send(f"G {x_mm} {y_mm} {speed_mms}", read_ms=300)
         return resp.get("responses", [])
 
+    def turn(self, heading_cdeg: int, eps_cdeg: int | None = None,
+             corr_id: str | None = None) -> list[str]:
+        """Send TURN command — rotate to an absolute heading and stop within eps.
+
+        Format: TURN <heading_cdeg> [eps=<cdeg>] [#id]
+        - ``heading_cdeg``: target heading in centidegrees (−18000 … +18000 = ±180°).
+          Positive values are CCW (matches OTOS CCW convention).
+        - ``eps_cdeg``: optional tolerance in centidegrees (default 300 = 3°;
+          range 10–1800). Pass a tighter value for calibration use (e.g. 100 = 1°).
+        - ``corr_id``: optional correlation id; echoed in EVT done TURN.
+
+        Robot replies ``OK turn heading=<cdeg> eps=<cdeg>`` synchronously.
+        On arrival within eps: ``EVT done TURN [#<id>]`` is emitted asynchronously.
+
+        To wait for completion, use ``wait_for_evt_done("TURN", timeout_ms)``.
+        Example::
+
+            proto.turn(9000, eps_cdeg=100, corr_id="1")  # turn to +90° (CCW), 1° eps
+            result = proto.wait_for_evt_done("TURN", timeout_ms=10000, corr_id="1")
+        """
+        cmd = f"TURN {heading_cdeg}"
+        if eps_cdeg is not None:
+            cmd += f" eps={eps_cdeg}"
+        if corr_id is not None:
+            cmd += f" #{corr_id}"
+        resp = self._conn.send(cmd, read_ms=300)
+        return resp.get("responses", [])
+
     def grip(self, deg: int | None = None) -> int | None:
         """Send GRIP [deg] command. Returns confirmed degree or None.
 
