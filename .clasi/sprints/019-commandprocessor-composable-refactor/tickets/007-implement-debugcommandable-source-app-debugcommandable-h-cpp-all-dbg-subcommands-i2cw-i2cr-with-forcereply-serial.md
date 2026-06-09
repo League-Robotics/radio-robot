@@ -1,13 +1,14 @@
 ---
-id: "007"
-title: "Implement DebugCommandable — source/app/DebugCommandable.h/.cpp, all DBG subcommands + I2CW/I2CR with ForceReply::SERIAL"
-status: open
+id: '007'
+title: "Implement DebugCommandable \u2014 source/app/DebugCommandable.h/.cpp, all\
+  \ DBG subcommands + I2CW/I2CR with ForceReply::SERIAL"
+status: done
 use-cases:
 - SUC-006
 depends-on:
 - '006'
-github-issue: ""
-issue: ""
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 
@@ -26,11 +27,11 @@ appears on serial.
 
 ## Acceptance Criteria
 
-- [ ] `source/app/DebugCommandable.h` declares:
+- [x] `source/app/DebugCommandable.h` declares:
   - `DbgCtx` struct: `{ LoopScheduler* sched; I2CBus* bus; Robot* robot; }`
   - `class DebugCommandable : public Commandable` with constructor `DebugCommandable(DbgCtx ctx)`
   - `virtual int getCommands(CommandDescriptor* buf, int max) const override`
-- [ ] `source/app/DebugCommandable.cpp` implements `getCommands()` returning descriptors for:
+- [x] `source/app/DebugCommandable.cpp` implements `getCommands()` returning descriptors for:
   - `"DBG LOOP RESET"` — ForceReply::SERIAL
   - `"DBG LOOP"` — ForceReply::SERIAL
   - `"DBG I2CLOG"` — ForceReply::SERIAL
@@ -40,9 +41,9 @@ appears on serial.
   - `"I2CW"` — ForceReply::SERIAL
   - `"I2CR"` — ForceReply::SERIAL
   - Descriptors must be ordered longest-prefix-first (LOOP RESET before LOOP, I2CLOG before I2C)
-- [ ] All handlers produce wire output identical to the existing DBG/I2CW/I2CR switch cases
-- [ ] `main.cpp` constructs a `DebugCommandable dbgCmd` and registers it; `setSerialReply` called on `CommandProcessor`
-- [ ] `python3 build.py` passes with no errors
+- [x] All handlers produce wire output identical to the existing DBG/I2CW/I2CR switch cases
+- [x] `main.cpp` constructs a `DebugCommandable dbgCmd` and registers it; `setSerialReply` called on `CommandProcessor`
+- [x] `python3 build.py` passes with no errors
 - [ ] Bench: `DBG LOOP` sent via radio produces output on serial (ForceReply::SERIAL verification)
 - [ ] Bench: `DBG I2C` reply appears on serial; `I2CW`/`I2CR` work correctly
 

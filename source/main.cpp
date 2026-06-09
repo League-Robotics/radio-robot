@@ -13,6 +13,7 @@
 #include "Config.h"
 #include "Icons.h"
 #include "RadioChannel.h"
+#include "DebugCommandable.h"
 
 // ---------------------------------------------------------------------------
 // MicroBit uBit singleton — file-scope so CODAL peripherals are fully
@@ -202,6 +203,15 @@ int main() {
     static LoopScheduler sched(robot, cmd, comm, uBit);
     cmd.setScheduler(&sched);             // enable DBG LOOP <x> <state> task toggling
     cmd.setI2CBus(&bus);                  // enable DBG I2C stats dump (015-003)
+
+    // DebugCommandable — owns all DBG / I2CW / I2CR descriptors with
+    // ForceReply::SERIAL.  Constructed here after sched and bus are live.
+    // The legacy CommandProcessor switch cases remain active (cmd uses the
+    // old constructor, _cmds == nullptr); this object is registered for
+    // T011 cutover and the setSerialReply wiring is exercised now.
+    static DbgCtx dbgCtx = { &sched, &bus, &robot };
+    static DebugCommandable dbgCmd(dbgCtx);
+    cmd.setSerialReply(serialReply, &comm.serial());
 
     // Wire the I2CBus and EVT sink into MotorController so enc_wedged events
     // are emitted with bus stats and go to the active serial/radio channel.
