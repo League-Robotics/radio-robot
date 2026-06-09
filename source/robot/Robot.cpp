@@ -68,7 +68,7 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
     motionController.setHardwareState(&state.inputs);
     motorController.setCommandsRef(&state.commands);
     motionController.setCtx(this);
-    odometry.setCtx(&otos);
+    odometry.setCtx(&otos, &state.inputs);
 }
 
 // ---------------------------------------------------------------------------

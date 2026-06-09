@@ -82,6 +82,10 @@ LoopScheduler::LoopScheduler(Robot& robot, CommandProcessor& cmd,
     // body drains one per iteration via dequeueOne(), keeping behaviour
     // transparent in run_blocks() mode (enqueue + dequeue in same tick).
     _cmd.setQueue(&_queue);
+
+    // Wire the same queue into MotionController so VW converter handlers
+    // (S, T, D, G, R, TURN) can push_front a VW ParsedCommand.
+    _robot.motionController.setQueue(&_queue);
 }
 
 // ---------------------------------------------------------------------------

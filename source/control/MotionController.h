@@ -39,8 +39,16 @@ struct Robot;
  * pointer or the slow-cadence timer.
  */
 
+// Forward-declare CommandQueue so MotionCtx can hold a pointer to it.
+class CommandQueue;
+
 // Context bundle used by Commandable-registered handlers.
-struct MotionCtx { MotionController* mc; struct Robot* robot; };
+struct MotionCtx {
+    MotionController*  mc;
+    struct Robot*      robot;
+    CommandQueue*      queue;    // command queue for VW converter push_front; may be null in sim
+    CommandDescriptor  vwDesc;   // stable VW descriptor used by converters to build ParsedCommand
+};
 
 class MotionController : public Commandable {
 public:
@@ -116,7 +124,13 @@ public:
 
     // setCtx — bind the Robot* for Commandable handlers.
     // Called by Robot's constructor after motionController is fully constructed.
-    void setCtx(struct Robot* r) { _ctx.mc = this; _ctx.robot = r; }
+    // Also initialises vwDesc so converter handlers can build a VW ParsedCommand.
+    void setCtx(struct Robot* r);
+
+    // setQueue — bind the CommandQueue for VW converter push_front.
+    // Called by LoopScheduler (or test harness) after the queue is created.
+    // Null (default) causes converter handlers to fall back to direct begin*() calls.
+    void setQueue(CommandQueue* q) { _ctx.queue = q; }
 
     // Query whether a MotionCommand is currently active (running or soft-stopping).
     // Used by CommandProcessor to distinguish new VW vs keepalive VW.

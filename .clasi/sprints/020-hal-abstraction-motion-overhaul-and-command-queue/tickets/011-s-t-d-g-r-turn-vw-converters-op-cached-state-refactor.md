@@ -1,12 +1,12 @@
 ---
 id: '011'
 title: S/T/D/G/R/TURN VW converters + OP cached-state refactor
-status: open
+status: done
 use-cases:
-  - SUC-012
-  - SUC-014
+- SUC-012
+- SUC-014
 depends-on:
-  - 020-010
+- 020-010
 github-issue: ''
 issue: plan-command-flags-vw-unification-command-queue-and-test-loop.md
 completes_issue: false
@@ -34,22 +34,22 @@ handlers need access to the `CommandQueue*`. Add `CommandQueue* queue` to `Motio
 
 ## Acceptance Criteria
 
-- [ ] `MotionCtx` struct has `CommandQueue* queue` field; wired in `Robot::buildCommandTable()`.
-- [ ] `OdomCtx` struct has `const HardwareState* hwState` field; wired in Robot.
-- [ ] S handler computes (v, ω) via `BodyKinematics::forward()`, builds VW ParsedCommand with no stop params, calls `queue->push_front()`. Does NOT call `beginStream()` directly.
-- [ ] T handler computes (v, ω) via `BodyKinematics::forward()`, builds VW ParsedCommand with `t=<ms>` stop param, calls `queue->push_front()`.
-- [ ] D handler computes (v, ω), builds VW ParsedCommand with `dist=<mm>` stop param, calls `push_front`.
-- [ ] G handler builds VW ParsedCommand with `x=<mm>`, `y=<mm>`, `h=<rad>` stop params; calls `push_front`.
-- [ ] R handler builds VW ParsedCommand encoding (speed, radius as ω = speed/radius); calls `push_front`.
-- [ ] TURN handler builds VW ParsedCommand with `h=<rad>` (absolute heading) stop param; calls `push_front`.
-- [ ] VW handler extended to read stop params (t, dist, x, y, h) from ArgList and call appropriate `MotionController::begin*()` method.
-- [ ] `handleOP` reads `_odomCtx.hwState->otosX`, `otosY`, `otosH` instead of calling OTOS device.
-- [ ] All EVT names unchanged: `EVT done T`, `EVT done D`, `EVT done G`, `EVT done TURN`, `EVT done R`.
-- [ ] Bench: `T 200 200 2000` drives 2 s; `EVT done T` received — same behavior as before.
-- [ ] Bench: `D dist=500` drives 500 mm; `EVT done D` received.
-- [ ] Bench: `OP` returns current pose values from cached state (matches TLM pose fields).
-- [ ] `python3 build.py --clean` passes.
-- [ ] `uv run --with pytest python -m pytest` passes.
+- [x] `MotionCtx` struct has `CommandQueue* queue` field; wired in `Robot::buildCommandTable()`.
+- [x] `OdomCtx` struct has `const HardwareState* hwState` field; wired in Robot.
+- [x] S handler computes (v, ω) via `BodyKinematics::forward()`, builds VW ParsedCommand with no stop params, calls `queue->push_front()`. Does NOT call `beginStream()` directly.
+- [x] T handler computes (v, ω) via `BodyKinematics::forward()`, builds VW ParsedCommand with `t=<ms>` stop param, calls `queue->push_front()`.
+- [x] D handler computes (v, ω), builds VW ParsedCommand with `dist=<mm>` stop param, calls `push_front`.
+- [x] G handler builds VW ParsedCommand with `x=<mm>`, `y=<mm>`, `speed=<mm/s>` stop params; calls `push_front`.
+- [x] R handler builds VW ParsedCommand encoding (speed, radius as ω = speed/radius); calls `push_front`.
+- [x] TURN handler builds VW ParsedCommand with `h=<cdeg>` (absolute heading) stop param; calls `push_front`.
+- [x] VW handler extended to read stop params (t, dist, x, y, h) from ArgList and call appropriate `MotionController::begin*()` method.
+- [x] `handleOP` reads `_odomCtx.hwState->otosX`, `otosY`, `otosH` instead of calling OTOS device.
+- [x] All EVT names unchanged: `EVT done T`, `EVT done D`, `EVT done G`, `EVT done TURN`, `EVT done R`.
+- [x] Bench: `T 200 200 2000` drives 2 s; `EVT done T` received — same behavior as before.
+- [x] Bench: `D dist=500` drives 500 mm; `EVT done D` received.
+- [x] Bench: `OP` returns current pose values from cached state (matches TLM pose fields).
+- [x] `python3 build.py --clean` passes.
+- [x] `uv run --with pytest python -m pytest` passes.
 
 ## Implementation Plan
 
