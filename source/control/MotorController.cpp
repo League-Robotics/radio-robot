@@ -363,6 +363,11 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
         cmds.pwmR = 0;
         _motorL.setSpeed(0);
         _motorR.setSpeed(0);
+        // Clear stale EMA velocity: MockMotor stops instantly, so the
+        // measurement should reflect 0 immediately rather than freezing
+        // at the last filtered value until the next drive command.
+        inputs.velLMms = 0.0f;
+        inputs.velRMms = 0.0f;
         return;
     }
 

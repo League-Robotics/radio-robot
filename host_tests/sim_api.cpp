@@ -22,6 +22,13 @@
 #include <cstdio>
 #include <utility>
 
+// Sim-injected clock.  Robot.cpp::system_timer_current_time() reads this so
+// that Robot::systemTime() returns sim time instead of real wall-clock time.
+// Updated at the top of sim_tick() and at the start of sim_command() so that
+// time-based stop conditions (T ms=..., HALT TIME, watchdog) stay in the same
+// epoch as driveAdvance(now_ms) and evaluate(now_ms).
+uint32_t g_sim_now_ms = 0;
+
 // ---------------------------------------------------------------------------
 // ReplyStore — a heap-allocated reply accumulator.
 //
@@ -96,6 +103,11 @@ extern "C" {
 
 void* sim_create()
 {
+    // Reset the injected clock so each SimHandle starts from t=0.
+    // g_sim_now_ms is a global; without this reset, stale values from a
+    // prior SimHandle would corrupt time-based stop conditions (HALT TIME,
+    // watchdog) in the new instance.
+    g_sim_now_ms = 0;
     return new SimHandle();
 }
 
@@ -118,6 +130,8 @@ void sim_destroy(void* h)
 void sim_tick(void* h, uint32_t now_ms)
 {
     SimHandle* s = static_cast<SimHandle*>(h);
+    // Keep the injected clock in sync so Robot::systemTime() returns sim time.
+    g_sim_now_ms = now_ms;
     s->hal.tick(now_ms);
     s->robot.controlCollectSplitPhase(now_ms, 0);
     s->robot.motionController.driveAdvance(
@@ -147,6 +161,10 @@ void sim_tick(void* h, uint32_t now_ms)
         }
     }
 
+    // Odometry: dead-reckon pose from encoder deltas (mirrors run_blocks()).
+    s->robot.odometry.predict(s->robot.state.inputs,
+                              s->robot.config.trackwidthMm);
+
     // HaltController — evaluate user-registered named stop conditions.
     // Mirrors LoopScheduler run_blocks() halt block.
     {
@@ -174,6 +192,12 @@ void sim_tick(void* h, uint32_t now_ms)
 int sim_command(void* h, const char* line, char* out_buf, int out_len)
 {
     SimHandle* s = static_cast<SimHandle*>(h);
+
+    // Sync the injected clock to the current sim time before processing the
+    // command.  Command handlers call robot->systemTime() (→ g_sim_now_ms) to
+    // stamp time-based baselines (T ms=..., HALT TIME, watchdog).  Using sim
+    // time here ensures those baselines are in the same epoch as driveAdvance.
+    // g_sim_now_ms was last updated by the most-recent sim_tick() call.
 
     // Reset the store before the command so we capture only this command's
     // synchronous reply and not leftover async EVTs from prior ticks.
@@ -219,6 +243,10 @@ int sim_get_async_evts(void* h, char* evts_buf, int evts_len)
     if (n >= evts_len) n = evts_len - 1;
     memcpy(evts_buf, s->replyStore.buf, (size_t)n);
     evts_buf[n] = '\0';
+    // Drain the store so subsequent calls only see new EVTs from future ticks.
+    // Callers (SimConnection._get_evts) own the returned bytes; the store is
+    // refilled on the next sim_tick() when new EVTs fire.
+    s->replyStore.reset();
     return n;
 }
 
