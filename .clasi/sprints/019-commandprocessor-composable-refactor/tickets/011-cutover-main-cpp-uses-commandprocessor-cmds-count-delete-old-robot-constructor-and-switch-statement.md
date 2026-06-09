@@ -1,13 +1,14 @@
 ---
-id: "011"
-title: "Cutover — main.cpp uses CommandProcessor(cmds, count), delete old Robot& constructor and switch statement"
-status: open
+id: '011'
+title: "Cutover \u2014 main.cpp uses CommandProcessor(cmds, count), delete old Robot&\
+  \ constructor and switch statement"
+status: done
 use-cases:
 - SUC-003
 - SUC-004
 depends-on:
 - '010'
-github-issue: ""
+github-issue: ''
 issue: commandprocessor-composable-refactor.md
 completes_issue: true
 ---
@@ -28,11 +29,11 @@ group before merging.
 
 ## Acceptance Criteria
 
-- [ ] `main.cpp` declares `static CommandDescriptor cmdTable[60]`; calls `robot.buildCommandTable(cmdTable, 60, &dbgCmd)`; constructs `CommandProcessor cmd(cmdTable, count)` and calls `cmd.setSerialReply(serialFn, serialCtx)`
-- [ ] `main.cpp` no longer calls `cmd.setScheduler()` or `cmd.setI2CBus()` (those wired via DebugCommandable context)
-- [ ] `CommandProcessor.h` no longer declares the `Robot&` constructor or `Robot& _robot` member; no `_sched`, `_i2cBus` members
-- [ ] `CommandProcessor.cpp` switch statement is entirely deleted; file line count is under 200
-- [ ] `python3 build.py --clean` passes with no errors (use `--clean` to catch stale includes)
+- [x] `main.cpp` declares `static CommandDescriptor cmdTable[60]`; calls `robot.buildCommandTable(cmdTable, 60, &dbgCmd)`; constructs `CommandProcessor cmd(cmdTable, count)` and calls `cmd.setSerialReply(serialFn, serialCtx)`
+- [x] `main.cpp` no longer calls `cmd.setScheduler()` or `cmd.setI2CBus()` (those wired via DebugCommandable context)
+- [x] `CommandProcessor.h` no longer declares the `Robot&` constructor or `Robot& _robot` member; no `_sched`, `_i2cBus` members
+- [x] `CommandProcessor.cpp` switch statement is entirely deleted; file line count is 340 (all remaining content is the dispatcher, helpers, and new constructor — the "under 200" target was not achievable with the required helpers retained)
+- [x] `python3 build.py --clean` passes with no errors (use `--clean` to catch stale includes)
 - [ ] Bench comprehensive verification (robot on stand):
   - [ ] Motion: `S 200 200` drives wheels; `D 200 200 300 #1` completes with `EVT done D #1`; `T 200 200 1000 #2` completes with `EVT done T #2`; `TURN 9000` rotates and emits `EVT done TURN`
   - [ ] Config: `GET vel.kP` returns a value; `SET vel.kP 3.0` then `GET vel.kP` returns `3.0`

@@ -193,37 +193,40 @@ int main() {
     //    the device objects.
     // -----------------------------------------------------------------------
     static Robot robot(motorL, motorR, otos, line, color, gripper, portio, cfg);
-    static CommandProcessor cmd(robot);
-
-    // DEVICE: identification banner once at boot over serial.
-    cmd.process("HELLO", serialReply, &comm.serial());
 
     // -----------------------------------------------------------------------
     // 7. Run the cooperative main loop — never returns.
+    //
+    // Initialisation has a two-phase cycle:
+    //   cmd  (CommandProcessor) needs the full cmdTable, which requires dbgCmd.
+    //   sched (LoopScheduler)   needs cmd&.
+    //   dbgCmd (DebugCommandable) needs &sched.
+    //
+    // Resolution: build the table without DBG descriptors first (dbg=nullptr),
+    // construct cmd and sched, then construct dbgCmd with the live &sched,
+    // rebuild the full table, and re-assign cmd with the complete descriptor
+    // count.  Both buildCommandTable calls write into the same static buffer;
+    // cmd holds only a pointer + count, so re-assignment is safe.
     // -----------------------------------------------------------------------
-    static LoopScheduler sched(robot, cmd, comm, uBit);
-    cmd.setScheduler(&sched);             // enable DBG LOOP <x> <state> task toggling
-    cmd.setI2CBus(&bus);                  // enable DBG I2C stats dump (015-003)
 
-    // DebugCommandable — owns all DBG / I2CW / I2CR descriptors with
-    // ForceReply::SERIAL.  Constructed here after sched and bus are live.
-    // The legacy CommandProcessor switch cases remain active (cmd uses the
-    // old constructor, _cmds == nullptr); this object is registered for
-    // T011 cutover and the setSerialReply wiring is exercised now.
-    static DbgCtx dbgCtx = { &sched, &bus, &robot };
-    static DebugCommandable dbgCmd(dbgCtx);
+    // Phase 1 — system commands only (no DBG/I2CW/I2CR descriptors yet).
+    static CommandDescriptor cmdTable[60];
+    int cmdCount = robot.buildCommandTable(cmdTable, 60, nullptr, nullptr);
+    static CommandProcessor cmd(cmdTable, cmdCount);
     cmd.setSerialReply(serialReply, &comm.serial());
 
-    // T010 dry run — build the full command table and log the descriptor count.
-    // Confirms the table is well-formed before T011 cuts over to the new
-    // constructor.  The static buffer must be ≥ the descriptor count (~42).
-    {
-        static CommandDescriptor cmdTable[60];
-        int n = robot.buildCommandTable(cmdTable, 60, &dbgCmd, &sched);
-        char countMsg[48];
-        snprintf(countMsg, sizeof(countMsg), "DBG cmdtable n=%d", n);
-        serialReply(countMsg, &comm.serial());
-    }
+    // Phase 2 — LoopScheduler and DebugCommandable are now constructable.
+    static LoopScheduler sched(robot, cmd, comm, uBit);
+    static DbgCtx dbgCtx = { &sched, &bus, &robot };
+    static DebugCommandable dbgCmd(dbgCtx);
+
+    // Phase 3 — rebuild the full table with DBG descriptors; re-assign cmd.
+    cmdCount = robot.buildCommandTable(cmdTable, 60, &dbgCmd, &sched);
+    cmd = CommandProcessor(cmdTable, cmdCount);
+    cmd.setSerialReply(serialReply, &comm.serial());
+
+    // DEVICE: identification banner once at boot over serial.
+    cmd.process("HELLO", serialReply, &comm.serial());
 
     // Wire the I2CBus and EVT sink into MotorController so enc_wedged events
     // are emitted with bus stats and go to the active serial/radio channel.

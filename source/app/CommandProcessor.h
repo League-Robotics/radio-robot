@@ -3,14 +3,6 @@
 #include "Protocol.h"
 #include "CommandTypes.h"
 
-// Forward declarations — CommandProcessor.cpp includes Robot.h directly.
-// Keeping only forward decls here avoids including Robot.h's transitive
-// header graph (MicroBit, CODAL, all subsystems) in every file that
-// includes CommandProcessor.h.
-struct Robot;
-class LoopScheduler;
-class I2CBus;
-
 /**
  * CommandProcessor — protocol v2 wire-protocol parser and dispatcher.
  *
@@ -31,17 +23,14 @@ class I2CBus;
  *   ID  …
  *
  * Usage (main.cpp):
- *   CommandProcessor cmd(robot);
+ *   CommandProcessor cmd(cmdTable, cmdCount);
+ *   cmd.setSerialReply(serialFn, serialCtx);
  *   // in loop:
  *   cmd.process(lineBuf, replyFn, ctx);
  */
 class CommandProcessor {
 public:
-    // Legacy constructor — uses the old switch-based dispatch in process().
-    explicit CommandProcessor(Robot& robot);
-
-    // Table-dispatch constructor — when _cmds != nullptr, process() routes
-    // through dispatchTable() instead of the legacy switch.
+    // Table-dispatch constructor.
     // cmds must point to a static array of count CommandDescriptors that
     // outlives this object. No heap allocation.
     CommandProcessor(const CommandDescriptor* cmds, int count);
@@ -49,14 +38,6 @@ public:
     // Parse and dispatch one command line. line must be NUL-terminated.
     // Calls replyFn(msg, ctx) for each response line.
     void process(const char* line, ReplyFn replyFn, void* ctx);
-
-    // Wire the scheduler so the DBG LOOP command can toggle/inspect tasks.
-    // Optional — if unset, DBG LOOP replies with an error.
-    void setScheduler(LoopScheduler* sched) { _sched = sched; }
-
-    // Wire the I2CBus instance so DBG I2C can read per-device stats (015-003).
-    // Optional — if unset, DBG I2C replies with an error.
-    void setI2CBus(I2CBus* bus) { _i2cBus = bus; }
 
     // Override the serial reply channel for ForceReply::SERIAL descriptors.
     // Optional — if unset, ForceReply::SERIAL uses the incoming replyFn/ctx.
@@ -129,17 +110,11 @@ public:
                          ReplyFn fn, void* ctx);
 
 private:
-    Robot* _robot   = nullptr;
-    LoopScheduler* _sched   = nullptr;
-    I2CBus*        _i2cBus  = nullptr;
-
-    // Table-dispatch state (set by the new constructor; nullptr in legacy mode).
     const CommandDescriptor* _cmds     = nullptr;
     int                      _cmdCount = 0;
     ReplyFn                  _serialFn  = nullptr;
     void*                    _serialCtx = nullptr;
 
-    // Table-dispatch implementation — called by process() when _cmds != nullptr.
     void dispatchTable(char** tokens, int ntok, KVPair* kvs, int nkv,
                        const char* corrId, ReplyFn replyFn, void* ctx);
 
