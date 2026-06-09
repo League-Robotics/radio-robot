@@ -125,11 +125,10 @@ private:
     float _tgtL;
     float _tgtR;
 
-    // D-command termination
-    int32_t  _dEncStartL;
-    int32_t  _dEncStartR;
-    int32_t  _dTargetMm;
-    uint32_t _dTimeoutMs;
+    // D-command state for per-tick decel hook
+    float _dDistTarget;  // target distance in mm
+    float _dOmega;       // commanded yaw rate at begin (from forward kinematics)
+    float _dEnc0;        // encoder average at begin (baseline for decel cap)
 
     // G go-to state machine
     enum class GPhase { IDLE, PRE_ROTATE, PURSUE };

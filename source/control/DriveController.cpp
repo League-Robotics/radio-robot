@@ -42,10 +42,9 @@ DriveController::DriveController(MotorController& mc, Odometry& odo, const Robot
     , _lastSMs(0)
     , _tgtL(0.0f)
     , _tgtR(0.0f)
-    , _dEncStartL(0)
-    , _dEncStartR(0)
-    , _dTargetMm(0)
-    , _dTimeoutMs(0)
+    , _dDistTarget(0.0f)
+    , _dOmega(0.0f)
+    , _dEnc0(0.0f)
     , _gPhase(GPhase::IDLE)
     , _gTargetXWorld(0.0f)
     , _gTargetYWorld(0.0f)
@@ -223,37 +222,63 @@ void DriveController::beginDistance(float leftMms, float rightMms,
                                      TargetState& target, ReplyFn fn, void* ctx,
                                      const char* corr_id)
 {
-    float sL, sR;
-    applySaturation(leftMms, rightMms, _cfg, sL, sR);
-    _mc.startDriveClean(sL, sR);
-    _mc.setTarget(sL, sR);
-    _tgtL = sL;
-    _tgtR = sR;
-    _mc.resetEncoderAccumulators();
-    _mc.getEncoderPositions(_dEncStartL, _dEncStartR);
-    _dTargetMm  = targetMm;
-    // Timeout scales with the expected drive time (distance / speed), not a
-    // fixed 5 s — otherwise a slow or long drive (e.g. 900 mm @ 80 mm/s = 11 s)
-    // is cut off early and never reaches its target. 2x nominal + 2 s margin.
-    {
-        float spdMax = fmaxf(fabsf(sL), fabsf(sR));
-        if (spdMax < 1.0f) spdMax = 1.0f;
-        uint32_t nominalMs = (uint32_t)(((float)targetMm / spdMax) * 1000.0f);
-        _dTimeoutMs = _lastTickMs + nominalMs * 2u + 2000u;
-    }
-    _mode       = DriveMode::DISTANCE;
+    // Convert (L, R) wheel speeds to body twist (v, ω) via forward kinematics.
+    float v_mms, omega_rads;
+    BodyKinematics::forward(leftMms, rightMms, _cfg.trackwidthMm, v_mms, omega_rads);
 
-    target.mode              = DriveMode::DISTANCE;
-    target.distanceTargetMm  = static_cast<float>(targetMm);
-    target.replyFn           = fn;
-    target.replyCtx          = ctx;
-    if (corr_id && corr_id[0] != '\0') {
-        strncpy(target.corrId, corr_id, sizeof(target.corrId) - 1);
-        target.corrId[sizeof(target.corrId) - 1] = '\0';
-    } else {
-        target.corrId[0] = '\0';
-    }
-    (void)now_ms;
+    // Encoder-reset workaround: reset the accumulator so DISTANCE delta starts
+    // from 0.  The state.inputs.encLMm/R baseline reset is done by AppContext::
+    // distanceDrive() after this call — do not move that reset here.
+    _mc.resetEncoderAccumulators();
+
+    // Capture encoder baseline for per-tick decel hook.  After resetEncoderAccumulators()
+    // the hardware positions are 0; reading immediately gives a clean 0 baseline.
+    int32_t encL0_raw, encR0_raw;
+    _mc.getEncoderPositions(encL0_raw, encR0_raw);
+    _dEnc0       = ((float)encL0_raw + (float)encR0_raw) * 0.5f;
+
+    // Store decel-hook state.
+    _dDistTarget = (float)targetMm;
+    _dOmega      = omega_rads;
+
+    // Timeout: 2× nominal travel time + 2 s safety margin.
+    // The nominal time is |targetMm| / max(|vL|, |vR|) in seconds.
+    // With profiled ramp-up the robot covers slightly less ground in the first
+    // ~200 ms than at full speed, so actual travel time is slightly longer than
+    // nominal — the 2× factor absorbs this comfortably.
+    float spdMax = fmaxf(fabsf(leftMms), fabsf(rightMms));
+    if (spdMax < 1.0f) spdMax = 1.0f;
+    float nominalMs = ((float)targetMm / spdMax) * 1000.0f;
+    float timeoutMs = nominalMs * 2.0f + 2000.0f;
+
+    // Configure a fresh MotionCommand with:
+    //   - DISTANCE stop condition as the primary trigger.
+    //   - TIME stop as safety net (generous; tolerates profiled ramp-up).
+    //   - SOFT stop style (ramp to zero before completing).
+    //   - EVT "EVT done D" on completion (preserves wire contract).
+    //   - Reply sink for async EVT delivery.
+    _activeCmd.configure(v_mms, omega_rads, &_bvc);
+    _activeCmd.addStop(makeDistanceStop((float)targetMm));
+    _activeCmd.addStop(makeTimeStop(timeoutMs));
+    _activeCmd.setReplySink(fn, ctx, corr_id);
+    _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
+    _activeCmd.setDoneEvt("EVT done D");
+
+    // Snapshot hardware state for MotionBaseline.
+    // After resetEncoderAccumulators() the accumulators are 0; AppContext will
+    // also zero state.inputs.encLMm/R immediately after this call returns, so
+    // the baseline enc0 captured by MotionCommand::start() will be 0 — matching
+    // the DISTANCE stop evaluation which reads (encLMm + encRMm)/2 from HardwareState.
+    HardwareState emptyState{};
+    const HardwareState& inputs = _hwState ? *_hwState : emptyState;
+    _activeCmd.start(inputs, now_ms);
+
+    // DISTANCE mode — distinct from STREAMING so the S-mode watchdog does not fire.
+    _mode = DriveMode::DISTANCE;
+
+    // Update target mode; reply sink captured by _activeCmd (not target.replyFn).
+    target.mode             = DriveMode::DISTANCE;
+    target.distanceTargetMm = static_cast<float>(targetMm);
 }
 
 void DriveController::beginGoTo(float tx, float ty, float speedMms, uint32_t now_ms,
@@ -367,9 +392,8 @@ void DriveController::cancel(uint32_t now_ms, ReplyFn fn, void* ctx)
 // Runs at a fixed period set by RobotConfig::controlPeriodMs (default 10 ms).
 // Executes the drive-mode state machines:
 //   1. STREAMING watchdog — emits EVT safety_stop inline on keepalive timeout.
-//   2. D-mode — emits EVT done D inline when distance reached or timeout.
-//   3. G-mode — advances PRE_ROTATE and PURSUE; emits EVT done G inline.
-//   T-mode is now handled by the MotionCommand path (TIME stop condition).
+//   2. G-mode — advances PRE_ROTATE and PURSUE; emits EVT done G inline.
+//   T/D-mode are now handled by the MotionCommand path (TIME/DISTANCE stop conditions).
 //
 // All EVT completions are emitted inline via target.replyFn() — safe because
 // there is no fiber boundary in the single cooperative main loop (014-005).
@@ -426,6 +450,23 @@ void DriveController::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
             _activeCmd.setTarget(v, omega);
         }
 
+        // D decel hook: clamp commanded speed downward as the robot nears
+        // the distance target.  Computes d_remaining from the raw encoder
+        // average (same field used by the DISTANCE stop condition in
+        // StopCondition::evaluate) so the decel profile and the stop fire
+        // at the same point.  Only clamps downward; does not increase speed.
+        if (_mode == DriveMode::DISTANCE) {
+            float enc_avg     = (inputs.encLMm + inputs.encRMm) * 0.5f;
+            float d_traveled  = fabsf(enc_avg - _dEnc0);
+            float d_remaining = _dDistTarget - d_traveled;
+            if (d_remaining > 0.0f) {
+                float v_cap = sqrtf(2.0f * _cfg.aDecel * d_remaining);
+                if (v_cap < _bvc.targetV()) {
+                    _activeCmd.setTarget(v_cap, _dOmega);
+                }
+            }
+        }
+
         bool still_running = _activeCmd.tick(inputs, now_ms, dt_s);
         if (!still_running) {
             // MotionCommand terminated; go IDLE.
@@ -455,21 +496,6 @@ void DriveController::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
         if (dt > (int32_t)_cfg.sTimeoutMs) {
             fullStop(nullptr, nullptr);
             emitEvt("EVT safety_stop", target);
-        }
-    }
-
-    // D-mode: stop when average encoder travel >= target, or on timeout. Uses a
-    // fresh atomic read (NOT the filtered control-loop encLMm): the filtered
-    // value can STALL when the outlier filter holds a run of glitchy reads, which
-    // makes D fail to reach target and not stop (runaway). The fresh read always
-    // tracks the real wheel, so D completes reliably.
-    if (_mode == DriveMode::DISTANCE) {
-        int32_t l, r;
-        _mc.getEncoderPositions(l, r);
-        int32_t traveled = (abs(l - _dEncStartL) + abs(r - _dEncStartR)) / 2;
-        if (traveled >= _dTargetMm || now_ms >= _dTimeoutMs) {
-            fullStop(nullptr, nullptr);
-            emitEvt("EVT done D", target);
         }
     }
 

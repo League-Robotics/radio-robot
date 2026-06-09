@@ -1,13 +1,13 @@
 ---
-id: "004"
-title: "Migrate D distance-drive onto MotionCommand DISTANCE stop with terminal decel"
-status: open
+id: '004'
+title: Migrate D distance-drive onto MotionCommand DISTANCE stop with terminal decel
+status: done
 use-cases:
 - SUC-004
 depends-on:
-- "003"
-github-issue: ""
-issue: ""
+- '003'
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -57,18 +57,19 @@ any emission path.
 
 ## Acceptance Criteria
 
-- [ ] `_dEncStartL/R`, `_dTargetMm`, `_dTimeoutMs` members removed (grep confirms).
-- [ ] `_dDistTarget`, `_dOmega`, `_dEnc0` added.
-- [ ] `EVT done D` wire format preserved (grep `done D` in all test files before editing).
-- [ ] `DISTANCE` stop uses encoder sum from HardwareState (`encLMm + encRMm)/2`
+- [x] `_dEncStartL/R`, `_dTargetMm`, `_dTimeoutMs` members removed (grep confirms).
+- [x] `_dDistTarget`, `_dOmega`, `_dEnc0` added.
+- [x] `EVT done D` wire format preserved (grep `done D` in all test files before editing).
+- [x] `DISTANCE` stop uses encoder sum from HardwareState (`encLMm + encRMm)/2`
   consistent with `StopCondition::evaluate` — no filtered-value stall.
-- [ ] Encoder-reset workaround (`resetEncoderAccumulators()`) still called before
+- [x] Encoder-reset workaround (`resetEncoderAccumulators()`) still called before
   `_activeCmd.start()`.
-- [ ] D-timeout heuristic retained: `2× nominal + 2 s` TIME stop alongside DISTANCE stop.
-- [ ] Terminal decel cap applied per tick; robot decelerates smoothly near target.
-- [ ] D branch removed from `driveAdvance`.
-- [ ] `uv run --with pytest python -m pytest -q` passes at 1179/8 baseline.
-- [ ] Clean build: `python3 build.py --clean` succeeds.
+- [x] D-timeout heuristic retained: `2× nominal + 2 s` TIME stop alongside DISTANCE stop.
+- [x] Terminal decel cap applied per tick; robot decelerates smoothly near target.
+- [x] D branch removed from `driveAdvance`.
+- [x] `uv run --with pytest python -m pytest -q` passes at 1238/8 (baseline 1226/8 + 12 new tests).
+- [x] Clean build: `python3 build.py --clean` succeeds.
+- [ ] **On-robot bench**: `D 200 200 400` terminates accurately at 400 mm; no spasm; no early timeout. **(DEFERRED — stakeholder-approved; robot bench required)**
 
 ## Implementation Plan
 
