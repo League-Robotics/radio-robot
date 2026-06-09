@@ -30,118 +30,11 @@
 #include "I2CBus.h"
 #include "Config.h"
 #include "StopCondition.h"
+#include "../robot/ConfigRegistry.h"
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <cctype>
-
-// ---------------------------------------------------------------------------
-// Config registry — maps friendly key names to RobotConfig field offsets.
-// ---------------------------------------------------------------------------
-
-enum ConfigFieldType {
-    CFG_FLOAT,        // float field, wire format: %.3f
-    CFG_INT,          // int32_t field, wire format: %d
-    CFG_FLOAT_AS_INT  // float field stored as integer magnitude, wire format: %d
-};
-
-struct ConfigEntry {
-    const char*    key;
-    ConfigFieldType type;
-    size_t         offset;  // offsetof(RobotConfig, field)
-};
-
-// Helper macros so the table stays readable.
-#define CFG_F(k, field)  { k, CFG_FLOAT,        offsetof(RobotConfig, field) }
-#define CFG_I(k, field)  { k, CFG_INT,           offsetof(RobotConfig, field) }
-#define CFG_FI(k, field) { k, CFG_FLOAT_AS_INT,  offsetof(RobotConfig, field) }
-
-static const ConfigEntry kRegistry[] = {
-    // Encoder calibration (mm per degree of motor rotation)
-    CFG_F("ml",           mmPerDegL),
-    CFG_F("mr",           mmPerDegR),
-    // Feed-forward and motor scale factors
-    CFG_F("kff",          kFF),
-    CFG_F("klf",          kScaleLF),
-    CFG_F("klb",          kScaleLB),
-    CFG_F("krf",          kScaleRF),
-    CFG_F("krb",          kScaleRB),
-    // Slower-wheel adjustment
-    CFG_F("adjThr",       kAdjThreshold),
-    CFG_F("adjGain",      kAdjGain),
-    // Geometry — stored as float, displayed as integer (mm)
-    CFG_FI("tw",          trackwidthMm),
-    // Ratio PID gains
-    CFG_F("pid.kp",       ratioPidKp),
-    CFG_F("pid.ki",       ratioPidKi),
-    CFG_F("pid.kd",       ratioPidKd),
-    CFG_F("pid.max",      ratioPidMax),
-    // Velocity loop gains (Sprint 010).
-    // C++ field names use flat camel-case; SET/GET key strings use dotted form.
-    //   velKp  ↔ "vel.kP"   velKi  ↔ "vel.kI"   velKff ↔ "vel.kFF"
-    CFG_F("vel.kP",       velKp),
-    CFG_F("vel.kI",       velKi),
-    CFG_F("vel.kFF",      velKff),
-    CFG_F("vel.iMax",     velIMax),        // integrator clamp (PWM%)
-    CFG_F("vel.kAw",      velKaw),         // back-calc anti-windup gain (1/s)
-    CFG_F("vel.filt",     velFiltAlpha),   // velocity EMA weight (smoothing)
-    CFG_F("sync",         syncGain),       // cross-wheel ratio coupling gain
-    // Velocity deadband and wheel speed ceiling (Sprint 010)
-    CFG_F("minWheelMms",  minWheelMms),
-    CFG_F("vWheelMax",    vWheelMax),
-    CFG_F("steerHeadroom",steerHeadroom),
-    // OTOS complementary fusion (Sprint 010, Ticket 006)
-    CFG_F("alphaPos",     alphaPos),
-    CFG_F("alphaYaw",     alphaYaw),
-    CFG_F("otosGate",     otosGate),
-    // Go-to tolerances — stored as float, displayed as integer (mm)
-    // Legacy keys retained for backward compatibility.
-    CFG_FI("turnThr",     turnThresholdMm),
-    CFG_FI("doneTol",     doneTolMm),
-    // Pose-control tunables (Sprint 011)
-    CFG_F ("aMax",        aMax),
-    CFG_F ("aDecel",      aDecel),
-    CFG_FI("turnGate",    turnInPlaceGate),   // wire: integer degrees; DriveController converts to radians at use-site
-    CFG_FI("arriveTol",   arriveTolMm),       // wire: integer mm
-    // Body motion limits (Sprint 017 — BodyVelocityController)
-    CFG_F("vBodyMax",    vBodyMax),           // body forward speed ceiling, mm/s
-    CFG_F("yawRateMax",  yawRateMax),         // yaw rate ceiling, deg/s
-    CFG_F("yawAccMax",   yawAccMax),          // yaw acceleration limit, deg/s²
-    CFG_F("jMax",        jMax),               // linear jerk limit, mm/s³ (0=trapezoid)
-    CFG_F("yawJerkMax",  yawJerkMax),         // yaw jerk limit, deg/s³   (0=trapezoid)
-    // Command scaling
-    CFG_F("distScale",    distScale),
-    CFG_F("turnScale",    turnScale),
-    // Timing and speed (int32_t fields)
-    CFG_I("minSpeed",     minSpeedMms),
-    CFG_I("sTimeout",     sTimeoutMs),
-    CFG_I("tick",         tickMs),
-    CFG_I("ctrlPeriod",   controlPeriodMs),
-    CFG_I("tlmPeriod",    tlmPeriodMs),
-    // Sensor lag budgets (ms) for the cooperative scheduler's low-priority tasks.
-    // SET lag.* N updates cfg.lag*Ms; LoopScheduler syncs task periodMs live.
-    CFG_I("lag.otos",     lagOtosMs),
-    CFG_I("lag.line",     lagLineMs),
-    CFG_I("lag.color",    lagColorMs),
-    CFG_I("lag.ports",    lagPortsMs),
-    // OTOS calibration and turn asymmetry (Sprint 012)
-    CFG_F("otosLinSc",    otosLinearScale),
-    CFG_F("otosAngSc",    otosAngularScale),
-    CFG_F("rotGainPos",   rotationGainPos),
-    CFG_F("rotGainNeg",   rotationGainNeg),
-    CFG_F("rotOffPos",    rotationOffsetDeg),
-    CFG_F("rotOffNeg",    rotationOffsetDegNeg),
-    CFG_F("rotSlip",      rotationalSlip),
-    CFG_F("odomOffX",     odomOffX),
-    CFG_F("odomOffY",     odomOffY),
-    CFG_F("odomYaw",      odomYawDeg),
-};
-
-#undef CFG_F
-#undef CFG_I
-#undef CFG_FI
-
-static constexpr int kRegistryCount = (int)(sizeof(kRegistry) / sizeof(kRegistry[0]));
 
 // ---------------------------------------------------------------------------
 // Constructor
@@ -325,202 +218,8 @@ void CommandProcessor::replyEvt(char* buf, int size,
     fn(buf, ctx);
 }
 
-// ---------------------------------------------------------------------------
-// Registry helpers — append one key=value pair to a string buffer.
-// Returns the number of characters written (not counting the NUL).
-// ---------------------------------------------------------------------------
-
-static int appendKeyValue(char* buf, int remaining, const ConfigEntry& entry,
-                          const RobotConfig& cfg)
-{
-    if (remaining <= 1) return 0;
-
-    const char* base = reinterpret_cast<const char*>(&cfg);
-    int written = 0;
-
-    switch (entry.type) {
-    case CFG_FLOAT: {
-        const float v = *reinterpret_cast<const float*>(base + entry.offset);
-        written = snprintf(buf, (size_t)remaining, "%s=%.3f", entry.key, (double)v);
-        break;
-    }
-    case CFG_INT: {
-        const int32_t v = *reinterpret_cast<const int32_t*>(base + entry.offset);
-        written = snprintf(buf, (size_t)remaining, "%s=%d", entry.key, (int)v);
-        break;
-    }
-    case CFG_FLOAT_AS_INT: {
-        const float v = *reinterpret_cast<const float*>(base + entry.offset);
-        written = snprintf(buf, (size_t)remaining, "%s=%d", entry.key, (int)v);
-        break;
-    }
-    }
-
-    if (written < 0 || written >= remaining) return remaining - 1;
-    return written;
-}
-
-// ---------------------------------------------------------------------------
-// handleGet — build CFG response line from named keys (or all keys).
-// tokens[1..ntok-1] are the requested keys; empty = all keys.
-// ---------------------------------------------------------------------------
-
-static void handleGet(char** tokens, int ntok, const RobotConfig& cfg,
-                      char* rbuf, int rbufSize, const char* corr_id,
-                      ReplyFn replyFn, void* ctx)
-{
-    // Build: "CFG key=val key=val ... [#id]"
-    // Sprint 012: buffer expanded from 512 to 768 to accommodate 10 new config
-    // keys (otosLinSc, otosAngSc, rotGainPos/Neg, rotOffPos/Neg, rotSlip,
-    // odomOffX/Y, odomYaw) which add ~156 bytes to the full GET dump.
-    // Stack-local buffer; no heap impact.
-    char line[768];
-    int pos = 0;
-    int rem = (int)sizeof(line);
-
-    // Write the "CFG " prefix.
-    int n = snprintf(line + pos, (size_t)rem, "CFG");
-    if (n > 0 && n < rem) { pos += n; rem -= n; }
-
-    bool anyKey = (ntok <= 1);  // no args → dump all
-
-    if (anyKey) {
-        // Dump all registry entries.
-        for (int i = 0; i < kRegistryCount && rem > 2; ++i) {
-            line[pos++] = ' '; --rem;
-            int w = appendKeyValue(line + pos, rem, kRegistry[i], cfg);
-            pos += w; rem -= w;
-        }
-    } else {
-        // Dump only the requested keys.
-        for (int t = 1; t < ntok && rem > 2; ++t) {
-            const char* reqKey = tokens[t];
-            bool found = false;
-            for (int i = 0; i < kRegistryCount; ++i) {
-                if (strcmp(kRegistry[i].key, reqKey) == 0) {
-                    line[pos++] = ' '; --rem;
-                    int w = appendKeyValue(line + pos, rem, kRegistry[i], cfg);
-                    pos += w; rem -= w;
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                // Unknown key in GET — reply with ERR for that key but continue.
-                CommandProcessor::replyErr(rbuf, rbufSize,
-                                           "badkey", reqKey, corr_id,
-                                           replyFn, ctx);
-            }
-        }
-    }
-
-    // Append correlation id if present.
-    if (corr_id && corr_id[0] != '\0' && rem > 3) {
-        int w = snprintf(line + pos, (size_t)rem, " #%s", corr_id);
-        if (w > 0 && w < rem) { pos += w; rem -= w; }
-    }
-
-    line[pos] = '\0';
-    replyFn(line, ctx);
-}
-
-// ---------------------------------------------------------------------------
-// handleSet — apply key=value pairs to RobotConfig.
-// Emits "OK set <applied>" and "ERR badkey <key>" per unknown key.
-// Calls updatePidGains() if any PID param was applied.
-// ---------------------------------------------------------------------------
-
-static void handleSet(KVPair* kvs, int nkv, RobotConfig& cfg,
-                      MotorController& mc,
-                      char* rbuf, int rbufSize, const char* corr_id,
-                      ReplyFn replyFn, void* ctx)
-{
-    // Build "OK set <applied keys>" body.
-    char applied[480];
-    int apos = 0;
-    int arem = (int)sizeof(applied);
-
-    bool pidChanged = false;
-    bool velChanged = false;
-
-    for (int i = 0; i < nkv; ++i) {
-        if (!kvs[i].key) continue;  // already rejected by pre-scan
-
-        const char* k = kvs[i].key;
-        const char* v = kvs[i].value;
-
-        // Find in registry.
-        const ConfigEntry* entry = nullptr;
-        for (int r = 0; r < kRegistryCount; ++r) {
-            if (strcmp(kRegistry[r].key, k) == 0) {
-                entry = &kRegistry[r];
-                break;
-            }
-        }
-
-        if (!entry) {
-            // Unknown key — emit ERR and continue processing remaining keys.
-            CommandProcessor::replyErr(rbuf, rbufSize,
-                                       "badkey", k, corr_id, replyFn, ctx);
-            continue;
-        }
-
-        // Write through to RobotConfig.
-        char* base = reinterpret_cast<char*>(&cfg);
-        switch (entry->type) {
-        case CFG_FLOAT: {
-            float fv = (float)atof(v);
-            memcpy(base + entry->offset, &fv, sizeof(float));
-            break;
-        }
-        case CFG_INT: {
-            int32_t iv = (int32_t)atoi(v);
-            memcpy(base + entry->offset, &iv, sizeof(int32_t));
-            break;
-        }
-        case CFG_FLOAT_AS_INT: {
-            float fv = (float)atoi(v);
-            memcpy(base + entry->offset, &fv, sizeof(float));
-            break;
-        }
-        }
-
-        // Track PID changes so we can call updatePidGains() once at the end.
-        if (strcmp(k, "pid.kp") == 0 || strcmp(k, "pid.ki") == 0 ||
-            strcmp(k, "pid.kd") == 0 || strcmp(k, "pid.max") == 0) {
-            pidChanged = true;
-        }
-
-        // Per-wheel velocity gains must be pushed into the live controllers
-        // (they hold copies made at construction). filt/sync are read per-tick.
-        if (strcmp(k, "vel.kP") == 0 || strcmp(k, "vel.kI") == 0 ||
-            strcmp(k, "vel.kFF") == 0 || strcmp(k, "vel.iMax") == 0 ||
-            strcmp(k, "vel.kAw") == 0 || strcmp(k, "minWheelMms") == 0) {
-            velChanged = true;
-        }
-
-        // Append to applied list.
-        if (apos > 0 && arem > 1) { applied[apos++] = ' '; --arem; }
-        int w = snprintf(applied + apos, (size_t)arem, "%s=%s", k, v);
-        if (w > 0 && w < arem) { apos += w; arem -= w; }
-    }
-
-    // Update PID gains in MotorController if any PID param changed.
-    if (pidChanged) {
-        mc.updatePidGains(cfg.ratioPidKp, cfg.ratioPidKi,
-                          cfg.ratioPidKd, cfg.ratioPidMax);
-    }
-    if (velChanged) {
-        mc.updateVelGains(cfg);
-    }
-
-    // Emit OK set only if at least one key was applied.
-    if (apos > 0) {
-        applied[apos] = '\0';
-        CommandProcessor::replyOK(rbuf, rbufSize, "set", applied, corr_id,
-                                  replyFn, ctx);
-    }
-}
+// Note: appendKeyValue, handleGet, and handleSet have been moved to
+// source/robot/ConfigRegistry.cpp (Sprint 019, Ticket 002).
 
 // ---------------------------------------------------------------------------
 // parseSensorToken — parse "sensor=<ch>:<op>:<thr>" into channel, cmp, threshold.
@@ -803,11 +502,25 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
             replyOK(rbuf, sizeof(rbuf), "get", body, corr_id, replyFn, ctx);
             return;
         }
-        // Positional args (tokens[1..]) are the requested keys.
-        // parseKV() would consume tokens that contain '='; GET only uses plain
-        // key names, so pass the raw token list directly.
-        handleGet(tokens, ntok, _robot.config, rbuf, sizeof(rbuf),
-                  corr_id, replyFn, ctx);
+        // Positional args (tokens[1..]) are the requested key names.
+        // Build an ArgList with each key name in sval, then call handleGet.
+        {
+            ArgList getArgs;
+            getArgs.count = 0;
+            for (int i = 1; i < ntok && getArgs.count < MAX_ARGS; ++i) {
+                const char* src = tokens[i];
+                int slen = 0;
+                for (; src[slen] && slen < (int)(sizeof(getArgs.args[0].sval) - 1); ++slen)
+                    getArgs.args[getArgs.count].sval[slen] = src[slen];
+                getArgs.args[getArgs.count].sval[slen] = '\0';
+                getArgs.args[getArgs.count].type  = ArgType::STR;
+                getArgs.args[getArgs.count].ival  = 0;
+                getArgs.args[getArgs.count].fval  = 0.0f;
+                ++getArgs.count;
+            }
+            CfgCtx cfgCtx{ &_robot.config, &_robot.motorController };
+            handleGet(getArgs, corr_id, replyFn, ctx, &cfgCtx);
+        }
         return;
     }
 
@@ -821,8 +534,26 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
                      replyFn, ctx);
             return;
         }
-        handleSet(kvs, nkv, _robot.config, _robot.motorController,
-                  rbuf, sizeof(rbuf), corr_id, replyFn, ctx);
+        // Build an ArgList with each kv pair packed as "key=value" in sval.
+        // MAX_ARGS caps the number of pairs forwarded in this transitional call
+        // (T010/T011 will route SET through the dispatch table without this limit).
+        {
+            ArgList setArgs;
+            setArgs.count = 0;
+            for (int i = 0; i < nkv && setArgs.count < MAX_ARGS; ++i) {
+                if (!kvs[i].key) continue;
+                char* dst = setArgs.args[setArgs.count].sval;
+                int cap = (int)(sizeof(setArgs.args[0].sval) - 1);
+                int n = snprintf(dst, (size_t)(cap + 1), "%s=%s", kvs[i].key, kvs[i].value);
+                if (n > cap) dst[cap] = '\0';
+                setArgs.args[setArgs.count].type = ArgType::STR;
+                setArgs.args[setArgs.count].ival = 0;
+                setArgs.args[setArgs.count].fval = 0.0f;
+                ++setArgs.count;
+            }
+            CfgCtx cfgCtx{ &_robot.config, &_robot.motorController };
+            handleSet(setArgs, corr_id, replyFn, ctx, &cfgCtx);
+        }
         return;
     }
 

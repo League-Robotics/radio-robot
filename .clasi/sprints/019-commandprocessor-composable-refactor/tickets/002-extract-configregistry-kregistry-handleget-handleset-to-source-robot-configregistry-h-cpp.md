@@ -1,13 +1,13 @@
 ---
-id: "002"
-title: "Extract ConfigRegistry — kRegistry[], handleGet, handleSet to source/robot/ConfigRegistry.h/.cpp"
-status: open
+id: '002'
+title: "Extract ConfigRegistry \u2014 kRegistry[], handleGet, handleSet to source/robot/ConfigRegistry.h/.cpp"
+status: done
 use-cases:
 - SUC-005
 depends-on:
 - '001'
-github-issue: ""
-issue: ""
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 
@@ -26,15 +26,15 @@ a pure code-movement ticket.
 
 ## Acceptance Criteria
 
-- [ ] `source/robot/ConfigRegistry.h` declares:
+- [x] `source/robot/ConfigRegistry.h` declares:
   - `CfgCtx` struct: `{ RobotConfig* cfg; MotorController* mc; }`
   - `ConfigEntry` struct with `key`, `type` (`ConfigFieldType` enum), and `offset` fields
   - `extern const ConfigEntry kRegistry[]` and `extern const int kRegistryCount`
   - `handleGet` — `HandlerFn`-compatible signature
   - `handleSet` — `HandlerFn`-compatible signature
-- [ ] `source/robot/ConfigRegistry.cpp` contains `kRegistry[]` (all ~40 entries), `kRegistryCount`, `handleGet`, and `handleSet` implementations
-- [ ] `CommandProcessor.cpp` no longer defines `kRegistry[]`, `handleGet`, or `handleSet`; it `#include`s `ConfigRegistry.h` instead
-- [ ] `python3 build.py` passes with no errors
+- [x] `source/robot/ConfigRegistry.cpp` contains `kRegistry[]` (all ~40 entries), `kRegistryCount`, `handleGet`, and `handleSet` implementations
+- [x] `CommandProcessor.cpp` no longer defines `kRegistry[]`, `handleGet`, or `handleSet`; it `#include`s `ConfigRegistry.h` instead
+- [x] `python3 build.py` passes with no errors
 - [ ] GET and SET round-trip correctly over the wire (`uv run rogo`: `GET vel.kP`, `SET vel.kP 3.0`)
 
 ## Implementation Plan
