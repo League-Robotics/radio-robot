@@ -135,7 +135,7 @@ static void handlePA(const ArgList& args, const char* corrId,
 // PortController implementation
 // ---------------------------------------------------------------------------
 
-PortController::PortController(PortIO& pio)
+PortController::PortController(IPortIO& pio)
     : _pio(pio)
 {
 }

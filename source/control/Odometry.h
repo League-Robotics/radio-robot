@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include "RobotState.h"
 #include "CommandTypes.h"
-#include "OtosSensor.h"
+#include "IOtosSensor.h"
 
 // Forward-declare Odometry so OdomCtx can hold a pointer to it.
 // The full class definition follows immediately below.
@@ -16,8 +16,8 @@ class Odometry;
  * reach the OtosSensor through this struct.
  */
 struct OdomCtx {
-    Odometry*   odo;
-    OtosSensor* otos;
+    Odometry*    odo;
+    IOtosSensor* otos;
 };
 
 /**
@@ -52,7 +52,7 @@ public:
 
     // Bind the OtosSensor so command handlers can reach it.
     // Called by Robot after construction.
-    void setCtx(OtosSensor* otos) { _odomCtx.odo = this; _odomCtx.otos = otos; }
+    void setCtx(IOtosSensor* otos) { _odomCtx.odo = this; _odomCtx.otos = otos; }
 
     // ---------------------------------------------------------------------------
     // Primary API — struct-based (014-004)

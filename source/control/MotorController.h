@@ -1,6 +1,6 @@
 #pragma once
 #include "MicroBit.h"
-#include "Motor.h"
+#include "IMotor.h"
 #include "Config.h"
 #include "RatioPidController.h"
 #include "VelocityController.h"
@@ -25,7 +25,7 @@ class I2CBus;
  */
 class MotorController {
 public:
-    MotorController(Motor& left, Motor& right, const RobotConfig& cal);
+    MotorController(IMotor& left, IMotor& right, const RobotConfig& cal);
 
     // Gains — public so CommandProcessor can update via K-commands.
     // Defaults: kFF=0.15, kP=0.05, kI=0.20, iClamp=60, kRatio=0.01
@@ -140,8 +140,8 @@ public:
     void resetEncoderAccumulators();
 
 private:
-    Motor&             _motorL;
-    Motor&             _motorR;
+    IMotor&            _motorL;
+    IMotor&            _motorR;
     const RobotConfig& _cal;
 
     // Per-wheel velocity controllers (PI + feed-forward). Sprint 010 inner loop.

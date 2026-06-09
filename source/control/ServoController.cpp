@@ -68,7 +68,7 @@ static void handleGrip(const ArgList& args, const char* corrId,
 // ServoController implementation
 // ---------------------------------------------------------------------------
 
-ServoController::ServoController(Servo& srv)
+ServoController::ServoController(IServo& srv)
     : _srv(srv)
 {
 }

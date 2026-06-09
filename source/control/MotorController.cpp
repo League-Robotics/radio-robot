@@ -11,7 +11,7 @@
 // Set back to 0 to restore closed-loop PID.
 #define PID_BYPASS 0
 
-MotorController::MotorController(Motor& left, Motor& right, const RobotConfig& cal)
+MotorController::MotorController(IMotor& left, IMotor& right, const RobotConfig& cal)
     : _motorL(left), _motorR(right), _cal(cal),
       _vcL(cal.velKff, cal.velKp, cal.velKi, cal.velIMax, cal.minWheelMms, cal.velKaw),
       _vcR(cal.velKff, cal.velKp, cal.velKi, cal.velIMax, cal.minWheelMms, cal.velKaw),

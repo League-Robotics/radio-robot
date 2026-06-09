@@ -1,6 +1,4 @@
 #include "Robot.h"
-#include "LineSensor.h"
-#include "ColorSensor.h"
 #include "MotionController.h"
 #include "MicroBit.h"
 #include "MicroBitDevice.h"
@@ -22,21 +20,24 @@
 // Constructor — initializer list must match member declaration order.
 //
 // Declaration order (from Robot.h):
-//   config, state, motorL, motorR, otos, line, colorSensor, gripper, portio,
+//   hal, config, state, motorL, motorR, otos, line, colorSensor, gripper, portio,
 //   motorController, odometry, motionController, portController, servoController
+//
+// hal must be declared (and therefore initialized) before the interface refs so
+// that hal.motorL() etc. are valid when the refs are bound.
 //
 // Two post-construction binds:
 //   motionController.setHardwareState(&state.inputs)  — MotionController reads pose
-//   motorController.setCommandsRef(&state.commands)  — MotorController writes tgt*/pwm*
+//   motorController.setCommandsRef(&state.commands)   — MotorController writes tgt*/pwm*
 // ---------------------------------------------------------------------------
 
-Robot::Robot(Motor& mL, Motor& mR, OtosSensor& o, LineSensor& l,
-                       ColorSensor& c, Servo& g, PortIO& p,
-                       const RobotConfig& cfg)
-    : config(cfg),
+Robot::Robot(Hardware& h, const RobotConfig& cfg)
+    : hal(h),
+      config(cfg),
       state(defaultInputs(cfg)),
-      motorL(mL), motorR(mR),
-      otos(o), line(l), colorSensor(c), gripper(g), portio(p),
+      motorL(hal.motorL()), motorR(hal.motorR()),
+      otos(hal.otos()), line(hal.lineSensor()),
+      colorSensor(hal.colorSensor()), gripper(hal.gripper()), portio(hal.portIO()),
       motorController(motorL, motorR, config),
       odometry(),
       motionController(motorController, odometry, config),
