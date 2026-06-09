@@ -103,6 +103,10 @@ public:
     // Used by the X verb and STOP handler when a VW command is active.
     void cancel(uint32_t now_ms, ReplyFn fn, void* ctx);
 
+    // setCtx — bind the Robot* for Commandable handlers.
+    // Called by Robot's constructor after motionController is fully constructed.
+    void setCtx(struct Robot* r) { _ctx.mc = this; _ctx.robot = r; }
+
     // Query whether a MotionCommand is currently active (running or soft-stopping).
     // Used by CommandProcessor to distinguish new VW vs keepalive VW.
     bool hasActiveCommand() const { return _activeCmd.active(); }
@@ -127,6 +131,10 @@ private:
     Odometry&          _odo;
     const RobotConfig& _cfg;
     HardwareState*     _hwState;  // authoritative state; set by setHardwareState()
+
+    // Context bundle for Commandable-registered handlers.
+    // Populated by setCtx() (called from Robot constructor).
+    mutable MotionCtx  _ctx;
 
     // MotionCommand subsystem (Sprint 017).
     // _bvc MUST be declared before _activeCmd: MotionController's constructor

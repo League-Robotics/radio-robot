@@ -1,14 +1,15 @@
 ---
-id: "008"
-title: "MotionController::getCommands() — S, T, D, G, R, TURN, VW, X, STOP with EVT async completion verification"
-status: open
+id: 008
+title: "MotionController::getCommands() \u2014 S, T, D, G, R, TURN, VW, X, STOP with\
+  \ EVT async completion verification"
+status: done
 use-cases:
 - SUC-001
 - SUC-007
 depends-on:
 - '007'
-github-issue: ""
-issue: ""
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 
@@ -29,7 +30,7 @@ the handlers but does not activate them.
 
 ## Acceptance Criteria
 
-- [ ] `MotionController::getCommands()` (in `source/control/MotionController.cpp`) returns descriptors for:
+- [x] `MotionController::getCommands()` (in `source/control/MotionController.cpp`) returns descriptors for:
   - `"S"` — parse: float leftMms, float rightMms; handler calls `beginStream(...)` with current time from `robot->systemTime()`
   - `"T"` — parse: float leftMms, float rightMms, int durationMs; optional `sensor=` kv; handler calls `beginTimed(...)`, replies `OK T`
   - `"D"` — parse: float leftMms, float rightMms, int targetMm; optional `sensor=` kv; handler calls `robot->distanceDrive(...)`
@@ -39,9 +40,9 @@ the handlers but does not activate them.
   - `"VW"` — parse: float v, float omega; handler calls `beginVelocity(...)` or re-arms keepalive
   - `"X"` — no parse; handler calls `cancel(now_ms, replyFn, ctx)`
   - `"STOP"` — no parse; handler calls `cancel(now_ms, replyFn, ctx)` (same as X)
-- [ ] Each motion handler captures `replyFn`, `replyCtx`, and `corrId` and passes them to `begin*()` identically to the corresponding old switch case
-- [ ] `MotionCtx` struct defined in `MotionController.h`: `{ MotionController* mc; Robot* robot; }`
-- [ ] `python3 build.py` passes with no errors
+- [x] Each motion handler captures `replyFn`, `replyCtx`, and `corrId` and passes them to `begin*()` identically to the corresponding old switch case
+- [x] `MotionCtx` struct defined in `MotionController.h`: `{ MotionController* mc; Robot* robot; }`
+- [x] `python3 build.py` passes with no errors
 - [ ] Bench EVT verification (via old path — old constructor still active): `D 200 200 300 #1` produces `EVT done D #1`; `T 200 200 1000 #2` produces `EVT done T #2`
 
 ## Implementation Plan
