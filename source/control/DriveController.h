@@ -140,7 +140,6 @@ private:
     float  _gTargetXWorld;  // goal x in world frame (mm), set at beginGoTo()
     float  _gTargetYWorld;  // goal y in world frame (mm), set at beginGoTo()
     float  _gSpeed;
-    float  _vRamped;        // current ramped speed (mm/s); reset to 0 at beginGoTo() and PRE_ROTATE→PURSUE
 
     // Tick timing
     uint32_t _lastTickMs;

@@ -1,13 +1,13 @@
 ---
-id: "002"
-title: "Migrate G go-to onto MotionCommand POSITION stop"
-status: open
+id: '002'
+title: Migrate G go-to onto MotionCommand POSITION stop
+status: done
 use-cases:
 - SUC-002
 depends-on:
-- "001"
-github-issue: ""
-issue: ""
+- '001'
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -39,14 +39,15 @@ Replace the inline `_vRamped` trapezoid in `DriveController`'s PURSUE loop with 
 
 ## Acceptance Criteria
 
-- [ ] `_vRamped` member removed from `DriveController.h` and `.cpp` (grep confirms 0 occurrences).
-- [ ] `tests/dev/test_pursuit_arc_steering.py` passes unchanged.
-- [ ] `EVT done G` wire format preserved (grep all test files for `done G` before editing emission).
-- [ ] POSITION stop condition terminates on arrival; old arrival branch removed from `driveAdvance`.
-- [ ] Terminal decel cap applied each tick in pursuit hook.
-- [ ] PRE_ROTATE branch unchanged (still raw `startDriveClean` + bearing check).
-- [ ] `uv run --with pytest python -m pytest -q` passes at 1179/8 baseline.
-- [ ] Clean build: `python3 build.py --clean` succeeds.
+- [x] `_vRamped` member removed from `DriveController.h` and `.cpp` (grep confirms 0 occurrences).
+- [x] `tests/dev/test_pursuit_arc_steering.py` passes unchanged.
+- [x] `EVT done G` wire format preserved (grep all test files for `done G` before editing emission).
+- [x] POSITION stop condition terminates on arrival; old arrival branch removed from `driveAdvance`.
+- [x] Terminal decel cap applied each tick in pursuit hook.
+- [x] PRE_ROTATE branch unchanged (still raw `startDriveClean` + bearing check).
+- [x] `uv run --with pytest python -m pytest -q` passes at 1226/8 baseline (ticket had 1179 — pre-existing pass count was already 1226).
+- [x] Clean build: `python3 build.py --clean` succeeds.
+- [ ] On-robot bench (G arcs to target + decelerates cleanly; no jerk from rest) — stakeholder-deferred.
 
 ## Implementation Plan
 

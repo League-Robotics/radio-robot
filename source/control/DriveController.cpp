@@ -51,7 +51,6 @@ DriveController::DriveController(MotorController& mc, Odometry& odo, const Robot
     , _gTargetXWorld(0.0f)
     , _gTargetYWorld(0.0f)
     , _gSpeed(0.0f)
-    , _vRamped(0.0f)
     , _lastTickMs(0)
     , _currentTimeMs(0)
 {
@@ -263,7 +262,6 @@ void DriveController::beginGoTo(float tx, float ty, float speedMms, uint32_t now
     _gTargetXWorld = x + tx * cosf(h_rad) - ty * sinf(h_rad);
     _gTargetYWorld = y + tx * sinf(h_rad) + ty * cosf(h_rad);
     _gSpeed   = speedMms;
-    _vRamped  = 0.0f;   // accel ramp starts fresh on each new go-to command
     _mode     = DriveMode::GO_TO;
 
     target.mode           = DriveMode::GO_TO;
@@ -321,11 +319,19 @@ void DriveController::beginGoTo(float tx, float ty, float speedMms, uint32_t now
         _gPhase = GPhase::PRE_ROTATE;
     } else {
         // Target is roughly ahead — enter pursuit directly.
-        _mc.startDriveClean(_gSpeed, _gSpeed);  // initial setpoint; PURSUE corrects next tick
+        // Configure MotionCommand with a POSITION stop at the world target.
+        // The per-tick pursuit hook in driveAdvance will update the (v, ω) target
+        // each tick before _activeCmd.tick() is called.
+        _activeCmd.configure(_gSpeed, 0.0f, &_bvc);
+        _activeCmd.addStop(makePositionStop(_gTargetXWorld, _gTargetYWorld, _cfg.arriveTolMm));
+        _activeCmd.setReplySink(fn, ctx, corr_id);
+        _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
+        _activeCmd.setDoneEvt("EVT done G");
+        HardwareState emptyState{};
+        const HardwareState& inputs = _hwState ? *_hwState : emptyState;
+        _activeCmd.start(inputs, now_ms);
         _gPhase = GPhase::PURSUE;
     }
-
-    (void)now_ms;
 }
 
 void DriveController::stop(uint32_t now_ms, ReplyFn fn, void* ctx)
@@ -334,6 +340,7 @@ void DriveController::stop(uint32_t now_ms, ReplyFn fn, void* ctx)
     if (_activeCmd.active()) {
         _activeCmd.cancel(MotionCommand::StopStyle::HARD);
     }
+    _gPhase = GPhase::IDLE;  // reset G phase on hard stop
     fullStop(fn, ctx);
     (void)now_ms;
 }
@@ -342,7 +349,8 @@ void DriveController::cancel(uint32_t now_ms, ReplyFn fn, void* ctx)
 {
     _activeCmd.cancel(MotionCommand::StopStyle::HARD);
     _mc.stop();
-    _mode = DriveMode::IDLE;
+    _mode   = DriveMode::IDLE;
+    _gPhase = GPhase::IDLE;  // reset G phase on any cancel
     (void)now_ms;
     (void)fn;
     (void)ctx;
@@ -380,16 +388,46 @@ void DriveController::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
     // and odometry.predict() before driveAdvance() is reached (014-003/004).
     (void)cmds;
 
-    // ── MotionCommand tick (VW / future MotionCommand-based verbs) ─────────────
+    // ── MotionCommand tick (VW / R / G PURSUE / future MotionCommand-based verbs) ─
     // When a MotionCommand is active, tick it exactly once and return early.
     // The old S/T/D/G if-chain runs ONLY when no MotionCommand is active.
     // This also prevents the STREAMING watchdog branch below from firing for VW.
     if (_activeCmd.active()) {
+        // G PURSUE hook: recompute (v, ω) from current pose each tick and call
+        // setTarget BEFORE _activeCmd.tick() so the BVC advances with the
+        // updated target this tick.
+        if (_mode == DriveMode::GO_TO && _gPhase == GPhase::PURSUE) {
+            float x, y, h_rad;
+            getPoseFloat(x, y, h_rad);
+
+            float dxW = _gTargetXWorld - x;
+            float dyW = _gTargetYWorld - y;
+            float dx  =  dxW * cosf(h_rad) + dyW * sinf(h_rad);
+            float dy  = -dxW * sinf(h_rad) + dyW * cosf(h_rad);
+
+            float d2          = dx * dx + dy * dy;
+            float d_remaining = sqrtf(d2);
+
+            // Terminal decel cap: v_cap = sqrt(2 * aDecel * d_remaining).
+            // Clamps the commanded speed to ensure the BVC has time to
+            // decelerate to zero before the POSITION stop fires.
+            float v     = _gSpeed;
+            float v_cap = sqrtf(2.0f * _cfg.aDecel * d_remaining);
+            if (v_cap < v) v = v_cap;
+
+            float kappa = (d2 > 0.1f) ? (2.0f * dy / d2) : 0.0f;
+            float omega = v * kappa;
+
+            _activeCmd.setTarget(v, omega);
+        }
+
         bool still_running = _activeCmd.tick(inputs, now_ms, dt_s);
         if (!still_running) {
             // MotionCommand terminated; go IDLE.
             _mode = DriveMode::IDLE;
             target.mode = DriveMode::IDLE;
+            // Reset G phase so a subsequent go-to command starts clean.
+            if (_gPhase != GPhase::IDLE) _gPhase = GPhase::IDLE;
         }
         return;
     }
@@ -449,46 +487,22 @@ void DriveController::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
             float gateRad = _cfg.turnInPlaceGate * (3.14159265f / 180.0f);
 
             if (bearing <= gateRad) {
-                _vRamped = 0.0f;
-                _gPhase  = GPhase::PURSUE;
+                // PRE_ROTATE → PURSUE transition: configure and start _activeCmd
+                // with a POSITION stop at the world target.  The per-tick hook
+                // above will update (v, ω) each tick before _activeCmd.tick().
+                _activeCmd.configure(_gSpeed, 0.0f, &_bvc);
+                _activeCmd.addStop(makePositionStop(_gTargetXWorld, _gTargetYWorld, _cfg.arriveTolMm));
+                _activeCmd.setReplySink(target.replyFn, target.replyCtx, target.corrId);
+                _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
+                _activeCmd.setDoneEvt("EVT done G");
+                const HardwareState& hw = _hwState ? *_hwState : inputs;
+                _activeCmd.start(hw, now_ms);
+                _gPhase = GPhase::PURSUE;
             }
         }
 
-        if (_gPhase == GPhase::PURSUE) {
-            float x, y, h_rad;
-            getPoseFloat(x, y, h_rad);
-
-            float dxW = _gTargetXWorld - x;
-            float dyW = _gTargetYWorld - y;
-            float dx  =  dxW * cosf(h_rad) + dyW * sinf(h_rad);
-            float dy  = -dxW * sinf(h_rad) + dyW * cosf(h_rad);
-
-            float d2          = dx * dx + dy * dy;
-            float d_remaining = sqrtf(d2);
-
-            if (d_remaining < _cfg.arriveTolMm) {
-                fullStop(nullptr, nullptr);
-                _gPhase = GPhase::IDLE;
-                emitEvt("EVT done G", target);
-                return;
-            }
-
-            _vRamped += _cfg.aMax * dt_s;
-            if (_vRamped > _gSpeed) _vRamped = _gSpeed;
-
-            float v_cap = sqrtf(2.0f * _cfg.aDecel * d_remaining);
-            if (v_cap < _vRamped) _vRamped = v_cap;
-
-            float v     = _vRamped;
-            float kappa = (d2 > 0.1f) ? (2.0f * dy / d2) : 0.0f;
-            float omega = v * kappa;
-
-            float vL, vR;
-            BodyKinematics::inverse(v, omega, _cfg.trackwidthMm, vL, vR);
-            float sL, sR;
-            BodyKinematics::saturate(vL, vR, _cfg.vWheelMax, _cfg.steerHeadroom, sL, sR);
-            _mc.setTarget(sL, sR);
-        }
+        // PURSUE is now handled by the MotionCommand path at the top of
+        // driveAdvance — control never reaches here while PURSUE is active.
     }
 }
 
