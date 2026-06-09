@@ -15,7 +15,7 @@ constexpr const char* PROTO_TAG_ID  = "ID";
 // Protocol version and firmware version string
 // ---------------------------------------------------------------------------
 constexpr int         PROTO_VERSION    = 2;
-constexpr const char* FIRMWARE_VERSION = "0.20260608.21";
+constexpr const char* FIRMWARE_VERSION = "0.20260609.7";
 
 using ReplyFn = void(*)(const char* msg, void* ctx);
 
@@ -23,4 +23,13 @@ struct ReplyCtx {
     bool viaSerial;
     bool viaRadio;
     bool relay;
+};
+
+// ---------------------------------------------------------------------------
+// KVPair — a single key=value token pair. Used by parseKV() and ParseFn.
+// Keys and values point into the working copy buffer; callers must not free.
+// ---------------------------------------------------------------------------
+struct KVPair {
+    const char* key;
+    const char* value;
 };

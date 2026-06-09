@@ -13,6 +13,8 @@
 #include "Config.h"
 #include "Icons.h"
 #include "RadioChannel.h"
+#include "DebugCommandable.h"
+#include <cstdio>
 
 // ---------------------------------------------------------------------------
 // MicroBit uBit singleton — file-scope so CODAL peripherals are fully
@@ -191,17 +193,35 @@ int main() {
     //    the device objects.
     // -----------------------------------------------------------------------
     static Robot robot(motorL, motorR, otos, line, color, gripper, portio, cfg);
-    static CommandProcessor cmd(robot);
-
-    // DEVICE: identification banner once at boot over serial.
-    cmd.process("HELLO", serialReply, &comm.serial());
 
     // -----------------------------------------------------------------------
     // 7. Run the cooperative main loop — never returns.
+    //
+    // Initialisation order:
+    //   cmd   needs the full command table, including DBG descriptors.
+    //   sched needs cmd& (reference, so cmd must exist first).
+    //   dbgCmd needs &sched.
+    //
+    // Resolution: build cmd without DBG first, construct sched + dbgCmd,
+    // then replace cmd with the full table.  std::vector makes the
+    // re-assignment safe — no shared static buffer.
     // -----------------------------------------------------------------------
+
+    // Phase 1 — all commands except DBG/I2CW/I2CR.
+    static CommandProcessor cmd(robot.buildCommandTable());
+    cmd.setSerialReply(serialReply, &comm.serial());
+
+    // Phase 2 — LoopScheduler and DebugCommandable are now constructable.
     static LoopScheduler sched(robot, cmd, comm, uBit);
-    cmd.setScheduler(&sched);             // enable DBG LOOP <x> <state> task toggling
-    cmd.setI2CBus(&bus);                  // enable DBG I2C stats dump (015-003)
+    static DbgCtx dbgCtx = { &sched, &bus, &robot };
+    static DebugCommandable dbgCmd(dbgCtx);
+
+    // Phase 3 — replace cmd with the full table including DBG descriptors.
+    cmd = CommandProcessor(robot.buildCommandTable(&dbgCmd, &sched));
+    cmd.setSerialReply(serialReply, &comm.serial());
+
+    // DEVICE: identification banner once at boot over serial.
+    cmd.process("HELLO", serialReply, &comm.serial());
 
     // Wire the I2CBus and EVT sink into MotorController so enc_wedged events
     // are emitted with bus stats and go to the active serial/radio channel.

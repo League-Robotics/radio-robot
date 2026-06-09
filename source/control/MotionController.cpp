@@ -1,4 +1,4 @@
-// DriveController.cpp — S/T/D/G drive state machines, S-mode watchdog,
+// MotionController.cpp — S/T/D/G drive state machines, S-mode watchdog,
 // streaming encoder counter, and odometry delta tracking.
 //
 // Transplanted from CommandProcessor.cpp (Sprint 007, Ticket 003).
@@ -17,11 +17,13 @@
 // a MotionCommand with a TIME stop condition (keepalive watchdog at sTimeoutMs).
 // driveAdvance ticks _activeCmd when active; STREAMING watchdog fires only for S.
 
-#include "DriveController.h"
+#include "MotionController.h"
 #include "MotorController.h"
 #include "Odometry.h"
 #include "BodyKinematics.h"
 #include "StopCondition.h"
+#include "Robot.h"
+#include "CommandProcessor.h"
 #include <cstdio>
 #include <cmath>
 #include <cstdlib>
@@ -31,11 +33,12 @@
 // Constructor
 // ---------------------------------------------------------------------------
 
-DriveController::DriveController(MotorController& mc, Odometry& odo, const RobotConfig& cfg)
+MotionController::MotionController(MotorController& mc, Odometry& odo, const RobotConfig& cfg)
     : _mc(mc)
     , _odo(odo)
     , _cfg(cfg)
     , _hwState(nullptr)
+    , _ctx{this, nullptr}   // robot set later by setCtx()
     , _bvc(mc, cfg)     // _bvc must be initialised before _activeCmd (declaration order)
     , _activeCmd()
     , _mode(DriveMode::IDLE)
@@ -78,7 +81,7 @@ static void applySaturation(float vL, float vR,
 // fiber boundary that would block I/O in driveAdvance().
 // ---------------------------------------------------------------------------
 
-/*static*/ void DriveController::emitEvt(const char* base, TargetState& target)
+/*static*/ void MotionController::emitEvt(const char* base, TargetState& target)
 {
     if (!target.replyFn) return;
 
@@ -102,7 +105,7 @@ static void applySaturation(float vL, float vR,
 // Entry points
 // ---------------------------------------------------------------------------
 
-void DriveController::beginStream(float leftMms, float rightMms, uint32_t now_ms,
+void MotionController::beginStream(float leftMms, float rightMms, uint32_t now_ms,
                                    TargetState& target, ReplyFn fn, void* ctx)
 {
     float sL, sR;
@@ -121,7 +124,7 @@ void DriveController::beginStream(float leftMms, float rightMms, uint32_t now_ms
     target.corrId[0] = '\0';
 }
 
-void DriveController::beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
+void MotionController::beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
                                      TargetState& target, ReplyFn fn, void* ctx,
                                      const char* corr_id)
 {
@@ -151,7 +154,7 @@ void DriveController::beginVelocity(float v_mms, float omega_rads, uint32_t now_
     target.mode = DriveMode::VELOCITY;
 }
 
-void DriveController::beginArc(float speedMms, float radiusMm, uint32_t now_ms,
+void MotionController::beginArc(float speedMms, float radiusMm, uint32_t now_ms,
                                 TargetState& target, ReplyFn fn, void* ctx,
                                 const char* corr_id)
 {
@@ -184,7 +187,7 @@ void DriveController::beginArc(float speedMms, float radiusMm, uint32_t now_ms,
     target.mode = DriveMode::VELOCITY;
 }
 
-void DriveController::beginTimed(float leftMms, float rightMms,
+void MotionController::beginTimed(float leftMms, float rightMms,
                                   uint32_t durationMs, uint32_t now_ms,
                                   TargetState& target, ReplyFn fn, void* ctx,
                                   const char* corr_id)
@@ -217,7 +220,7 @@ void DriveController::beginTimed(float leftMms, float rightMms,
     target.mode = DriveMode::VELOCITY;
 }
 
-void DriveController::beginDistance(float leftMms, float rightMms,
+void MotionController::beginDistance(float leftMms, float rightMms,
                                      int32_t targetMm, uint32_t now_ms,
                                      TargetState& target, ReplyFn fn, void* ctx,
                                      const char* corr_id)
@@ -281,7 +284,7 @@ void DriveController::beginDistance(float leftMms, float rightMms,
     target.distanceTargetMm = static_cast<float>(targetMm);
 }
 
-void DriveController::beginGoTo(float tx, float ty, float speedMms, uint32_t now_ms,
+void MotionController::beginGoTo(float tx, float ty, float speedMms, uint32_t now_ms,
                                  TargetState& target, ReplyFn fn, void* ctx,
                                  const char* corr_id)
 {
@@ -364,7 +367,7 @@ void DriveController::beginGoTo(float tx, float ty, float speedMms, uint32_t now
     }
 }
 
-void DriveController::beginTurn(float headingCdeg, float epsCdeg, uint32_t now_ms,
+void MotionController::beginTurn(float headingCdeg, float epsCdeg, uint32_t now_ms,
                                 TargetState& target, ReplyFn fn, void* ctx,
                                 const char* corr_id)
 {
@@ -434,7 +437,7 @@ void DriveController::beginTurn(float headingCdeg, float epsCdeg, uint32_t now_m
     target.mode = DriveMode::VELOCITY;
 }
 
-void DriveController::stop(uint32_t now_ms, ReplyFn fn, void* ctx)
+void MotionController::stop(uint32_t now_ms, ReplyFn fn, void* ctx)
 {
     // Cancel any active MotionCommand before calling fullStop().
     if (_activeCmd.active()) {
@@ -445,7 +448,7 @@ void DriveController::stop(uint32_t now_ms, ReplyFn fn, void* ctx)
     (void)now_ms;
 }
 
-void DriveController::cancel(uint32_t now_ms, ReplyFn fn, void* ctx)
+void MotionController::cancel(uint32_t now_ms, ReplyFn fn, void* ctx)
 {
     _activeCmd.cancel(MotionCommand::StopStyle::HARD);
     _mc.stop();
@@ -473,7 +476,7 @@ void DriveController::cancel(uint32_t now_ms, ReplyFn fn, void* ctx)
 // (ticket 005 wired this; ticket 006 moved it to the scheduler task).
 // ---------------------------------------------------------------------------
 
-void DriveController::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
+void MotionController::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
                                     TargetState& target, uint32_t now_ms)
 {
     // Throttle to controlPeriodMs cadence.
@@ -605,7 +608,7 @@ void DriveController::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
 // Private helpers
 // ---------------------------------------------------------------------------
 
-void DriveController::fullStop(ReplyFn fn, void* ctx)
+void MotionController::fullStop(ReplyFn fn, void* ctx)
 {
     _mc.stop();
     _mode  = DriveMode::IDLE;
@@ -622,7 +625,7 @@ void DriveController::fullStop(ReplyFn fn, void* ctx)
  * @param y      Output: y position in mm (float)
  * @param h_rad  Output: heading in radians
  */
-void DriveController::getPoseFloat(float& x, float& y, float& h_rad) const {
+void MotionController::getPoseFloat(float& x, float& y, float& h_rad) const {
     if (_hwState == nullptr) {
         x = 0.0f; y = 0.0f; h_rad = 0.0f;
         return;
@@ -632,4 +635,522 @@ void DriveController::getPoseFloat(float& x, float& y, float& h_rad) const {
     x     = static_cast<float>(xi);
     y     = static_cast<float>(yi);
     h_rad = static_cast<float>(hi) * (3.14159265f / 18000.0f);  // cdeg → rad
+}
+
+// ---------------------------------------------------------------------------
+// parseSensorToken — parse "sensor=<ch>:<op>:<thr>" into channel, cmp, threshold.
+//
+// Duplicated from CommandProcessor.cpp (static function; not exported).
+// Will be deduplicated once a shared SensorToken helper is extracted.
+//
+// Returns true on success; false on any parse/lookup failure.
+// ---------------------------------------------------------------------------
+
+static bool mc_parseSensorToken(const char* value,
+                                uint8_t& ch_out, float& thr_out,
+                                StopCondition::Cmp& cmp_out)
+{
+    char buf[32];
+    int vlen = 0;
+    for (const char* p = value; *p && vlen < (int)sizeof(buf) - 1; ++p, ++vlen)
+        buf[vlen] = *p;
+    buf[vlen] = '\0';
+
+    char* colon1 = strchr(buf, ':');
+    if (!colon1) return false;
+    *colon1 = '\0';
+    const char* ch_name = buf;
+    const char* rest    = colon1 + 1;
+
+    char* colon2 = strchr(rest, ':');
+    if (!colon2) return false;
+    *colon2 = '\0';
+    const char* op_str  = rest;
+    const char* thr_str = colon2 + 1;
+
+    uint8_t ch = 0;
+    bool found = false;
+    struct { const char* name; uint8_t idx; } chMap[] = {
+        { "line0",  0 }, { "line1",  1 }, { "line2",  2 }, { "line3",  3 },
+        { "colorR", 4 }, { "colorG", 5 }, { "colorB", 6 }, { "colorC", 7 },
+    };
+    for (int i = 0; i < 8; ++i) {
+        if (strcmp(ch_name, chMap[i].name) == 0) {
+            ch    = chMap[i].idx;
+            found = true;
+            break;
+        }
+    }
+    if (!found) return false;
+
+    StopCondition::Cmp cmp;
+    if (strcmp(op_str, "ge") == 0) {
+        cmp = StopCondition::Cmp::GE;
+    } else if (strcmp(op_str, "le") == 0) {
+        cmp = StopCondition::Cmp::LE;
+    } else {
+        return false;
+    }
+
+    int thr = atoi(thr_str);
+    ch_out  = ch;
+    thr_out = (float)thr;
+    cmp_out = cmp;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// getCommands — Commandable interface.  Returns descriptors for all 9 motion
+// commands: S, T, D, G, R, TURN, VW, X, STOP.
+//
+// Handler context (_ctx) is a MotionCtx{this, robot} populated by setCtx().
+// All handlers cast handlerCtx to MotionCtx*.
+//
+// Argument packing conventions (mirror the old switch cases in
+// CommandProcessor.cpp exactly so EVT async completions are equivalent):
+//   S    — args[0].ival=l, args[1].ival=r
+//   T    — args[0].ival=l, args[1].ival=r, args[2].ival=ms
+//          args[3] present (type STR, sval="sensor=<tok>") if sensor= given
+//   D    — args[0].ival=l, args[1].ival=r, args[2].ival=mm
+//          args[3] present (type STR) if sensor= given
+//   G    — args[0].ival=x, args[1].ival=y, args[2].ival=speed
+//   R    — args[0].ival=speed, args[1].ival=radius
+//   TURN — args[0].ival=heading_cdeg, args[1].ival=eps_cdeg
+//   VW   — args[0].ival=v, args[1].ival=omega (mrad/s)
+//   X    — no args
+//   STOP — no args
+// ---------------------------------------------------------------------------
+
+// ── Helper macro: set one INT arg ───────────────────────────────────────────
+// Avoids repeating the three-field assignment pattern for every arg slot.
+// Sets .type = ArgType::INT, .ival = v, .sval[0] = '\0'.
+static inline void setIntArg(Argument& a, int v)
+{
+    a.type    = ArgType::INT;
+    a.ival    = v;
+    a.sval[0] = '\0';
+}
+
+// ── Helper: copy a sensor= KV value string into args[idx] as STR ───────────
+// Returns the new args.count (idx + 1) on success, or original count if not
+// found.  Does NOT validate the sensor string — validation happens at handler
+// time via mc_parseSensorToken().
+static int packSensorArg(ArgList& out, int nextIdx,
+                         const KVPair* kvs, int nkv)
+{
+    for (int i = 0; i < nkv; ++i) {
+        if (kvs[i].key && strcmp(kvs[i].key, "sensor") == 0) {
+            out.args[nextIdx].type = ArgType::STR;
+            out.args[nextIdx].ival = 0;
+            out.args[nextIdx].fval = 0.0f;
+            int slen = 0;
+            const char* src = kvs[i].value;
+            while (*src && slen < (int)(sizeof(out.args[nextIdx].sval) - 1))
+                out.args[nextIdx].sval[slen++] = *src++;
+            out.args[nextIdx].sval[slen] = '\0';
+            return nextIdx + 1;
+        }
+    }
+    return nextIdx;  // no sensor= found
+}
+
+// ── S ────────────────────────────────────────────────────────────────────────
+
+static ParseResult parseS(const char* const* tokens, int ntokens,
+                           const KVPair* /*kvs*/, int /*nkv*/)
+{
+    ParseResult res;
+    if (ntokens < 2) {
+        res.ok = false; res.err.code = "badarg"; res.err.detail = nullptr; return res;
+    }
+    int l = atoi(tokens[0]);
+    int r = atoi(tokens[1]);
+    if (l < -1000 || l > 1000) {
+        res.ok = false; res.err.code = "range"; res.err.detail = "l"; return res;
+    }
+    if (r < -1000 || r > 1000) {
+        res.ok = false; res.err.code = "range"; res.err.detail = "r"; return res;
+    }
+    res.ok = true;
+    res.args.count = 2;
+    setIntArg(res.args.args[0], l);
+    setIntArg(res.args.args[1], r);
+    return res;
+}
+
+static void handleS(const ArgList& args, const char* corrId,
+                    ReplyFn replyFn, void* replyCtx, void* handlerCtx)
+{
+    MotionCtx* ctx = static_cast<MotionCtx*>(handlerCtx);
+    int l = args.args[0].ival;
+    int r = args.args[1].ival;
+    ctx->mc->beginStream((float)l, (float)r,
+                         ctx->robot->systemTime(),
+                         ctx->robot->state.target,
+                         replyFn, replyCtx);
+    char body[32];
+    snprintf(body, sizeof(body), "l=%d r=%d", l, r);
+    char rbuf[64];
+    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "drive", body, corrId, replyFn, replyCtx);
+}
+
+// ── T ────────────────────────────────────────────────────────────────────────
+
+static ParseResult parseT(const char* const* tokens, int ntokens,
+                           const KVPair* kvs, int nkv)
+{
+    ParseResult res;
+    if (ntokens < 3) {
+        res.ok = false; res.err.code = "badarg"; res.err.detail = nullptr; return res;
+    }
+    int l  = atoi(tokens[0]);
+    int r  = atoi(tokens[1]);
+    int ms = atoi(tokens[2]);
+    if (l < -1000 || l > 1000) {
+        res.ok = false; res.err.code = "range"; res.err.detail = "l"; return res;
+    }
+    if (r < -1000 || r > 1000) {
+        res.ok = false; res.err.code = "range"; res.err.detail = "r"; return res;
+    }
+    if (ms < 1 || ms > 30000) {
+        res.ok = false; res.err.code = "range"; res.err.detail = "ms"; return res;
+    }
+    res.ok = true;
+    res.args.count = 3;
+    setIntArg(res.args.args[0], l);
+    setIntArg(res.args.args[1], r);
+    setIntArg(res.args.args[2], ms);
+    // Pack optional sensor= into args[3].
+    res.args.count = packSensorArg(res.args, 3, kvs, nkv);
+    return res;
+}
+
+static void handleT(const ArgList& args, const char* corrId,
+                    ReplyFn replyFn, void* replyCtx, void* handlerCtx)
+{
+    MotionCtx* ctx = static_cast<MotionCtx*>(handlerCtx);
+    int l  = args.args[0].ival;
+    int r  = args.args[1].ival;
+    int ms = args.args[2].ival;
+    ctx->mc->beginTimed((float)l, (float)r, (uint32_t)ms,
+                        ctx->robot->systemTime(),
+                        ctx->robot->state.target,
+                        replyFn, replyCtx, corrId);
+    // Optional sensor= stop condition (packed into args[3] by parseT).
+    if (args.count >= 4) {
+        uint8_t ch; float thr; StopCondition::Cmp cmp;
+        if (!mc_parseSensorToken(args.args[3].sval, ch, thr, cmp)) {
+            char rbuf[64];
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg", "sensor",
+                                       corrId, replyFn, replyCtx);
+            ctx->mc->cancel(ctx->robot->systemTime(), replyFn, replyCtx);
+            return;
+        }
+        ctx->mc->activeCmd().addStop(makeSensorStop(ch, thr, cmp));
+    }
+    char body[48];
+    snprintf(body, sizeof(body), "l=%d r=%d ms=%d", l, r, ms);
+    char rbuf[80];
+    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "drive", body, corrId, replyFn, replyCtx);
+}
+
+// ── D ────────────────────────────────────────────────────────────────────────
+
+static ParseResult parseD(const char* const* tokens, int ntokens,
+                           const KVPair* kvs, int nkv)
+{
+    ParseResult res;
+    if (ntokens < 3) {
+        res.ok = false; res.err.code = "badarg"; res.err.detail = nullptr; return res;
+    }
+    int l  = atoi(tokens[0]);
+    int r  = atoi(tokens[1]);
+    int mm = atoi(tokens[2]);
+    if (l < -1000 || l > 1000) {
+        res.ok = false; res.err.code = "range"; res.err.detail = "l"; return res;
+    }
+    if (r < -1000 || r > 1000) {
+        res.ok = false; res.err.code = "range"; res.err.detail = "r"; return res;
+    }
+    if (mm < 1 || mm > 10000) {
+        res.ok = false; res.err.code = "range"; res.err.detail = "mm"; return res;
+    }
+    res.ok = true;
+    res.args.count = 3;
+    setIntArg(res.args.args[0], l);
+    setIntArg(res.args.args[1], r);
+    setIntArg(res.args.args[2], mm);
+    // Pack optional sensor= into args[3].
+    res.args.count = packSensorArg(res.args, 3, kvs, nkv);
+    return res;
+}
+
+static void handleD(const ArgList& args, const char* corrId,
+                    ReplyFn replyFn, void* replyCtx, void* handlerCtx)
+{
+    MotionCtx* ctx = static_cast<MotionCtx*>(handlerCtx);
+    int l  = args.args[0].ival;
+    int r  = args.args[1].ival;
+    int mm = args.args[2].ival;
+    ctx->robot->distanceDrive((int32_t)l, (int32_t)r, (int32_t)mm,
+                               replyFn, replyCtx, corrId);
+    // Optional sensor= stop condition (packed into args[3] by parseD).
+    if (args.count >= 4) {
+        uint8_t ch; float thr; StopCondition::Cmp cmp;
+        if (!mc_parseSensorToken(args.args[3].sval, ch, thr, cmp)) {
+            char rbuf[64];
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg", "sensor",
+                                       corrId, replyFn, replyCtx);
+            ctx->mc->cancel(ctx->robot->systemTime(), replyFn, replyCtx);
+            return;
+        }
+        ctx->mc->activeCmd().addStop(makeSensorStop(ch, thr, cmp));
+    }
+    char body[48];
+    snprintf(body, sizeof(body), "l=%d r=%d mm=%d", l, r, mm);
+    char rbuf[80];
+    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "drive", body, corrId, replyFn, replyCtx);
+}
+
+// ── G ────────────────────────────────────────────────────────────────────────
+
+static ParseResult parseG(const char* const* tokens, int ntokens,
+                           const KVPair* /*kvs*/, int /*nkv*/)
+{
+    ParseResult res;
+    if (ntokens < 3) {
+        res.ok = false; res.err.code = "badarg"; res.err.detail = nullptr; return res;
+    }
+    int x     = atoi(tokens[0]);
+    int y     = atoi(tokens[1]);
+    int speed = atoi(tokens[2]);
+    if (x < -10000 || x > 10000) {
+        res.ok = false; res.err.code = "range"; res.err.detail = "x"; return res;
+    }
+    if (y < -10000 || y > 10000) {
+        res.ok = false; res.err.code = "range"; res.err.detail = "y"; return res;
+    }
+    if (speed < 1 || speed > 1000) {
+        res.ok = false; res.err.code = "range"; res.err.detail = "speed"; return res;
+    }
+    res.ok = true;
+    res.args.count = 3;
+    setIntArg(res.args.args[0], x);
+    setIntArg(res.args.args[1], y);
+    setIntArg(res.args.args[2], speed);
+    return res;
+}
+
+static void handleG(const ArgList& args, const char* corrId,
+                    ReplyFn replyFn, void* replyCtx, void* handlerCtx)
+{
+    MotionCtx* ctx = static_cast<MotionCtx*>(handlerCtx);
+    int x     = args.args[0].ival;
+    int y     = args.args[1].ival;
+    int speed = args.args[2].ival;
+    ctx->mc->beginGoTo((float)x, (float)y, (float)speed,
+                       ctx->robot->systemTime(),
+                       ctx->robot->state.target,
+                       replyFn, replyCtx, corrId);
+    char body[64];
+    snprintf(body, sizeof(body), "x=%d y=%d speed=%d", x, y, speed);
+    char rbuf[96];
+    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "goto", body, corrId, replyFn, replyCtx);
+}
+
+// ── R ────────────────────────────────────────────────────────────────────────
+
+static ParseResult parseR(const char* const* tokens, int ntokens,
+                           const KVPair* /*kvs*/, int /*nkv*/)
+{
+    ParseResult res;
+    if (ntokens < 2) {
+        res.ok = false; res.err.code = "badarg"; res.err.detail = nullptr; return res;
+    }
+    int speed  = atoi(tokens[0]);
+    int radius = atoi(tokens[1]);
+    if (speed < -1000 || speed > 1000) {
+        res.ok = false; res.err.code = "range"; res.err.detail = "speed"; return res;
+    }
+    if (radius < -10000 || radius > 10000) {
+        res.ok = false; res.err.code = "range"; res.err.detail = "radius"; return res;
+    }
+    res.ok = true;
+    res.args.count = 2;
+    setIntArg(res.args.args[0], speed);
+    setIntArg(res.args.args[1], radius);
+    return res;
+}
+
+static void handleR(const ArgList& args, const char* corrId,
+                    ReplyFn replyFn, void* replyCtx, void* handlerCtx)
+{
+    MotionCtx* ctx = static_cast<MotionCtx*>(handlerCtx);
+    int speed  = args.args[0].ival;
+    int radius = args.args[1].ival;
+    uint32_t now = ctx->robot->systemTime();
+    ctx->mc->beginArc((float)speed, (float)radius, now,
+                      ctx->robot->state.target,
+                      replyFn, replyCtx, corrId);
+    char body[48];
+    snprintf(body, sizeof(body), "speed=%d radius=%d", speed, radius);
+    char rbuf[80];
+    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "arc", body, corrId, replyFn, replyCtx);
+}
+
+// ── TURN ─────────────────────────────────────────────────────────────────────
+
+static ParseResult parseTURN(const char* const* tokens, int ntokens,
+                              const KVPair* kvs, int nkv)
+{
+    ParseResult res;
+    if (ntokens < 1) {
+        res.ok = false; res.err.code = "badarg"; res.err.detail = nullptr; return res;
+    }
+    int heading_cdeg = atoi(tokens[0]);
+    if (heading_cdeg < -18000 || heading_cdeg > 18000) {
+        res.ok = false; res.err.code = "range"; res.err.detail = "heading"; return res;
+    }
+    // Parse optional eps=<cdeg> kv; default 300.
+    int eps_cdeg = 300;
+    for (int i = 0; i < nkv; ++i) {
+        if (kvs[i].key && strcmp(kvs[i].key, "eps") == 0) {
+            eps_cdeg = atoi(kvs[i].value);
+            if (eps_cdeg < 10 || eps_cdeg > 1800) {
+                res.ok = false; res.err.code = "range"; res.err.detail = "eps"; return res;
+            }
+            break;
+        }
+    }
+    res.ok = true;
+    res.args.count = 2;
+    setIntArg(res.args.args[0], heading_cdeg);
+    setIntArg(res.args.args[1], eps_cdeg);
+    // Pack optional sensor= into args[2].
+    res.args.count = packSensorArg(res.args, 2, kvs, nkv);
+    return res;
+}
+
+static void handleTURN(const ArgList& args, const char* corrId,
+                       ReplyFn replyFn, void* replyCtx, void* handlerCtx)
+{
+    MotionCtx* ctx = static_cast<MotionCtx*>(handlerCtx);
+    int heading_cdeg = args.args[0].ival;
+    int eps_cdeg     = args.args[1].ival;
+    uint32_t now = ctx->robot->systemTime();
+    ctx->mc->beginTurn((float)heading_cdeg, (float)eps_cdeg, now,
+                       ctx->robot->state.target,
+                       replyFn, replyCtx, corrId);
+    // Optional sensor= stop condition (packed into args[2] by parseTURN).
+    if (args.count >= 3) {
+        uint8_t ch; float thr; StopCondition::Cmp cmp;
+        if (!mc_parseSensorToken(args.args[2].sval, ch, thr, cmp)) {
+            char rbuf[64];
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg", "sensor",
+                                       corrId, replyFn, replyCtx);
+            ctx->mc->cancel(ctx->robot->systemTime(), replyFn, replyCtx);
+            return;
+        }
+        ctx->mc->activeCmd().addStop(makeSensorStop(ch, thr, cmp));
+    }
+    char body[48];
+    snprintf(body, sizeof(body), "heading=%d eps=%d", heading_cdeg, eps_cdeg);
+    char rbuf[80];
+    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "turn", body, corrId, replyFn, replyCtx);
+}
+
+// ── VW ───────────────────────────────────────────────────────────────────────
+
+static ParseResult parseVW(const char* const* tokens, int ntokens,
+                            const KVPair* /*kvs*/, int /*nkv*/)
+{
+    ParseResult res;
+    if (ntokens < 2) {
+        res.ok = false; res.err.code = "badarg"; res.err.detail = nullptr; return res;
+    }
+    int v     = atoi(tokens[0]);
+    int omega = atoi(tokens[1]);
+    if (v < -1000 || v > 1000) {
+        res.ok = false; res.err.code = "range"; res.err.detail = "v"; return res;
+    }
+    if (omega < -3142 || omega > 3142) {
+        res.ok = false; res.err.code = "range"; res.err.detail = "omega"; return res;
+    }
+    res.ok = true;
+    res.args.count = 2;
+    setIntArg(res.args.args[0], v);
+    setIntArg(res.args.args[1], omega);
+    return res;
+}
+
+static void handleVW(const ArgList& args, const char* corrId,
+                     ReplyFn replyFn, void* replyCtx, void* handlerCtx)
+{
+    MotionCtx* ctx = static_cast<MotionCtx*>(handlerCtx);
+    int v     = args.args[0].ival;
+    int omega = args.args[1].ival;
+    float omega_rads = (float)omega / 1000.0f;  // mrad/s → rad/s
+    uint32_t now = ctx->robot->systemTime();
+
+    if (ctx->mc->hasActiveCommand()) {
+        // Keepalive re-send: update target and re-arm TIME baseline.
+        ctx->mc->activeCmd().setTarget((float)v, omega_rads);
+    } else {
+        // New VW command: configure MotionCommand from scratch.
+        ctx->mc->beginVelocity((float)v, omega_rads, now,
+                               ctx->robot->state.target,
+                               replyFn, replyCtx, corrId);
+    }
+
+    char body[32];
+    snprintf(body, sizeof(body), "v=%d omega=%d", v, omega);
+    char rbuf[64];
+    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "vw", body, corrId, replyFn, replyCtx);
+}
+
+// ── X and STOP ───────────────────────────────────────────────────────────────
+
+static ParseResult parseNoArgs(const char* const* /*tokens*/, int /*ntokens*/,
+                               const KVPair* /*kvs*/, int /*nkv*/)
+{
+    ParseResult res;
+    res.ok = true;
+    res.args.count = 0;
+    return res;
+}
+
+static void handleX(const ArgList& /*args*/, const char* corrId,
+                    ReplyFn replyFn, void* replyCtx, void* handlerCtx)
+{
+    MotionCtx* ctx = static_cast<MotionCtx*>(handlerCtx);
+    uint32_t now = ctx->robot->systemTime();
+    ctx->mc->cancel(now, replyFn, replyCtx);
+    char rbuf[64];
+    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "x", nullptr, corrId, replyFn, replyCtx);
+}
+
+static void handleSTOP(const ArgList& /*args*/, const char* corrId,
+                       ReplyFn replyFn, void* replyCtx, void* handlerCtx)
+{
+    MotionCtx* ctx = static_cast<MotionCtx*>(handlerCtx);
+    uint32_t now = ctx->robot->systemTime();
+    ctx->mc->cancel(now, replyFn, replyCtx);
+    char rbuf[64];
+    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "stop", nullptr, corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
+std::vector<CommandDescriptor> MotionController::getCommands() const {
+    void* ctx = const_cast<MotionCtx*>(&_ctx);
+    return {
+        makeCmd("S",    parseS,      handleS,    ctx, "badarg"), // set wheel speeds (mm/s)
+        makeCmd("T",    parseT,      handleT,    ctx, "badarg"), // timed drive (ms)
+        makeCmd("D",    parseD,      handleD,    ctx, "badarg"), // distance drive (mm)
+        makeCmd("G",    parseG,      handleG,    ctx, "badarg"), // goto encoder position
+        makeCmd("R",    parseR,      handleR,    ctx, "badarg"), // rotate in place (deg)
+        makeCmd("TURN", parseTURN,   handleTURN, ctx, "badarg"), // arc turn (radius, deg)
+        makeCmd("VW",   parseVW,     handleVW,   ctx, "badarg"), // velocity + angular vel (unicycle)
+        makeCmd("X",    parseNoArgs, handleX,    ctx, "badarg"), // stop immediately
+        makeCmd("STOP", parseNoArgs, handleSTOP, ctx, "badarg"), // stop with deceleration
+    };
 }

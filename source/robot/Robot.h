@@ -8,9 +8,27 @@
 #include "PortIO.h"
 #include "MotorController.h"
 #include "Odometry.h"
-#include "DriveController.h"
+#include "MotionController.h"
+#include "PortController.h"
+#include "ServoController.h"
 #include "RobotState.h"
 #include "Protocol.h"
+#include "../types/CommandTypes.h"
+#include "../robot/ConfigRegistry.h"
+
+// Forward declarations — keeps the header-graph shallow.
+class DebugCommandable;
+class LoopScheduler;
+struct Robot;
+
+// ---------------------------------------------------------------------------
+// RobotSysCtx — context bundle for system command handlers (HELLO, PING, …).
+// handlerCtx for system CommandDescriptors is a RobotSysCtx*.
+// ---------------------------------------------------------------------------
+struct RobotSysCtx {
+    Robot*         robot;
+    LoopScheduler* sched;
+};
 
 /**
  * Robot — open struct that owns and wires all robot firmware subsystems.
@@ -22,7 +40,7 @@
  *
  * Devices (Motor, OtosSensor, LineSensor, ColorSensor, Servo, PortIO) are
  * constructed in main() as statics and held here as REFERENCES (not owned).
- * The control layer (MotorController, Odometry, DriveController) and state
+ * The control layer (MotorController, Odometry, MotionController) and state
  * (RobotConfig, RobotStateContainer) are VALUE MEMBERS owned by Robot.
  *
  * Member declaration order is load-bearing (C++ initialises members in
@@ -32,7 +50,8 @@
  *   3. otos, line, color, gripper, portio refs
  *   4. motorController         — needs motorL, motorR, config refs
  *   5. odometry                — default ctor
- *   6. driveController         — needs motorController, odometry, config
+ *   6. motionController        — needs motorController, odometry, config
+ *   7. portController          — needs portio ref
  */
 struct Robot {
     // ---- Owned value members (initialized first) ----
@@ -51,9 +70,11 @@ struct Robot {
     PortIO&             portio;
 
     // ---- Owned control-layer members (depend on refs above) ----
-    MotorController     motorController;  // (motorL, motorR, config)
-    Odometry            odometry;         // default ctor
-    DriveController     driveController;  // (motorController, odometry, config)
+    MotorController     motorController;   // (motorL, motorR, config)
+    Odometry            odometry;          // default ctor
+    MotionController    motionController;  // (motorController, odometry, config)
+    PortController      portController;    // (portio)
+    ServoController     servoController;   // (gripper)
 
     // ---- Constructor ----
     Robot(Motor& mL, Motor& mR, OtosSensor& o, LineSensor& l,
@@ -77,7 +98,7 @@ struct Robot {
     void colorRead();
     void portsRead();
 
-    // distanceDrive — calls driveController.beginDistance + zeroes encoder baseline
+    // distanceDrive — calls motionController.beginDistance + zeroes encoder baseline
     // in state.inputs so the outlier filter tracks from 0 (encoder-reset workaround).
     void distanceDrive(int32_t l, int32_t r, int32_t targetMm,
                        ReplyFn fn, void* ctx, const char* corr_id = nullptr);
@@ -91,9 +112,26 @@ struct Robot {
     // systemTime — robot system time in ms since boot.
     uint32_t systemTime() const;
 
+    // ---- Command-table building ----
+    // Aggregate all command descriptors into a vector:
+    //   Commandable members (motionController, odometry, portController,
+    //   servoController), optional DebugCommandable, then system commands
+    //   (HELLO, PING, ECHO, ID, VER, HELP, SNAP, ZERO, STREAM, RF,
+    //    GET VEL, GET, SET).
+    // sched may be nullptr; RF will reply ERR noradio if it is.
+    std::vector<CommandDescriptor> buildCommandTable(
+        DebugCommandable* dbg   = nullptr,
+        LoopScheduler*    sched = nullptr) const;
+
     // ---- Gating state that pairs with the kept methods ----
     uint32_t _lastTlmMs     = 0;
     uint32_t _lastActiveMs  = 0;
     uint32_t _lastControlMs = 0;
     bool     _prevDriving   = false;
+
+private:
+    // Stable storage for command contexts; pointers into these are placed in
+    // CommandDescriptors, which must outlive the CommandProcessor.
+    mutable CfgCtx      _cfgCtx  = {};  // GET / SET
+    mutable RobotSysCtx _sysCtx  = {};  // HELLO, PING, ECHO, ID, VER, …, RF
 };
