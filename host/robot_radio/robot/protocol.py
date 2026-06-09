@@ -436,22 +436,39 @@ class NezhaProtocol:
         """
         self._conn.send_fast(f"S {left_mms} {right_mms}")
 
-    def timed(self, left_mms: int, right_mms: int, ms: int) -> list[str]:
+    def timed(self, left_mms: int, right_mms: int, ms: int,
+             sensor: str | None = None) -> list[str]:
         """Send T command; return initial response lines.
 
-        Format: T <l> <r> <ms>
+        Format: T <l> <r> <ms> [sensor=<ch>:<op>:<thr>]
         Robot replies OK drive ...; later sends EVT done T.
+
+        Optional ``sensor`` modifier stops the drive early when a sensor crosses
+        a threshold.  Format: ``"<ch>:<op>:<thr>"`` where ch ∈ line0–line3,
+        colorR/G/B/C; op ∈ ge|le; thr is an integer raw ADC count.
+        Example: sensor="line0:ge:512"
         """
-        resp = self._conn.send(f"T {left_mms} {right_mms} {ms}", read_ms=300)
+        cmd = f"T {left_mms} {right_mms} {ms}"
+        if sensor is not None:
+            cmd += f" sensor={sensor}"
+        resp = self._conn.send(cmd, read_ms=300)
         return resp.get("responses", [])
 
-    def distance(self, left_mms: int, right_mms: int, mm: int) -> list[str]:
+    def distance(self, left_mms: int, right_mms: int, mm: int,
+                sensor: str | None = None) -> list[str]:
         """Send D command; return initial response lines.
 
-        Format: D <l> <r> <mm>
+        Format: D <l> <r> <mm> [sensor=<ch>:<op>:<thr>]
         Robot replies OK drive ...; later sends EVT done D.
+
+        Optional ``sensor`` modifier stops the drive early when a sensor crosses
+        a threshold.  Format: ``"<ch>:<op>:<thr>"`` (same as timed()).
+        Example: sensor="colorC:ge:800"
         """
-        resp = self._conn.send(f"D {left_mms} {right_mms} {mm}", read_ms=300)
+        cmd = f"D {left_mms} {right_mms} {mm}"
+        if sensor is not None:
+            cmd += f" sensor={sensor}"
+        resp = self._conn.send(cmd, read_ms=300)
         return resp.get("responses", [])
 
     def go_to(self, x_mm: int, y_mm: int, speed_mms: int) -> list[str]:
@@ -464,18 +481,21 @@ class NezhaProtocol:
         return resp.get("responses", [])
 
     def turn(self, heading_cdeg: int, eps_cdeg: int | None = None,
-             corr_id: str | None = None) -> list[str]:
+             corr_id: str | None = None,
+             sensor: str | None = None) -> list[str]:
         """Send TURN command — rotate to an absolute heading and stop within eps.
 
-        Format: TURN <heading_cdeg> [eps=<cdeg>] [#id]
+        Format: TURN <heading_cdeg> [eps=<cdeg>] [sensor=<ch>:<op>:<thr>] [#id]
         - ``heading_cdeg``: target heading in centidegrees (−18000 … +18000 = ±180°).
           Positive values are CCW (matches OTOS CCW convention).
         - ``eps_cdeg``: optional tolerance in centidegrees (default 300 = 3°;
           range 10–1800). Pass a tighter value for calibration use (e.g. 100 = 1°).
+        - ``sensor``: optional early-stop modifier; format ``"<ch>:<op>:<thr>"``
+          (same as timed() / distance()). Example: sensor="line0:ge:512"
         - ``corr_id``: optional correlation id; echoed in EVT done TURN.
 
         Robot replies ``OK turn heading=<cdeg> eps=<cdeg>`` synchronously.
-        On arrival within eps: ``EVT done TURN [#<id>]`` is emitted asynchronously.
+        On arrival within eps (or sensor trip): ``EVT done TURN [#<id>]`` emitted async.
 
         To wait for completion, use ``wait_for_evt_done("TURN", timeout_ms)``.
         Example::
@@ -486,10 +506,44 @@ class NezhaProtocol:
         cmd = f"TURN {heading_cdeg}"
         if eps_cdeg is not None:
             cmd += f" eps={eps_cdeg}"
+        if sensor is not None:
+            cmd += f" sensor={sensor}"
         if corr_id is not None:
             cmd += f" #{corr_id}"
         resp = self._conn.send(cmd, read_ms=300)
         return resp.get("responses", [])
+
+    def drive_until_sensor(self, left_mms: int, right_mms: int,
+                           duration_ms: int,
+                           channel: str, threshold: int,
+                           op: str = "ge") -> list[str]:
+        """Drive timed until a sensor crosses a threshold (or duration expires).
+
+        Convenience wrapper around T with a ``sensor=`` modifier.  The drive stops
+        at whichever comes first: the sensor condition or the time limit.
+
+        Args:
+            left_mms:   Left wheel speed in mm/s (−1000 … +1000).
+            right_mms:  Right wheel speed in mm/s (−1000 … +1000).
+            duration_ms: Maximum duration in ms (1 … 30000). Acts as a safety timeout.
+            channel:    Sensor channel name: line0–line3, colorR, colorG, colorB, colorC.
+            threshold:  Integer threshold in raw sensor units (uint16_t ADC counts).
+            op:         Comparison operator: "ge" (≥, default) or "le" (≤).
+
+        Returns:
+            Initial response lines from the firmware (OK drive … or ERR …).
+            EVT done T is emitted asynchronously; wait with wait_for_evt_done("T").
+
+        Wire format: ``T <left_mms> <right_mms> <duration_ms> sensor=<channel>:<op>:<threshold>``
+
+        Example::
+
+            proto.drive_until_sensor(200, 200, 10000, "line0", 512)
+            result = proto.wait_for_evt_done("T", timeout_ms=12000)
+            # result is "done" (sensor tripped) or "timeout"
+        """
+        sensor_token = f"{channel}:{op}:{threshold}"
+        return self.timed(left_mms, right_mms, duration_ms, sensor=sensor_token)
 
     def grip(self, deg: int | None = None) -> int | None:
         """Send GRIP [deg] command. Returns confirmed degree or None.

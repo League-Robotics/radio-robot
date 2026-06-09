@@ -1,13 +1,13 @@
 ---
-id: "006"
-title: "sensor= modifier — attach SENSOR stop to T, D, TURN commands"
-status: open
+id: '006'
+title: "sensor= modifier \u2014 attach SENSOR stop to T, D, TURN commands"
+status: done
 use-cases:
 - SUC-006
 depends-on:
-- "005"
-github-issue: ""
-issue: ""
+- '005'
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -69,19 +69,20 @@ as a helper that wraps T with a `sensor=` modifier. Also update `timed()`, `dist
 
 ## Acceptance Criteria
 
-- [ ] `T 200 200 5000 sensor=line0:ge:512` stops early when line[0] ≥ 512, emits `EVT done T`.
-- [ ] `T 200 200 5000 sensor=line0:ge:512` also stops at 5 s if sensor never trips.
-- [ ] `sensor=` absent → same behaviour as before (backward compatible).
-- [ ] Unknown channel name → `ERR badarg sensor`.
-- [ ] Unknown operator → `ERR badarg sensor`.
-- [ ] `addStop` after `start()` is verified safe (check against MotionCommand implementation;
+- [x] `T 200 200 5000 sensor=line0:ge:512` stops early when line[0] ≥ 512, emits `EVT done T`.
+- [x] `T 200 200 5000 sensor=line0:ge:512` also stops at 5 s if sensor never trips.
+- [x] `sensor=` absent → same behaviour as before (backward compatible).
+- [x] Unknown channel name → `ERR badarg sensor`.
+- [x] Unknown operator → `ERR badarg sensor`.
+- [x] `addStop` after `start()` is verified safe (check against MotionCommand implementation;
   note in code comment).
-- [ ] SENSOR conditions for all 8 named channels fire correctly (Python unit test using
+- [x] SENSOR conditions for all 8 named channels fire correctly (Python unit test using
   `test_stop_condition.py` pattern — SENSOR kind was tested in 017 but channel-name
   resolution is new here).
-- [ ] `drive_until_sensor()` wrapper in `protocol.py`.
-- [ ] `uv run --with pytest python -m pytest -q` passes at 1179/8 baseline.
-- [ ] Clean build: `python3 build.py --clean` succeeds.
+- [x] `drive_until_sensor()` wrapper in `protocol.py`.
+- [x] `uv run --with pytest python -m pytest -q` passes at 1292/8 baseline (1324/8 after new tests).
+- [x] Clean build: `python3 build.py --clean` succeeds.
+- NOTE: On-robot bench (`T 200 200 10000 sensor=line0:ge:512` — robot stops on line crossing) is stakeholder-deferred.
 
 ## Implementation Plan
 
