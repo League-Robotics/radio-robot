@@ -1,7 +1,7 @@
 ---
 id: 018
 title: Motion command migration
-status: planning-docs
+status: done
 branch: sprint/018-motion-command-migration
 use-cases:
 - SUC-001
