@@ -179,3 +179,124 @@ def test_zero_d_resets_dist_baseline(sim):
     r = sim.send_command("ZERO D")
     assert "D" in r, f"Expected D in ZERO D reply, got {repr(r)}"
     assert "OK" in r.upper(), f"Expected OK from ZERO D, got {repr(r)}"
+
+
+# ---------------------------------------------------------------------------
+# HALT POS
+# ---------------------------------------------------------------------------
+
+def test_halt_pos_registers(sim):
+    """HALT POS 500 0 50 returns OK HALT id=<n>."""
+    r = sim.send_command("HALT POS 500 0 50")
+    assert "OK" in r.upper(), f"Expected OK from HALT POS, got {repr(r)}"
+    assert "id=" in r, f"Expected id= in HALT POS reply, got {repr(r)}"
+
+
+def test_halt_pos_fires_when_in_radius(sim):
+    """HALT POS fires when robot pose is within the radius."""
+    sim.send_command("SET sTimeout=60000")
+    sim.send_command("VW 200 0")
+
+    # Register a position halt at (0, 0) with a very large radius
+    # so it fires immediately since the mock robot starts near the origin.
+    r = sim.send_command("HALT POS 0 0 10000")
+    assert "id=" in r, f"Expected id= in HALT POS reply, got {repr(r)}"
+
+    # Tick a little — condition should fire quickly given the huge radius.
+    sim.tick_for(200)
+    evts = sim.get_async_evts()
+    halt_id = _find_evt_halt(evts)
+    assert halt_id is not None, (
+        f"Expected 'EVT halt' after HALT POS 0 0 10000 (large radius), "
+        f"got: {repr(evts)}"
+    )
+
+
+def test_halt_pos_does_not_fire_outside_radius(sim):
+    """HALT POS does not fire when pose is outside the radius."""
+    sim.send_command("SET sTimeout=60000")
+    # Robot starts near origin; register a far-away target that should not fire
+    # within a short tick window.
+    r = sim.send_command("HALT POS 999999 999999 1")
+    assert "id=" in r, f"Expected id= in HALT POS reply, got {repr(r)}"
+
+    sim.send_command("VW 200 0")
+    sim.tick_for(200)
+    evts = sim.get_async_evts()
+    assert _find_evt_halt(evts) is None, (
+        f"Expected no EVT halt for far-away HALT POS, got: {repr(evts)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# HALT COLOR
+# ---------------------------------------------------------------------------
+
+def test_halt_color_registers(sim):
+    """HALT COLOR 120 0.8 0.6 0.3 returns OK HALT id=<n>."""
+    r = sim.send_command("HALT COLOR 120 0.8 0.6 0.3")
+    assert "OK" in r.upper(), f"Expected OK from HALT COLOR, got {repr(r)}"
+    assert "id=" in r, f"Expected id= in HALT COLOR reply, got {repr(r)}"
+
+
+# ---------------------------------------------------------------------------
+# HALT INFO
+# ---------------------------------------------------------------------------
+
+def test_halt_info_returns_original_string(sim):
+    """HALT INFO <id> replies with str= containing the original command label."""
+    r = sim.send_command("HALT POS 500 0 50")
+    assert "id=" in r, f"Expected id= in HALT POS reply, got {repr(r)}"
+    import re
+    m = re.search(r"id=(\d+)", r)
+    assert m, f"Could not parse id from {repr(r)}"
+    cid = int(m.group(1))
+
+    info = sim.send_command(f"HALT INFO {cid}")
+    assert "OK" in info.upper(), f"Expected OK from HALT INFO, got {repr(info)}"
+    assert "str=" in info, f"Expected str= in HALT INFO reply, got {repr(info)}"
+    # Label contains the key fields we formatted.
+    assert "POS" in info, f"Expected POS in info str, got {repr(info)}"
+
+
+def test_halt_info_not_found(sim):
+    """HALT INFO on a non-existent id returns ERR notfound."""
+    r = sim.send_command("HALT INFO 255")
+    assert "ERR" in r.upper(), f"Expected ERR for unknown HALT INFO id, got {repr(r)}"
+
+
+# ---------------------------------------------------------------------------
+# HALT CLEAR <id>
+# ---------------------------------------------------------------------------
+
+def test_halt_clear_id_removes_one(sim):
+    """HALT CLEAR <id> removes a single entry; the other remains."""
+    sim.send_command("ZERO T")
+    r0 = sim.send_command("HALT TIME 500")
+    r1 = sim.send_command("HALT TIME 600")
+    assert "id=0" in r0, f"Expected id=0 in first HALT TIME reply, got {repr(r0)}"
+    assert "id=1" in r1, f"Expected id=1 in second HALT TIME reply, got {repr(r1)}"
+
+    # Clear only id=0.
+    rc = sim.send_command("HALT CLEAR 0")
+    assert "OK" in rc.upper(), f"Expected OK from HALT CLEAR 0, got {repr(rc)}"
+    assert "cleared" in rc and "0" in rc, f"Expected cleared id=0 in reply, got {repr(rc)}"
+
+    # id=0 should be gone; id=1 should still be info-able.
+    ri = sim.send_command("HALT INFO 1")
+    assert "OK" in ri.upper(), f"Expected id=1 still present after HALT CLEAR 0, got {repr(ri)}"
+    # id=0 should now be notfound.
+    ri0 = sim.send_command("HALT INFO 0")
+    # After remove(), info() finds it but reports active=no, or it may not be found.
+    # Acceptable: either ERR notfound OR active=no in the reply.
+    # The implementation searches all entries including inactive ones (not found only
+    # if id is completely unknown), but active=no will appear in the reply.
+    # Just verify the entry was indeed deactivated by checking HALT LIST count decreased.
+    rl = sim.send_command("HALT LIST")
+    assert "count=1" in rl, f"Expected count=1 after removing id=0, got {repr(rl)}"
+
+
+def test_halt_clear_id_not_found(sim):
+    """HALT CLEAR <id> with an unknown id returns ERR notfound."""
+    rc = sim.send_command("HALT CLEAR 200")
+    assert "ERR" in rc.upper(), f"Expected ERR for unknown HALT CLEAR id, got {repr(rc)}"

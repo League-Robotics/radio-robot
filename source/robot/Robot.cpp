@@ -953,16 +953,17 @@ static ParseResult parseHalt(const char* const* tokens, int ntokens,
     ParseResult r;
     if (ntokens < 1) {
         r.ok = false;
-        r.err = { "badarg", "usage: HALT TIME|DIST|LINE|CLEAR|LIST ..." };
+        r.err = { "badarg", "usage: HALT TIME|DIST|POS|COLOR|LINE|CLEAR|INFO|LIST ..." };
         return r;
     }
     // Validate sub-verb.
     const char* sv = tokens[0];
-    if (strcmp(sv, "TIME") != 0 && strcmp(sv, "DIST") != 0 &&
-        strcmp(sv, "LINE") != 0 && strcmp(sv, "CLEAR") != 0 &&
-        strcmp(sv, "LIST") != 0) {
+    if (strcmp(sv, "TIME")  != 0 && strcmp(sv, "DIST")  != 0 &&
+        strcmp(sv, "LINE")  != 0 && strcmp(sv, "CLEAR") != 0 &&
+        strcmp(sv, "LIST")  != 0 && strcmp(sv, "POS")   != 0 &&
+        strcmp(sv, "COLOR") != 0 && strcmp(sv, "INFO")  != 0) {
         r.ok = false;
-        r.err = { "badarg", "usage: HALT TIME|DIST|LINE|CLEAR|LIST ..." };
+        r.err = { "badarg", "usage: HALT TIME|DIST|POS|COLOR|LINE|CLEAR|INFO|LIST ..." };
         return r;
     }
     // Pass all tokens as STR args.
@@ -998,11 +999,27 @@ static void handleHalt(const ArgList& args, const char* corrId,
 
     // ---- CLEAR ----
     if (strcmp(sv, "CLEAR") == 0) {
-        int n = robot->haltController.clear();
-        char body[32];
-        snprintf(body, sizeof(body), "cleared=%d", n);
-        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "HALT", body,
-                                   corrId, replyFn, replyCtx);
+        if (args.count >= 2) {
+            // HALT CLEAR <id> — remove one entry by id.
+            uint8_t rmid = (uint8_t)atoi(args.args[1].sval);
+            bool removed = robot->haltController.remove(rmid);
+            if (!removed) {
+                CommandProcessor::replyErr(rbuf, sizeof(rbuf), "notfound", "id",
+                                           corrId, replyFn, replyCtx);
+                return;
+            }
+            char body[32];
+            snprintf(body, sizeof(body), "cleared id=%u", (unsigned)rmid);
+            CommandProcessor::replyOK(rbuf, sizeof(rbuf), "HALT", body,
+                                       corrId, replyFn, replyCtx);
+        } else {
+            // HALT CLEAR — remove all entries.
+            int n = robot->haltController.clear();
+            char body[32];
+            snprintf(body, sizeof(body), "cleared=%d", n);
+            CommandProcessor::replyOK(rbuf, sizeof(rbuf), "HALT", body,
+                                       corrId, replyFn, replyCtx);
+        }
         return;
     }
 
@@ -1134,9 +1151,103 @@ static void handleHalt(const ArgList& args, const char* corrId,
         return;
     }
 
+    // ---- POS ----
+    if (strcmp(sv, "POS") == 0) {
+        // Wire: HALT POS <x_mm> <y_mm> <radius_mm>
+        if (args.count < 4) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg",
+                                       "usage: HALT POS <x_mm> <y_mm> <radius_mm>",
+                                       corrId, replyFn, replyCtx);
+            return;
+        }
+        float x   = (float)atof(args.args[1].sval);
+        float y   = (float)atof(args.args[2].sval);
+        float rad = (float)atof(args.args[3].sval);
+        StopStyle style = StopStyle::HARD;
+        if (args.count >= 5 && strcmp(args.args[4].sval, "SOFT") == 0)
+            style = StopStyle::SOFT;
+
+        StopCondition cond = makePositionStop(x, y, rad);
+        char label[40];
+        // Use integer mm to keep label well within StopEntry.str[40].
+        // "POS -32000 -32000 32000" = 22 chars — fits comfortably.
+        snprintf(label, sizeof(label), "POS %d %d %d",
+                 (int)x, (int)y, (int)rad);
+        int id = robot->haltController.add(cond, style, label);
+        if (id < 0) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
+                                       "halt table full (max 8)",
+                                       corrId, replyFn, replyCtx);
+            return;
+        }
+        char body[32];
+        snprintf(body, sizeof(body), "id=%d", id);
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "HALT", body,
+                                   corrId, replyFn, replyCtx);
+        return;
+    }
+
+    // ---- COLOR ----
+    if (strcmp(sv, "COLOR") == 0) {
+        // Wire: HALT COLOR <h> <s> <v> <dist>
+        if (args.count < 5) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg",
+                                       "usage: HALT COLOR <h> <s> <v> <dist>",
+                                       corrId, replyFn, replyCtx);
+            return;
+        }
+        float h    = (float)atof(args.args[1].sval);
+        float s    = (float)atof(args.args[2].sval);
+        float v    = (float)atof(args.args[3].sval);
+        float dist = (float)atof(args.args[4].sval);
+        StopStyle style = StopStyle::HARD;
+        if (args.count >= 6 && strcmp(args.args[5].sval, "SOFT") == 0)
+            style = StopStyle::SOFT;
+
+        StopCondition cond = makeColorStop(h, s, v, dist);
+        char label[40];
+        // Format as fixed 2-decimal for HSV floats; keep within StopEntry.str[40].
+        // "COLOR 360.00 1.00 1.00 1.00" = 28 chars — fits comfortably.
+        snprintf(label, sizeof(label), "COLOR %.2f %.2f %.2f %.2f",
+                 (double)h, (double)s, (double)v, (double)dist);
+        int id = robot->haltController.add(cond, style, label);
+        if (id < 0) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
+                                       "halt table full (max 8)",
+                                       corrId, replyFn, replyCtx);
+            return;
+        }
+        char body[32];
+        snprintf(body, sizeof(body), "id=%d", id);
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "HALT", body,
+                                   corrId, replyFn, replyCtx);
+        return;
+    }
+
+    // ---- INFO ----
+    if (strcmp(sv, "INFO") == 0) {
+        // Wire: HALT INFO <id>
+        if (args.count < 2) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg",
+                                       "usage: HALT INFO <id>",
+                                       corrId, replyFn, replyCtx);
+            return;
+        }
+        uint8_t qid = (uint8_t)atoi(args.args[1].sval);
+        char infoBuf[80];
+        if (!robot->haltController.info(qid, infoBuf, sizeof(infoBuf))) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "notfound", "id",
+                                       corrId, replyFn, replyCtx);
+            return;
+        }
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "HALT", infoBuf,
+                                   corrId, replyFn, replyCtx);
+        return;
+    }
+
     // Unknown sub-verb (should not reach here after parseHalt validation).
     CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg",
-                               "usage: HALT TIME|DIST|LINE|CLEAR|LIST ...",
+                               "usage: HALT TIME|DIST|POS|COLOR|LINE|CLEAR|INFO|LIST ...",
                                corrId, replyFn, replyCtx);
 }
 

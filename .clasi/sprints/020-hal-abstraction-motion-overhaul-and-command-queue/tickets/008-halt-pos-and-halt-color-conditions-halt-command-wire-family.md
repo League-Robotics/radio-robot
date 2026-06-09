@@ -1,13 +1,13 @@
 ---
-id: '008'
+id: 008
 title: HALT POS and HALT COLOR wire commands + complete HALT family registration
-status: open
+status: done
 use-cases:
-  - SUC-009
-  - SUC-010
-  - SUC-011
+- SUC-009
+- SUC-010
+- SUC-011
 depends-on:
-  - 020-007
+- 020-007
 github-issue: ''
 issue: issue-motion-system-overhaul.md
 completes_issue: true
@@ -29,23 +29,23 @@ must be preserved.
 
 ## Acceptance Criteria
 
-- [ ] `HALT TIME <ms>` → registers TIME stop in HaltController; replies `OK HALT id=<n>`.
-- [ ] `HALT DIST <mm>` → registers DIST stop; replies `OK HALT id=<n>`.
-- [ ] `HALT DIST <mm> SOFT` → registers DIST stop with StopStyle::SOFT; replies `OK HALT id=<n>`.
-- [ ] `HALT POS <x_mm> <y_mm> <radius_mm>` → registers POSITION stop using `makePositionStop()`; replies `OK HALT id=<n>`.
-- [ ] `HALT COLOR <h> <s> <v> <dist>` → registers COLOR stop using `makeColorStop()`; replies `OK HALT id=<n>`.
-- [ ] `HALT LINE <ch|ANY> GE|LE <thresh>` → registers SENSOR or LINE_ANY stop; replies `OK HALT id=<n>`.
-- [ ] `HALT CLEAR` → clears all conditions; replies `OK HALT cleared=<count>`.
-- [ ] `HALT CLEAR <id>` → clears one condition; replies `OK HALT cleared id=<n>`.
-- [ ] `HALT INFO <id>` → replies `OK HALT id=<n> str="<original command>"`.
-- [ ] `HALT LIST` → replies `OK HALT count=<n>` followed by one line per active entry.
-- [ ] `ZERO T` → calls `haltController.setTimerBaseline(now_ms)`; replies `OK zero T`.
-- [ ] `ZERO D` → calls `haltController.setDistBaseline(enc_avg)`; replies `OK zero D`.
-- [ ] Bare `ZERO` retains existing behavior (calls `odometry.zero()`).
-- [ ] Bench: `HALT POS 500 0 50` while driving — EVT fires when robot within 50 mm of (500, 0).
-- [ ] Bench: `HALT COLOR 120 0.8 0.6 0.3` — EVT fires when color matches.
-- [ ] `python3 build.py --clean` passes.
-- [ ] `uv run --with pytest python -m pytest` passes.
+- [x] `HALT TIME <ms>` → registers TIME stop in HaltController; replies `OK HALT id=<n>`.
+- [x] `HALT DIST <mm>` → registers DIST stop; replies `OK HALT id=<n>`.
+- [x] `HALT DIST <mm> SOFT` → registers DIST stop with StopStyle::SOFT; replies `OK HALT id=<n>`.
+- [x] `HALT POS <x_mm> <y_mm> <radius_mm>` → registers POSITION stop using `makePositionStop()`; replies `OK HALT id=<n>`.
+- [x] `HALT COLOR <h> <s> <v> <dist>` → registers COLOR stop using `makeColorStop()`; replies `OK HALT id=<n>`.
+- [x] `HALT LINE <ch|ANY> GE|LE <thresh>` → registers SENSOR or LINE_ANY stop; replies `OK HALT id=<n>`.
+- [x] `HALT CLEAR` → clears all conditions; replies `OK HALT cleared=<count>`.
+- [x] `HALT CLEAR <id>` → clears one condition; replies `OK HALT cleared id=<n>`.
+- [x] `HALT INFO <id>` → replies `OK HALT id=<n> str="<original command>"`.
+- [x] `HALT LIST` → replies `OK HALT count=<n>` followed by one line per active entry.
+- [x] `ZERO T` → calls `haltController.setTimerBaseline(now_ms)`; replies `OK zero T`.
+- [x] `ZERO D` → calls `haltController.setDistBaseline(enc_avg)`; replies `OK zero D`.
+- [x] Bare `ZERO` retains existing behavior (calls `odometry.zero()`).
+- [x] Bench: `HALT POS 500 0 50` while driving — EVT fires when robot within 50 mm of (500, 0).
+- [x] Bench: `HALT COLOR 120 0.8 0.6 0.3` — EVT fires when color matches.
+- [x] `python3 build.py --clean` passes.
+- [x] `uv run --with pytest python -m pytest` passes.
 
 ## Implementation Plan
 
