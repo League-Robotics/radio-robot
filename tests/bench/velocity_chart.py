@@ -540,11 +540,22 @@ def main() -> int:
         if not t_buf:
             return
 
-        t_arr = np.array(t_buf)
+        # Snapshot the buffers to a COMMON length first. The worker thread
+        # appends to these deques while we read them here, so they can be
+        # momentarily unequal — and matplotlib crashes when an x/y pair given
+        # to set_data() has mismatched lengths. Slice all to the shortest.
+        tl, vll, vrl = list(t_buf), list(vL_buf), list(vR_buf)
+        pxl, pyl = list(px_buf), list(py_buf)
+        n = min(len(tl), len(vll), len(vrl), len(pxl), len(pyl))
+        if n < 1:
+            return
+        t_arr = np.array(tl[-n:])
         now = t_arr[-1]
         age = now - t_arr            # 0 = newest (right edge), grows to the left
-        vl = np.array(vL_buf, dtype=float)
-        vr = np.array(vR_buf, dtype=float)
+        vl = np.array(vll[-n:], dtype=float)
+        vr = np.array(vrl[-n:], dtype=float)
+        px_arr = np.array(pxl[-n:], dtype=float)
+        py_arr = np.array(pyl[-n:], dtype=float)
 
         ln_vL.set_data(age, vl)
         ln_vR.set_data(age, vr)
@@ -591,10 +602,10 @@ def main() -> int:
         phase_dot.set_data([vl[-1]], [vr[-1]])
 
         # odometry
-        ln_px.set_data(age, np.array(px_buf, dtype=float))
-        ln_py.set_data(age, np.array(py_buf, dtype=float))
-        pmin = min(min(px_buf), min(py_buf))
-        pmax = max(max(px_buf), max(py_buf))
+        ln_px.set_data(age, px_arr)
+        ln_py.set_data(age, py_arr)
+        pmin = min(px_arr.min(), py_arr.min())
+        pmax = max(px_arr.max(), py_arr.max())
         if pmax > pmin:
             pad = 0.1 * (pmax - pmin) + 5
             ax_odom.set_ylim(pmin - pad, pmax + pad)

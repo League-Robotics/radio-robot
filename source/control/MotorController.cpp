@@ -426,7 +426,12 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
     // prevents the bang-bang setpoint switch that caused oscillation.
     float effTgtL = cmds.tgtLMms;
     float effTgtR = cmds.tgtRMms;
-    if (_cal.syncGain > 0.0f && cmds.tgtLMms != 0.0f && cmds.tgtRMms != 0.0f) {
+    // Only couple when BOTH wheels drive the SAME direction (straight / curve).
+    // For a spin-in-place the targets are opposite-sign (tgtL=-X, tgtR=+X); the
+    // "slowest-wheel-governs" math (coupled = velOther/ratio, ratio<0) then
+    // collapses the faster wheel toward the lagging one and the spin degenerates
+    // to a single wheel. Same-sign-only (product > 0) keeps spins independent.
+    if (_cal.syncGain > 0.0f && cmds.tgtLMms * cmds.tgtRMms > 0.0f) {
         float ratio = cmds.tgtRMms / cmds.tgtLMms;        // commanded vR/vL
         float achL  = inputs.velLMms / cmds.tgtLMms;      // fraction-of-target each wheel does
         float achR  = inputs.velRMms / cmds.tgtRMms;
