@@ -415,22 +415,33 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
     // Cross-wheel coupling — "slowest wheel governs" (015). Computed BEFORE the
     // per-wheel PID by adjusting the effective setpoints (not the PWM), so the
     // per-wheel PID does the work and there is no fighting. The wheel that is
-    // ACHIEVING more of its target is slaved to the slower wheel's actual speed
-    // at the commanded ratio: disturbing one wheel pulls the other onto the
-    // ratio line, and a fully-held wheel (vel -> 0) drags the other to 0. A
-    // deadband lets the per-wheel PID absorb LIGHT touches (point doesn't move);
-    // only a real, sustained discrepancy couples. SET sync=0 -> independent.
+    // ACHIEVING more of its target is slaved toward the slower wheel's pace;
+    // disturbing one wheel pulls the other onto the ratio line. A deadband lets
+    // the per-wheel PID absorb LIGHT touches; only a real, sustained discrepancy
+    // couples. SET sync=0 -> independent.
+    //
+    // Blend fraction = syncGain * (discrepancy - deadband), clamped [0,1].
+    // At syncGain=1 the coupled target reaches the fully-matched value only when
+    // the discrepancy is 100 % (one wheel fully stopped).  Proportional blending
+    // prevents the bang-bang setpoint switch that caused oscillation.
     float effTgtL = cmds.tgtLMms;
     float effTgtR = cmds.tgtRMms;
     if (_cal.syncGain > 0.0f && cmds.tgtLMms != 0.0f && cmds.tgtRMms != 0.0f) {
         float ratio = cmds.tgtRMms / cmds.tgtLMms;        // commanded vR/vL
         float achL  = inputs.velLMms / cmds.tgtLMms;      // fraction-of-target each wheel does
         float achR  = inputs.velRMms / cmds.tgtRMms;
-        const float deadband = 0.08f;                     // ignore light-touch differences
-        if (achL - achR > deadband) {
-            effTgtL = inputs.velRMms / ratio;             // left ahead -> follow right
-        } else if (achR - achL > deadband) {
-            effTgtR = inputs.velLMms * ratio;             // right ahead -> follow left
+        const float deadband = 0.08f;
+        float disc = achL - achR;                         // positive = left ahead
+        if (disc > deadband) {
+            float blend = _cal.syncGain * (disc - deadband);
+            if (blend > 1.0f) blend = 1.0f;
+            float coupled = inputs.velRMms / ratio;       // fully-matched target
+            effTgtL = cmds.tgtLMms * (1.0f - blend) + coupled * blend;
+        } else if (-disc > deadband) {
+            float blend = _cal.syncGain * (-disc - deadband);
+            if (blend > 1.0f) blend = 1.0f;
+            float coupled = inputs.velLMms * ratio;
+            effTgtR = cmds.tgtRMms * (1.0f - blend) + coupled * blend;
         }
     }
 
