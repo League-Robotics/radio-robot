@@ -1,7 +1,7 @@
 ---
 id: '021'
 title: Mock Hardware Noise Model and Figure-Eight Demo
-status: planning-docs
+status: done
 branch: sprint/021-mock-hardware-noise-model-and-figure-eight-demo
 use-cases:
 - SUC-001
