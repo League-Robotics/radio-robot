@@ -119,6 +119,7 @@ static functions in the same file unless noted.
 | `STREAM` | start/stop periodic TLM stream | [`handleStream`](robot/Robot.cpp#L683) | [`parseStream`](robot/Robot.cpp#L661) |
 | `RF` | set radio channel | [`handleRf`](robot/Robot.cpp#L781) | [`parseRf`](robot/Robot.cpp#L764) |
 | `+` | keepalive: reset watchdog | [`handleKeepalive`](robot/Robot.cpp#L914) | [`parseKeepalive`](robot/Robot.cpp#L908) |
+| `SAFE [off\|on [ms]]` | enable/disable safety-stop watchdog; optional timeout ms; `SAFE` alone queries. Reply: `OK safety on\|off timeout=<ms>` | `handleSafe` | `parseSafe` |
 | `GET VEL` | get velocity PID params | [`handleGetVel`](robot/Robot.cpp#L834) | [`parseGetVel`](robot/Robot.cpp#L828) |
 | `GET` | get config value by key | [`handleGet`](robot/ConfigRegistry.cpp#L155) | [`parseGet`](robot/Robot.cpp#L851) |
 | `SET` | set config value by key | [`handleSet`](robot/ConfigRegistry.cpp#L232) | [`parseSet`](robot/Robot.cpp#L874) |

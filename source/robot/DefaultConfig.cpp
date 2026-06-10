@@ -99,6 +99,7 @@ RobotConfig defaultRobotConfig() {
     p.minSpeedMms     = 50;
     p.tickMs          = 20;
     p.sTimeoutMs      = 500;
+    p.safetyEnabled   = true;
     p.controlPeriodMs = 10;
     p.tlmPeriodMs     = 0;
     p.tlmFields       = 0xFF;

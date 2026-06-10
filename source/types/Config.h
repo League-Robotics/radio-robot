@@ -147,6 +147,12 @@ struct RobotConfig {
     int32_t tickMs;
     int32_t sTimeoutMs;
 
+    // System safety-stop watchdog enable. When false the watchdog never fires
+    // (host keepalives not required) — for classroom T-driving where students
+    // send self-terminating commands without streaming "+". Toggle at runtime
+    // with the SAFE command (SAFE off / SAFE on [ms]). Default true.
+    bool safetyEnabled;
+
     // Control fiber period in ms.  The control fiber (encoder reads → PID →
     // setSpeed) sleeps this many ms between iterations.  Distinct from tickMs
     // so the control rate can be tuned independently of the legacy tick cadence.

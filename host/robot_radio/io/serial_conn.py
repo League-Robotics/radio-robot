@@ -1,6 +1,7 @@
 """Serial connection management for micro:bit relay/direct devices."""
 
 import glob
+import threading
 import time
 from typing import Any
 
@@ -9,6 +10,13 @@ import serial
 BAUD_RATE = 115200
 DEFAULT_PORT = "/dev/cu.usbmodem21431202"
 READ_TIMEOUT_S = 0.12
+
+# System safety-stop watchdog keepalive. The firmware safety-stops ANY motion
+# after sTimeoutMs (default 500) of host silence, so the host must continuously
+# send "+" keepalives while connected. We send them from a background daemon
+# thread well inside that window, so if this process dies the keepalives stop
+# and the robot safety-stops on its own. See LoopScheduler.cpp watchdog.
+_KEEPALIVE_PERIOD_S = 0.15
 
 # Active readiness-poll constants.
 # After opening the serial port, the device is not immediately ready — the
@@ -54,6 +62,11 @@ class SerialConnection:
         self._mode = mode  # None = auto-detect from announcement
         self._ser: serial.Serial | None = None
         self.on_send = on_send  # callback(cmd_str) for verbose logging
+        # Serial-write lock: serializes the keepalive thread's writes with the
+        # main thread's command writes so their bytes never interleave.
+        self._write_lock = threading.RLock()
+        self._ka_thread: threading.Thread | None = None
+        self._ka_stop = threading.Event()
 
     @property
     def is_open(self) -> bool:
@@ -121,6 +134,7 @@ class SerialConnection:
                 self._mode = "relay"
 
             if skip_ping:
+                self.start_keepalive()
                 return {
                     "status": "connected",
                     "port": self._port,
@@ -132,6 +146,7 @@ class SerialConnection:
             # Normal path: active readiness poll via PING.
             lines = self._poll_ready(total_timeout_s=_POLL_TOTAL_NORMAL_S)
 
+            self.start_keepalive()
             return {
                 "status": "connected",
                 "port": self._port,
@@ -165,10 +180,45 @@ class SerialConnection:
     def disconnect(self) -> dict[str, Any]:
         if not self.is_open:
             return {"status": "not_connected"}
+        self.stop_keepalive()
         port = self._port
         self._ser.close()
         self._ser = None
         return {"status": "disconnected", "port": port}
+
+    # ── safety-stop keepalive ────────────────────────────────────────────────
+    def start_keepalive(self, period_s: float = _KEEPALIVE_PERIOD_S) -> None:
+        """Start a background daemon thread that streams "+" keepalives so the
+        firmware safety-stop watchdog never trips during normal operation. If
+        this process dies the daemon thread dies with it, keepalives stop, and
+        the robot safety-stops on its own. Idempotent."""
+        if self._ka_thread is not None and self._ka_thread.is_alive():
+            return
+        self._ka_stop.clear()
+        self._ka_thread = threading.Thread(
+            target=self._keepalive_loop, args=(period_s,),
+            name="serial-keepalive", daemon=True)
+        self._ka_thread.start()
+
+    def stop_keepalive(self) -> None:
+        self._ka_stop.set()
+        t = self._ka_thread
+        if t is not None and t.is_alive() and t is not threading.current_thread():
+            t.join(timeout=1.0)
+        self._ka_thread = None
+
+    def _keepalive_loop(self, period_s: float) -> None:
+        msg = b">+\n" if self._mode == "relay" else b"+\n"
+        while not self._ka_stop.wait(period_s):
+            try:
+                if not self.is_open:
+                    break
+                with self._write_lock:
+                    if self._ser is not None:
+                        self._ser.write(msg)
+                        self._ser.flush()
+            except Exception:
+                break   # port closed / gone — let the robot safety-stop
 
     def send(self, message: str, read_ms: int = 500, stop_token: str | None = "OK") -> dict[str, Any]:
         """Send command with mode prefix, read and return responses.
@@ -187,9 +237,10 @@ class SerialConnection:
         cmd = f">{message}\n" if self._mode == "relay" else f"{message}\n"
         if self.on_send:
             self.on_send(cmd.rstrip())
-        self._ser.reset_input_buffer()
-        self._ser.write(cmd.encode("utf-8"))
-        self._ser.flush()
+        with self._write_lock:
+            self._ser.reset_input_buffer()
+            self._ser.write(cmd.encode("utf-8"))
+            self._ser.flush()
         lines = self.read_lines(read_ms, stop_token=stop_token)
         return {"sent": message, "mode": self._mode, "responses": lines}
 
@@ -201,8 +252,9 @@ class SerialConnection:
         
         if self.on_send:
             self.on_send(cmd.rstrip())
-        self._ser.write(cmd.encode("utf-8"))
-        self._ser.flush()
+        with self._write_lock:
+            self._ser.write(cmd.encode("utf-8"))
+            self._ser.flush()
 
     def read_lines(self, duration_ms: int = 500, stop_token: str | None = None) -> list[str]:
         """Read lines from the serial port within the given duration.
@@ -227,10 +279,15 @@ class SerialConnection:
             if not raw:
                 continue
             text = raw.decode("utf-8", "ignore").strip()
-            if text:
-                lines.append(text)
-                if stop_token and stop_token in text:
-                    break
+            if not text:
+                continue
+            # Drop keepalive acks so they never satisfy a caller's stop_token
+            # (e.g. "OK keepalive" must not match stop_token "OK").
+            if "keepalive" in text:
+                continue
+            lines.append(text)
+            if stop_token and stop_token in text:
+                break
         return lines
 
 

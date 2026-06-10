@@ -533,7 +533,7 @@ static void handleHelp(const ArgList& /*args*/, const char* corrId,
     char rbuf[520];
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "help",
         "PING ECHO ID VER HELP SET GET GET VEL STREAM SNAP "
-        "S T D G R TURN RT VW RF X STOP GRIP ZERO "
+        "S T D G R TURN RT VW RF X STOP GRIP ZERO + SAFE "
         "OI OZ OR OP OV OL OA P PA "
         "[sensor=<ch>:<op>:<thr>]",
         corrId, replyFn, replyCtx);
@@ -929,6 +929,75 @@ static void handleKeepalive(const ArgList& /*args*/, const char* corrId,
 }
 
 // ---------------------------------------------------------------------------
+// SAFE — enable/disable the system safety-stop watchdog and set its timeout.
+//   SAFE                 → query: "OK safety on|off timeout=<ms>"
+//   SAFE off  (or SAFE 0)→ disable the watchdog (no keepalives required)
+//   SAFE on   [<ms>]     → enable; optional <ms> sets sTimeoutMs
+//   SAFE <ms>            → <ms> > 0: enable + set timeout; 0: disable
+// Tokens are passed through as STR args (same as parseGet).
+// ---------------------------------------------------------------------------
+
+static ParseResult parseSafe(const char* const* tokens, int ntokens,
+                              const KVPair* /*kvs*/, int /*nkv*/)
+{
+    ParseResult r;
+    r.ok = true;
+    int n = (ntokens > MAX_ARGS) ? MAX_ARGS : ntokens;
+    r.args.count = n;
+    for (int i = 0; i < n; ++i) {
+        r.args.args[i].type = ArgType::STR;
+        r.args.args[i].ival = 0;
+        r.args.args[i].fval = 0.0f;
+        int j = 0;
+        for (; tokens[i][j] != '\0' && j < (int)sizeof(r.args.args[i].sval) - 1; ++j)
+            r.args.args[i].sval[j] = tokens[i][j];
+        r.args.args[i].sval[j] = '\0';
+    }
+    return r;
+}
+
+static void handleSafe(const ArgList& args, const char* corrId,
+                        ReplyFn replyFn, void* replyCtx, void* handlerCtx)
+{
+    char rbuf[80];
+    Robot* robot = ctxFrom(handlerCtx).robot;
+    if (robot == nullptr) {
+        CommandProcessor::replyErr(rbuf, sizeof(rbuf), "noctx", "SAFE",
+                                   corrId, replyFn, replyCtx);
+        return;
+    }
+    RobotConfig& cfg = robot->config;
+
+    if (args.count >= 1) {
+        const char* a0 = args.args[0].sval;
+        if (strcmp(a0, "off") == 0) {
+            cfg.safetyEnabled = false;
+        } else if (strcmp(a0, "on") == 0) {
+            cfg.safetyEnabled = true;
+            if (args.count >= 2) {
+                int ms = atoi(args.args[1].sval);
+                if (ms > 0) cfg.sTimeoutMs = ms;
+            }
+        } else {
+            // Numeric form: SAFE <ms>  (0 → off, >0 → on with that timeout).
+            int ms = atoi(a0);
+            if (ms <= 0) {
+                cfg.safetyEnabled = false;
+            } else {
+                cfg.safetyEnabled = true;
+                cfg.sTimeoutMs = ms;
+            }
+        }
+    }
+
+    char body[48];
+    snprintf(body, sizeof(body), "%s timeout=%d",
+             cfg.safetyEnabled ? "on" : "off", (int)cfg.sTimeoutMs);
+    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "safety", body,
+                              corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
 // HALT — user-facing named stop-condition commands.
 //
 // Wire formats:
@@ -1293,6 +1362,7 @@ std::vector<CommandDescriptor> Robot::buildCommandTable(
     cmds.push_back(makeCmd("STREAM",   parseStream,    handleStream,    sysCtxPtr, "badarg")); // start/stop periodic TLM stream
     cmds.push_back(makeCmd("RF",       parseRf,        handleRf,        sysCtxPtr, "badarg")); // set radio channel
     cmds.push_back(makeCmd("+",        parseKeepalive, handleKeepalive, sysCtxPtr, "badarg")); // keepalive: reset watchdog
+    cmds.push_back(makeCmd("SAFE",     parseSafe,      handleSafe,      sysCtxPtr, "badarg")); // enable/disable safety watchdog + set timeout
     cmds.push_back(makeCmd("GET VEL",  parseGetVel,    handleGetVel,    sysCtxPtr, "badarg")); // get velocity PID params
     cmds.push_back(makeCmd("GET",      parseGet,       handleGet,       &_cfgCtx,  "badkey")); // get config value by key
     cmds.push_back(makeCmd("SET",      parseSet,       handleSet,       &_cfgCtx,  "badkey")); // set config value by key

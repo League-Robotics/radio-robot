@@ -141,17 +141,18 @@ void sim_tick(void* h, uint32_t now_ms)
         s->robot.state.inputs, s->robot.state.commands,
         s->robot.state.target, now_ms);
 
-    // System keepalive watchdog — mirrors LoopScheduler behaviour.
+    // System keepalive watchdog — MUST mirror LoopScheduler.cpp exactly.
     // Fires EVT safety_stop + X when sTimeoutMs passes without any command.
-    // Only fires for open-ended modes (STREAMING / VW / R); self-terminating
-    // commands (T, D, G, TURN — with stop conditions) manage their own lifetime.
+    // Covers ALL active motion (any non-IDLE drive mode or active MotionCommand);
+    // self-terminating commands (T/D/G/TURN) are NOT exempt — a stop condition
+    // that never fires (e.g. a stalled G pre-rotate) must still be caught. The
+    // host is required to stream "+" keepalives for the lifetime of any motion.
     // Signed delta avoids uint32 underflow (same pattern as firmware).
     if (s->watchdogMs != 0) {
         MotionController& mc = s->robot.motionController;
         bool needsWatchdog =
-            (mc.mode() == DriveMode::STREAMING) ||
-            (mc.hasActiveCommand() && mc.activeCmd().isOpenEnded());
-        if (needsWatchdog) {
+            (mc.mode() != DriveMode::IDLE) || mc.hasActiveCommand();
+        if (s->robot.config.safetyEnabled && needsWatchdog) {
             int32_t wdDelta = (int32_t)(now_ms - s->watchdogMs);
             if (wdDelta > (int32_t)s->robot.config.sTimeoutMs) {
                 s->watchdogMs = now_ms;  // re-arm to avoid firing every tick
@@ -211,12 +212,12 @@ int sim_command(void* h, const char* line, char* out_buf, int out_len)
     // and will also be captured by any MotionCommand that calls setReplySink().
     s->cmd.process(line, storeReply, &s->replyStore);
 
-    // Reset system watchdog on every inbound command (mirrors LoopScheduler).
-    // Set to 1 (sentinel) so the watchdog is armed but the delta from the first
-    // sim_tick(now_ms=0) is -1 (signed), which won't fire prematurely.
-    // The watchdog fires when (now_ms - 1) exceeds sTimeoutMs, i.e. at ~501 ms
-    // after the last command — matching firmware behaviour.
-    s->watchdogMs = 1;
+    // Reset system watchdog on every inbound command — mirrors LoopScheduler's
+    // resetWatchdog(now). Reset to the CURRENT sim time so keepalives actually
+    // extend the window: the watchdog fires sTimeoutMs after the LAST command,
+    // not the first. g_sim_now_ms==0 (a command before the first tick) maps to
+    // the sentinel 1 so the timer stays armed (0 means "disarmed / none yet").
+    s->watchdogMs = (g_sim_now_ms == 0) ? 1u : g_sim_now_ms;
 
     // Copy the synchronous reply into the caller's buffer.
     int n = s->replyStore.written;

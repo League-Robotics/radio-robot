@@ -209,18 +209,20 @@ void LoopScheduler::run_blocks()
         // the watchdog stays disarmed until the first command arrives.
         // Signed delta avoids uint32 underflow (see memory note: watchdog-uint32-underflow).
         //
-        // Only fires when the robot is in an open-ended motion mode:
-        //   - STREAMING (S command, no active MotionCommand)
-        //   - VELOCITY/ARC (VW/R, active MotionCommand with no stop conditions)
-        // Self-terminating commands (T/D/G/TURN, with stop conditions) manage
-        // their own lifetime and are NOT interrupted by the system watchdog.
+        // The watchdog covers ALL active motion: any non-IDLE drive mode
+        // (STREAMING / TIMED / DISTANCE / GO_TO / VELOCITY) or any active
+        // MotionCommand. Self-terminating commands (T/D/G/TURN) are NO LONGER
+        // exempt — a stop condition that never fires (e.g. a G pre-rotate when the
+        // heading sensor stalls) would otherwise spin forever with nothing to stop
+        // it. The host MUST stream "+" keepalives for the lifetime of any motion;
+        // if it goes silent for sTimeoutMs the robot emits EVT safety_stop and X's.
         {
             now = _uBit.systemTime();
             MotionController& mc = _robot.motionController;
             bool needsWatchdog =
-                (mc.mode() == DriveMode::STREAMING) ||
-                (mc.hasActiveCommand() && mc.activeCmd().isOpenEnded());
-            if (_watchdogMs != 0 && activeFn != nullptr && needsWatchdog) {
+                (mc.mode() != DriveMode::IDLE) || mc.hasActiveCommand();
+            if (_robot.config.safetyEnabled && _watchdogMs != 0 &&
+                activeFn != nullptr && needsWatchdog) {
                 int32_t wdDelta = (int32_t)(now - _watchdogMs);
                 if (wdDelta > (int32_t)_robot.config.sTimeoutMs) {
                     _watchdogMs = now;  // reset to avoid repeated firing every tick
