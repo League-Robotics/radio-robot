@@ -52,6 +52,11 @@ public:
     void setLinearNoise(float sigma)      { _linearNoiseSigma = sigma; }
     void setYawNoise(float sigma)         { _yawNoiseSigma = sigma; }
 
+    // Accumulated OTOS odometry (sim model output) ---------------------------
+    float odomX() const { return _odomX; }
+    float odomY() const { return _odomY; }
+    float odomH() const { return _odomH; }
+
     // Advance the OTOS integration model by one time step.
     // velLMms, velRMms: true (pre-slip) left/right velocities in mm/s.
     // trackwidthMm: wheel-to-wheel distance in mm.
