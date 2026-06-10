@@ -91,7 +91,10 @@ struct SimHandle {
         , cfg(defaultRobotConfig())
         , robot(hal, cfg)
         , cmd(robot.buildCommandTable(nullptr, nullptr))
-    {}
+    {
+        // Wire robot geometry into MockHAL so ExactPoseTracker integrates correctly.
+        hal.setTrackwidth(cfg.trackwidthMm);
+    }
 };
 
 // ---------------------------------------------------------------------------
