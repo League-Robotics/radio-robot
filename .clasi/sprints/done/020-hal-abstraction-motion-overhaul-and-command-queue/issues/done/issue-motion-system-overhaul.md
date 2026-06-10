@@ -1,11 +1,19 @@
 ---
-status: in-progress
+status: done
 sprint: '020'
 tickets:
-- 020-005
-- 020-006
-- 020-007
-- 020-008
+- '001'
+- '002'
+- '003'
+- '004'
+- '005'
+- '006'
+- '007'
+- 008
+- 009
+- '010'
+- '011'
+- '012'
 ---
 
 # Issue: Motion system overhaul — BVC-only path, system watchdog, X soft, and first-class STOP conditions
