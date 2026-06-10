@@ -1,7 +1,7 @@
 ---
 id: '020'
 title: HAL Abstraction, Motion Overhaul, and Command Queue
-status: planning-docs
+status: done
 branch: sprint/020-hal-abstraction-motion-overhaul-and-command-queue
 use-cases: []
 issues:
