@@ -3,6 +3,7 @@
   "$id": "robot_config.schema.json",
   "title": "RobotConfig",
   "description": "Per-robot configuration for the radio-robot system.",
+  "$comment": "The custom `firmware` keyword on a property is the single source of truth that maps a JSON value to a firmware RobotConfig field. It has: `field` (the C++ RobotConfig member emitted into source/robot/DefaultConfig.cpp by scripts/gen_default_config.py), `set_key` (the live SET/GET wire key from source/robot/ConfigRegistry.cpp, used by the host runtime push; omit when the value is applied a special way, e.g. OTOS scalars via OL/OA), and `kind` (float | int | float_as_int | bool — how to render the literal). A property with `firmware` is baked into the generated firmware default AND pushed live on connect; one without is host-side only.",
   "type": "object",
   "required": ["schema_version", "identity"],
   "additionalProperties": false,
@@ -45,7 +46,7 @@
       "properties": {
         "robot_tag_id": { "type": "integer", "minimum": 0 },
         "tag_offset_mm": { "$ref": "#/$defs/OffsetXYYaw" },
-        "camera_distance_scale": { "type": "number", "description": "Multiplicative correction for camera-measured distances." }
+        "camera_distance_scale": { "type": "number", "description": "Multiplicative correction for camera-measured distances. Host-side only." }
       }
     },
 
@@ -56,7 +57,11 @@
         "drive_axle_offset_mm":    { "$ref": "#/$defs/OffsetXY" },
         "odometry_offset_mm":      { "$ref": "#/$defs/OffsetXYYaw" },
         "odometry_chip_upside_down": { "type": "boolean" },
-        "trackwidth":              { "type": ["number", "null"] },
+        "trackwidth": {
+          "type": ["number", "null"],
+          "description": "Wheel track width (mm).",
+          "firmware": { "field": "trackwidthMm", "set_key": "tw", "kind": "float_as_int" }
+        },
         "wheelbase_mm":            { "type": ["number", "null"] }
       }
     },
@@ -128,56 +133,66 @@
       "properties": {
         "otos_angular_scale": {
           "type": "number",
-          "description": "OTOS angular scale multiplier (e.g. 0.987). int8 = round((scale-1)/0.001)."
+          "description": "OTOS angular scale multiplier (e.g. 0.987). Programmed into the OTOS chip at boot from the baked default; live update via OL/OA, not SET.",
+          "firmware": { "field": "otosAngularScale", "kind": "float" }
         },
         "otos_linear_scale": {
           "type": "number",
-          "description": "OTOS linear scale multiplier (e.g. 1.050). int8 = round((scale-1)/0.001)."
+          "description": "OTOS linear scale multiplier (e.g. 1.050). Programmed into the OTOS chip at boot from the baked default; live update via OL/OA, not SET.",
+          "firmware": { "field": "otosLinearScale", "kind": "float" }
         },
         "mm_per_wheel_deg_left": {
           "type": ["number", "null"],
-          "description": "Per-wheel encoder calibration: mm of travel per degree of wheel rotation (left wheel)."
+          "description": "Per-wheel encoder calibration: mm of travel per degree of wheel rotation (left wheel).",
+          "firmware": { "field": "mmPerDegL", "set_key": "ml", "kind": "float" }
         },
         "mm_per_wheel_deg_right": {
           "type": ["number", "null"],
-          "description": "Per-wheel encoder calibration: mm of travel per degree of wheel rotation (right wheel)."
+          "description": "Per-wheel encoder calibration: mm of travel per degree of wheel rotation (right wheel).",
+          "firmware": { "field": "mmPerDegR", "set_key": "mr", "kind": "float" }
         },
         "rotational_slip": {
           "type": ["number", "null"],
-          "description": "Body-rotation efficiency: actual_body_rotation / no_slip_estimate. 1.0 = no slip."
+          "description": "Body-rotation efficiency: actual_body_rotation / no_slip_estimate. 1.0 = no slip.",
+          "firmware": { "field": "rotationalSlip", "set_key": "rotSlip", "kind": "float" }
         },
         "rotation_gain": {
           "type": ["number", "null"],
-          "description": "Linear correction gain for CCW (positive) turns: actual_deg = gain * commanded + offset."
+          "description": "Linear correction gain for CCW (positive) turns: actual_deg = gain * commanded + offset.",
+          "firmware": { "field": "rotationGainPos", "set_key": "rotGainPos", "kind": "float" }
         },
         "rotation_offset_deg": {
           "type": ["number", "null"],
-          "description": "Linear correction offset (deg) for CCW (positive) turns."
+          "description": "Linear correction offset (deg) for CCW (positive) turns.",
+          "firmware": { "field": "rotationOffsetDeg", "set_key": "rotOffPos", "kind": "float" }
         },
         "rotation_gain_neg": {
           "type": ["number", "null"],
-          "description": "Linear correction gain for CW (negative) turns. Falls back to rotation_gain when null."
+          "description": "Linear correction gain for CW (negative) turns. Falls back to rotation_gain when null.",
+          "firmware": { "field": "rotationGainNeg", "set_key": "rotGainNeg", "kind": "float" }
         },
         "rotation_offset_deg_neg": {
           "type": ["number", "null"],
-          "description": "Linear correction offset (deg) for CW (negative) turns. Falls back to rotation_offset_deg when null."
+          "description": "Linear correction offset (deg) for CW (negative) turns. Falls back to rotation_offset_deg when null.",
+          "firmware": { "field": "rotationOffsetDegNeg", "set_key": "rotOffNeg", "kind": "float" }
         }
       }
     },
     "control": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Velocity-loop PID + cross-wheel coupling tuning (pushed via SET vel.* / sync; firmware default kept when a field is null).",
+      "description": "Velocity-loop PID, cross-wheel coupling, and motion-planning tunables. Each field with a `firmware` mapping is baked into the generated default and pushed via SET on connect; firmware default kept when a field is null.",
       "properties": {
-        "vel_kp":        { "type": ["number", "null"], "description": "Velocity PID proportional gain (SET vel.kP)." },
-        "vel_ki":        { "type": ["number", "null"], "description": "Velocity PID integral gain (SET vel.kI)." },
-        "vel_kff":       { "type": ["number", "null"], "description": "Velocity feed-forward coefficient (SET vel.kFF)." },
-        "vel_imax":      { "type": ["number", "null"], "description": "Integrator anti-windup clamp, PWM% (SET vel.iMax)." },
-        "vel_kaw":       { "type": ["number", "null"], "description": "Back-calculation anti-windup gain, 1/s (SET vel.kAw)." },
-        "vel_filt":      { "type": ["number", "null"], "description": "Velocity EMA smoothing weight (SET vel.filt)." },
-        "sync":          { "type": ["number", "null"], "description": "Cross-wheel ratio coupling gain (SET sync)." },
-        "min_wheel_mms": { "type": ["number", "null"], "description": "Low-speed integrator deadband, mm/s (SET minWheelMms)." },
-        "max_rot_accel_dps2": { "type": ["number", "null"], "description": "Host-side turn ramp: max rotational acceleration, deg/s^2 (default 300). Not pushed to firmware." }
+        "vel_kp":        { "type": ["number", "null"], "description": "Velocity PID proportional gain.", "firmware": { "field": "velKp", "set_key": "vel.kP", "kind": "float" } },
+        "vel_ki":        { "type": ["number", "null"], "description": "Velocity PID integral gain.", "firmware": { "field": "velKi", "set_key": "vel.kI", "kind": "float" } },
+        "vel_kff":       { "type": ["number", "null"], "description": "Velocity feed-forward coefficient.", "firmware": { "field": "velKff", "set_key": "vel.kFF", "kind": "float" } },
+        "vel_imax":      { "type": ["number", "null"], "description": "Integrator anti-windup clamp, PWM%.", "firmware": { "field": "velIMax", "set_key": "vel.iMax", "kind": "float" } },
+        "vel_kaw":       { "type": ["number", "null"], "description": "Back-calculation anti-windup gain, 1/s.", "firmware": { "field": "velKaw", "set_key": "vel.kAw", "kind": "float" } },
+        "vel_filt":      { "type": ["number", "null"], "description": "Velocity EMA smoothing weight.", "firmware": { "field": "velFiltAlpha", "set_key": "vel.filt", "kind": "float" } },
+        "sync":          { "type": ["number", "null"], "description": "Cross-wheel ratio coupling gain.", "firmware": { "field": "syncGain", "set_key": "sync", "kind": "float" } },
+        "min_wheel_mms": { "type": ["number", "null"], "description": "Low-speed integrator deadband, mm/s.", "firmware": { "field": "minWheelMms", "set_key": "minWheelMms", "kind": "float" } },
+        "turn_gate":     { "type": ["number", "null"], "description": "Turn-in-place gate (deg): G/go-to pre-rotates in place until the bearing to the target is within this angle, then arcs. Sim sweep optimum ~35 (host_tests/arc_gate_sweep.ipynb).", "firmware": { "field": "turnInPlaceGate", "set_key": "turnGate", "kind": "float_as_int" } },
+        "max_rot_accel_dps2": { "type": ["number", "null"], "description": "Host-side turn ramp: max rotational acceleration, deg/s^2 (default 300). Host-side only — no firmware mapping." }
       }
     }
   },

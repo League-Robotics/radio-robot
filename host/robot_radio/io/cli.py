@@ -451,6 +451,43 @@ def _push_calibration(conn: SerialConnection) -> None:
                 _log(f"push calibration: SET {key}={val:g}")
                 conn.send(f"SET {key}={val:g}", read_ms=200)
 
+    # ── Step 10: schema-driven push of the remaining firmware-mapped values ──
+    # Bucket B fix: rotation calibration (rotGain*/rotOff*/rotSlip) and the turn
+    # gate live in the robot JSON + schema but were never pushed at runtime, so a
+    # running robot ignored JSON edits to them until reflash. Push every schema
+    # `firmware.set_key` not already sent above, straight from the loaded config.
+    _already_pushed = {
+        "ml", "mr", "tw", "vel.kP", "vel.kI", "vel.kFF", "vel.iMax",
+        "vel.kAw", "vel.filt", "sync", "minWheelMms",
+    }
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        _schema = _json.loads(
+            (_Path(__file__).resolve().parents[3] / "data" / "robots"
+             / "robot_config.schema.json").read_text()
+        )
+    except Exception as exc:
+        _log(f"push calibration: schema unreadable ({exc}); skipping schema-mapped SETs")
+        _schema = None
+    if _schema is not None:
+        for section, sec in (_schema.get("properties") or {}).items():
+            sec_obj = getattr(cfg, section, None)
+            if sec_obj is None:
+                continue
+            for prop, ps in (sec.get("properties") or {}).items():
+                fw = ps.get("firmware") if isinstance(ps, dict) else None
+                if not fw or "set_key" not in fw or fw["set_key"] in _already_pushed:
+                    continue
+                val = getattr(sec_obj, prop, None)
+                if val is None:
+                    continue
+                literal = (str(int(round(float(val))))
+                           if fw.get("kind") in ("int", "float_as_int")
+                           else f"{float(val):g}")
+                _log(f"push calibration: SET {fw['set_key']}={literal}")
+                conn.send(f"SET {fw['set_key']}={literal}", read_ms=200)
+
 
 def cmd_sync_pose(args):
     """Seed the robot's OTOS odometer with its current daemon world pose.

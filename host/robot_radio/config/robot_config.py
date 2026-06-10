@@ -160,6 +160,7 @@ class ControlConfig(BaseModel):
     vel_filt:      Optional[float] = None   # → SET vel.filt  (velocity EMA weight)
     sync:          Optional[float] = None   # → SET sync      (cross-wheel coupling)
     min_wheel_mms: Optional[float] = None   # → SET minWheelMms (low-speed deadband)
+    turn_gate:     Optional[float] = None   # → SET turnGate   (turn-in-place gate, deg)
 
     # Host-side motion limit (NOT pushed to firmware): the maximum rotational
     # acceleration, deg/s^2, that the turn / turn2 trapezoidal velocity profile

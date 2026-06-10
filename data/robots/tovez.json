@@ -79,6 +79,7 @@
     "vel_kaw": 3.0,
     "vel_filt": 0.15,
     "sync": 1.0,
+    "turn_gate": 35,
     "max_rot_accel_dps2": 300
   }
 }

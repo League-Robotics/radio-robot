@@ -19,6 +19,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OUT_FILE  = REPO_ROOT / "source" / "robot" / "DefaultConfig.cpp"
+SCHEMA_FILE = REPO_ROOT / "data" / "robots" / "robot_config.schema.json"
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +91,44 @@ def _b(v) -> str:
     return "true" if v else "false"
 
 
+def _emit_literal(kind: str, value) -> str:
+    """Render a JSON value as a C++ literal per the schema `firmware.kind`."""
+    if kind == "bool":
+        return _b(value)
+    if kind == "int":
+        return str(int(round(float(value))))
+    if kind == "float_as_int":
+        return _f(int(round(float(value))))   # integer magnitude, float-typed field
+    return _f(value)                           # "float"
+
+
+def fw_overrides(cfg: dict) -> dict:
+    """Schema-driven JSON->C-field map: {cpp_field: c_literal}.
+
+    Reads the custom ``firmware`` keyword from robot_config.schema.json (the
+    single source of truth for the mapping) and, for every property that has a
+    ``firmware.field`` AND a non-null value in the robot config, renders the C++
+    literal. The generator overrides its hardcoded default with these so adding a
+    value to the robot JSON flows into DefaultConfig.cpp with no generator edit.
+    """
+    try:
+        schema = json.loads(SCHEMA_FILE.read_text())
+    except Exception as e:  # pragma: no cover - build robustness
+        print(f"gen_default_config: schema unreadable ({e}); no overrides", file=sys.stderr)
+        return {}
+    out: dict = {}
+    for section, sec in (schema.get("properties") or {}).items():
+        for prop, ps in (sec.get("properties") or {}).items():
+            fw = ps.get("firmware") if isinstance(ps, dict) else None
+            if not fw or "field" not in fw:
+                continue
+            val = _get(cfg, section, prop)
+            if val is None:
+                continue
+            out[fw["field"]] = _emit_literal(fw.get("kind", "float"), val)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Code generation
 # ---------------------------------------------------------------------------
@@ -130,6 +169,15 @@ def generate(cfg: dict, source_path: str) -> str:
     vel_filt  = _get(ctrl, "vel_filt",      default=0.15)
     sync      = _get(ctrl, "sync",          default=1.0)
     min_wheel = _get(ctrl, "min_wheel_mms", default=20.0)
+
+    # Schema-driven overrides: any robot-JSON value mapped via the schema's
+    # `firmware` keyword wins over the hardcoded default below. This is how a
+    # value placed in the robot JSON reaches DefaultConfig.cpp with no edit here
+    # (e.g. control.turn_gate -> turnInPlaceGate).
+    fw = fw_overrides(cfg)
+
+    def ov(field, default):
+        return fw.get(field, default)
 
     return f"""\
 // AUTO-GENERATED — do not edit by hand.
@@ -215,7 +263,7 @@ RobotConfig defaultRobotConfig() {{
     // Pose-control tunables
     p.aMax            = 300.0f;
     p.aDecel          = 250.0f;
-    p.turnInPlaceGate = 45.0f;
+    p.turnInPlaceGate = {ov('turnInPlaceGate', '45.0f')};
     p.arriveTolMm     = 5.0f;
 
     // Body motion limits
