@@ -1,9 +1,13 @@
 ---
-id: "005"
-title: "Unit tests (tests/dev/test_ekf.py)"
-status: open
-use-cases: [SUC-001, SUC-002, SUC-003]
-depends-on: ["001"]
+id: '005'
+title: Unit tests (tests/dev/test_ekf.py)
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+depends-on:
+- '001'
 completes_issue: true
 ---
 
@@ -22,42 +26,42 @@ firmware implementation must match.
 
 ## Acceptance Criteria
 
-- [ ] `tests/dev/test_ekf.py` exists.
-- [ ] A `EKF` Python class mirrors the C++ class with `__init__()`, `init()`,
+- [x] `tests/dev/test_ekf.py` exists.
+- [x] A `EKF` Python class mirrors the C++ class with `__init__()`, `init()`,
   `set_pose()`, `predict()`, `update()`, `x`, `y`, `theta` properties.
-- [ ] Test class `TestPredictStraight`:
-  - [ ] Straight step (dCenter=100, dTheta=0, theta_before=0): `x` advances
+- [x] Test class `TestPredictStraight`:
+  - [x] Straight step (dCenter=100, dTheta=0, theta_before=0): `x` advances
     ~100 mm, `y` stays ~0, `theta` stays ~0.
-  - [ ] `P[0][0]` and `P[1][1]` grow by `q_xy` after one predict step.
-  - [ ] `P[2][2]` grows by `q_theta` after one predict step.
-- [ ] Test class `TestPredictTurn`:
-  - [ ] Pure rotation (dCenter=0, dTheta=pi/2, theta_before=0): `theta` is
+  - [x] `P[0][0]` and `P[1][1]` grow by `q_xy` after one predict step.
+  - [x] `P[2][2]` grows by `q_theta` after one predict step.
+- [x] Test class `TestPredictTurn`:
+  - [x] Pure rotation (dCenter=0, dTheta=pi/2, theta_before=0): `theta` is
     ~pi/2, `x` and `y` near 0.
-  - [ ] Combined arc (dCenter=100, dTheta=pi/4, theta_before=0): `x` and `y`
+  - [x] Combined arc (dCenter=100, dTheta=pi/4, theta_before=0): `x` and `y`
     match the expected midpoint integration values.
-- [ ] Test class `TestHeadingWrap`:
-  - [ ] Predict across +pi boundary stays in (-pi, pi].
-  - [ ] Predict across -pi boundary stays in (-pi, pi].
-- [ ] Test class `TestUpdate`:
-  - [ ] After an update when EKF state is 20 mm off from OTOS in x: `x` moves
+- [x] Test class `TestHeadingWrap`:
+  - [x] Predict across +pi boundary stays in (-pi, pi].
+  - [x] Predict across -pi boundary stays in (-pi, pi].
+- [x] Test class `TestUpdate`:
+  - [x] After an update when EKF state is 20 mm off from OTOS in x: `x` moves
     toward the observation.
-  - [ ] `P[0][0]` decreases after an update.
-  - [ ] `P[1][1]` decreases after an update.
-  - [ ] Heading is not changed by the update (only position is observed).
-- [ ] Test class `TestConvergence`:
-  - [ ] 30 predict+update cycles with OTOS at truth (0, 0, 0) and initial
+  - [x] `P[0][0]` decreases after an update.
+  - [x] `P[1][1]` decreases after an update.
+  - [x] Heading is not changed by the update (only position is observed).
+- [x] Test class `TestConvergence`:
+  - [x] 30 predict+update cycles with OTOS at truth (0, 0, 0) and initial
     state at (50, 50, 0): final `x` and `y` are within 5 mm of truth.
-  - [ ] P covariance decreases (is smaller after 30 cycles than after 1).
-- [ ] Test class `TestNoDriftWithoutUpdate`:
-  - [ ] P diverges monotonically without corrections (P[0][0] after 10 predicts
+  - [x] P covariance decreases (is smaller after 30 cycles than after 1).
+- [x] Test class `TestNoDriftWithoutUpdate`:
+  - [x] P diverges monotonically without corrections (P[0][0] after 10 predicts
     > P[0][0] after 1 predict).
-- [ ] Test class `TestSetPose`:
-  - [ ] `set_pose(100, 200, 0.5)` sets state to [100, 200, 0.5].
-  - [ ] After `set_pose()`, P is zero (or near zero).
-  - [ ] Predict after `set_pose()` advances from the new pose, not origin.
-- [ ] `uv run --with pytest python -m pytest tests/dev/test_ekf.py -v` passes
+- [x] Test class `TestSetPose`:
+  - [x] `set_pose(100, 200, 0.5)` sets state to [100, 200, 0.5].
+  - [x] After `set_pose()`, P is zero (or near zero).
+  - [x] Predict after `set_pose()` advances from the new pose, not origin.
+- [x] `uv run --with pytest python -m pytest tests/dev/test_ekf.py -v` passes
   all cases with zero failures.
-- [ ] `uv run --with pytest python -m pytest` (full suite) passes with no
+- [x] `uv run --with pytest python -m pytest` (full suite) passes with no
   regressions.
 
 ## Implementation Plan
