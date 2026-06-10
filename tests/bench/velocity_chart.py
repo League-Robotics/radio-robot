@@ -164,7 +164,18 @@ def _stream_worker(
         conn.send_fast(f"S {vL} {vR}")
         last_send = time.monotonic()
 
+        # Request raw OTOS position every N read-loop iterations so the odom
+        # panel shows actual optical-flow data rather than fused pose (which
+        # includes encoder dead-reckoning and drifts when wheels spin freely).
+        _op_interval = 5   # send OP every 5 iterations ≈ every 150 ms
+        _op_counter = 0
+
         while not stop_event.is_set():
+            _op_counter += 1
+            if _op_counter >= _op_interval:
+                _op_counter = 0
+                conn.send_fast("OP")
+
             for raw_line in conn.read_lines(duration_ms=30):
                 r = parse_response(raw_line)
                 if r is None:
@@ -174,10 +185,20 @@ def _stream_worker(
                     conn.send_fast(f"S {vL} {vR}")
                     last_send = time.monotonic()
                     continue
+                # Raw OTOS position reply — use this for the odom panel.
+                if r.tag == "OK" and r.tokens and r.tokens[0] == "op":
+                    try:
+                        x = int(r.kv["x"])
+                        y = int(r.kv["y"])
+                        data_queue.put((time.monotonic(), None, (x, y, 0),
+                                        None, None))
+                    except (KeyError, ValueError):
+                        pass
+                    continue
                 if r.tag == "TLM":
                     tlm = parse_tlm(r.raw)
                     if tlm is not None:
-                        data_queue.put((time.monotonic(), tlm.vel, tlm.pose,
+                        data_queue.put((time.monotonic(), tlm.vel, None,
                                         tlm.line, tlm.color))
 
             now = time.monotonic()
@@ -412,7 +433,7 @@ def main() -> int:
     _update_ratio_line()
 
     # odometry
-    ax_odom.set_title("Odometry (OTOS pose, mm)", fontsize=10)
+    ax_odom.set_title("OTOS raw position (mm)", fontsize=10)
     ax_odom.set_xlabel("seconds ago", fontsize=8)
     ax_odom.set_ylabel("mm", fontsize=8)
     ax_odom.set_xlim(window_s, 0)

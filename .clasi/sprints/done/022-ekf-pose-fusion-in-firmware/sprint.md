@@ -1,10 +1,14 @@
 ---
 id: '022'
 title: EKF Pose Fusion in Firmware
-status: planning-docs
+status: done
 branch: sprint/022-ekf-pose-fusion-in-firmware
-use-cases: [SUC-001, SUC-002, SUC-003]
-issues: [plan-ekf-pose-fusion-in-firmware.md]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+issues:
+- plan-ekf-pose-fusion-in-firmware.md
 ---
 
 # Sprint 022: EKF Pose Fusion in Firmware
