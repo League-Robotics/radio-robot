@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: Host RobotState dataclass, TLMFrame twist field, NezhaState wiring
-status: open
+status: done
 use-cases:
 - SUC-006
 depends-on:
@@ -33,7 +33,7 @@ all existing `TLMFrame` fields are preserved unchanged.
 ## Acceptance Criteria
 
 **`robot_state.py` (new file, SUC-006):**
-- [ ] `host/robot_radio/robot/robot_state.py` created with:
+- [x] `host/robot_radio/robot/robot_state.py` created with:
   ```python
   from dataclasses import dataclass
   from robot_radio.nav.pose import Pose
@@ -46,24 +46,24 @@ all existing `TLMFrame` fields are preserved unchanged.
       accel: tuple[float, float] | None  # (ax_mmps2, ay_mmps2) or None
       stamp: float   # host monotonic time, seconds
   ```
-- [ ] The file has a module docstring explaining units and the pose/velocity split
+- [x] The file has a module docstring explaining units and the pose/velocity split
   (matches WPILib `Pose2d` / `ChassisSpeeds` convention).
 
 **`TLMFrame` and `parse_tlm()` (SUC-006):**
-- [ ] `TLMFrame` gains `twist: tuple[int, int] | None = None`
+- [x] `TLMFrame` gains `twist: tuple[int, int] | None = None`
   where the tuple is `(v_mmps, omega_mradps)` as integers (firmware snprintf output).
-- [ ] `parse_tlm()` parses `twist=v,omega` following the exact same pattern as
+- [x] `parse_tlm()` parses `twist=v,omega` following the exact same pattern as
   the existing `vel` parsing (split on `,`, 2 parts, `int()` conversion).
-- [ ] `parse_tlm("TLM t=1000 pose=100,200,1800 twist=300,500")` returns a
+- [x] `parse_tlm("TLM t=1000 pose=100,200,1800 twist=300,500")` returns a
   `TLMFrame` with `twist = (300, 500)`.
-- [ ] `parse_tlm("TLM t=1000 pose=100,200,1800")` returns a `TLMFrame` with
+- [x] `parse_tlm("TLM t=1000 pose=100,200,1800")` returns a `TLMFrame` with
   `twist = None`.
-- [ ] All existing `parse_tlm()` behavior is unchanged (no regressions in
+- [x] All existing `parse_tlm()` behavior is unchanged (no regressions in
   `test_command_processor.py` or any protocol-level test).
 
 **`NezhaState` (SUC-006):**
-- [ ] `NezhaState.__init__()` initialises `self.robot_state: RobotState | None = None`.
-- [ ] `_process_line()` extended: when `tlm.pose is not None`:
+- [x] `NezhaState.__init__()` initialises `self.robot_state: RobotState | None = None`.
+- [x] `_process_line()` extended: when `tlm.pose is not None`:
   - Build `Pose(x=x_mm/10.0, y=y_mm/10.0, heading=h_cdeg/18000.0*pi)` from
     `tlm.pose`. Note: `Pose` uses centimetres, TLM uses mm; divide x/y by 10.
   - If `tlm.twist is not None`: `v = tlm.twist[0] * 1.0` (mm/s stays as mm/s),
@@ -71,13 +71,13 @@ all existing `TLMFrame` fields are preserved unchanged.
   - If `tlm.twist is None`: `v = 0.0`, `omega = 0.0`.
   - Build `RobotState(pose=pose, v=v, omega=omega, accel=None, stamp=time.monotonic())`.
   - Update `self.robot_state` under `_lock`.
-- [ ] `NezhaState.robot_state` is `None` at construction and after `__init__()`.
-- [ ] All existing attributes (`otos_pose`, `heading_rad`, `encoders`, etc.)
+- [x] `NezhaState.robot_state` is `None` at construction and after `__init__()`.
+- [x] All existing attributes (`otos_pose`, `heading_rad`, `encoders`, etc.)
   are updated as before — `robot_state` is additive, not a replacement.
-- [ ] Thread safety: `robot_state` is read/written under `_lock`.
+- [x] Thread safety: `robot_state` is read/written under `_lock`.
 
 **Build / test:**
-- [ ] `uv run --with pytest python -m pytest -v` passes, including all existing
+- [x] `uv run --with pytest python -m pytest -v` passes, including all existing
   tests that exercise `NezhaState` and `parse_tlm`.
 
 ## Implementation Plan
