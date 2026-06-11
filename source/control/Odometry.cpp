@@ -36,7 +36,8 @@ void Odometry::predict(HardwareState& s, float trackwidthMm)
     s.poseHrad  = wrapPi(s.poseHrad + dTheta);
 
     // EKF predict — propagate covariance using encoder-derived arc segment.
-    _ekf.predict(dCenter, dTheta, theta_before);
+    // dt_s=0 is a placeholder until T003 wires the real timestep.
+    _ekf.predict(dCenter, dTheta, theta_before, 0.0f);
     s.poseX    = _ekf.x();
     s.poseY    = _ekf.y();
     s.poseHrad = _ekf.theta();
@@ -140,7 +141,8 @@ float Odometry::wrapPi(float theta)
 
 void Odometry::initEKF(float q_xy, float q_theta, float r_otos_xy)
 {
-    _ekf.init(q_xy, q_theta, r_otos_xy);
+    // q_v, q_omega, r_otos_v, r_enc_v are placeholder zeros until T003 wires them.
+    _ekf.init(q_xy, q_theta, 0.0f, 0.0f, r_otos_xy, 0.0f, 0.0f);
 }
 
 // ---------------------------------------------------------------------------
@@ -149,7 +151,7 @@ void Odometry::initEKF(float q_xy, float q_theta, float r_otos_xy)
 
 void Odometry::correctEKF(HardwareState& s, float x_otos, float y_otos)
 {
-    _ekf.update(x_otos, y_otos);
+    _ekf.updatePosition(x_otos, y_otos);
     s.poseX    = _ekf.x();
     s.poseY    = _ekf.y();
     s.poseHrad = _ekf.theta();

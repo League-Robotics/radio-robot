@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: EKF 5-state extension (EKF.h / EKF.cpp)
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-002
@@ -40,7 +40,7 @@ All operations unrolled; no heap, no STL.
 
 ## Acceptance Criteria
 
-- [ ] `source/control/EKF.h` updated with:
+- [x] `source/control/EKF.h` updated with:
   ```cpp
   // State: [x_mm, y_mm, theta_rad, v_mmps, omega_rads]
   void init(float q_xy, float q_theta, float q_v, float q_omega,
@@ -56,35 +56,35 @@ All operations unrolled; no heap, no STL.
   float omega() const;
   uint32_t rejectedCount() const;
   ```
-- [ ] Private members: `float _x[5]`, `float _P[5][5]`, `float _Q[5][5]`,
+- [x] Private members: `float _x[5]`, `float _P[5][5]`, `float _Q[5][5]`,
   `float _rOtosXy`, `float _rOtosV`, `float _rEncV`, `uint32_t _rejected`.
-- [ ] `init()` sets the 5x5 Q diagonal: `Q[0][0]=Q[1][1]=q_xy`, `Q[2][2]=q_theta`,
+- [x] `init()` sets the 5x5 Q diagonal: `Q[0][0]=Q[1][1]=q_xy`, `Q[2][2]=q_theta`,
   `Q[3][3]=q_v`, `Q[4][4]=q_omega`; sets `_rOtosXy`, `_rOtosV`, `_rEncV`; resets
   `_x` and `_P` to zero.
-- [ ] `setPose(x, y, theta)` sets `_x[0..2]`, zeroes `_x[3]` and `_x[4]`, and
+- [x] `setPose(x, y, theta)` sets `_x[0..2]`, zeroes `_x[3]` and `_x[4]`, and
   zeroes all of `_P`.
-- [ ] `predict(dCenter, dTheta, theta_before, dt_s)`:
+- [x] `predict(dCenter, dTheta, theta_before, dt_s)`:
   - Position block `[0..2]` uses arc-segment exactly as sprint 022 `predict()`.
   - Velocity block: `_x[3]` and `_x[4]` unchanged (random-walk — identity
     sub-Jacobian). Process noise: `P[3][3] += _Q[3][3]`, `P[4][4] += _Q[4][4]`.
   - The off-diagonal entries P[0..2][3..4] and P[3..4][0..2] are zero and remain
     zero (block-decoupling — Jacobian has zero cross-block entries).
   - Full 5x5 P update is unrolled.
-- [ ] `updatePosition(x_otos, y_otos)`:
+- [x] `updatePosition(x_otos, y_otos)`:
   - Observation model H is 2x5 with H[0][0]=1, H[1][1]=1, rest zero.
   - Innovation: `y[0] = x_otos - _x[0]`, `y[1] = y_otos - _x[1]`.
   - Innovation covariance S (2x2): `S[0][0] = P[0][0] + _rOtosXy`, etc.
   - Mahalanobis gate: compute `d2 = y[0]*si00*y[0] + y[0]*si01*y[1] + y[1]*si10*y[0] + y[1]*si11*y[1]`; if `d2 > 5.99f` increment `_rejected` and return without update.
   - Kalman gain K is 5x2; state update and P update fully unrolled.
-- [ ] `updateVelocity(v_meas, omega_meas, r_v, r_omega)`:
+- [x] `updateVelocity(v_meas, omega_meas, r_v, r_omega)`:
   - Fuse v independently: H_v = [0,0,0,1,0]; innovation `yv = v_meas - _x[3]`;
     `s_v = P[3][3] + r_v`; gate: `yv*yv/s_v > 3.84f` → skip (increment `_rejected`);
     else K_v[i] = P[i][3]/s_v for i in 0..4; update state and P.
   - Fuse omega independently: H_w = [0,0,0,0,1]; same pattern with `r_omega`.
   - Each is a 1D Kalman update; treat them as two sequential scalar updates.
-- [ ] `rejectedCount()` returns `_rejected`.
-- [ ] No `new`/`malloc`, no STL, no `<random>`.
-- [ ] Compiles cleanly in both embedded and host builds (`python3 build.py` no
+- [x] `rejectedCount()` returns `_rejected`.
+- [x] No `new`/`malloc`, no STL, no `<random>`.
+- [x] Compiles cleanly in both embedded and host builds (`python3 build.py` no
   errors for EKF.h / EKF.cpp).
 
 ## Implementation Plan
