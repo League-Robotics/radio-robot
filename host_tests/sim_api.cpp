@@ -167,7 +167,7 @@ void sim_tick(void* h, uint32_t now_ms)
 
     // Odometry: dead-reckon pose from encoder deltas (mirrors run_blocks()).
     s->robot.odometry.predict(s->robot.state.inputs,
-                              s->robot.config.trackwidthMm);
+                              s->robot.config.trackwidthMm, now_ms);
 
     // HaltController — evaluate user-registered named stop conditions.
     // Mirrors LoopScheduler run_blocks() halt block.

@@ -68,7 +68,9 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
     motorController.setCommandsRef(&state.commands);
     motionController.setCtx(this);
     odometry.setCtx(&otos, &state.inputs);
-    odometry.initEKF(config.ekfQxy, config.ekfQtheta, config.ekfROtosXy);
+    odometry.initEKF(config.ekfQxy, config.ekfQtheta,
+                     config.ekfQv, config.ekfQomega,
+                     config.ekfROtosXy, config.ekfROtosV, config.ekfREncV);
 }
 
 // ---------------------------------------------------------------------------
@@ -174,7 +176,9 @@ void Robot::otosCorrect(uint32_t now_ms)
     state.inputs.otosH = p.h;
     state.inputs.otos.lastUpdMs = now_ms;
     state.inputs.otos.valid     = true;
-    odometry.correctEKF(state.inputs, p.x, p.y);
+    // T003: extended correctEKF signature — velocity args wired in T004.
+    // Passing zeros for OTOS and encoder velocity until T004 reads them.
+    odometry.correctEKF(state.inputs, p.x, p.y, 0.0f, 0.0f, 0.0f, 0.0f);
 }
 
 // ---------------------------------------------------------------------------

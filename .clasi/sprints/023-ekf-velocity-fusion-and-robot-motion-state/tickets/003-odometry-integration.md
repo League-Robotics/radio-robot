@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Odometry integration (5-state EKF wiring + setPose fix + Mahalanobis gating)
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-002
@@ -40,66 +40,66 @@ This ticket has three distinct sub-changes:
 ## Acceptance Criteria
 
 **setPose fix (SUC-005):**
-- [ ] `Odometry::setPose()` re-baselines: `_prevEncL = s.encLMm;` and
+- [x] `Odometry::setPose()` re-baselines: `_prevEncL = s.encLMm;` and
   `_prevEncR = s.encRMm;` (not `= 0.0f`).
-- [ ] The `zero()` method (which calls `setPose(s, 0, 0, 0)`) uses the same fixed
+- [x] The `zero()` method (which calls `setPose(s, 0, 0, 0)`) uses the same fixed
   path. Note: `zero()` is called at robot start when encoders read 0 — so the
   re-baseline correctly sets `_prevEncL = 0` in that case, which is identical to
   the old behavior on startup. The fix only matters when encoders are non-zero.
 
 **`initEKF()` (SUC-001):**
-- [ ] Signature extended to:
+- [x] Signature extended to:
   ```cpp
   void initEKF(float q_xy, float q_theta, float q_v, float q_omega,
                float r_otos_xy, float r_otos_v, float r_enc_v);
   ```
-- [ ] Body calls `_ekf.init(q_xy, q_theta, q_v, q_omega, r_otos_xy, r_otos_v, r_enc_v)`.
+- [x] Body calls `_ekf.init(q_xy, q_theta, q_v, q_omega, r_otos_xy, r_otos_v, r_enc_v)`.
 
 **`predict()` (SUC-001):**
-- [ ] Signature extended to include `uint32_t now_ms` (robot clock timestamp):
+- [x] Signature extended to include `uint32_t now_ms` (robot clock timestamp):
   `void predict(HardwareState& s, float trackwidthMm, uint32_t now_ms)`.
-- [ ] `dt_s` is computed as `(int32_t)(now_ms - _lastPredictMs) * 0.001f`.
+- [x] `dt_s` is computed as `(int32_t)(now_ms - _lastPredictMs) * 0.001f`.
   Uses a signed cast to avoid uint32 underflow (per `watchdog-uint32-underflow`
   finding). `_lastPredictMs` is a new private member (uint32_t) initialised to 0.
-- [ ] On the first call (`_lastPredictMs == 0`): set `_lastPredictMs = now_ms`,
+- [x] On the first call (`_lastPredictMs == 0`): set `_lastPredictMs = now_ms`,
   skip the velocity update (pass `dt_s = 0.0f` or a guard — do not divide by 0).
-- [ ] `dt_s > 0` guard: only compute `v_enc = dCenter / dt_s` and
+- [x] `dt_s > 0` guard: only compute `v_enc = dCenter / dt_s` and
   `omega_enc = dTheta / dt_s` when `dt_s > 0.001f` (1 ms minimum). Otherwise
   use `v_enc = 0.0f`, `omega_enc = 0.0f`.
-- [ ] `_ekf.predict(dCenter, dTheta, theta_before, dt_s)` called after encoder
+- [x] `_ekf.predict(dCenter, dTheta, theta_before, dt_s)` called after encoder
   delta computation (position before theta midpoint, same ordering as sprint 022).
-- [ ] `s.fusedV = _ekf.v()` and `s.fusedOmega = _ekf.omega()` written back
+- [x] `s.fusedV = _ekf.v()` and `s.fusedOmega = _ekf.omega()` written back
   alongside the existing `s.poseX = _ekf.x()`, etc.
-- [ ] `_lastPredictMs = now_ms` updated at the end of each `predict()` call.
+- [x] `_lastPredictMs = now_ms` updated at the end of each `predict()` call.
 
 **`correctEKF()` (SUC-002, SUC-004):**
-- [ ] Signature extended to:
+- [x] Signature extended to:
   ```cpp
   void correctEKF(HardwareState& s,
                   float x_otos, float y_otos,
                   float v_otos_mmps, float omega_otos_rads,
                   float v_enc_mmps, float omega_enc_rads);
   ```
-- [ ] Body calls `_ekf.updatePosition(x_otos, y_otos)` first.
-- [ ] Body calls `_ekf.updateVelocity(v_otos_mmps, omega_otos_rads, _ekf._rOtosV, _ekf._rOtosV)`.
+- [x] Body calls `_ekf.updatePosition(x_otos, y_otos)` first.
+- [x] Body calls `_ekf.updateVelocity(v_otos_mmps, omega_otos_rads, _ekf._rOtosV, _ekf._rOtosV)`.
   NOTE: `_rOtosV` and `_rEncV` must be accessible — either as public constants or
   via a getter, or pass them directly from the stored values. Recommended: store
   them as private members on `Odometry` (copies from `initEKF()` call) and pass to
   `updateVelocity()` explicitly. Do not expose private EKF fields.
-- [ ] Body calls `_ekf.updateVelocity(v_enc_mmps, omega_enc_rads, r_enc_v, r_enc_v)`.
-- [ ] All EKF outputs written back: `s.poseX`, `s.poseY`, `s.poseHrad`,
+- [x] Body calls `_ekf.updateVelocity(v_enc_mmps, omega_enc_rads, r_enc_v, r_enc_v)`.
+- [x] All EKF outputs written back: `s.poseX`, `s.poseY`, `s.poseHrad`,
   `s.fusedV`, `s.fusedOmega`.
 
 **Odometry header:**
-- [ ] `source/control/Odometry.h` updated with new `initEKF()`, `predict()`,
+- [x] `source/control/Odometry.h` updated with new `initEKF()`, `predict()`,
   `correctEKF()` signatures.
-- [ ] New private member `uint32_t _lastPredictMs` declared.
-- [ ] New private members `float _rOtosV` and `float _rEncV` for storing noise
+- [x] New private member `uint32_t _lastPredictMs` declared.
+- [x] New private members `float _rOtosV` and `float _rEncV` for storing noise
   params (passed to `updateVelocity()`).
 
 **Build:**
-- [ ] `python3 build.py` passes cleanly.
-- [ ] `uv run --with pytest python -m pytest -v` passes (T004 caller update may
+- [x] `python3 build.py` passes cleanly.
+- [x] `uv run --with pytest python -m pytest -v` passes (T004 caller update may
   be needed before the full suite passes — see dependency).
 
 ## Implementation Plan
