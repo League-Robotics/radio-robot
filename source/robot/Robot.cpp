@@ -350,6 +350,13 @@ int Robot::buildTlmFrame(char* buf, int len)
                      (unsigned)state.inputs.colorB, (unsigned)state.inputs.colorC);
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
+    if (config.tlmFields & TLM_FIELD_EKFREJ) {
+        // Cumulative EKF gate rejection count — all channels (pos, heading, velocity).
+        // Sprint 024-005: emitted as ekf_rej=<n> for divergence visibility.
+        n = snprintf(buf + pos, (size_t)rem, " ekf_rej=%d",
+                     odometry.ekfRejectCount());
+        if (n > 0 && n < rem) { pos += n; rem -= n; }
+    }
     buf[pos] = '\0';
     return pos;
 }
@@ -374,7 +381,7 @@ void Robot::telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx)
 
     if (config.tlmPeriodMs < 20) config.tlmPeriodMs = 20;  // clamp to 50 Hz max
 
-    char tlmBuf[128];
+    char tlmBuf[160];
     buildTlmFrame(tlmBuf, sizeof(tlmBuf));
     fn(tlmBuf, ctx);
     _lastTlmMs = now_ms;
@@ -601,7 +608,7 @@ static void handleSnap(const ArgList& /*args*/, const char* /*corrId*/,
                         ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
     Robot* robot = ctxFrom(handlerCtx).robot;
-    char tlmBuf[128];
+    char tlmBuf[160];
     robot->buildTlmFrame(tlmBuf, sizeof(tlmBuf));
     replyFn(tlmBuf, replyCtx);
 }
@@ -746,13 +753,14 @@ static void handleStream(const ArgList& args, const char* corrId,
                     fbuf[flen++] = *c;
                 if (end) {
                     fbuf[flen] = '\0';
-                    if (strcmp(fbuf, "enc")   == 0) mask |= TLM_FIELD_ENC;
-                    if (strcmp(fbuf, "pose")  == 0) mask |= TLM_FIELD_POSE;
-                    if (strcmp(fbuf, "vel")   == 0) mask |= TLM_FIELD_VEL;
-                    if (strcmp(fbuf, "line")  == 0) mask |= TLM_FIELD_LINE;
-                    if (strcmp(fbuf, "color") == 0) mask |= TLM_FIELD_COLOR;
-                    if (strcmp(fbuf, "twist") == 0) mask |= TLM_FIELD_TWIST;
-                    if (strcmp(fbuf, "otos")  == 0) mask |= TLM_FIELD_OTOS;
+                    if (strcmp(fbuf, "enc")     == 0) mask |= TLM_FIELD_ENC;
+                    if (strcmp(fbuf, "pose")    == 0) mask |= TLM_FIELD_POSE;
+                    if (strcmp(fbuf, "vel")     == 0) mask |= TLM_FIELD_VEL;
+                    if (strcmp(fbuf, "line")    == 0) mask |= TLM_FIELD_LINE;
+                    if (strcmp(fbuf, "color")   == 0) mask |= TLM_FIELD_COLOR;
+                    if (strcmp(fbuf, "twist")   == 0) mask |= TLM_FIELD_TWIST;
+                    if (strcmp(fbuf, "otos")    == 0) mask |= TLM_FIELD_OTOS;
+                    if (strcmp(fbuf, "ekf_rej") == 0) mask |= TLM_FIELD_EKFREJ;
                     flen = 0;
                     if (*c == '\0') break;
                 }
@@ -764,18 +772,19 @@ static void handleStream(const ArgList& args, const char* corrId,
             int bpos = 0;
             bool needComma = false;
             const struct { uint8_t bit; const char* name; } kFieldNames[] = {
-                { TLM_FIELD_ENC,   "enc"   },
-                { TLM_FIELD_POSE,  "pose"  },
-                { TLM_FIELD_VEL,   "vel"   },
-                { TLM_FIELD_LINE,  "line"  },
-                { TLM_FIELD_COLOR, "color" },
-                { TLM_FIELD_TWIST, "twist" },
-                { TLM_FIELD_OTOS,  "otos"  },
+                { TLM_FIELD_ENC,    "enc"     },
+                { TLM_FIELD_POSE,   "pose"    },
+                { TLM_FIELD_VEL,    "vel"     },
+                { TLM_FIELD_LINE,   "line"    },
+                { TLM_FIELD_COLOR,  "color"   },
+                { TLM_FIELD_TWIST,  "twist"   },
+                { TLM_FIELD_OTOS,   "otos"    },
+                { TLM_FIELD_EKFREJ, "ekf_rej" },
             };
             int brem = (int)sizeof(body);
             int bw = snprintf(body + bpos, (size_t)brem, "fields=");
             if (bw > 0 && bw < brem) { bpos += bw; brem -= bw; }
-            for (int fi = 0; fi < 7 && brem > 1; ++fi) {
+            for (int fi = 0; fi < 8 && brem > 1; ++fi) {
                 if (robot->config.tlmFields & kFieldNames[fi].bit) {
                     if (needComma) { body[bpos++] = ','; --brem; }
                     bw = snprintf(body + bpos, (size_t)brem, "%s", kFieldNames[fi].name);

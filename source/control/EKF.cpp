@@ -7,7 +7,10 @@
 // State: [x_mm, y_mm, theta_rad, v_mmps, omega_rads]
 // Sprint 023, Ticket 001.
 // Sprint 024, Ticket 004: added updateHeading(); sane P-prior in setPose();
-//   _rejHead_streak counter for D3 gate recovery (ticket 005).
+//   _rejHead_streak counter stub for D3 gate recovery.
+// Sprint 024, Ticket 005: _rejPos_streak; R×10 inflation + streak reset at 10
+//   consecutive rejections in updatePosition() and updateHeading() independently;
+//   getRejectCount() accessor alias for TLM.
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
@@ -28,6 +31,7 @@ EKF::EKF()
     _rEncV   = 0.0f;
     _rejected = 0;
     _rejHead_streak = 0;
+    _rejPos_streak  = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -53,6 +57,7 @@ void EKF::init(float q_xy, float q_theta, float q_v, float q_omega,
     _rEncV   = r_enc_v;
     _rejected = 0;
     _rejHead_streak = 0;
+    _rejPos_streak  = 0;
 
     // Reset state and covariance.
     for (int i = 0; i < 5; ++i)
@@ -236,9 +241,41 @@ void EKF::updatePosition(float x_otos, float y_otos)
 
     // Mahalanobis gating: d2 = yi^T * S_inv * yi; chi-square 2-DOF threshold = 5.99.
     float d2 = yi0*(si00*yi0 + si01*yi1) + yi1*(si10*yi0 + si11*yi1);
-    if (d2 > 5.99f) {
+    bool accepted = (d2 <= 5.99f);
+
+    if (!accepted) {
         ++_rejected;
-        return;
+        ++_rejPos_streak;
+        // D3 gate recovery (sprint 024-005): after 10 consecutive position
+        // rejections, inflate R×10 for one update and reset the streak.
+        // This converts "permanently locked out" into "recovers within ~1 s".
+        // _rejPos_streak is independent of _rejHead_streak.
+        if (_rejPos_streak >= 10) {
+            _rejPos_streak = 0;
+            // Rebuild S and S_inv with inflated R.
+            float rEff  = _rOtosXy * 10.0f;
+            float s00i  = _P[0][0] + rEff;
+            float s01i  = _P[0][1];
+            float s10i  = _P[1][0];
+            float s11i  = _P[1][1] + rEff;
+            float deti  = s00i * s11i - s01i * s10i;
+            if (deti > 1e-9f || deti < -1e-9f) {  // non-singular
+                float id = 1.0f / deti;
+                si00 =  s11i * id;
+                si01 = -s01i * id;
+                si10 = -s10i * id;
+                si11 =  s00i * id;
+                float d2i = yi0*(si00*yi0 + si01*yi1) + yi1*(si10*yi0 + si11*yi1);
+                accepted = (d2i <= 5.99f);
+            }
+            // If degenerate or still rejected after inflation — fall through to return.
+        }
+        if (!accepted) {
+            return;
+        }
+    } else {
+        // Normal accept — reset streak.
+        _rejPos_streak = 0;
     }
 
     // Kalman gain K = P*H^T * S_inv  (5x2).
@@ -413,7 +450,11 @@ void EKF::updateVelocity(float v_meas, float omega_meas, float r_v, float r_omeg
 // Covariance update:       P[i][k] -= K[i] * P[2][k]   for k=0..4
 //
 // _rejHead_streak: increments on each rejection; resets to 0 on each accept.
-// Used by ticket 005 for gate-recovery R-inflation logic.
+// D3 gate recovery (sprint 024-005): at 10 consecutive rejections, inflate
+// R×10 for one update and reset the streak. This converts "heading locked out
+// forever" to "recovers within ~1 s at 100 ms OTOS cadence".
+// _rejHead_streak is independent of _rejPos_streak (position divergence does
+// not trigger heading recovery and vice versa).
 // ---------------------------------------------------------------------------
 
 void EKF::updateHeading(float theta_meas, float r_theta)
@@ -422,53 +463,69 @@ void EKF::updateHeading(float theta_meas, float r_theta)
     float y = wrapPi(theta_meas - _x[2]);
     float s = _P[2][2] + r_theta;
 
-    if (s > 1e-12f && (y * y / s) <= 3.84f) {
-        // Accepted.
-        _rejHead_streak = 0;
+    if (s <= 1e-12f) {
+        return;  // degenerate — skip silently
+    }
 
-        // Kalman gain: K[i] = P[i][2] / s.
-        float k0 = _P[0][2] / s;
-        float k1 = _P[1][2] / s;
-        float k2 = _P[2][2] / s;
-        float k3 = _P[3][2] / s;
-        float k4 = _P[4][2] / s;
+    bool accepted = (y * y / s) <= 3.84f;
 
-        // State update.
-        _x[0] += k0 * y;
-        _x[1] += k1 * y;
-        _x[2] += k2 * y;
-        _x[2]  = wrapPi(_x[2]);
-        _x[3] += k3 * y;
-        _x[4] += k4 * y;
-
-        // Covariance update: P[i][k] -= K[i] * P[2][k].
-        float p2k0 = _P[2][0]; float p2k1 = _P[2][1]; float p2k2 = _P[2][2];
-        float p2k3 = _P[2][3]; float p2k4 = _P[2][4];
-
-        _P[0][0] -= k0 * p2k0; _P[0][1] -= k0 * p2k1; _P[0][2] -= k0 * p2k2; _P[0][3] -= k0 * p2k3; _P[0][4] -= k0 * p2k4;
-        _P[1][0] -= k1 * p2k0; _P[1][1] -= k1 * p2k1; _P[1][2] -= k1 * p2k2; _P[1][3] -= k1 * p2k3; _P[1][4] -= k1 * p2k4;
-        _P[2][0] -= k2 * p2k0; _P[2][1] -= k2 * p2k1; _P[2][2] -= k2 * p2k2; _P[2][3] -= k2 * p2k3; _P[2][4] -= k2 * p2k4;
-        _P[3][0] -= k3 * p2k0; _P[3][1] -= k3 * p2k1; _P[3][2] -= k3 * p2k2; _P[3][3] -= k3 * p2k3; _P[3][4] -= k3 * p2k4;
-        _P[4][0] -= k4 * p2k0; _P[4][1] -= k4 * p2k1; _P[4][2] -= k4 * p2k2; _P[4][3] -= k4 * p2k3; _P[4][4] -= k4 * p2k4;
-    } else if (s <= 1e-12f) {
-        // Degenerate: skip silently.
-    } else {
+    if (!accepted) {
         ++_rejected;
         ++_rejHead_streak;
+        // D3 gate recovery: at streak == 10, inflate R×10 for this update.
+        if (_rejHead_streak >= 10) {
+            _rejHead_streak = 0;
+            s = _P[2][2] + r_theta * 10.0f;
+            // Re-evaluate gate with inflated S.
+            accepted = (s > 1e-12f) && ((y * y / s) <= 3.84f);
+        }
+        if (!accepted) {
+            return;  // still rejected (or degenerate after inflation)
+        }
     }
+
+    // Accepted (normal or recovery path).
+    _rejHead_streak = 0;
+
+    // Kalman gain: K[i] = P[i][2] / s.
+    float k0 = _P[0][2] / s;
+    float k1 = _P[1][2] / s;
+    float k2 = _P[2][2] / s;
+    float k3 = _P[3][2] / s;
+    float k4 = _P[4][2] / s;
+
+    // State update.
+    _x[0] += k0 * y;
+    _x[1] += k1 * y;
+    _x[2] += k2 * y;
+    _x[2]  = wrapPi(_x[2]);
+    _x[3] += k3 * y;
+    _x[4] += k4 * y;
+
+    // Covariance update: P[i][k] -= K[i] * P[2][k].
+    float p2k0 = _P[2][0]; float p2k1 = _P[2][1]; float p2k2 = _P[2][2];
+    float p2k3 = _P[2][3]; float p2k4 = _P[2][4];
+
+    _P[0][0] -= k0 * p2k0; _P[0][1] -= k0 * p2k1; _P[0][2] -= k0 * p2k2; _P[0][3] -= k0 * p2k3; _P[0][4] -= k0 * p2k4;
+    _P[1][0] -= k1 * p2k0; _P[1][1] -= k1 * p2k1; _P[1][2] -= k1 * p2k2; _P[1][3] -= k1 * p2k3; _P[1][4] -= k1 * p2k4;
+    _P[2][0] -= k2 * p2k0; _P[2][1] -= k2 * p2k1; _P[2][2] -= k2 * p2k2; _P[2][3] -= k2 * p2k3; _P[2][4] -= k2 * p2k4;
+    _P[3][0] -= k3 * p2k0; _P[3][1] -= k3 * p2k1; _P[3][2] -= k3 * p2k2; _P[3][3] -= k3 * p2k3; _P[3][4] -= k3 * p2k4;
+    _P[4][0] -= k4 * p2k0; _P[4][1] -= k4 * p2k1; _P[4][2] -= k4 * p2k2; _P[4][3] -= k4 * p2k3; _P[4][4] -= k4 * p2k4;
 }
 
 // ---------------------------------------------------------------------------
 // Accessors
 // ---------------------------------------------------------------------------
 
-float    EKF::x()             const { return _x[0]; }
-float    EKF::y()             const { return _x[1]; }
-float    EKF::theta()         const { return _x[2]; }
-float    EKF::v()             const { return _x[3]; }
-float    EKF::omega()         const { return _x[4]; }
-uint32_t EKF::rejectedCount() const { return _rejected; }
-int      EKF::rejHeadStreak() const { return _rejHead_streak; }
+float    EKF::x()              const { return _x[0]; }
+float    EKF::y()              const { return _x[1]; }
+float    EKF::theta()          const { return _x[2]; }
+float    EKF::v()              const { return _x[3]; }
+float    EKF::omega()          const { return _x[4]; }
+uint32_t EKF::rejectedCount()  const { return _rejected; }
+int      EKF::getRejectCount() const { return (int)_rejected; }
+int      EKF::rejHeadStreak()  const { return _rejHead_streak; }
+int      EKF::rejPosStreak()   const { return _rejPos_streak; }
 
 // ---------------------------------------------------------------------------
 // wrapPi — wrap angle to (-pi, pi] using atan2f identity.

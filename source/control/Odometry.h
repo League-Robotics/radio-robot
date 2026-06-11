@@ -163,6 +163,10 @@ public:
     // Number of OTOS samples rejected by the outlier gate since boot.
     uint32_t otosRejectedCount() const { return _otosRejected; }
 
+    // Cumulative EKF gate rejection count (all channels: position, heading, velocity).
+    // Sprint 024-005: exposed for TLM ekf_rej= field.
+    int ekfRejectCount() const { return _ekf.getRejectCount(); }
+
     // ---------------------------------------------------------------------------
     // Legacy forward-Euler integrate (deprecated; kept for reference only).
     // dL_mm, dR_mm: signed mm traveled by left and right wheels this tick.

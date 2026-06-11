@@ -29,6 +29,7 @@
 //
 // Sprint 023, Ticket 001.
 // Sprint 024, Ticket 004: added updateHeading(); sane P-prior in setPose().
+// Sprint 024, Ticket 005: _rejPos_streak + R-inflation recovery; getRejectCount().
 // ===========================================================================
 
 class EKF {
@@ -88,7 +89,9 @@ public:
     float    v()            const;
     float    omega()        const;
     uint32_t rejectedCount() const;
+    int      getRejectCount() const;   // alias for TLM: same as rejectedCount()
     int      rejHeadStreak() const;
+    int      rejPosStreak()  const;
 
 private:
     float    _x[5];       // state: [x_mm, y_mm, theta_rad, v_mmps, omega_rads]
@@ -97,8 +100,9 @@ private:
     float    _rOtosXy;    // OTOS position noise variance (same for x and y)
     float    _rOtosV;     // OTOS velocity noise variance
     float    _rEncV;      // encoder velocity noise variance
-    uint32_t _rejected;   // count of gated (rejected) observations
-    int      _rejHead_streak; // consecutive heading-update rejection streak (used by D3 gate recovery)
+    uint32_t _rejected;       // cumulative count of gated (rejected) observations
+    int      _rejHead_streak; // consecutive heading-update rejection streak (D3 gate recovery)
+    int      _rejPos_streak;  // consecutive position-update rejection streak (D3 gate recovery)
 
     // Wrap angle to (-pi, pi] using atan2f identity.
     // Form: atan2f(sinf(theta), cosf(theta)) — exact match with Python mirror's
