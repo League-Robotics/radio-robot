@@ -24,6 +24,8 @@ class MockOtosSensor : public IOtosSensor {
 public:
     // IOtosSensor interface --------------------------------------------------
     OtosPose readTransformed(const RobotConfig& cfg) const override;
+    OtosVelocity readVelocityTransformed(const RobotConfig& cfg) const override;
+    OtosAccel readAccelTransformed(const RobotConfig& cfg) const override;
 
     void init() override {}
     void calibrateImu(uint8_t samples) override { (void)samples; }

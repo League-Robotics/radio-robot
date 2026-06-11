@@ -26,6 +26,14 @@ OtosPose MockOtosSensor::readTransformed(const RobotConfig& /*cfg*/) const {
     return pose;
 }
 
+OtosVelocity MockOtosSensor::readVelocityTransformed(const RobotConfig& /*cfg*/) const {
+    return {0.0f, 0.0f};
+}
+
+OtosAccel MockOtosSensor::readAccelTransformed(const RobotConfig& /*cfg*/) const {
+    return {0.0f, 0.0f};
+}
+
 void MockOtosSensor::getPositionRaw(int16_t& x, int16_t& y, int16_t& h) const {
     x = _rawX;
     y = _rawY;
