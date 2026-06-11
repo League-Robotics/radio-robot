@@ -959,9 +959,13 @@ static ParseResult parseKeepalive(const char* const* /*tokens*/, int /*ntokens*/
     ParseResult r; r.ok = true; r.args.count = 0; return r;
 }
 
-static void handleKeepalive(const ArgList& /*args*/, const char* corrId,
-                              ReplyFn replyFn, void* replyCtx, void* handlerCtx)
+static void handleKeepalive(const ArgList& /*args*/, const char* /*corrId*/,
+                              ReplyFn /*replyFn*/, void* /*replyCtx*/, void* handlerCtx)
 {
+    // Quiet keepalive (sprint 024-003): suppress the "OK keepalive" reply.
+    // At 6.7 Hz the acks competed with TLM frames for the 250-byte TX buffer;
+    // the host already filters them.  The watchdog reset (firmware side) and
+    // the sim watchdog arm (sim_api.cpp via sim_command) are the only effects.
 #ifndef HOST_BUILD
     LoopScheduler* sched = ctxFrom(handlerCtx).sched;
     Robot*         robot = ctxFrom(handlerCtx).robot;
@@ -971,9 +975,7 @@ static void handleKeepalive(const ArgList& /*args*/, const char* corrId,
 #else
     (void)handlerCtx;
 #endif
-    char rbuf[64];
-    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "keepalive", nullptr,
-                               corrId, replyFn, replyCtx);
+    // No reply emitted (quiet keepalive).
 }
 
 // ---------------------------------------------------------------------------
@@ -1019,6 +1021,15 @@ static void handleSafe(const ArgList& args, const char* corrId,
     if (args.count >= 1) {
         const char* a0 = args.args[0].sval;
         if (strcmp(a0, "off") == 0) {
+            // One-shot disable: do NOT clear safetyEnabled directly.
+            // Instead arm the one-shot flag in MotionController so safety
+            // is automatically restored when the next motion command begins.
+            // This prevents SAFE off from becoming a permanent foot-gun.
+            robot->motionController.disableSafetyOneShot();
+            // Reflect the transient "off" state in the reply (safetyEnabled
+            // will be re-armed by MotionController on the next begin*() call,
+            // but for the duration of any current-or-next command the watchdog
+            // is suppressed via _safeOneShotDisable).
             cfg.safetyEnabled = false;
         } else if (strcmp(a0, "on") == 0) {
             cfg.safetyEnabled = true;
@@ -1030,6 +1041,8 @@ static void handleSafe(const ArgList& args, const char* corrId,
             // Numeric form: SAFE <ms>  (0 → off, >0 → on with that timeout).
             int ms = atoi(a0);
             if (ms <= 0) {
+                // Same one-shot treatment as "SAFE off".
+                robot->motionController.disableSafetyOneShot();
                 cfg.safetyEnabled = false;
             } else {
                 cfg.safetyEnabled = true;

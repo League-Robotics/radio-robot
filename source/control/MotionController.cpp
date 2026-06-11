@@ -129,12 +129,48 @@ void MotionController::setCtx(struct Robot* r)
 }
 
 // ---------------------------------------------------------------------------
+// _checkSafeOneShot — re-arm safety if the one-shot disable flag is set.
+//
+// Called at the start of every begin*() entry point after the cancel-if-active
+// guard (ticket 002) and before configure().  If _safeOneShotDisable is true:
+//   - restore _cfg.safetyEnabled = true
+//   - emit "EVT safety re-armed" via the command reply sink
+//   - clear the flag
+// This ensures SAFE off is a one-shot bypass: the operator can issue a single
+// motion command without keepalives, and safety is automatically restored for
+// that command and all subsequent ones.
+//
+// Note: _cfg is a const-ref; safetyEnabled lives in the mutable RobotConfig
+// owned by Robot.  Access via _ctx.robot->config when available, which IS the
+// same object as _cfg (Robot passes &cfg to MotionController).  Cast away
+// const here — we are legitimately mutating config.safetyEnabled as the
+// designated "re-arm" code path (ticket 024-003 decision: MotionController
+// owns the flag; architecture review confirmed).
+// ---------------------------------------------------------------------------
+void MotionController::_checkSafeOneShot(ReplyFn fn, void* ctx)
+{
+    if (!_safeOneShotDisable) return;
+    _safeOneShotDisable = false;
+    // Re-arm via the mutable Robot config (same object as _cfg).
+    if (_ctx.robot != nullptr) {
+        _ctx.robot->config.safetyEnabled = true;
+    }
+    // Emit the re-arm event.
+    if (fn) {
+        fn("EVT safety re-armed", ctx);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Entry points
 // ---------------------------------------------------------------------------
 
 void MotionController::beginStream(float leftMms, float rightMms, uint32_t now_ms,
                                    TargetState& target, ReplyFn fn, void* ctx)
 {
+    // Re-arm safety if SAFE off was issued (one-shot disable, sprint 024-003).
+    _checkSafeOneShot(fn, ctx);
+
     // Convert wheel speeds to body twist via forward kinematics, then route
     // through BVC so all wheel commands go through the profiler path.
     float v, omega;
@@ -165,6 +201,9 @@ void MotionController::beginVelocity(float v_mms, float omega_rads, uint32_t now
     if (_activeCmd.active()) {
         _activeCmd.cancel(MotionCommand::StopStyle::HARD);
     }
+
+    // Re-arm safety if SAFE off was issued (one-shot disable, sprint 024-003).
+    _checkSafeOneShot(fn, ctx);
 
     // Configure a fresh MotionCommand for body-twist (v, ω) with:
     //   - No TIME stop (keepalive watchdog is now the system watchdog in
@@ -206,6 +245,9 @@ void MotionController::beginArc(float speedMms, float radiusMm, uint32_t now_ms,
         _activeCmd.cancel(MotionCommand::StopStyle::HARD);
     }
 
+    // Re-arm safety if SAFE off was issued (one-shot disable, sprint 024-003).
+    _checkSafeOneShot(fn, ctx);
+
     // Configure a fresh MotionCommand for body-twist (v, ω) with:
     //   - No stop conditions (open-ended; host cancels via X or R 0 r).
     //   - SOFT stop style (ramp to zero before completing).
@@ -238,6 +280,9 @@ void MotionController::beginTimed(float leftMms, float rightMms,
     // For equal L=R (straight drive), forward() gives v=(L+R)/2 and omega=0 — no steer bias.
     float v_mms, omega_rads;
     BodyKinematics::forward(leftMms, rightMms, _cfg.trackwidthMm, v_mms, omega_rads);
+
+    // Re-arm safety if SAFE off was issued (one-shot disable, sprint 024-003).
+    _checkSafeOneShot(fn, ctx);
 
     // Configure a fresh MotionCommand with:
     //   - TIME stop condition at durationMs.
@@ -285,6 +330,9 @@ void MotionController::beginDistance(float leftMms, float rightMms,
     // Store decel-hook state.
     _dDistTarget = (float)targetMm;
     _dOmega      = omega_rads;
+
+    // Re-arm safety if SAFE off was issued (one-shot disable, sprint 024-003).
+    _checkSafeOneShot(fn, ctx);
 
     // Timeout: 2× nominal travel time + 2 s safety margin.
     // The nominal time is |targetMm| / max(|vL|, |vR|) in seconds.
@@ -351,6 +399,10 @@ void MotionController::beginGoTo(float tx, float ty, float speedMms, uint32_t no
     } else {
         target.corrId[0] = '\0';
     }
+
+    // Re-arm safety if SAFE off was issued (one-shot disable, sprint 024-003).
+    // Done before the PRE_ROTATE / PURSUE branch so both paths benefit.
+    _checkSafeOneShot(fn, ctx);
 
     // Turn-in-place gate: bearing is computed from the robot-relative input
     // (tx, ty) at command time — the robot frame IS the input frame here.
@@ -509,6 +561,9 @@ void MotionController::beginTurn(float headingCdeg, float epsCdeg, uint32_t now_
         _activeCmd.cancel(MotionCommand::StopStyle::HARD);
     }
 
+    // Re-arm safety if SAFE off was issued (one-shot disable, sprint 024-003).
+    _checkSafeOneShot(fn, ctx);
+
     // Configure a fresh MotionCommand with:
     //   - target twist (0, ω): spin-in-place.
     //   - HEADING stop condition.
@@ -572,6 +627,14 @@ void MotionController::beginRotation(float relCdeg, uint32_t now_ms,
     float omega_sign = (relCdeg >= 0.0f) ? 1.0f : -1.0f;   // + ⇒ CCW
     float omega = omega_sign * rateDps * kDegToRad;        // rad/s
 
+    // Cancel any stale MotionCommand before configuring the new one.
+    if (_activeCmd.active()) {
+        _activeCmd.cancel(MotionCommand::StopStyle::HARD);
+    }
+
+    // Re-arm safety if SAFE off was issued (one-shot disable, sprint 024-003).
+    _checkSafeOneShot(fn, ctx);
+
     _activeCmd.configure(0.0f, omega, &_bvc);
     _activeCmd.addStop(makeRotationStop(stopArc));         // primary: encoder arc
 
@@ -617,6 +680,11 @@ void MotionController::cancel(uint32_t now_ms, ReplyFn fn, void* ctx)
     (void)now_ms;
     (void)fn;
     (void)ctx;
+}
+
+void MotionController::disableSafetyOneShot()
+{
+    _safeOneShotDisable = true;
 }
 
 void MotionController::softStop(uint32_t now_ms)
