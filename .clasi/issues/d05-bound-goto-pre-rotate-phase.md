@@ -37,10 +37,15 @@ either phase** — the only motion verb without one.
 ## Acceptance
 
 - **Sim (field profile):** issue `G` to a 135° bearing target with heading frozen
-  (mock); command must end via the TIME net, NOT spin forever; correct EVT label.
-- **Hardware:** `G` to a behind-the-robot target with the host deliberately silent
-  → robot stops on its own within the time net, safety ON the whole time. Robot
-  placed on field + a tour run never produces an unbounded spin.
+  (mock); command must end via the PRE_ROTATE TIME net and emit `EVT done G`, NOT
+  spin forever and NOT via `safety_stop`.
+- **Hardware (keepalives flowing / daemon ON, so the watchdog cannot mask the
+  result):** `G` to a behind-the-robot target with a frozen/wrong heading → robot
+  stops via the PRE_ROTATE TIME stop and emits the timeout `EVT done G`, **not**
+  `EVT safety_stop`; robot placed on field + a tour run never produces an unbounded
+  spin. (Host-silence → watchdog behavior is d04's test, not this one — with D5 but
+  not D4, host silence would trip the 500 ms watchdog before the TIME net and pass
+  for the wrong reason.)
 
 ## Source
 Defect **D5** in `docs/code_review/2026-06-11-Fable-s2p-review/2026-06-11-sim2real-architecture-review.md`;

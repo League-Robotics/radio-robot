@@ -33,10 +33,15 @@ dead. `beginRotation` (RT) computes its encoder-arc target with no slip term eit
 
 ## Acceptance
 
-- **Hardware:** `TURN 9000` lands 90° ± 3° physical (protractor/OTOS); `RT 9000`
-  likewise.
+- **Hardware (isolates D2 — encoder-arc stop, no fusion):** `RT 9000` lands
+  90° ± 3° physical (protractor/OTOS), and the dead-reckoned heading between OTOS
+  fixes tracks truth after the slip correction.
 - **Sim (field profile):** with mock slip on, predicted heading matches mock-body
   truth after the slip correction.
+- Note: `TURN 9000` end-point accuracy is validated in **d01**, not here — TURN
+  stops on the fused `poseHrad`, so its accuracy is delivered mainly by OTOS heading
+  fusion. D2's isolated effect shows up in RT and in dead-reckoning quality between
+  fixes.
 
 ## Source
 Defect **D2** in the 2026-06-11 sim2real review; fix P0.5. Relates to memory

@@ -34,7 +34,10 @@ to link-loss detection.
 3. Make `+` quiet on the wire (suppress the `OK keepalive` reply, or honour a `+q`
    variant): at 6.7 Hz the acks are noise competing with TLM for the 250-byte TX
    buffer, and the host filters them anyway.
-4. Restore a sane streaming `sTimeout` (~1 s) instead of 60 s once (1)/(2) land.
+4. Remove the `sTimeout=60000` overrides in **host code and test fixtures**
+   (e.g. `tests/bench/square_run.py`) — the firmware default (500 ms) is already
+   sane, so no firmware change is needed here; this is a host/test cleanup that
+   stops a 60 s net from masking watchdog behavior once (1)/(2) land.
 
 ## Acceptance
 
