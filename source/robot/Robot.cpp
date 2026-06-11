@@ -998,6 +998,52 @@ static void handleSafe(const ArgList& args, const char* corrId,
 }
 
 // ---------------------------------------------------------------------------
+// SI — set the odometry world pose directly (what G reads via getPoseFloat).
+//   SI <x_mm> <y_mm> <h_cdeg>
+// Establishes the robot's onboard pose from an external fix (e.g. the camera)
+// so a subsequent G/D/TURN drives in the correct world frame. This is the pose
+// the motion controller reads — unlike OV, which only nudges the raw OTOS chip.
+// Reply: OK setpose x=<mm> y=<mm> h=<cdeg>
+// ---------------------------------------------------------------------------
+
+static ParseResult parseSI(const char* const* tokens, int ntokens,
+                            const KVPair* /*kvs*/, int /*nkv*/)
+{
+    ParseResult r;
+    if (ntokens < 3) {
+        r.ok = false;
+        r.err = { "badarg", "SI x_mm y_mm h_cdeg" };
+        return r;
+    }
+    r.ok = true;
+    r.args.count = 3;
+    r.args.args[0].type = ArgType::INT; r.args.args[0].ival = atoi(tokens[0]);
+    r.args.args[1].type = ArgType::INT; r.args.args[1].ival = atoi(tokens[1]);
+    r.args.args[2].type = ArgType::INT; r.args.args[2].ival = atoi(tokens[2]);
+    return r;
+}
+
+static void handleSI(const ArgList& args, const char* corrId,
+                      ReplyFn replyFn, void* replyCtx, void* handlerCtx)
+{
+    char rbuf[80];
+    Robot* robot = ctxFrom(handlerCtx).robot;
+    if (robot == nullptr) {
+        CommandProcessor::replyErr(rbuf, sizeof(rbuf), "noctx", "SI",
+                                   corrId, replyFn, replyCtx);
+        return;
+    }
+    int32_t x_mm   = args.args[0].ival;
+    int32_t y_mm   = args.args[1].ival;
+    int32_t h_cdeg = args.args[2].ival;
+    robot->odometry.setPose(robot->state.inputs, x_mm, y_mm, h_cdeg);
+    char body[48];
+    snprintf(body, sizeof(body), "x=%d y=%d h=%d", (int)x_mm, (int)y_mm, (int)h_cdeg);
+    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "setpose", body,
+                              corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
 // HALT — user-facing named stop-condition commands.
 //
 // Wire formats:
@@ -1363,6 +1409,7 @@ std::vector<CommandDescriptor> Robot::buildCommandTable(
     cmds.push_back(makeCmd("RF",       parseRf,        handleRf,        sysCtxPtr, "badarg")); // set radio channel
     cmds.push_back(makeCmd("+",        parseKeepalive, handleKeepalive, sysCtxPtr, "badarg")); // keepalive: reset watchdog
     cmds.push_back(makeCmd("SAFE",     parseSafe,      handleSafe,      sysCtxPtr, "badarg")); // enable/disable safety watchdog + set timeout
+    cmds.push_back(makeCmd("SI",       parseSI,        handleSI,        sysCtxPtr, "badarg")); // set odometry world pose (x_mm y_mm h_cdeg)
     cmds.push_back(makeCmd("GET VEL",  parseGetVel,    handleGetVel,    sysCtxPtr, "badarg")); // get velocity PID params
     cmds.push_back(makeCmd("GET",      parseGet,       handleGet,       &_cfgCtx,  "badkey")); // get config value by key
     cmds.push_back(makeCmd("SET",      parseSet,       handleSet,       &_cfgCtx,  "badkey")); // set config value by key
