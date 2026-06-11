@@ -21,7 +21,8 @@ Odometry::Odometry()
 // Reads s.encLMm / s.encRMm; writes s.poseX / s.poseY / s.poseHrad.
 // ---------------------------------------------------------------------------
 
-void Odometry::predict(HardwareState& s, float trackwidthMm, uint32_t now_ms)
+void Odometry::predict(HardwareState& s, float trackwidthMm,
+                       float rotationalSlip, uint32_t now_ms)
 {
     // Compute dt — use signed cast to avoid uint32 underflow on rollover.
     // (See watchdog-uint32-underflow project finding: never plain-subtract
@@ -42,7 +43,11 @@ void Odometry::predict(HardwareState& s, float trackwidthMm, uint32_t now_ms)
     _prevEncR = s.encRMm;
 
     float dCenter   = (dL + dR) * 0.5f;
-    float dTheta    = (dR - dL) / trackwidthMm;
+    // Apply rotational-slip correction: encoder arc over-reports body rotation
+    // (wheel scrub during turns).  slip factor in [0.5, 1.0]; 0/unset → 1.0.
+    // (024-006: rotationalSlip is now active — was dead before this sprint.)
+    float slip      = effectiveSlip(rotationalSlip);
+    float dTheta    = ((dR - dL) / trackwidthMm) * slip;
     float thetaMid  = s.poseHrad + dTheta * 0.5f;
 
     s.poseX    += dCenter * cosf(thetaMid);

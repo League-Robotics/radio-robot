@@ -150,10 +150,6 @@ struct RobotConfig {
     float jMax;           // linear jerk limit, mm/s³  (0=trapezoid) (default 0.0)
     float yawJerkMax;     // yaw jerk limit, deg/s³    (0=trapezoid) (default 0.0)
 
-    // Command scaling
-    float   distScale;
-    float   turnScale;
-
     // Timing and speed parameters
     int32_t minSpeedMms;
     int32_t tickMs;

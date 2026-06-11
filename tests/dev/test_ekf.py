@@ -2076,3 +2076,168 @@ class TestTlmEkfRej:
         assert frame is not None
         assert frame.ekf_rej == 99999, \
             f"ekf_rej should be 99999, got {frame.ekf_rej}"
+
+
+# ---------------------------------------------------------------------------
+# TestRotationalSlip — Python mirror of Odometry::predict() slip correction
+#
+# Sprint 024-006: rotationalSlip is now active in firmware (was dead before).
+# dTheta = ((dR - dL) / trackwidthMm) * effective_slip(rotationalSlip)
+# effective_slip: 0.0/neg → 1.0; clamp [0.5, 1.0].
+#
+# These tests validate the slip-clamp helper and verify that an EKF driven
+# through slip-corrected dTheta accumulates 74% of the raw encoder arc.
+# ---------------------------------------------------------------------------
+
+def effective_slip(raw_slip: float) -> float:
+    """Migration-safe rotationalSlip clamp — matches effectiveSlip() in Odometry.h.
+
+    0.0 or negative → 1.0 (no correction; legacy/unset).
+    (0.0, 0.5)      → 0.5 (clamp floor).
+    [0.5, 1.0]      → pass-through.
+    > 1.0           → 1.0 (clamp ceiling).
+    """
+    if raw_slip <= 0.0:
+        return 1.0
+    if raw_slip < 0.5:
+        return 0.5
+    if raw_slip > 1.0:
+        return 1.0
+    return raw_slip
+
+
+class TestRotationalSlip:
+    """Validate effective_slip() and EKF predict with slip-corrected dTheta.
+
+    Sprint 024-006: rotationalSlip is now applied in Odometry::predict() before
+    passing dTheta to EKF::predict().  The Python mirror reflects this design:
+    the Odometry layer computes slip-corrected dTheta and then calls EKF.predict().
+    These tests verify the slip clamp helper and its effect on heading accumulation.
+    """
+
+    # ---- effective_slip helper tests -----------------------------------------
+
+    def test_slip_zero_maps_to_one(self):
+        """rotationalSlip=0.0 (unset/legacy) → effective slip = 1.0 (no correction)."""
+        assert effective_slip(0.0) == pytest.approx(1.0, abs=1e-9)
+
+    def test_slip_negative_maps_to_one(self):
+        """Negative rotationalSlip → effective slip = 1.0 (treat as unset)."""
+        assert effective_slip(-0.5) == pytest.approx(1.0, abs=1e-9)
+
+    def test_slip_below_floor_clamps_to_0_5(self):
+        """rotationalSlip=0.3 (below floor 0.5) → effective slip clamped to 0.5."""
+        assert effective_slip(0.3) == pytest.approx(0.5, abs=1e-9)
+
+    def test_slip_0_74_passes_through(self):
+        """rotationalSlip=0.74 (firmware default) passes through unchanged."""
+        assert effective_slip(0.74) == pytest.approx(0.74, abs=1e-9)
+
+    def test_slip_0_5_is_floor(self):
+        """rotationalSlip=0.5 (floor) passes through."""
+        assert effective_slip(0.5) == pytest.approx(0.5, abs=1e-9)
+
+    def test_slip_1_0_is_identity(self):
+        """rotationalSlip=1.0 (no-slip) passes through."""
+        assert effective_slip(1.0) == pytest.approx(1.0, abs=1e-9)
+
+    def test_slip_above_ceiling_clamps_to_1_0(self):
+        """rotationalSlip=1.2 (above ceiling) → effective slip clamped to 1.0."""
+        assert effective_slip(1.2) == pytest.approx(1.0, abs=1e-9)
+
+    # ---- EKF predict with slip-corrected dTheta ------------------------------
+
+    def test_predict_rotational_slip_reduces_heading(self):
+        """EKF predict with slip=0.74 accumulates only 74% of raw encoder dθ.
+
+        With rotationalSlip=0.74, a pure-rotation encoder arc of π/2 rad should
+        produce an EKF heading of 0.74 * π/2 ≈ 1.164 rad (not π/2 ≈ 1.571 rad).
+
+        The Odometry layer computes:
+            dTheta_corrected = dTheta_raw * effective_slip(0.74)
+        and passes the corrected value to EKF.predict(). This test mimics that
+        flow by pre-multiplying dTheta before calling EKF.predict().
+        """
+        e = _make_ekf_default()
+        raw_dtheta = math.pi / 2            # 90° encoder arc
+        slip = effective_slip(0.74)
+        corrected_dtheta = raw_dtheta * slip  # 74% of encoder arc
+        e.predict(0.0, corrected_dtheta, 0.0)  # pure rotation
+        expected = corrected_dtheta
+        assert e.theta == pytest.approx(expected, abs=1e-9), (
+            f"With slip=0.74, heading should be {expected:.4f} rad "
+            f"(74% of {raw_dtheta:.4f}), got {e.theta:.4f}"
+        )
+
+    def test_predict_slip_zero_is_identity(self):
+        """rotationalSlip=0.0 (unset) → effective slip 1.0 → heading unchanged.
+
+        Tests the migration-safe 0→1.0 mapping: old configs that don't set
+        rotationalSlip (0.0) must behave identically to pre-024-006 code (no
+        slip correction applied).
+        """
+        e = _make_ekf_default()
+        raw_dtheta = math.pi / 4
+        slip = effective_slip(0.0)   # 0 → 1.0 (no correction)
+        assert slip == pytest.approx(1.0, abs=1e-9), \
+            f"effective_slip(0.0) must be 1.0, got {slip}"
+        corrected_dtheta = raw_dtheta * slip
+        e.predict(0.0, corrected_dtheta, 0.0)
+        # Heading should equal the full raw_dtheta (no correction applied)
+        assert e.theta == pytest.approx(raw_dtheta, abs=1e-9), (
+            f"slip=0.0 (identity) should leave heading={raw_dtheta:.4f}, "
+            f"got {e.theta:.4f}"
+        )
+
+    def test_predict_two_steps_with_slip_accumulate_correctly(self):
+        """Two predict steps with slip=0.74 accumulate 74% of total encoder arc.
+
+        Validates that the slip correction is applied per-step and accumulates
+        consistently over multiple ticks (not a one-time offset).
+        """
+        e = _make_ekf_default()
+        slip = effective_slip(0.74)
+        raw_per_step = math.pi / 4    # 45° raw encoder arc per step
+        corrected = raw_per_step * slip
+
+        e.predict(0.0, corrected, 0.0)
+        e.predict(0.0, corrected, e.theta)
+
+        # After 2 steps: heading = 2 × corrected = 2 × 0.74 × (π/4)
+        expected = 2.0 * corrected
+        assert e.theta == pytest.approx(expected, abs=1e-9), (
+            f"Two steps with slip=0.74: expected {expected:.4f}, got {e.theta:.4f}"
+        )
+
+    def test_field_profile_over_report_sign(self):
+        """Field-profile fixture uses negative slip_turn_extra to produce encoder over-report.
+
+        In the sim field-profile, MockMotor.tick() computes:
+            enc = vel * (1 - slip_raw)
+        where slip_raw = slipStraight + slipTurnExtra * turnRate.
+
+        With slip_turn_extra = +0.26 (old wrong sign): slip_raw = +0.26 → enc = vel*0.74
+          → encoder UNDER-reports body rotation (wrong direction for scrub).
+        With slip_turn_extra = -0.26 (corrected sign, sprint 024-006):
+          slip_raw = -0.26 → enc = vel * 1.26 → encoder OVER-reports (correct: scrub).
+
+        This test verifies the sign convention is documented and understood.
+        """
+        vel = 100.0
+        turn_rate = 1.0  # full turn
+
+        # Old (wrong) sign: positive turn_extra → under-report
+        slip_raw_old = 0.0 + 0.26 * turn_rate
+        enc_old = vel * (1.0 - slip_raw_old)
+        assert enc_old < vel, (
+            "Old sign convention (positive turn_extra) should produce under-report "
+            f"(enc={enc_old:.1f} < vel={vel:.1f})"
+        )
+
+        # Corrected sign: negative turn_extra → over-report (scrub)
+        slip_raw_new = 0.0 + (-0.26) * turn_rate
+        enc_new = vel * (1.0 - slip_raw_new)
+        assert enc_new > vel, (
+            "Corrected sign (negative turn_extra) should produce over-report "
+            f"(enc={enc_new:.1f} > vel={vel:.1f})"
+        )

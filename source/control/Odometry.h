@@ -5,6 +5,27 @@
 #include "IOtosSensor.h"
 #include "EKF.h"
 
+// ---------------------------------------------------------------------------
+// effectiveSlip — migration-safe rotationalSlip clamp.
+//
+// Used by Odometry::predict() and MotionController::beginRotation() so both
+// apply the same clamped slip factor from RobotConfig::rotationalSlip.
+//
+// Value semantics:
+//   0.0 (or negative, or unset) → 1.0  (no correction; legacy config-safe)
+//   (0.0, 0.5)                  → 0.5  (clamp floor — unrealistic slip)
+//   [0.5, 1.0]                  → pass-through
+//   > 1.0                       → 1.0  (clamp ceiling)
+//
+// Sprint 024-006: rotationalSlip is now wired into firmware logic (was dead).
+// ---------------------------------------------------------------------------
+inline float effectiveSlip(float rawSlip) {
+    if (rawSlip <= 0.0f) return 1.0f;
+    if (rawSlip < 0.5f)  return 0.5f;
+    if (rawSlip > 1.0f)  return 1.0f;
+    return rawSlip;
+}
+
 // Forward-declare Odometry so OdomCtx can hold a pointer to it.
 // The full class definition follows immediately below.
 class Odometry;
@@ -79,10 +100,14 @@ public:
     // Also advances the EKF and writes EKF state as the authoritative pose,
     // including s.fusedV and s.fusedOmega from the velocity states.
     //
+    // rotationalSlip: body-rotation efficiency from RobotConfig (024-006).
+    //   dTheta = ((dR-dL)/trackwidth) * clamp(rotationalSlip, 0.5, 1.0).
+    //   0 / unset → 1.0 (migration-safe: no change for legacy exact-profile configs).
     // now_ms: robot system clock timestamp (ms). Used to compute dt for the
     // EKF and encoder-rate velocity. Signed delta cast avoids uint32 underflow
     // (see watchdog-uint32-underflow finding).
-    void predict(HardwareState& s, float trackwidthMm, uint32_t now_ms);
+    void predict(HardwareState& s, float trackwidthMm,
+                 float rotationalSlip, uint32_t now_ms);
 
     // EKF initialisation — set process and measurement noise parameters.
     // Must be called once at startup (e.g. from Robot constructor) before

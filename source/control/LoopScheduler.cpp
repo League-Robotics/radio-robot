@@ -277,7 +277,8 @@ void LoopScheduler::run_blocks()
         // ===== ODOMETRY: dead-reckon pose from encoder deltas ===============
         if (enOdom) {
             now = _uBit.systemTime();
-            _robot.odometry.predict(_robot.state.inputs, _robot.config.trackwidthMm, now);
+            _robot.odometry.predict(_robot.state.inputs, _robot.config.trackwidthMm,
+                                    _robot.config.rotationalSlip, now);
         }
 
         // ===== OTOS: timed I2C pose read + fusion ===========================

@@ -618,9 +618,12 @@ void MotionController::beginRotation(float relCdeg, uint32_t now_ms,
     const float kRtCoastArcMm = 8.0f;   // ~7.3° SOFT-ramp coast at 100°/s (sim-tuned)
 
     float tw   = _cfg.trackwidthMm;
-    // Per-wheel arc = |deg|·(π/180)·(trackwidth/2). The ROTATION stop fires when
-    // |Δ(encR - encL)|/2 reaches (arc - coast anticipation).
-    float arc  = fabsf(relCdeg) / 100.0f * kDegToRad * (tw * 0.5f);
+    // Per-wheel arc = |deg|·(π/180)·(trackwidth/2) / slip.
+    // Dividing by slip (< 1.0) enlarges the encoder-arc target so wheels travel
+    // far enough for the body to reach the commanded angle despite scrub.
+    // effectiveSlip() applies the same migration-safe clamp as Odometry::predict().
+    float slip = effectiveSlip(_cfg.rotationalSlip);
+    float arc  = fabsf(relCdeg) / 100.0f * kDegToRad * (tw * 0.5f) / slip;
     float stopArc = arc - kRtCoastArcMm;
     if (stopArc < 0.0f) stopArc = 0.0f;
     float rateDps = (_cfg.yawRateMax < kRtRateDps) ? _cfg.yawRateMax : kRtRateDps;

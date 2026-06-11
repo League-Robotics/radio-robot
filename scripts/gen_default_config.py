@@ -282,10 +282,6 @@ RobotConfig defaultRobotConfig() {{
     p.jMax            = 0.0f;
     p.yawJerkMax      = 0.0f;
 
-    // Command scaling
-    p.distScale       = 0.94f;
-    p.turnScale       = 1.07f;
-
     // Timing
     p.minSpeedMms     = 50;
     p.tickMs          = 20;

@@ -206,13 +206,19 @@ class Sim:
         sprint-024 motion-bounding regression tests.
 
         Args:
-            slip_turn_extra: Extra fractional slip applied during turns
-                             (0.26 ≈ field-measured value from rotationalSlip).
+            slip_turn_extra: Fractional encoder over-report during turns
+                             (positive = encoder reads MORE arc than body rotates,
+                             matching real scrub; 0.26 ≈ field-measured value).
+                             Negated before passing to sim_set_motor_slip because
+                             the MockMotor formula is ``enc = vel * (1 - slip)`` —
+                             negative slip produces over-report (sprint 024-006).
             fuse_otos:       Whether to enable OTOS→EKF correction each tick.
         """
+        # Negate: positive slip_turn_extra → negative raw slip → encoder over-reports.
+        # MockMotor tick: enc = vel * (1 - slip); slip < 0 → enc > vel (over-report).
         self._lib.sim_set_motor_slip(self._h, ctypes.c_int(2),
                                      ctypes.c_float(0.0),
-                                     ctypes.c_float(slip_turn_extra))
+                                     ctypes.c_float(-slip_turn_extra))
         if fuse_otos:
             self._lib.sim_enable_otos_model(self._h)
             self._lib.sim_set_otos_fusion(self._h, ctypes.c_int(1))

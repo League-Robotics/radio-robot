@@ -179,8 +179,10 @@ void sim_tick(void* h, uint32_t now_ms)
     }
 
     // Odometry: dead-reckon pose from encoder deltas (mirrors run_blocks()).
+    // Pass rotationalSlip so the sim uses the same slip-corrected dTheta as firmware.
     s->robot.odometry.predict(s->robot.state.inputs,
-                              s->robot.config.trackwidthMm, now_ms);
+                              s->robot.config.trackwidthMm,
+                              s->robot.config.rotationalSlip, now_ms);
 
     // OTOS EKF correction (sprint 023) — opt-in via sim_set_otos_fusion().
     // The real firmware runs otosCorrect() on the enOtos loop phase; the sim
