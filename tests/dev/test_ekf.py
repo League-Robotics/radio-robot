@@ -12,10 +12,13 @@ Sprint 023, Ticket T006 — extended to 5-state (x, y, theta, v, omega);
 Sprint 024, Ticket 004 — added update_heading(); sane P-prior in set_pose();
   TestUpdateHeading, TestSetPosePrior, TestHeadingConvergence.
 Sprint 024, Ticket 005 — per-method streak counters (_rej_pos_streak,
-  _rej_head_streak) + R×10 inflation + streak reset at 10 consecutive
+  _rej_head_streak) + P-inflation re-baseline recovery at 10 consecutive
   rejections in update_position() and update_heading() independently;
-  TestHeadingGateRecovery, TestPositionGateRecovery, field-profile fixture
-  in TestSquareFigureEight; get_reject_count() accessor alias.
+  TestHeadingGateRecovery, TestPositionGateRecovery (200mm teleport, <2s
+  convergence), field-profile fixture in TestSquareFigureEight;
+  get_reject_count() accessor alias.
+  Follow-up: switched from R×10 inflation to P-inflation because R×10 cannot
+  pass a 200mm gate at steady-state P (math: d²=200²/(P+10·R)≫5.99).
 """
 
 from __future__ import annotations
@@ -60,13 +63,17 @@ class EKF:
 
     set_pose() sets a sane diagonal P-prior (sprint 024-004) instead of zeroing P.
 
-    Sprint 024-005 — D3 gate recovery:
+    Sprint 024-005 — D3 gate recovery (P-inflation re-baseline):
       _rej_pos_streak: consecutive position rejection streak (independent of heading).
       _rej_head_streak: consecutive heading rejection streak (independent of position).
-      At 10 consecutive rejections in either method, R is inflated ×10 for one update
-      and the streak resets. This converts "permanently locked out" to "recovers
-      within ~1 s at 100 ms OTOS cadence." Streaks are independent — position
-      divergence does not trigger heading recovery and vice versa.
+      At 10 consecutive rejections, performs a P-inflation re-baseline: inflates
+      the relevant P block to ~1e6 mm² (position) or ~1e5 rad² (heading) so that
+      S ≫ innovation² (gate passes trivially) and K ≈ 1 (state snaps to measurement).
+      Architecture note: original design called for R×10 inflation; changed because
+      for a 200 mm jump at steady-state P (≈3 mm²), d²=200²/(P+10·R)≫5.99 — the
+      inflated gate still fails permanently. P-inflation is the only mechanism that
+      satisfies the 200mm/<2s acceptance criterion.
+      Streaks are independent — position divergence does not trigger heading recovery.
     """
 
     # Sane P-prior constants — must match EKF.h constexpr values exactly.
@@ -240,25 +247,41 @@ class EKF:
         if not accepted:
             self._rejected += 1
             self._rej_pos_streak += 1
-            # D3 gate recovery (sprint 024-005): at 10 consecutive position
-            # rejections, inflate R×10 for one update and reset streak.
+            # D3 gate recovery (sprint 024-005): after 10 consecutive position
+            # rejections, perform a P-inflation re-baseline and re-run the standard
+            # update. P-inflation sets P[0][0] and P[1][1] to a large value so that:
+            #   S = P + R_normal ≈ kRebaselineP  (>> innovation²)
+            #   K = P/(P+R) ≈ 1  →  state snaps to OTOS in one update.
+            # R×10 inflation cannot pass a 200mm gate at steady-state P (math:
+            #   d²=200²/(P+10·R)≫5.99 for P≈3mm², R=10mm²).
             # _rej_pos_streak is independent of _rej_head_streak.
             if self._rej_pos_streak >= 10:
                 self._rej_pos_streak = 0
-                r_eff = self._r_otos_xy * 10.0
-                s00i = self._P[0][0] + r_eff
-                s01i = self._P[0][1]
-                s10i = self._P[1][0]
-                s11i = self._P[1][1] + r_eff
-                deti = s00i * s11i - s01i * s10i
-                if abs(deti) > 1e-9:
-                    idi = 1.0 / deti
-                    si00 =  s11i * idi
-                    si01 = -s01i * idi
-                    si10 = -s10i * idi
-                    si11 =  s00i * idi
-                    d2i = yi0 * (si00 * yi0 + si01 * yi1) + yi1 * (si10 * yi0 + si11 * yi1)
-                    accepted = (d2i <= 5.99)
+                _K_REBASELINE_P = 1.0e6   # mm² — K≈1 after inflation
+                # Inflate position block of P; zero cross-terms.
+                self._P[0][0] = _K_REBASELINE_P
+                self._P[0][1] = 0.0
+                self._P[1][0] = 0.0
+                self._P[1][1] = _K_REBASELINE_P
+                self._P[0][2] = 0.0; self._P[0][3] = 0.0; self._P[0][4] = 0.0
+                self._P[1][2] = 0.0; self._P[1][3] = 0.0; self._P[1][4] = 0.0
+                self._P[2][0] = 0.0; self._P[2][1] = 0.0
+                self._P[3][0] = 0.0; self._P[3][1] = 0.0
+                self._P[4][0] = 0.0; self._P[4][1] = 0.0
+                # Recompute S and S_inv with inflated P — gate trivially passes.
+                s00 = self._P[0][0] + self._r_otos_xy
+                s01 = 0.0
+                s10 = 0.0
+                s11 = self._P[1][1] + self._r_otos_xy
+                det_r = s00 * s11  # s01=s10=0
+                if det_r < 1e-9:
+                    return  # degenerate — skip (should never happen)
+                inv_det = 1.0 / det_r
+                si00 =  s11 * inv_det
+                si01 = 0.0
+                si10 = 0.0
+                si11 =  s00 * inv_det
+                accepted = True   # K≈1 path — gate trivially satisfied
             if not accepted:
                 return
         else:
@@ -402,13 +425,24 @@ class EKF:
         if not accepted:
             self._rejected += 1
             self._rej_head_streak += 1
-            # D3 gate recovery (sprint 024-005): at streak == 10, inflate R×10.
+            # D3 gate recovery (sprint 024-005): at streak == 10, perform a
+            # P-inflation re-baseline on the heading block.
+            # Sets P[2][2] to a large value so S is large, gate passes trivially,
+            # and K = P[2][2]/S ≈ 1 — heading snaps to measurement in one update.
             if self._rej_head_streak >= 10:
                 self._rej_head_streak = 0
-                s = self._P[2][2] + r_theta * 10.0
-                accepted = (s > 1e-12) and ((y * y / s) <= 3.84)
+                _K_REBASELINE_P_THETA = 1.0e5   # rad² — K≈1 after inflation
+                self._P[2][2] = _K_REBASELINE_P_THETA
+                # Zero cross-covariances with x, y, v, omega.
+                self._P[2][0] = 0.0; self._P[2][1] = 0.0
+                self._P[2][3] = 0.0; self._P[2][4] = 0.0
+                self._P[0][2] = 0.0; self._P[1][2] = 0.0
+                self._P[3][2] = 0.0; self._P[4][2] = 0.0
+                # Recompute s with inflated P[2][2].
+                s = self._P[2][2] + r_theta
+                accepted = (s > 1e-12)   # gate trivially passes
             if not accepted:
-                return  # still rejected (or degenerate after inflation)
+                return  # degenerate after inflation — skip (should never happen)
 
         # Accepted (normal or recovery path).
         self._rej_head_streak = 0
@@ -1567,14 +1601,14 @@ class TestHeadingConvergence:
 # TestHeadingGateRecovery — D3 gate recovery for heading channel (sprint 024-005)
 #
 # After 10 consecutive heading rejections (large constant innovation), the 10th
-# rejection triggers R×10 inflation. The inflated gate should be wide enough for
-# the innovation to pass, executing a recovery update.
+# rejection triggers P-inflation re-baseline: P[2][2] is set to 1e5 rad²,
+# cross-terms zeroed, then the standard update runs with K≈1 (state snaps to meas).
 # Streaks are independent: position divergence must not affect the heading streak.
 # ---------------------------------------------------------------------------
 
 class TestHeadingGateRecovery:
-    """D3 gate recovery: after 10 consecutive heading rejections, R is inflated ×10
-    and one update is forced, resetting the streak. Sprint 024-005."""
+    """D3 gate recovery: after 10 consecutive heading rejections, P[2][2] is inflated
+    to 1e5 rad² (K≈1) and state snaps to measurement. Sprint 024-005."""
 
     def _make_ekf_with_heading_cov(self, heading_state: float = 0.0) -> EKF:
         """EKF with nonzero P[2][2] from 100 predicts."""
@@ -1602,38 +1636,18 @@ class TestHeadingGateRecovery:
             f"streak should reset to 0 on acceptance, got {e.rej_head_streak}"
 
     def test_recovery_fires_at_10_consecutive_rejections(self):
-        """At the 10th consecutive rejection, streak resets and recovery update fires.
+        """At the 10th consecutive rejection, streak resets and P-inflation recovery fires.
 
-        After 10 rejections, the inflation path runs. If the inflated gate passes,
-        the filter accepts the update (state changes) and streak resets to 0.
+        After 10 rejections, P[2][2] is inflated to 1e5 rad². Then the standard
+        update runs: S = P[2][2] + r_theta ≈ 1e5; K = P[2][2]/S ≈ 1; state snaps
+        to measurement. Streak resets to 0.
 
-        Setup: EKF theta=0, inject heading meas=1.8 rad with r_theta=0.001.
-        P[2][2] = 1.0 (from 100 predicts). s = 1.0 + 0.001 = 1.001.
-        d2 = 1.8^2 / 1.001 = 3.237 < 3.84 → actually accepted on first try.
+        Setup: 1 predict → P[2][2] = Q_THETA = 0.01. meas=0.21 rad, r_theta=0.001.
+          Normal: s = 0.01+0.001=0.011; d2 = 0.0441/0.011 = 4.009 > 3.84 → rejected.
+          After P-inflation: P[2][2]=1e5; S≈1e5; K≈1; theta snaps to meas ≈ 0.21 rad.
 
-        Instead, use meas=2.0 rad with r_theta=0.001 where d2 = 4.0/1.001 = 3.996 > 3.84
-        → rejected. With inflated: s_infl = 1.0 + 0.01 = 1.01; d2_infl = 4.0/1.01 = 3.96
-        → still rejected. Use meas=1.97: d2 = 1.97^2/1.001=3.878 > 3.84 (rejected).
-        Inflated: s=1.0+0.01=1.01; d2=3.88/1.01=3.842 → border. Use meas=1.96:
-        d2=1.96^2/1.001=3.838 → accepted on first try. Not ideal.
-
-        Better setup: use large P[2][2] so normal s is big but with tiny r, delta of
-        ~2 rad is borderline. OR: just use 9 rejections + 1 accepted and verify streak is 0.
-        OR: use a state where 9 consecutive rejections happen, then 10th triggers inflation
-        and the inflated gate DOES pass.
-
-        Approach: EKF theta=0; use meas=2.0 rad, r_theta=0.001. P[2][2]=1.0.
-        d2 = 4.0 / 1.001 = 3.996 > 3.84 → rejected each time (streak grows).
-        At step 10: streak>=10 → inflate: s_infl = 1.0 + 0.01 = 1.01.
-        d2_infl = 4.0 / 1.01 = 3.960 > 3.84 → STILL rejected. Need larger P.
-
-        Use 500 predicts → P[2][2] = 5.0. r_theta=0.001. s=5.001.
-        d2 = 4.0/5.001 = 0.80 < 3.84 → accepted normally. Not useful.
-
-        Use 1 predict → P[2][2] = 0.01. meas=0.2 rad, r_theta=0.001.
-        s = 0.01+0.001=0.011; d2=0.04/0.011=3.636 → accepted. Not useful.
-        meas=0.21 rad: d2=0.0441/0.011=4.009 > 3.84 → rejected.
-        Inflated: s=0.01+0.01=0.02; d2=0.0441/0.02=2.205 → accepted!
+        Any constant heading offset that produces d² > 3.84 works here — the key is
+        that 9 rejections grow the streak, and the 10th fires P-inflation.
         """
         e = _make_ekf_default()
         e.predict(0.0, 0.0, 0.0)  # P[2][2] = Q_THETA = 0.01
@@ -1710,18 +1724,14 @@ class TestHeadingGateRecovery:
 class TestPositionGateRecovery:
     """D3 gate recovery for position channel. Sprint 024-005.
 
-    The R×10 inflation mechanism widens the Mahalanobis gate so that innovations
-    just above the normal threshold can pass after 10 consecutive rejections.
+    The P-inflation re-baseline mechanism: at 10 consecutive rejections, P[0][0]
+    and P[1][1] are set to kRebaselineP (1e6 mm²) and cross-terms zeroed, then
+    the standard update runs. With S ≈ 1e6 mm², K ≈ 1 and state snaps to OTOS.
 
-    At steady-state P (P[0][0] ≈ 3mm²) with R_XY=10mm²:
-      - Normal S = 3 + 10 = 13; max normal innovation = sqrt(5.99 × 13) ≈ 8.8mm.
-      - Inflated S = 3 + 100 = 103; max inflated innovation ≈ sqrt(5.99 × 103) ≈ 24.8mm.
-
-    A 10mm innovation from origin (fresh filter, P[0][0]=1 after 1 predict):
-      S = 11; d2 = 100/11 = 9.09 > 5.99 → rejected.
-      S_infl = 101; d2 = 100/101 = 0.99 → ACCEPTED after 10 rejections.
-
-    This is the real regression guard for D3 recovery.
+    This satisfies the 200mm/<2s acceptance criterion:
+      - Normal gate at steady-state (P≈3mm²): d²=200²/13≈3077≫5.99 → rejected.
+      - R×10 inflated gate: d²=200²/103≈388≫5.99 → STILL rejected (cannot recover).
+      - P-inflation (P→1e6): d²=200²/(1e6+10)≈0.04→0 → accepted, K≈1 (one-shot snap).
     """
 
     def _make_convergence_ekf(self) -> EKF:
@@ -1768,20 +1778,15 @@ class TestPositionGateRecovery:
         )
 
     def test_with_recovery_moves_state_toward_truth(self):
-        """With R×10 inflation, the state moves toward the gated OTOS truth.
+        """With P-inflation re-baseline, the state snaps to OTOS truth in one update.
 
         Scenario: fresh EKF, 1 predict (P[0][0]=1), persistent OTOS at 10mm.
           Steps 1-9: rejected (streak grows to 9). State stays at 0.
-          Step 10: streak >= 10 → inflation fires.
-            S_infl = 1.0 + 100.0 = 101; d2 = 100/101 = 0.99 → accepted!
-          State moves toward 10mm truth (K * 10mm ≈ 0.1mm — small but nonzero).
+          Step 10: streak >= 10 → P-inflation fires (P[0][0]=1e6).
+            S = 1e6 + 10; K ≈ 1; state snaps to ~10mm.
 
         This contrasts with pre-005 logic where the state NEVER moves (permanent
-        rejection). With recovery: state is no longer free-running forever.
-
-        Note: full convergence to <5mm requires many recovery cycles since
-        Kalman gain K = P/(P + R×10) is small when P << R×10. The key property
-        is that the state starts moving instead of being permanently locked out.
+        rejection). With P-inflation re-baseline: state snaps to truth in one update.
         """
         e = _make_ekf_default()
         e.predict(0.0, 0.0, 0.0)  # P[0][0] = Q_XY = 1.0
@@ -1793,14 +1798,11 @@ class TestPositionGateRecovery:
         for _ in range(10):
             e.update_position(otos_x, 0.0)
 
-        # After recovery: state MUST have moved toward truth.
-        assert e.x > x_start, (
-            f"After recovery update (step 10), EKF x={e.x:.4f}mm should have moved "
-            f"from {x_start}mm toward truth {otos_x}mm"
-        )
-        # And it should not have jumped all the way to truth (K is small).
-        assert e.x < otos_x, (
-            f"EKF x={e.x:.4f}mm should still be below truth {otos_x}mm (K is small)"
+        # After P-inflation recovery: state MUST have snapped to within 1mm of truth.
+        # (K = 1e6/(1e6+10) ≈ 0.99999 → x ≈ otos_x)
+        assert abs(e.x - otos_x) < 1.0, (
+            f"After P-inflation recovery (step 10), EKF x={e.x:.4f}mm should be "
+            f"within 1mm of truth {otos_x}mm"
         )
         # Streak should be reset to 0 after the recovery update.
         assert e.rej_pos_streak == 0, \
@@ -1828,13 +1830,13 @@ class TestPositionGateRecovery:
         )
 
     def test_reject_count_rises_then_recovery_fires(self):
-        """rejected_count rises during 10-rejection sequence; recovery update fires at step 10."""
+        """rejected_count rises during 10-rejection sequence; P-inflation fires at step 10."""
         e = _make_ekf_default()
         # Use 1 predict to get tight P.
         e.predict(0.0, 0.0, 0.0)
         # Position innovation: 10mm with P[0][0]=1, r_otos_xy=10.
         # d2 = 100/11 = 9.09 > 5.99 → rejected on steps 1-9.
-        # Step 10: streak >= 10 → inflate: s_infl = 1.0 + 100.0 = 101; d2 = 0.99 → accepted.
+        # Step 10: streak >= 10 → P-inflation fires: P[0][0]=1e6; K≈1 → accepted.
         otos_x = 10.0
         otos_y = 0.0
 
@@ -1857,27 +1859,76 @@ class TestPositionGateRecovery:
             f"After recovery update, rej_pos_streak should be 0; got {pos_streak_list[-1]}"
         )
 
-    def test_large_teleport_shows_rising_rejected_count(self):
-        """A 200mm teleport at steady state shows rising rejected_count even without convergence.
+    def test_200mm_teleport_converges_within_2s(self):
+        """200mm OTOS teleport mid-run converges to new truth in < 2 s (< 20 steps @ 100ms).
 
-        For very large jumps (200mm >> inflated gate threshold of ~25mm at steady state),
-        the R×10 inflation alone cannot force convergence in a few steps, but the
-        ekf_rej (rejected_count) telemetry rises — making divergence visible from the host.
-        This is the TLM visibility criterion of the ticket.
+        This is the primary acceptance criterion for sprint 024-005 / issue d03.
+        Field failure scenario: robot is lifted or repositioned → OTOS jumps 200mm.
+        Without recovery, the filter free-runs on encoders permanently (confidently wrong).
+        With P-inflation re-baseline: after 10 consecutive rejections (~1s), P[0][0] is
+        inflated to 1e6 mm² → K≈1 → state snaps to new OTOS truth on the 10th step.
+
+        FAILS with R×10 inflation (pre-fix): d²=200²/(P+10·R)=200²/103≈388≫5.99 →
+        still permanently rejected. This verifies the fix is real, not cosmetic.
+
+        Setup:
+          - 30 predict+update cycles to reach steady state (EKF tracks correctly).
+          - Teleport OTOS pose by +200mm (robot is "lifted and repositioned").
+          - 20 more predict+update steps at 100ms cadence = 2s window.
+          - Assert fused pose within 50mm of new OTOS truth within those 20 steps.
         """
         e = self._make_convergence_ekf()
+        otos_truth_x = e.x + 200.0  # 200mm teleport
+        otos_truth_y = 0.0
 
-        otos_truth_x = e.x + 200.0  # 200mm jump
-        rej_before = e.rejected_count
-
-        # Run 20 steps: rejected_count should rise (at least 9 rejections before 1 recovery).
-        for _ in range(20):
+        converged = False
+        for step in range(20):
             e.predict(10.0, 0.0, e._x[2])
+            e.update_position(otos_truth_x + step * 10.0, otos_truth_y)
+            current_truth_x = otos_truth_x + step * 10.0
+            if abs(e.x - current_truth_x) < 50.0:
+                converged = True
+                break
+
+        assert converged, (
+            f"200mm teleport: EKF must converge to new OTOS truth within 20 steps "
+            f"(2s at 100ms cadence); final x={e.x:.1f}mm"
+        )
+
+    def test_200mm_teleport_fails_without_recovery(self):
+        """Verify that with recovery disabled, a 200mm teleport causes permanent lockout.
+
+        This test proves test_200mm_teleport_converges_within_2s is a genuine
+        regression guard: the new code PASSES, the old code FAILS.
+
+        Disables recovery by zeroing the streak before each update call so the
+        counter never reaches 10 (no recovery ever fires). With a static robot
+        (no movement), the OTOS update is the ONLY path to convergence.
+
+        Math (steady-state P≈3mm², R=10mm²):
+          Normal gate:       d²=200²/13≈3077≫5.99 → rejected forever.
+          R×10 inflated:     d²=200²/103≈388≫5.99 → STILL rejected.
+          P-inflation (new): d²≈0 → accepted, K≈1 → state snaps.
+        """
+        e = _make_ekf_default()
+        # Reach steady-state with static robot.
+        for _ in range(30):
+            e.predict(0.0, 0.0, e._x[2])
+            e.update_position(0.0, 0.0)
+
+        x_before_teleport = e.x   # ≈ 0mm
+        otos_truth_x = x_before_teleport + 200.0   # static 200mm (no robot movement)
+
+        # Disable recovery completely: reset streak to 0 before every update call.
+        for _ in range(20):
+            e.predict(0.0, 0.0, e._x[2])   # static robot — no position advance
+            e._rej_pos_streak = 0           # prevent recovery from accumulating
             e.update_position(otos_truth_x, 0.0)
 
-        rej_after = e.rejected_count
-        assert rej_after > rej_before, (
-            f"ekf_rej must rise during 200mm divergence: before={rej_before}, after={rej_after}"
+        # All 200mm updates rejected → x never moved toward truth.
+        assert abs(e.x - otos_truth_x) > 100.0, (
+            f"Without recovery, EKF should remain locked out at 200mm divergence; "
+            f"x={e.x:.1f}mm, truth={otos_truth_x:.1f}mm"
         )
 
 

@@ -29,7 +29,12 @@
 //
 // Sprint 023, Ticket 001.
 // Sprint 024, Ticket 004: added updateHeading(); sane P-prior in setPose().
-// Sprint 024, Ticket 005: _rejPos_streak + R-inflation recovery; getRejectCount().
+// Sprint 024, Ticket 005: _rejPos_streak + P-inflation re-baseline recovery;
+//   getRejectCount(). Architecture deviation: original design called for R×10
+//   inflation, but math shows d²=200²/(P+10·R)≫5.99 even at R×10 — still
+//   permanently rejected. P-inflation (P→1e6 mm² / r_theta×1e5) instead widens
+//   S so the standard gate passes (d²≈0) and K≈1, snapping state to OTOS in
+//   one update. This is the only mechanism that satisfies the 200mm/<2s AC.
 // ===========================================================================
 
 class EKF {

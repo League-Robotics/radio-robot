@@ -8,9 +8,14 @@
 // Sprint 023, Ticket 001.
 // Sprint 024, Ticket 004: added updateHeading(); sane P-prior in setPose();
 //   _rejHead_streak counter stub for D3 gate recovery.
-// Sprint 024, Ticket 005: _rejPos_streak; R×10 inflation + streak reset at 10
+// Sprint 024, Ticket 005: _rejPos_streak; P-inflation re-baseline recovery at 10
 //   consecutive rejections in updatePosition() and updateHeading() independently;
 //   getRejectCount() accessor alias for TLM.
+//   Architecture deviation: original design called for R×10 inflation, but for
+//   the 200mm/<2s acceptance criterion d²=200²/(P+10·R)≫5.99 — still permanently
+//   rejected. P-inflation (set position/heading P block to a large value, then run
+//   the standard update) makes S large so the gate passes (d²≈0) and K≈1,
+//   snapping the state to the OTOS measurement in one update.
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
@@ -247,28 +252,44 @@ void EKF::updatePosition(float x_otos, float y_otos)
         ++_rejected;
         ++_rejPos_streak;
         // D3 gate recovery (sprint 024-005): after 10 consecutive position
-        // rejections, inflate R×10 for one update and reset the streak.
-        // This converts "permanently locked out" into "recovers within ~1 s".
+        // rejections, perform a P-inflation re-baseline and re-run the standard
+        // update. P-inflation sets P[0][0] and P[1][1] to a large value
+        // (kRebaselineP) and zeros the cross-terms P[0][1]/P[1][0], so that:
+        //   S = P + R_normal ≈ kRebaselineP  (>>  innovation²)
+        //   K = P/(P+R) ≈ 1  →  state snaps to OTOS in one update.
+        // This satisfies the 200mm/<2s acceptance criterion.
+        // R×10 inflation cannot pass a 200mm gate at steady-state P (math:
+        //   d²=200²/(P+10·R)≫5.99 for P≈3mm², R=10mm²).
         // _rejPos_streak is independent of _rejHead_streak.
         if (_rejPos_streak >= 10) {
             _rejPos_streak = 0;
-            // Rebuild S and S_inv with inflated R.
-            float rEff  = _rOtosXy * 10.0f;
-            float s00i  = _P[0][0] + rEff;
-            float s01i  = _P[0][1];
-            float s10i  = _P[1][0];
-            float s11i  = _P[1][1] + rEff;
-            float deti  = s00i * s11i - s01i * s10i;
-            if (deti > 1e-9f || deti < -1e-9f) {  // non-singular
-                float id = 1.0f / deti;
-                si00 =  s11i * id;
-                si01 = -s01i * id;
-                si10 = -s10i * id;
-                si11 =  s00i * id;
-                float d2i = yi0*(si00*yi0 + si01*yi1) + yi1*(si10*yi0 + si11*yi1);
-                accepted = (d2i <= 5.99f);
+            // Inflate the position block of P so the next standard update snaps.
+            static constexpr float kRebaselineP = 1.0e6f;  // mm² — K≈1
+            _P[0][0] = kRebaselineP;
+            _P[0][1] = 0.0f;
+            _P[1][0] = 0.0f;
+            _P[1][1] = kRebaselineP;
+            // Zero position cross-covariances with heading and velocity blocks.
+            _P[0][2] = 0.0f; _P[0][3] = 0.0f; _P[0][4] = 0.0f;
+            _P[1][2] = 0.0f; _P[1][3] = 0.0f; _P[1][4] = 0.0f;
+            _P[2][0] = 0.0f; _P[2][1] = 0.0f;
+            _P[3][0] = 0.0f; _P[3][1] = 0.0f;
+            _P[4][0] = 0.0f; _P[4][1] = 0.0f;
+            // Recompute S and S_inv with inflated P — gate will easily pass.
+            s00 = _P[0][0] + _rOtosXy;
+            s01 = 0.0f;
+            s10 = 0.0f;
+            s11 = _P[1][1] + _rOtosXy;
+            float detR = s00 * s11;   // s01=s10=0 → det = s00*s11
+            if (detR < 1e-9f) {
+                return;  // degenerate after inflation — skip (should never happen)
             }
-            // If degenerate or still rejected after inflation — fall through to return.
+            inv_det = 1.0f / detR;
+            si00 =  s11 * inv_det;
+            si01 = 0.0f;
+            si10 = 0.0f;
+            si11 =  s00 * inv_det;
+            accepted = true;  // K≈1 path: gate is trivially satisfied
         }
         if (!accepted) {
             return;
@@ -472,15 +493,24 @@ void EKF::updateHeading(float theta_meas, float r_theta)
     if (!accepted) {
         ++_rejected;
         ++_rejHead_streak;
-        // D3 gate recovery: at streak == 10, inflate R×10 for this update.
+        // D3 gate recovery (sprint 024-005): at streak == 10, perform a P-inflation
+        // re-baseline on the heading block. Sets P[2][2] to a large value so that
+        // S = P[2][2] + r_theta is large, gate passes trivially, and K = P[2][2]/S ≈ 1
+        // — heading state snaps to the measurement in one update.
+        // R×10 inflation cannot satisfy the 200mm/<2s AC for large divergences.
         if (_rejHead_streak >= 10) {
             _rejHead_streak = 0;
-            s = _P[2][2] + r_theta * 10.0f;
-            // Re-evaluate gate with inflated S.
-            accepted = (s > 1e-12f) && ((y * y / s) <= 3.84f);
+            static constexpr float kRebaselinePTheta = 1.0e5f;  // rad² — K≈1
+            // Inflate heading variance; zero cross-covariances with x,y,v,omega.
+            _P[2][2] = kRebaselinePTheta;
+            _P[2][0] = 0.0f; _P[2][1] = 0.0f; _P[2][3] = 0.0f; _P[2][4] = 0.0f;
+            _P[0][2] = 0.0f; _P[1][2] = 0.0f; _P[3][2] = 0.0f; _P[4][2] = 0.0f;
+            // Recompute s with inflated P[2][2].
+            s = _P[2][2] + r_theta;
+            accepted = (s > 1e-12f);  // gate trivially passes
         }
         if (!accepted) {
-            return;  // still rejected (or degenerate after inflation)
+            return;  // degenerate after inflation — skip (should never happen)
         }
     }
 
