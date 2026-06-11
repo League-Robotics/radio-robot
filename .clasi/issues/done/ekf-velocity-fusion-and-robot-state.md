@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 # Extend the firmware EKF to fuse velocity and expose a unified robot motion state
