@@ -142,6 +142,19 @@ public:
     // Used by CommandProcessor to distinguish new VW vs keepalive VW.
     bool hasActiveCommand() const { return _activeCmd.active(); }
 
+    // Emit an EVT string on the active command's reply channel.
+    // Used by Robot::otosCorrect() to inject "EVT otos lost" without any
+    // command-context reply sink of its own.  Delegates to the private
+    // emitEvt(base, target) — the chosen path for Open Question 3.
+    // Callers pass the TargetState owned by Robot; emitEvt routes via
+    // target.sink.emitFn (the reply channel captured at command start).
+    // No-op if no command is active or the sink is null.
+    void emitToActiveChannel(const char* evt, TargetState& target) {
+        if (_activeCmd.active()) {
+            emitEvt(evt, target);
+        }
+    }
+
     // Access the active MotionCommand for keepalive re-arm (setTarget).
     // Only call when hasActiveCommand() returns true.
     MotionCommand& activeCmd() { return _activeCmd; }

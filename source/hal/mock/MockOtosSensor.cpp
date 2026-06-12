@@ -12,7 +12,7 @@ static float otosGaussian(std::mt19937& rng, float sigma) {
 }
 #endif
 
-OtosPose MockOtosSensor::readTransformed(const RobotConfig& /*cfg*/) const {
+OtosPose MockOtosSensor::readTransformed(const RobotConfig& /*cfg*/, float /*headingRad*/) const {
     OtosPose pose;
     if (_useSimModel) {
         pose.x = _odomX;
@@ -26,7 +26,7 @@ OtosPose MockOtosSensor::readTransformed(const RobotConfig& /*cfg*/) const {
     return pose;
 }
 
-OtosVelocity MockOtosSensor::readVelocityTransformed(const RobotConfig& /*cfg*/) const {
+OtosVelocity MockOtosSensor::readVelocityTransformed(const RobotConfig& /*cfg*/, float /*headingRad*/) const {
     return {_velV, _velOmega};
 }
 

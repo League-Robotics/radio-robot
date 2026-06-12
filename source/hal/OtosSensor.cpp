@@ -57,7 +57,7 @@ void OtosSensor::resetTracking()
     writeReg8(REG_RESET, 0x01);
 }
 
-OtosPose OtosSensor::readTransformed(const RobotConfig& cfg) const
+OtosPose OtosSensor::readTransformed(const RobotConfig& cfg, float headingRad) const
 {
     if (!is_initialized()) return {0.0f, 0.0f, 0.0f};
 
@@ -81,9 +81,17 @@ OtosPose OtosSensor::readTransformed(const RobotConfig& cfg) const
     float c = cosf(angRad);
     float s = sinf(angRad);
 
+    // Lever-arm correction: apply mounting offsets rotated by current heading.
+    // When odomOffX/Y are both zero (as in tovez.json), this is a no-op.
+    // Rotation: offset_world = R(headingRad) * [odomOffX, odomOffY]
+    float ch = cosf(headingRad);
+    float sh = sinf(headingRad);
+    float offXWorld = ch * cfg.odomOffX - sh * cfg.odomOffY;
+    float offYWorld = sh * cfg.odomOffX + ch * cfg.odomOffY;
+
     OtosPose pose;
-    pose.x = c * xF - s * yF - cfg.odomOffX;
-    pose.y = s * xF + c * yF - cfg.odomOffY;
+    pose.x = c * xF - s * yF - offXWorld;
+    pose.y = s * xF + c * yF - offYWorld;
     pose.h = hF + cfg.odomYawDeg * (3.14159265f / 180.0f);
     return pose;
 }
@@ -123,7 +131,7 @@ OtosPose OtosSensor::readTransformed(const RobotConfig& cfg) const
 //   channel of the velocity register (deg/s → rad/s), sign-preserved.
 // ---------------------------------------------------------------------------
 
-OtosVelocity OtosSensor::readVelocityTransformed(const RobotConfig& cfg) const
+OtosVelocity OtosSensor::readVelocityTransformed(const RobotConfig& cfg, float /*headingRad*/) const
 {
     if (!is_initialized()) return {0.0f, 0.0f};
 
@@ -254,11 +262,23 @@ void OtosSensor::readXYH(uint8_t startReg, int16_t& x, int16_t& y, int16_t& h) c
 {
     uint8_t raw[6] = {0};
     // repeated=true → no STOP after the register write (repeated-start read).
-    _i2c.write((ADDR << 1), (uint8_t*)&startReg, 1, false);
-    _i2c.read((ADDR << 1), (uint8_t*)raw, 6, false);
+    int wStatus = _i2c.write((ADDR << 1), (uint8_t*)&startReg, 1, false);
+    int rStatus = _i2c.read((ADDR << 1), (uint8_t*)raw, 6, false);
+    // MICROBIT_OK == 0 (CODAL convention).
+    _lastReadOk = (wStatus == 0 && rStatus == 0);
     x = (int16_t)(raw[0] | ((uint16_t)raw[1] << 8));
     y = (int16_t)(raw[2] | ((uint16_t)raw[3] << 8));
     h = (int16_t)(raw[4] | ((uint16_t)raw[5] << 8));
+}
+
+bool OtosSensor::readStatus(uint8_t& out) const
+{
+    if (!is_initialized()) { out = 0xFF; return false; }
+    // Write the register address.
+    uint8_t reg = REG_STATUS;
+    int wStatus = _i2c.write((ADDR << 1), &reg, 1, false);
+    int rStatus = _i2c.read((ADDR << 1), &out, 1, false);
+    return (wStatus == 0 && rStatus == 0);
 }
 
 void OtosSensor::writeXYH(uint8_t startReg, int16_t x, int16_t y, int16_t h)

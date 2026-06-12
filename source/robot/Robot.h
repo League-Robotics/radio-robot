@@ -141,6 +141,14 @@ struct Robot {
     uint32_t _lastControlMs = 0;
     bool     _prevDriving   = false;
 
+    // ---- OTOS validity tracking (D9 — 027-005) ----
+    // _otosInvalidStartMs: system time when OTOS first became invalid in the
+    //   current invalidity window (0 = OTOS is currently valid / no window open).
+    // _otosLostEmitted: true once "EVT otos lost" has been emitted for the
+    //   current invalidity window; reset to false when OTOS becomes valid again.
+    uint32_t _otosInvalidStartMs = 0;
+    bool     _otosLostEmitted    = false;
+
 private:
     // Stable storage for command contexts; pointers into these are placed in
     // CommandDescriptors, which must outlive the CommandProcessor.

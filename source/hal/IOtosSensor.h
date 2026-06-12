@@ -48,11 +48,24 @@ public:
     virtual ~IOtosSensor() = default;
 
     // Read position registers, apply transform from cfg, and return OtosPose.
-    virtual OtosPose readTransformed(const RobotConfig& cfg) const = 0;
+    // headingRad: current robot heading used for the lever-arm offset rotation.
+    // No-op for zero offsets (as in tovez.json). Default 0.0f for callers that
+    // do not yet supply heading.
+    virtual OtosPose readTransformed(const RobotConfig& cfg, float headingRad = 0.0f) const = 0;
 
     // Read velocity registers, apply transform from cfg, and return OtosVelocity.
     // v_mmps is the forward-axis body speed; omega_rads is the yaw rate.
-    virtual OtosVelocity readVelocityTransformed(const RobotConfig& cfg) const = 0;
+    // headingRad: see readTransformed (velocity lever-arm is near-zero in practice).
+    virtual OtosVelocity readVelocityTransformed(const RobotConfig& cfg, float headingRad = 0.0f) const = 0;
+
+    // Read the OTOS STATUS register (0x1F).
+    // Returns true on I2C success; out receives the raw status byte (0 = valid).
+    // Non-zero status means the OTOS tracking is invalid (e.g. sensor lifted).
+    virtual bool readStatus(uint8_t& out) const = 0;
+
+    // Returns true if the most recent burst read (readTransformed / readVelocityTransformed
+    // / readAccelTransformed) completed without I2C error.
+    virtual bool lastReadOk() const = 0;
 
     // Read acceleration registers, apply transform from cfg, and return OtosAccel.
     // ax_mmps2/ay_mmps2 are body-frame linear accelerations (angular discarded).
