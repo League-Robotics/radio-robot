@@ -46,6 +46,10 @@ public:
     // into the queue instead of dispatching them immediately.
     void setQueue(CommandQueue* q) { _queue = q; }
 
+    // Returns true if a queue is currently attached (non-null). Used by tests
+    // to assert the queue survives a Phase-3 CommandProcessor reassignment.
+    bool hasQueue() const { return _queue != nullptr; }
+
     // Dispatch one item from q. Returns false if q is empty.
     // Calls the descriptor's handlerFn directly (not process()) to avoid
     // re-enqueuing when _queue is still set.

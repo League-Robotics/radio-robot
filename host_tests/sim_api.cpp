@@ -426,6 +426,22 @@ float sim_get_otos_h(void* h) {
     return static_cast<SimHandle*>(h)->hal.otosMock().odomH();
 }
 
+// ---- N2 queue-invariant helper (030-002) ----
+
+// Returns 1 if the CommandProcessor has a queue attached (cmd.hasQueue()),
+// 0 otherwise.  Used by the boot/queue-invariant regression test to assert
+// that cmd._queue survives a Phase-3-style reassignment.
+//
+// In the sim, the queue is wired in SimHandle's constructor and is never
+// reassigned, so this always returns 1 after sim_create().  The regression
+// test is therefore a structural canary: if CommandProcessor's move-assign
+// ever silently clears the queue pointer again (e.g. a future refactor
+// re-introduces the Phase-3 pattern), this accessor will catch it.
+int sim_get_queue_wired(void* h)
+{
+    return static_cast<SimHandle*>(h)->cmd.hasQueue() ? 1 : 0;
+}
+
 // ---- D10 telemetry test helpers (028-005) ----
 
 // Returns 1 if the robot's TLM channel is bound (_tlmBoundCtx != nullptr),

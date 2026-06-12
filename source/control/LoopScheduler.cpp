@@ -185,6 +185,16 @@ void LoopScheduler::run_test()
 
 void LoopScheduler::run_blocks()
 {
+    // Re-wire the queue: main.cpp Phase 3 reassigns CommandProcessor via
+    // operator=, which move-assigns from a temporary whose _queue == nullptr,
+    // silently detaching the queue wired in the constructor (LoopScheduler.cpp:108).
+    // Mirroring the identical fix in run_test() (line 139) restores the queue
+    // path so process() enqueues commands for one-per-tick drain via dequeueOne().
+    // Without this, every command is dispatched immediately (the pre-026 path)
+    // and the setQueue(nullptr)/restore dance in loopTickOnce permanently arms
+    // the queue after the first safety stop, making dispatch mode history-dependent.
+    _cmd.setQueue(&_queue);
+
     // ---- ENABLE FLAGS -------------------------------------------------------
     bool enControl = true;   // read encoders + run PID + write motors (metronome)
     bool enComms   = true;   // drain serial + radio command queues

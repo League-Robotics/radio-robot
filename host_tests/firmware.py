@@ -197,6 +197,11 @@ class Sim:
         lib.sim_get_ekf_rej_count.argtypes = [ctypes.c_void_p]
         lib.sim_get_ekf_rej_count.restype = ctypes.c_int
 
+        # N2 queue-invariant helper (030-002)
+        # sim_get_queue_wired(void* h) → int (1 if queue attached, 0 if not)
+        lib.sim_get_queue_wired.argtypes = [ctypes.c_void_p]
+        lib.sim_get_queue_wired.restype = ctypes.c_int
+
         # D10 telemetry helpers (028-005)
         # sim_get_tlm_bound(void* h) → int (1 if bound, 0 if not)
         lib.sim_get_tlm_bound.argtypes = [ctypes.c_void_p]
@@ -212,6 +217,19 @@ class Sim:
             ctypes.c_int,
         ]
         lib.sim_tick_collect_tlm.restype = ctypes.c_int
+
+    # ------------------------------------------------------------------
+    # N2 queue-invariant helper (030-002)
+    # ------------------------------------------------------------------
+
+    def get_queue_wired(self) -> bool:
+        """Return True if CommandProcessor has a queue attached.
+
+        The queue is wired in SimHandle's constructor and must remain attached
+        for the full session — if this returns False, the Phase-3-style
+        move-assign bug has regressed (N2 finding).
+        """
+        return bool(self._lib.sim_get_queue_wired(self._h))
 
     # ------------------------------------------------------------------
     # D10 telemetry helpers (028-005)

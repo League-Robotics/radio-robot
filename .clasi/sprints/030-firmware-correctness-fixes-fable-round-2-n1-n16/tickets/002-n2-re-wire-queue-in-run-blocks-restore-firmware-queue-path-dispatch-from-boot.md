@@ -1,9 +1,10 @@
 ---
 id: '002'
-title: "N2: Re-wire queue in run_blocks() — restore firmware queue-path dispatch from boot"
-status: open
+title: "N2: Re-wire queue in run_blocks() \u2014 restore firmware queue-path dispatch\
+  \ from boot"
+status: done
 use-cases:
-  - SUC-002
+- SUC-002
 depends-on: []
 github-issue: ''
 issue: fr2-n2-queue-rewire.md
@@ -31,14 +32,14 @@ whether a safety stop has ever fired.
 
 ## Acceptance Criteria
 
-- [ ] `run_blocks()` re-wires `_cmd.setQueue(&_queue)` at its entry (one line,
+- [x] `run_blocks()` re-wires `_cmd.setQueue(&_queue)` at its entry (one line,
       mirroring the existing `run_test()` pattern).
-- [ ] New firmware-config boot test: asserts `cmd._queue` is non-null after Phase 3
+- [x] New firmware-config boot test: asserts `cmd._queue` is non-null after Phase 3
       reassignment and before the first command is dispatched.
-- [ ] Dispatch path in sim and firmware is the queue path both before and after a
+- [x] Dispatch path in sim and firmware is the queue path both before and after a
       simulated safety stop (no mode flip).
-- [ ] `python3 build.py` clean build passes.
-- [ ] `uv run --with pytest python -m pytest host_tests/ host/tests/` passes.
+- [x] `python3 build.py` clean build passes.
+- [x] `uv run --with pytest python -m pytest host_tests/ host/tests/` passes.
 
 ## Implementation Plan
 
