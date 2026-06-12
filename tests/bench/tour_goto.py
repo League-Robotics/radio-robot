@@ -19,9 +19,15 @@ firmware safety-stop are the backstop.
 """
 import argparse
 import math
+import pathlib
 import random
 import sys
 import time
+
+_BENCH = pathlib.Path(__file__).resolve().parent
+if str(_BENCH) not in sys.path:
+    sys.path.insert(0, str(_BENCH))
+from bench_safety import BenchRun  # noqa: E402
 
 ROBOT = 100
 FX, FY = 67 - 8, 44.65 - 8     # A1-centred safety fence (inset from the ArUco corners)
@@ -158,22 +164,23 @@ def main():
     errs = []
     t_start = time.monotonic()
     try:
-        for it in range(args.iters):
-            p = robot_pose(dc, cam)
-            if p is None:
-                print(f"[{it + 1}] lost the robot tag — stopping")
-                break
-            rx, ry, _ = p
-            ranked = sorted(SITES.items(),
-                            key=lambda kv: math.hypot(kv[1][0] - rx, kv[1][1] - ry))
-            name, (tx, ty) = rng.choice(ranked[args.drop:] or ranked)
-            dist = math.hypot(tx - rx, ty - ry)
-            print(f"[{it + 1:2d}/{args.iters}] from ({rx:+5.1f},{ry:+5.1f}) → "
-                  f"{name:10s} ({tx:+.0f},{ty:+.0f})  {dist:4.0f}cm out")
-            st, xy, dd = drive_to(tx, ty)
-            if st in ("OK", "GDONE"):
-                errs.append(dd)
-            print(f"            reached ({xy[0]:+5.1f},{xy[1]:+5.1f})  {dd:4.1f}cm off  [{st}]")
+        with BenchRun(proto, max_seconds=args.iters * 20 + 30):
+            for it in range(args.iters):
+                p = robot_pose(dc, cam)
+                if p is None:
+                    print(f"[{it + 1}] lost the robot tag — stopping")
+                    break
+                rx, ry, _ = p
+                ranked = sorted(SITES.items(),
+                                key=lambda kv: math.hypot(kv[1][0] - rx, kv[1][1] - ry))
+                name, (tx, ty) = rng.choice(ranked[args.drop:] or ranked)
+                dist = math.hypot(tx - rx, ty - ry)
+                print(f"[{it + 1:2d}/{args.iters}] from ({rx:+5.1f},{ry:+5.1f}) → "
+                      f"{name:10s} ({tx:+.0f},{ty:+.0f})  {dist:4.0f}cm out")
+                st, xy, dd = drive_to(tx, ty)
+                if st in ("OK", "GDONE"):
+                    errs.append(dd)
+                print(f"            reached ({xy[0]:+5.1f},{xy[1]:+5.1f})  {dd:4.1f}cm off  [{st}]")
         dt = time.monotonic() - t_start
         if errs:
             print(f"\n{len(errs)} hops in {dt:.0f}s — G+OTOS arrival: "
