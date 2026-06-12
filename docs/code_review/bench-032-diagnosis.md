@@ -136,7 +136,163 @@ open suspect).
 
 ---
 
-## Finding 1 — right encoder wedge corrupting odometry (firmware-hardening angle)
+## Finding 1 REVISITED — the wedge EVT cannot be trusted as evidence of an encoder fault
+
+Update after the equal-wheel balance retest (encR/encL = 0.87–1.00 across 12
+drives, "R under-counts" flags traced to a harness guard bug): the encoders
+are healthy. So why did `EVT enc_wedged wheel=R enc=0 n=10` fire, and why did
+TLM show `enc=22,0` and `enc=736,57`?
+
+### What the detector actually is
+
+`MotorController::controlTick` (`MotorController.cpp:246-343`): per wheel,
+every control tick (~24 ms, both encoders read every tick), if the commanded
+target is non-zero and the encoder mm value is float-identical to the previous
+tick's, increment a stuck counter; at 10 consecutive identical reads (~240 ms)
+emit `EVT enc_wedged` once (latched); re-arm on any change. Resolution is
+0.1° of wheel (≈0.06 mm), so "identical for 240 ms" really does mean "measured
+position not advancing." The logic is internally sound.
+
+### The problem: it watches the FILTERED value, so it conflates three causes
+
+The value it compares, `state.inputs.encLMm/RMm`, is written by the
+speed-scaled outlier filter in `Robot::controlCollectSplitPhase`
+(`Robot.cpp:114-163`): any read whose delta from the *stored* value exceeds
+`max(40 mm, tgt×0.2)` is rejected (2 silent retries) and the old value is
+**held**. Therefore `EVT enc_wedged` fires for any of:
+
+1. **True chip/I2C readback wedge** — the fault it was built for (015-003).
+2. **Wheel physically not turning** — stall, battery droop, slow spin-up. The
+   detector arms the moment `tgt != 0`; a drained motor that takes >240 ms to
+   move 0.06 mm trips it. (The retest's own observation — "barely moved at
+   speed 200 after hours of driving" — puts the bench run squarely in this
+   regime.)
+3. **Outlier-filter hold** — if the stored value and the chip's count diverge
+   by more than the gate, *every* subsequent read is rejected and the stored
+   value freezes. The filter has no telemetry; a filter-freeze is
+   indistinguishable from a wedge in both the EVT and the `enc=` TLM field.
+
+### Cause 3 has a specific, likely trigger: ZERO enc offset corruption
+
+`Motor::resetEncoder()` (`Motor.cpp:131-141`) is a *software* reset:
+`_encOffset += readEncoderAtomic()`. If that one atomic read returns garbage —
+a documented chip behavior (`Robot.cpp:123-125`: "the chip still occasionally
+returns ~149 mm garbage reads") — the offset is silently corrupted by the
+garbage amount X. `Robot::resetEncoders()` then sets the filter baseline to 0
+with no read-back verification. Every subsequent read returns
+`raw − corrupted offset` ≈ −X away from the baseline → outlier gate rejects →
+`encRMm` freezes at 0 → wedge EVT fires with `enc=0`, and the frozen value
+only unfreezes once the wheel has physically traveled ~X mm back inside the
+gate — after which the wheel *tracks correctly but lags X behind*.
+
+That reproduces the entire bench-032 signature — `enc=22,0` (R stuck at 0
+while L counts), `EVT enc_wedged wheel=R enc=0 n=10`, and `enc=736,57`
+(R apparently under-counting by a ~constant offset) — with zero hardware
+fault. It is also sim-invisible (the mock chip never returns garbage), i.e.
+exactly the class the bench exists to catch, just one layer down from where
+the issue filed it.
+
+### Verdict and fixes
+
+Trust `EVT enc_wedged` as "measured count not advancing while commanded."
+Do NOT trust it as "encoder hardware fault" — it cannot make that distinction
+as built. To make it diagnostic:
+
+- **Verify ZERO enc took:** after `resetEncoder()`, read back and require
+  |value| ≈ 0; retry the snapshot on failure. Cheap and kills the offset-
+  corruption path. Consider median-of-3 for the offset snapshot read.
+- **Instrument the filter hold path:** count consecutive rejected reads per
+  wheel and emit an EVT (or include the streak in TLM) when it exceeds a few
+  ticks. A silent permanent hold is the worst failure mode in this chain.
+- **Include the raw read in the wedge EVT** alongside the filtered value:
+  raw frozen too → real wedge/stall; raw moving while filtered frozen →
+  filter hold. One field makes the EVT self-disambiguating.
+- **Arming grace at drive start:** require the wheel to have moved once since
+  command start (or scale the threshold with commanded speed) so spin-up lag
+  on a drained battery doesn't fire it.
+- Battery voltage in TLM would settle the stall-vs-wedge question directly.
+
+The original `fr-bench-right-encoder-wedge.md` issue should be re-pointed at
+this chain: the hardware encoder is exonerated by the balance retest; the
+remaining work is the reset verification + filter instrumentation above, then
+a re-run on a fresh battery.
+
+### Post-refutation addendum (after fr-bench-right-encoder-wedge was refuted)
+
+The issue's correction (D syntax is `D <left> <right> <distance>`, so the
+"equal-wheel" drives were actually unequal) is confirmed against
+`MotionCommandHandlers.cpp` and the 032 log. Two refinements from the log
+(`docs/bench-validation-032/tlm_log.txt`):
+
+- The measured L/R ratios *exceed* the commanded ratios (D_slow: commanded
+  250/150 = 1.67×, measured 217/81 = 2.7×; D_med: commanded 400/300 = 1.33×,
+  measured 421/177 = 2.4×). The slower-commanded right wheel under-performs
+  disproportionately — visible in the ramp (`vel=78,19` … `234,120`). On a
+  weak battery the lower-commanded wheel sits near the min-PWM/stiction floor
+  and lags badly at drive start. That start-up lag (R crawling 3→7→9 mm while
+  L runs 26→38→45) is precisely the regime that trips the 240 ms wedge
+  detector — the likely true source of `EVT enc_wedged wheel=R enc=0 n=10`.
+  Not a readback wedge; a slow-starting wheel.
+- Re-run the ratio check on a fresh battery before drawing calibration
+  conclusions from any unequal-speed drive.
+
+---
+
+## NEW FINDING (from the 032 log) — D distance-stop fires instantly when prior encoder average ≈ target: baseline snapshot races the encoder reset
+
+Reading the TLM log exposed an unreported anomaly: **sqD2 and sqD4 never moved
+at all** — `enc=0,0`, `mode=I`, pose frozen for their entire 3 s windows —
+while sqD1/sqD3 and all seq-3 drives ran normally. Nobody flagged it
+(`analyze()` only checks jumps/residuals, and the verdict says "clean
+starts/stops").
+
+**Root cause (confirmed by ordering in source):**
+`MotionController::beginDistance` (`MotionController.cpp:340-389`) resets the
+*hardware* accumulators, then calls `_activeCmd.start(inputs, now_ms)` which
+snapshots `base.enc0Mm = (encLMm + encRMm)/2` from `state.inputs` — but
+`state.inputs.encLMm/R` are zeroed only *after* `beginDistance` returns, in
+`Robot::distanceDrive` (`Robot.cpp:432-441`). The comment at
+`MotionController.cpp:382-386` claims "the baseline enc0 captured by
+MotionCommand::start() will be 0" — wrong: at snapshot time the inputs still
+hold the previous command's values. Next tick, the collect reads the
+freshly-zeroed hardware (≈0), and the DISTANCE stop
+(`StopCondition.cpp:131-139`) computes `traveled = |0 − enc0|` = the stale
+average. If the previous command left avg-encoder ≥ targetMm, the stop fires
+on the first evaluate and the drive completes instantly with zero motion.
+
+**Log verification (exact numbers):**
+
+- sqD2 (`D 300 250 250`, target 250): prior enc from sqT1 = `90,410` → avg
+  **250.0** ≥ 250 → instant stop. Observed: zero motion. ✓
+- sqD4: prior enc from sqT3 = `183,319` → avg **251** ≥ 250 → instant stop.
+  Observed: zero motion. ✓
+- sqD3: prior enc from sqT2 = `67,−66` → avg **0.5** → ran normally. ✓
+- All seq-3 drives follow `ZERO enc` → enc0 = 0 → ran normally. ✓
+
+The alternating success/failure of the square legs is fully explained: each
+D+TURN pair leaves avg ≈ 250 mm on the accumulators (TURN does not reset
+encoders; its symmetric ±211 mm rides on top of the D leg's 301,199).
+
+Corollary even when it doesn't instant-fire: any leftover average shortens
+(or, if negative, lengthens) the next D by that amount — a silent distance
+error on every D not preceded by `ZERO enc`.
+
+**Fix:** make the baseline snapshot see zeroed inputs — e.g. zero
+`state.inputs.encLMm/R` (the full `resetEncoders()` sequence) *before*
+`_activeCmd.start()`, or explicitly set `enc0Mm = 0` for D-origin commands.
+Add a sim test: D → TURN → D with no ZERO between; second D must travel the
+full distance.
+
+**Also unexplained (separate, smaller):** `T_timed_1500` (`T 1500 300 300`)
+produced zero motion for its whole window (enc=0,0, pose 0,0,0, mode=I from
+t=0.41). Check the T argument order — if T is `<left> <right> <ms>`, 1500 is
+an out-of-range speed and the command may have been rejected (reply invisible
+over the relay, same as every other reply problem in this run). Worth a
+serial-port re-test before filing.
+
+---
+
+## Finding 1 (original) — right encoder wedge corrupting odometry (firmware-hardening angle)
 
 The hardware fault itself is confirmed and out of scope here, but the firmware
 currently has detection without defense:

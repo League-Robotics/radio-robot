@@ -2,36 +2,40 @@
 status: pending
 ---
 
-# Bench finding — `DBG OTOS BENCH` / `DBG OTOS` emit no reply on hardware
+# DBG OTOS BENCH: "no reply" was wrong transport (resolved); REAL bug = bench mode never engages
 
-## Context
+## Part A — "no reply on hardware" — RESOLVED (transport, not a firmware bug)
 
-Found during sprint 032 hardware bench validation (firmware v0.20260612.17, robot `tovez`).
-The Bench OTOS DBG commands added in sprint 031-003 do NOT reply on the real robot:
+The original symptom (`DBG OTOS BENCH`/`DBG OTOS` silent) was because the 032 bench harness talked
+over the RADIO RELAY. DBG descriptors are registered `ForceReply::SERIAL` by design
+(`DebugCommandable.h:23-24`, `DebugCommandable.cpp:694-704`): debug replies always go to the robot's
+USB serial regardless of the arrival channel. Listening on radio never sees them. Confirmed by the
+bench-032 diagnosis (`docs/code_review/bench-032-diagnosis.md` §Finding 2). Verified: over the
+robot's USB serial (`SerialConnection(..., mode="direct")`) every DBG command replies normally
+(`PING -> OK pong`, `DBG OTOS BENCH 1 -> OK dbg otos bench=...`, `DBG OTOS -> OK dbg otos`).
+STAKEHOLDER DIRECTIVE: run bench tests over the robot's USB serial, not the relay. No `ForceReply`
+change needed.
 
-- `DBG` alone → `ERR unknown` (the DBG subsystem parses fine).
-- `DBG OTOS BENCH 1 20 10 0` → **no reply at all** (not even ERR), even with a 1.2s read window.
-- `DBG OTOS` → **no reply at all**.
+## Part B — REAL firmware bug: `DBG OTOS BENCH 1` does not enable bench mode
 
-Because they're not `ERR unknown`, the `DBG OTOS [BENCH ...]` prefixes ARE registered (031-003 shipped),
-but the handlers emit nothing on hardware. The sim tests (`host_tests/test_dbg_otos_commands.py`) pass —
-this is a hardware-only reply-path failure, the exact class the bench harness exists to catch.
+Tested over USB serial (transport ruled out): `DBG OTOS BENCH 1` (and `DBG OTOS BENCH 1 20 10`)
+reply **`OK dbg otos bench=0`** every time — the enable flag never takes. `DBG OTOS BENCH 0` also
+replies `bench=0`. So the bench-mode pointer swap never engages, which is why bench mode was NOT
+active during the entire 032 run (matches the diagnosis cross-check: twist/ekf_rej both 0 while pose
+ran to a phantom 131° — impossible if the always-valid BenchOtosSensor were active).
 
-Consequence: the Bench OTOS could not be enabled or verified on the robot, so the 032 bench test ran on
-encoder odometry instead of the synthetic OTOS. Fixing this is the prerequisite to re-running the bench
-validation under the Bench OTOS.
-
-## Likely cause (to investigate)
-
-- The `#ifndef HOST_BUILD` reply path in `handleDbgOtosBench` / `handleDbgOtos`
-  (`source/app/DebugCommandable.cpp`, 031-003) may not call the reply function in the firmware build,
-  or replies into a channel/ctx that isn't forwarded.
-- Check the longest-prefix-first registration ordering of `DBG OTOS BENCH` vs `DBG OTOS` on the real
-  command table, and that the handler's `replyFn`/ctx are wired the same way working DBG handlers
-  (e.g. `DBG WEDGE`, which presumably does reply) are.
+The handler (`DebugCommandable.cpp handleDbgOtosBench`) parses `enable=atoi(tokens[0])` and calls
+`nh->setOtosBench(enable!=0)`, then replies `bench = nh->isBenchMode()?1:0`. `setOtosBench`/
+`isBenchMode` (`NezhaHAL.h:63-75`) swap/compare `_otosActive` against
+`static_cast<IOtosSensor*>(&_benchOtos)`. Something in this parse→swap→isBenchMode path is not
+flipping (or not reading back) the active pointer. Investigate: confirm `enable` is actually 1 at the
+handler (token/arg plumbing), that `setOtosBench(true)` assigns `_otosActive=&_benchOtos`, and that
+`isBenchMode()`'s pointer comparison holds (watch for cast/const-adjustment or a separate HAL
+instance). Add an on-target check (or a host-reachable seam) so this can't silently regress.
 
 ## Acceptance
 
-- On hardware, `DBG OTOS BENCH 1 ...` replies `OK dbg otos bench=1`, `DBG OTOS BENCH 0` replies
-  `OK dbg otos bench=0`, and `DBG OTOS` replies the `ideal=.. otos=.. fused=.. err=..` line.
-- Add a hardware smoke step (or note in the smoke ritual) that exercises these so it can't regress silently.
+- Over USB serial: `DBG OTOS BENCH 1` → `OK dbg otos bench=1`, `DBG OTOS BENCH 0` → `bench=0`.
+- With bench mode ON, `otos()` returns the BenchOtosSensor and `Robot::benchOtosTick` feeds it →
+  `DBG OTOS` shows `ideal`/`otos` advancing under commanded motion, and `twist` becomes non-zero
+  (also depends on Finding 3 enc-velocity un-gating). Re-verify in the serial bench re-run.
