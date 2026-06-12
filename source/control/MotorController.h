@@ -4,7 +4,6 @@
 #endif
 #include "IMotor.h"
 #include "Config.h"
-#include "RatioPidController.h"
 #include "VelocityController.h"
 #include "RobotState.h"
 #include "Protocol.h"
@@ -17,11 +16,15 @@ class I2CBus;
  * MotorController — per-wheel velocity PID wheel speed control.
  *
  * Inner loop is VelocityController (PI+FF) — one instance per wheel.
- * RatioPidController is retained but bypassed (not called in normal drive).
  *
  * Sprint 010 replaces the cumulative-distance ratio PID inner loop with
  * two independent VelocityController instances (_vcL, _vcR) that track
  * per-wheel mm/s setpoints. See docs/kinematics-model.md §2.1.
+ *
+ * N13 (030-010): RatioPidController removed — its update() was never called
+ * in controlTick (sync-gain coupling replaced it). The pid.* config keys
+ * (ratioPidKp/Ki/Kd/Max) are retained in ConfigRegistry for host
+ * compatibility (tests use SET/GET pid.*) but have no live controller effect.
  *
  * Thread safety: single-threaded tick loop only.
  */
@@ -61,9 +64,6 @@ public:
 
     // Reset integrators only (called by CommandProcessor on mode change).
     void resetIntegrators();
-
-    // Update PID gains at runtime (called by K-command setters).
-    void updatePidGains(float kP, float kI, float kD, float iClamp);
 
     // Push per-wheel velocity gains (vel.kP/kI/kFF/iMax/kAw/minWheel) from config
     // into the live VelocityControllers after a SET. (filt/sync are read per-tick.)
@@ -150,10 +150,7 @@ private:
     VelocityController _vcL;
     VelocityController _vcR;
 
-    // RatioPidController retained for compile compatibility; bypassed in normal drive.
-    RatioPidController _pid;
-
-    // Ratio-PID bookkeeping fields — retained but unused in velocity-loop path.
+    // Encoder/ratio bookkeeping for startDrive seeding (used by streaming command).
     float _cmdEncStartL;     // encoder mm snapshot at command start (left)
     float _cmdEncStartR;     // encoder mm snapshot at command start (right)
     float _cmdRatio;         // |fasterSpeed| / |slowerSpeed|, always >= 1.0

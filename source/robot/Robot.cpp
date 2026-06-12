@@ -407,10 +407,12 @@ int Robot::buildTlmFrame(char* buf, int len)
     char modeChar = 'I';
     switch (motionController.mode()) {
         case DriveMode::STREAMING: modeChar = 'S'; break;
-        case DriveMode::TIMED:     modeChar = 'T'; break;
         case DriveMode::DISTANCE:  modeChar = 'D'; break;
         case DriveMode::GO_TO:     modeChar = 'G'; break;
         case DriveMode::VELOCITY:  modeChar = 'V'; break;
+        // N13 (030-010): TIMED removed — T command runs as VELOCITY; mode=T
+        // was unreachable in firmware. Host parser handles mode=T gracefully
+        // for backward-compatibility with old logs.
         default:                   modeChar = 'I'; break;
     }
 

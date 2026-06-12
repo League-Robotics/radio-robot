@@ -205,13 +205,6 @@ public:
     // N15 test helper: return P[idx][idx] from the EKF (idx in [0..4]).
     float ekfPDiag(int idx) const { return _ekf.pDiag(idx); }
 
-    // ---------------------------------------------------------------------------
-    // Legacy forward-Euler integrate (deprecated; kept for reference only).
-    // dL_mm, dR_mm: signed mm traveled by left and right wheels this tick.
-    // NOTE: this overload writes to a local state — do not use in new code.
-    // ---------------------------------------------------------------------------
-    void update(HardwareState& s, float dL_mm, float dR_mm, float trackwidthMm);
-
     // Encoder-rate velocity from the most recent predict() call.
     // Stored so correctEKF() (called from otosCorrect()) can pass them to the
     // EKF velocity update channels without changing the cooperative loop's

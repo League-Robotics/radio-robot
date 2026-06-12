@@ -58,9 +58,13 @@ class Sim:
     # ------------------------------------------------------------------
 
     def send_command(self, line: str) -> str:
-        """Send one command line; return the synchronous reply as a decoded string."""
-        buf = ctypes.create_string_buffer(512)
-        n = self._lib.sim_command(self._h, line.encode(), buf, 512)
+        """Send one command line; return the synchronous reply as a decoded string.
+
+        Buffer is 2048 bytes — matches the ReplyStore capacity in sim_api.cpp so
+        that multi-line replies (e.g. chunked GET CFG output) are not truncated.
+        """
+        buf = ctypes.create_string_buffer(2048)
+        n = self._lib.sim_command(self._h, line.encode(), buf, 2048)
         if n <= 0:
             return ""
         return buf.raw[:n].decode(errors="replace")

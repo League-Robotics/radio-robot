@@ -148,27 +148,30 @@ static int appendKeyValue(char* buf, int remaining, const ConfigEntry& entry,
 // An empty args list (count == 0) means dump all keys.
 // handlerCtx is cast to CfgCtx*.
 //
-// Emits one CFG response line. For each unknown key, also emits ERR badkey.
+// N12 (030-010): Full GET dump is ~800 bytes but CODAL's serial TX buffer is
+// only 255 bytes (SerialPort.cpp:17).  sendReliable cannot make room for a
+// line longer than the buffer — it spins 5 ms then hands the string to ASYNC
+// which drops the overflow.  Buffer math: 58 keys × ~14 bytes/key ≈ 805 bytes,
+// exceeding the 255-byte limit by ~550 bytes.  BENCH CONFIRM NEEDED: verify
+// on hardware that chunked CFG lines arrive complete before removing this note.
+//
+// Fix: for bare GET (all-keys dump), emit multiple CFG lines each ≤ 200 bytes
+// so every line fits the 255-byte TX buffer.  Named-key requests fit a single
+// line.  The host-side get_config() already accumulates multiple CFG lines
+// via result.update(r.kv) (protocol.py:NezhaProtocol.get_config).
+//
+// Emits ≥1 CFG response lines. For each unknown key, also emits ERR badkey.
 // ---------------------------------------------------------------------------
+
+// Maximum content bytes per CFG line for the all-keys dump.  Set to 200 to
+// stay well under the 255-byte CODAL serial TX buffer.
+static const int kCfgChunkMax = 200;
 
 void handleGet(const ArgList& args, const char* corrId,
                ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
     const CfgCtx* ctx = reinterpret_cast<const CfgCtx*>(handlerCtx);
     const RobotConfig& cfg = *ctx->cfg;
-
-    // Build: "CFG key=val key=val ... [#id]"
-    // Sprint 012: buffer expanded from 512 to 768 to accommodate 10 new config
-    // keys (otosLinSc, otosAngSc, rotGainPos/Neg, rotOffPos/Neg, rotSlip,
-    // odomOffX/Y, odomYaw) which add ~156 bytes to the full GET dump.
-    // Stack-local buffer; no heap impact.
-    char line[768];
-    int pos = 0;
-    int rem = (int)sizeof(line);
-
-    // Write the "CFG " prefix.
-    int n = snprintf(line + pos, (size_t)rem, "CFG");
-    if (n > 0 && n < rem) { pos += n; rem -= n; }
 
     // replyCtx is the opaque context forwarded to replyFn (used for ERR replies).
     // For ERR replies we need a temporary buffer.
@@ -177,14 +180,72 @@ void handleGet(const ArgList& args, const char* corrId,
     bool anyKey = (args.count == 0);  // no args -> dump all
 
     if (anyKey) {
-        // Dump all registry entries.
-        for (int i = 0; i < kRegistryCount && rem > 2; ++i) {
-            line[pos++] = ' '; --rem;
-            int w = appendKeyValue(line + pos, rem, kRegistry[i], cfg);
-            pos += w; rem -= w;
+        // N12: chunk the full dump into multiple CFG lines, each ≤ kCfgChunkMax
+        // content bytes, so each transmission fits CODAL's 255-byte TX buffer.
+        // The host accumulates multiple CFG lines via result.update().
+        //
+        // Buffer is sized for one chunk: "CFG" prefix (3) + up to kCfgChunkMax
+        // content bytes + " #corrId" (≤ 10) + NUL.  256 bytes is sufficient.
+        char line[256];
+        int pos = 0;
+        int rem = (int)sizeof(line);
+
+        // Start the first CFG chunk.
+        int n = snprintf(line + pos, (size_t)rem, "CFG");
+        if (n > 0 && n < rem) { pos += n; rem -= n; }
+
+        for (int i = 0; i < kRegistryCount; ++i) {
+            // Probe: how many bytes would this key=val entry add?
+            char probe[48];
+            int wProbe = appendKeyValue(probe, (int)sizeof(probe) - 1, kRegistry[i], cfg);
+            int entrySize = 1 + wProbe;  // 1 for the leading space
+
+            // If adding this entry would push the content region over the chunk
+            // limit, flush the current line and start a fresh CFG chunk.
+            // Content bytes = pos - 3 ("CFG" prefix).
+            int contentBytes = pos - 3;
+            if (contentBytes > 0 && contentBytes + entrySize > kCfgChunkMax) {
+                // Flush: append corrId if present, then emit.
+                if (corrId && corrId[0] != '\0' && rem > 3) {
+                    int w = snprintf(line + pos, (size_t)rem, " #%s", corrId);
+                    if (w > 0 && w < rem) { pos += w; rem -= w; }
+                }
+                line[pos] = '\0';
+                replyFn(line, replyCtx);
+
+                // Start fresh chunk.
+                pos = 0; rem = (int)sizeof(line);
+                n = snprintf(line + pos, (size_t)rem, "CFG");
+                if (n > 0 && n < rem) { pos += n; rem -= n; }
+            }
+
+            // Append this entry.
+            if (rem > 2) {
+                line[pos++] = ' '; --rem;
+                int w = appendKeyValue(line + pos, rem, kRegistry[i], cfg);
+                pos += w; rem -= w;
+            }
         }
+
+        // Flush the final (possibly only) chunk.
+        if (corrId && corrId[0] != '\0' && rem > 3) {
+            int w = snprintf(line + pos, (size_t)rem, " #%s", corrId);
+            if (w > 0 && w < rem) { pos += w; rem -= w; }
+        }
+        line[pos] = '\0';
+        replyFn(line, replyCtx);
+
     } else {
-        // Dump only the requested keys.
+        // Named-key request: all requested keys fit in one CFG line (bounded by
+        // the number of keys the caller can specify in a single command, and any
+        // unknown key gets its own ERR).
+        char line[768];
+        int pos = 0;
+        int rem = (int)sizeof(line);
+
+        int n = snprintf(line + pos, (size_t)rem, "CFG");
+        if (n > 0 && n < rem) { pos += n; rem -= n; }
+
         for (int t = 0; t < args.count && rem > 2; ++t) {
             const char* reqKey = args.args[t].sval;
             bool found = false;
@@ -204,16 +265,16 @@ void handleGet(const ArgList& args, const char* corrId,
                                            replyFn, replyCtx);
             }
         }
-    }
 
-    // Append correlation id if present.
-    if (corrId && corrId[0] != '\0' && rem > 3) {
-        int w = snprintf(line + pos, (size_t)rem, " #%s", corrId);
-        if (w > 0 && w < rem) { pos += w; rem -= w; }
-    }
+        // Append correlation id if present.
+        if (corrId && corrId[0] != '\0' && rem > 3) {
+            int w = snprintf(line + pos, (size_t)rem, " #%s", corrId);
+            if (w > 0 && w < rem) { pos += w; rem -= w; }
+        }
 
-    line[pos] = '\0';
-    replyFn(line, replyCtx);
+        line[pos] = '\0';
+        replyFn(line, replyCtx);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -347,7 +408,6 @@ void handleSet(const ArgList& args, const char* corrId,
     int apos = 0;
     int arem = (int)sizeof(applied);
 
-    bool pidChanged = false;
     bool velChanged = false;
     bool anyParseErr = false;   // set on strtof/strtol end-pointer failure
 
@@ -457,11 +517,11 @@ void handleSet(const ArgList& args, const char* corrId,
         }
         }
 
-        // Track PID changes so we can call updatePidGains() once at the end.
-        if (strcmp(k, "pid.kp") == 0 || strcmp(k, "pid.ki") == 0 ||
-            strcmp(k, "pid.kd") == 0 || strcmp(k, "pid.max") == 0) {
-            pidChanged = true;
-        }
+        // N13 (030-010): pid.* keys are retained in the registry (host tests use
+        // them for SET/GET coverage) but the RatioPidController that once consumed
+        // them has been removed from MotorController.  Writes to pid.* update the
+        // RobotConfig fields (ratioPidKp/Ki/Kd/Max) and are accepted/rejected
+        // normally; there is no longer a live controller to push the gains into.
 
         // Per-wheel velocity gains must be pushed into the live controllers
         // (they hold copies made at construction). filt/sync are read per-tick.
@@ -530,11 +590,6 @@ void handleSet(const ArgList& args, const char* corrId,
         // Validation passed — commit atomically.
         cfg = candidate;
 
-        // Update PID gains in MotorController if any PID param changed.
-        if (pidChanged) {
-            mc.updatePidGains(cfg.ratioPidKp, cfg.ratioPidKi,
-                              cfg.ratioPidKd, cfg.ratioPidMax);
-        }
         if (velChanged) {
             mc.updateVelGains(cfg);
         }

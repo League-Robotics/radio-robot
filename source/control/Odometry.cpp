@@ -153,20 +153,6 @@ void Odometry::zero(HardwareState& s)
 }
 
 // ---------------------------------------------------------------------------
-// update — legacy forward-Euler (deprecated; callers should use predict()).
-// ---------------------------------------------------------------------------
-
-void Odometry::update(HardwareState& s, float dL_mm, float dR_mm, float trackwidthMm)
-{
-    float dCenter = (dL_mm + dR_mm) * 0.5f;
-    float dTheta  = (dR_mm - dL_mm) / trackwidthMm;
-
-    s.poseX    += dCenter * cosf(s.poseHrad);
-    s.poseY    += dCenter * sinf(s.poseHrad);
-    s.poseHrad += dTheta;
-}
-
-// ---------------------------------------------------------------------------
 // wrapPi — keep heading in (-π, π]
 // ---------------------------------------------------------------------------
 

@@ -3,19 +3,14 @@
 #include <math.h>
 #include <cstdio>
 
-// DEBUG (sprint 014 — encoder-wedge isolation): when 1, controlTick() bypasses
-// the velocity PID and drives the wheels OPEN-LOOP at a fixed PWM proportional
-// to the commanded velocity (feedforward only). The motor command does NOT
-// react to measured velocity, so an encoder reading 0 cannot make the PID slam
-// the PWM. Isolates whether PID feedback perpetuates the wedge.
-// Set back to 0 to restore closed-loop PID.
-#define PID_BYPASS 0
+// N13 (030-010): PID_BYPASS macro removed. It was a sprint-014 debug flag
+// (open-loop feedforward bypass of the velocity PID) that was always disabled
+// (set to 0) and no longer needed now that the encoder-wedge root cause is fixed.
 
 MotorController::MotorController(IMotor& left, IMotor& right, const RobotConfig& cal)
     : _motorL(left), _motorR(right), _cal(cal),
       _vcL(cal.velKff, cal.velKp, cal.velKi, cal.velIMax, cal.minWheelMms, cal.velKaw),
       _vcR(cal.velKff, cal.velKp, cal.velKi, cal.velIMax, cal.minWheelMms, cal.velKaw),
-      _pid(cal.ratioPidKp, cal.ratioPidKi, cal.ratioPidKd, cal.ratioPidMax),
       _cmdEncStartL(0.0f), _cmdEncStartR(0.0f),
       _cmdRatio(1.0f), _fasterIsRight(false),
       _cmds(nullptr),
@@ -69,7 +64,6 @@ void MotorController::startDriveClean(float leftMms, float rightMms)
     // which wedges the Nezha encoder — see encoder-wedge note).
     _cmdEncStartL = _prevEncL;
     _cmdEncStartR = _prevEncR;
-    _pid.reset();
     _vcL.reset();
     _vcR.reset();
 }
@@ -111,7 +105,6 @@ void MotorController::startDrive(float leftMms, float rightMms)
         _cmdEncStartR = curSlower - signSlower * seedSlower;
     }
 
-    if (newFasterIsRight != _fasterIsRight) _pid.reset();
     _fasterIsRight = newFasterIsRight;
     _cmdRatio = newRatio;
 }
@@ -122,7 +115,6 @@ void MotorController::stop()
         _cmds->tgtLMms = 0.0f;
         _cmds->tgtRMms = 0.0f;
     }
-    _pid.reset();
     _vcL.reset();
     _vcR.reset();
     // Use the control loop's cached encoder values (not a fresh atomic read,
@@ -135,14 +127,8 @@ void MotorController::stop()
 
 void MotorController::resetIntegrators()
 {
-    _pid.reset();
     _vcL.reset();
     _vcR.reset();
-}
-
-void MotorController::updatePidGains(float kP, float kI, float kD, float iClamp)
-{
-    _pid.updateGains(kP, kI, kD, iClamp);
 }
 
 void MotorController::updateVelGains(const RobotConfig& cal)
@@ -370,28 +356,6 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
         inputs.velRMms = 0.0f;
         return;
     }
-
-#if PID_BYPASS
-    // DEBUG: open-loop feedforward — PWM% = target_mm_s * velKff, clamped ±100.
-    // setSpeed() itself is write-on-change (Motor level), so just call it every
-    // tick unconditionally — no local change-tracking here (a stale static was
-    // skipping the restart write after a stop).
-    {
-        float ffL = cmds.tgtLMms * _cal.velKff;
-        float ffR = cmds.tgtRMms * _cal.velKff;
-        if (ffL >  100.0f) ffL =  100.0f;
-        if (ffL < -100.0f) ffL = -100.0f;
-        if (ffR >  100.0f) ffR =  100.0f;
-        if (ffR < -100.0f) ffR = -100.0f;
-        int8_t pL = (int8_t)roundf(ffL);
-        int8_t pR = (int8_t)roundf(ffR);
-        cmds.pwmL = pL;
-        cmds.pwmR = pR;
-        _motorL.setSpeed(pL);
-        _motorR.setSpeed(pR);
-        return;
-    }
-#endif
 
     // PID integrator dt: the ACTUAL elapsed control-tick time, not the nominal
     // controlPeriodMs. The real loop runs at ~24 ms (10 ms nominal + 2x4 ms

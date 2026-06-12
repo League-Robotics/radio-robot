@@ -205,7 +205,9 @@ struct MotorGains {
 enum class DriveMode : uint8_t {
     IDLE      = 0,
     STREAMING = 1,
-    TIMED     = 2,
+    // TIMED = 2 removed (N13, 030-010): T command runs as VELOCITY mode
+    // (beginTimed→beginVelocity path); DriveMode::TIMED was unreachable and
+    // TLM mode= could never emit 'T'. Value 2 is retired (do not reuse).
     DISTANCE  = 3,
     GO_TO     = 4,
     VELOCITY  = 5   // MotionCommand-based body-twist control (Sprint 017)

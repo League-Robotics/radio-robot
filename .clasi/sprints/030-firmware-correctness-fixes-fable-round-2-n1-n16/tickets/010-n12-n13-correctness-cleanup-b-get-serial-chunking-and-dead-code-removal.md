@@ -1,13 +1,13 @@
 ---
-id: "010"
-title: "N12+N13: Correctness cleanup B — GET serial chunking and dead code removal"
-status: open
+id: '010'
+title: "N12+N13: Correctness cleanup B \u2014 GET serial chunking and dead code removal"
+status: done
 use-cases:
-  - SUC-009
+- SUC-009
 depends-on:
-  - '009'
-github-issue: ""
-issue: ""
+- 009
+github-issue: ''
+issue: ''
 completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -40,20 +40,29 @@ Depends on ticket 009 to complete the cleanup cluster together.
 
 ## Acceptance Criteria
 
-- [ ] N12 bench step: run `GET` over serial and capture full output. Confirm whether
-      truncation occurs. (This is a hardware step — team-lead / stakeholder verifies.)
-- [ ] N12 implementation: if bench confirms truncation, chunk the `CFG` dump into
-      multiple serial writes of <= 200 bytes each. If no truncation is observed,
-      add a comment in `ConfigRegistry.cpp` documenting the buffer-size risk and
-      confirming bench result.
-- [ ] N13: `RatioPidController` construction, reset, and `pid.*` SET wiring removed
-      from `MotorController.cpp`.
-- [ ] N13: `PID_BYPASS` macro removed.
-- [ ] N13: `Odometry::update()` removed (function definition and declaration).
-- [ ] N13: `DriveMode::TIMED` removed; grep confirms no host parser expects `mode=T`
-      in TLM (or a comment is added if a parser reference is found).
-- [ ] `python3 build.py` clean build passes with no new warnings.
-- [ ] `uv run --with pytest python -m pytest host_tests/ host/tests/` passes.
+- [x] N12 bench step: Buffer math confirmed: 58 keys × ~14 bytes/key = ~805 bytes,
+      exceeding the 255-byte CODAL TX limit by ~550 bytes. Chunking implemented
+      defensively. BENCH CONFIRM NEEDED: stakeholder/team-lead verifies on hardware
+      that all 58 keys are received after this change.
+- [x] N12 implementation: chunked CFG dump into multiple serial writes of ≤ 200 content
+      bytes each (kCfgChunkMax=200). Host get_config() already accumulates multiple
+      CFG lines via result.update(). Sim send_command() buffer increased to 2048 bytes
+      to match ReplyStore capacity (was 512, truncated multi-line replies in tests).
+- [x] N13: `RatioPidController` member `_pid` and its construction removed from
+      `MotorController`. `_pid.reset()` calls removed from startDriveClean, stop,
+      resetIntegrators, startDrive. `updatePidGains()` method removed.
+      pid.* keys RETAINED in ConfigRegistry and RobotConfig (host tests use them).
+      The `updatePidGains` call removed from handleSet; pidChanged tracking removed.
+- [x] N13: `PID_BYPASS` macro removed from `MotorController.cpp` (was always 0).
+- [x] N13: `Odometry::update()` removed (declaration from .h, definition from .cpp).
+- [x] N13: `DriveMode::TIMED` removed from enum (Config.h); modeChar='T' case removed
+      from Robot.cpp TLM emitter. Grep result: host/tests/test_protocol_v2.py has
+      test_parse_tlm_mode_field_T which tests the *parser* with a synthetic string —
+      it does NOT require firmware to emit mode=T. Parser unchanged; test passes.
+- [x] `python3 build.py` clean build passes. FLASH: 184128 B (49.40%, 184784 text).
+      No new warnings.
+- [x] `uv run --with pytest python -m pytest host_tests/ host/tests/` passes.
+      684 passed (674 baseline + 10 new N12/N13 tests).
 
 ## Implementation Plan
 
