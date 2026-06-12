@@ -317,15 +317,30 @@ In the second (motors stopped, chip read failed), both fall back to encoder-delt
 SET <key>=<value>… [#id]
 → OK set <applied-key>=<value>… [#id]
    [ERR badkey <key> [#id]]…
+   [ERR badval <key>=<value> [#id]]
 ```
 
-Applies each valid key immediately to the live config.  Unknown keys
-each produce a separate `ERR badkey` line; valid keys are applied and
-listed in the `OK set` response body.  If no valid keys are provided,
-only `ERR` lines are emitted (no `OK set`).
+Applies all valid keys atomically to the live config.  The entire SET is
+all-or-nothing: if any key is unknown, non-numeric, or out of range, no keys
+are applied and the live config is unchanged.
 
-Changing any of `pid.kp`, `pid.ki`, `pid.kd`, or `pid.max` calls
-`MotorController::updatePidGains()` immediately.
+- Unknown key → `ERR badkey <key>`
+- Non-numeric or empty value → `ERR badval <key>` (parse failure)
+- Out-of-range or invariant violation → `ERR badval <key>=<value>` (first
+  failing key shown with its candidate value)
+
+Validated invariants (sprint 028-004):
+
+| Invariant                        | Failure consequence                      |
+|----------------------------------|------------------------------------------|
+| `tw > 0`                         | Division by zero in odometry arc/heading |
+| `ctrlPeriod > 0`                 | Scheduler sleep wraps to huge uint32     |
+| `vWheelMax > steerHeadroom`      | Saturation ceiling goes negative         |
+| `rotSlip` in [0.5, 1.0]          | Nonsensical arc estimates break odometry |
+
+If all keys parse and validate, `cfg = candidate` is applied atomically and
+`OK set <applied>` is emitted.  Changing any of `pid.kp`, `pid.ki`, `pid.kd`,
+or `pid.max` calls `MotorController::updatePidGains()` after the commit.
 
 Examples:
 
@@ -333,9 +348,14 @@ Examples:
 SET ml=0.487 mr=0.481
 OK set ml=0.487 mr=0.481
 
-SET ml=0.487 bad=1
-OK set ml=0.487
-ERR badkey bad
+SET tw=0
+ERR badval tw=0
+
+SET tw=abc
+ERR badval tw
+
+SET pid.kp=1.5 tw=0
+ERR badval tw=0
 
 SET bad=1
 ERR badkey bad
@@ -383,8 +403,10 @@ Value conventions:
   multipliers.
 - Float keys use three decimal places on output (`%.3f`).
 - Integer and float-as-int keys use `%d` on output.
-- `SET` accepts float text for float keys (`atof`) and integer text for
-  int and float-as-int keys (`atoi`).
+- `SET` accepts float text for float keys (`strtof` with end-pointer
+  validation) and integer text for int and float-as-int keys (`strtol`
+  base-10 with end-pointer validation).  Trailing non-numeric characters or
+  empty values are rejected with `ERR badval <key>`.
 
 ---
 
