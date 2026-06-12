@@ -4,43 +4,93 @@ status: pending
 
 # A1b — Delete host-side steering controllers and demote navigator.py to route planner
 
-> Re-filed from sprint 029 (navigation-ownership), ticket 003, closed unimplemented.
-> Gated on the committed design doc `docs/decisions/029-pose-authority.md` and on
-> A1a (camera_goto fold-in) landing first.
+> **Provenance:** sprint 029 (navigation-ownership) ticket 003, closed unimplemented.
+> Full ticket content preserved below.
+> **Gate:** the pose-authority design doc authorising these deletions is committed at
+> `docs/decisions/029-pose-authority.md` — re-read it and confirm it sanctions the
+> specific files below before deleting anything.
+> **Sequencing:** depends on A1a (camera_goto fold-in) landing first.
 
-## Context
+## Description
 
-The host runs a parallel steering loop that duplicates the firmware's job. The
-pose-authority decision is that firmware owns short-horizon motion + pose fusion;
-the host owns route planning and camera-based pose *corrections* (OV / SI resets),
-not its own steering loop. That makes the host steering library dead weight.
+This ticket executes the ownership decision: delete the host-side steering loop and
+its controller library.
 
-## Fix
+**Hard gate**: Do not begin until the stakeholder-approved design doc explicitly
+authorises deletion of the specific files listed below. If the design doc arrives at
+a different conclusion (e.g., retain the host-side loop for multi-waypoint paths),
+the scope must be revised before execution.
 
-**Hard gate:** re-read `docs/decisions/029-pose-authority.md` and confirm it
-authorises deleting the specific files below (and its answers to OQ-1 / OQ-2)
-before deleting anything. Grep all callers first.
+**What to delete** (per the suggested ownership split):
+- `nav/controllers/pure_pursuit.py`, `stanley.py`, `ltv.py` — host-side steering
+  controllers with zero callers outside navigator.py.
+- `navigator.py` methods: `navigate`, `follow_path`, `_run_controller`,
+  `_spin_to_heading` — the steering-loop methods.
+- Corresponding `robot_mcp.py` tool handlers that called these navigator methods
+  (update or remove `navigate`, `follow_path`, `follow_pose_path` MCP tools).
 
-- Delete `host/robot_radio/controllers/pure_pursuit.py`, `stanley.py`, `ltv.py`
-  (confirm zero production callers), and `controllers/__init__.py` if it ends empty.
-- Remove steering-loop methods from `nav/navigator.py` (`navigate`, `follow_path`,
-  `_run_controller`, `_spin_to_heading`). If route-planner methods (`visit_tags`,
-  `approach`, …) are retained per OQ-2, rewrite them to issue firmware G commands
-  via `robot.go_to()` instead of `_run_controller`.
-- Update/remove `io/robot_mcp.py` MCP tools `navigate` / `follow_path` /
-  `follow_pose_path` per the design doc (OQ-1). **Breaking MCP API change** — name
-  and update all known callers.
-- Remove or rewrite tests importing the deleted controllers.
+**What to retain** (minimum, subject to design doc answer to OQ-2):
+- `navigator.py` route-planning methods if the design doc determines they are
+  needed (e.g., `visit_tags` rewritten to issue G commands, `approach` method).
+- `controllers/pid.py` if it has callers outside the steering path.
 
-## Acceptance
+The actual keep/delete list must be confirmed against the design doc before
+execution. The executor must grep all callers before deleting any file.
 
-- `navigator.py` contains no `while` loop sending motor commands.
-- `uv run pytest` passes; bench smoke ritual passes (`rogo go`/`goto`/`turn` work).
+## Acceptance Criteria
 
-## Priority suggestion
+- [ ] **BLOCKED on the design doc**: it is signed off and explicitly authorises
+      the specific deletions below before this begins.
+- [ ] `controllers/pure_pursuit.py`, `stanley.py`, `ltv.py` are deleted (confirmed
+      zero callers in production path by grep).
+- [ ] `navigator.py` contains no `while` loop sending motor commands (drive/S/T).
+- [ ] `robot_mcp.py` MCP tools `navigate` and `follow_path` are either removed or
+      rewritten to issue firmware G commands (per design doc decision on OQ-1).
+- [ ] All tests that imported the deleted controllers are removed or rewritten.
+- [ ] `uv run pytest` passes with no new failures.
+- [ ] Smoke ritual passes after deletion.
 
-**Medium.** This is the actual ownership cleanup. Sequenced after A1a. Confirm the
-design doc's keep/delete list before scoping a sprint.
+## Implementation Plan
+
+### Approach
+
+1. Confirm the design doc answer to OQ-1 (MCP tools) and OQ-2 (navigator route
+   planner retention).
+2. Grep every deleted file for callers: `grep -rn "pure_pursuit\|stanley\|ltv" host/`
+   and confirm zero production callers.
+3. Delete `controllers/pure_pursuit.py`, `stanley.py`, `ltv.py`.
+4. Remove the steering-loop methods from `navigator.py`. If the route-planner
+   methods (`visit_tags`, `grab_at`, etc.) survive, rewrite them to use
+   `robot.go_to()` / firmware G commands instead of `_run_controller`.
+5. Update `robot_mcp.py`: remove or rewrite `navigate`, `follow_path`,
+   `follow_pose_path` handlers per the design doc.
+6. Update or remove tests that import the deleted modules.
+7. Run smoke ritual: `mbdeploy deploy robot --clean` + bench test.
+
+### Files to delete
+
+- `host/robot_radio/controllers/pure_pursuit.py`
+- `host/robot_radio/controllers/stanley.py`
+- `host/robot_radio/controllers/ltv.py`
+- `host/robot_radio/controllers/__init__.py` (if empty after deletions)
+
+### Files to modify
+
+- `host/robot_radio/nav/navigator.py` — delete steering-loop methods
+- `host/robot_radio/io/robot_mcp.py` — update/remove navigate/follow_path tools
+- `host/robot_radio/controllers/__init__.py` — remove deleted exports
+- Any test files importing the deleted controllers
+
+### Testing Plan
+
+- `uv run pytest` — full suite; confirm tests for deleted modules are removed.
+- Bench smoke ritual: verify `rogo go`, `rogo goto`, `rogo turn` still work.
+- If `robot_mcp.py` navigate tool is rewritten (not removed), test it via MCP
+  client against the bench robot.
+
+### Documentation Updates
+
+None — architecture-update.md already documents the deletions.
 
 ## Source
 

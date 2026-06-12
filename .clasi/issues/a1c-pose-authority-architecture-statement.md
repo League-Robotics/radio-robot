@@ -4,38 +4,60 @@ status: pending
 
 # A1c — Write pose-authority statement in docs/architecture.md and consolidate
 
-> Re-filed from sprint 029 (navigation-ownership), ticket 004, closed unimplemented.
-> Must follow A1b — the docs must describe the code as it actually ends up, not as
-> the design doc proposed.
+> **Provenance:** sprint 029 (navigation-ownership) ticket 004, closed unimplemented.
+> Full ticket content preserved below. This ticket originally completed the a1 issue.
+> **Sequencing:** must follow A1b — the docs must describe the code as it actually
+> ends up, not as the design doc proposed.
 
-## Context
+## Description
 
-The pose-authority decision is captured in `docs/decisions/029-pose-authority.md`,
-but `docs/architecture.md` does not yet state it as the architecture baseline, and
-the per-sprint architecture-update docs are not consolidated.
+This closes the a1 issue by writing the pose-authority statement into
+`docs/architecture.md` and then running the `consolidate-architecture` skill to
+merge all sprint update documents into a new consolidated architecture baseline.
 
-## Fix
+This may only execute after A1b is done, because the documentation must describe the
+code as it actually exists, not as it was before.
 
-After A1b lands, add a "Navigation Architecture" / "Pose Authority" section to
-`docs/architecture.md` that:
-- Names the authoritative pose source for short-horizon motion (firmware EKF).
-- Describes the camera-correction mechanism (OV / SI pose resets).
-- States the host runs no parallel steering loop.
-- Names `nav/camera_goto.py` as the CLI navigation module.
-- States the route-planner role if `navigator.py` was retained (OQ-2).
+## Acceptance Criteria
 
-Verify the prose matches the post-A1b state of `navigator.py` and `robot_mcp.py`.
-Then run the `consolidate-architecture` skill to produce a new consolidated baseline.
+- [ ] `docs/architecture.md` has a "Navigation Architecture" or "Pose Authority"
+      section that:
+      - Names the authoritative pose source for short-horizon motion (firmware EKF).
+      - Describes the camera-correction mechanism (OV / SI pose resets).
+      - States that the host does not run a parallel steering loop.
+      - Names `nav/camera_goto.py` as the CLI navigation module.
+      - States the route-planner role (if navigator.py was retained per OQ-2).
+- [ ] The written statement matches what the code actually does (verify by reading
+      the post-A1b state of navigator.py and robot_mcp.py).
+- [ ] `consolidate-architecture` skill is run and a new consolidated architecture
+      document is produced in `.clasi/architecture/`.
+- [ ] Issue `a1-navigation-and-pose-ownership.md` is marked done.
 
-## Acceptance
+## Implementation Plan
 
-- `docs/architecture.md` has the pose-authority section, matching real code.
-- A consolidated architecture document is produced via `consolidate-architecture`.
+### Approach
 
-## Priority suggestion
+1. Read the current `docs/architecture.md` to find the right insertion point.
+2. Write the "Navigation Architecture" section based on the post-deletion code
+   state (read navigator.py and robot_mcp.py after A1b is done).
+3. Run the `consolidate-architecture` skill.
 
-**Low.** Documentation close-out; sequenced last, after A1b. Completes the original
-a1 navigation-and-pose-ownership issue.
+### Files to modify
+
+- `docs/architecture.md` — add pose-authority section
+
+### Files to create
+
+- New consolidated architecture document (via `consolidate-architecture` skill)
+
+### Testing Plan
+
+No tests. Documentation only.
+
+### Documentation Updates
+
+- `docs/architecture.md` — pose-authority section added/updated.
+- Consolidated architecture document created by the skill.
 
 ## Source
 
