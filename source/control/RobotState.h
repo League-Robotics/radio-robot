@@ -90,7 +90,7 @@ struct TargetState {
     float     targetYWorld;     // go-to target Y in world frame, mm
     float     targetSpeedMms;   // requested travel speed, mm/s
     float     distanceTargetMm; // remaining distance for DISTANCE mode, mm
-    uint32_t  deadlineMs;       // wall-clock deadline for TIMED mode, ms
+    uint32_t  deadlineMs;       // wall-clock deadline (used by MotionCommand TIME stop), ms
     ReplyFn   replyFn;          // callback to send drive-complete reply
     void*     replyCtx;         // opaque context for replyFn
     char      corrId[16];       // correlation ID for the pending command

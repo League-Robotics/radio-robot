@@ -210,3 +210,258 @@ class TestSetInvariants:
         assert "OK" in reply, f"Expected OK for valid tw=120, got {reply!r}"
         val = _get_val(sim, "tw")
         assert val == "120", f"Expected tw=120 after SET, got {val!r}"
+
+
+# ---------------------------------------------------------------------------
+# N6: new rate/accel/timeout invariants (ticket 030-006)
+# ---------------------------------------------------------------------------
+
+class TestN6RateAccelTimeoutInvariants:
+    """N6: validateConfig rejects bad rate/accel/timeout values; valid SETs apply."""
+
+    # ----- aDecel -----
+
+    def test_adecel_negative_rejected(self, sim) -> None:
+        """SET aDecel=-100 → ERR badval; config unchanged."""
+        original = _get_val(sim, "aDecel")
+        reply = sim.send_command("SET aDecel=-100")
+        assert "ERR" in reply, f"Expected ERR for aDecel=-100, got {reply!r}"
+        assert "badval" in reply, f"Expected badval in reply, got {reply!r}"
+        assert "aDecel" in reply, f"Expected 'aDecel' in ERR reply, got {reply!r}"
+        assert "OK" not in reply, f"Must not emit OK for invalid SET, got {reply!r}"
+        after = _get_val(sim, "aDecel")
+        assert original == after, (
+            f"aDecel changed after rejected SET: was {original!r}, now {after!r}"
+        )
+
+    def test_adecel_zero_rejected(self, sim) -> None:
+        """SET aDecel=0 → ERR badval; config unchanged."""
+        original = _get_val(sim, "aDecel")
+        reply = sim.send_command("SET aDecel=0")
+        assert "ERR" in reply, f"Expected ERR for aDecel=0, got {reply!r}"
+        assert "badval" in reply, f"Expected badval in reply, got {reply!r}"
+        after = _get_val(sim, "aDecel")
+        assert original == after, (
+            f"aDecel changed after rejected SET: was {original!r}, now {after!r}"
+        )
+
+    def test_adecel_valid_accepted(self, sim) -> None:
+        """SET aDecel=200 (positive) → OK; reads back correctly."""
+        reply = sim.send_command("SET aDecel=200")
+        assert "OK" in reply, f"Expected OK for valid aDecel=200, got {reply!r}"
+        val = _get_val(sim, "aDecel")
+        assert val == "200.000", f"Expected aDecel=200.000 after SET, got {val!r}"
+
+    # ----- aMax -----
+
+    def test_amax_zero_rejected(self, sim) -> None:
+        """SET aMax=0 → ERR badval; config unchanged."""
+        original = _get_val(sim, "aMax")
+        reply = sim.send_command("SET aMax=0")
+        assert "ERR" in reply, f"Expected ERR for aMax=0, got {reply!r}"
+        assert "badval" in reply, f"Expected badval in reply, got {reply!r}"
+        assert "aMax" in reply, f"Expected 'aMax' in ERR reply, got {reply!r}"
+        assert "OK" not in reply, f"Must not emit OK for invalid SET, got {reply!r}"
+        after = _get_val(sim, "aMax")
+        assert original == after, (
+            f"aMax changed after rejected SET: was {original!r}, now {after!r}"
+        )
+
+    def test_amax_negative_rejected(self, sim) -> None:
+        """SET aMax=-50 → ERR badval; config unchanged."""
+        original = _get_val(sim, "aMax")
+        reply = sim.send_command("SET aMax=-50")
+        assert "ERR" in reply, f"Expected ERR for aMax=-50, got {reply!r}"
+        assert "badval" in reply, f"Expected badval in reply, got {reply!r}"
+        after = _get_val(sim, "aMax")
+        assert original == after, (
+            f"aMax changed after rejected SET: was {original!r}, now {after!r}"
+        )
+
+    def test_amax_valid_accepted(self, sim) -> None:
+        """SET aMax=150 (positive) → OK; reads back correctly."""
+        reply = sim.send_command("SET aMax=150")
+        assert "OK" in reply, f"Expected OK for valid aMax=150, got {reply!r}"
+        val = _get_val(sim, "aMax")
+        assert val == "150.000", f"Expected aMax=150.000 after SET, got {val!r}"
+
+    # ----- vBodyMax -----
+
+    def test_vbodymax_zero_rejected(self, sim) -> None:
+        """SET vBodyMax=0 → ERR badval; config unchanged."""
+        original = _get_val(sim, "vBodyMax")
+        reply = sim.send_command("SET vBodyMax=0")
+        assert "ERR" in reply, f"Expected ERR for vBodyMax=0, got {reply!r}"
+        assert "badval" in reply, f"Expected badval in reply, got {reply!r}"
+        assert "vBodyMax" in reply, f"Expected 'vBodyMax' in ERR reply, got {reply!r}"
+        assert "OK" not in reply, f"Must not emit OK for invalid SET, got {reply!r}"
+        after = _get_val(sim, "vBodyMax")
+        assert original == after, (
+            f"vBodyMax changed after rejected SET: was {original!r}, now {after!r}"
+        )
+
+    def test_vbodymax_negative_rejected(self, sim) -> None:
+        """SET vBodyMax=-100 → ERR badval; config unchanged."""
+        original = _get_val(sim, "vBodyMax")
+        reply = sim.send_command("SET vBodyMax=-100")
+        assert "ERR" in reply, f"Expected ERR for vBodyMax=-100, got {reply!r}"
+        assert "badval" in reply, f"Expected badval in reply, got {reply!r}"
+        after = _get_val(sim, "vBodyMax")
+        assert original == after, (
+            f"vBodyMax changed after rejected SET: was {original!r}, now {after!r}"
+        )
+
+    def test_vbodymax_valid_accepted(self, sim) -> None:
+        """SET vBodyMax=300 (positive) → OK; reads back correctly."""
+        reply = sim.send_command("SET vBodyMax=300")
+        assert "OK" in reply, f"Expected OK for valid vBodyMax=300, got {reply!r}"
+        val = _get_val(sim, "vBodyMax")
+        assert val == "300.000", f"Expected vBodyMax=300.000 after SET, got {val!r}"
+
+    # ----- yawRateMax -----
+
+    def test_yawratemax_zero_rejected(self, sim) -> None:
+        """SET yawRateMax=0 → ERR badval; config unchanged."""
+        original = _get_val(sim, "yawRateMax")
+        reply = sim.send_command("SET yawRateMax=0")
+        assert "ERR" in reply, f"Expected ERR for yawRateMax=0, got {reply!r}"
+        assert "badval" in reply, f"Expected badval in reply, got {reply!r}"
+        assert "yawRateMax" in reply, f"Expected 'yawRateMax' in ERR reply, got {reply!r}"
+        assert "OK" not in reply, f"Must not emit OK for invalid SET, got {reply!r}"
+        after = _get_val(sim, "yawRateMax")
+        assert original == after, (
+            f"yawRateMax changed after rejected SET: was {original!r}, now {after!r}"
+        )
+
+    def test_yawratemax_negative_rejected(self, sim) -> None:
+        """SET yawRateMax=-90 → ERR badval; config unchanged."""
+        original = _get_val(sim, "yawRateMax")
+        reply = sim.send_command("SET yawRateMax=-90")
+        assert "ERR" in reply, f"Expected ERR for yawRateMax=-90, got {reply!r}"
+        assert "badval" in reply, f"Expected badval in reply, got {reply!r}"
+        after = _get_val(sim, "yawRateMax")
+        assert original == after, (
+            f"yawRateMax changed after rejected SET: was {original!r}, now {after!r}"
+        )
+
+    def test_yawratemax_valid_accepted(self, sim) -> None:
+        """SET yawRateMax=90 (positive) → OK; reads back correctly."""
+        reply = sim.send_command("SET yawRateMax=90")
+        assert "OK" in reply, f"Expected OK for valid yawRateMax=90, got {reply!r}"
+        val = _get_val(sim, "yawRateMax")
+        assert val == "90.000", f"Expected yawRateMax=90.000 after SET, got {val!r}"
+
+    # ----- yawAccMax -----
+
+    def test_yawaccmax_zero_rejected(self, sim) -> None:
+        """SET yawAccMax=0 → ERR badval; config unchanged."""
+        original = _get_val(sim, "yawAccMax")
+        reply = sim.send_command("SET yawAccMax=0")
+        assert "ERR" in reply, f"Expected ERR for yawAccMax=0, got {reply!r}"
+        assert "badval" in reply, f"Expected badval in reply, got {reply!r}"
+        assert "yawAccMax" in reply, f"Expected 'yawAccMax' in ERR reply, got {reply!r}"
+        assert "OK" not in reply, f"Must not emit OK for invalid SET, got {reply!r}"
+        after = _get_val(sim, "yawAccMax")
+        assert original == after, (
+            f"yawAccMax changed after rejected SET: was {original!r}, now {after!r}"
+        )
+
+    def test_yawaccmax_negative_rejected(self, sim) -> None:
+        """SET yawAccMax=-360 → ERR badval; config unchanged."""
+        original = _get_val(sim, "yawAccMax")
+        reply = sim.send_command("SET yawAccMax=-360")
+        assert "ERR" in reply, f"Expected ERR for yawAccMax=-360, got {reply!r}"
+        assert "badval" in reply, f"Expected badval in reply, got {reply!r}"
+        after = _get_val(sim, "yawAccMax")
+        assert original == after, (
+            f"yawAccMax changed after rejected SET: was {original!r}, now {after!r}"
+        )
+
+    def test_yawaccmax_valid_accepted(self, sim) -> None:
+        """SET yawAccMax=360 (positive) → OK; reads back correctly."""
+        reply = sim.send_command("SET yawAccMax=360")
+        assert "OK" in reply, f"Expected OK for valid yawAccMax=360, got {reply!r}"
+        val = _get_val(sim, "yawAccMax")
+        assert val == "360.000", f"Expected yawAccMax=360.000 after SET, got {val!r}"
+
+    # ----- sTimeout -----
+
+    def test_stimeout_zero_rejected(self, sim) -> None:
+        """SET sTimeout=0 → ERR badval; config unchanged."""
+        original = _get_val(sim, "sTimeout")
+        reply = sim.send_command("SET sTimeout=0")
+        assert "ERR" in reply, f"Expected ERR for sTimeout=0, got {reply!r}"
+        assert "badval" in reply, f"Expected badval in reply, got {reply!r}"
+        assert "sTimeout" in reply, f"Expected 'sTimeout' in ERR reply, got {reply!r}"
+        assert "OK" not in reply, f"Must not emit OK for invalid SET, got {reply!r}"
+        after = _get_val(sim, "sTimeout")
+        assert original == after, (
+            f"sTimeout changed after rejected SET: was {original!r}, now {after!r}"
+        )
+
+    def test_stimeout_negative_rejected(self, sim) -> None:
+        """SET sTimeout=-1 → ERR badval; config unchanged."""
+        original = _get_val(sim, "sTimeout")
+        reply = sim.send_command("SET sTimeout=-1")
+        assert "ERR" in reply, f"Expected ERR for sTimeout=-1, got {reply!r}"
+        assert "badval" in reply, f"Expected badval in reply, got {reply!r}"
+        after = _get_val(sim, "sTimeout")
+        assert original == after, (
+            f"sTimeout changed after rejected SET: was {original!r}, now {after!r}"
+        )
+
+    def test_stimeout_below_floor_rejected(self, sim) -> None:
+        """SET sTimeout=100 (below 200ms floor) → ERR badval; config unchanged."""
+        original = _get_val(sim, "sTimeout")
+        reply = sim.send_command("SET sTimeout=100")
+        assert "ERR" in reply, f"Expected ERR for sTimeout=100, got {reply!r}"
+        assert "badval" in reply, f"Expected badval in reply, got {reply!r}"
+        after = _get_val(sim, "sTimeout")
+        assert original == after, (
+            f"sTimeout changed after rejected SET: was {original!r}, now {after!r}"
+        )
+
+    def test_stimeout_at_floor_accepted(self, sim) -> None:
+        """SET sTimeout=200 (at the 200ms floor) → OK; reads back correctly."""
+        reply = sim.send_command("SET sTimeout=200")
+        assert "OK" in reply, f"Expected OK for valid sTimeout=200, got {reply!r}"
+        val = _get_val(sim, "sTimeout")
+        assert val == "200", f"Expected sTimeout=200 after SET, got {val!r}"
+
+    def test_stimeout_valid_accepted(self, sim) -> None:
+        """SET sTimeout=1000 (well above floor) → OK; reads back correctly."""
+        reply = sim.send_command("SET sTimeout=1000")
+        assert "OK" in reply, f"Expected OK for valid sTimeout=1000, got {reply!r}"
+        val = _get_val(sim, "sTimeout")
+        assert val == "1000", f"Expected sTimeout=1000 after SET, got {val!r}"
+
+    # ----- rotSlip=0 (unset sentinel) -----
+
+    def test_rotslip_zero_accepted(self, sim) -> None:
+        """SET rotSlip=0 → OK (unset sentinel, effectiveSlip maps to 1.0)."""
+        reply = sim.send_command("SET rotSlip=0")
+        assert "OK" in reply, f"Expected OK for rotSlip=0 (unset sentinel), got {reply!r}"
+        val = _get_val(sim, "rotSlip")
+        assert val == "0.000", f"Expected rotSlip=0.000 after SET, got {val!r}"
+
+    def test_rotslip_in_range_accepted(self, sim) -> None:
+        """SET rotSlip=0.74 (valid calibrated value) → OK."""
+        reply = sim.send_command("SET rotSlip=0.74")
+        assert "OK" in reply, f"Expected OK for rotSlip=0.74, got {reply!r}"
+        val = _get_val(sim, "rotSlip")
+        assert val == "0.740", f"Expected rotSlip=0.740 after SET, got {val!r}"
+
+    # ----- atomicity: mixed valid + invalid -----
+
+    def test_adecel_atomicity_with_valid_key(self, sim) -> None:
+        """SET aMax=100 aDecel=-100 → ERR badval; aMax unchanged (atomicity)."""
+        original_amax = _get_val(sim, "aMax")
+        reply = sim.send_command("SET aMax=100 aDecel=-100")
+        assert "ERR" in reply, f"Expected ERR for aDecel=-100 mixed SET, got {reply!r}"
+        assert "badval" in reply, f"Expected badval in reply, got {reply!r}"
+        assert "OK" not in reply, f"Must not emit OK for partially-invalid SET, got {reply!r}"
+        after_amax = _get_val(sim, "aMax")
+        assert original_amax == after_amax, (
+            f"aMax changed after rejected SET (atomicity violated): "
+            f"was {original_amax!r}, now {after_amax!r}"
+        )

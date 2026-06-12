@@ -145,7 +145,9 @@ void CommandProcessor::dispatchTable(char** tokens, int ntok, KVPair* kvs, int n
             ++cidLen;
         }
         pc.corrId[cidLen] = '\0';
-        _queue->push_back(pc);
+        if (!_queue->push_back(pc)) {
+            replyErr(rbuf, sizeof(rbuf), "full", nullptr, corrId, effectiveFn, effectiveCtx);
+        }
     } else {
         desc.handlerFn(args, corrId, effectiveFn, effectiveCtx, desc.handlerCtx);
     }

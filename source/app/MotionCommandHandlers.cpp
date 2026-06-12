@@ -244,7 +244,14 @@ static void handleS(const ArgList& args, const char* corrId,
         // S-command semantics on the queue path.
         vwArgs.count = packKVArg(vwArgs, 2, "stream", 1);
 
-        pushVW(ctx, vwArgs, corrId, replyFn, replyCtx);
+        char body[32];
+        snprintf(body, sizeof(body), "l=%d r=%d", l, r);
+        char rbuf[64];
+        if (!pushVW(ctx, vwArgs, corrId, replyFn, replyCtx)) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full", nullptr, corrId, replyFn, replyCtx);
+            return;
+        }
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "drive", body, corrId, replyFn, replyCtx);
     } else {
         // Queue not available (sim fallback, should not be reached since sim
         // now wires the queue): use direct beginStream().
@@ -252,12 +259,11 @@ static void handleS(const ArgList& args, const char* corrId,
                              ctx->robot->systemTime(),
                              ctx->robot->state.target,
                              replyFn, replyCtx);
+        char body[32];
+        snprintf(body, sizeof(body), "l=%d r=%d", l, r);
+        char rbuf[64];
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "drive", body, corrId, replyFn, replyCtx);
     }
-
-    char body[32];
-    snprintf(body, sizeof(body), "l=%d r=%d", l, r);
-    char rbuf[64];
-    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "drive", body, corrId, replyFn, replyCtx);
 }
 
 // ── T ────────────────────────────────────────────────────────────────────────
@@ -305,6 +311,21 @@ static void handleT(const ArgList& args, const char* corrId,
     int ms = args.args[2].ival;
 
     if (ctx->queue != nullptr) {
+        // N16 fix (030-009): validate sensor= BEFORE replying OK on the queue
+        // path.  On the direct path, parse failure replies ERR and cancels.  The
+        // queue path previously packed the raw token and forwarded it to handleVW,
+        // which silently skipped the stop on parse failure after OK was already
+        // sent.  Validate here so both paths reply ERR consistently.
+        if (args.count >= 4) {
+            uint8_t ch; float thr; StopCondition::Cmp cmp;
+            if (!mc_parseSensorToken(args.args[3].sval, ch, thr, cmp)) {
+                char rbuf[80];
+                CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg", "sensor",
+                                           corrId, replyFn, replyCtx);
+                return;
+            }
+        }
+
         float v_mms, omega_rads;
         BodyKinematics::forward((float)l, (float)r, ctx->robot->config.trackwidthMm,
                                 v_mms, omega_rads);
@@ -323,7 +344,14 @@ static void handleT(const ArgList& args, const char* corrId,
             ++vwArgs.count;
         }
 
-        pushVW(ctx, vwArgs, corrId, replyFn, replyCtx);
+        char body[48];
+        snprintf(body, sizeof(body), "l=%d r=%d ms=%d", l, r, ms);
+        char rbuf[80];
+        if (!pushVW(ctx, vwArgs, corrId, replyFn, replyCtx)) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full", nullptr, corrId, replyFn, replyCtx);
+            return;
+        }
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "drive", body, corrId, replyFn, replyCtx);
     } else {
         // Queue not available: fall back to direct beginTimed().
         ctx->mc->beginTimed((float)l, (float)r, (uint32_t)ms,
@@ -342,12 +370,11 @@ static void handleT(const ArgList& args, const char* corrId,
             }
             ctx->mc->activeCmd().addStop(makeSensorStop(ch, thr, cmp));
         }
+        char body[48];
+        snprintf(body, sizeof(body), "l=%d r=%d ms=%d", l, r, ms);
+        char rbuf[80];
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "drive", body, corrId, replyFn, replyCtx);
     }
-
-    char body[48];
-    snprintf(body, sizeof(body), "l=%d r=%d ms=%d", l, r, ms);
-    char rbuf[80];
-    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "drive", body, corrId, replyFn, replyCtx);
 }
 
 // ── D ────────────────────────────────────────────────────────────────────────
@@ -394,6 +421,17 @@ static void handleD(const ArgList& args, const char* corrId,
     int mm = args.args[2].ival;
 
     if (ctx->queue != nullptr) {
+        // N16 fix (030-009): validate sensor= BEFORE replying OK on the queue path.
+        if (args.count >= 4) {
+            uint8_t ch; float thr; StopCondition::Cmp cmp;
+            if (!mc_parseSensorToken(args.args[3].sval, ch, thr, cmp)) {
+                char rbuf[80];
+                CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg", "sensor",
+                                           corrId, replyFn, replyCtx);
+                return;
+            }
+        }
+
         float v_mms, omega_rads;
         BodyKinematics::forward((float)l, (float)r, ctx->robot->config.trackwidthMm,
                                 v_mms, omega_rads);
@@ -412,7 +450,14 @@ static void handleD(const ArgList& args, const char* corrId,
             ++vwArgs.count;
         }
 
-        pushVW(ctx, vwArgs, corrId, replyFn, replyCtx);
+        char body[48];
+        snprintf(body, sizeof(body), "l=%d r=%d mm=%d", l, r, mm);
+        char rbuf[80];
+        if (!pushVW(ctx, vwArgs, corrId, replyFn, replyCtx)) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full", nullptr, corrId, replyFn, replyCtx);
+            return;
+        }
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "drive", body, corrId, replyFn, replyCtx);
     } else {
         // Queue not available: fall back to direct distanceDrive() (resets enc baseline).
         ctx->robot->distanceDrive((int32_t)l, (int32_t)r, (int32_t)mm,
@@ -429,12 +474,11 @@ static void handleD(const ArgList& args, const char* corrId,
             }
             ctx->mc->activeCmd().addStop(makeSensorStop(ch, thr, cmp));
         }
+        char body[48];
+        snprintf(body, sizeof(body), "l=%d r=%d mm=%d", l, r, mm);
+        char rbuf[80];
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "drive", body, corrId, replyFn, replyCtx);
     }
-
-    char body[48];
-    snprintf(body, sizeof(body), "l=%d r=%d mm=%d", l, r, mm);
-    char rbuf[80];
-    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "drive", body, corrId, replyFn, replyCtx);
 }
 
 // ── G ────────────────────────────────────────────────────────────────────────
@@ -488,19 +532,25 @@ static void handleG(const ArgList& args, const char* corrId,
         vwArgs.count = packKVArg(vwArgs, vwArgs.count, "y", y);
         vwArgs.count = packKVArg(vwArgs, vwArgs.count, "speed", speed);
 
-        pushVW(ctx, vwArgs, corrId, replyFn, replyCtx);
+        char body[64];
+        snprintf(body, sizeof(body), "x=%d y=%d speed=%d", x, y, speed);
+        char rbuf[96];
+        if (!pushVW(ctx, vwArgs, corrId, replyFn, replyCtx)) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full", nullptr, corrId, replyFn, replyCtx);
+            return;
+        }
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "goto", body, corrId, replyFn, replyCtx);
     } else {
         // Queue not available: fall back to direct beginGoTo().
         ctx->mc->beginGoTo((float)x, (float)y, (float)speed,
                            ctx->robot->systemTime(),
                            ctx->robot->state.target,
                            replyFn, replyCtx, corrId);
+        char body[64];
+        snprintf(body, sizeof(body), "x=%d y=%d speed=%d", x, y, speed);
+        char rbuf[96];
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "goto", body, corrId, replyFn, replyCtx);
     }
-
-    char body[64];
-    snprintf(body, sizeof(body), "x=%d y=%d speed=%d", x, y, speed);
-    char rbuf[96];
-    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "goto", body, corrId, replyFn, replyCtx);
 }
 
 // ── R ────────────────────────────────────────────────────────────────────────
@@ -552,19 +602,25 @@ static void handleR(const ArgList& args, const char* corrId,
         vwArgs.count = packKVArg(vwArgs, 2, "speed", speed);
         vwArgs.count = packKVArg(vwArgs, vwArgs.count, "radius", radius);
 
-        pushVW(ctx, vwArgs, corrId, replyFn, replyCtx);
+        char body[48];
+        snprintf(body, sizeof(body), "speed=%d radius=%d", speed, radius);
+        char rbuf[80];
+        if (!pushVW(ctx, vwArgs, corrId, replyFn, replyCtx)) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full", nullptr, corrId, replyFn, replyCtx);
+            return;
+        }
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "arc", body, corrId, replyFn, replyCtx);
     } else {
         // Queue not available: fall back to direct beginArc().
         uint32_t now = ctx->robot->systemTime();
         ctx->mc->beginArc((float)speed, (float)radius, now,
                           ctx->robot->state.target,
                           replyFn, replyCtx, corrId);
+        char body[48];
+        snprintf(body, sizeof(body), "speed=%d radius=%d", speed, radius);
+        char rbuf[80];
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "arc", body, corrId, replyFn, replyCtx);
     }
-
-    char body[48];
-    snprintf(body, sizeof(body), "speed=%d radius=%d", speed, radius);
-    char rbuf[80];
-    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "arc", body, corrId, replyFn, replyCtx);
 }
 
 // ── TURN ─────────────────────────────────────────────────────────────────────
@@ -614,6 +670,17 @@ static void handleTURN(const ArgList& args, const char* corrId,
     int eps_cdeg     = args.args[1].ival;
 
     if (ctx->queue != nullptr) {
+        // N16 fix (030-009): validate sensor= BEFORE replying OK on the queue path.
+        if (args.count >= 3) {
+            uint8_t ch; float thr; StopCondition::Cmp cmp;
+            if (!mc_parseSensorToken(args.args[2].sval, ch, thr, cmp)) {
+                char rbuf[80];
+                CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg", "sensor",
+                                           corrId, replyFn, replyCtx);
+                return;
+            }
+        }
+
         ArgList vwArgs;
         vwArgs.count = 2;
         setIntArg(vwArgs.args[0], 0);   // v = 0 (spin-in-place; omega computed by VW handler)
@@ -627,7 +694,14 @@ static void handleTURN(const ArgList& args, const char* corrId,
             ++vwArgs.count;
         }
 
-        pushVW(ctx, vwArgs, corrId, replyFn, replyCtx);
+        char body[48];
+        snprintf(body, sizeof(body), "heading=%d eps=%d", heading_cdeg, eps_cdeg);
+        char rbuf[80];
+        if (!pushVW(ctx, vwArgs, corrId, replyFn, replyCtx)) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full", nullptr, corrId, replyFn, replyCtx);
+            return;
+        }
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "turn", body, corrId, replyFn, replyCtx);
     } else {
         // Queue not available: fall back to direct beginTurn().
         uint32_t now = ctx->robot->systemTime();
@@ -646,12 +720,11 @@ static void handleTURN(const ArgList& args, const char* corrId,
             }
             ctx->mc->activeCmd().addStop(makeSensorStop(ch, thr, cmp));
         }
+        char body[48];
+        snprintf(body, sizeof(body), "heading=%d eps=%d", heading_cdeg, eps_cdeg);
+        char rbuf[80];
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "turn", body, corrId, replyFn, replyCtx);
     }
-
-    char body[48];
-    snprintf(body, sizeof(body), "heading=%d eps=%d", heading_cdeg, eps_cdeg);
-    char rbuf[80];
-    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "turn", body, corrId, replyFn, replyCtx);
 }
 
 // ── RT (relative turn, encoder-arc stop) ───────────────────────────────────────
@@ -688,17 +761,23 @@ static void handleRT(const ArgList& args, const char* corrId,
         setIntArg(vwArgs.args[0], 0);   // v = 0 (spin in place)
         setIntArg(vwArgs.args[1], 0);   // omega placeholder (computed by beginRotation)
         vwArgs.count = packKVArg(vwArgs, 2, "rot", rel_cdeg);
-        pushVW(ctx, vwArgs, corrId, replyFn, replyCtx);
+        char body[32];
+        snprintf(body, sizeof(body), "rot=%d", rel_cdeg);
+        char rbuf[64];
+        if (!pushVW(ctx, vwArgs, corrId, replyFn, replyCtx)) {
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full", nullptr, corrId, replyFn, replyCtx);
+            return;
+        }
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "rt", body, corrId, replyFn, replyCtx);
     } else {
         uint32_t now = ctx->robot->systemTime();
         ctx->mc->beginRotation((float)rel_cdeg, now, ctx->robot->state.target,
                                replyFn, replyCtx, corrId);
+        char body[32];
+        snprintf(body, sizeof(body), "rot=%d", rel_cdeg);
+        char rbuf[64];
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "rt", body, corrId, replyFn, replyCtx);
     }
-
-    char body[32];
-    snprintf(body, sizeof(body), "rot=%d", rel_cdeg);
-    char rbuf[64];
-    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "rt", body, corrId, replyFn, replyCtx);
 }
 
 // ── VW ───────────────────────────────────────────────────────────────────────

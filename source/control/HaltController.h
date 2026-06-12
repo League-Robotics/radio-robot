@@ -11,8 +11,10 @@
 // "EVT halt id=<n>", clears all conditions, and returns HaltAction::HARD or
 // HaltAction::SOFT to tell LoopScheduler which X variant to dispatch.
 //
-// Baselines (timer and distance) are set by the ZERO T / ZERO D command
-// extensions and are folded into a synthetic MotionBaseline for evaluate().
+// Baselines (timer and distance) are captured per-entry at add() time so that
+// e.g. "HALT TIME 5000" fires ~5 s after registration without requiring a
+// prior ZERO T / ZERO D. ZERO T / ZERO D still work as explicit overrides:
+// they re-baseline all currently-registered entries of the matching type.
 //
 // Wire commands (HALT TIME/DIST/CLEAR) add/remove conditions by calling
 // add() / clear() from their handlers.
@@ -34,11 +36,12 @@ enum class StopStyle : uint8_t { HARD, SOFT };
 
 // StopEntry — one registered halt condition.
 struct StopEntry {
-    StopCondition cond;
-    uint8_t       id;
-    StopStyle     style;
-    bool          active;
-    char          str[40];   // original command string for HALT INFO/LIST
+    StopCondition  cond;
+    MotionBaseline base;    // per-entry baseline captured at registration time
+    uint8_t        id;
+    StopStyle      style;
+    bool           active;
+    char           str[40]; // original command string for HALT INFO/LIST
 };
 
 class HaltController {
@@ -48,8 +51,13 @@ public:
     HaltController() = default;
 
     // add — register a new condition.
+    // now_ms and enc_avg_mm are the current system time and average encoder
+    // position at registration time; they are used to baseline TIME and DIST
+    // conditions so that e.g. "HALT TIME 5000" fires ~5 s after registration
+    // even without a prior ZERO T / ZERO D command.
     // Returns the assigned ID (monotonically increasing uint8_t); -1 on full.
-    int add(const StopCondition& cond, StopStyle style, const char* str);
+    int add(const StopCondition& cond, StopStyle style, const char* str,
+            uint32_t now_ms, float enc_avg_mm);
 
     // remove — deactivate the entry with the given id.
     // Returns true if found and removed.
@@ -65,11 +73,13 @@ public:
     // list — call fn(msg, ctx) once per active entry with a summary line.
     void list(ReplyFn fn, void* ctx) const;
 
-    // setTimerBaseline — set the t0Ms reference for TIME conditions.
-    void setTimerBaseline(uint32_t now_ms) { _timerBaselineMs = now_ms; }
+    // setTimerBaseline — override the t0Ms reference for all active TIME entries.
+    // Called by ZERO T to re-baseline time conditions to a specific instant.
+    void setTimerBaseline(uint32_t now_ms);
 
-    // setDistBaseline — set the enc0Mm reference for DISTANCE conditions.
-    void setDistBaseline(float enc_avg_mm) { _distBaselineMm = enc_avg_mm; }
+    // setDistBaseline — override the enc0Mm reference for all active DIST entries.
+    // Called by ZERO D to re-baseline distance conditions to a specific odometry point.
+    void setDistBaseline(float enc_avg_mm);
 
     // count — return the number of currently active entries.
     int count() const;
@@ -82,11 +92,12 @@ public:
 
 private:
     StopEntry _entries[kMaxEntries] = {};
-    int       _count   = 0;
-    uint8_t   _nextId  = 0;
-    uint32_t  _timerBaselineMs = 0;
-    float     _distBaselineMm  = 0.0f;
+    int       _count  = 0;
+    uint8_t   _nextId = 0;
 
     // clearAll — internal: mark all entries inactive and reset _count.
+    // Wire note: when any condition fires, clearAll() wipes ALL registered
+    // conditions (not just the one that fired). This is by design — a single
+    // halt event terminates the entire halt registry for the session.
     void clearAll();
 };

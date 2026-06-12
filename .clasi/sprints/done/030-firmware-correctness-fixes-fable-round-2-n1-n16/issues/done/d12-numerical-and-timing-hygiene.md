@@ -1,5 +1,8 @@
 ---
-status: pending
+status: done
+sprint: '030'
+tickets:
+- 030-001
 ---
 
 # D12 — Numerical / timing hygiene (assorted, lower severity)

@@ -319,6 +319,17 @@ float sim_get_pose_h(void* h)
     return static_cast<SimHandle*>(h)->robot.state.inputs.poseHrad;
 }
 
+// ---- EKF diagnostics ----
+
+// Cumulative EKF gate rejection count (all channels: position, heading, velocity).
+// Exposed for the N1 regression test: assert ekf_rej == 0 after a D command when
+// fusion is ON — the atomic encoder reset prevents the spurious negative delta that
+// previously caused Mahalanobis-gate rejections for ~10 ticks post-D. (030-001)
+int sim_get_ekf_rej_count(void* h)
+{
+    return static_cast<SimHandle*>(h)->robot.odometry.ekfRejectCount();
+}
+
 // ---- State injection ----
 
 // Inject encoder position directly into MockMotor (overrides physics).
@@ -415,6 +426,22 @@ float sim_get_otos_h(void* h) {
     return static_cast<SimHandle*>(h)->hal.otosMock().odomH();
 }
 
+// ---- N2 queue-invariant helper (030-002) ----
+
+// Returns 1 if the CommandProcessor has a queue attached (cmd.hasQueue()),
+// 0 otherwise.  Used by the boot/queue-invariant regression test to assert
+// that cmd._queue survives a Phase-3-style reassignment.
+//
+// In the sim, the queue is wired in SimHandle's constructor and is never
+// reassigned, so this always returns 1 after sim_create().  The regression
+// test is therefore a structural canary: if CommandProcessor's move-assign
+// ever silently clears the queue pointer again (e.g. a future refactor
+// re-introduces the Phase-3 pattern), this accessor will catch it.
+int sim_get_queue_wired(void* h)
+{
+    return static_cast<SimHandle*>(h)->cmd.hasQueue() ? 1 : 0;
+}
+
 // ---- D10 telemetry test helpers (028-005) ----
 
 // Returns 1 if the robot's TLM channel is bound (_tlmBoundCtx != nullptr),
@@ -481,6 +508,142 @@ int sim_tick_collect_tlm(void* h, uint32_t start_ms, uint32_t total_ms,
 
     if (out_buf && out_len > 0) out_buf[outPos] = '\0';
     return tlmCount;
+}
+
+// ---- N7 queue-overflow test helpers (030-005) ----
+
+// Returns the current number of items in the CommandQueue.
+// Used by overflow regression tests to verify the queue fills and that
+// subsequent enqueues (via sim_command) produce ERR full replies.
+int sim_queue_size(void* h)
+{
+    return static_cast<SimHandle*>(h)->_queue.size();
+}
+
+// Fill the CommandQueue to capacity (COMMAND_QUEUE_CAPACITY = 4) with
+// dummy no-op ParsedCommand entries.  Returns the number of items pushed.
+// After this call, any sim_command() that routes through dispatchTable()
+// (queue path) will fail with ERR full — except sim_command itself also
+// drains two items, so the test should call sim_fill_queue() then send
+// one more command WITHOUT calling dequeueOne.  This is done by calling
+// sim_command_no_drain() below.
+//
+// The dummy entries use a nullptr desc so dequeueOne() is a safe no-op
+// (it guards pc.desc != nullptr before calling handlerFn).
+int sim_fill_queue(void* h)
+{
+    SimHandle* s = static_cast<SimHandle*>(h);
+    int pushed = 0;
+    ParsedCommand dummy;
+    dummy.desc    = nullptr;   // no-op: dequeueOne guards desc != nullptr
+    dummy.replyFn = nullptr;
+    dummy.replyCtx = nullptr;
+    dummy.args.count = 0;
+    dummy.corrId[0] = '\0';
+    while (s->_queue.push_back(dummy)) ++pushed;
+    return pushed;
+}
+
+// Process one command WITHOUT the two post-process dequeueOne drains.
+// This is needed by the overflow test: we want dispatchTable() to find a
+// full queue and reply ERR full, without draining the queue first.
+// Returns the number of synchronous bytes written into out_buf.
+int sim_command_no_drain(void* h, const char* line, char* out_buf, int out_len)
+{
+    SimHandle* s = static_cast<SimHandle*>(h);
+    s->replyStore.reset();
+    s->_ts.activeFn    = storeReply;
+    s->_ts.activeTlmFn = storeReply;
+    s->_ts.activeCtx   = &s->replyStore;
+    s->cmd.process(line, storeReply, &s->replyStore);
+    // NOTE: no dequeueOne() calls — intentional, allows testing overflow.
+    int n = s->replyStore.written;
+    if (out_buf && out_len > 0) {
+        int copy = (n < out_len - 1) ? n : out_len - 1;
+        memcpy(out_buf, s->replyStore.buf, (size_t)copy);
+        out_buf[copy] = '\0';
+        n = copy;
+    }
+    s->replyStore.reset();
+    return n;
+}
+
+// ---- N8 sensor-freshness helpers (030-008) ----
+
+// Initialize (begin) the MockLineSensor so Robot::lineRead() considers it
+// present and emits line= in TLM.  Call before tests that need line data.
+void sim_init_line_sensor(void* h)
+{
+    static_cast<SimHandle*>(h)->hal.lineMock().begin();
+}
+
+// Initialize (begin) the MockColorSensor so Robot::colorRead() considers it
+// present and emits color= in TLM.  Call before tests that need color data.
+void sim_init_color_sensor(void* h)
+{
+    static_cast<SimHandle*>(h)->hal.colorMock().begin();
+}
+
+// Freeze / unfreeze the MockLineSensor.  When frozen, readValues() returns
+// false so Robot::lineRead() never updates lineVS.lastUpdMs — after ~2×lagMs
+// the TLM freshness gate drops the line= field from TLM frames.
+void sim_set_line_frozen(void* h, int frozen)
+{
+    static_cast<SimHandle*>(h)->hal.lineMock().setFrozen(frozen != 0);
+}
+
+// Freeze / unfreeze the MockColorSensor.  When frozen, pollRGBC() returns
+// false so Robot::colorRead() never updates colorVS.lastUpdMs — after ~2×lagMs
+// the TLM freshness gate drops the color= field from TLM frames.
+void sim_set_color_frozen(void* h, int frozen)
+{
+    static_cast<SimHandle*>(h)->hal.colorMock().setFrozen(frozen != 0);
+}
+
+// ---- N9 same-tick OTOS failure helper (030-008) ----
+
+// Inject / clear an OTOS read failure.  When set, MockOtosSensor::readTransformed
+// and readVelocityTransformed return false and emit {0,0,0}/{0,0}.
+// Robot::otosCorrect() must detect this same-tick failure via the return value
+// and skip EKF fusion — the fusedV/poseX/Y/H state must remain unchanged.
+void sim_set_otos_read_failure(void* h, int fail)
+{
+    static_cast<SimHandle*>(h)->hal.otosMock().setReadFailure(fail != 0);
+}
+
+// Read fusedV from state.inputs (EKF body-frame linear speed, mm/s).
+// Used by N9 test to assert the fused velocity is not dragged to zero on
+// a same-tick OTOS read failure.
+float sim_get_fused_v(void* h)
+{
+    return static_cast<SimHandle*>(h)->robot.state.inputs.fusedV;
+}
+
+// Read fusedOmega from state.inputs (EKF yaw rate, rad/s).
+float sim_get_fused_omega(void* h)
+{
+    return static_cast<SimHandle*>(h)->robot.state.inputs.fusedOmega;
+}
+
+// N11: inject a dead-reckoning pose into state.inputs directly.
+// Used by test_n11 to place the robot "past" a G target so the PURSUE
+// backtrack re-gate fires on the next few ticks.
+void sim_set_pose(void* h, float x, float y, float hrad)
+{
+    SimHandle* s = static_cast<SimHandle*>(h);
+    s->robot.state.inputs.poseX    = x;
+    s->robot.state.inputs.poseY    = y;
+    s->robot.state.inputs.poseHrad = hrad;
+}
+
+// N15: read one diagonal entry of the EKF covariance matrix P.
+// Returns P[idx][idx] where idx in [0..4]:
+//   0=x, 1=y, 2=theta, 3=v, 4=omega.
+// Used by N15 test to verify Q effect is invariant to loop rate.
+float sim_get_ekf_p_diag(void* h, int idx)
+{
+    if (idx < 0 || idx > 4) return -1.0f;
+    return static_cast<SimHandle*>(h)->robot.odometry.ekfPDiag(idx);
 }
 
 } // extern "C"

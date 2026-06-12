@@ -234,17 +234,40 @@ void Robot::otosCorrect(uint32_t now_ms)
 
     // Pass poseHrad for the lever-arm offset rotation (no-op when offsets are zero).
     float headingRad = state.inputs.poseHrad;
-    OtosPose p = otos.readTransformed(config, headingRad);
+
+    // N9 (030-008): use the return value of readTransformed — NOT the stale
+    // lastReadOk() from the previous tick.  _lastReadOk is updated INSIDE
+    // readTransformed (by readXYH), so checking it before the call would miss
+    // a failure that occurs on THIS tick.  A failed read decodes raw[6]={0}
+    // into pose(0,0,0)/vel(0,0); near the origin the Mahalanobis gate accepts
+    // these zeros and drags fusedV to zero — the D9 one-tick symptom.
+    OtosPose p;
+    bool poseOk = otos.readTransformed(config, p, headingRad);
+    if (!poseOk) {
+        // Same-tick I2C failure: mark otos invalid and skip fusion.
+        // Do not update otosX/Y/H or lastUpdMs with garbage zeros.
+        state.inputs.otos.valid = false;
+        return;
+    }
     state.inputs.otosX = p.x;
     state.inputs.otosY = p.y;
     state.inputs.otosH = p.h;
     state.inputs.otos.lastUpdMs = now_ms;
 
     // Read OTOS velocity and acceleration; store acceleration for telemetry.
-    OtosVelocity vel = otos.readVelocityTransformed(config, headingRad);
+    OtosVelocity vel;
+    bool velOk = otos.readVelocityTransformed(config, vel, headingRad);
     OtosAccel    acc = otos.readAccelTransformed(config);
     state.inputs.otosAccelX = acc.ax_mmps2;
     state.inputs.otosAccelY = acc.ay_mmps2;
+
+    // If the velocity read also failed this tick, use zero velocity rather
+    // than fusing garbage — the EKF's encoder-based velocity estimate is a
+    // better fallback.  We still fuse pose (poseOk was true).
+    if (!velOk) {
+        vel.v_mmps     = 0.0f;
+        vel.omega_rads = 0.0f;
+    }
 
     // Retrieve encoder-rate velocity from the most recent predict() tick.
     float enc_v     = odometry.lastEncV();
@@ -300,14 +323,37 @@ void Robot::portsRead()
 }
 
 // ---------------------------------------------------------------------------
-// distanceDrive — begin a distance drive and reset encoder outlier baseline.
+// resetEncoders — single canonical atomic encoder reset (N1, sprint 030-001).
 //
-// The encoder-reset workaround: beginDistance resets the MotionController's
-// accumulator to 0, but state.inputs.encLMm/R still hold the previous
-// drive's final value. The outlier filter compares new reads to those stale
-// values; the ~target→0 jump looks like a huge backward outlier and gets
-// REJECTED, freezing encLMm/R and corrupting the velocity loop. Zeroing
-// them here aligns the filter baseline with the fresh accumulator.
+// Atomically resets hardware accumulators, MotorController velocity baselines,
+// the outlier-filter baseline (state.inputs.encLMm/R), and Odometry's internal
+// encoder snapshot — without touching pose.
+//
+// Previously distanceDrive() reset hardware+MC but left Odometry::_prevEncL/R
+// stale, so the very next predict() computed dL = 0 - _prevEncL (large negative)
+// and teleported the pose backward by the prior segment's travel.  ZERO enc
+// was worse: hardware+MC reset but state.inputs.encLMm/R stayed stale, causing
+// the outlier filter to freeze encoder reads until the fresh accumulator climbed
+// back, then a pose jump.
+// ---------------------------------------------------------------------------
+
+void Robot::resetEncoders()
+{
+    // 1. Reset hardware accumulators AND MotorController velocity baselines
+    //    (_prevEncL/R, _hasTimestamp*, _prevTimeMsL/R).
+    motorController.resetEncoderAccumulators();
+
+    // 2. Align the outlier-filter baseline with the now-zeroed accumulators.
+    state.inputs.encLMm = 0.0f;
+    state.inputs.encRMm = 0.0f;
+
+    // 3. Re-baseline Odometry's encoder snapshot so predict() sees delta=0
+    //    on the very next tick rather than (0 - _prevEncL) = large negative.
+    odometry.rebaselinePrev(0.0f, 0.0f);
+}
+
+// ---------------------------------------------------------------------------
+// distanceDrive — begin a distance drive and atomically reset encoder state.
 // ---------------------------------------------------------------------------
 
 void Robot::distanceDrive(int32_t l, int32_t r, int32_t targetMm,
@@ -315,8 +361,10 @@ void Robot::distanceDrive(int32_t l, int32_t r, int32_t targetMm,
 {
     motionController.beginDistance((float)l, (float)r, targetMm,
                                    systemTime(), state.target, fn, ctx, corr_id);
-    state.inputs.encLMm = 0.0f;
-    state.inputs.encRMm = 0.0f;
+    // Atomic encoder reset: aligns hardware accumulators, MC velocity baselines,
+    // outlier-filter baseline, and Odometry encoder snapshot in one call.
+    // (Replaces the split reset that was here + inside beginDistance().)
+    resetEncoders();
 }
 
 // ---------------------------------------------------------------------------
@@ -336,9 +384,20 @@ int Robot::buildTlmFrame(char* buf, int len)
     if (config.tlmFields & TLM_FIELD_POSE) {
         Odometry::getPose(state.inputs, pose_x, pose_y, pose_h);
     }
-    bool haveLine = line.is_initialized() && state.inputs.lineVS.valid &&
+    // N8 (030-008): gate line/color on freshness, not just the sticky valid bit.
+    // A sensor that wedges after boot keeps valid=true forever; consult the
+    // lastUpdMs / lagMs envelope instead: fresh = now − lastUpdMs ≤ 2×lagMs.
+    // lagMs is 0 until the first valid read (last­UpdMs stays 0 too), so the
+    // sub­traction wraps and the gate is never met — correct for "never read".
+    bool haveLine = line.is_initialized() &&
+                    state.inputs.lineVS.valid &&
+                    (t_sample - state.inputs.lineVS.lastUpdMs
+                         <= 2u * state.inputs.lineVS.lagMs) &&
                     (config.tlmFields & TLM_FIELD_LINE);
-    bool haveColor = colorSensor.is_initialized() && state.inputs.colorVS.valid &&
+    bool haveColor = colorSensor.is_initialized() &&
+                     state.inputs.colorVS.valid &&
+                     (t_sample - state.inputs.colorVS.lastUpdMs
+                          <= 2u * state.inputs.colorVS.lagMs) &&
                      (config.tlmFields & TLM_FIELD_COLOR);
     bool haveVel = (config.tlmFields & TLM_FIELD_VEL) != 0;
     float velL = haveVel ? state.inputs.velLMms : 0.0f;
@@ -348,10 +407,12 @@ int Robot::buildTlmFrame(char* buf, int len)
     char modeChar = 'I';
     switch (motionController.mode()) {
         case DriveMode::STREAMING: modeChar = 'S'; break;
-        case DriveMode::TIMED:     modeChar = 'T'; break;
         case DriveMode::DISTANCE:  modeChar = 'D'; break;
         case DriveMode::GO_TO:     modeChar = 'G'; break;
         case DriveMode::VELOCITY:  modeChar = 'V'; break;
+        // N13 (030-010): TIMED removed — T command runs as VELOCITY; mode=T
+        // was unreachable in firmware. Host parser handles mode=T gracefully
+        // for backward-compatibility with old logs.
         default:                   modeChar = 'I'; break;
     }
 
@@ -381,7 +442,14 @@ int Robot::buildTlmFrame(char* buf, int len)
                      (int)(state.inputs.fusedOmega * 1000.0f));
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
-    if (config.tlmFields & TLM_FIELD_OTOS) {
+    // N8 (030-008): gate raw otos= on freshness — same 2×lagMs rule as
+    // line/color above.  otos.valid stays true after the first success; if the
+    // sensor goes dark the last-good pose would be emitted forever without
+    // the freshness check.
+    if ((config.tlmFields & TLM_FIELD_OTOS) &&
+        state.inputs.otos.valid &&
+        (t_sample - state.inputs.otos.lastUpdMs
+             <= 2u * state.inputs.otos.lagMs)) {
         // Raw OTOS pose (pre-fusion): x,y mm and heading in centidegrees,
         // matching the pose= field encoding. Lets the host plot the raw OTOS
         // sensor track alongside enc-derived and fused pose. 18000/pi cdeg/rad.
@@ -427,6 +495,12 @@ int Robot::buildTlmFrame(char* buf, int len)
 void Robot::telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx)
 {
     if (config.tlmPeriodMs <= 0) return;
+
+    // N3 null guard (030-003): _tlmBoundFn stays nullptr until STREAM binds the
+    // channel.  SET tlmPeriod without a prior STREAM must not reach fn(…) — a
+    // null fn-pointer call is a HardFault on the micro:bit.  Silent suppression
+    // matches the Robot.h:164-169 comment ("nullptr means TLM is suppressed").
+    if (fn == nullptr) return;
 
     // Idle-rate: when stopped, slow down to max(period, 500 ms) so the stream
     // stays alive but doesn't flood the link with idle noise.
@@ -749,7 +823,11 @@ static void handleZero(const ArgList& args, const char* corrId,
         if (strcmp(args.args[i].sval, "T")    == 0) doT    = true;
         if (strcmp(args.args[i].sval, "D")    == 0) doD    = true;
     }
-    if (doEnc)  robot->motorController.resetEncoderAccumulators();
+    // ZERO enc — atomic encoder reset: hardware accumulators, MC velocity
+    // baselines, outlier-filter baseline, and Odometry encoder snapshot.
+    // (N1 fix, sprint 030-001: replaces bare resetEncoderAccumulators() which
+    // left state.inputs.encLMm/R stale, freezing encoder reads for ~target mm.)
+    if (doEnc)  robot->resetEncoders();
     if (doPose) robot->odometry.zero(robot->state.inputs);
     // ZERO T — set timer baseline for HaltController TIME conditions.
     if (doT) {
@@ -889,9 +967,14 @@ static void handleStream(const ArgList& args, const char* corrId,
     // the channel and derive the TLM-appropriate reply fn (serialReplyTlm
     // for serial, radioReply for radio).  Commands on other channels do not
     // redirect the stream.
-    // _tlmBoundFn is set by runCommsIn once the channel is identified;
-    // it stays nullptr here so the sim path (which sets activeTlmFn directly)
-    // is unaffected until runCommsIn updates it on the next live iteration.
+    //
+    // N3 fix (030-003): also store the caller's replyFn as _tlmBoundFn so that
+    // telemetryEmit (now using _tlmBoundFn/_tlmBoundCtx directly) has a valid fn
+    // in both the sim path (replyFn = storeReply) and firmware path.  In firmware,
+    // runCommsIn overwrites _tlmBoundFn on the next iteration with the correct
+    // channel fn (serialReplyTlm or radioReply derived from _tlmBoundCtx), so
+    // _tlmBoundFn is always the pair that matches _tlmBoundCtx.
+    robot->_tlmBoundFn  = replyFn;
     robot->_tlmBoundCtx = replyCtx;
 
     char body[32];
@@ -1322,7 +1405,11 @@ static void handleHalt(const ArgList& args, const char* corrId,
         char label[40];
         snprintf(label, sizeof(label), "TIME %g%s", ms,
                  style == StopStyle::SOFT ? " SOFT" : "");
-        int id = robot->haltController.add(cond, style, label);
+        // Capture registration-time baseline so the condition fires ~ms after
+        // now, not ~ms after boot (N10 fix).
+        uint32_t now_ms   = robot->systemTime();
+        float    enc_avg  = (robot->state.inputs.encLMm + robot->state.inputs.encRMm) * 0.5f;
+        int id = robot->haltController.add(cond, style, label, now_ms, enc_avg);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
                                        "halt table full (max 8)",
@@ -1353,7 +1440,11 @@ static void handleHalt(const ArgList& args, const char* corrId,
         char label[40];
         snprintf(label, sizeof(label), "DIST %g%s", mm,
                  style == StopStyle::SOFT ? " SOFT" : "");
-        int id = robot->haltController.add(cond, style, label);
+        // Capture registration-time baseline so the condition fires ~mm after
+        // the current encoder position, not from boot (N10 fix).
+        uint32_t now_ms_d  = robot->systemTime();
+        float    enc_avg_d = (robot->state.inputs.encLMm + robot->state.inputs.encRMm) * 0.5f;
+        int id = robot->haltController.add(cond, style, label, now_ms_d, enc_avg_d);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
                                        "halt table full (max 8)",
@@ -1407,7 +1498,9 @@ static void handleHalt(const ArgList& args, const char* corrId,
             snprintf(label, sizeof(label), "LINE ANY %.2s %d%s",
                      opAbbrev, (int)threshold, softSfx);
         }
-        int id = robot->haltController.add(cond, style, label);
+        int id = robot->haltController.add(cond, style, label,
+                                            robot->systemTime(),
+                                            (robot->state.inputs.encLMm + robot->state.inputs.encRMm) * 0.5f);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
                                        "halt table full (max 8)",
@@ -1443,7 +1536,9 @@ static void handleHalt(const ArgList& args, const char* corrId,
         // "POS -32000 -32000 32000" = 22 chars — fits comfortably.
         snprintf(label, sizeof(label), "POS %d %d %d",
                  (int)x, (int)y, (int)rad);
-        int id = robot->haltController.add(cond, style, label);
+        int id = robot->haltController.add(cond, style, label,
+                                            robot->systemTime(),
+                                            (robot->state.inputs.encLMm + robot->state.inputs.encRMm) * 0.5f);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
                                        "halt table full (max 8)",
@@ -1480,7 +1575,9 @@ static void handleHalt(const ArgList& args, const char* corrId,
         // "COLOR 360.00 1.00 1.00 1.00" = 28 chars — fits comfortably.
         snprintf(label, sizeof(label), "COLOR %.2f %.2f %.2f %.2f",
                  (double)h, (double)s, (double)v, (double)dist);
-        int id = robot->haltController.add(cond, style, label);
+        int id = robot->haltController.add(cond, style, label,
+                                            robot->systemTime(),
+                                            (robot->state.inputs.encLMm + robot->state.inputs.encRMm) * 0.5f);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
                                        "halt table full (max 8)",

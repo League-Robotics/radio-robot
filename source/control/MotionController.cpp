@@ -148,6 +148,26 @@ void MotionController::_checkSafeOneShot(ReplyFn fn, void* ctx)
 void MotionController::beginStream(float leftMms, float rightMms, uint32_t now_ms,
                                    TargetState& target, ReplyFn fn, void* ctx)
 {
+    // Cancel-if-active: emit EVT cancelled for the preempted command's corrId
+    // before seeding the BVC.  Contract: an explicit S command (stream=1 path)
+    // cancels any running self-terminating command (TURN/G/T/D/R/RT) and takes
+    // over streaming.  This matches the cancel-then-proceed pattern used by all
+    // other begin*() entry points (beginVelocity, beginArc, beginTurn, etc.).
+    //
+    // N4 fix (sprint 030-004): without this guard an S during TURN/G/T/D leaves
+    // _activeCmd running — the old command's TIME/HEADING stop later fires,
+    // soft-stops the robot, and emits a stale EVT done, silently killing the
+    // stream.  The old command never gets EVT cancelled (P1.1 failure mode).
+    //
+    // D6 keepalive note: the D6 origin guard in handleVW already intercepts
+    // plain VW keepalives and sends them to setTarget() (or busy-replies for
+    // non-VW origins) BEFORE they can reach beginStream().  Only an explicit S
+    // command (stream=1 marker) bypasses the origin guard and arrives here.
+    // So this cancel fires only for genuine preemption, not for keepalives.
+    if (_activeCmd.active()) {
+        _activeCmd.cancel(MotionCommand::StopStyle::HARD);
+    }
+
     // Re-arm safety if SAFE off was issued (one-shot disable, sprint 024-003).
     _checkSafeOneShot(fn, ctx);
 
@@ -264,6 +284,15 @@ void MotionController::beginTimed(float leftMms, float rightMms,
     float v_mms, omega_rads;
     BodyKinematics::forward(leftMms, rightMms, _cfg.trackwidthMm, v_mms, omega_rads);
 
+    // Cancel-if-active: emit EVT cancelled for the preempted command's corrId
+    // before configuring the new T command.  Without this a host awaiting
+    // "EVT done G" that issues a T will never receive any terminal event for the
+    // G — the previous command's reply sink is silently reset by configure().
+    // N5 fix (sprint 030-004): uniform cancel-if-active across all begin*().
+    if (_activeCmd.active()) {
+        _activeCmd.cancel(MotionCommand::StopStyle::HARD);
+    }
+
     // Re-arm safety if SAFE off was issued (one-shot disable, sprint 024-003).
     _checkSafeOneShot(fn, ctx);
 
@@ -299,6 +328,14 @@ void MotionController::beginDistance(float leftMms, float rightMms,
     // Convert (L, R) wheel speeds to body twist (v, ω) via forward kinematics.
     float v_mms, omega_rads;
     BodyKinematics::forward(leftMms, rightMms, _cfg.trackwidthMm, v_mms, omega_rads);
+
+    // Cancel-if-active: emit EVT cancelled for the preempted command's corrId
+    // before resetting encoders or configuring the new D command.  Cancel comes
+    // first so the old command's terminal event is emitted with its own corrId
+    // before the new command takes over the reply sink.  N5 fix (sprint 030-004).
+    if (_activeCmd.active()) {
+        _activeCmd.cancel(MotionCommand::StopStyle::HARD);
+    }
 
     // Encoder-reset workaround: reset the accumulator so DISTANCE delta starts
     // from 0.  The state.inputs.encLMm/R baseline reset is done by Robot::
@@ -626,6 +663,15 @@ void MotionController::softStop(uint32_t now_ms)
 
 void MotionController::beginRawVelocity(float v_mms, float omega_rads)
 {
+    // Cancel-if-active: emit EVT cancelled for the preempted command's corrId
+    // before seeding the BVC.  _VW (raw velocity, fire-and-forget) must not
+    // leave a zombie MotionCommand that will later soft-stop the robot and emit
+    // a stale EVT done.  N4 fix (sprint 030-004): uniform cancel-if-active
+    // across all begin*() entry points.
+    if (_activeCmd.active()) {
+        _activeCmd.cancel(MotionCommand::StopStyle::HARD);
+    }
+
     // Seed the profiler's current state to the target — no ramp from zero.
     // Then set the target so advance() holds at this speed immediately.
     _bvc.seedCurrent(v_mms, omega_rads);
@@ -695,7 +741,13 @@ void MotionController::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
             if (fabsf(bearing_rf) > 1.5707963f) {  // π/2
                 if (++_pursueBacktrackTicks >= 3) {
                     _pursueBacktrackTicks = 0;
-                    _activeCmd.cancel(MotionCommand::StopStyle::HARD);
+                    // N11 fix (030-009): use cancelQuiet() instead of cancel() to
+                    // suppress the spurious "EVT cancelled #<corrId>" that would
+                    // otherwise be emitted for the G command's correlation id.
+                    // The G command is still in progress (transitioning back to
+                    // PRE_ROTATE), so emitting "EVT cancelled" for the G's corrId
+                    // falsely signals to the host that the G has failed.
+                    _activeCmd.cancelQuiet();
                     _startPreRotate(bearing_rf, _gSpeed, now_ms, target);
                     return;
                 }

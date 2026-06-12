@@ -58,9 +58,13 @@ class Sim:
     # ------------------------------------------------------------------
 
     def send_command(self, line: str) -> str:
-        """Send one command line; return the synchronous reply as a decoded string."""
-        buf = ctypes.create_string_buffer(512)
-        n = self._lib.sim_command(self._h, line.encode(), buf, 512)
+        """Send one command line; return the synchronous reply as a decoded string.
+
+        Buffer is 2048 bytes — matches the ReplyStore capacity in sim_api.cpp so
+        that multi-line replies (e.g. chunked GET CFG output) are not truncated.
+        """
+        buf = ctypes.create_string_buffer(2048)
+        n = self._lib.sim_command(self._h, line.encode(), buf, 2048)
         if n <= 0:
             return ""
         return buf.raw[:n].decode(errors="replace")
@@ -72,6 +76,17 @@ class Sim:
         if n <= 0:
             return ""
         return buf.raw[:n].decode(errors="replace")
+
+    def drain_reply_store(self) -> None:
+        """Discard any replies (TLM, EVTs) accumulated in the reply store.
+
+        Call this between tick_for() and tick_collect_tlm() to avoid
+        tick_collect_tlm() picking up TLM frames emitted during tick_for().
+        tick_for() uses sim_tick() which accumulates TLM in replyStore but
+        does not drain it; tick_collect_tlm() drains it on its first tick,
+        inadvertently including stale frames from the tick_for() phase.
+        """
+        self.get_async_evts()  # sim_get_async_evts resets the store
 
     # ------------------------------------------------------------------
     # Internal: argtypes / restype declarations
@@ -193,6 +208,79 @@ class Sim:
         lib.sim_get_exact_pose_h.argtypes = [ctypes.c_void_p]
         lib.sim_get_exact_pose_h.restype = ctypes.c_float
 
+        # sim_get_ekf_rej_count(void* h) → int  (030-001 N1 diagnostic)
+        lib.sim_get_ekf_rej_count.argtypes = [ctypes.c_void_p]
+        lib.sim_get_ekf_rej_count.restype = ctypes.c_int
+
+        # N8 sensor-freshness helpers (030-008)
+        # sim_init_line_sensor(void* h)
+        lib.sim_init_line_sensor.argtypes = [ctypes.c_void_p]
+        lib.sim_init_line_sensor.restype = None
+
+        # sim_init_color_sensor(void* h)
+        lib.sim_init_color_sensor.argtypes = [ctypes.c_void_p]
+        lib.sim_init_color_sensor.restype = None
+
+        # sim_set_line_frozen(void* h, int frozen)
+        lib.sim_set_line_frozen.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        lib.sim_set_line_frozen.restype = None
+
+        # sim_set_color_frozen(void* h, int frozen)
+        lib.sim_set_color_frozen.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        lib.sim_set_color_frozen.restype = None
+
+        # N9 same-tick OTOS failure helper (030-008)
+        # sim_set_otos_read_failure(void* h, int fail)
+        lib.sim_set_otos_read_failure.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        lib.sim_set_otos_read_failure.restype = None
+
+        # sim_get_fused_v(void* h) → float
+        lib.sim_get_fused_v.argtypes = [ctypes.c_void_p]
+        lib.sim_get_fused_v.restype = ctypes.c_float
+
+        # sim_get_fused_omega(void* h) → float
+        lib.sim_get_fused_omega.argtypes = [ctypes.c_void_p]
+        lib.sim_get_fused_omega.restype = ctypes.c_float
+
+        # N11 pose injection helper (030-009)
+        # sim_set_pose(void* h, float x, float y, float hrad)
+        lib.sim_set_pose.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_float,
+            ctypes.c_float,
+            ctypes.c_float,
+        ]
+        lib.sim_set_pose.restype = None
+
+        # N15 EKF P diagonal accessor (030-009)
+        # sim_get_ekf_p_diag(void* h, int idx) → float
+        lib.sim_get_ekf_p_diag.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        lib.sim_get_ekf_p_diag.restype = ctypes.c_float
+
+        # N2 queue-invariant helper (030-002)
+        # sim_get_queue_wired(void* h) → int (1 if queue attached, 0 if not)
+        lib.sim_get_queue_wired.argtypes = [ctypes.c_void_p]
+        lib.sim_get_queue_wired.restype = ctypes.c_int
+
+        # N7 queue-overflow helpers (030-005)
+        # sim_queue_size(void* h) → int (current item count)
+        lib.sim_queue_size.argtypes = [ctypes.c_void_p]
+        lib.sim_queue_size.restype = ctypes.c_int
+
+        # sim_fill_queue(void* h) → int (number of dummy items pushed)
+        lib.sim_fill_queue.argtypes = [ctypes.c_void_p]
+        lib.sim_fill_queue.restype = ctypes.c_int
+
+        # sim_command_no_drain(void* h, line, buf, len) → int
+        # Like sim_command but skips the two dequeueOne drains.
+        lib.sim_command_no_drain.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_int,
+        ]
+        lib.sim_command_no_drain.restype = ctypes.c_int
+
         # D10 telemetry helpers (028-005)
         # sim_get_tlm_bound(void* h) → int (1 if bound, 0 if not)
         lib.sim_get_tlm_bound.argtypes = [ctypes.c_void_p]
@@ -208,6 +296,48 @@ class Sim:
             ctypes.c_int,
         ]
         lib.sim_tick_collect_tlm.restype = ctypes.c_int
+
+    # ------------------------------------------------------------------
+    # N7 queue-overflow helpers (030-005)
+    # ------------------------------------------------------------------
+
+    def queue_size(self) -> int:
+        """Return the current number of items in the CommandQueue."""
+        return int(self._lib.sim_queue_size(self._h))
+
+    def fill_queue(self) -> int:
+        """Fill the CommandQueue to capacity with no-op dummy entries.
+
+        Returns the number of dummy items pushed.  After this call the
+        queue is full; any sim_command_no_drain() call that routes through
+        dispatchTable() will get ERR full.
+        """
+        return int(self._lib.sim_fill_queue(self._h))
+
+    def send_command_no_drain(self, line: str) -> str:
+        """Send one command WITHOUT draining the queue afterwards.
+
+        Used by overflow tests to see whether dispatchTable() returns
+        ERR full when the queue is already full.
+        """
+        buf = ctypes.create_string_buffer(512)
+        n = self._lib.sim_command_no_drain(self._h, line.encode(), buf, 512)
+        if n <= 0:
+            return ""
+        return buf.raw[:n].decode(errors="replace")
+
+    # ------------------------------------------------------------------
+    # N2 queue-invariant helper (030-002)
+    # ------------------------------------------------------------------
+
+    def get_queue_wired(self) -> bool:
+        """Return True if CommandProcessor has a queue attached.
+
+        The queue is wired in SimHandle's constructor and must remain attached
+        for the full session — if this returns False, the Phase-3-style
+        move-assign bug has regressed (N2 finding).
+        """
+        return bool(self._lib.sim_get_queue_wired(self._h))
 
     # ------------------------------------------------------------------
     # D10 telemetry helpers (028-005)
@@ -239,6 +369,81 @@ class Sim:
         raw = buf.raw.split(b"\x00")[0].decode(errors="replace")
         lines = [ln for ln in raw.split("\n") if ln.strip()]
         return lines
+
+    # ------------------------------------------------------------------
+    # N8 sensor-freshness helpers (030-008)
+    # ------------------------------------------------------------------
+
+    def init_line_sensor(self) -> None:
+        """Initialize (begin) the MockLineSensor so Robot::lineRead() is active."""
+        self._lib.sim_init_line_sensor(self._h)
+
+    def init_color_sensor(self) -> None:
+        """Initialize (begin) the MockColorSensor so Robot::colorRead() is active."""
+        self._lib.sim_init_color_sensor(self._h)
+
+    def set_line_frozen(self, frozen: bool) -> None:
+        """Freeze or unfreeze the MockLineSensor.
+
+        When frozen, readValues() returns false so Robot::lineRead() never
+        updates lineVS.lastUpdMs.  After ~2×lagMs the TLM freshness gate
+        drops the line= field from TLM frames (N8 fix verification).
+        """
+        self._lib.sim_set_line_frozen(self._h, ctypes.c_int(1 if frozen else 0))
+
+    def set_color_frozen(self, frozen: bool) -> None:
+        """Freeze or unfreeze the MockColorSensor (N8 fix verification)."""
+        self._lib.sim_set_color_frozen(self._h, ctypes.c_int(1 if frozen else 0))
+
+    # ------------------------------------------------------------------
+    # N9 same-tick OTOS failure helper (030-008)
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # N11 pose injection helper (030-009)
+    # ------------------------------------------------------------------
+
+    def set_pose(self, x: float, y: float, hrad: float) -> None:
+        """Directly inject a dead-reckoning pose into state.inputs.
+
+        Used by N11 test to place the robot past a G target so the PURSUE
+        backtrack re-gate fires without requiring the robot to physically drive.
+        """
+        self._lib.sim_set_pose(
+            self._h,
+            ctypes.c_float(x),
+            ctypes.c_float(y),
+            ctypes.c_float(hrad),
+        )
+
+    # ------------------------------------------------------------------
+    # N15 EKF P diagonal accessor (030-009)
+    # ------------------------------------------------------------------
+
+    def get_ekf_p_diag(self, idx: int) -> float:
+        """Return P[idx][idx] from the EKF covariance matrix.
+
+        Index mapping: 0=x, 1=y, 2=theta, 3=v, 4=omega.
+        Returns -1.0 for out-of-range idx.
+        """
+        return float(self._lib.sim_get_ekf_p_diag(self._h, ctypes.c_int(idx)))
+
+    def set_otos_read_failure(self, fail: bool) -> None:
+        """Inject or clear an OTOS read failure.
+
+        When set, MockOtosSensor::readTransformed returns false and emits
+        {0,0,0}.  Robot::otosCorrect() must detect this via the return value
+        and skip EKF fusion (N9 fix verification).
+        """
+        self._lib.sim_set_otos_read_failure(self._h, ctypes.c_int(1 if fail else 0))
+
+    def get_fused_v(self) -> float:
+        """Return fusedV (EKF body-frame linear speed, mm/s) from state.inputs."""
+        return float(self._lib.sim_get_fused_v(self._h))
+
+    def get_fused_omega(self) -> float:
+        """Return fusedOmega (EKF yaw rate, rad/s) from state.inputs."""
+        return float(self._lib.sim_get_fused_omega(self._h))
 
     # ------------------------------------------------------------------
     # Field-profile helpers
