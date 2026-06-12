@@ -1,0 +1,19 @@
+{
+  "in-struct-not-registered": {
+    "safetyEnabled":    "used internally by firmware to gate safety-stop watchdog; not externally tunable via SET (toggled by SAFE command instead)",
+    "tlmFields":        "set by STREAM command handler directly, not via ConfigRegistry SET; bitmask is not a persistent tuning param",
+    "tlmSnapPending":   "ephemeral one-shot flag set by SNAP command and cleared after one TLM frame; not a persistent config field",
+    "fwdSignL":         "motor direction sign set at construction time from robot JSON; runtime SET would not re-wire the HAL constructors",
+    "fwdSignR":         "motor direction sign set at construction time from robot JSON; runtime SET would not re-wire the HAL constructors",
+    "odomUpsideDown":   "OTOS mounting orientation flag read at construction time; runtime SET would not re-init the sensor — register when live re-init is supported",
+    "ekfQxy":           "EKF position process-noise covariance; used by initEKF at startup — register as tunable in a future sprint",
+    "ekfQtheta":        "EKF heading process-noise covariance; used by initEKF at startup — register as tunable in a future sprint",
+    "ekfROtosXy":       "EKF OTOS position measurement-noise covariance; used by initEKF at startup — register as tunable in a future sprint",
+    "ekfQv":            "EKF velocity process-noise covariance; used by initEKF at startup — register as tunable in a future sprint",
+    "ekfQomega":        "EKF yaw-rate process-noise covariance; used by initEKF at startup — register as tunable in a future sprint",
+    "ekfROtosV":        "EKF OTOS velocity measurement-noise covariance; used by initEKF at startup — register as tunable in a future sprint",
+    "ekfREncV":         "EKF encoder velocity measurement-noise covariance; used by initEKF at startup — register as tunable in a future sprint"
+  },
+  "registered-not-in-struct": {},
+  "registered-not-used": {}
+}
