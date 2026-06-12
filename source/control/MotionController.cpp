@@ -1123,13 +1123,18 @@ static void handleS(const ArgList& args, const char* corrId,
         int omega_int = (int)(omega_rads * 1000.0f);  // rad/s → mrad/s
 
         ArgList vwArgs;
-        vwArgs.count = 2;  // no stop params → S/stream mode
+        vwArgs.count = 2;
         setIntArg(vwArgs.args[0], v_int);
         setIntArg(vwArgs.args[1], omega_int);
+        // Pack a "stream=1" marker so handleVW routes via beginStream (seed
+        // BVC immediately, no trapezoid ramp).  This preserves the original
+        // S-command semantics on the queue path.
+        vwArgs.count = packKVArg(vwArgs, 2, "stream", 1);
 
         pushVW(ctx, vwArgs, corrId, replyFn, replyCtx);
     } else {
-        // Queue not available (sim): fall back to direct beginStream().
+        // Queue not available (sim fallback, should not be reached since sim
+        // now wires the queue): use direct beginStream().
         ctx->mc->beginStream((float)l, (float)r,
                              ctx->robot->systemTime(),
                              ctx->robot->state.target,
@@ -1816,7 +1821,22 @@ static void handleVW(const ArgList& args, const char* corrId,
     }
 
     // ── No stop params: open-ended velocity (VW / S mode) ──────────────────
-    if (ctx->mc->hasActiveCommand()) {
+    //
+    // If a "stream=1" marker is present (packed by handleS on the queue path),
+    // route via beginStream so the BVC is seeded immediately at the target speed
+    // (no trapezoid ramp-up).  This preserves the original S-command semantics.
+    // Direct VW commands with no stop params use beginVelocity (MotionCommand
+    // with ramp), which supports X soft + EVT done on completion.
+    if (vwHasKey(args, "stream")) {
+        // S streaming path — seed BVC at target and go to STREAMING mode.
+        // Convert (v, omega) back to (vL, vR) for beginStream.
+        float b  = ctx->robot->config.trackwidthMm;
+        float vL = (float)v - omega_rads * (b * 0.5f);
+        float vR = (float)v + omega_rads * (b * 0.5f);
+        ctx->mc->beginStream(vL, vR, now,
+                             ctx->robot->state.target,
+                             replyFn, replyCtx);
+    } else if (ctx->mc->hasActiveCommand()) {
         // Keepalive re-send: update target and re-arm TIME baseline.
         ctx->mc->activeCmd().setTarget((float)v, omega_rads);
     } else {

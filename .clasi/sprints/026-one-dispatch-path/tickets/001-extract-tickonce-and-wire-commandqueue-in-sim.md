@@ -1,10 +1,10 @@
 ---
 id: '001'
 title: Extract tickOnce and wire CommandQueue in sim
-status: open
+status: done
 use-cases:
-  - SUC-001
-  - SUC-002
+- SUC-001
+- SUC-002
 depends-on: []
 github-issue: ''
 issue: sim-runs-real-dispatch-path.md
@@ -83,22 +83,31 @@ functions are **unchanged** in signature. Python test code requires no changes.
 
 ## Acceptance Criteria
 
-- [ ] `LoopScheduler::tickOnce(uint32_t now)` exists and is declared in
-  `source/control/LoopScheduler.h`.
-- [ ] `tickOnce()` does not call `_uBit.systemTime()` internally.
-- [ ] `run_blocks()` calls `tickOnce(now)` and contains no duplicated block logic.
-- [ ] `SimHandle` gains a `CommandQueue _queue` field; it is wired to both `cmd`
+- [x] `LoopScheduler::tickOnce(uint32_t now)` exists and is declared in
+  `source/control/LoopScheduler.h`. (Implemented as free function `loopTickOnce()`
+  in `source/control/LoopTickOnce.h`, included by `LoopScheduler.h`. Free function
+  option (b) was chosen per ticket recommendation to avoid MicroBit& constructor
+  constraint, and because LoopScheduler.cpp is excluded from the host build.)
+- [x] `tickOnce()` does not call `_uBit.systemTime()` internally. (`loopTickOnce`
+  takes `now` as a parameter; `run_blocks()` passes `_uBit.systemTime()`;
+  `sim_tick()` passes `now_ms`.)
+- [x] `run_blocks()` calls `tickOnce(now)` and contains no duplicated block logic.
+  (Now delegates to `loopTickOnce()`; watchdog/halt/drive/odometry/sensors removed
+  from `run_blocks()` body.)
+- [x] `SimHandle` gains a `CommandQueue _queue` field; it is wired to both `cmd`
   and `robot.motionController` at construction.
-- [ ] `sim_tick()` calls `tickOnce()` (or the equivalent free function) and
+- [x] `sim_tick()` calls `tickOnce()` (or the equivalent free function) and
   contains no hand-mirrored copies of watchdog, halt, drive, odometry, or OTOS
-  block logic.
-- [ ] `SimHandle::watchdogMs` field is removed.
-- [ ] Converter commands sent via `sim_command()` travel through the queue path
-  (not the direct `begin*()` fallback). Verify by temporarily adding a `printf`
-  or by checking that the existing fallback-path comment in `test_vw_converters.py`
-  no longer applies and all converter tests still pass.
-- [ ] All existing `host_tests/*.py` tests pass.
-- [ ] `python3 build.py` succeeds (firmware compiles clean with `--clean`).
+  block logic. (`sim_tick` calls `loopTickOnce()`; all hand-mirrored blocks removed.)
+- [x] `SimHandle::watchdogMs` field is removed. (Replaced by `_ts.watchdogMs` in
+  `LoopTickState _ts`.)
+- [x] Converter commands sent via `sim_command()` travel through the queue path
+  (not the direct `begin*()` fallback). The "fallback-path" comment in
+  `test_vw_converters.py` has been updated; all converter tests pass. Debug output
+  confirmed T→pushVW→handleVW→beginTimed path is taken.
+- [x] All existing `host_tests/*.py` tests pass. (81/81 passed.)
+- [x] `python3 build.py` succeeds (firmware compiles clean). RAM: 98.33% (expected
+  normal CODAL fixed allocation per project memory).
 
 ## Testing
 
