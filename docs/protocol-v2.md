@@ -424,18 +424,40 @@ STREAM fields=<field>,… [#id]
 
 `STREAM <ms>` sets the periodic telemetry interval in milliseconds.
 `ms=0` disables streaming.  The minimum enforced period is 20 ms;
-smaller positive values are clamped to 20.
+smaller positive values are clamped to 20.  The `OK` reply echoes the
+*clamped* period (e.g. `STREAM 10` → `OK stream period=20`).
 
 `STREAM fields=<csv>` sets the field subscription bitmask.  The value
 is a comma-separated list of field names (`enc`, `pose`, `vel`, `line`,
 `color`).  Any unrecognised name is silently ignored.  An empty or
 all-unrecognised list resets the mask to `TLM_FIELD_ALL` (all fields).
 
+**Channel binding (D10, firmware 028-005).** The TLM stream is bound to
+the communication channel (serial or radio) that issued the most recent
+`STREAM <ms>` command.  Subsequent commands arriving on a *different*
+channel do not redirect the stream.  This is intentional: a radio drive
+command during an active serial TLM session must not silently steal the
+serial stream.
+
+*Implication:* a session that issues drive commands via radio without
+first issuing `STREAM` on serial will *not* receive serial TLM output.
+Issue `STREAM <ms>` on the channel that should receive TLM before
+driving.
+
+**Idle-rate (D10, firmware 028-005).** The stream continues even when the
+robot is stopped (idle > 400 ms).  When idle, the effective emit period
+is `max(period_ms, 500 ms)` so the host can distinguish "robot idle"
+from "serial dropped."  A gap exceeding 600 ms (500 ms idle period plus
+one loop tick) indicates a true loss.
+
 Examples:
 
 ```
 STREAM 100
 OK stream period=100
+
+STREAM 10
+OK stream period=20
 
 STREAM 0
 OK stream period=0
@@ -451,31 +473,33 @@ OK stream fields=enc,pose,line
 
 ```
 SNAP [#id]
-→ OK snap [#id]
+→ TLM t=<ms> mode=<char> seq=<n> … (raw TLM frame)
 ```
 
-Sets a one-shot flag; the next `Robot::tick()` call emits one immediate
-TLM frame before clearing the flag.  The `OK snap` response is returned
-immediately (before the TLM frame arrives).
+Returns one TLM frame synchronously.  The frame is emitted directly as
+a `TLM` line (not wrapped in `OK`).  SNAP and STREAM share the same
+`_tlmSeq` counter, so the `seq=` field is consistent across both paths
+(see *TLM Frame Format* below).
 
 ### TLM Frame Format
 
 ```
-TLM t=<ms> mode=<char> [enc=<l>,<r>] [pose=<x>,<y>,<h>] [vel=<vl>,<vr>] [line=<g1>,<g2>,<g3>,<g4>] [color=<r>,<g>,<b>,<c>]
+TLM t=<ms> mode=<char> seq=<n> [enc=<l>,<r>] [pose=<x>,<y>,<h>] [vel=<vl>,<vr>] [line=<g1>,<g2>,<g3>,<g4>] [color=<r>,<g>,<b>,<c>]
 ```
 
 Fields are emitted in the order shown; fields whose subscription bit is
 clear, or whose hardware is absent, are omitted.
 
-| Field    | Format                      | Units / notes                                            |
-|----------|-----------------------------|----------------------------------------------------------|
-| `t`      | `%lu` (unsigned long)       | Robot clock in ms at sensor-sample time (see note below) |
-| `mode`   | single character            | `I`=idle, `S`=streaming (set by either `S` or `VW` command), `T`=timed, `D`=distance, `G`=go-to |
-| `enc`    | `%d,%d`                     | Left and right encoder accumulated distance in mm        |
-| `pose`   | `%d,%d,%d`                  | x mm, y mm, heading in centi-degrees                     |
-| `vel`    | `%d,%d`                     | Left and right actual velocity in mm/s (from `MotorController::getActualVelocity()`) |
-| `line`   | `%u,%u,%u,%u`               | Four greyscale channels (raw ADC counts)                 |
-| `color`  | `%u,%u,%u,%u`               | R, G, B, clear channels (raw ADC counts)                 |
+| Field    | Format                      | Units / notes                                                          |
+|----------|-----------------------------|------------------------------------------------------------------------|
+| `t`      | `%lu` (unsigned long)       | Robot clock in ms at sensor-sample time                                |
+| `mode`   | single character            | `I`=idle, `S`=streaming (`S`/`VW`), `T`=timed, `D`=distance, `G`=go-to |
+| `seq`    | `%u` (uint16, wraps at 65535) | D10 sequence counter — shared by STREAM and SNAP (firmware 028-005+). Absent on older firmware. Use `tlm_drop_rate(frames)` to detect loss. |
+| `enc`    | `%d,%d`                     | Left and right encoder accumulated distance in mm                      |
+| `pose`   | `%d,%d,%d`                  | x mm, y mm, heading in centi-degrees                                   |
+| `vel`    | `%d,%d`                     | Left and right actual velocity in mm/s                                 |
+| `line`   | `%u,%u,%u,%u`               | Four greyscale channels (raw ADC counts)                               |
+| `color`  | `%u,%u,%u,%u`               | R, G, B, clear channels (raw ADC counts)                               |
 
 **Timestamp discipline.** `t=` is captured at the start of sensor
 reading (before `snprintf`), not at line-send time.  This ensures the
@@ -491,11 +515,18 @@ field is populated from `MotorController::getActualVelocity()` (landed in
 Sprint 010).  Values reflect the last `tick()` measurement; see `GET VEL`
 for per-wheel source flags (`C` = chip, `E` = encoder-delta).
 
+**`seq=` field (D10, firmware 028-005+).** A monotonically increasing
+`uint16` counter shared by all TLM frames (STREAM and SNAP).  Wraps at
+65 535.  The host can compute the drop rate with
+`tlm_drop_rate(frames)` from `robot_radio.robot.protocol`.  Frames from
+pre-028-005 firmware omit this field; `TLMFrame.seq` is `None`.
+
 Example:
 
 ```
-TLM t=12345 mode=S enc=1024,1019 pose=350,-12,1780 vel=198,201 line=120,340,330,118 color=21,30,18,80
-TLM t=12400 mode=I enc=1024,1019 pose=350,-12,1780 vel=0,0
+TLM t=12345 mode=S seq=0 enc=1024,1019 pose=350,-12,1780 vel=198,201 line=120,340,330,118 color=21,30,18,80
+TLM t=12395 mode=S seq=1 enc=1068,1063 pose=352,-12,1780 vel=200,200
+TLM t=12895 mode=I seq=2 enc=1068,1063 pose=352,-12,1780 vel=0,0
 ```
 
 ---
