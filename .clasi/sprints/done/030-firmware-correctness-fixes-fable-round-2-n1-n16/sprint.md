@@ -1,7 +1,7 @@
 ---
 id: '030'
 title: Firmware correctness fixes (Fable round-2 N1-N16)
-status: planning
+status: done
 branch: sprint/030-firmware-correctness-fixes-fable-round-2-n1-n16
 use-cases:
 - SUC-001
