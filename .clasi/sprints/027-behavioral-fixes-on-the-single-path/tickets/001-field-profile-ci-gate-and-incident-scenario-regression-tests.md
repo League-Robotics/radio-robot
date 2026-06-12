@@ -1,13 +1,13 @@
 ---
 id: '001'
 title: Field-profile CI gate and incident scenario regression tests
-status: open
+status: done
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-003
-  - SUC-004
-  - SUC-005
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
 depends-on: []
 github-issue: ''
 issue: field-profile-test-harness-and-ci.md
@@ -35,27 +35,30 @@ and adds the named scenario tests.
 
 ## Acceptance Criteria
 
-- [ ] `host_tests/conftest.py` exposes a `sim_field_profile` fixture: creates
+- [x] `host_tests/conftest.py` exposes a `sim_field_profile` fixture: creates
       a `Sim`, applies `SET sTimeout=60000`, then calls
       `s.set_field_profile(slip_turn_extra=0.26, fuse_otos=True)`.
-- [ ] `host_tests/test_incident_scenarios.py` exists with four test functions:
+- [x] `host_tests/test_incident_scenarios.py` exists with four test functions:
   - `test_scenario_g_into_boards` — G to a target requiring PURSUE in the
     field profile; orbit count must be < 1.5 revolutions before arriving or
     timing out. (Regression guard for D8; mark `xfail(strict=False)` if it
-    fails before 027-004 lands.)
+    fails before 027-004 lands.) — xpass (strict=False): sim converges
+    cleanly; orbit is a physical/carpet issue not reproducible in clean sim.
   - `test_scenario_turn_under_rotate` — TURN 9000 in field profile; OTOS
     heading at completion must be ≥ 85° (regression guard for 024 heading
-    fusion; should pass against current code).
+    fusion; should pass against current code). — PASSED.
   - `test_scenario_keepalive_kills_turn` — TURN 9000 + mid-flight `VW 0 0`
     keepalive injection; TURN must complete at commanded heading. Mark
     `@pytest.mark.xfail(strict=True)` until 027-003 (D6) lands; then remove.
+    — XFAIL (as expected; D6 not yet fixed).
   - `test_scenario_spin_on_placement` — OTOS pose frozen at (0,0,0) mid-PRE_ROTATE
     in field profile; command must exit via TIME net, not spin forever. Should
-    pass against current code (D5 already bounds it).
-- [ ] `test_d6_cannot_stomp_turn` from 026-003 confirmed present in
-      `host_tests/test_vw_converters.py` and still `xfail` (promoted to
-      passing in 027-003).
-- [ ] All existing `host_tests/` tests pass.
+    pass against current code (D5 already bounds it). — PASSED.
+- [x] `test_d6_cannot_stomp_turn` from 026-003 confirmed present in
+      `host_tests/test_d11_gate.py` (not test_vw_converters.py — ticket AC had
+      wrong file name; the test is present and xfail as required) and still
+      `xfail` (promoted to passing in 027-003).
+- [x] All existing `host_tests/` tests pass.
 
 ## Implementation Plan
 
