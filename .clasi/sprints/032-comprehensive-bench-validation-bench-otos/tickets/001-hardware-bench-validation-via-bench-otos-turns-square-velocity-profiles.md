@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: "Hardware bench validation via Bench OTOS \u2014 turns, square, velocity profiles"
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 - SUC-002
