@@ -1362,7 +1362,11 @@ static void handleHalt(const ArgList& args, const char* corrId,
         char label[40];
         snprintf(label, sizeof(label), "TIME %g%s", ms,
                  style == StopStyle::SOFT ? " SOFT" : "");
-        int id = robot->haltController.add(cond, style, label);
+        // Capture registration-time baseline so the condition fires ~ms after
+        // now, not ~ms after boot (N10 fix).
+        uint32_t now_ms   = robot->systemTime();
+        float    enc_avg  = (robot->state.inputs.encLMm + robot->state.inputs.encRMm) * 0.5f;
+        int id = robot->haltController.add(cond, style, label, now_ms, enc_avg);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
                                        "halt table full (max 8)",
@@ -1393,7 +1397,11 @@ static void handleHalt(const ArgList& args, const char* corrId,
         char label[40];
         snprintf(label, sizeof(label), "DIST %g%s", mm,
                  style == StopStyle::SOFT ? " SOFT" : "");
-        int id = robot->haltController.add(cond, style, label);
+        // Capture registration-time baseline so the condition fires ~mm after
+        // the current encoder position, not from boot (N10 fix).
+        uint32_t now_ms_d  = robot->systemTime();
+        float    enc_avg_d = (robot->state.inputs.encLMm + robot->state.inputs.encRMm) * 0.5f;
+        int id = robot->haltController.add(cond, style, label, now_ms_d, enc_avg_d);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
                                        "halt table full (max 8)",
@@ -1447,7 +1455,9 @@ static void handleHalt(const ArgList& args, const char* corrId,
             snprintf(label, sizeof(label), "LINE ANY %.2s %d%s",
                      opAbbrev, (int)threshold, softSfx);
         }
-        int id = robot->haltController.add(cond, style, label);
+        int id = robot->haltController.add(cond, style, label,
+                                            robot->systemTime(),
+                                            (robot->state.inputs.encLMm + robot->state.inputs.encRMm) * 0.5f);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
                                        "halt table full (max 8)",
@@ -1483,7 +1493,9 @@ static void handleHalt(const ArgList& args, const char* corrId,
         // "POS -32000 -32000 32000" = 22 chars — fits comfortably.
         snprintf(label, sizeof(label), "POS %d %d %d",
                  (int)x, (int)y, (int)rad);
-        int id = robot->haltController.add(cond, style, label);
+        int id = robot->haltController.add(cond, style, label,
+                                            robot->systemTime(),
+                                            (robot->state.inputs.encLMm + robot->state.inputs.encRMm) * 0.5f);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
                                        "halt table full (max 8)",
@@ -1520,7 +1532,9 @@ static void handleHalt(const ArgList& args, const char* corrId,
         // "COLOR 360.00 1.00 1.00 1.00" = 28 chars — fits comfortably.
         snprintf(label, sizeof(label), "COLOR %.2f %.2f %.2f %.2f",
                  (double)h, (double)s, (double)v, (double)dist);
-        int id = robot->haltController.add(cond, style, label);
+        int id = robot->haltController.add(cond, style, label,
+                                            robot->systemTime(),
+                                            (robot->state.inputs.encLMm + robot->state.inputs.encRMm) * 0.5f);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
                                        "halt table full (max 8)",

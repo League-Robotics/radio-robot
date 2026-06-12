@@ -1,9 +1,9 @@
 ---
 id: '007'
 title: 'N10: HALT TIME/DIST baseline at registration time, not boot epoch'
-status: open
+status: done
 use-cases:
-  - SUC-008
+- SUC-008
 depends-on: []
 github-issue: ''
 issue: fr2-n10-halt-baselines.md
@@ -29,18 +29,18 @@ undocumented on the wire.
 
 ## Acceptance Criteria
 
-- [ ] `add()` for TYPE_TIME entries baselines `_timerBaselineMs` at `now` if it has
+- [x] `add()` for TYPE_TIME entries baselines `_timerBaselineMs` at `now` if it has
       not been explicitly set by a `ZERO T` command (or always baselines at call time
       if that's the cleaner design — see implementation note).
-- [ ] `add()` for TYPE_DIST entries baselines `_distBaselineMm` at the current
+- [x] `add()` for TYPE_DIST entries baselines `_distBaselineMm` at the current
       odometry distance if not set.
-- [ ] `remove()` frees its slot so it can be reused by `add()`.
-- [ ] New sim test: `HALT TIME 5000` long after boot (no prior `ZERO T`) does not
+- [x] `remove()` frees its slot so it can be reused by `add()`.
+- [x] New sim test: `HALT TIME 5000` long after boot (no prior `ZERO T`) does not
       trip on the next tick; fires ~5000 ms after registration.
-- [ ] New sim test: 8 add/remove cycles — the 9th add succeeds (table is not
+- [x] New sim test: 8 add/remove cycles — the 9th add succeeds (table is not
       exhausted).
-- [ ] `python3 build.py` clean build passes.
-- [ ] `uv run --with pytest python -m pytest host_tests/ host/tests/` passes.
+- [x] `python3 build.py` clean build passes.
+- [x] `uv run --with pytest python -m pytest host_tests/ host/tests/` passes.
 
 ## Implementation Plan
 
