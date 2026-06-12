@@ -232,9 +232,31 @@ void handleGet(const ArgList& args, const char* corrId,
 //   vWheelMax > steerHeadroom  — effective ceiling = vWheelMax-steerHeadroom;
 //                     when ≤ 0 the saturation ceiling goes negative, clamping
 //                     output to a negative value and inverting the wheel.
-//   rotationalSlip in [0.5, 1.0] — values outside this range produce
-//                     nonsensical arc estimates that break odometry.
+//   rotationalSlip in {0} ∪ [0.5, 1.0] — 0 is the documented "unset → 1.0"
+//                     sentinel (effectiveSlip() maps ≤0 → 1.0); negative is
+//                     rejected as meaningless; (0, 0.5) is rejected to catch
+//                     implausible values (effectiveSlip would silently clamp
+//                     to 0.5); > 1.0 is rejected (inflates arc estimates).
+//   aMax > 0        — trapezoid dv_max used as denominator / step; zero stalls
+//                     BVC at zero speed (every motion verb looks dead).
+//   aDecel > 0      — trapezoid decel step dv_max; negative makes approach()
+//                     move away from target (runaway) and sqrtf(negative)→NaN
+//                     disables decel caps entirely.
+//   vBodyMax > 0    — body forward speed ceiling; zero clamps all motion
+//                     targets to zero.
+//   yawRateMax > 0  — yaw rate ceiling; zero clamps all yaw targets to zero.
+//   yawAccMax > 0   — yaw acceleration limit; zero stalls BVC yaw channel.
+//   sTimeoutMs >= STIMEOUT_MIN_MS — watchdog compare fires every tick when
+//                     sTimeoutMs ≤ 0 (signed delta ≥ 0 always); even small
+//                     values cause X-storms before the host can send a
+//                     keepalive.  200 ms provides margin over the firmware
+//                     tick budget (~25 ms worst-case) and the minimum
+//                     keepalive cadence without being overly restrictive.
 // ---------------------------------------------------------------------------
+
+// Minimum allowed sTimeoutMs value.  Below this the watchdog fires before the
+// host has any chance to send a keepalive (200 ms >> worst-case tick ~25 ms).
+static const int32_t STIMEOUT_MIN_MS = 200;
 
 static bool validateConfig(const RobotConfig& c, const char** badKey)
 {
@@ -250,8 +272,39 @@ static bool validateConfig(const RobotConfig& c, const char** badKey)
         *badKey = "vWheelMax";
         return false;
     }
-    if (c.rotationalSlip < 0.5f || c.rotationalSlip > 1.0f) {
+    // rotSlip=0 is the documented "unset" sentinel → effectiveSlip() → 1.0.
+    // Valid range: exactly 0.0 (unset), or [0.5, 1.0] (calibrated).
+    // Reject: negative (meaningless), (0, 0.5) (implausibly low and likely a
+    // user mistake — effectiveSlip() would silently clamp to 0.5), > 1.0
+    // (would inflate arc estimates).
+    if (c.rotationalSlip < 0.0f ||
+        (c.rotationalSlip > 0.0f && c.rotationalSlip < 0.5f) ||
+        c.rotationalSlip > 1.0f) {
         *badKey = "rotSlip";
+        return false;
+    }
+    if (c.aMax <= 0.0f) {
+        *badKey = "aMax";
+        return false;
+    }
+    if (c.aDecel <= 0.0f) {
+        *badKey = "aDecel";
+        return false;
+    }
+    if (c.vBodyMax <= 0.0f) {
+        *badKey = "vBodyMax";
+        return false;
+    }
+    if (c.yawRateMax <= 0.0f) {
+        *badKey = "yawRateMax";
+        return false;
+    }
+    if (c.yawAccMax <= 0.0f) {
+        *badKey = "yawAccMax";
+        return false;
+    }
+    if (c.sTimeoutMs < STIMEOUT_MIN_MS) {
+        *badKey = "sTimeout";
         return false;
     }
     return true;

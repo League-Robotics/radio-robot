@@ -1,9 +1,9 @@
 ---
 id: '006'
 title: 'N6: Extend validateConfig() to cover rate/accel/timeout family'
-status: open
+status: done
 use-cases:
-  - SUC-005
+- SUC-005
 depends-on: []
 github-issue: ''
 issue: fr2-n6-config-validation.md
@@ -32,19 +32,19 @@ rejects it, so a host cannot restore the documented "unset" state.
 
 ## Acceptance Criteria
 
-- [ ] `validateConfig()` rejects `aDecel <= 0`, `aMax <= 0`, `vBodyMax <= 0`,
+- [x] `validateConfig()` rejects `aDecel <= 0`, `aMax <= 0`, `vBodyMax <= 0`,
       `yawRateMax <= 0`, `yawAccMax <= 0` (each returns `ERR badval`).
-- [ ] `validateConfig()` rejects `sTimeoutMs` below a reasonable floor (e.g. <= 0,
+- [x] `validateConfig()` rejects `sTimeoutMs` below a reasonable floor (e.g. <= 0,
       or <= 100 ms — choose a value that prevents the X-storm without breaking
-      legitimate short timeouts).
-- [ ] `rotSlip=0` is accepted by `validateConfig()` (treated as "unset → 1.0"
+      legitimate short timeouts). Floor chosen: 200 ms.
+- [x] `rotSlip=0` is accepted by `validateConfig()` (treated as "unset → 1.0"
       matching `effectiveSlip()` semantics).
-- [ ] New sim tests: each of `SET aDecel=-100`, `SET aMax=0`, `SET sTimeout=0`,
+- [x] New sim tests: each of `SET aDecel=-100`, `SET aMax=0`, `SET sTimeout=0`,
       `SET vBodyMax=0`, `SET yawRateMax=0` returns `ERR badval` and leaves live
       config unchanged.
-- [ ] Existing config validation tests pass without regression.
-- [ ] `python3 build.py` clean build passes.
-- [ ] `uv run --with pytest python -m pytest host_tests/ host/tests/` passes.
+- [x] Existing config validation tests pass without regression.
+- [x] `python3 build.py` clean build passes.
+- [x] `uv run --with pytest python -m pytest host_tests/ host/tests/` passes.
 
 ## Implementation Plan
 
