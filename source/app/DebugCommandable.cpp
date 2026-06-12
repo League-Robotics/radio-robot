@@ -1,7 +1,7 @@
 // DebugCommandable.cpp — Commandable for all diagnostic commands.
 //
 // Owns: DBG LOOP RESET, DBG LOOP, DBG I2CLOG, DBG I2C, DBG IRQGUARD,
-//       DBG WEDGE, I2CW, I2CR.
+//       DBG WEDGE, DBG OTOS BENCH, DBG OTOS, I2CW, I2CR.
 //
 // All descriptors use ForceReply::SERIAL.
 // Handler logic mirrors the existing switch cases in CommandProcessor.cpp
@@ -9,13 +9,21 @@
 
 #include "DebugCommandable.h"
 #include "CommandProcessor.h"
-#include "LoopScheduler.h"
-#include "I2CBus.h"
-#include "WedgeTest.h"
 #include "Robot.h"
+#include "BenchOtosSensor.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+// LoopScheduler, I2CBus, WedgeTest, and NezhaHAL include CODAL/MicroBit
+// headers and must NOT be included in HOST_BUILD.  The handlers that use
+// them are guarded with #ifndef HOST_BUILD so the file compiles in both.
+#ifndef HOST_BUILD
+#include "LoopScheduler.h"
+#include "I2CBus.h"
+#include "WedgeTest.h"
+#include "NezhaHAL.h"
+#endif
 
 // ---------------------------------------------------------------------------
 // Internal helper — cast handlerCtx to DebugCommandable* and get DbgCtx.
@@ -115,6 +123,7 @@ static ParseResult parseDbgI2clog(const char* const* tokens, int ntokens,
 static void handleDbgI2clog(const ArgList& args, const char* corrId,
                               ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
+#ifndef HOST_BUILD
     DbgCtx ctx = dbgCtxFrom(handlerCtx);
     char rbuf[64];
     if (ctx.bus == nullptr) {
@@ -130,6 +139,12 @@ static void handleDbgI2clog(const ArgList& args, const char* corrId,
     }
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "dbg", "i2clog",
                               corrId, replyFn, replyCtx);
+#else
+    (void)args; (void)corrId; (void)handlerCtx;
+    char rbuf[64];
+    CommandProcessor::replyErr(rbuf, sizeof(rbuf), "noimpl", "no i2c bus",
+                               corrId, replyFn, replyCtx);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -163,6 +178,7 @@ static ParseResult parseDbgI2c(const char* const* tokens, int ntokens,
 static void handleDbgI2c(const ArgList& args, const char* corrId,
                           ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
+#ifndef HOST_BUILD
     DbgCtx ctx = dbgCtxFrom(handlerCtx);
     char rbuf[64];
     if (ctx.bus == nullptr) {
@@ -207,6 +223,12 @@ static void handleDbgI2c(const ArgList& args, const char* corrId,
     replyFn(buf, replyCtx);
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "dbg", "i2c",
                               corrId, replyFn, replyCtx);
+#else
+    (void)args; (void)corrId; (void)handlerCtx;
+    char rbuf[64];
+    CommandProcessor::replyErr(rbuf, sizeof(rbuf), "noimpl", "no i2c bus",
+                               corrId, replyFn, replyCtx);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +258,7 @@ static ParseResult parseDbgIrqguard(const char* const* tokens, int ntokens,
 static void handleDbgIrqguard(const ArgList& args, const char* corrId,
                                ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
+#ifndef HOST_BUILD
     DbgCtx ctx = dbgCtxFrom(handlerCtx);
     char rbuf[64];
     if (ctx.bus == nullptr) {
@@ -248,6 +271,12 @@ static void handleDbgIrqguard(const ArgList& args, const char* corrId,
     snprintf(msg, sizeof(msg), "irqguard=%d", ctx.bus->irqGuard() ? 1 : 0);
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "dbg", msg,
                               corrId, replyFn, replyCtx);
+#else
+    (void)args; (void)corrId; (void)handlerCtx;
+    char rbuf[64];
+    CommandProcessor::replyErr(rbuf, sizeof(rbuf), "noimpl", "no i2c bus",
+                               corrId, replyFn, replyCtx);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -278,6 +307,7 @@ static ParseResult parseDbgWedge(const char* const* tokens, int ntokens,
 static void handleDbgWedge(const ArgList& args, const char* corrId,
                             ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
+#ifndef HOST_BUILD
     DbgCtx ctx = dbgCtxFrom(handlerCtx);
     char rbuf[64];
     if (ctx.sched == nullptr) {
@@ -297,6 +327,206 @@ static void handleDbgWedge(const ArgList& args, const char* corrId,
     runWedgeTest(ctx.sched->uBit(), wrate, wwrite, wbus, wdith, wreg, wsens,
                  wreal, ctx.robot);
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "dbg", "wedge end",
+                              corrId, replyFn, replyCtx);
+#else
+    (void)args; (void)corrId; (void)handlerCtx;
+    char rbuf[64];
+    CommandProcessor::replyErr(rbuf, sizeof(rbuf), "noimpl", "no scheduler",
+                               corrId, replyFn, replyCtx);
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// DBG OTOS BENCH
+//   prefix "DBG OTOS BENCH" — argTokens = ["0"|"1"] + optional KV pairs
+//   parseFn: arg[0] = INT (0 or 1); KVs: noiseXY, noiseH, drift (FLOAT).
+//   handler: toggle bench mode; optionally apply noise params; reply OK.
+//
+//   DBG OTOS BENCH 1                  → enable bench mode
+//   DBG OTOS BENCH 0                  → disable bench mode
+//   DBG OTOS BENCH 1 noiseXY=0.02 noiseH=0.01 drift=0.0001
+//
+//   Reply: OK dbg otos bench=<0|1>
+//
+//   HOST_BUILD: NezhaHAL not available.  isBenchOtosActive() returns false;
+//   the handler parses and replies OK (no-op toggle, no crash).
+// ---------------------------------------------------------------------------
+
+static ParseResult parseDbgOtosBench(const char* const* tokens, int ntokens,
+                                      const KVPair* kvs, int nkv)
+{
+    ParseResult res;
+    res.ok = true;
+
+    // arg[0]: enable flag (INT).
+    if (ntokens >= 1) {
+        res.args.count = 1;
+        res.args.args[0].type  = ArgType::INT;
+        res.args.args[0].ival  = atoi(tokens[0]);
+        res.args.args[0].fval  = 0.0f;
+        res.args.args[0].sval[0] = '\0';
+    } else {
+        res.args.count = 0;
+    }
+
+    // KV pairs: noiseXY, noiseH, drift — stored as FLOAT args [1], [2], [3]
+    // with sentinels (-1.0f) meaning "not provided".
+    float noiseXY = -1.0f;
+    float noiseH  = -1.0f;
+    float drift   = -1.0f;
+
+    for (int i = 0; i < nkv; ++i) {
+        if (strcmp(kvs[i].key, "noiseXY") == 0)  noiseXY = (float)atof(kvs[i].value);
+        else if (strcmp(kvs[i].key, "noiseH") == 0) noiseH  = (float)atof(kvs[i].value);
+        else if (strcmp(kvs[i].key, "drift")  == 0) drift   = (float)atof(kvs[i].value);
+    }
+
+    // Pack optional noise params into args [1..3] as FLOAT.
+    // A fval of -1.0f signals "not supplied" to the handler.
+    int base = (res.args.count >= 1) ? 1 : 0;
+    int extra = 0;
+    if (base + extra < MAX_ARGS) {
+        res.args.args[base + extra].type  = ArgType::FLOAT;
+        res.args.args[base + extra].fval  = noiseXY;
+        res.args.args[base + extra].ival  = 0;
+        res.args.args[base + extra].sval[0] = '\0';
+        ++extra;
+    }
+    if (base + extra < MAX_ARGS) {
+        res.args.args[base + extra].type  = ArgType::FLOAT;
+        res.args.args[base + extra].fval  = noiseH;
+        res.args.args[base + extra].ival  = 0;
+        res.args.args[base + extra].sval[0] = '\0';
+        ++extra;
+    }
+    if (base + extra < MAX_ARGS) {
+        res.args.args[base + extra].type  = ArgType::FLOAT;
+        res.args.args[base + extra].fval  = drift;
+        res.args.args[base + extra].ival  = 0;
+        res.args.args[base + extra].sval[0] = '\0';
+        ++extra;
+    }
+    if (extra > 0) res.args.count = base + extra;
+
+    return res;
+}
+
+static void handleDbgOtosBench(const ArgList& args, const char* corrId,
+                                 ReplyFn replyFn, void* replyCtx, void* handlerCtx)
+{
+    DbgCtx ctx = dbgCtxFrom(handlerCtx);
+    char rbuf[64];
+
+    // arg[0]: enable flag (0 or 1); default to 0 if omitted.
+    int enable = (args.count >= 1) ? args.args[0].ival : 0;
+
+#ifndef HOST_BUILD
+    // Reach NezhaHAL via the robot's hal reference (same pattern as benchOtosTick).
+    auto* nh = static_cast<NezhaHAL*>(&ctx.robot->hal);
+    nh->setOtosBench(enable != 0);
+
+    // Apply optional noise/drift params when bench mode is being enabled.
+    // args[1]=noiseXY, args[2]=noiseH, args[3]=drift.  Sentinel = -1.0f.
+    if (enable && args.count >= 4) {
+        float noiseXY = args.args[1].fval;
+        float noiseH  = args.args[2].fval;
+        float drift   = args.args[3].fval;
+
+        // Negative sentinel means "not provided"; apply defaults.
+        if (noiseXY < 0.0f) noiseXY = 0.02f;  // 2% linear sigma default
+        if (noiseH  < 0.0f) noiseH  = 0.01f;  // 1% yaw sigma default
+        if (drift   < 0.0f) drift   = 0.0f;   // no drift default
+
+        nh->benchOtosPtr()->setNoise(noiseXY, noiseH, drift);
+    }
+
+    int active = nh->isBenchMode() ? 1 : 0;
+#else
+    // HOST_BUILD: NezhaHAL not available; toggle is a no-op.
+    int active = 0;
+    (void)enable;
+#endif
+
+    char msg[32];
+    snprintf(msg, sizeof(msg), "otos bench=%d", active);
+    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "dbg", msg,
+                              corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
+// DBG OTOS
+//   prefix "DBG OTOS" — no args.
+//   parseFn: always succeeds, 0 args.
+//   handler: emit ideal / otos / fused pose line, then OK.
+//
+//   Reply lines:
+//     ideal=<x>,<y>,<h> otos=<x>,<y>,<h> fused=<x>,<y>,<h> err=<dx>,<dy>,<dh>
+//     OK dbg otos
+//
+//   ideal   = BenchOtosSensor noiseless accumulator.
+//   otos    = BenchOtosSensor errored accumulator (what readTransformed returned).
+//   fused   = state.inputs.otosX/Y/H — EKF-fused pose written by otosCorrect().
+//   err     = ideal − otos (per-axis).
+//
+//   In HOST_BUILD / MockHAL, benchOtosPtr() is unavailable; guard and emit
+//   0,0,0 for ideal/otos.
+// ---------------------------------------------------------------------------
+
+static ParseResult parseDbgOtos(const char* const* /*tokens*/, int /*ntokens*/,
+                                 const KVPair* /*kvs*/, int /*nkv*/)
+{
+    ParseResult res;
+    res.ok = true;
+    res.args.count = 0;
+    return res;
+}
+
+static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
+                           ReplyFn replyFn, void* replyCtx, void* handlerCtx)
+{
+    DbgCtx ctx = dbgCtxFrom(handlerCtx);
+    char rbuf[64];
+
+    float idealX = 0.0f, idealY = 0.0f, idealH = 0.0f;
+    float otosX  = 0.0f, otosY  = 0.0f, otosH  = 0.0f;
+
+#ifndef HOST_BUILD
+    auto* nh = static_cast<NezhaHAL*>(&ctx.robot->hal);
+    BenchOtosSensor* bench = nh->benchOtosPtr();
+    if (bench != nullptr) {
+        idealX = bench->idealX();
+        idealY = bench->idealY();
+        idealH = bench->idealH();
+        otosX  = bench->otosX();
+        otosY  = bench->otosY();
+        otosH  = bench->otosH();
+    }
+#else
+    // HOST_BUILD: NezhaHAL not available; ideal and otos are always 0,0,0.
+    (void)ctx;
+#endif
+
+    // fused pose from EKF-integrated state (written by Robot::otosCorrect).
+    float fusedX = ctx.robot->state.inputs.otosX;
+    float fusedY = ctx.robot->state.inputs.otosY;
+    float fusedH = ctx.robot->state.inputs.otosH;
+
+    // err = ideal − otos (per axis).
+    float errX = idealX - otosX;
+    float errY = idealY - otosY;
+    float errH = idealH - otosH;
+
+    // Emit the pose comparison line, then the OK reply.
+    char pose_buf[200];
+    snprintf(pose_buf, sizeof(pose_buf),
+             "ideal=%.1f,%.1f,%.4f otos=%.1f,%.1f,%.4f fused=%.1f,%.1f,%.4f err=%.1f,%.1f,%.4f",
+             (double)idealX, (double)idealY, (double)idealH,
+             (double)otosX,  (double)otosY,  (double)otosH,
+             (double)fusedX, (double)fusedY, (double)fusedH,
+             (double)errX,   (double)errY,   (double)errH);
+    replyFn(pose_buf, replyCtx);
+
+    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "dbg", "otos",
                               corrId, replyFn, replyCtx);
 }
 
@@ -335,6 +565,7 @@ static ParseResult parseI2cw(const char* const* tokens, int ntokens,
 static void handleI2cw(const ArgList& args, const char* corrId,
                         ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
+#ifndef HOST_BUILD
     DbgCtx ctx = dbgCtxFrom(handlerCtx);
     char rbuf[64];
     if (ctx.bus == nullptr) {
@@ -353,6 +584,12 @@ static void handleI2cw(const ArgList& args, const char* corrId,
     snprintf(body, sizeof(body), "addr=0x%02X n=%d status=%d", addr7, len, status);
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "i2cw", body,
                               corrId, replyFn, replyCtx);
+#else
+    (void)args; (void)corrId; (void)handlerCtx;
+    char rbuf[64];
+    CommandProcessor::replyErr(rbuf, sizeof(rbuf), "noimpl", "no i2c bus",
+                               corrId, replyFn, replyCtx);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -395,6 +632,7 @@ static ParseResult parseI2cr(const char* const* tokens, int ntokens,
 static void handleI2cr(const ArgList& args, const char* corrId,
                         ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
+#ifndef HOST_BUILD
     DbgCtx ctx = dbgCtxFrom(handlerCtx);
     char rbuf[64];
     if (ctx.bus == nullptr) {
@@ -421,6 +659,12 @@ static void handleI2cr(const ArgList& args, const char* corrId,
     }
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "i2cr", body,
                               corrId, replyFn, replyCtx);
+#else
+    (void)args; (void)corrId; (void)handlerCtx;
+    char rbuf[64];
+    CommandProcessor::replyErr(rbuf, sizeof(rbuf), "noimpl", "no i2c bus",
+                               corrId, replyFn, replyCtx);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -447,13 +691,16 @@ std::vector<CommandDescriptor> DebugCommandable::getCommands() const
     // Longest-prefix entries first within each group so dispatchTable picks
     // the most-specific match (e.g. "DBG LOOP RESET" beats "DBG LOOP").
     return {
-        makeCmd("DBG LOOP RESET", parseDbgLoopReset, handleDbgLoopReset, ctx, "badarg", ForceReply::SERIAL),                          // reset loop stats counters
-        makeCmd("DBG LOOP",       parseDbgLoop,      handleDbgLoop,      ctx, "badarg", ForceReply::SERIAL),                          // report loop timing stats
-        makeCmd("DBG I2CLOG",     parseDbgI2clog,    handleDbgI2clog,    ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // dump I2C transaction log
-        makeCmd("DBG I2C",        parseDbgI2c,       handleDbgI2c,       ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // report I2C bus error counts
-        makeCmd("DBG IRQGUARD",   parseDbgIrqguard,  handleDbgIrqguard,  ctx, "badarg", ForceReply::SERIAL),                          // enable/disable IRQ guard
-        makeCmd("DBG WEDGE",      parseDbgWedge,     handleDbgWedge,     ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // run encoder wedge self-check
-        makeCmd("I2CW",           parseI2cw,         handleI2cw,         ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // raw I2C write (addr reg data…)
-        makeCmd("I2CR",           parseI2cr,         handleI2cr,         ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // raw I2C read (addr reg count)
+        makeCmd("DBG LOOP RESET",  parseDbgLoopReset,  handleDbgLoopReset,  ctx, "badarg", ForceReply::SERIAL),                          // reset loop stats counters
+        makeCmd("DBG LOOP",        parseDbgLoop,       handleDbgLoop,       ctx, "badarg", ForceReply::SERIAL),                          // report loop timing stats
+        makeCmd("DBG I2CLOG",      parseDbgI2clog,     handleDbgI2clog,     ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // dump I2C transaction log
+        makeCmd("DBG I2C",         parseDbgI2c,        handleDbgI2c,        ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // report I2C bus error counts
+        makeCmd("DBG IRQGUARD",    parseDbgIrqguard,   handleDbgIrqguard,   ctx, "badarg", ForceReply::SERIAL),                          // enable/disable IRQ guard
+        makeCmd("DBG WEDGE",       parseDbgWedge,      handleDbgWedge,      ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // run encoder wedge self-check
+        // DBG OTOS BENCH must appear BEFORE DBG OTOS — longest prefix wins.
+        makeCmd("DBG OTOS BENCH",  parseDbgOtosBench,  handleDbgOtosBench,  ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // enable/disable bench OTOS + set noise
+        makeCmd("DBG OTOS",        parseDbgOtos,       handleDbgOtos,       ctx, "badarg", ForceReply::SERIAL),                          // query ideal/otos/fused pose
+        makeCmd("I2CW",            parseI2cw,          handleI2cw,          ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // raw I2C write (addr reg data…)
+        makeCmd("I2CR",            parseI2cr,          handleI2cr,          ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // raw I2C read (addr reg count)
     };
 }

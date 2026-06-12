@@ -1104,6 +1104,86 @@ over the half-duplex relay).
 
 ---
 
+## 14. Debug Commands (`DBG …`)
+
+Debug commands are diagnostic-only and always reply on the serial port
+(`ForceReply::SERIAL`), regardless of which channel the command arrived on.
+They are registered by `DebugCommandable` and require `CMD_ACCESS_HARDWARE`
+where they modify hardware routing.
+
+### DBG OTOS BENCH — Enable / Disable Bench OTOS Sensor
+
+```
+DBG OTOS BENCH <0|1> [noiseXY=<f>] [noiseH=<f>] [drift=<f>]
+```
+
+- `1` — Enable bench mode: redirect the active OTOS pointer to `BenchOtosSensor`,
+  which synthesizes pose from commanded wheel velocity instead of reading the
+  real optical sensor.  Useful when the robot is on a stand and the floor sensor
+  sees no motion.
+- `0` — Disable bench mode: restore the real `OtosSensor`.
+- Optional KV args (applied when `1`):
+  - `noiseXY=<f>` — linear noise sigma (fraction of arc distance per tick;
+    default 0.02 = 2%)
+  - `noiseH=<f>` — yaw noise sigma (fraction of heading change per tick;
+    default 0.01 = 1%)
+  - `drift=<f>` — slow additive yaw drift in rad/s (default 0.0)
+- Flag: `CMD_ACCESS_HARDWARE`.
+
+Reply:
+
+```
+OK dbg otos bench=<0|1>
+```
+
+Examples:
+
+```
+DBG OTOS BENCH 1
+OK dbg otos bench=1
+
+DBG OTOS BENCH 0
+OK dbg otos bench=0
+
+DBG OTOS BENCH 1 noiseXY=0.02 noiseH=0.01 drift=0.0001
+OK dbg otos bench=1
+```
+
+### DBG OTOS — Query Ideal / Errored / Fused Pose
+
+```
+DBG OTOS
+```
+
+No arguments.  Query the three-way pose comparison for bench session analysis:
+
+- `ideal` — noiseless accumulator from `BenchOtosSensor` (ground truth of
+  commanded motion; always `0,0,0` when bench mode is off).
+- `otos` — errored accumulator from `BenchOtosSensor` (Gaussian noise + drift
+  applied; this is what `readTransformed()` returned and what the EKF fused).
+- `fused` — EKF-fused pose from `state.inputs.otosX/Y/H` (written by
+  `Robot::otosCorrect()` each control tick).
+- `err` — component-wise `ideal − otos` (noise accumulated so far).
+
+Reply (one pose line, then OK):
+
+```
+ideal=<x>,<y>,<h> otos=<x>,<y>,<h> fused=<x>,<y>,<h> err=<dx>,<dy>,<dh>
+OK dbg otos
+```
+
+Pose units: `x`, `y` in mm; `h` in radians (4 decimal places).
+
+Example:
+
+```
+DBG OTOS
+ideal=245.3,0.0,0.0000 otos=242.1,1.2,-0.0031 fused=243.7,0.6,-0.0015 err=3.2,-1.2,0.0031
+OK dbg otos
+```
+
+---
+
 ## Appendix: Removed v1 Commands
 
 The following v1 command vocabulary is removed in v2.  Any of these
