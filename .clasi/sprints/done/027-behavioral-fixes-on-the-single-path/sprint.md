@@ -1,7 +1,7 @@
 ---
 id: '027'
 title: Behavioral fixes on the single path
-status: planning-docs
+status: done
 branch: sprint/027-behavioral-fixes-on-the-single-path
 use-cases: []
 issues:
