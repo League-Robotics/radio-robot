@@ -1,11 +1,13 @@
 ---
-id: "004"
-title: "Host-sim unit test: BenchOtosSensor integrator correctness"
-status: open
-use-cases: [SUC-004]
-depends-on: ["031-001"]
-github-issue: ""
-issue: ""
+id: '004'
+title: 'Host-sim unit test: BenchOtosSensor integrator correctness'
+status: done
+use-cases:
+- SUC-004
+depends-on:
+- 031-001
+github-issue: ''
+issue: ''
 completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -55,16 +57,16 @@ sources are registered; register the new file the same way.
 
 ## Acceptance Criteria
 
-- [ ] `host_tests/test_bench_otos.cpp` (or equivalent) exists and compiles
+- [x] `host_tests/test_bench_otos.cpp` (or equivalent) exists and compiles
   under `HOST_BUILD`.
-- [ ] Zero-noise straight-drive oracle test passes: `x ≈ 10.0 mm` within
+- [x] Zero-noise straight-drive oracle test passes: `x ≈ 10.0 mm` within
   ±0.1 mm after 100 ticks at 100 mm/s.
-- [ ] Zero-noise arc-turn oracle test passes within ±0.1 mm / ±0.001 rad.
-- [ ] Noise-band test passes (statistical, reproducible via fixed HOST_BUILD
+- [x] Zero-noise arc-turn oracle test passes within ±0.1 mm / ±0.001 rad.
+- [x] Noise-band test passes (statistical, reproducible via fixed HOST_BUILD
   seed).
-- [ ] Zero-dt no-op test passes.
-- [ ] `python3 build.py` clean build passes.
-- [ ] `uv run --with pytest python -m pytest host_tests/ host/tests/` passes,
+- [x] Zero-dt no-op test passes.
+- [x] `python3 build.py` clean build passes.
+- [x] `uv run --with pytest python -m pytest host_tests/ host/tests/` passes,
   including the new test.
 
 ## Implementation Plan
