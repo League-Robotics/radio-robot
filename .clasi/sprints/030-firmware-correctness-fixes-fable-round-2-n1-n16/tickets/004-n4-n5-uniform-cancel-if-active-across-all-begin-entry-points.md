@@ -1,11 +1,11 @@
 ---
 id: '004'
 title: 'N4+N5: Uniform cancel-if-active across all begin*() entry points'
-status: open
+status: done
 use-cases:
-  - SUC-004
+- SUC-004
 depends-on:
-  - '002'
+- '002'
 github-issue: ''
 issue: fr2-n4-n5-cancel-if-active.md
 completes_issue: true
@@ -37,20 +37,20 @@ first boot, making these paths consistently exercised.
 
 ## Acceptance Criteria
 
-- [ ] `beginStream()` cancels any active command (emits `EVT cancelled` for its
+- [x] `beginStream()` cancels any active command (emits `EVT cancelled` for its
       corrId) before seeding the BVC.
-- [ ] `beginRawVelocity()` cancels any active command before proceeding.
-- [ ] `beginTimed()` cancels any active command before calling `configure()`.
-- [ ] `beginDistance()` cancels any active command before calling `configure()`
+- [x] `beginRawVelocity()` cancels any active command before proceeding.
+- [x] `beginTimed()` cancels any active command before calling `configure()`.
+- [x] `beginDistance()` cancels any active command before calling `configure()`
       (note: this is in addition to the `resetEncoders()` call from ticket 001).
-- [ ] New sim regression test (P1.1 verify scenario): start TURN, inject `S 0 0`
+- [x] New sim regression test (P1.1 verify scenario): start TURN, inject `S 0 0`
       mid-turn on the queue path — TURN completes at the commanded heading; no BVC
       jump; `EVT cancelled` is emitted for the TURN's corrId.
-- [ ] New sim test: G preempted by T — host receives `EVT cancelled` for the G's
+- [x] New sim test: G preempted by T — host receives `EVT cancelled` for the G's
       corrId before any T-related event.
-- [ ] No regression in existing motion preemption tests.
-- [ ] `python3 build.py` clean build passes.
-- [ ] `uv run --with pytest python -m pytest host_tests/ host/tests/` passes.
+- [x] No regression in existing motion preemption tests.
+- [x] `python3 build.py` clean build passes.
+- [x] `uv run --with pytest python -m pytest host_tests/ host/tests/` passes.
 
 ## Implementation Plan
 
