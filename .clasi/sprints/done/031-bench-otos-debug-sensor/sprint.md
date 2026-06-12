@@ -1,9 +1,13 @@
 ---
 id: '031'
 title: Bench OTOS debug sensor
-status: ticketing
+status: done
 branch: sprint/031-bench-otos-debug-sensor
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
 issues:
 - bench-otos-synthetic-otos-sensor-for-full-stack-bench-testing.md
 ---
