@@ -21,7 +21,8 @@ file(GLOB ROBOT_SOURCES   "${REPO_ROOT}/source/robot/*.cpp")
 file(GLOB MOCK_SOURCES    "${REPO_ROOT}/source/hal/mock/*.cpp")
 
 # Exclude files that require CODAL types that can't be stubbed at file level.
-list(FILTER APP_SOURCES     EXCLUDE REGEX ".*/DebugCommandable\\.cpp$")
+# DebugCommandable.cpp now guards all CODAL-dependent includes/handlers with
+# #ifndef HOST_BUILD so it can be compiled in the host build.
 list(FILTER APP_SOURCES     EXCLUDE REGEX ".*/WedgeTest\\.cpp$")
 list(FILTER CONTROL_SOURCES EXCLUDE REGEX ".*/LoopScheduler\\.cpp$")
 

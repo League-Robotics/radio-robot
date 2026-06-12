@@ -9,6 +9,7 @@
 #include "robot/Robot.h"
 #include "app/CommandProcessor.h"
 #include "app/CommandQueue.h"
+#include "app/DebugCommandable.h"
 #include "hal/mock/MockHAL.h"
 #include "hal/mock/MockMotor.h"
 #include "hal/mock/MockOtosSensor.h"
@@ -90,6 +91,10 @@ struct SimHandle {
     RobotConfig      cfg;
     Robot            robot;
     CommandQueue     _queue;
+    // DebugCommandable wired with robot; sched and bus are nullptr in sim.
+    // CODAL-dependent handlers (DBG WEDGE, I2CW, etc.) reply ERR noimpl in
+    // HOST_BUILD.  DBG OTOS BENCH and DBG OTOS work via HOST_BUILD paths.
+    DebugCommandable dbg;
     CommandProcessor cmd;
     ReplyStore       replyStore;
 
@@ -109,7 +114,8 @@ struct SimHandle {
         , cfg(defaultRobotConfig())
         , robot(hal, cfg)
         , _queue()
-        , cmd(robot.buildCommandTable(nullptr, nullptr))
+        , dbg(DbgCtx{nullptr, nullptr, &robot})
+        , cmd(robot.buildCommandTable(&dbg, nullptr))
         , benchOtos()
     {
         // Initialize the bench OTOS sensor (sets _initialized = true; no I2C).

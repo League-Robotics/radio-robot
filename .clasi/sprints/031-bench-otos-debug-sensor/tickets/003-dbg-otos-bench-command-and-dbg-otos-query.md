@@ -1,11 +1,14 @@
 ---
-id: "003"
-title: "DBG OTOS BENCH command and DBG OTOS query"
-status: open
-use-cases: [SUC-001, SUC-003]
-depends-on: ["031-002"]
-github-issue: ""
-issue: ""
+id: '003'
+title: DBG OTOS BENCH command and DBG OTOS query
+status: done
+use-cases:
+- SUC-001
+- SUC-003
+depends-on:
+- 031-002
+github-issue: ''
+issue: ''
 completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -57,15 +60,15 @@ check actual field names before writing).
 
 ## Acceptance Criteria
 
-- [ ] `DBG OTOS BENCH 1` reply is `OK dbg otos bench=1`.
-- [ ] `DBG OTOS BENCH 0` reply is `OK dbg otos bench=0`.
-- [ ] `DBG OTOS BENCH 1 noiseXY=0.5 noiseH=0.01 drift=0.001` is accepted;
+- [x] `DBG OTOS BENCH 1` reply is `OK dbg otos bench=1`.
+- [x] `DBG OTOS BENCH 0` reply is `OK dbg otos bench=0`.
+- [x] `DBG OTOS BENCH 1 noiseXY=0.5 noiseH=0.01 drift=0.001` is accepted;
   noise params updated (verify via subsequent `DBG OTOS` showing non-zero
   errored vs ideal after a drive tick).
-- [ ] `DBG OTOS` reply contains `ideal=`, `otos=`, and `fused=` fields.
-- [ ] `"DBG OTOS BENCH"` appears before `"DBG OTOS"` in the command table.
-- [ ] `python3 build.py` clean build passes.
-- [ ] `uv run --with pytest python -m pytest host_tests/ host/tests/` passes.
+- [x] `DBG OTOS` reply contains `ideal=`, `otos=`, and `fused=` fields.
+- [x] `"DBG OTOS BENCH"` appears before `"DBG OTOS"` in the command table.
+- [x] `python3 build.py` clean build passes.
+- [x] `uv run --with pytest python -m pytest host_tests/ host/tests/` passes.
 
 ## Implementation Plan
 
