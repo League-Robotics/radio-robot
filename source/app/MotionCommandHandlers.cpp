@@ -905,8 +905,31 @@ static void handleVW(const ArgList& args, const char* corrId,
         // D11: no replyOK here — handleS already replied before pushing this VW.
         return;
     } else if (ctx->mc->hasActiveCommand()) {
-        // Keepalive re-send: update target and re-arm TIME baseline.
-        ctx->mc->activeCmd().setTarget((float)v, omega_rads);
+        // D6 origin guard: only update the target when the active command is a
+        // VW-origin command.  Any other origin (TURN, G, T, D, R, RT) means a
+        // non-VW command is running; calling setTarget(0,0) here would corrupt
+        // its target (e.g. zero omega on an active TURN stops the rotation
+        // prematurely and silently corrupts navigation).
+        //
+        // For non-VW origins: reset the system watchdog by returning a busy
+        // reply and do NOT call setTarget.
+        if (ctx->mc->activeCmd().origin() == MotionCommand::Origin::VW) {
+            // VW keepalive: update target and re-arm.
+            ctx->mc->activeCmd().setTarget((float)v, omega_rads);
+        } else {
+            // Non-VW command active: reply busy, do not stomp target.
+            static const char* kOriginNames[] = {
+                "VW", "TURN", "G", "T", "D", "R", "RT"
+            };
+            int originIdx = static_cast<int>(ctx->mc->activeCmd().origin());
+            const char* originName = (originIdx >= 0 && originIdx < 7)
+                                     ? kOriginNames[originIdx] : "?";
+            char rbuf[64];
+            char body[32];
+            snprintf(body, sizeof(body), "busy=%s", originName);
+            CommandProcessor::replyOK(rbuf, sizeof(rbuf), "vw", body, corrId, replyFn, replyCtx);
+            return;
+        }
     } else {
         // New VW command: configure MotionCommand from scratch.
         ctx->mc->beginVelocity((float)v, omega_rads, now,

@@ -140,14 +140,6 @@ def test_direct_vw_replies_once(sim):
 # When fixed, the robot will reach ~90 degrees and this test will pass.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "D6 not fixed (sprint 026): VW 0 0 keepalive stomps active TURN via "
-        "MotionCommand::setTarget(0,0), halting rotation prematurely. "
-        "Fix target: sprint 027."
-    ),
-)
 def test_d6_cannot_stomp_turn(sim):
     """TURN 9000 reaches target heading (≥72 deg) despite mid-turn VW 0 0 keepalive.
 

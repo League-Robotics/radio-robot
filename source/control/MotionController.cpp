@@ -193,6 +193,7 @@ void MotionController::beginVelocity(float v_mms, float omega_rads, uint32_t now
     //   - No reply sink needed — VW has no correlated EVT done; system watchdog
     //     emits EVT safety_stop directly.
     _activeCmd.configure(v_mms, omega_rads, &_bvc);
+    _activeCmd.setOrigin(MotionCommand::Origin::VW);
     // No addStop: system watchdog in LoopScheduler owns keepalive enforcement.
     _activeCmd.setReplySink(fn, ctx, corr_id);
     _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
@@ -235,6 +236,7 @@ void MotionController::beginArc(float speedMms, float radiusMm, uint32_t now_ms,
     //   - EVT "EVT done R" on normal (SOFT ramp-down) completion.
     //   - Reply sink for async EVT delivery.
     _activeCmd.configure(speedMms, omega, &_bvc);
+    _activeCmd.setOrigin(MotionCommand::Origin::R);
     // No addStop: open-ended arc; keepalive via X or R 0 r.
     _activeCmd.setReplySink(fn, ctx, corr_id);
     _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
@@ -271,6 +273,7 @@ void MotionController::beginTimed(float leftMms, float rightMms,
     //   - EVT "EVT done T" on completion (preserves wire contract).
     //   - Reply sink for async EVT delivery.
     _activeCmd.configure(v_mms, omega_rads, &_bvc);
+    _activeCmd.setOrigin(MotionCommand::Origin::T);
     _activeCmd.addStop(makeTimeStop((float)durationMs));
     _activeCmd.setReplySink(fn, ctx, corr_id);
     _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
@@ -332,6 +335,7 @@ void MotionController::beginDistance(float leftMms, float rightMms,
     //   - EVT "EVT done D" on completion (preserves wire contract).
     //   - Reply sink for async EVT delivery.
     _activeCmd.configure(v_mms, omega_rads, &_bvc);
+    _activeCmd.setOrigin(MotionCommand::Origin::D);
     _activeCmd.addStop(makeDistanceStop((float)targetMm));
     _activeCmd.addStop(makeTimeStop(timeoutMs));
     _activeCmd.setReplySink(fn, ctx, corr_id);
@@ -434,6 +438,7 @@ void MotionController::beginGoTo(float tx, float ty, float speedMms, uint32_t no
         // On TIME net expiry (runaway), driveAdvance emits "EVT done G" directly
         // via target.replyFn so the caller gets a clean terminal event.
         _activeCmd.configure(0.0f, omega, &_bvc);
+        _activeCmd.setOrigin(MotionCommand::Origin::G);
         _activeCmd.addStop(makeHeadingStop(bearingSigned, gateRad));
         _activeCmd.addStop(makeTimeStop(timeoutMs));
         // No setReplySink: EVT emission is handled by driveAdvance on termination.
@@ -461,6 +466,7 @@ void MotionController::beginGoTo(float tx, float ty, float speedMms, uint32_t no
         }
 
         _activeCmd.configure(_gSpeed, 0.0f, &_bvc);
+        _activeCmd.setOrigin(MotionCommand::Origin::G);
         _activeCmd.addStop(makePositionStop(_gTargetXWorld, _gTargetYWorld, _cfg.arriveTolMm));
         _activeCmd.addStop(makeTimeStop(pursueTimeoutMs));
         _activeCmd.setReplySink(fn, ctx, corr_id);
@@ -524,6 +530,7 @@ void MotionController::beginTurn(float headingCdeg, float epsCdeg, uint32_t now_
     //   - EVT "EVT done TURN" on arrival.
     //   - Reply sink for async EVT delivery.
     _activeCmd.configure(0.0f, omega, &_bvc);
+    _activeCmd.setOrigin(MotionCommand::Origin::TURN);
     _activeCmd.addStop(makeHeadingStop(delta_rad, eps_rad));
     // Safety time-out net (mirrors beginDistance): a TURN must NEVER run away if
     // the HEADING stop never fires — e.g. odometry heading not advancing because
@@ -592,6 +599,7 @@ void MotionController::beginRotation(float relCdeg, uint32_t now_ms,
     _checkSafeOneShot(fn, ctx);
 
     _activeCmd.configure(0.0f, omega, &_bvc);
+    _activeCmd.setOrigin(MotionCommand::Origin::RT);
     _activeCmd.addStop(makeRotationStop(stopArc));         // primary: encoder arc
 
     // Tight time bound (runaway guard): nominal spin time = arc / wheel-linear-

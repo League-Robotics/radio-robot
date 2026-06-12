@@ -1,11 +1,11 @@
 ---
 id: '003'
-title: "D6: handleVW Origin guard — keepalives must not stomp active commands"
-status: open
+title: "D6: handleVW Origin guard \u2014 keepalives must not stomp active commands"
+status: done
 use-cases:
-  - SUC-003
+- SUC-003
 depends-on:
-  - "027-001"
+- 027-001
 github-issue: ''
 issue: d06-keepalive-must-not-mutate-active-command.md
 completes_issue: true
@@ -34,10 +34,10 @@ instead. Verify the file location before starting implementation.
 
 ## Acceptance Criteria
 
-- [ ] `MotionCommand::Origin` enum added to `source/control/MotionCommand.h`
+- [x] `MotionCommand::Origin` enum added to `source/control/MotionCommand.h`
       with values: `VW`, `TURN`, `G`, `T`, `D`, `R`, `RT`.
-- [ ] `setOrigin(Origin)` and `origin()` accessors added to `MotionCommand`.
-- [ ] Each `begin*()` method in `MotionController` calls `_activeCmd.setOrigin(X)`:
+- [x] `setOrigin(Origin)` and `origin()` accessors added to `MotionCommand`.
+- [x] Each `begin*()` method in `MotionController` calls `_activeCmd.setOrigin(X)`:
   - `beginVelocity` sets `Origin::VW`
   - `beginTurn` sets `Origin::TURN`
   - `beginGoTo` sets `Origin::G` (both PRE_ROTATE and PURSUE configure paths)
@@ -45,17 +45,17 @@ instead. Verify the file location before starting implementation.
   - `beginDistance` sets `Origin::D`
   - `beginArc` sets `Origin::R`
   - `beginRotation` sets `Origin::RT`
-- [ ] In `handleVW` no-stop-params branch: only call `setTarget(v, ω)` when
+- [x] In `handleVW` no-stop-params branch: only call `setTarget(v, ω)` when
       `activeCmd().origin() == Origin::VW`; for any other origin, reply
       `OK vw busy=<origin_name>` and do NOT call `setTarget`.
-- [ ] `protocol.py` docstrings for `vw()` and `drive()` updated to remove the
+- [x] `protocol.py` docstrings for `vw()` and `drive()` updated to remove the
       recommendation to use `VW`/`S` as keepalives during non-VW commands.
-- [ ] `test_d6_cannot_stomp_turn` in `host_tests/test_vw_converters.py`
+- [x] `test_d6_cannot_stomp_turn` in `host_tests/test_d11_gate.py`
       promoted from xfail to passing (remove the xfail mark; test passes).
-- [ ] `test_scenario_keepalive_kills_turn` in `host_tests/test_incident_scenarios.py`
+- [x] `test_scenario_keepalive_kills_turn` in `host_tests/test_incident_scenarios.py`
       promoted from xfail to passing (remove the xfail mark).
-- [ ] All `host_tests/` and `host/tests/` pass.
-- [ ] Firmware builds clean; `--clean` build before bench.
+- [x] All `host_tests/` and `host/tests/` pass.
+- [x] Firmware builds clean; `--clean` build before bench.
 
 ## Implementation Plan
 

@@ -220,15 +220,6 @@ def test_scenario_turn_under_rotate(sim_field_profile):
 # either the test is wrong or the defect was silently fixed.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "D6 not fixed (sprint 027-003): VW 0 0 keepalive calls setTarget(0,0) on "
-        "the active TURN, zeroing omega and stopping the rotation prematurely. "
-        "The TURN fires via TIME net at the wrong heading. "
-        "Fix target: sprint 027-003."
-    ),
-)
 def test_scenario_keepalive_kills_turn(sim):
     """TURN 9000 reaches ≥ 85° despite a VW 0 0 keepalive injected mid-flight.
 

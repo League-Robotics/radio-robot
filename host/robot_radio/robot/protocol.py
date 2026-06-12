@@ -433,7 +433,7 @@ class NezhaProtocol:
 
     def vw(self, v_mms: int, omega_mrads: int,
            corr_id: str | None = None) -> None:
-        """Send VW keepalive — sets body-twist velocity, resets watchdog.
+        """Send a VW command — sets body-twist velocity, resets system watchdog.
 
         Format: VW <v> <omega_mrads> [#id]
         - ``v_mms``: forward speed in mm/s (−1000 … +1000).
@@ -445,6 +445,13 @@ class NezhaProtocol:
         rate without blocking.  The firmware echoes ``OK vw v=… omega=…``
         synchronously, but callers driving at high frequency typically ignore
         the per-frame reply.
+
+        **Do not use VW as a keepalive during non-VW commands (TURN, G, T,
+        D, R, RT).**  Since firmware 027-003, the firmware detects an active
+        non-VW command and replies ``OK vw busy=<origin>`` without updating
+        the command target, so a ``VW 0 0`` keepalive will NOT reset the
+        watchdog for those commands.  Non-VW commands have a built-in TIME
+        stop net and do not require keepalives.
         """
         if corr_id is not None:
             self._conn.send_fast(f"VW {v_mms} {omega_mrads} #{corr_id}")
@@ -452,9 +459,15 @@ class NezhaProtocol:
             self._conn.send_fast(f"VW {v_mms} {omega_mrads}")
 
     def drive(self, left_mms: int, right_mms: int) -> None:
-        """Send S keepalive — sets streaming wheel speeds, resets watchdog.
+        """Send an S streaming command — sets streaming wheel speeds, resets watchdog.
 
         Format: S <l> <r>  (space-separated integers, literal mm/s)
+
+        **Do not use S as a keepalive during non-VW commands (TURN, G, T,
+        D, R, RT).**  S converts to a VW command internally; since firmware
+        027-003 the firmware detects an active non-VW command and replies
+        ``OK vw busy=<origin>`` without updating the command target.  Non-VW
+        commands have a built-in TIME stop net and do not require keepalives.
         """
         self._conn.send_fast(f"S {left_mms} {right_mms}")
 
