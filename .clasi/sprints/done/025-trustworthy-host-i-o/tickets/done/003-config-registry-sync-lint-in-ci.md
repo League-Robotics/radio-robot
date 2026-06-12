@@ -1,9 +1,9 @@
 ---
 id: '003'
 title: Config registry sync lint in CI
-status: open
+status: done
 use-cases:
-  - SUC-003
+- SUC-003
 depends-on: []
 github-issue: ''
 issue: a8-config-registry-sync-lint.md
@@ -103,19 +103,22 @@ is pure Python parsing and can run on `ubuntu-latest` without the ARM toolchain.
 
 ## Acceptance Criteria
 
-- [ ] `scripts/check_config_sync.py` exists and is runnable via
+- [x] `scripts/check_config_sync.py` exists and is runnable via
       `python scripts/check_config_sync.py` from the repo root.
-- [ ] Script reports `in-struct-not-registered`, `registered-not-in-struct`,
+- [x] Script reports `in-struct-not-registered`, `registered-not-in-struct`,
       and `registered-not-used` categories separately.
-- [ ] Script exits 0 when all offenders are resolved or allowlisted.
-- [ ] Script exits 1 when a new unregistered field is added to `Config.h`
+- [x] Script exits 0 when all offenders are resolved or allowlisted.
+- [x] Script exits 1 when a new unregistered field is added to `Config.h`
       (verified by a local dry-run adding a test field and running the script).
-- [ ] `safetyEnabled`, `tlmFields`, `tlmSnapPending` are either registered or
+- [x] `safetyEnabled`, `tlmFields`, `tlmSnapPending` are either registered or
       in the allowlist with a justification comment.
-- [ ] `turnScale` and `distScale` are either removed from `ConfigRegistry.cpp`
+- [x] `turnScale` and `distScale` are either removed from `ConfigRegistry.cpp`
       (if confirmed unread) or their usage is confirmed and documented.
-- [ ] CI job runs the lint on every PR and fails on drift.
-- [ ] No existing tests broken: `uv run --with pytest python -m pytest -q tests/dev/`
+      (Confirmed absent from ConfigRegistry.cpp; test_config_registry.py
+      confirms they were removed in sprint 024-006 as dead keys. No source/
+      references found outside Config.h comments.)
+- [x] CI job runs the lint on every PR and fails on drift.
+- [x] No existing tests broken: `uv run --with pytest python -m pytest -q tests/dev/`
 
 ## Implementation Plan
 

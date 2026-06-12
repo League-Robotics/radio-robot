@@ -7,6 +7,31 @@ on:
     branches: '*'
 
 jobs:
+  config-registry-sync:
+    runs-on: ubuntu-latest
+    name: Config registry sync lint (check_config_sync.py)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check config registry sync
+        run: python scripts/check_config_sync.py
+
+  host-transport-boundary:
+    runs-on: ubuntu-22.04
+    name: Host transport boundary (_ser must not escape serial_conn.py)
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce _ser encapsulation
+        run: |
+          result=$(grep -rn '\b_ser\b' host/robot_radio | grep -v 'io/serial_conn.py' || true)
+          if [ -n "$result" ]; then
+            echo "Transport boundary violation: _ser accessed outside io/serial_conn.py"
+            echo "$result"
+            exit 1
+          fi
+
   build-py-script:
     strategy:
       matrix:

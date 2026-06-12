@@ -1,9 +1,9 @@
 ---
 id: '001'
-title: "Reader thread demux — stop clearing input buffer on send"
-status: open
+title: "Reader thread demux \u2014 stop clearing input buffer on send"
+status: done
 use-cases:
-  - SUC-001
+- SUC-001
 depends-on: []
 github-issue: ''
 issue: d11a-serial-conn-stops-eating-input-buffer.md
@@ -105,20 +105,20 @@ Add `handshake(line: bytes) -> None`:
 
 ## Acceptance Criteria
 
-- [ ] `send()` contains no `reset_input_buffer()` call.
-- [ ] A reader thread is started by `connect()` after `_poll_ready` returns and
+- [x] `send()` contains no `reset_input_buffer()` call.
+- [x] A reader thread is started by `connect()` after `_poll_ready` returns and
       stopped by `disconnect()`.
-- [ ] `read_lines()` reads from `_tlm_queue` and `_evt_queue`; does not call
+- [x] `read_lines()` reads from `_tlm_queue` and `_evt_queue`; does not call
       `_ser.readline()`.
-- [ ] `read_pending_lines()` exists and performs a non-blocking drain of both
+- [x] `read_pending_lines()` exists and performs a non-blocking drain of both
       queues.
-- [ ] `handshake(line: bytes)` exists and writes a raw line under `_write_lock`.
-- [ ] Reader correctly routes TLM to `_tlm_queue`, EVT to `_evt_queue`, OK/ERR
+- [x] `handshake(line: bytes)` exists and writes a raw line under `_write_lock`.
+- [x] Reader correctly routes TLM to `_tlm_queue`, EVT to `_evt_queue`, OK/ERR
       to the corr-id keyed queue, keepalive acks to nowhere.
-- [ ] Concurrent `send()` calls do not receive each other's replies (each has
+- [x] Concurrent `send()` calls do not receive each other's replies (each has
       its own queue entry keyed by corr-id).
-- [ ] Unit tests in `tests/dev/test_serial_conn_reader.py` all pass.
-- [ ] All existing tests pass: `uv run --with pytest python -m pytest -q tests/dev/`
+- [x] Unit tests in `tests/dev/test_serial_conn_reader.py` all pass.
+- [x] All existing tests pass: `uv run --with pytest python -m pytest -q tests/dev/`
 
 ## Implementation Plan
 
