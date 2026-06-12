@@ -31,8 +31,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import pathlib
 import sys
 import time
+
+_BENCH = pathlib.Path(__file__).resolve().parent
+if str(_BENCH) not in sys.path:
+    sys.path.insert(0, str(_BENCH))
+from bench_safety import BenchRun  # noqa: E402
 
 DEFAULT_PLAYFIELD = "/Volumes/Proj/proj/RobotProjects/AprilTags/data/aprilcam/playfield.json"
 ROBOT_TAG_ID = 100
@@ -225,116 +231,117 @@ def main() -> int:
 
     status = "?"
     try:
-        proto.send(f"SET sTimeout={S_TIMEOUT_MS}", 200)
+        with BenchRun(proto, max_seconds=int(args.timeout) + 60):
+            proto.send(f"SET sTimeout={S_TIMEOUT_MS}", 200)
 
-        # ---- 0) MEASURE forward heading with a small straight nudge ----
-        p0 = read_pose(dc, cam, 1.5)
-        if p0 is None:
-            raise RuntimeError("lost tag before nudge")
-        x0, y0, _ = p0
-        proto.drive(NUDGE_SPEED, NUDGE_SPEED)
-        t = time.monotonic()
-        while time.monotonic() - t < NUDGE_DT:
+            # ---- 0) MEASURE forward heading with a small straight nudge ----
+            p0 = read_pose(dc, cam, 1.5)
+            if p0 is None:
+                raise RuntimeError("lost tag before nudge")
+            x0, y0, _ = p0
             proto.drive(NUDGE_SPEED, NUDGE_SPEED)
-            time.sleep(0.1)
-        stop_all()
-        time.sleep(0.25)
-        p1 = read_pose(dc, cam, 1.5)
-        if p1 is None:
-            raise RuntimeError("lost tag after nudge")
-        x1, y1, _ = p1
-        moved = math.hypot(x1 - x0, y1 - y0)
-        if moved < NUDGE_MIN_CM:
-            status = "NO_MOVE"
-            raise RuntimeError(f"nudge moved only {moved:.1f}cm — motors/relay?")
-        fwd = math.atan2(y1 - y0, x1 - x0)   # MEASURED forward heading (world)
-        print(f"measured forward heading = {math.degrees(fwd):+.0f}° "
-              f"(nudge {moved:.1f}cm)")
-
-        # ---- main loop: turn-to-face, then straight segment, re-check ----
-        t_start = time.monotonic()
-        last_seen = time.monotonic()
-        min_dist = dist0
-        wrongway = 0
-        rx, ry = x1, y1
-        while True:
-            now = time.monotonic()
-            if now - t_start > args.timeout:
-                status = "TIMEOUT"
-                break
-            p = read_pose(dc, cam, 0.12)
-            if p is None:
-                stop_all()
-                if now - last_seen > LOST_ABORT_S:
-                    status = "CAMERA_LOST"
-                    break
-                continue
-            last_seen = now
-            rx, ry, cyaw = p
-            dist = math.hypot(tx - rx, ty - ry)
-            bearing = math.atan2(ty - ry, tx - rx)
-            err = wrap(bearing - fwd)
-            draw(dc, cam, rx, ry, fwd, tx, ty)
-
-            if dist <= args.arrive:
-                status = "ARRIVED"
-                break
-            if not in_fence(rx, ry, fence):
-                status = "GEOFENCE"
-                break
-            min_dist = min(min_dist, dist)
-            wrongway = wrongway + 1 if dist > min_dist + 8.0 else 0
-            if wrongway >= 4:
-                status = "DIVERGING"
-                break
-
-            # 1) face the target if we're off by more than the tolerance
-            if abs(err) > math.radians(FACE_TOL_DEG):
-                print(f"  turn {math.degrees(err):+.0f}° to face (dist {dist:.0f}cm)")
-                turn_in_place(math.degrees(err))
-                fwd = wrap(fwd + err)        # predicted; corrected by the next segment
-                continue
-
-            # 2) drive a straight segment toward the target
-            v = v_for_dist(dist, args.speed)
-            sx, sy = rx, ry
-            seg_t = time.monotonic()
-            broke = None
-            while time.monotonic() - seg_t < SEG_DT:
-                proto.drive(int(v), int(v))      # straight: equal wheels
-                time.sleep(CAM_POLL_S)
-                p = read_pose(dc, cam, 0.08)
-                if p is not None:
-                    last_seen = time.monotonic()
-                    rx, ry, cyaw = p
-                    draw(dc, cam, rx, ry, fwd, tx, ty)
-                    if math.hypot(tx - rx, ty - ry) <= args.arrive:
-                        broke = "ARRIVED"
-                        break
-                    if not in_fence(rx, ry, fence):
-                        broke = "GEOFENCE"
-                        break
+            t = time.monotonic()
+            while time.monotonic() - t < NUDGE_DT:
+                proto.drive(NUDGE_SPEED, NUDGE_SPEED)
+                time.sleep(0.1)
             stop_all()
-            time.sleep(0.12)
-            # re-measure forward heading from the segment displacement (if useful)
-            p = read_pose(dc, cam, 0.8)
-            if p is not None:
-                rx, ry, cyaw = p
-                if math.hypot(rx - sx, ry - sy) > 2.0:
-                    fwd = math.atan2(ry - sy, rx - sx)
-            if broke in ("ARRIVED", "GEOFENCE"):
-                status = broke
-                break
+            time.sleep(0.25)
+            p1 = read_pose(dc, cam, 1.5)
+            if p1 is None:
+                raise RuntimeError("lost tag after nudge")
+            x1, y1, _ = p1
+            moved = math.hypot(x1 - x0, y1 - y0)
+            if moved < NUDGE_MIN_CM:
+                status = "NO_MOVE"
+                raise RuntimeError(f"nudge moved only {moved:.1f}cm — motors/relay?")
+            fwd = math.atan2(y1 - y0, x1 - x0)   # MEASURED forward heading (world)
+            print(f"measured forward heading = {math.degrees(fwd):+.0f}° "
+                  f"(nudge {moved:.1f}cm)")
 
-        stop_all()
-        time.sleep(0.3)
-        p = read_pose(dc, cam, 1.0)
-        if p is not None:
-            rx, ry, _ = p
-            d = math.hypot(tx - rx, ty - ry)
-            print(f"[{status}] final: robot ({rx:+.0f},{ry:+.0f}) cm  {d:.1f}cm from {tname}")
-        else:
-            print(f"[{status}] (no final camera fix)")
+            # ---- main loop: turn-to-face, then straight segment, re-check ----
+            t_start = time.monotonic()
+            last_seen = time.monotonic()
+            min_dist = dist0
+            wrongway = 0
+            rx, ry = x1, y1
+            while True:
+                now = time.monotonic()
+                if now - t_start > args.timeout:
+                    status = "TIMEOUT"
+                    break
+                p = read_pose(dc, cam, 0.12)
+                if p is None:
+                    stop_all()
+                    if now - last_seen > LOST_ABORT_S:
+                        status = "CAMERA_LOST"
+                        break
+                    continue
+                last_seen = now
+                rx, ry, cyaw = p
+                dist = math.hypot(tx - rx, ty - ry)
+                bearing = math.atan2(ty - ry, tx - rx)
+                err = wrap(bearing - fwd)
+                draw(dc, cam, rx, ry, fwd, tx, ty)
+
+                if dist <= args.arrive:
+                    status = "ARRIVED"
+                    break
+                if not in_fence(rx, ry, fence):
+                    status = "GEOFENCE"
+                    break
+                min_dist = min(min_dist, dist)
+                wrongway = wrongway + 1 if dist > min_dist + 8.0 else 0
+                if wrongway >= 4:
+                    status = "DIVERGING"
+                    break
+
+                # 1) face the target if we're off by more than the tolerance
+                if abs(err) > math.radians(FACE_TOL_DEG):
+                    print(f"  turn {math.degrees(err):+.0f}° to face (dist {dist:.0f}cm)")
+                    turn_in_place(math.degrees(err))
+                    fwd = wrap(fwd + err)        # predicted; corrected by the next segment
+                    continue
+
+                # 2) drive a straight segment toward the target
+                v = v_for_dist(dist, args.speed)
+                sx, sy = rx, ry
+                seg_t = time.monotonic()
+                broke = None
+                while time.monotonic() - seg_t < SEG_DT:
+                    proto.drive(int(v), int(v))      # straight: equal wheels
+                    time.sleep(CAM_POLL_S)
+                    p = read_pose(dc, cam, 0.08)
+                    if p is not None:
+                        last_seen = time.monotonic()
+                        rx, ry, cyaw = p
+                        draw(dc, cam, rx, ry, fwd, tx, ty)
+                        if math.hypot(tx - rx, ty - ry) <= args.arrive:
+                            broke = "ARRIVED"
+                            break
+                        if not in_fence(rx, ry, fence):
+                            broke = "GEOFENCE"
+                            break
+                stop_all()
+                time.sleep(0.12)
+                # re-measure forward heading from the segment displacement (if useful)
+                p = read_pose(dc, cam, 0.8)
+                if p is not None:
+                    rx, ry, cyaw = p
+                    if math.hypot(rx - sx, ry - sy) > 2.0:
+                        fwd = math.atan2(ry - sy, rx - sx)
+                if broke in ("ARRIVED", "GEOFENCE"):
+                    status = broke
+                    break
+
+            stop_all()
+            time.sleep(0.3)
+            p = read_pose(dc, cam, 1.0)
+            if p is not None:
+                rx, ry, _ = p
+                d = math.hypot(tx - rx, ty - ry)
+                print(f"[{status}] final: robot ({rx:+.0f},{ry:+.0f}) cm  {d:.1f}cm from {tname}")
+            else:
+                print(f"[{status}] (no final camera fix)")
     finally:
         try:
             stop_all()

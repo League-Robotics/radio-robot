@@ -186,15 +186,62 @@ void Robot::controlCollectSplitPhase(uint32_t now_ms, int /*pendingWheel*/)
 void Robot::otosCorrect(uint32_t now_ms)
 {
     if (!otos.is_initialized()) return;
-    OtosPose p = otos.readTransformed(config);
+
+    // -----------------------------------------------------------------------
+    // D9 (027-005): OTOS STATUS register validity gate.
+    //
+    // Read REG_STATUS (0x1F) and check the most-recent I2C read flag before
+    // fusing into the EKF.  A lifted or just-placed robot reports a non-zero
+    // STATUS byte (tracking invalid).  Passing zero velocity to the EKF while
+    // the sensor is invalid drags fused velocity to zero and fights the
+    // controller — this was the root cause of the "spin on placement" symptom.
+    //
+    // EVT path (Open Question 3 resolution): we call
+    //   motionController.emitToActiveChannel("EVT otos lost", state.target)
+    // which wraps the existing static emitEvt(base, TargetState&) helper.
+    // Robot owns state.target and can pass it directly; no new reply-sink
+    // plumbing is required.  emitEvt routes via target.sink.emitFn — the
+    // reply channel captured when the active command (G/T/D/TURN) started.
+    // -----------------------------------------------------------------------
+    uint8_t otosStatus = 0;
+    bool statusOk = otos.readStatus(otosStatus);
+
+    if (!statusOk || otosStatus != 0 || !otos.lastReadOk()) {
+        // OTOS is invalid: do not fuse; mark the validity envelope.
+        state.inputs.otos.valid = false;
+
+        // Emit "EVT otos lost" exactly once per invalidity window,
+        // but only when a motion command is actively running (no point
+        // signalling on a parked robot).
+        if (motionController.hasActiveCommand()) {
+            if (_otosInvalidStartMs == 0) {
+                _otosInvalidStartMs = now_ms;
+            }
+            if (!_otosLostEmitted &&
+                ((now_ms - _otosInvalidStartMs) >= 500u)) {
+                motionController.emitToActiveChannel("EVT otos lost",
+                                                     state.target);
+                _otosLostEmitted = true;
+            }
+        }
+        return;
+    }
+
+    // OTOS valid: reset the invalidity tracking window.
+    _otosInvalidStartMs = 0;
+    _otosLostEmitted    = false;
+    state.inputs.otos.valid = true;
+
+    // Pass poseHrad for the lever-arm offset rotation (no-op when offsets are zero).
+    float headingRad = state.inputs.poseHrad;
+    OtosPose p = otos.readTransformed(config, headingRad);
     state.inputs.otosX = p.x;
     state.inputs.otosY = p.y;
     state.inputs.otosH = p.h;
     state.inputs.otos.lastUpdMs = now_ms;
-    state.inputs.otos.valid     = true;
 
     // Read OTOS velocity and acceleration; store acceleration for telemetry.
-    OtosVelocity vel = otos.readVelocityTransformed(config);
+    OtosVelocity vel = otos.readVelocityTransformed(config, headingRad);
     OtosAccel    acc = otos.readAccelTransformed(config);
     state.inputs.otosAccelX = acc.ax_mmps2;
     state.inputs.otosAccelY = acc.ay_mmps2;

@@ -23,9 +23,14 @@ struct RobotConfig;
 class MockOtosSensor : public IOtosSensor {
 public:
     // IOtosSensor interface --------------------------------------------------
-    OtosPose readTransformed(const RobotConfig& cfg) const override;
-    OtosVelocity readVelocityTransformed(const RobotConfig& cfg) const override;
+    OtosPose readTransformed(const RobotConfig& cfg, float headingRad = 0.0f) const override;
+    OtosVelocity readVelocityTransformed(const RobotConfig& cfg, float headingRad = 0.0f) const override;
     OtosAccel readAccelTransformed(const RobotConfig& cfg) const override;
+
+    // D9: STATUS register and lastReadOk.
+    // Mock always returns success (statusOut=0, valid) so existing tests pass.
+    bool readStatus(uint8_t& out) const override { out = 0; return true; }
+    bool lastReadOk() const override { return true; }
 
     void init() override {}
     void calibrateImu(uint8_t samples) override { (void)samples; }

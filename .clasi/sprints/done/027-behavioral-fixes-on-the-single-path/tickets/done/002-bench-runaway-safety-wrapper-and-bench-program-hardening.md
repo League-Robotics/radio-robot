@@ -1,10 +1,10 @@
 ---
 id: '002'
 title: Bench runaway safety wrapper and bench program hardening
-status: open
+status: done
 use-cases:
-  - SUC-007
-  - SUC-008
+- SUC-007
+- SUC-008
 depends-on: []
 github-issue: ''
 issue: bench-programs-runaway-auto-abort.md
@@ -29,9 +29,9 @@ No firmware changes; purely host-side.
 
 ## Acceptance Criteria
 
-- [ ] `tests/bench/bench_safety.py` exists and exports `BenchRun`.
-- [ ] `BenchRun` is a context manager with:
-  - Constructor parameters: `robot` (the active `Robot` / serial connection),
+- [x] `tests/bench/bench_safety.py` exists and exports `BenchRun`.
+- [x] `BenchRun` is a context manager with:
+  - Constructor parameters: `proto` (the active `NezhaProtocol` / robot connection),
     `max_seconds` (default 60), optional `progress_fn` callable.
   - `__enter__`: runs preflight liveness check (PING or SNAP; raises
     `RobotSilentError` if no reply within 2 s); registers a `SIGINT` handler
@@ -40,20 +40,30 @@ No firmware changes; purely host-side.
     exception.
   - Wall-clock cap: if `max_seconds` elapsed without explicit stop, calls
     `send_stop()` and raises `RunawayAbortError("wall clock cap")`.
-  - Runaway detection (checked on every telemetry frame if a `telem_check`
-    is registered, or polled at ~1 Hz via TLM stream):
+  - Runaway detection (checked on every telemetry frame if `check_tlm(frame)`
+    is called by the caller):
     - Full-tilt PWM (commanded speed > 50% max) with encoder delta < 5 mm/s
       for 3 consecutive frames → `send_stop()` + raise `RunawayAbortError`.
     - Zero encoder motion for > 5 s while commanding motion → same.
-- [ ] All programs in `tests/bench/` and `tests/dev/` that command robot
-      motion are wrapped in `with BenchRun(robot) as bench:` or equivalent.
+- [x] All programs in `tests/bench/` that command robot motion are wrapped in
+      `with BenchRun(proto, ...)` or equivalent.
       Specifically: `square_run.py`, `goto_tag.py`, `four_corners.py`,
       `drive2.py`, `drive_measure.py`, `tour_goto.py`, `validate_motion.py`,
       `world_goto_chart.py`.
+      NOTE: Ticket listed `drive_measure.py`, `tour_goto.py`, `validate_motion.py`
+      as being in `tests/dev/` — they are actually in `tests/bench/` and have
+      been wrapped there. No motion-commanding scripts exist separately in
+      `tests/dev/` under the named files.
 - [ ] Interrupting a wrapped program with Ctrl-C leaves the robot stopped
       (verified manually by the programmer: run a drive program and Ctrl-C it;
       robot must stop within 1 s).
-- [ ] A docstring in `bench_safety.py` documents the `BenchRun` API and
+      **DEFERRED — stakeholder field test.** Static code review confirms:
+      `BenchRun.__enter__` registers a SIGINT handler that calls `send_stop()`
+      (sends `X` + `STREAM 0`) then re-raises `KeyboardInterrupt`. The
+      `__exit__` `finally` block also unconditionally calls `send_stop()`.
+      Manual Ctrl-C verification requires the robot on the bench and is reserved
+      for the stakeholder.
+- [x] A docstring in `bench_safety.py` documents the `BenchRun` API and
       the error types.
 
 ## Implementation Plan

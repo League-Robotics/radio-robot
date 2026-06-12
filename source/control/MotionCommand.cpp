@@ -29,6 +29,7 @@ void MotionCommand::configure(float v_mms, float omega_rads, BodyVelocityControl
     _replyCtx        = nullptr;
     _corrId[0]       = '\0';
     _stopStyle       = StopStyle::SOFT;
+    _origin          = Origin::VW;   // reset; caller must call setOrigin() to override
     _active          = false;
     _stopping        = false;
     _softDeadlineMs  = 0;

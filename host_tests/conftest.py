@@ -45,3 +45,21 @@ def sim(build_lib):
         # the safety-stop during tick_for loops that don't send keepalives.
         s.send_command("SET sTimeout=60000")
         yield s
+
+
+@pytest.fixture
+def sim_field_profile(build_lib):
+    """Create a Sim pre-configured with the field profile (turn slip + OTOS fusion).
+
+    Mirrors the ``sim`` fixture but additionally applies the field profile:
+    turn-slip over-report (slipTurnExtra = 0.26) and OTOS EKF fusion enabled.
+    Use this fixture for tests that must pass under field conditions.
+
+    The watchdog is extended to 60 s identically to the ``sim`` fixture.
+    """
+    from firmware import Sim  # noqa: PLC0415
+
+    with Sim() as s:
+        s.send_command("SET sTimeout=60000")
+        s.set_field_profile(slip_turn_extra=0.26, fuse_otos=True)
+        yield s

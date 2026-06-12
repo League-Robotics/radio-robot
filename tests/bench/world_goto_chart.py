@@ -41,9 +41,15 @@ import argparse
 import json
 import math
 import os
+import pathlib
 import sys
 import time
 from pathlib import Path
+
+_BENCH = pathlib.Path(__file__).resolve().parent
+if str(_BENCH) not in sys.path:
+    sys.path.insert(0, str(_BENCH))
+from bench_safety import BenchRun  # noqa: E402
 
 # --- A1-centred world-frame colours for the three estimate lines (RGB 0-255) --
 COL_CAMERA = [60, 220, 90]     # green  — ground truth
@@ -472,80 +478,81 @@ def run_cycle(args, dc, cam, proto, nezha, playfield, *, avoid_slug=None,
     t_start = time.monotonic()
 
     try:
-        # 5a. Pre-flight: nudge forward and confirm direction before committing.
-        ok, msg = preflight_nudge(proto, dc, cam, fence, args.nudge,
-                                  pump_telemetry, record_and_draw)
-        print(f"  nudge: {msg}")
-        if not ok:
-            status = "NUDGE_ABORT"
-            raise _AbortDrive()
+        with BenchRun(proto, max_seconds=int(args.timeout) + 60):
+            # 5a. Pre-flight: nudge forward and confirm direction before committing.
+            ok, msg = preflight_nudge(proto, dc, cam, fence, args.nudge,
+                                      pump_telemetry, record_and_draw)
+            print(f"  nudge: {msg}")
+            if not ok:
+                status = "NUDGE_ABORT"
+                raise _AbortDrive()
 
-        # 5b. Short re-checked hops toward the target. The robot never commits
-        #     to more than one hop; camera + geofence are checked throughout.
-        while time.monotonic() - t_start < args.timeout:
-            cp = read_cam_pose(dc, cam, timeout_s=CAM_LOSS)
-            if cp is None:
-                status = "CAMERA_LOST"
-                break
-            cx, cy, cyaw = cp
-            fwd = cyaw + math.pi / 2.0
-            pump_telemetry()
-            record_and_draw(cx, cy, fwd)
-
-            if not in_fence(cx, cy, fence):
-                status = "GEOFENCE"
-                break
-            dist = math.hypot(tx - cx, ty - cy)
-            if dist <= args.arrive:
-                status = "DONE"
-                break
-
-            # Plan a hop toward the target, clamped to stay inside the fence.
-            bearing = math.atan2(ty - cy, tx - cx)
-            hop = min(args.hop, dist)
-            hx, hy = cx + hop * math.cos(bearing), cy + hop * math.sin(bearing)
-            while hop > 2.0 and not in_fence(hx, hy, fence):
-                hop -= 2.0
-                hx, hy = cx + hop * math.cos(bearing), cy + hop * math.sin(bearing)
-            if hop <= 2.0:
-                status = "FENCE_LIMIT"
-                break
-
-            dxw, dyw = (hx - cx) * 10.0, (hy - cy) * 10.0
-            dxr = dxw * math.cos(fwd) + dyw * math.sin(fwd)
-            dyr = -dxw * math.sin(fwd) + dyw * math.cos(fwd)
-            proto.go_to(int(round(dxr)), int(round(dyr)), int(args.speed))
-
-            # Watch this hop the whole time: geofence + camera-loss STOP.
-            hop_t0 = time.monotonic()
-            last_seen = time.monotonic()
-            stop_all = False
-            while time.monotonic() - hop_t0 < HOP_TIMEOUT:
-                evt = pump_telemetry()
-                cp = read_cam_pose(dc, cam, timeout_s=0.12)
+            # 5b. Short re-checked hops toward the target. The robot never commits
+            #     to more than one hop; camera + geofence are checked throughout.
+            while time.monotonic() - t_start < args.timeout:
+                cp = read_cam_pose(dc, cam, timeout_s=CAM_LOSS)
                 if cp is None:
-                    if time.monotonic() - last_seen > CAM_LOSS:
-                        status = "CAMERA_LOST"
-                        stop_all = True
-                        break
-                    continue
-                last_seen = time.monotonic()
+                    status = "CAMERA_LOST"
+                    break
                 cx, cy, cyaw = cp
                 fwd = cyaw + math.pi / 2.0
+                pump_telemetry()
                 record_and_draw(cx, cy, fwd)
+
                 if not in_fence(cx, cy, fence):
                     status = "GEOFENCE"
-                    stop_all = True
                     break
-                if math.hypot(tx - cx, ty - cy) <= args.arrive:
+                dist = math.hypot(tx - cx, ty - cy)
+                if dist <= args.arrive:
                     status = "DONE"
-                    stop_all = True
                     break
-                if evt in ("DONE", "SAFETY_STOP"):
-                    break   # hop's G finished — re-plan from the outer loop
-            proto.stop()    # discrete, controlled stop between hops
-            if stop_all:
-                break
+
+                # Plan a hop toward the target, clamped to stay inside the fence.
+                bearing = math.atan2(ty - cy, tx - cx)
+                hop = min(args.hop, dist)
+                hx, hy = cx + hop * math.cos(bearing), cy + hop * math.sin(bearing)
+                while hop > 2.0 and not in_fence(hx, hy, fence):
+                    hop -= 2.0
+                    hx, hy = cx + hop * math.cos(bearing), cy + hop * math.sin(bearing)
+                if hop <= 2.0:
+                    status = "FENCE_LIMIT"
+                    break
+
+                dxw, dyw = (hx - cx) * 10.0, (hy - cy) * 10.0
+                dxr = dxw * math.cos(fwd) + dyw * math.sin(fwd)
+                dyr = -dxw * math.sin(fwd) + dyw * math.cos(fwd)
+                proto.go_to(int(round(dxr)), int(round(dyr)), int(args.speed))
+
+                # Watch this hop the whole time: geofence + camera-loss STOP.
+                hop_t0 = time.monotonic()
+                last_seen = time.monotonic()
+                stop_all = False
+                while time.monotonic() - hop_t0 < HOP_TIMEOUT:
+                    evt = pump_telemetry()
+                    cp = read_cam_pose(dc, cam, timeout_s=0.12)
+                    if cp is None:
+                        if time.monotonic() - last_seen > CAM_LOSS:
+                            status = "CAMERA_LOST"
+                            stop_all = True
+                            break
+                        continue
+                    last_seen = time.monotonic()
+                    cx, cy, cyaw = cp
+                    fwd = cyaw + math.pi / 2.0
+                    record_and_draw(cx, cy, fwd)
+                    if not in_fence(cx, cy, fence):
+                        status = "GEOFENCE"
+                        stop_all = True
+                        break
+                    if math.hypot(tx - cx, ty - cy) <= args.arrive:
+                        status = "DONE"
+                        stop_all = True
+                        break
+                    if evt in ("DONE", "SAFETY_STOP"):
+                        break   # hop's G finished — re-plan from the outer loop
+                proto.stop()    # discrete, controlled stop between hops
+                if stop_all:
+                    break
     except _AbortDrive:
         pass
     finally:

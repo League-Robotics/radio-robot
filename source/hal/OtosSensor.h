@@ -45,15 +45,27 @@ public:
     void resetTracking() override;
 
     // Read the raw position registers, convert LSBs to mm/rad, apply the
-    // upside-down flip and mounting-offset rotation from cfg, and return the
-    // result as an OtosPose.  Does NOT write to HardwareState or call
+    // upside-down flip, mounting-offset lever-arm rotation (rotated by headingRad),
+    // and return the result as an OtosPose.  Does NOT write to HardwareState or call
     // odometry.correct — those steps remain with the caller (Robot::otosCorrect).
     // Returns {0,0,0} if not initialized.
-    OtosPose readTransformed(const RobotConfig& cfg) const override;
+    // headingRad: current robot heading (radians) used to rotate the mounting offset
+    //   into the world frame.  No-op when odomOffX/Y are both zero (as in tovez.json).
+    OtosPose readTransformed(const RobotConfig& cfg, float headingRad = 0.0f) const override;
 
     // Read velocity registers (REG_VELOCITY_XL = 0x26), apply the same flip
     // and mounting rotation as readTransformed().  Returns {0,0} if not initialized.
-    OtosVelocity readVelocityTransformed(const RobotConfig& cfg) const override;
+    // headingRad: current robot heading (see readTransformed comment).
+    OtosVelocity readVelocityTransformed(const RobotConfig& cfg, float headingRad = 0.0f) const override;
+
+    // Read the OTOS STATUS register (0x1F) via readReg8.
+    // Returns true on I2C success; fills out with the raw status byte.
+    // A non-zero status byte means the OTOS tracking is invalid (e.g. lifted robot).
+    bool readStatus(uint8_t& out) const;
+
+    // Returns true if the most recent readXYH call succeeded (I2C ACK received).
+    // Updated by every readTransformed / readVelocityTransformed / readAccelTransformed call.
+    bool lastReadOk() const { return _lastReadOk; }
 
     // Read acceleration registers (REG_ACCELERATION_XL = 0x2C), apply the same
     // flip and mounting rotation.  Returns {0,0} if not initialized.
@@ -85,16 +97,21 @@ private:
     static constexpr uint8_t REG_RESET              = 0x07;
     static constexpr uint8_t REG_SIGNAL_PROCESS_CFG = 0x0E;
     static constexpr uint8_t REG_OFFSET_XL          = 0x10;
+    static constexpr uint8_t REG_STATUS             = 0x1F;
     static constexpr uint8_t REG_POSITION_XL        = 0x20;
     static constexpr uint8_t REG_VELOCITY_XL        = 0x26;
     static constexpr uint8_t REG_ACCELERATION_XL    = 0x2C;
 
     static constexpr uint8_t EXPECTED_PRODUCT_ID = 0x5F;
 
+    // Last readXYH I2C success flag (mutable so readXYH can update it in const methods).
+    mutable bool _lastReadOk = false;
+
     void    writeReg8(uint8_t reg, uint8_t val);
     uint8_t readReg8(uint8_t reg) const;
 
     // Burst read 6 bytes from a triple-register block (X_L X_H Y_L Y_H H_L H_H).
+    // Updates _lastReadOk: true if both I2C transactions returned MICROBIT_OK.
     void readXYH(uint8_t startReg, int16_t& x, int16_t& y, int16_t& h) const;
 
     // Burst write three signed int16 to a triple-register block.

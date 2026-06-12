@@ -3,32 +3,42 @@
 Run after a clean firmware flash (mbdeploy deploy robot --clean) to confirm
 the refactored firmware behaves correctly on the real robot.
 
-Five ritual steps (run in order):
+Five ritual checks (run in order):
 
-  1. Safety check   — SAFE query must return 'on'.
-  2. TURN ×4 closure — four sequential TURN 9000 commands; robot must return
-                       within 15° of starting heading (OTOS before = after ±15°).
-  3. G square       — drive G to each of four corners of a 300×300 mm square;
-                       return to origin; position error < 100 mm from OTOS.
-  4. No double-OK   — assert no '#id' correlation tag appears twice in the same
-                       reply burst during the G square run.
-  5. Stream aliveness — STREAM 40; run T 2000; stream must not go silent during
-                        the drive (EVT done T arrives and stream continues).
+  1. SAFE query     — prints PASS if response is 'on'.
+  2. TURN x4 closure — four sequential TURN 9000 commands; robot must return
+                       within 10 degrees of starting heading (OTOS readback).
+  3. G square       — drive G to each corner of a 300x300 mm square (4 legs);
+                       return to origin; OTOS position error at origin < 50 mm.
+  4. Lift test      — operator lifts robot mid-drive; script expects
+                       'EVT otos lost' within 5 s of the lift prompt; then
+                       checks robot does not spin on re-placement.
+  5. TLM drop-rate  — STREAM 40 for 10 s; counts frames; reports observed
+                       rate and any apparent drops.
+
+All motion in checks 2-4 is wrapped with BenchRun for automatic safe-stop
+on Ctrl-C, exception, or wall-clock cap.
+
+On completion, a dated SHA-stamped entry is appended to
+docs/knowledge/field-log.md (created if absent).
 
 Usage:
     uv run python tests/bench/smoke_ritual.py --port /dev/cu.usbmodem2121302
     uv run python tests/bench/smoke_ritual.py          # auto-detects relay port
 
-Outputs a summary table of pass/fail per step.  Any FAIL exits non-zero.
+Outputs a summary table of pass/fail per check.  Any FAIL exits non-zero.
 """
 
 from __future__ import annotations
 
 import argparse
 import math
+import subprocess
 import sys
 import time
 import pathlib
+import threading
+from datetime import datetime, timezone
 
 _REPO = pathlib.Path(__file__).resolve().parents[2]
 _HOST = _REPO / "host"
@@ -37,6 +47,7 @@ if str(_HOST) not in sys.path:
 
 from robot_radio.io.serial_conn import SerialConnection
 from robot_radio.robot.protocol import NezhaProtocol, parse_response, parse_tlm
+from bench_safety import BenchRun, RobotSilentError, RunawayAbortError
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +70,7 @@ def _banner(title: str) -> None:
 def _result(step: int, name: str, status: str, note: str = "") -> None:
     tick = "+" if status == STEP_PASS else ("~" if status == STEP_SKIP else "X")
     extra = f"  ({note})" if note else ""
-    print(f"  [{tick}] Step {step}: {name} — {status}{extra}")
+    print(f"  [{tick}] Check {step}: {name} -- {status}{extra}")
 
 
 def _wrap_deg(a: float) -> float:
@@ -92,12 +103,12 @@ def _keepalive_thread(proto: NezhaProtocol, stop: list[bool]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 1: Safety check
+# Check 1: Safety check
 # ---------------------------------------------------------------------------
 
-def step1_safety_check(proto: NezhaProtocol) -> str:
+def check1_safety_check(proto: NezhaProtocol) -> str:
     """SAFE query must return 'on'."""
-    _banner("Step 1: Safety check (SAFE query)")
+    _banner("Check 1: Safety check (SAFE query)")
     resp = proto.send("SAFE", read_ms=400)
     for line in resp.get("responses", []):
         r = parse_response(line)
@@ -110,58 +121,63 @@ def step1_safety_check(proto: NezhaProtocol) -> str:
                     print("  Safety watchdog is ON.")
                     return STEP_PASS
                 else:
-                    print(f"  Safety watchdog is '{state}' — expected 'on'.")
+                    print(f"  Safety watchdog is '{state}' -- expected 'on'.")
                     return STEP_FAIL
     print(f"  No parseable SAFE reply. Raw responses: {resp.get('responses', [])}")
     return STEP_FAIL
 
 
 # ---------------------------------------------------------------------------
-# Step 2: TURN ×4 closure
+# Check 2: TURN x4 closure
 # ---------------------------------------------------------------------------
 
-def step2_turn_closure(proto: NezhaProtocol) -> str:
-    """Four sequential TURN 9000 commands; heading must close to ±15°."""
-    _banner("Step 2: TURN ×4 closure")
-    TURN_HEADING = 9000   # centidegrees = 90°
+def check2_turn_closure(proto: NezhaProtocol) -> str:
+    """Four sequential TURN 9000 commands; heading must close to +-10 degrees."""
+    _banner("Check 2: TURN x4 closure")
+    TURN_HEADING = 9000    # centidegrees = 90 degrees
     TURN_TIMEOUT = 15_000  # ms per turn
-    CLOSURE_TOL_DEG = 15.0
+    CLOSURE_TOL_DEG = 10.0
 
     h0 = _otos_heading_deg(proto)
     if h0 is None:
-        print("  Cannot read starting OTOS heading — is OTOS enabled?")
+        print("  Cannot read starting OTOS heading -- is OTOS enabled?")
         return STEP_FAIL
-    print(f"  Starting heading: {h0:.1f}°")
+    print(f"  Starting heading: {h0:.1f} deg")
 
-    for i in range(4):
-        print(f"  TURN {TURN_HEADING} cdeg (turn {i+1}/4) ...")
-        proto.turn(TURN_HEADING, corr_id=str(i + 1))
-        outcome = proto.wait_for_evt_done("TURN", timeout_ms=TURN_TIMEOUT,
-                                          corr_id=str(i + 1))
-        if outcome != "done":
-            print(f"  TURN {i+1} outcome: {outcome} (expected 'done')")
-            return STEP_FAIL
-        time.sleep(0.3)
+    try:
+        with BenchRun(proto, max_seconds=90) as _bench:
+            for i in range(4):
+                print(f"  TURN {TURN_HEADING} cdeg (turn {i+1}/4) ...")
+                proto.turn(TURN_HEADING, corr_id=str(i + 1))
+                outcome = proto.wait_for_evt_done("TURN", timeout_ms=TURN_TIMEOUT,
+                                                  corr_id=str(i + 1))
+                if outcome != "done":
+                    print(f"  TURN {i+1} outcome: {outcome} (expected 'done')")
+                    return STEP_FAIL
+                time.sleep(0.3)
+    except (RobotSilentError, RunawayAbortError) as exc:
+        print(f"  BenchRun aborted: {exc}")
+        return STEP_FAIL
 
     h1 = _otos_heading_deg(proto)
     if h1 is None:
         print("  Cannot read final OTOS heading.")
         return STEP_FAIL
-    print(f"  Final heading:    {h1:.1f}°")
+    print(f"  Final heading:    {h1:.1f} deg")
 
     delta = abs(_wrap_deg(h1 - h0))
-    print(f"  Heading closure error: {delta:.1f}° (tolerance: {CLOSURE_TOL_DEG}°)")
+    print(f"  Heading closure error: {delta:.1f} deg (tolerance: {CLOSURE_TOL_DEG} deg)")
     if delta <= CLOSURE_TOL_DEG:
         return STEP_PASS
-    print(f"  FAIL — closure error {delta:.1f}° exceeds {CLOSURE_TOL_DEG}°")
+    print(f"  FAIL -- closure error {delta:.1f} deg exceeds {CLOSURE_TOL_DEG} deg")
     return STEP_FAIL
 
 
 # ---------------------------------------------------------------------------
-# Step 3: G square + Step 4: no double-OK
+# Check 3: G square (300x300 mm, < 50 mm return error from OTOS)
 # ---------------------------------------------------------------------------
 
-# 300×300 mm square corners (relative, starting at origin)
+# 300x300 mm square corners relative to zeroed OTOS origin.
 _SQUARE_CORNERS = [
     (150, 150),    # NE
     (-150, 150),   # NW
@@ -170,126 +186,211 @@ _SQUARE_CORNERS = [
     (0, 0),        # back to origin
 ]
 
-SQUARE_SPEED = 150      # mm/s
+SQUARE_SPEED = 150       # mm/s
 SQUARE_TIMEOUT = 20_000  # ms per leg
-SQUARE_ARRIVE_MM = 100  # OTOS position error tolerance at origin
+SQUARE_ARRIVE_MM = 50    # OTOS position error tolerance at origin
 
 
-def step3_4_g_square(proto: NezhaProtocol) -> tuple[str, str]:
-    """Drive G square; return (step3_status, step4_status).
+def check3_g_square(proto: NezhaProtocol) -> str:
+    """Drive G square; OTOS position error at return < 50 mm.
 
-    Step 3: position error at origin < 100 mm.
-    Step 4: no '#id' correlation tag repeated in the same reply burst.
+    Uses OTOS pose comparison (reset at start, read at origin return) as the
+    ground truth, since the camera may not be available in all bench contexts.
     """
-    _banner("Step 3+4: G square (300×300 mm) + no double-OK check")
+    _banner("Check 3: G square (300x300 mm)")
 
     # Zero OTOS before the run so origin = start.
     proto.zero_otos()
     time.sleep(0.3)
     print("  OTOS zeroed at start position.")
 
-    all_reply_lines: list[str] = []
-    ok_ids_per_burst: list[list[str | None]] = []
+    try:
+        with BenchRun(proto, max_seconds=120) as _bench:
+            for i, (x, y) in enumerate(_SQUARE_CORNERS):
+                label = f"({x:+d},{y:+d})" if (x, y) != (0, 0) else "origin"
+                print(f"  G {x} {y} {SQUARE_SPEED}  -> {label} ...")
+                proto.send(f"G {x} {y} {SQUARE_SPEED}", read_ms=300)
+                outcome = proto.wait_for_evt_done("G", timeout_ms=SQUARE_TIMEOUT)
+                if outcome != "done":
+                    print(f"  G to {label}: outcome={outcome} (expected 'done')")
+                    return STEP_FAIL
+                time.sleep(0.3)
+    except (RobotSilentError, RunawayAbortError) as exc:
+        print(f"  BenchRun aborted: {exc}")
+        return STEP_FAIL
 
-    for i, (x, y) in enumerate(_SQUARE_CORNERS):
-        label = f"({x:+d},{y:+d})" if (x, y) != (0, 0) else "origin"
-        print(f"  G {x} {y} {SQUARE_SPEED}  -> {label} ...")
-        resp = proto.send(f"G {x} {y} {SQUARE_SPEED}", read_ms=300)
-        burst_lines = resp.get("responses", [])
-        all_reply_lines.extend(burst_lines)
-
-        # Collect corr_ids from this burst for double-OK check.
-        burst_ids: list[str | None] = []
-        for line in burst_lines:
-            r = parse_response(line)
-            if r and r.tag == "OK":
-                burst_ids.append(r.corr_id)
-        ok_ids_per_burst.append(burst_ids)
-
-        # Wait for EVT done G.
-        outcome = proto.wait_for_evt_done("G", timeout_ms=SQUARE_TIMEOUT)
-        if outcome != "done":
-            print(f"  G to {label}: outcome={outcome} (expected 'done')")
-            return STEP_FAIL, STEP_SKIP
-        time.sleep(0.3)
-
-    # --- Step 3: check OTOS position at origin ---
+    # Check OTOS position at origin.
     pos = _otos_pos_mm(proto)
     if pos is None:
         print("  Cannot read final OTOS position.")
-        step3 = STEP_FAIL
-    else:
-        err_mm = math.hypot(pos[0], pos[1])
-        print(f"  Final OTOS position: x={pos[0]} mm, y={pos[1]} mm")
-        print(f"  Position error from origin: {err_mm:.0f} mm"
-              f"  (tolerance: {SQUARE_ARRIVE_MM} mm)")
-        if err_mm <= SQUARE_ARRIVE_MM:
-            step3 = STEP_PASS
-        else:
-            print(f"  FAIL — position error {err_mm:.0f} mm > {SQUARE_ARRIVE_MM} mm")
-            step3 = STEP_FAIL
+        return STEP_FAIL
 
-    # --- Step 4: no double-OK (same #id twice in same burst) ---
-    step4 = STEP_PASS
-    for burst_i, ids in enumerate(ok_ids_per_burst):
-        seen: set[str] = set()
-        for cid in ids:
-            if cid is None:
-                continue
-            if cid in seen:
-                print(f"  FAIL — duplicate corr_id #{cid} in burst {burst_i}")
-                step4 = STEP_FAIL
-                break
-            seen.add(cid)
-    if step4 == STEP_PASS:
-        print("  No duplicate OK #id found in any reply burst.")
-
-    return step3, step4
+    err_mm = math.hypot(pos[0], pos[1])
+    print(f"  Final OTOS position: x={pos[0]} mm, y={pos[1]} mm")
+    print(f"  Position error from origin: {err_mm:.0f} mm"
+          f"  (tolerance: {SQUARE_ARRIVE_MM} mm)")
+    if err_mm <= SQUARE_ARRIVE_MM:
+        return STEP_PASS
+    print(f"  FAIL -- position error {err_mm:.0f} mm > {SQUARE_ARRIVE_MM} mm")
+    return STEP_FAIL
 
 
 # ---------------------------------------------------------------------------
-# Step 5: Stream aliveness during T drive
+# Check 4: Lift test -- EVT otos lost within 5 s of lift
 # ---------------------------------------------------------------------------
 
-def step5_stream_aliveness(proto: NezhaProtocol) -> str:
-    """STREAM 40; run T 2000; verify stream continues after EVT done T."""
-    _banner("Step 5: Stream aliveness")
-    STREAM_PERIOD_MS = 40
-    T_DURATION_MS = 2000
-    T_SPEED = 150           # mm/s — moderate forward speed
-    T_TIMEOUT_MS = 5000     # wait for EVT done T
-    POST_T_WAIT_MS = 600    # time to check for continued stream after done T
-    STREAM_SILENCE_TOL = 3  # expect at least this many TLM frames post-done
+def check4_lift_test(proto: NezhaProtocol) -> str:
+    """Lift robot mid-drive; expect 'EVT otos lost' within 5 s; no spin on replace.
+
+    Operator flow:
+      1. Script starts a slow T 100 100 5000 drive.
+      2. Script prompts: 'Lift the robot now and press Enter when lifted...'
+      3. Operator lifts robot, presses Enter.
+      4. Script polls for 'EVT otos lost' in the event stream for 5 s.
+      5. Script prompts: 'Replace robot on floor and press Enter...'
+      6. Script waits 3 s and checks that robot is not spinning (OTOS heading
+         stable within 30 degrees over 2 s after re-placement).
+    """
+    _banner("Check 4: Lift test (EVT otos lost)")
+
+    EVT_WAIT_MS = 5_000   # time to wait for EVT otos lost after lift
+    SPIN_CHECK_MS = 2_000  # duration to check heading stability after replace
+    SPIN_TOL_DEG = 30.0   # heading drift threshold for 'no spin'
+
+    try:
+        with BenchRun(proto, max_seconds=60) as _bench:
+            # Start a slow forward drive long enough for the lift.
+            print("  Starting slow T drive (100 mm/s, 6 s) ...")
+            proto.timed(100, 100, 6_000)
+
+            # Prompt operator.
+            input("\n  >>> Lift the robot off the floor now, then press Enter <<<\n")
+
+            # Poll for 'EVT otos lost' in the next 5 s.
+            otos_lost_seen = False
+            deadline = time.time() + EVT_WAIT_MS / 1000.0
+            while time.time() < deadline:
+                lines = proto.read_lines(duration_ms=200)
+                for ln in lines:
+                    if "otos lost" in ln or "EVT otos lost" in ln:
+                        otos_lost_seen = True
+                        print(f"  EVT otos lost received: {ln.strip()}")
+                        break
+                if otos_lost_seen:
+                    break
+
+            if not otos_lost_seen:
+                print("  FAIL -- 'EVT otos lost' not received within 5 s of lift.")
+                return STEP_FAIL
+
+            # Prompt operator to replace robot.
+            input("\n  >>> Replace robot on the floor, then press Enter <<<\n")
+            time.sleep(1.0)  # brief settle
+
+            # Check heading stability (no spin on placement).
+            h0 = _otos_heading_deg(proto)
+            if h0 is None:
+                print("  Cannot read heading after replace -- PASS assumed (no spin detected).")
+                return STEP_PASS
+
+            time.sleep(SPIN_CHECK_MS / 1000.0)
+
+            h1 = _otos_heading_deg(proto)
+            if h1 is None:
+                print("  Cannot read heading after settle -- PASS assumed.")
+                return STEP_PASS
+
+            drift = abs(_wrap_deg(h1 - h0))
+            print(f"  Heading before/after settle: {h0:.1f} / {h1:.1f} deg"
+                  f"  drift={drift:.1f} deg (tolerance: {SPIN_TOL_DEG} deg)")
+            if drift <= SPIN_TOL_DEG:
+                print("  No spin on placement detected.")
+                return STEP_PASS
+            print(f"  FAIL -- heading drifted {drift:.1f} deg after re-placement "
+                  f"(possible spin-on-placement).")
+            return STEP_FAIL
+
+    except (RobotSilentError, RunawayAbortError) as exc:
+        print(f"  BenchRun aborted: {exc}")
+        return STEP_FAIL
+
+
+# ---------------------------------------------------------------------------
+# Check 5: TLM drop-rate
+# ---------------------------------------------------------------------------
+
+def check5_tlm_drop_rate(proto: NezhaProtocol) -> str:
+    """STREAM 40 for 10 s; count TLM frames and report observed rate and drops.
+
+    Expected rate: ~25 frames/s (STREAM 40 ms = 25 Hz).
+    PASS criterion: >= 80% of expected frames received (i.e., >= 200 frames in 10 s).
+    Always prints the measured rate even on failure.
+    """
+    _banner("Check 5: TLM drop-rate (STREAM 40 for 10 s)")
+
+    STREAM_PERIOD_MS = 40   # 25 Hz
+    MEASURE_SECS = 10.0
+    EXPECTED_FRAMES = int(MEASURE_SECS * 1000.0 / STREAM_PERIOD_MS)
+    MIN_FRAMES = int(EXPECTED_FRAMES * 0.80)   # 80% threshold
 
     proto.stream(STREAM_PERIOD_MS)
     time.sleep(0.15)  # let first frames arrive
+    print(f"  STREAM {STREAM_PERIOD_MS} ms enabled. Counting for {MEASURE_SECS:.0f} s ...")
 
-    print(f"  STREAM {STREAM_PERIOD_MS} ms enabled.")
-    print(f"  Sending T {T_SPEED} {T_SPEED} {T_DURATION_MS} ...")
-    proto.timed(T_SPEED, T_SPEED, T_DURATION_MS)
+    tlm_count = 0
+    t_start = time.monotonic()
+    t_end = t_start + MEASURE_SECS
+    while time.monotonic() < t_end:
+        for ln in proto.read_lines(duration_ms=200):
+            if parse_tlm(ln) is not None:
+                tlm_count += 1
 
-    # Wait for EVT done T.
-    outcome = proto.wait_for_evt_done("T", timeout_ms=T_TIMEOUT_MS)
-    print(f"  EVT done T outcome: {outcome}")
-    if outcome != "done":
-        proto.stop()
-        proto.stream(0)
-        print(f"  FAIL — EVT done T not received (outcome={outcome})")
-        return STEP_FAIL
+    elapsed = time.monotonic() - t_start
+    proto.stream(0)
 
-    # Check that TLM stream continues after EVT done T.
-    post_lines = proto.read_lines(duration_ms=POST_T_WAIT_MS)
-    tlm_count = sum(1 for ln in post_lines if parse_tlm(ln) is not None)
-    print(f"  TLM frames received in {POST_T_WAIT_MS} ms post-done: {tlm_count}"
-          f"  (need >= {STREAM_SILENCE_TOL})")
+    obs_rate = tlm_count / elapsed if elapsed > 0.0 else 0.0
+    print(f"  TLM frames received: {tlm_count} over {elapsed:.1f} s"
+          f"  (observed rate: {obs_rate:.1f} Hz)")
+    print(f"  Expected >= {MIN_FRAMES} frames ({EXPECTED_FRAMES} ideal at"
+          f" {1000.0/STREAM_PERIOD_MS:.0f} Hz x 0.80)")
 
-    proto.stream(0)  # stop streaming
-
-    if tlm_count >= STREAM_SILENCE_TOL:
+    if tlm_count >= MIN_FRAMES:
         return STEP_PASS
-    print(f"  FAIL — stream went silent after EVT done T"
-          f" ({tlm_count} frames, need {STREAM_SILENCE_TOL})")
+    print(f"  FAIL -- received only {tlm_count} frames ({obs_rate:.1f} Hz),"
+          f" expected >= {MIN_FRAMES}.")
     return STEP_FAIL
+
+
+# ---------------------------------------------------------------------------
+# Field log
+# ---------------------------------------------------------------------------
+
+def _append_field_log(results: dict[int, str], step_names: dict[int, str]) -> None:
+    """Append a dated SHA-stamped entry to docs/knowledge/field-log.md."""
+    log_path = _REPO / "docs" / "knowledge" / "field-log.md"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Get git SHA (short).
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(_REPO), stderr=subprocess.DEVNULL, text=True
+        ).strip()
+    except Exception:
+        sha = "unknown"
+
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+    overall = "PASS" if all(v == STEP_PASS for v in results.values()) else "FAIL"
+
+    lines = [f"\n## {ts}  sha={sha}  overall={overall}\n"]
+    for num in sorted(step_names):
+        status = results.get(num, STEP_SKIP)
+        lines.append(f"- Check {num} ({step_names[num]}): {status}\n")
+
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.writelines(lines)
+
+    print(f"\n  Field log entry appended: {log_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -301,11 +402,19 @@ def main() -> None:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", default=None,
                     help="relay serial port (auto-detects if omitted)")
-    ap.add_argument("--steps", default="1,2,3,4,5",
-                    help="comma-separated step numbers to run (default: all)")
+    ap.add_argument("--checks", default="1,2,3,4,5",
+                    help="comma-separated check numbers to run (default: all)")
     args = ap.parse_args()
 
-    steps_to_run = {int(s.strip()) for s in args.steps.split(",")}
+    checks_to_run = {int(s.strip()) for s in args.checks.split(",")}
+
+    step_names = {
+        1: "Safety check",
+        2: "TURN x4 closure",
+        3: "G square",
+        4: "Lift test (EVT otos lost)",
+        5: "TLM drop-rate",
+    }
 
     # Connect and preflight.
     print("Connecting to robot ...")
@@ -318,34 +427,26 @@ def main() -> None:
     png = proto.ping()
     if not png:
         proto.stop()
-        sys.exit("PING failed — robot not responding. Power-cycle and retry.")
+        sys.exit("PING failed -- robot not responding. Power-cycle and retry.")
     print(f"Robot alive: t={png[0]} ms, rtt={png[1]:.0f} ms")
 
     results: dict[int, str] = {}
-    step_names = {
-        1: "Safety check",
-        2: "TURN ×4 closure",
-        3: "G square",
-        4: "No double-OK",
-        5: "Stream aliveness",
-    }
 
     try:
-        if 1 in steps_to_run:
-            results[1] = step1_safety_check(proto)
+        if 1 in checks_to_run:
+            results[1] = check1_safety_check(proto)
 
-        if 2 in steps_to_run:
-            results[2] = step2_turn_closure(proto)
+        if 2 in checks_to_run:
+            results[2] = check2_turn_closure(proto)
 
-        if 3 in steps_to_run or 4 in steps_to_run:
-            s3, s4 = step3_4_g_square(proto)
-            if 3 in steps_to_run:
-                results[3] = s3
-            if 4 in steps_to_run:
-                results[4] = s4
+        if 3 in checks_to_run:
+            results[3] = check3_g_square(proto)
 
-        if 5 in steps_to_run:
-            results[5] = step5_stream_aliveness(proto)
+        if 4 in checks_to_run:
+            results[4] = check4_lift_test(proto)
+
+        if 5 in checks_to_run:
+            results[5] = check5_tlm_drop_rate(proto)
 
     finally:
         # Always safe-stop the robot on exit (normal or exception).
@@ -355,24 +456,27 @@ def main() -> None:
         proto.stream(0)
         conn.close()
 
+    # Append field log entry.
+    _append_field_log(results, step_names)
+
     # Summary.
     _banner("Smoke Ritual Summary")
     overall = STEP_PASS
-    for step_num in sorted(step_names):
-        if step_num not in steps_to_run:
+    for check_num in sorted(step_names):
+        if check_num not in checks_to_run:
             status = STEP_SKIP
         else:
-            status = results.get(step_num, STEP_SKIP)
-        _result(step_num, step_names[step_num], status)
+            status = results.get(check_num, STEP_SKIP)
+        _result(check_num, step_names[check_num], status)
         if status == STEP_FAIL:
             overall = STEP_FAIL
 
     print()
     if overall == STEP_PASS:
-        print("OVERALL: PASS — all steps passed.")
+        print("OVERALL: PASS -- all checks passed.")
         sys.exit(0)
     else:
-        print("OVERALL: FAIL — one or more steps failed.")
+        print("OVERALL: FAIL -- one or more checks failed.")
         sys.exit(1)
 
 

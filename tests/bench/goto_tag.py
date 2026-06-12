@@ -13,8 +13,14 @@ a forward hop is refused if it would leave the field or head away from the goal.
 """
 import argparse
 import math
+import pathlib
 import sys
 import time
+
+_BENCH = pathlib.Path(__file__).resolve().parent
+if str(_BENCH) not in sys.path:
+    sys.path.insert(0, str(_BENCH))
+from bench_safety import BenchRun  # noqa: E402
 
 ROBOT = 100
 
@@ -154,66 +160,67 @@ def main():
 
     status = "?"
     try:
-        for hop_i in range(14):
-            r = robot_pose(dc, cam)
-            if r is None:
-                status = "LOST"
-                break
-            rx, ry, cyaw = r
-            d = math.hypot(tx - rx, ty - ry)
-            print(f"\n  at ({rx:+.1f},{ry:+.1f}) yaw {math.degrees(cyaw):+.0f}°  "
-                  f"{d:.1f}cm to {tname}")
-            if d <= args.arrive:
-                status = "ARRIVED"
-                break
+        with BenchRun(proto, max_seconds=120):
+            for hop_i in range(14):
+                r = robot_pose(dc, cam)
+                if r is None:
+                    status = "LOST"
+                    break
+                rx, ry, cyaw = r
+                d = math.hypot(tx - rx, ty - ry)
+                print(f"\n  at ({rx:+.1f},{ry:+.1f}) yaw {math.degrees(cyaw):+.0f}°  "
+                      f"{d:.1f}cm to {tname}")
+                if d <= args.arrive:
+                    status = "ARRIVED"
+                    break
 
-            # 1) TURN to face the target
-            face()
+                # 1) TURN to face the target
+                face()
 
-            # 2) endpoint guard — must be facing it and stay on the field
-            r = robot_pose(dc, cam)
-            if r is None:
-                continue
-            rx, ry, cyaw = r
-            if abs(math.degrees(wrap(target_yaw(rx, ry) - cyaw))) > 35.0:
-                print("    still not facing target — re-turning")
-                continue
-            fwd = (-math.sin(cyaw), math.cos(cyaw))
-            hop = min(15.0, d - args.arrive * 0.5)
-            ex, ey = rx + hop * fwd[0], ry + hop * fwd[1]
-            while hop > 2.0 and not in_fence(ex, ey):
-                hop -= 2.0
+                # 2) endpoint guard — must be facing it and stay on the field
+                r = robot_pose(dc, cam)
+                if r is None:
+                    continue
+                rx, ry, cyaw = r
+                if abs(math.degrees(wrap(target_yaw(rx, ry) - cyaw))) > 35.0:
+                    print("    still not facing target — re-turning")
+                    continue
+                fwd = (-math.sin(cyaw), math.cos(cyaw))
+                hop = min(15.0, d - args.arrive * 0.5)
                 ex, ey = rx + hop * fwd[0], ry + hop * fwd[1]
-            if hop <= 2.0:
-                print("    forward would leave the field — stopping")
-                status = "FENCE"
-                break
+                while hop > 2.0 and not in_fence(ex, ey):
+                    hop -= 2.0
+                    ex, ey = rx + hop * fwd[0], ry + hop * fwd[1]
+                if hop <= 2.0:
+                    print("    forward would leave the field — stopping")
+                    status = "FENCE"
+                    break
 
-            # 3) DRIVE forward `hop` cm (camera-measured), stop on arrival/divergence
-            print(f"    driving forward {hop:.0f}cm toward target")
-            sx, sy = rx, ry
-            d0 = d
-            t0 = time.monotonic()
-            while time.monotonic() - t0 < 6.0:
-                proto.drive(args.speed, args.speed)
-                time.sleep(0.1)
-                rr = get_tag(dc, cam, ROBOT, 0.12)
-                if rr:
-                    moved = math.hypot(rr[0] - sx, rr[1] - sy)
-                    dist = math.hypot(tx - rr[0], ty - rr[1])
-                    if dist > d0 + 5.0:        # going the WRONG way — abort hop
-                        print("    distance increasing — stopping (wrong way)")
-                        break
-                    if moved >= hop or dist <= args.arrive or not in_fence(rr[0], rr[1]):
-                        break
-            stop()
-        else:
-            status = "MAXHOPS"
+                # 3) DRIVE forward `hop` cm (camera-measured), stop on arrival/divergence
+                print(f"    driving forward {hop:.0f}cm toward target")
+                sx, sy = rx, ry
+                d0 = d
+                t0 = time.monotonic()
+                while time.monotonic() - t0 < 6.0:
+                    proto.drive(args.speed, args.speed)
+                    time.sleep(0.1)
+                    rr = get_tag(dc, cam, ROBOT, 0.12)
+                    if rr:
+                        moved = math.hypot(rr[0] - sx, rr[1] - sy)
+                        dist = math.hypot(tx - rr[0], ty - rr[1])
+                        if dist > d0 + 5.0:        # going the WRONG way — abort hop
+                            print("    distance increasing — stopping (wrong way)")
+                            break
+                        if moved >= hop or dist <= args.arrive or not in_fence(rr[0], rr[1]):
+                            break
+                stop()
+            else:
+                status = "MAXHOPS"
 
-        r = robot_pose(dc, cam)
-        if r:
-            d = math.hypot(tx - r[0], ty - r[1])
-            print(f"\n  [{status}] final ({r[0]:+.1f},{r[1]:+.1f}) — {d:.1f}cm from {tname}")
+            r = robot_pose(dc, cam)
+            if r:
+                d = math.hypot(tx - r[0], ty - r[1])
+                print(f"\n  [{status}] final ({r[0]:+.1f},{r[1]:+.1f}) — {d:.1f}cm from {tname}")
     finally:
         stop()
         try:

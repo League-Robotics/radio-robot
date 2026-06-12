@@ -37,6 +37,15 @@ public:
     /** SOFT = ramp to (0,0) then emit EVT done; HARD = stop immediately. */
     enum class StopStyle : uint8_t { SOFT, HARD };
 
+    /**
+     * Origin — which command verb started this MotionCommand.
+     *
+     * Set by MotionController::begin*() methods via setOrigin().
+     * Used by handleVW to guard the setTarget() keepalive path: only a
+     * VW-origin command may have its target updated by a VW keepalive.
+     */
+    enum class Origin : uint8_t { VW, TURN, G, T, D, R, RT };
+
     // ------------------------------------------------------------------
     // Configuration phase (call before start)
     // ------------------------------------------------------------------
@@ -77,6 +86,22 @@ public:
      * Default is SOFT.
      */
     void setStopStyle(StopStyle s);
+
+    /**
+     * setOrigin — record which command verb started this MotionCommand.
+     *
+     * Must be called after configure() and before start().  configure()
+     * resets the origin to VW (the default) so callers that omit this
+     * call are treated as VW-origin — a safe default that does not guard.
+     */
+    void setOrigin(Origin o) { _origin = o; }
+
+    /**
+     * origin — return the command verb that started this MotionCommand.
+     *
+     * Used by handleVW to skip setTarget() for non-VW active commands.
+     */
+    Origin origin() const { return _origin; }
 
     /**
      * setDoneEvt — override the EVT name emitted on normal completion.
@@ -194,6 +219,7 @@ private:
     BodyVelocityController* _bvc            = nullptr;
     float       _vTgt                        = 0.0f;
     float       _omegaTgt                   = 0.0f;
+    Origin      _origin                     = Origin::VW;
     StopCondition _stops[kMaxStopConds]     = {};
     uint8_t     _nStops                     = 0;
     MotionBaseline _baseline                = {};

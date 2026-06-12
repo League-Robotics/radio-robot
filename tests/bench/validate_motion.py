@@ -22,8 +22,14 @@ from __future__ import annotations
 
 import argparse
 import math
+import pathlib
 import sys
 import time
+
+_BENCH = pathlib.Path(__file__).resolve().parent
+if str(_BENCH) not in sys.path:
+    sys.path.insert(0, str(_BENCH))
+from bench_safety import BenchRun  # noqa: E402
 
 ROBOT_TAG_ID = 100
 
@@ -555,23 +561,24 @@ def main() -> int:
     robot, conn, proto = open_robot(args.port)
     proto.send("SET sTimeout=600", 200)
     try:
-        steps = args.step.split(",")
-        if "turn" in steps:
-            step_turn(dc, cam, proto, args)
-        if "turnto" in steps:
-            step_turnto(dc, cam, proto, args)
-        if "circle" in steps:
-            step_circle(dc, cam, proto, args)
-        if "fwd" in steps:
-            step_fwd(dc, cam, proto, args)
-        if "outback" in steps:
-            step_outback(dc, cam, proto, args)
-        if "goto" in steps:
-            step_goto(dc, cam, proto, args)
-        if "roam" in steps:
-            step_roam(dc, cam, proto, args)
-        if "center" in steps or "centre" in steps:
-            step_center(dc, cam, proto, args)
+        with BenchRun(proto, max_seconds=600):
+            steps = args.step.split(",")
+            if "turn" in steps:
+                step_turn(dc, cam, proto, args)
+            if "turnto" in steps:
+                step_turnto(dc, cam, proto, args)
+            if "circle" in steps:
+                step_circle(dc, cam, proto, args)
+            if "fwd" in steps:
+                step_fwd(dc, cam, proto, args)
+            if "outback" in steps:
+                step_outback(dc, cam, proto, args)
+            if "goto" in steps:
+                step_goto(dc, cam, proto, args)
+            if "roam" in steps:
+                step_roam(dc, cam, proto, args)
+            if "center" in steps or "centre" in steps:
+                step_center(dc, cam, proto, args)
     finally:
         for _ in range(3):
             proto.stop()

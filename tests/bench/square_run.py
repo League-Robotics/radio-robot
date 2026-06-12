@@ -39,11 +39,15 @@ import time
 
 _REPO = pathlib.Path(__file__).resolve().parents[2]
 _HOST = _REPO / "host"
+_BENCH = pathlib.Path(__file__).resolve().parent
 if str(_HOST) not in sys.path:
     sys.path.insert(0, str(_HOST))
+if str(_BENCH) not in sys.path:
+    sys.path.insert(0, str(_BENCH))
 
 from robot_radio.io.serial_conn import SerialConnection
 from robot_radio.robot.protocol import NezhaProtocol, parse_tlm
+from bench_safety import BenchRun
 
 SITES = {
     "purple-NW": (-35, 24), "black-N": (0, 24), "orange-NE": (35, 24),
@@ -204,26 +208,26 @@ def main() -> None:
     print(f"route: {route}")
     poll(0.5, keepalive=False)
     arrive_mm = args.arrive_cm * 10.0
-    for name in route:
-        if name not in SITES:
-            print(f"  skip unknown box {name}"); continue
-        bx_cm, by_cm = SITES[name]
-        tgt = (bx_cm * 10.0, by_cm * 10.0)
-        print(f"  -> {name} ({bx_cm},{by_cm} cm)")
-        proto.send(f"G {int(tgt[0])} {int(tgt[1])} {args.speed}", 250)
-        ok = poll(args.timeout_s, keepalive=True, target_mm=tgt, arrive_mm=arrive_mm)
-        print(f"     {'reached' if ok else 'timeout'}")
-        conn.send_fast("X")
-        poll(args.settle_s, keepalive=False)
-        if args.correct and dc is not None:
-            p = robot_pose(dc, cam, n=4)
-            if p:
-                cx, cy, cyaw = p
-                h_cdeg = int(round((math.degrees(cyaw) + 90.0) * 100.0))
-                proto.send(f"SI {int(round(cx*10))} {int(round(cy*10))} {h_cdeg}", 150)
-                print(f"     camera correct -> SI ({cx:.1f},{cy:.1f})")
+    with BenchRun(proto, max_seconds=len(route) * args.timeout_s + 30):
+        for name in route:
+            if name not in SITES:
+                print(f"  skip unknown box {name}"); continue
+            bx_cm, by_cm = SITES[name]
+            tgt = (bx_cm * 10.0, by_cm * 10.0)
+            print(f"  -> {name} ({bx_cm},{by_cm} cm)")
+            proto.send(f"G {int(tgt[0])} {int(tgt[1])} {args.speed}", 250)
+            ok = poll(args.timeout_s, keepalive=True, target_mm=tgt, arrive_mm=arrive_mm)
+            print(f"     {'reached' if ok else 'timeout'}")
+            conn.send_fast("X")
+            poll(args.settle_s, keepalive=False)
+            if args.correct and dc is not None:
+                p = robot_pose(dc, cam, n=4)
+                if p:
+                    cx, cy, cyaw = p
+                    h_cdeg = int(round((math.degrees(cyaw) + 90.0) * 100.0))
+                    proto.send(f"SI {int(round(cx*10))} {int(round(cy*10))} {h_cdeg}", 150)
+                    print(f"     camera correct -> SI ({cx:.1f},{cy:.1f})")
 
-    conn.send_fast("X")
     conn.disconnect()
 
     meta = {"trackwidth_mm": trackwidth_mm,

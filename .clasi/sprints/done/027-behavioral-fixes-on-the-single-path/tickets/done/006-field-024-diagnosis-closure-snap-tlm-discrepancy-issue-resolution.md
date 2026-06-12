@@ -1,12 +1,12 @@
 ---
 id: '006'
 title: 'field-024 diagnosis closure: SNAP TLM discrepancy + issue resolution'
-status: open
+status: done
 use-cases:
-  - SUC-008
+- SUC-008
 depends-on:
-  - "027-002"
-  - "027-005"
+- 027-002
+- 027-005
 github-issue: ''
 issue: field-024-full-speed-spin-unresolved.md
 completes_issue: true
@@ -39,36 +39,45 @@ Once both leads are resolved (fixed or explicitly deferred), close the issue.
 
 ### Lead A — SNAP TLM investigation
 
-- [ ] Read `Robot::buildTlmFrame()` and the SNAP handler to determine whether
+- [x] Read `Robot::buildTlmFrame()` and the SNAP handler to determine whether
       SNAP constructs its frame differently from STREAM (different source
       struct, stale pointer, or a copy vs. reference issue introduced in
       024-005).
-- [ ] If the cause is a one-line bug (e.g. SNAP passes a local copy of
+- [x] If the cause is a one-line bug (e.g. SNAP passes a local copy of
       `HardwareState` that was captured before `driveAdvance` updated mode/enc):
       - Fix it in `Robot.cpp` or the SNAP handler.
       - Add a test or note that verifies the SNAP frame `mode` matches the
         STREAM frame `mode` in the sim after a motion command starts.
-- [ ] If the cause requires D10 firmware changes (seq numbers, frame
+      - **VERDICT: No one-line bug.** SNAP and STREAM call the same `buildTlmFrame()`
+        with the same `state.inputs`. See Lead A finding below.
+- [x] If the cause requires D10 firmware changes (seq numbers, frame
       demux, idle-rate changes):
       - Document the finding in a comment in the issue file.
       - Add a cross-reference: "requires sprint 028 D10 work".
       - Do NOT attempt the D10 fix here.
-- [ ] The field-024 issue file is updated with resolution notes:
+      - **VERDICT: Deferred to 028-001.** Root cause is tick-ordering: SNAP fires
+        via `dequeueOne()` before `driveAdvance()` in the same tick. The field-024
+        anomaly (mode=IDLE + enc=0 while spinning) occurred at a PRE_ROTATE→IDLE
+        transition boundary, not from a wrong struct or stale pointer. See
+        `field-024-full-speed-spin-unresolved.md` Resolution section for full trace.
+- [x] The field-024 issue file is updated with resolution notes:
       - Lead B: "closed by 027-002 (bench runaway wrapper)".
-      - Lead A: either "fixed in 027-006" or "deferred to 028 — see
-        [D10 cross-reference]".
+      - Lead A: "deferred to 028-001 — tick-ordering limitation, D10 work required".
 - [ ] Issue is moved to done if both leads are either fixed or explicitly
       deferred with sprint references.
+      *(Team-lead handles issue move to done/ when ticket is closed.)*
 
 ### Lead B — host-abandon-without-X
 
-- [ ] `square_run.py` in `tests/bench/` confirmed to use `BenchRun` (from
-      027-002). If 027-002 already wrapped it, verify; if not, wrap it here.
+- [x] `square_run.py` in `tests/bench/` confirmed to use `BenchRun` (from
+      027-002). `BenchRun` context manager present at line 211 of `square_run.py`.
 - [ ] Manual test: run `square_run.py` and Ctrl-C mid-run; robot stops.
+      **DEFERRED — stakeholder field test.** Requires hardware.
 
 ### All existing tests pass
 
-- [ ] `uv run pytest host_tests/ -v` green.
+- [x] `uv run pytest host_tests/ -v` green. 539 passed (4 new SNAP tests added in
+      `host_tests/test_snap_tlm.py`).
 
 ## Implementation Plan
 

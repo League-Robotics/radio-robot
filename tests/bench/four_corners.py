@@ -20,8 +20,14 @@ stronger break-free burst). Connects once and runs the whole route.
 """
 import argparse
 import math
+import pathlib
 import sys
 import time
+
+_BENCH = pathlib.Path(__file__).resolve().parent
+if str(_BENCH) not in sys.path:
+    sys.path.insert(0, str(_BENCH))
+from bench_safety import BenchRun  # noqa: E402
 
 ROBOT = 100
 FX, FY = 67 - 9, 44.65 - 9        # A1-centred geofence from the ArUco corners
@@ -207,12 +213,13 @@ def main():
     t_start = time.monotonic()
     errs = []
     try:
-        for lap in range(args.laps):
-            for name in ROUTE:
-                tx, ty = WP[name]
-                st, xy, d = drive_to(tx, ty, name)
-                errs.append((name, st, d))
-                print(f"  {name:7s} → ({xy[0]:+5.1f},{xy[1]:+5.1f})  {d:4.1f}cm  [{st}]")
+        with BenchRun(proto, max_seconds=len(ROUTE) * args.laps * 30 + 60):
+            for lap in range(args.laps):
+                for name in ROUTE:
+                    tx, ty = WP[name]
+                    st, xy, d = drive_to(tx, ty, name)
+                    errs.append((name, st, d))
+                    print(f"  {name:7s} → ({xy[0]:+5.1f},{xy[1]:+5.1f})  {d:4.1f}cm  [{st}]")
         dt = time.monotonic() - t_start
         oks = [d for _, s, d in errs if s == "OK"]
         print(f"\n  tour done in {dt:.0f}s — {len(oks)}/{len(errs)} legs arrived, "
