@@ -649,6 +649,18 @@ static void handleHelp(const ArgList& /*args*/, const char* corrId,
 // SNAP — synchronous telemetry frame.
 //   prefix "SNAP"; parseFn nullptr.
 //   Reply: TLM ... (raw frame, not OK-wrapped)
+//
+// Tick-ordering limitation (field-024 lead A, 028-001):
+//   SNAP is dispatched by cmd.dequeueOne() at the START of loopTickOnce(),
+//   BEFORE driveAdvance() runs.  At a mode-transition boundary (e.g. the
+//   first tick after a G/T/D command arrives), SNAP reports end-of-last-tick
+//   state — so mode=IDLE and enc=0 are possible even while the robot is
+//   physically moving.  After the first post-command tick, SNAP reflects live
+//   state correctly.
+//
+//   The real fix for host-visible frame staleness is D10 seq numbers
+//   (ticket 028-005): the shared _tlmSeq counter on both SNAP and STREAM lets
+//   the host detect/skip frames from before a motion phase started.
 // ---------------------------------------------------------------------------
 
 static ParseResult parseSnap(const char* const* /*tokens*/, int /*ntokens*/,

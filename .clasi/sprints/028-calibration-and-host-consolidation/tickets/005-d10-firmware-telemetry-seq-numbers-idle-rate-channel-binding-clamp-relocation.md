@@ -178,6 +178,12 @@ Update `docs/protocol-v2.md`:
 
 ## Notes
 
+- **field-024 Lead A (from 028-001):** 028-001 confirmed the tick-ordering
+  diagnosis (SNAP dispatched before driveAdvance) and chose to document it as a
+  known limitation rather than retime SNAP. The seq-number counter (`_tlmSeq`)
+  added by THIS ticket is the host-visible fix: it lets the host correlate SNAP
+  frames to motion phases and detect/skip stale frames from a pre-driveAdvance
+  snapshot. See inline comment added to `handleSnap` in `Robot.cpp` (028-001).
 - Depends on 028-001 to know whether the SNAP/STREAM field-024 lead is closed
   here or was already closed by 028-001. The shared `_tlmSeq` counter is the
   natural resolution if D10 is required.
