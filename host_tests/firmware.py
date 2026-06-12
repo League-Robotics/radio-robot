@@ -202,6 +202,25 @@ class Sim:
         lib.sim_get_queue_wired.argtypes = [ctypes.c_void_p]
         lib.sim_get_queue_wired.restype = ctypes.c_int
 
+        # N7 queue-overflow helpers (030-005)
+        # sim_queue_size(void* h) → int (current item count)
+        lib.sim_queue_size.argtypes = [ctypes.c_void_p]
+        lib.sim_queue_size.restype = ctypes.c_int
+
+        # sim_fill_queue(void* h) → int (number of dummy items pushed)
+        lib.sim_fill_queue.argtypes = [ctypes.c_void_p]
+        lib.sim_fill_queue.restype = ctypes.c_int
+
+        # sim_command_no_drain(void* h, line, buf, len) → int
+        # Like sim_command but skips the two dequeueOne drains.
+        lib.sim_command_no_drain.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_int,
+        ]
+        lib.sim_command_no_drain.restype = ctypes.c_int
+
         # D10 telemetry helpers (028-005)
         # sim_get_tlm_bound(void* h) → int (1 if bound, 0 if not)
         lib.sim_get_tlm_bound.argtypes = [ctypes.c_void_p]
@@ -217,6 +236,35 @@ class Sim:
             ctypes.c_int,
         ]
         lib.sim_tick_collect_tlm.restype = ctypes.c_int
+
+    # ------------------------------------------------------------------
+    # N7 queue-overflow helpers (030-005)
+    # ------------------------------------------------------------------
+
+    def queue_size(self) -> int:
+        """Return the current number of items in the CommandQueue."""
+        return int(self._lib.sim_queue_size(self._h))
+
+    def fill_queue(self) -> int:
+        """Fill the CommandQueue to capacity with no-op dummy entries.
+
+        Returns the number of dummy items pushed.  After this call the
+        queue is full; any sim_command_no_drain() call that routes through
+        dispatchTable() will get ERR full.
+        """
+        return int(self._lib.sim_fill_queue(self._h))
+
+    def send_command_no_drain(self, line: str) -> str:
+        """Send one command WITHOUT draining the queue afterwards.
+
+        Used by overflow tests to see whether dispatchTable() returns
+        ERR full when the queue is already full.
+        """
+        buf = ctypes.create_string_buffer(512)
+        n = self._lib.sim_command_no_drain(self._h, line.encode(), buf, 512)
+        if n <= 0:
+            return ""
+        return buf.raw[:n].decode(errors="replace")
 
     # ------------------------------------------------------------------
     # N2 queue-invariant helper (030-002)

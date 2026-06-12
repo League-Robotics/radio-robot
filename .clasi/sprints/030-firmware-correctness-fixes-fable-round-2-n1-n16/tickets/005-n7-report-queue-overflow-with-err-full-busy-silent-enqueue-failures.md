@@ -1,11 +1,11 @@
 ---
 id: '005'
-title: "N7: Report queue overflow with ERR full/busy — silent enqueue failures"
-status: open
+title: "N7: Report queue overflow with ERR full/busy \u2014 silent enqueue failures"
+status: done
 use-cases:
-  - SUC-006
+- SUC-006
 depends-on:
-  - '002'
+- '002'
 github-issue: ''
 issue: fr2-n7-queue-full-err.md
 completes_issue: true
@@ -30,17 +30,17 @@ Depends on ticket 002 because that's when the queue path becomes permanently act
 
 ## Acceptance Criteria
 
-- [ ] `dispatchTable()` checks `push_back()` return and replies `ERR full` (or
+- [x] `dispatchTable()` checks `push_back()` return and replies `ERR full` (or
       `ERR busy`) for dropped commands.
-- [ ] All converter sites that call `pushVW()` check the return. On failure, the
+- [x] All converter sites that call `pushVW()` check the return. On failure, the
       converter either (a) suppresses the early `OK` (preferred — no OK if VW not
       enqueued) or (b) emits a follow-up `ERR` after having sent `OK`.
-- [ ] New sim test: burst of 5 commands (queue capacity 4) — the 5th gets an
+- [x] New sim test: burst of 5 commands (queue capacity 4) — the 5th gets an
       explicit `ERR full`/`ERR busy` response.
-- [ ] New sim test: a converter whose `pushVW` fails returns no bare `OK` (or
+- [x] New sim test: a converter whose `pushVW` fails returns no bare `OK` (or
       follows up with `ERR`).
-- [ ] `python3 build.py` clean build passes.
-- [ ] `uv run --with pytest python -m pytest host_tests/ host/tests/` passes.
+- [x] `python3 build.py` clean build passes.
+- [x] `uv run --with pytest python -m pytest host_tests/ host/tests/` passes.
 
 ## Implementation Plan
 

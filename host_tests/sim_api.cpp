@@ -510,4 +510,62 @@ int sim_tick_collect_tlm(void* h, uint32_t start_ms, uint32_t total_ms,
     return tlmCount;
 }
 
+// ---- N7 queue-overflow test helpers (030-005) ----
+
+// Returns the current number of items in the CommandQueue.
+// Used by overflow regression tests to verify the queue fills and that
+// subsequent enqueues (via sim_command) produce ERR full replies.
+int sim_queue_size(void* h)
+{
+    return static_cast<SimHandle*>(h)->_queue.size();
+}
+
+// Fill the CommandQueue to capacity (COMMAND_QUEUE_CAPACITY = 4) with
+// dummy no-op ParsedCommand entries.  Returns the number of items pushed.
+// After this call, any sim_command() that routes through dispatchTable()
+// (queue path) will fail with ERR full — except sim_command itself also
+// drains two items, so the test should call sim_fill_queue() then send
+// one more command WITHOUT calling dequeueOne.  This is done by calling
+// sim_command_no_drain() below.
+//
+// The dummy entries use a nullptr desc so dequeueOne() is a safe no-op
+// (it guards pc.desc != nullptr before calling handlerFn).
+int sim_fill_queue(void* h)
+{
+    SimHandle* s = static_cast<SimHandle*>(h);
+    int pushed = 0;
+    ParsedCommand dummy;
+    dummy.desc    = nullptr;   // no-op: dequeueOne guards desc != nullptr
+    dummy.replyFn = nullptr;
+    dummy.replyCtx = nullptr;
+    dummy.args.count = 0;
+    dummy.corrId[0] = '\0';
+    while (s->_queue.push_back(dummy)) ++pushed;
+    return pushed;
+}
+
+// Process one command WITHOUT the two post-process dequeueOne drains.
+// This is needed by the overflow test: we want dispatchTable() to find a
+// full queue and reply ERR full, without draining the queue first.
+// Returns the number of synchronous bytes written into out_buf.
+int sim_command_no_drain(void* h, const char* line, char* out_buf, int out_len)
+{
+    SimHandle* s = static_cast<SimHandle*>(h);
+    s->replyStore.reset();
+    s->_ts.activeFn    = storeReply;
+    s->_ts.activeTlmFn = storeReply;
+    s->_ts.activeCtx   = &s->replyStore;
+    s->cmd.process(line, storeReply, &s->replyStore);
+    // NOTE: no dequeueOne() calls — intentional, allows testing overflow.
+    int n = s->replyStore.written;
+    if (out_buf && out_len > 0) {
+        int copy = (n < out_len - 1) ? n : out_len - 1;
+        memcpy(out_buf, s->replyStore.buf, (size_t)copy);
+        out_buf[copy] = '\0';
+        n = copy;
+    }
+    s->replyStore.reset();
+    return n;
+}
+
 } // extern "C"
