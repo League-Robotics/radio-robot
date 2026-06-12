@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Pose-authority design document and stakeholder sign-off gate
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 depends-on: []
