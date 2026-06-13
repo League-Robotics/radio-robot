@@ -1,5 +1,6 @@
 ---
 status: pending
+sprint: '033'
 ---
 
 # D distance-stop baseline races the encoder reset — D after TURN can complete with zero motion

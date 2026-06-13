@@ -1,11 +1,13 @@
 ---
-id: "002"
-title: "Comprehensive sim drive-validation harness — fix TLM parsing and assert drive health"
-status: open
-use-cases: [SUC-004]
+id: '002'
+title: "Comprehensive sim drive-validation harness \u2014 fix TLM parsing and assert\
+  \ drive health"
+status: done
+use-cases:
+- SUC-004
 depends-on: []
-github-issue: ""
-issue: ""
+github-issue: ''
+issue: ''
 completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->

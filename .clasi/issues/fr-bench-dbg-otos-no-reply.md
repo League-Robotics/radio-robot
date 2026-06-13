@@ -1,5 +1,6 @@
 ---
 status: pending
+sprint: '033'
 ---
 
 # DBG OTOS BENCH: "no reply" was wrong transport (resolved); REAL bug = bench mode never engages
