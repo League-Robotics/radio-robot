@@ -375,8 +375,33 @@ class Nezha(Robot):
         self._proto.stream(period_ms)
 
     def snap(self) -> None:
-        """Request one immediate TLM frame (SNAP command)."""
+        """Request one immediate TLM frame (SNAP command).
+
+        Low-level fire-and-forget wrapper; the returned frame is discarded.
+        Use ``refresh()`` to issue SNAP and capture the result into ``state``.
+        """
         self._proto.snap()
+
+    def refresh(self) -> "RobotState":
+        """Issue a one-shot SNAP and return the updated robot state.
+
+        Calls ``self._proto.snap()`` which synchronously returns a parsed
+        ``TLMFrame`` (or ``None`` if the robot sent no TLM in its response).
+        When a frame is received it is fed through ``_apply_tlm`` to update
+        ``self.state``; when no frame is received the prior ``self.state`` is
+        returned unchanged.
+
+        This is the idle-state-query path — no streaming, no background thread.
+
+        Returns
+        -------
+        RobotState
+            The current (possibly just-refreshed) robot state.
+        """
+        tlm = self._proto.snap()
+        if tlm is not None:
+            self._apply_tlm(tlm)
+        return self.state
 
     # ------------------------------------------------------------------
     # OTOS sensor management
@@ -410,6 +435,49 @@ class Nezha(Robot):
     def set_world_pose(self, x_mm: int, y_mm: int, h_cdeg: int) -> None:
         """Set OTOS world-frame pose (OV command). Heading in centi-degrees."""
         self._proto.otos_set_position(x_mm, y_mm, h_cdeg)
+
+    def update_world_pose(self, x_cm: float, y_cm: float, yaw_rad: float) -> None:
+        """Set the world-frame pose from camera-native units and record it in state.
+
+        Converts camera-native units to firmware wire units and calls
+        ``set_world_pose`` (OV command), then records the camera-native values
+        in ``self.state.world_pose`` as ``(x_cm, y_cm, yaw_rad)`` so callers
+        can read the last-set world pose back without unit conversion.
+
+        Unit conventions
+        ----------------
+        Input  (camera-native): centimetres for x/y, radians for heading.
+        Wire   (firmware):      ``x_mm = round(x_cm * 10)``,
+                                ``y_mm = round(y_cm * 10)``,
+                                ``h_cdeg = round(degrees(yaw_rad) * 100)``.
+        Stored (state):         ``(x_cm, y_cm, yaw_rad)`` — camera units, unchanged.
+
+        Parameters
+        ----------
+        x_cm:
+            World x-position in centimetres.
+        y_cm:
+            World y-position in centimetres.
+        yaw_rad:
+            World heading in radians (CCW-positive, 0 = north/forward).
+        """
+        x_mm = round(x_cm * 10)
+        y_mm = round(y_cm * 10)
+        h_cdeg = round(math.degrees(yaw_rad) * 100)
+        self._proto.otos_set_position(x_mm, y_mm, h_cdeg)
+        prev = self.state
+        self.state = RobotState(
+            pose=prev.pose,
+            v=prev.v,
+            omega=prev.omega,
+            accel=prev.accel,
+            stamp=prev.stamp,
+            encoders=prev.encoders,
+            twist=prev.twist,
+            line=prev.line,
+            color=prev.color,
+            world_pose=(x_cm, y_cm, yaw_rad),
+        )
 
     def read_otos_pose(self) -> tuple[int, int, int] | None:
         """Query current OTOS pose (OP command). Returns (x_mm, y_mm, h_cdeg) or None."""

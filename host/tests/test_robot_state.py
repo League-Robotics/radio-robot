@@ -229,3 +229,96 @@ class TestStateStampRecent:
         robot = _make_robot()
         robot._apply_tlm(TLMFrame(enc=(5, 5)))
         assert abs(robot.state.stamp - time.monotonic()) < 1.0
+
+
+# ---------------------------------------------------------------------------
+# test_refresh
+# ---------------------------------------------------------------------------
+
+class TestRefresh:
+    """Nezha.refresh() issues SNAP via _proto.snap() and updates self.state."""
+
+    def test_refresh_issues_snap_and_updates_state(self) -> None:
+        """refresh() calls _proto.snap(), applies the TLMFrame, returns updated state."""
+        robot = _make_robot()
+        snap_frame = TLMFrame(enc=(55, 53), pose=(100, 200, 4500), line=(1, 2, 3, 4))
+        robot._proto.snap = MagicMock(return_value=snap_frame)
+
+        result = robot.refresh()
+
+        robot._proto.snap.assert_called_once()
+        assert result is robot.state
+        assert robot.state.encoders == (55, 53)
+        assert robot.state.pose.x == pytest.approx(100.0)
+        assert robot.state.pose.y == pytest.approx(200.0)
+        assert robot.state.pose.heading == pytest.approx(math.pi / 4, rel=1e-4)
+        assert robot.state.line == (1, 2, 3, 4)
+
+    def test_refresh_when_snap_returns_none(self) -> None:
+        """When _proto.snap() returns None, refresh() returns prior state unchanged."""
+        robot = _make_robot()
+        # Seed a known state.
+        robot._apply_tlm(TLMFrame(enc=(10, 10)))
+        prior_state = robot.state
+
+        robot._proto.snap = MagicMock(return_value=None)
+        result = robot.refresh()
+
+        robot._proto.snap.assert_called_once()
+        assert result is prior_state
+        assert robot.state.encoders == (10, 10)
+
+
+# ---------------------------------------------------------------------------
+# test_update_world_pose
+# ---------------------------------------------------------------------------
+
+class TestUpdateWorldPose:
+    """Nezha.update_world_pose() converts units, calls OV, and updates state."""
+
+    def test_update_world_pose_unit_conversion(self) -> None:
+        """update_world_pose converts cm->mm, rad->cdeg before calling otos_set_position."""
+        robot = _make_robot()
+        robot._proto.otos_set_position = MagicMock()
+
+        robot.update_world_pose(10.0, -5.0, math.pi / 2)
+
+        # x_mm = round(10.0 * 10) = 100
+        # y_mm = round(-5.0 * 10) = -50
+        # h_cdeg = round(degrees(pi/2) * 100) = round(90.0 * 100) = 9000
+        robot._proto.otos_set_position.assert_called_once_with(100, -50, 9000)
+
+    def test_update_world_pose_stores_world_pose(self) -> None:
+        """After update_world_pose, state.world_pose holds the camera-native values."""
+        robot = _make_robot()
+        robot._proto.otos_set_position = MagicMock()
+
+        robot.update_world_pose(10.0, -5.0, math.pi / 2)
+
+        assert robot.state.world_pose is not None
+        x_cm, y_cm, yaw_rad = robot.state.world_pose
+        assert x_cm == pytest.approx(10.0)
+        assert y_cm == pytest.approx(-5.0)
+        assert yaw_rad == pytest.approx(math.pi / 2)
+
+    def test_update_world_pose_preserves_other_state_fields(self) -> None:
+        """update_world_pose does not disturb existing encoders, pose, etc."""
+        robot = _make_robot()
+        robot._apply_tlm(TLMFrame(enc=(33, 31), pose=(500, 250, 0), color=(10, 20, 30, 40)))
+        robot._proto.otos_set_position = MagicMock()
+
+        robot.update_world_pose(15.0, 3.5, 0.0)
+
+        assert robot.state.encoders == (33, 31)
+        assert robot.state.pose.x == pytest.approx(500.0)
+        assert robot.state.color == (10, 20, 30, 40)
+        assert robot.state.world_pose == pytest.approx((15.0, 3.5, 0.0))
+
+    def test_update_world_pose_zero_yaw_cdeg_conversion(self) -> None:
+        """Zero yaw_rad maps to h_cdeg=0 (round-trip sanity check)."""
+        robot = _make_robot()
+        robot._proto.otos_set_position = MagicMock()
+
+        robot.update_world_pose(0.0, 0.0, 0.0)
+
+        robot._proto.otos_set_position.assert_called_once_with(0, 0, 0)
