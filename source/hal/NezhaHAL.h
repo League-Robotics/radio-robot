@@ -53,6 +53,12 @@ public:
     // No-op: devices are self-contained.
     void tick(uint32_t now_ms) override { (void)now_ms; }
 
+    // Actuator-state tick (034-001): integrates commanded velocities into the
+    // bench OTOS plant when bench mode is active; no-op when bench mode is off.
+    // Ports the signed-delta dt logic from Robot::benchOtosTick so Robot no
+    // longer needs a downcast.
+    void tick(uint32_t now_ms, const MotorCommands& cmds) override;
+
     // Expose the shared I2CBus for MotorController::setI2CBus().
     I2CBus& bus() { return _bus; }
 
@@ -89,4 +95,10 @@ private:
     // Must be declared AFTER both _otos and _benchOtos so those members
     // are fully constructed before _otosActive is assigned.
     IOtosSensor*     _otosActive;
+
+    // Bench-tick state (034-001): trackwidth cached from RobotConfig at
+    // construction; last-tick timestamp for signed-delta dt computation
+    // (mirrors the logic formerly in Robot::benchOtosTick).
+    float            _trackwidthMm    = 0.0f;
+    uint32_t         _lastBenchTickMs = 0u;
 };
