@@ -1,16 +1,22 @@
 """RobotState — composite motion-state dataclass for the Nezha robot.
 
-Carries pose, fused body-frame velocity, OTOS acceleration, and a host-side
-timestamp as one coherent snapshot.  Built by NezhaState from each TLM frame
-that carries both ``pose=`` and ``twist=`` fields.
+Carries the full TLM payload — pose, encoders, twist, line sensor, color,
+optional world pose, and a host-side timestamp — as one coherent frozen
+snapshot.  Built by ``Nezha._apply_tlm`` from each incoming TLM frame.
 
 Unit conventions:
-    pose.x / pose.y : centimetres (world frame, inheriting from Pose)
-    pose.heading    : radians (CCW-positive, standard maths convention)
-    v               : mm/s (body-frame forward speed, from EKF fusedV)
-    omega           : rad/s (yaw rate, CCW-positive, from EKF fusedOmega)
-    accel           : (ax_mmps2, ay_mmps2) — raw OTOS body-frame acceleration, or None
-    stamp           : time.monotonic() seconds at the host when the frame was processed
+    pose.x / pose.y  : millimetres (body-frame OTOS position, matching TLM)
+    pose.heading     : radians (CCW-positive, standard maths convention)
+    encoders         : (left_mm, right_mm) cumulative encoder totals in mm
+    twist            : (v_mmps, omega_mradps) fused body-frame velocity
+    line             : (g1, g2, g3, g4) raw line-sensor ADC counts
+    color            : (r, g, b, c) raw colour-sensor ADC counts
+    world_pose       : (x_cm, y_cm, heading_rad) optional camera-calibrated
+                       world position; None until set by update_world_pose()
+    v                : mm/s (body-frame forward speed, EKF-fused)
+    omega            : rad/s (yaw rate, CCW-positive, EKF-fused)
+    accel            : (ax_mmps2, ay_mmps2) body-frame acceleration, or None
+    stamp            : time.monotonic() seconds at the host when built
 """
 
 from __future__ import annotations
@@ -22,20 +28,37 @@ from robot_radio.nav.pose import Pose
 
 @dataclass(frozen=True)
 class RobotState:
-    """Composite frozen motion state for one TLM frame.
+    """Composite frozen snapshot of the full TLM payload for one frame.
+
+    All fields that were absent from the incoming TLM frame retain the value
+    they held in the *previous* state (partial-frame handling).
 
     Parameters
     ----------
     pose:
-        Robot position and heading in world frame.  x/y in centimetres;
-        heading in radians (CCW-positive).
+        Robot OTOS position and heading.  ``x`` and ``y`` are in millimetres
+        (matching the TLM wire format); ``heading`` is in radians
+        (CCW-positive).
+    encoders:
+        Cumulative encoder totals as ``(left_mm, right_mm)`` in mm, or
+        ``None`` if no encoder frame has been received yet.
+    twist:
+        Fused body-frame velocity as ``(v_mmps, omega_mradps)``, or ``None``
+        if the ``twist=`` field was absent from all frames so far.
+    line:
+        Raw line-sensor ADC counts as ``(g1, g2, g3, g4)``, or ``None``.
+    color:
+        Raw colour-sensor ADC counts as ``(r, g, b, c)``, or ``None``.
+    world_pose:
+        Camera-calibrated world position as ``(x_cm, y_cm, heading_rad)``,
+        or ``None`` until explicitly set via ``Nezha.update_world_pose()``.
     v:
         Body-frame forward speed in mm/s (EKF-fused).
     omega:
         Yaw rate in rad/s, CCW-positive (EKF-fused).
     accel:
-        Body-frame linear acceleration as (ax_mmps2, ay_mmps2), or None when
-        the ``twist=`` field is absent or the frame carries no accel data.
+        Body-frame linear acceleration as ``(ax_mmps2, ay_mmps2)``, or
+        ``None`` when the frame carries no accel data.
     stamp:
         ``time.monotonic()`` seconds at the host when this state was built.
     """
@@ -45,3 +68,10 @@ class RobotState:
     omega: float
     accel: tuple[float, float] | None
     stamp: float
+    # New fields — all default to None so callers that construct RobotState
+    # explicitly (e.g. tests) need not supply them.
+    encoders: tuple[int, int] | None = None
+    twist: tuple[int, int] | None = None
+    line: tuple[int, int, int, int] | None = None
+    color: tuple[int, int, int, int] | None = None
+    world_pose: tuple[float, float, float] | None = None

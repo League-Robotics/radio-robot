@@ -47,8 +47,10 @@ import math
 import time
 from typing import Any, Generator
 
+from robot_radio.nav.pose import Pose
 from robot_radio.robot.robot import Robot
 from robot_radio.robot.protocol import NezhaProtocol, TLMFrame, ParsedResponse, parse_tlm
+from robot_radio.robot.robot_state import RobotState
 
 
 class RobotNotFoundError(ConnectionError):
@@ -57,6 +59,13 @@ class RobotNotFoundError(ConnectionError):
 
 class Nezha(Robot):
     """Driver for the DFRobot Nezha2 via serial running protocol v2 firmware.
+
+    The canonical robot state snapshot is available as ``robot.state``
+    (a frozen :class:`RobotState`), updated by ``_apply_tlm`` on every
+    incoming TLM frame.  The legacy per-attribute names
+    (``encoders``, ``otos_pose``, ``line_sensor``, ``color``) remain
+    available as thin properties over ``state`` so all existing callers
+    are unaffected.
 
     Streaming drive interface:
       - ``stream_drive(speeds, ...)`` — generator; yields ParsedResponse objects
@@ -84,11 +93,46 @@ class Nezha(Robot):
     def __init__(self, proto: NezhaProtocol) -> None:
         self._proto = proto
 
-        # Live sensor state — updated by streaming generators.
-        self.encoders:    tuple[int, int]             = (0, 0)
-        self.otos_pose:   tuple[float, float, float]  = (0.0, 0.0, 0.0)  # x_mm, y_mm, yaw_rad
-        self.line_sensor: tuple[int, int, int, int]   = (255, 255, 255, 255)
-        self.color:       tuple[int, int, int, int]   = (0, 0, 0, 0)
+        # Unified live sensor state — updated by _apply_tlm on every TLM frame.
+        # Legacy per-attribute names (encoders, otos_pose, line_sensor, color)
+        # are thin properties over this object so existing callers are unaffected.
+        self.state: RobotState = RobotState(
+            pose=Pose(x=0.0, y=0.0, heading=0.0),
+            v=0.0,
+            omega=0.0,
+            accel=None,
+            stamp=time.monotonic(),
+            encoders=None,
+            twist=None,
+            line=None,
+            color=None,
+            world_pose=None,
+        )
+
+    # ------------------------------------------------------------------
+    # Back-compat sensor properties (thin wrappers over self.state)
+    # ------------------------------------------------------------------
+
+    @property
+    def encoders(self) -> tuple[int, int]:
+        """Cached encoder totals (left_mm, right_mm). Returns (0, 0) until first TLM frame."""
+        return self.state.encoders or (0, 0)
+
+    @property
+    def otos_pose(self) -> tuple[float, float, float]:
+        """Cached OTOS pose (x_mm, y_mm, yaw_rad). Returns (0.0, 0.0, 0.0) until first TLM."""
+        p = self.state.pose
+        return (p.x, p.y, p.heading)
+
+    @property
+    def line_sensor(self) -> tuple[int, int, int, int]:
+        """Cached line sensor values (g1, g2, g3, g4). Returns (255,255,255,255) until first TLM."""
+        return self.state.line or (255, 255, 255, 255)
+
+    @property
+    def color(self) -> tuple[int, int, int, int]:
+        """Cached colour sensor values (r, g, b, c). Returns (0, 0, 0, 0) until first TLM."""
+        return self.state.color or (0, 0, 0, 0)
 
     # ------------------------------------------------------------------
     # Robot interface — connection
@@ -141,7 +185,7 @@ class Nezha(Robot):
             for resp in self._proto.stream_drive(speeds, period_ms=40, watchdog_ms=200):
                 tlm = parse_tlm(resp.raw) if resp.tag == "TLM" else None
                 if tlm and tlm.enc:
-                    self.encoders = tlm.enc
+                    self._apply_tlm(tlm)
                     yield tlm.enc
         except GeneratorExit:
             pass
@@ -188,8 +232,13 @@ class Nezha(Robot):
         return self.encoders
 
     def go_to(self, x_mm: int, y_mm: int, speed_mms: int,
+              on_tick: Any = None,
               timeout_s: float = 15.0) -> tuple[int, int, str]:
         """Blocking go-to (G command). Returns (left_enc_mm, right_enc_mm, outcome).
+
+        ``on_tick`` is accepted for ABC compatibility but ignored in the
+        blocking implementation (pass ``None`` to use the default blocking
+        behaviour).  ``timeout_s`` caps the total wait time.
 
         outcome is one of "done", "safety_stop", or "timeout".
         """
@@ -207,7 +256,18 @@ class Nezha(Robot):
     def zero_encoders(self) -> None:
         """Zero encoder counters (ZERO enc command)."""
         self._proto.zero_encoders()
-        self.encoders = (0, 0)
+        self.state = RobotState(
+            pose=self.state.pose,
+            v=self.state.v,
+            omega=self.state.omega,
+            accel=self.state.accel,
+            stamp=self.state.stamp,
+            encoders=(0, 0),
+            twist=self.state.twist,
+            line=self.state.line,
+            color=self.state.color,
+            world_pose=self.state.world_pose,
+        )
 
     def send(self, message: str, read_ms: int = 500) -> dict[str, Any]:
         """Send arbitrary v2 command string, return raw response dict."""
@@ -244,18 +304,43 @@ class Nezha(Robot):
             yield resp
 
     def _apply_tlm(self, tlm: TLMFrame) -> None:
-        """Apply a TLMFrame to live sensor state."""
-        if tlm.enc is not None:
-            self.encoders = tlm.enc
+        """Construct a new frozen RobotState from the incoming TLMFrame.
+
+        Fields absent from the frame retain their previous values from
+        ``self.state`` (partial-frame handling).
+        """
+        prev = self.state
+
+        # Pose: update if the frame carries a pose= field.
         if tlm.pose is not None:
             x_mm, y_mm, h_cdeg = tlm.pose
             # heading is centi-degrees (integer); convert to radians CCW-positive
             yaw_rad = math.radians(h_cdeg / 100.0)
-            self.otos_pose = (float(x_mm), float(y_mm), yaw_rad)
-        if tlm.line is not None:
-            self.line_sensor = tlm.line
-        if tlm.color is not None:
-            self.color = tlm.color
+            new_pose = Pose(x=float(x_mm), y=float(y_mm), heading=yaw_rad)
+        else:
+            new_pose = prev.pose
+
+        # Fused body-frame velocity (optional twist= field).
+        if tlm.twist is not None:
+            v_mmps, omega_mradps = tlm.twist
+            new_v = float(v_mmps)
+            new_omega = float(omega_mradps) / 1000.0  # mrad/s → rad/s
+        else:
+            new_v = prev.v
+            new_omega = prev.omega
+
+        self.state = RobotState(
+            pose=new_pose,
+            v=new_v,
+            omega=new_omega,
+            accel=prev.accel,
+            stamp=time.monotonic(),
+            encoders=tlm.enc if tlm.enc is not None else prev.encoders,
+            twist=tlm.twist if tlm.twist is not None else prev.twist,
+            line=tlm.line if tlm.line is not None else prev.line,
+            color=tlm.color if tlm.color is not None else prev.color,
+            world_pose=prev.world_pose,
+        )
 
     # ------------------------------------------------------------------
     # Ping / identity
@@ -300,7 +385,19 @@ class Nezha(Robot):
     def zero_otos(self) -> None:
         """Zero the OTOS position at the current location (ZERO pose command)."""
         self._proto.zero_otos()
-        self.otos_pose = (0.0, 0.0, self.otos_pose[2])
+        prev = self.state
+        self.state = RobotState(
+            pose=Pose(x=0.0, y=0.0, heading=prev.pose.heading),
+            v=prev.v,
+            omega=prev.omega,
+            accel=prev.accel,
+            stamp=prev.stamp,
+            encoders=prev.encoders,
+            twist=prev.twist,
+            line=prev.line,
+            color=prev.color,
+            world_pose=prev.world_pose,
+        )
 
     def init_otos(self) -> None:
         """Initialise the OTOS sensor (OI command). Robot must be still."""
