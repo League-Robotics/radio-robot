@@ -7,6 +7,10 @@
 #include "IPortIO.h"
 #include "IServo.h"
 
+// Forward declaration — full definition in source/control/RobotState.h.
+// Sufficient here because the overload takes a const reference (034-001).
+struct MotorCommands;
+
 /**
  * Hardware — abstract HAL registry / factory base class.
  *
@@ -32,4 +36,26 @@ public:
 
     // Periodic tick, called once per cooperative loop iteration.
     virtual void tick(uint32_t now_ms) = 0;
+
+    // Actuator-state tick — delivers commanded motor velocities to the HAL
+    // so that bench-mode sensor plants (BenchOtosSensor) can integrate them
+    // without requiring a downcast in Robot (034-001).
+    //
+    // Default no-op: subclasses that do not use bench mode (MockHAL until
+    // ticket 005, any future minimal HAL) inherit this and require no change.
+    // NezhaHAL overrides this to drive BenchOtosSensor when bench mode is on.
+    virtual void tick(uint32_t now_ms, const MotorCommands& cmds) {
+        (void)now_ms;
+        (void)cmds;
+    }
+
+    // Bench-OTOS swap (034-003): redirect otos() to the bench sensor (on=true)
+    // or restore the real sensor (on=false).  Default no-op for HALs that do
+    // not support bench mode (MockHAL uses the overrides below; NezhaHAL
+    // overrides with the real swap).
+    virtual void setOtosBench(bool on) { (void)on; }
+
+    // Returns true when the bench OTOS sensor is currently active (034-003).
+    // Default false for HALs that do not support bench mode.
+    virtual bool isBenchMode() const { return false; }
 };
