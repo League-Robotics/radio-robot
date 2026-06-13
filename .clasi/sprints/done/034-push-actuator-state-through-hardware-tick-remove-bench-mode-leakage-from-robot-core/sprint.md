@@ -2,7 +2,7 @@
 id: '034'
 title: Push actuator state through Hardware::tick; remove bench-mode leakage from
   robot core
-status: planning-docs
+status: done
 branch: sprint/034-push-actuator-state-through-hardware-tick-remove-bench-mode-leakage-from-robot-core
 use-cases: []
 issues:
