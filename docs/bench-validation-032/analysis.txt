@@ -1,0 +1,50 @@
+# Bench validation 032 — full-stack hardware drive test
+
+Firmware: v0.20260612.17 (sprint 030 correctness fixes N1-N16 + sprint 031 Bench OTOS), flashed to robot `tovez`.
+Method: held-open relay connection (DATA-PLANE `!GO` protocol), SNAP-polled telemetry while driving
+TURN x4, a D+TURN square, and D/T velocity profiles on the bench stand.
+Comms: see memory `relay-go-data-plane-protocol` — the robot_radio lib / rogo could NOT talk to the
+robot (they use the old `>`-prefix protocol and never send `!GO`); raw `!GO` + plain commands work.
+
+## What looks GOOD
+
+- **Clean velocity profiles / starts / stops.** Wheel velocity (`vel=`) ramps smoothly on every D:
+  e.g. D_med_300: 78 -> 127 -> 153 -> 189 -> 209 -> 234 mm/s, then mode I / vel 0,0 at completion.
+  No instant-jump starts, no mid-drive velocity spikes, clean decel to zero. (The N4/N5 "fast spin
+  signature" / bad-start class is NOT present.)
+- **No software runaway spin.** TURNs execute mode V -> I and stop; encoders symmetric on a good turn
+  (turn1: enc=-160,160). No unbounded omega.
+- **EKF rejections stayed 0** (`ekf_rej=0`) throughout — no Mahalanobis-gate storms (N1 pose-corruption
+  class not observed in software terms).
+- Firmware boots and runs rock-solid (uptime > 8 min across the session, never crashed).
+
+## FINDINGS (real issues surfaced)
+
+1. **[HARDWARE/HIGH] Right encoder wedges / severely under-counts during drives.**
+   `EVT enc_wedged wheel=R` fired mid-D; saw enc=22,0 (R stuck) and enc=736,57 (L=736, R=57 over one
+   drive). The firmware integrates this asymmetry into a phantom heading swing (pose -> 131 deg, big Y
+   drift) — odometry pose gets corrupted by the dead right encoder, NOT by a software bug. This is the
+   known nRF52 encoder-wedge / L-R-imbalance issue, re-confirmed on the bench with current firmware.
+   -> issue: fr-bench-right-encoder-wedge.md
+
+2. **[FIRMWARE/MED] `DBG OTOS BENCH` and `DBG OTOS` emit NO reply on hardware.** `DBG` alone returns
+   `ERR unknown`, so the subsystem parses; `DBG OTOS [BENCH ...]` are recognized (no ERR unknown) but
+   produce zero reply. The Bench OTOS (sprint 031) could not be enabled/verified on the real robot —
+   this test therefore ran on encoder odometry, not the synthetic OTOS. The sim tests for these
+   commands pass; the hardware reply path is broken. -> issue: fr-bench-dbg-otos-no-reply.md
+
+3. **[FIRMWARE/MED] `twist=` (fused body velocity) reads 0,0 for the entire run** even while wheels move
+   (`vel=-209,194`). fusedV/fusedOmega never populate the twist TLM field on hardware. -> issue:
+   fr-bench-twist-fusedv-zero.md
+
+4. **[KNOWN/LOW] Turn overshoot.** A 90 deg TURN reached ~108 deg fused heading (consistent with the
+   long-standing turn-overshoot from OTOS/encoder fusion; tracked separately).
+
+## Verdict
+
+The full firmware stack drives correctly on the bench: clean velocity control, clean starts/stops, no
+software-induced runaway spin, stable EKF. The dominant real problem is a HARDWARE right-encoder wedge
+that corrupts odometry. Two firmware telemetry/command gaps (Bench-OTOS DBG no-reply; twist=0) were
+also found — both are hardware-only (sim-green), exactly the class of bug this bench harness exists to
+catch. The Bench OTOS itself could not be exercised because its DBG command doesn't reply on hardware;
+fixing that (finding 2) is the prerequisite to re-running this test under the synthetic OTOS.
