@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Fix DBG OTOS BENCH enable bug
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 depends-on: []
