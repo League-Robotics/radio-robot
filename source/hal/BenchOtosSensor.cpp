@@ -1,3 +1,9 @@
+// 034-006: exclude this translation unit from production builds.
+// BENCH_OTOS_ENABLED is defined by CMakeLists.txt when PRODUCTION_BUILD is
+// OFF (the default).  HOST_BUILD always includes the bench sensor so the
+// sim suite is unaffected.
+#if defined(BENCH_OTOS_ENABLED) || defined(HOST_BUILD)
+
 #include "BenchOtosSensor.h"
 #include <cmath>
 
@@ -201,3 +207,5 @@ void BenchOtosSensor::tick(float velLMms, float velRMms,
         }
     }
 }
+
+#endif // defined(BENCH_OTOS_ENABLED) || defined(HOST_BUILD)  [034-006]

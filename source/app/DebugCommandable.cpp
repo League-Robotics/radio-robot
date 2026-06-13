@@ -10,7 +10,10 @@
 #include "DebugCommandable.h"
 #include "CommandProcessor.h"
 #include "Robot.h"
+// 034-006: BenchOtosSensor is bench-build only.
+#if defined(BENCH_OTOS_ENABLED) || defined(HOST_BUILD)
 #include "BenchOtosSensor.h"
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -429,7 +432,8 @@ static void handleDbgOtosBench(const ArgList& args, const char* corrId,
     // observe the toggle (round-trip test: bench=1 comes back correctly).
     ctx.robot->hal.setOtosBench(enable != 0);
 
-#ifndef HOST_BUILD
+// 034-006: benchOtosPtr()/setNoise() are only available with BENCH_OTOS_ENABLED.
+#if !defined(HOST_BUILD) && defined(BENCH_OTOS_ENABLED)
     // Apply optional noise/drift params when enabling (firmware bench sensor only).
     // DebugCommandable is firmware-only; NezhaHAL downcast is allowed here (034-004).
     // args[1]=noiseXY, args[2]=noiseH, args[3]=drift.  Sentinel = -1.0f.
@@ -490,7 +494,9 @@ static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
     float idealX = 0.0f, idealY = 0.0f, idealH = 0.0f;
     float otosX  = 0.0f, otosY  = 0.0f, otosH  = 0.0f;
 
-#ifndef HOST_BUILD
+// 034-006: benchOtosPtr() is only available when BENCH_OTOS_ENABLED is
+// defined.  HOST_BUILD skips NezhaHAL entirely (uses MockHAL).
+#if !defined(HOST_BUILD) && defined(BENCH_OTOS_ENABLED)
     // DebugCommandable is firmware-only; NezhaHAL downcast is allowed here
     // (034-004).  benchOtosPtr() is a NezhaHAL-specific accessor.
     auto* nh = static_cast<NezhaHAL*>(&ctx.robot->hal);
@@ -504,7 +510,7 @@ static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
         otosH  = bench->otosH();
     }
 #else
-    // HOST_BUILD: NezhaHAL not available; ideal and otos are always 0,0,0.
+    // HOST_BUILD or production (no BENCH_OTOS_ENABLED): ideal and otos are 0,0,0.
     (void)ctx;
 #endif
 
@@ -709,9 +715,14 @@ std::vector<CommandDescriptor> DebugCommandable::getCommands() const
         makeCmd("DBG I2C",         parseDbgI2c,        handleDbgI2c,        ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // report I2C bus error counts
         makeCmd("DBG IRQGUARD",    parseDbgIrqguard,   handleDbgIrqguard,   ctx, "badarg", ForceReply::SERIAL),                          // enable/disable IRQ guard
         makeCmd("DBG WEDGE",       parseDbgWedge,      handleDbgWedge,      ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // run encoder wedge self-check
+        // 034-006: DBG OTOS BENCH and DBG OTOS are bench-build only.
+        // BENCH_OTOS_ENABLED is defined in default firmware builds (PRODUCTION_BUILD=OFF).
+        // HOST_BUILD always includes them so the sim suite is unaffected.
+#if defined(BENCH_OTOS_ENABLED) || defined(HOST_BUILD)
         // DBG OTOS BENCH must appear BEFORE DBG OTOS — longest prefix wins.
         makeCmd("DBG OTOS BENCH",  parseDbgOtosBench,  handleDbgOtosBench,  ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // enable/disable bench OTOS + set noise
         makeCmd("DBG OTOS",        parseDbgOtos,       handleDbgOtos,       ctx, "badarg", ForceReply::SERIAL),                          // query ideal/otos/fused pose
+#endif // defined(BENCH_OTOS_ENABLED) || defined(HOST_BUILD)
         makeCmd("I2CW",            parseI2cw,          handleI2cw,          ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // raw I2C write (addr reg data…)
         makeCmd("I2CR",            parseI2cr,          handleI2cr,          ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // raw I2C read (addr reg count)
     };

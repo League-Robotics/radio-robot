@@ -256,6 +256,23 @@ list(APPEND SOURCE_FILES ${CC_FILES})
 # (ticket 020-003) and Python test harness only.
 list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/hal/mock/.*")
 
+# Production-build toggle (034-006).
+#
+# PRODUCTION_BUILD defaults OFF so the default firmware build is unchanged:
+#   - OFF (default): defines BENCH_OTOS_ENABLED → BenchOtosSensor + DBG OTOS
+#     commands are compiled in.  Stakeholder bench testing works as before.
+#   - ON: BENCH_OTOS_ENABLED is NOT defined → bench code excluded.
+#
+# To produce a production firmware: cmake <build_dir> -DPRODUCTION_BUILD=ON
+#
+# Polarity: OFF → BENCH_OTOS_ENABLED defined → #ifdef BENCH_OTOS_ENABLED
+# includes the bench code.  Always use #ifdef (not #ifndef) in source guards.
+option(PRODUCTION_BUILD "Exclude bench-testing infrastructure (BenchOtosSensor, DBG OTOS commands) from the build" OFF)
+
+if(NOT PRODUCTION_BUILD)
+    add_definitions(-DBENCH_OTOS_ENABLED)
+endif()
+
 if("${SOURCE_FILES}" STREQUAL "")
     message(FATAL_ERROR "${BoldRed}No user application to build, please add a main.cpp at: ${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}${ColourReset}")
 endif()

@@ -6,21 +6,28 @@ NezhaHAL::NezhaHAL(MicroBitI2C& i2c, MicroBitIO& io, const RobotConfig& cfg)
       _motorL(_bus, 2, cfg.fwdSignL),   // M2 left
       _motorR(_bus, 1, cfg.fwdSignR),   // M1 right
       _otos(_bus, cfg),
+#ifdef BENCH_OTOS_ENABLED
       _benchOtos(),
+#endif
       _line(_bus),
       _color(_bus),
       _portio(io),
-      _gripper(io.P1),
+      _gripper(io.P1)
+#ifdef BENCH_OTOS_ENABLED
+      ,
       _otosActive(&_otos),              // default: real sensor
       _trackwidthMm(cfg.trackwidthMm),  // cache for bench tick (034-001)
       _lastBenchTickMs(0u)
+#endif
 {
 }
 
 void NezhaHAL::begin()
 {
     _otos.begin();
+#ifdef BENCH_OTOS_ENABLED
     _benchOtos.begin();   // no-op: sets _initialized = true
+#endif
     _line.begin();
     _color.begin();
 }
@@ -48,6 +55,7 @@ void NezhaHAL::begin()
 
 void NezhaHAL::tick(uint32_t now_ms, const MotorCommands& cmds)
 {
+#ifdef BENCH_OTOS_ENABLED
     // Maintain the dt baseline every tick (see header comment) before the
     // bench-mode gate.
     int32_t  dt_signed = (int32_t)(now_ms - _lastBenchTickMs);
@@ -58,4 +66,9 @@ void NezhaHAL::tick(uint32_t now_ms, const MotorCommands& cmds)
     if (!isBenchMode()) return;
 
     benchOtosPtr()->tick(cmds.tgtLMms, cmds.tgtRMms, _trackwidthMm, dt_ms);
+#else
+    // Production: no bench sensor; this override is a no-op.  (034-006)
+    (void)now_ms;
+    (void)cmds;
+#endif
 }
