@@ -1,7 +1,7 @@
 ---
 id: '006'
 title: Exclude BenchOtosSensor and DBG OTOS commands from production build
-status: open
+status: done
 use-cases:
 - SUC-034-004
 depends-on:

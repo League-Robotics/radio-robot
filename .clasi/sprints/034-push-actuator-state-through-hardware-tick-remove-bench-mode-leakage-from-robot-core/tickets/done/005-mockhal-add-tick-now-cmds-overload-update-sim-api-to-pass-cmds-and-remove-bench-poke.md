@@ -1,7 +1,8 @@
 ---
 id: '005'
-title: 'MockHAL: add tick(now, cmds) overload; update sim_api to pass cmds and remove bench poke'
-status: open
+title: 'MockHAL: add tick(now, cmds) overload; update sim_api to pass cmds and remove
+  bench poke'
+status: done
 use-cases:
 - SUC-034-002
 depends-on:

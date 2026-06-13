@@ -1,7 +1,8 @@
 ---
 id: '004'
-title: 'Rework DebugCommandable DBG OTOS handlers: remove hal downcast, fix integer formatting (F1)'
-status: open
+title: 'Rework DebugCommandable DBG OTOS handlers: remove hal downcast, fix integer
+  formatting (F1)'
+status: done
 use-cases:
 - SUC-034-003
 - SUC-034-005

@@ -1,7 +1,8 @@
 ---
 id: '003'
-title: Delete benchOtosTick, isBenchOtosActive, _lastBenchTickMs and HOST_BUILD guards from Robot
-status: open
+title: Delete benchOtosTick, isBenchOtosActive, _lastBenchTickMs and HOST_BUILD guards
+  from Robot
+status: done
 use-cases:
 - SUC-034-001
 depends-on:
