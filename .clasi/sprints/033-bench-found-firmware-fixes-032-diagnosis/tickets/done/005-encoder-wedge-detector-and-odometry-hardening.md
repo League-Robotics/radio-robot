@@ -1,11 +1,11 @@
 ---
 id: '005'
 title: Encoder wedge detector and odometry hardening
-status: open
+status: done
 use-cases:
 - SUC-005
 depends-on:
-- "003"
+- '003'
 issue: fr-bench-right-encoder-wedge.md
 completes_issue: true
 ---

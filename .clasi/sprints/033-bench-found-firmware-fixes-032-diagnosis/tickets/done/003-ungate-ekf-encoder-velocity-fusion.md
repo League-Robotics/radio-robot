@@ -1,11 +1,11 @@
 ---
 id: '003'
 title: Ungate EKF encoder-velocity fusion
-status: open
+status: done
 use-cases:
 - SUC-003
 depends-on:
-- "002"
+- '002'
 issue: fr-bench-twist-fusedv-zero.md
 completes_issue: true
 ---
