@@ -1,11 +1,11 @@
 ---
-id: "001"
-title: "Rewrite bench harness to use robot USB serial"
-status: open
+id: '001'
+title: Rewrite bench harness to use robot USB serial
+status: done
 use-cases:
 - SUC-001
 depends-on: []
-issue: "fr-bench-dbg-otos-no-reply.md"
+issue: fr-bench-dbg-otos-no-reply.md
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -27,13 +27,13 @@ No firmware change. This is a tooling-only ticket.
 
 ## Acceptance Criteria
 
-- [ ] `bench_validation_032.py` opens the robot's USB serial directly — no `!GO`, no relay
+- [x] `bench_validation_032.py` opens the robot's USB serial directly — no `!GO`, no relay
       data-plane protocol; uses `SerialConnection(port, mode="direct")` or equivalent
-- [ ] `enc_balance_test.py` similarly opens the robot's direct USB serial
-- [ ] Both scripts accept a `--port` argument pointing at the robot's USB serial device
+- [x] `enc_balance_test.py` similarly opens the robot's direct USB serial
+- [x] Both scripts accept a `--port` argument pointing at the robot's USB serial device
       (default to a robot USB device path, not the relay path)
-- [ ] Script imports are correct; no NameErrors on import
-- [ ] Hardware re-run is NOT an acceptance gate for this ticket — that is a post-sprint
+- [x] Script imports are correct; no NameErrors on import
+- [x] Hardware re-run is NOT an acceptance gate for this ticket — that is a post-sprint
       team-lead task
 
 ## Testing
