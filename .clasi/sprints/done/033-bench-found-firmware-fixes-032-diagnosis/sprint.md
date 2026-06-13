@@ -1,7 +1,7 @@
 ---
 id: '033'
 title: Bench-found firmware fixes (032 diagnosis)
-status: ticketing
+status: done
 branch: sprint/033-bench-found-firmware-fixes-032-diagnosis
 use-cases:
 - SUC-001
