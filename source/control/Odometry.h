@@ -220,6 +220,14 @@ public:
     void setEncOmegaHealthy(bool healthy) { _encOmegaHealthy = healthy; }
     bool encOmegaHealthy() const { return _encOmegaHealthy; }
 
+    // Wedge-active gate (033-005e).  When true, predict() suppresses the
+    // differential term dTheta from the pose integration and the EKF predict
+    // step, preventing a frozen wheel from injecting phantom heading rotation.
+    // Robot::controlCollectSplitPhase() drives this from wheelWedgedL/R().
+    // Defaults false (no wedge active at startup).
+    void setWedgeActive(bool active) { _wedgeActive = active; }
+    bool wedgeActive() const { return _wedgeActive; }
+
 private:
     // Intermediate compute state: previous encoder snapshot (not in HardwareState
     // because Odometry runs at a different cadence than the control task).
@@ -248,6 +256,11 @@ private:
     // encoder yaw-rate observation (wedged wheel → phantom omega).  Driven by the
     // wedge detector (033-005); defaults true.
     bool _encOmegaHealthy = true;
+
+    // Wedge-active gate (033-005e).  When true, predict() zeroes dTheta before
+    // the pose integration and EKF predict step.  Driven by the wedge detector
+    // (Robot::controlCollectSplitPhase() via wheelWedgedL/R()).  Defaults false.
+    bool _wedgeActive = false;
 
     EKF _ekf;              // Extended Kalman Filter — fuses encoder odometry with OTOS
 

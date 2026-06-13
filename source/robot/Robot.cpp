@@ -142,6 +142,11 @@ void Robot::controlCollectSplitPhase(uint32_t now_ms, int /*pendingWheel*/)
                     float dr2 = r2 - state.inputs.encRMm;
                     if (dr2 <= kMaxDeltaMm && dr2 >= -kMaxDeltaMm) { newR = r2; break; }
                 }
+                // (033-005b) Outlier rejection: increment the consecutive-reject
+                // streak counter.  Saturate at 255 to avoid uint8 wrap.
+                if (_filterRejectStreakR < 255) ++_filterRejectStreakR;
+            } else {
+                _filterRejectStreakR = 0;
             }
             state.inputs.encRMm = newR;
         }
@@ -157,14 +162,67 @@ void Robot::controlCollectSplitPhase(uint32_t now_ms, int /*pendingWheel*/)
                     float dr2 = r2 - state.inputs.encLMm;
                     if (dr2 <= kMaxDeltaMm && dr2 >= -kMaxDeltaMm) { newL = r2; break; }
                 }
+                // (033-005b) Outlier rejection: increment streak counter.
+                if (_filterRejectStreakL < 255) ++_filterRejectStreakL;
+            } else {
+                _filterRejectStreakL = 0;
             }
             state.inputs.encLMm = newL;
         }
+
+        // (033-005b) Emit EVT enc_filter_hold at threshold crossing (onset only).
+        // We emit exactly once when streak == threshold, not on every tick above,
+        // to avoid flooding the link with repeated EVTs for a persistent hold.
+        // Use _tlmBoundFn so the EVT goes to the same channel as TLM; silently
+        // drop when no channel is bound (no STREAM issued yet).
+        if (_filterRejectStreakR == kFilterRejectStreakThreshold &&
+                _tlmBoundFn != nullptr) {
+            char evtBuf[64];
+            snprintf(evtBuf, sizeof(evtBuf),
+                     "EVT enc_filter_hold wheel=R streak=%u",
+                     (unsigned)_filterRejectStreakR);
+            _tlmBoundFn(evtBuf, _tlmBoundCtx);
+        }
+        if (_filterRejectStreakL == kFilterRejectStreakThreshold &&
+                _tlmBoundFn != nullptr) {
+            char evtBuf[64];
+            snprintf(evtBuf, sizeof(evtBuf),
+                     "EVT enc_filter_hold wheel=L streak=%u",
+                     (unsigned)_filterRejectStreakL);
+            _tlmBoundFn(evtBuf, _tlmBoundCtx);
+        }
+    } else {
+        // Not driving: reset streak counters so they don't carry over into the
+        // next drive episode.
+        _filterRejectStreakL = 0;
+        _filterRejectStreakR = 0;
     }
     _prevDriving = driving;
     _lastControlMs = now_ms;
     // refreshedWheel=3: both wheels updated; 0: idle, no velocity update.
     motorController.controlTick(state.inputs, state.commands, now_ms, driving ? 3 : 0);
+
+    // (033-005e) Push wedge state into Odometry after every control tick.
+    // wheelWedgedL/R() return the EVT-latch state from the detector above.
+    //
+    // setWedgeActive: unconditionally mirrors the combined wedge flag — dTheta
+    // suppression is purely Robot-owned (no external setter in tests).
+    //
+    // setEncOmegaHealthy: only called when a wedge is ACTIVE.  When no wedge is
+    // active we do NOT call setEncOmegaHealthy(true) — this preserves any manual
+    // override (e.g. sim_set_enc_omega_healthy(false) in 033-003 tests) and avoids
+    // overwriting the gate each tick when everything is healthy.  The gate is only
+    // restored to true when the wedge clears (anyWedged transitions false→true→false).
+    bool anyWedged = motorController.wheelWedgedL() || motorController.wheelWedgedR();
+    odometry.setWedgeActive(anyWedged);
+    if (anyWedged) {
+        // Wheel is wedged: suppress both dTheta and the omega observation.
+        odometry.setEncOmegaHealthy(false);
+    } else if (_prevAnyWedged) {
+        // Wedge just cleared: restore omega health (encoder re-armed → moving again).
+        odometry.setEncOmegaHealthy(true);
+    }
+    _prevAnyWedged = anyWedged;
 }
 
 // ---------------------------------------------------------------------------

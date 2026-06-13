@@ -729,4 +729,31 @@ void sim_bench_otos_set_noise(void* h, float noise_xy, float noise_h,
                                                     drift_rad_per_sec);
 }
 
+// ---- 033-005 wedge-defense sim hooks ----
+
+// Read the per-wheel wedge latch state from MotorController (033-005e).
+// Returns 1 if the wedge EVT latch is set (wheel is wedged), 0 otherwise.
+int sim_get_wheel_wedged_l(void* h)
+{
+    return static_cast<SimHandle*>(h)->robot.motorController.wheelWedgedL() ? 1 : 0;
+}
+int sim_get_wheel_wedged_r(void* h)
+{
+    return static_cast<SimHandle*>(h)->robot.motorController.wheelWedgedR() ? 1 : 0;
+}
+
+// Read the odometry wedge-active gate (033-005e).
+// Returns 1 when Odometry::_wedgeActive is true (dTheta suppressed in predict).
+int sim_get_odometry_wedge_active(void* h)
+{
+    return static_cast<SimHandle*>(h)->robot.odometry.wedgeActive() ? 1 : 0;
+}
+
+// Read the odometry encoder-omega health gate (033-003 / 033-005e).
+// Returns 1 when healthy (omega fused), 0 when suppressed (wedged).
+int sim_get_odometry_enc_omega_healthy(void* h)
+{
+    return static_cast<SimHandle*>(h)->robot.odometry.encOmegaHealthy() ? 1 : 0;
+}
+
 } // extern "C"

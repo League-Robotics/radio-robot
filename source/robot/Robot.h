@@ -175,6 +175,21 @@ struct Robot {
     bool     _prevDriving   = false;
     bool     _simBenchOtosActive = false;  // HOST_BUILD bench-mode mirror (033-002)
 
+    // ---- Wedge-state tracking for enc-omega gate (033-005e) ----
+    // Tracks whether a wheel was wedged on the previous tick so Robot can
+    // restore setEncOmegaHealthy(true) on the tick the wedge clears.
+    bool     _prevAnyWedged   = false;
+
+    // ---- Outlier-filter hold instrumentation (033-005b) ----
+    // Per-wheel consecutive-reject streak counters. Incremented each tick that
+    // a wheel's encoder read is rejected by the speed-scaled outlier gate; reset
+    // to 0 on any accepted read or when the robot is not driving. When either
+    // streak reaches kFilterRejectStreakThreshold, an EVT enc_filter_hold line
+    // is emitted (once per episode) to alert the host to a silent filter freeze.
+    static constexpr uint8_t kFilterRejectStreakThreshold = 3;
+    uint8_t  _filterRejectStreakL = 0;
+    uint8_t  _filterRejectStreakR = 0;
+
     // ---- D10 telemetry: sequence counter + channel binding (028-005) ----
     // _tlmSeq: monotonically incrementing uint16 emitted as seq=<n> in every
     //   TLM frame (both STREAM and SNAP share the same counter).  Wraps at 65535.

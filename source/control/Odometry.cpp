@@ -48,6 +48,15 @@ void Odometry::predict(HardwareState& s, float trackwidthMm,
     // (024-006: rotationalSlip is now active — was dead before this sprint.)
     float slip      = effectiveSlip(rotationalSlip);
     float dTheta    = ((dR - dL) / trackwidthMm) * slip;
+
+    // (033-005e) Wedge defense: while a wheel is wedged its encoder is frozen,
+    // so the differential (dR - dL) contains phantom heading rotation.  Suppress
+    // dTheta entirely — hold heading — to prevent pose and EKF corruption.
+    // _encOmegaHealthy is also suppressed by the same event (Robot wires both).
+    if (_wedgeActive) {
+        dTheta = 0.0f;
+    }
+
     float thetaMid  = s.poseHrad + dTheta * 0.5f;
 
     s.poseX    += dCenter * cosf(thetaMid);
