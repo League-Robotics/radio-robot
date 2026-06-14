@@ -14,6 +14,12 @@ class IMotor {
 public:
     virtual ~IMotor() = default;
 
+    // Prime/initialize the motor at boot (e.g. encoder readback). Default no-op.
+    // Concrete implementations (Motor) override this to prime the hardware encoder
+    // so the first read after boot returns valid data, not the frozen-at-zero
+    // value the Nezha 0x46 register exhibits before its first atomic read.
+    virtual void begin() {}
+
     // Set speed as signed percentage (-100..100). Positive = logical forward.
     virtual void setSpeed(int8_t pct) = 0;
 

@@ -36,6 +36,11 @@ void NezhaHAL::begin()
 #endif
     _line.begin();
     _color.begin();
+    // Prime both motor encoders: the Nezha 0x46 register sits frozen at 0 until
+    // the first atomic read (Motor::begin() calls resetEncoder() to trigger it).
+    // The I2C bus is live at this point (the sensor begins above already use it).
+    _motorL.begin();
+    _motorR.begin();
 }
 
 // ---------------------------------------------------------------------------

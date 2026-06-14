@@ -45,6 +45,13 @@ class Motor : public IMotor {
 public:
     Motor(I2CBus& i2c, uint8_t motorId, int8_t fwdSign);
 
+    // Prime the encoder at boot: calls resetEncoder() to perform the first
+    // atomic 0x46 read, un-freezing the Nezha readback that sits at 0 until
+    // the first atomic read occurs. Called by NezhaHAL::begin() once the I2C
+    // bus is live. After this call, all subsequent encoder reads return valid
+    // counts without any host-side zero-on-connect workaround.
+    void begin() override;
+
     // Set speed as signed percentage (-100..100). Positive = logical forward.
     // fwdSign is applied internally to map logical direction to chip direction.
     // Stores the commanded direction in _lastDir for readSpeed() sign inference.

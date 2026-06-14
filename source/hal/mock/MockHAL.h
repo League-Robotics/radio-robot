@@ -71,7 +71,11 @@ public:
     IPortIO&      portIO()      override { return _portIO; }
     IServo&       gripper()     override { return _servo; }
 
-    void begin() override { _benchOtos.begin(); }
+    void begin() override {
+        _benchOtos.begin();
+        _motorL.begin();  // no-op via IMotor default; MockMotor has no encoder freeze
+        _motorR.begin();
+    }
     void tick(uint32_t now_ms) override;
     void tick(uint32_t now_ms, const MotorCommands& cmds) override;
 

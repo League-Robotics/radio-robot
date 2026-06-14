@@ -31,6 +31,21 @@ Motor::Motor(I2CBus& i2c, uint8_t motorId, int8_t fwdSign)
 // Public interface
 // ---------------------------------------------------------------------------
 
+void Motor::begin()
+{
+    // Prime the Nezha encoder readback at boot.
+    //
+    // The 0x46 register on the Nezha V2 is frozen at 0 until the chip receives
+    // its first atomic read transaction; after that it counts normally.  Without
+    // this call the encoder sits at 0 for the entire first move, making the
+    // first distanceDrive() or velocity-loop tick receive garbage data.
+    //
+    // resetEncoder() performs the 3× atomic read + readback-verify sequence
+    // (see resetEncoder()), which both un-freezes the register AND zeros the
+    // software offset — the correct initial state for a fresh boot.
+    resetEncoder();
+}
+
 void Motor::setSpeed(int8_t pct)
 {
     // Clamp to [-100, 100].
