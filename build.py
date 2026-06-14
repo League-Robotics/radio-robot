@@ -47,6 +47,7 @@ parser.add_option('-d', '--dev', dest='dev', action="store_true", help='enable d
 parser.add_option('-g', '--generate-docs', dest='generate_docs', action="store_true", help='generate documentation for the current target', default=False)
 parser.add_option('-j', '--parallelism', dest='parallelism', action="store", help='Set the number of parallel threads to build with, if supported', default=10)
 parser.add_option('-n', '--lines', dest='detail_lines', action="store", help="Sets the number of detail lines to output (only relevant to --status)", default=3 )
+parser.add_option('--fw-only', dest='fw_only', action="store_true", help='Build ONLY the micro:bit firmware; skip the host-simulation library. By default build.py builds BOTH the bench firmware (MICROBIT.hex) and the full-simulation library (host_tests/build/libfirmware_host).', default=False)
 
 (options, args) = parser.parse_args()
 
@@ -137,6 +138,50 @@ elif len(args) > 1:
     print("Too many arguments supplied, only one target can be specified.")
     exit(1)
 
+def _project_version():
+    """Read the canonical project version from the root pyproject.toml."""
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(root, "pyproject.toml")) as f:
+            for line in f:
+                m = re.match(r'\s*version\s*=\s*"([^"]+)"', line)
+                if m:
+                    return m.group(1)
+    except Exception:
+        pass
+    return "?"
+
+
+def build_host_sim(clean):
+    """Build the host-simulation library (libfirmware_host) via the host_tests
+    CMake build (HOST_BUILD) — the 'full simulation' target the pytest harness
+    uses. Fast: ~8s clean, <1s incremental. Uses absolute paths from __file__ so
+    it is correct regardless of the current working directory. Raises on failure.
+    """
+    import subprocess
+    root = os.path.dirname(os.path.abspath(__file__))
+    host_tests = os.path.join(root, "host_tests")
+    build_dir = os.path.join(host_tests, "build")
+    if clean and os.path.isdir(build_dir):
+        shutil.rmtree(build_dir)
+    os.makedirs(build_dir, exist_ok=True)
+    print("\nBuilding host-simulation library (libfirmware_host, HOST_BUILD)...")
+    subprocess.run(["cmake", "-S", host_tests, "-B", build_dir], check=True)
+    subprocess.run(["cmake", "--build", build_dir, "--parallel"], check=True)
+
+
+def print_build_summary(fw_only):
+    """Print a one-glance summary so there is no guessing which versions exist."""
+    ver = _project_version()
+    print("\n=== build summary ===")
+    print("  firmware hex   v%s   (bench, BENCH_OTOS_ENABLED)   -> MICROBIT.hex" % ver)
+    if fw_only:
+        print("  host sim lib   (skipped: --fw-only)")
+    else:
+        print("  host sim lib   v%s   (HOST_BUILD)   -> host_tests/build/libfirmware_host" % ver)
+    print()
+
+
 if not options.test_platform:
 
     if not os.path.exists("../codal.json"):
@@ -148,6 +193,15 @@ if not options.test_platform:
         exit(0)
 
     build(options.clean, verbose=options.verbose, parallelism=options.parallelism)
+
+    # Dev build = BOTH versions. After the bench firmware (MICROBIT.hex), also
+    # build the full-simulation library (libfirmware_host, HOST_BUILD) so a single
+    # build always leaves both artifacts in sync — no guessing which you have.
+    # --fw-only skips this. The host-sim build is fast (~8s clean, <1s incremental).
+    if not options.fw_only:
+        build_host_sim(options.clean)
+
+    print_build_summary(options.fw_only)
     exit(0)
 
 for json_obj in test_json:
