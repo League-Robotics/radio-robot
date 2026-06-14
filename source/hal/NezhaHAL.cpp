@@ -3,8 +3,14 @@
 
 NezhaHAL::NezhaHAL(MicroBitI2C& i2c, MicroBitIO& io, const RobotConfig& cfg)
     : _bus(i2c),
-      _motorL(_bus, 2, cfg.fwdSignL),   // M2 left
-      _motorR(_bus, 1, cfg.fwdSignR),   // M1 right
+      // Physical wiring is mirrored vs the original M2=left / M1=right labels:
+      // the robot turned CW for +omega (should be CCW under the ENU+CCW camera).
+      // M1 is the physical LEFT wheel, M2 the physical RIGHT. Each motor keeps
+      // its own chip channel, fwd polarity, and mm/deg calibration (calibration
+      // follows motorId inside Motor: id 1 -> mmPerDegR, id 2 -> mmPerDegL); only
+      // the L/R role is swapped so +omega -> physical CCW. Forward is unaffected.
+      _motorL(_bus, 1, cfg.fwdSignR),   // chip M1 = physical LEFT
+      _motorR(_bus, 2, cfg.fwdSignL),   // chip M2 = physical RIGHT
       _otos(_bus, cfg),
 #ifdef BENCH_OTOS_ENABLED
       _benchOtos(),

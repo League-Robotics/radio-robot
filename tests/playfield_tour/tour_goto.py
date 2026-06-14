@@ -125,14 +125,15 @@ def main():
 
     def establish_and_go(gx, gy, rx, ry, yaw):
         """SI: establish the odometry world pose from the camera fix; then G to goal."""
-        # SI — set the odometry pose G reads (firmware heading = yaw + 90°).
-        h_cdeg = int(round((math.degrees(yaw) + 90.0) * 100.0))
+        # SI — set the odometry pose G reads. ENU + CCW, tag aligned with forward,
+        # so the firmware heading IS the camera yaw (no offset).
+        h_cdeg = int(round(math.degrees(yaw) * 100.0))
         proto.send(f"SI {int(round(rx * 10))} {int(round(ry * 10))} {h_cdeg}", 150)
         time.sleep(0.12)
-        # robot-relative target: forward=(-sin,cos), left=(-cos,-sin) of yaw (cm→mm)
+        # robot-relative target (H = yaw): forward=(cos,sin), left=(-sin,cos) (cm→mm).
         dx, dy = gx - rx, gy - ry
-        fwd = (-dx * math.sin(yaw) + dy * math.cos(yaw)) * 10.0
-        lft = (-dx * math.cos(yaw) - dy * math.sin(yaw)) * 10.0
+        fwd = (dx * math.cos(yaw) + dy * math.sin(yaw)) * 10.0
+        lft = (-dx * math.sin(yaw) + dy * math.cos(yaw)) * 10.0
         proto.send(f"G {int(round(fwd))} {int(round(lft))} {args.speed}", 150)
 
     def drive_to(gx, gy):
