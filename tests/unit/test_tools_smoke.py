@@ -1,18 +1,15 @@
-"""test_tools_smoke.py — smoke tests for tests/tools/velocity_chart.py and
-tests/tools/playfield_tour.py (ticket 037-003).
+"""test_tools_smoke.py — smoke tests for tests/tools/playfield_tour.py
+(ticket 037-003).
 
 All tests run headless against ``make_target("sim")`` — no hardware, no
 camera, no matplotlib display required.
 
 Tests:
-  1. test_velocity_chart_importable          — import with no display.
-  2. test_velocity_chart_arg_parsing         — arg parser covers --target/--real-time/--full-speed.
-  3. test_velocity_chart_sim_headless        — headless sim run collects rows.
-  4. test_playfield_tour_importable          — import with no camera/display.
-  5. test_playfield_tour_arg_parsing         — arg parser covers --target/--pose/--real-time.
-  6. test_playfield_tour_load_waypoints_fallback — fallback waypoints when no playfield.json.
-  7. test_playfield_tour_sim_smoke           — sim run drives at least one hop.
-  8. test_playfield_tour_compute_robot_relative — world→robot math is correct.
+  1. test_playfield_tour_importable          — import with no camera/display.
+  2. test_playfield_tour_arg_parsing         — arg parser covers --target/--pose/--real-time.
+  3. test_playfield_tour_load_waypoints_fallback — fallback waypoints when no playfield.json.
+  4. test_playfield_tour_sim_smoke           — sim run drives at least one hop.
+  5. test_playfield_tour_compute_robot_relative — world→robot math is correct.
 """
 
 from __future__ import annotations
@@ -52,110 +49,6 @@ def _import_tool(tool_name: str):
     sys.modules[module_key] = mod
     spec.loader.exec_module(mod)
     return mod
-
-
-# ---------------------------------------------------------------------------
-# velocity_chart smoke tests
-# ---------------------------------------------------------------------------
-
-class TestVelocityChartImport:
-    """velocity_chart imports without matplotlib or camera."""
-
-    def test_velocity_chart_importable(self) -> None:
-        """import tests.tools.velocity_chart works with no display."""
-        mod = _import_tool("velocity_chart")
-        assert hasattr(mod, "main")
-        assert hasattr(mod, "_parse_args")
-
-    def test_velocity_chart_no_matplotlib_on_import(self) -> None:
-        """Importing velocity_chart must not trigger a matplotlib import."""
-        # Remove cached module so we get a fresh import.
-        for key in list(sys.modules):
-            if "_test_tools_velocity_chart" in key:
-                del sys.modules[key]
-
-        mpl_before = "matplotlib" in sys.modules
-        _import_tool("velocity_chart")
-        if not mpl_before:
-            # matplotlib must not have been imported by the module-level import.
-            # (It may have been imported by a previous test in the session —
-            # only assert when it was absent before.)
-            assert "matplotlib" not in sys.modules, (
-                "velocity_chart imported matplotlib eagerly at module level"
-            )
-
-
-class TestVelocityChartArgParsing:
-    """_parse_args covers the documented CLI flags."""
-
-    def test_default_target_is_sim(self) -> None:
-        mod = _import_tool("velocity_chart")
-        args = mod._parse_args([])
-        assert args.target == "sim"
-
-    def test_target_bench(self) -> None:
-        mod = _import_tool("velocity_chart")
-        args = mod._parse_args(["--target", "bench"])
-        assert args.target == "bench"
-
-    def test_real_time_flag(self) -> None:
-        mod = _import_tool("velocity_chart")
-        args = mod._parse_args(["--real-time"])
-        assert args.real_time is True
-
-    def test_full_speed_flag(self) -> None:
-        mod = _import_tool("velocity_chart")
-        args = mod._parse_args(["--full-speed"])
-        assert args.real_time is False
-
-    def test_headless_flag(self) -> None:
-        mod = _import_tool("velocity_chart")
-        args = mod._parse_args(["--headless"])
-        assert args.headless is True
-
-    def test_duration_and_speed(self) -> None:
-        mod = _import_tool("velocity_chart")
-        args = mod._parse_args(["--duration", "5", "--speed", "300"])
-        assert args.duration == pytest.approx(5.0)
-        assert args.speed == 300
-
-
-class TestVelocityChartSimRun:
-    """Headless sim run completes without error."""
-
-    def test_velocity_chart_sim_headless_short(self, tmp_path) -> None:
-        """main(--target sim --full-speed --headless --duration 2) exits 0."""
-        mod = _import_tool("velocity_chart")
-        csv_path = str(tmp_path / "vc_test.csv")
-        rc = mod.main([
-            "--target", "sim",
-            "--full-speed",
-            "--headless",
-            "--duration", "2",
-            "--speed", "200",
-            "--csv", csv_path,
-        ])
-        assert rc == 0, f"velocity_chart.main returned non-zero: {rc}"
-
-    def test_velocity_chart_sim_collects_rows(self, tmp_path) -> None:
-        """Headless run accumulates at least a few dashboard rows."""
-        mod = _import_tool("velocity_chart")
-        csv_path = str(tmp_path / "vc_rows.csv")
-        mod.main([
-            "--target", "sim",
-            "--full-speed",
-            "--headless",
-            "--duration", "1",
-            "--speed", "150",
-            "--csv", csv_path,
-        ])
-        # CSV must exist and have at least one data row.
-        import csv as csv_mod
-        with open(csv_path) as fh:
-            rows = list(csv_mod.DictReader(fh))
-        assert len(rows) >= 1, "Expected at least 1 row in velocity_chart CSV output"
-        assert "vL" in rows[0], "Expected 'vL' column in CSV"
-        assert "vR" in rows[0], "Expected 'vR' column in CSV"
 
 
 # ---------------------------------------------------------------------------

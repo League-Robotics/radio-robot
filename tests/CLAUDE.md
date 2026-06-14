@@ -16,12 +16,13 @@ not as loose scripts in this tree.
   firmware-logic tests, and the `testkit`/tools tests. This is what CI runs.
   Non-test helper modules a unit test imports (e.g. `rogo.py`) live here as
   siblings.
-- `tools/` — **target-switchable interactive tools**: `velocity_chart.py`,
-  `playfield_tour.py`. Each runs against any target via
+- `tools/` — **target-switchable interactive tools**: `playfield_tour.py`.
+  Each runs against any target via
   `--target {sim,bench,production}` (and `--real-time/--full-speed`,
   `--pose {firmware,camera}`), built on `robot_radio.testkit.make_target`.
 - `bench/` — real-robot **hardware** bench scripts and helpers
-  (`bench_safety.py` is a thin shim over `robot_radio.testkit.safety`).
+  (`bench_safety.py` is a thin shim over `robot_radio.testkit.safety`);
+  `velocity_chart.py`, the rich real-robot live velocity dashboard, lives here.
 - `calibrate/` — calibration routines.
 - `old/` — **retired** one-off / probe / superseded scripts and demo notebooks,
   kept for reference. Not maintained, not collected.
