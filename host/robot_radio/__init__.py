@@ -50,4 +50,13 @@ def __getattr__(name: str):
     if name == "QBotPro":
         from robot_radio.robot.cutebot import QBotPro
         return QBotPro
+    if name == "Playfield":
+        from robot_radio.field.playfield import Playfield
+        return Playfield
+    if name == "Tag":
+        from robot_radio.field.playfield import Tag
+        return Tag
+    if name == "Feature":
+        from robot_radio.field.playfield import Feature
+        return Feature
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

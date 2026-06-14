@@ -6,6 +6,23 @@ related-tickets: ["032-001"]
 
 # Talking to the robot through the relay (the `!GO` data plane) + where the docs are
 
+> **CORRECTION (2026-06-13, sprint 036-007, bench-verified).** The claim below that
+> "forcing `dtr=False` actually SUPPRESSES the relay … leaves it mute" is **FALSE**.
+> Verified live: opening with `dtr=False` and spamming `HELLO` returns the `DEVICE:`
+> banner on the first try, and plain `PING`/`SNAP` return `OK pong` / a full `TLM`
+> frame. DTR's only role is **reset** (it resets any micro:bit on the open-time
+> transition); you assert DTR to reset a relay into a clean *command plane* so you can
+> configure it, not to "enable" comms. The real reason `rogo`/`robot_radio` failed
+> with "No device found" was **announcement detection**: with no reset there is no
+> boot banner, AND the reader thread dropped `DEVICE:` lines as noise — so the banner
+> was never captured even though plain commands worked. Fixed in sprint 036-007:
+> `SerialConnection` now HELLO-classifies (capturing the banner *before* the reader
+> starts), and for a `RADIOBRIDGE` relay runs `!ECHO OFF` → `!MODE RAW250` → `!GO`,
+> then talks plain. Also note: the robot's own USB is NOT always "flash-only/silent" —
+> the `tovez` NEZHA2 answers `HELLO`/`PING`/`SNAP`/`VER`/`ID` directly on its USB.
+> Radio-link note: relay and robot must share a channel; the robot's channel is
+> boot-selected and queried/set via the robot `RF` command (group is fixed).
+
 ## Where the documentation is (read this FIRST)
 
 **All project documentation is at https://robots.jointheleague.org/.** For ANY

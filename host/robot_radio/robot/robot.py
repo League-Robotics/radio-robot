@@ -1,7 +1,7 @@
 """Abstract base class for robot control."""
 
 from abc import ABC, abstractmethod
-from typing import Any, Generator
+from typing import Any, Callable, Generator
 
 
 class Robot(ABC):
@@ -47,3 +47,37 @@ class Robot(ABC):
     @abstractmethod
     def is_connected(self) -> bool:
         """Check if the robot connection is active."""
+
+    def go_to(
+        self,
+        x_mm: int,
+        y_mm: int,
+        speed_mms: int,
+        on_tick: Callable | None = None,
+        timeout_s: float = 15.0,
+    ) -> tuple[int, int, str]:
+        """Blocking go-to (G command). Returns (left_enc_mm, right_enc_mm, outcome).
+
+        ``on_tick`` is called after each update cycle if provided; when
+        ``None`` (default) the call blocks until the firmware signals completion.
+        ``timeout_s`` caps the total wait time.
+
+        Subclasses that already implement go_to with a different signature must
+        override this method directly.
+        """
+        raise NotImplementedError
+
+    def turn(
+        self,
+        heading_cdeg: int,
+        on_tick: Callable | None = None,
+        timeout_s: float = 15.0,
+    ) -> str:
+        """Rotate to an absolute heading (TURN command). Returns outcome string.
+
+        ``on_tick`` is called after each update cycle if provided.
+        ``timeout_s`` caps the total wait time.
+
+        Subclasses that implement turn must override this method.
+        """
+        raise NotImplementedError
