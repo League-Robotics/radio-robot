@@ -535,13 +535,21 @@ static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
     // Emit the pose comparison line, then the OK reply.
     // Format: ideal=<xmm>,<ymm>,<hcdeg> otos=... fused=... err=...
     // All integer fields: positions in mm, headings in centidegrees (cdeg).
+    // Raw OTOS STATUS byte + I2C-read-OK + the validity envelope used by the
+    // TLM otos= gate.  Lets a bench probe see why otos= is suppressed.
+    uint8_t otosStatus = 0xFF;
+    bool statusOk = ctx.robot->hal.otos().readStatus(otosStatus);
+    int valid = ctx.robot->state.inputs.otos.valid ? 1 : 0;
+
     char pose_buf[200];
     snprintf(pose_buf, sizeof(pose_buf),
-             "ideal=%d,%d,%d otos=%d,%d,%d fused=%d,%d,%d err=%d,%d,%d",
+             "ideal=%d,%d,%d otos=%d,%d,%d fused=%d,%d,%d err=%d,%d,%d "
+             "status=0x%02X statusOk=%d valid=%d",
              (int)roundf(idealX), (int)roundf(idealY), (int)roundf(idealH * kRadToCdeg),
              (int)roundf(otosX),  (int)roundf(otosY),  (int)roundf(otosH  * kRadToCdeg),
              (int)roundf(fusedX), (int)roundf(fusedY), (int)roundf(fusedH * kRadToCdeg),
-             (int)roundf(errX),   (int)roundf(errY),   (int)roundf(errH   * kRadToCdeg));
+             (int)roundf(errX),   (int)roundf(errY),   (int)roundf(errH   * kRadToCdeg),
+             (unsigned)otosStatus, statusOk ? 1 : 0, valid);
     replyFn(pose_buf, replyCtx);
 
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "dbg", "otos",

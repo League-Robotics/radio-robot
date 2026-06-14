@@ -475,6 +475,14 @@ int sim_get_tlm_bound(void* h)
     return (static_cast<SimHandle*>(h)->robot._tlmBoundCtx != nullptr) ? 1 : 0;
 }
 
+// Force the _tlmBoundIsRadio flag so tests can exercise the radio TLM-rate cap
+// in telemetryEmit.  In sim, runCommsIn (which normally resolves the channel
+// type) is not called, so this flag is otherwise always false.
+void sim_set_tlm_bound_radio(void* h, int on)
+{
+    static_cast<SimHandle*>(h)->robot._tlmBoundIsRadio = (on != 0);
+}
+
 // Advance simulation by total_ms in step_ms increments and collect all TLM
 // lines emitted by telemetryEmit into out_buf.  Returns the number of TLM
 // lines collected (not bytes).  out_buf receives concatenated lines separated

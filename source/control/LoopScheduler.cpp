@@ -80,8 +80,10 @@ static void runCommsIn(LoopScheduler& sched, uint32_t now)
     void* bCtx = sched.robot()._tlmBoundCtx;
     if (bCtx == static_cast<void*>(&serial)) {
         sched.robot()._tlmBoundFn = serialReplyTlm;
+        sched.robot()._tlmBoundIsRadio = false;
     } else if (bCtx == static_cast<void*>(&radio)) {
         sched.robot()._tlmBoundFn = radioReply;
+        sched.robot()._tlmBoundIsRadio = true;  // cap TLM rate (telemetryEmit)
     }
     // If bCtx is nullptr (never bound) or some other ctx (sim), leave
     // _tlmBoundFn unchanged.

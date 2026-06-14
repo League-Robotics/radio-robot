@@ -182,6 +182,15 @@ class SerialConnection:
         self._write_lock = threading.RLock()
         self._ka_thread: threading.Thread | None = None
         self._ka_stop = threading.Event()
+        # Monotonic timestamp of the last byte written to the port (any command
+        # OR a keepalive).  The keepalive loop only emits "+" once the wire has
+        # been idle for a full period: the firmware resets its safety-stop
+        # watchdog on ANY received line (LoopScheduler::runCommsIn), so a flowing
+        # command stream already feeds the watchdog, and a redundant "+" packed
+        # next to a command gets merged with it by the relay's RAW250 framing —
+        # corrupting the command ("ERR unknown" / dropped reply).  Updated under
+        # _write_lock by send()/send_fast() and the keepalive loop itself.
+        self._last_write_s = time.monotonic()
 
         # ── Reader thread infrastructure (sprint 025, ticket 001) ────────────
         # One queue per in-flight corr-id; created before write, deleted after
@@ -651,15 +660,30 @@ class SerialConnection:
         # Always plain "+": after !GO the relay is a transparent pipe, and
         # direct connections were already plain.  The old ">+" relay prefix is
         # no longer used on any code path.
+        #
+        # Idle-gate (sprint 040): only emit "+" when the wire has been idle for a
+        # full period.  The firmware resets its watchdog on EVERY received line,
+        # so any command already serves as a keepalive; emitting a redundant "+"
+        # next to a command lets the relay's RAW250 framing merge the two lines
+        # and corrupt the command.  Suppressing "+" while commands flow (connect,
+        # config, streaming) eliminates that collision, while true idle and long
+        # blocking motions (host otherwise silent) still get "+" with nothing to
+        # collide with.  Poll at half-period so idle keepalives stay regular and
+        # worst-case silence (~1.5×period ≈ 225 ms) stays well under the default
+        # sTimeoutMs (500).
         msg = b"+\n"
-        while not self._ka_stop.wait(period_s):
+        poll_s = period_s / 2.0
+        while not self._ka_stop.wait(poll_s):
             try:
                 if not self.is_open:
                     break
                 with self._write_lock:
+                    if (time.monotonic() - self._last_write_s) < period_s:
+                        continue  # a command fed the watchdog recently; skip "+"
                     if self._ser is not None:
                         self._ser.write(msg)
                         self._ser.flush()
+                        self._last_write_s = time.monotonic()
             except Exception:
                 break   # port closed / gone — let the robot safety-stop
 
@@ -708,6 +732,7 @@ class SerialConnection:
             with self._write_lock:
                 self._ser.write(cmd.encode("utf-8"))
                 self._ser.flush()
+                self._last_write_s = time.monotonic()  # defer the next "+"
         except Exception as exc:
             with self._reply_lock:
                 self._reply_queues.pop(corr_id, None)
@@ -749,6 +774,7 @@ class SerialConnection:
         with self._write_lock:
             self._ser.write(cmd.encode("utf-8"))
             self._ser.flush()
+            self._last_write_s = time.monotonic()  # defer the next "+"
 
     def read_lines(self, duration_ms: int = 500, stop_token: str | None = None) -> list[str]:
         """Read lines from the TLM and EVT queues within the given duration.

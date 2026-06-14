@@ -99,6 +99,49 @@ class TestApplyTlmPopulatesState:
 
 
 # ---------------------------------------------------------------------------
+# test_apply_tlm_otos_pose — raw OTOS pose from the otos= field
+# ---------------------------------------------------------------------------
+
+class TestApplyTlmOtosPose:
+    """_apply_tlm maps the TLM otos= field into state.otos_pose (raw OTOS).
+
+    This is the raw optical-odometry-sensor pose, kept distinct from the
+    encoder/EKF-fused state.pose.
+    """
+
+    def test_otos_pose_populated(self) -> None:
+        robot = _make_robot()
+        robot._apply_tlm(TLMFrame(otos=(120, -60, 9000)))
+        assert robot.state.otos_pose is not None
+        x, y, h = robot.state.otos_pose
+        assert x == pytest.approx(120.0)
+        assert y == pytest.approx(-60.0)
+        assert h == pytest.approx(math.pi / 2, rel=1e-4)  # 9000 cdeg = 90 deg
+
+    def test_otos_pose_none_before_otos_field(self) -> None:
+        """state.otos_pose stays None until an otos= field is seen."""
+        robot = _make_robot()
+        robot._apply_tlm(TLMFrame(enc=(1, 1), pose=(10, 10, 0)))
+        assert robot.state.otos_pose is None
+
+    def test_otos_pose_distinct_from_fused_pose(self) -> None:
+        """A frame with both pose= and otos= keeps them separate."""
+        robot = _make_robot()
+        robot._apply_tlm(TLMFrame(pose=(100, 50, 0), otos=(105, 47, 0)))
+        assert robot.state.pose.x == pytest.approx(100.0)
+        assert robot.state.otos_pose[0] == pytest.approx(105.0)
+        assert robot.state.otos_pose[1] == pytest.approx(47.0)
+
+    def test_absent_otos_retains_prior(self) -> None:
+        """A frame without otos= preserves the previous otos_pose."""
+        robot = _make_robot()
+        robot._apply_tlm(TLMFrame(otos=(200, 100, 4500)))
+        robot._apply_tlm(TLMFrame(enc=(5, 5)))  # no otos=
+        assert robot.state.otos_pose is not None
+        assert robot.state.otos_pose[0] == pytest.approx(200.0)
+
+
+# ---------------------------------------------------------------------------
 # test_apply_tlm_partial_frame
 # ---------------------------------------------------------------------------
 

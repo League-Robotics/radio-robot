@@ -33,6 +33,15 @@ bool OtosSensor::begin()
     init();
     setLinearScalar(scaleToInt8(_cfg.otosLinearScale));
     setAngularScalar(scaleToInt8(_cfg.otosAngularScale));
+
+    // Zero the OTOS position AND heading at boot so it starts at the same origin
+    // as the freshly-zeroed encoders.  The OTOS chip retains its tracked pose
+    // across a micro:bit reset/reflash (only a power cycle or an explicit write
+    // clears it), so without this the EKF fuses a STALE OTOS pose (seen: −728mm,
+    // −92°) against the encoders' (0,0,0) origin — corrupting the initial heading
+    // and sending GO_TO off in the wrong direction.  Done after init() so the
+    // zeroed heading is taken with the IMU bias already calibrated.
+    setPositionRaw(0, 0, 0);
     return true;
 }
 
@@ -43,6 +52,20 @@ void OtosSensor::init()
     writeReg8(REG_SIGNAL_PROCESS_CFG, 0x0F);
     // Reset Kalman tracking (bit 0 = 1).
     writeReg8(REG_RESET, 0x01);
+
+    // Calibrate the IMU bias (gyro + accelerometer) — the robot MUST be still.
+    // Writing the sample count to REG_IMU_CALIBRATION starts a background
+    // calibration; the OTOS decrements the register to 0 as it collects samples
+    // (~3 ms each, 255 → ~0.77 s).  Without this the gyro/accel bias is
+    // uncorrected: the heading drifts and warnTiltAngle (STATUS bit 0) stays set
+    // (which the fusion-health gate rejects).  Block until done or a generous
+    // timeout.  Runs at boot via begin() (after the 2.5 s sensor settle, robot
+    // still) and on the OI command (deliberate re-calibration — keep it still).
+    calibrateImu(kImuCalibSamples);
+    for (uint32_t waited = 0; waited < kImuCalibTimeoutMs; waited += 4u) {
+        if (readReg8(REG_IMU_CALIBRATION) == 0) break;  // calibration complete
+        fiber_sleep(4);
+    }
 }
 
 void OtosSensor::calibrateImu(uint8_t samples)

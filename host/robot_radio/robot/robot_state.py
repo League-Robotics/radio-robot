@@ -75,3 +75,8 @@ class RobotState:
     line: tuple[int, int, int, int] | None = None
     color: tuple[int, int, int, int] | None = None
     world_pose: tuple[float, float, float] | None = None
+    # Raw OTOS (optical odometry sensor) pose as ``(x_mm, y_mm, yaw_rad)``,
+    # pre-fusion, from the TLM ``otos=`` field — distinct from ``pose`` (the
+    # encoder/EKF-fused pose).  ``None`` until an ``otos=`` field is seen (the
+    # firmware omits it when the OTOS read is stale/invalid, e.g. lifted).
+    otos_pose: tuple[float, float, float] | None = None

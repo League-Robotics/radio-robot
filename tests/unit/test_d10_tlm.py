@@ -351,6 +351,50 @@ def test_n3_stream_then_non_stream_command_tlm_stays_on_bound_channel(sim):
 
 
 # ---------------------------------------------------------------------------
+# 6. RADIO RATE CAP: TLM bound to the radio is floored to ~5 Hz during motion
+# ---------------------------------------------------------------------------
+# The radio/relay link sustains only ~5 Hz of TLM cleanly (bench-measured
+# 2026-06-14: STREAM 200 delivered ~100% during motion, 10 Hz ~15%, 20 Hz ~0%).
+# telemetryEmit floors the effective period at 200 ms when _tlmBoundIsRadio is
+# set, so motion frames actually arrive over radio.  Serial keeps the full rate.
+
+def test_radio_cap_throttles_motion_tlm(sim):
+    """With the radio binding, STREAM 50 motion TLM is floored to ~5 Hz (200 ms).
+
+    Drive (active, so the idle-rate throttle does not apply), force the radio
+    binding, and collect for 1000 ms.  At the 200 ms radio cap we expect ~5
+    frames — far fewer than the ~20 the 50 ms period would otherwise produce.
+    """
+    assert "period=50" in sim.send_command("STREAM 50")
+    sim.set_tlm_bound_radio(True)
+    assert "OK" in sim.send_command("T 200 200 5000").upper()
+
+    frames = sim.tick_collect_tlm(total_ms=1000, step_ms=10)
+    assert 3 <= len(frames) <= 8, (
+        f"radio-capped motion TLM should be ~5 Hz (200 ms floor); "
+        f"got {len(frames)} frames in 1000 ms"
+    )
+
+
+def test_serial_no_cap_full_rate_motion_tlm(sim):
+    """Without the radio binding (serial), STREAM 50 motion TLM runs full-rate.
+
+    Same scenario as the radio-cap test but with _tlmBoundIsRadio = False: the
+    50 ms period (20 Hz) applies unthrottled, so we expect many more frames.
+    This guards against the cap leaking onto the serial channel.
+    """
+    assert "period=50" in sim.send_command("STREAM 50")
+    sim.set_tlm_bound_radio(False)
+    assert "OK" in sim.send_command("T 200 200 5000").upper()
+
+    frames = sim.tick_collect_tlm(total_ms=1000, step_ms=10)
+    assert len(frames) >= 15, (
+        f"serial motion TLM should run at the full ~20 Hz rate (no radio cap); "
+        f"got only {len(frames)} frames in 1000 ms"
+    )
+
+
+# ---------------------------------------------------------------------------
 # DEFERRED (stakeholder field test):
 # - Drop rate < 2% over a 60 s drive with STREAM 50 over relay.
 # - square_run.py bench test: tlm_drop_rate(frames) < 0.02.

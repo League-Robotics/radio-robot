@@ -310,6 +310,10 @@ class Sim:
         lib.sim_get_tlm_bound.argtypes = [ctypes.c_void_p]
         lib.sim_get_tlm_bound.restype = ctypes.c_int
 
+        # sim_set_tlm_bound_radio(void* h, int on) → None (forces radio TLM cap)
+        lib.sim_set_tlm_bound_radio.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        lib.sim_set_tlm_bound_radio.restype = None
+
         # sim_tick_collect_tlm(void* h, start_ms, total_ms, step_ms, buf, len) → int
         lib.sim_tick_collect_tlm.argtypes = [
             ctypes.c_void_p,
@@ -427,6 +431,14 @@ class Sim:
     def get_tlm_bound(self) -> bool:
         """Return True if the TLM channel is bound (STREAM was issued)."""
         return bool(self._lib.sim_get_tlm_bound(self._h))
+
+    def set_tlm_bound_radio(self, on: bool) -> None:
+        """Force the radio TLM-rate-cap flag (telemetryEmit) for testing.
+
+        In sim, runCommsIn never runs so the firmware's channel-type resolution
+        is skipped; this lets a test drive the radio cap path directly.
+        """
+        self._lib.sim_set_tlm_bound_radio(self._h, ctypes.c_int(1 if on else 0))
 
     def tick_collect_tlm(self, total_ms: int, step_ms: int = 24) -> list[str]:
         """Advance simulation and return a list of TLM frame strings emitted.

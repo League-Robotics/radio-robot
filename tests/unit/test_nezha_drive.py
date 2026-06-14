@@ -99,28 +99,82 @@ class TestConnectPreflight:
         assert calls[1] == "ID"
 
     def test_connect_preflight_ping_timeout_raises(self) -> None:
-        """connect() raises RobotNotFoundError when PING returns None."""
-        conn = _canned_send([
-            [],  # PING — no response
-        ])
+        """connect() raises RobotNotFoundError when every PING attempt is silent.
+
+        connect() retries the preflight (PING/ID are idempotent reads), so the
+        mock must answer consistently across all attempts — a command-aware
+        side_effect returns the same (empty) result however many times PING is
+        retried.
+        """
+        conn = MagicMock()
+        conn.is_open = True
+        conn.mode = "relay"
+
+        def _send(cmd, *a, **k):
+            return {"sent": cmd, "mode": "relay", "responses": []}  # always silent
+
+        conn.send.side_effect = _send
+        conn.send_fast.return_value = None
+        conn.read_lines.return_value = []
         robot, _ = _nezha_with_conn(conn)
         with pytest.raises(RobotNotFoundError, match="PING"):
             robot.connect()
 
     def test_connect_preflight_id_timeout_raises(self) -> None:
-        """connect() raises RobotNotFoundError when ID returns None."""
+        """connect() raises RobotNotFoundError when PING succeeds but ID is silent.
+
+        ID is retried; the command-aware mock answers PING always, ID never.
+        """
         conn = MagicMock()
         conn.is_open = True
         conn.mode = "relay"
-        conn.send.side_effect = [
-            {"sent": "PING", "mode": "relay", "responses": ["OK pong t=1"]},
-            {"sent": "ID", "mode": "relay", "responses": []},  # ID silent
-        ]
+
+        def _send(cmd, *a, **k):
+            if cmd == "PING":
+                return {"sent": "PING", "mode": "relay", "responses": ["OK pong t=1"]}
+            return {"sent": cmd, "mode": "relay", "responses": []}  # ID silent
+
+        conn.send.side_effect = _send
         conn.send_fast.return_value = None
         conn.read_lines.return_value = []
         robot, _ = _nezha_with_conn(conn)
         with pytest.raises(RobotNotFoundError, match="ID"):
             robot.connect()
+
+    def test_connect_preflight_retries_recover(self) -> None:
+        """connect() recovers when an early PING/ID attempt is corrupted.
+
+        Simulates the relay-merge collision: the first PING and the first ID
+        come back empty (lost reply), but the next attempt succeeds. connect()
+        must retry and return the identity rather than aborting.
+        """
+        conn = MagicMock()
+        conn.is_open = True
+        conn.mode = "relay"
+        ping_calls = {"n": 0}
+        id_calls = {"n": 0}
+
+        def _send(cmd, *a, **k):
+            if cmd == "PING":
+                ping_calls["n"] += 1
+                if ping_calls["n"] < 2:
+                    return {"sent": "PING", "mode": "relay", "responses": []}
+                return {"sent": "PING", "mode": "relay", "responses": ["OK pong t=1"]}
+            id_calls["n"] += 1
+            if id_calls["n"] < 2:
+                return {"sent": "ID", "mode": "relay", "responses": ["ERR unknown"]}
+            return {"sent": "ID", "mode": "relay", "responses": [
+                "ID model=Nezha2 name=TOVEZ serial=0 fw=2.0 proto=2 caps=otos,line"
+            ]}
+
+        conn.send.side_effect = _send
+        conn.send_fast.return_value = None
+        conn.read_lines.return_value = []
+        robot, _ = _nezha_with_conn(conn)
+        identity = robot.connect()
+        assert identity["model"] == "Nezha2"
+        assert ping_calls["n"] == 2  # recovered on 2nd PING
+        assert id_calls["n"] == 2    # recovered on 2nd ID
 
 
 # ===========================================================================

@@ -108,6 +108,12 @@ private:
 
     static constexpr uint8_t EXPECTED_PRODUCT_ID = 0x5F;
 
+    // IMU calibration (init()): sample count written to REG_IMU_CALIBRATION and
+    // the blocking poll budget.  255 samples ≈ 0.77 s at ~3 ms/sample; the
+    // timeout adds margin so a slow bus still completes.
+    static constexpr uint8_t  kImuCalibSamples   = 255;
+    static constexpr uint32_t kImuCalibTimeoutMs = 1500;
+
     // Last readXYH I2C success flag (mutable so readXYH can update it in const methods).
     mutable bool _lastReadOk = false;
 

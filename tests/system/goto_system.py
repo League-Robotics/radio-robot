@@ -46,14 +46,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def print_tick(robot) -> None:
-    """Print one telemetry frame from the robot's live state."""
+    """Print one telemetry frame from the robot's live state.
+
+    ``pose`` is the fused pose (encoder odometry + OTOS EKF); ``otos`` is the raw
+    OTOS (optical odometry sensor) pose from the ``otos=`` field, or ``n/a`` when
+    the firmware omitted it (OTOS read stale, e.g. lifted off the surface).  Both
+    are ``(x, y, heading)`` — x/y in mm, heading in degrees.  Velocity is mm/s,
+    yaw rate rad/s, encoders mm.  Units are dropped from the line for compactness.
+    """
     s = robot.state
     enc = s.encoders or (0, 0)
+    p = s.pose
+    if s.otos_pose is not None:
+        ox, oy, oh = s.otos_pose
+        otos_str = f"({ox:7.1f},{oy:7.1f},{math.degrees(oh):+6.1f})"
+    else:
+        otos_str = f"({'n/a':^22})"
     print(
-        f"  pose=({s.pose.x:7.1f},{s.pose.y:7.1f})mm "
-        f"hdg={math.degrees(s.pose.heading):+6.1f}deg  "
-        f"v={s.v:6.1f}mm/s w={s.omega:+5.2f}rad/s  "
-        f"enc=({enc[0]:>5},{enc[1]:>5})mm  "
+        f"  pose=({p.x:7.1f},{p.y:7.1f},{math.degrees(p.heading):+6.1f})  "
+        f"otos={otos_str}  "
+        f"v={s.v:6.1f} w={s.omega:+5.2f}  "
+        f"enc=({enc[0]:>5},{enc[1]:>5})  "
         f"line={s.line} color={s.color}"
     )
 

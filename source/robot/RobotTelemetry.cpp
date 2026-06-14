@@ -157,6 +157,17 @@ void Robot::telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx)
                : kIdleMinMs)
         : (uint32_t)config.tlmPeriodMs;
 
+    // Radio rate cap: the radio/relay link sustains only ~5 Hz of TLM cleanly —
+    // bench-measured 2026-06-14, STREAM 200 (5 Hz) delivered ~100% during motion,
+    // but 10 Hz dropped ~85% and 20 Hz ~100%.  When TLM is bound to the radio
+    // channel, floor the period at kRadioMinMs so motion frames actually arrive.
+    // Serial keeps the full requested rate (no cap).  At rest the idle throttle
+    // (>= kIdleMinMs) already exceeds this cap, so this only bites during motion.
+    static constexpr uint32_t kRadioMinMs = 200;
+    if (_tlmBoundIsRadio && effectivePeriod < kRadioMinMs) {
+        effectivePeriod = kRadioMinMs;
+    }
+
     if ((now_ms - _lastTlmMs) < effectivePeriod) return;
 
     char tlmBuf[160];

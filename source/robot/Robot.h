@@ -185,6 +185,12 @@ struct Robot {
     uint16_t _tlmSeq        = 0;
     ReplyFn  _tlmBoundFn    = nullptr;
     void*    _tlmBoundCtx   = nullptr;
+    // _tlmBoundIsRadio: true when the bound TLM channel is the radio (relay).
+    //   Set in runCommsIn alongside _tlmBoundFn (the only site that resolves the
+    //   channel type from _tlmBoundCtx).  telemetryEmit uses it to cap the TLM
+    //   rate on the radio: the link sustains only ~5 Hz, so emitting at the full
+    //   serial rate drops ~85-100% of frames during motion (bench-measured).
+    bool     _tlmBoundIsRadio = false;
 
     // ---- OTOS validity tracking (D9 — 027-005) ----
     // _otosInvalidStartMs: system time when OTOS first became invalid in the

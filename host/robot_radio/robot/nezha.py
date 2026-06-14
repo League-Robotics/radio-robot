@@ -143,23 +143,32 @@ class Nezha(Robot):
     def is_connected(self) -> bool:
         return self._proto.is_open
 
-    def connect(self) -> dict[str, str]:
+    def connect(self, attempts: int = 5) -> dict[str, str]:
         """Run liveness preflight: PING then ID.
 
         Returns the robot identity kv dict on success.
         Raises RobotNotFoundError if either step times out or returns no response.
+
+        Each step is retried up to ``attempts`` times.  PING and ID are
+        idempotent reads, and an occasional reply is lost when a "+" keepalive
+        gets merged with the command by the relay's RAW250 framing (the
+        keepalive idle-gate in SerialConnection minimises this, but a lone
+        command issued right after a "+" can still collide).  The rapid retries
+        form a command burst, during which the idle-gate suppresses "+" entirely,
+        so a corrupted preflight reliably recovers on the next attempt rather
+        than aborting the whole session.
         """
-        ping_result = self._proto.ping()
-        if ping_result is None:
+        if not any(self._proto.ping() is not None for _ in range(attempts)):
             raise RobotNotFoundError(
                 "Robot did not respond to PING — check cable, relay, and power."
             )
-        id_result = self._proto.get_id()
-        if id_result is None:
-            raise RobotNotFoundError(
-                "Robot did not respond to ID — relay may be present but robot is silent."
-            )
-        return id_result
+        for _ in range(attempts):
+            id_result = self._proto.get_id()
+            if id_result is not None:
+                return id_result
+        raise RobotNotFoundError(
+            "Robot did not respond to ID — relay may be present but robot is silent."
+        )
 
     # ------------------------------------------------------------------
     # Robot interface — motion
@@ -393,6 +402,7 @@ class Nezha(Robot):
             line=self.state.line,
             color=self.state.color,
             world_pose=self.state.world_pose,
+            otos_pose=self.state.otos_pose,
         )
 
     def send(self, message: str, read_ms: int = 500) -> dict[str, Any]:
@@ -530,6 +540,14 @@ class Nezha(Robot):
             new_v = prev.v
             new_omega = prev.omega
 
+        # Raw OTOS pose (optional otos= field): x,y mm and heading centi-degrees,
+        # same encoding as pose=. Kept separate from the fused pose above.
+        if tlm.otos is not None:
+            ox_mm, oy_mm, oh_cdeg = tlm.otos
+            new_otos = (float(ox_mm), float(oy_mm), math.radians(oh_cdeg / 100.0))
+        else:
+            new_otos = prev.otos_pose
+
         self.state = RobotState(
             pose=new_pose,
             v=new_v,
@@ -541,6 +559,7 @@ class Nezha(Robot):
             line=tlm.line if tlm.line is not None else prev.line,
             color=tlm.color if tlm.color is not None else prev.color,
             world_pose=prev.world_pose,
+            otos_pose=new_otos,
         )
 
     # ------------------------------------------------------------------
@@ -623,6 +642,7 @@ class Nezha(Robot):
             line=prev.line,
             color=prev.color,
             world_pose=prev.world_pose,
+            otos_pose=prev.otos_pose,
         )
 
     def init_otos(self) -> None:
@@ -678,6 +698,7 @@ class Nezha(Robot):
             line=prev.line,
             color=prev.color,
             world_pose=(x_cm, y_cm, yaw_rad),
+            otos_pose=prev.otos_pose,
         )
 
     def read_otos_pose(self) -> tuple[int, int, int] | None:

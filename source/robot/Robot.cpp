@@ -267,13 +267,55 @@ void Robot::otosCorrect(uint32_t now_ms)
     uint8_t otosStatus = 0;
     bool statusOk = activeOtos.readStatus(otosStatus);
 
-    if (!statusOk || otosStatus != 0 || !activeOtos.lastReadOk()) {
-        // OTOS is invalid: do not fuse; mark the validity envelope.
-        state.inputs.otos.valid = false;
+    // Two-tier gate (D9 + telemetry decoupling):
+    //
+    // 1. READABLE — is there a usable reading at all?  Only an I2C failure or a
+    //    HARD error (errPaa bit6 / errLsm bit7) means "no reading".  WARNING bits
+    //    (warnTiltAngle bit0 / warnOpticalTracking bit1) do NOT block the read:
+    //    the OTOS still returns a pose + IMU heading, just degraded.  On a
+    //    bench/stand warnOpticalTracking is ALWAYS set (no surface in range) —
+    //    we still want the raw reading visible in telemetry (otos=) and the IMU
+    //    heading usable.
+    //
+    // 2. HEALTHY — is it good enough to FUSE into the EKF?  Only when fully clean
+    //    (otosStatus == 0).  warnOpticalTracking ⇒ the optical position is
+    //    unreliable; fusing it drags fused velocity/pose (the D9 "spin on
+    //    placement" symptom).  Degraded readings are shown but not fused; pose
+    //    tracking falls back to encoder odometry.
+    //
+    // NOTE: do NOT gate on lastReadOk() before the read — it reflects the PREVIOUS
+    // tick's readXYH and starts false, which deadlocks the real sensor forever
+    // (valid never set → readTransformed never runs → _lastReadOk never set).
+    // The read is validated by readTransformed's own return value (poseOk) below.
+    static constexpr uint8_t kOtosHardErr = 0xC0;   // errLsm(7) | errPaa(6)
+    bool readable = statusOk && ((otosStatus & kOtosHardErr) == 0);
 
-        // Emit "EVT otos lost" exactly once per invalidity window,
-        // but only when a motion command is actively running (no point
-        // signalling on a parked robot).
+    // Pass poseHrad for the lever-arm offset rotation (no-op when offsets are zero).
+    float headingRad = state.inputs.poseHrad;
+
+    OtosPose p{0.0f, 0.0f, 0.0f};
+    bool poseOk = readable && activeOtos.readTransformed(config, p, headingRad);
+
+    // Telemetry: expose the raw OTOS pose whenever a fresh reading exists (even
+    // degraded).  otos.valid drives the TLM otos= freshness gate; it means "a
+    // recent raw reading exists", NOT "was fused".  On a same-tick read failure
+    // do not write otosX/Y/H with garbage zeros.
+    if (poseOk) {
+        state.inputs.otosX = p.x;
+        state.inputs.otosY = p.y;
+        state.inputs.otosH = p.h;
+        state.inputs.otos.lastUpdMs = now_ms;
+        state.inputs.otos.valid = true;
+    } else {
+        state.inputs.otos.valid = false;
+    }
+
+    // Fusion / "OTOS lost" health: clean status AND a successful read.
+    bool healthy = poseOk && (otosStatus == 0);
+    if (!healthy) {
+        // Emit "EVT otos lost" once per unhealthy window, only during an active
+        // motion command (no point signalling on a parked robot).  Trigger is
+        // unchanged from D9; the raw telemetry above is independent of this.
         if (motionController.hasActiveCommand()) {
             if (_otosInvalidStartMs == 0) {
                 _otosInvalidStartMs = now_ms;
@@ -285,35 +327,12 @@ void Robot::otosCorrect(uint32_t now_ms)
                 _otosLostEmitted = true;
             }
         }
-        return;
+        return;  // shown in telemetry (if poseOk), but not fused
     }
 
-    // OTOS valid: reset the invalidity tracking window.
+    // Healthy: reset the invalidity tracking window and fuse.
     _otosInvalidStartMs = 0;
     _otosLostEmitted    = false;
-    state.inputs.otos.valid = true;
-
-    // Pass poseHrad for the lever-arm offset rotation (no-op when offsets are zero).
-    float headingRad = state.inputs.poseHrad;
-
-    // N9 (030-008): use the return value of readTransformed — NOT the stale
-    // lastReadOk() from the previous tick.  _lastReadOk is updated INSIDE
-    // readTransformed (by readXYH), so checking it before the call would miss
-    // a failure that occurs on THIS tick.  A failed read decodes raw[6]={0}
-    // into pose(0,0,0)/vel(0,0); near the origin the Mahalanobis gate accepts
-    // these zeros and drags fusedV to zero — the D9 one-tick symptom.
-    OtosPose p;
-    bool poseOk = activeOtos.readTransformed(config, p, headingRad);
-    if (!poseOk) {
-        // Same-tick I2C failure: mark otos invalid and skip fusion.
-        // Do not update otosX/Y/H or lastUpdMs with garbage zeros.
-        state.inputs.otos.valid = false;
-        return;
-    }
-    state.inputs.otosX = p.x;
-    state.inputs.otosY = p.y;
-    state.inputs.otosH = p.h;
-    state.inputs.otos.lastUpdMs = now_ms;
 
     // Read OTOS velocity and acceleration; store acceleration for telemetry.
     OtosVelocity vel;
