@@ -1,8 +1,14 @@
 """
-conftest.py — pytest fixtures for host simulation tests (ticket 020-004).
+tests/conftest.py — root pytest fixtures for the merged test tree (ticket 037-004).
 
-build_lib  — session-scoped, autouse: cmake configure + build before any test.
-sim        — function-scoped: creates one Sim per test and destroys it after.
+Provides:
+  build_lib        — session-scoped, autouse: cmake build of libfirmware_host.
+  sim              — function-scoped: one fresh Sim per test.
+  sim_field_profile — function-scoped: Sim with field profile (turn slip + OTOS fusion).
+
+sys.path setup ensures:
+  - tests/sim/ is on sys.path → `from firmware import Sim` works from tests/unit/.
+  - host/ is on sys.path → `from robot_radio.testkit import ...` works everywhere.
 """
 import pathlib
 import subprocess
@@ -10,21 +16,38 @@ import sys
 
 import pytest
 
-_HOST_TESTS = pathlib.Path(__file__).parent
-_BUILD_DIR = _HOST_TESTS / "build"
+# ---------------------------------------------------------------------------
+# Path constants
+# ---------------------------------------------------------------------------
 
-# Tests live in unit/ (and other subdirs); make the shared helper modules in
-# this directory (firmware.py, etc.) importable from anywhere in the tree.
-if str(_HOST_TESTS) not in sys.path:
-    sys.path.insert(0, str(_HOST_TESTS))
+_TESTS_DIR = pathlib.Path(__file__).parent          # tests/
+_SIM_DIR   = _TESTS_DIR / "sim"                    # tests/sim/
+_BUILD_DIR = _SIM_DIR / "build"                    # tests/sim/build/
+_REPO_ROOT = _TESTS_DIR.parent                     # repo root
+_HOST_DIR  = _REPO_ROOT / "host"                   # host/ (robot_radio package)
 
+# ---------------------------------------------------------------------------
+# sys.path setup
+# ---------------------------------------------------------------------------
+# Add tests/sim/ so that `from firmware import Sim` works in tests/unit/ tests.
+if str(_SIM_DIR) not in sys.path:
+    sys.path.insert(0, str(_SIM_DIR))
+
+# Add host/ so that `from robot_radio.testkit import ...` works.
+if str(_HOST_DIR) not in sys.path:
+    sys.path.insert(0, str(_HOST_DIR))
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session", autouse=True)
 def build_lib():
     """Configure and build libfirmware_host if needed."""
     _BUILD_DIR.mkdir(exist_ok=True)
     subprocess.run(
-        ["cmake", "-S", str(_HOST_TESTS), "-B", str(_BUILD_DIR)],
+        ["cmake", "-S", str(_SIM_DIR), "-B", str(_BUILD_DIR)],
         check=True,
     )
     subprocess.run(

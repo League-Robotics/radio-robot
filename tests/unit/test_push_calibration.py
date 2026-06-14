@@ -29,6 +29,8 @@ from robot_radio.config.robot_config import (
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
 
+# __file__ is tests/unit/test_push_calibration.py; repo root is three levels up
+# (tests/unit/ -> tests/ -> repo root — same depth as host/tests/).
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _TOVEZ_JSON = _REPO_ROOT / "data" / "robots" / "tovez.json"
 

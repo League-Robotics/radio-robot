@@ -23,9 +23,9 @@ from robot_radio.config.robot_config import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-# Resolve the project root the same way robot_config.py does:
-# robot_config.py is at  host/robot_radio/config/robot_config.py
-# _PROJECT_ROOT = Path(__file__).parent.parent.parent  => repo root
+# Resolve the project root:
+# __file__ is tests/unit/test_robot_config.py; repo root is three levels up
+# (tests/unit/ -> tests/ -> repo root — same depth as host/tests/).
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _ROBOTS_DIR = _REPO_ROOT / "data" / "robots"
 _TOVEZ_JSON = _ROBOTS_DIR / "tovez.json"

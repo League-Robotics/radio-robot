@@ -30,7 +30,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def _repo_root() -> pathlib.Path:
-    """Return the repository root (three levels up from host/tests/)."""
+    """Return the repository root (three levels up from tests/unit/)."""
     return pathlib.Path(__file__).resolve().parent.parent.parent
 
 

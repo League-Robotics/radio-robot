@@ -1307,9 +1307,10 @@ class TestReplayHarness:
         """Import replay_tlm_log from ekf_replay (handles path discovery)."""
         import importlib.util
         import os
-        # Locate ekf_replay.py relative to this test file.
+        # Locate ekf_replay.py in tests/dev/ (dev scripts stay there; test moved to tests/unit/).
+        # __file__ is tests/unit/; ekf_replay.py lives in tests/dev/ (sibling of unit/).
         here = os.path.dirname(os.path.abspath(__file__))
-        replay_path = os.path.join(here, "ekf_replay.py")
+        replay_path = os.path.join(here, "..", "dev", "ekf_replay.py")
         spec = importlib.util.spec_from_file_location("ekf_replay", replay_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)

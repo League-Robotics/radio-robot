@@ -8,13 +8,14 @@ import pathlib
 import subprocess
 
 
-_REPO = pathlib.Path(__file__).resolve().parents[1]
+# __file__ is tests/unit/test_lint.py; repo root is three levels up.
+_REPO = pathlib.Path(__file__).resolve().parents[2]
 _SOURCE = _REPO / "source"
-_HOST_TESTS = _REPO / "host_tests"
+_SIM_DIR = _REPO / "tests" / "sim"
 
 
 def test_no_must_mirror_comment() -> None:
-    """Assert that no 'MUST mirror' comment exists in source/ or host_tests/.
+    """Assert that no 'MUST mirror' comment exists in source/ or tests/sim/.
 
     The pattern 'MUST mirror' flags hand-mirrored code that must stay in sync
     between the sim and the firmware.  Sprint 026-001 removed the last such
@@ -22,7 +23,7 @@ def test_no_must_mirror_comment() -> None:
     """
     # Exclude the lint test file itself (the pattern appears in its own docstring
     # and grep argument) and compiled __pycache__ bytecode.  All other files
-    # under source/ and host_tests/ are scanned.
+    # under source/ and tests/sim/ are scanned.
     result = subprocess.run(
         [
             "grep", "-rn",
@@ -30,7 +31,7 @@ def test_no_must_mirror_comment() -> None:
             "--exclude-dir=__pycache__",
             "MUST mirror",
             str(_SOURCE),
-            str(_HOST_TESTS),
+            str(_SIM_DIR),
         ],
         capture_output=True,
         text=True,

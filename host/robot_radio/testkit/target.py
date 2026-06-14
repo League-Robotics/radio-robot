@@ -143,8 +143,8 @@ def make_target(
             raise RuntimeError(
                 f"SimConnection.connect() failed: {result['error']}\n"
                 "Make sure the firmware sim library is built: "
-                "cmake -S host_tests -B host_tests/build && "
-                "cmake --build host_tests/build"
+                "cmake -S tests/sim -B tests/sim/build && "
+                "cmake --build tests/sim/build"
             )
 
         proto = NezhaProtocol(conn)

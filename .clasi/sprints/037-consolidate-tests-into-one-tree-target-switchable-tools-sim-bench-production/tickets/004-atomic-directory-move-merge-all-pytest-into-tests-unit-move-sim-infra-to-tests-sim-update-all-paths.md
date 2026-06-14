@@ -1,7 +1,8 @@
 ---
 id: '004'
-title: 'Atomic directory move: merge all pytest into tests/unit/, move sim infra to tests/sim/, update all paths'
-status: open
+title: 'Atomic directory move: merge all pytest into tests/unit/, move sim infra to
+  tests/sim/, update all paths'
+status: done
 use-cases:
 - SUC-001
 - SUC-002
@@ -138,14 +139,14 @@ After moving all tests to `tests/unit/`, remove `host/tests/`.
 
 ## Acceptance Criteria
 
-- [ ] `uv run --with pytest python -m pytest tests/ -q` collects and passes all tests that passed before the move.
-- [ ] `python3 build.py --with-sim` produces `tests/sim/build/libfirmware_host.*`.
-- [ ] `host/robot_radio/io/sim_conn.py` `_DEFAULT_LIB` resolves to `tests/sim/build/`.
-- [ ] `tests/sim/CMakeLists.txt` REPO_ROOT resolves to the repo root (verified by `cmake -S tests/sim -B tests/sim/build` succeeding).
-- [ ] `from firmware import Sim` works in `tests/unit/` tests via conftest `sys.path` with no per-file changes.
-- [ ] `host_tests/` directory is removed.
-- [ ] `host/tests/` directory is removed.
-- [ ] Root `pyproject.toml` `testpaths` contains only `["tests"]`.
+- [x] `uv run --with pytest python -m pytest tests/ -q` collects and passes all tests that passed before the move.
+- [x] `python3 build.py --with-sim` produces `tests/sim/build/libfirmware_host.*`.
+- [x] `host/robot_radio/io/sim_conn.py` `_DEFAULT_LIB` resolves to `tests/sim/build/`.
+- [x] `tests/sim/CMakeLists.txt` REPO_ROOT resolves to the repo root (verified by `cmake -S tests/sim -B tests/sim/build` succeeding).
+- [x] `from firmware import Sim` works in `tests/unit/` tests via conftest `sys.path` with no per-file changes.
+- [x] `host_tests/` directory is removed (tracked files removed; `build/` and `__pycache__` are untracked artifacts).
+- [x] `host/tests/` directory is removed.
+- [x] Root `pyproject.toml` `testpaths` contains only `["tests"]`.
 
 ## Testing Plan
 
