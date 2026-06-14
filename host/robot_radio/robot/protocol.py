@@ -676,13 +676,24 @@ class NezhaProtocol:
     def snap(self) -> "TLMFrame | None":
         """Request ONE telemetry frame synchronously and return it (parsed).
 
-        SNAP returns the frame as its reply (request/response), not via the
-        stream — so it works while stopped and survives the radio relay (an
-        ordinary command-response, unlike a dropped async stream frame). Set the
-        desired fields first with stream_fields(); no continuous stream needed.
+        SNAP returns the reply as a TLM frame (corr-id-less) routed to the
+        TLM queue — NOT to the corr-id reply queue.  The old send()-based
+        implementation waited on the corr-id queue and always timed out.
+
+        Implementation:
+        1. Drain any stale TLM frames already queued (to avoid returning a
+           stale snapshot from a previous SNAP or stream burst).
+        2. Fire SNAP via send_fast() — no corr-id wait.
+        3. Poll read_lines() for up to 400 ms, which drains _tlm_queue, and
+           return the first line that parse_tlm() accepts.
         """
-        resp = self._conn.send("SNAP", read_ms=400)
-        for ln in resp.get("responses", []):
+        # Step 1: drain stale frames so we get a fresh snapshot.
+        self._conn.read_pending_lines()
+        # Step 2: fire SNAP with no corr-id reply wait.
+        self._conn.send_fast("SNAP")
+        # Step 3: read from the TLM queue path until we get a parseable frame.
+        lines = self._conn.read_lines(duration_ms=400)
+        for ln in lines:
             f = parse_tlm(ln)
             if f is not None:
                 return f

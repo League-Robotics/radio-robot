@@ -550,8 +550,10 @@ class SerialConnection:
                 self._evt_queue.put(text)
                 continue
 
-            # Route OK/ERR/CFG replies by corr-id.
-            if text.startswith(("OK", "ERR", "CFG")):
+            # Route OK/ERR/CFG/ID replies by corr-id.
+            # NOTE: ID replies carry a trailing corr-id (e.g. "ID model=... #7")
+            # and must be routed like OK/ERR/CFG — not dropped silently.
+            if text.startswith(("OK", "ERR", "CFG", "ID")):
                 m = _CORR_ID_RE.search(text)
                 if m:
                     corr_id = m.group(1)
