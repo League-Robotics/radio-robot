@@ -70,6 +70,8 @@ class Nezha(Robot):
     Streaming drive interface:
       - ``stream_drive(speeds, ...)`` — generator; yields ParsedResponse objects
         and updates robot state (encoders, otos_pose, line_sensor, color)
+      - ``vw(v_mms, omega_mrads, ...)`` — body-velocity generator; yields None
+        each TLM tick; state updated before yield; break sends STOP + STREAM 0
       - ``send_drive(left, right)``   — fire-and-forget S keepalive for manual loops
 
     Typical streaming loop::
@@ -400,6 +402,81 @@ class Nezha(Robot):
     # ------------------------------------------------------------------
     # Streaming drive
     # ------------------------------------------------------------------
+
+    def vw(
+        self,
+        v_mms: int,
+        omega_mrads: int,
+        *,
+        period_ms: int = 40,
+    ) -> Generator[None, None, None]:
+        """Body-velocity streaming generator.  Yields ``None`` once per TLM tick.
+
+        Before each yield, ``robot.state`` is updated from the incoming TLM frame
+        via ``_apply_tlm``.  The caller reads ``robot.state`` directly after each
+        ``yield``::
+
+            for _ in robot.vw(200, 500):
+                print(robot.state.encoders)
+                if close_enough:
+                    break  # sends STOP + STREAM 0 cleanly
+
+        Protocol sequence
+        -----------------
+        1. ``STREAM <period_ms>`` — enable TLM at the requested period.
+        2. ``VW <v_mms> <omega_mrads>`` — start body-velocity drive.
+        3. Loop: read lines for 50 ms; for each TLM line call ``_apply_tlm``
+           then ``yield``; on ``EVT safety_stop`` exit naturally.
+        4. Re-send ``VW`` as a keepalive whenever
+           ``period_ms * 0.30 / 1000`` seconds have elapsed since the last
+           send (≤30% of the firmware watchdog window).
+        5. On ``GeneratorExit`` (caller ``break``): send ``STOP`` then
+           ``STREAM 0``; suppress exceptions so the generator exits cleanly.
+
+        Parameters
+        ----------
+        v_mms:
+            Forward speed in mm/s (−1000 … +1000).
+        omega_mrads:
+            Yaw rate in milli-radians/s (−3142 … +3142); positive = CCW.
+        period_ms:
+            TLM streaming period and keepalive base interval in milliseconds.
+            Default 40 ms (25 Hz).
+        """
+        vw_cmd = f"VW {v_mms} {omega_mrads}"
+        keepalive_s = period_ms * 0.30 / 1000.0
+
+        self._proto.stream(period_ms)
+
+        try:
+            self._proto._conn.send_fast(vw_cmd)
+            last_send = time.monotonic()
+            while True:
+                for raw_line in self._proto._conn.read_lines(duration_ms=50):
+                    r = parse_response(raw_line)
+                    if r is None:
+                        continue
+                    if r.tag == "EVT" and r.tokens and r.tokens[0] == "safety_stop":
+                        return
+                    if r.tag == "TLM":
+                        tlm = parse_tlm(raw_line)
+                        if tlm is not None:
+                            self._apply_tlm(tlm)
+                            yield None
+                    now = time.monotonic()
+                    if now - last_send >= keepalive_s:
+                        self._proto._conn.send_fast(vw_cmd)
+                        last_send = now
+                now = time.monotonic()
+                if now - last_send >= keepalive_s:
+                    self._proto._conn.send_fast(vw_cmd)
+                    last_send = now
+        except GeneratorExit:
+            try:
+                self._proto._conn.send_fast("STOP")
+                self._proto.stream(0)
+            except Exception:
+                pass
 
     def send_drive(self, left_mms: int, right_mms: int) -> None:
         """Fire-and-forget S keepalive for manual control loops."""
