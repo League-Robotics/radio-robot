@@ -1296,7 +1296,7 @@ class TestGoldenVectors:
 class TestReplayHarness:
     """replay_tlm_log() parses a fixture log and drives the EKF mirror."""
 
-    _FIXTURE = "tests/dev/fixtures/tlm_log_sample.txt"
+    _FIXTURE = "tests/old/dev/fixtures/tlm_log_sample.txt"
 
     def _load_fixture(self) -> str:
         """Return the fixture path (relative to project root)."""
@@ -1307,10 +1307,10 @@ class TestReplayHarness:
         """Import replay_tlm_log from ekf_replay (handles path discovery)."""
         import importlib.util
         import os
-        # Locate ekf_replay.py in tests/dev/ (dev scripts stay there; test moved to tests/unit/).
-        # __file__ is tests/unit/; ekf_replay.py lives in tests/dev/ (sibling of unit/).
+        # Locate ekf_replay.py in tests/old/dev/ (retired to old/ in sprint 037-005).
+        # __file__ is tests/unit/; ekf_replay.py lives in tests/old/dev/.
         here = os.path.dirname(os.path.abspath(__file__))
-        replay_path = os.path.join(here, "..", "dev", "ekf_replay.py")
+        replay_path = os.path.join(here, "..", "old", "dev", "ekf_replay.py")
         spec = importlib.util.spec_from_file_location("ekf_replay", replay_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
