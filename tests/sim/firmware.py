@@ -8,6 +8,7 @@ a Sim context manager.
 import ctypes
 import pathlib
 import sys
+import time
 
 _HERE = pathlib.Path(__file__).parent
 
@@ -46,12 +47,31 @@ class Sim:
     # Time advance
     # ------------------------------------------------------------------
 
-    def tick_for(self, total_ms: int, step_ms: int = 24) -> None:
-        """Advance simulation by total_ms milliseconds in step_ms increments."""
+    def tick_for(self, total_ms: int, step_ms: int = 24,
+                 real_time: bool = False, speed_factor: float = 1.0) -> None:
+        """Advance simulation by total_ms milliseconds in step_ms increments.
+
+        Parameters
+        ----------
+        total_ms:
+            Duration to simulate, in milliseconds.
+        step_ms:
+            Tick granularity in milliseconds (default 24 ms).
+        real_time:
+            When True, sleep after each tick to pace execution to wall-clock
+            time.  Default False — runs at full CPU speed (CI-safe).
+        speed_factor:
+            Wall-clock multiplier when real_time=True.  1.0 = real time;
+            2.0 = twice as fast; 0.5 = half speed.  Ignored when
+            real_time=False.
+        """
         end = self._t + total_ms
         while self._t < end:
+            dt = min(step_ms, end - self._t)
             self._lib.sim_tick(self._h, ctypes.c_uint32(self._t))
-            self._t += step_ms
+            self._t += dt
+            if real_time:
+                time.sleep(dt / 1000.0 / speed_factor)
 
     # ------------------------------------------------------------------
     # Command dispatch

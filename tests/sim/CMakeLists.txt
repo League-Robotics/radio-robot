@@ -7,10 +7,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_definitions(-DHOST_BUILD=1)
 
 # ---------------------------------------------------------------------------
-# Root of the firmware repo: parent of this CMakeLists.txt's directory.
-# CMAKE_SOURCE_DIR is the host_tests/ directory; repo root is one level up.
+# Root of the firmware repo: grandparent of this CMakeLists.txt's directory.
+# CMAKE_SOURCE_DIR is the tests/sim/ directory; repo root is two levels up.
 # ---------------------------------------------------------------------------
-get_filename_component(REPO_ROOT "${CMAKE_SOURCE_DIR}/.." ABSOLUTE)
+get_filename_component(REPO_ROOT "${CMAKE_SOURCE_DIR}/../.." ABSOLUTE)
 
 # ---------------------------------------------------------------------------
 # Collect firmware sources, then exclude CODAL-dependent files.

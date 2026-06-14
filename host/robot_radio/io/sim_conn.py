@@ -29,12 +29,13 @@ from __future__ import annotations
 import ctypes
 import pathlib
 import sys
+import time
 from typing import Any
 
 _LIB_NAME = "libfirmware_host.dylib" if sys.platform == "darwin" else "libfirmware_host.so"
 _HERE = pathlib.Path(__file__).parent
 # Resolve the dylib relative to this file: host/robot_radio/io/ -> ../../.. = repo root
-_DEFAULT_LIB = (_HERE / "../../../host_tests/build" / _LIB_NAME).resolve()
+_DEFAULT_LIB = (_HERE / "../../../tests/sim/build" / _LIB_NAME).resolve()
 
 # Default tick step: 24 ms matches the conftest fixture and is fine for the
 # 25 ms control period.  Smaller = smoother state log, more CPU.
@@ -65,9 +66,13 @@ class SimConnection:
     """
 
     def __init__(self, lib_path: str | pathlib.Path | None = None,
-                 tick_step_ms: int = _DEFAULT_TICK_MS) -> None:
+                 tick_step_ms: int = _DEFAULT_TICK_MS,
+                 real_time: bool = False,
+                 speed_factor: float = 1.0) -> None:
         self._lib_path = pathlib.Path(lib_path) if lib_path else _DEFAULT_LIB
         self._tick_step_ms = tick_step_ms
+        self._real_time = real_time
+        self._speed_factor = speed_factor
         self._lib: ctypes.CDLL | None = None
         self._h: ctypes.c_void_p | None = None
         self._t: int = 0
@@ -96,8 +101,8 @@ class SimConnection:
         if not self._lib_path.exists():
             return {
                 "error": f"Sim library not found at {self._lib_path}. "
-                         f"Run: cmake -S host_tests -B host_tests/build && "
-                         f"cmake --build host_tests/build",
+                         f"Run: cmake -S tests/sim -B tests/sim/build && "
+                         f"cmake --build tests/sim/build",
                 "lib_path": str(self._lib_path),
             }
 
@@ -360,6 +365,8 @@ class SimConnection:
             self._lib.sim_tick(self._h, ctypes.c_uint32(self._t))
             self._t += dt
             self._state_log.append(self._snapshot())
+            if self._real_time:
+                time.sleep(dt / 1000.0 / self._speed_factor)
 
             evts = self._get_evts()
             if evts:

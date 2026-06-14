@@ -24,6 +24,8 @@ import pytest
 import importlib.util
 from pathlib import Path as _Path
 
+# __file__ is tests/unit/test_calibrate_linear.py; repo root is three levels up
+# (tests/unit/ -> tests/ -> repo root — same depth as host/tests/).
 _REPO_ROOT_FOR_IMPORT = _Path(__file__).resolve().parents[2]
 _CAL_MOD_PATH = _REPO_ROOT_FOR_IMPORT / "tests" / "calibrate" / "calibrate_linear.py"
 _spec = importlib.util.spec_from_file_location("calibrate_linear", _CAL_MOD_PATH)

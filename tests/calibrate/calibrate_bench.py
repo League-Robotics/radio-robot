@@ -13,7 +13,7 @@ accumulator, so the post-drive enc is the per-wheel travel.
 
 SMOOTHNESS: this tool can't see it reliably — telemetry frames get dropped during
 a D drive (CODAL ASYNC TX). To watch the drive be smooth, use:
-    uv run python tests/dev/enc_watch.py
+    uv run python tests/old/dev/enc_watch.py
 which streams a live encoder trace during an S drive.
 
 Usage: uv run python tests/calibrate/calibrate_bench.py [-n N] [--mm 500] [--spd 80]
@@ -134,7 +134,7 @@ def main() -> int:
     conn.disconnect()
     npass = sum(1 for r in results if r)
     print(f"\n  {npass}/{len(results)} drives CLEAN (distance + balance)")
-    print("  (smoothness: run tests/dev/enc_watch.py to watch a live trace)")
+    print("  (smoothness: run tests/old/dev/enc_watch.py to watch a live trace)")
     return 0 if npass == len(results) else 1
 
 
