@@ -492,6 +492,16 @@ def main() -> int:
         return np.convolve(v, k, mode="same")
 
     # ---- update ----
+    def _safe_set(line, x, y):
+        # Trim x and y to the SAME (shortest) length before set_data(). The
+        # worker thread appends to the plot deques while we read them here, so
+        # a single time-series can still be momentarily 1 sample out of step
+        # even after the n=min snapshot below — and matplotlib crashes when it
+        # later recaches a line whose x/y lengths differ. Mirror of the guard
+        # in robot_radio/testkit/dash.py::_redraw.
+        m = min(len(x), len(y))
+        line.set_data(x[-m:], y[-m:])
+
     def _update():
         while not status_queue.empty():
             msg = status_queue.get_nowait()
@@ -557,8 +567,8 @@ def main() -> int:
         px_arr = np.array(pxl[-n:], dtype=float)
         py_arr = np.array(pyl[-n:], dtype=float)
 
-        ln_vL.set_data(age, vl)
-        ln_vR.set_data(age, vr)
+        _safe_set(ln_vL, age, vl)
+        _safe_set(ln_vR, age, vr)
 
         # 200 ms moving average + rolling RMSE jitter metric. Measured at the
         # 1 s-ago mark (MEASURE_AGE) where the averaging window is fully settled
@@ -568,13 +578,13 @@ def main() -> int:
             n200 = max(2, int(round(0.2 / dt)))
             mret = max(3, int(round(1.0 / dt)))          # 1 s rolling RMSE window
             maL, maR = _movavg(vl, n200), _movavg(vr, n200)
-            ln_vLa.set_data(age, maL)
-            ln_vRa.set_data(age, maR)
+            _safe_set(ln_vLa, age, maL)
+            _safe_set(ln_vRa, age, maR)
             kk = np.ones(mret) / mret
             rmsL = np.sqrt(np.convolve((vl - maL) ** 2, kk, mode="same"))
             rmsR = np.sqrt(np.convolve((vr - maR) ** 2, kk, mode="same"))
-            ln_jL.set_data(age, rmsL)
-            ln_jR.set_data(age, rmsR)
+            _safe_set(ln_jL, age, rmsL)
+            _safe_set(ln_jR, age, rmsR)
             idx1 = int(np.argmin(np.abs(age - MEASURE_AGE)))
             jit_text.set_text(
                 f"RMSE @{MEASURE_AGE:.0f}s  vL={rmsL[idx1]:4.1f}  vR={rmsR[idx1]:4.1f} mm/s")
@@ -598,12 +608,12 @@ def main() -> int:
             img_line.set_extent([age[0], age[-1], 0, 4])
 
         # phase
-        phase_trace.set_data(vl, vr)
+        _safe_set(phase_trace, vl, vr)
         phase_dot.set_data([vl[-1]], [vr[-1]])
 
         # odometry
-        ln_px.set_data(age, px_arr)
-        ln_py.set_data(age, py_arr)
+        _safe_set(ln_px, age, px_arr)
+        _safe_set(ln_py, age, py_arr)
         pmin = min(px_arr.min(), py_arr.min())
         pmax = max(px_arr.max(), py_arr.max())
         if pmax > pmin:
