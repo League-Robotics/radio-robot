@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Add real_time/speed_factor pacing flag to SimConnection and Sim.tick_for
-status: open
+status: done
 use-cases:
 - SUC-006
 depends-on:
@@ -53,13 +53,13 @@ if real_time:
 
 ## Acceptance Criteria
 
-- [ ] `SimConnection.__init__` accepts `real_time: bool = False` and `speed_factor: float = 1.0`.
-- [ ] `SimConnection(real_time=False)` (default) produces no measurable slowdown vs. current behavior.
-- [ ] `SimConnection(real_time=True)` paces ticks to wall-clock: a 500 ms sim run takes ≥ 490 ms wall time.
-- [ ] `SimConnection(real_time=True, speed_factor=2.0)` runs at 2× real-time: a 500 ms sim run takes ≥ 240 ms wall time.
-- [ ] `Sim.tick_for(ms, real_time=True)` in `firmware.py` paces ticks similarly.
-- [ ] All existing sim unit tests still pass (they use `real_time=False` default).
-- [ ] `make_target("sim", real_time=True).conn._real_time is True`.
+- [x] `SimConnection.__init__` accepts `real_time: bool = False` and `speed_factor: float = 1.0`.
+- [x] `SimConnection(real_time=False)` (default) produces no measurable slowdown vs. current behavior.
+- [x] `SimConnection(real_time=True)` paces ticks to wall-clock: a 500 ms sim run takes ≥ 490 ms wall time.
+- [x] `SimConnection(real_time=True, speed_factor=2.0)` runs at 2× real-time: a 500 ms sim run takes ≥ 240 ms wall time.
+- [x] `Sim.tick_for(ms, real_time=True)` in `firmware.py` paces ticks similarly.
+- [x] All existing sim unit tests still pass (they use `real_time=False` default).
+- [x] `make_target("sim", real_time=True).conn._real_time is True`.
 
 ## Testing Plan
 

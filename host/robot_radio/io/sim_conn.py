@@ -29,6 +29,7 @@ from __future__ import annotations
 import ctypes
 import pathlib
 import sys
+import time
 from typing import Any
 
 _LIB_NAME = "libfirmware_host.dylib" if sys.platform == "darwin" else "libfirmware_host.so"
@@ -65,9 +66,13 @@ class SimConnection:
     """
 
     def __init__(self, lib_path: str | pathlib.Path | None = None,
-                 tick_step_ms: int = _DEFAULT_TICK_MS) -> None:
+                 tick_step_ms: int = _DEFAULT_TICK_MS,
+                 real_time: bool = False,
+                 speed_factor: float = 1.0) -> None:
         self._lib_path = pathlib.Path(lib_path) if lib_path else _DEFAULT_LIB
         self._tick_step_ms = tick_step_ms
+        self._real_time = real_time
+        self._speed_factor = speed_factor
         self._lib: ctypes.CDLL | None = None
         self._h: ctypes.c_void_p | None = None
         self._t: int = 0
@@ -360,6 +365,8 @@ class SimConnection:
             self._lib.sim_tick(self._h, ctypes.c_uint32(self._t))
             self._t += dt
             self._state_log.append(self._snapshot())
+            if self._real_time:
+                time.sleep(dt / 1000.0 / self._speed_factor)
 
             evts = self._get_evts()
             if evts:
