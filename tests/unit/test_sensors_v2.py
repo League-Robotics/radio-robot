@@ -156,7 +156,7 @@ class TestOdomTrackerRobotConfig:
         cfg_path = _HOST.parent / "data" / "robots" / "tovez.json"
         cfg = load_robot_config(cfg_path)
         tracker = OdomTracker(config=cfg)
-        assert tracker.trackwidth_mm == 126.0
+        assert tracker.trackwidth_mm == 83.0
         assert abs(tracker.mm_per_deg_l - 0.6177) < 1e-6
         assert abs(tracker.mm_per_deg_r - 0.6101) < 1e-6
 

@@ -73,14 +73,14 @@ def test_rt_arc_larger_with_slip(sim):
 def test_rt_arc_no_slip_matches_geometry(sim):
     """RT 9000 with rotSlip=0 (identity) produces arc ≈ theoretical no-slip value.
 
-    Theoretical: stopArc = 90 * π/180 * (126/2) - 8 ≈ 90.9 mm.
+    Theoretical: stopArc = 90 * π/180 * (83/2) - 8 ≈ 57.2 mm.
     The SOFT ramp adds some coast, so actual final arc ≥ stopArc.
     """
     sim.send_command("SET rotSlip=0")
     arc = _arc_after_rt(sim, 9000)
 
     # Theoretical no-slip per-wheel arc (before coast).
-    tw_mm = 126.0   # trackwidthMm default
+    tw_mm = 83.0   # trackwidthMm default
     coast_mm = 8.0  # kRtCoastArcMm
     theoretical_stop_arc = 90.0 * math.pi / 180.0 * (tw_mm * 0.5) - coast_mm
     # Actual must be at least the stop-arc (SOFT ramp adds some coast past it).

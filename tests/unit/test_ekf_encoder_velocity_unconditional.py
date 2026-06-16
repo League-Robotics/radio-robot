@@ -69,6 +69,7 @@ def test_enc_omega_suppressed_when_wedged():
 
     with Sim() as s:
         # Same spin, but the encoder-omega gate is OFF the whole time.
+        s.send_command("SET yawRateMax=180")  # default is now 60; uncap the raw-T spin
         s.set_enc_omega_healthy(False)
         s.send_command("T 200 -200 3000")
         s.tick_for(1000)

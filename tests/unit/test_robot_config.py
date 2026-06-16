@@ -127,7 +127,7 @@ class TestLoadRobotConfig:
 
     def test_tovez_geometry(self):
         cfg = load_robot_config(_TOVEZ_JSON)
-        assert cfg.trackwidth == pytest.approx(126)
+        assert cfg.trackwidth == pytest.approx(83)
 
     def test_tovez_wheels(self):
         cfg = load_robot_config(_TOVEZ_JSON)

@@ -27,7 +27,7 @@ RobotConfig defaultRobotConfig() {
     p.kAdjGain        = 0.05f;
 
     // Geometry — baked from robot config
-    p.trackwidthMm    = 126.0f;
+    p.trackwidthMm    = 83.0f;
 
     // Ratio PID gains
     p.ratioPidKp      = 300.0f;
@@ -99,7 +99,7 @@ RobotConfig defaultRobotConfig() {
 
     // Body motion limits
     p.vBodyMax        = 400.0f;
-    p.yawRateMax      = 180.0f;
+    p.yawRateMax      = 60.0f;
     p.yawAccMax       = 720.0f;
     p.jMax            = 0.0f;
     p.yawJerkMax      = 0.0f;

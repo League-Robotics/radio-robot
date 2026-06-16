@@ -189,14 +189,14 @@ class TestPushCalibrationValues:
         assert abs(val - 0.6101) < 1e-4, f"Expected mr≈0.6101, got {val}"
 
     def test_set_tw_value(self):
-        """SET tw encodes trackwidth from tovez (126 mm)."""
+        """SET tw encodes trackwidth from tovez (83 mm)."""
         conn = _make_conn()
         _push_calibration(conn)
         cmds = _sent_cmds(conn)
         tw_cmds = [c for c in cmds if c.startswith("SET tw=")]
         assert tw_cmds, "No SET tw= command found"
         val = int(tw_cmds[0].split("=", 1)[1])
-        assert val == 126, f"Expected tw=126, got {val}"
+        assert val == 83, f"Expected tw=83, got {val}"
 
     def test_ol_value(self):
         """OL value matches tovez otos_linear_scale=0.919 → int8=-81."""
