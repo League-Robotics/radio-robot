@@ -171,15 +171,15 @@ class TestPlayfieldTourMath:
         assert abs(lft) < 1e-3, f"lft={lft}, expected ~0"
 
     def test_target_to_left(self) -> None:
-        """Robot facing east, target directly north: negated lateral → lft<0."""
+        """Robot facing east, target directly north: north IS the robot's left → lft>0."""
         mod = _import_tool("playfield_tour")
-        # Target is 10cm north (y+), robot facing east (yaw=0).
-        # Standard math: lft = +100mm (left), but the convention negates it.
-        # compute_g from playfield_random_tour: lft = dx*sin(H) - dy*cos(H)
-        # dx=0, dy=10 → lft = 0*sin(0) - 10*cos(0) = -10 → -100mm.
+        # Target is 10cm north (y+), robot facing east (yaw=0). Facing east,
+        # north is on your physical LEFT, and +left is CCW-positive, so the
+        # standard (non-negated) projection gives lft = +100mm:
+        #   lft = -dx*sin(H) + dy*cos(H) = -0*sin(0) + 10*cos(0) = +10 → +100mm.
         fwd, lft = mod._compute_robot_relative(0.0, 0.0, 0.0, 0.0, 10.0)
         assert abs(fwd) < 1e-3, f"fwd={fwd}, expected ~0"
-        assert lft == pytest.approx(-100.0, abs=1e-3), f"lft={lft}, expected -100mm"
+        assert lft == pytest.approx(100.0, abs=1e-3), f"lft={lft}, expected +100mm"
 
     def test_facing_north(self) -> None:
         """Robot facing north (yaw=pi/2), target directly north: fwd>0, lft≈0."""

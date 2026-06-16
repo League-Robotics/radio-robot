@@ -153,7 +153,7 @@ def _stream_worker(
 
         # Stream ALL fields so the sensors show up, then start streaming.
         try:
-            proto.stream_fields("enc,vel,pose,line,color")
+            proto.stream_fields("enc,vel,pose,line,color,otos")
         except Exception as exc:
             status_queue.put(f"WARN: stream_fields failed: {exc}")
         proto.stream(stream_ms)
@@ -164,18 +164,18 @@ def _stream_worker(
         conn.send_fast(f"S {vL} {vR}")
         last_send = time.monotonic()
 
-        # Request raw OTOS position every N read-loop iterations so the odom
-        # panel shows actual optical-flow data rather than fused pose (which
-        # includes encoder dead-reckoning and drifts when wheels spin freely).
-        _op_interval = 5   # send OP every 5 iterations ≈ every 150 ms
-        _op_counter = 0
+        # The raw OTOS pose (pre-fusion optical-flow track) rides in the TLM
+        # 'otos=' field, requested via stream_fields above. We use it for the
+        # odom panel instead of the fused pose= (which includes encoder
+        # dead-reckoning and drifts when the wheels spin freely).
+        #
+        # The old `OP` command path was removed: send_fast("OP") issues an
+        # un-correlated command, so the firmware's `OK op ...` reply (no #id)
+        # is routed to the reader thread's reply queue, which read_lines() does
+        # NOT drain — the reply was silently dropped and the panel stayed blank.
+        # The TLM field is delivered through the same queue read_lines() reads.
 
         while not stop_event.is_set():
-            _op_counter += 1
-            if _op_counter >= _op_interval:
-                _op_counter = 0
-                conn.send_fast("OP")
-
             for raw_line in conn.read_lines(duration_ms=30):
                 r = parse_response(raw_line)
                 if r is None:
@@ -185,20 +185,13 @@ def _stream_worker(
                     conn.send_fast(f"S {vL} {vR}")
                     last_send = time.monotonic()
                     continue
-                # Raw OTOS position reply — use this for the odom panel.
-                if r.tag == "OK" and r.tokens and r.tokens[0] == "op":
-                    try:
-                        x = int(r.kv["x"])
-                        y = int(r.kv["y"])
-                        data_queue.put((time.monotonic(), None, (x, y, 0),
-                                        None, None))
-                    except (KeyError, ValueError):
-                        pass
-                    continue
                 if r.tag == "TLM":
                     tlm = parse_tlm(r.raw)
                     if tlm is not None:
-                        data_queue.put((time.monotonic(), tlm.vel, None,
+                        # Raw OTOS (x_mm, y_mm) for the odom panel; None when the
+                        # frame carried no otos= (OTOS read invalid that tick).
+                        odom = (tlm.otos[0], tlm.otos[1], 0) if tlm.otos else None
+                        data_queue.put((time.monotonic(), tlm.vel, odom,
                                         tlm.line, tlm.color))
 
             now = time.monotonic()

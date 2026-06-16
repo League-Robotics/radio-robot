@@ -1,0 +1,12 @@
+{
+  "_provenance": "Colored squares detected LIVE via MCP get_objects (aprilcam) on 2026-06-15, pixel centers mapped through the daemon's calibrated homography (validated exactly on robot tag 100). In-field squares only (|x|<45, |y|<43).",
+  "squares": [
+    {"label": "red-E",     "x": 27.8,  "y": 0.3},
+    {"label": "orange-NE", "x": 27.7,  "y": 21.3},
+    {"label": "green-SE",  "x": 27.8,  "y": -21.2},
+    {"label": "red-W",     "x": -29.7, "y": 1.1},
+    {"label": "blue-SW",   "x": -29.0, "y": -21.3},
+    {"label": "purple-NW", "x": -28.8, "y": 21.6},
+    {"label": "yellow-S",  "x": -0.7,  "y": -38.0}
+  ]
+}

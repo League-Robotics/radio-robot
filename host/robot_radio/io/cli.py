@@ -274,12 +274,11 @@ def cmd_sync_pose(args):
 
     Unit conversions:
       - world_xy (cm) → mm: x_mm = round(x_cm * 10), y_mm = round(y_cm * 10)
-      - heading: firmware heading (drive-forward direction) = degrees(tag.yaw) + 90°
-        The +90° offset is verified on hardware (test/probe_heading.py): the
-        robot's forward direction in the daemon frame is (-sin θ, cos θ), so
-        drive-forward in world frame = tag.yaw + 90°. The daemon's yaw is
-        CCW-positive; the firmware SI command uses the same CCW-positive
-        convention (verified sprint-008). Result: h_deg = round(degrees(yaw) + 90).
+      - heading: firmware heading (drive-forward direction) = degrees(tag.yaw)
+        The daemon reports tag orientation in the world frame (0 = east,
+        CCW-positive), and that orientation IS the robot's forward heading —
+        no offset is applied. The firmware SI/OV command uses the same
+        CCW-positive convention. Result: h_deg = round(degrees(yaw)).
 
     Does NOT open data/homography.json or construct a local Playfield.
     The local homography was deleted on 2026-05-29 as stale (~30% scale error).
@@ -334,9 +333,9 @@ def cmd_sync_pose(args):
     # world_xy is in cm → firmware SI wants mm: multiply by 10.
     x_mm = round(x_cm * 10)
     y_mm = round(y_cm * 10)
-    # Heading: firmware forward direction = tag.yaw + 90° (verified hardware,
-    # see test/probe_heading.py and the knowledge file above).
-    h_deg = round(_math.degrees(yaw_rad) + 90.0)
+    # Heading: the daemon already reports tag orientation in the world frame
+    # (0 = east, CCW+), and that IS the robot's forward heading — no offset.
+    h_deg = round(_math.degrees(yaw_rad))
 
     robot, conn, _ = _make_robot(args)
     if not isinstance(robot, Nezha):
@@ -931,10 +930,10 @@ def cmd_goto(args):
         rogo goto 30 10            # drive to world (30, 10) cm
         rogo goto 30 10 --speed 120 --arrive 4
 
-    Heading convention (verified on hardware 2026-05-28, see test/probe_heading.py):
-        the robot's forward direction in the daemon frame is (-sinθ, cosθ),
-        i.e. world motion_dir = tag_yaw + 90°. So to head toward a point at
-        bearing φ = atan2(dy, dx), the required tag yaw is φ - 90°.
+    Heading convention: the daemon reports tag orientation in the world frame
+        (0 = east, CCW+), and that orientation IS the robot's forward heading.
+        So to head toward a point at bearing φ = atan2(dy, dx), the required
+        yaw is simply φ — no offset.
 
     Control logic lives in nav.camera_goto.go_to_world_camera (ticket 035-001).
     """
@@ -1663,8 +1662,8 @@ def main():
              "running from the AprilTags project directory with a calibrated "
              "playfield. Reads tag.world_xy (cm, A1-centred) and tag.yaw (rad) "
              "from the daemon, converts to mm/centi-degrees, and sends OV "
-             "to firmware (v2 OV command). The firmware heading = degrees(tag.yaw) + 90° "
-             "(the robot's drive-forward direction in world frame).",
+             "to firmware (v2 OV command). The firmware heading = degrees(tag.yaw) "
+             "(the daemon orientation, 0=east CCW+, IS the drive-forward direction).",
     )
 
     # calibrate: interactive multi-trial calibration subcommands

@@ -37,6 +37,9 @@ def test_fusedomega_nonzero_while_spinning_without_otos():
     """An in-place spin with no OTOS fusion still produces a nonzero fusedOmega."""
     with Sim() as s:
         # Spin in place: left +200, right -200 → large yaw rate, ~zero linear.
+        # The default yawRateMax is now 60, which caps this raw-T spin; set it
+        # high so the test exercises encoder-omega fusion at a known spin rate.
+        s.send_command("SET yawRateMax=180")
         s.send_command("T 200 -200 3000")
         s.tick_for(1000)
         fused_omega = s.get_fused_omega()
@@ -56,6 +59,7 @@ def test_enc_omega_suppressed_when_wedged():
     """
     with Sim() as s:
         # Baseline: healthy spin → large fusedOmega.
+        s.send_command("SET yawRateMax=180")  # default is now 60; uncap the raw-T spin
         s.send_command("T 200 -200 3000")
         s.tick_for(1000)
         omega_healthy = s.get_fused_omega()

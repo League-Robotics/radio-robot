@@ -106,7 +106,7 @@ def main() -> int:
             if p0 is None:
                 print("ERROR: camera cannot see the robot tag"); return 2
             cx0, cy0, cyaw0 = p0
-            fwd = cyaw0 + math.pi / 2.0     # robot forward direction in world frame
+            fwd = cyaw0     # tag orientation IS the forward direction (0=east, CCW+)
 
             # --- cap the drive so the forward endpoint stays inside the geofence ---
             # distance to each fence wall along +fwd:

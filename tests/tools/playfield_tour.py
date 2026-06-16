@@ -11,15 +11,14 @@ Control loop (per leg)::
   1. Read pose via ``tr.pose.read()`` → (x_cm, y_cm, yaw_rad).
   2. For camera/production runs: anchor firmware OTOS to camera fix via
      ``robot.update_world_pose(x_cm, y_cm, yaw_rad)``.
-  3. Compute robot-relative (fwd_mm, left_mm) from the world delta.
-     Lateral negation convention (from playfield_random_tour.py)::
+  3. Compute robot-relative (fwd_mm, left_mm) from the world delta — a plain
+     rigid-body projection by the robot's forward heading H (the camera's tag
+     orientation directly: 0 = east, CCW+), same as Navigator/go_to_world::
 
-         fwd = dx*cos(H) + dy*sin(H)   (world→robot forward projection)
-         lft = dx*sin(H) - dy*cos(H)   (world→robot lateral; NEGATED vs standard math)
+         fwd =  dx*cos(H) + dy*sin(H)   (world→robot forward projection)
+         lft = -dx*sin(H) + dy*cos(H)   (world→robot lateral, +left = CCW)
 
-     The negation compensates for the camera/field handedness: a target to
-     the robot's left in the world frame has lft < 0, which the firmware
-     interprets as "turn left (CCW)".
+     No handedness fudge: the camera reports the truth, so no correction.
 
   4. Call ``robot.go_to(fwd_mm, left_mm, speed, on_tick=on_tick_cb)``.
      ``on_tick_cb`` updates the camera track, checks bounds, and returns
@@ -193,20 +192,21 @@ def _compute_robot_relative(
 ) -> tuple[float, float]:
     """Convert world-frame target to robot-relative (fwd_mm, left_mm).
 
-    Applies the lateral negation convention documented in
-    ``playfield_random_tour.py``: a target to the robot's physical left in
-    world coordinates produces lft < 0, which the firmware interprets as
-    "turn CCW (left)".  This compensates for the field's handedness.
+    Plain rigid-body projection by the robot's forward heading H (the camera's
+    tag orientation directly: 0 = east, CCW+).  Forward unit = (cosH, sinH);
+    left unit = (-sinH, cosH), 90° CCW.  This is the same convention as
+    ``Navigator.navigate`` / ``nezha_kinematic.go_to_world`` — no handedness
+    fudge (the camera reports the truth, so no correction is needed):
 
-        fwd = dx*cos(H) + dy*sin(H)
-        lft = dx*sin(H) - dy*cos(H)    # NEGATED vs standard math left
+        fwd =  dx*cos(H) + dy*sin(H)
+        lft = -dx*sin(H) + dy*cos(H)
 
     Arguments are in cm; return value is in mm.
     """
     dx = tx_cm - x_cm
     dy = ty_cm - y_cm
     fwd = dx * math.cos(yaw_rad) + dy * math.sin(yaw_rad)
-    lft = dx * math.sin(yaw_rad) - dy * math.cos(yaw_rad)
+    lft = -dx * math.sin(yaw_rad) + dy * math.cos(yaw_rad)
     return (fwd * 10.0, lft * 10.0)   # cm → mm
 
 

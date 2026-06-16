@@ -167,7 +167,7 @@ class TestPushCalibrationValues:
     """The values sent match the tovez.json config."""
 
     def test_set_ml_value(self):
-        """SET ml encodes mm_per_wheel_deg_left from tovez (0.71659)."""
+        """SET ml encodes mm_per_wheel_deg_left from tovez (0.6177)."""
         conn = _make_conn()
         _push_calibration(conn)
         cmds = _sent_cmds(conn)
@@ -175,10 +175,10 @@ class TestPushCalibrationValues:
         assert ml_cmds, "No SET ml= command found"
         val_str = ml_cmds[0].split("=", 1)[1]
         val = float(val_str)
-        assert abs(val - 0.71659) < 1e-4, f"Expected ml≈0.71659, got {val}"
+        assert abs(val - 0.6177) < 1e-4, f"Expected ml≈0.6177, got {val}"
 
     def test_set_mr_value(self):
-        """SET mr encodes mm_per_wheel_deg_right from tovez (0.70777)."""
+        """SET mr encodes mm_per_wheel_deg_right from tovez (0.6101)."""
         conn = _make_conn()
         _push_calibration(conn)
         cmds = _sent_cmds(conn)
@@ -186,7 +186,7 @@ class TestPushCalibrationValues:
         assert mr_cmds, "No SET mr= command found"
         val_str = mr_cmds[0].split("=", 1)[1]
         val = float(val_str)
-        assert abs(val - 0.70777) < 1e-4, f"Expected mr≈0.70777, got {val}"
+        assert abs(val - 0.6101) < 1e-4, f"Expected mr≈0.6101, got {val}"
 
     def test_set_tw_value(self):
         """SET tw encodes trackwidth from tovez (126 mm)."""
@@ -199,14 +199,14 @@ class TestPushCalibrationValues:
         assert val == 126, f"Expected tw=126, got {val}"
 
     def test_ol_value(self):
-        """OL value matches tovez otos_linear_scale=1.127 → int8=127."""
+        """OL value matches tovez otos_linear_scale=0.919 → int8=-81."""
         conn = _make_conn()
         _push_calibration(conn)
         cmds = _sent_cmds(conn)
         ol_cmds = [c for c in cmds if c.startswith("OL ")]
         assert ol_cmds, "No OL command found"
         val = int(ol_cmds[0].split()[1])
-        assert val == 127, f"Expected OL 127, got {val}"
+        assert val == -81, f"Expected OL -81, got {val}"
 
     def test_oa_value(self):
         """OA value matches tovez otos_angular_scale=0.987 → int8=-13."""
@@ -293,14 +293,34 @@ class TestOiOrdering:
 class TestOdomOffsets:
     """Nonzero odom offsets are pushed via SET odomOffX/odomOffY/odomYaw."""
 
-    def test_zero_offsets_not_sent(self):
-        """tovez has all-zero offsets; SET odomOff* should be absent."""
-        conn = _make_conn()
+    def test_zero_offsets_not_sent(self, monkeypatch, tmp_path):
+        """All-zero odom offsets are not pushed (bandwidth optimization).
+
+        (tovez itself now carries odometry yaw_rad=π/2 for the OTOS mounting,
+        so use a synthetic all-zero config to exercise the suppression path.)
+        """
+        cfg_data = json.loads(_TOVEZ_JSON.read_text())
+        cfg_data["geometry"]["odometry_offset_mm"] = {"x": 0.0, "y": 0.0, "yaw_rad": 0.0}
+        tmp_cfg = tmp_path / "robot_zero_offset.json"
+        tmp_cfg.write_text(json.dumps(cfg_data))
+        monkeypatch.setenv("ROBOT_CONFIG", str(tmp_cfg))
+        _reset_robot_config()
+
+        conn = _make_conn(id_response=None)
         _push_calibration(conn)
         cmds = _sent_cmds(conn)
         odom = [c for c in cmds if "odomOff" in c or "odomYaw" in c]
         assert odom == [], \
-            f"Expected no odomOff* commands for tovez (offsets=0), got: {odom}"
+            f"Expected no odomOff*/odomYaw commands for all-zero offsets, got: {odom}"
+
+    def test_tovez_pushes_mounting_yaw(self):
+        """tovez's odometry mounting yaw (π/2 → 90°) is pushed via SET odomYaw."""
+        conn = _make_conn()
+        _push_calibration(conn)
+        cmds = _sent_cmds(conn)
+        yaw = [c for c in cmds if c.startswith("SET odomYaw=")]
+        assert yaw, f"Expected SET odomYaw for tovez mounting, got: {cmds}"
+        assert "90" in yaw[0], f"Expected ~90° mounting yaw, got: {yaw}"
 
     def test_nonzero_offsets_sent(self, monkeypatch, tmp_path):
         """When config has nonzero offsets, SET odomOffX/Y/Yaw are sent."""

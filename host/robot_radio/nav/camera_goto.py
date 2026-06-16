@@ -251,7 +251,7 @@ def go_to_world_camera(
             break
 
         motion_dir = math.atan2(dy, dx)
-        req_yaw = _wrap(motion_dir - math.pi / 2)   # forward = (-sinθ, cosθ)
+        req_yaw = _wrap(motion_dir)   # forward = (cosθ, sinθ); heading 0 = east
         head_err = _wrap(req_yaw - yaw)
 
         # Aim with the proven velocity-projected spin if badly off heading.
@@ -280,7 +280,7 @@ def go_to_world_camera(
             dist = math.hypot(dx, dy)
             if dist <= arrive_cm:
                 break
-            he = _wrap(_wrap(math.atan2(dy, dx) - math.pi / 2) - yaw)
+            he = _wrap(math.atan2(dy, dx) - yaw)
             if abs(he) > math.radians(REAIM_GATE_DEG):
                 break
             if dist > best + 2.0:   # overshot / moving away → re-aim

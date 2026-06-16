@@ -161,6 +161,7 @@ class ControlConfig(BaseModel):
     sync:          Optional[float] = None   # → SET sync      (cross-wheel coupling)
     min_wheel_mms: Optional[float] = None   # → SET minWheelMms (low-speed deadband)
     turn_gate:     Optional[float] = None   # → SET turnGate   (turn-in-place gate, deg)
+    yaw_rate_max:  Optional[float] = None   # → SET yawRateMax (yaw rate ceiling, deg/s)
 
     # Host-side motion limit (NOT pushed to firmware): the maximum rotational
     # acceleration, deg/s^2, that the turn / turn2 trapezoidal velocity profile

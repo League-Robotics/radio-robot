@@ -62,7 +62,7 @@ def _encoder_only(rows, meta):
     sx = meta.get("start_x_cm"); sy = meta.get("start_y_cm"); syaw = meta.get("start_yaw_rad")
     x = (float(sx) * 10.0) if sx is not None else None
     y = (float(sy) * 10.0) if sy is not None else None
-    th = (float(syaw) + math.pi / 2) if syaw is not None else math.pi / 2
+    th = float(syaw) if syaw is not None else 0.0
     prevL = prevR = None
     xs, ys, ts = [], [], []
     for r in rows:

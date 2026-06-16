@@ -495,7 +495,7 @@ class TestReadCameraPose:
             id=100,
             x=10.0,
             y=20.0,
-            yaw=0.0,  # tag yaw = 0 → world heading = pi/2
+            yaw=0.0,  # tag yaw = 0 → world heading = 0 (no offset; 0 = east)
         )
 
         call_count = [0]
@@ -513,10 +513,10 @@ class TestReadCameraPose:
 
         assert abs(x_cm - 10.0) < 0.01, f"x_cm={x_cm}, expected 10.0"
         assert abs(y_cm - 20.0) < 0.01, f"y_cm={y_cm}, expected 20.0"
-        # yaw should be tag_yaw + HEAD_OFF = 0.0 + pi/2 = pi/2
-        expected_yaw = math.pi / 2.0
+        # yaw is the tag orientation directly (no offset): tag_yaw = 0.0 → 0.0
+        expected_yaw = 0.0
         assert abs(yaw_rad - expected_yaw) < 0.001, (
-            f"yaw_rad={yaw_rad}, expected {expected_yaw} (pi/2)"
+            f"yaw_rad={yaw_rad}, expected {expected_yaw} (no offset)"
         )
 
     def test_read_camera_pose_raises_with_no_tags(self):
@@ -545,7 +545,7 @@ class TestCameraPose:
             id=100,
             x=5.0,
             y=15.0,
-            yaw=math.pi / 4,  # 45 degrees
+            yaw=math.pi / 4,  # 45 degrees → world heading = pi/4 (no offset)
         )
 
         call_count = [0]
@@ -562,8 +562,8 @@ class TestCameraPose:
 
         assert abs(x_cm - 5.0) < 0.01
         assert abs(y_cm - 15.0) < 0.01
-        # yaw = pi/4 + pi/2 = 3*pi/4
-        expected = math.pi / 4 + math.pi / 2
+        # yaw is the tag orientation directly (no offset): pi/4
+        expected = math.pi / 4
         assert abs(yaw_rad - expected) < 0.001
 
 

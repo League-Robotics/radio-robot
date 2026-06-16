@@ -9,8 +9,11 @@ All three sites average x, y linearly and average yaw circularly using
 atan2(mean(sin), mean(cos)) to handle angle wrap-around correctly.
 
 The camera convention is:
-  - world heading = tag yaw + 90 degrees (HEAD_OFF = pi/2)
-  - confirmed by empirical bench verification (documented in MEMORY.md)
+  - the daemon already reports tag orientation in the world frame:
+    0 = east, CCW-positive. That orientation IS the robot's forward heading;
+    NO offset is applied (the camera reports the truth, so the codebase must
+    not "correct" it — this matches Navigator/go_to_world, which use the raw
+    tag orientation directly).
 
 Usage::
 
@@ -31,11 +34,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from robot_radio.field.playfield import Playfield
 
-# Camera heading offset: world heading = tag yaw + 90 degrees.
-# Confirmed by bench: a +forward nudge moves the robot along yaw+90deg.
-_HEAD_OFF = math.pi / 2.0
-
-
 def read_camera_pose(
     playfield: "Playfield",
     tag_id: int = 100,
@@ -48,8 +46,10 @@ def read_camera_pose(
     averaging linearly for x and y and circularly for yaw (to handle angle
     wrap-around).
 
-    The world heading applies the camera heading convention:
-        world_yaw = atan2(mean(sin(tag_yaw)), mean(cos(tag_yaw))) + pi/2
+    The world heading is the (circular-mean) tag orientation directly — the
+    daemon already reports it in the world frame (0 = east, CCW+), and that
+    orientation IS the robot's forward heading:
+        world_yaw = atan2(mean(sin(tag_yaw)), mean(cos(tag_yaw)))
 
     Parameters
     ----------
@@ -104,6 +104,6 @@ def read_camera_pose(
     y_cm = sum(ys) / n_got
     mean_sin = sum(sin_yaws) / n_got
     mean_cos = sum(cos_yaws) / n_got
-    yaw_rad = math.atan2(mean_sin, mean_cos) + _HEAD_OFF
+    yaw_rad = math.atan2(mean_sin, mean_cos)
 
     return (x_cm, y_cm, yaw_rad)

@@ -281,7 +281,7 @@ RobotConfig defaultRobotConfig() {{
 
     // Body motion limits
     p.vBodyMax        = 400.0f;
-    p.yawRateMax      = 180.0f;
+    p.yawRateMax      = {ov('yawRateMax', '180.0f')};
     p.yawAccMax       = 720.0f;
     p.jMax            = 0.0f;
     p.yawJerkMax      = 0.0f;

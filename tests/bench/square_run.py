@@ -19,7 +19,7 @@ Pipeline:
   4. Save the log CSV.
 
 Frames/units: playfield A1-centred, +X east, +Y north, CCW heading. Camera gives
-cm; firmware gives mm; firmware heading = camera_yaw + 90 deg.
+cm; firmware gives mm; firmware heading = camera_yaw (0=east, CCW+; no offset).
 
 Usage:
     uv run python tests/bench/square_run.py --verify --port /dev/cu.usbmodem2121302
@@ -144,7 +144,7 @@ def main() -> None:
             print("[camera] robot tag not seen — continuing without start fix")
         else:
             x0_cm, y0_cm, yaw0 = p
-            h_cdeg = int(round((math.degrees(yaw0) + 90.0) * 100.0))
+            h_cdeg = int(round(math.degrees(yaw0) * 100.0))
             proto.send(f"SI {int(round(x0_cm*10))} {int(round(y0_cm*10))} {h_cdeg}", 250)
             print(f"start pose: x={x0_cm:.1f}cm y={y0_cm:.1f}cm yaw={math.degrees(yaw0):.0f}deg -> SI")
 
@@ -224,7 +224,7 @@ def main() -> None:
                 p = robot_pose(dc, cam, n=4)
                 if p:
                     cx, cy, cyaw = p
-                    h_cdeg = int(round((math.degrees(cyaw) + 90.0) * 100.0))
+                    h_cdeg = int(round(math.degrees(cyaw) * 100.0))
                     proto.send(f"SI {int(round(cx*10))} {int(round(cy*10))} {h_cdeg}", 150)
                     print(f"     camera correct -> SI ({cx:.1f},{cy:.1f})")
 

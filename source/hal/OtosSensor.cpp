@@ -126,7 +126,13 @@ bool OtosSensor::readTransformed(const RobotConfig& cfg, OtosPose& poseOut,
 
     poseOut.x = c * xF - s * yF - offXWorld;
     poseOut.y = s * xF + c * yF - offYWorld;
-    poseOut.h = hF + cfg.odomYawDeg * (3.14159265f / 180.0f);
+    // Heading takes NO mounting offset.  odomYawDeg rotates the POSITION vector
+    // into the robot frame (above), but the OTOS heading is a rotation angle that
+    // increases with the robot's own rotation (the chip is rigidly mounted), so
+    // it already equals the robot heading once re-zeroed at a known orientation.
+    // Adding odomYawDeg here would double-count it (was harmless only while
+    // odomYawDeg==0; with the 90° mounting it would bias the fused heading 90°).
+    poseOut.h = hF;
     return true;
 }
 

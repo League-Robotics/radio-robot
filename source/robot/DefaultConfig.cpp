@@ -12,8 +12,8 @@ RobotConfig defaultRobotConfig() {
     p.fwdSignR        = -1;
 
     // Encoder calibration — baked from robot config
-    p.mmPerDegL       = 0.71659f;
-    p.mmPerDegR       = 0.70777f;
+    p.mmPerDegL       = 0.6177f;
+    p.mmPerDegR       = 0.6101f;
 
     // Feed-forward and motor scale factors
     p.kFF             = 0.15f;
@@ -65,7 +65,7 @@ RobotConfig defaultRobotConfig() {
     // OTOS calibration scalars — baked from robot config.
     // OtosSensor::begin() programs the hardware registers from these
     // values at firmware boot; no host-side OL/OA push required.
-    p.otosLinearScale      = 1.127f;
+    p.otosLinearScale      = 0.919f;
     p.otosAngularScale     = 0.987f;
     p.rotationGainPos      = 0.956f;
     p.rotationGainNeg      = 0.954f;
@@ -74,7 +74,7 @@ RobotConfig defaultRobotConfig() {
     p.rotationalSlip       = 0.74f;
     p.odomOffX             = 0.0f;
     p.odomOffY             = 0.0f;
-    p.odomYawDeg           = 0.0f;
+    p.odomYawDeg           = 90.0f;
     p.odomUpsideDown       = false;
 
     // Velocity-loop gains — baked from robot config

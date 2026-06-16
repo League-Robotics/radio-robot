@@ -82,7 +82,14 @@ bool Radio::poll(char* buf, uint16_t len) {
 }
 
 void Radio::send(const char* msg) {
-    int msgLen = (int)strlen(msg);
+    // Terminate every message with '\n', mirroring SerialPort::send's "\r\n".
+    // The radio START/END framing alone delimits messages for the relay's
+    // COMMAND plane (which re-adds newlines), but after !GO the relay is a
+    // transparent byte pipe: without an embedded newline, consecutive robot→host
+    // messages (TLM frames, OK/ID/EVT replies) concatenate on the host and its
+    // line reader can't split them — replies get lost mid-stream. The '\n' is
+    // the last payload byte (msgLen counts it) so it survives reassembly.
+    int msgLen = (int)strlen(msg) + 1;   // +1 for the trailing '\n'
     int off = 0;
     bool first = true;
     uint8_t frame[FRAME_HEADER + MTU];
@@ -99,7 +106,12 @@ void Radio::send(const char* msg) {
         frame[0] = _txSeq++;
         frame[1] = flags;
         frame[2] = (uint8_t)chunk;
-        if (chunk > 0) memcpy(frame + FRAME_HEADER, msg + off, chunk);
+        for (int i = 0; i < chunk; ++i) {
+            int idx = off + i;
+            // All but the final byte come from msg; the final byte is '\n'.
+            frame[FRAME_HEADER + i] =
+                (idx < msgLen - 1) ? (uint8_t)msg[idx] : (uint8_t)'\n';
+        }
         _radio.datagram.send(frame, FRAME_HEADER + chunk);
 
         off += chunk;

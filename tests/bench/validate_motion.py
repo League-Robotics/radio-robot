@@ -175,7 +175,8 @@ def calibrate_forward(dc, cam, proto, speed=85, min_cm=6.0):
             offset = wrap(fwd_world - c1)              # ADDITIVE: forward = cyaw + offset
             print(f"  heading-calibrated: forward={math.degrees(fwd_world):+.0f}° "
                   f"(compass {compass(fwd_world):.0f}°) from a {moved:.1f}cm drive; "
-                  f"offset={math.degrees(offset):+.0f}° (expect ≈ +90° if tag-top=forward)")
+                  f"offset={math.degrees(offset):+.0f}° (expect ≈ 0° — the camera's "
+                  f"tag orientation IS the robot's forward heading)")
             return offset
         print(f"  calibration drive only {moved:.1f}cm (attempt {attempt + 1}) "
               f"— too short to read heading; retrying longer")
@@ -183,10 +184,10 @@ def calibrate_forward(dc, cam, proto, speed=85, min_cm=6.0):
 
 
 def forward_world(offset, cyaw):
-    # ADDITIVE: tag yaw is CCW-positive (same as world). forward heading =
-    # cyaw + offset, where offset = θ_mount + π/2 (≈ +90° if the tag's top
-    # points along the robot's forward). (The old `offset - cyaw` had the sign
-    # of cyaw flipped, which sent go-to-point off in the wrong direction.)
+    # forward heading = cyaw + offset. The camera reports tag orientation in the
+    # world frame (0 = east, CCW+) and that orientation IS the robot's forward
+    # heading, so the EMPIRICALLY measured offset should be ≈ 0; offset remains a
+    # measured residual (mount slop) rather than a hardcoded correction.
     return wrap(cyaw + offset)
 
 

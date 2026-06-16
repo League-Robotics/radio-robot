@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+import time
 
 from robot_radio.testkit import make_target
 
@@ -79,6 +80,19 @@ def main(argv: list[str] | None = None) -> int:
     robot = tr.robot
     ident = robot.connect()
     print(f"[{args.mode}] connected: {ident}")
+
+    # Synchronize ALL odometry subsystems to (0,0,0) at the start so every run is
+    # deterministic and follows roughly the same path:
+    #   OZ            — zero the OTOS chip's own raw tracking (it persists across
+    #                   resets, so the boot-zero isn't enough once the robot has
+    #                   been placed/moved before the run).
+    #   ZERO enc pose — reset the encoder accumulators AND the fused EKF pose.
+    # The robot is still here (before the G move), which the OTOS/heading zero
+    # requires for a clean reset.
+    robot.send("OZ")
+    robot.send("ZERO enc pose")
+    time.sleep(0.3)  # let the zero settle before streaming/driving
+
     print(f"G  forward={args.forward}mm  left={args.left}mm  @ {args.speed}mm/s\n")
 
     outcome = "error"
@@ -94,7 +108,9 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             pass
 
-    return 0 if outcome == "done" else 1
+    # "settled" = robot moved then stopped (used when EVT done was dropped over
+    # radio); treat it as a clean completion alongside the EVT-confirmed "done".
+    return 0 if outcome in ("done", "settled") else 1
 
 
 if __name__ == "__main__":

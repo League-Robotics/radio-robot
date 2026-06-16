@@ -271,6 +271,19 @@ class Nezha(Robot):
         last_keepalive = time.monotonic()
         had_tlm = False
 
+        # Settle-based completion (radio robustness): the firmware's
+        # ``EVT done <verb>`` rides the same lossy radio link as TLM and is
+        # easily dropped during/after motion, which would otherwise hang this
+        # loop until the full timeout.  So we also detect arrival independently:
+        # once the robot has actually moved and then holds ~zero velocity for
+        # _SETTLE_S, the motion is over → return "settled".  The caller reports
+        # the final pose so the operator sees where it actually stopped.
+        _SETTLE_V = 20.0      # mm/s linear "stopped" threshold
+        _SETTLE_W = 0.15      # rad/s yaw-rate "stopped" threshold
+        _SETTLE_S = 1.5       # s of continuous stop (after moving) → settled
+        moved = False
+        stopped_since: float | None = None
+
         while time.monotonic() < deadline:
             lines = self._proto._conn.read_lines(duration_ms=50)
             had_tlm = False
@@ -301,6 +314,21 @@ class Nezha(Robot):
                         self._proto.stream(0)
                         return "safety_stop"
 
+            # Settle detection: once the robot has moved and then holds ~zero
+            # velocity for _SETTLE_S, treat the move as complete even if the
+            # EVT done was never received (dropped over radio).
+            moving = (abs(self.state.v) > _SETTLE_V or
+                      abs(self.state.omega) > _SETTLE_W)
+            if moving:
+                moved = True
+                stopped_since = None
+            elif moved:
+                if stopped_since is None:
+                    stopped_since = time.monotonic()
+                elif time.monotonic() - stopped_since >= _SETTLE_S:
+                    self._proto.stream(0)
+                    return "settled"
+
             # Keepalive safety belt (daemon normally covers this).
             now = time.monotonic()
             if not had_tlm and (now - last_keepalive) >= _KEEPALIVE_INTERVAL:
@@ -318,7 +346,10 @@ class Nezha(Robot):
         """Blocking or callback-driven go-to (G command).
 
         Returns ``(left_enc_mm, right_enc_mm, outcome)`` where ``outcome``
-        is one of ``"done"``, ``"safety_stop"``, or ``"timeout"``.
+        is one of ``"done"``, ``"settled"``, ``"safety_stop"``, ``"aborted"``,
+        or ``"timeout"``.  ``"settled"`` (callback path only) means the robot
+        moved then held ~zero velocity for ~1.5 s without an ``EVT done`` — used
+        when that event is dropped over the radio link.
 
         Parameters
         ----------

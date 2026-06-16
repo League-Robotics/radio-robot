@@ -310,7 +310,7 @@ def preflight_nudge(proto, dc, cam, fence, nudge_cm, pump, record):
     if p0 is None:
         return False, "no camera fix before nudge"
     x0, y0, yaw0 = p0
-    fwd0 = yaw0 + math.pi / 2.0
+    fwd0 = yaw0   # tag orientation IS the robot's forward heading (0=east, CCW+)
 
     # Refuse to nudge if the forward endpoint would leave the geofence (the robot
     # is facing the edge). Caller should reposition / re-face toward the centre.
@@ -325,7 +325,7 @@ def preflight_nudge(proto, dc, cam, fence, nudge_cm, pump, record):
         evt = pump()
         cp = read_cam_pose(dc, cam, timeout_s=0.12)
         if cp is not None:
-            record(cp[0], cp[1], cp[2] + math.pi / 2.0)
+            record(cp[0], cp[1], cp[2])
             if not in_fence(cp[0], cp[1], fence):
                 proto.stop()
                 return False, "nudge would leave geofence — aborted"
@@ -367,7 +367,7 @@ def run_cycle(args, dc, cam, proto, nezha, playfield, *, avoid_slug=None,
     if pose is None:
         raise RuntimeError(f"camera did not see robot tag {ROBOT_TAG_ID} (calibrated)")
     cx, cy, cyaw = pose
-    fwd = cyaw + math.pi / 2.0    # robot forward heading in world frame
+    fwd = cyaw    # tag orientation IS the robot's forward heading (0=east, CCW+)
 
     # Geofence from the calibrated playfield — the robot must stay inside it.
     fence = geofence_from_playfield(playfield, args.margin)
@@ -410,7 +410,7 @@ def run_cycle(args, dc, cam, proto, nezha, playfield, *, avoid_slug=None,
         raise RuntimeError(f"target {target['slug']} is outside the geofence — refusing")
 
     # 3. Synchronise OTOS world pose to camera (OV command).
-    h_cdeg = int(round((math.degrees(cyaw) + 90.0) * 100.0))
+    h_cdeg = int(round(math.degrees(cyaw) * 100.0))
     nezha.set_world_pose(int(round(cx * 10)), int(round(cy * 10)), h_cdeg)
     print(f"  sync: OV {round(cx*10)} {round(cy*10)} {h_cdeg}")
 
@@ -495,7 +495,7 @@ def run_cycle(args, dc, cam, proto, nezha, playfield, *, avoid_slug=None,
                     status = "CAMERA_LOST"
                     break
                 cx, cy, cyaw = cp
-                fwd = cyaw + math.pi / 2.0
+                fwd = cyaw
                 pump_telemetry()
                 record_and_draw(cx, cy, fwd)
 
@@ -538,7 +538,7 @@ def run_cycle(args, dc, cam, proto, nezha, playfield, *, avoid_slug=None,
                         continue
                     last_seen = time.monotonic()
                     cx, cy, cyaw = cp
-                    fwd = cyaw + math.pi / 2.0
+                    fwd = cyaw
                     record_and_draw(cx, cy, fwd)
                     if not in_fence(cx, cy, fence):
                         status = "GEOFENCE"
