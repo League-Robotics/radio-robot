@@ -317,24 +317,26 @@ class TestRefresh:
 # ---------------------------------------------------------------------------
 
 class TestUpdateWorldPose:
-    """Nezha.update_world_pose() converts units, calls OV, and updates state."""
+    """Nezha.update_world_pose() converts units, anchors via SI, and updates state."""
 
     def test_update_world_pose_unit_conversion(self) -> None:
-        """update_world_pose converts cm->mm, rad->cdeg before calling otos_set_position."""
+        """update_world_pose converts cm->mm, rad->cdeg before calling set_internal_pose (SI)."""
         robot = _make_robot()
-        robot._proto.otos_set_position = MagicMock()
+        robot._proto.set_internal_pose = MagicMock()
 
         robot.update_world_pose(10.0, -5.0, math.pi / 2)
 
         # x_mm = round(10.0 * 10) = 100
         # y_mm = round(-5.0 * 10) = -50
         # h_cdeg = round(degrees(pi/2) * 100) = round(90.0 * 100) = 9000
-        robot._proto.otos_set_position.assert_called_once_with(100, -50, 9000)
+        # SI (Odometry::setPose) anchors the controller pose in WORLD coords,
+        # NOT OV (which only nudges the raw OTOS chip and lands rotated).
+        robot._proto.set_internal_pose.assert_called_once_with(100, -50, 9000)
 
     def test_update_world_pose_stores_world_pose(self) -> None:
         """After update_world_pose, state.world_pose holds the camera-native values."""
         robot = _make_robot()
-        robot._proto.otos_set_position = MagicMock()
+        robot._proto.set_internal_pose = MagicMock()
 
         robot.update_world_pose(10.0, -5.0, math.pi / 2)
 
@@ -348,7 +350,7 @@ class TestUpdateWorldPose:
         """update_world_pose does not disturb existing encoders, pose, etc."""
         robot = _make_robot()
         robot._apply_tlm(TLMFrame(enc=(33, 31), pose=(500, 250, 0), color=(10, 20, 30, 40)))
-        robot._proto.otos_set_position = MagicMock()
+        robot._proto.set_internal_pose = MagicMock()
 
         robot.update_world_pose(15.0, 3.5, 0.0)
 
@@ -360,8 +362,8 @@ class TestUpdateWorldPose:
     def test_update_world_pose_zero_yaw_cdeg_conversion(self) -> None:
         """Zero yaw_rad maps to h_cdeg=0 (round-trip sanity check)."""
         robot = _make_robot()
-        robot._proto.otos_set_position = MagicMock()
+        robot._proto.set_internal_pose = MagicMock()
 
         robot.update_world_pose(0.0, 0.0, 0.0)
 
-        robot._proto.otos_set_position.assert_called_once_with(0, 0, 0)
+        robot._proto.set_internal_pose.assert_called_once_with(0, 0, 0)

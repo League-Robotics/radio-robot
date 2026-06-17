@@ -8,18 +8,17 @@ Test plan (8 cases from the ticket):
 3. test_get_tag_no_world_xy
 4. test_get_object_from_fixture
 5. test_world_to_pixel_round_trip  (includes explicit y-flip + origin assertion)
-6. test_add_path_writes_paths_json
-7. test_clear_paths_writes_empty_list
-8. test_add_path_atomic
+6. test_add_path_publishes_overlay
+7. test_clear_paths_publishes_overlay
+8. test_add_path_publishes_via_grpc
 """
 
 from __future__ import annotations
 
 import json
 import math
-import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -355,12 +354,22 @@ class TestPixelWorldTransform:
 
 
 # ---------------------------------------------------------------------------
-# 6. test_add_path_writes_paths_json
+# 6. test_add_path_publishes_overlay
 # ---------------------------------------------------------------------------
 
 
+def _last_overlay_elements(dc: MagicMock) -> list[dict]:
+    """Return the ``elements`` arg of the most recent publish_overlay call."""
+    assert dc.publish_overlay.called, "publish_overlay was never called"
+    args, kwargs = dc.publish_overlay.call_args
+    # signature: publish_overlay(cam, elements, ttl=600.0)
+    cam = args[0] if len(args) > 0 else kwargs.get("cam")
+    assert cam == "test-cam", f"Expected cam 'test-cam', got {cam!r}"
+    return args[1] if len(args) > 1 else kwargs["elements"]
+
+
 class TestAddPath:
-    """add_path writes a correctly shaped paths.json."""
+    """add_path mutates in-memory _paths and publishes a daemon overlay."""
 
     def test_writes_one_path_entry(self, tmp_path: Path) -> None:
         dc = _make_dc()
@@ -368,11 +377,19 @@ class TestAddPath:
 
         pf.add_path("track", [(1.0, 2.0), (3.0, 4.0)])
 
-        paths_json = tmp_path / "paths.json"
-        assert paths_json.exists()
-        data = json.loads(paths_json.read_text())
-        assert len(data) == 1
-        entry = data[0]
+        # publish_overlay called with this camera.
+        dc.publish_overlay.assert_called_once()
+        elements = _last_overlay_elements(dc)
+        # A 2-waypoint path → one polyline + two points.
+        polylines = [e for e in elements if e["type"] == "polyline"]
+        points = [e for e in elements if e["type"] == "point"]
+        assert len(polylines) == 1
+        assert polylines[0]["params"] == pytest.approx([1.0, 2.0, 3.0, 4.0])
+        assert len(points) == 2
+
+        # In-memory _paths holds the path_id / waypoint structure.
+        assert len(pf._paths) == 1
+        entry = pf._paths[0]
         assert entry["path_id"] == "track"
         assert entry["playfield_id"] == "test-cam"
         wps = entry["waypoints"]
@@ -388,8 +405,8 @@ class TestAddPath:
 
         pf.add_path("cam", [(1.0, 2.0)], symbol="x", color=(255, 0, 0), size_cm=0.8)
 
-        data = json.loads((tmp_path / "paths.json").read_text())
-        wp = data[0]["waypoints"][0]
+        # In-memory waypoint carries the full schema.
+        wp = pf._paths[0]["waypoints"][0]
         assert "x" in wp
         assert "y" in wp
         assert "size_cm" in wp
@@ -400,6 +417,13 @@ class TestAddPath:
         assert wp["symbol_color"] == [255, 0, 0]
         assert wp["size_cm"] == pytest.approx(0.8)
 
+        # The published overlay carries the size and symbol colour through.
+        elements = _last_overlay_elements(dc)
+        points = [e for e in elements if e["type"] == "point"]
+        assert len(points) == 1
+        assert points[0]["params"] == pytest.approx([1.0, 2.0, 0.8])
+        assert points[0]["color"] == [255, 0, 0]
+
     def test_replace_existing_path_id(self, tmp_path: Path) -> None:
         dc = _make_dc()
         pf = _make_playfield(dc, tmp_path)
@@ -407,9 +431,14 @@ class TestAddPath:
         pf.add_path("track", [(1.0, 2.0)])
         pf.add_path("track", [(9.0, 8.0)])  # replace
 
-        data = json.loads((tmp_path / "paths.json").read_text())
-        assert len(data) == 1
-        assert data[0]["waypoints"][0]["x"] == pytest.approx(9.0)
+        assert len(pf._paths) == 1
+        assert pf._paths[0]["waypoints"][0]["x"] == pytest.approx(9.0)
+
+        # Latest overlay reflects the replacement.
+        elements = _last_overlay_elements(dc)
+        points = [e for e in elements if e["type"] == "point"]
+        assert len(points) == 1
+        assert points[0]["params"][:2] == pytest.approx([9.0, 8.0])
 
     def test_multiple_paths_preserved(self, tmp_path: Path) -> None:
         dc = _make_dc()
@@ -418,18 +447,22 @@ class TestAddPath:
         pf.add_path("a", [(0.0, 0.0)])
         pf.add_path("b", [(1.0, 1.0)])
 
-        data = json.loads((tmp_path / "paths.json").read_text())
-        ids = {e["path_id"] for e in data}
+        ids = {e["path_id"] for e in pf._paths}
         assert ids == {"a", "b"}
+
+        # The final overlay carries both paths (one point each).
+        elements = _last_overlay_elements(dc)
+        points = [e for e in elements if e["type"] == "point"]
+        assert len(points) == 2
 
 
 # ---------------------------------------------------------------------------
-# 7. test_clear_paths_writes_empty_list
+# 7. test_clear_paths_publishes_overlay
 # ---------------------------------------------------------------------------
 
 
 class TestClearPaths:
-    """clear_paths writes [] to paths.json."""
+    """clear_paths empties _paths and publishes an empty overlay."""
 
     def test_clears_after_add_path(self, tmp_path: Path) -> None:
         dc = _make_dc()
@@ -438,8 +471,10 @@ class TestClearPaths:
         pf.add_path("track", [(1.0, 2.0)])
         pf.clear_paths()
 
-        data = json.loads((tmp_path / "paths.json").read_text())
-        assert data == []
+        assert pf._paths == []
+        # Last publish_overlay call clears the overlay (empty element list).
+        elements = _last_overlay_elements(dc)
+        assert elements == []
 
     def test_clear_without_prior_write(self, tmp_path: Path) -> None:
         dc = _make_dc()
@@ -447,56 +482,44 @@ class TestClearPaths:
 
         pf.clear_paths()
 
-        data = json.loads((tmp_path / "paths.json").read_text())
-        assert data == []
+        assert pf._paths == []
+        dc.publish_overlay.assert_called_once()
+        elements = _last_overlay_elements(dc)
+        assert elements == []
 
 
 # ---------------------------------------------------------------------------
-# 8. test_add_path_atomic
+# 8. test_add_path_publishes_via_grpc
 # ---------------------------------------------------------------------------
 
 
 class TestAddPathAtomic:
-    """Verify atomic write: .tmp file created and os.replace called."""
+    """The path side-effect goes through the daemon gRPC publish_overlay API.
+
+    (The old atomic tmp-file + os.replace write mechanism is gone; paths are now
+    published as a live daemon overlay.)
+    """
 
     def test_tmp_file_and_os_replace(self, tmp_path: Path) -> None:
         dc = _make_dc()
         pf = _make_playfield(dc, tmp_path)
-        paths_json = tmp_path / "paths.json"
-        tmp_file = str(paths_json) + ".tmp"
 
-        replace_calls: list[tuple] = []
+        pf.add_path("cam", [(1.0, 2.0)])
 
-        original_replace = os.replace
-
-        def capture_replace(src: str, dst: str) -> None:
-            replace_calls.append((src, dst))
-            original_replace(src, dst)
-
-        with patch("robot_radio.field.playfield.os.replace", side_effect=capture_replace):
-            pf.add_path("cam", [(1.0, 2.0)])
-
-        assert len(replace_calls) == 1
-        src, dst = replace_calls[0]
-        assert src == tmp_file, f"Expected tmp file {tmp_file!r}, got {src!r}"
-        assert dst == str(paths_json), f"Expected dest {str(paths_json)!r}, got {dst!r}"
+        # No file is written; the publish goes over the daemon API.
+        assert not (tmp_path / "paths.json").exists()
+        assert not (tmp_path / "paths.json.tmp").exists()
+        dc.publish_overlay.assert_called_once()
+        _, kwargs = dc.publish_overlay.call_args
+        assert kwargs.get("ttl") == pytest.approx(600.0)
 
     def test_clear_paths_also_atomic(self, tmp_path: Path) -> None:
         dc = _make_dc()
         pf = _make_playfield(dc, tmp_path)
-        paths_json = tmp_path / "paths.json"
-        tmp_file = str(paths_json) + ".tmp"
 
-        replace_calls: list[tuple] = []
-        original_replace = os.replace
+        pf.clear_paths()
 
-        def capture_replace(src: str, dst: str) -> None:
-            replace_calls.append((src, dst))
-            original_replace(src, dst)
-
-        with patch("robot_radio.field.playfield.os.replace", side_effect=capture_replace):
-            pf.clear_paths()
-
-        assert len(replace_calls) == 1
-        assert replace_calls[0][0] == tmp_file
-        assert replace_calls[0][1] == str(paths_json)
+        assert not (tmp_path / "paths.json").exists()
+        dc.publish_overlay.assert_called_once()
+        _, kwargs = dc.publish_overlay.call_args
+        assert kwargs.get("ttl") == pytest.approx(600.0)

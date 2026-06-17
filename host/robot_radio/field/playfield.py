@@ -257,15 +257,35 @@ class Playfield:
             self._H_inv = np.linalg.inv(H)
 
     def _write_paths(self) -> None:
-        """Atomically write the current in-memory path list to paths.json."""
-        dest = self._default_paths_json()
-        if dest is None:
-            return
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = str(dest) + ".tmp"
-        with open(tmp, "w") as fh:
-            fh.write(json.dumps(self._paths))
-        os.replace(tmp, str(dest))
+        """Push the current in-memory paths to the daemon as a live overlay via the
+        gRPC API (``DaemonControl.publish_overlay``) — NOT a file. Each call replaces
+        the previous overlay for this camera; an empty path list clears it.
+
+        Path waypoints (world cm) become a ``polyline`` plus a filled ``point`` at
+        each waypoint, matching the overlay element schema the daemon renders
+        ({type, params(world cm), color[RGB], thickness}); see tests/bench/*.py.
+        """
+        elements: list[dict] = []
+        for entry in self._paths:
+            wps = entry.get("waypoints") or []
+            if not wps:
+                continue
+            line_color = list(wps[0].get("line_color", [0, 200, 255]))
+            if len(wps) >= 2:
+                params = [c for w in wps for c in (float(w["x"]), float(w["y"]))]
+                elements.append({"type": "polyline", "params": params,
+                                 "color": line_color, "thickness": 2})
+            for w in wps:
+                elements.append({
+                    "type": "point",
+                    "params": [float(w["x"]), float(w["y"]), float(w.get("size_cm", 1.2))],
+                    "color": list(w.get("symbol_color", line_color)),
+                    "thickness": -1,
+                })
+        try:
+            self._dc.publish_overlay(self._cam, elements, ttl=600.0)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Tags

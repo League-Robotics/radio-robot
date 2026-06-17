@@ -31,7 +31,7 @@
       "yaw_rad": 1.5707963
     },
     "odometry_chip_upside_down": false,
-    "trackwidth": 83,
+    "trackwidth": 128,
     "wheelbase_mm": null
   },
   "wheels": {
@@ -61,11 +61,11 @@
     "laser_port": 4
   },
   "calibration": {
-    "otos_linear_scale": 0.919,
+    "otos_linear_scale": 1.067,
     "otos_angular_scale": 0.987,
-    "mm_per_wheel_deg_left": 0.6177,
-    "mm_per_wheel_deg_right": 0.6101,
-    "rotational_slip": 0.74,
+    "mm_per_wheel_deg_left": 0.7165,
+    "mm_per_wheel_deg_right": 0.7077,
+    "rotational_slip": 0.92,
     "rotation_gain": 0.956,
     "rotation_offset_deg": 1.045,
     "rotation_gain_neg": 0.954,

@@ -167,7 +167,7 @@ class TestPushCalibrationValues:
     """The values sent match the tovez.json config."""
 
     def test_set_ml_value(self):
-        """SET ml encodes mm_per_wheel_deg_left from tovez (0.6177)."""
+        """SET ml encodes mm_per_wheel_deg_left from tovez (0.7165)."""
         conn = _make_conn()
         _push_calibration(conn)
         cmds = _sent_cmds(conn)
@@ -175,10 +175,10 @@ class TestPushCalibrationValues:
         assert ml_cmds, "No SET ml= command found"
         val_str = ml_cmds[0].split("=", 1)[1]
         val = float(val_str)
-        assert abs(val - 0.6177) < 1e-4, f"Expected ml≈0.6177, got {val}"
+        assert abs(val - 0.7165) < 1e-4, f"Expected ml≈0.7165, got {val}"
 
     def test_set_mr_value(self):
-        """SET mr encodes mm_per_wheel_deg_right from tovez (0.6101)."""
+        """SET mr encodes mm_per_wheel_deg_right from tovez (0.7077)."""
         conn = _make_conn()
         _push_calibration(conn)
         cmds = _sent_cmds(conn)
@@ -186,27 +186,27 @@ class TestPushCalibrationValues:
         assert mr_cmds, "No SET mr= command found"
         val_str = mr_cmds[0].split("=", 1)[1]
         val = float(val_str)
-        assert abs(val - 0.6101) < 1e-4, f"Expected mr≈0.6101, got {val}"
+        assert abs(val - 0.7077) < 1e-4, f"Expected mr≈0.7077, got {val}"
 
     def test_set_tw_value(self):
-        """SET tw encodes trackwidth from tovez (83 mm)."""
+        """SET tw encodes trackwidth from tovez (128 mm)."""
         conn = _make_conn()
         _push_calibration(conn)
         cmds = _sent_cmds(conn)
         tw_cmds = [c for c in cmds if c.startswith("SET tw=")]
         assert tw_cmds, "No SET tw= command found"
         val = int(tw_cmds[0].split("=", 1)[1])
-        assert val == 83, f"Expected tw=83, got {val}"
+        assert val == 128, f"Expected tw=128, got {val}"
 
     def test_ol_value(self):
-        """OL value matches tovez otos_linear_scale=0.919 → int8=-81."""
+        """OL value matches tovez otos_linear_scale=1.067 → int8=67."""
         conn = _make_conn()
         _push_calibration(conn)
         cmds = _sent_cmds(conn)
         ol_cmds = [c for c in cmds if c.startswith("OL ")]
         assert ol_cmds, "No OL command found"
         val = int(ol_cmds[0].split()[1])
-        assert val == -81, f"Expected OL -81, got {val}"
+        assert val == 67, f"Expected OL 67, got {val}"
 
     def test_oa_value(self):
         """OA value matches tovez otos_angular_scale=0.987 → int8=-13."""

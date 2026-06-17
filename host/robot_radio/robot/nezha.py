@@ -692,9 +692,14 @@ class Nezha(Robot):
         """Set the world-frame pose from camera-native units and record it in state.
 
         Converts camera-native units to firmware wire units and calls
-        ``set_world_pose`` (OV command), then records the camera-native values
-        in ``self.state.world_pose`` as ``(x_cm, y_cm, yaw_rad)`` so callers
-        can read the last-set world pose back without unit conversion.
+        ``set_internal_pose`` (SI command -> Odometry::setPose), which anchors the
+        motion controller's pose (poseX/poseY/poseHrad) so getPose/telemetry then
+        report WORLD coordinates directly.  Records the camera-native values in
+        ``self.state.world_pose`` as ``(x_cm, y_cm, yaw_rad)`` so callers can read
+        the last-set world pose back without unit conversion.
+
+        (Was OV — the raw-OTOS-chip nudge — which does NOT set the controller pose
+        and lands rotated by the OTOS mount angle; that was the +90° trace bug.)
 
         Unit conventions
         ----------------
@@ -711,12 +716,12 @@ class Nezha(Robot):
         y_cm:
             World y-position in centimetres.
         yaw_rad:
-            World heading in radians (CCW-positive, 0 = north/forward).
+            World heading in radians (CCW-positive, 0 = +x/east, camera frame).
         """
         x_mm = round(x_cm * 10)
         y_mm = round(y_cm * 10)
         h_cdeg = round(math.degrees(yaw_rad) * 100)
-        self._proto.otos_set_position(x_mm, y_mm, h_cdeg)
+        self._proto.set_internal_pose(x_mm, y_mm, h_cdeg)
         prev = self.state
         self.state = RobotState(
             pose=prev.pose,

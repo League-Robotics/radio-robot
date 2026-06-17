@@ -728,8 +728,21 @@ class NezhaProtocol:
         return None
 
     def otos_set_position(self, x_mm: int, y_mm: int, h_cdeg: int) -> None:
-        """Set OTOS world-frame position (OV command)."""
+        """Set OTOS world-frame position (OV command) — nudges the RAW OTOS chip
+        only; does NOT set the motion controller's pose.  Prefer set_internal_pose
+        (SI) for a camera fix.  NOTE: OV writes the chip's raw registers, which
+        readTransformed then rotates by the OTOS mount angle (odomYawDeg) — so a
+        world (x,y) passed here lands rotated; that mismatch is why OV must not be
+        used to anchor the world pose."""
         self._conn.send(f"OV {x_mm} {y_mm} {h_cdeg}", read_ms=300)
+
+    def set_internal_pose(self, x_mm: int, y_mm: int, h_cdeg: int) -> None:
+        """Set the motion controller's onboard pose from an external (camera) fix
+        (SI command -> Odometry::setPose).  This writes poseX/poseY/poseHrad — the
+        pose getPose/telemetry report and G/D/TURN drive against — so the robot
+        tracks in WORLD coordinates.  Heading is centi-degrees in the camera world
+        frame (0 = +x/east, CCW-positive)."""
+        self._conn.send(f"SI {x_mm} {y_mm} {h_cdeg}", read_ms=300)
 
     def otos_set_linear_scalar(self, val: int) -> int | None:
         """Set OTOS linear scalar (OL <val> command). Returns confirmed value or None."""

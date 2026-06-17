@@ -107,6 +107,14 @@ def main(argv=None) -> int:
                   f"enc={enc:6.1f} ({enc/truth:5.3f}) "
                   f"otos={otos:6.1f} ({otos/truth:5.3f}) fused={fused:6.1f} ({fused/truth:5.3f})")
             print("  (ratio>1 ⇒ over-reports ⇒ G stops SHORT by that factor)")
+            # Direction check: did the robot travel WHERE the camera says it faces?
+            # (camera position is validated ground truth, so this tests the camera
+            # heading's self-consistency / sign independently of the robot.)
+            travel = math.degrees(math.atan2(cy1 - cy0, cx1 - cx0))
+            derr = (travel - math.degrees(ch0) + 180) % 360 - 180
+            print(f"  DIR travel={travel:+.0f}° vs cam-head={math.degrees(ch0):+.0f}° "
+                  f"→ err={derr:+.0f}° "
+                  f"({'OK: forward = camera heading' if abs(derr) < 25 else 'MISMATCH'})")
             # Open-loop return toward start so reps stay bounded (heading unchanged
             # by a straight drive, so reversing retraces the line — accuracy N/A).
             if i + 1 < a.reps:
@@ -143,6 +151,16 @@ def main(argv=None) -> int:
                 print(f"  cmd Δ={sgn*a.turn:+.0f}° | TRUTH(cam)Δ={d_truth:+6.1f}° | "
                       f"fusedΔ={d_fused:+6.1f}° otosΔ={d_otos:+6.1f}°  fused/truth={r:5.3f}")
                 print("  (fused≈truth ⇒ heading good; otos≈truth but fused≠truth ⇒ fusion/trackwidth bug)")
+                # POSITION drift during an IN-PLACE turn — camera truth ~0 (tag is
+                # near the turn axis). If OTOS/fused position jumps, rotation is
+                # corrupting the position estimate (the arc-overshoot suspect).
+                cam_dpos = math.hypot(cx1 - cx0, cy1 - cy0) * 10.0   # cm → mm
+                fused_dpos = (math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+                              if (p0 and p1) else float("nan"))
+                otos_dpos = (math.hypot(o1[0] - o0[0], o1[1] - o0[1])
+                             if (o0 and o1) else float("nan"))
+                print(f"  POS drift (in-place turn, want ~0): cam={cam_dpos:5.1f}mm "
+                      f"fused={fused_dpos:5.1f}mm  otos={otos_dpos:5.1f}mm")
     finally:
         try: proto.stop()
         except Exception: pass

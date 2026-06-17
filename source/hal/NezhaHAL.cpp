@@ -3,14 +3,17 @@
 
 NezhaHAL::NezhaHAL(MicroBitI2C& i2c, MicroBitIO& io, const RobotConfig& cfg)
     : _bus(i2c),
-      // Physical wiring is mirrored vs the original M2=left / M1=right labels:
-      // the robot turned CW for +omega (should be CCW under the ENU+CCW camera).
-      // M1 is the physical LEFT wheel, M2 the physical RIGHT. Each motor keeps
-      // its own chip channel, fwd polarity, and mm/deg calibration (calibration
-      // follows motorId inside Motor: id 1 -> mmPerDegR, id 2 -> mmPerDegL); only
-      // the L/R role is swapped so +omega -> physical CCW. Forward is unaffected.
-      _motorL(_bus, 1, cfg.fwdSignR),   // chip M1 = physical LEFT
-      _motorR(_bus, 2, cfg.fwdSignL),   // chip M2 = physical RIGHT
+      // Canonical wiring (verified at the controller): LEFT wheel = M2 (chip id 2),
+      // RIGHT = M1 (chip id 1). Calibration follows motorId inside Motor (id 2 ->
+      // mmPerDegL, id 1 -> mmPerDegR), so this honest mapping keeps the per-wheel
+      // calibration correct AND makes the encoder-difference heading (encR-encL)/tw
+      // CCW+ — matching the (un-negated) OTOS heading and the ENU camera. The motor
+      // forward SENSE is inverted, handled separately by fwdSignL/R (flipped in
+      // gen_default_config) which does NOT affect the L/R encoder ordering here.
+      // (A prior L/R swap here was a mirror-era hack — the overhead camera was
+      // vertically flipped at the time — and it inverted the encoder heading.)
+      _motorL(_bus, 2, cfg.fwdSignL),   // chip M2 = physical LEFT
+      _motorR(_bus, 1, cfg.fwdSignR),   // chip M1 = physical RIGHT
       _otos(_bus, cfg),
 #ifdef BENCH_OTOS_ENABLED
       _benchOtos(),

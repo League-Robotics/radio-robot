@@ -115,11 +115,11 @@ class TestLoadRobotConfig:
 
     def test_tovez_calibration_values(self):
         cfg = load_robot_config(_TOVEZ_JSON)
-        assert cfg.calibration.otos_linear_scale == pytest.approx(0.919)
+        assert cfg.calibration.otos_linear_scale == pytest.approx(1.067)
         assert cfg.calibration.otos_angular_scale == pytest.approx(0.987)
-        assert cfg.calibration.mm_per_wheel_deg_left == pytest.approx(0.6177)
-        assert cfg.calibration.mm_per_wheel_deg_right == pytest.approx(0.6101)
-        assert cfg.calibration.rotational_slip == pytest.approx(0.74)
+        assert cfg.calibration.mm_per_wheel_deg_left == pytest.approx(0.7165)
+        assert cfg.calibration.mm_per_wheel_deg_right == pytest.approx(0.7077)
+        assert cfg.calibration.rotational_slip == pytest.approx(0.92)
         assert cfg.calibration.rotation_gain == pytest.approx(0.956)
         assert cfg.calibration.rotation_offset_deg == pytest.approx(1.045)
         assert cfg.calibration.rotation_gain_neg == pytest.approx(0.954)
@@ -127,7 +127,7 @@ class TestLoadRobotConfig:
 
     def test_tovez_geometry(self):
         cfg = load_robot_config(_TOVEZ_JSON)
-        assert cfg.trackwidth == pytest.approx(83)
+        assert cfg.trackwidth == pytest.approx(128)
 
     def test_tovez_wheels(self):
         cfg = load_robot_config(_TOVEZ_JSON)
@@ -151,8 +151,8 @@ class TestLoadRobotConfig:
 
     def test_otos_scalars(self):
         cfg = load_robot_config(_TOVEZ_JSON)
-        # otos_linear_scale=0.919 → scalar = round((0.919-1)/0.001) = -81
-        assert cfg.otos_linear_scalar == -81
+        # otos_linear_scale=1.067 → scalar = round((1.067-1)/0.001) = 67
+        assert cfg.otos_linear_scalar == 67
         # otos_angular_scale=0.987 → scalar = round((0.987-1)/0.001) = -13
         assert cfg.otos_angular_scalar == -13
 
@@ -227,5 +227,5 @@ class TestMatchRobotById:
         """Matched config carries the full calibration data."""
         cfg = match_robot_by_id("ID model=Nezha2 name=TOVEZ serial=89f137c0")
         assert cfg is not None
-        assert cfg.calibration.otos_linear_scale == pytest.approx(0.919)
+        assert cfg.calibration.otos_linear_scale == pytest.approx(1.067)
         assert cfg.calibration.rotation_gain_neg == pytest.approx(0.954)

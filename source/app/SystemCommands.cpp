@@ -723,6 +723,12 @@ static void handleSI(const ArgList& args, const char* corrId,
     int32_t y_mm   = args.args[1].ival;
     int32_t h_cdeg = args.args[2].ival;
     robot->odometry.setPose(robot->state.inputs, x_mm, y_mm, h_cdeg);
+    // Re-anchor the OTOS to the SAME world fix so its absolute position+heading
+    // observations agree with the controller pose, instead of dragging the EKF
+    // back toward the OTOS boot frame (the "starts right, then rotates away"
+    // bug).  h_cdeg -> rad: pi/18000 = 1.74532925e-4.
+    robot->otos.setWorldPose(robot->config, (float)x_mm, (float)y_mm,
+                             (float)h_cdeg * 1.74532925e-4f);
     char body[48];
     snprintf(body, sizeof(body), "x=%d y=%d h=%d", (int)x_mm, (int)y_mm, (int)h_cdeg);
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "setpose", body,

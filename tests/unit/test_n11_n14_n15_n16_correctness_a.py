@@ -208,11 +208,11 @@ def test_n15_q_growth_invariant_to_loop_rate(sim):
     p_fine   = run_predict_only(STEP_A)
     p_coarse = run_predict_only(STEP_B)
 
-    # Pre-fix: |p_fine - p_coarse| ≈ (83 - 42) × Q_per_call ≈ 41 × 200 = 8200
-    # Post-fix: both ≈ Q_per_second × TOTAL_MS/1000 = 200 × 2.0 = 400 mm²
+    # Pre-fix: |p_fine - p_coarse| ≈ (83 - 42) × Q_per_call ≈ 41 × 800 = 32800
+    # Post-fix: both ≈ Q_per_second × TOTAL_MS/1000 = 800 × 2.0 = 1600 mm²
     # Tolerance: within 2× step_B Q worth of each other (one extra tick error).
-    # Q_per_second (ekfQxy) = 200.0; at step_B dt = 0.048, one tick = 9.6 mm².
-    tolerance = 20.0  # mm² — generous to allow for rounding and step boundary
+    # Q_per_second (ekfQxy) = 800.0; at step_B dt = 0.048, one tick = 38.4 mm².
+    tolerance = 80.0  # mm² — generous to allow for rounding and step boundary
 
     assert abs(p_fine - p_coarse) < tolerance, (
         f"N15: EKF P[0][0] growth is loop-rate-coupled (not invariant).\n"
@@ -223,10 +223,10 @@ def test_n15_q_growth_invariant_to_loop_rate(sim):
 
 
 def test_n15_q_growth_matches_expected_per_second(sim):
-    """EKF P[0][0] growth after 1 second ≈ ekfQxy per second (= 200.0 mm²/s).
+    """EKF P[0][0] growth after 1 second ≈ ekfQxy per second (= 800.0 mm²/s).
 
     With Q*dt scaling, running for 1000 ms starting from P[0][0] = 0 (init)
-    should add approximately ekfQxy * 1.0 = 200.0 mm² to P[0][0].
+    should add approximately ekfQxy * 1.0 = 800.0 mm² to P[0][0].
 
     We allow a ±2 tick tolerance for step-boundary rounding.
     """
@@ -238,10 +238,10 @@ def test_n15_q_growth_matches_expected_per_second(sim):
     p1 = sim.get_ekf_p_diag(0)
     growth = p1 - p0
 
-    # Expected: ekfQxy * 1.0 s = 200.0 mm²
-    # Tolerance: ±2 ticks at 24 ms each = ±2 × 200 × 0.024 = ±9.6 mm²
-    expected = 200.0
-    tolerance = 15.0
+    # Expected: ekfQxy * 1.0 s = 800.0 mm²
+    # Tolerance: ±2 ticks at 24 ms each = ±2 × 800 × 0.024 = ±38.4 mm²
+    expected = 800.0
+    tolerance = 60.0
 
     assert abs(growth - expected) < tolerance, (
         f"N15: P[0][0] growth over 1 s = {growth:.3f} mm²; "

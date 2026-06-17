@@ -259,6 +259,49 @@ void OtosSensor::setPositionRaw(int16_t x, int16_t y, int16_t h)
     writeXYH(REG_POSITION_XL, x, y, h);
 }
 
+void OtosSensor::setWorldPose(const RobotConfig& cfg,
+                              float x_mm, float y_mm, float h_rad)
+{
+    // Exact inverse of readTransformed(): find the chip-frame raw pose that reads
+    // back as world (x_mm, y_mm, h_rad).  Used to anchor the OTOS to a camera fix
+    // (SI) so its absolute observations agree with the controller pose instead of
+    // dragging the EKF toward the boot frame.
+    //
+    // Forward (readTransformed), with angRad = -odomYawDeg:
+    //   poseOut.x = c*xF - s*yF - offXWorld ;  poseOut.y = s*xF + c*yF - offYWorld
+    //   poseOut.h = hF      (xF,yF,hF already negated when odomUpsideDown)
+    // Inverse: add the offset back, un-rotate by R(-angRad), then undo upside-down
+    // and convert mm/rad -> raw LSBs.
+    if (!is_initialized()) return;
+
+    float ch = cosf(h_rad);
+    float sh = sinf(h_rad);
+    float offXWorld = ch * cfg.odomOffX - sh * cfg.odomOffY;
+    float offYWorld = sh * cfg.odomOffX + ch * cfg.odomOffY;
+    float px = x_mm + offXWorld;
+    float py = y_mm + offYWorld;
+
+    float angRad = -cfg.odomYawDeg * (3.14159265f / 180.0f);
+    float c = cosf(angRad);
+    float s = sinf(angRad);
+    // (xF,yF) = R(-angRad) * (px,py)
+    float xF =  c * px + s * py;
+    float yF = -s * px + c * py;
+    float hF = h_rad;
+
+    if (cfg.odomUpsideDown) { xF = -xF; yF = -yF; hF = -hF; }
+
+    constexpr float kPosMmPerLsb  = 0.305f;
+    constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);
+    long rx = lroundf(xF / kPosMmPerLsb);
+    long ry = lroundf(yF / kPosMmPerLsb);
+    long rh = lroundf(hF / kHdgRadPerLsb);
+    if (rx >  32767) rx =  32767;  if (rx < -32767) rx = -32767;
+    if (ry >  32767) ry =  32767;  if (ry < -32767) ry = -32767;
+    if (rh >  32767) rh =  32767;  if (rh < -32767) rh = -32767;
+    writeXYH(REG_POSITION_XL, (int16_t)rx, (int16_t)ry, (int16_t)rh);
+}
+
 void OtosSensor::getVelocityRaw(int16_t& x, int16_t& y, int16_t& h) const
 {
     if (!is_initialized()) { x = 0; y = 0; h = 0; return; }

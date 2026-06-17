@@ -23,6 +23,12 @@ __pycache__
 build_*/
 cmake-build-*/
 
+# --- aprilcam server data (we are a CLIENT; aprilcam owns this) ---
+# aprilcam's data_dir is relative ("data/aprilcam"), so running its daemon or
+# our client tooling from this repo root makes it write logs/overlays here.
+# Never check that in — the real aprilcam data dir lives outside this repo.
+data/aprilcam/
+
 # CMake-generated files, wherever they land in the tree.
 # These names are always generated and are never checked-in source
 # (real .cmake modules live under utils/cmake/ and are unaffected).

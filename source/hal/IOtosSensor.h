@@ -90,6 +90,17 @@ public:
     virtual void getPositionRaw(int16_t& x, int16_t& y, int16_t& h) const = 0;
     virtual void setPositionRaw(int16_t x, int16_t y, int16_t h) = 0;
 
+    // Re-anchor the OTOS to a WORLD-frame pose (a camera fix) so its absolute
+    // position+heading observations AGREE with the controller pose instead of
+    // dragging the EKF back toward the boot frame.  This is the exact inverse of
+    // readTransformed() (un-rotates the mount angle, adds the lever-arm offset
+    // back).  Units: x_mm/y_mm millimetres, h_rad radians (world frame).
+    // Default no-op (mocks); the real and bench sensors override.
+    virtual void setWorldPose(const RobotConfig& cfg,
+                              float x_mm, float y_mm, float h_rad) {
+        (void)cfg; (void)x_mm; (void)y_mm; (void)h_rad;
+    }
+
     // Linear and angular scalar access (signed int8, 0.1% per LSB).
     virtual int8_t getLinearScalar() const = 0;
     virtual void   setLinearScalar(int8_t val) = 0;

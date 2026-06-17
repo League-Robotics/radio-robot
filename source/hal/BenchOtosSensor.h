@@ -66,6 +66,8 @@ public:
 
     void   getPositionRaw(int16_t& x, int16_t& y, int16_t& h) const override;
     void   setPositionRaw(int16_t x, int16_t y, int16_t h) override;
+    void   setWorldPose(const RobotConfig& cfg,
+                        float x_mm, float y_mm, float h_rad) override;
 
     int8_t getLinearScalar()         const override { return 0; }
     void   setLinearScalar(int8_t)         override {}

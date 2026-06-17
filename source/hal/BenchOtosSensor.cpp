@@ -136,6 +136,16 @@ void BenchOtosSensor::getPositionRaw(int16_t& x, int16_t& y, int16_t& h) const {
 
 void BenchOtosSensor::setPositionRaw(int16_t /*x*/, int16_t /*y*/, int16_t /*h*/) {}
 
+void BenchOtosSensor::setWorldPose(const RobotConfig& /*cfg*/,
+                                   float x_mm, float y_mm, float h_rad) {
+    // The sim OTOS reads back _otos* directly (identity transform — no mount
+    // rotation), so a camera fix just re-bases both accumulators to the world
+    // pose.  Mirrors OtosSensor::setWorldPose's effect for the host sim.
+    _idealX = _otosX = x_mm;
+    _idealY = _otosY = y_mm;
+    _idealH = _otosH = wrapAngle(h_rad);
+}
+
 // ---------------------------------------------------------------------------
 // Error model
 // ---------------------------------------------------------------------------

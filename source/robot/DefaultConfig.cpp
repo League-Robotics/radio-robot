@@ -7,13 +7,18 @@
 RobotConfig defaultRobotConfig() {
     RobotConfig p{};
 
-    // Motor forward-direction signs
-    p.fwdSignL        = +1;
-    p.fwdSignR        = -1;
+    // Motor forward-direction signs. fwdSign multiplies BOTH the drive command
+    // and the encoder reading (Motor.cpp), so it sets the encoder's forward sense.
+    // The robot drove BACKWARD on a forward command (camera-verified 2026-06-16:
+    // faces +0deg, a forward D travelled -180deg) — the encoder/drive sense was
+    // inverted — so both signs are flipped here. The L/R kinematic roles are
+    // swapped in NezhaHAL to keep the encoder-difference heading CCW+.
+    p.fwdSignL        = -1;
+    p.fwdSignR        = +1;
 
     // Encoder calibration — baked from robot config
-    p.mmPerDegL       = 0.6177f;
-    p.mmPerDegR       = 0.6101f;
+    p.mmPerDegL       = 0.7165f;
+    p.mmPerDegR       = 0.7077f;
 
     // Feed-forward and motor scale factors
     p.kFF             = 0.15f;
@@ -27,7 +32,7 @@ RobotConfig defaultRobotConfig() {
     p.kAdjGain        = 0.05f;
 
     // Geometry — baked from robot config
-    p.trackwidthMm    = 83.0f;
+    p.trackwidthMm    = 128.0f;
 
     // Ratio PID gains
     p.ratioPidKp      = 300.0f;
@@ -49,8 +54,13 @@ RobotConfig defaultRobotConfig() {
     // EKF::predict() multiplies Q by dt_s before adding to P.  At the default
     // controlPeriodMs = 10 ms, Q*dt = Q/100 matches the previous per-call values.
     // Q_per_second = Q_old / 0.010 s.
-    p.ekfQxy         = 200.0f;    // was 2.0 per-call; 2.0/0.010 = 200/s
-    p.ekfQtheta      = 0.5f;      // was 0.005 per-call; 0.005/0.010 = 0.5/s
+    // 2026-06-16: raised Qxy/Qtheta 4x to DISTRUST the encoder predict and let the
+    // EKF prefer the OTOS (optical-flow) absolute pose — the encoder heading is
+    // intrinsically noisy (turn slip), and a diverged predict was gating the good
+    // OTOS out mid-turn (fused rode the encoder).  Higher Q grows P faster, so the
+    // OTOS gate accepts more AND the OTOS is weighted more (K -> 1).
+    p.ekfQxy         = 800.0f;    // OTOS-preference (was 200)
+    p.ekfQtheta      = 2.0f;      // OTOS-preference (was 0.5)
     p.ekfROtosXy     = 50.0f;
 
     // EKF velocity fusion (Sprint 023)
@@ -65,13 +75,13 @@ RobotConfig defaultRobotConfig() {
     // OTOS calibration scalars — baked from robot config.
     // OtosSensor::begin() programs the hardware registers from these
     // values at firmware boot; no host-side OL/OA push required.
-    p.otosLinearScale      = 0.919f;
+    p.otosLinearScale      = 1.067f;
     p.otosAngularScale     = 0.987f;
     p.rotationGainPos      = 0.956f;
     p.rotationGainNeg      = 0.954f;
     p.rotationOffsetDeg    = 1.045f;
     p.rotationOffsetDegNeg = 1.158f;
-    p.rotationalSlip       = 0.74f;
+    p.rotationalSlip       = 0.92f;
     p.odomOffX             = 0.0f;
     p.odomOffY             = 0.0f;
     p.odomYawDeg           = 90.0f;
