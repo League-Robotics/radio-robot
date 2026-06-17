@@ -310,8 +310,13 @@ void Robot::otosCorrect(uint32_t now_ms)
         state.inputs.otos.valid = false;
     }
 
-    // Fusion / "OTOS lost" health: clean status AND a successful read.
-    bool healthy = poseOk && (otosStatus == 0);
+    // Fusion / "OTOS lost" health: a successful read with no HARD errors
+    // (readable/poseOk already exclude kOtosHardErr above).  Do NOT additionally
+    // gate on otosStatus==0 — benign WARNING bits (warnTiltAngle from the IMU,
+    // transient warnOpticalTracking) would otherwise drop the OTOS from fusion
+    // ENTIRELY, leaving the fused pose to ride the encoder.  The OTOS tracks the
+    // camera well even with a warn bit set; fuse it (2026-06-17).
+    bool healthy = poseOk;
     if (!healthy) {
         // Emit "EVT otos lost" once per unhealthy window, only during an active
         // motion command (no point signalling on a parked robot).  Trigger is

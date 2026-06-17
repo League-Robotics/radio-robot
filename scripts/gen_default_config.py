@@ -236,13 +236,14 @@ RobotConfig defaultRobotConfig() {{
     // EKF::predict() multiplies Q by dt_s before adding to P.  At the default
     // controlPeriodMs = 10 ms, Q*dt = Q/100 matches the previous per-call values.
     // Q_per_second = Q_old / 0.010 s.
-    // 2026-06-16: raised Qxy/Qtheta 4x to DISTRUST the encoder predict and let the
-    // EKF prefer the OTOS (optical-flow) absolute pose — the encoder heading is
-    // intrinsically noisy (turn slip), and a diverged predict was gating the good
-    // OTOS out mid-turn (fused rode the encoder).  Higher Q grows P faster, so the
-    // OTOS gate accepts more AND the OTOS is weighted more (K -> 1).
-    p.ekfQxy         = 800.0f;    // OTOS-preference (was 200)
-    p.ekfQtheta      = 2.0f;      // OTOS-preference (was 0.5)
+    // 2026-06-16: DISTRUST the encoder predict so the EKF prefers the OTOS
+    // (optical-flow) absolute pose — the encoder heading is intrinsically noisy
+    // (turn slip) and a diverged predict was gating the good OTOS out mid-turn
+    // (fused rode the encoder).  Higher Q grows P faster, so the OTOS gate accepts
+    // more AND the OTOS is weighted more (K -> 1).  Heading is the crux (position
+    // dead-reckons along it), so Qtheta is pushed hardest (32x original).
+    p.ekfQxy         = 800.0f;    // OTOS-preference (was 200; distrust encoder predict)
+    p.ekfQtheta      = 4.0f;      // OTOS-preference, heading crux (was 0.5)
     p.ekfROtosXy     = 50.0f;
 
     // EKF velocity fusion (Sprint 023)
@@ -307,7 +308,11 @@ RobotConfig defaultRobotConfig() {{
     p.tlmSnapPending  = false;
 
     // Sensor lag budgets
-    p.lagOtosMs       = 100;
+    // 2026-06-17: 100ms (10Hz) made the OTOS correct 10x slower than the 100Hz
+    // encoder predict, so the encoder dominated dead-reckoning between corrections
+    // and the OTOS often tripped the EKF gate by the time it voted.  20ms (50Hz)
+    // gives the OTOS a real say (predict:correct 2:1) so the fused tracks it.
+    p.lagOtosMs       = 20;
     p.lagLineMs       = 50;
     p.lagColorMs      = 100;
     p.lagPortsMs      = 50;
