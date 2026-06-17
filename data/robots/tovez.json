@@ -26,8 +26,8 @@
       "y": 0.0
     },
     "odometry_offset_mm": {
-      "x": 0.0,
-      "y": 0.0,
+      "x": -47.7,
+      "y": 4.0,
       "yaw_rad": 1.5707963
     },
     "odometry_chip_upside_down": false,

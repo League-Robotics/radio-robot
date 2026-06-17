@@ -83,8 +83,8 @@ RobotConfig defaultRobotConfig() {
     p.rotationOffsetDeg    = 1.045f;
     p.rotationOffsetDegNeg = 1.158f;
     p.rotationalSlip       = 0.92f;
-    p.odomOffX             = 0.0f;
-    p.odomOffY             = 0.0f;
+    p.odomOffX             = -47.7f;
+    p.odomOffY             = 4.0f;
     p.odomYawDeg           = 90.0f;
     p.odomUpsideDown       = false;
 
