@@ -392,7 +392,12 @@ class TestOKReplyRoutingRegression:
         assert result.get("fw") == "0.20260612.28", f"Unexpected fw: {result}"
 
     def test_err_reply_still_routed(self):
-        """ERR replies are still routed by corr-id (not affected by ID fix)."""
+        """ERR replies are still routed by corr-id (not affected by ID fix).
+
+        Uses a non-"unknown" ERR (badarg) so send()'s corrupted-command retry
+        (which re-sends on "ERR unknown") does not fire here — this test only
+        exercises corr-id routing of an ERR.
+        """
         fake = _FakeSerial()
         conn = _make_conn()
 
@@ -401,13 +406,37 @@ class TestOKReplyRoutingRegression:
             conn.connect()
 
             # First send() after connect() uses corr-id "#1".
-            fake.inject_after("ERR unknown command #1", delay=0.05)
+            fake.inject_after("ERR badarg #1", delay=0.05)
             result = conn.send("BOGUS", read_ms=300)
             conn.disconnect()
 
         responses = result.get("responses", [])
         assert any("ERR" in r for r in responses), (
             f"ERR reply not delivered — regression: {responses}"
+        )
+
+    def test_err_unknown_command_is_retried(self):
+        """A corrupted command (relay framing merge → "ERR unknown") is re-sent.
+
+        First attempt (corr-id #1) gets "ERR unknown" — proving it never ran — so
+        send() retries; the retry (corr-id #2) succeeds. Masks relay corruption
+        transparently instead of surfacing it as a skipped command.
+        """
+        fake = _FakeSerial()
+        conn = _make_conn()
+
+        with _patch_serial(fake):
+            _start_direct_connect(fake)
+            conn.connect()
+
+            fake.inject_after("ERR unknown #1", delay=0.05)
+            fake.inject_after("OK rt rot=9000 #2", delay=0.20)
+            result = conn.send("RT 9000", read_ms=400)
+            conn.disconnect()
+
+        responses = result.get("responses", [])
+        assert any("OK" in r for r in responses), (
+            f"retry did not recover corrupted command: {responses}"
         )
 
     def test_cfg_reply_still_routed(self):

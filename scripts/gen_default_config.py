@@ -309,10 +309,13 @@ RobotConfig defaultRobotConfig() {{
 
     // Sensor lag budgets
     // 2026-06-17: 100ms (10Hz) made the OTOS correct 10x slower than the 100Hz
-    // encoder predict, so the encoder dominated dead-reckoning between corrections
-    // and the OTOS often tripped the EKF gate by the time it voted.  20ms (50Hz)
-    // gives the OTOS a real say (predict:correct 2:1) so the fused tracks it.
-    p.lagOtosMs       = 20;
+    // encoder predict, so the encoder dominated between corrections and the OTOS
+    // tripped the EKF gate by the time it voted.  10ms (100Hz) gives the OTOS the
+    // most say in the fusion and measured the best turn accuracy (~1.5 deg vs the
+    // camera).  Instrumented field sweeps showed the TWIM encoder wedge is roughly
+    // RATE-INDEPENDENT (4-12% at 25/50/100Hz alike), so it is NOT mitigated by
+    // backing the rate off (a pre-write-idle encoder fix was tried and refuted).
+    p.lagOtosMs       = 10;
     p.lagLineMs       = 50;
     p.lagColorMs      = 100;
     p.lagPortsMs      = 50;

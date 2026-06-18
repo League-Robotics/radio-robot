@@ -296,8 +296,9 @@ class TestOdomOffsets:
     def test_zero_offsets_not_sent(self, monkeypatch, tmp_path):
         """All-zero odom offsets are not pushed (bandwidth optimization).
 
-        (tovez itself now carries odometry yaw_rad=π/2 for the OTOS mounting,
-        so use a synthetic all-zero config to exercise the suppression path.)
+        (tovez itself now carries a non-zero mounting OFFSET (odomOffX/Y) for the
+        re-mounted OTOS, so use a synthetic all-zero config to exercise the
+        suppression path.)
         """
         cfg_data = json.loads(_TOVEZ_JSON.read_text())
         cfg_data["geometry"]["odometry_offset_mm"] = {"x": 0.0, "y": 0.0, "yaw_rad": 0.0}
@@ -313,14 +314,18 @@ class TestOdomOffsets:
         assert odom == [], \
             f"Expected no odomOff*/odomYaw commands for all-zero offsets, got: {odom}"
 
-    def test_tovez_pushes_mounting_yaw(self):
-        """tovez's odometry mounting yaw (π/2 → 90°) is pushed via SET odomYaw."""
+    def test_tovez_pushes_mounting_offset(self):
+        """tovez's OTOS mounting OFFSET (sensor 47.7mm behind + 4mm left of the
+        axle) is pushed via SET odomOffX/odomOffY.  The chip is now mounted aligned
+        to the robot frame (silicon X=fwd, Y=left), so the mounting yaw is 0 — the
+        chip's own REG_OFFSET handles the lever-arm, no frame rotation needed."""
         conn = _make_conn()
         _push_calibration(conn)
         cmds = _sent_cmds(conn)
-        yaw = [c for c in cmds if c.startswith("SET odomYaw=")]
-        assert yaw, f"Expected SET odomYaw for tovez mounting, got: {cmds}"
-        assert "90" in yaw[0], f"Expected ~90° mounting yaw, got: {yaw}"
+        odom_x = [c for c in cmds if c.startswith("SET odomOffX=")]
+        odom_y = [c for c in cmds if c.startswith("SET odomOffY=")]
+        assert odom_x, f"Expected SET odomOffX for tovez mounting offset, got: {cmds}"
+        assert odom_y, f"Expected SET odomOffY for tovez mounting offset, got: {cmds}"
 
     def test_nonzero_offsets_sent(self, monkeypatch, tmp_path):
         """When config has nonzero offsets, SET odomOffX/Y/Yaw are sent."""

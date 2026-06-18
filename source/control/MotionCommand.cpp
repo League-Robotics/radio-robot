@@ -156,6 +156,22 @@ bool MotionCommand::tick(const HardwareState& inputs, uint32_t now_ms, float dt_
     bool stopped = false;
     for (uint8_t i = 0; i < _nStops; ++i) {
         if (_stops[i].evaluate(inputs, now_ms, _baseline)) {
+            // DIAGNOSTIC (transient turn-skip hunt): when a ROTATION arc stop
+            // fires, emit how it ended. A healthy turn shows ms~1-2s and arc~tgt;
+            // a tick-0 skip shows ms~0 with arc already >= tgt, and whichever of
+            // base/cur is the outlier pinpoints the garbage encoder read that
+            // corrupted the arc baseline.  One line per turn — low radio cost.
+            if (_stops[i].kind == StopCondition::Kind::ROTATION && _replyFn) {
+                float d = inputs.encRMm - inputs.encLMm - _baseline.encDiff0Mm;
+                if (d < 0.0f) d = -d;
+                char dbg[80];
+                snprintf(dbg, sizeof(dbg),
+                         "EVT ROTSTOP ms=%u arc=%d tgt=%d base=%d cur=%d",
+                         (unsigned)(now_ms - _baseline.t0Ms), (int)(d * 0.5f),
+                         (int)_stops[i].a, (int)_baseline.encDiff0Mm,
+                         (int)(inputs.encRMm - inputs.encLMm));
+                _replyFn(dbg, _replyCtx);
+            }
             stopped = true;
             break;
         }

@@ -714,49 +714,64 @@ class SerialConnection:
         if not self.is_open:
             return {"error": "Not connected. Call connect first."}
 
-        # Assign a unique corr-id for this send().
-        with self._reply_lock:
-            self._corr_counter += 1
-            corr_id = str(self._corr_counter)
-            reply_q: queue.Queue = queue.Queue()
-            self._reply_queues[corr_id] = reply_q
-
-        # Build plain command with corr-id suffix.
-        corr_suffix = f" #{corr_id}"
-        cmd = f"{message}{corr_suffix}\n"
-
-        if self.on_send:
-            self.on_send(cmd.rstrip())
-
-        try:
-            with self._write_lock:
-                self._ser.write(cmd.encode("utf-8"))
-                self._ser.flush()
-                self._last_write_s = time.monotonic()  # defer the next "+"
-        except Exception as exc:
-            with self._reply_lock:
-                self._reply_queues.pop(corr_id, None)
-            return {"error": str(exc), "sent": message}
-
-        # Drain reply queue until stop_token matched or deadline.
-        timeout_s = (read_ms / 1000.0) + 0.5
+        # The relay's RAW250 framing can merge a keepalive "+" with the next
+        # command, garbling it → the robot replies "ERR unknown" and never runs
+        # it. That reply PROVES the command didn't execute, so re-sending is safe
+        # (unlike a dropped OK ack, where the command DID run — never retry that).
+        # Retry only on ERR-unknown, a few times, to mask the relay corruption.
         lines: list[str] = []
-        deadline = time.time() + timeout_s
-        try:
-            while True:
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    break
-                try:
-                    line = reply_q.get(timeout=min(remaining, 0.05))
-                except queue.Empty:
-                    continue
-                lines.append(line)
-                if stop_token and stop_token in line:
-                    break
-        finally:
+        for _attempt in range(3):
+            # Assign a unique corr-id for this attempt.
             with self._reply_lock:
-                self._reply_queues.pop(corr_id, None)
+                self._corr_counter += 1
+                corr_id = str(self._corr_counter)
+                reply_q: queue.Queue = queue.Queue()
+                self._reply_queues[corr_id] = reply_q
+
+            # Build plain command with corr-id suffix.
+            corr_suffix = f" #{corr_id}"
+            cmd = f"{message}{corr_suffix}\n"
+
+            if self.on_send:
+                self.on_send(cmd.rstrip())
+
+            try:
+                with self._write_lock:
+                    self._ser.write(cmd.encode("utf-8"))
+                    self._ser.flush()
+                    self._last_write_s = time.monotonic()  # defer the next "+"
+            except Exception as exc:
+                with self._reply_lock:
+                    self._reply_queues.pop(corr_id, None)
+                return {"error": str(exc), "sent": message}
+
+            # Drain reply queue until stop_token matched or deadline.
+            timeout_s = (read_ms / 1000.0) + 0.5
+            lines = []
+            deadline = time.time() + timeout_s
+            try:
+                while True:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        break
+                    try:
+                        line = reply_q.get(timeout=min(remaining, 0.05))
+                    except queue.Empty:
+                        continue
+                    lines.append(line)
+                    # An ERR reply is terminal — break immediately so a corrupted
+                    # command retries fast instead of waiting the full read_ms.
+                    if (stop_token and stop_token in line) or line.startswith("ERR"):
+                        break
+            finally:
+                with self._reply_lock:
+                    self._reply_queues.pop(corr_id, None)
+
+            # Corrupted-command retry: re-send only if the robot rejected garbage.
+            if _attempt < 2 and any("ERR" in l and "unknown" in l for l in lines):
+                time.sleep(0.03)
+                continue
+            break
 
         return {"sent": message, "mode": self._mode, "responses": lines}
 

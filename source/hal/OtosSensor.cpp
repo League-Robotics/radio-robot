@@ -34,6 +34,29 @@ bool OtosSensor::begin()
     setLinearScalar(scaleToInt8(_cfg.otosLinearScale));
     setAngularScalar(scaleToInt8(_cfg.otosAngularScale));
 
+    // Tell the CHIP its mounting offset (REG_OFFSET 0x10) so it attributes the
+    // rotation-induced arc to yaw.  A sensor mounted off the center of rotation
+    // sees lateral optical flow during a turn; without telling the chip, its
+    // fusion mistakes that for translation, under-reports heading, and the robot
+    // over-turns.  With the offset set, the chip subtracts the expected arc
+    // (omega x r) and reports the TRACKING-CENTER pose directly.  The chip is
+    // mounted aligned to the robot frame (silicon X=fwd, Y=left -> odomYawDeg=0),
+    // so the offset is odomOffX/Y rotated into chip coords by odomYawDeg; the
+    // angular offset is 0 (sensor aligned with its own frame).  Raw LSB = mm *
+    // (kMeterToInt16/1000) = mm * 3.2768.  This replaces the host-side lever-arm.
+    {
+        float a   = _cfg.odomYawDeg * (3.14159265f / 180.0f);
+        float ca  = cosf(a), sa = sinf(a);
+        float chipX = ca * _cfg.odomOffX - sa * _cfg.odomOffY;   // robot -> chip
+        float chipY = sa * _cfg.odomOffX + ca * _cfg.odomOffY;
+        constexpr float kMmToInt16 = 32768.0f / 10.0f / 1000.0f;  // 3.2768 LSB/mm
+        long ox = lroundf(chipX * kMmToInt16);
+        long oy = lroundf(chipY * kMmToInt16);
+        if (ox >  32767) ox =  32767;  if (ox < -32767) ox = -32767;
+        if (oy >  32767) oy =  32767;  if (oy < -32767) oy = -32767;
+        writeXYH(REG_OFFSET_XL, (int16_t)ox, (int16_t)oy, 0);
+    }
+
     // Zero the OTOS position AND heading at boot so it starts at the same origin
     // as the freshly-zeroed encoders.  The OTOS chip retains its tracked pose
     // across a micro:bit reset/reflash (only a power cycle or an explicit write
@@ -116,22 +139,14 @@ bool OtosSensor::readTransformed(const RobotConfig& cfg, OtosPose& poseOut,
     float c = cosf(angRad);
     float s = sinf(angRad);
 
-    // Lever-arm correction: apply mounting offsets rotated by current heading.
-    // When odomOffX/Y are both zero (as in tovez.json), this is a no-op.
-    // Rotation: offset_world = R(headingRad) * [odomOffX, odomOffY]
-    float ch = cosf(headingRad);
-    float sh = sinf(headingRad);
-    float offXWorld = ch * cfg.odomOffX - sh * cfg.odomOffY;
-    float offYWorld = sh * cfg.odomOffX + ch * cfg.odomOffY;
-
-    poseOut.x = c * xF - s * yF - offXWorld;
-    poseOut.y = s * xF + c * yF - offYWorld;
-    // Heading takes NO mounting offset.  odomYawDeg rotates the POSITION vector
-    // into the robot frame (above), but the OTOS heading is a rotation angle that
-    // increases with the robot's own rotation (the chip is rigidly mounted), so
-    // it already equals the robot heading once re-zeroed at a known orientation.
-    // Adding odomYawDeg here would double-count it (was harmless only while
-    // odomYawDeg==0; with the 90° mounting it would bias the fused heading 90°).
+    // Mounting offset (lever-arm) is now applied IN THE CHIP via REG_OFFSET (set in
+    // begin()), so the chip already reports the TRACKING-CENTER pose.  Do NOT
+    // subtract a host-side lever-arm here too — that would double-correct.
+    // odomYawDeg still rotates the chip-native frame into the robot frame (a no-op
+    // when the chip is mounted aligned, odomYawDeg=0).  headingRad is unused now.
+    (void)headingRad;
+    poseOut.x = c * xF - s * yF;
+    poseOut.y = s * xF + c * yF;
     poseOut.h = hF;
     return true;
 }
@@ -267,19 +282,17 @@ void OtosSensor::setWorldPose(const RobotConfig& cfg,
     // (SI) so its absolute observations agree with the controller pose instead of
     // dragging the EKF toward the boot frame.
     //
-    // Forward (readTransformed), with angRad = -odomYawDeg:
-    //   poseOut.x = c*xF - s*yF - offXWorld ;  poseOut.y = s*xF + c*yF - offYWorld
-    //   poseOut.h = hF      (xF,yF,hF already negated when odomUpsideDown)
-    // Inverse: add the offset back, un-rotate by R(-angRad), then undo upside-down
-    // and convert mm/rad -> raw LSBs.
+    // Forward (readTransformed), with angRad = -odomYawDeg (lever-arm now in-chip):
+    //   poseOut.x = c*xF - s*yF ;  poseOut.y = s*xF + c*yF ;  poseOut.h = hF
+    //   (xF,yF,hF already negated when odomUpsideDown)
+    // Inverse: un-rotate by R(-angRad), undo upside-down, convert mm/rad -> raw LSBs.
     if (!is_initialized()) return;
 
-    float ch = cosf(h_rad);
-    float sh = sinf(h_rad);
-    float offXWorld = ch * cfg.odomOffX - sh * cfg.odomOffY;
-    float offYWorld = sh * cfg.odomOffX + ch * cfg.odomOffY;
-    float px = x_mm + offXWorld;
-    float py = y_mm + offYWorld;
+    // No host-side lever-arm: the chip applies REG_OFFSET, so its POSITION register
+    // is the tracking-CENTER pose.  Write the world center pose directly; only the
+    // odomYawDeg frame rotation below remains (a no-op when the chip is aligned).
+    float px = x_mm;
+    float py = y_mm;
 
     float angRad = -cfg.odomYawDeg * (3.14159265f / 180.0f);
     float c = cosf(angRad);

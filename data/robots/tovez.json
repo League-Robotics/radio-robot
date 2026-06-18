@@ -28,7 +28,7 @@
     "odometry_offset_mm": {
       "x": -47.7,
       "y": 4.0,
-      "yaw_rad": 1.5707963
+      "yaw_rad": 0.0
     },
     "odometry_chip_upside_down": false,
     "trackwidth": 128,
@@ -81,7 +81,7 @@
     "vel_filt": 0.15,
     "sync": 1.0,
     "turn_gate": 35,
-    "yaw_rate_max": 60,
+    "yaw_rate_max": 35,
     "max_rot_accel_dps2": 300,
     "arrive_tol_mm": 25
   }
