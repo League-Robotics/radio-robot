@@ -25,6 +25,10 @@
 #include "../subsystems/sensors/LineSensor.h"
 #include "../subsystems/sensors/ColorSensor.h"
 #include "../subsystems/sensors/Ports.h"
+// Phase E (043-002): Drive subsystem owning the CONTROL COLLECT block (outlier
+// filter + controlTick + wedge push).  Value member declared after the refs it
+// binds (motorL/motorR, motorController, estimate).
+#include "../subsystems/drive/Drive.h"
 
 // Forward declarations — keeps the header-graph shallow.
 class DebugCommandable;
@@ -90,6 +94,14 @@ struct Robot {
     MotionController    motionController;  // (motorController, estimate.odometry(), config)
     PortController      portController;    // (portio)
     ServoController     servoController;   // (gripper)
+    // Phase E (043-002) Drive subsystem — owns the CONTROL COLLECT block (outlier
+    // filter + motorController.controlTick() + wedge push into estimate) that was
+    // an inline block in loopTickOnce.  Binds the IMotor& device refs (motorL,
+    // motorR), motorController, estimate, state.inputs, state.commands, and config
+    // — all declared above, so they are live when this member constructs (C++
+    // inits in declaration order).  The five filter-streak members that used to
+    // live on Robot moved into Drive as value members (OQ-1: no external accesses).
+    subsystems::Drive   drive;             // (motorL, motorR, motorController, estimate, state.inputs, state.commands, config)
     // Phase E (043-001) sensor subsystems — own the timed LINE/COLOUR/PORTS reads
     // that were inline blocks in loopTickOnce.  Each binds the device-interface ref
     // (line / colorSensor / portio), state.inputs, and config — all declared above,
@@ -187,23 +199,12 @@ struct Robot {
     // ---- Gating state that pairs with the kept methods ----
     uint32_t _lastTlmMs     = 0;
     uint32_t _lastActiveMs  = 0;
-    uint32_t _lastControlMs = 0;
-    bool     _prevDriving   = false;
 
-    // ---- Wedge-state tracking for enc-omega gate (033-005e) ----
-    // Tracks whether a wheel was wedged on the previous tick so Robot can
-    // restore setEncOmegaHealthy(true) on the tick the wedge clears.
-    bool     _prevAnyWedged   = false;
-
-    // ---- Outlier-filter hold instrumentation (033-005b) ----
-    // Per-wheel consecutive-reject streak counters. Incremented each tick that
-    // a wheel's encoder read is rejected by the speed-scaled outlier gate; reset
-    // to 0 on any accepted read or when the robot is not driving. When either
-    // streak reaches kFilterRejectStreakThreshold, an EVT enc_filter_hold line
-    // is emitted (once per episode) to alert the host to a silent filter freeze.
-    static constexpr uint8_t kFilterRejectStreakThreshold = 3;
-    uint8_t  _filterRejectStreakL = 0;
-    uint8_t  _filterRejectStreakR = 0;
+    // Phase E (043-002): the CONTROL COLLECT filter-streak state moved onto the
+    // Drive subsystem (subsystems::Drive value members).  These five members —
+    // _lastControlMs, _prevDriving, _prevAnyWedged, _filterRejectStreakL/R — plus
+    // the kFilterRejectStreakThreshold constant now live on Drive.  OQ-1 grep
+    // confirmed no code path outside the relocated CONTROL COLLECT block read them.
 
     // ---- D10 telemetry: sequence counter + channel binding (028-005) ----
     // _tlmSeq: monotonically incrementing uint16 emitted as seq=<n> in every

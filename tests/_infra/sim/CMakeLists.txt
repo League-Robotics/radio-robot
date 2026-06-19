@@ -109,5 +109,7 @@ target_include_directories(firmware_host PRIVATE
     # 043-001 (Phase E): subsystem dirs so each subsystem .cpp resolves its own
     # same-directory header (#include "LineSensor.h" etc.).
     "${REPO_ROOT}/source/subsystems/sensors"
+    # 043-002 (Phase E): Drive subsystem dir (#include "Drive.h").
+    "${REPO_ROOT}/source/subsystems/drive"
     "${REPO_ROOT}/source/types"
 )

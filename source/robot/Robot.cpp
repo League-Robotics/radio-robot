@@ -61,6 +61,14 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       motionController(motorController, estimate.odometry(), config),
       portController(portio),
       servoController(gripper),
+      // Phase E (043-002) Drive subsystem — wired with the IMotor& device refs
+      // (motorL, motorR), motorController, estimate, state.inputs, state.commands,
+      // and config.  Declaration order in Robot.h puts `drive` after all of these,
+      // so the refs are live here.  The five filter-streak members it owns are
+      // value-initialised inside Drive (same initial values as the former Robot
+      // fields).  See architecture-update.md OQ-1/OQ-2.
+      drive(motorL, motorR, motorController, estimate,
+            state.inputs, state.commands, config),
       // Phase E (043-001) sensor subsystems — wired with their device ref,
       // state.inputs (HardwareState), and config.  Declaration order in Robot.h
       // puts these after the refs they bind, so the refs are live here.
@@ -112,13 +120,16 @@ uint32_t Robot::systemTime() const
 }
 
 // ---------------------------------------------------------------------------
-// controlCollectSplitPhase REMOVED (039-002).
+// controlCollectSplitPhase REMOVED (039-002); CONTROL COLLECT relocated (043-002).
 //
-// Its body moved into loopTickOnce()'s CONTROL COLLECT block (verbatim) and the
-// per-loop encoder read moved into Hardware::tick(now) → Motor::tick().  The
-// per-wheel streak/wedge state members it used (_filterRejectStreakL/R,
-// _prevDriving, _lastControlMs, _prevAnyWedged, kFilterRejectStreakThreshold)
-// remain on Robot because the relocated block reaches them via robot.*.
+// Its body moved into loopTickOnce()'s CONTROL COLLECT block (verbatim, 039-002)
+// and the per-loop encoder read moved into Hardware::tick(now) → Motor::tick().
+// Phase E (043-002): the CONTROL COLLECT block then moved VERBATIM into
+// subsystems::Drive::periodic(now, fn, ctx), and the per-wheel streak/wedge state
+// members it used (_filterRejectStreakL/R, _prevDriving, _lastControlMs,
+// _prevAnyWedged, kFilterRejectStreakThreshold) moved off Robot onto Drive as
+// value members.  loopTickOnce now calls robot.drive.periodic(...) in the same
+// position the inline block ran (before cmd.dequeueOne).
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------

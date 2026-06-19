@@ -1,14 +1,14 @@
 ---
-id: "002"
-title: "Drive subsystem: wrap CONTROL COLLECT block"
-status: open
+id: '002'
+title: 'Drive subsystem: wrap CONTROL COLLECT block'
+status: in-progress
 use-cases:
-  - SUC-002
-  - SUC-004
+- SUC-002
+- SUC-004
 depends-on:
-  - 043-001
-github-issue: ""
-issue: "migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md"
+- 043-001
+github-issue: ''
+issue: migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -36,28 +36,38 @@ directory and CMakeLists wiring; Drive can build on that foundation.
 
 ## Acceptance Criteria
 
-- [ ] `source/subsystems/drive/Drive.{h,cpp}` exist and compile.
-- [ ] `Drive` has `periodic()` and `updateInputs()`.
-- [ ] `Drive` holds: `MotorController&`, `PhysicalStateEstimate&`, `HardwareState&`,
+- [x] `source/subsystems/drive/Drive.{h,cpp}` exist and compile.
+- [x] `Drive` has `periodic()` and `updateInputs()`.
+- [x] `Drive` holds: `MotorController&`, `PhysicalStateEstimate&`, `HardwareState&`,
       `const RobotConfig&`, plus the five filter-streak value members.
-- [ ] `loopTickOnce` CONTROL COLLECT block (~lines 26-129) replaced by `robot.drive.periodic();`
-      — one line, in the SAME position (before `cmd.dequeueOne(queue)`).
-- [ ] `Robot.h` adds `Drive drive` value member, declared AFTER `motorController` and `estimate`.
-- [ ] `Robot.h` removes `_filterRejectStreakL`, `_filterRejectStreakR`, `_prevDriving`,
-      `_prevAnyWedged`, `_lastControlMs` members (after grep confirms no external accesses).
-- [ ] `Robot.cpp` constructor init-list wires `drive` with the appropriate refs.
-- [ ] No CODAL/MicroBit/I2CBus types in `source/subsystems/drive/`.
-- [ ] No `printf` / `telemetryEmit` calls inside `Drive` methods.
-- [ ] Simulation tier green: `uv run --with pytest python -m pytest -q` >= 2001 passed, 0 errors.
-- [ ] Golden-TLM canary byte-exact.
-- [ ] `defaultRobotConfig()` field-pin diff empty.
-- [ ] ARM firmware build gate: `python3 build.py --fw-only` -> 0 errors; then
-      `git checkout -- source/robot/DefaultConfig.cpp`.
-- [ ] Behavior-preservation fences green:
+      (Per architecture-update.md verbatim-move requirement, Drive ALSO holds
+      `IMotor& motorL`, `IMotor& motorR`, and `MotorCommands&` — the exact lvalues
+      the inline block reached via `r.motorL`/`r.motorR`/`r.state.commands`; these
+      are required for byte-exactness and are not behavior changes. Annotated honestly.)
+- [x] `loopTickOnce` CONTROL COLLECT block (~lines 26-129) replaced by
+      `robot.drive.periodic(now, robot._tlmBoundFn, robot._tlmBoundCtx);` — one
+      call, in the SAME position (before `cmd.dequeueOne(queue)`). The fn/ctx
+      params thread the Robot TLM sink so the EVT enc_filter_hold emission is
+      byte-identical (architecture-update.md OQ-2).
+- [x] `Robot.h` adds `Drive drive` value member, declared AFTER `motorController` and `estimate`.
+- [x] `Robot.h` removes `_filterRejectStreakL`, `_filterRejectStreakR`, `_prevDriving`,
+      `_prevAnyWedged`, `_lastControlMs` members (grep confirmed no external accesses — OQ-1).
+- [x] `Robot.cpp` constructor init-list wires `drive` with the appropriate refs.
+- [x] No CODAL/MicroBit/I2CBus types in `source/subsystems/drive/`.
+- [x] No `printf` / `telemetryEmit` calls inside `Drive` methods. (The EVT path uses
+      `snprintf` into a local buffer then calls the bound `fn` — verbatim from the
+      original block; neither `printf` nor `telemetryEmit`.)
+- [x] Simulation tier green: `uv run --with pytest python -m pytest -q` -> 2001 passed, 0 errors.
+- [x] Golden-TLM canary byte-exact (`test_golden_tlm.py` passed).
+- [x] `defaultRobotConfig()` field-pin diff empty (`test_default_config_pin.py` passed).
+- [x] ARM firmware build gate: `python3 build.py --fw-only` -> 0 errors, `MICROBIT.hex`
+      produced; then `git checkout -- source/robot/DefaultConfig.cpp` (restored).
+- [x] Behavior-preservation fences green:
       `test_033_005_wedge_hardening.py`, `test_incident_scenarios.py`,
       `test_goto_bounds.py`, `test_watchdog_exemption.py`,
       `test_ekf*.py`, `test_otos_fusion.py`,
-      Phase-B estimator/plant tests, motion/VW tests.
+      Phase-B estimator/plant tests, motion/VW tests. (175 passed in the
+      wedge/incident/goto/watchdog/ekf/otos/filter/streak fence selection.)
 
 ## Implementation Plan
 
