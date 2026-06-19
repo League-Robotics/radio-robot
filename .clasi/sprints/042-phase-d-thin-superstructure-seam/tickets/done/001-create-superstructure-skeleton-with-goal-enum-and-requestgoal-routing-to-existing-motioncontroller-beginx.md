@@ -2,7 +2,7 @@
 id: '001'
 title: Create Superstructure skeleton with Goal enum and requestGoal routing to existing
   MotionController.beginX()
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 - SUC-003
