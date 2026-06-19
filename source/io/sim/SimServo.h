@@ -3,16 +3,17 @@
 #include "io/capability/IPositionMotor.h"
 
 /**
- * MockServo — host-compilable IPositionMotor implementation for unit tests.
+ * SimServo — host-compilable IPositionMotor implementation for the SIM gripper.
  *
  * Records the last angle passed to setAngleDeg(). currentAngleDeg() returns the
- * stored value. Defaults to 0 before any set call.
+ * stored value. Defaults to 0 before any set call. No PhysicsWorld dependency —
+ * the gripper has no chassis-physics coupling, so it is a pure position store.
  *
- * 039-003: canonicalized from IServo (now an alias) to IPositionMotor.  Host
- * behaviour is unchanged — the stored angle and accessor semantics match the
- * former MockServo::setAngle/currentAngle.
+ * 040-004: renamed from MockServo (the last surviving Mock* in source/io/sim/)
+ * with no behaviour change, so the SIM path is uniformly Sim*-named. The stored
+ * angle and accessor semantics are unchanged from the former MockServo.
  */
-class MockServo : public IPositionMotor {
+class SimServo : public IPositionMotor {
 public:
     // IPositionMotor interface -----------------------------------------------
     void     setAngleDeg(uint16_t deg, uint8_t mode) override;

@@ -1,11 +1,13 @@
 ---
-id: "004"
-title: "Retire Mock* files and delete obsolete sim objects"
-status: open
-use-cases: [SUC-007]
-depends-on: ["040-003"]
-github-issue: ""
-issue: "migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md"
+id: '004'
+title: Retire Mock* files and delete obsolete sim objects
+status: in-progress
+use-cases:
+- SUC-007
+depends-on:
+- 040-003
+github-issue: ''
+issue: migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -59,13 +61,30 @@ all new `Sim*.cpp` files.
 
 ## Acceptance Criteria
 
-- [ ] `MockMotor.h/cpp`, `MockHAL.h/cpp`, `MockOtosSensor.h/cpp`,
+- [x] `MockMotor.h/cpp`, `MockHAL.h/cpp`, `MockOtosSensor.h/cpp`,
       `MockLineSensor.h/cpp`, `MockColorSensor.h/cpp`, `MockPortIO.h/cpp`
-      are deleted from `source/io/sim/`.
-- [ ] Host sim builds clean after deletion: `cmake --build tests/_infra/sim/build` succeeds.
-- [ ] No dead `#include` directives for retired files remain in `sim_api.cpp`.
-- [ ] `uv run --with pytest python -m pytest -q` ≥ 1957 passed, 0 errors.
-- [ ] All canaries green: golden-TLM, field-pin, vendor grep.
+      are deleted from `source/io/sim/`. (`git rm`, 12 files.)
+- [x] Host sim builds clean after deletion: `cmake --build tests/_infra/sim/build`
+      succeeds (CMake reconfigured for the changed glob; linked `.dylib` has zero
+      Mock symbols; no errors/warnings).
+- [x] No dead `#include` directives for retired files remain in `sim_api.cpp`
+      (T2 already removed them; verified no `#include "Mock*"` anywhere in source/tests).
+- [x] `uv run --with pytest python -m pytest -q` → 1964 passed, 0 errors
+      (count held exactly — deletions remove no tests; ≥1957 / ≥1964 satisfied).
+- [x] All canaries green: golden-TLM (byte-exact), field-pin (default-config-pin),
+      vendor confinement grep — plus slip fences (test_rt_slip, test_incident_scenarios,
+      test_goto_bounds, test_033_005_wedge_hardening): 17 passed.
+
+### Programmer note (OQ-2 resolution)
+
+Per OQ-2, the surviving `MockServo` (the only `Mock*` with no plant dependency —
+a pure position store) was **renamed to `SimServo`** (via `git mv`, behaviour
+unchanged) so the entire SIM path is uniformly `Sim*`-named. `SimHardware.h`
+updated: include `SimServo.h`, member `SimServo _servo`, accessor `servoSim()`
+(the old `servoMock()` had no external callers). The `IServo.h`/`IMotor.h`/
+`IVelocityMotor.h` Phase-A shims and `BenchOtosSensor` were left untouched per
+ticket scope. Remaining `MockHAL`/`MockMotor`/`ExactPoseTracker` mentions in
+source/tests are comments/docstrings/history only — no live code or includes.
 
 ## Implementation Plan
 

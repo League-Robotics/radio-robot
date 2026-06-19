@@ -7,7 +7,7 @@
 #include "SimLineSensor.h"
 #include "SimColorSensor.h"
 #include "SimPortIO.h"
-#include "MockServo.h"
+#include "SimServo.h"
 
 struct RobotConfig;
 
@@ -68,7 +68,7 @@ public:
     SimLineSensor&  simLineSensor()  { return _line; }
     SimColorSensor& simColorSensor() { return _color; }
     SimPortIO&      simPortIO()      { return _portIO; }
-    MockServo&      servoMock()      { return _servo; }
+    SimServo&       servoSim()       { return _servo; }
 
     // Robot trackwidth (mm) so the OTOS sim model integrates correctly.
     void setTrackwidth(float mm) { _trackwidthMm = mm; _plant.setTrackwidth(mm); }
@@ -84,7 +84,7 @@ private:
     SimLineSensor  _line;
     SimColorSensor _color;
     SimPortIO      _portIO;
-    MockServo      _servo;
+    SimServo       _servo;
 
     uint32_t       _lastTickMs   = 0;
     float          _trackwidthMm = 0.0f;
