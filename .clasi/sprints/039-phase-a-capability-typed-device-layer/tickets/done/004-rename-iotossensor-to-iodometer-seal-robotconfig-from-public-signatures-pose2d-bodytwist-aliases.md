@@ -2,7 +2,7 @@
 id: '004'
 title: Rename IOtosSensor to IOdometer; seal RobotConfig from public signatures; Pose2D/BodyTwist
   aliases
-status: in-progress
+status: done
 use-cases:
 - SUC-039-005
 depends-on:
