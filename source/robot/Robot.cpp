@@ -81,6 +81,12 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       lineSensor(line, state.inputs, config),
       colorSensor_(colorSensor, state.inputs, config),
       ports(portio, state.inputs, config),
+      // Phase E (043-003) Gripper subsystem — binds the existing `gripper` IServo&
+      // (== IPositionMotor&) device ref bound above.  Declaration order in Robot.h
+      // puts gripper_sub after `gripper`, so the ref is live here.  No-op subsystem
+      // (periodic/updateInputs are no-ops); not wired into loopTickOnce.  Actuation
+      // still flows through servoController (unchanged) — zero behavior change.
+      gripper_sub(gripper),
       // Superstructure (042-001) — wired with references to motionController and
       // haltController (both declared before it) plus config.  Declaration order
       // in Robot.h guarantees those are constructed first.

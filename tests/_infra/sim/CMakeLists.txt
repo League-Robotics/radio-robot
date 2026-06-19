@@ -111,5 +111,7 @@ target_include_directories(firmware_host PRIVATE
     "${REPO_ROOT}/source/subsystems/sensors"
     # 043-002 (Phase E): Drive subsystem dir (#include "Drive.h").
     "${REPO_ROOT}/source/subsystems/drive"
+    # 043-003 (Phase E): Gripper subsystem dir (#include "Gripper.h").
+    "${REPO_ROOT}/source/subsystems/gripper"
     "${REPO_ROOT}/source/types"
 )

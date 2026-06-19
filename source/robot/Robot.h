@@ -29,6 +29,11 @@
 // filter + controlTick + wedge push).  Value member declared after the refs it
 // binds (motorL/motorR, motorController, estimate).
 #include "../subsystems/drive/Drive.h"
+// Phase E (043-003): Gripper subsystem — structural seam for the optional servo
+// actuator (+ GripperIONull null-object).  periodic()/updateInputs() are no-ops;
+// NOT wired into loopTickOnce this sprint (gripper is command-driven via
+// ServoController).  Value member binds the existing `gripper` IServo ref.
+#include "../subsystems/gripper/Gripper.h"
 
 // Forward declarations — keeps the header-graph shallow.
 class DebugCommandable;
@@ -111,6 +116,15 @@ struct Robot {
     subsystems::LineSensor  lineSensor;    // (line, state.inputs, config)
     subsystems::ColorSensor colorSensor_;  // (colorSensor, state.inputs, config)
     subsystems::Ports       ports;         // (portio, state.inputs, config)
+    // Phase E (043-003) Gripper subsystem — structural seam for the OPTIONAL
+    // servo actuator.  Binds the existing `gripper` IServo& (== IPositionMotor&)
+    // device ref declared above, so it is live when this member constructs.
+    // periodic()/updateInputs() are no-ops and gripper_sub is NOT called from
+    // loopTickOnce — pure additive seam, zero behavior change (golden-TLM stays
+    // byte-exact).  Named gripper_sub to NOT shadow the `IServo& gripper` device
+    // ref above (OQ-4).  The existing ServoController servoController member that
+    // dispatches the GRIP command is unchanged and still owns actuation.
+    subsystems::Gripper     gripper_sub;   // (gripper)
     HaltController      haltController;    // user-facing named stop-condition registry
     // Superstructure (Seam 3, 042-001) — thin Goal coordinator.  MUST be declared
     // AFTER motionController and haltController: it holds references to both, and

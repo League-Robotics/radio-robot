@@ -1,13 +1,13 @@
 ---
-id: "003"
-title: "Gripper subsystem with GripperIONull null-object"
-status: open
+id: '003'
+title: Gripper subsystem with GripperIONull null-object
+status: in-progress
 use-cases:
-  - SUC-003
+- SUC-003
 depends-on:
-  - 043-001
-github-issue: ""
-issue: "migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md"
+- 043-001
+github-issue: ''
+issue: migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -36,23 +36,31 @@ in that ticket.
 
 ## Acceptance Criteria
 
-- [ ] `source/subsystems/gripper/Gripper.{h,cpp}` exist and compile.
-- [ ] `Gripper` has `periodic()` (no-op) and `updateInputs()` (no-op).
-- [ ] `GripperIONull` exists (as a class or type alias with no-op methods) in
+- [x] `source/subsystems/gripper/Gripper.{h,cpp}` exist and compile.
+- [x] `Gripper` has `periodic()` (no-op) and `updateInputs()` (no-op).
+- [x] `GripperIONull` exists (as a class or type alias with no-op methods) in
       `source/subsystems/gripper/Gripper.h`.
-- [ ] `Robot.h` adds `Gripper gripper_subsystem` value member (or `Gripper gripper_sub` —
+- [x] `Robot.h` adds `Gripper gripper_subsystem` value member (or `Gripper gripper_sub` —
       pick a name that does not shadow the existing `IServo& gripper` device ref).
-- [ ] Existing `ServoController servoController` member is unchanged.
-- [ ] Existing `IServo& gripper` device ref is unchanged.
-- [ ] `loopTickOnce` is NOT modified by this ticket (gripper periodic not wired in).
-- [ ] No CODAL/MicroBit/I2CBus types in `source/subsystems/gripper/`.
-- [ ] No `printf` / `telemetryEmit` calls in `Gripper` methods.
-- [ ] Simulation tier green: `uv run --with pytest python -m pytest -q` >= 2001 passed, 0 errors.
-- [ ] Golden-TLM canary byte-exact.
-- [ ] `defaultRobotConfig()` field-pin diff empty.
-- [ ] ARM firmware build gate: `python3 build.py --fw-only` -> 0 errors; then
+      [Chosen: `subsystems::Gripper gripper_sub` — OQ-4 resolved; does not shadow `gripper`.]
+- [x] Existing `ServoController servoController` member is unchanged.
+- [x] Existing `IServo& gripper` device ref is unchanged.
+- [x] `loopTickOnce` is NOT modified by this ticket (gripper periodic not wired in).
+      [Verified: `git diff` on source/control/LoopTickOnce.{cpp,h} is empty.]
+- [x] No CODAL/MicroBit/I2CBus types in `source/subsystems/gripper/`.
+      [Verified: vendor-confinement grep gate green; forbidden-token grep clean.]
+- [x] No `printf` / `telemetryEmit` calls in `Gripper` methods.
+- [x] Simulation tier green: `uv run --with pytest python -m pytest -q` >= 2001 passed, 0 errors.
+      [2001 passed in 28.90s, 0 errors.]
+- [x] Golden-TLM canary byte-exact.
+      [test_golden_tlm_unchanged passed — byte-exact oracle green.]
+- [x] `defaultRobotConfig()` field-pin diff empty.
+      [field-pin test passed; DefaultConfig.cpp restored via git checkout.]
+- [x] ARM firmware build gate: `python3 build.py --fw-only` -> 0 errors; then
       `git checkout -- source/robot/DefaultConfig.cpp`.
-- [ ] Servo command behavior unchanged (GRIP command still dispatches via `servoController`).
+      [0 `error:` lines, MICROBIT.hex produced; DefaultConfig.cpp restored.]
+- [x] Servo command behavior unchanged (GRIP command still dispatches via `servoController`).
+      [servo/grip targeted suite: 14 passed.]
 
 ## Implementation Plan
 
