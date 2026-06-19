@@ -1,7 +1,7 @@
 ---
 id: '043'
 title: "Phase E \u2014 Subsystem and periodic wrapping"
-status: planning-docs
+status: done
 branch: sprint/043-phase-e-subsystem-and-periodic-wrapping
 use-cases: []
 issues:
