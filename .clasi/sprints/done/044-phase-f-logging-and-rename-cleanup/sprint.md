@@ -1,7 +1,7 @@
 ---
 id: '044'
 title: "Phase F \u2014 Logging and rename/cleanup"
-status: planning-docs
+status: done
 branch: sprint/044-phase-f-logging-and-rename-cleanup
 use-cases: []
 issues:
