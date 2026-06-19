@@ -2,6 +2,19 @@
 #include "control/Odometry.h"   // effectiveSlip() — the SAME helper Odometry::predict uses
 #include <math.h>
 
+#ifdef HOST_BUILD
+#include <random>
+
+// Gaussian noise helper — returns a sample from N(0, sigma), or 0 if sigma <= 0.
+// Bit-identical to MockMotor.cpp::gaussianNoise so the reported-encoder noise
+// stream matches the retired model draw-for-draw (OQ-1 Option A).
+static float pwGaussianNoise(std::mt19937& rng, float sigma) {
+    if (sigma <= 0.0f) return 0.0f;
+    std::normal_distribution<float> dist(0.0f, sigma);
+    return dist(rng);
+}
+#endif
+
 // ---------------------------------------------------------------------------
 // update(dt_ms) — one canonical midpoint-arc integration step.
 //
@@ -34,6 +47,33 @@ void PhysicsWorld::update(uint32_t dt_ms) {
     _trueEncRMm += velR * dt_s;
     _trueVelLMms = velL;
     _trueVelRMms = velR;
+
+    // -----------------------------------------------------------------------
+    // Sub-step A': reported-encoder accumulation (OQ-1 Option A — legacy
+    // MockMotor::integrate model, used by SimMotor::positionMm()).
+    //
+    // GOLDEN-TLM CRITICAL — DO NOT REFACTOR / SIMPLIFY.  This is the EXACT
+    // MockMotor::integrate body (same float type, same operation order, same
+    // per-wheel std::mt19937{42u} noise stream):
+    //     float slip  = _slipStraight + _slipTurnExtra * _turnRate;
+    //     float noisy = vel * (1.0f - slip) + gaussianNoise(rng, sigma);
+    //     _encoderMm += noisy * (dt_ms / 1000.0f);
+    // With slip == 0, noise == 0, offset-factor 1.0 (golden-TLM fixture) this
+    // reduces to vel * dt_s — bit-identical to the true accumulator above AND to
+    // the value the retired MockMotor produced.  The sim_field_profile fixture
+    // sets _slipTurnExtra (< 0 → encoder over-reports arc on turns), preserving
+    // the slip-fence behaviour byte-for-byte.
+    // -----------------------------------------------------------------------
+    float encSlip = _slipStraight + _slipTurnExtra * _turnRate;
+#ifdef HOST_BUILD
+    float noisyL = velL * (1.0f - encSlip) + pwGaussianNoise(_rngL, _encNoiseSigmaL);
+    float noisyR = velR * (1.0f - encSlip) + pwGaussianNoise(_rngR, _encNoiseSigmaR);
+#else
+    float noisyL = velL * (1.0f - encSlip);
+    float noisyR = velR * (1.0f - encSlip);
+#endif
+    _reportedEncLMm += noisyL * dt_s;
+    _reportedEncRMm += noisyR * dt_s;
 
     // -----------------------------------------------------------------------
     // Sub-step B: chassis pose integration (NOT on the TLM path; clean formula).
@@ -72,6 +112,9 @@ void PhysicsWorld::reset() {
     _trueEncRMm  = 0.0f;
     _trueVelLMms = 0.0f;
     _trueVelRMms = 0.0f;
+
+    _reportedEncLMm = 0.0f;
+    _reportedEncRMm = 0.0f;
 
     for (int i = 0; i < 4; ++i) {
         _lineRaw[i]   = 0;

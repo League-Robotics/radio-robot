@@ -1,6 +1,8 @@
 // sim_api.cpp — extern "C" C ABI wrapper over a self-contained simulation.
 //
-// Provides an opaque SimHandle that owns MockHAL + Robot + CommandProcessor.
+// Provides an opaque SimHandle that owns SimHardware + Robot + CommandProcessor.
+// (040-002) SimHardware replaces MockHAL; PhysicsWorld is the single source of
+// ground truth and the Sim* observation models read it.
 // Python test code (ticket 020-004) loads this shared library via ctypes.
 //
 // Build: cmake -S . -B host_tests/build && cmake --build host_tests/build
@@ -10,9 +12,8 @@
 #include "app/CommandProcessor.h"
 #include "app/CommandQueue.h"
 #include "app/DebugCommandable.h"
-#include "io/sim/MockHAL.h"
-#include "io/sim/MockMotor.h"
-#include "io/sim/MockOtosSensor.h"
+#include "io/sim/SimHardware.h"
+#include "io/sim/PhysicsWorld.h"
 #include "io/real/BenchOtosSensor.h"
 #include "types/Config.h"
 #include "control/RobotState.h"
@@ -69,11 +70,15 @@ static void storeReply(const char* msg, void* ctx)
 // SimHandle — one self-contained simulation instance allocated per test.
 //
 // Construction order is load-bearing:
-//   1. hal        — MockHAL (owns all mock devices)
-//   2. cfg        — RobotConfig value from defaultRobotConfig()
+//   1. cfg        — RobotConfig value from defaultRobotConfig()
+//   2. hal        — SimHardware(cfg) (owns the PhysicsWorld plant + Sim* models)
 //   3. robot      — Robot(hal, cfg), wires motorController/odometry/etc.
 //   4. _queue     — CommandQueue (wired into cmd + robot._motionCtx)
 //   5. cmd        — CommandProcessor with the full command table
+//
+// (040-002) hal is now SimHardware, not MockHAL.  PhysicsWorld is the single
+// source of ground truth; the Sim* observation models read it.  cfg is declared
+// BEFORE hal because SimHardware(const RobotConfig&) needs it at construction.
 //
 // Queue wiring: sim_api mirrors LoopScheduler's constructor wiring exactly —
 //   cmd.setQueue(&_queue) and robot.setMotionQueue(&_queue) — so
@@ -87,8 +92,8 @@ static void storeReply(const char* msg, void* ctx)
 //   copies from replyStore into the caller's out_buf, then resets the store.
 // ---------------------------------------------------------------------------
 struct SimHandle {
-    MockHAL          hal;
     RobotConfig      cfg;
+    SimHardware      hal;
     Robot            robot;
     CommandQueue     _queue;
     // DebugCommandable wired with robot; sched and bus are nullptr in sim.
@@ -110,8 +115,8 @@ struct SimHandle {
     LoopTickState    _ts;
 
     SimHandle()
-        : hal()
-        , cfg(defaultRobotConfig())
+        : cfg(defaultRobotConfig())
+        , hal(cfg)
         , robot(hal, cfg)
         , _queue()
         , dbg(DbgCtx{nullptr, nullptr, &robot})
@@ -121,7 +126,9 @@ struct SimHandle {
         // Initialize the bench OTOS sensor (sets _initialized = true; no I2C).
         benchOtos.begin();
 
-        // Wire robot geometry into MockHAL so ExactPoseTracker integrates correctly.
+        // Wire robot geometry into SimHardware so the OTOS sim model integrates
+        // correctly.  SimHardware's ctor already set this from cfg; the explicit
+        // call is harmless (idempotent) and documents the dependency.
         hal.setTrackwidth(cfg.trackwidthMm);
 
         // Wire the queue into both cmd and Robot's MotionCtx — mirrors LoopScheduler's
@@ -358,98 +365,93 @@ int sim_get_ekf_rej_count(void* h)
 
 // ---- State injection ----
 
-// Inject encoder position directly into MockMotor (overrides physics).
+// Inject encoder position directly into the plant's reported encoder (Option A).
+// (040-002) Re-pointed from MockMotor to PhysicsWorld.  Behaviour preserved:
+// resets the SimMotor (zeros the side's reported accumulator + tick cache) and
+// patches state.inputs to report `mm` for this tick.  T3 will set the reported
+// AND true accumulators directly via the plant and drop the state.inputs patch.
 void sim_set_enc_l(void* h, float mm)
 {
-    // MockMotor does not expose a direct setEncoder; instead reset and set
-    // the accumulated encoder via the underlying field.  We access it through
-    // the Robot's motorL reference (which is a MockMotor).
     SimHandle* s = static_cast<SimHandle*>(h);
-    s->hal.motorLMock().resetEncoder();
-    // After reset, the mock encoder is 0.  We want it to report `mm`.
-    // The mock reads _encoderMm via collectEncoder/readEncoderMmF.
-    // We adjust by setting an initial offset via tick(0) — but that doesn't
-    // give us direct mm control.  Use the setOffsetFactor approach: inject
-    // via the hal's internal field through the mock accessor.
-    // MockMotor exposes no direct setEncoderMm; use the sim_command ZERO
-    // workaround or accept that enc injection re-zeroes and rebuilds.
-    // For now, sync Robot's state.inputs to reflect the current mock value.
+    s->hal.simMotorL().resetEncoder();
     s->robot.state.inputs.encLMm = mm;
 }
 
 void sim_set_enc_r(void* h, float mm)
 {
     SimHandle* s = static_cast<SimHandle*>(h);
-    s->hal.motorRMock().resetEncoder();
+    s->hal.simMotorR().resetEncoder();
     s->robot.state.inputs.encRMm = mm;
 }
 
-// Inject an OTOS pose reading into MockOtosSensor.
-// The injected pose is returned by MockOtosSensor::readTransformed() on the
-// next otosCorrect() call.
+// Inject an OTOS pose reading into the SimOdometer.  The injected pose is
+// returned by SimOdometer::readTransformed() on the next otosCorrect() call.
 void sim_set_otos_pose(void* h, float x, float y, float hrad)
 {
-    static_cast<SimHandle*>(h)->hal.otosMock().setInjectedPose(x, y, hrad);
+    static_cast<SimHandle*>(h)->hal.simOdometer().setInjectedPose(x, y, hrad);
 }
 
-// Inject a per-wheel speed offset factor (1.0 = symmetric).
+// Inject a per-wheel speed offset factor (1.0 = symmetric) into the plant.
 // side: 0 = left, 1 = right, other = both.
 void sim_set_motor_offset(void* h, int side, float factor)
 {
-    SimHandle* s = static_cast<SimHandle*>(h);
-    if (side == 0 || side > 1) s->hal.motorLMock().setOffsetFactor(factor);
-    if (side == 1 || side > 1) s->hal.motorRMock().setOffsetFactor(factor);
+    static_cast<SimHandle*>(h)->hal.plant().setOffsetFactor(side, factor);
 }
 
-// ---- Exact pose (oracle ground truth from ExactPoseTracker) ----
+// ---- Exact pose (oracle ground truth) ----
+// (040-002) Temporary alias to the plant's TRUE pose (T3 adds formal
+// sim_get_true_pose_*).  PhysicsWorld::truePose* is the consolidated oracle that
+// replaced ExactPoseTracker.
 float sim_get_exact_pose_x(void* h) {
-    return static_cast<SimHandle*>(h)->hal.exactPoseMock().x;
+    return static_cast<SimHandle*>(h)->hal.plant().truePoseX();
 }
 float sim_get_exact_pose_y(void* h) {
-    return static_cast<SimHandle*>(h)->hal.exactPoseMock().y;
+    return static_cast<SimHandle*>(h)->hal.plant().truePoseY();
 }
 float sim_get_exact_pose_h(void* h) {
-    return static_cast<SimHandle*>(h)->hal.exactPoseMock().h;
+    return static_cast<SimHandle*>(h)->hal.plant().truePoseH();
 }
 
 // ---- Encoder noise/slip (side: 0=left, 1=right, 2=both) ----
+// (040-002) Re-pointed to the plant's reported-encoder slip/noise model
+// (OQ-1 Option A — legacy MockMotor encoder-step model preserved bit-for-bit).
 void sim_set_motor_slip(void* h, int side, float straight, float turn_extra) {
-    SimHandle* s = static_cast<SimHandle*>(h);
-    if (side == 0 || side > 1) s->hal.motorLMock().setSlip(straight, turn_extra);
-    if (side == 1 || side > 1) s->hal.motorRMock().setSlip(straight, turn_extra);
+    // PhysicsWorld applies one shared slip pair to the reported encoder; the
+    // field-profile fixture always calls side=2, so a single set matches the
+    // retired per-motor behaviour.
+    (void)side;
+    static_cast<SimHandle*>(h)->hal.plant().setSlip(straight, turn_extra);
 }
 void sim_set_encoder_noise(void* h, int side, float sigma_mm) {
-    SimHandle* s = static_cast<SimHandle*>(h);
-    if (side == 0 || side > 1) s->hal.motorLMock().setEncoderNoise(sigma_mm);
-    if (side == 1 || side > 1) s->hal.motorRMock().setEncoderNoise(sigma_mm);
+    static_cast<SimHandle*>(h)->hal.plant().setEncoderNoise(side, sigma_mm);
 }
 
 // ---- OTOS sim model ----
 void sim_enable_otos_model(void* h) {
-    static_cast<SimHandle*>(h)->hal.otosMock().enableSimModel(true);
+    static_cast<SimHandle*>(h)->hal.simOdometer().enableSimModel(true);
 }
 // Enable/disable the firmware OTOS EKF correction inside sim_tick().
-// Also marks the mock OTOS initialised so Robot::otosCorrect() does not
+// Also marks the SimOdometer initialised so Robot::otosCorrect() does not
 // early-return on its is_initialized() guard.
 void sim_set_otos_fusion(void* h, int on) {
     SimHandle* s = static_cast<SimHandle*>(h);
     s->_ts.fuseOtos = (on != 0);
-    if (s->_ts.fuseOtos) s->hal.otosMock().begin();
+    if (s->_ts.fuseOtos) s->hal.simOdometer().begin();
 }
 void sim_set_otos_linear_noise(void* h, float sigma_fraction) {
-    static_cast<SimHandle*>(h)->hal.otosMock().setLinearNoise(sigma_fraction);
+    static_cast<SimHandle*>(h)->hal.simOdometer().setLinearNoise(sigma_fraction);
 }
 void sim_set_otos_yaw_noise(void* h, float sigma_fraction) {
-    static_cast<SimHandle*>(h)->hal.otosMock().setYawNoise(sigma_fraction);
+    static_cast<SimHandle*>(h)->hal.simOdometer().setYawNoise(sigma_fraction);
 }
 float sim_get_otos_x(void* h) {
-    return static_cast<SimHandle*>(h)->hal.otosMock().odomX();
+    return static_cast<SimHandle*>(h)->hal.simOdometer().odomX();
 }
 float sim_get_otos_y(void* h) {
-    return static_cast<SimHandle*>(h)->hal.otosMock().odomY();
+    return static_cast<SimHandle*>(h)->hal.simOdometer().odomY();
 }
 float sim_get_otos_h(void* h) {
-    return static_cast<SimHandle*>(h)->hal.otosMock().odomH();
+    return static_cast<SimHandle*>(h)->hal.simOdometer().odomH();
 }
 
 // ---- N2 queue-invariant helper (030-002) ----
@@ -612,30 +614,30 @@ int sim_command_no_drain(void* h, const char* line, char* out_buf, int out_len)
 // present and emits line= in TLM.  Call before tests that need line data.
 void sim_init_line_sensor(void* h)
 {
-    static_cast<SimHandle*>(h)->hal.lineMock().begin();
+    static_cast<SimHandle*>(h)->hal.simLineSensor().begin();
 }
 
-// Initialize (begin) the MockColorSensor so Robot::colorRead() considers it
+// Initialize (begin) the SimColorSensor so Robot::colorRead() considers it
 // present and emits color= in TLM.  Call before tests that need color data.
 void sim_init_color_sensor(void* h)
 {
-    static_cast<SimHandle*>(h)->hal.colorMock().begin();
+    static_cast<SimHandle*>(h)->hal.simColorSensor().begin();
 }
 
-// Freeze / unfreeze the MockLineSensor.  When frozen, readValues() returns
+// Freeze / unfreeze the SimLineSensor.  When frozen, readValues() returns
 // false so Robot::lineRead() never updates lineVS.lastUpdMs — after ~2×lagMs
 // the TLM freshness gate drops the line= field from TLM frames.
 void sim_set_line_frozen(void* h, int frozen)
 {
-    static_cast<SimHandle*>(h)->hal.lineMock().setFrozen(frozen != 0);
+    static_cast<SimHandle*>(h)->hal.simLineSensor().setFrozen(frozen != 0);
 }
 
-// Freeze / unfreeze the MockColorSensor.  When frozen, pollRGBC() returns
+// Freeze / unfreeze the SimColorSensor.  When frozen, pollRGBC() returns
 // false so Robot::colorRead() never updates colorVS.lastUpdMs — after ~2×lagMs
 // the TLM freshness gate drops the color= field from TLM frames.
 void sim_set_color_frozen(void* h, int frozen)
 {
-    static_cast<SimHandle*>(h)->hal.colorMock().setFrozen(frozen != 0);
+    static_cast<SimHandle*>(h)->hal.simColorSensor().setFrozen(frozen != 0);
 }
 
 // ---- N9 same-tick OTOS failure helper (030-008) ----
@@ -646,7 +648,7 @@ void sim_set_color_frozen(void* h, int frozen)
 // and skip EKF fusion — the fusedV/poseX/Y/H state must remain unchanged.
 void sim_set_otos_read_failure(void* h, int fail)
 {
-    static_cast<SimHandle*>(h)->hal.otosMock().setReadFailure(fail != 0);
+    static_cast<SimHandle*>(h)->hal.simOdometer().setReadFailure(fail != 0);
 }
 
 // Read fusedV from state.inputs (EKF body-frame linear speed, mm/s).

@@ -1,11 +1,14 @@
 ---
-id: "002"
-title: "Observation models and SimHardware — replace MockHAL with clean split"
-status: open
-use-cases: [SUC-002, SUC-004]
-depends-on: ["040-001"]
-github-issue: ""
-issue: "migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md"
+id: '002'
+title: "Observation models and SimHardware \u2014 replace MockHAL with clean split"
+status: done
+use-cases:
+- SUC-002
+- SUC-004
+depends-on:
+- 040-001
+github-issue: ''
+issue: migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -109,21 +112,48 @@ encoder-step slip (old `MockMotor` model). `SimMotor::positionMm()` returns the
 reported value. `setSlip(straight, turnExtra)` configures the reported-encoder path.
 Escalate to stakeholder only if Option A also fails.
 
+## Resolution notes (040-002, programmer)
+
+- **OQ-1 (slip): RESOLVED via Option A, adopted up-front.** To guarantee BOTH
+  golden-TLM byte-exactness AND the slip fences in a single pass, `PhysicsWorld`
+  carries a dual encoder path from the start: `trueEncL/RMm()` (unslipped ground
+  truth, for T3's `sim_get_true_*`) and `reportedEncL/RMm()` (the legacy
+  `MockMotor` encoder-step slip + per-wheel `std::mt19937{42u}` noise model).
+  `SimMotor::positionMm()` returns the reported value. `sim_set_motor_slip` /
+  `sim_set_encoder_noise` configure the reported path on the plant. In the
+  golden-TLM fixture (zero slip, zero noise, offset-factor 1.0) reported == true
+  == the value the retired `MockMotor::integrate` produced, so the byte-exact
+  canary is unaffected; the field-024 / slip-fence tests reproduce the old
+  encoder-step over-report bit-for-bit. The slip-relocation-only model was NOT
+  needed for the encoder path (the body-rotation `dTh` slip in sub-step B still
+  feeds `truePose*()` for the T3 oracle, but observation reads use the reported
+  path). All fences green; no escalation needed.
+- **Architecture-conflict annotation (DBG OTOS BENCH):** architecture-update.md
+  says `SimHardware::setOtosBench` is a pure no-op. That conflicts with the
+  behavior-preservation gate `test_dbg_otos_commands.py`, which round-trips the
+  bench flag through `isBenchMode()`. Per ticket guidance ("follow
+  architecture-update where ticket wording conflicts; annotate honestly"), the
+  flag is RECORDED (no actual sensor swap — there is still no bench OTOS in SIM;
+  `otos()` always returns the `SimOdometer`), exactly as the retired MockHAL did
+  host-side. This preserves the round-trip test with no behavior change.
+- `sim_set_enc_l/r` left on the `state.inputs` patch (now resets the SimMotor's
+  reported encoder); T3 fixes it properly per the architecture sequence.
+
 ## Acceptance Criteria
 
-- [ ] `SimMotor`, `SimOdometer`, `SimLineSensor`, `SimColorSensor`, `SimPortIO`,
+- [x] `SimMotor`, `SimOdometer`, `SimLineSensor`, `SimColorSensor`, `SimPortIO`,
       `SimHardware` exist in `source/io/sim/` and compile cleanly (HOST_BUILD).
-- [ ] `SimHandle::hal` is `SimHardware` (not `MockHAL`).
-- [ ] All existing `sim_*` ABI back-compat entry points re-pointed to plant/observation.
-- [ ] **`test_golden_tlm.py` passes byte-exactly.** This is the primary correctness gate.
-- [ ] Behavior-fence tests pass: `test_rt_slip.py`, `test_incident_scenarios.py`,
+- [x] `SimHandle::hal` is `SimHardware` (not `MockHAL`).
+- [x] All existing `sim_*` ABI back-compat entry points re-pointed to plant/observation.
+- [x] **`test_golden_tlm.py` passes byte-exactly.** This is the primary correctness gate.
+- [x] Behavior-fence tests pass: `test_rt_slip.py`, `test_incident_scenarios.py`,
       `test_goto_bounds.py`, `test_033_005_wedge_hardening.py`,
       `test_watchdog_exemption.py`, `test_ekf.py`, `test_otos_fusion.py`.
-- [ ] `test_bench_otos.py` passes unchanged.
-- [ ] `uv run --with pytest python -m pytest -q` ≥ 1957 passed, 0 errors.
-- [ ] `defaultRobotConfig()` field-pin diff empty.
-- [ ] Vendor-confinement grep gate passes.
-- [ ] No heap allocation introduced.
+- [x] `test_bench_otos.py` passes unchanged.
+- [x] `uv run --with pytest python -m pytest -q` ≥ 1957 passed, 0 errors. (1964 passed, 0 errors)
+- [x] `defaultRobotConfig()` field-pin diff empty.
+- [x] Vendor-confinement grep gate passes.
+- [x] No heap allocation introduced.
 
 ## Implementation Plan
 

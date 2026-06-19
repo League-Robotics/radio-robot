@@ -1,6 +1,10 @@
 #pragma once
 #include <stdint.h>
 
+#ifdef HOST_BUILD
+#include <random>
+#endif
+
 /**
  * PhysicsWorld — the single source of ground truth for the simulated chassis.
  *
@@ -29,6 +33,16 @@
  * GOLDEN-TLM CONSTRAINT: update() sub-step A (encoder accumulation) MUST match
  * MockMotor::integrate bit-for-bit for zero-slip / zero-noise / offset-factor-1.0
  * inputs.  See the comment in PhysicsWorld.cpp — do NOT simplify that expression.
+ *
+ * OQ-1 Option A (040-002): PhysicsWorld tracks BOTH a true (unslipped) encoder
+ * accumulator AND a reported (legacy MockMotor encoder-step slip + noise)
+ * accumulator.  SimMotor::positionMm() returns the REPORTED value, so the
+ * sim_field_profile / slip-fence behaviour is preserved bit-for-bit vs. the old
+ * MockMotor model (encoder over-reports arc by 26% on turns).  trueEncL/RMm()
+ * remains the unslipped ground truth for T3's sim_get_true_* / setTrueWheelTravel.
+ * In the golden-TLM fixture (zero slip, zero noise, offset-factor 1.0) the
+ * reported and true accumulators are bit-identical AND equal to the value the
+ * retired MockMotor::integrate produced — so the byte-exact canary is unaffected.
  */
 class PhysicsWorld {
 public:
@@ -44,6 +58,14 @@ public:
     void setActuators(int8_t pwmL, int8_t pwmR) {
         _pwmL = pwmL;
         _pwmR = pwmR;
+    }
+
+    // Store ONE wheel's PWM command (SimMotor::setOutput forwards here; the
+    // authoritative plant tick uses setActuators(cmds.pwmL, cmds.pwmR)).
+    // side: 0 = left, 1 = right.
+    void setActuator(int side, int8_t pwm) {
+        if (side == 0) _pwmL = pwm;
+        else           _pwmR = pwm;
     }
 
     // Advance the chassis one step of dt_ms milliseconds.  Two structurally
@@ -113,6 +135,14 @@ public:
         else                { _offsetFactorL = f; _offsetFactorR = f; }
     }
 
+    // OQ-1 Option A — reported-encoder (legacy MockMotor) noise config.  side:
+    // 0 = left, 1 = right, 2 = both.  Gaussian encoder noise (mm per tick) added
+    // to the REPORTED encoder accumulator only; the true accumulator is unaffected.
+    void setEncoderNoise(int side, float sigmaMm) {
+        if (side == 0 || side > 1) _encNoiseSigmaL = sigmaMm;
+        if (side == 1 || side > 1) _encNoiseSigmaR = sigmaMm;
+    }
+
     void setTrackwidth(float mm)    { _trackwidthMm = mm; }
     void setNominalMaxMms(float v)  { _nominalMaxMms = v; }
 
@@ -124,6 +154,27 @@ public:
 
     float trueEncLMm() const { return _trueEncLMm; }
     float trueEncRMm() const { return _trueEncRMm; }
+
+    // OQ-1 Option A — reported (legacy MockMotor encoder-step slip + noise)
+    // encoder accumulators.  SimMotor::positionMm() reads these.  Equal to the
+    // true accumulators when slip == 0 and noise == 0 (golden-TLM fixture).
+    float reportedEncLMm() const { return _reportedEncLMm; }
+    float reportedEncRMm() const { return _reportedEncRMm; }
+
+    // OQ-1 Option A — directly set the reported encoder accumulator (back-compat
+    // for sim_set_enc_l/r which resets+rebuilds the legacy MockMotor encoder).
+    void setReportedEncoder(int side, float mm) {
+        if (side == 0) _reportedEncLMm = mm;
+        else           _reportedEncRMm = mm;
+    }
+
+    // OQ-1 Option A — zero one side's reported encoder accumulator (mirrors
+    // MockMotor::resetEncoder, which zeros _encoderMm for that one wheel).  The
+    // true accumulator is the ground truth and is NOT reset here.
+    void resetReportedEncoder(int side) {
+        if (side == 0) _reportedEncLMm = 0.0f;
+        else           _reportedEncRMm = 0.0f;
+    }
 
     float trueVelLMms() const { return _trueVelLMms; }
     float trueVelRMms() const { return _trueVelRMms; }
@@ -155,11 +206,16 @@ private:
     float _truePoseY = 0.0f;
     float _truePoseH = 0.0f;
 
-    // --- True per-wheel travel / velocity ---
+    // --- True per-wheel travel / velocity (unslipped ground truth) ---
     float _trueEncLMm  = 0.0f;
     float _trueEncRMm  = 0.0f;
     float _trueVelLMms = 0.0f;
     float _trueVelRMms = 0.0f;
+
+    // --- Reported per-wheel travel (OQ-1 Option A: legacy MockMotor model) ---
+    // encoder-step slip + Gaussian noise; read by SimMotor::positionMm().
+    float _reportedEncLMm = 0.0f;
+    float _reportedEncRMm = 0.0f;
 
     // --- True auxiliary sensor values (zero-initialized) ---
     uint16_t _lineRaw[4]   = {0, 0, 0, 0};
@@ -176,4 +232,25 @@ private:
     // --- Per-wheel offset factors (default symmetric) ---
     float _offsetFactorL = 1.0f;
     float _offsetFactorR = 1.0f;
+
+    // --- Reported-encoder error model (OQ-1 Option A) ---
+    // Per-tick turn rate in [0, 1] (set by SimHardware before update()); drives
+    // the encoder-step slip term (slip = slipStraight + slipTurnExtra * turnRate)
+    // exactly as MockHAL::advance fed MockMotor::setTurnRate.
+    float _turnRate       = 0.0f;
+    float _encNoiseSigmaL = 0.0f;
+    float _encNoiseSigmaR = 0.0f;
+
+public:
+    // Per-tick turn rate (set by SimHardware before update()); used only by the
+    // reported-encoder slip term (sub-step A').
+    void setTurnRate(float r) { _turnRate = r; }
+
+private:
+#ifdef HOST_BUILD
+    // Two independent generators so the LEFT/RIGHT encoder-noise draw streams
+    // match the retired MockMotor (each MockMotor owned its own std::mt19937{42u}).
+    std::mt19937 _rngL{42u};
+    std::mt19937 _rngR{42u};
+#endif
 };
