@@ -1,11 +1,13 @@
 ---
-id: "002"
-title: "Move simulation tests to simulation/unit/ and repoint pyproject testpaths"
-status: open
-use-cases: [SUC-001]
-depends-on: ["001"]
-github-issue: ""
-issue: ""
+id: '002'
+title: Move simulation tests to simulation/unit/ and repoint pyproject testpaths
+status: in-progress
+use-cases:
+- SUC-001
+depends-on:
+- '001'
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -117,15 +119,15 @@ uv run --with pytest python -m pytest --collect-only -q 2>&1 | grep "bench\|fiel
 
 ## Acceptance Criteria
 
-- [ ] All 73 `test_*.py` files exist under `tests/simulation/` (unit/ or system/).
-- [ ] `tests/unit/` is empty and removed (or only contains `.gitkeep`).
-- [ ] `pyproject.toml` `testpaths = ["tests/simulation"]`.
-- [ ] `pyproject.toml` `norecursedirs` excludes `tests/bench`, `tests/field`,
+- [x] All 73 `test_*.py` files exist under `tests/simulation/` (unit/ or system/).
+- [x] `tests/unit/` is empty and removed (or only contains `.gitkeep`).
+- [x] `pyproject.toml` `testpaths = ["tests/simulation"]`.
+- [x] `pyproject.toml` `norecursedirs` excludes `tests/bench`, `tests/field`,
       `tests/_infra/sim/build`.
-- [ ] `uv run --with pytest python -m pytest -q` collects ≥ 1954 tests and passes.
-- [ ] Running `pytest --collect-only` does NOT collect any file from `tests/bench/`
+- [x] `uv run --with pytest python -m pytest -q` collects ≥ 1954 tests and passes.
+- [x] Running `pytest --collect-only` does NOT collect any file from `tests/bench/`
       or `tests/field/`.
-- [ ] `git diff source/` is empty.
+- [x] `git diff source/` is empty.
 
 ## Testing Plan
 

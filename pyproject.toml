@@ -41,20 +41,25 @@ members = [
 # imports modules that allocate huge grids and open animation loops. That can
 # exhaust memory on a small machine. Keep collection scoped and never descend
 # into vendored sims, the build tree, or the venv.
-# All maintained tests now live under tests/ (037-004 consolidation):
-#   tests/unit/  — library + firmware-logic + firmware-sim pytest suites
-#   tests/sim/   — sim infrastructure (CMakeLists.txt, firmware.py) — no tests collected here
+#
+# Tier layout (038 reorganization):
+#   tests/simulation/unit/   — library + firmware-logic + firmware-sim pytest suites (CI gate)
+#   tests/simulation/system/ — whole-robot scenario tests (also CI gate)
+#   tests/_infra/sim/        — sim infrastructure (CMakeLists.txt, firmware.py) — no tests collected
+#   tests/bench/             — real-hardware bench tests (opt-in, not collected by default)
+#   tests/field/             — playfield tests (opt-in, not collected by default)
+#
 # mbdeploy is a workspace member with its own test setup (run via mbdeploy/.venv);
 # collecting it from the repo root collides on the duplicate `tests` package name.
 # vendor/ sims are excluded via norecursedirs below.
-testpaths = ["tests"]
+testpaths = ["tests/simulation"]
 norecursedirs = [
     "tests/old",
-    "tests/sim/build",
+    "tests/_infra/sim/build",
     "tests/bench",
-    "tests/calibrate",
-    "tests/tools",
-    "tests/system",
+    "tests/field",
+    "tests/_infra/calibrate",
+    "tests/_infra/tools",
     "vendor", "build", ".venv", "node_modules",
     "*.egg", ".*", "dist", "{arch}", "__pycache__",
 ]

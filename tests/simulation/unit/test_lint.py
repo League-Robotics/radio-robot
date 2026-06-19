@@ -8,10 +8,10 @@ import pathlib
 import subprocess
 
 
-# __file__ is tests/unit/test_lint.py; repo root is three levels up.
-_REPO = pathlib.Path(__file__).resolve().parents[2]
+# __file__ is tests/simulation/unit/test_lint.py; repo root is four levels up.
+_REPO = pathlib.Path(__file__).resolve().parents[3]
 _SOURCE = _REPO / "source"
-_SIM_DIR = _REPO / "tests" / "sim"
+_SIM_DIR = _REPO / "tests" / "_infra" / "sim"
 
 
 def test_no_must_mirror_comment() -> None:

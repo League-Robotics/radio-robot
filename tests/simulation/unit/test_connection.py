@@ -354,8 +354,8 @@ class TestSessionCacheParity:
         import inspect
         from pathlib import Path
 
-        # __file__ is tests/unit/; robot_radio is at repo_root/host/robot_radio/
-        mcp_source_path = Path(__file__).parent.parent.parent / "host" / "robot_radio" / "io" / "robot_mcp.py"
+        # __file__ is tests/simulation/unit/; robot_radio is at repo_root/host/robot_radio/
+        mcp_source_path = Path(__file__).parent.parent.parent.parent / "host" / "robot_radio" / "io" / "robot_mcp.py"
         source = mcp_source_path.read_text()
         assert "from robot_radio.robot.connection import make_robot" in source, \
             ("robot_mcp.py does not import make_robot from robot_radio.robot.connection — "

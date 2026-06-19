@@ -21,8 +21,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # Ensure host package is importable
-# __file__ is tests/unit/test_sensors_v2.py; host/ is at repo_root/host/
-_HOST = Path(__file__).resolve().parent.parent.parent / "host"
+# __file__ is tests/simulation/unit/test_sensors_v2.py; host/ is at repo_root/host/
+_HOST = Path(__file__).resolve().parent.parent.parent.parent / "host"
 if str(_HOST) not in sys.path:
     sys.path.insert(0, str(_HOST))
 

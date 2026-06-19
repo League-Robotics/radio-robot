@@ -322,7 +322,7 @@ class TestBenchSafetyShim:
         import pathlib
 
         bench_safety_path = (
-            pathlib.Path(__file__).resolve().parent.parent.parent
+            pathlib.Path(__file__).resolve().parent.parent.parent.parent
             / "tests" / "bench" / "bench_safety.py"
         )
         spec = importlib.util.spec_from_file_location(
@@ -342,7 +342,7 @@ class TestBenchSafetyShim:
         import pathlib
 
         bench_safety_path = (
-            pathlib.Path(__file__).resolve().parent.parent.parent
+            pathlib.Path(__file__).resolve().parent.parent.parent.parent
             / "tests" / "bench" / "bench_safety.py"
         )
         spec = importlib.util.spec_from_file_location(

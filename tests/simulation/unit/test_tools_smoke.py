@@ -27,8 +27,8 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def _repo_root() -> pathlib.Path:
-    """Return the repository root (three levels up from tests/unit/)."""
-    return pathlib.Path(__file__).resolve().parent.parent.parent
+    """Return the repository root (four levels up from tests/simulation/unit/)."""
+    return pathlib.Path(__file__).resolve().parent.parent.parent.parent
 
 
 def _import_tool(tool_name: str):

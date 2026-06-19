@@ -1308,9 +1308,9 @@ class TestReplayHarness:
         import importlib.util
         import os
         # Locate ekf_replay.py in tests/old/dev/ (retired to old/ in sprint 037-005).
-        # __file__ is tests/unit/; ekf_replay.py lives in tests/old/dev/.
+        # __file__ is tests/simulation/unit/; ekf_replay.py lives in tests/old/dev/.
         here = os.path.dirname(os.path.abspath(__file__))
-        replay_path = os.path.join(here, "..", "old", "dev", "ekf_replay.py")
+        replay_path = os.path.join(here, "..", "..", "old", "dev", "ekf_replay.py")
         spec = importlib.util.spec_from_file_location("ekf_replay", replay_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
