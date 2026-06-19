@@ -1,45 +1,10 @@
 #pragma once
-#include <stdint.h>
-
-struct RobotConfig;
-
-/**
- * IMotor — pure-virtual interface for a single drive motor.
- *
- * Allows MotorController and Robot to be written against the interface
- * rather than the concrete Motor class, enabling test doubles and future
- * alternative hardware back-ends.
- */
-class IMotor {
-public:
-    virtual ~IMotor() = default;
-
-    // Prime/initialize the motor at boot (e.g. encoder readback). Default no-op.
-    // Concrete implementations (Motor) override this to prime the hardware encoder
-    // so the first read after boot returns valid data, not the frozen-at-zero
-    // value the Nezha 0x46 register exhibits before its first atomic read.
-    virtual void begin() {}
-
-    // Set speed as signed percentage (-100..100). Positive = logical forward.
-    virtual void setSpeed(int8_t pct) = 0;
-
-    // Split-phase encoder I/O, phase 1: issue the 0x46 write and return.
-    virtual void requestEncoder() = 0;
-
-    // Split-phase encoder I/O, phase 2: read back the 4-byte response.
-    virtual int32_t collectEncoder() const = 0;
-
-    // High-resolution encoder read in mm as float (used by velocity loop).
-    // readEncoderMmF is the generic name; concrete variants below for
-    // specific timing contexts.
-    virtual float readEncoderMmF(const RobotConfig& cfg) const = 0;
-
-    // Atomic single-shot encoder read (~8 ms, safe outside control loop).
-    virtual float readEncoderMmFAtomic(const RobotConfig& cfg) const = 0;
-
-    // Settle-only encoder read (~4 ms, safe inside fixed-rate control loop).
-    virtual float readEncoderMmFSettle(const RobotConfig& cfg) const = 0;
-
-    // Zero this motor's encoder accumulator (software offset reset).
-    virtual void resetEncoder() = 0;
-};
+// 039-001: IMotor is now an alias shim over the capability-typed interface.
+// The canonical drive-wheel interface lives at source/io/capability/IVelocityMotor.h.
+// This shim keeps every existing IMotor consumer (Motor, MockMotor,
+// MotorController, Robot, Hardware) compiling unchanged during the Phase A
+// transition; it is deleted in Phase F. The path-qualified include resolves in
+// both the host build (source/ on the path) and the firmware build (source/
+// added to INCLUDE_DIRS in CMakeLists.txt for 039-001).
+#include "io/capability/IVelocityMotor.h"
+using IMotor = IVelocityMotor;

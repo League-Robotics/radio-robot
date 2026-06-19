@@ -1,13 +1,14 @@
 ---
-id: "001"
-title: "Capability interface headers + IBusDiagnostics + seal MotorController vendor leaks"
-status: open
+id: '001'
+title: Capability interface headers + IBusDiagnostics + seal MotorController vendor
+  leaks
+status: done
 use-cases:
-  - SUC-039-001
-  - SUC-039-002
+- SUC-039-001
+- SUC-039-002
 depends-on: []
-github-issue: ""
-issue: ""
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -278,17 +279,17 @@ Remove from `tests/_infra/vendor_baseline.txt` the entries for `MotorController.
 
 ## Acceptance Criteria
 
-- [ ] `source/io/capability/` directory exists with exactly 8 headers (7 capability + `Pose2D.h`).
-- [ ] `source/io/capability/IBusDiagnostics.h` defines `errorCount()`, `reentryViolations()`, `lastError()`.
-- [ ] `source/hal/MotorBusDiagnostics.{h,cpp}` implement `IBusDiagnostics` by forwarding to `I2CBus`.
-- [ ] `MotorController.h` contains no `#include "MicroBit.h"` and no `I2CBus` forward declaration.
-- [ ] `MotorController.cpp` contains no `#include "I2CBus.h"`.
-- [ ] `NezhaHAL` exposes `IBusDiagnostics& busDiagnostics()`.
-- [ ] `main.cpp` calls `motorController.setBusDiagnostics(...)`.
-- [ ] `tests/_infra/vendor_baseline.txt` no longer contains `MotorController.h` or `MotorController.cpp` entries.
-- [ ] Vendor-confinement canary passes (run `uv run --with pytest python -m pytest tests/simulation/unit/test_vendor_confinement.py -q`).
-- [ ] Simulation tier green: `uv run --with pytest python -m pytest -q` — all tests pass, count >= 1957.
-- [ ] **Host build only** — no ARM toolchain required for this ticket.
+- [x] `source/io/capability/` directory exists with exactly 8 headers (7 capability + `Pose2D.h`).
+- [x] `source/io/capability/IBusDiagnostics.h` defines `errorCount()`, `reentryViolations()`, `lastError()`.
+- [x] `source/hal/MotorBusDiagnostics.{h,cpp}` implement `IBusDiagnostics` by forwarding to `I2CBus`.
+- [x] `MotorController.h` contains no `#include "MicroBit.h"` and no `I2CBus` forward declaration.
+- [x] `MotorController.cpp` contains no `#include "I2CBus.h"`.
+- [x] `NezhaHAL` exposes `IBusDiagnostics& busDiagnostics()`.
+- [x] `main.cpp` calls `motorController.setBusDiagnostics(...)`.
+- [x] `tests/_infra/vendor_baseline.txt` no longer contains `MotorController.h` or `MotorController.cpp` entries.
+- [x] Vendor-confinement canary passes (run `uv run --with pytest python -m pytest tests/simulation/unit/test_vendor_confinement.py -q`).
+- [x] Simulation tier green: `uv run --with pytest python -m pytest -q` — all tests pass, count >= 1957.
+- [x] **Host build only** — no ARM toolchain required for this ticket. (ARM `build.py --fw-only` also verified green as a hard gate per the execution instructions.)
 
 ## Testing Plan
 

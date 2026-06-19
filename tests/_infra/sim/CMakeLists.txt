@@ -38,6 +38,14 @@ add_library(firmware_host SHARED
     # BenchOtosSensor lives in source/hal/ (not mock/) so it is not globbed
     # by MOCK_SOURCES.  Add it explicitly so the host build includes it.
     "${REPO_ROOT}/source/hal/BenchOtosSensor.cpp"
+    # NOTE (039-001): MotorBusDiagnostics.cpp is deliberately NOT added to the
+    # host build. It is a REAL/firmware-only adapter (architecture §3 places it
+    # in io/real/) that forwards to I2CBus, whose definitions (I2CBus.cpp) are
+    # not compiled host-side — linking it here fails with undefined I2CBus
+    # symbols. The host build never constructs it (only NezhaHAL does, which is
+    # firmware-only); MockHAL leaves MotorController::_busDiag null, so the
+    # enc_wedged stats read zeros exactly as before. The firmware (CODAL) build
+    # picks it up via RECURSIVE_FIND_FILE over source/.
     "${CMAKE_SOURCE_DIR}/sim_api.cpp"
 )
 

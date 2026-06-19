@@ -21,7 +21,8 @@ NezhaHAL::NezhaHAL(MicroBitI2C& i2c, MicroBitIO& io, const RobotConfig& cfg)
       _line(_bus),
       _color(_bus),
       _portio(io),
-      _gripper(io.P1)
+      _gripper(io.P1),
+      _busDiag(_bus)                    // 039-001: bus-diagnostics adapter (0x10)
 #ifdef BENCH_OTOS_ENABLED
       ,
       _otosActive(&_otos),              // default: real sensor

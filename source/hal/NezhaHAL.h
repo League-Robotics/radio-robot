@@ -12,6 +12,7 @@
 #include "ColorSensor.h"
 #include "PortIO.h"
 #include "Servo.h"
+#include "MotorBusDiagnostics.h"
 #include "Config.h"
 
 /**
@@ -72,8 +73,13 @@ public:
     // In production (no BENCH_OTOS_ENABLED) this degenerates to a no-op.
     void tick(uint32_t now_ms, const MotorCommands& cmds) override;
 
-    // Expose the shared I2CBus for MotorController::setI2CBus().
+    // Expose the shared I2CBus for DebugCommandable (DBG I2C / I2CW / I2CR).
     I2CBus& bus() { return _bus; }
+
+    // Expose bus diagnostics as a capability for MotorController::setBusDiagnostics().
+    // Routes the motor-controller (0x10) error/reentry/lastErr counters upward
+    // without leaking I2CBus above the IO boundary (039-001).
+    IBusDiagnostics& busDiagnostics() { return _busDiag; }
 
 #ifdef BENCH_OTOS_ENABLED
     // --- Bench OTOS swap (sprint 031) --- [034-006: bench-build only]
@@ -109,6 +115,10 @@ private:
     ColorSensor      _color;
     PortIO           _portio;
     Servo            _gripper;
+
+    // Bus-diagnostics adapter (039-001) — constructed from _bus (declared above,
+    // so _bus is fully constructed first). Exposed via busDiagnostics().
+    MotorBusDiagnostics _busDiag;
 
 #ifdef BENCH_OTOS_ENABLED
     // Active OTOS pointer — initialized to &_otos in the constructor.
