@@ -345,7 +345,7 @@ static void handleZero(const ArgList& args, const char* corrId,
     // (N1 fix, sprint 030-001: replaces bare resetEncoderAccumulators() which
     // left state.inputs.encLMm/R stale, freezing encoder reads for ~target mm.)
     if (doEnc)  robot->resetEncoders();
-    if (doPose) robot->odometry.zero(robot->state.inputs);
+    if (doPose) robot->estimate.zero(robot->state.inputs);
     // ZERO T -- set timer baseline for HaltController TIME conditions.
     if (doT) {
         robot->haltController.setTimerBaseline(robot->systemTime());
@@ -722,7 +722,7 @@ static void handleSI(const ArgList& args, const char* corrId,
     int32_t x_mm   = args.args[0].ival;
     int32_t y_mm   = args.args[1].ival;
     int32_t h_cdeg = args.args[2].ival;
-    robot->odometry.setPose(robot->state.inputs, x_mm, y_mm, h_cdeg);
+    robot->estimate.resetPose(robot->state.inputs, x_mm, y_mm, h_cdeg);
     // Re-anchor the OTOS to the SAME world fix so its absolute position+heading
     // observations agree with the controller pose, instead of dragging the EKF
     // back toward the OTOS boot frame (the "starts right, then rotates away"

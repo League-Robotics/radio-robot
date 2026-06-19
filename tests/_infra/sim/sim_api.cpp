@@ -367,7 +367,7 @@ float sim_get_pose_h(void* h)
 // previously caused Mahalanobis-gate rejections for ~10 ticks post-D. (030-001)
 int sim_get_ekf_rej_count(void* h)
 {
-    return static_cast<SimHandle*>(h)->robot.odometry.ekfRejectCount();
+    return static_cast<SimHandle*>(h)->robot.estimate.ekfRejectCount();
 }
 
 // ---- State injection ----
@@ -778,7 +778,7 @@ float sim_get_fused_omega(void* h)
 // encoder cannot inject phantom omega into the fused state.
 void sim_set_enc_omega_healthy(void* h, int healthy)
 {
-    static_cast<SimHandle*>(h)->robot.odometry.setEncOmegaHealthy(healthy != 0);
+    static_cast<SimHandle*>(h)->robot.estimate.setEncOmegaHealthy(healthy != 0);
 }
 
 // N11: inject a dead-reckoning pose into state.inputs directly.
@@ -799,7 +799,7 @@ void sim_set_pose(void* h, float x, float y, float hrad)
 float sim_get_ekf_p_diag(void* h, int idx)
 {
     if (idx < 0 || idx > 4) return -1.0f;
-    return static_cast<SimHandle*>(h)->robot.odometry.ekfPDiag(idx);
+    return static_cast<SimHandle*>(h)->robot.estimate.ekfPDiag(idx);
 }
 
 // ---- Bench OTOS sim hooks (sprint 031-002) ----
@@ -876,14 +876,14 @@ int sim_get_wheel_wedged_r(void* h)
 // Returns 1 when Odometry::_wedgeActive is true (dTheta suppressed in predict).
 int sim_get_odometry_wedge_active(void* h)
 {
-    return static_cast<SimHandle*>(h)->robot.odometry.wedgeActive() ? 1 : 0;
+    return static_cast<SimHandle*>(h)->robot.estimate.wedgeActive() ? 1 : 0;
 }
 
 // Read the odometry encoder-omega health gate (033-003 / 033-005e).
 // Returns 1 when healthy (omega fused), 0 when suppressed (wedged).
 int sim_get_odometry_enc_omega_healthy(void* h)
 {
-    return static_cast<SimHandle*>(h)->robot.odometry.encOmegaHealthy() ? 1 : 0;
+    return static_cast<SimHandle*>(h)->robot.estimate.encOmegaHealthy() ? 1 : 0;
 }
 
 } // extern "C"

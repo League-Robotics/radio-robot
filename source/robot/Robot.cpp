@@ -39,7 +39,7 @@ static uint32_t system_timer_current_time() { return g_sim_now_ms; }
 //
 // Declaration order (from Robot.h):
 //   hal, config, state, motorL, motorR, otos, line, colorSensor, gripper, portio,
-//   motorController, odometry, motionController, portController, servoController
+//   motorController, estimate, motionController, portController, servoController
 //
 // hal must be declared (and therefore initialized) before the interface refs so
 // that hal.motorL() etc. are valid when the refs are bound.
@@ -57,8 +57,8 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       otos(hal.otos()), line(hal.lineSensor()),
       colorSensor(hal.colorSensor()), gripper(hal.gripper()), portio(hal.portIO()),
       motorController(motorL, motorR, config),
-      odometry(),
-      motionController(motorController, odometry, config),
+      estimate(),
+      motionController(motorController, estimate.odometry(), config),
       portController(portio),
       servoController(gripper)
 {
@@ -71,13 +71,13 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
     _motionCtx.mc    = &motionController;
     _motionCtx.robot = this;
     _motionCtx.queue = nullptr;
-    odometry.setCtx(&otos, &state.inputs);
+    estimate.setCtx(&otos, &state.inputs);
     // 041-002: the OTOS command handlers (OI/OZ/OR/OV/OL/OA/OP) moved out of
     // Odometry into the app-layer OtosCommands.  Bind the same IOdometer device
     // and cached HardwareState pointers the handlers previously reached through
     // Odometry::setCtx, so the verbs dispatch and behave identically.
     _otosCommands.setCtx(&otos, &state.inputs);
-    odometry.initEKF(config.ekfQxy, config.ekfQtheta,
+    estimate.initEKF(config.ekfQxy, config.ekfQtheta,
                      config.ekfQv, config.ekfQomega,
                      config.ekfROtosXy, config.ekfROtosV, config.ekfREncV,
                      config.ekfROtosTheta);
@@ -235,7 +235,7 @@ void Robot::otosCorrect(uint32_t now_ms)
 
     // Encoder-derived velocity is fused unconditionally in Odometry::predict()
     // every tick (033-003), so correctEKF() fuses only the OTOS observations.
-    odometry.correctEKF(state.inputs, p.x, p.y,
+    estimate.addOtosObservation(state.inputs, p.x, p.y,
                         p.h,
                         vel.v_mmps, vel.omega_rads);
 }
@@ -310,7 +310,7 @@ void Robot::resetEncoders()
 
     // 3. Re-baseline Odometry's encoder snapshot so predict() sees delta=0
     //    on the very next tick rather than (0 - _prevEncL) = large negative.
-    odometry.rebaselinePrev(0.0f, 0.0f);
+    estimate.rebaselinePrev(0.0f, 0.0f);
 }
 
 // ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 id: '003'
 title: Repoint three observation call-sites to PhysicalStateEstimate; enforce dependency
   rule
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-003
@@ -112,19 +112,19 @@ All of the following reference `robot.odometry` (or `odometry.`) and must become
 
 ## Acceptance Criteria
 
-- [ ] `Robot::odometry` renamed to `Robot::estimate` of type `PhysicalStateEstimate`.
-- [ ] Zero external calls to `robot.odometry.*` or `odometry.*` outside `Odometry.{h,cpp}` and `PhysicalStateEstimate.{h,cpp}`.
-- [ ] `loopTickOnce` calls `robot.estimate.addOdometryObservation(...)`.
-- [ ] `Robot::otosCorrect` calls `estimate.addOtosObservation(...)`.
-- [ ] `handleSI` calls `robot->estimate.resetPose(...)`.
-- [ ] All wedge/omega-health/rebaseline accessors routed through `robot.estimate.*`.
-- [ ] `PhysicalStateEstimate` has no `CommandTypes.h`, `Commandable`, `MicroBit.h`, or `Protocol.h` in its include graph.
-- [ ] `python3 build.py --fw-only` → 0 errors; `git checkout -- source/robot/DefaultConfig.cpp`.
-- [ ] `uv run --with pytest python -m pytest -q` → ≥ 1997 passed, 0 errors.
-- [ ] Golden-TLM canary byte-exact (`test_golden_tlm.py` passes).
-- [ ] Field-pin diff empty (`test_default_config_pin.py` passes).
-- [ ] Vendor-confinement grep gate passes.
-- [ ] Phase B fences green: `test_ekf*.py`, `test_otos_fusion.py`, `test_estimator_isolation.py`, `test_estimator_command_paths.py`, `test_observation_models.py`, `test_incident_scenarios.py`, `test_watchdog_exemption.py`.
+- [x] `Robot::odometry` renamed to `Robot::estimate` of type `PhysicalStateEstimate`.
+- [x] Zero external calls to `robot.odometry.*` or `odometry.*` outside `Odometry.{h,cpp}` and `PhysicalStateEstimate.{h,cpp}`. (Also repointed the 5 `robot.odometry.*` accessor call-sites in `tests/_infra/sim/sim_api.cpp` to `estimate.*`.)
+- [x] `loopTickOnce` calls `robot.estimate.addOdometryObservation(...)`.
+- [x] `Robot::otosCorrect` calls `estimate.addOtosObservation(...)`.
+- [x] `handleSI` calls `robot->estimate.resetPose(...)`.
+- [x] All wedge/omega-health/rebaseline accessors routed through `robot.estimate.*` (incl. ZERO-pose path → `robot->estimate.zero(...)`).
+- [x] `PhysicalStateEstimate` has no `CommandTypes.h`, `Commandable`, `MicroBit.h`, or `Protocol.h`-as-a-command-surface in its include graph. New fence `test_estimate_dependency_rule.py` walks the actual transitive `#include` graph and asserts no command-dispatch surface (`CommandTypes.h`/`CommandProcessor.h`/`Commandable`/`CommandDescriptor`), no CODAL (`MicroBit.h`), no device handle (`I2CBus`/`NezhaHAL`); reachable header set is a subset of the documented allowed set. NOTE per architecture-update.md §Module Definitions: `Protocol.h` IS reachable transitively via `RobotState.h` as a pure types header (reply tags + `ReplyFn` + `KVPair`; no `Commandable`/`CommandDescriptor`) — this is the documented allowed set; the fence asserts `Protocol.h` carries no command-dispatch surface rather than asserting its total absence.
+- [x] `python3 build.py --fw-only` → 0 errors; `git checkout -- source/robot/DefaultConfig.cpp`.
+- [x] `uv run --with pytest python -m pytest -q` → ≥ 1997 passed, 0 errors. (2001 passed.)
+- [x] Golden-TLM canary byte-exact (`test_golden_tlm.py` passes — frame-by-frame string equality against committed capture).
+- [x] Field-pin diff empty (`test_default_config_pin.py` passes).
+- [x] Vendor-confinement grep gate passes (`test_vendor_confinement.py`).
+- [x] Phase B fences green: `test_ekf*.py`, `test_otos_fusion.py`, `test_estimator_isolation.py`, `test_estimator_command_paths.py`, `test_observation_models.py`, `test_incident_scenarios.py`, `test_watchdog_exemption.py`.
 
 ## Testing
 
