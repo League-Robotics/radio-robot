@@ -1,17 +1,23 @@
 #pragma once
 #include <stdint.h>
-#include "../IPortIO.h"
+#include "io/capability/IPortIO.h"
+#include "PhysicsWorld.h"
 
 /**
- * MockPortIO — host-compilable IPortIO implementation for unit tests.
+ * SimPortIO — observation model for the four sensor/actuator port pins (040-002).
  *
- * Stores digital and analog state per port (1..4). Reads return last-written
- * value.  Out-of-range port: setDigital/setAnalog are no-ops; read returns -1.
+ * Implements IPortIO.  Holds a `const PhysicsWorld&` for forward-compat truth
+ * access; for now it reproduces the retired MockPortIO last-written-value store
+ * verbatim.  Out-of-range port: setDigital/setAnalog are no-ops; read returns -1.
+ *
+ * No CODAL dependency.  Compiles with plain clang++ -std=c++11 -I source.
  */
-class MockPortIO : public IPortIO {
+class SimPortIO : public IPortIO {
 public:
     static constexpr uint8_t kMinPort = 1;
     static constexpr uint8_t kMaxPort = 4;
+
+    explicit SimPortIO(const PhysicsWorld& plant) : _plant(plant) {}
 
     // IPortIO interface ------------------------------------------------------
     void setDigital(uint8_t port, bool high) override;
@@ -20,6 +26,8 @@ public:
     int  readAnalog(uint8_t port) const override;
 
 private:
+    const PhysicsWorld& _plant;     // forward-compat truth access
+
     // Indexed 0..3 for ports 1..4.
     bool     _digital[4] = {false, false, false, false};
     uint16_t _analog[4]  = {0, 0, 0, 0};
