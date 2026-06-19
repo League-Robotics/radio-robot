@@ -227,6 +227,16 @@ class Sim:
         lib.sim_set_otos_yaw_noise.argtypes = [ctypes.c_void_p, ctypes.c_float]
         lib.sim_set_otos_yaw_noise.restype = None
 
+        # sim_get_otos_x / _y / _h → float (SimOdometer accumulated odom pose).
+        # These read the observation model's reported pose (truth + configured
+        # error), used by the 040-005 observation-only isolation matrix.
+        lib.sim_get_otos_x.argtypes = [ctypes.c_void_p]
+        lib.sim_get_otos_x.restype = ctypes.c_float
+        lib.sim_get_otos_y.argtypes = [ctypes.c_void_p]
+        lib.sim_get_otos_y.restype = ctypes.c_float
+        lib.sim_get_otos_h.argtypes = [ctypes.c_void_p]
+        lib.sim_get_otos_h.restype = ctypes.c_float
+
         # sim_get_exact_pose_x / _y / _h → float
         lib.sim_get_exact_pose_x.argtypes = [ctypes.c_void_p]
         lib.sim_get_exact_pose_x.restype = ctypes.c_float
@@ -720,6 +730,72 @@ class Sim:
         "sensor is PERFECT" invariant.
         """
         self._lib.sim_set_perfect(self._h)
+
+    # ------------------------------------------------------------------
+    # OTOS observation model (SimOdometer) — 040-005 isolation matrix
+    # ------------------------------------------------------------------
+
+    def enable_otos_model(self) -> None:
+        """Enable the SimOdometer sim-model integrator (accumulated odom pose).
+
+        After this call sim_get_otos_* return the integrated OTOS reading
+        (true per-tick velocity arc ± configured noise) rather than 0.
+        """
+        self._lib.sim_enable_otos_model(self._h)
+
+    def set_otos_fusion(self, on: bool) -> None:
+        """Enable/disable firmware OTOS→EKF correction inside sim_tick().
+
+        Also marks the SimOdometer initialised (begin()) so otosCorrect()
+        does not early-return on its is_initialized() guard.
+        """
+        self._lib.sim_set_otos_fusion(self._h, ctypes.c_int(1 if on else 0))
+
+    def set_otos_pose(self, x: float, y: float, h_rad: float) -> None:
+        """Inject an OTOS pose reading into the SimOdometer (back-compat path).
+
+        The injected pose is returned by SimOdometer::readTransformed() on the
+        next otosCorrect() call.  Used to feed a deliberately bad measurement to
+        the EKF Mahalanobis gate (estimator-only isolation test).
+        """
+        self._lib.sim_set_otos_pose(
+            self._h,
+            ctypes.c_float(x),
+            ctypes.c_float(y),
+            ctypes.c_float(h_rad),
+        )
+
+    def set_otos_linear_noise(self, sigma_fraction: float) -> None:
+        """Set the SimOdometer linear-position noise sigma (fraction of arc)."""
+        self._lib.sim_set_otos_linear_noise(
+            self._h, ctypes.c_float(sigma_fraction))
+
+    def get_otos_pose(self) -> tuple[float, float, float]:
+        """Return (x_mm, y_mm, h_rad) from the SimOdometer accumulated odom pose.
+
+        This is the OTOS observation model's output (plant truth ± configured
+        sensor error), NOT the firmware's fused EKF estimate.  Zero until the
+        sim-model integrator is enabled via enable_otos_model().
+        """
+        x = float(self._lib.sim_get_otos_x(self._h))
+        y = float(self._lib.sim_get_otos_y(self._h))
+        h = float(self._lib.sim_get_otos_h(self._h))
+        return (x, y, h)
+
+    def get_ekf_rej_count(self) -> int:
+        """Return the cumulative EKF gate rejection count (all channels)."""
+        return int(self._lib.sim_get_ekf_rej_count(self._h))
+
+    def get_pose(self) -> tuple[float, float, float]:
+        """Return (x_mm, y_mm, h_rad) from the firmware's fused/DR estimate.
+
+        This is state.inputs.poseX/Y/Hrad (what Odometry writes), i.e. the
+        ESTIMATE — contrast with get_true_pose() (plant ground truth).
+        """
+        x = float(self._lib.sim_get_pose_x(self._h))
+        y = float(self._lib.sim_get_pose_y(self._h))
+        h = float(self._lib.sim_get_pose_h(self._h))
+        return (x, y, h)
 
     # ------------------------------------------------------------------
     # Bench OTOS sim hooks (031-002)

@@ -1,11 +1,15 @@
 ---
-id: "005"
-title: "Isolation test matrix — plant, observation, estimator, whole-robot"
-status: open
-use-cases: [SUC-001, SUC-002, SUC-003]
-depends-on: ["040-004"]
-github-issue: ""
-issue: "migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md"
+id: '005'
+title: "Isolation test matrix \u2014 plant, observation, estimator, whole-robot"
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+depends-on:
+- 040-004
+github-issue: ''
+issue: migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -112,16 +116,25 @@ Use `sim_field_profile` fixture for realistic slip conditions.
 
 ## Acceptance Criteria
 
-- [ ] `test_plant_correctness.py` exists and passes all four scenarios.
-- [ ] `test_observation_models.py` exists and passes all implemented scenarios
-      (frozen-encoder and yaw-drift deferred if ABI not added).
-- [ ] `test_estimator_isolation.py` exists and passes all four scenarios.
-- [ ] `test_whole_robot_plant_correctness.py` exists and passes all three
-      command scenarios plus estimation error gate.
-- [ ] `uv run --with pytest python -m pytest -q` ≥ 1957 + new tests passed, 0 errors.
-      (The floor grows from 1957 by however many new test cases are added.)
-- [ ] All existing canaries still green.
-- [ ] No source code changes (test files only).
+- [x] `test_plant_correctness.py` exists and passes all four scenarios.
+      (straight drive, spot turn, truth injection, sim_set_enc regression — 8 tests)
+- [x] `test_observation_models.py` exists and passes all implemented scenarios
+      (perfect odometer, read-failure dropout, frozen-encoder via offset=0 — 6
+      tests; yaw-drift deferred: no C ABI entry point for setYawDriftRadsPerSec).
+- [x] `test_estimator_isolation.py` exists and passes all four scenarios.
+      (clean drive, OTOS fusion, bad-OTOS rejection, recovery — 5 tests)
+- [x] `test_whole_robot_plant_correctness.py` exists and passes all three
+      command scenarios plus estimation error gate. (D/G/TURN + multi-step
+      D/TURN/G plan + 2-leg estimation-error gate — 5 tests)
+- [x] `uv run --with pytest python -m pytest -q` ≥ 1957 + new tests passed, 0 errors.
+      (1964 → 1997: +33 new tests, 0 errors. 24 matrix tests + 9 coverage-lever
+      tests — OTOS O*-command handlers and curved/asymmetric drives — pushing
+      simulatable line coverage 71.3% → 74.0%.)
+- [x] All existing canaries still green. (golden-TLM byte-exact, field-pin,
+      vendor grep gate, slip fences — all green.)
+- [x] No firmware/source code changes. Test files only, plus firmware.py ABI
+      wrappers for the already-existing sim_get_otos_*/enable_otos_model/
+      set_otos_fusion entry points (Test 2 needed them; no new C ABI added).
 
 ## Implementation Plan
 
