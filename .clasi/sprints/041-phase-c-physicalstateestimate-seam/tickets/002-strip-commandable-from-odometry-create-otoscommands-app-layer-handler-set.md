@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Strip Commandable from Odometry; create OtosCommands app-layer handler set
-status: open
+status: in-progress
 use-cases:
 - SUC-002
 - SUC-003
@@ -161,15 +161,15 @@ uv run --with pytest python -m pytest -q
 
 ## Acceptance Criteria
 
-- [ ] `Odometry` no longer inherits from `Commandable`; `getCommands()` is gone; `OdomCtx` is gone from `Odometry.h`; `CommandTypes.h` is not included from `Odometry.h`.
-- [ ] `source/app/OtosCommands.{h,cpp}` exist; handlers are verbatim from `Odometry.cpp`.
-- [ ] All seven verbs (`OI/OZ/OR/OV/OL/OA/OP`) respond correctly; `test_estimator_command_paths.py` passes green.
-- [ ] `Robot` owns `_otosCommands` value member; `buildCommandTable` aggregates it.
-- [ ] `source/state/PhysicalStateEstimate.h` transitive include set: no `CommandTypes.h`, no `Commandable`.
-- [ ] Vendor-confinement grep gate passes with `source/state/` in scope; baseline updated and committed.
-- [ ] `python3 build.py --fw-only` → 0 errors.
-- [ ] `uv run --with pytest python -m pytest -q` → ≥ 1997 passed, 0 errors.
-- [ ] Golden-TLM canary byte-exact; field-pin diff empty.
+- [x] `Odometry` no longer inherits from `Commandable`; `getCommands()` is gone; `OdomCtx` is gone from `Odometry.h`; `CommandTypes.h` is not included from `Odometry.h`.
+- [x] `source/app/OtosCommands.{h,cpp}` exist; handlers are verbatim from `Odometry.cpp`.
+- [x] All seven verbs (`OI/OZ/OR/OV/OL/OA/OP`) respond correctly; `test_estimator_command_paths.py` passes green.
+- [x] `Robot` owns `_otosCommands` value member; `buildCommandTable` aggregates it.
+- [x] `source/state/PhysicalStateEstimate.h` transitive include set: no `CommandTypes.h`, no `Commandable`.
+- [x] Vendor-confinement grep gate passes with `source/state/` in scope; baseline updated and committed.
+- [x] `python3 build.py --fw-only` → 0 errors.
+- [x] `uv run --with pytest python -m pytest -q` → ≥ 1997 passed, 0 errors.
+- [x] Golden-TLM canary byte-exact; field-pin diff empty.
 
 ## Testing
 

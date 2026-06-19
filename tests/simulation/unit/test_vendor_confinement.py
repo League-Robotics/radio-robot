@@ -1,8 +1,8 @@
 """Vendor-confinement grep-gate canary (038-004).
 
-Greps source/app/, source/control/, source/robot/, source/types/ for forbidden
-vendor tokens and asserts the hit-set has not grown vs the committed baseline
-tests/_infra/vendor_baseline.txt.
+Greps source/app/, source/control/, source/robot/, source/state/, source/types/
+for forbidden vendor tokens and asserts the hit-set has not grown vs the committed
+baseline tests/_infra/vendor_baseline.txt.
 
 CODAL-only files excluded from the host build are skipped — their vendor
 includes are intentional device-layer references, not leaks above io/.
@@ -27,7 +27,10 @@ REPO_ROOT = pathlib.Path(__file__).parents[3]
 SOURCE_DIR = REPO_ROOT / "source"
 BASELINE_FILE = REPO_ROOT / "tests" / "_infra" / "vendor_baseline.txt"
 
-INSPECT_DIRS = ["app", "control", "robot", "types"]
+# 041-002 (Phase C): source/state/ added to scope. After Commandable is stripped
+# from Odometry, the estimator layer (PhysicalStateEstimate, EKF) is dependency-
+# clean and must stay vendor-free — no MicroBit.h / I2CBus / microbit_random.
+INSPECT_DIRS = ["app", "control", "robot", "state", "types"]
 
 # CODAL-only files excluded from the host build — vendor deps here are expected.
 CODAL_ONLY = {

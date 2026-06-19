@@ -9,6 +9,7 @@
 #include "IPortIO.h"
 #include "MotorController.h"
 #include "Odometry.h"
+#include "OtosCommands.h"
 #include "MotionController.h"
 #include "PortController.h"
 #include "ServoController.h"
@@ -83,6 +84,12 @@ struct Robot {
     PortController      portController;    // (portio)
     ServoController     servoController;   // (gripper)
     HaltController      haltController;    // user-facing named stop-condition registry
+
+    // OtosCommands — app-layer Commandable for the seven OTOS-tuning verbs
+    // (OI/OZ/OR/OV/OL/OA/OP), moved out of Odometry in 041-002.  No construction
+    // dependency on other members; wired post-construction via setCtx() in the
+    // Robot constructor.  buildCommandTable aggregates its getCommands().
+    OtosCommands        _otosCommands;     // default ctor; setCtx()'d in constructor
 
     // ---- Constructor ----
     explicit Robot(Hardware& hal, const RobotConfig& cfg);

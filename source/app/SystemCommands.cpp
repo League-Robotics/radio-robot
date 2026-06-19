@@ -1102,7 +1102,10 @@ std::vector<CommandDescriptor> Robot::buildCommandTable(
     };
     // Sprint 026-002: replaced motionController.getCommands() with getMotionCommands().
     append(getMotionCommands(&_motionCtx));
-    append(odometry.getCommands());
+    // 041-002: the seven OTOS-tuning verbs moved out of Odometry (Commandable
+    // stripped) into the app-layer OtosCommands.  Aggregate them here in place
+    // of the old odometry.getCommands() so dispatch is unchanged.
+    append(_otosCommands.getCommands());
     append(portController.getCommands());
     append(servoController.getCommands());
     if (dbg) append(dbg->getCommands());

@@ -72,6 +72,11 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
     _motionCtx.robot = this;
     _motionCtx.queue = nullptr;
     odometry.setCtx(&otos, &state.inputs);
+    // 041-002: the OTOS command handlers (OI/OZ/OR/OV/OL/OA/OP) moved out of
+    // Odometry into the app-layer OtosCommands.  Bind the same IOdometer device
+    // and cached HardwareState pointers the handlers previously reached through
+    // Odometry::setCtx, so the verbs dispatch and behave identically.
+    _otosCommands.setCtx(&otos, &state.inputs);
     odometry.initEKF(config.ekfQxy, config.ekfQtheta,
                      config.ekfQv, config.ekfQomega,
                      config.ekfROtosXy, config.ekfROtosV, config.ekfREncV,
