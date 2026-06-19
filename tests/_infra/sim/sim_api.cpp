@@ -155,6 +155,17 @@ struct SimHandle {
         _ts.activeFn    = storeReply;
         _ts.activeTlmFn = storeReply;
         _ts.activeCtx   = &replyStore;
+
+        // (045-002) Wire the wedge-EVT sink — mirrors main.cpp:229
+        //   robot.motorController.setEvtSink(&sched.activeFn, &sched.activeCtx);
+        // In the host sim, _ts plays the role of LoopScheduler's per-tick state,
+        // and its activeFn/activeCtx are refreshed to storeReply/&replyStore at
+        // the top of every sim_tick() / sim_command(). Binding the MotorController's
+        // EVT sink to &_ts.activeFn / &_ts.activeCtx lets EVT enc_wedged flow into
+        // replyStore (read by sim_get_async_evts), exactly as the firmware routes
+        // it through sched.activeFn/Ctx. Without this the wedge latch still sets
+        // (sim_get_wheel_wedged_*) but the EVT line is never emitted in sim.
+        robot.motorController.setEvtSink(&_ts.activeFn, &_ts.activeCtx);
     }
 };
 

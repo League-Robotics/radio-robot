@@ -1,11 +1,14 @@
 ---
-id: "004"
-title: "EKF gating, Odometry wedge-suppress, PhysicsWorld slip paths, SystemCommands and OtosCommands coverage"
-status: open
-use-cases: ["SUC-005"]
-depends-on: ["001"]
-github-issue: ""
-issue: ""
+id: '004'
+title: EKF gating, Odometry wedge-suppress, PhysicsWorld slip paths, SystemCommands
+  and OtosCommands coverage
+status: in-progress
+use-cases:
+- SUC-005
+depends-on:
+- '001'
+github-issue: ''
+issue: ''
 completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->

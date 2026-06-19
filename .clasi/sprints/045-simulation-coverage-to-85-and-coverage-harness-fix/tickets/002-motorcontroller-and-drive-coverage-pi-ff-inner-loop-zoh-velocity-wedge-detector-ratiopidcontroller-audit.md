@@ -1,11 +1,14 @@
 ---
-id: "002"
-title: "MotorController and Drive coverage: PI+FF inner loop, ZOH velocity, wedge-detector, RatioPidController audit"
-status: open
-use-cases: ["SUC-002"]
-depends-on: ["001"]
-github-issue: ""
-issue: ""
+id: '002'
+title: 'MotorController and Drive coverage: PI+FF inner loop, ZOH velocity, wedge-detector,
+  RatioPidController audit'
+status: in-progress
+use-cases:
+- SUC-002
+depends-on:
+- '001'
+github-issue: ''
+issue: ''
 completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -45,17 +48,17 @@ just to hit lines — if it's dead code in the firmware, document it as such.
 
 ## Acceptance Criteria
 
-- [ ] New file `tests/simulation/unit/test_motor_controller_coverage.py` created.
-- [ ] Wedge-detector EVT: test sends motion command, holds encoder constant via `sim_set_enc_l`/`sim_set_enc_r` for `kWedgeThreshold` ticks (10 consecutive), and observes `EVT enc_wedged` in the async events buffer (`sim_get_async_evts`).
-- [ ] Arming grace: test confirms no `EVT enc_wedged` fires when encoder is held constant before the wheel has moved (command just started, zero travel since start).
-- [ ] Latch re-arm: test confirms `EVT enc_wedged` fires once per episode; after encoder moves again, a second stuck episode produces a second EVT.
-- [ ] ZOH path: test exercises `controlTick` with `refreshedWheel=1` (left) and `refreshedWheel=2` (right) separately (via sim tick with alternating encoder updates or direct tick manipulation if available).
-- [ ] `startDriveClean` vs `startDrive` distinction: streaming command (`S`) exercises `startDrive`; bounded command (`D`) exercises `startDriveClean`. Both paths covered.
-- [ ] `updateVelGains`: test issues `SET vel.kP=0.1` (or similar) and confirms no crash / the gains are accepted.
-- [ ] Drive.cpp paths: test exercises Drive-level command dispatch (at minimum `D`, `T`, and a cancellation path).
-- [ ] RatioPidController audit: programmer confirms dead code in `MotorController.cpp` (grep for any call to `_ratioPid` or similar); result documented in ticket closing comment. If dead, update `coverage.sh` exclusion set comment. If alive, write a test.
-- [ ] All existing tests still pass: `uv run --with pytest python -m pytest tests/simulation -q` exits 0.
-- [ ] Golden-TLM, field-pin, vendor grep gates all green.
+- [x] New file `tests/simulation/unit/test_motor_controller_coverage.py` created.
+- [x] Wedge-detector EVT: test freezes a wheel's encoder mid-drive (`sim_set_motor_offset(side,0)`) for `kWedgeThreshold`+ ticks and observes `EVT enc_wedged` in `sim_get_async_evts`. (Required wiring the wedge EVT sink in `sim_api.cpp` — see audit note below; previously the latch set but no EVT was emitted in sim because `setEvtSink` was only called in `main.cpp`.)
+- [x] Arming grace: `test_wedge_arming_grace_suppresses_premature_fire` confirms no `EVT enc_wedged` fires when the encoder is frozen before the wheel ever moved.
+- [x] Latch re-arm: `test_wedge_relatch_after_recovery` confirms one EVT per episode; after the encoder moves again, a second stuck episode produces a second EVT.
+- [~] ZOH path: `refreshedWheel=1`/`=2` are DEAD-IN-SIM — `Drive::periodic` always calls `controlTick(..., driving?3:0)`. The both-wheel ZOH branch (`==3`) and idle (`==0`) are exercised. Documented in the test-file docstring; the single-wheel branches are not test-additively reachable.
+- [~] `startDriveClean` vs `startDrive`: NO live callers in `source/` — the motion path runs `BodyVelocityController::tick()` → `MotorController::setTarget`, not `startDrive*`. These legacy seeding methods are unreachable through the sim. Documented in the test-file docstring.
+- [x] `updateVelGains`: `test_set_vel_gain_updates_running_controllers` issues `SET vel.kP=0.1`, confirms OK + GET reflects it, and that a subsequent drive produces finite PWM.
+- [x] Drive.cpp paths: tests exercise `VW`, `S`, `D`, `X` dispatch and the driving-vs-idle `periodic()` branches; the wedge-push branch (`anyWedged → setEncOmegaHealthy(false)`) is exercised by the wedge tests.
+- [x] RatioPidController audit: CONFIRMED DEAD CODE. Repo-wide grep finds no call site (only `pid.*` config keys, the class .h/.cpp, and the removal note in `MotorController.h`). Added to the CODAL/dead-code exclusion set in `coverage.sh` (per OQ-1 (a)).
+- [x] All existing tests still pass: `uv run --with pytest python -m pytest tests/simulation -q` → 2023 passed (was 2015; +8).
+- [x] Golden-TLM, field-pin, vendor grep gates all green.
 
 ## Implementation Plan
 

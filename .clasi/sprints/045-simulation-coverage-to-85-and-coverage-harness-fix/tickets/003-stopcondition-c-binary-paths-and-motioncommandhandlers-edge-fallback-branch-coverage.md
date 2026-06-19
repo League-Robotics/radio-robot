@@ -1,11 +1,15 @@
 ---
-id: "003"
-title: "StopCondition C++ binary paths and MotionCommandHandlers edge/fallback branch coverage"
-status: open
-use-cases: ["SUC-003", "SUC-004"]
-depends-on: ["001"]
-github-issue: ""
-issue: ""
+id: '003'
+title: StopCondition C++ binary paths and MotionCommandHandlers edge/fallback branch
+  coverage
+status: in-progress
+use-cases:
+- SUC-003
+- SUC-004
+depends-on:
+- '001'
+github-issue: ''
+issue: ''
 completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->

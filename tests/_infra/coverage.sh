@@ -33,7 +33,15 @@
 # Note: source/app/SystemCommands.cpp has mixed coverage — testable paths are
 # included in the simulatable denominator (only the RESET/#ifndef HOST_BUILD
 # paths are unreachable, but file-granularity exclusion cannot split them).
-# RatioPidController.cpp may be added here if confirmed CODAL-only (TBD).
+#
+# (045-002) source/control/RatioPidController.cpp — CONFIRMED DEAD CODE in the
+#   live control loop and excluded from the simulatable denominator.  N13/030-010
+#   removed RatioPidController::update() from MotorController::controlTick (the
+#   sync-gain coupling replaced it).  A repo-wide grep finds NO call site: the
+#   only references are the pid.* config keys in ConfigRegistry.cpp (kept for
+#   host SET/GET compatibility), the class's own .h/.cpp, and the removal note in
+#   MotorController.h.  It is therefore unreachable through the sim and excluded
+#   here rather than covered by a synthetic isolation test (per ticket OQ-1 (a)).
 
 set -euo pipefail
 
@@ -125,9 +133,10 @@ uv run --with gcovr gcovr \
 # Step 5b: Simulatable-code coverage (CODAL-only files excluded)
 # ---------------------------------------------------------------------------
 echo ""
-echo "=== Simulatable-code coverage (CODAL-only files excluded) ==="
+echo "=== Simulatable-code coverage (CODAL-only / dead-code files excluded) ==="
 echo "Excluded: DebugCommandable.cpp, PortController.cpp, ServoController.cpp,"
-echo "          io/real/*, WedgeTest.cpp, LoopScheduler.cpp, main.cpp, BenchOtosSensor.cpp"
+echo "          io/real/*, WedgeTest.cpp, LoopScheduler.cpp, main.cpp, BenchOtosSensor.cpp,"
+echo "          RatioPidController.cpp (045-002: confirmed dead code, no call sites)"
 echo ""
 
 SIM_SUMMARY="$(uv run --with gcovr gcovr \
@@ -136,6 +145,7 @@ SIM_SUMMARY="$(uv run --with gcovr gcovr \
     --exclude 'source/app/DebugCommandable\.cpp' \
     --exclude 'source/control/PortController\.cpp' \
     --exclude 'source/control/ServoController\.cpp' \
+    --exclude 'source/control/RatioPidController\.cpp' \
     --exclude 'source/io/real/.*' \
     --exclude 'source/app/WedgeTest\.cpp' \
     --exclude 'source/control/LoopScheduler\.cpp' \
