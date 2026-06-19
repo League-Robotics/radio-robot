@@ -1,0 +1,11 @@
+source/app/DebugCommandable.cpp:22: // LoopScheduler, I2CBus, WedgeTest, and NezhaHAL include CODAL/MicroBit
+source/app/DebugCommandable.cpp:27: #include "I2CBus.h"
+source/app/DebugCommandable.h:14: I2CBus*        bus;
+source/app/DebugCommandable.h:6: class I2CBus;
+source/control/MotorController.cpp:2: #include "I2CBus.h"
+source/control/MotorController.h:103: * setI2CBus — bind the I2CBus instance so controlTick() can read per-device
+source/control/MotorController.h:107: void setI2CBus(I2CBus* bus) { _i2cBus = bus; }
+source/control/MotorController.h:13: class I2CBus;
+source/control/MotorController.h:225: // Optional I2CBus pointer for stats in EVT body.
+source/control/MotorController.h:226: I2CBus*  _i2cBus;
+source/control/MotorController.h:3: #include "MicroBit.h"

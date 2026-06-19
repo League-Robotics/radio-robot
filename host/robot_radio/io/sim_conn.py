@@ -35,7 +35,7 @@ from typing import Any
 _LIB_NAME = "libfirmware_host.dylib" if sys.platform == "darwin" else "libfirmware_host.so"
 _HERE = pathlib.Path(__file__).parent
 # Resolve the dylib relative to this file: host/robot_radio/io/ -> ../../.. = repo root
-_DEFAULT_LIB = (_HERE / "../../../tests/sim/build" / _LIB_NAME).resolve()
+_DEFAULT_LIB = (_HERE / "../../../tests/_infra/sim/build" / _LIB_NAME).resolve()
 
 # Default tick step: 24 ms matches the conftest fixture and is fine for the
 # 25 ms control period.  Smaller = smoother state log, more CPU.
@@ -101,8 +101,8 @@ class SimConnection:
         if not self._lib_path.exists():
             return {
                 "error": f"Sim library not found at {self._lib_path}. "
-                         f"Run: cmake -S tests/sim -B tests/sim/build && "
-                         f"cmake --build tests/sim/build",
+                         f"Run: cmake -S tests/_infra/sim -B tests/_infra/sim/build && "
+                         f"cmake --build tests/_infra/sim/build",
                 "lib_path": str(self._lib_path),
             }
 
