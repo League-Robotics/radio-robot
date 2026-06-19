@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Retire Mock* files and delete obsolete sim objects
-status: in-progress
+status: done
 use-cases:
 - SUC-007
 depends-on:
