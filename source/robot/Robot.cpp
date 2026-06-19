@@ -118,7 +118,7 @@ void Robot::otosCorrect(uint32_t now_ms)
     // pointing to the real chip.  This is the ONLY place otosCorrect() diverges
     // from the `otos` ref; all other Robot read sites keep the cached ref.
     // (sprint 031-002 reference-reseating fix)
-    IOtosSensor& activeOtos = hal.otos();
+    IOdometer& activeOtos = hal.otos();
 
     if (!activeOtos.is_initialized()) return;
 
@@ -168,7 +168,7 @@ void Robot::otosCorrect(uint32_t now_ms)
     float headingRad = state.inputs.poseHrad;
 
     OtosPose p{0.0f, 0.0f, 0.0f};
-    bool poseOk = readable && activeOtos.readTransformed(config, p, headingRad);
+    bool poseOk = readable && activeOtos.readTransformed(p, headingRad);
 
     // Telemetry: expose the raw OTOS pose whenever a fresh reading exists (even
     // degraded).  otos.valid drives the TLM otos= freshness gate; it means "a
@@ -215,8 +215,8 @@ void Robot::otosCorrect(uint32_t now_ms)
 
     // Read OTOS velocity and acceleration; store acceleration for telemetry.
     OtosVelocity vel;
-    bool velOk = activeOtos.readVelocityTransformed(config, vel, headingRad);
-    OtosAccel    acc = activeOtos.readAccelTransformed(config);
+    bool velOk = activeOtos.readVelocityTransformed(vel, headingRad);
+    OtosAccel    acc = activeOtos.readAccelTransformed();
     state.inputs.otosAccelX = acc.ax_mmps2;
     state.inputs.otosAccelY = acc.ay_mmps2;
 

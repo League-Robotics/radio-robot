@@ -67,7 +67,7 @@ public:
     ILineSensor&  lineSensor()  override { return _line; }
     IColorSensor& colorSensor() override { return _color; }
     // Active OTOS — real mock sensor, or the bench sensor when bench mode is on.
-    IOtosSensor&  otos()        override { return *_otosActive; }
+    IOdometer&    otos()        override { return *_otosActive; }
     IPortIO&      portIO()      override { return _portIO; }
     IPositionMotor& gripper()   override { return _servo; }
 
@@ -101,11 +101,11 @@ public:
     // then runs the SAME BenchOtosSensor the firmware runs on hardware.
     void setOtosBench(bool on) override {
         _otosActive = on
-            ? static_cast<IOtosSensor*>(&_benchOtos)
-            : static_cast<IOtosSensor*>(&_otos);
+            ? static_cast<IOdometer*>(&_benchOtos)
+            : static_cast<IOdometer*>(&_otos);
     }
     bool isBenchMode() const override {
-        return _otosActive == static_cast<const IOtosSensor*>(&_benchOtos);
+        return _otosActive == static_cast<const IOdometer*>(&_benchOtos);
     }
 
 private:
@@ -126,5 +126,5 @@ private:
     ExactPoseTracker _exactPose;
     float            _trackwidthMm = 0.0f;
     // Active OTOS pointer — _otos (real) by default; _benchOtos when bench mode.
-    IOtosSensor*     _otosActive   = &_otos;
+    IOdometer*       _otosActive   = &_otos;
 };

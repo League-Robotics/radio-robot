@@ -26,11 +26,11 @@ public:
     // N9 (030-008): readTransformed / readVelocityTransformed now return bool.
     // Returns false (and fills {0,0,0}/{0,0}) when read failure is injected via
     // setReadFailure(true); callers must check the return and skip fusion.
-    bool readTransformed(const RobotConfig& cfg, OtosPose& poseOut,
+    bool readTransformed(OtosPose& poseOut,
                          float headingRad = 0.0f) const override;
-    bool readVelocityTransformed(const RobotConfig& cfg, OtosVelocity& velOut,
+    bool readVelocityTransformed(OtosVelocity& velOut,
                                  float headingRad = 0.0f) const override;
-    OtosAccel readAccelTransformed(const RobotConfig& cfg) const override;
+    OtosAccel readAccelTransformed() const override;
 
     // D9: STATUS register and lastReadOk.
     // Mock returns failure when _readFailure is set; otherwise success.

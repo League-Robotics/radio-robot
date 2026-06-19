@@ -727,7 +727,7 @@ static void handleSI(const ArgList& args, const char* corrId,
     // observations agree with the controller pose, instead of dragging the EKF
     // back toward the OTOS boot frame (the "starts right, then rotates away"
     // bug).  h_cdeg -> rad: pi/18000 = 1.74532925e-4.
-    robot->otos.setWorldPose(robot->config, (float)x_mm, (float)y_mm,
+    robot->otos.setWorldPose((float)x_mm, (float)y_mm,
                              (float)h_cdeg * 1.74532925e-4f);
     char body[48];
     snprintf(body, sizeof(body), "x=%d y=%d h=%d", (int)x_mm, (int)y_mm, (int)h_cdeg);

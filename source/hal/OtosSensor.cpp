@@ -103,7 +103,7 @@ void OtosSensor::resetTracking()
     writeReg8(REG_RESET, 0x01);
 }
 
-bool OtosSensor::readTransformed(const RobotConfig& cfg, OtosPose& poseOut,
+bool OtosSensor::readTransformed(OtosPose& poseOut,
                                   float headingRad) const
 {
     if (!is_initialized()) {
@@ -129,13 +129,13 @@ bool OtosSensor::readTransformed(const RobotConfig& cfg, OtosPose& poseOut,
     float yF = static_cast<float>(ry) * kPosMmPerLsb;
     float hF = static_cast<float>(rh) * kHdgRadPerLsb;
 
-    if (cfg.odomUpsideDown) {
+    if (_cfg.odomUpsideDown) {
         xF = -xF;
         yF = -yF;
         hF = -hF;
     }
 
-    float angRad = -cfg.odomYawDeg * (3.14159265f / 180.0f);
+    float angRad = -_cfg.odomYawDeg * (3.14159265f / 180.0f);
     float c = cosf(angRad);
     float s = sinf(angRad);
 
@@ -186,7 +186,7 @@ bool OtosSensor::readTransformed(const RobotConfig& cfg, OtosPose& poseOut,
 //   channel of the velocity register (deg/s → rad/s), sign-preserved.
 // ---------------------------------------------------------------------------
 
-bool OtosSensor::readVelocityTransformed(const RobotConfig& cfg, OtosVelocity& velOut,
+bool OtosSensor::readVelocityTransformed(OtosVelocity& velOut,
                                           float /*headingRad*/) const
 {
     if (!is_initialized()) {
@@ -212,13 +212,13 @@ bool OtosSensor::readVelocityTransformed(const RobotConfig& cfg, OtosVelocity& v
     float vyF = static_cast<float>(rvy) * kVelMmpsPerLsb;
     float whF = static_cast<float>(rvh) * kOmegaRadpsPerLsb;
 
-    if (cfg.odomUpsideDown) {
+    if (_cfg.odomUpsideDown) {
         vxF = -vxF;
         vyF = -vyF;
         whF = -whF;
     }
 
-    float angRad = -cfg.odomYawDeg * (3.14159265f / 180.0f);
+    float angRad = -_cfg.odomYawDeg * (3.14159265f / 180.0f);
     float c = cosf(angRad);
     float s = sinf(angRad);
 
@@ -232,7 +232,7 @@ bool OtosSensor::readVelocityTransformed(const RobotConfig& cfg, OtosVelocity& v
     return true;
 }
 
-OtosAccel OtosSensor::readAccelTransformed(const RobotConfig& cfg) const
+OtosAccel OtosSensor::readAccelTransformed() const
 {
     if (!is_initialized()) return {0.0f, 0.0f};
 
@@ -247,12 +247,12 @@ OtosAccel OtosSensor::readAccelTransformed(const RobotConfig& cfg) const
     // rah (angular acceleration) is discarded — only linear acceleration is used.
     (void)rah;
 
-    if (cfg.odomUpsideDown) {
+    if (_cfg.odomUpsideDown) {
         axF = -axF;
         ayF = -ayF;
     }
 
-    float angRad = -cfg.odomYawDeg * (3.14159265f / 180.0f);
+    float angRad = -_cfg.odomYawDeg * (3.14159265f / 180.0f);
     float c = cosf(angRad);
     float s = sinf(angRad);
 
@@ -274,8 +274,7 @@ void OtosSensor::setPositionRaw(int16_t x, int16_t y, int16_t h)
     writeXYH(REG_POSITION_XL, x, y, h);
 }
 
-void OtosSensor::setWorldPose(const RobotConfig& cfg,
-                              float x_mm, float y_mm, float h_rad)
+void OtosSensor::setWorldPose(float x_mm, float y_mm, float h_rad)
 {
     // Exact inverse of readTransformed(): find the chip-frame raw pose that reads
     // back as world (x_mm, y_mm, h_rad).  Used to anchor the OTOS to a camera fix
@@ -294,7 +293,7 @@ void OtosSensor::setWorldPose(const RobotConfig& cfg,
     float px = x_mm;
     float py = y_mm;
 
-    float angRad = -cfg.odomYawDeg * (3.14159265f / 180.0f);
+    float angRad = -_cfg.odomYawDeg * (3.14159265f / 180.0f);
     float c = cosf(angRad);
     float s = sinf(angRad);
     // (xF,yF) = R(-angRad) * (px,py)
@@ -302,7 +301,7 @@ void OtosSensor::setWorldPose(const RobotConfig& cfg,
     float yF = -s * px + c * py;
     float hF = h_rad;
 
-    if (cfg.odomUpsideDown) { xF = -xF; yF = -yF; hF = -hF; }
+    if (_cfg.odomUpsideDown) { xF = -xF; yF = -yF; hF = -hF; }
 
     constexpr float kPosMmPerLsb  = 0.305f;
     constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);

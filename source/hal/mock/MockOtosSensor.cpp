@@ -12,7 +12,7 @@ static float otosGaussian(std::mt19937& rng, float sigma) {
 }
 #endif
 
-bool MockOtosSensor::readTransformed(const RobotConfig& /*cfg*/, OtosPose& poseOut,
+bool MockOtosSensor::readTransformed(OtosPose& poseOut,
                                       float /*headingRad*/) const {
     if (_readFailure) {
         poseOut = {0.0f, 0.0f, 0.0f};
@@ -30,7 +30,7 @@ bool MockOtosSensor::readTransformed(const RobotConfig& /*cfg*/, OtosPose& poseO
     return true;
 }
 
-bool MockOtosSensor::readVelocityTransformed(const RobotConfig& /*cfg*/, OtosVelocity& velOut,
+bool MockOtosSensor::readVelocityTransformed(OtosVelocity& velOut,
                                               float /*headingRad*/) const {
     if (_readFailure) {
         velOut = {0.0f, 0.0f};
@@ -40,7 +40,7 @@ bool MockOtosSensor::readVelocityTransformed(const RobotConfig& /*cfg*/, OtosVel
     return true;
 }
 
-OtosAccel MockOtosSensor::readAccelTransformed(const RobotConfig& /*cfg*/) const {
+OtosAccel MockOtosSensor::readAccelTransformed() const {
     return {_accAx, _accAy};
 }
 

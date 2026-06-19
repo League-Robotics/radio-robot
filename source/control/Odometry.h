@@ -40,7 +40,7 @@ class Odometry;
  */
 struct OdomCtx {
     Odometry*            odo;
-    IOtosSensor*         otos;
+    IOdometer*           otos;
     const HardwareState* hwState;  // cached OTOS pose for OP read (no device call)
 };
 
@@ -84,7 +84,7 @@ public:
     // Bind the OtosSensor and cached HardwareState so command handlers can reach them.
     // Called by Robot after construction.  hwState may be nullptr in unit tests
     // that do not exercise OP; handleOP checks for null before dereferencing.
-    void setCtx(IOtosSensor* otos, const HardwareState* hwState = nullptr) {
+    void setCtx(IOdometer* otos, const HardwareState* hwState = nullptr) {
         _odomCtx.odo     = this;
         _odomCtx.otos    = otos;
         _odomCtx.hwState = hwState;

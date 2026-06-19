@@ -59,7 +59,7 @@ void MockHAL::advance(uint32_t now_ms, const MotorCommands* cmds) {
         // hardware.  otos() returns this sensor while bench mode is on, so
         // Robot::otosCorrect() fuses it into the EKF exactly as on the bench.
         if (cmds != nullptr && _trackwidthMm > 0.0f &&
-                _otosActive == static_cast<IOtosSensor*>(&_benchOtos)) {
+                _otosActive == static_cast<IOdometer*>(&_benchOtos)) {
             _benchOtos.tick(cmds->tgtLMms, cmds->tgtRMms, _trackwidthMm, udt);
         }
 

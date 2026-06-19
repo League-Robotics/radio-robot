@@ -51,10 +51,10 @@ public:
     IColorSensor& colorSensor() override { return _color; }
 #ifdef BENCH_OTOS_ENABLED
     // otos() returns the ACTIVE sensor — real or bench depending on _otosActive.
-    IOtosSensor&  otos()        override { return *_otosActive; }
+    IOdometer&    otos()        override { return *_otosActive; }
 #else
     // Production: no bench sensor; otos() always returns the real sensor.
-    IOtosSensor&  otos()        override { return _otos; }
+    IOdometer&    otos()        override { return _otos; }
 #endif
     IPortIO&      portIO()      override { return _portio; }
     IPositionMotor& gripper()   override { return _gripper; }
@@ -93,8 +93,8 @@ public:
     // (034-003).
     void setOtosBench(bool on) override {
         _otosActive = on
-            ? static_cast<IOtosSensor*>(&_benchOtos)
-            : static_cast<IOtosSensor*>(&_otos);
+            ? static_cast<IOdometer*>(&_benchOtos)
+            : static_cast<IOdometer*>(&_otos);
     }
 
     // Direct accessor to the BenchOtosSensor for tick() calls and noise tuning.
@@ -103,7 +103,7 @@ public:
     // Returns true when the bench sensor is currently active.  Overrides
     // Hardware::isBenchMode (034-003).
     bool isBenchMode() const override {
-        return _otosActive == static_cast<const IOtosSensor*>(&_benchOtos);
+        return _otosActive == static_cast<const IOdometer*>(&_benchOtos);
     }
 #endif // BENCH_OTOS_ENABLED
 
@@ -128,7 +128,7 @@ private:
     // Active OTOS pointer — initialized to &_otos in the constructor.
     // Must be declared AFTER both _otos and _benchOtos so those members
     // are fully constructed before _otosActive is assigned.
-    IOtosSensor*     _otosActive;
+    IOdometer*       _otosActive;
 
     // Bench-tick state (034-001): trackwidth cached from RobotConfig at
     // construction; last-tick timestamp for signed-delta dt computation

@@ -52,14 +52,14 @@ public:
     // headingRad: current robot heading (radians) used to rotate the mounting offset
     //   into the world frame.  No-op when odomOffX/Y are both zero (as in tovez.json).
     // N9 (030-008): callers MUST check the return value and skip fusion on false.
-    bool readTransformed(const RobotConfig& cfg, OtosPose& poseOut,
+    bool readTransformed(OtosPose& poseOut,
                          float headingRad = 0.0f) const override;
 
     // Read velocity registers (REG_VELOCITY_XL = 0x26), apply the same flip
     // and mounting rotation as readTransformed().  Writes to velOut.
     // Returns true on I2C success; false if the burst read failed (velOut = {0,0}).
     // headingRad: current robot heading (see readTransformed comment).
-    bool readVelocityTransformed(const RobotConfig& cfg, OtosVelocity& velOut,
+    bool readVelocityTransformed(OtosVelocity& velOut,
                                  float headingRad = 0.0f) const override;
 
     // Read the OTOS STATUS register (0x1F) via readReg8.
@@ -73,12 +73,11 @@ public:
 
     // Read acceleration registers (REG_ACCELERATION_XL = 0x2C), apply the same
     // flip and mounting rotation.  Returns {0,0} if not initialized.
-    OtosAccel readAccelTransformed(const RobotConfig& cfg) const override;
+    OtosAccel readAccelTransformed() const override;
 
     void getPositionRaw(int16_t& x, int16_t& y, int16_t& h) const override;
     void setPositionRaw(int16_t x, int16_t y, int16_t h) override;
-    void setWorldPose(const RobotConfig& cfg,
-                      float x_mm, float y_mm, float h_rad) override;
+    void setWorldPose(float x_mm, float y_mm, float h_rad) override;
     void getVelocityRaw(int16_t& x, int16_t& y, int16_t& h) const;
 
     int8_t getLinearScalar() const override;

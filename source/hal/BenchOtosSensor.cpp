@@ -94,10 +94,10 @@ void BenchOtosSensor::reset() {
 }
 
 // ---------------------------------------------------------------------------
-// IOtosSensor read methods
+// IOdometer read methods
 // ---------------------------------------------------------------------------
 
-bool BenchOtosSensor::readTransformed(const RobotConfig& /*cfg*/, OtosPose& poseOut,
+bool BenchOtosSensor::readTransformed(OtosPose& poseOut,
                                       float /*headingRad*/) const {
     poseOut.x = _otosX;
     poseOut.y = _otosY;
@@ -105,8 +105,7 @@ bool BenchOtosSensor::readTransformed(const RobotConfig& /*cfg*/, OtosPose& pose
     return true;
 }
 
-bool BenchOtosSensor::readVelocityTransformed(const RobotConfig& /*cfg*/,
-                                              OtosVelocity& velOut,
+bool BenchOtosSensor::readVelocityTransformed(OtosVelocity& velOut,
                                               float /*headingRad*/) const {
     velOut.v_mmps     = _velV;
     velOut.omega_rads = _velOmega;
@@ -122,7 +121,7 @@ bool BenchOtosSensor::lastReadOk() const {
     return true;
 }
 
-OtosAccel BenchOtosSensor::readAccelTransformed(const RobotConfig& /*cfg*/) const {
+OtosAccel BenchOtosSensor::readAccelTransformed() const {
     return { _accAx, 0.0f };
 }
 
@@ -136,8 +135,7 @@ void BenchOtosSensor::getPositionRaw(int16_t& x, int16_t& y, int16_t& h) const {
 
 void BenchOtosSensor::setPositionRaw(int16_t /*x*/, int16_t /*y*/, int16_t /*h*/) {}
 
-void BenchOtosSensor::setWorldPose(const RobotConfig& /*cfg*/,
-                                   float x_mm, float y_mm, float h_rad) {
+void BenchOtosSensor::setWorldPose(float x_mm, float y_mm, float h_rad) {
     // The sim OTOS reads back _otos* directly (identity transform — no mount
     // rotation), so a camera fix just re-bases both accumulators to the world
     // pose.  Mirrors OtosSensor::setWorldPose's effect for the host sim.

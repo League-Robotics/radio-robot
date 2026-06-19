@@ -52,13 +52,13 @@ public:
 
     // Returns the current errored pose (_otosX/Y/H) in poseOut.
     // Always returns true (bench sensor is always valid).
-    // cfg and headingRad are ignored (no lever-arm correction in bench mode).
-    bool readTransformed(const RobotConfig& cfg, OtosPose& poseOut,
+    // headingRad is ignored (no lever-arm correction in bench mode).
+    bool readTransformed(OtosPose& poseOut,
                          float headingRad = 0.0f) const override;
 
     // Returns body-frame velocity derived from the last tick's errored arc step.
     // Always returns true.
-    bool readVelocityTransformed(const RobotConfig& cfg, OtosVelocity& velOut,
+    bool readVelocityTransformed(OtosVelocity& velOut,
                                  float headingRad = 0.0f) const override;
 
     // Returns true; out = 0 (always valid, never lifted).
@@ -68,7 +68,7 @@ public:
     bool lastReadOk() const override;
 
     // Returns {0, 0} — no accelerometer in bench mode.
-    OtosAccel readAccelTransformed(const RobotConfig& cfg) const override;
+    OtosAccel readAccelTransformed() const override;
 
     // Calibration stubs — all no-ops; get* return 0.
     void   init() override {}
@@ -77,8 +77,7 @@ public:
 
     void   getPositionRaw(int16_t& x, int16_t& y, int16_t& h) const override;
     void   setPositionRaw(int16_t x, int16_t y, int16_t h) override;
-    void   setWorldPose(const RobotConfig& cfg,
-                        float x_mm, float y_mm, float h_rad) override;
+    void   setWorldPose(float x_mm, float y_mm, float h_rad) override;
 
     int8_t getLinearScalar()         const override { return 0; }
     void   setLinearScalar(int8_t)         override {}

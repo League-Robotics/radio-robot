@@ -27,7 +27,7 @@ public:
     virtual IVelocityMotor& motorR()      = 0;
     virtual ILineSensor&    lineSensor()  = 0;
     virtual IColorSensor&   colorSensor() = 0;
-    virtual IOtosSensor&    otos()        = 0;
+    virtual IOdometer&      otos()        = 0;
     virtual IPortIO&        portIO()      = 0;
     virtual IPositionMotor& gripper()     = 0;
 

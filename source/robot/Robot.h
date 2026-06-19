@@ -70,7 +70,7 @@ struct Robot {
     // constructs and binds motorL/motorR.
     IMotor&             motorL;
     IMotor&             motorR;
-    IOtosSensor&        otos;
+    IOdometer&          otos;
     ILineSensor&        line;
     IColorSensor&       colorSensor;  // named colorSensor to avoid macro collisions
     IServo&             gripper;
@@ -97,7 +97,8 @@ struct Robot {
     // The streak/wedge state members below remain — the relocated block uses them.
 
     // otosCorrect — read OTOS device, write state.inputs.otos*, call odometry.correct().
-    // Uses otos.readTransformed(config) from T001 — no inlined LSB math.
+    // Uses otos.readTransformed(pose, heading) — no inlined LSB math.  039-004:
+    // RobotConfig is sealed out of the read signature (held as an OtosSensor impl member).
     void otosCorrect(uint32_t now_ms);
 
     // Sensor read task entry points (write to state.inputs.*VS).

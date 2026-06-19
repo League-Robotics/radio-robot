@@ -1,14 +1,15 @@
 ---
-id: "004"
-title: "Rename IOtosSensor to IOdometer; seal RobotConfig from public signatures; Pose2D/BodyTwist aliases"
-status: open
+id: '004'
+title: Rename IOtosSensor to IOdometer; seal RobotConfig from public signatures; Pose2D/BodyTwist
+  aliases
+status: in-progress
 use-cases:
-  - SUC-039-005
+- SUC-039-005
 depends-on:
-  - "039-001"
-  - "039-003"
-github-issue: ""
-issue: ""
+- 039-001
+- 039-003
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -155,18 +156,18 @@ is unchanged (no new hits).
 
 ## Acceptance Criteria
 
-- [ ] `OtosSensor` derives from `IOdometer`; `readTransformed` takes no `RobotConfig&` parameter.
-- [ ] `OtosSensor` stores `const RobotConfig& _cfg` as a constructor-injected member.
-- [ ] `NezhaHAL` passes `cfg` to `OtosSensor` constructor.
-- [ ] `MockOtosSensor` implements `IOdometer` with updated signatures.
-- [ ] `BenchOtosSensor` implements `IOdometer` with updated signatures.
-- [ ] `Hardware::otos()` returns `IOdometer&`.
-- [ ] No caller of `readTransformed`, `readVelocityTransformed`, or `readAccelTransformed` passes `RobotConfig&`.
-- [ ] `using OtosPose = Pose2D;` and `using OtosVelocity = BodyTwist;` aliases present in `IOtosSensor.h` shim.
-- [ ] Vendor-confinement canary passes (no new hits; baseline unchanged from T1).
-- [ ] Golden-TLM canary passes byte-exact.
-- [ ] `defaultRobotConfig()` field-pin unchanged.
-- [ ] Simulation tier green: `uv run --with pytest python -m pytest -q`.
+- [x] `OtosSensor` derives from `IOdometer` (via the `IOtosSensor` alias shim); `readTransformed` takes no `RobotConfig&` parameter.
+- [x] `OtosSensor` stores `const RobotConfig& _cfg` as a constructor-injected member.
+- [x] `NezhaHAL` passes `cfg` to `OtosSensor` constructor (`_otos(_bus, cfg)`).
+- [x] `MockOtosSensor` implements `IOdometer` with updated signatures.
+- [x] `BenchOtosSensor` implements `IOdometer` with updated signatures.
+- [x] `Hardware::otos()` returns `IOdometer&`. (NezhaHAL/MockHAL return types canonicalized to `IOdometer&`.)
+- [x] No caller of `readTransformed`, `readVelocityTransformed`, or `readAccelTransformed` passes `RobotConfig&`. (Robot.cpp + SystemCommands.cpp `setWorldPose` updated.)
+- [x] `using OtosPose = Pose2D;` and `using OtosVelocity = BodyTwist;` aliases present in `IOtosSensor.h` shim.
+- [x] Vendor-confinement canary passes (no new hits; baseline unchanged — the sealed leaks live in `hal/`, below the scanned boundary, so no `vendor_baseline.txt` entries were removable).
+- [x] Golden-TLM canary passes byte-exact.
+- [x] `defaultRobotConfig()` field-pin unchanged (`test_default_config_pin.py` green).
+- [x] Simulation tier green: `uv run --with pytest python -m pytest -q` → 1957 passed, 0 errors.
 
 ## Testing Plan
 
