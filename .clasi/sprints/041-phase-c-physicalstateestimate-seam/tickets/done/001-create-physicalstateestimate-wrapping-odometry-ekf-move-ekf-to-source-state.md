@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Create PhysicalStateEstimate wrapping Odometry+EKF; move EKF to source/state/
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 - SUC-002
