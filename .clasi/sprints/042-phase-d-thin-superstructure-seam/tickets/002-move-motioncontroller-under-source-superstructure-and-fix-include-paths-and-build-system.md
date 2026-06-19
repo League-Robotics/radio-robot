@@ -2,7 +2,7 @@
 id: '002'
 title: Move MotionController under source/superstructure/ and fix include paths and
   build system
-status: open
+status: in-progress
 use-cases:
 - SUC-004
 depends-on:
@@ -40,20 +40,26 @@ same directory. No behavioral change — the shim ensures all callers resolve id
 
 ## Acceptance Criteria
 
-- [ ] `git mv source/control/MotionController.h source/superstructure/MotionController.h`
+- [x] `git mv source/control/MotionController.h source/superstructure/MotionController.h`
       and `git mv source/control/MotionController.cpp source/superstructure/MotionController.cpp`
       executed; bodies identical to pre-move (verified by `git diff`).
-- [ ] `source/control/MotionController.h` exists as an alias shim containing only
+      Byte-exact: blob hashes unchanged (`3828e50…` / `2fe8bbd…`); rename detected, 0 line changes.
+- [x] `source/control/MotionController.h` exists as an alias shim containing only
       `#pragma once` and `#include "../superstructure/MotionController.h"`.
-- [ ] Firmware build: `python3 build.py --fw-only` → 0 errors. Then
+- [x] Firmware build: `python3 build.py --fw-only` → 0 errors. Then
       `git checkout -- source/robot/DefaultConfig.cpp`.
-- [ ] Simulation tier green: `uv run --with pytest python -m pytest -q` ≥ 2001 passed,
-      0 errors.
-- [ ] Golden-TLM canary byte-exact.
-- [ ] `tests/_infra/vendor_baseline.txt` updated: MotionController entries point to
-      `source/superstructure/` path.
-- [ ] Vendor-confinement grep gate passes with `source/superstructure/` in INSPECT_DIRS.
-- [ ] `field-pin` canary (`defaultRobotConfig()` diff) empty.
+      `MotionController.cpp.obj` built from `source/superstructure/`; `[100%] Built target MICROBIT`.
+- [x] Simulation tier green: `uv run --with pytest python -m pytest -q` ≥ 2001 passed,
+      0 errors. (`2001 passed in 34.39s`.)
+- [x] Golden-TLM canary byte-exact. (`test_golden_tlm_unchanged` PASSED.)
+- [x] `tests/_infra/vendor_baseline.txt` updated: MotionController entries point to
+      `source/superstructure/` path. — N/A: baseline contains only 4 `source/app/` entries;
+      MotionController has no vendor tokens, so it produces zero hits in either dir. No baseline
+      change required (per ticket: "update if needed"; both `control` and `superstructure` are
+      INSPECT_DIRS, gate stays green).
+- [x] Vendor-confinement grep gate passes with `source/superstructure/` in INSPECT_DIRS.
+      (`INSPECT_DIRS` already includes `superstructure` from T1; `test_vendor_confinement_no_new_leaks` PASSED.)
+- [x] `field-pin` canary (`defaultRobotConfig()` diff) empty. (`test_default_robot_config_unchanged` PASSED.)
 
 ## Implementation Plan
 
