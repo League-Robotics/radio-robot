@@ -1,11 +1,13 @@
 ---
-id: "001"
-title: "Fix coverage.sh harness: correct gcovr invocation, per-file table, simulatable-code report"
-status: open
-use-cases: ["SUC-001"]
+id: '001'
+title: 'Fix coverage.sh harness: correct gcovr invocation, per-file table, simulatable-code
+  report'
+status: in-progress
+use-cases:
+- SUC-001
 depends-on: []
-github-issue: ""
-issue: ""
+github-issue: ''
+issue: ''
 completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -52,13 +54,13 @@ uv run --with gcovr gcovr \
 
 ## Acceptance Criteria
 
-- [ ] `bash tests/_infra/coverage.sh` runs to completion with exit code 0 and no gcovr errors.
-- [ ] Overall `source/` line coverage percentage is printed to stdout.
-- [ ] Per-file coverage table is printed (one row per source file).
-- [ ] Simulatable-code coverage percentage is printed on a clearly labelled line, with the exclusion set documented in the script comments.
-- [ ] `bash tests/_infra/coverage.sh --fail-under 85` exits 1 when coverage is below 85% (test by temporarily passing a high threshold like 99).
-- [ ] `bash tests/_infra/coverage.sh --fail-under 0` exits 0.
-- [ ] The full simulation test suite still passes: `uv run --with pytest python -m pytest tests/simulation -q` exits 0.
+- [x] `bash tests/_infra/coverage.sh` runs to completion with exit code 0 and no gcovr errors.
+- [x] Overall `source/` line coverage percentage is printed to stdout.
+- [x] Per-file coverage table is printed (one row per source file).
+- [x] Simulatable-code coverage percentage is printed on a clearly labelled line, with the exclusion set documented in the script comments.
+- [x] `bash tests/_infra/coverage.sh --fail-under 85` exits 1 when coverage is below 85% (test by temporarily passing a high threshold like 99).
+- [x] `bash tests/_infra/coverage.sh --fail-under 0` exits 0.
+- [x] The full simulation test suite still passes: `uv run --with pytest python -m pytest tests/simulation -q` exits 0.
 
 ## Implementation Plan
 
