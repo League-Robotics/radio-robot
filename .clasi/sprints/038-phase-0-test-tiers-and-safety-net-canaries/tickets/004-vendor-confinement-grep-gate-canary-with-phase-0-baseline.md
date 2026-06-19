@@ -1,11 +1,13 @@
 ---
-id: "004"
-title: "Vendor-confinement grep-gate canary with Phase 0 baseline"
-status: open
-use-cases: [SUC-003]
-depends-on: ["003"]
-github-issue: ""
-issue: ""
+id: '004'
+title: Vendor-confinement grep-gate canary with Phase 0 baseline
+status: done
+use-cases:
+- SUC-003
+depends-on:
+- '003'
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -115,13 +117,13 @@ def test_vendor_confinement_no_new_leaks():
 
 ## Acceptance Criteria
 
-- [ ] `test_vendor_confinement.py` exists in `tests/simulation/unit/`.
-- [ ] `tests/_infra/vendor_baseline.txt` is committed and reflects actual Phase 0 hits.
-- [ ] `uv run --with pytest python -m pytest tests/simulation/unit/test_vendor_confinement.py -v` passes.
-- [ ] Introducing a synthetic new forbidden token (e.g., `// I2CBus test` in
+- [x] `test_vendor_confinement.py` exists in `tests/simulation/unit/`.
+- [x] `tests/_infra/vendor_baseline.txt` is committed and reflects actual Phase 0 hits.
+- [x] `uv run --with pytest python -m pytest tests/simulation/unit/test_vendor_confinement.py -v` passes.
+- [x] Introducing a synthetic new forbidden token (e.g., `// I2CBus test` in
       `source/control/`) causes the test to fail, not just warn.
-- [ ] The overall simulation suite still passes ≥ 1954 tests with the new canary added.
-- [ ] `git diff source/` is empty.
+- [x] The overall simulation suite still passes ≥ 1954 tests with the new canary added.
+- [x] `git diff source/` is empty.
 
 ## Testing Plan
 
