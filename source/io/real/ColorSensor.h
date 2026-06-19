@@ -1,7 +1,7 @@
 #pragma once
 #include "MicroBit.h"
 #include "I2CBus.h"
-#include "IColorSensor.h"
+#include "io/capability/IColorSensor.h"
 #include <stdint.h>
 
 /**

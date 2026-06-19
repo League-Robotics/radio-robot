@@ -13,6 +13,7 @@
 #include "PortIO.h"
 #include "Servo.h"
 #include "MotorBusDiagnostics.h"
+#include "I2CBusRawAccess.h"
 #include "Config.h"
 
 /**
@@ -80,10 +81,16 @@ public:
     // Expose the shared I2CBus for DebugCommandable (DBG I2C / I2CW / I2CR).
     I2CBus& bus() { return _bus; }
 
-    // Expose bus diagnostics as a capability for MotorController::setBusDiagnostics().
-    // Routes the motor-controller (0x10) error/reentry/lastErr counters upward
-    // without leaking I2CBus above the IO boundary (039-001).
+    // Expose bus diagnostics as a capability for MotorController::setBusDiagnostics()
+    // and DebugCommandable's DBG I2C / I2CLOG / IRQGUARD handlers (044-003).
+    // Routes the per-device error/reentry/txn counters upward without leaking
+    // I2CBus above the IO boundary (039-001; extended 044-003).
     IBusDiagnostics& busDiagnostics() { return _busDiag; }
+
+    // Expose raw I2C read/write as a capability for DebugCommandable's I2CW /
+    // I2CR handlers (044-003).  Backed by I2CBusRawAccess over the shared
+    // I2CBus, sealing the final vendor leak above source/io/.
+    IRawBusAccess& rawBusAccess() { return _rawBusAccess; }
 
 #ifdef BENCH_OTOS_ENABLED
     // --- Bench OTOS swap (sprint 031) --- [034-006: bench-build only]
@@ -123,6 +130,10 @@ private:
     // Bus-diagnostics adapter (039-001) — constructed from _bus (declared above,
     // so _bus is fully constructed first). Exposed via busDiagnostics().
     MotorBusDiagnostics _busDiag;
+
+    // Raw-bus-access adapter (044-003) — constructed from _bus (declared above).
+    // Exposed via rawBusAccess() for DebugCommandable's I2CW / I2CR handlers.
+    I2CBusRawAccess _rawBusAccess;
 
 #ifdef BENCH_OTOS_ENABLED
     // Active OTOS pointer — initialized to &_otos in the constructor.

@@ -2,7 +2,7 @@
 #include "MicroBit.h"
 #include "I2CBus.h"
 #include "Config.h"
-#include "IMotor.h"
+#include "io/capability/IVelocityMotor.h"
 #include "io/capability/IPositionMotor.h"
 
 /**

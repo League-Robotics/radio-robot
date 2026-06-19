@@ -1,4 +1,0 @@
-source/app/DebugCommandable.cpp:22: // LoopScheduler, I2CBus, WedgeTest, and NezhaHAL include CODAL/MicroBit
-source/app/DebugCommandable.cpp:27: #include "I2CBus.h"
-source/app/DebugCommandable.h:14: I2CBus*        bus;
-source/app/DebugCommandable.h:6: class I2CBus;

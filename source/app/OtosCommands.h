@@ -2,7 +2,7 @@
 #include <vector>
 #include "CommandTypes.h"
 #include "IOdometer.h"
-#include "RobotState.h"
+#include "Inputs.h"
 
 // ---------------------------------------------------------------------------
 // OtosCommands — app-layer handler set for the seven OTOS-tuning verbs
@@ -16,7 +16,7 @@
 // the IOdometer device.
 //
 // Dependency direction (correct): source/app/ -> IOdometer.h (capability) +
-// CommandTypes.h (types) + RobotState.h (cached OTOS pose for OP).  The
+// CommandTypes.h (types) + Inputs.h (cached OTOS pose for OP).  The
 // estimator does NOT depend on these.
 // ---------------------------------------------------------------------------
 

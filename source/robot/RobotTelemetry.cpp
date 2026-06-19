@@ -24,7 +24,11 @@ int Robot::buildTlmFrame(char* buf, int len)
 
     int32_t pose_x = 0, pose_y = 0, pose_h = 0;
     if (config.tlmFields & TLM_FIELD_POSE) {
-        Odometry::getPose(state.inputs, pose_x, pose_y, pose_h);
+        // 044-001: read pose through the PhysicalStateEstimate seam instead of
+        // calling Odometry::getPose directly. estimate.getPose is a static
+        // forwarder to the same HardwareState pose fields (poseX/Y/poseHrad),
+        // so the emitted value is byte-identical (golden-TLM unchanged).
+        estimate.getPose(state.inputs, pose_x, pose_y, pose_h);
     }
     // N8 (030-008): gate line/color on freshness, not just the sticky valid bit.
     // A sensor that wedges after boot keeps valid=true forever; consult the
@@ -79,9 +83,15 @@ int Robot::buildTlmFrame(char* buf, int len)
         // fusedV is body linear speed in mm/s (integer).
         // fusedOmega is yaw rate in rad/s; convert to mrad/s (integer) matching
         // the omega_mrads convention used by VW command and NezhaProtocol.vw().
+        // 044-001: read velocity through the PhysicalStateEstimate seam instead
+        // of reading state.inputs.fusedV/fusedOmega directly. estimate.getVelocity
+        // copies those same fields (fV = s.fusedV; fOmega = s.fusedOmega), so the
+        // emitted value is byte-identical (golden-TLM unchanged).
+        float fV = 0.0f, fOmega = 0.0f;
+        estimate.getVelocity(state.inputs, fV, fOmega);
         n = snprintf(buf + pos, (size_t)rem, " twist=%d,%d",
-                     (int)state.inputs.fusedV,
-                     (int)(state.inputs.fusedOmega * 1000.0f));
+                     (int)fV,
+                     (int)(fOmega * 1000.0f));
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
     // N8 (030-008): gate raw otos= on freshness -- same 2*lagMs rule as

@@ -21,7 +21,7 @@
 // referenced only by beginGoTo, so it travels here with that body.  The static
 // member emitEvt — used by the kept driveAdvance — stays in MotionController.cpp.
 
-#include "MotionController.h"
+#include "superstructure/MotionController.h"
 #include "MotorController.h"
 #include "Odometry.h"
 #include "BodyKinematics.h"
@@ -40,7 +40,7 @@
 // Formats "<base> #<corrId>" and calls target->replyFn(msg, target->replyCtx).
 //
 // Lives in the control layer so no app-layer includes are needed — only
-// TargetState (RobotState.h, also control layer).
+// TargetState (types/Inputs.h).
 //
 // Sprint 026-002: replaces the old inline formatting inside emitEvt.
 // ---------------------------------------------------------------------------

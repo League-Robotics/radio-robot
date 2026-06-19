@@ -24,7 +24,8 @@ firmware `source/` tree the same way the build's include dirs do) and asserts:
        PhysicalStateEstimate.h        — the seam itself
        Odometry.h                     — wrapped estimator (composition)
        EKF.h                          — 5-state CTRV filter
-       RobotState.h                   — HardwareState POD (types header)
+       Inputs.h                       — HardwareState POD (types header;
+                                        was control/RobotState.h pre-044-002)
        Config.h                       — RobotConfig POD (types header)
        Protocol.h                     — reply tags + ReplyFn + KVPair (types
                                         header; NOT a command-dispatch surface:
@@ -34,7 +35,8 @@ firmware `source/` tree the same way the build's include dirs do) and asserts:
        Sensor.h / Pose2D.h              capability seam; pure interface, no device)
 
 Per architecture-update.md, `Protocol.h` is reachable ONLY transitively via
-`RobotState.h` as a types header. The rule the seam enforces is the absence of the
+`Inputs.h` (the types header, formerly control/RobotState.h). The rule the seam
+enforces is the absence of the
 COMMAND-DISPATCH surface (`Commandable`/`CommandTypes.h`/`CommandProcessor.h`) and
 of CODAL/device handles — which the forbidden-token check above asserts directly.
 
@@ -71,7 +73,7 @@ ALLOWED_HEADERS = {
     "PhysicalStateEstimate.h",
     "Odometry.h",
     "EKF.h",
-    "RobotState.h",
+    "Inputs.h",
     "Config.h",
     "Protocol.h",
     "MotionEventSink.h",
@@ -189,7 +191,7 @@ def test_estimate_include_graph_is_subset_of_allowed():
 
 def test_protocol_h_is_a_types_header_not_a_command_surface():
     """Document the one subtle allowed include: Protocol.h is reachable (via
-    RobotState.h) but carries ONLY reply tags + ReplyFn + KVPair POD types — it
+    Inputs.h) but carries ONLY reply tags + ReplyFn + KVPair POD types — it
     is NOT a command-dispatch surface (no Commandable / CommandDescriptor)."""
     proto = SOURCE_DIR / "types" / "Protocol.h"
     assert proto.exists()

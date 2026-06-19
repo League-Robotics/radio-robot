@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include "Odometry.h"         // pulls in EKF.h, RobotState.h transitively
+#include "Odometry.h"         // pulls in EKF.h, types/Inputs.h transitively
 
 // PhysicalStateEstimate — the single fused-belief object for the robot's
 // physical state (Phase C, Sprint 041). Wraps Odometry by composition.

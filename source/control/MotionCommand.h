@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include "RobotState.h"
+#include "Inputs.h"
 #include "Protocol.h"
 #include "StopCondition.h"
 

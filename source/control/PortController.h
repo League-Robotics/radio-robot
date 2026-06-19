@@ -1,6 +1,6 @@
 #pragma once
 #include "CommandTypes.h"
-#include "IPortIO.h"
+#include "io/capability/IPortIO.h"
 
 /**
  * PortController — Commandable wrapper around IPortIO that owns the P and PA

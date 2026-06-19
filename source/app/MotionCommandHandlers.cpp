@@ -15,7 +15,7 @@
 //   calling replyOK.
 
 #include "MotionCommandHandlers.h"
-#include "MotionController.h"
+#include "superstructure/MotionController.h"
 #include "Superstructure.h"
 #include "Robot.h"
 #include "CommandProcessor.h"

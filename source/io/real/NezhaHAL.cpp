@@ -1,5 +1,5 @@
 #include "NezhaHAL.h"
-#include "RobotState.h"   // MotorCommands full definition (034-001)
+#include "Inputs.h"   // MotorCommands full definition (034-001)
 
 NezhaHAL::NezhaHAL(MicroBitI2C& i2c, MicroBitIO& io, const RobotConfig& cfg)
     : _bus(i2c),
@@ -22,7 +22,8 @@ NezhaHAL::NezhaHAL(MicroBitI2C& i2c, MicroBitIO& io, const RobotConfig& cfg)
       _color(_bus),
       _portio(io),
       _gripper(io.P1),
-      _busDiag(_bus)                    // 039-001: bus-diagnostics adapter (0x10)
+      _busDiag(_bus),                   // 039-001: bus-diagnostics adapter (0x10)
+      _rawBusAccess(_bus)               // 044-003: raw-bus-access adapter (I2CW/I2CR)
 #ifdef BENCH_OTOS_ENABLED
       ,
       _otosActive(&_otos),              // default: real sensor

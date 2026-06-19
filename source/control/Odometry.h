@@ -1,8 +1,8 @@
 #pragma once
 #include <stdint.h>
-#include "RobotState.h"
-#include "IOtosSensor.h"
-#include "EKF.h"
+#include "Inputs.h"
+#include "io/capability/IOdometer.h"
+#include "state/EKF.h"
 
 // ---------------------------------------------------------------------------
 // effectiveSlip — migration-safe rotationalSlip clamp.

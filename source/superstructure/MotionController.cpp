@@ -27,6 +27,10 @@
 #include "MotionController.h"
 #include "MotorController.h"
 #include "Odometry.h"
+// 044-001: getPoseFloat now reads pose via the PhysicalStateEstimate seam.
+// Available transitively through Robot.h, but included directly to make the
+// dependency explicit.
+#include "PhysicalStateEstimate.h"
 #include "BodyKinematics.h"
 #include "StopCondition.h"
 #include "Robot.h"
@@ -356,7 +360,10 @@ void MotionController::getPoseFloat(float& x, float& y, float& h_rad) const {
         return;
     }
     int32_t xi, yi, hi;
-    Odometry::getPose(*_hwState, xi, yi, hi);
+    // 044-001: read pose through the PhysicalStateEstimate seam. getPose is a
+    // static forwarder to Odometry::getPose (same HardwareState pose fields), so
+    // the returned pose is byte-identical to the prior direct Odometry call.
+    PhysicalStateEstimate::getPose(*_hwState, xi, yi, hi);
     x     = static_cast<float>(xi);
     y     = static_cast<float>(yi);
     h_rad = static_cast<float>(hi) * (3.14159265f / 18000.0f);  // cdeg → rad

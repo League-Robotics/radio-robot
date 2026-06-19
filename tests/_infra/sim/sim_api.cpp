@@ -17,8 +17,8 @@
 #include "io/sim/WorldView.h"
 #include "io/real/BenchOtosSensor.h"
 #include "types/Config.h"
-#include "control/RobotState.h"
-#include "control/MotionController.h"
+#include "types/Inputs.h"
+#include "superstructure/MotionController.h"
 #include "control/MotionCommand.h"
 #include "control/HaltController.h"
 #include "control/LoopTickOnce.h"
@@ -126,7 +126,10 @@ struct SimHandle {
         , robot(hal, cfg)
         , _worldView(hal.plant(), robot.state.inputs)
         , _queue()
-        , dbg(DbgCtx{nullptr, nullptr, &robot})
+        // 044-003 (Phase F): DbgCtx gained busAccess; host build leaves both
+        // busDiag and busAccess null (DebugCommandable's I2C handlers are
+        // #ifndef HOST_BUILD, so the null bus path is never exercised host-side).
+        , dbg(DbgCtx{nullptr, nullptr, nullptr, &robot})
         , cmd(robot.buildCommandTable(&dbg, nullptr))
         , benchOtos()
     {

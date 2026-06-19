@@ -11,7 +11,7 @@
 #include "CommandProcessor.h"   // CommandProcessor::replyEvt, setQueue, process
 #include "CommandQueue.h"       // CommandQueue (X injection bypass)
 #include "HaltController.h"     // HaltController::evaluate, HaltAction
-#include "RobotState.h"         // HardwareState
+#include "Inputs.h"         // HardwareState
 #include "LoopTickOnce.h"       // LoopTickState
 #include "Config.h"             // RobotConfig (DriveMode via Config.h)
 

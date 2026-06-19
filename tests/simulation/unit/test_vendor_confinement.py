@@ -73,16 +73,24 @@ def collect_hits() -> set[str]:
     return hits
 
 
-def test_vendor_confinement_no_new_leaks():
-    """Assert no new vendor tokens appear above source/io/ vs Phase 0 baseline.
-
-    Existing baseline entries may disappear (Phase A sealing them) without
-    failing the gate — only NEW entries cause failure.
-    """
-    baseline: set[str] = set()
+def _baseline() -> set[str]:
     if BASELINE_FILE.exists():
-        baseline = {l for l in BASELINE_FILE.read_text().splitlines() if l.strip()}
+        return {l for l in BASELINE_FILE.read_text().splitlines() if l.strip()}
+    return set()
 
+
+def test_vendor_confinement_no_new_leaks():
+    """Assert no new vendor tokens appear above source/io/ vs the baseline.
+
+    Existing baseline entries may disappear (sealing them) without failing the
+    gate — only NEW entries cause failure.
+
+    044-003 (Phase F): the DebugCommandable I2CBus leak is sealed and the
+    baseline is now EMPTY, so this assertion is equivalent to "zero hits above
+    source/io/" — the migration's final vendor-confinement criterion. The
+    explicit test below pins that to a hard zero so the gate stays tight.
+    """
+    baseline = _baseline()
     current = collect_hits()
     new_leaks = current - baseline
 
@@ -90,4 +98,35 @@ def test_vendor_confinement_no_new_leaks():
         f"New vendor leaks found above source/io/ ({len(new_leaks)} new):\n"
         + "\n".join(sorted(new_leaks))
         + "\nUpdate tests/_infra/vendor_baseline.txt ONLY if these are intentional."
+    )
+
+
+def test_vendor_confinement_zero_hits_empty_baseline():
+    """Hard gate (044-003, FINAL): zero vendor hits above source/io/.
+
+    After Phase F sealed the last leak (DebugCommandable's I2CBus*, via
+    IBusDiagnostics + IRawBusAccess), the baseline is empty. The vendor-
+    confinement grep must return ZERO hits across the layers above the IO
+    boundary. If a future edit reintroduces a vendor token (MicroBit.h, I2CBus,
+    microbit_random) above source/io/, this fails immediately — there is no
+    longer any baseline to absorb it.
+
+    The baseline file MUST stay empty (or contain only explicitly-documented,
+    firmware-only-tool exemptions with a rationale comment — none exist today).
+    """
+    baseline = _baseline()
+    # Allow only commented-out rationale lines as "exemptions"; any real entry
+    # (a non-comment line) is a regression of the final criterion.
+    real_entries = {l for l in baseline if not l.lstrip().startswith("#")}
+    assert not real_entries, (
+        "vendor_baseline.txt must be empty after Phase F (044-003) — the final "
+        "vendor-confinement criterion is ZERO hits above source/io/. Found "
+        f"{len(real_entries)} baseline entries:\n" + "\n".join(sorted(real_entries))
+    )
+
+    current = collect_hits()
+    assert not current, (
+        f"Vendor tokens found above source/io/ ({len(current)} hits) — the "
+        "final vendor-confinement criterion (ZERO hits) is violated:\n"
+        + "\n".join(sorted(current))
     )
