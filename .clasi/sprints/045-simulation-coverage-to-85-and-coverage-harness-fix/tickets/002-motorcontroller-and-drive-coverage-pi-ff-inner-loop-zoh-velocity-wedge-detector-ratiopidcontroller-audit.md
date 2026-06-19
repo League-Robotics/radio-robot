@@ -2,7 +2,7 @@
 id: '002'
 title: 'MotorController and Drive coverage: PI+FF inner loop, ZOH velocity, wedge-detector,
   RatioPidController audit'
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 depends-on:

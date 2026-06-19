@@ -56,18 +56,18 @@ Uncovered paths include:
 
 ## Acceptance Criteria
 
-- [ ] New file `tests/simulation/unit/test_stop_condition_coverage.py` created.
-- [ ] ROTATION stop: test sends a spin command (e.g., `T` with rotation stop) and confirms the command stops when the rotation threshold is reached.
-- [ ] COLOR stop: if `sim_set_color_rgbc` wrapper exists or is added, test injects an RGBC value that matches a COLOR stop condition hue/sat/val target and confirms the command stops.
-- [ ] LINE_ANY stop: if `sim_set_line_values` wrapper exists or is added, test injects a line sensor value above threshold on one channel and confirms the command stops via `sensor=line0:ge:500` (or similar).
-- [ ] SENSOR stop (colorR channel 4, analogIn channel 8): test injects color/analog values and confirms stop.
-- [ ] New file `tests/simulation/unit/test_motion_handlers_coverage.py` (or `test_motion_command_handlers_coverage.py`) created.
-- [ ] ERR on malformed VW arg (missing required argument): send `VW` with no arguments; confirm ERR reply.
-- [ ] ERR on bad sensor= token: send a motion command with `sensor=badchan:ge:100`; confirm ERR or graceful failure.
-- [ ] MotionCommandHandlers queue-null fallback: programmer's decision documented (either a test covering the path, or a comment explaining it's dead-in-practice).
-- [ ] If `sim_api.cpp` needed new wrappers for line/color injection: the wrappers are added and exposed from `tests/_infra/sim/firmware.py` (or tested via ctypes directly).
-- [ ] All existing tests still pass.
-- [ ] Golden-TLM, field-pin, vendor grep gates all green.
+- [x] New file `tests/simulation/system/test_stop_condition_coverage.py` created (system tier — whole-robot drive+sensor+halt scenarios).
+- [x] ROTATION stop: `test_rotation_stop_terminates_spin` sends `RT 9000` (registers a `makeRotationStop`) and confirms the spin self-terminates (EVT / PWM zero), firing `Kind::ROTATION::evaluate`.
+- [x] COLOR stop: `test_color_stop_fires_on_match` / `..._does_not_fire_on_mismatch` inject RGBC via the new `sim_set_color_rgbc` wrapper and confirm `HALT COLOR` fires/does-not-fire — exercising `Kind::COLOR` (rgbToHSV, hueDistance, HSV distance, both fire and non-fire paths).
+- [x] LINE_ANY stop: `test_line_any_stop_fires_ge` / `..._le` inject line values via `sim_set_line_values` and confirm `HALT LINE ANY GE/LE` fires — exercising both `Kind::LINE_ANY` comparison branches and the OR short-circuit.
+- [~] SENSOR stop: `Kind::SENSOR` / `getSensorValue` are UNREACHABLE through the sim. The `sensor=` token attaches a SENSOR stop only on the direct (queue==null) path; on the QUEUE path (the sim's only mode) the stop is silently dropped — `packSensorArg` stores the value WITHOUT the `sensor=` prefix that handleVW's forwarding loop (`strncmp(...,"sensor=",7)`) requires. Covering it would need a production `source/` change (out of scope, test-additive only). Documented + regression-pinned by `test_sensor_stop_dropped_on_queue_path_documented`.
+- [x] New file `tests/simulation/unit/test_motion_handlers_coverage.py` created (26 tests).
+- [x] ERR on malformed VW arg: `test_vw_no_args_errors` / `..._one_arg_errors` confirm ERR; plus range-ERR for v/omega.
+- [x] ERR on bad sensor= token: `test_t_bad_sensor_channel_errors`, `..._bad_sensor_op_errors`, `..._malformed_sensor_no_colon_errors`, `test_d_bad_sensor_channel_errors`, `test_turn_bad_sensor_errors` all confirm ERR (mc_parseSensorToken failure paths on the queue path).
+- [~] MotionCommandHandlers queue-null fallback (OQ-3): DOCUMENTED dead-in-practice. The sim always wires the queue (SimHandle ctor), so the `else { direct begin*() }` branches are unreachable via `sim.send_command`; no C API exposes a `MotionCtx{queue=nullptr}` and adding one to cover a host-only fallback (firmware always wires the queue) is not warranted. Note in `test_motion_handlers_coverage.py` docstring.
+- [x] `sim_api.cpp` new wrappers `sim_set_line_values` / `sim_set_color_rgbc` added (OQ-2 — Sim sensors read a schedule table, not the plant, so these install a single-row schedule) and exposed in `firmware.py` (`set_line_values` / `set_color_rgbc`).
+- [x] All existing tests still pass: 2055 passed (was 2023; +32).
+- [x] Golden-TLM, field-pin, vendor grep gates all green.
 
 ## Implementation Plan
 

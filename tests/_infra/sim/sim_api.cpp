@@ -761,6 +761,33 @@ void sim_set_color_frozen(void* h, int frozen)
     static_cast<SimHandle*>(h)->hal.simColorSensor().setFrozen(frozen != 0);
 }
 
+// ---- (045-003) Fixed sensor-value injection (line / color) ----
+//
+// The Sim* line/color sensors read from an internal schedule table, NOT from
+// the PhysicsWorld plant (PhysicsWorld::setTrueLineRaw/setTrueColorRGBC set
+// plant truth that these sensors do not consult).  To inject a constant value
+// that flows into HardwareState (line[]/colorR/G/B/C) — and thus into
+// StopCondition::evaluate via the SENSOR/COLOR/LINE_ANY kinds — install a
+// single-row schedule.  With _scheduleRows == 1 the sensor's currentRow() is
+// always 0, so readValues()/pollRGBC() return the injected row every tick.
+//
+// Callers must first sim_init_line_sensor()/sim_init_color_sensor() (begin())
+// so the LineSensor/ColorSensor subsystem periodics actually read the sensor.
+
+void sim_set_line_values(void* h, uint16_t l0, uint16_t l1,
+                         uint16_t l2, uint16_t l3)
+{
+    uint16_t row[1][4] = {{ l0, l1, l2, l3 }};
+    static_cast<SimHandle*>(h)->hal.simLineSensor().setSchedule(row, 1);
+}
+
+void sim_set_color_rgbc(void* h, uint16_t r, uint16_t g,
+                        uint16_t b, uint16_t c)
+{
+    uint16_t row[1][4] = {{ r, g, b, c }};
+    static_cast<SimHandle*>(h)->hal.simColorSensor().setSchedule(row, 1);
+}
+
 // ---- N9 same-tick OTOS failure helper (030-008) ----
 
 // Inject / clear an OTOS read failure.  When set, MockOtosSensor::readTransformed
