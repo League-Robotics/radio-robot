@@ -1,11 +1,13 @@
 ---
-id: "007"
-title: "Coverage harness under _infra/ (cmake --coverage + gcovr)"
-status: open
-use-cases: [SUC-006]
-depends-on: ["003"]
-github-issue: ""
-issue: ""
+id: '007'
+title: Coverage harness under _infra/ (cmake --coverage + gcovr)
+status: done
+use-cases:
+- SUC-006
+depends-on:
+- '003'
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -127,15 +129,15 @@ change, not a behavior change.
 
 ## Acceptance Criteria
 
-- [ ] `tests/_infra/coverage.sh` exists and is executable.
-- [ ] Running `bash tests/_infra/coverage.sh` from the repo root completes without errors.
-- [ ] The script prints a gcovr summary line with an overall line coverage percentage
-      (e.g., `TOTAL ... 67.2%`).
-- [ ] The coverage build uses a separate `build_coverage/` dir — the standard `build/`
-      dir is unaffected.
-- [ ] The standard `uv run --with pytest python -m pytest -q` suite still passes ≥ 1954
+- [x] `tests/_infra/coverage.sh` exists and is executable.
+- [x] Running `bash tests/_infra/coverage.sh` from the repo root completes without errors.
+- [x] The script prints a gcovr summary line with an overall line coverage percentage.
+      Measured baseline: 71.6% lines (3489/4871) at Phase 0.
+- [x] The coverage build uses a separate `build_coverage/` dir — the standard `build/`
+      dir is unaffected (already covered by gitignore `build_*/` rule).
+- [x] The standard `uv run --with pytest python -m pytest -q` suite still passes ≥ 1954
       tests after this ticket (the firmware.py env var change is backward compatible).
-- [ ] `git diff source/` is empty.
+- [x] `git diff source/` is empty.
 
 ## Testing Plan
 

@@ -6,6 +6,7 @@ libfirmware_host.so (Linux) and exposes all sim_* C ABI functions through
 a Sim context manager.
 """
 import ctypes
+import os
 import pathlib
 import sys
 import time
@@ -17,7 +18,13 @@ def _lib_name() -> str:
     return "libfirmware_host.dylib" if sys.platform == "darwin" else "libfirmware_host.so"
 
 
-LIB_PATH = _HERE / "build" / _lib_name()
+_DEFAULT_LIB_PATH = _HERE / "build" / _lib_name()
+
+# FIRMWARE_HOST_LIB env var allows overriding the shared library path.
+# Used by the coverage harness (tests/_infra/coverage.sh) to load a
+# coverage-instrumented build from build_coverage/ without modifying the
+# standard build/. Backward-compatible: unset → uses the default build path.
+LIB_PATH = pathlib.Path(os.environ.get("FIRMWARE_HOST_LIB", str(_DEFAULT_LIB_PATH)))
 
 
 class Sim:
