@@ -1,7 +1,7 @@
 ---
 id: '040'
 title: "Phase B \u2014 Physical-plant simulation"
-status: planning-docs
+status: done
 branch: sprint/040-phase-b-physical-plant-simulation
 use-cases: []
 issues:
