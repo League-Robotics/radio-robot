@@ -41,6 +41,8 @@ file(GLOB ROBOT_SOURCES   "${REPO_ROOT}/source/robot/*.cpp")
 # new PhysicalStateEstimate wrapper. The control/ glob no longer picks up
 # EKF.cpp (the file is deleted from control/), so it must be globbed here.
 file(GLOB STATE_SOURCES   "${REPO_ROOT}/source/state/*.cpp")
+# 042-001 (Phase D): source/superstructure/ holds Superstructure.cpp (Seam 3).
+file(GLOB SUPERSTRUCTURE_SOURCES "${REPO_ROOT}/source/superstructure/*.cpp")
 
 list(FILTER APP_SOURCES     EXCLUDE REGEX ".*/WedgeTest\\.cpp$")
 list(FILTER CONTROL_SOURCES EXCLUDE REGEX ".*/LoopScheduler\\.cpp$")
@@ -69,6 +71,7 @@ add_library(firmware_host SHARED
     ${CONTROL_SOURCES}
     ${ROBOT_SOURCES}
     ${STATE_SOURCES}
+    ${SUPERSTRUCTURE_SOURCES}
     ${IO_DEVICE_SOURCES}
     ${REPLAY_SOURCES}
     # BenchOtosSensor lives in source/io/real/ (not io/sim/) so it is not globbed
@@ -96,5 +99,6 @@ target_include_directories(firmware_host PRIVATE
     "${REPO_ROOT}/source/io/sim"
     "${REPO_ROOT}/source/robot"
     "${REPO_ROOT}/source/state"
+    "${REPO_ROOT}/source/superstructure"
     "${REPO_ROOT}/source/types"
 )

@@ -12,6 +12,7 @@
 
 class MotionController;
 class CommandQueue;
+class Superstructure;
 struct Robot;
 
 // ---------------------------------------------------------------------------
@@ -21,6 +22,7 @@ struct Robot;
 // ---------------------------------------------------------------------------
 struct MotionCtx {
     MotionController*  mc;
+    Superstructure*    superstructure;  // Seam 3 (042-001): queue-path begin* goes through requestGoal
     struct Robot*      robot;
     CommandQueue*      queue;    // command queue for VW converter push_front; may be null
     CommandDescriptor  vwDesc;   // stable VW descriptor used by converters to build ParsedCommand

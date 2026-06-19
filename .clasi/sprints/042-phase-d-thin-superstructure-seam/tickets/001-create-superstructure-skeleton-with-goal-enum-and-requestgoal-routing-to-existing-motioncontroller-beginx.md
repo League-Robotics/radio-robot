@@ -2,7 +2,7 @@
 id: '001'
 title: Create Superstructure skeleton with Goal enum and requestGoal routing to existing
   MotionController.beginX()
-status: open
+status: in-progress
 use-cases:
 - SUC-001
 - SUC-003
@@ -46,27 +46,32 @@ directly. The golden-TLM canary must be byte-exact.
 
 ## Acceptance Criteria
 
-- [ ] `source/superstructure/Superstructure.h` exists with `Goal` enum, `GoalRequest` struct,
+- [x] `source/superstructure/Superstructure.h` exists with `Goal` enum, `GoalRequest` struct,
       and `Superstructure` class declaration.
-- [ ] `source/superstructure/Superstructure.cpp` exists with `requestGoal` dispatch switch
+- [x] `source/superstructure/Superstructure.cpp` exists with `requestGoal` dispatch switch
       and `goalAllowed()` stub (`return true`).
-- [ ] `GoalRequest` carries ALL parameters for every `beginX()` variant: `goal`, `now_ms`,
+- [x] `GoalRequest` carries ALL parameters for every `beginX()` variant: `goal`, `now_ms`,
       `replyFn`, `replyCtx`, `corrId`, `leftMms`, `rightMms`, `durationMs`, `targetMm`,
       `tx`, `ty`, `speedMms`, `headingCdeg`, `epsCdeg`, `relCdeg`, `v_mms`, `omega_rads`,
       `radiusMm`. Every field confirmed against the corresponding `beginX()` signature.
-- [ ] `MotionCtx` gains `Superstructure* superstructure`; `handleVW` queue-path branches
+      (Added `Robot* robot` to supply `state.target` and the DISTANCE path
+      `robot->distanceDrive` — keeps the routed calls byte-identical; see note below.)
+- [x] `MotionCtx` gains `Superstructure* superstructure`; `handleVW` queue-path branches
       call `ctx->superstructure->requestGoal(GoalRequest{...})` for all nine goal types.
-- [ ] `Robot.h` adds `Superstructure superstructure` value member, declared after
+      (ROTATE, TURN, GOTO, ARC, TIMED, DISTANCE, STREAM, VELOCITY — the eight active
+      begin* branches in `handleVW`. The `ctx->queue == nullptr` direct-call fallback
+      paths are LEFT pointing at `ctx->mc->beginX(...)` as-is per OQ-2.)
+- [x] `Robot.h` adds `Superstructure superstructure` value member, declared after
       `motionController` and `haltController`.
-- [ ] `tests/_infra/sim/CMakeLists.txt` updated: `source/superstructure/` in source glob.
-- [ ] Simulation tier green: `uv run --with pytest python -m pytest -q` ≥ 2001 passed,
-      0 errors.
-- [ ] Golden-TLM canary byte-exact.
-- [ ] ARM firmware build: `python3 build.py --fw-only` → 0 errors; then
-      `git checkout -- source/robot/DefaultConfig.cpp`.
-- [ ] Vendor-confinement grep gate passes (`source/superstructure/` in INSPECT_DIRS):
+- [x] `tests/_infra/sim/CMakeLists.txt` updated: `source/superstructure/` in source glob.
+- [x] Simulation tier green: `uv run --with pytest python -m pytest -q` ≥ 2001 passed,
+      0 errors. (2001 passed.)
+- [x] Golden-TLM canary byte-exact.
+- [x] ARM firmware build: `python3 build.py --fw-only` → 0 errors; then
+      `git checkout -- source/robot/DefaultConfig.cpp`. (0 error:, MICROBIT.hex; restored.)
+- [x] Vendor-confinement grep gate passes (`source/superstructure/` in INSPECT_DIRS):
       zero hits for `MicroBit`, `I2CBus`, vendor register addresses in `source/superstructure/`.
-- [ ] No state-graph or transition-table introduced — `requestGoal` is a plain switch.
+- [x] No state-graph or transition-table introduced — `requestGoal` is a plain switch.
 
 ## Implementation Plan
 

@@ -60,7 +60,11 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       estimate(),
       motionController(motorController, estimate.odometry(), config),
       portController(portio),
-      servoController(gripper)
+      servoController(gripper),
+      // Superstructure (042-001) — wired with references to motionController and
+      // haltController (both declared before it) plus config.  Declaration order
+      // in Robot.h guarantees those are constructed first.
+      superstructure(motionController, haltController, config)
 {
     motionController.setHardwareState(&state.inputs);
     motorController.setCommandsRef(&state.commands);
@@ -68,9 +72,12 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
     motionController.setRobotCtx(this);
     // Initialise _motionCtx (sprint 026-002): mc and robot pointers; queue wired
     // later by setMotionQueue() from LoopScheduler or test harness.
-    _motionCtx.mc    = &motionController;
-    _motionCtx.robot = this;
-    _motionCtx.queue = nullptr;
+    // 042-001: superstructure pointer wired so handleVW queue-path branches route
+    // begin* through requestGoal (Seam 3).
+    _motionCtx.mc             = &motionController;
+    _motionCtx.superstructure = &superstructure;
+    _motionCtx.robot          = this;
+    _motionCtx.queue          = nullptr;
     estimate.setCtx(&otos, &state.inputs);
     // 041-002: the OTOS command handlers (OI/OZ/OR/OV/OL/OA/OP) moved out of
     // Odometry into the app-layer OtosCommands.  Bind the same IOdometer device

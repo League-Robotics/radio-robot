@@ -30,7 +30,10 @@ BASELINE_FILE = REPO_ROOT / "tests" / "_infra" / "vendor_baseline.txt"
 # 041-002 (Phase C): source/state/ added to scope. After Commandable is stripped
 # from Odometry, the estimator layer (PhysicalStateEstimate, EKF) is dependency-
 # clean and must stay vendor-free — no MicroBit.h / I2CBus / microbit_random.
-INSPECT_DIRS = ["app", "control", "robot", "state", "types"]
+# 042-001 (Phase D): source/superstructure/ added to scope. The Superstructure
+# seam (Goal enum + requestGoal) must stay vendor-free — it depends only on
+# Config/Protocol and forward-declares MotionController/HaltController/Robot.
+INSPECT_DIRS = ["app", "control", "robot", "state", "superstructure", "types"]
 
 # CODAL-only files excluded from the host build — vendor deps here are expected.
 CODAL_ONLY = {
