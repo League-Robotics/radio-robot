@@ -1,7 +1,7 @@
 ---
 id: '042'
 title: "Phase D \u2014 Thin Superstructure seam"
-status: planning-docs
+status: done
 branch: sprint/042-phase-d-thin-superstructure-seam
 use-cases: []
 issues:
