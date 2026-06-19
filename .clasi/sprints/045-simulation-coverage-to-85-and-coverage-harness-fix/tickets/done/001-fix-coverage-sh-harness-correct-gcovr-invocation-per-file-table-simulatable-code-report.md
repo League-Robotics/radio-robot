@@ -2,7 +2,7 @@
 id: '001'
 title: 'Fix coverage.sh harness: correct gcovr invocation, per-file table, simulatable-code
   report'
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 depends-on: []
