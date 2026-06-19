@@ -1,7 +1,7 @@
 ---
 id: '040'
 title: "Phase B \u2014 Physical-plant simulation"
-status: roadmap
+status: planning-docs
 branch: sprint/040-phase-b-physical-plant-simulation
 use-cases: []
 issues:
@@ -123,5 +123,10 @@ Following §2 of the issue:
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 040-001 | PhysicsWorld — ground-truth plant with canonical midpoint-arc integration | — |
+| 040-002 | Observation models and SimHardware — replace MockHAL with clean split | 040-001 |
+| 040-003 | WorldView adapter, sim_get_true_* ABI, fix sim_set_enc, estimation_error | 040-002 |
+| 040-004 | Retire Mock* files and delete obsolete sim objects | 040-003 |
+| 040-005 | Isolation test matrix — plant, observation, estimator, whole-robot | 040-004 |
 
 Tickets execute serially in the order listed.
