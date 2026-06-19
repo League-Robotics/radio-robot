@@ -1,6 +1,6 @@
 ---
-status: draft
-sprint: '039'
+status: approved
+sprint: 039
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
