@@ -19,12 +19,17 @@
 #include <cstring>
 #include <cmath>
 
-// LoopScheduler, I2CBus, WedgeTest, and NezhaHAL include CODAL/MicroBit
-// headers and must NOT be included in HOST_BUILD.  The handlers that use
-// them are guarded with #ifndef HOST_BUILD so the file compiles in both.
+// LoopScheduler, WedgeTest, and NezhaHAL include CODAL/MicroBit headers and
+// must NOT be included in HOST_BUILD.  The handlers that use them are guarded
+// with #ifndef HOST_BUILD so the file compiles in both.
+//
+// 044-003 (Phase F): the concrete bus header is no longer included here.  The
+// DBG I2C / I2CLOG / IRQGUARD handlers reach the bus through DbgCtx::busDiag
+// (IBusDiagnostics*) and the I2CW / I2CR handlers through DbgCtx::busAccess
+// (IRawBusAccess*) — both capability interfaces from source/io/capability/,
+// sealing the final vendor leak above source/io/.
 #ifndef HOST_BUILD
 #include "LoopScheduler.h"
-#include "I2CBus.h"
 #include "WedgeTest.h"
 #include "NezhaHAL.h"
 #endif
@@ -130,16 +135,16 @@ static void handleDbgI2clog(const ArgList& args, const char* corrId,
 #ifndef HOST_BUILD
     DbgCtx ctx = dbgCtxFrom(handlerCtx);
     char rbuf[64];
-    if (ctx.bus == nullptr) {
+    if (ctx.busDiag == nullptr) {
         CommandProcessor::replyErr(rbuf, sizeof(rbuf), "noimpl", "no i2c bus",
                                    corrId, replyFn, replyCtx);
         return;
     }
     if (args.count >= 1 && strcmp(args.args[0].sval, "ARM") == 0) {
-        ctx.bus->resetStats();
-        ctx.bus->setLogging(true);
+        ctx.busDiag->resetStats();
+        ctx.busDiag->setLogging(true);
     } else {
-        ctx.bus->dumpRecent(replyFn, replyCtx);
+        ctx.busDiag->dumpRecent(replyFn, replyCtx);
     }
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "dbg", "i2clog",
                               corrId, replyFn, replyCtx);
@@ -185,20 +190,20 @@ static void handleDbgI2c(const ArgList& args, const char* corrId,
 #ifndef HOST_BUILD
     DbgCtx ctx = dbgCtxFrom(handlerCtx);
     char rbuf[64];
-    if (ctx.bus == nullptr) {
+    if (ctx.busDiag == nullptr) {
         CommandProcessor::replyErr(rbuf, sizeof(rbuf), "noimpl", "no i2c bus",
                                    corrId, replyFn, replyCtx);
         return;
     }
     if (args.count >= 1 && strcmp(args.args[0].sval, "RESET") == 0) {
-        ctx.bus->resetStats();
+        ctx.busDiag->resetStats();
         ctx.robot->motorController.resetStuckCounters();
         CommandProcessor::replyOK(rbuf, sizeof(rbuf), "dbg", "i2c reset",
                                   corrId, replyFn, replyCtx);
         return;
     }
     // Emit compact stats dump.
-    uint32_t rV = ctx.bus->reentryViolations();
+    uint32_t rV = ctx.busDiag->reentryViolations();
     uint8_t  sL = ctx.robot->motorController.stuckCountL();
     uint8_t  sR = ctx.robot->motorController.stuckCountR();
     char buf[200];
@@ -208,18 +213,18 @@ static void handleDbgI2c(const ArgList& args, const char* corrId,
         "0x1A:txn=%lu err=%lu last=%d "
         "0x43:txn=%lu err=%lu last=%d "
         "reentry=%lu stuck=L:%u,R:%u",
-        (unsigned long)ctx.bus->txnCount(0x10),
-        (unsigned long)ctx.bus->errCount(0x10),
-        ctx.bus->lastErr(0x10),
-        (unsigned long)ctx.bus->txnCount(0x17),
-        (unsigned long)ctx.bus->errCount(0x17),
-        ctx.bus->lastErr(0x17),
-        (unsigned long)ctx.bus->txnCount(0x1A),
-        (unsigned long)ctx.bus->errCount(0x1A),
-        ctx.bus->lastErr(0x1A),
-        (unsigned long)ctx.bus->txnCount(0x43),
-        (unsigned long)ctx.bus->errCount(0x43),
-        ctx.bus->lastErr(0x43),
+        (unsigned long)ctx.busDiag->txnCount(0x10),
+        (unsigned long)ctx.busDiag->errCount(0x10),
+        ctx.busDiag->lastErr(0x10),
+        (unsigned long)ctx.busDiag->txnCount(0x17),
+        (unsigned long)ctx.busDiag->errCount(0x17),
+        ctx.busDiag->lastErr(0x17),
+        (unsigned long)ctx.busDiag->txnCount(0x1A),
+        (unsigned long)ctx.busDiag->errCount(0x1A),
+        ctx.busDiag->lastErr(0x1A),
+        (unsigned long)ctx.busDiag->txnCount(0x43),
+        (unsigned long)ctx.busDiag->errCount(0x43),
+        ctx.busDiag->lastErr(0x43),
         (unsigned long)rV,
         (unsigned)sL,
         (unsigned)sR);
@@ -265,14 +270,14 @@ static void handleDbgIrqguard(const ArgList& args, const char* corrId,
 #ifndef HOST_BUILD
     DbgCtx ctx = dbgCtxFrom(handlerCtx);
     char rbuf[64];
-    if (ctx.bus == nullptr) {
+    if (ctx.busDiag == nullptr) {
         CommandProcessor::replyErr(rbuf, sizeof(rbuf), "noimpl", "no i2c bus",
                                    corrId, replyFn, replyCtx);
         return;
     }
-    if (args.count >= 1) ctx.bus->setIrqGuard(args.args[0].ival != 0);
+    if (args.count >= 1) ctx.busDiag->setIrqGuard(args.args[0].ival != 0);
     char msg[24];
-    snprintf(msg, sizeof(msg), "irqguard=%d", ctx.bus->irqGuard() ? 1 : 0);
+    snprintf(msg, sizeof(msg), "irqguard=%d", ctx.busDiag->irqGuard() ? 1 : 0);
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "dbg", msg,
                               corrId, replyFn, replyCtx);
 #else
@@ -594,7 +599,7 @@ static void handleI2cw(const ArgList& args, const char* corrId,
 #ifndef HOST_BUILD
     DbgCtx ctx = dbgCtxFrom(handlerCtx);
     char rbuf[64];
-    if (ctx.bus == nullptr) {
+    if (ctx.busAccess == nullptr) {
         CommandProcessor::replyErr(rbuf, sizeof(rbuf), "noimpl", "no i2c bus",
                                    corrId, replyFn, replyCtx);
         return;
@@ -605,7 +610,7 @@ static void handleI2cw(const ArgList& args, const char* corrId,
     for (int i = 1; i < args.count && len < (int)sizeof(data); ++i) {
         data[len++] = (uint8_t)strtol(args.args[i].sval, nullptr, 16);
     }
-    int status = ctx.bus->write((uint16_t)(addr7 << 1), data, len);
+    int status = ctx.busAccess->write((uint16_t)(addr7 << 1), data, len);
     char body[48];
     snprintf(body, sizeof(body), "addr=0x%02X n=%d status=%d", addr7, len, status);
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "i2cw", body,
@@ -661,7 +666,7 @@ static void handleI2cr(const ArgList& args, const char* corrId,
 #ifndef HOST_BUILD
     DbgCtx ctx = dbgCtxFrom(handlerCtx);
     char rbuf[64];
-    if (ctx.bus == nullptr) {
+    if (ctx.busAccess == nullptr) {
         CommandProcessor::replyErr(rbuf, sizeof(rbuf), "noimpl", "no i2c bus",
                                    corrId, replyFn, replyCtx);
         return;
@@ -671,10 +676,10 @@ static void handleI2cr(const ArgList& args, const char* corrId,
     int wstatus = 0;
     if (args.count >= 3) {
         uint8_t reg = (uint8_t)strtol(args.args[2].sval, nullptr, 16);
-        wstatus = ctx.bus->write((uint16_t)(addr7 << 1), &reg, 1, true);
+        wstatus = ctx.busAccess->write((uint16_t)(addr7 << 1), &reg, 1, true);
     }
     uint8_t buf[16];
-    int status = ctx.bus->read((uint16_t)(addr7 << 1), buf, count);
+    int status = ctx.busAccess->read((uint16_t)(addr7 << 1), buf, count);
     char body[120];
     int pos = snprintf(body, sizeof(body),
                        "addr=0x%02X n=%d wstatus=%d status=%d data=",

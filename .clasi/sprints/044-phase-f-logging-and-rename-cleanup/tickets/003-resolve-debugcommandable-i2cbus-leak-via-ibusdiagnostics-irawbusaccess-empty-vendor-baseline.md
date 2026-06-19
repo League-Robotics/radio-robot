@@ -1,13 +1,14 @@
 ---
-id: "003"
-title: "Resolve DebugCommandable I2CBus leak via IBusDiagnostics+IRawBusAccess; empty vendor baseline"
-status: open
+id: '003'
+title: Resolve DebugCommandable I2CBus leak via IBusDiagnostics+IRawBusAccess; empty
+  vendor baseline
+status: in-progress
 use-cases:
-  - SUC-004
+- SUC-004
 depends-on:
-  - "044-002"
-github-issue: ""
-issue: "migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md"
+- 044-002
+github-issue: ''
+issue: migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -139,24 +140,35 @@ kept for now (it's firmware-internal; not a leak); only its use in `DbgCtx` is r
 
 ## Acceptance Criteria
 
-- [ ] `source/app/DebugCommandable.h` has no `class I2CBus` forward declaration.
-- [ ] `source/app/DebugCommandable.h` `DbgCtx` has `IBusDiagnostics* busDiag` and
+- [x] `source/app/DebugCommandable.h` has no `class I2CBus` forward declaration.
+- [x] `source/app/DebugCommandable.h` `DbgCtx` has `IBusDiagnostics* busDiag` and
       `IRawBusAccess* busAccess`; no `I2CBus*`.
-- [ ] `source/app/DebugCommandable.cpp` does not `#include "I2CBus.h"` anywhere.
-- [ ] `source/io/capability/IRawBusAccess.h` exists with `write` and `read` methods.
-- [ ] `source/io/real/I2CBusRawAccess.h/.cpp` exists implementing `IRawBusAccess`.
-- [ ] `source/io/capability/IBusDiagnostics.h` declares the extended method set.
-- [ ] `source/io/real/MotorBusDiagnostics.h/.cpp` implements all new methods.
-- [ ] `NezhaHAL` exposes `rawBusAccess()` returning `IRawBusAccess&`.
-- [ ] `tests/_infra/vendor_baseline.txt` is empty.
-- [ ] `test_vendor_confinement.py` reports zero violations (run as part of simulation tier).
-- [ ] Host build green (DebugCommandable.cpp is excluded from HOST_BUILD — the host
-      build must still compile with the new `DbgCtx` header; null pointers for
-      `busDiag`/`busAccess` are acceptable in HOST_BUILD).
-- [ ] ARM firmware build green: `python3 build.py --fw-only` → 0 errors. Then
-      `git checkout -- source/robot/DefaultConfig.cpp`.
-- [ ] Full simulation tier green: `uv run --with pytest python -m pytest -q` >= 2001 passed, 0 errors.
-- [ ] Golden-TLM canary passes byte-exact.
+- [x] `source/app/DebugCommandable.cpp` does not `#include "I2CBus.h"` anywhere.
+- [x] `source/io/capability/IRawBusAccess.h` exists with `write` and `read` methods.
+- [x] `source/io/real/I2CBusRawAccess.h/.cpp` exists implementing `IRawBusAccess`.
+- [x] `source/io/capability/IBusDiagnostics.h` declares the extended method set.
+      (Kept original `errorCount`/`reentryViolations`/`lastError` — read by
+      MotorController — and added the 8 new methods. Used an inline `DumpFn`
+      function-pointer typedef for `dumpRecent` so `io/capability/` takes no
+      dependency on the command-dispatch layer, per the T3 note.)
+- [x] `source/io/real/MotorBusDiagnostics.h/.cpp` implements all new methods
+      (verbatim forwarders to the same-named `I2CBus` methods).
+- [x] `NezhaHAL` exposes `rawBusAccess()` returning `IRawBusAccess&`, backed by a
+      new `I2CBusRawAccess _rawBusAccess(_bus)` value member.
+- [x] `tests/_infra/vendor_baseline.txt` is empty.
+- [x] `test_vendor_confinement.py` reports zero violations, and a new
+      `test_vendor_confinement_zero_hits_empty_baseline` hard-asserts ZERO hits
+      above `source/io/` with an empty baseline (the FINAL criterion).
+- [x] Host build green. NOTE: `DebugCommandable.cpp` is actually COMPILED in the
+      host build (its CODAL-dependent handler bodies are `#ifndef HOST_BUILD`-
+      guarded, not the whole file); it compiles cleanly with the new `DbgCtx`
+      header, and `sim_api.cpp` constructs `DbgCtx{nullptr,nullptr,nullptr,&robot}`
+      (busDiag/busAccess null in HOST_BUILD). The ticket wording "excluded from
+      HOST_BUILD" is inaccurate; the intent (host compiles with null pointers) holds.
+- [x] ARM firmware build green: `python3 build.py --fw-only` → 0 `error:`,
+      `MICROBIT.hex` produced. `git checkout -- source/robot/DefaultConfig.cpp` done.
+- [x] Full simulation tier green: `uv run --with pytest python -m pytest -q` → 2002 passed, 0 errors.
+- [x] Golden-TLM canary passes byte-exact (`test_golden_tlm_unchanged`).
 
 ## Implementation Plan
 

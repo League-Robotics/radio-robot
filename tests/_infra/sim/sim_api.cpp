@@ -126,7 +126,10 @@ struct SimHandle {
         , robot(hal, cfg)
         , _worldView(hal.plant(), robot.state.inputs)
         , _queue()
-        , dbg(DbgCtx{nullptr, nullptr, &robot})
+        // 044-003 (Phase F): DbgCtx gained busAccess; host build leaves both
+        // busDiag and busAccess null (DebugCommandable's I2C handlers are
+        // #ifndef HOST_BUILD, so the null bus path is never exercised host-side).
+        , dbg(DbgCtx{nullptr, nullptr, nullptr, &robot})
         , cmd(robot.buildCommandTable(&dbg, nullptr))
         , benchOtos()
     {
