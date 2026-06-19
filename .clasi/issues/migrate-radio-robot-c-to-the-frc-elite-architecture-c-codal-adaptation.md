@@ -120,6 +120,12 @@ source/
   robot/         Robot.*  RobotTelemetry.*  ConfigRegistry.*  DefaultConfig.cpp
   types/         Config.h Protocol.h CommandTypes.h Inputs.h(=HardwareState)
   main.cpp
+
+tests/                          # test tiers, by how-much-hardware-is-real — see §7
+  simulation/  unit/  system/   # entirely simulated (SIM mode + PhysicsWorld)
+  bench/       unit/  system/   # real hardware on a stand, odometry simulated
+  field/       unit/  system/   # all real hardware + overhead camera
+  _infra/                       # sim build (sim_api/firmware.py/CMake), testkit, calibrate/, tools/
 ```
 Reached via **alias shims** (e.g. `using IMotor = IVelocityMotor;` during transition) so each step compiles green; old `I*.h` headers deleted last.
 
@@ -133,11 +139,38 @@ Reached via **alias shims** (e.g. `using IMotor = IVelocityMotor;` during transi
 
 ---
 
+## §7 — Test system (simulation / bench / field tiers)
+
+The reorg makes the test system first-class: tests are organized **by how much hardware is real**, matching the run mode and the existing `make_target(sim|bench|production)` switch in `robot_radio.testkit`.
+
+| Tier | Hardware | Target | Odometry / plant | Covers |
+|---|---|---|---|---|
+| **simulation** | none — runs **entirely** in SIM mode | `make_target("sim")` (host ctypes lib + `PhysicsWorld`) | fully simulated | logic + whole-robot scenarios, zero hardware |
+| **bench** | real robot on a stand; **odometry simulated**, motors + I2C sensors real | `make_target("bench")` (radio/serial → real fw, bench mode) | `BenchOtosSensor` for pose; real encoders/motors/sensors | real-device behavior that can't be honestly faked |
+| **field** | **all** real hardware on the playfield + overhead camera | `make_target("production")` | real OTOS + camera fixes | end-to-end navigation / system behavior |
+
+Directory structure — **by tier, with unit/system scope under each**:
+```
+tests/
+  simulation/  unit/      # pure logic + one subsystem on its Sim device — no hardware
+               system/    # whole-robot in sim (drive square, GOTO, estimate-vs-truth)
+  bench/       unit/      # real-device units: motor drive, encoder read, I2C, OTOS status
+               system/    # bench end-to-end on the stand (odometry simulated)
+  field/       unit/      # (minimal)
+               system/    # field navigation / tours (needs playfield + camera)
+  _infra/      # sim build (sim_api/firmware.py/CMake), testkit helpers, calibrate/, tools/
+```
+- **unit vs system:** *unit* = one thing in isolation (a subsystem on its Sim device, or one real device on the bench); *system* = the whole robot end-to-end.
+- **Where a test goes:** testable with no hardware → **simulation** (the default, always-run tier); needs a real device that can't be simulated honestly (I2C timing, real encoder/motor, OTOS lift) → **bench**; full navigation against the camera → **field**. Unit tests live primarily under **simulation** and **bench**; **field** is mostly system tests.
+- Subsumes today's flat layout: `tests/unit/` → `simulation/{unit,system}`; `tests/bench/` scripts → `bench/`; `tests/system/` (goto_world, tours) → `field/system/`. The physical-plant work (§2) is what lets the **simulation** tier run "entirely in simulation."
+
+---
+
 ## Migration sequence (each phase = one CLASI sprint)
 
-**Per-phase Definition of Done:** all 1954 host tests green · `defaultRobotConfig()` field-pin diff empty · golden-TLM canary unchanged · one hardware bench smoke (drive a square + GOTO a tag within prior tolerance) · no new heap/fibers · vendor-confinement grep gate passes (ratchets tighter each phase). Move behavioral bodies **verbatim**.
+**Per-phase Definition of Done:** **simulation tier green** (all sim unit + system tests — the continuous mandatory gate, ⊇ today's 1954) · **bench tier green** (the bench unit/system tests that apply — runnable now, robot on the stand) · `defaultRobotConfig()` field-pin diff empty · golden-TLM canary unchanged · no new heap/fibers · vendor-confinement grep gate (ratchets tighter each phase). **Field/system tier deferred** — each phase records its pending field checks to run when the robot's on the playfield. Move behavioral bodies **verbatim**.
 
-- **Phase 0 — Safety nets (no source moves):** add canaries — vendor-confinement grep gate, `defaultRobotConfig()` field-pin, golden-TLM frame for a fixed command sequence; record the calibration + bench-smoke baseline.
+- **Phase 0 — Safety nets + test tiers (no source moves):** stand up the `tests/{simulation,bench,field}/{unit,system}` tiers (§7) and move the current host suite into `simulation/`; add canaries — vendor-confinement grep gate, `defaultRobotConfig()` field-pin, golden-TLM frame for a fixed command sequence; record the calibration + bench baseline. (`tests/` reorg only — `source/` untouched.)
 - **Phase A — Capability devices:** add `io/capability/*` interfaces (as aliases over the current `I*` first), seal the `MotorController` `I2CBus`/`MicroBit.h` leak via `IBusDiagnostics`, move Nezha split-phase into the `Motor` impl + `Hardware::tick`, split `IMotor`→`IVelocityMotor`+`IPositionMotor` and rename `IOtosSensor`→`IOdometer` (fold `IServo` into `IPositionMotor`; seal the OTOS LSB/`cfg` leaks), `hal/`→`io/` + `ROBOT_RUN_MODE`.
 - **Phase B — Physical-plant sim:** create `PhysicsWorld` + observation models; collapse `MockMotor`/`ExactPoseTracker`/`BenchOtos`-dual-accumulators into the clean split; re-point `sim_api`/`firmware.py` (settable truth, error layers, `WorldView`); migrate the ~25 sim-driven tests (mostly via aliases).
 - **Phase C — `PhysicalStateEstimate` seam:** wrap `Odometry`+`EKF` by composition; repoint the three observation sites; strip `Commandable`; move EKF under `state/`.
@@ -166,7 +199,9 @@ CommandScheduler/SubsystemBase → the cooperative `loopTickOnce` + `CommandQueu
 
 ## Verification
 
-- **Each phase:** `python3 build.py --clean` (REAL + SIM) → `uv run --with pytest python -m pytest tests/unit -q` (1954 green) → canaries (config field-pin, golden-TLM, vendor grep gate) → flash + **bench smoke** (drive square + GOTO tag within tolerance; confirm `VER`).
+- **Required every phase — simulation tier (the gate):** `python3 build.py --clean` (REAL + SIM) → run the **simulation** tests (`make_target("sim")`; ⊇ today's 1954) all green, plus the canaries (config field-pin, golden-TLM, vendor grep gate). No phase advances on a red simulation tier.
+- **Runnable now — bench tier (robot is on the bench):** flash → run the **bench** tests (`make_target("bench")`, odometry simulated, motors/I2C/sensors real): `VER` matches, encoders count, drive-on-stand + sensor reads behave. Run these each phase where they apply.
+- **Deferred — field + system tier (no playfield access now):** the **field** tests (`make_target("production")` — full navigation, GOTO-a-tag, tours against the camera) and any whole-robot system tests **cannot run now**; each phase records them as pending, to run once the robot is back on the playfield.
 - **Plant correctness (Phase B):** new isolation tests per the doc's matrix — plant-only (true pose reaches target), observation-only (`setTruePose(known)` → sensor returns truth ± error; verify drift/dropout/frozen-encoder), estimator-only (`estimation_error() < TOL`; bad OTOS rejected), whole-robot (final *true* pose within tolerance of a D/G/TURN plan).
 - **Behavior-preservation fences (must stay green untouched):** `test_033_005_wedge_hardening.py`, `test_goto_bounds.py`, `test_incident_scenarios.py`, `test_ekf*.py`, `test_otos_fusion.py`, `test_watchdog_exemption.py`, `sim_field_profile` (slip).
 - **Final:** vendor-confinement grep returns zero hits above `source/io/`; the four-file device quartet exists per capability; the three seams are findable; a sim log can be re-fed in REPLAY mode (stub exercised).
