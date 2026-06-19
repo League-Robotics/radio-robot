@@ -1,8 +1,10 @@
 ---
 id: '001'
 title: Scaffold tier dirs and move sim infra to _infra/sim/
-status: open
-use-cases: [SUC-001, SUC-002]
+status: done
+use-cases:
+- SUC-001
+- SUC-002
 depends-on: []
 github-issue: ''
 issue: migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md
@@ -123,15 +125,15 @@ test count ≥ 1954 passed, 0 errors. Only commit once green.
 
 ## Acceptance Criteria
 
-- [ ] `tests/_infra/sim/CMakeLists.txt` exists; REPO_ROOT computed with 3 `..` hops.
-- [ ] `tests/_infra/sim/sim_api.cpp` and `tests/_infra/sim/firmware.py` exist.
-- [ ] `tests/conftest.py` `_SIM_DIR` points to `tests/_infra/sim/`.
-- [ ] `build.py` references `tests/_infra/sim/` in `build_host_sim()`.
-- [ ] `sim_conn.py` `_DEFAULT_LIB` resolves to `tests/_infra/sim/build/`.
-- [ ] All tier scaffold dirs exist: `simulation/unit/`, `simulation/system/`,
+- [x] `tests/_infra/sim/CMakeLists.txt` exists; REPO_ROOT computed with 3 `..` hops.
+- [x] `tests/_infra/sim/sim_api.cpp` and `tests/_infra/sim/firmware.py` exist.
+- [x] `tests/conftest.py` `_SIM_DIR` points to `tests/_infra/sim/`.
+- [x] `build.py` references `tests/_infra/sim/` in `build_host_sim()`.
+- [x] `sim_conn.py` `_DEFAULT_LIB` resolves to `tests/_infra/sim/build/`.
+- [x] All tier scaffold dirs exist: `simulation/unit/`, `simulation/system/`,
       `bench/unit/`, `bench/system/`, `field/unit/`, `field/system/`.
-- [ ] `uv run --with pytest python -m pytest -q` passes ≥ 1954 tests, 0 errors.
-- [ ] `git diff source/` is empty.
+- [x] `uv run --with pytest python -m pytest -q` passes ≥ 1954 tests, 0 errors.
+- [x] `git diff source/` is empty.
 
 ## Testing Plan
 

@@ -47,7 +47,7 @@ parser.add_option('-d', '--dev', dest='dev', action="store_true", help='enable d
 parser.add_option('-g', '--generate-docs', dest='generate_docs', action="store_true", help='generate documentation for the current target', default=False)
 parser.add_option('-j', '--parallelism', dest='parallelism', action="store", help='Set the number of parallel threads to build with, if supported', default=10)
 parser.add_option('-n', '--lines', dest='detail_lines', action="store", help="Sets the number of detail lines to output (only relevant to --status)", default=3 )
-parser.add_option('--fw-only', dest='fw_only', action="store_true", help='Build ONLY the micro:bit firmware; skip the host-simulation library. By default build.py builds BOTH the bench firmware (MICROBIT.hex) and the full-simulation library (tests/sim/build/libfirmware_host).', default=False)
+parser.add_option('--fw-only', dest='fw_only', action="store_true", help='Build ONLY the micro:bit firmware; skip the host-simulation library. By default build.py builds BOTH the bench firmware (MICROBIT.hex) and the full-simulation library (tests/_infra/sim/build/libfirmware_host).', default=False)
 
 (options, args) = parser.parse_args()
 
@@ -153,14 +153,14 @@ def _project_version():
 
 
 def build_host_sim(clean):
-    """Build the host-simulation library (libfirmware_host) via the tests/sim
+    """Build the host-simulation library (libfirmware_host) via the tests/_infra/sim
     CMake build (HOST_BUILD) — the 'full simulation' target the pytest harness
     uses. Fast: ~8s clean, <1s incremental. Uses absolute paths from __file__ so
     it is correct regardless of the current working directory. Raises on failure.
     """
     import subprocess
     root = os.path.dirname(os.path.abspath(__file__))
-    sim_dir = os.path.join(root, "tests", "sim")
+    sim_dir = os.path.join(root, "tests", "_infra", "sim")
     build_dir = os.path.join(sim_dir, "build")
     if clean and os.path.isdir(build_dir):
         shutil.rmtree(build_dir)
@@ -178,7 +178,7 @@ def print_build_summary(fw_only):
     if fw_only:
         print("  host sim lib   (skipped: --fw-only)")
     else:
-        print("  host sim lib   v%s   (HOST_BUILD)   -> tests/sim/build/libfirmware_host" % ver)
+        print("  host sim lib   v%s   (HOST_BUILD)   -> tests/_infra/sim/build/libfirmware_host" % ver)
     print()
 
 

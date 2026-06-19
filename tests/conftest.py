@@ -7,7 +7,7 @@ Provides:
   sim_field_profile — function-scoped: Sim with field profile (turn slip + OTOS fusion).
 
 sys.path setup ensures:
-  - tests/sim/ is on sys.path → `from firmware import Sim` works from tests/unit/.
+  - tests/_infra/sim/ is on sys.path → `from firmware import Sim` works from tests/unit/.
   - host/ is on sys.path → `from robot_radio.testkit import ...` works everywhere.
 """
 import pathlib
@@ -21,8 +21,8 @@ import pytest
 # ---------------------------------------------------------------------------
 
 _TESTS_DIR = pathlib.Path(__file__).parent          # tests/
-_SIM_DIR   = _TESTS_DIR / "sim"                    # tests/sim/
-_BUILD_DIR = _SIM_DIR / "build"                    # tests/sim/build/
+_SIM_DIR   = _TESTS_DIR / "_infra" / "sim"         # tests/_infra/sim/
+_BUILD_DIR = _SIM_DIR / "build"                    # tests/_infra/sim/build/
 _REPO_ROOT = _TESTS_DIR.parent                     # repo root
 _HOST_DIR  = _REPO_ROOT / "host"                   # host/ (robot_radio package)
 
