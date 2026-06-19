@@ -1,7 +1,7 @@
 ---
 id: 039
 title: "Phase A \u2014 Capability-typed device layer"
-status: roadmap
+status: planning-docs
 branch: sprint/039-phase-a-capability-typed-device-layer
 use-cases: []
 issues:
@@ -124,5 +124,10 @@ Following §1 of the issue:
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 039-001 | Capability interface headers + IBusDiagnostics + seal MotorController vendor leaks | — |
+| 039-002 | Move Nezha split-phase state machine into Motor impl; add positionMm/velocityMmps accessors | 039-001 |
+| 039-003 | Split IMotor into IVelocityMotor and IPositionMotor; fold IServo into IPositionMotor | 039-001, 039-002 |
+| 039-004 | Rename IOtosSensor to IOdometer; seal RobotConfig from public signatures; Pose2D/BodyTwist aliases | 039-001, 039-003 |
+| 039-005 | Rename hal/ to io/; establish real/ sim/ subdirs; ROBOT_RUN_MODE CMake; ReplayHAL stub | 039-001, 039-002, 039-003, 039-004 |
 
 Tickets execute serially in the order listed.
