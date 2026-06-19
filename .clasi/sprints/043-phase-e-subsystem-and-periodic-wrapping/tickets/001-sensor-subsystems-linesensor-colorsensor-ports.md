@@ -1,13 +1,13 @@
 ---
-id: "001"
-title: "Sensor subsystems: LineSensor, ColorSensor, Ports"
-status: open
+id: '001'
+title: 'Sensor subsystems: LineSensor, ColorSensor, Ports'
+status: done
 use-cases:
-  - SUC-001
-  - SUC-004
+- SUC-001
+- SUC-004
 depends-on: []
-github-issue: ""
-issue: "migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md"
+github-issue: ''
+issue: migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -35,28 +35,42 @@ touch the CONTROL COLLECT block (Drive, ticket 002) or the OTOS block.
 
 ## Acceptance Criteria
 
-- [ ] `source/subsystems/sensors/LineSensor.{h,cpp}` exist and compile.
-- [ ] `source/subsystems/sensors/ColorSensor.{h,cpp}` exist and compile.
-- [ ] `source/subsystems/sensors/Ports.{h,cpp}` exist and compile.
-- [ ] Each class has `periodic(LoopTickState& ts, uint32_t now)` and `updateInputs(uint32_t now)`.
-- [ ] `loopTickOnce` LINE/COLOUR/PORTS inline blocks replaced by one-liner subsystem calls
-      in the SAME ORDER as today (LINE before COLOUR before PORTS).
-- [ ] `Robot.h` adds `LineSensor lineSensor`, `ColorSensor colorSensor`, `Ports ports` value
-      members declared AFTER the `line`, `colorSensor`, `portio` device-interface refs they bind.
-- [ ] `Robot.cpp` constructor init-list wires each subsystem with device ref, `state.inputs`, `config`.
-- [ ] `Robot::lineRead()`, `colorRead()`, `portsRead()` declarations and bodies removed
-      (after grep confirms no external callers).
-- [ ] `source/subsystems/` added to `tests/_infra/sim/CMakeLists.txt` source glob.
-- [ ] `tests/_infra/vendor_baseline.txt` updated to include `source/subsystems/` in INSPECT_DIRS.
-- [ ] Vendor-confinement grep: `grep -rn "MicroBit\|I2CBus\|microbit_random" source/subsystems/`
+- [x] `source/subsystems/sensors/LineSensor.{h,cpp}` exist and compile.
+- [x] `source/subsystems/sensors/ColorSensor.{h,cpp}` exist and compile.
+- [x] `source/subsystems/sensors/Ports.{h,cpp}` exist and compile.
+- [x] Each class has `periodic(LoopTickState& ts, uint32_t now)` and `updateInputs(uint32_t now)`.
+- [x] `loopTickOnce` LINE/COLOUR/PORTS inline blocks replaced by one-liner subsystem calls
+      in the SAME ORDER as today (LINE before COLOUR before PORTS). Verified: OTOS → LINE →
+      COLOUR → PORTS → TLM, unchanged position.
+- [x] `Robot.h` adds `subsystems::LineSensor lineSensor`, `subsystems::ColorSensor colorSensor_`,
+      `subsystems::Ports ports` value members declared AFTER the `line`, `colorSensor`, `portio`
+      device-interface refs they bind. ANNOTATION: (1) the three subsystem classes are placed in
+      a `subsystems` namespace because `LineSensor`/`ColorSensor` are ALREADY global class names
+      (the io/real device drivers, source/io/real/{LineSensor,ColorSensor}.h, reachable in the
+      firmware build via NezhaHAL) — without the namespace the ARM build fails with ODR
+      redefinition. (2) the ColorSensor subsystem member is named `colorSensor_` (trailing
+      underscore) because the existing `IColorSensor& colorSensor` device ref already owns the
+      `colorSensor` name (kept to avoid macro collisions; used by SystemCommands caps). Both are
+      internal naming only — no behavior/TLM change. loopTickOnce calls `robot.colorSensor_.periodic`.
+- [x] `Robot.cpp` constructor init-list wires each subsystem with device ref, `state.inputs`, `config`.
+- [x] `Robot::lineRead()`, `colorRead()`, `portsRead()` declarations and bodies removed
+      (grep confirmed only callers were the loopTickOnce inline blocks; io/sim comments updated to
+      reference the new subsystem path are left as-is since they are descriptive comments).
+- [x] `source/subsystems/` added to `tests/_infra/sim/CMakeLists.txt` source glob
+      (GLOB_RECURSE SUBSYSTEM_SOURCES + include dir + add_library entry).
+- [x] INSPECT_DIRS updated to include `subsystems`. ANNOTATION: INSPECT_DIRS lives in
+      `tests/simulation/unit/test_vendor_confinement.py` (not `vendor_baseline.txt`, which is the
+      known-hits baseline output). `subsystems` added to the INSPECT_DIRS list there; the baseline
+      needs no new entries because source/subsystems/ is vendor-clean (zero hits).
+- [x] Vendor-confinement grep: `grep -rn "MicroBit\|I2CBus\|microbit_random" source/subsystems/`
       returns zero hits.
-- [ ] No `printf` / `telemetryEmit` calls inside any subsystem method body.
-- [ ] Simulation tier green: `uv run --with pytest python -m pytest -q` >= 2001 passed, 0 errors.
-- [ ] Golden-TLM canary byte-exact.
-- [ ] `defaultRobotConfig()` field-pin diff empty.
-- [ ] ARM firmware build gate: `python3 build.py --fw-only` -> 0 errors; then
-      `git checkout -- source/robot/DefaultConfig.cpp`.
-- [ ] Behavior-preservation fences green: `test_incident_scenarios.py`, `test_goto_bounds.py`,
+- [x] No `printf` / `telemetryEmit` calls inside any subsystem method body (only in header comments).
+- [x] Simulation tier green: `uv run --with pytest python -m pytest -q` -> 2001 passed, 0 errors.
+- [x] Golden-TLM canary byte-exact (test_golden_tlm_unchanged PASSED).
+- [x] `defaultRobotConfig()` field-pin diff empty (test_default_config_pin green).
+- [x] ARM firmware build gate: `python3 build.py --fw-only` -> 0 errors, MICROBIT.hex built; then
+      `git checkout -- source/robot/DefaultConfig.cpp` (restored).
+- [x] Behavior-preservation fences green: `test_incident_scenarios.py`, `test_goto_bounds.py`,
       `test_watchdog_exemption.py`.
 
 ## Implementation Plan

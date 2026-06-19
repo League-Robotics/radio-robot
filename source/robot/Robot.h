@@ -20,6 +20,11 @@
 #include "../control/HaltController.h"
 #include "../superstructure/Superstructure.h"
 #include "MotionCommandHandlers.h"
+// Phase E (043-001): thin sensor subsystems owning the timed LINE/COLOUR/PORTS
+// reads.  Each is a value member declared after the device-interface ref it binds.
+#include "../subsystems/sensors/LineSensor.h"
+#include "../subsystems/sensors/ColorSensor.h"
+#include "../subsystems/sensors/Ports.h"
 
 // Forward declarations — keeps the header-graph shallow.
 class DebugCommandable;
@@ -85,6 +90,15 @@ struct Robot {
     MotionController    motionController;  // (motorController, estimate.odometry(), config)
     PortController      portController;    // (portio)
     ServoController     servoController;   // (gripper)
+    // Phase E (043-001) sensor subsystems — own the timed LINE/COLOUR/PORTS reads
+    // that were inline blocks in loopTickOnce.  Each binds the device-interface ref
+    // (line / colorSensor / portio), state.inputs, and config — all declared above,
+    // so they are live when these members construct (C++ inits in declaration order).
+    // Types are namespaced under `subsystems` because LineSensor/ColorSensor are
+    // also io/real device-driver class names (firmware build collision).
+    subsystems::LineSensor  lineSensor;    // (line, state.inputs, config)
+    subsystems::ColorSensor colorSensor_;  // (colorSensor, state.inputs, config)
+    subsystems::Ports       ports;         // (portio, state.inputs, config)
     HaltController      haltController;    // user-facing named stop-condition registry
     // Superstructure (Seam 3, 042-001) — thin Goal coordinator.  MUST be declared
     // AFTER motionController and haltController: it holds references to both, and
@@ -115,10 +129,9 @@ struct Robot {
     // RobotConfig is sealed out of the read signature (held as an OtosSensor impl member).
     void otosCorrect(uint32_t now_ms);
 
-    // Sensor read task entry points (write to state.inputs.*VS).
-    void lineRead();
-    void colorRead();
-    void portsRead();
+    // Sensor read task entry points REMOVED (043-001, Phase E): lineRead/colorRead/
+    // portsRead bodies moved verbatim into the LineSensor/ColorSensor/Ports
+    // subsystems' updateInputs(now).  loopTickOnce calls their periodic() instead.
 
     // resetEncoders — atomically resets ALL encoder state so that both the outlier
     // filter baseline and Odometry's previous-encoder snapshot see a fresh zero.

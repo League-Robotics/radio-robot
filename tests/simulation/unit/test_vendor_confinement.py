@@ -33,7 +33,10 @@ BASELINE_FILE = REPO_ROOT / "tests" / "_infra" / "vendor_baseline.txt"
 # 042-001 (Phase D): source/superstructure/ added to scope. The Superstructure
 # seam (Goal enum + requestGoal) must stay vendor-free — it depends only on
 # Config/Protocol and forward-declares MotionController/HaltController/Robot.
-INSPECT_DIRS = ["app", "control", "robot", "state", "superstructure", "types"]
+# 043-001 (Phase E): source/subsystems/ added to scope. The thin sensor/drive/
+# gripper subsystems wrap capability interfaces only — no MicroBit.h / I2CBus /
+# microbit_random may appear in source/subsystems/.
+INSPECT_DIRS = ["app", "control", "robot", "state", "subsystems", "superstructure", "types"]
 
 # CODAL-only files excluded from the host build — vendor deps here are expected.
 CODAL_ONLY = {

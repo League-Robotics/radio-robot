@@ -61,6 +61,18 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       motionController(motorController, estimate.odometry(), config),
       portController(portio),
       servoController(gripper),
+      // Phase E (043-001) sensor subsystems — wired with their device ref,
+      // state.inputs (HardwareState), and config.  Declaration order in Robot.h
+      // puts these after the refs they bind, so the refs are live here.
+      // NOTE: the ColorSensor subsystem member is named colorSensor_ (trailing
+      // underscore) because the existing IColorSensor& device ref is already
+      // named colorSensor (kept to avoid macro collisions; used by
+      // SystemCommands::caps).  Architecture-update.md names it colorSensor; the
+      // device-ref collision forces the underscore.  Internal naming only — no
+      // behavior/TLM change.  See report annotation.
+      lineSensor(line, state.inputs, config),
+      colorSensor_(colorSensor, state.inputs, config),
+      ports(portio, state.inputs, config),
       // Superstructure (042-001) — wired with references to motionController and
       // haltController (both declared before it) plus config.  Declaration order
       // in Robot.h guarantees those are constructed first.
@@ -248,47 +260,18 @@ void Robot::otosCorrect(uint32_t now_ms)
 }
 
 // ---------------------------------------------------------------------------
-// lineRead — read 4-channel line sensor into HardwareState.
+// lineRead / colorRead / portsRead REMOVED (043-001, Phase E).
+//
+// The 4-channel line read, the non-blocking RGBC poll, and the digital/analogue
+// GPIO read moved VERBATIM into the new sensor subsystems'
+// updateInputs(uint32_t now) methods:
+//   source/subsystems/sensors/LineSensor.cpp
+//   source/subsystems/sensors/ColorSensor.cpp
+//   source/subsystems/sensors/Ports.cpp
+// systemTime() became the `now` parameter (same value loopTickOnce threads).
+// loopTickOnce now calls robot.lineSensor / robot.colorSensor_ / robot.ports
+// .periodic(ts, now) in the SAME order/position the inline blocks ran.
 // ---------------------------------------------------------------------------
-
-void Robot::lineRead()
-{
-    if (!line.is_initialized()) return;
-    if (line.readValues(state.inputs.line)) {
-        state.inputs.lineVS.lastUpdMs = systemTime();
-        state.inputs.lineVS.valid     = true;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// colorRead — non-blocking RGBC poll into HardwareState.
-// ---------------------------------------------------------------------------
-
-void Robot::colorRead()
-{
-    if (!colorSensor.is_initialized()) return;
-    if (colorSensor.pollRGBC(state.inputs.colorR,
-                              state.inputs.colorG,
-                              state.inputs.colorB,
-                              state.inputs.colorC)) {
-        state.inputs.colorVS.lastUpdMs = systemTime();
-        state.inputs.colorVS.valid     = true;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// portsRead — read digital and analogue GPIO ports into HardwareState.
-// ---------------------------------------------------------------------------
-
-void Robot::portsRead()
-{
-    for (uint8_t i = 0; i < 4; ++i) {
-        state.inputs.digitalIn[i] = (portio.readDigital(i) != 0);
-        state.inputs.analogIn[i]  = (int16_t)portio.readAnalog(i);
-    }
-    state.inputs.portsVS.lastUpdMs = systemTime();
-    state.inputs.portsVS.valid     = true;
-}
 
 // ---------------------------------------------------------------------------
 // resetEncoders — single canonical atomic encoder reset (N1, sprint 030-001).

@@ -43,6 +43,11 @@ file(GLOB ROBOT_SOURCES   "${REPO_ROOT}/source/robot/*.cpp")
 file(GLOB STATE_SOURCES   "${REPO_ROOT}/source/state/*.cpp")
 # 042-001 (Phase D): source/superstructure/ holds Superstructure.cpp (Seam 3).
 file(GLOB SUPERSTRUCTURE_SOURCES "${REPO_ROOT}/source/superstructure/*.cpp")
+# 043-001 (Phase E): source/subsystems/ holds the thin sensor subsystems
+# (LineSensor/ColorSensor/Ports). Globbed recursively so drive/ and gripper/
+# subdirs added in later Phase E tickets are picked up too. The firmware (CODAL)
+# build discovers these via RECURSIVE_FIND_FILE; the host build needs them here.
+file(GLOB_RECURSE SUBSYSTEM_SOURCES "${REPO_ROOT}/source/subsystems/*.cpp")
 
 list(FILTER APP_SOURCES     EXCLUDE REGEX ".*/WedgeTest\\.cpp$")
 list(FILTER CONTROL_SOURCES EXCLUDE REGEX ".*/LoopScheduler\\.cpp$")
@@ -72,6 +77,7 @@ add_library(firmware_host SHARED
     ${ROBOT_SOURCES}
     ${STATE_SOURCES}
     ${SUPERSTRUCTURE_SOURCES}
+    ${SUBSYSTEM_SOURCES}
     ${IO_DEVICE_SOURCES}
     ${REPLAY_SOURCES}
     # BenchOtosSensor lives in source/io/real/ (not io/sim/) so it is not globbed
@@ -100,5 +106,8 @@ target_include_directories(firmware_host PRIVATE
     "${REPO_ROOT}/source/robot"
     "${REPO_ROOT}/source/state"
     "${REPO_ROOT}/source/superstructure"
+    # 043-001 (Phase E): subsystem dirs so each subsystem .cpp resolves its own
+    # same-directory header (#include "LineSensor.h" etc.).
+    "${REPO_ROOT}/source/subsystems/sensors"
     "${REPO_ROOT}/source/types"
 )

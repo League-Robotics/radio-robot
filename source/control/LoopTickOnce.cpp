@@ -174,25 +174,20 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     }
 
     // ===== LINE: timed I2C read ===============================================
-    if (cfg.lagLineMs > 0 &&
-        (int32_t)(now - ts.lastLine) >= (int32_t)cfg.lagLineMs) {
-        robot.lineRead();
-        ts.lastLine = now;
-    }
+    // 043-001 (Phase E): the lag gate + read + timer bump moved VERBATIM into
+    // LineSensor::periodic(ts, now).  Same order/position, same numerics — the
+    // golden-TLM canary is the byte-exact oracle.
+    robot.lineSensor.periodic(ts, now);
 
     // ===== COLOUR: timed read =================================================
-    if (cfg.lagColorMs > 0 &&
-        (int32_t)(now - ts.lastColor) >= (int32_t)cfg.lagColorMs) {
-        robot.colorRead();
-        ts.lastColor = now;
-    }
+    // 043-001: verbatim COLOUR block now in ColorSensor::periodic(ts, now).
+    // (Robot member is colorSensor_ — the IColorSensor& device ref keeps the
+    // colorSensor name to avoid macro collisions; see Robot.cpp annotation.)
+    robot.colorSensor_.periodic(ts, now);
 
     // ===== PORTS: timed GPIO read =============================================
-    if (cfg.lagPortsMs > 0 &&
-        (int32_t)(now - ts.lastPorts) >= (int32_t)cfg.lagPortsMs) {
-        robot.portsRead();
-        ts.lastPorts = now;
-    }
+    // 043-001: verbatim PORTS block now in Ports::periodic(ts, now).
+    robot.ports.periodic(ts, now);
 
     // ===== TELEMETRY: timed TLM frame emit ====================================
     // N3 fix (030-003): emit with the STREAM-bound fn+ctx pair, not ts.activeCtx
