@@ -12,8 +12,8 @@ NezhaHAL::NezhaHAL(MicroBitI2C& i2c, MicroBitIO& io, const RobotConfig& cfg)
       // gen_default_config) which does NOT affect the L/R encoder ordering here.
       // (A prior L/R swap here was a mirror-era hack — the overhead camera was
       // vertically flipped at the time — and it inverted the encoder heading.)
-      _motorL(_bus, 2, cfg.fwdSignL),   // chip M2 = physical LEFT
-      _motorR(_bus, 1, cfg.fwdSignR),   // chip M1 = physical RIGHT
+      _motorL(_bus, 2, cfg.fwdSignL, cfg),   // chip M2 = physical LEFT
+      _motorR(_bus, 1, cfg.fwdSignR, cfg),   // chip M1 = physical RIGHT
       _otos(_bus, cfg),
 #ifdef BENCH_OTOS_ENABLED
       _benchOtos(),
@@ -67,6 +67,21 @@ void NezhaHAL::begin()
 // Ported from Robot::benchOtosTick; Robot will call this instead of the
 // downcast pattern once ticket 002 is implemented (034-001).
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// tick(now_ms) — sensor tick: per-loop split-phase encoder read (039-002).
+//
+// Replaces the encoder read that Robot::controlCollectSplitPhase performed.
+// RIGHT (M1) is read BEFORE LEFT (M2), matching the proven WedgeTest ordering
+// the old controlCollectSplitPhase relied on.  Each Motor::tick() issues the
+// identical 0x46-write + 4-byte-read transaction (via readEncoderMmFSettle),
+// so the bytes on the I2C wire are unchanged.
+// ---------------------------------------------------------------------------
+void NezhaHAL::tick(uint32_t now_ms)
+{
+    _motorR.tick(now_ms);   // Right (M1) first — proven ordering (sprint 015)
+    _motorL.tick(now_ms);   // Left (M2) second
+}
 
 void NezhaHAL::tick(uint32_t now_ms, const MotorCommands& cmds)
 {

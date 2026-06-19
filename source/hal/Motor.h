@@ -43,7 +43,7 @@
  */
 class Motor : public IMotor {
 public:
-    Motor(I2CBus& i2c, uint8_t motorId, int8_t fwdSign);
+    Motor(I2CBus& i2c, uint8_t motorId, int8_t fwdSign, const RobotConfig& cfg);
 
     // Prime the encoder at boot: calls resetEncoder() to perform the first
     // atomic 0x46 read, un-freezing the Nezha readback that sits at 0 until
@@ -56,6 +56,27 @@ public:
     // fwdSign is applied internally to map logical direction to chip direction.
     // Stores the commanded direction in _lastDir for readSpeed() sign inference.
     void    setSpeed(int8_t pct) override;
+
+    /**
+     * tick — per-loop split-phase encoder read (039-002).
+     *
+     * Called once per cooperative-loop iteration via NezhaHAL::tick(now_ms),
+     * BEFORE loopTickOnce.  Issues the split-phase encoder read (the exact
+     * 0x46-write + 4-byte-read I2C transaction that controlCollectSplitPhase
+     * previously issued via readEncoderMmFSettle) and caches the result in
+     * _lastPositionMm.  Differentiates against the previous cached position over
+     * the elapsed time and caches _lastVelocityMmps.
+     *
+     * NO outlier filter, NO PID velocity smoothing, NO wedge detection here —
+     * those stay in the control layer (Sprint 039 OQ-2 resolution b).  This keeps
+     * the I2C bytes on the wire identical to the pre-039 path while moving the
+     * raw read out of Robot.
+     */
+    void    tick(uint32_t now_ms) override;
+
+    // Cheap accessors — return the values cached by the most recent tick(); no I2C.
+    float   positionMm()   const override { return _lastPositionMm; }
+    float   velocityMmps() const override { return _lastVelocityMmps; }
 
     // Read cumulative encoder in mm using calibration from cfg.
     // Uses mmPerDegL if motorId==LEFT_MOTOR, mmPerDegR otherwise.
@@ -240,6 +261,19 @@ private:
     I2CBus& _i2c;
     uint8_t      _motorId;  // 1=M1/right, 2=M2/left
     int8_t       _fwdSign;  // +1 or -1
+
+    // Calibration reference (039-002) — used by tick() to convert raw encoder
+    // tenths-of-degrees to mm without the caller passing cfg every loop.
+    const RobotConfig& _cfg;
+
+    // ---- Split-phase tick() cache (039-002) ----
+    // _lastPositionMm  : cumulative encoder position in mm cached by tick().
+    // _lastVelocityMmps: velocity differentiated from successive tick() positions.
+    // _lastTickMs / _hasLastTick : timing baseline for the differentiation.
+    float    _lastPositionMm   = 0.0f;
+    float    _lastVelocityMmps = 0.0f;
+    uint32_t _lastTickMs       = 0;
+    bool     _hasLastTick      = false;
 
     // Commanded direction: +1 = logical forward, -1 = logical reverse, 0 = stopped.
     // Set by setSpeed(); read by readSpeed() to apply sign to the unsigned chip reading.

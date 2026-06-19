@@ -1,13 +1,14 @@
 ---
-id: "002"
-title: "Move Nezha split-phase state machine into Motor impl; add positionMm/velocityMmps accessors"
-status: open
+id: '002'
+title: Move Nezha split-phase state machine into Motor impl; add positionMm/velocityMmps
+  accessors
+status: done
 use-cases:
-  - SUC-039-003
+- SUC-039-003
 depends-on:
-  - "039-001"
-github-issue: ""
-issue: ""
+- 039-001
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -231,17 +232,23 @@ call. Since `WedgeTest` has a `Robot*`, use `robot->hal.tick(now)`. Verify textu
 
 ## Acceptance Criteria
 
-- [ ] `Robot::controlCollectSplitPhase` does not exist in `Robot.h` or `Robot.cpp`.
-- [ ] `Motor::tick(uint32_t now_ms)` implements the request/collect cycle + outlier filter.
-- [ ] `Motor::positionMm()` and `Motor::velocityMmps()` return last-collected values.
-- [ ] `MockMotor::tick(now_ms)` promotes `_encoderMm` → `_lastPositionMm` (no re-integration).
-- [ ] `LoopScheduler::run_blocks()` calls `robot.hal.tick(now)` (not `controlCollectSplitPhase`).
-- [ ] `sim_api.cpp` has no reference to `controlCollectSplitPhase`.
-- [ ] `WedgeTest.cpp` has no reference to `controlCollectSplitPhase` (ARM verify — textual).
-- [ ] Golden-TLM canary passes byte-exact (`uv run --with pytest python -m pytest tests/simulation/unit/test_golden_tlm.py -v`).
-- [ ] Simulation tier green: `uv run --with pytest python -m pytest -q` — count >= 1957.
-- [ ] `defaultRobotConfig()` field-pin unchanged.
-- [ ] No new heap allocation or fiber introduced.
+- [x] `Robot::controlCollectSplitPhase` does not exist in `Robot.h` or `Robot.cpp`.
+- [x] `Motor::tick(uint32_t now_ms)` implements the request/collect cycle. (Per OQ-2
+  resolution (b), the speed-scaled outlier filter is kept in the control layer —
+  relocated verbatim into `loopTickOnce()`'s CONTROL COLLECT block, fed from
+  `positionMm()` — NOT moved into `Motor::tick`. This is the lower-risk path that
+  keeps the golden-TLM byte-exact AND the I2C-wire bytes unchanged.)
+- [x] `Motor::positionMm()` and `Motor::velocityMmps()` return last-collected values.
+- [x] `MockMotor::tick(now_ms)` promotes `_encoderMm` → `_lastPositionMm` (no re-integration).
+  Existing integration renamed to `MockMotor::integrate(dt_ms)`, still the sole
+  integration site (driven by `MockHAL::tick(now,cmds)`).
+- [x] `LoopScheduler::run_blocks()` calls `robot.hal.tick(now)` (not `controlCollectSplitPhase`).
+- [x] `sim_api.cpp` has no reference to `controlCollectSplitPhase` (both sites → `hal.tick(now)`).
+- [x] `WedgeTest.cpp` has no reference to `controlCollectSplitPhase` (ARM verify — `hal.tick(now)`; firmware build clean).
+- [x] Golden-TLM canary passes byte-exact (`pytest tests/simulation/unit/test_golden_tlm.py` — 1 passed).
+- [x] Simulation tier green: `uv run --with pytest python -m pytest -q` — 1957 passed, 0 errors.
+- [x] `defaultRobotConfig()` field-pin unchanged (134 golden/field-pin/default-config tests pass; DefaultConfig.cpp reverted post-build).
+- [x] No new heap allocation or fiber introduced (all new state is value members; zero-heap, single-threaded preserved).
 
 ## Testing Plan
 

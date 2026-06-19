@@ -22,8 +22,9 @@
 //   Read:  4 bytes, signed int32 little-endian, units = tenths of degrees
 // ---------------------------------------------------------------------------
 
-Motor::Motor(I2CBus& i2c, uint8_t motorId, int8_t fwdSign)
-    : _i2c(i2c), _motorId(motorId), _fwdSign(fwdSign), _lastDir(0), _encOffset(0)
+Motor::Motor(I2CBus& i2c, uint8_t motorId, int8_t fwdSign, const RobotConfig& cfg)
+    : _i2c(i2c), _motorId(motorId), _fwdSign(fwdSign), _cfg(cfg), _lastDir(0),
+      _encOffset(0)
 {
 }
 
@@ -182,7 +183,13 @@ void Motor::resetEncoder()
         // Readback check: after the offset update, a fresh read should be ≈ 0.
         int32_t readback = readEncoderAtomic();
         if (readback >= -kReadbackThreshold && readback <= kReadbackThreshold) {
-            // Clean reset — done.
+            // Clean reset — done.  Realign the tick() cache with the now-zeroed
+            // accumulator so positionMm()/velocityMmps() and the outlier-filter
+            // baseline (state.inputs.encLMm/R, also zeroed in Robot::resetEncoders)
+            // stay in lockstep (039-002).
+            _lastPositionMm   = 0.0f;
+            _lastVelocityMmps = 0.0f;
+            _hasLastTick      = false;
             return;
         }
         // Readback non-zero: the offset snapshot was corrupted.  Undo this
@@ -199,6 +206,10 @@ void Motor::resetEncoder()
     if (lo > mid) { int32_t tmp = lo; lo = mid; mid = tmp; }
     if (mid > hi) { mid = hi; }
     _encOffset += mid;
+    // Realign the tick() cache after the (best-effort) reset (039-002).
+    _lastPositionMm   = 0.0f;
+    _lastVelocityMmps = 0.0f;
+    _hasLastTick      = false;
 }
 
 int32_t Motor::readEncoderAtomic() const
@@ -340,6 +351,35 @@ float Motor::readEncoderMmFSettle(const RobotConfig& cfg) const
     raw -= _encOffset;
     float mmPerDeg = (_motorId == 2) ? cfg.mmPerDegL : cfg.mmPerDegR;
     return (raw / 10.0f) * mmPerDeg * (float)_fwdSign;
+}
+
+void Motor::tick(uint32_t now_ms)
+{
+    // Per-loop split-phase encoder read (039-002).
+    //
+    // Issues the SAME I2C transaction controlCollectSplitPhase previously issued
+    // per wheel — readEncoderMmFSettle: 0x46 write → 4 ms post-write settle →
+    // 4-byte read → convert to mm.  The bytes on the wire are byte-for-byte
+    // identical to the pre-039 path; only the call site moved (Robot → here).
+    //
+    // The result is cached in _lastPositionMm for positionMm(); the control layer
+    // applies the speed-scaled outlier filter against this value (OQ-2 b).  A
+    // simple position-difference velocity is cached in _lastVelocityMmps for
+    // velocityMmps() — it is NOT consumed by the PID (which keeps its own EMA /
+    // plausibility-gated differentiation in MotorController::controlTick), so the
+    // golden-TLM frame is unaffected.
+    float pos = readEncoderMmFSettle(_cfg);
+
+    if (_hasLastTick) {
+        float elapsed_s = static_cast<float>(now_ms - _lastTickMs) / 1000.0f;
+        if (elapsed_s > 0.0f) {
+            _lastVelocityMmps = (pos - _lastPositionMm) / elapsed_s;
+        }
+    } else {
+        _hasLastTick = true;
+    }
+    _lastPositionMm = pos;
+    _lastTickMs     = now_ms;
 }
 
 int32_t Motor::readEncoderRaw() const

@@ -63,8 +63,12 @@ public:
     // With BENCH_OTOS_ENABLED: also calls _benchOtos.begin().
     void begin() override;
 
-    // No-op: devices are self-contained.
-    void tick(uint32_t now_ms) override { (void)now_ms; }
+    // Sensor tick (039-002): drives the per-loop split-phase encoder read for
+    // both wheels.  RIGHT (M1) is ticked BEFORE LEFT (M2) to preserve the exact
+    // I2C transaction ordering controlCollectSplitPhase used ("right motor first,
+    // then left" — Robot.cpp / WedgeTest sprint 015).  Called once per
+    // cooperative-loop iteration before loopTickOnce.
+    void tick(uint32_t now_ms) override;
 
     // Actuator-state tick (034-001): integrates commanded velocities into the
     // bench OTOS plant when bench mode is active; no-op when bench mode is off.

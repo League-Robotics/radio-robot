@@ -88,140 +88,14 @@ uint32_t Robot::systemTime() const
 }
 
 // ---------------------------------------------------------------------------
-// controlCollectSplitPhase — split-phase COLLECT for the cooperative loop.
+// controlCollectSplitPhase REMOVED (039-002).
 //
-// Reads both encoders, applies the speed-scaled outlier filter, writes
-// state.inputs.enc{L,R}Mm, then calls motorController.controlTick() for PID+PWM.
-//
-// Migrated from the original Robot controlCollectSplitPhase with mechanical
-// member-name substitutions (_state → state, _mc → motorController,
-// _motorL → motorL, _motorR → motorR, _config → config).
+// Its body moved into loopTickOnce()'s CONTROL COLLECT block (verbatim) and the
+// per-loop encoder read moved into Hardware::tick(now) → Motor::tick().  The
+// per-wheel streak/wedge state members it used (_filterRejectStreakL/R,
+// _prevDriving, _lastControlMs, _prevAnyWedged, kFilterRejectStreakThreshold)
+// remain on Robot because the relocated block reaches them via robot.*.
 // ---------------------------------------------------------------------------
-
-void Robot::controlCollectSplitPhase(uint32_t now_ms, int /*pendingWheel*/)
-{
-    // WedgeTest-proven pattern (sprint 015): read BOTH encoders every tick,
-    // right motor (M1) first, then left (M2). Write-on-change is already
-    // handled by Motor::setSpeed(). Single re-read on implausible delta.
-    //
-    // Cost: ~8 ms (2 × 4 ms post-write settle). controlPeriodMs must be ≥ 10 ms.
-    //
-    // Previous alternating-one-per-tick design (~5 Hz per wheel) wedged within
-    // ~165 ticks: each wedge caused the velocity PID to saturate and jerk.
-    // WedgeTest ran 10 min / 165 cycles with ZERO wedges using this pattern.
-    bool driving = (state.commands.tgtLMms != 0.0f ||
-                    state.commands.tgtRMms != 0.0f);
-    if (driving) {
-        // Outlier threshold SCALES with commanded speed. A legit tick can't move
-        // much more than (target speed × a worst-case ~200 ms scheduler tick), so
-        // the gate is max(40 mm floor, |target mm/s| × 0.2). A bad read triggers up
-        // to kRetries re-reads; if any is sane → use it; if ALL fail → hold the old
-        // stored value so the outlier baseline stays correct next tick.
-        //
-        // Why scaled, not a fixed 150 mm: at slow calibration speeds (~80 mm/s) a
-        // legit tick is <10 mm, but the chip still occasionally returns ~149 mm
-        // garbage reads — which slipped UNDER a fixed 150 mm gate, fed the velocity
-        // loop a huge spurious velocity, and spasmed the motor. Scaling keeps the
-        // gate tight when slow (rejects those) and wide when fast (~80 mm at
-        // 400 mm/s) so normal fast driving isn't tripped.
-        const float kMaxDeltaMm = fmaxf(40.0f,
-            fmaxf(fabsf((float)state.commands.tgtLMms),
-                  fabsf((float)state.commands.tgtRMms)) * 0.2f);
-        static constexpr int kRetries = 2;
-
-        // Right (M1) first — proven ordering from WedgeTest.
-        {
-            float newR = motorR.readEncoderMmFSettle(config);
-            float dR   = newR - state.inputs.encRMm;
-            if (dR > kMaxDeltaMm || dR < -kMaxDeltaMm) {
-                newR = state.inputs.encRMm;             // default: hold old
-                for (int k = 0; k < kRetries; ++k) {
-                    float r2  = motorR.readEncoderMmFSettle(config);
-                    float dr2 = r2 - state.inputs.encRMm;
-                    if (dr2 <= kMaxDeltaMm && dr2 >= -kMaxDeltaMm) { newR = r2; break; }
-                }
-                // (033-005b) Outlier rejection: increment the consecutive-reject
-                // streak counter.  Saturate at 255 to avoid uint8 wrap.
-                if (_filterRejectStreakR < 255) ++_filterRejectStreakR;
-            } else {
-                _filterRejectStreakR = 0;
-            }
-            state.inputs.encRMm = newR;
-        }
-
-        // Left (M2) second.
-        {
-            float newL = motorL.readEncoderMmFSettle(config);
-            float dL   = newL - state.inputs.encLMm;
-            if (dL > kMaxDeltaMm || dL < -kMaxDeltaMm) {
-                newL = state.inputs.encLMm;             // default: hold old
-                for (int k = 0; k < kRetries; ++k) {
-                    float r2  = motorL.readEncoderMmFSettle(config);
-                    float dr2 = r2 - state.inputs.encLMm;
-                    if (dr2 <= kMaxDeltaMm && dr2 >= -kMaxDeltaMm) { newL = r2; break; }
-                }
-                // (033-005b) Outlier rejection: increment streak counter.
-                if (_filterRejectStreakL < 255) ++_filterRejectStreakL;
-            } else {
-                _filterRejectStreakL = 0;
-            }
-            state.inputs.encLMm = newL;
-        }
-
-        // (033-005b) Emit EVT enc_filter_hold at threshold crossing (onset only).
-        // We emit exactly once when streak == threshold, not on every tick above,
-        // to avoid flooding the link with repeated EVTs for a persistent hold.
-        // Use _tlmBoundFn so the EVT goes to the same channel as TLM; silently
-        // drop when no channel is bound (no STREAM issued yet).
-        if (_filterRejectStreakR == kFilterRejectStreakThreshold &&
-                _tlmBoundFn != nullptr) {
-            char evtBuf[64];
-            snprintf(evtBuf, sizeof(evtBuf),
-                     "EVT enc_filter_hold wheel=R streak=%u",
-                     (unsigned)_filterRejectStreakR);
-            _tlmBoundFn(evtBuf, _tlmBoundCtx);
-        }
-        if (_filterRejectStreakL == kFilterRejectStreakThreshold &&
-                _tlmBoundFn != nullptr) {
-            char evtBuf[64];
-            snprintf(evtBuf, sizeof(evtBuf),
-                     "EVT enc_filter_hold wheel=L streak=%u",
-                     (unsigned)_filterRejectStreakL);
-            _tlmBoundFn(evtBuf, _tlmBoundCtx);
-        }
-    } else {
-        // Not driving: reset streak counters so they don't carry over into the
-        // next drive episode.
-        _filterRejectStreakL = 0;
-        _filterRejectStreakR = 0;
-    }
-    _prevDriving = driving;
-    _lastControlMs = now_ms;
-    // refreshedWheel=3: both wheels updated; 0: idle, no velocity update.
-    motorController.controlTick(state.inputs, state.commands, now_ms, driving ? 3 : 0);
-
-    // (033-005e) Push wedge state into Odometry after every control tick.
-    // wheelWedgedL/R() return the EVT-latch state from the detector above.
-    //
-    // setWedgeActive: unconditionally mirrors the combined wedge flag — dTheta
-    // suppression is purely Robot-owned (no external setter in tests).
-    //
-    // setEncOmegaHealthy: only called when a wedge is ACTIVE.  When no wedge is
-    // active we do NOT call setEncOmegaHealthy(true) — this preserves any manual
-    // override (e.g. sim_set_enc_omega_healthy(false) in 033-003 tests) and avoids
-    // overwriting the gate each tick when everything is healthy.  The gate is only
-    // restored to true when the wedge clears (anyWedged transitions false→true→false).
-    bool anyWedged = motorController.wheelWedgedL() || motorController.wheelWedgedR();
-    odometry.setWedgeActive(anyWedged);
-    if (anyWedged) {
-        // Wheel is wedged: suppress both dTheta and the omega observation.
-        odometry.setEncOmegaHealthy(false);
-    } else if (_prevAnyWedged) {
-        // Wedge just cleared: restore omega health (encoder re-armed → moving again).
-        odometry.setEncOmegaHealthy(true);
-    }
-    _prevAnyWedged = anyWedged;
-}
 
 // ---------------------------------------------------------------------------
 // otosCorrect — EKF Kalman update from OTOS position and velocity (sprint 023).

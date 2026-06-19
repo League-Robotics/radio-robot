@@ -91,9 +91,10 @@ struct Robot {
     // These methods span multiple subsystems and are kept as Robot members
     // rather than inlined at every call site.
 
-    // controlCollectSplitPhase — read both encoders, apply outlier filter,
-    // write state.inputs.enc{L,R}Mm, then call motorController.controlTick().
-    void controlCollectSplitPhase(uint32_t now_ms, int pendingWheel);
+    // controlCollectSplitPhase REMOVED (039-002): the encoder read moved into
+    // Hardware::tick(now) → Motor::tick(); the outlier filter + controlTick() +
+    // wedge push moved (verbatim) into loopTickOnce()'s CONTROL COLLECT block.
+    // The streak/wedge state members below remain — the relocated block uses them.
 
     // otosCorrect — read OTOS device, write state.inputs.otos*, call odometry.correct().
     // Uses otos.readTransformed(config) from T001 — no inlined LSB math.

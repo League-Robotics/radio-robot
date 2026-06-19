@@ -31,6 +31,30 @@ public:
     // Set speed as signed percentage (-100..100). Positive = logical forward.
     virtual void setSpeed(int8_t pct) = 0;
 
+    // ---- Per-loop encoder tick + cheap state accessors (039-002) ----
+    //
+    // tick(now_ms): called once per cooperative-loop iteration (via
+    // Hardware::tick(now_ms)) BEFORE loopTickOnce.  The concrete Motor performs
+    // the split-phase encoder read here and caches the last-collected position
+    // (mm) and a differentiated velocity (mm/s).  After tick() the control layer
+    // reads those cached values through positionMm() / velocityMmps() without
+    // issuing any further I2C.  Default no-op so non-encoder test doubles (and
+    // the MockMotor's separate integration path) need no special handling.
+    //
+    // NOTE: the speed-scaled outlier filter, velocity differentiation used by the
+    // PID, and the wedge push into Odometry remain in the control layer
+    // (MotorController::controlTick / loopTickOnce) per Sprint 039 Open Question 2
+    // resolution (b) — only the request/collect I2C read moves into the impl.
+    virtual void tick(uint32_t now_ms) { (void)now_ms; }
+
+    // positionMm(): last-collected cumulative encoder position in mm (float).
+    // Cheap accessor — returns the value cached by the most recent tick(); no I2C.
+    virtual float positionMm() const = 0;
+
+    // velocityMmps(): last-differentiated wheel velocity in mm/s.
+    // Cheap accessor — returns the value cached by the most recent tick(); no I2C.
+    virtual float velocityMmps() const = 0;
+
     // Split-phase encoder I/O, phase 1: issue the 0x46 write and return.
     virtual void requestEncoder() = 0;
 

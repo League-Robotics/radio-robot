@@ -2,10 +2,20 @@
 #include "control/RobotState.h"   // MotorCommands (commanded wheel velocity)
 #include <cmath>
 
-// tick(now) — plant integration with no actuator-command input (the bench
-// sensor needs commands, so it is not driven on this path).
+// tick(now) — sensor tick (039-002).  Promotes each mock motor's integrated
+// encoder position into its positionMm() accessor (mirrors NezhaHAL::tick, which
+// drives the real split-phase read).  RIGHT before LEFT to match NezhaHAL — the
+// mock ordering is immaterial to values (no I2C) but kept consistent.
+//
+// This does NOT integrate the plant; integration happens in tick(now,cmds) via
+// advance() → MockMotor::integrate (the single integration site, OQ-2).  The
+// old advance(now,nullptr) plant-integration on this path is removed: the sim
+// now calls hal.tick(now,cmds) (plant) then hal.tick(now) (sensor) each step,
+// and loopTickOnce also calls hal.tick(now,cmds) — the dt==0 guard already made
+// repeat plant integrations no-ops.
 void MockHAL::tick(uint32_t now_ms) {
-    advance(now_ms, nullptr);
+    _motorR.tick(now_ms);
+    _motorL.tick(now_ms);
 }
 
 // tick(now, cmds) — the firmware loop's actuator-state tick.  Drives the same
@@ -30,8 +40,8 @@ void MockHAL::advance(uint32_t now_ms, const MotorCommands* cmds) {
         _motorL.setTurnRate(turnRate);
         _motorR.setTurnRate(turnRate);
 
-        _motorL.tick(udt);
-        _motorR.tick(udt);
+        _motorL.integrate(udt);
+        _motorR.integrate(udt);
 
         // Update oracle ground-truth pose from pre-slip true velocities.
         if (_trackwidthMm > 0.0f) {
