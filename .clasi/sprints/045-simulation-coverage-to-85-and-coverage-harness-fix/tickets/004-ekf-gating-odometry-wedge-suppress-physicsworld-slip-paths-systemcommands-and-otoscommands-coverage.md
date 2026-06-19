@@ -2,7 +2,7 @@
 id: '004'
 title: EKF gating, Odometry wedge-suppress, PhysicsWorld slip paths, SystemCommands
   and OtosCommands coverage
-status: in-progress
+status: done
 use-cases:
 - SUC-005
 depends-on:
