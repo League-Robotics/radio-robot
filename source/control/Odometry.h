@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include "RobotState.h"
+#include "Inputs.h"
 #include "IOtosSensor.h"
 #include "EKF.h"
 

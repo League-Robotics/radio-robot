@@ -1,5 +1,5 @@
 #include "WorldView.h"
-#include "control/RobotState.h"   // HardwareState (poseX/poseY/poseHrad)
+#include "types/Inputs.h"   // HardwareState (poseX/poseY/poseHrad)
 #include <cmath>
 
 // Heading wrap to [-pi, pi].  Uses atan2f(sinf, cosf) — the numerically robust,

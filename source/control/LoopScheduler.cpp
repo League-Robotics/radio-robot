@@ -5,7 +5,7 @@
 #include "Communicator.h"
 #include "SerialPort.h"
 #include "Radio.h"
-#include "RobotState.h"
+#include "Inputs.h"
 #include "HaltController.h"
 #include <cstdio>
 

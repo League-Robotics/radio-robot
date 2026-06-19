@@ -17,7 +17,7 @@
 #include "io/sim/WorldView.h"
 #include "io/real/BenchOtosSensor.h"
 #include "types/Config.h"
-#include "control/RobotState.h"
+#include "types/Inputs.h"
 #include "control/MotionController.h"
 #include "control/MotionCommand.h"
 #include "control/HaltController.h"

@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include "RobotState.h"
+#include "Inputs.h"
 
 // ---------------------------------------------------------------------------
 // MotionBaseline — snapshot of state variables at motion-command start.

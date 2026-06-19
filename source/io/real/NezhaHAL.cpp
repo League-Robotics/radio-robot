@@ -1,5 +1,5 @@
 #include "NezhaHAL.h"
-#include "RobotState.h"   // MotorCommands full definition (034-001)
+#include "Inputs.h"   // MotorCommands full definition (034-001)
 
 NezhaHAL::NezhaHAL(MicroBitI2C& i2c, MicroBitIO& io, const RobotConfig& cfg)
     : _bus(i2c),

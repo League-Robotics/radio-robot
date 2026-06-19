@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include "io/capability/IPortIO.h"
-#include "RobotState.h"
+#include "Inputs.h"
 #include "Config.h"
 #include "LoopTickOnce.h"
 

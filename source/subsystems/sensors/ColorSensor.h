@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include "io/capability/IColorSensor.h"
-#include "RobotState.h"
+#include "Inputs.h"
 #include "Config.h"
 #include "LoopTickOnce.h"
 

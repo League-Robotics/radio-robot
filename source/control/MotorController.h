@@ -3,7 +3,7 @@
 #include "io/capability/IBusDiagnostics.h"
 #include "Config.h"
 #include "VelocityController.h"
-#include "RobotState.h"
+#include "Inputs.h"
 #include "Protocol.h"
 #include <stdint.h>
 

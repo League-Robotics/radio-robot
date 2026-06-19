@@ -7,7 +7,7 @@
 #include "IPortIO.h"
 #include "io/capability/IPositionMotor.h"
 
-// Forward declaration — full definition in source/control/RobotState.h.
+// Forward declaration — full definition in source/types/Inputs.h.
 // Sufficient here because the overload takes a const reference (034-001).
 struct MotorCommands;
 

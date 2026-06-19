@@ -1,13 +1,13 @@
 ---
-id: "002"
-title: "Move RobotState.h to source/types/Inputs.h and retire RobotState name"
-status: open
+id: '002'
+title: Move RobotState.h to source/types/Inputs.h and retire RobotState name
+status: done
 use-cases:
-  - SUC-002
+- SUC-002
 depends-on:
-  - "044-001"
-github-issue: ""
-issue: "migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md"
+- 044-001
+github-issue: ''
+issue: migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -69,16 +69,25 @@ Also check for the `#include <` variant and for `"control/RobotState.h"` (qualif
 
 ## Acceptance Criteria
 
-- [ ] `source/types/Inputs.h` exists with identical content to former `RobotState.h`.
-- [ ] `source/control/RobotState.h` does not exist.
-- [ ] Zero `#include "RobotState.h"` or `#include "control/RobotState.h"` occurrences
-      in maintained source files.
-- [ ] `grep -rn "RobotState\.h" source/ tests/_infra/` returns empty.
-- [ ] Host build green (immediate compile error if any include missed).
-- [ ] ARM firmware build green: `python3 build.py --fw-only` → 0 errors. Then
-      `git checkout -- source/robot/DefaultConfig.cpp`.
-- [ ] Golden-TLM canary passes byte-exact.
-- [ ] Full simulation tier green: `uv run --with pytest python -m pytest -q` >= 2001 passed, 0 errors.
+- [x] `source/types/Inputs.h` exists with identical content to former `RobotState.h`.
+      (`git mv`, 0 insertions/0 deletions — byte-identical, history preserved.)
+- [x] `source/control/RobotState.h` does not exist.
+- [x] Zero `#include "RobotState.h"` or `#include "control/RobotState.h"` occurrences
+      in maintained source files. (19 include sites repointed: 16 → `Inputs.h`, 3 → `types/Inputs.h`.)
+- [x] `grep -rn "RobotState\.h" source/ tests/_infra/` returns empty for maintained
+      source. (Remaining hits are stale generated dep files under `build/` and
+      `build_coverage/`, regenerated on rebuild; the legacy name was also retired
+      from 6 prose comments. `RobotStateContainer` — a canonical struct name — is kept.)
+- [x] Host build green (immediate compile error if any include missed). (Host/sim lib
+      rebuilt clean during the pytest run.)
+- [x] ARM firmware build green: `python3 build.py --fw-only` → 0 errors. Then
+      `git checkout -- source/robot/DefaultConfig.cpp`. (0 `error:`, `MICROBIT.hex`
+      produced; DefaultConfig.cpp restored.)
+- [x] Golden-TLM canary passes byte-exact. (`test_golden_tlm.py` 1 passed.)
+- [x] Full simulation tier green: `uv run --with pytest python -m pytest -q` >= 2001 passed, 0 errors.
+      (2001 passed in 31.71s, 0 errors. Includes the dependency-rule fence
+      `test_estimate_dependency_rule.py`, whose allowed-set was updated
+      `RobotState.h` → `Inputs.h`.)
 
 ## Implementation Plan
 

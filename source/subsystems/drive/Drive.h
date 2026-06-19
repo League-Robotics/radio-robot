@@ -3,7 +3,7 @@
 #include "IMotor.h"
 #include "MotorController.h"
 #include "PhysicalStateEstimate.h"
-#include "RobotState.h"          // HardwareState, MotorCommands (RobotStateContainer slices)
+#include "Inputs.h"          // HardwareState, MotorCommands (RobotStateContainer slices)
 #include "Config.h"              // RobotConfig
 #include "Protocol.h"            // ReplyFn
 

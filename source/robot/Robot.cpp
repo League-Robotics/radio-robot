@@ -143,7 +143,7 @@ uint32_t Robot::systemTime() const
 //
 // Reads OTOS position, velocity, and acceleration.  Passes position + velocity
 // to correctEKF() for EKF fusion.  Stores acceleration in HardwareState for
-// host telemetry via RobotState.
+// host telemetry via the RobotStateContainer.
 //
 // Encoder-derived velocity is NOT fused here: as of 033-003 it is fused
 // unconditionally in Odometry::predict() every tick, so fusedV/fusedOmega stay

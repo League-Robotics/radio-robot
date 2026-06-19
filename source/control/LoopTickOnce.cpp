@@ -1,7 +1,7 @@
 #include "LoopTickOnce.h"
 #include "Robot.h"
 #include "CommandProcessor.h"
-#include "RobotState.h"
+#include "Inputs.h"
 #include "HaltController.h"
 #include "MotionController.h"
 #include "MotionCommand.h"

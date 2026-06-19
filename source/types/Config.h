@@ -180,7 +180,7 @@ struct RobotConfig {
     // One-shot SNAP pending flag. Set by SNAP command; cleared after one TLM frame.
     bool tlmSnapPending;
 
-    // Sensor lag budgets (ms) used by RobotState freshness envelopes.
+    // Sensor lag budgets (ms) used by HardwareState freshness envelopes.
     // Each value is the expected worst-case latency for that sensor group.
     // lagOtosMs  : OTOS optical odometry sensor  (default 100 ms)
     // lagLineMs  : 4-channel line sensor          (default  50 ms)

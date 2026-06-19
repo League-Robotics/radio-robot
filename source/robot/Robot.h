@@ -13,7 +13,7 @@
 #include "MotionController.h"
 #include "PortController.h"
 #include "ServoController.h"
-#include "RobotState.h"
+#include "Inputs.h"
 #include "Protocol.h"
 #include "../types/CommandTypes.h"
 #include "../robot/ConfigRegistry.h"

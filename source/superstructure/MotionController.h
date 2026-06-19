@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include "Config.h"
 #include "Protocol.h"
-#include "RobotState.h"
+#include "Inputs.h"
 #include "BodyVelocityController.h"
 #include "MotionCommand.h"
 #include "CommandTypes.h"

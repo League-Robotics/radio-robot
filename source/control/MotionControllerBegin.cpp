@@ -40,7 +40,7 @@
 // Formats "<base> #<corrId>" and calls target->replyFn(msg, target->replyCtx).
 //
 // Lives in the control layer so no app-layer includes are needed — only
-// TargetState (RobotState.h, also control layer).
+// TargetState (types/Inputs.h).
 //
 // Sprint 026-002: replaces the old inline formatting inside emitEvt.
 // ---------------------------------------------------------------------------

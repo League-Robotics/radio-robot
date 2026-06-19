@@ -1,6 +1,6 @@
 #include "SimHardware.h"
 #include "types/Config.h"             // RobotConfig, defaultRobotConfig()
-#include "control/RobotState.h"       // MotorCommands
+#include "types/Inputs.h"       // MotorCommands
 #include <cmath>
 
 // ---------------------------------------------------------------------------
