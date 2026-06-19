@@ -1,7 +1,7 @@
 ---
 id: '042'
 title: "Phase D \u2014 Thin Superstructure seam"
-status: roadmap
+status: planning-docs
 branch: sprint/042-phase-d-thin-superstructure-seam
 use-cases: []
 issues:
@@ -114,5 +114,8 @@ Following §4 of the issue:
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 042-001 | Create Superstructure skeleton with Goal enum and requestGoal routing to existing MotionController.beginX() | — |
+| 042-002 | Move MotionController under source/superstructure/ and fix include paths and build system | 042-001 |
+| 042-003 | Centralize keepalive/SAFE/ESTOP safety into Superstructure.evaluateSafety() and pre-cut goalAllowed() hook | 042-001, 042-002 |
 
 Tickets execute serially in the order listed.
