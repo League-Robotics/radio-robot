@@ -134,62 +134,14 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // to the former immediate-dispatch path (enqueue + dequeue in same tick).
     cmd.dequeueOne(queue);
 
-    // ===== SYSTEM WATCHDOG: fire safety_stop + X after sTimeoutMs of silence =
-    // ts.watchdogMs == 0 means no command has been received yet this session;
-    // the watchdog stays disarmed until the first command arrives.
-    // Signed delta avoids uint32 underflow (project memory: watchdog-uint32-underflow).
-    //
-    // TIME-stop exemption (sprint 024-003): self-terminating commands that
-    // carry a TIME stop condition (T, D, G, TURN, RT, G PRE_ROTATE) are
-    // exempt from the keepalive requirement — their TIME net fires regardless
-    // of host silence.  Open-ended streaming commands (S / VW / R) have no
-    // TIME stop and remain keepalive-bound.
-    {
-        MotionController& mc = robot.motionController;
-        bool needsWatchdog =
-            (mc.mode() != DriveMode::IDLE) || mc.hasActiveCommand();
-
-        // Exempt commands that carry their own TIME backstop.
-        if (mc.hasActiveCommand() && mc.activeCmd().hasTimeStop()) {
-            needsWatchdog = false;
-        }
-
-        if (cfg.safetyEnabled && ts.watchdogMs != 0 &&
-            ts.activeFn != nullptr && needsWatchdog) {
-            int32_t wdDelta = (int32_t)(now - ts.watchdogMs);
-            if (wdDelta > (int32_t)cfg.sTimeoutMs) {
-                ts.watchdogMs = now;  // re-arm to avoid firing every tick
-                char wdBuf[64];
-                CommandProcessor::replyEvt(wdBuf, sizeof(wdBuf),
-                                           "safety_stop", "",
-                                           ts.activeFn, ts.activeCtx);
-                // Bypass the queue for internal emergency stop: detach queue
-                // so process() dispatches X immediately, then restore.
-                cmd.setQueue(nullptr);
-                cmd.process("X", ts.activeFn, ts.activeCtx);
-                cmd.setQueue(&queue);
-            }
-        }
-    }
-
-    // ===== HALT CONDITIONS: evaluate user-registered stop conditions ========
-    // Runs after the watchdog check, before the motion tick.
-    {
-        if (ts.activeFn != nullptr) {
-            HaltAction ha = robot.haltController.evaluate(
-                robot.state.inputs, now, ts.activeFn, ts.activeCtx);
-            // Bypass the queue for halt-triggered emergency stops.
-            if (ha == HaltAction::HARD) {
-                cmd.setQueue(nullptr);
-                cmd.process("X", ts.activeFn, ts.activeCtx);
-                cmd.setQueue(&queue);
-            } else if (ha == HaltAction::SOFT) {
-                cmd.setQueue(nullptr);
-                cmd.process("X soft", ts.activeFn, ts.activeCtx);
-                cmd.setQueue(&queue);
-            }
-        }
-    }
+    // ===== SAFETY: centralized per-tick safety evaluation (042-003) =========
+    // Formerly two consecutive inline blocks here — (1) the keepalive/system
+    // watchdog and (2) the halt-controller (SAFE/X/ESTOP) evaluation.  Both
+    // bodies moved VERBATIM, in the SAME ORDER, into Superstructure::evaluateSafety.
+    // This single call sits in the SAME position the blocks did: after
+    // dequeueOne(queue), before driveAdvance.  driveAdvance stays below, in the
+    // same order.  The golden-TLM canary is the byte-exact oracle.
+    robot.superstructure.evaluateSafety(cmd, queue, ts, robot.state.inputs, now);
 
     // ===== DRIVE: advance drive state machine =================================
     robot.motionController.driveAdvance(

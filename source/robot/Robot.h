@@ -18,6 +18,7 @@
 #include "../types/CommandTypes.h"
 #include "../robot/ConfigRegistry.h"
 #include "../control/HaltController.h"
+#include "../superstructure/Superstructure.h"
 #include "MotionCommandHandlers.h"
 
 // Forward declarations — keeps the header-graph shallow.
@@ -85,6 +86,11 @@ struct Robot {
     PortController      portController;    // (portio)
     ServoController     servoController;   // (gripper)
     HaltController      haltController;    // user-facing named stop-condition registry
+    // Superstructure (Seam 3, 042-001) — thin Goal coordinator.  MUST be declared
+    // AFTER motionController and haltController: it holds references to both, and
+    // C++ initialises members in declaration order, so they must be constructed
+    // first.  Holds a const RobotConfig& as well.
+    Superstructure      superstructure;    // (motionController, haltController, config)
 
     // OtosCommands — app-layer Commandable for the seven OTOS-tuning verbs
     // (OI/OZ/OR/OV/OL/OA/OP), moved out of Odometry in 041-002.  No construction

@@ -16,6 +16,7 @@
 
 #include "MotionCommandHandlers.h"
 #include "MotionController.h"
+#include "Superstructure.h"
 #include "Robot.h"
 #include "CommandProcessor.h"
 #include "CommandQueue.h"
@@ -843,9 +844,16 @@ static void handleVW(const ArgList& args, const char* corrId,
     // Check for RT (relative rotation): "rot=<cdeg>" present.
     if (vwHasKey(args, "rot")) {
         int rot_cdeg = vwScanKV(args, "rot", 0);
-        ctx->mc->beginRotation((float)rot_cdeg, now,
-                               ctx->robot->state.target,
-                               replyFn, replyCtx, corrId);
+        // Seam 3 (042-001): route through requestGoal — same beginRotation call.
+        GoalRequest gr{};
+        gr.goal    = Goal::ROTATE;
+        gr.robot   = ctx->robot;
+        gr.now_ms  = now;
+        gr.replyFn = replyFn;
+        gr.replyCtx = replyCtx;
+        gr.corrId  = corrId;
+        gr.relCdeg = (float)rot_cdeg;
+        ctx->superstructure->requestGoal(gr);
         // D11: no replyOK here — handleRT already replied.
         return;
     }
@@ -855,9 +863,17 @@ static void handleVW(const ArgList& args, const char* corrId,
         int h_cdeg  = vwScanKV(args, "h",   0);
         int eps     = vwScanKV(args, "eps", 300);
 
-        ctx->mc->beginTurn((float)h_cdeg, (float)eps, now,
-                           ctx->robot->state.target,
-                           replyFn, replyCtx, corrId);
+        // Seam 3 (042-001): route through requestGoal — same beginTurn call.
+        GoalRequest gr{};
+        gr.goal        = Goal::TURN;
+        gr.robot       = ctx->robot;
+        gr.now_ms      = now;
+        gr.replyFn     = replyFn;
+        gr.replyCtx    = replyCtx;
+        gr.corrId      = corrId;
+        gr.headingCdeg = (float)h_cdeg;
+        gr.epsCdeg     = (float)eps;
+        ctx->superstructure->requestGoal(gr);
 
         // Optional sensor= forwarding.
         for (int i = 2; i < args.count; ++i) {
@@ -881,9 +897,18 @@ static void handleVW(const ArgList& args, const char* corrId,
         int y_mm    = vwScanKV(args, "y",     0);
         int speed   = vwScanKV(args, "speed", v);  // fallback to v
 
-        ctx->mc->beginGoTo((float)x_mm, (float)y_mm, (float)speed, now,
-                           ctx->robot->state.target,
-                           replyFn, replyCtx, corrId);
+        // Seam 3 (042-001): route through requestGoal — same beginGoTo call.
+        GoalRequest gr{};
+        gr.goal     = Goal::GOTO;
+        gr.robot    = ctx->robot;
+        gr.now_ms   = now;
+        gr.replyFn  = replyFn;
+        gr.replyCtx = replyCtx;
+        gr.corrId   = corrId;
+        gr.tx       = (float)x_mm;
+        gr.ty       = (float)y_mm;
+        gr.speedMms = (float)speed;
+        ctx->superstructure->requestGoal(gr);
 
         // D11: no replyOK here — handleG already replied.
         return;
@@ -894,9 +919,17 @@ static void handleVW(const ArgList& args, const char* corrId,
         int speed   = vwScanKV(args, "speed",  v);
         int radius  = vwScanKV(args, "radius", 0);
 
-        ctx->mc->beginArc((float)speed, (float)radius, now,
-                          ctx->robot->state.target,
-                          replyFn, replyCtx, corrId);
+        // Seam 3 (042-001): route through requestGoal — same beginArc call.
+        GoalRequest gr{};
+        gr.goal     = Goal::ARC;
+        gr.robot    = ctx->robot;
+        gr.now_ms   = now;
+        gr.replyFn  = replyFn;
+        gr.replyCtx = replyCtx;
+        gr.corrId   = corrId;
+        gr.speedMms = (float)speed;
+        gr.radiusMm = (float)radius;
+        ctx->superstructure->requestGoal(gr);
 
         // D11: no replyOK here — handleR already replied.
         return;
@@ -911,9 +944,18 @@ static void handleVW(const ArgList& args, const char* corrId,
         float vL = (float)v - omega_rads * (b * 0.5f);
         float vR = (float)v + omega_rads * (b * 0.5f);
 
-        ctx->mc->beginTimed(vL, vR, (uint32_t)ms, now,
-                            ctx->robot->state.target,
-                            replyFn, replyCtx, corrId);
+        // Seam 3 (042-001): route through requestGoal — same beginTimed call.
+        GoalRequest gr{};
+        gr.goal       = Goal::TIMED;
+        gr.robot      = ctx->robot;
+        gr.now_ms     = now;
+        gr.replyFn    = replyFn;
+        gr.replyCtx   = replyCtx;
+        gr.corrId     = corrId;
+        gr.leftMms    = vL;
+        gr.rightMms   = vR;
+        gr.durationMs = (uint32_t)ms;
+        ctx->superstructure->requestGoal(gr);
 
         // Optional sensor= forwarding.
         for (int i = 2; i < args.count; ++i) {
@@ -940,8 +982,19 @@ static void handleVW(const ArgList& args, const char* corrId,
         float vL = (float)v - omega_rads * (b * 0.5f);
         float vR = (float)v + omega_rads * (b * 0.5f);
 
-        ctx->robot->distanceDrive((int32_t)vL, (int32_t)vR, (int32_t)mm,
-                                   replyFn, replyCtx, corrId);
+        // Seam 3 (042-001): route through requestGoal — DISTANCE dispatches to
+        // robot->distanceDrive (beginDistance + resetEncoders), same (int32) casts.
+        GoalRequest gr{};
+        gr.goal     = Goal::DISTANCE;
+        gr.robot    = ctx->robot;
+        gr.now_ms   = now;
+        gr.replyFn  = replyFn;
+        gr.replyCtx = replyCtx;
+        gr.corrId   = corrId;
+        gr.leftMms  = vL;
+        gr.rightMms = vR;
+        gr.targetMm = (int32_t)mm;
+        ctx->superstructure->requestGoal(gr);
 
         // Optional sensor= forwarding.
         for (int i = 2; i < args.count; ++i) {
@@ -978,9 +1031,17 @@ static void handleVW(const ArgList& args, const char* corrId,
         float b  = ctx->robot->config.trackwidthMm;
         float vL = (float)v - omega_rads * (b * 0.5f);
         float vR = (float)v + omega_rads * (b * 0.5f);
-        ctx->mc->beginStream(vL, vR, now,
-                             ctx->robot->state.target,
-                             replyFn, replyCtx);
+        // Seam 3 (042-001): route through requestGoal — same beginStream call.
+        GoalRequest gr{};
+        gr.goal     = Goal::STREAM;
+        gr.robot    = ctx->robot;
+        gr.now_ms   = now;
+        gr.replyFn  = replyFn;
+        gr.replyCtx = replyCtx;
+        gr.corrId   = corrId;
+        gr.leftMms  = vL;
+        gr.rightMms = vR;
+        ctx->superstructure->requestGoal(gr);
         // D11: no replyOK here — handleS already replied before pushing this VW.
         return;
     } else if (ctx->mc->hasActiveCommand()) {
@@ -1011,9 +1072,17 @@ static void handleVW(const ArgList& args, const char* corrId,
         }
     } else {
         // New VW command: configure MotionCommand from scratch.
-        ctx->mc->beginVelocity((float)v, omega_rads, now,
-                               ctx->robot->state.target,
-                               replyFn, replyCtx, corrId);
+        // Seam 3 (042-001): route through requestGoal — same beginVelocity call.
+        GoalRequest gr{};
+        gr.goal       = Goal::VELOCITY;
+        gr.robot      = ctx->robot;
+        gr.now_ms     = now;
+        gr.replyFn    = replyFn;
+        gr.replyCtx   = replyCtx;
+        gr.corrId     = corrId;
+        gr.v_mms      = (float)v;
+        gr.omega_rads = omega_rads;
+        ctx->superstructure->requestGoal(gr);
     }
 
     // Open-ended direct VW: emit exactly one OK reply.
