@@ -3,6 +3,7 @@
 #include "I2CBus.h"
 #include "Config.h"
 #include "IMotor.h"
+#include "io/capability/IPositionMotor.h"
 
 /**
  * Motor — I2C driver for one channel of the PlanetX Nezha V2 motor controller.
@@ -51,6 +52,17 @@ public:
     // bus is live. After this call, all subsequent encoder reads return valid
     // counts without any host-side zero-on-connect workaround.
     void begin() override;
+
+    /**
+     * asPositionMotor — RTTI-free secondary-capability discovery (039-003).
+     *
+     * A Nezha drive motor ALSO supports on-chip move-to-position (0x5D
+     * moveToAngle / 0x70 timedMove), so Motor returns a non-null IPositionMotor*
+     * here.  The returned pointer is an inner adapter (_posImpl) that forwards
+     * setAngleDeg() to moveToAngle() — NO wire bytes change.  Firmware is
+     * -fno-rtti, so this virtual accessor replaces dynamic_cast.
+     */
+    IPositionMotor* asPositionMotor() override { return &_posImpl; }
 
     // Set speed as signed percentage (-100..100). Positive = logical forward.
     // fwdSign is applied internally to map logical direction to chip direction.
@@ -258,9 +270,39 @@ public:
     float readEncoderMmFSettle(const RobotConfig& cfg) const override;
 
 private:
+    /**
+     * MotorPositionImpl — inner IPositionMotor adapter (039-003).
+     *
+     * Folds the Motor on-chip position-move subset into the IPositionMotor
+     * capability without multiple inheritance (safer under -fno-rtti, per the
+     * Sprint 039 architecture-update §5 decision).  setAngleDeg() forwards
+     * VERBATIM to the enclosing Motor's moveToAngle() (0x5D frame, unchanged
+     * wire bytes); currentAngleDeg() returns the last commanded angle.  Returned
+     * by Motor::asPositionMotor().
+     */
+    class MotorPositionImpl : public IPositionMotor {
+    public:
+        explicit MotorPositionImpl(Motor& outer) : _outer(outer) {}
+        void setAngleDeg(uint16_t deg, uint8_t mode) override {
+            _outer.moveToAngle(deg, mode);
+        }
+        uint16_t currentAngleDeg() const override { return _outer._lastAngle; }
+    private:
+        Motor& _outer;
+    };
+
     I2CBus& _i2c;
     uint8_t      _motorId;  // 1=M1/right, 2=M2/left
     int8_t       _fwdSign;  // +1 or -1
+
+    // Position-move capability adapter (039-003). Value member, bound to *this;
+    // exposed via asPositionMotor(). Declared here so it is constructed after the
+    // members above; the Motor ctor passes *this to it.
+    MotorPositionImpl _posImpl;
+
+    // Last angle commanded through moveToAngle() (the clamped 0..359 value),
+    // returned by MotorPositionImpl::currentAngleDeg(). 0 before any move.
+    uint16_t _lastAngle = 0;
 
     // Calibration reference (039-002) — used by tick() to convert raw encoder
     // tenths-of-degrees to mm without the caller passing cfg every loop.

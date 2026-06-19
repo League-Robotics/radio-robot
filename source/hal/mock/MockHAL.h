@@ -62,14 +62,14 @@ public:
     MockHAL() { _benchOtos.begin(); }
 
     // Hardware interface -----------------------------------------------------
-    IMotor&       motorL()      override { return _motorL; }
-    IMotor&       motorR()      override { return _motorR; }
+    IVelocityMotor& motorL()    override { return _motorL; }
+    IVelocityMotor& motorR()    override { return _motorR; }
     ILineSensor&  lineSensor()  override { return _line; }
     IColorSensor& colorSensor() override { return _color; }
     // Active OTOS — real mock sensor, or the bench sensor when bench mode is on.
     IOtosSensor&  otos()        override { return *_otosActive; }
     IPortIO&      portIO()      override { return _portIO; }
-    IServo&       gripper()     override { return _servo; }
+    IPositionMotor& gripper()   override { return _servo; }
 
     void begin() override {
         _benchOtos.begin();

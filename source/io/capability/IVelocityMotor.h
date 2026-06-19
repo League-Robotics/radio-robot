@@ -2,6 +2,7 @@
 #include <stdint.h>
 
 struct RobotConfig;
+class IPositionMotor;
 
 /**
  * IVelocityMotor — drive-wheel capability (039-001).
@@ -74,4 +75,17 @@ public:
 
     // Zero this motor's encoder accumulator (software offset reset).
     virtual void resetEncoder() = 0;
+
+    // ---- Secondary-capability discovery (039-003) ----
+    //
+    // asPositionMotor(): RTTI-free downcast to the position-move capability.
+    // Firmware is compiled -fno-rtti, so dynamic_cast is unavailable; this
+    // virtual accessor lets the control layer ask whether a given drive motor
+    // also supports on-chip move-to-angle (Nezha 0x5D/0x70) without a cast.
+    //
+    // Default returns nullptr — a plain drive motor (and the sim MockMotor)
+    // does NOT expose position control.  The concrete Motor overrides this to
+    // return a non-null IPositionMotor* backed by an inner adapter that forwards
+    // to moveToAngle() / timedMove().
+    virtual IPositionMotor* asPositionMotor() { return nullptr; }
 };

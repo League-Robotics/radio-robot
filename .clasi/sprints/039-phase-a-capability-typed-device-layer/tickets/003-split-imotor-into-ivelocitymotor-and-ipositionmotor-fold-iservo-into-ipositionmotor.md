@@ -1,14 +1,14 @@
 ---
-id: "003"
-title: "Split IMotor into IVelocityMotor and IPositionMotor; fold IServo into IPositionMotor"
-status: open
+id: '003'
+title: Split IMotor into IVelocityMotor and IPositionMotor; fold IServo into IPositionMotor
+status: done
 use-cases:
-  - SUC-039-004
+- SUC-039-004
 depends-on:
-  - "039-001"
-  - "039-002"
-github-issue: ""
-issue: ""
+- 039-001
+- 039-002
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -148,16 +148,54 @@ methods are called that don't exist on `IVelocityMotor`.
 
 ## Acceptance Criteria
 
-- [ ] `Motor` implements `IPositionMotor` (directly or via inner impl); `asPositionMotor()` returns non-null.
-- [ ] `Servo` derives from `IPositionMotor` (not `IServo` concretely).
-- [ ] `MockServo` derives from `IPositionMotor`.
-- [ ] `Hardware::gripper()` declared as `IPositionMotor&`.
-- [ ] `Hardware::motorL/R()` declared as `IVelocityMotor&`.
-- [ ] `ServoController` stores `IPositionMotor&`.
-- [ ] `source/hal/IMotor.h` is a shim only (`using IMotor = IVelocityMotor;`).
-- [ ] `source/hal/IServo.h` is a shim only (`using IServo = IPositionMotor;`).
-- [ ] Simulation tier green: `uv run --with pytest python -m pytest -q`.
-- [ ] Golden-TLM canary passes.
+- [x] `Motor` implements `IPositionMotor` (directly or via inner impl); `asPositionMotor()` returns non-null.
+- [x] `Servo` derives from `IPositionMotor` (not `IServo` concretely).
+- [x] `MockServo` derives from `IPositionMotor`.
+- [x] `Hardware::gripper()` declared as `IPositionMotor&`.
+- [x] `Hardware::motorL/R()` declared as `IVelocityMotor&`.
+- [x] `ServoController` stores `IPositionMotor&`.
+- [x] `source/hal/IMotor.h` is a shim only (`using IMotor = IVelocityMotor;`).
+- [x] `source/hal/IServo.h` is a shim only (`using IServo = IPositionMotor;`).
+- [x] Simulation tier green: `uv run --with pytest python -m pytest -q` → 1957 passed, 0 errors.
+- [x] Golden-TLM canary passes (byte-exact PASSED).
+
+## Implementation Notes (039-003)
+
+Decisions and honest annotations vs the ticket's literal wording:
+
+1. **Capability method rename applied here (per architecture §5, not the verbatim
+   T1 body).** T1 created `IPositionMotor.h` with the VERBATIM former `IServo`
+   methods (`setAngle(uint8_t)` / `currentAngle()`).  The Sprint 039
+   architecture-update §5 mandates the canonical taxonomy
+   `setAngleDeg(uint16_t deg, uint8_t mode)` / `currentAngleDeg()`.  This ticket
+   makes the interface CANONICAL: the capability now declares `setAngleDeg` /
+   `currentAngleDeg`.  Per OQ-3, concrete impls keep a convenience
+   `setAngle(uint8_t deg) { setAngleDeg(deg, 0); }`; mode byte 0 is the
+   hobby-servo default.  `IVelocityMotor` is left with its T1 verbatim method
+   names (`setSpeed`, `requestEncoder`, etc.) — the `setOutput` rename is a
+   separate, later concern and is out of scope for the type split.
+
+2. **`asPositionMotor()` wiring (RTTI-free, `-fno-rtti`).** Added the
+   `virtual IPositionMotor* asPositionMotor() { return nullptr; }` accessor to
+   `IVelocityMotor`.  `Motor` overrides it to return `&_posImpl`, an inner
+   `MotorPositionImpl : public IPositionMotor` adapter (architecture's chosen
+   inner-impl approach — no multiple inheritance, no diamond).  Its
+   `setAngleDeg(deg, mode)` forwards VERBATIM to the unchanged `Motor::moveToAngle`
+   (0x5D frame); `currentAngleDeg()` returns `_lastAngle` (the clamped 0..359
+   value `moveToAngle` already computes).  `MockMotor` inherits the `nullptr`
+   default — a drive-wheel sim correctly exposes no position control.
+
+3. **IPositionMotor capability coverage.** It now covers BOTH the hobby-servo
+   angle-set (the `Servo` / `MockServo` impl) AND the Nezha on-chip move-to-angle
+   (the `Motor` impl, reached via `IVelocityMotor::asPositionMotor()`).
+
+4. **Behaviour preservation.** No wire bytes and no numerics changed.  `moveToAngle`
+   gained only a host-side `_lastAngle = angle;` cache; `Servo::setAngleDeg` is the
+   former `setAngle` clamp body verbatim (mode ignored).  `MockServo` stores the
+   angle identically.  `ServoController` now calls `setAngleDeg(deg, 0)` /
+   `currentAngleDeg()` — identical observable behaviour.  Host suite (1957 passed),
+   golden-TLM byte-exact, field-pin, and vendor-grep gates all green; ARM firmware
+   build (`build.py --fw-only`) produced `MICROBIT.hex` with 0 `error:`.
 
 ## Testing Plan
 

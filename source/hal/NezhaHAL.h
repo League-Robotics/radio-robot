@@ -45,8 +45,8 @@ public:
     NezhaHAL(MicroBitI2C& i2c, MicroBitIO& io, const RobotConfig& cfg);
 
     // Hardware interface overrides ----------------------------------------
-    IMotor&       motorL()      override { return _motorL; }
-    IMotor&       motorR()      override { return _motorR; }
+    IVelocityMotor& motorL()    override { return _motorL; }
+    IVelocityMotor& motorR()    override { return _motorR; }
     ILineSensor&  lineSensor()  override { return _line; }
     IColorSensor& colorSensor() override { return _color; }
 #ifdef BENCH_OTOS_ENABLED
@@ -57,7 +57,7 @@ public:
     IOtosSensor&  otos()        override { return _otos; }
 #endif
     IPortIO&      portIO()      override { return _portio; }
-    IServo&       gripper()     override { return _gripper; }
+    IPositionMotor& gripper()   override { return _gripper; }
 
     // Call otos.begin(), line.begin(), color.begin().
     // With BENCH_OTOS_ENABLED: also calls _benchOtos.begin().

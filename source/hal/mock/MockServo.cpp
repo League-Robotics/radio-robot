@@ -1,9 +1,12 @@
 #include "MockServo.h"
 
-void MockServo::setAngle(uint8_t degrees) {
-    _angle = static_cast<int16_t>(degrees);
+void MockServo::setAngleDeg(uint16_t deg, uint8_t mode) {
+    // 039-003: host behaviour preserved — store the commanded angle verbatim.
+    // A mock hobby servo has no Nezha motion mode, so `mode` is ignored.
+    (void)mode;
+    _angle = deg;
 }
 
-int16_t MockServo::currentAngle() const {
+uint16_t MockServo::currentAngleDeg() const {
     return _angle;
 }

@@ -10,9 +10,12 @@ Servo::Servo(MicroBitPin& pin, uint16_t maxDegrees)
 // Public interface
 // ---------------------------------------------------------------------------
 
-void Servo::setAngle(uint8_t degrees)
+void Servo::setAngleDeg(uint16_t deg, uint8_t mode)
 {
-    uint8_t clamped = (degrees > _maxDegrees) ? (uint8_t)_maxDegrees : degrees;
+    // 039-003: body moved VERBATIM from the former Servo::setAngle(uint8_t).
+    // A hobby servo has no Nezha motion mode, so `mode` is ignored.
+    (void)mode;
+    uint16_t clamped = (deg > _maxDegrees) ? _maxDegrees : deg;
     _pin.setServoValue((int)clamped);
-    _currentAngle = (int16_t)clamped;
+    _currentAngle = clamped;
 }

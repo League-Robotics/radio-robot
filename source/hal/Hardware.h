@@ -1,11 +1,11 @@
 #pragma once
 #include <stdint.h>
-#include "IMotor.h"
+#include "io/capability/IVelocityMotor.h"
 #include "ILineSensor.h"
 #include "IColorSensor.h"
 #include "IOtosSensor.h"
 #include "IPortIO.h"
-#include "IServo.h"
+#include "io/capability/IPositionMotor.h"
 
 // Forward declaration — full definition in source/control/RobotState.h.
 // Sufficient here because the overload takes a const reference (034-001).
@@ -23,13 +23,13 @@ class Hardware {
 public:
     virtual ~Hardware() = default;
 
-    virtual IMotor&       motorL()      = 0;
-    virtual IMotor&       motorR()      = 0;
-    virtual ILineSensor&  lineSensor()  = 0;
-    virtual IColorSensor& colorSensor() = 0;
-    virtual IOtosSensor&  otos()        = 0;
-    virtual IPortIO&      portIO()      = 0;
-    virtual IServo&       gripper()     = 0;
+    virtual IVelocityMotor& motorL()      = 0;
+    virtual IVelocityMotor& motorR()      = 0;
+    virtual ILineSensor&    lineSensor()  = 0;
+    virtual IColorSensor&   colorSensor() = 0;
+    virtual IOtosSensor&    otos()        = 0;
+    virtual IPortIO&        portIO()      = 0;
+    virtual IPositionMotor& gripper()     = 0;
 
     // Initialize all owned devices (calls begin() on sensors).
     virtual void begin() = 0;

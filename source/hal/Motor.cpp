@@ -23,8 +23,8 @@
 // ---------------------------------------------------------------------------
 
 Motor::Motor(I2CBus& i2c, uint8_t motorId, int8_t fwdSign, const RobotConfig& cfg)
-    : _i2c(i2c), _motorId(motorId), _fwdSign(fwdSign), _cfg(cfg), _lastDir(0),
-      _encOffset(0)
+    : _i2c(i2c), _motorId(motorId), _fwdSign(fwdSign), _posImpl(*this), _cfg(cfg),
+      _lastDir(0), _encOffset(0)
 {
 }
 
@@ -510,6 +510,11 @@ void Motor::moveToAngle(uint16_t angle, uint8_t mode)
 {
     // Clamp to 0-359 (mirrors vendor TS: angle %= 360).
     angle = angle % 360;
+
+    // 039-003: record the clamped angle for IPositionMotor::currentAngleDeg()
+    // (reached via asPositionMotor()).  This is a host-side cache only — it does
+    // NOT change any wire byte below.
+    _lastAngle = angle;
 
     // Frame verified against pxt-nezha2/main.ts moveToAbsAngle():
     //   buf[0]=0xFF, buf[1]=0xF9, buf[2]=motorId, buf[3]=0x00,
