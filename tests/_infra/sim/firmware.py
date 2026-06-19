@@ -322,6 +322,20 @@ class Sim:
         lib.sim_set_color_frozen.argtypes = [ctypes.c_void_p, ctypes.c_int]
         lib.sim_set_color_frozen.restype = None
 
+        # (045-003) sim_set_line_values(void* h, uint16 l0,l1,l2,l3)
+        lib.sim_set_line_values.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint16, ctypes.c_uint16, ctypes.c_uint16, ctypes.c_uint16,
+        ]
+        lib.sim_set_line_values.restype = None
+
+        # (045-003) sim_set_color_rgbc(void* h, uint16 r,g,b,c)
+        lib.sim_set_color_rgbc.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint16, ctypes.c_uint16, ctypes.c_uint16, ctypes.c_uint16,
+        ]
+        lib.sim_set_color_rgbc.restype = None
+
         # N9 same-tick OTOS failure helper (030-008)
         # sim_set_otos_read_failure(void* h, int fail)
         lib.sim_set_otos_read_failure.argtypes = [ctypes.c_void_p, ctypes.c_int]
@@ -560,6 +574,36 @@ class Sim:
     def set_color_frozen(self, frozen: bool) -> None:
         """Freeze or unfreeze the MockColorSensor (N8 fix verification)."""
         self._lib.sim_set_color_frozen(self._h, ctypes.c_int(1 if frozen else 0))
+
+    # ------------------------------------------------------------------
+    # (045-003) Fixed sensor-value injection (line / color)
+    # ------------------------------------------------------------------
+
+    def set_line_values(self, l0: int, l1: int, l2: int, l3: int) -> None:
+        """Inject a constant 4-channel line-sensor reading into the SimLineSensor.
+
+        Installs a single-row schedule so the sensor returns (l0,l1,l2,l3) on
+        every read.  Call init_line_sensor() first so LineSensor::periodic reads
+        it into HardwareState.line[] (where StopCondition::evaluate sees it).
+        """
+        self._lib.sim_set_line_values(
+            self._h,
+            ctypes.c_uint16(l0), ctypes.c_uint16(l1),
+            ctypes.c_uint16(l2), ctypes.c_uint16(l3),
+        )
+
+    def set_color_rgbc(self, r: int, g: int, b: int, c: int) -> None:
+        """Inject a constant RGBC color-sensor reading into the SimColorSensor.
+
+        Installs a single-row schedule so the sensor returns (r,g,b,c) on every
+        read.  Call init_color_sensor() first so ColorSensor::periodic reads it
+        into HardwareState.colorR/G/B/C.
+        """
+        self._lib.sim_set_color_rgbc(
+            self._h,
+            ctypes.c_uint16(r), ctypes.c_uint16(g),
+            ctypes.c_uint16(b), ctypes.c_uint16(c),
+        )
 
     # ------------------------------------------------------------------
     # N9 same-tick OTOS failure helper (030-008)

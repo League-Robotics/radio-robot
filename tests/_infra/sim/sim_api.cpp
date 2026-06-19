@@ -155,6 +155,17 @@ struct SimHandle {
         _ts.activeFn    = storeReply;
         _ts.activeTlmFn = storeReply;
         _ts.activeCtx   = &replyStore;
+
+        // (045-002) Wire the wedge-EVT sink — mirrors main.cpp:229
+        //   robot.motorController.setEvtSink(&sched.activeFn, &sched.activeCtx);
+        // In the host sim, _ts plays the role of LoopScheduler's per-tick state,
+        // and its activeFn/activeCtx are refreshed to storeReply/&replyStore at
+        // the top of every sim_tick() / sim_command(). Binding the MotorController's
+        // EVT sink to &_ts.activeFn / &_ts.activeCtx lets EVT enc_wedged flow into
+        // replyStore (read by sim_get_async_evts), exactly as the firmware routes
+        // it through sched.activeFn/Ctx. Without this the wedge latch still sets
+        // (sim_get_wheel_wedged_*) but the EVT line is never emitted in sim.
+        robot.motorController.setEvtSink(&_ts.activeFn, &_ts.activeCtx);
     }
 };
 
@@ -748,6 +759,33 @@ void sim_set_line_frozen(void* h, int frozen)
 void sim_set_color_frozen(void* h, int frozen)
 {
     static_cast<SimHandle*>(h)->hal.simColorSensor().setFrozen(frozen != 0);
+}
+
+// ---- (045-003) Fixed sensor-value injection (line / color) ----
+//
+// The Sim* line/color sensors read from an internal schedule table, NOT from
+// the PhysicsWorld plant (PhysicsWorld::setTrueLineRaw/setTrueColorRGBC set
+// plant truth that these sensors do not consult).  To inject a constant value
+// that flows into HardwareState (line[]/colorR/G/B/C) — and thus into
+// StopCondition::evaluate via the SENSOR/COLOR/LINE_ANY kinds — install a
+// single-row schedule.  With _scheduleRows == 1 the sensor's currentRow() is
+// always 0, so readValues()/pollRGBC() return the injected row every tick.
+//
+// Callers must first sim_init_line_sensor()/sim_init_color_sensor() (begin())
+// so the LineSensor/ColorSensor subsystem periodics actually read the sensor.
+
+void sim_set_line_values(void* h, uint16_t l0, uint16_t l1,
+                         uint16_t l2, uint16_t l3)
+{
+    uint16_t row[1][4] = {{ l0, l1, l2, l3 }};
+    static_cast<SimHandle*>(h)->hal.simLineSensor().setSchedule(row, 1);
+}
+
+void sim_set_color_rgbc(void* h, uint16_t r, uint16_t g,
+                        uint16_t b, uint16_t c)
+{
+    uint16_t row[1][4] = {{ r, g, b, c }};
+    static_cast<SimHandle*>(h)->hal.simColorSensor().setSchedule(row, 1);
 }
 
 // ---- N9 same-tick OTOS failure helper (030-008) ----
