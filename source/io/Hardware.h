@@ -1,10 +1,10 @@
 #pragma once
 #include <stdint.h>
 #include "io/capability/IVelocityMotor.h"
-#include "ILineSensor.h"
-#include "IColorSensor.h"
-#include "IOtosSensor.h"
-#include "IPortIO.h"
+#include "io/capability/ILineSensor.h"
+#include "io/capability/IColorSensor.h"
+#include "io/capability/IOdometer.h"
+#include "io/capability/IPortIO.h"
 #include "io/capability/IPositionMotor.h"
 
 // Forward declaration — full definition in source/types/Inputs.h.

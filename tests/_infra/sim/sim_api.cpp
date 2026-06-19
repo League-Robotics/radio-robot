@@ -18,7 +18,7 @@
 #include "io/real/BenchOtosSensor.h"
 #include "types/Config.h"
 #include "types/Inputs.h"
-#include "control/MotionController.h"
+#include "superstructure/MotionController.h"
 #include "control/MotionCommand.h"
 #include "control/HaltController.h"
 #include "control/LoopTickOnce.h"

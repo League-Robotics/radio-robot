@@ -1,6 +1,6 @@
 #pragma once
 #include "MicroBit.h"
-#include "IPortIO.h"
+#include "io/capability/IPortIO.h"
 #include <stdint.h>
 
 /**

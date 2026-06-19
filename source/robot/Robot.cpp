@@ -1,5 +1,5 @@
 #include "Robot.h"
-#include "MotionController.h"
+#include "superstructure/MotionController.h"
 #ifndef HOST_BUILD
 #include "MicroBit.h"
 #include "MicroBitDevice.h"

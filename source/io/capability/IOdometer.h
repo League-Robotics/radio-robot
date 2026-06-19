@@ -109,3 +109,13 @@ public:
     virtual int8_t getAngularScalar() const = 0;
     virtual void   setAngularScalar(int8_t val) = 0;
 };
+
+// 044-004 (Phase F): the former `source/io/IOtosSensor.h` alias shim is deleted;
+// its aliases are folded in here so every consumer that still names IOtosSensor /
+// OtosPose / OtosVelocity / OtosAccel (OtosSensor, BenchOtosSensor, Odometry,
+// Robot) compiles unchanged. The value types are identical-layout (Pose2D.h,
+// included above). Behaviour-preserving rename housekeeping — no wire bytes change.
+using IOtosSensor  = IOdometer;
+using OtosPose     = Pose2D;
+using OtosVelocity = BodyTwist;
+using OtosAccel    = BodyAccel;

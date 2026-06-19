@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include "IMotor.h"
+#include "io/capability/IVelocityMotor.h"
 #include "MotorController.h"
 #include "PhysicalStateEstimate.h"
 #include "Inputs.h"          // HardwareState, MotorCommands (RobotStateContainer slices)

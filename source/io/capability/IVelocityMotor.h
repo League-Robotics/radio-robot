@@ -89,3 +89,9 @@ public:
     // to moveToAngle() / timedMove().
     virtual IPositionMotor* asPositionMotor() { return nullptr; }
 };
+
+// 044-004 (Phase F): the former `source/io/IMotor.h` alias shim is deleted; its
+// `using IMotor = IVelocityMotor;` alias is folded in here so every consumer that
+// still names IMotor (Motor, MotorController, Robot, Drive) compiles unchanged.
+// Behaviour-preserving rename housekeeping — no wire bytes change.
+using IMotor = IVelocityMotor;

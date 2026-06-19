@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include "IOtosSensor.h"
+#include "io/capability/IOdometer.h"
 
 struct RobotConfig;
 

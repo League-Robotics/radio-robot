@@ -21,7 +21,7 @@
 // referenced only by beginGoTo, so it travels here with that body.  The static
 // member emitEvt — used by the kept driveAdvance — stays in MotionController.cpp.
 
-#include "MotionController.h"
+#include "superstructure/MotionController.h"
 #include "MotorController.h"
 #include "Odometry.h"
 #include "BodyKinematics.h"

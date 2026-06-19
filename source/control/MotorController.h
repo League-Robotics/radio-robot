@@ -1,5 +1,5 @@
 #pragma once
-#include "IMotor.h"
+#include "io/capability/IVelocityMotor.h"
 #include "io/capability/IBusDiagnostics.h"
 #include "Config.h"
 #include "VelocityController.h"

@@ -40,3 +40,9 @@ public:
     // setAngleDeg() call.
     virtual uint16_t currentAngleDeg() const = 0;
 };
+
+// 044-004 (Phase F): the former `source/io/IServo.h` alias shim is deleted; its
+// `using IServo = IPositionMotor;` alias is folded in here so every consumer that
+// still names IServo (Servo, ServoController, Robot::gripper) compiles unchanged.
+// Behaviour-preserving rename housekeeping — no wire bytes change.
+using IServo = IPositionMotor;

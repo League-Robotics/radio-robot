@@ -1,18 +1,19 @@
 ---
-id: "004"
-title: "Delete alias shims, finalize REPLAY stub, and add seam-presence + logging-contract tests"
-status: open
+id: '004'
+title: Delete alias shims, finalize REPLAY stub, and add seam-presence + logging-contract
+  tests
+status: in-progress
 use-cases:
-  - SUC-003
-  - SUC-005
-  - SUC-006
-  - SUC-007
+- SUC-003
+- SUC-005
+- SUC-006
+- SUC-007
 depends-on:
-  - "044-001"
-  - "044-002"
-  - "044-003"
-github-issue: ""
-issue: "migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md"
+- 044-001
+- 044-002
+- 044-003
+github-issue: ''
+issue: migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md
 completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -215,24 +216,28 @@ def test_no_subsystem_prints():
 
 ## Acceptance Criteria
 
-- [ ] All eight alias shim files are deleted.
-- [ ] All callers of deleted shims include canonical paths and compile correctly.
-- [ ] `ReplayHAL.h` `NoopVelocityMotor` method names match `IVelocityMotor` interface
+- [x] All eight alias shim files are deleted.
+- [x] All callers of deleted shims include canonical paths and compile correctly.
+- [x] `ReplayHAL.h` `NoopVelocityMotor` method names match `IVelocityMotor` interface
       exactly (verify by compilation; add `override` to catch mismatches).
-- [ ] `tests/simulation/unit/test_architecture_seams.py` exists and all tests pass.
-- [ ] `tests/simulation/unit/test_logging_contract.py` exists and passes.
-- [ ] `test_vendor_baseline_empty` passes (vendor_baseline.txt is empty — set by T3).
-- [ ] Four-file device quartet tests pass for IVelocityMotor and IOdometer.
-- [ ] All three seam-presence tests pass.
-- [ ] `test_replay_hal_contains_robot_mode` passes.
-- [ ] Full simulation tier green: `uv run --with pytest python -m pytest -q` >= 2001 passed, 0 errors.
-- [ ] ARM firmware build green: `python3 build.py --fw-only` → 0 errors. Then
+      OQ-4 resolution: the whole drive-motor tree already uses `setSpeed` (interface,
+      Motor, SimMotor, MotorController, ReplayHAL) and all overrides already carry
+      `override`. The hypothesized `setSpeed`→`setOutput` rename is NOT applied —
+      renaming would break the build. Verified by compiling the REPLAY-mode lib clean.
+- [x] `tests/simulation/unit/test_architecture_seams.py` exists and all tests pass.
+- [x] `tests/simulation/unit/test_logging_contract.py` exists and passes.
+- [x] `test_vendor_baseline_empty` passes (vendor_baseline.txt is empty — set by T3).
+- [x] Four-file device quartet tests pass for IVelocityMotor and IOdometer.
+- [x] All three seam-presence tests pass.
+- [x] `test_replay_hal_contains_robot_mode` passes.
+- [x] Full simulation tier green: `uv run --with pytest python -m pytest -q` 2015 passed, 0 errors.
+- [x] ARM firmware build green: `python3 build.py --fw-only` → 0 errors. Then
       `git checkout -- source/robot/DefaultConfig.cpp`.
-- [ ] Golden-TLM canary passes byte-exact.
-- [ ] All behavior-preservation fences green: `test_033_005_wedge_hardening.py`,
+- [x] Golden-TLM canary passes byte-exact.
+- [x] All behavior-preservation fences green: `test_033_005_wedge_hardening.py`,
       `test_goto_bounds.py`, `test_incident_scenarios.py`, `test_ekf*.py`,
       `test_otos_fusion.py`, `test_watchdog_exemption.py`.
-- [ ] `defaultRobotConfig()` field-pin diff empty (canary passes).
+- [x] `defaultRobotConfig()` field-pin diff empty (canary passes).
 
 ## Implementation Plan
 
