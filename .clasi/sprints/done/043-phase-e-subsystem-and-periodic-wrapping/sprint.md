@@ -1,7 +1,7 @@
 ---
 id: '043'
 title: "Phase E \u2014 Subsystem and periodic wrapping"
-status: roadmap
+status: done
 branch: sprint/043-phase-e-subsystem-and-periodic-wrapping
 use-cases: []
 issues:
@@ -104,5 +104,8 @@ directory layout:
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 043-001 | Sensor subsystems: LineSensor, ColorSensor, Ports | — |
+| 043-002 | Drive subsystem: wrap CONTROL COLLECT block | 043-001 |
+| 043-003 | Gripper subsystem with GripperIONull null-object | 043-001 |
 
 Tickets execute serially in the order listed.

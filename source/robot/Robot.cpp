@@ -61,6 +61,32 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       motionController(motorController, estimate.odometry(), config),
       portController(portio),
       servoController(gripper),
+      // Phase E (043-002) Drive subsystem — wired with the IMotor& device refs
+      // (motorL, motorR), motorController, estimate, state.inputs, state.commands,
+      // and config.  Declaration order in Robot.h puts `drive` after all of these,
+      // so the refs are live here.  The five filter-streak members it owns are
+      // value-initialised inside Drive (same initial values as the former Robot
+      // fields).  See architecture-update.md OQ-1/OQ-2.
+      drive(motorL, motorR, motorController, estimate,
+            state.inputs, state.commands, config),
+      // Phase E (043-001) sensor subsystems — wired with their device ref,
+      // state.inputs (HardwareState), and config.  Declaration order in Robot.h
+      // puts these after the refs they bind, so the refs are live here.
+      // NOTE: the ColorSensor subsystem member is named colorSensor_ (trailing
+      // underscore) because the existing IColorSensor& device ref is already
+      // named colorSensor (kept to avoid macro collisions; used by
+      // SystemCommands::caps).  Architecture-update.md names it colorSensor; the
+      // device-ref collision forces the underscore.  Internal naming only — no
+      // behavior/TLM change.  See report annotation.
+      lineSensor(line, state.inputs, config),
+      colorSensor_(colorSensor, state.inputs, config),
+      ports(portio, state.inputs, config),
+      // Phase E (043-003) Gripper subsystem — binds the existing `gripper` IServo&
+      // (== IPositionMotor&) device ref bound above.  Declaration order in Robot.h
+      // puts gripper_sub after `gripper`, so the ref is live here.  No-op subsystem
+      // (periodic/updateInputs are no-ops); not wired into loopTickOnce.  Actuation
+      // still flows through servoController (unchanged) — zero behavior change.
+      gripper_sub(gripper),
       // Superstructure (042-001) — wired with references to motionController and
       // haltController (both declared before it) plus config.  Declaration order
       // in Robot.h guarantees those are constructed first.
@@ -100,13 +126,16 @@ uint32_t Robot::systemTime() const
 }
 
 // ---------------------------------------------------------------------------
-// controlCollectSplitPhase REMOVED (039-002).
+// controlCollectSplitPhase REMOVED (039-002); CONTROL COLLECT relocated (043-002).
 //
-// Its body moved into loopTickOnce()'s CONTROL COLLECT block (verbatim) and the
-// per-loop encoder read moved into Hardware::tick(now) → Motor::tick().  The
-// per-wheel streak/wedge state members it used (_filterRejectStreakL/R,
-// _prevDriving, _lastControlMs, _prevAnyWedged, kFilterRejectStreakThreshold)
-// remain on Robot because the relocated block reaches them via robot.*.
+// Its body moved into loopTickOnce()'s CONTROL COLLECT block (verbatim, 039-002)
+// and the per-loop encoder read moved into Hardware::tick(now) → Motor::tick().
+// Phase E (043-002): the CONTROL COLLECT block then moved VERBATIM into
+// subsystems::Drive::periodic(now, fn, ctx), and the per-wheel streak/wedge state
+// members it used (_filterRejectStreakL/R, _prevDriving, _lastControlMs,
+// _prevAnyWedged, kFilterRejectStreakThreshold) moved off Robot onto Drive as
+// value members.  loopTickOnce now calls robot.drive.periodic(...) in the same
+// position the inline block ran (before cmd.dequeueOne).
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -248,47 +277,18 @@ void Robot::otosCorrect(uint32_t now_ms)
 }
 
 // ---------------------------------------------------------------------------
-// lineRead — read 4-channel line sensor into HardwareState.
+// lineRead / colorRead / portsRead REMOVED (043-001, Phase E).
+//
+// The 4-channel line read, the non-blocking RGBC poll, and the digital/analogue
+// GPIO read moved VERBATIM into the new sensor subsystems'
+// updateInputs(uint32_t now) methods:
+//   source/subsystems/sensors/LineSensor.cpp
+//   source/subsystems/sensors/ColorSensor.cpp
+//   source/subsystems/sensors/Ports.cpp
+// systemTime() became the `now` parameter (same value loopTickOnce threads).
+// loopTickOnce now calls robot.lineSensor / robot.colorSensor_ / robot.ports
+// .periodic(ts, now) in the SAME order/position the inline blocks ran.
 // ---------------------------------------------------------------------------
-
-void Robot::lineRead()
-{
-    if (!line.is_initialized()) return;
-    if (line.readValues(state.inputs.line)) {
-        state.inputs.lineVS.lastUpdMs = systemTime();
-        state.inputs.lineVS.valid     = true;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// colorRead — non-blocking RGBC poll into HardwareState.
-// ---------------------------------------------------------------------------
-
-void Robot::colorRead()
-{
-    if (!colorSensor.is_initialized()) return;
-    if (colorSensor.pollRGBC(state.inputs.colorR,
-                              state.inputs.colorG,
-                              state.inputs.colorB,
-                              state.inputs.colorC)) {
-        state.inputs.colorVS.lastUpdMs = systemTime();
-        state.inputs.colorVS.valid     = true;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// portsRead — read digital and analogue GPIO ports into HardwareState.
-// ---------------------------------------------------------------------------
-
-void Robot::portsRead()
-{
-    for (uint8_t i = 0; i < 4; ++i) {
-        state.inputs.digitalIn[i] = (portio.readDigital(i) != 0);
-        state.inputs.analogIn[i]  = (int16_t)portio.readAnalog(i);
-    }
-    state.inputs.portsVS.lastUpdMs = systemTime();
-    state.inputs.portsVS.valid     = true;
-}
 
 // ---------------------------------------------------------------------------
 // resetEncoders — single canonical atomic encoder reset (N1, sprint 030-001).
