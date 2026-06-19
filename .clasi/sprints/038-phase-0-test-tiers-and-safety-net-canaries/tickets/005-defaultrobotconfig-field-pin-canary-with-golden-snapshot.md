@@ -1,11 +1,13 @@
 ---
-id: "005"
-title: "defaultRobotConfig() field-pin canary with golden snapshot"
-status: open
-use-cases: [SUC-004]
-depends-on: ["003"]
-github-issue: ""
-issue: ""
+id: '005'
+title: defaultRobotConfig() field-pin canary with golden snapshot
+status: done
+use-cases:
+- SUC-004
+depends-on:
+- '003'
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -109,15 +111,16 @@ def test_default_robot_config_unchanged(sim):
 
 ## Acceptance Criteria
 
-- [ ] `test_default_config_pin.py` exists in `tests/simulation/unit/`.
-- [ ] `tests/_infra/default_config_golden.json` is committed with all `RobotConfig` fields.
-- [ ] `uv run --with pytest python -m pytest tests/simulation/unit/test_default_config_pin.py -v` passes.
-- [ ] The test uses the `sim` fixture (session build, fresh Sim per test — no rebuild).
-- [ ] Manually changing a calibration value in `data/robots/tovez.json`, regenerating
+- [x] `test_default_config_pin.py` exists in `tests/simulation/unit/`.
+- [x] `tests/_infra/default_config_golden.json` is committed with all `RobotConfig` fields.
+- [x] `uv run --with pytest python -m pytest tests/simulation/unit/test_default_config_pin.py -v` passes.
+- [x] The test uses the `build_lib` fixture (session build, raw Sim per test — no rebuild).
+      Note: uses raw Sim() rather than `sim` fixture to avoid the fixture's SET sTimeout=60000
+      override masking changes to the default sTimeoutMs field in DefaultConfig.
+- [x] Manually changing a calibration value in `data/robots/tovez.json`, regenerating
       `DefaultConfig.cpp`, rebuilding the lib, and re-running the test causes it to FAIL.
-- [ ] The overall simulation suite still passes ≥ 1954 tests with the new canary added.
-- [ ] `git diff source/` is empty. If Option B (sim_api.cpp export) is used, the only
-      change in `tests/_infra/sim/sim_api.cpp` is the new `sim_get_default_config()` export.
+- [x] The overall simulation suite still passes ≥ 1954 tests with the new canary added.
+- [x] `git diff source/` is empty. Option A (GET commands) was used — no sim_api.cpp changes.
 
 ## Testing Plan
 
