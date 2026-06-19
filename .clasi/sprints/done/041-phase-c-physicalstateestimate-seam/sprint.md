@@ -1,7 +1,7 @@
 ---
 id: '041'
 title: "Phase C \u2014 PhysicalStateEstimate seam"
-status: planning-docs
+status: done
 branch: sprint/041-phase-c-physicalstateestimate-seam
 use-cases: []
 issues:
