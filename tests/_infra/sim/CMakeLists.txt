@@ -37,6 +37,10 @@ set(ROBOT_RUN_MODE "SIM" CACHE STRING "Build-target run mode: REAL | SIM | REPLA
 file(GLOB APP_SOURCES     "${REPO_ROOT}/source/app/*.cpp")
 file(GLOB CONTROL_SOURCES "${REPO_ROOT}/source/control/*.cpp")
 file(GLOB ROBOT_SOURCES   "${REPO_ROOT}/source/robot/*.cpp")
+# 041-001 (Phase C): source/state/ holds the EKF (moved from control/) and the
+# new PhysicalStateEstimate wrapper. The control/ glob no longer picks up
+# EKF.cpp (the file is deleted from control/), so it must be globbed here.
+file(GLOB STATE_SOURCES   "${REPO_ROOT}/source/state/*.cpp")
 
 list(FILTER APP_SOURCES     EXCLUDE REGEX ".*/WedgeTest\\.cpp$")
 list(FILTER CONTROL_SOURCES EXCLUDE REGEX ".*/LoopScheduler\\.cpp$")
@@ -64,6 +68,7 @@ add_library(firmware_host SHARED
     ${APP_SOURCES}
     ${CONTROL_SOURCES}
     ${ROBOT_SOURCES}
+    ${STATE_SOURCES}
     ${IO_DEVICE_SOURCES}
     ${REPLAY_SOURCES}
     # BenchOtosSensor lives in source/io/real/ (not io/sim/) so it is not globbed
@@ -90,5 +95,6 @@ target_include_directories(firmware_host PRIVATE
     "${REPO_ROOT}/source/io/real"
     "${REPO_ROOT}/source/io/sim"
     "${REPO_ROOT}/source/robot"
+    "${REPO_ROOT}/source/state"
     "${REPO_ROOT}/source/types"
 )

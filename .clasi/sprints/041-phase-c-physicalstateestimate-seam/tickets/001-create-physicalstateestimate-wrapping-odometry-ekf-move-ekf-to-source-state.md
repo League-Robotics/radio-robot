@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Create PhysicalStateEstimate wrapping Odometry+EKF; move EKF to source/state/
-status: open
+status: in-progress
 use-cases:
 - SUC-001
 - SUC-002
@@ -249,15 +249,15 @@ Golden-TLM, field-pin, vendor-confinement all pass because no runtime paths chan
 
 ## Acceptance Criteria
 
-- [ ] `source/state/EKF.h` and `source/state/EKF.cpp` exist with verbatim content.
-- [ ] `source/control/EKF.h` is a shim (`#include "../state/EKF.h"`); `source/control/EKF.cpp` is deleted.
-- [ ] `source/state/PhysicalStateEstimate.{h,cpp}` exist and compile cleanly.
-- [ ] `source/state/PhysicalStateEstimate.h` includes no `CommandTypes.h`, `Commandable`, `MicroBit.h`, or `Protocol.h` directly. (Transitive pull via `Odometry.h` is acceptable until T2.)
-- [ ] All forwarded accessors present; external `robot.odometry.*` call-site audit complete.
-- [ ] CMake source list for sim and firmware includes `source/state/`.
-- [ ] `python3 build.py --fw-only` → 0 errors; then `git checkout -- source/robot/DefaultConfig.cpp`.
-- [ ] `uv run --with pytest python -m pytest -q` → ≥ 1997 passed, 0 errors.
-- [ ] Golden-TLM canary byte-exact; field-pin diff empty; vendor-confinement gate passes.
+- [x] `source/state/EKF.h` and `source/state/EKF.cpp` exist with verbatim content.
+- [x] `source/control/EKF.h` is a shim (`#include "../state/EKF.h"`); `source/control/EKF.cpp` is deleted.
+- [x] `source/state/PhysicalStateEstimate.{h,cpp}` exist and compile cleanly.
+- [x] `source/state/PhysicalStateEstimate.h` includes no `CommandTypes.h`, `Commandable`, `MicroBit.h`, or `Protocol.h` directly. (Transitive pull via `Odometry.h` is acceptable until T2.)
+- [x] All forwarded accessors present; external `robot.odometry.*` call-site audit complete. (OQ-2: added `zero()` forwarder — the ZERO command call-site `robot->odometry.zero()` at SystemCommands.cpp:348 was not in the architecture forwarding enumeration; added so T3 can repoint without dangling. `getCommands()` deliberately NOT forwarded — it moves to OtosCommands in T2.)
+- [x] CMake source list for sim and firmware includes `source/state/`. (Sim: explicit `STATE_SOURCES` glob + `source/state` include dir added to `tests/_infra/sim/CMakeLists.txt`. Firmware: root `CMakeLists.txt` uses `RECURSIVE_FIND_FILE`/`RECURSIVE_FIND_DIR` over `source/`, which auto-discovers `source/state/*.cpp` and its include dir — no edit needed; verified `source/state/EKF.cpp.obj` + `PhysicalStateEstimate.cpp.obj` compiled into firmware.)
+- [x] `python3 build.py --fw-only` → 0 errors; then `git checkout -- source/robot/DefaultConfig.cpp`. (MICROBIT.hex produced, 0 `error:` lines.)
+- [x] `uv run --with pytest python -m pytest -q` → ≥ 1997 passed, 0 errors. (1997 passed.)
+- [x] Golden-TLM canary byte-exact; field-pin diff empty; vendor-confinement gate passes. (`test_golden_tlm.py`, `test_default_config_pin.py`, `test_vendor_confinement.py` all green. Vendor gate scope still `app/control/robot/types` — extension to `state/` is timed to T2 per OQ-3, not this ticket.)
 
 ## Testing
 
