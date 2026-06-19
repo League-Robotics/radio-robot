@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Gripper subsystem with GripperIONull null-object
-status: in-progress
+status: done
 use-cases:
 - SUC-003
 depends-on:
