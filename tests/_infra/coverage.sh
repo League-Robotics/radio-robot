@@ -18,7 +18,8 @@
 # Prerequisites (auto-installed via uv):
 #   cmake (system), gcovr (uv --with gcovr), pytest (uv --with pytest)
 #
-# Confirmed baseline (Sprint 045): ~74.6% overall line coverage over source/.
+# Final baseline (Sprint 045, ticket 045-005): 81.5% overall / 86.2% simulatable-code
+# (simulatable-code excludes CODAL-only + RatioPidController dead-code; see exclusion set below).
 #
 # CODAL-only exclusion set (simulatable-code denominator exclusions):
 #   source/app/DebugCommandable.cpp     — HOST_BUILD stubs only; I2C handlers guarded
