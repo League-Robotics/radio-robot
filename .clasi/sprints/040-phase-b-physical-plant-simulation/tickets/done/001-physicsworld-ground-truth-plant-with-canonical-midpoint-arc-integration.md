@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: "PhysicsWorld \u2014 ground-truth plant with canonical midpoint-arc integration"
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 - SUC-005
