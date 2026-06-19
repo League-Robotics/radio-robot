@@ -1,14 +1,14 @@
 ---
-status: in-progress
+status: done
 sprint: '042'
 tickets:
-- 038-001
-- 041-001
-- 041-002
-- 041-003
-- 042-001
-- 042-002
-- 042-003
+- 038-all
+- 039-all
+- 040-all
+- 041-all
+- 042-all
+- 043-all
+- 044-all
 ---
 
 # Migrate radio-robot-c to the FRC Elite Architecture (C++/CODAL adaptation)
