@@ -6,7 +6,7 @@
 #include "MockLineSensor.h"
 #include "MockColorSensor.h"
 #include "MockOtosSensor.h"
-#include "../BenchOtosSensor.h"
+#include "io/real/BenchOtosSensor.h"
 #include "MockPortIO.h"
 #include "MockServo.h"
 

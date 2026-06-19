@@ -17,7 +17,11 @@ def build(clean, verbose = False, parallelism = 10):
 
     if use_ninja:
         # configure
-        system("cmake .. -Wno-dev -DCMAKE_BUILD_TYPE=RelWithDebInfo -G \"Ninja\"")
+        # ROBOT_RUN_MODE=REAL (039-005): the firmware (CODAL) build compiles the
+        # io/real/ device impls and excludes io/sim/ + io/ReplayHAL. The root
+        # CMakeLists.txt defaults to REAL, but pass it explicitly so the build
+        # intent is self-documenting.
+        system("cmake .. -Wno-dev -DCMAKE_BUILD_TYPE=RelWithDebInfo -DROBOT_RUN_MODE=REAL -G \"Ninja\"")
 
         if clean:
             system("ninja clean")
@@ -29,7 +33,8 @@ def build(clean, verbose = False, parallelism = 10):
             system("ninja -j {}".format(parallelism))
     else:
         # configure
-        system("cmake .. -Wno-dev -DCMAKE_BUILD_TYPE=RelWithDebInfo -G \"Unix Makefiles\"")
+        # ROBOT_RUN_MODE=REAL (039-005): see the Ninja branch above.
+        system("cmake .. -Wno-dev -DCMAKE_BUILD_TYPE=RelWithDebInfo -DROBOT_RUN_MODE=REAL -G \"Unix Makefiles\"")
 
         if clean:
             system("make clean")

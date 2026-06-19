@@ -1,16 +1,17 @@
 ---
-id: "005"
-title: "Rename hal/ to io/; establish real/ sim/ subdirs; ROBOT_RUN_MODE CMake; ReplayHAL stub"
-status: open
+id: '005'
+title: Rename hal/ to io/; establish real/ sim/ subdirs; ROBOT_RUN_MODE CMake; ReplayHAL
+  stub
+status: done
 use-cases:
-  - SUC-039-006
+- SUC-039-006
 depends-on:
-  - "039-001"
-  - "039-002"
-  - "039-003"
-  - "039-004"
-github-issue: ""
-issue: ""
+- 039-001
+- 039-002
+- 039-003
+- 039-004
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -234,20 +235,20 @@ Mock files → `source/io/sim/`.
 
 ## Acceptance Criteria
 
-- [ ] `source/hal/` directory does not exist.
-- [ ] `source/io/capability/` contains all 8 headers (7 + Pose2D.h).
-- [ ] `source/io/real/` contains all real-device files (Motor, OtosSensor, NezhaHAL, I2CBus, Servo, BenchOtosSensor, MotorBusDiagnostics, Communicator, SerialPort, Radio, RadioChannel, LineSensor, ColorSensor, PortIO).
-- [ ] `source/io/sim/` contains all mock files (MockHAL, MockMotor, MockOtosSensor, MockLineSensor, MockColorSensor, MockServo, MockPortIO).
-- [ ] `source/io/Hardware.h`, shim `I*.h` headers, `Sensor.h` live at `source/io/`.
-- [ ] `source/io/ReplayHAL.h/.cpp` stub exists and compiles.
-- [ ] `tests/_infra/sim/CMakeLists.txt` uses `ROBOT_RUN_MODE=SIM`; no `hal/mock` filter.
-- [ ] Vendor-confinement test scope updated to "above `source/io/`".
-- [ ] Vendor-confinement canary passes.
-- [ ] Golden-TLM canary passes byte-exact.
-- [ ] `defaultRobotConfig()` field-pin unchanged.
-- [ ] Simulation tier green: `uv run --with pytest python -m pytest -q` — count >= 1957.
-- [ ] No new heap allocation or fiber introduced.
-- [ ] **Sprint 039 DoD check:** all items from the sprint.md `## Definition of Done` list are met.
+- [x] `source/hal/` directory does not exist.
+- [x] `source/io/capability/` contains all 8 headers (7 + Pose2D.h).
+- [x] `source/io/real/` contains all real-device files (Motor, OtosSensor, NezhaHAL, I2CBus, Servo, BenchOtosSensor, MotorBusDiagnostics, Communicator, SerialPort, Radio, RadioChannel, LineSensor, ColorSensor, PortIO).
+- [x] `source/io/sim/` contains all mock files (MockHAL, MockMotor, MockOtosSensor, MockLineSensor, MockColorSensor, MockServo, MockPortIO).
+- [x] `source/io/Hardware.h`, shim `I*.h` headers, `Sensor.h` live at `source/io/`.
+- [x] `source/io/ReplayHAL.h/.cpp` stub exists and compiles.
+- [x] `tests/_infra/sim/CMakeLists.txt` uses `ROBOT_RUN_MODE=SIM`; no `hal/mock` filter.
+- [x] Vendor-confinement test scope updated to "above `source/io/`".
+- [x] Vendor-confinement canary passes.
+- [x] Golden-TLM canary passes byte-exact.
+- [x] `defaultRobotConfig()` field-pin unchanged.
+- [x] Simulation tier green: `uv run --with pytest python -m pytest -q` — count >= 1957.
+- [x] No new heap allocation or fiber introduced.
+- [x] **Sprint 039 DoD check:** all items from the sprint.md `## Definition of Done` list are met (T1–T4 items verified satisfied in the current tree; the alias `I*.h` shims and the vendor-gate boundary-token tightening are deliberately DEFERRED to Phase F per architecture-update.md §2, which schedules shim deletion for Phase F — the shims were moved to `source/io/`, not deleted).
 
 ## Testing Plan
 
