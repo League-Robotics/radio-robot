@@ -2,7 +2,7 @@
 id: '003'
 title: Centralize keepalive/SAFE/ESTOP safety into Superstructure.evaluateSafety()
   and pre-cut goalAllowed() hook
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 - SUC-003
