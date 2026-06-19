@@ -119,11 +119,11 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
         // (033-005e) Push wedge state into Odometry after every control tick.
         bool anyWedged = r.motorController.wheelWedgedL() ||
                          r.motorController.wheelWedgedR();
-        r.odometry.setWedgeActive(anyWedged);
+        r.estimate.setWedgeActive(anyWedged);
         if (anyWedged) {
-            r.odometry.setEncOmegaHealthy(false);
+            r.estimate.setEncOmegaHealthy(false);
         } else if (r._prevAnyWedged) {
-            r.odometry.setEncOmegaHealthy(true);
+            r.estimate.setEncOmegaHealthy(true);
         }
         r._prevAnyWedged = anyWedged;
     }
@@ -196,7 +196,7 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
         robot.state.inputs, robot.state.commands, robot.state.target, now);
 
     // ===== ODOMETRY: dead-reckon pose from encoder deltas ====================
-    robot.odometry.predict(robot.state.inputs, cfg.trackwidthMm,
+    robot.estimate.addOdometryObservation(robot.state.inputs, cfg.trackwidthMm,
                            cfg.rotationalSlip, now);
 
     // ===== HAL ACTUATOR TICK: deliver commanded velocity to the HAL ===========

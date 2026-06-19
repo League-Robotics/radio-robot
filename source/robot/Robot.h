@@ -8,7 +8,8 @@
 #include "IServo.h"
 #include "IPortIO.h"
 #include "MotorController.h"
-#include "Odometry.h"
+#include "PhysicalStateEstimate.h"
+#include "OtosCommands.h"
 #include "MotionController.h"
 #include "PortController.h"
 #include "ServoController.h"
@@ -43,7 +44,8 @@ struct RobotSysCtx {
  *
  * Hardware is provided through a Hardware& (NezhaHAL on device, MockHAL in
  * host tests). Robot binds interface refs from hal.motorL() etc.
- * The control layer (MotorController, Odometry, MotionController) and state
+ * The control/state layer (MotorController, PhysicalStateEstimate,
+ * MotionController) and state
  * (RobotConfig, RobotStateContainer) are VALUE MEMBERS owned by Robot.
  *
  * Member declaration order is load-bearing (C++ initialises members in
@@ -53,8 +55,8 @@ struct RobotSysCtx {
  *   3. motorL, motorR refs     — bound before motorController constructs
  *   4. otos, line, color, gripper, portio refs
  *   5. motorController         — needs motorL, motorR, config refs
- *   6. odometry                — default ctor
- *   7. motionController        — needs motorController, odometry, config
+ *   6. estimate                — default ctor (PhysicalStateEstimate)
+ *   7. motionController        — needs motorController, estimate.odometry(), config
  *   8. portController          — needs portio ref
  */
 struct Robot {
@@ -78,11 +80,17 @@ struct Robot {
 
     // ---- Owned control-layer members (depend on refs above) ----
     MotorController     motorController;   // (motorL, motorR, config)
-    Odometry            odometry;          // default ctor
-    MotionController    motionController;  // (motorController, odometry, config)
+    PhysicalStateEstimate estimate;        // default ctor; wraps Odometry+EKF (041-003)
+    MotionController    motionController;  // (motorController, estimate.odometry(), config)
     PortController      portController;    // (portio)
     ServoController     servoController;   // (gripper)
     HaltController      haltController;    // user-facing named stop-condition registry
+
+    // OtosCommands — app-layer Commandable for the seven OTOS-tuning verbs
+    // (OI/OZ/OR/OV/OL/OA/OP), moved out of Odometry in 041-002.  No construction
+    // dependency on other members; wired post-construction via setCtx() in the
+    // Robot constructor.  buildCommandTable aggregates its getCommands().
+    OtosCommands        _otosCommands;     // default ctor; setCtx()'d in constructor
 
     // ---- Constructor ----
     explicit Robot(Hardware& hal, const RobotConfig& cfg);
@@ -96,7 +104,7 @@ struct Robot {
     // wedge push moved (verbatim) into loopTickOnce()'s CONTROL COLLECT block.
     // The streak/wedge state members below remain — the relocated block uses them.
 
-    // otosCorrect — read OTOS device, write state.inputs.otos*, call odometry.correct().
+    // otosCorrect — read OTOS device, write state.inputs.otos*, call estimate.addOtosObservation().
     // Uses otos.readTransformed(pose, heading) — no inlined LSB math.  039-004:
     // RobotConfig is sealed out of the read signature (held as an OtosSensor impl member).
     void otosCorrect(uint32_t now_ms);
@@ -115,7 +123,7 @@ struct Robot {
     //      _hasTimestamp*, _prevTimeMsL/R).
     //   2. Zeroes state.inputs.encLMm / encRMm — aligns the outlier filter
     //      baseline with the fresh accumulators.
-    //   3. Calls odometry.rebaselinePrev(0, 0) — prevents Odometry::predict()
+    //   3. Calls estimate.rebaselinePrev(0, 0) — prevents Odometry::predict()
     //      from computing a large negative delta (dL = 0 - _prevEncL) on the
     //      very next tick, which previously teleported the pose backward by the
     //      prior segment's travel.
@@ -148,7 +156,7 @@ struct Robot {
 
     // ---- Command-table building ----
     // Aggregate all command descriptors into a vector:
-    //   Commandable members (motionController, odometry, portController,
+    //   Commandable members (motionController, _otosCommands, portController,
     //   servoController), optional DebugCommandable, then system commands
     //   (HELLO, PING, ECHO, ID, VER, HELP, SNAP, ZERO, STREAM, RF,
     //    GET VEL, GET, SET).

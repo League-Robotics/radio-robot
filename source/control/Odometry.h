@@ -1,7 +1,6 @@
 #pragma once
 #include <stdint.h>
 #include "RobotState.h"
-#include "CommandTypes.h"
 #include "IOtosSensor.h"
 #include "EKF.h"
 
@@ -25,24 +24,6 @@ inline float effectiveSlip(float rawSlip) {
     if (rawSlip > 1.0f)  return 1.0f;
     return rawSlip;
 }
-
-// Forward-declare Odometry so OdomCtx can hold a pointer to it.
-// The full class definition follows immediately below.
-class Odometry;
-
-/**
- * OdomCtx — context bundle for Odometry Commandable handlers.
- *
- * All pointers are populated by Odometry::setCtx() before any command
- * can arrive.  OTOS command handlers (OI, OZ, OR, OV, OL, OA) reach the
- * OtosSensor through this struct.  handleOP reads hwState directly (cached
- * state from the main loop) instead of calling otos->getPositionRaw().
- */
-struct OdomCtx {
-    Odometry*            odo;
-    IOdometer*           otos;
-    const HardwareState* hwState;  // cached OTOS pose for OP read (no device call)
-};
 
 /**
  * Odometry — differential-drive dead-reckoning pose tracker.
@@ -75,20 +56,17 @@ struct OdomCtx {
  *   re-baseline fix (_prevEncL = s.encLMm, not 0) prevents spurious
  *   encoder-delta jumps after camera fixes.
  */
-class Odometry : public Commandable {
+class Odometry {
 public:
     Odometry();
 
-    virtual std::vector<CommandDescriptor> getCommands() const override;
-
-    // Bind the OtosSensor and cached HardwareState so command handlers can reach them.
-    // Called by Robot after construction.  hwState may be nullptr in unit tests
-    // that do not exercise OP; handleOP checks for null before dereferencing.
-    void setCtx(IOdometer* otos, const HardwareState* hwState = nullptr) {
-        _odomCtx.odo     = this;
-        _odomCtx.otos    = otos;
-        _odomCtx.hwState = hwState;
-    }
+    // setCtx — retained as a no-op binding hook for source-compatibility with
+    // PhysicalStateEstimate::setCtx (041-002).  The OTOS command handlers that
+    // formerly consumed these pointers moved to source/app/OtosCommands; the
+    // estimator no longer needs the IOdometer / HardwareState pointers, so this
+    // method ignores them.  Kept (rather than deleted) so the wrapper's setCtx
+    // forwarder and any pre-existing call site compile unchanged.
+    void setCtx(IOdometer* /*otos*/, const HardwareState* /*hwState*/ = nullptr) {}
 
     // ---------------------------------------------------------------------------
     // Primary API — struct-based (014-004)
@@ -263,8 +241,6 @@ private:
     bool _wedgeActive = false;
 
     EKF _ekf;              // Extended Kalman Filter — fuses encoder odometry with OTOS
-
-    mutable OdomCtx _odomCtx; // context bundle for Commandable handlers
 
     // Wrap heading to (-π, π] using atan2f identity.
     static float wrapPi(float theta);

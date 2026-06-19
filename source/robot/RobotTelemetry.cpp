@@ -117,7 +117,7 @@ int Robot::buildTlmFrame(char* buf, int len)
         // Cumulative EKF gate rejection count -- all channels (pos, heading, velocity).
         // Sprint 024-005: emitted as ekf_rej=<n> for divergence visibility.
         n = snprintf(buf + pos, (size_t)rem, " ekf_rej=%d",
-                     odometry.ekfRejectCount());
+                     estimate.ekfRejectCount());
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
     buf[pos] = '\0';

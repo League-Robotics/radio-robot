@@ -1,7 +1,7 @@
 ---
 id: '041'
 title: "Phase C \u2014 PhysicalStateEstimate seam"
-status: roadmap
+status: done
 branch: sprint/041-phase-c-physicalstateestimate-seam
 use-cases: []
 issues:
@@ -107,5 +107,8 @@ Following §3 of the issue:
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 041-001 | Create PhysicalStateEstimate wrapping Odometry+EKF; move EKF to source/state/ | — |
+| 041-002 | Strip Commandable from Odometry; create OtosCommands app-layer handler set | 041-001 |
+| 041-003 | Repoint three observation call-sites to PhysicalStateEstimate; enforce dependency rule | 041-002 |
 
 Tickets execute serially in the order listed.
