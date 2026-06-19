@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: 'Drive subsystem: wrap CONTROL COLLECT block'
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 - SUC-004
