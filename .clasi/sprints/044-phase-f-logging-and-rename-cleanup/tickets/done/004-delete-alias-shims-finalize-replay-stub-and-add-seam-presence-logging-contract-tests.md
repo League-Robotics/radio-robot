@@ -2,7 +2,7 @@
 id: '004'
 title: Delete alias shims, finalize REPLAY stub, and add seam-presence + logging-contract
   tests
-status: in-progress
+status: done
 use-cases:
 - SUC-003
 - SUC-005
