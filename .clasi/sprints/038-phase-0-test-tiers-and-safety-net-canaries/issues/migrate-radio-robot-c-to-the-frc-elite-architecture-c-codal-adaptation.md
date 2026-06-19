@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: 038
+tickets:
+- 038-001
 ---
 
 # Migrate radio-robot-c to the FRC Elite Architecture (C++/CODAL adaptation)
