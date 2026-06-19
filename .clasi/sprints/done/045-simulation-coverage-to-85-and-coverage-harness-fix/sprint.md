@@ -1,9 +1,15 @@
 ---
 id: '045'
 title: Simulation coverage to 85% and coverage-harness fix
-status: planning-docs
+status: done
 branch: sprint/045-simulation-coverage-to-85-and-coverage-harness-fix
-use-cases: ["SUC-001", "SUC-002", "SUC-003", "SUC-004", "SUC-005", "SUC-006"]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+- SUC-006
 issues: []
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
