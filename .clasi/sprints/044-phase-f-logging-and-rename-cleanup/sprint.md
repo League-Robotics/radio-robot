@@ -1,7 +1,7 @@
 ---
 id: '044'
 title: "Phase F \u2014 Logging and rename/cleanup"
-status: roadmap
+status: planning-docs
 branch: sprint/044-phase-f-logging-and-rename-cleanup
 use-cases: []
 issues:
@@ -129,5 +129,9 @@ Following §6 of the issue:
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 044-001 | Repoint TLM and MotionController pose reads to PhysicalStateEstimate seam | — |
+| 044-002 | Move RobotState.h to source/types/Inputs.h and retire RobotState name | 044-001 |
+| 044-003 | Resolve DebugCommandable I2CBus leak via IBusDiagnostics+IRawBusAccess; empty vendor baseline | 044-002 |
+| 044-004 | Delete alias shims, finalize REPLAY stub, and add seam-presence + logging-contract tests | 044-001, 044-002, 044-003 |
 
 Tickets execute serially in the order listed.
