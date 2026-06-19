@@ -240,6 +240,11 @@ endif()
 RECURSIVE_FIND_DIR(INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}" "*.h")
 RECURSIVE_FIND_DIR(HPP_DIRS "${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}" "*.hpp")
 list(APPEND INCLUDE_DIRS ${HPP_DIRS})
+# 039-001: add the source/ root so path-qualified capability includes
+# (e.g. #include "io/capability/IBusDiagnostics.h") resolve in the firmware
+# build, matching the host build which already lists source/. RECURSIVE_FIND_DIR
+# only adds directories that directly contain headers, and source/ has none.
+list(APPEND INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}")
 
 # *.c?? only catches .cpp, not .c, so let's be precise
 RECURSIVE_FIND_FILE(SOURCE_FILES "${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}" "*.cpp")
@@ -250,11 +255,31 @@ list(APPEND SOURCE_FILES ${S_FILES})
 list(APPEND SOURCE_FILES ${C_FILES})
 list(APPEND SOURCE_FILES ${CC_FILES})
 
-# Exclude host-only mock files from the firmware (CODAL) build.
-# The mock/ directory has no MicroBit/CODAL dependencies and must
-# not be compiled into firmware — it is used by the host CMake build
-# (ticket 020-003) and Python test harness only.
-list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/hal/mock/.*")
+# ---------------------------------------------------------------------------
+# ROBOT_RUN_MODE (039-005): explicit build-target run mode. The firmware (CODAL)
+# build is REAL by default — build.py passes -DROBOT_RUN_MODE=REAL. REAL compiles
+# the io/real/ device impls and excludes the host-only io/sim/ mock device set
+# and the io/ReplayHAL stub.
+#
+#   REAL   (default firmware) — io/real/ impls; io/sim/ + io/ReplayHAL excluded.
+#   SIM    — host build (tests/_infra/sim/CMakeLists.txt); not produced here.
+#   REPLAY — SIM source set + io/ReplayHAL stub (Phase F TLM replay).
+#
+# PRODUCTION_BUILD and BENCH_OTOS_ENABLED stay ORTHOGONAL to ROBOT_RUN_MODE.
+# ---------------------------------------------------------------------------
+if (NOT "${ROBOT_RUN_MODE}" STRGREATER "")
+    set(ROBOT_RUN_MODE "REAL")
+endif()
+message("${BoldBlue}ROBOT_RUN_MODE: ${ROBOT_RUN_MODE}${ColourReset}")
+
+# Exclude host-only sim/mock device files from the firmware (CODAL) build.
+# The io/sim/ directory (formerly hal/mock/) has no MicroBit/CODAL dependencies
+# and must not be compiled into firmware — it is used by the host CMake build
+# (ticket 020-003, tests/_infra/sim/CMakeLists.txt) and the Python test harness
+# only. ReplayHAL is the REPLAY-mode stub (host-side) and is likewise excluded
+# from the REAL firmware build.
+list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/io/sim/.*")
+list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/io/ReplayHAL\\.cpp$")
 
 # Production-build toggle (034-006).
 #

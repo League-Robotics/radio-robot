@@ -10,10 +10,10 @@
 #include "app/CommandProcessor.h"
 #include "app/CommandQueue.h"
 #include "app/DebugCommandable.h"
-#include "hal/mock/MockHAL.h"
-#include "hal/mock/MockMotor.h"
-#include "hal/mock/MockOtosSensor.h"
-#include "hal/BenchOtosSensor.h"
+#include "io/sim/MockHAL.h"
+#include "io/sim/MockMotor.h"
+#include "io/sim/MockOtosSensor.h"
+#include "io/real/BenchOtosSensor.h"
 #include "types/Config.h"
 #include "control/RobotState.h"
 #include "control/MotionController.h"
@@ -186,7 +186,11 @@ void sim_tick(void* h, uint32_t now_ms)
     // updated.  loopTickOnce will call hal.tick(now,cmds) again with the same
     // timestamp; MockHAL's dt==0 guard makes that second call a no-op.
     s->hal.tick(now_ms, s->robot.state.commands);
-    s->robot.controlCollectSplitPhase(now_ms, 0);
+    // (039-002) Sensor tick: promote the integrated encoder position into each
+    // MockMotor's positionMm() accessor.  The outlier filter + velocity PID +
+    // wedge push (formerly controlCollectSplitPhase) now run at the top of
+    // loopTickOnce, reading positionMm().
+    s->hal.tick(now_ms);
 
     // Ensure _ts has the current reply sink before each tick so that watchdog
     // and halt events go to replyStore.
@@ -506,7 +510,8 @@ int sim_tick_collect_tlm(void* h, uint32_t start_ms, uint32_t total_ms,
         // sim_tick: plant runs before controlCollectSplitPhase; loopTickOnce's
         // subsequent hal.tick(t,cmds) is idempotent via the dt==0 guard.
         s->hal.tick(t, s->robot.state.commands);
-        s->robot.controlCollectSplitPhase(t, 0);
+        // (039-002) Sensor tick — see sim_tick comment.
+        s->hal.tick(t);
 
         s->_ts.activeFn    = storeReply;
         s->_ts.activeTlmFn = storeReply;

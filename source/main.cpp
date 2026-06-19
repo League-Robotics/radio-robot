@@ -218,9 +218,10 @@ int main() {
     // DEVICE: identification banner once at boot over serial.
     cmd.process("HELLO", serialReply, &comm.serial());
 
-    // Wire the I2CBus and EVT sink into MotorController so enc_wedged events
-    // are emitted with bus stats and go to the active serial/radio channel.
-    robot.motorController.setI2CBus(&hardware.bus());
+    // Wire the bus-diagnostics capability and EVT sink into MotorController so
+    // enc_wedged events are emitted with bus stats and go to the active
+    // serial/radio channel (039-001: capability-typed, was setI2CBus).
+    robot.motorController.setBusDiagnostics(&hardware.busDiagnostics());
     robot.motorController.setEvtSink(&sched.activeFn, &sched.activeCtx);
 
     sched.run_blocks();

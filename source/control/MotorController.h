@@ -1,16 +1,11 @@
 #pragma once
-#ifndef HOST_BUILD
-#include "MicroBit.h"
-#endif
 #include "IMotor.h"
+#include "io/capability/IBusDiagnostics.h"
 #include "Config.h"
 #include "VelocityController.h"
 #include "RobotState.h"
 #include "Protocol.h"
 #include <stdint.h>
-
-// Forward declaration — include in .cpp only.
-class I2CBus;
 
 /**
  * MotorController — per-wheel velocity PID wheel speed control.
@@ -100,11 +95,12 @@ public:
     void setCommandsRef(MotorCommands* cmds) { _cmds = cmds; }
 
     /**
-     * setI2CBus — bind the I2CBus instance so controlTick() can read per-device
-     * stats when emitting EVT enc_wedged (015-003).
+     * setBusDiagnostics — bind the bus-diagnostics capability so controlTick()
+     * can read per-bus error/reentry/lastErr stats when emitting EVT enc_wedged
+     * (015-003; capability-typed in 039-001).
      * Optional — if unset, EVT stats show zeros.
      */
-    void setI2CBus(I2CBus* bus) { _i2cBus = bus; }
+    void setBusDiagnostics(IBusDiagnostics* diag) { _busDiag = diag; }
 
     /**
      * setEvtSink — bind the reply sink for EVT enc_wedged emission (015-003).
@@ -222,8 +218,8 @@ private:
     bool     _hasMovedL;          // true once left encoder has moved this episode
     bool     _hasMovedR;          // true once right encoder has moved this episode
 
-    // Optional I2CBus pointer for stats in EVT body.
-    I2CBus*  _i2cBus;
+    // Optional bus-diagnostics capability for stats in EVT body (039-001).
+    IBusDiagnostics* _busDiag;
 
     // Live pointers into LoopScheduler::activeFn / activeCtx so the EVT goes
     // to the channel that most recently sent a command.

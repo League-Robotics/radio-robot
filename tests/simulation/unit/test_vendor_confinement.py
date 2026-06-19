@@ -5,7 +5,12 @@ vendor tokens and asserts the hit-set has not grown vs the committed baseline
 tests/_infra/vendor_baseline.txt.
 
 CODAL-only files excluded from the host build are skipped — their vendor
-includes are intentional device-layer references, not leaks above hal/.
+includes are intentional device-layer references, not leaks above io/.
+
+039-005: the device layer moved source/hal/ -> source/io/ (capability/ real/
+sim/). The grep scope below (app/control/robot/types) is unchanged — those are
+the layers ABOVE the IO boundary that must stay vendor-free. The boundary is now
+source/io/ rather than source/hal/.
 
 To update the baseline after an intentional Phase-A seal:
     python3 -c "..." > tests/_infra/vendor_baseline.txt
@@ -60,7 +65,7 @@ def collect_hits() -> set[str]:
 
 
 def test_vendor_confinement_no_new_leaks():
-    """Assert no new vendor tokens appear above source/hal/ vs Phase 0 baseline.
+    """Assert no new vendor tokens appear above source/io/ vs Phase 0 baseline.
 
     Existing baseline entries may disappear (Phase A sealing them) without
     failing the gate — only NEW entries cause failure.
@@ -73,7 +78,7 @@ def test_vendor_confinement_no_new_leaks():
     new_leaks = current - baseline
 
     assert not new_leaks, (
-        f"New vendor leaks found above source/hal/ ({len(new_leaks)} new):\n"
+        f"New vendor leaks found above source/io/ ({len(new_leaks)} new):\n"
         + "\n".join(sorted(new_leaks))
         + "\nUpdate tests/_infra/vendor_baseline.txt ONLY if these are intentional."
     )

@@ -6,6 +6,7 @@
 #include "MotionController.h"
 #include "MotionCommand.h"
 #include <cstdio>
+#include <cmath>   // fmaxf, fabsf — control-collect outlier filter (039-002)
 
 // ---------------------------------------------------------------------------
 // loopTickOnce — one iteration of the firmware cooperative loop body.
@@ -20,6 +21,112 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
                   LoopTickState& ts, uint32_t now)
 {
     const RobotConfig& cfg = robot.config;
+
+    // ===== CONTROL COLLECT: outlier filter → PID → wedge push ===============
+    //
+    // Migrated VERBATIM from Robot::controlCollectSplitPhase (039-002, OQ-2 b).
+    // The per-loop split-phase encoder READ now happens earlier, in
+    // Hardware::tick(now) → Motor::tick() (driven by the caller before this
+    // function — LoopScheduler::run_blocks / sim_tick).  The cached value is read
+    // here via positionMm(); the speed-scaled outlier filter, PID velocity
+    // differentiation (inside controlTick), and the wedge push into Odometry stay
+    // in the control layer so the golden-TLM frame is byte-for-byte unchanged.
+    //
+    // The retry re-reads still go through readEncoderMmFSettle() so the I2C bytes
+    // on the wire (and the hardware retry behaviour) are identical to pre-039.
+    {
+        Robot& r = robot;
+        uint32_t now_ms = now;
+
+        // WedgeTest-proven pattern (sprint 015): read BOTH encoders every tick,
+        // right motor (M1) first, then left (M2). Write-on-change is already
+        // handled by Motor::setSpeed(). Single re-read on implausible delta.
+        bool driving = (r.state.commands.tgtLMms != 0.0f ||
+                        r.state.commands.tgtRMms != 0.0f);
+        if (driving) {
+            // Outlier threshold SCALES with commanded speed.  See the original
+            // Robot::controlCollectSplitPhase comment block for the full rationale
+            // (scaled vs fixed gate, slow-calibration garbage reads).
+            const float kMaxDeltaMm = fmaxf(40.0f,
+                fmaxf(fabsf((float)r.state.commands.tgtLMms),
+                      fabsf((float)r.state.commands.tgtRMms)) * 0.2f);
+            static constexpr int kRetries = 2;
+
+            // Right (M1) first — proven ordering from WedgeTest.
+            {
+                float newR = r.motorR.positionMm();
+                float dR   = newR - r.state.inputs.encRMm;
+                if (dR > kMaxDeltaMm || dR < -kMaxDeltaMm) {
+                    newR = r.state.inputs.encRMm;             // default: hold old
+                    for (int k = 0; k < kRetries; ++k) {
+                        float r2  = r.motorR.readEncoderMmFSettle(r.config);
+                        float dr2 = r2 - r.state.inputs.encRMm;
+                        if (dr2 <= kMaxDeltaMm && dr2 >= -kMaxDeltaMm) { newR = r2; break; }
+                    }
+                    if (r._filterRejectStreakR < 255) ++r._filterRejectStreakR;
+                } else {
+                    r._filterRejectStreakR = 0;
+                }
+                r.state.inputs.encRMm = newR;
+            }
+
+            // Left (M2) second.
+            {
+                float newL = r.motorL.positionMm();
+                float dL   = newL - r.state.inputs.encLMm;
+                if (dL > kMaxDeltaMm || dL < -kMaxDeltaMm) {
+                    newL = r.state.inputs.encLMm;             // default: hold old
+                    for (int k = 0; k < kRetries; ++k) {
+                        float r2  = r.motorL.readEncoderMmFSettle(r.config);
+                        float dr2 = r2 - r.state.inputs.encLMm;
+                        if (dr2 <= kMaxDeltaMm && dr2 >= -kMaxDeltaMm) { newL = r2; break; }
+                    }
+                    if (r._filterRejectStreakL < 255) ++r._filterRejectStreakL;
+                } else {
+                    r._filterRejectStreakL = 0;
+                }
+                r.state.inputs.encLMm = newL;
+            }
+
+            // (033-005b) Emit EVT enc_filter_hold at threshold crossing (onset).
+            if (r._filterRejectStreakR == Robot::kFilterRejectStreakThreshold &&
+                    r._tlmBoundFn != nullptr) {
+                char evtBuf[64];
+                snprintf(evtBuf, sizeof(evtBuf),
+                         "EVT enc_filter_hold wheel=R streak=%u",
+                         (unsigned)r._filterRejectStreakR);
+                r._tlmBoundFn(evtBuf, r._tlmBoundCtx);
+            }
+            if (r._filterRejectStreakL == Robot::kFilterRejectStreakThreshold &&
+                    r._tlmBoundFn != nullptr) {
+                char evtBuf[64];
+                snprintf(evtBuf, sizeof(evtBuf),
+                         "EVT enc_filter_hold wheel=L streak=%u",
+                         (unsigned)r._filterRejectStreakL);
+                r._tlmBoundFn(evtBuf, r._tlmBoundCtx);
+            }
+        } else {
+            // Not driving: reset streak counters so they don't carry over.
+            r._filterRejectStreakL = 0;
+            r._filterRejectStreakR = 0;
+        }
+        r._prevDriving = driving;
+        r._lastControlMs = now_ms;
+        // refreshedWheel=3: both wheels updated; 0: idle, no velocity update.
+        r.motorController.controlTick(r.state.inputs, r.state.commands, now_ms,
+                                      driving ? 3 : 0);
+
+        // (033-005e) Push wedge state into Odometry after every control tick.
+        bool anyWedged = r.motorController.wheelWedgedL() ||
+                         r.motorController.wheelWedgedR();
+        r.odometry.setWedgeActive(anyWedged);
+        if (anyWedged) {
+            r.odometry.setEncOmegaHealthy(false);
+        } else if (r._prevAnyWedged) {
+            r.odometry.setEncOmegaHealthy(true);
+        }
+        r._prevAnyWedged = anyWedged;
+    }
 
     // ===== QUEUE: dispatch one enqueued command per tick ===================
     // Commands arrive via cmd.process() → queue.push_back().

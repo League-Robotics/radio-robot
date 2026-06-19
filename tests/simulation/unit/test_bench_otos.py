@@ -154,7 +154,7 @@ def test_bench_otos_turn_changes_heading():
 #   h    = wrap_pi(h + dTh)
 #
 # This is the identical midpoint-arc formula used by Odometry::predict() and
-# ExactPoseTracker (see source/hal/mock/MockHAL.h).
+# ExactPoseTracker (see source/io/sim/MockHAL.h).
 # =============================================================================
 
 

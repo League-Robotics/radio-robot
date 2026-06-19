@@ -221,8 +221,13 @@ void LoopScheduler::run_blocks()
         uint32_t now = _uBit.systemTime();
 
         // ===== CONTROL: read both encoders (M1 first) → PID → setSpeed =====
+        // (039-002) The encoder READ moved into Hardware::tick(now) → Motor::tick()
+        // (right/M1 first, then left/M2 — same ordering as before).  The outlier
+        // filter, velocity PID, and wedge push now run at the top of loopTickOnce
+        // (CONTROL COLLECT block) reading positionMm().  This preserves the exact
+        // pre-loopTickOnce ordering controlCollectSplitPhase had.
         if (enControl) {
-            _robot.controlCollectSplitPhase(now, 0);
+            _robot.hal.tick(now);
         }
         now = _uBit.systemTime();
         controlDeadline = now + (uint32_t)_robot.config.controlPeriodMs;

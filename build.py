@@ -166,7 +166,11 @@ def build_host_sim(clean):
         shutil.rmtree(build_dir)
     os.makedirs(build_dir, exist_ok=True)
     print("\nBuilding host-simulation library (libfirmware_host, HOST_BUILD)...")
-    subprocess.run(["cmake", "-S", sim_dir, "-B", build_dir], check=True)
+    # ROBOT_RUN_MODE=SIM (039-005): the host build uses the io/sim/ device impls
+    # (MockHAL etc.). The sim CMakeLists defaults to SIM, but pass it explicitly.
+    subprocess.run(
+        ["cmake", "-S", sim_dir, "-B", build_dir, "-DROBOT_RUN_MODE=SIM"], check=True
+    )
     subprocess.run(["cmake", "--build", build_dir, "--parallel"], check=True)
 
 

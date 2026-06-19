@@ -224,7 +224,12 @@ void runWedgeTest(MicroBit& uBit, int rateHz, int writeMs, int busKHz, int dithe
             // path here does not. Phase l/r are mm/s in this mode.
             robot->motorController.setTarget((float)ph.l, (float)ph.r);
             if (useSensors) sensorTraffic(i2c, ticks);
-            robot->controlCollectSplitPhase(now, 0);
+            // (039-002) hal.tick(now) drives the split-phase encoder read (M1
+            // first, then M2 — same ordering controlCollectSplitPhase used).  The
+            // outlier filter + PID now run inside loopTickOnce; WedgeTest does not
+            // run the full loop, so it reads the collected positions directly via
+            // getEncoderPositions() below (unchanged).
+            robot->hal.tick(now);
             int32_t encL = 0, encR = 0;
             robot->motorController.getEncoderPositions(encL, encR);
             eR = encR; eL = encL;

@@ -1,5 +1,4 @@
 #include "MotorController.h"
-#include "I2CBus.h"
 #include <math.h>
 #include <cstdio>
 
@@ -23,7 +22,7 @@ MotorController::MotorController(IMotor& left, IMotor& right, const RobotConfig&
       _stuckCountL(0), _stuckCountR(0),
       _wedgeEmittedL(false), _wedgeEmittedR(false),
       _hasMovedL(false), _hasMovedR(false),
-      _i2cBus(nullptr),
+      _busDiag(nullptr),
       _evtFn(nullptr), _evtCtx(nullptr)
 {
     gains.kFF     = 0.15f;
@@ -299,14 +298,13 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
             if (_stuckCountL >= kWedgeThreshold && !_wedgeEmittedL) {
                 _wedgeEmittedL = true;
                 if (_evtFn && *_evtFn && _evtCtx && *_evtCtx) {
-#ifndef HOST_BUILD
-                    uint32_t busErr    = _i2cBus ? (_i2cBus->errCount(0x10)) : 0;
-                    uint32_t reentryN  = _i2cBus ? (_i2cBus->reentryViolations()) : 0;
-                    int      lastErrV  = _i2cBus ? (_i2cBus->lastErr(0x10)) : 0;
-#else
-                    uint32_t busErr = 0, reentryN = 0;
-                    int lastErrV = 0;
-#endif
+                    // (039-001) Diagnostics now come through the IBusDiagnostics
+                    // capability instead of a raw bus pointer.  Null (host /
+                    // unbound) yields zeros — byte-identical to the prior
+                    // HOST_BUILD path.
+                    uint32_t busErr    = _busDiag ? _busDiag->errorCount() : 0;
+                    uint32_t reentryN  = _busDiag ? _busDiag->reentryViolations() : 0;
+                    int      lastErrV  = _busDiag ? (int)_busDiag->lastError() : 0;
                     // (033-005c) Include a fresh raw read alongside the filtered
                     // value.  raw frozen + enc frozen → real chip/I2C wedge or
                     // stall; raw moving + enc frozen → outlier-filter hold.
@@ -352,14 +350,13 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
             if (_stuckCountR >= kWedgeThreshold && !_wedgeEmittedR) {
                 _wedgeEmittedR = true;
                 if (_evtFn && *_evtFn && _evtCtx && *_evtCtx) {
-#ifndef HOST_BUILD
-                    uint32_t busErr    = _i2cBus ? (_i2cBus->errCount(0x10)) : 0;
-                    uint32_t reentryN  = _i2cBus ? (_i2cBus->reentryViolations()) : 0;
-                    int      lastErrV  = _i2cBus ? (_i2cBus->lastErr(0x10)) : 0;
-#else
-                    uint32_t busErr = 0, reentryN = 0;
-                    int lastErrV = 0;
-#endif
+                    // (039-001) Diagnostics now come through the IBusDiagnostics
+                    // capability instead of a raw bus pointer.  Null (host /
+                    // unbound) yields zeros — byte-identical to the prior
+                    // HOST_BUILD path.
+                    uint32_t busErr    = _busDiag ? _busDiag->errorCount() : 0;
+                    uint32_t reentryN  = _busDiag ? _busDiag->reentryViolations() : 0;
+                    int      lastErrV  = _busDiag ? (int)_busDiag->lastError() : 0;
                     // (033-005c) Include a fresh raw read alongside the filtered
                     // value.  raw frozen + enc frozen → real chip/I2C wedge or
                     // stall; raw moving + enc frozen → outlier-filter hold.

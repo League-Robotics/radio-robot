@@ -53,9 +53,12 @@ static void handleGrip(const ArgList& args, const char* corrId,
     if (args.count >= 1) {
         deg = args.args[0].ival;
         uint8_t clamped = (deg < 0) ? 0 : (deg > 180) ? 180 : (uint8_t)deg;
-        sc->servo().setAngle(clamped);
+        // 039-003: setAngleDeg(deg, mode) replaces setAngle(deg); mode 0 is the
+        // hobby-servo default (OQ-3).  Behaviour is unchanged — the Servo impl
+        // ignores mode and clamps + drives the pin identically.
+        sc->servo().setAngleDeg(clamped, 0);
     } else {
-        deg = (int)sc->servo().currentAngle();
+        deg = (int)sc->servo().currentAngleDeg();
     }
     char body[24];
     snprintf(body, sizeof(body), "deg=%d", deg);
@@ -68,7 +71,7 @@ static void handleGrip(const ArgList& args, const char* corrId,
 // ServoController implementation
 // ---------------------------------------------------------------------------
 
-ServoController::ServoController(IServo& srv)
+ServoController::ServoController(IPositionMotor& srv)
     : _srv(srv)
 {
 }
