@@ -235,6 +235,62 @@ class Sim:
         lib.sim_get_exact_pose_h.argtypes = [ctypes.c_void_p]
         lib.sim_get_exact_pose_h.restype = ctypes.c_float
 
+        # ---- 040-003: true-vs-estimate ABI ----
+        # sim_get_true_pose_x / _y / _h → float (plant ground truth)
+        lib.sim_get_true_pose_x.argtypes = [ctypes.c_void_p]
+        lib.sim_get_true_pose_x.restype = ctypes.c_float
+        lib.sim_get_true_pose_y.argtypes = [ctypes.c_void_p]
+        lib.sim_get_true_pose_y.restype = ctypes.c_float
+        lib.sim_get_true_pose_h.argtypes = [ctypes.c_void_p]
+        lib.sim_get_true_pose_h.restype = ctypes.c_float
+
+        # sim_get_true_enc_l / _r → float (true unslipped wheel travel)
+        lib.sim_get_true_enc_l.argtypes = [ctypes.c_void_p]
+        lib.sim_get_true_enc_l.restype = ctypes.c_float
+        lib.sim_get_true_enc_r.argtypes = [ctypes.c_void_p]
+        lib.sim_get_true_enc_r.restype = ctypes.c_float
+
+        # sim_get_true_vel_l / _r → float (true per-wheel velocity, mm/s)
+        lib.sim_get_true_vel_l.argtypes = [ctypes.c_void_p]
+        lib.sim_get_true_vel_l.restype = ctypes.c_float
+        lib.sim_get_true_vel_r.argtypes = [ctypes.c_void_p]
+        lib.sim_get_true_vel_r.restype = ctypes.c_float
+
+        # sim_set_true_pose(void* h, float x, float y, float h_rad)
+        lib.sim_set_true_pose.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_float,
+            ctypes.c_float,
+            ctypes.c_float,
+        ]
+        lib.sim_set_true_pose.restype = None
+
+        # sim_set_true_wheel_travel(void* h, float enc_l_mm, float enc_r_mm)
+        lib.sim_set_true_wheel_travel.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_float,
+            ctypes.c_float,
+        ]
+        lib.sim_set_true_wheel_travel.restype = None
+
+        # sim_set_true_velocity(void* h, float vel_l_mms, float vel_r_mms)
+        lib.sim_set_true_velocity.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_float,
+            ctypes.c_float,
+        ]
+        lib.sim_set_true_velocity.restype = None
+
+        # sim_get_estimation_error_xy / _h → float (estimate vs. plant truth)
+        lib.sim_get_estimation_error_xy.argtypes = [ctypes.c_void_p]
+        lib.sim_get_estimation_error_xy.restype = ctypes.c_float
+        lib.sim_get_estimation_error_h.argtypes = [ctypes.c_void_p]
+        lib.sim_get_estimation_error_h.restype = ctypes.c_float
+
+        # sim_set_perfect(void* h) — reset all observation-model error to no-op
+        lib.sim_set_perfect.argtypes = [ctypes.c_void_p]
+        lib.sim_set_perfect.restype = None
+
         # sim_get_ekf_rej_count(void* h) → int  (030-001 N1 diagnostic)
         lib.sim_get_ekf_rej_count.argtypes = [ctypes.c_void_p]
         lib.sim_get_ekf_rej_count.restype = ctypes.c_int
@@ -582,6 +638,88 @@ class Sim:
         if fuse_otos:
             self._lib.sim_enable_otos_model(self._h)
             self._lib.sim_set_otos_fusion(self._h, ctypes.c_int(1))
+
+    # ------------------------------------------------------------------
+    # 040-003: true-vs-estimate ABI (WorldView / PhysicsWorld truth)
+    # ------------------------------------------------------------------
+
+    def get_true_pose(self) -> tuple[float, float, float]:
+        """Return (x_mm, y_mm, h_rad) from PhysicsWorld ground truth.
+
+        This is the plant truth (the consolidated oracle that replaced
+        ExactPoseTracker), NOT the firmware's fused/dead-reckoned estimate.
+        """
+        x = float(self._lib.sim_get_true_pose_x(self._h))
+        y = float(self._lib.sim_get_true_pose_y(self._h))
+        h = float(self._lib.sim_get_true_pose_h(self._h))
+        return (x, y, h)
+
+    def get_true_wheel_travel(self) -> tuple[float, float]:
+        """Return (enc_l_mm, enc_r_mm) true unslipped wheel travel from the plant."""
+        l = float(self._lib.sim_get_true_enc_l(self._h))
+        r = float(self._lib.sim_get_true_enc_r(self._h))
+        return (l, r)
+
+    def get_true_velocity(self) -> tuple[float, float]:
+        """Return (vel_l_mms, vel_r_mms) true per-wheel velocity (mm/s) from the plant."""
+        l = float(self._lib.sim_get_true_vel_l(self._h))
+        r = float(self._lib.sim_get_true_vel_r(self._h))
+        return (l, r)
+
+    def set_true_pose(self, x: float, y: float, h_rad: float) -> None:
+        """Set ground-truth pose directly (bypasses physics integration).
+
+        The next sim_tick does NOT overwrite it unless that tick integrates the
+        actuator path (non-zero PWM with dt>0).
+        """
+        self._lib.sim_set_true_pose(
+            self._h,
+            ctypes.c_float(x),
+            ctypes.c_float(y),
+            ctypes.c_float(h_rad),
+        )
+
+    def set_true_wheel_travel(self, enc_l_mm: float, enc_r_mm: float) -> None:
+        """Set true wheel-travel accumulators directly (plant ground truth).
+
+        Touches ONLY the true accumulators — for pure plant-truth isolation
+        tests.  Use set_enc / sim_set_enc_l/r to flow an injected encoder value
+        through the reported path and state.inputs as well.
+        """
+        self._lib.sim_set_true_wheel_travel(
+            self._h,
+            ctypes.c_float(enc_l_mm),
+            ctypes.c_float(enc_r_mm),
+        )
+
+    def set_true_velocity(self, vel_l_mms: float, vel_r_mms: float) -> None:
+        """Set true per-wheel velocity directly (plant ground truth, mm/s)."""
+        self._lib.sim_set_true_velocity(
+            self._h,
+            ctypes.c_float(vel_l_mms),
+            ctypes.c_float(vel_r_mms),
+        )
+
+    def estimation_error(self) -> tuple[float, float]:
+        """Return (xy_mm, h_rad) estimation error: firmware estimate vs. plant truth.
+
+        xy_mm is the Euclidean distance between the plant true pose and the
+        firmware's fused/dead-reckoned pose (state.inputs.poseX/Y).  h_rad is the
+        heading error wrapped to [-pi, pi].  Both are 0.0 when the robot has not
+        moved (estimate == truth == origin).
+        """
+        xy = float(self._lib.sim_get_estimation_error_xy(self._h))
+        h = float(self._lib.sim_get_estimation_error_h(self._h))
+        return (xy, h)
+
+    def set_perfect(self) -> None:
+        """Reset all observation-model error layers to no-op (perfect sensors).
+
+        Clears every Sim* model's freeze/dropout/read-failure/lift state and
+        zeros all noise/drift/slip — restoring the fresh-construction
+        "sensor is PERFECT" invariant.
+        """
+        self._lib.sim_set_perfect(self._h)
 
     # ------------------------------------------------------------------
     # Bench OTOS sim hooks (031-002)

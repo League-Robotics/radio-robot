@@ -1,11 +1,14 @@
 ---
-id: "003"
-title: "WorldView adapter, sim_get_true_* ABI, fix sim_set_enc, estimation_error"
-status: open
-use-cases: [SUC-003, SUC-004]
-depends-on: ["040-002"]
-github-issue: ""
-issue: "migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md"
+id: '003'
+title: WorldView adapter, sim_get_true_* ABI, fix sim_set_enc, estimation_error
+status: done
+use-cases:
+- SUC-003
+- SUC-004
+depends-on:
+- 040-002
+github-issue: ''
+issue: migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -98,18 +101,18 @@ def set_perfect(self) -> None:
 
 ## Acceptance Criteria
 
-- [ ] `WorldView.h` / `WorldView.cpp` created; `SimHandle` owns `WorldView _worldView`.
-- [ ] `sim_get_true_pose_x/y/h` return `PhysicsWorld` true pose.
-- [ ] `sim_set_true_pose` sets `PhysicsWorld` truth directly; next `sim_tick` does not overwrite it.
-- [ ] `sim_get_exact_pose_x/y/h` now formally alias `WorldView::truePoseX/Y/H()`.
-- [ ] **`sim_set_enc_l/r` fix:** after `sim_set_enc_l(h, 500.0)` and one `sim_tick`,
-      `sim_get_enc_l(h)` still reflects the injected value (not back to 0).
-- [ ] `sim_get_estimation_error_xy()` returns 0.0 when robot has not moved (EKF == truth).
-- [ ] `sim_set_perfect()` resets all error layers (no observable test change; tested in T5).
-- [ ] `firmware.py` `Sim` class has `get_true_pose()`, `set_true_pose()`,
+- [x] `WorldView.h` / `WorldView.cpp` created; `SimHandle` owns `WorldView _worldView`.
+- [x] `sim_get_true_pose_x/y/h` return `PhysicsWorld` true pose.
+- [x] `sim_set_true_pose` sets `PhysicsWorld` truth directly; next `sim_tick` does not overwrite it.
+- [x] `sim_get_exact_pose_x/y/h` now formally alias `WorldView::truePoseX/Y/H()`.
+- [x] **`sim_set_enc_l/r` fix:** after `sim_set_enc_l(h, 500.0)` and one `sim_tick`,
+      `sim_get_enc_l(h)` still reflects the injected value (not back to 0). Verified: enc_l = 500.000.
+- [x] `sim_get_estimation_error_xy()` returns 0.0 when robot has not moved (EKF == truth).
+- [x] `sim_set_perfect()` resets all error layers (no observable test change; tested in T5).
+- [x] `firmware.py` `Sim` class has `get_true_pose()`, `set_true_pose()`,
       `set_true_wheel_travel()`, `estimation_error()`, `set_perfect()` methods.
-- [ ] `uv run --with pytest python -m pytest -q` ≥ 1957 passed, 0 errors.
-- [ ] All canaries green (golden-TLM, field-pin, vendor grep).
+- [x] `uv run --with pytest python -m pytest -q` ≥ 1957 passed, 0 errors. Result: 1964 passed.
+- [x] All canaries green (golden-TLM, field-pin, vendor grep).
 
 ## Implementation Plan
 

@@ -14,6 +14,7 @@
 #include "app/DebugCommandable.h"
 #include "io/sim/SimHardware.h"
 #include "io/sim/PhysicsWorld.h"
+#include "io/sim/WorldView.h"
 #include "io/real/BenchOtosSensor.h"
 #include "types/Config.h"
 #include "control/RobotState.h"
@@ -95,6 +96,11 @@ struct SimHandle {
     RobotConfig      cfg;
     SimHardware      hal;
     Robot            robot;
+    // (040-003) WorldView — the canonical read-only bridge from PhysicsWorld
+    // truth into the C ABI.  Holds references to hal.plant() (ground truth) and
+    // robot.state.inputs (firmware pose estimate), so it always sees current
+    // state.  Declared AFTER hal and robot because it binds references to both.
+    WorldView        _worldView;
     CommandQueue     _queue;
     // DebugCommandable wired with robot; sched and bus are nullptr in sim.
     // CODAL-dependent handlers (DBG WEDGE, I2CW, etc.) reply ERR noimpl in
@@ -118,6 +124,7 @@ struct SimHandle {
         : cfg(defaultRobotConfig())
         , hal(cfg)
         , robot(hal, cfg)
+        , _worldView(hal.plant(), robot.state.inputs)
         , _queue()
         , dbg(DbgCtx{nullptr, nullptr, &robot})
         , cmd(robot.buildCommandTable(&dbg, nullptr))
@@ -365,23 +372,37 @@ int sim_get_ekf_rej_count(void* h)
 
 // ---- State injection ----
 
-// Inject encoder position directly into the plant's reported encoder (Option A).
-// (040-002) Re-pointed from MockMotor to PhysicsWorld.  Behaviour preserved:
-// resets the SimMotor (zeros the side's reported accumulator + tick cache) and
-// patches state.inputs to report `mm` for this tick.  T3 will set the reported
-// AND true accumulators directly via the plant and drop the state.inputs patch.
+// Inject encoder position directly into the plant (040-003 FIX).
+//
+// HISTORY: 040-002 left this writing only state.inputs.encLMm (plus a SimMotor
+// reset) — the "lying" bug: state.inputs.encLMm was overwritten on the next tick
+// by the value promoted from positionMm(), so the injected value did not flow
+// through the plant truth.
+//
+// FIX (040-003): set BOTH the TRUE wheel travel (ground truth, read by
+// sim_get_true_*) AND the REPORTED encoder accumulator (read by
+// SimMotor::positionMm() → loopTickOnce → state.inputs.encLMm) directly in the
+// plant.  Now the injected value survives the next tick: plant.update() ADDS
+// vel*dt to the reported accumulator (0 at 0 PWM), tick() promotes it into
+// positionMm(), and loopTickOnce writes it back to state.inputs.encLMm.
+// state.inputs is also patched here to keep the current tick in sync before the
+// next sim_tick() runs.
 void sim_set_enc_l(void* h, float mm)
 {
     SimHandle* s = static_cast<SimHandle*>(h);
-    s->hal.simMotorL().resetEncoder();
-    s->robot.state.inputs.encLMm = mm;
+    PhysicsWorld& p = s->hal.plant();
+    p.setTrueWheelTravel(mm, p.trueEncRMm());     // TRUE travel (ground truth)
+    p.setReportedEncoder(0, mm);                  // REPORTED accumulator (side 0 = L)
+    s->robot.state.inputs.encLMm = mm;            // keep state in sync this tick
 }
 
 void sim_set_enc_r(void* h, float mm)
 {
     SimHandle* s = static_cast<SimHandle*>(h);
-    s->hal.simMotorR().resetEncoder();
-    s->robot.state.inputs.encRMm = mm;
+    PhysicsWorld& p = s->hal.plant();
+    p.setTrueWheelTravel(p.trueEncLMm(), mm);     // TRUE travel (ground truth)
+    p.setReportedEncoder(1, mm);                  // REPORTED accumulator (side 1 = R)
+    s->robot.state.inputs.encRMm = mm;            // keep state in sync this tick
 }
 
 // Inject an OTOS pose reading into the SimOdometer.  The injected pose is
@@ -398,18 +419,104 @@ void sim_set_motor_offset(void* h, int side, float factor)
     static_cast<SimHandle*>(h)->hal.plant().setOffsetFactor(side, factor);
 }
 
-// ---- Exact pose (oracle ground truth) ----
-// (040-002) Temporary alias to the plant's TRUE pose (T3 adds formal
-// sim_get_true_pose_*).  PhysicsWorld::truePose* is the consolidated oracle that
-// replaced ExactPoseTracker.
+// ---- True pose (plant ground truth, not the EKF/dead-reckoning estimate) ----
+// (040-003) The canonical truth accessors.  WorldView::truePose* reads the
+// PhysicsWorld plant — the single source of ground truth that replaced
+// ExactPoseTracker.
+float sim_get_true_pose_x(void* h) {
+    return static_cast<SimHandle*>(h)->_worldView.truePoseX();
+}
+float sim_get_true_pose_y(void* h) {
+    return static_cast<SimHandle*>(h)->_worldView.truePoseY();
+}
+float sim_get_true_pose_h(void* h) {
+    return static_cast<SimHandle*>(h)->_worldView.truePoseH();
+}
+
+// ---- Exact pose (oracle ground truth) — FORMAL ALIAS of sim_get_true_pose_* ----
+// (040-003) Back-compat: these now route through WorldView (the canonical
+// accessor), identical to sim_get_true_pose_*.  The 040-002 temp alias read
+// hal.plant() directly; this formalizes it via WorldView.
 float sim_get_exact_pose_x(void* h) {
-    return static_cast<SimHandle*>(h)->hal.plant().truePoseX();
+    return static_cast<SimHandle*>(h)->_worldView.truePoseX();
 }
 float sim_get_exact_pose_y(void* h) {
-    return static_cast<SimHandle*>(h)->hal.plant().truePoseY();
+    return static_cast<SimHandle*>(h)->_worldView.truePoseY();
 }
 float sim_get_exact_pose_h(void* h) {
-    return static_cast<SimHandle*>(h)->hal.plant().truePoseH();
+    return static_cast<SimHandle*>(h)->_worldView.truePoseH();
+}
+
+// ---- True wheel travel / velocity (plant ground truth) ----
+// (040-003) Direct reads of the unslipped true accumulators / velocities.
+float sim_get_true_enc_l(void* h) {
+    return static_cast<SimHandle*>(h)->_worldView.trueEncLMm();
+}
+float sim_get_true_enc_r(void* h) {
+    return static_cast<SimHandle*>(h)->_worldView.trueEncRMm();
+}
+float sim_get_true_vel_l(void* h) {
+    return static_cast<SimHandle*>(h)->_worldView.trueVelLMms();
+}
+float sim_get_true_vel_r(void* h) {
+    return static_cast<SimHandle*>(h)->_worldView.trueVelRMms();
+}
+
+// ---- Set true plant state directly (isolation tests) ----
+// (040-003) Set the plant's ground-truth pose.  The next sim_tick does NOT
+// overwrite it unless that tick integrates the actuator path (non-zero PWM +
+// dt>0).  At 0 PWM, update() adds 0 to encoders and integrates 0 chassis motion,
+// so an injected pose persists.
+void sim_set_true_pose(void* h, float x, float y, float h_rad) {
+    static_cast<SimHandle*>(h)->hal.plant().setTruePose(x, y, h_rad);
+}
+
+// Set the plant's TRUE wheel travel accumulators directly (ground truth).  Unlike
+// sim_set_enc_l/r this touches ONLY the true accumulators (not the reported path
+// or state.inputs) — for pure plant-truth isolation tests.
+void sim_set_true_wheel_travel(void* h, float enc_l_mm, float enc_r_mm) {
+    static_cast<SimHandle*>(h)->hal.plant().setTrueWheelTravel(enc_l_mm, enc_r_mm);
+}
+
+// Set the plant's TRUE per-wheel velocity directly (ground truth, mm/s).
+void sim_set_true_velocity(void* h, float vel_l_mms, float vel_r_mms) {
+    static_cast<SimHandle*>(h)->hal.plant().setTrueVelocity(vel_l_mms, vel_r_mms);
+}
+
+// ---- Estimation error: firmware estimate vs. plant truth ----
+// (040-003) WorldView crosses the plant/estimate boundary.  XY is the Euclidean
+// distance (mm) between true pose and the firmware's fused/dead-reckoned pose;
+// H is the heading error (rad) wrapped to [-pi, pi].  Both are 0 when the robot
+// has not moved (estimate == truth == origin).
+float sim_get_estimation_error_xy(void* h) {
+    return static_cast<SimHandle*>(h)->_worldView.estimationErrorXY();
+}
+float sim_get_estimation_error_h(void* h) {
+    return static_cast<SimHandle*>(h)->_worldView.estimationErrorH();
+}
+
+// ---- Reset all observation-model error layers to no-op (perfect sensors) ----
+// (040-003) After this call every Sim* observation model is fresh-perfect: no
+// freeze/dropout, no read failure, no noise/drift.  Mirrors the "fresh sensor is
+// PERFECT" invariant (each error setter defaults to no-op at construction).
+void sim_set_perfect(void* h) {
+    SimHandle* s = static_cast<SimHandle*>(h);
+    // Drive-wheel encoders: clear freeze + zero per-side noise.
+    s->hal.simMotorL().setFrozen(false);
+    s->hal.simMotorR().setFrozen(false);
+    s->hal.simMotorL().setNoiseSigma(0.0f);
+    s->hal.simMotorR().setNoiseSigma(0.0f);
+    // OTOS odometer: clear read failure + lift; zero linear/yaw noise.
+    s->hal.simOdometer().setReadFailure(false);
+    s->hal.simOdometer().setLift(false);
+    s->hal.simOdometer().setLinearNoiseSigma(0.0f);
+    s->hal.simOdometer().setYawNoiseSigma(0.0f);
+    // Line / color sensors: clear freeze.
+    s->hal.simLineSensor().setFrozen(false);
+    s->hal.simColorSensor().setFrozen(false);
+    // Plant dynamics-error: zero encoder slip and noise (true == reported).
+    s->hal.plant().setSlip(0.0f, 0.0f);
+    s->hal.plant().setEncoderNoise(2, 0.0f);
 }
 
 // ---- Encoder noise/slip (side: 0=left, 1=right, 2=both) ----
