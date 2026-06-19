@@ -1,11 +1,13 @@
 ---
-id: "006"
-title: "Golden-TLM frame canary with committed capture"
-status: open
-use-cases: [SUC-005]
-depends-on: ["003"]
-github-issue: ""
-issue: ""
+id: '006'
+title: Golden-TLM frame canary with committed capture
+status: done
+use-cases:
+- SUC-005
+depends-on:
+- '003'
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -116,13 +118,13 @@ def test_golden_tlm_unchanged(sim):
 
 ## Acceptance Criteria
 
-- [ ] `test_golden_tlm.py` exists in `tests/simulation/unit/`.
-- [ ] `tests/_infra/golden_tlm_capture.json` is committed with ≥ 8 TLM frames.
-- [ ] `uv run --with pytest python -m pytest tests/simulation/unit/test_golden_tlm.py -v` passes.
-- [ ] The test uses the `sim` fixture and stepped time only (no `time.sleep`, no system clock).
-- [ ] The test is deterministic: running it twice in a row produces the same pass/fail.
-- [ ] The overall simulation suite still passes ≥ 1954 tests with the new canary added.
-- [ ] `git diff source/` is empty.
+- [x] `test_golden_tlm.py` exists in `tests/simulation/unit/`.
+- [x] `tests/_infra/golden_tlm_capture.json` is committed with ≥ 8 TLM frames (15 frames captured).
+- [x] `uv run --with pytest python -m pytest tests/simulation/unit/test_golden_tlm.py -v` passes.
+- [x] The test uses the `sim` fixture and stepped time only (no `time.sleep`, no system clock).
+- [x] The test is deterministic: running it twice in a row produces the same pass/fail.
+- [x] The overall simulation suite still passes ≥ 1954 tests with the new canary added.
+- [x] `git diff source/` is empty.
 
 ## Testing Plan
 
