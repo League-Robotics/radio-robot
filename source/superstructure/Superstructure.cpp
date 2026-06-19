@@ -8,6 +8,12 @@
 #include "Superstructure.h"
 #include "MotionController.h"
 #include "Robot.h"
+#include "CommandProcessor.h"   // CommandProcessor::replyEvt, setQueue, process
+#include "CommandQueue.h"       // CommandQueue (X injection bypass)
+#include "HaltController.h"     // HaltController::evaluate, HaltAction
+#include "RobotState.h"         // HardwareState
+#include "LoopTickOnce.h"       // LoopTickState
+#include "Config.h"             // RobotConfig (DriveMode via Config.h)
 
 // ---------------------------------------------------------------------------
 // goalAllowed — stub gate.  Returns true unconditionally this sprint.
@@ -94,5 +100,84 @@ void Superstructure::requestGoal(const GoalRequest& gr)
     case Goal::ESTOP:
         // Reserved — no caller routes these through requestGoal this sprint.
         break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// evaluateSafety — per-tick safety evaluation (042-003).
+//
+// The two block bodies below are MOVED VERBATIM from loopTickOnce, in the SAME
+// ORDER (watchdog first, then halt-controller).  Only their HOME changed: the
+// same statements run in the same order with the same effects.  The three
+// formerly-external references are re-sourced to the Superstructure-held
+// members / the inputs parameter so the block bodies stay textually identical:
+//   robot.motionController → _mc   (bound to the local `mc` ref, as before)
+//   robot.config           → _cfg  (bound to the local `cfg` ref, as before)
+//   robot.haltController    → _hc
+//   robot.state.inputs      → inputs (parameter)
+// NO reordering, NO logic change.  driveAdvance is NOT called here — it stays
+// in loopTickOnce immediately after this call.
+// ---------------------------------------------------------------------------
+void Superstructure::evaluateSafety(CommandProcessor& cmd, CommandQueue& queue,
+                                    LoopTickState& ts, const HardwareState& inputs,
+                                    uint32_t now)
+{
+    const RobotConfig& cfg = _cfg;
+
+    // ===== SYSTEM WATCHDOG: fire safety_stop + X after sTimeoutMs of silence =
+    // ts.watchdogMs == 0 means no command has been received yet this session;
+    // the watchdog stays disarmed until the first command arrives.
+    // Signed delta avoids uint32 underflow (project memory: watchdog-uint32-underflow).
+    //
+    // TIME-stop exemption (sprint 024-003): self-terminating commands that
+    // carry a TIME stop condition (T, D, G, TURN, RT, G PRE_ROTATE) are
+    // exempt from the keepalive requirement — their TIME net fires regardless
+    // of host silence.  Open-ended streaming commands (S / VW / R) have no
+    // TIME stop and remain keepalive-bound.
+    {
+        MotionController& mc = _mc;
+        bool needsWatchdog =
+            (mc.mode() != DriveMode::IDLE) || mc.hasActiveCommand();
+
+        // Exempt commands that carry their own TIME backstop.
+        if (mc.hasActiveCommand() && mc.activeCmd().hasTimeStop()) {
+            needsWatchdog = false;
+        }
+
+        if (cfg.safetyEnabled && ts.watchdogMs != 0 &&
+            ts.activeFn != nullptr && needsWatchdog) {
+            int32_t wdDelta = (int32_t)(now - ts.watchdogMs);
+            if (wdDelta > (int32_t)cfg.sTimeoutMs) {
+                ts.watchdogMs = now;  // re-arm to avoid firing every tick
+                char wdBuf[64];
+                CommandProcessor::replyEvt(wdBuf, sizeof(wdBuf),
+                                           "safety_stop", "",
+                                           ts.activeFn, ts.activeCtx);
+                // Bypass the queue for internal emergency stop: detach queue
+                // so process() dispatches X immediately, then restore.
+                cmd.setQueue(nullptr);
+                cmd.process("X", ts.activeFn, ts.activeCtx);
+                cmd.setQueue(&queue);
+            }
+        }
+    }
+
+    // ===== HALT CONDITIONS: evaluate user-registered stop conditions ========
+    // Runs after the watchdog check, before the motion tick.
+    {
+        if (ts.activeFn != nullptr) {
+            HaltAction ha = _hc.evaluate(
+                inputs, now, ts.activeFn, ts.activeCtx);
+            // Bypass the queue for halt-triggered emergency stops.
+            if (ha == HaltAction::HARD) {
+                cmd.setQueue(nullptr);
+                cmd.process("X", ts.activeFn, ts.activeCtx);
+                cmd.setQueue(&queue);
+            } else if (ha == HaltAction::SOFT) {
+                cmd.setQueue(nullptr);
+                cmd.process("X soft", ts.activeFn, ts.activeCtx);
+                cmd.setQueue(&queue);
+            }
+        }
     }
 }

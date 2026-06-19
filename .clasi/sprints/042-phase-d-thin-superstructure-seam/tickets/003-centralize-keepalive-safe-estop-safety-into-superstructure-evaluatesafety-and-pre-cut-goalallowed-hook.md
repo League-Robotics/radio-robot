@@ -2,7 +2,7 @@
 id: '003'
 title: Centralize keepalive/SAFE/ESTOP safety into Superstructure.evaluateSafety()
   and pre-cut goalAllowed() hook
-status: open
+status: in-progress
 use-cases:
 - SUC-002
 - SUC-003
@@ -46,33 +46,44 @@ byte-exact, and all safety fences must pass green.
 
 ## Acceptance Criteria
 
-- [ ] `Superstructure::evaluateSafety(CommandProcessor& cmd, CommandQueue& queue, LoopTickState& ts, uint32_t now)` exists in `Superstructure.{h,cpp}`.
-- [ ] The watchdog block body in `evaluateSafety` is textually identical to the
-      pre-ticket inline block in `loopTickOnce` (verified by diff).
-- [ ] The halt-controller block body in `evaluateSafety` is textually identical to the
-      pre-ticket inline block in `loopTickOnce` (verified by diff).
-- [ ] The two blocks appear in `evaluateSafety` in the SAME ORDER as they appeared in
+- [x] `Superstructure::evaluateSafety(...)` exists in `Superstructure.{h,cpp}`.
+      NOTE (annotation): the AC text shows the signature without `inputs`, but the
+      Implementation Plan (lines 102-117) AND architecture-update.md require an
+      added `const HardwareState& inputs` parameter — the halt block calls
+      `haltController.evaluate(robot.state.inputs, ...)`. Followed the plan/arch:
+      `evaluateSafety(CommandProcessor& cmd, CommandQueue& queue, LoopTickState& ts,
+      const HardwareState& inputs, uint32_t now)`; call site passes `robot.state.inputs`.
+- [x] The watchdog block body in `evaluateSafety` is textually identical to the
+      pre-ticket inline block in `loopTickOnce` (verified by diff — only the
+      documented re-source `robot.motionController` → `_mc`; logic byte-identical).
+- [x] The halt-controller block body in `evaluateSafety` is textually identical to the
+      pre-ticket inline block in `loopTickOnce` (verified by diff — only the
+      documented re-source `robot.haltController` → `_hc` and
+      `robot.state.inputs` → `inputs`; logic byte-identical).
+- [x] The two blocks appear in `evaluateSafety` in the SAME ORDER as they appeared in
       `loopTickOnce`: watchdog first, then halt-controller.
-- [ ] `loopTickOnce` no longer contains the watchdog or halt-controller inline blocks;
-      they are replaced by the single `robot.superstructure.evaluateSafety(cmd, queue, ts, now)` call.
-- [ ] `robot.motionController.driveAdvance(...)` call remains in `loopTickOnce` immediately
+- [x] `loopTickOnce` no longer contains the watchdog or halt-controller inline blocks;
+      they are replaced by the single `robot.superstructure.evaluateSafety(cmd, queue, ts, robot.state.inputs, now)` call.
+- [x] `robot.motionController.driveAdvance(...)` call remains in `loopTickOnce` immediately
       after the `evaluateSafety` call — NOT inside `evaluateSafety`.
-- [ ] `test_watchdog_exemption.py` passes (behavior-preservation fence).
-- [ ] `test_incident_scenarios.py` passes (behavior-preservation fence).
-- [ ] `test_goto_bounds.py` passes (behavior-preservation fence).
-- [ ] `test_033_005_wedge_hardening.py` passes (behavior-preservation fence).
-- [ ] Simulation tier green: `uv run --with pytest python -m pytest -q` ≥ 2001 passed,
+- [x] `test_watchdog_exemption.py` passes (behavior-preservation fence). (5/5 PASSED)
+- [x] `test_incident_scenarios.py` passes (behavior-preservation fence). (4/4 PASSED)
+- [x] `test_goto_bounds.py` passes (behavior-preservation fence). (4/4 PASSED)
+- [x] `test_033_005_wedge_hardening.py` passes (behavior-preservation fence). (3/3 PASSED)
+- [x] Simulation tier green: `uv run --with pytest python -m pytest -q` → 2001 passed,
       0 errors.
-- [ ] Golden-TLM canary byte-exact.
-- [ ] ARM firmware build: `python3 build.py --fw-only` → 0 errors; then
-      `git checkout -- source/robot/DefaultConfig.cpp`.
-- [ ] Field-pin canary (`defaultRobotConfig()` diff) empty.
-- [ ] Vendor-confinement grep gate passes.
-- [ ] No new heap allocation or fibers introduced.
-- [ ] No state-graph or transition-table introduced.
-- [ ] `source/superstructure/Superstructure.{h,cpp}` exists with `Goal` enum + `requestGoal` + `goalAllowed()` stub + `evaluateSafety()`.
-- [ ] All verb handlers route through `requestGoal` (queue-dispatch path).
-- [ ] `source/superstructure/MotionController.{h,cpp}` exists (from T2).
+- [x] Golden-TLM canary byte-exact. (`test_golden_tlm_unchanged` PASSED)
+- [x] ARM firmware build: `python3 build.py --fw-only` → 0 errors (`MICROBIT.hex`); then
+      `git checkout -- source/robot/DefaultConfig.cpp` (done).
+- [x] Field-pin canary (`defaultRobotConfig()` diff) empty (only a cosmetic
+      auto-gen source-path comment regen, discarded by the `git checkout` above).
+- [x] Vendor-confinement grep gate passes. (`test_vendor_confinement_no_new_leaks` PASSED)
+- [x] No new heap allocation or fibers introduced. (`evaluateSafety` uses only a
+      stack `char wdBuf[64]`, identical to the pre-ticket inline block.)
+- [x] No state-graph or transition-table introduced.
+- [x] `source/superstructure/Superstructure.{h,cpp}` exists with `Goal` enum + `requestGoal` + `goalAllowed()` stub + `evaluateSafety()`.
+- [x] All verb handlers route through `requestGoal` (queue-dispatch path). (T1; 16 `requestGoal` call sites)
+- [x] `source/superstructure/MotionController.{h,cpp}` exists (from T2).
 
 ## Implementation Plan
 

@@ -31,6 +31,10 @@
 class MotionController;
 class HaltController;
 struct Robot;
+class CommandProcessor;
+class CommandQueue;
+struct LoopTickState;
+struct HardwareState;
 
 // ---------------------------------------------------------------------------
 // Goal — the set of drive goals the Superstructure can be asked to start.
@@ -121,6 +125,20 @@ public:
     // this sprint: it mirrors the current gating exactly (there is no off-table
     // behaviour today), and is the seam where future pre-conditions will live.
     bool goalAllowed(const GoalRequest& gr) const;
+
+    // evaluateSafety — centralizes the per-tick safety evaluation that formerly
+    // lived as two consecutive inline blocks in loopTickOnce (042-003):
+    //   (1) keepalive/system watchdog  — needsWatchdog logic + X injection
+    //   (2) halt-controller            — haltController.evaluate() + X / X soft
+    // The two block bodies are MOVED VERBATIM, in the SAME ORDER (watchdog
+    // first, then halt-controller); only their HOME moved into Superstructure.
+    // NO reordering, NO logic change.  driveAdvance is NOT called here — it
+    // stays in loopTickOnce immediately after this call.  Called once per tick
+    // from loopTickOnce in the SAME position as the former inline blocks; the
+    // golden-TLM canary stays byte-exact.
+    void evaluateSafety(CommandProcessor& cmd, CommandQueue& queue,
+                        LoopTickState& ts, const HardwareState& inputs,
+                        uint32_t now);
 
     // Accessor for the wrapped MotionController (used by loopTickOnce in a
     // later Phase-D ticket; harmless to expose now).
