@@ -2,7 +2,7 @@
 id: '003'
 title: StopCondition C++ binary paths and MotionCommandHandlers edge/fallback branch
   coverage
-status: in-progress
+status: done
 use-cases:
 - SUC-003
 - SUC-004

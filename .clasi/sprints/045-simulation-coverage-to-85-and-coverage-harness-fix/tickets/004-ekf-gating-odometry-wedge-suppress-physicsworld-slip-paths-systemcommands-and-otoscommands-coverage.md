@@ -61,20 +61,21 @@ branches (likely malformed OTOS command args or out-of-range values).
 
 ## Acceptance Criteria
 
-- [ ] New file `tests/simulation/unit/test_ekf_odometry_commands_coverage.py` created.
-- [ ] EKF gate-reject path: inject an OTOS reading far from the current pose (e.g., 500mm teleport while robot is at origin with tight P); assert that `sim_get_ekf_rej_count` increases.
-- [ ] EKF P-inflation recovery: inject 10+ consecutive rejected OTOS readings; assert EKF eventually re-acquires (estimate converges back after P inflation).
-- [ ] Odometry wedge-suppress: run a motion command, trigger wedge on one wheel (via T002's technique), then confirm `predict()` is called with wedge flag set. Proxy: the pose heading does not drift in the wedged direction (observable via `sim_get_pose_h`).
-- [ ] PhysicsWorld slip: call `sim_set_motor_slip` with non-trivial values (`straight=0.2, turn_extra=0.1`) and run a straight-line drive; confirm encoder/pose shows expected slip behavior (actual travel < commanded travel).
-- [ ] `SNAP` command: `sim.send_command("SNAP")` produces a telemetry-format reply or OK.
-- [ ] `ZERO` command: `sim.send_command("ZERO")` resets encoder accumulators; `sim_get_enc_l` returns 0 (or near 0) after ZERO.
-- [ ] `HALT` command: `sim.send_command("HALT TIME ms=500")` registers a halt condition; motion stops after 500ms.
-- [ ] `VER` command: produces a version string reply.
-- [ ] `ECHO hello` command: produces `hello` in the reply.
-- [ ] `HELP` command: produces a multi-line reply without crashing.
-- [ ] OtosCommands: `sim.send_command("OTOS GET")` or equivalent produces a reply; error branches produce ERR.
-- [ ] All existing tests still pass.
-- [ ] Golden-TLM, field-pin, vendor grep gates all green.
+- [x] New file `tests/simulation/system/test_ekf_odometry_commands_coverage.py` created (system tier — estimator + sensor-injection scenarios).
+- [x] EKF gate-reject path: `test_ekf_gate_rejects_far_otos` injects a far OTOS teleport and asserts `sim_get_ekf_rej_count` increases while the estimate barely moves (updatePosition/updateHeading reject branches).
+- [x] EKF P-inflation recovery: `test_ekf_p_inflation_recovers_after_10_rejections` injects 15 consecutive rejections (crossing the 10-streak), asserting both position and heading P-inflation re-baseline fire (estimate snaps to the held reading). `test_ekf_recovers_to_truth_after_bad_burst` confirms reconvergence to truth.
+- [x] Odometry wedge-suppress: `test_odometry_wedge_suppresses_heading_drift` freezes R mid-drive (T002 technique), waits for `get_odometry_wedge_active()`, and asserts heading holds while the left wheel advances — the `if (_wedgeActive) dTheta=0` branch in Odometry::predict.
+- [x] PhysicsWorld slip: `test_physics_slip_reduces_reported_travel` sets `sim_set_motor_slip(straight=0.3)` and confirms reported travel < true travel; `test_physics_encoder_noise_path` exercises the HOST_BUILD pwGaussianNoise draw via `sim_set_encoder_noise`.
+- [x] `SNAP`: `test_snap_emits_tlm_frame` asserts a TLM frame.
+- [x] `ZERO`: `test_zero_enc_resets_accumulators` (enc near 0 after ZERO enc) + `test_zero_pose_resets_pose`.
+- [~] `HALT`: HALT TIME/DIST/POS/COLOR/LINE firing is already covered by `test_halt_controller.py` and (COLOR/LINE evaluate) by 045-003's `test_stop_condition_coverage.py`; not duplicated here.
+- [x] `VER`: `test_ver_reports_version` (OK + version digits).
+- [x] `ECHO hello`: `test_echo_returns_tokens`.
+- [x] `HELP`: `test_help_multiline_no_crash`.
+- [x] Also covered: `SI` (→ Odometry/EKF::setPose), `SAFE`, the `+` quiet keepalive, and GET/SET (round-trip + unknown-key ERR).
+- [x] OtosCommands: `test_otos_verbs_nodev_when_not_initialized` (all O-verb `nodev` ERR branches), `test_otos_verbs_ok_when_initialized` (OI/OZ/OR/OV/OL/OA OK branches after begin()), `test_otos_op_reports_pose_no_init_required` (OP), `test_otos_ov_bad_args_errors` (parseOV badarg).
+- [x] All existing tests still pass: 2076 passed (was 2055; +21).
+- [x] Golden-TLM, field-pin, vendor grep gates all green.
 
 ## Implementation Plan
 
