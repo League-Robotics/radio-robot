@@ -1,12 +1,12 @@
 ---
-id: "001"
-title: "Repoint TLM and MotionController pose reads to PhysicalStateEstimate seam"
-status: open
+id: '001'
+title: Repoint TLM and MotionController pose reads to PhysicalStateEstimate seam
+status: done
 use-cases:
-  - SUC-001
+- SUC-001
 depends-on: []
-github-issue: ""
-issue: "migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md"
+github-issue: ''
+issue: migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -56,14 +56,14 @@ and `getVelocity` are thin forwarders to the same `HardwareState` fields.
 
 ## Acceptance Criteria
 
-- [ ] `buildTlmFrame` calls `estimate.getPose(state.inputs, ...)` (not `Odometry::getPose`).
-- [ ] `buildTlmFrame` reads `fusedV`/`fusedOmega` via `estimate.getVelocity(state.inputs, ...)`.
-- [ ] `MotionController::getPoseFloat` calls `PhysicalStateEstimate::getPose(*_hwState, ...)`.
-- [ ] `Odometry::getPose` is not called from `RobotTelemetry.cpp` or `MotionController.cpp`.
-- [ ] Golden-TLM canary passes byte-exact (`uv run --with pytest python -m pytest tests/simulation/unit/test_golden_tlm.py -q`).
-- [ ] Full simulation tier green: `uv run --with pytest python -m pytest -q` >= 2001 passed, 0 errors.
-- [ ] ARM firmware build green: `python3 build.py --fw-only` → 0 errors. Then `git checkout -- source/robot/DefaultConfig.cpp`.
-- [ ] Behavior-preservation fences green: `test_ekf*.py`, `test_otos_fusion.py`, `test_goto_bounds.py`.
+- [x] `buildTlmFrame` calls `estimate.getPose(state.inputs, ...)` (not `Odometry::getPose`).
+- [x] `buildTlmFrame` reads `fusedV`/`fusedOmega` via `estimate.getVelocity(state.inputs, ...)`.
+- [x] `MotionController::getPoseFloat` calls `PhysicalStateEstimate::getPose(*_hwState, ...)`.
+- [x] `Odometry::getPose` is not called from `RobotTelemetry.cpp` or `MotionController.cpp`.
+- [x] Golden-TLM canary passes byte-exact (`uv run --with pytest python -m pytest tests/simulation/unit/test_golden_tlm.py -q`).
+- [x] Full simulation tier green: `uv run --with pytest python -m pytest -q` >= 2001 passed, 0 errors.
+- [x] ARM firmware build green: `python3 build.py --fw-only` → 0 errors. Then `git checkout -- source/robot/DefaultConfig.cpp`.
+- [x] Behavior-preservation fences green: `test_ekf*.py`, `test_otos_fusion.py`, `test_goto_bounds.py`.
 
 ## Implementation Plan
 
