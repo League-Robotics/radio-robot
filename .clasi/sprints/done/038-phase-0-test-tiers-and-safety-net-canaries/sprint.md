@@ -1,7 +1,7 @@
 ---
 id: 038
 title: "Phase 0 \u2014 Test tiers and safety-net canaries"
-status: planning-docs
+status: done
 branch: sprint/038-phase-0-test-tiers-and-safety-net-canaries
 use-cases: []
 issues:
