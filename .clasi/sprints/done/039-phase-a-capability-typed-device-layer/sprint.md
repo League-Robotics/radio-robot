@@ -1,7 +1,7 @@
 ---
 id: 039
 title: "Phase A \u2014 Capability-typed device layer"
-status: planning-docs
+status: done
 branch: sprint/039-phase-a-capability-typed-device-layer
 use-cases: []
 issues:
