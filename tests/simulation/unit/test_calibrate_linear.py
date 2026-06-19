@@ -27,7 +27,7 @@ from pathlib import Path as _Path
 # __file__ is tests/simulation/unit/test_calibrate_linear.py; repo root is four levels up
 # (tests/simulation/unit/ -> tests/simulation/ -> tests/ -> repo root).
 _REPO_ROOT_FOR_IMPORT = _Path(__file__).resolve().parents[3]
-_CAL_MOD_PATH = _REPO_ROOT_FOR_IMPORT / "tests" / "calibrate" / "calibrate_linear.py"
+_CAL_MOD_PATH = _REPO_ROOT_FOR_IMPORT / "tests" / "_infra" / "calibrate" / "calibrate_linear.py"
 _spec = importlib.util.spec_from_file_location("calibrate_linear", _CAL_MOD_PATH)
 _module = importlib.util.module_from_spec(_spec)
 sys.modules["calibrate_linear"] = _module   # register so reload() works

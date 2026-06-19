@@ -32,11 +32,11 @@ def _repo_root() -> pathlib.Path:
 
 
 def _import_tool(tool_name: str):
-    """Import tests/tools/<tool_name>.py by file path (avoids sys.path conflicts)."""
+    """Import tests/_infra/tools/<tool_name>.py by file path (avoids sys.path conflicts)."""
     import importlib.util
 
     repo = _repo_root()
-    tool_path = repo / "tests" / "tools" / f"{tool_name}.py"
+    tool_path = repo / "tests" / "_infra" / "tools" / f"{tool_name}.py"
     if not tool_path.exists():
         raise ImportError(f"Tool not found: {tool_path}")
 
