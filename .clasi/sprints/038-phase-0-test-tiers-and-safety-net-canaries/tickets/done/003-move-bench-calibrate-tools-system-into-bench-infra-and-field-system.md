@@ -1,11 +1,13 @@
 ---
-id: "003"
-title: "Move bench/calibrate/tools/system into bench/ _infra/ and field/system/"
-status: open
-use-cases: [SUC-001]
-depends-on: ["002"]
-github-issue: ""
-issue: ""
+id: '003'
+title: Move bench/calibrate/tools/system into bench/ _infra/ and field/system/
+status: done
+use-cases:
+- SUC-001
+depends-on:
+- '002'
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -103,14 +105,14 @@ Confirm ≥ 1954 passed, 0 errors. The simulation tier should be completely unaf
 
 ## Acceptance Criteria
 
-- [ ] `tests/calibrate/` is empty and removed (or only `.gitkeep`).
-- [ ] `tests/tools/` is empty and removed (or only `.gitkeep`).
-- [ ] `tests/system/` is empty and removed (or only `.gitkeep`).
-- [ ] `tests/_infra/calibrate/` contains all moved calibrate scripts.
-- [ ] `tests/_infra/tools/` contains `playfield_tour.py` (and `__init__.py` if it existed).
-- [ ] `tests/field/system/` contains all moved system scripts.
-- [ ] `uv run --with pytest python -m pytest -q` passes ≥ 1954 tests, 0 errors.
-- [ ] `git diff source/` is empty.
+- [x] `tests/calibrate/` is empty and removed (or only `.gitkeep`).
+- [x] `tests/tools/` is empty and removed (or only `.gitkeep`).
+- [x] `tests/system/` is empty and removed (or only `.gitkeep`).
+- [x] `tests/_infra/calibrate/` contains all moved calibrate scripts.
+- [x] `tests/_infra/tools/` contains `playfield_tour.py` (and `__init__.py` if it existed).
+- [x] `tests/field/system/` contains all moved system scripts.
+- [x] `uv run --with pytest python -m pytest -q` passes ≥ 1954 tests, 0 errors.
+- [x] `git diff source/` is empty.
 
 ## Testing Plan
 

@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Move simulation tests to simulation/unit/ and repoint pyproject testpaths
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 depends-on:
