@@ -2,7 +2,7 @@
 id: '003'
 title: Resolve DebugCommandable I2CBus leak via IBusDiagnostics+IRawBusAccess; empty
   vendor baseline
-status: in-progress
+status: done
 use-cases:
 - SUC-004
 depends-on:
