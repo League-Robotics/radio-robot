@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Strip Commandable from Odometry; create OtosCommands app-layer handler set
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 - SUC-003
