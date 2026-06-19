@@ -17,7 +17,6 @@ dependencies = [
 # Bench calibration / camera-ground-truth tooling (tests/calibrate/). Pulls in
 # the aprilcam camera client (and its CV/gRPC stack). Install with `uv sync`.
 calibrate = [
-    "aprilcam",
     "matplotlib>=3.8",
 ]
 
@@ -28,7 +27,6 @@ package = false
 default-groups = ["calibrate"]
 
 [tool.uv.sources]
-aprilcam = { path = "/Volumes/Proj/proj/RobotProjects/AprilTags", editable = true }
 robot-radio = { path = "host", editable = true }
 
 [tool.uv.workspace]

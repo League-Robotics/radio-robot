@@ -26,8 +26,19 @@ struct RobotConfig;
  *   Firmware   — microbit_random(int max) approximation via sum-of-uniforms
  *                (central-limit Gaussian; no std:: needed).
  *
- * This class lives in source/hal/ and is compiled into the firmware build
- * automatically.  The host build includes it explicitly via host_tests/CMakeLists.txt.
+ * WHY THIS LIVES IN source/hal/ AND NOT source/hal/mock/:
+ *   It is a synthetic ("near-mock") sensor, but unlike the true mocks
+ *   (MockOtosSensor, MockColorSensor, ...) it is NOT host-only.  It is compiled
+ *   INTO the firmware (gated by BENCH_OTOS_ENABLED) and DEPENDS ON CODAL: the
+ *   firmware PRNG path uses microbit_random() from MicroBitDevice.h.  NezhaHAL
+ *   owns one as a member and `DBG OTOS BENCH` drives it live on the real robot
+ *   stand.  The mock/ directory is deliberately host-only / CODAL-free and is
+ *   FILTERED OUT of the firmware build — CMakeLists.txt drops every path under
+ *   hal/mock/ via a list(FILTER SOURCE_FILES EXCLUDE REGEX ...) on that dir — so
+ *   moving this file there would drop it from the firmware and break the
+ *   NezhaHAL link.  It therefore lives here alongside the real OtosSensor; the
+ *   host-sim build (which globs mock/) picks it up explicitly via
+ *   tests/sim/CMakeLists.txt precisely because it is not under mock/.
  *
  * No I2C dependency.  begin() always succeeds; is_initialized() returns true.
  */
