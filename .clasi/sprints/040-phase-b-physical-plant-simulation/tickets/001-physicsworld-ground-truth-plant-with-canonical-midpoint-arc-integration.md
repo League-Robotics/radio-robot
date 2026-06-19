@@ -1,11 +1,14 @@
 ---
-id: "001"
-title: "PhysicsWorld — ground-truth plant with canonical midpoint-arc integration"
-status: open
-use-cases: [SUC-001, SUC-005, SUC-006]
+id: '001'
+title: "PhysicsWorld \u2014 ground-truth plant with canonical midpoint-arc integration"
+status: in-progress
+use-cases:
+- SUC-001
+- SUC-005
+- SUC-006
 depends-on: []
-github-issue: ""
-issue: "migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md"
+github-issue: ''
+issue: migrate-radio-robot-c-to-the-frc-elite-architecture-c-codal-adaptation.md
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -88,20 +91,20 @@ All const accessors for truth values:
 
 ## Acceptance Criteria
 
-- [ ] `source/io/sim/PhysicsWorld.h` and `PhysicsWorld.cpp` exist and compile
+- [x] `source/io/sim/PhysicsWorld.h` and `PhysicsWorld.cpp` exist and compile
       cleanly in the host sim build (HOST_BUILD, no CODAL dependency).
-- [ ] `update(dt_ms)` sub-step A formula is identical (bit-for-bit) to
+- [x] `update(dt_ms)` sub-step A formula is identical (bit-for-bit) to
       `MockMotor::integrate` for zero-slip, zero-noise, offset-factor-1.0 inputs.
       Verified by unit test (see Testing below).
-- [ ] `setTruePose` / `setTrueWheelTravel` / `setTrueVelocity` set their
+- [x] `setTruePose` / `setTrueWheelTravel` / `setTrueVelocity` set their
       respective truth fields directly; `update()` after set does not overwrite them
       (only the actuator path overwrites on the next `update()` call).
-- [ ] `reset()` zeros all state.
-- [ ] `setSlip(straight, turnExtra)` and `setOffsetFactor(side, factor)` configure
+- [x] `reset()` zeros all state.
+- [x] `setSlip(straight, turnExtra)` and `setOffsetFactor(side, factor)` configure
       the dynamics parameters correctly.
-- [ ] No heap allocation; all members are value types or primitive arrays.
-- [ ] Host sim builds clean: `cmake --build tests/_infra/sim/build` succeeds.
-- [ ] All existing simulation tests pass: `uv run --with pytest python -m pytest -q`
+- [x] No heap allocation; all members are value types or primitive arrays.
+- [x] Host sim builds clean: `cmake --build tests/_infra/sim/build` succeeds.
+- [x] All existing simulation tests pass: `uv run --with pytest python -m pytest -q`
       ≥ 1957 passed, 0 errors. (No sim_api.cpp change yet; existing tests are
       unaffected because PhysicsWorld is not yet wired in.)
 
