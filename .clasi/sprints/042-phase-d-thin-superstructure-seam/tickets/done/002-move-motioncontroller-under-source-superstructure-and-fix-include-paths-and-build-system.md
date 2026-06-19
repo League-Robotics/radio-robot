@@ -2,7 +2,7 @@
 id: '002'
 title: Move MotionController under source/superstructure/ and fix include paths and
   build system
-status: in-progress
+status: done
 use-cases:
 - SUC-004
 depends-on:
