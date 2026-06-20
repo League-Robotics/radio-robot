@@ -1,14 +1,14 @@
 ---
-id: "004"
-title: "Mecanum robot JSON scaffold + first-flash bring-up (HITL)"
-status: open
+id: '004'
+title: Mecanum robot JSON scaffold + first-flash bring-up (HITL)
+status: done
 use-cases:
-  - SUC-002
-  - SUC-003
+- SUC-002
+- SUC-003
 depends-on:
-  - "046-003"
-github-issue: ""
-issue: ""
+- 046-003
+github-issue: ''
+issue: ''
 completes_issue: false
 hardware-in-the-loop: true
 ---
