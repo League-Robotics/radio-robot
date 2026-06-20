@@ -1,15 +1,16 @@
 ---
-id: "002"
-title: "Kinematics math: BodyTwist3, RobotGeometry, MecanumKinematics, IKinematics alias"
-status: open
+id: '002'
+title: 'Kinematics math: BodyTwist3, RobotGeometry, MecanumKinematics, IKinematics
+  alias'
+status: in-progress
 use-cases:
-  - SUC-001
-  - SUC-003
-  - SUC-004
+- SUC-001
+- SUC-003
+- SUC-004
 depends-on:
-  - "046-001"
-github-issue: ""
-issue: ""
+- 046-001
+github-issue: ''
+issue: ''
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -140,14 +141,14 @@ Create `tests/unit/test_mecanum_kinematics.py` (or `.cpp` host test):
 
 ## Acceptance Criteria
 
-- [ ] Host unit tests pass: `uv run --with pytest python -m pytest tests/unit/test_mecanum_kinematics.py -v`.
-- [ ] Inverse → forward round-trip error < 1e-4 for pure forward, pure strafe, pure rotate, and combined twist.
-- [ ] Pure strafe (`vy=150, vx=0, omega=0`) produces expected wheel pattern.
-- [ ] Saturation preserves twist direction (verified by round-trip through `forward` after saturate).
-- [ ] `BodyKinematics` array overloads produce identical results to scalar form for `vy=0` inputs.
-- [ ] Differential sim build (`ROBOT_RUN_MODE=SIM`, no `ROBOT_DRIVETRAIN_MECANUM`) still compiles cleanly — `MecanumKinematics.cpp` excluded, `BodyKinematics.cpp` unchanged.
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` still reports `2093 passed`.
-- [ ] No new compiler warnings on the embedded target (check with a test build).
+- [x] Host unit tests pass: `uv run --with pytest python -m pytest tests/simulation/unit/test_mecanum_kinematics.py -v` (44 passed).
+- [x] Inverse → forward round-trip error < 1e-4 for pure forward, pure strafe, pure rotate, and combined twist.
+- [x] Pure strafe (`vy=150, vx=0, omega=0`) produces expected wheel pattern (FR/BL=-150, FL/BR=+150).
+- [x] Saturation preserves twist direction (verified by round-trip through `forward` after saturate).
+- [x] `BodyKinematics` array overloads produce identical results to scalar form for `vy=0` inputs.
+- [x] Differential sim build (`ROBOT_RUN_MODE=SIM`, no `ROBOT_DRIVETRAIN_MECANUM`) still compiles cleanly — `MecanumKinematics.cpp` included in sim (pure math, no HAL deps), `BodyKinematics.cpp` unchanged.
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` reports `2137 passed` (2093 + 44 new).
+- [x] No new compiler warnings on embedded target (cmake build clean; embedded build gated via firmware CMakeLists.txt filter on differential).
 
 ## Testing
 

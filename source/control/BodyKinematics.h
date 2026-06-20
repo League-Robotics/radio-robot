@@ -1,4 +1,5 @@
 #pragma once
+#include "Pose2D.h"
 
 /**
  * BodyKinematics — stateless differential-drive kinematic maps and saturation.
@@ -73,5 +74,31 @@ void forward(float vL, float vR, float b, float& v_out, float& omega_out);
 void saturate(float vL, float vR,
               float vWheelMax, float steerHeadroom,
               float& vL_out, float& vR_out);
+
+/**
+ * Array-form overloads — differential adapter for the shared IKinematics
+ * contract (046-002). These allow BodyKinematics to be used via the
+ * compile-time namespace alias in IKinematics.h alongside MecanumKinematics.
+ *
+ * wheels[2] = {vL, vR} (same sign convention as the scalar forms above).
+ * vy is always 0 for a differential drivetrain; inverse ignores t.vy_mmps and
+ * forward sets t_out.vy_mmps = 0.
+ *
+ * @param t          body twist input (vy_mmps ignored)
+ * @param b          track width, mm
+ * @param wheels     wheel speed array [vL, vR], mm/s (in/out)
+ */
+void inverse(BodyTwist3 t, float b, float wheels[2]);
+void forward(const float wheels[2], float b, BodyTwist3& t_out);
+
+/**
+ * Array-form saturate — uniform scale when any |wheel| > (vWheelMax - steerHeadroom).
+ *
+ * @param wheels        wheel speed array [vL, vR] (in/out, modified in-place)
+ * @param vWheelMax     absolute wheel speed ceiling, mm/s (must be > 0)
+ * @param steerHeadroom headroom below vWheelMax for steering authority, mm/s
+ * @param out           scaled wheel speed output [vL, vR], mm/s
+ */
+void saturate(float wheels[2], float vWheelMax, float steerHeadroom, float out[2]);
 
 } // namespace BodyKinematics

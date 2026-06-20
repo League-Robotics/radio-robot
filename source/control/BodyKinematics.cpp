@@ -8,6 +8,7 @@
  *   docs/kinematics-model.md §1.7 (saturation scaling, curvature preservation)
  */
 #include "BodyKinematics.h"
+#include "Pose2D.h"
 #include <math.h>
 
 namespace BodyKinematics {
@@ -39,6 +40,28 @@ void saturate(float vL, float vR,
         vL_out = vL;
         vR_out = vR;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Array-form overloads (046-002) — differential adapter for IKinematics.
+// wheels[2] = {vL, vR}. vy is always 0 for differential.
+// ---------------------------------------------------------------------------
+
+void inverse(BodyTwist3 t, float b, float wheels[2]) {
+    // vy is ignored (differential cannot strafe).
+    inverse(t.vx_mmps, t.omega_rads, b, wheels[0], wheels[1]);
+}
+
+void forward(const float wheels[2], float b, BodyTwist3& t_out) {
+    float v, omega;
+    forward(wheels[0], wheels[1], b, v, omega);
+    t_out.vx_mmps   = v;
+    t_out.vy_mmps   = 0.0f;
+    t_out.omega_rads = omega;
+}
+
+void saturate(float wheels[2], float vWheelMax, float steerHeadroom, float out[2]) {
+    saturate(wheels[0], wheels[1], vWheelMax, steerHeadroom, out[0], out[1]);
 }
 
 } // namespace BodyKinematics
