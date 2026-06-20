@@ -26,7 +26,7 @@ full control stack to the command grammar. Specifically:
 2. Generalize `MotorController` to hold 4 motors/VelocityControllers in the
    mecanum build; disable sync-coupling.
 3. Add a `vy` profiled channel to `BodyVelocityController`.
-4. Add `VW vy=<val>` optional argument, `OMNI vx vy omega`, and `STRAFE vy [t=|dist=]` command verbs.
+4. **Extend the `VW` command to 3-DOF: `VW vx vy omega`** — parse an optional second velocity component; the existing 2-token form `VW v omega` remains valid and sets `vy=0` (back-compatible). The body twist `vy` flows through to `BodyVelocityController`'s new lateral channel and `MecanumKinematics::inverse`.
 
 The differential build must remain byte-identical throughout.
 
@@ -134,30 +134,22 @@ Under `#ifdef ROBOT_DRIVETRAIN_MECANUM`:
 - `reset()`: clear `_vy`/`_vyTgt`/`_vyALive`.
 - `atTarget()`: add `vy` convergence check.
 
-### 4. source/app/MotionCommandHandlers.cpp — VW/OMNI/STRAFE verbs
+### 4. source/app/MotionCommandHandlers.cpp — VW extended to 3-DOF
 
-`VW` parser: add optional `vy=<float>` argument (parsed after omega; absent → 0).
-Pass `vy` to `BodyVelocityController::setTarget(v, omega, vy)`.
+`VW` is extended to accept an optional third argument:
 
-Under `#ifdef ROBOT_DRIVETRAIN_MECANUM`:
 ```
-OMNI <vx> <vy> <omega>   — 3-DOF velocity command (mm/s, mm/s, deg/s)
-STRAFE <vy> [t=<s>|dist=<mm>]  — pure lateral (vx=0, omega=0)
+VW <vx> <omega>           — existing 2-token form; vy=0 (back-compatible)
+VW <vx> <vy> <omega>      — new 3-token form (mecanum only; parsed under #ifdef)
 ```
 
-`OMNI` parse: read 3 floats; convert omega from deg/s to rad/s; call
-`bvc.setTarget(vx, omega_rad, vy)`.
+Under `#ifdef ROBOT_DRIVETRAIN_MECANUM`, the parser checks for a third token
+after `omega`; if present it is treated as `vy` (mm/s). If absent, `vy` defaults
+to `0.0f`. Both forms call `bvc.setTarget(vx, omega_rad, vy)` — no new command
+verb is introduced.
 
-`STRAFE`: read `vy`; optional `t=` (time-bounded, same as existing `T`-command
-machinery) or `dist=` (distance-bounded using OTOS y-pose delta — see OQ-4
-in architecture-update.md; implement using OTOS y-pose delta, document the OTOS
-dependency). Set `bvc.setTarget(0.0f, 0.0f, vy)` then start the bounded timer
-or OTOS-pose watcher.
-
-`STRAFE dist=` stop condition: capture `s.inputs.otosY` at command start;
-stop when `|s.inputs.otosY - startY| >= dist`. This requires OTOS to be healthy.
-If OTOS is invalid (status non-zero), fall back to time-bounded 5-second safety
-stop and emit `EVT strafe_no_otos`.
+`VW` remains the single unified body-twist primitive; for mecanum its velocity
+simply becomes 2-D (the `vy` component was always zero in the differential build).
 
 ## Files to Modify
 
@@ -170,32 +162,30 @@ stop and emit `EVT strafe_no_otos`.
 
 ## Acceptance Criteria
 
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` reports `2093 passed` (differential sim unchanged).
+- [ ] `uv run --with pytest python -m pytest tests/simulation -q` reports `2137 passed` (differential sim unchanged; regression gate).
 - [ ] Differential build: `MotorController`, `BodyVelocityController`, `MotorCommands`, `HardwareState` are byte-identical to pre-sprint (verify with `git diff` — all changes behind `#ifdef ROBOT_DRIVETRAIN_MECANUM`).
 - [ ] Mecanum sim build compiles cleanly with `ROBOT_DRIVETRAIN_MECANUM` defined.
-- [ ] `OMNI` and `STRAFE` verbs parse correctly in mecanum sim (add sim parse smoke-test if the test harness supports it).
-- [ ] `VW 200 30` (no `vy=`) continues to work in both builds (backward-compat default `vy=0`).
-- [ ] `VW 200 30 vy=50` accepted and `vy` threaded through to BVC in mecanum build.
-- [ ] `OMNI 200 80 30` accepted; `vx=200 mm/s, vy=80 mm/s, omega=30 deg/s` reached by BVC.
-- [ ] `STRAFE 150` accepted; robot translates laterally on the bench (HITL verification in T8).
-- [ ] `STRAFE 150 dist=500` accepted; stops when OTOS y-delta reaches 500mm (HITL in T8).
+- [ ] `VW 200 30` (2-token form) continues to work in both builds (backward-compat: `vy=0` default).
+- [ ] `VW 200 80 30` (3-token mecanum form) accepted; `vx=200 mm/s, vy=80 mm/s, omega=30 deg/s` threaded through to BVC in mecanum build.
+- [ ] No `OMNI` or `STRAFE` verbs are added; `VW` is the sole body-twist primitive.
 - [ ] Mecanum build: `controlTick` runs PID for all 4 wheels; 4 `Motor::setSpeed` calls per tick.
 - [ ] Sync-coupling is disabled in the mecanum build (verified: `syncGain` path is compiled out).
 - [ ] Anti-windup back-calculation uses `MecanumKinematics::forward` in the mecanum build.
 
 ## Testing
 
-- **Regression gate**: `uv run --with pytest python -m pytest tests/simulation -q`
+- **Regression gate**: `uv run --with pytest python -m pytest tests/simulation -q` — must report 2137 passed (differential sim golden).
 - **Sim smoke-test**: mecanum sim build compiles and the robot initializes without crash.
-- **New tests**: sim-level parse tests for `OMNI`/`STRAFE` verbs if harness supports it.
-- **HITL gate (T8)**: bench verification that forward + strafe + turn work on hardware.
+- **New tests**: sim-level parse test for `VW vx vy omega` 3-token form if harness supports it; confirm `VW v omega` (2-token) still passes.
+- **HITL gate (T8)**: bench verification that forward + lateral + turn work on hardware via `VW`.
 - **Verification command**: `uv run --with pytest python -m pytest tests/simulation -q`
 
 ## Implementation Notes
 
 - Read `source/app/MotionCommandHandlers.cpp` carefully before writing — understand
-  how existing verbs (`VW`, `T`, `D`) structure their parse/handle pairs, bounded
-  command state, and the `LoopScheduler` integration. Model `STRAFE` on `T`.
+  how the existing `VW` verb structures its parse/handle pair and how it calls
+  `BodyVelocityController::setTarget`. The 3-DOF extension is additive: parse a
+  third optional token under `#ifdef ROBOT_DRIVETRAIN_MECANUM` before dispatching.
 - The `refreshedWheel` encoding in `controlTick` for 4 wheels: use values 0–3 for
   "only wheel N was refreshed", or use a bitmask. Check how `MecanumHAL::tick()`
   signals the collected wheel before implementing the 4-wheel path.

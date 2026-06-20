@@ -119,7 +119,7 @@ inverse:  FR = (vx - vy - k*omega) * signFR
 
 forward:  vx    = (FR + FL + BR + BL) / 4
           vy    = (-FR + FL + BR - BL) / 4
-          omega = (-FR - FL + BR + BL) / (4k)   [with sign correction]
+          omega = (-FR + FL - BR + BL) / (4k)
 
 saturate: uniform scale s = (vWheelMax / max(|wi|)); applied when max > vWheelMax.
           Preserves twist direction (no per-wheel clipping).
@@ -179,14 +179,20 @@ fields under the mecanum guard:
 #endif
 ```
 
-**Command grammar** (`MotionCommandHandlers.cpp`): `VW` parser gains an
-optional `vy=<value>` argument (back-compatible; absent defaults to 0). Two new
-verbs are added under the mecanum guard:
+**Command grammar** (`MotionCommandHandlers.cpp`): `VW` is extended to 3-DOF.
+No new command verbs are introduced; `VW` remains the single unified body-twist
+primitive:
 
-- `OMNI <vx> <vy> <omega>` — full 3-DOF body twist command; feeds
-  `BodyVelocityController::setTarget(vx, omega, vy)`.
-- `STRAFE <vy> [t=<s>|dist=<mm>]` — pure lateral command (vx=0, omega=0),
-  optionally time- or distance-bounded (same completion machinery as `T`/`D`).
+```
+VW <vx> <omega>           — existing 2-token form; vy=0 (back-compatible, both builds)
+VW <vx> <vy> <omega>      — 3-token form (mecanum build only, #ifdef-gated)
+```
+
+The parser checks for a third token under `#ifdef ROBOT_DRIVETRAIN_MECANUM`; if
+absent `vy` defaults to `0.0f`. Both forms call
+`BodyVelocityController::setTarget(vx, omega_rad, vy)`. For mecanum the body
+velocity simply becomes 2-D: `vy` was always architecturally present (defaulting
+to zero) and now carries a real lateral component.
 
 ### D. OTOS-led odometry + lateral velocity
 
@@ -345,12 +351,8 @@ graph TD
     end
 
     subgraph Commands["Commands"]
-        VW[VW verb\n+vy= optional]
-        OMNI[OMNI verb\n#ifdef mecanum]
-        STRAFE[STRAFE verb\n#ifdef mecanum]
+        VW[VW verb\n3-DOF: vx vy omega\n2-token back-compat]
         VW --> BVC
-        OMNI --> BVC
-        STRAFE --> BVC
     end
 
     subgraph Odometry["Odometry"]
@@ -569,8 +571,7 @@ declared as references in an `#ifdef` block.
    sprint can add the 6th state. The simple complementary filter in T6 is
    the correct first-pass.
 
-4. **`STRAFE dist=` stop condition**: distance-bounded lateral stop requires
-   integrating `vy` over time (no encoder-based lateral odometer). The OTOS
-   y-pose delta is the natural stop condition. T5 should implement
-   `STRAFE dist=<mm>` using the OTOS y-pose delta rather than encoder
-   distance, and document the dependency on OTOS health.
+4. **Distance-bounded lateral motion**: if a future sprint adds distance-bounded
+   lateral commands (e.g. via `VW` with a duration/distance flag), the OTOS
+   y-pose delta is the natural stop condition; this requires OTOS to be healthy.
+   Deferred — not in scope for sprint 046.
