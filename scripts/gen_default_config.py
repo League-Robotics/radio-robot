@@ -369,6 +369,9 @@ RobotConfig defaultRobotConfig() {{
     p.aMaxY           = {ov('aMaxY',     '800.0f')};
     p.jMaxY           = {ov('jMaxY',     '0.0f')};
 
+    // OTOS lateral velocity complementary filter gain (046-006).
+    p.otosAlphaVy     = {ov('otosAlphaVy', '0.8f')};
+
     return p;
 }}
 """

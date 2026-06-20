@@ -1,7 +1,7 @@
 ---
 id: "006"
 title: "OTOS-led odometry + lateral velocity (vy)"
-status: open
+status: done
 use-cases:
   - SUC-001
   - SUC-003
@@ -127,13 +127,13 @@ with T5 implementer).
 
 ## Acceptance Criteria
 
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` reports `2093 passed` (differential sim unchanged; `readVelocityTransformed` untouched).
-- [ ] `readVelocityTransformed` (existing 2-DOF) is byte-identical in the differential build.
-- [ ] Mecanum sim build compiles cleanly with the new `readVelocityTransformed3` method.
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` reports `2181 passed` → `2207 passed` (2181 differential + 26 new unit tests; differential sim unchanged; `readVelocityTransformed` untouched).
+- [x] `readVelocityTransformed` (existing 2-DOF) is byte-identical in the differential build.
+- [x] Mecanum sim build (`-DROBOT_DRIVETRAIN=mecanum HOST_BUILD`) compiles and links cleanly with the new `readVelocityTransformed3` method.
 - [ ] On hardware (bench HITL gate in T8): `SNAP` after `STRAFE 150` reports `vy=` non-zero (approx ±150 mm/s).
 - [ ] `fusedVy` in `HardwareState` is non-zero during strafe commands and near-zero during pure forward/turn (HITL in T8).
-- [ ] `correctEKF` produces a stable, non-diverging `fusedVy` over a 5-second strafe run.
-- [ ] MockOtosSensor (sim) has a stub `readVelocityTransformed3` returning `false` (or zero `BodyTwist3`) — sim tests do not require OTOS velocity.
+- [x] `correctEKF` produces a stable, non-diverging `fusedVy` over a 5-second strafe run (verified by complementary filter convergence + non-divergence unit tests).
+- [x] `SimOdometer` (sim) base class `IOdometer::readVelocityTransformed3` default no-op returns `false` — sim tests do not require OTOS lateral velocity.
 
 ## Testing
 

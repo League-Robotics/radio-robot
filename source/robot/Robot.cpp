@@ -120,6 +120,10 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
                      config.ekfQv, config.ekfQomega,
                      config.ekfROtosXy, config.ekfROtosV, config.ekfREncV,
                      config.ekfROtosTheta);
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-006: seed the OTOS lateral velocity complementary filter gain from config.
+    estimate.setOtosAlphaVy(config.otosAlphaVy);
+#endif  // ROBOT_DRIVETRAIN_MECANUM
 }
 
 // ---------------------------------------------------------------------------
@@ -275,11 +279,32 @@ void Robot::otosCorrect(uint32_t now_ms)
         vel.omega_rads = 0.0f;
     }
 
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-006: read the lateral velocity component from the OTOS (3-DOF read).
+    // The OTOS REG_VELOCITY already carries vy; readVelocityTransformed3 applies
+    // the same mount-rotation transform and returns all three body-frame components.
+    // On failure (I2C error or sensor not initialised) vy_otos stays 0.0f so the
+    // complementary filter decays to zero rather than fusing garbage.
+    float vy_otos = 0.0f;
+    {
+        BodyTwist3 vel3{};
+        if (activeOtos.readVelocityTransformed3(vel3, headingRad)) {
+            vy_otos = vel3.vy_mmps;
+        }
+    }
+
+    // Encoder-derived velocity is fused unconditionally in Odometry::predict()
+    // every tick (033-003), so correctEKF() fuses only the OTOS observations.
+    estimate.addOtosObservation(state.inputs, p.x, p.y,
+                        p.h,
+                        vel.v_mmps, vel.omega_rads, vy_otos);
+#else
     // Encoder-derived velocity is fused unconditionally in Odometry::predict()
     // every tick (033-003), so correctEKF() fuses only the OTOS observations.
     estimate.addOtosObservation(state.inputs, p.x, p.y,
                         p.h,
                         vel.v_mmps, vel.omega_rads);
+#endif  // ROBOT_DRIVETRAIN_MECANUM
 }
 
 // ---------------------------------------------------------------------------

@@ -232,6 +232,67 @@ bool OtosSensor::readVelocityTransformed(OtosVelocity& velOut,
     return true;
 }
 
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+// ---------------------------------------------------------------------------
+// readVelocityTransformed3 — 3-DOF velocity read (mecanum build, 046-006).
+//
+// Reads the same REG_VELOCITY_XL burst as readVelocityTransformed but returns
+// all three body-frame components: vx (forward), vy (lateral), omega (yaw).
+// Applies the same upside-down flip and odomYawDeg rotation as
+// readVelocityTransformed.
+//
+// The OTOS chip's internal mount-offset compensation (written to REG_OFFSET in
+// begin()) correctly handles the lever arm, so no extra lever-arm code is
+// needed here.  omega passes through unchanged (the mounting-offset derivative
+// is zero — only the rotation angle matters for the linear components).
+// ---------------------------------------------------------------------------
+bool OtosSensor::readVelocityTransformed3(BodyTwist3& velOut,
+                                           float /*headingRad*/) const
+{
+    if (!is_initialized()) {
+        velOut = {0.0f, 0.0f, 0.0f};
+        return false;
+    }
+
+    int16_t rvx = 0, rvy = 0, rvh = 0;
+    readXYH(REG_VELOCITY_XL, rvx, rvy, rvh);
+
+    if (!_lastReadOk) {
+        velOut = {0.0f, 0.0f, 0.0f};
+        return false;
+    }
+
+    // Same LSB resolution as position (see comment block above readVelocityTransformed).
+    constexpr float kVelMmpsPerLsb    = 0.305f;
+    constexpr float kOmegaRadpsPerLsb = 0.00549f * (3.14159265f / 180.0f);
+
+    float vxF = static_cast<float>(rvx) * kVelMmpsPerLsb;
+    float vyF = static_cast<float>(rvy) * kVelMmpsPerLsb;
+    float whF = static_cast<float>(rvh) * kOmegaRadpsPerLsb;
+
+    if (_cfg.odomUpsideDown) {
+        vxF = -vxF;
+        vyF = -vyF;
+        whF = -whF;
+    }
+
+    float angRad = -_cfg.odomYawDeg * (3.14159265f / 180.0f);
+    float c = cosf(angRad);
+    float s = sinf(angRad);
+
+    // Rotate chip-native (vxF, vyF) into robot body frame.
+    // odomYawDeg is a constant mounting offset; its derivative is zero,
+    // so omega passes through unchanged (same reasoning as readVelocityTransformed).
+    float vxBody = c * vxF - s * vyF;
+    float vyBody = s * vxF + c * vyF;
+
+    velOut.vx_mmps    = vxBody;
+    velOut.vy_mmps    = vyBody;
+    velOut.omega_rads = whF;
+    return true;
+}
+#endif  // ROBOT_DRIVETRAIN_MECANUM
+
 OtosAccel OtosSensor::readAccelTransformed() const
 {
     if (!is_initialized()) return {0.0f, 0.0f};

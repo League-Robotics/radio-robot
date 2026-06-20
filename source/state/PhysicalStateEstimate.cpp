@@ -11,9 +11,10 @@ void PhysicalStateEstimate::addOdometryObservation(
 void PhysicalStateEstimate::addOtosObservation(
         HardwareState& s,
         float x_otos, float y_otos, float theta_otos_rad,
-        float v_otos_mmps, float omega_otos_rads) {
+        float v_otos_mmps, float omega_otos_rads,
+        float vy_otos_mmps) {
     _odometry.correctEKF(s, x_otos, y_otos, theta_otos_rad,
-                         v_otos_mmps, omega_otos_rads);
+                         v_otos_mmps, omega_otos_rads, vy_otos_mmps);
 }
 
 void PhysicalStateEstimate::resetPose(
@@ -78,3 +79,9 @@ void PhysicalStateEstimate::setWedgeActive(bool active) {
 void PhysicalStateEstimate::rebaselinePrev(float encL, float encR) {
     _odometry.rebaselinePrev(encL, encR);
 }
+
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+void PhysicalStateEstimate::setOtosAlphaVy(float alpha) {
+    _odometry.setOtosAlphaVy(alpha);
+}
+#endif  // ROBOT_DRIVETRAIN_MECANUM
