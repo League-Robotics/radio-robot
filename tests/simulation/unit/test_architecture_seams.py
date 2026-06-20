@@ -109,16 +109,23 @@ def test_replay_hal_velocity_motor_matches_interface():
     """REPLAY no-op motor overrides match IVelocityMotor (OQ-4: setSpeed, not setSpeed/setOutput mismatch).
 
     The whole drive-motor tree (IVelocityMotor, Motor, SimMotor, MotorController,
-    ReplayHAL::NoopVelocityMotor) consistently names the command method setSpeed.
-    Assert the interface and the REPLAY stub agree, and that the stub uses the
-    `override` keyword so any future signature drift fails to compile.
+    NoopVelocityMotor) consistently names the command method setSpeed.
+    Assert the interface and the shared NoopVelocityMotor stub agree, and that the
+    stub uses the `override` keyword so any future signature drift fails to compile.
+
+    NoopVelocityMotor was refactored from ReplayHAL.h into the shared header
+    io/NoopDevices.h in ticket 046-003. ReplayHAL.h includes NoopDevices.h so
+    the invariant is preserved; the check now targets the canonical location.
     """
     iface = (REPO_ROOT / "source" / "io" / "capability" / "IVelocityMotor.h").read_text()
+    noop = (REPO_ROOT / "source" / "io" / "NoopDevices.h").read_text()
     replay = (REPO_ROOT / "source" / "io" / "ReplayHAL.h").read_text()
     assert "virtual void setSpeed(int8_t pct)" in iface, \
         "IVelocityMotor no longer declares setSpeed(int8_t)"
-    assert "setSpeed(int8_t pct) override" in replay, \
-        "ReplayHAL::NoopVelocityMotor does not override setSpeed(int8_t)"
+    assert "setSpeed(int8_t pct) override" in noop, \
+        "NoopVelocityMotor (io/NoopDevices.h) does not override setSpeed(int8_t)"
+    assert 'include "io/NoopDevices.h"' in replay, \
+        "ReplayHAL.h no longer includes io/NoopDevices.h (NoopVelocityMotor moved there in 046-003)"
 
 
 def test_vendor_baseline_empty():

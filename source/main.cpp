@@ -1,6 +1,10 @@
 #include "MicroBit.h"
 #include "Robot.h"
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+#include "MecanumHAL.h"
+#else
 #include "NezhaHAL.h"
+#endif
 #include "CommandProcessor.h"
 #include "LoopScheduler.h"
 #include "Communicator.h"
@@ -156,7 +160,11 @@ int main() {
     // bus-wide. See docs/knowledge encoder-wedge note + WedgeTest.cpp.
     uBit.i2c.setFrequency(100000);
 
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    static MecanumHAL hardware(uBit.i2c, uBit.io, cfg);
+#else
     static NezhaHAL hardware(uBit.i2c, uBit.io, cfg);
+#endif
 
     // -----------------------------------------------------------------------
     // 4. Communications — begin() enables serial + radio.

@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include "Hardware.h"
+#include "io/NoopDevices.h"
 #include "io/capability/IVelocityMotor.h"
 #include "io/capability/IPositionMotor.h"
 #include "io/capability/IOdometer.h"
@@ -40,19 +41,8 @@ public:
     void tick(uint32_t now_ms) override { (void)now_ms; }
 
 private:
-    // ---- No-op velocity motor (drive wheel) ----
-    class NoopVelocityMotor : public IVelocityMotor {
-    public:
-        void    setSpeed(int8_t pct) override { (void)pct; }
-        float   positionMm() const override { return 0.0f; }
-        float   velocityMmps() const override { return 0.0f; }
-        void    requestEncoder() override {}
-        int32_t collectEncoder() const override { return 0; }
-        float   readEncoderMmF(const RobotConfig& cfg) const override { (void)cfg; return 0.0f; }
-        float   readEncoderMmFAtomic(const RobotConfig& cfg) const override { (void)cfg; return 0.0f; }
-        float   readEncoderMmFSettle(const RobotConfig& cfg) const override { (void)cfg; return 0.0f; }
-        void    resetEncoder() override {}
-    };
+    // NoopVelocityMotor is now in io/NoopDevices.h (046-003); it is included
+    // above so existing callers that forwarded through ReplayHAL.h still see it.
 
     // ---- No-op position motor (gripper / servo) ----
     class NoopPositionMotor : public IPositionMotor {

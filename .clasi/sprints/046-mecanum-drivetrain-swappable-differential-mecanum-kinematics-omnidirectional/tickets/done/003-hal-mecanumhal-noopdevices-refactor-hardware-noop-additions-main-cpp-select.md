@@ -1,7 +1,7 @@
 ---
 id: "003"
 title: "HAL: MecanumHAL, NoopDevices refactor, Hardware Noop additions, main.cpp select"
-status: open
+status: done
 use-cases:
   - SUC-001
   - SUC-002
@@ -133,17 +133,17 @@ The `Robot` binding receives `Hardware& hw` — no change needed there.
 
 ## Acceptance Criteria
 
-- [ ] `python build.py` (differential / tovez) exits 0; `MICROBIT.hex` produced;
+- [x] `python build.py` (differential / tovez) exits 0; `MICROBIT.hex` produced;
       `ROBOT_DRIVETRAIN_MECANUM` not defined.
-- [ ] `python build.py` (mecanum robot JSON) exits 0; `MICROBIT.hex` produced with
+- [x] `python build.py` (mecanum robot JSON) exits 0; `MICROBIT.hex` produced with
       `ROBOT_DRIVETRAIN_MECANUM` defined; `MecanumHAL` is the active HAL.
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` reports `2093 passed`.
-- [ ] Differential build: `NezhaHAL.cpp` compiled in; `MecanumHAL.cpp` excluded.
-- [ ] Mecanum build: `MecanumHAL.cpp` compiled in; `NezhaHAL.cpp` excluded.
-- [ ] All existing `Hardware` subclasses (MockHAL, ReplayHAL/sim build) compile
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` reports `2137 passed`.
+- [x] Differential build: `NezhaHAL.cpp` compiled in; `MecanumHAL.cpp` excluded.
+- [x] Mecanum build: `MecanumHAL.cpp` compiled in; `NezhaHAL.cpp` excluded.
+- [x] All existing `Hardware` subclasses (MockHAL, ReplayHAL/sim build) compile
       without modification — they inherit the default Noop `motorBR`/`motorBL`/
       `motorCount` from `Hardware.h`.
-- [ ] `NoopVelocityMotor` still accessible from `ReplayHAL.h` (via `#include
+- [x] `NoopVelocityMotor` still accessible from `ReplayHAL.h` (via `#include
       "NoopDevices.h"`) — no existing include paths broken.
 - [ ] `MecanumHAL` constructs and calls `begin()` in the mecanum build without
       crashing or wedging the I2C bus (confirmed on first-flash in T4).
