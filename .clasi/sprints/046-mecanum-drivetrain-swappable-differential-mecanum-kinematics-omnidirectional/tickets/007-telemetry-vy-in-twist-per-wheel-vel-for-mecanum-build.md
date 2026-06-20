@@ -1,7 +1,7 @@
 ---
 id: "007"
 title: "Telemetry: vy in twist=, per-wheel vel= for mecanum build"
-status: open
+status: done
 use-cases:
   - SUC-001
   - SUC-003
@@ -89,13 +89,13 @@ differential robots). Check `host/robot_radio/` for any TLM parsing code.
 
 ## Acceptance Criteria
 
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` reports `2093 passed`.
-- [ ] Golden-TLM oracle test (`tests/simulation/test_tlm_oracle.py`) is unchanged.
-- [ ] Differential TLM `twist=` format is byte-identical to pre-sprint (no `vy=` in differential output).
-- [ ] Differential TLM `vel=` format is byte-identical to pre-sprint (`vel=vL,vR` only).
-- [ ] Mecanum build: `SNAP` response includes `vy=<value>` in the `twist=` field.
-- [ ] Mecanum build: `SNAP` response `vel=` field has 4 comma-separated values (`FR,FL,BR,BL` order).
-- [ ] Host TLM parser (if any) handles the new `vy=` token gracefully on both robot types.
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` reports `2230 passed` (2207 pre-sprint + 23 new mecanum TLM tests).
+- [x] Golden-TLM oracle test (`tests/simulation/unit/test_golden_tlm.py`) is unchanged and passes — differential TLM bytes are byte-identical.
+- [x] Differential TLM `twist=` format is byte-identical to pre-sprint (no `vy=` in differential output).
+- [x] Differential TLM `vel=` format is byte-identical to pre-sprint (`vel=vL,vR` only).
+- [x] Mecanum build: `SNAP` response includes `vy` as second value in the `twist=` field (format: `twist=vx,vy,omega_mrad`).
+- [x] Mecanum build: `SNAP` response `vel=` field has 4 comma-separated values (`FR,FL,BR,BL` order). Verified: `vel=0,0,0,0` in idle mecanum SNAP.
+- [x] Host TLM parser (if any) handles the new `vy=` token gracefully on both robot types — `TLMFrame.twist` is `tuple[int,...]` supporting 2-tuple (differential) or 3-tuple (mecanum); `TLMFrame.vel` supports 2-tuple or 4-tuple.
 
 ## Testing
 

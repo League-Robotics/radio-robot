@@ -48,6 +48,10 @@ int Robot::buildTlmFrame(char* buf, int len)
     bool haveVel = (config.tlmFields & TLM_FIELD_VEL) != 0;
     float velL = haveVel ? state.inputs.velLMms : 0.0f;
     float velR = haveVel ? state.inputs.velRMms : 0.0f;
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    float velBR = haveVel ? state.inputs.velMms[2] : 0.0f;
+    float velBL = haveVel ? state.inputs.velMms[3] : 0.0f;
+#endif
     bool haveTwist = (config.tlmFields & TLM_FIELD_TWIST) != 0;
 
     char modeChar = 'I';
@@ -76,7 +80,14 @@ int Robot::buildTlmFrame(char* buf, int len)
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
     if (haveVel) {
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+        // Mecanum build: emit all 4 wheel velocities (FR, FL, BR, BL).
+        // velL=velMms[1]=FL, velR=velMms[0]=FR; BR/BL from velMms[2/3].
+        n = snprintf(buf + pos, (size_t)rem, " vel=%d,%d,%d,%d",
+                     (int)velR, (int)velL, (int)velBR, (int)velBL);
+#else
         n = snprintf(buf + pos, (size_t)rem, " vel=%d,%d", (int)velL, (int)velR);
+#endif
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
     if (haveTwist) {
@@ -89,9 +100,18 @@ int Robot::buildTlmFrame(char* buf, int len)
         // emitted value is byte-identical (golden-TLM unchanged).
         float fV = 0.0f, fOmega = 0.0f;
         estimate.getVelocity(state.inputs, fV, fOmega);
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+        // Mecanum build: emit 3-value twist: vx, vy, omega_mrad.
+        // fusedVy is lateral body velocity in mm/s (written by Odometry T6).
+        n = snprintf(buf + pos, (size_t)rem, " twist=%d,%d,%d",
+                     (int)fV,
+                     (int)state.inputs.fusedVy,
+                     (int)(fOmega * 1000.0f));
+#else
         n = snprintf(buf + pos, (size_t)rem, " twist=%d,%d",
                      (int)fV,
                      (int)(fOmega * 1000.0f));
+#endif
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
     // N8 (030-008): gate raw otos= on freshness -- same 2*lagMs rule as
