@@ -805,6 +805,55 @@ static ParseResult parseVW(const char* const* tokens, int ntokens,
                             const KVPair* /*kvs*/, int /*nkv*/)
 {
     ParseResult res;
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-005: 3-DOF VW form: "VW <vx> <vy> <omega>"
+    //   args[0] = vx   (mm/s)
+    //   args[1] = omega (mrad/s)
+    //   args[2] = vy   (mm/s)  — INT type, not confused with STR stop-params
+    //
+    // 2-token form "VW <vx> <omega>" is backward-compatible: args[2] absent → vy=0.
+    // Stop-param scanning (vwHasKey / vwScanKV) scans args[2..] for ArgType::STR,
+    // so an INT vy at args[2] is transparently skipped.
+    if (ntokens < 2) {
+        res.ok = false; res.err.code = "badarg"; res.err.detail = nullptr; return res;
+    }
+    if (ntokens >= 3) {
+        // 3-token form: vx, vy, omega
+        int vx    = atoi(tokens[0]);
+        int vy    = atoi(tokens[1]);
+        int omega = atoi(tokens[2]);
+        if (vx < -1000 || vx > 1000) {
+            res.ok = false; res.err.code = "range"; res.err.detail = "vx"; return res;
+        }
+        if (vy < -1000 || vy > 1000) {
+            res.ok = false; res.err.code = "range"; res.err.detail = "vy"; return res;
+        }
+        if (omega < -3142 || omega > 3142) {
+            res.ok = false; res.err.code = "range"; res.err.detail = "omega"; return res;
+        }
+        res.ok = true;
+        res.args.count = 3;
+        setIntArg(res.args.args[0], vx);
+        setIntArg(res.args.args[1], omega);  // args[1] is still omega (handleVW reads it)
+        setIntArg(res.args.args[2], vy);     // args[2] INT = vy; stop-param scanners skip INT
+    } else {
+        // 2-token form: vx, omega (vy=0)
+        int vx    = atoi(tokens[0]);
+        int omega = atoi(tokens[1]);
+        if (vx < -1000 || vx > 1000) {
+            res.ok = false; res.err.code = "range"; res.err.detail = "vx"; return res;
+        }
+        if (omega < -3142 || omega > 3142) {
+            res.ok = false; res.err.code = "range"; res.err.detail = "omega"; return res;
+        }
+        res.ok = true;
+        res.args.count = 2;
+        setIntArg(res.args.args[0], vx);
+        setIntArg(res.args.args[1], omega);
+    }
+    return res;
+#else
+    // Differential build: 2-token only.
     if (ntokens < 2) {
         res.ok = false; res.err.code = "badarg"; res.err.detail = nullptr; return res;
     }
@@ -821,6 +870,7 @@ static ParseResult parseVW(const char* const* tokens, int ntokens,
     setIntArg(res.args.args[0], v);
     setIntArg(res.args.args[1], omega);
     return res;
+#endif  // ROBOT_DRIVETRAIN_MECANUM
 }
 
 static void handleVW(const ArgList& args, const char* corrId,
@@ -831,6 +881,17 @@ static void handleVW(const ArgList& args, const char* corrId,
     int omega = args.args[1].ival;
     float omega_rads = (float)omega / 1000.0f;  // mrad/s → rad/s
     uint32_t now = ctx->robot->systemTime();
+
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-005: Extract vy from args[2] if present and INT type.
+    // args[2] INT = vy_mms (set by parseVW 3-token form).
+    // args[2] STR = stop-param (set by converter handlers like T/D/G/TURN/RT).
+    // The two are distinguishable by ArgType — stop-param scanners already skip INT.
+    float vy_mms = 0.0f;
+    if (args.count >= 3 && args.args[2].type == ArgType::INT) {
+        vy_mms = (float)args.args[2].ival;
+    }
+#endif
 
     // ── Stop-param dispatch ─────────────────────────────────────────────────
     // Converter handlers (S, T, D, G, R, TURN, RT) pack stop params as STR
@@ -1082,6 +1143,9 @@ static void handleVW(const ArgList& args, const char* corrId,
         gr.corrId     = corrId;
         gr.v_mms      = (float)v;
         gr.omega_rads = omega_rads;
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+        gr.vy_mms     = vy_mms;
+#endif
         ctx->superstructure->requestGoal(gr);
     }
 

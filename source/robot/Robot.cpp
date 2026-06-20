@@ -94,6 +94,12 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
 {
     motionController.setHardwareState(&state.inputs);
     motorController.setCommandsRef(&state.commands);
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-005: Bind rear motors (BR, BL) to MotorController after construction.
+    // The base 2-motor constructor bound FL (motorL/motorR = front motors);
+    // bindRearMotors attaches the rear motors and seeds their VelocityControllers.
+    motorController.bindRearMotors(hal.motorBR(), hal.motorBL());
+#endif
     // setRobotCtx replaces setCtx (sprint 026-002): MotionCtx now lives in Robot.
     motionController.setRobotCtx(this);
     // Initialise _motionCtx (sprint 026-002): mc and robot pointers; queue wired
@@ -314,6 +320,14 @@ void Robot::resetEncoders()
     // 2. Align the outlier-filter baseline with the now-zeroed accumulators.
     state.inputs.encLMm = 0.0f;
     state.inputs.encRMm = 0.0f;
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // Sync the 4-element array counterparts so mecanum code sees consistent
+    // zeros immediately (they would be synced on the next controlTick anyway).
+    state.inputs.encMm[0] = 0.0f;  // FR
+    state.inputs.encMm[1] = 0.0f;  // FL
+    state.inputs.encMm[2] = 0.0f;  // BR (rear encoder; zeroed defensively)
+    state.inputs.encMm[3] = 0.0f;  // BL
+#endif
 
     // 3. Re-baseline Odometry's encoder snapshot so predict() sees delta=0
     //    on the very next tick rather than (0 - _prevEncL) = large negative.

@@ -1,7 +1,7 @@
 ---
 id: "005"
 title: "N-wheel control: MotorController arrays, BVC vy channel, VW/OMNI/STRAFE verbs"
-status: open
+status: done
 use-cases:
   - SUC-001
   - SUC-003
@@ -162,15 +162,15 @@ simply becomes 2-D (the `vy` component was always zero in the differential build
 
 ## Acceptance Criteria
 
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` reports `2137 passed` (differential sim unchanged; regression gate).
-- [ ] Differential build: `MotorController`, `BodyVelocityController`, `MotorCommands`, `HardwareState` are byte-identical to pre-sprint (verify with `git diff` — all changes behind `#ifdef ROBOT_DRIVETRAIN_MECANUM`).
-- [ ] Mecanum sim build compiles cleanly with `ROBOT_DRIVETRAIN_MECANUM` defined.
-- [ ] `VW 200 30` (2-token form) continues to work in both builds (backward-compat: `vy=0` default).
-- [ ] `VW 200 80 30` (3-token mecanum form) accepted; `vx=200 mm/s, vy=80 mm/s, omega=30 deg/s` threaded through to BVC in mecanum build.
-- [ ] No `OMNI` or `STRAFE` verbs are added; `VW` is the sole body-twist primitive.
-- [ ] Mecanum build: `controlTick` runs PID for all 4 wheels; 4 `Motor::setSpeed` calls per tick.
-- [ ] Sync-coupling is disabled in the mecanum build (verified: `syncGain` path is compiled out).
-- [ ] Anti-windup back-calculation uses `MecanumKinematics::forward` in the mecanum build.
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` reports `2137 passed` (differential sim unchanged; regression gate). 2181 passed (2137 original + 44 new 046-005 tests).
+- [x] Differential build: `MotorController`, `BodyVelocityController`, `MotorCommands`, `HardwareState` are byte-identical to pre-sprint (verify with `git diff` — all changes behind `#ifdef ROBOT_DRIVETRAIN_MECANUM`).
+- [x] Mecanum sim build compiles cleanly with `ROBOT_DRIVETRAIN_MECANUM` defined.
+- [x] `VW 200 30` (2-token form) continues to work in both builds (backward-compat: `vy=0` default). Verified by `test_mecanum_vw_bvc.py::TestVW2TokenBackwardCompat`.
+- [x] `VW 200 80 30` (3-token mecanum form) accepted; `vx=200 mm/s, vy=80 mm/s, omega=30 deg/s` threaded through to BVC in mecanum build. Verified by `test_mecanum_vw_bvc.py::TestVW3TokenMecanum`.
+- [x] No `OMNI` or `STRAFE` verbs are added; `VW` is the sole body-twist primitive.
+- [x] Mecanum build: `controlTick` runs PID for all 4 wheels; 4 `Motor::setSpeed` calls per tick.
+- [x] Sync-coupling is disabled in the mecanum build (verified: `syncGain` path is compiled out).
+- [x] Anti-windup back-calculation uses `MecanumKinematics::forward` in the mecanum build.
 
 ## Testing
 

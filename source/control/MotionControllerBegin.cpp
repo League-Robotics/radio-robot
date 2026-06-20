@@ -142,9 +142,15 @@ void MotionController::beginStream(float leftMms, float rightMms, uint32_t now_m
     target.sink      = {};  // no async EVT for streaming mode
 }
 
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+void MotionController::beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
+                                     TargetState& target, ReplyFn fn, void* ctx,
+                                     const char* corr_id, float vy_mms)
+#else
 void MotionController::beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
                                      TargetState& target, ReplyFn fn, void* ctx,
                                      const char* corr_id)
+#endif
 {
     // Cancel any stale MotionCommand before configuring the new one.
     // cancel(HARD) emits "EVT cancelled" via the stored reply sink (making the
@@ -164,6 +170,13 @@ void MotionController::beginVelocity(float v_mms, float omega_rads, uint32_t now
     //   - No reply sink needed — VW has no correlated EVT done; system watchdog
     //     emits EVT safety_stop directly.
     _activeCmd.configure(v_mms, omega_rads, &_bvc);
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-005: Set the lateral vy channel on the BVC.  _activeCmd.configure
+    // already called _bvc.setTarget(v_mms, omega_rads); we immediately override
+    // with the 3-DOF form to include vy.  The default vy_mms=0 keeps the
+    // differential-equivalent path byte-identical when called without vy.
+    _bvc.setTarget(v_mms, omega_rads, vy_mms);
+#endif
     _activeCmd.setOrigin(MotionCommand::Origin::VW);
     // No addStop: system watchdog in LoopScheduler owns keepalive enforcement.
     _activeCmd.setReplySink(fn, ctx, corr_id);

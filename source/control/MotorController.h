@@ -21,6 +21,12 @@
  * (ratioPidKp/Ki/Kd/Max) are retained in ConfigRegistry for host
  * compatibility (tests use SET/GET pid.*) but have no live controller effect.
  *
+ * 046-005 (ROBOT_DRIVETRAIN_MECANUM): The class is extended to support 4
+ * motors and VelocityControllers. The rear motors are bound after construction
+ * via bindRearMotors(). The sync-coupling block is excluded from controlTick.
+ * The existing 2-arg setTarget(l,r) shim maps front wheels only; the new
+ * 4-arg setTarget(float*,int) sets all wheels and is used by BVC.
+ *
  * Thread safety: single-threaded tick loop only.
  */
 class MotorController {
@@ -39,6 +45,37 @@ public:
 
     // Set speed targets in mm/s. Zero both to coast (not brake).
     void setTarget(float leftMms, float rightMms);
+
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    /**
+     * bindRearMotors — attach rear wheel motors (mecanum build only).
+     *
+     * Called from Robot::Robot() after the base 2-motor constructor runs.
+     * Sets _motorBR/_motorBL pointers and initialises _vcBR/_vcBL velocity
+     * controllers with the same gains as the front wheels.
+     */
+    void bindRearMotors(IMotor& br, IMotor& bl);
+
+    /**
+     * setTarget — 4-wheel speed target setter (mecanum build only).
+     *
+     * Sets tgtMms[0..n-1] in the bound MotorCommands struct and also syncs
+     * tgtLMms() and tgtRMms() (indices 1 and 0) so shared code that checks
+     * front-wheel motion still works correctly.
+     *
+     * @param wheels  Array of n wheel speeds in mm/s [FR,FL,BR,BL order].
+     * @param n       Number of wheels (must be <= 4).
+     */
+    void setTarget(const float* wheels, int n);
+
+    /**
+     * getEncoderPositions — 4-wheel overload (mecanum build only).
+     *
+     * Fills out[0..3] with cumulative encoder distances in mm for
+     * [FR, FL, BR, BL] using atomic reads.
+     */
+    void getEncoderPositions(int32_t out[4]) const;
+#endif  // ROBOT_DRIVETRAIN_MECANUM
 
     /**
      * startDriveClean — used by T, D, and G commands.
@@ -225,6 +262,17 @@ private:
     // to the channel that most recently sent a command.
     ReplyFn* _evtFn;
     void**   _evtCtx;
+
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-005: Rear-motor pointers and velocity controllers.
+    // Initialised to nullptr/defaults; bound by bindRearMotors().
+    // Front motors (_motorL = FL, _motorR = FR) are still the primary L/R refs
+    // inherited from the base struct; these pointers supplement them.
+    IMotor*            _motorBR;   // Back-Right motor (port 3), nullptr until bound
+    IMotor*            _motorBL;   // Back-Left  motor (port 4), nullptr until bound
+    VelocityController _vcBR;      // velocity PI+FF for Back-Right
+    VelocityController _vcBL;      // velocity PI+FF for Back-Left
+#endif  // ROBOT_DRIVETRAIN_MECANUM
 
     // clamp helper
     static float clamp(float v, float lo, float hi);

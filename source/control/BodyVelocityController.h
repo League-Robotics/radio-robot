@@ -1,5 +1,8 @@
 #pragma once
 #include "Config.h"
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+#include "io/capability/Pose2D.h"  // RobotGeometry
+#endif
 
 class MotorController;
 
@@ -48,8 +51,16 @@ public:
      *
      * @param v_mms      Desired body forward speed, mm/s (signed; forward > 0).
      * @param omega_rads Desired yaw rate, rad/s (CCW-positive).
+     * @param vy_mms     Desired lateral speed, mm/s (mecanum only; default 0).
+     *                   Ignored in the differential build — the default keeps
+     *                   all existing callers (MotionCommand, MotionController)
+     *                   unchanged in both builds.
      */
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    void setTarget(float v_mms, float omega_rads, float vy_mms = 0.0f);
+#else
     void setTarget(float v_mms, float omega_rads);
+#endif
 
     /**
      * advance — step the profiler one control tick.
@@ -90,6 +101,14 @@ public:
      */
     void seedCurrent(float v_mms, float omega_rads);
 
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    /** currentVy — live profiled lateral speed, mm/s (mecanum only). */
+    float currentVy()  const { return _vy; }
+
+    /** targetVy — commanded lateral speed (before clamping), mm/s (mecanum only). */
+    float targetVy()   const { return _vyTgt; }
+#endif
+
     /** currentV — live profiled body forward speed, mm/s. */
     float currentV()     const { return _v; }
 
@@ -121,6 +140,14 @@ private:
     float _omegaTgt;    // commanded yaw rate (caller-supplied), rad/s
     float _aLive;       // current live linear acceleration, mm/s² (S-curve channel)
     float _omegaALive;  // current live yaw acceleration, rad/s²   (S-curve channel)
+
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-005: Lateral (vy) channel — mecanum only.
+    float        _vy;         // live profiled lateral speed, mm/s
+    float        _vyTgt;      // commanded lateral speed (caller-supplied), mm/s
+    float        _vyALive;    // current live lateral acceleration, mm/s² (S-curve)
+    RobotGeometry _geom;      // robot geometry (halfTrackMm, halfWheelbaseMm)
+#endif
 
     /**
      * approach — single-axis trapezoid step helper.
