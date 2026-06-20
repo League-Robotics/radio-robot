@@ -101,6 +101,39 @@ def _otos_pos_mm(proto) -> tuple[int, int] | None:
     return frame.pose[0], frame.pose[1]
 
 
+def _wait_motion_done(proto, timeout_ms: int, min_ms: int = 400) -> str:
+    """Wait for the active motion verb to finish, by polling SNAP 'mode'.
+
+    Relay-safe completion detector.  The radio bridge drops async ``EVT done``
+    lines, so ``wait_for_evt_done()`` times out over the relay; SNAP is a
+    synchronous request/reply and is reliable.  ``mode`` is ``'I'`` when idle
+    and a motion char (``V``/``G``/``T``/``R``/``D``) while a verb runs, so we
+    wait for active -> idle.  Returns ``"done"`` or ``"timeout"`` (matching the
+    ``wait_for_evt_done`` contract the checks compare against).
+
+    A fast move that returns to idle before the first poll is handled by the
+    ``min_ms`` floor: if no active frame was ever seen, require idle to persist
+    past ``min_ms`` before declaring done.
+    """
+    t0 = time.time()
+    deadline = t0 + timeout_ms / 1000.0
+    saw_active = False
+    idle_streak = 0
+    while time.time() < deadline:
+        frame = proto.snap()
+        mode = frame.mode if frame is not None else None
+        if mode is not None and mode != "I":
+            saw_active = True
+            idle_streak = 0
+        elif mode == "I":
+            if saw_active or (time.time() - t0) * 1000.0 >= min_ms:
+                idle_streak += 1
+                if idle_streak >= (2 if saw_active else 3):
+                    return "done"
+        time.sleep(0.08)
+    return "timeout"
+
+
 def _keepalive_thread(proto: NezhaProtocol, stop: list[bool]) -> None:
     """Background keepalive sender (+ every 200 ms)."""
     while not stop[0]:
@@ -162,8 +195,7 @@ def check2_turn_closure(robot) -> str:
             for i in range(4):
                 print(f"  RT {RT_STEP_CDEG} cdeg (relative +90, turn {i+1}/4) ...")
                 proto.send(f"RT {RT_STEP_CDEG} #{i + 1}", read_ms=200)
-                outcome = proto.wait_for_evt_done("RT", timeout_ms=RT_TIMEOUT,
-                                                  corr_id=str(i + 1))
+                outcome = _wait_motion_done(proto, timeout_ms=RT_TIMEOUT)
                 if outcome != "done":
                     print(f"  RT {i+1} outcome: {outcome} (expected 'done')")
                     return STEP_FAIL
@@ -199,7 +231,7 @@ SQUARE_SIDE_MM = 200     # 20 cm sides
 SQUARE_SPEED = 150       # mm/s
 LEG_TIMEOUT = 20_000     # ms per forward leg
 TURN_TIMEOUT = 15_000    # ms per corner turn
-SQUARE_GEOFENCE_MM = 350  # abort if displacement from origin exceeds this
+SQUARE_GEOFENCE_MM = 400  # abort if displacement from origin exceeds this (ideal corner ~283 mm)
 SQUARE_ARRIVE_MM = 120   # fused-pose return error tolerance at origin
 
 
@@ -228,9 +260,13 @@ def check3_g_square(robot) -> str:
                 print(f"  leg {i+1}/4: G {SQUARE_SIDE_MM} 0 {SQUARE_SPEED} "
                       f"(forward {SQUARE_SIDE_MM} mm) ...")
                 proto.send(f"G {SQUARE_SIDE_MM} 0 {SQUARE_SPEED} #{i + 1}", read_ms=300)
-                outcome = proto.wait_for_evt_done("G", timeout_ms=LEG_TIMEOUT,
-                                                  corr_id=str(i + 1))
-                d = _disp_mm()
+                outcome = _wait_motion_done(proto, timeout_ms=LEG_TIMEOUT)
+                p = _otos_pos_mm(proto)
+                h = _otos_heading_deg(proto)
+                d = math.hypot(p[0], p[1]) if p is not None else None
+                if p is not None and h is not None:
+                    print(f"    leg {i+1} end: x={p[0]:+d} y={p[1]:+d} mm  "
+                          f"h={h:+.0f} deg  disp={d:.0f} mm")
                 if d is not None and d > SQUARE_GEOFENCE_MM:
                     print(f"  GEOFENCE -- {d:.0f} mm from origin > {SQUARE_GEOFENCE_MM} mm; aborting")
                     return STEP_FAIL
@@ -240,10 +276,12 @@ def check3_g_square(robot) -> str:
                 if i < 3:   # reorient for the next side (no turn after the last leg)
                     print("  RT 9000 (relative +90) ...")
                     proto.send(f"RT 9000 #{i + 1}", read_ms=200)
-                    if proto.wait_for_evt_done("RT", timeout_ms=TURN_TIMEOUT,
-                                               corr_id=str(i + 1)) != "done":
+                    if _wait_motion_done(proto, timeout_ms=TURN_TIMEOUT) != "done":
                         print(f"  corner turn {i+1}: not done")
                         return STEP_FAIL
+                    th = _otos_heading_deg(proto)
+                    if th is not None:
+                        print(f"    turn {i+1} end: h={th:+.0f} deg")
                 time.sleep(0.3)
     except (RobotSilentError, RunawayAbortError) as exc:
         print(f"  BenchRun aborted: {exc}")

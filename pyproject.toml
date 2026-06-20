@@ -5,6 +5,7 @@ description = "Utility scripts for building and deploying microbit-v2-samples"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "aprilcam",
     "ipykernel>=7.2.0",
     "jupyter>=1.1.1",
     "opencv-python-headless>=4.13.0.92",
@@ -28,6 +29,7 @@ default-groups = ["calibrate"]
 
 [tool.uv.sources]
 robot-radio = { path = "host", editable = true }
+aprilcam = { path = "../AprilTags", editable = true }
 
 [tool.uv.workspace]
 members = [
