@@ -29,6 +29,20 @@ get_filename_component(REPO_ROOT "${CMAKE_SOURCE_DIR}/../../.." ABSOLUTE)
 set(ROBOT_RUN_MODE "SIM" CACHE STRING "Build-target run mode: REAL | SIM | REPLAY")
 
 # ---------------------------------------------------------------------------
+# ROBOT_DRIVETRAIN (046-001): compile-time drivetrain variant select.
+# Mirrors the block in the root CMakeLists.txt. Host (sim) builds default
+# to differential. Pass -DROBOT_DRIVETRAIN=mecanum for mecanum sim builds.
+# ---------------------------------------------------------------------------
+if (NOT "${ROBOT_DRIVETRAIN}" STRGREATER "")
+    set(ROBOT_DRIVETRAIN "differential")
+endif()
+message("${BoldBlue}ROBOT_DRIVETRAIN (sim): ${ROBOT_DRIVETRAIN}${ColourReset}")
+
+if ("${ROBOT_DRIVETRAIN}" STREQUAL "mecanum")
+    add_definitions(-DROBOT_DRIVETRAIN_MECANUM)
+endif()
+
+# ---------------------------------------------------------------------------
 # Collect common firmware sources (app/, control/, robot/), then exclude
 # CODAL-dependent files that can't be stubbed at file level.
 # DebugCommandable.cpp guards all CODAL-dependent includes/handlers with

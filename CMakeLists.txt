@@ -298,6 +298,36 @@ if(NOT PRODUCTION_BUILD)
     add_definitions(-DBENCH_OTOS_ENABLED)
 endif()
 
+# ---------------------------------------------------------------------------
+# ROBOT_DRIVETRAIN (046-001): compile-time drivetrain variant select.
+# build.py reads identity.drivetrain_type from the active robot JSON and
+# passes -DROBOT_DRIVETRAIN=<type>. Default is differential.
+#
+#   differential (default) — standard 2-wheel diff drive (NezhaHAL).
+#   mecanum                — 4-wheel omnidirectional mecanum drive
+#                            (MecanumHAL; added in ticket 046-003).
+#
+# Always use #ifdef ROBOT_DRIVETRAIN_MECANUM in source guards.
+# ---------------------------------------------------------------------------
+if (NOT "${ROBOT_DRIVETRAIN}" STRGREATER "")
+    set(ROBOT_DRIVETRAIN "differential")
+endif()
+message("${BoldBlue}ROBOT_DRIVETRAIN: ${ROBOT_DRIVETRAIN}${ColourReset}")
+
+if ("${ROBOT_DRIVETRAIN}" STREQUAL "mecanum")
+    add_definitions(-DROBOT_DRIVETRAIN_MECANUM)
+    # Exclude differential HAL from mecanum builds.
+    list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/io/real/NezhaHAL\\.cpp$")
+    # Exclude mecanum kinematics stub from differential builds (no-op filter when
+    # the file doesn't exist yet — only removes it if present).
+    # MecanumKinematics.cpp will be added in ticket 046-002.
+else()
+    # Exclude mecanum-only files from the differential build.
+    # Guard: only filter if the file exists to avoid CMake warnings on a clean tree.
+    list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/io/real/MecanumHAL\\.cpp$")
+    list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/control/MecanumKinematics\\.cpp$")
+endif()
+
 if("${SOURCE_FILES}" STREQUAL "")
     message(FATAL_ERROR "${BoldRed}No user application to build, please add a main.cpp at: ${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}${ColourReset}")
 endif()

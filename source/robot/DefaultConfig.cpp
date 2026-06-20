@@ -138,5 +138,31 @@ RobotConfig defaultRobotConfig() {
     p.lagColorMs      = 100;
     p.lagPortsMs      = 50;
 
+    // Sprint 046: mecanum drivetrain fields (baked from identity.drivetrain_type).
+    // Differential builds carry these fields with safe defaults; they are unused
+    // unless #ifdef ROBOT_DRIVETRAIN_MECANUM code reads them.
+    p.drivetrain      = 0;
+
+    // Mecanum geometry (MEASURE placeholders; default 63.0 mm half-track/wheelbase).
+    p.halfTrackMm     = 63.0f;
+    p.halfWheelbaseMm = 63.0f;
+
+    // Per-wheel encoder calibration (mecanum). Defaults from wheel_diameter_mm.
+    p.mmPerDegFR      = 0.7048512f;
+    p.mmPerDegFL      = 0.7048512f;
+    p.mmPerDegBR      = 0.7048512f;
+    p.mmPerDegBL      = 0.7048512f;
+
+    // Per-wheel forward signs (mecanum). Bench-confirmed defaults.
+    p.fwdSignFR       = -1;
+    p.fwdSignFL       = 1;
+    p.fwdSignBR       = -1;
+    p.fwdSignBL       = 1;
+
+    // Lateral profile limits (mecanum).
+    p.vyBodyMax       = 400.0f;
+    p.aMaxY           = 800.0f;
+    p.jMaxY           = 0.0f;
+
     return p;
 }
