@@ -3,10 +3,19 @@
 bench_validation_033.py — comprehensive on-robot bench validation for the
 sprint-033 firmware fixes, using the Bench OTOS synthetic sensor.
 
-Talks to the robot's OWN USB serial port directly with RAW pyserial (DTR
-asserted on open).  We do NOT use robot_radio.SerialConnection here: its
-direct mode only surfaces OK/ERR reply lines and silently drops the TLM frames
-that SNAP returns, so it cannot read telemetry.  Raw read captures everything.
+Talks to the robot's OWN USB serial port via robot_radio.SerialConnection in
+``mode="direct"``.  Commands are corr-id matched (each reply is routed back to
+its caller by a ``#N`` suffix), and SNAP's raw ``TLM`` frame is read from the
+reader thread's telemetry queue (``send_fast("SNAP")`` + ``read_lines(...,
+stop_token="TLM")``) — so telemetry IS captured here.
+
+This replaces an earlier raw-pyserial transport that reset the board on open
+(DTR pulse) and, with fixed-``sleep`` reads and no corr-id matching, latched
+replies onto the post-reset boot chatter: every reply ended up shifted by one
+command (the ``ID`` slot received PING's ``OK pong``), failing the liveness /
+bench-OTOS gates and crashing on a ``None`` SNAP.  SerialConnection.connect()
+also pulses DTR, but then polls until the board is ready, so reads never race
+the boot.
 
 Validates:
   - 033-002: DBG OTOS BENCH 1 engages bench mode (bench=1).
@@ -22,50 +31,60 @@ Run on the bench (robot on a stand, wheels free to spin):
 Optional port override:
     uv run python tests/bench/bench_validation_033.py /dev/cu.usbmodem2121102
 """
+import pathlib
 import sys
 import time
 
-import serial  # pyserial
+_REPO = pathlib.Path(__file__).resolve().parents[2]
+if str(_REPO / "host") not in sys.path:
+    sys.path.insert(0, str(_REPO / "host"))
+
+from robot_radio.io.serial_conn import SerialConnection  # noqa: E402
 
 PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/cu.usbmodem2121102"
 BAUD = 115200
 
 
 # ---------------------------------------------------------------------------
-# Raw serial transport
+# Transport — robot_radio.SerialConnection (mode="direct"), corr-id matched
 # ---------------------------------------------------------------------------
 
 class Bench:
+    """Robust direct-USB transport.
+
+    Wraps SerialConnection so commands are corr-id matched (no fixed-sleep
+    response races) and SNAP TLM frames come off the reader thread's telemetry
+    queue.  Public interface (send / snap / close) is unchanged from the old
+    raw-pyserial Bench, so the checks below are untouched.
+    """
+
     def __init__(self, port=PORT, baud=BAUD):
-        # DTR asserted by default (do NOT pass dtr=False — that yields silence).
-        self.p = serial.Serial(port, baud, timeout=0.2)
-        time.sleep(1.5)            # let the board boot / announce
-        self.p.reset_input_buffer()
+        self.conn = SerialConnection(port, baud=baud, mode="direct")
+        res = self.conn.connect()
+        if res.get("error"):
+            raise ConnectionError(f"connect {port}: {res['error']}")
 
     def send(self, cmd, read_ms=500):
-        """Write a command, read for read_ms, return list of reply lines."""
-        self.p.reset_input_buffer()
-        self.p.write((cmd + "\n").encode())
-        self.p.flush()
-        deadline = time.time() + read_ms / 1000.0
-        buf = b""
-        while time.time() < deadline:
-            chunk = self.p.read(4096)
-            if chunk:
-                buf += chunk
-            else:
-                time.sleep(0.01)
-        return [ln for ln in buf.decode(errors="replace").splitlines() if ln.strip()]
+        """Send a command; return its reply lines (corr-id matched)."""
+        return self.conn.send(cmd, read_ms=read_ms, stop_token="OK").get("responses", [])
 
     def snap(self):
-        """Return the SNAP TLM frame as a dict of parsed fields, or None."""
-        for ln in self.send("SNAP", read_ms=300):
-            if ln.startswith("TLM"):
-                return _parse_tlm(ln)
+        """Return the SNAP TLM frame as a dict of parsed fields, or None.
+
+        The firmware emits a raw ``TLM ...`` line for SNAP (not an OK/ERR
+        command reply), delivered via the reader thread's TLM queue.  Poll a
+        few times so a single missed frame never returns None (which used to
+        crash the baseline read).
+        """
+        for _ in range(6):
+            self.conn.send_fast("SNAP")
+            for ln in self.conn.read_lines(350, stop_token="TLM"):
+                if "TLM" in ln:
+                    return _parse_tlm(ln)
         return None
 
     def close(self):
-        self.p.close()
+        self.conn.disconnect()
 
 
 def _parse_tlm(line):

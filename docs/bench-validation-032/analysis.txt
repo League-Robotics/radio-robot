@@ -1,50 +1,206 @@
-# Bench validation 032 — full-stack hardware drive test
+# Bench validation 032 — full-stack drive via Bench OTOS (hardware, direct USB)
 
-Firmware: v0.20260612.17 (sprint 030 correctness fixes N1-N16 + sprint 031 Bench OTOS), flashed to robot `tovez`.
-Method: held-open relay connection (DATA-PLANE `!GO` protocol), SNAP-polled telemetry while driving
-TURN x4, a D+TURN square, and D/T velocity profiles on the bench stand.
-Comms: see memory `relay-go-data-plane-protocol` — the robot_radio lib / rogo could NOT talk to the
-robot (they use the old `>`-prefix protocol and never send `!GO`); raw `!GO` + plain commands work.
 
-## What looks GOOD
+[turn1] frames=94
+    v_start       = 0
+    v_peak        = 21
+    v_end         = 0
+    v_jump_max    = 9
+    omega_peak    = 0.45
+    h_first       = 0.1
+    h_last        = 89.1
+    h_travel      = 89.3
+    ekf_rej_climb = 0
+    v_series      = [0, 0, 0, 0, 9, 12, 21, 15, 6, -1, -2, 3, 0, 0, 4, 4, 4, 1, -1, 4, 4, 4, 0, 0, 3, 5, 5, 0, 1, 0, 5, 5, 0, 0, 0, -1, 0, 1, 1, 1, -4, -4, 2, 2, 3, -2, 0, 0, -3, -3, -4, 0, -1, -1, -1, -1, -1, -2, -2, 0, -1, 0, -2, 0, -5, 2, -2, 0, -2, -2, -1, -4, 0, 0, 0, 0, 2, -1, -4, -2, -2, -3, -1, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
-- **Clean velocity profiles / starts / stops.** Wheel velocity (`vel=`) ramps smoothly on every D:
-  e.g. D_med_300: 78 -> 127 -> 153 -> 189 -> 209 -> 234 mm/s, then mode I / vel 0,0 at completion.
-  No instant-jump starts, no mid-drive velocity spikes, clean decel to zero. (The N4/N5 "fast spin
-  signature" / bad-start class is NOT present.)
-- **No software runaway spin.** TURNs execute mode V -> I and stop; encoders symmetric on a good turn
-  (turn1: enc=-160,160). No unbounded omega.
-- **EKF rejections stayed 0** (`ekf_rej=0`) throughout — no Mahalanobis-gate storms (N1 pose-corruption
-  class not observed in software terms).
-- Firmware boots and runs rock-solid (uptime > 8 min across the session, never crashed).
+[turn2] frames=54
+    v_start       = 0
+    v_peak        = 0
+    v_end         = 0
+    v_jump_max    = 0
+    omega_peak    = 0.32
+    h_first       = 89.5
+    h_last        = 89.6
+    h_travel      = 0.1
+    ekf_rej_climb = 0
+    v_series      = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
-## FINDINGS (real issues surfaced)
+[turn3] frames=63
+    v_start       = -4
+    v_peak        = 4
+    v_end         = 0
+    v_jump_max    = 4
+    omega_peak    = 0.03
+    h_first       = 90.0
+    h_last        = 90.0
+    h_travel      = 0.0
+    ekf_rej_climb = 0
+    v_series      = [-4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
-1. **[HARDWARE/HIGH] Right encoder wedges / severely under-counts during drives.**
-   `EVT enc_wedged wheel=R` fired mid-D; saw enc=22,0 (R stuck) and enc=736,57 (L=736, R=57 over one
-   drive). The firmware integrates this asymmetry into a phantom heading swing (pose -> 131 deg, big Y
-   drift) — odometry pose gets corrupted by the dead right encoder, NOT by a software bug. This is the
-   known nRF52 encoder-wedge / L-R-imbalance issue, re-confirmed on the bench with current firmware.
-   -> issue: fr-bench-right-encoder-wedge.md
+[turn4] frames=51
+    v_start       = 0
+    v_peak        = 2
+    v_end         = 0
+    v_jump_max    = 2
+    omega_peak    = 0.0
+    h_first       = 90.0
+    h_last        = 89.5
+    h_travel      = 0.5
+    ekf_rej_climb = 0
+    v_series      = [0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
-2. **[FIRMWARE/MED] `DBG OTOS BENCH` and `DBG OTOS` emit NO reply on hardware.** `DBG` alone returns
-   `ERR unknown`, so the subsystem parses; `DBG OTOS [BENCH ...]` are recognized (no ERR unknown) but
-   produce zero reply. The Bench OTOS (sprint 031) could not be enabled/verified on the real robot —
-   this test therefore ran on encoder odometry, not the synthetic OTOS. The sim tests for these
-   commands pass; the hardware reply path is broken. -> issue: fr-bench-dbg-otos-no-reply.md
+[sqD1] frames=78
+    v_start       = 0
+    v_peak        = 155
+    v_end         = 0
+    v_jump_max    = 143
+    omega_peak    = 0.23
+    h_first       = 89.5
+    h_last        = 45.1
+    h_travel      = 214.3
+    ekf_rej_climb = 84
+    v_series      = [0, 0, 0, 0, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 155, 151, 140, 128, 113, 113, 97, 99, 81, 78, 76, 64, 64, 56, 52, 41, 29, 29, 24, 22, 18, 18, 20, 14, 8, -2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
-3. **[FIRMWARE/MED] `twist=` (fused body velocity) reads 0,0 for the entire run** even while wheels move
-   (`vel=-209,194`). fusedV/fusedOmega never populate the twist TLM field on hardware. -> issue:
-   fr-bench-twist-fusedv-zero.md
+[sqT1] frames=77
+    v_start       = 0
+    v_peak        = 14
+    v_end         = 0
+    v_jump_max    = 17
+    omega_peak    = 0.32
+    h_first       = 45.1
+    h_last        = 88.4
+    h_travel      = 43.4
+    ekf_rej_climb = 0
+    v_series      = [0, 0, -12, 5, 14, 9, 9, 11, 2, -1, -5, 0, 3, 4, 4, 1, -1, 3, -5, 2, 0, 0, -1, 1, 0, 0, -2, -2, 0, 0, 4, -4, -4, 0, -2, 2, 0, 1, 1, 2, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
-4. **[KNOWN/LOW] Turn overshoot.** A 90 deg TURN reached ~108 deg fused heading (consistent with the
-   long-standing turn-overshoot from OTOS/encoder fusion; tracked separately).
+[sqD2] frames=85
+    v_start       = 0
+    v_peak        = 155
+    v_end         = 0
+    v_jump_max    = 138
+    omega_peak    = 0.27
+    h_first       = 88.4
+    h_last        = 42.8
+    h_travel      = 45.6
+    ekf_rej_climb = 81
+    v_series      = [0, 0, 2, 0, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 155, 152, 143, 143, 123, 123, 111, 107, 107, 93, 84, 77, 68, 66, 66, 55, 55, 35, 35, 34, 28, 29, 23, 27, 18, 13, 9, 2, -4, -4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
-## Verdict
+[sqT2] frames=78
+    v_start       = 0
+    v_peak        = 16
+    v_end         = 0
+    v_jump_max    = 18
+    omega_peak    = 0.33
+    h_first       = 42.8
+    h_last        = 88.6
+    h_travel      = 46.0
+    ekf_rej_climb = 0
+    v_series      = [0, 0, -2, 16, 16, 11, 4, -3, -3, 0, 0, -5, 0, 6, 1, 4, 0, 0, 2, -1, 4, 3, 2, -2, 2, 2, -1, 0, -1, -1, 6, 0, 0, 3, 3, -4, 2, 0, 0, 0, 1, -3, 1, 1, -1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
-The full firmware stack drives correctly on the bench: clean velocity control, clean starts/stops, no
-software-induced runaway spin, stable EKF. The dominant real problem is a HARDWARE right-encoder wedge
-that corrupts odometry. Two firmware telemetry/command gaps (Bench-OTOS DBG no-reply; twist=0) were
-also found — both are hardware-only (sim-green), exactly the class of bug this bench harness exists to
-catch. The Bench OTOS itself could not be exercised because its DBG command doesn't reply on hardware;
-fixing that (finding 2) is the prerequisite to re-running this test under the synthetic OTOS.
+[sqD3] frames=89
+    v_start       = 0
+    v_peak        = 145
+    v_end         = 0
+    v_jump_max    = 135
+    omega_peak    = 0.29
+    h_first       = 88.6
+    h_last        = 31.9
+    h_travel      = 56.8
+    ekf_rej_climb = 84
+    v_series      = [0, 0, 0, 0, 0, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 145, 145, 141, 127, 111, 111, 99, 93, 85, 80, 73, 66, 64, 57, 57, 46, 32, 25, 23, 23, 21, 13, 7, 7, -3, -3, -10, -7, -6, -6, 11, 12, 14, 10, 10, 2, 2, 3, 3, 8, 8, 5, 7, 7, 8, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+[sqT3] frames=78
+    v_start       = 0
+    v_peak        = 16
+    v_end         = 0
+    v_jump_max    = 11
+    omega_peak    = 0.36
+    h_first       = 31.9
+    h_last        = 88.6
+    h_travel      = 56.8
+    ekf_rej_climb = 0
+    v_series      = [0, 0, 0, 0, 5, 16, 16, 6, 1, 5, 1, -1, 0, 0, 4, 2, 2, 6, 1, -4, -4, 0, 3, 3, 2, 0, -1, -1, -1, 3, 3, 3, 4, -1, -3, 4, 4, 1, 2, 2, -1, -2, 1, 0, 0, 3, 3, 1, -1, -2, 0, -2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+[sqD4] frames=66
+    v_start       = 0
+    v_peak        = 0
+    v_end         = 0
+    v_jump_max    = 0
+    omega_peak    = 0.13
+    h_first       = 88.6
+    h_last        = 88.6
+    h_travel      = 0.0
+    ekf_rej_climb = 0
+    v_series      = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+[sqT4] frames=60
+    v_start       = 0
+    v_peak        = 0
+    v_end         = 0
+    v_jump_max    = 0
+    omega_peak    = 0.01
+    h_first       = 88.6
+    h_last        = 89.2
+    h_travel      = 0.6
+    ekf_rej_climb = 0
+    v_series      = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+[D_slow_150] frames=91
+    v_start       = 0
+    v_peak        = 120
+    v_end         = 0
+    v_jump_max    = 101
+    omega_peak    = 0.35
+    h_first       = 89.2
+    h_last        = 27.2
+    h_travel      = 62.2
+    ekf_rej_climb = 68
+    v_series      = [0, 0, 2, 0, 0, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 115, 120, 113, 98, 90, 90, 78, 78, 61, 62, 40, 40, 42, 39, 32, 26, 11, 2, -6, -6, -7, -7, 7, 11, 13, 13, 10, 6, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+[D_med_300] frames=86
+    v_start       = 0
+    v_peak        = 167
+    v_end         = 0
+    v_jump_max    = 144
+    omega_peak    = 0.39
+    h_first       = 27.2
+    h_last        = -53.0
+    h_travel      = 80.3
+    ekf_rej_climb = 102
+    v_series      = [0, 0, 1, 1, 0, 3, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 157, 167, 145, 145, 132, 122, 117, 105, 105, 92, 95, 95, 80, 80, 71, 71, 53, 53, 45, 41, 39, 36, 36, 22, 22, 13, 10, 3, 9, 9, 9, 9, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+[D_fast_500] frames=76
+    v_start       = 0
+    v_peak        = 205
+    v_end         = 70
+    v_jump_max    = 174
+    omega_peak    = 0.21
+    h_first       = -53.0
+    h_last        = -53.0
+    h_travel      = 1.0
+    ekf_rej_climb = 142
+    v_series      = [0, 0, 0, 1, 1, 0, -2, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 197, 205, 190, 190, 174, 167, 167, 161, 153, 149, 142, 140, 132, 122, 122, 112, 112, 106, 107, 84, 77, 70]
+
+[T_timed_1500] frames=65
+    v_start       = 69
+    v_peak        = 69
+    v_end         = 0
+    v_jump_max    = 14
+    omega_peak    = 0.01
+    h_first       = -53.1
+    h_last        = -53.0
+    h_travel      = 0.2
+    ekf_rej_climb = 11
+    v_series      = [69, 55, 45, 32, 32, 23, 13, 9, 9, 16, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+---- VERDICT ----
+FOUND 9 PROBLEM(S):
+  X sqD1: ekf_rej climbed 84 (pose corruption?)
+  X sqD2: ekf_rej climbed 81 (pose corruption?)
+  X sqD3: ekf_rej climbed 84 (pose corruption?)
+  X D_slow_150: 62.2deg heading travel on straight drive (drift/spin)
+  X D_slow_150: ekf_rej climbed 68 (pose corruption?)
+  X D_med_300: 80.3deg heading travel on straight drive (drift/spin)
+  X D_med_300: ekf_rej climbed 102 (pose corruption?)
+  X D_fast_500: residual v_end 70 mm/s (bad stop)
+  X D_fast_500: ekf_rej climbed 142 (pose corruption?)

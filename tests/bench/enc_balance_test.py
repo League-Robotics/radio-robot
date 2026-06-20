@@ -54,10 +54,17 @@ def _robot_port_from_config() -> str | None:
 
 
 def _make_connection(port: str):
-    """Open a SerialConnection in direct mode to the robot's USB serial port."""
+    """Open a SerialConnection to the robot, auto-detecting the transport.
+
+    mode=None lets connect() classify the device: a direct NEZHA2 USB port stays
+    plain, while a RADIOBRIDGE relay runs the !GO handshake into the data plane.
+    This makes the test work over BOTH the robot's USB port and the radio relay
+    (D drives and synchronous SNAP encoder reads both survive the relay; only
+    async STREAM/EVT frames get dropped by the bridge, which this test never uses).
+    """
     sys.path.insert(0, str(_REPO / "host"))
     from robot_radio.io.serial_conn import SerialConnection
-    conn = SerialConnection(port, mode="direct")
+    conn = SerialConnection(port)
     result = conn.connect()
     if "error" in result:
         raise RuntimeError(f"Could not connect to {port}: {result['error']}")
@@ -96,7 +103,7 @@ def main():
     args = ap.parse_args()
 
     port = args.port or _robot_port_from_config() or _DEFAULT_PORT
-    print(f"Connecting to robot USB serial: {port}  (mode=direct, NOT relay)")
+    print(f"Connecting to robot: {port}  (transport auto-detected: USB-direct or radio relay)")
 
     conn = _make_connection(port)
 

@@ -31,3 +31,10 @@ uv run python tests/bench/smoke_ritual.py --port /dev/cu.usbmodem<N>
 
 Ticket 026-004 will be updated to PASS once all five steps are confirmed on
 the real robot. See ticket for acceptance criteria.
+
+## 2026-06-20T01:07Z  sha=ba14700  overall=FAIL
+- Check 1 (Safety check): PASS
+- Check 2 (RT x4 closure): FAIL
+- Check 3 (G square (200mm)): FAIL
+- Check 4 (Lift test (EVT otos lost)): SKIP
+- Check 5 (TLM drop-rate): FAIL

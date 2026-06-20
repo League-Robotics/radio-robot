@@ -6,10 +6,11 @@ the refactored firmware behaves correctly on the real robot.
 Five ritual checks (run in order):
 
   1. SAFE query     — prints PASS if response is 'on'.
-  2. TURN x4 closure — four sequential TURN 9000 commands; robot must return
-                       within 10 degrees of starting heading (OTOS readback).
-  3. G square       — drive G to each corner of a 300x300 mm square (4 legs);
-                       return to origin; OTOS position error at origin < 50 mm.
+  2. RT x4 closure  — four relative RT +90 turns; robot must return within
+                       12 degrees of the starting heading (fused-pose readback).
+  3. G square       — 200x200 mm square: four G <side> 0 forward legs with a
+                       relative RT +90 between them; fused-pose return error at
+                       origin < 120 mm.  Geofenced to keep it on the playfield.
   4. Lift test      — operator lifts robot mid-drive; script expects
                        'EVT otos lost' within 5 s of the lift prompt; then
                        checks robot does not spin on re-placement.
@@ -45,8 +46,8 @@ _HOST = _REPO / "host"
 if str(_HOST) not in sys.path:
     sys.path.insert(0, str(_HOST))
 
-from robot_radio.io.serial_conn import SerialConnection
-from robot_radio.robot.protocol import NezhaProtocol, parse_response, parse_tlm
+from robot_radio.io.cli import _make_robot
+from robot_radio.robot.protocol import parse_response, parse_tlm
 from bench_safety import BenchRun, RobotSilentError, RunawayAbortError
 
 
@@ -79,20 +80,25 @@ def _wrap_deg(a: float) -> float:
                                    math.cos(math.radians(a))))
 
 
-def _otos_heading_deg(proto: NezhaProtocol) -> float | None:
-    """Read OTOS heading in degrees via SNAP."""
+def _otos_heading_deg(proto) -> float | None:
+    """Read fused-pose heading in degrees via SNAP (pose=x,y,h_cdeg).
+
+    The current firmware emits the fused EKF pose as ``pose=`` in the TLM
+    frame; the raw ``otos=`` field is absent, so read ``.pose`` (which is what
+    G/D/TURN drive against anyway).
+    """
     frame = proto.snap()
-    if frame is None or frame.otos is None:
+    if frame is None or frame.pose is None:
         return None
-    return frame.otos[2] / 100.0  # cdeg -> deg
+    return frame.pose[2] / 100.0  # cdeg -> deg
 
 
-def _otos_pos_mm(proto: NezhaProtocol) -> tuple[int, int] | None:
-    """Read OTOS x,y position in mm via SNAP."""
+def _otos_pos_mm(proto) -> tuple[int, int] | None:
+    """Read fused-pose x,y position in mm via SNAP."""
     frame = proto.snap()
-    if frame is None or frame.otos is None:
+    if frame is None or frame.pose is None:
         return None
-    return frame.otos[0], frame.otos[1]
+    return frame.pose[0], frame.pose[1]
 
 
 def _keepalive_thread(proto: NezhaProtocol, stop: list[bool]) -> None:
@@ -131,28 +137,35 @@ def check1_safety_check(proto: NezhaProtocol) -> str:
 # Check 2: TURN x4 closure
 # ---------------------------------------------------------------------------
 
-def check2_turn_closure(proto: NezhaProtocol) -> str:
-    """Four sequential TURN 9000 commands; heading must close to +-10 degrees."""
-    _banner("Check 2: TURN x4 closure")
-    TURN_HEADING = 9000    # centidegrees = 90 degrees
-    TURN_TIMEOUT = 15_000  # ms per turn
-    CLOSURE_TOL_DEG = 10.0
+def check2_turn_closure(robot) -> str:
+    """Four relative RT +90 turns; heading must close to +-12 degrees.
+
+    Uses RT (relative turn) — NOT TURN (absolute heading).  Four RT +90s sum
+    to a full revolution back to the starting heading; an absolute TURN 9000
+    repeated would just hold +90 after the first (the verb goes to an absolute
+    target, so calls 2-4 are no-ops).
+    """
+    proto = robot._proto
+    _banner("Check 2: RT x4 closure (4x relative +90)")
+    RT_STEP_CDEG = 9000    # +90 deg relative (CCW)
+    RT_TIMEOUT = 15_000    # ms per turn
+    CLOSURE_TOL_DEG = 12.0
 
     h0 = _otos_heading_deg(proto)
     if h0 is None:
-        print("  Cannot read starting OTOS heading -- is OTOS enabled?")
+        print("  Cannot read starting heading -- is fused pose reporting?")
         return STEP_FAIL
     print(f"  Starting heading: {h0:.1f} deg")
 
     try:
-        with BenchRun(proto, max_seconds=90) as _bench:
+        with BenchRun(robot, max_seconds=90) as _bench:
             for i in range(4):
-                print(f"  TURN {TURN_HEADING} cdeg (turn {i+1}/4) ...")
-                proto.turn(TURN_HEADING, corr_id=str(i + 1))
-                outcome = proto.wait_for_evt_done("TURN", timeout_ms=TURN_TIMEOUT,
+                print(f"  RT {RT_STEP_CDEG} cdeg (relative +90, turn {i+1}/4) ...")
+                proto.send(f"RT {RT_STEP_CDEG} #{i + 1}", read_ms=200)
+                outcome = proto.wait_for_evt_done("RT", timeout_ms=RT_TIMEOUT,
                                                   corr_id=str(i + 1))
                 if outcome != "done":
-                    print(f"  TURN {i+1} outcome: {outcome} (expected 'done')")
+                    print(f"  RT {i+1} outcome: {outcome} (expected 'done')")
                     return STEP_FAIL
                 time.sleep(0.3)
     except (RobotSilentError, RunawayAbortError) as exc:
@@ -161,7 +174,7 @@ def check2_turn_closure(proto: NezhaProtocol) -> str:
 
     h1 = _otos_heading_deg(proto)
     if h1 is None:
-        print("  Cannot read final OTOS heading.")
+        print("  Cannot read final heading.")
         return STEP_FAIL
     print(f"  Final heading:    {h1:.1f} deg")
 
@@ -177,61 +190,78 @@ def check2_turn_closure(proto: NezhaProtocol) -> str:
 # Check 3: G square (300x300 mm, < 50 mm return error from OTOS)
 # ---------------------------------------------------------------------------
 
-# 300x300 mm square corners relative to zeroed OTOS origin.
-_SQUARE_CORNERS = [
-    (150, 150),    # NE
-    (-150, 150),   # NW
-    (-150, -150),  # SW
-    (150, -150),   # SE
-    (0, 0),        # back to origin
-]
-
+# 200 mm square via robot-relative G forward legs + relative RT +90 turns.
+# G is ROBOT-RELATIVE (G <forward_mm> <left_mm> <speed>), so each leg drives
+# forward SQUARE_SIDE_MM and a relative RT +90 reorients for the next side;
+# four legs + three turns trace a square back to the origin.  20 cm sides keep
+# the path well inside the playfield (corners reach ~283 mm from start).
+SQUARE_SIDE_MM = 200     # 20 cm sides
 SQUARE_SPEED = 150       # mm/s
-SQUARE_TIMEOUT = 20_000  # ms per leg
-SQUARE_ARRIVE_MM = 50    # OTOS position error tolerance at origin
+LEG_TIMEOUT = 20_000     # ms per forward leg
+TURN_TIMEOUT = 15_000    # ms per corner turn
+SQUARE_GEOFENCE_MM = 350  # abort if displacement from origin exceeds this
+SQUARE_ARRIVE_MM = 120   # fused-pose return error tolerance at origin
 
 
-def check3_g_square(proto: NezhaProtocol) -> str:
-    """Drive G square; OTOS position error at return < 50 mm.
+def check3_g_square(robot) -> str:
+    """Drive a 200 mm square with G forward legs + RT turns; return error < 120 mm.
 
-    Uses OTOS pose comparison (reset at start, read at origin return) as the
-    ground truth, since the camera may not be available in all bench contexts.
+    Uses fused-pose (reset at start, read at origin return) as ground truth,
+    since the overhead camera is not available in all bench contexts.  A live
+    geofence on displacement-from-origin keeps the robot on the playfield.
     """
-    _banner("Check 3: G square (300x300 mm)")
+    proto = robot._proto
+    _banner("Check 3: G square (200x200 mm, G forward + RT turns)")
 
-    # Zero OTOS before the run so origin = start.
+    # Zero fused pose before the run so origin = start.
     proto.zero_otos()
     time.sleep(0.3)
-    print("  OTOS zeroed at start position.")
+    print("  Fused pose zeroed at start position (origin).")
+
+    def _disp_mm() -> float | None:
+        p = _otos_pos_mm(proto)
+        return None if p is None else math.hypot(p[0], p[1])
 
     try:
-        with BenchRun(proto, max_seconds=120) as _bench:
-            for i, (x, y) in enumerate(_SQUARE_CORNERS):
-                label = f"({x:+d},{y:+d})" if (x, y) != (0, 0) else "origin"
-                print(f"  G {x} {y} {SQUARE_SPEED}  -> {label} ...")
-                proto.send(f"G {x} {y} {SQUARE_SPEED}", read_ms=300)
-                outcome = proto.wait_for_evt_done("G", timeout_ms=SQUARE_TIMEOUT)
-                if outcome != "done":
-                    print(f"  G to {label}: outcome={outcome} (expected 'done')")
+        with BenchRun(robot, max_seconds=120) as _bench:
+            for i in range(4):
+                print(f"  leg {i+1}/4: G {SQUARE_SIDE_MM} 0 {SQUARE_SPEED} "
+                      f"(forward {SQUARE_SIDE_MM} mm) ...")
+                proto.send(f"G {SQUARE_SIDE_MM} 0 {SQUARE_SPEED} #{i + 1}", read_ms=300)
+                outcome = proto.wait_for_evt_done("G", timeout_ms=LEG_TIMEOUT,
+                                                  corr_id=str(i + 1))
+                d = _disp_mm()
+                if d is not None and d > SQUARE_GEOFENCE_MM:
+                    print(f"  GEOFENCE -- {d:.0f} mm from origin > {SQUARE_GEOFENCE_MM} mm; aborting")
                     return STEP_FAIL
+                if outcome != "done":
+                    print(f"  leg {i+1}: outcome={outcome} (expected 'done')")
+                    return STEP_FAIL
+                if i < 3:   # reorient for the next side (no turn after the last leg)
+                    print("  RT 9000 (relative +90) ...")
+                    proto.send(f"RT 9000 #{i + 1}", read_ms=200)
+                    if proto.wait_for_evt_done("RT", timeout_ms=TURN_TIMEOUT,
+                                               corr_id=str(i + 1)) != "done":
+                        print(f"  corner turn {i+1}: not done")
+                        return STEP_FAIL
                 time.sleep(0.3)
     except (RobotSilentError, RunawayAbortError) as exc:
         print(f"  BenchRun aborted: {exc}")
         return STEP_FAIL
 
-    # Check OTOS position at origin.
+    # Check fused position back at origin.
     pos = _otos_pos_mm(proto)
     if pos is None:
-        print("  Cannot read final OTOS position.")
+        print("  Cannot read final position.")
         return STEP_FAIL
 
     err_mm = math.hypot(pos[0], pos[1])
-    print(f"  Final OTOS position: x={pos[0]} mm, y={pos[1]} mm")
-    print(f"  Position error from origin: {err_mm:.0f} mm"
+    print(f"  Final fused position: x={pos[0]} mm, y={pos[1]} mm")
+    print(f"  Return error from origin: {err_mm:.0f} mm"
           f"  (tolerance: {SQUARE_ARRIVE_MM} mm)")
     if err_mm <= SQUARE_ARRIVE_MM:
         return STEP_PASS
-    print(f"  FAIL -- position error {err_mm:.0f} mm > {SQUARE_ARRIVE_MM} mm")
+    print(f"  FAIL -- return error {err_mm:.0f} mm > {SQUARE_ARRIVE_MM} mm")
     return STEP_FAIL
 
 
@@ -239,7 +269,7 @@ def check3_g_square(proto: NezhaProtocol) -> str:
 # Check 4: Lift test -- EVT otos lost within 5 s of lift
 # ---------------------------------------------------------------------------
 
-def check4_lift_test(proto: NezhaProtocol) -> str:
+def check4_lift_test(robot) -> str:
     """Lift robot mid-drive; expect 'EVT otos lost' within 5 s; no spin on replace.
 
     Operator flow:
@@ -251,6 +281,7 @@ def check4_lift_test(proto: NezhaProtocol) -> str:
       6. Script waits 3 s and checks that robot is not spinning (OTOS heading
          stable within 30 degrees over 2 s after re-placement).
     """
+    proto = robot._proto
     _banner("Check 4: Lift test (EVT otos lost)")
 
     EVT_WAIT_MS = 5_000   # time to wait for EVT otos lost after lift
@@ -258,7 +289,7 @@ def check4_lift_test(proto: NezhaProtocol) -> str:
     SPIN_TOL_DEG = 30.0   # heading drift threshold for 'no spin'
 
     try:
-        with BenchRun(proto, max_seconds=60) as _bench:
+        with BenchRun(robot, max_seconds=60) as _bench:
             # Start a slow forward drive long enough for the lift.
             print("  Starting slow T drive (100 mm/s, 6 s) ...")
             proto.timed(100, 100, 6_000)
@@ -410,19 +441,20 @@ def main() -> None:
 
     step_names = {
         1: "Safety check",
-        2: "TURN x4 closure",
-        3: "G square",
+        2: "RT x4 closure",
+        3: "G square (200mm)",
         4: "Lift test (EVT otos lost)",
         5: "TLM drop-rate",
     }
 
-    # Connect and preflight.
+    # Connect and preflight via the shared robot-construction path
+    # (_make_robot -> Nezha robot + open SerialConnection; auto !GO over relay).
     print("Connecting to robot ...")
-    conn = SerialConnection(args.port) if args.port else SerialConnection()
-    res = conn.connect()
-    if res.get("error"):
-        sys.exit(f"Connection failed: {res['error']}")
-    proto = NezhaProtocol(conn)
+    args.verbose = False
+    robot, conn, result = _make_robot(args)
+    if result.get("error"):
+        sys.exit(f"Connection failed: {result['error']}")
+    proto = robot._proto
 
     png = proto.ping()
     if not png:
@@ -437,13 +469,13 @@ def main() -> None:
             results[1] = check1_safety_check(proto)
 
         if 2 in checks_to_run:
-            results[2] = check2_turn_closure(proto)
+            results[2] = check2_turn_closure(robot)
 
         if 3 in checks_to_run:
-            results[3] = check3_g_square(proto)
+            results[3] = check3_g_square(robot)
 
         if 4 in checks_to_run:
-            results[4] = check4_lift_test(proto)
+            results[4] = check4_lift_test(robot)
 
         if 5 in checks_to_run:
             results[5] = check5_tlm_drop_rate(proto)
@@ -454,7 +486,7 @@ def main() -> None:
         print("[safe-stop] Sending STOP + STREAM 0 ...")
         proto.stop()
         proto.stream(0)
-        conn.close()
+        conn.disconnect()
 
     # Append field log entry.
     _append_field_log(results, step_names)
