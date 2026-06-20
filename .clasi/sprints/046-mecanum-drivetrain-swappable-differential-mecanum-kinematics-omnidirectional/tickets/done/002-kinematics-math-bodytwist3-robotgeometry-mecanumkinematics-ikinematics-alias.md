@@ -2,7 +2,7 @@
 id: '002'
 title: 'Kinematics math: BodyTwist3, RobotGeometry, MecanumKinematics, IKinematics
   alias'
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 - SUC-003
