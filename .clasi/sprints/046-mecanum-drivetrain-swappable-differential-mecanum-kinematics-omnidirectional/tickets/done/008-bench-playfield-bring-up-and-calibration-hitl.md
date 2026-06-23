@@ -1,15 +1,15 @@
 ---
-id: "008"
-title: "Bench + playfield bring-up and calibration (HITL)"
-status: open
+id: 008
+title: Bench + playfield bring-up and calibration (HITL)
+status: done
 use-cases:
-  - SUC-003
-  - SUC-004
-  - SUC-005
+- SUC-003
+- SUC-004
+- SUC-005
 depends-on:
-  - "046-007"
-github-issue: ""
-issue: ""
+- 046-007
+github-issue: ''
+issue: ''
 completes_issue: true
 hardware-in-the-loop: true
 ---
