@@ -18,6 +18,8 @@ Sequence:
   2. Turn closure: 4x relative RT +90; camera-measured heading must close to ~0.
   3. Square: 4x [G forward SIDE + RT +90]; record the CAMERA world pose at each
      corner; report the true return error.
+  4. Strafe (mecanum only): STRAFE 150 t=2.0; camera-measured |delta_y| > 80% of
+     commanded; forward drift |delta_x| < 15% of lateral; SNAP vy= non-zero.
 
 Completion is detected by polling SNAP `mode` (V/G/T -> I) — the relay drops async
 EVT, so wait_for_evt_done would hang. Every move is camera-geofenced; safe-stop
@@ -33,6 +35,7 @@ if _RR_HOST not in sys.path:
     sys.path.insert(0, _RR_HOST)
 
 from robot_radio.io.serial_conn import SerialConnection
+from robot_radio.config import get_robot_config
 from aprilcam.config import Config
 from aprilcam.client.control import DaemonControl
 
@@ -64,6 +67,30 @@ def snap_mode():
                 for tok in ln.split():
                     if tok.startswith("mode="):
                         return tok.split("=", 1)[1]
+        time.sleep(0.04)
+    return None
+
+
+def snap_vy():
+    """Return the body-frame vy (mm/s) from SNAP TLM twist= field, or None.
+
+    Mecanum TLM encodes twist= as a 3-tuple: vx,vy,omega_mrad.
+    Returns the vy (second value) as float, or None if not available.
+    This function is best-effort: it reads one SNAP poll and returns
+    whatever it finds (may be stale or missing during mode transition).
+    """
+    for _ in range(6):
+        conn.send_fast("SNAP")
+        for ln in conn.read_lines(350, stop_token="TLM"):
+            if "TLM" in ln:
+                for tok in ln.split():
+                    if tok.startswith("twist="):
+                        parts = tok.split("=", 1)[1].split(",")
+                        if len(parts) >= 2:
+                            try:
+                                return float(parts[1])
+                            except ValueError:
+                                pass
         time.sleep(0.04)
     return None
 
@@ -210,6 +237,93 @@ def square():
     return ret
 
 
+def strafe_leg():
+    """Strafe leg: STRAFE 150 t=2.0, camera-measured displacement assertions.
+
+    Gating: only runs when drivetrain_type == 'mecanum'. Differential robots
+    skip this leg cleanly — it returns (None, None, None).
+
+    Command: STRAFE 150 t=2.0 (time-bounded 2 s, +Y body direction at 150 mm/s).
+    After the move we sample SNAP vy= while the robot is still in motion, then
+    send STOP and read the final camera pose.
+
+    Camera assertions (both must pass):
+      |delta_y| > 150 mm * 0.80  — at least 80% of commanded lateral displacement
+      |delta_x| < |delta_y| * 0.15  — forward drift less than 15% of lateral
+
+    Camera coordinates are in cm; displacement thresholds are converted accordingly.
+    Returns (delta_x_cm, delta_y_cm, snap_vy_mms).
+    """
+    # Gate: skip entirely for differential robots
+    cfg = get_robot_config()
+    drivetrain = cfg.identity.drivetrain_type if cfg is not None else "differential"
+    if drivetrain != "mecanum":
+        print(f"\n== STRAFE LEG: SKIPPED (drivetrain_type={drivetrain!r}, not mecanum) ==")
+        return None, None, None
+
+    print("\n== STRAFE LEG: STRAFE 150 t=2.0 (camera-measured) ==")
+    p0 = require_on_field()
+    x0_cm, y0_cm = p0[0], p0[1]
+    print(f"  start: ({x0_cm:+.1f},{y0_cm:+.1f}) cm  yaw={p0[2]:+.1f}")
+
+    # Send STRAFE command (time-bounded, 2 s)
+    send("STRAFE 150 t=2.0")
+
+    # Sample vy while robot is in motion (~1 s into the move)
+    time.sleep(1.0)
+    vy_mms = snap_vy()
+    print(f"  SNAP vy during strafe: {vy_mms} mm/s")
+
+    # Wait for the remainder of the 2 s move window, then stop
+    time.sleep(1.5)
+    send("STOP")
+
+    # Allow the robot to settle
+    wait_idle(3000, min_ms=200)
+
+    p1 = require_on_field()
+    x1_cm, y1_cm = p1[0], p1[1]
+    print(f"  end:   ({x1_cm:+.1f},{y1_cm:+.1f}) cm  yaw={p1[2]:+.1f}")
+
+    delta_x_cm = x1_cm - x0_cm
+    delta_y_cm = y1_cm - y0_cm
+    print(f"  delta_x={delta_x_cm:+.1f} cm  delta_y={delta_y_cm:+.1f} cm")
+
+    # Convert 80% of 150 mm commanded to cm: 150 * 0.80 / 10 = 12.0 cm
+    LATERAL_COMMANDED_CM = 150.0 / 10.0        # 15.0 cm
+    LATERAL_MIN_CM       = LATERAL_COMMANDED_CM * 0.80  # 12.0 cm
+    DRIFT_MAX_FRAC       = 0.15
+
+    lateral_ok = abs(delta_y_cm) >= LATERAL_MIN_CM
+    drift_ok   = abs(delta_x_cm) < abs(delta_y_cm) * DRIFT_MAX_FRAC
+
+    print(f"  ASSERTION lateral |delta_y|={abs(delta_y_cm):.1f} cm >= {LATERAL_MIN_CM:.1f} cm : "
+          f"{'PASS' if lateral_ok else 'FAIL'}")
+    print(f"  ASSERTION drift   |delta_x|={abs(delta_x_cm):.1f} cm < "
+          f"|delta_y|*0.15={abs(delta_y_cm)*DRIFT_MAX_FRAC:.1f} cm : "
+          f"{'PASS' if drift_ok else 'FAIL'}")
+
+    # vy= sign check: STRAFE 150 is positive vy body command; vy sample should be > 0
+    if vy_mms is not None:
+        vy_sign_ok = vy_mms > 0
+        print(f"  SNAP vy sign: {vy_mms:+.0f} mm/s (expected > 0): "
+              f"{'PASS' if vy_sign_ok else 'FAIL'}")
+    else:
+        print("  SNAP vy: no sample captured (skipping sign check)")
+
+    assert lateral_ok, (
+        f"Strafe lateral displacement {abs(delta_y_cm):.1f} cm < "
+        f"required {LATERAL_MIN_CM:.1f} cm (80% of {LATERAL_COMMANDED_CM:.1f} cm commanded)"
+    )
+    assert drift_ok, (
+        f"Strafe forward drift {abs(delta_x_cm):.1f} cm >= "
+        f"{DRIFT_MAX_FRAC*100:.0f}% of lateral {abs(delta_y_cm):.1f} cm — "
+        "suspect fwd_sign_* or geometry error"
+    )
+
+    return delta_x_cm, delta_y_cm, vy_mms
+
+
 def main():
     global dc, cam
     res = conn.connect()
@@ -228,9 +342,15 @@ def main():
         recenter()
         clo = turn_closure()
         ret = square()
+        dx, dy, vy = strafe_leg()
         print("\n==== PLAYFIELD RESULT (camera ground truth) ====")
         print(f"  turn closure : {clo:.1f} deg")
         print(f"  square return: {ret:.1f} cm")
+        if dy is not None:
+            print(f"  strafe lateral: {abs(dy):.1f} cm  drift: {abs(dx):.1f} cm"
+                  f"  vy_snap: {vy} mm/s")
+        else:
+            print("  strafe leg   : SKIPPED (not mecanum)")
         print(f"  elapsed      : {time.time()-t0:.0f} s")
     finally:
         print("\n[safe-stop] X + disconnect")

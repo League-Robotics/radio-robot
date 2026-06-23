@@ -122,6 +122,14 @@ comment in `active_robot.json`.
 
 ## Acceptance Criteria
 
+<!-- PROGRAMMER DELIVERABLE (code only, no hardware required) -->
+- [x] `tests/bench/playfield_camera_run.py` includes strafe leg after forward + turn
+      legs: sends `STRAFE 150 t=2.0`, samples `SNAP vy=` during motion, asserts
+      `|delta_y| > 150mm*0.80` and `|delta_x| < |delta_y|*0.15`; leg is gated on
+      `drivetrain_type == "mecanum"` (skips cleanly for differential). (`py_compile`
+      clean; sim suite 2230 passed; `data/robots/` untouched.) ← code merged 2026-06-23
+
+<!-- HITL DELIVERABLES — pending hardware, to be completed by team-lead -->
 - [ ] `tests/bench/playfield_camera_run.py` runs without error on the mecanum robot
       (team-lead confirms all three legs execute).
 - [ ] Forward leg: camera-measured displacement within 10% of commanded (1m run).
