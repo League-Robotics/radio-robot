@@ -215,6 +215,19 @@ private:
     bool     _hasTimestampL;
     bool     _hasTimestampR;
 
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-008: rear-wheel velocity-differentiation state. The rear encoders are
+    // read every loop by MecanumHAL::tick(), so their cached positionMm() is
+    // fresh each controlTick; we differentiate it here to feed the rear PI
+    // (without this, velMms[2]/[3] stayed 0 → rear PI wound up to saturation).
+    float    _prevEncBR = 0.0f;
+    float    _prevEncBL = 0.0f;
+    uint32_t _prevTimeMsBR = 0;
+    uint32_t _prevTimeMsBL = 0;
+    bool     _hasTimestampBR = false;
+    bool     _hasTimestampBL = false;
+#endif
+
     // PID integrator dt: actual elapsed control-tick time (ms). The loop runs at
     // ~24 ms (10 ms nominal + 2x4 ms encoder settle + bus), NOT the nominal
     // controlPeriodMs, so using the nominal value made kI act at ~0.4x strength

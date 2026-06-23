@@ -152,8 +152,17 @@ bool BodyVelocityController::advance(float dt_s)
     }
 
     // Mecanum inverse kinematics: body twist (vx, vy, omega) → 4 wheel speeds.
-    const int8_t signs[4] = { _cfg.fwdSignFR, _cfg.fwdSignFL,
-                               _cfg.fwdSignBR, _cfg.fwdSignBL };
+    //
+    // 046-008: The kinematics works in the LOGICAL convention (forward-positive
+    // per wheel). The per-wheel PHYSICAL forward sign (cfg.fwdSign*) is applied
+    // by the HAL Motor layer — Motor::setSpeed multiplies the PWM by _fwdSign and
+    // the encoder read applies it too — exactly as the differential drive does.
+    // Applying cfg.fwdSign here as well double-applied it (±1 squared = +1),
+    // cancelling the correction so every wheel was driven by the raw value (all
+    // wheels spun the same way on a forward command). So use identity signs here
+    // and let the Motor own the physical sign. (The sim's SimMotor ignores
+    // fwdSign, so identity is also correct in simulation.)
+    const int8_t signs[4] = { 1, 1, 1, 1 };
     float wheels[kWheelCount];
     float satWheels[kWheelCount];
     BodyTwist3 twist{ _v, _vy, _omega };

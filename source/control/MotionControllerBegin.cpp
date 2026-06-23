@@ -170,13 +170,6 @@ void MotionController::beginVelocity(float v_mms, float omega_rads, uint32_t now
     //   - No reply sink needed — VW has no correlated EVT done; system watchdog
     //     emits EVT safety_stop directly.
     _activeCmd.configure(v_mms, omega_rads, &_bvc);
-#ifdef ROBOT_DRIVETRAIN_MECANUM
-    // 046-005: Set the lateral vy channel on the BVC.  _activeCmd.configure
-    // already called _bvc.setTarget(v_mms, omega_rads); we immediately override
-    // with the 3-DOF form to include vy.  The default vy_mms=0 keeps the
-    // differential-equivalent path byte-identical when called without vy.
-    _bvc.setTarget(v_mms, omega_rads, vy_mms);
-#endif
     _activeCmd.setOrigin(MotionCommand::Origin::VW);
     // No addStop: system watchdog in LoopScheduler owns keepalive enforcement.
     _activeCmd.setReplySink(fn, ctx, corr_id);
@@ -186,6 +179,14 @@ void MotionController::beginVelocity(float v_mms, float omega_rads, uint32_t now
     HardwareState emptyState{};
     const HardwareState& inputs = _hwState ? *_hwState : emptyState;
     _activeCmd.start(inputs, now_ms);
+
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-008: Apply the 3-DOF target (incl. vy) AFTER start(). start() re-applies
+    // the 2-arg (v, omega) target, which resets vy to 0 on the mecanum BVC — so a
+    // vy set before start() (a strafe command) is silently dropped and produces no
+    // lateral motion. Re-applying it here, post-start, makes strafe actually drive.
+    _activeCmd.setTarget(v_mms, omega_rads, vy_mms);
+#endif
 
     // Set mode to VELOCITY — distinct from STREAMING so the S-mode watchdog
     // branch in driveAdvance does NOT fire for VW.

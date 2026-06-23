@@ -1116,7 +1116,12 @@ static void handleVW(const ArgList& args, const char* corrId,
         // reply and do NOT call setTarget.
         if (ctx->mc->activeCmd().origin() == MotionCommand::Origin::VW) {
             // VW keepalive: update target and re-arm.
+            // 046-008: carry vy so a streamed strafe isn't reset to 0 each keepalive.
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+            ctx->mc->activeCmd().setTarget((float)v, omega_rads, vy_mms);
+#else
             ctx->mc->activeCmd().setTarget((float)v, omega_rads);
+#endif
         } else {
             // Non-VW command active: reply busy, do not stomp target.
             static const char* kOriginNames[] = {

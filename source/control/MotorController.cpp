@@ -379,6 +379,46 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
         inputs.encMm[0] = inputs.encRMm;
     }
     // refreshedWheel == 0: first iteration — velocities held at 0.
+
+    // 046-008: Rear-wheel velocity feedback (BR=index 2, BL=index 3).
+    // MecanumHAL::tick() reads all four encoders every loop, so the rear cached
+    // positions (positionMm(), already fwdSign-applied → logical) are fresh each
+    // controlTick. Differentiate them exactly like the front (EMA + outlier
+    // reject) so the rear PI regulates instead of winding up to saturation.
+    if (_motorBR) {
+        float encBR = _motorBR->positionMm();
+        if (!_hasTimestampBR) {
+            _prevEncBR = encBR; _prevTimeMsBR = now_ms; _hasTimestampBR = true;
+        } else {
+            float elapsed_s = static_cast<float>(now_ms - _prevTimeMsBR) / 1000.0f;
+            if (elapsed_s > 0.0f) {
+                float rawV = (encBR - _prevEncBR) / elapsed_s;
+                if (fabsf(rawV) <= kMaxPlausibleMmps) {
+                    float a = _cal.velFiltAlpha;
+                    inputs.velMms[2] = a * rawV + (1.0f - a) * inputs.velMms[2];
+                    _prevEncBR = encBR; _prevTimeMsBR = now_ms;
+                }
+            }
+        }
+        inputs.encMm[2] = encBR;
+    }
+    if (_motorBL) {
+        float encBL = _motorBL->positionMm();
+        if (!_hasTimestampBL) {
+            _prevEncBL = encBL; _prevTimeMsBL = now_ms; _hasTimestampBL = true;
+        } else {
+            float elapsed_s = static_cast<float>(now_ms - _prevTimeMsBL) / 1000.0f;
+            if (elapsed_s > 0.0f) {
+                float rawV = (encBL - _prevEncBL) / elapsed_s;
+                if (fabsf(rawV) <= kMaxPlausibleMmps) {
+                    float a = _cal.velFiltAlpha;
+                    inputs.velMms[3] = a * rawV + (1.0f - a) * inputs.velMms[3];
+                    _prevEncBL = encBL; _prevTimeMsBL = now_ms;
+                }
+            }
+        }
+        inputs.encMm[3] = encBL;
+    }
 #else
     if (refreshedWheel == 1) {
         // Left wheel was just collected.
