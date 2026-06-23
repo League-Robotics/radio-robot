@@ -1,16 +1,16 @@
 ---
 id: '046'
 title: 'Mecanum drivetrain: swappable differential/mecanum kinematics (omnidirectional)'
-status: planning-docs
+status: done
 branch: mecanum
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-003
-  - SUC-004
-  - SUC-005
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
 issues:
-  - mecanum-drivetrain-swappable-differential-mecanum-kinematics-full-omnidirectional.md
+- mecanum-drivetrain-swappable-differential-mecanum-kinematics-full-omnidirectional.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
