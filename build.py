@@ -76,6 +76,32 @@ import subprocess as _sp
 _gen = os.path.join(os.path.dirname(__file__), "scripts", "gen_default_config.py")
 _sp.run([sys.executable, _gen], check=True)
 
+# Read drivetrain_type from the active robot JSON (046-001).
+# gen_default_config.py already resolved the config above; re-resolve here to
+# avoid duplicating the resolution logic. We import from gen_default_config since
+# it already has load_robot_config() that mirrors the active_robot.json pointer
+# resolution used by the generator.
+def _read_drivetrain_type():
+    """Return the drivetrain_type from the active robot config ('differential' or 'mecanum')."""
+    try:
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "gen_default_config",
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "gen_default_config.py")
+        )
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        _cfg, _ = _mod.load_robot_config()
+        identity = _cfg.get("identity", {}) or {}
+        return identity.get("drivetrain_type", "differential") or "differential"
+    except Exception as _e:
+        print(f"build.py: could not read drivetrain_type ({_e}), defaulting to differential", file=sys.stderr)
+        return "differential"
+
+_drivetrain_type = _read_drivetrain_type()
+print(f"build.py: drivetrain_type={_drivetrain_type!r}", file=sys.stderr)
+_drivetrain_cmake_arg = f"-DROBOT_DRIVETRAIN={_drivetrain_type}"
+
 # out of source build!
 os.chdir("build")
 
@@ -168,8 +194,11 @@ def build_host_sim(clean):
     print("\nBuilding host-simulation library (libfirmware_host, HOST_BUILD)...")
     # ROBOT_RUN_MODE=SIM (039-005): the host build uses the io/sim/ device impls
     # (MockHAL etc.). The sim CMakeLists defaults to SIM, but pass it explicitly.
+    # 046-001: also pass ROBOT_DRIVETRAIN so the sim build matches the firmware build.
     subprocess.run(
-        ["cmake", "-S", sim_dir, "-B", build_dir, "-DROBOT_RUN_MODE=SIM"], check=True
+        ["cmake", "-S", sim_dir, "-B", build_dir,
+         "-DROBOT_RUN_MODE=SIM",
+         f"-DROBOT_DRIVETRAIN={_drivetrain_type}"], check=True
     )
     subprocess.run(["cmake", "--build", build_dir, "--parallel"], check=True)
 
@@ -196,7 +225,8 @@ if not options.test_platform:
         generate_docs()
         exit(0)
 
-    build(options.clean, verbose=options.verbose, parallelism=options.parallelism)
+    build(options.clean, verbose=options.verbose, parallelism=options.parallelism,
+          extra_cmake_args=_drivetrain_cmake_arg)
 
     # Dev build = BOTH versions. After the bench firmware (MICROBIT.hex), also
     # build the full-simulation library (libfirmware_host, HOST_BUILD) so a single

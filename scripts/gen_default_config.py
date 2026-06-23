@@ -134,10 +134,13 @@ def fw_overrides(cfg: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def generate(cfg: dict, source_path: str) -> str:
-    cal   = cfg.get("calibration", {}) or {}
-    geom  = cfg.get("geometry",    {}) or {}
-    ctrl  = cfg.get("control",     {}) or {}
-    wheels = cfg.get("wheels",     {}) or {}
+    cal        = cfg.get("calibration",       {}) or {}
+    geom       = cfg.get("geometry",          {}) or {}
+    ctrl       = cfg.get("control",           {}) or {}
+    wheels     = cfg.get("wheels",            {}) or {}
+    mgeom      = cfg.get("mecanum_geometry",  {}) or {}
+    mcal       = cfg.get("mecanum_calibration", {}) or {}
+    identity   = cfg.get("identity",          {}) or {}
 
     # Derive default mm/deg from wheel diameter when explicit override is absent.
     wd = _get(wheels, "wheel_diameter_mm")
@@ -169,6 +172,26 @@ def generate(cfg: dict, source_path: str) -> str:
     vel_filt  = _get(ctrl, "vel_filt",      default=0.15)
     sync      = _get(ctrl, "sync",          default=1.0)
     min_wheel = _get(ctrl, "min_wheel_mms", default=20.0)
+
+    # Mecanum: drivetrain type (0=differential, 1=mecanum).
+    drivetrain_type = _get(identity, "drivetrain_type", default="differential")
+
+    # Mecanum geometry (mm). Defaults are measurement placeholders.
+    half_track = _get(mgeom, "half_track_mm")
+    half_wb    = _get(mgeom, "half_wheelbase_mm")
+
+    # Mecanum per-wheel encoder calibration. Falls back to wheel_diameter_mm
+    # derived default (same formula as mmPerDegL/R for differential).
+    mmpd_fr = _get(mcal, "mm_per_wheel_deg_fr")
+    mmpd_fl = _get(mcal, "mm_per_wheel_deg_fl")
+    mmpd_br = _get(mcal, "mm_per_wheel_deg_br")
+    mmpd_bl = _get(mcal, "mm_per_wheel_deg_bl")
+
+    # Mecanum per-wheel forward signs. Bench-confirmed defaults.
+    sign_fr = _get(mcal, "fwd_sign_fr", default=-1)
+    sign_fl = _get(mcal, "fwd_sign_fl", default=+1)
+    sign_br = _get(mcal, "fwd_sign_br", default=-1)
+    sign_bl = _get(mcal, "fwd_sign_bl", default=+1)
 
     # Schema-driven overrides: any robot-JSON value mapped via the schema's
     # `firmware` keyword wins over the hardcoded default below. This is how a
@@ -319,6 +342,35 @@ RobotConfig defaultRobotConfig() {{
     p.lagLineMs       = 50;
     p.lagColorMs      = 100;
     p.lagPortsMs      = 50;
+
+    // Sprint 046: mecanum drivetrain fields (baked from identity.drivetrain_type).
+    // Differential builds carry these fields with safe defaults; they are unused
+    // unless #ifdef ROBOT_DRIVETRAIN_MECANUM code reads them.
+    p.drivetrain      = {1 if drivetrain_type == 'mecanum' else 0};
+
+    // Mecanum geometry (MEASURE placeholders; default 63.0 mm half-track/wheelbase).
+    p.halfTrackMm     = {_f(half_track if half_track is not None else 63.0)};
+    p.halfWheelbaseMm = {_f(half_wb    if half_wb    is not None else 63.0)};
+
+    // Per-wheel encoder calibration (mecanum). Defaults from wheel_diameter_mm.
+    p.mmPerDegFR      = {_f(mmpd_fr if mmpd_fr is not None else default_mmpd)};
+    p.mmPerDegFL      = {_f(mmpd_fl if mmpd_fl is not None else default_mmpd)};
+    p.mmPerDegBR      = {_f(mmpd_br if mmpd_br is not None else default_mmpd)};
+    p.mmPerDegBL      = {_f(mmpd_bl if mmpd_bl is not None else default_mmpd)};
+
+    // Per-wheel forward signs (mecanum). Bench-confirmed defaults.
+    p.fwdSignFR       = {sign_fr};
+    p.fwdSignFL       = {sign_fl};
+    p.fwdSignBR       = {sign_br};
+    p.fwdSignBL       = {sign_bl};
+
+    // Lateral profile limits (mecanum).
+    p.vyBodyMax       = {ov('vyBodyMax', '400.0f')};
+    p.aMaxY           = {ov('aMaxY',     '800.0f')};
+    p.jMaxY           = {ov('jMaxY',     '0.0f')};
+
+    // OTOS lateral velocity complementary filter gain (046-006).
+    p.otosAlphaVy     = {ov('otosAlphaVy', '0.8f')};
 
     return p;
 }}

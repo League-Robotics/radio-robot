@@ -111,13 +111,19 @@ public:
     //   theta_otos_rad         — OTOS heading observation (rad) — sprint 024-004
     //   v_otos_mmps            — OTOS body-frame linear velocity (mm/s)
     //   omega_otos_rads        — OTOS angular velocity (rad/s)
+    //   vy_otos_mmps           — OTOS lateral velocity (mm/s); mecanum build only
     //
     // 033-003: encoder-derived velocity is fused unconditionally in predict(),
     // NOT here — fusing it in both paths would double-count it per OTOS tick.
+    //
+    // 046-006: vy_otos_mmps is an optional parameter (default 0.0f) so that
+    // the differential build callers compile without change.  In the mecanum
+    // build it drives the complementary filter for s.fusedVy.
     void correctEKF(HardwareState& s,
                     float x_otos, float y_otos,
                     float theta_otos_rad,
-                    float v_otos_mmps, float omega_otos_rads);
+                    float v_otos_mmps, float omega_otos_rads,
+                    float vy_otos_mmps = 0.0f);
 
     // OTOS complementary correction — correct step of predict/correct.
     // (docs/kinematics-model.md §2.4; EKF upgrade path replaces this later.)
@@ -206,6 +212,14 @@ public:
     void setWedgeActive(bool active) { _wedgeActive = active; }
     bool wedgeActive() const { return _wedgeActive; }
 
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-006: set the OTOS lateral velocity complementary filter gain.
+    // Call once at startup (from Robot constructor, after cfg is loaded).
+    // Default 0.8f is applied if this is never called.
+    void setOtosAlphaVy(float alpha) { _otosAlphaVy = alpha; }
+    float fusedVy() const { return _fusedVy; }
+#endif  // ROBOT_DRIVETRAIN_MECANUM
+
 private:
     // Intermediate compute state: previous encoder snapshot (not in HardwareState
     // because Odometry runs at a different cadence than the control task).
@@ -241,6 +255,15 @@ private:
     bool _wedgeActive = false;
 
     EKF _ekf;              // Extended Kalman Filter — fuses encoder odometry with OTOS
+
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-006: complementary-filter state for lateral velocity.
+    // Updated in correctEKF() using _otosAlphaVy.
+    // Not updated in predict() — encoder forward-kinematics do not observe vy
+    // reliably for a mecanum wheel at this stage.
+    float _fusedVy     = 0.0f;
+    float _otosAlphaVy = 0.8f;  // OTOS-trusting blend gain; set via setOtosAlphaVy()
+#endif  // ROBOT_DRIVETRAIN_MECANUM
 
     // Wrap heading to (-π, π] using atan2f identity.
     static float wrapPi(float theta);

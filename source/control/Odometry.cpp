@@ -219,7 +219,8 @@ void Odometry::initEKF(float q_xy, float q_theta, float q_v, float q_omega,
 void Odometry::correctEKF(HardwareState& s,
                           float x_otos, float y_otos,
                           float theta_otos_rad,
-                          float v_otos_mmps, float omega_otos_rads)
+                          float v_otos_mmps, float omega_otos_rads,
+                          float vy_otos_mmps)
 {
     // 1. Fuse OTOS position (Mahalanobis-gated inside EKF).
     _ekf.updatePosition(x_otos, y_otos);
@@ -237,4 +238,15 @@ void Odometry::correctEKF(HardwareState& s,
     s.poseHrad   = _ekf.theta();
     s.fusedV     = _ekf.v();
     s.fusedOmega = _ekf.omega();
+
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-006: complementary filter for lateral body velocity.
+    // OTOS directly observes vy; blend toward the OTOS reading each correction tick.
+    // _otosAlphaVy defaults to 0.8 (strongly OTOS-trusting); set via setOtosAlphaVy().
+    // vy_otos_mmps defaults to 0.0f in the differential build (no-op).
+    _fusedVy   = _otosAlphaVy * vy_otos_mmps + (1.0f - _otosAlphaVy) * _fusedVy;
+    s.fusedVy  = _fusedVy;
+#else
+    (void)vy_otos_mmps;
+#endif  // ROBOT_DRIVETRAIN_MECANUM
 }

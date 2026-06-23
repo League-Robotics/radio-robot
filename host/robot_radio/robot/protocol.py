@@ -46,16 +46,21 @@ class TLMFrame:
     ``seq`` is the D10 sequence counter (uint16, wrapping at 65535); absent on
     pre-028-005 firmware.  Use ``tlm_drop_rate(frames)`` to estimate packet loss.
     ``pose`` heading is in centi-degrees (integer), positions in mm.
-    ``vel`` is per-wheel measured speed in mm/s (chip-preferred, encoder fallback).
-    ``twist`` is fused body-frame velocity: (v_mmps, omega_mradps) as integers.
+    ``vel`` is per-wheel measured speed in mm/s:
+      - Differential build: 2-tuple (vL_mmps, vR_mmps).
+      - Mecanum build:      4-tuple (vFR_mmps, vFL_mmps, vBR_mmps, vBL_mmps).
+    ``twist`` is fused body-frame velocity:
+      - Differential build: 2-tuple (v_mmps, omega_mradps).
+      - Mecanum build:      3-tuple (vx_mmps, vy_mmps, omega_mradps).
+    The vy field in the mecanum twist is the lateral body velocity from OTOS.
     """
     t: int | None = None
     mode: str | None = None
     seq: int | None = None                       # D10 sequence counter (uint16, wraps at 65535)
     enc: tuple[int, int] | None = None          # (left_mm, right_mm)
     pose: tuple[int, int, int] | None = None    # (x_mm, y_mm, heading_cdeg)
-    vel: tuple[int, int] | None = None          # (vL_mmps, vR_mmps) — per-wheel mm/s
-    twist: tuple[int, int] | None = None        # (v_mmps, omega_mradps) — fused body velocity
+    vel: tuple[int, ...] | None = None          # differential: (vL, vR); mecanum: (vFR, vFL, vBR, vBL) mm/s
+    twist: tuple[int, ...] | None = None        # differential: (v, omega_mrad); mecanum: (vx, vy, omega_mrad)
     otos: tuple[int, int, int] | None = None    # (x_mm, y_mm, heading_cdeg) — raw OTOS pose
     line: tuple[int, int, int, int] | None = None   # (g1, g2, g3, g4)
     color: tuple[int, int, int, int] | None = None  # (r, g, b, c)
@@ -173,7 +178,12 @@ def parse_tlm(line: str) -> TLMFrame | None:
         try:
             parts = kv["vel"].split(",")
             if len(parts) == 2:
+                # Differential: (vL_mmps, vR_mmps)
                 frame.vel = (int(parts[0]), int(parts[1]))
+            elif len(parts) == 4:
+                # Mecanum: (vFR_mmps, vFL_mmps, vBR_mmps, vBL_mmps)
+                frame.vel = (int(parts[0]), int(parts[1]),
+                             int(parts[2]), int(parts[3]))
         except ValueError:
             pass
 
@@ -181,7 +191,11 @@ def parse_tlm(line: str) -> TLMFrame | None:
         try:
             parts = kv["twist"].split(",")
             if len(parts) == 2:
+                # Differential: (v_mmps, omega_mradps)
                 frame.twist = (int(parts[0]), int(parts[1]))
+            elif len(parts) == 3:
+                # Mecanum: (vx_mmps, vy_mmps, omega_mradps)
+                frame.twist = (int(parts[0]), int(parts[1]), int(parts[2]))
         except ValueError:
             pass
 

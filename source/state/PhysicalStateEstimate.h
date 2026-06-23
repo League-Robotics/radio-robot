@@ -27,10 +27,13 @@ public:
                                 float rotationalSlip, uint32_t now_ms);
 
     // OTOS EKF correction (= Odometry::correctEKF, verbatim).
+    // vy_otos_mmps: OTOS lateral velocity (mm/s); mecanum build only (046-006).
+    // Default 0.0f so all existing differential callers compile unchanged.
     void addOtosObservation(HardwareState& s,
                             float x_otos, float y_otos,
                             float theta_otos_rad,
-                            float v_otos_mmps, float omega_otos_rads);
+                            float v_otos_mmps, float omega_otos_rads,
+                            float vy_otos_mmps = 0.0f);
 
     // External camera re-anchor / SI verb (= Odometry::setPose, verbatim).
     void resetPose(HardwareState& s,
@@ -76,6 +79,11 @@ public:
     void     setWedgeActive(bool active);
 
     void     rebaselinePrev(float encL, float encR);
+
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-006: forward the OTOS lateral velocity filter gain to Odometry.
+    void     setOtosAlphaVy(float alpha);
+#endif  // ROBOT_DRIVETRAIN_MECANUM
 
     // --- Access to the wrapped Odometry (for OtosCommands context in T2) ---
     Odometry& odometry() { return _odometry; }

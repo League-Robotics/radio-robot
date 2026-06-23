@@ -28,5 +28,15 @@
     "role": "NEZHA2",
     "serial": "2314287040",
     "uid": "9906360200052820a8fdb5e413abb276000000006e052820"
+  },
+  "9906360200052820fe9a0254d8d892d9000000006e052820": {
+    "announcement": "DEVICE:NEZHA2:robot:togov:2108549556",
+    "common_name": "robot",
+    "device_name": "togov",
+    "enum": 5,
+    "port": "/dev/cu.usbmodem2121102",
+    "role": "NEZHA2",
+    "serial": "2108549556",
+    "uid": "9906360200052820fe9a0254d8d892d9000000006e052820"
   }
 }

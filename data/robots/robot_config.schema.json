@@ -23,7 +23,13 @@
         "robot_name":     { "type": "string" },
         "uid":            { "type": "string" },
         "hardware_model": { "type": "string" },
-        "common_name":    { "type": "string" }
+        "common_name":    { "type": "string" },
+        "drivetrain_type": {
+          "type": "string",
+          "enum": ["differential", "mecanum"],
+          "default": "differential",
+          "description": "Compile-time drivetrain variant. 'differential' (default) = standard 2-wheel diff drive; 'mecanum' = 4-wheel omnidirectional mecanum. The build system reads this field to select -DROBOT_DRIVETRAIN; the firmware RobotConfig.drivetrain field is baked from this."
+        }
       }
     },
 
@@ -183,6 +189,7 @@
         }
       }
     },
+
     "control": {
       "type": "object",
       "additionalProperties": false,
@@ -200,6 +207,87 @@
         "yaw_rate_max":  { "type": ["number", "null"], "description": "Yaw rate ceiling (deg/s) for TURN and arc rotation; lower reduces in-place turn overshoot (firmware default 180; 60 is camera-calibrated for tovez).", "firmware": { "field": "yawRateMax", "set_key": "yawRateMax", "kind": "float" } },
         "arrive_tol_mm": { "type": ["number", "null"], "description": "G arrival tolerance radius (mm): POSITION stop fires when the robot centre is within this disc of the target. Default 5; widened to 25 for carpet (D8 027-004).", "firmware": { "field": "arriveTolMm", "set_key": "arriveTol", "kind": "float" } },
         "max_rot_accel_dps2": { "type": ["number", "null"], "description": "Host-side turn ramp: max rotational acceleration, deg/s^2 (default 300). Host-side only — no firmware mapping." }
+      }
+    },
+
+    "mecanum_geometry": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Mecanum drivetrain geometry. All fields are optional; null means use the generated default. Only consumed when identity.drivetrain_type = 'mecanum'.",
+      "properties": {
+        "half_track_mm": {
+          "type": ["number", "null"],
+          "description": "Half the wheel track width (mm). Placeholder default 63.0 — MEASURE on the bench.",
+          "firmware": { "field": "halfTrackMm", "kind": "float" }
+        },
+        "half_wheelbase_mm": {
+          "type": ["number", "null"],
+          "description": "Half the wheelbase (mm). Placeholder default 63.0 — MEASURE on the bench.",
+          "firmware": { "field": "halfWheelbaseMm", "kind": "float" }
+        }
+      }
+    },
+
+    "mecanum_calibration": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Mecanum per-wheel calibration. All fields are optional; null means use the generated default. Only consumed when identity.drivetrain_type = 'mecanum'.",
+      "properties": {
+        "mm_per_wheel_deg_fr": {
+          "type": ["number", "null"],
+          "description": "Per-wheel encoder calibration: mm of travel per degree of motor rotation (front-right). Defaults from wheel_diameter_mm if null.",
+          "firmware": { "field": "mmPerDegFR", "kind": "float" }
+        },
+        "mm_per_wheel_deg_fl": {
+          "type": ["number", "null"],
+          "description": "Per-wheel encoder calibration: mm of travel per degree of motor rotation (front-left). Defaults from wheel_diameter_mm if null.",
+          "firmware": { "field": "mmPerDegFL", "kind": "float" }
+        },
+        "mm_per_wheel_deg_br": {
+          "type": ["number", "null"],
+          "description": "Per-wheel encoder calibration: mm of travel per degree of motor rotation (back-right). Defaults from wheel_diameter_mm if null.",
+          "firmware": { "field": "mmPerDegBR", "kind": "float" }
+        },
+        "mm_per_wheel_deg_bl": {
+          "type": ["number", "null"],
+          "description": "Per-wheel encoder calibration: mm of travel per degree of motor rotation (back-left). Defaults from wheel_diameter_mm if null.",
+          "firmware": { "field": "mmPerDegBL", "kind": "float" }
+        },
+        "fwd_sign_fr": {
+          "type": ["integer", "null"],
+          "description": "Front-right wheel forward sign: +1 = CCW-is-forward, -1 = CW-is-forward. Default -1.",
+          "firmware": { "field": "fwdSignFR", "kind": "int" }
+        },
+        "fwd_sign_fl": {
+          "type": ["integer", "null"],
+          "description": "Front-left wheel forward sign: +1 = CCW-is-forward, -1 = CW-is-forward. Default +1.",
+          "firmware": { "field": "fwdSignFL", "kind": "int" }
+        },
+        "fwd_sign_br": {
+          "type": ["integer", "null"],
+          "description": "Back-right wheel forward sign: +1 = CCW-is-forward, -1 = CW-is-forward. Default -1.",
+          "firmware": { "field": "fwdSignBR", "kind": "int" }
+        },
+        "fwd_sign_bl": {
+          "type": ["integer", "null"],
+          "description": "Back-left wheel forward sign: +1 = CCW-is-forward, -1 = CW-is-forward. Default +1.",
+          "firmware": { "field": "fwdSignBL", "kind": "int" }
+        },
+        "vy_body_max": {
+          "type": ["number", "null"],
+          "description": "Lateral body speed ceiling (mm/s). Default 400.0.",
+          "firmware": { "field": "vyBodyMax", "kind": "float" }
+        },
+        "a_max_y": {
+          "type": ["number", "null"],
+          "description": "Lateral acceleration limit (mm/s^2). Default 800.0.",
+          "firmware": { "field": "aMaxY", "kind": "float" }
+        },
+        "j_max_y": {
+          "type": ["number", "null"],
+          "description": "Lateral jerk limit (mm/s^3). 0 = trapezoid (default 0.0).",
+          "firmware": { "field": "jMaxY", "kind": "float" }
+        }
       }
     }
   },

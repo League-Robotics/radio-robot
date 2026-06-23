@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "io/NoopDevices.h"
 #include "io/capability/IVelocityMotor.h"
 #include "io/capability/ILineSensor.h"
 #include "io/capability/IColorSensor.h"
@@ -58,4 +59,20 @@ public:
     // Returns true when the bench OTOS sensor is currently active (034-003).
     // Default false for HALs that do not support bench mode.
     virtual bool isBenchMode() const { return false; }
+
+    // -----------------------------------------------------------------------
+    // Default Noop accessors for rear motors (mecanum build overrides these
+    // in MecanumHAL; all existing HAL subclasses — NezhaHAL, MockHAL,
+    // ReplayHAL, SimHardware — inherit these defaults and require no change).
+    // Added in ticket 046-003.
+    // -----------------------------------------------------------------------
+    virtual IVelocityMotor& motorBR()         { return _noopMotor; }
+    virtual IVelocityMotor& motorBL()         { return _noopMotor; }
+    virtual int             motorCount() const { return 2; }
+
+private:
+    // Shared no-op motor instance backing the default motorBR()/motorBL()
+    // accessors. Declared last so subclass constructors (which run before
+    // the base destructor) never depend on this field's ordering.
+    NoopVelocityMotor _noopMotor;
 };

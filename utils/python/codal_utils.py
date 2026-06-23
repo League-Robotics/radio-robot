@@ -11,9 +11,12 @@ def system(cmd):
     if os.system(cmd) != 0:
       sys.exit(1)
 
-def build(clean, verbose = False, parallelism = 10):
+def build(clean, verbose = False, parallelism = 10, extra_cmake_args = ""):
     # Use Ninja on Windows, or if available in any other OS
     use_ninja = shutil.which("ninja") is not None or platform.system() == "Windows"
+
+    # Append any extra CMake arguments (e.g. -DROBOT_DRIVETRAIN=mecanum).
+    extra = (" " + extra_cmake_args.strip()) if extra_cmake_args.strip() else ""
 
     if use_ninja:
         # configure
@@ -21,7 +24,7 @@ def build(clean, verbose = False, parallelism = 10):
         # io/real/ device impls and excludes io/sim/ + io/ReplayHAL. The root
         # CMakeLists.txt defaults to REAL, but pass it explicitly so the build
         # intent is self-documenting.
-        system("cmake .. -Wno-dev -DCMAKE_BUILD_TYPE=RelWithDebInfo -DROBOT_RUN_MODE=REAL -G \"Ninja\"")
+        system("cmake .. -Wno-dev -DCMAKE_BUILD_TYPE=RelWithDebInfo -DROBOT_RUN_MODE=REAL{extra} -G \"Ninja\"".format(extra=extra))
 
         if clean:
             system("ninja clean")
@@ -34,7 +37,7 @@ def build(clean, verbose = False, parallelism = 10):
     else:
         # configure
         # ROBOT_RUN_MODE=REAL (039-005): see the Ninja branch above.
-        system("cmake .. -Wno-dev -DCMAKE_BUILD_TYPE=RelWithDebInfo -DROBOT_RUN_MODE=REAL -G \"Unix Makefiles\"")
+        system("cmake .. -Wno-dev -DCMAKE_BUILD_TYPE=RelWithDebInfo -DROBOT_RUN_MODE=REAL{extra} -G \"Unix Makefiles\"".format(extra=extra))
 
         if clean:
             system("make clean")

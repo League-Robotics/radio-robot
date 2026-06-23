@@ -85,9 +85,14 @@ void Superstructure::requestGoal(const GoalRequest& gr)
 
     case Goal::VELOCITY:
         // handleVW open-ended NEW-command branch:
-        //   beginVelocity(v, omega, now, target, fn, ctx, corrId).
+        //   beginVelocity(v, omega, now, target, fn, ctx, corrId[, vy]).
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+        _mc.beginVelocity(gr.v_mms, gr.omega_rads, gr.now_ms,
+                          target, gr.replyFn, gr.replyCtx, gr.corrId, gr.vy_mms);
+#else
         _mc.beginVelocity(gr.v_mms, gr.omega_rads, gr.now_ms,
                           target, gr.replyFn, gr.replyCtx, gr.corrId);
+#endif
         break;
 
     case Goal::ARC:

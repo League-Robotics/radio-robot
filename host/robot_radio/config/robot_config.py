@@ -44,6 +44,10 @@ class IdentityConfig(BaseModel):
     uid: str
     hardware_model: str = ""
     common_name: str = ""
+    # 046-001: compile-time drivetrain variant ('differential' or 'mecanum').
+    # Host-side this is informational only — the build system bakes it into
+    # the firmware. Default 'differential' keeps existing configs valid.
+    drivetrain_type: str = "differential"
 
 
 class ConnectionConfig(BaseModel):

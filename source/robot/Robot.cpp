@@ -94,6 +94,12 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
 {
     motionController.setHardwareState(&state.inputs);
     motorController.setCommandsRef(&state.commands);
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-005: Bind rear motors (BR, BL) to MotorController after construction.
+    // The base 2-motor constructor bound FL (motorL/motorR = front motors);
+    // bindRearMotors attaches the rear motors and seeds their VelocityControllers.
+    motorController.bindRearMotors(hal.motorBR(), hal.motorBL());
+#endif
     // setRobotCtx replaces setCtx (sprint 026-002): MotionCtx now lives in Robot.
     motionController.setRobotCtx(this);
     // Initialise _motionCtx (sprint 026-002): mc and robot pointers; queue wired
@@ -114,6 +120,10 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
                      config.ekfQv, config.ekfQomega,
                      config.ekfROtosXy, config.ekfROtosV, config.ekfREncV,
                      config.ekfROtosTheta);
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-006: seed the OTOS lateral velocity complementary filter gain from config.
+    estimate.setOtosAlphaVy(config.otosAlphaVy);
+#endif  // ROBOT_DRIVETRAIN_MECANUM
 }
 
 // ---------------------------------------------------------------------------
@@ -269,11 +279,32 @@ void Robot::otosCorrect(uint32_t now_ms)
         vel.omega_rads = 0.0f;
     }
 
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-006: read the lateral velocity component from the OTOS (3-DOF read).
+    // The OTOS REG_VELOCITY already carries vy; readVelocityTransformed3 applies
+    // the same mount-rotation transform and returns all three body-frame components.
+    // On failure (I2C error or sensor not initialised) vy_otos stays 0.0f so the
+    // complementary filter decays to zero rather than fusing garbage.
+    float vy_otos = 0.0f;
+    {
+        BodyTwist3 vel3{};
+        if (activeOtos.readVelocityTransformed3(vel3, headingRad)) {
+            vy_otos = vel3.vy_mmps;
+        }
+    }
+
+    // Encoder-derived velocity is fused unconditionally in Odometry::predict()
+    // every tick (033-003), so correctEKF() fuses only the OTOS observations.
+    estimate.addOtosObservation(state.inputs, p.x, p.y,
+                        p.h,
+                        vel.v_mmps, vel.omega_rads, vy_otos);
+#else
     // Encoder-derived velocity is fused unconditionally in Odometry::predict()
     // every tick (033-003), so correctEKF() fuses only the OTOS observations.
     estimate.addOtosObservation(state.inputs, p.x, p.y,
                         p.h,
                         vel.v_mmps, vel.omega_rads);
+#endif  // ROBOT_DRIVETRAIN_MECANUM
 }
 
 // ---------------------------------------------------------------------------
@@ -314,6 +345,14 @@ void Robot::resetEncoders()
     // 2. Align the outlier-filter baseline with the now-zeroed accumulators.
     state.inputs.encLMm = 0.0f;
     state.inputs.encRMm = 0.0f;
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // Sync the 4-element array counterparts so mecanum code sees consistent
+    // zeros immediately (they would be synced on the next controlTick anyway).
+    state.inputs.encMm[0] = 0.0f;  // FR
+    state.inputs.encMm[1] = 0.0f;  // FL
+    state.inputs.encMm[2] = 0.0f;  // BR (rear encoder; zeroed defensively)
+    state.inputs.encMm[3] = 0.0f;  // BL
+#endif
 
     // 3. Re-baseline Odometry's encoder snapshot so predict() sees delta=0
     //    on the very next tick rather than (0 - _prevEncL) = large negative.

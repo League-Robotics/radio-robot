@@ -85,6 +85,16 @@ public:
     int8_t getAngularScalar() const override;
     void   setAngularScalar(int8_t val) override;
 
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-006: 3-DOF velocity read (mecanum build only).
+    // Reads the same REG_VELOCITY_XL registers as readVelocityTransformed but
+    // returns all three body-frame components: vx (forward), vy (lateral),
+    // and omega (yaw rate).  Applies the same flip/rotation transform as
+    // readVelocityTransformed.  Returns false on I2C error.
+    bool readVelocityTransformed3(BodyTwist3& velOut,
+                                  float headingRad = 0.0f) const override;
+#endif  // ROBOT_DRIVETRAIN_MECANUM
+
 private:
     I2CBus&            _i2c;
     const RobotConfig& _cfg;

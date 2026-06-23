@@ -142,9 +142,15 @@ void MotionController::beginStream(float leftMms, float rightMms, uint32_t now_m
     target.sink      = {};  // no async EVT for streaming mode
 }
 
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+void MotionController::beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
+                                     TargetState& target, ReplyFn fn, void* ctx,
+                                     const char* corr_id, float vy_mms)
+#else
 void MotionController::beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
                                      TargetState& target, ReplyFn fn, void* ctx,
                                      const char* corr_id)
+#endif
 {
     // Cancel any stale MotionCommand before configuring the new one.
     // cancel(HARD) emits "EVT cancelled" via the stored reply sink (making the
@@ -173,6 +179,14 @@ void MotionController::beginVelocity(float v_mms, float omega_rads, uint32_t now
     HardwareState emptyState{};
     const HardwareState& inputs = _hwState ? *_hwState : emptyState;
     _activeCmd.start(inputs, now_ms);
+
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // 046-008: Apply the 3-DOF target (incl. vy) AFTER start(). start() re-applies
+    // the 2-arg (v, omega) target, which resets vy to 0 on the mecanum BVC — so a
+    // vy set before start() (a strafe command) is silently dropped and produces no
+    // lateral motion. Re-applying it here, post-start, makes strafe actually drive.
+    _activeCmd.setTarget(v_mms, omega_rads, vy_mms);
+#endif
 
     // Set mode to VELOCITY — distinct from STREAMING so the S-mode watchdog
     // branch in driveAdvance does NOT fire for VW.

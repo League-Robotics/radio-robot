@@ -19,7 +19,46 @@ struct ValueSet {
 
 // ---------------------------------------------------------------------------
 // MotorCommands — actuator outputs produced by the control loop.
+//
+// 046-005 design note: the mecanum build KEEPS the existing scalar fields
+// (tgtLMms, tgtRMms, pwmL, pwmR) so that ALL shared code in Drive.cpp,
+// MotionController.cpp, SimHardware.cpp etc. compiles in both builds with
+// ZERO call-site changes.  The mecanum build ADDS 4-element arrays alongside
+// (tgtMms[4], pwm[4]) for mecanum-specific code (BVC, MotorController).
+//
+// MotorController in the mecanum build syncs BOTH representations when
+// setTarget() is called: it writes tgtMms[0..3] (rear) AND keeps
+// tgtLMms/tgtRMms in sync so shared code that reads them (Drive.cpp driving
+// detection) continues to work correctly.
+//
+// Reference-member approach was rejected: reference members cannot appear in
+// structs using aggregate `= {}` zero-initialisation (C++ requires that every
+// reference member be explicitly bound in a user-provided constructor, and
+// `RobotStateContainer s{}` would not compile).
 // ---------------------------------------------------------------------------
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+struct MotorCommands {
+    // Scalar L/R fields — IDENTICAL layout to the differential struct so that
+    // shared code (Drive.cpp, MotionController.cpp, SimHardware.cpp, etc.)
+    // compiles without any call-site changes in the mecanum build.
+    float    tgtLMms = 0.0f;     // FL target speed (semantic "left"), mm/s
+    float    tgtRMms = 0.0f;     // FR target speed (semantic "right"), mm/s
+    int16_t  pwmL    = 0;        // FL raw PWM output
+    int16_t  pwmR    = 0;        // FR raw PWM output
+    bool     digitalOut[4]   = {};
+    int16_t  analogOut[4]    = {};
+    bool     digitalDirty[4] = {};
+    bool     analogDirty[4]  = {};
+
+    // 4-wheel arrays (mecanum-only code uses these).
+    // [0]=FR, [1]=FL, [2]=BR, [3]=BL.
+    // FR  maps to tgtRMms (semantic "right front"),
+    // FL  maps to tgtLMms (semantic "left front").
+    // MotorController::setTarget(float*,int) writes all 4 AND syncs tgtLMms/tgtRMms.
+    float    tgtMms[4] = {};   // all-wheel targets (synced with tgtLMms/tgtRMms)
+    int16_t  pwm[4]    = {};   // all-wheel PWM outputs (synced with pwmL/pwmR)
+};
+#else
 struct MotorCommands {
     float    tgtLMms;           // left-wheel target speed, mm/s
     float    tgtRMms;           // right-wheel target speed, mm/s
@@ -30,10 +69,78 @@ struct MotorCommands {
     bool     digitalDirty[4];   // channel has unsent update
     bool     analogDirty[4];    // channel has unsent update
 };
+#endif  // ROBOT_DRIVETRAIN_MECANUM
 
 // ---------------------------------------------------------------------------
 // HardwareState — all sensor readings (latest values + freshness envelopes).
+//
+// 046-005 design note: same strategy as MotorCommands — the mecanum build
+// KEEPS the existing scalar encLMm/encRMm/velLMms/velRMms fields so shared
+// code (Drive.cpp, MotionController.cpp, Odometry.cpp, etc.) compiles in
+// both builds unchanged.  The mecanum build ADDS encMm[4]/velMms[4] alongside
+// for mecanum-specific code and adds fusedVy (lateral body velocity).
+//
+// MotorController in the mecanum build keeps the scalar fields and the arrays
+// in sync: encMm[0]/[1] alias FR/FL, velMms[0]/[1] alias FR/FL.  BR/BL
+// (indices 2/3) have no corresponding scalar; they are mecanum-only.
 // ---------------------------------------------------------------------------
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+struct HardwareState {
+    // Scalar L/R fields — IDENTICAL layout to the differential struct.
+    // Shared code (Drive.cpp, MotionController.cpp, Odometry.cpp, etc.)
+    // reads/writes these without any change in the mecanum build.
+    float    encLMm = 0.0f;   // FL (front-left) cumulative distance, mm
+    float    encRMm = 0.0f;   // FR (front-right) cumulative distance, mm
+    ValueSet enc;              // freshness for encoder readings
+
+    float    velLMms = 0.0f;  // FL velocity, mm/s
+    float    velRMms = 0.0f;  // FR velocity, mm/s
+
+    // 4-wheel arrays (mecanum-only code uses these; kept in sync by MotorController).
+    // [0]=FR, [1]=FL, [2]=BR, [3]=BL.
+    float    encMm[4]  = {};  // per-wheel cumulative distances (encMm[0]=encRMm, [1]=encLMm)
+    float    velMms[4] = {};  // per-wheel velocities          (velMms[0]=velRMms, [1]=velLMms)
+
+    // Lateral body velocity (mecanum-only; written by MotorController/BVC).
+    float    fusedVy = 0.0f;  // lateral velocity from forward kinematics, mm/s
+
+    // Dead-reckoning pose (updated each encoder tick)
+    float    poseX    = 0.0f;
+    float    poseY    = 0.0f;
+    float    poseHrad = 0.0f;
+    ValueSet pose;
+
+    // EKF fused velocity
+    float    fusedV     = 0.0f;
+    float    fusedOmega = 0.0f;
+
+    // OTOS acceleration
+    float    otosAccelX = 0.0f;
+    float    otosAccelY = 0.0f;
+
+    // OTOS optical odometry sensor
+    float    otosX = 0.0f;
+    float    otosY = 0.0f;
+    float    otosH = 0.0f;
+    ValueSet otos;
+
+    // Line sensor (4-channel)
+    uint16_t line[4] = {};
+    ValueSet lineVS;
+
+    // Color sensor (RGBC)
+    uint16_t colorR = 0;
+    uint16_t colorG = 0;
+    uint16_t colorB = 0;
+    uint16_t colorC = 0;
+    ValueSet colorVS;
+
+    // General-purpose I/O ports
+    bool     digitalIn[4] = {};
+    int16_t  analogIn[4]  = {};
+    ValueSet portsVS;
+};
+#else
 struct HardwareState {
     // Encoder odometry
     float    encLMm;    // left-wheel cumulative distance, mm
@@ -80,6 +187,7 @@ struct HardwareState {
     int16_t  analogIn[4];   // analogue input channels 0–3
     ValueSet portsVS;       // freshness for port readings
 };
+#endif  // ROBOT_DRIVETRAIN_MECANUM
 
 // ---------------------------------------------------------------------------
 // TargetState — the current drive command from the radio / command processor.
