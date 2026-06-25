@@ -31,11 +31,6 @@ default-groups = ["calibrate"]
 robot-radio = { path = "host", editable = true }
 aprilcam = { path = "../AprilTags", editable = true }
 
-[tool.uv.workspace]
-members = [
-    "mbdeploy",
-]
-
 [tool.pytest.ini_options]
 # Pin where tests live. Without this, a bare `pytest` from the repo root
 # recursively collects EVERYTHING — including vendor/PythonRobotics (90+
@@ -51,8 +46,6 @@ members = [
 #   tests/bench/             — real-hardware bench tests (opt-in, not collected by default)
 #   tests/field/             — playfield tests (opt-in, not collected by default)
 #
-# mbdeploy is a workspace member with its own test setup (run via mbdeploy/.venv);
-# collecting it from the repo root collides on the duplicate `tests` package name.
 # vendor/ sims are excluded via norecursedirs below.
 testpaths = ["tests/simulation"]
 norecursedirs = [

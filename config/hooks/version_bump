@@ -6,7 +6,6 @@
 # version, so every component reports the same build:
 #   - root            pyproject.toml          (microbit-v2-samples-tools)
 #   - host library    host/pyproject.toml     (robot_radio)
-#   - mbdeploy        mbdeploy/pyproject.toml
 #   - firmware        source/types/Protocol.h (FIRMWARE_VERSION)
 #
 # Args (from dotconfig): <project_dir> <old_version> <new_version>
@@ -35,7 +34,6 @@ sync_toml_version() {
 # pyproject.toml files — explicit list, never glob (avoids .venv/vendor copies).
 sync_toml_version "$PROJECT_DIR/pyproject.toml"
 sync_toml_version "$PROJECT_DIR/host/pyproject.toml"
-sync_toml_version "$PROJECT_DIR/mbdeploy/pyproject.toml"
 
 # Firmware version string in the C++ header.
 HEADER="$PROJECT_DIR/source/types/Protocol.h"

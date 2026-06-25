@@ -97,11 +97,12 @@ This installs Python modules used by the build and test tooling:
 
 ## mbdeploy setup
 
-`mbdeploy` is the standalone deploy package in the `mbdeploy/` directory.
-Install it once with pipx so it is available on `$PATH` in its own venv:
+`mbdeploy` is a standalone deploy package, now published at
+<https://github.com/Busboombot/mbdeploy>. Install it once with pipx so it is
+available on `$PATH` in its own venv:
 
 ```
-    pipx install --editable ./mbdeploy
+    pipx install git+https://github.com/Busboombot/mbdeploy.git
 ```
 
 Or use the justfile recipe:

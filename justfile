@@ -27,7 +27,7 @@ build-clean:
     uv run python3 build.py --clean
 
 mbd-install:
-    pipx install --editable ./mbdeploy
+    pipx install git+https://github.com/Busboombot/mbdeploy.git
 
 list:
     mbdeploy list
