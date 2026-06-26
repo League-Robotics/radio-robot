@@ -1,0 +1,2 @@
+size,trials,ok,corrupt,timeout,success,mean_rtt_ms
+50,25,25,0,0,1.0000,99.76

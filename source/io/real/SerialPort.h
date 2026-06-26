@@ -26,6 +26,12 @@ public:
     void sendReliable(const char* msg);  // bounded-wait for room — for replies/EVT
     void sendf(const char* fmt, ...);  // snprintf into 256-byte stack buffer
 
+    // Retune the UART baud at runtime. Drains TX first so an already-queued
+    // reply (sent at the OLD baud) clocks out fully before the switch. Supported
+    // rates: 115200 (default), 230400, 921600, 1000000. The host must change its
+    // own baud to match WITHOUT reopening the port (reopening pulses DTR → reset).
+    void setBaud(uint32_t baud);
+
 private:
     NRF52Serial& _serial;
     char     _rxBuf[256];   // holds up to a 250-byte line (RAW250 message size)

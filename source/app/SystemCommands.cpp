@@ -522,6 +522,72 @@ static ParseResult parseRf(const char* const* tokens, int ntokens,
     return r;
 }
 
+// ---------------------------------------------------------------------------
+// BAUD <rate> -- change the USB serial baud rate at runtime.
+//   Boots at 115200; "BAUD <rate>" replies "OK baud <rate>" at the OLD baud,
+//   then retunes the UART. Supported: 115200, 230400, 921600, 1000000.
+//   The HOST must then change its own baud on the OPEN port (do NOT reopen —
+//   reopening pulses DTR and resets the robot back to 115200). "BAUD" with no
+//   arg queries the supported set. Reply: OK baud <rate>.
+// ---------------------------------------------------------------------------
+
+static ParseResult parseBaud(const char* const* tokens, int ntokens,
+                              const KVPair* /*kvs*/, int /*nkv*/)
+{
+    ParseResult r;
+    r.ok = true;
+    if (ntokens >= 1) {
+        // Store as STR (sval), not ival: Argument's ival/fval share a union, and
+        // the common "ival=X; fval=0.0f;" idiom would zero a >16-bit rate. The
+        // handler atoi()s sval, which is outside the union.
+        r.args.count = 1;
+        r.args.args[0].type = ArgType::STR;
+        int j = 0;
+        for (; tokens[0][j] != '\0' && j < (int)sizeof(r.args.args[0].sval) - 1; ++j)
+            r.args.args[0].sval[j] = tokens[0][j];
+        r.args.args[0].sval[j] = '\0';
+    } else {
+        r.args.count = 0;
+    }
+    return r;
+}
+
+static void handleBaud(const ArgList& args, const char* corrId,
+                        ReplyFn replyFn, void* replyCtx, void* handlerCtx)
+{
+    LoopScheduler* sched = ctxFrom(handlerCtx).sched;
+    char rbuf[64];
+    if (sched == nullptr) {
+        CommandProcessor::replyErr(rbuf, sizeof(rbuf), "noserial", nullptr,
+                                   corrId, replyFn, replyCtx);
+        return;
+    }
+#ifndef HOST_BUILD
+    if (args.count < 1) {
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "baud",
+                                  "115200|230400|921600|1000000",
+                                  corrId, replyFn, replyCtx);
+        return;
+    }
+    uint32_t rate = (uint32_t)atoi(args.args[0].sval);
+    if (rate != 115200 && rate != 230400 && rate != 921600 && rate != 1000000) {
+        CommandProcessor::replyErr(rbuf, sizeof(rbuf), "range", "baud",
+                                   corrId, replyFn, replyCtx);
+        return;
+    }
+    // Reply on the OLD baud FIRST, then retune (setBaud drains TX before switch).
+    char body[24];
+    snprintf(body, sizeof(body), "%lu", (unsigned long)rate);
+    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "baud", body,
+                              corrId, replyFn, replyCtx);
+    sched->comm().serial().setBaud(rate);
+#else
+    (void)args;
+    CommandProcessor::replyErr(rbuf, sizeof(rbuf), "noserial", nullptr,
+                               corrId, replyFn, replyCtx);
+#endif
+}
+
 static void handleRf(const ArgList& args, const char* corrId,
                       ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
@@ -1123,6 +1189,7 @@ std::vector<CommandDescriptor> Robot::buildCommandTable(
     cmds.push_back(makeCmd("HALT",     parseHalt,      handleHalt,      sysCtxPtr, "badarg")); // named stop-condition registry
     cmds.push_back(makeCmd("STREAM",   parseStream,    handleStream,    sysCtxPtr, "badarg")); // start/stop periodic TLM stream
     cmds.push_back(makeCmd("RF",       parseRf,        handleRf,        sysCtxPtr, "badarg")); // set radio channel
+    cmds.push_back(makeCmd("BAUD",     parseBaud,      handleBaud,      sysCtxPtr, "badarg")); // set USB serial baud rate
     cmds.push_back(makeCmd("+",        parseKeepalive, handleKeepalive, sysCtxPtr, "badarg")); // keepalive: reset watchdog
     cmds.push_back(makeCmd("SAFE",     parseSafe,      handleSafe,      sysCtxPtr, "badarg")); // enable/disable safety watchdog + set timeout
     cmds.push_back(makeCmd("SI",       parseSI,        handleSI,        sysCtxPtr, "badarg")); // set odometry world pose (x_mm y_mm h_cdeg)

@@ -76,6 +76,11 @@ class Link:
         self.ser.write(text.encode("utf-8") + b"\n")
         self.ser.flush()
 
+    def set_host_baud(self, baud: int):
+        # Change baud on the OPEN port (sends USB-CDC SET_LINE_CODING without a
+        # DTR pulse) so the robot is NOT reset. Reopening would reset it to 115200.
+        self.ser.baudrate = baud
+
     def poll_line(self) -> str | None:
         """Return one complete line if available, else None (after a ~10 ms poll)."""
         nl = self._buf.find(b"\n")
@@ -89,6 +94,17 @@ class Link:
             line, self._buf = self._buf[:nl], self._buf[nl + 1:]
             return line.decode("utf-8", "ignore").strip()
         return None
+
+
+def selftest(link, tag="999999", timeout=1.5) -> bool:
+    """One id-correlated ECHO must round-trip. Returns True on success."""
+    link.send_line(f"ECHO selftest_payload #{tag}")
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        ln = link.poll_line()
+        if ln and ln.startswith(_OK_ECHO) and ln.rstrip().endswith(f"#{tag}"):
+            return True
+    return False
 
 
 def run_size(link, size, duration, window, timeout_s, rng, id0):
@@ -169,6 +185,9 @@ def main() -> int:
                     help="max requests in flight (1=request/reply; <=4 for the robot)")
     ap.add_argument("--timeout-ms", type=int, default=1000,
                     help="a message is 'lost' only if unanswered this long (default 1000)")
+    ap.add_argument("--set-baud", type=int, default=None,
+                    help="after connecting at 115200, send BAUD <rate> and retune "
+                         "the host (115200|230400|921600|1000000)")
     ap.add_argument("--go", action="store_true",
                     help="send '!GO' first (radio relay data-plane entry)")
     ap.add_argument("--settle", type=float, default=1.5)
@@ -198,19 +217,42 @@ def main() -> int:
         time.sleep(0.2)
         link.flush_input()
 
-        # Self-test + liveness: one id-correlated ECHO must round-trip.
-        link.send_line("ECHO selftest_payload #999999")
-        got = None
-        t_end = time.monotonic() + 1.5
-        while time.monotonic() < t_end:
-            ln = link.poll_line()
-            if ln and ln.startswith(_OK_ECHO) and ln.rstrip().endswith("#999999"):
-                got = ln
+        # Self-test + liveness at the boot baud. Retry through the ~3 s post-open
+        # reboot (each open pulses DTR → reset); resend the probe until it answers.
+        alive = False
+        for _ in range(16):
+            if selftest(link, timeout=0.5):
+                alive = True
                 break
-        if not got:
+        if not alive:
             print("ECHO self-test FAILED — robot not answering. (right port? --go for relay?)")
             return 2
-        print("ECHO self-test OK — id-correlated round-trip verified.\n")
+        print(f"ECHO self-test OK at {link.ser.baudrate} baud.")
+
+        # Optional: bump the baud via the firmware BAUD command. Reply comes at
+        # the OLD baud; then we retune the HOST on the open port (no reopen/reset).
+        if args.set_baud and args.set_baud != link.ser.baudrate:
+            target = args.set_baud
+            link.send_line(f"BAUD {target}")
+            ack = None
+            end = time.monotonic() + 1.0
+            while time.monotonic() < end:
+                ln = link.poll_line()
+                if ln and "baud" in ln and str(target) in ln:
+                    ack = ln
+                    break
+            print(f"BAUD {target} -> {ack or '(no ack)'}")
+            time.sleep(0.1)                     # let the robot finish retuning
+            link.set_host_baud(target)          # switch host on the OPEN port
+            time.sleep(0.2)
+            link.flush_input()
+            if not selftest(link):
+                print(f"FAILED to talk at {target} baud — the DAPLink interface "
+                      f"may not support it (target nRF52 does). Reverting host to 115200.")
+                link.set_host_baud(115200)
+                return 2
+            print(f"link verified at {target} baud ✓")
+        print()
 
         print(f"id-correlated, lag-tolerant; window={args.window}, "
               f"{args.duration:.0f}s/size, timeout={args.timeout_ms}ms")

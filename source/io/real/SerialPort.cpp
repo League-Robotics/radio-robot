@@ -67,6 +67,20 @@ void SerialPort::sendReliable(const char* msg) {
     _serial.send(s, ASYNC);
 }
 
+void SerialPort::setBaud(uint32_t baud) {
+    // Drain the TX buffer so the just-sent reply (at the OLD baud) is fully
+    // clocked out to the interface chip before retuning — otherwise its trailing
+    // bytes are garbled by the switch. Bounded so a stuck buffer can't hang us.
+    const uint64_t drainUs = system_timer_current_time_us() + 20000;   // 20 ms cap
+    while (_serial.txBufferedSize() > 0 &&
+           system_timer_current_time_us() < drainUs) { /* spin */ }
+    // The software buffer is empty, but the UART shift register + DAPLink still
+    // need a moment to push the final bytes out. Brief settle before retuning.
+    const uint64_t settleUs = system_timer_current_time_us() + 4000;    // ~4 ms
+    while (system_timer_current_time_us() < settleUs) { /* spin */ }
+    _serial.setBaud((int)baud);
+}
+
 void SerialPort::sendf(const char* fmt, ...) {
     char tmp[256];
     va_list args;
