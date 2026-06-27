@@ -52,3 +52,17 @@ the real robot. See ticket for acceptance criteria.
 - Check 3 (G square (200mm)): FAIL
 - Check 4 (Lift test (EVT otos lost)): SKIP
 - Check 5 (TLM drop-rate): SKIP
+
+## 2026-06-27T05:13Z  sha=60baf5e  overall=FAIL
+- Check 1 (Safety check): PASS
+- Check 2 (RT x4 closure): SKIP
+- Check 3 (G square (200mm)): SKIP
+- Check 4 (Lift test (EVT otos lost)): SKIP
+- Check 5 (TLM drop-rate): FAIL
+
+## 2026-06-27T05:43Z  sha=60baf5e  overall=FAIL
+- Check 1 (Safety check): PASS
+- Check 2 (RT x4 closure): PASS
+- Check 3 (G square (200mm)): FAIL
+- Check 4 (Lift test (EVT otos lost)): SKIP
+- Check 5 (TLM drop-rate): SKIP

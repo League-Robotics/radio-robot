@@ -59,7 +59,6 @@ COL_ROBOT = [70, 130, 255]     # blue   — robot marker
 COL_TARGET = [255, 220, 0]     # yellow — target marker
 COL_PATH = [150, 150, 150]     # grey   — planned straight path
 
-DEFAULT_PLAYFIELD = "/Volumes/Proj/proj/RobotProjects/AprilTags/data/aprilcam/playfield.json"
 ROBOT_TAG_ID = 100
 
 
@@ -73,8 +72,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--port", default=None, help="Serial port (auto-detect if omitted)")
     p.add_argument("--cam-index", type=int, default=1,
                    help="OS camera index to open in the daemon if none is open (default 1, Arducam)")
-    p.add_argument("--playfield", default=DEFAULT_PLAYFIELD,
-                   help="Path to playfield.json (target squares)")
+    p.add_argument("--playfield", default=None,
+                   help="Explicit playfield JSON file (default: fetch from the aprilcam daemon)")
+    p.add_argument("--playfield-name", default=None,
+                   help="Named playfield to fetch from the daemon (default: the first one)")
     p.add_argument("--speed", type=int, default=120, help="Hop drive speed mm/s (default 120)")
     p.add_argument("--arrive", type=float, default=6.0,
                    help="Arrival tolerance cm (default 6)")
@@ -107,6 +108,30 @@ def _parse_args() -> argparse.Namespace:
 def load_playfield(path: str) -> dict:
     with open(path) as f:
         return json.load(f)
+
+
+def playfield_from_daemon(dc, name: str | None = None) -> dict:
+    """Fetch the playfield map from the aprilcam daemon (no local file needed).
+
+    Uses ``DaemonControl.list_playfields()`` and parses an entry's ``json_blob``,
+    which has the same ``{playfield, aruco_tags, rectangles, ...}`` structure the
+    old hardcoded ``playfield.json`` did. Picks the entry whose slug matches
+    *name*, or the first one if *name* is None.
+    """
+    resp = dc.list_playfields()
+    entries = list(resp.playfields)
+    if not entries:
+        raise RuntimeError(
+            "aprilcam daemon has no playfield defined — add one to the daemon's "
+            "playfields dir, or pass --playfield <file>")
+    entry = entries[0]
+    if name is not None:
+        match = next((e for e in entries if e.name == name), None)
+        if match is None:
+            avail = ", ".join(e.name for e in entries) or "(none)"
+            raise RuntimeError(f"playfield '{name}' not found on daemon; available: {avail}")
+        entry = match
+    return json.loads(entry.json_blob)
 
 
 def _sign(v: float, eps: float = 1e-6) -> int:
@@ -478,7 +503,10 @@ def run_cycle(args, dc, cam, proto, nezha, playfield, *, avoid_slug=None,
     t_start = time.monotonic()
 
     try:
-        with BenchRun(proto, max_seconds=int(args.timeout) + 60):
+        # Pass the Nezha (not proto) — SafeRun's "has .stop() ⇒ Nezha" heuristic
+        # now misfires on NezhaProtocol (which gained a .stop()), so it would try
+        # nezha._proto on a proto. The Nezha is the intended arg (cf. smoke_ritual).
+        with BenchRun(nezha, max_seconds=int(args.timeout) + 60):
             # 5a. Pre-flight: nudge forward and confirm direction before committing.
             ok, msg = preflight_nudge(proto, dc, cam, fence, args.nudge,
                                       pump_telemetry, record_and_draw)
@@ -695,11 +723,20 @@ def _image_for(base: str, idx: int, total: int) -> str:
 
 def main() -> int:
     args = _parse_args()
-    playfield = load_playfield(args.playfield)
 
     print("Connecting to aprilcam daemon …")
     dc, cam = open_daemon(args.cam_index)
     print(f"  camera: {cam}")
+
+    # Playfield map: explicit file if --playfield is given, else fetched from the
+    # aprilcam daemon (list_playfields) — no hardcoded file dependency.
+    if args.playfield:
+        playfield = load_playfield(args.playfield)
+        print(f"  playfield: {args.playfield} (file)")
+    else:
+        playfield = playfield_from_daemon(dc, args.playfield_name)
+        pf_name = playfield.get("display_name") or playfield.get("name") or "?"
+        print(f"  playfield: '{pf_name}' (from daemon)")
 
     conn = proto = nezha = None
     if not args.plan_only:

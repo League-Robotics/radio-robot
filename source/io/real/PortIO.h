@@ -5,11 +5,26 @@
 
 /**
  * PortIO — CODAL IO abstraction for the four sensor/actuator ports on the
- * PlanetX Nezha V2 expansion board.
+ * ELECFREAKS PlanetX / Nezha V2 expansion board.
  *
- * Pin mapping:
- *   Digital S2 connector: J1→P8,  J2→P12, J3→P14, J4→P16
- *   Analog  S1 connector: J1→P1,  J2→P2,  J3→P13, J4→P15
+ * Real board structure (authoritative — ELECFREAKS pxt-PlanetX basic.ts): each
+ * RJ11 port carries TWO micro:bit GPIO lines plus 3V and GND. There is NO
+ * separate "digital connector" vs "analog connector" — every port has both
+ * lines; they're just wired to different micro:bit pins:
+ *
+ *     Port   line S1     line S2
+ *     J1     P1          P8
+ *     J2     P2          P12
+ *     J3     P13         P14
+ *     J4     P15         P16
+ *
+ * Only J1/J2's S1 pins (P1/P2) are ADC-capable; P13/P15 are NOT real analog
+ * inputs (PlanetX's AnalogRJPin enum only defines J1/J2 for that reason).
+ *
+ * This class picks one line per port for each access mode:
+ *   readDigital/setDigital(port) -> the S2 line: J1=P8, J2=P12, J3=P14, J4=P16
+ *   readAnalog/setAnalog(port)   -> the S1 line: J1=P1, J2=P2, J3=P13, J4=P15
+ *   (analog on J3/J4 is nominal only — P13/P15 lack an ADC.)
  *
  * Port numbers are 1-based (1..4); out-of-range values return -1 or are ignored.
  */
