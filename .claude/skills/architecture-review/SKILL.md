@@ -1,1 +1,1 @@
-/Users/eric/proj/league/robotics/radio-robot/.agents/skills/architecture-review/SKILL.md
+/Volumes/Proj/proj/RobotProjects/radio-robot-elite/.agents/skills/architecture-review/SKILL.md
