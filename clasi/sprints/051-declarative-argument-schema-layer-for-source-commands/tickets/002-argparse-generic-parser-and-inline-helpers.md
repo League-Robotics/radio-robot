@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: ArgParse generic parser and inline helpers
-status: open
+status: in-progress
 use-cases:
 - SUC-001
 - SUC-002
