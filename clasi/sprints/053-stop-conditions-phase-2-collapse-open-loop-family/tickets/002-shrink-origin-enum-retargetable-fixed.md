@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Shrink Origin enum to RETARGETABLE/FIXED
-status: in-progress
+status: done
 use-cases:
 - SUC-003
 depends-on:
@@ -23,26 +23,26 @@ treated identically (reply busy=). Reduce the enum to two values:
 
 ## Acceptance Criteria
 
-- [ ] `MotionCommand::Origin` enum in `source/commands/MotionCommand.h` has
+- [x] `MotionCommand::Origin` enum in `source/commands/MotionCommand.h` has
   exactly two values: `RETARGETABLE` and `FIXED`.
-- [ ] `beginVelocity` in `MotionControllerBegin.cpp` calls
+- [x] `beginVelocity` in `MotionControllerBegin.cpp` calls
   `_activeCmd.setOrigin(MotionCommand::Origin::RETARGETABLE)`.
-- [ ] All other `setOrigin()` calls (`beginArc`, `beginTimed`, `beginDistance`,
+- [x] All other `setOrigin()` calls (`beginArc`, `beginTimed`, `beginDistance`,
   `beginGoTo`, `beginTurn`, `beginRotation`, `_startPreRotate`) call
   `setOrigin(MotionCommand::Origin::FIXED)`.
-- [ ] The default in `configure()` (which resets origin) uses `RETARGETABLE`
+- [x] The default in `configure()` (which resets origin) uses `RETARGETABLE`
   (matching the old `VW` default; `MotionCommand.cpp` resets `_origin =
   Origin::VW` on configure — update to `RETARGETABLE`).
-- [ ] The keepalive guard in `handleVW` (`MotionCommands.cpp`) checks
+- [x] The keepalive guard in `handleVW` (`MotionCommands.cpp`) checks
   `origin() == MotionCommand::Origin::RETARGETABLE`.
-- [ ] The `kOriginNames` busy-reply table (currently 7 strings) is replaced
+- [x] The `kOriginNames` busy-reply table (currently 7 strings) is replaced
   with a simple `const char* originName = (origin == Origin::RETARGETABLE)
   ? "RETARGETABLE" : "FIXED";` or equivalent inline expression. Wire output
   changes from e.g. `busy=T` to `busy=FIXED` — this is an internal-only wire
   change (the busy= value is informational, not parsed by hosts).
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` passes with
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` passes with
   exactly 2 known failures.
-- [ ] `python build.py --clean` exits 0.
+- [x] `python build.py --clean` exits 0.
 
 ## Implementation Plan
 
