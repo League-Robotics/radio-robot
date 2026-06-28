@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: Migrate SystemCommands.cpp to ArgSchema
-status: open
+status: in-progress
 use-cases:
 - SUC-001
 - SUC-003
