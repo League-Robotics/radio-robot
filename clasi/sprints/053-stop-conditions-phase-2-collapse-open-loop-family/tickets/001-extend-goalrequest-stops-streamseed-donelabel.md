@@ -1,6 +1,6 @@
 ---
-id: 053-001
-title: "Extend GoalRequest: stops[], streamSeed, doneLabel"
+id: '001'
+title: 'Extend GoalRequest: stops[], streamSeed, doneLabel'
 status: open
 use-cases:
 - SUC-001

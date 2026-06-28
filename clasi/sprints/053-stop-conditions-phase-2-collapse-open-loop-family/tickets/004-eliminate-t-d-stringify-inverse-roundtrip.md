@@ -1,6 +1,6 @@
 ---
-id: 053-004
-title: "Eliminate T/D stringify+inverse round-trip"
+id: '004'
+title: Eliminate T/D stringify+inverse round-trip
 status: open
 use-cases:
 - SUC-002

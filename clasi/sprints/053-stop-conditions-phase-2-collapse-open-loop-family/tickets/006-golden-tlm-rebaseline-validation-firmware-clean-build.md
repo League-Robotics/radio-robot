@@ -1,6 +1,6 @@
 ---
-id: 053-006
-title: "Golden-TLM re-baseline, validation, firmware clean build"
+id: '006'
+title: Golden-TLM re-baseline, validation, firmware clean build
 status: open
 use-cases:
 - SUC-005

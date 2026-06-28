@@ -1,6 +1,6 @@
 ---
-id: 053-005
-title: "Eliminate R stringify round-trip; collapse VELOCITY goal"
+id: '005'
+title: Eliminate R stringify round-trip; collapse VELOCITY goal
 status: open
 use-cases:
 - SUC-002
