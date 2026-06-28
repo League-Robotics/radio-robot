@@ -3,6 +3,8 @@
 
 Odometry::Odometry()
     : _prevEncL(0.0f), _prevEncR(0.0f)
+    , _encPoseX(0.0f), _encPoseY(0.0f), _encPoseH(0.0f)
+    , _encVx(0.0f), _encVy(0.0f), _encOmega(0.0f)
     , _otosRejected(0)
     , _lastPredictMs(0)
     , _rOtosV(0.0f), _rEncV(0.0f), _rOtosTheta(0.0f)
@@ -54,6 +56,15 @@ void Odometry::predict(HardwareState& s, float trackwidthMm,
 
     float thetaMid  = s.poseHrad + dTheta * 0.5f;
 
+    // 047-002: arc-integrate encoder deltas into the encoder-only accumulator FIRST.
+    // This accumulator is never touched by the EKF so it provides a pure
+    // dead-reckoning baseline for fusion validation.
+    float encThetaMid = _encPoseH + dTheta * 0.5f;
+    _encPoseX += dCenter * cosf(encThetaMid);
+    _encPoseY += dCenter * sinf(encThetaMid);
+    _encPoseH  = wrapPi(_encPoseH + dTheta);
+
+    // Legacy dead-reckoning (still needed as the EKF seed before EKF overwrites below).
     s.poseX    += dCenter * cosf(thetaMid);
     s.poseY    += dCenter * sinf(thetaMid);
     s.poseHrad  = wrapPi(s.poseHrad + dTheta);
@@ -64,8 +75,22 @@ void Odometry::predict(HardwareState& s, float trackwidthMm,
     if (dt_s > 0.0f) {
         _lastEncV     = dCenter / dt_s;        // body linear speed (mm/s)
         _lastEncOmega = dTheta  / dt_s;        // yaw rate (rad/s)
+        _encVx        = _lastEncV;
+        _encVy        = 0.0f;                  // differential: no lateral encoder obs
+        _encOmega     = _lastEncOmega;
     }
-    // else: retain previous _lastEncV/_lastEncOmega (0 on first tick)
+    // else: retain previous _lastEncV/_lastEncOmega / _encV* (0 on first tick)
+
+    // 047-002: populate actual.encoder from the private accumulator.
+    // EKF has NOT run yet — these fields reflect pure dead-reckoning.
+    s.encoder.pose.x          = _encPoseX;
+    s.encoder.pose.y          = _encPoseY;
+    s.encoder.pose.h          = _encPoseH;
+    s.encoder.twist.vx_mmps   = _encVx;
+    s.encoder.twist.vy_mmps   = _encVy;
+    s.encoder.twist.omega_rads = _encOmega;
+    s.encoder.stamp.lastUpdMs = now_ms;
+    s.encoder.stamp.valid     = true;
 
     // EKF predict — propagate state and covariance using encoder-derived arc segment.
     _ekf.predict(dCenter, dTheta, theta_before, dt_s);
@@ -90,6 +115,7 @@ void Odometry::predict(HardwareState& s, float trackwidthMm,
         _ekf.updateVelocity(_lastEncV, omega_obs, _rEncV, _rEncV);
     }
 
+    // Legacy mirror-writes — Phase C consumers read these scalar fields.
     s.poseX    = _ekf.x();
     s.poseY    = _ekf.y();
     s.poseHrad = _ekf.theta();
@@ -97,6 +123,16 @@ void Odometry::predict(HardwareState& s, float trackwidthMm,
     // Write EKF velocity states back to HardwareState (after enc-velocity fusion).
     s.fusedV     = _ekf.v();
     s.fusedOmega = _ekf.omega();
+
+    // 047-002: populate actual.fused from EKF output (after enc-velocity fusion).
+    s.fused.pose.x           = _ekf.x();
+    s.fused.pose.y           = _ekf.y();
+    s.fused.pose.h           = _ekf.theta();
+    s.fused.twist.vx_mmps    = _ekf.v();
+    s.fused.twist.vy_mmps    = 0.0f;          // updated in correctEKF for mecanum
+    s.fused.twist.omega_rads = _ekf.omega();
+    s.fused.stamp.lastUpdMs  = now_ms;
+    s.fused.stamp.valid      = true;
 
     _lastPredictMs = now_ms;
 }
@@ -165,6 +201,15 @@ void Odometry::setPose(HardwareState& s, int32_t x_mm, int32_t y_mm, int32_t h_c
     _prevEncL  = s.encLMm;
     _prevEncR  = s.encRMm;
 
+    // 047-002: reset the encoder-only accumulator to the new pose value so the
+    // dead-reckoning baseline stays consistent with the absolute fix.
+    _encPoseX  = s.poseX;
+    _encPoseY  = s.poseY;
+    _encPoseH  = s.poseHrad;
+    _encVx     = 0.0f;
+    _encVy     = 0.0f;
+    _encOmega  = 0.0f;
+
     _ekf.setPose(s.poseX, s.poseY, s.poseHrad);
 }
 
@@ -220,8 +265,21 @@ void Odometry::correctEKF(HardwareState& s,
                           float x_otos, float y_otos,
                           float theta_otos_rad,
                           float v_otos_mmps, float omega_otos_rads,
-                          float vy_otos_mmps)
+                          float vy_otos_mmps, uint32_t now_ms)
 {
+    // 047-002: capture raw OTOS observation into actual.optical BEFORE EKF update.
+    // pose: store the raw OTOS reading (do NOT differentiate; Q4 resolved).
+    // twist: reuse the v/omega values passed in as the optical twist estimate.
+    // stamp: mark valid with the current now_ms.
+    s.optical.pose.x       = x_otos;
+    s.optical.pose.y       = y_otos;
+    s.optical.pose.h       = theta_otos_rad;
+    s.optical.twist.vx_mmps   = v_otos_mmps;
+    s.optical.twist.vy_mmps   = vy_otos_mmps;
+    s.optical.twist.omega_rads = omega_otos_rads;
+    s.optical.stamp.lastUpdMs = now_ms;
+    s.optical.stamp.valid     = true;
+
     // 1. Fuse OTOS position (Mahalanobis-gated inside EKF).
     _ekf.updatePosition(x_otos, y_otos);
 
@@ -232,20 +290,33 @@ void Odometry::correctEKF(HardwareState& s,
     //    v and omega noise (symmetric simplification — v1 design).
     _ekf.updateVelocity(v_otos_mmps, omega_otos_rads, _rOtosV, _rOtosV);
 
-    // Write all EKF outputs back to HardwareState.
+    // Write all EKF outputs back to HardwareState (legacy mirrors — Phase C consumers).
     s.poseX      = _ekf.x();
     s.poseY      = _ekf.y();
     s.poseHrad   = _ekf.theta();
     s.fusedV     = _ekf.v();
     s.fusedOmega = _ekf.omega();
 
+    // 047-002: write structured fused estimate from EKF output.
+    s.fused.pose.x          = _ekf.x();
+    s.fused.pose.y          = _ekf.y();
+    s.fused.pose.h          = _ekf.theta();
+    s.fused.twist.vx_mmps   = _ekf.v();
+    s.fused.twist.omega_rads = _ekf.omega();
+    s.fused.stamp.lastUpdMs = now_ms;
+    s.fused.stamp.valid     = true;
+
 #ifdef ROBOT_DRIVETRAIN_MECANUM
     // 046-006: complementary filter for lateral body velocity.
     // OTOS directly observes vy; blend toward the OTOS reading each correction tick.
     // _otosAlphaVy defaults to 0.8 (strongly OTOS-trusting); set via setOtosAlphaVy().
     // vy_otos_mmps defaults to 0.0f in the differential build (no-op).
-    _fusedVy   = _otosAlphaVy * vy_otos_mmps + (1.0f - _otosAlphaVy) * _fusedVy;
-    s.fusedVy  = _fusedVy;
+    _fusedVy        = _otosAlphaVy * vy_otos_mmps + (1.0f - _otosAlphaVy) * _fusedVy;
+    s.fusedVy       = _fusedVy;
+    // 047-002: also mirror into the structured fused twist.
+    s.fused.twist.vy_mmps = _fusedVy;
+    // 047-002: mirror into structured optical twist.
+    s.optical.twist.vy_mmps = vy_otos_mmps;
 #else
     (void)vy_otos_mmps;
 #endif  // ROBOT_DRIVETRAIN_MECANUM

@@ -356,21 +356,21 @@ float sim_get_pwm_r(void* h)
     return static_cast<float>(static_cast<SimHandle*>(h)->robot.state.outputs.pwmR);
 }
 
-// ---- Pose reads (dead-reckoning from Robot::state.actual) ----
+// ---- Pose reads (fused estimate from Robot::state.actual.fused — 047-002) ----
 
 float sim_get_pose_x(void* h)
 {
-    return static_cast<SimHandle*>(h)->robot.state.actual.poseX;
+    return static_cast<SimHandle*>(h)->robot.state.actual.fused.pose.x;
 }
 
 float sim_get_pose_y(void* h)
 {
-    return static_cast<SimHandle*>(h)->robot.state.actual.poseY;
+    return static_cast<SimHandle*>(h)->robot.state.actual.fused.pose.y;
 }
 
 float sim_get_pose_h(void* h)
 {
-    return static_cast<SimHandle*>(h)->robot.state.actual.poseHrad;
+    return static_cast<SimHandle*>(h)->robot.state.actual.fused.pose.h;
 }
 
 // ---- EKF diagnostics ----
@@ -799,18 +799,20 @@ void sim_set_otos_read_failure(void* h, int fail)
     static_cast<SimHandle*>(h)->hal.simOdometer().setReadFailure(fail != 0);
 }
 
-// Read fusedV from state.actual (EKF body-frame linear speed, mm/s).
+// Read fusedV from state.actual.fused (EKF body-frame linear speed, mm/s).
 // Used by N9 test to assert the fused velocity is not dragged to zero on
 // a same-tick OTOS read failure.
+// 047-002: re-pointed from legacy fusedV scalar to fused.twist.vx_mmps.
 float sim_get_fused_v(void* h)
 {
-    return static_cast<SimHandle*>(h)->robot.state.actual.fusedV;
+    return static_cast<SimHandle*>(h)->robot.state.actual.fused.twist.vx_mmps;
 }
 
-// Read fusedOmega from state.actual (EKF yaw rate, rad/s).
+// Read fusedOmega from state.actual.fused (EKF yaw rate, rad/s).
+// 047-002: re-pointed from legacy fusedOmega scalar to fused.twist.omega_rads.
 float sim_get_fused_omega(void* h)
 {
-    return static_cast<SimHandle*>(h)->robot.state.actual.fusedOmega;
+    return static_cast<SimHandle*>(h)->robot.state.actual.fused.twist.omega_rads;
 }
 
 // 033-003: set the encoder-omega health gate.  When healthy=0, predict()
@@ -825,12 +827,17 @@ void sim_set_enc_omega_healthy(void* h, int healthy)
 // N11: inject a dead-reckoning pose into state.actual directly.
 // Used by test_n11 to place the robot "past" a G target so the PURSUE
 // backtrack re-gate fires on the next few ticks.
+// 047-002: also write into actual.fused.pose so sim_get_pose_x/y/h
+// (now reading fused.pose) sees the injected value immediately.
 void sim_set_pose(void* h, float x, float y, float hrad)
 {
     SimHandle* s = static_cast<SimHandle*>(h);
-    s->robot.state.actual.poseX    = x;
-    s->robot.state.actual.poseY    = y;
-    s->robot.state.actual.poseHrad = hrad;
+    s->robot.state.actual.poseX        = x;
+    s->robot.state.actual.poseY        = y;
+    s->robot.state.actual.poseHrad     = hrad;
+    s->robot.state.actual.fused.pose.x = x;
+    s->robot.state.actual.fused.pose.y = y;
+    s->robot.state.actual.fused.pose.h = hrad;
 }
 
 // N15: read one diagonal entry of the EKF covariance matrix P.
@@ -925,6 +932,45 @@ int sim_get_odometry_wedge_active(void* h)
 int sim_get_odometry_enc_omega_healthy(void* h)
 {
     return static_cast<SimHandle*>(h)->robot.estimate.encOmegaHealthy() ? 1 : 0;
+}
+
+// ---- Three-estimate pose reads (047-002) ----
+//
+// encoder : pure dead-reckoning accumulator — never touched by the EKF.
+// optical : raw OTOS observation captured before EKF correction.
+// fused   : EKF output — authoritative belief (same as sim_get_pose_x/y/h).
+//
+// These let tests compare the three estimates side by side (ticket 005
+// fusion-validation test will use enc vs fused divergence as the key check).
+
+float sim_get_enc_pose_x(void* h) {
+    return static_cast<SimHandle*>(h)->robot.state.actual.encoder.pose.x;
+}
+float sim_get_enc_pose_y(void* h) {
+    return static_cast<SimHandle*>(h)->robot.state.actual.encoder.pose.y;
+}
+float sim_get_enc_pose_h(void* h) {
+    return static_cast<SimHandle*>(h)->robot.state.actual.encoder.pose.h;
+}
+
+float sim_get_otos_pose_x(void* h) {
+    return static_cast<SimHandle*>(h)->robot.state.actual.optical.pose.x;
+}
+float sim_get_otos_pose_y(void* h) {
+    return static_cast<SimHandle*>(h)->robot.state.actual.optical.pose.y;
+}
+float sim_get_otos_pose_h(void* h) {
+    return static_cast<SimHandle*>(h)->robot.state.actual.optical.pose.h;
+}
+
+float sim_get_fused_pose_x(void* h) {
+    return static_cast<SimHandle*>(h)->robot.state.actual.fused.pose.x;
+}
+float sim_get_fused_pose_y(void* h) {
+    return static_cast<SimHandle*>(h)->robot.state.actual.fused.pose.y;
+}
+float sim_get_fused_pose_h(void* h) {
+    return static_cast<SimHandle*>(h)->robot.state.actual.fused.pose.h;
 }
 
 } // extern "C"

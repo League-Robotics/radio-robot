@@ -1,9 +1,13 @@
 ---
 id: '002'
-title: "Phase B — Odometry encoder accumulator and three-estimate wiring"
-status: open
-use-cases: [SUC-047-001, SUC-047-002, SUC-047-003]
-depends-on: ['001']
+title: "Phase B \u2014 Odometry encoder accumulator and three-estimate wiring"
+status: done
+use-cases:
+- SUC-047-001
+- SUC-047-002
+- SUC-047-003
+depends-on:
+- '001'
 github-issue: ''
 issue: robot-state-object-proposed-structure-for-review.md
 completes_issue: false
@@ -70,20 +74,20 @@ migrated in Phase C continue to read correct values through the shims.
 
 ## Acceptance Criteria
 
-- [ ] `Odometry` has private `_encPoseX`, `_encPoseY`, `_encPoseH`, `_encVx`, `_encVy`, `_encOmega` fields, initialized to 0 in the constructor.
-- [ ] `predict()` writes `actual.encoder.pose`, `actual.encoder.twist`, `actual.encoder.stamp` (never touched by EKF).
-- [ ] `predict()` writes `actual.fused.pose`, `actual.fused.twist`, `actual.fused.stamp` (from EKF output).
-- [ ] `correctEKF()` writes `actual.optical.pose`, `actual.optical.twist`, `actual.optical.stamp` before fusing.
-- [ ] `correctEKF()` writes `actual.fused.*` after EKF update.
-- [ ] `setPose()`/`zero()` reset `_encPoseX/Y/H` and `_encVx/Vy/Omega`.
-- [ ] Legacy mirror-writes remain active (e.g. `s.poseX = actual.fused.pose.x`) — no consumer outside this ticket's scope should break.
-- [ ] `PhysicalStateEstimate::encoderEstimate()`, `opticalEstimate()`, `fusedEstimate()` return const refs to the correct `PoseEstimate` members.
-- [ ] `WorldView` constructor updated to `const ActualState&`; `estimationErrorXY/H()` read `actual.fused.pose`.
-- [ ] All existing `sim_api.cpp` ABI function bodies re-pointed to new struct paths.
-- [ ] New `sim_get_enc_pose_*`, `sim_get_otos_pose_*`, `sim_get_fused_pose_*` ABI functions added.
-- [ ] **Differential build compiles clean** (`python build.py --clean`).
-- [ ] **Mecanum build compiles clean**.
-- [ ] **Sim unit suite green**: `uv run --with pytest python -m pytest tests/simulation/ -q` — no Python test edits required.
+- [x] `Odometry` has private `_encPoseX`, `_encPoseY`, `_encPoseH`, `_encVx`, `_encVy`, `_encOmega` fields, initialized to 0 in the constructor.
+- [x] `predict()` writes `actual.encoder.pose`, `actual.encoder.twist`, `actual.encoder.stamp` (never touched by EKF).
+- [x] `predict()` writes `actual.fused.pose`, `actual.fused.twist`, `actual.fused.stamp` (from EKF output).
+- [x] `correctEKF()` writes `actual.optical.pose`, `actual.optical.twist`, `actual.optical.stamp` before fusing.
+- [x] `correctEKF()` writes `actual.fused.*` after EKF update.
+- [x] `setPose()`/`zero()` reset `_encPoseX/Y/H` and `_encVx/Vy/Omega`.
+- [x] Legacy mirror-writes remain active (e.g. `s.poseX = actual.fused.pose.x`) — no consumer outside this ticket's scope should break.
+- [x] `PhysicalStateEstimate::encoderEstimate()`, `opticalEstimate()`, `fusedEstimate()` return const refs to the correct `PoseEstimate` members.
+- [x] `WorldView` constructor updated to `const ActualState&`; `estimationErrorXY/H()` read `actual.fused.pose`.
+- [x] All existing `sim_api.cpp` ABI function bodies re-pointed to new struct paths.
+- [x] New `sim_get_enc_pose_*`, `sim_get_otos_pose_*`, `sim_get_fused_pose_*` ABI functions added.
+- [x] **Differential build compiles clean** (`python build.py --clean`).
+- [x] **Mecanum build compiles clean**.
+- [x] **Sim unit suite green**: `uv run --with pytest python -m pytest tests/simulation/ -q` — no Python test edits required.
 
 ## Implementation Plan
 

@@ -28,12 +28,12 @@ public:
 
     // OTOS EKF correction (= Odometry::correctEKF, verbatim).
     // vy_otos_mmps: OTOS lateral velocity (mm/s); mecanum build only (046-006).
-    // Default 0.0f so all existing differential callers compile unchanged.
+    // now_ms: robot system clock (ms); used to stamp actual.optical.stamp (047-002).
     void addOtosObservation(HardwareState& s,
                             float x_otos, float y_otos,
                             float theta_otos_rad,
                             float v_otos_mmps, float omega_otos_rads,
-                            float vy_otos_mmps = 0.0f);
+                            float vy_otos_mmps, uint32_t now_ms);
 
     // External camera re-anchor / SI verb (= Odometry::setPose, verbatim).
     void resetPose(HardwareState& s,
@@ -64,6 +64,21 @@ public:
     // (Passed through to _odometry.setCtx(); also stored for OtosCommands
     // wiring in T2.)
     void setCtx(IOdometer* otos, const HardwareState* hwState = nullptr);
+
+    // --- Three-estimate forwarders (047-002) ---
+    // Return const references into the ActualState passed to each observation
+    // method — callers read whichever estimate they need without copying.
+    // NOTE: the returned reference is only valid as long as the ActualState
+    //       passed to the observation methods is in scope.
+    const PoseEstimate& encoderEstimate(const HardwareState& s) const {
+        return s.encoder;
+    }
+    const PoseEstimate& opticalEstimate(const HardwareState& s) const {
+        return s.optical;
+    }
+    const PoseEstimate& fusedEstimate(const HardwareState& s) const {
+        return s.fused;
+    }
 
     // --- Forwarded accessors (used by RobotTelemetry, LoopTickOnce, etc.) ---
     uint32_t otosRejectedCount() const;

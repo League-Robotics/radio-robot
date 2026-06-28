@@ -293,15 +293,17 @@ void Robot::otosCorrect(uint32_t now_ms)
 
     // Encoder-derived velocity is fused unconditionally in Odometry::predict()
     // every tick (033-003), so correctEKF() fuses only the OTOS observations.
+    // 047-002: now_ms added so correctEKF can stamp actual.optical.stamp.lastUpdMs.
     estimate.addOtosObservation(state.actual, p.x, p.y,
                         p.h,
-                        vel.v_mmps, vel.omega_rads, vy_otos);
+                        vel.v_mmps, vel.omega_rads, vy_otos, now_ms);
 #else
     // Encoder-derived velocity is fused unconditionally in Odometry::predict()
     // every tick (033-003), so correctEKF() fuses only the OTOS observations.
+    // 047-002: now_ms added so correctEKF can stamp actual.optical.stamp.lastUpdMs.
     estimate.addOtosObservation(state.actual, p.x, p.y,
                         p.h,
-                        vel.v_mmps, vel.omega_rads);
+                        vel.v_mmps, vel.omega_rads, 0.0f, now_ms);
 #endif  // ROBOT_DRIVETRAIN_MECANUM
 }
 
