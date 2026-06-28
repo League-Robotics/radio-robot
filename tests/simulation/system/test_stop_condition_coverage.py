@@ -167,37 +167,18 @@ def test_color_stop_does_not_fire_on_mismatch():
 # ---------------------------------------------------------------------------
 # Kind::SENSOR — DOCUMENTED UNREACHABLE-IN-SIM (queue path drops the stop).
 #
-# `T/D/TURN ... sensor=<chan>:<op>:<thr>` is INTENDED to attach a SENSOR
-# StopCondition.  On the DIRECT (queue==nullptr) path it does, via
-# ctx->mc->activeCmd().addStop(makeSensorStop(...)).  But the sim ALWAYS runs the
-# QUEUE path (the queue is wired), and on the queue path the SENSOR stop is
-# silently DROPPED — a firmware behavior, not a test gap:
-#
-#   * handleT/handleD/handleTURN pack the sensor token via packSensorArg(), which
-#     stores ONLY the value part ("line0:ge:500"), WITHOUT the "sensor=" prefix.
-#   * handleVW's sensor-forwarding loops require the prefix:
-#         strncmp(args.args[i].sval, "sensor=", 7) == 0
-#     which never matches the prefix-stripped token, so makeSensorStop is never
-#     called and Kind::SENSOR::evaluate / getSensorValue() are never reached.
-#
-# Consequently Kind::SENSOR and getSensorValue() in StopCondition.cpp are NOT
-# coverable test-additively through the sim (covering them would require a
-# production source/ change to align the prefix handling, which is out of scope
-# for a test-additive sprint and would break `git diff source/` empty).
-#
-# This test pins the OBSERVABLE behavior (the queue-path sensor stop does NOT
-# terminate the timed drive early) so the finding is regression-guarded.  The
-# sensor-token VALIDATION on the queue path IS exercised by the ERR-token tests
-# in test_motion_handlers_coverage.py.
+# Sprint 052-001: the queue-path prefix bug was fixed.  parseT/parseD/parseTURN
+# now pack sensor= tokens with the full "sensor=<value>" prefix (via
+# mc_packStopKVs), and handleVW calls mc_applyStopClauses which correctly
+# matches both "stop=" and "sensor=" prefixes.  Kind::SENSOR now fires on the
+# queue path exactly as on the direct path.
 # ---------------------------------------------------------------------------
 
-def test_sensor_stop_dropped_on_queue_path_documented():
-    """Queue-path SENSOR stop is dropped: the timed drive runs past the crossing.
+def test_sensor_stop_fires_on_queue_path():
+    """Queue-path SENSOR stop fires when line0 crosses threshold (052-001 fix).
 
-    Confirms the documented firmware behavior above — with the queue wired (the
-    sim's normal mode), a `T ... sensor=line0:ge:500` does NOT stop early when
-    line0 crosses the threshold; only the TIME stop governs.  The drive is still
-    running (non-zero PWM) right after the crossing.
+    `T 200 200 9000 sensor=line0:ge:500` attaches a SENSOR stop; when line0 is
+    injected above 500 the drive terminates early (EVT done), leaving PWM at 0.
     """
     with Sim() as s:
         s.send_command("SET sTimeout=60000")
@@ -211,14 +192,12 @@ def test_sensor_stop_dropped_on_queue_path_documented():
         _tick_collect(s, 5)
         # Cross the threshold well above 500.
         s.set_line_values(900, 0, 0, 0)
-        evts = _tick_collect(s, 20)
+        evts = _tick_collect(s, 80)  # generous window; SENSOR stop should fire quickly
 
-        # Drive is still running: the SENSOR stop was dropped on the queue path.
         pwm_l = float(s._lib.sim_get_pwm_l(s._h))
-        assert pwm_l != 0.0 and "EVT done" not in evts, (
-            f"queue-path SENSOR stop unexpectedly fired (pwm_l={pwm_l}, evts={evts!r}); "
-            f"if this now stops early, the packSensorArg/sensor= prefix handling "
-            f"changed — update this finding and add a real Kind::SENSOR fire test."
+        assert "EVT done" in evts or pwm_l == 0.0, (
+            f"SENSOR stop did not fire on queue path after line0 crossed threshold "
+            f"(pwm_l={pwm_l}, evts={evts!r})"
         )
 
 

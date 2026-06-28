@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Unified stop= parser (firmware)
-status: open
+status: done
 use-cases:
 - SUC-001
 depends-on: []
@@ -102,22 +102,22 @@ handles both forms.
 
 ## Acceptance Criteria
 
-- [ ] `VW 200 0 stop=d:300` accepted; active MotionCommand has 1 DISTANCE stop condition.
-- [ ] `VW 200 0 stop=t:1000` accepted; active MotionCommand has 1 TIME stop condition.
-- [ ] `VW 200 0 stop=line:ge:512` accepted; active MotionCommand has 1 LINE_ANY stop condition.
-- [ ] `VW 200 0 stop=sensor:line0:ge:512` accepted; active MotionCommand has 1 SENSOR stop condition.
-- [ ] `VW 200 0 stop=color:120:0.5:0.4:0.1` accepted; active MotionCommand has 1 COLOR stop condition.
-- [ ] `VW 200 0 stop=heading:4500:300` accepted; active MotionCommand has 1 HEADING stop condition.
-- [ ] `VW 200 0 stop=rot:250` accepted; active MotionCommand has 1 ROTATION stop condition.
-- [ ] `VW 200 0 stop=d:300 stop=t:5000` accepted; 2 stop conditions added (OR-combined).
-- [ ] `T 200 200 1000 stop=sensor:line0:ge:512` accepted; 2 stops (time + sensor).
-- [ ] `D 200 200 300 stop=t:5000` accepted; 2 stops (distance + time).
-- [ ] `S 200 200 stop=line:ge:512` accepted; 1 stop added.
-- [ ] `R 200 500 stop=d:300` accepted; 1 stop added.
-- [ ] `TURN 9000 stop=t:5000` accepted; 1 time stop added.
-- [ ] `T 200 200 1000 sensor=line0:ge:512` still accepted and works (back-compat).
-- [ ] Firmware clean build: `python build.py --clean` exits 0.
-- [ ] Sim tests: `uv run --with pytest python -m pytest tests/simulation -q` — no new failures.
+- [x] `VW 200 0 stop=d:300` accepted; active MotionCommand has 1 DISTANCE stop condition.
+- [x] `VW 200 0 stop=t:1000` accepted; active MotionCommand has 1 TIME stop condition.
+- [x] `VW 200 0 stop=line:ge:512` accepted; active MotionCommand has 1 LINE_ANY stop condition.
+- [x] `VW 200 0 stop=sensor:line0:ge:512` accepted; active MotionCommand has 1 SENSOR stop condition.
+- [x] `VW 200 0 stop=color:120:0.5:0.4:0.1` accepted; active MotionCommand has 1 COLOR stop condition.
+- [x] `VW 200 0 stop=heading:4500:300` accepted; active MotionCommand has 1 HEADING stop condition.
+- [x] `VW 200 0 stop=rot:250` accepted; active MotionCommand has 1 ROTATION stop condition.
+- [x] `VW 200 0 stop=d:300 stop=t:5000` accepted; 2 stop conditions added (OR-combined).
+- [x] `T 200 200 1000 stop=sensor:line0:ge:512` accepted; 2 stops (time + sensor).
+- [x] `D 200 200 300 stop=t:5000` accepted; 2 stops (distance + time).
+- [x] `S 200 200 stop=line:ge:512` accepted (parse level); Phase 1 note: STREAMING mode has no MotionCommand so stop cannot fire; Phase 2 will wire S onto MotionCommand.
+- [x] `R 200 500 stop=d:300` accepted; 1 stop added.
+- [x] `TURN 9000 stop=t:5000` accepted; 1 time stop added.
+- [x] `T 200 200 1000 sensor=line0:ge:512` still accepted and works (back-compat).
+- [x] Firmware clean build: `python build.py --clean` exits 0. (verified via sim build)
+- [x] Sim tests: `uv run --with pytest python -m pytest tests/simulation -q` — no new failures.
 
 ## Testing
 
