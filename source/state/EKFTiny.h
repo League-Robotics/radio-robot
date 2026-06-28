@@ -102,6 +102,42 @@ public:
         return (idx >= 0 && idx < 5) ? _ekf.P[idx * 5 + idx] : -1.0f;
     }
 
+    // --- Test-harness accessors (sim_api.cpp / test_ekf.py parity gate) ---
+    // These expose internal state needed by the EKFTiny parity tests in
+    // tests/simulation/unit/test_ekf.py. They mirror the Python EKF mirror's
+    // direct attribute access (_x[i], _P[i][j], _rej_pos_streak, etc.).
+    // Sprint 050, Ticket 004.
+
+    // P[row][col] — full covariance matrix entry read.
+    float pEntry(int row, int col) const
+    {
+        return (row >= 0 && row < 5 && col >= 0 && col < 5)
+               ? _ekf.P[row * 5 + col] : 0.0f;
+    }
+
+    // x[idx] — state vector read.
+    float xEntry(int idx) const
+    {
+        return (idx >= 0 && idx < 5) ? _ekf.x[idx] : 0.0f;
+    }
+
+    // Direct state injection — needed by tests that pre-set v, omega, theta.
+    void setXEntry(int idx, float val)
+    {
+        if (idx >= 0 && idx < 5) _ekf.x[idx] = val;
+    }
+
+    // Direct covariance injection — needed by tests that set P[2][2]=0.1 etc.
+    void setPEntry(int row, int col, float val)
+    {
+        if (row >= 0 && row < 5 && col >= 0 && col < 5)
+            _ekf.P[row * 5 + col] = val;
+    }
+
+    // Direct streak injection — needed by pre-005-logic tests that reset streaks.
+    void setRejPosStreak(int s) { _rejPos_streak = s; }
+    void setRejHeadStreak(int s) { _rejHead_streak = s; }
+
 private:
     ekf_t    _ekf;
     float    _Q[5][5];    // process noise (diagonal)

@@ -494,6 +494,99 @@ class Sim:
         lib.sim_get_fused_pose_h.argtypes = [ctypes.c_void_p]
         lib.sim_get_fused_pose_h.restype = ctypes.c_float
 
+        # ---- Sprint 050, Ticket 004 — standalone EKFTiny sim API ----
+        # Lifecycle: sim_ekftiny_create() / sim_ekftiny_destroy(). The returned
+        # void* is a standalone EKFTiny, NOT tied to the main SimHandle.
+        lib.sim_ekftiny_create.argtypes = []
+        lib.sim_ekftiny_create.restype = ctypes.c_void_p
+
+        lib.sim_ekftiny_destroy.argtypes = [ctypes.c_void_p]
+        lib.sim_ekftiny_destroy.restype = None
+
+        lib.sim_ekftiny_init.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float,
+            ctypes.c_float, ctypes.c_float, ctypes.c_float,
+        ]
+        lib.sim_ekftiny_init.restype = None
+
+        lib.sim_ekftiny_set_pose.argtypes = [
+            ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float,
+        ]
+        lib.sim_ekftiny_set_pose.restype = None
+
+        lib.sim_ekftiny_predict.argtypes = [
+            ctypes.c_void_p, ctypes.c_float, ctypes.c_float,
+            ctypes.c_float, ctypes.c_float,
+        ]
+        lib.sim_ekftiny_predict.restype = None
+
+        lib.sim_ekftiny_update_position.argtypes = [
+            ctypes.c_void_p, ctypes.c_float, ctypes.c_float,
+        ]
+        lib.sim_ekftiny_update_position.restype = None
+
+        lib.sim_ekftiny_update_velocity.argtypes = [
+            ctypes.c_void_p, ctypes.c_float, ctypes.c_float,
+            ctypes.c_float, ctypes.c_float,
+        ]
+        lib.sim_ekftiny_update_velocity.restype = None
+
+        lib.sim_ekftiny_update_heading.argtypes = [
+            ctypes.c_void_p, ctypes.c_float, ctypes.c_float,
+        ]
+        lib.sim_ekftiny_update_heading.restype = None
+
+        # State accessors
+        lib.sim_ekftiny_x.argtypes     = [ctypes.c_void_p]
+        lib.sim_ekftiny_x.restype      = ctypes.c_float
+        lib.sim_ekftiny_y.argtypes     = [ctypes.c_void_p]
+        lib.sim_ekftiny_y.restype      = ctypes.c_float
+        lib.sim_ekftiny_theta.argtypes = [ctypes.c_void_p]
+        lib.sim_ekftiny_theta.restype  = ctypes.c_float
+        lib.sim_ekftiny_v.argtypes     = [ctypes.c_void_p]
+        lib.sim_ekftiny_v.restype      = ctypes.c_float
+        lib.sim_ekftiny_omega.argtypes = [ctypes.c_void_p]
+        lib.sim_ekftiny_omega.restype  = ctypes.c_float
+
+        lib.sim_ekftiny_rejected_count.argtypes  = [ctypes.c_void_p]
+        lib.sim_ekftiny_rejected_count.restype   = ctypes.c_int
+        lib.sim_ekftiny_rej_head_streak.argtypes = [ctypes.c_void_p]
+        lib.sim_ekftiny_rej_head_streak.restype  = ctypes.c_int
+        lib.sim_ekftiny_rej_pos_streak.argtypes  = [ctypes.c_void_p]
+        lib.sim_ekftiny_rej_pos_streak.restype   = ctypes.c_int
+
+        # P diagonal and full-row accessor
+        lib.sim_ekftiny_p_diag.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        lib.sim_ekftiny_p_diag.restype  = ctypes.c_float
+
+        lib.sim_ekftiny_p_row.argtypes = [
+            ctypes.c_void_p, ctypes.c_int,
+            ctypes.POINTER(ctypes.c_float),
+        ]
+        lib.sim_ekftiny_p_row.restype = None
+
+        # Direct injection (needed by tests that set state/covariance/streak)
+        lib.sim_ekftiny_set_x.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_float,
+        ]
+        lib.sim_ekftiny_set_x.restype = None
+
+        lib.sim_ekftiny_set_p.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_float,
+        ]
+        lib.sim_ekftiny_set_p.restype = None
+
+        lib.sim_ekftiny_set_rej_pos_streak.argtypes = [
+            ctypes.c_void_p, ctypes.c_int,
+        ]
+        lib.sim_ekftiny_set_rej_pos_streak.restype = None
+
+        lib.sim_ekftiny_set_rej_head_streak.argtypes = [
+            ctypes.c_void_p, ctypes.c_int,
+        ]
+        lib.sim_ekftiny_set_rej_head_streak.restype = None
+
     # ------------------------------------------------------------------
     # N7 queue-overflow helpers (030-005)
     # ------------------------------------------------------------------
