@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Wire libraries/cmon-pid/ include path into firmware and host-sim builds
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 depends-on:
@@ -24,14 +24,14 @@ build uses `tests/_infra/sim/CMakeLists.txt`. Both must be updated.
 
 ## Acceptance Criteria
 
-- [ ] `CMakeLists.txt` (root) contains an explicit
+- [x] `CMakeLists.txt` (root) contains an explicit
       `include_directories(${PROJECT_SOURCE_DIR}/libraries/cmon-pid)` line with
       an inline comment explaining it is the Sprint 049 vendored header.
-- [ ] `tests/_infra/sim/CMakeLists.txt` contains
+- [x] `tests/_infra/sim/CMakeLists.txt` contains
       `"${REPO_ROOT}/libraries/cmon-pid"` in the `target_include_directories`
       block for `firmware_host`.
-- [ ] The host sim rebuilds without error after the include-path change.
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` introduces no
+- [x] The host sim rebuilds without error after the include-path change.
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` introduces no
       new failures beyond the 2 pre-existing baseline failures.
 
 ## Implementation Plan

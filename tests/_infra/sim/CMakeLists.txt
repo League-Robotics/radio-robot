@@ -127,4 +127,6 @@ target_include_directories(firmware_host PRIVATE
     # 043-003 (Phase E): Gripper subsystem dir (#include "Gripper.h").
     "${REPO_ROOT}/source/subsystems/gripper"
     "${REPO_ROOT}/source/types"
+    # 049-002: cmon-pid float-adapted vendored header (Sprint 049, Phase A).
+    "${REPO_ROOT}/libraries/cmon-pid"
 )

@@ -207,6 +207,10 @@ set(LIB_FOLDERS "")
 # Add the root of the libraries folder as a search path. Useful for disambiguating header files with duplicated names.
 MESSAGE (STATUS "Adding library path: (${PROJECT_SOURCE_DIR}/${LIB_DEST})")
 include_directories(${PROJECT_SOURCE_DIR}/${LIB_DEST})
+# libraries/cmon-pid: float-adapted vendored header (Sprint 049, Phase A).
+# Added explicitly because cmon-pid is not a CODAL dependency managed via
+# add_subdirectory — it is a plain vendored-in-place header.
+include_directories(${PROJECT_SOURCE_DIR}/libraries/cmon-pid)
 
 #add_subdirectory("${PROJECT_SOURCE_DIR}/${LIB_DEST}/${dep}")
 
