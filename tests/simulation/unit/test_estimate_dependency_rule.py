@@ -23,7 +23,7 @@ firmware `source/` tree the same way the build's include dirs do) and asserts:
        <stdint.h>, <math.h>           — scalar types / EKF math
        PhysicalStateEstimate.h        — the seam itself
        Odometry.h                     — wrapped estimator (composition)
-       EKF.h                          — 5-state CTRV filter
+       EKFTiny.h                      — 5-state CTRV filter (TinyEKF backend, sprint 050)
        Inputs.h                       — HardwareState POD (types header;
                                         was control/RobotState.h pre-044-002)
        Config.h                       — RobotConfig POD (types header)
@@ -72,7 +72,7 @@ INCLUDE_DIRS = [
 ALLOWED_HEADERS = {
     "PhysicalStateEstimate.h",
     "Odometry.h",
-    "EKF.h",
+    "EKFTiny.h",  # 050-005: EKFTiny replaces EKF as live estimator backend
     "Inputs.h",
     "Config.h",
     "Protocol.h",

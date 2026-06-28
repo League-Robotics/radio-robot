@@ -42,6 +42,7 @@ _INCLUDE_DIRS = [
     _SRC / "robot",
     _SRC / "types",
     _SRC / "app",
+    _REPO_ROOT / "libraries" / "tinyekf",  # 050-005: EKFTiny.h includes <tinyekf.h>
 ]
 
 # ---------------------------------------------------------------------------
