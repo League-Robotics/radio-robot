@@ -1,9 +1,11 @@
 ---
 id: '003'
 title: Implement EKFTiny thin layer over ekf_t keeping all robustness layers
-status: open
-use-cases: ["SUC-002"]
-depends-on: ["050-002"]
+status: in-progress
+use-cases:
+- SUC-002
+depends-on:
+- 050-002
 github-issue: ''
 issue: consolidate-control-code-onto-vendored-libraries-cmon-pid-tinyekf.md
 completes_issue: false
