@@ -25,7 +25,7 @@ import pytest
 
 # ---------------------------------------------------------------------------
 # Python model of BodyKinematics::saturate()
-# (must match source/control/BodyKinematics.cpp exactly)
+# (must match source/kinematics/BodyKinematics.cpp exactly)
 # ---------------------------------------------------------------------------
 
 def saturate(vL: float, vR: float, vWheelMax: float, steerHeadroom: float) -> tuple[float, float]:

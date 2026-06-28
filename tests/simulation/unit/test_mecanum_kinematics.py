@@ -3,8 +3,8 @@
 BodyKinematics array overloads (046-002).
 
 Pure Python implementation of the equations defined in:
-  source/control/MecanumKinematics.h / .cpp
-  source/control/BodyKinematics.h / .cpp  (array overloads)
+  source/kinematics/MecanumKinematics.h / .cpp
+  source/kinematics/BodyKinematics.h / .cpp  (array overloads)
 
 Wheel index order (canonical):
   [0] = FR (Front-Right)

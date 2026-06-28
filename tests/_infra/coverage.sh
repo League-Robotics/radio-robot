@@ -27,7 +27,7 @@
 #   source/control/ServoController.cpp  — hardware PWM output, same rationale
 #   source/io/real/*                    — real device drivers, absent from host lib
 #   source/app/WedgeTest.cpp            — CODAL-only diagnostic (#ifndef HOST_BUILD)
-#   source/control/LoopScheduler.cpp    — CODAL scheduler (MicroBit fiber APIs)
+#   source/app/commands/LoopScheduler.cpp — CODAL scheduler (MicroBit fiber APIs)
 #   source/main.cpp                     — CODAL entry point, not in host lib
 #   source/io/real/BenchOtosSensor.cpp  — bench-only, physical OTOS over I2C
 #
@@ -149,7 +149,7 @@ SIM_SUMMARY="$(uv run --with gcovr gcovr \
     --exclude 'source/control/RatioPidController\.cpp' \
     --exclude 'source/io/real/.*' \
     --exclude 'source/app/WedgeTest\.cpp' \
-    --exclude 'source/control/LoopScheduler\.cpp' \
+    --exclude 'source/app/commands/LoopScheduler\.cpp' \
     --exclude 'source/main\.cpp' \
     --gcov-ignore-errors=source_not_found \
     --print-summary \

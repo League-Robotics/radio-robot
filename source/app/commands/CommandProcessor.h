@@ -1,5 +1,4 @@
 #pragma once
-#include <stdint.h>
 #include "Protocol.h"
 #include "CommandTypes.h"
 #include "CommandQueue.h"

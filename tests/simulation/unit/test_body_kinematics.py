@@ -2,7 +2,7 @@
 """test_body_kinematics.py — Unit tests for BodyKinematics math (010-002).
 
 Pure Python implementation of the same equations defined in:
-  source/control/BodyKinematics.h / .cpp
+  source/kinematics/BodyKinematics.h / .cpp
 
 Tests verify:
   - inverse(v, omega, b) -> (vL, vR): vL = v - omega*(b/2), vR = v + omega*(b/2)

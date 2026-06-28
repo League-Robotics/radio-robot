@@ -12,7 +12,6 @@
 #include "Icons.h"
 #include "RadioChannel.h"
 #include "DebugCommandable.h"
-#include <cstdio>
 
 // === TEMPORARY (046-008): per-wheel motor diagnostic. Set to 0 (or delete this
 // line + the wheelTestMain() block below + source/WheelTestMain.cpp) to restore

@@ -16,7 +16,7 @@ Tests verify the body-level (v, ω) trapezoid profiler:
   - seedCurrent() sets _v/_omega; next advance ramps from seeded values.
   - Wheel math: (v, omega) -> inverse -> saturate -> (sL, sR) matches manual Python.
 
-Unit conventions (match source/control/BodyKinematics.h):
+Unit conventions (match source/kinematics/BodyKinematics.h):
   v      : mm/s (body forward speed)
   omega  : rad/s CCW-positive (body yaw rate)
   vL, vR : mm/s (wheel speeds, signed)

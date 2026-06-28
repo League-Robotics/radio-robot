@@ -9,9 +9,9 @@
 // Load:  python3 -c "import ctypes; ctypes.CDLL('./host_tests/build/libfirmware_host.dylib')"
 
 #include "robot/Robot.h"
-#include "app/CommandProcessor.h"
-#include "app/CommandQueue.h"
-#include "app/DebugCommandable.h"
+#include "app/commands/CommandProcessor.h"
+#include "app/commands/CommandQueue.h"
+#include "app/commands/DebugCommandable.h"
 #include "io/sim/SimHardware.h"
 #include "io/sim/PhysicsWorld.h"
 #include "io/sim/WorldView.h"
@@ -19,9 +19,9 @@
 #include "types/Config.h"
 #include "types/Inputs.h"
 #include "superstructure/MotionController.h"
-#include "control/MotionCommand.h"
+#include "app/commands/MotionCommand.h"
 #include "control/HaltController.h"
-#include "control/LoopTickOnce.h"
+#include "app/LoopTickOnce.h"
 #include "types/CommandTypes.h"
 
 #include <cstring>
