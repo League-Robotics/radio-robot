@@ -80,9 +80,3 @@ void PhysicalStateEstimate::setWedgeActive(bool active) {
 void PhysicalStateEstimate::rebaselinePrev(float encL, float encR) {
     _odometry.rebaselinePrev(encL, encR);
 }
-
-#ifdef ROBOT_DRIVETRAIN_MECANUM
-void PhysicalStateEstimate::setOtosAlphaVy(float alpha) {
-    _odometry.setOtosAlphaVy(alpha);
-}
-#endif  // ROBOT_DRIVETRAIN_MECANUM
