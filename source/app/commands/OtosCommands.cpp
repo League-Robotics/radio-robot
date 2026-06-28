@@ -146,8 +146,8 @@ static void handleOR(const ArgList& /*args*/, const char* corrId,
 
 // handleOP — report current OTOS pose from cached HardwareState.
 //
-// Reads hwState->otosX/Y/H (values written by Robot::otosCorrect() each OTOS
-// task tick) instead of calling otos->getPositionRaw() on the device.
+// Reads hwState->optical.pose.{x,y,h} (values written by Robot::otosCorrect()
+// each OTOS task tick via actual.optical.pose) instead of calling the device.
 // This is the only OTOS command that does NOT access hardware (flag = CMD_NONE).
 // If hwState is null (test harness without OTOS), returns zeros.
 //
@@ -162,9 +162,9 @@ static void handleOP(const ArgList& /*args*/, const char* corrId,
 
     float x = 0.0f, y = 0.0f, h = 0.0f;
     if (c->hwState != nullptr) {
-        x = c->hwState->otosX;
-        y = c->hwState->otosY;
-        h = c->hwState->otosH;
+        x = c->hwState->optical.pose.x;
+        y = c->hwState->optical.pose.y;
+        h = c->hwState->optical.pose.h;
     }
 
     // Convert heading from radians to integer milliradians for the reply.

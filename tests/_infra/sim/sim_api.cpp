@@ -322,38 +322,39 @@ int sim_get_async_evts(void* h, char* evts_buf, int evts_len)
 
 // ---- Encoder reads (accumulated mm from Robot::state.actual) ----
 
+// Array convention: [0]=FR=R, [1]=FL=L — see ActualState.h.
 float sim_get_enc_l(void* h)
 {
-    return static_cast<SimHandle*>(h)->robot.state.actual.encLMm;
+    return static_cast<SimHandle*>(h)->robot.state.actual.encMm[1];  // FL = index 1
 }
 
 float sim_get_enc_r(void* h)
 {
-    return static_cast<SimHandle*>(h)->robot.state.actual.encRMm;
+    return static_cast<SimHandle*>(h)->robot.state.actual.encMm[0];  // FR = index 0
 }
 
 // ---- Velocity reads (mm/s from Robot::state.actual) ----
 
 float sim_get_vel_l(void* h)
 {
-    return static_cast<SimHandle*>(h)->robot.state.actual.velLMms;
+    return static_cast<SimHandle*>(h)->robot.state.actual.velMms[1];  // FL = index 1
 }
 
 float sim_get_vel_r(void* h)
 {
-    return static_cast<SimHandle*>(h)->robot.state.actual.velRMms;
+    return static_cast<SimHandle*>(h)->robot.state.actual.velMms[0];  // FR = index 0
 }
 
 // ---- PWM reads (from Robot::state.outputs) ----
 
 float sim_get_pwm_l(void* h)
 {
-    return static_cast<float>(static_cast<SimHandle*>(h)->robot.state.outputs.pwmL);
+    return static_cast<float>(static_cast<SimHandle*>(h)->robot.state.outputs.pwm[1]);  // FL = index 1
 }
 
 float sim_get_pwm_r(void* h)
 {
-    return static_cast<float>(static_cast<SimHandle*>(h)->robot.state.outputs.pwmR);
+    return static_cast<float>(static_cast<SimHandle*>(h)->robot.state.outputs.pwm[0]);  // FR = index 0
 }
 
 // ---- Pose reads (fused estimate from Robot::state.actual.fused — 047-002) ----
@@ -407,7 +408,7 @@ void sim_set_enc_l(void* h, float mm)
     PhysicsWorld& p = s->hal.plant();
     p.setTrueWheelTravel(mm, p.trueEncRMm());     // TRUE travel (ground truth)
     p.setReportedEncoder(0, mm);                  // REPORTED accumulator (side 0 = L)
-    s->robot.state.actual.encLMm = mm;            // keep state in sync this tick
+    s->robot.state.actual.encMm[1] = mm;          // FL = index 1: keep state in sync this tick
 }
 
 void sim_set_enc_r(void* h, float mm)
@@ -416,7 +417,7 @@ void sim_set_enc_r(void* h, float mm)
     PhysicsWorld& p = s->hal.plant();
     p.setTrueWheelTravel(p.trueEncLMm(), mm);     // TRUE travel (ground truth)
     p.setReportedEncoder(1, mm);                  // REPORTED accumulator (side 1 = R)
-    s->robot.state.actual.encRMm = mm;            // keep state in sync this tick
+    s->robot.state.actual.encMm[0] = mm;          // FR = index 0: keep state in sync this tick
 }
 
 // Inject an OTOS pose reading into the SimOdometer.  The injected pose is
@@ -827,14 +828,10 @@ void sim_set_enc_omega_healthy(void* h, int healthy)
 // N11: inject a dead-reckoning pose into state.actual directly.
 // Used by test_n11 to place the robot "past" a G target so the PURSUE
 // backtrack re-gate fires on the next few ticks.
-// 047-002: also write into actual.fused.pose so sim_get_pose_x/y/h
-// (now reading fused.pose) sees the injected value immediately.
+// 047-004: writes only canonical fused.pose (compat scalars removed).
 void sim_set_pose(void* h, float x, float y, float hrad)
 {
     SimHandle* s = static_cast<SimHandle*>(h);
-    s->robot.state.actual.poseX        = x;
-    s->robot.state.actual.poseY        = y;
-    s->robot.state.actual.poseHrad     = hrad;
     s->robot.state.actual.fused.pose.x = x;
     s->robot.state.actual.fused.pose.y = y;
     s->robot.state.actual.fused.pose.h = hrad;

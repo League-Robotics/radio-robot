@@ -56,8 +56,6 @@ void MotorController::setTarget(float leftMms, float rightMms)
         // Scalar tgtLMms/tgtRMms are mirror-writes removed in Phase D.
         _cmds->tgtMms[1] = leftMms;    // FL = index 1
         _cmds->tgtMms[0] = rightMms;   // FR = index 0
-        _cmds->tgtLMms   = leftMms;    // mirror-write scalar (Phase D removes)
-        _cmds->tgtRMms   = rightMms;   // mirror-write scalar (Phase D removes)
 #ifdef ROBOT_DRIVETRAIN_MECANUM
         // Rear wheels (indices 2,3) are left unchanged; BVC sets all 4 via
         // setTarget(const float*, int) when doing full mecanum IK.
@@ -69,11 +67,8 @@ void MotorController::startDriveClean(float leftMms, float rightMms)
 {
     if (_cmds) {
         // Write canonical tgtMms[] arrays ([0]=FR=R, [1]=FL=L) for all builds.
-        // Scalar tgtLMms/tgtRMms are mirror-writes removed in Phase D.
         _cmds->tgtMms[1] = leftMms;    // FL = index 1
         _cmds->tgtMms[0] = rightMms;   // FR = index 0
-        _cmds->tgtLMms   = leftMms;    // mirror-write scalar (Phase D removes)
-        _cmds->tgtRMms   = rightMms;   // mirror-write scalar (Phase D removes)
 #ifdef ROBOT_DRIVETRAIN_MECANUM
         // Clear rear targets — BVC will set all 4 on the first tick.
         _cmds->tgtMms[2] = 0.0f;
@@ -104,11 +99,8 @@ void MotorController::startDrive(float leftMms, float rightMms)
 {
     if (_cmds) {
         // Write canonical tgtMms[] arrays ([0]=FR=R, [1]=FL=L) for all builds.
-        // Scalar tgtLMms/tgtRMms are mirror-writes removed in Phase D.
         _cmds->tgtMms[1] = leftMms;    // FL = index 1
         _cmds->tgtMms[0] = rightMms;   // FR = index 0
-        _cmds->tgtLMms   = leftMms;    // mirror-write scalar (Phase D removes)
-        _cmds->tgtRMms   = rightMms;   // mirror-write scalar (Phase D removes)
     }
 
     bool newFasterIsRight = (fabsf(rightMms) >= fabsf(leftMms));
@@ -151,10 +143,8 @@ void MotorController::startDrive(float leftMms, float rightMms)
 void MotorController::stop()
 {
     if (_cmds) {
-        // Zero canonical tgtMms[] arrays for all builds; scalar mirror-writes stay for Phase D.
+        // Zero canonical tgtMms[] arrays for all builds.
         for (int i = 0; i < kWheelCount; ++i) _cmds->tgtMms[i] = 0.0f;
-        _cmds->tgtLMms = 0.0f;   // mirror-write scalar (Phase D removes)
-        _cmds->tgtRMms = 0.0f;   // mirror-write scalar (Phase D removes)
     }
     _vcL.reset();
     _vcR.reset();
@@ -212,11 +202,6 @@ void MotorController::setTarget(const float* wheels, int n)
     for (int i = 0; i < n; ++i) {
         _cmds->tgtMms[i] = wheels[i];
     }
-    // Keep scalar L/R fields in sync so shared code (Drive.cpp driving-detect,
-    // etc.) that reads tgtLMms / tgtRMms sees consistent values.
-    // tgtMms[0]=FR=semantic right, tgtMms[1]=FL=semantic left.
-    if (n >= 1) _cmds->tgtRMms = _cmds->tgtMms[0];
-    if (n >= 2) _cmds->tgtLMms = _cmds->tgtMms[1];
 }
 
 void MotorController::getEncoderPositions(int32_t out[4]) const
@@ -278,9 +263,8 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
     // 046-005: Mecanum velocity update.
     //
     // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
-    // Drive.cpp (shared code) writes encMm[] canonical arrays (and mirrors to
-    // scalars); we read encMm[] here.  We write velMms[]/velLMms/velRMms in
-    // parallel — the scalar writes are mirror-writes removed in Phase D.
+    // Drive.cpp writes encMm[] canonical arrays; we read encMm[] here and
+    // write velMms[] canonical arrays.
     //
     // refreshedWheel: 1=FL(L), 2=FR(R), 3=both front.
     // Rear wheels (indices 2,3) are not collected in this sprint; their velMms/encMm
@@ -295,15 +279,12 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
                 float rawV = (encFL - _prevEncL) / elapsed_s;
                 if (fabsf(rawV) <= kMaxPlausibleMmps) {
                     float a = _cal.velFiltAlpha;
-                    float newVel = a * rawV + (1.0f - a) * inputs.velMms[1];
-                    inputs.velMms[1] = newVel;   // canonical array
-                    inputs.velLMms   = newVel;   // mirror-write scalar (Phase D removes)
+                    inputs.velMms[1] = a * rawV + (1.0f - a) * inputs.velMms[1];
                     _prevEncL    = encFL;
                     _prevTimeMsL = now_ms;
                 }
             }
         }
-        // encMm[1] already up-to-date (Drive.cpp wrote canonical array).
     } else if (refreshedWheel == 2) {
         float encFR = inputs.encMm[0];   // FR = index 0
         if (!_hasTimestampR) {
@@ -314,15 +295,12 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
                 float rawV = (encFR - _prevEncR) / elapsed_s;
                 if (fabsf(rawV) <= kMaxPlausibleMmps) {
                     float a = _cal.velFiltAlpha;
-                    float newVel = a * rawV + (1.0f - a) * inputs.velMms[0];
-                    inputs.velMms[0] = newVel;   // canonical array
-                    inputs.velRMms   = newVel;   // mirror-write scalar (Phase D removes)
+                    inputs.velMms[0] = a * rawV + (1.0f - a) * inputs.velMms[0];
                     _prevEncR    = encFR;
                     _prevTimeMsR = now_ms;
                 }
             }
         }
-        // encMm[0] already up-to-date (Drive.cpp wrote canonical array).
     } else if (refreshedWheel == 3) {
         // Both front wheels.
         float encFL = inputs.encMm[1];   // FL = index 1
@@ -334,15 +312,12 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
                 float rawV = (encFL - _prevEncL) / elapsed_s;
                 if (fabsf(rawV) <= kMaxPlausibleMmps) {
                     float a = _cal.velFiltAlpha;
-                    float newVel = a * rawV + (1.0f - a) * inputs.velMms[1];
-                    inputs.velMms[1] = newVel;   // canonical array
-                    inputs.velLMms   = newVel;   // mirror-write scalar (Phase D removes)
+                    inputs.velMms[1] = a * rawV + (1.0f - a) * inputs.velMms[1];
                     _prevEncL    = encFL;
                     _prevTimeMsL = now_ms;
                 }
             }
         }
-        // encMm[1] already up-to-date (Drive.cpp wrote canonical array).
         float encFR = inputs.encMm[0];   // FR = index 0
         if (!_hasTimestampR) {
             _prevEncR = encFR; _prevTimeMsR = now_ms; _hasTimestampR = true;
@@ -352,15 +327,12 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
                 float rawV = (encFR - _prevEncR) / elapsed_s;
                 if (fabsf(rawV) <= kMaxPlausibleMmps) {
                     float a = _cal.velFiltAlpha;
-                    float newVel = a * rawV + (1.0f - a) * inputs.velMms[0];
-                    inputs.velMms[0] = newVel;   // canonical array
-                    inputs.velRMms   = newVel;   // mirror-write scalar (Phase D removes)
+                    inputs.velMms[0] = a * rawV + (1.0f - a) * inputs.velMms[0];
                     _prevEncR    = encFR;
                     _prevTimeMsR = now_ms;
                 }
             }
         }
-        // encMm[0] already up-to-date (Drive.cpp wrote canonical array).
     }
     // refreshedWheel == 0: first iteration — velocities held at 0.
 
@@ -405,8 +377,7 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
     }
 #else
     // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
-    // Reads use encMm[]/velMms[] canonical arrays; writes also update the
-    // backward-compat scalar fields (mirror-writes removed in Phase D).
+    // Reads use encMm[] canonical arrays; writes use velMms[] canonical arrays.
     if (refreshedWheel == 1) {
         // Left wheel was just collected.
         float encLMm = inputs.encMm[1];   // FL = index 1
@@ -418,16 +389,14 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
                 float rawV = (encLMm - _prevEncL) / elapsed_s;
                 if (fabsf(rawV) <= kMaxPlausibleMmps) {        // accept plausible
                     float a = _cal.velFiltAlpha;               // EMA smoothing
-                    float newVel = a * rawV + (1.0f - a) * inputs.velMms[1];
-                    inputs.velMms[1] = newVel;   // canonical array
-                    inputs.velLMms   = newVel;   // mirror-write scalar (Phase D removes)
+                    inputs.velMms[1] = a * rawV + (1.0f - a) * inputs.velMms[1];
                     _prevEncL    = encLMm;
                     _prevTimeMsL = now_ms;
                 }
                 // else: garbage read — reject, hold velocity and prev refs.
             }
         }
-        // Right wheel: ZOH — leave velMms[0]/velRMms unchanged.
+        // Right wheel: ZOH — leave velMms[0] unchanged.
     } else if (refreshedWheel == 2) {
         // Right wheel was just collected.
         float encRMm = inputs.encMm[0];   // FR = index 0
@@ -439,16 +408,14 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
                 float rawV = (encRMm - _prevEncR) / elapsed_s;
                 if (fabsf(rawV) <= kMaxPlausibleMmps) {        // accept plausible
                     float a = _cal.velFiltAlpha;               // EMA smoothing
-                    float newVel = a * rawV + (1.0f - a) * inputs.velMms[0];
-                    inputs.velMms[0] = newVel;   // canonical array
-                    inputs.velRMms   = newVel;   // mirror-write scalar (Phase D removes)
+                    inputs.velMms[0] = a * rawV + (1.0f - a) * inputs.velMms[0];
                     _prevEncR    = encRMm;
                     _prevTimeMsR = now_ms;
                 }
                 // else: garbage read — reject, hold velocity and prev refs.
             }
         }
-        // Left wheel: ZOH — leave velMms[1]/velLMms unchanged.
+        // Left wheel: ZOH — leave velMms[1] unchanged.
     } else if (refreshedWheel == 3) {
         // Both wheels updated this tick (WedgeTest pattern — sprint 015).
         float encLMm = inputs.encMm[1];   // FL = index 1
@@ -460,9 +427,7 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
                 float rawV = (encLMm - _prevEncL) / elapsed_s;
                 if (fabsf(rawV) <= kMaxPlausibleMmps) {
                     float a = _cal.velFiltAlpha;
-                    float newVel = a * rawV + (1.0f - a) * inputs.velMms[1];
-                    inputs.velMms[1] = newVel;   // canonical array
-                    inputs.velLMms   = newVel;   // mirror-write scalar (Phase D removes)
+                    inputs.velMms[1] = a * rawV + (1.0f - a) * inputs.velMms[1];
                     _prevEncL    = encLMm;
                     _prevTimeMsL = now_ms;
                 }
@@ -477,9 +442,7 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
                 float rawV = (encRMm - _prevEncR) / elapsed_s;
                 if (fabsf(rawV) <= kMaxPlausibleMmps) {
                     float a = _cal.velFiltAlpha;
-                    float newVel = a * rawV + (1.0f - a) * inputs.velMms[0];
-                    inputs.velMms[0] = newVel;   // canonical array
-                    inputs.velRMms   = newVel;   // mirror-write scalar (Phase D removes)
+                    inputs.velMms[0] = a * rawV + (1.0f - a) * inputs.velMms[0];
                     _prevEncR    = encRMm;
                     _prevTimeMsR = now_ms;
                 }
@@ -634,9 +597,6 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
         }
         if (!anyActive) {
             for (int i = 0; i < 4; ++i) cmds.pwm[i] = 0;
-            // Keep scalar fields in sync with arrays.
-            cmds.pwmL = 0;
-            cmds.pwmR = 0;
             _motorL.setSpeed(0);  // FL (front-left)
             _motorR.setSpeed(0);  // FR (front-right)
             if (_motorBR) _motorBR->setSpeed(0);
@@ -645,9 +605,6 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
             inputs.velMms[1] = 0.0f;  // FL
             inputs.velMms[2] = 0.0f;  // BR
             inputs.velMms[3] = 0.0f;  // BL
-            // Keep scalar vel fields in sync.
-            inputs.velLMms = 0.0f;
-            inputs.velRMms = 0.0f;
             return;
         }
     }
@@ -656,8 +613,6 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
     if (cmds.tgtMms[1] == 0.0f && cmds.tgtMms[0] == 0.0f) {
         cmds.pwm[1] = 0;   // canonical array FL
         cmds.pwm[0] = 0;   // canonical array FR
-        cmds.pwmL   = 0;   // mirror-write scalar (Phase D removes)
-        cmds.pwmR   = 0;   // mirror-write scalar (Phase D removes)
         _motorL.setSpeed(0);
         _motorR.setSpeed(0);
         // Clear stale EMA velocity: MockMotor stops instantly, so the
@@ -665,8 +620,6 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
         // at the last filtered value until the next drive command.
         inputs.velMms[1] = 0.0f;   // canonical array FL
         inputs.velMms[0] = 0.0f;   // canonical array FR
-        inputs.velLMms   = 0.0f;   // mirror-write scalar (Phase D removes)
-        inputs.velRMms   = 0.0f;   // mirror-write scalar (Phase D removes)
         return;
     }
 #endif
@@ -699,9 +652,6 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
         float uFR = _vcR.update(cmds.tgtMms[0], inputs.velMms[0], dt_s);
         cmds.pwm[1] = static_cast<int16_t>(roundf(uFL));
         cmds.pwm[0] = static_cast<int16_t>(roundf(uFR));
-        // Keep scalar pwmL/pwmR in sync with array (shared code reads pwmL/pwmR).
-        cmds.pwmL = cmds.pwm[1];
-        cmds.pwmR = cmds.pwm[0];
         _motorL.setSpeed(static_cast<int8_t>(roundf(uFL)));  // FL
         _motorR.setSpeed(static_cast<int8_t>(roundf(uFR)));  // FR
         if (_motorBR) {
@@ -759,11 +709,9 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
     float uL = _vcL.update(effTgtL, inputs.velMms[1], dt_s);
     float uR = _vcR.update(effTgtR, inputs.velMms[0], dt_s);
 
-    // Write canonical pwm[] arrays first, then mirror-write scalars (Phase D removes scalars).
+    // Write canonical pwm[] arrays.
     cmds.pwm[1] = static_cast<int16_t>(roundf(uL));   // FL = index 1
     cmds.pwm[0] = static_cast<int16_t>(roundf(uR));   // FR = index 0
-    cmds.pwmL = cmds.pwm[1];   // mirror-write scalar (Phase D removes)
-    cmds.pwmR = cmds.pwm[0];   // mirror-write scalar (Phase D removes)
     _motorL.setSpeed(static_cast<int8_t>(roundf(uL)));
     _motorR.setSpeed(static_cast<int8_t>(roundf(uR)));
 #endif  // ROBOT_DRIVETRAIN_MECANUM

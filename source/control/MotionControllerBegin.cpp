@@ -357,11 +357,9 @@ void MotionController::beginDistance(float leftMms, float rightMms,
     // Robot::distanceDrive() still calls resetEncoders() after this (re-zeroing
     // the mirror plus resetting velocity baselines and the odometry snapshot).
     if (_hwState) {
-        // Zero canonical encoder arrays; scalar mirror-writes stay for Phase D.
+        // Zero canonical encoder arrays.
         _hwState->encMm[0] = 0;   // FR = index 0
         _hwState->encMm[1] = 0;   // FL = index 1
-        _hwState->encLMm = 0;     // mirror-write scalar (Phase D removes)
-        _hwState->encRMm = 0;     // mirror-write scalar (Phase D removes)
     }
 
     // Snapshot hardware state for MotionBaseline.  The encoder mirror was just

@@ -78,7 +78,6 @@ void Drive::periodic(uint32_t now, ReplyFn fn, void* ctx)
                 _filterRejectStreakR = 0;
             }
             _inputs.encMm[0] = newR;   // canonical array FR
-            _inputs.encRMm   = newR;   // mirror-write scalar (Phase D removes)
         }
 
         // Left (M2) second.
@@ -98,7 +97,6 @@ void Drive::periodic(uint32_t now, ReplyFn fn, void* ctx)
                 _filterRejectStreakL = 0;
             }
             _inputs.encMm[1] = newL;   // canonical array FL
-            _inputs.encLMm   = newL;   // mirror-write scalar (Phase D removes)
         }
 
         // (033-005b) Emit EVT enc_filter_hold at threshold crossing (onset).

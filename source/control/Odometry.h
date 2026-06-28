@@ -76,10 +76,9 @@ public:
     // ---------------------------------------------------------------------------
 
     // Midpoint (exact-arc) integration — primary predict step.
-    // Reads s.encLMm / s.encRMm, computes deltas against _prevEncL/_prevEncR,
-    // then writes the updated pose into s.poseX / s.poseY / s.poseHrad.
-    // Also advances the EKF and writes EKF state as the authoritative pose,
-    // including s.fusedV and s.fusedOmega from the velocity states.
+    // Reads s.encMm[1] (FL=L) / s.encMm[0] (FR=R), computes deltas against
+    // _prevEncL/_prevEncR, then writes the updated pose into s.fused.pose.{x,y,h}.
+    // Also advances the EKF and writes EKF state into s.fused.{pose,twist,stamp}.
     //
     // rotationalSlip: body-rotation efficiency from RobotConfig (024-006).
     //   dTheta = ((dR-dL)/trackwidth) * clamp(rotationalSlip, 0.5, 1.0).

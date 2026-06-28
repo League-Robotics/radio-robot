@@ -227,14 +227,10 @@ void Robot::otosCorrect(uint32_t now_ms)
     // recent raw reading exists", NOT "was fused".  On a same-tick read failure
     // do not write otosX/Y/H with garbage zeros.
     if (poseOk) {
-        // Write canonical optical.pose (047-003); scalar mirror-writes removed Phase D.
+        // Write canonical optical.pose (047-002).
         state.actual.optical.pose.x = p.x;
         state.actual.optical.pose.y = p.y;
         state.actual.optical.pose.h = p.h;
-        // Mirror-write backward-compat scalars (Phase D removes these).
-        state.actual.otosX = p.x;
-        state.actual.otosY = p.y;
-        state.actual.otosH = p.h;
         state.actual.otos.lastUpdMs = now_ms;
         state.actual.otos.valid = true;
     } else {
@@ -351,9 +347,7 @@ void Robot::resetEncoders()
     motorController.resetEncoderAccumulators();
 
     // 2. Align the outlier-filter baseline with the now-zeroed accumulators.
-    state.actual.encLMm = 0.0f;
-    state.actual.encRMm = 0.0f;
-    // Sync the per-wheel array counterparts (sized by kWheelCount; #ifdef-free).
+    // Array convention: [0]=FR=R, [1]=FL=L (sized by kWheelCount; #ifdef-free).
     for (int i = 0; i < kWheelCount; ++i) state.actual.encMm[i] = 0.0f;
 
     // 3. Re-baseline Odometry's encoder snapshot so predict() sees delta=0

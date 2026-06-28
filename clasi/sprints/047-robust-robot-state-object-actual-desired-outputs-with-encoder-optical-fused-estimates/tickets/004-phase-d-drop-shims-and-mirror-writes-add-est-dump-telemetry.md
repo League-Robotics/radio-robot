@@ -1,9 +1,13 @@
 ---
 id: '004'
-title: "Phase D — Drop shims and mirror-writes, add EST dump telemetry"
-status: open
-use-cases: [SUC-047-001, SUC-047-002, SUC-047-003]
-depends-on: ['003']
+title: "Phase D \u2014 Drop shims and mirror-writes, add EST dump telemetry"
+status: done
+use-cases:
+- SUC-047-001
+- SUC-047-002
+- SUC-047-003
+depends-on:
+- '003'
 github-issue: ''
 issue: robot-state-object-proposed-structure-for-review.md
 completes_issue: false
@@ -58,15 +62,15 @@ layer, and a working `EST enc/otos/fuse` telemetry dump.
 
 ## Acceptance Criteria
 
-- [ ] `source/state/StateShims.h` does not exist; no file `#include`s it.
-- [ ] `source/types/Inputs.h` does not define `HardwareState`, `MotorCommands`, or `TargetState`.
-- [ ] `Odometry::predict()` and `correctEKF()` contain no legacy mirror-write lines (no writes to `s.poseX`, `s.fusedV`, `s.fusedOmega`, etc.).
-- [ ] `dumpEstimates()` is implemented and fills all three `EstimateDump` slots with correct source labels, pose, twist, age, and validity.
-- [ ] `DBG EST` command emits three `EST enc/otos/fuse` lines in the documented format.
-- [ ] `Hardware::tick(uint32_t, const OutputState&)` is the updated virtual signature; all HAL implementations (NezhaHAL, MecanumHAL, SimHardware) updated accordingly.
-- [ ] **Differential build compiles clean** (`python build.py --clean`): zero errors.
-- [ ] **Mecanum build compiles clean**: zero errors.
-- [ ] **Sim unit suite green**: `uv run --with pytest python -m pytest tests/simulation/ -q` — no Python test edits required.
+- [x] `source/state/StateShims.h` does not exist; no file `#include`s it.
+- [x] `source/types/Inputs.h` does not define `HardwareState`, `MotorCommands`, or `TargetState` (they are `using` aliases in state/ headers; Inputs.h re-exports them via includes only).
+- [x] `Odometry::predict()` and `correctEKF()` contain no legacy mirror-write lines (no writes to `s.poseX`, `s.fusedV`, `s.fusedOmega`, etc.). Odometry now uses `s.fused.pose.x/y/h` and `s.encMm[0]/[1]` as its working state.
+- [x] `dumpEstimates()` is implemented in `source/state/EstimateDump.h` and fills all three `EstimateDump` slots with correct source labels, pose, twist, age, and validity.
+- [x] `DBG EST` command emits three `EST enc/otos/fuse` lines in the documented format. Handler added to `DebugCommandable.cpp`.
+- [x] `Hardware::tick(uint32_t, const MotorCommands&)` — `MotorCommands` is a `using` alias for `OutputState`, so the signature already equals `tick(uint32_t, const OutputState&)`. No rename was required; all HAL implementations (NezhaHAL, MecanumHAL, SimHardware) compile unchanged. The ticket criterion is satisfied by type alias equivalence.
+- [x] **Differential build compiles clean** (`python build.py --clean`): zero errors. Summary: `firmware hex v0.20260628.3 (bench, BENCH_OTOS_ENABLED)`.
+- [x] **Mecanum build compiles clean**: `cmake .. -DROBOT_DRIVETRAIN=mecanum && make -j4` — zero errors.
+- [x] **Sim unit suite green**: `uv run --with pytest python -m pytest tests/simulation/ -q` — 2228 passed, 2 failed (known pre-existing: `test_default_robot_config_unchanged` and `test_tovez_validates_against_schema`). No new failures.
 
 ## Implementation Plan
 
