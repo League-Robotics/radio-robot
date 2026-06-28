@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Eliminate T/D stringify+inverse round-trip
-status: open
+status: in-progress
 use-cases:
 - SUC-002
 - SUC-004
