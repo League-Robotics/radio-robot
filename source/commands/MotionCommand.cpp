@@ -1,0 +1,275 @@
+// MotionCommand.cpp — body-velocity active command lifecycle.
+//
+// See MotionCommand.h for full API documentation.
+// Architecture reference: .clasi/sprints/017-.../architecture-update.md §MotionCommand
+// Sprint 017, Ticket 003.
+
+#include "MotionCommand.h"
+#include "BodyVelocityController.h"
+#include <cstdio>
+#include <cstring>
+#include <cassert>
+
+// ---------------------------------------------------------------------------
+// Configuration phase
+// ---------------------------------------------------------------------------
+
+void MotionCommand::configure(float v_mms, float omega_rads, BodyVelocityController* bvc)
+{
+    _bvc       = bvc;
+    _vTgt      = v_mms;
+    _omegaTgt  = omega_rads;
+
+    // Clear all per-command state so a recycled instance has no residue.
+    _nStops          = 0;
+    for (uint8_t i = 0; i < kMaxStopConds; ++i) {
+        _stops[i] = StopCondition{};
+    }
+    _replyFn         = nullptr;
+    _replyCtx        = nullptr;
+    _corrId[0]       = '\0';
+    _stopStyle       = StopStyle::SOFT;
+    _origin          = Origin::VW;   // reset; caller must call setOrigin() to override
+    _active          = false;
+    _stopping        = false;
+    _softDeadlineMs  = 0;
+    _baseline        = MotionBaseline{};
+    // Reset done EVT label to default; caller must call setDoneEvt() after
+    // configure() to override it for the new command.
+    strncpy(_doneEvtLabel, "EVT done", sizeof(_doneEvtLabel) - 1);
+    _doneEvtLabel[sizeof(_doneEvtLabel) - 1] = '\0';
+}
+
+void MotionCommand::setDoneEvt(const char* label)
+{
+    if (!label) return;
+    strncpy(_doneEvtLabel, label, sizeof(_doneEvtLabel) - 1);
+    _doneEvtLabel[sizeof(_doneEvtLabel) - 1] = '\0';
+}
+
+bool MotionCommand::addStop(const StopCondition& c)
+{
+    if (_nStops >= kMaxStopConds) {
+        assert(false && "MotionCommand: addStop overflow — kMaxStopConds reached");
+        return false;
+    }
+    _stops[_nStops++] = c;
+    return true;
+}
+
+void MotionCommand::setReplySink(ReplyFn fn, void* ctx, const char* corrId)
+{
+    _replyFn  = fn;
+    _replyCtx = ctx;
+    if (corrId && corrId[0] != '\0') {
+        strncpy(_corrId, corrId, sizeof(_corrId) - 1);
+        _corrId[sizeof(_corrId) - 1] = '\0';
+    } else {
+        _corrId[0] = '\0';
+    }
+}
+
+void MotionCommand::setStopStyle(StopStyle s)
+{
+    _stopStyle = s;
+}
+
+// ---------------------------------------------------------------------------
+// Predicate: hasTimeStop
+// ---------------------------------------------------------------------------
+
+bool MotionCommand::hasTimeStop() const
+{
+    for (uint8_t i = 0; i < _nStops; ++i) {
+        if (_stops[i].kind == StopCondition::Kind::TIME) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Execution phase
+// ---------------------------------------------------------------------------
+
+void MotionCommand::start(const HardwareState& inputs, uint32_t now_ms)
+{
+    // Capture motion baseline.
+    // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
+    _baseline.t0Ms       = now_ms;
+    _baseline.enc0Mm     = (inputs.encMm[1] + inputs.encMm[0]) * 0.5f;
+    _baseline.encDiff0Mm = inputs.encMm[0] - inputs.encMm[1];
+    _baseline.heading0Rad = inputs.fused.pose.h;
+    _baseline.pose0X     = inputs.fused.pose.x;
+    _baseline.pose0Y     = inputs.fused.pose.y;
+
+    _active   = true;
+    _stopping = false;
+
+    // Hand target to BVC; BVC will start ramping on the next tick.
+    if (_bvc) {
+        _bvc->setTarget(_vTgt, _omegaTgt);
+    }
+}
+
+void MotionCommand::setTarget(float v_mms, float omega_rads)
+{
+    _vTgt     = v_mms;
+    _omegaTgt = omega_rads;
+
+    if (_bvc) {
+        _bvc->setTarget(_vTgt, _omegaTgt);
+    }
+}
+
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+void MotionCommand::setTarget(float v_mms, float omega_rads, float vy_mms)
+{
+    _vTgt     = v_mms;
+    _omegaTgt = omega_rads;
+
+    if (_bvc) {
+        _bvc->setTarget(_vTgt, _omegaTgt, vy_mms);
+    }
+}
+#endif
+
+bool MotionCommand::tick(const HardwareState& inputs, uint32_t now_ms, float dt_s)
+{
+    if (!_active) return false;
+
+    // ------------------------------------------------------------------
+    // SOFT ramp-down sub-phase.
+    // ------------------------------------------------------------------
+    if (_stopping) {
+        // Still ramping to (0, 0) — advance BVC.
+        if (_bvc) _bvc->advance(dt_s);
+
+        // Check termination conditions: converged OR deadline passed.
+        bool converged = _bvc ? _bvc->atTarget() : true;
+        int32_t dt_deadline = (int32_t)(now_ms - _softDeadlineMs);
+        bool deadline_hit   = (dt_deadline >= 0);
+
+        if (converged || deadline_hit) {
+            _active   = false;
+            _stopping = false;
+            emitEvt(_doneEvtLabel);
+        }
+        return _active;
+    }
+
+    // ------------------------------------------------------------------
+    // Normal running sub-phase.
+    // ------------------------------------------------------------------
+
+    // Advance BVC one tick (profile → inverse → saturate → setTarget).
+    if (_bvc) _bvc->advance(dt_s);
+
+    // Evaluate stop conditions (OR-across-array: first hit terminates).
+    bool stopped = false;
+    for (uint8_t i = 0; i < _nStops; ++i) {
+        if (_stops[i].evaluate(inputs, now_ms, _baseline)) {
+            // DIAGNOSTIC (transient turn-skip hunt): when a ROTATION arc stop
+            // fires, emit how it ended. A healthy turn shows ms~1-2s and arc~tgt;
+            // a tick-0 skip shows ms~0 with arc already >= tgt, and whichever of
+            // base/cur is the outlier pinpoints the garbage encoder read that
+            // corrupted the arc baseline.  One line per turn — low radio cost.
+            if (_stops[i].kind == StopCondition::Kind::ROTATION && _replyFn) {
+                float d = inputs.encMm[0] - inputs.encMm[1] - _baseline.encDiff0Mm;
+                if (d < 0.0f) d = -d;
+                char dbg[80];
+                snprintf(dbg, sizeof(dbg),
+                         "EVT ROTSTOP ms=%u arc=%d tgt=%d base=%d cur=%d",
+                         (unsigned)(now_ms - _baseline.t0Ms), (int)(d * 0.5f),
+                         (int)_stops[i].a, (int)_baseline.encDiff0Mm,
+                         (int)(inputs.encMm[0] - inputs.encMm[1]));
+                _replyFn(dbg, _replyCtx);
+            }
+            stopped = true;
+            break;
+        }
+    }
+
+    if (stopped) {
+        if (_stopStyle == StopStyle::HARD) {
+            // Immediate teardown.
+            if (_bvc) _bvc->reset();
+            _active   = false;
+            _stopping = false;
+            emitEvt(_doneEvtLabel);
+        } else {
+            // SOFT: ramp to (0, 0) over up to kSoftDeadlineMs.
+            _stopping       = true;
+            _softDeadlineMs = now_ms + kSoftDeadlineMs;
+            if (_bvc) _bvc->setTarget(0.0f, 0.0f);
+        }
+    }
+
+    return _active;
+}
+
+void MotionCommand::cancel(StopStyle s)
+{
+    if (!_active) return;
+
+    // HARD cancel (cancel is always an emergency abort regardless of style arg).
+    if (_bvc) _bvc->reset();
+    _active   = false;
+    _stopping = false;
+    emitEvt("EVT cancelled");
+
+    (void)s;  // style argument reserved for future use
+}
+
+void MotionCommand::cancelQuiet()
+{
+    if (!_active) return;
+
+    // N11: suppress "EVT cancelled" by clearing the reply sink before teardown.
+    // Used for internal phase transitions (e.g. PURSUE backtrack re-gate) where
+    // the enclosing command (G) is still in progress and the cancel is an
+    // implementation detail, not a terminal event for the host-visible corrId.
+    _replyFn  = nullptr;
+    _replyCtx = nullptr;
+
+    if (_bvc) _bvc->reset();
+    _active   = false;
+    _stopping = false;
+    // emitEvt("EVT cancelled") is intentionally omitted — sink cleared above.
+}
+
+void MotionCommand::softStop(uint32_t now_ms)
+{
+    // No-op if not active or already ramping down.
+    if (!_active || _stopping) return;
+
+    // Arm SOFT ramp-down: BVC target → (0,0); tick() will emit EVT done
+    // once the BVC converges or the 3 s deadline passes.
+    _stopping       = true;
+    _softDeadlineMs = now_ms + kSoftDeadlineMs;
+    if (_bvc) _bvc->setTarget(0.0f, 0.0f);
+}
+
+// ---------------------------------------------------------------------------
+// Private helpers
+// ---------------------------------------------------------------------------
+
+void MotionCommand::emitEvt(const char* base)
+{
+    if (!_replyFn) return;
+
+    char msg[48];
+    if (_corrId[0] != '\0') {
+        snprintf(msg, sizeof(msg), "%s #%s", base, _corrId);
+    } else {
+        // Manual copy to avoid another snprintf call with no format args.
+        int i = 0;
+        while (base[i] && i < (int)sizeof(msg) - 1) {
+            msg[i] = base[i];
+            ++i;
+        }
+        msg[i] = '\0';
+    }
+
+    _replyFn(msg, _replyCtx);
+}
