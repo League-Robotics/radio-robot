@@ -193,12 +193,16 @@ struct RobotConfig {
 
     // -----------------------------------------------------------------------
     // Sprint 046: mecanum drivetrain support (baked from robot JSON).
+    // Sprint 048: compile-time drivetrain selection is now unconditionally
+    // differential. Mecanum fields below are retained for future mecanum use
+    // and are read from JSON; they are not wired into firmware logic in the
+    // current differential build.
     // -----------------------------------------------------------------------
 
     // Drivetrain type: 0 = differential (default), 1 = mecanum.
     // Baked from identity.drivetrain_type in the robot JSON.
-    // Use the ROBOT_DRIVETRAIN_MECANUM preprocessor define for compile-time
-    // drivetrain selection; this field carries the runtime identity.
+    // Retained for runtime identity reporting; compile-time drivetrain
+    // selection is now unconditionally differential.
     uint8_t drivetrain;
 
     // Mecanum geometry (mm). Placeholder defaults — MEASURE on the bench.
@@ -224,8 +228,8 @@ struct RobotConfig {
     float aMaxY;       // lateral acceleration limit, mm/s^2    (default 800.0f)
     float jMaxY;       // lateral jerk limit, mm/s^3 (0=trapezoid; default 0.0f)
 
-    // OTOS lateral velocity complementary filter gain (mecanum, 046-006).
-    // fusedVy = otosAlphaVy * vy_otos + (1 - otosAlphaVy) * fusedVy.
+    // OTOS lateral velocity complementary filter gain (retained for future mecanum use).
+    // Not wired in the current differential build (sprint 048).
     // Range [0, 1]; 0.8 = heavily OTOS-trusting (default).
     float otosAlphaVy;  // lateral velocity blend gain (default 0.8f)
 };

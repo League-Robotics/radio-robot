@@ -1,12 +1,13 @@
 ---
-id: "003"
-title: "State/odometry/telemetry/robot wiring strip: Odometry, PhysicalStateEstimate, Robot, RobotTelemetry, Config"
-status: open
+id: '003'
+title: 'State/odometry/telemetry/robot wiring strip: Odometry, PhysicalStateEstimate,
+  Robot, RobotTelemetry, Config'
+status: done
 use-cases:
-  - SUC-048-002
+- SUC-048-002
 depends-on:
-  - "001"
-  - "002"
+- '001'
+- '002'
 issue: eliminate-ifdef-robot-drivetrain-mecanum-everywhere.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -32,39 +33,39 @@ Config.h is independent but grouped here for completeness.
 
 ## Acceptance Criteria
 
-- [ ] `source/control/Odometry.h` (lines 222–228, 277–284):
-  - [ ] No `setOtosAlphaVy()` declaration.
-  - [ ] No `fusedVy()` accessor.
-  - [ ] No `_fusedVy` or `_otosAlphaVy` private members.
-  - [ ] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
-- [ ] `source/control/Odometry.cpp`:
-  - [ ] No `_fusedVy` complementary filter code path.
-  - [ ] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
-  - [ ] `actual.fused.twist.vy` (Sprint 047 `BodyTwist3` field) is written as
+- [x] `source/control/Odometry.h` (lines 222–228, 277–284):
+  - [x] No `setOtosAlphaVy()` declaration.
+  - [x] No `fusedVy()` accessor.
+  - [x] No `_fusedVy` or `_otosAlphaVy` private members.
+  - [x] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
+- [x] `source/control/Odometry.cpp`:
+  - [x] No `_fusedVy` complementary filter code path.
+  - [x] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
+  - [x] `actual.fused.twist.vy` (Sprint 047 `BodyTwist3` field) is written as
     `0.0f` unconditionally or left at its zero-initialized value — NOT deleted.
-- [ ] `source/state/PhysicalStateEstimate.h`:
-  - [ ] No `setOtosAlphaVy` declaration.
-  - [ ] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
-- [ ] `source/state/PhysicalStateEstimate.cpp`:
-  - [ ] No `setOtosAlphaVy` implementation.
-  - [ ] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
-- [ ] `source/robot/Robot.cpp` (lines 98–103, 124–127, ~284–296):
-  - [ ] No `bindRearMotors()` call.
-  - [ ] No `setOtosAlphaVy()` init call.
-  - [ ] OTOS read uses 2-DOF path (vx + omega) only; no mecanum `vy` read.
-  - [ ] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
-- [ ] `source/robot/RobotTelemetry.cpp` (lines 53, 85, 105):
-  - [ ] Rear-motor PWM/velocity telemetry fields removed.
-  - [ ] `vy` fusion telemetry field removed.
-  - [ ] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
-- [ ] `source/types/Config.h` (~line 48):
-  - [ ] Comments updated: no reference to "set by CMake from `drivetrain_type`"
+- [x] `source/state/PhysicalStateEstimate.h`:
+  - [x] No `setOtosAlphaVy` declaration.
+  - [x] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
+- [x] `source/state/PhysicalStateEstimate.cpp`:
+  - [x] No `setOtosAlphaVy` implementation.
+  - [x] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
+- [x] `source/robot/Robot.cpp` (lines 98–103, 124–127, ~284–296):
+  - [x] No `bindRearMotors()` call.
+  - [x] No `setOtosAlphaVy()` init call.
+  - [x] OTOS read uses 2-DOF path (vx + omega) only; no mecanum `vy` read.
+  - [x] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
+- [x] `source/robot/RobotTelemetry.cpp` (lines 53, 85, 105):
+  - [x] Rear-motor PWM/velocity telemetry fields removed.
+  - [x] `vy` fusion telemetry field removed.
+  - [x] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
+- [x] `source/types/Config.h` (~line 48):
+  - [x] Comments updated: no reference to "set by CMake from `drivetrain_type`"
     or "if ROBOT_DRIVETRAIN_MECANUM".
-  - [ ] All mecanum config fields (`halfTrackMm`, `halfWheelbaseMm`, `vyBodyMax`,
+  - [x] All mecanum config fields (`halfTrackMm`, `halfWheelbaseMm`, `vyBodyMax`,
     `aMaxY`, `jMaxY`, `fwdSignFR`, `fwdSignFL`, `fwdSignBR`, `fwdSignBL`,
     `otosAlphaVy`) remain in the struct, unchanged.
-- [ ] `uv run pytest` passes.
-- [ ] `grep -rn ROBOT_DRIVETRAIN_MECANUM source/control source/state source/robot source/types`
+- [x] `uv run pytest` passes.
+- [x] `grep -rn ROBOT_DRIVETRAIN_MECANUM source/control source/state source/robot source/types`
   returns zero matches.
 
 ## Implementation Plan

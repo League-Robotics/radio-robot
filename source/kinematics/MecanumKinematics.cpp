@@ -4,11 +4,10 @@
  * See MecanumKinematics.h for full API, equations, and unit conventions.
  *
  * This file is pure math and has NO hardware, CODAL, or I2C dependencies.
- * It compiles cleanly in BOTH the host/sim build and the firmware build,
- * regardless of ROBOT_DRIVETRAIN. The differential firmware build may exclude
- * it via the CMakeLists.txt filter, but the host/sim build always includes it
- * so that host unit tests cover the mecanum math even when the drivetrain is
- * configured as differential.
+ * It compiles cleanly in BOTH the host/sim build and the firmware build.
+ * The firmware CMakeLists.txt selects which drivetrain sources to compile,
+ * but the host/sim build always includes this file so that host unit tests
+ * cover the mecanum math regardless of the active firmware drivetrain.
  */
 #include "MecanumKinematics.h"
 #include <math.h>

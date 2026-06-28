@@ -99,9 +99,6 @@ struct GoalRequest {
     // Body-twist (VELOCITY)
     float     v_mms;
     float     omega_rads;
-#ifdef ROBOT_DRIVETRAIN_MECANUM
-    float     vy_mms;   // lateral speed (mecanum VELOCITY goal; 0.0f default)
-#endif
 
     // Arc (ARC)
     float     radiusMm;

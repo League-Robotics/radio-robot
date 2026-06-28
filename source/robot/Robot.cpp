@@ -95,12 +95,6 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
     // 047-003: wire BVC → DesiredState publish so bodyTwist/bodyTwistRaw are
     // updated every advance() tick.
     motionController.setBvcStateRef(&state.desired);
-#ifdef ROBOT_DRIVETRAIN_MECANUM
-    // 046-005: Bind rear motors (BR, BL) to MotorController after construction.
-    // The base 2-motor constructor bound FL (motorL/motorR = front motors);
-    // bindRearMotors attaches the rear motors and seeds their VelocityControllers.
-    motorController.bindRearMotors(hal.motorBR(), hal.motorBL());
-#endif
     // setRobotCtx replaces setCtx (sprint 026-002): MotionCtx now lives in Robot.
     motionController.setRobotCtx(this);
     // Initialise _motionCtx (sprint 026-002): mc and robot pointers; queue wired
@@ -121,10 +115,6 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
                      config.ekfQv, config.ekfQomega,
                      config.ekfROtosXy, config.ekfROtosV, config.ekfREncV,
                      config.ekfROtosTheta);
-#ifdef ROBOT_DRIVETRAIN_MECANUM
-    // 046-006: seed the OTOS lateral velocity complementary filter gain from config.
-    estimate.setOtosAlphaVy(config.otosAlphaVy);
-#endif  // ROBOT_DRIVETRAIN_MECANUM
 }
 
 // ---------------------------------------------------------------------------
@@ -281,34 +271,13 @@ void Robot::otosCorrect(uint32_t now_ms)
         vel.omega_rads = 0.0f;
     }
 
-#ifdef ROBOT_DRIVETRAIN_MECANUM
-    // 046-006: read the lateral velocity component from the OTOS (3-DOF read).
-    // The OTOS REG_VELOCITY already carries vy; readVelocityTransformed3 applies
-    // the same mount-rotation transform and returns all three body-frame components.
-    // On failure (I2C error or sensor not initialised) vy_otos stays 0.0f so the
-    // complementary filter decays to zero rather than fusing garbage.
-    float vy_otos = 0.0f;
-    {
-        BodyTwist3 vel3{};
-        if (activeOtos.readVelocityTransformed3(vel3, headingRad)) {
-            vy_otos = vel3.vy_mmps;
-        }
-    }
-
     // Encoder-derived velocity is fused unconditionally in Odometry::predict()
     // every tick (033-003), so correctEKF() fuses only the OTOS observations.
     // 047-002: now_ms added so correctEKF can stamp actual.optical.stamp.lastUpdMs.
-    estimate.addOtosObservation(state.actual, p.x, p.y,
-                        p.h,
-                        vel.v_mmps, vel.omega_rads, vy_otos, now_ms);
-#else
-    // Encoder-derived velocity is fused unconditionally in Odometry::predict()
-    // every tick (033-003), so correctEKF() fuses only the OTOS observations.
-    // 047-002: now_ms added so correctEKF can stamp actual.optical.stamp.lastUpdMs.
+    // Differential build: vy is always 0.0f (no lateral encoder/OTOS observation).
     estimate.addOtosObservation(state.actual, p.x, p.y,
                         p.h,
                         vel.v_mmps, vel.omega_rads, 0.0f, now_ms);
-#endif  // ROBOT_DRIVETRAIN_MECANUM
 }
 
 // ---------------------------------------------------------------------------

@@ -1,10 +1,6 @@
 #include "MicroBit.h"
 #include "Robot.h"
-#ifdef ROBOT_DRIVETRAIN_MECANUM
-#include "MecanumHAL.h"
-#else
 #include "NezhaHAL.h"
-#endif
 #include "CommandProcessor.h"
 #include "LoopScheduler.h"
 #include "Communicator.h"
@@ -12,11 +8,6 @@
 #include "Icons.h"
 #include "RadioChannel.h"
 #include "DebugCommands.h"
-
-// === TEMPORARY (046-008): per-wheel motor diagnostic. Set to 0 (or delete this
-// line + the wheelTestMain() block below + source/WheelTestMain.cpp) to restore
-// the normal boot. Mecanum-only; ignored on the differential build. ===
-#define WHEEL_TEST_MAIN 0
 
 // ---------------------------------------------------------------------------
 // MicroBit uBit singleton — file-scope so CODAL peripherals are fully
@@ -164,26 +155,14 @@ int main() {
     // bus-wide. See docs/knowledge encoder-wedge note + WedgeTest.cpp.
     uBit.i2c.setFrequency(100000);
 
-#ifdef ROBOT_DRIVETRAIN_MECANUM
-    static MecanumHAL hardware(uBit.i2c, uBit.io, cfg);
-#else
+    // To build for mecanum: replace NezhaHAL with MecanumHAL and update IKinematics.h
     static NezhaHAL hardware(uBit.i2c, uBit.io, cfg);
-#endif
 
     // -----------------------------------------------------------------------
     // 4. Communications — begin() enables serial + radio.
     // -----------------------------------------------------------------------
     static Communicator comm(uBit.serial, uBit.radio, uBit.messageBus);
     comm.begin(rfChannel);
-
-#if defined(ROBOT_DRIVETRAIN_MECANUM) && WHEEL_TEST_MAIN
-    // 046-008 per-wheel diagnostic — drives motors directly over serial OR radio
-    // (via comm), bypasses the whole control stack, and NEVER RETURNS. Temporary.
-    {
-        extern void wheelTestMain(MicroBit&, MecanumHAL&, Communicator&);
-        wheelTestMain(uBit, hardware, comm);
-    }
-#endif
 
     // -----------------------------------------------------------------------
     // 5. Device initialisation — NezhaHAL::begin() calls otos, line, color

@@ -2,9 +2,7 @@
 /**
  * IKinematics.h — compile-time kinematics namespace alias (046-002).
  *
- * Selects the active kinematics implementation at compile time based on
- * the ROBOT_DRIVETRAIN_MECANUM preprocessor define (set by CMake from the
- * robot JSON drivetrain_type field).
+ * Differential-only build. The alias and kWheelCount are unconditional.
  *
  * Usage:
  *   #include "IKinematics.h"
@@ -13,13 +11,15 @@
  *
  * The alias ensures the control stack (BodyVelocityController, ticket 046-003)
  * can call the correct kinematics without an #ifdef at every call site.
+ *
+ * To build for a mecanum robot (see also source/main.cpp):
+ *   1. Replace the include + alias + kWheelCount below with:
+ *        #include "MecanumKinematics.h"
+ *        namespace Kinematics = MecanumKinematics;
+ *        constexpr int kWheelCount = 4;
+ *   2. In source/main.cpp, replace NezhaHAL with MecanumHAL.
+ * (git history preserves the full mecanum integration prior to sprint 048.)
  */
-#ifdef ROBOT_DRIVETRAIN_MECANUM
-  #include "MecanumKinematics.h"
-  namespace Kinematics = MecanumKinematics;
-  constexpr int kWheelCount = 4;
-#else
-  #include "BodyKinematics.h"
-  namespace Kinematics = BodyKinematics;
-  constexpr int kWheelCount = 2;
-#endif
+#include "BodyKinematics.h"
+namespace Kinematics = BodyKinematics;
+constexpr int kWheelCount = 2;

@@ -297,19 +297,10 @@ void Odometry::correctEKF(HardwareState& s,
     s.fused.pose.y          = _ekf.y();
     s.fused.pose.h          = _ekf.theta();
     s.fused.twist.vx_mmps   = _ekf.v();
+    s.fused.twist.vy_mmps   = 0.0f;   // differential: no lateral velocity; vy_otos captured in optical only
     s.fused.twist.omega_rads = _ekf.omega();
     s.fused.stamp.lastUpdMs = now_ms;
     s.fused.stamp.valid     = true;
-
-#ifdef ROBOT_DRIVETRAIN_MECANUM
-    // 046-006: complementary filter for lateral body velocity.
-    // OTOS directly observes vy; blend toward the OTOS reading each correction tick.
-    // _otosAlphaVy defaults to 0.8 (strongly OTOS-trusting); set via setOtosAlphaVy().
-    // vy_otos_mmps defaults to 0.0f in the differential build (no-op).
-    _fusedVy              = _otosAlphaVy * vy_otos_mmps + (1.0f - _otosAlphaVy) * _fusedVy;
-    s.fused.twist.vy_mmps = _fusedVy;
-    s.optical.twist.vy_mmps = vy_otos_mmps;
-#else
-    (void)vy_otos_mmps;
-#endif  // ROBOT_DRIVETRAIN_MECANUM
+    // vy_otos_mmps is captured into optical.twist above (before EKF update);
+    // on the differential build it is always 0.0f and is not fused into fused.twist.
 }

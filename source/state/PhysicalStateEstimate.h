@@ -27,7 +27,7 @@ public:
                                 float rotationalSlip, uint32_t now_ms);
 
     // OTOS EKF correction (= Odometry::correctEKF, verbatim).
-    // vy_otos_mmps: OTOS lateral velocity (mm/s); mecanum build only (046-006).
+    // vy_otos_mmps: OTOS lateral velocity (mm/s); always 0.0f on differential builds.
     // now_ms: robot system clock (ms); used to stamp actual.optical.stamp (047-002).
     void addOtosObservation(HardwareState& s,
                             float x_otos, float y_otos,
@@ -94,11 +94,6 @@ public:
     void     setWedgeActive(bool active);
 
     void     rebaselinePrev(float encL, float encR);
-
-#ifdef ROBOT_DRIVETRAIN_MECANUM
-    // 046-006: forward the OTOS lateral velocity filter gain to Odometry.
-    void     setOtosAlphaVy(float alpha);
-#endif  // ROBOT_DRIVETRAIN_MECANUM
 
     // --- Access to the wrapped Odometry (for OtosCommands context in T2) ---
     Odometry& odometry() { return _odometry; }

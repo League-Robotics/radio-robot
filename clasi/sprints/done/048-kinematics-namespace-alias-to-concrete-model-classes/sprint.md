@@ -1,7 +1,7 @@
 ---
 id: 048
 title: Eliminate ROBOT_DRIVETRAIN_MECANUM ifdef (differential-only)
-status: roadmap
+status: done
 branch: sprint/048-kinematics-namespace-alias-to-concrete-model-classes
 issues:
 - eliminate-ifdef-robot-drivetrain-mecanum-everywhere.md

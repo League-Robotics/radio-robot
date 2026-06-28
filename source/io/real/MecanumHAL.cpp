@@ -76,7 +76,7 @@ void MecanumHAL::tick(uint32_t now_ms)
 //
 // TODO(T5): replace the front-pair-only approximation below with a proper
 // MecanumKinematics::forward call once MotorCommands gains the 4-element
-// tgtMms[] array under #ifdef ROBOT_DRIVETRAIN_MECANUM.  For now, use the
+// tgtMms[] array for mecanum.  For now, use the
 // same differential approximation as NezhaHAL (front-pair vx, zero vy) so
 // the bench OTOS plant gives a reasonable forward-motion estimate.
 //
