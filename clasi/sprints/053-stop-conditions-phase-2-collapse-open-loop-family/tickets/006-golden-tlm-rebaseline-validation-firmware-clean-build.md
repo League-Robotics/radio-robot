@@ -1,7 +1,7 @@
 ---
 id: '006'
 title: Golden-TLM re-baseline, validation, firmware clean build
-status: open
+status: in-progress
 use-cases:
 - SUC-005
 depends-on:
