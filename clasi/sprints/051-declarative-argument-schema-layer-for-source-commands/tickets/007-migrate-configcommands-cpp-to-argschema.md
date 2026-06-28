@@ -1,7 +1,7 @@
 ---
 id: '007'
 title: Migrate ConfigCommands.cpp to ArgSchema
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 - SUC-003
@@ -52,14 +52,14 @@ the format.
 
 ## Acceptance Criteria
 
-- [ ] `parseGetVel` deleted; GET VEL registered with `parseFn=nullptr`.
-- [ ] `parseGet` deleted; GET registered with `makeSchemaCmd` using `variadic=true`
+- [x] `parseGetVel` deleted; GET VEL registered with `parseFn=nullptr`.
+- [x] `parseGet` deleted; GET registered with `makeSchemaCmd` using `variadic=true`
   schema; `handleGet` unchanged.
-- [ ] `parseSet` retained; body uses `argStr` where applicable.
-- [ ] `appendConfigCommands` updated to use new registrations.
-- [ ] All existing GET/SET/GET VEL behaviour preserved byte-identically.
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` — no new failures.
-- [ ] Primary oracle: `tests/simulation/unit/test_system_commands_coverage.py`
+- [x] `parseSet` retained; body uses `argStr` where applicable.
+- [x] `appendConfigCommands` updated to use new registrations.
+- [x] All existing GET/SET/GET VEL behaviour preserved byte-identically.
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` — no new failures.
+- [x] Primary oracle: `tests/simulation/unit/test_system_commands_coverage.py`
   (exercises GET and SET with exact reply assertions).
 
 ## Implementation Plan

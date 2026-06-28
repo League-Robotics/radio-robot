@@ -10,6 +10,11 @@
 // defined in source/robot/ConfigRegistry.cpp — only the parse* halves and the
 // GET VEL parse/handle pair live here. Behaviour is unchanged: descriptors are
 // wired exactly as buildCommandTable previously wired them.
+//
+// Migration (051-007): parseGetVel and parseGet removed; GET VEL registered
+// with parseFn=nullptr; GET registered with makeSchemaCmd (variadic=true schema);
+// parseSet retained (custom KV-to-"k=v" encoding) with body rewritten using
+// argStr helper.
 // ---------------------------------------------------------------------------
 
 #include "ConfigCommands.h"
@@ -33,15 +38,9 @@ static RobotSysCtx& sysCtxFrom(void* p)
 
 // ---------------------------------------------------------------------------
 // GET VEL -- per-wheel velocity readout (separate descriptor from GET).
-//   prefix "GET VEL"; parseFn nullptr.
+//   prefix "GET VEL"; parseFn nullptr (no-arg command).
 //   Reply: OK get vel=<vL>:E,<vR>:E
 // ---------------------------------------------------------------------------
-
-static ParseResult parseGetVel(const char* const* /*tokens*/, int /*ntokens*/,
-                                const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r; r.ok = true; r.args.count = 0; return r;
-}
 
 static void handleGetVel(const ArgList& /*args*/, const char* corrId,
                           ReplyFn replyFn, void* replyCtx, void* handlerCtx)
@@ -57,31 +56,15 @@ static void handleGetVel(const ArgList& /*args*/, const char* corrId,
 }
 
 // ---------------------------------------------------------------------------
-// parseGet -- convert positional key-name tokens into STR args for handleGet.
-//   Each token becomes args[i].sval = key name.
+// GET — variadic ArgSchema: each token becomes args[i].sval (key name).
+//   handleGet (defined in ConfigRegistry.cpp) reads args.args[i].sval.
 // ---------------------------------------------------------------------------
 
-static ParseResult parseGet(const char* const* tokens, int ntokens,
-                             const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r;
-    r.ok = true;
-    int n = (ntokens > MAX_ARGS) ? MAX_ARGS : ntokens;
-    r.args.count = n;
-    for (int i = 0; i < n; ++i) {
-        r.args.args[i].type = ArgType::STR;
-        r.args.args[i].ival = 0;
-        r.args.args[i].fval = 0.0f;
-        int j = 0;
-        for (; tokens[i][j] != '\0' && j < (int)sizeof(r.args.args[i].sval) - 1; ++j)
-            r.args.args[i].sval[j] = tokens[i][j];
-        r.args.args[i].sval[j] = '\0';
-    }
-    return r;
-}
+static const ArgSchema getSchema = { nullptr, 0, 0, true, nullptr };
 
 // ---------------------------------------------------------------------------
 // parseSet -- convert kv pairs into "key=value" STR args for handleSet.
+//   Custom parseFn retained: reads kvs[], not tokens[].
 // ---------------------------------------------------------------------------
 
 static ParseResult parseSet(const char* const* /*tokens*/, int /*ntokens*/,
@@ -123,7 +106,7 @@ static ParseResult parseSet(const char* const* /*tokens*/, int /*ntokens*/,
 void appendConfigCommands(std::vector<CommandDescriptor>& cmds,
                           CfgCtx* cfgCtx, void* sysCtx)
 {
-    cmds.push_back(makeCmd("GET VEL",  parseGetVel,    handleGetVel,    sysCtx,  "badarg")); // get velocity PID params
-    cmds.push_back(makeCmd("GET",      parseGet,       handleGet,       cfgCtx,  "badkey")); // get config value by key
-    cmds.push_back(makeCmd("SET",      parseSet,       handleSet,       cfgCtx,  "badkey")); // set config value by key
+    cmds.push_back(makeCmd("GET VEL",  nullptr,   handleGetVel, sysCtx,  "badarg")); // get velocity (no-arg)
+    cmds.push_back(makeSchemaCmd("GET", &getSchema, handleGet,  cfgCtx,  "badkey")); // get config value by key (variadic)
+    cmds.push_back(makeCmd("SET",      parseSet,   handleSet,   cfgCtx,  "badkey")); // set config value by key
 }
