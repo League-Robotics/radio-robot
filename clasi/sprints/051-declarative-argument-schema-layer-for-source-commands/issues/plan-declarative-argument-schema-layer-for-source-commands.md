@@ -1,6 +1,16 @@
 ---
-status: pending
+status: in-progress
 sprint: '051'
+tickets:
+- 051-001
+- 051-002
+- 051-003
+- 051-004
+- 051-005
+- 051-006
+- 051-007
+- 051-008
+- 051-009
 ---
 
 # Plan: Declarative argument-schema layer for `source/commands/`
