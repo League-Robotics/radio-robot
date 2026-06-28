@@ -13,9 +13,9 @@
 
 #include "Robot.h"
 #include "CommandProcessor.h"
-#include "MotionCommandHandlers.h"
+#include "MotionCommands.h"
 #include "ConfigCommands.h"
-#include "DebugCommandable.h"
+#include "DebugCommands.h"
 
 #ifndef HOST_BUILD
 #include "MicroBit.h"
@@ -632,7 +632,7 @@ static void handleRf(const ArgList& args, const char* corrId,
 // ---------------------------------------------------------------------------
 // GET VEL / GET / SET -- config-registry commands.
 //
-// Moved to source/app/ConfigCommands.cpp (finding A3 split).  The parse*/handle*
+// Moved to source/commands/ConfigCommands.cpp (finding A3 split).  The parse*/handle*
 // functions live there as file-local statics; their descriptors are registered
 // onto the command table below via appendConfigCommands().
 // ---------------------------------------------------------------------------
@@ -1143,7 +1143,7 @@ static void handleHalt(const ArgList& args, const char* corrId,
 // ---------------------------------------------------------------------------
 
 std::vector<CommandDescriptor> Robot::buildCommandTable(
-    DebugCommandable* dbg, LoopScheduler* sched) const
+    DebugCommands* dbg, LoopScheduler* sched) const
 {
     // Populate stable context structs (members, so pointers are valid for the
     // lifetime of this Robot).

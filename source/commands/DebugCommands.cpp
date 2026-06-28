@@ -1,4 +1,4 @@
-// DebugCommandable.cpp — Commandable for all diagnostic commands.
+// DebugCommands.cpp — Commandable for all diagnostic commands.
 //
 // Owns: DBG LOOP RESET, DBG LOOP, DBG I2CLOG, DBG I2C, DBG IRQGUARD,
 //       DBG WEDGE, DBG OTOS BENCH, DBG OTOS, DBG EST, I2CW, I2CR.
@@ -7,7 +7,7 @@
 // Handler logic mirrors the existing switch cases in CommandProcessor.cpp
 // exactly.  The old switch cases remain live until T011 cutover.
 
-#include "DebugCommandable.h"
+#include "DebugCommands.h"
 #include "CommandProcessor.h"
 #include "Robot.h"
 #include "state/EstimateDump.h"
@@ -36,8 +36,8 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// Internal helper — cast handlerCtx to DebugCommandable* and get DbgCtx.
-// handlerCtx is always const_cast<DebugCommandable*>(this).
+// Internal helper — cast handlerCtx to DebugCommands* and get DbgCtx.
+// handlerCtx is always const_cast<DebugCommands*>(this).
 // ---------------------------------------------------------------------------
 
 // Forward declaration of accessor used by handlers (defined at bottom of file).
@@ -441,7 +441,7 @@ static void handleDbgOtosBench(const ArgList& args, const char* corrId,
 // 034-006: benchOtosPtr()/setNoise() are only available with BENCH_OTOS_ENABLED.
 #if !defined(HOST_BUILD) && defined(BENCH_OTOS_ENABLED)
     // Apply optional noise/drift params when enabling (firmware bench sensor only).
-    // DebugCommandable is firmware-only; NezhaHAL downcast is allowed here (034-004).
+    // DebugCommands is firmware-only; NezhaHAL downcast is allowed here (034-004).
     // args[1]=noiseXY, args[2]=noiseH, args[3]=drift.  Sentinel = -1.0f.
     if (enable && args.count >= 4) {
         auto* nh = static_cast<NezhaHAL*>(&ctx.robot->hal);
@@ -503,7 +503,7 @@ static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
 // 034-006: benchOtosPtr() is only available when BENCH_OTOS_ENABLED is
 // defined.  HOST_BUILD skips NezhaHAL entirely (uses MockHAL).
 #if !defined(HOST_BUILD) && defined(BENCH_OTOS_ENABLED)
-    // DebugCommandable is firmware-only; NezhaHAL downcast is allowed here
+    // DebugCommands is firmware-only; NezhaHAL downcast is allowed here
     // (034-004).  benchOtosPtr() is a NezhaHAL-specific accessor.
     auto* nh = static_cast<NezhaHAL*>(&ctx.robot->hal);
     BenchOtosSensor* bench = nh->benchOtosPtr();
@@ -771,25 +771,25 @@ static void handleI2cr(const ArgList& args, const char* corrId,
 
 // ---------------------------------------------------------------------------
 // dbgCtxFrom — extract DbgCtx from handlerCtx.
-// handlerCtx is always const_cast<DebugCommandable*>(this).
+// handlerCtx is always const_cast<DebugCommands*>(this).
 // ---------------------------------------------------------------------------
 static DbgCtx dbgCtxFrom(void* p)
 {
-    return reinterpret_cast<DebugCommandable*>(p)->ctx();
+    return reinterpret_cast<DebugCommands*>(p)->ctx();
 }
 
 // ---------------------------------------------------------------------------
-// DebugCommandable implementation
+// DebugCommands implementation
 // ---------------------------------------------------------------------------
 
-DebugCommandable::DebugCommandable(DbgCtx ctx)
+DebugCommands::DebugCommands(DbgCtx ctx)
     : _ctx(ctx)
 {
 }
 
-std::vector<CommandDescriptor> DebugCommandable::getCommands() const
+std::vector<CommandDescriptor> DebugCommands::getCommands() const
 {
-    void* ctx = const_cast<DebugCommandable*>(this);
+    void* ctx = const_cast<DebugCommands*>(this);
     // Longest-prefix entries first within each group so dispatchTable picks
     // the most-specific match (e.g. "DBG LOOP RESET" beats "DBG LOOP").
     return {

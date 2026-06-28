@@ -22,16 +22,16 @@
 # (simulatable-code excludes CODAL-only + RatioPidController dead-code; see exclusion set below).
 #
 # CODAL-only exclusion set (simulatable-code denominator exclusions):
-#   source/app/DebugCommandable.cpp     — HOST_BUILD stubs only; I2C handlers guarded
+#   source/commands/DebugCommands.cpp     — HOST_BUILD stubs only; I2C handlers guarded
 #   source/control/PortController.cpp   — NezhaHAL hardware I/O, not sim-exercisable
 #   source/control/ServoController.cpp  — hardware PWM output, same rationale
 #   source/io/real/*                    — real device drivers, absent from host lib
-#   source/app/WedgeTest.cpp            — CODAL-only diagnostic (#ifndef HOST_BUILD)
-#   source/app/commands/LoopScheduler.cpp — CODAL scheduler (MicroBit fiber APIs)
+#   source/robot/WedgeTest.cpp            — CODAL-only diagnostic (#ifndef HOST_BUILD)
+#   source/robot/LoopScheduler.cpp — CODAL scheduler (MicroBit fiber APIs)
 #   source/main.cpp                     — CODAL entry point, not in host lib
 #   source/io/real/BenchOtosSensor.cpp  — bench-only, physical OTOS over I2C
 #
-# Note: source/app/SystemCommands.cpp has mixed coverage — testable paths are
+# Note: source/commands/SystemCommands.cpp has mixed coverage — testable paths are
 # included in the simulatable denominator (only the RESET/#ifndef HOST_BUILD
 # paths are unreachable, but file-granularity exclusion cannot split them).
 #
@@ -135,7 +135,7 @@ uv run --with gcovr gcovr \
 # ---------------------------------------------------------------------------
 echo ""
 echo "=== Simulatable-code coverage (CODAL-only / dead-code files excluded) ==="
-echo "Excluded: DebugCommandable.cpp, PortController.cpp, ServoController.cpp,"
+echo "Excluded: DebugCommands.cpp, PortController.cpp, ServoController.cpp,"
 echo "          io/real/*, WedgeTest.cpp, LoopScheduler.cpp, main.cpp, BenchOtosSensor.cpp,"
 echo "          RatioPidController.cpp (045-002: confirmed dead code, no call sites)"
 echo ""
@@ -143,13 +143,13 @@ echo ""
 SIM_SUMMARY="$(uv run --with gcovr gcovr \
     --root . \
     --filter 'source/' \
-    --exclude 'source/app/DebugCommandable\.cpp' \
+    --exclude 'source/commands/DebugCommands\.cpp' \
     --exclude 'source/control/PortController\.cpp' \
     --exclude 'source/control/ServoController\.cpp' \
     --exclude 'source/control/RatioPidController\.cpp' \
     --exclude 'source/io/real/.*' \
-    --exclude 'source/app/WedgeTest\.cpp' \
-    --exclude 'source/app/commands/LoopScheduler\.cpp' \
+    --exclude 'source/robot/WedgeTest\.cpp' \
+    --exclude 'source/robot/LoopScheduler\.cpp' \
     --exclude 'source/main\.cpp' \
     --gcov-ignore-errors=source_not_found \
     --print-summary \

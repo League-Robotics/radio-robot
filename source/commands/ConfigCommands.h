@@ -5,7 +5,7 @@
 // ---------------------------------------------------------------------------
 // ConfigCommands — config-registry command descriptors (GET, GET VEL, SET).
 //
-// Extracted from source/app/SystemCommands.cpp (finding A3 split). The
+// Extracted from source/commands/SystemCommands.cpp (finding A3 split). The
 // parse*/handle* functions for these commands remain file-local statics inside
 // ConfigCommands.cpp; this seam lets Robot::buildCommandTable (still in
 // SystemCommands.cpp) register them across the translation-unit boundary.

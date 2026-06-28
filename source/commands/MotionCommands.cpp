@@ -1,4 +1,4 @@
-// MotionCommandHandlers.cpp — motion command parsing, conversion, and reply
+// MotionCommands.cpp — motion command parsing, conversion, and reply
 // formatting, extracted from MotionController.cpp (sprint 026, ticket 002).
 //
 // Dependency direction: app/ → control/.  All CommandProcessor reply calls
@@ -14,7 +14,7 @@
 //   All stop-param branches in handleVW call begin*() and return WITHOUT
 //   calling replyOK.
 
-#include "MotionCommandHandlers.h"
+#include "MotionCommands.h"
 #include "superstructure/MotionController.h"
 #include "Superstructure.h"
 #include "Robot.h"

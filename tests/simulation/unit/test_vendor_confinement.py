@@ -1,6 +1,6 @@
 """Vendor-confinement grep-gate canary (038-004).
 
-Greps source/app/, source/control/, source/robot/, source/state/, source/types/
+Greps source/commands/, source/control/, source/robot/, source/state/, source/types/
 for forbidden vendor tokens and asserts the hit-set has not grown vs the committed
 baseline tests/_infra/vendor_baseline.txt.
 
@@ -36,7 +36,7 @@ BASELINE_FILE = REPO_ROOT / "tests" / "_infra" / "vendor_baseline.txt"
 # 043-001 (Phase E): source/subsystems/ added to scope. The thin sensor/drive/
 # gripper subsystems wrap capability interfaces only — no MicroBit.h / I2CBus /
 # microbit_random may appear in source/subsystems/.
-INSPECT_DIRS = ["app", "control", "robot", "state", "subsystems", "superstructure", "types"]
+INSPECT_DIRS = ["commands", "control", "robot", "state", "subsystems", "superstructure", "types"]
 
 # CODAL-only files excluded from the host build — vendor deps here are expected.
 CODAL_ONLY = {
@@ -85,7 +85,7 @@ def test_vendor_confinement_no_new_leaks():
     Existing baseline entries may disappear (sealing them) without failing the
     gate — only NEW entries cause failure.
 
-    044-003 (Phase F): the DebugCommandable I2CBus leak is sealed and the
+    044-003 (Phase F): the DebugCommands I2CBus leak is sealed and the
     baseline is now EMPTY, so this assertion is equivalent to "zero hits above
     source/io/" — the migration's final vendor-confinement criterion. The
     explicit test below pins that to a hard zero so the gate stays tight.
@@ -104,7 +104,7 @@ def test_vendor_confinement_no_new_leaks():
 def test_vendor_confinement_zero_hits_empty_baseline():
     """Hard gate (044-003, FINAL): zero vendor hits above source/io/.
 
-    After Phase F sealed the last leak (DebugCommandable's I2CBus*, via
+    After Phase F sealed the last leak (DebugCommands's I2CBus*, via
     IBusDiagnostics + IRawBusAccess), the baseline is empty. The vendor-
     confinement grep must return ZERO hits across the layers above the IO
     boundary. If a future edit reintroduces a vendor token (MicroBit.h, I2CBus,

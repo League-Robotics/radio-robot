@@ -76,13 +76,13 @@ public:
     // bench OTOS plant when bench mode is active; no-op otherwise.
     void tick(uint32_t now_ms, const MotorCommands& cmds) override;
 
-    // Expose the shared I2CBus for DebugCommandable (DBG I2C / I2CW / I2CR).
+    // Expose the shared I2CBus for DebugCommands (DBG I2C / I2CW / I2CR).
     I2CBus& bus() { return _bus; }
 
-    // Expose bus diagnostics for MotorController and DebugCommandable.
+    // Expose bus diagnostics for MotorController and DebugCommands.
     IBusDiagnostics& busDiagnostics() { return _busDiag; }
 
-    // Expose raw I2C read/write for DebugCommandable's I2CW / I2CR handlers.
+    // Expose raw I2C read/write for DebugCommands's I2CW / I2CR handlers.
     IRawBusAccess& rawBusAccess() { return _rawBusAccess; }
 
 #ifdef BENCH_OTOS_ENABLED

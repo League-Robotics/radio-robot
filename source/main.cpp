@@ -11,7 +11,7 @@
 #include "Config.h"
 #include "Icons.h"
 #include "RadioChannel.h"
-#include "DebugCommandable.h"
+#include "DebugCommands.h"
 
 // === TEMPORARY (046-008): per-wheel motor diagnostic. Set to 0 (or delete this
 // line + the wheelTestMain() block below + source/WheelTestMain.cpp) to restore
@@ -227,14 +227,14 @@ int main() {
     static CommandProcessor cmd(robot.buildCommandTable());
     cmd.setSerialReply(serialReply, &comm.serial());
 
-    // Phase 2 — LoopScheduler and DebugCommandable are now constructable.
+    // Phase 2 — LoopScheduler and DebugCommands are now constructable.
     static LoopScheduler sched(robot, cmd, comm, uBit);
     // 044-003 (Phase F): DbgCtx now carries two capability pointers instead of
     // the vendor I2CBus* — busDiag (IBusDiagnostics) for DBG I2C/I2CLOG/IRQGUARD
     // and busAccess (IRawBusAccess) for I2CW/I2CR — sealing the final vendor leak.
     static DbgCtx dbgCtx = { &sched, &hardware.busDiagnostics(),
                              &hardware.rawBusAccess(), &robot };
-    static DebugCommandable dbgCmd(dbgCtx);
+    static DebugCommands dbgCmd(dbgCtx);
 
     // Phase 3 — replace cmd with the full table including DBG descriptors.
     cmd = CommandProcessor(robot.buildCommandTable(&dbgCmd, &sched));

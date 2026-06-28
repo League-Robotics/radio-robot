@@ -3,7 +3,7 @@
 #include "CommandTypes.h"
 
 // ---------------------------------------------------------------------------
-// MotionCommandHandlers — app-layer motion command parsing, conversion, and
+// MotionCommands — app-layer motion command parsing, conversion, and
 // reply formatting.  Extracted from MotionController (sprint 026, ticket 002).
 //
 // Dependency direction: app/ → control/.

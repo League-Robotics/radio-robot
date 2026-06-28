@@ -65,7 +65,7 @@ public:
 
     // setCtx — retained as a no-op binding hook for source-compatibility with
     // PhysicalStateEstimate::setCtx (041-002).  The OTOS command handlers that
-    // formerly consumed these pointers moved to source/app/OtosCommands; the
+    // formerly consumed these pointers moved to source/commands/OtosCommands; the
     // estimator no longer needs the IOdometer / HardwareState pointers, so this
     // method ignores them.  Kept (rather than deleted) so the wrapper's setCtx
     // forwarder and any pre-existing call site compile unchanged.

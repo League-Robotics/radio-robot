@@ -15,7 +15,7 @@
 // same verbs, same args, same parse guards, same reply strings, same effects on
 // the IOdometer device.
 //
-// Dependency direction (correct): source/app/ -> IOdometer.h (capability) +
+// Dependency direction (correct): source/commands/ -> IOdometer.h (capability) +
 // CommandTypes.h (types) + Inputs.h (cached OTOS pose for OP).  The
 // estimator does NOT depend on these.
 // ---------------------------------------------------------------------------

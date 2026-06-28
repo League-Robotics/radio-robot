@@ -40,7 +40,7 @@ struct Robot;
  *
  * Sprint 026-002: MotionController no longer includes the protocol headers
  * (CommandProcessor, CommandQueue).  All protocol reply formatting lives in
- * source/app/MotionCommandHandlers.cpp.  Motion events are reported
+ * source/commands/MotionCommands.cpp.  Motion events are reported
  * through the MotionEventSink stored in TargetState.
  */
 
@@ -143,7 +143,7 @@ public:
     // setRobotCtx — bind the Robot* for use by begin*() entry points.
     // Called by Robot's constructor after motionController is fully constructed.
     // (replaces setCtx which also initialised vwDesc; vwDesc now lives in MotionCtx
-    // in Robot / MotionCommandHandlers — sprint 026-002)
+    // in Robot / MotionCommands — sprint 026-002)
     void setRobotCtx(struct Robot* r) { _robot = r; }
 
     // setBvcStateRef — wire the DesiredState publish target into the BVC (047-003).

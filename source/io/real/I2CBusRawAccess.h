@@ -8,7 +8,7 @@ class I2CBus;
  * Phase F).
  *
  * Wraps the same I2CBus the motors/sensors use and exposes raw byte-level
- * read/write for the DebugCommandable I2CW / I2CR handlers, so DebugCommandable
+ * read/write for the DebugCommands I2CW / I2CR handlers, so DebugCommands
  * holds an IRawBusAccess* instead of an I2CBus*.  This is the adapter that
  * seals the final vendor leak above source/io/.
  *

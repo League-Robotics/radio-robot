@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // ConfigCommands.cpp — config-registry command handlers (GET, GET VEL, SET).
 //
-// Split from source/app/SystemCommands.cpp (finding A3). Contains:
+// Split from source/commands/SystemCommands.cpp (finding A3). Contains:
 //   - file-local static parse*/handle* functions for GET VEL, GET, and SET
 //   - appendConfigCommands() seam that registers these descriptors onto the
 //     command table built by Robot::buildCommandTable (in SystemCommands.cpp)

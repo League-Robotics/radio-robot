@@ -20,7 +20,7 @@
 // Sprint 020, Ticket 011: S/T/D/G/R/TURN converted to VW converter handlers.
 //
 // Sprint 026, Ticket 002: Handler/parser/reply code extracted to
-// source/app/MotionCommandHandlers.cpp.  The protocol headers
+// source/commands/MotionCommands.cpp.  The protocol headers
 // (CommandProcessor, CommandQueue) are no longer included here.
 // emitEvt now calls through MotionEventSink stored in TargetState.
 

@@ -16,8 +16,8 @@
  *   lastError()         -> I2CBus::lastErr(0x10)
  *
  * Sprint 044 (Phase F) extends the interface with the full diagnostic surface
- * the DebugCommandable DBG handlers (DBG I2C / DBG I2CLOG / DBG IRQGUARD) need,
- * so DebugCommandable no longer references I2CBus directly.  These take an
+ * the DebugCommands DBG handlers (DBG I2C / DBG I2CLOG / DBG IRQGUARD) need,
+ * so DebugCommands no longer references I2CBus directly.  These take an
  * explicit 7-bit device address (the addr the DBG I2C stats line iterates over):
  *   txnCount(addr7)  -> I2CBus::txnCount(addr7)
  *   errCount(addr7)  -> I2CBus::errCount(addr7)
@@ -29,7 +29,7 @@
  *   setIrqGuard(on)  -> I2CBus::setIrqGuard(on)
  *
  * Any future bus type (SPI, CAN) that implements this interface works with the
- * control layer and DebugCommandable without further changes.
+ * control layer and DebugCommands without further changes.
  */
 class IBusDiagnostics {
 public:
@@ -45,7 +45,7 @@ public:
     virtual uint32_t reentryViolations() const = 0;
     virtual uint32_t lastError() const = 0;
 
-    // --- Added in Sprint 044 (Phase F) to seal DebugCommandable's I2CBus leak ---
+    // --- Added in Sprint 044 (Phase F) to seal DebugCommands's I2CBus leak ---
     virtual uint32_t txnCount(uint8_t addr7) const = 0;
     virtual uint32_t errCount(uint8_t addr7) const = 0;
     virtual int8_t   lastErr(uint8_t addr7) const = 0;

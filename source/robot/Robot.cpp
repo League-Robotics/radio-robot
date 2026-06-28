@@ -5,7 +5,7 @@
 #include "MicroBitDevice.h"
 #endif
 #include "Odometry.h"
-#include "DebugCommandable.h"
+#include "DebugCommands.h"
 #include "CommandProcessor.h"
 #include "ConfigRegistry.h"
 #include <cstdio>

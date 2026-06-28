@@ -19,7 +19,7 @@
 #include "../robot/ConfigRegistry.h"
 #include "../control/HaltController.h"
 #include "../superstructure/Superstructure.h"
-#include "MotionCommandHandlers.h"
+#include "MotionCommands.h"
 // Phase E (043-001): thin sensor subsystems owning the timed LINE/COLOUR/PORTS
 // reads.  Each is a value member declared after the device-interface ref it binds.
 #include "../subsystems/sensors/LineSensor.h"
@@ -36,7 +36,7 @@
 #include "../subsystems/gripper/Gripper.h"
 
 // Forward declarations — keeps the header-graph shallow.
-class DebugCommandable;
+class DebugCommands;
 class LoopScheduler;
 struct Robot;
 
@@ -202,12 +202,12 @@ struct Robot {
     // ---- Command-table building ----
     // Aggregate all command descriptors into a vector:
     //   Commandable members (motionController, _otosCommands, portController,
-    //   servoController), optional DebugCommandable, then system commands
+    //   servoController), optional DebugCommands, then system commands
     //   (HELLO, PING, ECHO, ID, VER, HELP, SNAP, ZERO, STREAM, RF,
     //    GET VEL, GET, SET).
     // sched may be nullptr; RF will reply ERR noradio if it is.
     std::vector<CommandDescriptor> buildCommandTable(
-        DebugCommandable* dbg   = nullptr,
+        DebugCommands* dbg   = nullptr,
         LoopScheduler*    sched = nullptr) const;
 
     // ---- Gating state that pairs with the kept methods ----
@@ -252,5 +252,5 @@ private:
     mutable MotionCtx   _motionCtx = {};  // S/T/D/G/R/TURN/RT/VW/X/STOP handlers (sprint 026-002)
 
     // CommandQueue forward declaration for setMotionQueue.
-    // (Included via MotionCommandHandlers.h → CommandQueue.h.)
+    // (Included via MotionCommands.h → CommandQueue.h.)
 };

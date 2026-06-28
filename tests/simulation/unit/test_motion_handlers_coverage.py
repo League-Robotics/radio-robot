@@ -1,6 +1,6 @@
 """
 test_motion_handlers_coverage.py — error/edge-path coverage for
-MotionCommandHandlers.cpp (sprint 045 ticket 003).
+MotionCommands.cpp (sprint 045 ticket 003).
 
 Targets the verb parser ERR branches (missing required args, out-of-range
 values) and the queue-path sensor= validation that the existing motion tests

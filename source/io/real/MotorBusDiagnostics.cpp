@@ -23,7 +23,7 @@ uint32_t MotorBusDiagnostics::lastError() const
     return static_cast<uint32_t>(_bus.lastErr(kMotorAddr));
 }
 
-// --- Added 044-003 (Phase F): full diagnostic surface for DebugCommandable ---
+// --- Added 044-003 (Phase F): full diagnostic surface for DebugCommands ---
 // Each method forwards verbatim to the same-named I2CBus method so the DBG
 // replies are byte-identical to the prior direct I2CBus reads.
 

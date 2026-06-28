@@ -1108,7 +1108,7 @@ over the half-duplex relay).
 
 Debug commands are diagnostic-only and always reply on the serial port
 (`ForceReply::SERIAL`), regardless of which channel the command arrived on.
-They are registered by `DebugCommandable` and require `CMD_ACCESS_HARDWARE`
+They are registered by `DebugCommands` and require `CMD_ACCESS_HARDWARE`
 where they modify hardware routing.
 
 ### DBG OTOS BENCH — Enable / Disable Bench OTOS Sensor

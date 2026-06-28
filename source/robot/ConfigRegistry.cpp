@@ -7,7 +7,7 @@
 // the composable dispatch table is in place (T010/T011).
 
 #include "ConfigRegistry.h"
-#include "../app/commands/CommandProcessor.h"
+#include "../commands/CommandProcessor.h"
 #include "../control/MotorController.h"
 #include <cstring>
 #include <cstdio>

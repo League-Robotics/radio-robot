@@ -43,17 +43,16 @@ if ("${ROBOT_DRIVETRAIN}" STREQUAL "mecanum")
 endif()
 
 # ---------------------------------------------------------------------------
-# Collect common firmware sources (app/, control/, robot/), then exclude
+# Collect common firmware sources (commands/, control/, robot/), then exclude
 # CODAL-dependent files that can't be stubbed at file level.
-# DebugCommandable.cpp guards all CODAL-dependent includes/handlers with
+# DebugCommands.cpp guards all CODAL-dependent includes/handlers with
 # #ifndef HOST_BUILD so it can be compiled in the host build.
 # ---------------------------------------------------------------------------
-file(GLOB APP_SOURCES     "${REPO_ROOT}/source/app/*.cpp")
-# Command handlers + dispatch infrastructure live in source/app/commands/
-# (CommandProcessor, CommandQueue, the *Commands handler sets, DebugCommandable,
-# MotionCommand). The app/ glob above is non-recursive, so glob this subdir too.
-# The firmware (CODAL) build discovers these via RECURSIVE_FIND_FILE over source/.
-file(GLOB COMMANDS_SOURCES "${REPO_ROOT}/source/app/commands/*.cpp")
+# Command handlers + dispatch infrastructure live in source/commands/
+# (CommandProcessor, CommandQueue, the *Commands handler sets, DebugCommands,
+# MotionCommand). The firmware (CODAL) build discovers these via
+# RECURSIVE_FIND_FILE over source/.
+file(GLOB COMMANDS_SOURCES "${REPO_ROOT}/source/commands/*.cpp")
 file(GLOB CONTROL_SOURCES "${REPO_ROOT}/source/control/*.cpp")
 # Kinematics (body/wheel geometry math) moved out of control/ into its own dir.
 # Pure math, no CODAL deps, so it builds host-side. The firmware (CODAL) build
@@ -72,10 +71,11 @@ file(GLOB SUPERSTRUCTURE_SOURCES "${REPO_ROOT}/source/superstructure/*.cpp")
 # build discovers these via RECURSIVE_FIND_FILE; the host build needs them here.
 file(GLOB_RECURSE SUBSYSTEM_SOURCES "${REPO_ROOT}/source/subsystems/*.cpp")
 
-list(FILTER APP_SOURCES      EXCLUDE REGEX ".*/WedgeTest\\.cpp$")
-# LoopScheduler.cpp moved control/ -> app/commands/; it's CODAL-dependent and
-# can't build host-side, so exclude it from the commands glob (was control glob).
-list(FILTER COMMANDS_SOURCES EXCLUDE REGEX ".*/LoopScheduler\\.cpp$")
+# WedgeTest.cpp and LoopScheduler.cpp live in source/robot/; both are
+# CODAL-dependent (MicroBit fiber / diagnostic APIs) and can't build host-side,
+# so exclude them from the robot glob.
+list(FILTER ROBOT_SOURCES    EXCLUDE REGEX ".*/WedgeTest\\.cpp$")
+list(FILTER ROBOT_SOURCES    EXCLUDE REGEX ".*/LoopScheduler\\.cpp$")
 
 # ---------------------------------------------------------------------------
 # Device-layer source set by ROBOT_RUN_MODE.
@@ -97,7 +97,6 @@ if(ROBOT_RUN_MODE STREQUAL "REPLAY")
 endif()
 
 add_library(firmware_host SHARED
-    ${APP_SOURCES}
     ${COMMANDS_SOURCES}
     ${CONTROL_SOURCES}
     ${KINEMATICS_SOURCES}
@@ -124,8 +123,7 @@ add_library(firmware_host SHARED
 
 target_include_directories(firmware_host PRIVATE
     "${REPO_ROOT}/source"
-    "${REPO_ROOT}/source/app"
-    "${REPO_ROOT}/source/app/commands"
+    "${REPO_ROOT}/source/commands"
     "${REPO_ROOT}/source/control"
     "${REPO_ROOT}/source/kinematics"
     "${REPO_ROOT}/source/io"

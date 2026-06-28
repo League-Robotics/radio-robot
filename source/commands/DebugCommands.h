@@ -14,7 +14,7 @@ struct Robot;
 // pointers, sealing the final vendor leak above source/io/.  busDiag serves the
 // DBG I2C / I2CLOG / IRQGUARD diagnostics; busAccess serves the I2CW / I2CR raw
 // transfers.  Both are implemented by adapters in source/io/real/ and are null
-// in the host build (DebugCommandable's I2C handlers are #ifndef HOST_BUILD).
+// in the host build (DebugCommands's I2C handlers are #ifndef HOST_BUILD).
 // ---------------------------------------------------------------------------
 struct DbgCtx {
     LoopScheduler*   sched;
@@ -24,7 +24,7 @@ struct DbgCtx {
 };
 
 // ---------------------------------------------------------------------------
-// DebugCommandable — Commandable that owns all diagnostic commands:
+// DebugCommands — Commandable that owns all diagnostic commands:
 //   DBG LOOP RESET, DBG LOOP, DBG I2CLOG, DBG I2C, DBG IRQGUARD,
 //   DBG WEDGE, I2CW, I2CR.
 //
@@ -34,13 +34,13 @@ struct DbgCtx {
 // Handler logic mirrors the existing switch cases in CommandProcessor.cpp
 // exactly.  Those switch cases remain live until T011 cutover.
 // ---------------------------------------------------------------------------
-class DebugCommandable : public Commandable {
+class DebugCommands : public Commandable {
 public:
-    explicit DebugCommandable(DbgCtx ctx);
+    explicit DebugCommands(DbgCtx ctx);
 
     virtual std::vector<CommandDescriptor> getCommands() const override;
 
-    // Accessor used by handler functions in DebugCommandable.cpp.
+    // Accessor used by handler functions in DebugCommands.cpp.
     DbgCtx ctx() const { return _ctx; }
 
 private:

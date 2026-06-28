@@ -10,7 +10,7 @@ Connect the robot's USB port (NEZHA2 device, e.g. /dev/cu.usbmodem2121102) to
 the host — NOT the relay (RADIOBRIDGE, e.g. /dev/cu.usbmodem2121402).
 
 The firmware D command is:  D <leftSpeed> <rightSpeed> <distanceMm>
-(confirmed in source/app/MotionCommandHandlers.cpp parseD: tokens[0]=left, tokens[1]=right).
+(confirmed in source/commands/MotionCommands.cpp parseD: tokens[0]=left, tokens[1]=right).
 So an HONEST encoder-balance test must command EQUAL speeds, e.g. `D 200 200 300`
 (both wheels 200 mm/s, drive 300 mm). On a healthy robot encL ~= encR.
 

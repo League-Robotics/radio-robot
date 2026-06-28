@@ -15,8 +15,8 @@ class I2CBus;
  *   lastError()         -> I2CBus::lastErr(0x10)  (cast int -> uint32_t)
  *
  * Sprint 044 (Phase F) extends the adapter to forward the full diagnostic
- * surface the DebugCommandable DBG handlers (DBG I2C / DBG I2CLOG / DBG IRQGUARD)
- * use, so DebugCommandable holds an IBusDiagnostics* instead of an I2CBus*.
+ * surface the DebugCommands DBG handlers (DBG I2C / DBG I2CLOG / DBG IRQGUARD)
+ * use, so DebugCommands holds an IBusDiagnostics* instead of an I2CBus*.
  * These take an explicit 7-bit address and forward to the same-named I2CBus
  * methods, so the DBG replies are byte-identical to the prior direct I2CBus reads.
  *
@@ -32,7 +32,7 @@ public:
     uint32_t reentryViolations() const override;
     uint32_t lastError() const override;
 
-    // --- Added 044-003 (Phase F): full diagnostic surface for DebugCommandable ---
+    // --- Added 044-003 (Phase F): full diagnostic surface for DebugCommands ---
     uint32_t txnCount(uint8_t addr7) const override;
     uint32_t errCount(uint8_t addr7) const override;
     int8_t   lastErr(uint8_t addr7) const override;

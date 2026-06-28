@@ -26,7 +26,7 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# Pure Python mirrors of VW parse logic (parseVW in MotionCommandHandlers.cpp)
+# Pure Python mirrors of VW parse logic (parseVW in MotionCommands.cpp)
 # ---------------------------------------------------------------------------
 
 def parse_vw_tokens(tokens: list[str]) -> dict | None:

@@ -5,11 +5,11 @@
  * IRawBusAccess — raw I2C byte-level read/write access (044-003, Phase F).
  *
  * Implemented by I2CBusRawAccess (source/io/real/) wrapping the shared I2CBus.
- * Used ONLY by DebugCommandable for the I2CW / I2CR diagnostic handlers.
+ * Used ONLY by DebugCommands for the I2CW / I2CR diagnostic handlers.
  *
  * Separating raw read/write from IBusDiagnostics keeps each capability cohesive:
  * IBusDiagnostics exposes read-only statistics; IRawBusAccess mutates the bus.
- * This seals the final vendor (I2CBus) leak above source/io/ — DebugCommandable
+ * This seals the final vendor (I2CBus) leak above source/io/ — DebugCommands
  * holds an IRawBusAccess* instead of an I2CBus*.
  *
  * Address convention matches I2CBus::write/read: addr8 is the 8-bit wire address

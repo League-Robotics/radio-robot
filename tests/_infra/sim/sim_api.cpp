@@ -9,9 +9,9 @@
 // Load:  python3 -c "import ctypes; ctypes.CDLL('./host_tests/build/libfirmware_host.dylib')"
 
 #include "robot/Robot.h"
-#include "app/commands/CommandProcessor.h"
-#include "app/commands/CommandQueue.h"
-#include "app/commands/DebugCommandable.h"
+#include "commands/CommandProcessor.h"
+#include "commands/CommandQueue.h"
+#include "commands/DebugCommands.h"
 #include "io/sim/SimHardware.h"
 #include "io/sim/PhysicsWorld.h"
 #include "io/sim/WorldView.h"
@@ -19,9 +19,9 @@
 #include "types/Config.h"
 #include "types/Inputs.h"
 #include "superstructure/MotionController.h"
-#include "app/commands/MotionCommand.h"
+#include "commands/MotionCommand.h"
 #include "control/HaltController.h"
-#include "app/LoopTickOnce.h"
+#include "robot/LoopTickOnce.h"
 #include "types/CommandTypes.h"
 
 #include <cstring>
@@ -102,10 +102,10 @@ struct SimHandle {
     // state.  Declared AFTER hal and robot because it binds references to both.
     WorldView        _worldView;
     CommandQueue     _queue;
-    // DebugCommandable wired with robot; sched and bus are nullptr in sim.
+    // DebugCommands wired with robot; sched and bus are nullptr in sim.
     // CODAL-dependent handlers (DBG WEDGE, I2CW, etc.) reply ERR noimpl in
     // HOST_BUILD.  DBG OTOS BENCH and DBG OTOS work via HOST_BUILD paths.
-    DebugCommandable dbg;
+    DebugCommands dbg;
     CommandProcessor cmd;
     ReplyStore       replyStore;
 
@@ -127,7 +127,7 @@ struct SimHandle {
         , _worldView(hal.plant(), robot.state.actual)
         , _queue()
         // 044-003 (Phase F): DbgCtx gained busAccess; host build leaves both
-        // busDiag and busAccess null (DebugCommandable's I2C handlers are
+        // busDiag and busAccess null (DebugCommands's I2C handlers are
         // #ifndef HOST_BUILD, so the null bus path is never exercised host-side).
         , dbg(DbgCtx{nullptr, nullptr, nullptr, &robot})
         , cmd(robot.buildCommandTable(&dbg, nullptr))
