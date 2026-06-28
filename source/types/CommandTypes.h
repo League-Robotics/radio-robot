@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <vector>
 #include "Protocol.h"
+#include "ArgSchema.h"
 
 // ---------------------------------------------------------------------------
 // CommandTypes.h — foundational types for the registration-based command
@@ -96,21 +97,25 @@ static constexpr uint8_t CMD_ACCESS_HARDWARE = 1;
 // ~42 commands ≈ 1176 bytes of static BSS.
 //
 //   prefix      — command prefix string: "S", "DBG LOOP", "DBG LOOP RESET", …
-//   parseFn     — nullptr means pass raw tokens directly to handlerFn
+//   parseFn     — nullptr means pass raw tokens directly to handlerFn;
+//                 also nullptr when schema != nullptr (schema path is used instead)
 //   handlerFn   — command implementation
 //   handlerCtx  — subsystem instance pointer; cast inside handlerFn
-//   errFmt      — ERR code emitted when parseFn returns ok=false
+//   errFmt      — ERR code emitted when parseFn or schema parse returns ok=false
 //   forceReply  — channel override (see ForceReply)
 //   flags       — CMD_NONE or CMD_ACCESS_HARDWARE
+//   schema      — when non-null, dispatchTable calls parseSchema() instead of
+//                 parseFn; existing commands leave this nullptr (no behaviour change)
 // ---------------------------------------------------------------------------
 struct CommandDescriptor {
-    const char* prefix;
-    ParseFn     parseFn;
-    HandlerFn   handlerFn;
-    void*       handlerCtx;
-    const char* errFmt;
-    ForceReply  forceReply;
-    uint8_t     flags;       // CMD_NONE or CMD_ACCESS_HARDWARE
+    const char*     prefix;
+    ParseFn         parseFn;
+    HandlerFn       handlerFn;
+    void*           handlerCtx;
+    const char*     errFmt;
+    ForceReply      forceReply;
+    uint8_t         flags;       // CMD_NONE or CMD_ACCESS_HARDWARE
+    const ArgSchema* schema;     // nullptr → use parseFn (legacy path)
 };
 
 // ---------------------------------------------------------------------------
@@ -125,6 +130,7 @@ public:
 // ---------------------------------------------------------------------------
 // makeCmd — inline helper to construct a CommandDescriptor without relying
 // on brace-initialised aggregate literals (which are verbose in C++11).
+// schema is always nullptr here; existing call sites are unchanged.
 // ---------------------------------------------------------------------------
 inline CommandDescriptor makeCmd(const char* prefix, ParseFn parseFn,
                                  HandlerFn handlerFn, void* ctx,
@@ -139,6 +145,29 @@ inline CommandDescriptor makeCmd(const char* prefix, ParseFn parseFn,
     d.errFmt      = errFmt;
     d.forceReply  = forceReply;
     d.flags       = flags;
+    d.schema      = nullptr;
+    return d;
+}
+
+// ---------------------------------------------------------------------------
+// makeSchemaCmd — inline helper to construct a schema-driven CommandDescriptor.
+// parseFn is set to nullptr; dispatch routes through parseSchema() instead.
+// Call sites that migrate a command from makeCmd use this factory.
+// ---------------------------------------------------------------------------
+inline CommandDescriptor makeSchemaCmd(const char* prefix, const ArgSchema* schema,
+                                       HandlerFn handlerFn, void* ctx,
+                                       const char* errFmt     = "badarg",
+                                       ForceReply  forceReply = ForceReply::NONE,
+                                       uint8_t     flags      = CMD_NONE) {
+    CommandDescriptor d;
+    d.prefix      = prefix;
+    d.parseFn     = nullptr;
+    d.handlerFn   = handlerFn;
+    d.handlerCtx  = ctx;
+    d.errFmt      = errFmt;
+    d.forceReply  = forceReply;
+    d.flags       = flags;
+    d.schema      = schema;
     return d;
 }
 

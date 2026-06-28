@@ -120,6 +120,31 @@ public:
                          const char* name, const char* body,
                          ReplyFn fn, void* ctx);
 
+    /**
+     * replyOKf — variadic form of replyOK.
+     *
+     * Formats body via vsnprintf into buf[0..size-1], then calls replyOK.
+     * No heap allocation; safe under -fno-exceptions/-fno-rtti.
+     * fmt/... follow printf conventions; the formatted result becomes the body.
+     */
+    static void replyOKf(char* buf, int size,
+                         const char* verb, const char* id,
+                         ReplyFn fn, void* ctx,
+                         const char* fmt, ...)
+        __attribute__((format(printf, 7, 8)));
+
+    /**
+     * replyErrf — variadic form of replyErr.
+     *
+     * Formats detail via vsnprintf into buf[0..size-1], then calls replyErr.
+     * No heap allocation; safe under -fno-exceptions/-fno-rtti.
+     */
+    static void replyErrf(char* buf, int size,
+                          const char* code, const char* id,
+                          ReplyFn fn, void* ctx,
+                          const char* fmt, ...)
+        __attribute__((format(printf, 7, 8)));
+
 private:
     std::vector<CommandDescriptor> _cmds;
     ReplyFn                        _serialFn  = nullptr;
