@@ -258,7 +258,7 @@ static void handleS(const ArgList& args, const char* corrId,
         // now wires the queue): use direct beginStream().
         ctx->mc->beginStream((float)l, (float)r,
                              ctx->robot->systemTime(),
-                             ctx->robot->state.target,
+                             ctx->robot->state.desired,
                              replyFn, replyCtx);
         char body[32];
         snprintf(body, sizeof(body), "l=%d r=%d", l, r);
@@ -357,7 +357,7 @@ static void handleT(const ArgList& args, const char* corrId,
         // Queue not available: fall back to direct beginTimed().
         ctx->mc->beginTimed((float)l, (float)r, (uint32_t)ms,
                             ctx->robot->systemTime(),
-                            ctx->robot->state.target,
+                            ctx->robot->state.desired,
                             replyFn, replyCtx, corrId);
         // Optional sensor= stop condition (packed into args[3] by parseT).
         if (args.count >= 4) {
@@ -545,7 +545,7 @@ static void handleG(const ArgList& args, const char* corrId,
         // Queue not available: fall back to direct beginGoTo().
         ctx->mc->beginGoTo((float)x, (float)y, (float)speed,
                            ctx->robot->systemTime(),
-                           ctx->robot->state.target,
+                           ctx->robot->state.desired,
                            replyFn, replyCtx, corrId);
         char body[64];
         snprintf(body, sizeof(body), "x=%d y=%d speed=%d", x, y, speed);
@@ -615,7 +615,7 @@ static void handleR(const ArgList& args, const char* corrId,
         // Queue not available: fall back to direct beginArc().
         uint32_t now = ctx->robot->systemTime();
         ctx->mc->beginArc((float)speed, (float)radius, now,
-                          ctx->robot->state.target,
+                          ctx->robot->state.desired,
                           replyFn, replyCtx, corrId);
         char body[48];
         snprintf(body, sizeof(body), "speed=%d radius=%d", speed, radius);
@@ -707,7 +707,7 @@ static void handleTURN(const ArgList& args, const char* corrId,
         // Queue not available: fall back to direct beginTurn().
         uint32_t now = ctx->robot->systemTime();
         ctx->mc->beginTurn((float)heading_cdeg, (float)eps_cdeg, now,
-                           ctx->robot->state.target,
+                           ctx->robot->state.desired,
                            replyFn, replyCtx, corrId);
         // Optional sensor= stop condition (packed into args[2] by parseTURN).
         if (args.count >= 3) {
@@ -772,7 +772,7 @@ static void handleRT(const ArgList& args, const char* corrId,
         CommandProcessor::replyOK(rbuf, sizeof(rbuf), "rt", body, corrId, replyFn, replyCtx);
     } else {
         uint32_t now = ctx->robot->systemTime();
-        ctx->mc->beginRotation((float)rel_cdeg, now, ctx->robot->state.target,
+        ctx->mc->beginRotation((float)rel_cdeg, now, ctx->robot->state.desired,
                                replyFn, replyCtx, corrId);
         char body[32];
         snprintf(body, sizeof(body), "rot=%d", rel_cdeg);

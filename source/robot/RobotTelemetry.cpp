@@ -12,15 +12,15 @@
 // ---------------------------------------------------------------------------
 // buildTlmFrame — assemble the unified TLM frame; returns length.
 //
-// Reads state.inputs, config, motionController.mode(). Shared by the periodic
+// Reads state.actual, config, motionController.mode(). Shared by the periodic
 // STREAM (telemetryEmit) and the synchronous SNAP command.
 // ---------------------------------------------------------------------------
 
 int Robot::buildTlmFrame(char* buf, int len)
 {
     uint32_t t_sample = systemTime();
-    int32_t encL = static_cast<int32_t>(state.inputs.encLMm);
-    int32_t encR = static_cast<int32_t>(state.inputs.encRMm);
+    int32_t encL = static_cast<int32_t>(state.actual.encLMm);
+    int32_t encR = static_cast<int32_t>(state.actual.encRMm);
 
     int32_t pose_x = 0, pose_y = 0, pose_h = 0;
     if (config.tlmFields & TLM_FIELD_POSE) {
@@ -28,7 +28,7 @@ int Robot::buildTlmFrame(char* buf, int len)
         // calling Odometry::getPose directly. estimate.getPose is a static
         // forwarder to the same HardwareState pose fields (poseX/Y/poseHrad),
         // so the emitted value is byte-identical (golden-TLM unchanged).
-        estimate.getPose(state.inputs, pose_x, pose_y, pose_h);
+        estimate.getPose(state.actual, pose_x, pose_y, pose_h);
     }
     // N8 (030-008): gate line/color on freshness, not just the sticky valid bit.
     // A sensor that wedges after boot keeps valid=true forever; consult the
@@ -36,21 +36,21 @@ int Robot::buildTlmFrame(char* buf, int len)
     // lagMs is 0 until the first valid read (lastUpdMs stays 0 too), so the
     // subtraction wraps and the gate is never met -- correct for "never read".
     bool haveLine = line.is_initialized() &&
-                    state.inputs.lineVS.valid &&
-                    (t_sample - state.inputs.lineVS.lastUpdMs
-                         <= 2u * state.inputs.lineVS.lagMs) &&
+                    state.actual.lineVS.valid &&
+                    (t_sample - state.actual.lineVS.lastUpdMs
+                         <= 2u * state.actual.lineVS.lagMs) &&
                     (config.tlmFields & TLM_FIELD_LINE);
     bool haveColor = colorSensor.is_initialized() &&
-                     state.inputs.colorVS.valid &&
-                     (t_sample - state.inputs.colorVS.lastUpdMs
-                          <= 2u * state.inputs.colorVS.lagMs) &&
+                     state.actual.colorVS.valid &&
+                     (t_sample - state.actual.colorVS.lastUpdMs
+                          <= 2u * state.actual.colorVS.lagMs) &&
                      (config.tlmFields & TLM_FIELD_COLOR);
     bool haveVel = (config.tlmFields & TLM_FIELD_VEL) != 0;
-    float velL = haveVel ? state.inputs.velLMms : 0.0f;
-    float velR = haveVel ? state.inputs.velRMms : 0.0f;
+    float velL = haveVel ? state.actual.velLMms : 0.0f;
+    float velR = haveVel ? state.actual.velRMms : 0.0f;
 #ifdef ROBOT_DRIVETRAIN_MECANUM
-    float velBR = haveVel ? state.inputs.velMms[2] : 0.0f;
-    float velBL = haveVel ? state.inputs.velMms[3] : 0.0f;
+    float velBR = haveVel ? state.actual.velMms[2] : 0.0f;
+    float velBL = haveVel ? state.actual.velMms[3] : 0.0f;
 #endif
     bool haveTwist = (config.tlmFields & TLM_FIELD_TWIST) != 0;
 
@@ -95,17 +95,17 @@ int Robot::buildTlmFrame(char* buf, int len)
         // fusedOmega is yaw rate in rad/s; convert to mrad/s (integer) matching
         // the omega_mrads convention used by VW command and NezhaProtocol.vw().
         // 044-001: read velocity through the PhysicalStateEstimate seam instead
-        // of reading state.inputs.fusedV/fusedOmega directly. estimate.getVelocity
+        // of reading state.actual.fusedV/fusedOmega directly. estimate.getVelocity
         // copies those same fields (fV = s.fusedV; fOmega = s.fusedOmega), so the
         // emitted value is byte-identical (golden-TLM unchanged).
         float fV = 0.0f, fOmega = 0.0f;
-        estimate.getVelocity(state.inputs, fV, fOmega);
+        estimate.getVelocity(state.actual, fV, fOmega);
 #ifdef ROBOT_DRIVETRAIN_MECANUM
         // Mecanum build: emit 3-value twist: vx, vy, omega_mrad.
         // fusedVy is lateral body velocity in mm/s (written by Odometry T6).
         n = snprintf(buf + pos, (size_t)rem, " twist=%d,%d,%d",
                      (int)fV,
-                     (int)state.inputs.fusedVy,
+                     (int)state.actual.fusedVy,
                      (int)(fOmega * 1000.0f));
 #else
         n = snprintf(buf + pos, (size_t)rem, " twist=%d,%d",
@@ -119,28 +119,28 @@ int Robot::buildTlmFrame(char* buf, int len)
     // sensor goes dark the last-good pose would be emitted forever without
     // the freshness check.
     if ((config.tlmFields & TLM_FIELD_OTOS) &&
-        state.inputs.otos.valid &&
-        (t_sample - state.inputs.otos.lastUpdMs
-             <= 2u * state.inputs.otos.lagMs)) {
+        state.actual.otos.valid &&
+        (t_sample - state.actual.otos.lastUpdMs
+             <= 2u * state.actual.otos.lagMs)) {
         // Raw OTOS pose (pre-fusion): x,y mm and heading in centidegrees,
         // matching the pose= field encoding. Lets the host plot the raw OTOS
         // sensor track alongside enc-derived and fused pose. 18000/pi cdeg/rad.
         n = snprintf(buf + pos, (size_t)rem, " otos=%d,%d,%d",
-                     (int)state.inputs.otosX,
-                     (int)state.inputs.otosY,
-                     (int)(state.inputs.otosH * 5729.5779513f));
+                     (int)state.actual.otosX,
+                     (int)state.actual.otosY,
+                     (int)(state.actual.otosH * 5729.5779513f));
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
     if (haveLine) {
         n = snprintf(buf + pos, (size_t)rem, " line=%u,%u,%u,%u",
-                     (unsigned)state.inputs.line[0], (unsigned)state.inputs.line[1],
-                     (unsigned)state.inputs.line[2], (unsigned)state.inputs.line[3]);
+                     (unsigned)state.actual.line[0], (unsigned)state.actual.line[1],
+                     (unsigned)state.actual.line[2], (unsigned)state.actual.line[3]);
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
     if (haveColor) {
         n = snprintf(buf + pos, (size_t)rem, " color=%u,%u,%u,%u",
-                     (unsigned)state.inputs.colorR, (unsigned)state.inputs.colorG,
-                     (unsigned)state.inputs.colorB, (unsigned)state.inputs.colorC);
+                     (unsigned)state.actual.colorR, (unsigned)state.actual.colorG,
+                     (unsigned)state.actual.colorB, (unsigned)state.actual.colorC);
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
     if (config.tlmFields & TLM_FIELD_EKFREJ) {

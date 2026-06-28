@@ -8,9 +8,9 @@
 #include "io/capability/IPortIO.h"
 #include "io/capability/IPositionMotor.h"
 
-// Forward declaration — full definition in source/types/Inputs.h.
-// Sufficient here because the overload takes a const reference (034-001).
-struct MotorCommands;
+// Full definition needed for the tick() overload that takes a const reference.
+// MotorCommands is now a using-alias for OutputState (sprint 047-001).
+#include "types/Inputs.h"
 
 /**
  * Hardware — abstract HAL registry / factory base class.

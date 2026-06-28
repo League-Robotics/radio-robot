@@ -474,7 +474,7 @@ static void handleDbgOtosBench(const ArgList& args, const char* corrId,
 //
 //   ideal   = BenchOtosSensor noiseless accumulator.
 //   otos    = BenchOtosSensor errored accumulator (what readTransformed returned).
-//   fused   = state.inputs.otosX/Y/H — EKF-fused pose written by otosCorrect().
+//   fused   = state.actual.otosX/Y/H — EKF-fused pose written by otosCorrect().
 //   err     = ideal − otos (per-axis).
 //
 //   In HOST_BUILD / MockHAL, benchOtosPtr() is unavailable; guard and emit
@@ -520,9 +520,9 @@ static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
 #endif
 
     // fused pose from EKF-integrated state (written by Robot::otosCorrect).
-    float fusedX = ctx.robot->state.inputs.otosX;
-    float fusedY = ctx.robot->state.inputs.otosY;
-    float fusedH = ctx.robot->state.inputs.otosH;
+    float fusedX = ctx.robot->state.actual.otosX;
+    float fusedY = ctx.robot->state.actual.otosY;
+    float fusedH = ctx.robot->state.actual.otosH;
 
     // err = ideal − otos (per axis).
     float errX = idealX - otosX;
@@ -544,7 +544,7 @@ static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
     // TLM otos= gate.  Lets a bench probe see why otos= is suppressed.
     uint8_t otosStatus = 0xFF;
     bool statusOk = ctx.robot->hal.otos().readStatus(otosStatus);
-    int valid = ctx.robot->state.inputs.otos.valid ? 1 : 0;
+    int valid = ctx.robot->state.actual.otos.valid ? 1 : 0;
 
     char pose_buf[200];
     snprintf(pose_buf, sizeof(pose_buf),

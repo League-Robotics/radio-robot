@@ -1,7 +1,9 @@
 #pragma once
 #include "PhysicsWorld.h"
 
-struct HardwareState;
+// HardwareState is now a using-alias for ActualState (sprint 047-001);
+// cannot be forward-declared as a struct. Include the full definition.
+#include "types/Inputs.h"
 
 /**
  * WorldView — read-only bridge from PhysicsWorld ground truth into the

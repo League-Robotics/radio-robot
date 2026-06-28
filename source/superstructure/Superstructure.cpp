@@ -33,7 +33,7 @@ bool Superstructure::goalAllowed(const GoalRequest& /*gr*/) const
 // goalAllowed() first (a denied goal returns without calling begin*), then a
 // plain switch dispatches to the same begin* call, with the same arguments,
 // that the verb handler made directly.  Each case reads only the GoalRequest
-// fields relevant to its goal; the TargetState is gr.robot->state.target, the
+// fields relevant to its goal; the TargetState is gr.robot->state.desired, the
 // same reference the direct calls passed.
 // ---------------------------------------------------------------------------
 void Superstructure::requestGoal(const GoalRequest& gr)
@@ -42,7 +42,7 @@ void Superstructure::requestGoal(const GoalRequest& gr)
         return;  // future use: denied goal makes no begin* call
     }
 
-    TargetState& target = gr.robot->state.target;
+    TargetState& target = gr.robot->state.desired;
 
     switch (gr.goal) {
     case Goal::STREAM:
@@ -119,7 +119,7 @@ void Superstructure::requestGoal(const GoalRequest& gr)
 //   robot.motionController → _mc   (bound to the local `mc` ref, as before)
 //   robot.config           → _cfg  (bound to the local `cfg` ref, as before)
 //   robot.haltController    → _hc
-//   robot.state.inputs      → inputs (parameter)
+//   robot.state.actual      → inputs (parameter)
 // NO reordering, NO logic change.  driveAdvance is NOT called here — it stays
 // in loopTickOnce immediately after this call.
 // ---------------------------------------------------------------------------

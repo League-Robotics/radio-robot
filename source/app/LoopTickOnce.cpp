@@ -50,14 +50,14 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // This single call sits in the SAME position the blocks did: after
     // dequeueOne(queue), before driveAdvance.  driveAdvance stays below, in the
     // same order.  The golden-TLM canary is the byte-exact oracle.
-    robot.superstructure.evaluateSafety(cmd, queue, ts, robot.state.inputs, now);
+    robot.superstructure.evaluateSafety(cmd, queue, ts, robot.state.actual, now);
 
     // ===== DRIVE: advance drive state machine =================================
     robot.motionController.driveAdvance(
-        robot.state.inputs, robot.state.commands, robot.state.target, now);
+        robot.state.actual, robot.state.outputs, robot.state.desired, now);
 
     // ===== ODOMETRY: dead-reckon pose from encoder deltas ====================
-    robot.estimate.addOdometryObservation(robot.state.inputs, cfg.trackwidthMm,
+    robot.estimate.addOdometryObservation(robot.state.actual, cfg.trackwidthMm,
                            cfg.rotationalSlip, now);
 
     // ===== HAL ACTUATOR TICK: deliver commanded velocity to the HAL ===========
@@ -67,7 +67,7 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // readTransformed().  Production NezhaHAL / MockHAL implement this as a
     // near-no-op when bench mode is off; the robot core no longer reaches into
     // the concrete HAL to do this (034-002, replaces robot.benchOtosTick).
-    robot.hal.tick(now, robot.state.commands);
+    robot.hal.tick(now, robot.state.outputs);
 
     // ===== OTOS: timed I2C pose read + EKF fusion ============================
     // In firmware: run when enOtos is set and lagOtosMs has elapsed.
