@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: 'Framework wiring: CommandTypes + CommandProcessor dispatch'
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 - SUC-003
