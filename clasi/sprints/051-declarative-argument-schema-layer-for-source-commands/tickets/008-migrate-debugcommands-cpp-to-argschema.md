@@ -1,7 +1,7 @@
 ---
-id: '008'
+id: 008
 title: Migrate DebugCommands.cpp to ArgSchema
-status: open
+status: in-progress
 use-cases:
 - SUC-001
 - SUC-003
