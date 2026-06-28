@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: 'Documentation: protocol-v2.md and COMMANDS.md'
-status: in-progress
+status: done
 use-cases:
 - SUC-004
 depends-on:
@@ -110,14 +110,14 @@ etc. Add a `stop=` column or a note below the table:
 
 ## Acceptance Criteria
 
-- [ ] `docs/protocol-v2.md` §10 has a `reason=` table listing all 9 reason tokens.
-- [ ] `docs/protocol-v2.md` §10 has a `stop=` Clauses subsection with the 7-kind
+- [x] `docs/protocol-v2.md` §10 has a `reason=` table listing all 9 reason tokens.
+- [x] `docs/protocol-v2.md` §10 has a `stop=` Clauses subsection with the 7-kind
   grammar table.
-- [ ] `docs/protocol-v2.md` §10 shows `EVT done T #12 reason=time` as an example EVT line.
-- [ ] `docs/protocol-v2.md` §10 shows `EVT safety_stop reason=watchdog` as an example.
-- [ ] `source/COMMANDS.md` notes stop= acceptance on VW, S, T, D, R, TURN.
-- [ ] Back-compat note: `sensor=` alias is documented.
-- [ ] Sim tests pass: `uv run --with pytest python -m pytest tests/simulation -q` — no new failures (docs changes only; test_lint.py checks are expected to pass).
+- [x] `docs/protocol-v2.md` §10 shows `EVT done T #12 reason=time` as an example EVT line.
+- [x] `docs/protocol-v2.md` §10 shows `EVT safety_stop reason=watchdog` as an example.
+- [x] `source/COMMANDS.md` notes stop= acceptance on VW, S, T, D, R, TURN.
+- [x] Back-compat note: `sensor=` alias is documented.
+- [x] Sim tests pass: `uv run --with pytest python -m pytest tests/simulation -q` — no new failures (docs changes only; test_lint.py checks are expected to pass).
 
 ## Testing
 
