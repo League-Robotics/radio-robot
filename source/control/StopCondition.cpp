@@ -133,7 +133,8 @@ bool StopCondition::evaluate(const HardwareState& s, uint32_t now_ms,
             // `a` holds the distance threshold in mm.
             // Uses raw encoder sum (not filtered) per architecture decision:
             //   "filtered value can stall under outlier filtering" (D-command finding).
-            float enc_avg = (s.encLMm + s.encRMm) * 0.5f;
+            // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
+            float enc_avg = (s.encMm[1] + s.encMm[0]) * 0.5f;
             float traveled = enc_avg - base.enc0Mm;
             if (traveled < 0.0f) traveled = -traveled;  // fabsf without including math.h twice
             return traveled >= a;
@@ -143,7 +144,7 @@ bool StopCondition::evaluate(const HardwareState& s, uint32_t now_ms,
             // `a` = target heading delta (rad); `b` = eps (rad).
             // Fires when the robot's heading is within eps of the target heading.
             // wrap_angle keeps the difference in (-π, π].
-            float current_delta = wrap_angle(s.poseHrad - base.heading0Rad);
+            float current_delta = wrap_angle(s.fused.pose.h - base.heading0Rad);
             float error = wrap_angle(current_delta - a);
             float abs_error = (error < 0.0f) ? -error : error;
             return abs_error < b;
@@ -152,8 +153,8 @@ bool StopCondition::evaluate(const HardwareState& s, uint32_t now_ms,
         case Kind::POSITION: {
             // `ax` = target X mm; `a` = target Y mm; `b` = radius mm.
             // Fires when the Euclidean distance from current pose to target is < b.
-            float dx = s.poseX - ax;
-            float dy = s.poseY - a;
+            float dx = s.fused.pose.x - ax;
+            float dy = s.fused.pose.y - a;
             float dist2 = dx * dx + dy * dy;
             return dist2 < (b * b);
         }
@@ -201,7 +202,8 @@ bool StopCondition::evaluate(const HardwareState& s, uint32_t now_ms,
             // tracks rotation while the sum (used by DISTANCE) stays ~0.
             // Per-wheel arc = |Δdiff| / 2.  Uses raw encoder values (not
             // filtered) — same rationale as DISTANCE: the filter can stall.
-            float diff = (s.encRMm - s.encLMm) - base.encDiff0Mm;
+            // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
+            float diff = (s.encMm[0] - s.encMm[1]) - base.encDiff0Mm;
             if (diff < 0.0f) diff = -diff;
             return (diff * 0.5f) >= a;
         }

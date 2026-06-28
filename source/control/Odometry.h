@@ -55,6 +55,9 @@ inline float effectiveSlip(float rawSlip) {
  *   correctEKF() extended for OTOS + encoder velocity fusion. setPose
  *   re-baseline fix (_prevEncL = s.encLMm, not 0) prevents spurious
  *   encoder-delta jumps after camera fixes.
+ * Sprint 047, Ticket 002: encoder-only dead-reckoning accumulator added
+ *   (_encPoseX/Y/H, _encVx/Vy/Omega); predict() dual-writes encoder and
+ *   fused estimates; correctEKF() captures raw OTOS into actual.optical.
  */
 class Odometry {
 public:
@@ -73,10 +76,9 @@ public:
     // ---------------------------------------------------------------------------
 
     // Midpoint (exact-arc) integration — primary predict step.
-    // Reads s.encLMm / s.encRMm, computes deltas against _prevEncL/_prevEncR,
-    // then writes the updated pose into s.poseX / s.poseY / s.poseHrad.
-    // Also advances the EKF and writes EKF state as the authoritative pose,
-    // including s.fusedV and s.fusedOmega from the velocity states.
+    // Reads s.encMm[1] (FL=L) / s.encMm[0] (FR=R), computes deltas against
+    // _prevEncL/_prevEncR, then writes the updated pose into s.fused.pose.{x,y,h}.
+    // Also advances the EKF and writes EKF state into s.fused.{pose,twist,stamp}.
     //
     // rotationalSlip: body-rotation efficiency from RobotConfig (024-006).
     //   dTheta = ((dR-dL)/trackwidth) * clamp(rotationalSlip, 0.5, 1.0).
@@ -112,6 +114,8 @@ public:
     //   v_otos_mmps            — OTOS body-frame linear velocity (mm/s)
     //   omega_otos_rads        — OTOS angular velocity (rad/s)
     //   vy_otos_mmps           — OTOS lateral velocity (mm/s); mecanum build only
+    //   now_ms                 — robot system clock (ms); used to stamp
+    //                            actual.optical.stamp.lastUpdMs (047-002)
     //
     // 033-003: encoder-derived velocity is fused unconditionally in predict(),
     // NOT here — fusing it in both paths would double-count it per OTOS tick.
@@ -119,11 +123,14 @@ public:
     // 046-006: vy_otos_mmps is an optional parameter (default 0.0f) so that
     // the differential build callers compile without change.  In the mecanum
     // build it drives the complementary filter for s.fusedVy.
+    //
+    // 047-002: now_ms added for optical.stamp.lastUpdMs; callers must pass
+    // the same now_ms they use for the corresponding predict() call.
     void correctEKF(HardwareState& s,
                     float x_otos, float y_otos,
                     float theta_otos_rad,
                     float v_otos_mmps, float omega_otos_rads,
-                    float vy_otos_mmps = 0.0f);
+                    float vy_otos_mmps, uint32_t now_ms);
 
     // OTOS complementary correction — correct step of predict/correct.
     // (docs/kinematics-model.md §2.4; EKF upgrade path replaces this later.)
@@ -225,6 +232,17 @@ private:
     // because Odometry runs at a different cadence than the control task).
     float    _prevEncL;   // last encoder snapshot, mm
     float    _prevEncR;   // last encoder snapshot, mm
+
+    // Encoder-only dead-reckoning accumulator (047-002).
+    // Integrated from wheel deltas only; the EKF NEVER writes here.
+    // Used to populate actual.encoder.{pose,twist,stamp} every predict() tick.
+    // Reset by setPose()/zero() to the new pose value.
+    float    _encPoseX;    // encoder-only pose X, mm
+    float    _encPoseY;    // encoder-only pose Y, mm
+    float    _encPoseH;    // encoder-only heading, rad
+    float    _encVx;       // encoder-only body linear speed, mm/s
+    float    _encVy;       // encoder-only lateral speed, mm/s (always 0 for differential)
+    float    _encOmega;    // encoder-only yaw rate, rad/s
 
     uint32_t _otosRejected; // count of OTOS samples rejected by outlier gate
 

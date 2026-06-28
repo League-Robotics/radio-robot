@@ -68,19 +68,17 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       // value-initialised inside Drive (same initial values as the former Robot
       // fields).  See architecture-update.md OQ-1/OQ-2.
       drive(motorL, motorR, motorController, estimate,
-            state.inputs, state.commands, config),
+            state.actual, state.outputs, config),
       // Phase E (043-001) sensor subsystems — wired with their device ref,
-      // state.inputs (HardwareState), and config.  Declaration order in Robot.h
-      // puts these after the refs they bind, so the refs are live here.
+      // state.actual (ActualState / HardwareState alias), and config.
+      // Declaration order in Robot.h puts these after the refs they bind.
       // NOTE: the ColorSensor subsystem member is named colorSensor_ (trailing
       // underscore) because the existing IColorSensor& device ref is already
       // named colorSensor (kept to avoid macro collisions; used by
-      // SystemCommands::caps).  Architecture-update.md names it colorSensor; the
-      // device-ref collision forces the underscore.  Internal naming only — no
-      // behavior/TLM change.  See report annotation.
-      lineSensor(line, state.inputs, config),
-      colorSensor_(colorSensor, state.inputs, config),
-      ports(portio, state.inputs, config),
+      // SystemCommands::caps).
+      lineSensor(line, state.actual, config),
+      colorSensor_(colorSensor, state.actual, config),
+      ports(portio, state.actual, config),
       // Phase E (043-003) Gripper subsystem — binds the existing `gripper` IServo&
       // (== IPositionMotor&) device ref bound above.  Declaration order in Robot.h
       // puts gripper_sub after `gripper`, so the ref is live here.  No-op subsystem
@@ -92,8 +90,11 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       // in Robot.h guarantees those are constructed first.
       superstructure(motionController, haltController, config)
 {
-    motionController.setHardwareState(&state.inputs);
-    motorController.setCommandsRef(&state.commands);
+    motionController.setHardwareState(&state.actual);
+    motorController.setCommandsRef(&state.outputs);
+    // 047-003: wire BVC → DesiredState publish so bodyTwist/bodyTwistRaw are
+    // updated every advance() tick.
+    motionController.setBvcStateRef(&state.desired);
 #ifdef ROBOT_DRIVETRAIN_MECANUM
     // 046-005: Bind rear motors (BR, BL) to MotorController after construction.
     // The base 2-motor constructor bound FL (motorL/motorR = front motors);
@@ -110,12 +111,12 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
     _motionCtx.superstructure = &superstructure;
     _motionCtx.robot          = this;
     _motionCtx.queue          = nullptr;
-    estimate.setCtx(&otos, &state.inputs);
+    estimate.setCtx(&otos, &state.actual);
     // 041-002: the OTOS command handlers (OI/OZ/OR/OV/OL/OA/OP) moved out of
     // Odometry into the app-layer OtosCommands.  Bind the same IOdometer device
     // and cached HardwareState pointers the handlers previously reached through
     // Odometry::setCtx, so the verbs dispatch and behave identically.
-    _otosCommands.setCtx(&otos, &state.inputs);
+    _otosCommands.setCtx(&otos, &state.actual);
     estimate.initEKF(config.ekfQxy, config.ekfQtheta,
                      config.ekfQv, config.ekfQomega,
                      config.ekfROtosXy, config.ekfROtosV, config.ekfREncV,
@@ -215,8 +216,8 @@ void Robot::otosCorrect(uint32_t now_ms)
     static constexpr uint8_t kOtosHardErr = 0xC0;   // errLsm(7) | errPaa(6)
     bool readable = statusOk && ((otosStatus & kOtosHardErr) == 0);
 
-    // Pass poseHrad for the lever-arm offset rotation (no-op when offsets are zero).
-    float headingRad = state.inputs.poseHrad;
+    // Pass current fused heading for the lever-arm offset rotation.
+    float headingRad = state.actual.fused.pose.h;
 
     OtosPose p{0.0f, 0.0f, 0.0f};
     bool poseOk = readable && activeOtos.readTransformed(p, headingRad);
@@ -226,13 +227,14 @@ void Robot::otosCorrect(uint32_t now_ms)
     // recent raw reading exists", NOT "was fused".  On a same-tick read failure
     // do not write otosX/Y/H with garbage zeros.
     if (poseOk) {
-        state.inputs.otosX = p.x;
-        state.inputs.otosY = p.y;
-        state.inputs.otosH = p.h;
-        state.inputs.otos.lastUpdMs = now_ms;
-        state.inputs.otos.valid = true;
+        // Write canonical optical.pose (047-002).
+        state.actual.optical.pose.x = p.x;
+        state.actual.optical.pose.y = p.y;
+        state.actual.optical.pose.h = p.h;
+        state.actual.otos.lastUpdMs = now_ms;
+        state.actual.otos.valid = true;
     } else {
-        state.inputs.otos.valid = false;
+        state.actual.otos.valid = false;
     }
 
     // Fusion / "OTOS lost" health: a successful read with no HARD errors
@@ -253,7 +255,7 @@ void Robot::otosCorrect(uint32_t now_ms)
             if (!_otosLostEmitted &&
                 ((now_ms - _otosInvalidStartMs) >= 500u)) {
                 motionController.emitToActiveChannel("EVT otos lost",
-                                                     state.target);
+                                                     state.desired);
                 _otosLostEmitted = true;
             }
         }
@@ -268,8 +270,8 @@ void Robot::otosCorrect(uint32_t now_ms)
     OtosVelocity vel;
     bool velOk = activeOtos.readVelocityTransformed(vel, headingRad);
     OtosAccel    acc = activeOtos.readAccelTransformed();
-    state.inputs.otosAccelX = acc.ax_mmps2;
-    state.inputs.otosAccelY = acc.ay_mmps2;
+    state.actual.otosAccelX = acc.ax_mmps2;
+    state.actual.otosAccelY = acc.ay_mmps2;
 
     // If the velocity read also failed this tick, use zero velocity rather
     // than fusing garbage — the EKF's encoder-based velocity estimate is a
@@ -295,15 +297,17 @@ void Robot::otosCorrect(uint32_t now_ms)
 
     // Encoder-derived velocity is fused unconditionally in Odometry::predict()
     // every tick (033-003), so correctEKF() fuses only the OTOS observations.
-    estimate.addOtosObservation(state.inputs, p.x, p.y,
+    // 047-002: now_ms added so correctEKF can stamp actual.optical.stamp.lastUpdMs.
+    estimate.addOtosObservation(state.actual, p.x, p.y,
                         p.h,
-                        vel.v_mmps, vel.omega_rads, vy_otos);
+                        vel.v_mmps, vel.omega_rads, vy_otos, now_ms);
 #else
     // Encoder-derived velocity is fused unconditionally in Odometry::predict()
     // every tick (033-003), so correctEKF() fuses only the OTOS observations.
-    estimate.addOtosObservation(state.inputs, p.x, p.y,
+    // 047-002: now_ms added so correctEKF can stamp actual.optical.stamp.lastUpdMs.
+    estimate.addOtosObservation(state.actual, p.x, p.y,
                         p.h,
-                        vel.v_mmps, vel.omega_rads);
+                        vel.v_mmps, vel.omega_rads, 0.0f, now_ms);
 #endif  // ROBOT_DRIVETRAIN_MECANUM
 }
 
@@ -343,16 +347,8 @@ void Robot::resetEncoders()
     motorController.resetEncoderAccumulators();
 
     // 2. Align the outlier-filter baseline with the now-zeroed accumulators.
-    state.inputs.encLMm = 0.0f;
-    state.inputs.encRMm = 0.0f;
-#ifdef ROBOT_DRIVETRAIN_MECANUM
-    // Sync the 4-element array counterparts so mecanum code sees consistent
-    // zeros immediately (they would be synced on the next controlTick anyway).
-    state.inputs.encMm[0] = 0.0f;  // FR
-    state.inputs.encMm[1] = 0.0f;  // FL
-    state.inputs.encMm[2] = 0.0f;  // BR (rear encoder; zeroed defensively)
-    state.inputs.encMm[3] = 0.0f;  // BL
-#endif
+    // Array convention: [0]=FR=R, [1]=FL=L (sized by kWheelCount; #ifdef-free).
+    for (int i = 0; i < kWheelCount; ++i) state.actual.encMm[i] = 0.0f;
 
     // 3. Re-baseline Odometry's encoder snapshot so predict() sees delta=0
     //    on the very next tick rather than (0 - _prevEncL) = large negative.
@@ -367,7 +363,7 @@ void Robot::distanceDrive(int32_t l, int32_t r, int32_t targetMm,
                                 ReplyFn fn, void* ctx, const char* corr_id)
 {
     motionController.beginDistance((float)l, (float)r, targetMm,
-                                   systemTime(), state.target, fn, ctx, corr_id);
+                                   systemTime(), state.desired, fn, ctx, corr_id);
     // Atomic encoder reset: aligns hardware accumulators, MC velocity baselines,
     // outlier-filter baseline, and Odometry encoder snapshot in one call.
     // (Replaces the split reset that was here + inside beginDistance().)

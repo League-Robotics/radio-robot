@@ -469,6 +469,31 @@ class Sim:
         lib.sim_get_odometry_enc_omega_healthy.argtypes = [ctypes.c_void_p]
         lib.sim_get_odometry_enc_omega_healthy.restype = ctypes.c_int
 
+        # ---- Three-estimate pose reads (047-002 / 047-005) ----
+        # sim_get_enc_pose_x/y/h → float (encoder dead-reckoning, never touched by EKF)
+        lib.sim_get_enc_pose_x.argtypes = [ctypes.c_void_p]
+        lib.sim_get_enc_pose_x.restype = ctypes.c_float
+        lib.sim_get_enc_pose_y.argtypes = [ctypes.c_void_p]
+        lib.sim_get_enc_pose_y.restype = ctypes.c_float
+        lib.sim_get_enc_pose_h.argtypes = [ctypes.c_void_p]
+        lib.sim_get_enc_pose_h.restype = ctypes.c_float
+
+        # sim_get_otos_pose_x/y/h → float (raw optical reading, pre-EKF)
+        lib.sim_get_otos_pose_x.argtypes = [ctypes.c_void_p]
+        lib.sim_get_otos_pose_x.restype = ctypes.c_float
+        lib.sim_get_otos_pose_y.argtypes = [ctypes.c_void_p]
+        lib.sim_get_otos_pose_y.restype = ctypes.c_float
+        lib.sim_get_otos_pose_h.argtypes = [ctypes.c_void_p]
+        lib.sim_get_otos_pose_h.restype = ctypes.c_float
+
+        # sim_get_fused_pose_x/y/h → float (EKF output, same as sim_get_pose_x/y/h)
+        lib.sim_get_fused_pose_x.argtypes = [ctypes.c_void_p]
+        lib.sim_get_fused_pose_x.restype = ctypes.c_float
+        lib.sim_get_fused_pose_y.argtypes = [ctypes.c_void_p]
+        lib.sim_get_fused_pose_y.restype = ctypes.c_float
+        lib.sim_get_fused_pose_h.argtypes = [ctypes.c_void_p]
+        lib.sim_get_fused_pose_h.restype = ctypes.c_float
+
     # ------------------------------------------------------------------
     # N7 queue-overflow helpers (030-005)
     # ------------------------------------------------------------------
@@ -926,3 +951,40 @@ class Sim:
             ctypes.c_float(noise_h),
             ctypes.c_float(drift_rad_per_sec),
         )
+
+    # ------------------------------------------------------------------
+    # Three-estimate pose accessors (047-002 / 047-005)
+    # ------------------------------------------------------------------
+
+    def get_enc_pose(self) -> tuple[float, float, float]:
+        """Return (x_mm, y_mm, h_rad) from the encoder dead-reckoning accumulator.
+
+        This path is NEVER overwritten by EKF fusion — it is the pure
+        encoder-only dead-reckoned estimate (state.actual.encoder.pose).
+        """
+        x = float(self._lib.sim_get_enc_pose_x(self._h))
+        y = float(self._lib.sim_get_enc_pose_y(self._h))
+        h = float(self._lib.sim_get_enc_pose_h(self._h))
+        return (x, y, h)
+
+    def get_optical_pose(self) -> tuple[float, float, float]:
+        """Return (x_mm, y_mm, h_rad) from the raw OTOS optical estimate.
+
+        This is the last value written by otosCorrect() before the EKF
+        correction step (state.actual.optical.pose).
+        """
+        x = float(self._lib.sim_get_otos_pose_x(self._h))
+        y = float(self._lib.sim_get_otos_pose_y(self._h))
+        h = float(self._lib.sim_get_otos_pose_h(self._h))
+        return (x, y, h)
+
+    def get_fused_pose(self) -> tuple[float, float, float]:
+        """Return (x_mm, y_mm, h_rad) from the EKF fused estimate.
+
+        This is the EKF output (state.actual.fused.pose) — the authoritative
+        belief that consumers such as GoTo use.  Equivalent to get_pose().
+        """
+        x = float(self._lib.sim_get_fused_pose_x(self._h))
+        y = float(self._lib.sim_get_fused_pose_y(self._h))
+        h = float(self._lib.sim_get_fused_pose_h(self._h))
+        return (x, y, h)

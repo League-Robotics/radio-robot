@@ -3,6 +3,8 @@
 
 Odometry::Odometry()
     : _prevEncL(0.0f), _prevEncR(0.0f)
+    , _encPoseX(0.0f), _encPoseY(0.0f), _encPoseH(0.0f)
+    , _encVx(0.0f), _encVy(0.0f), _encOmega(0.0f)
     , _otosRejected(0)
     , _lastPredictMs(0)
     , _rOtosV(0.0f), _rEncV(0.0f), _rOtosTheta(0.0f)
@@ -13,7 +15,7 @@ Odometry::Odometry()
 // ---------------------------------------------------------------------------
 // predict — midpoint (exact-arc) integration (docs/kinematics-model.md §2.4)
 //
-// Reads s.encLMm / s.encRMm; writes s.poseX / s.poseY / s.poseHrad.
+// Reads s.encMm[1] (FL=L) / s.encMm[0] (FR=R); writes s.fused.pose.{x,y,h}.
 // ---------------------------------------------------------------------------
 
 void Odometry::predict(HardwareState& s, float trackwidthMm,
@@ -30,12 +32,13 @@ void Odometry::predict(HardwareState& s, float trackwidthMm,
         dt_s = (int32_t)(now_ms - _lastPredictMs) * 0.001f;
     }
 
-    float theta_before = s.poseHrad;   // heading before this step — MUST be first
+    float theta_before = s.fused.pose.h;   // heading before this step — MUST be first
 
-    float dL = s.encLMm - _prevEncL;
-    float dR = s.encRMm - _prevEncR;
-    _prevEncL = s.encLMm;
-    _prevEncR = s.encRMm;
+    // Array convention: [0]=FR=R, [1]=FL=L — see ActualState.h.
+    float dL = s.encMm[1] - _prevEncL;
+    float dR = s.encMm[0] - _prevEncR;
+    _prevEncL = s.encMm[1];
+    _prevEncR = s.encMm[0];
 
     float dCenter   = (dL + dR) * 0.5f;
     // Apply rotational-slip correction: encoder arc over-reports body rotation
@@ -52,11 +55,20 @@ void Odometry::predict(HardwareState& s, float trackwidthMm,
         dTheta = 0.0f;
     }
 
-    float thetaMid  = s.poseHrad + dTheta * 0.5f;
+    float thetaMid  = s.fused.pose.h + dTheta * 0.5f;
 
-    s.poseX    += dCenter * cosf(thetaMid);
-    s.poseY    += dCenter * sinf(thetaMid);
-    s.poseHrad  = wrapPi(s.poseHrad + dTheta);
+    // 047-002: arc-integrate encoder deltas into the encoder-only accumulator FIRST.
+    // This accumulator is never touched by the EKF so it provides a pure
+    // dead-reckoning baseline for fusion validation.
+    float encThetaMid = _encPoseH + dTheta * 0.5f;
+    _encPoseX += dCenter * cosf(encThetaMid);
+    _encPoseY += dCenter * sinf(encThetaMid);
+    _encPoseH  = wrapPi(_encPoseH + dTheta);
+
+    // Dead-reckoning advance of the fused pose (EKF seed before EKF overwrites below).
+    s.fused.pose.x += dCenter * cosf(thetaMid);
+    s.fused.pose.y += dCenter * sinf(thetaMid);
+    s.fused.pose.h  = wrapPi(s.fused.pose.h + dTheta);
 
     // Compute encoder-rate velocity for this tick.
     // Guard against dt_s == 0 (first tick or duplicate timestamp): skip velocity
@@ -64,8 +76,22 @@ void Odometry::predict(HardwareState& s, float trackwidthMm,
     if (dt_s > 0.0f) {
         _lastEncV     = dCenter / dt_s;        // body linear speed (mm/s)
         _lastEncOmega = dTheta  / dt_s;        // yaw rate (rad/s)
+        _encVx        = _lastEncV;
+        _encVy        = 0.0f;                  // differential: no lateral encoder obs
+        _encOmega     = _lastEncOmega;
     }
-    // else: retain previous _lastEncV/_lastEncOmega (0 on first tick)
+    // else: retain previous _lastEncV/_lastEncOmega / _encV* (0 on first tick)
+
+    // 047-002: populate actual.encoder from the private accumulator.
+    // EKF has NOT run yet — these fields reflect pure dead-reckoning.
+    s.encoder.pose.x          = _encPoseX;
+    s.encoder.pose.y          = _encPoseY;
+    s.encoder.pose.h          = _encPoseH;
+    s.encoder.twist.vx_mmps   = _encVx;
+    s.encoder.twist.vy_mmps   = _encVy;
+    s.encoder.twist.omega_rads = _encOmega;
+    s.encoder.stamp.lastUpdMs = now_ms;
+    s.encoder.stamp.valid     = true;
 
     // EKF predict — propagate state and covariance using encoder-derived arc segment.
     _ekf.predict(dCenter, dTheta, theta_before, dt_s);
@@ -90,13 +116,15 @@ void Odometry::predict(HardwareState& s, float trackwidthMm,
         _ekf.updateVelocity(_lastEncV, omega_obs, _rEncV, _rEncV);
     }
 
-    s.poseX    = _ekf.x();
-    s.poseY    = _ekf.y();
-    s.poseHrad = _ekf.theta();
-
-    // Write EKF velocity states back to HardwareState (after enc-velocity fusion).
-    s.fusedV     = _ekf.v();
-    s.fusedOmega = _ekf.omega();
+    // 047-002: populate actual.fused from EKF output (after enc-velocity fusion).
+    s.fused.pose.x           = _ekf.x();
+    s.fused.pose.y           = _ekf.y();
+    s.fused.pose.h           = _ekf.theta();
+    s.fused.twist.vx_mmps    = _ekf.v();
+    s.fused.twist.vy_mmps    = 0.0f;          // updated in correctEKF for mecanum
+    s.fused.twist.omega_rads = _ekf.omega();
+    s.fused.stamp.lastUpdMs  = now_ms;
+    s.fused.stamp.valid      = true;
 
     _lastPredictMs = now_ms;
 }
@@ -104,7 +132,7 @@ void Odometry::predict(HardwareState& s, float trackwidthMm,
 // ---------------------------------------------------------------------------
 // correct — OTOS complementary correction (docs/kinematics-model.md §2.4)
 //
-// Reads and writes s.poseX / s.poseY / s.poseHrad.
+// Reads and writes s.fused.pose.{x,y,h}.
 // ---------------------------------------------------------------------------
 
 void Odometry::correct(HardwareState& s,
@@ -113,8 +141,8 @@ void Odometry::correct(HardwareState& s,
 {
     // Outlier gate: reject if OTOS position disagrees with predicted pose
     // by more than the gate threshold.
-    float dx = x_otos - s.poseX;
-    float dy = y_otos - s.poseY;
+    float dx = x_otos - s.fused.pose.x;
+    float dy = y_otos - s.fused.pose.y;
     float dist = sqrtf(dx * dx + dy * dy);
     if (dist > otosGate) {
         ++_otosRejected;
@@ -122,26 +150,26 @@ void Odometry::correct(HardwareState& s,
     }
 
     // Accepted: complementary blend of position.
-    s.poseX += alphaPos * dx;
-    s.poseY += alphaPos * dy;
+    s.fused.pose.x += alphaPos * dx;
+    s.fused.pose.y += alphaPos * dy;
 
     // Heading blend: angle-wrap-safe — blend on the angular difference,
     // not on the raw angle, to avoid crossing the ±π discontinuity.
-    float dh = wrapPi(theta_otos_rad - s.poseHrad);
-    s.poseHrad = wrapPi(s.poseHrad + alphaYaw * dh);
+    float dh = wrapPi(theta_otos_rad - s.fused.pose.h);
+    s.fused.pose.h = wrapPi(s.fused.pose.h + alphaYaw * dh);
 }
 
 // ---------------------------------------------------------------------------
-// getPose — read pose from s and convert to integer mm + centidegrees.
+// getPose — read pose from s.fused.pose and convert to integer mm + centidegrees.
 // ---------------------------------------------------------------------------
 
 void Odometry::getPose(const HardwareState& s,
                        int32_t& x_mm, int32_t& y_mm, int32_t& h_cdeg)
 {
-    x_mm = static_cast<int32_t>(s.poseX);
-    y_mm = static_cast<int32_t>(s.poseY);
+    x_mm = static_cast<int32_t>(s.fused.pose.x);
+    y_mm = static_cast<int32_t>(s.fused.pose.y);
 
-    float cdeg = s.poseHrad * RAD_TO_CDEG;
+    float cdeg = s.fused.pose.h * RAD_TO_CDEG;
     if (cdeg >  18000.0f) cdeg =  18000.0f;
     if (cdeg < -18000.0f) cdeg = -18000.0f;
     h_cdeg = static_cast<int32_t>(cdeg);
@@ -153,19 +181,38 @@ void Odometry::getPose(const HardwareState& s,
 
 void Odometry::setPose(HardwareState& s, int32_t x_mm, int32_t y_mm, int32_t h_cdeg)
 {
-    s.poseX    = static_cast<float>(x_mm);
-    s.poseY    = static_cast<float>(y_mm);
-    s.poseHrad = static_cast<float>(h_cdeg) * CDEG_TO_RAD;
+    float newX = static_cast<float>(x_mm);
+    float newY = static_cast<float>(y_mm);
+    float newH = static_cast<float>(h_cdeg) * CDEG_TO_RAD;
+
+    s.fused.pose.x = newX;
+    s.fused.pose.y = newY;
+    s.fused.pose.h = newH;
 
     // Re-baseline encoder snapshot to current encoder values (not 0.0f).
     // This prevents a spurious encoder-delta jump on the very next predict()
     // call after a camera fix (SI command) when encoders are non-zero.
     // Note: zero() calls setPose(s, 0, 0, 0) at startup when encoders read 0,
-    // so _prevEncL = s.encLMm = 0 there — identical to the old behaviour on boot.
-    _prevEncL  = s.encLMm;
-    _prevEncR  = s.encRMm;
+    // so _prevEncL = s.encMm[1] = 0 there — identical to the old behaviour on boot.
+    // Array convention: [0]=FR=R, [1]=FL=L — see ActualState.h.
+    _prevEncL  = s.encMm[1];
+    _prevEncR  = s.encMm[0];
 
-    _ekf.setPose(s.poseX, s.poseY, s.poseHrad);
+    // 047-002: reset the encoder-only accumulator to the new pose value so the
+    // dead-reckoning baseline stays consistent with the absolute fix.
+    _encPoseX  = newX;
+    _encPoseY  = newY;
+    _encPoseH  = newH;
+    _encVx     = 0.0f;
+    _encVy     = 0.0f;
+    _encOmega  = 0.0f;
+
+    // Also update encoder estimate pose for consistency.
+    s.encoder.pose.x = newX;
+    s.encoder.pose.y = newY;
+    s.encoder.pose.h = newH;
+
+    _ekf.setPose(newX, newY, newH);
 }
 
 // ---------------------------------------------------------------------------
@@ -220,8 +267,21 @@ void Odometry::correctEKF(HardwareState& s,
                           float x_otos, float y_otos,
                           float theta_otos_rad,
                           float v_otos_mmps, float omega_otos_rads,
-                          float vy_otos_mmps)
+                          float vy_otos_mmps, uint32_t now_ms)
 {
+    // 047-002: capture raw OTOS observation into actual.optical BEFORE EKF update.
+    // pose: store the raw OTOS reading (do NOT differentiate; Q4 resolved).
+    // twist: reuse the v/omega values passed in as the optical twist estimate.
+    // stamp: mark valid with the current now_ms.
+    s.optical.pose.x       = x_otos;
+    s.optical.pose.y       = y_otos;
+    s.optical.pose.h       = theta_otos_rad;
+    s.optical.twist.vx_mmps   = v_otos_mmps;
+    s.optical.twist.vy_mmps   = vy_otos_mmps;
+    s.optical.twist.omega_rads = omega_otos_rads;
+    s.optical.stamp.lastUpdMs = now_ms;
+    s.optical.stamp.valid     = true;
+
     // 1. Fuse OTOS position (Mahalanobis-gated inside EKF).
     _ekf.updatePosition(x_otos, y_otos);
 
@@ -232,20 +292,23 @@ void Odometry::correctEKF(HardwareState& s,
     //    v and omega noise (symmetric simplification — v1 design).
     _ekf.updateVelocity(v_otos_mmps, omega_otos_rads, _rOtosV, _rOtosV);
 
-    // Write all EKF outputs back to HardwareState.
-    s.poseX      = _ekf.x();
-    s.poseY      = _ekf.y();
-    s.poseHrad   = _ekf.theta();
-    s.fusedV     = _ekf.v();
-    s.fusedOmega = _ekf.omega();
+    // 047-002: write structured fused estimate from EKF output.
+    s.fused.pose.x          = _ekf.x();
+    s.fused.pose.y          = _ekf.y();
+    s.fused.pose.h          = _ekf.theta();
+    s.fused.twist.vx_mmps   = _ekf.v();
+    s.fused.twist.omega_rads = _ekf.omega();
+    s.fused.stamp.lastUpdMs = now_ms;
+    s.fused.stamp.valid     = true;
 
 #ifdef ROBOT_DRIVETRAIN_MECANUM
     // 046-006: complementary filter for lateral body velocity.
     // OTOS directly observes vy; blend toward the OTOS reading each correction tick.
     // _otosAlphaVy defaults to 0.8 (strongly OTOS-trusting); set via setOtosAlphaVy().
     // vy_otos_mmps defaults to 0.0f in the differential build (no-op).
-    _fusedVy   = _otosAlphaVy * vy_otos_mmps + (1.0f - _otosAlphaVy) * _fusedVy;
-    s.fusedVy  = _fusedVy;
+    _fusedVy              = _otosAlphaVy * vy_otos_mmps + (1.0f - _otosAlphaVy) * _fusedVy;
+    s.fused.twist.vy_mmps = _fusedVy;
+    s.optical.twist.vy_mmps = vy_otos_mmps;
 #else
     (void)vy_otos_mmps;
 #endif  // ROBOT_DRIVETRAIN_MECANUM

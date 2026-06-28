@@ -146,6 +146,10 @@ public:
     // in Robot / MotionCommandHandlers — sprint 026-002)
     void setRobotCtx(struct Robot* r) { _robot = r; }
 
+    // setBvcStateRef — wire the DesiredState publish target into the BVC (047-003).
+    // Called by Robot's constructor so BVC writes bodyTwist/bodyTwistRaw every tick.
+    void setBvcStateRef(DesiredState* ds) { _bvc.setStateRef(ds); }
+
     // Query whether a MotionCommand is currently active (running or soft-stopping).
     // Used by CommandProcessor to distinguish new VW vs keepalive VW.
     bool hasActiveCommand() const { return _activeCmd.active(); }

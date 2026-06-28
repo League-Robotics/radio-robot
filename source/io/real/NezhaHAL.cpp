@@ -96,7 +96,8 @@ void NezhaHAL::tick(uint32_t now_ms, const MotorCommands& cmds)
     // Early-return when bench mode is off (production path — nearly free).
     if (!isBenchMode()) return;
 
-    benchOtosPtr()->tick(cmds.tgtLMms, cmds.tgtRMms, _trackwidthMm, dt_ms);
+    // Array convention: [0]=R (FR), [1]=L (FL) — see OutputState.h.
+    benchOtosPtr()->tick(cmds.tgtMms[1], cmds.tgtMms[0], _trackwidthMm, dt_ms);
 #else
     // Production: no bench sensor; this override is a no-op.  (034-006)
     (void)now_ms;

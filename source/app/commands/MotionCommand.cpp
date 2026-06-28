@@ -95,12 +95,13 @@ bool MotionCommand::hasTimeStop() const
 void MotionCommand::start(const HardwareState& inputs, uint32_t now_ms)
 {
     // Capture motion baseline.
+    // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
     _baseline.t0Ms       = now_ms;
-    _baseline.enc0Mm     = (inputs.encLMm + inputs.encRMm) * 0.5f;
-    _baseline.encDiff0Mm = inputs.encRMm - inputs.encLMm;
-    _baseline.heading0Rad = inputs.poseHrad;
-    _baseline.pose0X     = inputs.poseX;
-    _baseline.pose0Y     = inputs.poseY;
+    _baseline.enc0Mm     = (inputs.encMm[1] + inputs.encMm[0]) * 0.5f;
+    _baseline.encDiff0Mm = inputs.encMm[0] - inputs.encMm[1];
+    _baseline.heading0Rad = inputs.fused.pose.h;
+    _baseline.pose0X     = inputs.fused.pose.x;
+    _baseline.pose0Y     = inputs.fused.pose.y;
 
     _active   = true;
     _stopping = false;
@@ -174,14 +175,14 @@ bool MotionCommand::tick(const HardwareState& inputs, uint32_t now_ms, float dt_
             // base/cur is the outlier pinpoints the garbage encoder read that
             // corrupted the arc baseline.  One line per turn — low radio cost.
             if (_stops[i].kind == StopCondition::Kind::ROTATION && _replyFn) {
-                float d = inputs.encRMm - inputs.encLMm - _baseline.encDiff0Mm;
+                float d = inputs.encMm[0] - inputs.encMm[1] - _baseline.encDiff0Mm;
                 if (d < 0.0f) d = -d;
                 char dbg[80];
                 snprintf(dbg, sizeof(dbg),
                          "EVT ROTSTOP ms=%u arc=%d tgt=%d base=%d cur=%d",
                          (unsigned)(now_ms - _baseline.t0Ms), (int)(d * 0.5f),
                          (int)_stops[i].a, (int)_baseline.encDiff0Mm,
-                         (int)(inputs.encRMm - inputs.encLMm));
+                         (int)(inputs.encMm[0] - inputs.encMm[1]));
                 _replyFn(dbg, _replyCtx);
             }
             stopped = true;

@@ -343,16 +343,16 @@ static void handleZero(const ArgList& args, const char* corrId,
     // ZERO enc -- atomic encoder reset: hardware accumulators, MC velocity
     // baselines, outlier-filter baseline, and Odometry encoder snapshot.
     // (N1 fix, sprint 030-001: replaces bare resetEncoderAccumulators() which
-    // left state.inputs.encLMm/R stale, freezing encoder reads for ~target mm.)
+    // left state.actual.encLMm/R stale, freezing encoder reads for ~target mm.)
     if (doEnc)  robot->resetEncoders();
-    if (doPose) robot->estimate.zero(robot->state.inputs);
+    if (doPose) robot->estimate.zero(robot->state.actual);
     // ZERO T -- set timer baseline for HaltController TIME conditions.
     if (doT) {
         robot->haltController.setTimerBaseline(robot->systemTime());
     }
     // ZERO D -- set distance baseline for HaltController DISTANCE conditions.
     if (doD) {
-        float enc_avg = (robot->state.inputs.encLMm + robot->state.inputs.encRMm) * 0.5f;
+        float enc_avg = (robot->state.actual.encMm[1] + robot->state.actual.encMm[0]) * 0.5f;
         robot->haltController.setDistBaseline(enc_avg);
     }
 
@@ -788,7 +788,7 @@ static void handleSI(const ArgList& args, const char* corrId,
     int32_t x_mm   = args.args[0].ival;
     int32_t y_mm   = args.args[1].ival;
     int32_t h_cdeg = args.args[2].ival;
-    robot->estimate.resetPose(robot->state.inputs, x_mm, y_mm, h_cdeg);
+    robot->estimate.resetPose(robot->state.actual, x_mm, y_mm, h_cdeg);
     // Re-anchor the OTOS to the SAME world fix so its absolute position+heading
     // observations agree with the controller pose, instead of dragging the EKF
     // back toward the OTOS boot frame (the "starts right, then rotates away"
@@ -926,7 +926,7 @@ static void handleHalt(const ArgList& args, const char* corrId,
         // Capture registration-time baseline so the condition fires ~ms after
         // now, not ~ms after boot (N10 fix).
         uint32_t now_ms   = robot->systemTime();
-        float    enc_avg  = (robot->state.inputs.encLMm + robot->state.inputs.encRMm) * 0.5f;
+        float    enc_avg  = (robot->state.actual.encMm[1] + robot->state.actual.encMm[0]) * 0.5f;
         int id = robot->haltController.add(cond, style, label, now_ms, enc_avg);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
@@ -961,7 +961,7 @@ static void handleHalt(const ArgList& args, const char* corrId,
         // Capture registration-time baseline so the condition fires ~mm after
         // the current encoder position, not from boot (N10 fix).
         uint32_t now_ms_d  = robot->systemTime();
-        float    enc_avg_d = (robot->state.inputs.encLMm + robot->state.inputs.encRMm) * 0.5f;
+        float    enc_avg_d = (robot->state.actual.encMm[1] + robot->state.actual.encMm[0]) * 0.5f;
         int id = robot->haltController.add(cond, style, label, now_ms_d, enc_avg_d);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
@@ -1018,7 +1018,7 @@ static void handleHalt(const ArgList& args, const char* corrId,
         }
         int id = robot->haltController.add(cond, style, label,
                                             robot->systemTime(),
-                                            (robot->state.inputs.encLMm + robot->state.inputs.encRMm) * 0.5f);
+                                            (robot->state.actual.encMm[1] + robot->state.actual.encMm[0]) * 0.5f);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
                                        "halt table full (max 8)",
@@ -1056,7 +1056,7 @@ static void handleHalt(const ArgList& args, const char* corrId,
                  (int)x, (int)y, (int)rad);
         int id = robot->haltController.add(cond, style, label,
                                             robot->systemTime(),
-                                            (robot->state.inputs.encLMm + robot->state.inputs.encRMm) * 0.5f);
+                                            (robot->state.actual.encMm[1] + robot->state.actual.encMm[0]) * 0.5f);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
                                        "halt table full (max 8)",
@@ -1095,7 +1095,7 @@ static void handleHalt(const ArgList& args, const char* corrId,
                  (double)h, (double)s, (double)v, (double)dist);
         int id = robot->haltController.add(cond, style, label,
                                             robot->systemTime(),
-                                            (robot->state.inputs.encLMm + robot->state.inputs.encRMm) * 0.5f);
+                                            (robot->state.actual.encMm[1] + robot->state.actual.encMm[0]) * 0.5f);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
                                        "halt table full (max 8)",

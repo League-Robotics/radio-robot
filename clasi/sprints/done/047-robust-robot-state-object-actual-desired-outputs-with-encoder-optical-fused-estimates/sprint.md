@@ -2,9 +2,15 @@
 id: '047'
 title: 'Robust robot state object: actual/desired/outputs with encoder/optical/fused
   estimates'
-status: planning-docs
+status: done
 branch: sprint/047-robust-robot-state-object-actual-desired-outputs-with-encoder-optical-fused-estimates
-use-cases: [SUC-047-001, SUC-047-002, SUC-047-003, SUC-047-004, SUC-047-005, SUC-047-006]
+use-cases:
+- SUC-047-001
+- SUC-047-002
+- SUC-047-003
+- SUC-047-004
+- SUC-047-005
+- SUC-047-006
 issues:
 - robot-state-object-proposed-structure-for-review.md
 ---

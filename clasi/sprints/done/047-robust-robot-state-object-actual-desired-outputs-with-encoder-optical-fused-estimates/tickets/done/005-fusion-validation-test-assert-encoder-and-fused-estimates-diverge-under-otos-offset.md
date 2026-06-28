@@ -1,9 +1,14 @@
 ---
 id: '005'
-title: 'Fusion-validation test: assert encoder and fused estimates diverge under OTOS offset'
-status: open
-use-cases: [SUC-047-001, SUC-047-004, SUC-047-005]
-depends-on: ['004']
+title: 'Fusion-validation test: assert encoder and fused estimates diverge under OTOS
+  offset'
+status: done
+use-cases:
+- SUC-047-001
+- SUC-047-004
+- SUC-047-005
+depends-on:
+- '004'
 github-issue: ''
 issue: robot-state-object-proposed-structure-for-review.md
 completes_issue: true
@@ -117,13 +122,30 @@ def test_est_dump_emits_three_lines(sim):
 
 ## Acceptance Criteria
 
-- [ ] `tests/simulation/unit/test_fusion_validation.py` exists and is collected by pytest.
-- [ ] `test_encoder_not_overwritten_by_fusion` passes: encoder pose is not pulled toward the OTOS-injected offset after fusion runs.
-- [ ] `test_est_dump_emits_three_lines` passes: `DBG EST` reply contains all three `EST enc/otos/fuse` lines with `x=`, `y=`, `h=`, `age=`, `v=` fields.
-- [ ] All three `sim_get_*_pose_*` ABI wrapper methods are added to the `Sim` Python class (or equivalent ctypes binding).
-- [ ] **Full sim suite green**: `uv run --with pytest python -m pytest tests/simulation/ -q`.
-- [ ] **Differential build compiles clean** (`python build.py --clean`): zero errors.
-- [ ] **Mecanum build compiles clean**: zero errors.
+- [x] `tests/simulation/unit/test_fusion_validation.py` exists and is collected by pytest.
+- [x] `test_encoder_not_overwritten_by_fusion` passes: encoder pose is not pulled toward the OTOS-injected offset after fusion runs.
+- [x] `test_est_dump_emits_three_lines` passes: `DBG EST` reply contains all three `EST enc/otos/fuse` lines with `x=`, `y=`, `h=`, `age=`, `v=` fields.
+- [x] All three `sim_get_*_pose_*` ABI wrapper methods are added to the `Sim` Python class (or equivalent ctypes binding).
+- [x] **Full sim suite green**: `uv run --with pytest python -m pytest tests/simulation/ -q` — 2230 passed, 2 known pre-existing failures only.
+- [x] **Differential build compiles clean** (`python build.py --clean`): zero errors.
+- [x] **Mecanum build compiles clean**: `cmake -S tests/_infra/sim -B tests/_infra/sim/build_mecanum -DROBOT_DRIVETRAIN=mecanum && cmake --build tests/_infra/sim/build_mecanum`: zero errors.
+
+### Implementation Notes
+
+**Real harness API used**: `Sim` class from `tests/_infra/sim/firmware.py`; fixture `sim` from `tests/conftest.py`.
+New wrapper methods added: `get_enc_pose()`, `get_optical_pose()`, `get_fused_pose()` (each returns `(x_mm, y_mm, h_rad)` tuple).
+
+**Scenario for `test_encoder_not_overwritten_by_fusion`**:
+- Drive `VW 200 0` for 2000 ms → encoder accumulates ~200 mm in X.
+- Stop with `X`, settle 2 ticks.
+- Inject OTOS at `enc_x_before + 200 mm` (persistent via `set_otos_pose`).
+- Enable fusion (`set_otos_fusion(True)`); tick 25 × 24 ms.
+- After 10 consecutive gate rejections the EKF fires P-inflation (K≈1) and fused snaps to OTOS.
+- Thresholds: enc drift < 5 mm (stopped robot, any larger drift is a regression); fused pull > 50 mm (actual snap is ~200 mm); optical error < 10 mm.
+
+**Scenario for `test_est_dump_emits_three_lines`**:
+- Tick 24 ms to populate estimates, then send `DBG EST`.
+- Assert labels `EST enc`, `EST otos`, `EST fuse` present; all 8 fields `x=, y=, h=, vx=, vy=, w=, age=, v=` present on each line.
 
 ## Implementation Plan
 

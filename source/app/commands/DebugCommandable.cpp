@@ -1,7 +1,7 @@
 // DebugCommandable.cpp — Commandable for all diagnostic commands.
 //
 // Owns: DBG LOOP RESET, DBG LOOP, DBG I2CLOG, DBG I2C, DBG IRQGUARD,
-//       DBG WEDGE, DBG OTOS BENCH, DBG OTOS, I2CW, I2CR.
+//       DBG WEDGE, DBG OTOS BENCH, DBG OTOS, DBG EST, I2CW, I2CR.
 //
 // All descriptors use ForceReply::SERIAL.
 // Handler logic mirrors the existing switch cases in CommandProcessor.cpp
@@ -10,6 +10,7 @@
 #include "DebugCommandable.h"
 #include "CommandProcessor.h"
 #include "Robot.h"
+#include "state/EstimateDump.h"
 // 034-006: BenchOtosSensor is bench-build only.
 #if defined(BENCH_OTOS_ENABLED) || defined(HOST_BUILD)
 #include "BenchOtosSensor.h"
@@ -474,7 +475,7 @@ static void handleDbgOtosBench(const ArgList& args, const char* corrId,
 //
 //   ideal   = BenchOtosSensor noiseless accumulator.
 //   otos    = BenchOtosSensor errored accumulator (what readTransformed returned).
-//   fused   = state.inputs.otosX/Y/H — EKF-fused pose written by otosCorrect().
+//   fused   = state.actual.otosX/Y/H — EKF-fused pose written by otosCorrect().
 //   err     = ideal − otos (per-axis).
 //
 //   In HOST_BUILD / MockHAL, benchOtosPtr() is unavailable; guard and emit
@@ -519,10 +520,10 @@ static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
     (void)ctx;
 #endif
 
-    // fused pose from EKF-integrated state (written by Robot::otosCorrect).
-    float fusedX = ctx.robot->state.inputs.otosX;
-    float fusedY = ctx.robot->state.inputs.otosY;
-    float fusedH = ctx.robot->state.inputs.otosH;
+    // Raw OTOS pose from state (written by Robot::otosCorrect into optical.pose).
+    float fusedX = ctx.robot->state.actual.optical.pose.x;
+    float fusedY = ctx.robot->state.actual.optical.pose.y;
+    float fusedH = ctx.robot->state.actual.optical.pose.h;
 
     // err = ideal − otos (per axis).
     float errX = idealX - otosX;
@@ -544,7 +545,7 @@ static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
     // TLM otos= gate.  Lets a bench probe see why otos= is suppressed.
     uint8_t otosStatus = 0xFF;
     bool statusOk = ctx.robot->hal.otos().readStatus(otosStatus);
-    int valid = ctx.robot->state.inputs.otos.valid ? 1 : 0;
+    int valid = ctx.robot->state.actual.otos.valid ? 1 : 0;
 
     char pose_buf[200];
     snprintf(pose_buf, sizeof(pose_buf),
@@ -558,6 +559,76 @@ static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
     replyFn(pose_buf, replyCtx);
 
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "dbg", "otos",
+                              corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
+// DBG EST
+//   prefix "DBG EST" — no args.
+//   parseFn: always succeeds, 0 args.
+//   handler: dump three EstimateDump lines (enc, otos, fuse) via replyFn.
+//
+//   Reply lines:
+//     EST enc   x=.. y=.. h=.. vx=.. vy=.. w=.. age=.. v=1
+//     EST otos  x=.. y=.. h=.. vx=.. vy=.. w=.. age=.. v=1
+//     EST fuse  x=.. y=.. h=.. vx=.. vy=.. w=.. age=.. v=1
+//     OK dbg est
+//
+//   All fields are integer-scaled: positions in mm, headings in cdeg,
+//   velocities in mm/s and mrad/s, age in ms.  Uses snprintf into a
+//   stack-local buffer — no heap.
+// ---------------------------------------------------------------------------
+
+static ParseResult parseDbgEst(const char* const* /*tokens*/, int /*ntokens*/,
+                                const KVPair* /*kvs*/, int /*nkv*/)
+{
+    ParseResult res;
+    res.ok = true;
+    res.args.count = 0;
+    return res;
+}
+
+static void handleDbgEst(const ArgList& /*args*/, const char* corrId,
+                          ReplyFn replyFn, void* replyCtx, void* handlerCtx)
+{
+    DbgCtx ctx = dbgCtxFrom(handlerCtx);
+    char rbuf[64];
+
+    if (ctx.robot == nullptr) {
+        CommandProcessor::replyErr(rbuf, sizeof(rbuf), "noimpl", "no robot",
+                                   corrId, replyFn, replyCtx);
+        return;
+    }
+
+    EstimateDump dump[3];
+    uint32_t now_ms = ctx.robot->systemTime();
+    dumpEstimates(ctx.robot->state.actual, now_ms, dump);
+
+    // RAD_TO_CDEG = 18000/pi — same constant used by Odometry.h.
+    static constexpr float kRadToCdeg  = 18000.0f / 3.14159265f;
+    static constexpr float kRadToMrad  = 1000.0f;
+
+    for (int i = 0; i < 3; ++i) {
+        const EstimateDump& d = dump[i];
+        // age: cap to 9999999 so it fits in the buffer.
+        uint32_t age = d.ageMs;
+        if (age > 9999999u) age = 9999999u;
+        char line[160];
+        snprintf(line, sizeof(line),
+                 "EST %-4s x=%d y=%d h=%d vx=%d vy=%d w=%d age=%u v=%d",
+                 d.source,
+                 (int)d.pose.x,
+                 (int)d.pose.y,
+                 (int)(d.pose.h * kRadToCdeg),
+                 (int)d.twist.vx_mmps,
+                 (int)d.twist.vy_mmps,
+                 (int)(d.twist.omega_rads * kRadToMrad),
+                 (unsigned)age,
+                 d.valid ? 1 : 0);
+        replyFn(line, replyCtx);
+    }
+
+    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "dbg", "est",
                               corrId, replyFn, replyCtx);
 }
 
@@ -736,6 +807,7 @@ std::vector<CommandDescriptor> DebugCommandable::getCommands() const
         makeCmd("DBG OTOS BENCH",  parseDbgOtosBench,  handleDbgOtosBench,  ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // enable/disable bench OTOS + set noise
         makeCmd("DBG OTOS",        parseDbgOtos,       handleDbgOtos,       ctx, "badarg", ForceReply::SERIAL),                          // query ideal/otos/fused pose
 #endif // defined(BENCH_OTOS_ENABLED) || defined(HOST_BUILD)
+        makeCmd("DBG EST",         parseDbgEst,        handleDbgEst,        ctx, "badarg", ForceReply::SERIAL),                          // dump enc/otos/fuse EstimateDump lines
         makeCmd("I2CW",            parseI2cw,          handleI2cw,          ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // raw I2C write (addr reg data…)
         makeCmd("I2CR",            parseI2cr,          handleI2cr,          ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // raw I2C read (addr reg count)
     };

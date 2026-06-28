@@ -81,6 +81,16 @@ ALLOWED_HEADERS = {
     "IOdometer.h",
     "Sensor.h",
     "Pose2D.h",
+    # Sprint 047-001: new state-layer type headers. All are pure POD types with
+    # no command-dispatch surface, no CODAL, no device handles. Intentional addition.
+    "ValueSet.h",
+    "PoseEstimate.h",
+    "ActualState.h",
+    "DesiredState.h",
+    "OutputState.h",
+    "IKinematics.h",
+    "BodyKinematics.h",
+    "MecanumKinematics.h",
 }
 
 # Forbidden tokens — command-dispatch surface, CODAL, and device handles. None of

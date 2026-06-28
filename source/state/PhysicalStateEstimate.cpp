@@ -12,9 +12,9 @@ void PhysicalStateEstimate::addOtosObservation(
         HardwareState& s,
         float x_otos, float y_otos, float theta_otos_rad,
         float v_otos_mmps, float omega_otos_rads,
-        float vy_otos_mmps) {
+        float vy_otos_mmps, uint32_t now_ms) {
     _odometry.correctEKF(s, x_otos, y_otos, theta_otos_rad,
-                         v_otos_mmps, omega_otos_rads, vy_otos_mmps);
+                         v_otos_mmps, omega_otos_rads, vy_otos_mmps, now_ms);
 }
 
 void PhysicalStateEstimate::resetPose(
@@ -33,8 +33,9 @@ void PhysicalStateEstimate::getPose(const HardwareState& s,
 
 void PhysicalStateEstimate::getVelocity(const HardwareState& s,
         float& v_mmps, float& omega_rads) {
-    v_mmps      = s.fusedV;
-    omega_rads  = s.fusedOmega;
+    // Read from canonical fused.twist fields (written by Odometry — 047-002).
+    v_mmps     = s.fused.twist.vx_mmps;
+    omega_rads = s.fused.twist.omega_rads;
 }
 
 void PhysicalStateEstimate::initEKF(

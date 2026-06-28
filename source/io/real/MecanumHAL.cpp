@@ -95,8 +95,9 @@ void MecanumHAL::tick(uint32_t now_ms, const MotorCommands& cmds)
 
     // Front-pair approximation: treat as differential using FL(L) and FR(R).
     // trackwidthMm used here is 2 * halfTrackMm (full track width).
+    // Array convention: [0]=R (FR), [1]=L (FL) — see OutputState.h.
     float trackwidthMm = 2.0f * _halfTrackMm;
-    benchOtosPtr()->tick(cmds.tgtLMms, cmds.tgtRMms, trackwidthMm, dt_ms);
+    benchOtosPtr()->tick(cmds.tgtMms[1], cmds.tgtMms[0], trackwidthMm, dt_ms);
 #else
     (void)now_ms;
     (void)cmds;

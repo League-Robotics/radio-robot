@@ -229,7 +229,8 @@ void MotionController::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
         // StopCondition::evaluate) so the decel profile and the stop fire
         // at the same point.  Only clamps downward; does not increase speed.
         if (_mode == DriveMode::DISTANCE) {
-            float enc_avg     = (inputs.encLMm + inputs.encRMm) * 0.5f;
+            // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
+            float enc_avg     = (inputs.encMm[1] + inputs.encMm[0]) * 0.5f;
             float d_traveled  = fabsf(enc_avg - _dEnc0);
             float d_remaining = _dDistTarget - d_traveled;
             if (d_remaining > 0.0f) {

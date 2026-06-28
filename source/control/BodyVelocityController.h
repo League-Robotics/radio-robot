@@ -1,5 +1,6 @@
 #pragma once
 #include "Config.h"
+#include "state/DesiredState.h"  // DesiredState — for setStateRef() publish
 #ifdef ROBOT_DRIVETRAIN_MECANUM
 #include "io/capability/Pose2D.h"  // RobotGeometry
 #endif
@@ -130,9 +131,23 @@ public:
      */
     bool atTarget() const;
 
+    /**
+     * setStateRef — bind a DesiredState to receive BVC publish at end of advance().
+     *
+     * After each advance() call, if _ds is non-null, writes:
+     *   _ds->bodyTwist    = {_v, _vy, _omega}  — live profiled setpoint
+     *   _ds->bodyTwistRaw = {_vTgt, _vyTgt, _omegaTgt} — caller-commanded (pre-profile)
+     * On differential builds _vy and _vyTgt are always 0.
+     * Pass nullptr to disconnect (safe, no-op publish).
+     *
+     * @param ds  Pointer to the DesiredState to publish into (owned by Robot).
+     */
+    void setStateRef(DesiredState* ds) { _ds = ds; }
+
 private:
     MotorController&   _mc;
     const RobotConfig& _cfg;
+    DesiredState*      _ds = nullptr;  // publish target; null = disabled
 
     float _v;           // live profiled body forward speed, mm/s
     float _omega;       // live profiled yaw rate, rad/s

@@ -1,8 +1,10 @@
 ---
 id: '001'
-title: "Phase A — New state type headers and RobotStateContainer restructure"
-status: open
-use-cases: [SUC-047-002, SUC-047-003]
+title: "Phase A \u2014 New state type headers and RobotStateContainer restructure"
+status: done
+use-cases:
+- SUC-047-002
+- SUC-047-003
 depends-on: []
 github-issue: ''
 issue: robot-state-object-proposed-structure-for-review.md
@@ -55,14 +57,14 @@ and the new `source/state/` headers changes in this ticket.
 
 ## Acceptance Criteria
 
-- [ ] `source/state/PoseEstimate.h`, `ActualState.h`, `DesiredState.h`, `OutputState.h`, `EstimateDump.h`, `StateShims.h` all exist and are syntactically correct C++.
-- [ ] `RobotStateContainer` has exactly three top-level fields: `actual`, `desired`, `outputs`.
-- [ ] `defaultInputs()` correctly seeds `lagMs` in `actual.enc`, `actual.lineVS`, `actual.colorVS`, `actual.portsVS`.
-- [ ] No `#ifdef ROBOT_DRIVETRAIN_MECANUM` inside any of the new struct bodies.
-- [ ] **Differential build compiles clean** (`python build.py --clean`): zero errors, zero new warnings.
-- [ ] **Mecanum build compiles clean**: zero errors, zero new warnings.
-- [ ] **Sim unit suite green**: `uv run --with pytest python -m pytest tests/simulation/ -q` passes (sim_api.cpp is not yet updated; existing ABI bodies still compile via legacy struct paths or shims).
-- [ ] All existing field names (`poseX`, `encLMm`, `pwmL`, `tgtLMms`, `mode`, `replyFn`, etc.) resolve via shim functions without any consumer file being edited.
+- [x] `source/state/PoseEstimate.h`, `ActualState.h`, `DesiredState.h`, `OutputState.h`, `EstimateDump.h`, `StateShims.h` all exist and are syntactically correct C++.
+- [x] `RobotStateContainer` has exactly three top-level fields: `actual`, `desired`, `outputs`.
+- [x] `defaultInputs()` correctly seeds `lagMs` in `actual.otos`, `actual.lineVS`, `actual.colorVS`, `actual.portsVS` (enc lag is 0 — synchronous, per inline comment).
+- [x] No `#ifdef ROBOT_DRIVETRAIN_MECANUM` inside any of the new struct bodies.
+- [x] **Differential build compiles clean** (`python build.py --clean`): zero errors, zero new warnings.
+- [x] **Mecanum build compiles clean**: zero errors, zero new warnings.
+- [x] **Sim unit suite green**: `uv run --with pytest python -m pytest tests/simulation/ -q` — 2228 passed, 2 pre-existing failures (unrelated schema validation issue). `test_estimate_dependency_rule` now passes with ALLOWED_HEADERS updated.
+- [x] All existing field names (`poseX`, `encLMm`, `pwmL`, `tgtLMms`, `mode`, `replyFn`, etc.) resolve via shim functions without any consumer file being edited.
 
 ## Implementation Plan
 
