@@ -1,10 +1,10 @@
 ---
-id: "001"
-title: "Model-selection consolidation: IKinematics.h and main.cpp unconditional differential"
-status: open
+id: '001'
+title: 'Model-selection consolidation: IKinematics.h and main.cpp unconditional differential'
+status: done
 use-cases:
-  - SUC-048-002
-  - SUC-048-003
+- SUC-048-002
+- SUC-048-003
 depends-on: []
 issue: eliminate-ifdef-robot-drivetrain-mecanum-everywhere.md
 ---
@@ -29,22 +29,22 @@ layer file is touched yet, so compilation remains clean throughout.
 
 ## Acceptance Criteria
 
-- [ ] `source/kinematics/IKinematics.h` contains no `#ifdef`. Body is unconditional:
+- [x] `source/kinematics/IKinematics.h` contains no `#ifdef`. Body is unconditional:
   `#include "BodyKinematics.h"`, `namespace Kinematics = BodyKinematics;`,
   `constexpr int kWheelCount = 2;`.
-- [ ] `IKinematics.h` carries a comment marking this file and `main.cpp` as the
+- [x] `IKinematics.h` carries a comment marking this file and `main.cpp` as the
   places to edit when building a mecanum robot.
-- [ ] `source/main.cpp` `#include "NezhaHAL.h"` is unconditional (no `#ifdef`
+- [x] `source/main.cpp` `#include "NezhaHAL.h"` is unconditional (no `#ifdef`
   guard around it).
-- [ ] `main.cpp` HAL instantiation `static NezhaHAL hardware(...)` is unconditional.
-- [ ] `main.cpp` `#define WHEEL_TEST_MAIN 0` line and the entire `#if defined(...)
+- [x] `main.cpp` HAL instantiation `static NezhaHAL hardware(...)` is unconditional.
+- [x] `main.cpp` `#define WHEEL_TEST_MAIN 0` line and the entire `#if defined(...)
   && WHEEL_TEST_MAIN` block are deleted.
-- [ ] `main.cpp` has a comment on the HAL instantiation line noting this is the
+- [x] `main.cpp` has a comment on the HAL instantiation line noting this is the
   mecanum re-introduction point.
-- [ ] `MecanumKinematics.h` / `MecanumKinematics.cpp` are untouched (retain).
-- [ ] `MecanumHAL.cpp` is untouched (retain).
-- [ ] `uv run pytest` passes (differential sim build, no behavior change).
-- [ ] Firmware compiles cleanly (CMake macro still defined; `#ifdef` branches are
+- [x] `MecanumKinematics.h` / `MecanumKinematics.cpp` are untouched (retain).
+- [x] `MecanumHAL.cpp` is untouched (retain).
+- [x] `uv run pytest` passes (differential sim build, no behavior change).
+- [x] Firmware compiles cleanly (CMake macro still defined; `#ifdef` branches are
   now gone from these files, so the macro evaluating true/false does not matter here).
 
 ## Implementation Plan
