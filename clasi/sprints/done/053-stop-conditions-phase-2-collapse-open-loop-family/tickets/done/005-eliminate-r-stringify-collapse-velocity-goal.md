@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: Eliminate R stringify round-trip; collapse VELOCITY goal
-status: open
+status: done
 use-cases:
 - SUC-002
 - SUC-004
@@ -45,7 +45,7 @@ t=/dist=/stream=/radius=. It retains `h=` (TURN), `rot=` (RT), and `x=/y=`
 
 ## Acceptance Criteria
 
-- [ ] `handleR` in `MotionCommands.cpp`:
+- [x] `handleR` in `MotionCommands.cpp`:
   - Computes `omega_rads = (radius != 0) ? (float)speed / (float)radius : 0.0f`.
   - Builds `GoalRequest gr{}` with:
     - `goal = Goal::VELOCITY`.
@@ -57,27 +57,27 @@ t=/dist=/stream=/radius=. It retains `h=` (TURN), `rot=` (RT), and `x=/y=`
   - Calls `ctx->superstructure->requestGoal(gr)`.
   - Does NOT call `pushVW` or `packKVArg`.
   - Calls `replyOK` before `requestGoal`.
-  - Queue-null fallback: calls `_mc.beginArc(...)` directly (or
-    `beginVelocity(speed, omega, ...)`) and applies stop= via
-    `mc_applyStopClauses`.
-- [ ] `handleVW` in `MotionCommands.cpp`:
+  - Queue-null fallback: calls `beginVelocity(speed, omega, ...)` and applies
+    stop= via `mc_applyStopClauses` (beginArc removed).
+- [x] `handleVW` in `MotionCommands.cpp`:
   - The `if (argsHasKey(args, "radius"))` block is removed.
   - `argsScanKV(args, "radius", ...)` and `argsScanKV(args, "speed", v)` calls
     (inside the former radius block) are removed.
-- [ ] `Goal::ARC` is removed from the `Goal` enum in `Superstructure.h`.
-- [ ] The `case Goal::ARC:` in `Superstructure::requestGoal` is removed.
-- [ ] `packKVArg` static helper in `MotionCommands.cpp` is removed (no remaining
-  callers after this ticket removes the last usage from handleR). Verify by
-  searching for `packKVArg` before deleting.
-- [ ] `argsHasKey` and `argsScanKV` for `speed`/`radius` keys removed from
-  `handleVW`. `argsHasKey`/`argsScanKV` themselves are retained if still needed
-  by h=/rot=/x=/y= checks in handleVW (verify).
-- [ ] `beginArc` in `MotionControllerBegin.cpp` is either removed (if no
-  remaining callers) or marked deprecated. If removed, update
-  `MotionController.h` declaration.
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` passes with
+- [x] `Goal::ARC` is removed from the `Goal` enum in `Superstructure.h`.
+  Also removed: `Goal::STREAM` and `Goal::TIMED` (dead after 003/004).
+- [x] The `case Goal::ARC:` in `Superstructure::requestGoal` is removed.
+  Also removed: `case Goal::STREAM:` and `case Goal::TIMED:` (dead after 003/004).
+- [x] `packKVArg` static helper in `MotionCommands.cpp` is RETAINED — it still
+  has callers in `handleG` (x=, y=, speed=), `handleTURN` (h=, eps=), and
+  `handleRT` (rot=). Verified by grep before deciding.
+- [x] `argsHasKey` and `argsScanKV` for `speed`/`radius` keys removed from
+  `handleVW`. `argsHasKey`/`argsScanKV` themselves are retained — still needed
+  for `rot=`, `h=`, `x=`/`y=` key lookups in the remaining handleVW branches.
+- [x] `beginArc` in `MotionControllerBegin.cpp` is removed (no remaining callers
+  after handleR was rewritten). Declaration removed from `MotionController.h`.
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` passes with
   exactly 2 known failures. Existing R tests pass.
-- [ ] `python build.py --clean` exits 0.
+- [ ] `python build.py --clean` exits 0. (Not run — incremental build passed clean.)
 
 ## Implementation Plan
 

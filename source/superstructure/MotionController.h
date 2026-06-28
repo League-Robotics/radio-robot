@@ -59,22 +59,17 @@ public:
     //          nullptr or empty string when no id was supplied.
     void beginStream(float leftMms, float rightMms, uint32_t now_ms,
                      TargetState& target, ReplyFn fn, void* ctx);
-    // VW command entry point: configures a MotionCommand with a TIME stop condition
-    // (keepalive watchdog) and the BodyVelocityController, then starts it.
-    // Does NOT delegate to beginStream(); VW is now VELOCITY mode.
+    // VW / S command entry point: configures a MotionCommand for body-twist (v, ω)
+    // with VELOCITY mode.  Does NOT delegate to beginStream(); VW and S both use
+    // VELOCITY mode after ticket 053-003.
+    //
+    // seedImmediate (default false): when true, seeds the BVC current state to
+    // (v_mms, omega_rads) before setTarget — preserving S's original immediate-seed
+    // semantics (no trapezoid ramp-up). VW passes false (ramps from current state).
     void beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
                        TargetState& target, ReplyFn fn, void* ctx,
-                       const char* corr_id = nullptr);
+                       const char* corr_id = nullptr, bool seedImmediate = false);
 
-    // R arc command entry point: computes κ = 1/radius (0 when radius==0),
-    // configures a MotionCommand with target (speedMms, speedMms * κ),
-    // SOFT stop style, no stop conditions (open-ended; host cancels via X
-    // or soft-stops via R 0 r).  EVT "EVT done R" on SOFT ramp-down.
-    // Sign convention: positive radius ⇒ positive ω ⇒ CCW (left arc).
-    // speedMms == 0 ⇒ target (0, 0), SOFT ramp-down triggers immediately.
-    void beginArc(float speedMms, float radiusMm, uint32_t now_ms,
-                  TargetState& target, ReplyFn fn, void* ctx,
-                  const char* corr_id = nullptr);
     void beginTimed(float leftMms, float rightMms, uint32_t durationMs, uint32_t now_ms,
                     TargetState& target, ReplyFn fn, void* ctx,
                     const char* corr_id = nullptr);

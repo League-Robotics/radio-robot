@@ -1,7 +1,7 @@
 ---
 id: '053'
-title: "Stop conditions — Phase 2 (collapse open-loop family)"
-status: planning-docs
+title: "Stop conditions \u2014 Phase 2 (collapse open-loop family)"
+status: done
 branch: sprint/053-stop-conditions-phase-2-collapse-open-loop-family
 use-cases:
 - SUC-001

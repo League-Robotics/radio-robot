@@ -115,13 +115,14 @@ static bool mc_parseSensorToken(const char* value,
 }
 
 // ---------------------------------------------------------------------------
-// mc_parseStopToken — parse the value portion of a "stop=<kind>:<args>" token.
+// mc_parseStopTokenInto — parse the value portion of a "stop=<kind>:<args>"
+// token into a StopCondition struct (no MotionCommand required).
 //
 // @param value  String after "stop=" (e.g. "d:300", "line:ge:512",
 //               "sensor:line0:ge:512", "color:120:0.5:0.4:0.1",
 //               "heading:4500:300", "rot:250", "t:1000").
-// @param mc     MotionCommand to call addStop() on when successful.
-// @return       true when a valid stop condition was parsed and added; false on error.
+// @param out    StopCondition to populate on success.
+// @return       true when a valid stop condition was parsed; false on error.
 //
 // Dispatch on prefix before the first ':':
 //   t:<ms>                   → makeTimeStop(ms)
@@ -129,10 +130,10 @@ static bool mc_parseSensorToken(const char* value,
 //   line:<ge|le>:<thr>       → makeLineAnyStop(thr, cmp)
 //   sensor:<ch>:<ge|le>:<thr>→ makeSensorStop(ch, thr, cmp)
 //   color:<h>:<s>:<v>:<dist> → makeColorStop(h, s, v, dist)
-//   heading:<cdeg>:<eps_cdeg>→ makeHeadingStop(rad, eps_rad) (divide by 100*180/π)
+//   heading:<cdeg>:<eps_cdeg>→ makeHeadingStop(rad, eps_rad)
 //   rot:<arc_mm>             → makeRotationStop(arc_mm)
 // ---------------------------------------------------------------------------
-static bool mc_parseStopToken(const char* value, MotionCommand& mc)
+static bool mc_parseStopTokenInto(const char* value, StopCondition& out)
 {
     char buf[64];
     int vlen = 0;
@@ -148,21 +149,21 @@ static bool mc_parseStopToken(const char* value, MotionCommand& mc)
     const char* rest = colon1 + 1;
 
     if (strcmp(kind, "t") == 0) {
-        // t:<ms>
         float ms = (float)atof(rest);
-        return mc.addStop(makeTimeStop(ms));
+        out = makeTimeStop(ms);
+        return true;
     }
 
     if (strcmp(kind, "d") == 0) {
-        // d:<mm>
         float mm = (float)atof(rest);
-        return mc.addStop(makeDistanceStop(mm));
+        out = makeDistanceStop(mm);
+        return true;
     }
 
     if (strcmp(kind, "rot") == 0) {
-        // rot:<arc_mm>
         float arc = (float)atof(rest);
-        return mc.addStop(makeRotationStop(arc));
+        out = makeRotationStop(arc);
+        return true;
     }
 
     if (strcmp(kind, "line") == 0) {
@@ -175,19 +176,20 @@ static bool mc_parseStopToken(const char* value, MotionCommand& mc)
         StopCondition::Cmp cmp;
         if (!mc_parseCmp(op_str, cmp)) return false;
         float thr = (float)atof(thr_str);
-        return mc.addStop(makeLineAnyStop(thr, cmp));
+        out = makeLineAnyStop(thr, cmp);
+        return true;
     }
 
     if (strcmp(kind, "sensor") == 0) {
-        // sensor:<ch>:<ge|le>:<thr>  — delegate to mc_parseSensorToken
+        // sensor:<ch>:<ge|le>:<thr>
         uint8_t ch; float thr; StopCondition::Cmp cmp;
         if (!mc_parseSensorToken(rest, ch, thr, cmp)) return false;
-        return mc.addStop(makeSensorStop(ch, thr, cmp));
+        out = makeSensorStop(ch, thr, cmp);
+        return true;
     }
 
     if (strcmp(kind, "color") == 0) {
         // color:<h>:<s>:<v>:<dist>
-        // Parse four colon-delimited floats.
         char* p2 = strchr(const_cast<char*>(rest), ':');
         if (!p2) return false;
         *p2 = '\0';
@@ -207,12 +209,12 @@ static bool mc_parseStopToken(const char* value, MotionCommand& mc)
         const char* r4 = p4 + 1;
         float dist = (float)atof(r4);
 
-        return mc.addStop(makeColorStop(h, s, v, dist));
+        out = makeColorStop(h, s, v, dist);
+        return true;
     }
 
     if (strcmp(kind, "heading") == 0) {
         // heading:<cdeg>:<eps_cdeg>
-        // Convert centidegrees → radians: divide by 100, then by 180/π.
         char* colon2 = strchr(const_cast<char*>(rest), ':');
         if (!colon2) return false;
         *colon2 = '\0';
@@ -222,10 +224,26 @@ static bool mc_parseStopToken(const char* value, MotionCommand& mc)
         const float kCdegToRad = 3.14159265f / (100.0f * 180.0f);
         float headingRad = cdeg     * kCdegToRad;
         float epsRad     = eps_cdeg * kCdegToRad;
-        return mc.addStop(makeHeadingStop(headingRad, epsRad));
+        out = makeHeadingStop(headingRad, epsRad);
+        return true;
     }
 
     return false;  // unknown kind
+}
+
+// ---------------------------------------------------------------------------
+// mc_parseStopToken — parse a "stop=<kind>:<args>" token and add the result
+// to a MotionCommand via mc.addStop().  Wraps mc_parseStopTokenInto.
+//
+// @param value  String after "stop=".
+// @param mc     MotionCommand to call addStop() on when successful.
+// @return       true when a valid stop condition was parsed and added.
+// ---------------------------------------------------------------------------
+static bool mc_parseStopToken(const char* value, MotionCommand& mc)
+{
+    StopCondition cond;
+    if (!mc_parseStopTokenInto(value, cond)) return false;
+    return mc.addStop(cond);
 }
 
 // ---------------------------------------------------------------------------
@@ -518,11 +536,19 @@ static ParseResult parseR(const char* const* tokens, int ntokens,
 
 // ── S ────────────────────────────────────────────────────────────────────────
 
-// handleS — VW converter (no stop params → S/streaming mode via beginStream fallback).
+// handleS — velocity-goal (streamSeed) path (migrated 053-003).
 //
-// Computes (v, ω) from (l, r) via BodyKinematics::forward(), encodes as
-// VW args[0]=v_mms, args[1]=omega_mrads (no stop params), and pushes to the
-// queue. Falls back to beginStream() when queue is null (sim / unit test).
+// Computes (v, ω) from (l, r) via BodyKinematics::forward(), builds a
+// GoalRequest with goal=VELOCITY and streamSeed=true (seeds BVC immediately,
+// no trapezoid ramp), and calls requestGoal().  Any stop= / sensor= clauses
+// packed by parseS into args[2..] are copied into gr.stops[] so they fire.
+//
+// Phase 1 deferral resolved: stop= clauses on S now attach to the active
+// MotionCommand and fire normally.
+//
+// D11 note: S replies OK here in the handler (same as before), then calls
+// requestGoal.  requestGoal internally calls beginVelocity which does NOT
+// emit its own reply — the handler's replyOK covers the command.
 static void handleS(const ArgList& args, const char* corrId,
                     ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
@@ -530,57 +556,69 @@ static void handleS(const ArgList& args, const char* corrId,
     int l = args.args[0].ival;
     int r = args.args[1].ival;
 
-    if (ctx->queue != nullptr) {
-        // Compute body twist via forward kinematics; encode as VW mrad/s integers.
-        float v_mms, omega_rads;
-        BodyKinematics::forward((float)l, (float)r, ctx->robot->config.trackwidthMm,
-                                v_mms, omega_rads);
-        int v_int     = (int)v_mms;
-        int omega_int = (int)(omega_rads * 1000.0f);  // rad/s → mrad/s
+    // Compute body twist via forward kinematics.
+    float v_mms, omega_rads;
+    BodyKinematics::forward((float)l, (float)r, ctx->robot->config.trackwidthMm,
+                            v_mms, omega_rads);
 
-        ArgList vwArgs;
-        vwArgs.count = 2;
-        argInt(vwArgs.args[0], v_int);
-        argInt(vwArgs.args[1], omega_int);
-        // Pack a "stream=1" marker so handleVW routes via beginStream (seed
-        // BVC immediately, no trapezoid ramp).  This preserves the original
-        // S-command semantics on the queue path.
-        vwArgs.count = packKVArg(vwArgs, 2, "stream", 1);
+    uint32_t now = ctx->robot->systemTime();
 
-        // Forward any stop= / sensor= tokens from args[2..] (packed by parseS).
-        for (int i = 2; i < args.count && vwArgs.count < MAX_ARGS; ++i) {
-            vwArgs.args[vwArgs.count++] = args.args[i];
+    // Build GoalRequest for VELOCITY with streamSeed=true (immediate seed, no ramp).
+    GoalRequest gr{};
+    gr.goal       = Goal::VELOCITY;
+    gr.robot      = ctx->robot;
+    gr.now_ms     = now;
+    gr.replyFn    = replyFn;
+    gr.replyCtx   = replyCtx;
+    gr.corrId     = corrId;
+    gr.v_mms      = v_mms;
+    gr.omega_rads = omega_rads;
+    gr.streamSeed = true;
+    gr.doneLabel  = "EVT done S";
+
+    // Pack any stop= / sensor= clauses from args[2..] (parsed and forwarded by
+    // parseS via mc_packStopKVs).  These are STR args with full "stop=<value>"
+    // or "sensor=<value>" prefixes.  Use mc_parseStopTokenInto to populate
+    // gr.stops[] directly without needing an active MotionCommand.
+    for (int i = 2; i < args.count && gr.nStops < 4; ++i) {
+        if (args.args[i].type != ArgType::STR) continue;
+        const char* s = args.args[i].sval;
+        StopCondition cond;
+        bool ok = false;
+        if (strncmp(s, "stop=", 5) == 0) {
+            ok = mc_parseStopTokenInto(s + 5, cond);
+        } else if (strncmp(s, "sensor=", 7) == 0) {
+            // Back-compat: "sensor=<ch>:<op>:<thr>" → SENSOR stop.
+            uint8_t ch; float thr; StopCondition::Cmp cmp;
+            if (mc_parseSensorToken(s + 7, ch, thr, cmp)) {
+                cond = makeSensorStop(ch, thr, cmp);
+                ok   = true;
+            }
         }
-
-        char body[32];
-        snprintf(body, sizeof(body), "l=%d r=%d", l, r);
-        char rbuf[64];
-        if (!pushVW(ctx, vwArgs, corrId, replyFn, replyCtx)) {
-            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full", nullptr, corrId, replyFn, replyCtx);
-            return;
-        }
-        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "drive", body, corrId, replyFn, replyCtx);
-    } else {
-        // Queue not available (sim fallback, should not be reached since sim
-        // now wires the queue): use direct beginStream().
-        ctx->mc->beginStream((float)l, (float)r,
-                             ctx->robot->systemTime(),
-                             ctx->robot->state.desired,
-                             replyFn, replyCtx);
-        char body[32];
-        snprintf(body, sizeof(body), "l=%d r=%d", l, r);
-        char rbuf[64];
-        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "drive", body, corrId, replyFn, replyCtx);
+        if (ok) gr.stops[gr.nStops++] = cond;
     }
+
+    ctx->superstructure->requestGoal(gr);
+
+    char body[32];
+    snprintf(body, sizeof(body), "l=%d r=%d", l, r);
+    char rbuf[64];
+    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "drive", body, corrId, replyFn, replyCtx);
 }
 
 // ── T ────────────────────────────────────────────────────────────────────────
 
-// handleT — VW converter with t=<ms> stop param.
+// handleT — direct requestGoal(VELOCITY) with a TIME stop (053-004).
 //
-// Computes (v, ω) from (l, r) via forward kinematics, builds VW args with
-// "t=<ms>" stop param, and pushes to the queue.  Falls back to direct
-// beginTimed() when queue is null.
+// Computes (v, ω) from (l, r) via forward kinematics, builds a GoalRequest
+// with goal=VELOCITY, stops[0]=makeTimeStop(ms), doneLabel="EVT done T", and
+// calls requestGoal directly.  Eliminates the stringify/inverse round-trip that
+// previously packed "t=<ms>" into VW args and re-parsed them in handleVW.
+//
+// D11 note: replyOK is called BEFORE requestGoal (converter already replied;
+// the queue-drain hop is eliminated).
+//
+// Falls back to direct beginTimed() when queue is null (sim path preserved).
 static void handleT(const ArgList& args, const char* corrId,
                     ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
@@ -590,26 +628,11 @@ static void handleT(const ArgList& args, const char* corrId,
     int ms = args.args[2].ival;
 
     if (ctx->queue != nullptr) {
-        // N16 fix (030-009): validate all stop= / sensor= clauses BEFORE replying OK
-        // on the queue path.  parseT packs them at args[3..] as "stop=<value>" /
-        // "sensor=<value>" strings with the prefix included.
+        // Validate sensor= back-compat clauses BEFORE replying OK (N16 fix, 030-009).
         for (int i = 3; i < args.count; ++i) {
             if (args.args[i].type != ArgType::STR) continue;
             const char* s = args.args[i].sval;
-            bool isStop   = strncmp(s, "stop=",   5) == 0;
-            bool isSensor = strncmp(s, "sensor=", 7) == 0;
-            if (!isStop && !isSensor) continue;
-            // Dry-run validation: create a temporary MotionCommand to absorb the
-            // addStop call.  Use a null MotionCommand trick: just parse the token
-            // to check it's valid (mc_parseStopToken returns false on bad input).
-            if (isStop) {
-                // Validate by attempting to parse without a real mc: build a temp
-                // to absorb the call if the token parses but we don't want to apply
-                // it yet.  Simplest: test via mc_parseSensorToken for sensor kind,
-                // or just let handleVW apply it after requestGoal.
-                // For now, only validate sensor= back-compat tokens here (N16 scope).
-            }
-            if (isSensor) {
+            if (strncmp(s, "sensor=", 7) == 0) {
                 uint8_t ch; float thr; StopCondition::Cmp cmp;
                 if (!mc_parseSensorToken(s + 7, ch, thr, cmp)) {
                     char rbuf[80];
@@ -620,32 +643,48 @@ static void handleT(const ArgList& args, const char* corrId,
             }
         }
 
+        // Compute body twist via forward kinematics (no integer truncation).
         float v_mms, omega_rads;
         BodyKinematics::forward((float)l, (float)r, ctx->robot->config.trackwidthMm,
                                 v_mms, omega_rads);
-        int v_int     = (int)v_mms;
-        int omega_int = (int)(omega_rads * 1000.0f);
 
-        ArgList vwArgs;
-        vwArgs.count = 2;
-        argInt(vwArgs.args[0], v_int);
-        argInt(vwArgs.args[1], omega_int);
-        vwArgs.count = packKVArg(vwArgs, 2, "t", ms);
+        uint32_t now = ctx->robot->systemTime();
 
-        // Forward all stop= / sensor= tokens from args[3..] into vwArgs.
-        // parseT packed them with full prefixes ("stop=..." / "sensor=...").
-        for (int i = 3; i < args.count && vwArgs.count < MAX_ARGS; ++i) {
-            vwArgs.args[vwArgs.count++] = args.args[i];
+        // Build GoalRequest for VELOCITY + TIME stop — no pushVW, no KV packing.
+        GoalRequest gr{};
+        gr.goal       = Goal::VELOCITY;
+        gr.robot      = ctx->robot;
+        gr.now_ms     = now;
+        gr.replyFn    = replyFn;
+        gr.replyCtx   = replyCtx;
+        gr.corrId     = corrId;
+        gr.v_mms      = v_mms;
+        gr.omega_rads = omega_rads;
+        gr.doneLabel  = "EVT done T";
+        gr.streamSeed = false;
+        gr.stops[gr.nStops++] = makeTimeStop((float)ms);
+
+        // Pack any additional stop= / sensor= clauses from args[3..].
+        for (int i = 3; i < args.count && gr.nStops < MotionCommand::kMaxStopConds; ++i) {
+            if (args.args[i].type != ArgType::STR) continue;
+            const char* s = args.args[i].sval;
+            StopCondition cond;
+            if (strncmp(s, "stop=", 5) == 0 && mc_parseStopTokenInto(s + 5, cond)) {
+                gr.stops[gr.nStops++] = cond;
+            } else if (strncmp(s, "sensor=", 7) == 0) {
+                uint8_t ch; float thr; StopCondition::Cmp cmp;
+                if (mc_parseSensorToken(s + 7, ch, thr, cmp))
+                    gr.stops[gr.nStops++] = makeSensorStop(ch, thr, cmp);
+            }
         }
 
+        // D11: reply before requestGoal (converter already replied;
+        // handleVW is no longer called for T).
         char body[48];
         snprintf(body, sizeof(body), "l=%d r=%d ms=%d", l, r, ms);
         char rbuf[80];
-        if (!pushVW(ctx, vwArgs, corrId, replyFn, replyCtx)) {
-            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full", nullptr, corrId, replyFn, replyCtx);
-            return;
-        }
         CommandProcessor::replyOK(rbuf, sizeof(rbuf), "drive", body, corrId, replyFn, replyCtx);
+        ctx->superstructure->requestGoal(gr);
     } else {
         // Queue not available: fall back to direct beginTimed().
         ctx->mc->beginTimed((float)l, (float)r, (uint32_t)ms,
@@ -663,10 +702,22 @@ static void handleT(const ArgList& args, const char* corrId,
 
 // ── D ────────────────────────────────────────────────────────────────────────
 
-// handleD — VW converter with dist=<mm> stop param.
+// handleD — direct requestGoal(DISTANCE) with a DISTANCE stop (053-004).
 //
-// Computes (v, ω) from (l, r), builds VW args with "dist=<mm>" stop param,
-// and pushes to the queue.  Falls back to direct distanceDrive() when queue is null.
+// Builds a GoalRequest with goal=DISTANCE (preserving the atomic encoder reset
+// via robot->distanceDrive in Superstructure::requestGoal), leftMms/rightMms
+// as integer wheel speeds, targetMm=mm, stops[0]=makeDistanceStop(mm), and
+// doneLabel="EVT done D".  Eliminates the stringify/inverse round-trip.
+//
+// Architecture note: Goal::DISTANCE is KEPT (not collapsed to VELOCITY) precisely
+// to preserve the atomic encoder reset (beginDistance + resetEncoders) that
+// Robot::distanceDrive performs.  The Superstructure DISTANCE case routes through
+// robot->distanceDrive and applies doneLabel/stops[] after the call.
+//
+// D11 note: replyOK is called BEFORE requestGoal (converter already replied;
+// the queue-drain hop is eliminated).
+//
+// Falls back to direct distanceDrive() when queue is null (sim path preserved).
 static void handleD(const ArgList& args, const char* corrId,
                     ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
@@ -676,8 +727,7 @@ static void handleD(const ArgList& args, const char* corrId,
     int mm = args.args[2].ival;
 
     if (ctx->queue != nullptr) {
-        // N16 fix (030-009): validate sensor= back-compat clauses BEFORE replying OK
-        // on the queue path.  parseD packs stop= / sensor= at args[3..] with prefixes.
+        // Validate sensor= back-compat clauses BEFORE replying OK (N16 fix, 030-009).
         for (int i = 3; i < args.count; ++i) {
             if (args.args[i].type != ArgType::STR) continue;
             const char* s = args.args[i].sval;
@@ -692,31 +742,44 @@ static void handleD(const ArgList& args, const char* corrId,
             }
         }
 
-        float v_mms, omega_rads;
-        BodyKinematics::forward((float)l, (float)r, ctx->robot->config.trackwidthMm,
-                                v_mms, omega_rads);
-        int v_int     = (int)v_mms;
-        int omega_int = (int)(omega_rads * 1000.0f);
+        uint32_t now = ctx->robot->systemTime();
 
-        ArgList vwArgs;
-        vwArgs.count = 2;
-        argInt(vwArgs.args[0], v_int);
-        argInt(vwArgs.args[1], omega_int);
-        vwArgs.count = packKVArg(vwArgs, 2, "dist", mm);
+        // Build GoalRequest for DISTANCE — wheel speeds passed as integers,
+        // matching distanceDrive's (int32_t vL, int32_t vR, int32_t targetMm) signature.
+        GoalRequest gr{};
+        gr.goal     = Goal::DISTANCE;
+        gr.robot    = ctx->robot;
+        gr.now_ms   = now;
+        gr.replyFn  = replyFn;
+        gr.replyCtx = replyCtx;
+        gr.corrId   = corrId;
+        gr.leftMms  = (float)l;   // int32_t cast preserved inside Superstructure
+        gr.rightMms = (float)r;
+        gr.targetMm = (int32_t)mm;
+        gr.doneLabel = "EVT done D";
+        gr.stops[gr.nStops++] = makeDistanceStop((float)mm);
 
-        // Forward all stop= / sensor= tokens from args[3..] into vwArgs.
-        for (int i = 3; i < args.count && vwArgs.count < MAX_ARGS; ++i) {
-            vwArgs.args[vwArgs.count++] = args.args[i];
+        // Pack any additional stop= / sensor= clauses from args[3..].
+        for (int i = 3; i < args.count && gr.nStops < MotionCommand::kMaxStopConds; ++i) {
+            if (args.args[i].type != ArgType::STR) continue;
+            const char* s = args.args[i].sval;
+            StopCondition cond;
+            if (strncmp(s, "stop=", 5) == 0 && mc_parseStopTokenInto(s + 5, cond)) {
+                gr.stops[gr.nStops++] = cond;
+            } else if (strncmp(s, "sensor=", 7) == 0) {
+                uint8_t ch; float thr; StopCondition::Cmp cmp;
+                if (mc_parseSensorToken(s + 7, ch, thr, cmp))
+                    gr.stops[gr.nStops++] = makeSensorStop(ch, thr, cmp);
+            }
         }
 
+        // D11: reply before requestGoal (converter already replied;
+        // handleVW is no longer called for D).
         char body[48];
         snprintf(body, sizeof(body), "l=%d r=%d mm=%d", l, r, mm);
         char rbuf[80];
-        if (!pushVW(ctx, vwArgs, corrId, replyFn, replyCtx)) {
-            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full", nullptr, corrId, replyFn, replyCtx);
-            return;
-        }
         CommandProcessor::replyOK(rbuf, sizeof(rbuf), "drive", body, corrId, replyFn, replyCtx);
+        ctx->superstructure->requestGoal(gr);
     } else {
         // Queue not available: fall back to direct distanceDrive() (resets enc baseline).
         ctx->robot->distanceDrive((int32_t)l, (int32_t)r, (int32_t)mm,
@@ -777,11 +840,19 @@ static void handleG(const ArgList& args, const char* corrId,
 
 // ── R ────────────────────────────────────────────────────────────────────────
 
-// handleR — VW converter with "speed=<mm/s>", "radius=<mm>" stop params.
+// handleR — direct requestGoal(VELOCITY) for arc command (053-005).
 //
-// R (arc) is open-ended: v = speed, omega = speed/radius (κ = 1/radius).
-// No stop condition; stop params encode raw speed + radius for VW handler.
-// Falls back to direct beginArc() when queue is null.
+// R (arc) is an open-loop twist command: v = speed, omega = speed/radius
+// (κ = 1/radius).  Computes omega inline and calls requestGoal(VELOCITY)
+// directly — no stringify/re-parse round-trip through pushVW/handleVW.
+//
+// Any stop= clauses from args[2..] (packed by parseR via mc_packStopKVs)
+// are forwarded into gr.stops[] so they fire normally.
+//
+// D11: replyOK is called before requestGoal (converter already replied;
+// the queue-drain hop is eliminated).
+//
+// Falls back to direct beginVelocity() when queue is null (sim path).
 static void handleR(const ArgList& args, const char* corrId,
                     ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
@@ -789,41 +860,57 @@ static void handleR(const ArgList& args, const char* corrId,
     int speed  = args.args[0].ival;
     int radius = args.args[1].ival;
 
+    // Compute omega = speed / radius (κ = 1/radius; 0 when radius == 0).
+    // Sign convention: positive radius ⇒ positive ω ⇒ CCW (left arc).
+    float omega_rads = (radius != 0) ? ((float)speed / (float)radius) : 0.0f;
+
+    char body[48];
+    snprintf(body, sizeof(body), "speed=%d radius=%d", speed, radius);
+    char rbuf[80];
+
     if (ctx->queue != nullptr) {
-        // Compute omega = speed * kappa = speed / radius (kappa = 1/radius).
-        float omega_rads = (radius != 0) ? ((float)speed / (float)radius) : 0.0f;
-        int v_int     = speed;
-        int omega_int = (int)(omega_rads * 1000.0f);  // rad/s → mrad/s
-
-        ArgList vwArgs;
-        vwArgs.count = 2;
-        argInt(vwArgs.args[0], v_int);
-        argInt(vwArgs.args[1], omega_int);
-        vwArgs.count = packKVArg(vwArgs, 2, "speed", speed);
-        vwArgs.count = packKVArg(vwArgs, vwArgs.count, "radius", radius);
-
-        // Forward any stop= / sensor= tokens from args[2..] (packed by parseR).
-        for (int i = 2; i < args.count && vwArgs.count < MAX_ARGS; ++i) {
-            vwArgs.args[vwArgs.count++] = args.args[i];
-        }
-
-        char body[48];
-        snprintf(body, sizeof(body), "speed=%d radius=%d", speed, radius);
-        char rbuf[80];
-        if (!pushVW(ctx, vwArgs, corrId, replyFn, replyCtx)) {
-            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full", nullptr, corrId, replyFn, replyCtx);
-            return;
-        }
-        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "arc", body, corrId, replyFn, replyCtx);
-    } else {
-        // Queue not available: fall back to direct beginArc().
         uint32_t now = ctx->robot->systemTime();
-        ctx->mc->beginArc((float)speed, (float)radius, now,
-                          ctx->robot->state.desired,
-                          replyFn, replyCtx, corrId);
-        char body[48];
-        snprintf(body, sizeof(body), "speed=%d radius=%d", speed, radius);
-        char rbuf[80];
+
+        // Build GoalRequest for VELOCITY — arc is an open-loop twist command.
+        GoalRequest gr{};
+        gr.goal       = Goal::VELOCITY;
+        gr.robot      = ctx->robot;
+        gr.now_ms     = now;
+        gr.replyFn    = replyFn;
+        gr.replyCtx   = replyCtx;
+        gr.corrId     = corrId;
+        gr.v_mms      = (float)speed;
+        gr.omega_rads = omega_rads;
+        gr.doneLabel  = "EVT done R";
+        gr.streamSeed = false;
+
+        // Pack any stop= / sensor= clauses from args[2..] (packed by parseR
+        // via mc_packStopKVs; full "stop=<value>" / "sensor=<value>" prefixes).
+        for (int i = 2; i < args.count && gr.nStops < MotionCommand::kMaxStopConds; ++i) {
+            if (args.args[i].type != ArgType::STR) continue;
+            const char* s = args.args[i].sval;
+            StopCondition cond;
+            if (strncmp(s, "stop=", 5) == 0 && mc_parseStopTokenInto(s + 5, cond)) {
+                gr.stops[gr.nStops++] = cond;
+            } else if (strncmp(s, "sensor=", 7) == 0) {
+                uint8_t ch; float thr; StopCondition::Cmp cmp;
+                if (mc_parseSensorToken(s + 7, ch, thr, cmp))
+                    gr.stops[gr.nStops++] = makeSensorStop(ch, thr, cmp);
+            }
+        }
+
+        // D11: reply before requestGoal (no queue hop needed).
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "arc", body, corrId, replyFn, replyCtx);
+        ctx->superstructure->requestGoal(gr);
+    } else {
+        // Queue not available: fall back to direct beginVelocity().
+        uint32_t now = ctx->robot->systemTime();
+        ctx->mc->beginVelocity((float)speed, omega_rads, now,
+                               ctx->robot->state.desired,
+                               replyFn, replyCtx, corrId);
+        // Set EVT done R label and apply stop= / sensor= clauses.
+        ctx->mc->activeCmd().setDoneEvt("EVT done R");
+        mc_applyStopClauses(args, 2, ctx->mc->activeCmd());
         CommandProcessor::replyOK(rbuf, sizeof(rbuf), "arc", body, corrId, replyFn, replyCtx);
     }
 }
@@ -971,13 +1058,22 @@ static void handleRT(const ArgList& args, const char* corrId,
 //   args[0].ival = v in mm/s
 //   args[1].ival = omega in mrad/s (wire units; converted to rad/s here)
 //   args[2..] = optional stop params (ArgType::STR "key=value"):
-//     "t=<ms>"        → call beginTimed(v, omega, ms, ...)
-//     "dist=<mm>"     → call beginDistance(vL, vR equivalent, mm, ...)
 //     "x=<mm>"+"y=<mm>"+"speed=<mm/s>" → call beginGoTo(x, y, speed, ...)
 //     "h=<cdeg>"+"eps=<cdeg>"           → call beginTurn(h_cdeg, eps_cdeg, ...)
-//     "speed=<mm/s>"+"radius=<mm>"      → call beginArc(speed, radius, ...)
-//     "stream=1"      → call beginStream (S-command semantics, seeded BVC)
+//     "rot=<cdeg>"                      → call beginRotation(rot_cdeg, ...)
 //     (no stop params) → open-ended velocity (beginVelocity or keepalive re-arm)
+//
+// Note (053-003): the "stream=1" KV branch has been removed.  S is now routed
+// directly through requestGoal(VELOCITY, streamSeed=true) in handleS and no
+// longer pushes a VW command onto the queue.
+//
+// Note (053-004): the "t=<ms>" and "dist=<mm>" KV branches have been removed.
+// T and D now call requestGoal directly from handleT/handleD without pushing
+// a VW command onto the queue.
+//
+// Note (053-005): the "radius=<mm>" / "speed=<mm/s>" KV branch has been
+// removed.  R now calls requestGoal(VELOCITY) directly from handleR, computing
+// omega = speed/radius inline and never pushing a VW command onto the queue.
 //
 // D11 suppression: when dispatched from a converter push (stop-param branches),
 // handleVW does NOT call replyOK — the converter handler already replied.
@@ -1094,145 +1190,43 @@ static void handleVW(const ArgList& args, const char* corrId,
         return;
     }
 
-    // Check for R (arc): "radius=<mm>" present (speed=<mm/s> also present).
-    if (argsHasKey(args, "radius")) {
-        int speed   = argsScanKV(args, "speed",  v);
-        int radius  = argsScanKV(args, "radius", 0);
-
-        // Seam 3 (042-001): route through requestGoal — same beginArc call.
-        GoalRequest gr{};
-        gr.goal     = Goal::ARC;
-        gr.robot    = ctx->robot;
-        gr.now_ms   = now;
-        gr.replyFn  = replyFn;
-        gr.replyCtx = replyCtx;
-        gr.corrId   = corrId;
-        gr.speedMms = (float)speed;
-        gr.radiusMm = (float)radius;
-        ctx->superstructure->requestGoal(gr);
-
-        // Apply any stop= clauses forwarded by handleR via args[2..].
-        mc_applyStopClauses(args, 2, ctx->mc->activeCmd());
-
-        // D11: no replyOK here — handleR already replied.
-        return;
-    }
-
-    // Check for T (timed): "t=<ms>" present.
-    if (argsHasKey(args, "t")) {
-        int ms = argsScanKV(args, "t", 0);
-
-        // Convert (v, omega) back to (vL, vR) for beginTimed (which takes wheel speeds).
-        float b = ctx->robot->config.trackwidthMm;
-        float vL = (float)v - omega_rads * (b * 0.5f);
-        float vR = (float)v + omega_rads * (b * 0.5f);
-
-        // Seam 3 (042-001): route through requestGoal — same beginTimed call.
-        GoalRequest gr{};
-        gr.goal       = Goal::TIMED;
-        gr.robot      = ctx->robot;
-        gr.now_ms     = now;
-        gr.replyFn    = replyFn;
-        gr.replyCtx   = replyCtx;
-        gr.corrId     = corrId;
-        gr.leftMms    = vL;
-        gr.rightMms   = vR;
-        gr.durationMs = (uint32_t)ms;
-        ctx->superstructure->requestGoal(gr);
-
-        // Apply all stop= / sensor= clauses from args[2..] (packed by handleT;
-        // includes both "stop=..." and "sensor=..." prefixes via mc_applyStopClauses).
-        mc_applyStopClauses(args, 2, ctx->mc->activeCmd());
-
-        // D11: no replyOK here — handleT already replied.
-        return;
-    }
-
-    // Check for D (distance): "dist=<mm>" present.
-    if (argsHasKey(args, "dist")) {
-        int mm = argsScanKV(args, "dist", 0);
-
-        // Convert (v, omega) back to (vL, vR) for distanceDrive (which takes wheel speeds).
-        float b = ctx->robot->config.trackwidthMm;
-        float vL = (float)v - omega_rads * (b * 0.5f);
-        float vR = (float)v + omega_rads * (b * 0.5f);
-
-        // Seam 3 (042-001): route through requestGoal — DISTANCE dispatches to
-        // robot->distanceDrive (beginDistance + resetEncoders), same (int32) casts.
-        GoalRequest gr{};
-        gr.goal     = Goal::DISTANCE;
-        gr.robot    = ctx->robot;
-        gr.now_ms   = now;
-        gr.replyFn  = replyFn;
-        gr.replyCtx = replyCtx;
-        gr.corrId   = corrId;
-        gr.leftMms  = vL;
-        gr.rightMms = vR;
-        gr.targetMm = (int32_t)mm;
-        ctx->superstructure->requestGoal(gr);
-
-        // Apply all stop= / sensor= clauses from args[2..].
-        mc_applyStopClauses(args, 2, ctx->mc->activeCmd());
-
-        // D11: no replyOK here — handleD already replied.
-        return;
-    }
-
-    // ── No stop params: open-ended velocity (VW / S mode) ──────────────────
+    // ── No stop params: open-ended velocity ────────────────────────────────
     //
-    // If a "stream=1" marker is present (packed by handleS on the queue path),
-    // route via beginStream so the BVC is seeded immediately at the target speed
-    // (no trapezoid ramp-up).  This preserves the original S-command semantics.
+    // Note (053-005): the "radius=<mm>" / "speed=<mm/s>" KV branch that formerly
+    // routed R-command pushes through handleVW has been removed.  R now calls
+    // requestGoal(VELOCITY) directly from handleR, computing omega = speed/radius
+    // inline and never reaching handleVW.
+    //
+    // Note (053-004): the "t=<ms>" and "dist=<mm>" KV branches have been removed.
+    // T and D now call requestGoal directly from handleT/handleD without going
+    // through the queue, so handleVW is never dispatched for T or D commands.
+    //
     // Direct VW commands with no stop params use beginVelocity (MotionCommand
     // with ramp), which supports X soft + EVT done on completion.
     //
-    // D11 note: this is the ONLY branch that emits replyOK.  The "stream=1"
-    // path is dispatched from handleS (which already called replyOK), but
-    // beginStream doesn't reply — the S converter's replyOK covers it.
-    // The open-ended VW path (no stream, no stop params) is the direct VW
-    // command; it emits exactly one replyOK here.
-    if (argsHasKey(args, "stream")) {
-        // S streaming path — seed BVC at target and go to STREAMING mode.
-        // Convert (v, omega) back to (vL, vR) for beginStream.
-        float b  = ctx->robot->config.trackwidthMm;
-        float vL = (float)v - omega_rads * (b * 0.5f);
-        float vR = (float)v + omega_rads * (b * 0.5f);
-        // Seam 3 (042-001): route through requestGoal — same beginStream call.
-        GoalRequest gr{};
-        gr.goal     = Goal::STREAM;
-        gr.robot    = ctx->robot;
-        gr.now_ms   = now;
-        gr.replyFn  = replyFn;
-        gr.replyCtx = replyCtx;
-        gr.corrId   = corrId;
-        gr.leftMms  = vL;
-        gr.rightMms = vR;
-        ctx->superstructure->requestGoal(gr);
-        // Phase 1 note: DriveMode::STREAMING (S command) does not use a
-        // MotionCommand, so stop= clauses cannot be attached here.  Phase 2 will
-        // migrate S onto MotionCommand to enable stop= support.
-        // D11: no replyOK here — handleS already replied before pushing this VW.
-        return;
-    } else if (ctx->mc->hasActiveCommand()) {
-        // D6 origin guard: only update the target when the active command is a
-        // VW-origin command.  Any other origin (TURN, G, T, D, R, RT) means a
-        // non-VW command is running; calling setTarget(0,0) here would corrupt
-        // its target (e.g. zero omega on an active TURN stops the rotation
-        // prematurely and silently corrupts navigation).
+    // D11 note: this is the ONLY branch that emits replyOK.  The open-ended VW
+    // path (no stop params) is the direct VW command; it emits exactly one
+    // replyOK here.
+    //
+    // Note (053-003): the "stream=1" KV branch that formerly routed S-command
+    // pushes through handleVW has been removed.  S now calls requestGoal
+    // directly from handleS with streamSeed=true; it never reaches handleVW.
+    if (ctx->mc->hasActiveCommand()) {
+        // D6 origin guard: only update the target when the active command is
+        // RETARGETABLE (VW-origin).  A FIXED command (TURN, G, T, D, R, RT)
+        // must not have its target stomped — e.g. zeroing omega on an active
+        // TURN stops the rotation prematurely and silently corrupts navigation.
         //
-        // For non-VW origins: reset the system watchdog by returning a busy
+        // For FIXED commands: reset the system watchdog by returning a busy
         // reply and do NOT call setTarget.
-        if (ctx->mc->activeCmd().origin() == MotionCommand::Origin::VW) {
+        if (ctx->mc->activeCmd().origin() == MotionCommand::Origin::RETARGETABLE) {
             // VW keepalive: update target and re-arm.
             ctx->mc->activeCmd().setTarget((float)v, omega_rads);
         } else {
-            // Non-VW command active: reply busy, do not stomp target.
-            static const char* kOriginNames[] = {
-                "VW", "TURN", "G", "T", "D", "R", "RT"
-            };
-            int originIdx = static_cast<int>(ctx->mc->activeCmd().origin());
-            const char* originName = (originIdx >= 0 && originIdx < 7)
-                                     ? kOriginNames[originIdx] : "?";
+            // FIXED command active: reply busy, do not stomp target.
+            const char* originName =
+                (ctx->mc->activeCmd().origin() == MotionCommand::Origin::RETARGETABLE)
+                ? "RETARGETABLE" : "FIXED";
             char rbuf[64];
             char body[32];
             snprintf(body, sizeof(body), "busy=%s", originName);

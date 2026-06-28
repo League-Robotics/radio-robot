@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: 'Extend GoalRequest: stops[], streamSeed, doneLabel'
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-002
@@ -28,7 +28,7 @@ changes are required this ticket.
 
 ## Acceptance Criteria
 
-- [ ] `GoalRequest` in `Superstructure.h` contains exactly these new fields
+- [x] `GoalRequest` in `Superstructure.h` contains exactly these new fields
   (after the existing `radiusMm` field):
   ```cpp
   StopCondition stops[4];   // stop conditions to apply after begin
@@ -36,16 +36,16 @@ changes are required this ticket.
   bool          streamSeed; // true → seed BVC immediately (S-command semantics)
   const char*   doneLabel;  // EVT label for setDoneEvt; nullptr = use default
   ```
-- [ ] `StopCondition.h` is included in `Superstructure.h` (it may already be
+- [x] `StopCondition.h` is included in `Superstructure.h` (it may already be
   transitively included; verify and add a direct include if needed).
-- [ ] `Superstructure::requestGoal` in `Superstructure.cpp` reads `gr.nStops`
+- [x] `Superstructure::requestGoal` in `Superstructure.cpp` reads `gr.nStops`
   and `gr.stops[]` and calls `mc.addStop(gr.stops[i])` for `i` in
   `0..nStops-1` after each begin call that uses an active MotionCommand
   (VELOCITY and DISTANCE cases). Reads `gr.doneLabel` and calls
   `_mc.activeCmd().setDoneEvt(gr.doneLabel)` when `gr.doneLabel != nullptr`
   and an active command exists. `gr.streamSeed` is stored but not yet acted
   upon (used by ticket 003).
-- [ ] All existing callers of `requestGoal` compile without modification
+- [x] All existing callers of `requestGoal` compile without modification
   (verified by `uv run --with pytest python -m pytest tests/simulation -q`
   passing with exactly 2 known failures).
 - [ ] `python build.py --clean` exits 0 (ARM build).

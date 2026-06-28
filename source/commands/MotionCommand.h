@@ -38,13 +38,17 @@ public:
     enum class StopStyle : uint8_t { SOFT, HARD };
 
     /**
-     * Origin — which command verb started this MotionCommand.
+     * Origin — re-targetability class of the active MotionCommand.
      *
      * Set by MotionController::begin*() methods via setOrigin().
-     * Used by handleVW to guard the setTarget() keepalive path: only a
-     * VW-origin command may have its target updated by a VW keepalive.
+     * Used by handleVW to guard the setTarget() keepalive path:
+     *   RETARGETABLE: a bare VW keepalive may update this command's target
+     *                 (formerly VW-origin commands).
+     *   FIXED:        command runs to completion; a VW keepalive replies busy=
+     *                 and does not touch the target (formerly all other origins:
+     *                 TURN, G, T, D, R, RT).
      */
-    enum class Origin : uint8_t { VW, TURN, G, T, D, R, RT };
+    enum class Origin : uint8_t { RETARGETABLE, FIXED };
 
     // ------------------------------------------------------------------
     // Configuration phase (call before start)
@@ -88,18 +92,20 @@ public:
     void setStopStyle(StopStyle s);
 
     /**
-     * setOrigin — record which command verb started this MotionCommand.
+     * setOrigin — record the re-targetability class of this MotionCommand.
      *
      * Must be called after configure() and before start().  configure()
-     * resets the origin to VW (the default) so callers that omit this
-     * call are treated as VW-origin — a safe default that does not guard.
+     * resets the origin to RETARGETABLE (the default) so callers that omit
+     * this call are treated as retargetable — a safe default for VW-style
+     * commands.
      */
     void setOrigin(Origin o) { _origin = o; }
 
     /**
-     * origin — return the command verb that started this MotionCommand.
+     * origin — return the re-targetability class of this MotionCommand.
      *
-     * Used by handleVW to skip setTarget() for non-VW active commands.
+     * Used by handleVW to decide whether a bare VW keepalive may update
+     * the target (RETARGETABLE) or must reply busy= (FIXED).
      */
     Origin origin() const { return _origin; }
 
@@ -237,7 +243,7 @@ private:
     BodyVelocityController* _bvc            = nullptr;
     float       _vTgt                        = 0.0f;
     float       _omegaTgt                   = 0.0f;
-    Origin      _origin                     = Origin::VW;
+    Origin      _origin                     = Origin::RETARGETABLE;
     StopCondition _stops[kMaxStopConds]     = {};
     uint8_t     _nStops                     = 0;
     MotionBaseline _baseline                = {};

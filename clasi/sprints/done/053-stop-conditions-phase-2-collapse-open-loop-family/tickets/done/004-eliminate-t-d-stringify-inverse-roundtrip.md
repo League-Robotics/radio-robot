@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Eliminate T/D stringify+inverse round-trip
-status: open
+status: done
 use-cases:
 - SUC-002
 - SUC-004
@@ -44,7 +44,7 @@ and `dist` are removed from `handleVW`.
 
 ## Acceptance Criteria
 
-- [ ] `handleT` in `MotionCommands.cpp`:
+- [x] `handleT` in `MotionCommands.cpp`:
   - Computes `(v, ω)` via `BodyKinematics::forward(l, r, trackwidthMm, ...)`.
   - Builds `GoalRequest gr{}` with:
     - `goal = Goal::VELOCITY`.
@@ -59,7 +59,7 @@ and `dist` are removed from `handleVW`.
     replied; handleVW is no longer called for T).
   - Queue-null fallback: calls `_mc.beginTimed(...)` directly and applies
     stop= via `mc_applyStopClauses` (sim path; existing behavior preserved).
-- [ ] `handleD` in `MotionCommands.cpp`:
+- [x] `handleD` in `MotionCommands.cpp`:
   - Computes `(v, ω)` via `BodyKinematics::forward(l, r, trackwidthMm, ...)`.
   - Builds `GoalRequest gr{}` with:
     - `goal = Goal::DISTANCE`.
@@ -73,19 +73,23 @@ and `dist` are removed from `handleVW`.
   - Calls `replyOK` before `requestGoal`.
   - Queue-null fallback: calls `ctx->robot->distanceDrive(...)` directly and
     applies stop= via `mc_applyStopClauses`.
-- [ ] `handleVW` in `MotionCommands.cpp`:
+- [x] `handleVW` in `MotionCommands.cpp`:
   - The `if (argsHasKey(args, "t"))` block is removed.
   - The `if (argsHasKey(args, "dist"))` block is removed.
   - `argsScanKV(args, "t", ...)` and `argsScanKV(args, "dist", ...)` calls
     removed.
-- [ ] `packKVArg` static helper is removed (if no other callers remain after
+- [x] `packKVArg` static helper is removed (if no other callers remain after
   this ticket and ticket 005). Check for remaining uses before removing.
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` passes with
+  NOTE: `packKVArg` is RETAINED — G, R, TURN, RT handlers still use it.
+  It will be removed in ticket 005 or later when no callers remain.
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` passes with
   exactly 2 known failures. Existing T/D tests continue to pass.
-- [ ] `python build.py --clean` exits 0.
-- [ ] Encoder reset for D: `distanceDrive` still performs the atomic encoder
+- [x] `python build.py --clean` exits 0.
+- [x] Encoder reset for D: `distanceDrive` still performs the atomic encoder
   reset. The programmer must verify that `MotionCommand::start()` captures a
   zero enc0 baseline after the reset (same as pre-sprint behavior).
+  VERIFIED: `test_d_encoder_baseline_is_zero_at_start` confirms enc0 near 0
+  after D command (via `sim_get_enc_l/r` check within one tick of D start).
 
 ## Implementation Plan
 

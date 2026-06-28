@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include "Config.h"
 #include "Protocol.h"
+#include "StopCondition.h"
 
 // ---------------------------------------------------------------------------
 // Superstructure — Seam 3 of the FRC Elite Architecture adaptation (Phase D).
@@ -42,21 +43,20 @@ struct LoopTickState;
 // Goal — the set of drive goals the Superstructure can be asked to start.
 //
 // One value per begin* family.  IDLE/ESTOP are reserved for future use
-// (no caller routes them through requestGoal this sprint); the eight active
-// goals map 1:1 to the existing MotionController begin* entry points (plus
-// DISTANCE, which routes through Robot::distanceDrive to preserve the
-// atomic encoder reset).
+// (no caller routes them through requestGoal this sprint).
+//
+// After sprint 053: STREAM, TIMED, ARC collapsed to VELOCITY (open-loop
+// twist commands share a single code path via beginVelocity).  DISTANCE is
+// kept to preserve the atomic encoder reset (Robot::distanceDrive).
+// GOTO / TURN / ROTATE are closed-loop controllers and are kept as-is.
 // ---------------------------------------------------------------------------
 enum class Goal {
     IDLE,
-    STREAM,    // beginStream
-    TIMED,     // beginTimed
     DISTANCE,  // Robot::distanceDrive (beginDistance + resetEncoders)
     GOTO,      // beginGoTo
     TURN,      // beginTurn
     ROTATE,    // beginRotation
-    VELOCITY,  // beginVelocity
-    ARC,       // beginArc
+    VELOCITY,  // beginVelocity (covers VW, S, T, R open-loop arcs)
     ESTOP
 };
 
@@ -87,7 +87,7 @@ struct GoalRequest {
     // GoTo (GOTO)
     float     tx;
     float     ty;
-    float     speedMms;     // GOTO, ARC
+    float     speedMms;     // GOTO
 
     // Heading goal (TURN)
     float     headingCdeg;
@@ -96,12 +96,16 @@ struct GoalRequest {
     // Relative rotation (ROTATE)
     float     relCdeg;
 
-    // Body-twist (VELOCITY)
+    // Body-twist (VELOCITY) — covers VW, S, T, and R (arc) open-loop commands.
+    // R computes omega = speed/radius inline in handleR before building GoalRequest.
     float     v_mms;
     float     omega_rads;
 
-    // Arc (ARC)
-    float     radiusMm;
+    // Stop-condition plumbing (populated by verb handlers)
+    StopCondition stops[4];   // stop conditions to apply after begin
+    uint8_t       nStops;     // number of valid entries in stops[]
+    bool          streamSeed; // true → seed BVC immediately (S-command semantics)
+    const char*   doneLabel;  // EVT label for setDoneEvt; nullptr = use default
 };
 
 // ---------------------------------------------------------------------------
