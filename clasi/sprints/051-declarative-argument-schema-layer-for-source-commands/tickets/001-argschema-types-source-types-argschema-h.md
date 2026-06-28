@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: ArgSchema types (source/types/ArgSchema.h)
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-002
@@ -26,19 +26,19 @@ The types must be placed in `source/types/` — not in `source/commands/` — so
 
 ## Acceptance Criteria
 
-- [ ] `source/types/ArgSchema.h` is created with exactly:
+- [x] `source/types/ArgSchema.h` is created with exactly:
   - `enum class ArgKind : uint8_t { INT, FLOAT, STR };`
   - `struct ArgDef { const char* name; ArgKind kind; bool ranged; int32_t lo, hi; };`
   - `struct ArgSchema { const ArgDef* defs; int ndefs; int minTokens; bool variadic; const char* packKv; };`
-- [ ] File includes only `<stdint.h>` (no other dependencies).
-- [ ] File compiles cleanly under `-std=c++11 -fno-exceptions -fno-rtti`.
-- [ ] `ArgDef.ranged` is documented: when `false`, no range check is applied
+- [x] File includes only `<stdint.h>` (no other dependencies).
+- [x] File compiles cleanly under `-std=c++11 -fno-exceptions -fno-rtti`.
+- [x] `ArgDef.ranged` is documented: when `false`, no range check is applied
   (INT value accepted via `atoi` with silent truncation — preserves `OV`/`SI`
   behaviour).
-- [ ] `ArgSchema.packKv` is documented: when non-null, `parseSchema` will append
+- [x] `ArgSchema.packKv` is documented: when non-null, `parseSchema` will append
   the value of the matching KV pair as a trailing STR arg (reproduces
   `packSensorArg` for T/D/TURN).
-- [ ] No change to any existing file in this ticket.
+- [x] No change to any existing file in this ticket.
 
 ## Implementation Plan
 
