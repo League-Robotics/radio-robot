@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Migrate OtosCommands.cpp to ArgSchema
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-002
@@ -48,19 +48,19 @@ Replace the 6 identical guard blocks in handleOI/OZ/OR/OV/OL/OA with
 
 ## Acceptance Criteria
 
-- [ ] `parseOI`, `parseOZ`, `parseOR`, `parseOP` deleted; registrations updated to
+- [x] `parseOI`, `parseOZ`, `parseOR`, `parseOP` deleted; registrations updated to
   `makeCmd(..., nullptr, handleXxx, ...)` or `makeSchemaCmd` with empty schema.
-- [ ] `parseOV` deleted; replaced with static `ArgSchema ovSchema{ndefs=3,
+- [x] `parseOV` deleted; replaced with static `ArgSchema ovSchema{ndefs=3,
   minTokens=3, ranged=false, ...}` and `makeSchemaCmd` registration.
-- [ ] `parseOL`, `parseOA` deleted; each replaced with schema `{ndefs=1,
+- [x] `parseOL`, `parseOA` deleted; each replaced with schema `{ndefs=1,
   minTokens=0, ranged=false}`.
-- [ ] `handleOV` still casts `args.args[i].ival` to `int16_t` at use site
+- [x] `handleOV` still casts `args.args[i].ival` to `int16_t` at use site
   (behaviour unchanged).
-- [ ] `handleOL`/`handleOA` still cast `args.args[0].ival` to `int8_t` at use site.
-- [ ] `otosReady` inline helper implemented; all 6 hardware handlers use it.
-- [ ] OtosCommands.cpp compiles cleanly; no other file changed.
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` — no new failures.
-- [ ] Spot-check via test suite: `OV 1 2 3` -> `OK setpos x=1 y=2 h=3`;
+- [x] `handleOL`/`handleOA` still cast `args.args[0].ival` to `int8_t` at use site.
+- [x] `otosReady` inline helper implemented; all 6 hardware handlers use it.
+- [x] OtosCommands.cpp compiles cleanly; no other file changed.
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` — no new failures.
+- [x] Spot-check via test suite: `OV 1 2 3` -> `OK setpos x=1 y=2 h=3`;
   `OV 1` -> `ERR badarg`; `OI` when not initialized -> `ERR nodev oi`.
 
 ## Implementation Plan

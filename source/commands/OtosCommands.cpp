@@ -1,15 +1,19 @@
 #include "OtosCommands.h"
 #include "CommandProcessor.h"
+#include "types/ArgSchema.h"
 #include <cstdio>
-#include <cstdlib>
 
 // ===========================================================================
-// OtosCommands — OI, OZ, OR, OP, OV, OL, OA  (041-002)
+// OtosCommands — OI, OZ, OR, OP, OV, OL, OA  (041-002, migrated 051-004)
 //
 // Moved VERBATIM from Odometry.cpp's Commandable implementation.  The only
 // changes are the context type (OtosCtx* instead of OdomCtx*) and the context
 // pointer (&_ctx instead of &_odomCtx).  Parse formats, reply strings, and
 // device effects are byte-identical.
+//
+// Migration (051-004): bespoke parse functions replaced with ArgSchema /
+// nullptr registrations.  A shared otosReady() helper factors the repeated
+// nodev guard.
 //
 // Context type: OtosCtx* (cast from handlerCtx); all handlers use otos
 // (handleOP additionally reads hwState).
@@ -18,81 +22,45 @@
 OtosCommands::OtosCommands() : _ctx{nullptr, nullptr} {}
 
 // ---------------------------------------------------------------------------
-// Parse functions — strip verb token so tokens[0] is the first argument.
+// Argument schemas — declarative replacements for the hand-written parsers.
 // ---------------------------------------------------------------------------
 
-// OI — no arguments
-static ParseResult parseOI(const char* const* /*tokens*/, int /*ntokens*/,
-                            const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r; r.ok = true; r.args.count = 0; return r;
-}
+// OV <x> <y> <h> — three mandatory positional INTs; no range check (silent
+// int16_t truncation in the handler, as before).
+static const ArgDef ovDefs[3] = {
+    { "x", ArgKind::INT, false, 0, 0 },
+    { "y", ArgKind::INT, false, 0, 0 },
+    { "h", ArgKind::INT, false, 0, 0 },
+};
+static const ArgSchema ovSchema = { ovDefs, 3, 3, false, nullptr };
 
-// OZ — no arguments
-static ParseResult parseOZ(const char* const* /*tokens*/, int /*ntokens*/,
-                            const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r; r.ok = true; r.args.count = 0; return r;
-}
+// OL [val] — optional int8 scalar; 0 or 1 INT token; no range check.
+static const ArgDef olDefs[1] = {
+    { "scalar", ArgKind::INT, false, 0, 0 },
+};
+static const ArgSchema olSchema = { olDefs, 1, 0, false, nullptr };
 
-// OR — no arguments
-static ParseResult parseOR(const char* const* /*tokens*/, int /*ntokens*/,
-                            const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r; r.ok = true; r.args.count = 0; return r;
-}
+// OA [val] — optional int8 scalar; 0 or 1 INT token; no range check.
+static const ArgDef oaDefs[1] = {
+    { "scalar", ArgKind::INT, false, 0, 0 },
+};
+static const ArgSchema oaSchema = { oaDefs, 1, 0, false, nullptr };
 
-// OP — no arguments
-static ParseResult parseOP(const char* const* /*tokens*/, int /*ntokens*/,
-                            const KVPair* /*kvs*/, int /*nkv*/)
+// ---------------------------------------------------------------------------
+// otosReady — shared nodev guard.
+//
+// Returns false and emits "ERR nodev <verb>" when the OTOS sensor has not
+// been initialised.  Each handler that touches hardware calls this first;
+// handleOP does NOT call it (it only reads cached state).
+// ---------------------------------------------------------------------------
+static bool otosReady(OtosCtx* c, const char* verb, char* rbuf, int rbsz,
+                      const char* corrId, ReplyFn fn, void* ctx)
 {
-    ParseResult r; r.ok = true; r.args.count = 0; return r;
-}
-
-// OV <x> <y> <h> — three mandatory int16 arguments
-static ParseResult parseOV(const char* const* tokens, int ntokens,
-                            const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r;
-    if (ntokens < 3) {
-        r.ok = false; r.err = { "badarg", nullptr }; return r;
+    if (!c->otos->is_initialized()) {
+        CommandProcessor::replyErr(rbuf, rbsz, "nodev", verb, corrId, fn, ctx);
+        return false;
     }
-    r.ok = true;
-    r.args.count = 3;
-    r.args.args[0].type = ArgType::INT; r.args.args[0].ival = (int16_t)atoi(tokens[0]);
-    r.args.args[1].type = ArgType::INT; r.args.args[1].ival = (int16_t)atoi(tokens[1]);
-    r.args.args[2].type = ArgType::INT; r.args.args[2].ival = (int16_t)atoi(tokens[2]);
-    return r;
-}
-
-// OL [val] — optional int8 scalar
-static ParseResult parseOL(const char* const* tokens, int ntokens,
-                            const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r; r.ok = true;
-    if (ntokens >= 1) {
-        r.args.count = 1;
-        r.args.args[0].type = ArgType::INT;
-        r.args.args[0].ival = (int8_t)atoi(tokens[0]);
-    } else {
-        r.args.count = 0;
-    }
-    return r;
-}
-
-// OA [val] — optional int8 scalar
-static ParseResult parseOA(const char* const* tokens, int ntokens,
-                            const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r; r.ok = true;
-    if (ntokens >= 1) {
-        r.args.count = 1;
-        r.args.args[0].type = ArgType::INT;
-        r.args.args[0].ival = (int8_t)atoi(tokens[0]);
-    } else {
-        r.args.count = 0;
-    }
-    return r;
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -104,11 +72,7 @@ static void handleOI(const ArgList& /*args*/, const char* corrId,
 {
     OtosCtx* c = reinterpret_cast<OtosCtx*>(handlerCtx);
     char rbuf[64];
-    if (!c->otos->is_initialized()) {
-        CommandProcessor::replyErr(rbuf, sizeof(rbuf), "nodev", "oi",
-                                   corrId, replyFn, replyCtx);
-        return;
-    }
+    if (!otosReady(c, "oi", rbuf, sizeof(rbuf), corrId, replyFn, replyCtx)) return;
     c->otos->init();
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "oi", nullptr,
                               corrId, replyFn, replyCtx);
@@ -119,11 +83,7 @@ static void handleOZ(const ArgList& /*args*/, const char* corrId,
 {
     OtosCtx* c = reinterpret_cast<OtosCtx*>(handlerCtx);
     char rbuf[64];
-    if (!c->otos->is_initialized()) {
-        CommandProcessor::replyErr(rbuf, sizeof(rbuf), "nodev", "oz",
-                                   corrId, replyFn, replyCtx);
-        return;
-    }
+    if (!otosReady(c, "oz", rbuf, sizeof(rbuf), corrId, replyFn, replyCtx)) return;
     c->otos->setPositionRaw(0, 0, 0);
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "oz", nullptr,
                               corrId, replyFn, replyCtx);
@@ -134,11 +94,7 @@ static void handleOR(const ArgList& /*args*/, const char* corrId,
 {
     OtosCtx* c = reinterpret_cast<OtosCtx*>(handlerCtx);
     char rbuf[64];
-    if (!c->otos->is_initialized()) {
-        CommandProcessor::replyErr(rbuf, sizeof(rbuf), "nodev", "or",
-                                   corrId, replyFn, replyCtx);
-        return;
-    }
+    if (!otosReady(c, "or", rbuf, sizeof(rbuf), corrId, replyFn, replyCtx)) return;
     c->otos->resetTracking();
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "or", nullptr,
                               corrId, replyFn, replyCtx);
@@ -183,11 +139,8 @@ static void handleOV(const ArgList& args, const char* corrId,
 {
     OtosCtx* c = reinterpret_cast<OtosCtx*>(handlerCtx);
     char rbuf[96];
-    if (!c->otos->is_initialized()) {
-        CommandProcessor::replyErr(rbuf, sizeof(rbuf), "nodev", "ov",
-                                   corrId, replyFn, replyCtx);
-        return;
-    }
+    if (!otosReady(c, "ov", rbuf, sizeof(rbuf), corrId, replyFn, replyCtx)) return;
+    // Cast to int16_t at use site — preserves existing silent truncation behaviour.
     int16_t ox = (int16_t)args.args[0].ival;
     int16_t oy = (int16_t)args.args[1].ival;
     int16_t oh = (int16_t)args.args[2].ival;
@@ -203,12 +156,9 @@ static void handleOL(const ArgList& args, const char* corrId,
 {
     OtosCtx* c = reinterpret_cast<OtosCtx*>(handlerCtx);
     char rbuf[64];
-    if (!c->otos->is_initialized()) {
-        CommandProcessor::replyErr(rbuf, sizeof(rbuf), "nodev", "ol",
-                                   corrId, replyFn, replyCtx);
-        return;
-    }
+    if (!otosReady(c, "ol", rbuf, sizeof(rbuf), corrId, replyFn, replyCtx)) return;
     if (args.count >= 1) {
+        // Cast to int8_t at use site — preserves existing silent truncation behaviour.
         c->otos->setLinearScalar((int8_t)args.args[0].ival);
     }
     int8_t val = c->otos->getLinearScalar();
@@ -223,12 +173,9 @@ static void handleOA(const ArgList& args, const char* corrId,
 {
     OtosCtx* c = reinterpret_cast<OtosCtx*>(handlerCtx);
     char rbuf[64];
-    if (!c->otos->is_initialized()) {
-        CommandProcessor::replyErr(rbuf, sizeof(rbuf), "nodev", "oa",
-                                   corrId, replyFn, replyCtx);
-        return;
-    }
+    if (!otosReady(c, "oa", rbuf, sizeof(rbuf), corrId, replyFn, replyCtx)) return;
     if (args.count >= 1) {
+        // Cast to int8_t at use site — preserves existing silent truncation behaviour.
         c->otos->setAngularScalar((int8_t)args.args[0].ival);
     }
     int8_t val = c->otos->getAngularScalar();
@@ -243,12 +190,12 @@ std::vector<CommandDescriptor> OtosCommands::getCommands() const
 {
     void* ctx = const_cast<OtosCtx*>(&_ctx);
     return {
-        makeCmd("OI", parseOI, handleOI, ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // OTOS init: re-initialise sensor
-        makeCmd("OZ", parseOZ, handleOZ, ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // OTOS zero: reset position to 0,0,0
-        makeCmd("OR", parseOR, handleOR, ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // OTOS read: one-shot position snapshot
-        makeCmd("OP", parseOP, handleOP, ctx, "badarg"), // OTOS position: report current x,y,h (reads cached state)
-        makeCmd("OV", parseOV, handleOV, ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // OTOS velocity: report vx,vy,omega
-        makeCmd("OL", parseOL, handleOL, ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // OTOS linear scalar calibration
-        makeCmd("OA", parseOA, handleOA, ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // OTOS angular scalar calibration
+        makeCmd("OI", nullptr, handleOI, ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // OTOS init: re-initialise sensor
+        makeCmd("OZ", nullptr, handleOZ, ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // OTOS zero: reset position to 0,0,0
+        makeCmd("OR", nullptr, handleOR, ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // OTOS read: one-shot position snapshot
+        makeCmd("OP", nullptr, handleOP, ctx, "badarg"), // OTOS position: report current x,y,h (reads cached state)
+        makeSchemaCmd("OV", &ovSchema, handleOV, ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // OTOS velocity: set position x,y,h
+        makeSchemaCmd("OL", &olSchema, handleOL, ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // OTOS linear scalar calibration
+        makeSchemaCmd("OA", &oaSchema, handleOA, ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // OTOS angular scalar calibration
     };
 }
