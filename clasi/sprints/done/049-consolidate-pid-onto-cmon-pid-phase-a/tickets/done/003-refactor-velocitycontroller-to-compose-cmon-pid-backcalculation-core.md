@@ -1,11 +1,11 @@
 ---
 id: '003'
 title: Refactor VelocityController to compose cmon-pid backcalculation core
-status: open
+status: done
 use-cases:
-  - SUC-002
+- SUC-002
 depends-on:
-  - '002'
+- '002'
 github-issue: ''
 issue: consolidate-control-code-onto-vendored-libraries-cmon-pid-tinyekf.md
 completes_issue: false
@@ -35,25 +35,25 @@ Gain mapping:
 
 ## Acceptance Criteria
 
-- [ ] `VelocityController.cpp` includes `cmon-pid.h` and holds a
+- [x] `VelocityController.cpp` includes `cmon-pid.h` and holds a
       `cmon_pid::backcalculation_t<cmon_pid::pid_bwe>` member.
-- [ ] The hand-rolled `integral +=` and freeze-or-bleed integrator code is
+- [x] The hand-rolled `integral +=` and freeze-or-bleed integrator code is
       removed from `VelocityController::update()`.
-- [ ] The public fields `kFF`, `kP`, `kI`, `iMax`, `minWheelMms`, `kAw`,
+- [x] The public fields `kFF`, `kP`, `kI`, `iMax`, `minWheelMms`, `kAw`,
       and `integral` remain on the class with the same names and types.
       (`integral` may delegate to cmon-pid's internal state accessor for
       inspection; it must read the current integrator value.)
-- [ ] `VelocityController::reset()` resets the cmon-pid internal state.
-- [ ] Constructor signature is unchanged: `VelocityController(float kFF, float kP,
+- [x] `VelocityController::reset()` resets the cmon-pid internal state.
+- [x] Constructor signature is unchanged: `VelocityController(float kFF, float kP,
       float kI, float iMax, float minWheelMms, float kAw = 0.0f)`.
-- [ ] `MotorController::updateVelGains()` pushes updated gains into the
+- [x] `MotorController::updateVelGains()` pushes updated gains into the
       cmon-pid instance when called (the six public fields are updated AND the
       cmon-pid instance is reconfigured).
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` shows no new
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` shows no new
       failures beyond the 2 pre-existing baseline failures.
-- [ ] `test_velocity_controller.py` is fully green.
-- [ ] `test_motor_controller.py` is fully green.
-- [ ] `test_body_velocity_controller.py` is fully green.
+- [x] `test_velocity_controller.py` is fully green.
+- [x] `test_motor_controller.py` is fully green.
+- [x] `test_body_velocity_controller.py` is fully green.
 
 ## Implementation Plan
 

@@ -16,11 +16,6 @@
  * two independent VelocityController instances (_vcL, _vcR) that track
  * per-wheel mm/s setpoints. See docs/kinematics-model.md §2.1.
  *
- * N13 (030-010): RatioPidController removed — its update() was never called
- * in controlTick (sync-gain coupling replaced it). The pid.* config keys
- * (ratioPidKp/Ki/Kd/Max) are retained in ConfigRegistry for host
- * compatibility (tests use SET/GET pid.*) but have no live controller effect.
- *
  * Thread safety: single-threaded tick loop only.
  */
 class MotorController {

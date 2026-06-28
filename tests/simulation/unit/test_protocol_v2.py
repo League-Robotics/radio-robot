@@ -221,11 +221,11 @@ class TestParseCFG:
     """Unit tests for parse_cfg()."""
 
     def test_full_cfg(self) -> None:
-        d = parse_cfg("CFG ml=0.487 mr=0.481 tw=120 sTimeout=200 pid.kp=2.000")
+        d = parse_cfg("CFG ml=0.487 mr=0.481 tw=120 sTimeout=200 vel.kP=0.300")
         assert d is not None
         assert d["ml"] == "0.487"
         assert d["tw"] == "120"
-        assert d["pid.kp"] == "2.000"
+        assert d["vel.kP"] == "0.300"
 
     def test_non_cfg_returns_none(self) -> None:
         assert parse_cfg("OK stop") is None
@@ -533,9 +533,9 @@ class TestResponseParsing:
         assert result["tw"] == "120"
 
     def test_get_config_keys(self) -> None:
-        proto, conn = _proto(["CFG ml=0.487 pid.kp=2.000"])
-        result = proto.get_config("ml", "pid.kp")
-        conn.send.assert_called_once_with("GET ml pid.kp", read_ms=500)
+        proto, conn = _proto(["CFG ml=0.487 vel.kP=0.300"])
+        result = proto.get_config("ml", "vel.kP")
+        conn.send.assert_called_once_with("GET ml vel.kP", read_ms=500)
         assert result is not None
         assert result["ml"] == "0.487"
 

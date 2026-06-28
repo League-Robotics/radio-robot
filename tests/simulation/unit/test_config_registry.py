@@ -76,10 +76,6 @@ REGISTRY = [
     ("adjThr",        "float"),
     ("adjGain",       "float"),
     ("tw",            "float_as_int"),
-    ("pid.kp",        "float"),
-    ("pid.ki",        "float"),
-    ("pid.kd",        "float"),
-    ("pid.max",       "float"),
     # New keys added Sprint 010-004: velocity/saturation tunables
     ("vel.kP",        "float"),
     ("vel.kI",        "float"),
@@ -117,13 +113,13 @@ REGISTRY_KEYS = [k for k, _ in REGISTRY]
 
 # Default RobotConfig values as written to the wire by GET.
 # These match defaultRobotConfig() in Config.h + expected %.3f / %d formatting.
-# Sprint 010-004 adds 6 new keys after pid.max; sprint 011-001 adds 4 more.
+# Sprint 010-004 adds 6 new velocity/saturation keys; sprint 011-001 adds 4 pose-control keys.
 # Sprint 024-006: distScale and turnScale removed (were registered but dead).
-# Total 40 keys.
+# Sprint 049-004: pid.kp/ki/kd/max removed (RatioPidController deleted).
+# Total 36 keys.
 DEFAULT_GET_LINE = (
     "CFG ml=0.487 mr=0.481 kff=0.150 klf=1.000 klb=1.000 krf=1.000 krb=1.000 "
-    "adjThr=0.500 adjGain=0.050 tw=126 pid.kp=300.000 pid.ki=0.000 pid.kd=0.000 "
-    "pid.max=30.000 vel.kP=0.300 vel.kI=0.050 vel.kFF=0.150 "
+    "adjThr=0.500 adjGain=0.050 tw=126 vel.kP=0.300 vel.kI=0.050 vel.kFF=0.150 "
     "minWheelMms=20.000 vWheelMax=400.000 steerHeadroom=20.000 "
     "turnThr=50 doneTol=5 "
     "minSpeed=50 sTimeout=500 tick=20 tlmPeriod=0 "
@@ -141,9 +137,9 @@ DEFAULT_GET_LINE = (
 class TestRegistrySpec:
     """Validate the registry spec itself is consistent."""
 
-    def test_all_40_keys_present(self) -> None:
-        """Sprint 024-006: distScale and turnScale removed, leaving 40 keys."""
-        assert len(REGISTRY) == 40, f"Expected 40 registry entries, got {len(REGISTRY)}"
+    def test_all_36_keys_present(self) -> None:
+        """Sprint 049-004: pid.* keys removed, leaving 36 keys."""
+        assert len(REGISTRY) == 36, f"Expected 36 registry entries, got {len(REGISTRY)}"
 
     def test_key_names_unique(self) -> None:
         keys = [k for k, _ in REGISTRY]
@@ -202,10 +198,6 @@ class TestGetResponseFormat:
         kv = parse_cfg(DEFAULT_GET_LINE)
         assert kv["tw"] == "126"
 
-    def test_default_pid_kp_value(self) -> None:
-        kv = parse_cfg(DEFAULT_GET_LINE)
-        assert kv["pid.kp"] == "300.000"
-
     def test_default_sTimeout_value(self) -> None:
         kv = parse_cfg(DEFAULT_GET_LINE)
         assert kv["sTimeout"] == "500"
@@ -228,15 +220,16 @@ class TestGetResponseFormat:
         )
 
     def test_response_length_reasonable(self) -> None:
-        """Confirm the response is in the expected range (~500-765 bytes).
+        """Confirm the response is in the expected range (~440-765 bytes).
         Sprint 010-004 added 6 keys raising the floor from ~238 to ~336 bytes.
         Sprint 011-001 added 4 more keys raising the floor to ~390 bytes.
         Sprint 012-001 added 10 more keys raising the floor to ~565 bytes.
         Sprint 024-006 removed 2 dead keys (distScale, turnScale), floor ~533 bytes.
+        Sprint 049-004 removed 4 pid.* keys, floor ~477 bytes.
         """
         length = len(DEFAULT_GET_LINE)
-        assert 500 < length < 765, (
-            f"GET response length {length} is outside expected range 500-765"
+        assert 440 < length < 765, (
+            f"GET response length {length} is outside expected range 440-765"
         )
 
 
@@ -473,13 +466,13 @@ class TestPoseControlTunables:
         err_line = "ERR badkey badkey"
         assert err_line == "ERR badkey badkey"
 
-    def test_full_get_40_keys(self) -> None:
-        """Full GET dump has exactly 40 keys (42 from Sprint 012-001, minus 2 removed in sprint 024-006)."""
+    def test_full_get_36_keys(self) -> None:
+        """Full GET dump has exactly 36 keys (40 from Sprint 024-006, minus 4 pid.* removed in sprint 049-004)."""
         kv = parse_cfg(DEFAULT_GET_LINE)
-        assert len(kv) == 40, f"Expected 40 keys in full GET, got {len(kv)}"
+        assert len(kv) == 36, f"Expected 36 keys in full GET, got {len(kv)}"
 
     def test_get_dump_under_768_bytes_with_new_keys(self) -> None:
-        """Confirm the 42-key GET dump fits in the 768-byte firmware buffer (expanded Sprint 012-001)."""
+        """Confirm the 36-key GET dump fits in the 768-byte firmware buffer (expanded Sprint 012-001)."""
         length = len(DEFAULT_GET_LINE.encode("utf-8"))
         assert length < 768, (
             f"GET response is {length} bytes — exceeds 768-byte buffer limit"
@@ -632,11 +625,12 @@ class TestOtosAndTurnAsymmetryKeys:
         """Report and validate the new full GET dump byte count (fits in 768-byte buffer).
 
         Sprint 024-006: distScale and turnScale removed → dump shrinks from ~565 to ~533 bytes.
+        Sprint 049-004: pid.* keys removed → dump shrinks by ~56 bytes.
         """
         length = len(DEFAULT_GET_LINE.encode("utf-8"))
-        # The 40-key GET dump is ~533 bytes; firmware buffer is 768 bytes.
-        assert 510 <= length <= 600, (
-            f"GET dump is {length} bytes — outside expected 510-600 byte range for 40 keys"
+        # The 36-key GET dump is ~477 bytes; firmware buffer is 768 bytes.
+        assert 440 <= length <= 550, (
+            f"GET dump is {length} bytes — outside expected 440-550 byte range for 36 keys"
         )
         assert length < 768, (
             f"GET dump is {length} bytes — exceeds 768-byte firmware buffer"
@@ -660,10 +654,10 @@ class TestGetSubset:
         assert response == "CFG ml=0.487"
 
     def test_get_two_keys(self) -> None:
-        response = self._simulate_get_subset(["ml", "pid.kp"])
+        response = self._simulate_get_subset(["ml", "kff"])
         kv = parse_cfg(response)
         assert "ml" in kv
-        assert "pid.kp" in kv
+        assert "kff" in kv
         assert len(kv) == 2
 
     def test_get_subset_format(self) -> None:
@@ -699,9 +693,9 @@ class TestSetResponseFormat:
         resp = self._simulate_set_err("badkey")
         assert resp == "ERR badkey badkey"
 
-    def test_set_pid_key_format(self) -> None:
-        resp = self._simulate_set_ok({"pid.kp": "2.5"})
-        assert "pid.kp=2.5" in resp
+    def test_set_vel_key_format(self) -> None:
+        resp = self._simulate_set_ok({"vel.kP": "0.4"})
+        assert "vel.kP=0.4" in resp
 
 
 class TestCorrelationId:
@@ -758,15 +752,15 @@ class TestWireFormatExamples:
         assert "mr" in kv
 
     def test_example_get_subset_format(self) -> None:
-        """GET ml pid.kp → CFG ml=0.487 pid.kp=2.0 (subset)"""
+        """GET ml kff → CFG ml=0.487 kff=0.150 (subset)"""
         # Simulate: parse a subset response
-        line = "CFG ml=0.487 pid.kp=300.000"
+        line = "CFG ml=0.487 kff=0.150"
         kv = parse_cfg(line)
-        assert kv == {"ml": "0.487", "pid.kp": "300.000"}
+        assert kv == {"ml": "0.487", "kff": "0.150"}
 
     def test_example_set_ok_format(self) -> None:
-        """SET ml=0.487 pid.kp=2.0 → OK set ml=0.487 pid.kp=2.0"""
-        line = "OK set ml=0.487 pid.kp=2.0"
+        """SET ml=0.487 kff=0.15 → OK set ml=0.487 kff=0.15"""
+        line = "OK set ml=0.487 kff=0.15"
         assert line.startswith("OK set")
         assert "ml=0.487" in line
 

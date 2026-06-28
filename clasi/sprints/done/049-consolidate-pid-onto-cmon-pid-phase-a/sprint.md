@@ -1,7 +1,7 @@
 ---
 id: 049
 title: Consolidate PID onto cmon-pid (Phase A)
-status: planning-docs
+status: done
 branch: sprint/049-consolidate-pid-onto-cmon-pid-phase-a
 use-cases: []
 issues:

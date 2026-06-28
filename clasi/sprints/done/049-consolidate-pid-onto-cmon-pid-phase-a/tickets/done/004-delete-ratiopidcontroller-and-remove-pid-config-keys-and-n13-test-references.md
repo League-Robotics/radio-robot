@@ -1,11 +1,11 @@
 ---
 id: '004'
 title: Delete RatioPidController and remove pid.* config keys and N13 test references
-status: open
+status: done
 use-cases:
-  - SUC-003
+- SUC-003
 depends-on:
-  - '003'
+- '003'
 github-issue: ''
 issue: consolidate-control-code-onto-vendored-libraries-cmon-pid-tinyekf.md
 completes_issue: false
@@ -36,18 +36,19 @@ must be updated or removed once the fields are gone.
 
 ## Acceptance Criteria
 
-- [ ] `source/control/RatioPidController.h` does not exist.
-- [ ] `source/control/RatioPidController.cpp` does not exist.
-- [ ] `source/types/Config.h` contains no `ratioPidKp`, `ratioPidKi`,
+- [x] `source/control/RatioPidController.h` does not exist.
+- [x] `source/control/RatioPidController.cpp` does not exist.
+- [x] `source/types/Config.h` contains no `ratioPidKp`, `ratioPidKi`,
       `ratioPidKd`, or `ratioPidMax` fields.
-- [ ] `source/robot/ConfigRegistry.cpp` `kRegistry[]` contains no
+- [x] `source/robot/ConfigRegistry.cpp` `kRegistry[]` contains no
       `pid.kp`, `pid.ki`, `pid.kd`, or `pid.max` entries.
-- [ ] `source/robot/DefaultConfig.cpp` contains no `ratioPid` assignments.
-- [ ] `source/control/MotorController.h` N13 note is updated or removed.
-- [ ] `tests/simulation/unit/test_ratio_pid.py` does not exist.
-- [ ] No remaining `pid.kp`, `pid.ki`, `pid.kd`, `pid.max` strings appear in
-      any `tests/simulation/` Python file (grep confirms).
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` exits with
+- [x] `source/robot/DefaultConfig.cpp` contains no `ratioPid` assignments.
+- [x] `source/control/MotorController.h` N13 note is updated or removed.
+- [x] `tests/simulation/unit/test_ratio_pid.py` does not exist.
+- [x] No remaining `pid.kp`, `pid.ki`, `pid.kd`, `pid.max` strings appear in
+      any `tests/simulation/` Python file as live config key assertions (grep confirms;
+      remaining occurrences are deletion-verification tests or comments).
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` exits with
       exactly the 2 pre-existing failures (no new failures introduced).
 
 ## Implementation Plan

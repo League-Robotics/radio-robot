@@ -1,11 +1,11 @@
 ---
 id: '005'
 title: 'Validate Phase A: full sim suite green, confinement gate passes'
-status: open
+status: done
 use-cases:
-  - SUC-004
+- SUC-004
 depends-on:
-  - '004'
+- '004'
 github-issue: ''
 issue: consolidate-control-code-onto-vendored-libraries-cmon-pid-tinyekf.md
 completes_issue: false

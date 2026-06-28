@@ -20,11 +20,10 @@ kWedgeThreshold consecutive frozen ticks (post-arming-grace) the detector fires.
 
 ARCHITECTURE NOTES (documented per ticket OQ-1 and the ZOH acceptance criterion):
 
-  * RatioPidController is DEAD CODE in the live control loop.  N13/030-010 removed
-    its update() from controlTick; the only references in source/ are the pid.*
-    config keys in ConfigRegistry (kept for host SET/GET compatibility), the
-    class's own .h/.cpp, and the removal note in MotorController.h.  It is excluded
-    from the simulatable-code denominator in tests/_infra/coverage.sh.
+  * RatioPidController was dead code in the live control loop (N13/030-010 removed
+    its update() from controlTick). It was fully deleted in sprint 049-004 along with
+    the pid.* config keys (ratioPidKp/Ki/Kd/Max) and the N13 note in MotorController.h.
+    It was excluded from the simulatable-code denominator in tests/_infra/coverage.sh.
 
   * controlTick's refreshedWheel==1 (left-only) and refreshedWheel==2 (right-only)
     ZOH branches are DEAD-IN-SIM.  Drive::periodic always calls

@@ -42,12 +42,6 @@ struct RobotConfig {
     // Geometry
     float trackwidthMm;
 
-    // Ratio PID gains
-    float ratioPidKp;
-    float ratioPidKi;
-    float ratioPidKd;
-    float ratioPidMax;
-
     // Wheel saturation ceiling and steering headroom (docs/kinematics-model.md §1.7).
     // Effective ceiling = vWheelMax - steerHeadroom.
     // SET/GET key strings use dotted form: "vWheelMax", "steerHeadroom".

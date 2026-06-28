@@ -35,11 +35,6 @@ const ConfigEntry kRegistry[] = {
     CFG_F("adjGain",      kAdjGain),
     // Geometry — stored as float, displayed as integer (mm)
     CFG_FI("tw",          trackwidthMm),
-    // Ratio PID gains
-    CFG_F("pid.kp",       ratioPidKp),
-    CFG_F("pid.ki",       ratioPidKi),
-    CFG_F("pid.kd",       ratioPidKd),
-    CFG_F("pid.max",      ratioPidMax),
     // Velocity loop gains (Sprint 010).
     // C++ field names use flat camel-case; SET/GET key strings use dotted form.
     //   velKp  <-> "vel.kP"   velKi  <-> "vel.kI"   velKff <-> "vel.kFF"
@@ -516,12 +511,6 @@ void handleSet(const ArgList& args, const char* corrId,
             break;
         }
         }
-
-        // N13 (030-010): pid.* keys are retained in the registry (host tests use
-        // them for SET/GET coverage) but the RatioPidController that once consumed
-        // them has been removed from MotorController.  Writes to pid.* update the
-        // RobotConfig fields (ratioPidKp/Ki/Kd/Max) and are accepted/rejected
-        // normally; there is no longer a live controller to push the gains into.
 
         // Per-wheel velocity gains must be pushed into the live controllers
         // (they hold copies made at construction). filt/sync are read per-tick.

@@ -5,8 +5,8 @@ atomic apply (ticket 028-004).
 Tests verify:
   - SET tw=0         → ERR badval tw=0;   live cfg.tw unchanged (GET tw shows original)
   - SET tw=abc       → ERR badval tw;     non-numeric value rejected at parse stage
-  - SET pid.kp=1.5 tw=0  → ERR badval tw=0; pid.kp unchanged (atomicity)
-  - SET pid.kp=1.5 pid.ki=0.05  → OK set; GET confirms both applied
+  - SET vel.kP=1.5 tw=0  → ERR badval tw=0; vel.kP unchanged (atomicity)
+  - SET vel.kP=1.5 vel.kI=0.05  → OK set; GET confirms both applied
   - SET ctrlPeriod=0 → ERR badval ctrlPeriod=0  (controlPeriodMs > 0 invariant)
   - SET vWheelMax=10 steerHeadroom=50 → ERR badval (vWheelMax > steerHeadroom cross-field)
   - SET rotSlip=0.3  → ERR badval rotSlip=0.300  (rotationalSlip [0.5, 1.0] invariant)
@@ -75,21 +75,21 @@ class TestSetValidationRejection:
         )
 
     def test_set_mixed_valid_invalid_rejected(self, sim) -> None:
-        """SET pid.kp=1.5 tw=0 → ERR badval; pid.kp unchanged (atomicity)."""
-        original_kp = _get_val(sim, "pid.kp")
+        """SET vel.kP=1.5 tw=0 → ERR badval; vel.kP unchanged (atomicity)."""
+        original_kp = _get_val(sim, "vel.kP")
 
-        reply = sim.send_command("SET pid.kp=1.5 tw=0")
+        reply = sim.send_command("SET vel.kP=1.5 tw=0")
         assert "ERR" in reply, f"Expected ERR for mixed valid/invalid SET, got {reply!r}"
         assert "badval" in reply, f"Expected badval in reply, got {reply!r}"
         assert "OK" not in reply, f"Must not emit OK for partially-invalid SET, got {reply!r}"
 
-    def test_set_mixed_pid_kp_unchanged(self, sim) -> None:
-        """After SET pid.kp=1.5 tw=0 is rejected, pid.kp must be unchanged (atomicity)."""
-        original_kp = _get_val(sim, "pid.kp")
-        sim.send_command("SET pid.kp=1.5 tw=0")
-        after_kp = _get_val(sim, "pid.kp")
+    def test_set_mixed_vel_kP_unchanged(self, sim) -> None:
+        """After SET vel.kP=1.5 tw=0 is rejected, vel.kP must be unchanged (atomicity)."""
+        original_kp = _get_val(sim, "vel.kP")
+        sim.send_command("SET vel.kP=1.5 tw=0")
+        after_kp = _get_val(sim, "vel.kP")
         assert original_kp == after_kp, (
-            f"pid.kp changed after rejected SET (atomicity violated): "
+            f"vel.kP changed after rejected SET (atomicity violated): "
             f"was {original_kp!r}, now {after_kp!r}"
         )
 
@@ -101,25 +101,25 @@ class TestSetValidationRejection:
 class TestSetValidationAccept:
     """Valid SETs apply atomically and reply OK set."""
 
-    def test_set_pid_kp_ki_ok(self, sim) -> None:
-        """SET pid.kp=1.5 pid.ki=0.05 → OK set containing both keys."""
-        reply = sim.send_command("SET pid.kp=1.5 pid.ki=0.05")
+    def test_set_vel_kP_kI_ok(self, sim) -> None:
+        """SET vel.kP=1.5 vel.kI=0.05 → OK set containing both keys."""
+        reply = sim.send_command("SET vel.kP=1.5 vel.kI=0.05")
         assert "OK" in reply, f"Expected OK for valid SET, got {reply!r}"
         assert "set" in reply, f"Expected 'set' verb in OK reply, got {reply!r}"
-        assert "pid.kp" in reply, f"Expected pid.kp in OK body, got {reply!r}"
-        assert "pid.ki" in reply, f"Expected pid.ki in OK body, got {reply!r}"
+        assert "vel.kP" in reply, f"Expected vel.kP in OK body, got {reply!r}"
+        assert "vel.kI" in reply, f"Expected vel.kI in OK body, got {reply!r}"
 
-    def test_set_pid_kp_reads_back(self, sim) -> None:
-        """SET pid.kp=1.5 → GET pid.kp returns 1.500."""
-        sim.send_command("SET pid.kp=1.5 pid.ki=0.05")
-        val = _get_val(sim, "pid.kp")
-        assert val == "1.500", f"Expected pid.kp=1.500 after SET, got {val!r}"
+    def test_set_vel_kP_reads_back(self, sim) -> None:
+        """SET vel.kP=1.5 → GET vel.kP returns 1.500."""
+        sim.send_command("SET vel.kP=1.5 vel.kI=0.05")
+        val = _get_val(sim, "vel.kP")
+        assert val == "1.500", f"Expected vel.kP=1.500 after SET, got {val!r}"
 
-    def test_set_pid_ki_reads_back(self, sim) -> None:
-        """SET pid.ki=0.05 → GET pid.ki returns 0.050."""
-        sim.send_command("SET pid.kp=1.5 pid.ki=0.05")
-        val = _get_val(sim, "pid.ki")
-        assert val == "0.050", f"Expected pid.ki=0.050 after SET, got {val!r}"
+    def test_set_vel_kI_reads_back(self, sim) -> None:
+        """SET vel.kI=0.05 → GET vel.kI returns 0.050."""
+        sim.send_command("SET vel.kP=1.5 vel.kI=0.05")
+        val = _get_val(sim, "vel.kI")
+        assert val == "0.050", f"Expected vel.kI=0.050 after SET, got {val!r}"
 
 
 # ---------------------------------------------------------------------------
