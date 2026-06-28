@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Shrink Origin enum to RETARGETABLE/FIXED
-status: open
+status: in-progress
 use-cases:
 - SUC-003
 depends-on:
