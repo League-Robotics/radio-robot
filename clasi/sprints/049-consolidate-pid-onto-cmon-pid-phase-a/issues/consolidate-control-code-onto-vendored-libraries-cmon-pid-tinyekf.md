@@ -1,6 +1,12 @@
 ---
-status: pending
-sprint: '050'
+status: in-progress
+sprint: 049
+tickets:
+- 049-001
+- 049-002
+- 049-003
+- 049-004
+- 049-005
 ---
 
 # Consolidate control code onto vendored libraries (cmon-pid + TinyEKF)

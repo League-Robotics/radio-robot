@@ -1,7 +1,7 @@
 ---
 id: 049
 title: Consolidate PID onto cmon-pid (Phase A)
-status: roadmap
+status: planning-docs
 branch: sprint/049-consolidate-pid-onto-cmon-pid-phase-a
 use-cases: []
 issues:
@@ -55,6 +55,32 @@ wiring that Phase B (Sprint 050) will reuse.
 Clean firmware + host-sim build (`python build.py --clean`); full sim unit
 suite green with no `RatioPidController` references remaining in source.
 
+## Test strategy
+
+IMPORTANT: The canonical test command for this sprint is:
+
+```
+uv run --with pytest python -m pytest tests/simulation -q
+```
+
+Do NOT use bare `uv run pytest` — it uses an ephemeral interpreter missing
+project deps and falsely reports mass failures.
+
+Known pre-existing baseline: exactly 2 failures unrelated to this sprint:
+- `tests/simulation/unit/test_default_config_pin.py::test_default_robot_config_unchanged`
+- `tests/simulation/unit/test_robot_config.py::TestSchemaValidation::test_tovez_validates_against_schema`
+
+A ticket is acceptable if and only if it introduces NO new failures beyond these 2.
+Deleting `test_ratio_pid.py` will reduce the passed count by one — this is expected.
+
 ## Tickets
 
-To be created at detail-planning (plan-sprint).
+Tickets execute serially in dependency order.
+
+| # | Title | Depends on |
+|---|---|---|
+| 001 | Vendor cmon-pid as float-adapted header into libraries/cmon-pid/ | — |
+| 002 | Wire libraries/cmon-pid/ include path into firmware and host-sim builds | 001 |
+| 003 | Refactor VelocityController to compose cmon-pid backcalculation core | 002 |
+| 004 | Delete RatioPidController and remove pid.* config keys and N13 test references | 003 |
+| 005 | Validate Phase A: full sim suite green, confinement gate passes | 004 |
