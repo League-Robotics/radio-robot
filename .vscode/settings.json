@@ -1,0 +1,19 @@
+{
+    // The Microsoft C/C++ IntelliSense parser (EDG) cannot parse the GCC 15.2
+    // headers this project's toolchain ships, producing phantom "expected a ';'"
+    // squiggles on valid code. Disable it and use clangd (Apple clang 21) instead,
+    // which parses GCC 15 headers correctly. cpptools is still used for debugging.
+    "C_Cpp.intelliSenseEngine": "disabled",
+
+    "clangd.path": "/usr/bin/clangd",
+    "clangd.arguments": [
+        // Read the real per-file flags the build uses.
+        "--compile-commands-dir=/Volumes/Proj/proj/RobotProjects/radio-robot-elite/build",
+        // Let clangd run the ARM GCC driver to import its newlib + libstdc++
+        // system include paths (so cross-target headers resolve correctly).
+        "--query-driver=/opt/homebrew/bin/arm-none-eabi-*",
+        "--background-index",
+        "--header-insertion=never",
+        "--pch-storage=memory"
+    ]
+}
