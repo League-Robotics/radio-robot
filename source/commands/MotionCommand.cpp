@@ -38,6 +38,9 @@ void MotionCommand::configure(float v_mms, float omega_rads, BodyVelocityControl
     // configure() to override it for the new command.
     strncpy(_doneEvtLabel, "EVT done", sizeof(_doneEvtLabel) - 1);
     _doneEvtLabel[sizeof(_doneEvtLabel) - 1] = '\0';
+    // Reset fired-condition state for the new command.
+    _firedKind    = StopCondition::Kind::NONE;
+    _firedChannel = 0;
 }
 
 void MotionCommand::setDoneEvt(const char* label)
@@ -174,6 +177,9 @@ bool MotionCommand::tick(const HardwareState& inputs, uint32_t now_ms, float dt_
                          (int)(inputs.encMm[0] - inputs.encMm[1]));
                 _replyFn(dbg, _replyCtx);
             }
+            // Record which condition fired so emitEvt can append reason=<token>.
+            _firedKind    = _stops[i].kind;
+            _firedChannel = _stops[i].sensor;
             stopped = true;
             break;
         }
@@ -243,11 +249,41 @@ void MotionCommand::softStop(uint32_t now_ms)
 // Private helpers
 // ---------------------------------------------------------------------------
 
+// Map StopCondition::Kind + channel to a reason token string.
+// Returns "" (empty) for NONE — no reason token appended for cancel paths.
+// Channel names for SENSOR mirror kSensorChannels in MotionCommands.cpp.
+// 0-3: line[0..3]; 4-7: colorR/G/B/C; 8-11: analogIn[0..3].
+static const char* mc_reasonToken(StopCondition::Kind kind, uint8_t channel)
+{
+    using K = StopCondition::Kind;
+    switch (kind) {
+        case K::NONE:     return "";
+        case K::TIME:     return "time";
+        case K::DISTANCE: return "dist";
+        case K::ROTATION: return "rot";
+        case K::HEADING:  return "heading";
+        case K::POSITION: return "pos";
+        case K::LINE_ANY: return "line";
+        case K::COLOR:    return "color";
+        case K::SENSOR: {
+            // Channel-name table: matches kSensorChannels in MotionCommands.cpp.
+            static const char* kNames[12] = {
+                "line0", "line1", "line2", "line3",
+                "colorR", "colorG", "colorB", "colorC",
+                "analogIn0", "analogIn1", "analogIn2", "analogIn3",
+            };
+            if (channel < 12) return kNames[channel];
+            return "sensor";
+        }
+        default: return "";
+    }
+}
+
 void MotionCommand::emitEvt(const char* base)
 {
     if (!_replyFn) return;
 
-    char msg[48];
+    char msg[80];
     if (_corrId[0] != '\0') {
         snprintf(msg, sizeof(msg), "%s #%s", base, _corrId);
     } else {
@@ -258,6 +294,14 @@ void MotionCommand::emitEvt(const char* base)
             ++i;
         }
         msg[i] = '\0';
+    }
+
+    // Append reason=<token> if a stop condition fired.
+    const char* reason = mc_reasonToken(_firedKind, _firedChannel);
+    if (reason[0] != '\0') {
+        int len = 0;
+        while (msg[len]) ++len;
+        snprintf(msg + len, sizeof(msg) - len, " reason=%s", reason);
     }
 
     _replyFn(msg, _replyCtx);

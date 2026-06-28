@@ -254,6 +254,11 @@ private:
     /** EVT label emitted on normal (non-cancel) completion. Default "EVT done". */
     char        _doneEvtLabel[24]    = "EVT done";
 
+    /** Which stop condition fired; NONE until one fires. */
+    StopCondition::Kind _firedKind    = StopCondition::Kind::NONE;
+    /** Channel index; valid only when _firedKind == SENSOR. */
+    uint8_t             _firedChannel = 0;
+
     /**
      * emitEvt — build and emit an EVT message via the captured reply sink.
      *

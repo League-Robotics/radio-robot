@@ -145,6 +145,37 @@ def _evaluate_condition(cond: dict, s: HardwareState, now_ms: int,
     return False
 
 
+# ---------------------------------------------------------------------------
+# Reason token map — mirrors mc_reasonToken() in MotionCommand.cpp
+# ---------------------------------------------------------------------------
+
+_SENSOR_CHANNEL_NAMES = [
+    "line0", "line1", "line2", "line3",
+    "colorR", "colorG", "colorB", "colorC",
+    "analogIn0", "analogIn1", "analogIn2", "analogIn3",
+]
+
+def _reason_token(kind: str, channel: int = 0) -> str:
+    """Map stop kind (string) + channel index to a reason token string."""
+    _MAP = {
+        'NONE':     '',
+        'TIME':     'time',
+        'DISTANCE': 'dist',
+        'ROTATION': 'rot',
+        'HEADING':  'heading',
+        'POSITION': 'pos',
+        'LINE_ANY': 'line',
+        'COLOR':    'color',
+    }
+    if kind in _MAP:
+        return _MAP[kind]
+    if kind == 'SENSOR':
+        if 0 <= channel < len(_SENSOR_CHANNEL_NAMES):
+            return _SENSOR_CHANNEL_NAMES[channel]
+        return 'sensor'
+    return ''
+
+
 class MotionCommand:
     """
     Python mirror of source/control/MotionCommand.cpp.
@@ -171,6 +202,9 @@ class MotionCommand:
         self._now_ms    = 0
         # Mirrors C++ MotionCommand::setDoneEvt(); default "EVT done".
         self._done_evt_label = 'EVT done'
+        # Fired condition tracking (mirrors _firedKind / _firedChannel in C++).
+        self._fired_kind:    str = 'NONE'
+        self._fired_channel: int = 0
 
         # Captured EVT messages.
         self.emitted_evts: list[str] = []
@@ -193,6 +227,8 @@ class MotionCommand:
         self._soft_deadline_ms = 0
         self._now_ms    = 0
         self._done_evt_label = 'EVT done'
+        self._fired_kind    = 'NONE'
+        self._fired_channel = 0
         self.emitted_evts = []
 
     def add_stop(self, cond: dict) -> bool:
@@ -268,6 +304,9 @@ class MotionCommand:
         stopped = False
         for c in self._stops:
             if _evaluate_condition(c, inputs, now_ms, self._baseline):
+                # Record which condition fired (mirrors C++ _firedKind/_firedChannel).
+                self._fired_kind    = c.get('kind', 'NONE')
+                self._fired_channel = c.get('sensor', 0)
                 stopped = True
                 break
 
@@ -305,6 +344,10 @@ class MotionCommand:
             msg = f"{base} #{self._corr_id}"
         else:
             msg = base
+        # Append reason=<token> when a stop condition fired (not for cancel paths).
+        reason = _reason_token(self._fired_kind, self._fired_channel)
+        if reason:
+            msg = f"{msg} reason={reason}"
         self.emitted_evts.append(msg)
         if self._reply_fn:
             self._reply_fn(msg, None)
@@ -381,7 +424,7 @@ class TestSoftTeardown:
 
         assert mc.active() is False
         assert len(mc.emitted_evts) == 1
-        assert mc.emitted_evts[0] == 'EVT done'
+        assert mc.emitted_evts[0] == 'EVT done reason=time'
 
     def test_soft_active_false_after_evt_done(self):
         """active() is False once EVT done is emitted.
@@ -450,7 +493,7 @@ class TestSoftDeadline:
         mc.tick(HardwareState(), now_ms=110, dt_s=0.01)  # converged → done
 
         assert mc.active() is False
-        assert mc.emitted_evts[-1] == 'EVT done'
+        assert mc.emitted_evts[-1] == 'EVT done reason=time'
 
 
 # ---------------------------------------------------------------------------
@@ -803,7 +846,7 @@ class TestCorrId:
 
         mc.tick(HardwareState(), now_ms=100, dt_s=0.01)   # TIME fires → _stopping
         mc.tick(HardwareState(), now_ms=110, dt_s=0.01)   # BVC at target → EVT done
-        assert mc.emitted_evts[-1] == 'EVT done #abc123'
+        assert mc.emitted_evts[-1] == 'EVT done #abc123 reason=time'
 
     def test_evt_cancelled_includes_corr_id(self):
         """EVT cancelled includes corrId."""
@@ -829,7 +872,7 @@ class TestCorrId:
 
         mc.tick(HardwareState(), now_ms=100, dt_s=0.01)   # TIME fires → _stopping
         mc.tick(HardwareState(), now_ms=110, dt_s=0.01)   # BVC at target → EVT done
-        assert mc.emitted_evts[-1] == 'EVT done'
+        assert mc.emitted_evts[-1] == 'EVT done reason=time'
 
 
 # ---------------------------------------------------------------------------
