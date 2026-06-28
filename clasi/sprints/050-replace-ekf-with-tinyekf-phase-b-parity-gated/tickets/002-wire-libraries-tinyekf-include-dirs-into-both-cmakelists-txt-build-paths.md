@@ -1,9 +1,11 @@
 ---
 id: '002'
 title: Wire libraries/tinyekf include dirs into both CMakeLists.txt build paths
-status: open
-use-cases: ["SUC-001"]
-depends-on: ["050-001"]
+status: in-progress
+use-cases:
+- SUC-001
+depends-on:
+- 050-001
 github-issue: ''
 issue: consolidate-control-code-onto-vendored-libraries-cmon-pid-tinyekf.md
 completes_issue: false
