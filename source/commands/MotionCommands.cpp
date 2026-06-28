@@ -13,6 +13,14 @@
 //   Only the open-ended VW branch (no stop params) in handleVW emits replyOK.
 //   All stop-param branches in handleVW call begin*() and return WITHOUT
 //   calling replyOK.
+//
+// Migration (051-006): bespoke parse functions (parseS, parseT, parseD,
+// parseG, parseR, parseRT, parseX, parseNoArgs) replaced with static ArgSchema
+// structs + makeSchemaCmd registrations.  parseTURN, parseVW, parse_VW are
+// retained with bodies rewritten using argInt / argStr / kvFind helpers.
+// setIntArg, packSensorArg, vwScanKV, vwHasKey local helpers deleted; their
+// call sites now use argInt (from ArgParse.h) and inline KV scanning (for
+// handleVW's STR-args-based KV lookup).
 
 #include "MotionCommands.h"
 #include "superstructure/MotionController.h"
@@ -23,8 +31,8 @@
 #include "BodyKinematics.h"
 #include "StopCondition.h"
 #include "CommandTypes.h"
+#include "ArgParse.h"
 #include <cstdio>
-#include <cmath>
 #include <cstdlib>
 #include <cstring>
 
@@ -96,34 +104,6 @@ static bool mc_parseSensorToken(const char* value,
     return true;
 }
 
-// ── Helper macro: set one INT arg ───────────────────────────────────────────
-static inline void setIntArg(Argument& a, int v)
-{
-    a.type    = ArgType::INT;
-    a.ival    = v;
-    a.sval[0] = '\0';
-}
-
-// ── Helper: copy a sensor= KV value string into args[idx] as STR ───────────
-static int packSensorArg(ArgList& out, int nextIdx,
-                         const KVPair* kvs, int nkv)
-{
-    for (int i = 0; i < nkv; ++i) {
-        if (kvs[i].key && strcmp(kvs[i].key, "sensor") == 0) {
-            out.args[nextIdx].type = ArgType::STR;
-            out.args[nextIdx].ival = 0;
-            out.args[nextIdx].fval = 0.0f;
-            int slen = 0;
-            const char* src = kvs[i].value;
-            while (*src && slen < (int)(sizeof(out.args[nextIdx].sval) - 1))
-                out.args[nextIdx].sval[slen++] = *src++;
-            out.args[nextIdx].sval[slen] = '\0';
-            return nextIdx + 1;
-        }
-    }
-    return nextIdx;  // no sensor= found
-}
-
 // ---------------------------------------------------------------------------
 // pushVW — build a VW ParsedCommand and push_front it onto the queue.
 //
@@ -160,8 +140,27 @@ static int packKVArg(ArgList& out, int idx, const char* key, int ival)
     return idx + 1;
 }
 
-// ── Helper: scan args[2..] for a "key=value" string and return int value. ──
-static int vwScanKV(const ArgList& args, const char* key, int defVal)
+// ── Inline KV helpers for handleVW (scan STR args[2..] for "key=value") ────
+//
+// These replace the deleted vwHasKey / vwScanKV local helpers.  They scan
+// args.args[2..args.count-1] for STR entries whose prefix matches "key=",
+// mirroring the original logic exactly.
+
+static bool argsHasKey(const ArgList& args, const char* key)
+{
+    int keyLen = 0;
+    while (key[keyLen]) ++keyLen;
+    for (int i = 2; i < args.count; ++i) {
+        if (args.args[i].type != ArgType::STR) continue;
+        const char* s = args.args[i].sval;
+        int j = 0;
+        while (j < keyLen && s[j] == key[j]) ++j;
+        if (j == keyLen && s[j] == '=') return true;
+    }
+    return false;
+}
+
+static int argsScanKV(const ArgList& args, const char* key, int defVal)
 {
     int keyLen = 0;
     while (key[keyLen]) ++keyLen;
@@ -177,44 +176,58 @@ static int vwScanKV(const ArgList& args, const char* key, int defVal)
     return defVal;
 }
 
-// ── Helper: check if a key is present in args[2..] ──────────────────────────
-static bool vwHasKey(const ArgList& args, const char* key)
-{
-    int keyLen = 0;
-    while (key[keyLen]) ++keyLen;
-    for (int i = 2; i < args.count; ++i) {
-        if (args.args[i].type != ArgType::STR) continue;
-        const char* s = args.args[i].sval;
-        int j = 0;
-        while (j < keyLen && s[j] == key[j]) ++j;
-        if (j == keyLen && s[j] == '=') return true;
-    }
-    return false;
-}
+// ---------------------------------------------------------------------------
+// Argument schemas — declarative replacements for bespoke parse functions.
+// ---------------------------------------------------------------------------
+
+// S <l> <r> — 2 mandatory ranged INTs, [-1000, 1000] each.
+static const ArgDef sDefs[2] = {
+    { "l", ArgKind::INT, true, -1000, 1000 },
+    { "r", ArgKind::INT, true, -1000, 1000 },
+};
+static const ArgSchema sSchema = { sDefs, 2, 2, false, nullptr };
+
+// T <l> <r> <ms> [sensor=...] — 3 mandatory ranged INTs; sensor= KV packed as trailing STR.
+static const ArgDef tDefs[3] = {
+    { "l",  ArgKind::INT, true, -1000,  1000  },
+    { "r",  ArgKind::INT, true, -1000,  1000  },
+    { "ms", ArgKind::INT, true,     1, 30000  },
+};
+static const ArgSchema tSchema = { tDefs, 3, 3, false, "sensor" };
+
+// D <l> <r> <mm> [sensor=...] — 3 mandatory ranged INTs; sensor= KV packed as trailing STR.
+static const ArgDef dDefs[3] = {
+    { "l",  ArgKind::INT, true, -1000,  1000  },
+    { "r",  ArgKind::INT, true, -1000,  1000  },
+    { "mm", ArgKind::INT, true,     1, 10000  },
+};
+static const ArgSchema dSchema = { dDefs, 3, 3, false, "sensor" };
+
+// G <x> <y> <speed> — 3 mandatory ranged INTs.
+static const ArgDef gDefs[3] = {
+    { "x",     ArgKind::INT, true, -10000, 10000 },
+    { "y",     ArgKind::INT, true, -10000, 10000 },
+    { "speed", ArgKind::INT, true,      1,  1000 },
+};
+static const ArgSchema gSchema = { gDefs, 3, 3, false, nullptr };
+
+// R <speed> <radius> — 2 mandatory ranged INTs.
+static const ArgDef rDefs[2] = {
+    { "speed",  ArgKind::INT, true,  -1000,  1000  },
+    { "radius", ArgKind::INT, true, -10000, 10000  },
+};
+static const ArgSchema rSchema = { rDefs, 2, 2, false, nullptr };
+
+// RT <deg> — 1 mandatory ranged INT.
+static const ArgDef rtDefs[1] = {
+    { "deg", ArgKind::INT, true, -180000, 180000 },
+};
+static const ArgSchema rtSchema = { rtDefs, 1, 1, false, nullptr };
+
+// X [soft] — 0 or 1 optional token; variadic so "soft" token is captured as STR.
+static const ArgSchema xSchema = { nullptr, 0, 0, true, nullptr };
 
 // ── S ────────────────────────────────────────────────────────────────────────
-
-static ParseResult parseS(const char* const* tokens, int ntokens,
-                           const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult res;
-    if (ntokens < 2) {
-        res.ok = false; res.err.code = "badarg"; res.err.detail = nullptr; return res;
-    }
-    int l = atoi(tokens[0]);
-    int r = atoi(tokens[1]);
-    if (l < -1000 || l > 1000) {
-        res.ok = false; res.err.code = "range"; res.err.detail = "l"; return res;
-    }
-    if (r < -1000 || r > 1000) {
-        res.ok = false; res.err.code = "range"; res.err.detail = "r"; return res;
-    }
-    res.ok = true;
-    res.args.count = 2;
-    setIntArg(res.args.args[0], l);
-    setIntArg(res.args.args[1], r);
-    return res;
-}
 
 // handleS — VW converter (no stop params → S/streaming mode via beginStream fallback).
 //
@@ -238,8 +251,8 @@ static void handleS(const ArgList& args, const char* corrId,
 
         ArgList vwArgs;
         vwArgs.count = 2;
-        setIntArg(vwArgs.args[0], v_int);
-        setIntArg(vwArgs.args[1], omega_int);
+        argInt(vwArgs.args[0], v_int);
+        argInt(vwArgs.args[1], omega_int);
         // Pack a "stream=1" marker so handleVW routes via beginStream (seed
         // BVC immediately, no trapezoid ramp).  This preserves the original
         // S-command semantics on the queue path.
@@ -268,35 +281,6 @@ static void handleS(const ArgList& args, const char* corrId,
 }
 
 // ── T ────────────────────────────────────────────────────────────────────────
-
-static ParseResult parseT(const char* const* tokens, int ntokens,
-                           const KVPair* kvs, int nkv)
-{
-    ParseResult res;
-    if (ntokens < 3) {
-        res.ok = false; res.err.code = "badarg"; res.err.detail = nullptr; return res;
-    }
-    int l  = atoi(tokens[0]);
-    int r  = atoi(tokens[1]);
-    int ms = atoi(tokens[2]);
-    if (l < -1000 || l > 1000) {
-        res.ok = false; res.err.code = "range"; res.err.detail = "l"; return res;
-    }
-    if (r < -1000 || r > 1000) {
-        res.ok = false; res.err.code = "range"; res.err.detail = "r"; return res;
-    }
-    if (ms < 1 || ms > 30000) {
-        res.ok = false; res.err.code = "range"; res.err.detail = "ms"; return res;
-    }
-    res.ok = true;
-    res.args.count = 3;
-    setIntArg(res.args.args[0], l);
-    setIntArg(res.args.args[1], r);
-    setIntArg(res.args.args[2], ms);
-    // Pack optional sensor= into args[3].
-    res.args.count = packSensorArg(res.args, 3, kvs, nkv);
-    return res;
-}
 
 // handleT — VW converter with t=<ms> stop param.
 //
@@ -335,8 +319,8 @@ static void handleT(const ArgList& args, const char* corrId,
 
         ArgList vwArgs;
         vwArgs.count = 2;
-        setIntArg(vwArgs.args[0], v_int);
-        setIntArg(vwArgs.args[1], omega_int);
+        argInt(vwArgs.args[0], v_int);
+        argInt(vwArgs.args[1], omega_int);
         vwArgs.count = packKVArg(vwArgs, 2, "t", ms);
 
         // sensor= forwarding: pack into the VW args if present.
@@ -359,7 +343,7 @@ static void handleT(const ArgList& args, const char* corrId,
                             ctx->robot->systemTime(),
                             ctx->robot->state.desired,
                             replyFn, replyCtx, corrId);
-        // Optional sensor= stop condition (packed into args[3] by parseT).
+        // Optional sensor= stop condition (packed into args[3] by tSchema packKv).
         if (args.count >= 4) {
             uint8_t ch; float thr; StopCondition::Cmp cmp;
             if (!mc_parseSensorToken(args.args[3].sval, ch, thr, cmp)) {
@@ -379,35 +363,6 @@ static void handleT(const ArgList& args, const char* corrId,
 }
 
 // ── D ────────────────────────────────────────────────────────────────────────
-
-static ParseResult parseD(const char* const* tokens, int ntokens,
-                           const KVPair* kvs, int nkv)
-{
-    ParseResult res;
-    if (ntokens < 3) {
-        res.ok = false; res.err.code = "badarg"; res.err.detail = nullptr; return res;
-    }
-    int l  = atoi(tokens[0]);
-    int r  = atoi(tokens[1]);
-    int mm = atoi(tokens[2]);
-    if (l < -1000 || l > 1000) {
-        res.ok = false; res.err.code = "range"; res.err.detail = "l"; return res;
-    }
-    if (r < -1000 || r > 1000) {
-        res.ok = false; res.err.code = "range"; res.err.detail = "r"; return res;
-    }
-    if (mm < 1 || mm > 10000) {
-        res.ok = false; res.err.code = "range"; res.err.detail = "mm"; return res;
-    }
-    res.ok = true;
-    res.args.count = 3;
-    setIntArg(res.args.args[0], l);
-    setIntArg(res.args.args[1], r);
-    setIntArg(res.args.args[2], mm);
-    // Pack optional sensor= into args[3].
-    res.args.count = packSensorArg(res.args, 3, kvs, nkv);
-    return res;
-}
 
 // handleD — VW converter with dist=<mm> stop param.
 //
@@ -441,8 +396,8 @@ static void handleD(const ArgList& args, const char* corrId,
 
         ArgList vwArgs;
         vwArgs.count = 2;
-        setIntArg(vwArgs.args[0], v_int);
-        setIntArg(vwArgs.args[1], omega_int);
+        argInt(vwArgs.args[0], v_int);
+        argInt(vwArgs.args[1], omega_int);
         vwArgs.count = packKVArg(vwArgs, 2, "dist", mm);
 
         // sensor= forwarding: pack into the VW args if present.
@@ -463,7 +418,7 @@ static void handleD(const ArgList& args, const char* corrId,
         // Queue not available: fall back to direct distanceDrive() (resets enc baseline).
         ctx->robot->distanceDrive((int32_t)l, (int32_t)r, (int32_t)mm,
                                    replyFn, replyCtx, corrId);
-        // Optional sensor= stop condition (packed into args[3] by parseD).
+        // Optional sensor= stop condition (packed into args[3] by dSchema packKv).
         if (args.count >= 4) {
             uint8_t ch; float thr; StopCondition::Cmp cmp;
             if (!mc_parseSensorToken(args.args[3].sval, ch, thr, cmp)) {
@@ -484,33 +439,6 @@ static void handleD(const ArgList& args, const char* corrId,
 
 // ── G ────────────────────────────────────────────────────────────────────────
 
-static ParseResult parseG(const char* const* tokens, int ntokens,
-                           const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult res;
-    if (ntokens < 3) {
-        res.ok = false; res.err.code = "badarg"; res.err.detail = nullptr; return res;
-    }
-    int x     = atoi(tokens[0]);
-    int y     = atoi(tokens[1]);
-    int speed = atoi(tokens[2]);
-    if (x < -10000 || x > 10000) {
-        res.ok = false; res.err.code = "range"; res.err.detail = "x"; return res;
-    }
-    if (y < -10000 || y > 10000) {
-        res.ok = false; res.err.code = "range"; res.err.detail = "y"; return res;
-    }
-    if (speed < 1 || speed > 1000) {
-        res.ok = false; res.err.code = "range"; res.err.detail = "speed"; return res;
-    }
-    res.ok = true;
-    res.args.count = 3;
-    setIntArg(res.args.args[0], x);
-    setIntArg(res.args.args[1], y);
-    setIntArg(res.args.args[2], speed);
-    return res;
-}
-
 // handleG — VW converter with x=<mm>, y=<mm>, speed=<mm/s> stop params.
 //
 // G is a go-to command: VW args use speed as v, 0 as omega (G's own logic
@@ -527,8 +455,8 @@ static void handleG(const ArgList& args, const char* corrId,
     if (ctx->queue != nullptr) {
         ArgList vwArgs;
         vwArgs.count = 2;
-        setIntArg(vwArgs.args[0], speed);   // v = speed
-        setIntArg(vwArgs.args[1], 0);       // omega = 0 (G's steering computed by VW handler)
+        argInt(vwArgs.args[0], speed);   // v = speed
+        argInt(vwArgs.args[1], 0);       // omega = 0 (G's steering computed by VW handler)
         vwArgs.count = packKVArg(vwArgs, 2, "x", x);
         vwArgs.count = packKVArg(vwArgs, vwArgs.count, "y", y);
         vwArgs.count = packKVArg(vwArgs, vwArgs.count, "speed", speed);
@@ -556,28 +484,6 @@ static void handleG(const ArgList& args, const char* corrId,
 
 // ── R ────────────────────────────────────────────────────────────────────────
 
-static ParseResult parseR(const char* const* tokens, int ntokens,
-                           const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult res;
-    if (ntokens < 2) {
-        res.ok = false; res.err.code = "badarg"; res.err.detail = nullptr; return res;
-    }
-    int speed  = atoi(tokens[0]);
-    int radius = atoi(tokens[1]);
-    if (speed < -1000 || speed > 1000) {
-        res.ok = false; res.err.code = "range"; res.err.detail = "speed"; return res;
-    }
-    if (radius < -10000 || radius > 10000) {
-        res.ok = false; res.err.code = "range"; res.err.detail = "radius"; return res;
-    }
-    res.ok = true;
-    res.args.count = 2;
-    setIntArg(res.args.args[0], speed);
-    setIntArg(res.args.args[1], radius);
-    return res;
-}
-
 // handleR — VW converter with "speed=<mm/s>", "radius=<mm>" stop params.
 //
 // R (arc) is open-ended: v = speed, omega = speed/radius (κ = 1/radius).
@@ -598,8 +504,8 @@ static void handleR(const ArgList& args, const char* corrId,
 
         ArgList vwArgs;
         vwArgs.count = 2;
-        setIntArg(vwArgs.args[0], v_int);
-        setIntArg(vwArgs.args[1], omega_int);
+        argInt(vwArgs.args[0], v_int);
+        argInt(vwArgs.args[1], omega_int);
         vwArgs.count = packKVArg(vwArgs, 2, "speed", speed);
         vwArgs.count = packKVArg(vwArgs, vwArgs.count, "radius", radius);
 
@@ -639,21 +545,23 @@ static ParseResult parseTURN(const char* const* tokens, int ntokens,
     }
     // Parse optional eps=<cdeg> kv; default 300.
     int eps_cdeg = 300;
-    for (int i = 0; i < nkv; ++i) {
-        if (kvs[i].key && strcmp(kvs[i].key, "eps") == 0) {
-            eps_cdeg = atoi(kvs[i].value);
-            if (eps_cdeg < 10 || eps_cdeg > 1800) {
-                res.ok = false; res.err.code = "range"; res.err.detail = "eps"; return res;
-            }
-            break;
+    const KVPair* epsKv = kvFind(kvs, nkv, "eps");
+    if (epsKv) {
+        eps_cdeg = atoi(epsKv->value);
+        if (eps_cdeg < 10 || eps_cdeg > 1800) {
+            res.ok = false; res.err.code = "range"; res.err.detail = "eps"; return res;
         }
     }
     res.ok = true;
     res.args.count = 2;
-    setIntArg(res.args.args[0], heading_cdeg);
-    setIntArg(res.args.args[1], eps_cdeg);
-    // Pack optional sensor= into args[2].
-    res.args.count = packSensorArg(res.args, 2, kvs, nkv);
+    argInt(res.args.args[0], heading_cdeg);
+    argInt(res.args.args[1], eps_cdeg);
+    // Pack optional sensor= into args[2] using kvFind + argStr.
+    const KVPair* sensorKv = kvFind(kvs, nkv, "sensor");
+    if (sensorKv && sensorKv->value) {
+        argStr(res.args.args[2], sensorKv->value);
+        res.args.count = 3;
+    }
     return res;
 }
 
@@ -684,8 +592,8 @@ static void handleTURN(const ArgList& args, const char* corrId,
 
         ArgList vwArgs;
         vwArgs.count = 2;
-        setIntArg(vwArgs.args[0], 0);   // v = 0 (spin-in-place; omega computed by VW handler)
-        setIntArg(vwArgs.args[1], 0);   // omega placeholder; VW handler uses "h" param
+        argInt(vwArgs.args[0], 0);   // v = 0 (spin-in-place; omega computed by VW handler)
+        argInt(vwArgs.args[1], 0);   // omega placeholder; VW handler uses "h" param
         vwArgs.count = packKVArg(vwArgs, 2, "h", heading_cdeg);
         vwArgs.count = packKVArg(vwArgs, vwArgs.count, "eps", eps_cdeg);
 
@@ -730,23 +638,6 @@ static void handleTURN(const ArgList& args, const char* corrId,
 
 // ── RT (relative turn, encoder-arc stop) ───────────────────────────────────────
 
-static ParseResult parseRT(const char* const* tokens, int ntokens,
-                            const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult res;
-    if (ntokens < 1) {
-        res.ok = false; res.err.code = "badarg"; res.err.detail = nullptr; return res;
-    }
-    int rel_cdeg = atoi(tokens[0]);
-    if (rel_cdeg < -180000 || rel_cdeg > 180000) {   // ±1800° relative
-        res.ok = false; res.err.code = "range"; res.err.detail = "deg"; return res;
-    }
-    res.ok = true;
-    res.args.count = 1;
-    setIntArg(res.args.args[0], rel_cdeg);
-    return res;
-}
-
 // handleRT — RELATIVE spin-in-place by rel_cdeg, stopped on encoder arc.
 // Enqueues a VW with "rot=<cdeg>" so the VW handler (loop context) calls
 // beginRotation(). Falls back to a direct call when the queue is null.
@@ -759,8 +650,8 @@ static void handleRT(const ArgList& args, const char* corrId,
     if (ctx->queue != nullptr) {
         ArgList vwArgs;
         vwArgs.count = 2;
-        setIntArg(vwArgs.args[0], 0);   // v = 0 (spin in place)
-        setIntArg(vwArgs.args[1], 0);   // omega placeholder (computed by beginRotation)
+        argInt(vwArgs.args[0], 0);   // v = 0 (spin in place)
+        argInt(vwArgs.args[1], 0);   // omega placeholder (computed by beginRotation)
         vwArgs.count = packKVArg(vwArgs, 2, "rot", rel_cdeg);
         char body[32];
         snprintf(body, sizeof(body), "rot=%d", rel_cdeg);
@@ -819,8 +710,8 @@ static ParseResult parseVW(const char* const* tokens, int ntokens,
     }
     res.ok = true;
     res.args.count = 2;
-    setIntArg(res.args.args[0], v);
-    setIntArg(res.args.args[1], omega);
+    argInt(res.args.args[0], v);
+    argInt(res.args.args[1], omega);
     return res;
 }
 
@@ -843,8 +734,8 @@ static void handleVW(const ArgList& args, const char* corrId,
     // Only the open-ended path (no stop params) emits "OK vw ...".
 
     // Check for RT (relative rotation): "rot=<cdeg>" present.
-    if (vwHasKey(args, "rot")) {
-        int rot_cdeg = vwScanKV(args, "rot", 0);
+    if (argsHasKey(args, "rot")) {
+        int rot_cdeg = argsScanKV(args, "rot", 0);
         // Seam 3 (042-001): route through requestGoal — same beginRotation call.
         GoalRequest gr{};
         gr.goal    = Goal::ROTATE;
@@ -860,9 +751,9 @@ static void handleVW(const ArgList& args, const char* corrId,
     }
 
     // Check for TURN: "h=<cdeg>" present (and no "x" key).
-    if (vwHasKey(args, "h") && !vwHasKey(args, "x")) {
-        int h_cdeg  = vwScanKV(args, "h",   0);
-        int eps     = vwScanKV(args, "eps", 300);
+    if (argsHasKey(args, "h") && !argsHasKey(args, "x")) {
+        int h_cdeg  = argsScanKV(args, "h",   0);
+        int eps     = argsScanKV(args, "eps", 300);
 
         // Seam 3 (042-001): route through requestGoal — same beginTurn call.
         GoalRequest gr{};
@@ -893,10 +784,10 @@ static void handleVW(const ArgList& args, const char* corrId,
     }
 
     // Check for G (go-to): "x=<mm>" and "y=<mm>" present.
-    if (vwHasKey(args, "x") && vwHasKey(args, "y")) {
-        int x_mm    = vwScanKV(args, "x",     0);
-        int y_mm    = vwScanKV(args, "y",     0);
-        int speed   = vwScanKV(args, "speed", v);  // fallback to v
+    if (argsHasKey(args, "x") && argsHasKey(args, "y")) {
+        int x_mm    = argsScanKV(args, "x",     0);
+        int y_mm    = argsScanKV(args, "y",     0);
+        int speed   = argsScanKV(args, "speed", v);  // fallback to v
 
         // Seam 3 (042-001): route through requestGoal — same beginGoTo call.
         GoalRequest gr{};
@@ -916,9 +807,9 @@ static void handleVW(const ArgList& args, const char* corrId,
     }
 
     // Check for R (arc): "radius=<mm>" present (speed=<mm/s> also present).
-    if (vwHasKey(args, "radius")) {
-        int speed   = vwScanKV(args, "speed",  v);
-        int radius  = vwScanKV(args, "radius", 0);
+    if (argsHasKey(args, "radius")) {
+        int speed   = argsScanKV(args, "speed",  v);
+        int radius  = argsScanKV(args, "radius", 0);
 
         // Seam 3 (042-001): route through requestGoal — same beginArc call.
         GoalRequest gr{};
@@ -937,8 +828,8 @@ static void handleVW(const ArgList& args, const char* corrId,
     }
 
     // Check for T (timed): "t=<ms>" present.
-    if (vwHasKey(args, "t")) {
-        int ms = vwScanKV(args, "t", 0);
+    if (argsHasKey(args, "t")) {
+        int ms = argsScanKV(args, "t", 0);
 
         // Convert (v, omega) back to (vL, vR) for beginTimed (which takes wheel speeds).
         float b = ctx->robot->config.trackwidthMm;
@@ -975,8 +866,8 @@ static void handleVW(const ArgList& args, const char* corrId,
     }
 
     // Check for D (distance): "dist=<mm>" present.
-    if (vwHasKey(args, "dist")) {
-        int mm = vwScanKV(args, "dist", 0);
+    if (argsHasKey(args, "dist")) {
+        int mm = argsScanKV(args, "dist", 0);
 
         // Convert (v, omega) back to (vL, vR) for distanceDrive (which takes wheel speeds).
         float b = ctx->robot->config.trackwidthMm;
@@ -1026,7 +917,7 @@ static void handleVW(const ArgList& args, const char* corrId,
     // beginStream doesn't reply — the S converter's replyOK covers it.
     // The open-ended VW path (no stream, no stop params) is the direct VW
     // command; it emits exactly one replyOK here.
-    if (vwHasKey(args, "stream")) {
+    if (argsHasKey(args, "stream")) {
         // S streaming path — seed BVC at target and go to STREAMING mode.
         // Convert (v, omega) back to (vL, vR) for beginStream.
         float b  = ctx->robot->config.trackwidthMm;
@@ -1114,8 +1005,8 @@ static ParseResult parse_VW(const char* const* tokens, int ntokens,
     }
     res.ok = true;
     res.args.count = 2;
-    setIntArg(res.args.args[0], v);
-    setIntArg(res.args.args[1], omega);
+    argInt(res.args.args[0], v);
+    argInt(res.args.args[1], omega);
     return res;
 }
 
@@ -1133,38 +1024,6 @@ static void handle_VW(const ArgList& args, const char* corrId,
 
 // ── X and STOP ───────────────────────────────────────────────────────────────
 
-static ParseResult parseNoArgs(const char* const* /*tokens*/, int /*ntokens*/,
-                               const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult res;
-    res.ok = true;
-    res.args.count = 0;
-    return res;
-}
-
-// parseX — optional "soft" positional token; stored as STR arg if present.
-static ParseResult parseX(const char* const* tokens, int ntokens,
-                           const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult res;
-    res.ok = true;
-    if (ntokens >= 1 && strcmp(tokens[0], "soft") == 0) {
-        // Pack "soft" as STR arg[0].
-        res.args.count = 1;
-        res.args.args[0].type = ArgType::STR;
-        res.args.args[0].ival = 0;
-        res.args.args[0].fval = 0.0f;
-        res.args.args[0].sval[0] = 's';
-        res.args.args[0].sval[1] = 'o';
-        res.args.args[0].sval[2] = 'f';
-        res.args.args[0].sval[3] = 't';
-        res.args.args[0].sval[4] = '\0';
-    } else {
-        res.args.count = 0;
-    }
-    return res;
-}
-
 static void handleX(const ArgList& args, const char* corrId,
                     ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
@@ -1172,6 +1031,7 @@ static void handleX(const ArgList& args, const char* corrId,
     uint32_t now = ctx->robot->systemTime();
 
     // Check for "soft" positional arg — soft stop ramps BVC to zero.
+    // xSchema is variadic so "soft" arrives as STR arg[0] when present.
     bool isSoft = (args.count >= 1 &&
                    args.args[0].type == ArgType::STR &&
                    strcmp(args.args[0].sval, "soft") == 0);
@@ -1215,16 +1075,16 @@ std::vector<CommandDescriptor> getMotionCommands(MotionCtx* ctx)
     ctx->vwDesc.flags      = CMD_ACCESS_HARDWARE;
 
     return {
-        makeCmd("S",    parseS,      handleS,    ctx, "badarg"), // set wheel speeds (mm/s)
-        makeCmd("T",    parseT,      handleT,    ctx, "badarg"), // timed drive (ms)
-        makeCmd("D",    parseD,      handleD,    ctx, "badarg"), // distance drive (mm)
-        makeCmd("G",    parseG,      handleG,    ctx, "badarg"), // goto encoder position
-        makeCmd("R",    parseR,      handleR,    ctx, "badarg"), // arc drive: R <speed> <radius_mm>
-        makeCmd("TURN", parseTURN,   handleTURN, ctx, "badarg"), // spin in place to absolute heading
-        makeCmd("RT",   parseRT,     handleRT,   ctx, "badarg"), // relative spin by <cdeg>
-        makeCmd("VW",   parseVW,     handleVW,   ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE),
-        makeCmd("_VW",  parse_VW,    handle_VW,  ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE),
-        makeCmd("X",    parseX,      handleX,    ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE),
-        makeCmd("STOP", parseNoArgs, handleSTOP, ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE),
+        makeSchemaCmd("S",    &sSchema,  handleS,    ctx, "badarg"),                                        // set wheel speeds (mm/s)
+        makeSchemaCmd("T",    &tSchema,  handleT,    ctx, "badarg"),                                        // timed drive (ms)
+        makeSchemaCmd("D",    &dSchema,  handleD,    ctx, "badarg"),                                        // distance drive (mm)
+        makeSchemaCmd("G",    &gSchema,  handleG,    ctx, "badarg"),                                        // goto encoder position
+        makeSchemaCmd("R",    &rSchema,  handleR,    ctx, "badarg"),                                        // arc drive: R <speed> <radius_mm>
+        makeCmd(      "TURN", parseTURN, handleTURN, ctx, "badarg"),                                        // spin in place to absolute heading
+        makeSchemaCmd("RT",   &rtSchema, handleRT,   ctx, "badarg"),                                        // relative spin by <cdeg>
+        makeCmd(      "VW",   parseVW,   handleVW,   ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // body-twist velocity
+        makeCmd(      "_VW",  parse_VW,  handle_VW,  ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // raw velocity (no ramp)
+        makeSchemaCmd("X",    &xSchema,  handleX,    ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // stop / soft stop
+        makeCmd(      "STOP", nullptr,   handleSTOP, ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // hard stop
     };
 }
