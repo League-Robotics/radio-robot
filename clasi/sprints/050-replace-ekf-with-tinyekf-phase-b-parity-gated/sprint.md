@@ -1,7 +1,7 @@
 ---
 id: '050'
 title: Replace EKF with TinyEKF (Phase B, parity-gated)
-status: roadmap
+status: planning-docs
 branch: sprint/050-replace-ekf-with-tinyekf-phase-b-parity-gated
 use-cases: []
 issues:
@@ -62,4 +62,13 @@ binaries; `test_vendor_confinement.py` green.
 
 ## Tickets
 
-To be created at detail-planning (plan-sprint).
+Tickets execute serially in dependency order.
+
+| # | Title | Depends On |
+|---|-------|------------|
+| 001 | Vendor tinyekf.h into libraries/tinyekf with provenance preamble | — |
+| 002 | Wire libraries/tinyekf include dirs into both CMakeLists.txt build paths | 050-001 |
+| 003 | Implement EKFTiny thin layer over ekf_t keeping all robustness layers | 050-002 |
+| 004 | Parity gate: verify EKFTiny passes test_ekf.py in full with no new suite failures | 050-003 |
+| 005 | Swap Odometry to EKFTiny and delete old EKF.h/EKF.cpp | 050-004 |
+| 006 | Final validation: full suite, firmware build, vendor confinement, and TinyEKF constraint check | 050-005 |
