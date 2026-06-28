@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 sprint: 048
 tickets:
 - 048-001

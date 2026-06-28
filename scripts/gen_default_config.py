@@ -338,8 +338,8 @@ RobotConfig defaultRobotConfig() {{
     p.lagPortsMs      = 50;
 
     // Sprint 046: mecanum drivetrain fields (baked from identity.drivetrain_type).
-    // Differential builds carry these fields with safe defaults; they are unused
-    // unless #ifdef ROBOT_DRIVETRAIN_MECANUM code reads them.
+    // Differential-only build carries these fields with safe defaults; they are
+    // unused unless mecanum kinematics code reads them (retained for future use).
     p.drivetrain      = {1 if drivetrain_type == 'mecanum' else 0};
 
     // Mecanum geometry (MEASURE placeholders; default 63.0 mm half-track/wheelbase).
