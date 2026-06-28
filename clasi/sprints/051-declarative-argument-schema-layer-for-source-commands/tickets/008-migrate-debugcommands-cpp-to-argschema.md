@@ -1,7 +1,7 @@
 ---
 id: 008
 title: Migrate DebugCommands.cpp to ArgSchema
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 - SUC-003
@@ -55,20 +55,20 @@ ranged=false}` schema reproduces this exactly.
 
 ## Acceptance Criteria
 
-- [ ] `parseDbgLoopReset`, `parseDbgOtos`, `parseDbgEst` deleted; registrations
+- [x] `parseDbgLoopReset`, `parseDbgOtos`, `parseDbgEst` deleted; registrations
   updated to `parseFn=nullptr`.
-- [ ] `parseDbgLoop`, `parseDbgI2clog`, `parseDbgI2c` deleted; replaced by
+- [x] `parseDbgLoop`, `parseDbgI2clog`, `parseDbgI2c` deleted; replaced by
   `variadic=true` schemas + `makeSchemaCmd` registrations.
-- [ ] `parseDbgIrqguard` deleted; replaced by `{ndefs=1, minTokens=0, ranged=false}`
+- [x] `parseDbgIrqguard` deleted; replaced by `{ndefs=1, minTokens=0, ranged=false}`
   schema.
-- [ ] `parseDbgWedge`, `parseDbgOtosBench`, `parseI2cw`, `parseI2cr` retained.
-- [ ] `handleDbgOtosBench` uses `kvFloat`/`kvInt` instead of inline loop.
-- [ ] All conditional compilation guards (`#ifndef HOST_BUILD`,
+- [x] `parseDbgWedge`, `parseDbgOtosBench`, `parseI2cw`, `parseI2cr` retained.
+- [x] `handleDbgOtosBench` uses `kvFloat`/`kvInt` instead of inline loop.
+- [x] All conditional compilation guards (`#ifndef HOST_BUILD`,
   `#if defined(BENCH_OTOS_ENABLED) || defined(HOST_BUILD)`) preserved unchanged.
-- [ ] `DebugCommands::getCommands()` registration order preserved (longest prefix
+- [x] `DebugCommands::getCommands()` registration order preserved (longest prefix
   first within groups, e.g. DBG OTOS BENCH before DBG OTOS).
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` — no new failures.
-- [ ] Primary oracle: full sim unit suite (DBG commands are exercised in HOST_BUILD).
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` — no new failures.
+- [x] Primary oracle: full sim unit suite (DBG commands are exercised in HOST_BUILD).
 
 ## Implementation Plan
 

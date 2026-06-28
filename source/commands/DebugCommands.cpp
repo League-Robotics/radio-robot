@@ -6,11 +6,20 @@
 // All descriptors use ForceReply::SERIAL.
 // Handler logic mirrors the existing switch cases in CommandProcessor.cpp
 // exactly.  The old switch cases remain live until T011 cutover.
+//
+// Migration (051-008): bespoke parse functions replaced with ArgSchema /
+// nullptr registrations.  parseDbgLoopReset, parseDbgOtos, parseDbgEst
+// deleted (no-arg → nullptr).  parseDbgLoop, parseDbgI2clog, parseDbgI2c
+// deleted (variadic STR → makeSchemaCmd).  parseDbgIrqguard deleted
+// (ndefs=1, minTokens=0 → makeSchemaCmd).  parseDbgWedge, parseDbgOtosBench,
+// parseI2cw, parseI2cr retained (custom logic).  parseDbgOtosBench KV loop
+// replaced with kvFloat helpers from ArgParse.h.
 
 #include "DebugCommands.h"
 #include "CommandProcessor.h"
 #include "Robot.h"
 #include "state/EstimateDump.h"
+#include "ArgParse.h"
 // 034-006: BenchOtosSensor is bench-build only.
 #if defined(BENCH_OTOS_ENABLED) || defined(HOST_BUILD)
 #include "BenchOtosSensor.h"
@@ -44,20 +53,33 @@
 static DbgCtx dbgCtxFrom(void* p);
 
 // ---------------------------------------------------------------------------
-// DBG LOOP RESET
-//   prefix "DBG LOOP RESET" — argTokens = [] (0 tokens after prefix strip)
-//   parseFn: always succeeds, 0 args.
-//   handler: no-op acknowledgement (loop timing stats removed with run_tasks)
+// Argument schemas — declarative replacements for bespoke parse functions.
 // ---------------------------------------------------------------------------
 
-static ParseResult parseDbgLoopReset(const char* const* /*tokens*/, int /*ntokens*/,
-                                     const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult res;
-    res.ok = true;
-    res.args.count = 0;
-    return res;
-}
+// DBG LOOP RESET — no-arg; parseFn=nullptr.
+// DBG OTOS       — no-arg; parseFn=nullptr.
+// DBG EST        — no-arg; parseFn=nullptr.
+
+// DBG LOOP — variadic: up to 2 STR tokens (x and state).
+static const ArgSchema dbgLoopSchema = { nullptr, 0, 0, true, nullptr };
+
+// DBG I2CLOG — variadic: 0 or 1 STR token ("ARM").
+static const ArgSchema dbgI2clogSchema = { nullptr, 0, 0, true, nullptr };
+
+// DBG I2C — variadic: 0 or 1 STR token ("RESET").
+static const ArgSchema dbgI2cSchema = { nullptr, 0, 0, true, nullptr };
+
+// DBG IRQGUARD — optional INT: 0 or 1 token; ndefs=1, minTokens=0, ranged=false.
+static const ArgDef dbgIrqguardDefs[1] = {
+    { "enable", ArgKind::INT, false, 0, 0 },
+};
+static const ArgSchema dbgIrqguardSchema = { dbgIrqguardDefs, 1, 0, false, nullptr };
+
+// ---------------------------------------------------------------------------
+// DBG LOOP RESET
+//   prefix "DBG LOOP RESET" — parseFn=nullptr (no args).
+//   handler: no-op acknowledgement (loop timing stats removed with run_tasks)
+// ---------------------------------------------------------------------------
 
 static void handleDbgLoopReset(const ArgList& /*args*/, const char* corrId,
                                 ReplyFn replyFn, void* replyCtx, void* /*handlerCtx*/)
@@ -69,31 +91,9 @@ static void handleDbgLoopReset(const ArgList& /*args*/, const char* corrId,
 
 // ---------------------------------------------------------------------------
 // DBG LOOP
-//   prefix "DBG LOOP" — argTokens = []
-//   parseFn: always succeeds, 0 args.
+//   prefix "DBG LOOP" — variadic ArgSchema; tokens stored as STR args.
 //   handler: confirm loop is running.
 // ---------------------------------------------------------------------------
-
-static ParseResult parseDbgLoop(const char* const* tokens, int ntokens,
-                                 const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult res;
-    res.ok = true;
-    // Pass up to 2 tokens as STR args (x and state).
-    int n = (ntokens > MAX_ARGS) ? MAX_ARGS : ntokens;
-    res.args.count = n;
-    for (int i = 0; i < n; ++i) {
-        res.args.args[i].type = ArgType::STR;
-        // Copy into sval (bounded).
-        int j = 0;
-        for (; tokens[i][j] != '\0' && j < (int)sizeof(res.args.args[i].sval) - 1; ++j)
-            res.args.args[i].sval[j] = tokens[i][j];
-        res.args.args[i].sval[j] = '\0';
-        res.args.args[i].ival = 0;
-        res.args.args[i].fval = 0.0f;
-    }
-    return res;
-}
 
 static void handleDbgLoop(const ArgList& /*args*/, const char* corrId,
                            ReplyFn replyFn, void* replyCtx, void* /*handlerCtx*/)
@@ -105,30 +105,9 @@ static void handleDbgLoop(const ArgList& /*args*/, const char* corrId,
 
 // ---------------------------------------------------------------------------
 // DBG I2CLOG
-//   prefix "DBG I2CLOG" — argTokens = [] or ["ARM"]
-//   parseFn: always succeeds; 0 or 1 STR args.
+//   prefix "DBG I2CLOG" — variadic ArgSchema; 0 or 1 STR args.
 //   handler: ARM → resetStats + setLogging(true); else → dumpRecent.
 // ---------------------------------------------------------------------------
-
-static ParseResult parseDbgI2clog(const char* const* tokens, int ntokens,
-                                   const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult res;
-    res.ok = true;
-    if (ntokens >= 1) {
-        res.args.count = 1;
-        res.args.args[0].type = ArgType::STR;
-        int j = 0;
-        for (; tokens[0][j] != '\0' && j < (int)sizeof(res.args.args[0].sval) - 1; ++j)
-            res.args.args[0].sval[j] = tokens[0][j];
-        res.args.args[0].sval[j] = '\0';
-        res.args.args[0].ival = 0;
-        res.args.args[0].fval = 0.0f;
-    } else {
-        res.args.count = 0;
-    }
-    return res;
-}
 
 static void handleDbgI2clog(const ArgList& args, const char* corrId,
                               ReplyFn replyFn, void* replyCtx, void* handlerCtx)
@@ -159,31 +138,10 @@ static void handleDbgI2clog(const ArgList& args, const char* corrId,
 
 // ---------------------------------------------------------------------------
 // DBG I2C
-//   prefix "DBG I2C" — argTokens = [] or ["RESET"]
-//   parseFn: always succeeds; 0 or 1 STR args.
+//   prefix "DBG I2C" — variadic ArgSchema; 0 or 1 STR args.
 //   handler: RESET → resetStats + resetStuckCounters;
 //            else → emit compact stats line + OK.
 // ---------------------------------------------------------------------------
-
-static ParseResult parseDbgI2c(const char* const* tokens, int ntokens,
-                                const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult res;
-    res.ok = true;
-    if (ntokens >= 1) {
-        res.args.count = 1;
-        res.args.args[0].type = ArgType::STR;
-        int j = 0;
-        for (; tokens[0][j] != '\0' && j < (int)sizeof(res.args.args[0].sval) - 1; ++j)
-            res.args.args[0].sval[j] = tokens[0][j];
-        res.args.args[0].sval[j] = '\0';
-        res.args.args[0].ival = 0;
-        res.args.args[0].fval = 0.0f;
-    } else {
-        res.args.count = 0;
-    }
-    return res;
-}
 
 static void handleDbgI2c(const ArgList& args, const char* corrId,
                           ReplyFn replyFn, void* replyCtx, void* handlerCtx)
@@ -243,27 +201,9 @@ static void handleDbgI2c(const ArgList& args, const char* corrId,
 
 // ---------------------------------------------------------------------------
 // DBG IRQGUARD
-//   prefix "DBG IRQGUARD" — argTokens = [] or ["0"|"1"]
-//   parseFn: always succeeds; 0 or 1 INT args.
+//   prefix "DBG IRQGUARD" — dbgIrqguardSchema (ndefs=1, minTokens=0).
 //   handler: if arg → setIrqGuard; always reply OK with state.
 // ---------------------------------------------------------------------------
-
-static ParseResult parseDbgIrqguard(const char* const* tokens, int ntokens,
-                                     const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult res;
-    res.ok = true;
-    if (ntokens >= 1) {
-        res.args.count = 1;
-        res.args.args[0].type = ArgType::INT;
-        res.args.args[0].ival = atoi(tokens[0]);
-        res.args.args[0].fval = 0.0f;
-        res.args.args[0].sval[0] = '\0';
-    } else {
-        res.args.count = 0;
-    }
-    return res;
-}
 
 static void handleDbgIrqguard(const ArgList& args, const char* corrId,
                                ReplyFn replyFn, void* replyCtx, void* handlerCtx)
@@ -383,15 +323,10 @@ static ParseResult parseDbgOtosBench(const char* const* tokens, int ntokens,
 
     // KV pairs: noiseXY, noiseH, drift — stored as FLOAT args [1], [2], [3]
     // with sentinels (-1.0f) meaning "not provided".
-    float noiseXY = -1.0f;
-    float noiseH  = -1.0f;
-    float drift   = -1.0f;
-
-    for (int i = 0; i < nkv; ++i) {
-        if (strcmp(kvs[i].key, "noiseXY") == 0)  noiseXY = (float)atof(kvs[i].value);
-        else if (strcmp(kvs[i].key, "noiseH") == 0) noiseH  = (float)atof(kvs[i].value);
-        else if (strcmp(kvs[i].key, "drift")  == 0) drift   = (float)atof(kvs[i].value);
-    }
+    // Use kvFloat helpers (ArgParse.h) in place of the inline kv loop.
+    float noiseXY = kvFloat(kvs, nkv, "noiseXY", -1.0f);
+    float noiseH  = kvFloat(kvs, nkv, "noiseH",  -1.0f);
+    float drift   = kvFloat(kvs, nkv, "drift",   -1.0f);
 
     // Pack optional noise params into args [1..3] as FLOAT.
     // A fval of -1.0f signals "not supplied" to the handler.
@@ -465,8 +400,7 @@ static void handleDbgOtosBench(const ArgList& args, const char* corrId,
 
 // ---------------------------------------------------------------------------
 // DBG OTOS
-//   prefix "DBG OTOS" — no args.
-//   parseFn: always succeeds, 0 args.
+//   prefix "DBG OTOS" — parseFn=nullptr (no args).
 //   handler: emit ideal / otos / fused pose line, then OK.
 //
 //   Reply lines:
@@ -481,15 +415,6 @@ static void handleDbgOtosBench(const ArgList& args, const char* corrId,
 //   In HOST_BUILD / MockHAL, benchOtosPtr() is unavailable; guard and emit
 //   0,0,0 for ideal/otos.
 // ---------------------------------------------------------------------------
-
-static ParseResult parseDbgOtos(const char* const* /*tokens*/, int /*ntokens*/,
-                                 const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult res;
-    res.ok = true;
-    res.args.count = 0;
-    return res;
-}
 
 static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
                            ReplyFn replyFn, void* replyCtx, void* handlerCtx)
@@ -564,8 +489,7 @@ static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
 
 // ---------------------------------------------------------------------------
 // DBG EST
-//   prefix "DBG EST" — no args.
-//   parseFn: always succeeds, 0 args.
+//   prefix "DBG EST" — parseFn=nullptr (no args).
 //   handler: dump three EstimateDump lines (enc, otos, fuse) via replyFn.
 //
 //   Reply lines:
@@ -578,15 +502,6 @@ static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
 //   velocities in mm/s and mrad/s, age in ms.  Uses snprintf into a
 //   stack-local buffer — no heap.
 // ---------------------------------------------------------------------------
-
-static ParseResult parseDbgEst(const char* const* /*tokens*/, int /*ntokens*/,
-                                const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult res;
-    res.ok = true;
-    res.args.count = 0;
-    return res;
-}
 
 static void handleDbgEst(const ArgList& /*args*/, const char* corrId,
                           ReplyFn replyFn, void* replyCtx, void* handlerCtx)
@@ -793,22 +708,22 @@ std::vector<CommandDescriptor> DebugCommands::getCommands() const
     // Longest-prefix entries first within each group so dispatchTable picks
     // the most-specific match (e.g. "DBG LOOP RESET" beats "DBG LOOP").
     return {
-        makeCmd("DBG LOOP RESET",  parseDbgLoopReset,  handleDbgLoopReset,  ctx, "badarg", ForceReply::SERIAL),                          // reset loop stats counters
-        makeCmd("DBG LOOP",        parseDbgLoop,       handleDbgLoop,       ctx, "badarg", ForceReply::SERIAL),                          // report loop timing stats
-        makeCmd("DBG I2CLOG",      parseDbgI2clog,     handleDbgI2clog,     ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // dump I2C transaction log
-        makeCmd("DBG I2C",         parseDbgI2c,        handleDbgI2c,        ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // report I2C bus error counts
-        makeCmd("DBG IRQGUARD",    parseDbgIrqguard,   handleDbgIrqguard,   ctx, "badarg", ForceReply::SERIAL),                          // enable/disable IRQ guard
-        makeCmd("DBG WEDGE",       parseDbgWedge,      handleDbgWedge,      ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // run encoder wedge self-check
+        makeCmd(      "DBG LOOP RESET",  nullptr,              handleDbgLoopReset,  ctx, "badarg", ForceReply::SERIAL),                          // reset loop stats counters
+        makeSchemaCmd("DBG LOOP",        &dbgLoopSchema,       handleDbgLoop,       ctx, "badarg", ForceReply::SERIAL),                          // report loop timing stats
+        makeSchemaCmd("DBG I2CLOG",      &dbgI2clogSchema,     handleDbgI2clog,     ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // dump I2C transaction log
+        makeSchemaCmd("DBG I2C",         &dbgI2cSchema,        handleDbgI2c,        ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // report I2C bus error counts
+        makeSchemaCmd("DBG IRQGUARD",    &dbgIrqguardSchema,   handleDbgIrqguard,   ctx, "badarg", ForceReply::SERIAL),                          // enable/disable IRQ guard
+        makeCmd(      "DBG WEDGE",       parseDbgWedge,        handleDbgWedge,      ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // run encoder wedge self-check
         // 034-006: DBG OTOS BENCH and DBG OTOS are bench-build only.
         // BENCH_OTOS_ENABLED is defined in default firmware builds (PRODUCTION_BUILD=OFF).
         // HOST_BUILD always includes them so the sim suite is unaffected.
 #if defined(BENCH_OTOS_ENABLED) || defined(HOST_BUILD)
         // DBG OTOS BENCH must appear BEFORE DBG OTOS — longest prefix wins.
-        makeCmd("DBG OTOS BENCH",  parseDbgOtosBench,  handleDbgOtosBench,  ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // enable/disable bench OTOS + set noise
-        makeCmd("DBG OTOS",        parseDbgOtos,       handleDbgOtos,       ctx, "badarg", ForceReply::SERIAL),                          // query ideal/otos/fused pose
+        makeCmd(      "DBG OTOS BENCH",  parseDbgOtosBench,    handleDbgOtosBench,  ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // enable/disable bench OTOS + set noise
+        makeCmd(      "DBG OTOS",        nullptr,               handleDbgOtos,       ctx, "badarg", ForceReply::SERIAL),                          // query ideal/otos/fused pose
 #endif // defined(BENCH_OTOS_ENABLED) || defined(HOST_BUILD)
-        makeCmd("DBG EST",         parseDbgEst,        handleDbgEst,        ctx, "badarg", ForceReply::SERIAL),                          // dump enc/otos/fuse EstimateDump lines
-        makeCmd("I2CW",            parseI2cw,          handleI2cw,          ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // raw I2C write (addr reg data…)
-        makeCmd("I2CR",            parseI2cr,          handleI2cr,          ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // raw I2C read (addr reg count)
+        makeCmd(      "DBG EST",         nullptr,               handleDbgEst,        ctx, "badarg", ForceReply::SERIAL),                          // dump enc/otos/fuse EstimateDump lines
+        makeCmd(      "I2CW",            parseI2cw,            handleI2cw,          ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // raw I2C write (addr reg data…)
+        makeCmd(      "I2CR",            parseI2cr,            handleI2cr,          ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // raw I2C read (addr reg count)
     };
 }
