@@ -1,8 +1,9 @@
 ---
 id: '001'
 title: Vendor tinyekf.h into libraries/tinyekf with provenance preamble
-status: open
-use-cases: ["SUC-001"]
+status: done
+use-cases:
+- SUC-001
 depends-on: []
 github-issue: ''
 issue: consolidate-control-code-onto-vendored-libraries-cmon-pid-tinyekf.md
@@ -46,11 +47,11 @@ No CMake changes in this ticket. That is ticket 002.
 
 ## Acceptance Criteria
 
-- [ ] `libraries/tinyekf/tinyekf.h` exists and begins with the provenance preamble.
-- [ ] `libraries/tinyekf/LICENSE` exists (MIT license text from the upstream clone).
-- [ ] The body of `tinyekf.h` after the preamble is byte-for-byte identical to the upstream file.
-- [ ] No CMakeLists.txt or subdirectories in `libraries/tinyekf/` — header-only vendor, same structure as `libraries/cmon-pid/`.
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` shows no new failures beyond the 2 pre-existing baseline (config-schema tests).
+- [x] `libraries/tinyekf/tinyekf.h` exists and begins with the provenance preamble.
+- [x] `libraries/tinyekf/LICENSE` exists (MIT license text from the upstream clone).
+- [x] The body of `tinyekf.h` after the preamble is byte-for-byte identical to the upstream file.
+- [x] No CMakeLists.txt or subdirectories in `libraries/tinyekf/` — header-only vendor, same structure as `libraries/cmon-pid/`.
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` shows no new failures beyond the 2 pre-existing baseline (config-schema tests).
 
 ## Implementation Plan
 
