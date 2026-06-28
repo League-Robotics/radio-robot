@@ -1,11 +1,11 @@
 ---
 id: '004'
 title: Delete RatioPidController and remove pid.* config keys and N13 test references
-status: open
+status: in-progress
 use-cases:
-  - SUC-003
+- SUC-003
 depends-on:
-  - '003'
+- '003'
 github-issue: ''
 issue: consolidate-control-code-onto-vendored-libraries-cmon-pid-tinyekf.md
 completes_issue: false
