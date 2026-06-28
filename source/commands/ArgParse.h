@@ -15,6 +15,7 @@
 #include "types/CommandTypes.h"
 #include "types/Protocol.h"  // KVPair
 
+#include <cstdlib>  // atoi, atof
 #include <cstring>  // strcmp
 
 // ---------------------------------------------------------------------------
@@ -101,10 +102,6 @@ inline int kvInt(const KVPair* kvs, int nkv, const char* key, int def)
 {
     const KVPair* kv = kvFind(kvs, nkv, key);
     if (!kv || !kv->value) return def;
-    // atoi is available in <cstdlib>; callers must include it if they use kvInt
-    // from a .cpp file.  Here we call it through the standard C linkage that
-    // is always available in the translation unit including this header.
-    extern int atoi(const char*);
     return atoi(kv->value);
 }
 
@@ -115,7 +112,6 @@ inline float kvFloat(const KVPair* kvs, int nkv, const char* key, float def)
 {
     const KVPair* kv = kvFind(kvs, nkv, key);
     if (!kv || !kv->value) return def;
-    extern double atof(const char*);
     return (float)atof(kv->value);
 }
 
