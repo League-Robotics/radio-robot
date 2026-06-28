@@ -31,6 +31,7 @@
 #include "control/HaltController.h"
 #include "robot/LoopTickOnce.h"
 #include "types/CommandTypes.h"
+#include "commands/ArgParse.h"
 
 #include <cstring>
 #include <cstdio>
@@ -1107,6 +1108,119 @@ void sim_ekftiny_set_rej_pos_streak(void* h, int streak)
 void sim_ekftiny_set_rej_head_streak(void* h, int streak)
 {
     static_cast<EKFTiny*>(h)->setRejHeadStreak(streak);
+}
+
+// ---------------------------------------------------------------------------
+// ArgParse C-ABI test hooks (051-002)
+//
+// sim_parse_schema — invoke parseSchema with a fully described schema and
+// token/KV arrays, and return the ParseResult through output pointers.
+//
+// Parameters (in):
+//   tokens     — array of ntokens C strings (positional tokens).
+//   ntokens    — number of tokens.
+//   kv_keys    — array of nkv key C strings (KV pairs).
+//   kv_vals    — array of nkv value C strings (parallel to kv_keys).
+//   nkv        — number of KV pairs.
+//   def_names  — array of ndefs arg names (ArgDef.name).
+//   def_kinds  — array of ndefs ArgKind values as int (0=INT,1=FLOAT,2=STR).
+//   def_ranged — array of ndefs ranged flags (0 or 1).
+//   def_lo     — array of ndefs lo bounds (meaningful when ranged).
+//   def_hi     — array of ndefs hi bounds (meaningful when ranged).
+//   ndefs      — number of ArgDef entries.
+//   min_tokens — schema.minTokens.
+//   variadic   — schema.variadic (0 or 1).
+//   pack_kv    — schema.packKv key string, or nullptr for none.
+//
+// Parameters (out — caller provides arrays of capacity >= MAX_ARGS):
+//   out_ok           — 1 on success, 0 on failure.
+//   out_count        — number of args in result (undefined on failure).
+//   out_arg_types    — arg type per slot (0=INT,1=FLOAT,2=STR).
+//   out_arg_ivals    — ival per slot.
+//   out_arg_fvals    — fval per slot.
+//   out_arg_svals    — flat buffer; each arg uses 32 bytes at offset i*32.
+//   out_err_detail   — on failure: pointer to detail string (may be null).
+//                      Written as a C string into err_detail_buf[64].
+//   err_detail_buf   — caller-provided 64-byte buffer for error detail string.
+//
+// Returns: 1 if ok, 0 if not ok.
+// ---------------------------------------------------------------------------
+int sim_parse_schema(
+    const char* const* tokens, int ntokens,
+    const char* const* kv_keys, const char* const* kv_vals, int nkv,
+    const char* const* def_names, const int* def_kinds,
+    const int* def_ranged, const int* def_lo, const int* def_hi, int ndefs,
+    int min_tokens, int variadic, const char* pack_kv,
+    int* out_ok, int* out_count,
+    int* out_arg_types, int* out_arg_ivals, float* out_arg_fvals,
+    char* out_arg_svals,            // flat: slot i occupies svals[i*32..i*32+31]
+    char* err_detail_buf)           // 64-byte output for error detail
+{
+    // Build KVPair array on the stack.
+    KVPair kvs[MAX_ARGS];
+    int kv_count = (nkv < MAX_ARGS) ? nkv : MAX_ARGS;
+    for (int i = 0; i < kv_count; ++i) {
+        kvs[i].key   = kv_keys  ? kv_keys[i]  : nullptr;
+        kvs[i].value = kv_vals  ? kv_vals[i]  : nullptr;
+    }
+
+    // Build ArgDef array on the stack.
+    ArgDef defs[MAX_ARGS];
+    int def_count = (ndefs < MAX_ARGS) ? ndefs : MAX_ARGS;
+    for (int i = 0; i < def_count; ++i) {
+        defs[i].name   = def_names  ? def_names[i]  : "";
+        defs[i].kind   = static_cast<ArgKind>(def_kinds[i]);
+        defs[i].ranged = def_ranged ? (def_ranged[i] != 0) : false;
+        defs[i].lo     = def_lo     ? def_lo[i]     : 0;
+        defs[i].hi     = def_hi     ? def_hi[i]     : 0;
+    }
+
+    ArgSchema schema;
+    schema.defs       = defs;
+    schema.ndefs      = def_count;
+    schema.minTokens  = min_tokens;
+    schema.variadic   = (variadic != 0);
+    schema.packKv     = pack_kv;
+
+    ParseResult r = parseSchema(tokens, ntokens,
+                                kv_count > 0 ? kvs : nullptr, kv_count,
+                                schema);
+
+    *out_ok = r.ok ? 1 : 0;
+
+    if (r.ok) {
+        *out_count = r.args.count;
+        for (int i = 0; i < r.args.count; ++i) {
+            out_arg_types[i] = static_cast<int>(r.args.args[i].type);
+            out_arg_ivals[i] = r.args.args[i].ival;
+            out_arg_fvals[i] = r.args.args[i].fval;
+            char* dst = out_arg_svals + i * 32;
+            int j = 0;
+            while (r.args.args[i].sval[j] && j < 31) {
+                dst[j] = r.args.args[i].sval[j];
+                ++j;
+            }
+            dst[j] = '\0';
+        }
+        if (err_detail_buf) err_detail_buf[0] = '\0';
+    } else {
+        *out_count = 0;
+        // Write error detail into caller's buffer.
+        if (err_detail_buf) {
+            if (r.err.detail) {
+                int k = 0;
+                while (r.err.detail[k] && k < 63) {
+                    err_detail_buf[k] = r.err.detail[k];
+                    ++k;
+                }
+                err_detail_buf[k] = '\0';
+            } else {
+                err_detail_buf[0] = '\0';
+            }
+        }
+    }
+
+    return r.ok ? 1 : 0;
 }
 
 } // extern "C"

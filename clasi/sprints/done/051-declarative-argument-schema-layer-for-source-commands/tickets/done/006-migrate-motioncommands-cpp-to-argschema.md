@@ -1,7 +1,7 @@
 ---
 id: '006'
 title: Migrate MotionCommands.cpp to ArgSchema
-status: open
+status: done
 use-cases:
 - SUC-002
 - SUC-004
@@ -58,25 +58,26 @@ must be handled carefully.
 
 ## Acceptance Criteria
 
-- [ ] `parseS`, `parseD`, `parseG`, `parseR`, `parseRT` deleted; replaced by static
+- [x] `parseS`, `parseD`, `parseG`, `parseR`, `parseRT` deleted; replaced by static
   `ArgSchema` structs with correct `ndefs`, `minTokens`, `ranged=true`, `lo`, `hi`,
   and `name` matching the existing ERR detail strings.
-- [ ] `parseT` deleted; replaced by schema with `packKv="sensor"`.
-- [ ] `parseD` deleted; replaced by schema with `packKv="sensor"`.
-- [ ] `parseX` (variadic) deleted; replaced by schema with `variadic=true`.
-- [ ] `parseNoArgs` deleted; STOP registered with `parseFn=nullptr`.
-- [ ] `parseTURN` retained; body rewritten with `argInt`, `kvInt`, `kvFind`;
-  `packSensorArg` call remains (or replaced by equivalent `kvFind` inline).
-- [ ] `parseVW`, `parse_VW` retained; `setIntArg` calls replaced by `argInt`.
-- [ ] `setIntArg` local helper deleted; all call sites use `argInt` from ArgParse.h.
-- [ ] `packSensorArg` local helper deleted; `kvFind` / `argStr` used instead.
-- [ ] `vwScanKV` replaced by `kvInt`; `vwHasKey` replaced by `kvHas` in handleVW.
-- [ ] All range ERR detail strings byte-identical: `S 99999` -> `ERR range l`;
+- [x] `parseT` deleted; replaced by schema with `packKv="sensor"`.
+- [x] `parseD` deleted; replaced by schema with `packKv="sensor"`.
+- [x] `parseX` (variadic) deleted; replaced by schema with `variadic=true`.
+- [x] `parseNoArgs` deleted; STOP registered with `parseFn=nullptr`.
+- [x] `parseTURN` retained; body rewritten with `argInt`, `kvFind`, and inline
+  `kvFind`+`argStr` for sensor= (replacing `packSensorArg`).
+- [x] `parseVW`, `parse_VW` retained; `setIntArg` calls replaced by `argInt`.
+- [x] `setIntArg` local helper deleted; all call sites use `argInt` from ArgParse.h.
+- [x] `packSensorArg` local helper deleted; `kvFind` / `argStr` used instead.
+- [x] `vwScanKV` and `vwHasKey` deleted; replaced by `argsScanKV` / `argsHasKey`
+  static helpers (same logic, renamed to avoid confusion with KVPair-based kvInt/kvHas).
+- [x] All range ERR detail strings byte-identical: `S 99999` -> `ERR range l`;
   `T 0 0 99999` -> `ERR range ms`; `D 0 0 0` -> `ERR range mm`; etc.
-- [ ] `T` and `D` sensor forwarding still works: `T 500 500 1000 sensor=line0:ge:500`
+- [x] `T` and `D` sensor forwarding still works: `T 500 500 1000 sensor=line0:ge:500`
   -> `OK drive l=500 r=500 ms=1000` with sensor validated.
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` — no new failures.
-- [ ] Primary oracle: `tests/simulation/system/test_stop_condition_coverage.py`.
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` — no new failures.
+- [x] Primary oracle: `tests/simulation/system/test_stop_condition_coverage.py`.
 
 ## Implementation Plan
 

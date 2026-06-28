@@ -1,7 +1,7 @@
 ---
-id: '009'
+id: 009
 title: Final validation and cleanup
-status: open
+status: done
 use-cases:
 - SUC-005
 depends-on:
@@ -9,7 +9,7 @@ depends-on:
 - '005'
 - '006'
 - '007'
-- '008'
+- 008
 github-issue: ''
 issue: plan-declarative-argument-schema-layer-for-source-commands.md
 completes_issue: true
@@ -55,19 +55,19 @@ verifies that the full migration is correct and complete.
 
 ## Acceptance Criteria
 
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` shows exactly 2
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` shows exactly 2
   failures: `test_default_robot_config_unchanged` and
   `TestSchemaValidation::test_tovez_validates_against_schema`. No others.
-- [ ] `tests/simulation/unit/test_system_commands_coverage.py` passes fully.
-- [ ] `tests/simulation/system/test_stop_condition_coverage.py` passes fully.
-- [ ] `tests/simulation/system/test_ekf_odometry_commands_coverage.py` passes fully.
-- [ ] `python build.py --clean` succeeds under `-fno-exceptions -fno-rtti`.
-- [ ] No `setIntArg`, `packSensorArg`, `vwScanKV`, or `vwHasKey` references remain
+- [x] `tests/simulation/unit/test_system_commands_coverage.py` passes fully.
+- [x] `tests/simulation/system/test_stop_condition_coverage.py` passes fully.
+- [x] `tests/simulation/system/test_ekf_odometry_commands_coverage.py` passes fully.
+- [x] `python build.py --clean` succeeds under `-fno-exceptions -fno-rtti`.
+- [x] No `setIntArg`, `packSensorArg`, `vwScanKV`, or `vwHasKey` references remain
   in the five migrated command files (grep check).
-- [ ] No remaining inline char-by-char `sval` copy loops in the five migrated files.
-- [ ] Binary size does not grow vs. pre-migration build (or difference is documented
+- [x] No remaining inline char-by-char `sval` copy loops in the five migrated files.
+- [x] Binary size does not grow vs. pre-migration build (or difference is documented
   with justification).
-- [ ] All 5 use cases (SUC-001 through SUC-005) are satisfied.
+- [x] All 5 use cases (SUC-001 through SUC-005) are satisfied.
 
 ## Implementation Plan
 

@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: ArgParse generic parser and inline helpers
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-002
@@ -61,30 +61,30 @@ in this ticket — no `CommandTypes.h` wiring, no command file changes.
 
 ## Acceptance Criteria
 
-- [ ] `source/commands/ArgParse.h` declares `parseSchema` and all inline helpers.
-- [ ] `source/commands/ArgParse.cpp` implements `parseSchema`.
-- [ ] `ArgParse.h` includes `ArgSchema.h` from `source/types/` and `Protocol.h`
+- [x] `source/commands/ArgParse.h` declares `parseSchema` and all inline helpers.
+- [x] `source/commands/ArgParse.cpp` implements `parseSchema`.
+- [x] `ArgParse.h` includes `ArgSchema.h` from `source/types/` and `Protocol.h`
   (for `KVPair`) and `CommandTypes.h` (for `Argument`, `ArgList`, `ParseResult`,
   `MAX_ARGS`).
-- [ ] Variadic path: `ival=0`, `fval=0.0f` initialised before sval copy; count
+- [x] Variadic path: `ival=0`, `fval=0.0f` initialised before sval copy; count
   capped at `MAX_ARGS`; sval capped at 31 chars + NUL.
-- [ ] Positional INT without `ranged`: value stored as `atoi(token)` with no range
+- [x] Positional INT without `ranged`: value stored as `atoi(token)` with no range
   check (preserves int16 truncation behaviour of OV/SI when handler casts).
-- [ ] Positional INT with `ranged`: if out of [lo,hi], returns
+- [x] Positional INT with `ranged`: if out of [lo,hi], returns
   `ParseResult{ok=false, err={nullptr, def.name}}`.
-- [ ] `minTokens`: if `ntokens < minTokens`, returns
+- [x] `minTokens`: if `ntokens < minTokens`, returns
   `ParseResult{ok=false, err={nullptr, nullptr}}`.
-- [ ] `packKv`: appends matching KV value as trailing STR; if key not found, count
+- [x] `packKv`: appends matching KV value as trailing STR; if key not found, count
   is unchanged (matches `packSensorArg` when sensor= absent).
-- [ ] `argStr` produces the same bounded sval copy as the variadic path.
-- [ ] Unit tests written covering:
+- [x] `argStr` produces the same bounded sval copy as the variadic path.
+- [x] Unit tests written covering:
   - `parseSchema` no-arg, positional (INT, FLOAT, STR), variadic.
   - Range check pass and fail (correct detail string returned).
   - `minTokens` guard.
   - `packKv` present and absent.
   - All inline helper functions.
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` — no new failures.
-- [ ] `source/commands/ArgParse.cpp` added to `tests/_infra/sim/CMakeLists.txt`
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` — no new failures.
+- [x] `source/commands/ArgParse.cpp` added to `tests/_infra/sim/CMakeLists.txt`
   if not already compiled in transitively.
 
 ## Implementation Plan

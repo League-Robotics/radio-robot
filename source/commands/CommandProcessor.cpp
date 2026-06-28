@@ -7,10 +7,12 @@
 
 #include "CommandProcessor.h"
 #include "CommandQueue.h"
+#include "ArgParse.h"
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <cctype>
+#include <cstdarg>
 
 // ---------------------------------------------------------------------------
 // Constructor
@@ -73,8 +75,13 @@ static int prefixMatchLen(const char* prefix, char** tokens, int ntok)
 // against tokens[0..ntok-1]. If no descriptor matches, replies ERR unknown.
 // Otherwise:
 //   1. Determines the effective reply channel (ForceReply::SERIAL override).
-//   2. Calls parseFn (if non-null); on failure, replies ERR errFmt and returns.
-//   3. Calls handlerFn with the parsed ArgList (or an empty ArgList).
+//   2. Schema branch (D11 rule): if desc.schema != nullptr, calls parseSchema();
+//      on failure, dispatcher emits ERR using desc.errFmt + result.err.detail.
+//      The schema branch is checked BEFORE parseFn so schema-migrated commands
+//      naturally shadow the (now nullptr) parseFn field.
+//   3. parseFn branch: legacy path; activates only when schema == nullptr and
+//      parseFn != nullptr.  Byte-identical to the original code.
+//   4. Calls handlerFn with the parsed ArgList (or an empty ArgList).
 // ---------------------------------------------------------------------------
 
 void CommandProcessor::dispatchTable(char** tokens, int ntok, KVPair* kvs, int nkv,
@@ -116,7 +123,20 @@ void CommandProcessor::dispatchTable(char** tokens, int ntok, KVPair* kvs, int n
     ArgList args;
     args.count = 0;
 
-    if (desc.parseFn != nullptr) {
+    // Schema-first branch (D11): schema path activates when desc.schema != nullptr.
+    // parseFn branch is legacy escape hatch; activates only when schema == nullptr.
+    if (desc.schema != nullptr) {
+        ParseResult result = parseSchema(
+            const_cast<const char* const*>(argTokens), argNtok,
+            kvs, nkv, *desc.schema);
+        if (!result.ok) {
+            const char* detail = result.err.detail;  // may be nullptr
+            const char* code   = (desc.errFmt != nullptr) ? desc.errFmt : "badarg";
+            replyErr(rbuf, sizeof(rbuf), code, detail, corrId, effectiveFn, effectiveCtx);
+            return;
+        }
+        args = result.args;
+    } else if (desc.parseFn != nullptr) {
         ParseResult result = desc.parseFn(
             const_cast<const char* const*>(argTokens), argNtok,
             kvs, nkv);
@@ -324,6 +344,34 @@ void CommandProcessor::replyEvt(char* buf, int size,
         snprintf(buf, (size_t)size, "EVT %s", name);
     }
     fn(buf, ctx);
+}
+
+void CommandProcessor::replyOKf(char* buf, int size,
+                                const char* verb, const char* id,
+                                ReplyFn fn, void* ctx,
+                                const char* fmt, ...)
+{
+    // Format the body into a stack-local buffer, then delegate to replyOK.
+    char body[480];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(body, sizeof(body), fmt, ap);
+    va_end(ap);
+    replyOK(buf, size, verb, body, id, fn, ctx);
+}
+
+void CommandProcessor::replyErrf(char* buf, int size,
+                                 const char* code, const char* id,
+                                 ReplyFn fn, void* ctx,
+                                 const char* fmt, ...)
+{
+    // Format the detail into a stack-local buffer, then delegate to replyErr.
+    char detail[480];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(detail, sizeof(detail), fmt, ap);
+    va_end(ap);
+    replyErr(buf, size, code, detail, id, fn, ctx);
 }
 
 // Note: appendKeyValue, handleGet, and handleSet have been moved to

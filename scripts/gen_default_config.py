@@ -239,12 +239,6 @@ RobotConfig defaultRobotConfig() {{
     // Geometry — baked from robot config
     p.trackwidthMm    = {_f(trackwidth)};
 
-    // Ratio PID gains
-    p.ratioPidKp      = 300.0f;
-    p.ratioPidKi      = 0.0f;
-    p.ratioPidKd      = 0.0f;
-    p.ratioPidMax     = 30.0f;
-
     // Wheel saturation ceiling and steering headroom
     p.vWheelMax       = 400.0f;
     p.steerHeadroom   = 20.0f;

@@ -134,7 +134,7 @@ RobotConfig defaultRobotConfig() {
 
     // Sprint 046: mecanum drivetrain fields (baked from identity.drivetrain_type).
     // Differential builds carry these fields with safe defaults; they are unused
-    // by the differential-only build and retained for future mecanum support.
+    // unless #ifdef ROBOT_DRIVETRAIN_MECANUM code reads them.
     p.drivetrain      = 0;
 
     // Mecanum geometry (MEASURE placeholders; default 63.0 mm half-track/wheelbase).

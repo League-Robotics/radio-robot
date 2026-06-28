@@ -1,7 +1,7 @@
 ---
 id: '051'
 title: Declarative argument-schema layer for source/commands
-status: planning-docs
+status: done
 branch: sprint/051-declarative-argument-schema-layer-for-source-commands
 use-cases:
 - SUC-001
