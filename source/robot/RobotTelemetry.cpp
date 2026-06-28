@@ -19,8 +19,9 @@
 int Robot::buildTlmFrame(char* buf, int len)
 {
     uint32_t t_sample = systemTime();
-    int32_t encL = static_cast<int32_t>(state.actual.encLMm);
-    int32_t encR = static_cast<int32_t>(state.actual.encRMm);
+    // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
+    int32_t encL = static_cast<int32_t>(state.actual.encMm[1]);
+    int32_t encR = static_cast<int32_t>(state.actual.encMm[0]);
 
     int32_t pose_x = 0, pose_y = 0, pose_h = 0;
     if (config.tlmFields & TLM_FIELD_POSE) {
@@ -46,8 +47,9 @@ int Robot::buildTlmFrame(char* buf, int len)
                           <= 2u * state.actual.colorVS.lagMs) &&
                      (config.tlmFields & TLM_FIELD_COLOR);
     bool haveVel = (config.tlmFields & TLM_FIELD_VEL) != 0;
-    float velL = haveVel ? state.actual.velLMms : 0.0f;
-    float velR = haveVel ? state.actual.velRMms : 0.0f;
+    // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
+    float velL = haveVel ? state.actual.velMms[1] : 0.0f;
+    float velR = haveVel ? state.actual.velMms[0] : 0.0f;
 #ifdef ROBOT_DRIVETRAIN_MECANUM
     float velBR = haveVel ? state.actual.velMms[2] : 0.0f;
     float velBL = haveVel ? state.actual.velMms[3] : 0.0f;
@@ -105,7 +107,7 @@ int Robot::buildTlmFrame(char* buf, int len)
         // fusedVy is lateral body velocity in mm/s (written by Odometry T6).
         n = snprintf(buf + pos, (size_t)rem, " twist=%d,%d,%d",
                      (int)fV,
-                     (int)state.actual.fusedVy,
+                     (int)state.actual.fused.twist.vy_mmps,
                      (int)(fOmega * 1000.0f));
 #else
         n = snprintf(buf + pos, (size_t)rem, " twist=%d,%d",
@@ -126,9 +128,9 @@ int Robot::buildTlmFrame(char* buf, int len)
         // matching the pose= field encoding. Lets the host plot the raw OTOS
         // sensor track alongside enc-derived and fused pose. 18000/pi cdeg/rad.
         n = snprintf(buf + pos, (size_t)rem, " otos=%d,%d,%d",
-                     (int)state.actual.otosX,
-                     (int)state.actual.otosY,
-                     (int)(state.actual.otosH * 5729.5779513f));
+                     (int)state.actual.optical.pose.x,
+                     (int)state.actual.optical.pose.y,
+                     (int)(state.actual.optical.pose.h * 5729.5779513f));
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
     if (haveLine) {

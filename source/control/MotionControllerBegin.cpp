@@ -357,8 +357,11 @@ void MotionController::beginDistance(float leftMms, float rightMms,
     // Robot::distanceDrive() still calls resetEncoders() after this (re-zeroing
     // the mirror plus resetting velocity baselines and the odometry snapshot).
     if (_hwState) {
-        _hwState->encLMm = 0;
-        _hwState->encRMm = 0;
+        // Zero canonical encoder arrays; scalar mirror-writes stay for Phase D.
+        _hwState->encMm[0] = 0;   // FR = index 0
+        _hwState->encMm[1] = 0;   // FL = index 1
+        _hwState->encLMm = 0;     // mirror-write scalar (Phase D removes)
+        _hwState->encRMm = 0;     // mirror-write scalar (Phase D removes)
     }
 
     // Snapshot hardware state for MotionBaseline.  The encoder mirror was just
@@ -468,11 +471,10 @@ void MotionController::beginTurn(float headingCdeg, float epsCdeg, uint32_t now_
     float theta_rad = headingCdeg * kCdegToRad;
     float eps_rad   = epsCdeg   * kCdegToRad;
 
-    // Read current heading from HardwareState (in radians, via poseHrad).
-    // poseHrad is stored as a float in radians in HardwareState (set by Odometry).
+    // Read current heading from the canonical fused pose (written by Odometry).
     float currentHeadingRad = 0.0f;
     if (_hwState != nullptr) {
-        currentHeadingRad = _hwState->poseHrad;
+        currentHeadingRad = _hwState->fused.pose.h;
     }
 
     // Compute shortest-path delta: wrap_angle gives the signed angle in (-π, π].

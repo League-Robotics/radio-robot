@@ -1,9 +1,13 @@
 ---
 id: '003'
-title: "Phase C — Migrate consumers to new state paths"
-status: open
-use-cases: [SUC-047-002, SUC-047-003, SUC-047-006]
-depends-on: ['002']
+title: "Phase C \u2014 Migrate consumers to new state paths"
+status: done
+use-cases:
+- SUC-047-002
+- SUC-047-003
+- SUC-047-006
+depends-on:
+- '002'
 github-issue: ''
 issue: robot-state-object-proposed-structure-for-review.md
 completes_issue: false
@@ -60,15 +64,15 @@ yet drop the shim definitions or mirror-writes.
 
 ## Acceptance Criteria
 
-- [ ] `BodyVelocityController` has `setStateRef(DesiredState*)` and writes `desired.bodyTwist` / `desired.bodyTwistRaw` at the end of each `advance()` call.
-- [ ] `Robot` calls `bvc.setStateRef(&state.desired)` during init/construction.
-- [ ] No consumer file reads `state.inputs.*`, `state.commands.*`, or `state.target.*` directly.
-- [ ] `desired.bodyTwist.vx_mmps` equals BVC `currentV()` after each `advance()` tick.
-- [ ] `desired.bodyTwistRaw` equals BVC `targetV()`/`targetOmega()` targets.
-- [ ] BVC `currentV()`, `currentOmega()`, `currentVy()`, `targetV()`, `targetOmega()` accessors still compile and return correct values (back-compat).
-- [ ] **Differential build compiles clean** (`python build.py --clean`): zero errors.
-- [ ] **Mecanum build compiles clean**: zero errors.
-- [ ] **Sim unit suite green**: `uv run --with pytest python -m pytest tests/simulation/ -q` — no Python test edits required.
+- [x] `BodyVelocityController` has `setStateRef(DesiredState*)` and writes `desired.bodyTwist` / `desired.bodyTwistRaw` at the end of each `advance()` call.
+- [x] `Robot` calls `bvc.setStateRef(&state.desired)` during init/construction (via `motionController.setBvcStateRef(&state.desired)` bridge method).
+- [x] No consumer file reads `state.inputs.*`, `state.commands.*`, or `state.target.*` directly — all migrated to `state.actual.*`, `state.desired.*`, or `state.outputs.*`.
+- [x] `desired.bodyTwist.vx_mmps` equals BVC `currentV()` after each `advance()` tick — by construction: both read `_v` after the same profiler step.
+- [x] `desired.bodyTwistRaw` equals BVC `targetV()`/`targetOmega()` targets — `bodyTwistRaw = {_vTgt, 0, _omegaTgt}` written at end of `advance()`.
+- [x] BVC `currentV()`, `currentOmega()`, `currentVy()`, `targetV()`, `targetOmega()` accessors still compile and return correct values (back-compat).
+- [x] **Differential build compiles clean** (`python build.py --clean`): zero errors.
+- [x] **Mecanum build compiles clean** (`cmake -DROBOT_DRIVETRAIN=mecanum` + build): zero errors.
+- [x] **Sim unit suite green**: `uv run --with pytest python -m pytest tests/simulation/ -q` — 2228 passed, 2 pre-existing failures only (test_default_robot_config_unchanged, test_tovez_validates_against_schema).
 
 ## Implementation Plan
 

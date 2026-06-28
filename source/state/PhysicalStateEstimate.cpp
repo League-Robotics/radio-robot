@@ -33,8 +33,9 @@ void PhysicalStateEstimate::getPose(const HardwareState& s,
 
 void PhysicalStateEstimate::getVelocity(const HardwareState& s,
         float& v_mmps, float& omega_rads) {
-    v_mmps      = s.fusedV;
-    omega_rads  = s.fusedOmega;
+    // Read from canonical fused.twist fields (written by Odometry — 047-002).
+    v_mmps     = s.fused.twist.vx_mmps;
+    omega_rads = s.fused.twist.omega_rads;
 }
 
 void PhysicalStateEstimate::initEKF(

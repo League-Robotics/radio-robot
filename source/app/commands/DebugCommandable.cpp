@@ -519,10 +519,10 @@ static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
     (void)ctx;
 #endif
 
-    // fused pose from EKF-integrated state (written by Robot::otosCorrect).
-    float fusedX = ctx.robot->state.actual.otosX;
-    float fusedY = ctx.robot->state.actual.otosY;
-    float fusedH = ctx.robot->state.actual.otosH;
+    // Raw OTOS pose from state (written by Robot::otosCorrect into optical.pose).
+    float fusedX = ctx.robot->state.actual.optical.pose.x;
+    float fusedY = ctx.robot->state.actual.optical.pose.y;
+    float fusedH = ctx.robot->state.actual.optical.pose.h;
 
     // err = ideal − otos (per axis).
     float errX = idealX - otosX;

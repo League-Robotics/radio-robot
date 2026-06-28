@@ -45,20 +45,19 @@ void SimHardware::advance(uint32_t now_ms, const MotorCommands& cmds) {
 
         // Compute turn rate from the current PWM commands and feed it to the
         // plant before update() so the reported-encoder slip model sees the
-        // correct turn intensity.  Bit-identical to MockHAL::advance, which used
-        // MockMotor::cmdSpeed() — equal to cmds.pwmL/pwmR (same rounded value).
-        float aL = fabsf(static_cast<float>(cmds.pwmL));
-        float aR = fabsf(static_cast<float>(cmds.pwmR));
+        // correct turn intensity.
+        // Array convention: [0]=R (FR), [1]=L (FL) — see OutputState.h.
+        float aL = fabsf(static_cast<float>(cmds.pwm[1]));
+        float aR = fabsf(static_cast<float>(cmds.pwm[0]));
         float turnRate = (aL + aR > 0.5f)
-            ? fabsf(static_cast<float>(cmds.pwmR - cmds.pwmL)) / (aL + aR)
+            ? fabsf(static_cast<float>(cmds.pwm[0] - cmds.pwm[1])) / (aL + aR)
             : 0.0f;
         _plant.setTurnRate(turnRate);
 
         // ONE ordered integration step.  setActuators uses the SAME rounded PWM
-        // the control law produced this tick (cmds.pwmL/pwmR), so the encoder
-        // accumulation is bit-identical to the retired MockMotor::integrate.
-        _plant.setActuators(static_cast<int8_t>(cmds.pwmL),
-                            static_cast<int8_t>(cmds.pwmR));
+        // the control law produced this tick (cmds.pwm[1]=FL=L, cmds.pwm[0]=FR=R).
+        _plant.setActuators(static_cast<int8_t>(cmds.pwm[1]),
+                            static_cast<int8_t>(cmds.pwm[0]));
         _plant.update(udt);
 
         // OTOS sim model: integrate the TRUE (pre-slip) plant velocities into the

@@ -92,6 +92,9 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
 {
     motionController.setHardwareState(&state.actual);
     motorController.setCommandsRef(&state.outputs);
+    // 047-003: wire BVC → DesiredState publish so bodyTwist/bodyTwistRaw are
+    // updated every advance() tick.
+    motionController.setBvcStateRef(&state.desired);
 #ifdef ROBOT_DRIVETRAIN_MECANUM
     // 046-005: Bind rear motors (BR, BL) to MotorController after construction.
     // The base 2-motor constructor bound FL (motorL/motorR = front motors);
@@ -213,8 +216,8 @@ void Robot::otosCorrect(uint32_t now_ms)
     static constexpr uint8_t kOtosHardErr = 0xC0;   // errLsm(7) | errPaa(6)
     bool readable = statusOk && ((otosStatus & kOtosHardErr) == 0);
 
-    // Pass poseHrad for the lever-arm offset rotation (no-op when offsets are zero).
-    float headingRad = state.actual.poseHrad;
+    // Pass current fused heading for the lever-arm offset rotation.
+    float headingRad = state.actual.fused.pose.h;
 
     OtosPose p{0.0f, 0.0f, 0.0f};
     bool poseOk = readable && activeOtos.readTransformed(p, headingRad);
@@ -224,6 +227,11 @@ void Robot::otosCorrect(uint32_t now_ms)
     // recent raw reading exists", NOT "was fused".  On a same-tick read failure
     // do not write otosX/Y/H with garbage zeros.
     if (poseOk) {
+        // Write canonical optical.pose (047-003); scalar mirror-writes removed Phase D.
+        state.actual.optical.pose.x = p.x;
+        state.actual.optical.pose.y = p.y;
+        state.actual.optical.pose.h = p.h;
+        // Mirror-write backward-compat scalars (Phase D removes these).
         state.actual.otosX = p.x;
         state.actual.otosY = p.y;
         state.actual.otosH = p.h;

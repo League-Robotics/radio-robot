@@ -48,51 +48,57 @@ void Drive::periodic(uint32_t now, ReplyFn fn, void* ctx)
     // WedgeTest-proven pattern (sprint 015): read BOTH encoders every tick,
     // right motor (M1) first, then left (M2). Write-on-change is already
     // handled by Motor::setSpeed(). Single re-read on implausible delta.
-    bool driving = (_commands.tgtLMms != 0.0f ||
-                    _commands.tgtRMms != 0.0f);
+    // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
+    // tgtMms[] is the canonical output array; scalar tgtLMms/tgtRMms are mirror-writes.
+    bool driving = (_commands.tgtMms[1] != 0.0f ||
+                    _commands.tgtMms[0] != 0.0f);
     if (driving) {
         // Outlier threshold SCALES with commanded speed.  See the original
         // Robot::controlCollectSplitPhase comment block for the full rationale
         // (scaled vs fixed gate, slow-calibration garbage reads).
         const float kMaxDeltaMm = fmaxf(40.0f,
-            fmaxf(fabsf((float)_commands.tgtLMms),
-                  fabsf((float)_commands.tgtRMms)) * 0.2f);
+            fmaxf(fabsf((float)_commands.tgtMms[1]),
+                  fabsf((float)_commands.tgtMms[0])) * 0.2f);
         static constexpr int kRetries = 2;
 
         // Right (M1) first — proven ordering from WedgeTest.
+        // encMm[0]=FR=R (canonical); encRMm is mirror-write (Phase D removes).
         {
             float newR = _motorR.positionMm();
-            float dR   = newR - _inputs.encRMm;
+            float dR   = newR - _inputs.encMm[0];
             if (dR > kMaxDeltaMm || dR < -kMaxDeltaMm) {
-                newR = _inputs.encRMm;             // default: hold old
+                newR = _inputs.encMm[0];           // default: hold old
                 for (int k = 0; k < kRetries; ++k) {
                     float r2  = _motorR.readEncoderMmFSettle(_cfg);
-                    float dr2 = r2 - _inputs.encRMm;
+                    float dr2 = r2 - _inputs.encMm[0];
                     if (dr2 <= kMaxDeltaMm && dr2 >= -kMaxDeltaMm) { newR = r2; break; }
                 }
                 if (_filterRejectStreakR < 255) ++_filterRejectStreakR;
             } else {
                 _filterRejectStreakR = 0;
             }
-            _inputs.encRMm = newR;
+            _inputs.encMm[0] = newR;   // canonical array FR
+            _inputs.encRMm   = newR;   // mirror-write scalar (Phase D removes)
         }
 
         // Left (M2) second.
+        // encMm[1]=FL=L (canonical); encLMm is mirror-write (Phase D removes).
         {
             float newL = _motorL.positionMm();
-            float dL   = newL - _inputs.encLMm;
+            float dL   = newL - _inputs.encMm[1];
             if (dL > kMaxDeltaMm || dL < -kMaxDeltaMm) {
-                newL = _inputs.encLMm;             // default: hold old
+                newL = _inputs.encMm[1];           // default: hold old
                 for (int k = 0; k < kRetries; ++k) {
                     float r2  = _motorL.readEncoderMmFSettle(_cfg);
-                    float dr2 = r2 - _inputs.encLMm;
+                    float dr2 = r2 - _inputs.encMm[1];
                     if (dr2 <= kMaxDeltaMm && dr2 >= -kMaxDeltaMm) { newL = r2; break; }
                 }
                 if (_filterRejectStreakL < 255) ++_filterRejectStreakL;
             } else {
                 _filterRejectStreakL = 0;
             }
-            _inputs.encLMm = newL;
+            _inputs.encMm[1] = newL;   // canonical array FL
+            _inputs.encLMm   = newL;   // mirror-write scalar (Phase D removes)
         }
 
         // (033-005b) Emit EVT enc_filter_hold at threshold crossing (onset).

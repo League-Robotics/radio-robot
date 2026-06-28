@@ -196,6 +196,19 @@ bool BodyVelocityController::advance(float dt_s)
     _mc.setTarget(sL, sR);
 #endif  // ROBOT_DRIVETRAIN_MECANUM
 
+    // Publish live and raw body twist to DesiredState (047-003).
+    // _vy / _vyTgt are always 0 in the differential build (field absent in private
+    // members); they are present in the mecanum build via the #ifdef block above.
+    if (_ds) {
+#ifdef ROBOT_DRIVETRAIN_MECANUM
+        _ds->bodyTwist    = {_v,    _vy,    _omega};
+        _ds->bodyTwistRaw = {_vTgt, _vyTgt, _omegaTgt};
+#else
+        _ds->bodyTwist    = {_v,    0.0f,   _omega};
+        _ds->bodyTwistRaw = {_vTgt, 0.0f,   _omegaTgt};
+#endif
+    }
+
     return !atTarget();
 }
 
