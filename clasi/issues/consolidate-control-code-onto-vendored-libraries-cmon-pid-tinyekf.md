@@ -1,5 +1,6 @@
 ---
 status: pending
+sprint: '050'
 ---
 
 # Consolidate control code onto vendored libraries (cmon-pid + TinyEKF)
