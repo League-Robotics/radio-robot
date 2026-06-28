@@ -1,11 +1,11 @@
 ---
 id: '003'
 title: Refactor VelocityController to compose cmon-pid backcalculation core
-status: open
+status: in-progress
 use-cases:
-  - SUC-002
+- SUC-002
 depends-on:
-  - '002'
+- '002'
 github-issue: ''
 issue: consolidate-control-code-onto-vendored-libraries-cmon-pid-tinyekf.md
 completes_issue: false
