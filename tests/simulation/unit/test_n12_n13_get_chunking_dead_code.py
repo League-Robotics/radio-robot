@@ -12,7 +12,7 @@ N12: Full GET dump (~58 keys, ~805 bytes) is chunked into multiple CFG lines
      without truncation after this change.  The bench step is a stakeholder/
      team-lead task with the robot connected over serial.
 
-N13: Dead/vestigial code removed:
+N13: Dead/vestigial code removed (030-010):
        - RatioPidController removed from MotorController (never ran in
          controlTick; sync-gain coupling replaced it).
        - PID_BYPASS macro removed (was always 0; encoder-wedge root cause fixed).
@@ -20,19 +20,12 @@ N13: Dead/vestigial code removed:
        - DriveMode::TIMED removed (T command runs as VELOCITY; mode= can never
          emit 'T' from firmware).
 
-     pid.* keys RETAINED in ConfigRegistry (host tests use SET/GET pid.*).
+     pid.* keys were RETAINED in ConfigRegistry at that time (host tests used SET/GET pid.*).
      Host TLM parser still accepts mode=T for backward-compatibility with old
      logs; firmware never emits it.
 
-     Caller-safety checks (documented here):
-       - grep host_tests/ host/ tests/ for "pid." SET usage: FOUND in
-         host_tests/test_config_set.py and host/tests/test_protocol_v2.py.
-         pid.* keys kept as no-op config fields (SET/GET accepted, no live
-         controller).  No callers depend on the side-effect of updatePidGains().
-       - grep host/robot_radio for mode=T parser: test_protocol_v2.py has
-         test_parse_tlm_mode_field_T and test_tlm_all_fields both test the
-         parser with a synthetic TLM string — they do NOT require firmware to
-         emit mode=T.  Parser is unchanged; test passes.
+     Sprint 049-004: pid.* keys and RatioPidController source files fully deleted.
+     SET pid.* now returns ERR badkey; bare GET no longer includes pid.* entries.
 """
 from __future__ import annotations
 import re
@@ -102,7 +95,6 @@ class TestN12GetChunking:
         # Spot-check a selection of keys spanning the full registry.
         expected_keys = [
             "ml", "mr", "kff", "tw",
-            "pid.kp", "pid.ki", "pid.kd", "pid.max",
             "vel.kP", "vel.kI", "vel.kFF", "vel.iMax",
             "sync", "vWheelMax", "steerHeadroom",
             "alphaPos", "alphaYaw",
@@ -129,16 +121,6 @@ class TestN12GetChunking:
         assert "ml" in merged, f"Expected 'ml' in CFG reply, got {merged!r}"
         assert "tw" in merged, f"Expected 'tw' in CFG reply, got {merged!r}"
 
-    def test_pid_keys_present_in_chunks(self, sim) -> None:
-        """pid.* keys are present in bare GET output (retained for host compat)."""
-        raw = sim.send_command("GET")
-        merged = _merge_cfg(_collect_cfg_lines(raw))
-        for key in ("pid.kp", "pid.ki", "pid.kd", "pid.max"):
-            assert key in merged, (
-                f"Expected pid key {key!r} in GET output (N13: key retained for "
-                f"host compat); got keys: {sorted(merged.keys())}"
-            )
-
     def test_chunk_count_reasonable(self, sim) -> None:
         """Bare GET produces between 2 and 10 chunks (sanity bound)."""
         raw = sim.send_command("GET")
@@ -149,50 +131,41 @@ class TestN12GetChunking:
 
 
 # ---------------------------------------------------------------------------
-# N13 — dead code removed: pid.* keys kept as no-ops
+# N13 — dead code fully removed: pid.* keys and RatioPidController deleted
+# (sprint 049-004)
 # ---------------------------------------------------------------------------
 
-class TestN13PidKeysNoOp:
-    """N13: pid.* keys are retained in registry but have no live controller effect."""
+class TestN13PidKeysRemoved:
+    """N13 / sprint 049-004: pid.* keys and RatioPidController are fully deleted.
 
-    def test_set_pid_kp_accepted(self, sim) -> None:
-        """SET pid.kp=5.0 is accepted (key still in registry)."""
+    The pid.* config keys (ratioPidKp/Ki/Kd/Max) that were retained for
+    host compatibility in sprint 030-010 (N13) have been removed in
+    sprint 049-004. SET pid.* must now return ERR badkey, and bare GET
+    must not include any pid.* key.
+    """
+
+    def test_set_pid_kp_rejected(self, sim) -> None:
+        """SET pid.kp=5.0 → ERR badkey (key deleted in sprint 049-004)."""
         reply = sim.send_command("SET pid.kp=5.0")
-        assert "OK" in reply, (
-            f"Expected OK for SET pid.kp=5.0 (key retained for host compat), "
-            f"got {reply!r}"
+        assert "ERR" in reply, (
+            f"Expected ERR badkey for SET pid.kp (key deleted), got {reply!r}"
+        )
+        assert "badkey" in reply, (
+            f"Expected 'badkey' in ERR reply for SET pid.kp, got {reply!r}"
         )
 
-    def test_set_pid_ki_accepted(self, sim) -> None:
-        """SET pid.ki=0.01 is accepted."""
+    def test_set_pid_ki_rejected(self, sim) -> None:
+        """SET pid.ki=0.01 → ERR badkey (key deleted in sprint 049-004)."""
         reply = sim.send_command("SET pid.ki=0.01")
-        assert "OK" in reply, f"Expected OK for SET pid.ki, got {reply!r}"
+        assert "ERR" in reply, f"Expected ERR for SET pid.ki, got {reply!r}"
+        assert "badkey" in reply, f"Expected badkey in reply, got {reply!r}"
 
-    def test_get_pid_kp_readable(self, sim) -> None:
-        """GET pid.kp returns a value (key still readable from RobotConfig)."""
-        sim.send_command("SET pid.kp=2.5")
-        raw = sim.send_command("GET pid.kp")
-        assert "pid.kp=2.500" in raw, (
-            f"Expected pid.kp=2.500 in GET reply after SET, got {raw!r}"
-        )
-
-    def test_pid_kp_not_in_motor_controller(self, sim) -> None:
-        """Verify pid.* has no effect on motor PWM (the PID controller is removed).
-
-        SET pid.kp to a huge value: if RatioPidController were still running in
-        controlTick, the enormous gain would cause runaway PWM.  The motor
-        should respond identically with pid.kp=300 vs pid.kp=999999.
-        This is a compile-time guarantee (update() is never called) but the
-        runtime smoke-check confirms no obvious side-effect.
-        """
-        sim.send_command("SET sTimeout=30000")
-        sim.send_command("SET pid.kp=999999.0")
-        sim.send_command("S 200 200 5000")
-        sim.tick_for(500)
-        # Motor should still be driving normally (PWM not at ±100 runaway).
-        # The test just confirms no crash or wildly invalid state.
-        import ctypes
-        pwm_l = float(sim._lib.sim_get_pwm_l(sim._h))
-        pwm_r = float(sim._lib.sim_get_pwm_r(sim._h))
-        assert -101 < pwm_l < 101, f"PWM_L out of range after pid.kp=999999: {pwm_l}"
-        assert -101 < pwm_r < 101, f"PWM_R out of range after pid.kp=999999: {pwm_r}"
+    def test_pid_keys_absent_from_get(self, sim) -> None:
+        """Bare GET must not include pid.kp/ki/kd/max (deleted in sprint 049-004)."""
+        raw = sim.send_command("GET")
+        merged = _merge_cfg(_collect_cfg_lines(raw))
+        for key in ("pid.kp", "pid.ki", "pid.kd", "pid.max"):
+            assert key not in merged, (
+                f"pid key {key!r} should be absent from GET output (deleted in "
+                f"sprint 049-004); got keys: {sorted(merged.keys())}"
+            )
