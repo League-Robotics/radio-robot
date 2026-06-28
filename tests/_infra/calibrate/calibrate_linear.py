@@ -428,7 +428,7 @@ def main() -> int:
             print(f"  driving {args.distance} mm…")
             timeout_ms = int(args.distance / max(args.speed, 1) * 1000) + 4000
             proto.distance(args.speed, args.speed, args.distance)
-            outcome = proto.wait_for_evt_done("D", timeout_ms)
+            outcome, _ = proto.wait_for_evt_done("D", timeout_ms)
             proto.stop()
             time.sleep(0.4)
 

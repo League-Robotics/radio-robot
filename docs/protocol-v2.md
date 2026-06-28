@@ -622,6 +622,69 @@ OK drive l=200 r=200 ms=1000
 EVT done T
 ```
 
+**`reason=` field (sprint 052+).** Every `EVT done …` and `EVT safety_stop`
+line carries a trailing `reason=<token>` field indicating why the motion ended.
+The field follows any `#<id>` token:
+
+| Reason token  | Fired by                                                                  |
+|---------------|---------------------------------------------------------------------------|
+| `time`        | Time stop (`stop=t:` or T/D built-in time stop)                           |
+| `dist`        | Distance stop (`stop=d:` or D built-in distance stop)                     |
+| `rot`         | Rotation stop (`stop=rot:`)                                               |
+| `heading`     | Heading stop (`stop=heading:`)                                            |
+| `pos`         | Position stop (G/GOTO arrival)                                            |
+| `line`        | Line-any stop (`stop=line:`)                                              |
+| `color`       | Color-match stop (`stop=color:`)                                          |
+| `<channel>`   | Sensor stop (`stop=sensor:<ch>:`) — token is the channel name (e.g. `line0`) |
+| `watchdog`    | Safety watchdog expired (`EVT safety_stop reason=watchdog`)               |
+
+The `reason=` token is additive: existing hosts that match on the verb
+(`EVT done T`) continue to work unchanged.
+
+Examples:
+
+```
+EVT done T #12 reason=time
+EVT done D reason=dist
+EVT safety_stop reason=watchdog
+```
+
+### stop= Clauses
+
+Any open-loop motion command (`VW`, `S`, `R`, `T`, `D`, `TURN`) may carry one
+or more `stop=<kind>:<args>` clauses as `key=value` pairs.  Each clause adds a
+stop condition that fires when its condition is satisfied; conditions are
+OR-combined.  Up to 4 `stop=` clauses are accepted per command
+(`kMaxStopConds = 4`).
+
+| Clause                              | Fires when                                                        |
+|-------------------------------------|-------------------------------------------------------------------|
+| `stop=t:<ms>`                       | Duration ≥ ms milliseconds                                        |
+| `stop=d:<mm>`                       | Average encoder travel ≥ mm millimetres                           |
+| `stop=line:<ge\|le>:<thr>`          | Any of line[0..3] satisfies the threshold                         |
+| `stop=sensor:<ch>:<ge\|le>:<thr>`   | Named channel satisfies the threshold                             |
+| `stop=color:<h>:<s>:<v>:<dist>`     | HSV colour distance from target ≤ dist                            |
+| `stop=heading:<cdeg>:<eps_cdeg>`    | Heading within eps of target (centi-degrees)                      |
+| `stop=rot:<arc_mm>`                 | Per-wheel encoder arc ≥ arc_mm                                    |
+
+Channel names for `stop=sensor:`: `line0`..`line3`, `colorR`..`colorC`,
+`analogIn0`..`analogIn3`.
+
+`sensor=<ch>:<op>:<thr>` is accepted as a back-compat alias for
+`stop=sensor:<ch>:<op>:<thr>`.
+
+`T` and `D` retain their positional time/distance arguments AND may carry
+additional `stop=` clauses (OR-combined with the built-in stop):
+
+```
+T 200 200 1000 stop=sensor:line0:ge:512
+D 200 200 300 stop=t:5000
+VW 200 0 stop=d:300 stop=t:5000
+S 200 200 stop=line:ge:512
+TURN 9000 stop=sensor:line0:ge:512
+R 200 500 stop=d:400
+```
+
 ### S — Streaming (Watchdog) Drive
 
 ```
@@ -631,7 +694,7 @@ S <l> <r> [#id]
 
 Sets left and right wheel velocities (mm/s) and resets the streaming
 watchdog.  If no `S` command arrives within `sTimeout` ms (default 500),
-the firmware stops the motors and emits `EVT safety_stop`.
+the firmware stops the motors and emits `EVT safety_stop reason=watchdog`.
 
 Velocity range: −1000 … +1000 mm/s per wheel.  Values outside this
 range return `ERR range l` or `ERR range r`.
@@ -649,13 +712,15 @@ OK drive l=-100 r=100
 ### T — Timed Drive
 
 ```
-T <l> <r> <ms> [#id]
+T <l> <r> <ms> [stop=<kind>:<args>]… [#id]
 → OK drive l=<l> r=<r> ms=<ms> [#id]
   … (later, asynchronously) …
-  EVT done T [#id]
+  EVT done T [#id] reason=<token>
 ```
 
-Drives at the given speeds for `ms` milliseconds (1 … 30 000).
+Drives at the given speeds for `ms` milliseconds (1 … 30 000).  Optional
+`stop=` clauses may be appended; each fires an early stop (OR-combined with
+the built-in time stop).
 
 Velocity range: −1000 … +1000 mm/s.  Duration range: 1 … 30 000 ms.
 
@@ -664,25 +729,31 @@ Example:
 ```
 T 200 200 1000
 OK drive l=200 r=200 ms=1000
-EVT done T
+EVT done T reason=time
 
 T 200 200 1000 #12
 OK drive l=200 r=200 ms=1000 #12
-EVT done T #12
+EVT done T #12 reason=time
+
+T 200 200 5000 stop=sensor:line0:ge:512
+OK drive l=200 r=200 ms=5000
+… (stops when line0 ≥ 512 or 5 s elapses) …
+EVT done T reason=line0
 ```
 
 ### D — Distance Drive
 
 ```
-D <l> <r> <mm> [#id]
+D <l> <r> <mm> [stop=<kind>:<args>]… [#id]
 → OK drive l=<l> r=<r> mm=<mm> [#id]
   … (later, asynchronously) …
-  EVT done D [#id]
+  EVT done D [#id] reason=<token>
 ```
 
 Drives at the given speeds until the average of the absolute encoder
 travel on both wheels reaches `mm` millimetres (1 … 10 000), or until
-a 5-second hard timeout fires.
+a 5-second hard timeout fires.  Optional `stop=` clauses may be appended;
+each fires an early stop (OR-combined with the built-in distance stop).
 
 Velocity range: −1000 … +1000 mm/s.  Distance range: 1 … 10 000 mm.
 
@@ -691,11 +762,16 @@ Example:
 ```
 D 200 200 300
 OK drive l=200 r=200 mm=300
-EVT done D
+EVT done D reason=dist
 
 D 200 200 300 #5
 OK drive l=200 r=200 mm=300 #5
-EVT done D #5
+EVT done D #5 reason=dist
+
+D 200 200 500 stop=t:3000
+OK drive l=200 r=200 mm=500
+… (stops at 500 mm or 3 s, whichever comes first) …
+EVT done D reason=dist
 ```
 
 ### G — Go-To (relative XY)
@@ -733,7 +809,7 @@ EVT done G #7
 ### VW — Body-Twist Velocity Drive (Watchdogged)
 
 ```
-VW <v> <omega_mrads> [#id]
+VW <v> <omega_mrads> [stop=<kind>:<args>]… [#id]
 → OK vw v=<v> omega=<omega_mrads> [#id]
 ```
 
@@ -742,11 +818,13 @@ Sets a body-twist velocity: `v` is the forward speed in mm/s and
 Positive `omega` is CCW (left turn).
 
 The firmware converts `(v, ω)` to individual wheel speeds via
-`BodyKinematics::inverse()`, applies `saturate()`, and enters `STREAMING`
-mode — the **same** watchdog path as the `S` command.  If no `VW` (or `S`)
-command arrives within `sTimeout` ms the motors stop and
-`EVT safety_stop [#id]` is emitted (with the `#id` from the last `VW`
-command, if one was supplied).
+`BodyKinematics::inverse()`, applies `saturate()`, and enters `VELOCITY`
+mode.  If no `VW` (or `S`) command arrives within `sTimeout` ms the motors
+stop and `EVT safety_stop [#id] reason=watchdog` is emitted (with the `#id`
+from the last `VW` command, if one was supplied).
+
+Optional `stop=` clauses may be appended; the first clause that fires ends
+the drive and emits `EVT done VW [#id] reason=<token>`.
 
 The TLM `mode=` field uses `S` for both `S` and `VW` commands.
 
@@ -768,7 +846,12 @@ OK vw v=0 omega=500
 VW 200 300 #7
 OK vw v=200 omega=300 #7
 … (watchdog fires with no subsequent VW) …
-EVT safety_stop #7
+EVT safety_stop #7 reason=watchdog
+
+VW 200 0 stop=d:300 stop=t:5000
+OK vw v=200 omega=0
+… (stops at 300 mm or 5 s) …
+EVT done VW reason=dist
 ```
 
 ### RF — Radio Channel
@@ -1070,7 +1153,7 @@ D 200 200 300
 OK drive l=200 r=200 mm=300
 TLM t=12400 mode=D enc=45,44 pose=45,0,0
 TLM t=12420 mode=D enc=89,88 pose=89,0,0
-EVT done D
+EVT done D reason=dist
 ```
 
 With correlation id (host can match completion to originating request):
@@ -1079,7 +1162,16 @@ With correlation id (host can match completion to originating request):
 D 200 200 300 #5
 OK drive l=200 r=200 mm=300 #5
 TLM t=12400 mode=D enc=45,44 pose=45,0,0
-EVT done D #5
+EVT done D #5 reason=dist
+```
+
+With `stop=` early-exit clause:
+
+```
+T 200 200 1000 #12 stop=sensor:line0:ge:512
+OK drive l=200 r=200 ms=1000 #12
+… (line0 crosses 512 before 1 s elapses) …
+EVT done T #12 reason=line0
 ```
 
 ### Clock-Sync Alignment

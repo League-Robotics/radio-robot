@@ -21,6 +21,7 @@ import pytest
 from robot_radio.robot.protocol import (
     NezhaProtocol,
     ParsedResponse,
+    Stop,
     TLMFrame,
     parse_cfg,
     parse_response,
@@ -648,26 +649,26 @@ class TestEVTDone:
     def test_wait_for_evt_done_returns_done(self) -> None:
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T"]
-        outcome = proto.wait_for_evt_done("T", timeout_ms=1000)
+        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
         assert outcome == "done"
 
     def test_wait_for_evt_done_safety_stop(self) -> None:
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT safety_stop"]
-        outcome = proto.wait_for_evt_done("T", timeout_ms=1000)
+        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
         assert outcome == "safety_stop"
 
     def test_wait_for_evt_done_timeout(self) -> None:
         proto, conn = _proto()
         conn.read_lines.return_value = []  # no replies ever
-        outcome = proto.wait_for_evt_done("T", timeout_ms=10)  # very short
+        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=10)  # very short
         assert outcome == "timeout"
 
     def test_wait_for_evt_done_with_matching_corr_id(self) -> None:
         """wait_for_evt_done accepts EVT done T #12 when corr_id='12'."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T #12"]
-        outcome = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="12")
+        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="12")
         assert outcome == "done"
 
     def test_wait_for_evt_done_skips_wrong_corr_id(self) -> None:
@@ -676,7 +677,7 @@ class TestEVTDone:
         proto, conn = _proto()
         # Always return the wrong id — the filter should skip it and we time out.
         conn.read_lines.side_effect = itertools.repeat(["EVT done T #99"])
-        outcome = proto.wait_for_evt_done("T", timeout_ms=20, corr_id="12")
+        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=20, corr_id="12")
         # Should not accept the wrong id → times out.
         assert outcome == "timeout"
 
@@ -684,14 +685,14 @@ class TestEVTDone:
         """Bare EVT done T (no id) is accepted even when a corr_id filter is set."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T"]
-        outcome = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="12")
+        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="12")
         assert outcome == "done"
 
     def test_wait_for_evt_done_corr_id_safety_stop(self) -> None:
         """EVT safety_stop #5 is accepted when waiting for corr_id='5'."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT safety_stop #5"]
-        outcome = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="5")
+        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="5")
         assert outcome == "safety_stop"
 
 
@@ -921,18 +922,20 @@ class TestWaitForEvtDonePaths:
     """test_wait_for_evt_done_success / test_wait_for_evt_done_safety_stop."""
 
     def test_wait_for_evt_done_success(self) -> None:
-        """wait_for_evt_done returns 'done' when EVT done T is received."""
+        """wait_for_evt_done returns ('done', None) when EVT done T is received."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T"]
-        result = proto.wait_for_evt_done("T", timeout_ms=1000)
+        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
         assert result == "done"
+        assert reason is None
 
     def test_wait_for_evt_done_safety_stop(self) -> None:
-        """wait_for_evt_done returns 'safety_stop' when EVT safety_stop is received."""
+        """wait_for_evt_done returns ('safety_stop', None) when EVT safety_stop is received."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT safety_stop"]
-        result = proto.wait_for_evt_done("T", timeout_ms=1000)
+        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
         assert result == "safety_stop"
+        assert reason is None
 
     def test_wait_for_evt_done_wrong_verb_keeps_waiting(self) -> None:
         """wait_for_evt_done('T') ignores EVT done D — only accepts matching verb."""
@@ -940,28 +943,29 @@ class TestWaitForEvtDonePaths:
         proto, conn = _proto()
         # Always return the wrong verb — should not match and we time out.
         conn.read_lines.side_effect = itertools.repeat(["EVT done D"])
-        result = proto.wait_for_evt_done("T", timeout_ms=20)
+        result, reason = proto.wait_for_evt_done("T", timeout_ms=20)
         assert result == "timeout"
 
     def test_wait_for_evt_done_timeout_returns_timeout(self) -> None:
-        """wait_for_evt_done returns 'timeout' when no matching event arrives."""
+        """wait_for_evt_done returns ('timeout', None) when no matching event arrives."""
         proto, conn = _proto()
         conn.read_lines.return_value = []
-        result = proto.wait_for_evt_done("T", timeout_ms=10)
+        result, reason = proto.wait_for_evt_done("T", timeout_ms=10)
         assert result == "timeout"
+        assert reason is None
 
     def test_wait_for_evt_done_corr_id_success(self) -> None:
         """wait_for_evt_done with corr_id accepts EVT done T #7 when id='7'."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T #7"]
-        result = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="7")
+        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="7")
         assert result == "done"
 
     def test_wait_for_evt_done_corr_id_safety_stop(self) -> None:
         """wait_for_evt_done with corr_id accepts EVT safety_stop #7 when id='7'."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT safety_stop #7"]
-        result = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="7")
+        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="7")
         assert result == "safety_stop"
 
 
@@ -1316,3 +1320,145 @@ class TestTlmDropRate:
         frames = self._frames(received)
         rate = tlm_drop_rate(frames)
         assert rate < 0.02, f"Expected rate < 2%, got {rate:.3f}"
+
+
+# ===========================================================================
+# 052-003 — Stop builder and wait_for_evt_done reason= parsing
+# ===========================================================================
+
+class TestStopBuilder:
+    """Verify all Stop builder class methods produce correct wire tokens."""
+
+    def test_time(self) -> None:
+        assert Stop.time(1000) == "stop=t:1000"
+
+    def test_dist(self) -> None:
+        assert Stop.dist(300) == "stop=d:300"
+
+    def test_line_ge(self) -> None:
+        assert Stop.line("ge", 512) == "stop=line:ge:512"
+
+    def test_line_le(self) -> None:
+        assert Stop.line("le", 256) == "stop=line:le:256"
+
+    def test_sensor(self) -> None:
+        assert Stop.sensor("line0", "ge", 512) == "stop=sensor:line0:ge:512"
+
+    def test_sensor_color_channel(self) -> None:
+        assert Stop.sensor("colorC", "le", 800) == "stop=sensor:colorC:le:800"
+
+    def test_color(self) -> None:
+        assert Stop.color(120, 0.5, 0.4, 0.1) == "stop=color:120:0.5:0.4:0.1"
+
+    def test_heading(self) -> None:
+        assert Stop.heading(4500, 300) == "stop=heading:4500:300"
+
+    def test_rot(self) -> None:
+        assert Stop.rot(250) == "stop=rot:250"
+
+
+class TestStopOnWire:
+    """Verify that stop= tokens are appended correctly in motion commands."""
+
+    def test_vw_with_stop_dist(self) -> None:
+        """vw(200, 0, stop=[Stop.dist(300)]) sends 'VW 200 0 stop=d:300'."""
+        proto, conn = _proto()
+        proto.vw(200, 0, stop=[Stop.dist(300)])
+        cmd = conn.send_fast.call_args[0][0]
+        assert cmd == "VW 200 0 stop=d:300"
+
+    def test_vw_multiple_stop_tokens(self) -> None:
+        """Multiple stop tokens are space-joined and appended before any corr_id."""
+        proto, conn = _proto()
+        proto.vw(200, 0, stop=[Stop.dist(300), Stop.time(5000)])
+        cmd = conn.send_fast.call_args[0][0]
+        assert cmd == "VW 200 0 stop=d:300 stop=t:5000"
+
+    def test_vw_stop_before_corr_id(self) -> None:
+        """stop= tokens come before the trailing #id."""
+        proto, conn = _proto()
+        proto.vw(200, 0, corr_id="7", stop=[Stop.dist(300)])
+        cmd = conn.send_fast.call_args[0][0]
+        assert cmd == "VW 200 0 stop=d:300 #7"
+
+    def test_vw_without_stop_backward_compat(self) -> None:
+        """vw() without stop= produces the same wire string as before."""
+        proto, conn = _proto()
+        proto.vw(200, 0)
+        cmd = conn.send_fast.call_args[0][0]
+        assert cmd == "VW 200 0"
+
+    def test_timed_with_stop_sensor(self) -> None:
+        """timed() with stop=[Stop.sensor(...)] appends sensor stop token."""
+        proto, conn = _proto(["OK drive"])
+        proto.timed(200, 200, 1000, stop=[Stop.sensor("line0", "ge", 512)])
+        cmd = conn.send.call_args[0][0]
+        assert cmd == "T 200 200 1000 stop=sensor:line0:ge:512"
+
+    def test_arc_with_stop(self) -> None:
+        """arc() with stop= appends stop token before corr_id."""
+        proto, conn = _proto()
+        proto.arc(200, 0, corr_id="3", stop=[Stop.rot(250)])
+        cmd = conn.send_fast.call_args[0][0]
+        assert cmd == "R 200 0 stop=rot:250 #3"
+
+    def test_drive_with_stop(self) -> None:
+        """drive() with stop= appends stop token."""
+        proto, conn = _proto()
+        proto.drive(200, 200, stop=[Stop.dist(500)])
+        cmd = conn.send_fast.call_args[0][0]
+        assert cmd == "S 200 200 stop=d:500"
+
+
+class TestWaitForEvtDoneReason:
+    """Verify wait_for_evt_done returns (outcome, reason) with reason= parsing."""
+
+    def test_done_with_reason_time(self) -> None:
+        """EVT done T reason=time → ('done', 'time')."""
+        proto, conn = _proto()
+        conn.read_lines.return_value = ["EVT done T reason=time"]
+        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
+        assert result == "done"
+        assert reason == "time"
+
+    def test_done_without_reason(self) -> None:
+        """EVT done T (no reason=) → ('done', None)."""
+        proto, conn = _proto()
+        conn.read_lines.return_value = ["EVT done T"]
+        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
+        assert result == "done"
+        assert reason is None
+
+    def test_safety_stop_with_reason_watchdog(self) -> None:
+        """EVT safety_stop reason=watchdog → ('safety_stop', 'watchdog')."""
+        proto, conn = _proto()
+        conn.read_lines.return_value = ["EVT safety_stop reason=watchdog"]
+        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
+        assert result == "safety_stop"
+        assert reason == "watchdog"
+
+    def test_timeout_reason_is_none(self) -> None:
+        """Timeout → ('timeout', None)."""
+        proto, conn = _proto()
+        conn.read_lines.return_value = []
+        result, reason = proto.wait_for_evt_done("T", timeout_ms=10)
+        assert result == "timeout"
+        assert reason is None
+
+    def test_corr_id_filter_with_reason(self) -> None:
+        """corr_id filtering still works when reason= is present."""
+        import itertools
+        proto, conn = _proto()
+        # Wrong corr_id should be skipped; should time out.
+        conn.read_lines.side_effect = itertools.repeat(["EVT done T reason=dist #99"])
+        result, reason = proto.wait_for_evt_done("T", timeout_ms=20, corr_id="7")
+        assert result == "timeout"
+        assert reason is None
+
+    def test_corr_id_match_with_reason(self) -> None:
+        """Correct corr_id with reason= → correct tuple."""
+        proto, conn = _proto()
+        conn.read_lines.return_value = ["EVT done T reason=sensor #7"]
+        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="7")
+        assert result == "done"
+        assert reason == "sensor"

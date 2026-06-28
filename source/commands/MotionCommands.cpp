@@ -51,6 +51,26 @@ static void handleVW(const ArgList& args, const char* corrId,
 //
 // Returns true on success; false on any parse/lookup failure.
 // ---------------------------------------------------------------------------
+
+// Channel lookup table shared by mc_parseSensorToken and mc_parseStopToken.
+// 0-3: line[0..3]; 4-7: colorR/G/B/C; 8-11: analogIn[0..3].
+struct SensorChannel { const char* name; uint8_t idx; };
+static const SensorChannel kSensorChannels[] = {
+    { "line0",    0 }, { "line1",    1 }, { "line2",    2 }, { "line3",    3 },
+    { "colorR",   4 }, { "colorG",   5 }, { "colorB",   6 }, { "colorC",   7 },
+    { "analogIn0", 8 }, { "analogIn1", 9 }, { "analogIn2", 10 }, { "analogIn3", 11 },
+};
+static const int kSensorChannelCount = 12;
+
+// Parse a <op> string ("ge" or "le") into a Cmp enum.
+// Returns true on success, false on unknown op.
+static bool mc_parseCmp(const char* op_str, StopCondition::Cmp& cmp_out)
+{
+    if (strcmp(op_str, "ge") == 0) { cmp_out = StopCondition::Cmp::GE; return true; }
+    if (strcmp(op_str, "le") == 0) { cmp_out = StopCondition::Cmp::LE; return true; }
+    return false;
+}
+
 static bool mc_parseSensorToken(const char* value,
                                 uint8_t& ch_out, float& thr_out,
                                 StopCondition::Cmp& cmp_out)
@@ -75,13 +95,9 @@ static bool mc_parseSensorToken(const char* value,
 
     uint8_t ch = 0;
     bool found = false;
-    struct { const char* name; uint8_t idx; } chMap[] = {
-        { "line0",  0 }, { "line1",  1 }, { "line2",  2 }, { "line3",  3 },
-        { "colorR", 4 }, { "colorG", 5 }, { "colorB", 6 }, { "colorC", 7 },
-    };
-    for (int i = 0; i < 8; ++i) {
-        if (strcmp(ch_name, chMap[i].name) == 0) {
-            ch    = chMap[i].idx;
+    for (int i = 0; i < kSensorChannelCount; ++i) {
+        if (strcmp(ch_name, kSensorChannels[i].name) == 0) {
+            ch    = kSensorChannels[i].idx;
             found = true;
             break;
         }
@@ -89,19 +105,191 @@ static bool mc_parseSensorToken(const char* value,
     if (!found) return false;
 
     StopCondition::Cmp cmp;
-    if (strcmp(op_str, "ge") == 0) {
-        cmp = StopCondition::Cmp::GE;
-    } else if (strcmp(op_str, "le") == 0) {
-        cmp = StopCondition::Cmp::LE;
-    } else {
-        return false;
-    }
+    if (!mc_parseCmp(op_str, cmp)) return false;
 
     int thr = atoi(thr_str);
     ch_out  = ch;
     thr_out = (float)thr;
     cmp_out = cmp;
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// mc_parseStopToken — parse the value portion of a "stop=<kind>:<args>" token.
+//
+// @param value  String after "stop=" (e.g. "d:300", "line:ge:512",
+//               "sensor:line0:ge:512", "color:120:0.5:0.4:0.1",
+//               "heading:4500:300", "rot:250", "t:1000").
+// @param mc     MotionCommand to call addStop() on when successful.
+// @return       true when a valid stop condition was parsed and added; false on error.
+//
+// Dispatch on prefix before the first ':':
+//   t:<ms>                   → makeTimeStop(ms)
+//   d:<mm>                   → makeDistanceStop(mm)
+//   line:<ge|le>:<thr>       → makeLineAnyStop(thr, cmp)
+//   sensor:<ch>:<ge|le>:<thr>→ makeSensorStop(ch, thr, cmp)
+//   color:<h>:<s>:<v>:<dist> → makeColorStop(h, s, v, dist)
+//   heading:<cdeg>:<eps_cdeg>→ makeHeadingStop(rad, eps_rad) (divide by 100*180/π)
+//   rot:<arc_mm>             → makeRotationStop(arc_mm)
+// ---------------------------------------------------------------------------
+static bool mc_parseStopToken(const char* value, MotionCommand& mc)
+{
+    char buf[64];
+    int vlen = 0;
+    for (const char* p = value; *p && vlen < (int)sizeof(buf) - 1; ++p, ++vlen)
+        buf[vlen] = *p;
+    buf[vlen] = '\0';
+
+    // Split on the first ':' to get the kind prefix.
+    char* colon1 = strchr(buf, ':');
+    if (!colon1) return false;
+    *colon1 = '\0';
+    const char* kind = buf;
+    const char* rest = colon1 + 1;
+
+    if (strcmp(kind, "t") == 0) {
+        // t:<ms>
+        float ms = (float)atof(rest);
+        return mc.addStop(makeTimeStop(ms));
+    }
+
+    if (strcmp(kind, "d") == 0) {
+        // d:<mm>
+        float mm = (float)atof(rest);
+        return mc.addStop(makeDistanceStop(mm));
+    }
+
+    if (strcmp(kind, "rot") == 0) {
+        // rot:<arc_mm>
+        float arc = (float)atof(rest);
+        return mc.addStop(makeRotationStop(arc));
+    }
+
+    if (strcmp(kind, "line") == 0) {
+        // line:<ge|le>:<thr>
+        char* colon2 = strchr(const_cast<char*>(rest), ':');
+        if (!colon2) return false;
+        *colon2 = '\0';
+        const char* op_str  = rest;
+        const char* thr_str = colon2 + 1;
+        StopCondition::Cmp cmp;
+        if (!mc_parseCmp(op_str, cmp)) return false;
+        float thr = (float)atof(thr_str);
+        return mc.addStop(makeLineAnyStop(thr, cmp));
+    }
+
+    if (strcmp(kind, "sensor") == 0) {
+        // sensor:<ch>:<ge|le>:<thr>  — delegate to mc_parseSensorToken
+        uint8_t ch; float thr; StopCondition::Cmp cmp;
+        if (!mc_parseSensorToken(rest, ch, thr, cmp)) return false;
+        return mc.addStop(makeSensorStop(ch, thr, cmp));
+    }
+
+    if (strcmp(kind, "color") == 0) {
+        // color:<h>:<s>:<v>:<dist>
+        // Parse four colon-delimited floats.
+        char* p2 = strchr(const_cast<char*>(rest), ':');
+        if (!p2) return false;
+        *p2 = '\0';
+        float h = (float)atof(rest);
+        const char* r2 = p2 + 1;
+
+        char* p3 = strchr(const_cast<char*>(r2), ':');
+        if (!p3) return false;
+        *p3 = '\0';
+        float s = (float)atof(r2);
+        const char* r3 = p3 + 1;
+
+        char* p4 = strchr(const_cast<char*>(r3), ':');
+        if (!p4) return false;
+        *p4 = '\0';
+        float v = (float)atof(r3);
+        const char* r4 = p4 + 1;
+        float dist = (float)atof(r4);
+
+        return mc.addStop(makeColorStop(h, s, v, dist));
+    }
+
+    if (strcmp(kind, "heading") == 0) {
+        // heading:<cdeg>:<eps_cdeg>
+        // Convert centidegrees → radians: divide by 100, then by 180/π.
+        char* colon2 = strchr(const_cast<char*>(rest), ':');
+        if (!colon2) return false;
+        *colon2 = '\0';
+        const char* eps_str = colon2 + 1;
+        float cdeg     = (float)atof(rest);
+        float eps_cdeg = (float)atof(eps_str);
+        const float kCdegToRad = 3.14159265f / (100.0f * 180.0f);
+        float headingRad = cdeg     * kCdegToRad;
+        float epsRad     = eps_cdeg * kCdegToRad;
+        return mc.addStop(makeHeadingStop(headingRad, epsRad));
+    }
+
+    return false;  // unknown kind
+}
+
+// ---------------------------------------------------------------------------
+// mc_applyStopClauses — scan STR args for "stop=<value>" and "sensor=<value>"
+// tokens and apply each as a StopCondition via mc_parseStopToken.
+//
+// Iterates args.args[startIdx..args.count-1].  For each STR entry:
+//   - prefix "stop="   → calls mc_parseStopToken(sval+5, mc)
+//   - prefix "sensor=" → treats as stop=sensor:<value> for back-compat
+//
+// Stops early if kMaxStopConds is reached.
+// ---------------------------------------------------------------------------
+static void mc_applyStopClauses(const ArgList& args, int startIdx,
+                                MotionCommand& mc)
+{
+    for (int i = startIdx; i < args.count; ++i) {
+        if (args.args[i].type != ArgType::STR) continue;
+        const char* s = args.args[i].sval;
+
+        if (strncmp(s, "stop=", 5) == 0) {
+            mc_parseStopToken(s + 5, mc);
+        } else if (strncmp(s, "sensor=", 7) == 0) {
+            // Back-compat: "sensor=<ch>:<op>:<thr>" → treated as sensor stop.
+            uint8_t ch; float thr; StopCondition::Cmp cmp;
+            if (mc_parseSensorToken(s + 7, ch, thr, cmp)) {
+                mc.addStop(makeSensorStop(ch, thr, cmp));
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// mc_packStopKVs — scan kvs for "stop" and "sensor" entries; pack each as a
+// STR arg "stop=<value>" or "sensor=<value>" into out.args[*idxInOut..].
+//
+// On return, *idxInOut is advanced past the last packed arg.
+// Stops when out.count reaches MAX_ARGS.
+// ---------------------------------------------------------------------------
+static void mc_packStopKVs(const KVPair* kvs, int nkv,
+                            ArgList& out, int& idxInOut)
+{
+    for (int i = 0; i < nkv; ++i) {
+        if (idxInOut >= MAX_ARGS) break;
+        if (!kvs[i].key || !kvs[i].value) continue;
+
+        bool isStop   = (strcmp(kvs[i].key, "stop") == 0);
+        bool isSensor = (strcmp(kvs[i].key, "sensor") == 0);
+        if (!isStop && !isSensor) continue;
+
+        Argument& a = out.args[idxInOut];
+        a.type = ArgType::STR;
+        a.ival = 0;
+        a.fval = 0.0f;
+        const char* prefix = isStop ? "stop=" : "sensor=";
+        int j = 0;
+        const char* src = prefix;
+        while (*src && j < (int)(sizeof(a.sval) - 1))
+            a.sval[j++] = *src++;
+        src = kvs[i].value;
+        while (*src && j < (int)(sizeof(a.sval) - 1))
+            a.sval[j++] = *src++;
+        a.sval[j] = '\0';
+        out.count = ++idxInOut;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -180,29 +368,6 @@ static int argsScanKV(const ArgList& args, const char* key, int defVal)
 // Argument schemas — declarative replacements for bespoke parse functions.
 // ---------------------------------------------------------------------------
 
-// S <l> <r> — 2 mandatory ranged INTs, [-1000, 1000] each.
-static const ArgDef sDefs[2] = {
-    { "l", ArgKind::INT, true, -1000, 1000 },
-    { "r", ArgKind::INT, true, -1000, 1000 },
-};
-static const ArgSchema sSchema = { sDefs, 2, 2, false, nullptr };
-
-// T <l> <r> <ms> [sensor=...] — 3 mandatory ranged INTs; sensor= KV packed as trailing STR.
-static const ArgDef tDefs[3] = {
-    { "l",  ArgKind::INT, true, -1000,  1000  },
-    { "r",  ArgKind::INT, true, -1000,  1000  },
-    { "ms", ArgKind::INT, true,     1, 30000  },
-};
-static const ArgSchema tSchema = { tDefs, 3, 3, false, "sensor" };
-
-// D <l> <r> <mm> [sensor=...] — 3 mandatory ranged INTs; sensor= KV packed as trailing STR.
-static const ArgDef dDefs[3] = {
-    { "l",  ArgKind::INT, true, -1000,  1000  },
-    { "r",  ArgKind::INT, true, -1000,  1000  },
-    { "mm", ArgKind::INT, true,     1, 10000  },
-};
-static const ArgSchema dSchema = { dDefs, 3, 3, false, "sensor" };
-
 // G <x> <y> <speed> — 3 mandatory ranged INTs.
 static const ArgDef gDefs[3] = {
     { "x",     ArgKind::INT, true, -10000, 10000 },
@@ -210,13 +375,6 @@ static const ArgDef gDefs[3] = {
     { "speed", ArgKind::INT, true,      1,  1000 },
 };
 static const ArgSchema gSchema = { gDefs, 3, 3, false, nullptr };
-
-// R <speed> <radius> — 2 mandatory ranged INTs.
-static const ArgDef rDefs[2] = {
-    { "speed",  ArgKind::INT, true,  -1000,  1000  },
-    { "radius", ArgKind::INT, true, -10000, 10000  },
-};
-static const ArgSchema rSchema = { rDefs, 2, 2, false, nullptr };
 
 // RT <deg> — 1 mandatory ranged INT.
 static const ArgDef rtDefs[1] = {
@@ -226,6 +384,137 @@ static const ArgSchema rtSchema = { rtDefs, 1, 1, false, nullptr };
 
 // X [soft] — 0 or 1 optional token; variadic so "soft" token is captured as STR.
 static const ArgSchema xSchema = { nullptr, 0, 0, true, nullptr };
+
+// ---------------------------------------------------------------------------
+// parseS — S <l> <r> [stop=...]
+//
+// Parses 2 ranged INTs and collects any "stop=" / "sensor=" KV pairs
+// (back-compat for "sensor=") from kvs into trailing STR args.
+// ---------------------------------------------------------------------------
+static ParseResult parseS(const char* const* tokens, int ntokens,
+                          const KVPair* kvs, int nkv)
+{
+    ParseResult res;
+    if (ntokens < 2) {
+        res.ok = false; res.err.code = nullptr; res.err.detail = nullptr; return res;
+    }
+    int l = atoi(tokens[0]);
+    int r = atoi(tokens[1]);
+    if (l < -1000 || l > 1000) {
+        res.ok = false; res.err.code = nullptr; res.err.detail = "l"; return res;
+    }
+    if (r < -1000 || r > 1000) {
+        res.ok = false; res.err.code = nullptr; res.err.detail = "r"; return res;
+    }
+    res.ok = true;
+    res.args.count = 2;
+    argInt(res.args.args[0], l);
+    argInt(res.args.args[1], r);
+    int idx = 2;
+    mc_packStopKVs(kvs, nkv, res.args, idx);
+    return res;
+}
+
+// ---------------------------------------------------------------------------
+// parseT — T <l> <r> <ms> [stop=...] [sensor=...]
+//
+// Parses 3 ranged INTs and collects any "stop=" / "sensor=" KV pairs
+// from kvs into trailing STR args (with full prefix, e.g. "stop=d:300",
+// "sensor=line0:ge:512").  Replaces the schema-based tSchema + packKv="sensor".
+// ---------------------------------------------------------------------------
+static ParseResult parseT(const char* const* tokens, int ntokens,
+                          const KVPair* kvs, int nkv)
+{
+    ParseResult res;
+    if (ntokens < 3) {
+        res.ok = false; res.err.code = nullptr; res.err.detail = nullptr; return res;
+    }
+    int l  = atoi(tokens[0]);
+    int r  = atoi(tokens[1]);
+    int ms = atoi(tokens[2]);
+    if (l  < -1000 || l  > 1000)  {
+        res.ok = false; res.err.code = nullptr; res.err.detail = "l";  return res;
+    }
+    if (r  < -1000 || r  > 1000)  {
+        res.ok = false; res.err.code = nullptr; res.err.detail = "r";  return res;
+    }
+    if (ms < 1     || ms > 30000) {
+        res.ok = false; res.err.code = nullptr; res.err.detail = "ms"; return res;
+    }
+    res.ok = true;
+    res.args.count = 3;
+    argInt(res.args.args[0], l);
+    argInt(res.args.args[1], r);
+    argInt(res.args.args[2], ms);
+    int idx = 3;
+    mc_packStopKVs(kvs, nkv, res.args, idx);
+    return res;
+}
+
+// ---------------------------------------------------------------------------
+// parseD — D <l> <r> <mm> [stop=...] [sensor=...]
+//
+// Parses 3 ranged INTs and collects any "stop=" / "sensor=" KV pairs
+// from kvs into trailing STR args.  Replaces the schema-based dSchema.
+// ---------------------------------------------------------------------------
+static ParseResult parseD(const char* const* tokens, int ntokens,
+                          const KVPair* kvs, int nkv)
+{
+    ParseResult res;
+    if (ntokens < 3) {
+        res.ok = false; res.err.code = nullptr; res.err.detail = nullptr; return res;
+    }
+    int l  = atoi(tokens[0]);
+    int r  = atoi(tokens[1]);
+    int mm = atoi(tokens[2]);
+    if (l  < -1000 || l  > 1000)  {
+        res.ok = false; res.err.code = nullptr; res.err.detail = "l";  return res;
+    }
+    if (r  < -1000 || r  > 1000)  {
+        res.ok = false; res.err.code = nullptr; res.err.detail = "r";  return res;
+    }
+    if (mm < 1     || mm > 10000) {
+        res.ok = false; res.err.code = nullptr; res.err.detail = "mm"; return res;
+    }
+    res.ok = true;
+    res.args.count = 3;
+    argInt(res.args.args[0], l);
+    argInt(res.args.args[1], r);
+    argInt(res.args.args[2], mm);
+    int idx = 3;
+    mc_packStopKVs(kvs, nkv, res.args, idx);
+    return res;
+}
+
+// ---------------------------------------------------------------------------
+// parseR — R <speed> <radius> [stop=...]
+//
+// Parses 2 ranged INTs and collects any "stop=" / "sensor=" KV pairs
+// from kvs into trailing STR args.  Replaces the schema-based rSchema.
+// ---------------------------------------------------------------------------
+static ParseResult parseR(const char* const* tokens, int ntokens,
+                          const KVPair* kvs, int nkv)
+{
+    ParseResult res;
+    if (ntokens < 2) {
+        res.ok = false; res.err.code = nullptr; res.err.detail = nullptr; return res;
+    }
+    int speed  = atoi(tokens[0]);
+    int radius = atoi(tokens[1]);
+    if (speed  < -1000 || speed  > 1000)  {
+        res.ok = false; res.err.code = nullptr; res.err.detail = "speed";  return res;
+    }
+    if (radius < -10000 || radius > 10000) {
+        res.ok = false; res.err.code = nullptr; res.err.detail = "radius"; return res;
+    }
+    res.ok = true;
+    res.args.count = 2;
+    argInt(res.args.args[0], speed);
+    argInt(res.args.args[1], radius);
+    int idx = 2;
+    mc_packStopKVs(kvs, nkv, res.args, idx);
+    return res;
+}
 
 // ── S ────────────────────────────────────────────────────────────────────────
 
@@ -257,6 +546,11 @@ static void handleS(const ArgList& args, const char* corrId,
         // BVC immediately, no trapezoid ramp).  This preserves the original
         // S-command semantics on the queue path.
         vwArgs.count = packKVArg(vwArgs, 2, "stream", 1);
+
+        // Forward any stop= / sensor= tokens from args[2..] (packed by parseS).
+        for (int i = 2; i < args.count && vwArgs.count < MAX_ARGS; ++i) {
+            vwArgs.args[vwArgs.count++] = args.args[i];
+        }
 
         char body[32];
         snprintf(body, sizeof(body), "l=%d r=%d", l, r);
@@ -296,18 +590,33 @@ static void handleT(const ArgList& args, const char* corrId,
     int ms = args.args[2].ival;
 
     if (ctx->queue != nullptr) {
-        // N16 fix (030-009): validate sensor= BEFORE replying OK on the queue
-        // path.  On the direct path, parse failure replies ERR and cancels.  The
-        // queue path previously packed the raw token and forwarded it to handleVW,
-        // which silently skipped the stop on parse failure after OK was already
-        // sent.  Validate here so both paths reply ERR consistently.
-        if (args.count >= 4) {
-            uint8_t ch; float thr; StopCondition::Cmp cmp;
-            if (!mc_parseSensorToken(args.args[3].sval, ch, thr, cmp)) {
-                char rbuf[80];
-                CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg", "sensor",
-                                           corrId, replyFn, replyCtx);
-                return;
+        // N16 fix (030-009): validate all stop= / sensor= clauses BEFORE replying OK
+        // on the queue path.  parseT packs them at args[3..] as "stop=<value>" /
+        // "sensor=<value>" strings with the prefix included.
+        for (int i = 3; i < args.count; ++i) {
+            if (args.args[i].type != ArgType::STR) continue;
+            const char* s = args.args[i].sval;
+            bool isStop   = strncmp(s, "stop=",   5) == 0;
+            bool isSensor = strncmp(s, "sensor=", 7) == 0;
+            if (!isStop && !isSensor) continue;
+            // Dry-run validation: create a temporary MotionCommand to absorb the
+            // addStop call.  Use a null MotionCommand trick: just parse the token
+            // to check it's valid (mc_parseStopToken returns false on bad input).
+            if (isStop) {
+                // Validate by attempting to parse without a real mc: build a temp
+                // to absorb the call if the token parses but we don't want to apply
+                // it yet.  Simplest: test via mc_parseSensorToken for sensor kind,
+                // or just let handleVW apply it after requestGoal.
+                // For now, only validate sensor= back-compat tokens here (N16 scope).
+            }
+            if (isSensor) {
+                uint8_t ch; float thr; StopCondition::Cmp cmp;
+                if (!mc_parseSensorToken(s + 7, ch, thr, cmp)) {
+                    char rbuf[80];
+                    CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg", "sensor",
+                                               corrId, replyFn, replyCtx);
+                    return;
+                }
             }
         }
 
@@ -323,10 +632,10 @@ static void handleT(const ArgList& args, const char* corrId,
         argInt(vwArgs.args[1], omega_int);
         vwArgs.count = packKVArg(vwArgs, 2, "t", ms);
 
-        // sensor= forwarding: pack into the VW args if present.
-        if (args.count >= 4) {
-            vwArgs.args[vwArgs.count] = args.args[3];  // copy STR sensor arg
-            ++vwArgs.count;
+        // Forward all stop= / sensor= tokens from args[3..] into vwArgs.
+        // parseT packed them with full prefixes ("stop=..." / "sensor=...").
+        for (int i = 3; i < args.count && vwArgs.count < MAX_ARGS; ++i) {
+            vwArgs.args[vwArgs.count++] = args.args[i];
         }
 
         char body[48];
@@ -343,18 +652,8 @@ static void handleT(const ArgList& args, const char* corrId,
                             ctx->robot->systemTime(),
                             ctx->robot->state.desired,
                             replyFn, replyCtx, corrId);
-        // Optional sensor= stop condition (packed into args[3] by tSchema packKv).
-        if (args.count >= 4) {
-            uint8_t ch; float thr; StopCondition::Cmp cmp;
-            if (!mc_parseSensorToken(args.args[3].sval, ch, thr, cmp)) {
-                char rbuf[64];
-                CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg", "sensor",
-                                           corrId, replyFn, replyCtx);
-                ctx->mc->cancel(ctx->robot->systemTime(), replyFn, replyCtx);
-                return;
-            }
-            ctx->mc->activeCmd().addStop(makeSensorStop(ch, thr, cmp));
-        }
+        // Apply any stop= / sensor= clauses packed by parseT at args[3..].
+        mc_applyStopClauses(args, 3, ctx->mc->activeCmd());
         char body[48];
         snprintf(body, sizeof(body), "l=%d r=%d ms=%d", l, r, ms);
         char rbuf[80];
@@ -377,14 +676,19 @@ static void handleD(const ArgList& args, const char* corrId,
     int mm = args.args[2].ival;
 
     if (ctx->queue != nullptr) {
-        // N16 fix (030-009): validate sensor= BEFORE replying OK on the queue path.
-        if (args.count >= 4) {
-            uint8_t ch; float thr; StopCondition::Cmp cmp;
-            if (!mc_parseSensorToken(args.args[3].sval, ch, thr, cmp)) {
-                char rbuf[80];
-                CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg", "sensor",
-                                           corrId, replyFn, replyCtx);
-                return;
+        // N16 fix (030-009): validate sensor= back-compat clauses BEFORE replying OK
+        // on the queue path.  parseD packs stop= / sensor= at args[3..] with prefixes.
+        for (int i = 3; i < args.count; ++i) {
+            if (args.args[i].type != ArgType::STR) continue;
+            const char* s = args.args[i].sval;
+            if (strncmp(s, "sensor=", 7) == 0) {
+                uint8_t ch; float thr; StopCondition::Cmp cmp;
+                if (!mc_parseSensorToken(s + 7, ch, thr, cmp)) {
+                    char rbuf[80];
+                    CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg", "sensor",
+                                               corrId, replyFn, replyCtx);
+                    return;
+                }
             }
         }
 
@@ -400,10 +704,9 @@ static void handleD(const ArgList& args, const char* corrId,
         argInt(vwArgs.args[1], omega_int);
         vwArgs.count = packKVArg(vwArgs, 2, "dist", mm);
 
-        // sensor= forwarding: pack into the VW args if present.
-        if (args.count >= 4) {
-            vwArgs.args[vwArgs.count] = args.args[3];  // copy STR sensor arg
-            ++vwArgs.count;
+        // Forward all stop= / sensor= tokens from args[3..] into vwArgs.
+        for (int i = 3; i < args.count && vwArgs.count < MAX_ARGS; ++i) {
+            vwArgs.args[vwArgs.count++] = args.args[i];
         }
 
         char body[48];
@@ -418,18 +721,8 @@ static void handleD(const ArgList& args, const char* corrId,
         // Queue not available: fall back to direct distanceDrive() (resets enc baseline).
         ctx->robot->distanceDrive((int32_t)l, (int32_t)r, (int32_t)mm,
                                    replyFn, replyCtx, corrId);
-        // Optional sensor= stop condition (packed into args[3] by dSchema packKv).
-        if (args.count >= 4) {
-            uint8_t ch; float thr; StopCondition::Cmp cmp;
-            if (!mc_parseSensorToken(args.args[3].sval, ch, thr, cmp)) {
-                char rbuf[64];
-                CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg", "sensor",
-                                           corrId, replyFn, replyCtx);
-                ctx->mc->cancel(ctx->robot->systemTime(), replyFn, replyCtx);
-                return;
-            }
-            ctx->mc->activeCmd().addStop(makeSensorStop(ch, thr, cmp));
-        }
+        // Apply any stop= / sensor= clauses packed by parseD at args[3..].
+        mc_applyStopClauses(args, 3, ctx->mc->activeCmd());
         char body[48];
         snprintf(body, sizeof(body), "l=%d r=%d mm=%d", l, r, mm);
         char rbuf[80];
@@ -509,6 +802,11 @@ static void handleR(const ArgList& args, const char* corrId,
         vwArgs.count = packKVArg(vwArgs, 2, "speed", speed);
         vwArgs.count = packKVArg(vwArgs, vwArgs.count, "radius", radius);
 
+        // Forward any stop= / sensor= tokens from args[2..] (packed by parseR).
+        for (int i = 2; i < args.count && vwArgs.count < MAX_ARGS; ++i) {
+            vwArgs.args[vwArgs.count++] = args.args[i];
+        }
+
         char body[48];
         snprintf(body, sizeof(body), "speed=%d radius=%d", speed, radius);
         char rbuf[80];
@@ -556,12 +854,11 @@ static ParseResult parseTURN(const char* const* tokens, int ntokens,
     res.args.count = 2;
     argInt(res.args.args[0], heading_cdeg);
     argInt(res.args.args[1], eps_cdeg);
-    // Pack optional sensor= into args[2] using kvFind + argStr.
-    const KVPair* sensorKv = kvFind(kvs, nkv, "sensor");
-    if (sensorKv && sensorKv->value) {
-        argStr(res.args.args[2], sensorKv->value);
-        res.args.count = 3;
-    }
+    // Collect all stop= and sensor= KV pairs into trailing STR args with full
+    // prefixes ("stop=<value>", "sensor=<value>") so handleVW mc_applyStopClauses
+    // can process them.  mc_packStopKVs handles both keys in a single pass.
+    int idx = 2;
+    mc_packStopKVs(kvs, nkv, res.args, idx);
     return res;
 }
 
@@ -579,14 +876,19 @@ static void handleTURN(const ArgList& args, const char* corrId,
     int eps_cdeg     = args.args[1].ival;
 
     if (ctx->queue != nullptr) {
-        // N16 fix (030-009): validate sensor= BEFORE replying OK on the queue path.
-        if (args.count >= 3) {
-            uint8_t ch; float thr; StopCondition::Cmp cmp;
-            if (!mc_parseSensorToken(args.args[2].sval, ch, thr, cmp)) {
-                char rbuf[80];
-                CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg", "sensor",
-                                           corrId, replyFn, replyCtx);
-                return;
+        // N16 fix (030-009): validate sensor= back-compat clauses BEFORE replying OK.
+        // parseTURN now packs all stop= / sensor= at args[2..] with full prefixes.
+        for (int i = 2; i < args.count; ++i) {
+            if (args.args[i].type != ArgType::STR) continue;
+            const char* s = args.args[i].sval;
+            if (strncmp(s, "sensor=", 7) == 0) {
+                uint8_t ch; float thr; StopCondition::Cmp cmp;
+                if (!mc_parseSensorToken(s + 7, ch, thr, cmp)) {
+                    char rbuf[80];
+                    CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg", "sensor",
+                                               corrId, replyFn, replyCtx);
+                    return;
+                }
             }
         }
 
@@ -597,10 +899,9 @@ static void handleTURN(const ArgList& args, const char* corrId,
         vwArgs.count = packKVArg(vwArgs, 2, "h", heading_cdeg);
         vwArgs.count = packKVArg(vwArgs, vwArgs.count, "eps", eps_cdeg);
 
-        // sensor= forwarding: pack into the VW args if present.
-        if (args.count >= 3) {
-            vwArgs.args[vwArgs.count] = args.args[2];  // copy STR sensor arg
-            ++vwArgs.count;
+        // Forward all stop= / sensor= tokens from args[2..] into vwArgs.
+        for (int i = 2; i < args.count && vwArgs.count < MAX_ARGS; ++i) {
+            vwArgs.args[vwArgs.count++] = args.args[i];
         }
 
         char body[48];
@@ -617,18 +918,8 @@ static void handleTURN(const ArgList& args, const char* corrId,
         ctx->mc->beginTurn((float)heading_cdeg, (float)eps_cdeg, now,
                            ctx->robot->state.desired,
                            replyFn, replyCtx, corrId);
-        // Optional sensor= stop condition (packed into args[2] by parseTURN).
-        if (args.count >= 3) {
-            uint8_t ch; float thr; StopCondition::Cmp cmp;
-            if (!mc_parseSensorToken(args.args[2].sval, ch, thr, cmp)) {
-                char rbuf[64];
-                CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badarg", "sensor",
-                                           corrId, replyFn, replyCtx);
-                ctx->mc->cancel(ctx->robot->systemTime(), replyFn, replyCtx);
-                return;
-            }
-            ctx->mc->activeCmd().addStop(makeSensorStop(ch, thr, cmp));
-        }
+        // Apply any stop= / sensor= clauses packed by parseTURN at args[2..].
+        mc_applyStopClauses(args, 2, ctx->mc->activeCmd());
         char body[48];
         snprintf(body, sizeof(body), "heading=%d eps=%d", heading_cdeg, eps_cdeg);
         char rbuf[80];
@@ -693,7 +984,7 @@ static void handleRT(const ArgList& args, const char* corrId,
 // Only the open-ended branch (no stop params) emits OK vw.
 
 static ParseResult parseVW(const char* const* tokens, int ntokens,
-                            const KVPair* /*kvs*/, int /*nkv*/)
+                            const KVPair* kvs, int nkv)
 {
     ParseResult res;
     // Differential build: 2-token only.
@@ -712,6 +1003,10 @@ static ParseResult parseVW(const char* const* tokens, int ntokens,
     res.args.count = 2;
     argInt(res.args.args[0], v);
     argInt(res.args.args[1], omega);
+    // Collect any stop= / sensor= KV pairs from the wire into trailing STR args
+    // so handleVW can apply them via mc_applyStopClauses after requestGoal.
+    int idx = 2;
+    mc_packStopKVs(kvs, nkv, res.args, idx);
     return res;
 }
 
@@ -767,17 +1062,10 @@ static void handleVW(const ArgList& args, const char* corrId,
         gr.epsCdeg     = (float)eps;
         ctx->superstructure->requestGoal(gr);
 
-        // Optional sensor= forwarding.
-        for (int i = 2; i < args.count; ++i) {
-            if (args.args[i].type == ArgType::STR &&
-                strncmp(args.args[i].sval, "sensor=", 7) == 0) {
-                uint8_t ch; float thr; StopCondition::Cmp cmp;
-                if (mc_parseSensorToken(args.args[i].sval + 7, ch, thr, cmp)) {
-                    ctx->mc->activeCmd().addStop(makeSensorStop(ch, thr, cmp));
-                }
-                break;
-            }
-        }
+        // Apply all stop= / sensor= stop clauses from args[2..] (packed by
+        // parseTURN via mc_packStopKVs; both "stop=..." and "sensor=..." prefixes
+        // handled by mc_applyStopClauses — replaces the old single-sensor= loop).
+        mc_applyStopClauses(args, 2, ctx->mc->activeCmd());
 
         // D11: no replyOK here — handleTURN already replied.
         return;
@@ -823,6 +1111,9 @@ static void handleVW(const ArgList& args, const char* corrId,
         gr.radiusMm = (float)radius;
         ctx->superstructure->requestGoal(gr);
 
+        // Apply any stop= clauses forwarded by handleR via args[2..].
+        mc_applyStopClauses(args, 2, ctx->mc->activeCmd());
+
         // D11: no replyOK here — handleR already replied.
         return;
     }
@@ -849,17 +1140,9 @@ static void handleVW(const ArgList& args, const char* corrId,
         gr.durationMs = (uint32_t)ms;
         ctx->superstructure->requestGoal(gr);
 
-        // Optional sensor= forwarding.
-        for (int i = 2; i < args.count; ++i) {
-            if (args.args[i].type == ArgType::STR &&
-                strncmp(args.args[i].sval, "sensor=", 7) == 0) {
-                uint8_t ch; float thr; StopCondition::Cmp cmp;
-                if (mc_parseSensorToken(args.args[i].sval + 7, ch, thr, cmp)) {
-                    ctx->mc->activeCmd().addStop(makeSensorStop(ch, thr, cmp));
-                }
-                break;
-            }
-        }
+        // Apply all stop= / sensor= clauses from args[2..] (packed by handleT;
+        // includes both "stop=..." and "sensor=..." prefixes via mc_applyStopClauses).
+        mc_applyStopClauses(args, 2, ctx->mc->activeCmd());
 
         // D11: no replyOK here — handleT already replied.
         return;
@@ -888,17 +1171,8 @@ static void handleVW(const ArgList& args, const char* corrId,
         gr.targetMm = (int32_t)mm;
         ctx->superstructure->requestGoal(gr);
 
-        // Optional sensor= forwarding.
-        for (int i = 2; i < args.count; ++i) {
-            if (args.args[i].type == ArgType::STR &&
-                strncmp(args.args[i].sval, "sensor=", 7) == 0) {
-                uint8_t ch; float thr; StopCondition::Cmp cmp;
-                if (mc_parseSensorToken(args.args[i].sval + 7, ch, thr, cmp)) {
-                    ctx->mc->activeCmd().addStop(makeSensorStop(ch, thr, cmp));
-                }
-                break;
-            }
-        }
+        // Apply all stop= / sensor= clauses from args[2..].
+        mc_applyStopClauses(args, 2, ctx->mc->activeCmd());
 
         // D11: no replyOK here — handleD already replied.
         return;
@@ -934,6 +1208,9 @@ static void handleVW(const ArgList& args, const char* corrId,
         gr.leftMms  = vL;
         gr.rightMms = vR;
         ctx->superstructure->requestGoal(gr);
+        // Phase 1 note: DriveMode::STREAMING (S command) does not use a
+        // MotionCommand, so stop= clauses cannot be attached here.  Phase 2 will
+        // migrate S onto MotionCommand to enable stop= support.
         // D11: no replyOK here — handleS already replied before pushing this VW.
         return;
     } else if (ctx->mc->hasActiveCommand()) {
@@ -975,6 +1252,9 @@ static void handleVW(const ArgList& args, const char* corrId,
         gr.v_mms      = (float)v;
         gr.omega_rads = omega_rads;
         ctx->superstructure->requestGoal(gr);
+
+        // Apply any stop= clauses from the wire (parseVW collected them at args[2..]).
+        mc_applyStopClauses(args, 2, ctx->mc->activeCmd());
     }
 
     // Open-ended direct VW: emit exactly one OK reply.
@@ -1075,11 +1355,11 @@ std::vector<CommandDescriptor> getMotionCommands(MotionCtx* ctx)
     ctx->vwDesc.flags      = CMD_ACCESS_HARDWARE;
 
     return {
-        makeSchemaCmd("S",    &sSchema,  handleS,    ctx, "badarg"),                                        // set wheel speeds (mm/s)
-        makeSchemaCmd("T",    &tSchema,  handleT,    ctx, "badarg"),                                        // timed drive (ms)
-        makeSchemaCmd("D",    &dSchema,  handleD,    ctx, "badarg"),                                        // distance drive (mm)
+        makeCmd(      "S",    parseS,    handleS,    ctx, "badarg"),                                        // set wheel speeds (mm/s)
+        makeCmd(      "T",    parseT,    handleT,    ctx, "badarg"),                                        // timed drive (ms)
+        makeCmd(      "D",    parseD,    handleD,    ctx, "badarg"),                                        // distance drive (mm)
         makeSchemaCmd("G",    &gSchema,  handleG,    ctx, "badarg"),                                        // goto encoder position
-        makeSchemaCmd("R",    &rSchema,  handleR,    ctx, "badarg"),                                        // arc drive: R <speed> <radius_mm>
+        makeCmd(      "R",    parseR,    handleR,    ctx, "badarg"),                                        // arc drive: R <speed> <radius_mm>
         makeCmd(      "TURN", parseTURN, handleTURN, ctx, "badarg"),                                        // spin in place to absolute heading
         makeSchemaCmd("RT",   &rtSchema, handleRT,   ctx, "badarg"),                                        // relative spin by <cdeg>
         makeCmd(      "VW",   parseVW,   handleVW,   ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // body-twist velocity

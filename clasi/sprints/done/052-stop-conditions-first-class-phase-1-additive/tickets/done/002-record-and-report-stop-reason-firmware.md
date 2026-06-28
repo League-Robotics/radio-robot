@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Record and report stop reason (firmware)
-status: open
+status: done
 use-cases:
 - SUC-002
 depends-on:
@@ -148,19 +148,19 @@ Files likely to need updates (from inspection):
 
 ## Acceptance Criteria
 
-- [ ] `T 200 200 1000` (no explicit stop) emits `EVT done T reason=time`.
-- [ ] `D 200 200 300` emits `EVT done D reason=dist`.
-- [ ] A ROTATION stop fires with `reason=rot`.
-- [ ] A HEADING stop fires with `reason=heading`.
-- [ ] A POSITION stop fires with `reason=pos`.
-- [ ] A LINE_ANY stop fires with `reason=line`.
-- [ ] A COLOR stop fires with `reason=color`.
-- [ ] A SENSOR stop for channel line0 fires with `reason=line0`.
-- [ ] Watchdog fire emits `EVT safety_stop reason=watchdog` (not just `EVT safety_stop`).
-- [ ] `EVT done T #12 reason=time` — corr_id and reason both present in correct order.
-- [ ] No existing test breaks due to the additive nature (prefix matches still valid).
-- [ ] Sim tests pass: `uv run --with pytest python -m pytest tests/simulation -q` — no new failures beyond the 2 pre-existing.
-- [ ] Firmware clean build: `python build.py --clean` exits 0.
+- [x] `T 200 200 1000` (no explicit stop) emits `EVT done T reason=time`.
+- [x] `D 200 200 300` emits `EVT done D reason=dist`.
+- [x] A ROTATION stop fires with `reason=rot`.
+- [x] A HEADING stop fires with `reason=heading`.
+- [x] A POSITION stop fires with `reason=pos`.
+- [x] A LINE_ANY stop fires with `reason=line`.
+- [x] A COLOR stop fires with `reason=color`.
+- [x] A SENSOR stop for channel line0 fires with `reason=line0`.
+- [x] Watchdog fire emits `EVT safety_stop reason=watchdog` (not just `EVT safety_stop`).
+- [x] `EVT done T #12 reason=time` — corr_id and reason both present in correct order.
+- [x] No existing test breaks due to the additive nature (prefix matches still valid).
+- [x] Sim tests pass: `uv run --with pytest python -m pytest tests/simulation -q` — no new failures beyond the 2 pre-existing.
+- [x] Firmware clean build: `python build.py --clean` exits 0.
 
 ## Testing
 

@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: 'Validation: sim tests, firmware clean build, end-to-end'
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-002

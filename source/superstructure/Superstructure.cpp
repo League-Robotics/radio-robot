@@ -151,7 +151,7 @@ void Superstructure::evaluateSafety(CommandProcessor& cmd, CommandQueue& queue,
                 ts.watchdogMs = now;  // re-arm to avoid firing every tick
                 char wdBuf[64];
                 CommandProcessor::replyEvt(wdBuf, sizeof(wdBuf),
-                                           "safety_stop", "",
+                                           "safety_stop", "reason=watchdog",
                                            ts.activeFn, ts.activeCtx);
                 // Bypass the queue for internal emergency stop: detach queue
                 // so process() dispatches X immediately, then restore.

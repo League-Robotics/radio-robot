@@ -1,7 +1,7 @@
 ---
 id: '052'
-title: "Stop conditions first-class — Phase 1 (additive)"
-status: planning-docs
+title: "Stop conditions first-class \u2014 Phase 1 (additive)"
+status: done
 branch: sprint/052-stop-conditions-first-class-phase-1-additive
 use-cases:
 - SUC-001

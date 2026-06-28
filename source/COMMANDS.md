@@ -45,15 +45,24 @@ they drive (`beginGoTo`, pursuit, ramps) stays in
 [`MotionController.cpp`](control/MotionController.cpp). Registered in
 [`getMotionCommands()`](commands/MotionCommands.cpp#L1135).
 
+**stop= clauses (sprint 052).** The open-loop motion verbs `VW`, `T`, `D`,
+`R`, and `TURN` accept one or more `stop=<kind>:<args>` clauses appended as
+`key=value` pairs. Each clause adds a stop condition (OR-combined); up to 4
+clauses per command. The first condition to fire ends the drive and adds a
+`reason=<token>` field to the `EVT done` line. `sensor=<ch>:<op>:<thr>` is
+accepted as a back-compat alias for `stop=sensor:<ch>:<op>:<thr>`. See
+[`docs/protocol-v2.md` §10](../docs/protocol-v2.md) for the full grammar and
+reason-token table.
+
 | Cmd | Meaning | HW | Handler | Parse |
 |-----|---------|----|---------|-------|
 | `S` | set wheel speeds (mm/s) | | [`handleS`](commands/MotionCommands.cpp#L223) | [`parseS`](commands/MotionCommands.cpp#L196) |
-| `T` | timed drive (ms) | | [`handleT`](commands/MotionCommands.cpp#L305) | [`parseT`](commands/MotionCommands.cpp#L271) |
-| `D` | distance drive (mm) | | [`handleD`](commands/MotionCommands.cpp#L415) | [`parseD`](commands/MotionCommands.cpp#L382) |
+| `T` | timed drive (ms); accepts `stop=` clauses | | [`handleT`](commands/MotionCommands.cpp#L305) | [`parseT`](commands/MotionCommands.cpp#L271) |
+| `D` | distance drive (mm); accepts `stop=` clauses | | [`handleD`](commands/MotionCommands.cpp#L415) | [`parseD`](commands/MotionCommands.cpp#L382) |
 | `G` | go-to a **robot-relative** point — `G <x> <y> <speed>`: `x` = forward mm, `y` = left mm (`+` = left / CCW), `speed` = 1–1000 mm/s (`x`,`y` clamped to ±10000). Arcs to the (forward, left) target in the robot frame; replies `OK goto`, then `EVT done G` on arrival. | | [`handleG`](commands/MotionCommands.cpp#L518) | [`parseG`](commands/MotionCommands.cpp#L486) |
-| `R` | arc drive: forward speed + turn radius mm — `R <speed> <radius>` (`beginArc`, replies `OK arc`) | | [`handleR`](commands/MotionCommands.cpp#L585) | [`parseR`](commands/MotionCommands.cpp#L558) |
-| `TURN` | spin in place to absolute heading, centidegrees — `TURN <cdeg> [eps=]` (`beginTurn`, replies `OK turn`) | | [`handleTURN`](commands/MotionCommands.cpp#L665) | [`parseTURN`](commands/MotionCommands.cpp#L628) |
-| `VW` | velocity + angular vel (unicycle) | ✓ | [`handleVW`](commands/MotionCommands.cpp#L825) | [`parseVW`](commands/MotionCommands.cpp#L803) |
+| `R` | arc drive: forward speed + turn radius mm — `R <speed> <radius>` (`beginArc`, replies `OK arc`); accepts `stop=` clauses | | [`handleR`](commands/MotionCommands.cpp#L585) | [`parseR`](commands/MotionCommands.cpp#L558) |
+| `TURN` | spin in place to absolute heading, centidegrees — `TURN <cdeg> [eps=]` (`beginTurn`, replies `OK turn`); accepts `stop=` clauses | | [`handleTURN`](commands/MotionCommands.cpp#L665) | [`parseTURN`](commands/MotionCommands.cpp#L628) |
+| `VW` | velocity + angular vel (unicycle); accepts `stop=` clauses | ✓ | [`handleVW`](commands/MotionCommands.cpp#L825) | [`parseVW`](commands/MotionCommands.cpp#L803) |
 | `_VW` | raw velocity, no ramp (seed+set BVC now) | ✓ | [`handle_VW`](commands/MotionCommands.cpp#L1052) | [`parse_VW`](commands/MotionCommands.cpp#L1030) |
 | `X` | stop immediately (`X soft` = ramp) | ✓ | [`handleX`](commands/MotionCommands.cpp#L1098) | [`parseX`](commands/MotionCommands.cpp#L1076) |
 | `STOP` | stop with deceleration | ✓ | [`handleSTOP`](commands/MotionCommands.cpp#L1118) | [`parseNoArgs`](commands/MotionCommands.cpp#L1066) |
