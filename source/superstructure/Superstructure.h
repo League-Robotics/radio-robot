@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include "Config.h"
 #include "Protocol.h"
+#include "StopCondition.h"
 
 // ---------------------------------------------------------------------------
 // Superstructure — Seam 3 of the FRC Elite Architecture adaptation (Phase D).
@@ -102,6 +103,12 @@ struct GoalRequest {
 
     // Arc (ARC)
     float     radiusMm;
+
+    // Stop-condition plumbing (tickets 003–005 will populate these from verb handlers)
+    StopCondition stops[4];   // stop conditions to apply after begin
+    uint8_t       nStops;     // number of valid entries in stops[]
+    bool          streamSeed; // true → seed BVC immediately (S-command semantics)
+    const char*   doneLabel;  // EVT label for setDoneEvt; nullptr = use default
 };
 
 // ---------------------------------------------------------------------------

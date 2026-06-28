@@ -55,6 +55,10 @@ void Superstructure::requestGoal(const GoalRequest& gr)
         // handleVW "t" branch: beginTimed(vL, vR, ms, now, target, fn, ctx, corrId).
         _mc.beginTimed(gr.leftMms, gr.rightMms, gr.durationMs, gr.now_ms,
                        target, gr.replyFn, gr.replyCtx, gr.corrId);
+        if (_mc.hasActiveCommand()) {
+            if (gr.doneLabel) _mc.activeCmd().setDoneEvt(gr.doneLabel);
+            for (uint8_t i = 0; i < gr.nStops; ++i) _mc.activeCmd().addStop(gr.stops[i]);
+        }
         break;
 
     case Goal::DISTANCE:
@@ -63,6 +67,10 @@ void Superstructure::requestGoal(const GoalRequest& gr)
         // (beginDistance + resetEncoders).
         gr.robot->distanceDrive((int32_t)gr.leftMms, (int32_t)gr.rightMms,
                                 gr.targetMm, gr.replyFn, gr.replyCtx, gr.corrId);
+        if (_mc.hasActiveCommand()) {
+            if (gr.doneLabel) _mc.activeCmd().setDoneEvt(gr.doneLabel);
+            for (uint8_t i = 0; i < gr.nStops; ++i) _mc.activeCmd().addStop(gr.stops[i]);
+        }
         break;
 
     case Goal::GOTO:
@@ -88,12 +96,20 @@ void Superstructure::requestGoal(const GoalRequest& gr)
         //   beginVelocity(v, omega, now, target, fn, ctx, corrId).
         _mc.beginVelocity(gr.v_mms, gr.omega_rads, gr.now_ms,
                           target, gr.replyFn, gr.replyCtx, gr.corrId);
+        if (_mc.hasActiveCommand()) {
+            if (gr.doneLabel) _mc.activeCmd().setDoneEvt(gr.doneLabel);
+            for (uint8_t i = 0; i < gr.nStops; ++i) _mc.activeCmd().addStop(gr.stops[i]);
+        }
         break;
 
     case Goal::ARC:
         // handleVW "radius" branch: beginArc(speed, radius, now, target, fn, ctx, corrId).
         _mc.beginArc(gr.speedMms, gr.radiusMm, gr.now_ms,
                      target, gr.replyFn, gr.replyCtx, gr.corrId);
+        if (_mc.hasActiveCommand()) {
+            if (gr.doneLabel) _mc.activeCmd().setDoneEvt(gr.doneLabel);
+            for (uint8_t i = 0; i < gr.nStops; ++i) _mc.activeCmd().addStop(gr.stops[i]);
+        }
         break;
 
     case Goal::IDLE:
