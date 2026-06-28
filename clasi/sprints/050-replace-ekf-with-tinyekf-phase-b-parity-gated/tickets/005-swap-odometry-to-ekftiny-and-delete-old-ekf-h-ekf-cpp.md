@@ -1,9 +1,11 @@
 ---
 id: '005'
 title: Swap Odometry to EKFTiny and delete old EKF.h/EKF.cpp
-status: open
-use-cases: ["SUC-003"]
-depends-on: ["050-004"]
+status: in-progress
+use-cases:
+- SUC-003
+depends-on:
+- 050-004
 github-issue: ''
 issue: consolidate-control-code-onto-vendored-libraries-cmon-pid-tinyekf.md
 completes_issue: false
