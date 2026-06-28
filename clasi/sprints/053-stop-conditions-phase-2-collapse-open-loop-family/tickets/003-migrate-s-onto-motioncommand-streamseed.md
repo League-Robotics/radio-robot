@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Migrate S onto MotionCommand (streamSeed path)
-status: open
+status: in-progress
 use-cases:
 - SUC-001
 - SUC-004
