@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: 'Documentation: protocol-v2.md and COMMANDS.md'
-status: open
+status: in-progress
 use-cases:
 - SUC-004
 depends-on:
