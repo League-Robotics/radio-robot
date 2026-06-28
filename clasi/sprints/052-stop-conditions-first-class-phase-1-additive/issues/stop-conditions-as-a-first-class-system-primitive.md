@@ -1,6 +1,12 @@
 ---
-status: pending
-sprint: '053'
+status: in-progress
+sprint: '052'
+tickets:
+- 052-001
+- 052-002
+- 052-003
+- 052-004
+- 052-005
 ---
 
 # Stop Conditions as a First-Class System Primitive
