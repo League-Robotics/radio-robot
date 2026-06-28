@@ -122,17 +122,6 @@ void MotionCommand::setTarget(float v_mms, float omega_rads)
     }
 }
 
-#ifdef ROBOT_DRIVETRAIN_MECANUM
-void MotionCommand::setTarget(float v_mms, float omega_rads, float vy_mms)
-{
-    _vTgt     = v_mms;
-    _omegaTgt = omega_rads;
-
-    if (_bvc) {
-        _bvc->setTarget(_vTgt, _omegaTgt, vy_mms);
-    }
-}
-#endif
 
 bool MotionCommand::tick(const HardwareState& inputs, uint32_t now_ms, float dt_s)
 {

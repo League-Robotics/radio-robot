@@ -141,18 +141,6 @@ public:
      */
     void setTarget(float v_mms, float omega_rads);
 
-#ifdef ROBOT_DRIVETRAIN_MECANUM
-    /**
-     * setTarget (3-DOF, mecanum) — update v, omega AND the lateral vy on the BVC.
-     *
-     * 046-008: the 2-arg setTarget()/start() apply the BVC's 2-arg form, which
-     * resets vy to 0 (the mecanum BVC default). VW velocity commands carrying a
-     * non-zero vy (strafe) must use this overload so vy is not dropped — both at
-     * begin (applied after start()) and on each keepalive re-arm.
-     */
-    void setTarget(float v_mms, float omega_rads, float vy_mms);
-#endif
-
     /**
      * tick — advance BVC one tick; evaluate stop conditions; handle teardown.
      *
