@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: Migrate SystemCommands.cpp to ArgSchema
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 - SUC-003
@@ -51,18 +51,18 @@ but have their bodies cleaned up with `argStr` helpers.
 
 ## Acceptance Criteria
 
-- [ ] `parseHello`, `parsePing`, `parseId`, `parseVer`, `parseHelp`, `parseSnap`,
+- [x] `parseHello`, `parsePing`, `parseId`, `parseVer`, `parseHelp`, `parseSnap`,
   `parseKeepalive` deleted; registrations updated to `parseFn = nullptr`.
-- [ ] `parseEcho`, `parseStream`, `parseSafe` deleted; replaced by `variadic=true`
+- [x] `parseEcho`, `parseStream`, `parseSafe` deleted; replaced by `variadic=true`
   ArgSchema + `makeSchemaCmd` registrations.
-- [ ] `parseSI` deleted; replaced by `{ndefs=3, minTokens=3, ranged=false}` schema.
-- [ ] `parseRf` deleted; replaced by `{ndefs=1, minTokens=0, ranged=false}` schema.
-- [ ] `parseZero` retained; body uses `argStr` helper for the token copy loops.
-- [ ] `parseHalt` retained; body uses `argStr` helper for the token copy loops.
-- [ ] `parseBaud` retained (sval path for large int; argStr acceptable).
-- [ ] All handler reply strings byte-identical vs. before.
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` — no new failures.
-- [ ] Primary oracle: `tests/simulation/unit/test_system_commands_coverage.py`.
+- [x] `parseSI` deleted; replaced by `{ndefs=3, minTokens=3, ranged=false}` schema.
+- [x] `parseRf` deleted; replaced by `{ndefs=1, minTokens=0, ranged=false}` schema.
+- [x] `parseZero` retained; body uses `argStr` helper for the token copy loops.
+- [x] `parseHalt` retained; body uses `argStr` helper for the token copy loops.
+- [x] `parseBaud` retained (sval path for large int; argStr acceptable).
+- [x] All handler reply strings byte-identical vs. before.
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` — no new failures.
+- [x] Primary oracle: `tests/simulation/unit/test_system_commands_coverage.py`.
 
 ## Implementation Plan
 

@@ -9,6 +9,10 @@
 //
 // All handlers remain Robot:: member calls via RobotSysCtx* handlerCtx.
 // Class layout and Robot.h are unchanged.
+//
+// Migration (051-005): no-arg parse stubs removed (parseFn=nullptr);
+// ECHO/STREAM/SAFE migrated to variadic ArgSchema; SI/RF migrated to
+// positional ArgSchema. ZERO/HALT/BAUD retain custom parseFn.
 // ---------------------------------------------------------------------------
 
 #include "Robot.h"
@@ -16,6 +20,7 @@
 #include "MotionCommands.h"
 #include "ConfigCommands.h"
 #include "DebugCommands.h"
+#include "ArgParse.h"
 
 #ifndef HOST_BUILD
 #include "MicroBit.h"
@@ -63,12 +68,6 @@ static RobotSysCtx& ctxFrom(void* p)
 //   Output: DEVICE:NEZHA2:robot:<name>:<serial>
 // ---------------------------------------------------------------------------
 
-static ParseResult parseHello(const char* const* /*tokens*/, int /*ntokens*/,
-                               const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r; r.ok = true; r.args.count = 0; return r;
-}
-
 static void handleHello(const ArgList& /*args*/, const char* /*corrId*/,
                          ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
@@ -87,12 +86,6 @@ static void handleHello(const ArgList& /*args*/, const char* /*corrId*/,
 //   Reply: OK pong t=<ms>
 // ---------------------------------------------------------------------------
 
-static ParseResult parsePing(const char* const* /*tokens*/, int /*ntokens*/,
-                              const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r; r.ok = true; r.args.count = 0; return r;
-}
-
 static void handlePing(const ArgList& /*args*/, const char* corrId,
                         ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
@@ -105,30 +98,37 @@ static void handlePing(const ArgList& /*args*/, const char* corrId,
 }
 
 // ---------------------------------------------------------------------------
-// ECHO -- echo payload tokens back.
-//   prefix "ECHO"; parseFn stores tokens as STR args.
-//   Reply: OK echo <joined tokens>
+// Argument schemas — declarative replacements for ECHO, STREAM, SAFE, SI, RF.
 // ---------------------------------------------------------------------------
 
-static ParseResult parseEcho(const char* const* tokens, int ntokens,
-                              const KVPair* /*kvs*/, int /*nkv*/)
-{
-    // Store each token as a STR arg; handler reassembles them.
-    ParseResult r;
-    r.ok = true;
-    int n = (ntokens > MAX_ARGS) ? MAX_ARGS : ntokens;
-    r.args.count = n;
-    for (int i = 0; i < n; ++i) {
-        r.args.args[i].type = ArgType::STR;
-        r.args.args[i].ival = 0;
-        r.args.args[i].fval = 0.0f;
-        int j = 0;
-        for (; tokens[i][j] != '\0' && j < (int)sizeof(r.args.args[i].sval) - 1; ++j)
-            r.args.args[i].sval[j] = tokens[i][j];
-        r.args.args[i].sval[j] = '\0';
-    }
-    return r;
-}
+// ECHO — variadic: all tokens passed through as STR args.
+static const ArgSchema echoSchema = { nullptr, 0, 0, true, nullptr };
+
+// STREAM — variadic: period or "fields=..." tokens passed as STR args.
+static const ArgSchema streamSchema = { nullptr, 0, 0, true, nullptr };
+
+// SAFE — variadic: "off"/"on"/numeric tokens passed as STR args.
+static const ArgSchema safeSchema = { nullptr, 0, 0, true, nullptr };
+
+// SI <x_mm> <y_mm> <h_cdeg> — 3 mandatory INTs; ranged=false (plain atoi, no range check).
+static const ArgDef siDefs[3] = {
+    { "x_mm",   ArgKind::INT, false, 0, 0 },
+    { "y_mm",   ArgKind::INT, false, 0, 0 },
+    { "h_cdeg", ArgKind::INT, false, 0, 0 },
+};
+static const ArgSchema siSchema = { siDefs, 3, 3, false, nullptr };
+
+// RF [chan] — 0 or 1 optional INT; ranged=false.
+static const ArgDef rfDefs[1] = {
+    { "chan", ArgKind::INT, false, 0, 0 },
+};
+static const ArgSchema rfSchema = { rfDefs, 1, 0, false, nullptr };
+
+// ---------------------------------------------------------------------------
+// ECHO -- echo payload tokens back.
+//   prefix "ECHO"; variadic ArgSchema; stores tokens as STR args.
+//   Reply: OK echo <joined tokens>
+// ---------------------------------------------------------------------------
 
 static void handleEcho(const ArgList& args, const char* corrId,
                         ReplyFn replyFn, void* replyCtx, void* handlerCtx)
@@ -154,12 +154,6 @@ static void handleEcho(const ArgList& args, const char* corrId,
 //   prefix "ID"; parseFn nullptr.
 //   Reply: ID model=Nezha2 name=<n> serial=<s> fw=<ver> proto=2 caps=<c>
 // ---------------------------------------------------------------------------
-
-static ParseResult parseId(const char* const* /*tokens*/, int /*ntokens*/,
-                            const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r; r.ok = true; r.args.count = 0; return r;
-}
 
 static void handleId(const ArgList& /*args*/, const char* corrId,
                       ReplyFn replyFn, void* replyCtx, void* handlerCtx)
@@ -206,12 +200,6 @@ static void handleId(const ArgList& /*args*/, const char* corrId,
 //   Reply: OK ver fw=<ver> proto=2
 // ---------------------------------------------------------------------------
 
-static ParseResult parseVer(const char* const* /*tokens*/, int /*ntokens*/,
-                             const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r; r.ok = true; r.args.count = 0; return r;
-}
-
 static void handleVer(const ArgList& /*args*/, const char* corrId,
                        ReplyFn replyFn, void* replyCtx, void* /*handlerCtx*/)
 {
@@ -226,12 +214,6 @@ static void handleVer(const ArgList& /*args*/, const char* corrId,
 //   prefix "HELP"; parseFn nullptr.
 //   Reply: OK help <verb list>
 // ---------------------------------------------------------------------------
-
-static ParseResult parseHelp(const char* const* /*tokens*/, int /*ntokens*/,
-                              const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r; r.ok = true; r.args.count = 0; return r;
-}
 
 static void handleHelp(const ArgList& /*args*/, const char* corrId,
                         ReplyFn replyFn, void* replyCtx, void* /*handlerCtx*/)
@@ -262,12 +244,6 @@ static void handleHelp(const ArgList& /*args*/, const char* corrId,
 //   (ticket 028-005): the shared _tlmSeq counter on both SNAP and STREAM lets
 //   the host detect/skip frames from before a motion phase started.
 // ---------------------------------------------------------------------------
-
-static ParseResult parseSnap(const char* const* /*tokens*/, int /*ntokens*/,
-                              const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r; r.ok = true; r.args.count = 0; return r;
-}
 
 static void handleSnap(const ArgList& /*args*/, const char* /*corrId*/,
                         ReplyFn replyFn, void* replyCtx, void* handlerCtx)
@@ -309,19 +285,12 @@ static ParseResult parseZero(const char* const* tokens, int ntokens,
         r.err = { "badarg", nullptr };
         return r;
     }
-    // Pass tokens as STR args.
+    // Pass tokens as STR args using argStr helper.
     int n = (ntokens > MAX_ARGS) ? MAX_ARGS : ntokens;
     r.ok = true;
     r.args.count = n;
-    for (int i = 0; i < n; ++i) {
-        r.args.args[i].type = ArgType::STR;
-        r.args.args[i].ival = 0;
-        r.args.args[i].fval = 0.0f;
-        int j = 0;
-        for (; tokens[i][j] != '\0' && j < (int)sizeof(r.args.args[i].sval) - 1; ++j)
-            r.args.args[i].sval[j] = tokens[i][j];
-        r.args.args[i].sval[j] = '\0';
-    }
+    for (int i = 0; i < n; ++i)
+        argStr(r.args.args[i], tokens[i]);
     return r;
 }
 
@@ -376,31 +345,9 @@ static void handleZero(const ArgList& args, const char* corrId,
 
 // ---------------------------------------------------------------------------
 // STREAM -- configure telemetry stream period and/or field mask.
-//   prefix "STREAM"; parseFn passes period int or fields= string.
+//   prefix "STREAM"; variadic ArgSchema; passes period int or fields= string.
 //   Reply: OK stream period=<ms> | OK stream fields=<csv>
 // ---------------------------------------------------------------------------
-
-static ParseResult parseStream(const char* const* tokens, int ntokens,
-                                const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r;
-    r.ok = true;
-    // Pass tokens as raw STR args.
-    // "STREAM <ms>" -> args[0].sval = "<ms>"  (parsed as int by handler)
-    // "STREAM fields=enc,pose" -> args[0].sval = "fields=enc,pose"  (handler checks prefix)
-    int n = (ntokens > MAX_ARGS) ? MAX_ARGS : ntokens;
-    r.args.count = n;
-    for (int i = 0; i < n; ++i) {
-        r.args.args[i].type = ArgType::STR;
-        r.args.args[i].ival = 0;
-        r.args.args[i].fval = 0.0f;
-        int j = 0;
-        for (; tokens[i][j] != '\0' && j < (int)sizeof(r.args.args[i].sval) - 1; ++j)
-            r.args.args[i].sval[j] = tokens[i][j];
-        r.args.args[i].sval[j] = '\0';
-    }
-    return r;
-}
 
 static void handleStream(const ArgList& args, const char* corrId,
                           ReplyFn replyFn, void* replyCtx, void* handlerCtx)
@@ -500,29 +447,6 @@ static void handleStream(const ArgList& args, const char* corrId,
 }
 
 // ---------------------------------------------------------------------------
-// RF -- radio channel get/set.
-//   prefix "RF"; parseFn passes optional channel as INT arg.
-//   Reply: OK rf chan=<n> group=10
-// ---------------------------------------------------------------------------
-
-static ParseResult parseRf(const char* const* tokens, int ntokens,
-                            const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r;
-    r.ok = true;
-    if (ntokens >= 1) {
-        r.args.count = 1;
-        r.args.args[0].type = ArgType::INT;
-        r.args.args[0].ival = atoi(tokens[0]);
-        r.args.args[0].fval = 0.0f;
-        r.args.args[0].sval[0] = '\0';
-    } else {
-        r.args.count = 0;
-    }
-    return r;
-}
-
-// ---------------------------------------------------------------------------
 // BAUD <rate> -- change the USB serial baud rate at runtime.
 //   Boots at 115200; "BAUD <rate>" replies "OK baud <rate>" at the OLD baud,
 //   then retunes the UART. Supported: 115200, 230400, 921600, 1000000.
@@ -541,11 +465,7 @@ static ParseResult parseBaud(const char* const* tokens, int ntokens,
         // the common "ival=X; fval=0.0f;" idiom would zero a >16-bit rate. The
         // handler atoi()s sval, which is outside the union.
         r.args.count = 1;
-        r.args.args[0].type = ArgType::STR;
-        int j = 0;
-        for (; tokens[0][j] != '\0' && j < (int)sizeof(r.args.args[0].sval) - 1; ++j)
-            r.args.args[0].sval[j] = tokens[0][j];
-        r.args.args[0].sval[j] = '\0';
+        argStr(r.args.args[0], tokens[0]);
     } else {
         r.args.count = 0;
     }
@@ -644,12 +564,6 @@ static void handleRf(const ArgList& args, const char* corrId,
 //   Reply: OK keepalive
 // ---------------------------------------------------------------------------
 
-static ParseResult parseKeepalive(const char* const* /*tokens*/, int /*ntokens*/,
-                                   const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r; r.ok = true; r.args.count = 0; return r;
-}
-
 static void handleKeepalive(const ArgList& /*args*/, const char* /*corrId*/,
                               ReplyFn /*replyFn*/, void* /*replyCtx*/, void* handlerCtx)
 {
@@ -675,27 +589,8 @@ static void handleKeepalive(const ArgList& /*args*/, const char* /*corrId*/,
 //   SAFE off  (or SAFE 0)-> disable the watchdog (no keepalives required)
 //   SAFE on   [<ms>]     -> enable; optional <ms> sets sTimeoutMs
 //   SAFE <ms>            -> <ms> > 0: enable + set timeout; 0: disable
-// Tokens are passed through as STR args (same as parseGet).
+// variadic ArgSchema: tokens passed through as STR args.
 // ---------------------------------------------------------------------------
-
-static ParseResult parseSafe(const char* const* tokens, int ntokens,
-                              const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r;
-    r.ok = true;
-    int n = (ntokens > MAX_ARGS) ? MAX_ARGS : ntokens;
-    r.args.count = n;
-    for (int i = 0; i < n; ++i) {
-        r.args.args[i].type = ArgType::STR;
-        r.args.args[i].ival = 0;
-        r.args.args[i].fval = 0.0f;
-        int j = 0;
-        for (; tokens[i][j] != '\0' && j < (int)sizeof(r.args.args[i].sval) - 1; ++j)
-            r.args.args[i].sval[j] = tokens[i][j];
-        r.args.args[i].sval[j] = '\0';
-    }
-    return r;
-}
 
 static void handleSafe(const ArgList& args, const char* corrId,
                         ReplyFn replyFn, void* replyCtx, void* handlerCtx)
@@ -756,24 +651,8 @@ static void handleSafe(const ArgList& args, const char* corrId,
 // so a subsequent G/D/TURN drives in the correct world frame. This is the pose
 // the motion controller reads -- unlike OV, which only nudges the raw OTOS chip.
 // Reply: OK setpose x=<mm> y=<mm> h=<cdeg>
+// siSchema: 3 mandatory INTs, ranged=false (plain atoi, no range check).
 // ---------------------------------------------------------------------------
-
-static ParseResult parseSI(const char* const* tokens, int ntokens,
-                            const KVPair* /*kvs*/, int /*nkv*/)
-{
-    ParseResult r;
-    if (ntokens < 3) {
-        r.ok = false;
-        r.err = { "badarg", "SI x_mm y_mm h_cdeg" };
-        return r;
-    }
-    r.ok = true;
-    r.args.count = 3;
-    r.args.args[0].type = ArgType::INT; r.args.args[0].ival = atoi(tokens[0]);
-    r.args.args[1].type = ArgType::INT; r.args.args[1].ival = atoi(tokens[1]);
-    r.args.args[2].type = ArgType::INT; r.args.args[2].ival = atoi(tokens[2]);
-    return r;
-}
 
 static void handleSI(const ArgList& args, const char* corrId,
                       ReplyFn replyFn, void* replyCtx, void* handlerCtx)
@@ -837,19 +716,12 @@ static ParseResult parseHalt(const char* const* tokens, int ntokens,
         r.err = { "badarg", "usage: HALT TIME|DIST|POS|COLOR|LINE|CLEAR|INFO|LIST ..." };
         return r;
     }
-    // Pass all tokens as STR args.
+    // Pass all tokens as STR args using argStr helper.
     int n = (ntokens > MAX_ARGS) ? MAX_ARGS : ntokens;
     r.ok = true;
     r.args.count = n;
-    for (int i = 0; i < n; ++i) {
-        r.args.args[i].type = ArgType::STR;
-        r.args.args[i].ival = 0;
-        r.args.args[i].fval = 0.0f;
-        int j = 0;
-        for (; tokens[i][j] != '\0' && j < (int)sizeof(r.args.args[i].sval) - 1; ++j)
-            r.args.args[i].sval[j] = tokens[i][j];
-        r.args.args[i].sval[j] = '\0';
-    }
+    for (int i = 0; i < n; ++i)
+        argStr(r.args.args[i], tokens[i]);
     return r;
 }
 
@@ -1177,22 +1049,24 @@ std::vector<CommandDescriptor> Robot::buildCommandTable(
     if (dbg) append(dbg->getCommands());
 
     // ---- System commands ----
-    // GET VEL before GET so the longer prefix wins the linear scan.
-    cmds.push_back(makeCmd("HELLO",     parseHello,     handleHello,     sysCtxPtr, "badarg")); // identify firmware + version
-    cmds.push_back(makeCmd("PING",     parsePing,      handlePing,      sysCtxPtr, "badarg")); // liveness check
-    cmds.push_back(makeCmd("ECHO",     parseEcho,      handleEcho,      sysCtxPtr, "badarg")); // echo tokens back
-    cmds.push_back(makeCmd("ID",       parseId,        handleId,        sysCtxPtr, "badarg")); // report robot identity string
-    cmds.push_back(makeCmd("VER",      parseVer,       handleVer,       sysCtxPtr, "badarg")); // report firmware version
-    cmds.push_back(makeCmd("HELP",     parseHelp,      handleHelp,      sysCtxPtr, "badarg")); // list available commands
-    cmds.push_back(makeCmd("SNAP",     parseSnap,      handleSnap,      sysCtxPtr, "badarg")); // emit one TLM frame on demand
-    cmds.push_back(makeCmd("ZERO",     parseZero,      handleZero,      sysCtxPtr, "badarg")); // zero encoders/pose/halt-baselines
-    cmds.push_back(makeCmd("HALT",     parseHalt,      handleHalt,      sysCtxPtr, "badarg")); // named stop-condition registry
-    cmds.push_back(makeCmd("STREAM",   parseStream,    handleStream,    sysCtxPtr, "badarg")); // start/stop periodic TLM stream
-    cmds.push_back(makeCmd("RF",       parseRf,        handleRf,        sysCtxPtr, "badarg")); // set radio channel
-    cmds.push_back(makeCmd("BAUD",     parseBaud,      handleBaud,      sysCtxPtr, "badarg")); // set USB serial baud rate
-    cmds.push_back(makeCmd("+",        parseKeepalive, handleKeepalive, sysCtxPtr, "badarg")); // keepalive: reset watchdog
-    cmds.push_back(makeCmd("SAFE",     parseSafe,      handleSafe,      sysCtxPtr, "badarg")); // enable/disable safety watchdog + set timeout
-    cmds.push_back(makeCmd("SI",       parseSI,        handleSI,        sysCtxPtr, "badarg")); // set odometry world pose (x_mm y_mm h_cdeg)
+    // No-arg commands: parseFn=nullptr — framework passes empty ArgList.
+    cmds.push_back(makeCmd("HELLO",  nullptr, handleHello,     sysCtxPtr, "badarg")); // identify firmware + version
+    cmds.push_back(makeCmd("PING",   nullptr, handlePing,      sysCtxPtr, "badarg")); // liveness check
+    cmds.push_back(makeCmd("ID",     nullptr, handleId,        sysCtxPtr, "badarg")); // report robot identity string
+    cmds.push_back(makeCmd("VER",    nullptr, handleVer,       sysCtxPtr, "badarg")); // report firmware version
+    cmds.push_back(makeCmd("HELP",   nullptr, handleHelp,      sysCtxPtr, "badarg")); // list available commands
+    cmds.push_back(makeCmd("SNAP",   nullptr, handleSnap,      sysCtxPtr, "badarg")); // emit one TLM frame on demand
+    cmds.push_back(makeCmd("+",      nullptr, handleKeepalive, sysCtxPtr, "badarg")); // keepalive: reset watchdog
+    // Custom-parseFn commands: ZERO/HALT retain sub-verb dispatch; BAUD uses sval for large int.
+    cmds.push_back(makeCmd("ZERO",   parseZero, handleZero,   sysCtxPtr, "badarg")); // zero encoders/pose/halt-baselines
+    cmds.push_back(makeCmd("HALT",   parseHalt, handleHalt,   sysCtxPtr, "badarg")); // named stop-condition registry
+    cmds.push_back(makeCmd("BAUD",   parseBaud, handleBaud,   sysCtxPtr, "badarg")); // set USB serial baud rate
+    // Schema-driven commands: variadic STR for ECHO/STREAM/SAFE; positional INT for SI/RF.
+    cmds.push_back(makeSchemaCmd("ECHO",   &echoSchema,   handleEcho,   sysCtxPtr, "badarg")); // echo tokens back
+    cmds.push_back(makeSchemaCmd("STREAM", &streamSchema, handleStream, sysCtxPtr, "badarg")); // start/stop periodic TLM stream
+    cmds.push_back(makeSchemaCmd("SAFE",   &safeSchema,   handleSafe,   sysCtxPtr, "badarg")); // enable/disable safety watchdog + set timeout
+    cmds.push_back(makeSchemaCmd("SI",     &siSchema,     handleSI,     sysCtxPtr, "badarg")); // set odometry world pose (x_mm y_mm h_cdeg)
+    cmds.push_back(makeSchemaCmd("RF",     &rfSchema,     handleRf,     sysCtxPtr, "badarg")); // set radio channel
     // GET VEL / GET / SET descriptors live in ConfigCommands.cpp (A3 split).
     // GET VEL is registered first so its longer prefix wins the linear scan.
     appendConfigCommands(cmds, &_cfgCtx, sysCtxPtr);
