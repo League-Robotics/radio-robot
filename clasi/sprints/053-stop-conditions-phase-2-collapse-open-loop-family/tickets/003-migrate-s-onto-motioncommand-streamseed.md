@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Migrate S onto MotionCommand (streamSeed path)
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 - SUC-004
@@ -42,7 +42,7 @@ is still set by `beginRawVelocity` (_VW command) — do not affect that path.
 
 ## Acceptance Criteria
 
-- [ ] `handleS` in `MotionCommands.cpp`:
+- [x] `handleS` in `MotionCommands.cpp`:
   - Computes (v, ω) via `BodyKinematics::forward` (already does this).
   - Packs any `stop=` / `sensor=` clauses from `args[2..]` into
     `gr.stops[0..nStops-1]` (iterating and calling `mc_parseStopToken` inline
@@ -54,26 +54,26 @@ is still set by `beginRawVelocity` (_VW command) — do not affect that path.
   - Does NOT call `pushVW` or `packKVArg`.
   - Replies OK in the same place as before (no D11 change for S; S replies
     after requestGoal, not before).
-- [ ] `beginVelocity` in `MotionControllerBegin.cpp` has a `bool seedImmediate`
+- [x] `beginVelocity` in `MotionControllerBegin.cpp` has a `bool seedImmediate`
   parameter (default `false`). When `true`:
   - Calls `_bvc.seedCurrent(v_mms, omega_rads)` before `_bvc.setTarget(...)`.
   - Sets `_mode = DriveMode::VELOCITY` (not STREAMING).
-- [ ] `Superstructure::requestGoal` VELOCITY case: when `gr.streamSeed == true`,
+- [x] `Superstructure::requestGoal` VELOCITY case: when `gr.streamSeed == true`,
   calls `_mc.beginVelocity(..., seedImmediate=true)`.
-- [ ] `handleVW` in `MotionCommands.cpp`: the `argsHasKey(args, "stream")`
+- [x] `handleVW` in `MotionCommands.cpp`: the `argsHasKey(args, "stream")`
   branch is removed.
-- [ ] `parseS` and `mc_packStopKVs` helper: `parseS` continues to pack stop=
+- [x] `parseS` and `mc_packStopKVs` helper: `parseS` continues to pack stop=
   KVs into trailing STR args for the queue path (the stop-packing is needed for
   the direct GoalRequest stop[] population in handleS).
-- [ ] `driveAdvance` audit: any `mode == DriveMode::STREAMING` branch that
+- [x] `driveAdvance` audit: any `mode == DriveMode::STREAMING` branch that
   applied S-specific keepalive or watchdog logic is updated. `DriveMode::STREAMING`
   is only the mode of `_VW` / `beginRawVelocity` after this change.
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` passes with
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` passes with
   exactly 2 known failures; at least one new test covers:
   - `S 300 300 stop=d:400` fires `reason=dist`.
   - `S 300 300` with no stop= remains open-ended.
   - `EVT done S` label emitted on completion.
-- [ ] `python build.py --clean` exits 0.
+- [x] `python build.py --clean` exits 0.
 
 ## Implementation Plan
 

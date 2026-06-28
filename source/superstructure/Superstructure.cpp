@@ -92,10 +92,12 @@ void Superstructure::requestGoal(const GoalRequest& gr)
         break;
 
     case Goal::VELOCITY:
-        // handleVW open-ended NEW-command branch:
-        //   beginVelocity(v, omega, now, target, fn, ctx, corrId).
+        // VW open-ended NEW-command branch, and S-command (streamSeed=true) branch.
+        // beginVelocity(v, omega, now, target, fn, ctx, corrId, seedImmediate).
+        // When gr.streamSeed is true (S command), the BVC is seeded at the target
+        // speed immediately (no trapezoid ramp-up), preserving S's original semantics.
         _mc.beginVelocity(gr.v_mms, gr.omega_rads, gr.now_ms,
-                          target, gr.replyFn, gr.replyCtx, gr.corrId);
+                          target, gr.replyFn, gr.replyCtx, gr.corrId, gr.streamSeed);
         if (_mc.hasActiveCommand()) {
             if (gr.doneLabel) _mc.activeCmd().setDoneEvt(gr.doneLabel);
             for (uint8_t i = 0; i < gr.nStops; ++i) _mc.activeCmd().addStop(gr.stops[i]);

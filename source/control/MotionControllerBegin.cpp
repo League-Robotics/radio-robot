@@ -144,7 +144,7 @@ void MotionController::beginStream(float leftMms, float rightMms, uint32_t now_m
 
 void MotionController::beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
                                      TargetState& target, ReplyFn fn, void* ctx,
-                                     const char* corr_id)
+                                     const char* corr_id, bool seedImmediate)
 {
     // Cancel any stale MotionCommand before configuring the new one.
     // cancel(HARD) emits "EVT cancelled" via the stored reply sink (making the
@@ -157,15 +157,26 @@ void MotionController::beginVelocity(float v_mms, float omega_rads, uint32_t now
     // Re-arm safety if SAFE off was issued (one-shot disable, sprint 024-003).
     _checkSafeOneShot(fn, ctx);
 
+    // seedImmediate (S-command path): seed the BVC current state immediately at
+    // the target speed so there is no trapezoid ramp-up.  This preserves S's
+    // original semantics (beginStream seeded BVC before setTarget).
+    // VW / non-seed path: BVC ramps from its current state (no seedCurrent call).
+    if (seedImmediate) {
+        _bvc.seedCurrent(v_mms, omega_rads);
+    }
+
     // Configure a fresh MotionCommand for body-twist (v, ω) with:
     //   - No TIME stop (keepalive watchdog is now the system watchdog in
     //     LoopScheduler — fires EVT safety_stop + X after sTimeoutMs silence).
     //   - SOFT stop style (ramp to zero before completing).
     //   - No reply sink needed — VW has no correlated EVT done; system watchdog
     //     emits EVT safety_stop directly.
+    //   - RETARGETABLE origin for VW (S-origin is also RETARGETABLE per ticket 002).
     _activeCmd.configure(v_mms, omega_rads, &_bvc);
     _activeCmd.setOrigin(MotionCommand::Origin::RETARGETABLE);
     // No addStop: system watchdog in LoopScheduler owns keepalive enforcement.
+    // (Stop conditions for S / VW with stop= are added by Superstructure::requestGoal
+    //  after this call, via gr.stops[] and gr.nStops.)
     _activeCmd.setReplySink(fn, ctx, corr_id);
     _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
 
@@ -175,10 +186,10 @@ void MotionController::beginVelocity(float v_mms, float omega_rads, uint32_t now
     _activeCmd.start(inputs, now_ms);
 
     // Set mode to VELOCITY — distinct from STREAMING so the S-mode watchdog
-    // branch in driveAdvance does NOT fire for VW.
+    // branch in driveAdvance does NOT fire for VW or S.
     _mode = DriveMode::VELOCITY;
 
-    // Do NOT write to target.replyFn for VW — the reply sink is captured by
+    // Do NOT write to target.replyFn for VW/S — the reply sink is captured by
     // _activeCmd.  target is updated only for the TLM mode field.
     target.mode = DriveMode::VELOCITY;
 }

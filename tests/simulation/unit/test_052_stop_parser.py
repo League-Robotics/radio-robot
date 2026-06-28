@@ -302,12 +302,11 @@ def test_s_stop_line_accepted(sim):
 def test_s_stop_line_accepted_parser_only(sim):
     """S 200 200 stop=line:ge:512 is accepted at the parse level (no ERR).
 
-    Phase 1 note: The S command routes via DriveMode::STREAMING (beginStream),
-    which does NOT use a MotionCommand.  The stop= token is parsed and forwarded
-    by parseS + handleS + handleVW, but mc_applyStopClauses finds no active
-    MotionCommand to attach the condition to.  The condition therefore has no
-    effect in Phase 1; Phase 2 will wire S onto MotionCommand.  This test
-    ensures the wire grammar is accepted without error.
+    Phase 1 note (now resolved in 053-003): S previously routed via
+    DriveMode::STREAMING (beginStream), which did NOT use a MotionCommand.
+    After 053-003, S routes via VELOCITY+streamSeed so stop= conditions
+    now fire.  This test retains the acceptance check; firing is verified
+    in test_053_s_stop_condition.py::test_s_stop_line_fires.
     """
     _setup(sim)
     r = sim.send_command("S 200 200 stop=line:ge:512")
