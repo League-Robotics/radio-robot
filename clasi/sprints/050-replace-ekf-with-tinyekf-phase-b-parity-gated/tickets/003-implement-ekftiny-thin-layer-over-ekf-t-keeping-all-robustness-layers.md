@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Implement EKFTiny thin layer over ekf_t keeping all robustness layers
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 depends-on:
@@ -125,14 +125,14 @@ Use `ekf_initialize(&_ekf, pdiag)` in `init()` and optionally in `setPose()`.
 
 ## Acceptance Criteria
 
-- [ ] `source/state/EKFTiny.h` exists with the public API matching `EKF` exactly.
-- [ ] `source/state/EKFTiny.cpp` exists with `#define EKF_N 5` and `#define EKF_M 2` before `#include <tinyekf.h>`.
-- [ ] `ekf_predict` is called in `EKFTiny::predict()` for the F*P*Fᵀ+Q step.
-- [ ] `ekf_update` is called (or bypassed with analytic equivalent) in `EKFTiny::updatePosition()` for the M=2 update.
-- [ ] `updateHeading` and `updateVelocity` apply scalar updates manually (no `ekf_update` call) — same numerical path as `EKF.cpp`.
-- [ ] All robustness layers present: arc-segment model, Mahalanobis gating (all three channels), D3 P-inflation recovery for position and heading, wedge-aware omega suppression is supported via the `updateVelocity` omega_obs=0 path.
-- [ ] `source/state/EKF.{h,cpp}` are NOT deleted or modified.
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` passes with no new failures beyond the 2 pre-existing baseline. (Parity of EKFTiny vs test_ekf.py is verified in ticket 004; this ticket just confirms the build is clean.)
+- [x] `source/state/EKFTiny.h` exists with the public API matching `EKF` exactly.
+- [x] `source/state/EKFTiny.cpp` exists with `#define EKF_N 5` and `#define EKF_M 2` before `#include <tinyekf.h>`.
+- [x] `ekf_predict` is called in `EKFTiny::predict()` for the F*P*Fᵀ+Q step.
+- [x] `ekf_update` is called (or bypassed with analytic equivalent) in `EKFTiny::updatePosition()` for the M=2 update. (Bypassed: analytic 2x2 S^-1 used end-to-end for parity; see design note.)
+- [x] `updateHeading` and `updateVelocity` apply scalar updates manually (no `ekf_update` call) — same numerical path as `EKF.cpp`.
+- [x] All robustness layers present: arc-segment model, Mahalanobis gating (all three channels), D3 P-inflation recovery for position and heading, wedge-aware omega suppression is supported via the `updateVelocity` omega_obs=0 path.
+- [x] `source/state/EKF.{h,cpp}` are NOT deleted or modified.
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` passes with no new failures beyond the 2 pre-existing baseline. (Parity of EKFTiny vs test_ekf.py is verified in ticket 004; this ticket just confirms the build is clean.)
 
 ## Implementation Plan
 
