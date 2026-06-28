@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Host-side stop= builders and reason= parsing
-status: open
+status: in-progress
 use-cases:
 - SUC-003
 depends-on:
