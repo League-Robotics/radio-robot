@@ -1,15 +1,16 @@
 ---
-id: "005"
-title: "Tests cleanup and final verification: delete mecanum integration tests, verify green"
-status: open
+id: '005'
+title: 'Tests cleanup and final verification: delete mecanum integration tests, verify
+  green'
+status: in-progress
 use-cases:
-  - SUC-048-004
-  - SUC-048-001
+- SUC-048-004
+- SUC-048-001
 depends-on:
-  - "001"
-  - "002"
-  - "003"
-  - "004"
+- '001'
+- '002'
+- '003'
+- '004'
 issue: eliminate-ifdef-robot-drivetrain-mecanum-everywhere.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
