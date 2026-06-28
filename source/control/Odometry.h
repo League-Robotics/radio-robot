@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include "Inputs.h"
 #include "io/capability/IOdometer.h"
-#include "state/EKF.h"
+#include "state/EKFTiny.h"
 
 // ---------------------------------------------------------------------------
 // effectiveSlip — migration-safe rotationalSlip clamp.
@@ -263,7 +263,7 @@ private:
     // (Robot::controlCollectSplitPhase() via wheelWedgedL/R()).  Defaults false.
     bool _wedgeActive = false;
 
-    EKF _ekf;              // Extended Kalman Filter — fuses encoder odometry with OTOS
+    EKFTiny _ekf;          // Extended Kalman Filter — fuses encoder odometry with OTOS
 
 
     // Wrap heading to (-π, π] using atan2f identity.

@@ -1,9 +1,12 @@
 ---
 id: '006'
-title: 'Final validation: full suite, firmware build, vendor confinement, and TinyEKF constraint check'
-status: open
-use-cases: ["SUC-004"]
-depends-on: ["050-005"]
+title: 'Final validation: full suite, firmware build, vendor confinement, and TinyEKF
+  constraint check'
+status: done
+use-cases:
+- SUC-004
+depends-on:
+- 050-005
 github-issue: ''
 issue: consolidate-control-code-onto-vendored-libraries-cmon-pid-tinyekf.md
 completes_issue: true

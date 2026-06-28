@@ -8,6 +8,14 @@
 // Build: cmake -S . -B host_tests/build && cmake --build host_tests/build
 // Load:  python3 -c "import ctypes; ctypes.CDLL('./host_tests/build/libfirmware_host.dylib')"
 
+// Sprint 050, Ticket 004: EKFTiny must be included BEFORE robot/Robot.h so that
+// EKF_N / EKF_M are defined from EKFTiny.h before tinyekf.h is pulled in by any
+// other header.  EKFTiny.h itself guards the defines with #ifndef, so including it
+// first is safe even if Robot.h or its transitive headers also include tinyekf.h.
+#define EKF_N 5
+#define EKF_M 2
+#include "state/EKFTiny.h"
+
 #include "robot/Robot.h"
 #include "commands/CommandProcessor.h"
 #include "commands/CommandQueue.h"
@@ -968,6 +976,137 @@ float sim_get_fused_pose_y(void* h) {
 }
 float sim_get_fused_pose_h(void* h) {
     return static_cast<SimHandle*>(h)->robot.state.actual.fused.pose.h;
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 050, Ticket 004 — standalone EKFTiny sim API
+//
+// These functions create and exercise an EKFTiny object independently from the
+// live Robot/Odometry stack.  They are used by test_ekf.py to run the same
+// numerical test suite against EKFTiny as is run against the Python EKF mirror,
+// establishing parity between the two implementations.
+//
+// Pattern: sim_ekftiny_create() returns an opaque void* owning an EKFTiny
+// instance.  Callers must call sim_ekftiny_destroy() when done.  This is a
+// separate lifecycle from the main SimHandle.
+// ---------------------------------------------------------------------------
+
+// Opaque handle for a standalone EKFTiny instance (not wired into Robot).
+void* sim_ekftiny_create()
+{
+    return new EKFTiny();
+}
+
+void sim_ekftiny_destroy(void* h)
+{
+    delete static_cast<EKFTiny*>(h);
+}
+
+// Mirrors EKFTiny::init().
+void sim_ekftiny_init(void* h,
+                      float q_xy, float q_theta, float q_v, float q_omega,
+                      float r_otos_xy, float r_otos_v, float r_enc_v)
+{
+    static_cast<EKFTiny*>(h)->init(q_xy, q_theta, q_v, q_omega,
+                                   r_otos_xy, r_otos_v, r_enc_v);
+}
+
+// Mirrors EKFTiny::setPose().
+void sim_ekftiny_set_pose(void* h, float x, float y, float theta)
+{
+    static_cast<EKFTiny*>(h)->setPose(x, y, theta);
+}
+
+// Mirrors EKFTiny::predict().
+void sim_ekftiny_predict(void* h, float dCenter, float dTheta,
+                         float theta_before, float dt_s)
+{
+    static_cast<EKFTiny*>(h)->predict(dCenter, dTheta, theta_before, dt_s);
+}
+
+// Mirrors EKFTiny::updatePosition().
+void sim_ekftiny_update_position(void* h, float x_otos, float y_otos)
+{
+    static_cast<EKFTiny*>(h)->updatePosition(x_otos, y_otos);
+}
+
+// Mirrors EKFTiny::updateVelocity().
+void sim_ekftiny_update_velocity(void* h, float v_meas, float omega_meas,
+                                 float r_v, float r_omega)
+{
+    static_cast<EKFTiny*>(h)->updateVelocity(v_meas, omega_meas, r_v, r_omega);
+}
+
+// Mirrors EKFTiny::updateHeading().
+void sim_ekftiny_update_heading(void* h, float theta_meas, float r_theta)
+{
+    static_cast<EKFTiny*>(h)->updateHeading(theta_meas, r_theta);
+}
+
+// State accessors.
+float sim_ekftiny_x(void* h)     { return static_cast<EKFTiny*>(h)->x(); }
+float sim_ekftiny_y(void* h)     { return static_cast<EKFTiny*>(h)->y(); }
+float sim_ekftiny_theta(void* h) { return static_cast<EKFTiny*>(h)->theta(); }
+float sim_ekftiny_v(void* h)     { return static_cast<EKFTiny*>(h)->v(); }
+float sim_ekftiny_omega(void* h) { return static_cast<EKFTiny*>(h)->omega(); }
+
+int sim_ekftiny_rejected_count(void* h)
+{
+    return static_cast<EKFTiny*>(h)->rejectedCount();
+}
+
+int sim_ekftiny_rej_head_streak(void* h)
+{
+    return static_cast<EKFTiny*>(h)->rejHeadStreak();
+}
+
+int sim_ekftiny_rej_pos_streak(void* h)
+{
+    return static_cast<EKFTiny*>(h)->rejPosStreak();
+}
+
+// P diagonal accessor — index 0..4.
+float sim_ekftiny_p_diag(void* h, int idx)
+{
+    return static_cast<EKFTiny*>(h)->pDiag(idx);
+}
+
+// Row accessor: return one row of the 5x5 P matrix as 5 floats into out[].
+// Needed by tests that inspect off-diagonal entries (e.g. TestSetPose, block-
+// decoupling tests).  out must point to a buffer of at least 5 floats.
+void sim_ekftiny_p_row(void* h, int row, float* out)
+{
+    EKFTiny* e = static_cast<EKFTiny*>(h);
+    if (row < 0 || row > 4 || !out) return;
+    for (int col = 0; col < 5; ++col)
+        out[col] = e->pEntry(row, col);
+}
+
+// Direct state injection — needed by tests that set _x[3] or _x[4] directly
+// (e.g. TestPredictVelocity, TestUpdateVelocity, TestMahalanobisGating).
+void sim_ekftiny_set_x(void* h, int idx, float val)
+{
+    static_cast<EKFTiny*>(h)->setXEntry(idx, val);
+}
+
+// Direct P injection — needed by tests that set P entries directly
+// (e.g. TestUpdateHeading: e._P[2][2] = 0.1, TestPositionGateRecovery:
+// e._rej_pos_streak = 0).
+void sim_ekftiny_set_p(void* h, int row, int col, float val)
+{
+    static_cast<EKFTiny*>(h)->setPEntry(row, col, val);
+}
+
+// Direct streak injection — needed by tests that reset streaks (pre-005 logic
+// simulation in TestPositionGateRecovery::test_pre_005_logic_does_not_converge).
+void sim_ekftiny_set_rej_pos_streak(void* h, int streak)
+{
+    static_cast<EKFTiny*>(h)->setRejPosStreak(streak);
+}
+
+void sim_ekftiny_set_rej_head_streak(void* h, int streak)
+{
+    static_cast<EKFTiny*>(h)->setRejHeadStreak(streak);
 }
 
 } // extern "C"

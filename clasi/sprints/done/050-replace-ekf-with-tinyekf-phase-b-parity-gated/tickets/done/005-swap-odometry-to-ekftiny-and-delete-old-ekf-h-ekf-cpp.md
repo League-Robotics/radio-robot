@@ -1,9 +1,11 @@
 ---
 id: '005'
 title: Swap Odometry to EKFTiny and delete old EKF.h/EKF.cpp
-status: open
-use-cases: ["SUC-003"]
-depends-on: ["050-004"]
+status: done
+use-cases:
+- SUC-003
+depends-on:
+- 050-004
 github-issue: ''
 issue: consolidate-control-code-onto-vendored-libraries-cmon-pid-tinyekf.md
 completes_issue: false
@@ -46,14 +48,14 @@ Before deleting EKF.h and EKF.cpp:
 
 ## Acceptance Criteria
 
-- [ ] `source/state/EKF.h` does not exist.
-- [ ] `source/state/EKF.cpp` does not exist.
-- [ ] `source/control/Odometry.h` includes `"state/EKFTiny.h"` and declares `EKFTiny _ekf`.
-- [ ] `source/control/Odometry.cpp` is unchanged.
-- [ ] `source/state/PhysicalStateEstimate.{h,cpp}` are unchanged.
-- [ ] `python build.py --clean` completes successfully (firmware + host-sim builds).
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` shows exactly 2 failures (pre-existing config-schema tests) and no others.
-- [ ] `test_vendor_confinement.py` remains green.
+- [x] `source/state/EKF.h` does not exist.
+- [x] `source/state/EKF.cpp` does not exist.
+- [x] `source/control/Odometry.h` includes `"state/EKFTiny.h"` and declares `EKFTiny _ekf`.
+- [x] `source/control/Odometry.cpp` is unchanged.
+- [x] `source/state/PhysicalStateEstimate.{h,cpp}` are unchanged (comment-only update to PhysicalStateEstimate.h).
+- [x] `python build.py --clean` completes successfully (firmware + host-sim builds).
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` shows exactly 2 failures (pre-existing config-schema tests) and no others.
+- [x] `test_vendor_confinement.py` remains green.
 
 ## Implementation Plan
 

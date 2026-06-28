@@ -37,6 +37,7 @@ _INCLUDE_DIRS = [
     _SRC / "robot",
     _SRC / "types",
     _SRC / "app",
+    _REPO_ROOT / "libraries" / "tinyekf",  # 050-005: EKFTiny.h includes <tinyekf.h>
 ]
 
 # C++ harness: drives PhysicsWorld and prints PASS/FAIL lines the test parses.

@@ -1,9 +1,11 @@
 ---
 id: '004'
 title: 'Parity gate: verify EKFTiny passes test_ekf.py in full with no new suite failures'
-status: open
-use-cases: ["SUC-002"]
-depends-on: ["050-003"]
+status: done
+use-cases:
+- SUC-002
+depends-on:
+- 050-003
 github-issue: ''
 issue: consolidate-control-code-onto-vendored-libraries-cmon-pid-tinyekf.md
 completes_issue: false
@@ -61,11 +63,11 @@ failures beyond those 2.
 
 ## Acceptance Criteria
 
-- [ ] `tests/simulation/unit/test_ekf.py` passes in full — zero failures in that file.
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` shows exactly 2 failures (the pre-existing config-schema tests) and no others.
-- [ ] If numerical parity required a fix in `EKFTiny.cpp` (e.g., analytic S⁻¹ for position channel), the fix is commented with a note explaining why `ekf_update` was bypassed for that channel.
-- [ ] `source/state/EKF.{h,cpp}` remain untouched.
-- [ ] `source/control/Odometry.{h,cpp}` remain untouched.
+- [x] `tests/simulation/unit/test_ekf.py` passes in full — zero failures in that file.
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` shows exactly 2 failures (the pre-existing config-schema tests) and no others.
+- [x] If numerical parity required a fix in `EKFTiny.cpp` (e.g., analytic S⁻¹ for position channel), the fix is commented with a note explaining why `ekf_update` was bypassed for that channel.
+- [x] `source/state/EKF.{h,cpp}` remain untouched.
+- [x] `source/control/Odometry.{h,cpp}` remain untouched.
 
 ## Implementation Plan
 

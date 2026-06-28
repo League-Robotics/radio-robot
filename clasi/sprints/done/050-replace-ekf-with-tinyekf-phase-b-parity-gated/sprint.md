@@ -1,7 +1,7 @@
 ---
 id: '050'
 title: Replace EKF with TinyEKF (Phase B, parity-gated)
-status: planning-docs
+status: done
 branch: sprint/050-replace-ekf-with-tinyekf-phase-b-parity-gated
 use-cases: []
 issues:
