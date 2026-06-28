@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: Eliminate R stringify round-trip; collapse VELOCITY goal
-status: open
+status: in-progress
 use-cases:
 - SUC-002
 - SUC-004
