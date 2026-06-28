@@ -159,6 +159,11 @@ void MotorController::updateVelGains(const RobotConfig& cal)
     _vcL.iMax = cal.velIMax; _vcR.iMax = cal.velIMax;
     _vcL.kAw  = cal.velKaw;  _vcR.kAw  = cal.velKaw;
     _vcL.minWheelMms = cal.minWheelMms; _vcR.minWheelMms = cal.minWheelMms;
+    // Reconfigure the cmon-pid instances with the updated gains (049-003).
+    // This re-applies ParallelPid/Backcalculation coefficients immediately so
+    // the new gains take effect on the very next controlTick, not one tick later.
+    _vcL.reconfigurePid();
+    _vcR.reconfigurePid();
 }
 
 void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
