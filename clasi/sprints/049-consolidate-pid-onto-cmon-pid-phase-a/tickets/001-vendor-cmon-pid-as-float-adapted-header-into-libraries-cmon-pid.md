@@ -1,9 +1,9 @@
 ---
 id: '001'
 title: Vendor cmon-pid as float-adapted header into libraries/cmon-pid/
-status: open
+status: done
 use-cases:
-  - SUC-001
+- SUC-001
 depends-on: []
 github-issue: ''
 issue: consolidate-control-code-onto-vendored-libraries-cmon-pid-tinyekf.md
@@ -28,14 +28,14 @@ build.
 
 ## Acceptance Criteria
 
-- [ ] `libraries/cmon-pid/cmon-pid.h` exists with a preamble comment documenting
+- [x] `libraries/cmon-pid/cmon-pid.h` exists with a preamble comment documenting
       the upstream source URL, commit/version, license, and the `double`->`float`
       adaptation rationale.
-- [ ] `libraries/cmon-pid/LICENSE` exists (BSD-2-Clause, verbatim from upstream).
-- [ ] The vendored header contains zero `double` occurrences (grep confirms).
-- [ ] The vendored header contains no `#include <...>` STL headers, no `new`,
+- [x] `libraries/cmon-pid/LICENSE` exists (BSD-2-Clause, verbatim from upstream).
+- [x] The vendored header contains zero `double` occurrences (grep confirms).
+- [x] The vendored header contains no `#include <...>` STL headers, no `new`,
       no `malloc`, no virtual functions, no exceptions.
-- [ ] The header compiles cleanly in a minimal host-build smoke test (included
+- [x] The header compiles cleanly in a minimal host-build smoke test (included
       by a `.cpp` file that instantiates `cmon_pid::ParallelPid` and
       `cmon_pid::backcalculation_t`).
 
