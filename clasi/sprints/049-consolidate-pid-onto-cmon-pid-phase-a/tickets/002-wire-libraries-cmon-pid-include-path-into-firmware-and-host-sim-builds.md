@@ -1,11 +1,11 @@
 ---
 id: '002'
 title: Wire libraries/cmon-pid/ include path into firmware and host-sim builds
-status: open
+status: in-progress
 use-cases:
-  - SUC-001
+- SUC-001
 depends-on:
-  - '001'
+- '001'
 github-issue: ''
 issue: consolidate-control-code-onto-vendored-libraries-cmon-pid-tinyekf.md
 completes_issue: false
