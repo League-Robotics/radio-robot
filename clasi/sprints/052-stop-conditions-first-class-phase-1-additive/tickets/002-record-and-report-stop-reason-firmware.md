@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Record and report stop reason (firmware)
-status: open
+status: in-progress
 use-cases:
 - SUC-002
 depends-on:
