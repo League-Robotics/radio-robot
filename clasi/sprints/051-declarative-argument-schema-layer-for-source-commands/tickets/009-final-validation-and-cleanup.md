@@ -1,7 +1,7 @@
 ---
-id: '009'
+id: 009
 title: Final validation and cleanup
-status: open
+status: in-progress
 use-cases:
 - SUC-005
 depends-on:
@@ -9,7 +9,7 @@ depends-on:
 - '005'
 - '006'
 - '007'
-- '008'
+- 008
 github-issue: ''
 issue: plan-declarative-argument-schema-layer-for-source-commands.md
 completes_issue: true
