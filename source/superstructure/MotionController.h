@@ -59,22 +59,12 @@ public:
     //          nullptr or empty string when no id was supplied.
     void beginStream(float leftMms, float rightMms, uint32_t now_ms,
                      TargetState& target, ReplyFn fn, void* ctx);
-    // VW command entry point: converts (v, ω) body-twist to (vL, vR) via
-    // BodyKinematics::inverse() + saturate(), then delegates to beginStream().
     // VW command entry point: configures a MotionCommand with a TIME stop condition
     // (keepalive watchdog) and the BodyVelocityController, then starts it.
     // Does NOT delegate to beginStream(); VW is now VELOCITY mode.
-    // 046-005: vy_mms is the lateral body speed (mecanum only; 0.0f in diff build).
-    //   The default parameter keeps all existing callers unchanged in both builds.
-#ifdef ROBOT_DRIVETRAIN_MECANUM
-    void beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
-                       TargetState& target, ReplyFn fn, void* ctx,
-                       const char* corr_id = nullptr, float vy_mms = 0.0f);
-#else
     void beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
                        TargetState& target, ReplyFn fn, void* ctx,
                        const char* corr_id = nullptr);
-#endif
 
     // R arc command entry point: computes κ = 1/radius (0 when radius==0),
     // configures a MotionCommand with target (speedMms, speedMms * κ),

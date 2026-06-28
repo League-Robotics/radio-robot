@@ -1,11 +1,11 @@
 ---
-id: "002"
-title: "Control/superstructure strip: BVC, MotorController, Superstructure, MotionCommands"
-status: open
+id: '002'
+title: 'Control/superstructure strip: BVC, MotorController, Superstructure, MotionCommands'
+status: done
 use-cases:
-  - SUC-048-002
+- SUC-048-002
 depends-on:
-  - "001"
+- '001'
 issue: eliminate-ifdef-robot-drivetrain-mecanum-everywhere.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -28,38 +28,38 @@ Ticket 004 (CMake removal) can then safely drop the macro definition.
 
 ## Acceptance Criteria
 
-- [ ] `source/control/BodyVelocityController.h`:
-  - [ ] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
-  - [ ] No `setTarget(v, omega, vy)` overload — only `setTarget(float v_mms, float omega_rads)`.
-  - [ ] No `currentVy()` or `targetVy()` accessors.
-  - [ ] No `_vy`, `_vyTgt`, `_vyALive`, `_geom` private members.
-  - [ ] No `#include "io/capability/Pose2D.h"` inside the mecanum guard.
-- [ ] `source/control/BodyVelocityController.cpp`:
-  - [ ] `advance()` contains no mecanum `vy`-ramp branch.
-  - [ ] `advance()` publishes `DesiredState` as `{_v, 0.0f, _omega}` unconditionally.
-  - [ ] No `#ifdef ROBOT_DRIVETRAIN_MECANUM` anywhere.
-- [ ] `source/control/MotorController.h`:
-  - [ ] No `_motorBR`, `_motorBL`, `_vcBR`, `_vcBL` declarations.
-  - [ ] No `bindRearMotors()` declaration.
-  - [ ] No 4-wheel `setTarget` overload.
-  - [ ] No `getEncoderPositions(float[4])` — only `getEncoderPositions(float[2])`.
-  - [ ] No BR/BL encoder-state fields.
-  - [ ] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
-- [ ] `source/control/MotorController.cpp`:
-  - [ ] All ~17 mecanum blocks deleted.
-  - [ ] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
-- [ ] `source/superstructure/MotionController.h`:
-  - [ ] `GoalRequest` struct has no `vy_mms` field.
-  - [ ] No 8-argument `beginVelocity` overload.
-  - [ ] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
-- [ ] `source/superstructure/Superstructure.h` / `.cpp`:
-  - [ ] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
-  - [ ] No calls to the 8-arg `beginVelocity` overload.
-- [ ] `source/commands/MotionCommands.cpp`:
-  - [ ] Mecanum blocks at ~808–873, 885, 1120, 1151 deleted.
-  - [ ] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
-- [ ] `uv run pytest` passes.
-- [ ] `grep -rn ROBOT_DRIVETRAIN_MECANUM source/control source/superstructure source/commands`
+- [x] `source/control/BodyVelocityController.h`:
+  - [x] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
+  - [x] No `setTarget(v, omega, vy)` overload — only `setTarget(float v_mms, float omega_rads)`.
+  - [x] No `currentVy()` or `targetVy()` accessors.
+  - [x] No `_vy`, `_vyTgt`, `_vyALive`, `_geom` private members.
+  - [x] No `#include "io/capability/Pose2D.h"` inside the mecanum guard.
+- [x] `source/control/BodyVelocityController.cpp`:
+  - [x] `advance()` contains no mecanum `vy`-ramp branch.
+  - [x] `advance()` publishes `DesiredState` as `{_v, 0.0f, _omega}` unconditionally.
+  - [x] No `#ifdef ROBOT_DRIVETRAIN_MECANUM` anywhere.
+- [x] `source/control/MotorController.h`:
+  - [x] No `_motorBR`, `_motorBL`, `_vcBR`, `_vcBL` declarations.
+  - [x] No `bindRearMotors()` declaration.
+  - [x] No 4-wheel `setTarget` overload.
+  - [x] No `getEncoderPositions(float[4])` — only `getEncoderPositions(float[2])`.
+  - [x] No BR/BL encoder-state fields.
+  - [x] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
+- [x] `source/control/MotorController.cpp`:
+  - [x] All ~17 mecanum blocks deleted.
+  - [x] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
+- [x] `source/superstructure/MotionController.h`:
+  - [x] `GoalRequest` struct has no `vy_mms` field.
+  - [x] No 8-argument `beginVelocity` overload.
+  - [x] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
+- [x] `source/superstructure/Superstructure.h` / `.cpp`:
+  - [x] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
+  - [x] No calls to the 8-arg `beginVelocity` overload.
+- [x] `source/commands/MotionCommands.cpp`:
+  - [x] Mecanum blocks at ~808–873, 885, 1120, 1151 deleted.
+  - [x] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
+- [x] `uv run pytest` passes (2230 passed, 2 known pre-existing failures only).
+- [x] `grep -rn ROBOT_DRIVETRAIN_MECANUM source/control source/superstructure source/commands`
   returns zero matches.
 
 ## Implementation Plan
