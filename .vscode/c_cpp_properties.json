@@ -2,19 +2,19 @@
     "configurations": [
         {
             "name": "Mac",
-            "includePath": [
-                "${workspaceFolder}/source/**",
-                "${workspaceFolder}/libraries/**",
-                "${workspaceFolder}/utils/cmake/**",
-                "${workspaceFolder}/build/libraries/**"
-            ],
-            "defines": ["NRF52833_XXAA"],
             "compileCommands": "${workspaceFolder}/build/compile_commands.json",
             "compilerPath": "/opt/homebrew/bin/arm-none-eabi-g++",
-            "compilerArgs": ["-DNRF52833_XXAA"],
+            "compilerArgs": [
+                "-mcpu=cortex-m4",
+                "-mthumb",
+                "-mfpu=fpv4-sp-d16",
+                "-mfloat-abi=softfp",
+                "-DNRF52833_XXAA"
+            ],
             "cStandard": "c11",
             "cppStandard": "c++11",
-            "intelliSenseMode": "gcc-arm"
+            "intelliSenseMode": "gcc-arm",
+            "defines": ["NRF52833_XXAA"]
         }
     ],
     "version": 4

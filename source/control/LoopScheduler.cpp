@@ -7,6 +7,7 @@
 #include "Radio.h"
 #include "Inputs.h"
 #include "HaltController.h"
+#include <cstdint>
 #include <cstdio>
 
 // ---------------------------------------------------------------------------

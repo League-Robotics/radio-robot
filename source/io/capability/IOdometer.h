@@ -109,19 +109,20 @@ public:
     virtual int8_t getAngularScalar() const = 0;
     virtual void   setAngularScalar(int8_t val) = 0;
 
-    // 046-006 (mecanum only): 3-DOF velocity read — surfaces the lateral (vy)
-    // component discarded by readVelocityTransformed.  Returns true on I2C
-    // success; false on error or when the concrete class does not support this
-    // call (e.g. SimOdometer, BenchOtosSensor — both return false with a zeroed
-    // velOut so the caller safely ignores the reading).
+    // 046-006: 3-DOF velocity read — surfaces the lateral (vy) component
+    // discarded by readVelocityTransformed.  Returns true on I2C success;
+    // false on error or when the concrete class does not support this call
+    // (e.g. SimOdometer, BenchOtosSensor — both inherit this default and
+    // return false with a zeroed velOut so the caller safely ignores it).
     // headingRad: same mount-offset rotation parameter as readVelocityTransformed.
     // Default no-op returns false (the caller must guard on the return value).
-#ifdef ROBOT_DRIVETRAIN_MECANUM
+    // Unconditional: an odometer's ability to report 3 DOF is independent of the
+    // drivetrain.  Whether the lateral channel is fused is decided upstream by
+    // the estimator (see Robot.cpp), which is the genuine drivetrain boundary.
     virtual bool readVelocityTransformed3(BodyTwist3& velOut,
                                           float headingRad = 0.0f) const {
         (void)velOut; (void)headingRad; return false;
     }
-#endif  // ROBOT_DRIVETRAIN_MECANUM
 };
 
 // 044-004 (Phase F): the former `source/io/IOtosSensor.h` alias shim is deleted;

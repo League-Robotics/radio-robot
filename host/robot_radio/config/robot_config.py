@@ -36,6 +36,11 @@ class OffsetXY(BaseModel):
 class OffsetXYYaw(BaseModel):
     x: float = 0.0
     y: float = 0.0
+    # z: out-of-plane height (mm). For a vision tag_offset_mm this is the tag's
+    # height above the floor cross (the robot's true center on the playfield), so
+    # the daemon can project the elevated tag back down to that cross. Defaults to
+    # 0 (in-plane) — unused for odometry_offset_mm.
+    z: float = 0.0
     yaw_rad: float = 0.0
 
 

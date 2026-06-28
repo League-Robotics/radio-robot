@@ -192,7 +192,7 @@ int main() {
     //    disable a sensor; is_initialized() gates each read task.
     // -----------------------------------------------------------------------
     // Settle so the sensors have time to power up before begin() probes them.
-    uBit.sleep(2500);
+    uBit.sleep(1500);
     hardware.begin();
 
     // OTOS (mandatory) detection is occasionally lost to a transient nRF52 TWIM
