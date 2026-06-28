@@ -840,11 +840,19 @@ static void handleG(const ArgList& args, const char* corrId,
 
 // ── R ────────────────────────────────────────────────────────────────────────
 
-// handleR — VW converter with "speed=<mm/s>", "radius=<mm>" stop params.
+// handleR — direct requestGoal(VELOCITY) for arc command (053-005).
 //
-// R (arc) is open-ended: v = speed, omega = speed/radius (κ = 1/radius).
-// No stop condition; stop params encode raw speed + radius for VW handler.
-// Falls back to direct beginArc() when queue is null.
+// R (arc) is an open-loop twist command: v = speed, omega = speed/radius
+// (κ = 1/radius).  Computes omega inline and calls requestGoal(VELOCITY)
+// directly — no stringify/re-parse round-trip through pushVW/handleVW.
+//
+// Any stop= clauses from args[2..] (packed by parseR via mc_packStopKVs)
+// are forwarded into gr.stops[] so they fire normally.
+//
+// D11: replyOK is called before requestGoal (converter already replied;
+// the queue-drain hop is eliminated).
+//
+// Falls back to direct beginVelocity() when queue is null (sim path).
 static void handleR(const ArgList& args, const char* corrId,
                     ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
@@ -852,41 +860,57 @@ static void handleR(const ArgList& args, const char* corrId,
     int speed  = args.args[0].ival;
     int radius = args.args[1].ival;
 
+    // Compute omega = speed / radius (κ = 1/radius; 0 when radius == 0).
+    // Sign convention: positive radius ⇒ positive ω ⇒ CCW (left arc).
+    float omega_rads = (radius != 0) ? ((float)speed / (float)radius) : 0.0f;
+
+    char body[48];
+    snprintf(body, sizeof(body), "speed=%d radius=%d", speed, radius);
+    char rbuf[80];
+
     if (ctx->queue != nullptr) {
-        // Compute omega = speed * kappa = speed / radius (kappa = 1/radius).
-        float omega_rads = (radius != 0) ? ((float)speed / (float)radius) : 0.0f;
-        int v_int     = speed;
-        int omega_int = (int)(omega_rads * 1000.0f);  // rad/s → mrad/s
-
-        ArgList vwArgs;
-        vwArgs.count = 2;
-        argInt(vwArgs.args[0], v_int);
-        argInt(vwArgs.args[1], omega_int);
-        vwArgs.count = packKVArg(vwArgs, 2, "speed", speed);
-        vwArgs.count = packKVArg(vwArgs, vwArgs.count, "radius", radius);
-
-        // Forward any stop= / sensor= tokens from args[2..] (packed by parseR).
-        for (int i = 2; i < args.count && vwArgs.count < MAX_ARGS; ++i) {
-            vwArgs.args[vwArgs.count++] = args.args[i];
-        }
-
-        char body[48];
-        snprintf(body, sizeof(body), "speed=%d radius=%d", speed, radius);
-        char rbuf[80];
-        if (!pushVW(ctx, vwArgs, corrId, replyFn, replyCtx)) {
-            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full", nullptr, corrId, replyFn, replyCtx);
-            return;
-        }
-        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "arc", body, corrId, replyFn, replyCtx);
-    } else {
-        // Queue not available: fall back to direct beginArc().
         uint32_t now = ctx->robot->systemTime();
-        ctx->mc->beginArc((float)speed, (float)radius, now,
-                          ctx->robot->state.desired,
-                          replyFn, replyCtx, corrId);
-        char body[48];
-        snprintf(body, sizeof(body), "speed=%d radius=%d", speed, radius);
-        char rbuf[80];
+
+        // Build GoalRequest for VELOCITY — arc is an open-loop twist command.
+        GoalRequest gr{};
+        gr.goal       = Goal::VELOCITY;
+        gr.robot      = ctx->robot;
+        gr.now_ms     = now;
+        gr.replyFn    = replyFn;
+        gr.replyCtx   = replyCtx;
+        gr.corrId     = corrId;
+        gr.v_mms      = (float)speed;
+        gr.omega_rads = omega_rads;
+        gr.doneLabel  = "EVT done R";
+        gr.streamSeed = false;
+
+        // Pack any stop= / sensor= clauses from args[2..] (packed by parseR
+        // via mc_packStopKVs; full "stop=<value>" / "sensor=<value>" prefixes).
+        for (int i = 2; i < args.count && gr.nStops < MotionCommand::kMaxStopConds; ++i) {
+            if (args.args[i].type != ArgType::STR) continue;
+            const char* s = args.args[i].sval;
+            StopCondition cond;
+            if (strncmp(s, "stop=", 5) == 0 && mc_parseStopTokenInto(s + 5, cond)) {
+                gr.stops[gr.nStops++] = cond;
+            } else if (strncmp(s, "sensor=", 7) == 0) {
+                uint8_t ch; float thr; StopCondition::Cmp cmp;
+                if (mc_parseSensorToken(s + 7, ch, thr, cmp))
+                    gr.stops[gr.nStops++] = makeSensorStop(ch, thr, cmp);
+            }
+        }
+
+        // D11: reply before requestGoal (no queue hop needed).
+        CommandProcessor::replyOK(rbuf, sizeof(rbuf), "arc", body, corrId, replyFn, replyCtx);
+        ctx->superstructure->requestGoal(gr);
+    } else {
+        // Queue not available: fall back to direct beginVelocity().
+        uint32_t now = ctx->robot->systemTime();
+        ctx->mc->beginVelocity((float)speed, omega_rads, now,
+                               ctx->robot->state.desired,
+                               replyFn, replyCtx, corrId);
+        // Set EVT done R label and apply stop= / sensor= clauses.
+        ctx->mc->activeCmd().setDoneEvt("EVT done R");
+        mc_applyStopClauses(args, 2, ctx->mc->activeCmd());
         CommandProcessor::replyOK(rbuf, sizeof(rbuf), "arc", body, corrId, replyFn, replyCtx);
     }
 }
@@ -1036,7 +1060,6 @@ static void handleRT(const ArgList& args, const char* corrId,
 //   args[2..] = optional stop params (ArgType::STR "key=value"):
 //     "x=<mm>"+"y=<mm>"+"speed=<mm/s>" → call beginGoTo(x, y, speed, ...)
 //     "h=<cdeg>"+"eps=<cdeg>"           → call beginTurn(h_cdeg, eps_cdeg, ...)
-//     "speed=<mm/s>"+"radius=<mm>"      → call beginArc(speed, radius, ...)
 //     "rot=<cdeg>"                      → call beginRotation(rot_cdeg, ...)
 //     (no stop params) → open-ended velocity (beginVelocity or keepalive re-arm)
 //
@@ -1047,6 +1070,10 @@ static void handleRT(const ArgList& args, const char* corrId,
 // Note (053-004): the "t=<ms>" and "dist=<mm>" KV branches have been removed.
 // T and D now call requestGoal directly from handleT/handleD without pushing
 // a VW command onto the queue.
+//
+// Note (053-005): the "radius=<mm>" / "speed=<mm/s>" KV branch has been
+// removed.  R now calls requestGoal(VELOCITY) directly from handleR, computing
+// omega = speed/radius inline and never pushing a VW command onto the queue.
 //
 // D11 suppression: when dispatched from a converter push (stop-param branches),
 // handleVW does NOT call replyOK — the converter handler already replied.
@@ -1163,31 +1190,12 @@ static void handleVW(const ArgList& args, const char* corrId,
         return;
     }
 
-    // Check for R (arc): "radius=<mm>" present (speed=<mm/s> also present).
-    if (argsHasKey(args, "radius")) {
-        int speed   = argsScanKV(args, "speed",  v);
-        int radius  = argsScanKV(args, "radius", 0);
-
-        // Seam 3 (042-001): route through requestGoal — same beginArc call.
-        GoalRequest gr{};
-        gr.goal     = Goal::ARC;
-        gr.robot    = ctx->robot;
-        gr.now_ms   = now;
-        gr.replyFn  = replyFn;
-        gr.replyCtx = replyCtx;
-        gr.corrId   = corrId;
-        gr.speedMms = (float)speed;
-        gr.radiusMm = (float)radius;
-        ctx->superstructure->requestGoal(gr);
-
-        // Apply any stop= clauses forwarded by handleR via args[2..].
-        mc_applyStopClauses(args, 2, ctx->mc->activeCmd());
-
-        // D11: no replyOK here — handleR already replied.
-        return;
-    }
-
     // ── No stop params: open-ended velocity ────────────────────────────────
+    //
+    // Note (053-005): the "radius=<mm>" / "speed=<mm/s>" KV branch that formerly
+    // routed R-command pushes through handleVW has been removed.  R now calls
+    // requestGoal(VELOCITY) directly from handleR, computing omega = speed/radius
+    // inline and never reaching handleVW.
     //
     // Note (053-004): the "t=<ms>" and "dist=<mm>" KV branches have been removed.
     // T and D now call requestGoal directly from handleT/handleD without going

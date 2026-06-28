@@ -31,10 +31,13 @@ bool Superstructure::goalAllowed(const GoalRequest& /*gr*/) const
 // requestGoal — single guarded transition function.
 //
 // goalAllowed() first (a denied goal returns without calling begin*), then a
-// plain switch dispatches to the same begin* call, with the same arguments,
-// that the verb handler made directly.  Each case reads only the GoalRequest
-// fields relevant to its goal; the TargetState is gr.robot->state.desired, the
-// same reference the direct calls passed.
+// plain switch dispatches to the matching begin* call.  After sprint 053:
+//   - Goal::VELOCITY covers VW, S (streamSeed=true), T (stops[0]=TIME), and
+//     R (arc, omega=speed/radius pre-computed in handleR).
+//   - Goal::STREAM, Goal::TIMED, Goal::ARC have been removed — all collapsed
+//     to VELOCITY (open-loop twist path).
+//   - Goal::DISTANCE is kept for the atomic encoder reset.
+//   - Goal::GOTO / TURN / ROTATE are closed-loop and kept as-is.
 // ---------------------------------------------------------------------------
 void Superstructure::requestGoal(const GoalRequest& gr)
 {
@@ -45,22 +48,6 @@ void Superstructure::requestGoal(const GoalRequest& gr)
     TargetState& target = gr.robot->state.desired;
 
     switch (gr.goal) {
-    case Goal::STREAM:
-        // handleVW "stream" branch: beginStream(vL, vR, now, target, fn, ctx).
-        _mc.beginStream(gr.leftMms, gr.rightMms, gr.now_ms,
-                        target, gr.replyFn, gr.replyCtx);
-        break;
-
-    case Goal::TIMED:
-        // handleVW "t" branch: beginTimed(vL, vR, ms, now, target, fn, ctx, corrId).
-        _mc.beginTimed(gr.leftMms, gr.rightMms, gr.durationMs, gr.now_ms,
-                       target, gr.replyFn, gr.replyCtx, gr.corrId);
-        if (_mc.hasActiveCommand()) {
-            if (gr.doneLabel) _mc.activeCmd().setDoneEvt(gr.doneLabel);
-            for (uint8_t i = 0; i < gr.nStops; ++i) _mc.activeCmd().addStop(gr.stops[i]);
-        }
-        break;
-
     case Goal::DISTANCE:
         // handleVW "dist" branch: robot->distanceDrive(vL, vR, mm, fn, ctx, corrId).
         // Routed through Robot to preserve the atomic encoder reset
@@ -98,16 +85,6 @@ void Superstructure::requestGoal(const GoalRequest& gr)
         // speed immediately (no trapezoid ramp-up), preserving S's original semantics.
         _mc.beginVelocity(gr.v_mms, gr.omega_rads, gr.now_ms,
                           target, gr.replyFn, gr.replyCtx, gr.corrId, gr.streamSeed);
-        if (_mc.hasActiveCommand()) {
-            if (gr.doneLabel) _mc.activeCmd().setDoneEvt(gr.doneLabel);
-            for (uint8_t i = 0; i < gr.nStops; ++i) _mc.activeCmd().addStop(gr.stops[i]);
-        }
-        break;
-
-    case Goal::ARC:
-        // handleVW "radius" branch: beginArc(speed, radius, now, target, fn, ctx, corrId).
-        _mc.beginArc(gr.speedMms, gr.radiusMm, gr.now_ms,
-                     target, gr.replyFn, gr.replyCtx, gr.corrId);
         if (_mc.hasActiveCommand()) {
             if (gr.doneLabel) _mc.activeCmd().setDoneEvt(gr.doneLabel);
             for (uint8_t i = 0; i < gr.nStops; ++i) _mc.activeCmd().addStop(gr.stops[i]);
