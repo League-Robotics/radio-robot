@@ -58,7 +58,22 @@ Ticket 004 (CMake removal) can then safely drop the macro definition.
 - [x] `source/commands/MotionCommands.cpp`:
   - [x] Mecanum blocks at ~808–873, 885, 1120, 1151 deleted.
   - [x] No `#ifdef ROBOT_DRIVETRAIN_MECANUM`.
+- [x] `source/commands/MotionCommand.h` (residual site, second pass):
+  - [x] 3-DOF `setTarget(float v_mms, float omega_rads, float vy_mms)` overload declaration removed.
+  - [x] `#ifdef ROBOT_DRIVETRAIN_MECANUM` / `#endif` guards removed.
+- [x] `source/commands/MotionCommand.cpp` (residual site, second pass):
+  - [x] 3-DOF `setTarget` definition removed.
+  - [x] `#ifdef ROBOT_DRIVETRAIN_MECANUM` / `#endif` guards removed.
+- [x] `source/control/MotionControllerBegin.cpp` (residual site, second pass):
+  - [x] Mecanum `beginVelocity` overload signature guards removed; only 7-arg differential form remains.
+  - [x] `#ifdef ROBOT_DRIVETRAIN_MECANUM` post-start block applying 3-DOF `vy` removed.
+  - [x] No `#ifdef ROBOT_DRIVETRAIN_MECANUM` anywhere.
+- [x] `source/robot/DefaultConfig.cpp` (residual site, second pass):
+  - [x] Comment reworded to not reference the macro literal.
+- [x] `source/io/real/MecanumHAL.cpp` (residual site, second pass):
+  - [x] TODO comment reworded to drop `ROBOT_DRIVETRAIN_MECANUM` token.
 - [x] `uv run pytest` passes (2230 passed, 2 known pre-existing failures only).
+- [x] `grep -rln ROBOT_DRIVETRAIN_MECANUM source/` returns zero matches (full tree clean).
 - [x] `grep -rn ROBOT_DRIVETRAIN_MECANUM source/control source/superstructure source/commands`
   returns zero matches.
 
