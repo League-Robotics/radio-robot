@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Host-side stop= builders and reason= parsing
-status: in-progress
+status: done
 use-cases:
 - SUC-003
 depends-on:
@@ -189,27 +189,27 @@ Update to mention the new `reason=` trailing token.
 
 ## Acceptance Criteria
 
-- [ ] `Stop.time(1000)` returns `"stop=t:1000"`.
-- [ ] `Stop.dist(300)` returns `"stop=d:300"`.
-- [ ] `Stop.line("ge", 512)` returns `"stop=line:ge:512"`.
-- [ ] `Stop.sensor("line0", "ge", 512)` returns `"stop=sensor:line0:ge:512"`.
-- [ ] `Stop.color(120, 0.5, 0.4, 0.1)` returns `"stop=color:120:0.5:0.4:0.1"`.
-- [ ] `Stop.heading(4500, 300)` returns `"stop=heading:4500:300"`.
-- [ ] `Stop.rot(250)` returns `"stop=rot:250"`.
-- [ ] `vw(200, 0, stop=[Stop.dist(300)])` sends `VW 200 0 stop=d:300\n` on the wire.
-- [ ] `timed(200, 200, 1000, stop=[Stop.sensor("line0", "ge", 512)])` sends
+- [x] `Stop.time(1000)` returns `"stop=t:1000"`.
+- [x] `Stop.dist(300)` returns `"stop=d:300"`.
+- [x] `Stop.line("ge", 512)` returns `"stop=line:ge:512"`.
+- [x] `Stop.sensor("line0", "ge", 512)` returns `"stop=sensor:line0:ge:512"`.
+- [x] `Stop.color(120, 0.5, 0.4, 0.1)` returns `"stop=color:120:0.5:0.4:0.1"`.
+- [x] `Stop.heading(4500, 300)` returns `"stop=heading:4500:300"`.
+- [x] `Stop.rot(250)` returns `"stop=rot:250"`.
+- [x] `vw(200, 0, stop=[Stop.dist(300)])` sends `VW 200 0 stop=d:300\n` on the wire.
+- [x] `timed(200, 200, 1000, stop=[Stop.sensor("line0", "ge", 512)])` sends
   `T 200 200 1000 stop=sensor:line0:ge:512\n`.
-- [ ] Multiple stop tokens: `vw(200, 0, stop=[Stop.dist(300), Stop.time(5000)])` sends
+- [x] Multiple stop tokens: `vw(200, 0, stop=[Stop.dist(300), Stop.time(5000)])` sends
   `VW 200 0 stop=d:300 stop=t:5000\n`.
-- [ ] `corr_id` still works with stop tokens: `vw(200, 0, corr_id="7", stop=[Stop.dist(300)])`
+- [x] `corr_id` still works with stop tokens: `vw(200, 0, corr_id="7", stop=[Stop.dist(300)])`
   sends `VW 200 0 stop=d:300 #7\n`.
-- [ ] `wait_for_evt_done` returns `("done", "time")` when EVT line is `EVT done T reason=time`.
-- [ ] `wait_for_evt_done` returns `("done", None)` when EVT line is `EVT done T` (no reason=).
-- [ ] `wait_for_evt_done` returns `("safety_stop", "watchdog")` when EVT is
+- [x] `wait_for_evt_done` returns `("done", "time")` when EVT line is `EVT done T reason=time`.
+- [x] `wait_for_evt_done` returns `("done", None)` when EVT line is `EVT done T` (no reason=).
+- [x] `wait_for_evt_done` returns `("safety_stop", "watchdog")` when EVT is
   `EVT safety_stop reason=watchdog`.
-- [ ] `wait_for_evt_done` returns `("timeout", None)` on timeout.
-- [ ] All existing call sites of `wait_for_evt_done` updated to unpack tuple.
-- [ ] Sim tests pass: `uv run --with pytest python -m pytest tests/simulation -q` — no new failures.
+- [x] `wait_for_evt_done` returns `("timeout", None)` on timeout.
+- [x] All existing call sites of `wait_for_evt_done` updated to unpack tuple.
+- [x] Sim tests pass: `uv run --with pytest python -m pytest tests/simulation -q` — no new failures.
 
 ## Testing
 

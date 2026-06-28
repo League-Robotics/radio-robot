@@ -814,7 +814,7 @@ def cmd_turn(args):
     corr = "1"
     _log(f"turn {args.degrees:+.1f}° → RT {rel_cdeg} (encoder-arc, on-robot)")
     proto.send(f"RT {rel_cdeg} #{corr}", 400)
-    outcome = proto.wait_for_evt_done("RT", timeout_ms=20000, corr_id=corr)
+    outcome, _ = proto.wait_for_evt_done("RT", timeout_ms=20000, corr_id=corr)
     conn.disconnect()
 
     if outcome == "timeout":

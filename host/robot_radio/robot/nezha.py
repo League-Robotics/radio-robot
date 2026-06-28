@@ -211,7 +211,7 @@ class Nezha(Robot):
 
         l, r = _clamp(left_mms), _clamp(right_mms)
         self._proto.timed(l, r, ms)
-        self._proto.wait_for_evt_done("T", ms + 2000)
+        self._proto.wait_for_evt_done("T", ms + 2000)  # outcome unused; discard reason
         return self.encoders
 
     def speed_for_distance(self, left_mms: int, right_mms: int, mm: int) -> tuple[int, int]:
@@ -232,7 +232,7 @@ class Nezha(Robot):
             self._proto.read_pending_lines()
             self._proto.distance(l, r, hop_mm)
 
-            outcome = self._proto.wait_for_evt_done("D", timeout_ms=6000)
+            outcome, _ = self._proto.wait_for_evt_done("D", timeout_ms=6000)
             if outcome == "timeout":
                 self._proto.stop()
                 raise TimeoutError(
@@ -374,7 +374,7 @@ class Nezha(Robot):
             # Back-compat blocking path — behaviour unchanged from pre-sprint.
             self._proto.go_to(x_mm, y_mm, speed)
             timeout_ms = int(timeout_s * 1000)
-            outcome = self._proto.wait_for_evt_done("G", timeout_ms)
+            outcome, _ = self._proto.wait_for_evt_done("G", timeout_ms)
             time.sleep(0.2)
             return self.encoders[0], self.encoders[1], outcome
         else:
@@ -409,7 +409,8 @@ class Nezha(Robot):
         if on_tick is None:
             self._proto.turn(heading_cdeg, eps_cdeg=eps_cdeg)
             timeout_ms = int(timeout_s * 1000)
-            return self._proto.wait_for_evt_done("TURN", timeout_ms)
+            outcome, _ = self._proto.wait_for_evt_done("TURN", timeout_ms)
+            return outcome
         else:
             self._proto.stream(80)
             self._proto.turn(heading_cdeg, eps_cdeg=eps_cdeg)
