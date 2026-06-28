@@ -1,7 +1,7 @@
 ---
 id: '006'
 title: Migrate MotionCommands.cpp to ArgSchema
-status: open
+status: in-progress
 use-cases:
 - SUC-002
 - SUC-004
