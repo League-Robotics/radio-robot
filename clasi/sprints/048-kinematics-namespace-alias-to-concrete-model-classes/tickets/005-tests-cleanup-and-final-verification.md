@@ -2,7 +2,7 @@
 id: '005'
 title: 'Tests cleanup and final verification: delete mecanum integration tests, verify
   green'
-status: in-progress
+status: done
 use-cases:
 - SUC-048-004
 - SUC-048-001
@@ -31,22 +31,22 @@ This ticket is last — it depends on all prior tickets because:
 
 ## Acceptance Criteria
 
-- [ ] `tests/simulation/unit/test_046_007_mecanum_tlm_format.py` deleted.
-- [ ] `tests/simulation/unit/test_046_006_otos_lateral_vy.py` deleted.
-- [ ] `tests/simulation/unit/test_mecanum_vw_bvc.py` deleted.
-- [ ] `tests/WheelTestMain.cpp` deleted.
-- [ ] `tests/simulation/unit/test_mecanum_kinematics.py` still present and passes.
-- [ ] `tests/bench/wheel_test.py` runs against the differential robot without error
+- [x] `tests/simulation/unit/test_046_007_mecanum_tlm_format.py` deleted.
+- [x] `tests/simulation/unit/test_046_006_otos_lateral_vy.py` deleted.
+- [x] `tests/simulation/unit/test_mecanum_vw_bvc.py` deleted.
+- [x] `tests/WheelTestMain.cpp` deleted.
+- [x] `tests/simulation/unit/test_mecanum_kinematics.py` still present and passes.
+- [x] `tests/bench/wheel_test.py` runs against the differential robot without error
   (verify it does not hard-require mecanum; adjust if needed).
-- [ ] `tests/bench/teleop.py` runs against the differential robot without error.
-- [ ] `tests/bench/playfield_camera_run.py` runs against the differential robot
+- [x] `tests/bench/teleop.py` runs against the differential robot without error.
+- [x] `tests/bench/playfield_camera_run.py` runs against the differential robot
   without error.
-- [ ] **Final success gate:**
-  - [ ] `grep -rn ROBOT_DRIVETRAIN_MECANUM source tests CMakeLists.txt build.py`
+- [x] **Final success gate:**
+  - [x] `grep -rn ROBOT_DRIVETRAIN_MECANUM source tests CMakeLists.txt build.py`
     returns **zero** matches.
-  - [ ] `python build.py --clean` compiles clean, no errors or warnings.
-  - [ ] `uv run pytest` passes, all green (differential single-config).
-  - [ ] `test_mecanum_kinematics.py` is included in the passing run.
+  - [x] `python build.py --clean` compiles clean, no errors or warnings.
+  - [x] `uv run pytest` passes, all green (differential single-config).
+  - [x] `test_mecanum_kinematics.py` is included in the passing run.
 
 ## Implementation Plan
 
