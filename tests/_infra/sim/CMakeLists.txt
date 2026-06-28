@@ -129,4 +129,6 @@ target_include_directories(firmware_host PRIVATE
     "${REPO_ROOT}/source/types"
     # 049-002: cmon-pid float-adapted vendored header (Sprint 049, Phase A).
     "${REPO_ROOT}/libraries/cmon-pid"
+    # 050-002: TinyEKF header-only LA backend (Sprint 050, Phase B).
+    "${REPO_ROOT}/libraries/tinyekf"
 )

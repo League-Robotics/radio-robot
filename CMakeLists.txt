@@ -211,6 +211,8 @@ include_directories(${PROJECT_SOURCE_DIR}/${LIB_DEST})
 # Added explicitly because cmon-pid is not a CODAL dependency managed via
 # add_subdirectory — it is a plain vendored-in-place header.
 include_directories(${PROJECT_SOURCE_DIR}/libraries/cmon-pid)
+# libraries/tinyekf: header-only EKF LA backend (Sprint 050, Phase B).
+include_directories(${PROJECT_SOURCE_DIR}/libraries/tinyekf)
 
 #add_subdirectory("${PROJECT_SOURCE_DIR}/${LIB_DEST}/${dep}")
 

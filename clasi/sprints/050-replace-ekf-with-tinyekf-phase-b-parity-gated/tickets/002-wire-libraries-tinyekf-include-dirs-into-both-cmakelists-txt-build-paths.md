@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Wire libraries/tinyekf include dirs into both CMakeLists.txt build paths
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 depends-on:
@@ -50,10 +50,10 @@ Add:
 
 ## Acceptance Criteria
 
-- [ ] Root `CMakeLists.txt` contains `include_directories(${PROJECT_SOURCE_DIR}/libraries/tinyekf)` immediately after the cmon-pid line.
-- [ ] `tests/_infra/sim/CMakeLists.txt` contains `"${REPO_ROOT}/libraries/tinyekf"` inside `target_include_directories(firmware_host PRIVATE ...)` immediately after the cmon-pid entry.
-- [ ] No other changes to either CMakeLists.txt.
-- [ ] `uv run --with pytest python -m pytest tests/simulation -q` still passes with no new failures beyond the 2 pre-existing baseline.
+- [x] Root `CMakeLists.txt` contains `include_directories(${PROJECT_SOURCE_DIR}/libraries/tinyekf)` immediately after the cmon-pid line.
+- [x] `tests/_infra/sim/CMakeLists.txt` contains `"${REPO_ROOT}/libraries/tinyekf"` inside `target_include_directories(firmware_host PRIVATE ...)` immediately after the cmon-pid entry.
+- [x] No other changes to either CMakeLists.txt.
+- [x] `uv run --with pytest python -m pytest tests/simulation -q` still passes with no new failures beyond the 2 pre-existing baseline.
 
 ## Implementation Plan
 
