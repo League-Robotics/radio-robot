@@ -10,7 +10,7 @@ data/calibration/rotation_fit.ipynb so the model can be explored.
 Robot must be in camera view (playfield, via the relay).
 
 Usage:
-  uv run python tests/calibrate/rotation_sweep.py
+  uv run python tests/_infra/calibrate/rotation_sweep.py
       [--speeds 60,100,150] [--angles 30,60,120,200,300,400] [--reps 1]
 """
 import argparse
@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rotation_cal import _Cam, wrap180   # reuse camera + helper
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 _TOVEZ_JSON = _REPO_ROOT / "data" / "robots" / "tovez.json"
 _OUT_CSV = _REPO_ROOT / "data" / "calibration" / "rotation_sweep.csv"
 

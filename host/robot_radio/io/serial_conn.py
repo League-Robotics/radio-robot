@@ -171,12 +171,14 @@ class SerialConnection:
     """
 
     def __init__(self, port: str = DEFAULT_PORT, baud: int = BAUD_RATE,
-                 mode: str | None = None, on_send=None):
+                 mode: str | None = None, on_send=None, on_recv=None):
         self._port = port
         self._baud = baud
         self._mode = mode  # None = auto-detect from announcement
         self._ser: serial.Serial | None = None
-        self.on_send = on_send  # callback(cmd_str) for verbose logging
+        self.on_send = on_send  # callback(cmd_str) for verbose TX logging
+        self.on_recv = on_recv  # callback(line_str) for verbose RX logging
+                                # (every decoded line from the reader thread)
         # Serial-write lock: serializes the keepalive thread's writes with the
         # main thread's command writes so their bytes never interleave.
         self._write_lock = threading.RLock()
@@ -530,6 +532,11 @@ class SerialConnection:
 
             if not text:
                 continue
+
+            # Verbose RX hook: report every decoded line (incl. keepalive/relay
+            # comment lines) before the routing/drop filters below.
+            if self.on_recv:
+                self.on_recv(text)
 
             # Drop keepalive acks.
             if "keepalive" in text:

@@ -28,7 +28,7 @@ Ground truth: the tape measure (definitive). The camera is a tracked estimator
 — its distance error vs the tape is measured and a camera_distance_scale logged.
 
 Run (aprilcam + pyserial come from this project's `calibrate` group):
-    uv run python tests/calibrate/calibrate_linear.py
+    uv run python tests/_infra/calibrate/calibrate_linear.py
 Options: --distance MM  --speed MMPS  --port DEV  --field "W H"  --no-write
 """
 
@@ -42,7 +42,7 @@ from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Library imports — all hardware work is deferred to main().
-# Import guard: this file lives under tests/calibrate/ which is in pytest
+# Import guard: this file lives under tests/_infra/calibrate/ which is in pytest
 # testpaths. These top-level imports must NOT open serial, start cameras, or
 # define any test_* functions. All hardware work is inside main().
 # ---------------------------------------------------------------------------
@@ -61,7 +61,7 @@ DEFAULT_SPEED_MMPS = 80       # slow: D drives straighter/cleaner at low speed
 ROBOT_TAG = 100               # tovez wears AprilTag 100
 LASER_PORT_DEFAULT = 4        # J4 digital port — the line laser
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 _TOVEZ_JSON = _REPO_ROOT / "data" / "robots" / "tovez.json"
 
 

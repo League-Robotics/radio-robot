@@ -11,7 +11,7 @@ what the camera (ground truth) saw vs what each onboard estimator reported:
 It writes NOTHING — pure diagnosis.  A ratio >1 means the estimator OVER-reports
 (robot stops short); <1 means it UNDER-reports (overshoot).
 
-    uv run python tests/calibrate/odom_check.py --straight 300 --turn 90
+    uv run python tests/_infra/calibrate/odom_check.py --straight 300 --turn 90
 """
 from __future__ import annotations
 

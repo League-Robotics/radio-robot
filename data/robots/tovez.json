@@ -14,7 +14,7 @@
   "vision": {
     "robot_tag_id": 100,
     "tag_offset_mm": {
-      "x": 50.0,
+      "x": 47.5,
       "y": 0.0,
       "z": 120.0,
       "yaw_rad": 0.0
@@ -82,8 +82,8 @@
     "vel_filt": 0.15,
     "sync": 1.0,
     "turn_gate": 35,
-    "yaw_rate_max": 35,
-    "max_rot_accel_dps2": 300,
+    "yaw_rate_max": 70,
+    "max_rot_accel_dps2": 600,
     "arrive_tol_mm": 25
   }
 }

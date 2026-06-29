@@ -16,7 +16,7 @@ a D drive (CODAL ASYNC TX). To watch the drive be smooth, use:
     uv run python tests/old/dev/enc_watch.py
 which streams a live encoder trace during an S drive.
 
-Usage: uv run python tests/calibrate/calibrate_bench.py [-n N] [--mm 500] [--spd 80]
+Usage: uv run python tests/_infra/calibrate/calibrate_bench.py [-n N] [--mm 500] [--spd 80]
 """
 import argparse
 import sys

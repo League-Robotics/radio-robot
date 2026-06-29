@@ -6,9 +6,9 @@ scale to the robot live, and persists the new values to data/robots/tovez.json s
 the next boot's DefaultConfig matches.
 
     # scale the current encoder mm/deg by a measured factor (truth/reported):
-    uv run python tests/calibrate/set_linear_cal.py --enc-factor 0.862
+    uv run python tests/_infra/calibrate/set_linear_cal.py --enc-factor 0.862
     # or set explicit values:
-    uv run python tests/calibrate/set_linear_cal.py --ml 0.6176 --mr 0.6100
+    uv run python tests/_infra/calibrate/set_linear_cal.py --ml 0.6176 --mr 0.6100
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from robot_radio.robot.protocol import NezhaProtocol
 from robot_radio.io.serial_conn import SerialConnection, list_serial_ports
 from robot_radio.config.robot_config import load_robot_config
 
-_REPO = Path(__file__).resolve().parents[2]
+_REPO = Path(__file__).resolve().parents[3]
 _TOVEZ = _REPO / "data" / "robots" / "tovez.json"
 
 

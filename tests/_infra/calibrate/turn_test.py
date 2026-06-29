@@ -11,7 +11,7 @@ The 2-param model (gain + offset, per direction) corrects the commanded angle.
 
 Three checks: A. dead-reckoning accuracy, B. closed-loop turn2, C. accumulation.
 Robot in camera view (playfield, via relay).
-Usage: uv run python tests/calibrate/turn_test.py [--dps 90] [--accel 300] [--tol 2.5]
+Usage: uv run python tests/_infra/calibrate/turn_test.py [--dps 90] [--accel 300] [--tol 2.5]
 """
 import argparse
 import math
@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rotation_cal import _Cam, wrap180   # reuse camera + helper
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 _TOVEZ_JSON = _REPO_ROOT / "data" / "robots" / "tovez.json"
 PROFILE_HZ = 20            # velocity-stream rate during a turn
 

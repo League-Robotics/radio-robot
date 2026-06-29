@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """set_param.py — SET arbitrary firmware config keys at runtime (no flash).
 
-    uv run python tests/calibrate/set_param.py alphaYaw=1.0 yawRateMax=60
+    uv run python tests/_infra/calibrate/set_param.py alphaYaw=1.0 yawRateMax=60
 """
 from __future__ import annotations
 

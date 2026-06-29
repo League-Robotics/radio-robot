@@ -17,7 +17,7 @@ turns (true for slip > ~0.5 on the raw 360°, and near-exact once the gain is on
 Writes rotation_gain / rotation_gain_neg to the robot config (unless --no-write).
 Robot must be in camera view (i.e. on the playfield, reached via the relay).
 
-Usage: uv run python tests/calibrate/rotation_cal.py [--port DEV] [--spd 100] [--no-write]
+Usage: uv run python tests/_infra/calibrate/rotation_cal.py [--port DEV] [--spd 100] [--no-write]
 """
 import argparse
 import json
@@ -27,7 +27,7 @@ import sys
 import time
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 _TOVEZ_JSON = _REPO_ROOT / "data" / "robots" / "tovez.json"
 ROBOT_TAG = 100
 

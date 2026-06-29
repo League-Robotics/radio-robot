@@ -16,7 +16,7 @@ camera client — `aprilcam` is declared as the `calibrate` dependency group in
 `uv run` work:
 
 ```sh
-uv run python tests/calibrate/calibrate_linear.py
+uv run python tests/_infra/calibrate/calibrate_linear.py
 ```
 
 ## `calibrate_linear.py` — distance calibration
