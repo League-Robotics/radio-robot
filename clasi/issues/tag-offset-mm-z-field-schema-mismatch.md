@@ -2,14 +2,29 @@
 status: pending
 ---
 
-# `tag_offset_mm.z` rejected by robot_config schema (2 pre-existing test failures)
+# Stale config goldens: `tag_offset_mm.z` schema + DefaultConfig golden drift (2 baseline test failures)
 
 ## Problem
 
-Two host sim tests fail on `master` (pre-existing, unrelated to sprint 054):
+Two host sim tests fail on `master` (pre-existing baseline, NOT caused by the
+message-architecture sprints 054-059). They have **two distinct root causes** —
+corrected diagnosis below (an earlier note lumped both under `tag_offset_mm.z`):
 
-- `tests/simulation/unit/test_default_config_pin.py::test_default_robot_config_unchanged`
 - `tests/simulation/unit/test_robot_config.py::TestSchemaValidation::test_tovez_validates_against_schema`
+  — **schema gap**: a robot config carries `tag_offset_mm.z` (tag mount height) but
+  the schema's `tag_offset_mm` object sets `additionalProperties:false` without a `z`
+  property. (Original cause, below.)
+- `tests/simulation/unit/test_default_config_pin.py::test_default_robot_config_unchanged`
+  — **stale GOLDEN snapshot**, NOT a schema issue. `defaultRobotConfig()` differs from
+  the pinned golden on two fields: `odomOffY` (golden 4.0 vs actual 3.5 — already stale
+  at session start) and `yawRateMax` (golden 35.0 vs actual 70.0). The `yawRateMax`
+  delta surfaced when sprint 055's `build.py --clean` **regenerated `DefaultConfig.cpp`
+  from the schema SSOT** (commit 4745d81), refreshing a stale committed default; the
+  golden file was not updated to match. This is generated-artifact staleness, not a
+  behavior regression — and the live tovez robot uses its own per-robot JSON config,
+  not this compile-time default. **Fix requires human review**: confirm the SSOT
+  values (is `yawRateMax=70` / `odomOffY=3.5` intended?) then refresh the golden via the
+  project's pin-update procedure — do NOT rubber-stamp the snapshot.
 
 Both fail with the same `jsonschema.ValidationError`:
 
