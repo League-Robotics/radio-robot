@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Sensors subsystem facade and sim isolation tests
-status: open
+status: done
 use-cases:
 - SUC-003
 depends-on:
@@ -123,17 +123,17 @@ and the simulation isolation tests.
 
 ## Acceptance Criteria
 
-- [ ] `Sensors::tick(now)` drives both `LineSensor` and `ColorSensor` reads when
+- [x] `Sensors::tick(now)` drives both `LineSensor` and `ColorSensor` reads when
       the lag gate fires; skips them when lag has not elapsed.
-- [ ] `Sensors::state()` returns a `const SensorsState&` (no copy, no heap).
-- [ ] `Sensors::configure(lc, cc)` stores configs; next tick uses updated lag values.
-- [ ] `toLineSensorConfig()` / `toColorSensorConfig()` map `RobotConfig` fields to
+- [x] `Sensors::state()` returns a `const SensorsState&` (no copy, no heap).
+- [x] `Sensors::configure(lc, cc)` stores configs; next tick uses updated lag values.
+- [x] `toLineSensorConfig()` / `toColorSensorConfig()` map `RobotConfig` fields to
       generated message config types correctly (spot-check at least `lag_line_ms`,
       `threshold`, `lag_color_ms`).
-- [ ] `test_sensors_subsystem.py` passes: connected, range, color reads, configure-lag.
-- [ ] No virtual dispatch introduced. No heap allocation.
-- [ ] `python build.py --clean` zero errors.
-- [ ] `uv run python -m pytest` green (no regressions to existing suite).
+- [x] `test_sensors_subsystem.py` passes: connected, range, color reads, configure-lag.
+- [x] No virtual dispatch introduced. No heap allocation.
+- [x] `python build.py --clean` zero errors.
+- [x] `uv run python -m pytest` green (no regressions to existing suite).
 
 ## Testing Plan
 
