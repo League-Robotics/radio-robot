@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include "state/ActualState.h"
-#include "io/capability/Pose2D.h"  // Pose2D, BodyTwist3
+#include "hal/capability/Pose2D.h"  // Pose2D, BodyTwist3
 
 // ---------------------------------------------------------------------------
 // EstimateDump — snapshot of one pose estimate for diagnostic output (047-001).

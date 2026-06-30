@@ -1,6 +1,6 @@
 #pragma once
 #include "MicroBit.h"
-#include "io/capability/IPositionMotor.h"
+#include "hal/capability/IPositionMotor.h"
 #include <stdint.h>
 
 /**

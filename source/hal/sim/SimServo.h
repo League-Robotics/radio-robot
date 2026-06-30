@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include "io/capability/IPositionMotor.h"
+#include "hal/capability/IPositionMotor.h"
 
 /**
  * SimServo — host-compilable IPositionMotor implementation for the SIM gripper.

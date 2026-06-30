@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include "io/capability/IPortIO.h"
+#include "hal/capability/IPortIO.h"
 #include "Inputs.h"
 #include "Config.h"
 #include "LoopTickOnce.h"

@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include "io/capability/IPositionMotor.h"
+#include "hal/capability/IPositionMotor.h"
 
 // ---------------------------------------------------------------------------
 // Gripper — thin subsystem wrapper for the OPTIONAL servo actuator (Phase E seam).

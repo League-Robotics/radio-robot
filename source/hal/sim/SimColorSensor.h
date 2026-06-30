@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include "io/capability/IColorSensor.h"
+#include "hal/capability/IColorSensor.h"
 #include "PhysicsWorld.h"
 
 /**

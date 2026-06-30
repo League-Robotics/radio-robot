@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include "io/capability/Pose2D.h"    // BodyTwist3
+#include "hal/capability/Pose2D.h"    // BodyTwist3
 #include "kinematics/IKinematics.h"  // Kinematics::kWheelCount
 #include "types/Config.h"            // DriveMode
 #include "types/Protocol.h"          // ReplyFn

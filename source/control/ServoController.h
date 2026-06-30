@@ -1,6 +1,6 @@
 #pragma once
 #include "CommandTypes.h"
-#include "io/capability/IPositionMotor.h"
+#include "hal/capability/IPositionMotor.h"
 
 /**
  * ServoController — Commandable wrapper around IPositionMotor that owns the GRIP

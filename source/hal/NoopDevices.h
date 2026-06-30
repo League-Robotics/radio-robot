@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include "io/capability/IVelocityMotor.h"
+#include "hal/capability/IVelocityMotor.h"
 
 // ---------------------------------------------------------------------------
 // NoopVelocityMotor — do-nothing IVelocityMotor for stubs and default HAL

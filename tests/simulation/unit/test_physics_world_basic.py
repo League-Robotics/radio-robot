@@ -30,9 +30,9 @@ _SRC = _REPO_ROOT / "source"
 
 _INCLUDE_DIRS = [
     _SRC,
-    _SRC / "io",
-    _SRC / "io" / "capability",
-    _SRC / "io" / "real",
+    _SRC / "hal",
+    _SRC / "hal" / "capability",
+    _SRC / "hal" / "real",
     _SRC / "control",
     _SRC / "robot",
     _SRC / "types",
@@ -42,7 +42,7 @@ _INCLUDE_DIRS = [
 
 # C++ harness: drives PhysicsWorld and prints PASS/FAIL lines the test parses.
 _HARNESS = r"""
-#include "io/sim/PhysicsWorld.h"
+#include "hal/sim/PhysicsWorld.h"
 #include <cstdint>
 #include <cstdio>
 #include <cmath>
@@ -223,7 +223,7 @@ def physics_world_harness(tmp_path_factory):
     cmd = [
         "c++", "-std=c++11", "-DHOST_BUILD=1",
         str(src),
-        str(_SRC / "io" / "sim" / "PhysicsWorld.cpp"),
+        str(_SRC / "hal" / "sim" / "PhysicsWorld.cpp"),
     ]
     for d in _INCLUDE_DIRS:
         cmd += ["-I", str(d)]

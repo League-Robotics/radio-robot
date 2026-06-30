@@ -1,6 +1,6 @@
 #pragma once
-#include "io/capability/IVelocityMotor.h"
-#include "io/capability/IBusDiagnostics.h"
+#include "hal/capability/IVelocityMotor.h"
+#include "hal/capability/IBusDiagnostics.h"
 #include "Config.h"
 #include "VelocityController.h"
 #include "Inputs.h"

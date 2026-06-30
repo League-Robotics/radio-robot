@@ -39,6 +39,8 @@ BASELINE_FILE = REPO_ROOT / "tests" / "_infra" / "vendor_baseline.txt"
 INSPECT_DIRS = ["commands", "control", "robot", "state", "subsystems", "superstructure", "types"]
 
 # CODAL-only files excluded from the host build — vendor deps here are expected.
+# NezhaHAL and MecanumHAL moved from hal/real/ to source/robot/ in 055-001;
+# they are CODAL-dependent hardware drivers and their vendor tokens are expected.
 CODAL_ONLY = {
     "WedgeTest.cpp",
     "WedgeTest.h",
@@ -47,6 +49,10 @@ CODAL_ONLY = {
     "Icons.h",
     "SystemCommands.cpp",
     "Robot.cpp",
+    "NezhaHAL.cpp",
+    "NezhaHAL.h",
+    "MecanumHAL.cpp",
+    "MecanumHAL.h",
 }
 
 FORBIDDEN_PATTERNS = [

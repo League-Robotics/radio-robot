@@ -25,11 +25,11 @@
 #   source/commands/DebugCommands.cpp     — HOST_BUILD stubs only; I2C handlers guarded
 #   source/control/PortController.cpp   — NezhaHAL hardware I/O, not sim-exercisable
 #   source/control/ServoController.cpp  — hardware PWM output, same rationale
-#   source/io/real/*                    — real device drivers, absent from host lib
+#   source/hal/real/*                   — real device drivers, absent from host lib
 #   source/robot/WedgeTest.cpp            — CODAL-only diagnostic (#ifndef HOST_BUILD)
 #   source/robot/LoopScheduler.cpp — CODAL scheduler (MicroBit fiber APIs)
 #   source/main.cpp                     — CODAL entry point, not in host lib
-#   source/io/real/BenchOtosSensor.cpp  — bench-only, physical OTOS over I2C
+#   source/hal/real/BenchOtosSensor.cpp — bench-only, physical OTOS over I2C
 #
 # Note: source/commands/SystemCommands.cpp has mixed coverage — testable paths are
 # included in the simulatable denominator (only the RESET/#ifndef HOST_BUILD
@@ -147,7 +147,7 @@ SIM_SUMMARY="$(uv run --with gcovr gcovr \
     --exclude 'source/control/PortController\.cpp' \
     --exclude 'source/control/ServoController\.cpp' \
     --exclude 'source/control/RatioPidController\.cpp' \
-    --exclude 'source/io/real/.*' \
+    --exclude 'source/hal/real/.*' \
     --exclude 'source/robot/WedgeTest\.cpp' \
     --exclude 'source/robot/LoopScheduler\.cpp' \
     --exclude 'source/main\.cpp' \

@@ -1,7 +1,7 @@
 #pragma once
 #include "MicroBit.h"
 #include "I2CBus.h"
-#include "io/capability/ILineSensor.h"
+#include "hal/capability/ILineSensor.h"
 #include <stdint.h>
 
 /**

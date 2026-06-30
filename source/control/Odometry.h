@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include "Inputs.h"
-#include "io/capability/IOdometer.h"
+#include "hal/capability/IOdometer.h"
 #include "state/EKFTiny.h"
 
 // ---------------------------------------------------------------------------
