@@ -1,7 +1,7 @@
 ---
 id: 059
 title: Phase 3 - System integration, command bus, planner, and bottom-up config
-status: planning-docs
+status: done
 branch: sprint/059-phase-3-system-integration-command-bus-planner-and-bottom-up-config
 use-cases:
 - SUC-001
