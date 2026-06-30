@@ -1,7 +1,7 @@
 ---
 id: '055'
 title: Phase 0 - Reorganize source/io into hal, com, robot
-status: planning-docs
+status: done
 branch: sprint/055-phase-0-reorganize-source-io-into-hal-com-robot
 use-cases:
 - SUC-001
