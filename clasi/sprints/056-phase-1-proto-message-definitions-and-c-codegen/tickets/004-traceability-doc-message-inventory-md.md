@@ -1,7 +1,7 @@
 ---
 id: '004'
-title: "Traceability doc — message-inventory.md"
-status: open
+title: "Traceability doc \u2014 message-inventory.md"
+status: done
 use-cases:
 - SUC-005
 depends-on:
@@ -167,20 +167,20 @@ the generated table.
 
 ## Acceptance Criteria
 
-- [ ] The `FIELD_TRACE` dict in `scripts/gen_messages.py` covers every field of
+- [x] The `FIELD_TRACE` dict in `scripts/gen_messages.py` covers every field of
       every message in the 7 proto files (or marks fields as "new" if no existing
       home exists).
-- [ ] `python scripts/gen_messages.py --emit-inventory` runs without error and writes
+- [x] `python scripts/gen_messages.py --emit-inventory` runs without error and writes
       `docs/design/message-inventory.md`.
-- [ ] `docs/design/message-inventory.md` is checked into the repo.
-- [ ] The generated table includes all spot-check rows:
+- [x] `docs/design/message-inventory.md` is checked into the repo.
+- [x] The generated table includes all spot-check rows:
       - `DrivetrainState::fused` → `ActualState::fused`
       - `PlannerCommand::goto_goal` → `DesiredState DriveMode::GO_TO / targetXWorld,targetYWorld`
       - `MotorCommand::velocity_mmps` → `portable-motor-interface VELOCITY verb / IVelocityMotor::setSpeed()`
       - `DrivetrainConfig::vel_gains` → `RobotConfig::{velKp,velKi,...}`
       - `PlannerConfig::a_max` → `RobotConfig::aMax`
-- [ ] Fields with no existing home are annotated "new field" (not left blank).
-- [ ] `uv run python -m pytest` remains green (no new failures).
+- [x] Fields with no existing home are annotated "new field" (not left blank).
+- [x] `uv run python -m pytest` remains green (no new failures).
 
 ## Implementation Plan
 
