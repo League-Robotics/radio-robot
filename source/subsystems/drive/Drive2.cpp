@@ -17,6 +17,7 @@
 #include "state/PhysicalStateEstimate.h"
 #include "control/Odometry.h"
 #include "hal/capability/Pose2D.h"    // Pose2D / BodyTwist
+#include "kinematics/BodyKinematics.h" // inverse() — TWIST → wheel speeds (060-004)
 
 #include <cmath>   // fmaxf, fabsf
 
@@ -71,7 +72,7 @@ void Drive2::apply(const msg::DrivetrainCommand& cmd)
 // 5. OTOS correction (if lag elapsed and device is ready).
 // 6. Refresh _state from _hw.
 // ---------------------------------------------------------------------------
-void Drive2::tickUpdate(uint32_t now)
+void Drive2::tickUpdate(uint32_t now, bool fuseOtos)
 {
     // ------------------------------------------------------------------
     // STEP 1+2: Outlier filter → encoder collect → controlTick
@@ -112,12 +113,14 @@ void Drive2::tickUpdate(uint32_t now)
                          ? _drvCfg.get_lag_otos()
                          : _robCfg.lagOtosMs;
     if (lagMs > 0 && _otos.is_initialized()) {
-        if (!_otosEverReady) {
-            // First time: mark ready and seed the timer so we don't fire
-            // with an uninitialised _lastOtosMs.
+        _hw.otos.lagMs = lagMs;   // keep stamp lag field in sync
+        if (!_otosEverReady && !fuseOtos) {
+            // First time (normal lag-gated path): mark ready and seed the timer
+            // so we don't fire with an uninitialised _lastOtosMs.
             _otosEverReady = true;
             _lastOtosMs    = now;
-        } else if ((int32_t)(now - _lastOtosMs) >= (int32_t)lagMs) {
+        } else if (fuseOtos || (int32_t)(now - _lastOtosMs) >= (int32_t)lagMs) {
+            if (!_otosEverReady) { _otosEverReady = true; }
             float headingRad = _hw.fused.pose.h;
             Pose2D p{};
             bool poseOk = _otos.readTransformed(p, headingRad);
@@ -128,6 +131,14 @@ void Drive2::tickUpdate(uint32_t now)
                                         p.x, p.y, p.h,
                                         vel.v_mmps, vel.omega_rads,
                                         0.0f, now);
+                // 060-004: Mirror Robot::otosCorrect() — mark otos.valid so
+                // buildTlmFrame's N8 freshness gate emits the otos= field.
+                _hw.otos.lastUpdMs = now;
+                _hw.otos.valid     = true;
+            } else {
+                // Read failed this cycle — valid stays unchanged (preserves
+                // the last-known-good stamp, matching Robot::otosCorrect behaviour).
+                _hw.otos.valid = false;
             }
             _lastOtosMs = now;
         }
@@ -213,13 +224,21 @@ msg::CommandBatch Drive2::tickAction(uint32_t now)
             break;
         }
 
-        // Use BVC profiler: setTarget then advance with a 1-tick dt.
-        // dt_s: estimate from config controlPeriodMs; fall back to 20 ms.
-        float dt_s = (_robCfg.controlPeriodMs > 0)
-                         ? (float)_robCfg.controlPeriodMs / 1000.0f
-                         : 0.020f;
-        _bvc.setTarget(vx, omega);
-        _bvc.advance(dt_s);
+        // 060-004: The TWIST arriving here is already profiled by the planner's
+        // internal BVC (MotionController._bvc).  Running another BVC ramp in
+        // Drive2 would double-profile the motion (planner ramps 0→target, then
+        // Drive2 ramps 0→planner_output) causing indefinitely-slow ramp-up that
+        // fails almost every motor/motion test.  Instead, do a direct inverse-
+        // kinematics conversion and set wheel targets immediately.
+        //
+        // The MotorController's own velocity PID (controlTick) still closes the
+        // wheel-speed loop; this sets the TARGET, not the PWM duty cycle.
+        float vL = 0.0f, vR = 0.0f;
+        float trackwidth = (_drvCfg.get_trackwidth() > 0.0f)
+                               ? _drvCfg.get_trackwidth()
+                               : _robCfg.trackwidthMm;
+        BodyKinematics::inverse(vx, omega, trackwidth, vL, vR);
+        _mc.setTarget(vL, vR);
         break;
     }
 
@@ -328,6 +347,56 @@ void Drive2::projectFromLegacy(const HardwareState& hw)
     _state.optical.pose.x = hw.optical.pose.x;
     _state.optical.pose.y = hw.optical.pose.y;
     _state.optical.pose.h = hw.optical.pose.h;
+}
+
+// ---------------------------------------------------------------------------
+// resetEncoders — zero Drive2's private encoder baseline (060-004).
+//
+// Mirrors Robot::resetEncoders() for the Drive2 subsystem so that D commands
+// and ZERO enc keep drive2._hw in sync with the hardware motor reset.
+//
+// Three-step reset (verbatim semantics from Robot::resetEncoders):
+//   1. Zero _hw.encMm[]: sets the outlier-filter baseline so the next
+//      _runOutlierFilter() sees delta=0 on the fresh accumulator.
+//   2. Refresh _state.enc_[] so state() returns 0 immediately this tick.
+//   3. Re-baseline _odo's snapshot: prevents predict() computing dL=0-prev
+//      (a large negative delta) on the first tick after reset.
+// ---------------------------------------------------------------------------
+void Drive2::resetEncoders()
+{
+    for (int i = 0; i < kWheelCount; ++i) {
+        _hw.encMm[i]    = 0.0f;
+        _state.enc_[i]  = 0.0f;
+    }
+    _odo.rebaselinePrev(0.0f, 0.0f);
+}
+
+// ---------------------------------------------------------------------------
+// injectFusedPose — sim injection hook (060-004).
+//
+// Writes x/y/h_rad directly into _hw.fused.pose and refreshes _state.fused
+// so that the next drive2.state() read sees the injected pose immediately.
+// Used by sim_api.cpp::sim_set_pose when USE_ORDERED_TICK is defined.
+// ---------------------------------------------------------------------------
+void Drive2::injectFusedPose(float x, float y, float h_rad)
+{
+    _hw.fused.pose.x = x;
+    _hw.fused.pose.y = y;
+    _hw.fused.pose.h = h_rad;
+    _state.fused.pose.x = x;
+    _state.fused.pose.y = y;
+    _state.fused.pose.h = h_rad;
+}
+
+// ---------------------------------------------------------------------------
+// setEncOmegaHealthy — sim injection hook (060-004).
+//
+// Forwards the encoder-omega health gate to Drive2's own PhysicalStateEstimate.
+// Used by sim_api.cpp::sim_set_enc_omega_healthy when USE_ORDERED_TICK is defined.
+// ---------------------------------------------------------------------------
+void Drive2::setEncOmegaHealthy(bool healthy)
+{
+    _est.setEncOmegaHealthy(healthy);
 }
 
 // ---------------------------------------------------------------------------

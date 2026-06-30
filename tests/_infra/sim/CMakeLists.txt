@@ -6,6 +6,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_definitions(-DHOST_BUILD=1)
 
+# 060-004: Make USE_ORDERED_TICK the compile-time default so the full host
+# test suite runs against the ordered-tick path without needing an explicit flag.
+add_compile_definitions(USE_ORDERED_TICK)
+
 # ---------------------------------------------------------------------------
 # Root of the firmware repo: great-grandparent of this CMakeLists.txt's directory.
 # CMAKE_SOURCE_DIR is tests/_infra/sim/; repo root is three levels up.

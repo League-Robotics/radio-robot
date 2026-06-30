@@ -128,7 +128,16 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
 #endif
     // 047-003: wire BVC → DesiredState publish so bodyTwist/bodyTwistRaw are
     // updated every advance() tick.
+    //
+    // 060-004: In the ordered-tick path, MotionController2's constructor already
+    // called _mc.setBvcStateRef(&planner._desired) so that planner.tick() reads
+    // the BVC body-twist output from planner._desired.  We must NOT override that
+    // binding here, or planner.tick() will read stale zeros from _desired.bodyTwist
+    // (its own private member) while BVC writes to robot.state.desired instead.
+    // In the legacy path, state.desired is still the correct target.
+#ifndef USE_ORDERED_TICK
     motionController.setBvcStateRef(&state.desired);
+#endif
     // setRobotCtx replaces setCtx (sprint 026-002): MotionCtx now lives in Robot.
     motionController.setRobotCtx(this);
     // Initialise _motionCtx (sprint 026-002): mc and robot pointers; queue wired
@@ -356,6 +365,14 @@ void Robot::resetEncoders()
     // 3. Re-baseline Odometry's encoder snapshot so predict() sees delta=0
     //    on the very next tick rather than (0 - _prevEncL) = large negative.
     estimate.rebaselinePrev(0.0f, 0.0f);
+
+    // 4. 060-004: In ordered-tick path, Drive2 owns an independent encoder
+    //    baseline in _hw.encMm[].  Reset it so tickUpdate() sees 0 delta after
+    //    the hardware reset, and LoopTickOnce.cpp's sync block copies 0 back
+    //    into state.actual.encMm[] (not the stale pre-reset accumulator).
+#ifdef USE_ORDERED_TICK
+    drive2.resetEncoders();
+#endif
 }
 
 // ---------------------------------------------------------------------------

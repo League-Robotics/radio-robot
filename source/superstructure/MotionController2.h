@@ -81,6 +81,26 @@ public:
     // "the implementer should document the chosen approach in a comment."
     void configure(const msg::PlannerConfig& cfg);
 
+    // syncWireContext — copy the reply fn/ctx/corrId from robot.state.desired
+    // into _desired before tick() calls driveAdvance().
+    //
+    // 060-004: G/TURN/D commands are dispatched through the wire path
+    // (handleGoTo, handleTurn, handleDistance → mc.beginGoTo / beginTurn /
+    // beginDistance) which writes the real replyFn into robot.state.desired.
+    // But driveAdvance() uses MC2's _desired (= _target), which has _noopReply.
+    // When PRE_ROTATE completes, driveAdvance line 275 calls:
+    //   _activeCmd.setReplySink(target.replyFn, target.replyCtx, target.corrId)
+    // overwriting the activeCmd's real replyFn with _noopReply.
+    // This sync propagates the real reply context from the wire path into MC2's
+    // _desired so driveAdvance uses the correct reply sink for EVT emission.
+    void syncWireContext(const DesiredState& wire) {
+        _desired.replyFn  = wire.replyFn;
+        _desired.replyCtx = wire.replyCtx;
+        // corrId is a char array — copy element-by-element (no strncpy in header).
+        for (int i = 0; i < 16; ++i) _desired.corrId[i] = wire.corrId[i];
+        _desired.sink = wire.sink;
+    }
+
 private:
     MotionController&          _mc;       // existing goal-closure engine (by ref)
     const subsystems::Drive2&  _drive2;   // source of fused pose/twist

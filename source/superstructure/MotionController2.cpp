@@ -198,6 +198,35 @@ msg::CommandBatch MotionController2::tick(uint32_t now)
     _hw.encMm[0] = drvState.enc()[0];  // [0]=R
     _hw.encMm[1] = drvState.enc()[1];  // [1]=L
 
+    // Sensor fields (line / color) for SENSOR/LINE_ANY/COLOR stop conditions.
+    //
+    // 060-004: MotionController2::_hw is populated solely from drive2.state(),
+    // which carries no sensor data.  MotionCommand::_stops[].evaluate(inputs, …)
+    // passes our private _hw as `inputs`, so without this copy, all line/color
+    // stop conditions see zero values and never fire.
+    //
+    // The authoritative sensor state lives in robot.state.actual (sensors.tick
+    // writes there via lineSensor._inputs / colorSensor_._inputs, both of which
+    // hold &state.actual).  MotionController::hardwareState() exposes the same
+    // pointer (it was set to &state.actual in Robot.cpp).
+    //
+    // Note: sensors.tick() runs at step 7 (after planner.tick at step 4).
+    // This copies the values that sensors.tick() wrote on the PREVIOUS tick,
+    // which introduces a one-tick lag for sensor stops.  That lag is acceptable
+    // and matches the legacy loop (which also evaluates sensors before
+    // sensor_tick's current-tick write in the next pass).  The full cutover
+    // (060-005) will remove this indirection once Sensors exposes a proper API.
+    {
+        const HardwareState* live = _mc.hardwareState();
+        if (live != nullptr) {
+            for (int i = 0; i < 4; ++i) _hw.line[i]  = live->line[i];
+            _hw.colorR = live->colorR;
+            _hw.colorG = live->colorG;
+            _hw.colorB = live->colorB;
+            _hw.colorC = live->colorC;
+        }
+    }
+
     // ------------------------------------------------------------------
     // STEP 2: Advance goal logic via driveAdvance.
     //
@@ -218,9 +247,20 @@ msg::CommandBatch MotionController2::tick(uint32_t now)
     // BVC.advance() writes bodyTwist into _desired (via setBvcStateRef(&_desired)
     // wired in the constructor).  After driveAdvance() returns, _desired.bodyTwist
     // holds the profiled live setpoint: {vx, 0, omega}.
+    //
+    // 060-004: When the MC is IDLE with no active command (e.g. after stop() /
+    // watchdog X / distance complete), driveAdvance() returns without advancing
+    // the BVC, leaving _desired.bodyTwist at the last profiled value.  Propagating
+    // that stale non-zero twist to Drive2 keeps the motors running indefinitely.
+    // Zero the body twist explicitly so Drive2 receives {0,0,0} in IDLE.
     // ------------------------------------------------------------------
     float vx    = _desired.bodyTwist.vx_mmps;
     float omega = _desired.bodyTwist.omega_rads;
+    if (_mc.mode() == DriveMode::IDLE && !_mc.hasActiveCommand()) {
+        vx    = 0.0f;
+        omega = 0.0f;
+        _desired.bodyTwist = {0.0f, 0.0f, 0.0f};
+    }
 
     // ------------------------------------------------------------------
     // STEP 4: Pack DrivetrainCommand{TWIST} into CommandBatch.

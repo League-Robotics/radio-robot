@@ -304,6 +304,10 @@ if(NOT PRODUCTION_BUILD)
     add_definitions(-DBENCH_OTOS_ENABLED)
 endif()
 
+# 060-004: USE_ORDERED_TICK is now the default compile-time path — the ordered-tick
+# control loop (LoopTickOnce.cpp #else branch) is active in all builds.
+add_definitions(-DUSE_ORDERED_TICK)
+
 # ---------------------------------------------------------------------------
 # Drivetrain HAL exclusions (048-004): the firmware build is always
 # differential (NezhaHAL). MecanumHAL.cpp is retained in-tree for future

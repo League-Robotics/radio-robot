@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Flip USE_ORDERED_TICK to default; full host suite green
-status: open
+status: done
 use-cases:
 - SUC-004
 depends-on:
@@ -38,13 +38,13 @@ path now run against the ordered-tick path and pass.
 
 ## Acceptance Criteria
 
-- [ ] `tests/_infra/sim/CMakeLists.txt` defines `USE_ORDERED_TICK` unconditionally.
-- [ ] The firmware `CMakeLists.txt` defines `USE_ORDERED_TICK` unconditionally.
-- [ ] The sim shared library rebuilds cleanly (`cd tests/_infra/sim && python3 build.py`).
-- [ ] `uv run python -m pytest` — green except the 2 known-baseline config-golden failures.
-- [ ] `test_golden_tlm.py` passes (using the regenerated capture from ticket 001).
-- [ ] `test_059_ordered_tick_parity.py` passes.
-- [ ] `test_planner_subsystem.py` passes.
+- [x] `tests/_infra/sim/CMakeLists.txt` defines `USE_ORDERED_TICK` unconditionally.
+- [x] The firmware `CMakeLists.txt` defines `USE_ORDERED_TICK` unconditionally.
+- [x] The sim shared library rebuilds cleanly (`cd tests/_infra/sim && python3 build.py`).
+- [x] `uv run python -m pytest` — green except the 2 known-baseline config-golden failures.
+- [x] `test_golden_tlm.py` passes (using the regenerated capture from ticket 001).
+- [x] `test_059_ordered_tick_parity.py` passes.
+- [x] `test_planner_subsystem.py` passes.
 
 ## Implementation Plan
 

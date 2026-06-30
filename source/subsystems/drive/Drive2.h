@@ -67,7 +67,10 @@ public:
 
     // SENSE phase: read encoders, run EKF predict; optionally OTOS correct.
     // Updates _state. Call before tickAction().
-    void tickUpdate(uint32_t now);
+    // fuseOtos: when true, bypass the internal OTOS lag gate and run OTOS
+    //   correction every tick (mirrors ts.fuseOtos in LoopTickOnce — used by
+    //   sim_set_otos_fusion which forces sub-lag-period OTOS updates in tests).
+    void tickUpdate(uint32_t now, bool fuseOtos = false);
 
     // ACT phase: apply staged command via kinematics → wheel PID → motor output.
     // Returns (currently empty) CommandBatch — Drive2 is a leaf actuator.
@@ -94,6 +97,29 @@ public:
 
     // Declared capability set.
     msg::DrivetrainCapabilities capabilities() const;
+
+    // resetEncoders — atomically zero Drive2's private encoder baseline and
+    // re-anchor the Odometry snapshot so the next tickUpdate sees delta=0.
+    // Called by Robot::resetEncoders() in the ordered-tick path so that D and
+    // ZERO enc commands keep drive2._hw in sync with the hardware reset.
+    void resetEncoders();
+
+    // ---- Sim injection hooks (060-004) ----
+    // Used by sim_api.cpp to synchronise the Drive2 private state with direct
+    // plant injections (e.g. sim_set_enc_l, sim_set_pose, sim_set_enc_omega_healthy).
+    // These are compile-time thin — zero overhead in firmware (never called there).
+
+    // Inject encoder position directly into _hw (mirrors sim_set_enc_l/r for Drive2).
+    // Does NOT reset the plant or MotorController — just aligns the private baseline.
+    void injectEncL(float mm) { _hw.encMm[1] = mm; _state.enc_[1] = mm; }
+    void injectEncR(float mm) { _hw.encMm[0] = mm; _state.enc_[0] = mm; }
+
+    // Inject a fused pose directly into _hw (mirrors sim_set_pose for Drive2).
+    // Refreshes _state.fused too so the next state() read sees it immediately.
+    void injectFusedPose(float x, float y, float h_rad);
+
+    // Forward the encoder-omega health gate to drive2's own estimator.
+    void setEncOmegaHealthy(bool healthy);
 
 private:
     // ---- Component references ----
