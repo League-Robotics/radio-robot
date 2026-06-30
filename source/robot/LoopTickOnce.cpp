@@ -273,15 +273,16 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // =========================================================
     // STEP 7 — sensors.tick(now): timed line/color reads
     //
-    // Sensors facade drives both sensor reads when their lag
-    // gates fire, independent of LoopTickState timestamps.
-    // The legacy lineSensor.periodic / colorSensor_.periodic /
-    // ports.periodic are still called for ports (Ports is not
-    // yet a Ports2 subsystem) and to keep LoopTickState.lastLine
-    // / lastColor in sync with the firmware scheduler.
+    // sensors.tick() is the SOLE sensor-schedule authority in the
+    // ordered-tick path.  It drives both sensor reads when their
+    // lag gates (_lastLineTick / _lastColorTick in Sensors.h) fire,
+    // independent of LoopTickState.lastLine / lastColor (which are
+    // NOT read or written here).  lineSensor.periodic() and
+    // colorSensor_.periodic() are NOT called in this path.
     // =========================================================
     robot.sensors.tick(now);
-    // ports.periodic: Ports is not yet wrapped in a Ports2 facade.
+    // ports.periodic: Ports is not yet wrapped in a Ports2 facade;
+    // keep it here until a Ports2 subsystem replaces it (ticket 060-005+).
     robot.ports.periodic(ts, now);
 
     // =========================================================

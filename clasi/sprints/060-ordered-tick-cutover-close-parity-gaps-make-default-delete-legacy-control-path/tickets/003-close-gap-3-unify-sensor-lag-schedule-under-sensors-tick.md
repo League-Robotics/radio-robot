@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: 'Close gap 3: unify sensor lag schedule under sensors.tick()'
-status: open
+status: done
 use-cases:
 - SUC-003
 depends-on:
@@ -43,12 +43,12 @@ The `Sensors` facade's `_lastLineTick`/`_lastColorTick` are the authoritative ti
 
 ## Acceptance Criteria
 
-- [ ] `robot.lineSensor.periodic(ts, now)` is NOT called in the ordered-tick branch of `LoopTickOnce.cpp`.
-- [ ] `robot.colorSensor_.periodic(ts, now)` is NOT called in the ordered-tick branch.
-- [ ] `robot.ports.periodic(ts, now)` IS still called in the ordered-tick branch.
-- [ ] A comment in `LoopTickOnce.cpp` documents that `sensors.tick()` is the sole sensor schedule authority.
-- [ ] `uv run python -m pytest` — green except the 2 known-baseline failures.
-- [ ] `test_golden_tlm.py` remains green.
+- [x] `robot.lineSensor.periodic(ts, now)` is NOT called in the ordered-tick branch of `LoopTickOnce.cpp`.
+- [x] `robot.colorSensor_.periodic(ts, now)` is NOT called in the ordered-tick branch.
+- [x] `robot.ports.periodic(ts, now)` IS still called in the ordered-tick branch.
+- [x] A comment in `LoopTickOnce.cpp` documents that `sensors.tick()` is the sole sensor schedule authority.
+- [x] `uv run python -m pytest` — green except the 2 known-baseline failures.
+- [x] `test_golden_tlm.py` remains green.
 
 ## Implementation Plan
 
