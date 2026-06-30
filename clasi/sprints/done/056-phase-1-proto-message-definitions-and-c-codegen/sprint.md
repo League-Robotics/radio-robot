@@ -1,7 +1,7 @@
 ---
 id: '056'
 title: Phase 1 - Proto message definitions and C++ codegen
-status: planning-docs
+status: done
 branch: sprint/056-phase-1-proto-message-definitions-and-c-codegen
 use-cases:
 - SUC-001
