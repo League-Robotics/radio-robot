@@ -262,11 +262,13 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // STEP 6b — HAL ACTUATOR TICK
     //
     // The HAL tick delivers the motor commands to the plant.
-    // Under the ordered-tick path, robot.state.outputs is still
-    // the MotorController's live command sink (setCommandsRef
-    // wires to robot.state.outputs in the Robot constructor).
+    // 060-002: Drive2's constructor binds MotorController to
+    // drive2._outputs (setCommandsRef(&_outputs)), and Robot.cpp
+    // no longer overrides that binding in the ordered-tick path.
+    // So the buffer the MotorController actually wrote to is
+    // drive2._outputs — pass drive2.outputs() here.
     // =========================================================
-    robot.hal.tick(now, robot.state.outputs);
+    robot.hal.tick(now, robot.drive2.outputs());
 
     // =========================================================
     // STEP 7 — sensors.tick(now): timed line/color reads

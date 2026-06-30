@@ -118,7 +118,14 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
                       subsystems::toColorSensorConfig(config));
     planner.configure(toPlannerConfig(config));
     motionController.setHardwareState(&state.actual);
+    // 060-002: In the ordered-tick path, Drive2's constructor already called
+    // _mc.setCommandsRef(&_outputs), binding MotorController to drive2._outputs.
+    // We must NOT override that binding here, or drive2.outputs() will be stale.
+    // In the legacy path (sim + unguarded firmware), state.outputs is still the
+    // correct sink — keep the call under #ifndef USE_ORDERED_TICK.
+#ifndef USE_ORDERED_TICK
     motorController.setCommandsRef(&state.outputs);
+#endif
     // 047-003: wire BVC → DesiredState publish so bodyTwist/bodyTwistRaw are
     // updated every advance() tick.
     motionController.setBvcStateRef(&state.desired);

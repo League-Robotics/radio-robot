@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: 'Close gap 2: single motor-output authority (setCommandsRef)'
-status: open
+status: done
 use-cases:
 - SUC-002
 depends-on:
@@ -53,12 +53,12 @@ After this ticket: in the ordered-tick path, `MotorController` writes to
 
 ## Acceptance Criteria
 
-- [ ] The ordered-tick branch step 6b calls `robot.hal.tick(now, robot.drive2.outputs())` (not `robot.state.outputs`).
-- [ ] Drive2's `_mc.setCommandsRef(&_outputs)` binding is not overridden for the ordered-tick path.
-- [ ] `MockHAL::tick` compiles and runs correctly with the updated argument.
-- [ ] `uv run python -m pytest` — green except the 2 known-baseline failures.
-- [ ] `test_golden_tlm.py` remains green.
-- [ ] `test_059_ordered_tick_parity.py` remains green.
+- [x] The ordered-tick branch step 6b calls `robot.hal.tick(now, robot.drive2.outputs())` (not `robot.state.outputs`).
+- [x] Drive2's `_mc.setCommandsRef(&_outputs)` binding is not overridden for the ordered-tick path.
+- [x] `MockHAL::tick` compiles and runs correctly with the updated argument.
+- [x] `uv run python -m pytest` — green except the 2 known-baseline failures.
+- [x] `test_golden_tlm.py` remains green.
+- [x] `test_059_ordered_tick_parity.py` remains green.
 
 ## Implementation Plan
 
