@@ -10,46 +10,46 @@ namespace msg {
 
 // GripperCommand
 struct GripperCommand {
-    Opt<float> angle_deg = {};
+    Opt<float> angle = {};
 
     // --- getters ---
-    const Opt<float>& get_angle_deg() const { return angle_deg; }
+    const Opt<float>& get_angle() const { return angle; }
 
     // --- chainable setters (Command/Config only) ---
-    GripperCommand& setAngleDeg(float v) {
-        angle_deg.has = true; angle_deg.val = v;
+    GripperCommand& setAngle(float v) {
+        angle.has = true; angle.val = v;
         return *this;
     }
 };
 
 // GripperState
 struct GripperState {
-    Opt<float> angle_deg = {};
+    Opt<float> angle = {};
     bool connected = false;
 
     // --- getters ---
-    const Opt<float>& get_angle_deg() const { return angle_deg; }
+    const Opt<float>& get_angle() const { return angle; }
     bool get_connected() const { return connected; }
 };
 
 // GripperConfig
 struct GripperConfig {
     bool has_gripper = false;
-    float gripper_offset_mm = 0.0f;
-    float min_deg = 0.0f;
-    float max_deg = 0.0f;
+    float gripper_offset = 0.0f;
+    float min = 0.0f;
+    float max = 0.0f;
 
     // --- getters ---
     bool get_has_gripper() const { return has_gripper; }
-    float get_gripper_offset_mm() const { return gripper_offset_mm; }
-    float get_min_deg() const { return min_deg; }
-    float get_max_deg() const { return max_deg; }
+    float get_gripper_offset() const { return gripper_offset; }
+    float get_min() const { return min; }
+    float get_max() const { return max; }
 
     // --- chainable setters (Command/Config only) ---
     GripperConfig& setHasGripper(bool v) { has_gripper = v; return *this; }
-    GripperConfig& setGripperOffsetMm(float v) { gripper_offset_mm = v; return *this; }
-    GripperConfig& setMinDeg(float v) { min_deg = v; return *this; }
-    GripperConfig& setMaxDeg(float v) { max_deg = v; return *this; }
+    GripperConfig& setGripperOffset(float v) { gripper_offset = v; return *this; }
+    GripperConfig& setMin(float v) { min = v; return *this; }
+    GripperConfig& setMax(float v) { max = v; return *this; }
 };
 
 }  // namespace msg

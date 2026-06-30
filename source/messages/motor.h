@@ -14,16 +14,16 @@ struct MotorCommand {
         NONE = 0,
         DUTY_CYCLE = 1,
         VOLTAGE = 2,
-        VELOCITY_MMPS = 3,
-        POSITION_MM = 4,
+        VELOCITY = 3,
+        POSITION = 4,
         NEUTRAL = 5,
     };
     ControlKind control_kind = ControlKind::NONE;
     union {
         float duty_cycle;
         float voltage;
-        float velocity_mmps;
-        float position_mm;
+        float velocity;
+        float position;
         Neutral neutral;
     } control = {};
 
@@ -44,14 +44,14 @@ struct MotorCommand {
         control.voltage = v;
         return *this;
     }
-    MotorCommand& setVelocityMmps(float v) {
-        control_kind = ControlKind::VELOCITY_MMPS;
-        control.velocity_mmps = v;
+    MotorCommand& setVelocity(float v) {
+        control_kind = ControlKind::VELOCITY;
+        control.velocity = v;
         return *this;
     }
-    MotorCommand& setPositionMm(float v) {
-        control_kind = ControlKind::POSITION_MM;
-        control.position_mm = v;
+    MotorCommand& setPosition(float v) {
+        control_kind = ControlKind::POSITION;
+        control.position = v;
         return *this;
     }
     MotorCommand& setNeutral(const Neutral& v) {
@@ -68,16 +68,16 @@ struct MotorCommand {
 // MotorState
 struct MotorState {
     bool connected = false;
-    Opt<float> position_mm = {};
-    Opt<float> velocity_mmps = {};
-    Opt<float> applied_pct = {};
+    Opt<float> position = {};
+    Opt<float> velocity = {};
+    Opt<float> applied = {};
     Opt<bool> wedged = {};
 
     // --- getters ---
     bool get_connected() const { return connected; }
-    const Opt<float>& get_position_mm() const { return position_mm; }
-    const Opt<float>& get_velocity_mmps() const { return velocity_mmps; }
-    const Opt<float>& get_applied_pct() const { return applied_pct; }
+    const Opt<float>& get_position() const { return position; }
+    const Opt<float>& get_velocity() const { return velocity; }
+    const Opt<float>& get_applied() const { return applied; }
     const Opt<bool>& get_wedged() const { return wedged; }
 };
 

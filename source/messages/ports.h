@@ -68,17 +68,17 @@ struct PortState {
 
 // PortConfig
 struct PortConfig {
-    uint32_t lag_ports_ms = 0;
+    uint32_t lag_ports = 0;
     uint32_t direction_[4] = {};
     uint8_t direction_count = 0;
 
     // --- getters ---
-    uint32_t get_lag_ports_ms() const { return lag_ports_ms; }
+    uint32_t get_lag_ports() const { return lag_ports; }
     const uint32_t* direction() const { return direction_; }
     uint8_t direction_count_val() const { return direction_count; }
 
     // --- chainable setters (Command/Config only) ---
-    PortConfig& setLagPortsMs(uint32_t v) { lag_ports_ms = v; return *this; }
+    PortConfig& setLagPorts(uint32_t v) { lag_ports = v; return *this; }
     PortConfig& clearDirection() { direction_count = 0; return *this; }
 };
 

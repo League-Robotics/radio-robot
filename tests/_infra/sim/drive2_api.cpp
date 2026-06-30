@@ -89,9 +89,9 @@ void drive2_api_apply_twist(void* h, float vx, float vy, float omega)
     Drive2Handle* d = static_cast<Drive2Handle*>(h);
     msg::DrivetrainCommand cmd;
     msg::BodyTwist3 twist{};
-    twist.vx_mmps    = vx;
-    twist.vy_mmps    = vy;
-    twist.omega_rads = omega;
+    twist.v_x    = vx;
+    twist.v_y    = vy;
+    twist.omega = omega;
     cmd.setTwist(twist);
     d->drive2.apply(cmd);
 }
@@ -120,9 +120,9 @@ void drive2_api_apply_setpose(void* h, float x, float y, float h_rad)
     Drive2Handle* d = static_cast<Drive2Handle*>(h);
     msg::DrivetrainCommand cmd;
     msg::SetPose pose{};
-    pose.x_mm  = x;
-    pose.y_mm  = y;
-    pose.h_rad = h_rad;
+    pose.x  = x;
+    pose.y  = y;
+    pose.h = h_rad;
     cmd.setPose(pose);
     d->drive2.apply(cmd);
 }
@@ -161,17 +161,17 @@ void drive2_api_tick_action(void* h, uint32_t now_ms)
 
 float drive2_api_get_fused_x(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->drive2.state().get_fused().get_pose().get_x_mm();
+    return static_cast<Drive2Handle*>(h)->drive2.state().get_fused().get_pose().get_x();
 }
 
 float drive2_api_get_fused_y(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->drive2.state().get_fused().get_pose().get_y_mm();
+    return static_cast<Drive2Handle*>(h)->drive2.state().get_fused().get_pose().get_y();
 }
 
 float drive2_api_get_fused_h(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->drive2.state().get_fused().get_pose().get_h_rad();
+    return static_cast<Drive2Handle*>(h)->drive2.state().get_fused().get_pose().get_h();
 }
 
 int drive2_api_get_connected(void* h)
@@ -209,16 +209,16 @@ float drive2_api_get_target_mms_l(void* h)
     // For the test purposes: read sim motor L's current velocity (if 0, braked).
     // We use hal.simMotorL() to read the last commanded speed from PhysicsWorld.
     // PhysicsWorld::trueVelLMms() returns the ACTUAL velocity (not commanded).
-    // Instead, the simplest correct approach: read state.vel_mms_[1] from Drive2.
+    // Instead, the simplest correct approach: read state.vel_[1] from Drive2.
     const msg::DrivetrainState& st = static_cast<Drive2Handle*>(h)->drive2.state();
-    if (st.vel_mms_count_val() >= 2) return st.vel_mms()[1];
+    if (st.vel_count_val() >= 2) return st.vel()[1];
     return 0.0f;
 }
 
 float drive2_api_get_target_mms_r(void* h)
 {
     const msg::DrivetrainState& st = static_cast<Drive2Handle*>(h)->drive2.state();
-    if (st.vel_mms_count_val() >= 1) return st.vel_mms()[0];
+    if (st.vel_count_val() >= 1) return st.vel()[0];
     return 0.0f;
 }
 
@@ -322,25 +322,25 @@ float drive2_api_ground_truth_h(void* h)
 // Encoder-only pose X (mm) — from DrivetrainState::encoder (dead-reckoning).
 float drive2_api_get_encoder_x(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->drive2.state().get_encoder().get_pose().get_x_mm();
+    return static_cast<Drive2Handle*>(h)->drive2.state().get_encoder().get_pose().get_x();
 }
 
 // Encoder-only pose Y (mm).
 float drive2_api_get_encoder_y(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->drive2.state().get_encoder().get_pose().get_y_mm();
+    return static_cast<Drive2Handle*>(h)->drive2.state().get_encoder().get_pose().get_y();
 }
 
 // Optical-only pose X (mm) — from DrivetrainState::optical (OTOS sim model).
 float drive2_api_get_optical_x(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->drive2.state().get_optical().get_pose().get_x_mm();
+    return static_cast<Drive2Handle*>(h)->drive2.state().get_optical().get_pose().get_x();
 }
 
 // Optical-only pose Y (mm).
 float drive2_api_get_optical_y(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->drive2.state().get_optical().get_pose().get_y_mm();
+    return static_cast<Drive2Handle*>(h)->drive2.state().get_optical().get_pose().get_y();
 }
 
 } // extern "C"

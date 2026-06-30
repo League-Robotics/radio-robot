@@ -679,9 +679,9 @@ static void handleSI(const ArgList& args, const char* corrId,
     {
         msg::DrivetrainCommand siCmd;
         msg::SetPose sp{};
-        sp.x_mm  = (float)x_mm;
-        sp.y_mm  = (float)y_mm;
-        sp.h_rad = (float)h_cdeg * 1.74532925e-4f;
+        sp.x  = (float)x_mm;
+        sp.y  = (float)y_mm;
+        sp.h  = (float)h_cdeg * 1.74532925e-4f;
         siCmd.setPose(sp);
         robot->drive2.apply(siCmd);
     }

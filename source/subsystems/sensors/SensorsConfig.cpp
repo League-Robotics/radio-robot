@@ -25,7 +25,7 @@ namespace subsystems {
 msg::LineSensorConfig toLineSensorConfig(const RobotConfig& rc)
 {
     msg::LineSensorConfig cfg;
-    cfg.lag_line_ms = rc.lagLineMs;
+    cfg.lag_line = rc.lagLineMs;
     // threshold / norm_min / norm_max / channel_map: no RobotConfig mapping;
     // left at zero-initialized defaults.
     return cfg;
@@ -43,7 +43,7 @@ msg::LineSensorConfig toLineSensorConfig(const RobotConfig& rc)
 msg::ColorSensorConfig toColorSensorConfig(const RobotConfig& rc)
 {
     msg::ColorSensorConfig cfg;
-    cfg.lag_color_ms = rc.lagColorMs;
+    cfg.lag_color = rc.lagColorMs;
     // integration / gain / cal_r / cal_g / cal_b: no RobotConfig mapping;
     // left at zero-initialized defaults.
     return cfg;

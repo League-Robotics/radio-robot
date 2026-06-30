@@ -66,82 +66,82 @@ struct StopCondition {
 
 // VelocityGoal
 struct VelocityGoal {
-    float vx_mmps = 0.0f;
-    float vy_mmps = 0.0f;
-    float omega_rads = 0.0f;
-    uint32_t duration_ms = 0;
+    float v_x = 0.0f;
+    float v_y = 0.0f;
+    float omega = 0.0f;
+    uint32_t duration = 0;
 
     // --- getters ---
-    float get_vx_mmps() const { return vx_mmps; }
-    float get_vy_mmps() const { return vy_mmps; }
-    float get_omega_rads() const { return omega_rads; }
-    uint32_t get_duration_ms() const { return duration_ms; }
+    float get_v_x() const { return v_x; }
+    float get_v_y() const { return v_y; }
+    float get_omega() const { return omega; }
+    uint32_t get_duration() const { return duration; }
 };
 
 // GotoGoal
 struct GotoGoal {
-    float x_mm = 0.0f;
-    float y_mm = 0.0f;
-    float speed_mmps = 0.0f;
+    float x = 0.0f;
+    float y = 0.0f;
+    float speed = 0.0f;
 
     // --- getters ---
-    float get_x_mm() const { return x_mm; }
-    float get_y_mm() const { return y_mm; }
-    float get_speed_mmps() const { return speed_mmps; }
+    float get_x() const { return x; }
+    float get_y() const { return y; }
+    float get_speed() const { return speed; }
 };
 
 // TurnGoal
 struct TurnGoal {
-    float heading_rad = 0.0f;
-    float speed_mmps = 0.0f;
+    float heading = 0.0f;
+    float speed = 0.0f;
 
     // --- getters ---
-    float get_heading_rad() const { return heading_rad; }
-    float get_speed_mmps() const { return speed_mmps; }
+    float get_heading() const { return heading; }
+    float get_speed() const { return speed; }
 };
 
 // DistanceGoal
 struct DistanceGoal {
-    float distance_mm = 0.0f;
-    float speed_mmps = 0.0f;
+    float distance = 0.0f;
+    float speed = 0.0f;
 
     // --- getters ---
-    float get_distance_mm() const { return distance_mm; }
-    float get_speed_mmps() const { return speed_mmps; }
+    float get_distance() const { return distance; }
+    float get_speed() const { return speed; }
 };
 
 // TimedGoal
 struct TimedGoal {
-    float vx_mmps = 0.0f;
-    float omega_rads = 0.0f;
-    uint32_t duration_ms = 0;
+    float v_x = 0.0f;
+    float omega = 0.0f;
+    uint32_t duration = 0;
 
     // --- getters ---
-    float get_vx_mmps() const { return vx_mmps; }
-    float get_omega_rads() const { return omega_rads; }
-    uint32_t get_duration_ms() const { return duration_ms; }
+    float get_v_x() const { return v_x; }
+    float get_omega() const { return omega; }
+    uint32_t get_duration() const { return duration; }
 };
 
 // RotationGoal
 struct RotationGoal {
-    float angle_rad = 0.0f;
-    float speed_mmps = 0.0f;
+    float angle = 0.0f;
+    float speed = 0.0f;
 
     // --- getters ---
-    float get_angle_rad() const { return angle_rad; }
-    float get_speed_mmps() const { return speed_mmps; }
+    float get_angle() const { return angle; }
+    float get_speed() const { return speed; }
 };
 
 // StreamGoal
 struct StreamGoal {
-    float vx_mmps = 0.0f;
-    float vy_mmps = 0.0f;
-    float omega_rads = 0.0f;
+    float v_x = 0.0f;
+    float v_y = 0.0f;
+    float omega = 0.0f;
 
     // --- getters ---
-    float get_vx_mmps() const { return vx_mmps; }
-    float get_vy_mmps() const { return vy_mmps; }
-    float get_omega_rads() const { return omega_rads; }
+    float get_v_x() const { return v_x; }
+    float get_v_y() const { return v_y; }
+    float get_omega() const { return omega; }
 };
 
 // PlannerCommand
@@ -233,21 +233,21 @@ struct PlannerCommand {
 // PlannerState
 struct PlannerState {
     DriveMode mode = static_cast<DriveMode>(0);
-    float target_x_mm = 0.0f;
-    float target_y_mm = 0.0f;
-    float target_speed_mms = 0.0f;
-    float distance_target_mm = 0.0f;
-    uint32_t deadline_ms = 0;
+    float target_x = 0.0f;
+    float target_y = 0.0f;
+    float target_speed = 0.0f;
+    float distance_target = 0.0f;
+    uint32_t deadline = 0;
     BodyTwist3 body_twist = {};
     bool active = false;
 
     // --- getters ---
     DriveMode get_mode() const { return mode; }
-    float get_target_x_mm() const { return target_x_mm; }
-    float get_target_y_mm() const { return target_y_mm; }
-    float get_target_speed_mms() const { return target_speed_mms; }
-    float get_distance_target_mm() const { return distance_target_mm; }
-    uint32_t get_deadline_ms() const { return deadline_ms; }
+    float get_target_x() const { return target_x; }
+    float get_target_y() const { return target_y; }
+    float get_target_speed() const { return target_speed; }
+    float get_distance_target() const { return distance_target; }
+    uint32_t get_deadline() const { return deadline; }
     const BodyTwist3& get_body_twist() const { return body_twist; }
     bool get_active() const { return active; }
 };
@@ -261,11 +261,11 @@ struct PlannerConfig {
     float yaw_acc_max = 0.0f;
     float j_max = 0.0f;
     float yaw_jerk_max = 0.0f;
-    float arrive_tol_mm = 0.0f;
+    float arrive_tol = 0.0f;
     float turn_in_place_gate = 0.0f;
-    float turn_threshold_mm = 0.0f;
-    float done_tol_mm = 0.0f;
-    float min_speed_mms = 0.0f;
+    float turn_threshold = 0.0f;
+    float done_tol = 0.0f;
+    float min_speed = 0.0f;
 
     // --- getters ---
     float get_a_max() const { return a_max; }
@@ -275,11 +275,11 @@ struct PlannerConfig {
     float get_yaw_acc_max() const { return yaw_acc_max; }
     float get_j_max() const { return j_max; }
     float get_yaw_jerk_max() const { return yaw_jerk_max; }
-    float get_arrive_tol_mm() const { return arrive_tol_mm; }
+    float get_arrive_tol() const { return arrive_tol; }
     float get_turn_in_place_gate() const { return turn_in_place_gate; }
-    float get_turn_threshold_mm() const { return turn_threshold_mm; }
-    float get_done_tol_mm() const { return done_tol_mm; }
-    float get_min_speed_mms() const { return min_speed_mms; }
+    float get_turn_threshold() const { return turn_threshold; }
+    float get_done_tol() const { return done_tol; }
+    float get_min_speed() const { return min_speed; }
 
     // --- chainable setters (Command/Config only) ---
     PlannerConfig& setAMax(float v) { a_max = v; return *this; }
@@ -289,11 +289,11 @@ struct PlannerConfig {
     PlannerConfig& setYawAccMax(float v) { yaw_acc_max = v; return *this; }
     PlannerConfig& setJMax(float v) { j_max = v; return *this; }
     PlannerConfig& setYawJerkMax(float v) { yaw_jerk_max = v; return *this; }
-    PlannerConfig& setArriveTolMm(float v) { arrive_tol_mm = v; return *this; }
+    PlannerConfig& setArriveTol(float v) { arrive_tol = v; return *this; }
     PlannerConfig& setTurnInPlaceGate(float v) { turn_in_place_gate = v; return *this; }
-    PlannerConfig& setTurnThresholdMm(float v) { turn_threshold_mm = v; return *this; }
-    PlannerConfig& setDoneTolMm(float v) { done_tol_mm = v; return *this; }
-    PlannerConfig& setMinSpeedMms(float v) { min_speed_mms = v; return *this; }
+    PlannerConfig& setTurnThreshold(float v) { turn_threshold = v; return *this; }
+    PlannerConfig& setDoneTol(float v) { done_tol = v; return *this; }
+    PlannerConfig& setMinSpeed(float v) { min_speed = v; return *this; }
 };
 
 }  // namespace msg

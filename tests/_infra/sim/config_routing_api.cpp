@@ -216,9 +216,9 @@ void config_route_apply_si(void* h, float x_mm, float y_mm, float h_rad)
     ConfigRouteHandle* cr = static_cast<ConfigRouteHandle*>(h);
     msg::DrivetrainCommand cmd;
     msg::SetPose sp{};
-    sp.x_mm  = x_mm;
-    sp.y_mm  = y_mm;
-    sp.h_rad = h_rad;
+    sp.x  = x_mm;
+    sp.y  = y_mm;
+    sp.h = h_rad;
     cmd.setPose(sp);
     cr->robot.drive2.apply(cmd);
 }
@@ -237,19 +237,19 @@ void config_route_tick(void* h, uint32_t now_ms)
 float config_route_drive2_fused_x(void* h)
 {
     return static_cast<ConfigRouteHandle*>(h)
-        ->robot.drive2.state().get_fused().get_pose().get_x_mm();
+        ->robot.drive2.state().get_fused().get_pose().get_x();
 }
 
 float config_route_drive2_fused_y(void* h)
 {
     return static_cast<ConfigRouteHandle*>(h)
-        ->robot.drive2.state().get_fused().get_pose().get_y_mm();
+        ->robot.drive2.state().get_fused().get_pose().get_y();
 }
 
 float config_route_drive2_fused_h(void* h)
 {
     return static_cast<ConfigRouteHandle*>(h)
-        ->robot.drive2.state().get_fused().get_pose().get_h_rad();
+        ->robot.drive2.state().get_fused().get_pose().get_h();
 }
 
 // ---------------------------------------------------------------------------

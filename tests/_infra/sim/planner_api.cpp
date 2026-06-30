@@ -120,9 +120,9 @@ float planner_api_tick(void* h, uint32_t now_ms)
         if (oc.verb_id == 1 && oc.args_count >= 3) {
             msg::DrivetrainCommand drvCmd;
             msg::BodyTwist3 twist{};
-            twist.vx_mmps    = oc.args_[0];
-            twist.vy_mmps    = oc.args_[1];
-            twist.omega_rads = oc.args_[2];
+            twist.v_x    = oc.args_[0];
+            twist.v_y    = oc.args_[1];
+            twist.omega = oc.args_[2];
             drvCmd.setTwist(twist);
             p->drive2.apply(drvCmd);
         }
@@ -132,7 +132,7 @@ float planner_api_tick(void* h, uint32_t now_ms)
     p->drive2.tickAction(now_ms);
 
     // Return the commanded vx for the caller to inspect.
-    return p->mc2.state().get_body_twist().get_vx_mmps();
+    return p->mc2.state().get_body_twist().get_v_x();
 }
 
 // ---------------------------------------------------------------------------
@@ -145,8 +145,8 @@ void planner_api_apply_velocity(void* h, float vx, float omega)
     PlannerHandle* p = static_cast<PlannerHandle*>(h);
     msg::PlannerCommand cmd;
     msg::VelocityGoal g{};
-    g.vx_mmps    = vx;
-    g.omega_rads = omega;
+    g.v_x    = vx;
+    g.omega = omega;
     cmd.setVelocity(g);
     p->mc2.apply(cmd);
 }
@@ -166,7 +166,7 @@ void planner_api_apply_turn(void* h, float heading_rad)
     PlannerHandle* p = static_cast<PlannerHandle*>(h);
     msg::PlannerCommand cmd;
     msg::TurnGoal g{};
-    g.heading_rad = heading_rad;
+    g.heading = heading_rad;
     cmd.setTurn(g);
     p->mc2.apply(cmd);
 }
@@ -177,9 +177,9 @@ void planner_api_apply_timed(void* h, float vx, float omega, uint32_t duration_m
     PlannerHandle* p = static_cast<PlannerHandle*>(h);
     msg::PlannerCommand cmd;
     msg::TimedGoal g{};
-    g.vx_mmps    = vx;
-    g.omega_rads = omega;
-    g.duration_ms = duration_ms;
+    g.v_x    = vx;
+    g.omega = omega;
+    g.duration = duration_ms;
     cmd.setTimed(g);
     p->mc2.apply(cmd);
 }
@@ -190,9 +190,9 @@ void planner_api_apply_goto(void* h, float x_mm, float y_mm, float speed_mmps)
     PlannerHandle* p = static_cast<PlannerHandle*>(h);
     msg::PlannerCommand cmd;
     msg::GotoGoal g{};
-    g.x_mm       = x_mm;
-    g.y_mm       = y_mm;
-    g.speed_mmps = speed_mmps;
+    g.x       = x_mm;
+    g.y       = y_mm;
+    g.speed = speed_mmps;
     cmd.setGotoGoal(g);
     p->mc2.apply(cmd);
 }
@@ -203,8 +203,8 @@ void planner_api_apply_distance(void* h, float distance_mm, float speed_mmps)
     PlannerHandle* p = static_cast<PlannerHandle*>(h);
     msg::PlannerCommand cmd;
     msg::DistanceGoal g{};
-    g.distance_mm = distance_mm;
-    g.speed_mmps  = speed_mmps;
+    g.distance = distance_mm;
+    g.speed  = speed_mmps;
     cmd.setDistance(g);
     p->mc2.apply(cmd);
 }
@@ -215,7 +215,7 @@ void planner_api_apply_rotation(void* h, float angle_rad)
     PlannerHandle* p = static_cast<PlannerHandle*>(h);
     msg::PlannerCommand cmd;
     msg::RotationGoal g{};
-    g.angle_rad = angle_rad;
+    g.angle = angle_rad;
     cmd.setRotation(g);
     p->mc2.apply(cmd);
 }
@@ -242,12 +242,12 @@ int planner_api_get_mode(void* h)
 
 float planner_api_get_body_twist_vx(void* h)
 {
-    return static_cast<PlannerHandle*>(h)->mc2.state().get_body_twist().get_vx_mmps();
+    return static_cast<PlannerHandle*>(h)->mc2.state().get_body_twist().get_v_x();
 }
 
 float planner_api_get_body_twist_omega(void* h)
 {
-    return static_cast<PlannerHandle*>(h)->mc2.state().get_body_twist().get_omega_rads();
+    return static_cast<PlannerHandle*>(h)->mc2.state().get_body_twist().get_omega();
 }
 
 // ---------------------------------------------------------------------------
@@ -256,17 +256,17 @@ float planner_api_get_body_twist_omega(void* h)
 
 float planner_api_get_fused_x(void* h)
 {
-    return static_cast<PlannerHandle*>(h)->drive2.state().get_fused().get_pose().get_x_mm();
+    return static_cast<PlannerHandle*>(h)->drive2.state().get_fused().get_pose().get_x();
 }
 
 float planner_api_get_fused_y(void* h)
 {
-    return static_cast<PlannerHandle*>(h)->drive2.state().get_fused().get_pose().get_y_mm();
+    return static_cast<PlannerHandle*>(h)->drive2.state().get_fused().get_pose().get_y();
 }
 
 float planner_api_get_fused_h(void* h)
 {
-    return static_cast<PlannerHandle*>(h)->drive2.state().get_fused().get_pose().get_h_rad();
+    return static_cast<PlannerHandle*>(h)->drive2.state().get_fused().get_pose().get_h();
 }
 
 // ---------------------------------------------------------------------------
@@ -299,7 +299,7 @@ float planner_api_default_config_arrive_tol_mm()
 {
     RobotConfig cfg = defaultRobotConfig();
     msg::PlannerConfig pcfg = toPlannerConfig(cfg);
-    return pcfg.get_arrive_tol_mm();
+    return pcfg.get_arrive_tol();
 }
 
 } // extern "C"

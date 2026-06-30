@@ -14,24 +14,24 @@ schema itself rather than a single firmware member.
 
 | Proto file | Message | Field | C++ type | Maps to existing |
 |---|---|---|---|---|
-| common.proto | Pose2D | x_mm | float | Pose2D::x (hal/capability/Pose2D.h) |
-| common.proto | Pose2D | y_mm | float | Pose2D::y (hal/capability/Pose2D.h) |
-| common.proto | Pose2D | h_rad | float | Pose2D::h (hal/capability/Pose2D.h) |
-| common.proto | BodyTwist | v_mmps | float | (new field — BodyTwist2 not in ActualState; BodyTwist3 used instead) |
-| common.proto | BodyTwist | omega_rads | float | (new field — BodyTwist2 not in ActualState; BodyTwist3 used instead) |
-| common.proto | BodyTwist3 | vx_mmps | float | BodyTwist3::vx_mmps (hal/capability/Pose2D.h) |
-| common.proto | BodyTwist3 | vy_mmps | float | BodyTwist3::vy_mmps (hal/capability/Pose2D.h) |
-| common.proto | BodyTwist3 | omega_rads | float | BodyTwist3::omega_rads (hal/capability/Pose2D.h) |
-| common.proto | BodyAccel | ax_mmps2 | float | ActualState::otosAccelX (passthroughtelemetry) |
-| common.proto | BodyAccel | ay_mmps2 | float | ActualState::otosAccelY (passthroughtelemetry) |
-| common.proto | ValueSet | lag_ms | uint32_t | ValueSet::lagMs (types/ValueSet.h) |
-| common.proto | ValueSet | last_upd_ms | uint32_t | ValueSet::lastUpdMs (types/ValueSet.h) |
+| common.proto | Pose2D | x | float | Pose2D::x (hal/capability/Pose2D.h) |
+| common.proto | Pose2D | y | float | Pose2D::y (hal/capability/Pose2D.h) |
+| common.proto | Pose2D | h | float | Pose2D::h (hal/capability/Pose2D.h) |
+| common.proto | BodyTwist | v | float | (new field — BodyTwist2 not in ActualState; BodyTwist3 used instead) |
+| common.proto | BodyTwist | omega | float | (new field — BodyTwist2 not in ActualState; BodyTwist3 used instead) |
+| common.proto | BodyTwist3 | v_x | float | BodyTwist3::vx_mmps (hal/capability/Pose2D.h) |
+| common.proto | BodyTwist3 | v_y | float | BodyTwist3::vy_mmps (hal/capability/Pose2D.h) |
+| common.proto | BodyTwist3 | omega | float | BodyTwist3::omega_rads (hal/capability/Pose2D.h) |
+| common.proto | BodyAccel | a_x | float | ActualState::otosAccelX (passthroughtelemetry) |
+| common.proto | BodyAccel | a_y | float | ActualState::otosAccelY (passthroughtelemetry) |
+| common.proto | ValueSet | lag | uint32_t | ValueSet::lagMs (types/ValueSet.h) |
+| common.proto | ValueSet | last_upd | uint32_t | ValueSet::lastUpdMs (types/ValueSet.h) |
 | common.proto | ValueSet | valid | bool | ValueSet::valid (types/ValueSet.h) |
 | common.proto | PoseEstimate | pose | Pose2D | PoseEstimate::pose (state/PoseEstimate.h) |
 | common.proto | PoseEstimate | twist | BodyTwist3 | PoseEstimate::twist (state/PoseEstimate.h) |
 | common.proto | PoseEstimate | stamp | ValueSet | PoseEstimate::stamp (state/PoseEstimate.h) |
-| common.proto | WheelTarget | speed_mmps | Opt<float> | DesiredState::wheelMms[] (per-wheel speed target) |
-| common.proto | WheelTarget | position_mm | Opt<float> | IPositionMotor::setAngleDeg (position-motor interface) |
+| common.proto | WheelTarget | speed | Opt<float> | DesiredState::wheelMms[] (per-wheel speed target) |
+| common.proto | WheelTarget | position | Opt<float> | IPositionMotor::setAngleDeg (position-motor interface) |
 | common.proto | Gains | kp | float | RobotConfig::velKp |
 | common.proto | Gains | ki | float | RobotConfig::velKi |
 | common.proto | Gains | kff | float | RobotConfig::velKff |
@@ -48,9 +48,9 @@ schema itself rather than a single firmware member.
 | common.proto | Capabilities | holonomic | bool | (new field — holonomic flag, Phase 2) |
 | common.proto | Capabilities | onboard_position | bool | (new field — onboard position flag, Phase 2) |
 | common.proto | Capabilities | wheel_count | uint32_t | (new field — wheel count, Phase 2) |
-| drivetrain.proto | SetPose | x_mm | float | Superstructure::handleSI() / estimate.resetPose x |
-| drivetrain.proto | SetPose | y_mm | float | Superstructure::handleSI() / estimate.resetPose y |
-| drivetrain.proto | SetPose | h_rad | float | Superstructure::handleSI() / estimate.resetPose h |
+| drivetrain.proto | SetPose | x | float | Superstructure::handleSI() / estimate.resetPose x |
+| drivetrain.proto | SetPose | y | float | Superstructure::handleSI() / estimate.resetPose y |
+| drivetrain.proto | SetPose | h | float | Superstructure::handleSI() / estimate.resetPose h |
 | drivetrain.proto | WheelTargets | w | WheelTarget[4] | DesiredState::wheelMms[] (array of per-wheel targets) |
 | drivetrain.proto | DrivetrainCommand | twist | BodyTwist3 | DesiredState::bodyTwist (BodyTwist3 profiled setpoint) |
 | drivetrain.proto | DrivetrainCommand | wheels | WheelTargets | DesiredState::wheelMms[kWheelCount] (per-wheel speed) |
@@ -60,9 +60,9 @@ schema itself rather than a single firmware member.
 | drivetrain.proto | DrivetrainState | fused | PoseEstimate | ActualState::fused (PoseEstimate) |
 | drivetrain.proto | DrivetrainState | encoder | PoseEstimate | ActualState::encoder (PoseEstimate) |
 | drivetrain.proto | DrivetrainState | optical | PoseEstimate | ActualState::optical (PoseEstimate) |
-| drivetrain.proto | DrivetrainState | enc_mm | float[4] | ActualState::encMm[kWheelCount] |
-| drivetrain.proto | DrivetrainState | vel_mms | float[4] | ActualState::velMms[kWheelCount] |
-| drivetrain.proto | DrivetrainState | enc | ValueSet | ActualState::enc (ValueSet) |
+| drivetrain.proto | DrivetrainState | enc | float[4] | ActualState::encMm[kWheelCount] |
+| drivetrain.proto | DrivetrainState | vel | float[4] | ActualState::velMms[kWheelCount] |
+| drivetrain.proto | DrivetrainState | enc_stamp | ValueSet | ActualState::enc (ValueSet) |
 | drivetrain.proto | DrivetrainState | otos | ValueSet | ActualState::otos (ValueSet) |
 | drivetrain.proto | DrivetrainState | wheel_wedged | bool[4] | (new field — wheel-stall flag, not yet in ActualState) |
 | drivetrain.proto | DrivetrainState | connected | bool | (new field — drivetrain connected flag, not in ActualState) |
@@ -70,9 +70,9 @@ schema itself rather than a single firmware member.
 | drivetrain.proto | DrivetrainConfig | fwd_sign_r | int32_t | RobotConfig::fwdSignR |
 | drivetrain.proto | DrivetrainConfig | mm_per_deg_l | float | RobotConfig::mmPerDegL |
 | drivetrain.proto | DrivetrainConfig | mm_per_deg_r | float | RobotConfig::mmPerDegR |
-| drivetrain.proto | DrivetrainConfig | trackwidth_mm | float | RobotConfig::trackwidthMm |
-| drivetrain.proto | DrivetrainConfig | half_track_mm | float | RobotConfig::halfTrackMm |
-| drivetrain.proto | DrivetrainConfig | half_wheelbase_mm | float | RobotConfig::halfWheelbaseMm |
+| drivetrain.proto | DrivetrainConfig | trackwidth | float | RobotConfig::trackwidthMm |
+| drivetrain.proto | DrivetrainConfig | half_track | float | RobotConfig::halfTrackMm |
+| drivetrain.proto | DrivetrainConfig | half_wheelbase | float | RobotConfig::halfWheelbaseMm |
 | drivetrain.proto | DrivetrainConfig | mm_per_deg_wheel | float[4] | RobotConfig::{mmPerDegFR,mmPerDegFL,mmPerDegBR,mmPerDegBL} |
 | drivetrain.proto | DrivetrainConfig | fwd_sign_wheel | int32_t[4] | RobotConfig::{fwdSignFR,fwdSignFL,fwdSignBR,fwdSignBL} |
 | drivetrain.proto | DrivetrainConfig | v_wheel_max | float | RobotConfig::vWheelMax |
@@ -80,7 +80,7 @@ schema itself rather than a single firmware member.
 | drivetrain.proto | DrivetrainConfig | vel_gains | Gains | RobotConfig::{velKp,velKi,velKff,velIMax,velKaw} |
 | drivetrain.proto | DrivetrainConfig | vel_filt_alpha | float | RobotConfig::velFiltAlpha |
 | drivetrain.proto | DrivetrainConfig | sync_gain | float | RobotConfig::syncGain |
-| drivetrain.proto | DrivetrainConfig | min_wheel_mms | float | RobotConfig::minWheelMms |
+| drivetrain.proto | DrivetrainConfig | min_wheel | float | RobotConfig::minWheelMms |
 | drivetrain.proto | DrivetrainConfig | alpha_pos | float | RobotConfig::alphaPos |
 | drivetrain.proto | DrivetrainConfig | alpha_yaw | float | RobotConfig::alphaYaw |
 | drivetrain.proto | DrivetrainConfig | otos_gate | float | RobotConfig::otosGate |
@@ -88,12 +88,12 @@ schema itself rather than a single firmware member.
 | drivetrain.proto | DrivetrainConfig | otos_angular_scale | float | RobotConfig::otosAngularScale |
 | drivetrain.proto | DrivetrainConfig | rotation_gain_pos | float | RobotConfig::rotationGainPos |
 | drivetrain.proto | DrivetrainConfig | rotation_gain_neg | float | RobotConfig::rotationGainNeg |
-| drivetrain.proto | DrivetrainConfig | rotation_offset_deg | float | RobotConfig::rotationOffsetDeg |
-| drivetrain.proto | DrivetrainConfig | rotation_offset_deg_neg | float | RobotConfig::rotationOffsetDegNeg |
+| drivetrain.proto | DrivetrainConfig | rotation_offset | float | RobotConfig::rotationOffsetDeg |
+| drivetrain.proto | DrivetrainConfig | rotation_offset_neg | float | RobotConfig::rotationOffsetDegNeg |
 | drivetrain.proto | DrivetrainConfig | rotational_slip | float | RobotConfig::rotationalSlip |
 | drivetrain.proto | DrivetrainConfig | odom_off_x | float | RobotConfig::odomOffX |
 | drivetrain.proto | DrivetrainConfig | odom_off_y | float | RobotConfig::odomOffY |
-| drivetrain.proto | DrivetrainConfig | odom_yaw_deg | float | RobotConfig::odomYawDeg |
+| drivetrain.proto | DrivetrainConfig | odom_yaw | float | RobotConfig::odomYawDeg |
 | drivetrain.proto | DrivetrainConfig | odom_upside_down | bool | RobotConfig::odomUpsideDown |
 | drivetrain.proto | DrivetrainConfig | ekf_q_xy | float | RobotConfig::ekfQxy |
 | drivetrain.proto | DrivetrainConfig | ekf_q_theta | float | RobotConfig::ekfQtheta |
@@ -103,28 +103,28 @@ schema itself rather than a single firmware member.
 | drivetrain.proto | DrivetrainConfig | ekf_q_omega | float | RobotConfig::ekfQomega |
 | drivetrain.proto | DrivetrainConfig | ekf_r_otos_v | float | RobotConfig::ekfROtosV |
 | drivetrain.proto | DrivetrainConfig | ekf_r_enc_v | float | RobotConfig::ekfREncV |
-| drivetrain.proto | DrivetrainConfig | lag_otos_ms | uint32_t | RobotConfig::lagOtosMs |
+| drivetrain.proto | DrivetrainConfig | lag_otos | uint32_t | RobotConfig::lagOtosMs |
 | drivetrain.proto | DrivetrainConfig | drivetrain_type | int32_t | RobotConfig::drivetrain |
 | drivetrain.proto | DrivetrainCapabilities | holonomic | bool | (new field — holonomic capability flag, Phase 2) |
 | drivetrain.proto | DrivetrainCapabilities | onboard_position | bool | (new field — onboard position capability, Phase 2) |
 | drivetrain.proto | DrivetrainCapabilities | wheel_count | uint32_t | (new field — wheel count declaration, Phase 2) |
-| gripper.proto | GripperCommand | angle_deg | Opt<float> | IPositionMotor::setAngleDeg (hal/capability/IPositionMotor.h) |
-| gripper.proto | GripperState | angle_deg | Opt<float> | (new field — servo angle readback, not yet in OutputState) |
+| gripper.proto | GripperCommand | angle | Opt<float> | IPositionMotor::setAngleDeg (hal/capability/IPositionMotor.h) |
+| gripper.proto | GripperState | angle | Opt<float> | (new field — servo angle readback, not yet in OutputState) |
 | gripper.proto | GripperState | connected | bool | (new field — gripper connected flag, not yet in ActualState) |
 | gripper.proto | GripperConfig | has_gripper | bool | (new field — has-gripper capability flag, not in RobotConfig) |
-| gripper.proto | GripperConfig | gripper_offset_mm | float | (new field — gripper mounting offset, not in RobotConfig) |
-| gripper.proto | GripperConfig | min_deg | float | (new field — servo minimum angle, not in RobotConfig) |
-| gripper.proto | GripperConfig | max_deg | float | (new field — servo maximum angle, not in RobotConfig) |
+| gripper.proto | GripperConfig | gripper_offset | float | (new field — gripper mounting offset, not in RobotConfig) |
+| gripper.proto | GripperConfig | min | float | (new field — servo minimum angle, not in RobotConfig) |
+| gripper.proto | GripperConfig | max | float | (new field — servo maximum angle, not in RobotConfig) |
 | motor.proto | MotorCommand | duty_cycle | float | portable-motor-interface: DUTY_CYCLE verb / IVelocityMotor::setSpeed() |
 | motor.proto | MotorCommand | voltage | float | portable-motor-interface: VOLTAGE verb (new control mode) |
-| motor.proto | MotorCommand | velocity_mmps | float | portable-motor-interface: VELOCITY verb / IVelocityMotor::setSpeed() |
-| motor.proto | MotorCommand | position_mm | float | portable-motor-interface: POSITION verb / IPositionMotor::setAngleDeg() |
+| motor.proto | MotorCommand | velocity | float | portable-motor-interface: VELOCITY verb / IVelocityMotor::setSpeed() |
+| motor.proto | MotorCommand | position | float | portable-motor-interface: POSITION verb / IPositionMotor::setAngleDeg() |
 | motor.proto | MotorCommand | neutral | Neutral | portable-motor-interface: NEUTRAL verb (BRAKE/COAST) / OutputState::pwm[] |
 | motor.proto | MotorCommand | feedforward | Opt<float> | RobotConfig::velKff (feed-forward coefficient in vel loop) |
 | motor.proto | MotorState | connected | bool | (new field — motor I2C connected flag, via IBusDiagnostics::errorCount()) |
-| motor.proto | MotorState | position_mm | Opt<float> | IVelocityMotor::positionMm() / ActualState::encMm[] |
-| motor.proto | MotorState | velocity_mmps | Opt<float> | IVelocityMotor::velocityMmps() / ActualState::velMms[] |
-| motor.proto | MotorState | applied_pct | Opt<float> | OutputState::pwm[] (applied PWM % — new dedicated readback field) |
+| motor.proto | MotorState | position | Opt<float> | IVelocityMotor::positionMm() / ActualState::encMm[] |
+| motor.proto | MotorState | velocity | Opt<float> | IVelocityMotor::velocityMmps() / ActualState::velMms[] |
+| motor.proto | MotorState | applied | Opt<float> | OutputState::pwm[] (applied PWM % — new dedicated readback field) |
 | motor.proto | MotorState | wedged | Opt<bool> | (new field — motor stall flag, related to IBusDiagnostics wedge detection) |
 | motor.proto | MotorConfig | mm_per_deg | float | RobotConfig::{mmPerDegL,mmPerDegR} (per-motor, indexed by channel) |
 | motor.proto | MotorConfig | fwd_sign | int32_t | RobotConfig::{fwdSignL,fwdSignR} (per-motor, indexed by channel) |
@@ -137,25 +137,25 @@ schema itself rather than a single firmware member.
 | planner.proto | StopCondition | ay | float | StopCondition::ay (COLOR: target value/brightness) |
 | planner.proto | StopCondition | sensor | uint32_t | StopCondition::sensor (channel index into HardwareState) |
 | planner.proto | StopCondition | cmp | CmpOp | StopCondition::Cmp (GE/LE comparison direction) |
-| planner.proto | VelocityGoal | vx_mmps | float | DesiredState::bodyTwistRaw.vx_mmps (VW/VX verb body velocity) |
-| planner.proto | VelocityGoal | vy_mmps | float | DesiredState::bodyTwistRaw.vy_mmps (holonomic lateral) |
-| planner.proto | VelocityGoal | omega_rads | float | DesiredState::bodyTwistRaw.omega_rads |
-| planner.proto | VelocityGoal | duration_ms | uint32_t | DesiredState::deadlineMs (T-command deadline) |
-| planner.proto | GotoGoal | x_mm | float | DesiredState::targetXWorld |
-| planner.proto | GotoGoal | y_mm | float | DesiredState::targetYWorld |
-| planner.proto | GotoGoal | speed_mmps | float | DesiredState::targetSpeedMms |
-| planner.proto | TurnGoal | heading_rad | float | DesiredState::targetXWorld (heading encoded as target; DriveMode::GO_TO) |
-| planner.proto | TurnGoal | speed_mmps | float | DesiredState::targetSpeedMms |
-| planner.proto | DistanceGoal | distance_mm | float | DesiredState::distanceTargetMm |
-| planner.proto | DistanceGoal | speed_mmps | float | DesiredState::targetSpeedMms |
-| planner.proto | TimedGoal | vx_mmps | float | DesiredState::bodyTwistRaw.vx_mmps (T verb velocity) |
-| planner.proto | TimedGoal | omega_rads | float | DesiredState::bodyTwistRaw.omega_rads |
-| planner.proto | TimedGoal | duration_ms | uint32_t | DesiredState::deadlineMs |
-| planner.proto | RotationGoal | angle_rad | float | DesiredState::distanceTargetMm (rotation arc encoded as distance; DriveMode::DISTANCE) |
-| planner.proto | RotationGoal | speed_mmps | float | DesiredState::targetSpeedMms |
-| planner.proto | StreamGoal | vx_mmps | float | DesiredState::bodyTwistRaw.vx_mmps (S verb streaming velocity) |
-| planner.proto | StreamGoal | vy_mmps | float | DesiredState::bodyTwistRaw.vy_mmps |
-| planner.proto | StreamGoal | omega_rads | float | DesiredState::bodyTwistRaw.omega_rads |
+| planner.proto | VelocityGoal | v_x | float | DesiredState::bodyTwistRaw.vx_mmps (VW/VX verb body velocity) |
+| planner.proto | VelocityGoal | v_y | float | DesiredState::bodyTwistRaw.vy_mmps (holonomic lateral) |
+| planner.proto | VelocityGoal | omega | float | DesiredState::bodyTwistRaw.omega_rads |
+| planner.proto | VelocityGoal | duration | uint32_t | DesiredState::deadlineMs (T-command deadline) |
+| planner.proto | GotoGoal | x | float | DesiredState::targetXWorld |
+| planner.proto | GotoGoal | y | float | DesiredState::targetYWorld |
+| planner.proto | GotoGoal | speed | float | DesiredState::targetSpeedMms |
+| planner.proto | TurnGoal | heading | float | DesiredState::targetXWorld (heading encoded as target; DriveMode::GO_TO) |
+| planner.proto | TurnGoal | speed | float | DesiredState::targetSpeedMms |
+| planner.proto | DistanceGoal | distance | float | DesiredState::distanceTargetMm |
+| planner.proto | DistanceGoal | speed | float | DesiredState::targetSpeedMms |
+| planner.proto | TimedGoal | v_x | float | DesiredState::bodyTwistRaw.vx_mmps (T verb velocity) |
+| planner.proto | TimedGoal | omega | float | DesiredState::bodyTwistRaw.omega_rads |
+| planner.proto | TimedGoal | duration | uint32_t | DesiredState::deadlineMs |
+| planner.proto | RotationGoal | angle | float | DesiredState::distanceTargetMm (rotation arc encoded as distance; DriveMode::DISTANCE) |
+| planner.proto | RotationGoal | speed | float | DesiredState::targetSpeedMms |
+| planner.proto | StreamGoal | v_x | float | DesiredState::bodyTwistRaw.vx_mmps (S verb streaming velocity) |
+| planner.proto | StreamGoal | v_y | float | DesiredState::bodyTwistRaw.vy_mmps |
+| planner.proto | StreamGoal | omega | float | DesiredState::bodyTwistRaw.omega_rads |
 | planner.proto | PlannerCommand | velocity | VelocityGoal | DesiredState DriveMode::VELOCITY / bodyTwistRaw (VW/VX verbs) |
 | planner.proto | PlannerCommand | goto_goal | GotoGoal | DesiredState DriveMode::GO_TO / targetXWorld,targetYWorld |
 | planner.proto | PlannerCommand | turn | TurnGoal | DesiredState DriveMode::GO_TO (heading goal variant) |
@@ -169,11 +169,11 @@ schema itself rather than a single firmware member.
 | planner.proto | PlannerCommand | origin | Origin | (new field — command origin USER/AUTONOMOUS, Phase 2) |
 | planner.proto | PlannerCommand | corr_id | char | DesiredState::corrId[16] (correlation ID for reply tracking) |
 | planner.proto | PlannerState | mode | DriveMode | DesiredState::mode (DriveMode enum) |
-| planner.proto | PlannerState | target_x_mm | float | DesiredState::targetXWorld |
-| planner.proto | PlannerState | target_y_mm | float | DesiredState::targetYWorld |
-| planner.proto | PlannerState | target_speed_mms | float | DesiredState::targetSpeedMms |
-| planner.proto | PlannerState | distance_target_mm | float | DesiredState::distanceTargetMm |
-| planner.proto | PlannerState | deadline_ms | uint32_t | DesiredState::deadlineMs |
+| planner.proto | PlannerState | target_x | float | DesiredState::targetXWorld |
+| planner.proto | PlannerState | target_y | float | DesiredState::targetYWorld |
+| planner.proto | PlannerState | target_speed | float | DesiredState::targetSpeedMms |
+| planner.proto | PlannerState | distance_target | float | DesiredState::distanceTargetMm |
+| planner.proto | PlannerState | deadline | uint32_t | DesiredState::deadlineMs |
 | planner.proto | PlannerState | body_twist | BodyTwist3 | DesiredState::bodyTwist (profiled live setpoint) |
 | planner.proto | PlannerState | active | bool | (new field — planner active flag, not a DesiredState member) |
 | planner.proto | PlannerConfig | a_max | float | RobotConfig::aMax |
@@ -183,11 +183,11 @@ schema itself rather than a single firmware member.
 | planner.proto | PlannerConfig | yaw_acc_max | float | RobotConfig::yawAccMax |
 | planner.proto | PlannerConfig | j_max | float | RobotConfig::jMax |
 | planner.proto | PlannerConfig | yaw_jerk_max | float | RobotConfig::yawJerkMax |
-| planner.proto | PlannerConfig | arrive_tol_mm | float | RobotConfig::arriveTolMm |
+| planner.proto | PlannerConfig | arrive_tol | float | RobotConfig::arriveTolMm |
 | planner.proto | PlannerConfig | turn_in_place_gate | float | RobotConfig::turnInPlaceGate |
-| planner.proto | PlannerConfig | turn_threshold_mm | float | RobotConfig::turnThresholdMm |
-| planner.proto | PlannerConfig | done_tol_mm | float | RobotConfig::doneTolMm |
-| planner.proto | PlannerConfig | min_speed_mms | float | RobotConfig::minSpeedMms |
+| planner.proto | PlannerConfig | turn_threshold | float | RobotConfig::turnThresholdMm |
+| planner.proto | PlannerConfig | done_tol | float | RobotConfig::doneTolMm |
+| planner.proto | PlannerConfig | min_speed | float | RobotConfig::minSpeedMms |
 | ports.proto | DigitalOut | value | bool[4] | DesiredState::digitalOut[4] / OutputState::digitalOut[4] |
 | ports.proto | DigitalOut | mask | uint32_t | (new field — channel-enable mask for digital output, Phase 2) |
 | ports.proto | AnalogOut | value | int32_t[4] | DesiredState::analogOut[4] / OutputState::analogOut[4] |
@@ -197,13 +197,13 @@ schema itself rather than a single firmware member.
 | ports.proto | PortState | digital_in | bool[4] | ActualState::digitalIn[4] |
 | ports.proto | PortState | analog_in | int32_t[4] | ActualState::analogIn[4] |
 | ports.proto | PortState | stamp | ValueSet | ActualState::portsVS (ValueSet) |
-| ports.proto | PortConfig | lag_ports_ms | uint32_t | RobotConfig::lagPortsMs |
+| ports.proto | PortConfig | lag_ports | uint32_t | RobotConfig::lagPortsMs |
 | ports.proto | PortConfig | direction | uint32_t[4] | (new field — per-port direction bitmap, not in RobotConfig) |
 | sensors.proto | LineSensorState | raw | uint32_t[4] | ActualState::line[4] (raw ADC values) |
 | sensors.proto | LineSensorState | normalized | uint32_t[4] | (new field — normalized line values, not yet split in ActualState) |
 | sensors.proto | LineSensorState | stamp | ValueSet | ActualState::lineVS (ValueSet) |
 | sensors.proto | LineSensorState | connected | bool | (new field — line sensor connected flag, capability query) |
-| sensors.proto | LineSensorConfig | lag_line_ms | uint32_t | RobotConfig::lagLineMs |
+| sensors.proto | LineSensorConfig | lag_line | uint32_t | RobotConfig::lagLineMs |
 | sensors.proto | LineSensorConfig | threshold | uint32_t | (new field — binarization threshold, not in RobotConfig) |
 | sensors.proto | LineSensorConfig | norm_min | uint32_t | (new field — normalization minimum, not in RobotConfig) |
 | sensors.proto | LineSensorConfig | norm_max | uint32_t | (new field — normalization maximum, not in RobotConfig) |
@@ -214,7 +214,7 @@ schema itself rather than a single firmware member.
 | sensors.proto | ColorSensorState | c | uint32_t | ActualState::colorC |
 | sensors.proto | ColorSensorState | stamp | ValueSet | ActualState::colorVS (ValueSet) |
 | sensors.proto | ColorSensorState | connected | bool | (new field — color sensor connected flag, capability query) |
-| sensors.proto | ColorSensorConfig | lag_color_ms | uint32_t | RobotConfig::lagColorMs |
+| sensors.proto | ColorSensorConfig | lag_color | uint32_t | RobotConfig::lagColorMs |
 | sensors.proto | ColorSensorConfig | integration | uint32_t | (new field — integration time register, not in RobotConfig) |
 | sensors.proto | ColorSensorConfig | gain | uint32_t | (new field — sensor gain register, not in RobotConfig) |
 | sensors.proto | ColorSensorConfig | cal_r | float | (new field — color calibration scale R, not in RobotConfig) |

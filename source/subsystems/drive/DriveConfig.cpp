@@ -24,9 +24,9 @@ msg::DrivetrainConfig toDriveConfig(const RobotConfig& rc)
     cfg.setMmPerDegR(rc.mmPerDegR);
 
     // --- Geometry ---
-    cfg.setTrackwidthMm(rc.trackwidthMm);
-    cfg.setHalfTrackMm(rc.halfTrackMm);
-    cfg.setHalfWheelbaseMm(rc.halfWheelbaseMm);
+    cfg.setTrackwidth(rc.trackwidthMm);
+    cfg.setHalfTrack(rc.halfTrackMm);
+    cfg.setHalfWheelbase(rc.halfWheelbaseMm);
 
     // --- Wheel saturation / steering headroom ---
     cfg.setVWheelMax(rc.vWheelMax);
@@ -44,7 +44,7 @@ msg::DrivetrainConfig toDriveConfig(const RobotConfig& rc)
     // --- Velocity filter and sync ---
     cfg.setVelFiltAlpha(rc.velFiltAlpha);
     cfg.setSyncGain(rc.syncGain);
-    cfg.setMinWheelMms(rc.minWheelMms);
+    cfg.setMinWheel(rc.minWheelMms);
 
     // --- OTOS complementary fusion ---
     cfg.setAlphaPos(rc.alphaPos);
@@ -59,7 +59,7 @@ msg::DrivetrainConfig toDriveConfig(const RobotConfig& rc)
     // --- OTOS mounting offsets ---
     cfg.setOdomOffX(rc.odomOffX);
     cfg.setOdomOffY(rc.odomOffY);
-    cfg.setOdomYawDeg(rc.odomYawDeg);
+    cfg.setOdomYaw(rc.odomYawDeg);
     cfg.setOdomUpsideDown(rc.odomUpsideDown);
 
     // --- EKF noise parameters ---
@@ -73,7 +73,7 @@ msg::DrivetrainConfig toDriveConfig(const RobotConfig& rc)
     cfg.setEkfREncV(rc.ekfREncV);
 
     // --- OTOS lag budget (ms) ---
-    cfg.setLagOtosMs(rc.lagOtosMs);
+    cfg.setLagOtos(rc.lagOtosMs);
 
     // --- Drivetrain type (0 = differential, 1 = mecanum) ---
     cfg.setDrivetrainType((int32_t)rc.drivetrain);
@@ -81,8 +81,8 @@ msg::DrivetrainConfig toDriveConfig(const RobotConfig& rc)
     // --- Rotation asymmetry correction ---
     cfg.setRotationGainPos(rc.rotationGainPos);
     cfg.setRotationGainNeg(rc.rotationGainNeg);
-    cfg.setRotationOffsetDeg(rc.rotationOffsetDeg);
-    cfg.setRotationOffsetDegNeg(rc.rotationOffsetDegNeg);
+    cfg.setRotationOffset(rc.rotationOffsetDeg);
+    cfg.setRotationOffsetNeg(rc.rotationOffsetDegNeg);
 
     return cfg;
 }

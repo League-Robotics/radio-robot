@@ -67,49 +67,49 @@ message StopCondition {
 
 // Constant body-velocity goal with a duration.
 message VelocityGoal {
-  float  vx_mmps   = 1;
-  float  vy_mmps   = 2;
-  float  omega_rads = 3;
-  uint32 duration_ms = 4;
+  float  v_x      = 1;
+  float  v_y      = 2;
+  float  omega    = 3;
+  uint32 duration = 4;
 }
 
 // Pose-goto goal: drive to (x, y) at speed.
 message GotoGoal {
-  float x_mm      = 1;
-  float y_mm      = 2;
-  float speed_mmps = 3;
+  float x     = 1;
+  float y     = 2;
+  float speed = 3;
 }
 
 // Turn-in-place to an absolute heading.
 message TurnGoal {
-  float heading_rad = 1;
-  float speed_mmps  = 2;
+  float heading = 1;
+  float speed   = 2;
 }
 
 // Drive a signed distance at a given speed.
 message DistanceGoal {
-  float  distance_mm = 1;
-  float  speed_mmps  = 2;
+  float  distance = 1;
+  float  speed    = 2;
 }
 
 // Drive for a fixed duration (vx, omega).
 message TimedGoal {
-  float  vx_mmps    = 1;
-  float  omega_rads = 2;
-  uint32 duration_ms = 3;
+  float  v_x      = 1;
+  float  omega    = 2;
+  uint32 duration = 3;
 }
 
 // Rotate by a relative angle at speed.
 message RotationGoal {
-  float angle_rad  = 1;
-  float speed_mmps = 2;
+  float angle = 1;
+  float speed = 2;
 }
 
 // Streaming body-velocity (open-loop, no auto-stop).
 message StreamGoal {
-  float vx_mmps    = 1;
-  float vy_mmps    = 2;
-  float omega_rads = 3;
+  float v_x   = 1;
+  float v_y   = 2;
+  float omega = 3;
 }
 
 // ---------------------------------------------------------------------------
@@ -132,35 +132,35 @@ message PlannerCommand {
   repeated StopCondition stops = 9 [(max_count) = 4];
   StopStyle style              = 10;
   Origin    origin             = 11;
-  string    corr_id            = 12 [(units) = "none"];  // correlation ID for reply tracking
+  string    corr_id            = 12;  // correlation ID for reply tracking
 }
 
 // Read-only snapshot of the planner's internal state.
 // Equivalent to today's DesiredState.
 message PlannerState {
-  DriveMode  mode               = 1;
-  float      target_x_mm       = 2;
-  float      target_y_mm       = 3;
-  float      target_speed_mms  = 4;
-  float      distance_target_mm = 5;
-  uint32     deadline_ms        = 6;
-  BodyTwist3 body_twist         = 7;
-  bool       active             = 8;
+  DriveMode  mode            = 1;
+  float      target_x        = 2;
+  float      target_y        = 3;
+  float      target_speed    = 4;
+  float      distance_target = 5;
+  uint32     deadline        = 6;
+  BodyTwist3 body_twist      = 7;
+  bool       active          = 8;
 }
 
 // Motion-only RobotConfig subset owned by the Planner.
 // Drive geometry/PID are in DrivetrainConfig, not here.
 message PlannerConfig {
-  float  a_max              = 1  [(units) = "mm/s^2"];
-  float  a_decel            = 2  [(units) = "mm/s^2"];
-  float  v_body_max         = 3  [(units) = "mm/s"];
-  float  yaw_rate_max       = 4  [(units) = "rad/s"];
-  float  yaw_acc_max        = 5  [(units) = "rad/s^2"];
+  float  a_max              = 1;
+  float  a_decel            = 2;
+  float  v_body_max         = 3;
+  float  yaw_rate_max       = 4;
+  float  yaw_acc_max        = 5;
   float  j_max              = 6;
   float  yaw_jerk_max       = 7;
-  float  arrive_tol_mm      = 8;
-  float  turn_in_place_gate = 9  [(units) = "deg"];
-  float  turn_threshold_mm  = 10;
-  float  done_tol_mm        = 11;
-  float  min_speed_mms      = 12;
+  float  arrive_tol         = 8;
+  float  turn_in_place_gate = 9;
+  float  turn_threshold     = 10;
+  float  done_tol           = 11;
+  float  min_speed          = 12;
 }

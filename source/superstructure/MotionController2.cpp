@@ -78,26 +78,26 @@ void MotionController2::apply(const msg::PlannerCommand& cmd)
 
     case msg::PlannerCommand::GoalKind::VELOCITY: {
         // beginVelocity takes (v_mms, omega_rads).
-        float v     = cmd.goal.velocity.vx_mmps;
-        float omega = cmd.goal.velocity.omega_rads;
+        float v     = cmd.goal.velocity.v_x;
+        float omega = cmd.goal.velocity.omega;
         _mc.beginVelocity(v, omega, now, _target, _noopReply, nullptr, corrId);
         break;
     }
 
     case msg::PlannerCommand::GoalKind::GOTO_GOAL: {
         // beginGoTo takes (tx, ty, speedMms).
-        float tx    = cmd.goal.goto_goal.x_mm;
-        float ty    = cmd.goal.goto_goal.y_mm;
-        float speed = cmd.goal.goto_goal.speed_mmps;
+        float tx    = cmd.goal.goto_goal.x;
+        float ty    = cmd.goal.goto_goal.y;
+        float speed = cmd.goal.goto_goal.speed;
         _mc.beginGoTo(tx, ty, speed, now, _target, _noopReply, nullptr, corrId);
         break;
     }
 
     case msg::PlannerCommand::GoalKind::TURN: {
         // beginTurn takes (headingCdeg, epsCdeg).
-        // TurnGoal.heading_rad → convert to centidegrees.
+        // TurnGoal.heading → convert to centidegrees.
         static constexpr float RAD_TO_CDEG = 18000.0f / 3.14159265f;
-        float headingCdeg = cmd.goal.turn.heading_rad * RAD_TO_CDEG;
+        float headingCdeg = cmd.goal.turn.heading * RAD_TO_CDEG;
         float epsCdeg     = 300.0f;  // default 3° tolerance
         _mc.beginTurn(headingCdeg, epsCdeg, now, _target, _noopReply, nullptr, corrId);
         break;
@@ -107,14 +107,14 @@ void MotionController2::apply(const msg::PlannerCommand& cmd)
         // beginDistance takes (leftMms, rightMms, targetMm).
         // DistanceGoal: distance_mm, speed_mmps.
         // Convert straight speed to wheel speeds: L=R=speed.
-        float leftMms  = cmd.goal.distance.speed_mmps;
-        float rightMms = cmd.goal.distance.speed_mmps;
+        float leftMms  = cmd.goal.distance.speed;
+        float rightMms = cmd.goal.distance.speed;
         // Negative distance → reverse both wheel directions.
-        if (cmd.goal.distance.distance_mm < 0.0f) {
+        if (cmd.goal.distance.distance < 0.0f) {
             leftMms  = -leftMms;
             rightMms = -rightMms;
         }
-        int32_t targetMm = (int32_t)(cmd.goal.distance.distance_mm);
+        int32_t targetMm = (int32_t)(cmd.goal.distance.distance);
         if (targetMm < 0) targetMm = -targetMm;  // beginDistance takes unsigned magnitude
         _mc.beginDistance(leftMms, rightMms, targetMm, now, _target, _noopReply, nullptr, corrId);
         break;
@@ -126,10 +126,10 @@ void MotionController2::apply(const msg::PlannerCommand& cmd)
         // Convert body twist to differential wheel speeds via inverse kinematics.
         float vL = 0.0f;
         float vR = 0.0f;
-        BodyKinematics::inverse(cmd.goal.timed.vx_mmps,
-                                cmd.goal.timed.omega_rads,
+        BodyKinematics::inverse(cmd.goal.timed.v_x,
+                                cmd.goal.timed.omega,
                                 _cfg.trackwidthMm, vL, vR);
-        uint32_t durationMs = cmd.goal.timed.duration_ms;
+        uint32_t durationMs = cmd.goal.timed.duration;
         _mc.beginTimed(vL, vR, durationMs, now, _target, _noopReply, nullptr, corrId);
         break;
     }
@@ -138,7 +138,7 @@ void MotionController2::apply(const msg::PlannerCommand& cmd)
         // beginRotation takes (relCdeg).
         // RotationGoal: angle_rad.
         static constexpr float RAD_TO_CDEG = 18000.0f / 3.14159265f;
-        float relCdeg = cmd.goal.rotation.angle_rad * RAD_TO_CDEG;
+        float relCdeg = cmd.goal.rotation.angle * RAD_TO_CDEG;
         _mc.beginRotation(relCdeg, now, _target, _noopReply, nullptr, corrId);
         break;
     }
@@ -148,8 +148,8 @@ void MotionController2::apply(const msg::PlannerCommand& cmd)
         // StreamGoal: vx_mmps, vy_mmps (ignored for differential), omega_rads.
         float vL = 0.0f;
         float vR = 0.0f;
-        BodyKinematics::inverse(cmd.goal.stream.vx_mmps,
-                                cmd.goal.stream.omega_rads,
+        BodyKinematics::inverse(cmd.goal.stream.v_x,
+                                cmd.goal.stream.omega,
                                 _cfg.trackwidthMm, vL, vR);
         _mc.beginStream(vL, vR, now, _target, _noopReply, nullptr);
         break;
@@ -187,16 +187,16 @@ msg::CommandBatch MotionController2::tick(uint32_t now)
     // ------------------------------------------------------------------
     const msg::DrivetrainState& drvState = _drive2.state();
 
-    _hw.fused.pose.x   = drvState.get_fused().get_pose().get_x_mm();
-    _hw.fused.pose.y   = drvState.get_fused().get_pose().get_y_mm();
-    _hw.fused.pose.h   = drvState.get_fused().get_pose().get_h_rad();
-    _hw.fused.twist.vx_mmps    = drvState.get_fused().get_twist().get_vx_mmps();
-    _hw.fused.twist.vy_mmps    = drvState.get_fused().get_twist().get_vy_mmps();
-    _hw.fused.twist.omega_rads = drvState.get_fused().get_twist().get_omega_rads();
+    _hw.fused.pose.x              = drvState.get_fused().get_pose().get_x();
+    _hw.fused.pose.y              = drvState.get_fused().get_pose().get_y();
+    _hw.fused.pose.h              = drvState.get_fused().get_pose().get_h();
+    _hw.fused.twist.vx_mmps       = drvState.get_fused().get_twist().get_v_x();
+    _hw.fused.twist.vy_mmps       = drvState.get_fused().get_twist().get_v_y();
+    _hw.fused.twist.omega_rads    = drvState.get_fused().get_twist().get_omega();
 
     // Encoder pose (for DISTANCE stop condition evaluation via driveAdvance).
-    _hw.encMm[0] = drvState.enc_mm()[0];  // [0]=R
-    _hw.encMm[1] = drvState.enc_mm()[1];  // [1]=L
+    _hw.encMm[0] = drvState.enc()[0];  // [0]=R
+    _hw.encMm[1] = drvState.enc()[1];  // [1]=L
 
     // ------------------------------------------------------------------
     // STEP 2: Advance goal logic via driveAdvance.
@@ -229,9 +229,9 @@ msg::CommandBatch MotionController2::tick(uint32_t now)
 
     msg::DrivetrainCommand drvCmd;
     msg::BodyTwist3 twist{};
-    twist.vx_mmps    = vx;
-    twist.vy_mmps    = 0.0f;
-    twist.omega_rads = omega;
+    twist.v_x    = vx;
+    twist.v_y    = 0.0f;
+    twist.omega = omega;
     drvCmd.setTwist(twist);
 
     // CommandBatch.cmds_[] holds OutCommand (verb_id/args encoding).
@@ -261,16 +261,16 @@ msg::CommandBatch MotionController2::tick(uint32_t now)
     default:                   _state.mode = msg::DriveMode::IDLE;     break;
     }
     _state.active          = _mc.hasActiveCommand();
-    _state.body_twist.vx_mmps    = vx;
-    _state.body_twist.vy_mmps    = 0.0f;
-    _state.body_twist.omega_rads = omega;
+    _state.body_twist.v_x    = vx;
+    _state.body_twist.v_y    = 0.0f;
+    _state.body_twist.omega = omega;
 
     // Goal position / target fields from _target (DesiredState).
-    _state.target_x_mm         = _target.targetXWorld;
-    _state.target_y_mm         = _target.targetYWorld;
-    _state.target_speed_mms    = _target.targetSpeedMms;
-    _state.distance_target_mm  = _target.distanceTargetMm;
-    _state.deadline_ms         = _target.deadlineMs;
+    _state.target_x         = _target.targetXWorld;
+    _state.target_y         = _target.targetYWorld;
+    _state.target_speed    = _target.targetSpeedMms;
+    _state.distance_target  = _target.distanceTargetMm;
+    _state.deadline         = _target.deadlineMs;
 
     return batch;
 }
@@ -296,9 +296,9 @@ void MotionController2::configure(const msg::PlannerConfig& cfg)
     if (cfg.yaw_acc_max != 0.0f) _cfg.yawAccMax     = cfg.yaw_acc_max;
     if (cfg.j_max       != 0.0f) _cfg.jMax          = cfg.j_max;
     if (cfg.yaw_jerk_max!= 0.0f) _cfg.yawJerkMax    = cfg.yaw_jerk_max;
-    if (cfg.arrive_tol_mm       != 0.0f) _cfg.arriveTolMm     = cfg.arrive_tol_mm;
+    if (cfg.arrive_tol       != 0.0f) _cfg.arriveTolMm     = cfg.arrive_tol;
     if (cfg.turn_in_place_gate  != 0.0f) _cfg.turnInPlaceGate = cfg.turn_in_place_gate;
-    if (cfg.turn_threshold_mm   != 0.0f) _cfg.turnThresholdMm = cfg.turn_threshold_mm;
-    if (cfg.done_tol_mm         != 0.0f) _cfg.doneTolMm       = cfg.done_tol_mm;
-    if (cfg.min_speed_mms       != 0.0f) _cfg.minSpeedMms     = (int32_t)cfg.min_speed_mms;
+    if (cfg.turn_threshold   != 0.0f) _cfg.turnThresholdMm = cfg.turn_threshold;
+    if (cfg.done_tol         != 0.0f) _cfg.doneTolMm       = cfg.done_tol;
+    if (cfg.min_speed       != 0.0f) _cfg.minSpeedMms     = (int32_t)cfg.min_speed;
 }

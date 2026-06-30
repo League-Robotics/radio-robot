@@ -10,35 +10,35 @@ import "options.proto";
 
 // 2-D pose: position in mm, heading in radians.
 message Pose2D {
-  float x_mm  = 1;
-  float y_mm  = 2;
-  float h_rad = 3;
+  float x  = 1;
+  float y  = 2;
+  float h  = 3;
 }
 
 // Body-frame twist for differential (non-holonomic) drivetrains.
 message BodyTwist {
-  float v_mmps    = 1;  // forward speed, mm/s
-  float omega_rads = 2; // angular rate, rad/s
+  float v     = 1;  // forward speed, mm/s
+  float omega = 2; // angular rate, rad/s
 }
 
 // Body-frame twist for holonomic (3-DOF) drivetrains.
 message BodyTwist3 {
-  float vx_mmps    = 1;
-  float vy_mmps    = 2;
-  float omega_rads = 3;
+  float v_x   = 1;
+  float v_y   = 2;
+  float omega = 3;
 }
 
 // Body-frame acceleration (holonomic).
 message BodyAccel {
-  float ax_mmps2 = 1;
-  float ay_mmps2 = 2;
+  float a_x = 1;
+  float a_y = 2;
 }
 
 // Sensor freshness and validity stamp.
 message ValueSet {
-  uint32 lag_ms     = 1;
-  uint32 last_upd_ms = 2;
-  bool   valid      = 3;
+  uint32 lag      = 1;
+  uint32 last_upd = 2;
+  bool   valid    = 3;
 }
 
 // A pose+twist snapshot with a validity stamp.
@@ -50,8 +50,8 @@ message PoseEstimate {
 
 // Per-wheel target; nullable fields mean "don't command this axis".
 message WheelTarget {
-  optional float speed_mmps  = 1;  // null → don't command speed
-  optional float position_mm = 2;  // null → don't command position
+  optional float speed    = 1;  // null → don't command speed
+  optional float position = 2;  // null → don't command position
 }
 
 // PID + feedforward gains for a velocity controller.

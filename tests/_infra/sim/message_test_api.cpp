@@ -21,14 +21,14 @@
 // Both msg:: and ::Pose2D/BodyTwist3 are now visible in this TU.
 // Prove they have the same memory layout (same size, same field count).
 
-// msg::Pose2D { float x_mm, y_mm, h_rad } vs ::Pose2D { float x, y, h }
+// msg::Pose2D { float x, y, h } vs ::Pose2D { float x, y, h }
 static_assert(sizeof(msg::Pose2D) == sizeof(::Pose2D),
     "msg::Pose2D and ::Pose2D must have the same size — layout compat broken");
 static_assert(sizeof(msg::Pose2D) == sizeof(float) * 3,
-    "Generated msg::Pose2D must be 3 floats {x_mm,y_mm,h_rad} — "
+    "Generated msg::Pose2D must be 3 floats {x,y,h} — "
     "layout compat with HAL Pose2D broken; check common.proto");
 
-// msg::BodyTwist3 { float vx_mmps, vy_mmps, omega_rads }
+// msg::BodyTwist3 { float v_x, v_y, omega }
 // vs ::BodyTwist3 { float vx_mmps, vy_mmps, omega_rads }
 static_assert(sizeof(msg::BodyTwist3) == sizeof(::BodyTwist3),
     "msg::BodyTwist3 and ::BodyTwist3 must have the same size — layout compat broken");
@@ -46,7 +46,7 @@ extern "C" {
 // Test 1: DrivetrainCommand fluent builder round-trip.
 //
 // Constructs a default msg::DrivetrainCommand, calls setTwist(vx, vy, omega),
-// then reads back control.twist.{vx_mmps, vy_mmps, omega_rads} and the
+// then reads back control.twist.{v_x, v_y, omega} and the
 // control_kind discriminant.
 //
 // Returns 1 on success, 0 on failure.
@@ -60,14 +60,14 @@ int msg_test_drivetrain_twist_roundtrip(
 {
     msg::DrivetrainCommand cmd;
     msg::BodyTwist3 t;
-    t.vx_mmps    = vx;
-    t.vy_mmps    = vy;
-    t.omega_rads = omega;
+    t.v_x   = vx;
+    t.v_y   = vy;
+    t.omega = omega;
     cmd.setTwist(t);
 
-    if (out_vx)    *out_vx    = cmd.control.twist.vx_mmps;
-    if (out_vy)    *out_vy    = cmd.control.twist.vy_mmps;
-    if (out_omega) *out_omega = cmd.control.twist.omega_rads;
+    if (out_vx)    *out_vx    = cmd.control.twist.v_x;
+    if (out_vy)    *out_vy    = cmd.control.twist.v_y;
+    if (out_omega) *out_omega = cmd.control.twist.omega;
     if (out_kind)  *out_kind  = static_cast<int>(cmd.control_kind);
     return 1;
 }

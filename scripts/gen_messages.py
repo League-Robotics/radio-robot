@@ -56,27 +56,27 @@ _INVENTORY_MAP: dict = {
     # -----------------------------------------------------------------------
 
     # Pose2D: 2-D pose value type matching hal/capability/Pose2D.h {x,y,h}
-    ("Pose2D", "x_mm"):     "Pose2D::x (hal/capability/Pose2D.h)",
-    ("Pose2D", "y_mm"):     "Pose2D::y (hal/capability/Pose2D.h)",
-    ("Pose2D", "h_rad"):    "Pose2D::h (hal/capability/Pose2D.h)",
+    ("Pose2D", "x"):     "Pose2D::x (hal/capability/Pose2D.h)",
+    ("Pose2D", "y"):     "Pose2D::y (hal/capability/Pose2D.h)",
+    ("Pose2D", "h"):     "Pose2D::h (hal/capability/Pose2D.h)",
 
     # BodyTwist: 2-DOF differential twist; not used standalone in ActualState
     # (BodyTwist3 is used everywhere); BodyTwist is retained for wire-compat.
-    ("BodyTwist", "v_mmps"):     "(new field — BodyTwist2 not in ActualState; BodyTwist3 used instead)",
-    ("BodyTwist", "omega_rads"): "(new field — BodyTwist2 not in ActualState; BodyTwist3 used instead)",
+    ("BodyTwist", "v"):     "(new field — BodyTwist2 not in ActualState; BodyTwist3 used instead)",
+    ("BodyTwist", "omega"): "(new field — BodyTwist2 not in ActualState; BodyTwist3 used instead)",
 
     # BodyTwist3: 3-DOF holonomic twist matching hal/capability/Pose2D.h BodyTwist3
-    ("BodyTwist3", "vx_mmps"):    "BodyTwist3::vx_mmps (hal/capability/Pose2D.h)",
-    ("BodyTwist3", "vy_mmps"):    "BodyTwist3::vy_mmps (hal/capability/Pose2D.h)",
-    ("BodyTwist3", "omega_rads"): "BodyTwist3::omega_rads (hal/capability/Pose2D.h)",
+    ("BodyTwist3", "v_x"):   "BodyTwist3::vx_mmps (hal/capability/Pose2D.h)",
+    ("BodyTwist3", "v_y"):   "BodyTwist3::vy_mmps (hal/capability/Pose2D.h)",
+    ("BodyTwist3", "omega"): "BodyTwist3::omega_rads (hal/capability/Pose2D.h)",
 
     # BodyAccel: used by OTOS passthrough telemetry; not a named member of ActualState
-    ("BodyAccel", "ax_mmps2"): "ActualState::otosAccelX (passthroughtelemetry)",
-    ("BodyAccel", "ay_mmps2"): "ActualState::otosAccelY (passthroughtelemetry)",
+    ("BodyAccel", "a_x"): "ActualState::otosAccelX (passthroughtelemetry)",
+    ("BodyAccel", "a_y"): "ActualState::otosAccelY (passthroughtelemetry)",
 
     # ValueSet: sensor freshness/validity stamp matching types/ValueSet.h ValueSet
-    ("ValueSet", "lag_ms"):      "ValueSet::lagMs (types/ValueSet.h)",
-    ("ValueSet", "last_upd_ms"): "ValueSet::lastUpdMs (types/ValueSet.h)",
+    ("ValueSet", "lag"):      "ValueSet::lagMs (types/ValueSet.h)",
+    ("ValueSet", "last_upd"): "ValueSet::lastUpdMs (types/ValueSet.h)",
     ("ValueSet", "valid"):       "ValueSet::valid (types/ValueSet.h)",
 
     # PoseEstimate: pose+twist+stamp; matches source/state/PoseEstimate.h
@@ -85,8 +85,8 @@ _INVENTORY_MAP: dict = {
     ("PoseEstimate", "stamp"): "PoseEstimate::stamp (state/PoseEstimate.h)",
 
     # WheelTarget: per-wheel nullable speed/position target
-    ("WheelTarget", "speed_mmps"):  "DesiredState::wheelMms[] (per-wheel speed target)",
-    ("WheelTarget", "position_mm"): "IPositionMotor::setAngleDeg (position-motor interface)",
+    ("WheelTarget", "speed"):    "DesiredState::wheelMms[] (per-wheel speed target)",
+    ("WheelTarget", "position"): "IPositionMotor::setAngleDeg (position-motor interface)",
 
     # Gains: velocity PID gains matching RobotConfig vel* fields
     ("Gains", "kp"):    "RobotConfig::velKp",
@@ -117,9 +117,9 @@ _INVENTORY_MAP: dict = {
     # -----------------------------------------------------------------------
 
     # SetPose: imperative pose re-anchor (SI verb in the new message surface)
-    ("SetPose", "x_mm"):  "Superstructure::handleSI() / estimate.resetPose x",
-    ("SetPose", "y_mm"):  "Superstructure::handleSI() / estimate.resetPose y",
-    ("SetPose", "h_rad"): "Superstructure::handleSI() / estimate.resetPose h",
+    ("SetPose", "x"): "Superstructure::handleSI() / estimate.resetPose x",
+    ("SetPose", "y"): "Superstructure::handleSI() / estimate.resetPose y",
+    ("SetPose", "h"): "Superstructure::handleSI() / estimate.resetPose h",
 
     # WheelTargets: wrapper for repeated WheelTarget (per-wheel speed/position)
     ("WheelTargets", "w"): "DesiredState::wheelMms[] (array of per-wheel targets)",
@@ -135,9 +135,9 @@ _INVENTORY_MAP: dict = {
     ("DrivetrainState", "fused"):        "ActualState::fused (PoseEstimate)",
     ("DrivetrainState", "encoder"):      "ActualState::encoder (PoseEstimate)",
     ("DrivetrainState", "optical"):      "ActualState::optical (PoseEstimate)",
-    ("DrivetrainState", "enc_mm"):       "ActualState::encMm[kWheelCount]",
-    ("DrivetrainState", "vel_mms"):      "ActualState::velMms[kWheelCount]",
-    ("DrivetrainState", "enc"):          "ActualState::enc (ValueSet)",
+    ("DrivetrainState", "enc"):          "ActualState::encMm[kWheelCount]",
+    ("DrivetrainState", "vel"):          "ActualState::velMms[kWheelCount]",
+    ("DrivetrainState", "enc_stamp"):    "ActualState::enc (ValueSet)",
     ("DrivetrainState", "otos"):         "ActualState::otos (ValueSet)",
     ("DrivetrainState", "wheel_wedged"): "(new field — wheel-stall flag, not yet in ActualState)",
     ("DrivetrainState", "connected"):    "(new field — drivetrain connected flag, not in ActualState)",
@@ -147,9 +147,9 @@ _INVENTORY_MAP: dict = {
     ("DrivetrainConfig", "fwd_sign_r"):           "RobotConfig::fwdSignR",
     ("DrivetrainConfig", "mm_per_deg_l"):         "RobotConfig::mmPerDegL",
     ("DrivetrainConfig", "mm_per_deg_r"):         "RobotConfig::mmPerDegR",
-    ("DrivetrainConfig", "trackwidth_mm"):         "RobotConfig::trackwidthMm",
-    ("DrivetrainConfig", "half_track_mm"):         "RobotConfig::halfTrackMm",
-    ("DrivetrainConfig", "half_wheelbase_mm"):     "RobotConfig::halfWheelbaseMm",
+    ("DrivetrainConfig", "trackwidth"):         "RobotConfig::trackwidthMm",
+    ("DrivetrainConfig", "half_track"):         "RobotConfig::halfTrackMm",
+    ("DrivetrainConfig", "half_wheelbase"):     "RobotConfig::halfWheelbaseMm",
     ("DrivetrainConfig", "mm_per_deg_wheel"):      "RobotConfig::{mmPerDegFR,mmPerDegFL,mmPerDegBR,mmPerDegBL}",
     ("DrivetrainConfig", "fwd_sign_wheel"):        "RobotConfig::{fwdSignFR,fwdSignFL,fwdSignBR,fwdSignBL}",
     ("DrivetrainConfig", "v_wheel_max"):           "RobotConfig::vWheelMax",
@@ -157,7 +157,7 @@ _INVENTORY_MAP: dict = {
     ("DrivetrainConfig", "vel_gains"):             "RobotConfig::{velKp,velKi,velKff,velIMax,velKaw}",
     ("DrivetrainConfig", "vel_filt_alpha"):        "RobotConfig::velFiltAlpha",
     ("DrivetrainConfig", "sync_gain"):             "RobotConfig::syncGain",
-    ("DrivetrainConfig", "min_wheel_mms"):         "RobotConfig::minWheelMms",
+    ("DrivetrainConfig", "min_wheel"):              "RobotConfig::minWheelMms",
     ("DrivetrainConfig", "alpha_pos"):             "RobotConfig::alphaPos",
     ("DrivetrainConfig", "alpha_yaw"):             "RobotConfig::alphaYaw",
     ("DrivetrainConfig", "otos_gate"):             "RobotConfig::otosGate",
@@ -165,12 +165,12 @@ _INVENTORY_MAP: dict = {
     ("DrivetrainConfig", "otos_angular_scale"):    "RobotConfig::otosAngularScale",
     ("DrivetrainConfig", "rotation_gain_pos"):     "RobotConfig::rotationGainPos",
     ("DrivetrainConfig", "rotation_gain_neg"):     "RobotConfig::rotationGainNeg",
-    ("DrivetrainConfig", "rotation_offset_deg"):   "RobotConfig::rotationOffsetDeg",
-    ("DrivetrainConfig", "rotation_offset_deg_neg"):"RobotConfig::rotationOffsetDegNeg",
+    ("DrivetrainConfig", "rotation_offset"):        "RobotConfig::rotationOffsetDeg",
+    ("DrivetrainConfig", "rotation_offset_neg"):    "RobotConfig::rotationOffsetDegNeg",
     ("DrivetrainConfig", "rotational_slip"):       "RobotConfig::rotationalSlip",
     ("DrivetrainConfig", "odom_off_x"):            "RobotConfig::odomOffX",
     ("DrivetrainConfig", "odom_off_y"):            "RobotConfig::odomOffY",
-    ("DrivetrainConfig", "odom_yaw_deg"):          "RobotConfig::odomYawDeg",
+    ("DrivetrainConfig", "odom_yaw"):               "RobotConfig::odomYawDeg",
     ("DrivetrainConfig", "odom_upside_down"):      "RobotConfig::odomUpsideDown",
     ("DrivetrainConfig", "ekf_q_xy"):              "RobotConfig::ekfQxy",
     ("DrivetrainConfig", "ekf_q_theta"):           "RobotConfig::ekfQtheta",
@@ -180,7 +180,7 @@ _INVENTORY_MAP: dict = {
     ("DrivetrainConfig", "ekf_q_omega"):           "RobotConfig::ekfQomega",
     ("DrivetrainConfig", "ekf_r_otos_v"):          "RobotConfig::ekfROtosV",
     ("DrivetrainConfig", "ekf_r_enc_v"):           "RobotConfig::ekfREncV",
-    ("DrivetrainConfig", "lag_otos_ms"):           "RobotConfig::lagOtosMs",
+    ("DrivetrainConfig", "lag_otos"):               "RobotConfig::lagOtosMs",
     ("DrivetrainConfig", "drivetrain_type"):       "RobotConfig::drivetrain",
 
     # DrivetrainCapabilities: capability declaration (new Phase 2 type)
@@ -193,36 +193,36 @@ _INVENTORY_MAP: dict = {
     # -----------------------------------------------------------------------
 
     # GripperCommand: servo angle command (via ServoController / IPositionMotor)
-    ("GripperCommand", "angle_deg"): "IPositionMotor::setAngleDeg (hal/capability/IPositionMotor.h)",
+    ("GripperCommand", "angle"): "IPositionMotor::setAngleDeg (hal/capability/IPositionMotor.h)",
 
     # GripperState: servo angle feedback (not yet in OutputState/ActualState)
-    ("GripperState", "angle_deg"):  "(new field — servo angle readback, not yet in OutputState)",
-    ("GripperState", "connected"):  "(new field — gripper connected flag, not yet in ActualState)",
+    ("GripperState", "angle"):     "(new field — servo angle readback, not yet in OutputState)",
+    ("GripperState", "connected"): "(new field — gripper connected flag, not yet in ActualState)",
 
     # GripperConfig: gripper capability config (new fields, not in RobotConfig)
-    ("GripperConfig", "has_gripper"):       "(new field — has-gripper capability flag, not in RobotConfig)",
-    ("GripperConfig", "gripper_offset_mm"): "(new field — gripper mounting offset, not in RobotConfig)",
-    ("GripperConfig", "min_deg"):           "(new field — servo minimum angle, not in RobotConfig)",
-    ("GripperConfig", "max_deg"):           "(new field — servo maximum angle, not in RobotConfig)",
+    ("GripperConfig", "has_gripper"):      "(new field — has-gripper capability flag, not in RobotConfig)",
+    ("GripperConfig", "gripper_offset"):   "(new field — gripper mounting offset, not in RobotConfig)",
+    ("GripperConfig", "min"):              "(new field — servo minimum angle, not in RobotConfig)",
+    ("GripperConfig", "max"):              "(new field — servo maximum angle, not in RobotConfig)",
 
     # -----------------------------------------------------------------------
     # motor.proto
     # -----------------------------------------------------------------------
 
     # MotorCommand: portable-motor-interface verbs
-    ("MotorCommand", "duty_cycle"):    "portable-motor-interface: DUTY_CYCLE verb / IVelocityMotor::setSpeed()",
-    ("MotorCommand", "voltage"):       "portable-motor-interface: VOLTAGE verb (new control mode)",
-    ("MotorCommand", "velocity_mmps"): "portable-motor-interface: VELOCITY verb / IVelocityMotor::setSpeed()",
-    ("MotorCommand", "position_mm"):   "portable-motor-interface: POSITION verb / IPositionMotor::setAngleDeg()",
-    ("MotorCommand", "neutral"):       "portable-motor-interface: NEUTRAL verb (BRAKE/COAST) / OutputState::pwm[]",
-    ("MotorCommand", "feedforward"):   "RobotConfig::velKff (feed-forward coefficient in vel loop)",
+    ("MotorCommand", "duty_cycle"):  "portable-motor-interface: DUTY_CYCLE verb / IVelocityMotor::setSpeed()",
+    ("MotorCommand", "voltage"):     "portable-motor-interface: VOLTAGE verb (new control mode)",
+    ("MotorCommand", "velocity"):    "portable-motor-interface: VELOCITY verb / IVelocityMotor::setSpeed()",
+    ("MotorCommand", "position"):    "portable-motor-interface: POSITION verb / IPositionMotor::setAngleDeg()",
+    ("MotorCommand", "neutral"):     "portable-motor-interface: NEUTRAL verb (BRAKE/COAST) / OutputState::pwm[]",
+    ("MotorCommand", "feedforward"): "RobotConfig::velKff (feed-forward coefficient in vel loop)",
 
     # MotorState: per-motor observable state
-    ("MotorState", "connected"):     "(new field — motor I2C connected flag, via IBusDiagnostics::errorCount())",
-    ("MotorState", "position_mm"):   "IVelocityMotor::positionMm() / ActualState::encMm[]",
-    ("MotorState", "velocity_mmps"): "IVelocityMotor::velocityMmps() / ActualState::velMms[]",
-    ("MotorState", "applied_pct"):   "OutputState::pwm[] (applied PWM % — new dedicated readback field)",
-    ("MotorState", "wedged"):        "(new field — motor stall flag, related to IBusDiagnostics wedge detection)",
+    ("MotorState", "connected"): "(new field — motor I2C connected flag, via IBusDiagnostics::errorCount())",
+    ("MotorState", "position"):  "IVelocityMotor::positionMm() / ActualState::encMm[]",
+    ("MotorState", "velocity"):  "IVelocityMotor::velocityMmps() / ActualState::velMms[]",
+    ("MotorState", "applied"):   "OutputState::pwm[] (applied PWM % — new dedicated readback field)",
+    ("MotorState", "wedged"):    "(new field — motor stall flag, related to IBusDiagnostics wedge detection)",
 
     # MotorConfig: per-motor calibration parameters
     ("MotorConfig", "mm_per_deg"): "RobotConfig::{mmPerDegL,mmPerDegR} (per-motor, indexed by channel)",
@@ -246,31 +246,31 @@ _INVENTORY_MAP: dict = {
     ("StopCondition", "cmp"):    "StopCondition::Cmp (GE/LE comparison direction)",
 
     # Goal variant messages: map to DesiredState / MotionCommand handler
-    ("VelocityGoal", "vx_mmps"):    "DesiredState::bodyTwistRaw.vx_mmps (VW/VX verb body velocity)",
-    ("VelocityGoal", "vy_mmps"):    "DesiredState::bodyTwistRaw.vy_mmps (holonomic lateral)",
-    ("VelocityGoal", "omega_rads"): "DesiredState::bodyTwistRaw.omega_rads",
-    ("VelocityGoal", "duration_ms"):"DesiredState::deadlineMs (T-command deadline)",
+    ("VelocityGoal", "v_x"):      "DesiredState::bodyTwistRaw.vx_mmps (VW/VX verb body velocity)",
+    ("VelocityGoal", "v_y"):      "DesiredState::bodyTwistRaw.vy_mmps (holonomic lateral)",
+    ("VelocityGoal", "omega"):    "DesiredState::bodyTwistRaw.omega_rads",
+    ("VelocityGoal", "duration"): "DesiredState::deadlineMs (T-command deadline)",
 
-    ("GotoGoal", "x_mm"):      "DesiredState::targetXWorld",
-    ("GotoGoal", "y_mm"):      "DesiredState::targetYWorld",
-    ("GotoGoal", "speed_mmps"):"DesiredState::targetSpeedMms",
+    ("GotoGoal", "x"):     "DesiredState::targetXWorld",
+    ("GotoGoal", "y"):     "DesiredState::targetYWorld",
+    ("GotoGoal", "speed"): "DesiredState::targetSpeedMms",
 
-    ("TurnGoal", "heading_rad"): "DesiredState::targetXWorld (heading encoded as target; DriveMode::GO_TO)",
-    ("TurnGoal", "speed_mmps"):  "DesiredState::targetSpeedMms",
+    ("TurnGoal", "heading"): "DesiredState::targetXWorld (heading encoded as target; DriveMode::GO_TO)",
+    ("TurnGoal", "speed"):   "DesiredState::targetSpeedMms",
 
-    ("DistanceGoal", "distance_mm"): "DesiredState::distanceTargetMm",
-    ("DistanceGoal", "speed_mmps"):  "DesiredState::targetSpeedMms",
+    ("DistanceGoal", "distance"): "DesiredState::distanceTargetMm",
+    ("DistanceGoal", "speed"):    "DesiredState::targetSpeedMms",
 
-    ("TimedGoal", "vx_mmps"):    "DesiredState::bodyTwistRaw.vx_mmps (T verb velocity)",
-    ("TimedGoal", "omega_rads"): "DesiredState::bodyTwistRaw.omega_rads",
-    ("TimedGoal", "duration_ms"):"DesiredState::deadlineMs",
+    ("TimedGoal", "v_x"):      "DesiredState::bodyTwistRaw.vx_mmps (T verb velocity)",
+    ("TimedGoal", "omega"):    "DesiredState::bodyTwistRaw.omega_rads",
+    ("TimedGoal", "duration"): "DesiredState::deadlineMs",
 
-    ("RotationGoal", "angle_rad"):  "DesiredState::distanceTargetMm (rotation arc encoded as distance; DriveMode::DISTANCE)",
-    ("RotationGoal", "speed_mmps"): "DesiredState::targetSpeedMms",
+    ("RotationGoal", "angle"): "DesiredState::distanceTargetMm (rotation arc encoded as distance; DriveMode::DISTANCE)",
+    ("RotationGoal", "speed"): "DesiredState::targetSpeedMms",
 
-    ("StreamGoal", "vx_mmps"):    "DesiredState::bodyTwistRaw.vx_mmps (S verb streaming velocity)",
-    ("StreamGoal", "vy_mmps"):    "DesiredState::bodyTwistRaw.vy_mmps",
-    ("StreamGoal", "omega_rads"): "DesiredState::bodyTwistRaw.omega_rads",
+    ("StreamGoal", "v_x"):   "DesiredState::bodyTwistRaw.vx_mmps (S verb streaming velocity)",
+    ("StreamGoal", "v_y"):   "DesiredState::bodyTwistRaw.vy_mmps",
+    ("StreamGoal", "omega"): "DesiredState::bodyTwistRaw.omega_rads",
 
     # PlannerCommand: oneof goal + metadata
     ("PlannerCommand", "velocity"):  "DesiredState DriveMode::VELOCITY / bodyTwistRaw (VW/VX verbs)",
@@ -287,14 +287,14 @@ _INVENTORY_MAP: dict = {
     ("PlannerCommand", "corr_id"):   "DesiredState::corrId[16] (correlation ID for reply tracking)",
 
     # PlannerState: maps to DesiredState members
-    ("PlannerState", "mode"):               "DesiredState::mode (DriveMode enum)",
-    ("PlannerState", "target_x_mm"):        "DesiredState::targetXWorld",
-    ("PlannerState", "target_y_mm"):        "DesiredState::targetYWorld",
-    ("PlannerState", "target_speed_mms"):   "DesiredState::targetSpeedMms",
-    ("PlannerState", "distance_target_mm"): "DesiredState::distanceTargetMm",
-    ("PlannerState", "deadline_ms"):        "DesiredState::deadlineMs",
-    ("PlannerState", "body_twist"):         "DesiredState::bodyTwist (profiled live setpoint)",
-    ("PlannerState", "active"):             "(new field — planner active flag, not a DesiredState member)",
+    ("PlannerState", "mode"):            "DesiredState::mode (DriveMode enum)",
+    ("PlannerState", "target_x"):        "DesiredState::targetXWorld",
+    ("PlannerState", "target_y"):        "DesiredState::targetYWorld",
+    ("PlannerState", "target_speed"):    "DesiredState::targetSpeedMms",
+    ("PlannerState", "distance_target"): "DesiredState::distanceTargetMm",
+    ("PlannerState", "deadline"):        "DesiredState::deadlineMs",
+    ("PlannerState", "body_twist"):      "DesiredState::bodyTwist (profiled live setpoint)",
+    ("PlannerState", "active"):          "(new field — planner active flag, not a DesiredState member)",
 
     # PlannerConfig: motion-only RobotConfig subset
     ("PlannerConfig", "a_max"):             "RobotConfig::aMax",
@@ -304,11 +304,11 @@ _INVENTORY_MAP: dict = {
     ("PlannerConfig", "yaw_acc_max"):       "RobotConfig::yawAccMax",
     ("PlannerConfig", "j_max"):             "RobotConfig::jMax",
     ("PlannerConfig", "yaw_jerk_max"):      "RobotConfig::yawJerkMax",
-    ("PlannerConfig", "arrive_tol_mm"):     "RobotConfig::arriveTolMm",
+    ("PlannerConfig", "arrive_tol"):        "RobotConfig::arriveTolMm",
     ("PlannerConfig", "turn_in_place_gate"):"RobotConfig::turnInPlaceGate",
-    ("PlannerConfig", "turn_threshold_mm"): "RobotConfig::turnThresholdMm",
-    ("PlannerConfig", "done_tol_mm"):       "RobotConfig::doneTolMm",
-    ("PlannerConfig", "min_speed_mms"):     "RobotConfig::minSpeedMms",
+    ("PlannerConfig", "turn_threshold"):    "RobotConfig::turnThresholdMm",
+    ("PlannerConfig", "done_tol"):          "RobotConfig::doneTolMm",
+    ("PlannerConfig", "min_speed"):         "RobotConfig::minSpeedMms",
 
     # -----------------------------------------------------------------------
     # ports.proto
@@ -332,8 +332,8 @@ _INVENTORY_MAP: dict = {
     ("PortState", "stamp"):      "ActualState::portsVS (ValueSet)",
 
     # PortConfig: ports configuration
-    ("PortConfig", "lag_ports_ms"): "RobotConfig::lagPortsMs",
-    ("PortConfig", "direction"):    "(new field — per-port direction bitmap, not in RobotConfig)",
+    ("PortConfig", "lag_ports"): "RobotConfig::lagPortsMs",
+    ("PortConfig", "direction"): "(new field — per-port direction bitmap, not in RobotConfig)",
 
     # -----------------------------------------------------------------------
     # sensors.proto
@@ -346,7 +346,7 @@ _INVENTORY_MAP: dict = {
     ("LineSensorState", "connected"):  "(new field — line sensor connected flag, capability query)",
 
     # LineSensorConfig: line sensor configuration
-    ("LineSensorConfig", "lag_line_ms"): "RobotConfig::lagLineMs",
+    ("LineSensorConfig", "lag_line"): "RobotConfig::lagLineMs",
     ("LineSensorConfig", "threshold"):   "(new field — binarization threshold, not in RobotConfig)",
     ("LineSensorConfig", "norm_min"):    "(new field — normalization minimum, not in RobotConfig)",
     ("LineSensorConfig", "norm_max"):    "(new field — normalization maximum, not in RobotConfig)",
@@ -361,7 +361,7 @@ _INVENTORY_MAP: dict = {
     ("ColorSensorState", "connected"): "(new field — color sensor connected flag, capability query)",
 
     # ColorSensorConfig: color sensor configuration
-    ("ColorSensorConfig", "lag_color_ms"): "RobotConfig::lagColorMs",
+    ("ColorSensorConfig", "lag_color"): "RobotConfig::lagColorMs",
     ("ColorSensorConfig", "integration"):  "(new field — integration time register, not in RobotConfig)",
     ("ColorSensorConfig", "gain"):         "(new field — sensor gain register, not in RobotConfig)",
     ("ColorSensorConfig", "cal_r"):        "(new field — color calibration scale R, not in RobotConfig)",
@@ -889,17 +889,17 @@ def _emit_bridges_header() -> str:
 // the two structs are bit-for-bit compatible (same size, same alignment)
 // so they can be safely reinterpret_cast<> across the subsystem boundary.
 
-// msg::Pose2D { float x_mm, y_mm, h_rad } vs ::Pose2D { float x, y, h }
+// msg::Pose2D { float x, y, h } vs ::Pose2D { float x, y, h }
 // Same layout: 3 floats, trivially copyable.
 static_assert(sizeof(msg::Pose2D) == sizeof(::Pose2D),
               "msg::Pose2D and ::Pose2D must have the same size — layout compat broken");
 static_assert(sizeof(msg::Pose2D) == sizeof(float) * 3,
-              "msg::Pose2D must be 3 floats {x_mm,y_mm,h_rad}");
+              "msg::Pose2D must be 3 floats {x,y,h}");
 static_assert(sizeof(::Pose2D) == sizeof(float) * 3,
               "HAL Pose2D must be 3 floats {x,y,h}");
 
-// msg::BodyTwist3 { float vx_mmps, vy_mmps, omega_rads }
-// vs ::BodyTwist3 { float vx_mmps, vy_mmps, omega_rads } — identical layout.
+// msg::BodyTwist3 { float v_x, v_y, omega }
+// vs ::BodyTwist3 { float vx_mmps, vy_mmps, omega_rads } — identical layout (3 floats, same size).
 static_assert(sizeof(msg::BodyTwist3) == sizeof(::BodyTwist3),
               "msg::BodyTwist3 and ::BodyTwist3 must have the same size — layout compat broken");
 static_assert(sizeof(msg::BodyTwist3) == sizeof(float) * 3,

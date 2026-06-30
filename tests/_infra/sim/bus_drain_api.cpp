@@ -181,7 +181,7 @@ float bus_drain_api_drive2_get_fused_x(void* h)
 {
     if (!h) return 0.0f;
     BusDrainHandle* b = static_cast<BusDrainHandle*>(h);
-    return b->drive2.state().get_fused().get_pose().get_x_mm();
+    return b->drive2.state().get_fused().get_pose().get_x();
 }
 
 // Read the command queue's current size.
@@ -212,7 +212,7 @@ float bus_drain_api_drive2_get_vx(void* h)
 {
     if (!h) return 0.0f;
     BusDrainHandle* b = static_cast<BusDrainHandle*>(h);
-    return b->drive2.state().get_fused().get_twist().get_vx_mmps();
+    return b->drive2.state().get_fused().get_twist().get_v_x();
 }
 
 // ---------------------------------------------------------------------------

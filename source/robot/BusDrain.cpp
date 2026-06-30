@@ -64,9 +64,9 @@ uint8_t drainCommandBatch(
             // ----------------------------------------------------------------
             msg::DrivetrainCommand drvCmd;
             msg::BodyTwist3 twist{};
-            twist.vx_mmps    = (oc.args_count >= 1) ? oc.args_[0] : 0.0f;
-            twist.vy_mmps    = (oc.args_count >= 2) ? oc.args_[1] : 0.0f;
-            twist.omega_rads = (oc.args_count >= 3) ? oc.args_[2] : 0.0f;
+            twist.v_x    = (oc.args_count >= 1) ? oc.args_[0] : 0.0f;
+            twist.v_y    = (oc.args_count >= 2) ? oc.args_[1] : 0.0f;
+            twist.omega = (oc.args_count >= 3) ? oc.args_[2] : 0.0f;
             drvCmd.setTwist(twist);
             drive2.apply(drvCmd);
             ++routed;

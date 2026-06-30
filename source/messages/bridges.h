@@ -24,17 +24,17 @@
 // the two structs are bit-for-bit compatible (same size, same alignment)
 // so they can be safely reinterpret_cast<> across the subsystem boundary.
 
-// msg::Pose2D { float x_mm, y_mm, h_rad } vs ::Pose2D { float x, y, h }
+// msg::Pose2D { float x, y, h } vs ::Pose2D { float x, y, h }
 // Same layout: 3 floats, trivially copyable.
 static_assert(sizeof(msg::Pose2D) == sizeof(::Pose2D),
               "msg::Pose2D and ::Pose2D must have the same size — layout compat broken");
 static_assert(sizeof(msg::Pose2D) == sizeof(float) * 3,
-              "msg::Pose2D must be 3 floats {x_mm,y_mm,h_rad}");
+              "msg::Pose2D must be 3 floats {x,y,h}");
 static_assert(sizeof(::Pose2D) == sizeof(float) * 3,
               "HAL Pose2D must be 3 floats {x,y,h}");
 
-// msg::BodyTwist3 { float vx_mmps, vy_mmps, omega_rads }
-// vs ::BodyTwist3 { float vx_mmps, vy_mmps, omega_rads } — identical layout.
+// msg::BodyTwist3 { float v_x, v_y, omega }
+// vs ::BodyTwist3 { float vx_mmps, vy_mmps, omega_rads } — identical layout (3 floats, same size).
 static_assert(sizeof(msg::BodyTwist3) == sizeof(::BodyTwist3),
               "msg::BodyTwist3 and ::BodyTwist3 must have the same size — layout compat broken");
 static_assert(sizeof(msg::BodyTwist3) == sizeof(float) * 3,

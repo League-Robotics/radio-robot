@@ -99,8 +99,8 @@ void Drive2::tickUpdate(uint32_t now)
     // ------------------------------------------------------------------
     // STEP 4: EKF predict — encoder dead-reckoning integrate
     // ------------------------------------------------------------------
-    float trackwidth = (_drvCfg.get_trackwidth_mm() > 0.0f)
-                           ? _drvCfg.get_trackwidth_mm()
+    float trackwidth = (_drvCfg.get_trackwidth() > 0.0f)
+                           ? _drvCfg.get_trackwidth()
                            : _robCfg.trackwidthMm;
     float rotSlip    = _robCfg.rotationalSlip;
     _est.addOdometryObservation(_hw, trackwidth, rotSlip, now);
@@ -108,8 +108,8 @@ void Drive2::tickUpdate(uint32_t now)
     // ------------------------------------------------------------------
     // STEP 5: OTOS correction (lag-gated, matches LoopTickOnce pattern)
     // ------------------------------------------------------------------
-    uint32_t lagMs = (_drvCfg.get_lag_otos_ms() > 0)
-                         ? _drvCfg.get_lag_otos_ms()
+    uint32_t lagMs = (_drvCfg.get_lag_otos() > 0)
+                         ? _drvCfg.get_lag_otos()
                          : _robCfg.lagOtosMs;
     if (lagMs > 0 && _otos.is_initialized()) {
         if (!_otosEverReady) {
@@ -144,15 +144,15 @@ void Drive2::tickUpdate(uint32_t now)
 
     // Helper lambda: copy ::PoseEstimate → msg::PoseEstimate.
     auto copyPE = [](const ::PoseEstimate& src, msg::PoseEstimate& dst) {
-        dst.pose.x_mm      = src.pose.x;
-        dst.pose.y_mm      = src.pose.y;
-        dst.pose.h_rad     = src.pose.h;
-        dst.twist.vx_mmps  = src.twist.vx_mmps;
-        dst.twist.vy_mmps  = src.twist.vy_mmps;
-        dst.twist.omega_rads = src.twist.omega_rads;
-        dst.stamp.lag_ms      = src.stamp.lagMs;
-        dst.stamp.last_upd_ms = src.stamp.lastUpdMs;
-        dst.stamp.valid       = src.stamp.valid;
+        dst.pose.x      = src.pose.x;
+        dst.pose.y      = src.pose.y;
+        dst.pose.h      = src.pose.h;
+        dst.twist.v_x   = src.twist.vx_mmps;
+        dst.twist.v_y   = src.twist.vy_mmps;
+        dst.twist.omega = src.twist.omega_rads;
+        dst.stamp.lag      = src.stamp.lagMs;
+        dst.stamp.last_upd = src.stamp.lastUpdMs;
+        dst.stamp.valid    = src.stamp.valid;
     };
 
     copyPE(_hw.fused,   _state.fused);
@@ -160,20 +160,20 @@ void Drive2::tickUpdate(uint32_t now)
     copyPE(_hw.optical, _state.optical);
 
     // Per-wheel diagnostics (differential: [0]=R, [1]=L).
-    _state.enc_mm_[0]  = _hw.encMm[0];
-    _state.enc_mm_[1]  = _hw.encMm[1];
-    _state.enc_mm_count = 2;
-    _state.vel_mms_[0]  = _hw.velMms[0];
-    _state.vel_mms_[1]  = _hw.velMms[1];
-    _state.vel_mms_count = 2;
+    _state.enc_[0]  = _hw.encMm[0];
+    _state.enc_[1]  = _hw.encMm[1];
+    _state.enc_count = 2;
+    _state.vel_[0]  = _hw.velMms[0];
+    _state.vel_[1]  = _hw.velMms[1];
+    _state.vel_count = 2;
 
     // Freshness envelopes: ::ValueSet → msg::ValueSet field-by-field.
-    _state.enc.lag_ms      = _hw.enc.lagMs;
-    _state.enc.last_upd_ms = _hw.enc.lastUpdMs;
-    _state.enc.valid       = _hw.enc.valid;
-    _state.otos.lag_ms      = _hw.otos.lagMs;
-    _state.otos.last_upd_ms = _hw.otos.lastUpdMs;
-    _state.otos.valid       = _hw.otos.valid;
+    _state.enc_stamp.lag      = _hw.enc.lagMs;
+    _state.enc_stamp.last_upd = _hw.enc.lastUpdMs;
+    _state.enc_stamp.valid    = _hw.enc.valid;
+    _state.otos.lag           = _hw.otos.lagMs;
+    _state.otos.last_upd      = _hw.otos.lastUpdMs;
+    _state.otos.valid         = _hw.otos.valid;
 
     // Wedge latch per wheel.
     _state.wheel_wedged_[0]  = _mc.wheelWedgedR() ? 1u : 0u;
@@ -202,9 +202,9 @@ msg::CommandBatch Drive2::tickAction(uint32_t now)
     switch (_cmd.control_kind) {
 
     case msg::DrivetrainCommand::ControlKind::TWIST: {
-        float vx    = _cmd.control.twist.vx_mmps;
-        float vy    = _cmd.control.twist.vy_mmps;
-        float omega = _cmd.control.twist.omega_rads;
+        float vx    = _cmd.control.twist.v_x;
+        float vy    = _cmd.control.twist.v_y;
+        float omega = _cmd.control.twist.omega;
 
         // vy-reject on differential build.
         if (!capabilities().get_holonomic() && vy != 0.0f) {
@@ -229,11 +229,11 @@ msg::CommandBatch Drive2::tickAction(uint32_t now)
         float tL = 0.0f;
         float tR = 0.0f;
         // Convention: differential — w_[0] = right, w_[1] = left.
-        if (count > 0 && _cmd.control.wheels.w_[0].get_speed_mmps().has) {
-            tR = _cmd.control.wheels.w_[0].get_speed_mmps().val;
+        if (count > 0 && _cmd.control.wheels.w_[0].get_speed().has) {
+            tR = _cmd.control.wheels.w_[0].get_speed().val;
         }
-        if (count > 1 && _cmd.control.wheels.w_[1].get_speed_mmps().has) {
-            tL = _cmd.control.wheels.w_[1].get_speed_mmps().val;
+        if (count > 1 && _cmd.control.wheels.w_[1].get_speed().has) {
+            tL = _cmd.control.wheels.w_[1].get_speed().val;
         }
         _mc.setTarget(tL, tR);
         break;
@@ -255,19 +255,19 @@ msg::CommandBatch Drive2::tickAction(uint32_t now)
         // SetPose: re-anchor the fused estimate.
         // h_rad → centidegrees for resetPose() API.
         static constexpr float RAD_TO_CDEG = 18000.0f / 3.14159265f;
-        int32_t x_mm  = (int32_t)_cmd.control.pose.x_mm;
-        int32_t y_mm  = (int32_t)_cmd.control.pose.y_mm;
-        int32_t h_cdeg = (int32_t)(_cmd.control.pose.h_rad * RAD_TO_CDEG);
-        _est.resetPose(_hw, x_mm, y_mm, h_cdeg);
+        int32_t pose_x  = (int32_t)_cmd.control.pose.x;
+        int32_t pose_y  = (int32_t)_cmd.control.pose.y;
+        int32_t h_cdeg  = (int32_t)(_cmd.control.pose.h * RAD_TO_CDEG);
+        _est.resetPose(_hw, pose_x, pose_y, h_cdeg);
 
         // Refresh fused estimate into _state immediately (field-by-field copy:
         // ::PoseEstimate and msg::PoseEstimate are distinct C++ types).
-        _state.fused.pose.x_mm       = _hw.fused.pose.x;
-        _state.fused.pose.y_mm       = _hw.fused.pose.y;
-        _state.fused.pose.h_rad      = _hw.fused.pose.h;
-        _state.fused.twist.vx_mmps   = _hw.fused.twist.vx_mmps;
-        _state.fused.twist.vy_mmps   = _hw.fused.twist.vy_mmps;
-        _state.fused.twist.omega_rads = _hw.fused.twist.omega_rads;
+        _state.fused.pose.x         = _hw.fused.pose.x;
+        _state.fused.pose.y         = _hw.fused.pose.y;
+        _state.fused.pose.h         = _hw.fused.pose.h;
+        _state.fused.twist.v_x      = _hw.fused.twist.vx_mmps;
+        _state.fused.twist.v_y      = _hw.fused.twist.vy_mmps;
+        _state.fused.twist.omega    = _hw.fused.twist.omega_rads;
         break;
     }
 

@@ -38,6 +38,6 @@ message PortState {
 
 // Configuration for the ports subsystem.
 message PortConfig {
-  uint32          lag_ports_ms = 1;
+  uint32          lag_ports    = 1;
   repeated uint32 direction    = 2 [(max_count) = 4];  // per-port direction bitmap
 }

@@ -84,8 +84,8 @@ void sensors_api_configure(void* h, uint32_t lag_line_ms, uint32_t lag_color_ms)
     SensorsHandle* s = static_cast<SensorsHandle*>(h);
     msg::LineSensorConfig  lc = subsystems::toLineSensorConfig(s->cfg);
     msg::ColorSensorConfig cc = subsystems::toColorSensorConfig(s->cfg);
-    lc.lag_line_ms  = lag_line_ms;
-    cc.lag_color_ms = lag_color_ms;
+    lc.lag_line  = lag_line_ms;
+    cc.lag_color = lag_color_ms;
     s->sensors.configure(lc, cc);
 }
 

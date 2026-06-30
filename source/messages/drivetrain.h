@@ -10,14 +10,14 @@ namespace msg {
 
 // SetPose
 struct SetPose {
-    float x_mm = 0.0f;
-    float y_mm = 0.0f;
-    float h_rad = 0.0f;
+    float x = 0.0f;
+    float y = 0.0f;
+    float h = 0.0f;
 
     // --- getters ---
-    float get_x_mm() const { return x_mm; }
-    float get_y_mm() const { return y_mm; }
-    float get_h_rad() const { return h_rad; }
+    float get_x() const { return x; }
+    float get_y() const { return y; }
+    float get_h() const { return h; }
 };
 
 // WheelTargets
@@ -85,11 +85,11 @@ struct DrivetrainState {
     PoseEstimate fused = {};
     PoseEstimate encoder = {};
     PoseEstimate optical = {};
-    float enc_mm_[4] = {};
-    uint8_t enc_mm_count = 0;
-    float vel_mms_[4] = {};
-    uint8_t vel_mms_count = 0;
-    ValueSet enc = {};
+    float enc_[4] = {};
+    uint8_t enc_count = 0;
+    float vel_[4] = {};
+    uint8_t vel_count = 0;
+    ValueSet enc_stamp = {};
     ValueSet otos = {};
     uint8_t wheel_wedged_[4] = {};  // bool[]
     uint8_t wheel_wedged_count = 0;
@@ -99,11 +99,11 @@ struct DrivetrainState {
     const PoseEstimate& get_fused() const { return fused; }
     const PoseEstimate& get_encoder() const { return encoder; }
     const PoseEstimate& get_optical() const { return optical; }
-    const float* enc_mm() const { return enc_mm_; }
-    uint8_t enc_mm_count_val() const { return enc_mm_count; }
-    const float* vel_mms() const { return vel_mms_; }
-    uint8_t vel_mms_count_val() const { return vel_mms_count; }
-    const ValueSet& get_enc() const { return enc; }
+    const float* enc() const { return enc_; }
+    uint8_t enc_count_val() const { return enc_count; }
+    const float* vel() const { return vel_; }
+    uint8_t vel_count_val() const { return vel_count; }
+    const ValueSet& get_enc_stamp() const { return enc_stamp; }
     const ValueSet& get_otos() const { return otos; }
     const uint8_t* wheel_wedged() const { return wheel_wedged_; }
     uint8_t wheel_wedged_count_val() const { return wheel_wedged_count; }
@@ -116,9 +116,9 @@ struct DrivetrainConfig {
     int32_t fwd_sign_r = 0;
     float mm_per_deg_l = 0.0f;
     float mm_per_deg_r = 0.0f;
-    float trackwidth_mm = 0.0f;
-    float half_track_mm = 0.0f;
-    float half_wheelbase_mm = 0.0f;
+    float trackwidth = 0.0f;
+    float half_track = 0.0f;
+    float half_wheelbase = 0.0f;
     float mm_per_deg_wheel_[4] = {};
     uint8_t mm_per_deg_wheel_count = 0;
     int32_t fwd_sign_wheel_[4] = {};
@@ -128,7 +128,7 @@ struct DrivetrainConfig {
     Gains vel_gains = {};
     float vel_filt_alpha = 0.0f;
     float sync_gain = 0.0f;
-    float min_wheel_mms = 0.0f;
+    float min_wheel = 0.0f;
     float alpha_pos = 0.0f;
     float alpha_yaw = 0.0f;
     float otos_gate = 0.0f;
@@ -136,12 +136,12 @@ struct DrivetrainConfig {
     float otos_angular_scale = 0.0f;
     float rotation_gain_pos = 0.0f;
     float rotation_gain_neg = 0.0f;
-    float rotation_offset_deg = 0.0f;
-    float rotation_offset_deg_neg = 0.0f;
+    float rotation_offset = 0.0f;
+    float rotation_offset_neg = 0.0f;
     float rotational_slip = 0.0f;
     float odom_off_x = 0.0f;
     float odom_off_y = 0.0f;
-    float odom_yaw_deg = 0.0f;
+    float odom_yaw = 0.0f;
     bool odom_upside_down = false;
     float ekf_q_xy = 0.0f;
     float ekf_q_theta = 0.0f;
@@ -151,7 +151,7 @@ struct DrivetrainConfig {
     float ekf_q_omega = 0.0f;
     float ekf_r_otos_v = 0.0f;
     float ekf_r_enc_v = 0.0f;
-    uint32_t lag_otos_ms = 0;
+    uint32_t lag_otos = 0;
     int32_t drivetrain_type = 0;
 
     // --- getters ---
@@ -159,9 +159,9 @@ struct DrivetrainConfig {
     int32_t get_fwd_sign_r() const { return fwd_sign_r; }
     float get_mm_per_deg_l() const { return mm_per_deg_l; }
     float get_mm_per_deg_r() const { return mm_per_deg_r; }
-    float get_trackwidth_mm() const { return trackwidth_mm; }
-    float get_half_track_mm() const { return half_track_mm; }
-    float get_half_wheelbase_mm() const { return half_wheelbase_mm; }
+    float get_trackwidth() const { return trackwidth; }
+    float get_half_track() const { return half_track; }
+    float get_half_wheelbase() const { return half_wheelbase; }
     const float* mm_per_deg_wheel() const { return mm_per_deg_wheel_; }
     uint8_t mm_per_deg_wheel_count_val() const { return mm_per_deg_wheel_count; }
     const int32_t* fwd_sign_wheel() const { return fwd_sign_wheel_; }
@@ -171,7 +171,7 @@ struct DrivetrainConfig {
     const Gains& get_vel_gains() const { return vel_gains; }
     float get_vel_filt_alpha() const { return vel_filt_alpha; }
     float get_sync_gain() const { return sync_gain; }
-    float get_min_wheel_mms() const { return min_wheel_mms; }
+    float get_min_wheel() const { return min_wheel; }
     float get_alpha_pos() const { return alpha_pos; }
     float get_alpha_yaw() const { return alpha_yaw; }
     float get_otos_gate() const { return otos_gate; }
@@ -179,12 +179,12 @@ struct DrivetrainConfig {
     float get_otos_angular_scale() const { return otos_angular_scale; }
     float get_rotation_gain_pos() const { return rotation_gain_pos; }
     float get_rotation_gain_neg() const { return rotation_gain_neg; }
-    float get_rotation_offset_deg() const { return rotation_offset_deg; }
-    float get_rotation_offset_deg_neg() const { return rotation_offset_deg_neg; }
+    float get_rotation_offset() const { return rotation_offset; }
+    float get_rotation_offset_neg() const { return rotation_offset_neg; }
     float get_rotational_slip() const { return rotational_slip; }
     float get_odom_off_x() const { return odom_off_x; }
     float get_odom_off_y() const { return odom_off_y; }
-    float get_odom_yaw_deg() const { return odom_yaw_deg; }
+    float get_odom_yaw() const { return odom_yaw; }
     bool get_odom_upside_down() const { return odom_upside_down; }
     float get_ekf_q_xy() const { return ekf_q_xy; }
     float get_ekf_q_theta() const { return ekf_q_theta; }
@@ -194,7 +194,7 @@ struct DrivetrainConfig {
     float get_ekf_q_omega() const { return ekf_q_omega; }
     float get_ekf_r_otos_v() const { return ekf_r_otos_v; }
     float get_ekf_r_enc_v() const { return ekf_r_enc_v; }
-    uint32_t get_lag_otos_ms() const { return lag_otos_ms; }
+    uint32_t get_lag_otos() const { return lag_otos; }
     int32_t get_drivetrain_type() const { return drivetrain_type; }
 
     // --- chainable setters (Command/Config only) ---
@@ -202,9 +202,9 @@ struct DrivetrainConfig {
     DrivetrainConfig& setFwdSignR(int32_t v) { fwd_sign_r = v; return *this; }
     DrivetrainConfig& setMmPerDegL(float v) { mm_per_deg_l = v; return *this; }
     DrivetrainConfig& setMmPerDegR(float v) { mm_per_deg_r = v; return *this; }
-    DrivetrainConfig& setTrackwidthMm(float v) { trackwidth_mm = v; return *this; }
-    DrivetrainConfig& setHalfTrackMm(float v) { half_track_mm = v; return *this; }
-    DrivetrainConfig& setHalfWheelbaseMm(float v) { half_wheelbase_mm = v; return *this; }
+    DrivetrainConfig& setTrackwidth(float v) { trackwidth = v; return *this; }
+    DrivetrainConfig& setHalfTrack(float v) { half_track = v; return *this; }
+    DrivetrainConfig& setHalfWheelbase(float v) { half_wheelbase = v; return *this; }
     DrivetrainConfig& clearMmPerDegWheel() { mm_per_deg_wheel_count = 0; return *this; }
     DrivetrainConfig& clearFwdSignWheel() { fwd_sign_wheel_count = 0; return *this; }
     DrivetrainConfig& setVWheelMax(float v) { v_wheel_max = v; return *this; }
@@ -212,7 +212,7 @@ struct DrivetrainConfig {
     DrivetrainConfig& setVelGains(const Gains& v) { vel_gains = v; return *this; }
     DrivetrainConfig& setVelFiltAlpha(float v) { vel_filt_alpha = v; return *this; }
     DrivetrainConfig& setSyncGain(float v) { sync_gain = v; return *this; }
-    DrivetrainConfig& setMinWheelMms(float v) { min_wheel_mms = v; return *this; }
+    DrivetrainConfig& setMinWheel(float v) { min_wheel = v; return *this; }
     DrivetrainConfig& setAlphaPos(float v) { alpha_pos = v; return *this; }
     DrivetrainConfig& setAlphaYaw(float v) { alpha_yaw = v; return *this; }
     DrivetrainConfig& setOtosGate(float v) { otos_gate = v; return *this; }
@@ -220,12 +220,12 @@ struct DrivetrainConfig {
     DrivetrainConfig& setOtosAngularScale(float v) { otos_angular_scale = v; return *this; }
     DrivetrainConfig& setRotationGainPos(float v) { rotation_gain_pos = v; return *this; }
     DrivetrainConfig& setRotationGainNeg(float v) { rotation_gain_neg = v; return *this; }
-    DrivetrainConfig& setRotationOffsetDeg(float v) { rotation_offset_deg = v; return *this; }
-    DrivetrainConfig& setRotationOffsetDegNeg(float v) { rotation_offset_deg_neg = v; return *this; }
+    DrivetrainConfig& setRotationOffset(float v) { rotation_offset = v; return *this; }
+    DrivetrainConfig& setRotationOffsetNeg(float v) { rotation_offset_neg = v; return *this; }
     DrivetrainConfig& setRotationalSlip(float v) { rotational_slip = v; return *this; }
     DrivetrainConfig& setOdomOffX(float v) { odom_off_x = v; return *this; }
     DrivetrainConfig& setOdomOffY(float v) { odom_off_y = v; return *this; }
-    DrivetrainConfig& setOdomYawDeg(float v) { odom_yaw_deg = v; return *this; }
+    DrivetrainConfig& setOdomYaw(float v) { odom_yaw = v; return *this; }
     DrivetrainConfig& setOdomUpsideDown(bool v) { odom_upside_down = v; return *this; }
     DrivetrainConfig& setEkfQXy(float v) { ekf_q_xy = v; return *this; }
     DrivetrainConfig& setEkfQTheta(float v) { ekf_q_theta = v; return *this; }
@@ -235,7 +235,7 @@ struct DrivetrainConfig {
     DrivetrainConfig& setEkfQOmega(float v) { ekf_q_omega = v; return *this; }
     DrivetrainConfig& setEkfROtosV(float v) { ekf_r_otos_v = v; return *this; }
     DrivetrainConfig& setEkfREncV(float v) { ekf_r_enc_v = v; return *this; }
-    DrivetrainConfig& setLagOtosMs(uint32_t v) { lag_otos_ms = v; return *this; }
+    DrivetrainConfig& setLagOtos(uint32_t v) { lag_otos = v; return *this; }
     DrivetrainConfig& setDrivetrainType(int32_t v) { drivetrain_type = v; return *this; }
 };
 

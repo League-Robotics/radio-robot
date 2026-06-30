@@ -21,7 +21,7 @@ message LineSensorState {
 
 // Configuration for the line sensor array.
 message LineSensorConfig {
-  uint32 lag_line_ms            = 1;
+  uint32 lag_line               = 1;
   uint32 threshold              = 2;
   uint32 norm_min               = 3;
   uint32 norm_max               = 4;
@@ -40,7 +40,7 @@ message ColorSensorState {
 
 // Configuration for the color sensor.
 message ColorSensorConfig {
-  uint32 lag_color_ms = 1;
+  uint32 lag_color    = 1;
   uint32 integration  = 2;
   uint32 gain         = 3;
   float  cal_r        = 4;  // color calibration scale factors

@@ -20,57 +20,57 @@ enum class Neutral : uint8_t {
 
 // Pose2D
 struct Pose2D {
-    float x_mm = 0.0f;
-    float y_mm = 0.0f;
-    float h_rad = 0.0f;
+    float x = 0.0f;
+    float y = 0.0f;
+    float h = 0.0f;
 
     // --- getters ---
-    float get_x_mm() const { return x_mm; }
-    float get_y_mm() const { return y_mm; }
-    float get_h_rad() const { return h_rad; }
+    float get_x() const { return x; }
+    float get_y() const { return y; }
+    float get_h() const { return h; }
 };
 
 // BodyTwist
 struct BodyTwist {
-    float v_mmps = 0.0f;
-    float omega_rads = 0.0f;
+    float v = 0.0f;
+    float omega = 0.0f;
 
     // --- getters ---
-    float get_v_mmps() const { return v_mmps; }
-    float get_omega_rads() const { return omega_rads; }
+    float get_v() const { return v; }
+    float get_omega() const { return omega; }
 };
 
 // BodyTwist3
 struct BodyTwist3 {
-    float vx_mmps = 0.0f;
-    float vy_mmps = 0.0f;
-    float omega_rads = 0.0f;
+    float v_x = 0.0f;
+    float v_y = 0.0f;
+    float omega = 0.0f;
 
     // --- getters ---
-    float get_vx_mmps() const { return vx_mmps; }
-    float get_vy_mmps() const { return vy_mmps; }
-    float get_omega_rads() const { return omega_rads; }
+    float get_v_x() const { return v_x; }
+    float get_v_y() const { return v_y; }
+    float get_omega() const { return omega; }
 };
 
 // BodyAccel
 struct BodyAccel {
-    float ax_mmps2 = 0.0f;
-    float ay_mmps2 = 0.0f;
+    float a_x = 0.0f;
+    float a_y = 0.0f;
 
     // --- getters ---
-    float get_ax_mmps2() const { return ax_mmps2; }
-    float get_ay_mmps2() const { return ay_mmps2; }
+    float get_a_x() const { return a_x; }
+    float get_a_y() const { return a_y; }
 };
 
 // ValueSet
 struct ValueSet {
-    uint32_t lag_ms = 0;
-    uint32_t last_upd_ms = 0;
+    uint32_t lag = 0;
+    uint32_t last_upd = 0;
     bool valid = false;
 
     // --- getters ---
-    uint32_t get_lag_ms() const { return lag_ms; }
-    uint32_t get_last_upd_ms() const { return last_upd_ms; }
+    uint32_t get_lag() const { return lag; }
+    uint32_t get_last_upd() const { return last_upd; }
     bool get_valid() const { return valid; }
 };
 
@@ -88,12 +88,12 @@ struct PoseEstimate {
 
 // WheelTarget
 struct WheelTarget {
-    Opt<float> speed_mmps = {};
-    Opt<float> position_mm = {};
+    Opt<float> speed = {};
+    Opt<float> position = {};
 
     // --- getters ---
-    const Opt<float>& get_speed_mmps() const { return speed_mmps; }
-    const Opt<float>& get_position_mm() const { return position_mm; }
+    const Opt<float>& get_speed() const { return speed; }
+    const Opt<float>& get_position() const { return position; }
 };
 
 // Gains
