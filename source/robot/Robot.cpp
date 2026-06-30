@@ -1,5 +1,7 @@
 #include "Robot.h"
 #include "superstructure/MotionController.h"
+#include "subsystems/sensors/SensorsConfig.h"
+#include "superstructure/PlannerConfig.h"
 #ifndef HOST_BUILD
 #include "MicroBit.h"
 #include "MicroBitDevice.h"
@@ -88,8 +90,33 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       // Superstructure (042-001) — wired with references to motionController and
       // haltController (both declared before it) plus config.  Declaration order
       // in Robot.h guarantees those are constructed first.
-      superstructure(motionController, haltController, config)
+      superstructure(motionController, haltController, config),
+      // Phase 3 (059-004): new message-contract subsystems.  ADDITIVE — NOT yet
+      // wired into loopTickOnce; configure() called in the constructor body below.
+      //
+      // bvc2: Drive2's private BodyVelocityController.  Separate from
+      // MotionController's internal _bvc so the two paths don't share PID state.
+      bvc2(motorController, config),
+      // drive2: new-arch Drive2, built with the same device refs as the legacy
+      // drive subsystem.  Own BVC (bvc2), own EKF state (via est + odo).
+      drive2(motorL, motorR, motorController, bvc2, estimate, estimate.odometry(),
+             hal.otos(), config),
+      // sensors: facade over the existing lineSensor / colorSensor_ subsystems;
+      // shares the same HardwareState they write into.
+      sensors(lineSensor, colorSensor_, state.actual),
+      // planner: wraps existing motionController + drive2.
+      planner(motionController, drive2, config)
 {
+    // -----------------------------------------------------------------------
+    // Phase 3 (059-004): bottom-up configure() calls.
+    // Project the initial RobotConfig into each new-arch subsystem so their
+    // internal config slices are live-equivalent from construction time.
+    // These calls are idempotent and cheap; order matches dependency direction.
+    // -----------------------------------------------------------------------
+    drive2.configure(toDriveConfig(config));
+    sensors.configure(subsystems::toLineSensorConfig(config),
+                      subsystems::toColorSensorConfig(config));
+    planner.configure(toPlannerConfig(config));
     motionController.setHardwareState(&state.actual);
     motorController.setCommandsRef(&state.outputs);
     // 047-003: wire BVC → DesiredState publish so bodyTwist/bodyTwistRaw are

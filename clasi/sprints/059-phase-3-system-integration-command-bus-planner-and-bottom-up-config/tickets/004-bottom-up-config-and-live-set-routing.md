@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Bottom-up config and live SET routing
-status: open
+status: done
 use-cases:
 - SUC-004
 - SUC-005
@@ -39,27 +39,27 @@ wired to `configure()` in the constructor). This ticket does NOT yet change
 
 ## Acceptance Criteria
 
-- [ ] `Robot::Robot(Hardware& hal, const RobotConfig& cfg)` constructor calls:
+- [x] `Robot::Robot(Hardware& hal, const RobotConfig& cfg)` constructor calls:
   - `drive2.configure(toDriveConfig(cfg))` after `drive2` is constructed
   - `sensors.configure(toSensorsConfig(cfg).line, toSensorsConfig(cfg).color)` after `sensors` is constructed
   - `planner.configure(toPlannerConfig(cfg))` after `planner` is constructed
-- [ ] `data/robots/robot_config.schema.json` has a `"subsystem"` annotation for
+- [x] `data/robots/robot_config.schema.json` has a `"subsystem"` annotation for
   at minimum these fields:
   - `"vel.kP"`, `"vel.kI"`, `"vel.kFf"`, `"vel.iMax"`, `"vel.kAw"` → `"drive"`
   - `"aMax"`, `"vBodyMax"`, `"yawRateMax"`, `"arriveTolMm"` → `"planner"`
   - `"lagLineMs"`, `"lagColorMs"` → `"sensors"`
-- [ ] `ConfigRegistry.cpp::handleSet` reads the `"subsystem"` annotation for the
+- [x] `ConfigRegistry.cpp::handleSet` reads the `"subsystem"` annotation for the
   changed field and calls the appropriate `configure()` method:
   - `"drive"` → constructs a `msg::DrivetrainConfig` delta and calls `drive2.configure(delta)`
   - `"planner"` → constructs a `msg::PlannerConfig` delta and calls `planner.configure(delta)`
   - `"sensors"` → constructs a sensor config delta and calls `sensors.configure(delta)`
   - Fields with no `"subsystem"` annotation continue to use the existing `kRegistry[]`
     direct-write path (backward compatibility preserved)
-- [ ] `MotorController::updateVelGains` is still called internally from `drive2.configure()`
+- [x] `MotorController::updateVelGains` is still called internally from `drive2.configure()`
   when velocity gain fields change (it is NOT deleted, just called from a new path).
-- [ ] `handleSI` (`SI` verb handler) routes to `drive2.apply(DrivetrainCommand{SetPose{x,y,h}})`
+- [x] `handleSI` (`SI` verb handler) routes to `drive2.apply(DrivetrainCommand{SetPose{x,y,h}})`
   instead of calling `estimate.resetPose()` directly. Behavior is identical.
-- [ ] Unit tests in `tests/simulation/unit/test_059_config_routing.py`:
+- [x] Unit tests in `tests/simulation/unit/test_059_config_routing.py`:
   - `test_set_vel_kp_routes_to_drive2` — issue `SET vel.kP 2.0`; verify `drive2`
     applies the updated gain on the next `tickUpdate/tickAction`.
   - `test_set_amax_routes_to_planner` — issue `SET aMax 1500`; verify planner's
@@ -69,9 +69,9 @@ wired to `configure()` in the constructor). This ticket does NOT yet change
   - `test_init_configure_called` — construct `Robot` on `MockHAL`; verify that
     `drive2.state()` and `sensors.state()` reflect the default `RobotConfig`
     values (not zero-initialized).
-- [ ] `python build.py --clean` zero errors.
-- [ ] `uv run python -m pytest -x --tb=short -q` at 2380/2 plus new tests.
-- [ ] Existing `test_config_registry.py` and `test_config_set.py` pass unchanged.
+- [x] `python build.py --clean` zero errors.
+- [x] `uv run python -m pytest -x --tb=short -q` at 2380/2 plus new tests (2408/2 total).
+- [x] Existing `test_config_registry.py` and `test_config_set.py` pass unchanged.
 
 ## Implementation Plan
 
