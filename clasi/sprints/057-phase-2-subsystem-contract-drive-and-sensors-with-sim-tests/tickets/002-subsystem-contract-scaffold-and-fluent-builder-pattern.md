@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Subsystem contract scaffold and fluent-builder pattern
-status: open
+status: done
 use-cases:
 - SUC-002
 depends-on:
@@ -64,14 +64,14 @@ It does NOT implement a full subsystem — that is tickets 003 and 004.
 
 ## Acceptance Criteria
 
-- [ ] `source/subsystems/SubsystemContract.h` exists and documents the 3-message /
+- [x] `source/subsystems/SubsystemContract.h` exists and documents the 3-message /
       4-verb convention, fluent-builder form, `CommandBatch`-return tick, two-phase
       Drive split, and apply-stages-only semantics.
-- [ ] `source/subsystems/sensors/SensorsState.h` exists with `subsystems::SensorsState`
+- [x] `source/subsystems/sensors/SensorsState.h` exists with `subsystems::SensorsState`
       holding `msg::LineSensorState line` and `msg::ColorSensorState color`.
-- [ ] Both headers compile under `-std=c++11 -fno-rtti -fno-exceptions` (verified by
+- [x] Both headers compile under `-std=c++11 -fno-rtti -fno-exceptions` (verified by
       `python build.py --clean`).
-- [ ] No existing tests broken (`uv run python -m pytest` baseline green).
+- [x] No existing tests broken (`uv run python -m pytest` baseline green).
 
 ## Testing Plan
 
