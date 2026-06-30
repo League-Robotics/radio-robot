@@ -1,5 +1,8 @@
 ---
-status: pending
+status: done
+sprint: 058
+tickets:
+- 058-001
 ---
 
 # Sim: encoder error injection + dual-noisy-source EKF fusion test

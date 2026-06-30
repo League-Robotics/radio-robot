@@ -76,6 +76,14 @@ public:
     // promoting new plant values, so positionMm() holds its last cached value.
     void setFrozen(bool frozen) { _frozen = frozen; }
 
+    // Encoder error injection (ticket 058-001): per-wheel scale error and slip,
+    // forwarded to the plant's reported-encoder error model.  Defaults to zero
+    // (no-op) so a fresh SimMotor is PERFECT.
+    //   err:      fractional scale error (0 = perfect, 0.05 = 5% over-report).
+    //   fraction: fraction of motion not registered (0 = perfect, 0.05 = 5% slip).
+    void setScaleError(float err);
+    void setSlip(float fraction);
+
     // Test accessors
     int8_t cmdSpeed() const { return _cmdSpeed; }
 
