@@ -1,16 +1,8 @@
 """
-test_059_ordered_tick_parity.py — Ordered-tick parity tests (ticket 059-005).
+test_059_ordered_tick_parity.py — Ordered-tick behavioural tests (ticket 059-005).
 
-Verifies byte-plausible parity for VW and TURN commands run through the sim.
-
-These tests are written against the DEFAULT (legacy) loopTickOnce path —
-USE_ORDERED_TICK is NOT defined in the standard sim build.  They serve as:
-
-  1. A REGRESSION GUARD for the default loop (the live production path).
-  2. The parity oracle for the ordered-tick path once it becomes default.
-
-When USE_ORDERED_TICK is enabled and the full-robot tests all pass at 2408/2,
-these assertions define the acceptance criteria for the live cutover.
+Verifies behavioural correctness for VW and TURN commands run through the sim
+against the ordered-tick path (the sole loopTickOnce path as of 060-005).
 
 Two test scenarios
 ------------------
@@ -29,21 +21,6 @@ test_turn_parity
       - Final heading is within 2° of π/2 (0.035 rad tolerance, per
         the ticket acceptance criterion).
       - The fused pose heading (estimate) is ≥ 1.4 rad (close to π/2).
-
-Parity note
------------
-Under the default legacy path these tests pass with normal sim dynamics.
-Under the ordered-tick path (USE_ORDERED_TICK defined), if these same
-assertions hold the full-robot suite must ALSO be verified at 2408/2
-before declaring live cutover.  The ordered-tick path is currently
-feature-flagged OFF by default (see LoopTickOnce.cpp comment block).
-
-Parity gaps that prevent live cutover today (documented in ticket 059-005):
-  a) Drive2 owns a private _hw; buildTlmFrame still reads robot.state.actual.
-  b) MotorController's setCommandsRef is wired to robot.state.outputs in the
-     Robot constructor, not Drive2's _outputs, so BVC output flows correctly
-     through the legacy MotorController path regardless of which loop is active.
-  c) Sensors.tick() runs its own lag timers independent of LoopTickState.
 """
 from __future__ import annotations
 
@@ -161,8 +138,7 @@ def test_turn_parity(sim):
     # seed sim).  The ticket acceptance criterion states "within 2° of target"
     # for the real firmware; the sim noise model relaxes this to 5° because the
     # MockMotor integrates encoder noise that the real hardware does not have.
-    # When USE_ORDERED_TICK is live-default (after parity cutover), both paths
-    # must pass this same gate.
+    # Gate applies to the ordered-tick path (sole path since 060-005).
     target_rad = math.pi / 2.0
     tolerance_rad = 0.087   # 5° in radians
     assert abs(ph_wrapped - target_rad) <= tolerance_rad, (
@@ -174,8 +150,8 @@ def test_turn_parity(sim):
 
     # Spot-turn: x and y should not have drifted significantly.
     assert abs(px) < 30.0, (
-        f"TURN parity: pose_x={px:.1f} mm — excessive x drift on a spot turn."
+        f"TURN: pose_x={px:.1f} mm — excessive x drift on a spot turn."
     )
     assert abs(py) < 30.0, (
-        f"TURN parity: pose_y={py:.1f} mm — excessive y drift on a spot turn."
+        f"TURN: pose_y={py:.1f} mm — excessive y drift on a spot turn."
     )

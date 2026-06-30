@@ -63,14 +63,6 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       motionController(motorController, estimate.odometry(), config),
       portController(portio),
       servoController(gripper),
-      // Phase E (043-002) Drive subsystem — wired with the IMotor& device refs
-      // (motorL, motorR), motorController, estimate, state.inputs, state.commands,
-      // and config.  Declaration order in Robot.h puts `drive` after all of these,
-      // so the refs are live here.  The five filter-streak members it owns are
-      // value-initialised inside Drive (same initial values as the former Robot
-      // fields).  See architecture-update.md OQ-1/OQ-2.
-      drive(motorL, motorR, motorController, estimate,
-            state.actual, state.outputs, config),
       // Phase E (043-001) sensor subsystems — wired with their device ref,
       // state.actual (ActualState / HardwareState alias), and config.
       // Declaration order in Robot.h puts these after the refs they bind.
@@ -118,26 +110,15 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
                       subsystems::toColorSensorConfig(config));
     planner.configure(toPlannerConfig(config));
     motionController.setHardwareState(&state.actual);
-    // 060-002: In the ordered-tick path, Drive2's constructor already called
-    // _mc.setCommandsRef(&_outputs), binding MotorController to drive2._outputs.
-    // We must NOT override that binding here, or drive2.outputs() will be stale.
-    // In the legacy path (sim + unguarded firmware), state.outputs is still the
-    // correct sink — keep the call under #ifndef USE_ORDERED_TICK.
-#ifndef USE_ORDERED_TICK
-    motorController.setCommandsRef(&state.outputs);
-#endif
-    // 047-003: wire BVC → DesiredState publish so bodyTwist/bodyTwistRaw are
-    // updated every advance() tick.
+    // 060-002: Drive2's constructor already called _mc.setCommandsRef(&_outputs),
+    // binding MotorController to drive2._outputs.  Do NOT override that binding
+    // here, or drive2.outputs() will be stale.
     //
-    // 060-004: In the ordered-tick path, MotionController2's constructor already
-    // called _mc.setBvcStateRef(&planner._desired) so that planner.tick() reads
-    // the BVC body-twist output from planner._desired.  We must NOT override that
-    // binding here, or planner.tick() will read stale zeros from _desired.bodyTwist
-    // (its own private member) while BVC writes to robot.state.desired instead.
-    // In the legacy path, state.desired is still the correct target.
-#ifndef USE_ORDERED_TICK
-    motionController.setBvcStateRef(&state.desired);
-#endif
+    // 060-004: MotionController2's constructor already called
+    // _mc.setBvcStateRef(&planner._desired) so that planner.tick() reads the BVC
+    // body-twist output from planner._desired.  Do NOT override that binding here
+    // or planner.tick() will read stale zeros from _desired.bodyTwist while BVC
+    // writes to robot.state.desired instead.
     // setRobotCtx replaces setCtx (sprint 026-002): MotionCtx now lives in Robot.
     motionController.setRobotCtx(this);
     // Initialise _motionCtx (sprint 026-002): mc and robot pointers; queue wired
@@ -175,11 +156,8 @@ uint32_t Robot::systemTime() const
 // Its body moved into loopTickOnce()'s CONTROL COLLECT block (verbatim, 039-002)
 // and the per-loop encoder read moved into Hardware::tick(now) → Motor::tick().
 // Phase E (043-002): the CONTROL COLLECT block then moved VERBATIM into
-// subsystems::Drive::periodic(now, fn, ctx), and the per-wheel streak/wedge state
-// members it used (_filterRejectStreakL/R, _prevDriving, _lastControlMs,
-// _prevAnyWedged, kFilterRejectStreakThreshold) moved off Robot onto Drive as
-// value members.  loopTickOnce now calls robot.drive.periodic(...) in the same
-// position the inline block ran (before cmd.dequeueOne).
+// subsystems::Drive::periodic(now, fn, ctx) and is now deleted together with the
+// legacy loop branch in 060-005.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -366,13 +344,11 @@ void Robot::resetEncoders()
     //    on the very next tick rather than (0 - _prevEncL) = large negative.
     estimate.rebaselinePrev(0.0f, 0.0f);
 
-    // 4. 060-004: In ordered-tick path, Drive2 owns an independent encoder
-    //    baseline in _hw.encMm[].  Reset it so tickUpdate() sees 0 delta after
-    //    the hardware reset, and LoopTickOnce.cpp's sync block copies 0 back
-    //    into state.actual.encMm[] (not the stale pre-reset accumulator).
-#ifdef USE_ORDERED_TICK
+    // 4. 060-004: Drive2 owns an independent encoder baseline in _hw.encMm[].
+    //    Reset it so tickUpdate() sees 0 delta after the hardware reset, and
+    //    LoopTickOnce.cpp's sync block copies 0 back into state.actual.encMm[]
+    //    (not the stale pre-reset accumulator).
     drive2.resetEncoders();
-#endif
 }
 
 // ---------------------------------------------------------------------------

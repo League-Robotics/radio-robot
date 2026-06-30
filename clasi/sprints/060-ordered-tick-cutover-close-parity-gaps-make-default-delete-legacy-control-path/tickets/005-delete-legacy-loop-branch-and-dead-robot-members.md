@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: Delete legacy loop branch and dead Robot members
-status: open
+status: done
 use-cases:
 - SUC-005
 depends-on:
@@ -66,13 +66,13 @@ deleted. `grep -r USE_ORDERED_TICK source/ tests/` returns nothing.
 
 ## Acceptance Criteria
 
-- [ ] `LoopTickOnce.cpp` contains no `#ifndef USE_ORDERED_TICK` / `#ifdef` / `#else` / `#endif` guards.
-- [ ] `source/subsystems/drive/Drive.h` and `Drive.cpp` (the old legacy Drive) do not exist.
-- [ ] `Robot.h` has no `subsystems::Drive drive` member declaration.
-- [ ] `_tlmBoundFn` / `_tlmBoundCtx` are deleted from `Robot.h/.cpp` (if no live call sites found) OR retained with a comment documenting the live call site.
-- [ ] `grep -r USE_ORDERED_TICK source/ tests/` returns nothing.
-- [ ] Codebase compiles cleanly.
-- [ ] `uv run python -m pytest` — green except the 2 known-baseline failures.
+- [x] `LoopTickOnce.cpp` contains no `#ifndef USE_ORDERED_TICK` / `#ifdef` / `#else` / `#endif` guards.
+- [x] `source/subsystems/drive/Drive.h` and `Drive.cpp` (the old legacy Drive) do not exist.
+- [x] `Robot.h` has no `subsystems::Drive drive` member declaration.
+- [x] `_tlmBoundFn` / `_tlmBoundCtx` are deleted from `Robot.h/.cpp` (if no live call sites found) OR retained with a comment documenting the live call site. (RETAINED: live call sites in SystemCommands.cpp, LoopScheduler.cpp, RobotTelemetry.cpp, sim_api.cpp — per criteria the fields remain with their existing documentation comment.)
+- [x] `grep -r USE_ORDERED_TICK source/ tests/` returns nothing.
+- [x] Codebase compiles cleanly.
+- [x] `uv run python -m pytest` — green except the 2 known-baseline failures.
 
 ## Implementation Plan
 

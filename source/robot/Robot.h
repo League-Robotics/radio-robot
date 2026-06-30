@@ -25,10 +25,6 @@
 #include "../subsystems/sensors/LineSensor.h"
 #include "../subsystems/sensors/ColorSensor.h"
 #include "../subsystems/sensors/Ports.h"
-// Phase E (043-002): Drive subsystem owning the CONTROL COLLECT block (outlier
-// filter + controlTick + wedge push).  Value member declared after the refs it
-// binds (motorL/motorR, motorController, estimate).
-#include "../subsystems/drive/Drive.h"
 // Phase E (043-003): Gripper subsystem — structural seam for the optional servo
 // actuator (+ GripperIONull null-object).  periodic()/updateInputs() are no-ops;
 // NOT wired into loopTickOnce this sprint (gripper is command-driven via
@@ -108,17 +104,14 @@ struct Robot {
     // ---- Owned control-layer members (depend on refs above) ----
     MotorController     motorController;   // (motorL, motorR, config)
     PhysicalStateEstimate estimate;        // default ctor; wraps Odometry+EKF (041-003)
+    // 060-005 NOTE: MotionController remains a public Robot value member for now.
+    // Removing it from the Robot public surface (making MC2 own it as a private
+    // value member) requires rerouting all direct call sites in SystemCommands.cpp,
+    // MotionCommands.cpp, MotionControllerBegin.cpp, RobotTelemetry.cpp, Robot.cpp,
+    // and otosCorrect() — a structural refactor deferred to a follow-on ticket.
     MotionController    motionController;  // (motorController, estimate.odometry(), config)
     PortController      portController;    // (portio)
     ServoController     servoController;   // (gripper)
-    // Phase E (043-002) Drive subsystem — owns the CONTROL COLLECT block (outlier
-    // filter + motorController.controlTick() + wedge push into estimate) that was
-    // an inline block in loopTickOnce.  Binds the IMotor& device refs (motorL,
-    // motorR), motorController, estimate, state.inputs, state.commands, and config
-    // — all declared above, so they are live when this member constructs (C++
-    // inits in declaration order).  The five filter-streak members that used to
-    // live on Robot moved into Drive as value members (OQ-1: no external accesses).
-    subsystems::Drive   drive;             // (motorL, motorR, motorController, estimate, state.inputs, state.commands, config)
     // Phase E (043-001) sensor subsystems — own the timed LINE/COLOUR/PORTS reads
     // that were inline blocks in loopTickOnce.  Each binds the device-interface ref
     // (line / colorSensor / portio), state.inputs, and config — all declared above,
@@ -241,12 +234,6 @@ struct Robot {
     // ---- Gating state that pairs with the kept methods ----
     uint32_t _lastTlmMs     = 0;
     uint32_t _lastActiveMs  = 0;
-
-    // Phase E (043-002): the CONTROL COLLECT filter-streak state moved onto the
-    // Drive subsystem (subsystems::Drive value members).  These five members —
-    // _lastControlMs, _prevDriving, _prevAnyWedged, _filterRejectStreakL/R — plus
-    // the kFilterRejectStreakThreshold constant now live on Drive.  OQ-1 grep
-    // confirmed no code path outside the relocated CONTROL COLLECT block read them.
 
     // ---- D10 telemetry: sequence counter + channel binding (028-005) ----
     // _tlmSeq: monotonically incrementing uint16 emitted as seq=<n> in every

@@ -79,14 +79,6 @@ public:
     // Read-only state snapshot — no I/O, no copy.
     const msg::DrivetrainState& state() const { return _state; }
 
-    // projectFromLegacy — copy encoder/pose/vel/twist/otos fields from a
-    // legacy HardwareState snapshot into _state, without running any motor
-    // control or EKF logic.  Used by the legacy loopTickOnce path so that
-    // buildTlmFrame (which reads drive2.state()) sees live values during the
-    // transitional period before USE_ORDERED_TICK is the default.
-    // Deleted together with the legacy loop branch in ticket 060-005.
-    void projectFromLegacy(const HardwareState& hw);
-
     // Read-only access to the internal actuator outputs (for sim tick ordering).
     // The MotorController writes pwm[] here each controlTick; the sim plant needs
     // these to advance the physics model.
