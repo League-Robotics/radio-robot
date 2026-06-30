@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package robot;
+
+import "common.proto";
+
+// ---------------------------------------------------------------------------
+// Motor subsystem messages
+// ---------------------------------------------------------------------------
+
+// Command for a single motor: one control mode (oneof) + optional feedforward.
+message MotorCommand {
+  oneof control {
+    float   duty_cycle    = 1;  // fractional [-1, 1]
+    float   voltage       = 2;  // volts
+    float   velocity_mmps = 3;  // mm/s
+    float   position_mm   = 4;  // mm (requires onboard_position capability)
+    Neutral neutral       = 5;  // BRAKE or COAST
+  }
+  optional float feedforward = 6;  // voltage feedforward added on top of PID output
+}
+
+// Read-only snapshot of a motor's observed state.
+message MotorState {
+  bool            connected     = 1;
+  optional float  position_mm   = 2;
+  optional float  velocity_mmps = 3;
+  optional float  applied_pct   = 4;  // applied duty cycle fraction [-1, 1]
+  optional bool   wedged        = 5;  // true if motor appears stalled/jammed
+}
+
+// Configuration parameters for a motor.
+message MotorConfig {
+  float  mm_per_deg = 1;  // linear travel per degree of shaft rotation
+  int32  fwd_sign   = 2;  // +1 or -1: physical forward direction correction
+}
+
+// Declared motor capabilities.
+message MotorCapabilities {
+  bool onboard_position = 1;
+  bool has_encoder      = 2;
+}

@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+package robot;
+
+import "options.proto";
+
+// ---------------------------------------------------------------------------
+// Shared geometric and kinematic value types
+// ---------------------------------------------------------------------------
+
+// 2-D pose: position in mm, heading in radians.
+message Pose2D {
+  float x_mm  = 1;
+  float y_mm  = 2;
+  float h_rad = 3;
+}
+
+// Body-frame twist for differential (non-holonomic) drivetrains.
+message BodyTwist {
+  float v_mmps    = 1;  // forward speed, mm/s
+  float omega_rads = 2; // angular rate, rad/s
+}
+
+// Body-frame twist for holonomic (3-DOF) drivetrains.
+message BodyTwist3 {
+  float vx_mmps    = 1;
+  float vy_mmps    = 2;
+  float omega_rads = 3;
+}
+
+// Body-frame acceleration (holonomic).
+message BodyAccel {
+  float ax_mmps2 = 1;
+  float ay_mmps2 = 2;
+}
+
+// Sensor freshness and validity stamp.
+message ValueSet {
+  uint32 lag_ms     = 1;
+  uint32 last_upd_ms = 2;
+  bool   valid      = 3;
+}
+
+// A pose+twist snapshot with a validity stamp.
+message PoseEstimate {
+  Pose2D    pose  = 1;
+  BodyTwist3 twist = 2;
+  ValueSet  stamp = 3;
+}
+
+// Per-wheel target; nullable fields mean "don't command this axis".
+message WheelTarget {
+  optional float speed_mmps  = 1;  // null → don't command speed
+  optional float position_mm = 2;  // null → don't command position
+}
+
+// PID + feedforward gains for a velocity controller.
+message Gains {
+  float kp    = 1;
+  float ki    = 2;
+  float kff   = 3;
+  float i_max = 4;
+  float kaw   = 5;  // anti-windup coefficient
+}
+
+// Motor neutral mode.
+enum Neutral {
+  BRAKE = 0;
+  COAST = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Inter-subsystem command bus types
+// ---------------------------------------------------------------------------
+
+// Compact routable command emitted by tick() onto the command bus.
+// verb_id identifies the target subsystem + action; args are the payload.
+message OutCommand {
+  uint32 verb_id  = 1;
+  repeated float args = 2 [(max_count) = 4];
+  uint32 argc     = 3;
+  bool   priority = 4;  // true → push_front (safety/ESTOP)
+}
+
+// Fixed-capacity batch of OutCommands returned by tick().
+message CommandBatch {
+  repeated OutCommand cmds = 1 [(max_count) = 8];
+  uint32 count = 2;
+}
+
+// Declared capability axes: which command modes are accepted and which
+// state fields are populated.
+message Capabilities {
+  repeated uint32 command_modes    = 1 [(max_count) = 8];
+  repeated uint32 state_fields     = 2 [(max_count) = 16];
+  bool     holonomic               = 3;
+  bool     onboard_position        = 4;
+  uint32   wheel_count             = 5;
+}

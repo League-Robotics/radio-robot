@@ -1,0 +1,110 @@
+syntax = "proto3";
+
+package robot;
+
+import "common.proto";
+import "options.proto";
+
+// ---------------------------------------------------------------------------
+// Drivetrain subsystem messages
+// ---------------------------------------------------------------------------
+
+// Imperative re-anchor of the fused pose estimate (the old SI verb).
+// This is a Drive *command* (not config) — Drive owns the estimator.
+message SetPose {
+  float x_mm  = 1;
+  float y_mm  = 2;
+  float h_rad = 3;
+}
+
+// Per-wheel target array; w[] has exactly kWheelCount entries.
+message WheelTargets {
+  repeated WheelTarget w = 1 [(max_count) = 4];
+}
+
+// Command for the drivetrain subsystem.
+// SetPose is a variant here (not in PlannerCommand).
+// vy in twist is only honored when capabilities().holonomic.
+message DrivetrainCommand {
+  oneof control {
+    BodyTwist3   twist   = 1;  // body-frame velocity setpoint
+    WheelTargets wheels  = 2;  // direct per-wheel speed/position
+    Neutral      neutral = 3;  // BRAKE | COAST
+    SetPose      pose    = 4;  // imperative pose re-anchor
+  }
+  optional bool seed = 5;  // immediate-seed (S-command semantics)
+}
+
+// Read-only snapshot of the drivetrain's belief and diagnostics.
+// Consumers above the boundary depend only on `fused`; per-wheel fields are
+// read-only diagnostics (telemetry/replay).
+message DrivetrainState {
+  PoseEstimate fused            = 1;  // authoritative boundary-crossing belief
+  PoseEstimate encoder          = 2;  // diagnostic: dead-reckoned
+  PoseEstimate optical          = 3;  // diagnostic: raw OTOS
+  repeated float enc_mm         = 4  [(max_count) = 4];  // per-wheel encoder distance (diagnostic)
+  repeated float vel_mms        = 5  [(max_count) = 4];  // per-wheel velocity mm/s (diagnostic)
+  ValueSet   enc                = 6;   // encoder freshness
+  ValueSet   otos               = 7;   // OTOS freshness
+  repeated bool wheel_wedged    = 8  [(max_count) = 4];
+  bool       connected          = 9;
+}
+
+// Full drive configuration slice: geometry, PID gains, OTOS fusion, EKF noise.
+// Motion limits (a_max, v_body_max, yaw_rate_max) are NOT here — they belong
+// to PlannerConfig.
+message DrivetrainConfig {
+  // Differential geometry
+  int32  fwd_sign_l           = 1;
+  int32  fwd_sign_r           = 2;
+  float  mm_per_deg_l         = 3;
+  float  mm_per_deg_r         = 4;
+  float  trackwidth_mm        = 5;
+  // Mecanum/holonomic geometry
+  float  half_track_mm        = 6;
+  float  half_wheelbase_mm    = 7;
+  repeated float mm_per_deg_wheel = 8  [(max_count) = 4];
+  repeated int32 fwd_sign_wheel   = 9  [(max_count) = 4];
+  // Velocity saturation
+  float  v_wheel_max          = 10;
+  float  steer_headroom       = 11;
+  // Velocity PID
+  Gains  vel_gains            = 12;
+  float  vel_filt_alpha       = 13;
+  float  sync_gain            = 14;
+  float  min_wheel_mms        = 15;
+  // OTOS fusion
+  float  alpha_pos            = 16;
+  float  alpha_yaw            = 17;
+  float  otos_gate            = 18;
+  float  otos_linear_scale    = 19;
+  float  otos_angular_scale   = 20;
+  float  rotation_gain_pos    = 21;
+  float  rotation_gain_neg    = 22;
+  float  rotation_offset_deg  = 23;
+  float  rotation_offset_deg_neg = 24;
+  float  rotational_slip      = 25;
+  float  odom_off_x           = 26;
+  float  odom_off_y           = 27;
+  float  odom_yaw_deg         = 28;
+  bool   odom_upside_down     = 29;
+  // EKF noise parameters
+  float  ekf_q_xy             = 30;
+  float  ekf_q_theta          = 31;
+  float  ekf_r_otos_xy        = 32;
+  float  ekf_r_otos_theta     = 33;
+  float  ekf_q_v              = 34;
+  float  ekf_q_omega          = 35;
+  float  ekf_r_otos_v         = 36;
+  float  ekf_r_enc_v          = 37;
+  uint32 lag_otos_ms          = 38;
+  // Drivetrain type selector (kinematics variant)
+  int32  drivetrain_type      = 39;
+}
+
+// Declared drivetrain capabilities.
+message DrivetrainCapabilities {
+  bool   holonomic         = 1;
+  bool   onboard_position  = 2;
+  uint32 wheel_count       = 3;
+}

@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package robot;
+
+import "common.proto";
+import "options.proto";
+
+// ---------------------------------------------------------------------------
+// Sensors subsystem messages — pure-observation, no Command message.
+// Line and color sensors are two independent read-only units aggregated
+// under a common Sensors facade.
+// ---------------------------------------------------------------------------
+
+// Read-only snapshot of the line sensor array.
+message LineSensorState {
+  repeated uint32 raw        = 1 [(max_count) = 4];
+  repeated uint32 normalized = 2 [(max_count) = 4];
+  ValueSet        stamp      = 3;
+  bool            connected  = 4;
+}
+
+// Configuration for the line sensor array.
+message LineSensorConfig {
+  uint32 lag_line_ms            = 1;
+  uint32 threshold              = 2;
+  uint32 norm_min               = 3;
+  uint32 norm_max               = 4;
+  repeated uint32 channel_map   = 5 [(max_count) = 4];
+}
+
+// Read-only snapshot of the color sensor.
+message ColorSensorState {
+  uint32   r         = 1;
+  uint32   g         = 2;
+  uint32   b         = 3;
+  uint32   c         = 4;  // clear/ambient channel
+  ValueSet stamp     = 5;
+  bool     connected = 6;
+}
+
+// Configuration for the color sensor.
+message ColorSensorConfig {
+  uint32 lag_color_ms = 1;
+  uint32 integration  = 2;
+  uint32 gain         = 3;
+  float  cal_r        = 4;  // color calibration scale factors
+  float  cal_g        = 5;
+  float  cal_b        = 6;
+}

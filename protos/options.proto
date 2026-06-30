@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package robot;
+
+import "google/protobuf/descriptor.proto";
+
+// Custom field options for robot message schemas.
+//
+// (units)     — string metadata describing physical units of a field
+//               (e.g., "mm/s^2", "rad/s"). Informational only; not used at runtime.
+// (max_count) — declares the maximum number of elements in a repeated field.
+//               Used by gen_messages.py to emit fixed-capacity C++ arrays.
+
+extend google.protobuf.FieldOptions {
+  optional string units     = 50000;
+  optional uint32 max_count = 50001;
+}
