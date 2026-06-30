@@ -1,7 +1,7 @@
 ---
 id: '007'
 title: 'Bench-parity prep: firmware build + parity checklist for tovez'
-status: open
+status: done
 use-cases:
 - SUC-007
 depends-on:
@@ -78,11 +78,11 @@ with the new firmware:
 
 ## Acceptance Criteria
 
-- [ ] Firmware builds cleanly: `python3 build.py --clean` succeeds with no errors.
-- [ ] MICROBIT.hex exists and is non-trivially sized (confirms no silent build failure).
-- [ ] Bench checklist is documented (in this ticket or as a committed file).
-- [ ] `uv run python -m pytest` — green except the 2 known-baseline failures (final sprint-close verification).
-- [ ] Physical bench run is executed by the stakeholder (not part of ticket-done criteria — stakeholder confirms separately).
+- [x] Firmware builds cleanly: `python3 build.py --clean` succeeds with no errors.
+- [x] MICROBIT.hex exists and is non-trivially sized (confirms no silent build failure).
+- [x] Bench checklist is documented (in this ticket or as a committed file).
+- [x] `uv run python -m pytest` — green except the 2 known-baseline failures (final sprint-close verification).
+- [ ] Physical bench run is executed by the stakeholder (not part of ticket-done criteria — deferred to stakeholder).
 
 ## Implementation Plan
 
