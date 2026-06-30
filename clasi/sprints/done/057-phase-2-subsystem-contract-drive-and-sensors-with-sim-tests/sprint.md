@@ -1,7 +1,7 @@
 ---
 id: '057'
 title: Phase 2 - Subsystem contract, Drive and Sensors with sim tests
-status: planning-docs
+status: done
 branch: sprint/057-phase-2-subsystem-contract-drive-and-sensors-with-sim-tests
 use-cases:
 - SUC-001
