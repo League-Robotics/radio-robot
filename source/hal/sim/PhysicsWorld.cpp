@@ -72,8 +72,14 @@ void PhysicsWorld::update(uint32_t dt_ms) {
     float noisyL = velL * (1.0f - encSlip);
     float noisyR = velR * (1.0f - encSlip);
 #endif
-    _reportedEncLMm += noisyL * dt_s;
-    _reportedEncRMm += noisyR * dt_s;
+    // Encoder error injection (ticket 058-001): apply per-wheel scale error and
+    // slip to the reported delta AFTER the legacy slip+noise step, before
+    // accumulation.  True accumulator is untouched — ground truth is preserved.
+    // Both default to zero (1.0f * 1.0f = no change) so golden-TLM is unaffected.
+    float deltaL = noisyL * dt_s * (1.0f + _encScaleErrL) * (1.0f - _encSlipL);
+    float deltaR = noisyR * dt_s * (1.0f + _encScaleErrR) * (1.0f - _encSlipR);
+    _reportedEncLMm += deltaL;
+    _reportedEncRMm += deltaR;
 
     // -----------------------------------------------------------------------
     // Sub-step B: chassis pose integration (NOT on the TLM path; clean formula).

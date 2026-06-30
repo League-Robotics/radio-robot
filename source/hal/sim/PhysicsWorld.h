@@ -143,6 +143,23 @@ public:
         if (side == 1 || side > 1) _encNoiseSigmaR = sigmaMm;
     }
 
+    // Encoder error injection (ticket 058-001): per-wheel scale error and slip
+    // applied to the REPORTED encoder accumulator only.  The true accumulator
+    // (_trueEncLMm / _trueEncRMm) and chassis pose remain unaffected — ground
+    // truth is preserved and golden-TLM parity holds when both are zero (default).
+    //
+    // side: 0 = left, 1 = right, 2 = both.
+    // err:  fractional scale error (0 = perfect, 0.05 = 5% over-report).
+    // slip: fraction of motion not registered (0 = perfect, 0.05 = 5% under-report).
+    void setEncoderScaleError(int side, float err) {
+        if (side == 0 || side > 1) _encScaleErrL = err;
+        if (side == 1 || side > 1) _encScaleErrR = err;
+    }
+    void setEncoderSlip(int side, float fraction) {
+        if (side == 0 || side > 1) _encSlipL = fraction;
+        if (side == 1 || side > 1) _encSlipR = fraction;
+    }
+
     void setTrackwidth(float mm)    { _trackwidthMm = mm; }
     void setNominalMaxMms(float v)  { _nominalMaxMms = v; }
 
@@ -252,6 +269,13 @@ private:
     float _turnRate       = 0.0f;
     float _encNoiseSigmaL = 0.0f;
     float _encNoiseSigmaR = 0.0f;
+
+    // Encoder error injection (ticket 058-001): per-wheel scale error and slip
+    // applied to the REPORTED encoder accumulator only.  Default zero = no effect.
+    float _encScaleErrL = 0.0f;  // fractional over/under-report (0 = perfect)
+    float _encScaleErrR = 0.0f;
+    float _encSlipL     = 0.0f;  // fraction of motion not registered (0 = perfect)
+    float _encSlipR     = 0.0f;
 
 public:
     // Per-tick turn rate (set by SimHardware before update()); used only by the

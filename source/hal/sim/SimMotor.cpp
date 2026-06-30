@@ -70,3 +70,13 @@ void SimMotor::tick(uint32_t now_ms) {
 void SimMotor::setNoiseSigma(float sigmaMm) {
     _mut.setEncoderNoise(sideIdx(), sigmaMm);
 }
+
+// Encoder error injection (ticket 058-001): forward to the plant's per-wheel
+// reported-encoder error model.  The true accumulator is untouched.
+void SimMotor::setScaleError(float err) {
+    _mut.setEncoderScaleError(sideIdx(), err);
+}
+
+void SimMotor::setSlip(float fraction) {
+    _mut.setEncoderSlip(sideIdx(), fraction);
+}

@@ -223,6 +223,19 @@ float drive2_api_get_target_mms_r(void* h)
 }
 
 // ---------------------------------------------------------------------------
+// Sensor initialization (ticket 058-001)
+// ---------------------------------------------------------------------------
+
+// Initialize the SimOdometer (OTOS sim sensor) so Drive2's OTOS correction
+// path activates.  Must be called before enable_otos_sim_model if optical
+// fusion is required in the test.  Mirrors Robot::begin() → otos.begin().
+void drive2_api_begin_otos(void* h)
+{
+    Drive2Handle* d = static_cast<Drive2Handle*>(h);
+    d->hal.otos().begin();
+}
+
+// ---------------------------------------------------------------------------
 // Noise / error-model injection (ticket 057-005)
 // ---------------------------------------------------------------------------
 
@@ -253,6 +266,31 @@ void drive2_api_enable_otos_sim_model(void* h,
     odom.setDriftPerTickRad(drift_per_tick_rad);
     odom.setLinearScaleError(linear_scale_err);
     odom.setAngularScaleError(angular_scale_err);
+}
+
+// ---------------------------------------------------------------------------
+// Encoder error-model injection (ticket 058-001)
+// ---------------------------------------------------------------------------
+
+// Configure per-wheel encoder error on both SimMotors.
+// Mirrors drive2_api_enable_otos_sim_model for the encoder path.
+//
+//   slip_l / slip_r:         fraction of motion not registered (0 = perfect,
+//                            0.05 = 5% under-report) — applied to REPORTED
+//                            encoder only; ground-truth pose is unaffected.
+//   scale_err_l / scale_err_r: fractional over/under-report of motion
+//                            (0 = perfect, 0.05 = 5% over-report).
+void drive2_api_enable_encoder_sim_model(void* h,
+                                         float slip_l,
+                                         float slip_r,
+                                         float scale_err_l,
+                                         float scale_err_r)
+{
+    Drive2Handle* d = static_cast<Drive2Handle*>(h);
+    d->hal.simMotorL().setSlip(slip_l);
+    d->hal.simMotorR().setSlip(slip_r);
+    d->hal.simMotorL().setScaleError(scale_err_l);
+    d->hal.simMotorR().setScaleError(scale_err_r);
 }
 
 // ---------------------------------------------------------------------------
