@@ -122,6 +122,8 @@ add_library(firmware_host SHARED
     "${CMAKE_SOURCE_DIR}/drive2_api.cpp"
     # 059-001: C-ABI shims for MotionController2 (Planner) subsystem isolation tests.
     "${CMAKE_SOURCE_DIR}/planner_api.cpp"
+    # 059-003: C-ABI shims for BusDrain (command-queue bus drain/route) tests.
+    "${CMAKE_SOURCE_DIR}/bus_drain_api.cpp"
 )
 
 target_include_directories(firmware_host PRIVATE

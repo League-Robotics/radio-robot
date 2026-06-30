@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Command-queue bus drain and route
-status: open
+status: done
 use-cases:
 - SUC-003
 depends-on:
@@ -33,7 +33,7 @@ test shim (ticket 002) to verify routing correctness in isolation.
 
 ## Acceptance Criteria
 
-- [ ] `source/robot/BusDrain.h` declares:
+- [x] `source/robot/BusDrain.h` declares:
   ```cpp
   // Route every OutCommand in batch to its target subsystem.
   // Bounded: stops after kBusDrainMaxIters commands per call.
@@ -46,7 +46,7 @@ test shim (ticket 002) to verify routing correctness in isolation.
       CommandQueue&          queue,
       CommandProcessor&      cmd);
   ```
-- [ ] `source/robot/BusDrain.cpp` implements `drainCommandBatch()`:
+- [x] `source/robot/BusDrain.cpp` implements `drainCommandBatch()`:
   - Iterates over `batch.cmds_[0..batch.cmds_count-1]`.
   - For each `OutCommand`: dispatches by `verb_id` to the correct subsystem `apply()`.
     - Verb ID for `DrivetrainCommand::twist` → `drive2.apply(DrivetrainCommand{twist})`.
@@ -55,12 +55,12 @@ test shim (ticket 002) to verify routing correctness in isolation.
       `push_front` if `priority==true`).
   - Enforces `kBusDrainMaxIters = 8`; if exceeded, returns immediately (caller is
     responsible for emitting EVT if needed).
-- [ ] `kBusDrainMaxIters` is a named compile-time constant (not a magic number).
-- [ ] A `priority=true` `OutCommand` is routed via `queue.push_front()`.
-- [ ] `push_front` failure (queue full) is handled: the count is returned and the
+- [x] `kBusDrainMaxIters` is a named compile-time constant (not a magic number).
+- [x] A `priority=true` `OutCommand` is routed via `queue.push_front()`.
+- [x] `push_front` failure (queue full) is handled: the count is returned and the
   caller can emit `EVT bus_overflow` if needed (overflow of safety command is
   treated as EVT not assertion).
-- [ ] Unit test in `tests/simulation/unit/test_059_bus_drain.py`:
+- [x] Unit test in `tests/simulation/unit/test_059_bus_drain.py`:
   - `test_twist_command_routed_to_drive2` — build a `CommandBatch` with one
     `DrivetrainCommand{twist}`, call `drainCommandBatch`, verify `drive2.state()` reflects
     the applied command on the next `tickUpdate/tickAction`.
@@ -69,8 +69,8 @@ test shim (ticket 002) to verify routing correctness in isolation.
     the head of the queue.
   - `test_bounded_cascade_stops_at_max_iters` — build a `CommandBatch` with 10
     commands (> 8); verify `drainCommandBatch` returns 8 and does not process beyond.
-- [ ] `python build.py --clean` zero errors.
-- [ ] `uv run python -m pytest -x --tb=short -q` at 2380/2 plus new tests.
+- [x] `python build.py --clean` zero errors.
+- [x] `uv run python -m pytest -x --tb=short -q` at 2380/2 plus new tests.
 
 ## Implementation Plan
 
