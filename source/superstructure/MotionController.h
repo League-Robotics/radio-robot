@@ -52,6 +52,12 @@ public:
     // before the first tick).  Required so getPoseFloat() can read pose fields.
     void setHardwareState(HardwareState* s) { _hwState = s; }
 
+    // Read-only access to the authoritative HardwareState pointer.
+    // 060-004: Planner::tick() uses this to copy sensor (line/color)
+    // fields from robot.state.actual into its private _hw before driveAdvance(),
+    // so that MotionCommand::_stops[].evaluate() sees live sensor values.
+    const HardwareState* hardwareState() const { return _hwState; }
+
     // Entry points — called from Robot drive methods.
     // Each writes mode, deadline/goal, speed, and the reply sink into target,
     // and also captures into the private members for legacy compatibility.

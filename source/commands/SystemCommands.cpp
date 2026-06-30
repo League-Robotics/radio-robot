@@ -668,13 +668,11 @@ static void handleSI(const ArgList& args, const char* corrId,
     int32_t y_mm   = args.args[1].ival;
     int32_t h_cdeg = args.args[2].ival;
     // Direct path (legacy + live loop): reset the shared estimate and state.actual.
-    // This keeps the live loopTickOnce path working unchanged (ticket 059-005 has
-    // not yet cut over to drive2.tickUpdate as the authoritative SENSE source).
     robot->estimate.resetPose(robot->state.actual, x_mm, y_mm, h_cdeg);
-    // 059-004: also stage via drive2.apply(SetPose) so the new-arch Drive2 subsystem
-    // sees the same pose re-anchor.  Drive2::tickAction processes the staged command
+    // 059-004: also stage via drive.apply(SetPose) so the new-arch Drive subsystem
+    // sees the same pose re-anchor.  Drive::tickAction processes the staged command
     // and calls _est.resetPose on its own private _hw estimate.  Both the legacy path
-    // (robot->estimate above) and the new-arch path (drive2) are consistent.
+    // (robot->estimate above) and the new-arch path (drive) are consistent.
     // h_cdeg → rad: pi/18000 = 1.74532925e-4.
     {
         msg::DrivetrainCommand siCmd;
@@ -683,7 +681,7 @@ static void handleSI(const ArgList& args, const char* corrId,
         sp.y  = (float)y_mm;
         sp.h  = (float)h_cdeg * 1.74532925e-4f;
         siCmd.setPose(sp);
-        robot->drive2.apply(siCmd);
+        robot->drive.apply(siCmd);
     }
     // Re-anchor the OTOS to the SAME world fix so its absolute position+heading
     // observations agree with the controller pose, instead of dragging the EKF
@@ -1037,11 +1035,11 @@ std::vector<CommandDescriptor> Robot::buildCommandTable(
     // Populate stable context structs (members, so pointers are valid for the
     // lifetime of this Robot).
     // 059-004: wire subsystem pointers so handleSet can route annotated fields
-    // to drive2.configure() / planner.configure() / sensors.configure().
+    // to drive.configure() / planner.configure() / sensors.configure().
     _cfgCtx.cfg     = const_cast<RobotConfig*>(&config);
     _cfgCtx.mc      = const_cast<MotorController*>(&motorController);
-    _cfgCtx.drive2  = const_cast<subsystems::Drive2*>(&drive2);
-    _cfgCtx.planner = const_cast<MotionController2*>(&planner);
+    _cfgCtx.drive   = const_cast<subsystems::Drive*>(&drive);
+    _cfgCtx.planner = const_cast<Planner*>(&planner);
     _cfgCtx.sensors = const_cast<subsystems::Sensors*>(&sensors);
     _sysCtx.robot = const_cast<Robot*>(this);
     _sysCtx.sched = sched;

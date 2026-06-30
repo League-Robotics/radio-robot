@@ -1,5 +1,14 @@
 ---
-status: pending
+status: in-progress
+sprint: '060'
+tickets:
+- 060-001
+- 060-002
+- 060-003
+- 060-004
+- 060-005
+- 060-006
+- 060-007
 ---
 
 # Make the ordered-tick loop the default and delete ALL legacy control-path code

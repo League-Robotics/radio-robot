@@ -9,10 +9,10 @@
 #include "ConfigRegistry.h"
 #include "../commands/CommandProcessor.h"
 #include "../control/MotorController.h"
-#include "../subsystems/drive/Drive2.h"
+#include "../subsystems/drive/Drive.h"
 #include "../subsystems/sensors/Sensors.h"
 #include "../subsystems/sensors/SensorsConfig.h"
-#include "../superstructure/MotionController2.h"
+#include "../superstructure/Planner.h"
 #include "../superstructure/PlannerConfig.h"
 #include <cstring>
 #include <cstdio>
@@ -44,7 +44,7 @@ const ConfigEntry kRegistry[] = {
     // Geometry — stored as float, displayed as integer (mm)
     CFG_FI("tw",          trackwidthMm),
     // Velocity loop gains (Sprint 010).  Annotated "drive" so SET routes to
-    // drive2.configure() after the direct-write commit (059-004).
+    // drive.configure() after the direct-write commit (059-004).
     //   velKp  <-> "vel.kP"   velKi  <-> "vel.kI"   velKff <-> "vel.kFF"
     CFG_F_SS("vel.kP",    velKp,    "drive"),
     CFG_F_SS("vel.kI",    velKi,    "drive"),
@@ -640,8 +640,8 @@ void handleSet(const ArgList& args, const char* corrId,
             }
         }
 
-        if (driveChanged && ctx->drive2 != nullptr) {
-            ctx->drive2->configure(toDriveConfig(cfg));
+        if (driveChanged && ctx->drive != nullptr) {
+            ctx->drive->configure(toDriveConfig(cfg));
         }
         if (plannerChanged && ctx->planner != nullptr) {
             ctx->planner->configure(toPlannerConfig(cfg));

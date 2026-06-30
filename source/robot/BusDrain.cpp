@@ -3,7 +3,7 @@
 // See BusDrain.h for design notes and bounded-cascade / safety-priority policy.
 //
 // Dispatch table (verb_id → subsystem):
-//   kVerbDrivetrainTwist (1) → drive2.apply(DrivetrainCommand{TWIST})
+//   kVerbDrivetrainTwist (1) → drive.apply(DrivetrainCommand{TWIST})
 //   kVerbPlannerCommand  (2) → planner.apply(PlannerCommand)  [reserved; no-op]
 //   all other verb IDs       → queue.push_back / queue.push_front if priority
 //
@@ -23,8 +23,8 @@
 #include "state/EKFTiny.h"
 
 #include "robot/BusDrain.h"
-#include "subsystems/drive/Drive2.h"       // subsystems::Drive2, apply()
-#include "superstructure/MotionController2.h"  // MotionController2, apply()
+#include "subsystems/drive/Drive.h"         // subsystems::Drive, apply()
+#include "superstructure/Planner.h"        // Planner, apply()
 #include "commands/CommandQueue.h"          // CommandQueue, ParsedCommand
 #include "commands/CommandProcessor.h"      // CommandProcessor (signature only)
 #include "messages/common.h"               // msg::CommandBatch, OutCommand
@@ -38,8 +38,8 @@
 // ---------------------------------------------------------------------------
 uint8_t drainCommandBatch(
     const msg::CommandBatch& batch,
-    subsystems::Drive2&      drive2,
-    MotionController2&       planner,
+    subsystems::Drive&       drive,
+    Planner&                 planner,
     CommandQueue&            queue,
     CommandProcessor&        /*cmd*/)   // retained for future dequeueOne integration
 {
@@ -55,9 +55,9 @@ uint8_t drainCommandBatch(
 
         if (oc.verb_id == msg::kVerbDrivetrainTwist) {
             // ----------------------------------------------------------------
-            // TWIST → Drive2.apply(DrivetrainCommand{TWIST})
+            // TWIST → Drive.apply(DrivetrainCommand{TWIST})
             //
-            // Packing convention (from MotionController2::tick()):
+            // Packing convention (from Planner::tick()):
             //   args_[0] = vx_mmps
             //   args_[1] = vy_mmps
             //   args_[2] = omega_rads
@@ -68,12 +68,12 @@ uint8_t drainCommandBatch(
             twist.v_y    = (oc.args_count >= 2) ? oc.args_[1] : 0.0f;
             twist.omega = (oc.args_count >= 3) ? oc.args_[2] : 0.0f;
             drvCmd.setTwist(twist);
-            drive2.apply(drvCmd);
+            drive.apply(drvCmd);
             ++routed;
 
         } else if (oc.verb_id == msg::kVerbPlannerCommand) {
             // ----------------------------------------------------------------
-            // PLANNER → MotionController2.apply(PlannerCommand)
+            // PLANNER → Planner.apply(PlannerCommand)
             //
             // Reserved for future use.  A full encoding of PlannerCommand
             // into OutCommand args_ is not yet defined.  This branch is a

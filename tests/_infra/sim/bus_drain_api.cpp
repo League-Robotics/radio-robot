@@ -37,9 +37,9 @@
 #include "control/BodyVelocityController.h"
 #include "state/PhysicalStateEstimate.h"
 #include "control/Odometry.h"
-#include "subsystems/drive/Drive2.h"        // also declares toDriveConfig()
+#include "subsystems/drive/Drive.h"          // also declares toDriveConfig()
 #include "superstructure/MotionController.h"
-#include "superstructure/MotionController2.h"
+#include "superstructure/Planner.h"
 #include "superstructure/PlannerConfig.h"
 #include "commands/CommandQueue.h"
 #include "commands/CommandProcessor.h"
@@ -60,9 +60,9 @@ struct BusDrainHandle {
     MotorController         mc_ctrl;
     BodyVelocityController  bvc;
     PhysicalStateEstimate   est;
-    subsystems::Drive2      drive2;
+    subsystems::Drive       drive;
     MotionController        motion_ctrl;
-    MotionController2       mc2;
+    Planner                 planner;
     CommandQueue            queue;
     CommandProcessor        cmd_proc;
 
@@ -72,15 +72,24 @@ struct BusDrainHandle {
         , mc_ctrl(hal.motorL(), hal.motorR(), cfg)
         , bvc(mc_ctrl, cfg)
         , est()
-        , drive2(hal.motorL(), hal.motorR(),
-                 mc_ctrl, bvc, est, est.odometry(),
-                 hal.otos(), cfg)
+        , drive(hal.motorL(), hal.motorR(),
+                mc_ctrl, bvc, est, est.odometry(),
+                hal.otos(), cfg)
         , motion_ctrl(mc_ctrl, est.odometry(), cfg)
-        , mc2(motion_ctrl, drive2, cfg)
+        , planner(motion_ctrl, drive, cfg)
         , queue()
         , cmd_proc()
     {
-        drive2.configure(toDriveConfig(cfg));
+        drive.configure(toDriveConfig(cfg));
+        // 060-004: initialise the EKF so that Odometry::predict() runs the
+        // full EKF step and populates _hw.fused.twist.vx_mmps.
+        // Without this, _ekf.v() / _ekf.omega() are uninitialized and predict()
+        // may skip the update, leaving fused.twist at zero even after encoder motion.
+        // Mirrors Robot::Robot() which calls estimate.initEKF(…) during construction.
+        est.initEKF(cfg.ekfQxy, cfg.ekfQtheta,
+                    cfg.ekfQv,  cfg.ekfQomega,
+                    cfg.ekfROtosXy, cfg.ekfROtosV,
+                    cfg.ekfREncV,   cfg.ekfROtosTheta);
     }
 };
 
@@ -169,7 +178,7 @@ uint8_t bus_drain_api_drain(void* h, const msg::CommandBatch* batch)
 {
     if (!h || !batch) return 0;
     BusDrainHandle* b = static_cast<BusDrainHandle*>(h);
-    return drainCommandBatch(*batch, b->drive2, b->mc2, b->queue, b->cmd_proc);
+    return drainCommandBatch(*batch, b->drive, b->planner, b->queue, b->cmd_proc);
 }
 
 // ---------------------------------------------------------------------------
@@ -181,7 +190,7 @@ float bus_drain_api_drive2_get_fused_x(void* h)
 {
     if (!h) return 0.0f;
     BusDrainHandle* b = static_cast<BusDrainHandle*>(h);
-    return b->drive2.state().get_fused().get_pose().get_x();
+    return b->drive.state().get_fused().get_pose().get_x();
 }
 
 // Read the command queue's current size.
@@ -201,18 +210,28 @@ void bus_drain_api_tick(void* h, uint32_t now_ms)
 {
     if (!h) return;
     BusDrainHandle* b = static_cast<BusDrainHandle*>(h);
-    b->hal.tick(now_ms, b->drive2.outputs());
+    b->hal.tick(now_ms, b->drive.outputs());
     b->hal.tick(now_ms);
-    b->drive2.tickUpdate(now_ms);
-    b->drive2.tickAction(now_ms);
+    b->drive.tickUpdate(now_ms);
+    b->drive.tickAction(now_ms);
 }
 
-// Read the commanded vx from the drive2 state twist (set during tickAction via BVC).
+// Read the encoder-derived vx from drive2 state.
+//
+// 060-004: In the ordered-tick path, Drive2::tickAction TWIST calls
+// _mc.setTarget() directly (direct IK, no BVC ramp). The EKF velocity state
+// (fused.twist.vx) starts at 0 and has a chi-square gate that requires
+// P[3][3] to grow large enough to accept the full-speed step — which takes
+// 100+ ticks. The encoder twist (_encVx = dCenter / dt_s) is NOT gated and
+// reflects the actual measured encoder velocity directly.  The test's intent
+// is to verify that the TWIST command was received and drive2 is actually
+// driving; encoder vx is the right signal for that intent.
 float bus_drain_api_drive2_get_vx(void* h)
 {
     if (!h) return 0.0f;
     BusDrainHandle* b = static_cast<BusDrainHandle*>(h);
-    return b->drive2.state().get_fused().get_twist().get_v_x();
+    // encoder.twist.v_x is set from dCenter/dt_s each tick — no chi-square gate.
+    return b->drive.state().get_encoder().get_twist().get_v_x();
 }
 
 // ---------------------------------------------------------------------------

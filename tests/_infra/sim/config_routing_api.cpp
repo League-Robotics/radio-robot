@@ -4,7 +4,7 @@
 //
 //   ConfigRouteHandle — full Robot + ConfigRegistry wiring so tests can issue
 //     SET commands and verify subsystem configure() was called.  Constructed
-//     on SimHardware; _cfgCtx subsystem pointers are wired to robot.drive2 /
+//     on SimHardware; _cfgCtx subsystem pointers are wired to robot.drive /
 //     robot.planner / robot.sensors.
 //
 //   InitConfigHandle — simpler handle to verify the bottom-up configure() call
@@ -24,9 +24,9 @@
 #include "robot/Robot.h"
 #include "robot/ConfigRegistry.h"
 #include "commands/CommandProcessor.h"
-#include "subsystems/drive/Drive2.h"
+#include "subsystems/drive/Drive.h"
 #include "subsystems/sensors/Sensors.h"
-#include "superstructure/MotionController2.h"
+#include "superstructure/Planner.h"
 #include "messages/drivetrain.h"
 #include "messages/planner.h"
 #include "messages/sensors.h"
@@ -73,7 +73,7 @@ struct ConfigRouteHandle {
         // Wire CfgCtx with all subsystem pointers so handleSet routing fires.
         cfgCtx.cfg     = &robot.config;
         cfgCtx.mc      = &robot.motorController;
-        cfgCtx.drive2  = &robot.drive2;
+        cfgCtx.drive   = &robot.drive;
         cfgCtx.planner = &robot.planner;
         cfgCtx.sensors = &robot.sensors;
     }
@@ -220,36 +220,36 @@ void config_route_apply_si(void* h, float x_mm, float y_mm, float h_rad)
     sp.y  = y_mm;
     sp.h = h_rad;
     cmd.setPose(sp);
-    cr->robot.drive2.apply(cmd);
+    cr->robot.drive.apply(cmd);
 }
 
 void config_route_tick(void* h, uint32_t now_ms)
 {
     ConfigRouteHandle* cr = static_cast<ConfigRouteHandle*>(h);
-    cr->hal.tick(now_ms, cr->robot.drive2.outputs());
+    cr->hal.tick(now_ms, cr->robot.drive.outputs());
     cr->hal.tick(now_ms);
-    cr->robot.drive2.tickUpdate(now_ms);
+    cr->robot.drive.tickUpdate(now_ms);
     // tickAction processes staged commands (including SetPose) and writes motor
     // outputs.  Must be called after tickUpdate (mirrors the live loop ordering).
-    cr->robot.drive2.tickAction(now_ms);
+    cr->robot.drive.tickAction(now_ms);
 }
 
 float config_route_drive2_fused_x(void* h)
 {
     return static_cast<ConfigRouteHandle*>(h)
-        ->robot.drive2.state().get_fused().get_pose().get_x();
+        ->robot.drive.state().get_fused().get_pose().get_x();
 }
 
 float config_route_drive2_fused_y(void* h)
 {
     return static_cast<ConfigRouteHandle*>(h)
-        ->robot.drive2.state().get_fused().get_pose().get_y();
+        ->robot.drive.state().get_fused().get_pose().get_y();
 }
 
 float config_route_drive2_fused_h(void* h)
 {
     return static_cast<ConfigRouteHandle*>(h)
-        ->robot.drive2.state().get_fused().get_pose().get_h();
+        ->robot.drive.state().get_fused().get_pose().get_h();
 }
 
 // ---------------------------------------------------------------------------

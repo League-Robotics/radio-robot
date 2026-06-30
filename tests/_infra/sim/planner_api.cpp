@@ -33,9 +33,9 @@
 #include "control/BodyVelocityController.h"
 #include "state/PhysicalStateEstimate.h"
 #include "control/Odometry.h"
-#include "subsystems/drive/Drive2.h"   // also declares toDriveConfig()
+#include "subsystems/drive/Drive.h"    // also declares toDriveConfig()
 #include "superstructure/MotionController.h"
-#include "superstructure/MotionController2.h"
+#include "superstructure/Planner.h"
 #include "superstructure/PlannerConfig.h"
 #include "messages/planner.h"
 #include "messages/common.h"
@@ -50,9 +50,9 @@ struct PlannerHandle {
     MotorController             mc_ctrl;
     BodyVelocityController      bvc;
     PhysicalStateEstimate       est;
-    subsystems::Drive2          drive2;
+    subsystems::Drive           drive;
     MotionController            motion_ctrl;
-    MotionController2           mc2;
+    Planner                     planner;
 
     PlannerHandle()
         : cfg(defaultRobotConfig())
@@ -60,14 +60,14 @@ struct PlannerHandle {
         , mc_ctrl(hal.motorL(), hal.motorR(), cfg)
         , bvc(mc_ctrl, cfg)
         , est()
-        , drive2(hal.motorL(), hal.motorR(),
-                 mc_ctrl, bvc, est, est.odometry(),
-                 hal.otos(), cfg)
+        , drive(hal.motorL(), hal.motorR(),
+                mc_ctrl, bvc, est, est.odometry(),
+                hal.otos(), cfg)
         , motion_ctrl(mc_ctrl, est.odometry(), cfg)
-        , mc2(motion_ctrl, drive2, cfg)
+        , planner(motion_ctrl, drive, cfg)
     {
-        // Apply Drive2 config so it has live gains/lag.
-        drive2.configure(toDriveConfig(cfg));
+        // Apply Drive config so it has live gains/lag.
+        drive.configure(toDriveConfig(cfg));
     }
 };
 
@@ -105,14 +105,14 @@ float planner_api_tick(void* h, uint32_t now_ms)
     PlannerHandle* p = static_cast<PlannerHandle*>(h);
 
     // Advance the physics plant.
-    p->hal.tick(now_ms, p->drive2.outputs());
+    p->hal.tick(now_ms, p->drive.outputs());
     p->hal.tick(now_ms);
 
     // SENSE phase.
-    p->drive2.tickUpdate(now_ms);
+    p->drive.tickUpdate(now_ms);
 
     // PLAN phase: get the CommandBatch from MC2.
-    msg::CommandBatch batch = p->mc2.tick(now_ms);
+    msg::CommandBatch batch = p->planner.tick(now_ms);
 
     // Stage the first TWIST command in Drive2 (if any).
     if (batch.cmds_count > 0) {
@@ -124,15 +124,15 @@ float planner_api_tick(void* h, uint32_t now_ms)
             twist.v_y    = oc.args_[1];
             twist.omega = oc.args_[2];
             drvCmd.setTwist(twist);
-            p->drive2.apply(drvCmd);
+            p->drive.apply(drvCmd);
         }
     }
 
     // ACT phase.
-    p->drive2.tickAction(now_ms);
+    p->drive.tickAction(now_ms);
 
     // Return the commanded vx for the caller to inspect.
-    return p->mc2.state().get_body_twist().get_v_x();
+    return p->planner.state().get_body_twist().get_v_x();
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +148,7 @@ void planner_api_apply_velocity(void* h, float vx, float omega)
     g.v_x    = vx;
     g.omega = omega;
     cmd.setVelocity(g);
-    p->mc2.apply(cmd);
+    p->planner.apply(cmd);
 }
 
 // Apply a STOP goal.
@@ -157,7 +157,7 @@ void planner_api_apply_stop(void* h)
     PlannerHandle* p = static_cast<PlannerHandle*>(h);
     msg::PlannerCommand cmd;
     cmd.setStop(true);
-    p->mc2.apply(cmd);
+    p->planner.apply(cmd);
 }
 
 // Apply a TURN goal: heading_rad.
@@ -168,7 +168,7 @@ void planner_api_apply_turn(void* h, float heading_rad)
     msg::TurnGoal g{};
     g.heading = heading_rad;
     cmd.setTurn(g);
-    p->mc2.apply(cmd);
+    p->planner.apply(cmd);
 }
 
 // Apply a TIMED goal: vx_mmps, omega_rads, duration_ms.
@@ -181,7 +181,7 @@ void planner_api_apply_timed(void* h, float vx, float omega, uint32_t duration_m
     g.omega = omega;
     g.duration = duration_ms;
     cmd.setTimed(g);
-    p->mc2.apply(cmd);
+    p->planner.apply(cmd);
 }
 
 // Apply a GOTO_GOAL: x_mm, y_mm, speed_mmps.
@@ -194,7 +194,7 @@ void planner_api_apply_goto(void* h, float x_mm, float y_mm, float speed_mmps)
     g.y       = y_mm;
     g.speed = speed_mmps;
     cmd.setGotoGoal(g);
-    p->mc2.apply(cmd);
+    p->planner.apply(cmd);
 }
 
 // Apply a DISTANCE goal: distance_mm, speed_mmps.
@@ -206,7 +206,7 @@ void planner_api_apply_distance(void* h, float distance_mm, float speed_mmps)
     g.distance = distance_mm;
     g.speed  = speed_mmps;
     cmd.setDistance(g);
-    p->mc2.apply(cmd);
+    p->planner.apply(cmd);
 }
 
 // Apply a ROTATION goal: angle_rad.
@@ -217,7 +217,7 @@ void planner_api_apply_rotation(void* h, float angle_rad)
     msg::RotationGoal g{};
     g.angle = angle_rad;
     cmd.setRotation(g);
-    p->mc2.apply(cmd);
+    p->planner.apply(cmd);
 }
 
 // ---------------------------------------------------------------------------
@@ -226,28 +226,28 @@ void planner_api_apply_rotation(void* h, float angle_rad)
 
 int planner_api_get_active(void* h)
 {
-    return static_cast<PlannerHandle*>(h)->mc2.state().get_active() ? 1 : 0;
+    return static_cast<PlannerHandle*>(h)->planner.state().get_active() ? 1 : 0;
 }
 
 // Alias for planner_api_get_active — satisfies ticket 059-002 shim contract.
 int planner_api_is_active(void* h)
 {
-    return static_cast<PlannerHandle*>(h)->mc2.state().get_active() ? 1 : 0;
+    return static_cast<PlannerHandle*>(h)->planner.state().get_active() ? 1 : 0;
 }
 
 int planner_api_get_mode(void* h)
 {
-    return (int)static_cast<PlannerHandle*>(h)->mc2.state().get_mode();
+    return (int)static_cast<PlannerHandle*>(h)->planner.state().get_mode();
 }
 
 float planner_api_get_body_twist_vx(void* h)
 {
-    return static_cast<PlannerHandle*>(h)->mc2.state().get_body_twist().get_v_x();
+    return static_cast<PlannerHandle*>(h)->planner.state().get_body_twist().get_v_x();
 }
 
 float planner_api_get_body_twist_omega(void* h)
 {
-    return static_cast<PlannerHandle*>(h)->mc2.state().get_body_twist().get_omega();
+    return static_cast<PlannerHandle*>(h)->planner.state().get_body_twist().get_omega();
 }
 
 // ---------------------------------------------------------------------------
@@ -256,17 +256,17 @@ float planner_api_get_body_twist_omega(void* h)
 
 float planner_api_get_fused_x(void* h)
 {
-    return static_cast<PlannerHandle*>(h)->drive2.state().get_fused().get_pose().get_x();
+    return static_cast<PlannerHandle*>(h)->drive.state().get_fused().get_pose().get_x();
 }
 
 float planner_api_get_fused_y(void* h)
 {
-    return static_cast<PlannerHandle*>(h)->drive2.state().get_fused().get_pose().get_y();
+    return static_cast<PlannerHandle*>(h)->drive.state().get_fused().get_pose().get_y();
 }
 
 float planner_api_get_fused_h(void* h)
 {
-    return static_cast<PlannerHandle*>(h)->drive2.state().get_fused().get_pose().get_h();
+    return static_cast<PlannerHandle*>(h)->drive.state().get_fused().get_pose().get_h();
 }
 
 // ---------------------------------------------------------------------------

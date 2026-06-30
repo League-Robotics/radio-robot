@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_definitions(-DHOST_BUILD=1)
 
+
 # ---------------------------------------------------------------------------
 # Root of the firmware repo: great-grandparent of this CMakeLists.txt's directory.
 # CMAKE_SOURCE_DIR is tests/_infra/sim/; repo root is three levels up.
@@ -118,9 +119,9 @@ add_library(firmware_host SHARED
     "${CMAKE_SOURCE_DIR}/message_test_api.cpp"
     # 057-003: C-ABI shims for Sensors subsystem isolation tests.
     "${CMAKE_SOURCE_DIR}/sensors_api.cpp"
-    # 057-004: C-ABI shims for Drive2 subsystem isolation tests.
+    # 057-004: C-ABI shims for Drive subsystem isolation tests (drive2_api.cpp filename kept for Python ctypes compatibility).
     "${CMAKE_SOURCE_DIR}/drive2_api.cpp"
-    # 059-001: C-ABI shims for MotionController2 (Planner) subsystem isolation tests.
+    # 059-001: C-ABI shims for Planner subsystem isolation tests.
     "${CMAKE_SOURCE_DIR}/planner_api.cpp"
     # 059-003: C-ABI shims for BusDrain (command-queue bus drain/route) tests.
     "${CMAKE_SOURCE_DIR}/bus_drain_api.cpp"
@@ -144,7 +145,7 @@ target_include_directories(firmware_host PRIVATE
     # 043-001 (Phase E): subsystem dirs so each subsystem .cpp resolves its own
     # same-directory header (#include "LineSensor.h" etc.).
     "${REPO_ROOT}/source/subsystems/sensors"
-    # 043-002 (Phase E): Drive subsystem dir (#include "Drive.h").
+    # 043-002/060-006: Drive subsystem dir (Drive2.h renamed to Drive.h in 060-006).
     "${REPO_ROOT}/source/subsystems/drive"
     # 043-003 (Phase E): Gripper subsystem dir (#include "Gripper.h").
     "${REPO_ROOT}/source/subsystems/gripper"

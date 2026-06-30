@@ -1,10 +1,10 @@
 // verb_ids.h — compile-time verb ID constants for the command bus.
 //
 // These constants define the mapping between OutCommand::verb_id values and
-// the subsystem apply() calls they encode.  Both the producer (MotionController2::tick())
+// the subsystem apply() calls they encode.  Both the producer (Planner::tick())
 // and the consumer (drainCommandBatch()) must agree on these constants.
 //
-// Encoding convention (matches 059-001 MotionController2::tick() packing):
+// Encoding convention (matches 059-001 Planner::tick() packing):
 //   kVerbDrivetrainTwist = 1  — DrivetrainCommand{TWIST}
 //                                args_[0]=vx_mmps, args_[1]=vy_mmps, args_[2]=omega_rads
 //   kVerbPlannerCommand  = 2  — PlannerCommand (not yet used; reserved for future goals)

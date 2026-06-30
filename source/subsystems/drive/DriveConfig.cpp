@@ -1,12 +1,12 @@
 // DriveConfig.cpp — toDriveConfig projection (ticket 057-004).
 //
-// Projects a RobotConfig into a msg::DrivetrainConfig for use by Drive2::configure()
-// and the fluent builder idiom (drive2.newConfig().msg() = toDriveConfig(cfg)).
+// Projects a RobotConfig into a msg::DrivetrainConfig for use by Drive::configure()
+// and the fluent builder idiom (drive.newConfig().msg() = toDriveConfig(cfg)).
 //
 // Motion limits (aMax, vBodyMax, yawRateMax) are NOT mapped here — those belong
 // to PlannerConfig scope (Phase 3, ticket 006).
 
-#include "subsystems/drive/Drive2.h"  // declares toDriveConfig (global namespace)
+#include "subsystems/drive/Drive.h"  // declares toDriveConfig (global namespace)
 #include "types/Config.h"
 #include "messages/drivetrain.h"
 #include "messages/common.h"

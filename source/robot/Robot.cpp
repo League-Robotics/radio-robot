@@ -63,14 +63,6 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       motionController(motorController, estimate.odometry(), config),
       portController(portio),
       servoController(gripper),
-      // Phase E (043-002) Drive subsystem — wired with the IMotor& device refs
-      // (motorL, motorR), motorController, estimate, state.inputs, state.commands,
-      // and config.  Declaration order in Robot.h puts `drive` after all of these,
-      // so the refs are live here.  The five filter-streak members it owns are
-      // value-initialised inside Drive (same initial values as the former Robot
-      // fields).  See architecture-update.md OQ-1/OQ-2.
-      drive(motorL, motorR, motorController, estimate,
-            state.actual, state.outputs, config),
       // Phase E (043-001) sensor subsystems — wired with their device ref,
       // state.actual (ActualState / HardwareState alias), and config.
       // Declaration order in Robot.h puts these after the refs they bind.
@@ -94,18 +86,18 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       // Phase 3 (059-004): new message-contract subsystems.  ADDITIVE — NOT yet
       // wired into loopTickOnce; configure() called in the constructor body below.
       //
-      // bvc2: Drive2's private BodyVelocityController.  Separate from
+      // bvc: Drive's own BodyVelocityController.  Separate from
       // MotionController's internal _bvc so the two paths don't share PID state.
-      bvc2(motorController, config),
-      // drive2: new-arch Drive2, built with the same device refs as the legacy
-      // drive subsystem.  Own BVC (bvc2), own EKF state (via est + odo).
-      drive2(motorL, motorR, motorController, bvc2, estimate, estimate.odometry(),
-             hal.otos(), config),
+      bvc(motorController, config),
+      // drive: new-arch Drive, built with the same device refs as the legacy
+      // drive subsystem.  Own BVC (bvc), own EKF state (via est + odo).
+      drive(motorL, motorR, motorController, bvc, estimate, estimate.odometry(),
+            hal.otos(), config),
       // sensors: facade over the existing lineSensor / colorSensor_ subsystems;
       // shares the same HardwareState they write into.
       sensors(lineSensor, colorSensor_, state.actual),
-      // planner: wraps existing motionController + drive2.
-      planner(motionController, drive2, config)
+      // planner: wraps existing motionController + drive.
+      planner(motionController, drive, config)
 {
     // -----------------------------------------------------------------------
     // Phase 3 (059-004): bottom-up configure() calls.
@@ -113,15 +105,20 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
     // internal config slices are live-equivalent from construction time.
     // These calls are idempotent and cheap; order matches dependency direction.
     // -----------------------------------------------------------------------
-    drive2.configure(toDriveConfig(config));
+    drive.configure(toDriveConfig(config));
     sensors.configure(subsystems::toLineSensorConfig(config),
                       subsystems::toColorSensorConfig(config));
     planner.configure(toPlannerConfig(config));
     motionController.setHardwareState(&state.actual);
-    motorController.setCommandsRef(&state.outputs);
-    // 047-003: wire BVC → DesiredState publish so bodyTwist/bodyTwistRaw are
-    // updated every advance() tick.
-    motionController.setBvcStateRef(&state.desired);
+    // 060-002: Drive's constructor already called _mc.setCommandsRef(&_outputs),
+    // binding MotorController to drive._outputs.  Do NOT override that binding
+    // here, or drive.outputs() will be stale.
+    //
+    // 060-004: Planner's constructor already called
+    // _mc.setBvcStateRef(&planner._desired) so that planner.tick() reads the BVC
+    // body-twist output from planner._desired.  Do NOT override that binding here
+    // or planner.tick() will read stale zeros from _desired.bodyTwist while BVC
+    // writes to robot.state.desired instead.
     // setRobotCtx replaces setCtx (sprint 026-002): MotionCtx now lives in Robot.
     motionController.setRobotCtx(this);
     // Initialise _motionCtx (sprint 026-002): mc and robot pointers; queue wired
@@ -159,11 +156,8 @@ uint32_t Robot::systemTime() const
 // Its body moved into loopTickOnce()'s CONTROL COLLECT block (verbatim, 039-002)
 // and the per-loop encoder read moved into Hardware::tick(now) → Motor::tick().
 // Phase E (043-002): the CONTROL COLLECT block then moved VERBATIM into
-// subsystems::Drive::periodic(now, fn, ctx), and the per-wheel streak/wedge state
-// members it used (_filterRejectStreakL/R, _prevDriving, _lastControlMs,
-// _prevAnyWedged, kFilterRejectStreakThreshold) moved off Robot onto Drive as
-// value members.  loopTickOnce now calls robot.drive.periodic(...) in the same
-// position the inline block ran (before cmd.dequeueOne).
+// subsystems::Drive::periodic(now, fn, ctx) and is now deleted together with the
+// legacy loop branch in 060-005.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -349,6 +343,12 @@ void Robot::resetEncoders()
     // 3. Re-baseline Odometry's encoder snapshot so predict() sees delta=0
     //    on the very next tick rather than (0 - _prevEncL) = large negative.
     estimate.rebaselinePrev(0.0f, 0.0f);
+
+    // 4. 060-004: Drive owns an independent encoder baseline in _hw.encMm[].
+    //    Reset it so tickUpdate() sees 0 delta after the hardware reset, and
+    //    LoopTickOnce.cpp's sync block copies 0 back into state.actual.encMm[]
+    //    (not the stale pre-reset accumulator).
+    drive.resetEncoders();
 }
 
 // ---------------------------------------------------------------------------

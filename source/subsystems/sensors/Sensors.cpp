@@ -43,7 +43,8 @@ void Sensors::tick(uint32_t now)
         _state.line.raw_count          = 4;
         _state.line.normalized_count   = 4;
         _state.line.stamp.valid        = _hw.lineVS.valid;
-        _state.line.stamp.last_upd  = _hw.lineVS.lastUpdMs;
+        _state.line.stamp.last_upd     = _hw.lineVS.lastUpdMs;
+        _state.line.stamp.lag          = _hw.lineVS.lagMs;
     }
 
     // ---- Color sensor -------------------------------------------------------
@@ -61,7 +62,8 @@ void Sensors::tick(uint32_t now)
         _state.color.b              = static_cast<uint32_t>(_hw.colorB);
         _state.color.c              = static_cast<uint32_t>(_hw.colorC);
         _state.color.stamp.valid       = _hw.colorVS.valid;
-        _state.color.stamp.last_upd = _hw.colorVS.lastUpdMs;
+        _state.color.stamp.last_upd    = _hw.colorVS.lastUpdMs;
+        _state.color.stamp.lag         = _hw.colorVS.lagMs;
     }
 }
 

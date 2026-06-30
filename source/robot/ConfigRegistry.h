@@ -7,8 +7,8 @@
 // Forward declarations — avoids pulling full header graphs into every TU
 // that includes ConfigRegistry.h.
 class MotorController;
-class MotionController2;
-namespace subsystems { class Drive2; }
+class Planner;
+namespace subsystems { class Drive; }
 namespace subsystems { class Sensors; }
 
 // ---------------------------------------------------------------------------
@@ -27,7 +27,7 @@ enum ConfigFieldType {
 // subsystem — annotation for live SET routing (059-004).  When non-null,
 //   handleSet builds a typed config delta and calls the owning subsystem's
 //   configure() method AFTER the normal direct-write commit:
-//     "drive"   → builds msg::DrivetrainConfig delta → drive2.configure()
+//     "drive"   → builds msg::DrivetrainConfig delta → drive.configure()
 //     "planner" → builds msg::PlannerConfig delta    → planner.configure()
 //     "sensors" → builds sensor config delta         → sensors.configure()
 //   nullptr means the existing kRegistry[] direct-write path only (no
@@ -54,8 +54,8 @@ struct ConfigEntry {
 struct CfgCtx {
     RobotConfig*            cfg;
     MotorController*        mc;
-    subsystems::Drive2*     drive2    = nullptr;  // SET "drive" routing
-    MotionController2*      planner   = nullptr;  // SET "planner" routing
+    subsystems::Drive*      drive     = nullptr;  // SET "drive" routing
+    Planner*                planner   = nullptr;  // SET "planner" routing
     subsystems::Sensors*    sensors   = nullptr;  // SET "sensors" routing
 };
 
