@@ -12,12 +12,12 @@
 // ---------------------------------------------------------------------------
 // buildTlmFrame — assemble the unified TLM frame; returns length.
 //
-// Reads drive2.state(), sensors.state(), config, motionController.mode().
+// Reads drive.state(), sensors.state(), config, motionController.mode().
 // Shared by the periodic STREAM (telemetryEmit) and the synchronous SNAP command.
 //
 // 060-001: rewired from state.actual (legacy HardwareState) to the new
 // message-contract subsystem state accessors: drive-related fields from
-// drive2.state() (msg::DrivetrainState) and sensor fields from sensors.state()
+// drive.state() (msg::DrivetrainState) and sensor fields from sensors.state()
 // (subsystems::SensorsState). Wire format (field names, snprintf calls) unchanged.
 // ---------------------------------------------------------------------------
 
@@ -25,13 +25,13 @@ int Robot::buildTlmFrame(char* buf, int len)
 {
     uint32_t t_sample = systemTime();
     // Array convention: [0]=R (FR), [1]=L (FL) — same as ActualState.h enc arrays.
-    // drive2.state().enc() returns the per-wheel encoder accumulator array.
-    const msg::DrivetrainState& ds = drive2.state();
+    // drive.state().enc() returns the per-wheel encoder accumulator array.
+    const msg::DrivetrainState& ds = drive.state();
     const subsystems::SensorsState& ss = sensors.state();
     int32_t encL = static_cast<int32_t>(ds.enc()[1]);
     int32_t encR = static_cast<int32_t>(ds.enc()[0]);
 
-    // 060-001: pose read from drive2.state().fused.pose (msg::Pose2D: x,y mm, h rad).
+    // 060-001: pose read from drive.state().fused.pose (msg::Pose2D: x,y mm, h rad).
     // Convert to integer mm (x,y) and centidegrees (h) matching the legacy output.
     // RAD_TO_CDEG = 18000/pi ≈ 5729.578 — same constant Odometry::getPose uses.
     static constexpr float kRadToCdeg = 5729.5779513f;
@@ -95,7 +95,7 @@ int Robot::buildTlmFrame(char* buf, int len)
         // fusedV is body linear speed in mm/s (integer).
         // fusedOmega is yaw rate in rad/s; convert to mrad/s (integer) matching
         // the omega_mrads convention used by VW command and NezhaProtocol.vw().
-        // 060-001: read velocity from drive2.state().fused.twist (msg::BodyTwist3:
+        // 060-001: read velocity from drive.state().fused.twist (msg::BodyTwist3:
         // v_x mm/s, omega rad/s). Semantics identical to legacy estimate.getVelocity.
         float fV     = ds.fused.twist.v_x;
         float fOmega = ds.fused.twist.omega;
@@ -108,8 +108,8 @@ int Robot::buildTlmFrame(char* buf, int len)
     // line/color above.  otos.valid stays true after the first success; if the
     // sensor goes dark the last-good pose would be emitted forever without
     // the freshness check.
-    // 060-001: read from drive2.state().otos (msg::ValueSet) and
-    // drive2.state().optical.pose (msg::Pose2D: x,y mm, h rad).
+    // 060-001: read from drive.state().otos (msg::ValueSet) and
+    // drive.state().optical.pose (msg::Pose2D: x,y mm, h rad).
     if ((config.tlmFields & TLM_FIELD_OTOS) &&
         ds.otos.get_valid() &&
         (t_sample - ds.otos.get_last_upd()

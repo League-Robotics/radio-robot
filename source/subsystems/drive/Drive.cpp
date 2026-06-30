@@ -1,4 +1,4 @@
-// Drive2.cpp — subsystems::Drive2 implementation (ticket 057-004).
+// Drive.cpp — subsystems::Drive implementation (renamed from Drive2 in 060-006).
 //
 // Composes the existing control components by reference: MotorController,
 // BodyVelocityController, PhysicalStateEstimate, Odometry, IMotor x2, IOdometer.
@@ -6,11 +6,9 @@
 //   tickUpdate  → SENSE (outlier filter → controlTick → EKF predict → OTOS correct)
 //   tickAction  → ACT   (staged command → BVC.setTarget → BVC.advance → MC.setTarget)
 //
-// ADDITIVE — Drive::periodic() and the live loopTickOnce wiring are UNTOUCHED.
-//
-// C++11, no heap in Drive2, no virtual dispatch in the contract path.
+// C++11, no heap in Drive, no virtual dispatch in the contract path.
 
-#include "Drive2.h"
+#include "Drive.h"
 
 #include "MotorController.h"
 #include "BodyVelocityController.h"
@@ -26,13 +24,13 @@ namespace subsystems {
 // ---------------------------------------------------------------------------
 // Constructor
 // ---------------------------------------------------------------------------
-Drive2::Drive2(IMotor& motorL, IMotor& motorR,
-               MotorController& mc,
-               BodyVelocityController& bvc,
-               PhysicalStateEstimate& est,
-               Odometry& odo,
-               IOdometer& otos,
-               const RobotConfig& cfg)
+Drive::Drive(IMotor& motorL, IMotor& motorR,
+             MotorController& mc,
+             BodyVelocityController& bvc,
+             PhysicalStateEstimate& est,
+             Odometry& odo,
+             IOdometer& otos,
+             const RobotConfig& cfg)
     : _motorL(motorL)
     , _motorR(motorR)
     , _mc(mc)
@@ -56,7 +54,7 @@ Drive2::Drive2(IMotor& motorL, IMotor& motorR,
 // ---------------------------------------------------------------------------
 // apply — stage the command (no hardware, no emission).
 // ---------------------------------------------------------------------------
-void Drive2::apply(const msg::DrivetrainCommand& cmd)
+void Drive::apply(const msg::DrivetrainCommand& cmd)
 {
     _cmd        = cmd;
     _cmdPending = true;
@@ -72,7 +70,7 @@ void Drive2::apply(const msg::DrivetrainCommand& cmd)
 // 5. OTOS correction (if lag elapsed and device is ready).
 // 6. Refresh _state from _hw.
 // ---------------------------------------------------------------------------
-void Drive2::tickUpdate(uint32_t now, bool fuseOtos)
+void Drive::tickUpdate(uint32_t now, bool fuseOtos)
 {
     // ------------------------------------------------------------------
     // STEP 1+2: Outlier filter → encoder collect → controlTick
@@ -199,9 +197,9 @@ void Drive2::tickUpdate(uint32_t now, bool fuseOtos)
 // tickAction — ACT phase.
 //
 // Reads the staged command and dispatches to the appropriate control path.
-// Returns an empty CommandBatch (Drive2 is a leaf actuator in this sprint).
+// Returns an empty CommandBatch (Drive is a leaf actuator in this sprint).
 // ---------------------------------------------------------------------------
-msg::CommandBatch Drive2::tickAction(uint32_t now)
+msg::CommandBatch Drive::tickAction(uint32_t now)
 {
     (void)now;
 
@@ -226,8 +224,8 @@ msg::CommandBatch Drive2::tickAction(uint32_t now)
 
         // 060-004: The TWIST arriving here is already profiled by the planner's
         // internal BVC (MotionController._bvc).  Running another BVC ramp in
-        // Drive2 would double-profile the motion (planner ramps 0→target, then
-        // Drive2 ramps 0→planner_output) causing indefinitely-slow ramp-up that
+        // Drive would double-profile the motion (planner ramps 0→target, then
+        // Drive ramps 0→planner_output) causing indefinitely-slow ramp-up that
         // fails almost every motor/motion test.  Instead, do a direct inverse-
         // kinematics conversion and set wheel targets immediately.
         //
@@ -300,10 +298,10 @@ msg::CommandBatch Drive2::tickAction(uint32_t now)
 }
 
 // ---------------------------------------------------------------------------
-// resetEncoders — zero Drive2's private encoder baseline (060-004).
+// resetEncoders — zero Drive's private encoder baseline (060-004).
 //
-// Mirrors Robot::resetEncoders() for the Drive2 subsystem so that D commands
-// and ZERO enc keep drive2._hw in sync with the hardware motor reset.
+// Mirrors Robot::resetEncoders() for the Drive subsystem so that D commands
+// and ZERO enc keep drive._hw in sync with the hardware motor reset.
 //
 // Three-step reset (verbatim semantics from Robot::resetEncoders):
 //   1. Zero _hw.encMm[]: sets the outlier-filter baseline so the next
@@ -312,7 +310,7 @@ msg::CommandBatch Drive2::tickAction(uint32_t now)
 //   3. Re-baseline _odo's snapshot: prevents predict() computing dL=0-prev
 //      (a large negative delta) on the first tick after reset.
 // ---------------------------------------------------------------------------
-void Drive2::resetEncoders()
+void Drive::resetEncoders()
 {
     for (int i = 0; i < kWheelCount; ++i) {
         _hw.encMm[i]    = 0.0f;
@@ -325,10 +323,10 @@ void Drive2::resetEncoders()
 // injectFusedPose — sim injection hook (060-004).
 //
 // Writes x/y/h_rad directly into _hw.fused.pose and refreshes _state.fused
-// so that the next drive2.state() read sees the injected pose immediately.
+// so that the next drive.state() read sees the injected pose immediately.
 // Used by sim_api.cpp::sim_set_pose.
 // ---------------------------------------------------------------------------
-void Drive2::injectFusedPose(float x, float y, float h_rad)
+void Drive::injectFusedPose(float x, float y, float h_rad)
 {
     _hw.fused.pose.x = x;
     _hw.fused.pose.y = y;
@@ -341,10 +339,10 @@ void Drive2::injectFusedPose(float x, float y, float h_rad)
 // ---------------------------------------------------------------------------
 // setEncOmegaHealthy — sim injection hook (060-004).
 //
-// Forwards the encoder-omega health gate to Drive2's own PhysicalStateEstimate.
+// Forwards the encoder-omega health gate to Drive's own PhysicalStateEstimate.
 // Used by sim_api.cpp::sim_set_enc_omega_healthy.
 // ---------------------------------------------------------------------------
-void Drive2::setEncOmegaHealthy(bool healthy)
+void Drive::setEncOmegaHealthy(bool healthy)
 {
     _est.setEncOmegaHealthy(healthy);
 }
@@ -352,7 +350,7 @@ void Drive2::setEncOmegaHealthy(bool healthy)
 // ---------------------------------------------------------------------------
 // configure — store config; next tick reads updated gains/lag/etc.
 // ---------------------------------------------------------------------------
-void Drive2::configure(const msg::DrivetrainConfig& cfg)
+void Drive::configure(const msg::DrivetrainConfig& cfg)
 {
     _drvCfg = cfg;
 
@@ -360,7 +358,7 @@ void Drive2::configure(const msg::DrivetrainConfig& cfg)
     // Only update if non-zero gains were supplied (zero = "use defaults").
     if (cfg.get_vel_gains().get_kp() != 0.0f || cfg.get_vel_gains().get_ki() != 0.0f) {
         // We reach into RobotConfig-typed updateVelGains via a local copy.
-        // Drive2 uses _robCfg as the "base" and the msg::Gains as an override.
+        // Drive uses _robCfg as the "base" and the msg::Gains as an override.
         // For simplicity in this sprint, just call updateVelGains on the original
         // config — the msg::DrivetrainConfig gains are applied when a REAL
         // toDriveConfig projection wires them in (ticket 005 / Phase 3).
@@ -371,7 +369,7 @@ void Drive2::configure(const msg::DrivetrainConfig& cfg)
 // ---------------------------------------------------------------------------
 // capabilities — declared truth for this build.
 // ---------------------------------------------------------------------------
-msg::DrivetrainCapabilities Drive2::capabilities() const
+msg::DrivetrainCapabilities Drive::capabilities() const
 {
     msg::DrivetrainCapabilities caps;
     // Holonomic if drivetrain_type > 0 (1 = mecanum) in config.
@@ -388,12 +386,12 @@ msg::DrivetrainCapabilities Drive2::capabilities() const
 // ---------------------------------------------------------------------------
 // _runOutlierFilter — private: speed-scaled outlier filter + encoder collect.
 //
-// Verbatim from Drive::periodic() with member renaming:
+// Verbatim from legacy Drive::periodic() with member renaming:
 //   _commands → _outputs     (MotorCommands)
 //   _inputs   → _hw          (HardwareState)
-//   fn/ctx    → nullptr      (no EVT sink in Drive2 for now)
+//   fn/ctx    → nullptr      (no EVT sink in Drive for now)
 // ---------------------------------------------------------------------------
-void Drive2::_runOutlierFilter(uint32_t now)
+void Drive::_runOutlierFilter(uint32_t now)
 {
     bool driving = (_outputs.tgtMms[1] != 0.0f || _outputs.tgtMms[0] != 0.0f);
     if (driving) {

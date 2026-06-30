@@ -53,7 +53,7 @@ public:
     void setHardwareState(HardwareState* s) { _hwState = s; }
 
     // Read-only access to the authoritative HardwareState pointer.
-    // 060-004: MotionController2::tick() uses this to copy sensor (line/color)
+    // 060-004: Planner::tick() uses this to copy sensor (line/color)
     // fields from robot.state.actual into its private _hw before driveAdvance(),
     // so that MotionCommand::_stops[].evaluate() sees live sensor values.
     const HardwareState* hardwareState() const { return _hwState; }

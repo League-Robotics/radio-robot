@@ -3,7 +3,7 @@
 // PlannerConfig.h — toPlannerConfig projection declaration (ticket 059-001).
 //
 // Projects a RobotConfig into a msg::PlannerConfig for use by
-// MotionController2::configure() and the Phase 3 command-bus initialization.
+// Planner::configure() and the Phase 3 command-bus initialization.
 //
 // Motion-limits scope only: aMax, aDecel, vBodyMax, yawRateMax, yawAccMax,
 // jMax, yawJerkMax, arriveTolMm, turnInPlaceGate, turnThresholdMm, doneTolMm,

@@ -5,8 +5,8 @@
 #include "HaltController.h"
 #include "MotionCommand.h"
 #include "robot/BusDrain.h"
-#include "subsystems/drive/Drive2.h"
-#include "superstructure/MotionController2.h"
+#include "subsystems/drive/Drive.h"
+#include "superstructure/Planner.h"
 #include <cstdio>
 #include <cmath>   // fmaxf, fabsf
 
@@ -53,7 +53,7 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // fuseOtos: bypass Drive2's internal OTOS lag gate when ts.fuseOtos is set
     // (mirrors the ts.fuseOtos bypass in the legacy path; used by sim tests that
     // call sim_set_otos_fusion(1) to force per-tick OTOS updates).
-    robot.drive2.tickUpdate(now, ts.fuseOtos);
+    robot.drive.tickUpdate(now, ts.fuseOtos);
 
     // =========================================================
     // STEP 2b — Sync robot.state.actual from drive2.state()
@@ -70,7 +70,7 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // with the most recent SENSE phase.
     // =========================================================
     {
-        const msg::DrivetrainState& ds = robot.drive2.state();
+        const msg::DrivetrainState& ds = robot.drive.state();
         // Per-wheel encoder accumulator (mm).  [0]=R (FR), [1]=L (FL).
         robot.state.actual.encMm[0] = ds.enc()[0];
         robot.state.actual.encMm[1] = ds.enc()[1];
@@ -146,7 +146,7 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // drainCommandBatch routes the TWIST OutCommand to
     // drive2.apply(DrivetrainCommand{TWIST}).
     // =========================================================
-    drainCommandBatch(plannerBatch, robot.drive2, robot.planner, queue, cmd);
+    drainCommandBatch(plannerBatch, robot.drive, robot.planner, queue, cmd);
 
     // =========================================================
     // STEP 6 — drive2.tickAction(now): ACT
@@ -155,7 +155,7 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // → motor output.  Drive2's BVC (bvc2) is separate from
     // MotionController's internal BVC.
     // =========================================================
-    robot.drive2.tickAction(now);
+    robot.drive.tickAction(now);
 
     // =========================================================
     // STEP 6b — HAL ACTUATOR TICK
@@ -167,7 +167,7 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // So the buffer the MotorController actually wrote to is
     // drive2._outputs — pass drive2.outputs() here.
     // =========================================================
-    robot.hal.tick(now, robot.drive2.outputs());
+    robot.hal.tick(now, robot.drive.outputs());
 
     // =========================================================
     // STEP 7 — sensors.tick(now): timed line/color reads

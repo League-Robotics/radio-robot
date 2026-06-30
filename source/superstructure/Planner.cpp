@@ -1,17 +1,15 @@
-// MotionController2.cpp — Phase 3 Planner subsystem wrapper (ticket 059-001).
+// Planner.cpp — Planner subsystem wrapper (renamed from MotionController2 in 060-006).
 //
-// Composes the existing MotionController by reference.  ADDITIVE — the live
-// loopTickOnce / MotionController wiring is UNTOUCHED until ticket 059-005.
+// Composes the existing MotionController by reference.  The existing MotionController
+// logic is unchanged.
 //
 // Design note on configure() / RobotConfig shadow:
 //   MotionController holds a const RobotConfig& that was passed at construction
 //   (Robot passes &config). Updating motion limits via configure(PlannerConfig)
-//   cannot reach that reference because it is const. MC2 therefore maintains a
+//   cannot reach that reference because it is const. Planner therefore maintains a
 //   local RobotConfig copy (_cfg) that starts as a copy of the original and is
-//   updated by configure(). The copy is used by MC2's state/reporting logic;
+//   updated by configure(). The copy is used by Planner's state/reporting logic;
 //   the underlying MotionController still reads limits from its own original cfg.
-//   Ticket 059-005 (cutover) will replace the Robot wiring so that the same
-//   RobotConfig flows through MC2 into the live MC.
 //
 // C++11, no heap allocation in tick(), no virtual dispatch, no STL.
 
@@ -21,26 +19,26 @@
 #define EKF_M 2
 #include "state/EKFTiny.h"
 
-#include "superstructure/MotionController2.h"
-#include "subsystems/drive/Drive2.h"      // Drive2 definition (for state())
-#include "kinematics/BodyKinematics.h"    // inverse() for TIMED/DISTANCE/STREAM
-#include "messages/drivetrain.h"          // msg::DrivetrainCommand
-#include "messages/planner.h"             // msg::PlannerCommand
-#include "messages/common.h"              // msg::CommandBatch
-#include "types/Inputs.h"                 // HardwareState, MotorCommands, TargetState
-#include "types/Config.h"                 // RobotConfig, DriveMode
-#include "control/StopCondition.h"        // makeTimeStop, makeDistanceStop, makeHeadingStop
-#include <cstring>                        // strncpy
-#include <cmath>                          // fabsf
+#include "superstructure/Planner.h"
+#include "subsystems/drive/Drive.h"           // Drive definition (for state())
+#include "kinematics/BodyKinematics.h"        // inverse() for TIMED/DISTANCE/STREAM
+#include "messages/drivetrain.h"              // msg::DrivetrainCommand
+#include "messages/planner.h"                 // msg::PlannerCommand
+#include "messages/common.h"                  // msg::CommandBatch
+#include "types/Inputs.h"                     // HardwareState, MotorCommands, TargetState
+#include "types/Config.h"                     // RobotConfig, DriveMode
+#include "control/StopCondition.h"            // makeTimeStop, makeDistanceStop, makeHeadingStop
+#include <cstring>                            // strncpy
+#include <cmath>                              // fabsf
 
 // ---------------------------------------------------------------------------
 // Constructor
 // ---------------------------------------------------------------------------
-MotionController2::MotionController2(MotionController& mc,
-                                     const subsystems::Drive2& drive2,
-                                     const RobotConfig& cfg)
+Planner::Planner(MotionController& mc,
+                 const subsystems::Drive& drive,
+                 const RobotConfig& cfg)
     : _mc(mc)
-    , _drive2(drive2)
+    , _drive(drive)
     , _cfg(cfg)        // local shadow copy — updated by configure()
     , _target(_desired)  // _target is an alias for _desired (TargetState = DesiredState)
 {
@@ -48,10 +46,7 @@ MotionController2::MotionController2(MotionController& mc,
     // tick() can read _desired.bodyTwist after driveAdvance().
     //
     // Side-effect note: this redirects the existing BVC publish target.
-    // In isolated test use (ticket 059-002), _mc has not been wired to a live
-    // Robot, so this is safe. In the live Robot wiring, MC2 is not constructed
-    // on the live MC until ticket 059-005 (the cutover), at which point Robot
-    // will update its own setBvcStateRef call.
+    // In isolated test use, _mc has not been wired to a live Robot, so this is safe.
     _mc.setBvcStateRef(&_desired);
 }
 
@@ -60,7 +55,7 @@ MotionController2::MotionController2(MotionController& mc,
 // Dispatches on PlannerCommand::GoalKind → the appropriate begin*() call.
 // ReplyFn is a no-op sink for now; EVT routing comes in ticket 059-003.
 // ---------------------------------------------------------------------------
-void MotionController2::apply(const msg::PlannerCommand& cmd)
+void Planner::apply(const msg::PlannerCommand& cmd)
 {
     const uint32_t now = 0;  // apply() is called outside the tick loop;
                              // the actual now_ms is passed in tick().
@@ -170,22 +165,22 @@ void MotionController2::apply(const msg::PlannerCommand& cmd)
 // tick — advance goal closure one tick.
 //
 // Sequence:
-//   1. Populate _hw from _drive2.state() (fused pose + twist).
+//   1. Populate _hw from _drive.state() (fused pose + twist).
 //   2. Call _mc.driveAdvance(_hw, _cmds, _target, now).
 //   3. Read commanded body twist from _desired.bodyTwist.
 //   4. Pack msg::DrivetrainCommand{TWIST} into CommandBatch.
 //   5. Update _state.
 // ---------------------------------------------------------------------------
-msg::CommandBatch MotionController2::tick(uint32_t now)
+msg::CommandBatch Planner::tick(uint32_t now)
 {
     // ------------------------------------------------------------------
-    // STEP 1: Populate _hw from _drive2.state() (fused pose / twist).
+    // STEP 1: Populate _hw from _drive.state() (fused pose / twist).
     //
     // HardwareState uses legacy ::PoseEstimate / ::BodyTwist3 (source/state/).
     // msg::DrivetrainState uses msg::PoseEstimate / msg::BodyTwist3 (messages/).
     // Both have the same field semantics; copy field-by-field.
     // ------------------------------------------------------------------
-    const msg::DrivetrainState& drvState = _drive2.state();
+    const msg::DrivetrainState& drvState = _drive.state();
 
     _hw.fused.pose.x              = drvState.get_fused().get_pose().get_x();
     _hw.fused.pose.y              = drvState.get_fused().get_pose().get_y();
@@ -200,7 +195,7 @@ msg::CommandBatch MotionController2::tick(uint32_t now)
 
     // Sensor fields (line / color) for SENSOR/LINE_ANY/COLOR stop conditions.
     //
-    // 060-004: MotionController2::_hw is populated solely from drive2.state(),
+    // 060-004: Planner::_hw is populated solely from drive.state(),
     // which carries no sensor data.  MotionCommand::_stops[].evaluate(inputs, …)
     // passes our private _hw as `inputs`, so without this copy, all line/color
     // stop conditions see zero values and never fire.
@@ -214,8 +209,7 @@ msg::CommandBatch MotionController2::tick(uint32_t now)
     // This copies the values that sensors.tick() wrote on the PREVIOUS tick,
     // which introduces a one-tick lag for sensor stops.  That lag is acceptable
     // and matches the legacy loop (which also evaluates sensors before
-    // sensor_tick's current-tick write in the next pass).  The full cutover
-    // (060-005) will remove this indirection once Sensors exposes a proper API.
+    // sensor_tick's current-tick write in the next pass).
     {
         const HardwareState* live = _mc.hardwareState();
         if (live != nullptr) {
@@ -230,14 +224,14 @@ msg::CommandBatch MotionController2::tick(uint32_t now)
     // ------------------------------------------------------------------
     // STEP 2: Advance goal logic via driveAdvance.
     //
-    // _cmds: sink for motor output (discarded — Drive2 owns the real motor path).
+    // _cmds: sink for motor output (discarded — Drive owns the real motor path).
     // _target: our local DesiredState; BVC writes bodyTwist here via setBvcStateRef.
     //
     // Note: if _mc._hwState != nullptr (i.e. the MC is wired to the live Robot's
     // HardwareState), getPoseFloat() inside driveAdvance will read from there
     // rather than _hw.inputs. This is intentional in the live wiring: the live
-    // pose is authoritative. In isolated test use (ticket 059-002), _mc._hwState
-    // is null, so driveAdvance falls back to our _hw parameter.
+    // pose is authoritative. In isolated test use, _mc._hwState is null, so
+    // driveAdvance falls back to our _hw parameter.
     // ------------------------------------------------------------------
     _mc.driveAdvance(_hw, _cmds, _target, now);
 
@@ -251,8 +245,8 @@ msg::CommandBatch MotionController2::tick(uint32_t now)
     // 060-004: When the MC is IDLE with no active command (e.g. after stop() /
     // watchdog X / distance complete), driveAdvance() returns without advancing
     // the BVC, leaving _desired.bodyTwist at the last profiled value.  Propagating
-    // that stale non-zero twist to Drive2 keeps the motors running indefinitely.
-    // Zero the body twist explicitly so Drive2 receives {0,0,0} in IDLE.
+    // that stale non-zero twist to Drive keeps the motors running indefinitely.
+    // Zero the body twist explicitly so Drive receives {0,0,0} in IDLE.
     // ------------------------------------------------------------------
     float vx    = _desired.bodyTwist.vx_mmps;
     float omega = _desired.bodyTwist.omega_rads;
@@ -277,7 +271,7 @@ msg::CommandBatch MotionController2::tick(uint32_t now)
     // CommandBatch.cmds_[] holds OutCommand (verb_id/args encoding).
     // For Phase 3 integration, we use a direct DrivetrainCommand embedding
     // convention: verb_id=1 (TWIST), args[0]=vx, args[1]=vy, args[2]=omega.
-    // The command bus dispatcher in ticket 059-004 will decode these.
+    // The command bus dispatcher decodes these.
     if (batch.cmds_count < 8) {
         msg::OutCommand& oc = batch.cmds_[batch.cmds_count++];
         oc.verb_id    = 1;  // TWIST verb
@@ -321,9 +315,9 @@ msg::CommandBatch MotionController2::tick(uint32_t now)
 // Updates the local RobotConfig shadow (_cfg) with the motion-only fields from
 // the PlannerConfig message. The wrapped MotionController reads limits from its
 // own original RobotConfig ref, which is not directly reachable here; the
-// intent is to prepare for ticket 059-005 where MC2 owns the config flow.
+// intent is to prepare for a future ticket where Planner owns the config flow.
 // ---------------------------------------------------------------------------
-void MotionController2::configure(const msg::PlannerConfig& cfg)
+void Planner::configure(const msg::PlannerConfig& cfg)
 {
     _planCfg = cfg;
 

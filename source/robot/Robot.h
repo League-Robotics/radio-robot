@@ -30,17 +30,17 @@
 // NOT wired into loopTickOnce this sprint (gripper is command-driven via
 // ServoController).  Value member binds the existing `gripper` IServo ref.
 #include "../subsystems/gripper/Gripper.h"
-// Phase 3 (059-004): new message-contract subsystems — Drive2, Sensors, and
-// MotionController2 (Planner).  ADDITIVE: constructed alongside the existing
-// subsystems; configure() called in the Robot constructor; NOT yet wired into
-// loopTickOnce (ticket 059-005 cutover).  Drive2 requires its own
-// BodyVelocityController member (Robot gains one named bvc2 to avoid
+// Phase 3 (059-004): new message-contract subsystems — Drive, Sensors, and
+// Planner.  ADDITIVE: constructed alongside the existing subsystems;
+// configure() called in the Robot constructor.  Drive requires its own
+// BodyVelocityController member (Robot gains one named bvc to avoid
 // shadowing MotionController's internal _bvc).
+// Renamed from Drive2/bvc2/MotionController2 in ticket 060-006.
 #include "../control/BodyVelocityController.h"
-#include "../subsystems/drive/Drive2.h"
+#include "../subsystems/drive/Drive.h"
 #include "../subsystems/sensors/Sensors.h"
 #include "../subsystems/sensors/SensorsConfig.h"
-#include "../superstructure/MotionController2.h"
+#include "../superstructure/Planner.h"
 #include "../superstructure/PlannerConfig.h"
 
 // Forward declarations — keeps the header-graph shallow.
@@ -105,7 +105,7 @@ struct Robot {
     MotorController     motorController;   // (motorL, motorR, config)
     PhysicalStateEstimate estimate;        // default ctor; wraps Odometry+EKF (041-003)
     // 060-005 NOTE: MotionController remains a public Robot value member for now.
-    // Removing it from the Robot public surface (making MC2 own it as a private
+    // Removing it from the Robot public surface (making Planner own it as a private
     // value member) requires rerouting all direct call sites in SystemCommands.cpp,
     // MotionCommands.cpp, MotionControllerBegin.cpp, RobotTelemetry.cpp, Robot.cpp,
     // and otosCorrect() — a structural refactor deferred to a follow-on ticket.
@@ -136,22 +136,21 @@ struct Robot {
     // C++ initialises members in declaration order, so they must be constructed
     // first.  Holds a const RobotConfig& as well.
     Superstructure      superstructure;    // (motionController, haltController, config)
-    // Phase 3 (059-004): new message-contract subsystems.  ADDITIVE — NOT yet
-    // wired into loopTickOnce (ticket 059-005 cutover).  configure() is called
+    // Phase 3 (059-004): new message-contract subsystems.  configure() is called
     // in the Robot constructor body after all legacy members are fully constructed.
     //
     // Declaration order is load-bearing (must follow all legacy members they ref):
-    //   bvc2       depends on motorController (declared above)
-    //   drive2     depends on motorL/motorR, motorController, bvc2, estimate
-    //   sensors    depends on lineSensor, colorSensor_ (declared above)
-    //   planner    depends on motionController, drive2 (declared above)
+    //   bvc      depends on motorController (declared above)
+    //   drive    depends on motorL/motorR, motorController, bvc, estimate
+    //   sensors  depends on lineSensor, colorSensor_ (declared above)
+    //   planner  depends on motionController, drive (declared above)
     //
-    // bvc2: Drive2's own BodyVelocityController.  Separate from the _bvc inside
+    // bvc: Drive's own BodyVelocityController.  Separate from the _bvc inside
     // MotionController to avoid sharing state between the legacy and new paths.
-    BodyVelocityController  bvc2;          // Drive2's BVC — (motorController, config)
-    subsystems::Drive2      drive2;        // new-arch Drive subsystem (059-004)
+    BodyVelocityController  bvc;           // Drive's BVC — (motorController, config)
+    subsystems::Drive       drive;         // new-arch Drive subsystem (059-004)
     subsystems::Sensors     sensors;       // new-arch Sensors facade (059-004)
-    MotionController2       planner;       // new-arch Planner wrapper (059-004)
+    Planner                 planner;       // new-arch Planner wrapper (059-004)
 
     // OtosCommands — app-layer Commandable for the seven OTOS-tuning verbs
     // (OI/OZ/OR/OV/OL/OA/OP), moved out of Odometry in 041-002.  No construction

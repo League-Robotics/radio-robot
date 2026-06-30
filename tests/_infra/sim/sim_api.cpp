@@ -228,7 +228,7 @@ void sim_tick(void* h, uint32_t now_ms)
     // _mc.setCommandsRef(&_outputs).  The pre-tick plant advance therefore uses
     // drive2.outputs() so that the PREVIOUS tick's motor command reaches the
     // physics model before loopTickOnce reads encoders.
-    s->hal.tick(now_ms, s->robot.drive2.outputs());
+    s->hal.tick(now_ms, s->robot.drive.outputs());
     // (039-002) Sensor tick: promote the integrated encoder position into each
     // MockMotor's positionMm() accessor.  The outlier filter + velocity PID +
     // wedge push (formerly controlCollectSplitPhase) now run at the top of
@@ -341,12 +341,12 @@ int sim_get_async_evts(void* h, char* evts_buf, int evts_len)
 // 060-004/060-005: drive2.state() is the authoritative encoder source.
 float sim_get_enc_l(void* h)
 {
-    return static_cast<const SimHandle*>(h)->robot.drive2.state().enc()[1];  // FL = index 1
+    return static_cast<const SimHandle*>(h)->robot.drive.state().enc()[1];  // FL = index 1
 }
 
 float sim_get_enc_r(void* h)
 {
-    return static_cast<const SimHandle*>(h)->robot.drive2.state().enc()[0];  // FR = index 0
+    return static_cast<const SimHandle*>(h)->robot.drive.state().enc()[0];  // FR = index 0
 }
 
 // ---- Velocity reads (mm/s) ----
@@ -354,12 +354,12 @@ float sim_get_enc_r(void* h)
 
 float sim_get_vel_l(void* h)
 {
-    return static_cast<const SimHandle*>(h)->robot.drive2.state().vel()[1];  // FL = index 1
+    return static_cast<const SimHandle*>(h)->robot.drive.state().vel()[1];  // FL = index 1
 }
 
 float sim_get_vel_r(void* h)
 {
-    return static_cast<const SimHandle*>(h)->robot.drive2.state().vel()[0];  // FR = index 0
+    return static_cast<const SimHandle*>(h)->robot.drive.state().vel()[0];  // FR = index 0
 }
 
 // ---- PWM reads ----
@@ -367,12 +367,12 @@ float sim_get_vel_r(void* h)
 
 float sim_get_pwm_l(void* h)
 {
-    return static_cast<float>(static_cast<const SimHandle*>(h)->robot.drive2.outputs().pwm[1]);  // FL = index 1
+    return static_cast<float>(static_cast<const SimHandle*>(h)->robot.drive.outputs().pwm[1]);  // FL = index 1
 }
 
 float sim_get_pwm_r(void* h)
 {
-    return static_cast<float>(static_cast<const SimHandle*>(h)->robot.drive2.outputs().pwm[0]);  // FR = index 0
+    return static_cast<float>(static_cast<const SimHandle*>(h)->robot.drive.outputs().pwm[0]);  // FR = index 0
 }
 
 // ---- Pose reads (fused estimate — 047-002) ----
@@ -380,17 +380,17 @@ float sim_get_pwm_r(void* h)
 
 float sim_get_pose_x(void* h)
 {
-    return static_cast<const SimHandle*>(h)->robot.drive2.state().fused.pose.x;
+    return static_cast<const SimHandle*>(h)->robot.drive.state().fused.pose.x;
 }
 
 float sim_get_pose_y(void* h)
 {
-    return static_cast<const SimHandle*>(h)->robot.drive2.state().fused.pose.y;
+    return static_cast<const SimHandle*>(h)->robot.drive.state().fused.pose.y;
 }
 
 float sim_get_pose_h(void* h)
 {
-    return static_cast<const SimHandle*>(h)->robot.drive2.state().fused.pose.h;
+    return static_cast<const SimHandle*>(h)->robot.drive.state().fused.pose.h;
 }
 
 // ---- EKF diagnostics ----
@@ -428,7 +428,7 @@ void sim_set_enc_l(void* h, float mm)
     p.setTrueWheelTravel(mm, p.trueEncRMm());     // TRUE travel (ground truth)
     p.setReportedEncoder(0, mm);                  // REPORTED accumulator (side 0 = L)
     s->robot.state.actual.encMm[1] = mm;          // FL = index 1: keep state.actual in sync
-    s->robot.drive2.injectEncL(mm);               // sync drive2 private _hw (060-004)
+    s->robot.drive.injectEncL(mm);               // sync drive2 private _hw (060-004)
 }
 
 void sim_set_enc_r(void* h, float mm)
@@ -438,7 +438,7 @@ void sim_set_enc_r(void* h, float mm)
     p.setTrueWheelTravel(p.trueEncLMm(), mm);     // TRUE travel (ground truth)
     p.setReportedEncoder(1, mm);                  // REPORTED accumulator (side 1 = R)
     s->robot.state.actual.encMm[0] = mm;          // FR = index 0: keep state.actual in sync
-    s->robot.drive2.injectEncR(mm);               // sync drive2 private _hw (060-004)
+    s->robot.drive.injectEncR(mm);               // sync drive2 private _hw (060-004)
 }
 
 // Inject an OTOS pose reading into the SimOdometer.  The injected pose is
@@ -655,7 +655,7 @@ int sim_tick_collect_tlm(void* h, uint32_t start_ms, uint32_t total_ms,
         // sim_tick: plant runs before controlCollectSplitPhase; loopTickOnce's
         // subsequent hal.tick(t,cmds) is idempotent via the dt==0 guard.
         // 060-004: MC writes into drive2._outputs, so use drive2.outputs().
-        s->hal.tick(t, s->robot.drive2.outputs());
+        s->hal.tick(t, s->robot.drive.outputs());
         // (039-002) Sensor tick — see sim_tick comment.
         s->hal.tick(t);
 
@@ -826,13 +826,13 @@ void sim_set_otos_read_failure(void* h, int fail)
 // 047-002/060-004/060-005: drive2.state() is the authoritative EKF output.
 float sim_get_fused_v(void* h)
 {
-    return static_cast<const SimHandle*>(h)->robot.drive2.state().fused.twist.v_x;
+    return static_cast<const SimHandle*>(h)->robot.drive.state().fused.twist.v_x;
 }
 
 // Read fusedOmega from fused estimate (EKF yaw rate, rad/s).
 float sim_get_fused_omega(void* h)
 {
-    return static_cast<const SimHandle*>(h)->robot.drive2.state().fused.twist.omega;
+    return static_cast<const SimHandle*>(h)->robot.drive.state().fused.twist.omega;
 }
 
 // 033-003: set the encoder-omega health gate.  When healthy=0, predict()
@@ -846,7 +846,7 @@ void sim_set_enc_omega_healthy(void* h, int healthy)
     bool h_val = (healthy != 0);
     s->robot.estimate.setEncOmegaHealthy(h_val);
     // Drive2 has its own PhysicalStateEstimate (_est) that must also be gated.
-    s->robot.drive2.setEncOmegaHealthy(h_val);
+    s->robot.drive.setEncOmegaHealthy(h_val);
 }
 
 // N11: inject a dead-reckoning pose.
@@ -858,7 +858,7 @@ void sim_set_pose(void* h, float x, float y, float hrad)
 {
     // The authoritative pose is in drive2._hw.  Inject via Drive2::injectFusedPose()
     // which writes to drive2._hw.fused.pose and refreshes _state.
-    static_cast<SimHandle*>(h)->robot.drive2.injectFusedPose(x, y, hrad);
+    static_cast<SimHandle*>(h)->robot.drive.injectFusedPose(x, y, hrad);
 }
 
 // N15: read one diagonal entry of the EKF covariance matrix P.
@@ -966,33 +966,33 @@ int sim_get_odometry_enc_omega_healthy(void* h)
 
 // 060-004/060-005: Three-estimate reads all come from drive2.state().
 float sim_get_enc_pose_x(void* h) {
-    return static_cast<const SimHandle*>(h)->robot.drive2.state().encoder.pose.x;
+    return static_cast<const SimHandle*>(h)->robot.drive.state().encoder.pose.x;
 }
 float sim_get_enc_pose_y(void* h) {
-    return static_cast<const SimHandle*>(h)->robot.drive2.state().encoder.pose.y;
+    return static_cast<const SimHandle*>(h)->robot.drive.state().encoder.pose.y;
 }
 float sim_get_enc_pose_h(void* h) {
-    return static_cast<const SimHandle*>(h)->robot.drive2.state().encoder.pose.h;
+    return static_cast<const SimHandle*>(h)->robot.drive.state().encoder.pose.h;
 }
 
 float sim_get_otos_pose_x(void* h) {
-    return static_cast<const SimHandle*>(h)->robot.drive2.state().optical.pose.x;
+    return static_cast<const SimHandle*>(h)->robot.drive.state().optical.pose.x;
 }
 float sim_get_otos_pose_y(void* h) {
-    return static_cast<const SimHandle*>(h)->robot.drive2.state().optical.pose.y;
+    return static_cast<const SimHandle*>(h)->robot.drive.state().optical.pose.y;
 }
 float sim_get_otos_pose_h(void* h) {
-    return static_cast<const SimHandle*>(h)->robot.drive2.state().optical.pose.h;
+    return static_cast<const SimHandle*>(h)->robot.drive.state().optical.pose.h;
 }
 
 float sim_get_fused_pose_x(void* h) {
-    return static_cast<const SimHandle*>(h)->robot.drive2.state().fused.pose.x;
+    return static_cast<const SimHandle*>(h)->robot.drive.state().fused.pose.x;
 }
 float sim_get_fused_pose_y(void* h) {
-    return static_cast<const SimHandle*>(h)->robot.drive2.state().fused.pose.y;
+    return static_cast<const SimHandle*>(h)->robot.drive.state().fused.pose.y;
 }
 float sim_get_fused_pose_h(void* h) {
-    return static_cast<const SimHandle*>(h)->robot.drive2.state().fused.pose.h;
+    return static_cast<const SimHandle*>(h)->robot.drive.state().fused.pose.h;
 }
 
 // ---------------------------------------------------------------------------

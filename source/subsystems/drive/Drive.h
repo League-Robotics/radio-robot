@@ -1,14 +1,13 @@
 #pragma once
 // =============================================================================
-// Drive2.h — subsystems::Drive2
+// Drive.h — subsystems::Drive
 //
 // Message-contract Drive subsystem: composes the existing control components
 // by reference (MotorController, BodyVelocityController, PhysicalStateEstimate,
 // Odometry, two IVelocityMotor, one IOdometer) and exposes the 4-verb contract
 // plus two-phase tick (tickUpdate / tickAction) per SubsystemContract.h.
 //
-// ADDITIVE — does NOT modify Drive::periodic() or the live loopTickOnce wiring.
-// Phase 3 does the swap; Drive2 is a NEW class. (Ticket 057-004.)
+// Renamed from Drive2 in ticket 060-006 (de-scaffold).
 //
 // Constraints: C++11, no heap/STL/RTTI/exceptions, no virtual in the contract.
 // =============================================================================
@@ -21,7 +20,7 @@
 #include "types/Config.h"          // RobotConfig
 #include "types/Inputs.h"          // HardwareState (= ActualState), MotorCommands
 
-// Forward declarations — resolved at link time by including the .h in Drive2.cpp.
+// Forward declarations — resolved at link time by including the .h in Drive.cpp.
 class MotorController;
 class BodyVelocityController;
 class PhysicalStateEstimate;
@@ -30,35 +29,35 @@ class Odometry;
 namespace subsystems {
 
 // ---------------------------------------------------------------------------
-// Drive2 — message-driven drivetrain subsystem.
+// Drive — message-driven drivetrain subsystem.
 //
 // Construction order mirrors Robot.h: motorL/motorR → MotorController →
 // BodyVelocityController → PhysicalStateEstimate → RobotConfig.
 //
 // Inherits FluentBuilder so call sites can use the fluent idiom:
-//   drive2.newCommand().msg().setTwist({200,0,0});
-//   drive2.apply(drive2._pending_cmd);
+//   drive.newCommand().msg().setTwist({200,0,0});
+//   drive.apply(drive._pending_cmd);
 // (Or the direct apply(cmd) path for wire-sourced commands.)
 //
-// No virtual dispatch in the control path. No heap allocation inside Drive2.
+// No virtual dispatch in the control path. No heap allocation inside Drive.
 // All component references are live for the lifetime of the owning object.
 // ---------------------------------------------------------------------------
-class Drive2 : public FluentBuilder<Drive2,
-                                    msg::DrivetrainCommand,
-                                    msg::DrivetrainConfig>
+class Drive : public FluentBuilder<Drive,
+                                   msg::DrivetrainCommand,
+                                   msg::DrivetrainConfig>
 {
 public:
     // Constructor — holds references to all control components.
-    // `hw` is the HardwareState that the Odometry/Estimator writes into; Drive2
+    // `hw` is the HardwareState that the Odometry/Estimator writes into; Drive
     // owns its own private HardwareState slice (`_hw`) for isolation from the
     // live Robot state.
-    Drive2(IMotor& motorL, IMotor& motorR,
-           MotorController& mc,
-           BodyVelocityController& bvc,
-           PhysicalStateEstimate& est,
-           Odometry& odo,
-           IOdometer& otos,
-           const RobotConfig& cfg);
+    Drive(IMotor& motorL, IMotor& motorR,
+          MotorController& mc,
+          BodyVelocityController& bvc,
+          PhysicalStateEstimate& est,
+          Odometry& odo,
+          IOdometer& otos,
+          const RobotConfig& cfg);
 
     // ---- 4-verb contract (no virtual dispatch) ----
 
@@ -73,7 +72,7 @@ public:
     void tickUpdate(uint32_t now, bool fuseOtos = false);
 
     // ACT phase: apply staged command via kinematics → wheel PID → motor output.
-    // Returns (currently empty) CommandBatch — Drive2 is a leaf actuator.
+    // Returns (currently empty) CommandBatch — Drive is a leaf actuator.
     msg::CommandBatch tickAction(uint32_t now);
 
     // Read-only state snapshot — no I/O, no copy.
@@ -90,27 +89,27 @@ public:
     // Declared capability set.
     msg::DrivetrainCapabilities capabilities() const;
 
-    // resetEncoders — atomically zero Drive2's private encoder baseline and
+    // resetEncoders — atomically zero Drive's private encoder baseline and
     // re-anchor the Odometry snapshot so the next tickUpdate sees delta=0.
     // Called by Robot::resetEncoders() in the ordered-tick path so that D and
-    // ZERO enc commands keep drive2._hw in sync with the hardware reset.
+    // ZERO enc commands keep drive._hw in sync with the hardware reset.
     void resetEncoders();
 
     // ---- Sim injection hooks (060-004) ----
-    // Used by sim_api.cpp to synchronise the Drive2 private state with direct
+    // Used by sim_api.cpp to synchronise the Drive private state with direct
     // plant injections (e.g. sim_set_enc_l, sim_set_pose, sim_set_enc_omega_healthy).
     // These are compile-time thin — zero overhead in firmware (never called there).
 
-    // Inject encoder position directly into _hw (mirrors sim_set_enc_l/r for Drive2).
+    // Inject encoder position directly into _hw (mirrors sim_set_enc_l/r for Drive).
     // Does NOT reset the plant or MotorController — just aligns the private baseline.
     void injectEncL(float mm) { _hw.encMm[1] = mm; _state.enc_[1] = mm; }
     void injectEncR(float mm) { _hw.encMm[0] = mm; _state.enc_[0] = mm; }
 
-    // Inject a fused pose directly into _hw (mirrors sim_set_pose for Drive2).
+    // Inject a fused pose directly into _hw (mirrors sim_set_pose for Drive).
     // Refreshes _state.fused too so the next state() read sees it immediately.
     void injectFusedPose(float x, float y, float h_rad);
 
-    // Forward the encoder-omega health gate to drive2's own estimator.
+    // Forward the encoder-omega health gate to drive's own estimator.
     void setEncOmegaHealthy(bool healthy);
 
 private:
@@ -130,11 +129,11 @@ private:
     msg::DrivetrainCommand  _cmd     = {};   // staged command (apply → tickAction)
     bool                    _cmdPending = false;
 
-    // Internal hardware-state slice owned by Drive2 (isolates from live Robot state).
+    // Internal hardware-state slice owned by Drive (isolates from live Robot state).
     HardwareState           _hw      = {};
     MotorCommands           _outputs = {};
 
-    // Outlier-filter streak counters (verbatim from Drive — same initial values).
+    // Outlier-filter streak counters (verbatim from legacy Drive — same initial values).
     uint32_t _lastControlMs       = 0;
     bool     _prevDriving         = false;
     bool     _prevAnyWedged       = false;
@@ -145,7 +144,7 @@ private:
     uint32_t _lastOtosMs = 0;
     bool     _otosEverReady = false;
 
-    // Per-wheel outlier-filter hold threshold (same as Drive::kFilterRejectStreakThreshold).
+    // Per-wheel outlier-filter hold threshold (same as kFilterRejectStreakThreshold).
     static constexpr uint8_t kFilterRejectStreakThreshold = 3;
 
     // ---- Helpers ----

@@ -86,18 +86,18 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       // Phase 3 (059-004): new message-contract subsystems.  ADDITIVE — NOT yet
       // wired into loopTickOnce; configure() called in the constructor body below.
       //
-      // bvc2: Drive2's private BodyVelocityController.  Separate from
+      // bvc: Drive's own BodyVelocityController.  Separate from
       // MotionController's internal _bvc so the two paths don't share PID state.
-      bvc2(motorController, config),
-      // drive2: new-arch Drive2, built with the same device refs as the legacy
-      // drive subsystem.  Own BVC (bvc2), own EKF state (via est + odo).
-      drive2(motorL, motorR, motorController, bvc2, estimate, estimate.odometry(),
-             hal.otos(), config),
+      bvc(motorController, config),
+      // drive: new-arch Drive, built with the same device refs as the legacy
+      // drive subsystem.  Own BVC (bvc), own EKF state (via est + odo).
+      drive(motorL, motorR, motorController, bvc, estimate, estimate.odometry(),
+            hal.otos(), config),
       // sensors: facade over the existing lineSensor / colorSensor_ subsystems;
       // shares the same HardwareState they write into.
       sensors(lineSensor, colorSensor_, state.actual),
-      // planner: wraps existing motionController + drive2.
-      planner(motionController, drive2, config)
+      // planner: wraps existing motionController + drive.
+      planner(motionController, drive, config)
 {
     // -----------------------------------------------------------------------
     // Phase 3 (059-004): bottom-up configure() calls.
@@ -105,16 +105,16 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
     // internal config slices are live-equivalent from construction time.
     // These calls are idempotent and cheap; order matches dependency direction.
     // -----------------------------------------------------------------------
-    drive2.configure(toDriveConfig(config));
+    drive.configure(toDriveConfig(config));
     sensors.configure(subsystems::toLineSensorConfig(config),
                       subsystems::toColorSensorConfig(config));
     planner.configure(toPlannerConfig(config));
     motionController.setHardwareState(&state.actual);
-    // 060-002: Drive2's constructor already called _mc.setCommandsRef(&_outputs),
-    // binding MotorController to drive2._outputs.  Do NOT override that binding
-    // here, or drive2.outputs() will be stale.
+    // 060-002: Drive's constructor already called _mc.setCommandsRef(&_outputs),
+    // binding MotorController to drive._outputs.  Do NOT override that binding
+    // here, or drive.outputs() will be stale.
     //
-    // 060-004: MotionController2's constructor already called
+    // 060-004: Planner's constructor already called
     // _mc.setBvcStateRef(&planner._desired) so that planner.tick() reads the BVC
     // body-twist output from planner._desired.  Do NOT override that binding here
     // or planner.tick() will read stale zeros from _desired.bodyTwist while BVC
@@ -344,11 +344,11 @@ void Robot::resetEncoders()
     //    on the very next tick rather than (0 - _prevEncL) = large negative.
     estimate.rebaselinePrev(0.0f, 0.0f);
 
-    // 4. 060-004: Drive2 owns an independent encoder baseline in _hw.encMm[].
+    // 4. 060-004: Drive owns an independent encoder baseline in _hw.encMm[].
     //    Reset it so tickUpdate() sees 0 delta after the hardware reset, and
     //    LoopTickOnce.cpp's sync block copies 0 back into state.actual.encMm[]
     //    (not the stale pre-reset accumulator).
-    drive2.resetEncoders();
+    drive.resetEncoders();
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 // drive2_api.cpp — extern "C" C-ABI shims for the Drive2 subsystem (ticket 057-004).
 //
-// Provides an opaque Drive2Handle that owns a self-contained Drive2 subsystem
+// Provides an opaque DriveHandle that owns a self-contained Drive2 subsystem
 // constructed on SimHardware, with its own local control components.
 // Python tests (test_drive2_subsystem.py) load this via ctypes and call these
 // functions directly.
@@ -13,10 +13,10 @@
 //   5. est          — PhysicalStateEstimate (default ctor, then initEKF)
 //   6. drive2       — Drive2(motorL, motorR, mc, bvc, est, est.odometry(), otos, cfg)
 //
-// The Drive2Handle owns all control components as value members so they
+// The DriveHandle owns all control components as value members so they
 // outlive any individual function call (no dangling refs).
 //
-// Heap allocation in the test fixture struct (Drive2Handle) is acceptable —
+// Heap allocation in the test fixture struct (DriveHandle) is acceptable —
 // the no-heap constraint applies to Drive2 itself, not the test harness.
 
 // Sprint 050, Ticket 004: EKFTiny must be included BEFORE any header that
@@ -33,33 +33,33 @@
 #include "control/BodyVelocityController.h"
 #include "state/PhysicalStateEstimate.h"
 #include "control/Odometry.h"
-#include "subsystems/drive/Drive2.h"
+#include "subsystems/drive/Drive.h"
 #include "messages/drivetrain.h"
 #include "messages/common.h"
 
 // ---------------------------------------------------------------------------
-// Drive2Handle — opaque handle owning a self-contained Drive2 subsystem.
+// DriveHandle — opaque handle owning a self-contained Drive2 subsystem.
 // ---------------------------------------------------------------------------
-struct Drive2Handle {
+struct DriveHandle {
     RobotConfig                cfg;
     SimHardware                hal;
     MotorController            mc;
     BodyVelocityController     bvc;
     PhysicalStateEstimate      est;
-    subsystems::Drive2         drive2;
+    subsystems::Drive         drive;
 
-    Drive2Handle()
+    DriveHandle()
         : cfg(defaultRobotConfig())
         , hal(cfg)
         , mc(hal.motorL(), hal.motorR(), cfg)
         , bvc(mc, cfg)
         , est()
-        , drive2(hal.motorL(), hal.motorR(),
-                 mc, bvc, est, est.odometry(),
-                 hal.otos(), cfg)
+        , drive(hal.motorL(), hal.motorR(),
+                mc, bvc, est, est.odometry(),
+                hal.otos(), cfg)
     {
-        // Apply the default config projection so Drive2 has live gains/lag.
-        drive2.configure(toDriveConfig(cfg));
+        // Apply the default config projection so Drive has live gains/lag.
+        drive.configure(toDriveConfig(cfg));
     }
 };
 
@@ -71,12 +71,12 @@ extern "C" {
 
 void* drive2_api_create()
 {
-    return new Drive2Handle();
+    return new DriveHandle();
 }
 
 void drive2_api_destroy(void* h)
 {
-    delete static_cast<Drive2Handle*>(h);
+    delete static_cast<DriveHandle*>(h);
 }
 
 // ---------------------------------------------------------------------------
@@ -86,45 +86,45 @@ void drive2_api_destroy(void* h)
 // Apply a body-twist command: vx_mmps, vy_mmps, omega_rads.
 void drive2_api_apply_twist(void* h, float vx, float vy, float omega)
 {
-    Drive2Handle* d = static_cast<Drive2Handle*>(h);
+    DriveHandle* d = static_cast<DriveHandle*>(h);
     msg::DrivetrainCommand cmd;
     msg::BodyTwist3 twist{};
     twist.v_x    = vx;
     twist.v_y    = vy;
     twist.omega = omega;
     cmd.setTwist(twist);
-    d->drive2.apply(cmd);
+    d->drive.apply(cmd);
 }
 
 // Apply neutral/brake command.
 void drive2_api_apply_neutral_brake(void* h)
 {
-    Drive2Handle* d = static_cast<Drive2Handle*>(h);
+    DriveHandle* d = static_cast<DriveHandle*>(h);
     msg::DrivetrainCommand cmd;
     cmd.setNeutral(msg::Neutral::BRAKE);
-    d->drive2.apply(cmd);
+    d->drive.apply(cmd);
 }
 
 // Apply neutral/coast command.
 void drive2_api_apply_neutral_coast(void* h)
 {
-    Drive2Handle* d = static_cast<Drive2Handle*>(h);
+    DriveHandle* d = static_cast<DriveHandle*>(h);
     msg::DrivetrainCommand cmd;
     cmd.setNeutral(msg::Neutral::COAST);
-    d->drive2.apply(cmd);
+    d->drive.apply(cmd);
 }
 
 // Apply SetPose command: re-anchor the fused estimate to (x_mm, y_mm, h_rad).
 void drive2_api_apply_setpose(void* h, float x, float y, float h_rad)
 {
-    Drive2Handle* d = static_cast<Drive2Handle*>(h);
+    DriveHandle* d = static_cast<DriveHandle*>(h);
     msg::DrivetrainCommand cmd;
     msg::SetPose pose{};
     pose.x  = x;
     pose.y  = y;
     pose.h = h_rad;
     cmd.setPose(pose);
-    d->drive2.apply(cmd);
+    d->drive.apply(cmd);
 }
 
 // ---------------------------------------------------------------------------
@@ -140,19 +140,19 @@ void drive2_api_apply_setpose(void* h, float x, float y, float h_rad)
 //   drive2.tickUpdate(now)  — read positionMm(), run outlier filter + EKF predict.
 void drive2_api_tick_update(void* h, uint32_t now_ms)
 {
-    Drive2Handle* d = static_cast<Drive2Handle*>(h);
+    DriveHandle* d = static_cast<DriveHandle*>(h);
     // drive2.outputs() exposes the MotorCommands that controlTick() wrote to
     // during the previous tickAction call (or zero-init on the very first tick).
-    d->hal.tick(now_ms, d->drive2.outputs());
+    d->hal.tick(now_ms, d->drive.outputs());
     d->hal.tick(now_ms);
-    d->drive2.tickUpdate(now_ms);
+    d->drive.tickUpdate(now_ms);
 }
 
 // ACT phase: apply staged command → motor outputs.
 void drive2_api_tick_action(void* h, uint32_t now_ms)
 {
-    Drive2Handle* d = static_cast<Drive2Handle*>(h);
-    d->drive2.tickAction(now_ms);
+    DriveHandle* d = static_cast<DriveHandle*>(h);
+    d->drive.tickAction(now_ms);
 }
 
 // ---------------------------------------------------------------------------
@@ -161,22 +161,22 @@ void drive2_api_tick_action(void* h, uint32_t now_ms)
 
 float drive2_api_get_fused_x(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->drive2.state().get_fused().get_pose().get_x();
+    return static_cast<DriveHandle*>(h)->drive.state().get_fused().get_pose().get_x();
 }
 
 float drive2_api_get_fused_y(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->drive2.state().get_fused().get_pose().get_y();
+    return static_cast<DriveHandle*>(h)->drive.state().get_fused().get_pose().get_y();
 }
 
 float drive2_api_get_fused_h(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->drive2.state().get_fused().get_pose().get_h();
+    return static_cast<DriveHandle*>(h)->drive.state().get_fused().get_pose().get_h();
 }
 
 int drive2_api_get_connected(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->drive2.state().get_connected() ? 1 : 0;
+    return static_cast<DriveHandle*>(h)->drive.state().get_connected() ? 1 : 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -185,7 +185,7 @@ int drive2_api_get_connected(void* h)
 
 int drive2_api_capabilities_holonomic(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->drive2.capabilities().get_holonomic() ? 1 : 0;
+    return static_cast<DriveHandle*>(h)->drive.capabilities().get_holonomic() ? 1 : 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -210,14 +210,14 @@ float drive2_api_get_target_mms_l(void* h)
     // We use hal.simMotorL() to read the last commanded speed from PhysicsWorld.
     // PhysicsWorld::trueVelLMms() returns the ACTUAL velocity (not commanded).
     // Instead, the simplest correct approach: read state.vel_[1] from Drive2.
-    const msg::DrivetrainState& st = static_cast<Drive2Handle*>(h)->drive2.state();
+    const msg::DrivetrainState& st = static_cast<DriveHandle*>(h)->drive.state();
     if (st.vel_count_val() >= 2) return st.vel()[1];
     return 0.0f;
 }
 
 float drive2_api_get_target_mms_r(void* h)
 {
-    const msg::DrivetrainState& st = static_cast<Drive2Handle*>(h)->drive2.state();
+    const msg::DrivetrainState& st = static_cast<DriveHandle*>(h)->drive.state();
     if (st.vel_count_val() >= 1) return st.vel()[0];
     return 0.0f;
 }
@@ -231,7 +231,7 @@ float drive2_api_get_target_mms_r(void* h)
 // fusion is required in the test.  Mirrors Robot::begin() → otos.begin().
 void drive2_api_begin_otos(void* h)
 {
-    Drive2Handle* d = static_cast<Drive2Handle*>(h);
+    DriveHandle* d = static_cast<DriveHandle*>(h);
     d->hal.otos().begin();
 }
 
@@ -257,7 +257,7 @@ void drive2_api_enable_otos_sim_model(void* h,
                                       float linear_scale_err,
                                       float angular_scale_err)
 {
-    Drive2Handle* d = static_cast<Drive2Handle*>(h);
+    DriveHandle* d = static_cast<DriveHandle*>(h);
     SimOdometer& odom = d->hal.simOdometer();
     odom.enableSimModel(true);
     odom.setLinearNoiseSigma(linear_noise_sigma);
@@ -286,7 +286,7 @@ void drive2_api_enable_encoder_sim_model(void* h,
                                          float scale_err_l,
                                          float scale_err_r)
 {
-    Drive2Handle* d = static_cast<Drive2Handle*>(h);
+    DriveHandle* d = static_cast<DriveHandle*>(h);
     d->hal.simMotorL().setSlip(slip_l);
     d->hal.simMotorR().setSlip(slip_r);
     d->hal.simMotorL().setScaleError(scale_err_l);
@@ -300,19 +300,19 @@ void drive2_api_enable_encoder_sim_model(void* h,
 // Plant ground-truth X position (mm) — the true integrated chassis pose.
 float drive2_api_ground_truth_x(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->hal.groundTruthX();
+    return static_cast<DriveHandle*>(h)->hal.groundTruthX();
 }
 
 // Plant ground-truth Y position (mm).
 float drive2_api_ground_truth_y(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->hal.groundTruthY();
+    return static_cast<DriveHandle*>(h)->hal.groundTruthY();
 }
 
 // Plant ground-truth heading (rad).
 float drive2_api_ground_truth_h(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->hal.groundTruthH();
+    return static_cast<DriveHandle*>(h)->hal.groundTruthH();
 }
 
 // ---------------------------------------------------------------------------
@@ -322,25 +322,25 @@ float drive2_api_ground_truth_h(void* h)
 // Encoder-only pose X (mm) — from DrivetrainState::encoder (dead-reckoning).
 float drive2_api_get_encoder_x(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->drive2.state().get_encoder().get_pose().get_x();
+    return static_cast<DriveHandle*>(h)->drive.state().get_encoder().get_pose().get_x();
 }
 
 // Encoder-only pose Y (mm).
 float drive2_api_get_encoder_y(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->drive2.state().get_encoder().get_pose().get_y();
+    return static_cast<DriveHandle*>(h)->drive.state().get_encoder().get_pose().get_y();
 }
 
 // Optical-only pose X (mm) — from DrivetrainState::optical (OTOS sim model).
 float drive2_api_get_optical_x(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->drive2.state().get_optical().get_pose().get_x();
+    return static_cast<DriveHandle*>(h)->drive.state().get_optical().get_pose().get_x();
 }
 
 // Optical-only pose Y (mm).
 float drive2_api_get_optical_y(void* h)
 {
-    return static_cast<Drive2Handle*>(h)->drive2.state().get_optical().get_pose().get_y();
+    return static_cast<DriveHandle*>(h)->drive.state().get_optical().get_pose().get_y();
 }
 
 } // extern "C"

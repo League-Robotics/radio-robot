@@ -7,7 +7,7 @@
 //
 //   verb_id = kVerbDrivetrainTwist (1)
 //       → reconstruct DrivetrainCommand{TWIST} from args_[0..2]
-//       → call drive2.apply(cmd)
+//       → call drive.apply(cmd)
 //
 //   verb_id = kVerbPlannerCommand (2)
 //       → reconstruct PlannerCommand from args_ (not yet used; no-op)
@@ -38,7 +38,7 @@
 // (test_059_bus_drain.py) via the C-ABI shim bus_drain_api.cpp.
 //
 // Constraints: C++11, no heap/STL/RTTI/exceptions.  RETURN model.
-// Reuses msg:: types, CommandQueue, CommandProcessor, Drive2.
+// Reuses msg:: types, CommandQueue, CommandProcessor, Drive.
 #pragma once
 
 #include "messages/common.h"        // msg::CommandBatch, msg::OutCommand
@@ -46,8 +46,8 @@
 #include <stdint.h>
 
 // Forward declarations — resolved at link time.
-namespace subsystems { class Drive2; }
-class MotionController2;
+namespace subsystems { class Drive; }
+class Planner;
 class CommandQueue;
 class CommandProcessor;
 
@@ -59,9 +59,9 @@ static constexpr uint8_t kBusDrainMaxIters = 8u;
 // drainCommandBatch — route every OutCommand in batch to its target.
 //
 // Parameters:
-//   batch  — CommandBatch returned by a subsystem tick() (e.g. MotionController2)
-//   drive2 — Drive2 subsystem; receives DrivetrainCommand{TWIST} for verb_id=1
-//   planner— MotionController2; receives PlannerCommand for verb_id=2 (reserved)
+//   batch  — CommandBatch returned by a subsystem tick() (e.g. Planner)
+//   drive  — Drive subsystem; receives DrivetrainCommand{TWIST} for verb_id=1
+//   planner— Planner; receives PlannerCommand for verb_id=2 (reserved)
 //   queue  — CommandQueue for passthrough / ASCII-verb commands
 //   cmd    — CommandProcessor (unused in the current dispatch table; retained
 //             for future dequeueOne integration)
@@ -74,7 +74,7 @@ static constexpr uint8_t kBusDrainMaxIters = 8u;
 // ---------------------------------------------------------------------------
 uint8_t drainCommandBatch(
     const msg::CommandBatch& batch,
-    subsystems::Drive2&      drive2,
-    MotionController2&       planner,
+    subsystems::Drive&       drive,
+    Planner&                 planner,
     CommandQueue&            queue,
     CommandProcessor&        cmd);
