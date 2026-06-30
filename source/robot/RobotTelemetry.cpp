@@ -12,44 +12,54 @@
 // ---------------------------------------------------------------------------
 // buildTlmFrame — assemble the unified TLM frame; returns length.
 //
-// Reads state.actual, config, motionController.mode(). Shared by the periodic
-// STREAM (telemetryEmit) and the synchronous SNAP command.
+// Reads drive2.state(), sensors.state(), config, motionController.mode().
+// Shared by the periodic STREAM (telemetryEmit) and the synchronous SNAP command.
+//
+// 060-001: rewired from state.actual (legacy HardwareState) to the new
+// message-contract subsystem state accessors: drive-related fields from
+// drive2.state() (msg::DrivetrainState) and sensor fields from sensors.state()
+// (subsystems::SensorsState). Wire format (field names, snprintf calls) unchanged.
 // ---------------------------------------------------------------------------
 
 int Robot::buildTlmFrame(char* buf, int len)
 {
     uint32_t t_sample = systemTime();
-    // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
-    int32_t encL = static_cast<int32_t>(state.actual.encMm[1]);
-    int32_t encR = static_cast<int32_t>(state.actual.encMm[0]);
+    // Array convention: [0]=R (FR), [1]=L (FL) — same as ActualState.h enc arrays.
+    // drive2.state().enc() returns the per-wheel encoder accumulator array.
+    const msg::DrivetrainState& ds = drive2.state();
+    const subsystems::SensorsState& ss = sensors.state();
+    int32_t encL = static_cast<int32_t>(ds.enc()[1]);
+    int32_t encR = static_cast<int32_t>(ds.enc()[0]);
 
+    // 060-001: pose read from drive2.state().fused.pose (msg::Pose2D: x,y mm, h rad).
+    // Convert to integer mm (x,y) and centidegrees (h) matching the legacy output.
+    // RAD_TO_CDEG = 18000/pi ≈ 5729.578 — same constant Odometry::getPose uses.
+    static constexpr float kRadToCdeg = 5729.5779513f;
     int32_t pose_x = 0, pose_y = 0, pose_h = 0;
     if (config.tlmFields & TLM_FIELD_POSE) {
-        // 044-001: read pose through the PhysicalStateEstimate seam instead of
-        // calling Odometry::getPose directly. estimate.getPose is a static
-        // forwarder to the same HardwareState pose fields (poseX/Y/poseHrad),
-        // so the emitted value is byte-identical (golden-TLM unchanged).
-        estimate.getPose(state.actual, pose_x, pose_y, pose_h);
+        pose_x = static_cast<int32_t>(ds.fused.pose.x);
+        pose_y = static_cast<int32_t>(ds.fused.pose.y);
+        pose_h = static_cast<int32_t>(ds.fused.pose.h * kRadToCdeg);
     }
     // N8 (030-008): gate line/color on freshness, not just the sticky valid bit.
     // A sensor that wedges after boot keeps valid=true forever; consult the
-    // lastUpdMs / lagMs envelope instead: fresh = now - lastUpdMs <= 2*lagMs.
-    // lagMs is 0 until the first valid read (lastUpdMs stays 0 too), so the
+    // last_upd / lag envelope instead: fresh = now - last_upd <= 2*lag.
+    // lag is 0 until the first valid read (last_upd stays 0 too), so the
     // subtraction wraps and the gate is never met -- correct for "never read".
     bool haveLine = line.is_initialized() &&
-                    state.actual.lineVS.valid &&
-                    (t_sample - state.actual.lineVS.lastUpdMs
-                         <= 2u * state.actual.lineVS.lagMs) &&
+                    ss.line.stamp.get_valid() &&
+                    (t_sample - ss.line.stamp.get_last_upd()
+                         <= 2u * ss.line.stamp.get_lag()) &&
                     (config.tlmFields & TLM_FIELD_LINE);
     bool haveColor = colorSensor.is_initialized() &&
-                     state.actual.colorVS.valid &&
-                     (t_sample - state.actual.colorVS.lastUpdMs
-                          <= 2u * state.actual.colorVS.lagMs) &&
+                     ss.color.stamp.get_valid() &&
+                     (t_sample - ss.color.stamp.get_last_upd()
+                          <= 2u * ss.color.stamp.get_lag()) &&
                      (config.tlmFields & TLM_FIELD_COLOR);
     bool haveVel = (config.tlmFields & TLM_FIELD_VEL) != 0;
-    // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
-    float velL = haveVel ? state.actual.velMms[1] : 0.0f;
-    float velR = haveVel ? state.actual.velMms[0] : 0.0f;
+    // Array convention: [0]=R (FR), [1]=L (FL) — same as ActualState.h vel arrays.
+    float velL = haveVel ? ds.vel()[1] : 0.0f;
+    float velR = haveVel ? ds.vel()[0] : 0.0f;
     bool haveTwist = (config.tlmFields & TLM_FIELD_TWIST) != 0;
 
     char modeChar = 'I';
@@ -85,44 +95,46 @@ int Robot::buildTlmFrame(char* buf, int len)
         // fusedV is body linear speed in mm/s (integer).
         // fusedOmega is yaw rate in rad/s; convert to mrad/s (integer) matching
         // the omega_mrads convention used by VW command and NezhaProtocol.vw().
-        // 044-001: read velocity through the PhysicalStateEstimate seam instead
-        // of reading state.actual.fusedV/fusedOmega directly. estimate.getVelocity
-        // copies those same fields (fV = s.fusedV; fOmega = s.fusedOmega), so the
-        // emitted value is byte-identical (golden-TLM unchanged).
-        float fV = 0.0f, fOmega = 0.0f;
-        estimate.getVelocity(state.actual, fV, fOmega);
+        // 060-001: read velocity from drive2.state().fused.twist (msg::BodyTwist3:
+        // v_x mm/s, omega rad/s). Semantics identical to legacy estimate.getVelocity.
+        float fV     = ds.fused.twist.v_x;
+        float fOmega = ds.fused.twist.omega;
         n = snprintf(buf + pos, (size_t)rem, " twist=%d,%d",
                      (int)fV,
                      (int)(fOmega * 1000.0f));
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
-    // N8 (030-008): gate raw otos= on freshness -- same 2*lagMs rule as
+    // N8 (030-008): gate raw otos= on freshness -- same 2*lag rule as
     // line/color above.  otos.valid stays true after the first success; if the
     // sensor goes dark the last-good pose would be emitted forever without
     // the freshness check.
+    // 060-001: read from drive2.state().otos (msg::ValueSet) and
+    // drive2.state().optical.pose (msg::Pose2D: x,y mm, h rad).
     if ((config.tlmFields & TLM_FIELD_OTOS) &&
-        state.actual.otos.valid &&
-        (t_sample - state.actual.otos.lastUpdMs
-             <= 2u * state.actual.otos.lagMs)) {
+        ds.otos.get_valid() &&
+        (t_sample - ds.otos.get_last_upd()
+             <= 2u * ds.otos.get_lag())) {
         // Raw OTOS pose (pre-fusion): x,y mm and heading in centidegrees,
         // matching the pose= field encoding. Lets the host plot the raw OTOS
         // sensor track alongside enc-derived and fused pose. 18000/pi cdeg/rad.
         n = snprintf(buf + pos, (size_t)rem, " otos=%d,%d,%d",
-                     (int)state.actual.optical.pose.x,
-                     (int)state.actual.optical.pose.y,
-                     (int)(state.actual.optical.pose.h * 5729.5779513f));
+                     (int)ds.optical.pose.x,
+                     (int)ds.optical.pose.y,
+                     (int)(ds.optical.pose.h * kRadToCdeg));
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
     if (haveLine) {
+        // 060-001: read from sensors.state().line.raw() array (msg::LineSensorState).
         n = snprintf(buf + pos, (size_t)rem, " line=%u,%u,%u,%u",
-                     (unsigned)state.actual.line[0], (unsigned)state.actual.line[1],
-                     (unsigned)state.actual.line[2], (unsigned)state.actual.line[3]);
+                     (unsigned)ss.line.raw()[0], (unsigned)ss.line.raw()[1],
+                     (unsigned)ss.line.raw()[2], (unsigned)ss.line.raw()[3]);
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
     if (haveColor) {
+        // 060-001: read from sensors.state().color (msg::ColorSensorState).
         n = snprintf(buf + pos, (size_t)rem, " color=%u,%u,%u,%u",
-                     (unsigned)state.actual.colorR, (unsigned)state.actual.colorG,
-                     (unsigned)state.actual.colorB, (unsigned)state.actual.colorC);
+                     (unsigned)ss.color.r, (unsigned)ss.color.g,
+                     (unsigned)ss.color.b, (unsigned)ss.color.c);
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
     if (config.tlmFields & TLM_FIELD_EKFREJ) {

@@ -59,8 +59,12 @@
 // ===========================================================================
 // LEGACY LOOP (default, USE_ORDERED_TICK not defined)
 //
-// Unchanged from sprint 043.  All full-robot tests and the golden-TLM canary
-// use this path.  Do not modify without updating the golden capture.
+// Mostly unchanged from sprint 043.  060-001 adds a transitional bridge at
+// the end (before TLM): drive2.projectFromLegacy() mirrors state.actual into
+// drive2._state, and sensors.tick() mirrors it into sensors._state.  This
+// keeps buildTlmFrame (which now reads drive2.state() / sensors.state())
+// byte-identical to the previous state.actual path.
+// Deleted together with this legacy branch in ticket 060-005.
 // ===========================================================================
 void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
                   LoopTickState& ts, uint32_t now)
@@ -143,6 +147,23 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // 043-001: verbatim PORTS block now in Ports::periodic(ts, now).
     robot.ports.periodic(ts, now);
 
+    // ===== BRIDGE: project legacy state into message-contract subsystems ======
+    // 060-001: buildTlmFrame now reads from drive2.state() and sensors.state()
+    // instead of robot.state.actual.  In this legacy loop path, state.actual is
+    // the authoritative source; drive2 and sensors must be explicitly updated to
+    // mirror it so that TLM frames carry live values.
+    //
+    // drive2.projectFromLegacy: copies enc/vel/fused/optical/otos fields from
+    // state.actual into drive2._state without running any motor control or EKF.
+    // Deleted together with this legacy loop branch in ticket 060-005.
+    //
+    // sensors.tick: populates sensors._state from state.actual (which lineSensor
+    // and colorSensor_ just updated above via their periodic() calls). Safe to
+    // call alongside lineSensor.periodic / colorSensor_.periodic because it reads
+    // the same HardwareState fields they wrote.
+    robot.drive2.projectFromLegacy(robot.state.actual);
+    robot.sensors.tick(now);
+
     // ===== TELEMETRY: timed TLM frame emit ====================================
     // N3 fix (030-003): emit with the STREAM-bound fn+ctx pair, not ts.activeCtx
     // (which is the last *command* channel, not the bound stream channel).
@@ -181,13 +202,11 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // =========================================================
     // STEP 1 — COMMS DRAIN: outlier filter + control collect
     //
-    // Drive::periodic() is kept here so robot.state.actual
-    // (encMm[], velMms[], the EKF fused state) receives the
-    // fresh encoder read that the rest of the legacy TLM path
-    // reads from.  Until buildTlmFrame is updated to read from
-    // drive2.state(), this call keeps TLM byte-identical.
+    // 060-001: drive.periodic() crutch removed. buildTlmFrame now
+    // reads encoder/pose/vel/twist/otos from drive2.state() and
+    // sensor fields from sensors.state(); robot.state.actual is no
+    // longer populated by the ordered-tick path.
     // =========================================================
-    robot.drive.periodic(now, robot._tlmBoundFn, robot._tlmBoundCtx);
 
     // =========================================================
     // STEP 2 — drive2.tickUpdate(now): SENSE
@@ -266,10 +285,8 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // =========================================================
     // STEP 8 — TELEMETRY
     //
-    // Reads from robot.state.actual (legacy path keeps it live
-    // via drive.periodic() in step 1).  After parity cutover,
-    // buildTlmFrame will be updated to read from drive2.state()
-    // and sensors.state().
+    // 060-001: buildTlmFrame now reads from drive2.state() and
+    // sensors.state() — robot.state.actual is no longer required.
     // =========================================================
     if (cfg.tlmPeriodMs > 0 &&
         (int32_t)(now - ts.lastTlm) >= (int32_t)cfg.tlmPeriodMs) {

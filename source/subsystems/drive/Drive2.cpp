@@ -281,6 +281,56 @@ msg::CommandBatch Drive2::tickAction(uint32_t now)
 }
 
 // ---------------------------------------------------------------------------
+// projectFromLegacy — copy legacy HardwareState into _state without any motor
+// control or EKF logic.
+//
+// Used by the legacy loopTickOnce path (060-001 transitional bridge) so that
+// buildTlmFrame (which now reads drive2.state()) sees live values before
+// USE_ORDERED_TICK is enabled as the default (ticket 060-004).  Deleted
+// together with the legacy loop branch in ticket 060-005.
+//
+// Field mapping (legacy HardwareState → msg::DrivetrainState):
+//   hw.encMm[i]       → enc_[i]       (enc_count = 2)
+//   hw.velMms[i]      → vel_[i]       (vel_count = 2)
+//   hw.fused.pose.*   → fused.pose.*  (same layout, different field names)
+//   hw.fused.twist.*  → fused.twist.* (vx_mmps → v_x, omega_rads → omega)
+//   hw.otos.*         → otos.*        (lagMs/lastUpdMs → lag/last_upd)
+//   hw.optical.pose.* → optical.pose.* (same layout)
+// ---------------------------------------------------------------------------
+void Drive2::projectFromLegacy(const HardwareState& hw)
+{
+    // Encoder positions
+    _state.enc_[0] = hw.encMm[0];
+    _state.enc_[1] = hw.encMm[1];
+    _state.enc_count = 2;
+
+    // Wheel velocities
+    _state.vel_[0] = hw.velMms[0];
+    _state.vel_[1] = hw.velMms[1];
+    _state.vel_count = 2;
+
+    // Fused pose (EKF output): old Pose2D.{x,y,h} → new msg::Pose2D.{x,y,h}
+    _state.fused.pose.x = hw.fused.pose.x;
+    _state.fused.pose.y = hw.fused.pose.y;
+    _state.fused.pose.h = hw.fused.pose.h;
+
+    // Fused twist: old BodyTwist3.{vx_mmps,vy_mmps,omega_rads} → msg::BodyTwist3.{v_x,v_y,omega}
+    _state.fused.twist.v_x   = hw.fused.twist.vx_mmps;
+    _state.fused.twist.v_y   = hw.fused.twist.vy_mmps;
+    _state.fused.twist.omega = hw.fused.twist.omega_rads;
+
+    // OTOS freshness: old ValueSet.{lagMs,lastUpdMs,valid} → msg::ValueSet.{lag,last_upd,valid}
+    _state.otos.lag      = hw.otos.lagMs;
+    _state.otos.last_upd = hw.otos.lastUpdMs;
+    _state.otos.valid    = hw.otos.valid;
+
+    // Optical (raw OTOS) pose
+    _state.optical.pose.x = hw.optical.pose.x;
+    _state.optical.pose.y = hw.optical.pose.y;
+    _state.optical.pose.h = hw.optical.pose.h;
+}
+
+// ---------------------------------------------------------------------------
 // configure — store config; next tick reads updated gains/lag/etc.
 // ---------------------------------------------------------------------------
 void Drive2::configure(const msg::DrivetrainConfig& cfg)
