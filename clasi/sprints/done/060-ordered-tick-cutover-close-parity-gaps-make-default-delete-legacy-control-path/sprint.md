@@ -2,7 +2,7 @@
 id: '060'
 title: 'Ordered-tick cutover: close parity gaps, make default, delete legacy control
   path'
-status: planning-docs
+status: done
 branch: sprint/060-ordered-tick-cutover-close-parity-gaps-make-default-delete-legacy-control-path
 use-cases: []
 issues:
