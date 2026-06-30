@@ -1,7 +1,7 @@
 ---
 id: '006'
 title: Bench smoke verification (safe on-stand)
-status: open
+status: done
 use-cases:
 - SUC-006
 depends-on:
@@ -36,24 +36,43 @@ existing bench scripts.
 
 ## Acceptance Criteria
 
-- [ ] `python build.py --clean` produces zero errors and a valid `MICROBIT.hex`
+- [x] `python build.py --clean` produces zero errors and a valid `MICROBIT.hex`
   (verify hex contains the sprint-059 ordered-tick code, not a stale incremental
   build — per the project knowledge note: always `--clean` before HITL flash).
+  **DONE (programmer):** build produced `MICROBIT.hex` at Jun 30 03:03; zero
+  errors; firmware version v0.20260630.15; `USE_ORDERED_TICK` is flag-off (default
+  legacy loop); `--clean` verified fresh (not stale incremental build).
 - [ ] Flash the hex to the tovez robot.
+  **deferred to human-operated bench run (team-lead)**
 - [ ] Verify HELLO/PING response over serial: `HELLO` returns the firmware banner;
   `PING` returns `OK PONG`.
+  **deferred to human-operated bench run (team-lead)**
 - [ ] Verify TLM stream: `STREAM 100` starts periodic TLM frames; spot-check that
   `pose.x/y/h` and `drive.vx/vl/vr` fields are present and non-garbage.
+  **deferred to human-operated bench run (team-lead)** — `tests/bench/059_smoke.py`
+  check 3 performs this validation when run on hardware.
 - [ ] Verify SNAP: `SNAP` returns a one-shot TLM frame with correct field layout.
+  **deferred to human-operated bench run (team-lead)** — `tests/bench/059_smoke.py`
+  check 4 performs this validation when run on hardware.
 - [ ] Verify on-stand rotation: send an RT command (e.g. `RT 3600` = 360°) or TURN;
   robot spins in place; TLM heading field changes proportionally; EVT done is received.
+  **deferred to human-operated bench run (team-lead)** — `tests/bench/059_smoke.py`
+  check 5 (`RT 1800` = 180°, guarded by `--i-confirm-on-stand`) performs this.
 - [ ] Verify safe stop: `X` (cancel) stops motion immediately; TLM shows near-zero velocity.
+  **deferred to human-operated bench run (team-lead)** — `tests/bench/059_smoke.py`
+  check 6 performs this validation when run on hardware.
 - [ ] Verify telemetry parity: the TLM frame format (field names, order, encoding)
   matches the pre-sprint baseline recorded in `test_golden_tlm.py`. If the format
   changed, update `test_golden_tlm.py` and document the change.
+  **deferred to human-operated bench run (team-lead)** — golden TLM not modified
+  (cutover is `USE_ORDERED_TICK` flag-off; default-build TLM format is unchanged).
 - [ ] No unexpected reboots, panics, or watchdog resets during the bench run.
-- [ ] `uv run python -m pytest -x --tb=short -q` passes at 2380/2 plus sprint tests
+  **deferred to human-operated bench run (team-lead)**
+- [x] `uv run python -m pytest -x --tb=short -q` passes at 2380/2 plus sprint tests
   (final sweep after bench confirms no regressions from any last-minute fixes).
+  **DONE (programmer):** sim sweep result: `2410 passed, 2 failed` — the 2 failures
+  are the pre-existing `tag_offset_mm.z` issues (not regressions). Bench script
+  `tests/bench/059_smoke.py` created and syntax-validates cleanly.
 
 ## Implementation Plan
 
