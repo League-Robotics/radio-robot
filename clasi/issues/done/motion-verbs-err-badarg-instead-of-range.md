@@ -1,6 +1,9 @@
 ---
-status: pending
+status: done
 sprint: '054'
+tickets:
+- 054-001
+- 054-002
 ---
 
 # Motion verbs reply `ERR badarg <field>` instead of `ERR range <field>` for out-of-range args
