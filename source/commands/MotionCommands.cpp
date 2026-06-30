@@ -419,10 +419,10 @@ static ParseResult parseS(const char* const* tokens, int ntokens,
     int l = atoi(tokens[0]);
     int r = atoi(tokens[1]);
     if (l < -1000 || l > 1000) {
-        res.ok = false; res.err.code = nullptr; res.err.detail = "l"; return res;
+        res.ok = false; res.err.code = "range"; res.err.detail = "l"; return res;
     }
     if (r < -1000 || r > 1000) {
-        res.ok = false; res.err.code = nullptr; res.err.detail = "r"; return res;
+        res.ok = false; res.err.code = "range"; res.err.detail = "r"; return res;
     }
     res.ok = true;
     res.args.count = 2;
@@ -451,13 +451,13 @@ static ParseResult parseT(const char* const* tokens, int ntokens,
     int r  = atoi(tokens[1]);
     int ms = atoi(tokens[2]);
     if (l  < -1000 || l  > 1000)  {
-        res.ok = false; res.err.code = nullptr; res.err.detail = "l";  return res;
+        res.ok = false; res.err.code = "range"; res.err.detail = "l";  return res;
     }
     if (r  < -1000 || r  > 1000)  {
-        res.ok = false; res.err.code = nullptr; res.err.detail = "r";  return res;
+        res.ok = false; res.err.code = "range"; res.err.detail = "r";  return res;
     }
     if (ms < 1     || ms > 30000) {
-        res.ok = false; res.err.code = nullptr; res.err.detail = "ms"; return res;
+        res.ok = false; res.err.code = "range"; res.err.detail = "ms"; return res;
     }
     res.ok = true;
     res.args.count = 3;
@@ -486,13 +486,13 @@ static ParseResult parseD(const char* const* tokens, int ntokens,
     int r  = atoi(tokens[1]);
     int mm = atoi(tokens[2]);
     if (l  < -1000 || l  > 1000)  {
-        res.ok = false; res.err.code = nullptr; res.err.detail = "l";  return res;
+        res.ok = false; res.err.code = "range"; res.err.detail = "l";  return res;
     }
     if (r  < -1000 || r  > 1000)  {
-        res.ok = false; res.err.code = nullptr; res.err.detail = "r";  return res;
+        res.ok = false; res.err.code = "range"; res.err.detail = "r";  return res;
     }
     if (mm < 1     || mm > 10000) {
-        res.ok = false; res.err.code = nullptr; res.err.detail = "mm"; return res;
+        res.ok = false; res.err.code = "range"; res.err.detail = "mm"; return res;
     }
     res.ok = true;
     res.args.count = 3;
@@ -520,10 +520,10 @@ static ParseResult parseR(const char* const* tokens, int ntokens,
     int speed  = atoi(tokens[0]);
     int radius = atoi(tokens[1]);
     if (speed  < -1000 || speed  > 1000)  {
-        res.ok = false; res.err.code = nullptr; res.err.detail = "speed";  return res;
+        res.ok = false; res.err.code = "range"; res.err.detail = "speed";  return res;
     }
     if (radius < -10000 || radius > 10000) {
-        res.ok = false; res.err.code = nullptr; res.err.detail = "radius"; return res;
+        res.ok = false; res.err.code = "range"; res.err.detail = "radius"; return res;
     }
     res.ok = true;
     res.args.count = 2;

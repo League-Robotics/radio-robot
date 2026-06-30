@@ -142,7 +142,9 @@ void CommandProcessor::dispatchTable(char** tokens, int ntok, KVPair* kvs, int n
             kvs, nkv);
         if (!result.ok) {
             const char* detail = (result.err.detail != nullptr) ? result.err.detail : nullptr;
-            const char* code   = (desc.errFmt != nullptr) ? desc.errFmt : "badarg";
+            const char* code   = (result.err.code  != nullptr) ? result.err.code
+                               : (desc.errFmt      != nullptr) ? desc.errFmt
+                               : "badarg";
             replyErr(rbuf, sizeof(rbuf), code, detail, corrId, effectiveFn, effectiveCtx);
             return;
         }
