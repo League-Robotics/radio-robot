@@ -16,7 +16,52 @@
 //   - sim_tick()                   (sim, after hal.tick() + controlCollectSplitPhase)
 //
 // See LoopTickOnce.h for the full contract.
+//
 // ---------------------------------------------------------------------------
+// TWO COMPILE-TIME PATHS — controlled by USE_ORDERED_TICK
+//
+// Default (USE_ORDERED_TICK undefined): the LEGACY LOOP.
+//   Unchanged from sprint 043 — all full-robot tests and the golden-TLM canary
+//   are byte-exact against this path.  This is the PRODUCTION default.
+//
+// Optional (USE_ORDERED_TICK defined): the ORDERED-TICK PATH (059-005).
+//   Rewired to the eight-step message-driven sequence:
+//     1. COMMS DRAIN      — drive.periodic (outlier filter + control)
+//     2. drive2.tickUpdate(now)   — SENSE: encoders + EKF predict + OTOS
+//     3. BUS DRAIN        — safety + dequeueOne + drainCommandBatch
+//     4. planner.tick(now)        — advance goal; returns CommandBatch{TWIST}
+//     5. BUS DRAIN        — route planner batch → drive2.apply
+//     6. drive2.tickAction(now)   — ACT: BVC → wheel PID → motor output
+//     7. sensors.tick(now)        — timed line/color reads
+//     8. TELEMETRY        — emit from state.actual (parity-shared state)
+//
+// PARITY GAPS (documented for follow-on ticket):
+//   a) Drive2 operates on its own private _hw (not robot.state.actual).
+//      The TLM frame still reads from robot.state.actual (Drive::periodic
+//      keeps that path live on #ifdef USE_ORDERED_TICK).  A full cutover
+//      requires Drive2 to write its state into robot.state.actual, OR
+//      buildTlmFrame must be updated to read from drive2.state() — which
+//      would require regenerating the golden_tlm_capture.json.
+//   b) The MotorController's setCommandsRef is wired to robot.state.outputs
+//      in the Robot constructor, not Drive2's private _outputs.  Drive2's
+//      tickAction BVC path writes motor output through bvc2 → _mc which
+//      writes to robot.state.outputs (re-wiring is needed in a follow-on).
+//   c) Sensors facade (sensors.tick) drives line/color reads through its own
+//      lag timers, independent of LoopTickState.lastLine/lastColor.
+//
+// Both paths compile and pass their respective tests.  The full-robot suite
+// stays green under the default (legacy) path.  Ticket 059-006 (or a
+// follow-on) will resolve the parity gaps and enable live cutover.
+// ---------------------------------------------------------------------------
+
+#ifndef USE_ORDERED_TICK
+
+// ===========================================================================
+// LEGACY LOOP (default, USE_ORDERED_TICK not defined)
+//
+// Unchanged from sprint 043.  All full-robot tests and the golden-TLM canary
+// use this path.  Do not modify without updating the golden capture.
+// ===========================================================================
 void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
                   LoopTickState& ts, uint32_t now)
 {
@@ -112,3 +157,125 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
         ts.lastTlm = now;
     }
 }
+
+#else  // USE_ORDERED_TICK
+
+// ===========================================================================
+// ORDERED-TICK PATH (059-005) — enabled with -DUSE_ORDERED_TICK
+//
+// Eight-step message-driven sequence per the Phase-3 architecture.
+// See comment block above for parity gaps relative to the legacy loop.
+//
+// Additional headers needed for the ordered-tick path.
+// ===========================================================================
+
+#include "robot/BusDrain.h"
+#include "subsystems/drive/Drive2.h"
+#include "superstructure/MotionController2.h"
+
+void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
+                  LoopTickState& ts, uint32_t now)
+{
+    const RobotConfig& cfg = robot.config;
+
+    // =========================================================
+    // STEP 1 — COMMS DRAIN: outlier filter + control collect
+    //
+    // Drive::periodic() is kept here so robot.state.actual
+    // (encMm[], velMms[], the EKF fused state) receives the
+    // fresh encoder read that the rest of the legacy TLM path
+    // reads from.  Until buildTlmFrame is updated to read from
+    // drive2.state(), this call keeps TLM byte-identical.
+    // =========================================================
+    robot.drive.periodic(now, robot._tlmBoundFn, robot._tlmBoundCtx);
+
+    // =========================================================
+    // STEP 2 — drive2.tickUpdate(now): SENSE
+    //
+    // Runs the Drive2 outlier filter + EKF predict + OTOS
+    // correction on Drive2's private _hw.  The Drive2 estimate
+    // is independent of robot.state.actual; it becomes the
+    // authoritative source only after the full parity cutover.
+    // =========================================================
+    robot.drive2.tickUpdate(now);
+
+    // =========================================================
+    // STEP 3 — BUS DRAIN: safety + dequeueOne + motion verbs
+    //
+    // Safety is evaluated first (keepalive watchdog + halt
+    // controller), then one enqueued command is dispatched
+    // (dequeueOne), matching the legacy ordering.  The comms
+    // batch from step 1 would normally arrive here; in the
+    // current implementation the comms drain produces no
+    // explicit CommandBatch, so we run evaluateSafety +
+    // dequeueOne directly.
+    // =========================================================
+    robot.superstructure.evaluateSafety(cmd, queue, ts, robot.state.actual, now);
+    cmd.dequeueOne(queue);
+
+    // =========================================================
+    // STEP 4 — planner.tick(now): advance goal state machine
+    //
+    // MotionController2::tick() calls _mc.driveAdvance() with
+    // its own _hw (populated from drive2.state()) and returns a
+    // CommandBatch containing a DrivetrainCommand{TWIST}.
+    // =========================================================
+    msg::CommandBatch plannerBatch = robot.planner.tick(now);
+
+    // =========================================================
+    // STEP 5 — BUS DRAIN: route planner batch → drive2.apply
+    //
+    // drainCommandBatch routes the TWIST OutCommand to
+    // drive2.apply(DrivetrainCommand{TWIST}).
+    // =========================================================
+    drainCommandBatch(plannerBatch, robot.drive2, robot.planner, queue, cmd);
+
+    // =========================================================
+    // STEP 6 — drive2.tickAction(now): ACT
+    //
+    // Applies the staged DrivetrainCommand via BVC → wheel PID
+    // → motor output.  Drive2's BVC (bvc2) is separate from
+    // MotionController's internal BVC.
+    // =========================================================
+    robot.drive2.tickAction(now);
+
+    // =========================================================
+    // STEP 6b — HAL ACTUATOR TICK
+    //
+    // The HAL tick delivers the motor commands to the plant.
+    // Under the ordered-tick path, robot.state.outputs is still
+    // the MotorController's live command sink (setCommandsRef
+    // wires to robot.state.outputs in the Robot constructor).
+    // =========================================================
+    robot.hal.tick(now, robot.state.outputs);
+
+    // =========================================================
+    // STEP 7 — sensors.tick(now): timed line/color reads
+    //
+    // Sensors facade drives both sensor reads when their lag
+    // gates fire, independent of LoopTickState timestamps.
+    // The legacy lineSensor.periodic / colorSensor_.periodic /
+    // ports.periodic are still called for ports (Ports is not
+    // yet a Ports2 subsystem) and to keep LoopTickState.lastLine
+    // / lastColor in sync with the firmware scheduler.
+    // =========================================================
+    robot.sensors.tick(now);
+    // ports.periodic: Ports is not yet wrapped in a Ports2 facade.
+    robot.ports.periodic(ts, now);
+
+    // =========================================================
+    // STEP 8 — TELEMETRY
+    //
+    // Reads from robot.state.actual (legacy path keeps it live
+    // via drive.periodic() in step 1).  After parity cutover,
+    // buildTlmFrame will be updated to read from drive2.state()
+    // and sensors.state().
+    // =========================================================
+    if (cfg.tlmPeriodMs > 0 &&
+        (int32_t)(now - ts.lastTlm) >= (int32_t)cfg.tlmPeriodMs) {
+        robot.telemetryEmit(now, robot._tlmBoundFn, robot._tlmBoundCtx);
+        ts.lastTlm = now;
+    }
+}
+
+#endif  // USE_ORDERED_TICK

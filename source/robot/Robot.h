@@ -34,6 +34,18 @@
 // NOT wired into loopTickOnce this sprint (gripper is command-driven via
 // ServoController).  Value member binds the existing `gripper` IServo ref.
 #include "../subsystems/gripper/Gripper.h"
+// Phase 3 (059-004): new message-contract subsystems — Drive2, Sensors, and
+// MotionController2 (Planner).  ADDITIVE: constructed alongside the existing
+// subsystems; configure() called in the Robot constructor; NOT yet wired into
+// loopTickOnce (ticket 059-005 cutover).  Drive2 requires its own
+// BodyVelocityController member (Robot gains one named bvc2 to avoid
+// shadowing MotionController's internal _bvc).
+#include "../control/BodyVelocityController.h"
+#include "../subsystems/drive/Drive2.h"
+#include "../subsystems/sensors/Sensors.h"
+#include "../subsystems/sensors/SensorsConfig.h"
+#include "../superstructure/MotionController2.h"
+#include "../superstructure/PlannerConfig.h"
 
 // Forward declarations — keeps the header-graph shallow.
 class DebugCommands;
@@ -131,6 +143,22 @@ struct Robot {
     // C++ initialises members in declaration order, so they must be constructed
     // first.  Holds a const RobotConfig& as well.
     Superstructure      superstructure;    // (motionController, haltController, config)
+    // Phase 3 (059-004): new message-contract subsystems.  ADDITIVE — NOT yet
+    // wired into loopTickOnce (ticket 059-005 cutover).  configure() is called
+    // in the Robot constructor body after all legacy members are fully constructed.
+    //
+    // Declaration order is load-bearing (must follow all legacy members they ref):
+    //   bvc2       depends on motorController (declared above)
+    //   drive2     depends on motorL/motorR, motorController, bvc2, estimate
+    //   sensors    depends on lineSensor, colorSensor_ (declared above)
+    //   planner    depends on motionController, drive2 (declared above)
+    //
+    // bvc2: Drive2's own BodyVelocityController.  Separate from the _bvc inside
+    // MotionController to avoid sharing state between the legacy and new paths.
+    BodyVelocityController  bvc2;          // Drive2's BVC — (motorController, config)
+    subsystems::Drive2      drive2;        // new-arch Drive subsystem (059-004)
+    subsystems::Sensors     sensors;       // new-arch Sensors facade (059-004)
+    MotionController2       planner;       // new-arch Planner wrapper (059-004)
 
     // OtosCommands — app-layer Commandable for the seven OTOS-tuning verbs
     // (OI/OZ/OR/OV/OL/OA/OP), moved out of Odometry in 041-002.  No construction

@@ -9,6 +9,11 @@
 #include "ConfigRegistry.h"
 #include "../commands/CommandProcessor.h"
 #include "../control/MotorController.h"
+#include "../subsystems/drive/Drive2.h"
+#include "../subsystems/sensors/Sensors.h"
+#include "../subsystems/sensors/SensorsConfig.h"
+#include "../superstructure/MotionController2.h"
+#include "../superstructure/PlannerConfig.h"
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -16,9 +21,12 @@
 // ---------------------------------------------------------------------------
 // Helper macros so the table stays readable.
 // ---------------------------------------------------------------------------
-#define CFG_F(k, field)  { k, CFG_FLOAT,        offsetof(RobotConfig, field) }
-#define CFG_I(k, field)  { k, CFG_INT,           offsetof(RobotConfig, field) }
-#define CFG_FI(k, field) { k, CFG_FLOAT_AS_INT,  offsetof(RobotConfig, field) }
+#define CFG_F(k, field)       { k, CFG_FLOAT,        offsetof(RobotConfig, field), nullptr }
+#define CFG_I(k, field)       { k, CFG_INT,           offsetof(RobotConfig, field), nullptr }
+#define CFG_FI(k, field)      { k, CFG_FLOAT_AS_INT,  offsetof(RobotConfig, field), nullptr }
+#define CFG_F_SS(k, field, ss)  { k, CFG_FLOAT,       offsetof(RobotConfig, field), ss }
+#define CFG_I_SS(k, field, ss)  { k, CFG_INT,         offsetof(RobotConfig, field), ss }
+#define CFG_FI_SS(k, field, ss) { k, CFG_FLOAT_AS_INT, offsetof(RobotConfig, field), ss }
 
 const ConfigEntry kRegistry[] = {
     // Encoder calibration (mm per degree of motor rotation)
@@ -35,16 +43,16 @@ const ConfigEntry kRegistry[] = {
     CFG_F("adjGain",      kAdjGain),
     // Geometry — stored as float, displayed as integer (mm)
     CFG_FI("tw",          trackwidthMm),
-    // Velocity loop gains (Sprint 010).
-    // C++ field names use flat camel-case; SET/GET key strings use dotted form.
+    // Velocity loop gains (Sprint 010).  Annotated "drive" so SET routes to
+    // drive2.configure() after the direct-write commit (059-004).
     //   velKp  <-> "vel.kP"   velKi  <-> "vel.kI"   velKff <-> "vel.kFF"
-    CFG_F("vel.kP",       velKp),
-    CFG_F("vel.kI",       velKi),
-    CFG_F("vel.kFF",      velKff),
-    CFG_F("vel.iMax",     velIMax),        // integrator clamp (PWM%)
-    CFG_F("vel.kAw",      velKaw),         // back-calc anti-windup gain (1/s)
-    CFG_F("vel.filt",     velFiltAlpha),   // velocity EMA weight (smoothing)
-    CFG_F("sync",         syncGain),       // cross-wheel ratio coupling gain
+    CFG_F_SS("vel.kP",    velKp,    "drive"),
+    CFG_F_SS("vel.kI",    velKi,    "drive"),
+    CFG_F_SS("vel.kFF",   velKff,   "drive"),
+    CFG_F_SS("vel.iMax",  velIMax,  "drive"),   // integrator clamp (PWM%)
+    CFG_F_SS("vel.kAw",   velKaw,   "drive"),   // back-calc anti-windup gain (1/s)
+    CFG_F("vel.filt",     velFiltAlpha),         // velocity EMA weight (smoothing)
+    CFG_F("sync",         syncGain),             // cross-wheel ratio coupling gain
     // Velocity deadband and wheel speed ceiling (Sprint 010)
     CFG_F("minWheelMms",  minWheelMms),
     CFG_F("vWheelMax",    vWheelMax),
@@ -57,17 +65,18 @@ const ConfigEntry kRegistry[] = {
     // Legacy keys retained for backward compatibility.
     CFG_FI("turnThr",     turnThresholdMm),
     CFG_FI("doneTol",     doneTolMm),
-    // Pose-control tunables (Sprint 011)
-    CFG_F ("aMax",        aMax),
-    CFG_F ("aDecel",      aDecel),
-    CFG_FI("turnGate",    turnInPlaceGate),   // wire: integer degrees; MotionController converts to radians at use-site
-    CFG_FI("arriveTol",   arriveTolMm),       // wire: integer mm
+    // Pose-control tunables (Sprint 011). aMax/vBodyMax/yawRateMax/arriveTolMm
+    // annotated "planner" so SET routes to planner.configure() (059-004).
+    CFG_F_SS("aMax",       aMax,         "planner"),
+    CFG_F   ("aDecel",     aDecel),
+    CFG_FI  ("turnGate",   turnInPlaceGate),   // wire: integer degrees; MotionController converts to radians at use-site
+    CFG_FI_SS("arriveTol", arriveTolMm,  "planner"),  // wire: integer mm
     // Body motion limits (Sprint 017 -- BodyVelocityController)
-    CFG_F("vBodyMax",    vBodyMax),           // body forward speed ceiling, mm/s
-    CFG_F("yawRateMax",  yawRateMax),         // yaw rate ceiling, deg/s
-    CFG_F("yawAccMax",   yawAccMax),          // yaw acceleration limit, deg/s^2
-    CFG_F("jMax",        jMax),               // linear jerk limit, mm/s^3 (0=trapezoid)
-    CFG_F("yawJerkMax",  yawJerkMax),         // yaw jerk limit, deg/s^3   (0=trapezoid)
+    CFG_F_SS("vBodyMax",   vBodyMax,     "planner"),  // body forward speed ceiling, mm/s
+    CFG_F_SS("yawRateMax", yawRateMax,   "planner"),  // yaw rate ceiling, deg/s
+    CFG_F   ("yawAccMax",  yawAccMax),                // yaw acceleration limit, deg/s^2
+    CFG_F   ("jMax",       jMax),                     // linear jerk limit, mm/s^3 (0=trapezoid)
+    CFG_F   ("yawJerkMax", yawJerkMax),               // yaw jerk limit, deg/s^3   (0=trapezoid)
     // Timing and speed (int32_t fields)
     CFG_I("minSpeed",     minSpeedMms),
     CFG_I("sTimeout",     sTimeoutMs),
@@ -75,11 +84,12 @@ const ConfigEntry kRegistry[] = {
     CFG_I("ctrlPeriod",   controlPeriodMs),
     CFG_I("tlmPeriod",    tlmPeriodMs),
     // Sensor lag budgets (ms) for the cooperative scheduler's low-priority tasks.
-    // SET lag.* N updates cfg.lag*Ms; LoopScheduler syncs task periodMs live.
-    CFG_I("lag.otos",     lagOtosMs),
-    CFG_I("lag.line",     lagLineMs),
-    CFG_I("lag.color",    lagColorMs),
-    CFG_I("lag.ports",    lagPortsMs),
+    // lag.line / lag.color annotated "sensors" so SET routes to sensors.configure()
+    // (059-004).  SET lag.* N updates cfg.lag*Ms; LoopScheduler syncs periodMs live.
+    CFG_I   ("lag.otos",  lagOtosMs),
+    CFG_I_SS("lag.line",  lagLineMs,    "sensors"),
+    CFG_I_SS("lag.color", lagColorMs,   "sensors"),
+    CFG_I   ("lag.ports", lagPortsMs),
     // OTOS calibration and turn asymmetry (Sprint 012)
     CFG_F("otosLinSc",    otosLinearScale),
     CFG_F("otosAngSc",    otosAngularScale),
@@ -98,6 +108,9 @@ const ConfigEntry kRegistry[] = {
 #undef CFG_F
 #undef CFG_I
 #undef CFG_FI
+#undef CFG_F_SS
+#undef CFG_I_SS
+#undef CFG_FI_SS
 
 const int kRegistryCount = (int)(sizeof(kRegistry) / sizeof(kRegistry[0]));
 
@@ -581,6 +594,62 @@ void handleSet(const ArgList& args, const char* corrId,
 
         if (velChanged) {
             mc.updateVelGains(cfg);
+        }
+
+        // ---------------------------------------------------------------------------
+        // Live SET routing (059-004): for each committed field that carries a
+        // "subsystem" annotation, push a typed config delta into the owning
+        // subsystem's configure() method.  This runs AFTER the direct-write commit
+        // so both RobotConfig and the subsystem's internal copy stay consistent.
+        //
+        // Routing precedence:
+        //   annotated field + non-null subsystem ptr → configure(delta)
+        //   annotated field + null ptr               → no-op (subsystem not yet live)
+        //   unannotated field                        → direct-write only (no configure)
+        //
+        // We call configure() once per subsystem that had ≥1 annotated field changed,
+        // passing the full projected slice (not just the changed fields).  A full-
+        // slice push is safe because all projection functions are idempotent and
+        // cheap; it avoids the need to accumulate per-field deltas.
+        // ---------------------------------------------------------------------------
+        bool driveChanged   = false;
+        bool plannerChanged = false;
+        bool sensorsChanged = false;
+
+        // Scan the committed keys to detect which subsystems were touched.
+        for (int i = 0; i < args.count; ++i) {
+            char kvbuf2[64];
+            int kvlen2 = 0;
+            for (const char* p = args.args[i].sval;
+                 *p && kvlen2 < (int)sizeof(kvbuf2) - 1; ++p, ++kvlen2) {
+                kvbuf2[kvlen2] = *p;
+            }
+            kvbuf2[kvlen2] = '\0';
+            char* eq2 = strchr(kvbuf2, '=');
+            if (!eq2) continue;
+            *eq2 = '\0';
+            const char* k2 = kvbuf2;
+            for (int r = 0; r < kRegistryCount; ++r) {
+                if (strcmp(kRegistry[r].key, k2) == 0 &&
+                    kRegistry[r].subsystem != nullptr) {
+                    if (strcmp(kRegistry[r].subsystem, "drive")   == 0) driveChanged   = true;
+                    if (strcmp(kRegistry[r].subsystem, "planner") == 0) plannerChanged = true;
+                    if (strcmp(kRegistry[r].subsystem, "sensors") == 0) sensorsChanged = true;
+                    break;
+                }
+            }
+        }
+
+        if (driveChanged && ctx->drive2 != nullptr) {
+            ctx->drive2->configure(toDriveConfig(cfg));
+        }
+        if (plannerChanged && ctx->planner != nullptr) {
+            ctx->planner->configure(toPlannerConfig(cfg));
+        }
+        if (sensorsChanged && ctx->sensors != nullptr) {
+            msg::LineSensorConfig  lc = subsystems::toLineSensorConfig(cfg);
+            msg::ColorSensorConfig cc = subsystems::toColorSensorConfig(cfg);
+            ctx->sensors->configure(lc, cc);
         }
 
         applied[apos] = '\0';
