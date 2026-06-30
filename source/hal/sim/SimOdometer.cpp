@@ -74,12 +74,22 @@ void SimOdometer::tick(float velL, float velR, float tw, uint32_t dt_ms) {
     float dt_s    = static_cast<float>(dt_ms) / 1000.0f;
     float dC      = (velL + velR) * 0.5f * dt_s;
     float dTh     = (velR - velL) / tw * dt_s;
+    // Gaussian noise (zero-mean, as before).
     float noisyDC  = dC  * (1.0f + otosGaussian(_rng, _linearNoiseSigma));
     float noisyDTh = dTh * (1.0f + otosGaussian(_rng, _yawNoiseSigma));
+    // Deterministic scale error (ticket 057-005): multiplies the noisy delta by
+    // (1 + scaleErr).  Applied after Gaussian noise so both compose naturally.
+    // Default _linearScaleErr == 0 and _angularScaleErr == 0 → no-op.
+    noisyDC  *= (1.0f + _linearScaleErr);
+    noisyDTh *= (1.0f + _angularScaleErr);
     float hMid    = _odomH + noisyDTh * 0.5f;
     _odomX += noisyDC * cosf(hMid);
     _odomY += noisyDC * sinf(hMid);
     _odomH += noisyDTh;
+    // Deterministic drift (ticket 057-005): additive offset accumulated per tick.
+    // Default _driftPerTickMm == 0 and _driftPerTickRad == 0 → no-op.
+    _odomX += _driftPerTickMm;
+    _odomH += _driftPerTickRad;
     // Wrap heading to [-pi, pi].
     while (_odomH >  static_cast<float>(M_PI)) _odomH -= 2.0f * static_cast<float>(M_PI);
     while (_odomH < -static_cast<float>(M_PI)) _odomH += 2.0f * static_cast<float>(M_PI);

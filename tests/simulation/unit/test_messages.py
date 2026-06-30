@@ -81,6 +81,12 @@ def _load_lib() -> ctypes.CDLL:
         ctypes.POINTER(ctypes.c_float),
     ]
 
+    # msg_test_drivetrain_control_kind_enum(out_twist_val) — test 6b
+    lib.msg_test_drivetrain_control_kind_enum.restype = ctypes.c_int
+    lib.msg_test_drivetrain_control_kind_enum.argtypes = [
+        ctypes.POINTER(ctypes.c_int),
+    ]
+
     return lib
 
 
@@ -231,8 +237,35 @@ def test_static_assert_bridges_compile():
     The fact that this test file is reachable (imported by pytest) means the
     shared library compiled successfully, which means all static_asserts in
     message_test_api.cpp passed.
+
+    Phase 2 (ticket 057-001): message_test_api.cpp now includes BOTH
+    messages/common.h AND hal/capability/Pose2D.h in one TU.  The static_asserts
+    verify sizeof(msg::Pose2D)==sizeof(::Pose2D) etc. — cross-namespace layout
+    compatibility.  If those asserts fired the build would fail, so reaching
+    here proves they passed.
     """
     # If the library loaded (msg_lib fixture didn't raise), all static_asserts
     # in message_test_api.cpp fired and passed at compile time.
     # This test is a documentary marker; it always passes at runtime.
     pass
+
+
+# ---------------------------------------------------------------------------
+# Test 6b: msg:: namespace — ControlKind enum round-trip.
+#
+# Verifies that msg::DrivetrainCommand::ControlKind::TWIST is accessible
+# with the msg:: qualifier via the C shim and equals 1.
+# ---------------------------------------------------------------------------
+
+def test_drivetrain_control_kind_namespace(msg_lib):
+    """msg::DrivetrainCommand::ControlKind::TWIST == 1 (accessible via msg:: qualifier)."""
+    out_twist_val = ctypes.c_int()
+
+    ret = msg_lib.msg_test_drivetrain_control_kind_enum(
+        ctypes.byref(out_twist_val),
+    )
+
+    assert ret == 1, "msg_test_drivetrain_control_kind_enum returned failure"
+    assert out_twist_val.value == 1, (
+        f"msg::DrivetrainCommand::ControlKind::TWIST must == 1, got {out_twist_val.value}"
+    )

@@ -1,5 +1,12 @@
 ---
-status: pending
+status: in-progress
+sprint: '057'
+tickets:
+- 057-001
+- 057-002
+- 057-003
+- 057-004
+- 057-005
 ---
 
 # Message-Based Subsystem Architecture (Drive + Sensors + Planner)

@@ -6,6 +6,8 @@
 #include "messages/common.h"
 
 
+namespace msg {
+
 // SetPose
 struct SetPose {
     float x_mm = 0.0f;
@@ -248,4 +250,6 @@ struct DrivetrainCapabilities {
     bool get_onboard_position() const { return onboard_position; }
     uint32_t get_wheel_count() const { return wheel_count; }
 };
+
+}  // namespace msg
 

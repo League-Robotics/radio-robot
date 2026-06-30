@@ -73,6 +73,12 @@ public:
     // Robot trackwidth (mm) so the OTOS sim model integrates correctly.
     void setTrackwidth(float mm) { _trackwidthMm = mm; _plant.setTrackwidth(mm); }
 
+    // Ground-truth pass-throughs (ticket 057-005): expose the plant's authoritative
+    // integrated pose so Python test shims can compare fused output vs. ground truth.
+    float groundTruthX() const { return _plant.groundTruthX(); }
+    float groundTruthY() const { return _plant.groundTruthY(); }
+    float groundTruthH() const { return _plant.groundTruthH(); }
+
 private:
     // Shared dt-guarded plant integration for tick(now,cmds).
     void advance(uint32_t now_ms, const MotorCommands& cmds);

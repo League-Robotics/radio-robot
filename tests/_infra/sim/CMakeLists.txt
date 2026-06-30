@@ -116,6 +116,10 @@ add_library(firmware_host SHARED
     # 056-003: C-ABI shims for generated message type tests + generated-side
     # static_assert layout-compat checks (bridging messages/common.h types).
     "${CMAKE_SOURCE_DIR}/message_test_api.cpp"
+    # 057-003: C-ABI shims for Sensors subsystem isolation tests.
+    "${CMAKE_SOURCE_DIR}/sensors_api.cpp"
+    # 057-004: C-ABI shims for Drive2 subsystem isolation tests.
+    "${CMAKE_SOURCE_DIR}/drive2_api.cpp"
 )
 
 target_include_directories(firmware_host PRIVATE

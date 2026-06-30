@@ -6,6 +6,8 @@
 #include "messages/common.h"
 
 
+namespace msg {
+
 // MotorCommand
 struct MotorCommand {
     enum class ControlKind : uint8_t {
@@ -102,4 +104,6 @@ struct MotorCapabilities {
     bool get_onboard_position() const { return onboard_position; }
     bool get_has_encoder() const { return has_encoder; }
 };
+
+}  // namespace msg
 

@@ -6,6 +6,8 @@
 #include "messages/common.h"
 
 
+namespace msg {
+
 // GripperCommand
 struct GripperCommand {
     Opt<float> angle_deg = {};
@@ -49,4 +51,6 @@ struct GripperConfig {
     GripperConfig& setMinDeg(float v) { min_deg = v; return *this; }
     GripperConfig& setMaxDeg(float v) { max_deg = v; return *this; }
 };
+
+}  // namespace msg
 
