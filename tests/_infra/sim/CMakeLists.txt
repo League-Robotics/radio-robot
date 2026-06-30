@@ -113,6 +113,9 @@ add_library(firmware_host SHARED
     # enc_wedged stats read zeros exactly as before. The firmware (CODAL) build
     # picks it up via RECURSIVE_FIND_FILE over source/.
     "${CMAKE_SOURCE_DIR}/sim_api.cpp"
+    # 056-003: C-ABI shims for generated message type tests + generated-side
+    # static_assert layout-compat checks (bridging messages/common.h types).
+    "${CMAKE_SOURCE_DIR}/message_test_api.cpp"
 )
 
 target_include_directories(firmware_host PRIVATE
@@ -140,4 +143,6 @@ target_include_directories(firmware_host PRIVATE
     "${REPO_ROOT}/libraries/cmon-pid"
     # 050-002: TinyEKF header-only LA backend (Sprint 050, Phase B).
     "${REPO_ROOT}/libraries/tinyekf"
+    # 056-003: generated C++11 POD message headers (source/messages/*.h).
+    "${REPO_ROOT}/source/messages"
 )

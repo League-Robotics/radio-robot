@@ -76,6 +76,10 @@ import subprocess as _sp
 _gen = os.path.join(os.path.dirname(__file__), "scripts", "gen_default_config.py")
 _sp.run([sys.executable, _gen], check=True)
 
+# Regenerate source/messages/*.h from protos/*.proto (C++11 POD headers).
+_gen_msgs = os.path.join(os.path.dirname(__file__), "scripts", "gen_messages.py")
+_sp.run([sys.executable, _gen_msgs], check=True)
+
 # out of source build!
 os.chdir("build")
 

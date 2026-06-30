@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package robot;
+
+// ---------------------------------------------------------------------------
+// Gripper subsystem messages
+// ---------------------------------------------------------------------------
+
+// Command for the gripper: optional angle means "don't override current angle".
+message GripperCommand {
+  optional float angle_deg = 1;
+}
+
+// Read-only snapshot of the gripper state.
+message GripperState {
+  optional float angle_deg = 1;
+  bool           connected = 2;
+}
+
+// Configuration for the gripper.
+message GripperConfig {
+  bool  has_gripper        = 1;
+  float gripper_offset_mm  = 2;
+  float min_deg            = 3;
+  float max_deg            = 4;
+}

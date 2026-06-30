@@ -1,6 +1,6 @@
 [project]
 name = "microbit-v2-samples-tools"
-version = "0.20260629.5"
+version = "0.20260630.2"
 description = "Utility scripts for building and deploying microbit-v2-samples"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,12 +20,18 @@ dependencies = [
 calibrate = [
     "matplotlib>=3.8",
 ]
+# Host-side build tooling — proto-to-C++ codegen. The device never sees protobuf.
+# Install with `uv sync`.
+codegen = [
+    "grpcio-tools>=1.60,<2.0",
+]
 
 [tool.uv]
 package = false
-# Include the calibrate group by default so `uv run tests/calibrate/...` always
-# has the aprilcam camera client available without an explicit --group flag.
-default-groups = ["calibrate"]
+# Include the calibrate and codegen groups by default so `uv run` commands always
+# have the aprilcam camera client and grpc codegen tools available without
+# explicit --group flags.
+default-groups = ["calibrate", "codegen"]
 
 [tool.uv.sources]
 robot-radio = { path = "host", editable = true }

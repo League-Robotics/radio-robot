@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package robot;
+
+import "common.proto";
+import "options.proto";
+
+// ---------------------------------------------------------------------------
+// Ports subsystem messages (digital + analog I/O)
+// ---------------------------------------------------------------------------
+
+// Digital output values and which channels to apply (mask).
+message DigitalOut {
+  repeated bool value = 1 [(max_count) = 4];
+  uint32        mask  = 2;
+}
+
+// Analog output values and which channels to apply (mask).
+message AnalogOut {
+  repeated int32 value = 1 [(max_count) = 4];
+  uint32         mask  = 2;
+}
+
+// Command for the ports subsystem: either digital or analog output.
+message PortCommand {
+  oneof control {
+    DigitalOut digital_out = 1;
+    AnalogOut  analog_out  = 2;
+  }
+}
+
+// Read-only snapshot of port input states.
+message PortState {
+  repeated bool  digital_in = 1 [(max_count) = 4];
+  repeated int32 analog_in  = 2 [(max_count) = 4];
+  ValueSet       stamp      = 3;
+}
+
+// Configuration for the ports subsystem.
+message PortConfig {
+  uint32          lag_ports_ms = 1;
+  repeated uint32 direction    = 2 [(max_count) = 4];  // per-port direction bitmap
+}
