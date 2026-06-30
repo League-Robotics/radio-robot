@@ -2,8 +2,8 @@
 #include "MicroBit.h"
 #include "I2CBus.h"
 #include "Config.h"
-#include "io/capability/IVelocityMotor.h"
-#include "io/capability/IPositionMotor.h"
+#include "hal/capability/IVelocityMotor.h"
+#include "hal/capability/IPositionMotor.h"
 
 /**
  * Motor — I2C driver for one channel of the PlanetX Nezha V2 motor controller.

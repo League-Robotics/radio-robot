@@ -1,5 +1,5 @@
 #pragma once
-#include "io/capability/Pose2D.h"  // Pose2D, BodyTwist3
+#include "hal/capability/Pose2D.h"  // Pose2D, BodyTwist3
 #include "types/ValueSet.h"        // ValueSet
 
 // ---------------------------------------------------------------------------

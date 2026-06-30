@@ -1,13 +1,13 @@
 #pragma once
 #include <stdint.h>
 #include "Hardware.h"
-#include "io/NoopDevices.h"
-#include "io/capability/IVelocityMotor.h"
-#include "io/capability/IPositionMotor.h"
-#include "io/capability/IOdometer.h"
-#include "io/capability/ILineSensor.h"
-#include "io/capability/IColorSensor.h"
-#include "io/capability/IPortIO.h"
+#include "hal/NoopDevices.h"
+#include "hal/capability/IVelocityMotor.h"
+#include "hal/capability/IPositionMotor.h"
+#include "hal/capability/IOdometer.h"
+#include "hal/capability/ILineSensor.h"
+#include "hal/capability/IColorSensor.h"
+#include "hal/capability/IPortIO.h"
 
 /**
  * ReplayHAL — stub Hardware implementation for ROBOT_RUN_MODE=REPLAY (039-005).

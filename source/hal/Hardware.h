@@ -1,12 +1,12 @@
 #pragma once
 #include <stdint.h>
-#include "io/NoopDevices.h"
-#include "io/capability/IVelocityMotor.h"
-#include "io/capability/ILineSensor.h"
-#include "io/capability/IColorSensor.h"
-#include "io/capability/IOdometer.h"
-#include "io/capability/IPortIO.h"
-#include "io/capability/IPositionMotor.h"
+#include "hal/NoopDevices.h"
+#include "hal/capability/IVelocityMotor.h"
+#include "hal/capability/ILineSensor.h"
+#include "hal/capability/IColorSensor.h"
+#include "hal/capability/IOdometer.h"
+#include "hal/capability/IPortIO.h"
+#include "hal/capability/IPositionMotor.h"
 
 // Full definition needed for the tick() overload that takes a const reference.
 // MotorCommands is now a using-alias for OutputState (sprint 047-001).

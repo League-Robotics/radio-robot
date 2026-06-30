@@ -1,5 +1,5 @@
 #pragma once
-#include "io/capability/IRawBusAccess.h"
+#include "hal/capability/IRawBusAccess.h"
 
 class I2CBus;
 

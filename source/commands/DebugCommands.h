@@ -1,7 +1,7 @@
 #pragma once
 #include "CommandTypes.h"
-#include "io/capability/IBusDiagnostics.h"
-#include "io/capability/IRawBusAccess.h"
+#include "hal/capability/IBusDiagnostics.h"
+#include "hal/capability/IRawBusAccess.h"
 
 // Forward declarations — keeps the header-graph shallow.
 class LoopScheduler;

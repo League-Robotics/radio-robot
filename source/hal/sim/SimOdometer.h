@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include "io/capability/IOdometer.h"
+#include "hal/capability/IOdometer.h"
 #include "PhysicsWorld.h"
 
 #ifdef HOST_BUILD

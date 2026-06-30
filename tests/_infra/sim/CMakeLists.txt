@@ -16,12 +16,12 @@ get_filename_component(REPO_ROOT "${CMAKE_SOURCE_DIR}/../../.." ABSOLUTE)
 # ROBOT_RUN_MODE (039-005): explicit build-target run mode replacing the old
 # glob-then-filter "exclude hal/mock" pattern.
 #
-#   SIM    (default here) — host build: io/sim/ device impls (MockHAL etc.);
-#          io/real/ device impls are NOT globbed (NezhaHAL/I2CBus/Motor.cpp are
+#   SIM    (default here) — host build: hal/sim/ device impls (MockHAL etc.);
+#          hal/real/ device impls are NOT globbed (NezhaHAL/I2CBus/Motor.cpp are
 #          CODAL-only and would not link host-side).
 #   REAL   — firmware build (driven from the root CMakeLists.txt + build.py);
-#          io/real/ device impls, io/sim/ excluded.
-#   REPLAY — SIM source set plus the io/ReplayHAL stub (Phase F TLM replay).
+#          hal/real/ device impls, hal/sim/ excluded.
+#   REPLAY — SIM source set plus the hal/ReplayHAL stub (Phase F TLM replay).
 #
 # PRODUCTION_BUILD and BENCH_OTOS_ENABLED stay ORTHOGONAL to ROBOT_RUN_MODE —
 # they are not folded into this variable.
@@ -44,6 +44,8 @@ file(GLOB CONTROL_SOURCES "${REPO_ROOT}/source/control/*.cpp")
 # Pure math, no CODAL deps, so it builds host-side. The firmware (CODAL) build
 # discovers these via RECURSIVE_FIND_FILE over source/.
 file(GLOB KINEMATICS_SOURCES "${REPO_ROOT}/source/kinematics/*.cpp")
+# source/robot/ includes NezhaHAL.cpp and MecanumHAL.cpp (055-001: moved from
+# hal/real/) which are CODAL-dependent and excluded below.
 file(GLOB ROBOT_SOURCES   "${REPO_ROOT}/source/robot/*.cpp")
 # 041-001 (Phase C): source/state/ holds the EKF (moved from control/) and the
 # new PhysicalStateEstimate wrapper. The control/ glob no longer picks up
@@ -62,24 +64,30 @@ file(GLOB_RECURSE SUBSYSTEM_SOURCES "${REPO_ROOT}/source/subsystems/*.cpp")
 # so exclude them from the robot glob.
 list(FILTER ROBOT_SOURCES    EXCLUDE REGEX ".*/WedgeTest\\.cpp$")
 list(FILTER ROBOT_SOURCES    EXCLUDE REGEX ".*/LoopScheduler\\.cpp$")
+# NezhaHAL.cpp and MecanumHAL.cpp moved to source/robot/ (055-001); they are
+# CODAL-dependent hardware drivers and must not compile host-side.
+list(FILTER ROBOT_SOURCES EXCLUDE REGEX ".*/NezhaHAL\\.cpp$")
+list(FILTER ROBOT_SOURCES EXCLUDE REGEX ".*/MecanumHAL\\.cpp$")
 
 # ---------------------------------------------------------------------------
 # Device-layer source set by ROBOT_RUN_MODE.
 #
-# SIM / REPLAY: glob the host (sim) device impls under source/io/sim/. The
-# io/real/ tree (NezhaHAL.cpp, I2CBus.cpp, Motor.cpp, MotorBusDiagnostics.cpp,
-# the comms files, ...) is deliberately NOT globbed — those are CODAL-only and
-# would fail to link host-side. BenchOtosSensor.cpp is the one io/real/ file the
-# host build needs (the sim_bench_otos_* hooks), so it is added explicitly below.
+# SIM / REPLAY: glob the host (sim) device impls under source/hal/sim/. The
+# hal/real/ tree (I2CBus.cpp, Motor.cpp, MotorBusDiagnostics.cpp, the comms
+# files, ...) is deliberately NOT globbed — those are CODAL-only and would
+# fail to link host-side. NezhaHAL/MecanumHAL moved to source/robot/ (055-001)
+# and are excluded by the FILTER lines above. BenchOtosSensor.cpp is the one
+# hal/real/ file the host build needs (the sim_bench_otos_* hooks), so it is
+# added explicitly below.
 #
-# REPLAY additionally compiles the io/ReplayHAL stub (Phase F TLM replay; no-op
+# REPLAY additionally compiles the hal/ReplayHAL stub (Phase F TLM replay; no-op
 # for now). It is a header-only no-op HAL whose .cpp anchors RobotMode::REPLAY.
 # ---------------------------------------------------------------------------
-file(GLOB IO_DEVICE_SOURCES "${REPO_ROOT}/source/io/sim/*.cpp")
+file(GLOB IO_DEVICE_SOURCES "${REPO_ROOT}/source/hal/sim/*.cpp")
 
 set(REPLAY_SOURCES "")
 if(ROBOT_RUN_MODE STREQUAL "REPLAY")
-    list(APPEND REPLAY_SOURCES "${REPO_ROOT}/source/io/ReplayHAL.cpp")
+    list(APPEND REPLAY_SOURCES "${REPO_ROOT}/source/hal/ReplayHAL.cpp")
 endif()
 
 add_library(firmware_host SHARED
@@ -92,13 +100,13 @@ add_library(firmware_host SHARED
     ${SUBSYSTEM_SOURCES}
     ${IO_DEVICE_SOURCES}
     ${REPLAY_SOURCES}
-    # BenchOtosSensor lives in source/io/real/ (not io/sim/) so it is not globbed
+    # BenchOtosSensor lives in source/hal/real/ (not hal/sim/) so it is not globbed
     # by IO_DEVICE_SOURCES. Add it explicitly so the host build includes it — the
     # sim_bench_otos_* hooks drive it directly. It has no CODAL/I2CBus link deps.
-    "${REPO_ROOT}/source/io/real/BenchOtosSensor.cpp"
+    "${REPO_ROOT}/source/hal/real/BenchOtosSensor.cpp"
     # NOTE (039-001): MotorBusDiagnostics.cpp is deliberately NOT added to the
     # host build. It is a REAL/firmware-only adapter (architecture §3 places it
-    # in io/real/) that forwards to I2CBus, whose definitions (I2CBus.cpp) are
+    # in hal/real/) that forwards to I2CBus, whose definitions (I2CBus.cpp) are
     # not compiled host-side — linking it here fails with undefined I2CBus
     # symbols. The host build never constructs it (only NezhaHAL does, which is
     # firmware-only); MockHAL leaves MotorController::_busDiag null, so the
@@ -112,10 +120,11 @@ target_include_directories(firmware_host PRIVATE
     "${REPO_ROOT}/source/commands"
     "${REPO_ROOT}/source/control"
     "${REPO_ROOT}/source/kinematics"
-    "${REPO_ROOT}/source/io"
-    "${REPO_ROOT}/source/io/capability"
-    "${REPO_ROOT}/source/io/real"
-    "${REPO_ROOT}/source/io/sim"
+    "${REPO_ROOT}/source/hal"
+    "${REPO_ROOT}/source/hal/capability"
+    "${REPO_ROOT}/source/hal/real"
+    "${REPO_ROOT}/source/hal/sim"
+    "${REPO_ROOT}/source/com"
     "${REPO_ROOT}/source/robot"
     "${REPO_ROOT}/source/state"
     "${REPO_ROOT}/source/superstructure"

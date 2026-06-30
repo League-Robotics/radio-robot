@@ -1,7 +1,7 @@
 #pragma once
 #include "MicroBit.h"
 #include "I2CBus.h"
-#include "io/capability/IOdometer.h"
+#include "hal/capability/IOdometer.h"
 #include <stdint.h>
 
 struct RobotConfig;   // fwd decl — begin() applies the OTOS scalars from config

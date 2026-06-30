@@ -1,5 +1,5 @@
 #pragma once
-#include "io/capability/IBusDiagnostics.h"
+#include "hal/capability/IBusDiagnostics.h"
 
 class I2CBus;
 

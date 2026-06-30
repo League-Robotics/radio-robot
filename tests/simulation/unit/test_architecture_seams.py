@@ -13,8 +13,8 @@ REPO_ROOT = pathlib.Path(__file__).parent.parent.parent.parent
 
 
 def test_seam1_capability_directory_exists():
-    """Seam 1: source/io/capability/ directory (the capability interfaces) exists."""
-    d = REPO_ROOT / "source" / "io" / "capability"
+    """Seam 1: source/hal/capability/ directory (the capability interfaces) exists."""
+    d = REPO_ROOT / "source" / "hal" / "capability"
     assert d.is_dir(), f"Seam 1 missing: {d}"
 
 
@@ -36,10 +36,10 @@ def test_seam3_superstructure_exists():
 
 def test_four_file_device_quartet_velocity_motor():
     """IVelocityMotor quartet: capability iface + real impl + sim impl + Hardware wiring."""
-    cap = REPO_ROOT / "source" / "io" / "capability" / "IVelocityMotor.h"
-    real = REPO_ROOT / "source" / "io" / "real" / "Motor.h"
-    sim = REPO_ROOT / "source" / "io" / "sim" / "SimMotor.h"
-    hardware = REPO_ROOT / "source" / "io" / "Hardware.h"
+    cap = REPO_ROOT / "source" / "hal" / "capability" / "IVelocityMotor.h"
+    real = REPO_ROOT / "source" / "hal" / "real" / "Motor.h"
+    sim = REPO_ROOT / "source" / "hal" / "sim" / "SimMotor.h"
+    hardware = REPO_ROOT / "source" / "hal" / "Hardware.h"
     assert cap.is_file(), f"Capability missing: {cap}"
     assert real.is_file(), f"Real impl missing: {real}"
     assert sim.is_file(), f"Sim impl missing: {sim}"
@@ -51,10 +51,10 @@ def test_four_file_device_quartet_velocity_motor():
 
 def test_four_file_device_quartet_odometer():
     """IOdometer quartet: capability iface + real impl + sim impl + Hardware wiring."""
-    cap = REPO_ROOT / "source" / "io" / "capability" / "IOdometer.h"
-    real = REPO_ROOT / "source" / "io" / "real" / "OtosSensor.h"
-    sim = REPO_ROOT / "source" / "io" / "sim" / "SimOdometer.h"
-    hardware = REPO_ROOT / "source" / "io" / "Hardware.h"
+    cap = REPO_ROOT / "source" / "hal" / "capability" / "IOdometer.h"
+    real = REPO_ROOT / "source" / "hal" / "real" / "OtosSensor.h"
+    sim = REPO_ROOT / "source" / "hal" / "sim" / "SimOdometer.h"
+    hardware = REPO_ROOT / "source" / "hal" / "Hardware.h"
     assert cap.is_file(), f"Capability missing: {cap}"
     assert real.is_file(), f"Real impl missing: {real}"
     assert sim.is_file(), f"Sim impl missing: {sim}"
@@ -89,15 +89,15 @@ def test_inputs_h_exists_and_robotstate_retired():
 
 def test_replay_hal_exists():
     """ReplayHAL stub files exist (the REPLAY-mode HAL)."""
-    h = REPO_ROOT / "source" / "io" / "ReplayHAL.h"
-    cpp = REPO_ROOT / "source" / "io" / "ReplayHAL.cpp"
+    h = REPO_ROOT / "source" / "hal" / "ReplayHAL.h"
+    cpp = REPO_ROOT / "source" / "hal" / "ReplayHAL.cpp"
     assert h.is_file(), f"ReplayHAL.h missing: {h}"
     assert cpp.is_file(), f"ReplayHAL.cpp missing: {cpp}"
 
 
 def test_replay_hal_contains_robot_mode():
     """ReplayHAL.cpp anchors RobotMode::REPLAY with a static_assert (stub exercised)."""
-    cpp = REPO_ROOT / "source" / "io" / "ReplayHAL.cpp"
+    cpp = REPO_ROOT / "source" / "hal" / "ReplayHAL.cpp"
     content = cpp.read_text()
     assert "RobotMode::REPLAY" in content, \
         "RobotMode::REPLAY not found in ReplayHAL.cpp"
@@ -114,18 +114,18 @@ def test_replay_hal_velocity_motor_matches_interface():
     stub uses the `override` keyword so any future signature drift fails to compile.
 
     NoopVelocityMotor was refactored from ReplayHAL.h into the shared header
-    io/NoopDevices.h in ticket 046-003. ReplayHAL.h includes NoopDevices.h so
+    hal/NoopDevices.h in ticket 046-003. ReplayHAL.h includes NoopDevices.h so
     the invariant is preserved; the check now targets the canonical location.
     """
-    iface = (REPO_ROOT / "source" / "io" / "capability" / "IVelocityMotor.h").read_text()
-    noop = (REPO_ROOT / "source" / "io" / "NoopDevices.h").read_text()
-    replay = (REPO_ROOT / "source" / "io" / "ReplayHAL.h").read_text()
+    iface = (REPO_ROOT / "source" / "hal" / "capability" / "IVelocityMotor.h").read_text()
+    noop = (REPO_ROOT / "source" / "hal" / "NoopDevices.h").read_text()
+    replay = (REPO_ROOT / "source" / "hal" / "ReplayHAL.h").read_text()
     assert "virtual void setSpeed(int8_t pct)" in iface, \
         "IVelocityMotor no longer declares setSpeed(int8_t)"
     assert "setSpeed(int8_t pct) override" in noop, \
-        "NoopVelocityMotor (io/NoopDevices.h) does not override setSpeed(int8_t)"
-    assert 'include "io/NoopDevices.h"' in replay, \
-        "ReplayHAL.h no longer includes io/NoopDevices.h (NoopVelocityMotor moved there in 046-003)"
+        "NoopVelocityMotor (hal/NoopDevices.h) does not override setSpeed(int8_t)"
+    assert 'include "hal/NoopDevices.h"' in replay, \
+        "ReplayHAL.h no longer includes hal/NoopDevices.h (NoopVelocityMotor moved there in 046-003)"
 
 
 def test_vendor_baseline_empty():
