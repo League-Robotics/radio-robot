@@ -152,6 +152,18 @@ public:
     float truePoseY() const { return _truePoseY; }
     float truePoseH() const { return _truePoseH; }
 
+    // Ground-truth accessors (ticket 057-005): return the plant's authoritative
+    // integrated pose.  Alias to truePose* — ground truth IS the integrated state.
+    float groundTruthX() const { return _truePoseX; }
+    float groundTruthY() const { return _truePoseY; }
+    float groundTruthH() const { return _truePoseH; }
+
+    // Ideal (error-free) pose: currently identical to ground truth.  Diverges only
+    // if wheel-encoder error / slip is introduced for the OTOS path separately.
+    float idealX() const { return _truePoseX; }
+    float idealY() const { return _truePoseY; }
+    float idealH() const { return _truePoseH; }
+
     float trueEncLMm() const { return _trueEncLMm; }
     float trueEncRMm() const { return _trueEncRMm; }
 

@@ -222,4 +222,87 @@ float drive2_api_get_target_mms_r(void* h)
     return 0.0f;
 }
 
+// ---------------------------------------------------------------------------
+// Noise / error-model injection (ticket 057-005)
+// ---------------------------------------------------------------------------
+
+// Enable the OTOS sim model and configure all noise + drift knobs.
+// After this call the SimOdometer integrates from plant velocity with the
+// specified error so the optical estimate diverges from ground truth.
+//
+//   linear_noise_sigma  — Gaussian position noise (mm, zero-mean, per tick)
+//   yaw_noise_sigma     — Gaussian heading noise (rad, zero-mean, per tick)
+//   drift_per_tick_mm   — Deterministic X-axis drift per tick (mm)
+//   drift_per_tick_rad  — Deterministic heading drift per tick (rad)
+//   linear_scale_err    — Fractional linear scale error (0.03 = 3% over-report)
+//   angular_scale_err   — Fractional angular scale error
+void drive2_api_enable_otos_sim_model(void* h,
+                                      float linear_noise_sigma,
+                                      float yaw_noise_sigma,
+                                      float drift_per_tick_mm,
+                                      float drift_per_tick_rad,
+                                      float linear_scale_err,
+                                      float angular_scale_err)
+{
+    Drive2Handle* d = static_cast<Drive2Handle*>(h);
+    SimOdometer& odom = d->hal.simOdometer();
+    odom.enableSimModel(true);
+    odom.setLinearNoiseSigma(linear_noise_sigma);
+    odom.setYawNoiseSigma(yaw_noise_sigma);
+    odom.setDriftPerTickMm(drift_per_tick_mm);
+    odom.setDriftPerTickRad(drift_per_tick_rad);
+    odom.setLinearScaleError(linear_scale_err);
+    odom.setAngularScaleError(angular_scale_err);
+}
+
+// ---------------------------------------------------------------------------
+// Ground-truth reads (ticket 057-005)
+// ---------------------------------------------------------------------------
+
+// Plant ground-truth X position (mm) — the true integrated chassis pose.
+float drive2_api_ground_truth_x(void* h)
+{
+    return static_cast<Drive2Handle*>(h)->hal.groundTruthX();
+}
+
+// Plant ground-truth Y position (mm).
+float drive2_api_ground_truth_y(void* h)
+{
+    return static_cast<Drive2Handle*>(h)->hal.groundTruthY();
+}
+
+// Plant ground-truth heading (rad).
+float drive2_api_ground_truth_h(void* h)
+{
+    return static_cast<Drive2Handle*>(h)->hal.groundTruthH();
+}
+
+// ---------------------------------------------------------------------------
+// Raw encoder-only and optical-only pose reads (ticket 057-005)
+// ---------------------------------------------------------------------------
+
+// Encoder-only pose X (mm) — from DrivetrainState::encoder (dead-reckoning).
+float drive2_api_get_encoder_x(void* h)
+{
+    return static_cast<Drive2Handle*>(h)->drive2.state().get_encoder().get_pose().get_x_mm();
+}
+
+// Encoder-only pose Y (mm).
+float drive2_api_get_encoder_y(void* h)
+{
+    return static_cast<Drive2Handle*>(h)->drive2.state().get_encoder().get_pose().get_y_mm();
+}
+
+// Optical-only pose X (mm) — from DrivetrainState::optical (OTOS sim model).
+float drive2_api_get_optical_x(void* h)
+{
+    return static_cast<Drive2Handle*>(h)->drive2.state().get_optical().get_pose().get_x_mm();
+}
+
+// Optical-only pose Y (mm).
+float drive2_api_get_optical_y(void* h)
+{
+    return static_cast<Drive2Handle*>(h)->drive2.state().get_optical().get_pose().get_y_mm();
+}
+
 } // extern "C"

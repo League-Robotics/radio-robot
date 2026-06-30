@@ -81,6 +81,18 @@ public:
     // OTOS LIFT status (robot lifted; sensor returns INVALID).
     void setLift(bool on)                 { _lift = on; }
 
+    // Deterministic drift error: accumulated offset added per tick.
+    // A fresh SimOdometer has zero drift (perfect sensor).
+    // _driftPerTickMm is added to the linear odometry accumulator each tick;
+    // _driftPerTickRad is added to the heading accumulator each tick.
+    void setDriftPerTickMm(float mm)   { _driftPerTickMm = mm; }
+    void setDriftPerTickRad(float rad) { _driftPerTickRad = rad; }
+
+    // Scale error: multiplies the reported delta by (1 + error).
+    // 0.0 = perfect, 0.05 = 5% scale error.
+    void setLinearScaleError(float err)  { _linearScaleErr = err; }
+    void setAngularScaleError(float err) { _angularScaleErr = err; }
+
     // Accumulated OTOS odometry (sim-model output; back-compat sim_get_otos_*).
     float odomX() const { return _odomX; }
     float odomY() const { return _odomY; }
@@ -112,6 +124,13 @@ private:
     float _odomX            = 0.0f;
     float _odomY            = 0.0f;
     float _odomH            = 0.0f;
+
+    // Deterministic error model (ticket 057-005).
+    // All zero by default → a fresh SimOdometer is perfect (no behaviour change).
+    float _driftPerTickMm   = 0.0f;   // linear drift added to odomX accumulator per tick
+    float _driftPerTickRad  = 0.0f;   // heading drift added to odomH per tick
+    float _linearScaleErr   = 0.0f;   // fractional scale error on linear delta (0 = perfect)
+    float _angularScaleErr  = 0.0f;   // fractional scale error on angular delta (0 = perfect)
 
     float _velV             = 0.0f;
     float _velOmega         = 0.0f;

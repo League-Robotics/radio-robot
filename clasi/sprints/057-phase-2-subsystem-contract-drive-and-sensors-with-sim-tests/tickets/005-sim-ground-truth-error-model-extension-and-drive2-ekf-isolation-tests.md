@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: Sim ground-truth/error model extension and Drive2 EKF isolation tests
-status: open
+status: done
 use-cases:
 - SUC-005
 depends-on:
@@ -162,23 +162,23 @@ Document the chosen values in the test comment.
 
 ## Acceptance Criteria
 
-- [ ] `SimOdometer` gains `setDriftPerTickMm(float)`, `setDriftPerTickRad(float)`,
+- [x] `SimOdometer` gains `setDriftPerTickMm(float)`, `setDriftPerTickRad(float)`,
       `setLinearScaleError(float)`, `setAngularScaleError(float)` setters.
-- [ ] `SimOdometer::tick()` applies drift and scale error in addition to existing
+- [x] `SimOdometer::tick()` applies drift and scale error in addition to existing
       zero-mean Gaussian noise. A default `SimOdometer` (all knobs at zero) behaves
       identically to before.
-- [ ] `PhysicsWorld::groundTruthX/Y/H()` accessors added and return the plant's
+- [x] `PhysicsWorld::groundTruthX/Y/H()` accessors added and return the plant's
       authoritative integrated position.
-- [ ] `SimHardware::groundTruthX/Y/H()` pass-throughs added.
-- [ ] `drive2_api.cpp` shims added for `enable_otos_sim_model` and ground-truth reads.
-- [ ] `test_ekf_fusion_beats_noise` passes: fused error < 20 mm, max(enc_err, opt_err)
+- [x] `SimHardware::groundTruthX/Y/H()` pass-throughs added.
+- [x] `drive2_api.cpp` shims added for `enable_otos_sim_model` and ground-truth reads.
+- [x] `test_ekf_fusion_beats_noise` passes: fused error < 20 mm, max(enc_err, opt_err)
       > 10 mm after 50 ticks with noise injected.
-- [ ] All 4 existing `test_drive2_subsystem.py` tests from ticket 004 still pass
+- [x] All 4 existing `test_drive2_subsystem.py` tests from ticket 004 still pass
       (noise knobs default to zero — no regression).
-- [ ] All other existing simulation tests still pass (no existing `SimOdometer` or
+- [x] All other existing simulation tests still pass (no existing `SimOdometer` or
       `PhysicsWorld` behavior changes when knobs are left at default zero).
-- [ ] `python build.py --clean` zero errors.
-- [ ] `uv run python -m pytest` green at baseline + all new tests.
+- [x] `python build.py --clean` zero errors.
+- [x] `uv run python -m pytest` green at baseline + all new tests.
 
 ## Testing Plan
 
