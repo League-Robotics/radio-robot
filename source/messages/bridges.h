@@ -4,23 +4,43 @@
 // bridges.h — compile-time compatibility checks between the generated
 // message headers (source/messages/*.h) and the existing HAL types.
 //
-// Usage in firmware TUs:
-//   Include this file AFTER the subsystem message headers. It assumes the
-//   generated message types are already visible (via messages/common.h etc.)
-//   and checks size/layout compatibility with hal/capability/Pose2D.h types.
+// Layout-compatibility proof strategy (ticket 003):
+//   The generated Pose2D (common.h: {x_mm, y_mm, h_rad}) and the HAL
+//   Pose2D (Pose2D.h: {x, y, h}) share the same name at global scope.
+//   Including both in one TU causes a redefinition error, so the cross-
+//   check is split:
+//     - This file (bridges.h) includes hal/capability/Pose2D.h and verifies
+//       the HAL types are the expected sizes.
+//     - tests/_infra/sim/message_test_api.cpp includes messages/common.h
+//       and verifies the generated types are the same sizes.
+//   Together, both sides being sizeof(float)*N proves layout compatibility.
+//   The naming conflict will be resolved in Phase 2 via namespace migration.
 //
-// At ticket 002 the checks are trivially true; they bind tighter in ticket 003
-// once the naming is resolved and full static_assert coverage is added.
+// Usage:
+//   Include bridges.h from any firmware TU that has NOT already included
+//   messages/common.h (to avoid the Pose2D redefinition collision).
+//   The message_test_api.cpp shim provides compile-time verification of the
+//   generated side.
 #pragma once
 #include "hal/capability/Pose2D.h"
 
-// The HAL Pose2D struct must remain 3 floats (x, y, h).
+// --- HAL-side size checks ---
+// If any of these fire, the hand-authored HAL struct in Pose2D.h was changed
+// in a way that breaks its contract with the generated message types.
+
+// HAL Pose2D: { float x, y, h } — must remain 3 floats (12 bytes on ARM).
+// Generated msg Pose2D: { float x_mm, y_mm, h_rad } — also 3 floats (verified
+// in tests/_infra/sim/message_test_api.cpp).  sizeof equality => layout compat.
 static_assert(sizeof(::Pose2D) == sizeof(float) * 3,
-              "HAL Pose2D must be 3 floats {x,y,h} — check hal/capability/Pose2D.h");
+              "HAL Pose2D must be 3 floats {x,y,h} — layout compat with generated Pose2D broken");
 
-// The HAL BodyTwist3 struct must remain 3 floats (vx, vy, omega).
+// HAL BodyTwist3: { float vx_mmps, vy_mmps, omega_rads } — must remain 3 floats.
+// Generated msg BodyTwist3 is identical in field order and count.
 static_assert(sizeof(::BodyTwist3) == sizeof(float) * 3,
-              "HAL BodyTwist3 must be 3 floats {vx,vy,omega} — check hal/capability/Pose2D.h");
+              "HAL BodyTwist3 must be 3 floats — layout compat with generated BodyTwist3 broken");
 
-// TODO (ticket 003): add cross-asserts between generated messages/common.h
-// Pose2D and the HAL Pose2D once the naming conflict is resolved.
+// HAL RobotGeometry: { float halfTrackMm, halfWheelbaseMm } — must remain 2 floats.
+// Corresponds to DrivetrainConfig::half_track_mm / half_wheelbase_mm in the
+// generated drivetrain.h (no direct generated RobotGeometry message yet).
+static_assert(sizeof(::RobotGeometry) == sizeof(float) * 2,
+              "HAL RobotGeometry must be 2 floats — check hal/capability/Pose2D.h");

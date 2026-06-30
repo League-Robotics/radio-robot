@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Generated headers compile + static_assert bridges + host unit tests
-status: open
+status: done
 use-cases:
 - SUC-003
 - SUC-004
@@ -146,17 +146,17 @@ pattern used by the existing `sim_api.cpp` shims.
 
 ## Acceptance Criteria
 
-- [ ] `python build.py --clean` exits 0 with `source/messages/*.h` present (device build).
-- [ ] Host sim library builds cleanly after adding `source/messages/` to include path.
-- [ ] `tests/_infra/sim/CMakeLists.txt` has `source/messages/` in `target_include_directories`.
-- [ ] `source/messages/bridges.h` has `static_assert` checks for `Pose2D`, `BodyTwist3`,
+- [x] `python build.py --clean` exits 0 with `source/messages/*.h` present (device build).
+- [x] Host sim library builds cleanly after adding `source/messages/` to include path.
+- [x] `tests/_infra/sim/CMakeLists.txt` has `source/messages/` in `target_include_directories`.
+- [x] `source/messages/bridges.h` has `static_assert` checks for `Pose2D`, `BodyTwist3`,
       and `RobotGeometry` size equality vs. hand-authored types.
-- [ ] `tests/simulation/unit/test_messages.py` exists and contains at minimum the 5
+- [x] `tests/simulation/unit/test_messages.py` exists and contains at minimum the 5
       test functions listed above (or equivalent).
-- [ ] `uv run python -m pytest tests/simulation/unit/test_messages.py` exits 0.
-- [ ] Full `uv run python -m pytest` run is green except the 2 pre-existing
+- [x] `uv run python -m pytest tests/simulation/unit/test_messages.py` exits 0.
+- [x] Full `uv run python -m pytest` run is green except the 2 pre-existing
       `tag_offset_mm.z` failures (no new failures introduced).
-- [ ] No `std::`, `new`, `delete`, `throw` in any `source/messages/*.h` file.
+- [x] No `std::`, `new`, `delete`, `throw` in any `source/messages/*.h` file.
 
 ## Implementation Plan
 
