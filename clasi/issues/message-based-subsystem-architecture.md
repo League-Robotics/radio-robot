@@ -58,34 +58,46 @@ S::Command   // intent   (u) — what to do
 S::State     // estimate (x) — what is happening (read-only snapshot)
 S::Config    // params   (θ) — how to behave
 
-CommandBatch periodic(uint32_t now);   // LIFECYCLE ENGINE — does the per-tick work; returns outbound commands
-CommandBatch apply(const Command&);    // stage intent; returns outbound ROUTABLE commands (not S::Command)
+void         apply(const Command&);    // STAGE intent only — no execution, no emission; the next tick() acts on it
+CommandBatch tick(uint32_t now);       // LIFECYCLE ENGINE — does the per-tick work; returns outbound ROUTABLE commands
 const State& state() const;            // const-ref to the subsystem's internal State; getters on it
-void         configure(const Config&); // delta-apply params; live-safe; read by the next periodic()
+void         configure(const Config&); // delta-apply params; live-safe; read by the next tick()
 Capabilities capabilities() const;     // declared truth: which Command modes accepted, which State fields populated
 ```
 
-- **`periodic(now)` is the engine.** It does the subsystem's per-tick work: drives
+- **`tick(now)` is the engine.** It does the subsystem's per-tick work: drives
   hardware I/O, runs the internal control step, updates the owned `State` slice and
   actuator outputs. The other verbs are deliberately cheap around it.
-- **`apply()` stages intent** (writes the desired/output slice). It does **not**
-  touch hardware; the next `periodic()` acts on it.
+- **`apply()` stages intent** (writes the desired/pending slice) and **returns
+  nothing**. It does **not** touch hardware and does **not** emit anything; the next
+  `tick()` reads the staged command, acts on it, and is the verb that produces
+  outbound commands.
 - **`state()` returns a const reference** to the subsystem's internal `State`,
-  which `periodic()` keeps fresh. No device I/O, no copy — callers hold the ref and
+  which `tick()` keeps fresh. No device I/O, no copy — callers hold the ref and
   call getters (the existing cached-accessor idiom, e.g. `IVelocityMotor::positionMm()`).
-- **`configure()` delta-applies params**, read live by the next `periodic()`.
+- **`configure()` delta-applies params**, read live by the next `tick()`.
 
 **Two-phase Drive, single-phase Sensors (resolved — not "optional").** Because I2C
 is split-phase and the loop must order *all sensing before all actuation*, **Drive**
-splits `periodic()` into `updateInputs(now)` (sense: request/collect encoders + OTOS,
-run fusion, refresh State) and `update(now)` (act: kinematics → wheel PID → motor
-outputs) — the AdvantageKit `updateInputs`/`periodic` seam. **Sensors** stays
-single-phase `periodic(now)`. The scheduler calls Drive's `updateInputs()` early and
-its `update()` late (see [run loop](#the-run-loop-explicit-ordered-tick)).
+splits `tick()` into `tickUpdate(now)` (sense: request/collect encoders + OTOS, run
+fusion, refresh State) and `tickAction(now)` (act: kinematics → wheel PID → motor
+outputs) — the same seam AdvantageKit splits into `updateInputs`/`periodic`, but kept
+under the `tick` name so both halves read as one verb. **Sensors** stays single-phase
+`tick(now)`. The scheduler calls Drive's `tickUpdate()` early and its `tickAction()`
+late (see [run loop](#the-run-loop-explicit-ordered-tick)). In the two-phase form the
+**`tickAction()` half carries the `CommandBatch` return** (it is the act/emit phase);
+`tickUpdate()` only senses and returns nothing. (Drive is a leaf actuator and rarely
+emits to other subsystems, but the seam is there if it must.)
 
-**Naming.** Devices use `tick(now_ms)` (`IVelocityMotor::tick`, `hal.tick`);
-subsystems use `periodic(now)`. `subsystem.periodic()` drives the nested
-`device.tick()` calls — same idea at two scales, not a conflict.
+**Naming (one verb everywhere).** A function whose job is "advance this thing on a
+time interval" has **one name across the whole codebase: `tick(now)`** — devices,
+subsystems, and the Planner alike. There is no `tick`-for-devices /
+`periodic`-for-subsystems split: it is the same operation at different scales, so it
+carries the same name. `subsystem.tick()` drives the nested `device.tick()` calls.
+(The existing device/HAL `tick(now_ms)` already sets the convention; subsystems —
+currently `periodic()` — are renamed to `tick()` as part of this work. The only
+elaboration is Drive's two-phase `tickUpdate`/`tickAction` split above, which still
+keeps `tick` in the name.)
 
 **Fluent ergonomics (the call-site form).** Message types are plain objects with
 getters and (for `Command`/`Config`) chainable setters; the subsystem owns one
@@ -96,7 +108,7 @@ terminated by the verb, over the data-plane `apply(const Command&)` beneath it:
 drive.newCommand().setTwist(vx, vy, omega).apply();   // vy rejected unless capabilities().holonomic
 sensors.line().newConfig().setLagMs(20).configure();
 
-drive.updateInputs(now); drive.update(now);
+drive.tickUpdate(now); drive.tickAction(now);
 float vx = drive.state().fused().twist().vx();        // getters on the const State ref, no copy
 ```
 
@@ -119,27 +131,30 @@ continuity, documented as a deviation.
 
 ### The command-queue bus — inter-subsystem emission (RETURN model)
 
-Both `apply()` and `periodic()` may produce **outbound commands addressed to other
-subsystems**, not just mutate their own slice. This makes the robot a
-message-passing network over the shared `CommandQueue`.
+**`tick()` is the only emitter.** Because `apply()` merely stages a command and
+nothing executes until the next `tick()`, **`tick()` is the verb that produces
+outbound commands addressed to other subsystems** — not just mutating its own slice.
+`apply()` returns nothing. This makes the robot a message-passing network over the
+shared `CommandQueue`, driven by the tick.
 
-- **Consume typed, produce routable.** A verb takes its own typed `S::Command`, but
-  emits commands addressed to *other* subsystems — heterogeneous — so the outbound
-  type is a **compact routable `OutCommand`** (verb-id + args), batched as
+- **Consume typed, produce routable.** `tick()` reads the subsystem's staged typed
+  `S::Command` (set earlier by `apply()`), but the commands it emits are addressed to
+  *other* subsystems — heterogeneous — so the outbound type is a **compact routable
+  `OutCommand`** (verb-id + args), batched as
   `CommandBatch { OutCommand cmds[K]; uint8 count; }`. The framework drains the
   returned batch onto the queue and routes it through the **existing**
   `CommandProcessor` verb router. No new addressing layer.
-- **Return model (RESOLVED — see [Resolved decisions](#resolved-decisions)).** Verbs
-  **return** a fixed-capacity `CommandBatch`; the scheduler drains it. Chosen over
-  the sink model because it is testable by inspecting the return (no mock sink),
-  self-documenting, and the **compact `OutCommand`** (Phase 1) keeps the by-value
-  copy cheap — sidestepping the 424 B `ParsedCommand` cost on the depth-4 queue.
-- **`periodic()` NEVER returns state.** `state()` is the only way to read state
-  (const-ref to the single source of truth). What `periodic()` *produces* is
-  outbound commands — same as `apply()`. Both verbs are command-producers; state is
-  always a getter.
+- **Return model (RESOLVED — see [Resolved decisions](#resolved-decisions)).**
+  `tick()` **returns** a fixed-capacity `CommandBatch`; the scheduler drains it.
+  Chosen over the sink model because it is testable by inspecting the return (no mock
+  sink), self-documenting, and the **compact `OutCommand`** (Phase 1) keeps the
+  by-value copy cheap — sidestepping the 424 B `ParsedCommand` cost on the depth-4
+  queue.
+- **`tick()` produces commands, never state.** `state()` is the only way to read
+  state (const-ref to the single source of truth). What `tick()` *returns* is
+  outbound commands; state is always a getter, never a return value.
 - **The bus dissolves the planner/drive layering.** The Planner is a unit whose
-  `periodic()` reads `drive.state()` (pose) and **emits a `DrivetrainCommand{twist}`**
+  `tick()` reads `drive.state()` (pose) and **emits a `DrivetrainCommand{twist}`**
   into its returned batch → routed to `drive.apply()`. "Above/below" becomes message
   flow, not a call hierarchy.
 - **Cascade policy (mandatory, actor-model tax).** Depth-4 queue ⇒ run-to-completion
@@ -148,13 +163,38 @@ message-passing network over the shared `CommandQueue`.
   of the queue, never the back. All inter-subsystem traffic is on the bus ⇒
   uniformly loggable / replayable.
 
+### Control-loop ownership (who closes what)
+
+There are **three nested loops at three tiers**, and they are owned by three different
+places. Being precise about this matters — the Planner does **not** "own the control
+loops"; the velocity feedback is closed close to the hardware, where it has to be.
+
+1. **Per-wheel velocity loop — owned by the motor (`MotorController`, inside Drive).**
+   Each wheel runs a velocity PID (`velKp/Ki/Kff/IMax/Kaw`, …) that drives commanded
+   wheel velocity → actual wheel velocity. This is the innermost, fastest loop and
+   lives at/near the motor.
+2. **Inter-wheel coordination loop — owned by Drive (`BodyVelocityController`,
+   `syncGain`).** Given a commanded body twist, Drive converts it to per-wheel targets
+   (`Kinematics::inverse`) and closes the loop that keeps the wheels in the correct
+   *relationship* to each other so the realized motion matches the twist.
+3. **Goal closure / guidance — owned by the Planner.** This is **not a velocity
+   controller.** Given a *goal* (target pose / heading / distance + stop conditions)
+   and the pose estimate, the Planner generates a **time-varying twist setpoint**
+   (trapezoidal accel/decel profile, heading-error steering toward the target,
+   stop-condition evaluation) and decides when the goal is *reached*. It is an outer
+   guidance step on pose/heading that emits a twist setpoint — it never touches wheel
+   velocities or motor outputs.
+
+So: **the Planner closes the *goal*; Drive and the motors close the *velocity loops*.**
+A `DrivetrainCommand{twist}` is the setpoint handed from tier 3 down to tiers 2→1.
+
 ### Drive subsystem
 
 **Membership:** `motorL/R` (+ encoders), OTOS (`IOdometer`), `MotorController`,
 `BodyVelocityController`, `Odometry`/`PhysicalStateEstimate`, `Kinematics`. Today's
-scattered control members **fold into Drive**. Pure velocity-in / pose-out; closed-loop
-goals live above in the Planner. Only `BodyTwist3` and `Pose2D` cross the boundary;
-`wheels[]` stays internal.
+scattered control members **fold into Drive**. Drive is velocity-in / pose-out and
+**closes the velocity loops** (tiers 1–2 above); goal closure lives above in the
+Planner. Only `BodyTwist3` and `Pose2D` cross the boundary; `wheels[]` stays internal.
 
 **`DrivetrainCommand`** — twist + mode only (+ a SetPose re-anchor, resolved below):
 ```
@@ -173,7 +213,8 @@ struct WheelTargets { WheelTarget w[kWheelCount]; };
 //   both          → swerve-style (drive speed + steer angle) — future swerve extension
 ```
 - **Boundary rule:** body-level command = velocity (twist); wheel-level = speed or
-  position. Body POSE *goals* (GOTO/TURN) are closed-loop and live in the Planner.
+  position. Body POSE *goals* (GOTO/TURN) require guidance on the pose estimate (goal
+  closure) and live in the Planner — not here.
 - **`vy`** is honored only when `capabilities().holonomic`. On the compile-time
   differential build it is **unrepresentable / rejected**, not silently dropped —
   the worked example of "make the impossible command un-expressible."
@@ -221,9 +262,13 @@ ColorSensorConfig{ uint32 lagColorMs; integration; gain; calibration; }
 ### Planner (MotionController)
 
 Not a hardware subsystem, but uses the same message shape. Receives user goals from
-comms (`PlannerCommand`), owns the closed-loop logic (trapezoid accel/decel, heading,
-stop conditions), reads `drive.state()` for pose/twist, and **emits**
-`DrivetrainCommand{twist}` each tick onto the bus → `drive.apply()`.
+comms (`PlannerCommand`) and owns **goal closure**, not velocity control: it generates
+the twist setpoint from a goal + the pose estimate (trapezoid accel/decel profile,
+heading-error steering, stop-condition evaluation) and decides when the goal is
+reached. It reads `drive.state()` for pose/twist and **emits** a
+`DrivetrainCommand{twist}` setpoint each tick onto the bus → `drive.apply()`. The
+velocity loops that realize that setpoint are closed below, in Drive and the motors
+(see [Control-loop ownership](#control-loop-ownership-who-closes-what)).
 
 - `PlannerCommand` ≡ today's `GoalRequest` union (velocity / goto / turn / rotation /
   distance / timed / stream / stop) + `StopCondition stops[4]` + style/origin.
@@ -260,18 +305,62 @@ all actuation (split-phase I2C, M1-before-M2) and applies the bus cascade guard:
 
 ```
 1. COMMS DRAIN   (source/com): serial/radio → parse → enqueue PlannerCommands. Bind reply channel.
-2. DRIVE.updateInputs(now): SENSE — split-phase encoder request/collect (M1,M2), OTOS when due,
+2. DRIVE.tickUpdate(now): SENSE — split-phase encoder request/collect (M1,M2), OTOS when due,
                   run fusion (predict/correct), refresh Drive State.
 3. BUS DRAIN+ROUTE (bounded): user motion verbs → planner.apply(); emitted DrivetrainCommands →
                   drive.apply(). priority=true → push_front.
-4. PLANNER.periodic(now): read drive.state(), advance trapezoid/heading/stop logic, RETURN a
+4. PLANNER.tick(now): read drive.state(), advance trapezoid/heading/stop logic, RETURN a
                   CommandBatch with a DrivetrainCommand{twist}.
 5. BUS DRAIN (bounded): route the planner's batch → drive.apply().
-6. DRIVE.update(now): ACT — Kinematics::inverse + saturate → per-wheel PID → motor.setSpeed.
-7. SENSORS.periodic(now): timed line/color reads → Sensors State.
+6. DRIVE.tickAction(now): ACT — Kinematics::inverse + saturate → per-wheel PID → motor.setSpeed.
+7. SENSORS.tick(now): timed line/color reads → Sensors State.
 8. TELEMETRY: emit from subsystem state() snapshots.
 9. SLEEP to control deadline.
 ```
+
+### Simulation & test infrastructure (REQUIRED — first-class deliverable)
+
+**Every subsystem must have host simulation tests.** The message contract exists in
+large part to make this possible: a subsystem is a standalone unit you feed a list of
+`Command`s and then assert its `state()`. This is not optional polish — it is a
+gating deliverable of Phases 2–3. Build on the **existing** sim seam
+(`source/io/sim/` → `source/hal/sim/` after Phase 0: `SimHardware`, `SimMotor`,
+`SimOdometer`, `SimLineSensor`, `SimColorSensor`, `SimPortIO`; the
+`libfirmware_host`/ctypes/pytest wrapper; the noise model from sprints 021/040) —
+extend it, do not rebuild it.
+
+**The ground-truth → sensor-error model (the core of drivetrain sim).** `SimHardware`
+integrates the commanded wheel motion into a **ground-truth pose** (what the robot
+*really* did) and tracks the **ideal pose** (what a perfect, error-free robot would
+do for the same commands). From those, the sim derives *error-injected* sensor
+readings — the simulator's whole job is to add realistic error on top of truth so the
+fusion has something to correct:
+
+- **Encoders** — derive per-wheel counts from ground-truth wheel motion, then inject
+  encoder error (wheel slip, quantization, scale mismatch). `SimMotor`/encoder path.
+- **OTOS (optical flow)** — derive the optical-flow delta from ground-truth body
+  motion, then inject OTOS error (drift, additive noise, linear/angular scale error,
+  heading bias). `SimOdometer` is the seam; extend its error model so the optical
+  estimate diverges from truth the way the real OTOS does.
+- The Drive subsystem's fusion (encoder + OTOS EKF) then consumes both noisy streams;
+  the test asserts the **fused** pose tracks ground truth within tolerance even though
+  neither raw sensor does. This is how the drivetrain is simulated end-to-end.
+
+**Required coverage:**
+- **Motors + encoders** — sim isolation tests **and** bench tests (the robot is on the
+  bench; motors and motor encoders are exercisable on real hardware too).
+- **Drive** — sim only: command twists / wheel targets, tick, assert fused pose vs
+  ground truth through the encoder+OTOS error model above. Exercise `vy`-reject on the
+  differential build, `SetPose` re-anchor, neutral/brake.
+- **Sensors (line + color)** — sim isolation tests via `SimLineSensor`/`SimColorSensor`
+  (bench coverage for these is explicitly *not* required by the stakeholder).
+- **Planner** — sim isolation: feed goals, tick, assert the **returned**
+  `DrivetrainCommand{twist}` setpoint sequence matches the expected profile (no robot,
+  no comms — return model makes this a pure function of goal + injected pose).
+
+**Harness shape:** a single-subsystem fixture (`construct on sim devices → apply()
+commands → tick() N times → read state() → assert`) added under `tests/simulation/unit/`
+alongside the existing full-robot `send_command`/`tick_for`/`get_pose` tests.
 
 ---
 
@@ -279,14 +368,16 @@ all actuation (split-phase I2C, M1-before-M2) and applies the bus cascade guard:
 
 These settle forks/conflicts left open across the three original issues:
 
-1. **Inter-subsystem emission = RETURN model**, not sink. Verbs return a
-   `CommandBatch` of compact `OutCommand`s; the scheduler drains/routes it. (Old
-   issue A leaned return; old issue C assumed a `CommandSink`. Resolved to return:
-   testable without mocks, and the planner-isolation test inspects the returned batch
-   directly — *simpler* than a capturing sink. The sink model is rejected for hidden
-   coupling + mock requirement.)
+1. **Inter-subsystem emission = RETURN model, and `tick()` is the only emitter.**
+   `apply()` only *stages* the command and returns nothing; nothing executes until the
+   next `tick()`, so **`tick()`** is the verb that returns the `CommandBatch` of
+   compact `OutCommand`s, which the scheduler drains/routes. (Old issue A leaned
+   return; old issue C assumed a `CommandSink`. Resolved to return: testable without
+   mocks, and the planner-isolation test inspects the returned batch directly —
+   *simpler* than a capturing sink. The sink model is rejected for hidden coupling +
+   mock requirement.)
 2. **Two-phase Drive / single-phase Sensors** is fixed, not "optional." Drive exposes
-   `updateInputs`/`update`; Sensors exposes `periodic`. The scheduler ordering above
+   `tickUpdate`/`tickAction`; Sensors exposes `tick`. The scheduler ordering above
    depends on this.
 3. **No virtual base class.** The contract is structural (documented convention,
    optional C++20 `concept`), per `Drive.h`'s constraint.
@@ -389,11 +480,11 @@ and `Sensors` as standalone message units. (Planner + full integration is Phase 
   reused-internal-instance fluent builders (`newCommand()`/`newConfig()`).
 - **Drive** — fold today's `MotorController` + `BodyVelocityController` +
   `Odometry`/`PhysicalStateEstimate` + OTOS into one subsystem with
-  `updateInputs(now)` / `update(now)` / `apply(DrivetrainCommand)` /
+  `tickUpdate(now)` / `tickAction(now)` / `apply(DrivetrainCommand)` /
   `state() -> const DrivetrainState&` / `configure(DrivetrainConfig)` / `capabilities()`.
   Handles `twist`/`wheels`/`neutral`/`SetPose`; rejects `vy` unless holonomic.
 - **Sensors** — line + color as two read-only units behind a `Sensors` facade with
-  `periodic(now)` / `state()` / `configure()`. Empty command axis.
+  `tick(now)` / `state()` / `configure()`. Empty command axis.
 - Projection functions `toDriveConfig()` / `toSensorsConfig()` from `RobotConfig`.
 - Each subsystem keeps its `State` byte-traceable to today's `ActualState` slices so
   the golden-TLM oracle still passes.
@@ -401,7 +492,7 @@ and `Sensors` as standalone message units. (Planner + full integration is Phase 
 **Acceptance:**
 - **Subsystem-isolation tests** (new, on the existing `SimHardware`/`libfirmware_host`
   seam): construct ONE subsystem on sim devices; feed a list of `Command`s via
-  `apply()` / fluent builder; call `periodic()` (or `updateInputs`+`update`) N times;
+  `apply()` / fluent builder; call `tick()` (or `tickUpdate`+`tickAction`) N times;
   read `state()`; assert. No full robot, no comms.
 - Walk one concrete open-loop command (`VW`) end-to-end through Drive and confirm
   byte-plausible parity with today's control-collect + drive-advance + odometry path.
@@ -422,7 +513,7 @@ command-queue bus, with bottom-up config and the ordered tick.
   with a ref to read `drive.state()` → **split config via projections and
   `configure()` each subsystem after construction** → construct scheduler with the
   subsystem set + comms + `CommandQueue` → enter loop.
-- **Planner** (`MotionController`): `apply(PlannerCommand)` / `periodic(now)` returning
+- **Planner** (`MotionController`): `apply(PlannerCommand)` / `tick(now)` returning
   a `CommandBatch{DrivetrainCommand{twist}}` / `state()` / `configure(PlannerConfig)`.
 - **The ordered tick** (rewire `loopTickOnce` to the [run loop](#the-run-loop-explicit-ordered-tick)
   above) + the **bus drain/route** with the bounded-cascade guard and `push_front`
@@ -436,7 +527,7 @@ command-queue bus, with bottom-up config and the ordered tick.
   split-phase encoder order, bounded per-tick work, and safety priority are preserved
   — byte-plausible parity with today's `loopTickOnce`.
 - **Planner-isolation test** (new): construct `MotionController`; feed user goals
-  (`timed`, `turn`, `distance`) via `apply()`; tick `periodic()`; **assert the returned
+  (`timed`, `turn`, `distance`) via `apply()`; call `tick()`; **assert the returned
   `CommandBatch` of `DrivetrainCommand`s** (twist + yaw-rate sequence) matches the
   expected trapezoid/heading profile. (Return model ⇒ inspect the batch, no sink mock.)
 - Live `SET vel.kP` routes to `drive.configure()`; init `configure()` sets OTOS offset

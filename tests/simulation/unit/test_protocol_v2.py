@@ -1462,3 +1462,46 @@ class TestWaitForEvtDoneReason:
         result, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="7")
         assert result == "done"
         assert reason == "sensor"
+
+
+# ---------------------------------------------------------------------------
+# Live-sim range-vs-badarg tests (054-001)
+# ---------------------------------------------------------------------------
+
+class TestMotionVerbRangeErrors:
+    """Verify S/T/D/R emit ERR range (not ERR badarg) for out-of-range args."""
+
+    def test_s_range_l(self, sim) -> None:
+        """S 99999 0 → ERR range l (l is out of range)."""
+        r = sim.send_command("S 99999 0")
+        assert r.strip() == "ERR range l", f"Unexpected reply: {r!r}"
+
+    def test_s_range_r(self, sim) -> None:
+        """S 0 99999 → ERR range r (r is out of range)."""
+        r = sim.send_command("S 0 99999")
+        assert r.strip() == "ERR range r", f"Unexpected reply: {r!r}"
+
+    def test_s_badarg_no_args(self, sim) -> None:
+        """S (no args) → ERR badarg (arg-count path unaffected)."""
+        r = sim.send_command("S")
+        assert r.strip() == "ERR badarg", f"Unexpected reply: {r!r}"
+
+    def test_t_range_ms(self, sim) -> None:
+        """T 0 0 0 → ERR range ms (ms=0 is below minimum of 1)."""
+        r = sim.send_command("T 0 0 0")
+        assert r.strip() == "ERR range ms", f"Unexpected reply: {r!r}"
+
+    def test_t_badarg_too_few(self, sim) -> None:
+        """T 0 0 (two args, not three) → ERR badarg."""
+        r = sim.send_command("T 0 0")
+        assert r.strip() == "ERR badarg", f"Unexpected reply: {r!r}"
+
+    def test_d_range_mm(self, sim) -> None:
+        """D 0 0 0 → ERR range mm (mm=0 is below minimum of 1)."""
+        r = sim.send_command("D 0 0 0")
+        assert r.strip() == "ERR range mm", f"Unexpected reply: {r!r}"
+
+    def test_r_range_speed(self, sim) -> None:
+        """R 99999 0 → ERR range speed (speed is out of range)."""
+        r = sim.send_command("R 99999 0")
+        assert r.strip() == "ERR range speed", f"Unexpected reply: {r!r}"

@@ -112,25 +112,20 @@ class TestSCommand:
         assert kv["l"] == "200"
         assert kv["r"] == "150"
 
-    def test_s_badarg_no_args(self) -> None:
-        """S (no args) → ERR badarg."""
-        line = "ERR badarg"
-        code, _ = parse_err(line)
-        assert code == "badarg"
+    def test_s_badarg_no_args(self, sim) -> None:
+        """S (no args) → ERR badarg (live firmware)."""
+        resp = sim.send_command("S")
+        assert resp.strip() == "ERR badarg", f"Unexpected reply: {resp!r}"
 
-    def test_s_range_l_too_high(self) -> None:
-        """S 1001 0 → ERR range l."""
-        line = "ERR range l"
-        code, detail = parse_err(line)
-        assert code == "range"
-        assert "l" in detail
+    def test_s_range_l_too_high(self, sim) -> None:
+        """S 1001 0 → ERR range l (live firmware)."""
+        resp = sim.send_command("S 1001 0")
+        assert resp.strip() == "ERR range l", f"Unexpected reply: {resp!r}"
 
-    def test_s_range_r_too_high(self) -> None:
-        """S 0 1001 → ERR range r."""
-        line = "ERR range r"
-        code, detail = parse_err(line)
-        assert code == "range"
-        assert "r" in detail
+    def test_s_range_r_too_high(self, sim) -> None:
+        """S 0 1001 → ERR range r (live firmware)."""
+        resp = sim.send_command("S 0 1001")
+        assert resp.strip() == "ERR range r", f"Unexpected reply: {resp!r}"
 
     def test_evt_safety_stop_format(self) -> None:
         """S watchdog timeout emits EVT safety_stop (no #id)."""
@@ -192,18 +187,15 @@ class TestTCommand:
         line = "EVT done T"
         assert "cmd=" not in line
 
-    def test_t_badarg_too_few(self) -> None:
-        """T 200 150 (no ms) → ERR badarg."""
-        line = "ERR badarg"
-        code, _ = parse_err(line)
-        assert code == "badarg"
+    def test_t_badarg_too_few(self, sim) -> None:
+        """T 200 150 (no ms) → ERR badarg (live firmware)."""
+        resp = sim.send_command("T 200 150")
+        assert resp.strip() == "ERR badarg", f"Unexpected reply: {resp!r}"
 
-    def test_t_range_ms_too_large(self) -> None:
-        """T 200 200 31000 → ERR range ms."""
-        line = "ERR range ms"
-        code, detail = parse_err(line)
-        assert code == "range"
-        assert "ms" in detail
+    def test_t_range_ms_too_large(self, sim) -> None:
+        """T 200 200 31000 → ERR range ms (live firmware)."""
+        resp = sim.send_command("T 0 0 31000")
+        assert resp.strip() == "ERR range ms", f"Unexpected reply: {resp!r}"
 
     def test_t_with_corr_id(self) -> None:
         """T 200 150 1000 #5 → OK drive ... #5 (synchronous reply)."""
@@ -263,18 +255,15 @@ class TestDCommand:
         line = "EVT done D"
         assert "cmd=" not in line
 
-    def test_d_badarg_too_few(self) -> None:
-        """D 200 200 (no mm) → ERR badarg."""
-        line = "ERR badarg"
-        code, _ = parse_err(line)
-        assert code == "badarg"
+    def test_d_badarg_too_few(self, sim) -> None:
+        """D 200 200 (no mm) → ERR badarg (live firmware)."""
+        resp = sim.send_command("D 200 200")
+        assert resp.strip() == "ERR badarg", f"Unexpected reply: {resp!r}"
 
-    def test_d_range_mm_zero(self) -> None:
-        """D 200 200 0 → ERR range mm."""
-        line = "ERR range mm"
-        code, detail = parse_err(line)
-        assert code == "range"
-        assert "mm" in detail
+    def test_d_range_mm_zero(self, sim) -> None:
+        """D 200 200 0 → ERR range mm (live firmware)."""
+        resp = sim.send_command("D 200 200 0")
+        assert resp.strip() == "ERR range mm", f"Unexpected reply: {resp!r}"
 
 
 # ---------------------------------------------------------------------------
