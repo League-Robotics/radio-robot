@@ -1,7 +1,7 @@
 ---
 id: 058
 title: Sim encoder-error injection and dual-source EKF fusion test
-status: planning-docs
+status: done
 branch: sprint/058-sim-encoder-error-injection-and-dual-source-ekf-fusion-test
 use-cases:
 - SUC-001
