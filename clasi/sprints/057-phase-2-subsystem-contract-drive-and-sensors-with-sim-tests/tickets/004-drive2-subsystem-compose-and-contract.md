@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: 'Drive2 subsystem: compose and contract'
-status: open
+status: done
 use-cases:
 - SUC-004
 depends-on:
@@ -174,24 +174,24 @@ Tests (no EKF noise — that's ticket 005):
 
 ## Acceptance Criteria
 
-- [ ] `Drive2` constructor takes `(IMotor& motorL, IMotor& motorR, MotorController&,
+- [x] `Drive2` constructor takes `(IMotor& motorL, IMotor& motorR, MotorController&,
       BodyVelocityController&, PhysicalStateEstimate&, Odometry&, IOdometer&, const RobotConfig&)`.
-- [ ] `apply(DrivetrainCommand)` stages only — no hardware I/O, no return value.
-- [ ] `tickUpdate(now)` runs encoder collect + OTOS read + EKF predict/correct; updates `_state`.
-- [ ] `tickAction(now)` runs kinematics → wheel PID → motor outputs; returns `msg::CommandBatch`.
-- [ ] `state()` returns `const msg::DrivetrainState&` — no copy.
-- [ ] `configure(DrivetrainConfig)` stores config; next tick picks it up.
-- [ ] `capabilities()` returns `holonomic=false` for differential, `holonomic=true` for mecanum.
-- [ ] `vy`-reject: on differential build, `apply` with `vy!=0` results in no-op actuation.
-- [ ] `SetPose` re-anchor: after `apply(SetPose{x,y,h})` + `tickUpdate` + `tickAction`,
+- [x] `apply(DrivetrainCommand)` stages only — no hardware I/O, no return value.
+- [x] `tickUpdate(now)` runs encoder collect + OTOS read + EKF predict/correct; updates `_state`.
+- [x] `tickAction(now)` runs kinematics → wheel PID → motor outputs; returns `msg::CommandBatch`.
+- [x] `state()` returns `const msg::DrivetrainState&` — no copy.
+- [x] `configure(DrivetrainConfig)` stores config; next tick picks it up.
+- [x] `capabilities()` returns `holonomic=false` for differential, `holonomic=true` for mecanum.
+- [x] `vy`-reject: on differential build, `apply` with `vy!=0` results in no-op actuation.
+- [x] `SetPose` re-anchor: after `apply(SetPose{x,y,h})` + `tickUpdate` + `tickAction`,
       `state().get_fused().get_pose().get_x_mm()` ≈ x.
-- [ ] Neutral/brake: after `apply(Neutral{BRAKE})` + tick, wheel outputs ~0.
-- [ ] `toDriveConfig()` maps at least: `trackwidthMm`, `velKp/Ki/Kff/IMax/Kaw`, `alphaPos`,
+- [x] Neutral/brake: after `apply(Neutral{BRAKE})` + tick, wheel outputs ~0.
+- [x] `toDriveConfig()` maps at least: `trackwidthMm`, `velKp/Ki/Kff/IMax/Kaw`, `alphaPos`,
       `alphaYaw`, `otosGate`, `ekfQXy`, `ekfQTheta`, `lagOtosMs`, `drivetrainType`.
-- [ ] No virtual dispatch in `Drive2` control path. No heap in `Drive2`.
-- [ ] `test_drive2_subsystem.py` 4 tests pass.
-- [ ] `python build.py --clean` zero errors.
-- [ ] `uv run python -m pytest` green at baseline + new tests.
+- [x] No virtual dispatch in `Drive2` control path. No heap in `Drive2`.
+- [x] `test_drive2_subsystem.py` 4 tests pass.
+- [x] `python build.py --clean` zero errors.
+- [x] `uv run python -m pytest` green at baseline + new tests.
 
 ## Testing Plan
 
