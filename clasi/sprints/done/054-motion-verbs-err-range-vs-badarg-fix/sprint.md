@@ -1,7 +1,7 @@
 ---
 id: '054'
 title: Motion verbs ERR range vs badarg fix
-status: planning-docs
+status: done
 branch: sprint/054-motion-verbs-err-range-vs-badarg-fix
 use-cases:
 - SUC-001
