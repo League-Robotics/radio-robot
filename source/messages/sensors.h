@@ -6,6 +6,8 @@
 #include "messages/common.h"
 
 
+namespace msg {
+
 // LineSensorState
 struct LineSensorState {
     uint32_t raw_[4] = {};
@@ -92,4 +94,6 @@ struct ColorSensorConfig {
     ColorSensorConfig& setCalG(float v) { cal_g = v; return *this; }
     ColorSensorConfig& setCalB(float v) { cal_b = v; return *this; }
 };
+
+}  // namespace msg
 

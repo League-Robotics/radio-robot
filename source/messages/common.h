@@ -5,6 +5,8 @@
 
 #include <stdint.h>
 
+namespace msg {
+
 // Opt<T> — nullable wrapper for proto3 optional fields.
 // Replaces std::optional<T> (which requires RTTI / exceptions).
 // Target: CODAL C++11, -fno-rtti -fno-exceptions, no heap.
@@ -157,4 +159,6 @@ struct Capabilities {
     bool get_onboard_position() const { return onboard_position; }
     uint32_t get_wheel_count() const { return wheel_count; }
 };
+
+}  // namespace msg
 

@@ -3,47 +3,49 @@
 // (ticket 056-003) Provides testable C-ABI functions that exercise the
 // generated source/messages/*.h types from Python via ctypes.
 //
-// This file intentionally does NOT include hal/capability/Pose2D.h.
-// Including both messages/common.h and Pose2D.h in one TU causes a
-// redefinition of struct Pose2D (same global name, different fields).
-// The compile-time layout-compatibility proof is split:
-//   - This file verifies the generated types (Pose2D, BodyTwist3) are the
-//     correct sizes.
-//   - source/messages/bridges.h verifies the HAL types are the same sizes.
-// Together the static_asserts prove layout compatibility without needing to
-// include both in one TU.
+// Phase 2 (ticket 057-001): all generated types are now in namespace msg::,
+// so this file can safely include BOTH messages/common.h AND
+// hal/capability/Pose2D.h in the same TU — msg::Pose2D and ::Pose2D are
+// now distinct names.  The static_asserts below verify cross-namespace
+// layout compatibility directly (replacing the split-TU workaround).
 
-// Include generated message headers (no HAL headers — see comment above).
-#include "messages/common.h"       // Pose2D, BodyTwist3, Opt<T>, CommandBatch, OutCommand, etc.
-#include "messages/drivetrain.h"   // DrivetrainCommand (includes common.h)
-#include "messages/motor.h"        // MotorCommand (includes common.h)
-#include "messages/planner.h"      // PlannerCommand, PlannerConfig (includes common.h)
+// Include both generated message headers AND the HAL Pose2D header in one TU.
+// This was impossible before namespace migration (name collision); it works now.
+#include "hal/capability/Pose2D.h"    // ::Pose2D, ::BodyTwist3, ::RobotGeometry
+#include "messages/common.h"          // msg::Pose2D, msg::BodyTwist3, msg::Opt<T>, etc.
+#include "messages/drivetrain.h"      // msg::DrivetrainCommand
+#include "messages/motor.h"           // msg::MotorCommand
+#include "messages/planner.h"         // msg::PlannerCommand, msg::PlannerConfig
 
-// --- Generated-side size checks (ticket 003 bridges verify) ---
-// These are the generated counterparts to the HAL-side checks in bridges.h.
-// Both sides must be sizeof(float)*N for layout compatibility.
+// --- Cross-namespace layout-compatibility checks (Phase 2, ticket 057-001) ---
+// Both msg:: and ::Pose2D/BodyTwist3 are now visible in this TU.
+// Prove they have the same memory layout (same size, same field count).
 
-// Generated Pose2D: { float x_mm, y_mm, h_rad } — must match HAL Pose2D { float x, y, h }.
-static_assert(sizeof(Pose2D) == sizeof(float) * 3,
-    "Generated Pose2D must be 3 floats {x_mm,y_mm,h_rad} — "
+// msg::Pose2D { float x_mm, y_mm, h_rad } vs ::Pose2D { float x, y, h }
+static_assert(sizeof(msg::Pose2D) == sizeof(::Pose2D),
+    "msg::Pose2D and ::Pose2D must have the same size — layout compat broken");
+static_assert(sizeof(msg::Pose2D) == sizeof(float) * 3,
+    "Generated msg::Pose2D must be 3 floats {x_mm,y_mm,h_rad} — "
     "layout compat with HAL Pose2D broken; check common.proto");
 
-// Generated BodyTwist3: { float vx_mmps, vy_mmps, omega_rads } — must match HAL BodyTwist3.
-static_assert(sizeof(BodyTwist3) == sizeof(float) * 3,
-    "Generated BodyTwist3 must be 3 floats — "
+// msg::BodyTwist3 { float vx_mmps, vy_mmps, omega_rads }
+// vs ::BodyTwist3 { float vx_mmps, vy_mmps, omega_rads }
+static_assert(sizeof(msg::BodyTwist3) == sizeof(::BodyTwist3),
+    "msg::BodyTwist3 and ::BodyTwist3 must have the same size — layout compat broken");
+static_assert(sizeof(msg::BodyTwist3) == sizeof(float) * 3,
+    "Generated msg::BodyTwist3 must be 3 floats — "
     "layout compat with HAL BodyTwist3 broken; check common.proto");
 
-// CommandBatch uses OutCommand[8] (common.h); verify OutCommand has verb_id + args[4].
-// (Not a cross-HAL check; guards against generator regressions.)
-static_assert(sizeof(CommandBatch) >= sizeof(OutCommand) * 8,
-    "CommandBatch must hold at least 8 OutCommands — check common.proto max_count");
+// msg::CommandBatch uses msg::OutCommand[8]; guard against generator regressions.
+static_assert(sizeof(msg::CommandBatch) >= sizeof(msg::OutCommand) * 8,
+    "msg::CommandBatch must hold at least 8 OutCommands — check common.proto max_count");
 
 extern "C" {
 
 // ---------------------------------------------------------------------------
 // Test 1: DrivetrainCommand fluent builder round-trip.
 //
-// Constructs a default DrivetrainCommand, calls setTwist(vx, vy, omega),
+// Constructs a default msg::DrivetrainCommand, calls setTwist(vx, vy, omega),
 // then reads back control.twist.{vx_mmps, vy_mmps, omega_rads} and the
 // control_kind discriminant.
 //
@@ -56,8 +58,8 @@ int msg_test_drivetrain_twist_roundtrip(
     float* out_vx, float* out_vy, float* out_omega,
     int* out_kind)
 {
-    DrivetrainCommand cmd;
-    BodyTwist3 t;
+    msg::DrivetrainCommand cmd;
+    msg::BodyTwist3 t;
     t.vx_mmps    = vx;
     t.vy_mmps    = vy;
     t.omega_rads = omega;
@@ -73,7 +75,7 @@ int msg_test_drivetrain_twist_roundtrip(
 // ---------------------------------------------------------------------------
 // Test 2: MotorCommand Opt<float> feedforward — present case.
 //
-// Constructs a MotorCommand, calls setFeedforward(val).
+// Constructs a msg::MotorCommand, calls setFeedforward(val).
 // Returns has flag and val via out pointers.
 // ---------------------------------------------------------------------------
 int msg_test_motor_feedforward_present(
@@ -81,7 +83,7 @@ int msg_test_motor_feedforward_present(
     int* out_has,
     float* out_val)
 {
-    MotorCommand m;
+    msg::MotorCommand m;
     m.setFeedforward(val);
 
     if (out_has) *out_has = m.feedforward.has ? 1 : 0;
@@ -92,12 +94,12 @@ int msg_test_motor_feedforward_present(
 // ---------------------------------------------------------------------------
 // Test 3: MotorCommand Opt<float> feedforward — absent (default) case.
 //
-// Constructs a default MotorCommand and reads the feedforward Opt.
+// Constructs a default msg::MotorCommand and reads the feedforward Opt.
 // out_has should be 0.
 // ---------------------------------------------------------------------------
 int msg_test_motor_feedforward_absent(int* out_has)
 {
-    MotorCommand m;
+    msg::MotorCommand m;
     if (out_has) *out_has = m.feedforward.has ? 1 : 0;
     return 1;
 }
@@ -105,16 +107,16 @@ int msg_test_motor_feedforward_absent(int* out_has)
 // ---------------------------------------------------------------------------
 // Test 4: CommandBatch repeated-field count.
 //
-// Appends n_cmds default OutCommand entries to a CommandBatch and returns
-// the cmds_count value.
+// Appends n_cmds default msg::OutCommand entries to a msg::CommandBatch and
+// returns the cmds_count value.
 // ---------------------------------------------------------------------------
 int msg_test_command_batch_count(int n_cmds, int* out_count)
 {
-    CommandBatch batch;
-    int max_cap = 8;  // OutCommand cmds_[8]
+    msg::CommandBatch batch;
+    int max_cap = 8;  // msg::OutCommand cmds_[8]
     int to_add = n_cmds < max_cap ? n_cmds : max_cap;
     for (int i = 0; i < to_add; ++i) {
-        batch.cmds_[batch.cmds_count++] = OutCommand{};
+        batch.cmds_[batch.cmds_count++] = msg::OutCommand{};
     }
     if (out_count) *out_count = static_cast<int>(batch.cmds_count);
     return 1;
@@ -129,12 +131,27 @@ int msg_test_planner_config_chained(
     float a_max, float v_body_max,
     float* out_a_max, float* out_v_body_max)
 {
-    PlannerConfig cfg;
+    msg::PlannerConfig cfg;
     cfg.setAMax(a_max).setVBodyMax(v_body_max);
 
     if (out_a_max)      *out_a_max      = cfg.a_max;
     if (out_v_body_max) *out_v_body_max = cfg.v_body_max;
     return 1;
+}
+
+// ---------------------------------------------------------------------------
+// Test 6b: Namespace isolation — msg::DrivetrainCommand::ControlKind::TWIST.
+//
+// Verifies that the ControlKind enum is accessible as
+// msg::DrivetrainCommand::ControlKind::TWIST and equals 1.
+// Returns 1 on success, 0 on failure.
+// ---------------------------------------------------------------------------
+int msg_test_drivetrain_control_kind_enum(int* out_twist_val)
+{
+    // Verify msg::DrivetrainCommand::ControlKind::TWIST == 1
+    int twist_val = static_cast<int>(msg::DrivetrainCommand::ControlKind::TWIST);
+    if (out_twist_val) *out_twist_val = twist_val;
+    return (twist_val == 1) ? 1 : 0;
 }
 
 } // extern "C"

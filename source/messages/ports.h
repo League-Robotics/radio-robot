@@ -6,6 +6,8 @@
 #include "messages/common.h"
 
 
+namespace msg {
+
 // DigitalOut
 struct DigitalOut {
     uint8_t value_[4] = {};  // bool[]
@@ -79,4 +81,6 @@ struct PortConfig {
     PortConfig& setLagPortsMs(uint32_t v) { lag_ports_ms = v; return *this; }
     PortConfig& clearDirection() { direction_count = 0; return *this; }
 };
+
+}  // namespace msg
 

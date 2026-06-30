@@ -6,6 +6,8 @@
 #include "messages/common.h"
 
 
+namespace msg {
+
 enum class DriveMode : uint8_t {
     IDLE = 0,
     STREAMING = 1,
@@ -293,4 +295,6 @@ struct PlannerConfig {
     PlannerConfig& setDoneTolMm(float v) { done_tol_mm = v; return *this; }
     PlannerConfig& setMinSpeedMms(float v) { min_speed_mms = v; return *this; }
 };
+
+}  // namespace msg
 

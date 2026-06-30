@@ -794,9 +794,11 @@ _BANNER = """\
 #pragma once
 """
 
-_COMMON_PREAMBLE = """\
-#include <stdint.h>
+# For common.proto: emitted BEFORE the namespace msg block (system include only).
+_COMMON_SYSTEM_INCLUDE = "#include <stdint.h>\n"
 
+# For common.proto: emitted INSIDE namespace msg (Opt<T> is a msg:: type).
+_COMMON_NAMESPACE_PREAMBLE = """\
 // Opt<T> — nullable wrapper for proto3 optional fields.
 // Replaces std::optional<T> (which requires RTTI / exceptions).
 // Target: CODAL C++11, -fno-rtti -fno-exceptions, no heap.
@@ -809,7 +811,12 @@ _OTHER_INCLUDE = '#include "messages/common.h"\n'
 
 def _emit_file(fd, file_messages: dict, file_enums: dict,
                all_enums: set[str]) -> str:
-    """Emit the full content of one generated header."""
+    """Emit the full content of one generated header.
+
+    All generated types (Opt<T>, enums, structs) are wrapped in
+    ``namespace msg { ... }`` so ``msg::Pose2D`` and ``::Pose2D`` (HAL) are
+    distinct names and can coexist in a single translation unit.
+    """
     lines: list[str] = []
     proto_name = fd.name
 
@@ -823,10 +830,19 @@ def _emit_file(fd, file_messages: dict, file_enums: dict,
     is_common = (proto_name == "common.proto")
 
     if is_common:
-        lines.append(_COMMON_PREAMBLE)
+        # <stdint.h> goes outside the namespace (it defines global typedefs).
+        lines.append(_COMMON_SYSTEM_INCLUDE)
     else:
         lines.append(_OTHER_INCLUDE)
         lines.append("")
+
+    # Open namespace msg — ALL generated types live in msg::
+    lines.append("namespace msg {")
+    lines.append("")
+
+    if is_common:
+        # Opt<T> is a generated utility template; it goes inside msg::
+        lines.append(_COMMON_NAMESPACE_PREAMBLE)
 
     # Emit top-level enums in this file
     for ed in fd.enum_type:
@@ -836,6 +852,10 @@ def _emit_file(fd, file_messages: dict, file_enums: dict,
     for md in fd.message_type:
         want_setters = md.name in _SETTER_TYPES
         _emit_message(md, want_setters, lines, all_enums)
+
+    # Close namespace msg
+    lines.append("}  // namespace msg")
+    lines.append("")
 
     return "\n".join(lines) + "\n"
 
@@ -849,40 +869,43 @@ def _emit_bridges_header() -> str:
 // bridges.h — compile-time compatibility checks between the generated
 // message headers (source/messages/*.h) and the existing HAL types.
 //
-// Layout-compatibility proof strategy (ticket 003):
-//   The generated Pose2D (common.h: {x_mm, y_mm, h_rad}) and the HAL
-//   Pose2D (Pose2D.h: {x, y, h}) share the same name at global scope.
-//   Including both in one TU causes a redefinition error, so the cross-
-//   check is split:
-//     - This file (bridges.h) includes hal/capability/Pose2D.h and verifies
-//       the HAL types are the expected sizes.
-//     - tests/_infra/sim/message_test_api.cpp includes messages/common.h
-//       and verifies the generated types are the same sizes.
-//   Together, both sides being sizeof(float)*N proves layout compatibility.
-//   The naming conflict will be resolved in Phase 2 via namespace migration.
+// Phase 2 namespace strategy (ticket 057-001):
+//   All generated types are now in namespace msg::, so msg::Pose2D and
+//   ::Pose2D (HAL) are distinct names.  Both can be included in the SAME
+//   translation unit without a redefinition error.  This file therefore
+//   includes BOTH headers and asserts cross-namespace layout compatibility
+//   directly: sizeof(msg::Pose2D) == sizeof(::Pose2D) etc.
 //
 // Usage:
-//   Include bridges.h from any firmware TU that has NOT already included
-//   messages/common.h (to avoid the Pose2D redefinition collision).
-//   The message_test_api.cpp shim provides compile-time verification of the
-//   generated side.
+//   Include bridges.h from any firmware TU that needs the HAL types or
+//   the generated message types — both are now safe to include together.
 #pragma once
 #include "hal/capability/Pose2D.h"
+#include "messages/common.h"
 
-// --- HAL-side size checks ---
-// If any of these fire, the hand-authored HAL struct in Pose2D.h was changed
-// in a way that breaks its contract with the generated message types.
+// --- Cross-namespace layout-compatibility checks (Phase 2) ---
+// Now that generated types live in msg:: the compiler can see BOTH
+// msg::Pose2D and ::Pose2D in one TU.  These static_asserts prove that
+// the two structs are bit-for-bit compatible (same size, same alignment)
+// so they can be safely reinterpret_cast<> across the subsystem boundary.
 
-// HAL Pose2D: { float x, y, h } — must remain 3 floats (12 bytes on ARM).
-// Generated msg Pose2D: { float x_mm, y_mm, h_rad } — also 3 floats (verified
-// in tests/_infra/sim/message_test_api.cpp).  sizeof equality => layout compat.
+// msg::Pose2D { float x_mm, y_mm, h_rad } vs ::Pose2D { float x, y, h }
+// Same layout: 3 floats, trivially copyable.
+static_assert(sizeof(msg::Pose2D) == sizeof(::Pose2D),
+              "msg::Pose2D and ::Pose2D must have the same size — layout compat broken");
+static_assert(sizeof(msg::Pose2D) == sizeof(float) * 3,
+              "msg::Pose2D must be 3 floats {x_mm,y_mm,h_rad}");
 static_assert(sizeof(::Pose2D) == sizeof(float) * 3,
-              "HAL Pose2D must be 3 floats {x,y,h} — layout compat with generated Pose2D broken");
+              "HAL Pose2D must be 3 floats {x,y,h}");
 
-// HAL BodyTwist3: { float vx_mmps, vy_mmps, omega_rads } — must remain 3 floats.
-// Generated msg BodyTwist3 is identical in field order and count.
+// msg::BodyTwist3 { float vx_mmps, vy_mmps, omega_rads }
+// vs ::BodyTwist3 { float vx_mmps, vy_mmps, omega_rads } — identical layout.
+static_assert(sizeof(msg::BodyTwist3) == sizeof(::BodyTwist3),
+              "msg::BodyTwist3 and ::BodyTwist3 must have the same size — layout compat broken");
+static_assert(sizeof(msg::BodyTwist3) == sizeof(float) * 3,
+              "msg::BodyTwist3 must be 3 floats");
 static_assert(sizeof(::BodyTwist3) == sizeof(float) * 3,
-              "HAL BodyTwist3 must be 3 floats — layout compat with generated BodyTwist3 broken");
+              "HAL BodyTwist3 must be 3 floats");
 
 // HAL RobotGeometry: { float halfTrackMm, halfWheelbaseMm } — must remain 2 floats.
 // Corresponds to DrivetrainConfig::half_track_mm / half_wheelbase_mm in the
