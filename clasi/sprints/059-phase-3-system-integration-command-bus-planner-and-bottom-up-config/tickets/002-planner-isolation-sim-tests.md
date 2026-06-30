@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Planner-isolation sim tests
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-002
@@ -34,7 +34,7 @@ expose `MotionController2` to the Python test harness, following the same patter
 
 ## Acceptance Criteria
 
-- [ ] `tests/_infra/sim/planner_api.cpp` exposes `extern "C"` functions:
+- [x] `tests/_infra/sim/planner_api.cpp` exposes `extern "C"` functions:
   - `void* planner_api_create(void* drive2_handle)` — construct `MotionController2`
     backed by the given `Drive2` instance
   - `void  planner_api_destroy(void* h)`
@@ -44,7 +44,7 @@ expose `MotionController2` to the Python test harness, following the same patter
   - `void  planner_api_apply_stop(void* h)`
   - `int   planner_api_tick(void* h, uint32_t now_ms, float* out_vx, float* out_vy, float* out_omega, int* out_has_cmd)` — calls `tick(now)`, writes the first `DrivetrainCommand.twist` fields; sets `*out_has_cmd = 1` if batch non-empty; returns batch count
   - `int   planner_api_is_active(void* h)` — 1 if `state().active`, else 0
-- [ ] `tests/simulation/unit/test_planner_subsystem.py` contains:
+- [x] `tests/simulation/unit/test_planner_subsystem.py` contains:
   - `test_timed_goal_twist_profile` — apply timed goal (200 mm/s for 500 ms); tick
     50 times; assert early ticks have increasing vx (ramp-up), mid ticks cruise near
     target, late ticks decrease (decel), and after deadline `is_active` returns 0.
@@ -59,9 +59,9 @@ expose `MotionController2` to the Python test harness, following the same patter
     `is_active` becomes 0 and returned vx, omega are 0.
   - `test_planner_returns_empty_batch_when_idle` — tick with no goal; assert
     `out_has_cmd == 0`.
-- [ ] All new tests pass: `uv run python -m pytest tests/simulation/unit/test_planner_subsystem.py -v`
-- [ ] Existing suite stays at 2380/2: `uv run python -m pytest -x --tb=short -q`
-- [ ] `python build.py --clean` zero errors (planner_api.cpp compiles).
+- [x] All new tests pass: `uv run python -m pytest tests/simulation/unit/test_planner_subsystem.py -v`
+- [x] Existing suite stays at 2380/2: `uv run python -m pytest -x --tb=short -q`
+- [x] `python build.py --clean` zero errors (planner_api.cpp compiles).
 
 ## Implementation Plan
 

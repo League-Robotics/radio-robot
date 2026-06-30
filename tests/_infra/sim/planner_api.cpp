@@ -229,6 +229,12 @@ int planner_api_get_active(void* h)
     return static_cast<PlannerHandle*>(h)->mc2.state().get_active() ? 1 : 0;
 }
 
+// Alias for planner_api_get_active — satisfies ticket 059-002 shim contract.
+int planner_api_is_active(void* h)
+{
+    return static_cast<PlannerHandle*>(h)->mc2.state().get_active() ? 1 : 0;
+}
+
 int planner_api_get_mode(void* h)
 {
     return (int)static_cast<PlannerHandle*>(h)->mc2.state().get_mode();
