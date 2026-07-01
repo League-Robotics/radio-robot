@@ -1,11 +1,11 @@
 ---
 id: '002'
 title: Reroute Superstructure from MotionController to Planner
-status: open
+status: done
 use-cases:
 - SUC-002
 depends-on:
-- "001"
+- '001'
 github-issue: ''
 issue: internalize-legacy-motioncontroller-into-planner.md
 completes_issue: false
@@ -55,17 +55,17 @@ still exists and is still used by other call sites.
 
 ## Acceptance Criteria
 
-- [ ] `Superstructure.h` forward-declares `Planner`, not `MotionController`.
-- [ ] `Superstructure` constructor takes `Planner&`.
-- [ ] `Superstructure::_planner` (was `_mc`) is `Planner&`.
-- [ ] `Superstructure::planner()` accessor returns `Planner&`.
-- [ ] `requestGoal` switch calls `_planner.beginX(...)` for all Goal cases.
-- [ ] `Robot.cpp` initializer uses `superstructure(planner, haltController, config)`.
-- [ ] `LoopScheduler.h` has no remaining `MotionController` reference or
+- [x] `Superstructure.h` forward-declares `Planner`, not `MotionController`.
+- [x] `Superstructure` constructor takes `Planner&`.
+- [x] `Superstructure::_planner` (was `_mc`) is `Planner&`.
+- [x] `Superstructure::planner()` accessor returns `Planner&`.
+- [x] `requestGoal` switch calls `_planner.beginX(...)` for all Goal cases.
+- [x] `Robot.cpp` initializer uses `superstructure(planner, haltController, config)`.
+- [x] `LoopScheduler.h` has no remaining `MotionController` reference or
       `superstructure.mc()` call.
-- [ ] `robot.motionController` is still a valid member (not removed yet).
-- [ ] `cmake --build build_sim` succeeds with zero errors.
-- [ ] `uv run python -m pytest tests/simulation/unit/test_golden_tlm.py
+- [x] `robot.motionController` is still a valid member (not removed yet).
+- [x] `cmake --build build_sim` succeeds with zero errors.
+- [x] `uv run python -m pytest tests/simulation/unit/test_golden_tlm.py
       tests/simulation/unit/test_059_ordered_tick_parity.py
       tests/simulation/unit/test_planner_subsystem.py` all pass.
 

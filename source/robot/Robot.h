@@ -132,10 +132,11 @@ struct Robot {
     subsystems::Gripper     gripper_sub;   // (gripper)
     HaltController      haltController;    // user-facing named stop-condition registry
     // Superstructure (Seam 3, 042-001) — thin Goal coordinator.  MUST be declared
-    // AFTER motionController and haltController: it holds references to both, and
-    // C++ initialises members in declaration order, so they must be constructed
-    // first.  Holds a const RobotConfig& as well.
-    Superstructure      superstructure;    // (motionController, haltController, config)
+    // AFTER haltController: it holds a reference to it, and C++ initialises
+    // members in declaration order.  Also holds Planner& and const RobotConfig&.
+    // Note: planner is declared AFTER superstructure; the Planner& is only stored
+    // (not used) during Superstructure construction, so this is safe (061-002).
+    Superstructure      superstructure;    // (planner, haltController, config)
     // Phase 3 (059-004): new message-contract subsystems.  configure() is called
     // in the Robot constructor body after all legacy members are fully constructed.
     //

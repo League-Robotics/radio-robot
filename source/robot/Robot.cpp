@@ -79,10 +79,12 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       // (periodic/updateInputs are no-ops); not wired into loopTickOnce.  Actuation
       // still flows through servoController (unchanged) — zero behavior change.
       gripper_sub(gripper),
-      // Superstructure (042-001) — wired with references to motionController and
-      // haltController (both declared before it) plus config.  Declaration order
-      // in Robot.h guarantees those are constructed first.
-      superstructure(motionController, haltController, config),
+      // Superstructure (042-001) — wired with references to planner and
+      // haltController plus config.  Declaration order in Robot.h guarantees
+      // haltController is constructed first; planner is constructed after
+      // superstructure (safe: Superstructure only stores the reference, never
+      // uses it during construction).
+      superstructure(planner, haltController, config),
       // Phase 3 (059-004): new message-contract subsystems.  ADDITIVE — NOT yet
       // wired into loopTickOnce; configure() called in the constructor body below.
       //

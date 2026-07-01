@@ -11,7 +11,7 @@
 // point for goal starts.  `requestGoal(GoalRequest)` is the single external
 // entry point: it calls `goalAllowed(gr)` (stub: returns true) and then
 // dispatches via a plain `switch(gr.goal)` to the EXISTING
-// MotionController::beginX(...) call (or Robot::distanceDrive for DISTANCE).
+// Planner::beginX(...) call (or Robot::distanceDrive for DISTANCE).
 //
 // Behaviour-preservation contract (042-001): after this seam is inserted the
 // effect is IDENTICAL to the pre-ticket state — requestGoal produces exactly
@@ -24,12 +24,12 @@
 // existing beginX() call.  Extending to a richer interlock later is additive.
 //
 // Dependency rule: this header depends only on Config (RobotConfig) and
-// Protocol (ReplyFn).  It forward-declares MotionController, HaltController,
+// Protocol (ReplyFn).  It forward-declares Planner, HaltController,
 // and Robot so it pulls in NO vendor/device headers and NO io/ headers.  The
 // vendor-confinement grep gate must see zero hits in source/superstructure/.
 // ---------------------------------------------------------------------------
 
-class MotionController;
+class Planner;
 class HaltController;
 struct Robot;
 class CommandProcessor;
@@ -113,9 +113,9 @@ struct GoalRequest {
 // ---------------------------------------------------------------------------
 class Superstructure {
 public:
-    Superstructure(MotionController& mc, HaltController& hc,
+    Superstructure(Planner& planner, HaltController& hc,
                    const RobotConfig& cfg)
-        : _mc(mc), _hc(hc), _cfg(cfg) {}
+        : _planner(planner), _hc(hc), _cfg(cfg) {}
 
     // requestGoal — the ONLY external entry point for goal starts.
     //
@@ -146,12 +146,12 @@ public:
                         LoopTickState& ts, const HardwareState& inputs,
                         uint32_t now);
 
-    // Accessor for the wrapped MotionController (used by loopTickOnce in a
+    // Accessor for the wrapped Planner (used by loopTickOnce in a
     // later Phase-D ticket; harmless to expose now).
-    MotionController& mc() { return _mc; }
+    Planner& planner() { return _planner; }
 
 private:
-    MotionController&   _mc;
+    Planner&            _planner;
     HaltController&     _hc;
     const RobotConfig&  _cfg;
 };
