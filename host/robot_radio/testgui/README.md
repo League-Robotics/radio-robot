@@ -108,6 +108,30 @@ Send assembles the wire string from the current spin-box values and calls
 
 ---
 
+## Tour buttons
+
+Below the command rows, one button per named tour (`commands.TOURS`) runs a
+pre-programmed motion sequence.  Clicking **Tour 1**:
+
+1. Resets the robot to the origin (same as **Set Robot @ 0,0**: `ZERO enc`,
+   `OZ`, `SI 0 0 0` + display reset).
+2. On a background thread, sends each move in the tour one at a time, **waiting
+   for the previous move to finish** before the next.
+
+Completion is detected by polling `SNAP` and reading its `mode` field
+(`mode=I` = idle) — the async `EVT done` event is *not* used because the radio
+relay drops asynchronous events but answers `SNAP` reliably.  Each poll waits
+up to 30 s per move before aborting the tour.
+
+Tour 1 (heading 0 after the reset) traces: `RT 45°`, drive 420 mm, turn to
+absolute heading 180°, drive 700 mm, then `RT 90°` with drives of 500 / 700 /
+500 mm between the turns.  The sequence lives in `commands.TOUR_1` as plain
+wire strings.
+
+The tour is aborted (and the thread joined) on Disconnect and on app quit.
+
+---
+
 ## Operations panel
 
 Below the command rows, the **Operations** group provides six one-click actions:

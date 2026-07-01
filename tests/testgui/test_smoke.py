@@ -139,6 +139,29 @@ class TestAppOpens:
 
 
 # ---------------------------------------------------------------------------
+# test_tour_button_present
+# ---------------------------------------------------------------------------
+
+
+class TestTourButton:
+    """The Tour 1 button exists, starts disabled, and enables on connect."""
+
+    def test_tour_button_present_and_disabled(self, qapp):
+        """A 'Tour 1' QPushButton exists and is disabled before connect."""
+        from PySide6.QtWidgets import QPushButton  # type: ignore[import-untyped]
+        from robot_radio.testgui.__main__ import _build_main_window
+
+        window, _app = _build_main_window()
+        try:
+            btn = window.findChild(QPushButton, "tour_btn_tour_1")
+            assert btn is not None, "Tour 1 button not found"
+            assert btn.text() == "Tour 1"
+            assert not btn.isEnabled(), "Tour button should start disabled"
+        finally:
+            window.hide()
+
+
+# ---------------------------------------------------------------------------
 # test_trace_model_feeds_tlm
 # ---------------------------------------------------------------------------
 

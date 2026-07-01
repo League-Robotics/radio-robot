@@ -39,6 +39,7 @@ centidegrees, producing ``RT <rel_cdeg>``.
 
 from __future__ import annotations
 
+import re
 from typing import Any, TypedDict
 
 
@@ -224,3 +225,76 @@ def build_wire_string(spec: CommandSpec, values: dict[str, Any]) -> str:
             tokens.append(str(wire_val))
 
     return " ".join(tokens)
+
+
+# ---------------------------------------------------------------------------
+# Pre-programmed tours
+# ---------------------------------------------------------------------------
+#
+# A "tour" is an ordered list of firmware wire strings the GUI sends one at a
+# time, waiting for each bounded move to physically complete (SNAP ``mode``
+# returns to ``I`` = idle) before dispatching the next.  The tour is prefixed
+# by a "Set Robot @ 0,0" origin reset performed by the GUI itself, so the list
+# below contains only the motion steps.
+#
+# Tour 1 (heading 0 = facing +x after the origin reset):
+#   RT 45°           → RT 4500      (relative in-place turn, +CCW)
+#   drive 420 mm     → D 200 200 420
+#   turn to 180°     → TURN 18000   (absolute heading, centidegrees)
+#   drive 700 mm     → D 200 200 700
+#   RT 90° ×3 with drives of 500 / 700 / 500 mm between them.
+#
+# D speeds use the schema default of 200 mm/s (both wheels forward).
+
+TOUR_1: list[str] = [
+    "RT 4500",
+    "D 200 200 420",
+    "TURN 18000",
+    "D 200 200 700",
+    "RT 9000",
+    "D 200 200 500",
+    "RT 9000",
+    "D 200 200 700",
+    "RT 9000",
+    "D 200 200 500",
+]
+
+#: Named tours available to the GUI (label → ordered wire strings).
+TOURS: dict[str, list[str]] = {
+    "Tour 1": TOUR_1,
+}
+
+
+# ---------------------------------------------------------------------------
+# Telemetry / SNAP mode parsing (Qt-free, for completion detection)
+# ---------------------------------------------------------------------------
+
+_MODE_RE = re.compile(r"\bmode=([A-Za-z])")
+
+
+def parse_tlm_mode(reply: str) -> str | None:
+    """Extract the single-character ``mode`` field from a TLM/SNAP reply.
+
+    A ``SNAP`` command returns a telemetry frame such as
+    ``"TLM t=1234 mode=I seq=5 ..."``.  The ``mode`` character reports the
+    robot's motion state: ``I`` = idle, and ``S`` / ``T`` / ``D`` / ``G``
+    (and other non-``I`` values) mean a motion command is still executing.
+
+    Parameters
+    ----------
+    reply:
+        The raw reply string from ``transport.command("SNAP")`` — may span
+        multiple lines; the first ``mode=`` token found is used.
+
+    Returns
+    -------
+    str | None
+        The uppercase mode character, or ``None`` if no ``mode=`` field is
+        present (e.g. an empty reply on timeout).
+    """
+    if not reply:
+        return None
+    m = _MODE_RE.search(reply)
+    if m is None:
+        return None
+    return m.group(1).upper()

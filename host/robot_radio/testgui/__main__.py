@@ -147,7 +147,12 @@ def _build_main_window():  # type: ignore[return]
         SimTransport,
         list_ports,
     )
-    from robot_radio.testgui.commands import COMMANDS, build_wire_string
+    from robot_radio.testgui.commands import (
+        COMMANDS,
+        TOURS,
+        build_wire_string,
+        parse_tlm_mode,
+    )
     from robot_radio.testgui.operations import build_panel as _build_ops_panel, build_setpose_command
     from robot_radio.testgui.traces import TraceModel
     from robot_radio.testgui.canvas import build_canvas
@@ -167,6 +172,8 @@ def _build_main_window():  # type: ignore[return]
         "live_view_active": False,
         "live_worker": None,
         "live_thread": None,
+        "tour_worker": None,
+        "tour_thread": None,
     }
 
     # Keyboard driver — wires cursor-key VW driving onto the main window.
@@ -358,6 +365,29 @@ def _build_main_window():  # type: ignore[return]
         _row_send_getters.append((btn, cmd_spec, getters))
 
     left_layout.addWidget(cmd_rows_widget)
+
+    # Tour buttons — run a pre-programmed motion sequence (one per named tour).
+    # Each button resets the robot to the origin, then sends the tour's moves
+    # one at a time on a background thread, waiting for each to complete.
+    tour_row = QWidget()
+    tour_layout = QHBoxLayout(tour_row)
+    tour_layout.setContentsMargins(0, 0, 0, 0)
+    tour_layout.setSpacing(4)
+    _tour_buttons: list[tuple[QPushButton, str]] = []
+    for _tour_name in TOURS:
+        _tb = QPushButton(_tour_name)
+        _tb.setObjectName(f"tour_btn_{_tour_name.lower().replace(' ', '_')}")
+        _tb.setEnabled(False)
+        _tb.setToolTip(
+            f"Run {_tour_name}: reset to origin, then drive a fixed "
+            "sequence, waiting for each move to complete."
+        )
+        tour_layout.addWidget(_tb)
+        _tour_buttons.append((_tb, _tour_name))
+        # Enable/disable together with the Send buttons on connect/disconnect.
+        _send_buttons.append(_tb)
+    tour_layout.addStretch()
+    left_layout.addWidget(tour_row)
 
     left_layout.addStretch()
     splitter.addWidget(left_widget)
@@ -557,6 +587,95 @@ def _build_main_window():  # type: ignore[return]
     _bridge.frame_ready.connect(_bridge.on_frame_ready, Qt.ConnectionType.QueuedConnection)
     _bridge.truth_ready.connect(_bridge.on_truth_ready, Qt.ConnectionType.QueuedConnection)
 
+    class _TourRunner(QObject):
+        """Runs a pre-programmed tour on a background thread.
+
+        Sends each wire string in ``steps`` via ``transport.command``, then
+        polls ``SNAP`` until the robot returns to idle (``mode=I``) before
+        sending the next.  SNAP polling (rather than the async ``EVT done``
+        event) is used because the radio relay drops asynchronous events but
+        answers ``SNAP`` reliably.
+
+        Signals are marshalled to the Qt main thread via QueuedConnection:
+        ``log_line(text, direction)`` mirrors the manual Send path (direction
+        ``"TX"``/``"RX"`` feeds the recorder; ``""`` is a status line), and
+        ``finished()`` re-enables the button and joins the thread.
+        """
+
+        log_line = Signal(str, str)
+        finished = Signal()
+
+        #: Delay (s) after a command before polling, so the move has started.
+        SPINUP_S = 0.2
+        #: Interval (s) between SNAP completion polls.
+        POLL_S = 0.3
+        #: Per-move timeout (s) before giving up and aborting the tour.
+        MOVE_TIMEOUT_S = 30.0
+
+        def __init__(self, transport: "object", name: str, steps: list[str]) -> None:
+            super().__init__()
+            self._transport = transport
+            self._name = name
+            self._steps = steps
+            self._stop = False
+
+        def stop(self) -> None:
+            """Request the tour abort at the next safe point (thread-safe)."""
+            self._stop = True
+
+        @Slot()
+        def run(self) -> None:
+            """Execute the tour step-by-step (runs on the worker thread)."""
+            import time
+
+            total = len(self._steps)
+            try:
+                for i, cmd in enumerate(self._steps, 1):
+                    if self._stop:
+                        self.log_line.emit(f"[TOUR] {self._name} aborted", "")
+                        return
+                    self.log_line.emit(
+                        f"[TOUR] {self._name} step {i}/{total}: {cmd}", ""
+                    )
+                    self.log_line.emit(f"TX {cmd}", "TX")
+                    try:
+                        reply = self._transport.command(cmd, read_ms=500)
+                    except Exception as exc:  # noqa: BLE001
+                        self.log_line.emit(f"[TOUR] error sending {cmd!r}: {exc}", "")
+                        return
+                    if reply:
+                        self.log_line.emit(f"RX {reply.strip()}", "RX")
+                    if not self._wait_for_idle(time):
+                        self.log_line.emit(
+                            f"[TOUR] timed out waiting for '{cmd}' to complete — "
+                            "aborting",
+                            "",
+                        )
+                        return
+                self.log_line.emit(f"[TOUR] {self._name} complete", "")
+            finally:
+                self.finished.emit()
+
+        def _wait_for_idle(self, time_mod: "object") -> bool:
+            """Poll SNAP until ``mode=I`` (idle) or the per-move timeout.
+
+            Returns ``True`` when idle is observed (or on stop request),
+            ``False`` on timeout.
+            """
+            time_mod.sleep(self.SPINUP_S)
+            deadline = time_mod.monotonic() + self.MOVE_TIMEOUT_S
+            while time_mod.monotonic() < deadline:
+                if self._stop:
+                    return True
+                try:
+                    reply = self._transport.command("SNAP", read_ms=300)
+                except Exception:  # noqa: BLE001
+                    return False
+                if parse_tlm_mode(reply) == "I":
+                    return True
+                time_mod.sleep(self.POLL_S)
+            return False
+
     def _on_telemetry_thread_v2(frame: "object") -> None:
         """Transport on_telemetry callback — fires on the reader/tick thread.
 
@@ -709,6 +828,79 @@ def _build_main_window():  # type: ignore[return]
         canvas_ctrl.reset_avatar_to_center()
         canvas_ctrl.refresh()
 
+    # ----------------------------------------------------------- tour controls
+
+    def _on_tour_log(text: str, direction: str) -> None:
+        """Main-thread slot for tour log/step lines (marshalled from worker)."""
+        _append_log(text, direction=direction or None)
+
+    def _stop_tour() -> None:
+        """Stop a running tour worker and join its thread (safe if idle)."""
+        worker = _state.get("tour_worker")
+        thread = _state.get("tour_thread")
+        if worker is not None:
+            try:
+                worker.stop()
+            except Exception:
+                pass
+        if thread is not None:
+            try:
+                thread.quit()
+                thread.wait(3000)
+            except Exception:
+                pass
+        _state["tour_worker"] = None
+        _state["tour_thread"] = None
+
+    def _on_tour_finished() -> None:
+        """Main-thread slot: tour ended — join the thread, re-enable buttons."""
+        thread = _state.get("tour_thread")
+        if thread is not None:
+            try:
+                thread.quit()
+                thread.wait(3000)
+            except Exception:
+                pass
+        _state["tour_worker"] = None
+        _state["tour_thread"] = None
+        if _state.get("transport") is not None:
+            for _tb, _ in _tour_buttons:
+                _tb.setEnabled(True)
+
+    def _make_tour_handler(name: str, steps: list[str]):
+        def _on_tour_clicked() -> None:
+            transport = _state.get("transport")
+            if transport is None:
+                _append_log("[WARN] Not connected")
+                return
+            if _state.get("tour_thread") is not None:
+                _append_log("[WARN] A tour is already running")
+                return
+            _append_log(f"[TOUR] {name} starting — resetting to origin")
+            # Origin reset runs on the main thread (wire commands + display).
+            _set_origin()
+            # Disable all tour buttons while one runs.
+            for _tb, _ in _tour_buttons:
+                _tb.setEnabled(False)
+            from PySide6.QtCore import QThread  # type: ignore[import-untyped]
+
+            worker = _TourRunner(transport, name, list(steps))
+            thread = QThread()
+            worker.moveToThread(thread)
+            worker.log_line.connect(_on_tour_log, Qt.ConnectionType.QueuedConnection)
+            worker.finished.connect(
+                _on_tour_finished, Qt.ConnectionType.QueuedConnection
+            )
+            thread.started.connect(worker.run)
+            thread.start()
+            _state["tour_worker"] = worker
+            _state["tour_thread"] = thread
+
+        return _on_tour_clicked
+
+    for _tour_btn, _tour_name in _tour_buttons:
+        _tour_btn.clicked.connect(_make_tour_handler(_tour_name, TOURS[_tour_name]))
+
     # Operations panel — built after _append_log is defined so the log callback
     # is live.
     ops_panel, ops_ctrl = _build_ops_panel(
@@ -836,6 +1028,8 @@ def _build_main_window():  # type: ignore[return]
         transport: Transport | None = _state.get("transport")
         if transport is None:
             return
+        # Stop any running tour before the transport goes away.
+        _stop_tour()
         # Stop the live-view worker first so it doesn't race with cleanup.
         _stop_live_worker()
         # Detach cursor-key driving before the transport goes away.
@@ -862,8 +1056,9 @@ def _build_main_window():  # type: ignore[return]
     connect_btn.clicked.connect(_on_connect)
     disconnect_btn.clicked.connect(_on_disconnect)
 
-    # Stop the live-view worker on app quit to avoid thread leaks.
+    # Stop the live-view worker and any running tour on app quit.
     app.aboutToQuit.connect(_stop_live_worker)
+    app.aboutToQuit.connect(_stop_tour)
 
     # -------------------------------------------------------------- startup grab
     # Trigger a best-effort live playfield grab shortly after the event loop
