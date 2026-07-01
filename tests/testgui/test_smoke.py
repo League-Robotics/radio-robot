@@ -197,16 +197,16 @@ class TestRobotMarkerMoves:
 
         _canvas_widget, canvas_ctrl = build_canvas(model)
 
-        # Initially no fused data → marker is hidden.
-        assert not canvas_ctrl._marker_group.isVisible(), (
-            "Marker should be hidden before any TLM is fed"
+        # Avatar is always visible — it starts at world (0,0) centre.
+        assert canvas_ctrl._marker_group.isVisible(), (
+            "Marker should be visible at startup (shown at centre before any TLM)"
         )
 
         # Feed first frame — establishes baseline at anchor (0, 0).
         model.feed(_make_frame(pose=(0, 0, 0)))
         canvas_ctrl.refresh(fused_yaw_rad=0.0)
 
-        # Capture position after first frame (should be at canvas origin ≈ 0,0).
+        # Capture position after first frame (should be at canvas origin ≈ centre).
         pos_after_first = canvas_ctrl._marker_group.pos()
         assert canvas_ctrl._marker_group.isVisible(), (
             "Marker should be visible after feeding first fused frame"

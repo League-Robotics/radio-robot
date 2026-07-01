@@ -216,15 +216,29 @@ class TestRobotMarker:
         model, widget, ctrl = canvas_with_fused
         assert ctrl._marker_group.isVisible(), "Robot marker not visible after fused feed"
 
-    def test_marker_hidden_before_fused_feed(self, qapp):
-        """Robot marker is hidden when no fused points have been added."""
-        from robot_radio.testgui.canvas import build_canvas
+    def test_marker_visible_at_center_before_fused_feed(self, qapp):
+        """Robot marker is visible at world (0,0) centre before any telemetry."""
+        from robot_radio.testgui.canvas import build_canvas, _PIXELS_PER_CM
+        from robot_radio.testgui.canvas import _load_calibration
 
         model = _make_trace_model()
         model.anchor(0.0, 0.0, 0.0)
         widget, ctrl = build_canvas(model)
         ctrl.refresh()
-        assert not ctrl._marker_group.isVisible(), "Marker must be hidden with no fused points"
+        # Avatar is always visible (shown at centre on startup).
+        assert ctrl._marker_group.isVisible(), "Marker must be visible at startup (no data yet)"
+        # Position should be at image centre (world 0,0 = centre of rectified image).
+        w_cm, h_cm = _load_calibration()
+        ppc = _PIXELS_PER_CM
+        expected_cx = (w_cm / 2) * ppc
+        expected_cy = (h_cm / 2) * ppc
+        pos = ctrl._marker_group.pos()
+        assert pos.x() == pytest.approx(expected_cx, abs=2.0), (
+            f"Marker x at startup should be image-centre {expected_cx:.1f}px, got {pos.x():.1f}"
+        )
+        assert pos.y() == pytest.approx(expected_cy, abs=2.0), (
+            f"Marker y at startup should be image-centre {expected_cy:.1f}px, got {pos.y():.1f}"
+        )
 
     def test_marker_has_two_children(self, canvas_with_fused):
         """Marker group must contain exactly two rectangle items (front + back)."""
@@ -382,6 +396,12 @@ class TestSetBackground:
 
 
 class TestWorldToPixel:
+    """Field-centred world→pixel transform: world (0,0) is image centre.
+
+    Formula: px = (field_w/2 + x_cm) * ppc
+             py = (field_h/2 - y_cm) * ppc   (y-flip: north = up)
+    """
+
     @pytest.fixture
     def ctrl(self, qapp):
         from robot_radio.testgui.canvas import build_canvas
@@ -390,32 +410,180 @@ class TestWorldToPixel:
         _, ctrl = build_canvas(model)
         return ctrl
 
-    def test_origin_maps_to_top_left(self, ctrl):
-        """World (0, 0) → pixel (0, img_h) because y is flipped."""
+    def test_origin_maps_to_image_centre(self, ctrl):
+        """World (0, 0) must map to the centre of the rectified image."""
         px, py = ctrl._world_to_px(0.0, 0.0)
-        assert px == pytest.approx(0.0, abs=1.0)
-        assert py == pytest.approx(ctrl._img_h, abs=1.0)
+        assert px == pytest.approx(ctrl._img_w / 2.0, abs=2.0), (
+            f"Origin x: expected img_w/2={ctrl._img_w/2:.1f}, got {px:.1f}"
+        )
+        assert py == pytest.approx(ctrl._img_h / 2.0, abs=2.0), (
+            f"Origin y: expected img_h/2={ctrl._img_h/2:.1f}, got {py:.1f}"
+        )
 
-    def test_top_right_corner(self, ctrl):
-        """World (field_w, 0) → pixel (img_w, img_h)."""
+    def test_ppc_scale_east(self, ctrl):
+        """Moving 1 cm east increases pixel x by ppc pixels."""
+        from robot_radio.testgui.canvas import _PIXELS_PER_CM
+        px0, py0 = ctrl._world_to_px(0.0, 0.0)
+        px1, py1 = ctrl._world_to_px(1.0, 0.0)
+        assert px1 - px0 == pytest.approx(_PIXELS_PER_CM, abs=0.01)
+        assert py1 == pytest.approx(py0, abs=0.01)
+
+    def test_ppc_scale_north(self, ctrl):
+        """Moving 1 cm north decreases pixel y by ppc pixels (y-flip)."""
+        from robot_radio.testgui.canvas import _PIXELS_PER_CM
+        px0, py0 = ctrl._world_to_px(0.0, 0.0)
+        px1, py1 = ctrl._world_to_px(0.0, 1.0)
+        assert py0 - py1 == pytest.approx(_PIXELS_PER_CM, abs=0.01)
+        assert px1 == pytest.approx(px0, abs=0.01)
+
+    def test_south_west_corner(self, ctrl):
+        """World (-field_w/2, -field_h/2) maps to pixel (0, img_h) — SW corner."""
         from robot_radio.testgui.canvas import _load_calibration
         w_cm, h_cm = _load_calibration()
-        px, py = ctrl._world_to_px(w_cm, 0.0)
-        assert px == pytest.approx(ctrl._img_w, abs=2.0)
-        assert py == pytest.approx(ctrl._img_h, abs=2.0)
+        px, py = ctrl._world_to_px(-w_cm / 2, -h_cm / 2)
+        assert px == pytest.approx(0.0, abs=2.0), f"SW corner x: {px:.1f}"
+        assert py == pytest.approx(ctrl._img_h, abs=2.0), f"SW corner y: {py:.1f}"
 
-    def test_top_left_north_corner(self, ctrl):
-        """World (0, field_h) → pixel (0, 0) — north is up (low pixel y)."""
-        from robot_radio.testgui.canvas import _load_calibration
-        w_cm, h_cm = _load_calibration()
-        px, py = ctrl._world_to_px(0.0, h_cm)
-        assert px == pytest.approx(0.0, abs=2.0)
-        assert py == pytest.approx(0.0, abs=2.0)
-
-    def test_centre_of_field(self, ctrl):
-        """World centre maps to pixel centre."""
+    def test_north_east_corner(self, ctrl):
+        """World (field_w/2, field_h/2) maps to pixel (img_w, 0) — NE corner."""
         from robot_radio.testgui.canvas import _load_calibration
         w_cm, h_cm = _load_calibration()
         px, py = ctrl._world_to_px(w_cm / 2, h_cm / 2)
+        assert px == pytest.approx(ctrl._img_w, abs=2.0), f"NE corner x: {px:.1f}"
+        assert py == pytest.approx(0.0, abs=2.0), f"NE corner y: {py:.1f}"
+
+    def test_centre_of_field(self, ctrl):
+        """World (0, 0) maps to pixel centre — explicit sanity check."""
+        from robot_radio.testgui.canvas import _load_calibration
+        w_cm, h_cm = _load_calibration()
+        px, py = ctrl._world_to_px(0.0, 0.0)
         assert px == pytest.approx(ctrl._img_w / 2, abs=2.0)
         assert py == pytest.approx(ctrl._img_h / 2, abs=2.0)
+
+
+# ---------------------------------------------------------------------------
+# Robot marker physical dimensions
+# ---------------------------------------------------------------------------
+
+
+class TestMarkerDimensions:
+    """Marker must be 8.0 cm long (heading) × 5.0 cm wide at _PIXELS_PER_CM."""
+
+    @pytest.fixture
+    def canvas_setup(self, qapp):
+        from robot_radio.testgui.canvas import build_canvas
+
+        model = _make_trace_model()
+        _, ctrl = build_canvas(model)
+        return ctrl
+
+    def test_marker_length_px(self, canvas_setup):
+        """Marker length (heading direction, full height in item coords) = 8.0 * ppc."""
+        from robot_radio.testgui.canvas import _PIXELS_PER_CM, _MARKER_LENGTH_CM
+        from PySide6.QtWidgets import QGraphicsRectItem  # type: ignore[import-untyped]
+
+        ctrl = canvas_setup
+        ppc = _PIXELS_PER_CM
+        expected_length_px = _MARKER_LENGTH_CM * ppc
+
+        children = ctrl._marker_group.childItems()
+        rect_items = [c for c in children if isinstance(c, QGraphicsRectItem)]
+        # Total height = front height + back height.
+        total_h = sum(abs(r.rect().height()) for r in rect_items)
+        assert total_h == pytest.approx(expected_length_px, abs=0.01), (
+            f"Marker total length: expected {expected_length_px:.1f}px, got {total_h:.1f}px"
+        )
+
+    def test_marker_width_px(self, canvas_setup):
+        """Marker width (lateral) = 5.0 * ppc."""
+        from robot_radio.testgui.canvas import _PIXELS_PER_CM, _MARKER_WIDTH_CM
+        from PySide6.QtWidgets import QGraphicsRectItem  # type: ignore[import-untyped]
+
+        ctrl = canvas_setup
+        ppc = _PIXELS_PER_CM
+        expected_width_px = _MARKER_WIDTH_CM * ppc
+
+        children = ctrl._marker_group.childItems()
+        rect_items = [c for c in children if isinstance(c, QGraphicsRectItem)]
+        for r in rect_items:
+            assert r.rect().width() == pytest.approx(expected_width_px, abs=0.01), (
+                f"Marker rect width: expected {expected_width_px:.1f}px, "
+                f"got {r.rect().width():.1f}px"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Avatar startup position and reset_avatar_to_center
+# ---------------------------------------------------------------------------
+
+
+class TestAvatarCenter:
+    """Avatar must start at (0,0) centre and reset there on demand."""
+
+    @pytest.fixture
+    def canvas_setup(self, qapp):
+        from robot_radio.testgui.canvas import build_canvas
+
+        model = _make_trace_model()
+        _, ctrl = build_canvas(model)
+        return model, ctrl
+
+    def test_avatar_visible_at_startup(self, canvas_setup):
+        """Avatar is visible before any telemetry."""
+        _, ctrl = canvas_setup
+        assert ctrl._marker_group.isVisible(), "Avatar must be visible at startup"
+
+    def test_avatar_at_center_at_startup(self, canvas_setup):
+        """Avatar starts at world (0,0) = image centre."""
+        _, ctrl = canvas_setup
+        from robot_radio.testgui.canvas import _PIXELS_PER_CM, _load_calibration
+        w_cm, h_cm = _load_calibration()
+        ppc = _PIXELS_PER_CM
+        expected_x = (w_cm / 2) * ppc
+        expected_y = (h_cm / 2) * ppc
+        pos = ctrl._marker_group.pos()
+        assert pos.x() == pytest.approx(expected_x, abs=2.0)
+        assert pos.y() == pytest.approx(expected_y, abs=2.0)
+
+    def test_reset_avatar_to_center_repositions(self, canvas_setup):
+        """reset_avatar_to_center() moves the marker back to image centre."""
+        model, ctrl = canvas_setup
+        from robot_radio.testgui.canvas import _PIXELS_PER_CM, _load_calibration
+
+        # Feed some data to move marker away from centre.
+        model.anchor(0.0, 0.0, 0.0)
+        model.feed(_make_frame(pose=(0, 0, 0)))
+        model.feed(_make_frame(pose=(5000, 0, 0)))  # 500 cm east
+        ctrl.refresh(fused_yaw_rad=0.0)
+
+        # Avatar should no longer be at centre.
+        w_cm, h_cm = _load_calibration()
+        ppc = _PIXELS_PER_CM
+        centre_x = (w_cm / 2) * ppc
+        centre_y = (h_cm / 2) * ppc
+        pos_before = ctrl._marker_group.pos()
+        assert pos_before.x() != pytest.approx(centre_x, abs=5.0), (
+            "Avatar should have moved away from centre after feeding pose"
+        )
+
+        # Now reset.
+        ctrl.reset_avatar_to_center()
+
+        pos_after = ctrl._marker_group.pos()
+        assert pos_after.x() == pytest.approx(centre_x, abs=2.0), (
+            f"reset_avatar_to_center: x={pos_after.x():.1f} should be {centre_x:.1f}"
+        )
+        assert pos_after.y() == pytest.approx(centre_y, abs=2.0), (
+            f"reset_avatar_to_center: y={pos_after.y():.1f} should be {centre_y:.1f}"
+        )
+        assert ctrl._marker_group.isVisible(), "Avatar must remain visible after reset"
+
+    def test_reset_avatar_sends_no_command(self, canvas_setup):
+        """reset_avatar_to_center() is display-only — no transport interaction."""
+        # This is a canvas-level test: the method has no transport parameter at all.
+        _, ctrl = canvas_setup
+        # Just verify the method exists and doesn't raise.
+        import inspect
+        sig = inspect.signature(ctrl.reset_avatar_to_center)
+        assert len(sig.parameters) == 0, "reset_avatar_to_center takes no args"
+        ctrl.reset_avatar_to_center()  # must not raise

@@ -1,6 +1,6 @@
 """robot_radio.testgui.operations — Operations panel for the Robot Test GUI.
 
-Provides :class:`OperationsPanel`, a ``QGroupBox`` containing six one-click
+Provides :class:`OperationsPanel`, a ``QGroupBox`` containing seven one-click
 action buttons:
 
 ============================================================  =============================
@@ -12,8 +12,11 @@ Zero Encoders                                                  Send ``ZERO enc``
 STOP                                                           Send ``STOP``
 Clear Traces                                                   Call ``clear_traces_cb`` hook
 Refresh Playfield                                              Read cam-3 frame from daemon;
+                                                               deskew via homography;
                                                                call ``refresh_playfield_cb``
 STREAM on/off toggle                                          Send ``STREAM 50`` / ``STREAM 0``
+Set Robot @ 0,0                                                Call ``set_origin_cb`` hook
+                                                               (display-only, no wire cmd)
 ============================================================  =============================
 
 Design rules
@@ -21,25 +24,33 @@ Design rules
 - All PySide6 imports are **deferred** inside ``build_panel()`` so this module
   is importable without PySide6 present.
 - All aprilcam / daemon imports are **lazy** (inside handler bodies).
-- Buttons that require a transport connection (everything except Clear Traces
-  and STREAM) start disabled; call ``set_connected(True)`` after
-  ``transport.connect()`` to enable them.
+- Buttons that require a transport connection (everything except Clear Traces,
+  STREAM, and Set Robot @ 0,0) start disabled; call ``set_connected(True)``
+  after ``transport.connect()`` to enable them.
 - STREAM button starts disabled like the others; toggling it on sends
   ``STREAM 50``, toggling it off sends ``STREAM 0``.
+- "Set Robot @ 0,0" is always enabled (display-only, no transport needed).
 
 Hooks for ticket 008 (canvas/TraceModel)
 -----------------------------------------
-Two callables accepted at construction time (or settable as attributes):
+Three callables accepted at construction time (or settable as attributes):
 
 ``clear_traces_cb``
     Called when the user clicks "Clear Traces".  Should clear all four
     polylines in the ``TraceModel``.  No-ops safely if ``None``.
 
 ``refresh_playfield_cb(pixmap)``
-    Called with a ``QPixmap`` when the user clicks "Refresh Playfield".
-    The panel reads the playfield frame from the aprilcam daemon (camera 3)
-    and constructs a ``QPixmap``; ticket 008 wires this to replace the
-    canvas background.  No-ops safely if ``None``.
+    Called with a deskewed ``QPixmap`` when the user clicks "Refresh Playfield".
+    The panel reads the playfield frame from the aprilcam daemon (camera 3),
+    deskews it via the playfield homography, and constructs a ``QPixmap``;
+    ticket 008 wires this to replace the canvas background.
+    No-ops safely if ``None``.
+
+``set_origin_cb``
+    Called when the user clicks "Set Robot @ 0,0".  Should re-anchor the
+    ``TraceModel`` so the current pose maps to (0, 0), clear traces, and
+    move the avatar to centre.  Display-only: no motion command is sent.
+    No-ops safely if ``None``.
 
 Pure helper (Qt-free, importable in headless tests)
 ----------------------------------------------------
@@ -112,6 +123,7 @@ def build_panel(
     *,
     clear_traces_cb: Callable[[], None] | None = None,
     refresh_playfield_cb: Callable[["object"], None] | None = None,
+    set_origin_cb: Callable[[], None] | None = None,
 ) -> "tuple[object, object]":
     """Build and return the operations panel ``QGroupBox``.
 
@@ -127,8 +139,13 @@ def build_panel(
         Optional hook called when "Clear Traces" is clicked.  Ticket 008
         wires this to ``TraceModel.clear()``.
     refresh_playfield_cb:
-        Optional hook called with a ``QPixmap`` when "Refresh Playfield" is
-        clicked.  Ticket 008 wires this to update the canvas background.
+        Optional hook called with a deskewed ``QPixmap`` when "Refresh
+        Playfield" is clicked.  Ticket 008 wires this to update the canvas
+        background.
+    set_origin_cb:
+        Optional hook called when "Set Robot @ 0,0" is clicked.  Should
+        re-anchor the TraceModel, clear traces, and move the avatar to centre.
+        Display-only: no motion command is sent.  No-ops safely if ``None``.
 
     Returns
     -------
@@ -195,7 +212,8 @@ def build_panel(
     refresh_btn = QPushButton("Refresh Playfield")
     refresh_btn.setObjectName("ops_btn_refresh_playfield")
     refresh_btn.setToolTip(
-        "Capture a new playfield image from camera 3 and update the canvas background."
+        "Capture a new playfield image from camera 3, deskew it via homography,\n"
+        "and update the canvas background."
     )
     refresh_btn.setEnabled(False)
 
@@ -215,6 +233,25 @@ def build_panel(
     row2_layout.addWidget(stream_btn)
     layout.addWidget(row2)
 
+    # Row 3: Set Robot @ 0,0 (display-only, always enabled)
+    row3 = QWidget()
+    row3_layout = QHBoxLayout(row3)
+    row3_layout.setContentsMargins(0, 0, 0, 0)
+    row3_layout.setSpacing(4)
+
+    origin_btn = QPushButton("Set Robot @ 0,0")
+    origin_btn.setObjectName("ops_btn_set_origin")
+    origin_btn.setToolTip(
+        "Re-anchor the avatar to the playfield centre (world 0,0).\n"
+        "Physically place the robot at the playfield centre first.\n"
+        "Display-only — sends NO motion command to the robot."
+    )
+    origin_btn.setEnabled(True)  # Works without transport (display-only)
+
+    row3_layout.addWidget(origin_btn)
+    row3_layout.addStretch()
+    layout.addWidget(row3)
+
     # Buttons that need a transport connection.
     _transport_buttons = [sync_btn, zero_btn, stop_btn, refresh_btn, stream_btn]
 
@@ -228,9 +265,11 @@ def build_panel(
         clear_btn=clear_btn,
         refresh_btn=refresh_btn,
         stream_btn=stream_btn,
+        origin_btn=origin_btn,
         transport_buttons=_transport_buttons,
         clear_traces_cb=clear_traces_cb,
         refresh_playfield_cb=refresh_playfield_cb,
+        set_origin_cb=set_origin_cb,
     )
 
     # Wire buttons to controller handlers.
@@ -240,6 +279,7 @@ def build_panel(
     clear_btn.clicked.connect(controller.on_clear_traces)
     refresh_btn.clicked.connect(controller.on_refresh_playfield)
     stream_btn.toggled.connect(controller.on_stream_toggled)
+    origin_btn.clicked.connect(controller.on_set_origin)
 
     return panel, controller
 
@@ -261,8 +301,12 @@ class OpsController:
     clear_traces_cb:
         Hook for "Clear Traces".  Ticket 008 wires this to ``TraceModel.clear()``.
     refresh_playfield_cb:
-        Hook for "Refresh Playfield".  Called with a ``QPixmap`` (or ``None``
-        if image capture fails).  Ticket 008 wires this to update the canvas.
+        Hook for "Refresh Playfield".  Called with a deskewed ``QPixmap``
+        (or ``None`` if image capture/deskew fails).  Ticket 008 wires this
+        to update the canvas.
+    set_origin_cb:
+        Hook for "Set Robot @ 0,0".  Re-anchors the TraceModel and moves the
+        avatar to centre.  Display-only: no motion command is sent.
     """
 
     def __init__(
@@ -276,9 +320,11 @@ class OpsController:
         clear_btn: "object",
         refresh_btn: "object",
         stream_btn: "object",
+        origin_btn: "object",
         transport_buttons: list,
         clear_traces_cb: Callable[[], None] | None = None,
         refresh_playfield_cb: Callable[["object"], None] | None = None,
+        set_origin_cb: Callable[[], None] | None = None,
     ) -> None:
         self._transport_ref = transport_ref
         self._log_cb = log_cb
@@ -288,9 +334,11 @@ class OpsController:
         self._clear_btn = clear_btn
         self._refresh_btn = refresh_btn
         self._stream_btn = stream_btn
+        self._origin_btn = origin_btn
         self._transport_buttons = transport_buttons
         self.clear_traces_cb = clear_traces_cb
         self.refresh_playfield_cb = refresh_playfield_cb
+        self.set_origin_cb = set_origin_cb
         self._stream_on = False  # tracks stream toggle state
 
     # ------------------------------------------------------------------
@@ -405,6 +453,24 @@ class OpsController:
                 self._log(f"[ERROR] Clear Traces: callback raised: {exc}")
                 return
         self._log("[INFO] Clear Traces: done")
+
+    def on_set_origin(self) -> None:
+        """Re-anchor avatar to playfield centre (display-only, no wire command).
+
+        Calls ``set_origin_cb`` which should:
+        1. Re-anchor the ``TraceModel`` so the current pose maps to (0, 0).
+        2. Clear existing trace polylines.
+        3. Move the canvas avatar to world (0, 0).
+
+        This is a GUI-only operation — no motion command is sent to the robot.
+        """
+        if self.set_origin_cb is not None:
+            try:
+                self.set_origin_cb()
+            except Exception as exc:
+                self._log(f"[ERROR] Set Robot @ 0,0: callback raised: {exc}")
+                return
+        self._log("[INFO] Set Robot @ 0,0: avatar anchored to centre")
 
     def on_refresh_playfield(self) -> None:
         """Capture a playfield image from aprilcam and call refresh_playfield_cb."""
@@ -555,7 +621,7 @@ class OpsController:
         if not image_bytes:
             return None
 
-        return _bytes_to_pixmap(image_bytes)
+        return _deskew_bytes_to_pixmap(image_bytes)
 
 
 def _bytes_to_pixmap(image_bytes: bytes) -> "object | None":
@@ -574,3 +640,47 @@ def _bytes_to_pixmap(image_bytes: bytes) -> "object | None":
     except Exception:
         _log.debug("_bytes_to_pixmap failed", exc_info=True)
         return None
+
+
+def _deskew_bytes_to_pixmap(image_bytes: bytes) -> "object | None":
+    """Decode *image_bytes*, deskew via the playfield homography, and return a ``QPixmap``.
+
+    Uses the same ``PlayfieldCalibration`` and ``_PIXELS_PER_CM`` as
+    ``canvas._load_deskewed_bg_pixmap`` so a camera-3 refresh produces a
+    rectified image geometrically identical to the default background.
+
+    Falls back to ``_bytes_to_pixmap`` (un-deskewed) if ``cv2`` or the
+    calibration is unavailable.
+    """
+    try:
+        import numpy as np
+        import cv2
+        from robot_radio.media.movie import _deskew_frame
+        from robot_radio.testgui.canvas import _build_playfield_calibration, _PIXELS_PER_CM
+
+        calib = _build_playfield_calibration()
+        if calib is None:
+            raise RuntimeError("Playfield calibration unavailable")
+
+        # Decode JPEG/PNG bytes → BGR ndarray.
+        buf = np.frombuffer(image_bytes, dtype=np.uint8)
+        frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+        if frame is None:
+            raise RuntimeError("cv2.imdecode returned None")
+
+        deskewed = _deskew_frame(frame, calib, _PIXELS_PER_CM)
+
+        # BGR → RGB → QPixmap.
+        rgb = deskewed[:, :, ::-1].copy()
+        h, w, ch = rgb.shape
+        from PySide6.QtGui import QImage, QPixmap  # type: ignore[import-untyped]
+        qi = QImage(rgb.data, w, h, w * ch, QImage.Format.Format_RGB888)
+        pm = QPixmap.fromImage(qi)
+        if pm.isNull():
+            raise RuntimeError("QPixmap.fromImage returned null")
+        _log.debug("Deskewed cam-3 refresh: %dx%d px", w, h)
+        return pm
+
+    except Exception as exc:
+        _log.debug("_deskew_bytes_to_pixmap failed (%s); falling back to raw pixmap", exc)
+        return _bytes_to_pixmap(image_bytes)
