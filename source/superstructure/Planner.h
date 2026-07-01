@@ -98,6 +98,91 @@ public:
         _desired.sink = wire.sink;
     }
 
+    // -------------------------------------------------------------------------
+    // MotionController compatibility API — delegated to _mc (ticket 061-001).
+    // Becomes native in 061-004.
+    //
+    // All signatures exactly match their MotionController counterparts so that
+    // later tickets can change a call site's receiver from `motionController`
+    // to `planner` without altering argument lists.
+    // -------------------------------------------------------------------------
+
+    DriveMode mode() const { return _mc.mode(); }
+
+    void beginStream(float leftMms, float rightMms, uint32_t now_ms,
+                     TargetState& target, ReplyFn fn, void* ctx) {
+        _mc.beginStream(leftMms, rightMms, now_ms, target, fn, ctx);
+    }
+
+    void beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
+                       TargetState& target, ReplyFn fn, void* ctx,
+                       const char* corr_id = nullptr, bool seedImmediate = false) {
+        _mc.beginVelocity(v_mms, omega_rads, now_ms, target, fn, ctx,
+                          corr_id, seedImmediate);
+    }
+
+    void beginTimed(float leftMms, float rightMms, uint32_t durationMs, uint32_t now_ms,
+                    TargetState& target, ReplyFn fn, void* ctx,
+                    const char* corr_id = nullptr) {
+        _mc.beginTimed(leftMms, rightMms, durationMs, now_ms, target, fn, ctx, corr_id);
+    }
+
+    void beginDistance(float leftMms, float rightMms, int32_t targetMm, uint32_t now_ms,
+                       TargetState& target, ReplyFn fn, void* ctx,
+                       const char* corr_id = nullptr) {
+        _mc.beginDistance(leftMms, rightMms, targetMm, now_ms, target, fn, ctx, corr_id);
+    }
+
+    void beginGoTo(float tx, float ty, float speedMms, uint32_t now_ms,
+                   TargetState& target, ReplyFn fn, void* ctx,
+                   const char* corr_id = nullptr) {
+        _mc.beginGoTo(tx, ty, speedMms, now_ms, target, fn, ctx, corr_id);
+    }
+
+    void beginTurn(float headingCdeg, float epsCdeg, uint32_t now_ms,
+                   TargetState& target, ReplyFn fn, void* ctx,
+                   const char* corr_id = nullptr) {
+        _mc.beginTurn(headingCdeg, epsCdeg, now_ms, target, fn, ctx, corr_id);
+    }
+
+    void beginRotation(float relCdeg, uint32_t now_ms,
+                       TargetState& target, ReplyFn fn, void* ctx,
+                       const char* corr_id = nullptr) {
+        _mc.beginRotation(relCdeg, now_ms, target, fn, ctx, corr_id);
+    }
+
+    void stop(uint32_t now_ms, ReplyFn fn, void* ctx) {
+        _mc.stop(now_ms, fn, ctx);
+    }
+
+    void cancel(uint32_t now_ms, ReplyFn fn, void* ctx) {
+        _mc.cancel(now_ms, fn, ctx);
+    }
+
+    void softStop(uint32_t now_ms) { _mc.softStop(now_ms); }
+
+    void beginRawVelocity(float v_mms, float omega_rads) {
+        _mc.beginRawVelocity(v_mms, omega_rads);
+    }
+
+    void disableSafetyOneShot() { _mc.disableSafetyOneShot(); }
+
+    bool hasActiveCommand() const { return _mc.hasActiveCommand(); }
+
+    void emitToActiveChannel(const char* evt, TargetState& target) {
+        _mc.emitToActiveChannel(evt, target);
+    }
+
+    MotionCommand& activeCmd() { return _mc.activeCmd(); }
+
+    void setHardwareState(HardwareState* s) { _mc.setHardwareState(s); }
+
+    void setRobotCtx(Robot* r) { _mc.setRobotCtx(r); }
+
+    void setBvcStateRef(DesiredState* ds) { _mc.setBvcStateRef(ds); }
+
+    const HardwareState* hardwareState() const { return _mc.hardwareState(); }
+
 private:
     MotionController&         _mc;       // existing goal-closure engine (by ref)
     const subsystems::Drive&  _drive;    // source of fused pose/twist
