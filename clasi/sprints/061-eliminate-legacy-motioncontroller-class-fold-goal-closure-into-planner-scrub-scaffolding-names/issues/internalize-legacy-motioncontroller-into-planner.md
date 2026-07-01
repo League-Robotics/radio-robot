@@ -9,6 +9,7 @@ tickets:
 - 061-005
 - 061-006
 - 061-007
+- 061-008
 ---
 
 # Eliminate the legacy `MotionController` class — fold goal-closure into `Planner`, scrub all remaining legacy/scaffolding names
