@@ -79,6 +79,7 @@ def _build_main_window():  # type: ignore[return]
     from robot_radio.testgui.operations import build_panel as _build_ops_panel
     from robot_radio.testgui.traces import TraceModel
     from robot_radio.testgui.canvas import build_canvas
+    from robot_radio.testgui.drive import KeyboardDriver
 
     # QApplication must exist before any QWidget is created.  We create one
     # only if one does not already exist (e.g. during testing).
@@ -87,6 +88,9 @@ def _build_main_window():  # type: ignore[return]
     # Active transport — kept in a mutable container so inner functions can
     # rebind it without 'nonlocal' limitations across closures.
     _state: dict = {"transport": None}
+
+    # Keyboard driver — wires cursor-key VW driving onto the main window.
+    _driver = KeyboardDriver()
 
     # ------------------------------------------------------------------ window
     window = QMainWindow()
@@ -464,6 +468,9 @@ def _build_main_window():  # type: ignore[return]
 
         _state["transport"] = transport
 
+        # Attach cursor-key driving to the window.
+        _driver.attach(window, transport)
+
         # Update button states.
         connect_btn.setEnabled(False)
         disconnect_btn.setEnabled(True)
@@ -482,6 +489,8 @@ def _build_main_window():  # type: ignore[return]
         transport: Transport | None = _state.get("transport")
         if transport is None:
             return
+        # Detach cursor-key driving before the transport goes away.
+        _driver.detach()
         try:
             transport.disconnect()
         except Exception as exc:

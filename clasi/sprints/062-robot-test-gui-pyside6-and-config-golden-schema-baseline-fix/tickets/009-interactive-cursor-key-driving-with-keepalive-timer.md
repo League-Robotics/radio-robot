@@ -1,11 +1,11 @@
 ---
-id: '009'
+id: 009
 title: Interactive cursor-key driving with keepalive timer
-status: open
+status: done
 use-cases:
 - SUC-006
 depends-on:
-- '008'
+- 008
 issue: plan-robot-test-gui-pyside6.md
 completes_issue: false
 ---
@@ -31,7 +31,7 @@ Corresponds to item 7 in the approved design's ticket breakdown.
 
 ## Acceptance Criteria
 
-- [ ] `host/robot_radio/testgui/drive.py` defines `KeyboardDriver`:
+- [x] `host/robot_radio/testgui/drive.py` defines `KeyboardDriver`:
   - `attach(window, transport)` — installs `keyPressEvent` / `keyReleaseEvent`
     overrides on the main window.
   - On press of Up/Down/Left/Right (and no auto-repeat): starts a `QTimer`
@@ -39,19 +39,19 @@ Corresponds to item 7 in the approved design's ticket breakdown.
   - On release: stops the timer; calls `transport.send("STOP")`.
   - Qt auto-repeat is suppressed: `event.isAutoRepeat()` check in press handler;
     ignore auto-repeat events.
-- [ ] Named constants `FWD_SPEED_MMS` and `ROTATE_OMEGA_MRADS` at the top of
+- [x] Named constants `FWD_SPEED_MMS` and `ROTATE_OMEGA_MRADS` at the top of
   `drive.py` control the VW speeds.
-- [ ] Wire strings emitted:
+- [x] Wire strings emitted:
   - Up held: `VW 200 0` (or `VW <FWD_SPEED_MMS> 0`)
   - Down held: `VW -200 0`
   - Left held: `VW 0 500` (or `VW 0 <ROTATE_OMEGA_MRADS>`)
   - Right held: `VW 0 -500`
   - Release: `STOP`
-- [ ] `KeyboardDriver` is inactive (ignores key events) when no transport is
+- [x] `KeyboardDriver` is inactive (ignores key events) when no transport is
   connected.
-- [ ] If the transport reply to a VW command contains `vw busy`: logs the
+- [x] If the transport reply to a VW command contains `vw busy`: logs the
   warning; does NOT suppress the STOP on release.
-- [ ] `uv run python -m pytest tests/simulation` passes.
+- [x] `uv run python -m pytest tests/simulation` passes.
 
 ## Implementation Plan
 
