@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Relay auto-discovery in transport.py
-status: open
+status: done
 use-cases:
 - SUC-002
 depends-on:
@@ -53,26 +53,26 @@ banner probing — just read the announcement.
 
 ## Acceptance Criteria
 
-- [ ] `find_relay_port(["portA", "portB"], probe)` returns `"portA"` when
+- [x] `find_relay_port(["portA", "portB"], probe)` returns `"portA"` when
       `probe("portA")` returns a string containing `"RADIOBRIDGE"` and
       `probe("portB")` returns `None`.
-- [ ] `find_relay_port([], probe)` returns `None`.
-- [ ] `find_relay_port(["portA"], probe)` returns `None` when `probe("portA")`
+- [x] `find_relay_port([], probe)` returns `None`.
+- [x] `find_relay_port(["portA"], probe)` returns `None` when `probe("portA")`
       returns `None`.
-- [ ] `find_relay_port` calls `probe_fn` only until a match is found (stops early).
-- [ ] `probe_fn` exceptions (I/O errors) are caught; the port is skipped, not fatal.
-- [ ] `_relay_probe_banner(port)` returns `None` on a non-existent port without
+- [x] `find_relay_port` calls `probe_fn` only until a match is found (stops early).
+- [x] `probe_fn` exceptions (I/O errors) are caught; the port is skipped, not fatal.
+- [x] `_relay_probe_banner(port)` returns `None` on a non-existent port without
       raising (defensive timeout/error handling).
-- [ ] In the GUI, clicking Connect in Relay mode with the relay plugged in
+- [x] In the GUI, clicking Connect in Relay mode with the relay plugged in
       discovers and connects to the relay; `port_edit` is **populated with
       the discovered port** (so the user can see which port was used); the
       log shows "[INFO] Relay found on /dev/...". Both the port field
       update and the log entry are required — not one or the other.
-- [ ] In the GUI, clicking Connect in Relay mode with no relay plugged in
+- [x] In the GUI, clicking Connect in Relay mode with no relay plugged in
       logs "[WARN] No relay found on any serial port" and does not connect.
-- [ ] Discovery does not disrupt non-relay serial devices probed along the way
+- [x] Discovery does not disrupt non-relay serial devices probed along the way
       (no commands sent, port closed cleanly after banner read).
-- [ ] All existing `tests/testgui/` tests pass unchanged.
+- [x] All existing `tests/testgui/` tests pass unchanged.
 
 ## Implementation Plan
 

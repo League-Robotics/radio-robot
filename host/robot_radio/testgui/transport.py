@@ -67,9 +67,23 @@ SimTransport()
     - OTOS linear noise (sigma_fraction=0.05) so TLM pose and ground truth
       diverge visibly during motion.
 
-Helper:
+Helpers:
     list_ports() -> list[str]
         Enumerate USB modem serial ports (wraps serial_conn.list_serial_ports).
+
+    find_relay_port(port_list, probe_fn) -> str | None
+        Pure, Qt-free relay auto-discovery.  Calls ``probe_fn(port)`` for
+        each port in order; returns the first port whose banner contains
+        ``"RADIOBRIDGE"``, or ``None``.  Exceptions from ``probe_fn`` are
+        caught and the port is skipped.
+
+    _relay_probe_banner(port, timeout_s) -> str | None
+        Real I/O probe.  Opens the port with DTR asserted (pyserial default),
+        waits up to ``timeout_s`` for a ``DEVICE:`` announcement line, and
+        returns it.  Returns ``None`` on timeout or any I/O error.  Always
+        closes the port before returning.  Does NOT send any commands — only
+        reads the relay's boot announcement
+        (``DEVICE:RADIOBRIDGE:relay:gozop:<id>``).
 """
 
 from __future__ import annotations
@@ -104,6 +118,84 @@ _CAMERA_TAG_ID = 100
 def list_ports() -> list[str]:
     """Return a sorted list of USB modem serial ports."""
     return list_serial_ports()
+
+
+def find_relay_port(
+    port_list: list[str],
+    probe_fn: "Callable[[str], str | None]",
+) -> "str | None":
+    """Return the first port in port_list whose banner contains 'RADIOBRIDGE'.
+
+    Iterates over ``port_list`` in order, calling ``probe_fn(port)`` for each
+    candidate.  Returns the first port for which ``probe_fn`` returns a string
+    containing ``"RADIOBRIDGE"``.  Stops early once a match is found.
+
+    ``probe_fn`` exceptions are caught silently and the port is skipped.
+    Returns ``None`` if no match is found or ``port_list`` is empty.
+
+    This function is pure and Qt-free — it can be imported and tested without
+    a ``QApplication`` instance.
+
+    Parameters
+    ----------
+    port_list:
+        Ordered list of serial port paths to probe.
+    probe_fn:
+        Callable that takes a port path and returns the device banner string
+        or ``None`` if the port does not announce as a relay (or on error).
+    """
+    for port in port_list:
+        try:
+            banner = probe_fn(port)
+        except Exception:
+            continue
+        if banner and "RADIOBRIDGE" in banner:
+            return port
+    return None
+
+
+def _relay_probe_banner(port: str, timeout_s: float = 1.2) -> "str | None":
+    """Open port with DTR asserted and read the relay DEVICE: announcement line.
+
+    The relay resets on the DTR-pulse that occurs when pyserial opens the port
+    (DTR is asserted by default — do NOT pass ``dtr=False``).  After reset the
+    relay announces itself on the control plane:
+
+        DEVICE:RADIOBRIDGE:relay:gozop:<id>
+
+    This function waits up to ``timeout_s`` for that line and returns it.
+    Returns ``None`` on timeout or any I/O / OS error.  Always closes the port
+    before returning, regardless of outcome, so that non-relay devices probed
+    along the way are not left open.
+
+    Does NOT send any commands (no ``!GO``, no ``HELLO``).  Banner reading is
+    purely passive — open, wait, read, close.
+
+    Parameters
+    ----------
+    port:
+        Serial port path, e.g. ``/dev/cu.usbmodem21421201``.
+    timeout_s:
+        Maximum time to wait for the ``DEVICE:`` announcement line.
+    """
+    import serial  # type: ignore[import]
+    ser = None
+    try:
+        ser = serial.Serial(port, 115200, timeout=timeout_s)
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            line = ser.readline().decode("ascii", errors="replace").strip()
+            if line.startswith("DEVICE:"):
+                return line
+        return None
+    except Exception:
+        return None
+    finally:
+        if ser is not None:
+            try:
+                ser.close()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------

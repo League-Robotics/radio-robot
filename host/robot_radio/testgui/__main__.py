@@ -501,10 +501,18 @@ def _build_main_window():  # type: ignore[return]
                 return
             transport = SerialTransport(port)
         elif name == "Relay":
-            if not port:
-                _append_log("[ERROR] No port specified for Relay transport")
+            from robot_radio.testgui.transport import find_relay_port, _relay_probe_banner
+            _append_log("[INFO] Relay: scanning serial ports for relay...")
+            discovered = find_relay_port(list_ports(), _relay_probe_banner)
+            if discovered is None:
+                # Fall back to port_edit if the user typed a port manually.
+                discovered = port_edit.text().strip() or None
+            if discovered is None:
+                _append_log("[WARN] No relay found on any serial port")
                 return
-            transport = RelayTransport(port)
+            _append_log(f"[INFO] Relay found on {discovered}")
+            port_edit.setText(discovered)
+            transport = RelayTransport(discovered)
         else:
             # Sim transport — backed by ctypes firmware simulator.
             transport = SimTransport()
