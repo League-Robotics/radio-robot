@@ -1066,3 +1066,113 @@ class TestDeskewWithTagFrame:
         px, py = w2px(0.0, 0.0)
         assert px == pytest.approx(ppc * ox, abs=0.1)
         assert py == pytest.approx(ppc * oy, abs=0.1)
+
+
+# ---------------------------------------------------------------------------
+# Startup background — grey placeholder, not stale bundled image
+# ---------------------------------------------------------------------------
+
+
+class TestStartupBackground:
+    """build_canvas() must start with a grey placeholder, never the stale bundled image.
+
+    Policy (from canvas.py docstring):
+    - Default startup background is a neutral grey placeholder.
+    - The bundled test images in tests/old/ are NEVER loaded for live display.
+    - TESTGUI_LOAD_STATIC_PLAYFIELD=1 re-enables the old path (for debugging only).
+
+    We verify:
+    1. The background pixel map is NOT loaded from the bundled JPEG paths.
+    2. The background is a grey solid-colour pixmap at the correct field aspect.
+    3. _make_grey_placeholder() exists and returns a valid non-null pixmap.
+    """
+
+    def test_make_grey_placeholder_returns_valid_pixmap(self, qapp):
+        """_make_grey_placeholder(w, h) returns a non-null QPixmap of size (w, h)."""
+        from robot_radio.testgui.canvas import _make_grey_placeholder
+        pm = _make_grey_placeholder(400, 250)
+        from PySide6.QtGui import QPixmap  # type: ignore[import-untyped]
+        assert isinstance(pm, QPixmap)
+        assert not pm.isNull(), "_make_grey_placeholder returned null pixmap"
+        assert pm.width() == 400
+        assert pm.height() == 250
+
+    def test_startup_background_not_stale_image_by_default(self, qapp):
+        """build_canvas() default background must not be the bundled playfield image.
+
+        The bundled paths in tests/old/ are stale and must not be shown as live
+        display.  We verify that TESTGUI_LOAD_STATIC_PLAYFIELD is NOT set (i.e.
+        the default), and that the initial background pixmap is a plain grey
+        placeholder, not a photo loaded from disk.
+
+        We check this indirectly: the grey placeholder has a uniform grey fill
+        (all pixels near (80,80,80)), while a real playfield photo is not uniform.
+        """
+        import os
+        # Ensure the debug override is OFF.
+        os.environ.pop("TESTGUI_LOAD_STATIC_PLAYFIELD", None)
+
+        from robot_radio.testgui.canvas import build_canvas, _PIXELS_PER_CM
+        model = _make_trace_model()
+        widget, ctrl = build_canvas(model)
+
+        from PySide6.QtCore import Qt  # type: ignore[import-untyped]
+        pm = ctrl._bg_item.pixmap()
+        assert not pm.isNull(), "Background pixmap must not be null"
+
+        # Sample the centre pixel — grey placeholder is uniform (80,80,80).
+        img = pm.toImage()
+        cx, cy = pm.width() // 2, pm.height() // 2
+        color = img.pixelColor(cx, cy)
+        # Grey placeholder: all channels should be close to 80.
+        assert abs(color.red() - 80) <= 10, (
+            f"Startup background should be grey (R≈80); got R={color.red()} "
+            f"— it looks like a real photo was loaded (stale bundled image?)"
+        )
+        assert abs(color.green() - 80) <= 10, (
+            f"Startup background should be grey (G≈80); got G={color.green()}"
+        )
+        assert abs(color.blue() - 80) <= 10, (
+            f"Startup background should be grey (B≈80); got B={color.blue()}"
+        )
+
+    def test_startup_background_correct_dimensions(self, qapp):
+        """Grey placeholder has the correct field dimensions at _PIXELS_PER_CM."""
+        import os
+        os.environ.pop("TESTGUI_LOAD_STATIC_PLAYFIELD", None)
+
+        from robot_radio.testgui.canvas import build_canvas, _PIXELS_PER_CM, _load_calibration
+        model = _make_trace_model()
+        widget, ctrl = build_canvas(model)
+
+        fw, fh = _load_calibration()
+        ppc = _PIXELS_PER_CM
+        expected_w = int(round(fw * ppc))
+        expected_h = int(round(fh * ppc))
+
+        pm = ctrl._bg_item.pixmap()
+        assert pm.width() == expected_w, (
+            f"Placeholder width: expected {expected_w}, got {pm.width()}"
+        )
+        assert pm.height() == expected_h, (
+            f"Placeholder height: expected {expected_h}, got {pm.height()}"
+        )
+
+    def test_debug_override_flag_loads_static_image(self, qapp):
+        """TESTGUI_LOAD_STATIC_PLAYFIELD=1 enables the old static-image path.
+
+        We only test that the flag is honoured (no crash / valid pixmap returned).
+        We don't assert the actual pixel content because the static image may or
+        may not be present in the test environment.
+        """
+        import os
+        os.environ["TESTGUI_LOAD_STATIC_PLAYFIELD"] = "1"
+        try:
+            from robot_radio.testgui.canvas import build_canvas
+            model = _make_trace_model()
+            widget, ctrl = build_canvas(model)  # must not crash
+
+            pm = ctrl._bg_item.pixmap()
+            assert not pm.isNull(), "Background must not be null even in debug mode"
+        finally:
+            os.environ.pop("TESTGUI_LOAD_STATIC_PLAYFIELD", None)

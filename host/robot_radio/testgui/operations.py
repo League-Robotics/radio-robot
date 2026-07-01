@@ -226,9 +226,10 @@ def build_panel(
     refresh_btn.setObjectName("ops_btn_refresh_playfield")
     refresh_btn.setToolTip(
         "Capture a new playfield image from camera 3, deskew it via homography,\n"
-        "and update the canvas background."
+        "and update the canvas background.\n"
+        "Available without a robot connection (camera is independent)."
     )
-    refresh_btn.setEnabled(False)
+    refresh_btn.setEnabled(True)  # Camera is independent of robot transport
 
     stream_btn = QPushButton("STREAM: off")
     stream_btn.setObjectName("ops_btn_stream")
@@ -266,7 +267,9 @@ def build_panel(
     layout.addWidget(row3)
 
     # Buttons that need a transport connection.
-    _transport_buttons = [sync_btn, zero_btn, stop_btn, refresh_btn, stream_btn]
+    # NOTE: refresh_btn is intentionally NOT in this list — the playfield camera
+    # is independent of the robot transport and should always be accessible.
+    _transport_buttons = [sync_btn, zero_btn, stop_btn, stream_btn]
 
     # ------------------------------------------------------------------ controller
     controller = OpsController(
@@ -496,12 +499,10 @@ class OpsController:
         - ``origin_x``, ``origin_y`` are the A1 origin (cm, corner-origin frame)
           from the daemon's TagFrame; the canvas uses these so world (0,0)
           maps to tag 1's real pixel position.
-        """
-        transport = self._transport_ref.get("transport")
-        if transport is None:
-            self._log("[WARN] Refresh Playfield: not connected")
-            return
 
+        The playfield camera is independent of the robot transport.  This method
+        works (and should succeed) even when no robot transport is connected.
+        """
         self._log(f"[INFO] Refresh Playfield: capturing from camera {_PLAYFIELD_CAMERA_INDEX}...")
         try:
             result = self._capture_playfield_frame_and_calib()
@@ -525,6 +526,97 @@ class OpsController:
             f"[INFO] Refresh Playfield: done "
             f"(origin=({origin_x:.1f},{origin_y:.1f}) cm)"
         )
+
+    def trigger_live_grab(self) -> None:
+        """Fire-and-forget: run the playfield grab on a background thread.
+
+        Captures the playfield image from the aprilcam daemon (blocking gRPC +
+        camera calls) on a daemon thread so the Qt main thread is never blocked.
+        The result is delivered back to the Qt main thread via a ``QObject``
+        signal (``QueuedConnection``), which is safe to call from any thread.
+
+        If the daemon is unavailable, logs a message to the log pane and shows
+        the grey placeholder (no stale image, no crash).  No-ops if
+        ``refresh_playfield_cb`` is not wired.
+
+        This method must be called from the Qt main thread (it creates a QObject
+        helper inline to hold the signal).  The background thread does only the
+        blocking daemon calls — no Qt calls.
+        """
+        try:
+            from PySide6.QtCore import QObject, Signal, Slot, Qt  # type: ignore[import-untyped]
+            import threading
+
+            log_cb = self._log_cb
+            capture_fn = self._capture_playfield_frame_and_calib
+            refresh_cb = self.refresh_playfield_cb
+
+            class _GrabBridge(QObject):
+                """Single-use bridge: posts result from daemon thread to Qt thread."""
+                result_ready = Signal(object)  # carries (pixmap, ox, oy) or None
+
+                def __init__(self) -> None:
+                    super().__init__()
+
+                @Slot(object)
+                def on_result(self, result: object) -> None:
+                    try:
+                        if result is None:
+                            try:
+                                log_cb(
+                                    "[INFO] Refresh Playfield: no aprilcam camera — "
+                                    "showing placeholder; click Refresh after calibrating"
+                                )
+                            except Exception:
+                                pass
+                            return
+                        pixmap, origin_x, origin_y = result
+                        if refresh_cb is not None:
+                            try:
+                                refresh_cb(pixmap, origin_x, origin_y)
+                            except Exception as exc:
+                                try:
+                                    log_cb(f"[ERROR] Auto-grab callback failed: {exc}")
+                                except Exception:
+                                    pass
+                        try:
+                            log_cb(
+                                f"[INFO] Playfield updated from camera "
+                                f"(origin=({origin_x:.1f},{origin_y:.1f}) cm)"
+                            )
+                        except Exception:
+                            pass
+                    except Exception as exc:
+                        try:
+                            log_cb(f"[ERROR] Auto-grab delivery failed: {exc}")
+                        except Exception:
+                            pass
+
+            bridge = _GrabBridge()
+            bridge.result_ready.connect(bridge.on_result, Qt.ConnectionType.QueuedConnection)
+
+            # Keep a reference so Python doesn't GC the bridge before the signal fires.
+            self._last_grab_bridge = bridge
+
+            def _run_in_thread() -> None:
+                try:
+                    result = capture_fn()
+                except Exception as exc:
+                    _log.debug("Auto-grab failed: %s", exc)
+                    try:
+                        log_cb(
+                            "[INFO] Refresh Playfield: no aprilcam camera — "
+                            "showing placeholder; click Refresh after calibrating"
+                        )
+                    except Exception:
+                        pass
+                    result = None
+                bridge.result_ready.emit(result)
+
+            t = threading.Thread(target=_run_in_thread, name="playfield-grab", daemon=True)
+            t.start()
+        except Exception as exc:
+            _log.debug("trigger_live_grab setup failed: %s", exc)
 
     def on_stream_toggled(self, checked: bool) -> None:
         """Toggle telemetry streaming; send ``STREAM 50`` or ``STREAM 0``."""

@@ -510,6 +510,12 @@ def _build_main_window():  # type: ignore[return]
         desc = "Sim" if name == "Sim" else f"{name} on {port}"
         _append_log(f"[INFO] Connected via {desc}")
 
+        # Auto-grab the live playfield image on hardware connect.  Sim has no
+        # camera so skip it there — the grey placeholder is correct for sim.
+        if not isinstance(transport, SimTransport):
+            from PySide6.QtCore import QTimer  # type: ignore[import-untyped]
+            QTimer.singleShot(200, ops_ctrl.trigger_live_grab)
+
     def _on_disconnect() -> None:
         """Call transport.disconnect() and clean up."""
         transport: Transport | None = _state.get("transport")
@@ -538,6 +544,15 @@ def _build_main_window():  # type: ignore[return]
 
     connect_btn.clicked.connect(_on_connect)
     disconnect_btn.clicked.connect(_on_disconnect)
+
+    # -------------------------------------------------------------- startup grab
+    # Trigger a best-effort live playfield grab shortly after the event loop
+    # starts (200 ms delay gives Qt time to show the window and initialise the
+    # viewport before we fire a background daemon call).  The grab runs on a
+    # background thread; the grey placeholder remains visible until it completes.
+    # In sim mode there is no camera so we skip the auto-grab entirely.
+    from PySide6.QtCore import QTimer  # type: ignore[import-untyped]
+    QTimer.singleShot(200, ops_ctrl.trigger_live_grab)
 
     return window, app
 

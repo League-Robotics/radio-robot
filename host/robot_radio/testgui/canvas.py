@@ -58,15 +58,24 @@ All PySide6 imports are deferred inside methods and factory functions so that
 ``import robot_radio.testgui.canvas`` succeeds without PySide6 installed
 (unit tests and static analysis).
 
-Asset resolution
-----------------
-The static fallback playfield assets are resolved relative to this file:
+Startup background policy
+--------------------------
+On launch the canvas always shows a **neutral grey placeholder** — the bundled
+test-fixture images in ``tests/old/`` are NEVER loaded for live display.  A
+live grab (via the aprilcam daemon) is triggered automatically on window show
+and again on each hardware connect; the grey placeholder is replaced once the
+grab succeeds.  In sim mode (no camera) the grey placeholder is permanent.
 
-    pathlib.Path(__file__).parents[3] / "tests" / "old" / "playfield_tour" / ...
+The bundled calibration JSON (``tests/old/playfield_tour/playfield_calibration.json``)
+is still read for field dimensions (cm) so the placeholder is the correct
+aspect ratio.
 
-``__file__`` is ``host/robot_radio/testgui/canvas.py``; ``parents[3]`` is the
-repo root when installed editable (``uv sync``).  If the assets are missing,
-the canvas degrades gracefully.
+Debug override
+--------------
+Setting the environment variable ``TESTGUI_LOAD_STATIC_PLAYFIELD=1`` re-enables
+the old behaviour that loads the bundled deskewed JPEG as the startup background.
+This is **OFF by default** and intended only for debugging when no camera is
+available.
 """
 
 from __future__ import annotations
@@ -356,7 +365,18 @@ def build_canvas(trace_model: "TraceModel") -> "tuple[object, object]":
     view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
     # ------------------------------------------------------------------ Background pixmap
-    bg_pixmap = _load_deskewed_bg_pixmap(img_w, img_h)
+    # Always start with a grey placeholder.  The live-camera grab (triggered by
+    # the window show-event or a hardware connect) will replace it.  The bundled
+    # test images in tests/old/ are NEVER shown for live display; they only exist
+    # as unit-test fixtures.
+    # Debug override: TESTGUI_LOAD_STATIC_PLAYFIELD=1 re-enables the old path.
+    import os as _os
+    if _os.environ.get("TESTGUI_LOAD_STATIC_PLAYFIELD") == "1":
+        bg_pixmap = _load_deskewed_bg_pixmap(img_w, img_h)
+        _log.debug("TESTGUI_LOAD_STATIC_PLAYFIELD=1: loaded static background")
+    else:
+        bg_pixmap = _make_grey_placeholder(img_w, img_h)
+        _log.debug("Startup: grey placeholder %dx%d px (live grab pending)", img_w, img_h)
 
     bg_item = QGraphicsPixmapItem(bg_pixmap)
     bg_item.setZValue(-1)
@@ -718,6 +738,18 @@ class CanvasController:
 # ---------------------------------------------------------------------------
 # Asset loading helpers
 # ---------------------------------------------------------------------------
+
+def _make_grey_placeholder(img_w: int, img_h: int) -> "object":
+    """Return a neutral grey ``QPixmap`` of size ``(img_w, img_h)``.
+
+    Used as the startup background so the canvas has the correct aspect ratio
+    while waiting for the first live camera grab.  Never returns a null pixmap.
+    """
+    from PySide6.QtGui import QColor, QPixmap  # type: ignore[import-untyped]
+    pm = QPixmap(img_w, img_h)
+    pm.fill(QColor(80, 80, 80))
+    return pm
+
 
 def _load_deskewed_bg_pixmap(img_w: int, img_h: int) -> "object":
     """Load or generate the deskewed playfield background as a ``QPixmap``.
