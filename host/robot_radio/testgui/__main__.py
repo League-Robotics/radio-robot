@@ -5,10 +5,24 @@ Launches the Robot Test GUI main window.  Requires PySide6 (install via
 
 All PySide6 imports are kept inside this module so that the package itself can
 be imported without PySide6 present.
+
+Wiring (ticket 008)
+--------------------
+- ``TraceModel`` (traces.py) accumulates four world-cm polylines.
+- ``build_canvas()`` (canvas.py) renders the playfield QGraphicsView with
+  trace paths and a robot marker (red front / blue back).
+- Transport ``on_telemetry`` and ``on_truth`` callbacks are marshalled from
+  background threads to the Qt main thread via ``QMetaObject.invokeMethod``
+  before touching the TraceModel or canvas.
+- The ops panel's ``clear_traces_cb`` is wired to ``TraceModel.clear()``
+  followed by ``canvas_ctrl.refresh()``.
+- The ops panel's ``refresh_playfield_cb`` is wired to
+  ``canvas_ctrl.set_background(pixmap)``.
 """
 
 from __future__ import annotations
 
+import math
 import sys
 
 
@@ -18,8 +32,8 @@ def _build_main_window():  # type: ignore[return]
     Layout (left-to-right via QSplitter):
     - Left panel: transport selector QComboBox, port QLineEdit, Connect
       button, schema-driven command rows, and placeholder operations panel.
-    - Right panel: placeholder QGraphicsView canvas (top) and timestamped
-      log pane QPlainTextEdit (bottom).
+    - Right panel: QGraphicsView playfield canvas with trace paths and robot
+      marker (top) and timestamped log pane QPlainTextEdit (bottom).
 
     The transport selector enables the port QLineEdit when Serial or Relay
     is selected.  Clicking Connect instantiates the selected Transport,
@@ -41,8 +55,6 @@ def _build_main_window():  # type: ignore[return]
         QApplication,
         QComboBox,
         QDoubleSpinBox,
-        QGraphicsScene,
-        QGraphicsView,
         QHBoxLayout,
         QLabel,
         QLineEdit,
@@ -55,7 +67,6 @@ def _build_main_window():  # type: ignore[return]
         QWidget,
     )
     from PySide6.QtCore import Qt, QMetaObject, Q_ARG  # type: ignore[import-untyped]
-    from PySide6.QtCore import Slot  # type: ignore[import-untyped]
 
     from robot_radio.testgui.transport import (
         Transport,
@@ -66,6 +77,8 @@ def _build_main_window():  # type: ignore[return]
     )
     from robot_radio.testgui.commands import COMMANDS, build_wire_string
     from robot_radio.testgui.operations import build_panel as _build_ops_panel
+    from robot_radio.testgui.traces import TraceModel
+    from robot_radio.testgui.canvas import build_canvas
 
     # QApplication must exist before any QWidget is created.  We create one
     # only if one does not already exist (e.g. during testing).
@@ -241,6 +254,9 @@ def _build_main_window():  # type: ignore[return]
     left_layout.addStretch()
     splitter.addWidget(left_widget)
 
+    # --------------------------------------------------------- TraceModel (Qt-free)
+    trace_model = TraceModel()
+
     # --------------------------------------------------------------- right panel
     right_widget = QWidget()
     right_layout = QVBoxLayout(right_widget)
@@ -249,12 +265,9 @@ def _build_main_window():  # type: ignore[return]
     right_splitter = QSplitter(Qt.Orientation.Vertical)
     right_layout.addWidget(right_splitter)
 
-    # Placeholder: canvas (QGraphicsView)
-    scene = QGraphicsScene()
-    canvas = QGraphicsView(scene)
-    canvas.setObjectName("canvas_view")
-    canvas.setMinimumSize(400, 300)
-    right_splitter.addWidget(canvas)
+    # Playfield canvas — replaces the ticket-005 placeholder QGraphicsView.
+    canvas_widget, canvas_ctrl = build_canvas(trace_model)
+    right_splitter.addWidget(canvas_widget)
 
     # Log pane (QPlainTextEdit) — receives timestamped TX/RX lines
     log_pane = QPlainTextEdit()
@@ -287,6 +300,74 @@ def _build_main_window():  # type: ignore[return]
             Q_ARG(str, text),
         )
 
+    # ---------------------------------------------------------------- telemetry / truth wiring
+    # Transport callbacks fire on background threads.  We must marshal to the
+    # Qt main thread before touching TraceModel or canvas.
+
+    # Thread-safe queue for TLMFrame objects crossing thread boundary.
+    import queue as _queue_mod
+    _pending_frames: "_queue_mod.Queue" = _queue_mod.Queue()
+
+    # Use a QObject subclass with proper Qt signals to bridge the thread hop
+    # safely.  QMetaObject.invokeMethod with a missing slot silently fails, so
+    # we use dedicated signals connected with QueuedConnection instead.
+    from PySide6.QtCore import QObject, Signal, Slot  # type: ignore[import-untyped]
+
+    class _TelemetryBridge(QObject):
+        """Bridges background-thread TLMFrame delivery to the Qt main thread.
+
+        The ``frame_ready`` signal carries a sentinel (int) across the thread
+        boundary; the actual frame is retrieved from a shared queue.
+        """
+        frame_ready = Signal()
+        truth_ready = Signal(float, float, float)
+
+        def __init__(self) -> None:
+            super().__init__()
+
+        @Slot()
+        def on_frame_ready(self) -> None:
+            """Process all pending TLMFrames queued from background threads."""
+            while True:
+                try:
+                    frame = _pending_frames.get_nowait()
+                except Exception:
+                    break
+                trace_model.feed(frame)
+                fused_yaw_rad = None
+                if frame.pose is not None:
+                    fused_yaw_rad = math.radians(frame.pose[2] / 100.0)
+                canvas_ctrl.refresh(fused_yaw_rad)
+
+        @Slot(float, float, float)
+        def on_truth_ready(self, x_cm: float, y_cm: float, yaw_rad: float) -> None:
+            """Process a ground-truth pose update on the Qt main thread."""
+            trace_model.feed_truth(x_cm, y_cm, yaw_rad)
+            canvas_ctrl.refresh()
+
+    _bridge = _TelemetryBridge()
+    _bridge.frame_ready.connect(_bridge.on_frame_ready, Qt.ConnectionType.QueuedConnection)
+    _bridge.truth_ready.connect(_bridge.on_truth_ready, Qt.ConnectionType.QueuedConnection)
+
+    def _on_telemetry_thread_v2(frame: "object") -> None:
+        """Transport on_telemetry callback — fires on the reader/tick thread.
+
+        Enqueues the frame and emits the bridge signal to wake the Qt main
+        thread.
+        """
+        _pending_frames.put(frame)
+        _bridge.frame_ready.emit()  # type: ignore[attr-defined]
+
+    def _on_truth_thread(pose: "tuple | None") -> None:
+        """Transport on_truth callback — fires on the truth/tick thread.
+
+        Ignores ``None`` (camera not available); emits bridge signal for a
+        valid pose.
+        """
+        if pose is not None:
+            x_cm, y_cm, yaw_rad = pose
+            _bridge.truth_ready.emit(x_cm, y_cm, yaw_rad)  # type: ignore[attr-defined]
+
     def _on_transport_changed(index: int) -> None:
         """Enable/disable port picker depending on selected transport."""
         name = transport_combo.currentText()
@@ -302,13 +383,24 @@ def _build_main_window():  # type: ignore[return]
     for _btn, _spec, _getters in _row_send_getters:
         _wire_send_button(_btn, _spec, _getters)
 
+    # ---------------------------------------------------------------- ops panel callbacks
+
+    def _clear_traces() -> None:
+        """Clear all traces and refresh the canvas."""
+        trace_model.clear()
+        canvas_ctrl.refresh()
+
+    def _refresh_playfield(pixmap: "object") -> None:
+        """Swap the canvas background to the new pixmap."""
+        canvas_ctrl.set_background(pixmap)
+
     # Operations panel — built after _append_log is defined so the log callback
-    # is live.  The clear_traces_cb and refresh_playfield_cb hooks start as None;
-    # ticket 008 (canvas/TraceModel) will wire them after construction via
-    # ops_ctrl.clear_traces_cb and ops_ctrl.refresh_playfield_cb attributes.
+    # is live.
     ops_panel, ops_ctrl = _build_ops_panel(
         log_cb=_append_log,
         transport_ref=_state,
+        clear_traces_cb=_clear_traces,
+        refresh_playfield_cb=_refresh_playfield,
     )
     # Insert the ops panel before the addStretch() already added above.
     # Because addStretch() was called already, insert at the position before it.
@@ -337,6 +429,14 @@ def _build_main_window():  # type: ignore[return]
 
         # Wire log callback.
         transport.on_log = _on_log_from_thread
+
+        # Wire telemetry and truth callbacks — these fire on background threads;
+        # the bridge marshals them safely to the Qt main thread.
+        transport.on_telemetry = _on_telemetry_thread_v2
+        transport.on_truth = _on_truth_thread
+
+        # Clear any stale trace data from a previous session.
+        trace_model.clear()
 
         try:
             transport.connect()

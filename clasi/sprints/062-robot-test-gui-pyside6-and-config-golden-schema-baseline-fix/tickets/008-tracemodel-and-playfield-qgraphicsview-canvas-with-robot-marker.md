@@ -1,7 +1,7 @@
 ---
-id: '008'
+id: 008
 title: TraceModel and playfield QGraphicsView canvas with robot marker
-status: open
+status: done
 use-cases:
 - SUC-007
 - SUC-011
@@ -40,7 +40,7 @@ Corresponds to item 6 in the approved design's ticket breakdown.
 
 ## Acceptance Criteria
 
-- [ ] `host/robot_radio/testgui/traces.py` defines `TraceModel`:
+- [x] `host/robot_radio/testgui/traces.py` defines `TraceModel`:
   - Holds four lists of `(x_cm, y_cm)` world points: `camera`, `encoder`,
     `otos`, `fused`.
   - `anchor(x_cm, y_cm, yaw_rad)` sets the initial world pose for the
@@ -50,7 +50,7 @@ Corresponds to item 6 in the approved design's ticket breakdown.
   - `feed_truth(x_cm, y_cm, yaw_rad)` appends a point to the camera trace.
   - `clear()` resets all four lists and the anchor.
   - Each trace has an `enabled` boolean flag.
-- [ ] Canvas `QGraphicsView`:
+- [x] Canvas `QGraphicsView`:
   - Background: playfield `QPixmap` loaded from `playfield.jpg`.
   - Four `QPainterPath` items in colors: green (camera), orange (encoder),
     cyan (OTOS), magenta (fused).
@@ -60,15 +60,15 @@ Corresponds to item 6 in the approved design's ticket breakdown.
     the corresponding path item.
   - Canvas updates whenever `TraceModel` changes (Qt signal or explicit
     `scene.update()` call).
-- [ ] World-cm to pixel mapping uses calibration from `playfield_calibration.json`
+- [x] World-cm to pixel mapping uses calibration from `playfield_calibration.json`
   (134 cm × 89.3 cm → canvas pixel dimensions).
-- [ ] `TraceModel.clear()` is wired to the Clear Traces button from ticket 007.
-- [ ] The trace model and canvas are connected to the transport's `telemetry`
+- [x] `TraceModel.clear()` is wired to the Clear Traces button from ticket 007.
+- [x] The trace model and canvas are connected to the transport's `telemetry`
   and `truth` callbacks: each incoming `TLMFrame` calls `traces.feed(frame)`;
   each truth pose calls `traces.feed_truth(...)`.
-- [ ] OQ-2 (playfield image path) is resolved and documented in the commit
+- [x] OQ-2 (playfield image path) is resolved and documented in the commit
   message.
-- [ ] `uv run python -m pytest tests/simulation` passes.
+- [x] `uv run python -m pytest tests/simulation` passes.
 
 ## Implementation Plan
 
