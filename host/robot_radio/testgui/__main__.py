@@ -130,7 +130,7 @@ def _build_main_window():  # type: ignore[return]
         list_ports,
     )
     from robot_radio.testgui.commands import COMMANDS, build_wire_string
-    from robot_radio.testgui.operations import build_panel as _build_ops_panel
+    from robot_radio.testgui.operations import build_panel as _build_ops_panel, build_setpose_command
     from robot_radio.testgui.traces import TraceModel
     from robot_radio.testgui.canvas import build_canvas
     from robot_radio.testgui.drive import KeyboardDriver
@@ -546,17 +546,34 @@ def _build_main_window():  # type: ignore[return]
         canvas_ctrl.set_background(pixmap, origin_x=origin_x, origin_y=origin_y)
 
     def _set_origin() -> None:
-        """Re-anchor the TraceModel to the current pose as world (0,0).
+        """Reset robot to world origin: wire commands + display reset.
 
         Operator workflow: physically place the robot at the playfield centre,
-        then click "Set Robot @ 0,0" to tell the GUI the robot is at (0,0).
+        then click "Set Robot @ 0,0" to reset everything to (0, 0, heading 0).
 
-        This re-anchors the TraceModel (so the next incoming pose delta
-        starts from world 0,0), clears all trace polylines, and moves the
-        canvas avatar to centre.  No motion command is sent.
+        Steps:
+        1. Send ``ZERO enc`` to clear wheel encoder integrators.
+        2. Send ``SI 0 0 0`` (via build_setpose_command) to update the
+           firmware's internal pose estimate AND heading to (0 mm, 0 mm, 0°).
+        3. Re-anchor the TraceModel, clear trace polylines, and move the
+           canvas avatar to the field centre with heading 0.
+
+        If no transport is connected, steps 1 and 2 are skipped and a
+        ``[WARN]`` message is logged.  The display reset (step 3) still runs
+        so the GUI stays consistent.  In Sim mode a transport IS present, so
+        ``ZERO enc`` and ``SI 0 0 0`` are both sent.
         """
-        # Re-anchor: current origin maps to (0, 0).  Use heading 0 (east) as
-        # the new forward direction for the body-to-world transform.
+        transport = _state.get("transport")
+        if transport is not None:
+            # 1. Zero encoder counters so SI starts from a clean state.
+            transport.command("ZERO enc", read_ms=300)
+            # 2. Set firmware internal pose AND heading to (0, 0, 0°).
+            si_cmd = build_setpose_command(0.0, 0.0, 0.0)
+            transport.command(si_cmd, read_ms=300)
+        else:
+            _append_log("[WARN] Set Robot @ 0,0: no robot connected — display only")
+
+        # 3. Reset the display (unchanged from before).
         trace_model.anchor(0.0, 0.0, 0.0)
         trace_model.clear()
         canvas_ctrl.reset_avatar_to_center()

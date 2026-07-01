@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: 'Set Robot @ 0,0: full pose reset (heading + encoders + SI command)'
-status: open
+status: done
 use-cases:
 - SUC-005
 depends-on: []
@@ -58,23 +58,23 @@ centidegrees (0 = forward / east). Passing `(0.0, 0.0, 0.0)` should produce
 
 ## Acceptance Criteria
 
-- [ ] Clicking "Set Robot @ 0,0" when connected sends `ZERO enc` followed by
+- [x] Clicking "Set Robot @ 0,0" when connected sends `ZERO enc` followed by
       `SI 0 0 0` to the transport, in that order, before the display is reset.
-- [ ] Both `ZERO enc` and `SI 0 0 0` appear in the GUI log with their sent
+- [x] Both `ZERO enc` and `SI 0 0 0` appear in the GUI log with their sent
       wire strings (existing transport logging covers this automatically; verify
       the log pane shows both lines).
-- [ ] The display reset still runs after the wire commands: avatar moves to
+- [x] The display reset still runs after the wire commands: avatar moves to
       field centre, traces are cleared, heading is 0.
-- [ ] When no transport is connected (`_state["transport"] is None`), the wire
+- [x] When no transport is connected (`_state["transport"] is None`), the wire
       commands are skipped and a `[WARN] Set Robot @ 0,0: no robot connected —
       display only` message is logged; the display reset still runs.
-- [ ] In Sim mode the commands are sent (sim transport accepts them).
-- [ ] `build_setpose_command(0.0, 0.0, 0.0)` returns a string starting with
+- [x] In Sim mode the commands are sent (sim transport accepts them).
+- [x] `build_setpose_command(0.0, 0.0, 0.0)` returns a string starting with
       `"SI"` containing three numeric tokens; the handler sends this exact string.
-- [ ] Headless tests (Qt-free) verify the command sequence using a fake transport
+- [x] Headless tests (Qt-free) verify the command sequence using a fake transport
       with a `commands_sent` list: `ZERO enc` is at index 0, `SI ...` at index 1.
-- [ ] All existing `tests/testgui/` tests pass unchanged.
-- [ ] `QT_QPA_PLATFORM=offscreen uv run python -m pytest tests/testgui -q` passes.
+- [x] All existing `tests/testgui/` tests pass unchanged.
+- [x] `QT_QPA_PLATFORM=offscreen uv run python -m pytest tests/testgui -q` passes.
 
 ## Implementation Plan
 
