@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Live-view worker, canvas live-mode, and mode-gated wiring
-status: open
+status: done
 use-cases:
 - SUC-003
 - SUC-004
@@ -67,55 +67,55 @@ ticket delivers all three remaining pieces:
 
 ### Deskew refactor (operations.py)
 
-- [ ] `_deskew_bgr_ndarray(raw_bgr, tag_frame, ppc=None)` exists and returns
+- [x] `_deskew_bgr_ndarray(raw_bgr, tag_frame, ppc=None)` exists and returns
       `(ndarray, float, float)` or `None` on failure.
-- [ ] `_deskew_bgr_ndarray` does not import PySide6 and can be called in a
+- [x] `_deskew_bgr_ndarray` does not import PySide6 and can be called in a
       headless test with no QApplication.
-- [ ] `_deskew_bgr_with_tag_frame()` behavior is unchanged: existing test
+- [x] `_deskew_bgr_with_tag_frame()` behavior is unchanged: existing test
       coverage in `test_operations.py` passes.
 
 ### LiveViewWorker (live_view.py)
 
-- [ ] `_LiveViewWorker` is importable from `testgui.live_view` without PySide6.
-- [ ] `_LiveViewWorker.frame_ready` signal is emitted with
+- [x] `_LiveViewWorker` is importable from `testgui.live_view` without PySide6.
+- [x] `_LiveViewWorker.frame_ready` signal is emitted with
       `(object, float, float, float, float, float)` type signature.
-- [ ] Worker can be constructed and its `run()` slot called in a headless test
+- [x] Worker can be constructed and its `run()` slot called in a headless test
       with a mocked daemon that returns a synthetic BGR ndarray and TagFrame.
-- [ ] When daemon is unavailable, worker does not crash and logs a warning.
-- [ ] When tag 100 is not in `get_tags()` result, the worker **holds the last
+- [x] When daemon is unavailable, worker does not crash and logs a warning.
+- [x] When tag 100 is not in `get_tags()` result, the worker **holds the last
       known `(tag_x, tag_y, tag_yaw)`** and emits that value with the new
       frame. The avatar does NOT snap to (0, 0) and is NOT hidden. The last
       known pose is initialized to `(0.0, 0.0, 0.0)` before the first
       successful tag-100 read, and updated only when tag 100 is seen.
-- [ ] `stop()` slot sets an internal stop flag; `run()` exits within 2 s of
+- [x] `stop()` slot sets an internal stop flag; `run()` exits within 2 s of
       `stop()` being called.
 
 ### CanvasController additions (canvas.py)
 
-- [ ] `set_avatar_pose(x_cm, y_cm, yaw_rad)` positions and rotates the marker
+- [x] `set_avatar_pose(x_cm, y_cm, yaw_rad)` positions and rotates the marker
       at explicit world coordinates using `rotation_deg = 90 - degrees(yaw_rad)`.
-- [ ] `set_avatar_pose` does not read `trace_model.fused`.
-- [ ] `restore_static_background()` replaces the canvas pixmap with a grey
+- [x] `set_avatar_pose` does not read `trace_model.fused`.
+- [x] `restore_static_background()` replaces the canvas pixmap with a grey
       placeholder and resets the origin to `(field_w/2, field_h/2)`.
-- [ ] `restore_static_background()` calls `refresh()` so traces re-render.
-- [ ] Both methods pass headless tests (with offscreen QApplication).
+- [x] `restore_static_background()` calls `refresh()` so traces re-render.
+- [x] Both methods pass headless tests (with offscreen QApplication).
 
 ### Mode-gated wiring (__main__.py)
 
-- [ ] Connecting via Relay starts the live-view worker and sets
+- [x] Connecting via Relay starts the live-view worker and sets
       `_state["live_view_active"] = True`.
-- [ ] Connecting via Sim or Serial does NOT start the live-view worker.
-- [ ] Disconnecting from Relay stops the worker+thread and calls
+- [x] Connecting via Sim or Serial does NOT start the live-view worker.
+- [x] Disconnecting from Relay stops the worker+thread and calls
       `restore_static_background()`.
-- [ ] `_on_live_frame` slot: receives BGR ndarray + origin + tag pose; builds
+- [x] `_on_live_frame` slot: receives BGR ndarray + origin + tag pose; builds
       `QPixmap` on the main thread; calls `canvas_ctrl.set_background()` +
       `canvas_ctrl.set_avatar_pose()`.
-- [ ] In PLAYFIELD MODE, `on_truth_ready` calls `trace_model.feed_truth()` but
+- [x] In PLAYFIELD MODE, `on_truth_ready` calls `trace_model.feed_truth()` but
       skips `canvas_ctrl.refresh(fused_yaw)` (avatar driven by live view, not
       fused TLM).
-- [ ] Canvas background is a live camera image in PLAYFIELD MODE after connect.
-- [ ] Canvas background reverts to grey placeholder after relay disconnect.
-- [ ] All existing `tests/testgui/` tests pass unchanged.
+- [x] Canvas background is a live camera image in PLAYFIELD MODE after connect.
+- [x] Canvas background reverts to grey placeholder after relay disconnect.
+- [x] All existing `tests/testgui/` tests pass unchanged.
 
 ## Implementation Plan
 

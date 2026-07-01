@@ -502,6 +502,11 @@ class CanvasController:
     Call :meth:`refresh` from the Qt main thread after every
     :meth:`~TraceModel.feed` or :meth:`~TraceModel.feed_truth` call.
 
+    In PLAYFIELD MODE the live-view worker drives the avatar via
+    :meth:`set_avatar_pose` instead of :meth:`refresh`.  On relay disconnect
+    call :meth:`restore_static_background` to revert to the grey placeholder
+    and reset the origin to the field-centre fallback.
+
     Parameters
     ----------
     scene, view, bg_item, trace_items, marker_group, checkboxes:
@@ -654,6 +659,44 @@ class CanvasController:
         item = self._trace_items.get(name)
         if item is not None:
             item.setVisible(checked)  # type: ignore[attr-defined]
+
+    def set_avatar_pose(self, x_cm: float, y_cm: float, yaw_rad: float) -> None:
+        """Position and rotate the avatar at explicit world coordinates.
+
+        Does not consult ``trace_model.fused``.  Used in PLAYFIELD MODE where
+        the camera tag drives the avatar instead of fused telemetry.
+
+        Parameters
+        ----------
+        x_cm, y_cm:
+            World position in centimetres (A1-centred frame).
+        yaw_rad:
+            Robot heading in radians.  Converted to Qt rotation via
+            ``rotation_deg = 90 - degrees(yaw_rad)``.
+        """
+        px, py = self._world_to_px(x_cm, y_cm)
+        self._marker_group.setPos(px, py)           # type: ignore[attr-defined]
+        rotation_deg = 90.0 - math.degrees(yaw_rad)
+        self._marker_group.setRotation(rotation_deg)  # type: ignore[attr-defined]
+        self._marker_group.setVisible(True)           # type: ignore[attr-defined]
+        self._scene.update()                          # type: ignore[attr-defined]
+
+    def restore_static_background(self) -> None:
+        """Replace the live camera background with a grey placeholder.
+
+        Resets the world→pixel origin to the field-centre fallback
+        ``(field_w/2, field_h/2)`` so that world (0, 0) maps to the image
+        centre again — correct for Sim and for "no camera" states.  Calls
+        :meth:`refresh` so traces re-render with the restored transform.
+
+        Call this after stopping the live-view worker on relay disconnect.
+        """
+        self._origin_x = self._field_w_cm / 2.0
+        self._origin_y = self._field_h_cm / 2.0
+        self._world_to_px = _make_world_to_px(self._origin_x, self._origin_y, self._ppc)
+        placeholder = _make_grey_placeholder(self._img_w, self._img_h)
+        self._bg_item.setPixmap(placeholder)          # type: ignore[attr-defined]
+        self.refresh()
 
     def reset_avatar_to_center(self) -> None:
         """Move the robot avatar to world (0, 0) and reset heading to 0° (east).

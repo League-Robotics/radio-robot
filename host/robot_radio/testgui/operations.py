@@ -1,7 +1,8 @@
 """robot_radio.testgui.operations — Operations panel for the Robot Test GUI.
 
 Provides :class:`OperationsPanel`, a ``QGroupBox`` containing seven one-click
-action buttons:
+action buttons, plus the Qt-free helper :func:`_deskew_bgr_ndarray` used by
+the live-view worker.
 
 ============================================================  =============================
 Button                                                         Action
@@ -760,15 +761,15 @@ def _bgr_ndarray_to_pixmap(bgr: "object") -> "object | None":
         return None
 
 
-def _deskew_bgr_with_tag_frame(
+def _deskew_bgr_ndarray(
     raw_bgr: "object",
     tag_frame: "object",
     ppc: float | None = None,
 ) -> "tuple[object, float, float] | None":
-    """Deskew *raw_bgr* using the daemon TagFrame's homography and return calibration.
+    """Deskew *raw_bgr* using the daemon TagFrame's homography.
 
-    Uses the live daemon homography (not the static JSON) so the rectified image
-    always matches the daemon's current calibration.
+    Qt-free: does not build a QPixmap.  Safe to call from a background thread
+    or in headless tests with no QApplication.
 
     Parameters
     ----------
@@ -777,15 +778,16 @@ def _deskew_bgr_with_tag_frame(
     tag_frame:
         ``TagFrame`` from ``DaemonControl.get_tags()`` — carries ``.homography``
         (3×3), ``.origin_x``, ``.origin_y``, ``.field_width_cm``,
-        ``.field_height_cm``.
+        ``.field_height_cm``, ``.playfield_corners``.
     ppc:
         Pixels per cm.  If ``None``, uses ``canvas._PIXELS_PER_CM`` (8.0).
 
     Returns
     -------
-    ``(QPixmap, origin_x, origin_y)`` on success, or ``None`` on failure.
-    origin_x and origin_y are the cm offset at which world (0,0) / tag 1 lands in
-    the deskewed image, so the canvas world_to_px places the avatar on tag 1.
+    ``(deskewed_bgr_ndarray, origin_x, origin_y)`` on success, or ``None`` on
+    failure.  origin_x and origin_y are the cm offset at which world (0,0) /
+    tag 1 lands in the deskewed image, so the canvas world_to_px places the
+    avatar on tag 1.
     """
     try:
         import numpy as np
@@ -854,12 +856,46 @@ def _deskew_bgr_with_tag_frame(
             "Deskewed: %dx%d px, origin=(%.1f,%.1f) cm",
             out_w, out_h, origin_x, origin_y,
         )
-
-        pixmap = _bgr_ndarray_to_pixmap(deskewed)
-        if pixmap is None:
-            raise RuntimeError("Failed to convert deskewed BGR to QPixmap")
-        return pixmap, origin_x, origin_y
+        return deskewed, origin_x, origin_y
 
     except Exception as exc:
-        _log.debug("_deskew_bgr_with_tag_frame failed (%s)", exc)
+        _log.debug("_deskew_bgr_ndarray failed (%s)", exc)
         return None
+
+
+def _deskew_bgr_with_tag_frame(
+    raw_bgr: "object",
+    tag_frame: "object",
+    ppc: float | None = None,
+) -> "tuple[object, float, float] | None":
+    """Deskew *raw_bgr* using the daemon TagFrame's homography and return calibration.
+
+    Uses the live daemon homography (not the static JSON) so the rectified image
+    always matches the daemon's current calibration.
+
+    Parameters
+    ----------
+    raw_bgr:
+        Raw BGR ndarray from ``DaemonControl.capture_frame()``.
+    tag_frame:
+        ``TagFrame`` from ``DaemonControl.get_tags()`` — carries ``.homography``
+        (3×3), ``.origin_x``, ``.origin_y``, ``.field_width_cm``,
+        ``.field_height_cm``.
+    ppc:
+        Pixels per cm.  If ``None``, uses ``canvas._PIXELS_PER_CM`` (8.0).
+
+    Returns
+    -------
+    ``(QPixmap, origin_x, origin_y)`` on success, or ``None`` on failure.
+    origin_x and origin_y are the cm offset at which world (0,0) / tag 1 lands in
+    the deskewed image, so the canvas world_to_px places the avatar on tag 1.
+    """
+    result = _deskew_bgr_ndarray(raw_bgr, tag_frame, ppc)
+    if result is None:
+        return None
+    bgr, origin_x, origin_y = result
+    pixmap = _bgr_ndarray_to_pixmap(bgr)
+    if pixmap is None:
+        _log.debug("_deskew_bgr_with_tag_frame: _bgr_ndarray_to_pixmap returned None")
+        return None
+    return pixmap, origin_x, origin_y

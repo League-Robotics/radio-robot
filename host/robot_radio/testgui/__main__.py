@@ -32,6 +32,23 @@ Wiring (ticket 008)
   ``canvas_ctrl.set_background(pixmap, origin_x=origin_x, origin_y=origin_y)`` so
   the world→pixel transform updates atomically with the background; world (0,0)
   lands on AprilTag 1 after refresh.
+
+Live-view lifecycle (ticket 003)
+----------------------------------
+In PLAYFIELD MODE (Relay transport) a ``_LiveViewWorker`` runs on a ``QThread``
+and streams camera frames at ~12 Hz.  The worker emits ``frame_ready`` with a
+BGR ndarray; the main-thread slot ``_on_live_frame`` converts it to a QPixmap
+and calls ``canvas_ctrl.set_background`` + ``canvas_ctrl.set_avatar_pose``.
+
+When live-view is active (``_state["live_view_active"] is True``), the
+``on_truth_ready`` slot skips ``canvas_ctrl.refresh()`` — the avatar is driven
+by the camera, not fused telemetry.  The green truth trace still accumulates.
+
+On relay disconnect (or window close) the worker is stopped, the thread joined,
+and ``canvas_ctrl.restore_static_background()`` reverts the canvas to the grey
+placeholder with the field-centre origin.
+
+Sim and Serial transports do NOT start the live-view worker.
 """
 
 from __future__ import annotations
@@ -124,7 +141,14 @@ def _build_main_window():  # type: ignore[return]
 
     # Active transport — kept in a mutable container so inner functions can
     # rebind it without 'nonlocal' limitations across closures.
-    _state: dict = {"transport": None}
+    # live_view_active: True while a _LiveViewWorker is running (Relay only).
+    # live_worker / live_thread: references held for clean shutdown.
+    _state: dict = {
+        "transport": None,
+        "live_view_active": False,
+        "live_worker": None,
+        "live_thread": None,
+    }
 
     # Keyboard driver — wires cursor-key VW driving onto the main window.
     _driver = KeyboardDriver()
@@ -396,9 +420,17 @@ def _build_main_window():  # type: ignore[return]
 
         @Slot(float, float, float)
         def on_truth_ready(self, x_cm: float, y_cm: float, yaw_rad: float) -> None:
-            """Process a ground-truth pose update on the Qt main thread."""
+            """Process a ground-truth pose update on the Qt main thread.
+
+            Always accumulates the camera trace in the TraceModel.  In
+            PLAYFIELD MODE (live_view_active) the avatar is driven by the
+            camera live-view worker, so ``canvas_ctrl.refresh()`` is skipped
+            to avoid a redundant redraw that would fight the worker's
+            ``set_avatar_pose`` call.
+            """
             trace_model.feed_truth(x_cm, y_cm, yaw_rad)
-            canvas_ctrl.refresh()
+            if not _state.get("live_view_active"):
+                canvas_ctrl.refresh()
 
     _bridge = _TelemetryBridge()
     _bridge.frame_ready.connect(_bridge.on_frame_ready, Qt.ConnectionType.QueuedConnection)
@@ -422,6 +454,61 @@ def _build_main_window():  # type: ignore[return]
         if pose is not None:
             x_cm, y_cm, yaw_rad = pose
             _bridge.truth_ready.emit(x_cm, y_cm, yaw_rad)  # type: ignore[attr-defined]
+
+    def _on_live_frame(
+        bgr: object,
+        origin_x: float,
+        origin_y: float,
+        tx: float,
+        ty: float,
+        tyaw: float,
+    ) -> None:
+        """Main-thread slot: convert BGR ndarray to QPixmap and update the canvas.
+
+        Called via QueuedConnection from the live-view worker thread.
+        QPixmap must be constructed here (GUI thread only).
+
+        Parameters
+        ----------
+        bgr:
+            BGR ndarray from the worker.
+        origin_x, origin_y:
+            A1 origin in cm from the deskewed frame — passed to set_background.
+        tx, ty:
+            Tag-100 world position in cm.
+        tyaw:
+            Tag-100 world heading in radians.
+        """
+        from robot_radio.testgui.operations import _bgr_ndarray_to_pixmap
+        pm = _bgr_ndarray_to_pixmap(bgr)
+        if pm is not None:
+            canvas_ctrl.set_background(pm, origin_x=origin_x, origin_y=origin_y)
+        canvas_ctrl.set_avatar_pose(tx, ty, tyaw)
+
+    def _stop_live_worker() -> None:
+        """Stop the live-view worker and thread, then restore the static background.
+
+        Safe to call when no worker is running (no-op in that case).
+        """
+        if not _state.get("live_view_active"):
+            return
+        worker = _state.get("live_worker")
+        thread = _state.get("live_thread")
+        if worker is not None:
+            try:
+                worker.stop()
+            except Exception:
+                pass
+        if thread is not None:
+            try:
+                thread.quit()
+                thread.wait(3000)
+            except Exception:
+                pass
+        _state["live_worker"] = None
+        _state["live_thread"] = None
+        _state["live_view_active"] = False
+        canvas_ctrl.restore_static_background()
 
     def _on_transport_changed(index: int) -> None:
         """Enable/disable port picker and update mode label for selected transport."""
@@ -554,6 +641,27 @@ def _build_main_window():  # type: ignore[return]
 
         _state["transport"] = transport
 
+        # Start the live-view worker for Relay (PLAYFIELD MODE) only.
+        # Sim and Serial have no playfield camera.
+        if name == "Relay":
+            from PySide6.QtCore import QThread  # type: ignore[import-untyped]
+            from robot_radio.testgui.live_view import build_live_view_worker
+            try:
+                live_worker = build_live_view_worker()
+                live_thread = QThread()
+                live_worker.moveToThread(live_thread)
+                live_worker.frame_ready.connect(
+                    _on_live_frame, Qt.ConnectionType.QueuedConnection
+                )
+                live_thread.started.connect(live_worker.run)
+                live_thread.start()
+                _state["live_worker"] = live_worker
+                _state["live_thread"] = live_thread
+                _state["live_view_active"] = True
+                _append_log("[INFO] Live-view worker started (PLAYFIELD MODE)")
+            except Exception as exc:
+                _append_log(f"[WARN] Could not start live-view worker: {exc}")
+
         # Attach cursor-key driving to the window.
         _driver.attach(window, transport)
 
@@ -581,6 +689,8 @@ def _build_main_window():  # type: ignore[return]
         transport: Transport | None = _state.get("transport")
         if transport is None:
             return
+        # Stop the live-view worker first so it doesn't race with cleanup.
+        _stop_live_worker()
         # Detach cursor-key driving before the transport goes away.
         _driver.detach()
         try:
@@ -604,6 +714,9 @@ def _build_main_window():  # type: ignore[return]
 
     connect_btn.clicked.connect(_on_connect)
     disconnect_btn.clicked.connect(_on_disconnect)
+
+    # Stop the live-view worker on app quit to avoid thread leaks.
+    app.aboutToQuit.connect(_stop_live_worker)
 
     # -------------------------------------------------------------- startup grab
     # Trigger a best-effort live playfield grab shortly after the event loop
