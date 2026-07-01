@@ -119,8 +119,8 @@ add_library(firmware_host SHARED
     "${CMAKE_SOURCE_DIR}/message_test_api.cpp"
     # 057-003: C-ABI shims for Sensors subsystem isolation tests.
     "${CMAKE_SOURCE_DIR}/sensors_api.cpp"
-    # 057-004: C-ABI shims for Drive subsystem isolation tests (drive2_api.cpp filename kept for Python ctypes compatibility).
-    "${CMAKE_SOURCE_DIR}/drive2_api.cpp"
+    # 057-004: C-ABI shims for Drive subsystem isolation tests.
+    "${CMAKE_SOURCE_DIR}/drive_api.cpp"
     # 059-001: C-ABI shims for Planner subsystem isolation tests.
     "${CMAKE_SOURCE_DIR}/planner_api.cpp"
     # 059-003: C-ABI shims for BusDrain (command-queue bus drain/route) tests.

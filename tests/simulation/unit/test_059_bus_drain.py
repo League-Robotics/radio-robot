@@ -6,9 +6,9 @@ tests/_infra/sim/bus_drain_api.cpp, loaded via ctypes.
 
 Three acceptance-criteria tests:
 
-1. test_twist_command_routed_to_drive2
+1. test_twist_command_routed_to_drive
    Build a CommandBatch with one TWIST OutCommand (verb_id=1, vx=200),
-   drain it, run one Drive2 tick, verify the command was applied (drive2
+   drain it, run one Drive tick, verify the command was applied (drive
    is in the expected state — not stopped).
 
 2. test_priority_command_uses_push_front
@@ -21,7 +21,7 @@ Three acceptance-criteria tests:
    Build a CommandBatch with 10 commands (> kBusDrainMaxIters=8), drain it,
    verify drainCommandBatch returns 8 and does not process beyond.
 
-The handle is a BusDrainHandle (Drive2 + MC2 + CommandQueue) owned by the
+The handle is a BusDrainHandle (Drive + Planner + CommandQueue) owned by the
 C-ABI shim.  All allocation is in the shim; drainCommandBatch itself has no
 heap allocation.
 """
@@ -114,8 +114,8 @@ def _load_lib() -> ctypes.CDLL:
     ]
 
     # --- State reads ---
-    lib.bus_drain_api_drive2_get_fused_x.restype  = ctypes.c_float
-    lib.bus_drain_api_drive2_get_fused_x.argtypes = [ctypes.c_void_p]
+    lib.bus_drain_api_drive_get_fused_x.restype  = ctypes.c_float
+    lib.bus_drain_api_drive_get_fused_x.argtypes = [ctypes.c_void_p]
 
     lib.bus_drain_api_queue_size.restype  = ctypes.c_int
     lib.bus_drain_api_queue_size.argtypes = [ctypes.c_void_p]
@@ -123,8 +123,8 @@ def _load_lib() -> ctypes.CDLL:
     lib.bus_drain_api_tick.restype  = None
     lib.bus_drain_api_tick.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
 
-    lib.bus_drain_api_drive2_get_vx.restype  = ctypes.c_float
-    lib.bus_drain_api_drive2_get_vx.argtypes = [ctypes.c_void_p]
+    lib.bus_drain_api_drive_get_vx.restype  = ctypes.c_float
+    lib.bus_drain_api_drive_get_vx.argtypes = [ctypes.c_void_p]
 
     lib.bus_drain_api_max_iters.restype  = ctypes.c_uint8
     lib.bus_drain_api_max_iters.argtypes = []
@@ -186,7 +186,7 @@ def test_twist_command_routed_to_drive2(lib, handle):
 
     # After 200 ms of ticks with a 200 mm/s command, Drive2's BVC should have
     # produced non-zero velocity.  The fused twist vx should be > 0.
-    vx_state = lib.bus_drain_api_drive2_get_vx(handle)
+    vx_state = lib.bus_drain_api_drive_get_vx(handle)
     assert vx_state > 0.0, (
         f"Drive2 fused twist vx={vx_state:.3f} — expected > 0 after TWIST drain + tick"
     )

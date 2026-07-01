@@ -1,11 +1,11 @@
 ---
 id: '006'
 title: Scrub test-infra drive2/mc2 scaffolding names (C ABI + Python, atomic rename)
-status: open
+status: done
 use-cases:
 - SUC-006
 depends-on:
-- "005"
+- '005'
 github-issue: ''
 issue: internalize-legacy-motioncontroller-into-planner.md
 completes_issue: false
@@ -76,19 +76,19 @@ update MUST happen in the same commit. This ticket renames everything atomically
 
 ## Acceptance Criteria
 
-- [ ] `tests/_infra/sim/drive2_api.cpp` does not exist;
+- [x] `tests/_infra/sim/drive2_api.cpp` does not exist;
       `tests/_infra/sim/drive_api.cpp` exists.
-- [ ] All `drive2_api_*` C++ `extern "C"` symbols are renamed `drive_api_*`.
-- [ ] All `bus_drain_api_drive2_*` C++ symbols are renamed `bus_drain_api_drive_*`.
-- [ ] `tests/simulation/unit/test_drive2_subsystem.py` does not exist;
+- [x] All `drive2_api_*` C++ `extern "C"` symbols are renamed `drive_api_*`.
+- [x] All `bus_drain_api_drive2_*` C++ symbols are renamed `bus_drain_api_drive_*`.
+- [x] `tests/simulation/unit/test_drive2_subsystem.py` does not exist;
       `tests/simulation/unit/test_drive_subsystem.py` exists.
-- [ ] `tests/simulation/unit/test_motioncontroller2_smoke.py` does not exist;
+- [x] `tests/simulation/unit/test_motioncontroller2_smoke.py` does not exist;
       `tests/simulation/unit/test_planner_subsystem_smoke.py` exists.
-- [ ] `Drive2Ctx` does not appear in any `.py` file.
-- [ ] `grep -rIn "drive2_api\|bus_drain_api_drive2\|Drive2Ctx\|mc2" tests/`
+- [x] `Drive2Ctx` does not appear in any `.py` file.
+- [x] `grep -rIn "drive2_api\|bus_drain_api_drive2\|Drive2Ctx\|mc2" tests/`
       returns zero hits.
-- [ ] `cmake --build build_sim` succeeds with zero errors.
-- [ ] `uv run python -m pytest` passes (all except 2 baseline config-golden).
+- [x] `cmake --build build_sim` succeeds with zero errors.
+- [x] `uv run python -m pytest` passes (all except 2 baseline config-golden).
 
 ## Implementation Plan
 

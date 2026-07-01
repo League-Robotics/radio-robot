@@ -236,8 +236,8 @@ class TestSetPoseViaSIVerb:
 class TestInitConfigureCalled:
     """Robot constructor calls configure() on drive2/sensors/planner (059-004)."""
 
-    def test_drive2_vel_kp_non_zero_at_init(self, handle):
-        """drive2's effective vel_gains.kp is the default velKp (0.3), not zero.
+    def test_drive_vel_kp_non_zero_at_init(self, handle):
+        """drive's effective vel_gains.kp is the default velKp (0.3), not zero.
 
         If configure() was NOT called, the projected kp would read back from
         defaultRobotConfig() as 0.3 (same source), so this test verifies the
@@ -269,7 +269,7 @@ class TestInitConfigureCalled:
             f"planner a_max expected 300.0 (default), got {amax}"
         )
 
-    def test_drive2_planner_sensors_default_consistent(self, handle):
+    def test_drive_planner_sensors_default_consistent(self, handle):
         """All three subsystems are configured consistently from the same RobotConfig."""
         kp   = _lib.config_route_init_drive2_vel_kp(handle)
         amax = _lib.config_route_init_planner_amax(handle)

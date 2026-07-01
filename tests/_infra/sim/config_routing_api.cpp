@@ -206,10 +206,10 @@ float config_route_planner_amax(void* h)
 }
 
 // ---------------------------------------------------------------------------
-// SI routing probe — apply SI via drive2.apply(SetPose) and verify fused pose.
+// SI routing probe — apply SI via drive.apply(SetPose) and verify fused pose.
 //
-// drive2 must run tickUpdate() to process the staged SetPose command.
-// We use the existing drive2_api pattern (hal.tick + drive2.tickUpdate).
+// drive must run tickUpdate() to process the staged SetPose command.
+// We use the existing drive_api pattern (hal.tick + drive.tickUpdate).
 // ---------------------------------------------------------------------------
 void config_route_apply_si(void* h, float x_mm, float y_mm, float h_rad)
 {

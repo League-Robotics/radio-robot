@@ -1,7 +1,7 @@
 """
-test_motioncontroller2_smoke.py — MotionController2 smoke tests (ticket 059-001).
+test_planner_subsystem_smoke.py — Planner subsystem smoke tests (ticket 059-001).
 
-Exercises the MotionController2 (Planner) subsystem via C-ABI shims in
+Exercises the Planner subsystem via C-ABI shims in
 tests/_infra/sim/planner_api.cpp, loaded via ctypes.  This ticket's tests are
 construction + minimal tick sanity; deeper planner-isolation tests come in 059-002.
 
@@ -120,7 +120,7 @@ def lib() -> ctypes.CDLL:
 
 
 class TestPlannerSmoke:
-    """Smoke tests for MotionController2 construction and minimal tick behavior."""
+    """Smoke tests for Planner construction and minimal tick behavior."""
 
     def test_construct_destroy(self, lib):
         """Create and destroy a PlannerHandle — must not crash."""

@@ -86,12 +86,12 @@ void planner_api_destroy(void* h)
 // Tick
 //
 // Ordering mirrors the live loopTickOnce pattern:
-//   hal.tick(now, drive2.outputs()) — integrate plant physics
-//   hal.tick(now)                   — promote encoder into positionMm()
-//   drive2.tickUpdate(now)          — SENSE: encoder collect + EKF predict
-//   mc2.tick(now)                   — PLAN: driveAdvance + extract twist
-//   drive2.apply(cmd)               — stage the twist command in Drive2
-//   drive2.tickAction(now)          — ACT: BVC advance + motor output
+//   hal.tick(now, drive.outputs()) — integrate plant physics
+//   hal.tick(now)                  — promote encoder into positionMm()
+//   drive.tickUpdate(now)          — SENSE: encoder collect + EKF predict
+//   planner.tick(now)              — PLAN: driveAdvance + extract twist
+//   drive.apply(cmd)               — stage the twist command in Drive
+//   drive.tickAction(now)          — ACT: BVC advance + motor output
 // ---------------------------------------------------------------------------
 
 // Run one full planner + drive tick. Returns the commanded vx (mm/s).
