@@ -138,6 +138,7 @@ def _make_controller(
     transport: FakeTransport | None = None,
     clear_cb=None,
     refresh_cb=None,
+    set_origin_cb=None,
 ) -> tuple["object", list[str], dict]:
     """Build an OpsController with fake widgets and optional transport."""
     from robot_radio.testgui.operations import OpsController
@@ -171,6 +172,7 @@ def _make_controller(
     clear_btn = FakeBtn()
     refresh_btn = FakeBtn()
     stream_btn = FakeBtn(text="STREAM: off")
+    origin_btn = FakeBtn()
 
     ctrl = OpsController(
         transport_ref=state,
@@ -181,9 +183,11 @@ def _make_controller(
         clear_btn=clear_btn,
         refresh_btn=refresh_btn,
         stream_btn=stream_btn,
+        origin_btn=origin_btn,
         transport_buttons=[sync_btn, zero_btn, stop_btn, refresh_btn, stream_btn],
         clear_traces_cb=clear_cb,
         refresh_playfield_cb=refresh_cb,
+        set_origin_cb=set_origin_cb,
     )
     return ctrl, log_entries, state
 
@@ -527,7 +531,7 @@ class TestBuildPanel:
         assert isinstance(panel, QGroupBox)
         assert isinstance(ctrl, OpsController)
 
-    def test_ops_panel_has_six_buttons(self):
+    def test_ops_panel_has_seven_buttons(self):
         from PySide6.QtWidgets import QApplication, QPushButton  # type: ignore[import-untyped]
         import sys
 
@@ -538,8 +542,8 @@ class TestBuildPanel:
         panel, ctrl = build_panel(log_cb=lambda _: None, transport_ref=state)
 
         buttons = panel.findChildren(QPushButton)
-        assert len(buttons) == 6, (
-            f"Expected 6 buttons in ops panel, found {len(buttons)}: "
+        assert len(buttons) == 7, (
+            f"Expected 7 buttons in ops panel, found {len(buttons)}: "
             f"{[b.objectName() for b in buttons]}"
         )
 
@@ -560,6 +564,7 @@ class TestBuildPanel:
             "ops_btn_clear_traces",
             "ops_btn_refresh_playfield",
             "ops_btn_stream",
+            "ops_btn_set_origin",
         }
         from PySide6.QtWidgets import QPushButton  # type: ignore[import-untyped]
         actual_names = {b.objectName() for b in panel.findChildren(QPushButton)}
@@ -577,7 +582,7 @@ class TestBuildPanel:
         state = {"transport": None}
         panel, ctrl = build_panel(log_cb=lambda _: None, transport_ref=state)
 
-        # All buttons except clear_traces should start disabled.
+        # All buttons except clear_traces and set_origin should start disabled.
         disabled_names = {
             "ops_btn_sync_pose",
             "ops_btn_zero_encoders",
@@ -619,3 +624,89 @@ class TestBuildPanel:
         stream_btn = panel.findChild(QPushButton, "ops_btn_stream")
         assert stream_btn is not None
         assert stream_btn.isCheckable()
+
+    def test_set_origin_btn_enabled_initially(self):
+        """'Set Robot @ 0,0' button must be enabled without a transport."""
+        from PySide6.QtWidgets import QApplication, QPushButton  # type: ignore[import-untyped]
+        import sys
+
+        app = QApplication.instance() or QApplication(sys.argv)
+        from robot_radio.testgui.operations import build_panel
+
+        state = {"transport": None}
+        panel, ctrl = build_panel(log_cb=lambda _: None, transport_ref=state)
+
+        origin_btn = panel.findChild(QPushButton, "ops_btn_set_origin")
+        assert origin_btn is not None, "ops_btn_set_origin not found"
+        assert origin_btn.isEnabled(), "'Set Robot @ 0,0' should be enabled without transport"
+
+
+# ---------------------------------------------------------------------------
+# Set Robot @ 0,0 (on_set_origin) — display-only, no wire command
+# ---------------------------------------------------------------------------
+
+
+class TestSetOrigin:
+    """on_set_origin calls set_origin_cb; never touches the transport."""
+
+    def test_calls_set_origin_cb(self):
+        called = []
+        ctrl, log, state = _make_controller(None, set_origin_cb=lambda: called.append(True))
+        ctrl.on_set_origin()
+        assert called == [True], "set_origin_cb should have been called once"
+
+    def test_no_cb_does_not_raise(self):
+        ctrl, log, state = _make_controller(None, set_origin_cb=None)
+        ctrl.on_set_origin()  # must not raise
+
+    def test_logs_done(self):
+        ctrl, log, state = _make_controller(None)
+        ctrl.on_set_origin()
+        assert any("0,0" in e or "anchor" in e.lower() or "centre" in e.lower() for e in log)
+
+    def test_works_without_transport(self):
+        """Set Robot @ 0,0 must work with no transport connected."""
+        called = []
+        ctrl, log, state = _make_controller(None, set_origin_cb=lambda: called.append(1))
+        ctrl.on_set_origin()
+        assert called  # callback was invoked
+
+    def test_sends_no_wire_command(self):
+        """on_set_origin must not call transport.command() or transport.send()."""
+        t = FakeTransport()
+        ctrl, log, state = _make_controller(t, set_origin_cb=lambda: None)
+        ctrl.on_set_origin()
+        assert not t.sent_commands, (
+            f"Set Robot @ 0,0 must send no wire commands; got: {t.sent_commands}"
+        )
+        assert not t.sent_fire_forget, (
+            f"Set Robot @ 0,0 must send no fire-and-forget commands; got: {t.sent_fire_forget}"
+        )
+
+    def test_sends_no_command_with_connected_transport(self):
+        """Even when a transport is connected, on_set_origin sends nothing."""
+        t = FakeTransport()
+        ctrl, log, state = _make_controller(t, set_origin_cb=lambda: None)
+        # Simulate connected state.
+        ctrl.set_connected(True, t)
+        ctrl.on_set_origin()
+        assert not t.sent_commands
+        assert not t.sent_fire_forget
+
+    def test_cb_exception_logged_not_raised(self):
+        def bad_cb():
+            raise RuntimeError("re-anchor error")
+
+        ctrl, log, state = _make_controller(None, set_origin_cb=bad_cb)
+        ctrl.on_set_origin()  # must not raise
+        assert any("ERROR" in e or "callback" in e.lower() for e in log)
+
+    def test_set_origin_transport_button_remains_enabled_after_set_origin(self):
+        """After set_origin, transport buttons should be unaffected."""
+        t = FakeTransport()
+        ctrl, log, state = _make_controller(t, set_origin_cb=lambda: None)
+        ctrl.set_connected(True, t)
+        before = [btn.enabled for btn in ctrl._transport_buttons]
+        ctrl.on_set_origin()
+        after = [btn.enabled for btn in ctrl._transport_buttons]
+        assert before == after, "set_origin must not change transport button enable state"

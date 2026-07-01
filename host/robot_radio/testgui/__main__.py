@@ -395,8 +395,25 @@ def _build_main_window():  # type: ignore[return]
         canvas_ctrl.refresh()
 
     def _refresh_playfield(pixmap: "object") -> None:
-        """Swap the canvas background to the new pixmap."""
+        """Swap the canvas background to the (already deskewed) new pixmap."""
         canvas_ctrl.set_background(pixmap)
+
+    def _set_origin() -> None:
+        """Re-anchor the TraceModel to the current pose as world (0,0).
+
+        Operator workflow: physically place the robot at the playfield centre,
+        then click "Set Robot @ 0,0" to tell the GUI the robot is at (0,0).
+
+        This re-anchors the TraceModel (so the next incoming pose delta
+        starts from world 0,0), clears all trace polylines, and moves the
+        canvas avatar to centre.  No motion command is sent.
+        """
+        # Re-anchor: current origin maps to (0, 0).  Use heading 0 (east) as
+        # the new forward direction for the body-to-world transform.
+        trace_model.anchor(0.0, 0.0, 0.0)
+        trace_model.clear()
+        canvas_ctrl.reset_avatar_to_center()
+        canvas_ctrl.refresh()
 
     # Operations panel — built after _append_log is defined so the log callback
     # is live.
@@ -405,6 +422,7 @@ def _build_main_window():  # type: ignore[return]
         transport_ref=_state,
         clear_traces_cb=_clear_traces,
         refresh_playfield_cb=_refresh_playfield,
+        set_origin_cb=_set_origin,
     )
     # Insert the ops panel before the addStretch() already added above.
     # Because addStretch() was called already, insert at the position before it.
