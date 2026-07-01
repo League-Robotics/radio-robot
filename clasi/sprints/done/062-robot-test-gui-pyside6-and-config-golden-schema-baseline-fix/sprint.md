@@ -1,7 +1,7 @@
 ---
 id: '062'
 title: Robot Test GUI (PySide6) and config-golden/schema baseline fix
-status: planning-docs
+status: done
 branch: sprint/062-robot-test-gui-pyside6-and-config-golden-schema-baseline-fix
 use-cases:
 - SUC-001
