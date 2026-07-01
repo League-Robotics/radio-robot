@@ -85,6 +85,62 @@ status: draft
   - [ ] `CanvasController.set_avatar_pose(x_cm, y_cm, yaw_rad)` passes headless tests.
   - [ ] `CanvasController.restore_static_background()` passes headless tests.
 
+## SUC-005: Reset robot pose to origin from the GUI
+
+- **Actor**: Developer or robot operator
+- **Preconditions**: Robot is on the playfield (or bench stand); Test GUI is open;
+  any transport may be selected.
+- **Main Flow**:
+  1. Operator physically places the robot at the playfield origin (0, 0).
+  2. Operator clicks "Set Robot @ 0,0" in the operations panel.
+  3. GUI sends `ZERO enc` to reset wheel encoder counters to zero.
+  4. GUI sends `SI 0 0 0` to update the firmware's internal pose estimate to
+     (x=0 mm, y=0 mm, heading=0 centidegrees).
+  5. GUI resets the canvas display: avatar moves to field centre, heading 0;
+     trace polylines are cleared; trace model is re-anchored at (0, 0, 0).
+  6. Log shows the two commands sent.
+- **Postconditions**: Robot firmware reports pose (0, 0, 0); GUI displays the
+  robot at the field centre; subsequent telemetry-driven motion starts from the
+  correct origin.
+- **Alternate Flow (no transport connected)**:
+  2a. `_state["transport"]` is `None`.
+  2b. Wire commands are skipped; GUI logs "[WARN] Set Robot @ 0,0: no robot
+      connected — display only".
+  2c. Display reset still runs (avatar to centre, traces cleared).
+- **Acceptance Criteria**:
+  - [ ] `ZERO enc` is sent before `SI 0 0 0` when a transport is connected.
+  - [ ] In Sim mode both commands are sent.
+  - [ ] No transport connected: warning logged, display reset still runs.
+  - [ ] Headless tests verify the command sequence with a fake transport.
+
+## SUC-006: Record a Test GUI session to a file
+
+- **Actor**: Developer running a playfield or bench trial
+- **Preconditions**: Test GUI is open; Record, Pause, Stop controls are visible.
+- **Main Flow**:
+  1. User clicks **Record**. A timestamped `recordings/<timestamp>.jsonl` file
+     is created; appending begins immediately.
+  2. Every TX line (command sent to robot) and every RX line (response /
+     telemetry) is written to the file with monotonic + wall-clock timestamps
+     and a direction tag (`TX` or `RX`).
+  3. User clicks **Pause**. Appending suspends; file remains open.
+  4. User clicks **Record** (Resume). Appending resumes into the same file.
+  5. User clicks **Stop**. File is finalized and closed; log shows the saved
+     path. Controls return to idle state.
+- **Postconditions**: The JSONL file on disk contains a complete, ordered record
+  of all TX/RX lines during the non-paused recording window.
+- **Alternate Flow (stop without recording)**:
+  - Record was never clicked or Stop was already clicked; clicking Stop again is
+    a no-op.
+- **Acceptance Criteria**:
+  - [ ] Record / Pause / Stop buttons exist with correct enable/disable states.
+  - [ ] After Record, both TX and RX lines appear in the file with timestamps.
+  - [ ] Pausing drops all entries until Resume; no gap in file (file stays open).
+  - [ ] Stop writes and closes the file; log shows the path.
+  - [ ] Works across Sim, Serial, and Relay transports.
+  - [ ] `SessionRecorder` is Qt-free; headless tests cover append, pause gating,
+        and JSONL serialization.
+
 ## SUC-004: SIM/BENCH MODE background unchanged
 
 - **Actor**: Developer using Sim or Serial transport

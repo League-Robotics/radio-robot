@@ -8,8 +8,12 @@ use-cases:
 - SUC-002
 - SUC-003
 - SUC-004
+- SUC-005
+- SUC-006
 issues:
 - live-camera-view-for-the-test-gui.md
+- testgui-record-pause-stop-command-log.md
+- testgui-set-robot-zero-full-reset.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -140,5 +144,8 @@ Before tickets can be created, all of the following must be true:
 | 001 | Mode indicator and transport-combo plumbing | — |
 | 002 | Relay auto-discovery in transport.py | 001 |
 | 003 | Live-view worker, canvas live-mode, and mode-gated wiring | 001, 002 |
+| 004 | Set Robot @ 0,0: full pose reset (heading + encoders + SI command) | — |
+| 005 | Record / Pause / Stop command+response logging | — |
 
-Tickets execute serially in the order listed.
+Tickets 001–003 are done. Tickets 004 and 005 are independent of each other
+and of 001–003; they may execute in any order after 003 is done.

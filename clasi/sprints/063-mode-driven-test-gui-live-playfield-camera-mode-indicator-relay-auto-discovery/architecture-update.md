@@ -300,6 +300,65 @@ two new functions in `transport.py` and the updated `_on_connect()`.
 
 ---
 
+---
+
+## Addendum — Tickets 004 and 005
+
+*Added when tickets 004–005 were appended to the sprint (2026-07-01).*
+
+### Ticket 004: Full pose reset in `_set_origin()`
+
+`_set_origin()` in `__main__.py` is extended to send two wire commands before
+the existing display reset:
+
+1. `transport.command("ZERO enc")` — resets encoder counters.
+2. `transport.command(build_setpose_command(0.0, 0.0, 0.0))` — sends `SI 0 0 0`
+   to set firmware pose to (0 mm, 0 mm, 0 centidegrees).
+
+No new modules, classes, or public APIs are introduced. The change is entirely
+inside the existing closure. Connection gating is a single `if transport is not
+None:` guard; the display reset runs regardless.
+
+**Component impact**: `__main__.py` only. `operations.build_setpose_command` is
+already imported. `OpsController.on_zero_encoders` is NOT called (it carries
+additional UI state logic); the command is sent directly on the transport.
+
+### Ticket 005: `SessionRecorder` and Record/Pause/Stop UI
+
+A new module `testgui/recorder.py` provides `SessionRecorder` — a Qt-free
+state machine with three states (`idle`, `recording`, `paused`). It appends
+JSONL entries to an open file and is the only component with file-system access
+for recording.
+
+`__main__.py` is extended with:
+- Three `QPushButton` widgets (`record_btn`, `pause_btn`, `stop_btn`) in a
+  horizontal layout in the left panel.
+- A `SessionRecorder` instance scoped to `_build_main_window()`.
+- Extension of `_append_log(line, direction=None)` — adds an optional
+  `direction` parameter; when `"TX"` or `"RX"`, routes to
+  `recorder.append(direction, line)`.
+
+**Tap architecture**: the tap is at `_append_log`, not inside any transport
+class. This means the recorder captures exactly what the log pane displays,
+independent of transport type, without modifying any transport interface.
+
+**Dependency**: `recorder.py` has no dependencies outside the Python standard
+library (`json`, `time`, `datetime`, `pathlib`). No Qt, no aprilcam, no
+robot_radio imports.
+
+**Dependency graph addition** (no cycles):
+
+```mermaid
+graph LR
+    MAIN["__main__.py"]
+    RECORDER["recorder.py\nSessionRecorder"]
+    MAIN --> RECORDER
+```
+
+`recorder.py` is a leaf module. All existing arrows are unchanged.
+
+---
+
 ## Resolved Decisions (formerly Open Questions)
 
 The following were open questions at architecture-review time. All three have

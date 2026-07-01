@@ -1192,7 +1192,7 @@ wheels = [
 
 [[package]]
 name = "robot-radio"
-version = "0.20260701.7"
+version = "0.20260701.9"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
