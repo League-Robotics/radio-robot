@@ -109,7 +109,7 @@ float planner_api_tick(void* h, uint32_t now_ms)
     // PLAN phase: get the CommandBatch from MC2.
     msg::CommandBatch batch = p->planner.tick(now_ms);
 
-    // Stage the first TWIST command in Drive2 (if any).
+    // Stage the first TWIST command in Drive (if any).
     if (batch.cmds_count > 0) {
         const msg::OutCommand& oc = batch.cmds_[0];
         if (oc.verb_id == 1 && oc.args_count >= 3) {
@@ -246,7 +246,7 @@ float planner_api_get_body_twist_omega(void* h)
 }
 
 // ---------------------------------------------------------------------------
-// Drive2 pose reads (for verifying motion)
+// Drive pose reads (for verifying motion)
 // ---------------------------------------------------------------------------
 
 float planner_api_get_fused_x(void* h)

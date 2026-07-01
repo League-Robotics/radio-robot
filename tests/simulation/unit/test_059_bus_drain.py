@@ -156,7 +156,7 @@ def handle(lib):
 def test_twist_command_routed_to_drive2(lib, handle):
     """
     Build a CommandBatch with one TWIST OutCommand (verb_id=1, vx=200 mm/s),
-    drain it, run 5 Drive2 ticks, verify Drive2 actually received the command
+    drain it, run 5 Drive ticks, verify Drive actually received the command
     by checking that the fused twist shows nonzero vx (the BVC ramps up).
 
     We verify the routing mechanism, not exact trajectory — the BVC has a
@@ -184,11 +184,11 @@ def test_twist_command_routed_to_drive2(lib, handle):
         now_ms += 20
         lib.bus_drain_api_tick(handle, ctypes.c_uint32(now_ms))
 
-    # After 200 ms of ticks with a 200 mm/s command, Drive2's BVC should have
+    # After 200 ms of ticks with a 200 mm/s command, Drive's BVC should have
     # produced non-zero velocity.  The fused twist vx should be > 0.
     vx_state = lib.bus_drain_api_drive_get_vx(handle)
     assert vx_state > 0.0, (
-        f"Drive2 fused twist vx={vx_state:.3f} — expected > 0 after TWIST drain + tick"
+        f"Drive fused twist vx={vx_state:.3f} — expected > 0 after TWIST drain + tick"
     )
 
 

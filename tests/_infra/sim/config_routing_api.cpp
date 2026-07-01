@@ -154,14 +154,14 @@ int config_route_set_lag_line(void* h, int32_t ms)
 }
 
 // ---------------------------------------------------------------------------
-// Drive2 state reads — used to verify vel.kP routing.
+// Drive state reads — used to verify vel.kP routing.
 //
-// drive2.configure() stores vel_gains.kp inside _drvCfg; we read it back
-// via the robot's Drive2 member.
+// drive.configure() stores vel_gains.kp inside _drvCfg; we read it back
+// via the robot's Drive member.
 // ---------------------------------------------------------------------------
 
-// Read the vel_gains.kp stored in drive2's internal DrivetrainConfig slice.
-// Drive2::state() does not expose config; we re-project from RobotConfig
+// Read the vel_gains.kp stored in drive's internal DrivetrainConfig slice.
+// Drive::state() does not expose config; we re-project from RobotConfig
 // (which handleSet has already committed) and compare with what configure()
 // would have received.  The simplest observable: robot.config.velKp matches
 // what was SET.
@@ -183,9 +183,9 @@ int32_t config_route_get_robot_lag_line(void* h)
 }
 
 // ---------------------------------------------------------------------------
-// Drive2 configure() probe — read the effective vel_gains.kp from drive2.
+// Drive configure() probe — read the effective vel_gains.kp from drive.
 //
-// Drive2 stores the projected DrivetrainConfig internally; we trigger a
+// Drive stores the projected DrivetrainConfig internally; we trigger a
 // read-back by calling toDriveConfig on the current robot.config.
 // The test verifies that after SET vel.kP=X, toDriveConfig(robot.config).vel_gains.kp == X.
 // ---------------------------------------------------------------------------

@@ -145,7 +145,7 @@ target_include_directories(firmware_host PRIVATE
     # 043-001 (Phase E): subsystem dirs so each subsystem .cpp resolves its own
     # same-directory header (#include "LineSensor.h" etc.).
     "${REPO_ROOT}/source/subsystems/sensors"
-    # 043-002/060-006: Drive subsystem dir (Drive2.h renamed to Drive.h in 060-006).
+    # 043-002/060-006: Drive subsystem dir (de-scaffolded in 060-006).
     "${REPO_ROOT}/source/subsystems/drive"
     # 043-003 (Phase E): Gripper subsystem dir (#include "Gripper.h").
     "${REPO_ROOT}/source/subsystems/gripper"

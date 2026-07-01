@@ -46,11 +46,11 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // =========================================================
     // STEP 2 — drive2.tickUpdate(now): SENSE
     //
-    // Runs the Drive2 outlier filter + EKF predict + OTOS
-    // correction on Drive2's private _hw.  The Drive2 estimate
+    // Runs the Drive outlier filter + EKF predict + OTOS
+    // correction on Drive's private _hw.  The Drive estimate
     // is the authoritative source in the ordered-tick path.
     // =========================================================
-    // fuseOtos: bypass Drive2's internal OTOS lag gate when ts.fuseOtos is set
+    // fuseOtos: bypass Drive's internal OTOS lag gate when ts.fuseOtos is set
     // (mirrors the ts.fuseOtos bypass in the legacy path; used by sim tests that
     // call sim_set_otos_fusion(1) to force per-tick OTOS updates).
     robot.drive.tickUpdate(now, ts.fuseOtos);
@@ -134,8 +134,8 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // =========================================================
     // STEP 4 — planner.tick(now): advance goal state machine
     //
-    // MotionController2::tick() calls _mc.driveAdvance() with
-    // its own _hw (populated from drive2.state()) and returns a
+    // Planner::tick() calls _mc.driveAdvance() with
+    // its own _hw (populated from drive.state()) and returns a
     // CommandBatch containing a DrivetrainCommand{TWIST}.
     // =========================================================
     msg::CommandBatch plannerBatch = robot.planner.tick(now);
@@ -160,11 +160,11 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // STEP 6b — HAL ACTUATOR TICK
     //
     // The HAL tick delivers the motor commands to the plant.
-    // 060-002: Drive2's constructor binds MotorController to
-    // drive2._outputs (setCommandsRef(&_outputs)), and Robot.cpp
+    // 060-002: Drive's constructor binds MotorController to
+    // drive._outputs (setCommandsRef(&_outputs)), and Robot.cpp
     // no longer overrides that binding in the ordered-tick path.
     // So the buffer the MotorController actually wrote to is
-    // drive2._outputs — pass drive2.outputs() here.
+    // drive._outputs — pass drive.outputs() here.
     // =========================================================
     robot.hal.tick(now, robot.drive.outputs());
 

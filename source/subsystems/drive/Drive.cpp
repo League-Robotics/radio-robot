@@ -1,4 +1,4 @@
-// Drive.cpp — subsystems::Drive implementation (renamed from Drive2 in 060-006).
+// Drive.cpp — subsystems::Drive implementation (de-scaffolded in 060-006).
 //
 // Composes the existing control components by reference: MotorController,
 // BodyVelocityController, PhysicalStateEstimate, Odometry, IMotor x2, IOdometer.

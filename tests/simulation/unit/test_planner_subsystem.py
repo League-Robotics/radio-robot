@@ -1,9 +1,9 @@
 """
 test_planner_subsystem.py — Planner-isolation sim tests (ticket 059-002).
 
-Exercises the MotionController2 (Planner) subsystem via C-ABI shims in
+Exercises the Planner subsystem via C-ABI shims in
 tests/_infra/sim/planner_api.cpp, loaded via ctypes.  This is the
-stakeholder-requested validation: construct MotionController2 in isolation
+stakeholder-requested validation: construct Planner in isolation
 (via the C-ABI shim — no full robot, no comms), feed user goals via apply(),
 call tick() repeatedly, and assert the RETURNED CommandBatch DrivetrainCommand
 {twist} sequence (the vx + omega setpoints over time).
@@ -381,7 +381,7 @@ class TestPlannerIsolation:
         stop (driveAdvance exits early once mode=IDLE and no MotionCommand is
         active), so the body_twist in _desired freezes at its last ramp value.
         The RETURN model contract is: is_active=0 and no new TWIST commands are
-        issued to Drive2 — which is what the live bus dispatcher checks before
+        issued to Drive — which is what the live bus dispatcher checks before
         forwarding.  We assert is_active=0 (the essential invariant) rather than
         vx=0 (which depends on BVC coast behaviour outside this ticket's scope).
         """
