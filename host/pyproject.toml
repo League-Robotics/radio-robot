@@ -30,6 +30,20 @@ dev = [
     "jsonschema>=4.26.0",
     "pytest>=8.0",
 ]
+# The Robot Test GUI needs both PySide6 (widgets) and the aprilcam camera
+# client (live playfield capture, tag pose). aprilcam is an editable path
+# dependency (see [tool.uv.sources]); the GUI imports it lazily so the base
+# robot_radio install stays lightweight for on-robot use. Install with
+# `uv sync --group gui` from this directory.
 gui = [
     "PySide6>=6.0",
+    "aprilcam",
+    # Deskewing a captured playfield frame via the daemon homography uses cv2
+    # (robot_radio.media.movie / testgui.canvas). aprilcam decodes with Pillow
+    # and only imports cv2 lazily, so it must be listed explicitly here.
+    "opencv-python-headless>=4.13.0.92",
 ]
+
+[tool.uv.sources]
+# AprilTags lives beside the repo root: host/ -> ../.. == RobotProjects/, then AprilTags/.
+aprilcam = { path = "../../AprilTags", editable = true }

@@ -784,7 +784,8 @@ def _deskew_bgr_with_tag_frame(
     Returns
     -------
     ``(QPixmap, origin_x, origin_y)`` on success, or ``None`` on failure.
-    origin_x and origin_y are the daemon's A1 offset in cm (corner-origin frame).
+    origin_x and origin_y are the cm offset at which world (0,0) / tag 1 lands in
+    the deskewed image, so the canvas world_to_px places the avatar on tag 1.
     """
     try:
         import numpy as np
@@ -812,15 +813,45 @@ def _deskew_bgr_with_tag_frame(
                 f"TagFrame field dims ({fw},{fh}) invalid; is the camera calibrated?"
             )
 
-        # warp = diag(ppc, ppc, 1) @ H  (matches PlayfieldCalibration.warp_matrix)
-        scale = np.array([[ppc, 0, 0], [0, ppc, 0], [0, 0, 1]], dtype=float)
-        warp = scale @ H
         out_w = max(1, int(round(fw * ppc)))
         out_h = max(1, int(round(fh * ppc)))
 
+        # The daemon homography H maps raw pixels into the A1-CENTRED cm frame
+        # (origin at AprilTag 1, +x east, +y NORTH/up) — NOT a corner-origin frame.
+        # Warping with diag(ppc)·H would map only the +x/+y quadrant into the output
+        # rectangle and leave the rest black (the classic "playfield in the top-left
+        # corner" symptom).  Instead, deskew directly from the daemon's
+        # playfield_corners (the field's 4 corners in raw pixels) onto the full
+        # output rectangle, so the whole field fills the canvas regardless of where
+        # tag 1 sits or which way the cm frame is oriented.
+        corners_raw = getattr(tag_frame, "playfield_corners", None)
+        if corners_raw is not None and len(corners_raw) == 4:
+            src = np.array(corners_raw, dtype=np.float32)  # UL, UR, LR, LL (raw px)
+            dst = np.array(
+                [[0, 0], [out_w, 0], [out_w, out_h], [0, out_h]], dtype=np.float32
+            )
+            warp = cv2.getPerspectiveTransform(src, dst)
+            # Canvas origin: where world (0,0) [tag 1] lands in the output, in cm.
+            # world → raw via H⁻¹, raw → output via warp.  The canvas world_to_px is
+            # px = ppc·(x + origin_x), py = ppc·(origin_y − y), so origin_x/origin_y
+            # are exactly the output pixel of world (0,0) divided by ppc.  This ties
+            # the avatar's world-(0,0) position to the same warp used for the image,
+            # so the red/blue marker lands exactly on tag 1 at the field centre.
+            H_inv = np.linalg.inv(H)
+            raw0 = H_inv @ np.array([0.0, 0.0, 1.0])
+            out0 = warp @ np.array([raw0[0] / raw0[2], raw0[1] / raw0[2], 1.0])
+            origin_x = float(out0[0] / out0[2]) / ppc
+            origin_y = float(out0[1] / out0[2]) / ppc
+        else:
+            # Legacy corner-origin homography (e.g. the static JSON calibration):
+            # warp = diag(ppc,ppc,1)·H maps [0,fw]×[0,fh] cm onto the output, and
+            # origin_x/origin_y are the daemon's reported A1 offset (unchanged).
+            scale = np.array([[ppc, 0, 0], [0, ppc, 0], [0, 0, 1]], dtype=float)
+            warp = scale @ H
+
         deskewed = cv2.warpPerspective(raw_bgr, warp, (out_w, out_h))
         _log.debug(
-            "Deskewed via daemon H: %dx%d px, origin=(%.1f,%.1f) cm",
+            "Deskewed: %dx%d px, origin=(%.1f,%.1f) cm",
             out_w, out_h, origin_x, origin_y,
         )
 
