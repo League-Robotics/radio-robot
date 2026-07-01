@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: Record / Pause / Stop command+response logging
-status: open
+status: done
 use-cases:
 - SUC-006
 depends-on: []
@@ -80,53 +80,53 @@ because the tap is at `_append_log`, not inside any transport class.
 
 ### Recorder core (`recorder.py`)
 
-- [ ] `SessionRecorder` is importable without PySide6 or any Qt dependency.
-- [ ] `start(output_path)` opens a recording session; subsequent `append(dir,
+- [x] `SessionRecorder` is importable without PySide6 or any Qt dependency.
+- [x] `start(output_path)` opens a recording session; subsequent `append(dir,
       line)` calls write JSONL entries with `t_mono`, `t_wall`, `dir`, `line`.
-- [ ] `pause()` suspends appending; calls to `append()` while paused are
+- [x] `pause()` suspends appending; calls to `append()` while paused are
       silently dropped.
-- [ ] `resume()` re-enables appending into the same file.
-- [ ] `stop()` flushes any in-memory buffer and closes the file handle; further
+- [x] `resume()` re-enables appending into the same file.
+- [x] `stop()` flushes any in-memory buffer and closes the file handle; further
       `append()` calls are no-ops until `start()` is called again.
-- [ ] Each JSONL entry contains: `t_mono` (float, seconds since epoch via
+- [x] Each JSONL entry contains: `t_mono` (float, seconds since epoch via
       `time.monotonic()`), `t_wall` (ISO-8601 UTC string), `dir` (`"TX"` or
       `"RX"`), `line` (the raw wire string, stripped of trailing newline).
-- [ ] The output file is valid JSONL: each line is a standalone JSON object.
-- [ ] `recordings/` directory is created automatically if absent.
-- [ ] `state` property returns `"idle"`, `"recording"`, or `"paused"`.
+- [x] The output file is valid JSONL: each line is a standalone JSON object.
+- [x] `recordings/` directory is created automatically if absent.
+- [x] `state` property returns `"idle"`, `"recording"`, or `"paused"`.
 
 ### UI wiring (`__main__.py`)
 
-- [ ] Record, Pause, Stop buttons exist with object names `"record_btn"`,
+- [x] Record, Pause, Stop buttons exist with object names `"record_btn"`,
       `"pause_btn"`, `"stop_btn"`.
-- [ ] Initial state: Record enabled, Pause and Stop disabled.
-- [ ] After clicking Record: Record disabled, Pause and Stop enabled; recorder
+- [x] Initial state: Record enabled, Pause and Stop disabled.
+- [x] After clicking Record: Record disabled, Pause and Stop enabled; recorder
       starts a new session file in `recordings/`.
-- [ ] After clicking Pause: Pause disabled, Record (Resume) and Stop enabled;
+- [x] After clicking Pause: Pause disabled, Record (Resume) and Stop enabled;
       appending is suspended.
-- [ ] After clicking Record/Resume while paused: Resume disabled, Pause and
+- [x] After clicking Record/Resume while paused: Resume disabled, Pause and
       Stop enabled; appending resumes.
-- [ ] After clicking Stop: all buttons return to idle state; file is finalized
+- [x] After clicking Stop: all buttons return to idle state; file is finalized
       and closed; log shows the path of the saved file.
-- [ ] TX lines passed to `_append_log` with direction `"TX"` are appended to
+- [x] TX lines passed to `_append_log` with direction `"TX"` are appended to
       the active recording when recording is active.
-- [ ] RX lines passed to `_append_log` with direction `"RX"` are appended to
+- [x] RX lines passed to `_append_log` with direction `"RX"` are appended to
       the active recording when recording is active.
-- [ ] Appending is skipped (no error) when recorder is paused.
-- [ ] Appending is skipped (no error) when recorder is idle (not yet started).
+- [x] Appending is skipped (no error) when recorder is paused.
+- [x] Appending is skipped (no error) when recorder is idle (not yet started).
 
 ### Transport coverage
 
-- [ ] Recording works in Sim mode (TX/RX echoed by SimTransport appear in
+- [x] Recording works in Sim mode (TX/RX echoed by SimTransport appear in
       the recording).
-- [ ] Recording works in Serial (bench) mode.
-- [ ] Recording works in Relay (playfield) mode.
+- [x] Recording works in Serial (bench) mode.
+- [x] Recording works in Relay (playfield) mode.
 
 ### Headless tests
 
-- [ ] Headless tests of `SessionRecorder` pass without a QApplication.
-- [ ] `QT_QPA_PLATFORM=offscreen uv run python -m pytest tests/testgui -q` passes.
-- [ ] All existing `tests/testgui/` tests pass unchanged.
+- [x] Headless tests of `SessionRecorder` pass without a QApplication.
+- [x] `QT_QPA_PLATFORM=offscreen uv run python -m pytest tests/testgui -q` passes.
+- [x] All existing `tests/testgui/` tests pass unchanged.
 
 ## Implementation Plan
 

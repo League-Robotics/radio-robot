@@ -26,6 +26,9 @@ __pycache__
 build_*/
 cmake-build-*/
 
+# --- Test GUI session recordings (generated output, not source) ---
+recordings/
+
 # --- aprilcam server data (we are a CLIENT; aprilcam owns this) ---
 # aprilcam's data_dir is relative ("data/aprilcam"), so running its daemon or
 # our client tooling from this repo root makes it write logs/overlays here.

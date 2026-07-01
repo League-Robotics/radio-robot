@@ -49,6 +49,24 @@ and ``canvas_ctrl.restore_static_background()`` reverts the canvas to the grey
 placeholder with the field-centre origin.
 
 Sim and Serial transports do NOT start the live-view worker.
+
+Record / Pause / Stop controls (ticket 005)
+---------------------------------------------
+Three ``QPushButton`` widgets — ``record_btn``, ``pause_btn``, ``stop_btn`` —
+appear below the transport controls on the left panel.  They drive a
+``SessionRecorder`` (Qt-free, ``testgui/recorder.py``) that writes every TX
+command and every RX response/telemetry line to a JSONL file under
+``recordings/``.
+
+The tap point is ``_append_log(text, direction=None)``: any call with
+``direction="TX"`` or ``direction="RX"`` is forwarded to the recorder.  GUI
+status messages (connect/disconnect notices, etc.) call ``_append_log`` without
+a direction and are NOT recorded.
+
+Button enable/disable rules:
+- Idle:      Record enabled; Pause and Stop disabled.
+- Recording: Record disabled; Pause and Stop enabled.
+- Paused:    Record (labelled "Resume") enabled; Pause disabled; Stop enabled.
 """
 
 from __future__ import annotations
@@ -134,6 +152,7 @@ def _build_main_window():  # type: ignore[return]
     from robot_radio.testgui.traces import TraceModel
     from robot_radio.testgui.canvas import build_canvas
     from robot_radio.testgui.drive import KeyboardDriver
+    from robot_radio.testgui.recorder import SessionRecorder
 
     # QApplication must exist before any QWidget is created.  We create one
     # only if one does not already exist (e.g. during testing).
@@ -152,6 +171,9 @@ def _build_main_window():  # type: ignore[return]
 
     # Keyboard driver — wires cursor-key VW driving onto the main window.
     _driver = KeyboardDriver()
+
+    # Session recorder — Qt-free; accumulates TX/RX lines to a JSONL file.
+    recorder = SessionRecorder()
 
     # ------------------------------------------------------------------ window
     window = QMainWindow()
@@ -209,6 +231,24 @@ def _build_main_window():  # type: ignore[return]
     btn_layout.addWidget(connect_btn)
     btn_layout.addWidget(disconnect_btn)
     left_layout.addWidget(btn_row)
+
+    # Record / Pause / Stop controls (ticket 005)
+    record_btn = QPushButton("Record")
+    record_btn.setObjectName("record_btn")
+    pause_btn = QPushButton("Pause")
+    pause_btn.setObjectName("pause_btn")
+    pause_btn.setEnabled(False)
+    stop_btn = QPushButton("Stop")
+    stop_btn.setObjectName("stop_btn")
+    stop_btn.setEnabled(False)
+
+    rec_row = QWidget()
+    rec_layout = QHBoxLayout(rec_row)
+    rec_layout.setContentsMargins(0, 0, 0, 0)
+    rec_layout.addWidget(record_btn)
+    rec_layout.addWidget(pause_btn)
+    rec_layout.addWidget(stop_btn)
+    left_layout.addWidget(rec_row)
 
     # Command rows — built from the COMMANDS schema.
     # Each row: Send button | verb label | field1 | field2 …
@@ -298,11 +338,11 @@ def _build_main_window():  # type: ignore[return]
                 for param, getter in zip(spec["params"], getters)
             }
             line = build_wire_string(spec, values)
-            _append_log(f"TX {line}")
+            _append_log(f"TX {line}", direction="TX")
             try:
                 reply = transport.command(line, read_ms=500)
                 if reply:
-                    _append_log(f"RX {reply.strip()}")
+                    _append_log(f"RX {reply.strip()}", direction="RX")
             except Exception as exc:
                 _append_log(f"[ERROR] {exc}")
 
@@ -363,21 +403,82 @@ def _build_main_window():  # type: ignore[return]
 
     # ---------------------------------------------------------------- wiring
 
-    def _append_log(text: str) -> None:
-        """Append *text* to the log pane.  Must be called from the Qt main thread."""
+    def _append_log(text: str, direction: str | None = None) -> None:
+        """Append *text* to the log pane and optionally record it.
+
+        Must be called from the Qt main thread.
+
+        Parameters
+        ----------
+        text:
+            The line to display in the log pane.
+        direction:
+            ``"TX"`` or ``"RX"`` to route this line through the session
+            recorder.  Pass ``None`` (default) for internal GUI status messages
+            that should not be recorded.
+        """
         log_pane.appendPlainText(text)
         # Auto-scroll to bottom.
         sb = log_pane.verticalScrollBar()
         sb.setValue(sb.maximum())
+        # Route TX/RX lines to the active recorder session.
+        if direction is not None:
+            recorder.append(direction, text)  # type: ignore[arg-type]
+
+    # ----------------------------------------------------------- recorder controls
+
+    def _on_record_clicked() -> None:
+        """Handle Record / Resume button click."""
+        if recorder.state == "idle":
+            path = recorder.start()
+            _append_log(f"[REC] Recording started: {path}")
+            record_btn.setEnabled(False)
+            record_btn.setText("Record")
+            pause_btn.setEnabled(True)
+            stop_btn.setEnabled(True)
+        elif recorder.state == "paused":
+            recorder.resume()
+            _append_log("[REC] Recording resumed")
+            record_btn.setEnabled(False)
+            record_btn.setText("Record")
+            pause_btn.setEnabled(True)
+
+    def _on_pause_clicked() -> None:
+        """Handle Pause button click."""
+        recorder.pause()
+        _append_log("[REC] Recording paused")
+        record_btn.setText("Resume")
+        record_btn.setEnabled(True)
+        pause_btn.setEnabled(False)
+
+    def _on_stop_clicked() -> None:
+        """Handle Stop button click — finalize the recording file."""
+        path = recorder.stop()
+        record_btn.setText("Record")
+        record_btn.setEnabled(True)
+        pause_btn.setEnabled(False)
+        stop_btn.setEnabled(False)
+        if path is not None:
+            _append_log(f"[REC] Recording saved: {path}")
+
+    record_btn.clicked.connect(_on_record_clicked)
+    pause_btn.clicked.connect(_on_pause_clicked)
+    stop_btn.clicked.connect(_on_stop_clicked)
 
     def _on_log_from_thread(text: str) -> None:
-        """Thread-safe log delivery via QMetaObject.invokeMethod."""
-        QMetaObject.invokeMethod(
-            log_pane,
-            "appendPlainText",
-            Qt.ConnectionType.QueuedConnection,
-            Q_ARG(str, text),
-        )
+        """Thread-safe RX log delivery — marshals to the Qt main thread.
+
+        Receives lines from background transport reader threads and posts them
+        to the main thread via QMetaObject.invokeMethod with QueuedConnection.
+        The actual log-pane append and recorder write happen on the main thread
+        inside ``_append_log``.
+        """
+        # We cannot call _append_log directly here (wrong thread), so we
+        # schedule a lambda to be called on the main thread.  Using
+        # QMetaObject.invokeMethod on log_pane.appendPlainText is simpler for
+        # the display, but we also need the recorder path.  The cleanest
+        # solution is to use a dedicated bridge signal (see _RXBridge below).
+        _rx_bridge.rx_line.emit(text)  # type: ignore[attr-defined]
 
     # ---------------------------------------------------------------- telemetry / truth wiring
     # Transport callbacks fire on background threads.  We must marshal to the
@@ -391,6 +492,26 @@ def _build_main_window():  # type: ignore[return]
     # safely.  QMetaObject.invokeMethod with a missing slot silently fails, so
     # we use dedicated signals connected with QueuedConnection instead.
     from PySide6.QtCore import QObject, Signal, Slot  # type: ignore[import-untyped]
+
+    class _RXBridge(QObject):
+        """Bridges background-thread RX log lines to the Qt main thread.
+
+        The ``rx_line`` signal carries the raw wire string across the thread
+        boundary; the ``on_rx_line`` slot handles it on the main thread, calling
+        ``_append_log`` with ``direction="RX"`` so the recorder is also fed.
+        """
+        rx_line = Signal(str)
+
+        def __init__(self) -> None:
+            super().__init__()
+
+        @Slot(str)
+        def on_rx_line(self, text: str) -> None:
+            """Process an RX line on the Qt main thread."""
+            _append_log(text, direction="RX")
+
+    _rx_bridge = _RXBridge()
+    _rx_bridge.rx_line.connect(_rx_bridge.on_rx_line, Qt.ConnectionType.QueuedConnection)
 
     class _TelemetryBridge(QObject):
         """Bridges background-thread TLMFrame delivery to the Qt main thread.
