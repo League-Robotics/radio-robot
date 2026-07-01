@@ -137,7 +137,7 @@ class TestIsSimTransport:
 def _make_controller(
     transport: FakeTransport | None = None,
     clear_cb=None,
-    refresh_cb=None,
+    refresh_cb=None,    # signature: (pixmap, origin_x, origin_y) -> None
     set_origin_cb=None,
 ) -> tuple["object", list[str], dict]:
     """Build an OpsController with fake widgets and optional transport."""
@@ -447,7 +447,8 @@ class TestRefreshPlayfieldDaemonUnavailable:
         def _fail():
             raise RuntimeError("daemon not available")
 
-        ctrl._capture_playfield_pixmap = _fail
+        # _capture_playfield_frame_and_calib replaced _capture_playfield_pixmap.
+        ctrl._capture_playfield_frame_and_calib = _fail
         ctrl.on_refresh_playfield()
 
         assert any("WARN" in e or "capture" in e.lower() for e in log)
@@ -456,30 +457,36 @@ class TestRefreshPlayfieldDaemonUnavailable:
         t = FakeTransport()
         ctrl, log, state = _make_controller(t)
 
-        ctrl._capture_playfield_pixmap = lambda: None
+        # Returning None signals no image from daemon.
+        ctrl._capture_playfield_frame_and_calib = lambda: None
         ctrl.on_refresh_playfield()
 
         assert any("WARN" in e or "no image" in e.lower() for e in log)
 
     def test_pixmap_calls_refresh_cb(self):
+        """refresh_playfield_cb is called with (pixmap, origin_x, origin_y)."""
         t = FakeTransport()
-        received = []
-        ctrl, log, state = _make_controller(t, refresh_cb=received.append)
+        received: list = []
+        ctrl, log, state = _make_controller(t, refresh_cb=lambda px, ox, oy: received.append((px, ox, oy)))
 
         fake_pixmap = object()
-        ctrl._capture_playfield_pixmap = lambda: fake_pixmap
+        # _capture_playfield_frame_and_calib returns (pixmap, origin_x, origin_y).
+        ctrl._capture_playfield_frame_and_calib = lambda: (fake_pixmap, 12.5, 34.0)
         ctrl.on_refresh_playfield()
 
-        assert received == [fake_pixmap]
+        assert len(received) == 1
+        assert received[0][0] is fake_pixmap
+        assert received[0][1] == pytest.approx(12.5)
+        assert received[0][2] == pytest.approx(34.0)
 
     def test_refresh_cb_exception_logged(self):
         t = FakeTransport()
 
-        def bad_cb(px):
+        def bad_cb(px, ox, oy):
             raise ValueError("canvas error")
 
         ctrl, log, state = _make_controller(t, refresh_cb=bad_cb)
-        ctrl._capture_playfield_pixmap = lambda: object()
+        ctrl._capture_playfield_frame_and_calib = lambda: (object(), 0.0, 0.0)
         ctrl.on_refresh_playfield()
 
         assert any("ERROR" in e or "callback" in e.lower() for e in log)

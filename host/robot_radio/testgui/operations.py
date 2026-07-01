@@ -11,8 +11,8 @@ Sync Pose from Camera                                          Read tag-100 from
 Zero Encoders                                                  Send ``ZERO enc``
 STOP                                                           Send ``STOP``
 Clear Traces                                                   Call ``clear_traces_cb`` hook
-Refresh Playfield                                              Read cam-3 frame from daemon;
-                                                               deskew via homography;
+Refresh Playfield                                              Read cam-3 frame + calib from
+                                                               daemon; deskew via daemon H;
                                                                call ``refresh_playfield_cb``
 STREAM on/off toggle                                          Send ``STREAM 50`` / ``STREAM 0``
 Set Robot @ 0,0                                                Call ``set_origin_cb`` hook
@@ -39,18 +39,28 @@ Three callables accepted at construction time (or settable as attributes):
     Called when the user clicks "Clear Traces".  Should clear all four
     polylines in the ``TraceModel``.  No-ops safely if ``None``.
 
-``refresh_playfield_cb(pixmap)``
-    Called with a deskewed ``QPixmap`` when the user clicks "Refresh Playfield".
-    The panel reads the playfield frame from the aprilcam daemon (camera 3),
-    deskews it via the playfield homography, and constructs a ``QPixmap``;
-    ticket 008 wires this to replace the canvas background.
+``refresh_playfield_cb(pixmap, origin_x, origin_y)``
+    Called with a deskewed ``QPixmap`` AND the daemon's A1 origin (cm) when
+    the user clicks "Refresh Playfield".  The panel reads the playfield frame
+    and calibration from the aprilcam daemon (camera index ``_PLAYFIELD_CAMERA_INDEX``),
+    deskews via the daemon's live homography H, and passes both the rectified
+    ``QPixmap`` and the A1 origin to this hook.  The canvas wires
+    ``CanvasController.set_background(pixmap, origin_x=ox, origin_y=oy)`` here
+    so the world→pixel transform updates atomically with the background.
     No-ops safely if ``None``.
 
 ``set_origin_cb``
     Called when the user clicks "Set Robot @ 0,0".  Should re-anchor the
     ``TraceModel`` so the current pose maps to (0, 0), clear traces, and
-    move the avatar to centre.  Display-only: no motion command is sent.
-    No-ops safely if ``None``.
+    move the avatar to world (0,0) with heading reset to 0°.
+    Display-only: no motion command is sent.  No-ops safely if ``None``.
+
+Sim fallback
+------------
+In sim mode there is no daemon.  The canvas uses the static
+``playfield_calibration.json`` homography and assumes
+origin = (field_w/2, field_h/2) so world (0,0) = image centre, which is
+correct for the simulator's true-start pose.
 
 Pure helper (Qt-free, importable in headless tests)
 ----------------------------------------------------
@@ -122,7 +132,7 @@ def build_panel(
     transport_ref: dict,
     *,
     clear_traces_cb: Callable[[], None] | None = None,
-    refresh_playfield_cb: Callable[["object"], None] | None = None,
+    refresh_playfield_cb: "Callable[[object, float, float], None] | None" = None,
     set_origin_cb: Callable[[], None] | None = None,
 ) -> "tuple[object, object]":
     """Build and return the operations panel ``QGroupBox``.
@@ -139,12 +149,15 @@ def build_panel(
         Optional hook called when "Clear Traces" is clicked.  Ticket 008
         wires this to ``TraceModel.clear()``.
     refresh_playfield_cb:
-        Optional hook called with a deskewed ``QPixmap`` when "Refresh
-        Playfield" is clicked.  Ticket 008 wires this to update the canvas
-        background.
+        Optional hook called with ``(pixmap, origin_x, origin_y)`` when
+        "Refresh Playfield" is clicked.  ``pixmap`` is the deskewed ``QPixmap``
+        from the daemon; ``origin_x`` and ``origin_y`` are the daemon's A1
+        origin in cm.  Ticket 008 wires this to ``CanvasController.set_background``
+        so the transform updates atomically with the background.
     set_origin_cb:
         Optional hook called when "Set Robot @ 0,0" is clicked.  Should
-        re-anchor the TraceModel, clear traces, and move the avatar to centre.
+        re-anchor the TraceModel, clear traces, and move the avatar to world
+        (0,0) with heading reset to 0°.
         Display-only: no motion command is sent.  No-ops safely if ``None``.
 
     Returns
@@ -301,12 +314,15 @@ class OpsController:
     clear_traces_cb:
         Hook for "Clear Traces".  Ticket 008 wires this to ``TraceModel.clear()``.
     refresh_playfield_cb:
-        Hook for "Refresh Playfield".  Called with a deskewed ``QPixmap``
-        (or ``None`` if image capture/deskew fails).  Ticket 008 wires this
-        to update the canvas.
+        Hook for "Refresh Playfield".  Called with ``(pixmap, origin_x, origin_y)``
+        where ``pixmap`` is a deskewed ``QPixmap`` and ``origin_x``/``origin_y``
+        are the daemon's A1 origin in cm.  Ticket 008 wires this to
+        ``CanvasController.set_background`` so the transform and background
+        update atomically.
     set_origin_cb:
-        Hook for "Set Robot @ 0,0".  Re-anchors the TraceModel and moves the
-        avatar to centre.  Display-only: no motion command is sent.
+        Hook for "Set Robot @ 0,0".  Re-anchors the TraceModel, moves the
+        avatar to world (0,0), and resets heading to 0°.  Display-only: no
+        motion command is sent.
     """
 
     def __init__(
@@ -323,7 +339,7 @@ class OpsController:
         origin_btn: "object",
         transport_buttons: list,
         clear_traces_cb: Callable[[], None] | None = None,
-        refresh_playfield_cb: Callable[["object"], None] | None = None,
+        refresh_playfield_cb: "Callable[[object, float, float], None] | None" = None,
         set_origin_cb: Callable[[], None] | None = None,
     ) -> None:
         self._transport_ref = transport_ref
@@ -473,7 +489,14 @@ class OpsController:
         self._log("[INFO] Set Robot @ 0,0: avatar anchored to centre")
 
     def on_refresh_playfield(self) -> None:
-        """Capture a playfield image from aprilcam and call refresh_playfield_cb."""
+        """Capture a playfield image + calibration from aprilcam and call refresh_playfield_cb.
+
+        Calls ``refresh_playfield_cb(pixmap, origin_x, origin_y)`` where:
+        - ``pixmap`` is the deskewed ``QPixmap`` (warped using the daemon's H).
+        - ``origin_x``, ``origin_y`` are the A1 origin (cm, corner-origin frame)
+          from the daemon's TagFrame; the canvas uses these so world (0,0)
+          maps to tag 1's real pixel position.
+        """
         transport = self._transport_ref.get("transport")
         if transport is None:
             self._log("[WARN] Refresh Playfield: not connected")
@@ -481,22 +504,27 @@ class OpsController:
 
         self._log(f"[INFO] Refresh Playfield: capturing from camera {_PLAYFIELD_CAMERA_INDEX}...")
         try:
-            pixmap = self._capture_playfield_pixmap()
+            result = self._capture_playfield_frame_and_calib()
         except Exception as exc:
             self._log(f"[WARN] Refresh Playfield: capture failed: {exc}")
             return
 
-        if pixmap is None:
+        if result is None:
             self._log("[WARN] Refresh Playfield: no image from daemon (is it running?)")
             return
 
+        pixmap, origin_x, origin_y = result
+
         if self.refresh_playfield_cb is not None:
             try:
-                self.refresh_playfield_cb(pixmap)
+                self.refresh_playfield_cb(pixmap, origin_x, origin_y)
             except Exception as exc:
                 self._log(f"[ERROR] Refresh Playfield: callback raised: {exc}")
                 return
-        self._log("[INFO] Refresh Playfield: done")
+        self._log(
+            f"[INFO] Refresh Playfield: done "
+            f"(origin=({origin_x:.1f},{origin_y:.1f}) cm)"
+        )
 
     def on_stream_toggled(self, checked: bool) -> None:
         """Toggle telemetry streaming; send ``STREAM 50`` or ``STREAM 0``."""
@@ -570,11 +598,18 @@ class OpsController:
                 pass
         return pose
 
-    def _capture_playfield_pixmap(self) -> "object | None":
-        """Capture a frame from camera *_PLAYFIELD_CAMERA_INDEX* as a ``QPixmap``.
+    def _capture_playfield_frame_and_calib(
+        self,
+    ) -> "tuple[object, float, float] | None":
+        """Capture a frame from the aprilcam daemon and deskew via its live homography.
 
-        Returns a ``QPixmap`` or ``None`` if the daemon is not available or the
-        frame cannot be converted.
+        Returns ``(QPixmap, origin_x, origin_y)`` on success, or ``None`` if the
+        daemon is not available.  Raises on connection errors so the caller can log.
+
+        The deskew uses the daemon's TagFrame homography H (not the static JSON),
+        so the rectified image always matches the daemon's current calibration.
+        origin_x / origin_y are the daemon's A1 offset (corner-origin cm) — the
+        canvas uses these to place world (0,0) at tag 1's real pixel position.
         """
         try:
             from aprilcam.config import Config  # type: ignore[import]
@@ -588,99 +623,120 @@ class OpsController:
             if not cams:
                 raise RuntimeError("aprilcam daemon reports no cameras")
 
-            # Find camera 3 by index, or fall back to cams[0].
-            cam = None
+            # Select the playfield camera by name-based heuristic: prefer cameras
+            # whose name contains the index digit, or fall back to cams[0].
+            cam_name: str = cams[0]
             for c in cams:
-                if getattr(c, "index", None) == _PLAYFIELD_CAMERA_INDEX:
-                    cam = c
+                if str(_PLAYFIELD_CAMERA_INDEX) in str(c):
+                    cam_name = c
                     break
-            if cam is None:
-                cam = cams[0]
-                _log.debug(
-                    "Camera %d not found; falling back to %s",
-                    _PLAYFIELD_CAMERA_INDEX,
-                    getattr(cam, "index", "?"),
-                )
+            _log.debug("Refresh Playfield: using camera %r", cam_name)
 
-            # Capture a frame.  The DaemonControl API returns a raw JPEG/PNG
-            # buffer via capture_frame().  If unavailable, try get_frame().
-            image_bytes: bytes | None = None
-            if hasattr(dc, "capture_frame"):
-                image_bytes = dc.capture_frame(cam)
-            elif hasattr(dc, "get_frame"):
-                frame = dc.get_frame(cam)
-                image_bytes = getattr(frame, "jpeg_bytes", None) or getattr(
-                    frame, "image_bytes", None
-                )
+            # Capture BGR frame + calibration in a single daemon session.
+            raw_bgr = dc.capture_frame(cam_name)
+            tag_frame = dc.get_tags(cam_name)
         finally:
             try:
                 dc.close()
             except Exception:
                 pass
 
-        if not image_bytes:
+        if raw_bgr is None:
             return None
 
-        return _deskew_bytes_to_pixmap(image_bytes)
+        return _deskew_bgr_with_tag_frame(raw_bgr, tag_frame)
 
 
-def _bytes_to_pixmap(image_bytes: bytes) -> "object | None":
-    """Convert raw image bytes to a ``QPixmap``.
+def _bgr_ndarray_to_pixmap(bgr: "object") -> "object | None":
+    """Convert a BGR numpy ndarray to a ``QPixmap``.
 
-    Returns ``None`` if the bytes cannot be decoded or PySide6 is unavailable.
+    Returns ``None`` on failure or if PySide6 is unavailable.
     """
     try:
-        from PySide6.QtGui import QPixmap  # type: ignore[import-untyped]
-        from PySide6.QtCore import QByteArray  # type: ignore[import-untyped]
-        pixmap = QPixmap()
-        ok = pixmap.loadFromData(QByteArray(image_bytes))
-        if ok and not pixmap.isNull():
-            return pixmap
-        return None
+        import numpy as np
+        from PySide6.QtGui import QImage, QPixmap  # type: ignore[import-untyped]
+        bgr_arr = np.ascontiguousarray(bgr)
+        h, w, ch = bgr_arr.shape
+        rgb = bgr_arr[:, :, ::-1].copy()
+        qi = QImage(rgb.data, w, h, w * ch, QImage.Format.Format_RGB888)
+        pm = QPixmap.fromImage(qi)
+        if pm.isNull():
+            return None
+        return pm
     except Exception:
-        _log.debug("_bytes_to_pixmap failed", exc_info=True)
+        _log.debug("_bgr_ndarray_to_pixmap failed", exc_info=True)
         return None
 
 
-def _deskew_bytes_to_pixmap(image_bytes: bytes) -> "object | None":
-    """Decode *image_bytes*, deskew via the playfield homography, and return a ``QPixmap``.
+def _deskew_bgr_with_tag_frame(
+    raw_bgr: "object",
+    tag_frame: "object",
+    ppc: float | None = None,
+) -> "tuple[object, float, float] | None":
+    """Deskew *raw_bgr* using the daemon TagFrame's homography and return calibration.
 
-    Uses the same ``PlayfieldCalibration`` and ``_PIXELS_PER_CM`` as
-    ``canvas._load_deskewed_bg_pixmap`` so a camera-3 refresh produces a
-    rectified image geometrically identical to the default background.
+    Uses the live daemon homography (not the static JSON) so the rectified image
+    always matches the daemon's current calibration.
 
-    Falls back to ``_bytes_to_pixmap`` (un-deskewed) if ``cv2`` or the
-    calibration is unavailable.
+    Parameters
+    ----------
+    raw_bgr:
+        Raw BGR ndarray from ``DaemonControl.capture_frame()``.
+    tag_frame:
+        ``TagFrame`` from ``DaemonControl.get_tags()`` — carries ``.homography``
+        (3×3), ``.origin_x``, ``.origin_y``, ``.field_width_cm``,
+        ``.field_height_cm``.
+    ppc:
+        Pixels per cm.  If ``None``, uses ``canvas._PIXELS_PER_CM`` (8.0).
+
+    Returns
+    -------
+    ``(QPixmap, origin_x, origin_y)`` on success, or ``None`` on failure.
+    origin_x and origin_y are the daemon's A1 offset in cm (corner-origin frame).
     """
     try:
         import numpy as np
         import cv2
-        from robot_radio.media.movie import _deskew_frame
-        from robot_radio.testgui.canvas import _build_playfield_calibration, _PIXELS_PER_CM
+        from robot_radio.testgui.canvas import _PIXELS_PER_CM
 
-        calib = _build_playfield_calibration()
-        if calib is None:
-            raise RuntimeError("Playfield calibration unavailable")
+        if ppc is None:
+            ppc = _PIXELS_PER_CM
 
-        # Decode JPEG/PNG bytes → BGR ndarray.
-        buf = np.frombuffer(image_bytes, dtype=np.uint8)
-        frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
-        if frame is None:
-            raise RuntimeError("cv2.imdecode returned None")
+        homography_raw = getattr(tag_frame, "homography", None)
+        if homography_raw is None:
+            raise RuntimeError("TagFrame has no homography (camera not calibrated?)")
 
-        deskewed = _deskew_frame(frame, calib, _PIXELS_PER_CM)
+        H = np.array(homography_raw, dtype=float)
+        if H.shape != (3, 3):
+            raise RuntimeError(f"Homography shape {H.shape!r}; expected (3,3)")
 
-        # BGR → RGB → QPixmap.
-        rgb = deskewed[:, :, ::-1].copy()
-        h, w, ch = rgb.shape
-        from PySide6.QtGui import QImage, QPixmap  # type: ignore[import-untyped]
-        qi = QImage(rgb.data, w, h, w * ch, QImage.Format.Format_RGB888)
-        pm = QPixmap.fromImage(qi)
-        if pm.isNull():
-            raise RuntimeError("QPixmap.fromImage returned null")
-        _log.debug("Deskewed cam-3 refresh: %dx%d px", w, h)
-        return pm
+        fw = float(getattr(tag_frame, "field_width_cm", 0.0))
+        fh = float(getattr(tag_frame, "field_height_cm", 0.0))
+        origin_x = float(getattr(tag_frame, "origin_x", 0.0))
+        origin_y = float(getattr(tag_frame, "origin_y", 0.0))
+
+        if fw <= 0 or fh <= 0:
+            raise RuntimeError(
+                f"TagFrame field dims ({fw},{fh}) invalid; is the camera calibrated?"
+            )
+
+        # warp = diag(ppc, ppc, 1) @ H  (matches PlayfieldCalibration.warp_matrix)
+        scale = np.array([[ppc, 0, 0], [0, ppc, 0], [0, 0, 1]], dtype=float)
+        warp = scale @ H
+        out_w = max(1, int(round(fw * ppc)))
+        out_h = max(1, int(round(fh * ppc)))
+
+        deskewed = cv2.warpPerspective(raw_bgr, warp, (out_w, out_h))
+        _log.debug(
+            "Deskewed via daemon H: %dx%d px, origin=(%.1f,%.1f) cm",
+            out_w, out_h, origin_x, origin_y,
+        )
+
+        pixmap = _bgr_ndarray_to_pixmap(deskewed)
+        if pixmap is None:
+            raise RuntimeError("Failed to convert deskewed BGR to QPixmap")
+        return pixmap, origin_x, origin_y
 
     except Exception as exc:
-        _log.debug("_deskew_bytes_to_pixmap failed (%s); falling back to raw pixmap", exc)
-        return _bytes_to_pixmap(image_bytes)
+        _log.debug("_deskew_bgr_with_tag_frame failed (%s)", exc)
+        return None

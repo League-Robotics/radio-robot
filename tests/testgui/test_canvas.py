@@ -748,3 +748,321 @@ class TestAvatarCenter:
         sig = inspect.signature(ctrl.reset_avatar_to_center)
         assert len(sig.parameters) == 0, "reset_avatar_to_center takes no args"
         ctrl.reset_avatar_to_center()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# A1-centred world→pixel mapping (daemon-origin path)
+# ---------------------------------------------------------------------------
+
+
+class TestA1CentredWorldToPixel:
+    """Daemon A1-centred world→pixel transform: world (0,0) → (ppc*ox, ppc*oy).
+
+    The live-camera path uses origin_x/origin_y from the daemon's TagFrame,
+    NOT field_w/2 or field_h/2.  This tests the core correctness of the
+    A1-centred formula:
+
+        px = ppc * (x_cm + origin_x)
+        py = ppc * (origin_y - y_cm)   # y-flip
+    """
+
+    def test_make_world_to_px_origin_at_corner(self):
+        """origin=(0,0) means world (0,0) maps to pixel (0,0) — field corner."""
+        from robot_radio.testgui.canvas import _make_world_to_px, _PIXELS_PER_CM
+
+        ppc = _PIXELS_PER_CM
+        f = _make_world_to_px(origin_x=0.0, origin_y=0.0, ppc=ppc)
+        px, py = f(0.0, 0.0)
+        assert px == pytest.approx(0.0)
+        assert py == pytest.approx(0.0)
+
+    def test_make_world_to_px_a1_origin_off_centre(self):
+        """origin=(ox, oy) maps world (0,0) to pixel (ppc*ox, ppc*oy) — NOT field centre."""
+        from robot_radio.testgui.canvas import _make_world_to_px, _PIXELS_PER_CM
+
+        ppc = _PIXELS_PER_CM
+        ox, oy = 30.0, 20.0   # not field_w/2 or field_h/2
+        f = _make_world_to_px(origin_x=ox, origin_y=oy, ppc=ppc)
+        px, py = f(0.0, 0.0)
+        assert px == pytest.approx(ppc * ox), f"expected px={ppc*ox}, got {px}"
+        assert py == pytest.approx(ppc * oy), f"expected py={ppc*oy}, got {py}"
+
+    def test_make_world_to_px_non_centred_differs_from_centre(self):
+        """When ox != fw/2, the origin pixel differs from image centre."""
+        from robot_radio.testgui.canvas import _make_world_to_px, _PIXELS_PER_CM, _load_calibration
+
+        ppc = _PIXELS_PER_CM
+        fw, fh = _load_calibration()
+        half_w = fw / 2.0
+        half_h = fh / 2.0
+        # Use a clearly off-centre origin.
+        ox, oy = half_w * 0.3, half_h * 0.7
+        f = _make_world_to_px(origin_x=ox, origin_y=oy, ppc=ppc)
+        px, py = f(0.0, 0.0)
+        # Must NOT equal field centre.
+        assert px != pytest.approx(ppc * half_w, abs=1.0), (
+            "Non-centred origin should not map (0,0) to image centre x"
+        )
+        assert py != pytest.approx(ppc * half_h, abs=1.0), (
+            "Non-centred origin should not map (0,0) to image centre y"
+        )
+        # Must equal (ppc*ox, ppc*oy).
+        assert px == pytest.approx(ppc * ox)
+        assert py == pytest.approx(ppc * oy)
+
+    def test_make_world_to_px_east_increment(self):
+        """Moving 1 cm east always increases px by ppc regardless of origin."""
+        from robot_radio.testgui.canvas import _make_world_to_px, _PIXELS_PER_CM
+
+        ppc = _PIXELS_PER_CM
+        f = _make_world_to_px(origin_x=40.0, origin_y=25.0, ppc=ppc)
+        px0, py0 = f(0.0, 0.0)
+        px1, py1 = f(1.0, 0.0)
+        assert px1 - px0 == pytest.approx(ppc, abs=0.01)
+        assert py1 == pytest.approx(py0, abs=0.01)
+
+    def test_make_world_to_px_north_decrement(self):
+        """Moving 1 cm north always decreases py by ppc (y-flip) regardless of origin."""
+        from robot_radio.testgui.canvas import _make_world_to_px, _PIXELS_PER_CM
+
+        ppc = _PIXELS_PER_CM
+        f = _make_world_to_px(origin_x=40.0, origin_y=25.0, ppc=ppc)
+        px0, py0 = f(0.0, 0.0)
+        px1, py1 = f(0.0, 1.0)
+        assert py0 - py1 == pytest.approx(ppc, abs=0.01)
+        assert px1 == pytest.approx(px0, abs=0.01)
+
+    def test_set_background_updates_origin_and_transform(self, qapp):
+        """set_background(pixmap, origin_x=ox, origin_y=oy) atomically updates world→px."""
+        from robot_radio.testgui.canvas import build_canvas, _PIXELS_PER_CM
+        from PySide6.QtGui import QPixmap, QColor  # type: ignore[import-untyped]
+
+        model = _make_trace_model()
+        _, ctrl = build_canvas(model)
+
+        ppc = _PIXELS_PER_CM
+        ox, oy = 22.0, 17.5   # A1 offset that is NOT field centre
+        pm = QPixmap(int(80 * ppc), int(60 * ppc))
+        pm.fill(QColor(100, 120, 140))
+
+        ctrl.set_background(pm, origin_x=ox, origin_y=oy)
+
+        # origin must be stored
+        assert ctrl._origin_x == pytest.approx(ox)
+        assert ctrl._origin_y == pytest.approx(oy)
+
+        # world (0,0) must map to (ppc*ox, ppc*oy)
+        px, py = ctrl._world_to_px(0.0, 0.0)
+        assert px == pytest.approx(ppc * ox, abs=0.1)
+        assert py == pytest.approx(ppc * oy, abs=0.1)
+
+    def test_set_background_without_origin_preserves_existing(self, qapp):
+        """set_background(pixmap) without origin params preserves the existing origin."""
+        from robot_radio.testgui.canvas import build_canvas, _PIXELS_PER_CM
+        from PySide6.QtGui import QPixmap, QColor  # type: ignore[import-untyped]
+
+        model = _make_trace_model()
+        _, ctrl = build_canvas(model)
+        ppc = _PIXELS_PER_CM
+
+        # First set a custom origin.
+        ox, oy = 33.0, 21.0
+        pm1 = QPixmap(int(80 * ppc), int(60 * ppc))
+        pm1.fill(QColor(100, 120, 140))
+        ctrl.set_background(pm1, origin_x=ox, origin_y=oy)
+        assert ctrl._origin_x == pytest.approx(ox)
+
+        # Set background again with no origin params — origin must be preserved.
+        pm2 = QPixmap(int(80 * ppc), int(60 * ppc))
+        pm2.fill(QColor(50, 60, 70))
+        ctrl.set_background(pm2)
+
+        assert ctrl._origin_x == pytest.approx(ox), (
+            "Origin must be preserved when set_background called without origin params"
+        )
+        assert ctrl._origin_y == pytest.approx(oy)
+
+
+# ---------------------------------------------------------------------------
+# Sim fallback path — origin at field centre
+# ---------------------------------------------------------------------------
+
+
+class TestSimFallbackOrigin:
+    """In sim/static mode, build_canvas() uses origin = (fw/2, fh/2) so world (0,0)
+    maps to image centre — the simulator's true start pose is (0,0).
+    """
+
+    @pytest.fixture
+    def ctrl(self, qapp):
+        from robot_radio.testgui.canvas import build_canvas
+
+        model = _make_trace_model()
+        _, ctrl = build_canvas(model)
+        return ctrl
+
+    def test_sim_fallback_origin_is_field_centre(self, ctrl):
+        """build_canvas() default origin = (fw/2, fh/2) — world (0,0) = image centre."""
+        from robot_radio.testgui.canvas import _load_calibration
+
+        fw, fh = _load_calibration()
+        assert ctrl._origin_x == pytest.approx(fw / 2.0, abs=0.1)
+        assert ctrl._origin_y == pytest.approx(fh / 2.0, abs=0.1)
+
+    def test_sim_fallback_world_zero_is_image_centre(self, ctrl):
+        """Sim fallback: world (0,0) maps to the image centre pixel."""
+        px, py = ctrl._world_to_px(0.0, 0.0)
+        assert px == pytest.approx(ctrl._img_w / 2.0, abs=2.0)
+        assert py == pytest.approx(ctrl._img_h / 2.0, abs=2.0)
+
+
+# ---------------------------------------------------------------------------
+# reset_avatar_to_center — heading reset
+# ---------------------------------------------------------------------------
+
+
+class TestResetAvatarHeading:
+    """reset_avatar_to_center() must reset the avatar heading to 0° (east).
+
+    The Qt rotation formula is ``rotation_deg = 90 - degrees(yaw_rad)``.
+    For yaw_rad=0 (east), rotation_deg = 90.0.  The reset must leave
+    marker_group.rotation() == 90.0.
+    """
+
+    @pytest.fixture
+    def canvas_setup(self, qapp):
+        from robot_radio.testgui.canvas import build_canvas
+
+        model = _make_trace_model()
+        model.anchor(0.0, 0.0, 0.0)
+        _, ctrl = build_canvas(model)
+        return model, ctrl
+
+    def test_reset_leaves_heading_zero(self, canvas_setup):
+        """reset_avatar_to_center() → rotation == 90.0 (yaw=0 east)."""
+        model, ctrl = canvas_setup
+
+        # Rotate to some non-zero heading.
+        ctrl.refresh(fused_yaw_rad=math.pi / 2)   # north, rotation=0
+        assert ctrl._marker_group.rotation() != pytest.approx(90.0, abs=1.0), (
+            "Pre-condition: rotation should not be 90 at yaw=pi/2"
+        )
+
+        # Reset — must go back to 90° (heading east = 0 rad).
+        ctrl.reset_avatar_to_center()
+        assert ctrl._marker_group.rotation() == pytest.approx(90.0, abs=0.01), (
+            f"reset_avatar_to_center: rotation={ctrl._marker_group.rotation():.2f}° "
+            "should be 90.0° (east / yaw=0)"
+        )
+
+    def test_reset_heading_after_arbitrary_yaw(self, canvas_setup):
+        """reset_avatar_to_center() always resets to 90° regardless of prior heading."""
+        model, ctrl = canvas_setup
+
+        for yaw in (math.pi / 4, math.pi, 3 * math.pi / 2, -math.pi / 6):
+            ctrl.refresh(fused_yaw_rad=yaw)
+            ctrl.reset_avatar_to_center()
+            assert ctrl._marker_group.rotation() == pytest.approx(90.0, abs=0.01), (
+                f"After reset from yaw={math.degrees(yaw):.1f}°, "
+                f"rotation should be 90.0°, got {ctrl._marker_group.rotation():.2f}°"
+            )
+
+    def test_reset_keeps_avatar_visible(self, canvas_setup):
+        """Avatar must remain visible after heading reset."""
+        model, ctrl = canvas_setup
+        ctrl.refresh(fused_yaw_rad=1.0)
+        ctrl.reset_avatar_to_center()
+        assert ctrl._marker_group.isVisible()
+
+
+# ---------------------------------------------------------------------------
+# _deskew_bgr_with_tag_frame (operations helper) — daemon H path
+# ---------------------------------------------------------------------------
+
+
+class TestDeskewWithTagFrame:
+    """_deskew_bgr_with_tag_frame: uses daemon H to warp, returns (pixmap, ox, oy)."""
+
+    def _make_fake_tag_frame(self, ox: float = 30.0, oy: float = 20.0,
+                             fw: float = 80.0, fh: float = 60.0) -> object:
+        """Build a minimal fake TagFrame for testing."""
+        import numpy as np
+
+        # Identity homography (raw-pixel = cm*1, i.e. 1 px/cm → ppc scales it).
+        # In practice H maps raw pixels to corner-origin cm; for a unit test we
+        # just need a real 3×3 so cv2.warpPerspective doesn't fail.
+        H = np.eye(3, dtype=float).tolist()
+
+        class FakeTagFrame:
+            homography = H
+            origin_x = ox
+            origin_y = oy
+            field_width_cm = fw
+            field_height_cm = fh
+
+        return FakeTagFrame()
+
+    def test_returns_tuple_with_origin(self):
+        """Returns (QPixmap, origin_x, origin_y) matching the TagFrame."""
+        import numpy as np
+        from robot_radio.testgui.operations import _deskew_bgr_with_tag_frame
+
+        ox, oy = 25.0, 18.5
+        fake_tf = self._make_fake_tag_frame(ox=ox, oy=oy, fw=80.0, fh=60.0)
+        # Small synthetic BGR image.
+        raw_bgr = np.zeros((480, 640, 3), dtype=np.uint8)
+        result = _deskew_bgr_with_tag_frame(raw_bgr, fake_tf, ppc=2.0)
+
+        assert result is not None, "_deskew_bgr_with_tag_frame returned None"
+        pixmap, got_ox, got_oy = result
+        assert got_ox == pytest.approx(ox)
+        assert got_oy == pytest.approx(oy)
+
+    def test_pixmap_size_matches_field_dims(self):
+        """Output QPixmap dimensions = (round(fw*ppc), round(fh*ppc))."""
+        import numpy as np
+        from robot_radio.testgui.operations import _deskew_bgr_with_tag_frame
+
+        fw, fh, ppc = 80.0, 60.0, 2.0
+        fake_tf = self._make_fake_tag_frame(fw=fw, fh=fh)
+        raw_bgr = np.zeros((480, 640, 3), dtype=np.uint8)
+        result = _deskew_bgr_with_tag_frame(raw_bgr, fake_tf, ppc=ppc)
+
+        assert result is not None
+        pixmap, _, _ = result
+        assert pixmap.width() == round(fw * ppc)
+        assert pixmap.height() == round(fh * ppc)
+
+    def test_no_homography_returns_none(self):
+        """Returns None when TagFrame.homography is None (uncalibrated camera)."""
+        import numpy as np
+        from robot_radio.testgui.operations import _deskew_bgr_with_tag_frame
+
+        class FakeUncalibratedFrame:
+            homography = None
+            origin_x = 0.0
+            origin_y = 0.0
+            field_width_cm = 80.0
+            field_height_cm = 60.0
+
+        raw_bgr = np.zeros((480, 640, 3), dtype=np.uint8)
+        result = _deskew_bgr_with_tag_frame(raw_bgr, FakeUncalibratedFrame(), ppc=2.0)
+        assert result is None, "Should return None when homography is None"
+
+    def test_world_zero_maps_to_ppc_times_origin(self):
+        """With the returned (ox, oy), world (0,0) maps to (ppc*ox, ppc*oy) via canvas formula."""
+        import numpy as np
+        from robot_radio.testgui.operations import _deskew_bgr_with_tag_frame
+        from robot_radio.testgui.canvas import _make_world_to_px
+
+        ox, oy, ppc = 22.0, 16.0, 4.0
+        fake_tf = self._make_fake_tag_frame(ox=ox, oy=oy, fw=80.0, fh=60.0)
+        raw_bgr = np.zeros((480, 640, 3), dtype=np.uint8)
+        result = _deskew_bgr_with_tag_frame(raw_bgr, fake_tf, ppc=ppc)
+
+        assert result is not None
+        _, got_ox, got_oy = result
+        w2px = _make_world_to_px(origin_x=got_ox, origin_y=got_oy, ppc=ppc)
+        px, py = w2px(0.0, 0.0)
+        assert px == pytest.approx(ppc * ox, abs=0.1)
+        assert py == pytest.approx(ppc * oy, abs=0.1)
