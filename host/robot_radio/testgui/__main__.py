@@ -17,7 +17,7 @@ def _build_main_window():  # type: ignore[return]
 
     Layout (left-to-right via QSplitter):
     - Left panel: transport selector QComboBox, port QLineEdit, Connect
-      button, placeholder command rows, and placeholder operations panel.
+      button, schema-driven command rows, and placeholder operations panel.
     - Right panel: placeholder QGraphicsView canvas (top) and timestamped
       log pane QPlainTextEdit (bottom).
 
@@ -29,11 +29,18 @@ def _build_main_window():  # type: ignore[return]
     The log pane receives all sent and received lines via the transport's
     on_log callback, delivered safely from background threads via
     QMetaObject.invokeMethod.
+
+    Command rows are built from the ``COMMANDS`` schema in
+    ``robot_radio.testgui.commands``.  Each row has a label, one labeled
+    input field per parameter, and a Send button.  Send buttons are disabled
+    when no transport is connected.  Clicking Send assembles the wire string
+    via ``build_wire_string`` and calls ``transport.command(line)``.
     """
     # PySide6 imports are intentionally deferred here.
     from PySide6.QtWidgets import (  # type: ignore[import-untyped]
         QApplication,
         QComboBox,
+        QDoubleSpinBox,
         QGraphicsScene,
         QGraphicsView,
         QHBoxLayout,
@@ -42,6 +49,7 @@ def _build_main_window():  # type: ignore[return]
         QMainWindow,
         QPlainTextEdit,
         QPushButton,
+        QSpinBox,
         QSplitter,
         QVBoxLayout,
         QWidget,
@@ -56,6 +64,7 @@ def _build_main_window():  # type: ignore[return]
         SimTransport,
         list_ports,
     )
+    from robot_radio.testgui.commands import COMMANDS, build_wire_string
 
     # QApplication must exist before any QWidget is created.  We create one
     # only if one does not already exist (e.g. during testing).
@@ -122,15 +131,111 @@ def _build_main_window():  # type: ignore[return]
     btn_layout.addWidget(disconnect_btn)
     left_layout.addWidget(btn_row)
 
-    # Placeholder: command rows area
-    cmd_placeholder = QWidget()
-    cmd_placeholder.setObjectName("cmd_rows_placeholder")
-    cmd_placeholder.setMinimumHeight(120)
-    cmd_label = QLabel("(command rows — coming in later tickets)")
-    cmd_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    cmd_inner = QVBoxLayout(cmd_placeholder)
-    cmd_inner.addWidget(cmd_label)
-    left_layout.addWidget(cmd_placeholder)
+    # Command rows — built from the COMMANDS schema.
+    # Each row: label | field1 | field2 … | Send button
+    # All Send buttons are collected so we can enable/disable them together.
+    cmd_rows_widget = QWidget()
+    cmd_rows_widget.setObjectName("cmd_rows")
+    cmd_rows_layout = QVBoxLayout(cmd_rows_widget)
+    cmd_rows_layout.setContentsMargins(0, 4, 0, 4)
+    cmd_rows_layout.setSpacing(4)
+
+    # List of all Send buttons — disabled until a transport connects.
+    _send_buttons: list[QPushButton] = []
+
+    def _build_command_row(spec) -> tuple[QWidget, list]:
+        """Build one command row widget from a CommandSpec.
+
+        Returns (row_widget, field_getters) where ``field_getters`` is an
+        ordered list of callables; each callable returns the current numeric
+        value of the corresponding field.
+        """
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(4)
+
+        # Command verb label (fixed-width so rows align).
+        verb_label = QLabel(spec["label"])
+        verb_label.setFixedWidth(44)
+        row_layout.addWidget(verb_label)
+
+        field_getters: list = []
+
+        for param in spec["params"]:
+            name = param["name"]
+            unit = param.get("unit", "")
+            p_type = param.get("type", int)
+            p_min = param.get("min", -10000)
+            p_max = param.get("max", 10000)
+            p_default = param.get("default", 0)
+
+            # Short label above (or beside) the field.
+            param_label = QLabel(f"{name}:")
+            param_label.setFixedWidth(46)
+            row_layout.addWidget(param_label)
+
+            if p_type is float:
+                spin = QDoubleSpinBox()
+                spin.setRange(float(p_min), float(p_max))
+                spin.setValue(float(p_default))
+                spin.setDecimals(1)
+                spin.setSuffix(f" {unit}" if unit else "")
+                spin.setFixedWidth(80)
+                row_layout.addWidget(spin)
+                field_getters.append(lambda s=spin: s.value())
+            else:
+                spin = QSpinBox()
+                spin.setRange(int(p_min), int(p_max))
+                spin.setValue(int(p_default))
+                spin.setSuffix(f" {unit}" if unit else "")
+                spin.setFixedWidth(80)
+                row_layout.addWidget(spin)
+                field_getters.append(lambda s=spin: s.value())
+
+        send_btn = QPushButton("Send")
+        send_btn.setObjectName(f"send_btn_{spec['label'].lower()}")
+        send_btn.setEnabled(False)
+        send_btn.setFixedWidth(52)
+        row_layout.addWidget(send_btn)
+        row_layout.addStretch()
+
+        _send_buttons.append(send_btn)
+        return row, field_getters
+
+    # Wire up each row's Send button to build + dispatch the wire string.
+    def _wire_send_button(btn: QPushButton, spec, getters: list) -> None:
+        """Connect btn.clicked to a closure that builds + sends the wire string."""
+        def _on_send():
+            transport: Transport | None = _state.get("transport")
+            if transport is None:
+                _append_log("[WARN] Not connected")
+                return
+            values = {
+                param["name"]: getter()
+                for param, getter in zip(spec["params"], getters)
+            }
+            line = build_wire_string(spec, values)
+            _append_log(f"TX {line}")
+            try:
+                reply = transport.command(line, read_ms=500)
+                if reply:
+                    _append_log(f"RX {reply.strip()}")
+            except Exception as exc:
+                _append_log(f"[ERROR] {exc}")
+
+        btn.clicked.connect(_on_send)
+
+    # Build all six command rows.
+    _row_send_getters: list[tuple[QPushButton, "object", list]] = []
+    for cmd_spec in COMMANDS:
+        row_widget, getters = _build_command_row(cmd_spec)
+        cmd_rows_layout.addWidget(row_widget)
+        # Find the Send button just appended.
+        btn = _send_buttons[-1]
+        _row_send_getters.append((btn, cmd_spec, getters))
+
+    left_layout.addWidget(cmd_rows_widget)
 
     # Placeholder: operations panel
     ops_placeholder = QWidget()
@@ -202,6 +307,10 @@ def _build_main_window():  # type: ignore[return]
     # Trigger once to set initial state.
     _on_transport_changed(transport_combo.currentIndex())
 
+    # Wire Send buttons — must happen after _append_log / _state are in scope.
+    for _btn, _spec, _getters in _row_send_getters:
+        _wire_send_button(_btn, _spec, _getters)
+
     def _on_connect() -> None:
         """Instantiate the selected Transport, call connect(), send STREAM 50."""
         name = transport_combo.currentText()
@@ -257,6 +366,9 @@ def _build_main_window():  # type: ignore[return]
         disconnect_btn.setEnabled(True)
         transport_combo.setEnabled(False)
         port_edit.setEnabled(False)
+        # Enable all Send buttons now that a transport is connected.
+        for _sb in _send_buttons:
+            _sb.setEnabled(True)
         desc = "Sim" if name == "Sim" else f"{name} on {port}"
         _append_log(f"[INFO] Connected via {desc}")
 
@@ -275,6 +387,9 @@ def _build_main_window():  # type: ignore[return]
         connect_btn.setEnabled(True)
         disconnect_btn.setEnabled(False)
         transport_combo.setEnabled(True)
+        # Disable all Send buttons — no transport connected.
+        for _sb in _send_buttons:
+            _sb.setEnabled(False)
         # Re-enable port field if a hardware transport was selected.
         _on_transport_changed(transport_combo.currentIndex())
         _append_log("[INFO] Disconnected")

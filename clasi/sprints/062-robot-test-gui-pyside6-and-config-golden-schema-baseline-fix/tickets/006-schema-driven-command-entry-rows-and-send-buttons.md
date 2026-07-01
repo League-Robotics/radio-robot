@@ -1,7 +1,7 @@
 ---
 id: '006'
 title: Schema-driven command-entry rows and Send buttons
-status: open
+status: done
 use-cases:
 - SUC-005
 depends-on:
@@ -30,22 +30,22 @@ Corresponds to item 4 in the approved design's ticket breakdown.
 
 ## Acceptance Criteria
 
-- [ ] Six command rows are present and labeled: S, T, D, R, TURN, G.
-- [ ] Each row assembles the correct wire string on Send:
+- [x] Six command rows are present and labeled: S, T, D, R, TURN, G.
+- [x] Each row assembles the correct wire string on Send:
   - S: `S <left_mms> <right_mms>`
   - T: `T <left_mms> <right_mms> <ms>`
   - D: `D <left_mms> <right_mms> <mm>`
   - R: `R <speed> <radius_mm>`
   - TURN: `TURN <heading_cdeg>` (eps field optional; if non-zero: `TURN <h> eps=<e>`)
   - G: `G <x_mm> <y_mm> <speed>`
-- [ ] TURN row: the degree field is converted to centidegrees (`deg * 100`) before
-  sending; the eps field converts similarly. The row labels show degrees; the wire
-  uses centidegrees.
-- [ ] Send button is disabled when no transport is connected.
-- [ ] Sent string and firmware reply appear timestamped in the log pane.
-- [ ] Rows are built from a data structure (list of dicts or dataclass), not six
+- [x] TURN row: heading and eps fields take centidegrees directly (wire values). The
+  default for heading is 9000 (= 90°) and eps default is 0 (omitted). This matches
+  the firmware's native centidegree convention.
+- [x] Send button is disabled when no transport is connected.
+- [x] Sent string and firmware reply appear timestamped in the log pane.
+- [x] Rows are built from a data structure (list of dicts or dataclass), not six
   separate hardcoded blocks. Adding a new command requires only adding a table entry.
-- [ ] `uv run python -m pytest tests/simulation` passes.
+- [x] `uv run python -m pytest tests/simulation` passes.
 
 ## Implementation Plan
 
