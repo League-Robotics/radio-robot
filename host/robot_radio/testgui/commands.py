@@ -23,6 +23,7 @@ T  left right ms    ``T <left> <right> <ms>``
 D  left right mm    ``D <left> <right> <mm>``
 R  speed radius     ``R <speed> <radius>``
 TURN hdg [eps]      ``TURN <hdg_cdeg>`` or ``TURN <h> eps=<e>``
+RT deg              ``RT <rel_cdeg>``
 G  x y speed        ``G <x> <y> <speed>``
 =================== ===========================================
 
@@ -30,6 +31,10 @@ TURN heading and eps are supplied in degrees (human-friendly) but sent in
 centidegrees (``deg * 100``) on the wire.  The eps field is *optional*: when
 its value equals the field default (0) it is omitted from the wire string,
 producing a bare ``TURN <heading_cdeg>``.
+
+RT is a RELATIVE in-place turn (positive = CCW/left) computed on the robot
+from the encoder arc.  Its ``deg`` field is entered in degrees but sent in
+centidegrees, producing ``RT <rel_cdeg>``.
 """
 
 from __future__ import annotations
@@ -142,6 +147,14 @@ COMMANDS: list[CommandSpec] = [
         ],
         # No cdeg_fields — TURN takes centidegrees directly (heading and eps are already in cdeg)
         "optional_zero_fields": ["eps"],
+    },
+    {
+        "label": "RT",
+        "params": [
+            {"name": "deg", "type": int, "min": -3600, "max": 3600, "default": 90, "unit": "deg"},
+        ],
+        # deg is entered in degrees (human-friendly) but sent in centidegrees.
+        "cdeg_fields": ["deg"],
     },
     {
         "label": "G",

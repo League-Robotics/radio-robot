@@ -23,7 +23,7 @@ test_robot_marker_moves
     marker's scene position differs from the origin (it was updated).
 
 test_command_rows_emit_correct_wire_strings
-    For each command row (S, T, D, R, TURN, G), call ``build_wire_string``
+    For each command row (S, T, D, R, TURN, RT, G), call ``build_wire_string``
     with known values and a FakeTransport, and assert the emitted wire
     string equals the expected value.
 
@@ -268,6 +268,12 @@ class TestCommandRowsEmitCorrectWireStrings:
         result = self._build_wire("TURN", {"heading": 9000, "eps": 0})
         assert result == "TURN 9000", (
             f"TURN row: expected 'TURN 9000', got {result!r}"
+        )
+
+    def test_rt_row_wire_string(self):
+        result = self._build_wire("RT", {"deg": 90})
+        assert result == "RT 9000", (
+            f"RT row: expected 'RT 9000', got {result!r}"
         )
 
     def test_g_row_wire_string(self):

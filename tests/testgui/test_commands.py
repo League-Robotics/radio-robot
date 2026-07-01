@@ -1,8 +1,9 @@
 """tests/testgui/test_commands.py — Headless tests for commands.py.
 
 Verifies that:
-- COMMANDS contains six entries for S, T, D, R, TURN, G.
+- COMMANDS contains seven entries for S, T, D, R, TURN, RT, G.
 - build_wire_string emits the correct wire string for each command.
+- RT deg is passed as centidegrees (integer): a relative in-place turn.
 - TURN heading is passed as centidegrees (integer).
 - TURN eps=0 is omitted; non-zero eps is included as eps=<val>.
 - All tests run without a QApplication or a display server.
@@ -34,12 +35,12 @@ def _labels():
 class TestCommandsSchema:
     """COMMANDS list shape and content."""
 
-    def test_commands_has_six_entries(self):
+    def test_commands_has_seven_entries(self):
         from robot_radio.testgui.commands import COMMANDS
-        assert len(COMMANDS) == 6, f"Expected 6 commands, got {len(COMMANDS)}"
+        assert len(COMMANDS) == 7, f"Expected 7 commands, got {len(COMMANDS)}"
 
     def test_commands_labels(self):
-        expected = ["S", "T", "D", "R", "TURN", "G"]
+        expected = ["S", "T", "D", "R", "TURN", "RT", "G"]
         assert _labels() == expected
 
     def test_each_spec_has_label(self):
@@ -100,6 +101,13 @@ class TestCommandsSchema:
         assert len(turn_spec["params"]) == 2
         names = [p["name"] for p in turn_spec["params"]]
         assert names == ["heading", "eps"]
+
+    def test_rt_has_one_param(self):
+        from robot_radio.testgui.commands import COMMANDS
+        rt_spec = next(s for s in COMMANDS if s["label"] == "RT")
+        assert len(rt_spec["params"]) == 1
+        names = [p["name"] for p in rt_spec["params"]]
+        assert names == ["deg"]
 
     def test_g_has_three_params(self):
         from robot_radio.testgui.commands import COMMANDS
@@ -254,6 +262,35 @@ class TestBuildWireStringTURN:
         spec = next(s for s in COMMANDS if s["label"] == "TURN")
         result = build_wire_string(spec, {"heading": 0, "eps": 10})
         assert result == "TURN 0 eps=10"
+
+
+class TestBuildWireStringRT:
+    """RT <rel_cdeg> — relative in-place turn; deg entered, cdeg on wire."""
+
+    def test_rt_positive_ccw(self):
+        from robot_radio.testgui.commands import COMMANDS, build_wire_string
+        spec = next(s for s in COMMANDS if s["label"] == "RT")
+        result = build_wire_string(spec, {"deg": 90})
+        assert result == "RT 9000"
+
+    def test_rt_negative_cw(self):
+        from robot_radio.testgui.commands import COMMANDS, build_wire_string
+        spec = next(s for s in COMMANDS if s["label"] == "RT")
+        result = build_wire_string(spec, {"deg": -45})
+        assert result == "RT -4500"
+
+    def test_rt_zero(self):
+        from robot_radio.testgui.commands import COMMANDS, build_wire_string
+        spec = next(s for s in COMMANDS if s["label"] == "RT")
+        result = build_wire_string(spec, {"deg": 0})
+        assert result == "RT 0"
+
+    def test_rt_uses_default(self):
+        from robot_radio.testgui.commands import COMMANDS, build_wire_string
+        spec = next(s for s in COMMANDS if s["label"] == "RT")
+        result = build_wire_string(spec, {})
+        # Default deg=90 → 9000 cdeg
+        assert result == "RT 9000"
 
 
 class TestBuildWireStringG:

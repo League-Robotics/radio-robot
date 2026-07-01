@@ -152,7 +152,8 @@ def _build_main_window():  # type: ignore[return]
     left_layout.addWidget(btn_row)
 
     # Command rows — built from the COMMANDS schema.
-    # Each row: label | field1 | field2 … | Send button
+    # Each row: Send button | verb label | field1 | field2 …
+    # Send buttons and verb labels are fixed-width so they line up in columns.
     # All Send buttons are collected so we can enable/disable them together.
     cmd_rows_widget = QWidget()
     cmd_rows_widget.setObjectName("cmd_rows")
@@ -175,7 +176,14 @@ def _build_main_window():  # type: ignore[return]
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(4)
 
-        # Command verb label (fixed-width so rows align).
+        # Send button first so all Send buttons form a left-justified column.
+        send_btn = QPushButton("Send")
+        send_btn.setObjectName(f"send_btn_{spec['label'].lower()}")
+        send_btn.setEnabled(False)
+        send_btn.setFixedWidth(52)
+        row_layout.addWidget(send_btn)
+
+        # Command verb label (fixed-width so verb names align in their own column).
         verb_label = QLabel(spec["label"])
         verb_label.setFixedWidth(44)
         row_layout.addWidget(verb_label)
@@ -213,11 +221,6 @@ def _build_main_window():  # type: ignore[return]
                 row_layout.addWidget(spin)
                 field_getters.append(lambda s=spin: s.value())
 
-        send_btn = QPushButton("Send")
-        send_btn.setObjectName(f"send_btn_{spec['label'].lower()}")
-        send_btn.setEnabled(False)
-        send_btn.setFixedWidth(52)
-        row_layout.addWidget(send_btn)
         row_layout.addStretch()
 
         _send_buttons.append(send_btn)
@@ -246,7 +249,7 @@ def _build_main_window():  # type: ignore[return]
 
         btn.clicked.connect(_on_send)
 
-    # Build all six command rows.
+    # Build one row per command in the COMMANDS schema.
     _row_send_getters: list[tuple[QPushButton, "object", list]] = []
     for cmd_spec in COMMANDS:
         row_widget, getters = _build_command_row(cmd_spec)
