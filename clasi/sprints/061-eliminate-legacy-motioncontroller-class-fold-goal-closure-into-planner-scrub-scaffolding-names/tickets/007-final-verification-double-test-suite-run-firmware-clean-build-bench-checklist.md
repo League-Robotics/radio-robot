@@ -1,11 +1,11 @@
 ---
 id: '007'
 title: 'Final verification: double test-suite run, firmware clean build, bench checklist'
-status: open
+status: done
 use-cases:
 - SUC-007
 depends-on:
-- "006"
+- '006'
 github-issue: ''
 issue: internalize-legacy-motioncontroller-into-planner.md
 completes_issue: true
@@ -76,13 +76,24 @@ on the branch before any merge to master.
 
 ## Acceptance Criteria
 
-- [ ] `uv run python -m pytest` run 1: passes except 2 baseline failures.
-- [ ] `uv run python -m pytest` run 2: same result as run 1 (no flapping).
-- [ ] `build.py --clean` exits zero.
-- [ ] `MICROBIT.hex` build banner verified as fresh (not stale incremental).
-- [ ] `tests/bench/061_bench_checklist.md` exists with all command sequences
+- [x] `uv run python -m pytest` run 1: passes except 2 baseline failures.
+      Run 1: 2411 passed, 2 failed (test_tovez_validates_against_schema,
+      test_default_robot_config_unchanged). 64.41s.
+- [x] `uv run python -m pytest` run 2: same result as run 1 (no flapping).
+      Run 2: 2411 passed, 2 failed (same tests). 28.45s. Diff: timing only.
+- [x] `build.py --clean` exits zero.
+      Build summary: firmware hex v0.20260630.32 (bench, BENCH_OTOS_ENABLED) -> MICROBIT.hex
+      host sim lib v0.20260630.32 (HOST_BUILD) -> tests/_infra/sim/build/libfirmware_host
+- [x] `MICROBIT.hex` build banner verified as fresh (not stale incremental).
+      MICROBIT.hex: 952,011 bytes, built 2026-06-30 18:28:55.
+      Version stamp decoded from Intel hex binary data: `0.20260630.32`
+      (matches dotconfig version). Confirmed fresh build.
+- [x] `tests/bench/061_bench_checklist.md` exists with all command sequences
       listed above, each with a checkbox for stakeholder sign-off.
-- [ ] Sprint branch left open for stakeholder bench-test.
+      8 checks: Idle TLM, VW, TURN, D, RT, G (playfield-gated), SAFE one-shot,
+      TLM mode-char table.
+- [x] Sprint branch left open for stakeholder bench-test.
+      (Physical bench run deferred to stakeholder — not a ticket-done criterion.)
 
 ## Implementation Plan
 
