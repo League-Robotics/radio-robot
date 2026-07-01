@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Mode indicator and transport-combo plumbing
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-004
@@ -36,17 +36,17 @@ helper makes mode-gated behavior in later tickets trivial to write and test).
 
 ## Acceptance Criteria
 
-- [ ] A `QLabel` with object name `"mode_label"` is visible in the right panel,
+- [x] A `QLabel` with object name `"mode_label"` is visible in the right panel,
       above the playfield canvas, at all times.
-- [ ] With "Sim" selected, label text is exactly `"SIM MODE"`.
-- [ ] With "Serial" selected, label text is exactly `"BENCH MODE"`.
-- [ ] With "Relay" selected, label text is exactly `"PLAYFIELD MODE"`.
-- [ ] Label updates immediately on combo change — no connect/disconnect needed.
-- [ ] `transport_name_to_mode_label("Sim")` returns `"SIM MODE"` (and the color).
-- [ ] `transport_name_to_mode_label("Serial")` returns `"BENCH MODE"`.
-- [ ] `transport_name_to_mode_label("Relay")` returns `"PLAYFIELD MODE"`.
-- [ ] Unknown transport names return a safe fallback (e.g. `"UNKNOWN MODE"`).
-- [ ] All existing `tests/testgui/` tests pass unchanged.
+- [x] With "Sim" selected, label text is exactly `"SIM MODE"`.
+- [x] With "Serial" selected, label text is exactly `"BENCH MODE"`.
+- [x] With "Relay" selected, label text is exactly `"PLAYFIELD MODE"`.
+- [x] Label updates immediately on combo change — no connect/disconnect needed.
+- [x] `transport_name_to_mode_label("Sim")` returns `"SIM MODE"` (and the color).
+- [x] `transport_name_to_mode_label("Serial")` returns `"BENCH MODE"`.
+- [x] `transport_name_to_mode_label("Relay")` returns `"PLAYFIELD MODE"`.
+- [x] Unknown transport names return a safe fallback (e.g. `"UNKNOWN MODE"`).
+- [x] All existing `tests/testgui/` tests pass unchanged.
 
 ## Implementation Plan
 

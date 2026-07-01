@@ -6,6 +6,18 @@ Launches the Robot Test GUI main window.  Requires PySide6 (install via
 All PySide6 imports are kept inside this module so that the package itself can
 be imported without PySide6 present.
 
+Mode indicator (ticket 001)
+----------------------------
+- A ``QLabel`` with ``objectName="mode_label"`` is placed at the top of the
+  right panel, above the playfield canvas.
+- It reflects the currently selected transport:
+  - "Sim"    → "SIM MODE"     (grey)
+  - "Serial" → "BENCH MODE"   (blue)
+  - "Relay"  → "PLAYFIELD MODE" (green)
+- The pure, Qt-free helper ``transport_name_to_mode_label(name)`` maps a
+  transport name to ``(text, stylesheet)`` and can be imported and tested
+  without a ``QApplication``.
+
 Wiring (ticket 008)
 --------------------
 - ``TraceModel`` (traces.py) accumulates four world-cm polylines.
@@ -26,6 +38,29 @@ from __future__ import annotations
 
 import math
 import sys
+
+
+def transport_name_to_mode_label(name: str) -> tuple[str, str]:
+    """Map a transport name to a ``(text, stylesheet)`` pair for the mode label.
+
+    This function is Qt-free and can be imported and tested without a
+    ``QApplication`` instance.
+
+    Args:
+        name: The transport name as shown in the combo box ("Sim", "Serial",
+              "Relay", or any other string).
+
+    Returns:
+        A tuple of ``(label_text, stylesheet)`` where ``label_text`` is the
+        display string for the mode label and ``stylesheet`` is a CSS-style
+        string suitable for ``QLabel.setStyleSheet()``.
+    """
+    _MAP: dict[str, tuple[str, str]] = {
+        "Sim": ("SIM MODE", "color: #808080; font-weight: bold;"),
+        "Serial": ("BENCH MODE", "color: #4080ff; font-weight: bold;"),
+        "Relay": ("PLAYFIELD MODE", "color: #20c020; font-weight: bold;"),
+    }
+    return _MAP.get(name, ("UNKNOWN MODE", "color: #ff8000; font-weight: bold;"))
 
 
 def _build_main_window():  # type: ignore[return]
@@ -271,6 +306,17 @@ def _build_main_window():  # type: ignore[return]
     right_layout = QVBoxLayout(right_widget)
     right_layout.setContentsMargins(4, 4, 4, 4)
 
+    # Mode indicator label — updated by _on_transport_changed() below.
+    mode_label = QLabel("SIM MODE")
+    mode_label.setObjectName("mode_label")
+    mode_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    _init_text, _init_style = transport_name_to_mode_label(
+        transport_combo.currentText()
+    )
+    mode_label.setText(_init_text)
+    mode_label.setStyleSheet(_init_style)
+    right_layout.addWidget(mode_label)
+
     right_splitter = QSplitter(Qt.Orientation.Vertical)
     right_layout.addWidget(right_splitter)
 
@@ -378,11 +424,14 @@ def _build_main_window():  # type: ignore[return]
             _bridge.truth_ready.emit(x_cm, y_cm, yaw_rad)  # type: ignore[attr-defined]
 
     def _on_transport_changed(index: int) -> None:
-        """Enable/disable port picker depending on selected transport."""
+        """Enable/disable port picker and update mode label for selected transport."""
         name = transport_combo.currentText()
         hardware = name in ("Serial", "Relay")
         port_edit.setEnabled(hardware)
         port_label.setEnabled(hardware)
+        text, style = transport_name_to_mode_label(name)
+        mode_label.setText(text)
+        mode_label.setStyleSheet(style)
 
     transport_combo.currentIndexChanged.connect(_on_transport_changed)
     # Trigger once to set initial state.
