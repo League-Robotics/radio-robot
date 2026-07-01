@@ -1,6 +1,6 @@
 [project]
 name = "robot-radio"
-version = "0.20260630.36"
+version = "0.20260701.2"
 requires-python = ">=3.10"
 dependencies = [
     "pydantic>=2.13.4",
@@ -29,4 +29,7 @@ norecursedirs = ["vendor", "node_modules", "built", ".pxt", "old", "__pycache__"
 dev = [
     "jsonschema>=4.26.0",
     "pytest>=8.0",
+]
+gui = [
+    "PySide6>=6.0",
 ]
