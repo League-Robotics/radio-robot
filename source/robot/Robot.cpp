@@ -2,8 +2,8 @@
 #include "subsystems/sensors/SensorsConfig.h"
 #include "superstructure/PlannerConfig.h"
 #ifndef HOST_BUILD
-#include "MicroBit.h"
-#include "MicroBitDevice.h"
+#include "MicroBit.h"        // IWYU pragma: keep — firmware build needs system_timer_current_time()
+#include "MicroBitDevice.h"  // IWYU pragma: keep — firmware runtime init (clangd false-positive under HOST_BUILD)
 #endif
 #include "DebugCommands.h"
 #include "ConfigRegistry.h"
