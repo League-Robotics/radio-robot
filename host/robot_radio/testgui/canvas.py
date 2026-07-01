@@ -309,13 +309,34 @@ def build_canvas(trace_model: "TraceModel") -> "tuple[object, object]":
     scene = QGraphicsScene()
     scene.setBackgroundBrush(QBrush(QColor(40, 40, 40)))
 
+    # ------------------------------------------------------------------ FitView subclass
+    # Defined lazily inside build_canvas so PySide6 stays a deferred import.
+    class _FitView(QGraphicsView):
+        """QGraphicsView that always fits the scene in the viewport.
+
+        Overrides resizeEvent and showEvent so the scene rect is re-fitted
+        whenever the widget is shown or resized — the build-time fitInView call
+        happens before the viewport has its real size, so it must be repeated.
+        Scrollbars and scroll-hand drag are disabled so the user can never pan.
+        """
+
+        def resizeEvent(self, event: "object") -> None:  # type: ignore[override]
+            super().resizeEvent(event)
+            self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+        def showEvent(self, event: "object") -> None:  # type: ignore[override]
+            super().showEvent(event)
+            self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
     # ------------------------------------------------------------------ View
-    view = QGraphicsView(scene)
+    view = _FitView(scene)
     view.setObjectName("canvas_view")
     view.setMinimumSize(400, 280)
     view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-    view.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+    view.setDragMode(QGraphicsView.DragMode.NoDrag)
     view.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+    view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
     # ------------------------------------------------------------------ Background pixmap
     bg_pixmap = _load_deskewed_bg_pixmap(img_w, img_h)
@@ -533,6 +554,15 @@ class CanvasController:
             self._img_h = new_h
             # The deskewed image is always at _PIXELS_PER_CM resolution; ppc unchanged.
             self.refresh()
+            # Re-fit the view so the new background fills the viewport correctly.
+            try:
+                from PySide6.QtCore import Qt  # type: ignore[import-untyped]
+                self._view.fitInView(  # type: ignore[attr-defined]
+                    self._scene.sceneRect(),  # type: ignore[attr-defined]
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                )
+            except Exception:
+                _log.debug("set_background re-fit failed", exc_info=True)
         except Exception:
             _log.debug("set_background failed", exc_info=True)
 

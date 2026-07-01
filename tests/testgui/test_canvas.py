@@ -391,6 +391,167 @@ class TestSetBackground:
 
 
 # ---------------------------------------------------------------------------
+# View scrollbar / drag / fit-in-view policy
+# ---------------------------------------------------------------------------
+
+
+class TestViewFitPolicy:
+    """The QGraphicsView must always fit the playfield with no scroll capability."""
+
+    @pytest.fixture
+    def view_setup(self, qapp):
+        from robot_radio.testgui.canvas import build_canvas
+        from PySide6.QtWidgets import QGraphicsView  # type: ignore[import-untyped]
+
+        model = _make_trace_model()
+        widget, ctrl = build_canvas(model)
+        view = widget.findChild(QGraphicsView, "canvas_view")
+        assert view is not None
+        return widget, ctrl, view
+
+    def test_horizontal_scrollbar_always_off(self, view_setup):
+        """Horizontal scrollbar policy must be ScrollBarAlwaysOff."""
+        from PySide6.QtCore import Qt  # type: ignore[import-untyped]
+        widget, ctrl, view = view_setup
+        assert view.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff, (
+            "Horizontal scrollbar must be ScrollBarAlwaysOff to prevent panning"
+        )
+
+    def test_vertical_scrollbar_always_off(self, view_setup):
+        """Vertical scrollbar policy must be ScrollBarAlwaysOff."""
+        from PySide6.QtCore import Qt  # type: ignore[import-untyped]
+        widget, ctrl, view = view_setup
+        assert view.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff, (
+            "Vertical scrollbar must be ScrollBarAlwaysOff to prevent panning"
+        )
+
+    def test_drag_mode_no_drag(self, view_setup):
+        """Drag mode must be NoDrag — user must not be able to scroll/pan."""
+        from PySide6.QtWidgets import QGraphicsView  # type: ignore[import-untyped]
+        widget, ctrl, view = view_setup
+        assert view.dragMode() == QGraphicsView.DragMode.NoDrag, (
+            "Drag mode must be NoDrag to prevent user panning"
+        )
+
+    def test_scene_rect_fits_in_viewport_after_show(self, qapp):
+        """After show(), the entire sceneRect must be contained in the viewport."""
+        from robot_radio.testgui.canvas import build_canvas
+        from PySide6.QtWidgets import QGraphicsView  # type: ignore[import-untyped]
+        from PySide6.QtCore import QRectF  # type: ignore[import-untyped]
+
+        model = _make_trace_model()
+        widget, ctrl = build_canvas(model)
+        view = widget.findChild(QGraphicsView, "canvas_view")
+        assert view is not None
+
+        # Resize to a concrete size so the viewport has real dimensions.
+        widget.resize(800, 500)
+        view.resize(700, 500)
+        # Trigger show/resize events so _FitView re-fits.
+        widget.show()
+        view.show()
+
+        scene_rect = view.sceneRect()
+        if scene_rect.isEmpty():
+            pytest.skip("scene rect is empty — cannot test fit")
+
+        # Map viewport corners to scene coords to get the visible scene region.
+        vp_rect = view.viewport().rect()
+        visible_in_scene = view.mapToScene(vp_rect).boundingRect()
+
+        # The scene rect must be fully contained within the visible region
+        # (with a small tolerance for floating-point rounding and letterboxing).
+        tol = 2.0
+        expanded_visible = QRectF(
+            visible_in_scene.x() - tol,
+            visible_in_scene.y() - tol,
+            visible_in_scene.width() + 2 * tol,
+            visible_in_scene.height() + 2 * tol,
+        )
+        assert expanded_visible.contains(scene_rect), (
+            f"sceneRect {scene_rect} not fully visible; visible region {visible_in_scene}"
+        )
+
+    def test_scene_rect_fits_after_resize(self, qapp):
+        """After a resize(), the entire sceneRect must still fit — no scrolling needed."""
+        from robot_radio.testgui.canvas import build_canvas
+        from PySide6.QtWidgets import QGraphicsView  # type: ignore[import-untyped]
+        from PySide6.QtCore import QRectF  # type: ignore[import-untyped]
+
+        model = _make_trace_model()
+        widget, ctrl = build_canvas(model)
+        view = widget.findChild(QGraphicsView, "canvas_view")
+        assert view is not None
+
+        widget.show()
+
+        for w, h in [(600, 400), (1024, 600)]:
+            widget.resize(w, h)
+            view.resize(w - 80, h)  # leave room for checkboxes
+
+            scene_rect = view.sceneRect()
+            if scene_rect.isEmpty():
+                continue
+
+            vp_rect = view.viewport().rect()
+            visible_in_scene = view.mapToScene(vp_rect).boundingRect()
+
+            tol = 2.0
+            expanded_visible = QRectF(
+                visible_in_scene.x() - tol,
+                visible_in_scene.y() - tol,
+                visible_in_scene.width() + 2 * tol,
+                visible_in_scene.height() + 2 * tol,
+            )
+            assert expanded_visible.contains(scene_rect), (
+                f"After resize to ({w},{h}): sceneRect {scene_rect} "
+                f"not fully visible; visible {visible_in_scene}"
+            )
+
+    def test_background_swap_refits(self, qapp):
+        """set_background() with a new pixmap must re-fit the scene in the view."""
+        from robot_radio.testgui.canvas import build_canvas
+        from PySide6.QtWidgets import QGraphicsView  # type: ignore[import-untyped]
+        from PySide6.QtGui import QPixmap, QColor  # type: ignore[import-untyped]
+        from PySide6.QtCore import QRectF  # type: ignore[import-untyped]
+
+        model = _make_trace_model()
+        widget, ctrl = build_canvas(model)
+        view = widget.findChild(QGraphicsView, "canvas_view")
+        assert view is not None
+
+        widget.resize(800, 500)
+        view.resize(700, 500)
+        widget.show()
+        view.show()
+
+        # Swap in a new background pixmap of a different size.
+        pm = QPixmap(400, 300)
+        pm.fill(QColor(50, 100, 150))
+        ctrl.set_background(pm)
+
+        scene_rect = view.sceneRect()
+        assert scene_rect.width() == pytest.approx(400, abs=2), (
+            f"Scene rect width should be 400 after bg swap, got {scene_rect.width()}"
+        )
+
+        vp_rect = view.viewport().rect()
+        visible_in_scene = view.mapToScene(vp_rect).boundingRect()
+
+        tol = 2.0
+        expanded_visible = QRectF(
+            visible_in_scene.x() - tol,
+            visible_in_scene.y() - tol,
+            visible_in_scene.width() + 2 * tol,
+            visible_in_scene.height() + 2 * tol,
+        )
+        assert expanded_visible.contains(scene_rect), (
+            f"After bg swap: sceneRect {scene_rect} not fully visible; "
+            f"visible {visible_in_scene}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # World-to-pixel coordinate mapping
 # ---------------------------------------------------------------------------
 
