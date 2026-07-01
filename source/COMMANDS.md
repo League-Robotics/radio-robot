@@ -38,12 +38,12 @@ serial link instead of the requesting channel.
 
 ## Motion — [`source/commands/MotionCommands.cpp`](commands/MotionCommands.cpp)
 
-The motion command parse/handle functions were split out of
-`MotionController.cpp` (A3 refactor) into
+The motion command parse/handle functions live in
 [`MotionCommands.cpp`](commands/MotionCommands.cpp); the motion logic
-they drive (`beginGoTo`, pursuit, ramps) stays in
-[`MotionController.cpp`](control/MotionController.cpp). Registered in
-[`getMotionCommands()`](commands/MotionCommands.cpp#L1135).
+they drive (`beginGoTo`, pursuit, ramps) lives in
+[`Planner.cpp`](superstructure/Planner.cpp) and
+[`PlannerBegin.cpp`](control/PlannerBegin.cpp). Registered in
+[`getMotionCommands()`](commands/MotionCommands.cpp#L1335).
 
 **stop= clauses (sprint 052).** The open-loop motion verbs `VW`, `T`, `D`,
 `R`, and `TURN` accept one or more `stop=<kind>:<args>` clauses appended as

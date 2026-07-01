@@ -26,7 +26,6 @@
 #include "hal/real/BenchOtosSensor.h"
 #include "types/Config.h"
 #include "types/Inputs.h"
-#include "superstructure/MotionController.h"
 #include "commands/MotionCommand.h"
 #include "control/HaltController.h"
 #include "robot/LoopTickOnce.h"
@@ -223,10 +222,10 @@ void sim_tick(void* h, uint32_t now_ms)
     // updated.  loopTickOnce will call hal.tick(now,cmds) again with the same
     // timestamp; MockHAL's dt==0 guard makes that second call a no-op.
     //
-    // 060-004: The MotorController writes its PWM output into drive2._outputs
-    // (not robot.state.outputs) because Drive2's constructor called
+    // 060-004: The MotorController writes its PWM output into drive._outputs
+    // (not robot.state.outputs) because Drive's constructor called
     // _mc.setCommandsRef(&_outputs).  The pre-tick plant advance therefore uses
-    // drive2.outputs() so that the PREVIOUS tick's motor command reaches the
+    // drive.outputs() so that the PREVIOUS tick's motor command reaches the
     // physics model before loopTickOnce reads encoders.
     s->hal.tick(now_ms, s->robot.drive.outputs());
     // (039-002) Sensor tick: promote the integrated encoder position into each
@@ -845,7 +844,7 @@ void sim_set_enc_omega_healthy(void* h, int healthy)
     SimHandle* s = static_cast<SimHandle*>(h);
     bool h_val = (healthy != 0);
     s->robot.estimate.setEncOmegaHealthy(h_val);
-    // Drive2 has its own PhysicalStateEstimate (_est) that must also be gated.
+    // Drive has its own PhysicalStateEstimate (_est) that must also be gated.
     s->robot.drive.setEncOmegaHealthy(h_val);
 }
 
@@ -856,8 +855,8 @@ void sim_set_enc_omega_healthy(void* h, int healthy)
 // 060-004: ordered-tick must inject into drive2's estimator.
 void sim_set_pose(void* h, float x, float y, float hrad)
 {
-    // The authoritative pose is in drive2._hw.  Inject via Drive2::injectFusedPose()
-    // which writes to drive2._hw.fused.pose and refreshes _state.
+    // The authoritative pose is in drive._hw.  Inject via Drive::injectFusedPose()
+    // which writes to drive._hw.fused.pose and refreshes _state.
     static_cast<SimHandle*>(h)->robot.drive.injectFusedPose(x, y, hrad);
 }
 

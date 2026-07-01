@@ -1,15 +1,4 @@
-// Planner.cpp — Planner subsystem wrapper (renamed from MotionController2 in 060-006).
-//
-// Composes the existing MotionController by reference.  The existing MotionController
-// logic is unchanged.
-//
-// Design note on configure() / RobotConfig shadow:
-//   MotionController holds a const RobotConfig& that was passed at construction
-//   (Robot passes &config). Updating motion limits via configure(PlannerConfig)
-//   cannot reach that reference because it is const. Planner therefore maintains a
-//   local RobotConfig copy (_cfg) that starts as a copy of the original and is
-//   updated by configure(). The copy is used by Planner's state/reporting logic;
-//   the underlying MotionController still reads limits from its own original cfg.
+// Planner.cpp — Planner subsystem.
 //
 // C++11, no heap allocation in tick(), no virtual dispatch, no STL.
 
@@ -27,45 +16,366 @@
 #include "messages/common.h"                  // msg::CommandBatch
 #include "types/Inputs.h"                     // HardwareState, MotorCommands, TargetState
 #include "types/Config.h"                     // RobotConfig, DriveMode
+#include "control/MotorController.h"          // MotorController (for beginDistance)
 #include "control/StopCondition.h"            // makeTimeStop, makeDistanceStop, makeHeadingStop
+#include "state/PhysicalStateEstimate.h"      // getPose (044-001 seam)
 #include <cstring>                            // strncpy
-#include <cmath>                              // fabsf
+#include <cmath>                              // fabsf, sqrtf, cosf, sinf
 
 // ---------------------------------------------------------------------------
 // Constructor
 // ---------------------------------------------------------------------------
-Planner::Planner(MotionController& mc,
+Planner::Planner(MotorController& mc_ctrl, Odometry& odo,
                  const subsystems::Drive& drive,
                  const RobotConfig& cfg)
-    : _mc(mc)
+    : _mc_ctrl(mc_ctrl)
+    , _odo(odo)
+    , _cfg(cfg)           // local copy — configure() can update motion limits
+    , _hwState(nullptr)
+    , _robot(nullptr)     // set later by setRobotCtx()
+    , _bvc(mc_ctrl, cfg)  // _bvc must be initialised before _activeCmd
+    , _activeCmd()
+    , _safeOneShotDisable(false)
+    , _mode(DriveMode::IDLE)
+    , _tgtL(0.0f)
+    , _tgtR(0.0f)
+    , _dDistTarget(0.0f)
+    , _dOmega(0.0f)
+    , _dEnc0(0.0f)
+    , _gPhase(GPhase::IDLE)
+    , _gTargetXWorld(0.0f)
+    , _gTargetYWorld(0.0f)
+    , _gSpeed(0.0f)
+    , _pursueBacktrackTicks(0)
+    , _lastTickMs(0)
+    , _currentTimeMs(0)
     , _drive(drive)
-    , _cfg(cfg)        // local shadow copy — updated by configure()
-    , _target(_desired)  // _target is an alias for _desired (TargetState = DesiredState)
+    , _hw{}
+    , _cmds{}
+    , _desired{}
+    , _target(_desired)   // _target is an alias for _desired (TargetState = DesiredState)
+    , _state{}
+    , _planCfg{}
 {
-    // Wire the BVC inside _mc to publish body twist into our _desired so that
+    // Wire the BVC to publish body twist into our _desired so that
     // tick() can read _desired.bodyTwist after driveAdvance().
+    _bvc.setStateRef(&_desired);
+}
+
+// ---------------------------------------------------------------------------
+// emitEvt — inline EVT emission via the MotionEventSink stored in target.
+//
+// Calls target.sink.emitFn(base, corrId, ctx) if set.
+// Clears target.corrId after emitting so a subsequent completion on the
+// same target does not re-use a stale id.
+//
+// Sprint 026-002: calls through MotionEventSink rather than formatting inline.
+// ---------------------------------------------------------------------------
+
+/*static*/ void Planner::emitEvt(const char* base, TargetState& target)
+{
+    if (target.sink.emitFn) {
+        target.sink.emitFn(base, target.corrId, target.sink.ctx);
+    }
+    target.corrId[0] = '\0';  // consumed
+}
+
+void Planner::stop(uint32_t now_ms, ReplyFn fn, void* ctx)
+{
+    // Cancel any active MotionCommand before calling fullStop().
+    if (_activeCmd.active()) {
+        _activeCmd.cancel(MotionCommand::StopStyle::HARD);
+    }
+    _gPhase = GPhase::IDLE;  // reset G phase on hard stop
+    fullStop(fn, ctx);
+    (void)now_ms;
+}
+
+void Planner::cancel(uint32_t now_ms, ReplyFn fn, void* ctx)
+{
+    _activeCmd.cancel(MotionCommand::StopStyle::HARD);
+    _mc_ctrl.stop();
+    _mode   = DriveMode::IDLE;
+    _gPhase = GPhase::IDLE;  // reset G phase on any cancel
+    (void)now_ms;
+    (void)fn;
+    (void)ctx;
+}
+
+void Planner::disableSafetyOneShot()
+{
+    _safeOneShotDisable = true;
+}
+
+void Planner::softStop(uint32_t now_ms)
+{
+    if (_activeCmd.active()) {
+        // Active MotionCommand: arm its SOFT ramp-down.
+        // tick() will advance BVC toward (0,0) and emit EVT done when converged.
+        _activeCmd.softStop(now_ms);
+    } else {
+        // No active MotionCommand (STREAMING or IDLE mode): just set BVC target
+        // to (0,0) and let the profiler ramp down.  No EVT done in this case.
+        _bvc.setTarget(0.0f, 0.0f);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// driveAdvance — cooperative-loop task entry point (014-005).
+//
+// Runs at a fixed period set by RobotConfig::controlPeriodMs (default 10 ms).
+// Executes the drive-mode state machines:
+//   1. STREAMING watchdog — emits EVT safety_stop inline on keepalive timeout.
+//   2. G-mode — advances PRE_ROTATE and PURSUE; emits EVT done G inline.
+//   T/D-mode are now handled by the MotionCommand path (TIME/DISTANCE stop conditions).
+//
+// All EVT completions are emitted inline via target.sink.emitFn() (sprint 026-002)
+// — safe because there is no fiber boundary in the single cooperative main loop.
+//
+// NOTE: OTOS correction is NOT done here.  It is the sole responsibility of
+// Robot::otosCorrect() called at the slow cadence in LoopScheduler
+// (ticket 005 wired this; ticket 006 moved it to the scheduler task).
+// ---------------------------------------------------------------------------
+
+void Planner::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
+                           TargetState& target, uint32_t now_ms)
+{
+    // Throttle to controlPeriodMs cadence.
+    if ((now_ms - _lastTickMs) < (uint32_t)_cfg.controlPeriodMs) return;
+
+    float dt_s      = (float)(now_ms - _lastTickMs) / 1000.0f;
+    _lastTickMs     = now_ms;
+    _currentTimeMs  = now_ms;
+
+    // Motor controller tick and odometry predict are called by Robot::controlCollectSplitPhase()
+    // and odometry.predict() before driveAdvance() is reached (014-003/004).
+    (void)cmds;
+
+    // ── MotionCommand tick (VW / R / G PURSUE / future MotionCommand-based verbs) ─
+    // When a MotionCommand is active, tick it exactly once and return early.
+    // The old S/T/D/G if-chain runs ONLY when no MotionCommand is active.
+    // This also prevents the STREAMING watchdog branch below from firing for VW.
+    if (_activeCmd.active()) {
+        // G PURSUE hook: recompute (v, ω) from current pose each tick and call
+        // setTarget BEFORE _activeCmd.tick() so the BVC advances with the
+        // updated target this tick.
+        if (_mode == DriveMode::GO_TO && _gPhase == GPhase::PURSUE) {
+            float x, y, h_rad;
+            getPoseFloat(x, y, h_rad);
+
+            float dxW = _gTargetXWorld - x;
+            float dyW = _gTargetYWorld - y;
+            float dx  =  dxW * cosf(h_rad) + dyW * sinf(h_rad);
+            float dy  = -dxW * sinf(h_rad) + dyW * cosf(h_rad);
+
+            float d2          = dx * dx + dy * dy;
+            float d_remaining = sqrtf(d2);
+
+            // Re-gate counter (D8 027-004): if the target is behind the robot
+            // for 3 consecutive ticks, cancel PURSUE and restart PRE_ROTATE.
+            // fabsf(bearing) > π/2 means dx < 0 (target behind robot-frame x axis).
+            float bearing_rf = atan2f(dy, dx);
+            if (fabsf(bearing_rf) > 1.5707963f) {  // π/2
+                if (++_pursueBacktrackTicks >= 3) {
+                    _pursueBacktrackTicks = 0;
+                    // N11 fix (030-009): use cancelQuiet() instead of cancel() to
+                    // suppress the spurious "EVT cancelled #<corrId>" that would
+                    // otherwise be emitted for the G command's correlation id.
+                    // The G command is still in progress (transitioning back to
+                    // PRE_ROTATE), so emitting "EVT cancelled" for the G's corrId
+                    // falsely signals to the host that the G has failed.
+                    _activeCmd.cancelQuiet();
+                    _startPreRotate(bearing_rf, _gSpeed, now_ms, target);
+                    return;
+                }
+            } else {
+                _pursueBacktrackTicks = 0;
+            }
+
+            // Terminal decel cap: v_cap = sqrt(2 * aDecel * d_remaining).
+            // Clamps the commanded speed to ensure the BVC has time to
+            // decelerate to zero before the POSITION stop fires.
+            float v     = _gSpeed;
+            float v_cap = sqrtf(2.0f * _cfg.aDecel * d_remaining);
+            if (v_cap < v) v = v_cap;
+
+            // Curvature clamp (D8 027-004): bound κ so passing abeam the target
+            // (small d, dy ≠ 0) cannot drive ω into a tight orbit.
+            // kappaMax = 2 / max(d_remaining, 2·arriveTolMm) limits the turning
+            // radius to at most 0.5·arriveTolMm at the tightest point.
+            float kappaMax = 2.0f / fmaxf(d_remaining,
+                                          2.0f * _cfg.arriveTolMm);
+            float kappa = (d2 > 0.1f)
+                ? fmaxf(-kappaMax, fminf(kappaMax, 2.0f * dy / d2))
+                : 0.0f;
+            float omega = v * kappa;
+
+            _activeCmd.setTarget(v, omega);
+        }
+
+        // D decel hook: clamp commanded speed downward as the robot nears
+        // the distance target.  Computes d_remaining from the raw encoder
+        // average (same field used by the DISTANCE stop condition in
+        // StopCondition::evaluate) so the decel profile and the stop fire
+        // at the same point.  Only clamps downward; does not increase speed.
+        if (_mode == DriveMode::DISTANCE) {
+            // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
+            float enc_avg     = (inputs.encMm[1] + inputs.encMm[0]) * 0.5f;
+            float d_traveled  = fabsf(enc_avg - _dEnc0);
+            float d_remaining = _dDistTarget - d_traveled;
+            if (d_remaining > 0.0f) {
+                float v_cap = sqrtf(2.0f * _cfg.aDecel * d_remaining);
+                if (v_cap < _bvc.targetV()) {
+                    _activeCmd.setTarget(v_cap, _dOmega);
+                }
+            }
+        }
+
+        bool still_running = _activeCmd.tick(inputs, now_ms, dt_s);
+        if (!still_running) {
+            // MotionCommand terminated.
+            //
+            // PRE_ROTATE special case (sprint 024-001): when the PRE_ROTATE
+            // MotionCommand finishes, check the current bearing.
+            //   - bearing <= gateRad (HEADING stop fired) → transition to PURSUE.
+            //   - bearing >  gateRad (TIME net fired)     → runaway; emit "EVT done G"
+            //     and go IDLE so the caller gets a clean terminal event.
+            if (_mode == DriveMode::GO_TO && _gPhase == GPhase::PRE_ROTATE) {
+                float x, y, h_rad;
+                getPoseFloat(x, y, h_rad);
+                float dxW   = _gTargetXWorld - x;
+                float dyW   = _gTargetYWorld - y;
+                float dx_rf =  dxW * cosf(h_rad) + dyW * sinf(h_rad);
+                float dy_rf = -dxW * sinf(h_rad) + dyW * cosf(h_rad);
+                float bearingNow = fabsf(atan2f(dy_rf, dx_rf));
+                float gateRad    = _cfg.turnInPlaceGate * (3.14159265f / 180.0f);
+
+                if (bearingNow <= gateRad) {
+                    // HEADING stop fired → start the PURSUE phase.
+                    // Compute distance for the PURSUE TIME net.
+                    float distanceMm     = sqrtf(dxW * dxW + dyW * dyW);
+                    float pursueSpd      = (_gSpeed > 1.0f) ? _gSpeed : 1.0f;
+                    float pursueTimeoutMs = 2.0f * (distanceMm / pursueSpd) * 1000.0f + 4000.0f;
+
+                    _bvc.reset();
+                    _activeCmd.configure(_gSpeed, 0.0f, &_bvc);
+                    _activeCmd.addStop(makePositionStop(_gTargetXWorld, _gTargetYWorld,
+                                                       _cfg.arriveTolMm));
+                    _activeCmd.addStop(makeTimeStop(pursueTimeoutMs));
+                    _activeCmd.setReplySink(target.replyFn, target.replyCtx, target.corrId);
+                    _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
+                    _activeCmd.setDoneEvt("EVT done G");
+                    const HardwareState& hw = _hwState ? *_hwState : inputs;
+                    _activeCmd.start(hw, now_ms);
+                    _gPhase = GPhase::PURSUE;
+                    // Do NOT go IDLE; PURSUE is now active.
+                    return;
+                } else {
+                    // TIME net fired (runaway spin): emit terminal EVT and go IDLE.
+                    // _activeCmd had no reply sink, so we emit directly here.
+                    emitEvt("EVT done G", target);
+                    _mc_ctrl.stop();
+                    _bvc.reset();
+                    _mode = DriveMode::IDLE;
+                    target.mode = DriveMode::IDLE;
+                    _gPhase = GPhase::IDLE;
+                    return;
+                }
+            }
+
+            // Normal completion (non-PRE_ROTATE): stop motors, reset, go IDLE.
+            // Without this the last BVC wheel target persists and the motor PID
+            // keeps driving it forever (runaway), since IDLE mode no longer
+            // advances the BVC to write fresh (zero) setpoints. _mc_ctrl.stop()
+            // zeros tgtLMms/tgtRMms and resets the PID, so driving=false next tick.
+            _mc_ctrl.stop();
+            _bvc.reset();
+            _mode = DriveMode::IDLE;
+            target.mode = DriveMode::IDLE;
+            // Reset G phase so a subsequent go-to command starts clean.
+            if (_gPhase != GPhase::IDLE) _gPhase = GPhase::IDLE;
+        }
+        return;
+    }
+
+    // S-mode keepalive watchdog has been removed from driveAdvance.
+    // The system watchdog in LoopScheduler now handles keepalive enforcement for
+    // all modes (STREAMING, VELOCITY, etc.) — it fires EVT safety_stop + X after
+    // sTimeoutMs of inbound command silence (Sprint 020, Ticket 005).
+    (void)inputs;
+
+    // ── BVC tick for STREAMING mode ─────────────────────────────────────────
+    // STREAMING mode sets BVC targets but does not have an active MotionCommand
+    // to call _bvc.advance(). Tick the BVC directly here so the profiler
+    // advances and wheel setpoints are written every control period.
     //
-    // Side-effect note: this redirects the existing BVC publish target.
-    // In isolated test use, _mc has not been wired to a live Robot, so this is safe.
-    _mc.setBvcStateRef(&_desired);
+    // PRE_ROTATE is no longer ticked here (sprint 024-001): it now runs via
+    // _activeCmd (which calls _bvc.advance() internally in tick()), so the
+    // PRE_ROTATE branch was removed to prevent double-ticking the BVC.
+    if (_mode == DriveMode::STREAMING) {
+        _bvc.advance(dt_s);
+    }
+
+    // G-mode: no additional state-machine branches needed here.
+    // PRE_ROTATE now runs via _activeCmd (handled in the block above).
+    // PURSUE runs via _activeCmd (handled in the block above).
+    // Both phases are driven entirely by the MotionCommand path at the top
+    // of driveAdvance — control never reaches here while GO_TO is active
+    // with a running _activeCmd.
+}
+
+// ---------------------------------------------------------------------------
+// Private helpers
+// ---------------------------------------------------------------------------
+
+void Planner::fullStop(ReplyFn fn, void* ctx)
+{
+    _mc_ctrl.stop();
+    _mode  = DriveMode::IDLE;
+    _tgtL  = 0.0f;
+    _tgtR  = 0.0f;
+    (void)fn;
+    (void)ctx;
+}
+
+/**
+ * Read the current odometry pose and convert to floating-point values.
+ *
+ * @param x      Output: x position in mm (float)
+ * @param y      Output: y position in mm (float)
+ * @param h_rad  Output: heading in radians
+ */
+void Planner::getPoseFloat(float& x, float& y, float& h_rad) const {
+    if (_hwState == nullptr) {
+        x = 0.0f; y = 0.0f; h_rad = 0.0f;
+        return;
+    }
+    int32_t xi, yi, hi;
+    // 044-001: read pose through the PhysicalStateEstimate seam. getPose is a
+    // static forwarder to Odometry::getPose (same HardwareState pose fields), so
+    // the returned pose is byte-identical to the prior direct Odometry call.
+    PhysicalStateEstimate::getPose(*_hwState, xi, yi, hi);
+    x     = static_cast<float>(xi);
+    y     = static_cast<float>(yi);
+    h_rad = static_cast<float>(hi) * (3.14159265f / 18000.0f);  // cdeg → rad
 }
 
 // ---------------------------------------------------------------------------
 // apply — stage the goal command.
 // Dispatches on PlannerCommand::GoalKind → the appropriate begin*() call.
-// ReplyFn is a no-op sink for now; EVT routing comes in ticket 059-003.
+// ReplyFn is a no-op sink; EVT routing comes via the command bus.
 // ---------------------------------------------------------------------------
 void Planner::apply(const msg::PlannerCommand& cmd)
 {
     const uint32_t now = 0;  // apply() is called outside the tick loop;
                              // the actual now_ms is passed in tick().
-    // We stage the command into the MC immediately on apply() so that the next
-    // tick() call finds the MC in the correct state. The MotionController begin*()
+    // We stage the command into the Planner immediately on apply() so that the
+    // next tick() call finds the planner in the correct state. The begin*()
     // calls are idempotent with respect to timing — they just configure the
     // internal MotionCommand; driveAdvance() advances it every tick.
     //
     // Note: corr_id from PlannerCommand::corr_id[] is passed as a string.
-    // The MotionController begin*() functions accept a const char* corrId.
+    // The begin*() functions accept a const char* corrId.
 
     const char* corrId = (cmd.corr_id[0] != '\0') ? cmd.corr_id : nullptr;
 
@@ -75,7 +385,7 @@ void Planner::apply(const msg::PlannerCommand& cmd)
         // beginVelocity takes (v_mms, omega_rads).
         float v     = cmd.goal.velocity.v_x;
         float omega = cmd.goal.velocity.omega;
-        _mc.beginVelocity(v, omega, now, _target, _noopReply, nullptr, corrId);
+        beginVelocity(v, omega, now, _target, _noopReply, nullptr, corrId);
         break;
     }
 
@@ -84,7 +394,7 @@ void Planner::apply(const msg::PlannerCommand& cmd)
         float tx    = cmd.goal.goto_goal.x;
         float ty    = cmd.goal.goto_goal.y;
         float speed = cmd.goal.goto_goal.speed;
-        _mc.beginGoTo(tx, ty, speed, now, _target, _noopReply, nullptr, corrId);
+        beginGoTo(tx, ty, speed, now, _target, _noopReply, nullptr, corrId);
         break;
     }
 
@@ -94,7 +404,7 @@ void Planner::apply(const msg::PlannerCommand& cmd)
         static constexpr float RAD_TO_CDEG = 18000.0f / 3.14159265f;
         float headingCdeg = cmd.goal.turn.heading * RAD_TO_CDEG;
         float epsCdeg     = 300.0f;  // default 3° tolerance
-        _mc.beginTurn(headingCdeg, epsCdeg, now, _target, _noopReply, nullptr, corrId);
+        beginTurn(headingCdeg, epsCdeg, now, _target, _noopReply, nullptr, corrId);
         break;
     }
 
@@ -111,7 +421,7 @@ void Planner::apply(const msg::PlannerCommand& cmd)
         }
         int32_t targetMm = (int32_t)(cmd.goal.distance.distance);
         if (targetMm < 0) targetMm = -targetMm;  // beginDistance takes unsigned magnitude
-        _mc.beginDistance(leftMms, rightMms, targetMm, now, _target, _noopReply, nullptr, corrId);
+        beginDistance(leftMms, rightMms, targetMm, now, _target, _noopReply, nullptr, corrId);
         break;
     }
 
@@ -125,7 +435,7 @@ void Planner::apply(const msg::PlannerCommand& cmd)
                                 cmd.goal.timed.omega,
                                 _cfg.trackwidthMm, vL, vR);
         uint32_t durationMs = cmd.goal.timed.duration;
-        _mc.beginTimed(vL, vR, durationMs, now, _target, _noopReply, nullptr, corrId);
+        beginTimed(vL, vR, durationMs, now, _target, _noopReply, nullptr, corrId);
         break;
     }
 
@@ -134,7 +444,7 @@ void Planner::apply(const msg::PlannerCommand& cmd)
         // RotationGoal: angle_rad.
         static constexpr float RAD_TO_CDEG = 18000.0f / 3.14159265f;
         float relCdeg = cmd.goal.rotation.angle * RAD_TO_CDEG;
-        _mc.beginRotation(relCdeg, now, _target, _noopReply, nullptr, corrId);
+        beginRotation(relCdeg, now, _target, _noopReply, nullptr, corrId);
         break;
     }
 
@@ -146,12 +456,12 @@ void Planner::apply(const msg::PlannerCommand& cmd)
         BodyKinematics::inverse(cmd.goal.stream.v_x,
                                 cmd.goal.stream.omega,
                                 _cfg.trackwidthMm, vL, vR);
-        _mc.beginStream(vL, vR, now, _target, _noopReply, nullptr);
+        beginStream(vL, vR, now, _target, _noopReply, nullptr);
         break;
     }
 
     case msg::PlannerCommand::GoalKind::STOP:
-        _mc.stop(now, _noopReply, nullptr);
+        stop(now, _noopReply, nullptr);
         break;
 
     case msg::PlannerCommand::GoalKind::NONE:
@@ -166,7 +476,7 @@ void Planner::apply(const msg::PlannerCommand& cmd)
 //
 // Sequence:
 //   1. Populate _hw from _drive.state() (fused pose + twist).
-//   2. Call _mc.driveAdvance(_hw, _cmds, _target, now).
+//   2. Call driveAdvance(_hw, _cmds, _target, now).
 //   3. Read commanded body twist from _desired.bodyTwist.
 //   4. Pack msg::DrivetrainCommand{TWIST} into CommandBatch.
 //   5. Update _state.
@@ -202,8 +512,8 @@ msg::CommandBatch Planner::tick(uint32_t now)
     //
     // The authoritative sensor state lives in robot.state.actual (sensors.tick
     // writes there via lineSensor._inputs / colorSensor_._inputs, both of which
-    // hold &state.actual).  MotionController::hardwareState() exposes the same
-    // pointer (it was set to &state.actual in Robot.cpp).
+    // hold &state.actual).  hardwareState() exposes the same pointer
+    // (it was set to &state.actual in Robot.cpp).
     //
     // Note: sensors.tick() runs at step 7 (after planner.tick at step 4).
     // This copies the values that sensors.tick() wrote on the PREVIOUS tick,
@@ -211,7 +521,7 @@ msg::CommandBatch Planner::tick(uint32_t now)
     // and matches the legacy loop (which also evaluates sensors before
     // sensor_tick's current-tick write in the next pass).
     {
-        const HardwareState* live = _mc.hardwareState();
+        const HardwareState* live = _hwState;
         if (live != nullptr) {
             for (int i = 0; i < 4; ++i) _hw.line[i]  = live->line[i];
             _hw.colorR = live->colorR;
@@ -226,14 +536,8 @@ msg::CommandBatch Planner::tick(uint32_t now)
     //
     // _cmds: sink for motor output (discarded — Drive owns the real motor path).
     // _target: our local DesiredState; BVC writes bodyTwist here via setBvcStateRef.
-    //
-    // Note: if _mc._hwState != nullptr (i.e. the MC is wired to the live Robot's
-    // HardwareState), getPoseFloat() inside driveAdvance will read from there
-    // rather than _hw.inputs. This is intentional in the live wiring: the live
-    // pose is authoritative. In isolated test use, _mc._hwState is null, so
-    // driveAdvance falls back to our _hw parameter.
     // ------------------------------------------------------------------
-    _mc.driveAdvance(_hw, _cmds, _target, now);
+    driveAdvance(_hw, _cmds, _target, now);
 
     // ------------------------------------------------------------------
     // STEP 3: Read commanded body twist from _desired.bodyTwist.
@@ -242,15 +546,15 @@ msg::CommandBatch Planner::tick(uint32_t now)
     // wired in the constructor).  After driveAdvance() returns, _desired.bodyTwist
     // holds the profiled live setpoint: {vx, 0, omega}.
     //
-    // 060-004: When the MC is IDLE with no active command (e.g. after stop() /
-    // watchdog X / distance complete), driveAdvance() returns without advancing
+    // 060-004: When the planner is IDLE with no active command (e.g. after stop()
+    // / watchdog X / distance complete), driveAdvance() returns without advancing
     // the BVC, leaving _desired.bodyTwist at the last profiled value.  Propagating
     // that stale non-zero twist to Drive keeps the motors running indefinitely.
     // Zero the body twist explicitly so Drive receives {0,0,0} in IDLE.
     // ------------------------------------------------------------------
     float vx    = _desired.bodyTwist.vx_mmps;
     float omega = _desired.bodyTwist.omega_rads;
-    if (_mc.mode() == DriveMode::IDLE && !_mc.hasActiveCommand()) {
+    if (_mode == DriveMode::IDLE && !_activeCmd.active()) {
         vx    = 0.0f;
         omega = 0.0f;
         _desired.bodyTwist = {0.0f, 0.0f, 0.0f};
@@ -286,7 +590,7 @@ msg::CommandBatch Planner::tick(uint32_t now)
     // STEP 5: Update _state.
     // ------------------------------------------------------------------
     // Map legacy DriveMode → msg::DriveMode.
-    switch (_mc.mode()) {
+    switch (_mode) {
     case DriveMode::IDLE:      _state.mode = msg::DriveMode::IDLE;     break;
     case DriveMode::STREAMING: _state.mode = msg::DriveMode::STREAMING; break;
     case DriveMode::DISTANCE:  _state.mode = msg::DriveMode::DISTANCE;  break;
@@ -294,7 +598,7 @@ msg::CommandBatch Planner::tick(uint32_t now)
     case DriveMode::VELOCITY:  _state.mode = msg::DriveMode::VELOCITY;  break;
     default:                   _state.mode = msg::DriveMode::IDLE;     break;
     }
-    _state.active          = _mc.hasActiveCommand();
+    _state.active          = _activeCmd.active();
     _state.body_twist.v_x    = vx;
     _state.body_twist.v_y    = 0.0f;
     _state.body_twist.omega = omega;
@@ -313,16 +617,14 @@ msg::CommandBatch Planner::tick(uint32_t now)
 // configure — store updated planner config (motion limits only).
 //
 // Updates the local RobotConfig shadow (_cfg) with the motion-only fields from
-// the PlannerConfig message. The wrapped MotionController reads limits from its
-// own original RobotConfig ref, which is not directly reachable here; the
-// intent is to prepare for a future ticket where Planner owns the config flow.
+// the PlannerConfig message. These match the mapping in toPlannerConfig()
+// (PlannerConfig.cpp).
 // ---------------------------------------------------------------------------
 void Planner::configure(const msg::PlannerConfig& cfg)
 {
     _planCfg = cfg;
 
     // Update the local shadow RobotConfig with the motion-limit fields.
-    // These match the mapping in toPlannerConfig() (PlannerConfig.cpp).
     if (cfg.a_max       != 0.0f) _cfg.aMax         = cfg.a_max;
     if (cfg.a_decel     != 0.0f) _cfg.aDecel        = cfg.a_decel;
     if (cfg.v_body_max  != 0.0f) _cfg.vBodyMax      = cfg.v_body_max;

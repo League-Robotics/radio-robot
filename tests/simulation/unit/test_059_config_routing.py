@@ -132,8 +132,8 @@ def handle():
 # Tests
 # ---------------------------------------------------------------------------
 
-class TestSetVelKpRoutesToDrive2:
-    """SET vel.kP=2.0 routes to drive2.configure() (subsystem annotation: 'drive')."""
+class TestSetVelKpRoutesToDrive:
+    """SET vel.kP=2.0 routes to drive.configure() (subsystem annotation: 'drive')."""
 
     def test_set_vel_kp_commits_to_robot_config(self, handle):
         """handleSet writes vel.kP into RobotConfig.velKp."""
@@ -143,7 +143,7 @@ class TestSetVelKpRoutesToDrive2:
         assert abs(kp - 2.0) < 1e-4, f"RobotConfig.velKp expected 2.0, got {kp}"
 
     def test_set_vel_kp_projects_to_drive_config(self, handle):
-        """After SET vel.kP=2.0, the Drive2 config projection reflects the new gain."""
+        """After SET vel.kP=2.0, the Drive config projection reflects the new gain."""
         _lib.config_route_set_vel_kp(handle, 2.0)
         kp = _lib.config_route_drive2_vel_kp(handle)
         assert abs(kp - 2.0) < 1e-4, (
@@ -188,10 +188,10 @@ class TestSetAmaxRoutesToPlanner:
 
 
 class TestSetPoseViaSIVerb:
-    """SI verb routes through drive2.apply(SetPose); tickUpdate processes it."""
+    """SI verb routes through drive.apply(SetPose); tickUpdate processes it."""
 
     def test_setpose_x_y_h_applied(self, handle):
-        """drive2.apply(SetPose) + tickUpdate → fused pose matches requested values."""
+        """drive.apply(SetPose) + tickUpdate → fused pose matches requested values."""
         target_x   =  100.0
         target_y   =  200.0
         target_h   = math.pi / 4  # 45 degrees in radians
@@ -200,7 +200,7 @@ class TestSetPoseViaSIVerb:
                                    ctypes.c_float(target_x),
                                    ctypes.c_float(target_y),
                                    ctypes.c_float(target_h))
-        # Run one tick so Drive2 processes the staged SetPose command.
+        # Run one tick so Drive processes the staged SetPose command.
         _lib.config_route_tick(handle, 100)
 
         fx = _lib.config_route_drive2_fused_x(handle)
@@ -236,8 +236,8 @@ class TestSetPoseViaSIVerb:
 class TestInitConfigureCalled:
     """Robot constructor calls configure() on drive2/sensors/planner (059-004)."""
 
-    def test_drive2_vel_kp_non_zero_at_init(self, handle):
-        """drive2's effective vel_gains.kp is the default velKp (0.3), not zero.
+    def test_drive_vel_kp_non_zero_at_init(self, handle):
+        """drive's effective vel_gains.kp is the default velKp (0.3), not zero.
 
         If configure() was NOT called, the projected kp would read back from
         defaultRobotConfig() as 0.3 (same source), so this test verifies the
@@ -269,7 +269,7 @@ class TestInitConfigureCalled:
             f"planner a_max expected 300.0 (default), got {amax}"
         )
 
-    def test_drive2_planner_sensors_default_consistent(self, handle):
+    def test_drive_planner_sensors_default_consistent(self, handle):
         """All three subsystems are configured consistently from the same RobotConfig."""
         kp   = _lib.config_route_init_drive2_vel_kp(handle)
         amax = _lib.config_route_init_planner_amax(handle)

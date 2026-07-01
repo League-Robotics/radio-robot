@@ -7,7 +7,7 @@
 // Odometry, two IVelocityMotor, one IOdometer) and exposes the 4-verb contract
 // plus two-phase tick (tickUpdate / tickAction) per SubsystemContract.h.
 //
-// Renamed from Drive2 in ticket 060-006 (de-scaffold).
+// De-scaffolded in ticket 060-006 (name stabilized).
 //
 // Constraints: C++11, no heap/STL/RTTI/exceptions, no virtual in the contract.
 // =============================================================================

@@ -4,24 +4,22 @@
 
 // ---------------------------------------------------------------------------
 // MotionCommands — app-layer motion command parsing, conversion, and
-// reply formatting.  Extracted from MotionController (sprint 026, ticket 002).
+// reply formatting.
 //
 // Dependency direction: app/ → control/.
 // All CommandProcessor::replyOK/Err/Evt calls live here, not in control/.
 // ---------------------------------------------------------------------------
 
-class MotionController;
+class Planner;
 class CommandQueue;
 class Superstructure;
 struct Robot;
 
 // ---------------------------------------------------------------------------
 // MotionCtx — context bundle used by Commandable-registered motion handlers.
-//
-// Moved from source/control/MotionController.h to app layer (sprint 026-002).
 // ---------------------------------------------------------------------------
 struct MotionCtx {
-    MotionController*  mc;
+    Planner*           mc;
     Superstructure*    superstructure;  // Seam 3 (042-001): queue-path begin* goes through requestGoal
     struct Robot*      robot;
     CommandQueue*      queue;    // command queue for VW converter push_front; may be null
@@ -32,7 +30,7 @@ struct MotionCtx {
 // getMotionCommands — returns the full set of motion CommandDescriptors
 // (S, T, D, G, R, TURN, RT, VW, _VW, X, STOP) bound to ctx.
 //
-// Replaces MotionController::getCommands().  Called by Robot::buildCommandTable().
+// Called by Robot::buildCommandTable().
 // ctx must remain live for the lifetime of the returned descriptors.
 // ---------------------------------------------------------------------------
 std::vector<CommandDescriptor> getMotionCommands(MotionCtx* ctx);

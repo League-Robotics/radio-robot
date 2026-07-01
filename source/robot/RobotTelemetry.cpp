@@ -12,7 +12,7 @@
 // ---------------------------------------------------------------------------
 // buildTlmFrame — assemble the unified TLM frame; returns length.
 //
-// Reads drive.state(), sensors.state(), config, motionController.mode().
+// Reads drive.state(), sensors.state(), config, planner.mode().
 // Shared by the periodic STREAM (telemetryEmit) and the synchronous SNAP command.
 //
 // 060-001: rewired from state.actual (legacy HardwareState) to the new
@@ -63,7 +63,7 @@ int Robot::buildTlmFrame(char* buf, int len)
     bool haveTwist = (config.tlmFields & TLM_FIELD_TWIST) != 0;
 
     char modeChar = 'I';
-    switch (motionController.mode()) {
+    switch (planner.mode()) {
         case DriveMode::STREAMING: modeChar = 'S'; break;
         case DriveMode::DISTANCE:  modeChar = 'D'; break;
         case DriveMode::GO_TO:     modeChar = 'G'; break;
@@ -172,7 +172,7 @@ void Robot::telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx)
     // stays alive but doesn't flood the link with idle noise.
     static constexpr uint32_t kIdleMinMs = 500;
     static constexpr uint32_t kGraceMs   = 400;
-    if (motionController.mode() != DriveMode::IDLE) _lastActiveMs = now_ms;
+    if (planner.mode() != DriveMode::IDLE) _lastActiveMs = now_ms;
     bool stopped = ((now_ms - _lastActiveMs) > kGraceMs);
 
     uint32_t effectivePeriod = stopped

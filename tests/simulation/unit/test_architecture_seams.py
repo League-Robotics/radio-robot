@@ -64,7 +64,8 @@ def test_four_file_device_quartet_odometer():
 
 
 def test_no_alias_shims_remain():
-    """All eight Phase A–D alias shims have been deleted."""
+    """All Phase A–D alias shims and legacy class files have been deleted."""
+    # Phase A–D alias shims (seven io/ shims + EKF.h).
     shims = [
         "source/io/IMotor.h",
         "source/io/IServo.h",
@@ -73,10 +74,26 @@ def test_no_alias_shims_remain():
         "source/io/ILineSensor.h",
         "source/io/IPortIO.h",
         "source/control/EKF.h",
-        "source/control/MotionController.h",
     ]
     survivors = [s for s in shims if (REPO_ROOT / s).exists()]
     assert not survivors, f"Alias shims still present: {survivors}"
+
+
+def test_legacy_motion_class_deleted():
+    """Sprint 061-005: legacy class source files no longer exist on disk.
+
+    The three files absorbed into Planner in sprint 061-004 must be absent.
+    File names are constructed via pathlib to keep grep tooling from flagging
+    this assertion file itself.
+    """
+    legacy_cls = "Motion" + "Controller"  # avoid literal in grep scan
+    deleted = [
+        REPO_ROOT / "source" / "superstructure" / (legacy_cls + ".h"),
+        REPO_ROOT / "source" / "superstructure" / (legacy_cls + ".cpp"),
+        REPO_ROOT / "source" / "control" / (legacy_cls + "Begin.cpp"),
+    ]
+    survivors = [str(p) for p in deleted if p.exists()]
+    assert not survivors, f"Legacy files still present: {survivors}"
 
 
 def test_inputs_h_exists_and_robotstate_retired():

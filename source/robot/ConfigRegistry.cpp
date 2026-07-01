@@ -69,7 +69,7 @@ const ConfigEntry kRegistry[] = {
     // annotated "planner" so SET routes to planner.configure() (059-004).
     CFG_F_SS("aMax",       aMax,         "planner"),
     CFG_F   ("aDecel",     aDecel),
-    CFG_FI  ("turnGate",   turnInPlaceGate),   // wire: integer degrees; MotionController converts to radians at use-site
+    CFG_FI  ("turnGate",   turnInPlaceGate),   // wire: integer degrees; Planner converts to radians at use-site
     CFG_FI_SS("arriveTol", arriveTolMm,  "planner"),  // wire: integer mm
     // Body motion limits (Sprint 017 -- BodyVelocityController)
     CFG_F_SS("vBodyMax",   vBodyMax,     "planner"),  // body forward speed ceiling, mm/s

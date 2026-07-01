@@ -1,7 +1,7 @@
 // bus_drain_api.cpp — extern "C" C-ABI shims for the bus drain layer (ticket 059-003).
 //
 // Provides a BusDrainHandle that owns a self-contained stack of
-//   PlannerHandle (= SimHardware + Drive2 + MotionController2)
+//   SimHardware + Drive + Planner
 //   + CommandQueue
 //   + CommandProcessor (empty command table)
 //
@@ -11,14 +11,14 @@
 //   bus_drain_api_build_priority_batch — build a CommandBatch with one priority=true OutCommand
 //   bus_drain_api_build_n_commands — build a CommandBatch with N identical OutCommands
 //   bus_drain_api_drain — call drainCommandBatch(), return routed count
-//   bus_drain_api_drive2_get_fused_x — read drive2 state after drain
+//   bus_drain_api_drive_get_fused_x — read drive state after drain
 //   bus_drain_api_queue_size — return queue.size() after drain
 //   bus_drain_api_drain_returns_n — drain a batch, return the routed count
 //
 // Python tests (test_059_bus_drain.py) load this via ctypes.
 //
-// Construction order mirrors planner_api.cpp:
-//   cfg / hal / mc_ctrl / bvc / est / drive2 / motion_ctrl / mc2
+// Construction order mirrors planner_api.cpp (061-004: motion_ctrl removed):
+//   cfg / hal / mc_ctrl / bvc / est / drive / planner
 //   + CommandQueue + CommandProcessor (empty)
 //
 // Heap allocation in BusDrainHandle is acceptable — the no-heap constraint
@@ -38,7 +38,6 @@
 #include "state/PhysicalStateEstimate.h"
 #include "control/Odometry.h"
 #include "subsystems/drive/Drive.h"          // also declares toDriveConfig()
-#include "superstructure/MotionController.h"
 #include "superstructure/Planner.h"
 #include "superstructure/PlannerConfig.h"
 #include "commands/CommandQueue.h"
@@ -61,7 +60,6 @@ struct BusDrainHandle {
     BodyVelocityController  bvc;
     PhysicalStateEstimate   est;
     subsystems::Drive       drive;
-    MotionController        motion_ctrl;
     Planner                 planner;
     CommandQueue            queue;
     CommandProcessor        cmd_proc;
@@ -75,8 +73,7 @@ struct BusDrainHandle {
         , drive(hal.motorL(), hal.motorR(),
                 mc_ctrl, bvc, est, est.odometry(),
                 hal.otos(), cfg)
-        , motion_ctrl(mc_ctrl, est.odometry(), cfg)
-        , planner(motion_ctrl, drive, cfg)
+        , planner(mc_ctrl, est.odometry(), drive, cfg)
         , queue()
         , cmd_proc()
     {
@@ -185,8 +182,8 @@ uint8_t bus_drain_api_drain(void* h, const msg::CommandBatch* batch)
 // State reads
 // ---------------------------------------------------------------------------
 
-// Read drive2's fused X pose (mm/s) after drain (reflects applied TWIST).
-float bus_drain_api_drive2_get_fused_x(void* h)
+// Read drive's fused X pose (mm/s) after drain (reflects applied TWIST).
+float bus_drain_api_drive_get_fused_x(void* h)
 {
     if (!h) return 0.0f;
     BusDrainHandle* b = static_cast<BusDrainHandle*>(h);
@@ -202,10 +199,10 @@ int bus_drain_api_queue_size(void* h)
 }
 
 // ---------------------------------------------------------------------------
-// Drive2 tick helpers (for verifying that an applied TWIST actually drives)
+// Drive tick helpers (for verifying that an applied TWIST actually drives)
 // ---------------------------------------------------------------------------
 
-// Run one full sense + act cycle on Drive2 so the applied command takes effect.
+// Run one full sense + act cycle on Drive so the applied command takes effect.
 void bus_drain_api_tick(void* h, uint32_t now_ms)
 {
     if (!h) return;
@@ -216,17 +213,17 @@ void bus_drain_api_tick(void* h, uint32_t now_ms)
     b->drive.tickAction(now_ms);
 }
 
-// Read the encoder-derived vx from drive2 state.
+// Read the encoder-derived vx from drive state.
 //
-// 060-004: In the ordered-tick path, Drive2::tickAction TWIST calls
+// 060-004: In the ordered-tick path, Drive::tickAction TWIST calls
 // _mc.setTarget() directly (direct IK, no BVC ramp). The EKF velocity state
 // (fused.twist.vx) starts at 0 and has a chi-square gate that requires
 // P[3][3] to grow large enough to accept the full-speed step — which takes
 // 100+ ticks. The encoder twist (_encVx = dCenter / dt_s) is NOT gated and
 // reflects the actual measured encoder velocity directly.  The test's intent
-// is to verify that the TWIST command was received and drive2 is actually
+// is to verify that the TWIST command was received and drive is actually
 // driving; encoder vx is the right signal for that intent.
-float bus_drain_api_drive2_get_vx(void* h)
+float bus_drain_api_drive_get_vx(void* h)
 {
     if (!h) return 0.0f;
     BusDrainHandle* b = static_cast<BusDrainHandle*>(h);

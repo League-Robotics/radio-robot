@@ -7,7 +7,7 @@
 // ---------------------------------------------------------------------------
 // effectiveSlip — migration-safe rotationalSlip clamp.
 //
-// Used by Odometry::predict() and MotionController::beginRotation() so both
+// Used by Odometry::predict() and Planner::beginRotation() so both
 // apply the same clamped slip factor from RobotConfig::rotationalSlip.
 //
 // Value semantics:

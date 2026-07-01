@@ -6,7 +6,7 @@
 // oracle.  No state-graph, no transition-table — just dispatch.
 
 #include "Superstructure.h"
-#include "MotionController.h"
+#include "Planner.h"
 #include "Robot.h"
 #include "CommandProcessor.h"   // CommandProcessor::replyEvt, setQueue, process
 #include "CommandQueue.h"       // CommandQueue (X injection bypass)
@@ -54,28 +54,28 @@ void Superstructure::requestGoal(const GoalRequest& gr)
         // (beginDistance + resetEncoders).
         gr.robot->distanceDrive((int32_t)gr.leftMms, (int32_t)gr.rightMms,
                                 gr.targetMm, gr.replyFn, gr.replyCtx, gr.corrId);
-        if (_mc.hasActiveCommand()) {
-            if (gr.doneLabel) _mc.activeCmd().setDoneEvt(gr.doneLabel);
-            for (uint8_t i = 0; i < gr.nStops; ++i) _mc.activeCmd().addStop(gr.stops[i]);
+        if (_planner.hasActiveCommand()) {
+            if (gr.doneLabel) _planner.activeCmd().setDoneEvt(gr.doneLabel);
+            for (uint8_t i = 0; i < gr.nStops; ++i) _planner.activeCmd().addStop(gr.stops[i]);
         }
         break;
 
     case Goal::GOTO:
         // handleVW "x"+"y" branch: beginGoTo(x, y, speed, now, target, fn, ctx, corrId).
-        _mc.beginGoTo(gr.tx, gr.ty, gr.speedMms, gr.now_ms,
-                      target, gr.replyFn, gr.replyCtx, gr.corrId);
+        _planner.beginGoTo(gr.tx, gr.ty, gr.speedMms, gr.now_ms,
+                           target, gr.replyFn, gr.replyCtx, gr.corrId);
         break;
 
     case Goal::TURN:
         // handleVW "h" branch: beginTurn(h_cdeg, eps, now, target, fn, ctx, corrId).
-        _mc.beginTurn(gr.headingCdeg, gr.epsCdeg, gr.now_ms,
-                      target, gr.replyFn, gr.replyCtx, gr.corrId);
+        _planner.beginTurn(gr.headingCdeg, gr.epsCdeg, gr.now_ms,
+                           target, gr.replyFn, gr.replyCtx, gr.corrId);
         break;
 
     case Goal::ROTATE:
         // handleVW "rot" branch: beginRotation(rot_cdeg, now, target, fn, ctx, corrId).
-        _mc.beginRotation(gr.relCdeg, gr.now_ms,
-                          target, gr.replyFn, gr.replyCtx, gr.corrId);
+        _planner.beginRotation(gr.relCdeg, gr.now_ms,
+                               target, gr.replyFn, gr.replyCtx, gr.corrId);
         break;
 
     case Goal::VELOCITY:
@@ -83,11 +83,11 @@ void Superstructure::requestGoal(const GoalRequest& gr)
         // beginVelocity(v, omega, now, target, fn, ctx, corrId, seedImmediate).
         // When gr.streamSeed is true (S command), the BVC is seeded at the target
         // speed immediately (no trapezoid ramp-up), preserving S's original semantics.
-        _mc.beginVelocity(gr.v_mms, gr.omega_rads, gr.now_ms,
-                          target, gr.replyFn, gr.replyCtx, gr.corrId, gr.streamSeed);
-        if (_mc.hasActiveCommand()) {
-            if (gr.doneLabel) _mc.activeCmd().setDoneEvt(gr.doneLabel);
-            for (uint8_t i = 0; i < gr.nStops; ++i) _mc.activeCmd().addStop(gr.stops[i]);
+        _planner.beginVelocity(gr.v_mms, gr.omega_rads, gr.now_ms,
+                               target, gr.replyFn, gr.replyCtx, gr.corrId, gr.streamSeed);
+        if (_planner.hasActiveCommand()) {
+            if (gr.doneLabel) _planner.activeCmd().setDoneEvt(gr.doneLabel);
+            for (uint8_t i = 0; i < gr.nStops; ++i) _planner.activeCmd().addStop(gr.stops[i]);
         }
         break;
 
@@ -106,10 +106,10 @@ void Superstructure::requestGoal(const GoalRequest& gr)
 // same statements run in the same order with the same effects.  The three
 // formerly-external references are re-sourced to the Superstructure-held
 // members / the inputs parameter so the block bodies stay textually identical:
-//   robot.motionController → _mc   (bound to the local `mc` ref, as before)
-//   robot.config           → _cfg  (bound to the local `cfg` ref, as before)
-//   robot.haltController    → _hc
-//   robot.state.actual      → inputs (parameter)
+//   robot.planner          → _planner (bound to the local `mc` ref, as before)
+//   robot.config           → _cfg     (bound to the local `cfg` ref, as before)
+//   robot.haltController   → _hc
+//   robot.state.actual     → inputs (parameter)
 // NO reordering, NO logic change.  driveAdvance is NOT called here — it stays
 // in loopTickOnce immediately after this call.
 // ---------------------------------------------------------------------------
@@ -130,7 +130,7 @@ void Superstructure::evaluateSafety(CommandProcessor& cmd, CommandQueue& queue,
     // of host silence.  Open-ended streaming commands (S / VW / R) have no
     // TIME stop and remain keepalive-bound.
     {
-        MotionController& mc = _mc;
+        Planner& mc = _planner;
         bool needsWatchdog =
             (mc.mode() != DriveMode::IDLE) || mc.hasActiveCommand();
 

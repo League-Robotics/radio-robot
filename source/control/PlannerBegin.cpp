@@ -1,30 +1,25 @@
-// MotionControllerBegin.cpp — MotionController begin*() command entry points.
+// PlannerBegin.cpp — Planner begin*() command entry points.
 //
-// Split from MotionController.cpp (finding A3): pure translation-unit move of
-// the begin* family of member-function DEFINITIONS.  These remain
-// MotionController:: members declared in MotionController.h — no header,
-// signature, or logic change.
+// Translation-unit containing the begin* family of member-function DEFINITIONS
+// for Planner.  Split from Planner.cpp for compilation-unit size management.
 //
 // Contains:
 //   _checkSafeOneShot, beginStream, beginVelocity, beginTimed,
 //   beginDistance, beginGoTo, beginTurn, beginRotation, beginRawVelocity,
 //   _startPreRotate
 //
-// Removed (053-005): beginArc — R command now computes omega = speed/radius
-// inline in handleR and routes through beginVelocity via Goal::VELOCITY.
-//
 // driveAdvance (per-tick pursuit/advance machinery), stop, cancel,
 // disableSafetyOneShot, softStop, fullStop, getPoseFloat, emitEvt, and the
-// constructor stay in MotionController.cpp.  Member functions link across
+// constructor stay in Planner.cpp.  Member functions link across
 // translation units, so e.g. beginGoTo calling getPoseFloat (kept) and
 // _startPreRotate (here), and driveAdvance (kept) calling _startPreRotate, are
 // all fine.
 //
 // localEvtEmitter (file-local static, the default MotionEventSink::emitFn) is
 // referenced only by beginGoTo, so it travels here with that body.  The static
-// member emitEvt — used by the kept driveAdvance — stays in MotionController.cpp.
+// member emitEvt — used by the kept driveAdvance — stays in Planner.cpp.
 
-#include "superstructure/MotionController.h"
+#include "superstructure/Planner.h"
 #include "MotorController.h"
 #include "Odometry.h"
 #include "BodyKinematics.h"
@@ -76,12 +71,12 @@ static void localEvtEmitter(const char* base, const char* corrId, void* ctx)
 //
 // Note: _cfg is a const-ref; safetyEnabled lives in the mutable RobotConfig
 // owned by Robot.  Access via _robot->config when available, which IS the
-// same object as _cfg (Robot passes &cfg to MotionController).  Cast away
+// same object as _cfg (Robot passes &cfg to Planner).  Cast away
 // const here — we are legitimately mutating config.safetyEnabled as the
-// designated "re-arm" code path (ticket 024-003 decision: MotionController
+// designated "re-arm" code path (ticket 024-003 decision: Planner
 // owns the flag; architecture review confirmed).
 // ---------------------------------------------------------------------------
-void MotionController::_checkSafeOneShot(ReplyFn fn, void* ctx)
+void Planner::_checkSafeOneShot(ReplyFn fn, void* ctx)
 {
     if (!_safeOneShotDisable) return;
     _safeOneShotDisable = false;
@@ -99,8 +94,8 @@ void MotionController::_checkSafeOneShot(ReplyFn fn, void* ctx)
 // Entry points
 // ---------------------------------------------------------------------------
 
-void MotionController::beginStream(float leftMms, float rightMms, uint32_t now_ms,
-                                   TargetState& target, ReplyFn fn, void* ctx)
+void Planner::beginStream(float leftMms, float rightMms, uint32_t now_ms,
+                          TargetState& target, ReplyFn fn, void* ctx)
 {
     // Cancel-if-active: emit EVT cancelled for the preempted command's corrId
     // before seeding the BVC.  Contract: an explicit S command (stream=1 path)
@@ -145,9 +140,9 @@ void MotionController::beginStream(float leftMms, float rightMms, uint32_t now_m
     target.sink      = {};  // no async EVT for streaming mode
 }
 
-void MotionController::beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
-                                     TargetState& target, ReplyFn fn, void* ctx,
-                                     const char* corr_id, bool seedImmediate)
+void Planner::beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
+                            TargetState& target, ReplyFn fn, void* ctx,
+                            const char* corr_id, bool seedImmediate)
 {
     // Cancel any stale MotionCommand before configuring the new one.
     // cancel(HARD) emits "EVT cancelled" via the stored reply sink (making the
@@ -197,10 +192,10 @@ void MotionController::beginVelocity(float v_mms, float omega_rads, uint32_t now
     target.mode = DriveMode::VELOCITY;
 }
 
-void MotionController::beginTimed(float leftMms, float rightMms,
-                                  uint32_t durationMs, uint32_t now_ms,
-                                  TargetState& target, ReplyFn fn, void* ctx,
-                                  const char* corr_id)
+void Planner::beginTimed(float leftMms, float rightMms,
+                         uint32_t durationMs, uint32_t now_ms,
+                         TargetState& target, ReplyFn fn, void* ctx,
+                         const char* corr_id)
 {
     // Convert (L, R) wheel speeds to body twist (v, ω) via the forward kinematics map.
     // For equal L=R (straight drive), forward() gives v=(L+R)/2 and omega=0 — no steer bias.
@@ -243,10 +238,10 @@ void MotionController::beginTimed(float leftMms, float rightMms,
     target.mode = DriveMode::VELOCITY;
 }
 
-void MotionController::beginDistance(float leftMms, float rightMms,
-                                     int32_t targetMm, uint32_t now_ms,
-                                     TargetState& target, ReplyFn fn, void* ctx,
-                                     const char* corr_id)
+void Planner::beginDistance(float leftMms, float rightMms,
+                            int32_t targetMm, uint32_t now_ms,
+                            TargetState& target, ReplyFn fn, void* ctx,
+                            const char* corr_id)
 {
     // Convert (L, R) wheel speeds to body twist (v, ω) via forward kinematics.
     float v_mms, omega_rads;
@@ -263,12 +258,12 @@ void MotionController::beginDistance(float leftMms, float rightMms,
     // Encoder-reset workaround: reset the accumulator so DISTANCE delta starts
     // from 0.  The state.inputs.encLMm/R baseline reset is done by Robot::
     // distanceDrive() after this call — do not move that reset here.
-    _mc.resetEncoderAccumulators();
+    _mc_ctrl.resetEncoderAccumulators();
 
     // Capture encoder baseline for per-tick decel hook.  After resetEncoderAccumulators()
     // the hardware positions are 0; reading immediately gives a clean 0 baseline.
     int32_t encL0_raw, encR0_raw;
-    _mc.getEncoderPositions(encL0_raw, encR0_raw);
+    _mc_ctrl.getEncoderPositions(encL0_raw, encR0_raw);
     _dEnc0       = ((float)encL0_raw + (float)encR0_raw) * 0.5f;
 
     // Store decel-hook state.
@@ -337,9 +332,9 @@ void MotionController::beginDistance(float leftMms, float rightMms,
     target.distanceTargetMm = static_cast<float>(targetMm);
 }
 
-void MotionController::beginGoTo(float tx, float ty, float speedMms, uint32_t now_ms,
-                                 TargetState& target, ReplyFn fn, void* ctx,
-                                 const char* corr_id)
+void Planner::beginGoTo(float tx, float ty, float speedMms, uint32_t now_ms,
+                        TargetState& target, ReplyFn fn, void* ctx,
+                        const char* corr_id)
 {
     // Store goal in world frame by transforming robot-relative (tx, ty)
     // using the current odometry pose.
@@ -417,9 +412,9 @@ void MotionController::beginGoTo(float tx, float ty, float speedMms, uint32_t no
     }
 }
 
-void MotionController::beginTurn(float headingCdeg, float epsCdeg, uint32_t now_ms,
-                                TargetState& target, ReplyFn fn, void* ctx,
-                                const char* corr_id)
+void Planner::beginTurn(float headingCdeg, float epsCdeg, uint32_t now_ms,
+                        TargetState& target, ReplyFn fn, void* ctx,
+                        const char* corr_id)
 {
     // Convert centidegrees → radians for the absolute target heading.
     // 1 cdeg = π/18000 rad (same conversion as getPoseFloat uses for poseHrad).
@@ -503,9 +498,9 @@ void MotionController::beginTurn(float headingCdeg, float epsCdeg, uint32_t now_
 // so it does not depend on poseHrad/OTOS at all. A tight TIME stop bounds the
 // spin so a frozen encoder read can never run away.
 // ---------------------------------------------------------------------------
-void MotionController::beginRotation(float relCdeg, uint32_t now_ms,
-                                     TargetState& target, ReplyFn fn, void* ctx,
-                                     const char* corr_id)
+void Planner::beginRotation(float relCdeg, uint32_t now_ms,
+                            TargetState& target, ReplyFn fn, void* ctx,
+                            const char* corr_id)
 {
     const float kDegToRad = 3.14159265f / 180.0f;
     // Spin rate for RT — deliberately moderate (not yawRateMax) so the SOFT
@@ -561,7 +556,7 @@ void MotionController::beginRotation(float relCdeg, uint32_t now_ms,
     target.mode = DriveMode::VELOCITY;
 }
 
-void MotionController::beginRawVelocity(float v_mms, float omega_rads)
+void Planner::beginRawVelocity(float v_mms, float omega_rads)
 {
     // Cancel-if-active: emit EVT cancelled for the preempted command's corrId
     // before seeding the BVC.  _VW (raw velocity, fire-and-forget) must not
@@ -597,8 +592,8 @@ void MotionController::beginRawVelocity(float v_mms, float omega_rads)
 //             beginGoTo().  The PRE_ROTATE command does NOT set a reply sink;
 //             driveAdvance handles the PRE_ROTATE → PURSUE transition and emits
 //             "EVT done G" on TIME-net expiry directly via target.replyFn.
-void MotionController::_startPreRotate(float bearingRad, float speed,
-                                        uint32_t now_ms, TargetState& target)
+void Planner::_startPreRotate(float bearingRad, float speed,
+                              uint32_t now_ms, TargetState& target)
 {
     float gateRad = _cfg.turnInPlaceGate * (3.14159265f / 180.0f);
 

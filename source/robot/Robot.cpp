@@ -1,19 +1,12 @@
 #include "Robot.h"
-#include "superstructure/MotionController.h"
 #include "subsystems/sensors/SensorsConfig.h"
 #include "superstructure/PlannerConfig.h"
 #ifndef HOST_BUILD
-#include "MicroBit.h"
-#include "MicroBitDevice.h"
+#include "MicroBit.h"        // IWYU pragma: keep — firmware build needs system_timer_current_time()
+#include "MicroBitDevice.h"  // IWYU pragma: keep — firmware runtime init (clangd false-positive under HOST_BUILD)
 #endif
-#include "Odometry.h"
 #include "DebugCommands.h"
-#include "CommandProcessor.h"
 #include "ConfigRegistry.h"
-#include <cstdio>
-#include <cmath>
-#include <cstring>
-#include <cstdlib>
 #include <cassert>
 
 // ---------------------------------------------------------------------------
@@ -41,13 +34,14 @@ static uint32_t system_timer_current_time() { return g_sim_now_ms; }
 //
 // Declaration order (from Robot.h):
 //   hal, config, state, motorL, motorR, otos, line, colorSensor, gripper, portio,
-//   motorController, estimate, motionController, portController, servoController
+//   motorController, estimate, portController, servoController
+//   (motionController removed 061-004 — absorbed into Planner)
 //
 // hal must be declared (and therefore initialized) before the interface refs so
 // that hal.motorL() etc. are valid when the refs are bound.
 //
 // Two post-construction binds:
-//   motionController.setHardwareState(&state.inputs)  — MotionController reads pose
+//   planner.setHardwareState(&state.inputs)  — Planner reads authoritative pose
 //   motorController.setCommandsRef(&state.commands)   — MotorController writes tgt*/pwm*
 // ---------------------------------------------------------------------------
 
@@ -60,7 +54,6 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       colorSensor(hal.colorSensor()), gripper(hal.gripper()), portio(hal.portIO()),
       motorController(motorL, motorR, config),
       estimate(),
-      motionController(motorController, estimate.odometry(), config),
       portController(portio),
       servoController(gripper),
       // Phase E (043-001) sensor subsystems — wired with their device ref,
@@ -79,15 +72,17 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       // (periodic/updateInputs are no-ops); not wired into loopTickOnce.  Actuation
       // still flows through servoController (unchanged) — zero behavior change.
       gripper_sub(gripper),
-      // Superstructure (042-001) — wired with references to motionController and
-      // haltController (both declared before it) plus config.  Declaration order
-      // in Robot.h guarantees those are constructed first.
-      superstructure(motionController, haltController, config),
+      // Superstructure (042-001) — wired with references to planner and
+      // haltController plus config.  Declaration order in Robot.h guarantees
+      // haltController is constructed first; planner is constructed after
+      // superstructure (safe: Superstructure only stores the reference, never
+      // uses it during construction).
+      superstructure(planner, haltController, config),
       // Phase 3 (059-004): new message-contract subsystems.  ADDITIVE — NOT yet
       // wired into loopTickOnce; configure() called in the constructor body below.
       //
       // bvc: Drive's own BodyVelocityController.  Separate from
-      // MotionController's internal _bvc so the two paths don't share PID state.
+      // Planner's internal _bvc so the two paths don't share PID state.
       bvc(motorController, config),
       // drive: new-arch Drive, built with the same device refs as the legacy
       // drive subsystem.  Own BVC (bvc), own EKF state (via est + odo).
@@ -96,8 +91,8 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       // sensors: facade over the existing lineSensor / colorSensor_ subsystems;
       // shares the same HardwareState they write into.
       sensors(lineSensor, colorSensor_, state.actual),
-      // planner: wraps existing motionController + drive.
-      planner(motionController, drive, config)
+      // planner: owns motion control directly (061-004: motionController removed).
+      planner(motorController, estimate.odometry(), drive, config)
 {
     // -----------------------------------------------------------------------
     // Phase 3 (059-004): bottom-up configure() calls.
@@ -109,23 +104,21 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
     sensors.configure(subsystems::toLineSensorConfig(config),
                       subsystems::toColorSensorConfig(config));
     planner.configure(toPlannerConfig(config));
-    motionController.setHardwareState(&state.actual);
+    planner.setHardwareState(&state.actual);
     // 060-002: Drive's constructor already called _mc.setCommandsRef(&_outputs),
     // binding MotorController to drive._outputs.  Do NOT override that binding
     // here, or drive.outputs() will be stale.
     //
-    // 060-004: Planner's constructor already called
-    // _mc.setBvcStateRef(&planner._desired) so that planner.tick() reads the BVC
-    // body-twist output from planner._desired.  Do NOT override that binding here
-    // or planner.tick() will read stale zeros from _desired.bodyTwist while BVC
-    // writes to robot.state.desired instead.
+    // 061-004: Planner's constructor already called _bvc.setStateRef(&_desired)
+    // so that planner.tick() reads the BVC body-twist output from planner._desired.
+    // Do NOT override that binding here or planner.tick() will read stale zeros.
     // setRobotCtx replaces setCtx (sprint 026-002): MotionCtx now lives in Robot.
-    motionController.setRobotCtx(this);
+    planner.setRobotCtx(this);
     // Initialise _motionCtx (sprint 026-002): mc and robot pointers; queue wired
     // later by setMotionQueue() from LoopScheduler or test harness.
     // 042-001: superstructure pointer wired so handleVW queue-path branches route
     // begin* through requestGoal (Seam 3).
-    _motionCtx.mc             = &motionController;
+    _motionCtx.mc             = &planner;
     _motionCtx.superstructure = &superstructure;
     _motionCtx.robot          = this;
     _motionCtx.queue          = nullptr;
@@ -195,7 +188,7 @@ void Robot::otosCorrect(uint32_t now_ms)
     // controller — this was the root cause of the "spin on placement" symptom.
     //
     // EVT path (Open Question 3 resolution): we call
-    //   motionController.emitToActiveChannel("EVT otos lost", state.target)
+    //   planner.emitToActiveChannel("EVT otos lost", state.desired)
     // which wraps the existing static emitEvt(base, TargetState&) helper.
     // Robot owns state.target and can pass it directly; no new reply-sink
     // plumbing is required.  emitEvt routes via target.sink.emitFn — the
@@ -259,14 +252,14 @@ void Robot::otosCorrect(uint32_t now_ms)
         // Emit "EVT otos lost" once per unhealthy window, only during an active
         // motion command (no point signalling on a parked robot).  Trigger is
         // unchanged from D9; the raw telemetry above is independent of this.
-        if (motionController.hasActiveCommand()) {
+        if (planner.hasActiveCommand()) {
             if (_otosInvalidStartMs == 0) {
                 _otosInvalidStartMs = now_ms;
             }
             if (!_otosLostEmitted &&
                 ((now_ms - _otosInvalidStartMs) >= 500u)) {
-                motionController.emitToActiveChannel("EVT otos lost",
-                                                     state.desired);
+                planner.emitToActiveChannel("EVT otos lost",
+                                            state.desired);
                 _otosLostEmitted = true;
             }
         }
@@ -358,8 +351,8 @@ void Robot::resetEncoders()
 void Robot::distanceDrive(int32_t l, int32_t r, int32_t targetMm,
                                 ReplyFn fn, void* ctx, const char* corr_id)
 {
-    motionController.beginDistance((float)l, (float)r, targetMm,
-                                   systemTime(), state.desired, fn, ctx, corr_id);
+    planner.beginDistance((float)l, (float)r, targetMm,
+                          systemTime(), state.desired, fn, ctx, corr_id);
     // Atomic encoder reset: aligns hardware accumulators, MC velocity baselines,
     // outlier-filter baseline, and Odometry encoder snapshot in one call.
     // (Replaces the split reset that was here + inside beginDistance().)

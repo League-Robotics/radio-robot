@@ -341,9 +341,12 @@ void OtosSensor::setWorldPose(float x_mm, float y_mm, float h_rad)
     long rx = lroundf(xF / kPosMmPerLsb);
     long ry = lroundf(yF / kPosMmPerLsb);
     long rh = lroundf(hF / kHdgRadPerLsb);
-    if (rx >  32767) rx =  32767;  if (rx < -32767) rx = -32767;
-    if (ry >  32767) ry =  32767;  if (ry < -32767) ry = -32767;
-    if (rh >  32767) rh =  32767;  if (rh < -32767) rh = -32767;
+    if (rx >  32767) rx =  32767;
+    if (rx < -32767) rx = -32767;
+    if (ry >  32767) ry =  32767;
+    if (ry < -32767) ry = -32767;
+    if (rh >  32767) rh =  32767;
+    if (rh < -32767) rh = -32767;
     writeXYH(REG_POSITION_XL, (int16_t)rx, (int16_t)ry, (int16_t)rh);
 }
 

@@ -5,7 +5,7 @@ test_ekf_dual_source.py — Encoder error injection + dual-source EKF fusion tes
 Three tests:
 
 1. test_encoder_error_injection_only
-   Verifies that drive2_api_enable_encoder_sim_model injects meaningful encoder
+   Verifies that drive_api_enable_encoder_sim_model injects meaningful encoder
    error in isolation.  The SimOdometer is initialized (begin_otos) and the
    zero-noise sim model is enabled so OTOS accumulates true position and the EKF
    can lean on it to correct the over-reporting encoder.
@@ -20,7 +20,7 @@ Three tests:
 
 3. test_otos_bad_encoder_good
    Regression of the 057-005 single-bad-sensor scenario: noisy OTOS without
-   OTOS initialization so Drive2's correction path is inactive.  The EKF
+   OTOS initialization so Drive's correction path is inactive.  The EKF
    encoder dead-reckoning tracks ground truth while optical_x stays at 0
    (opt_err = gt_x >> 10 mm).  Fused error must be < 20 mm.
 
@@ -30,13 +30,13 @@ Architecture note — EKF sensor weighting:
   OTOS-primary when OTOS is initialized.  Test 2 exploits this: with encoder
   over-reporting and OTOS under-reporting, the EKF's weighted blend lands
   between the two biased sources and closer to ground truth than either.
-  Test 3 keeps OTOS uninitialized so Drive2's OTOS-correction path is inactive,
+  Test 3 keeps OTOS uninitialized so Drive's OTOS-correction path is inactive,
   and the encoder dead-reckoning alone tracks ground truth.
 
-The encoder shim (drive2_api_enable_encoder_sim_model) and the OTOS
-initialization shim (drive2_api_begin_otos) are loaded from the same
-libfirmware_host as the existing drive2 tests.  Drive2Ctx and _load_lib are
-imported from test_drive2_subsystem (sibling module in tests/simulation/unit/).
+The encoder shim (drive_api_enable_encoder_sim_model) and the OTOS
+initialization shim (drive_api_begin_otos) are loaded from the same
+libfirmware_host as the existing drive tests.  DriveCtx and _load_lib are
+imported from test_drive_subsystem (sibling module in tests/simulation/unit/).
 """
 
 from __future__ import annotations
@@ -48,14 +48,14 @@ import pathlib
 import pytest
 
 # ---------------------------------------------------------------------------
-# Import the shared Drive2Ctx + base _load_lib from the sibling test module.
+# Import the shared DriveCtx + base _load_lib from the sibling test module.
 # ---------------------------------------------------------------------------
 
 _HERE = pathlib.Path(__file__).parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-from test_drive2_subsystem import Drive2Ctx, _load_lib as _base_load_lib  # noqa: E402
+from test_drive_subsystem import DriveCtx, _load_lib as _base_load_lib  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -67,9 +67,9 @@ def _load_lib() -> ctypes.CDLL:
     """Load firmware_host and configure all shim signatures including encoder model."""
     lib = _base_load_lib()
 
-    # drive2_api_enable_encoder_sim_model (ticket 058-001)
-    lib.drive2_api_enable_encoder_sim_model.restype  = None
-    lib.drive2_api_enable_encoder_sim_model.argtypes = [
+    # drive_api_enable_encoder_sim_model (ticket 058-001)
+    lib.drive_api_enable_encoder_sim_model.restype  = None
+    lib.drive_api_enable_encoder_sim_model.argtypes = [
         ctypes.c_void_p,   # handle
         ctypes.c_float,    # slip_l
         ctypes.c_float,    # slip_r
@@ -77,16 +77,16 @@ def _load_lib() -> ctypes.CDLL:
         ctypes.c_float,    # scale_err_r
     ]
 
-    # drive2_api_begin_otos (ticket 058-001) — initialises SimOdometer so
-    # Drive2's OTOS-correction path activates.  Mirrors Robot::begin() → otos.begin().
-    lib.drive2_api_begin_otos.restype  = None
-    lib.drive2_api_begin_otos.argtypes = [ctypes.c_void_p]
+    # drive_api_begin_otos (ticket 058-001) — initialises SimOdometer so
+    # Drive's OTOS-correction path activates.  Mirrors Robot::begin() → otos.begin().
+    lib.drive_api_begin_otos.restype  = None
+    lib.drive_api_begin_otos.argtypes = [ctypes.c_void_p]
 
     return lib
 
 
 # ---------------------------------------------------------------------------
-# Module-scoped fixture (mirrors dlib in test_drive2_subsystem).
+# Module-scoped fixture (mirrors dlib in test_drive_subsystem).
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
@@ -96,15 +96,15 @@ def dlib(build_lib):  # noqa: ARG001
 
 
 # ---------------------------------------------------------------------------
-# Extended Drive2Ctx with encoder sim model and OTOS init helpers.
+# Extended DriveCtx with encoder sim model and OTOS init helpers.
 # ---------------------------------------------------------------------------
 
-class Drive2CtxEx(Drive2Ctx):
-    """Drive2Ctx extended with enable_encoder_sim_model and begin_otos."""
+class DriveCtxEx(DriveCtx):
+    """DriveCtx extended with enable_encoder_sim_model and begin_otos."""
 
-    def begin_otos(self) -> "Drive2CtxEx":
-        """Initialize the SimOdometer so Drive2's OTOS-correction path is active."""
-        self._lib.drive2_api_begin_otos(self._h)
+    def begin_otos(self) -> "DriveCtxEx":
+        """Initialize the SimOdometer so Drive's OTOS-correction path is active."""
+        self._lib.drive_api_begin_otos(self._h)
         return self
 
     def enable_encoder_sim_model(
@@ -113,8 +113,8 @@ class Drive2CtxEx(Drive2Ctx):
         slip_r: float = 0.0,
         scale_err_l: float = 0.0,
         scale_err_r: float = 0.0,
-    ) -> "Drive2CtxEx":
-        self._lib.drive2_api_enable_encoder_sim_model(
+    ) -> "DriveCtxEx":
+        self._lib.drive_api_enable_encoder_sim_model(
             self._h,
             ctypes.c_float(slip_l),
             ctypes.c_float(slip_r),
@@ -138,8 +138,8 @@ class Drive2CtxEx(Drive2Ctx):
 
 def test_encoder_error_injection_only(dlib):
     """Encoder scale over-report is detected and corrected by clean OTOS via EKF."""
-    with Drive2CtxEx(dlib) as d:
-        # Initialize OTOS so Drive2 applies optical corrections.
+    with DriveCtxEx(dlib) as d:
+        # Initialize OTOS so Drive applies optical corrections.
         d.begin_otos()
         # Enable OTOS zero-noise sim model: accumulates true velocity → perfect reference.
         d.enable_otos_sim_model(
@@ -192,8 +192,8 @@ def test_encoder_error_injection_only(dlib):
 
 def test_ekf_dual_source_fusion(dlib):
     """EKF fused pose beats BOTH biased encoder (over-report) and biased OTOS (under-report)."""
-    with Drive2CtxEx(dlib) as d:
-        # Initialize OTOS so Drive2 applies optical corrections.
+    with DriveCtxEx(dlib) as d:
+        # Initialize OTOS so Drive applies optical corrections.
         d.begin_otos()
         # OTOS: deterministic negative drift (-0.15 mm/tick) → under-reports position.
         # No Gaussian noise so the result is deterministic across runs.
@@ -248,19 +248,19 @@ def test_ekf_dual_source_fusion(dlib):
 # Test 3: test_otos_bad_encoder_good
 #
 # Regression of the 057-005 single-bad-sensor scenario.  The SimOdometer is
-# NOT initialized (drive2_api_begin_otos not called), so Drive2's OTOS-
+# NOT initialized (drive_api_begin_otos not called), so Drive's OTOS-
 # correction path remains inactive.  The EKF encoder dead-reckoning tracks
 # ground truth closely; optical_x stays at 0 (opt_err ≈ gt_x >> 10 mm).
 #
-# This mirrors test_ekf_fusion_beats_noise in test_drive2_subsystem.py and
+# This mirrors test_ekf_fusion_beats_noise in test_drive_subsystem.py and
 # verifies that encoder-clean / OTOS-inactive behaviour is unchanged by the
 # 058-001 changes.
 # ---------------------------------------------------------------------------
 
 def test_otos_bad_encoder_good(dlib):
     """OTOS-inactive / encoder-clean regime: EKF stays within 20 mm of ground truth."""
-    with Drive2CtxEx(dlib) as d:
-        # OTOS NOT initialized — Drive2 correction path inactive for this test.
+    with DriveCtxEx(dlib) as d:
+        # OTOS NOT initialized — Drive correction path inactive for this test.
         # Same OTOS error parameters as the 057-005 test_ekf_fusion_beats_noise.
         d.enable_otos_sim_model(
             linear_noise_sigma=5.0,

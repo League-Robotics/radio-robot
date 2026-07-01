@@ -10,7 +10,6 @@
 #include "MotorController.h"
 #include "PhysicalStateEstimate.h"
 #include "OtosCommands.h"
-#include "superstructure/MotionController.h"
 #include "PortController.h"
 #include "ServoController.h"
 #include "Inputs.h"
@@ -34,14 +33,11 @@
 // Planner.  ADDITIVE: constructed alongside the existing subsystems;
 // configure() called in the Robot constructor.  Drive requires its own
 // BodyVelocityController member (Robot gains one named bvc to avoid
-// shadowing MotionController's internal _bvc).
-// Renamed from Drive2/bvc2/MotionController2 in ticket 060-006.
+// shadowing Planner's internal _bvc).
 #include "../control/BodyVelocityController.h"
 #include "../subsystems/drive/Drive.h"
 #include "../subsystems/sensors/Sensors.h"
-#include "../subsystems/sensors/SensorsConfig.h"
 #include "../superstructure/Planner.h"
-#include "../superstructure/PlannerConfig.h"
 
 // Forward declarations — keeps the header-graph shallow.
 class DebugCommands;
@@ -67,9 +63,8 @@ struct RobotSysCtx {
  *
  * Hardware is provided through a Hardware& (NezhaHAL on device, MockHAL in
  * host tests). Robot binds interface refs from hal.motorL() etc.
- * The control/state layer (MotorController, PhysicalStateEstimate,
- * MotionController) and state
- * (RobotConfig, RobotStateContainer) are VALUE MEMBERS owned by Robot.
+ * The control/state layer (MotorController, PhysicalStateEstimate, Planner)
+ * and state (RobotConfig, RobotStateContainer) are VALUE MEMBERS owned by Robot.
  *
  * Member declaration order is load-bearing (C++ initialises members in
  * declaration order):
@@ -79,8 +74,8 @@ struct RobotSysCtx {
  *   4. otos, line, color, gripper, portio refs
  *   5. motorController         — needs motorL, motorR, config refs
  *   6. estimate                — default ctor (PhysicalStateEstimate)
- *   7. motionController        — needs motorController, estimate.odometry(), config
- *   8. portController          — needs portio ref
+ *   7. portController          — needs portio ref
+ *   8. planner depends on motorController, estimate.odometry(), drive, config
  */
 struct Robot {
     // ---- HAL reference (must be declared first) ----
@@ -104,12 +99,7 @@ struct Robot {
     // ---- Owned control-layer members (depend on refs above) ----
     MotorController     motorController;   // (motorL, motorR, config)
     PhysicalStateEstimate estimate;        // default ctor; wraps Odometry+EKF (041-003)
-    // 060-005 NOTE: MotionController remains a public Robot value member for now.
-    // Removing it from the Robot public surface (making Planner own it as a private
-    // value member) requires rerouting all direct call sites in SystemCommands.cpp,
-    // MotionCommands.cpp, MotionControllerBegin.cpp, RobotTelemetry.cpp, Robot.cpp,
-    // and otosCorrect() — a structural refactor deferred to a follow-on ticket.
-    MotionController    motionController;  // (motorController, estimate.odometry(), config)
+    // motionController removed in 061-004: absorbed into Planner as direct members.
     PortController      portController;    // (portio)
     ServoController     servoController;   // (gripper)
     // Phase E (043-001) sensor subsystems — own the timed LINE/COLOUR/PORTS reads
@@ -132,10 +122,11 @@ struct Robot {
     subsystems::Gripper     gripper_sub;   // (gripper)
     HaltController      haltController;    // user-facing named stop-condition registry
     // Superstructure (Seam 3, 042-001) — thin Goal coordinator.  MUST be declared
-    // AFTER motionController and haltController: it holds references to both, and
-    // C++ initialises members in declaration order, so they must be constructed
-    // first.  Holds a const RobotConfig& as well.
-    Superstructure      superstructure;    // (motionController, haltController, config)
+    // AFTER haltController: it holds a reference to it, and C++ initialises
+    // members in declaration order.  Also holds Planner& and const RobotConfig&.
+    // Note: planner is declared AFTER superstructure; the Planner& is only stored
+    // (not used) during Superstructure construction, so this is safe (061-002).
+    Superstructure      superstructure;    // (planner, haltController, config)
     // Phase 3 (059-004): new message-contract subsystems.  configure() is called
     // in the Robot constructor body after all legacy members are fully constructed.
     //
@@ -143,10 +134,10 @@ struct Robot {
     //   bvc      depends on motorController (declared above)
     //   drive    depends on motorL/motorR, motorController, bvc, estimate
     //   sensors  depends on lineSensor, colorSensor_ (declared above)
-    //   planner  depends on motionController, drive (declared above)
+    //   planner  depends on motorController, estimate.odometry(), drive, config (061-004)
     //
     // bvc: Drive's own BodyVelocityController.  Separate from the _bvc inside
-    // MotionController to avoid sharing state between the legacy and new paths.
+    // Planner to avoid sharing state between the Drive and Planner BVC instances.
     BodyVelocityController  bvc;           // Drive's BVC — (motorController, config)
     subsystems::Drive       drive;         // new-arch Drive subsystem (059-004)
     subsystems::Sensors     sensors;       // new-arch Sensors facade (059-004)

@@ -161,7 +161,7 @@ public:
      * Note: value bytes are NOT contiguous in the frame — high byte at [5],
      * mode at [6], low byte at [7]. This matches the vendor TS exactly.
      *
-     * Not wired into MotionController — provided for completeness and demos.
+     * Not wired into Planner — provided for completeness and demos.
      */
     void timedMove(uint8_t dir, int16_t value, uint8_t mode);
 
@@ -186,7 +186,7 @@ public:
      * vendor warns against. The busy-wait keeps the CPU spinning for the
      * full 4 ms with no scheduler yield, guaranteeing no I2C interleave.
      *
-     * Not wired into MotionController — provided for completeness and demos.
+     * Not wired into Planner — provided for completeness and demos.
      */
     void moveToAngle(uint16_t angle, uint8_t mode);
 

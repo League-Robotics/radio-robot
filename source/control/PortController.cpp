@@ -8,7 +8,6 @@
 #include "CommandProcessor.h"
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 
 // ---------------------------------------------------------------------------
 // Parse functions
