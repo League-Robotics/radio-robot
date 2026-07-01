@@ -674,27 +674,36 @@ def _build_main_window():  # type: ignore[return]
 
         Steps:
         1. Send ``ZERO enc`` to clear wheel encoder integrators.
-        2. Send ``SI 0 0 0`` (via build_setpose_command) to update the
-           firmware's internal pose estimate AND heading to (0 mm, 0 mm, 0°).
-        3. Re-anchor the TraceModel, clear trace polylines, and move the
+        2. Send ``OZ`` to zero the OTOS sensor's position and heading.
+           This is essential: the firmware fuses the OTOS absolute heading
+           every tick (``Odometry::correctEKF``), so without resetting the
+           OTOS the heading snaps to 0 via ``SI`` then immediately drifts
+           back toward the OTOS's stale reading.  ``OZ`` calls
+           ``setPositionRaw(0, 0, 0)`` on the OTOS, re-referencing it to the
+           robot's current physical orientation as the new heading-zero.
+        3. Send ``SI 0 0 0`` (via build_setpose_command) to snap the
+           firmware's fused/EKF pose to (0 mm, 0 mm, 0°).
+        4. Re-anchor the TraceModel, clear trace polylines, and move the
            canvas avatar to the field centre with heading 0.
 
-        If no transport is connected, steps 1 and 2 are skipped and a
-        ``[WARN]`` message is logged.  The display reset (step 3) still runs
+        If no transport is connected, steps 1–3 are skipped and a
+        ``[WARN]`` message is logged.  The display reset (step 4) still runs
         so the GUI stays consistent.  In Sim mode a transport IS present, so
-        ``ZERO enc`` and ``SI 0 0 0`` are both sent.
+        all three wire commands are sent.
         """
         transport = _state.get("transport")
         if transport is not None:
             # 1. Zero encoder counters so SI starts from a clean state.
             transport.command("ZERO enc", read_ms=300)
-            # 2. Set firmware internal pose AND heading to (0, 0, 0°).
+            # 2. Zero the OTOS sensor (re-references heading to current orientation).
+            transport.command("OZ", read_ms=300)
+            # 3. Snap the fused/EKF pose to (0, 0, heading 0°).
             si_cmd = build_setpose_command(0.0, 0.0, 0.0)
             transport.command(si_cmd, read_ms=300)
         else:
             _append_log("[WARN] Set Robot @ 0,0: no robot connected — display only")
 
-        # 3. Reset the display (unchanged from before).
+        # 4. Reset the display (unchanged from before).
         trace_model.anchor(0.0, 0.0, 0.0)
         trace_model.clear()
         canvas_ctrl.reset_avatar_to_center()

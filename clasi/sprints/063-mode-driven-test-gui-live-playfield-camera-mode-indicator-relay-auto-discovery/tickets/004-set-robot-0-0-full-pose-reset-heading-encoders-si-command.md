@@ -15,54 +15,51 @@ completes_issue: true
 
 ## Description
 
-The "Set Robot @ 0,0" button currently resets the on-screen display only — it
-re-anchors the trace model and moves the canvas avatar to the field centre, but
-sends no wire commands to the robot. The robot's internal pose estimate, heading,
-and encoder counters remain unchanged.
+The "Set Robot @ 0,0" button resets the robot to the world origin.  It must
+reset **everything**: encoders, the OTOS sensor heading, the fused/EKF pose,
+and the on-screen display.
 
-This ticket makes the button reset **everything** to the origin:
+The full wire sequence (in order):
 
 1. Send `ZERO enc` to reset the wheel encoder counters.
-2. Send `SI 0 0 0` (via `build_setpose_command(0.0, 0.0, 0.0)`) to update the
-   firmware's internal pose estimate to (0 mm, 0 mm, 0 centidegrees), which also
-   resets the heading.
-3. Reset the display as today: `trace_model.anchor(0,0,0)`, `trace_model.clear()`,
+2. Send `OZ` to zero the OTOS sensor's position and heading
+   (`setPositionRaw(0,0,0)`).  This step is essential: the firmware's EKF
+   fuses the OTOS absolute heading every tick (`Odometry::correctEKF`:
+   `s.poseHrad += alphaYaw*wrapπ(θ_otos − s.poseHrad)`), so without
+   resetting the OTOS the heading snaps to 0 via `SI` then immediately
+   drifts back to the OTOS's stale reading.  `OZ` re-references the OTOS
+   to the robot's current physical orientation as the new heading-zero.
+3. Send `SI 0 0 0` (via `build_setpose_command(0.0, 0.0, 0.0)`) to snap the
+   firmware's fused/EKF pose to (0 mm, 0 mm, 0 centidegrees).
+4. Reset the display: `trace_model.anchor(0,0,0)`, `trace_model.clear()`,
    `canvas_ctrl.reset_avatar_to_center()`, `canvas_ctrl.refresh()`.
 
-The existing `_set_origin()` closure in `__main__.py` currently does step 3 only.
-The programmer must extend it to also do steps 1 and 2.
-
-**Wire command ordering**: send `ZERO enc` first (clears integrators so SI starts
-from a clean state), then `SI 0 0 0`. Both commands are sent synchronously using
-the existing transport reference from `_state["transport"]`.
-
 **Connection gating**: if `_state["transport"]` is `None` (not connected), skip
-the wire commands and log a clearly worded `[WARN]` message explaining that no
-robot is connected. The display reset (step 3) still runs so the GUI stays
-consistent. In Sim mode a transport IS present, so `ZERO enc` and `SI 0 0 0`
-should be sent — the sim transport accepts and echoes commands normally.
+steps 1–3 and log a clearly worded `[WARN]` message.  The display reset (step 4)
+still runs so the GUI stays consistent.  In Sim mode a transport IS present, so
+all three wire commands are sent.
 
-**`SI` semantics**: the `SI x_mm y_mm h_cdeg` command sets the firmware's
-internal position AND heading in one atomic update. `build_setpose_command(0.0,
-0.0, 0.0)` returns `"SI 0 0 0"`. Confirm unit expectations against
-https://robots.jointheleague.org/ before finalizing the call site — `x_mm` and
-`y_mm` are millimetres from the playfield origin, `h_cdeg` is heading in
-centidegrees (0 = forward / east). Passing `(0.0, 0.0, 0.0)` should produce
-`"SI 0 0 0"` (integer or float format accepted by the firmware).
+**`OZ` syntax**: bare verb, no arguments — `transport.command("OZ", read_ms=300)`.
+Confirmed against `source/COMMANDS.md` (row `OZ`) and
+`source/commands/OtosCommands.cpp` (`handleOZ` → `setPositionRaw(0,0,0)`).
 
-**Files to modify:**
-- `host/robot_radio/testgui/__main__.py` — extend `_set_origin()` closure.
+**`SI` semantics**: `SI x_mm y_mm h_cdeg` sets the firmware's fused pose.
+`build_setpose_command(0.0, 0.0, 0.0)` returns `"SI 0 0 0"`.
 
-**Files to create:**
-- `tests/testgui/test_set_origin.py` — Qt-free and offscreen tests.
+**Files modified:**
+- `host/robot_radio/testgui/__main__.py` — `_set_origin()` closure updated.
+
+**Files created/updated:**
+- `tests/testgui/test_set_origin.py` — Qt-free tests asserting the 3-command sequence.
 
 ## Acceptance Criteria
 
-- [x] Clicking "Set Robot @ 0,0" when connected sends `ZERO enc` followed by
-      `SI 0 0 0` to the transport, in that order, before the display is reset.
-- [x] Both `ZERO enc` and `SI 0 0 0` appear in the GUI log with their sent
-      wire strings (existing transport logging covers this automatically; verify
-      the log pane shows both lines).
+- [x] Clicking "Set Robot @ 0,0" when connected sends `ZERO enc`, then `OZ`,
+      then `SI 0 0 0` to the transport, in that order, before the display is reset.
+- [x] `OZ` (OTOS zero) is included to re-reference the OTOS absolute heading so
+      the EKF does not drift back to the stale heading after `SI` resets the pose.
+- [x] `ZERO enc`, `OZ`, and `SI 0 0 0` appear in the GUI log (transport logging
+      covers this automatically via the `on_log` callback).
 - [x] The display reset still runs after the wire commands: avatar moves to
       field centre, traces are cleared, heading is 0.
 - [x] When no transport is connected (`_state["transport"] is None`), the wire
@@ -72,7 +69,8 @@ centidegrees (0 = forward / east). Passing `(0.0, 0.0, 0.0)` should produce
 - [x] `build_setpose_command(0.0, 0.0, 0.0)` returns a string starting with
       `"SI"` containing three numeric tokens; the handler sends this exact string.
 - [x] Headless tests (Qt-free) verify the command sequence using a fake transport
-      with a `commands_sent` list: `ZERO enc` is at index 0, `SI ...` at index 1.
+      with a `commands_sent` list: `ZERO enc` at index 0, `OZ` at index 1,
+      `SI 0 0 0` at index 2.
 - [x] All existing `tests/testgui/` tests pass unchanged.
 - [x] `QT_QPA_PLATFORM=offscreen uv run python -m pytest tests/testgui -q` passes.
 

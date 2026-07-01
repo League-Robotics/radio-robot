@@ -1,8 +1,13 @@
 """Tests for the _set_origin command sequence (ticket 063-004).
 
-Verifies that _set_origin sends ZERO enc then SI 0 0 0 when a transport is
-connected, and logs a warning (skipping wire commands) when no transport is
-available.
+Verifies that _set_origin sends ZERO enc, OZ, then SI 0 0 0 (in that order)
+when a transport is connected, and logs a warning (skipping wire commands) when
+no transport is available.
+
+The OZ command zeroes the OTOS sensor's position and heading
+(setPositionRaw(0,0,0)).  Without it, the firmware's EKF fuses the OTOS
+absolute heading every tick and the heading drifts back to the stale OTOS
+reading even after SI resets the fused pose.
 
 Qt-free: these tests import only pure helpers and do not require a QApplication.
 
@@ -51,8 +56,8 @@ def test_build_setpose_command_origin_exact():
     assert result == "SI 0 0 0", f"Expected 'SI 0 0 0', got: {result!r}"
 
 
-def test_set_origin_sends_zero_enc_then_si(monkeypatch):
-    """_set_origin sends ZERO enc then SI 0 0 0 when a transport is connected."""
+def test_set_origin_sends_zero_enc_oz_then_si(monkeypatch):
+    """_set_origin sends ZERO enc, OZ, then SI 0 0 0 when a transport is connected."""
     # Import the pure helper to get the expected SI string.
     from robot_radio.testgui.operations import build_setpose_command
 
@@ -84,6 +89,7 @@ def test_set_origin_sends_zero_enc_then_si(monkeypatch):
         transport = state.get("transport")
         if transport is not None:
             transport.command("ZERO enc", read_ms=300)
+            transport.command("OZ", read_ms=300)
             si_cmd = build_setpose_command(0.0, 0.0, 0.0)
             transport.command(si_cmd, read_ms=300)
         else:
@@ -95,19 +101,22 @@ def test_set_origin_sends_zero_enc_then_si(monkeypatch):
 
     _set_origin()
 
-    assert len(fake_transport.commands_sent) == 2, (
-        f"Expected 2 wire commands, got: {fake_transport.commands_sent}"
+    assert len(fake_transport.commands_sent) == 3, (
+        f"Expected 3 wire commands, got: {fake_transport.commands_sent}"
     )
     assert fake_transport.commands_sent[0] == "ZERO enc", (
         f"First command must be ZERO enc, got: {fake_transport.commands_sent[0]!r}"
     )
-    assert fake_transport.commands_sent[1] == expected_si, (
-        f"Second command must be {expected_si!r}, got: {fake_transport.commands_sent[1]!r}"
+    assert fake_transport.commands_sent[1] == "OZ", (
+        f"Second command must be OZ, got: {fake_transport.commands_sent[1]!r}"
+    )
+    assert fake_transport.commands_sent[2] == expected_si, (
+        f"Third command must be {expected_si!r}, got: {fake_transport.commands_sent[2]!r}"
     )
 
 
-def test_set_origin_zero_enc_before_si():
-    """ZERO enc is at index 0; SI at index 1 — ordering is mandatory."""
+def test_set_origin_command_ordering():
+    """ZERO enc at index 0, OZ at index 1, SI at index 2 — ordering is mandatory."""
     from robot_radio.testgui.operations import build_setpose_command
 
     fake_transport = _FakeTransport()
@@ -132,6 +141,7 @@ def test_set_origin_zero_enc_before_si():
         transport = state.get("transport")
         if transport is not None:
             transport.command("ZERO enc", read_ms=300)
+            transport.command("OZ", read_ms=300)
             si_cmd = build_setpose_command(0.0, 0.0, 0.0)
             transport.command(si_cmd, read_ms=300)
         else:
@@ -143,10 +153,12 @@ def test_set_origin_zero_enc_before_si():
 
     _set_origin()
 
-    # ZERO enc clears integrators; SI must come after.
+    # ZERO enc clears integrators first; OZ re-references OTOS heading second;
+    # SI snaps the fused EKF pose last.
     assert fake_transport.commands_sent.index("ZERO enc") == 0
+    assert fake_transport.commands_sent.index("OZ") == 1
     si_cmd = build_setpose_command(0.0, 0.0, 0.0)
-    assert fake_transport.commands_sent.index(si_cmd) == 1
+    assert fake_transport.commands_sent.index(si_cmd) == 2
 
 
 def test_set_origin_no_transport_skips_wire_commands():
@@ -174,6 +186,7 @@ def test_set_origin_no_transport_skips_wire_commands():
         transport = state.get("transport")
         if transport is not None:
             transport.command("ZERO enc", read_ms=300)
+            transport.command("OZ", read_ms=300)
             si_cmd = build_setpose_command(0.0, 0.0, 0.0)
             transport.command(si_cmd, read_ms=300)
         else:
@@ -221,6 +234,7 @@ def test_set_origin_no_transport_display_reset_still_runs():
         transport = state.get("transport")
         if transport is not None:
             transport.command("ZERO enc", read_ms=300)
+            transport.command("OZ", read_ms=300)
             si_cmd = build_setpose_command(0.0, 0.0, 0.0)
             transport.command(si_cmd, read_ms=300)
         else:
