@@ -1,11 +1,11 @@
 ---
 id: '005'
 title: Delete MotionController source files; fix all includes; verify grep clean
-status: open
+status: done
 use-cases:
 - SUC-005
 depends-on:
-- "004"
+- '004'
 github-issue: ''
 issue: internalize-legacy-motioncontroller-into-planner.md
 completes_issue: false
@@ -62,15 +62,15 @@ hits (only provenance comments, which must be reworded or removed).
 
 ## Acceptance Criteria
 
-- [ ] `source/superstructure/MotionController.h` does not exist.
-- [ ] `source/superstructure/MotionController.cpp` does not exist.
-- [ ] `source/control/MotionControllerBegin.cpp` does not exist.
-- [ ] `grep -rn "MotionController.h" source/ tests/` returns zero hits.
-- [ ] `grep -rIn "MotionController\b" source/` returns zero hits (after
+- [x] `source/superstructure/MotionController.h` does not exist.
+- [x] `source/superstructure/MotionController.cpp` does not exist.
+- [x] `source/control/MotionControllerBegin.cpp` does not exist.
+- [x] `grep -rn "MotionController.h" source/ tests/` returns zero hits.
+- [x] `grep -rIn "MotionController\b" source/` returns zero hits (after
       comment updates; pure comment hits are acceptable only if they describe
       provenance in past-tense — programmer judgment on each hit).
-- [ ] `cmake --build build_sim` succeeds with zero errors.
-- [ ] `uv run python -m pytest tests/simulation/unit/test_golden_tlm.py
+- [x] `cmake --build build_sim` succeeds with zero errors.
+- [x] `uv run python -m pytest tests/simulation/unit/test_golden_tlm.py
       tests/simulation/unit/test_059_ordered_tick_parity.py
       tests/simulation/unit/test_planner_subsystem.py` all pass.
 

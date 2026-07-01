@@ -1,9 +1,7 @@
 // PlannerBegin.cpp — Planner begin*() command entry points.
 //
-// Split from MotionControllerBegin.cpp (ticket 061-004): pure translation-unit
-// move of the begin* family of member-function DEFINITIONS from MotionController
-// into Planner.  Method names changed from MotionController:: → Planner:: and
-// _mc. references replaced with direct member access.
+// Translation-unit containing the begin* family of member-function DEFINITIONS
+// for Planner.  Split from Planner.cpp for compilation-unit size management.
 //
 // Contains:
 //   _checkSafeOneShot, beginStream, beginVelocity, beginTimed,
@@ -73,9 +71,9 @@ static void localEvtEmitter(const char* base, const char* corrId, void* ctx)
 //
 // Note: _cfg is a const-ref; safetyEnabled lives in the mutable RobotConfig
 // owned by Robot.  Access via _robot->config when available, which IS the
-// same object as _cfg (Robot passes &cfg to MotionController).  Cast away
+// same object as _cfg (Robot passes &cfg to Planner).  Cast away
 // const here — we are legitimately mutating config.safetyEnabled as the
-// designated "re-arm" code path (ticket 024-003 decision: MotionController
+// designated "re-arm" code path (ticket 024-003 decision: Planner
 // owns the flag; architecture review confirmed).
 // ---------------------------------------------------------------------------
 void Planner::_checkSafeOneShot(ReplyFn fn, void* ctx)

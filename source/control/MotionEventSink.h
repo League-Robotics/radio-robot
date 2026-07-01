@@ -1,12 +1,9 @@
 #pragma once
 
 // ---------------------------------------------------------------------------
-// MotionEventSink — narrow interface for MotionController to report motion
-// completion events and safety events to the app layer without any
-// protocol-layer knowledge.
-//
-// Sprint 026, Ticket 002: eliminates the MotionController → CommandProcessor
-// dependency (layering inversion fix).
+// MotionEventSink — narrow interface for Planner to report motion completion
+// events and safety events to the app layer without any protocol-layer
+// knowledge.
 //
 // The app layer sets emitFn to a static function that formats and calls
 // CommandProcessor::replyEvt (or directly appends the EVT line to the reply

@@ -26,7 +26,6 @@
 #include "hal/real/BenchOtosSensor.h"
 #include "types/Config.h"
 #include "types/Inputs.h"
-#include "superstructure/MotionController.h"
 #include "commands/MotionCommand.h"
 #include "control/HaltController.h"
 #include "robot/LoopTickOnce.h"

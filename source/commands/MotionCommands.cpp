@@ -1,9 +1,8 @@
 // MotionCommands.cpp — motion command parsing, conversion, and reply
-// formatting, extracted from MotionController.cpp (sprint 026, ticket 002).
+// formatting.
 //
 // Dependency direction: app/ → control/.  All CommandProcessor reply calls
-// live here.  MotionController.cpp no longer includes CommandProcessor.h or
-// CommandQueue.h after this extraction.
+// live here.
 //
 // D11 suppression rule (sprint 026-002):
 //   Each converter handler (S, T, D, G, R, TURN, RT) calls replyOK ONCE
@@ -1332,8 +1331,8 @@ static void handleSTOP(const ArgList& /*args*/, const char* corrId,
 // ---------------------------------------------------------------------------
 // getMotionCommands — returns the full set of motion CommandDescriptors.
 //
-// Replaces MotionController::getCommands().  ctx->vwDesc is initialised here
-// so that converter handlers can build ParsedCommands targeting handleVW.
+// ctx->vwDesc is initialised here so that converter handlers can build
+// ParsedCommands targeting handleVW.
 // ctx must remain live for the lifetime of the returned descriptors.
 // ---------------------------------------------------------------------------
 std::vector<CommandDescriptor> getMotionCommands(MotionCtx* ctx)

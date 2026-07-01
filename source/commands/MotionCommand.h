@@ -18,11 +18,11 @@ class BodyVelocityController;
 //   6. tick(inputs, now_ms, dt_s) — advance BVC; evaluate conditions; handle teardown.
 //   7. cancel(s)                  — abort with EVT cancelled.
 //
-// A single MotionCommand instance is owned by MotionController. Calling
+// A single MotionCommand instance is owned by Planner. Calling
 // configure() + start() a second time recycles the object with no residue.
 //
-// EVT emission mirrors MotionController::emitEvt: builds "<base> #<corrId>"
-// when corrId is non-empty, then calls the captured reply function.
+// EVT emission: builds "<base> #<corrId>" when corrId is non-empty, then
+// calls the captured reply function.
 //
 // No heap. Stop conditions are held in a fixed-size inline array.
 //
@@ -40,7 +40,7 @@ public:
     /**
      * Origin — re-targetability class of the active MotionCommand.
      *
-     * Set by MotionController::begin*() methods via setOrigin().
+     * Set by Planner::begin*() methods via setOrigin().
      * Used by handleVW to guard the setTarget() keepalive path:
      *   RETARGETABLE: a bare VW keepalive may update this command's target
      *                 (formerly VW-origin commands).
@@ -62,7 +62,7 @@ public:
      *
      * @param v_mms      Commanded body forward speed, mm/s.
      * @param omega_rads Commanded yaw rate, rad/s.
-     * @param bvc        Pointer to the owning MotionController's BVC (non-null).
+     * @param bvc        Pointer to the owning Planner's BVC (non-null).
      */
     void configure(float v_mms, float omega_rads, BodyVelocityController* bvc);
 
@@ -169,7 +169,7 @@ public:
      * cancel — abort the command immediately.
      *
      * HARD (default): calls bvc->reset(); emits "EVT cancelled"; goes IDLE.
-     *   The caller (MotionController::cancel) is responsible for calling
+     *   The caller (Planner::cancel) is responsible for calling
      *   mc.stop() after this returns.
      * SOFT: same as HARD cancel for now (cancel is always an emergency abort).
      *
@@ -186,7 +186,7 @@ public:
      * BVC reset, suppressing the "EVT cancelled #<corrId>" emission.
      *
      * Use for internal phase transitions (e.g. PURSUE backtrack re-gate in
-     * MotionController::driveAdvance) where the top-level command (G) is
+     * Planner::driveAdvance) where the top-level command (G) is
      * still in progress and the cancel is an implementation detail.  Emitting
      * "EVT cancelled" for the G's corrId in this case confuses hosts that
      * treat "EVT cancelled" as a terminal event for that id.
@@ -269,7 +269,7 @@ private:
      * emitEvt — build and emit an EVT message via the captured reply sink.
      *
      * Builds "<base> #<corrId>" if corrId is non-empty, else just "<base>".
-     * Mirrors MotionController::emitEvt.
+     * Mirrors Planner::emitEvt.
      */
     void emitEvt(const char* base);
 };

@@ -223,7 +223,7 @@ msg::CommandBatch Drive::tickAction(uint32_t now)
         }
 
         // 060-004: The TWIST arriving here is already profiled by the planner's
-        // internal BVC (MotionController._bvc).  Running another BVC ramp in
+        // internal BVC (Planner::_bvc).  Running another BVC ramp in
         // Drive would double-profile the motion (planner ramps 0→target, then
         // Drive ramps 0→planner_output) causing indefinitely-slow ramp-up that
         // fails almost every motor/motion test.  Instead, do a direct inverse-

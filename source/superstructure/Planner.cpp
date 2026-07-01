@@ -1,7 +1,4 @@
-// Planner.cpp — Planner subsystem (061-004: absorbed MotionController entirely).
-//
-// Previously delegated to MotionController by reference; as of 061-004 all
-// MotionController logic is moved here as direct members and methods.
+// Planner.cpp — Planner subsystem.
 //
 // C++11, no heap allocation in tick(), no virtual dispatch, no STL.
 

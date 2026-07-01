@@ -1,9 +1,9 @@
 #pragma once
 // =============================================================================
-// Planner.h — Planner subsystem (061-004: absorbed MotionController entirely).
+// Planner.h — Planner subsystem.
 //
 // Owns and advances the S/T/D/G drive state machines, S-mode watchdog, and
-// odometry delta tracking directly — MotionController is no longer a member.
+// odometry delta tracking directly as native members.
 //
 // Role: GOAL CLOSURE only. Planner generates a time-varying body-twist setpoint
 // from a goal + pose estimate and decides when the goal is reached.
@@ -49,8 +49,7 @@ struct Robot;
 // ---------------------------------------------------------------------------
 class Planner {
 public:
-    // Constructor — takes MotorController + Odometry + Drive + config directly
-    // (MotionController is gone as of 061-004).
+    // Constructor — takes MotorController + Odometry + Drive + config directly.
     // cfg: motion-limits source (aMax, vBodyMax, etc.); stored as local copy
     // so configure() can update it without disturbing the original.
     Planner(MotorController& mc_ctrl, Odometry& odo,
@@ -98,9 +97,7 @@ public:
     }
 
     // -------------------------------------------------------------------------
-    // MotionController-compatible API — native methods (not delegated).
-    // These signatures exactly match the MotionController counterparts so that
-    // call sites routed through planner work unchanged.
+    // Planner native motion API — begin*(), stop, cancel, etc.
     // -------------------------------------------------------------------------
 
     DriveMode mode() const { return _mode; }
@@ -161,7 +158,7 @@ public:
     const HardwareState* hardwareState() const { return _hwState; }
 
 private:
-    // ---- Primary control members (from absorbed MotionController) ----
+    // ---- Primary control members ----
     MotorController&   _mc_ctrl;    // wheel output / encoder access
     Odometry&          _odo;        // pose reads in begin*() (via getPoseFloat())
     RobotConfig        _cfg;        // local copy of motion limits; configure() updates it
@@ -171,7 +168,6 @@ private:
     // Set by setRobotCtx() from Robot constructor.
     struct Robot*      _robot;
 
-    // MotionCommand subsystem.
     // _bvc MUST be declared before _activeCmd: Planner's constructor
     // passes &_bvc to _activeCmd.configure(), so _bvc must be fully constructed
     // first.  Do not reorder.

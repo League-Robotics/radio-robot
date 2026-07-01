@@ -152,8 +152,7 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // STEP 6 — drive2.tickAction(now): ACT
     //
     // Applies the staged DrivetrainCommand via BVC → wheel PID
-    // → motor output.  Drive2's BVC (bvc2) is separate from
-    // MotionController's internal BVC.
+    // → motor output.  Drive's BVC is separate from Planner's internal BVC.
     // =========================================================
     robot.drive.tickAction(now);
 

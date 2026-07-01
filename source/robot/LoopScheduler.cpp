@@ -112,9 +112,6 @@ LoopScheduler::LoopScheduler(Robot& robot, CommandProcessor& cmd,
 
     // Wire the same queue into Robot's MotionCtx so VW converter handlers
     // (S, T, D, G, R, TURN) can push_front a VW ParsedCommand.
-    // Sprint 026-002: replaced robot.motionController.setQueue() with
-    // robot.setMotionQueue() since MotionCtx (and its queue pointer) now
-    // lives in Robot, not MotionController.
     _robot.setMotionQueue(&_queue);
 }
 

@@ -33,8 +33,7 @@
 // Planner.  ADDITIVE: constructed alongside the existing subsystems;
 // configure() called in the Robot constructor.  Drive requires its own
 // BodyVelocityController member (Robot gains one named bvc to avoid
-// shadowing MotionController's internal _bvc).
-// Renamed from Drive2/bvc2/MotionController2 in ticket 060-006.
+// shadowing Planner's internal _bvc).
 #include "../control/BodyVelocityController.h"
 #include "../subsystems/drive/Drive.h"
 #include "../subsystems/sensors/Sensors.h"
@@ -66,9 +65,8 @@ struct RobotSysCtx {
  *
  * Hardware is provided through a Hardware& (NezhaHAL on device, MockHAL in
  * host tests). Robot binds interface refs from hal.motorL() etc.
- * The control/state layer (MotorController, PhysicalStateEstimate,
- * MotionController) and state
- * (RobotConfig, RobotStateContainer) are VALUE MEMBERS owned by Robot.
+ * The control/state layer (MotorController, PhysicalStateEstimate, Planner)
+ * and state (RobotConfig, RobotStateContainer) are VALUE MEMBERS owned by Robot.
  *
  * Member declaration order is load-bearing (C++ initialises members in
  * declaration order):
@@ -79,7 +77,6 @@ struct RobotSysCtx {
  *   5. motorController         — needs motorL, motorR, config refs
  *   6. estimate                — default ctor (PhysicalStateEstimate)
  *   7. portController          — needs portio ref
- *      (motionController removed in 061-004; absorbed into Planner)
  *   8. planner depends on motorController, estimate.odometry(), drive, config
  */
 struct Robot {
