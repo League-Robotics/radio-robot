@@ -551,6 +551,17 @@ class FakeSim:
     def get_true_pose(self) -> tuple[float, float, float]:
         return (self._pose_x_mm, self._pose_y_mm, self._pose_h_rad)
 
+    def set_true_pose(self, x_mm: float, y_mm: float, h_rad: float) -> None:
+        self._pose_x_mm = x_mm
+        self._pose_y_mm = y_mm
+        self._pose_h_rad = h_rad
+
+    def set_true_wheel_travel(self, enc_l_mm: float, enc_r_mm: float) -> None:
+        self._true_enc = (enc_l_mm, enc_r_mm)
+
+    def set_true_velocity(self, vel_l_mms: float, vel_r_mms: float) -> None:
+        self._true_vel = (vel_l_mms, vel_r_mms)
+
     def set_field_profile(self, slip_turn_extra: float = 0.26,
                           fuse_otos: bool = True) -> None:
         self._field_profile_applied = True
@@ -750,6 +761,54 @@ class TestSimTransportConnect:
             )
         finally:
             t.disconnect()
+
+    def test_set_true_pose_teleports_plant(self):
+        """set_true_pose() must move the plant ground truth (cm→mm), so the
+        avatar does not snap back to a stale pose after Set Robot @ 0,0.
+
+        Regression: SI/OZ only reset the firmware belief; without teleporting
+        the plant, get_true_pose() (which drives the sim avatar) kept the
+        robot's prior heading and the avatar jumped back.
+        """
+        t, fake_sim, _ = self._connected_sim()
+        try:
+            # Plant starts at the FakeSim default (100 mm, 200 mm, 0.5 rad).
+            assert fake_sim.get_true_pose() != (0.0, 0.0, 0.0)
+            t.set_true_pose(0.0, 0.0, 0.0)
+            # Give the tick-thread a moment to drain the queued plant action.
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                if fake_sim.get_true_pose() == (0.0, 0.0, 0.0):
+                    break
+                time.sleep(0.02)
+            assert fake_sim.get_true_pose() == (0.0, 0.0, 0.0), (
+                f"plant not teleported to origin: {fake_sim.get_true_pose()}"
+            )
+        finally:
+            t.disconnect()
+
+    def test_set_true_pose_converts_cm_to_mm(self):
+        """set_true_pose(x_cm, y_cm, yaw_rad) must scale position ×10 to mm."""
+        t, fake_sim, _ = self._connected_sim()
+        try:
+            t.set_true_pose(12.5, -4.0, 1.0)
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                if fake_sim.get_true_pose() == (125.0, -40.0, 1.0):
+                    break
+                time.sleep(0.02)
+            assert fake_sim.get_true_pose() == (125.0, -40.0, 1.0), (
+                f"cm→mm conversion wrong: {fake_sim.get_true_pose()}"
+            )
+        finally:
+            t.disconnect()
+
+    def test_set_true_pose_noop_when_disconnected(self):
+        from robot_radio.testgui.transport import SimTransport
+
+        t = SimTransport()
+        # Must not raise when not connected.
+        t.set_true_pose(0.0, 0.0, 0.0)
 
     def test_connect_is_idempotent(self):
         from unittest.mock import patch, MagicMock

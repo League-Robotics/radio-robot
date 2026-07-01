@@ -155,7 +155,11 @@ def _build_main_window():  # type: ignore[return]
         goto_reached,
         parse_tlm_mode,
     )
-    from robot_radio.testgui.operations import build_panel as _build_ops_panel, build_setpose_command
+    from robot_radio.testgui.operations import (
+        build_panel as _build_ops_panel,
+        build_setpose_command,
+        is_sim_transport,
+    )
     from robot_radio.testgui.traces import TraceModel
     from robot_radio.testgui.canvas import build_canvas
     from robot_radio.testgui.drive import KeyboardDriver
@@ -1020,6 +1024,16 @@ def _build_main_window():  # type: ignore[return]
         """
         transport = _state.get("transport")
         if transport is not None:
+            # 0. Sim only: teleport the plant ground-truth to (0, 0, 0°).
+            #    In Sim mode the avatar follows the plant ground truth, not the
+            #    firmware's belief.  On real hardware the operator physically
+            #    places the robot at centre; the sim has no operator, so without
+            #    this the plant keeps its prior (e.g. turned) pose and the avatar
+            #    snaps back to it on the next truth delivery — while OZ/SI below
+            #    would re-reference the OTOS at a stale heading.  Teleport FIRST
+            #    so OZ zeroes at heading 0 and SI 0 0 0 stays consistent.
+            if is_sim_transport(transport):
+                transport.set_true_pose(0.0, 0.0, 0.0)
             # 1. Zero encoder counters so SI starts from a clean state.
             transport.command("ZERO enc", read_ms=300)
             # 2. Zero the OTOS sensor (re-references heading to current orientation).

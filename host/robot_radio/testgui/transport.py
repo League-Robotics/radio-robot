@@ -661,6 +661,43 @@ class SimTransport(Transport):
         self._cmd_queue.put((line, None, None))
         self._log(f"> {line}")
 
+    def set_true_pose(self, x_cm: float, y_cm: float, yaw_rad: float) -> None:
+        """Teleport the simulator plant (ground-truth) pose.
+
+        In Sim mode the canvas avatar follows the plant ground truth
+        (``sim.get_true_pose()``), NOT the firmware's belief.  The wire
+        commands ``OZ`` and ``SI`` only reset the firmware's EKF estimate and
+        the OTOS reference — they do NOT move the plant.  On real hardware the
+        operator physically places the robot; in the sim there is no operator,
+        so the plant must be teleported explicitly or the avatar snaps back to
+        the plant's stale pose on the next ground-truth delivery.
+
+        Enqueues a plant action on the tick-thread (the only thread allowed to
+        touch the ``Sim`` object).  True wheel travel and velocity are also
+        zeroed so encoder-based odometry restarts from a clean state.
+
+        Parameters
+        ----------
+        x_cm, y_cm:
+            Target plant position in centimetres (converted to mm for the sim).
+        yaw_rad:
+            Target plant heading in radians (0 = east), passed through as-is.
+        """
+        if not self._connected:
+            return
+
+        def _action(sim: "object") -> None:
+            sim.set_true_pose(x_cm * 10.0, y_cm * 10.0, yaw_rad)  # type: ignore[attr-defined]
+            # Zero true wheel travel and velocity so odom restarts clean.
+            try:
+                sim.set_true_wheel_travel(0.0, 0.0)  # type: ignore[attr-defined]
+                sim.set_true_velocity(0.0, 0.0)      # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+        self._cmd_queue.put((_action, None, None))
+        self._log(f"> [sim] set_true_pose({x_cm:.1f}cm, {y_cm:.1f}cm, {math.degrees(yaw_rad):.1f}°)")
+
     def command(self, line: str, read_ms: int = 200) -> str:
         """Send a command and return the synchronous reply string.
 
@@ -750,7 +787,13 @@ class SimTransport(Transport):
                 item = self._cmd_queue.get_nowait()
                 line, reply_list, done_evt = item
                 try:
-                    reply = sim.send_command(line)  # type: ignore[attr-defined]
+                    if callable(line):
+                        # Plant action (e.g. set_true_pose) — run directly on
+                        # the tick-thread which exclusively owns the Sim object.
+                        line(sim)
+                        reply = ""
+                    else:
+                        reply = sim.send_command(line)  # type: ignore[attr-defined]
                 except Exception as exc:
                     reply = f"ERR sim: {exc}"
                 if reply_list is not None:

@@ -146,6 +146,11 @@ Before tickets can be created, all of the following must be true:
 | 003 | Live-view worker, canvas live-mode, and mode-gated wiring | 001, 002 |
 | 004 | Set Robot @ 0,0: full pose reset (heading + encoders + SI command) | — |
 | 005 | Record / Pause / Stop command+response logging | — |
+| 006 | Functional simulated OTOS for EKF fusion and heading-reset testing | — |
 
-Tickets 001–003 are done. Tickets 004 and 005 are independent of each other
-and of 001–003; they may execute in any order after 003 is done.
+Tickets 001–003 are done. Tickets 004, 005, and 006 are independent of each
+other and of 001–003; they may execute in any order after 003 is done. Ticket
+006 touches firmware (`source/hal/sim/`) and the `tests/_infra/sim` host
+harness rather than the Test GUI itself, but is included in this sprint
+because it directly enables testing ticket 004's heading-reset behaviour
+(SUC-005) in Sim mode.

@@ -359,6 +359,254 @@ graph LR
 
 ---
 
+## Addendum — Ticket 006: Functional simulated OTOS for EKF fusion and heading-reset testing
+
+*Added when ticket 006 was appended to the sprint (2026-07-01), from issue
+`sim-otos-device-for-kalman-and-heading-reset.md`.*
+
+### Investigation summary (corrects the issue's initial diagnosis)
+
+The issue text speculated that `OtosCtx.otos` is unwired in the sim/host build.
+Investigation (reading `Robot.cpp` construction order and empirically probing
+`libfirmware_host.dylib` via `tests/_infra/sim/firmware.py`) found this is **not**
+the root cause — `Robot::Robot()` already calls
+`_otosCommands.setCtx(&otos, &state.actual)` unconditionally
+(`source/robot/Robot.cpp:130`), and `otos` is `hal.otos()`, which in
+`SimHardware` (`source/hal/sim/SimHardware.h:44`) returns the same `SimOdometer&`
+instance (`_odom`) used everywhere else (`Drive`, `otosCorrect`). The command
+context is correctly wired in both builds.
+
+The real root causes are two independent, narrower gaps:
+
+1. **`SimOdometer` is never `begin()`-initialised outside test-only hooks.**
+   `Sensor::is_initialized()` gates every OTOS command handler
+   (`otosReady()` in `OtosCommands.cpp`) and `Robot::otosCorrect()`
+   (`activeOtos.is_initialized()` guard, `Robot.cpp:179`). `SimOdometer::begin()`
+   is currently called from exactly one place: the test-only C ABI function
+   `sim_set_otos_fusion()` (`tests/_infra/sim/sim_api.cpp:578-581`), which is
+   reached from Python only via `Sim.set_otos_fusion()` /
+   `Sim.set_field_profile(fuse_otos=True)`. `SimTransport._apply_field_profile()`
+   (`host/robot_radio/testgui/transport.py`) already calls
+   `sim.set_field_profile(fuse_otos=True)` on every Sim-mode connect, so the Test
+   GUI's Sim mode *does* already flip `_initialized = true` — confirmed empirically:
+   `OZ`/`OI`/`OR`/`OV` all return `OK` once `set_field_profile(fuse_otos=True)` has
+   run, and `ERR nodev` before it. Any other sim/host entry point that doesn't call
+   this (e.g. a bare `tests/simulation` fixture that talks to the command surface
+   without going through `set_field_profile`) still sees `nodev`. This is a
+   sequencing/initialization gap, not a missing-wire gap.
+
+2. **`OZ`/`OV` (`setPositionRaw`) do not reset the accumulator the EKF actually
+   reads — this is the real heading-reset gap, confirmed empirically.**
+   `SimOdometer::readTransformed()` returns `{_odomX, _odomY, _odomH}` when
+   `_useSimModel` is on (the path enabled by `enableSimModel(true)`, which
+   `set_field_profile`/`set_otos_fusion` also turns on). `setPositionRaw()`
+   (`SimOdometer.cpp:54-59`, invoked by `OZ`/`OV`) only writes `_rawX/_rawY/_rawH`
+   — the raw-register shadow copy used by `getPositionRaw()`/`OP`'s underlying
+   registers — and never touches `_odomX/_odomY/_odomH`. Only
+   `setInjectedPose()` (used exclusively by `sim_set_otos_pose`, a different
+   test-only hook, not reachable from any command) resets the accumulator.
+   Empirical probe (turn robot to h=0.1245 rad, stop, call `OZ`, re-read
+   `sim.get_otos_pose()`): the accumulator is **unchanged** by `OZ`. Consequently
+   today, in sim, `OZ` is a no-op on the value the EKF fuses, and `SI 0 0 0`
+   (`Odometry::setPose`) does not visibly "drift back" either — because there is
+   nothing pulling it back toward a *different* reference; the OTOS accumulator
+   just keeps reporting the same absolute heading it always would, `SI` doesn't
+   change it, and `correctEKF` re-applies it every tick regardless of `SI`. The
+   sim therefore fails to reproduce the hardware bug in **both** directions:
+   `OZ` doesn't fix anything (it's a no-op) and `SI`-alone's drift-back is not
+   currently demonstrable because there's no re-referencing step to compare
+   against.
+
+Both gaps are independent of the standalone `BenchOtosSensor`
+(`sim_bench_otos_*` / `DBG OTOS BENCH`), which remains a separate model used
+only by that debug command and is out of scope here — confirmed by grep: no
+call site connects `BenchOtosSensor` to `Robot::otosCorrect()` or the EKF.
+
+### Responsibility change
+
+**Module: `SimOdometer` (sim OTOS observation model)**
+Purpose: model the OTOS as an independent absolute-heading sensor that a
+command/fusion caller can zero, read, and re-tick, matching the real
+`OtosSensor`'s contract as closely as a kinematic model allows.
+Boundary: inside — `_odomX/Y/H` accumulator, error/noise model, raw-register
+shadow, `_initialized` gate. Outside — the plant truth it reads from
+(`PhysicsWorld`, via `tick()`'s velocity args, already supplied by
+`SimHardware`), the EKF it feeds (`Odometry`/`PhysicalStateEstimate`, already
+decoupled via `IOdometer`).
+Use cases served: SUC-005 (pose reset), SUC-007 (new, sim OTOS testability).
+
+No new module is introduced. This is a targeted change to `SimOdometer`'s
+`setPositionRaw()` plus an initialization-sequencing fix so `begin()` happens
+on every sim/host path that exercises the OTOS command surface, not only the
+`set_field_profile` test fixture path.
+
+### What changes
+
+1. **`SimOdometer::setPositionRaw(x, y, h)`** (`source/hal/sim/SimOdometer.cpp`)
+   is extended to also re-reference the accumulator: after writing the raw
+   shadow registers, set `_odomX = x; _odomY = y; _odomH = h;` (same values,
+   converted from the raw int16 LSB units `setPositionRaw` already receives —
+   `OZ` calls it with `(0,0,0)`, so no unit-conversion subtlety for the zero
+   case; `OV`'s non-zero case reuses the existing raw→float conversion
+   `getPositionRaw`/`setPositionRaw` already define for the real `OtosSensor`,
+   so `SimOdometer` must apply the identical LSB scale before writing
+   `_odomX/Y/H`). This makes `OZ`/`OV` re-reference the accumulator exactly as
+   the real OTOS's `setPositionRaw` re-references the chip's internal tracker —
+   closing gap 2. `resetTracking()` (`OR`) and `init()` (`OI`) remain no-ops
+   (documented open question below — a kinematic model has no Kalman filter of
+   its own to reset).
+
+2. **Initialization sequencing**: `SimOdometer::begin()` must be called
+   wherever a sim/host build brings up the OTOS command surface for real use,
+   not only inside the test-only `sim_set_otos_fusion()` shim. Two call sites
+   need it:
+   - `SimTransport` (`host/robot_radio/testgui/transport.py`): already calls
+     `sim.set_field_profile(fuse_otos=True)` on connect, which already begins
+     the sim OTOS — **no change needed here**, confirmed empirically. This
+     addendum documents that this call is now load-bearing for ticket-006
+     acceptance, not just for the noise/slip profile.
+   - `tests/_infra/sim/firmware.py` / `sim_api.cpp`: add a dedicated,
+     narrowly-named hook (e.g. `sim_begin_otos(h)` wrapping
+     `hal.simOdometer().begin()`, mirroring the existing
+     `drive_api_begin_otos()` pattern in `drive_api.cpp:232-235`) so
+     `tests/simulation` tests can bring up the OTOS command surface
+     (`OZ`/`OI`/`OR`/`OV`) WITHOUT also pulling in the full noise/slip
+     side-effects of `set_field_profile()`. This keeps "OTOS is ready" and
+     "field-realistic error injection" as separately controllable test
+     fixtures, matching the existing separation between
+     `sim_enable_otos_model()` (accumulator on) and `sim_set_otos_fusion()`
+     (fusion + `begin()`).
+
+3. **No change to `Robot.cpp`, `OtosCommands.cpp`, `Odometry.cpp`, or
+   `SimHardware.h`.** The command-context wiring and the EKF fusion path are
+   already correct; this ticket only fixes the sim OTOS's own state machine
+   and where it gets initialized.
+
+### Diagrams
+
+```mermaid
+graph TD
+    CMD["OtosCommands\n(OZ/OI/OR/OV handlers)"]
+    ROBOT["Robot::otosCorrect()"]
+    IODOM["IOdometer\n(interface)"]
+    SIMODOM["SimOdometer\n(_odomX/Y/H accumulator,\n_rawX/Y/H shadow, _initialized)"]
+    EKF["Odometry::correctEKF\n(EKF fusion)"]
+    SIMHW["SimHardware\n(otos() -> _odom)"]
+    HARNESS["tests/_infra/sim\n(sim_api.cpp / firmware.py)"]
+    GUI["SimTransport\n(_apply_field_profile)"]
+
+    CMD -->|"setPositionRaw(0,0,0)"| IODOM
+    ROBOT -->|"readTransformed()"| IODOM
+    IODOM -.impl.-> SIMODOM
+    SIMHW -->|"otos()"| SIMODOM
+    ROBOT --> EKF
+    HARNESS -->|"begin() [new: sim_begin_otos]"| SIMODOM
+    GUI -->|"set_field_profile(fuse_otos=True)\n[already begins otos]"| HARNESS
+```
+
+No new nodes and no new dependency edges beyond one new harness-only entry
+point (`sim_begin_otos`); the command/fusion dependency direction is
+unchanged. No ERD changes (no data-model change — same `Pose2D`/`BodyTwist`
+value types).
+
+### Impact on existing components
+
+- `SimOdometer`: behavior-preserving for every existing caller of
+  `setPositionRaw()` that does NOT rely on the accumulator staying stale after
+  a raw-register write — grep confirms the only callers are `OZ`/`OV`
+  handlers and tests that assert `getPositionRaw()` (raw shadow, unaffected)
+  or exercise `OZ` end-to-end (which currently asserts nothing about the
+  accumulator, since it was previously a no-op there).
+- `Drive::tickUpdate`'s `_otosEverReady`/lag-gate logic is unaffected — it
+  gates on `is_initialized()` and `now - _lastOtosMs`, neither of which this
+  ticket touches.
+- Test GUI: no code change required in `transport.py`; `_apply_field_profile`
+  already does the right thing. This ticket's fix in `SimOdometer` makes that
+  existing call path behave correctly end-to-end for "Set Robot @ 0,0."
+
+### Migration concerns
+
+- **Golden-TLM / behavior-preservation risk**: `SimOdometer`'s header
+  explicitly promises bit-identical behavior against the retired
+  `MockOtosSensor` for `tests/simulation/unit/test_golden_tlm.py`. The
+  `setPositionRaw` change only fires on `OZ`/`OV` calls. Confirmed by reading
+  `test_golden_tlm.py`'s fixed command sequence (`SET sTimeout=...`,
+  `STREAM 50`, `T 100 100 10000`, `X`) — it contains **no** `OZ`/`OV`/`OI`/`OR`
+  calls, so the golden capture is unaffected by this ticket. Still run
+  `test_golden_tlm.py` after implementation to confirm.
+- **`test_ekf_dual_source.py` / `test_dbg_otos_commands.py` / `test_ekf.py`**:
+  these exercise `enable_otos_model()`/`begin_otos()`/OTOS fusion directly;
+  none currently call `OZ`/`OV` through the command surface (confirmed by
+  grep — they use `sim_set_otos_pose`/`drive_api` hooks instead), so they are
+  expected to be unaffected, but must be run to confirm.
+  `test_dbg_otos_commands.py` tests the **bench** OTOS (`DBG OTOS BENCH`), a
+  different model — out of scope, unaffected by construction.
+  `sim_bench_otos_reset` and `sim_get_bench_otos_*` are also untouched.
+- **Sequencing**: implement the `SimOdometer::setPositionRaw` fix first
+  (independently testable), then the `sim_begin_otos` harness hook, then the
+  `tests/simulation` regression test. No firmware behavior on real hardware
+  changes (the real `OtosSensor`'s `setPositionRaw` already re-references the
+  physical chip's tracker; this ticket only brings the sim model in line).
+
+### Design rationale
+
+**Decision: fix `SimOdometer::setPositionRaw`, not add a new sim OTOS class.**
+- Context: the issue's suggested framing ("wire OtosCtx.otos to sim") implied
+  a missing-integration problem; investigation found the integration already
+  correct and the bug narrower (a stale accumulator).
+- Alternatives considered: (a) build a new "independent absolute-heading sim
+  OTOS" class replacing `SimOdometer`'s injected/accumulated dual-mode design;
+  (b) patch `setPositionRaw` in place.
+- Why this choice: `SimOdometer` already has the required shape — an
+  accumulator with a `_useSimModel` toggle, a raw-register shadow, and error
+  injection. The bug is a single missing line (accumulator not reset by
+  `setPositionRaw`). Introducing a new class would duplicate the
+  behavior-preservation guarantees `SimOdometer` already carries for
+  golden-TLM and risk exactly the regression this ticket must avoid.
+- Consequences: the fix is minimal and localized, but the two-mode design
+  (`_injectedX/Y/H` vs `_odomX/Y/H`, only one active depending on
+  `_useSimModel`) remains slightly confusing — `setPositionRaw` after this
+  change writes to `_rawX/Y/H` AND `_odomX/Y/H`, but NOT `_injectedX/Y/H`
+  (matching `setInjectedPose`'s asymmetric behavior, which resets only its own
+  channel). This asymmetry is called out as an open question below.
+
+**Decision: separate `sim_begin_otos()` harness hook rather than requiring
+`tests/simulation` tests to call `set_field_profile()`.**
+- Context: `set_field_profile()` bundles OTOS-begin with turn-slip injection
+  and OTOS noise — side effects a test asserting exact heading-reset behavior
+  does not want.
+- Alternatives considered: (a) reuse `set_field_profile(fuse_otos=True)` in
+  the new regression test; (b) add a narrow `sim_begin_otos()`/`begin_otos()`
+  hook mirroring `drive_api_begin_otos()`.
+- Why this choice: (b) keeps the regression test's error model at zero
+  (deterministic assertions on exact heading values) while still exercising
+  the real `is_initialized()` gate — consistent with the existing
+  `drive_api_begin_otos()` precedent for the same reason.
+- Consequences: one new tiny C ABI function + Python binding; no behavior
+  change to any existing hook.
+
+### Open questions
+
+1. Should `OI` (`init()`) or `OR` (`resetTracking()`) do anything in
+   `SimOdometer` beyond remaining no-ops, now that `OZ`/`OV` have real effects?
+   On real hardware `OI` re-runs signal processing + Kalman reset and `OR`
+   resets the chip's internal Kalman tracking — neither has a kinematic
+   equivalent in a model with no internal filter. Recommend: leave both as
+   no-ops (matches today) but return `OK` (not `nodev`) once `begin()` has
+   run, which ticket 006's acceptance criteria already require. Flagging for
+   stakeholder confirmation that "no-op but OK" is acceptable for `OI`/`OR` in
+   sim, versus needing a documented simulated effect.
+2. `setPositionRaw`'s raw-LSB scale factor must match whatever
+   `getPositionRaw`/the real `OtosSensor` use for OTOS registers — needs a
+   quick confirmation read of the real `OtosSensor::setPositionRaw` /
+   `getPositionRaw` conversion during implementation so `OZ 0 0 0` (the only
+   value it's called with today) and `OV x y h` (arbitrary values) convert
+   consistently. `OZ` uses `(0,0,0)`, which is scale-invariant, so this only
+   matters for `OV`'s non-zero case and for future ticket work, not for the
+   heading-reset acceptance criteria in this ticket.
+
+---
+
 ## Resolved Decisions (formerly Open Questions)
 
 The following were open questions at architecture-review time. All three have

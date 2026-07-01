@@ -141,6 +141,39 @@ status: draft
   - [ ] `SessionRecorder` is Qt-free; headless tests cover append, pause gating,
         and JSONL serialization.
 
+## SUC-007: Test the OTOS heading-reset bug in Sim mode
+
+- **Actor**: Developer validating the EKF/OTOS fusion path or the "Set Robot @ 0,0"
+  heading reset (SUC-005) without hardware.
+- **Preconditions**: Test GUI (or a `tests/simulation` test) is connected via the Sim
+  transport.
+- **Main Flow**:
+  1. Developer drives the sim robot to a non-zero heading (e.g. `VW 0 300` then `S`).
+  2. Developer sends `SI 0 0 0` alone (no `OZ`).
+  3. Over the next several ticks, the fused heading drifts back toward the sim OTOS's
+     retained absolute heading — reproducing the exact hardware bug documented in
+     `.clasi/knowledge/2026-07-01-heading-reset-needs-oz-not-just-si.md`.
+  4. Developer repeats from a non-zero heading, this time sending `ZERO enc`, then
+     `OZ`, then `SI 0 0 0` (the SUC-005 sequence).
+  5. The fused heading resets to 0 and **holds** at 0 across many subsequent ticks
+     (no drift-back), because `OZ` re-referenced the sim OTOS's absolute heading.
+  6. `OZ`, `OI`, `OR`, `OV` all reply `OK` in Sim mode (never `ERR nodev`).
+- **Postconditions**: Sim mode reproduces hardware OTOS-fusion behaviour closely enough
+  that the heading-reset bug and its fix are both observable and regression-tested
+  without a physical robot.
+- **Acceptance Criteria**:
+  - [ ] In Sim mode, `OZ`/`OI`/`OR`/`OV` never return `ERR nodev`.
+  - [ ] `SI 0 0 0` alone (no `OZ`) leaves the fused heading drifting back toward the
+        sim OTOS's retained heading within a few ticks.
+  - [ ] `ZERO enc` + `OZ` + `SI 0 0 0` resets the fused heading to 0 and holds it there.
+  - [ ] Test GUI Sim mode: clicking "Set Robot @ 0,0" after a turn drives the on-screen
+        avatar heading to 0 and it stays there (no visible drift-back).
+  - [ ] `tests/simulation` regression test covers both the bug-reproduction and the
+        fix-verification cases described above.
+  - [ ] Existing golden-TLM / OTOS-fusion sim tests (`test_golden_tlm.py`,
+        `test_ekf_dual_source.py`, `test_dbg_otos_commands.py`, `test_ekf.py`) pass
+        unchanged.
+
 ## SUC-004: SIM/BENCH MODE background unchanged
 
 - **Actor**: Developer using Sim or Serial transport

@@ -1,6 +1,8 @@
 ---
-status: pending
+status: in-progress
 sprint: '063'
+tickets:
+- 063-006
 ---
 
 # Sim Mode needs a functional simulated OTOS (test the Kalman filter + heading reset)
