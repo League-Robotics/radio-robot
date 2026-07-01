@@ -24,7 +24,7 @@
   "ml": 0.716,
   "mr": 0.708,
   "odomOffX": -47.7,
-  "odomOffY": 4.0,
+  "odomOffY": 3.5,
   "odomYaw": 0.0,
   "otosAngSc": 0.987,
   "otosGate": 50.0,
@@ -52,5 +52,5 @@
   "vWheelMax": 400.0,
   "yawAccMax": 720.0,
   "yawJerkMax": 0.0,
-  "yawRateMax": 35.0
+  "yawRateMax": 70.0
 }

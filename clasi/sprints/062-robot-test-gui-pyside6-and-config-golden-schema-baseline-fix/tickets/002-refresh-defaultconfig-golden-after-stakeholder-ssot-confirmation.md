@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Refresh DefaultConfig golden after stakeholder SSOT confirmation
-status: open
+status: done
 use-cases:
 - SUC-017
 depends-on:
@@ -38,19 +38,19 @@ Root cause B of the two baseline test failures (see issue).
 
 ## Acceptance Criteria
 
-- [ ] **STAKEHOLDER GATE (must be confirmed before committing):** Stakeholder
+- [x] **STAKEHOLDER GATE (must be confirmed before committing):** Stakeholder
   has explicitly confirmed that the intended SSOT values are `yawRateMax=70`
   and `odomOffY=3.5`. Record the confirmation in the commit message (e.g.,
   "Confirmed by stakeholder 2026-07-XX: yawRateMax=70, odomOffY=3.5 are correct").
-- [ ] Programmer has located the SSOT: either `data/robots/robot_config.schema.json`
+- [x] Programmer has located the SSOT: either `data/robots/robot_config.schema.json`
   default values or `scripts/gen_default_config.py` logic, and confirmed which
   file is authoritative for `defaultRobotConfig()` values.
-- [ ] Golden file updated using the project's pin-update procedure (read the
+- [x] Golden file updated using the project's pin-update procedure (read the
   test file to find the update command).
-- [ ] `tests/simulation/unit/test_default_config_pin.py::test_default_robot_config_unchanged`
+- [x] `tests/simulation/unit/test_default_config_pin.py::test_default_robot_config_unchanged`
   passes.
-- [ ] `uv run python -m pytest tests/simulation` passes (no regressions).
-- [ ] Commit message records the stakeholder-confirmed SSOT values.
+- [x] `uv run python -m pytest tests/simulation` passes (no regressions).
+- [x] Commit message records the stakeholder-confirmed SSOT values.
 
 ## Implementation Plan
 
