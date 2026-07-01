@@ -10,7 +10,7 @@
 // All CommandProcessor::replyOK/Err/Evt calls live here, not in control/.
 // ---------------------------------------------------------------------------
 
-class MotionController;
+class Planner;
 class CommandQueue;
 class Superstructure;
 struct Robot;
@@ -21,7 +21,7 @@ struct Robot;
 // Moved from source/control/MotionController.h to app layer (sprint 026-002).
 // ---------------------------------------------------------------------------
 struct MotionCtx {
-    MotionController*  mc;
+    Planner*           mc;
     Superstructure*    superstructure;  // Seam 3 (042-001): queue-path begin* goes through requestGoal
     struct Robot*      robot;
     CommandQueue*      queue;    // command queue for VW converter push_front; may be null

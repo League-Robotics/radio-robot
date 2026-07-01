@@ -47,7 +47,7 @@ static uint32_t system_timer_current_time() { return g_sim_now_ms; }
 // that hal.motorL() etc. are valid when the refs are bound.
 //
 // Two post-construction binds:
-//   motionController.setHardwareState(&state.inputs)  — MotionController reads pose
+//   planner.setHardwareState(&state.inputs)  — Planner/MotionController reads pose
 //   motorController.setCommandsRef(&state.commands)   — MotorController writes tgt*/pwm*
 // ---------------------------------------------------------------------------
 
@@ -111,7 +111,7 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
     sensors.configure(subsystems::toLineSensorConfig(config),
                       subsystems::toColorSensorConfig(config));
     planner.configure(toPlannerConfig(config));
-    motionController.setHardwareState(&state.actual);
+    planner.setHardwareState(&state.actual);
     // 060-002: Drive's constructor already called _mc.setCommandsRef(&_outputs),
     // binding MotorController to drive._outputs.  Do NOT override that binding
     // here, or drive.outputs() will be stale.
@@ -122,12 +122,12 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
     // or planner.tick() will read stale zeros from _desired.bodyTwist while BVC
     // writes to robot.state.desired instead.
     // setRobotCtx replaces setCtx (sprint 026-002): MotionCtx now lives in Robot.
-    motionController.setRobotCtx(this);
+    planner.setRobotCtx(this);
     // Initialise _motionCtx (sprint 026-002): mc and robot pointers; queue wired
     // later by setMotionQueue() from LoopScheduler or test harness.
     // 042-001: superstructure pointer wired so handleVW queue-path branches route
     // begin* through requestGoal (Seam 3).
-    _motionCtx.mc             = &motionController;
+    _motionCtx.mc             = &planner;
     _motionCtx.superstructure = &superstructure;
     _motionCtx.robot          = this;
     _motionCtx.queue          = nullptr;
@@ -197,7 +197,7 @@ void Robot::otosCorrect(uint32_t now_ms)
     // controller — this was the root cause of the "spin on placement" symptom.
     //
     // EVT path (Open Question 3 resolution): we call
-    //   motionController.emitToActiveChannel("EVT otos lost", state.target)
+    //   planner.emitToActiveChannel("EVT otos lost", state.desired)
     // which wraps the existing static emitEvt(base, TargetState&) helper.
     // Robot owns state.target and can pass it directly; no new reply-sink
     // plumbing is required.  emitEvt routes via target.sink.emitFn — the
@@ -261,14 +261,14 @@ void Robot::otosCorrect(uint32_t now_ms)
         // Emit "EVT otos lost" once per unhealthy window, only during an active
         // motion command (no point signalling on a parked robot).  Trigger is
         // unchanged from D9; the raw telemetry above is independent of this.
-        if (motionController.hasActiveCommand()) {
+        if (planner.hasActiveCommand()) {
             if (_otosInvalidStartMs == 0) {
                 _otosInvalidStartMs = now_ms;
             }
             if (!_otosLostEmitted &&
                 ((now_ms - _otosInvalidStartMs) >= 500u)) {
-                motionController.emitToActiveChannel("EVT otos lost",
-                                                     state.desired);
+                planner.emitToActiveChannel("EVT otos lost",
+                                            state.desired);
                 _otosLostEmitted = true;
             }
         }
@@ -360,8 +360,8 @@ void Robot::resetEncoders()
 void Robot::distanceDrive(int32_t l, int32_t r, int32_t targetMm,
                                 ReplyFn fn, void* ctx, const char* corr_id)
 {
-    motionController.beginDistance((float)l, (float)r, targetMm,
-                                   systemTime(), state.desired, fn, ctx, corr_id);
+    planner.beginDistance((float)l, (float)r, targetMm,
+                          systemTime(), state.desired, fn, ctx, corr_id);
     // Atomic encoder reset: aligns hardware accumulators, MC velocity baselines,
     // outlier-filter baseline, and Odometry encoder snapshot in one call.
     // (Replaces the split reset that was here + inside beginDistance().)

@@ -23,7 +23,7 @@
 // handleVW's STR-args-based KV lookup).
 
 #include "MotionCommands.h"
-#include "superstructure/MotionController.h"
+#include "superstructure/Planner.h"
 #include "Superstructure.h"
 #include "Robot.h"
 #include "CommandProcessor.h"

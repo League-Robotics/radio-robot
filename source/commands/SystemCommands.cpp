@@ -611,9 +611,9 @@ static void handleSafe(const ArgList& args, const char* corrId,
             // Instead arm the one-shot flag in MotionController so safety
             // is automatically restored when the next motion command begins.
             // This prevents SAFE off from becoming a permanent foot-gun.
-            robot->motionController.disableSafetyOneShot();
+            robot->planner.disableSafetyOneShot();
             // Reflect the transient "off" state in the reply (safetyEnabled
-            // will be re-armed by MotionController on the next begin*() call,
+            // will be re-armed by Planner on the next begin*() call,
             // but for the duration of any current-or-next command the watchdog
             // is suppressed via _safeOneShotDisable).
             cfg.safetyEnabled = false;
@@ -628,7 +628,7 @@ static void handleSafe(const ArgList& args, const char* corrId,
             int ms = atoi(a0);
             if (ms <= 0) {
                 // Same one-shot treatment as "SAFE off".
-                robot->motionController.disableSafetyOneShot();
+                robot->planner.disableSafetyOneShot();
                 cfg.safetyEnabled = false;
             } else {
                 cfg.safetyEnabled = true;
@@ -1046,7 +1046,7 @@ std::vector<CommandDescriptor> Robot::buildCommandTable(
     // Initialise _motionCtx for this build (sprint 026-002).
     // mc and robot pointers are already set in the constructor; vwDesc is
     // initialised by getMotionCommands() below.
-    _motionCtx.mc    = const_cast<MotionController*>(&motionController);
+    _motionCtx.mc    = const_cast<Planner*>(&planner);
     _motionCtx.robot = const_cast<Robot*>(this);
     // queue is set by setMotionQueue() from LoopScheduler; preserve it here.
 
@@ -1058,7 +1058,7 @@ std::vector<CommandDescriptor> Robot::buildCommandTable(
     auto append = [&](std::vector<CommandDescriptor> v) {
         cmds.insert(cmds.end(), v.begin(), v.end());
     };
-    // Sprint 026-002: replaced motionController.getCommands() with getMotionCommands().
+    // Sprint 026-002: replaced MotionController::getCommands() with getMotionCommands().
     append(getMotionCommands(&_motionCtx));
     // 041-002: the seven OTOS-tuning verbs moved out of Odometry (Commandable
     // stripped) into the app-layer OtosCommands.  Aggregate them here in place

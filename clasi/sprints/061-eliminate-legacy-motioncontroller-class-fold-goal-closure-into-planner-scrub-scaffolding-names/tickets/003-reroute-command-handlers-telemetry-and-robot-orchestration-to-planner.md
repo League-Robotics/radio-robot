@@ -1,12 +1,12 @@
 ---
 id: '003'
 title: Reroute command handlers, telemetry, and Robot orchestration to Planner
-status: open
+status: done
 use-cases:
 - SUC-003
 depends-on:
-- "001"
-- "002"
+- '001'
+- '002'
 github-issue: ''
 issue: internalize-legacy-motioncontroller-into-planner.md
 completes_issue: false
@@ -66,24 +66,24 @@ methods on it by name.
 
 ## Acceptance Criteria
 
-- [ ] `MotionCtx::mc` is `Planner*` (not `MotionController*`).
-- [ ] `MotionCommands.h` forward-declares `Planner`, not `MotionController`.
-- [ ] `RobotTelemetry.cpp` calls `planner.mode()` in both locations.
-- [ ] `Robot.cpp` setup calls `planner.setHardwareState`, `planner.setRobotCtx`,
+- [x] `MotionCtx::mc` is `Planner*` (not `MotionController*`).
+- [x] `MotionCommands.h` forward-declares `Planner`, not `MotionController`.
+- [x] `RobotTelemetry.cpp` calls `planner.mode()` in both locations.
+- [x] `Robot.cpp` setup calls `planner.setHardwareState`, `planner.setRobotCtx`,
       `planner.setBvcStateRef`, and `_motionCtx.mc = &planner`.
-- [ ] `Robot.cpp::otosCorrect` uses `planner.hasActiveCommand()` and
+- [x] `Robot.cpp::otosCorrect` uses `planner.hasActiveCommand()` and
       `planner.emitToActiveChannel(...)`.
-- [ ] `Robot.cpp::distanceDrive` calls `planner.beginDistance(...)`.
-- [ ] `SystemCommands.cpp` calls `robot->planner.disableSafetyOneShot()`
+- [x] `Robot.cpp::distanceDrive` calls `planner.beginDistance(...)`.
+- [x] `SystemCommands.cpp` calls `robot->planner.disableSafetyOneShot()`
       in both call sites and assigns `_motionCtx.mc = &robot->planner`.
-- [ ] `grep -n "motionController\." source/robot/Robot.cpp
+- [x] `grep -n "motionController\." source/robot/Robot.cpp
       source/robot/RobotTelemetry.cpp source/commands/SystemCommands.cpp
       source/commands/MotionCommands.h` returns zero hits.
-- [ ] `cmake --build build_sim` succeeds with zero errors.
-- [ ] `uv run python -m pytest tests/simulation/unit/test_golden_tlm.py
+- [x] `cmake --build build_sim` succeeds with zero errors.
+- [x] `uv run python -m pytest tests/simulation/unit/test_golden_tlm.py
       tests/simulation/unit/test_059_ordered_tick_parity.py
       tests/simulation/unit/test_planner_subsystem.py` all pass.
-- [ ] `robot.motionController` still compiles (member not yet removed).
+- [x] `robot.motionController` still compiles (member not yet removed).
 
 ## Implementation Plan
 
