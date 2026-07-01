@@ -502,3 +502,525 @@ class TestLogCallback:
         assert any("STOP" in e for e in log_entries), (
             f"Expected 'STOP' in log entries but got: {log_entries}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests: SimTransport
+# ---------------------------------------------------------------------------
+
+
+class FakeSim:
+    """Minimal fake for tests/_infra/sim/firmware.Sim.
+
+    Tracks sent commands, provides canned TLM replies in get_async_evts(),
+    and exposes get_true_pose() for ground-truth delivery tests.
+    """
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+        self._async_evts: list[str] = []
+        self._pose_x_mm: float = 100.0
+        self._pose_y_mm: float = 200.0
+        self._pose_h_rad: float = 0.5
+        self._field_profile_applied: bool = False
+        self._otos_noise_set: bool = False
+        self._destroyed: bool = False
+        # For context manager protocol
+        self._t: int = 0
+
+    def __enter__(self) -> "FakeSim":
+        return self
+
+    def __exit__(self, *_) -> None:
+        self._destroyed = True
+
+    def send_command(self, line: str) -> str:
+        self.sent.append(line)
+        if line.startswith("STREAM"):
+            return "OK stream"
+        return "OK"
+
+    def get_async_evts(self) -> str:
+        evts = "\n".join(self._async_evts)
+        self._async_evts.clear()
+        return evts
+
+    def tick_for(self, total_ms: int, step_ms: int = 24, **_kw) -> None:
+        self._t += total_ms
+
+    def get_true_pose(self) -> tuple[float, float, float]:
+        return (self._pose_x_mm, self._pose_y_mm, self._pose_h_rad)
+
+    def set_field_profile(self, slip_turn_extra: float = 0.26,
+                          fuse_otos: bool = True) -> None:
+        self._field_profile_applied = True
+
+    def set_otos_linear_noise(self, sigma_fraction: float) -> None:
+        self._otos_noise_set = True
+
+    def inject_tlm(self, line: str) -> None:
+        """Add a TLM line to the async event queue."""
+        self._async_evts.append(line)
+
+
+def _make_sim_transport_with_fake(fake_sim: FakeSim | None = None):
+    """Construct a SimTransport whose tick-thread uses FakeSim instead of real Sim.
+
+    Patches both the lib-path existence check and the Sim import so no real
+    library is required.
+    """
+    from unittest.mock import patch, MagicMock
+    from robot_radio.testgui.transport import SimTransport
+    import pathlib
+
+    if fake_sim is None:
+        fake_sim = FakeSim()
+
+    # Patch _sim_lib_path to return a path that "exists".
+    fake_path = MagicMock(spec=pathlib.Path)
+    fake_path.exists.return_value = True
+    fake_path.parent.parent = pathlib.Path("/fake/tests/_infra/sim")
+
+    # We patch at the tick_loop level by providing a fake Sim via sys.modules.
+    import sys
+    fake_firmware_module = MagicMock()
+    fake_firmware_module.Sim.return_value = fake_sim
+    fake_firmware_module.Sim.return_value.__enter__ = lambda s: s
+    fake_firmware_module.Sim.return_value.__exit__ = lambda s, *a: None
+
+    return fake_sim, fake_path, fake_firmware_module
+
+
+class TestSimTransportABC:
+    """SimTransport implements the Transport ABC."""
+
+    def test_simtransport_is_transport(self):
+        from robot_radio.testgui.transport import SimTransport, Transport
+
+        assert issubclass(SimTransport, Transport)
+
+    def test_simtransport_callback_slots(self):
+        from robot_radio.testgui.transport import SimTransport
+
+        t = SimTransport()
+        assert hasattr(t, "on_telemetry")
+        assert hasattr(t, "on_truth")
+        assert hasattr(t, "on_log")
+        assert t.on_telemetry is None
+        assert t.on_truth is None
+        assert t.on_log is None
+
+    def test_simtransport_has_send_and_command(self):
+        from robot_radio.testgui.transport import SimTransport
+
+        assert callable(SimTransport.send)
+        assert callable(SimTransport.command)
+
+
+class TestSimTransportLibCheck:
+    """connect() behaviour when the sim lib is missing or present."""
+
+    def test_connect_returns_without_connecting_when_lib_missing(self):
+        """If the lib path does not exist, connect() must NOT set _connected."""
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = False
+
+        t = SimTransport()
+        log_entries: list[str] = []
+        t.on_log = log_entries.append
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.object(SimTransport, "_show_build_warning"):
+            t.connect()
+
+        assert not t._connected, "_connected must remain False when lib is missing"
+
+    def test_connect_calls_show_build_warning_when_lib_missing(self):
+        """When the lib is missing, _show_build_warning must be called."""
+        from unittest.mock import patch, MagicMock, call
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = False
+
+        t = SimTransport()
+        t.on_log = lambda _: None
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.object(SimTransport, "_show_build_warning") as mock_warn:
+            t.connect()
+
+        mock_warn.assert_called_once()
+
+    def test_connect_logs_error_when_lib_missing(self):
+        """on_log must receive an error message mentioning build."""
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = False
+
+        t = SimTransport()
+        log_entries: list[str] = []
+        t.on_log = log_entries.append
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.object(SimTransport, "_show_build_warning"):
+            t.connect()
+
+        assert any("build" in e.lower() or "Build" in e or "ERROR" in e
+                   for e in log_entries), (
+            f"Expected build-related error in log; got: {log_entries}"
+        )
+
+
+class TestSimTransportConnect:
+    """connect() behaviour when the lib is present (using FakeSim)."""
+
+    def _connected_sim(self) -> tuple:
+        """Return (SimTransport, FakeSim) with a real connect() on fake Sim."""
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+        import sys
+
+        fake_sim = FakeSim()
+
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = True
+        fake_path.parent.parent = str(pathlib.Path("/nonexistent/sim"))
+
+        # Build a fake 'firmware' module so the import in _tick_loop succeeds.
+        fake_fw_module = MagicMock()
+        fake_fw_module.Sim.return_value = fake_sim
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.dict(sys.modules, {"firmware": fake_fw_module}):
+            t = SimTransport()
+            log_entries: list[str] = []
+            t.on_log = log_entries.append
+            t.connect()
+
+        # Give tick-thread a moment to start and send STREAM 50.
+        time.sleep(0.15)
+
+        return t, fake_sim, log_entries
+
+    def test_connected_flag_is_set(self):
+        t, _, _ = self._connected_sim()
+        try:
+            assert t._connected
+        finally:
+            t.disconnect()
+
+    def test_stream_50_sent_on_connect(self):
+        t, fake_sim, _ = self._connected_sim()
+        try:
+            # Give tick-thread time to run and send STREAM 50.
+            time.sleep(0.1)
+            assert any("STREAM" in s for s in fake_sim.sent), (
+                f"STREAM 50 not found in sent commands: {fake_sim.sent}"
+            )
+        finally:
+            t.disconnect()
+
+    def test_field_profile_applied_on_connect(self):
+        t, fake_sim, _ = self._connected_sim()
+        try:
+            time.sleep(0.1)
+            assert fake_sim._field_profile_applied, (
+                "set_field_profile was not called on connect"
+            )
+            assert fake_sim._otos_noise_set, (
+                "set_otos_linear_noise was not called on connect"
+            )
+        finally:
+            t.disconnect()
+
+    def test_connect_is_idempotent(self):
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+        import sys
+
+        fake_sim = FakeSim()
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = True
+        fake_path.parent.parent = str(pathlib.Path("/nonexistent/sim"))
+        fake_fw_module = MagicMock()
+        fake_fw_module.Sim.return_value = fake_sim
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.dict(sys.modules, {"firmware": fake_fw_module}):
+            t = SimTransport()
+            t.on_log = lambda _: None
+            t.connect()
+            t.connect()  # second call must be a no-op
+
+        try:
+            assert t._connected
+            # tick_thread must be a single thread — count active sim threads.
+            sim_threads = [
+                th for th in threading.enumerate()
+                if th.name == "sim-tick-thread"
+            ]
+            assert len(sim_threads) <= 1, (
+                "Multiple tick-threads started by double connect()"
+            )
+        finally:
+            t.disconnect()
+
+
+class TestSimTransportDisconnect:
+    """disconnect() behaviour."""
+
+    def test_disconnect_stops_tick_thread(self):
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+        import sys
+
+        fake_sim = FakeSim()
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = True
+        fake_path.parent.parent = str(pathlib.Path("/nonexistent/sim"))
+        fake_fw_module = MagicMock()
+        fake_fw_module.Sim.return_value = fake_sim
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.dict(sys.modules, {"firmware": fake_fw_module}):
+            t = SimTransport()
+            t.on_log = lambda _: None
+            t.connect()
+            time.sleep(0.1)
+
+            tick_thread = t._tick_thread
+            assert tick_thread is not None and tick_thread.is_alive()
+
+            t.disconnect()
+
+        # After disconnect, tick-thread must exit.
+        if tick_thread is not None:
+            tick_thread.join(timeout=3.0)
+        assert tick_thread is None or not tick_thread.is_alive(), (
+            "Tick-thread still alive after disconnect()"
+        )
+
+    def test_disconnect_without_connect_does_not_raise(self):
+        from robot_radio.testgui.transport import SimTransport
+
+        t = SimTransport()
+        t.disconnect()  # must not raise
+
+
+class TestSimTransportCommands:
+    """send() and command() route through the cmd queue to the tick-thread."""
+
+    def _connected_sim(self) -> tuple:
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+        import sys
+
+        fake_sim = FakeSim()
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = True
+        fake_path.parent.parent = str(pathlib.Path("/nonexistent/sim"))
+        fake_fw_module = MagicMock()
+        fake_fw_module.Sim.return_value = fake_sim
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.dict(sys.modules, {"firmware": fake_fw_module}):
+            t = SimTransport()
+            t.on_log = lambda _: None
+            t.connect()
+
+        time.sleep(0.15)
+        return t, fake_sim
+
+    def test_send_queues_command(self):
+        t, fake_sim = self._connected_sim()
+        try:
+            t.send("D 200 200 500")
+            # Give tick-thread a chance to process the queue.
+            time.sleep(0.1)
+            assert any("D 200 200 500" in s for s in fake_sim.sent), (
+                f"D command not found in sim.sent: {fake_sim.sent}"
+            )
+        finally:
+            t.disconnect()
+
+    def test_send_raises_when_not_connected(self):
+        from robot_radio.testgui.transport import SimTransport
+
+        t = SimTransport()
+        with pytest.raises(ConnectionError):
+            t.send("PING")
+
+    def test_command_returns_reply(self):
+        t, fake_sim = self._connected_sim()
+        try:
+            reply = t.command("PING", read_ms=500)
+            assert reply == "OK", f"Expected 'OK' reply, got {reply!r}"
+        finally:
+            t.disconnect()
+
+    def test_command_when_not_connected_returns_empty(self):
+        from robot_radio.testgui.transport import SimTransport
+
+        t = SimTransport()
+        result = t.command("PING")
+        assert result == ""
+
+
+class TestSimTransportTLMDelivery:
+    """TLM lines from get_async_evts() are parsed and delivered to on_telemetry."""
+
+    def test_tlm_delivered_to_callback(self):
+        """TLM lines injected into FakeSim's async queue are delivered."""
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+        import sys
+
+        fake_sim = FakeSim()
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = True
+        fake_path.parent.parent = str(pathlib.Path("/nonexistent/sim"))
+        fake_fw_module = MagicMock()
+        fake_fw_module.Sim.return_value = fake_sim
+
+        received_frames: list = []
+        done_evt = threading.Event()
+
+        def _on_tlm(frame):
+            received_frames.append(frame)
+            done_evt.set()
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.dict(sys.modules, {"firmware": fake_fw_module}):
+            t = SimTransport()
+            t.on_telemetry = _on_tlm
+            t.on_log = lambda _: None
+            t.connect()
+
+        # Inject a TLM line into the fake sim's async event queue.
+        fake_sim.inject_tlm("TLM t=12345 enc=100,200 pose=300,400,900")
+
+        # Wait for delivery.
+        delivered = done_evt.wait(timeout=2.0)
+        t.disconnect()
+
+        assert delivered, "on_telemetry was not called within 2 s"
+        assert len(received_frames) >= 1
+        frame = received_frames[0]
+        assert frame.t == 12345
+        assert frame.enc == (100, 200)
+
+    def test_non_tlm_lines_not_delivered(self):
+        """EVT lines in get_async_evts() do not trigger on_telemetry."""
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+        import sys
+
+        fake_sim = FakeSim()
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = True
+        fake_path.parent.parent = str(pathlib.Path("/nonexistent/sim"))
+        fake_fw_module = MagicMock()
+        fake_fw_module.Sim.return_value = fake_sim
+
+        received_frames: list = []
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.dict(sys.modules, {"firmware": fake_fw_module}):
+            t = SimTransport()
+            t.on_telemetry = lambda f: received_frames.append(f)
+            t.on_log = lambda _: None
+            t.connect()
+
+        # Inject an EVT line — should not trigger on_telemetry.
+        fake_sim.inject_tlm("EVT done T")
+        time.sleep(0.2)
+        t.disconnect()
+
+        assert received_frames == [], "EVT line should not produce a TLMFrame"
+
+
+class TestSimTransportTruthDelivery:
+    """Ground-truth pose is delivered to on_truth with correct unit conversion."""
+
+    def test_truth_delivered_to_callback(self):
+        """on_truth is called with (x_cm, y_cm, yaw_rad) from the sim."""
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport, _SIM_TRUTH_EVERY_N_TICKS
+        import pathlib
+        import sys
+
+        fake_sim = FakeSim()
+        # Set a known true pose (mm units from sim).
+        fake_sim._pose_x_mm = 1000.0   # 100.0 cm
+        fake_sim._pose_y_mm = 500.0    # 50.0 cm
+        fake_sim._pose_h_rad = 1.2
+
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = True
+        fake_path.parent.parent = str(pathlib.Path("/nonexistent/sim"))
+        fake_fw_module = MagicMock()
+        fake_fw_module.Sim.return_value = fake_sim
+
+        received_poses: list = []
+        done_evt = threading.Event()
+
+        def _on_truth(pose):
+            if pose is not None:
+                received_poses.append(pose)
+                done_evt.set()
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.dict(sys.modules, {"firmware": fake_fw_module}):
+            t = SimTransport()
+            t.on_truth = _on_truth
+            t.on_log = lambda _: None
+            t.connect()
+
+        # Wait long enough for at least _SIM_TRUTH_EVERY_N_TICKS ticks.
+        wait_s = (_SIM_TRUTH_EVERY_N_TICKS + 2) * 0.025 + 0.5
+        delivered = done_evt.wait(timeout=wait_s)
+        t.disconnect()
+
+        assert delivered, f"on_truth was not called within {wait_s:.1f} s"
+        assert len(received_poses) >= 1
+
+        x_cm, y_cm, yaw_rad = received_poses[0]
+        # Conversion: mm → cm (divide by 10); heading passthrough.
+        assert abs(x_cm - 100.0) < 1e-3, f"x_cm mismatch: {x_cm}"
+        assert abs(y_cm - 50.0) < 1e-3, f"y_cm mismatch: {y_cm}"
+        assert abs(yaw_rad - 1.2) < 1e-3, f"yaw_rad mismatch: {yaw_rad}"

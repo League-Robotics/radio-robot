@@ -1,4 +1,4 @@
-"""robot_radio.testgui.transport — Transport ABC and Serial/Relay backends.
+"""robot_radio.testgui.transport — Transport ABC and Serial/Relay/Sim backends.
 
 Defines the unified transport interface used by the Robot Test GUI so that
 ``app.py`` never branches on backend type.
@@ -35,7 +35,7 @@ RelayTransport(port: str)
     Wraps SerialConnection(port, mode="relay") — !GO handshake is handled
     internally by SerialConnection.
 
-Both concrete backends:
+Both concrete hardware backends:
 - Start a TLM reader thread on connect() that reads lines from the serial
   connection's TLM/EVT queues, parses them via parse_tlm(), and invokes
   on_telemetry.
@@ -44,6 +44,28 @@ Both concrete backends:
   dependency is lazy / optional: if the daemon is not available the thread
   logs a warning and delivers None.
 - Join all threads on disconnect().
+
+SimTransport()
+    Drives the ctypes firmware simulator (tests/_infra/sim/firmware.py Sim
+    class) instead of real hardware.  Owns a background tick-thread that
+    advances sim.tick_for() at wall-clock rate (~20 ms/step), drains
+    sim.get_async_evts() for TLM/EVT lines, and delivers ground-truth pose
+    from sim_get_true_pose_x/y/h via the on_truth callback.
+
+    Unit conversion: sim true-pose is (x_mm, y_mm, h_rad); on_truth receives
+    (x_cm, y_cm, yaw_rad) — x and y are divided by 10; heading is passed
+    through unchanged (already radians).
+
+    Before connecting, if the sim lib
+    (tests/_infra/sim/build/libfirmware_host.{dylib,so}) is missing, a
+    QMessageBox.warning is shown (when Qt is available) and connect() returns
+    without connecting.
+
+    A realistic field error profile is applied on connect:
+    - Motor turn-slip (slip_turn_extra=0.26) matching the sim_field_profile
+      fixture from tests/conftest.py.
+    - OTOS linear noise (sigma_fraction=0.05) so TLM pose and ground truth
+      diverge visibly during motion.
 
 Helper:
     list_ports() -> list[str]
@@ -54,6 +76,10 @@ from __future__ import annotations
 
 import abc
 import logging
+import math
+import pathlib
+import queue
+import sys
 import threading
 import time
 from typing import Callable
@@ -398,3 +424,330 @@ class RelayTransport(_HardwareTransport):
 
     def __init__(self, port: str) -> None:
         super().__init__(port=port, mode="relay")
+
+
+# ---------------------------------------------------------------------------
+# Sim lib path helpers
+# ---------------------------------------------------------------------------
+
+def _sim_lib_name() -> str:
+    """Return the platform-specific sim library filename."""
+    return "libfirmware_host.dylib" if sys.platform == "darwin" else "libfirmware_host.so"
+
+
+def _sim_lib_path() -> pathlib.Path:
+    """Return the expected path for the firmware host simulation library.
+
+    The library lives at tests/_infra/sim/build/ relative to the repo root.
+    This function resolves the path regardless of the current working directory
+    by walking up from this file's location.
+    """
+    # transport.py is at host/robot_radio/testgui/transport.py
+    # Repo root is three levels up.
+    _here = pathlib.Path(__file__).parent   # testgui/
+    _host = _here.parent.parent             # host/
+    _repo = _host.parent                    # repo root
+    return _repo / "tests" / "_infra" / "sim" / "build" / _sim_lib_name()
+
+
+# ---------------------------------------------------------------------------
+# SimTransport
+# ---------------------------------------------------------------------------
+
+# Tick step in milliseconds — how many sim-ms we advance per wall-clock tick.
+_SIM_TICK_STEP_MS = 20
+# Wall-clock sleep between ticks (real-time pacing at 1.0 speed factor).
+_SIM_TICK_SLEEP_S = _SIM_TICK_STEP_MS / 1000.0
+# Ground-truth pose delivery rate (~5 Hz to match hardware truth polling).
+_SIM_TRUTH_EVERY_N_TICKS = max(1, round(200 / _SIM_TICK_STEP_MS))
+
+# Field-profile error parameters (mirrors tests/conftest.py sim_field_profile).
+_SIM_SLIP_TURN_EXTRA = 0.26   # fractional encoder over-report during turns
+_SIM_OTOS_LINEAR_NOISE = 0.05  # OTOS linear noise sigma (fraction of arc)
+
+
+class SimTransport(Transport):
+    """Transport backend that drives the ctypes firmware simulator.
+
+    Owns a ``Sim`` instance (from ``tests/_infra/sim/firmware.py``) and a
+    daemon tick-thread that advances simulation at wall-clock rate, drains
+    ``sim.get_async_evts()`` for TLM/EVT lines, and delivers ground-truth
+    pose via ``on_truth``.
+
+    Unit conversion
+    ---------------
+    Sim true-pose returns ``(x_mm, y_mm, h_rad)``.  The ``on_truth`` callback
+    receives ``(x_cm, y_cm, yaw_rad)`` — x and y are divided by 10 to convert
+    from mm to cm; heading is passed through unchanged (already in radians).
+
+    Thread safety
+    -------------
+    The ``Sim`` ctypes object is NOT thread-safe for concurrent ``tick_for()``
+    and ``send_command()``.  The tick-thread owns the ``Sim`` exclusively.
+    Commands submitted via ``send()`` / ``command()`` are placed in a
+    ``queue.Queue``; the tick-thread drains that queue between ticks.
+    ``command()`` provides a synchronous reply by pairing each command with a
+    ``threading.Event`` and a one-element list for the response.
+
+    Lib build check
+    ---------------
+    ``connect()`` checks for the sim lib before loading ``Sim``.  If the lib
+    is missing, a ``QMessageBox.warning`` is shown (when Qt is available) and
+    ``connect()`` returns without connecting.  If Qt is not available, a
+    message is emitted via ``on_log`` instead.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._sim: "object | None" = None   # Sim instance, owned by tick-thread
+        self._tick_thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        # Queue items: (line: str, reply_list: list[str] | None, done_event: Event | None)
+        # For send() (fire-and-forget): reply_list=None, done_event=None
+        # For command() (synchronous): reply_list=[""]*1, done_event=Event
+        self._cmd_queue: queue.Queue = queue.Queue()
+        self._connected = False
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def connect(self) -> None:
+        """Load the sim lib, configure the error profile, and start the tick-thread.
+
+        If the sim lib is missing, shows a warning and returns without
+        connecting.  Idempotent — does nothing if already connected.
+        """
+        if self._connected:
+            return
+
+        lib_path = _sim_lib_path()
+        if not lib_path.exists():
+            msg = (
+                f"Sim library not found: {lib_path}\n"
+                f"Build it with:  python build.py\n"
+                f"(run from tests/_infra/sim/)"
+            )
+            self._log(f"[ERROR] {msg}")
+            _log.warning("SimTransport: lib missing at %s", lib_path)
+            self._show_build_warning(str(lib_path))
+            return
+
+        self._stop_event.clear()
+        self._tick_thread = threading.Thread(
+            target=self._tick_loop,
+            name="sim-tick-thread",
+            daemon=True,
+        )
+        self._tick_thread.start()
+        self._connected = True
+        self._log("[INFO] SimTransport connected")
+
+    def disconnect(self) -> None:
+        """Signal the tick-thread to stop and wait for it to exit."""
+        self._stop_event.set()
+
+        if self._tick_thread is not None and self._tick_thread.is_alive():
+            if self._tick_thread is not threading.current_thread():
+                self._tick_thread.join(timeout=3.0)
+                if self._tick_thread.is_alive():
+                    _log.warning("SimTransport tick-thread did not exit within 3 s")
+
+        self._tick_thread = None
+        self._connected = False
+        self._sim = None
+        self._log("[INFO] SimTransport disconnected")
+
+    # ------------------------------------------------------------------
+    # Commands
+    # ------------------------------------------------------------------
+
+    def send(self, line: str) -> None:
+        """Fire-and-forget: enqueue a command for the tick-thread to execute."""
+        if not self._connected:
+            raise ConnectionError("SimTransport is not connected")
+        self._cmd_queue.put((line, None, None))
+        self._log(f"TX {line}")
+
+    def command(self, line: str, read_ms: int = 200) -> str:
+        """Send a command and return the synchronous reply string.
+
+        Enqueues the command with a ``threading.Event`` and waits for the
+        tick-thread to process it.  Timeout is derived from ``read_ms``.
+        Returns an empty string on timeout or when not connected.
+        """
+        if not self._connected:
+            return ""
+        reply_list: list[str] = [""]
+        done_evt = threading.Event()
+        self._cmd_queue.put((line, reply_list, done_evt))
+        self._log(f"TX {line}")
+        timeout_s = max(read_ms / 1000.0, 1.0)
+        done_evt.wait(timeout=timeout_s)
+        reply = reply_list[0]
+        if reply:
+            self._log(f"RX {reply.strip()}")
+        return reply
+
+    # ------------------------------------------------------------------
+    # Background tick-thread
+    # ------------------------------------------------------------------
+
+    def _tick_loop(self) -> None:
+        """Advance the sim at wall-clock rate; drain commands and async events.
+
+        This is the only thread that touches the Sim object.  On entry it
+        creates the Sim, configures the field-error profile, and sends
+        ``STREAM 50`` to start TLM streaming.  On exit it destroys the Sim.
+        """
+        # Import here — only loaded after the lib is verified present.
+        try:
+            import sys as _sys
+            _SIM_DIR = str(_sim_lib_path().parent.parent)
+            if _SIM_DIR not in _sys.path:
+                _sys.path.insert(0, _SIM_DIR)
+            from firmware import Sim  # type: ignore[import]
+        except Exception as exc:
+            _log.error("SimTransport: failed to import Sim: %s", exc)
+            self._log(f"[ERROR] Failed to load simulator: {exc}")
+            self._connected = False
+            return
+
+        try:
+            with Sim() as sim:
+                self._sim = sim
+                self._apply_field_profile(sim)
+                # Send STREAM 50 so the firmware emits TLM every 50 ms.
+                reply = sim.send_command("STREAM 50")
+                self._log(f"[INFO] STREAM 50 → {reply.strip() if reply else 'OK'}")
+
+                tick_count = 0
+                while not self._stop_event.is_set():
+                    t0 = time.monotonic()
+
+                    # Drain commands from the queue.
+                    self._drain_cmd_queue(sim)
+
+                    # Advance simulation by one step.
+                    sim.tick_for(_SIM_TICK_STEP_MS, step_ms=_SIM_TICK_STEP_MS)
+
+                    # Drain async events (TLM/EVT lines) from the sim.
+                    self._drain_async_evts(sim)
+
+                    # Deliver ground-truth pose periodically.
+                    tick_count += 1
+                    if tick_count % _SIM_TRUTH_EVERY_N_TICKS == 0:
+                        self._deliver_sim_truth(sim)
+
+                    # Pace to wall-clock rate.
+                    elapsed = time.monotonic() - t0
+                    sleep_s = _SIM_TICK_SLEEP_S - elapsed
+                    if sleep_s > 0:
+                        self._stop_event.wait(timeout=sleep_s)
+        except Exception as exc:
+            _log.error("SimTransport tick-loop crashed: %s", exc)
+            self._log(f"[ERROR] Sim tick-loop crashed: {exc}")
+        finally:
+            self._sim = None
+
+    def _drain_cmd_queue(self, sim: "object") -> None:
+        """Drain all pending commands from the queue and execute them on sim."""
+        # Import Sim type for isinstance check would be circular; use duck-typing.
+        try:
+            while True:
+                item = self._cmd_queue.get_nowait()
+                line, reply_list, done_evt = item
+                try:
+                    reply = sim.send_command(line)  # type: ignore[attr-defined]
+                except Exception as exc:
+                    reply = f"ERR sim: {exc}"
+                if reply_list is not None:
+                    reply_list[0] = reply
+                if done_evt is not None:
+                    done_evt.set()
+        except queue.Empty:
+            pass
+
+    def _drain_async_evts(self, sim: "object") -> None:
+        """Drain accumulated async output and deliver TLM frames."""
+        try:
+            raw = sim.get_async_evts()  # type: ignore[attr-defined]
+        except Exception:
+            return
+        if not raw:
+            return
+        for line in raw.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            frame = parse_tlm(line)
+            if frame is not None:
+                self._deliver_tlm(frame)
+
+    def _deliver_sim_truth(self, sim: "object") -> None:
+        """Read ground-truth pose from the sim and deliver to on_truth callback.
+
+        Converts from simulator units (x_mm, y_mm, h_rad) to the callback
+        convention (x_cm, y_cm, yaw_rad): x and y are divided by 10.
+        Heading is already in radians and is passed through unchanged.
+        """
+        try:
+            x_mm, y_mm, h_rad = sim.get_true_pose()  # type: ignore[attr-defined]
+        except Exception:
+            return
+        x_cm = x_mm / 10.0
+        y_cm = y_mm / 10.0
+        self._deliver_truth((x_cm, y_cm, h_rad))
+
+    def _apply_field_profile(self, sim: "object") -> None:
+        """Apply realistic field-error profile to the sim.
+
+        Mirrors the ``sim_field_profile`` fixture from tests/conftest.py:
+        - Turn-slip over-report (slipTurnExtra=0.26) via set_field_profile().
+        - OTOS linear position noise (sigma_fraction=0.05).
+
+        This makes the TLM pose (firmware estimate) diverge from the ground-
+        truth trace during motion, giving the GUI a realistic split view.
+        """
+        try:
+            sim.set_field_profile(  # type: ignore[attr-defined]
+                slip_turn_extra=_SIM_SLIP_TURN_EXTRA,
+                fuse_otos=True,
+            )
+            sim.set_otos_linear_noise(_SIM_OTOS_LINEAR_NOISE)  # type: ignore[attr-defined]
+            self._log(
+                f"[INFO] Sim field profile applied "
+                f"(slip_turn_extra={_SIM_SLIP_TURN_EXTRA}, "
+                f"otos_linear_noise={_SIM_OTOS_LINEAR_NOISE})"
+            )
+        except Exception as exc:
+            _log.warning("SimTransport: could not apply field profile: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Qt warning helper
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _show_build_warning(lib_path: str) -> None:
+        """Show a QMessageBox.warning if Qt is available; otherwise log only.
+
+        Qt is optional — the transport module must be importable without
+        PySide6.  This method attempts a deferred import and falls back
+        silently when PySide6 is not installed.
+        """
+        try:
+            from PySide6.QtWidgets import QApplication, QMessageBox  # type: ignore[import-untyped]
+            app = QApplication.instance()
+            if app is not None:
+                QMessageBox.warning(
+                    None,
+                    "Build required",
+                    f"Simulator library not found:\n{lib_path}\n\n"
+                    "Run:  python build.py\n"
+                    "(from tests/_infra/sim/)",
+                )
+        except ImportError:
+            # PySide6 not installed — warning was already emitted via on_log.
+            pass
+        except Exception as exc:
+            _log.debug("SimTransport: could not show QMessageBox: %s", exc)

@@ -53,6 +53,7 @@ def _build_main_window():  # type: ignore[return]
         Transport,
         SerialTransport,
         RelayTransport,
+        SimTransport,
         list_ports,
     )
 
@@ -219,9 +220,8 @@ def _build_main_window():  # type: ignore[return]
                 return
             transport = RelayTransport(port)
         else:
-            # Sim transport — placeholder until ticket 005.
-            _append_log("[INFO] Sim transport not yet implemented (ticket 005)")
-            return
+            # Sim transport — backed by ctypes firmware simulator.
+            transport = SimTransport()
 
         # Wire log callback.
         transport.on_log = _on_log_from_thread
@@ -232,15 +232,23 @@ def _build_main_window():  # type: ignore[return]
             _append_log(f"[ERROR] Connect failed: {exc}")
             return
 
-        # Send STREAM 50 to start TLM streaming.
-        try:
-            reply = transport.command("STREAM 50", read_ms=300)
-            if reply:
-                _append_log(f"[INFO] STREAM 50 → {reply}")
-            else:
-                _append_log("[INFO] STREAM 50 sent")
-        except Exception as exc:
-            _append_log(f"[WARN] STREAM 50 failed: {exc}")
+        # For SimTransport, connect() may return without connecting if the lib
+        # is missing (it shows a QMessageBox and returns silently).  Check.
+        if isinstance(transport, SimTransport) and not transport._connected:
+            # Warning was already shown by connect() / _show_build_warning().
+            return
+
+        # For Sim transport, STREAM 50 is sent internally by the tick-thread.
+        # For hardware transports, send STREAM 50 here.
+        if not isinstance(transport, SimTransport):
+            try:
+                reply = transport.command("STREAM 50", read_ms=300)
+                if reply:
+                    _append_log(f"[INFO] STREAM 50 → {reply}")
+                else:
+                    _append_log("[INFO] STREAM 50 sent")
+            except Exception as exc:
+                _append_log(f"[WARN] STREAM 50 failed: {exc}")
 
         _state["transport"] = transport
 
@@ -249,7 +257,8 @@ def _build_main_window():  # type: ignore[return]
         disconnect_btn.setEnabled(True)
         transport_combo.setEnabled(False)
         port_edit.setEnabled(False)
-        _append_log(f"[INFO] Connected via {name} on {port}")
+        desc = "Sim" if name == "Sim" else f"{name} on {port}"
+        _append_log(f"[INFO] Connected via {desc}")
 
     def _on_disconnect() -> None:
         """Call transport.disconnect() and clean up."""

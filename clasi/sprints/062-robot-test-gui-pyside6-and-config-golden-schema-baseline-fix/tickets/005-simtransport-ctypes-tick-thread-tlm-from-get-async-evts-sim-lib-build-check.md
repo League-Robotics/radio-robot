@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: 'SimTransport: ctypes tick-thread, TLM from get_async_evts, sim-lib build check'
-status: open
+status: done
 use-cases:
 - SUC-002
 - SUC-007
@@ -32,24 +32,24 @@ Corresponds to item 3 in the approved design's ticket breakdown.
 
 ## Acceptance Criteria
 
-- [ ] `SimTransport` is added to `testgui/transport.py`, implementing the
+- [x] `SimTransport` is added to `testgui/transport.py`, implementing the
   `Transport` ABC.
-- [ ] On `connect()`: checks for `tests/_infra/sim/build/libfirmware_host.*`;
+- [x] On `connect()`: checks for `tests/_infra/sim/build/libfirmware_host.*`;
   if missing, shows `QMessageBox.warning("Build required", "Run: python build.py")`
   and returns without connecting.
-- [ ] On `connect()` (lib present): loads `Sim`, starts a daemon tick-thread
+- [x] On `connect()` (lib present): loads `Sim`, starts a daemon tick-thread
   that calls `sim.tick()` at wall-clock rate (~20 ms), drains `get_async_evts()`
   for TLM lines, calls `parse_tlm` on TLM lines, invokes the `telemetry`
   callback with parsed `TLMFrame`, and invokes the `truth` callback with
   `(sim_get_true_pose_x(), sim_get_true_pose_y(), sim_get_true_pose_h())`.
-- [ ] `send(line)` and `command(line)` are forwarded to `sim.send_command(line)`
+- [x] `send(line)` and `command(line)` are forwarded to `sim.send_command(line)`
   via a thread-safe queue or lock (not called from the Qt main thread directly).
-- [ ] `disconnect()` stops the tick-thread cleanly.
-- [ ] Selecting **Sim** in the transport selector and clicking **Connect** triggers
+- [x] `disconnect()` stops the tick-thread cleanly.
+- [x] Selecting **Sim** in the transport selector and clicking **Connect** triggers
   the lib-check and, if the lib is present, connects without error.
-- [ ] Sim mode applies `sim_set_motor_slip` and/or `sim_set_otos_linear_noise`
+- [x] Sim mode applies `sim_set_motor_slip` and/or `sim_set_otos_linear_noise`
   on connect to produce visible trace divergence.
-- [ ] `uv run python -m pytest tests/simulation` passes.
+- [x] `uv run python -m pytest tests/simulation` passes.
 
 ## Implementation Plan
 
