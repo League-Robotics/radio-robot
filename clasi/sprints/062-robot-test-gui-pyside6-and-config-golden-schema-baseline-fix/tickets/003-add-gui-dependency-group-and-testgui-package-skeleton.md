@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Add gui dependency group and testgui package skeleton
-status: open
+status: done
 use-cases:
 - SUC-001
 depends-on: []
@@ -23,19 +23,19 @@ Corresponds to item 1 in the approved design's ticket breakdown.
 
 ## Acceptance Criteria
 
-- [ ] `host/pyproject.toml` has a `[dependency-groups] gui` entry containing
+- [x] `host/pyproject.toml` has a `[dependency-groups] gui` entry containing
   `PySide6>=6.0`.
-- [ ] `host/robot_radio/testgui/__init__.py` exists (package marker).
-- [ ] `host/robot_radio/testgui/__main__.py` exists; running
+- [x] `host/robot_radio/testgui/__init__.py` exists (package marker).
+- [x] `host/robot_radio/testgui/__main__.py` exists; running
   `python -m robot_radio.testgui` opens a `QMainWindow` without error.
-- [ ] The window contains at minimum: a transport selector `QComboBox`
+- [x] The window contains at minimum: a transport selector `QComboBox`
   (`Sim / Serial / Relay`), placeholder areas for command rows and operations
   panel, a placeholder `QGraphicsView` for the canvas, and a placeholder
   `QPlainTextEdit` for the log pane.
-- [ ] The window closes cleanly (no dangling threads — none started yet).
-- [ ] `uv run python -m pytest tests/simulation` passes (no regressions).
-- [ ] `uv sync` (without `--group gui`) does NOT pull in PySide6.
-- [ ] `uv sync --group gui` succeeds and `python -m robot_radio.testgui` opens
+- [x] The window closes cleanly (no dangling threads — none started yet).
+- [x] `uv run python -m pytest tests/simulation` passes (no regressions).
+- [x] `uv sync` (without `--group gui`) does NOT pull in PySide6.
+- [x] `uv sync --group gui` succeeds and `python -m robot_radio.testgui` opens
   the window.
 
 ## Implementation Plan
