@@ -21,7 +21,9 @@ Fields:
                      e.g. ``"2026-07-01T14:23:00.123+00:00"``.
     dir     str      Direction tag: ``"TX"`` for commands sent to the robot,
                      ``"RX"`` for responses and telemetry received from the robot.
-    line    str      The raw wire string, stripped of trailing ``\\r\\n``.
+    line    str      The formatted log string, stripped of trailing ``\\r\\n``.
+                     Transmitted commands are marked ``> ...`` and received
+                     replies/telemetry ``< ...`` (matching ``dir``).
 
 Threading assumption
 --------------------
@@ -40,6 +42,29 @@ from pathlib import Path
 from typing import Literal
 
 Direction = Literal["TX", "RX"]
+
+
+def direction_from_marker(text: str) -> Direction | None:
+    """Infer the TX/RX direction of a formatted transport log line.
+
+    Transport log lines are formatted ``[HH:MM:SS] > <wire>`` for commands
+    transmitted to the robot and ``[HH:MM:SS] < <wire>`` for replies/telemetry
+    received from it.  Internal GUI status lines (``[INFO]``, ``[WARN]``,
+    ``[ERROR]``, ``[REC]`` …) carry neither marker.
+
+    Returns ``"TX"`` for ``>``, ``"RX"`` for ``<``, and ``None`` for anything
+    else — the latter so status lines are routed to the log pane but *not*
+    written to the recording (which is a pure wire-traffic log).
+    """
+    # Strip the leading ``[HH:MM:SS] `` timestamp, if present, then inspect the
+    # first character of the remaining body.
+    body = text.split("] ", 1)[1] if "] " in text else text
+    marker = body[:1]
+    if marker == ">":
+        return "TX"
+    if marker == "<":
+        return "RX"
+    return None
 
 
 class SessionRecorder:

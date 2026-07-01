@@ -329,10 +329,10 @@ class _HardwareTransport(Transport):
 
         # Wire log callbacks through SerialConnection's on_send/on_recv hooks.
         def _on_send(line: str) -> None:
-            self._log(f"TX {line}")
+            self._log(f"> {line}")
 
         def _on_recv(line: str) -> None:
-            self._log(f"RX {line}")
+            self._log(f"< {line}")
 
         self._conn = SerialConnection(
             port=self._port,
@@ -659,7 +659,7 @@ class SimTransport(Transport):
         if not self._connected:
             raise ConnectionError("SimTransport is not connected")
         self._cmd_queue.put((line, None, None))
-        self._log(f"TX {line}")
+        self._log(f"> {line}")
 
     def command(self, line: str, read_ms: int = 200) -> str:
         """Send a command and return the synchronous reply string.
@@ -673,12 +673,12 @@ class SimTransport(Transport):
         reply_list: list[str] = [""]
         done_evt = threading.Event()
         self._cmd_queue.put((line, reply_list, done_evt))
-        self._log(f"TX {line}")
+        self._log(f"> {line}")
         timeout_s = max(read_ms / 1000.0, 1.0)
         done_evt.wait(timeout=timeout_s)
         reply = reply_list[0]
         if reply:
-            self._log(f"RX {reply.strip()}")
+            self._log(f"< {reply.strip()}")
         return reply
 
     # ------------------------------------------------------------------

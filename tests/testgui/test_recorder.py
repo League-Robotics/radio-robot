@@ -391,3 +391,41 @@ def test_append_log_paused_does_not_record(tmp_path):
     assert len(lines) == 2
     assert json.loads(lines[0])["line"] == "TX cmd1"
     assert json.loads(lines[1])["line"] == "TX cmd3"
+
+
+# ---------------------------------------------------------------------------
+# direction_from_marker — TX/RX inference from formatted log lines
+# ---------------------------------------------------------------------------
+
+def test_direction_from_marker_tx():
+    """A ``>`` marker after the timestamp is a transmitted command → TX."""
+    from robot_radio.testgui.recorder import direction_from_marker
+
+    assert direction_from_marker("[10:46:44] > SNAP") == "TX"
+    assert direction_from_marker("[10:46:44] > RT 4500") == "TX"
+
+
+def test_direction_from_marker_rx():
+    """A ``<`` marker after the timestamp is a received reply/telemetry → RX."""
+    from robot_radio.testgui.recorder import direction_from_marker
+
+    assert direction_from_marker("[10:46:44] < OK oz") == "RX"
+    assert direction_from_marker("[10:46:44] < TLM t=6640 mode=V seq=20") == "RX"
+
+
+def test_direction_from_marker_status_lines_are_none():
+    """Internal status lines carry no marker → None (not recorded)."""
+    from robot_radio.testgui.recorder import direction_from_marker
+
+    assert direction_from_marker("[10:46:44] [INFO] Connected via Sim") is None
+    assert direction_from_marker("[10:46:44] [WARN] No relay found") is None
+    assert direction_from_marker("[10:46:44] [ERROR] Connect failed: boom") is None
+    assert direction_from_marker("[REC] Recording started: /tmp/x.jsonl") is None
+
+
+def test_direction_from_marker_without_timestamp_prefix():
+    """Marker inference also works on lines lacking the ``[HH:MM:SS] `` prefix."""
+    from robot_radio.testgui.recorder import direction_from_marker
+
+    assert direction_from_marker("> SI 0 0 0") == "TX"
+    assert direction_from_marker("< OK setpose") == "RX"

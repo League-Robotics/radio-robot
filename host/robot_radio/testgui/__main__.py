@@ -159,7 +159,7 @@ def _build_main_window():  # type: ignore[return]
     from robot_radio.testgui.traces import TraceModel
     from robot_radio.testgui.canvas import build_canvas
     from robot_radio.testgui.drive import KeyboardDriver
-    from robot_radio.testgui.recorder import SessionRecorder
+    from robot_radio.testgui.recorder import SessionRecorder, direction_from_marker
 
     # QApplication must exist before any QWidget is created.  We create one
     # only if one does not already exist (e.g. during testing).
@@ -176,8 +176,10 @@ def _build_main_window():  # type: ignore[return]
         "live_thread": None,
         "tour_worker": None,
         "tour_thread": None,
+        "tour_bridge": None,
         "goto_worker": None,
         "goto_thread": None,
+        "goto_bridge": None,
         # Latest camera ground-truth pose (x_cm, y_cm, yaw_rad, monotonic_ts)
         # cached from the transport on_truth callback for the GOTO loop.
         "last_truth": None,
@@ -352,11 +354,11 @@ def _build_main_window():  # type: ignore[return]
                 for param, getter in zip(spec["params"], getters)
             }
             line = build_wire_string(spec, values)
-            _append_log(f"TX {line}", direction="TX")
+            _append_log(f"> {line}", direction="TX")
             try:
                 reply = transport.command(line, read_ms=500)
                 if reply:
-                    _append_log(f"RX {reply.strip()}", direction="RX")
+                    _append_log(f"< {reply.strip()}", direction="RX")
             except Exception as exc:
                 _append_log(f"[ERROR] {exc}")
 
@@ -575,9 +577,11 @@ def _build_main_window():  # type: ignore[return]
     class _RXBridge(QObject):
         """Bridges background-thread RX log lines to the Qt main thread.
 
-        The ``rx_line`` signal carries the raw wire string across the thread
-        boundary; the ``on_rx_line`` slot handles it on the main thread, calling
-        ``_append_log`` with ``direction="RX"`` so the recorder is also fed.
+        The ``rx_line`` signal carries the raw formatted log string across the
+        thread boundary; the ``on_rx_line`` slot handles it on the main thread.
+        The line's direction (``TX``/``RX``/status) is inferred from its
+        ``>``/``<`` marker so the recorder is fed with the correct ``dir`` and
+        internal status lines are not recorded.
         """
         rx_line = Signal(str)
 
@@ -586,8 +590,8 @@ def _build_main_window():  # type: ignore[return]
 
         @Slot(str)
         def on_rx_line(self, text: str) -> None:
-            """Process an RX line on the Qt main thread."""
-            _append_log(text, direction="RX")
+            """Process a transport log line on the Qt main thread."""
+            _append_log(text, direction=direction_from_marker(text))
 
     _rx_bridge = _RXBridge()
     _rx_bridge.rx_line.connect(_rx_bridge.on_rx_line, Qt.ConnectionType.QueuedConnection)
@@ -635,6 +639,39 @@ def _build_main_window():  # type: ignore[return]
     _bridge = _TelemetryBridge()
     _bridge.frame_ready.connect(_bridge.on_frame_ready, Qt.ConnectionType.QueuedConnection)
     _bridge.truth_ready.connect(_bridge.on_truth_ready, Qt.ConnectionType.QueuedConnection)
+
+    class _WorkerBridge(QObject):
+        """Marshals background-worker signals onto the Qt GUI main thread.
+
+        A worker ``QObject`` running on its own ``QThread`` emits
+        ``log_line(text, direction)`` and ``finished()``.  Those signals MUST
+        be delivered to slots that run on the GUI thread — Qt widget access
+        (e.g. ``QPlainTextEdit.appendPlainText``) from any other thread
+        segfaults in Qt's text/layout engine.
+
+        Connecting a worker signal directly to a plain Python function with
+        ``QueuedConnection`` does NOT achieve that: with no ``QObject``
+        receiver, PySide delivers the call on the *worker* thread.  This bridge
+        is created on the GUI thread, so its *bound-method* slots — and the
+        callbacks they invoke — run on the GUI thread, exactly like the
+        existing ``_RXBridge`` / ``_TelemetryBridge`` pattern.
+
+        A fresh bridge is created per worker run and kept alive in ``_state``
+        (a dropped reference would silently break the connection).
+        """
+
+        def __init__(self, log_cb, finished_cb) -> None:
+            super().__init__()
+            self._log_cb = log_cb
+            self._finished_cb = finished_cb
+
+        @Slot(str, str)
+        def on_log(self, text: str, direction: str) -> None:
+            self._log_cb(text, direction or None)
+
+        @Slot()
+        def on_finished(self) -> None:
+            self._finished_cb()
 
     class _TourRunner(QObject):
         """Runs a pre-programmed tour on a background thread.
@@ -686,14 +723,14 @@ def _build_main_window():  # type: ignore[return]
                     self.log_line.emit(
                         f"[TOUR] {self._name} step {i}/{total}: {cmd}", ""
                     )
-                    self.log_line.emit(f"TX {cmd}", "TX")
+                    self.log_line.emit(f"> {cmd}", "TX")
                     try:
                         reply = self._transport.command(cmd, read_ms=500)
                     except Exception as exc:  # noqa: BLE001
                         self.log_line.emit(f"[TOUR] error sending {cmd!r}: {exc}", "")
                         return
                     if reply:
-                        self.log_line.emit(f"RX {reply.strip()}", "RX")
+                        self.log_line.emit(f"< {reply.strip()}", "RX")
                     if not self._wait_for_idle(time):
                         self.log_line.emit(
                             f"[TOUR] timed out waiting for '{cmd}' to complete — "
@@ -1022,6 +1059,7 @@ def _build_main_window():  # type: ignore[return]
                 pass
         _state["tour_worker"] = None
         _state["tour_thread"] = None
+        _state["tour_bridge"] = None
 
     def _on_tour_finished() -> None:
         """Main-thread slot: tour ended — join the thread, re-enable buttons."""
@@ -1034,6 +1072,7 @@ def _build_main_window():  # type: ignore[return]
                 pass
         _state["tour_worker"] = None
         _state["tour_thread"] = None
+        _state["tour_bridge"] = None
         if _state.get("transport") is not None:
             for _tb, _ in _tour_buttons:
                 _tb.setEnabled(True)
@@ -1058,14 +1097,19 @@ def _build_main_window():  # type: ignore[return]
             worker = _TourRunner(transport, name, list(steps))
             thread = QThread()
             worker.moveToThread(thread)
-            worker.log_line.connect(_on_tour_log, Qt.ConnectionType.QueuedConnection)
+            # Marshal worker signals to the GUI thread via a main-thread bridge
+            # (see _WorkerBridge — a direct connection to _on_tour_log would run
+            # on the worker thread and segfault Qt).
+            bridge = _WorkerBridge(_on_tour_log, _on_tour_finished)
+            worker.log_line.connect(bridge.on_log, Qt.ConnectionType.QueuedConnection)
             worker.finished.connect(
-                _on_tour_finished, Qt.ConnectionType.QueuedConnection
+                bridge.on_finished, Qt.ConnectionType.QueuedConnection
             )
             thread.started.connect(worker.run)
             thread.start()
             _state["tour_worker"] = worker
             _state["tour_thread"] = thread
+            _state["tour_bridge"] = bridge
 
         return _on_tour_clicked
 
@@ -1095,6 +1139,7 @@ def _build_main_window():  # type: ignore[return]
                 pass
         _state["goto_worker"] = None
         _state["goto_thread"] = None
+        _state["goto_bridge"] = None
 
     def _on_goto_finished() -> None:
         """Main-thread slot: GOTO ended — join thread, re-enable the button."""
@@ -1107,6 +1152,7 @@ def _build_main_window():  # type: ignore[return]
                 pass
         _state["goto_worker"] = None
         _state["goto_thread"] = None
+        _state["goto_bridge"] = None
         if _state.get("transport") is not None:
             goto_btn.setEnabled(True)
 
@@ -1131,12 +1177,16 @@ def _build_main_window():  # type: ignore[return]
         )
         thread = QThread()
         worker.moveToThread(thread)
-        worker.log_line.connect(_on_goto_log, Qt.ConnectionType.QueuedConnection)
-        worker.finished.connect(_on_goto_finished, Qt.ConnectionType.QueuedConnection)
+        # Marshal worker signals to the GUI thread via a main-thread bridge
+        # (see _WorkerBridge).
+        bridge = _WorkerBridge(_on_goto_log, _on_goto_finished)
+        worker.log_line.connect(bridge.on_log, Qt.ConnectionType.QueuedConnection)
+        worker.finished.connect(bridge.on_finished, Qt.ConnectionType.QueuedConnection)
         thread.started.connect(worker.run)
         thread.start()
         _state["goto_worker"] = worker
         _state["goto_thread"] = thread
+        _state["goto_bridge"] = bridge
 
     goto_btn.clicked.connect(_on_goto_clicked)
 
