@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Transport ABC and Serial/Relay wrappers with TLM reader thread
-status: open
+status: done
 use-cases:
 - SUC-003
 - SUC-004
@@ -32,27 +32,27 @@ Corresponds to item 2 in the approved design's ticket breakdown.
 
 ## Acceptance Criteria
 
-- [ ] `host/robot_radio/testgui/transport.py` exists and defines:
+- [x] `host/robot_radio/testgui/transport.py` exists and defines:
   - `Transport` ABC with `send(line: str) -> None`, `command(line: str, read_ms: int = 200) -> str`,
     a `telemetry` callback/signal delivering parsed `TLMFrame`, and a `truth`
     callback delivering `(x_cm, y_cm, yaw_rad) | None`.
   - `SerialTransport(port: str)` — wraps `SerialConnection(port, mode="direct")`.
   - `RelayTransport(port: str)` — wraps `SerialConnection(port, mode="relay")`.
-- [ ] Both concrete backends start a reader thread on `connect()` that:
+- [x] Both concrete backends start a reader thread on `connect()` that:
   - Reads lines from the serial connection.
   - Calls `parse_tlm(line)` (from `robot/protocol.py`) on TLM lines;
     invokes the `telemetry` callback with the resulting `TLMFrame`.
   - Forwards all lines (sent and received) to the log pane callback.
-- [ ] Both backends start a camera-truth polling thread on `connect()` that:
+- [x] Both backends start a camera-truth polling thread on `connect()` that:
   - Calls `read_camera_pose` (from `testkit/camera.py`) for tag 100.
   - Invokes the `truth` callback with the world pose.
   - Handles daemon-not-available gracefully (logs warning, does not crash).
-- [ ] `disconnect()` joins all threads cleanly; no dangling threads.
-- [ ] Transport selector in the window enables a port-picker `QLineEdit` when
+- [x] `disconnect()` joins all threads cleanly; no dangling threads.
+- [x] Transport selector in the window enables a port-picker `QLineEdit` when
   Serial or Relay is selected; clicking **Connect** calls `transport.connect()`
   and `transport.command("STREAM 50")`.
-- [ ] Log pane shows each sent line and each received reply/TLM line timestamped.
-- [ ] `uv run python -m pytest tests/simulation` passes.
+- [x] Log pane shows each sent line and each received reply/TLM line timestamped.
+- [x] `uv run python -m pytest tests/simulation` passes.
 
 ## Implementation Plan
 
