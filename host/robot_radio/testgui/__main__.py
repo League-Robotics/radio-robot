@@ -16,8 +16,10 @@ Wiring (ticket 008)
   before touching the TraceModel or canvas.
 - The ops panel's ``clear_traces_cb`` is wired to ``TraceModel.clear()``
   followed by ``canvas_ctrl.refresh()``.
-- The ops panel's ``refresh_playfield_cb`` is wired to
-  ``canvas_ctrl.set_background(pixmap)``.
+- The ops panel's ``refresh_playfield_cb(pixmap, origin_x, origin_y)`` is wired to
+  ``canvas_ctrl.set_background(pixmap, origin_x=origin_x, origin_y=origin_y)`` so
+  the world→pixel transform updates atomically with the background; world (0,0)
+  lands on AprilTag 1 after refresh.
 """
 
 from __future__ import annotations
@@ -394,9 +396,15 @@ def _build_main_window():  # type: ignore[return]
         trace_model.clear()
         canvas_ctrl.refresh()
 
-    def _refresh_playfield(pixmap: "object") -> None:
-        """Swap the canvas background to the (already deskewed) new pixmap."""
-        canvas_ctrl.set_background(pixmap)
+    def _refresh_playfield(pixmap: "object", origin_x: float, origin_y: float) -> None:
+        """Swap canvas background and update the A1 origin atomically.
+
+        Both the deskewed pixmap and the daemon's A1 origin (cm, corner-origin
+        frame) come from a single daemon read in OpsController so they always
+        match.  Passing origin_x/origin_y to set_background ensures world (0,0)
+        maps to tag 1's real pixel position in the new background.
+        """
+        canvas_ctrl.set_background(pixmap, origin_x=origin_x, origin_y=origin_y)
 
     def _set_origin() -> None:
         """Re-anchor the TraceModel to the current pose as world (0,0).

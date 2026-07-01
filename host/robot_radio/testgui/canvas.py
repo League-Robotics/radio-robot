@@ -16,31 +16,41 @@ Provides :class:`PlayfieldCanvas`, a ``QWidget`` wrapping a ``QGraphicsView`` /
 
 World-cm to pixel mapping
 --------------------------
-The background image is produced by deskewing ``playfield.jpg`` through the
-homography stored in::
+The canvas supports two world→pixel origins:
 
-    tests/old/playfield_tour/playfield_calibration.json
+**A1-centred (live camera path)** — the aprilcam daemon's world frame uses
+AprilTag 1 as the origin.  ``get_tags()`` provides ``.origin_x`` / ``.origin_y``
+(tag 1's position in the corner-origin cm frame) and the 3×3 homography H.
 
-at a fixed resolution of ``_PIXELS_PER_CM = 8.0`` px/cm.  The resulting
-rectified image has size ``output_size = (field_w_cm * ppc, field_h_cm * ppc)``
-and world (0, 0) sits exactly at the image centre.
+A1-centred world→pixel transform::
 
-Field-centred world→pixel transform::
+    px = ppc * (x_cm + origin_x)
+    py = ppc * (origin_y - y_cm)   # y-flip: +y north = up
 
-    px = (field_w_cm / 2 + x_cm) * ppc
-    py = (field_h_cm / 2 - y_cm) * ppc   # y-flip: +y north = up
+So world (0, 0) → (ppc * origin_x, ppc * origin_y) = tag 1's real pixel
+position in the deskewed image.  origin_x and origin_y come from the daemon
+and are NOT assumed to equal field_w/2 and field_h/2.
 
-This places world (0, 0) at the exact image centre.  All three of
-{background, traces, robot marker} use this same ``ppc`` and formula so they
-align perfectly.
+**Sim / static fallback** — when no daemon is available, or in simulation mode,
+falls back to a field-centred origin: origin_x = field_w/2, origin_y = field_h/2
+so world (0, 0) maps to the image centre (matches simulation's true start pose).
 
-Fallback
---------
-If ``cv2`` is unavailable or the calibration/image files are missing the
-canvas falls back to loading ``playfield_deskewed.jpg`` if present, or a plain
-grey rectangle at ``output_size``.  The geometry (field-centred transform) is
-preserved regardless of which fallback fires, so traces and the robot marker
-always align with the background.
+The transform formula is identical in both cases; only origin_x / origin_y
+differ.
+
+Deskew pipeline (live camera path)
+-----------------------------------
+Given daemon homography H (3×3, raw-camera-pixel → corner-origin cm):
+
+    warp = diag(ppc, ppc, 1) @ H
+    output_size = (round(fw*ppc), round(fh*ppc))
+    cv2.warpPerspective(raw_bgr, warp, output_size)
+
+This matches ``PlayfieldCalibration.warp_matrix(ppc)`` from ``movie.py``.
+
+The background and the world→pixel transform are always set TOGETHER from a
+single daemon read; ``set_background`` accepts the calibration params so the
+transform always matches the background that was warped.
 
 PySide6 import policy
 ---------------------
@@ -50,9 +60,9 @@ All PySide6 imports are deferred inside methods and factory functions so that
 
 Asset resolution
 ----------------
-The playfield assets are resolved relative to this file's location:
+The static fallback playfield assets are resolved relative to this file:
 
-    pathlib.Path(__file__).parents[4] / "tests" / "old" / "playfield_tour" / ...
+    pathlib.Path(__file__).parents[3] / "tests" / "old" / "playfield_tour" / ...
 
 ``__file__`` is ``host/robot_radio/testgui/canvas.py``; ``parents[3]`` is the
 repo root when installed editable (``uv sync``).  If the assets are missing,
@@ -223,16 +233,21 @@ def _bgr_to_pixmap(bgr: "object") -> "object | None":
         return None
 
 
-def _make_world_to_px(field_w_cm: float, field_h_cm: float, ppc: float):
-    """Return a field-centred world→pixel callable.
+def _make_world_to_px(origin_x: float, origin_y: float, ppc: float):
+    """Return an A1-centred world→pixel callable.
 
-    World (0, 0) maps to the image centre.  +x is east (right), +y is north
-    (up, i.e. *decreasing* pixel y).
+    World (0, 0) maps to pixel (ppc * origin_x, ppc * origin_y).
+    +x is east (right), +y is north (up, i.e. *decreasing* pixel y).
+
+    For the live-camera path, origin_x and origin_y come from the daemon's
+    TagFrame (.origin_x, .origin_y), which is AprilTag 1's position in the
+    corner-origin cm frame.  For the sim/static fallback, they are set to
+    field_w/2 and field_h/2 so world (0,0) maps to the image centre.
 
     Parameters
     ----------
-    field_w_cm, field_h_cm:
-        Full playfield dimensions in cm.
+    origin_x, origin_y:
+        A1 offset in cm (corner-origin frame).  world (0,0) → (ppc*ox, ppc*oy).
     ppc:
         Pixels per cm.
 
@@ -240,18 +255,15 @@ def _make_world_to_px(field_w_cm: float, field_h_cm: float, ppc: float):
     -------
     callable ``(x_cm, y_cm) -> (px, py)``
     """
-    half_w = field_w_cm / 2.0
-    half_h = field_h_cm / 2.0
-
     def world_to_px(x_cm: float, y_cm: float) -> tuple[float, float]:
         """Convert world-cm to scene pixel coordinates.
 
-        World origin (0, 0) is the playfield centre.
+        World origin (0, 0) is AprilTag 1 (live) or playfield centre (sim).
         +x is east (right in the image), +y is north (up in the image,
         i.e. *decreasing* pixel y).
         """
-        px = (half_w + x_cm) * ppc
-        py = (half_h - y_cm) * ppc
+        px = ppc * (x_cm + origin_x)
+        py = ppc * (origin_y - y_cm)
         return px, py
 
     return world_to_px
@@ -305,6 +317,11 @@ def build_canvas(trace_model: "TraceModel") -> "tuple[object, object]":
     img_w = int(round(field_w_cm * ppc))
     img_h = int(round(field_h_cm * ppc))
 
+    # Sim/static fallback origin: field centre (world 0,0 = image centre).
+    # The live-camera path overwrites this via set_background(pixmap, origin_x, origin_y).
+    _origin_x = field_w_cm / 2.0
+    _origin_y = field_h_cm / 2.0
+
     # ------------------------------------------------------------------ Scene
     scene = QGraphicsScene()
     scene.setBackgroundBrush(QBrush(QColor(40, 40, 40)))
@@ -347,7 +364,8 @@ def build_canvas(trace_model: "TraceModel") -> "tuple[object, object]":
     scene.setSceneRect(0, 0, img_w, img_h)
 
     # ------------------------------------------------------------------ Coordinate transform
-    world_to_px = _make_world_to_px(field_w_cm, field_h_cm, ppc)
+    # Sim/static-fallback origin: field centre → world (0,0) = image centre.
+    world_to_px = _make_world_to_px(_origin_x, _origin_y, ppc)
 
     # ------------------------------------------------------------------ Trace path items
     trace_items: dict[str, object] = {}
@@ -389,10 +407,11 @@ def build_canvas(trace_model: "TraceModel") -> "tuple[object, object]":
     back_rect.setPen(QPen(Qt.PenStyle.NoPen))
     marker_group.addToGroup(back_rect)
 
-    # Show avatar at world (0, 0) center immediately — before any telemetry.
+    # Show avatar at world (0, 0) immediately — before any telemetry.
+    # With the A1 origin, world (0,0) maps to tag 1's pixel position.
     cx, cy = world_to_px(0.0, 0.0)
     marker_group.setPos(cx, cy)
-    marker_group.setRotation(90.0)   # heading 0 = east; 90-0=90 deg Qt rotation
+    marker_group.setRotation(90.0)   # heading 0 = east; rotation_deg = 90 - 0 = 90
     marker_group.setVisible(True)
 
     # ------------------------------------------------------------------ Checkboxes
@@ -438,6 +457,8 @@ def build_canvas(trace_model: "TraceModel") -> "tuple[object, object]":
         field_h_cm=field_h_cm,
         img_w=img_w,
         img_h=img_h,
+        origin_x=_origin_x,
+        origin_y=_origin_y,
     )
 
     # Wire checkboxes to trace visibility.
@@ -475,6 +496,10 @@ class CanvasController:
         Playfield dimensions in cm (from calibration JSON).
     img_w, img_h:
         Rectified background image size in pixels.
+    origin_x, origin_y:
+        A1 offset in cm (corner-origin frame).  For the live-camera path
+        these come from the daemon's TagFrame; for the sim/static fallback
+        they are field_w/2 and field_h/2.
     """
 
     def __init__(
@@ -493,6 +518,8 @@ class CanvasController:
         field_h_cm: float,
         img_w: int,
         img_h: int,
+        origin_x: float | None = None,
+        origin_y: float | None = None,
     ) -> None:
         self._scene = scene
         self._view = view
@@ -507,6 +534,10 @@ class CanvasController:
         self._field_h_cm = field_h_cm
         self._img_w = img_w
         self._img_h = img_h
+        # A1 origin (cm, corner-origin frame): where world (0,0) sits in the deskewed image.
+        # Defaults to field centre for sim/static fallback.
+        self._origin_x = field_w_cm / 2.0 if origin_x is None else origin_x
+        self._origin_y = field_h_cm / 2.0 if origin_y is None else origin_y
 
         # Expose for backward compatibility with tests that read _px_per_cm_x/_px_per_cm_y.
         self._px_per_cm_x = ppc
@@ -533,26 +564,49 @@ class CanvasController:
         self._update_marker(fused_yaw_rad)
         self._scene.update()  # type: ignore[attr-defined]
 
-    def set_background(self, pixmap: "object") -> None:
-        """Replace the canvas background with a new ``QPixmap`` (already deskewed).
+    def set_background(
+        self,
+        pixmap: "object",
+        *,
+        origin_x: float | None = None,
+        origin_y: float | None = None,
+    ) -> None:
+        """Replace the canvas background and (optionally) update the A1 origin.
+
+        Background and transform are updated atomically so that traces and the
+        robot avatar always align with the displayed background image.
 
         Parameters
         ----------
         pixmap:
             A deskewed ``QPixmap`` at the canonical ``_PIXELS_PER_CM`` resolution.
             If ``None`` or not a valid pixmap, the call is ignored.
+        origin_x, origin_y:
+            A1 offset in cm (corner-origin frame) from the daemon's TagFrame.
+            When provided, world (0,0) will map to pixel (ppc*origin_x, ppc*origin_y)
+            in the new background — i.e. the avatar will sit on AprilTag 1.
+            When ``None``, the existing origin is preserved (or the sim fallback
+            field_w/2, field_h/2 remains in effect).
         """
         try:
             from PySide6.QtGui import QPixmap  # type: ignore[import-untyped]
             if pixmap is None or not isinstance(pixmap, QPixmap) or pixmap.isNull():
                 return
+            # Update origin BEFORE rebuilding world_to_px so the transform
+            # always matches the background that is about to be displayed.
+            if origin_x is not None:
+                self._origin_x = origin_x
+            if origin_y is not None:
+                self._origin_y = origin_y
+            # Rebuild the world→pixel callable from the (possibly new) origin.
+            self._world_to_px = _make_world_to_px(self._origin_x, self._origin_y, self._ppc)
             self._bg_item.setPixmap(pixmap)  # type: ignore[attr-defined]
             new_w = pixmap.width()
             new_h = pixmap.height()
             self._scene.setSceneRect(0, 0, new_w, new_h)  # type: ignore[attr-defined]
             self._img_w = new_w
             self._img_h = new_h
-            # The deskewed image is always at _PIXELS_PER_CM resolution; ppc unchanged.
+            # Refresh traces and avatar with the new transform.
             self.refresh()
             # Re-fit the view so the new background fills the viewport correctly.
             try:
@@ -582,17 +636,21 @@ class CanvasController:
             item.setVisible(checked)  # type: ignore[attr-defined]
 
     def reset_avatar_to_center(self) -> None:
-        """Move the robot avatar to world (0, 0) and make it visible.
+        """Move the robot avatar to world (0, 0) and reset heading to 0° (east).
 
         Display-only: no motion command is sent.  Used by the "Set Robot @ 0,0"
         button after the operator has physically placed the robot at the
-        playfield centre.
+        A1 origin (tag 1).
+
+        Heading is reset to 0° (east, red-front pointing +x / right) so the
+        avatar orientation matches the assumed starting pose.  The Qt rotation
+        formula ``rotation_deg = 90 - degrees(yaw_rad)`` gives 90 - 0 = 90°.
         """
         cx, cy = self._world_to_px(0.0, 0.0)
-        self._marker_group.setPos(cx, cy)  # type: ignore[attr-defined]
-        self._marker_group.setRotation(90.0)  # type: ignore[attr-defined]
-        self._marker_group.setVisible(True)   # type: ignore[attr-defined]
-        self._scene.update()  # type: ignore[attr-defined]
+        self._marker_group.setPos(cx, cy)       # type: ignore[attr-defined]
+        self._marker_group.setRotation(90.0)    # yaw=0 east → 90° Qt rotation  # type: ignore[attr-defined]
+        self._marker_group.setVisible(True)     # type: ignore[attr-defined]
+        self._scene.update()                    # type: ignore[attr-defined]
 
     # ------------------------------------------------------------------
     # Internal helpers
