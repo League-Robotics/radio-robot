@@ -382,6 +382,37 @@ class TestTours:
 
 
 # ---------------------------------------------------------------------------
+# Camera-based GOTO geometry helpers
+# ---------------------------------------------------------------------------
+
+
+class TestGotoGeometry:
+    """goto_distance_mm / goto_reached pure geometry (no Qt)."""
+
+    def test_distance_zero_at_target(self):
+        from robot_radio.testgui.commands import goto_distance_mm
+        assert goto_distance_mm(100, 200, 100, 200) == 0.0
+
+    def test_distance_3_4_5(self):
+        from robot_radio.testgui.commands import goto_distance_mm
+        assert goto_distance_mm(300, 400, 0, 0) == 500.0
+
+    def test_reached_within_eps(self):
+        from robot_radio.testgui.commands import goto_reached
+        # 30 mm away, eps 50 → reached.
+        assert goto_reached(30, 0, 0, 0, 50) is True
+
+    def test_reached_exactly_at_eps(self):
+        from robot_radio.testgui.commands import goto_reached
+        # Exactly eps away counts as reached (<=).
+        assert goto_reached(50, 0, 0, 0, 50) is True
+
+    def test_not_reached_beyond_eps(self):
+        from robot_radio.testgui.commands import goto_reached
+        assert goto_reached(100, 0, 0, 0, 50) is False
+
+
+# ---------------------------------------------------------------------------
 # SNAP / TLM mode parsing (completion detection)
 # ---------------------------------------------------------------------------
 

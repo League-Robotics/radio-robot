@@ -160,6 +160,20 @@ class TestTourButton:
         finally:
             window.hide()
 
+    def test_goto_button_present_and_disabled(self, qapp):
+        """A 'GOTO' QPushButton exists and is disabled before connect."""
+        from PySide6.QtWidgets import QPushButton  # type: ignore[import-untyped]
+        from robot_radio.testgui.__main__ import _build_main_window
+
+        window, _app = _build_main_window()
+        try:
+            btn = window.findChild(QPushButton, "goto_btn")
+            assert btn is not None, "GOTO button not found"
+            assert btn.text() == "GOTO"
+            assert not btn.isEnabled(), "GOTO button should start disabled"
+        finally:
+            window.hide()
+
 
 # ---------------------------------------------------------------------------
 # test_trace_model_feeds_tlm

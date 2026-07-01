@@ -266,6 +266,40 @@ TOURS: dict[str, list[str]] = {
 
 
 # ---------------------------------------------------------------------------
+# Camera-based GOTO (synthetic host-side command) — pure geometry helpers
+# ---------------------------------------------------------------------------
+#
+# GOTO is not a firmware verb.  The GUI drives the robot to a world point by
+# repeatedly (a) reading the camera ground-truth pose, (b) snapping the robot's
+# internal pose to it (``SI``), and (c) re-issuing a firmware ``G`` go-to toward
+# the fixed target — a camera-in-the-loop pure-pursuit corrected for odometry
+# drift.  The loop stops when the robot is within ``eps`` of the target.
+
+
+def goto_distance_mm(
+    target_x_mm: float,
+    target_y_mm: float,
+    cur_x_mm: float,
+    cur_y_mm: float,
+) -> float:
+    """Return the Euclidean distance (mm) from the current point to the target."""
+    dx = target_x_mm - cur_x_mm
+    dy = target_y_mm - cur_y_mm
+    return (dx * dx + dy * dy) ** 0.5
+
+
+def goto_reached(
+    target_x_mm: float,
+    target_y_mm: float,
+    cur_x_mm: float,
+    cur_y_mm: float,
+    eps_mm: float,
+) -> bool:
+    """Return ``True`` when the current point is within ``eps_mm`` of the target."""
+    return goto_distance_mm(target_x_mm, target_y_mm, cur_x_mm, cur_y_mm) <= eps_mm
+
+
+# ---------------------------------------------------------------------------
 # Telemetry / SNAP mode parsing (Qt-free, for completion detection)
 # ---------------------------------------------------------------------------
 

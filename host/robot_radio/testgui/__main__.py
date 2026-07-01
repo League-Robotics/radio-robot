@@ -151,6 +151,8 @@ def _build_main_window():  # type: ignore[return]
         COMMANDS,
         TOURS,
         build_wire_string,
+        goto_distance_mm,
+        goto_reached,
         parse_tlm_mode,
     )
     from robot_radio.testgui.operations import build_panel as _build_ops_panel, build_setpose_command
@@ -174,6 +176,11 @@ def _build_main_window():  # type: ignore[return]
         "live_thread": None,
         "tour_worker": None,
         "tour_thread": None,
+        "goto_worker": None,
+        "goto_thread": None,
+        # Latest camera ground-truth pose (x_cm, y_cm, yaw_rad, monotonic_ts)
+        # cached from the transport on_truth callback for the GOTO loop.
+        "last_truth": None,
     }
 
     # Keyboard driver — wires cursor-key VW driving onto the main window.
@@ -388,6 +395,48 @@ def _build_main_window():  # type: ignore[return]
         _send_buttons.append(_tb)
     tour_layout.addStretch()
     left_layout.addWidget(tour_row)
+
+    # GOTO — synthetic camera-based go-to: drive to a world (x, y) point by
+    # repeatedly correcting the robot's pose from the camera and re-issuing G.
+    goto_row = QWidget()
+    goto_layout = QHBoxLayout(goto_row)
+    goto_layout.setContentsMargins(0, 0, 0, 0)
+    goto_layout.setSpacing(4)
+
+    goto_btn = QPushButton("GOTO")
+    goto_btn.setObjectName("goto_btn")
+    goto_btn.setEnabled(False)
+    goto_btn.setFixedWidth(52)
+    goto_btn.setToolTip(
+        "Camera-based go-to: repeatedly reads the camera pose, snaps the robot "
+        "to it (SI), and drives toward (x, y) with G until within eps."
+    )
+    goto_layout.addWidget(goto_btn)
+
+    _goto_verb = QLabel("GOTO")
+    _goto_verb.setFixedWidth(44)
+    goto_layout.addWidget(_goto_verb)
+
+    def _make_goto_spin(name: str, default: int, lo: int, hi: int, unit: str):
+        lbl = QLabel(f"{name}:")
+        lbl.setFixedWidth(46)
+        goto_layout.addWidget(lbl)
+        sp = QSpinBox()
+        sp.setRange(lo, hi)
+        sp.setValue(default)
+        sp.setSuffix(f" {unit}")
+        sp.setFixedWidth(80)
+        goto_layout.addWidget(sp)
+        return sp
+
+    goto_x_spin = _make_goto_spin("x", 0, -10000, 10000, "mm")
+    goto_y_spin = _make_goto_spin("y", 0, -10000, 10000, "mm")
+    goto_eps_spin = _make_goto_spin("eps", 50, 1, 2000, "mm")
+    goto_speed_spin = _make_goto_spin("speed", 200, 1, 1000, "mm/s")
+    goto_layout.addStretch()
+    left_layout.addWidget(goto_row)
+    # GOTO enables/disables with the Send buttons on connect/disconnect.
+    _send_buttons.append(goto_btn)
 
     left_layout.addStretch()
     splitter.addWidget(left_widget)
@@ -676,6 +725,124 @@ def _build_main_window():  # type: ignore[return]
                 time_mod.sleep(self.POLL_S)
             return False
 
+    class _GotoRunner(QObject):
+        """Camera-based GOTO — drives to a world point via repeated ``G`` moves.
+
+        Each iteration reads the freshest cached camera ground-truth pose,
+        checks whether the robot is within ``eps`` of the target (→ done, send
+        ``STOP``), and otherwise snaps the robot's internal pose to the camera
+        truth (``SI``) and re-issues a firmware ``G`` toward the fixed target.
+        This is a camera-in-the-loop pure pursuit that corrects for odometry
+        drift; the throttle keeps it from spamming the link.
+
+        Runs on a background thread; ``log_line(text, direction)`` and
+        ``finished()`` marshal to the Qt main thread (like ``_TourRunner``).
+        Target/eps are in mm; speed in mm/s (matching the firmware ``G`` verb).
+        """
+
+        log_line = Signal(str, str)
+        finished = Signal()
+
+        #: Throttle (s) between pursuit iterations — "not as fast as it can".
+        POLL_S = 0.3
+        #: Max age (s) of a cached truth pose before it is considered stale.
+        TRUTH_MAX_AGE_S = 2.0
+        #: Overall timeout (s) before giving up.
+        TIMEOUT_S = 60.0
+
+        def __init__(
+            self,
+            transport: "object",
+            state: dict,
+            target_x_mm: int,
+            target_y_mm: int,
+            eps_mm: int,
+            speed: int,
+        ) -> None:
+            super().__init__()
+            self._transport = transport
+            self._state = state
+            self._tx = target_x_mm
+            self._ty = target_y_mm
+            self._eps = eps_mm
+            self._speed = speed
+            self._stop = False
+
+        def stop(self) -> None:
+            """Request the GOTO abort at the next safe point (thread-safe)."""
+            self._stop = True
+
+        @Slot()
+        def run(self) -> None:
+            """Run the pursuit loop (on the worker thread)."""
+            import time
+
+            self.log_line.emit(
+                f"[GOTO] target=({self._tx}, {self._ty}) mm, eps={self._eps} mm, "
+                f"speed={self._speed} mm/s",
+                "",
+            )
+            deadline = time.monotonic() + self.TIMEOUT_S
+            last_status = 0.0
+            try:
+                while not self._stop:
+                    now = time.monotonic()
+                    if now > deadline:
+                        self.log_line.emit("[GOTO] timed out — aborting", "")
+                        self._safe_stop()
+                        return
+
+                    truth = self._state.get("last_truth")
+                    if truth is None or (now - truth[3]) > self.TRUTH_MAX_AGE_S:
+                        self.log_line.emit(
+                            "[GOTO] waiting for a fresh camera pose...", ""
+                        )
+                        time.sleep(self.POLL_S)
+                        continue
+
+                    x_cm, y_cm, yaw_rad, _ = truth
+                    cur_x_mm = x_cm * 10.0
+                    cur_y_mm = y_cm * 10.0
+
+                    if goto_reached(self._tx, self._ty, cur_x_mm, cur_y_mm, self._eps):
+                        self._safe_stop()
+                        self.log_line.emit("[GOTO] reached target — complete", "")
+                        return
+
+                    # Correct the robot's internal pose to camera truth, then
+                    # re-aim at the fixed world target.
+                    si = build_setpose_command(x_cm, y_cm, yaw_rad)
+                    g = f"G {self._tx} {self._ty} {self._speed}"
+                    try:
+                        self._transport.command(si, read_ms=200)
+                        self._transport.command(g, read_ms=200)
+                    except Exception as exc:  # noqa: BLE001
+                        self.log_line.emit(f"[GOTO] send failed: {exc}", "")
+                        return
+
+                    # Throttled progress line (~1 Hz) — the raw SI/G traffic is
+                    # visible via the transport, so we summarise here.
+                    if now - last_status >= 1.0:
+                        dist = goto_distance_mm(
+                            self._tx, self._ty, cur_x_mm, cur_y_mm
+                        )
+                        self.log_line.emit(f"[GOTO] dist={dist:.0f} mm", "")
+                        last_status = now
+
+                    time.sleep(self.POLL_S)
+                # Loop exited due to stop request.
+                self.log_line.emit("[GOTO] aborted", "")
+                self._safe_stop()
+            finally:
+                self.finished.emit()
+
+        def _safe_stop(self) -> None:
+            """Send a best-effort STOP to halt the robot."""
+            try:
+                self._transport.send("STOP")
+            except Exception:  # noqa: BLE001
+                pass
+
     def _on_telemetry_thread_v2(frame: "object") -> None:
         """Transport on_telemetry callback — fires on the reader/tick thread.
 
@@ -693,6 +860,10 @@ def _build_main_window():  # type: ignore[return]
         """
         if pose is not None:
             x_cm, y_cm, yaw_rad = pose
+            # Cache the freshest truth pose (with a monotonic timestamp) so the
+            # GOTO worker can read it without opening its own daemon session.
+            import time as _time
+            _state["last_truth"] = (x_cm, y_cm, yaw_rad, _time.monotonic())
             _bridge.truth_ready.emit(x_cm, y_cm, yaw_rad)  # type: ignore[attr-defined]
 
     def _on_live_frame(
@@ -901,6 +1072,74 @@ def _build_main_window():  # type: ignore[return]
     for _tour_btn, _tour_name in _tour_buttons:
         _tour_btn.clicked.connect(_make_tour_handler(_tour_name, TOURS[_tour_name]))
 
+    # ----------------------------------------------------------- GOTO controls
+
+    def _on_goto_log(text: str, direction: str) -> None:
+        """Main-thread slot for GOTO log lines (marshalled from the worker)."""
+        _append_log(text, direction=direction or None)
+
+    def _stop_goto() -> None:
+        """Stop a running GOTO worker and join its thread (safe if idle)."""
+        worker = _state.get("goto_worker")
+        thread = _state.get("goto_thread")
+        if worker is not None:
+            try:
+                worker.stop()
+            except Exception:
+                pass
+        if thread is not None:
+            try:
+                thread.quit()
+                thread.wait(3000)
+            except Exception:
+                pass
+        _state["goto_worker"] = None
+        _state["goto_thread"] = None
+
+    def _on_goto_finished() -> None:
+        """Main-thread slot: GOTO ended — join thread, re-enable the button."""
+        thread = _state.get("goto_thread")
+        if thread is not None:
+            try:
+                thread.quit()
+                thread.wait(3000)
+            except Exception:
+                pass
+        _state["goto_worker"] = None
+        _state["goto_thread"] = None
+        if _state.get("transport") is not None:
+            goto_btn.setEnabled(True)
+
+    def _on_goto_clicked() -> None:
+        transport = _state.get("transport")
+        if transport is None:
+            _append_log("[WARN] Not connected")
+            return
+        if _state.get("goto_thread") is not None:
+            _append_log("[WARN] GOTO already running")
+            return
+        goto_btn.setEnabled(False)
+        from PySide6.QtCore import QThread  # type: ignore[import-untyped]
+
+        worker = _GotoRunner(
+            transport,
+            _state,
+            goto_x_spin.value(),
+            goto_y_spin.value(),
+            goto_eps_spin.value(),
+            goto_speed_spin.value(),
+        )
+        thread = QThread()
+        worker.moveToThread(thread)
+        worker.log_line.connect(_on_goto_log, Qt.ConnectionType.QueuedConnection)
+        worker.finished.connect(_on_goto_finished, Qt.ConnectionType.QueuedConnection)
+        thread.started.connect(worker.run)
+        thread.start()
+        _state["goto_worker"] = worker
+        _state["goto_thread"] = thread
+
+    goto_btn.clicked.connect(_on_goto_clicked)
+
     # Operations panel — built after _append_log is defined so the log callback
     # is live.
     ops_panel, ops_ctrl = _build_ops_panel(
@@ -1028,8 +1267,10 @@ def _build_main_window():  # type: ignore[return]
         transport: Transport | None = _state.get("transport")
         if transport is None:
             return
-        # Stop any running tour before the transport goes away.
+        # Stop any running tour / GOTO before the transport goes away.
         _stop_tour()
+        _stop_goto()
+        _state["last_truth"] = None
         # Stop the live-view worker first so it doesn't race with cleanup.
         _stop_live_worker()
         # Detach cursor-key driving before the transport goes away.
@@ -1056,9 +1297,10 @@ def _build_main_window():  # type: ignore[return]
     connect_btn.clicked.connect(_on_connect)
     disconnect_btn.clicked.connect(_on_disconnect)
 
-    # Stop the live-view worker and any running tour on app quit.
+    # Stop the live-view worker and any running tour / GOTO on app quit.
     app.aboutToQuit.connect(_stop_live_worker)
     app.aboutToQuit.connect(_stop_tour)
+    app.aboutToQuit.connect(_stop_goto)
 
     # -------------------------------------------------------------- startup grab
     # Trigger a best-effort live playfield grab shortly after the event loop
