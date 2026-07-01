@@ -184,7 +184,9 @@ def _make_controller(
         refresh_btn=refresh_btn,
         stream_btn=stream_btn,
         origin_btn=origin_btn,
-        transport_buttons=[sync_btn, zero_btn, stop_btn, refresh_btn, stream_btn],
+        # refresh_btn is NOT in transport_buttons — the camera is independent of
+        # the robot transport, so Refresh Playfield is always enabled.
+        transport_buttons=[sync_btn, zero_btn, stop_btn, stream_btn],
         clear_traces_cb=clear_cb,
         refresh_playfield_cb=refresh_cb,
         set_origin_cb=set_origin_cb,
@@ -435,14 +437,27 @@ class TestSyncPoseDaemonUnavailable:
 # --- Refresh Playfield (daemon unavailable) ---
 
 class TestRefreshPlayfieldDaemonUnavailable:
-    def test_no_transport_logs_warn(self):
+    def test_no_transport_does_not_warn_not_connected(self):
+        """on_refresh_playfield works without a transport — camera is independent."""
         ctrl, log, state = _make_controller(None)
+        # Stub out the actual daemon call so the test is hermetic.
+        ctrl._capture_playfield_frame_and_calib = lambda: None
         ctrl.on_refresh_playfield()
-        assert any("WARN" in e or "not connected" in e for e in log)
+        # Must NOT log a "not connected" warning — refresh does not need transport.
+        assert not any("not connected" in e.lower() for e in log), (
+            f"Refresh Playfield must not warn 'not connected'; got: {log}"
+        )
+
+    def test_no_transport_attempts_capture(self):
+        """on_refresh_playfield attempts capture even without a transport."""
+        ctrl, log, state = _make_controller(None)
+        called = []
+        ctrl._capture_playfield_frame_and_calib = lambda: called.append(True) or None
+        ctrl.on_refresh_playfield()
+        assert called, "Capture must be attempted even without a robot transport"
 
     def test_capture_failure_logs_warn_not_crash(self):
-        t = FakeTransport()
-        ctrl, log, state = _make_controller(t)
+        ctrl, log, state = _make_controller(None)
 
         def _fail():
             raise RuntimeError("daemon not available")
@@ -454,8 +469,7 @@ class TestRefreshPlayfieldDaemonUnavailable:
         assert any("WARN" in e or "capture" in e.lower() for e in log)
 
     def test_none_pixmap_logs_warn(self):
-        t = FakeTransport()
-        ctrl, log, state = _make_controller(t)
+        ctrl, log, state = _make_controller(None)
 
         # Returning None signals no image from daemon.
         ctrl._capture_playfield_frame_and_calib = lambda: None
@@ -465,9 +479,8 @@ class TestRefreshPlayfieldDaemonUnavailable:
 
     def test_pixmap_calls_refresh_cb(self):
         """refresh_playfield_cb is called with (pixmap, origin_x, origin_y)."""
-        t = FakeTransport()
         received: list = []
-        ctrl, log, state = _make_controller(t, refresh_cb=lambda px, ox, oy: received.append((px, ox, oy)))
+        ctrl, log, state = _make_controller(None, refresh_cb=lambda px, ox, oy: received.append((px, ox, oy)))
 
         fake_pixmap = object()
         # _capture_playfield_frame_and_calib returns (pixmap, origin_x, origin_y).
@@ -479,17 +492,178 @@ class TestRefreshPlayfieldDaemonUnavailable:
         assert received[0][1] == pytest.approx(12.5)
         assert received[0][2] == pytest.approx(34.0)
 
-    def test_refresh_cb_exception_logged(self):
-        t = FakeTransport()
+    def test_pixmap_calls_refresh_cb_without_transport(self):
+        """refresh_playfield_cb is called even without a robot transport."""
+        received: list = []
+        ctrl, log, state = _make_controller(None, refresh_cb=lambda px, ox, oy: received.append((px, ox, oy)))
 
+        fake_pixmap = object()
+        ctrl._capture_playfield_frame_and_calib = lambda: (fake_pixmap, 5.0, 8.0)
+        ctrl.on_refresh_playfield()
+
+        assert len(received) == 1, "Refresh callback must fire without transport"
+
+    def test_refresh_cb_exception_logged(self):
         def bad_cb(px, ox, oy):
             raise ValueError("canvas error")
 
-        ctrl, log, state = _make_controller(t, refresh_cb=bad_cb)
+        ctrl, log, state = _make_controller(None, refresh_cb=bad_cb)
         ctrl._capture_playfield_frame_and_calib = lambda: (object(), 0.0, 0.0)
         ctrl.on_refresh_playfield()
 
         assert any("ERROR" in e or "callback" in e.lower() for e in log)
+
+
+# ---------------------------------------------------------------------------
+# trigger_live_grab — background-thread auto-grab
+# ---------------------------------------------------------------------------
+
+
+class TestTriggerLiveGrab:
+    """trigger_live_grab fires capture on a background thread and marshals result
+    back to the Qt main thread via a queued signal.
+    """
+
+    def _build_qapp(self):
+        from PySide6.QtWidgets import QApplication  # type: ignore[import-untyped]
+        import sys
+        return QApplication.instance() or QApplication(sys.argv)
+
+    def _pump_events(self, n: int = 5) -> None:
+        """Process Qt events so queued signals are delivered."""
+        from PySide6.QtWidgets import QApplication  # type: ignore[import-untyped]
+        for _ in range(n):
+            QApplication.processEvents()
+
+    def test_trigger_calls_capture_on_background_thread(self):
+        """Capture runs on a non-main thread."""
+        import threading
+        self._build_qapp()
+
+        call_threads: list = []
+
+        def _fake_capture():
+            call_threads.append(threading.current_thread().name)
+            return None
+
+        ctrl, log, state = _make_controller(None)
+        ctrl._capture_playfield_frame_and_calib = _fake_capture
+        ctrl.trigger_live_grab()
+
+        # Give the thread time to complete.
+        import time
+        time.sleep(0.2)
+        self._pump_events(10)
+
+        assert call_threads, "Capture was never called"
+        main_thread = threading.main_thread().name
+        assert call_threads[0] != main_thread, (
+            f"Capture must run on a background thread, not {main_thread!r}"
+        )
+
+    def test_trigger_success_invokes_refresh_cb(self):
+        """On success, refresh_playfield_cb is called (via queued signal)."""
+        import time
+        self._build_qapp()
+
+        received: list = []
+
+        def _fake_capture():
+            return (object(), 10.0, 20.0)
+
+        ctrl, log, state = _make_controller(
+            None,
+            refresh_cb=lambda px, ox, oy: received.append((px, ox, oy)),
+        )
+        ctrl._capture_playfield_frame_and_calib = _fake_capture
+        ctrl.trigger_live_grab()
+
+        # Wait for thread + signal delivery.
+        time.sleep(0.2)
+        self._pump_events(10)
+
+        assert len(received) == 1, (
+            f"refresh_playfield_cb should have been called once; calls={received}"
+        )
+        _, ox, oy = received[0]
+        assert ox == pytest.approx(10.0)
+        assert oy == pytest.approx(20.0)
+
+    def test_trigger_daemon_absent_logs_placeholder_message(self):
+        """When capture fails (daemon absent), logs a clear placeholder message."""
+        import time
+        self._build_qapp()
+
+        def _fail():
+            raise RuntimeError("aprilcam not available")
+
+        ctrl, log, state = _make_controller(None)
+        ctrl._capture_playfield_frame_and_calib = _fail
+        ctrl.trigger_live_grab()
+
+        time.sleep(0.2)
+        self._pump_events(10)
+
+        # Must log a message about no camera/placeholder — not crash.
+        assert any(
+            "aprilcam" in e.lower() or "placeholder" in e.lower() or "camera" in e.lower()
+            for e in log
+        ), f"Expected placeholder message in log; got: {log}"
+
+    def test_trigger_daemon_absent_no_stale_image(self):
+        """When capture fails, refresh_playfield_cb is NOT called (no stale image shown)."""
+        import time
+        self._build_qapp()
+
+        received: list = []
+
+        def _fail():
+            raise RuntimeError("aprilcam not available")
+
+        ctrl, log, state = _make_controller(
+            None,
+            refresh_cb=lambda px, ox, oy: received.append((px, ox, oy)),
+        )
+        ctrl._capture_playfield_frame_and_calib = _fail
+        ctrl.trigger_live_grab()
+
+        time.sleep(0.2)
+        self._pump_events(10)
+
+        assert not received, (
+            "refresh_playfield_cb must NOT be called when capture fails "
+            "(no stale image should be shown)"
+        )
+
+    def test_trigger_none_result_logs_placeholder_message(self):
+        """When capture returns None, logs the placeholder message."""
+        import time
+        self._build_qapp()
+
+        ctrl, log, state = _make_controller(None)
+        ctrl._capture_playfield_frame_and_calib = lambda: None
+        ctrl.trigger_live_grab()
+
+        time.sleep(0.2)
+        self._pump_events(10)
+
+        assert any(
+            "placeholder" in e.lower() or "camera" in e.lower() or "aprilcam" in e.lower()
+            for e in log
+        ), f"Expected placeholder message when capture returns None; got: {log}"
+
+    def test_trigger_no_crash_when_no_refresh_cb(self):
+        """trigger_live_grab must not crash when refresh_playfield_cb is None."""
+        import time
+        self._build_qapp()
+
+        ctrl, log, state = _make_controller(None, refresh_cb=None)
+        ctrl._capture_playfield_frame_and_calib = lambda: (object(), 5.0, 5.0)
+        ctrl.trigger_live_grab()  # must not raise
+
+        time.sleep(0.2)
+        self._pump_events(10)
+        # No assertion needed — just must not crash.
 
 
 # ---------------------------------------------------------------------------
@@ -589,12 +763,13 @@ class TestBuildPanel:
         state = {"transport": None}
         panel, ctrl = build_panel(log_cb=lambda _: None, transport_ref=state)
 
-        # All buttons except clear_traces and set_origin should start disabled.
+        # Transport-dependent buttons start disabled.
+        # NOTE: refresh_playfield is NOT in this list — the camera is independent
+        # of the robot transport and should always be enabled.
         disabled_names = {
             "ops_btn_sync_pose",
             "ops_btn_zero_encoders",
             "ops_btn_stop",
-            "ops_btn_refresh_playfield",
             "ops_btn_stream",
         }
         for btn in panel.findChildren(QPushButton):
@@ -602,6 +777,24 @@ class TestBuildPanel:
                 assert not btn.isEnabled(), (
                     f"Button {btn.objectName()!r} should be disabled initially"
                 )
+
+    def test_refresh_playfield_btn_enabled_initially(self):
+        """Refresh Playfield must be enabled without transport (camera is independent)."""
+        from PySide6.QtWidgets import QApplication, QPushButton  # type: ignore[import-untyped]
+        import sys
+
+        app = QApplication.instance() or QApplication(sys.argv)
+        from robot_radio.testgui.operations import build_panel
+
+        state = {"transport": None}
+        panel, ctrl = build_panel(log_cb=lambda _: None, transport_ref=state)
+
+        refresh_btn = panel.findChild(QPushButton, "ops_btn_refresh_playfield")
+        assert refresh_btn is not None, "ops_btn_refresh_playfield not found"
+        assert refresh_btn.isEnabled(), (
+            "Refresh Playfield must be enabled without transport "
+            "(camera is independent of robot connection)"
+        )
 
     def test_clear_traces_btn_enabled_initially(self):
         from PySide6.QtWidgets import QApplication, QPushButton  # type: ignore[import-untyped]
