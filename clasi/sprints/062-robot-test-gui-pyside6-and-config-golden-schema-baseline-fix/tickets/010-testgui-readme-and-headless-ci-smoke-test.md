@@ -1,11 +1,11 @@
 ---
 id: '010'
 title: testgui README and headless CI smoke test
-status: open
+status: done
 use-cases:
 - SUC-015
 depends-on:
-- '009'
+- 009
 issue: plan-robot-test-gui-pyside6.md
 completes_issue: true
 ---
@@ -27,7 +27,7 @@ Corresponds to item 8 in the approved design's ticket breakdown.
 
 ## Acceptance Criteria
 
-- [ ] `host/robot_radio/testgui/README.md` covers:
+- [x] `host/robot_radio/testgui/README.md` covers:
   - Prerequisites: `uv sync --group gui`
   - Launch: `python -m robot_radio.testgui`
   - Transport selection: Sim (build lib first with `python build.py`), Serial,
@@ -35,9 +35,9 @@ Corresponds to item 8 in the approved design's ticket breakdown.
   - Sim lib build: `cd <project_root> && python build.py`
   - Interactive driving: cursor keys
   - Syncing pose from camera: prerequisites (aprilcam daemon)
-- [ ] `tests/testgui/conftest.py` sets `os.environ["QT_QPA_PLATFORM"] = "offscreen"`
+- [x] `tests/testgui/conftest.py` sets `os.environ["QT_QPA_PLATFORM"] = "offscreen"`
   before Qt is imported.
-- [ ] `tests/testgui/test_smoke.py` (or equivalent) passes with
+- [x] `tests/testgui/test_smoke.py` (or equivalent) passes with
   `uv run python -m pytest tests/testgui/ -v`:
   - `test_app_opens`: construct `QMainWindow` with a fake Transport; confirm it
     does not crash.
@@ -50,11 +50,11 @@ Corresponds to item 8 in the approved design's ticket breakdown.
     Transport; assert `transport.last_sent` equals the expected wire string.
   - `test_turn_row_converts_degrees_to_centidegrees`: set TURN row to 90°;
     assert sent string contains `9000` (centidegrees).
-- [ ] All headless tests are excluded from `tests/simulation/` (run via
+- [x] All headless tests are excluded from `tests/simulation/` (run via
   `uv run python -m pytest tests/testgui/`, not included in the simulation gate).
-- [ ] `uv run python -m pytest tests/simulation` still passes (simulation gate
+- [x] `uv run python -m pytest tests/simulation` still passes (simulation gate
   unaffected).
-- [ ] `uv run python -m pytest tests/testgui/` passes (new gate, no hardware
+- [x] `uv run python -m pytest tests/testgui/` passes (new gate, no hardware
   required if `QT_QPA_PLATFORM=offscreen`).
 
 ## Implementation Plan
