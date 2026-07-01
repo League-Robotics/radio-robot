@@ -2,7 +2,7 @@
 id: '061'
 title: "Eliminate legacy MotionController class \u2014 fold goal-closure into Planner,\
   \ scrub scaffolding names"
-status: planning-docs
+status: done
 branch: sprint/061-eliminate-legacy-motioncontroller-class-fold-goal-closure-into-planner-scrub-scaffolding-names
 use-cases: []
 issues:
