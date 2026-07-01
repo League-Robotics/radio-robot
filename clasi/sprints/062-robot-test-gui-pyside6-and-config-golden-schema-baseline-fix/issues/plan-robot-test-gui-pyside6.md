@@ -1,5 +1,15 @@
 ---
-status: pending
+status: in-progress
+sprint: '062'
+tickets:
+- 062-003
+- 062-004
+- 062-005
+- 062-006
+- 062-007
+- 062-008
+- 062-009
+- 062-010
 ---
 
 # Plan: Robot Test GUI (PySide6)

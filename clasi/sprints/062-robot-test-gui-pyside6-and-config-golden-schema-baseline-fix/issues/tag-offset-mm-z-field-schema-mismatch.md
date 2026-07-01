@@ -1,5 +1,9 @@
 ---
-status: pending
+status: in-progress
+sprint: '062'
+tickets:
+- 062-001
+- 062-002
 ---
 
 # Stale config goldens: `tag_offset_mm.z` schema + DefaultConfig golden drift (2 baseline test failures)
