@@ -37,9 +37,7 @@
 #include "../control/BodyVelocityController.h"
 #include "../subsystems/drive/Drive.h"
 #include "../subsystems/sensors/Sensors.h"
-#include "../subsystems/sensors/SensorsConfig.h"
 #include "../superstructure/Planner.h"
-#include "../superstructure/PlannerConfig.h"
 
 // Forward declarations — keeps the header-graph shallow.
 class DebugCommands;

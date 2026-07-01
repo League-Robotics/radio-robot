@@ -30,6 +30,7 @@
 #include "messages/drivetrain.h"
 #include "messages/planner.h"
 #include "messages/sensors.h"
+#include "superstructure/PlannerConfig.h"
 #include <cstring>
 #include <cstdio>
 

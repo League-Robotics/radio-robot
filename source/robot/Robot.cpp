@@ -5,14 +5,8 @@
 #include "MicroBit.h"
 #include "MicroBitDevice.h"
 #endif
-#include "Odometry.h"
 #include "DebugCommands.h"
-#include "CommandProcessor.h"
 #include "ConfigRegistry.h"
-#include <cstdio>
-#include <cmath>
-#include <cstring>
-#include <cstdlib>
 #include <cassert>
 
 // ---------------------------------------------------------------------------
