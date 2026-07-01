@@ -307,6 +307,7 @@
       "properties": {
         "x":       { "type": "number" },
         "y":       { "type": "number" },
+        "z":       { "type": "number", "description": "Tag or offset mount height in mm (optional)." },
         "yaw_rad": { "type": "number" }
       }
     }

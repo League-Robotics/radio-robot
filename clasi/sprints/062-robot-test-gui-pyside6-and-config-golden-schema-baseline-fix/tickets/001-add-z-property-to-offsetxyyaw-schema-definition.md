@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Add z property to OffsetXYYaw schema definition
-status: open
+status: done
 use-cases:
 - SUC-016
 depends-on: []
@@ -28,15 +28,15 @@ without relaxing the schema against genuinely unknown keys.
 
 ## Acceptance Criteria
 
-- [ ] `$defs.OffsetXYYaw.properties` in `data/robots/robot_config.schema.json`
+- [x] `$defs.OffsetXYYaw.properties` in `data/robots/robot_config.schema.json`
   gains a `z` property: `{"type": "number"}`.
-- [ ] `additionalProperties: false` is retained on `OffsetXYYaw`.
-- [ ] `tests/simulation/unit/test_robot_config.py::TestSchemaValidation::test_tovez_validates_against_schema`
+- [x] `additionalProperties: false` is retained on `OffsetXYYaw`.
+- [x] `tests/simulation/unit/test_robot_config.py::TestSchemaValidation::test_tovez_validates_against_schema`
   passes.
-- [ ] No existing robot config files (`tovez.json`, `togov.json`) require
+- [x] No existing robot config files (`tovez.json`, `togov.json`) require
   modification.
-- [ ] `uv run python -m pytest tests/simulation` passes (no regressions).
-- [ ] Confirm no host code reads `tag_offset_mm.z` expecting its absence to be
+- [x] `uv run python -m pytest tests/simulation` passes (no regressions).
+- [x] Confirm no host code reads `tag_offset_mm.z` expecting its absence to be
   meaningful (grep check — expect zero hits for code that branches on missing z).
 
 ## Implementation Plan
