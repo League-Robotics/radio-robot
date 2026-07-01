@@ -65,6 +65,7 @@ def _build_main_window():  # type: ignore[return]
         list_ports,
     )
     from robot_radio.testgui.commands import COMMANDS, build_wire_string
+    from robot_radio.testgui.operations import build_panel as _build_ops_panel
 
     # QApplication must exist before any QWidget is created.  We create one
     # only if one does not already exist (e.g. during testing).
@@ -237,16 +238,6 @@ def _build_main_window():  # type: ignore[return]
 
     left_layout.addWidget(cmd_rows_widget)
 
-    # Placeholder: operations panel
-    ops_placeholder = QWidget()
-    ops_placeholder.setObjectName("ops_panel_placeholder")
-    ops_placeholder.setMinimumHeight(120)
-    ops_label = QLabel("(operations panel — coming in later tickets)")
-    ops_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    ops_inner = QVBoxLayout(ops_placeholder)
-    ops_inner.addWidget(ops_label)
-    left_layout.addWidget(ops_placeholder)
-
     left_layout.addStretch()
     splitter.addWidget(left_widget)
 
@@ -311,6 +302,18 @@ def _build_main_window():  # type: ignore[return]
     for _btn, _spec, _getters in _row_send_getters:
         _wire_send_button(_btn, _spec, _getters)
 
+    # Operations panel — built after _append_log is defined so the log callback
+    # is live.  The clear_traces_cb and refresh_playfield_cb hooks start as None;
+    # ticket 008 (canvas/TraceModel) will wire them after construction via
+    # ops_ctrl.clear_traces_cb and ops_ctrl.refresh_playfield_cb attributes.
+    ops_panel, ops_ctrl = _build_ops_panel(
+        log_cb=_append_log,
+        transport_ref=_state,
+    )
+    # Insert the ops panel before the addStretch() already added above.
+    # Because addStretch() was called already, insert at the position before it.
+    left_layout.insertWidget(left_layout.count() - 1, ops_panel)
+
     def _on_connect() -> None:
         """Instantiate the selected Transport, call connect(), send STREAM 50."""
         name = transport_combo.currentText()
@@ -369,6 +372,8 @@ def _build_main_window():  # type: ignore[return]
         # Enable all Send buttons now that a transport is connected.
         for _sb in _send_buttons:
             _sb.setEnabled(True)
+        # Enable operations panel buttons.
+        ops_ctrl.set_connected(True, transport)
         desc = "Sim" if name == "Sim" else f"{name} on {port}"
         _append_log(f"[INFO] Connected via {desc}")
 
@@ -390,6 +395,8 @@ def _build_main_window():  # type: ignore[return]
         # Disable all Send buttons — no transport connected.
         for _sb in _send_buttons:
             _sb.setEnabled(False)
+        # Disable operations panel buttons.
+        ops_ctrl.set_connected(False)
         # Re-enable port field if a hardware transport was selected.
         _on_transport_changed(transport_combo.currentIndex())
         _append_log("[INFO] Disconnected")

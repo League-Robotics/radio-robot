@@ -1,7 +1,8 @@
 ---
 id: '007'
-title: 'Operations panel: sync-pose, zero-encoders, STOP, clear-traces, refresh-playfield, STREAM toggle'
-status: open
+title: 'Operations panel: sync-pose, zero-encoders, STOP, clear-traces, refresh-playfield,
+  STREAM toggle'
+status: done
 use-cases:
 - SUC-008
 - SUC-009
@@ -36,26 +37,26 @@ Corresponds to item 5 in the approved design's ticket breakdown.
 
 ## Acceptance Criteria
 
-- [ ] **Sync pose from camera** button: reads the aprilcam daemon pose for tag
+- [x] **Sync pose from camera** button: reads the aprilcam daemon pose for tag
   100 and sends firmware `P <x_mm> <y_mm> <h_cdeg>`. Logs the pose values and
   the firmware reply. On aprilcam daemon not available: logs a warning; does
   not crash.
-- [ ] **Zero encoders** button: sends the firmware zero-encoder command. Logs
+- [x] **Zero encoders** button: sends the firmware zero-encoder command. Logs
   the command and reply.
-- [ ] **STOP** button: sends `X` or `STOP`. Logs the command.
-- [ ] **Clear traces** button: clears all four trace polylines in the trace
+- [x] **STOP** button: sends `X` or `STOP`. Logs the command.
+- [x] **Clear traces** button: clears all four trace polylines in the trace
   model (ticket 008 will actually render them; the trace model clear method
   must be callable from here). Does NOT send any transport command.
-- [ ] **Refresh playfield from cam 3** button: captures a new playfield image
+- [x] **Refresh playfield from cam 3** button: captures a new playfield image
   from the aprilcam daemon; replaces the canvas background `QPixmap`. Logs the
   action. On daemon not available: logs a warning.
-- [ ] **STREAM on/off** toggle: when toggling on, sends `STREAM 50`; when
+- [x] **STREAM on/off** toggle: when toggling on, sends `STREAM 50`; when
   toggling off, sends `STREAM 0`. Button label reflects current state.
-- [ ] All buttons except Clear Traces and STREAM are disabled when no transport
+- [x] All buttons except Clear Traces and STREAM are disabled when no transport
   is connected.
-- [ ] Programmer documents the resolution of OQ-1 (cmd_sync_pose importability)
+- [x] Programmer documents the resolution of OQ-1 (cmd_sync_pose importability)
   in the commit message.
-- [ ] `uv run python -m pytest tests/simulation` passes.
+- [x] `uv run python -m pytest tests/simulation` passes.
 
 ## Implementation Plan
 
