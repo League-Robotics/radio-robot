@@ -1,10 +1,9 @@
 #pragma once
 // =============================================================================
-// Planner.h — Planner subsystem wrapper (renamed from MotionController2, 060-006)
+// Planner.h — Planner subsystem (061-004: absorbed MotionController entirely).
 //
-// Wraps the existing MotionController behind the 4-verb message-contract API.
-// This is ADDITIVE: the existing MotionController logic is unchanged. The new
-// class delegates to it by reference.
+// Owns and advances the S/T/D/G drive state machines, S-mode watchdog, and
+// odometry delta tracking directly — MotionController is no longer a member.
 //
 // Role: GOAL CLOSURE only. Planner generates a time-varying body-twist setpoint
 // from a goal + pose estimate and decides when the goal is reached.
@@ -19,26 +18,29 @@
 // See: clasi/issues/message-based-subsystem-architecture.md §Planner
 // =============================================================================
 
-#include "MotionController.h"
 #include "types/Inputs.h"          // HardwareState, MotorCommands, TargetState
-#include "types/Config.h"          // RobotConfig
+#include "types/Config.h"          // RobotConfig, DriveMode
+#include "types/CommandTypes.h"    // ReplyFn
 #include "messages/planner.h"      // msg::PlannerCommand, PlannerState, PlannerConfig
 #include "messages/common.h"       // msg::CommandBatch
 #include "messages/drivetrain.h"   // msg::DrivetrainCommand
+#include "BodyVelocityController.h"  // BodyVelocityController
+#include "MotionCommand.h"           // MotionCommand
 
 namespace subsystems {
 class Drive;
 }
 
+class MotorController;
+class Odometry;
+struct Robot;
+
 // ---------------------------------------------------------------------------
-// Planner — message-driven Planner subsystem wrapper.
+// Planner — message-driven Planner subsystem.
 //
-// Construction: takes the existing MotionController and Drive by reference,
-// plus the RobotConfig for geometry / limits.
-//
-// Side effect of construction: calls _mc.setBvcStateRef(&_desired) to wire the
-// internal BVC to publish body twist into _desired. This is intentional for
-// isolated test use. In the live wiring, Robot constructs Planner after Drive.
+// Construction: takes MotorController& (for wheel output / encoder access),
+// Odometry& (for pose reads in begin* entry points), Drive (for fused pose in
+// tick()), and the RobotConfig for geometry / limits.
 //
 // apply() STAGES only — no hardware I/O.
 // tick(now) does all work and RETURNS a CommandBatch containing a
@@ -47,10 +49,11 @@ class Drive;
 // ---------------------------------------------------------------------------
 class Planner {
 public:
-    // Constructor — wraps existing components by reference.
+    // Constructor — takes MotorController + Odometry + Drive + config directly
+    // (MotionController is gone as of 061-004).
     // cfg: motion-limits source (aMax, vBodyMax, etc.); stored as local copy
     // so configure() can update it without disturbing the original.
-    Planner(MotionController& mc,
+    Planner(MotorController& mc_ctrl, Odometry& odo,
             const subsystems::Drive& drive,
             const RobotConfig& cfg);
 
@@ -62,7 +65,7 @@ public:
 
     // Advance goal closure one tick.
     // 1. Populate _hw from _drive.state() (fused pose + twist).
-    // 2. Call _mc.driveAdvance(_hw, _cmds, _target, now).
+    // 2. Call driveAdvance(_hw, _cmds, _target, now) — now a direct method.
     // 3. Read commanded body twist from _desired.bodyTwist.
     // 4. Pack DrivetrainCommand{TWIST} into returned CommandBatch.
     // 5. Update _state.
@@ -72,10 +75,6 @@ public:
     const msg::PlannerState& state() const { return _state; }
 
     // Store updated planner config (motion limits only).
-    // Approach: maintain a local RobotConfig copy _cfg that shadows the original.
-    // The existing MotionController reads limits from its own const RobotConfig&
-    // which is the original; _cfg is used here to populate PlannerState and for
-    // future toPlannerConfig projections.
     void configure(const msg::PlannerConfig& cfg);
 
     // syncWireContext — copy the reply fn/ctx/corrId from robot.state.desired
@@ -99,96 +98,119 @@ public:
     }
 
     // -------------------------------------------------------------------------
-    // MotionController compatibility API — delegated to _mc (ticket 061-001).
-    // Becomes native in 061-004.
-    //
-    // All signatures exactly match their MotionController counterparts so that
-    // later tickets can change a call site's receiver from `motionController`
-    // to `planner` without altering argument lists.
+    // MotionController-compatible API — native methods (not delegated).
+    // These signatures exactly match the MotionController counterparts so that
+    // call sites routed through planner work unchanged.
     // -------------------------------------------------------------------------
 
-    DriveMode mode() const { return _mc.mode(); }
+    DriveMode mode() const { return _mode; }
 
     void beginStream(float leftMms, float rightMms, uint32_t now_ms,
-                     TargetState& target, ReplyFn fn, void* ctx) {
-        _mc.beginStream(leftMms, rightMms, now_ms, target, fn, ctx);
-    }
+                     TargetState& target, ReplyFn fn, void* ctx);
 
     void beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
                        TargetState& target, ReplyFn fn, void* ctx,
-                       const char* corr_id = nullptr, bool seedImmediate = false) {
-        _mc.beginVelocity(v_mms, omega_rads, now_ms, target, fn, ctx,
-                          corr_id, seedImmediate);
-    }
+                       const char* corr_id = nullptr, bool seedImmediate = false);
 
     void beginTimed(float leftMms, float rightMms, uint32_t durationMs, uint32_t now_ms,
                     TargetState& target, ReplyFn fn, void* ctx,
-                    const char* corr_id = nullptr) {
-        _mc.beginTimed(leftMms, rightMms, durationMs, now_ms, target, fn, ctx, corr_id);
-    }
+                    const char* corr_id = nullptr);
 
     void beginDistance(float leftMms, float rightMms, int32_t targetMm, uint32_t now_ms,
                        TargetState& target, ReplyFn fn, void* ctx,
-                       const char* corr_id = nullptr) {
-        _mc.beginDistance(leftMms, rightMms, targetMm, now_ms, target, fn, ctx, corr_id);
-    }
+                       const char* corr_id = nullptr);
 
     void beginGoTo(float tx, float ty, float speedMms, uint32_t now_ms,
                    TargetState& target, ReplyFn fn, void* ctx,
-                   const char* corr_id = nullptr) {
-        _mc.beginGoTo(tx, ty, speedMms, now_ms, target, fn, ctx, corr_id);
-    }
+                   const char* corr_id = nullptr);
 
     void beginTurn(float headingCdeg, float epsCdeg, uint32_t now_ms,
                    TargetState& target, ReplyFn fn, void* ctx,
-                   const char* corr_id = nullptr) {
-        _mc.beginTurn(headingCdeg, epsCdeg, now_ms, target, fn, ctx, corr_id);
-    }
+                   const char* corr_id = nullptr);
 
     void beginRotation(float relCdeg, uint32_t now_ms,
                        TargetState& target, ReplyFn fn, void* ctx,
-                       const char* corr_id = nullptr) {
-        _mc.beginRotation(relCdeg, now_ms, target, fn, ctx, corr_id);
-    }
+                       const char* corr_id = nullptr);
 
-    void stop(uint32_t now_ms, ReplyFn fn, void* ctx) {
-        _mc.stop(now_ms, fn, ctx);
-    }
+    void stop(uint32_t now_ms, ReplyFn fn, void* ctx);
 
-    void cancel(uint32_t now_ms, ReplyFn fn, void* ctx) {
-        _mc.cancel(now_ms, fn, ctx);
-    }
+    void cancel(uint32_t now_ms, ReplyFn fn, void* ctx);
 
-    void softStop(uint32_t now_ms) { _mc.softStop(now_ms); }
+    void softStop(uint32_t now_ms);
 
-    void beginRawVelocity(float v_mms, float omega_rads) {
-        _mc.beginRawVelocity(v_mms, omega_rads);
-    }
+    void beginRawVelocity(float v_mms, float omega_rads);
 
-    void disableSafetyOneShot() { _mc.disableSafetyOneShot(); }
+    void disableSafetyOneShot();
 
-    bool hasActiveCommand() const { return _mc.hasActiveCommand(); }
+    bool hasActiveCommand() const { return _activeCmd.active(); }
 
     void emitToActiveChannel(const char* evt, TargetState& target) {
-        _mc.emitToActiveChannel(evt, target);
+        if (_activeCmd.active()) {
+            emitEvt(evt, target);
+        }
     }
 
-    MotionCommand& activeCmd() { return _mc.activeCmd(); }
+    MotionCommand& activeCmd() { return _activeCmd; }
 
-    void setHardwareState(HardwareState* s) { _mc.setHardwareState(s); }
+    void setHardwareState(HardwareState* s) { _hwState = s; }
 
-    void setRobotCtx(Robot* r) { _mc.setRobotCtx(r); }
+    void setRobotCtx(Robot* r) { _robot = r; }
 
-    void setBvcStateRef(DesiredState* ds) { _mc.setBvcStateRef(ds); }
+    void setBvcStateRef(DesiredState* ds) { _bvc.setStateRef(ds); }
 
-    const HardwareState* hardwareState() const { return _mc.hardwareState(); }
+    const HardwareState* hardwareState() const { return _hwState; }
 
 private:
-    MotionController&         _mc;       // existing goal-closure engine (by ref)
-    const subsystems::Drive&  _drive;    // source of fused pose/twist
-    RobotConfig               _cfg;      // local shadow copy; configure() updates it
+    // ---- Primary control members (from absorbed MotionController) ----
+    MotorController&   _mc_ctrl;    // wheel output / encoder access
+    Odometry&          _odo;        // pose reads in begin*() (via getPoseFloat())
+    RobotConfig        _cfg;        // local copy of motion limits; configure() updates it
+    HardwareState*     _hwState;    // authoritative state; set by setHardwareState()
 
-    // Internal state owned by Planner (passed to driveAdvance).
+    // Robot pointer for _checkSafeOneShot (re-arming config.safetyEnabled).
+    // Set by setRobotCtx() from Robot constructor.
+    struct Robot*      _robot;
+
+    // MotionCommand subsystem.
+    // _bvc MUST be declared before _activeCmd: Planner's constructor
+    // passes &_bvc to _activeCmd.configure(), so _bvc must be fully constructed
+    // first.  Do not reorder.
+    BodyVelocityController _bvc;        // body-level (v,ω) profiler
+    MotionCommand          _activeCmd;  // the single active MotionCommand
+
+    // SAFE one-shot disable flag (sprint 024-003).
+    bool _safeOneShotDisable = false;
+
+    // Drive mode
+    DriveMode _mode;
+
+    // Current speed targets (kept for internal use only)
+    float _tgtL;
+    float _tgtR;
+
+    // D-command state for per-tick decel hook
+    float _dDistTarget;  // target distance in mm
+    float _dOmega;       // commanded yaw rate at begin (from forward kinematics)
+    float _dEnc0;        // encoder average at begin (baseline for decel cap)
+
+    // G go-to state machine
+    enum class GPhase { IDLE, PRE_ROTATE, PURSUE };
+    GPhase  _gPhase;
+    float   _gTargetXWorld;  // goal x in world frame (mm), set at beginGoTo()
+    float   _gTargetYWorld;  // goal y in world frame (mm), set at beginGoTo()
+    float   _gSpeed;
+
+    // PURSUE re-gate counter (D8 027-004).
+    uint8_t _pursueBacktrackTicks = 0;
+
+    // Tick timing
+    uint32_t _lastTickMs;
+    uint32_t _currentTimeMs;
+
+    // ---- Drive subsystem (for fused pose/twist in tick()) ----
+    const subsystems::Drive&  _drive;
+
+    // Internal state used by tick() (passed to driveAdvance).
     HardwareState             _hw      = {};  // populated from _drive.state() each tick
     MotorCommands             _cmds    = {};  // sink for driveAdvance motor outputs (discarded)
     DesiredState              _desired = {};  // BVC publish target (wired via setBvcStateRef)
@@ -200,7 +222,16 @@ private:
     // Stored planner config snapshot (set by configure()).
     msg::PlannerConfig        _planCfg = {};
 
-    // No-op reply sink used for all begin*() calls (EVT completion events
-    // are routed via the command bus; not needed here).
+    // No-op reply sink used for apply() begin*() calls.
     static void _noopReply(const char* /*msg*/, void* /*ctx*/) {}
+
+    // ---- Private helpers (implementations in Planner.cpp / PlannerBegin.cpp) ----
+    void driveAdvance(HardwareState& inputs, MotorCommands& cmds,
+                      TargetState& target, uint32_t now_ms);
+    void fullStop(ReplyFn fn, void* ctx);
+    void getPoseFloat(float& x, float& y, float& h_rad) const;
+    void _checkSafeOneShot(ReplyFn fn, void* ctx);
+    void _startPreRotate(float bearingRad, float speed,
+                         uint32_t now_ms, TargetState& target);
+    static void emitEvt(const char* base, TargetState& target);
 };

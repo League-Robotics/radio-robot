@@ -1,5 +1,4 @@
 #include "Robot.h"
-#include "superstructure/MotionController.h"
 #include "subsystems/sensors/SensorsConfig.h"
 #include "superstructure/PlannerConfig.h"
 #ifndef HOST_BUILD
@@ -41,13 +40,14 @@ static uint32_t system_timer_current_time() { return g_sim_now_ms; }
 //
 // Declaration order (from Robot.h):
 //   hal, config, state, motorL, motorR, otos, line, colorSensor, gripper, portio,
-//   motorController, estimate, motionController, portController, servoController
+//   motorController, estimate, portController, servoController
+//   (motionController removed 061-004 — absorbed into Planner)
 //
 // hal must be declared (and therefore initialized) before the interface refs so
 // that hal.motorL() etc. are valid when the refs are bound.
 //
 // Two post-construction binds:
-//   planner.setHardwareState(&state.inputs)  — Planner/MotionController reads pose
+//   planner.setHardwareState(&state.inputs)  — Planner reads authoritative pose
 //   motorController.setCommandsRef(&state.commands)   — MotorController writes tgt*/pwm*
 // ---------------------------------------------------------------------------
 
@@ -60,7 +60,6 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       colorSensor(hal.colorSensor()), gripper(hal.gripper()), portio(hal.portIO()),
       motorController(motorL, motorR, config),
       estimate(),
-      motionController(motorController, estimate.odometry(), config),
       portController(portio),
       servoController(gripper),
       // Phase E (043-001) sensor subsystems — wired with their device ref,
@@ -89,7 +88,7 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       // wired into loopTickOnce; configure() called in the constructor body below.
       //
       // bvc: Drive's own BodyVelocityController.  Separate from
-      // MotionController's internal _bvc so the two paths don't share PID state.
+      // Planner's internal _bvc so the two paths don't share PID state.
       bvc(motorController, config),
       // drive: new-arch Drive, built with the same device refs as the legacy
       // drive subsystem.  Own BVC (bvc), own EKF state (via est + odo).
@@ -98,8 +97,8 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       // sensors: facade over the existing lineSensor / colorSensor_ subsystems;
       // shares the same HardwareState they write into.
       sensors(lineSensor, colorSensor_, state.actual),
-      // planner: wraps existing motionController + drive.
-      planner(motionController, drive, config)
+      // planner: owns motion control directly (061-004: motionController removed).
+      planner(motorController, estimate.odometry(), drive, config)
 {
     // -----------------------------------------------------------------------
     // Phase 3 (059-004): bottom-up configure() calls.
@@ -116,11 +115,9 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
     // binding MotorController to drive._outputs.  Do NOT override that binding
     // here, or drive.outputs() will be stale.
     //
-    // 060-004: Planner's constructor already called
-    // _mc.setBvcStateRef(&planner._desired) so that planner.tick() reads the BVC
-    // body-twist output from planner._desired.  Do NOT override that binding here
-    // or planner.tick() will read stale zeros from _desired.bodyTwist while BVC
-    // writes to robot.state.desired instead.
+    // 061-004: Planner's constructor already called _bvc.setStateRef(&_desired)
+    // so that planner.tick() reads the BVC body-twist output from planner._desired.
+    // Do NOT override that binding here or planner.tick() will read stale zeros.
     // setRobotCtx replaces setCtx (sprint 026-002): MotionCtx now lives in Robot.
     planner.setRobotCtx(this);
     // Initialise _motionCtx (sprint 026-002): mc and robot pointers; queue wired

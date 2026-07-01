@@ -10,7 +10,6 @@
 #include "MotorController.h"
 #include "PhysicalStateEstimate.h"
 #include "OtosCommands.h"
-#include "superstructure/MotionController.h"
 #include "PortController.h"
 #include "ServoController.h"
 #include "Inputs.h"
@@ -79,8 +78,9 @@ struct RobotSysCtx {
  *   4. otos, line, color, gripper, portio refs
  *   5. motorController         — needs motorL, motorR, config refs
  *   6. estimate                — default ctor (PhysicalStateEstimate)
- *   7. motionController        — needs motorController, estimate.odometry(), config
- *   8. portController          — needs portio ref
+ *   7. portController          — needs portio ref
+ *      (motionController removed in 061-004; absorbed into Planner)
+ *   8. planner depends on motorController, estimate.odometry(), drive, config
  */
 struct Robot {
     // ---- HAL reference (must be declared first) ----
@@ -104,12 +104,7 @@ struct Robot {
     // ---- Owned control-layer members (depend on refs above) ----
     MotorController     motorController;   // (motorL, motorR, config)
     PhysicalStateEstimate estimate;        // default ctor; wraps Odometry+EKF (041-003)
-    // 060-005 NOTE: MotionController remains a public Robot value member for now.
-    // Removing it from the Robot public surface (making Planner own it as a private
-    // value member) requires rerouting all direct call sites in SystemCommands.cpp,
-    // MotionCommands.cpp, MotionControllerBegin.cpp, RobotTelemetry.cpp, Robot.cpp,
-    // and otosCorrect() — a structural refactor deferred to a follow-on ticket.
-    MotionController    motionController;  // (motorController, estimate.odometry(), config)
+    // motionController removed in 061-004: absorbed into Planner as direct members.
     PortController      portController;    // (portio)
     ServoController     servoController;   // (gripper)
     // Phase E (043-001) sensor subsystems — own the timed LINE/COLOUR/PORTS reads
@@ -144,10 +139,10 @@ struct Robot {
     //   bvc      depends on motorController (declared above)
     //   drive    depends on motorL/motorR, motorController, bvc, estimate
     //   sensors  depends on lineSensor, colorSensor_ (declared above)
-    //   planner  depends on motionController, drive (declared above)
+    //   planner  depends on motorController, estimate.odometry(), drive, config (061-004)
     //
     // bvc: Drive's own BodyVelocityController.  Separate from the _bvc inside
-    // MotionController to avoid sharing state between the legacy and new paths.
+    // Planner to avoid sharing state between the Drive and Planner BVC instances.
     BodyVelocityController  bvc;           // Drive's BVC — (motorController, config)
     subsystems::Drive       drive;         // new-arch Drive subsystem (059-004)
     subsystems::Sensors     sensors;       // new-arch Sensors facade (059-004)

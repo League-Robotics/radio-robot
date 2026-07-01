@@ -1,24 +1,22 @@
-// planner_api.cpp — extern "C" C-ABI shims for the MotionController2
-// (Planner) subsystem (ticket 059-001).
+// planner_api.cpp — extern "C" C-ABI shims for the Planner subsystem
+// (ticket 059-001; updated 061-004: MotionController absorbed into Planner).
 //
-// Provides an opaque PlannerHandle that owns a self-contained MotionController2
-// constructed on top of SimHardware + Drive2, with its own local control
+// Provides an opaque PlannerHandle that owns a self-contained Planner
+// constructed on top of SimHardware + Drive, with its own local control
 // components. Python tests (ticket 059-002) load this via ctypes and call these
 // functions directly.
 //
-// Construction order (mirrors drive2_api.cpp / Robot.h dependency order):
+// Construction order (mirrors Robot.h dependency order):
 //   1. cfg          — RobotConfig from defaultRobotConfig()
 //   2. hal          — SimHardware(cfg)
 //   3. mc_ctrl      — MotorController(hal.motorL(), hal.motorR(), cfg)
 //   4. bvc          — BodyVelocityController(mc_ctrl, cfg)
 //   5. est          — PhysicalStateEstimate
-//   6. drive2       — Drive2(motorL, motorR, mc_ctrl, bvc, est, odo, otos, cfg)
-//   7. odo_ctrl     — Odometry (owned by est; accessed via est.odometry())
-//   8. motion_ctrl  — MotionController(mc_ctrl, est.odometry(), cfg)
-//   9. mc2          — MotionController2(motion_ctrl, drive2, cfg)
+//   6. drive        — Drive(motorL, motorR, mc_ctrl, bvc, est, odo, otos, cfg)
+//   7. planner      — Planner(mc_ctrl, est.odometry(), drive, cfg)
 //
 // Heap allocation in PlannerHandle is acceptable — the no-heap constraint
-// applies to MotionController2::tick() itself, not the test harness.
+// applies to Planner::tick() itself, not the test harness.
 
 // Sprint 050, Ticket 004: EKFTiny must be included BEFORE any header that
 // transitively pulls in tinyekf.h (e.g. Odometry.h → EKFTiny.h).
@@ -34,7 +32,6 @@
 #include "state/PhysicalStateEstimate.h"
 #include "control/Odometry.h"
 #include "subsystems/drive/Drive.h"    // also declares toDriveConfig()
-#include "superstructure/MotionController.h"
 #include "superstructure/Planner.h"
 #include "superstructure/PlannerConfig.h"
 #include "messages/planner.h"
@@ -51,7 +48,6 @@ struct PlannerHandle {
     BodyVelocityController      bvc;
     PhysicalStateEstimate       est;
     subsystems::Drive           drive;
-    MotionController            motion_ctrl;
     Planner                     planner;
 
     PlannerHandle()
@@ -63,8 +59,7 @@ struct PlannerHandle {
         , drive(hal.motorL(), hal.motorR(),
                 mc_ctrl, bvc, est, est.odometry(),
                 hal.otos(), cfg)
-        , motion_ctrl(mc_ctrl, est.odometry(), cfg)
-        , planner(motion_ctrl, drive, cfg)
+        , planner(mc_ctrl, est.odometry(), drive, cfg)
     {
         // Apply Drive config so it has live gains/lag.
         drive.configure(toDriveConfig(cfg));

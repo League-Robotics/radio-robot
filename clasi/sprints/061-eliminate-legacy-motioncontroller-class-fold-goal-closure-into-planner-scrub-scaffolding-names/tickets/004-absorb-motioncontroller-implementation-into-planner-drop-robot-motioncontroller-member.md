@@ -2,11 +2,11 @@
 id: '004'
 title: Absorb MotionController implementation into Planner; drop Robot motionController
   member
-status: open
+status: done
 use-cases:
 - SUC-004
 depends-on:
-- "003"
+- '003'
 github-issue: ''
 issue: internalize-legacy-motioncontroller-into-planner.md
 completes_issue: false
@@ -103,20 +103,20 @@ ticket 005 deletes them to make any lingering include errors visible separately)
 
 ## Acceptance Criteria
 
-- [ ] `Planner.h` has no `_mc` member and no `#include "MotionController.h"`.
-- [ ] `Planner.h` private section declares `_bvc` before `_activeCmd`.
-- [ ] `Planner` constructor takes `(MotorController&, Odometry&, const subsystems::Drive&, const RobotConfig&)`.
-- [ ] `Planner.cpp` contains `driveAdvance()`, `stop()`, `cancel()`, `softStop()`,
+- [x] `Planner.h` has no `_mc` member and no `#include "MotionController.h"`.
+- [x] `Planner.h` private section declares `_bvc` before `_activeCmd`.
+- [x] `Planner` constructor takes `(MotorController&, Odometry&, const subsystems::Drive&, const RobotConfig&)`.
+- [x] `Planner.cpp` contains `driveAdvance()`, `stop()`, `cancel()`, `softStop()`,
       `beginRawVelocity()`, `emitEvt()`, `fullStop()`, `getPoseFloat()` bodies,
       all operating on local members.
-- [ ] `PlannerBegin.cpp` exists with all `Planner::beginX(...)` bodies.
-- [ ] `PlannerBegin.cpp` is in `CMakeLists.txt` (sim target).
-- [ ] `Robot.h` has no `MotionController motionController;` member.
-- [ ] `Robot.h` has no `#include "superstructure/MotionController.h"`.
-- [ ] `Robot.cpp` initializer constructs `planner(motorController, estimate.odometry(), drive, config)`.
-- [ ] `planner_api.cpp` `PlannerHandle` has no `motion_ctrl` member.
-- [ ] `cmake --build build_sim` succeeds with zero errors.
-- [ ] `uv run python -m pytest tests/simulation/unit/test_golden_tlm.py
+- [x] `PlannerBegin.cpp` exists with all `Planner::beginX(...)` bodies.
+- [x] `PlannerBegin.cpp` is in `CMakeLists.txt` (sim target).
+- [x] `Robot.h` has no `MotionController motionController;` member.
+- [x] `Robot.h` has no `#include "superstructure/MotionController.h"`.
+- [x] `Robot.cpp` initializer constructs `planner(motorController, estimate.odometry(), drive, config)`.
+- [x] `planner_api.cpp` `PlannerHandle` has no `motion_ctrl` member.
+- [x] `cmake --build build_sim` succeeds with zero errors.
+- [x] `uv run python -m pytest tests/simulation/unit/test_golden_tlm.py
       tests/simulation/unit/test_059_ordered_tick_parity.py
       tests/simulation/unit/test_planner_subsystem.py` all pass.
 

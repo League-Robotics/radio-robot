@@ -1,7 +1,7 @@
 // bus_drain_api.cpp — extern "C" C-ABI shims for the bus drain layer (ticket 059-003).
 //
 // Provides a BusDrainHandle that owns a self-contained stack of
-//   PlannerHandle (= SimHardware + Drive2 + MotionController2)
+//   SimHardware + Drive + Planner
 //   + CommandQueue
 //   + CommandProcessor (empty command table)
 //
@@ -17,8 +17,8 @@
 //
 // Python tests (test_059_bus_drain.py) load this via ctypes.
 //
-// Construction order mirrors planner_api.cpp:
-//   cfg / hal / mc_ctrl / bvc / est / drive2 / motion_ctrl / mc2
+// Construction order mirrors planner_api.cpp (061-004: motion_ctrl removed):
+//   cfg / hal / mc_ctrl / bvc / est / drive / planner
 //   + CommandQueue + CommandProcessor (empty)
 //
 // Heap allocation in BusDrainHandle is acceptable — the no-heap constraint
@@ -38,7 +38,6 @@
 #include "state/PhysicalStateEstimate.h"
 #include "control/Odometry.h"
 #include "subsystems/drive/Drive.h"          // also declares toDriveConfig()
-#include "superstructure/MotionController.h"
 #include "superstructure/Planner.h"
 #include "superstructure/PlannerConfig.h"
 #include "commands/CommandQueue.h"
@@ -61,7 +60,6 @@ struct BusDrainHandle {
     BodyVelocityController  bvc;
     PhysicalStateEstimate   est;
     subsystems::Drive       drive;
-    MotionController        motion_ctrl;
     Planner                 planner;
     CommandQueue            queue;
     CommandProcessor        cmd_proc;
@@ -75,8 +73,7 @@ struct BusDrainHandle {
         , drive(hal.motorL(), hal.motorR(),
                 mc_ctrl, bvc, est, est.odometry(),
                 hal.otos(), cfg)
-        , motion_ctrl(mc_ctrl, est.odometry(), cfg)
-        , planner(motion_ctrl, drive, cfg)
+        , planner(mc_ctrl, est.odometry(), drive, cfg)
         , queue()
         , cmd_proc()
     {
