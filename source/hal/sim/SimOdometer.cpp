@@ -55,6 +55,22 @@ void SimOdometer::setPositionRaw(int16_t x, int16_t y, int16_t h) {
     _rawX = x;
     _rawY = y;
     _rawH = h;
+    // Re-reference the accumulator readTransformed() actually returns to the
+    // EKF (source/robot/Robot.cpp otosCorrect() -> Odometry::correctEKF()).
+    // The real OtosSensor::setPositionRaw() (source/hal/real/OtosSensor.cpp)
+    // writes the chip's POSITION registers directly, and readTransformed()
+    // scales those SAME registers by the chip's LSB resolution
+    // (kPosMmPerLsb = 0.305 mm/LSB, kHdgRadPerLsb = 0.00549 deg/LSB in rad) on
+    // every read. So on the real chip, writing the raw registers IS the
+    // accumulator -- there's no separate host-side shadow to fall out of
+    // sync. Mirror that here: convert the same raw ints with the same LSB
+    // scale into the float accumulator, so `OZ` (setPositionRaw(0,0,0)) truly
+    // zeroes the pose readTransformed() returns, matching the real OTOS.
+    constexpr float kPosMmPerLsb  = 0.305f;
+    constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);
+    _odomX = static_cast<float>(x) * kPosMmPerLsb;
+    _odomY = static_cast<float>(y) * kPosMmPerLsb;
+    _odomH = static_cast<float>(h) * kHdgRadPerLsb;
 }
 
 void SimOdometer::setInjectedPose(float x, float y, float h) {

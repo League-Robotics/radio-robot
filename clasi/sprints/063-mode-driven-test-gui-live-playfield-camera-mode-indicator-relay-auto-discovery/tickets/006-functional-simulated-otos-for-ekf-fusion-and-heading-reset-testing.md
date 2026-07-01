@@ -1,7 +1,7 @@
 ---
 id: '006'
 title: Functional simulated OTOS for EKF fusion and heading-reset testing
-status: open
+status: done
 use-cases:
 - SUC-007
 - SUC-005
@@ -77,37 +77,41 @@ connects it to `Robot::otosCorrect()` or the EKF. That model is out of scope.
 
 ## Acceptance Criteria
 
-- [ ] In Sim mode (via the Test GUI, and via any `tests/simulation` fixture
+- [x] In Sim mode (via the Test GUI, and via any `tests/simulation` fixture
       that calls the new `begin_otos` harness hook), `OZ`, `OI`, `OR`, and
       `OV` all reply `OK` — never `ERR nodev`.
-- [ ] `OZ` (and `OV x y h`) re-reference the sim OTOS's accumulated pose
+- [x] `OZ` (and `OV x y h`) re-reference the sim OTOS's accumulated pose
       (`_odomX/_odomY/_odomH`), not just the raw-register shadow
       (`_rawX/_rawY/_rawH`): after `OZ`, `sim.get_otos_pose()` reads
       `(0.0, 0.0, 0.0)` even if the robot was previously at a non-zero
       heading.
-- [ ] Reproduces the hardware bug: after turning to a non-zero heading and
+- [x] Reproduces the hardware bug: after turning to a non-zero heading and
       stopping, sending `SI 0 0 0` **alone** (no `OZ`) leaves the fused
       heading (`sim.get_fused_pose()`) at the sim OTOS's retained heading,
       not at 0, across many subsequent ticks (no `OZ` means no
       re-referencing, so `correctEKF` keeps re-applying the stale OTOS
       heading).
-- [ ] Verifies the fix: after turning to a non-zero heading and stopping,
+- [x] Verifies the fix: after turning to a non-zero heading and stopping,
       sending `ZERO enc`, then `OZ`, then `SI 0 0 0` resets the fused heading
       to 0 and it **holds** at 0 across many subsequent ticks.
-- [ ] Test GUI Sim mode: clicking "Set Robot @ 0,0" (ticket 063-004's
+- [x] Test GUI Sim mode: clicking "Set Robot @ 0,0" (ticket 063-004's
       `_set_origin()` sequence) after a turn drives the on-screen avatar
       heading to 0 and keeps it there — no manual test-only hook required,
-      only the existing `_apply_field_profile()` call on connect.
-- [ ] `tests/simulation` gains a regression test file (or is added to an
+      only the existing `_apply_field_profile()` call on connect. (Verified
+      via the fixed `setPositionRaw` + the existing
+      `sim.set_field_profile(fuse_otos=True)` call path exercised by the new
+      regression tests; `SimTransport._apply_field_profile()` was not
+      modified, per plan.)
+- [x] `tests/simulation` gains a regression test file (or is added to an
       existing OTOS-fusion test file) covering both the bug-reproduction and
       fix-verification cases above, using the new `begin_otos` harness hook
       (not `set_field_profile`, to keep the assertions free of turn-slip/noise
       side effects).
-- [ ] No regressions: `test_golden_tlm.py`, `test_ekf_dual_source.py`,
+- [x] No regressions: `test_golden_tlm.py`, `test_ekf_dual_source.py`,
       `test_dbg_otos_commands.py`, `test_ekf.py`,
       `test_ekf_encoder_velocity_unconditional.py`, and
       `test_n8_n9_sensor_freshness.py` all pass unchanged.
-- [ ] `OI` (`init()`) and `OR` (`resetTracking()`) remain no-ops in
+- [x] `OI` (`init()`) and `OR` (`resetTracking()`) remain no-ops in
       `SimOdometer` (per the architecture addendum's open question 1) but
       return `OK` once the sim OTOS is initialised.
 

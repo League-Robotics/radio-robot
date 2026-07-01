@@ -20,7 +20,17 @@
  * std::mt19937{43u} noise stream, same heading wrap.  readTransformed returns the
  * injected pose by default, or the accumulated noisy odom pose when the sim model
  * is enabled (enableSimModel(true)) — matching MockOtosSensor exactly so the OTOS
- * fusion / sensor-freshness tests pass unchanged.
+ * fusion / sensor-freshness tests pass unchanged.  (No golden-TLM command sequence
+ * calls OZ/OV, so this preservation guarantee is unaffected by the setPositionRaw
+ * fix below — see ticket 063-006.)
+ *
+ * setPositionRaw() re-references the `_odomX/_odomY/_odomH` accumulator (not just
+ * the `_rawX/_rawY/_rawH` shadow), at parity with the real OtosSensor chip: on
+ * hardware, setPositionRaw() writes the chip's POSITION registers directly, and
+ * readTransformed() re-reads and rescales those SAME registers every tick, so
+ * there is no separate accumulator to fall out of sync there.  `OZ`
+ * (setPositionRaw(0,0,0)) therefore actually zeroes the pose the EKF fuses via
+ * Robot::otosCorrect(), matching hardware (ticket 063-006).
  *
  * Every error setter defaults to a no-op, so a fresh SimOdometer is PERFECT.
  *
@@ -49,6 +59,16 @@ public:
     void resetTracking() override {}
 
     void getPositionRaw(int16_t& x, int16_t& y, int16_t& h) const override;
+
+    // Writes the raw-register shadow (_rawX/_rawY/_rawH, read back by
+    // getPositionRaw()) AND re-references the _odomX/_odomY/_odomH
+    // accumulator that readTransformed() returns to the EKF, using the same
+    // LSB scale (kPosMmPerLsb / kHdgRadPerLsb) as the real OtosSensor chip.
+    // This is parity with hardware: the real chip's POSITION registers ARE
+    // its accumulator (readTransformed() re-reads/rescales them every tick),
+    // so writing them re-references the reported pose immediately. `OZ`
+    // (setPositionRaw(0,0,0)) therefore zeroes the fused OTOS pose, not just
+    // the shadow registers (ticket 063-006).
     void setPositionRaw(int16_t x, int16_t y, int16_t h) override;
 
     int8_t getLinearScalar()  const override { return _linearScalar; }

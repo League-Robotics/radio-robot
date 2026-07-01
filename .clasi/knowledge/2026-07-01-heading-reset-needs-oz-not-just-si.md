@@ -44,3 +44,30 @@ when this is issued (the whole point: tell the system "here is 0,0,0").
 `OV x y h` (set OTOS pose to arbitrary values via `setPositionRaw`), `OP` (report
 cached OTOS pose). For a plain heading/pose zero-at-current-orientation, `OZ` is the
 one to use.
+
+## Update (2026-07-01, ticket 063-006): now reproducible and regression-tested in sim
+
+Previously the sim's `SimOdometer` did not reproduce this bug: `setPositionRaw`
+(invoked by `OZ`/`OV`) only wrote the raw-register shadow (`_rawX/_rawY/_rawH`), never
+the `_odomX/_odomY/_odomH` accumulator that `readTransformed()` actually returns to
+the EKF. So in sim, `OZ` was a no-op on the fused pose and `SI 0 0 0` alone didn't
+visibly "drift back" either — there was no re-referencing step to drift back FROM.
+Separately, `SimOdometer::begin()` (required by `Sensor::is_initialized()` gates on
+every OTOS command and on `Robot::otosCorrect()`) was only reachable via
+`sim_set_otos_fusion` / `set_field_profile(fuse_otos=True)`, so a bare `tests/simulation`
+fixture calling the OTOS command surface directly saw `ERR nodev`.
+
+Fixed in `source/hal/sim/SimOdometer.cpp`'s `setPositionRaw` (now re-references
+`_odomX/_odomY/_odomH` using the same LSB scale as the real `OtosSensor` chip) plus a
+narrow `sim_begin_otos()` / `Sim.begin_otos()` harness hook
+(`tests/_infra/sim/sim_api.cpp`, `tests/_infra/sim/firmware.py`) mirroring
+`drive_api_begin_otos()`. Both the bug (SI-alone drifts back) and the fix
+(ZERO enc + OZ + SI holds at 0) are now regression-tested in
+`tests/simulation/unit/test_sim_otos_heading_reset.py`.
+
+**Gotcha hit while writing that test:** the firmware's stop command is `X`
+(`MotionCommands.cpp`, "stop / soft stop"), NOT `S` — `S` is "set wheel speeds" and
+takes required args; sending it with none replies `ERR badarg` and the robot keeps
+spinning. Using `S` as a bare stop silently left the sim robot still turning, which
+looked exactly like an unfixed heading-reset bug (fused heading kept climbing) until
+traced back to the wrong stop command in the test helper.
