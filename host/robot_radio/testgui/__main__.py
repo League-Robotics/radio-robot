@@ -33,12 +33,19 @@ Wiring (ticket 008)
   the world→pixel transform updates atomically with the background; world (0,0)
   lands on AprilTag 1 after refresh.
 
-Live-view lifecycle (ticket 003)
-----------------------------------
+Live-view lifecycle (ticket 003; main-thread bridge + throttle, ticket 009)
+-----------------------------------------------------------------------------
 In PLAYFIELD MODE (Relay transport) a ``_LiveViewWorker`` runs on a ``QThread``
-and streams camera frames at ~12 Hz.  The worker emits ``frame_ready`` with a
-BGR ndarray; the main-thread slot ``_on_live_frame`` converts it to a QPixmap
-and calls ``canvas_ctrl.set_background`` + ``canvas_ctrl.set_avatar_pose``.
+and streams camera frames at ~9-12 Hz.  ``frame_ready`` is connected to a
+``_LiveFrameBridge`` (see :func:`build_live_frame_bridge`) constructed on the
+GUI thread — NOT to a bare function — because a ``QueuedConnection`` to a
+non-``QObject`` callable is delivered on the *emitting* (worker) thread in
+this PySide build, and the worker's tight capture loop never returns to its
+own event loop to process it (``testgui-playfield-not-live-updating.md``).
+The bridge's ``on_frame`` slot calls ``canvas_ctrl.set_avatar_pose`` on
+*every* frame (full worker rate, smooth marker) but converts the BGR ndarray
+to a QPixmap and calls ``canvas_ctrl.set_background`` only on a throttled
+subset (~3-4 fps) to limit GUI-thread work.
 
 When live-view is active (``_state["live_view_active"] is True``), the
 ``on_truth_ready`` slot skips ``canvas_ctrl.refresh()`` — the avatar is driven
@@ -114,6 +121,119 @@ def transport_name_to_mode_label(name: str) -> tuple[str, str]:
         "Relay": ("PLAYFIELD MODE", "color: #20c020; font-weight: bold;"),
     }
     return _MAP.get(name, ("UNKNOWN MODE", "color: #ff8000; font-weight: bold;"))
+
+
+def build_live_frame_bridge(canvas_ctrl) -> object:
+    """Build a ``_LiveFrameBridge`` bound to ``canvas_ctrl`` (ticket 063-009).
+
+    Mirrors :func:`robot_radio.testgui.live_view.build_live_view_worker`'s
+    factory pattern: PySide6 is imported lazily here so this module stays
+    importable without PySide6 present, and the returned object is a real
+    ``QObject`` that can be constructed directly in a headless test (pass a
+    fake ``canvas_ctrl`` stand-in and call ``.on_frame(...)`` — no
+    ``QApplication``-driven event loop or GUI wiring required).
+
+    Root cause this bridges around (see
+    ``testgui-playfield-not-live-updating.md`` and the ``_WorkerBridge``
+    docstring below): connecting a worker ``QObject``'s signal directly to a
+    bare function with ``Qt.ConnectionType.QueuedConnection`` does NOT marshal
+    the call onto the GUI thread in this PySide build — with no ``QObject``
+    receiver, the "queued" delivery instead runs on the *emitting* (worker)
+    thread. The live-view worker's ``run()`` loop never returns to its own
+    thread's Qt event loop (a tight ``while not self._stop`` loop with
+    ``time.sleep()``), so such deliveries are never processed at all and the
+    canvas never repaints. Constructing this bridge on the GUI thread and
+    connecting ``frame_ready`` to its *bound-method* slot ensures delivery
+    reliably happens on the GUI thread, exactly like ``_RXBridge`` /
+    ``_TelemetryBridge`` / ``_WorkerBridge``.
+
+    Stakeholder-decided throttling: the avatar pose (``set_avatar_pose``)
+    updates on **every** frame the worker emits (full worker rate, ~9-12 Hz),
+    so the marker stays smooth. The background pixmap conversion
+    (``_bgr_ndarray_to_pixmap``) and ``set_background`` call are more
+    expensive, so they are throttled to roughly 3-4 fps by only running on
+    every ``BACKGROUND_THROTTLE_N``-th frame (frame-count modulo, not a
+    wall-clock gate — simplest option that meets the target given the
+    worker's steady ~9-12 Hz rate). A lower effective background rate under
+    load is acceptable; tests assert the ratio invariant, not an exact fps.
+    """
+    from PySide6.QtCore import QObject, Slot  # type: ignore[import-untyped]
+
+    class _LiveFrameBridge(QObject):
+        """Marshals live-view worker frames onto the Qt GUI main thread.
+
+        See :func:`build_live_frame_bridge` for the full rationale. In short:
+        a ``QueuedConnection`` to a bare function is delivered on the
+        *emitting* thread in this PySide build (the live-view worker never
+        returns to its own event loop, so such deliveries are never
+        processed — see ``testgui-playfield-not-live-updating.md``). This
+        bridge is constructed on the GUI thread, so its bound-method slot
+        runs on the GUI thread, exactly like the existing ``_WorkerBridge``.
+
+        Avatar pose updates on every frame (full worker rate); the
+        background ``QPixmap`` conversion + ``canvas_ctrl.set_background()``
+        call is throttled to ~3-4 fps so as not to burn GUI-thread time on
+        every ~80ms tick.
+        """
+
+        #: Convert+set the background every Nth frame (~9-12 Hz worker / 3 ≈ 3-4 fps).
+        BACKGROUND_THROTTLE_N = 3
+
+        def __init__(self, canvas_ctrl) -> None:
+            super().__init__()
+            self._canvas_ctrl = canvas_ctrl
+            self._frame_count = 0
+
+        @Slot(object, float, float, float, float, float)
+        def on_frame(
+            self,
+            bgr: object,
+            origin_x: float,
+            origin_y: float,
+            tx: float,
+            ty: float,
+            tyaw: float,
+        ) -> None:
+            """Main-thread slot: full-rate avatar, throttled background.
+
+            Called via ``QueuedConnection`` from the live-view worker
+            thread, but delivered on the GUI thread because this bridge is a
+            ``QObject`` constructed there. ``QPixmap`` must be constructed
+            here (GUI thread only).
+
+            Parameters
+            ----------
+            bgr:
+                BGR ndarray from the worker.
+            origin_x, origin_y:
+                A1 origin in cm from the deskewed frame — passed to
+                set_background.
+            tx, ty:
+                Tag-100 world position in cm.
+            tyaw:
+                Tag-100 world heading in radians.
+            """
+            # Avatar: every frame, full worker rate (~9-12 Hz) — stakeholder
+            # decision, keeps the marker smooth even though the background
+            # is throttled.
+            self._canvas_ctrl.set_avatar_pose(tx, ty, tyaw)
+
+            # Background: throttled subset (~3-4 fps target). Frame-count
+            # modulo is the simplest gate that meets the target at the
+            # worker's steady rate; a time.monotonic() gate would be an
+            # equally valid implementer's choice per the ticket.
+            self._frame_count += 1
+            if self._frame_count % self.BACKGROUND_THROTTLE_N != 0:
+                return
+
+            from robot_radio.testgui.operations import _bgr_ndarray_to_pixmap
+            pm = _bgr_ndarray_to_pixmap(bgr)
+            if pm is not None:
+                self._canvas_ctrl.set_background(
+                    pm, origin_x=origin_x, origin_y=origin_y
+                )
+
+    return _LiveFrameBridge(canvas_ctrl)
 
 
 def _build_main_window():  # type: ignore[return]
@@ -192,11 +312,15 @@ def _build_main_window():  # type: ignore[return]
     # rebind it without 'nonlocal' limitations across closures.
     # live_view_active: True while a _LiveViewWorker is running (Relay only).
     # live_worker / live_thread: references held for clean shutdown.
+    # live_bridge: the _LiveFrameBridge (ticket 063-009) kept alive for the
+    # lifetime of the frame_ready connection — a dropped reference would
+    # silently break delivery, exactly as documented for _WorkerBridge.
     _state: dict = {
         "transport": None,
         "live_view_active": False,
         "live_worker": None,
         "live_thread": None,
+        "live_bridge": None,
         "tour_worker": None,
         "tour_thread": None,
         "tour_bridge": None,
@@ -981,36 +1105,6 @@ def _build_main_window():  # type: ignore[return]
             _state["last_truth"] = (x_cm, y_cm, yaw_rad, _time.monotonic())
             _bridge.truth_ready.emit(x_cm, y_cm, yaw_rad)  # type: ignore[attr-defined]
 
-    def _on_live_frame(
-        bgr: object,
-        origin_x: float,
-        origin_y: float,
-        tx: float,
-        ty: float,
-        tyaw: float,
-    ) -> None:
-        """Main-thread slot: convert BGR ndarray to QPixmap and update the canvas.
-
-        Called via QueuedConnection from the live-view worker thread.
-        QPixmap must be constructed here (GUI thread only).
-
-        Parameters
-        ----------
-        bgr:
-            BGR ndarray from the worker.
-        origin_x, origin_y:
-            A1 origin in cm from the deskewed frame — passed to set_background.
-        tx, ty:
-            Tag-100 world position in cm.
-        tyaw:
-            Tag-100 world heading in radians.
-        """
-        from robot_radio.testgui.operations import _bgr_ndarray_to_pixmap
-        pm = _bgr_ndarray_to_pixmap(bgr)
-        if pm is not None:
-            canvas_ctrl.set_background(pm, origin_x=origin_x, origin_y=origin_y)
-        canvas_ctrl.set_avatar_pose(tx, ty, tyaw)
-
     def _stop_live_worker() -> None:
         """Stop the live-view worker and thread, then restore the static background.
 
@@ -1033,6 +1127,10 @@ def _build_main_window():  # type: ignore[return]
                 pass
         _state["live_worker"] = None
         _state["live_thread"] = None
+        # Drop the _LiveFrameBridge reference alongside the worker/thread
+        # (ticket 063-009) — nothing else holds it once the connection is
+        # torn down.
+        _state["live_bridge"] = None
         _state["live_view_active"] = False
         canvas_ctrl.restore_static_background()
 
@@ -1525,13 +1623,22 @@ def _build_main_window():  # type: ignore[return]
                 live_worker = build_live_view_worker()
                 live_thread = QThread()
                 live_worker.moveToThread(live_thread)
+                # Route frame_ready through a main-thread bridge (ticket
+                # 063-009), NOT a bare function: a QueuedConnection to a
+                # non-QObject callable is delivered on the *emitting*
+                # (worker) thread in this PySide build, and the worker's
+                # capture loop never returns to its own event loop to
+                # process it — see build_live_frame_bridge's docstring and
+                # testgui-playfield-not-live-updating.md.
+                live_bridge = build_live_frame_bridge(canvas_ctrl)
                 live_worker.frame_ready.connect(
-                    _on_live_frame, Qt.ConnectionType.QueuedConnection
+                    live_bridge.on_frame, Qt.ConnectionType.QueuedConnection
                 )
                 live_thread.started.connect(live_worker.run)
                 live_thread.start()
                 _state["live_worker"] = live_worker
                 _state["live_thread"] = live_thread
+                _state["live_bridge"] = live_bridge
                 _state["live_view_active"] = True
                 _append_log("[INFO] Live-view worker started (PLAYFIELD MODE)")
             except Exception as exc:

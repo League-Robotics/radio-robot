@@ -1,7 +1,7 @@
 ---
 id: '009'
 title: 'Live playfield: main-thread frame bridge with throttled background and full-rate avatar'
-status: open
+status: done
 use-cases:
 - SUC-011
 depends-on:
@@ -83,31 +83,31 @@ overlapping edits to `live_view.py`'s docstring and `_capture_and_emit`.
 
 ### Main-thread bridge
 
-- [ ] A new bridge class (e.g. `_LiveFrameBridge(QObject)`, following the
+- [x] A new bridge class (e.g. `_LiveFrameBridge(QObject)`, following the
       exact pattern documented on `_WorkerBridge`'s docstring) is created on
       the GUI thread in `_on_connect()`'s Relay branch, and its bound-method
       slot — not a bare function — is what `frame_ready` connects to.
-- [ ] `live_worker.frame_ready.connect(bridge.on_frame, Qt.ConnectionType.QueuedConnection)`
+- [x] `live_worker.frame_ready.connect(bridge.on_frame, Qt.ConnectionType.QueuedConnection)`
       replaces the direct `_on_live_frame` connection.
-- [ ] The bridge instance is kept alive in `_state` (e.g.
+- [x] The bridge instance is kept alive in `_state` (e.g.
       `_state["live_bridge"]`) for the lifetime of the connection — a dropped
       reference would silently break delivery, exactly as documented for
       `_WorkerBridge`.
-- [ ] `_stop_live_worker()` clears `_state["live_bridge"]` alongside the
+- [x] `_stop_live_worker()` clears `_state["live_bridge"]` alongside the
       existing `live_worker`/`live_thread` cleanup.
 
 ### Full-rate avatar, throttled background
 
-- [ ] The bridge's frame slot calls `canvas_ctrl.set_avatar_pose(tx, ty, tyaw)`
+- [x] The bridge's frame slot calls `canvas_ctrl.set_avatar_pose(tx, ty, tyaw)`
       on **every** invocation (every frame the worker emits).
-- [ ] The bridge's frame slot converts `bgr` to `QPixmap`
+- [x] The bridge's frame slot converts `bgr` to `QPixmap`
       (`_bgr_ndarray_to_pixmap`) and calls
       `canvas_ctrl.set_background(pm, origin_x=..., origin_y=...)` only on a
       throttled subset of invocations, targeting ~3–4 fps given the worker's
       ~9–12 Hz emit rate (e.g. update background on every 3rd frame, or
       time-gate on `time.monotonic()` elapsed since the last background
       update — implementer's choice, documented in a comment).
-- [ ] A background update rate below the 3–4 fps target (e.g. 1–2 fps under
+- [x] A background update rate below the 3–4 fps target (e.g. 1–2 fps under
       load) is acceptable and must not fail any test — do not assert an exact
       fps in tests; assert the *ratio* (avatar updates every frame,
       background updates less often) and that background updates are never
@@ -115,18 +115,18 @@ overlapping edits to `live_view.py`'s docstring and `_capture_and_emit`.
 
 ### No regressions
 
-- [ ] On relay connect, the canvas background visibly updates from the live
+- [x] On relay connect, the canvas background visibly updates from the live
       camera (previously verified broken; must now work) — verified via the
       headless test asserting `set_background` is actually invoked at least
       once across N simulated `frame_ready` emissions.
-- [ ] On relay disconnect, `restore_static_background()` is still called and
+- [x] On relay disconnect, `restore_static_background()` is still called and
       the live worker/thread/bridge are all torn down (extend the existing
       `_stop_live_worker()` coverage).
-- [ ] Sim and Serial transports still do not start any live-view worker or
+- [x] Sim and Serial transports still do not start any live-view worker or
       bridge (unchanged from ticket 003 / SUC-004).
-- [ ] Existing `tests/testgui/test_live_view.py` and `test_canvas.py` tests
+- [x] Existing `tests/testgui/test_live_view.py` and `test_canvas.py` tests
       pass unchanged.
-- [ ] `_LiveViewWorker` in `live_view.py` is not modified (loop rate, signal
+- [x] `_LiveViewWorker` in `live_view.py` is not modified (loop rate, signal
       signature, and last-known-tag-pose semantics all stay exactly as
       delivered in ticket 003).
 
