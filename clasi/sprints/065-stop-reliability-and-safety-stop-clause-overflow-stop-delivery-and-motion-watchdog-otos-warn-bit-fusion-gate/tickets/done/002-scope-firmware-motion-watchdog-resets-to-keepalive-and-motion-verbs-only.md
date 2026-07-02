@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Scope firmware motion-watchdog resets to keepalive and motion verbs only
-status: in-progress
+status: done
 use-cases:
 - SUC-003
 depends-on:
