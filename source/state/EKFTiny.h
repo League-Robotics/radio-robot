@@ -59,8 +59,25 @@ public:
     //   r_otos_xy — OTOS measurement noise variance for x and y (mm^2)
     //   r_otos_v  — OTOS measurement noise variance for linear velocity (mm/s)^2
     //   r_enc_v   — encoder measurement noise variance for linear velocity (mm/s)^2
+    //
+    // BOOT-ONLY: also resets state and covariance (_ekf.x[]/_ekf.P[]) to zero.
+    // Not safe to call mid-mission — doing so would teleport the fused pose
+    // back to the origin. Its only caller is Drive's constructor, where
+    // x[]/P[] are already zero and the reset is a no-op in effect. A live
+    // runtime noise update (e.g. from a SET command) must use setNoise()
+    // instead (Sprint 067, Ticket 003).
     void init(float q_xy, float q_theta, float q_v, float q_omega,
               float r_otos_xy, float r_otos_v, float r_enc_v);
+
+    // Update noise parameters ONLY — does NOT touch _ekf.x[], _ekf.P[], or
+    // the rejection-streak counters. Safe to call at any time, including
+    // mid-mission, to live-tune the filter's noise model without disturbing
+    // its current pose/velocity belief or gate-recovery state.
+    //   q_xy/q_theta/q_v/q_omega/r_otos_xy/r_otos_v/r_enc_v — same meaning
+    //   as init()'s parameters of the same name.
+    // Sprint 067, Ticket 003.
+    void setNoise(float q_xy, float q_theta, float q_v, float q_omega,
+                  float r_otos_xy, float r_otos_v, float r_enc_v);
 
     // Overwrite state with a known pose; zeroes v and omega; sets sane diagonal
     // P-prior (100 mm^2, 100 mm^2, (5 deg)^2, v-vars) instead of zeroing P.

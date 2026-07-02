@@ -104,6 +104,16 @@ public:
                  float r_otos_xy, float r_otos_v, float r_enc_v,
                  float r_otos_theta);
 
+    // Live noise update — forwards to EKFTiny::setNoise() (does NOT reset
+    // EKF state/covariance) and refreshes Odometry's own cached
+    // _rOtosTheta (read by correctEKF() when fusing OTOS heading). Safe to
+    // call at any time, including mid-mission, e.g. from a "drive"-annotated
+    // SET of an EKF noise key. Parameters match initEKF()'s of the same name.
+    // Sprint 067, Ticket 003.
+    void setNoise(float q_xy, float q_theta, float q_v, float q_omega,
+                  float r_otos_xy, float r_otos_v, float r_enc_v,
+                  float r_otos_theta);
+
     // EKF correction — fuse OTOS position, heading, and velocity measurements
     // into the 5-state EKF.
     // Call order: updatePosition → updateHeading → updateVelocity(OTOS).

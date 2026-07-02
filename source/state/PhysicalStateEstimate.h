@@ -60,6 +60,12 @@ public:
                  float r_otos_xy, float r_otos_v, float r_enc_v,
                  float r_otos_theta);
 
+    // Live noise update — forwards to Odometry::setNoise() (does NOT reset
+    // EKF state/covariance). Safe to call mid-mission. Sprint 067, Ticket 003.
+    void setNoise(float q_xy, float q_theta, float q_v, float q_omega,
+                  float r_otos_xy, float r_otos_v, float r_enc_v,
+                  float r_otos_theta);
+
     // Bind IOdometer* and HardwareState* for the OTOS command context.
     // (Passed through to _odometry.setCtx(); also stored for OtosCommands
     // wiring in T2.)

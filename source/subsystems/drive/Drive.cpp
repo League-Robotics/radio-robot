@@ -431,6 +431,20 @@ void Drive::configure(const msg::DrivetrainConfig& cfg)
         // toDriveConfig projection wires them in (ticket 005 / Phase 3).
         _mc.updateVelGains(_robCfg);
     }
+
+    // Push a live EKF noise update (does NOT reset fused pose/covariance —
+    // see EKFTiny::setNoise()). Sourced from the live _robCfg, which already
+    // reflects the just-committed SET, not the `cfg` parameter above (which
+    // only carries the eleven msg::DrivetrainConfig-projected fields).
+    // Fires whenever any "drive"-annotated key is SET; today that's only
+    // ekfRHead (ekfROtosTheta), but the signature already accepts the seven
+    // not-yet-registered EKF noise fields so a future sprint can expose them
+    // via the registry with no further plumbing changes here.
+    // Sprint 067, Ticket 003.
+    _est.setNoise(_robCfg.ekfQxy, _robCfg.ekfQtheta,
+                  _robCfg.ekfQv,   _robCfg.ekfQomega,
+                  _robCfg.ekfROtosXy, _robCfg.ekfROtosV,
+                  _robCfg.ekfREncV,   _robCfg.ekfROtosTheta);
 }
 
 // ---------------------------------------------------------------------------

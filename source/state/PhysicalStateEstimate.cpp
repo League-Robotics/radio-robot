@@ -45,6 +45,13 @@ void PhysicalStateEstimate::initEKF(
                       r_otos_xy, r_otos_v, r_enc_v, r_otos_theta);
 }
 
+void PhysicalStateEstimate::setNoise(
+        float q_xy, float q_theta, float q_v, float q_omega,
+        float r_otos_xy, float r_otos_v, float r_enc_v, float r_otos_theta) {
+    _odometry.setNoise(q_xy, q_theta, q_v, q_omega,
+                       r_otos_xy, r_otos_v, r_enc_v, r_otos_theta);
+}
+
 void PhysicalStateEstimate::setCtx(IOdometer* otos,
                                    const HardwareState* hwState) {
     _odometry.setCtx(otos, hwState);

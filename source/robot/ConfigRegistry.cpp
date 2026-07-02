@@ -102,7 +102,7 @@ const ConfigEntry kRegistry[] = {
     CFG_F("odomOffY",     odomOffY),
     CFG_F("odomYaw",      odomYawDeg),
     // EKF heading fusion noise (sprint 024-004)
-    CFG_F("ekfRHead",     ekfROtosTheta),
+    CFG_F_SS("ekfRHead",  ekfROtosTheta, "drive"),
 };
 
 #undef CFG_F
