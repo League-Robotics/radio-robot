@@ -1,6 +1,7 @@
 ---
 status: pending
 severity: medium
+sprint: '067'
 ---
 
 # SET silently fails to propagate unannotated config keys to the Planner — rotSlip (and others) frozen at boot-time defaults

@@ -1,6 +1,7 @@
 ---
 status: pending
 severity: high
+sprint: 069
 ---
 
 # Sim error model: all error parameters runtime-settable, modeled in the plant, and fittable to real hardware by regression

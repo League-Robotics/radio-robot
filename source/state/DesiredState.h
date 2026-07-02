@@ -18,6 +18,7 @@
 // TargetState is a using-alias for DesiredState so that existing function
 // signatures (void foo(TargetState& t)) continue to compile without edits.
 // ---------------------------------------------------------------------------
+// FIXME remove units from all names. 
 struct DesiredState {
     // ----- BVC profiled live setpoints (new in 047-001) -----
     BodyTwist3 bodyTwist    = {0.0f, 0.0f, 0.0f};  // profiled live setpoint

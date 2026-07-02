@@ -24,7 +24,7 @@ struct OutputState {
     // ----- Port outputs and dirty flags -----
     bool     digitalOut[4]   = {};
     int16_t  analogOut[4]    = {};
-    bool     digitalDirty[4] = {};
+    bool     digitalDirty[4] = {}; // FIXME need comments about what dirty means
     bool     analogDirty[4]  = {};
 };
 

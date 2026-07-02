@@ -1,5 +1,6 @@
 ---
 status: pending
+sprint: 069
 ---
 
 # Expose the simulator's existing error-model knobs (scale error, drift) in the TestGUI Sim Errors panel

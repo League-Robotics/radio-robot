@@ -18,7 +18,7 @@
 // Mirrors ArgType in CommandTypes.h but belongs to the schema layer, not the
 // runtime tagged-union layer.
 // ---------------------------------------------------------------------------
-enum class ArgKind : uint8_t { INT, FLOAT, STR };
+enum class ArgKind : uint8_t { INT, FLOAT, STR }; // FIXME duplicate of CommandTypes::ArgType?
 
 // ---------------------------------------------------------------------------
 // ArgDef — declaration of one positional argument slot.

@@ -1,6 +1,7 @@
 ---
 status: pending
 severity: medium
+sprint: 068
 ---
 
 # TLM must carry three world poses: encoder-only, OTOS, and EKF — add the missing encoder-only pose

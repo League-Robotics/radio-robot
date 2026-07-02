@@ -20,7 +20,7 @@
 //   EST fuse  x=.. y=.. h=.. vx=.. vy=.. w=.. age=.. v=1
 // ---------------------------------------------------------------------------
 struct EstimateDump {
-    const char* source;   // "enc", "otos", "fuse"
+    const char* source;   // "enc", "otos", "fuse" FIXME should be an enum. 
     Pose2D      pose;     // x mm, y mm, h rad
     BodyTwist3  twist;    // vx mm/s, vy mm/s, omega rad/s
     uint32_t    ageMs;    // now_ms - stamp.lastUpdMs; UINT32_MAX if !valid

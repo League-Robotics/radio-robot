@@ -29,6 +29,7 @@ struct RobotConfig {
     float mmPerDegR;
 
     // Feed-forward and motor scale factors
+    // 
     float kFF;
     float kScaleLF;
     float kScaleLB;
@@ -40,7 +41,7 @@ struct RobotConfig {
     float kAdjGain;
 
     // Geometry
-    float trackwidthMm;
+    float trackwidthMm; // FIXME should not have units in name
 
     // Wheel saturation ceiling and steering headroom (docs/kinematics-model.md §1.7).
     // Effective ceiling = vWheelMax - steerHeadroom.
@@ -56,7 +57,7 @@ struct RobotConfig {
     float velKp;          // proportional gain for per-wheel velocity loop
     float velKi;          // integral gain for per-wheel velocity loop
     float velKff;         // feed-forward coefficient: FF = velKff * |setpoint|
-    float minWheelMms;    // deadband: integrator frozen below this |speed| (default 20.0 mm/s)
+    float minWheelMms;    // deadband: integrator frozen below this |speed| (default 20.0 mm/s) FIXME should not have units in name
     float velIMax;        // integrator clamp (PWM%, ±). SET "vel.iMax". Bounds windup.
     float velKaw;         // back-calc anti-windup gain (1/s). SET "vel.kAw". Bleeds the
                           // integrator while the output is saturated so a held wheel
@@ -111,7 +112,7 @@ struct RobotConfig {
     float otosAngularScale;     // OTOS angular calibration multiplier (default 0.987)
     float rotationGainPos;      // CCW turn gain (default 1.0)
     float rotationGainNeg;      // CW turn gain (default 1.17)
-    float rotationOffsetDeg;    // CCW turn offset, degrees (default 0.0)
+    float rotationOffsetDeg;    // CCW turn offset, degrees (default 0.0) FIXME should not have units in name
     float rotationOffsetDegNeg; // CW turn offset, degrees (default 0.0)
     float rotationalSlip;       // body-rotation efficiency (default 0.74)
     float odomOffX;             // OTOS X mounting offset, mm (default 0.0)
@@ -120,8 +121,9 @@ struct RobotConfig {
     bool  odomUpsideDown;       // OTOS mounted upside-down (default false)
 
     // Go-to tolerances (legacy, retained for backward compatibility)
-    float turnThresholdMm;
-    float doneTolMm;
+     // FIXME Eliminate legacies 
+    float turnThresholdMm;  // FIXME should not have units in name
+    float doneTolMm;  // FIXME should not have units in name
 
     // Pose-control tunables (Sprint 011)
     // aMax: acceleration limit, mm/s²
@@ -131,7 +133,7 @@ struct RobotConfig {
     float aMax;
     float aDecel;
     float turnInPlaceGate;
-    float arriveTolMm;
+    float arriveTolMm; // FIXME should not have units in name
 
     // Body motion limits (Sprint 017 — BodyVelocityController).
     // vBodyMax:      body forward speed ceiling, mm/s          (default 400.0)
@@ -164,7 +166,7 @@ struct RobotConfig {
     int32_t controlPeriodMs;
 
     // Telemetry streaming period in ms (0 = off). Set via STREAM command.
-    int32_t tlmPeriodMs;
+    int32_t tlmPeriodMs; //FIXME should not have units in name
 
     // Telemetry field-subscription bitmask. Set via STREAM fields=...
     // Bit 0 = enc, Bit 1 = pose, Bit 2 = vel, Bit 3 = line, Bit 4 = color.
@@ -180,7 +182,7 @@ struct RobotConfig {
     // lagLineMs  : 4-channel line sensor          (default  50 ms)
     // lagColorMs : RGBC color sensor              (default 100 ms)
     // lagPortsMs : general-purpose I/O ports      (default  50 ms)
-    uint32_t lagOtosMs;
+    uint32_t lagOtosMs; // FIXME Remove units, replace with 'Time'
     uint32_t lagLineMs;
     uint32_t lagColorMs;
     uint32_t lagPortsMs;
@@ -200,7 +202,7 @@ struct RobotConfig {
     uint8_t drivetrain;
 
     // Mecanum geometry (mm). Placeholder defaults — MEASURE on the bench.
-    float halfTrackMm;       // half of wheel track width (default 63.0f)
+    float halfTrackMm;       // half of wheel track width (default 63.0f) FIXME no units in names
     float halfWheelbaseMm;   // half of wheelbase (default 63.0f)
 
     // Per-wheel encoder calibration (mecanum, mm per degree of motor rotation).
