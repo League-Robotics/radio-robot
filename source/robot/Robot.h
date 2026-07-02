@@ -249,6 +249,19 @@ struct Robot {
     uint32_t _otosInvalidStartMs = 0;
     bool     _otosLostEmitted    = false;
 
+    // ---- OTOS WARNING-bit persistence gate (CR-06 — 065-006) ----
+    // Restores the transient-vs-persistent distinction the 2026-06-17
+    // `healthy = poseOk` change lost: a READABLE-but-WARNING reading (bench,
+    // lifted, freshly-placed robot) is fused through <= kOtosWarnPersistK
+    // consecutive warn ticks (transient), then blocked until
+    // kOtosCleanReadmitN consecutive clean ticks re-admit it.  See
+    // architecture-update.md Step 4-5 item 6 / Design Rationale Decision 5.
+    uint8_t _otosWarnStreak    = 0;
+    uint8_t _otosCleanStreak   = 0;
+    bool    _otosFusionBlocked = false;
+    static constexpr uint8_t kOtosWarnPersistK  = 3;
+    static constexpr uint8_t kOtosCleanReadmitN = 5;
+
 private:
     // Stable storage for command contexts; pointers into these are placed in
     // CommandDescriptors, which must outlive the CommandProcessor.

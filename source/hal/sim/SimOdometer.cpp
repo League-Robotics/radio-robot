@@ -86,6 +86,19 @@ void SimOdometer::setInjectedPose(float x, float y, float h) {
 
 void SimOdometer::tick(float velL, float velR, float tw, uint32_t dt_ms) {
 #ifdef HOST_BUILD
+    if (_warnOptical) {
+        // WARN (065-006): model "frozen pose, near-zero velocity" — skip the
+        // odometry-accumulator update entirely (pose stays pinned at
+        // whatever _odomX/Y/H held when the warn condition began) and zero
+        // the velocity/accel outputs.  Encoders (driven independently by
+        // true wheel velocity, not this model) are unaffected.
+        _velV     = 0.0f;
+        _velOmega = 0.0f;
+        _accAx    = 0.0f;
+        _accAy    = 0.0f;
+        _prevVelV = 0.0f;
+        return;
+    }
     if (!_useSimModel || tw <= 0.0f) return;
     float dt_s    = static_cast<float>(dt_ms) / 1000.0f;
     float dC      = (velL + velR) * 0.5f * dt_s;

@@ -879,6 +879,21 @@ void sim_set_otos_read_failure(void* h, int fail)
     static_cast<SimHandle*>(h)->hal.simOdometer().setReadFailure(fail != 0);
 }
 
+// ---- OTOS WARN-bit-set-but-readable injection (065-006) ----
+
+// Inject / clear a persistent OTOS WARNING status (readStatus() returns
+// out=0x02/readable=true; readTransformed/readVelocityTransformed stay
+// readable but the pose accumulator freezes and velocity/accel zero).
+// Mirrors sim_set_otos_read_failure exactly, one tier up (readable-but-
+// degraded rather than unreadable). Drive::tickUpdate's STEP 5 OTOS
+// correction (the live ordered-tick fusion path) and Robot::otosCorrect()
+// both gate `addOtosObservation` on this via their own warn-streak
+// persistence counters.
+void sim_set_otos_warn(void* h, int on)
+{
+    static_cast<SimHandle*>(h)->hal.simOdometer().setWarnOptical(on != 0);
+}
+
 // Read fusedV from fused estimate (EKF body-frame linear speed, mm/s).
 // 047-002/060-004/060-005: drive2.state() is the authoritative EKF output.
 float sim_get_fused_v(void* h)

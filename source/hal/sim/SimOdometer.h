@@ -49,6 +49,10 @@ public:
     bool readStatus(uint8_t& out) const override {
         // LIFT (robot lifted) → INVALID status (0xFF). Read failure → failure too.
         if (_lift || _readFailure) { out = 0xFF; return false; }
+        // WARN (readable-but-degraded, 065-006): warnOpticalTracking (bit 1),
+        // matching the real OTOS chip's STATUS register — the reading is
+        // still readable (return true) but callers gate fusion on it.
+        if (_warnOptical) { out = 0x02; return true; }
         out = 0;
         return true;
     }
@@ -100,6 +104,12 @@ public:
     void setYawNoise(float sigma)         { _yawNoiseSigma = sigma; }
     // OTOS LIFT status (robot lifted; sensor returns INVALID).
     void setLift(bool on)                 { _lift = on; }
+    // OTOS WARN status (065-006): readable-but-degraded (e.g. persistently
+    // lifted / on the stand / freshly placed — warnOpticalTracking). Mirrors
+    // setLift's shape but stays READABLE (readStatus returns true, out=0x02)
+    // instead of INVALID; tick() freezes the pose accumulator and zeros
+    // velocity/accel while set, modeling "frozen pose, near-zero velocity".
+    void setWarnOptical(bool on)          { _warnOptical = on; }
 
     // Deterministic drift error: accumulated offset added per tick.
     // A fresh SimOdometer has zero drift (perfect sensor).
@@ -131,6 +141,7 @@ private:
     float   _injectedH     = 0.0f;
     bool    _readFailure   = false;
     bool    _lift          = false;
+    bool    _warnOptical   = false;
     int16_t _rawX          = 0;
     int16_t _rawY          = 0;
     int16_t _rawH          = 0;

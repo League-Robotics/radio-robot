@@ -150,6 +150,28 @@ private:
     uint32_t _lastOtosMs = 0;
     bool     _otosEverReady = false;
 
+    // ---- OTOS WARNING-bit persistence gate (CR-06 — 065-006) ----
+    // This is the LIVE ordered-tick OTOS-fusion path (STEP 5 of tickUpdate,
+    // exercised by both real firmware and the sim via loopTickOnce ->
+    // drive.tickUpdate); Robot::otosCorrect() carries the same gate for
+    // documentation/API parity but has no caller post-060 cutover (dead
+    // code -- the legacy loop was deleted in 060-005). Mirrors
+    // Robot::otosCorrect()'s state machine and constants exactly: fuse
+    // through <= kOtosWarnPersistK consecutive WARNING ticks (transient),
+    // block once the streak persists, re-admit after kOtosCleanReadmitN
+    // consecutive clean ticks. See architecture-update.md Step 4-5 item 6 /
+    // Design Rationale Decision 5.
+    uint8_t _otosWarnStreak    = 0;
+    uint8_t _otosCleanStreak   = 0;
+    bool    _otosFusionBlocked = false;
+    static constexpr uint8_t kOtosWarnPersistK  = 3;
+    static constexpr uint8_t kOtosCleanReadmitN = 5;
+
+    // Update the WARNING-bit persistence gate for one tick's readStatus()
+    // result. warnBit: true when the reading is degraded (a WARNING bit is
+    // set) or the status read itself failed; false for a fully clean tick.
+    void _updateOtosFusionGate(bool warnBit);
+
     // Per-wheel outlier-filter hold threshold (same as kFilterRejectStreakThreshold).
     static constexpr uint8_t kFilterRejectStreakThreshold = 3;
 
