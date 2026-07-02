@@ -216,7 +216,7 @@ static void handleDbgIrqguard(const ArgList& args, const char* corrId,
                                    corrId, replyFn, replyCtx);
         return;
     }
-    if (args.count >= 1) ctx.busDiag->setIrqGuard(args.args[0].ival != 0);
+    if (args.suppliedCount >= 1) ctx.busDiag->setIrqGuard(args.args[0].ival != 0);
     char msg[24];
     snprintf(msg, sizeof(msg), "irqguard=%d", ctx.busDiag->irqGuard() ? 1 : 0);
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "dbg", msg,
@@ -251,6 +251,7 @@ static ParseResult parseDbgWedge(const char* const* tokens, int ntokens,
         res.args.args[i].fval = 0.0f;
         res.args.args[i].sval[0] = '\0';
     }
+    res.args.suppliedCount = res.args.count;
     return res;
 }
 
@@ -354,6 +355,7 @@ static ParseResult parseDbgOtosBench(const char* const* tokens, int ntokens,
         ++extra;
     }
     if (extra > 0) res.args.count = base + extra;
+    res.args.suppliedCount = res.args.count;
 
     return res;
 }
@@ -576,6 +578,7 @@ static ParseResult parseI2cw(const char* const* tokens, int ntokens,
         res.args.args[i].ival = 0;
         res.args.args[i].fval = 0.0f;
     }
+    res.args.suppliedCount = res.args.count;
     return res;
 }
 
@@ -643,6 +646,7 @@ static ParseResult parseI2cr(const char* const* tokens, int ntokens,
         res.args.args[i].ival = 0;
         res.args.args[i].fval = 0.0f;
     }
+    res.args.suppliedCount = res.args.count;
     return res;
 }
 

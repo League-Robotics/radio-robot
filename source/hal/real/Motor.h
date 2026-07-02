@@ -104,6 +104,27 @@ public:
     void    resetEncoder() override;
 
     /**
+     * rebaselineSoft — software-only encoder rebaseline (064-003).
+     *
+     * Folds the already-tick-cached _lastPositionMm (obtained by the normal
+     * per-tick 0x46 read, NOT a new atomic burst) back into raw tenths-of
+     * -degrees and adds it to _encOffset — issues NO I2C transaction — then
+     * zeros the cache exactly as resetEncoder()'s success path already does.
+     * Called by MotorController::resetEncoderAccumulators() instead of
+     * resetEncoder() whenever the drivetrain is not at rest, so the atomic
+     * read burst (which latches the Nezha readback while the wheels are
+     * rotating) is never fired mid-motion.
+     */
+    void    rebaselineSoft() override;
+
+    // Cumulative reset-kind counters (064-003), incremented by resetEncoder()
+    // / rebaselineSoft() respectively. Testability only (Motor.cpp is not
+    // reachable from HOST_BUILD; verified by code review + the SimMotor
+    // mirror's parallel counters).
+    uint32_t hardResetCount() const override { return _hardResetCount; }
+    uint32_t softResetCount() const override { return _softResetCount; }
+
+    /**
      * requestEncoder — split-phase encoder I/O, phase 1.
      *
      * Issues the 0x46 write command and returns immediately (no busy-wait,
@@ -111,6 +132,11 @@ public:
      * elapses before calling collectEncoder() — the cooperative loop's idle
      * sleep provides this guarantee. Only one wheel's request may be in
      * flight at a time; the LoopScheduler alternates wheels across ticks.
+     *
+     * (064-005) Caches the write's I2C return code in _pendingEncRequestOk.
+     * collectEncoder() folds this into its own failure decision: a failed
+     * phase-1 write means the phase-2 response — even if its own read()
+     * reports OK — is for a stale prior request, not this cycle's.
      */
     void requestEncoder() override;
 
@@ -122,6 +148,13 @@ public:
      * No busy-wait, no fiber_sleep. The caller is responsible for satisfying
      * the vendor's required inter-transaction delay (≥ one loop period,
      * supplied by the cooperative scheduler's idle sleep).
+     *
+     * (064-005) On I2C failure (this read() call OR the preceding
+     * requestEncoder() write reported non-OK) returns the last known-good
+     * value (_lastGoodRawEnc) instead of computing from a zeroed response
+     * buffer — a zeroed buffer would read as `0 - _encOffset`, a large
+     * fabricated jump (CR-03,
+     * clasi/issues/encoder-integrity-i2c-failures-and-outlier-filter-recovery.md).
      */
     int32_t collectEncoder() const override;
 
@@ -245,6 +278,11 @@ public:
      *
      * Use for: resetEncoder(), any one-off read outside the control tick.
      * Cost: ~8 ms (two 4ms delays).
+     *
+     * (064-005) On I2C failure (either the write or the read reports
+     * non-OK) returns the last known-good value (_lastGoodRawEnc) instead
+     * of computing from a zeroed response buffer (CR-03). readEncoderMmFAtomic()
+     * delegates to this method, so it is protected automatically.
      */
     int32_t readEncoderAtomic() const;
 
@@ -266,6 +304,10 @@ public:
      *
      * Use for: controlCollectSplitPhase() — both-encoder read every tick.
      * Do NOT use for one-off reads (use readEncoderMmFAtomic instead).
+     *
+     * (064-005) On I2C failure (either the write or the read reports
+     * non-OK) returns the last known-good value (_lastGoodRawEnc, converted
+     * to mm) instead of computing from a zeroed response buffer (CR-03).
      */
     float readEncoderMmFSettle(const RobotConfig& cfg) const override;
 
@@ -339,6 +381,30 @@ private:
 
     // Software encoder offset (tenths of degrees), zeroed by resetEncoder().
     mutable int32_t _encOffset;
+
+    // Cumulative reset-kind counters (064-003): resetEncoder() increments
+    // _hardResetCount; rebaselineSoft() increments _softResetCount. Exposed
+    // via hardResetCount()/softResetCount() for testability.
+    uint32_t _hardResetCount = 0;
+    uint32_t _softResetCount = 0;
+
+    // (064-005) Last known-good encoder read: raw tenths-of-degrees, offset
+    // -applied — the SAME domain collectEncoder()/readEncoderAtomic() already
+    // return. Updated on every successful I2C read; returned unchanged on
+    // failure so a dropped I2C transaction cannot fabricate a position jump
+    // (CR-03). Re-zeroed by resetEncoder()/rebaselineSoft() alongside
+    // _lastPositionMm so a failed read immediately after a reset holds the
+    // fresh (~0) baseline rather than a stale pre-reset value. Starts at 0,
+    // matching the pre-first-read state.
+    mutable int32_t _lastGoodRawEnc = 0;
+
+    // (064-005) Cached I2C write-status of the most recent requestEncoder()
+    // call (split-phase phase 1). collectEncoder() (phase 2) combines this
+    // with its own read() status: a failed phase-1 write means the phase-2
+    // response, even if its own read() reports OK, answers a stale prior
+    // request. Defaults to true (no failure assumed before the first
+    // requestEncoder() call).
+    bool _pendingEncRequestOk = true;
 
     // Write an 8-byte motor command to the chip.
     void    writeMotorCmd(uint8_t direction, uint8_t speed);

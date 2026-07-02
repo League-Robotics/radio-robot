@@ -11,7 +11,7 @@ The C ABI function signature:
         kv_keys,  kv_vals,  nkv,
         def_names, def_kinds, def_ranged, def_lo, def_hi, ndefs,
         min_tokens, variadic, pack_kv,
-        out_ok, out_count,
+        out_ok, out_count, out_supplied_count,
         out_arg_types, out_arg_ivals, out_arg_fvals, out_arg_svals,
         err_detail_buf)
 
@@ -64,7 +64,8 @@ def _load_lib():
         ctypes.c_int,
         ctypes.c_int,
         ctypes.c_char_p,
-        # out_ok, out_count
+        # out_ok, out_count, out_supplied_count
+        ctypes.POINTER(ctypes.c_int),
         ctypes.POINTER(ctypes.c_int),
         ctypes.POINTER(ctypes.c_int),
         # out_arg_types, out_arg_ivals, out_arg_fvals, out_arg_svals
@@ -116,8 +117,9 @@ def call_parse_schema(tokens, kvs=None, defs=None,
     """
     Call sim_parse_schema and return a dict:
         {
-          'ok':     bool,
-          'count':  int,
+          'ok':             bool,
+          'count':          int,
+          'supplied_count': int,  # positional slots actually supplied (064-001)
           'args':   [{'type':int, 'ival':int, 'fval':float, 'sval':str}, ...],
           'detail': str | None   # error detail when not ok
         }
@@ -140,8 +142,9 @@ def call_parse_schema(tokens, kvs=None, defs=None,
     dlo_arr  = _int_array([d.lo for d in defs]) if ndefs else (ctypes.c_int * 1)()
     dhi_arr  = _int_array([d.hi for d in defs]) if ndefs else (ctypes.c_int * 1)()
 
-    out_ok    = ctypes.c_int(0)
-    out_count = ctypes.c_int(0)
+    out_ok             = ctypes.c_int(0)
+    out_count          = ctypes.c_int(0)
+    out_supplied_count = ctypes.c_int(0)
     out_types = (ctypes.c_int   * MAX_ARGS)()
     out_ivals = (ctypes.c_int   * MAX_ARGS)()
     out_fvals = (ctypes.c_float * MAX_ARGS)()
@@ -155,12 +158,14 @@ def call_parse_schema(tokens, kvs=None, defs=None,
         min_tokens, 1 if variadic else 0,
         pack_kv.encode() if pack_kv else None,
         ctypes.byref(out_ok), ctypes.byref(out_count),
+        ctypes.byref(out_supplied_count),
         out_types, out_ivals, out_fvals, out_svals,
         err_buf,
     )
 
-    ok    = (out_ok.value == 1)
-    count = out_count.value
+    ok             = (out_ok.value == 1)
+    count          = out_count.value
+    supplied_count = out_supplied_count.value
     args  = []
     for i in range(count):
         slot = out_svals.raw[i * _STR_SLOT: i * _STR_SLOT + _STR_SLOT]
@@ -178,7 +183,13 @@ def call_parse_schema(tokens, kvs=None, defs=None,
     detail_str = detail_raw[:nul].decode(errors='replace') if nul >= 0 else ''
     detail = detail_str if detail_str else None
 
-    return {'ok': ok, 'count': count, 'args': args, 'detail': detail}
+    return {
+        'ok': ok,
+        'count': count,
+        'supplied_count': supplied_count,
+        'args': args,
+        'detail': detail,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -500,3 +511,94 @@ class TestMixed:
         r = call_parse_schema(['999', '1.5'], defs=defs, min_tokens=2)
         assert r['ok'] is False
         assert r['detail'] == 'count'
+
+
+# ---------------------------------------------------------------------------
+# Tests — suppliedCount (064-001: query-mutates-state ArgSchema fix)
+#
+# Root cause: parseSchema()'s positional path always fills every declared
+# ArgDef slot (atoi(nullptr)==0 when a token is omitted), so `count` is
+# always == ndefs regardless of how many tokens were actually supplied.
+# suppliedCount is the new field that distinguishes "token omitted" from
+# "token supplied, defaulted value happens to match." These tests use a
+# schema shaped exactly like dbgIrqguardSchema (ndefs=1, minTokens=0,
+# ranged=false) — the shape that exposed the defect in DBG IRQGUARD/RF/OL/OA.
+# ---------------------------------------------------------------------------
+
+class TestSuppliedCount:
+    def test_zero_tokens_supplied_count_zero(self):
+        """dbgIrqguardSchema-shaped: bare query (0 tokens) -> suppliedCount=0."""
+        defs = [ArgDef('enable', 0, ranged=False)]
+        r = call_parse_schema([], defs=defs, min_tokens=0)
+        assert r['ok'] is True
+        assert r['count'] == 1            # slot still filled (defaulted)
+        assert r['supplied_count'] == 0    # but nothing was actually supplied
+
+    def test_one_token_supplied_count_one(self):
+        """dbgIrqguardSchema-shaped: one token supplied -> suppliedCount=1."""
+        defs = [ArgDef('enable', 0, ranged=False)]
+        r = call_parse_schema(['1'], defs=defs, min_tokens=0)
+        assert r['ok'] is True
+        assert r['count'] == 1
+        assert r['supplied_count'] == 1
+        assert r['args'][0]['ival'] == 1
+
+    def test_explicit_zero_vs_omitted_same_ival_different_supplied_count(self):
+        """
+        This is the direct regression test for the root cause: an explicit
+        "0" token and an omitted token both parse to ival==0 (atoi("0")==0
+        and atoi(nullptr)==0 are indistinguishable by value), but they MUST
+        differ in suppliedCount so a handler can tell them apart.
+        """
+        defs = [ArgDef('enable', 0, ranged=False)]
+
+        omitted = call_parse_schema([], defs=defs, min_tokens=0)
+        explicit_zero = call_parse_schema(['0'], defs=defs, min_tokens=0)
+
+        assert omitted['args'][0]['ival'] == 0
+        assert explicit_zero['args'][0]['ival'] == 0
+        # Same defaulted/supplied value...
+        assert omitted['args'][0]['ival'] == explicit_zero['args'][0]['ival']
+        # ...but suppliedCount tells them apart.
+        assert omitted['supplied_count'] == 0
+        assert explicit_zero['supplied_count'] == 1
+
+    def test_two_optional_args_partial_supply(self):
+        """Two positional defs, only the first token supplied."""
+        defs = [ArgDef('a', 0, ranged=False), ArgDef('b', 0, ranged=False)]
+        r = call_parse_schema(['7'], defs=defs, min_tokens=0)
+        assert r['ok'] is True
+        assert r['count'] == 2
+        assert r['supplied_count'] == 1
+
+    def test_extra_tokens_supplied_count_capped_at_ndefs(self):
+        """More tokens than ndefs: suppliedCount caps at ndefs, like count."""
+        defs = [ArgDef('a', 0, ranged=False)]
+        r = call_parse_schema(['1', '2', '3'], defs=defs, min_tokens=0)
+        assert r['ok'] is True
+        assert r['count'] == 1
+        assert r['supplied_count'] == 1
+
+    def test_no_arg_schema_supplied_count_zero(self):
+        """ndefs=0: supplied_count is always 0, matching count."""
+        r = call_parse_schema([], defs=[], min_tokens=0, variadic=False)
+        assert r['ok'] is True
+        assert r['count'] == 0
+        assert r['supplied_count'] == 0
+
+    def test_variadic_supplied_count_equals_count(self):
+        """Variadic path: suppliedCount already equals count (no behavior change)."""
+        r = call_parse_schema(['a', 'b', 'c'], variadic=True, min_tokens=0)
+        assert r['ok'] is True
+        assert r['supplied_count'] == r['count'] == 3
+
+    def test_pack_kv_does_not_inflate_supplied_count(self):
+        """packKv's trailing appended arg is not a positional token; it must
+        not be counted in suppliedCount even though it raises `count`."""
+        defs = [ArgDef('l', 0, ranged=False)]
+        kvs = [('sensor', 'line0:ge:128')]
+        r = call_parse_schema([], kvs=kvs, defs=defs,
+                              min_tokens=0, pack_kv='sensor')
+        assert r['ok'] is True
+        assert r['count'] == 2         # positional default + packKv append
+        assert r['supplied_count'] == 0  # no positional token was supplied

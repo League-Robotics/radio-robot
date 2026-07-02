@@ -40,6 +40,7 @@ ParseResult parseSchema(const char* const* tokens, int ntokens,
         res.ok = true;
         int n = (ntokens < MAX_ARGS) ? ntokens : MAX_ARGS;
         res.args.count = n;
+        res.args.suppliedCount = n;
         for (int i = 0; i < n; ++i) {
             res.args.args[i].type = ArgType::STR;
             res.args.args[i].ival = 0;
@@ -93,6 +94,11 @@ ParseResult parseSchema(const char* const* tokens, int ntokens,
     }
 
     res.args.count = count;
+    // suppliedCount: how many of the positional slots actually had a token
+    // in the incoming call (as opposed to being filled with a default value
+    // because the caller omitted them). packKv's trailing append below (if
+    // any) is not a positional token, so it is deliberately excluded here.
+    res.args.suppliedCount = (ntokens < schema.ndefs) ? ntokens : schema.ndefs;
 
     // ── packKv: append matching KV value as trailing STR ──────────────────────
     // Mirrors packSensorArg byte-for-byte: scans kvs for schema.packKv;

@@ -1,8 +1,9 @@
 ---
 id: '003'
 title: Software-only encoder rebaseline when drivetrain is not at rest
-status: open
-use-cases: [SUC-003]
+status: done
+use-cases:
+- SUC-003
 depends-on: []
 github-issue: ''
 issue: encoder-reset-while-moving-latches-readback.md
@@ -31,14 +32,14 @@ hardware burst *twice*. A third call site, `SystemCommands.cpp`'s
 
 ## Acceptance Criteria
 
-- [ ] `IVelocityMotor` (`source/hal/capability/IVelocityMotor.h`) gains
+- [x] `IVelocityMotor` (`source/hal/capability/IVelocityMotor.h`) gains
       `virtual void rebaselineSoft() = 0;` (pure — both current
       implementers are updated in this ticket) and `virtual uint32_t
       hardResetCount() const { return 0; }` / `virtual uint32_t
       softResetCount() const { return 0; }` (default-returning-zero, so any
       other implementer outside `Motor`/`SimMotor` keeps compiling
       unmodified).
-- [ ] `Motor::rebaselineSoft()`: folds the already-tick-cached
+- [x] `Motor::rebaselineSoft()`: folds the already-tick-cached
       `_lastPositionMm` (obtained by the normal per-tick 0x46 read, NOT a
       new atomic burst) back into raw tenths-of-degrees and adds it to
       `_encOffset` — **issues no I2C transaction** — then zeros the cache
@@ -47,33 +48,42 @@ hardware burst *twice*. A third call site, `SystemCommands.cpp`'s
       `Robot::resetEncoders()`/`Drive::resetEncoders()` zero
       unconditionally afterward — a mismatch here would look like a fresh
       outlier-filter freeze).
-- [ ] `Motor::resetEncoder()` increments a new `_hardResetCount`;
+- [x] `Motor::resetEncoder()` increments a new `_hardResetCount`;
       `rebaselineSoft()` increments a new `_softResetCount`; both exposed
       via the new `IVelocityMotor` accessors.
-- [ ] `MotorController` gains two new members, `_lastVelMmsL/R`, refreshed
+- [x] `MotorController` gains two new members, `_lastVelMmsL/R`, refreshed
       each `controlTick()` call from `inputs.velMms[]` *after* that tick's
       per-wheel ZOH velocity update runs.
-- [ ] `MotorController::resetEncoderAccumulators()` (unchanged signature)
+- [x] `MotorController::resetEncoderAccumulators()` (unchanged signature)
       computes an at-rest decision internally: commanded component
       (`_cmds->tgtMms[0]==0.0f && _cmds->tgtMms[1]==0.0f`) AND measured
       component (`|_lastVelMmsL| < kAtRestVelEpsilonMms &&
       |_lastVelMmsR| < kAtRestVelEpsilonMms`, default epsilon 5 mm/s). At
       rest: call `resetEncoder()` on both wheels (unchanged hardware
       re-prime). Not at rest: call `rebaselineSoft()` on both wheels.
-- [ ] No call-site signature changes anywhere: `Robot::distanceDrive()`,
+- [x] No call-site signature changes anywhere: `Robot::distanceDrive()`,
       `SystemCommands::handleZero`, and `Planner::beginDistance()` all get
       the new behavior automatically through the single
       `resetEncoderAccumulators()` choke point.
-- [ ] `SimMotor::rebaselineSoft()` performs the same effect
+- [x] `SimMotor::rebaselineSoft()` performs the same effect
       `resetEncoder()` already does in sim (zero the reported accumulator
       via `_mut.resetReportedEncoder()`) — sim has no I2C timing race to
       avoid. `SimMotor` also implements `hardResetCount()`/
       `softResetCount()`, incremented from `resetEncoder()`/
       `rebaselineSoft()` respectively.
-- [ ] New sim hooks in `tests/_infra/sim/sim_api.cpp`:
+- [x] New sim hooks in `tests/_infra/sim/sim_api.cpp`:
       `sim_get_motor_hard_reset_count_l/r`, `sim_get_motor_soft_reset_count_l/r`.
-- [ ] `uv run --with pytest python -m pytest -q` is green (2 known-baseline
+- [x] `uv run --with pytest python -m pytest -q` is green (2 known-baseline
       failures allowed, no new failures).
+
+**Implementation note (found during this ticket, not previously called
+out):** `IVelocityMotor` had a THIRD implementer beyond `Motor`/`SimMotor` —
+`NoopVelocityMotor` (`source/hal/NoopDevices.h`), used by `ReplayHAL`/
+`Hardware.h` default HAL slots. Since `rebaselineSoft()` is pure virtual,
+this class needed a no-op override (matching its existing no-op
+`resetEncoder()`) to keep compiling. Added; no behavior change (Noop stays a
+do-nothing stub). `hardResetCount()`/`softResetCount()` needed no override
+there (safely defaulted, per the interface's own design).
 
 ## Testing
 

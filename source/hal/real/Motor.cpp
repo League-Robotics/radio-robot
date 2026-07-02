@@ -1,4 +1,5 @@
 #include "Motor.h"
+#include "MotorSlew.h"
 #include <math.h>
 
 // ---------------------------------------------------------------------------
@@ -87,29 +88,56 @@ void Motor::setSpeed(int8_t pct)
         // sees a change and writes the latest PID output once the interval ends.
         return;
     }
-    _lastWriteUs    = nowUs;
-    _lastWrittenPct = pct;
 
-    // Apply fwdSign: positive pct = logical forward; fwdSign maps that to
+    // |ΔPWM| slew cap (064-002 — see MotorSlew.h and
+    // clasi/issues/encoder-reset-while-moving-latches-readback.md). A stop
+    // (pct == 0) is the sprint's explicit safety exemption and is always
+    // written in full, immediately — never clamped. Every other write —
+    // including a full reversal, which stays un-throttled by the rate limit
+    // above — is stepped by at most kMaxDeltaPwmPerWrite toward the
+    // requested target instead of slamming the whole swing in one 0x60
+    // transaction. `written`, not the caller's `pct`, becomes the new
+    // _lastWrittenPct below, so the write-on-change guard at the top of this
+    // function causes a large reversal to converge over several consecutive
+    // setSpeed() calls rather than one instant step.
+    //
+    // BENCH-CONFIRM: design-time estimate (see architecture-update.md "Cap
+    // value" / Open Questions), not yet HITL-validated — same convention as
+    // readSpeed()'s kUnitFactor below.
+    static constexpr uint8_t kMaxDeltaPwmPerWrite = 25;  // of the ±100 PWM-percent range
+    int8_t written = stopping
+        ? pct
+        : MotorSlew::clampStep(_lastWrittenPct, pct, kMaxDeltaPwmPerWrite);
+
+    _lastWriteUs    = nowUs;
+    _lastWrittenPct = written;
+
+    // Apply fwdSign: positive written = logical forward; fwdSign maps that to
     // the chip's CW/CCW convention.  For the right wheel, fwdSign = -1 so
     // that a positive command results in CCW chip rotation (physical forward).
-    int16_t effective = (int16_t)_fwdSign * (int16_t)pct;
+    int16_t effective = (int16_t)_fwdSign * (int16_t)written;
 
     if (effective == 0) {
         // Zero speed: COAST via the 0x60 move command with speed 0 — NOT the
         // 0x5F "shutdown" command. 0x5F shuts the Nezha controller down and
         // wedges subsequent encoder reads (they freeze at a constant). The old
         // firmware used 0x60-speed-0 to coast and reserved 0x5F for a final
-        // program-end stop. See docs/knowledge encoder-wedge note.
+        // program-end stop. See docs/knowledge encoder-wedge note. (Reached
+        // both by a genuine stop, pct==0, and by a slew-clamped write that
+        // happens to pass exactly through zero while converging toward a
+        // reversal target — both are correctly a momentary coast.)
         writeMotorCmd(DIR_CW, 0);
         _lastDir = 0;
     } else {
         uint8_t dir   = (effective > 0) ? DIR_CW : DIR_CCW;
         uint8_t speed = (effective > 0) ? (uint8_t)effective : (uint8_t)(-effective);
         writeMotorCmd(dir, speed);
-        // Track logical direction (sign of the original pct, not the chip direction)
-        // so readSpeed() can apply the correct sign to the unsigned chip reading.
-        _lastDir = (pct > 0) ? (int8_t)1 : (int8_t)-1;
+        // Track logical direction (sign of the value actually written this
+        // call, not the caller's ultimate target) so readSpeed() applies the
+        // correct sign to the unsigned chip reading for the motion the chip
+        // is physically executing right now — which, mid-slew, may still be
+        // the old direction even though a reversal has been requested.
+        _lastDir = (written > 0) ? (int8_t)1 : (int8_t)-1;
     }
 }
 
@@ -164,6 +192,13 @@ void Motor::resetEncoder()
     static constexpr int     kMaxRetries       = 2;
     static constexpr int32_t kReadbackThreshold = 2;  // tenths of degrees ≈ <1 mm
 
+    // (064-003) One resetEncoder() call is one hard (hardware atomic-read)
+    // reset, regardless of how many internal retries the snapshot loop below
+    // takes. Counted here, once, so callers (MotorController::
+    // resetEncoderAccumulators() via the at-rest decision) can be verified
+    // to have chosen the hardware path.
+    ++_hardResetCount;
+
     for (int attempt = 0; attempt <= kMaxRetries; ++attempt) {
         // Median-of-3: take three reads and sort to find the middle value.
         int32_t s0 = readEncoderAtomic();
@@ -190,6 +225,11 @@ void Motor::resetEncoder()
             _lastPositionMm   = 0.0f;
             _lastVelocityMmps = 0.0f;
             _hasLastTick      = false;
+            // (064-005) Re-zero the held-last-good-read baseline too, so a
+            // failed read immediately after this reset holds ~0 (the fresh
+            // baseline) rather than a stale value computed against the old
+            // offset.
+            _lastGoodRawEnc   = 0;
             return;
         }
         // Readback non-zero: the offset snapshot was corrupted.  Undo this
@@ -210,6 +250,45 @@ void Motor::resetEncoder()
     _lastPositionMm   = 0.0f;
     _lastVelocityMmps = 0.0f;
     _hasLastTick      = false;
+    // (064-005) See the clean-reset path above — same rationale.
+    _lastGoodRawEnc   = 0;
+}
+
+void Motor::rebaselineSoft()
+{
+    // (064-003) Software-only encoder rebaseline: MotorController::
+    // resetEncoderAccumulators() calls this instead of resetEncoder() when
+    // the drivetrain is NOT at rest, to avoid firing the atomic 0x46 read
+    // burst (3 reads + readback-verify, ~24-32 ms of busy-wait I2C) while the
+    // wheels are rotating — that burst latches the Nezha encoder readback
+    // (see clasi/sprints/064-.../issues/
+    // encoder-reset-while-moving-latches-readback.md). Issues NO I2C
+    // transaction at all: folds the already-tick-cached _lastPositionMm
+    // (populated by the normal per-tick 0x46 read in tick(), not a new
+    // atomic read) back into raw tenths-of-degrees and adds it to
+    // _encOffset, then zeros the cache exactly as resetEncoder()'s success
+    // path does — so positionMm() reads 0 immediately after this call, in
+    // lockstep with the host-side baselines (Robot::resetEncoders() /
+    // Drive::resetEncoders()) that zero unconditionally right after calling
+    // MotorController::resetEncoderAccumulators().
+    //
+    // Inverse of readEncoderMmF()'s conversion (mm = (raw/10) * mmPerDeg *
+    // fwdSign): rawDelta = (mm / (mmPerDeg * fwdSign)) * 10. rawDelta is the
+    // amount by which the offset-subtracted raw reading would need to move
+    // to reach 0, i.e. exactly the increment _encOffset needs.
+    float mmPerDeg = (_motorId == 2) ? _cfg.mmPerDegL : _cfg.mmPerDegR;
+    if (mmPerDeg != 0.0f) {
+        float rawDeltaF = (_lastPositionMm / (mmPerDeg * (float)_fwdSign)) * 10.0f;
+        _encOffset += (int32_t)rawDeltaF;
+    }
+    _lastPositionMm   = 0.0f;
+    _lastVelocityMmps = 0.0f;
+    _hasLastTick      = false;
+    // (064-005) See resetEncoder()'s clean-reset path — same rationale: a
+    // failed read immediately after this rebaseline should hold ~0, not a
+    // stale value computed against the pre-rebaseline offset.
+    _lastGoodRawEnc   = 0;
+    ++_softResetCount;
 }
 
 int32_t Motor::readEncoderAtomic() const
@@ -240,7 +319,7 @@ int32_t Motor::readEncoderAtomic() const
         0x00, 0xF5,
         0x00
     };
-    _i2c.write((ADDR << 1), (uint8_t*)cmd, 8, false);
+    int writeResult = _i2c.write((ADDR << 1), (uint8_t*)cmd, 8, false);
 
     // Post-write settle: chip prepares the 4-byte encoder response.
     {
@@ -249,7 +328,17 @@ int32_t Motor::readEncoderAtomic() const
     }
 
     uint8_t resp[4] = {0, 0, 0, 0};
-    _i2c.read((ADDR << 1), (uint8_t*)resp, 4, false);
+    int readResult = _i2c.read((ADDR << 1), (uint8_t*)resp, 4, false);
+
+    // (064-005) CR-03: on I2C failure the response buffer stays {0,0,0,0},
+    // which would compute as `0 - _encOffset` — a large fabricated jump.
+    // Hold the last known-good value instead (readSpeedRaw()'s sibling
+    // pattern uses an out-of-band sentinel, -1; no such sentinel exists here
+    // since every int32_t is a valid encoder count, so hold-last-value is
+    // used instead).
+    if (writeResult != MICROBIT_OK || readResult != MICROBIT_OK) {
+        return _lastGoodRawEnc;
+    }
 
     int32_t raw = (int32_t)(
         ((uint32_t)resp[3] << 24) |
@@ -259,7 +348,9 @@ int32_t Motor::readEncoderAtomic() const
     );
 
     // Subtract the software offset captured at last resetEncoder() call.
-    return raw - _encOffset;
+    int32_t result = raw - _encOffset;
+    _lastGoodRawEnc = result;
+    return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -299,7 +390,10 @@ void Motor::requestEncoder()
         0x00, 0xF5,
         0x00
     };
-    _i2c.write((ADDR << 1), (uint8_t*)cmd, 8, false);
+    int writeResult = _i2c.write((ADDR << 1), (uint8_t*)cmd, 8, false);
+    // (064-005) Cache this write's status; collectEncoder() (phase 2) folds
+    // it into its own failure decision (CR-03).
+    _pendingEncRequestOk = (writeResult == MICROBIT_OK);
 }
 
 int32_t Motor::collectEncoder() const
@@ -311,7 +405,16 @@ int32_t Motor::collectEncoder() const
     // loop guarantees this ordering (LoopScheduler alternates wheels).
     // No busy-wait or fiber_sleep.
     uint8_t resp[4] = {0, 0, 0, 0};
-    _i2c.read((ADDR << 1), (uint8_t*)resp, 4, false);
+    int readResult = _i2c.read((ADDR << 1), (uint8_t*)resp, 4, false);
+
+    // (064-005) CR-03: a failed phase-1 write (_pendingEncRequestOk == false)
+    // means this read — even if it itself reports OK — answers a stale prior
+    // request, not this cycle's; treat it as a combined failure. Either way,
+    // hold the last known-good value instead of computing from a zeroed
+    // response buffer.
+    if (!_pendingEncRequestOk || readResult != MICROBIT_OK) {
+        return _lastGoodRawEnc;
+    }
 
     int32_t raw = (int32_t)(
         ((uint32_t)resp[3] << 24) |
@@ -321,7 +424,9 @@ int32_t Motor::collectEncoder() const
     );
 
     // Subtract the software offset captured at last resetEncoder() call.
-    return raw - _encOffset;
+    int32_t result = raw - _encOffset;
+    _lastGoodRawEnc = result;
+    return result;
 }
 
 float Motor::readEncoderMmFAtomic(const RobotConfig& cfg) const
@@ -340,16 +445,25 @@ float Motor::readEncoderMmFSettle(const RobotConfig& cfg) const
     // idle between ticks, so the pre-idle is redundant there. Cost: ~4 ms.
     static constexpr uint32_t kSettleUs = 4000;
     uint8_t cmd[8] = { 0xFF, 0xF9, _motorId, 0x00, 0x46, 0x00, 0xF5, 0x00 };
-    _i2c.write((ADDR << 1), (uint8_t*)cmd, 8, false);
+    int writeResult = _i2c.write((ADDR << 1), (uint8_t*)cmd, 8, false);
     uint64_t deadline = system_timer_current_time_us() + kSettleUs;
     while (system_timer_current_time_us() < deadline) {}
     uint8_t resp[4] = { 0, 0, 0, 0 };
-    _i2c.read((ADDR << 1), (uint8_t*)resp, 4, false);
+    int readResult = _i2c.read((ADDR << 1), (uint8_t*)resp, 4, false);
+
+    float mmPerDeg = (_motorId == 2) ? cfg.mmPerDegL : cfg.mmPerDegR;
+
+    // (064-005) CR-03: on I2C failure, hold the last known-good value
+    // (converted to mm) instead of computing from a zeroed response buffer.
+    if (writeResult != MICROBIT_OK || readResult != MICROBIT_OK) {
+        return (_lastGoodRawEnc / 10.0f) * mmPerDeg * (float)_fwdSign;
+    }
+
     int32_t raw = (int32_t)(
         ((uint32_t)resp[3] << 24) | ((uint32_t)resp[2] << 16) |
         ((uint32_t)resp[1] <<  8) | (uint32_t)resp[0]);
     raw -= _encOffset;
-    float mmPerDeg = (_motorId == 2) ? cfg.mmPerDegL : cfg.mmPerDegR;
+    _lastGoodRawEnc = raw;
     return (raw / 10.0f) * mmPerDeg * (float)_fwdSign;
 }
 

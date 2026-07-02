@@ -78,6 +78,17 @@ int Robot::buildTlmFrame(char* buf, int len)
     int n = snprintf(buf + pos, (size_t)rem, "TLM t=%lu mode=%c seq=%u",
                      (unsigned long)t_sample, modeChar, (unsigned)_tlmSeq++);
     if (n > 0 && n < rem) { pos += n; rem -= n; }
+    // (064-004) wedge=<L>,<R> is unconditional -- NOT gated by
+    // config.tlmFields (the uint8_t bitmask's 8 bits are all already
+    // assigned; see architecture-update.md Design Rationale 2). The wedge
+    // detector's only prior output, EVT enc_wedged, is a latched one-shot
+    // event that a relay/radio link can drop -- this gives a host a
+    // per-frame, poll-safe view of the same latch. L-then-R wire order
+    // matches enc=/vel=; wheel_wedged()[1]=L, [0]=R (Drive::tickUpdate
+    // populates it every tick from MotorController::wheelWedgedL()/R()).
+    n = snprintf(buf + pos, (size_t)rem, " wedge=%u,%u",
+                 (unsigned)ds.wheel_wedged()[1], (unsigned)ds.wheel_wedged()[0]);
+    if (n > 0 && n < rem) { pos += n; rem -= n; }
     if (config.tlmFields & TLM_FIELD_ENC) {
         n = snprintf(buf + pos, (size_t)rem, " enc=%d,%d", (int)encL, (int)encR);
         if (n > 0 && n < rem) { pos += n; rem -= n; }

@@ -16,18 +16,25 @@ void SimMotor::setSpeed(int8_t pct) {
 }
 
 int32_t SimMotor::collectEncoder() const {
+    // (064-005) Injected read failure: hold the last tick()-cached value
+    // instead of a live plant read, mirroring the real Motor's hold-last
+    // -value fix (CR-03).
+    if (_readFailure) return static_cast<int32_t>(_lastPositionMm);
     return static_cast<int32_t>(reportedEncMm());
 }
 
 float SimMotor::readEncoderMmF(const RobotConfig& /*cfg*/) const {
+    if (_readFailure) return _lastPositionMm;
     return reportedEncMm();
 }
 
 float SimMotor::readEncoderMmFAtomic(const RobotConfig& /*cfg*/) const {
+    if (_readFailure) return _lastPositionMm;
     return reportedEncMm();
 }
 
 float SimMotor::readEncoderMmFSettle(const RobotConfig& /*cfg*/) const {
+    if (_readFailure) return _lastPositionMm;
     return reportedEncMm();
 }
 
@@ -41,6 +48,24 @@ void SimMotor::resetEncoder() {
     _lastPositionMm   = 0.0f;
     _lastVelocityMmps = 0.0f;
     _hasLastTick      = false;
+    ++_hardResetCount;
+}
+
+void SimMotor::rebaselineSoft() {
+    // (064-003) The sim has no I2C timing race to avoid (no real bus, no
+    // atomic-read burst to latch), so this performs the SAME effect
+    // resetEncoder() already does above — zero the reported accumulator.
+    // Only the reset-kind counter differs (_softResetCount, not
+    // _hardResetCount), so a full-pipeline sim test can verify the at-rest
+    // DECISION made by MotorController::resetEncoderAccumulators() (which
+    // path was taken) without any behavioral difference in the resulting
+    // encoder position.
+    _mut.resetReportedEncoder(sideIdx());
+    _cmdSpeed         = 0;
+    _lastPositionMm   = 0.0f;
+    _lastVelocityMmps = 0.0f;
+    _hasLastTick      = false;
+    ++_softResetCount;
 }
 
 void SimMotor::tick(uint32_t now_ms) {
@@ -48,10 +73,11 @@ void SimMotor::tick(uint32_t now_ms) {
     // COPY only (no re-integration); bit-identical to MockMotor::tick.  A simple
     // position-difference velocity is cached for velocityMmps() (not consumed by
     // the PID, so it does not affect the golden-TLM frame).
-    if (_frozen) {
-        // Frozen encoder: hold the last cached value, do NOT advance the
-        // timestamp baseline (so velocity differentiation resumes cleanly on
-        // unfreeze).  Forward-compat: default-off, so MockMotor parity holds.
+    if (_frozen || _readFailure) {
+        // Frozen encoder / injected read failure (064-005): hold the last
+        // cached value, do NOT advance the timestamp baseline (so velocity
+        // differentiation resumes cleanly once unfrozen/cleared).
+        // Forward-compat: both default-off, so MockMotor parity holds.
         return;
     }
     float pos = reportedEncMm();

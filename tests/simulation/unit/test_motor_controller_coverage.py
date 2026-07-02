@@ -5,8 +5,8 @@ Sprint 045 ticket 002.  Exercises the real C++ MotorController paths that the
 existing test_motor_controller.py (4 tests) leaves untouched:
 
   - The encoder-wedge detector: stuck-counter loop, kWedgeThreshold fire, the
-    EVT enc_wedged emission via _evtFn/_evtCtx, the arming-grace gate
-    (_hasMovedL/R), and latch re-arm after the encoder moves again.
+    EVT enc_wedged emission via _evtFn/_evtCtx, and latch re-arm after the
+    encoder moves again.
   - wheelWedgedL()/wheelWedgedR() latch accessors after the EVT fires.
   - updateVelGains() via SET vel.kP (ConfigRegistry → mc.updateVelGains).
   - getEncoderPositions() via the D (distance) begin path
@@ -16,7 +16,15 @@ existing test_motor_controller.py (4 tests) leaves untouched:
 All wedge tests use the proven sim technique from test_033_005_wedge_hardening:
 drive a wheel, then freeze its encoder via sim_set_motor_offset(side, 0.0) so the
 reported encoder value stops changing while the wheel is still commanded.  After
-kWedgeThreshold consecutive frozen ticks (post-arming-grace) the detector fires.
+kWedgeThreshold consecutive frozen ticks the detector fires.
+
+NOTE (064-004): the 033-005d "arming grace" (_hasMovedL/R — the detector did
+not count until a wheel had moved at least once since the command started)
+was REMOVED. It was a structural blind spot: a wheel frozen from the very
+start of a new command never "moved," so counting never started (Episode A
+from the field: an RT turn frozen for 14 TLM frames produced zero EVTs).
+See test_wedge_fires_when_frozen_before_first_move below and
+tests/simulation/unit/test_064_004_wedge_blindspots.py.
 
 ARCHITECTURE NOTES (documented per ticket OQ-1 and the ZOH acceptance criterion):
 
@@ -42,7 +50,9 @@ import ctypes
 # kWedgeThreshold in MotorController.h
 WEDGE_THRESHOLD = 10
 TICK_STEP_MS = 24
-# Ticks to run before freezing so _hasMovedL/R latch arms (post arming-grace).
+# Warm-up ticks of real matched movement before freezing (not required for
+# arming since 064-004, but keeps these tests' setup realistic/representative
+# of a mid-command freeze rather than a from-the-start one).
 TICKS_BEFORE_FREEZE = 6
 
 
@@ -150,16 +160,18 @@ def test_wedge_evt_fires_once_per_episode(sim):
     )
 
 
-def test_wedge_arming_grace_suppresses_premature_fire(sim):
-    """No EVT enc_wedged fires when the wheel is frozen BEFORE it ever moved.
+def test_wedge_fires_when_frozen_before_first_move(sim):
+    """EVT enc_wedged still fires when the wheel is frozen BEFORE it ever moved.
 
-    Exercises the _hasMovedR arming-grace gate (033-005d): the stuck counter must
-    NOT advance until the wheel has moved at least once since the command started.
-    Freezing R from the very start of the command leaves _hasMovedR False, so the
-    detector never arms even though the encoder is constant and commanded.
+    064-004 removed the 033-005d arming-grace gate (_hasMovedR): the stuck
+    counter used to NOT advance until the wheel had moved at least once
+    since the command started, which meant a wheel frozen from the very
+    start of a command (Episode A's exact shape) never armed. The detector
+    is now unconditional — freezing R BEFORE issuing the drive must still
+    fire within kWedgeThreshold ticks.
     """
     sim.send_command("SET sTimeout=60000")
-    # Freeze R BEFORE issuing the drive — _hasMovedR can never latch True.
+    # Freeze R BEFORE issuing the drive — R never moves this episode.
     _freeze_right(sim)
     sim.send_command("VW 200 0")
     sim.get_async_evts()
@@ -168,13 +180,16 @@ def test_wedge_arming_grace_suppresses_premature_fire(sim):
     for _ in range(WEDGE_THRESHOLD + 20):
         _tick_n(sim, 1)
         evts += sim.get_async_evts()
+        if sim.get_wheel_wedged_r():
+            break
 
-    assert not sim.get_wheel_wedged_r(), (
-        "wheelWedgedR() fired even though R never moved — arming grace "
-        "(_hasMovedR) is not gating the stuck counter."
+    assert sim.get_wheel_wedged_r(), (
+        "wheelWedgedR() never fired even though R was frozen from the start "
+        "of the command — the 033-005d arming-grace blind spot has "
+        "regressed (064-004 removed it)."
     )
-    assert "EVT enc_wedged wheel=R" not in evts, (
-        f"enc_wedged EVT fired before the wheel ever moved — arming grace broken. "
+    assert "EVT enc_wedged wheel=R" in evts, (
+        f"enc_wedged EVT did not fire for a wheel frozen from the start. "
         f"Events: {evts!r}"
     )
 
@@ -183,8 +198,8 @@ def test_wedge_relatch_after_recovery(sim):
     """The wedge latch re-arms: a second stuck episode produces a second EVT.
 
     Episode 1: freeze R → EVT fires, latch set.  Recover: unfreeze R, tick so the
-    encoder moves again → re-arm path resets _stuckCountR/_wedgeEmittedR and sets
-    _hasMovedR.  Episode 2: freeze R again → a fresh EVT fires.  This exercises the
+    encoder moves again → re-arm path resets _stuckCountR/_wedgeEmittedR.
+    Episode 2: freeze R again → a fresh EVT fires.  This exercises the
     `encR != _wedgePrevEncR` re-arm branch followed by a second fire.
     """
     sim.send_command("SET sTimeout=60000")

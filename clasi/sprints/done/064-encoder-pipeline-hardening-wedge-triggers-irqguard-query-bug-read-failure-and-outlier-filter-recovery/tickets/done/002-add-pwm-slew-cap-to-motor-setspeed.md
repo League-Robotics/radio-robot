@@ -1,8 +1,9 @@
 ---
 id: '002'
-title: "Add |ΔPWM| slew cap to Motor::setSpeed"
-status: open
-use-cases: [SUC-002]
+title: "Add |\u0394PWM| slew cap to Motor::setSpeed"
+status: done
+use-cases:
+- SUC-002
 depends-on: []
 github-issue: ''
 issue: encoder-reset-while-moving-latches-readback.md
@@ -27,31 +28,31 @@ This ticket bounds the magnitude of any single 0x60 write.
 
 ## Acceptance Criteria
 
-- [ ] New header `source/hal/real/MotorSlew.h`: a small, dependency-free
+- [x] New header `source/hal/real/MotorSlew.h`: a small, dependency-free
       (no CODAL/MicroBit include) helper, e.g.
       `int8_t clampStep(int8_t lastWritten, int8_t target, uint8_t
       maxDelta)` — returns `target` unchanged if `|target - lastWritten| <=
       maxDelta`, else steps `lastWritten` by `maxDelta` toward `target`.
-- [ ] `Motor::setSpeed()` uses this helper for every write **except** the
+- [x] `Motor::setSpeed()` uses this helper for every write **except** the
       `pct == 0` stop path, which stays a full, immediate write (safety
       exemption — do not change stop behavior).
-- [ ] `_lastWrittenPct` is updated to the *clamped* value actually written,
+- [x] `_lastWrittenPct` is updated to the *clamped* value actually written,
       not the caller's requested `pct` — so the existing write-on-change
       guard (`if (pct == _lastWrittenPct) return;`) causes a large reversal
       to converge over several consecutive `setSpeed()` calls instead of one
       instant slam. The existing reversal exemption from the 40 ms *rate*
       throttle is unchanged (a reversal is still written every tick,
       un-throttled) — only the *magnitude* per write is now bounded.
-- [ ] `kMaxDeltaPwmPerWrite = 25` (of the ±100 range), declared as a named
+- [x] `kMaxDeltaPwmPerWrite = 25` (of the ±100 range), declared as a named
       constant with a comment marking it a design-time estimate pending
       bench confirmation (matching the existing `// BENCH-CONFIRM`-style
       convention used elsewhere in `Motor.cpp`, e.g. `readSpeed()`'s
       `kUnitFactor`).
-- [ ] `SimMotor::setSpeed()` is explicitly **not** modified — no slew
+- [x] `SimMotor::setSpeed()` is explicitly **not** modified — no slew
       logic added in sim (see architecture-update.md Design Rationale 3:
       the golden-TLM canary and other tests assume instant PWM application
       in sim; the hazard this cap defends against is real-I2C-only).
-- [ ] `uv run --with pytest python -m pytest -q` is green (2 known-baseline
+- [x] `uv run --with pytest python -m pytest -q` is green (2 known-baseline
       failures allowed, no new failures) — this includes confirming
       `test_golden_tlm.py` and any other sim test that commands a raw
       reversal is unaffected, since `SimMotor` is untouched.

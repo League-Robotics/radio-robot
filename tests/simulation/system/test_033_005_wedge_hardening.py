@@ -184,7 +184,7 @@ def test_frozen_wheel_no_phantom_dtheta():
     drifting one wheel's worth every tick.
 
     Protocol:
-      1. Drive straight (VW 200 0) so both encoders move and grace latches arm.
+      1. Drive straight (VW 200 0) so both encoders are moving.
       2. Freeze right encoder (offsetFactor=0).
       3. Tick until wedgeActive==True (poll); record heading at that instant.
       4. Tick a long post-latch window (the left wheel keeps counting).
@@ -193,6 +193,11 @@ def test_frozen_wheel_no_phantom_dtheta():
     DISABLE-TO-PROVE (verified by the reviewer by wrapping the
     `if (_wedgeActive) dTheta = 0;` block in `if (false && ...)` and rebuilding):
     the post-latch drift jumps from ~0° to tens of degrees, failing the assert.
+
+    A second block below covers the companion 064-004 regression: freezing R
+    BEFORE any movement (Episode A's exact shape) must also arm and fire the
+    detector — this used to be blocked by the 033-005d arming grace, which
+    064-004 removed.
     """
     POST_LATCH_TICKS = 40   # left wheel keeps counting the whole time
 
@@ -252,16 +257,20 @@ def test_frozen_wheel_no_phantom_dtheta():
             f"h_end={math.degrees(h_end):.2f}°"
         )
 
-    # ---- DISABLE-TO-PROVE: freeze R BEFORE any movement ----
-    # When R is frozen from the start, _hasMovedR never becomes True, so
-    # the wedge detector never arms (arming grace protects against false-fire
-    # at drive start, which is item d).  As a side effect, wedgeActive stays
-    # False, and predict() computes phantom dTheta from (dR=0 - dL).
-    # This demonstrates what happens without the fix active.
+    # ---- Freeze R BEFORE any movement (064-004: arming-grace blind spot) ----
+    # Prior to 064-004, the 033-005d arming grace (_hasMovedR) meant a wheel
+    # that entered a command already frozen never "moved," so the detector
+    # never armed — wedgeActive stayed False and predict() computed phantom
+    # dTheta from (dR=0 - dL) forever (this WAS the DISABLE-TO-PROVE case:
+    # exactly Episode A from the field, RT turn frozen for 14 TLM frames,
+    # zero EVT). 064-004 removes the arming grace entirely, so the detector
+    # now arms unconditionally: the wedge fires within kWedgeThreshold ticks
+    # even though R never moved, wedgeActive goes True quickly, and dTheta
+    # suppression engages fast enough that total heading drift stays small.
     with Sim() as s:
         s.send_command("SET sTimeout=60000")
 
-        # Freeze right BEFORE starting, so _hasMovedR stays False.
+        # Freeze right BEFORE starting, so R never moves this episode.
         _freeze_right(s)
         s.send_command("VW 200 0")
         t = 0
@@ -270,20 +279,27 @@ def test_frozen_wheel_no_phantom_dtheta():
         t = _tick_n(s, WEDGE_THRESHOLD + 15, t)
         h_final = float(s._lib.sim_get_pose_h(s._h))
 
-        wedge_active_unfired = s.get_odometry_wedge_active()
-        # Wedge must NOT have fired (grace latch never armed).
-        assert not wedge_active_unfired, (
-            "DISABLE-TO-PROVE setup: wedge fired even though R never moved — "
-            "arming grace (_hasMovedR) is not working."
+        wedge_active_fired = s.get_odometry_wedge_active()
+        # (064-004) The wedge MUST fire even though R never moved — the
+        # arming-grace blind spot that used to block this is gone.
+        assert wedge_active_fired, (
+            "wedge did not fire when R was frozen from the start of a new "
+            "command — the 033-005d arming grace (_hasMovedR) blind spot "
+            "has regressed (064-004 removed it)."
         )
 
-        drift_without_fix = abs(math.atan2(
+        drift_with_fix = abs(math.atan2(
             math.sin(h_final - h_initial),
             math.cos(h_final - h_initial)))
 
-        assert drift_without_fix > 0.05, (
-            f"DISABLE-TO-PROVE: no heading drift when R is frozen without the gate "
-            f"({math.degrees(drift_without_fix):.2f}°). Test cannot prove the fix."
+        # Once the wedge fires (within kWedgeThreshold=10 ticks) dTheta
+        # suppression holds heading essentially flat for the remaining
+        # ticks — total drift over the whole window stays small, unlike the
+        # unbounded drift the old arming-grace blind spot produced.
+        assert drift_with_fix < 0.1, (
+            f"heading drifted {math.degrees(drift_with_fix):.2f}° while R was "
+            f"frozen from the start — expected the fast-arming detector "
+            f"(064-004) to suppress phantom dTheta almost immediately."
         )
 
 

@@ -90,8 +90,34 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
     _est.setWedgeActive(anyWedged);
     if (anyWedged) {
         _est.setEncOmegaHealthy(false);
-    } else if (_prevAnyWedged) {
-        _est.setEncOmegaHealthy(true);
+        // (064-004) Auto re-prime at idle: a wedge latch that persists while
+        // the drivetrain is genuinely at rest is worth exactly one automatic
+        // hardware re-prime attempt per episode -- this is the same at-rest
+        // atomic reset that self-heals a transient latch elsewhere (next D
+        // from idle, ZERO enc). A persistent latch needs a full power cycle
+        // (see the KB doc), so hammering resetEncoderAccumulators() every
+        // idle tick would not help and would just add needless I2C traffic
+        // -- hence the one-shot gate. Reuses MotorController's own at-rest
+        // decision (064-003, isAtRest()) instead of duplicating the
+        // epsilon/commanded-vs-measured logic here.
+        //
+        // resetStuckCounters() is required alongside the reset: while idle,
+        // Drive calls controlTick() with refreshedWheel=0 (see `driving`
+        // below), so the wedge-check block in controlTick() never runs
+        // again until a new command starts driving -- nothing would
+        // otherwise observe the reset and clear the latch, so the one-shot
+        // flag below would never re-arm for a future, separate episode.
+        if (!_wedgeReprimeAttempted && _mc.isAtRest()) {
+            _mc.resetEncoderAccumulators();
+            _mc.resetStuckCounters();
+            _wedgeReprimeAttempted = true;
+        }
+    } else {
+        if (_prevAnyWedged) {
+            _est.setEncOmegaHealthy(true);
+        }
+        // Re-arm for the next episode once the latch actually clears.
+        _wedgeReprimeAttempted = false;
     }
     _prevAnyWedged = anyWedged;
 
@@ -386,10 +412,18 @@ msg::DrivetrainCapabilities Drive::capabilities() const
 // ---------------------------------------------------------------------------
 // _runOutlierFilter — private: speed-scaled outlier filter + encoder collect.
 //
-// Verbatim from legacy Drive::periodic() with member renaming:
+// Originally verbatim from legacy Drive::periodic() with member renaming:
 //   _commands → _outputs     (MotorCommands)
 //   _inputs   → _hw          (HardwareState)
 //   fn/ctx    → nullptr      (no EVT sink in Drive for now)
+//
+// (064-006) Restores the reject-streak rebaseline that was lost in the
+// sprint-060 cutover: kFilterRejectStreakThreshold consecutive rejected
+// ticks now accept the already-computed fresh reading as the new baseline
+// instead of holding a stale one forever (CR-02). Also refreshes _hw.encMm[]
+// unconditionally while idle (architecture-update.md Design Rationale 5) so
+// a hand-rolled wheel's baseline is absorbed before the next command starts,
+// rather than relying solely on the in-drive streak escape hatch.
 // ---------------------------------------------------------------------------
 void Drive::_runOutlierFilter(uint32_t now)
 {
@@ -402,8 +436,9 @@ void Drive::_runOutlierFilter(uint32_t now)
 
         // Right (M1) first — proven ordering from WedgeTest.
         {
-            float newR = _motorR.positionMm();
-            float dR   = newR - _hw.encMm[0];
+            float freshR = _motorR.positionMm();   // already read this tick, no extra I2C
+            float newR   = freshR;
+            float dR     = newR - _hw.encMm[0];
             if (dR > kMaxDeltaMm || dR < -kMaxDeltaMm) {
                 newR = _hw.encMm[0];
                 for (int k = 0; k < kRetries; ++k) {
@@ -412,6 +447,12 @@ void Drive::_runOutlierFilter(uint32_t now)
                     if (dr2 <= kMaxDeltaMm && dr2 >= -kMaxDeltaMm) { newR = r2; break; }
                 }
                 if (_filterRejectStreakR < 255) ++_filterRejectStreakR;
+                if (_filterRejectStreakR >= kFilterRejectStreakThreshold) {
+                    // Persistent (3+ consecutive) rejection: the baseline is
+                    // stale, not the reading. Rebaseline to the fresh read.
+                    newR = freshR;
+                    _filterRejectStreakR = 0;
+                }
             } else {
                 _filterRejectStreakR = 0;
             }
@@ -420,8 +461,9 @@ void Drive::_runOutlierFilter(uint32_t now)
 
         // Left (M2) second.
         {
-            float newL = _motorL.positionMm();
-            float dL   = newL - _hw.encMm[1];
+            float freshL = _motorL.positionMm();   // already read this tick, no extra I2C
+            float newL   = freshL;
+            float dL     = newL - _hw.encMm[1];
             if (dL > kMaxDeltaMm || dL < -kMaxDeltaMm) {
                 newL = _hw.encMm[1];
                 for (int k = 0; k < kRetries; ++k) {
@@ -430,12 +472,24 @@ void Drive::_runOutlierFilter(uint32_t now)
                     if (dr2 <= kMaxDeltaMm && dr2 >= -kMaxDeltaMm) { newL = r2; break; }
                 }
                 if (_filterRejectStreakL < 255) ++_filterRejectStreakL;
+                if (_filterRejectStreakL >= kFilterRejectStreakThreshold) {
+                    // Persistent (3+ consecutive) rejection: the baseline is
+                    // stale, not the reading. Rebaseline to the fresh read.
+                    newL = freshL;
+                    _filterRejectStreakL = 0;
+                }
             } else {
                 _filterRejectStreakL = 0;
             }
             _hw.encMm[1] = newL;
         }
     } else {
+        // Idle: refresh the baseline unconditionally, no outlier gate.
+        // PWM is 0 here so no PID/EKF stability is at stake, and this
+        // absorbs a hand-rolled wheel's new position before the next
+        // command starts (architecture-update.md Design Rationale 5).
+        _hw.encMm[0] = _motorR.positionMm();
+        _hw.encMm[1] = _motorL.positionMm();
         _filterRejectStreakL = 0;
         _filterRejectStreakR = 0;
     }

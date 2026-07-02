@@ -521,7 +521,7 @@ static void handleRf(const ArgList& args, const char* corrId,
 #ifndef HOST_BUILD
     Radio& radio = sched->comm().radio();
 
-    if (args.count < 1) {
+    if (args.suppliedCount < 1) {
         // Query.
         char body[32];
         snprintf(body, sizeof(body), "chan=%d group=%d",

@@ -157,7 +157,8 @@ def test_odometry_wedge_suppresses_heading_drift():
     with Sim() as s:
         s.send_command("SET sTimeout=60000")
         s.send_command("VW 200 0")
-        # Pre-move so the arming-grace latches.
+        # Warm-up: real matched movement before freezing (mid-command freeze,
+        # not a from-the-start one; not required for arming since 064-004).
         _tick_n(s, 6)
         _freeze_right(s)
 

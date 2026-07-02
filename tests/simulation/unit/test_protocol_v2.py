@@ -213,6 +213,36 @@ class TestParseTLM:
         assert frame.t is None
         assert frame.enc == (10, 10)
 
+    def test_wedge_field_healthy(self) -> None:
+        # wedge= is unconditional on the firmware side (064-004): present on
+        # every frame, 0,0 when both wheels are healthy.
+        frame = parse_tlm("TLM t=100 mode=I seq=0 wedge=0,0 enc=10,10")
+        assert frame is not None
+        assert frame.wedge == (0, 0)
+
+    def test_wedge_field_left_latched(self) -> None:
+        frame = parse_tlm("TLM t=100 mode=V seq=1 wedge=1,0 enc=10,10")
+        assert frame is not None
+        assert frame.wedge == (1, 0)
+
+    def test_wedge_field_right_latched(self) -> None:
+        frame = parse_tlm("TLM t=100 mode=V seq=1 wedge=0,1 enc=10,10")
+        assert frame is not None
+        assert frame.wedge == (0, 1)
+
+    def test_wedge_field_absent_on_older_frame(self) -> None:
+        # Additive field — a TLM frame from older firmware without wedge=
+        # must still parse cleanly, with wedge staying None.
+        frame = parse_tlm("TLM t=100 mode=I seq=0 enc=10,10")
+        assert frame is not None
+        assert frame.wedge is None
+        assert frame.enc == (10, 10)
+
+    def test_wedge_field_malformed_ignored(self) -> None:
+        frame = parse_tlm("TLM t=100 wedge=notanumber,0 enc=10,10")
+        assert frame is not None
+        assert frame.wedge is None
+
 
 # ===========================================================================
 # parse_cfg
@@ -772,11 +802,13 @@ class TestTLMFrameEdgeCases:
 
     def test_tlm_all_fields(self) -> None:
         # vel= uses 2-value format vL,vR (Sprint 010, Ticket 007)
-        line = "TLM t=12345 mode=T enc=1024,1019 pose=350,-12,1780 vel=200,195 line=120,340,330,118 color=21,30,18,80"
+        # wedge= is 064-004's additive, unconditional per-wheel latch field.
+        line = "TLM t=12345 mode=T wedge=0,0 enc=1024,1019 pose=350,-12,1780 vel=200,195 line=120,340,330,118 color=21,30,18,80"
         frame = parse_tlm(line)
         assert frame is not None
         assert frame.t == 12345
         assert frame.mode == "T"
+        assert frame.wedge == (0, 0)
         assert frame.enc == (1024, 1019)
         assert frame.pose == (350, -12, 1780)
         assert frame.vel == (200, 195)

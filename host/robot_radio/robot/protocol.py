@@ -55,6 +55,10 @@ class TLMFrame:
       - Differential build: 2-tuple (v_mmps, omega_mradps).
       - Mecanum build:      3-tuple (vx_mmps, vy_mmps, omega_mradps).
     The vy field in the mecanum twist is the lateral body velocity from OTOS.
+    ``wedge`` is the per-wheel encoder-wedge detector latch state (064-004):
+    (left, right), each 0 (healthy) or 1 (latched). Unconditional on the
+    firmware side (not gated by STREAM fields=) — always present on any
+    firmware new enough to emit it; absent (None) on older firmware.
     """
     t: int | None = None
     mode: str | None = None
@@ -67,6 +71,7 @@ class TLMFrame:
     line: tuple[int, int, int, int] | None = None   # (g1, g2, g3, g4)
     color: tuple[int, int, int, int] | None = None  # (r, g, b, c)
     ekf_rej: int | None = None                   # cumulative EKF gate rejection count
+    wedge: tuple[int, int] | None = None         # (left, right) wedge-latch state, 0/1 each (064-004)
 
 
 @dataclass
@@ -226,6 +231,14 @@ def parse_tlm(line: str) -> TLMFrame | None:
     if "seq" in kv:
         try:
             frame.seq = int(kv["seq"])
+        except ValueError:
+            pass
+
+    if "wedge" in kv:
+        try:
+            parts = kv["wedge"].split(",")
+            if len(parts) == 2:
+                frame.wedge = (int(parts[0]), int(parts[1]))
         except ValueError:
             pass
 

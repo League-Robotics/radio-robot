@@ -24,6 +24,7 @@
 #include "hal/sim/PhysicsWorld.h"
 #include "hal/sim/WorldView.h"
 #include "hal/real/BenchOtosSensor.h"
+#include "hal/real/MotorSlew.h"
 #include "types/Config.h"
 #include "types/Inputs.h"
 #include "commands/MotionCommand.h"
@@ -440,6 +441,27 @@ void sim_set_enc_r(void* h, float mm)
     s->robot.drive.injectEncR(mm);               // sync drive2 private _hw (060-004)
 }
 
+// (064-006) Inject a REPORTED-encoder-only jump — the "hand-rolled/hand-lifted
+// wheel" analogue: the physical sensor now reports a new position (exactly
+// what SimMotor::tick() promotes into positionMm(), mirroring the real
+// Motor's continuously-refreshed _lastPositionMm), but — UNLIKE
+// sim_set_enc_l/r — Drive's private outlier-filter baseline (_hw.encMm[]) and
+// state.actual are deliberately left untouched. This is what creates the
+// genuine baseline-vs-sensor divergence that Drive::_runOutlierFilter's
+// reject-streak rebaseline and idle-refresh logic must recover from;
+// sim_set_enc_l/r cannot exercise that path because it syncs the baseline in
+// the same call, eliminating the divergence. side convention matches
+// PhysicsWorld::setReportedEncoder (0 = L, 1 = R).
+void sim_set_reported_enc_l(void* h, float mm)
+{
+    static_cast<SimHandle*>(h)->hal.plant().setReportedEncoder(0, mm);
+}
+
+void sim_set_reported_enc_r(void* h, float mm)
+{
+    static_cast<SimHandle*>(h)->hal.plant().setReportedEncoder(1, mm);
+}
+
 // Inject an OTOS pose reading into the SimOdometer.  The injected pose is
 // returned by SimOdometer::readTransformed() on the next otosCorrect() call.
 void sim_set_otos_pose(void* h, float x, float y, float hrad)
@@ -536,9 +558,11 @@ float sim_get_estimation_error_h(void* h) {
 // PERFECT" invariant (each error setter defaults to no-op at construction).
 void sim_set_perfect(void* h) {
     SimHandle* s = static_cast<SimHandle*>(h);
-    // Drive-wheel encoders: clear freeze + zero per-side noise.
+    // Drive-wheel encoders: clear freeze + read-failure + zero per-side noise.
     s->hal.simMotorL().setFrozen(false);
     s->hal.simMotorR().setFrozen(false);
+    s->hal.simMotorL().setReadFailure(false);
+    s->hal.simMotorR().setReadFailure(false);
     s->hal.simMotorL().setNoiseSigma(0.0f);
     s->hal.simMotorR().setNoiseSigma(0.0f);
     // OTOS odometer: clear read failure + lift; zero linear/yaw noise.
@@ -566,6 +590,22 @@ void sim_set_motor_slip(void* h, int side, float straight, float turn_extra) {
 }
 void sim_set_encoder_noise(void* h, int side, float sigma_mm) {
     static_cast<SimHandle*>(h)->hal.plant().setEncoderNoise(side, sigma_mm);
+}
+
+// ---- Encoder I2C read-failure injection (064-005, side: 0=left, 1=right, ----
+// ---- other=both — matching the sim_set_motor_slip/setEncoderNoise convention) --
+//
+// Mirrors sim_set_otos_read_failure: while injected, SimMotor::tick() does not
+// promote a fresh reported-encoder value (holds _lastPositionMm), and
+// collectEncoder()/readEncoderMmF()/readEncoderMmFAtomic()/readEncoderMmFSettle()
+// likewise hold their last cached value — the sim-reachable counterpart to the
+// real Motor's hold-last-value fix (CR-03,
+// clasi/issues/encoder-integrity-i2c-failures-and-outlier-filter-recovery.md).
+void sim_set_motor_read_failure(void* h, int side, int fail) {
+    SimHandle* s = static_cast<SimHandle*>(h);
+    bool f = (fail != 0);
+    if (side == 0 || side > 1) s->hal.simMotorL().setReadFailure(f);
+    if (side == 1 || side > 1) s->hal.simMotorR().setReadFailure(f);
 }
 
 // ---- OTOS sim model ----
@@ -1161,6 +1201,8 @@ void sim_ekftiny_set_rej_head_streak(void* h, int streak)
 // Parameters (out — caller provides arrays of capacity >= MAX_ARGS):
 //   out_ok           — 1 on success, 0 on failure.
 //   out_count        — number of args in result (undefined on failure).
+//   out_supplied_count — number of positional slots actually supplied by the
+//                      caller (<= out_count; undefined on failure). 064-001.
 //   out_arg_types    — arg type per slot (0=INT,1=FLOAT,2=STR).
 //   out_arg_ivals    — ival per slot.
 //   out_arg_fvals    — fval per slot.
@@ -1177,7 +1219,7 @@ int sim_parse_schema(
     const char* const* def_names, const int* def_kinds,
     const int* def_ranged, const int* def_lo, const int* def_hi, int ndefs,
     int min_tokens, int variadic, const char* pack_kv,
-    int* out_ok, int* out_count,
+    int* out_ok, int* out_count, int* out_supplied_count,
     int* out_arg_types, int* out_arg_ivals, float* out_arg_fvals,
     char* out_arg_svals,            // flat: slot i occupies svals[i*32..i*32+31]
     char* err_detail_buf)           // 64-byte output for error detail
@@ -1216,6 +1258,7 @@ int sim_parse_schema(
 
     if (r.ok) {
         *out_count = r.args.count;
+        *out_supplied_count = r.args.suppliedCount;
         for (int i = 0; i < r.args.count; ++i) {
             out_arg_types[i] = static_cast<int>(r.args.args[i].type);
             out_arg_ivals[i] = r.args.args[i].ival;
@@ -1231,6 +1274,7 @@ int sim_parse_schema(
         if (err_detail_buf) err_detail_buf[0] = '\0';
     } else {
         *out_count = 0;
+        *out_supplied_count = 0;
         // Write error detail into caller's buffer.
         if (err_detail_buf) {
             if (r.err.detail) {
@@ -1247,6 +1291,55 @@ int sim_parse_schema(
     }
 
     return r.ok ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------
+// MotorSlew C-ABI test hook (064-002)
+//
+// sim_motor_clamp_slew — invoke MotorSlew::clampStep() (source/hal/real/
+// MotorSlew.h) directly so pytest can exercise the exact |ΔPWM| clamp
+// arithmetic that Motor::setSpeed() (source/hal/real/Motor.cpp) runs on
+// every 0x60 write. Motor.cpp itself is CODAL-only and not reachable from
+// HOST_BUILD (see tests/_infra/sim/CMakeLists.txt's hal/real/ exclusion),
+// but MotorSlew.h is a standalone, dependency-free header, so this hook
+// links it straight into libfirmware_host with no MockHAL/SimHandle needed.
+//
+// Pure function, no state: takes the last-written PWM percent, the caller's
+// requested target, and the max per-write delta; returns the clamped value
+// that would actually be written.
+// ---------------------------------------------------------------------------
+int sim_motor_clamp_slew(int lastWritten, int target, int maxDelta)
+{
+    return (int)MotorSlew::clampStep((int8_t)lastWritten, (int8_t)target,
+                                      (uint8_t)maxDelta);
+}
+
+// ---------------------------------------------------------------------------
+// Reset-kind sim hooks (064-003)
+//
+// Expose SimMotor's hardResetCount()/softResetCount() so a full-pipeline sim
+// test can reproduce the stand session's arm-3 scenario (D preempted
+// mid-flight by a second D): drive, preempt, and assert that
+// resetEncoderAccumulators() chose the software rebaseline (softResetCount
+// incremented) rather than the hardware atomic re-prime (hardResetCount did
+// NOT increment) — and, symmetrically, that a reset from genuine idle still
+// takes the hardware path.
+// ---------------------------------------------------------------------------
+int sim_get_motor_hard_reset_count_l(void* h)
+{
+    return (int)static_cast<SimHandle*>(h)->hal.simMotorL().hardResetCount();
+}
+int sim_get_motor_hard_reset_count_r(void* h)
+{
+    return (int)static_cast<SimHandle*>(h)->hal.simMotorR().hardResetCount();
+}
+int sim_get_motor_soft_reset_count_l(void* h)
+{
+    return (int)static_cast<SimHandle*>(h)->hal.simMotorL().softResetCount();
+}
+int sim_get_motor_soft_reset_count_r(void* h)
+{
+    return (int)static_cast<SimHandle*>(h)->hal.simMotorR().softResetCount();
 }
 
 } // extern "C"
