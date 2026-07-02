@@ -134,6 +134,17 @@ def is_sim_transport(transport: object) -> bool:
     return type(transport).__name__ == "SimTransport"
 
 
+def is_relay_transport(transport: object) -> bool:
+    """Return True when *transport* is a ``RelayTransport`` (PLAYFIELD MODE).
+
+    Duck-typed on the class name for the same reason as ``is_sim_transport``.
+    Used to hide "Set Robot @ 0,0" in playfield mode: there the robot's world
+    pose comes from the overhead camera (tag 100), so the operator physically
+    places the robot at world (0, 0) rather than re-seeding the firmware pose.
+    """
+    return type(transport).__name__ == "RelayTransport"
+
+
 # ---------------------------------------------------------------------------
 # Operations panel factory
 # ---------------------------------------------------------------------------
@@ -384,8 +395,11 @@ class OpsController:
         """Enable or disable transport-dependent buttons.
 
         In Sim mode, the "Sync Pose" button is disabled (no camera) with a
-        tooltip explaining why.  All other transport-dependent buttons are
-        enabled.
+        tooltip explaining why.  In PLAYFIELD MODE (Relay) the "Set Robot @
+        0,0" button is hidden — the robot's world pose comes from the camera,
+        so the operator physically moves the robot to world (0, 0) instead of
+        re-seeding the firmware pose.  All other transport-dependent buttons
+        are enabled.
 
         Parameters
         ----------
@@ -393,10 +407,20 @@ class OpsController:
             ``True`` after a successful ``transport.connect()``;
             ``False`` after ``transport.disconnect()``.
         transport:
-            The active transport (used to detect Sim mode).
+            The active transport (used to detect Sim / Relay mode).
         """
         for btn in self._transport_buttons:
             btn.setEnabled(connected)  # type: ignore[attr-defined]
+
+        # "Set Robot @ 0,0" is meaningless in playfield mode (camera-sourced
+        # pose): hide it when connected via Relay, show it otherwise.
+        if self._origin_btn is not None:
+            hide_origin = (
+                connected
+                and transport is not None
+                and is_relay_transport(transport)
+            )
+            self._origin_btn.setVisible(not hide_origin)  # type: ignore[attr-defined]
 
         if connected and transport is not None and is_sim_transport(transport):
             self._sync_btn.setEnabled(False)  # type: ignore[attr-defined]

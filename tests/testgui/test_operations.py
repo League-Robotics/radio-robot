@@ -57,6 +57,16 @@ FakeSimTransport.__name__ = "SimTransport"
 FakeSimTransport.__qualname__ = "SimTransport"
 
 
+class FakeRelayTransport(FakeTransport):
+    """Fake transport whose class name is 'RelayTransport' (PLAYFIELD MODE)."""
+
+    pass
+
+
+FakeRelayTransport.__name__ = "RelayTransport"
+FakeRelayTransport.__qualname__ = "RelayTransport"
+
+
 # ---------------------------------------------------------------------------
 # Qt-free pure-helper tests
 # ---------------------------------------------------------------------------
@@ -108,6 +118,44 @@ class TestBuildSetposeCommand:
         assert isinstance(result, str)
 
 
+class TestIsRelayTransport:
+    """is_relay_transport — duck-type check + origin-button gating."""
+
+    def test_relay_named_transport_is_relay(self):
+        from robot_radio.testgui.operations import is_relay_transport
+
+        assert is_relay_transport(FakeRelayTransport())
+
+    def test_sim_and_serial_are_not_relay(self):
+        from robot_radio.testgui.operations import is_relay_transport
+
+        assert not is_relay_transport(FakeSimTransport())
+        assert not is_relay_transport(FakeTransport())
+        assert not is_relay_transport(None)  # type: ignore[arg-type]
+
+    def test_origin_hidden_on_relay_connect(self):
+        """Set Robot @ 0,0 is hidden in PLAYFIELD (Relay) mode."""
+        t = FakeRelayTransport()
+        ctrl, log, state = _make_controller(t)
+        ctrl.set_connected(True, t)
+        assert ctrl._origin_btn.visible is False  # type: ignore[attr-defined]
+
+    def test_origin_visible_on_sim_and_serial_connect(self):
+        for t in (FakeSimTransport(), FakeTransport()):
+            ctrl, log, state = _make_controller(t)
+            ctrl.set_connected(True, t)
+            assert ctrl._origin_btn.visible is True  # type: ignore[attr-defined]
+
+    def test_origin_restored_on_disconnect(self):
+        """After a relay session, disconnect makes the button visible again."""
+        t = FakeRelayTransport()
+        ctrl, log, state = _make_controller(t)
+        ctrl.set_connected(True, t)
+        assert ctrl._origin_btn.visible is False  # type: ignore[attr-defined]
+        ctrl.set_connected(False)
+        assert ctrl._origin_btn.visible is True  # type: ignore[attr-defined]
+
+
 class TestIsSimTransport:
     """is_sim_transport — duck-type check on class name."""
 
@@ -154,6 +202,7 @@ def _make_controller(
             self.checked = checked
             self.text_val = text
             self.tooltip = ""
+            self.visible = True
 
         def setEnabled(self, v: bool) -> None:
             self.enabled = v
@@ -166,6 +215,9 @@ def _make_controller(
 
         def setChecked(self, v: bool) -> None:
             self.checked = v
+
+        def setVisible(self, v: bool) -> None:
+            self.visible = v
 
     sync_btn = FakeBtn()
     zero_btn = FakeBtn()
