@@ -47,9 +47,21 @@ The bridge's ``on_frame`` slot calls ``canvas_ctrl.set_avatar_pose`` on
 to a QPixmap and calls ``canvas_ctrl.set_background`` only on a throttled
 subset (~3-4 fps) to limit GUI-thread work.
 
-When live-view is active (``_state["live_view_active"] is True``), the
-``on_truth_ready`` slot skips ``canvas_ctrl.refresh()`` — the avatar is driven
-by the camera, not fused telemetry.  The green truth trace still accumulates.
+When live-view is active (``_state["live_view_active"] is True``), BOTH
+``_TelemetryBridge`` slots leave the avatar marker alone — the camera live-view
+worker (``canvas_ctrl.set_avatar_pose``) is the sole owner of the marker in
+live view:
+
+- ``on_truth_ready`` skips ``canvas_ctrl.refresh()`` entirely.  The green
+  truth trace still accumulates in the TraceModel.
+- ``on_frame_ready`` calls ``canvas_ctrl.refresh(update_marker=False)`` so
+  the trace paths (including the magenta fused trace) still redraw at the
+  faster TLM rate, but ``_update_marker`` is not invoked and the marker is
+  not repositioned.
+
+Outside live view (Sim/Serial, or Relay before live-view starts),
+``on_frame_ready`` calls ``canvas_ctrl.refresh(fused_yaw_rad)`` as before,
+positioning the marker from the latest fused pose.
 
 On relay disconnect (or window close) the worker is stopped, the thread joined,
 and ``canvas_ctrl.restore_static_background()`` reverts the canvas to the grey
@@ -812,7 +824,15 @@ def _build_main_window():  # type: ignore[return]
 
         @Slot()
         def on_frame_ready(self) -> None:
-            """Process all pending TLMFrames queued from background threads."""
+            """Process all pending TLMFrames queued from background threads.
+
+            Always accumulates the fused trace in the TraceModel.  In
+            PLAYFIELD MODE (``live_view_active``) the avatar is driven by the
+            camera live-view worker (:meth:`CanvasController.set_avatar_pose`),
+            so the marker is left untouched here (``refresh(update_marker=False)``)
+            to avoid fighting the worker for the marker's position — only the
+            trace paths redraw at the (faster) TLM rate.
+            """
             while True:
                 try:
                     frame = _pending_frames.get_nowait()
@@ -822,7 +842,10 @@ def _build_main_window():  # type: ignore[return]
                 fused_yaw_rad = None
                 if frame.pose is not None:
                     fused_yaw_rad = math.radians(frame.pose[2] / 100.0)
-                canvas_ctrl.refresh(fused_yaw_rad)
+                if _state.get("live_view_active"):
+                    canvas_ctrl.refresh(update_marker=False)
+                else:
+                    canvas_ctrl.refresh(fused_yaw_rad)
 
         @Slot(float, float, float)
         def on_truth_ready(self, x_cm: float, y_cm: float, yaw_rad: float) -> None:

@@ -193,6 +193,82 @@ class TestCanvasRefresh:
 
 
 # ---------------------------------------------------------------------------
+# CanvasController.refresh(update_marker=False) — camera bridge owns the avatar
+# (ticket 063-011: TLM refresh must not move the avatar in live view)
+# ---------------------------------------------------------------------------
+
+
+class TestRefreshUpdateMarkerParam:
+    """refresh(update_marker=False) rebuilds traces but must NOT move the marker."""
+
+    @pytest.fixture
+    def canvas_setup(self, qapp):
+        from robot_radio.testgui.canvas import build_canvas
+
+        model = _make_trace_model()
+        model.anchor(0.0, 0.0, 0.0)
+        widget, ctrl = build_canvas(model)
+        return model, widget, ctrl
+
+    def test_refresh_update_marker_false_does_not_move_marker(self, canvas_setup):
+        """refresh(update_marker=False) leaves the marker position unchanged."""
+        model, widget, ctrl = canvas_setup
+
+        # Establish a baseline marker position away from the origin.
+        model.feed(_make_frame(pose=(0, 0, 0)))
+        model.feed(_make_frame(pose=(1000, 0, 0)))
+        ctrl.refresh(fused_yaw_rad=0.0)
+        pos_before = ctrl._marker_group.pos()
+        rotation_before = ctrl._marker_group.rotation()
+
+        # Feed a fused point that WOULD move the marker if applied.
+        model.feed(_make_frame(pose=(5000, 500, 9000)))
+        ctrl.refresh(fused_yaw_rad=math.pi / 2, update_marker=False)
+
+        pos_after = ctrl._marker_group.pos()
+        rotation_after = ctrl._marker_group.rotation()
+        assert pos_after.x() == pytest.approx(pos_before.x()), (
+            "Marker x must not move when update_marker=False"
+        )
+        assert pos_after.y() == pytest.approx(pos_before.y()), (
+            "Marker y must not move when update_marker=False"
+        )
+        assert rotation_after == pytest.approx(rotation_before), (
+            "Marker rotation must not change when update_marker=False"
+        )
+
+    def test_refresh_update_marker_false_still_updates_traces(self, canvas_setup):
+        """refresh(update_marker=False) still rebuilds the trace paths."""
+        model, widget, ctrl = canvas_setup
+
+        model.feed(_make_frame(pose=(0, 0, 0)))
+        model.feed(_make_frame(pose=(1000, 0, 0)))
+        ctrl.refresh(update_marker=False)
+
+        item = ctrl._trace_items["fused"]
+        path = item.path()
+        assert not path.isEmpty(), "fused trace path must update even with update_marker=False"
+
+    def test_refresh_default_moves_marker(self, canvas_setup):
+        """refresh() with the default update_marker=True DOES move the marker
+        (contrast case proving the parameter, not some other effect, gates
+        the marker update)."""
+        model, widget, ctrl = canvas_setup
+
+        model.feed(_make_frame(pose=(0, 0, 0)))
+        ctrl.refresh(fused_yaw_rad=0.0)
+        pos_before = ctrl._marker_group.pos()
+
+        model.feed(_make_frame(pose=(2000, 0, 0)))
+        ctrl.refresh(fused_yaw_rad=0.0)
+        pos_after = ctrl._marker_group.pos()
+
+        assert pos_after.x() != pytest.approx(pos_before.x()), (
+            "Marker must move on a default refresh() call (update_marker=True)"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Robot marker — red front / blue back, rotation
 # ---------------------------------------------------------------------------
 

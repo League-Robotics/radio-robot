@@ -575,8 +575,13 @@ class CanvasController:
     # Public API
     # ------------------------------------------------------------------
 
-    def refresh(self, fused_yaw_rad: float | None = None) -> None:
-        """Rebuild all trace paths from the TraceModel and update the marker.
+    def refresh(
+        self,
+        fused_yaw_rad: float | None = None,
+        *,
+        update_marker: bool = True,
+    ) -> None:
+        """Rebuild all trace paths from the TraceModel and (optionally) the marker.
 
         Parameters
         ----------
@@ -584,9 +589,18 @@ class CanvasController:
             Current fused heading in radians (from the latest TLMFrame.pose[2]
             converted from centidegrees).  If ``None``, the marker heading is
             unchanged.
+        update_marker:
+            When ``True`` (default), reposition/rotate the robot marker from
+            the latest fused pose via :meth:`_update_marker` — preserves the
+            behaviour of every existing caller.  When ``False``, only the
+            trace paths are rebuilt and the marker is left untouched; used in
+            PLAYFIELD MODE live view where the camera bridge
+            (:meth:`set_avatar_pose`) owns the avatar and a TLM-rate refresh
+            must not fight it for the marker's position.
         """
         self._update_traces()
-        self._update_marker(fused_yaw_rad)
+        if update_marker:
+            self._update_marker(fused_yaw_rad)
         self._scene.update()  # type: ignore[attr-defined]
 
     def set_background(
