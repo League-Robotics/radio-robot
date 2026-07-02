@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: "Add |\u0394PWM| slew cap to Motor::setSpeed"
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 depends-on: []
