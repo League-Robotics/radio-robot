@@ -1,7 +1,7 @@
 ---
 id: 068
 title: Three world poses in TLM (firmware encpose)
-status: roadmap
+status: planning-docs
 branch: sprint/068-three-world-poses-in-tlm-firmware-encpose
 use-cases: []
 issues:
@@ -116,5 +116,9 @@ Before tickets can be created, all of the following must be true:
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 001 | Firmware: expose encpose= in TLM | — |
+| 002 | Host protocol: parse_tlm() + TLMFrame.encpose | 001 |
+| 003 | TestGUI: delete host-side encoder integrator, plot encpose= directly | 002 |
+| 004 | Regression: zero-error three-pose agreement | 002 |
 
 Tickets execute serially in the order listed.

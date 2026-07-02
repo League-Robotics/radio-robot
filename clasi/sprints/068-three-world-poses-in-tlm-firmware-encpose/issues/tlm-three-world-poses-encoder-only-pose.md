@@ -1,7 +1,12 @@
 ---
-status: pending
+status: in-progress
 severity: medium
 sprint: 068
+tickets:
+- 068-001
+- 068-002
+- 068-003
+- 068-004
 ---
 
 # TLM must carry three world poses: encoder-only, OTOS, and EKF — add the missing encoder-only pose
