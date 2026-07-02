@@ -24,6 +24,7 @@
 #include "hal/sim/PhysicsWorld.h"
 #include "hal/sim/WorldView.h"
 #include "hal/real/BenchOtosSensor.h"
+#include "hal/real/MotorSlew.h"
 #include "types/Config.h"
 #include "types/Inputs.h"
 #include "commands/MotionCommand.h"
@@ -1251,6 +1252,27 @@ int sim_parse_schema(
     }
 
     return r.ok ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------
+// MotorSlew C-ABI test hook (064-002)
+//
+// sim_motor_clamp_slew — invoke MotorSlew::clampStep() (source/hal/real/
+// MotorSlew.h) directly so pytest can exercise the exact |ΔPWM| clamp
+// arithmetic that Motor::setSpeed() (source/hal/real/Motor.cpp) runs on
+// every 0x60 write. Motor.cpp itself is CODAL-only and not reachable from
+// HOST_BUILD (see tests/_infra/sim/CMakeLists.txt's hal/real/ exclusion),
+// but MotorSlew.h is a standalone, dependency-free header, so this hook
+// links it straight into libfirmware_host with no MockHAL/SimHandle needed.
+//
+// Pure function, no state: takes the last-written PWM percent, the caller's
+// requested target, and the max per-write delta; returns the clamped value
+// that would actually be written.
+// ---------------------------------------------------------------------------
+int sim_motor_clamp_slew(int lastWritten, int target, int maxDelta)
+{
+    return (int)MotorSlew::clampStep((int8_t)lastWritten, (int8_t)target,
+                                      (uint8_t)maxDelta);
 }
 
 } // extern "C"

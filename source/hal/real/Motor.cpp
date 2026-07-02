@@ -1,4 +1,5 @@
 #include "Motor.h"
+#include "MotorSlew.h"
 #include <math.h>
 
 // ---------------------------------------------------------------------------
@@ -87,29 +88,56 @@ void Motor::setSpeed(int8_t pct)
         // sees a change and writes the latest PID output once the interval ends.
         return;
     }
-    _lastWriteUs    = nowUs;
-    _lastWrittenPct = pct;
 
-    // Apply fwdSign: positive pct = logical forward; fwdSign maps that to
+    // |ΔPWM| slew cap (064-002 — see MotorSlew.h and
+    // clasi/issues/encoder-reset-while-moving-latches-readback.md). A stop
+    // (pct == 0) is the sprint's explicit safety exemption and is always
+    // written in full, immediately — never clamped. Every other write —
+    // including a full reversal, which stays un-throttled by the rate limit
+    // above — is stepped by at most kMaxDeltaPwmPerWrite toward the
+    // requested target instead of slamming the whole swing in one 0x60
+    // transaction. `written`, not the caller's `pct`, becomes the new
+    // _lastWrittenPct below, so the write-on-change guard at the top of this
+    // function causes a large reversal to converge over several consecutive
+    // setSpeed() calls rather than one instant step.
+    //
+    // BENCH-CONFIRM: design-time estimate (see architecture-update.md "Cap
+    // value" / Open Questions), not yet HITL-validated — same convention as
+    // readSpeed()'s kUnitFactor below.
+    static constexpr uint8_t kMaxDeltaPwmPerWrite = 25;  // of the ±100 PWM-percent range
+    int8_t written = stopping
+        ? pct
+        : MotorSlew::clampStep(_lastWrittenPct, pct, kMaxDeltaPwmPerWrite);
+
+    _lastWriteUs    = nowUs;
+    _lastWrittenPct = written;
+
+    // Apply fwdSign: positive written = logical forward; fwdSign maps that to
     // the chip's CW/CCW convention.  For the right wheel, fwdSign = -1 so
     // that a positive command results in CCW chip rotation (physical forward).
-    int16_t effective = (int16_t)_fwdSign * (int16_t)pct;
+    int16_t effective = (int16_t)_fwdSign * (int16_t)written;
 
     if (effective == 0) {
         // Zero speed: COAST via the 0x60 move command with speed 0 — NOT the
         // 0x5F "shutdown" command. 0x5F shuts the Nezha controller down and
         // wedges subsequent encoder reads (they freeze at a constant). The old
         // firmware used 0x60-speed-0 to coast and reserved 0x5F for a final
-        // program-end stop. See docs/knowledge encoder-wedge note.
+        // program-end stop. See docs/knowledge encoder-wedge note. (Reached
+        // both by a genuine stop, pct==0, and by a slew-clamped write that
+        // happens to pass exactly through zero while converging toward a
+        // reversal target — both are correctly a momentary coast.)
         writeMotorCmd(DIR_CW, 0);
         _lastDir = 0;
     } else {
         uint8_t dir   = (effective > 0) ? DIR_CW : DIR_CCW;
         uint8_t speed = (effective > 0) ? (uint8_t)effective : (uint8_t)(-effective);
         writeMotorCmd(dir, speed);
-        // Track logical direction (sign of the original pct, not the chip direction)
-        // so readSpeed() can apply the correct sign to the unsigned chip reading.
-        _lastDir = (pct > 0) ? (int8_t)1 : (int8_t)-1;
+        // Track logical direction (sign of the value actually written this
+        // call, not the caller's ultimate target) so readSpeed() applies the
+        // correct sign to the unsigned chip reading for the motion the chip
+        // is physically executing right now — which, mid-slew, may still be
+        // the old direction even though a reversal has been requested.
+        _lastDir = (written > 0) ? (int8_t)1 : (int8_t)-1;
     }
 }
 
