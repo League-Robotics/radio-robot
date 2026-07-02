@@ -304,7 +304,6 @@ def _build_main_window():  # type: ignore[return]
         build_wire_string,
         goto_distance_mm,
         goto_reached,
-        parse_tlm_mode,
     )
     from robot_radio.testgui.operations import (
         build_panel as _build_ops_panel,
@@ -350,7 +349,16 @@ def _build_main_window():  # type: ignore[return]
     _driver = KeyboardDriver()
 
     # Session recorder — Qt-free; accumulates TX/RX lines to a JSONL file.
+    # Manual recorder: driven by the Record/Pause/Stop buttons, writes a
+    # timestamped file the operator explicitly saves.
     recorder = SessionRecorder()
+    # Always-on "latest" recorder: runs for the whole connected session and
+    # overwrites recordings/latest.jsonl each connect, so there is ALWAYS a
+    # capture even when the operator forgot to press Record.  Fed the same
+    # TX/RX lines as the manual recorder, but independent of its state.
+    latest_recorder = SessionRecorder()
+    #: Fixed filename the latest-session capture is (over)written to.
+    LATEST_RECORDING_NAME = "latest.jsonl"
 
     # ------------------------------------------------------------------ window
     window = QMainWindow()
@@ -802,9 +810,11 @@ def _build_main_window():  # type: ignore[return]
         # Auto-scroll to bottom.
         sb = log_pane.verticalScrollBar()
         sb.setValue(sb.maximum())
-        # Route TX/RX lines to the active recorder session.
+        # Route TX/RX lines to both recorders: the manual one (only records
+        # when the operator started it) and the always-on latest capture.
         if direction is not None:
             recorder.append(direction, text)  # type: ignore[arg-type]
+            latest_recorder.append(direction, text)  # type: ignore[arg-type]
 
     # ----------------------------------------------------------- recorder controls
 
@@ -988,10 +998,17 @@ def _build_main_window():  # type: ignore[return]
         """Runs a pre-programmed tour on a background thread.
 
         Sends each wire string in ``steps`` via ``transport.command``, then
-        polls ``SNAP`` until the robot returns to idle (``mode=I``) before
-        sending the next.  SNAP polling (rather than the async ``EVT done``
-        event) is used because the radio relay drops asynchronous events but
-        answers ``SNAP`` reliably.
+        waits for the robot to return to idle (``mode=I``) before sending the
+        next.  Idle detection requests fresh telemetry with a fire-and-forget
+        ``SNAP`` and reads the resulting frame from ``state["last_tlm"]`` (the
+        transport reader delivers the SNAP's TLM reply there via
+        ``on_telemetry``).  This is done instead of ``transport.command("SNAP")``
+        because a SNAP reply is a corr-id-less TLM frame that ``command()``'s
+        reply queue never receives — the call would always time out with an
+        empty string, so ``mode=I`` was never seen and the tour could never
+        advance past its first step.  On-demand SNAP (rather than a stream) is
+        used because the radio relay drops asynchronous stream frames but
+        answers SNAP reliably.
 
         Signals are marshalled to the Qt main thread via QueuedConnection:
         ``log_line(text, direction)`` mirrors the manual Send path (direction
@@ -1006,12 +1023,17 @@ def _build_main_window():  # type: ignore[return]
         SPINUP_S = 0.2
         #: Interval (s) between SNAP completion polls.
         POLL_S = 0.3
+        #: Max wait (s) for a SNAP's TLM reply to reach state["last_tlm"].
+        SNAP_REPLY_TIMEOUT_S = 0.8
         #: Per-move timeout (s) before giving up and aborting the tour.
         MOVE_TIMEOUT_S = 30.0
 
-        def __init__(self, transport: "object", name: str, steps: list[str]) -> None:
+        def __init__(
+            self, transport: "object", state: dict, name: str, steps: list[str]
+        ) -> None:
             super().__init__()
             self._transport = transport
+            self._state = state
             self._name = name
             self._steps = steps
             self._stop = False
@@ -1054,23 +1076,41 @@ def _build_main_window():  # type: ignore[return]
                 self.finished.emit()
 
         def _wait_for_idle(self, time_mod: "object") -> bool:
-            """Poll SNAP until ``mode=I`` (idle) or the per-move timeout.
+            """Wait until telemetry reports ``mode=I`` (idle) or timeout.
+
+            Requests a fresh frame with a fire-and-forget ``SNAP`` and reads
+            the mode from ``state["last_tlm"]`` (populated by the transport's
+            ``on_telemetry`` callback — see the class docstring for why
+            ``command("SNAP")`` cannot be used).  Only frames stamped after
+            this wait began are accepted, so a stale pre-move idle frame does
+            not end the wait early.
 
             Returns ``True`` when idle is observed (or on stop request),
             ``False`` on timeout.
             """
             time_mod.sleep(self.SPINUP_S)
-            deadline = time_mod.monotonic() + self.MOVE_TIMEOUT_S
+            t_start = time_mod.monotonic()
+            deadline = t_start + self.MOVE_TIMEOUT_S
             while time_mod.monotonic() < deadline:
                 if self._stop:
                     return True
+                # Request one fresh telemetry frame; its TLM reply is delivered
+                # to state["last_tlm"] by the transport reader thread.
                 try:
-                    reply = self._transport.command("SNAP", read_ms=300)
+                    self._transport.send("SNAP")
                 except Exception:  # noqa: BLE001
                     return False
-                if parse_tlm_mode(reply) == "I":
-                    return True
-                time_mod.sleep(self.POLL_S)
+                reply_deadline = time_mod.monotonic() + self.SNAP_REPLY_TIMEOUT_S
+                while time_mod.monotonic() < reply_deadline:
+                    if self._stop:
+                        return True
+                    cached = self._state.get("last_tlm")
+                    if cached is not None:
+                        frame, ts = cached
+                        mode = (getattr(frame, "mode", None) or "").upper()
+                        if ts >= t_start and mode == "I":
+                            return True
+                    time_mod.sleep(self.POLL_S)
             return False
 
     class _GotoRunner(QObject):
@@ -1195,8 +1235,14 @@ def _build_main_window():  # type: ignore[return]
         """Transport on_telemetry callback — fires on the reader/tick thread.
 
         Enqueues the frame and emits the bridge signal to wake the Qt main
-        thread.
+        thread.  Also caches the freshest frame (with a monotonic timestamp)
+        in ``_state["last_tlm"]`` so the tour worker can poll motion state
+        without a synchronous ``SNAP``: a SNAP reply is a corr-id-less TLM
+        frame that ``command()``'s reply queue never receives, but it *does*
+        flow through this callback, so the tour reads mode from here instead.
         """
+        import time as _time
+        _state["last_tlm"] = (frame, _time.monotonic())
         _pending_frames.put(frame)
         _bridge.frame_ready.emit()  # type: ignore[attr-defined]
 
@@ -1463,7 +1509,7 @@ def _build_main_window():  # type: ignore[return]
             stop_tour_btn.setEnabled(True)
             from PySide6.QtCore import QThread  # type: ignore[import-untyped]
 
-            worker = _TourRunner(transport, name, list(steps))
+            worker = _TourRunner(transport, _state, name, list(steps))
             thread = QThread()
             worker.moveToThread(thread)
             # Marshal worker signals to the GUI thread via a main-thread bridge
@@ -1712,6 +1758,18 @@ def _build_main_window():  # type: ignore[return]
             # Warning was already shown by connect() / _show_build_warning().
             return
 
+        # Start the always-on "latest" capture for this whole session. It
+        # overwrites recordings/latest.jsonl each connect so there is always a
+        # recording of the most recent session — even if the operator never
+        # pressed Record. Started before STREAM 50 so setup traffic is captured.
+        try:
+            if latest_recorder.state != "idle":
+                latest_recorder.stop()
+            latest_path = latest_recorder.start(LATEST_RECORDING_NAME)
+            _append_log(f"[REC] Latest-session capture started: {latest_path}")
+        except Exception as exc:  # noqa: BLE001
+            _append_log(f"[WARN] Could not start latest-session capture: {exc}")
+
         # For Sim transport, STREAM 50 is sent internally by the tick-thread.
         # For hardware transports, send STREAM 50 here.
         if not isinstance(transport, SimTransport):
@@ -1787,6 +1845,7 @@ def _build_main_window():  # type: ignore[return]
         _stop_tour()
         _stop_goto()
         _state["last_truth"] = None
+        _state["last_tlm"] = None
         # Stop the live-view worker first so it doesn't race with cleanup.
         _stop_live_worker()
         # Detach cursor-key driving before the transport goes away.
@@ -1809,6 +1868,10 @@ def _build_main_window():  # type: ignore[return]
         # Re-enable port field if a hardware transport was selected.
         _on_transport_changed(transport_combo.currentIndex())
         _append_log("[INFO] Disconnected")
+        # Finalize the always-on latest-session capture.
+        latest_path = latest_recorder.stop()
+        if latest_path is not None:
+            _append_log(f"[REC] Latest-session capture saved: {latest_path}")
 
     connect_btn.clicked.connect(_on_connect)
     disconnect_btn.clicked.connect(_on_disconnect)
@@ -1817,6 +1880,10 @@ def _build_main_window():  # type: ignore[return]
     app.aboutToQuit.connect(_stop_live_worker)
     app.aboutToQuit.connect(_stop_tour)
     app.aboutToQuit.connect(_stop_goto)
+    # Flush/close both recorders on quit so a quit-without-disconnect still
+    # leaves a complete latest.jsonl on disk.
+    app.aboutToQuit.connect(recorder.stop)
+    app.aboutToQuit.connect(latest_recorder.stop)
 
     # -------------------------------------------------------------- startup grab
     # Trigger a best-effort live playfield grab shortly after the event loop

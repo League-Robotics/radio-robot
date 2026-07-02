@@ -429,3 +429,40 @@ def test_direction_from_marker_without_timestamp_prefix():
 
     assert direction_from_marker("> SI 0 0 0") == "TX"
     assert direction_from_marker("< OK setpose") == "RX"
+
+
+# ---------------------------------------------------------------------------
+# Fixed-name "latest" capture — overwrite-on-restart semantics
+# ---------------------------------------------------------------------------
+
+
+def test_recorder_fixed_name_overwrites_on_restart(tmp_path):
+    """Re-starting with the same filename truncates the prior contents.
+
+    This guards the always-on "latest.jsonl" capture: each connect calls
+    start("latest.jsonl") again, and the file must be overwritten (not
+    appended), so it always reflects only the most recent session.
+    """
+    from robot_radio.testgui.recorder import SessionRecorder
+
+    rec_dir = tmp_path / "recordings"
+    r = SessionRecorder(recordings_dir=rec_dir)
+
+    # First session: two lines.
+    p1 = r.start("latest.jsonl")
+    r.append("TX", "> RT 4500")
+    r.append("RX", "< OK rt rot=4500")
+    r.stop()
+    first = p1.read_text().strip().splitlines()
+    assert len(first) == 2
+
+    # Second session: one line, same fixed filename.
+    p2 = r.start("latest.jsonl")
+    assert p2 == p1, "latest capture must reuse the same fixed path"
+    r.append("TX", "> D 200 200 420")
+    r.stop()
+
+    lines = p2.read_text().strip().splitlines()
+    assert len(lines) == 1, "restart must overwrite, not append to, latest.jsonl"
+    assert json.loads(lines[0])["line"] == "> D 200 200 420"
+    assert "RT 4500" not in p2.read_text(), "stale first-session data survived"
