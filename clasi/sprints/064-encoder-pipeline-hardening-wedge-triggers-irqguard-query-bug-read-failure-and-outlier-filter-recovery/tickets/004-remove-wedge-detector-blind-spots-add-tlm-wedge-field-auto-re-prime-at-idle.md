@@ -1,9 +1,12 @@
 ---
 id: '004'
 title: Remove wedge-detector blind spots, add TLM wedge= field, auto re-prime at idle
-status: open
-use-cases: [SUC-004, SUC-005]
-depends-on: ['003']
+status: in-progress
+use-cases:
+- SUC-004
+- SUC-005
+depends-on:
+- '003'
 github-issue: ''
 issue: encoder-reset-while-moving-latches-readback.md
 completes_issue: true
@@ -34,22 +37,22 @@ decision).
 
 ## Acceptance Criteria
 
-- [ ] `controlTick()`'s per-wheel comparison becomes unconditional: an
+- [x] `controlTick()`'s per-wheel comparison becomes unconditional: an
       identical consecutive raw reading increments `_stuckCountW`; a
       changed reading resets it. Both the `tgtW != 0.0f` branch and the
       `_hasMovedW` gate are **removed** from the counting logic.
-- [ ] `_hasMovedL/R` fields are deleted, along with their clearing in
+- [x] `_hasMovedL/R` fields are deleted, along with their clearing in
       `startDriveClean()`/`startDrive()`/`stop()`.
-- [ ] `kWedgeThreshold` (10) and the latched, single-shot `EVT enc_wedged`
+- [x] `kWedgeThreshold` (10) and the latched, single-shot `EVT enc_wedged`
       line are unchanged in format and firing semantics (still fires once
       per episode, still includes the raw-read + bus-diagnostics fields).
-- [ ] `RobotTelemetry::buildTlmFrame()` (`source/robot/RobotTelemetry.cpp`)
+- [x] `RobotTelemetry::buildTlmFrame()` (`source/robot/RobotTelemetry.cpp`)
       gains `wedge=<L>,<R>` (0/1 per wheel, L-then-R wire order matching
       `enc=`/`vel=`), reading `drive.state().wheel_wedged()[1]` (L) and
       `[0]` (R). **Emitted unconditionally**, not gated by
       `config.tlmFields` (see architecture-update.md Design Rationale 2 —
       the bitmask's `uint8_t` has all 8 bits already assigned).
-- [ ] `Drive::tickUpdate()`'s existing wedge-push step (STEP 3) gains: if
+- [x] `Drive::tickUpdate()`'s existing wedge-push step (STEP 3) gains: if
       `anyWedged` and the drivetrain is at rest (reuse ticket 003's at-rest
       concept — do not duplicate the epsilon/decision logic) and no
       re-prime has been attempted for this latch episode, call
@@ -57,7 +60,7 @@ decision).
       flag clears when `anyWedged` next goes false (mirror the existing
       `_prevAnyWedged` pattern already in `tickUpdate`). One shared flag
       (not per-wheel) is sufficient.
-- [ ] `uv run --with pytest python -m pytest -q` is green (2 known-baseline
+- [x] `uv run --with pytest python -m pytest -q` is green (2 known-baseline
       failures allowed, no new failures) — **including updating
       `tests/simulation/unit/test_golden_tlm.py`'s captured expected TLM
       frame(s)** to include the new unconditional `wedge=` field (this WILL

@@ -1067,8 +1067,10 @@ class Sim:
         """Return True if the left wheel wedge latch is set (033-005e).
 
         The latch fires when the left encoder has been identical for
-        kWedgeThreshold consecutive commanded ticks (after the first move).
-        Resets when the encoder changes again.
+        kWedgeThreshold consecutive readings. Unconditional since 064-004 —
+        no longer gated on a nonzero commanded target or on the wheel having
+        moved at least once first (the old arming grace). Resets when the
+        encoder changes again.
         """
         return bool(self._lib.sim_get_wheel_wedged_l(self._h))
 

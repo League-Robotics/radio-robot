@@ -22,7 +22,6 @@ MotorController::MotorController(IMotor& left, IMotor& right, const RobotConfig&
       _wedgePrevValidL(false), _wedgePrevValidR(false),
       _stuckCountL(0), _stuckCountR(0),
       _wedgeEmittedL(false), _wedgeEmittedR(false),
-      _hasMovedL(false), _hasMovedR(false),
       _busDiag(nullptr),
       _evtFn(nullptr), _evtCtx(nullptr)
 {
@@ -41,8 +40,6 @@ void MotorController::resetStuckCounters()
     _wedgeEmittedR   = false;
     _wedgePrevValidL = false;
     _wedgePrevValidR = false;
-    _hasMovedL       = false;  // (033-005d) re-arm grace latches
-    _hasMovedR       = false;
 }
 
 void MotorController::setTarget(float leftMms, float rightMms)
@@ -71,10 +68,6 @@ void MotorController::startDriveClean(float leftMms, float rightMms)
     _cmdEncStartR = _prevEncR;
     _vcL.reset();
     _vcR.reset();
-    // (033-005d) Clear arming-grace latches: the detector must not fire until
-    // each wheel has moved at least once since this command started.
-    _hasMovedL = false;
-    _hasMovedR = false;
 }
 
 void MotorController::startDrive(float leftMms, float rightMms)
@@ -117,9 +110,6 @@ void MotorController::startDrive(float leftMms, float rightMms)
 
     _fasterIsRight = newFasterIsRight;
     _cmdRatio = newRatio;
-    // (033-005d) Clear arming-grace latches on streaming command start.
-    _hasMovedL = false;
-    _hasMovedR = false;
 }
 
 void MotorController::stop()
@@ -136,9 +126,6 @@ void MotorController::stop()
     _cmdEncStartR = _prevEncR;
     _motorL.setSpeed(0);
     _motorR.setSpeed(0);
-    // (033-005d) Clear arming-grace latches on stop.
-    _hasMovedL = false;
-    _hasMovedR = false;
 }
 
 void MotorController::resetIntegrators()
@@ -274,13 +261,18 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
     // PID runs for BOTH wheels using the held (ZOH) velocities.
 
     // -------------------------------------------------------------------------
-    // Encoder-wedge detector (015-003).
+    // Encoder-wedge detector (015-003; blind spots removed 064-004).
     //
-    // Per-wheel: if the commanded speed is non-zero and the encoder value has
-    // not changed since the last reading, increment the stuck counter. When
-    // the counter reaches kWedgeThreshold and the latch is clear, emit
-    // EVT enc_wedged once (latched) and set the latch. Re-arm when the
-    // encoder moves.
+    // Per-wheel: an identical consecutive raw reading increments the stuck
+    // counter; a changed reading resets it. Unconditional — NOT gated by
+    // commanded target (the old tgtW==0.0f reset wiped any streak
+    // accumulated during the tail of a command, exactly where the latch
+    // mechanism onsets) and NOT gated by an arming grace (the old
+    // "has moved since command start" gate meant a wheel that entered a
+    // new command already frozen never armed — Episode A: RT turn frozen
+    // for 14 TLM frames, zero EVT). When the counter reaches
+    // kWedgeThreshold and the latch is clear, emit EVT enc_wedged once
+    // (latched) and set the latch. Re-arm when the encoder moves.
     //
     // Only checked when a wheel's encoder was just refreshed (refreshedWheel
     // matches the wheel index) so we compare two real hardware reads, not
@@ -292,25 +284,15 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
         // Left-wheel check — when left (or both) was just collected.
         if (refreshedWheel == 1 || refreshedWheel == 3) {
             float encL = inputs.encMm[1];    // FL = index 1 ([0]=R, [1]=L)
-            float tgtL = cmds.tgtMms[1];
-            if (tgtL != 0.0f) {
-                if (_wedgePrevValidL && encL != _wedgePrevEncL) {
-                    // Encoder moved: re-arm and set the arming-grace latch.
+            if (_wedgePrevValidL) {
+                if (encL != _wedgePrevEncL) {
+                    // Encoder moved (or a genuine encoder-reset event shifted
+                    // the baseline): re-arm.
                     _stuckCountL   = 0;
                     _wedgeEmittedL = false;
-                    _hasMovedL     = true;  // (033-005d) wheel has moved at least once
-                } else if (_wedgePrevValidL && encL == _wedgePrevEncL) {
-                    // (033-005d) Only count toward wedge threshold once the
-                    // wheel has moved at least once since the command started.
-                    // This prevents spin-up lag from firing the detector.
-                    if (_hasMovedL) {
-                        if (_stuckCountL < 255) ++_stuckCountL;
-                    }
+                } else if (_stuckCountL < 255) {
+                    ++_stuckCountL;
                 }
-            } else {
-                // Not commanded — reset.
-                _stuckCountL   = 0;
-                _wedgeEmittedL = false;
             }
             _wedgePrevEncL   = encL;
             _wedgePrevValidL = true;
@@ -348,22 +330,15 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
         // Right-wheel check — when right (or both) was just collected.
         if (refreshedWheel == 2 || refreshedWheel == 3) {
             float encR = inputs.encMm[0];    // FR = index 0 ([0]=R, [1]=L)
-            float tgtR = cmds.tgtMms[0];
-            if (tgtR != 0.0f) {
-                if (_wedgePrevValidR && encR != _wedgePrevEncR) {
-                    // Encoder moved: re-arm and set the arming-grace latch.
+            if (_wedgePrevValidR) {
+                if (encR != _wedgePrevEncR) {
+                    // Encoder moved (or a genuine encoder-reset event shifted
+                    // the baseline): re-arm.
                     _stuckCountR   = 0;
                     _wedgeEmittedR = false;
-                    _hasMovedR     = true;  // (033-005d) wheel has moved at least once
-                } else if (_wedgePrevValidR && encR == _wedgePrevEncR) {
-                    // (033-005d) Gate on arming grace: don't count until moved once.
-                    if (_hasMovedR) {
-                        if (_stuckCountR < 255) ++_stuckCountR;
-                    }
+                } else if (_stuckCountR < 255) {
+                    ++_stuckCountR;
                 }
-            } else {
-                _stuckCountR   = 0;
-                _wedgeEmittedR = false;
             }
             _wedgePrevEncR   = encR;
             _wedgePrevValidR = true;
@@ -497,6 +472,27 @@ void MotorController::getEncoderPositions(int32_t& leftMm, int32_t& rightMm) con
     rightMm = static_cast<int32_t>(_motorR.readEncoderMmFAtomic(_cal));
 }
 
+bool MotorController::computeAtRest() const
+{
+    // (064-003) At-rest decision: commanded targets both zero AND measured
+    // |velocity| below a small epsilon.
+    //
+    // Commanded component: read directly off the authoritative MotorCommands
+    // (the same _cmds pointer setTarget()/startDrive()/stop() write through).
+    // Measured component: _lastVelMmsL/R, refreshed every controlTick() call
+    // from the EMA-filtered inputs.velMms[] (see controlTick() above).
+    bool cmdAtRest = (!_cmds) ||
+                     (_cmds->tgtMms[0] == 0.0f && _cmds->tgtMms[1] == 0.0f);
+    bool velAtRest = (fabsf(_lastVelMmsL) < kAtRestVelEpsilonMms) &&
+                     (fabsf(_lastVelMmsR) < kAtRestVelEpsilonMms);
+    return cmdAtRest && velAtRest;
+}
+
+bool MotorController::isAtRest() const
+{
+    return computeAtRest();
+}
+
 void MotorController::resetEncoderAccumulators()
 {
     // (064-003) At-rest decision: firing the hardware atomic-read burst
@@ -505,27 +501,10 @@ void MotorController::resetEncoderAccumulators()
     // Nezha encoder readback — stand-proven ~1.4 transient latches/cycle,
     // escalating to persistent (see clasi/sprints/064-.../issues/
     // encoder-reset-while-moving-latches-readback.md). It is safe only when
-    // the drivetrain is genuinely at rest: commanded targets both zero AND
-    // measured |velocity| below a small epsilon. When not at rest, rebaseline
-    // in software only (no I2C transaction) instead — Motor::rebaselineSoft()
-    // / SimMotor::rebaselineSoft().
-    //
-    // Commanded component: read directly off the authoritative MotorCommands
-    // (the same _cmds pointer setTarget()/startDrive()/stop() write through).
-    // Measured component: _lastVelMmsL/R, refreshed every controlTick() call
-    // from the EMA-filtered inputs.velMms[] (see controlTick() above).
-    //
-    // kAtRestVelEpsilonMms is a design-time estimate (BENCH-CONFIRM — see
-    // architecture-update.md "Open Questions"), not yet HITL-validated —
-    // same convention as Motor::setSpeed()'s kMaxDeltaPwmPerWrite.
-    static constexpr float kAtRestVelEpsilonMms = 5.0f;
-
-    bool cmdAtRest = (!_cmds) ||
-                     (_cmds->tgtMms[0] == 0.0f && _cmds->tgtMms[1] == 0.0f);
-    bool velAtRest = (fabsf(_lastVelMmsL) < kAtRestVelEpsilonMms) &&
-                     (fabsf(_lastVelMmsR) < kAtRestVelEpsilonMms);
-
-    if (cmdAtRest && velAtRest) {
+    // the drivetrain is genuinely at rest (computeAtRest()). When not at
+    // rest, rebaseline in software only (no I2C transaction) instead —
+    // Motor::rebaselineSoft() / SimMotor::rebaselineSoft().
+    if (computeAtRest()) {
         // At rest: unchanged hardware atomic re-prime. This is ALSO the
         // transient-wedge self-heal mechanism relied on elsewhere (an
         // at-rest reset, e.g. the next D from idle or ZERO enc, re-primes and

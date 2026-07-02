@@ -90,8 +90,34 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
     _est.setWedgeActive(anyWedged);
     if (anyWedged) {
         _est.setEncOmegaHealthy(false);
-    } else if (_prevAnyWedged) {
-        _est.setEncOmegaHealthy(true);
+        // (064-004) Auto re-prime at idle: a wedge latch that persists while
+        // the drivetrain is genuinely at rest is worth exactly one automatic
+        // hardware re-prime attempt per episode -- this is the same at-rest
+        // atomic reset that self-heals a transient latch elsewhere (next D
+        // from idle, ZERO enc). A persistent latch needs a full power cycle
+        // (see the KB doc), so hammering resetEncoderAccumulators() every
+        // idle tick would not help and would just add needless I2C traffic
+        // -- hence the one-shot gate. Reuses MotorController's own at-rest
+        // decision (064-003, isAtRest()) instead of duplicating the
+        // epsilon/commanded-vs-measured logic here.
+        //
+        // resetStuckCounters() is required alongside the reset: while idle,
+        // Drive calls controlTick() with refreshedWheel=0 (see `driving`
+        // below), so the wedge-check block in controlTick() never runs
+        // again until a new command starts driving -- nothing would
+        // otherwise observe the reset and clear the latch, so the one-shot
+        // flag below would never re-arm for a future, separate episode.
+        if (!_wedgeReprimeAttempted && _mc.isAtRest()) {
+            _mc.resetEncoderAccumulators();
+            _mc.resetStuckCounters();
+            _wedgeReprimeAttempted = true;
+        }
+    } else {
+        if (_prevAnyWedged) {
+            _est.setEncOmegaHealthy(true);
+        }
+        // Re-arm for the next episode once the latch actually clears.
+        _wedgeReprimeAttempted = false;
     }
     _prevAnyWedged = anyWedged;
 

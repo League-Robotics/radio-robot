@@ -106,8 +106,9 @@ public:
     void setEvtSink(ReplyFn* fn, void** ctx) { _evtFn = fn; _evtCtx = ctx; }
 
     /**
-     * stuckCountL / stuckCountR — current consecutive-identical-while-commanded
-     * counter for left and right wheels respectively (015-003).
+     * stuckCountL / stuckCountR — current consecutive-identical-reading
+     * counter for left and right wheels respectively (015-003; unconditional
+     * since 064-004 — no longer gated on commanded target or arming grace).
      * Read by CommandProcessor::DBG I2C to include in the dump line.
      */
     uint8_t stuckCountL() const { return _stuckCountL; }
@@ -141,6 +142,18 @@ public:
 
     // Zero encoder accumulators — delegates to Motor::resetEncoder() for each wheel.
     void resetEncoderAccumulators();
+
+    /**
+     * isAtRest — true when the drivetrain is genuinely at rest (064-003
+     * decision: commanded targets both zero AND measured |velocity| below
+     * kAtRestVelEpsilonMms). Exposes the SAME epsilon/decision computation
+     * resetEncoderAccumulators() uses internally to choose hardware-atomic
+     * vs. software-only rebaseline — reused (not duplicated) by Drive's
+     * auto-re-prime gate (064-004) so it only attempts a re-prime when a
+     * hardware re-prime is actually the path resetEncoderAccumulators()
+     * would take.
+     */
+    bool isAtRest() const;
 
 private:
     IMotor&            _motorL;
@@ -190,9 +203,15 @@ private:
     float    _lastVelMmsR;
 
     // -------------------------------------------------------------------------
-    // Encoder-wedge detector (015-003)
+    // Encoder-wedge detector (015-003; blind spots removed 064-004)
     //
-    // Per-wheel consecutive-identical-while-commanded counter.
+    // Per-wheel consecutive-identical-reading counter, unconditional: any
+    // identical consecutive raw reading increments it, any changed reading
+    // resets it to 0 — regardless of commanded target (the old tgtW==0.0f
+    // reset is gone) and regardless of whether the wheel has ever moved this
+    // episode (the old 033-005d arming grace is gone). A genuinely idle,
+    // uncommanded wheel is therefore "stuck" too — correctly so; TLM's mode=
+    // field lets a host distinguish idle quiescence from an in-motion fault.
     // When either counter reaches kWedgeThreshold and the latch flag is clear,
     // an EVT enc_wedged line is emitted via _evtFn/_evtCtx and the latch is set.
     // The latch re-arms (clears) when the encoder value changes.
@@ -207,19 +226,17 @@ private:
     bool     _wedgePrevValidL;    // false until first reading
     bool     _wedgePrevValidR;
 
-    uint8_t  _stuckCountL;        // consecutive identical-while-commanded reads (L)
-    uint8_t  _stuckCountR;        // consecutive identical-while-commanded reads (R)
+    uint8_t  _stuckCountL;        // consecutive identical readings (L)
+    uint8_t  _stuckCountR;        // consecutive identical readings (R)
     bool     _wedgeEmittedL;      // latch: EVT already sent for this episode (L); exposed via wheelWedgedL() (033-005e)
     bool     _wedgeEmittedR;      // latch: EVT already sent for this episode (R); exposed via wheelWedgedR() (033-005e)
 
-    // (033-005d) Arming grace: wedge detector does not arm until the wheel
-    // has moved at least once since the command started.  This prevents the
-    // spin-up lag of a drained battery from firing the detector prematurely
-    // (the sprint-032 bench run saw EVT enc_wedged in this exact regime).
-    // Latches clear on startDriveClean(), startDrive(), and stop(); set when
-    // the encoder value first differs from the start snapshot.
-    bool     _hasMovedL;          // true once left encoder has moved this episode
-    bool     _hasMovedR;          // true once right encoder has moved this episode
+    // (064-004) The 033-005d arming grace (_hasMovedL/R — wedge detector did
+    // not arm until the wheel had moved at least once since the command
+    // started) is REMOVED. It was a structural blind spot: a wheel that
+    // enters a new command already frozen never "moves," so counting never
+    // started (Episode A: RT turn frozen for 14 TLM frames, zero EVT). The
+    // per-wheel comparison is now unconditional — see controlTick().
 
     // Optional bus-diagnostics capability for stats in EVT body (039-001).
     IBusDiagnostics* _busDiag;
@@ -228,6 +245,15 @@ private:
     // to the channel that most recently sent a command.
     ReplyFn* _evtFn;
     void**   _evtCtx;
+
+    // (064-003/064-004) At-rest decision shared by resetEncoderAccumulators()
+    // (chooses hardware-atomic vs. software-only rebaseline) and isAtRest()
+    // (Drive's auto-re-prime gate) — one computation, two callers.
+    // kAtRestVelEpsilonMms is a design-time estimate (BENCH-CONFIRM — see
+    // architecture-update.md "Open Questions"), not yet HITL-validated —
+    // same convention as Motor::setSpeed()'s kMaxDeltaPwmPerWrite.
+    static constexpr float kAtRestVelEpsilonMms = 5.0f;
+    bool computeAtRest() const;
 
     // clamp helper
     static float clamp(float v, float lo, float hi);

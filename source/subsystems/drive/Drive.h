@@ -140,6 +140,12 @@ private:
     uint8_t  _filterRejectStreakL = 0;
     uint8_t  _filterRejectStreakR = 0;
 
+    // (064-004) Auto re-prime at idle: one-shot flag so a wedge latch that
+    // persists while the drivetrain is at rest gets exactly one automatic
+    // resetEncoderAccumulators() attempt per episode, not one every idle
+    // tick. Clears when anyWedged next goes false (mirrors _prevAnyWedged).
+    bool     _wedgeReprimeAttempted = false;
+
     // OTOS timing for the lag gate.
     uint32_t _lastOtosMs = 0;
     bool     _otosEverReady = false;
