@@ -1,9 +1,11 @@
 ---
 id: '004'
 title: 'Regression: zero-error three-pose agreement'
-status: open
-use-cases: [SUC-003]
-depends-on: ['002']
+status: done
+use-cases:
+- SUC-003
+depends-on:
+- '002'
 github-issue: ''
 issue: tlm-three-world-poses-encoder-only-pose.md
 completes_issue: true
@@ -35,29 +37,56 @@ frames through the protocol layer, not through the TestGUI.
 
 ## Acceptance Criteria
 
-- [ ] New sim regression test (tier: `tests/simulation/system/`) drives a
+- [x] New sim regression test (tier: `tests/simulation/system/`) drives a
       multi-leg maneuver (straight legs and at least one turn, matching
       the shape of the TestGUI's `TOUR_1` sequence) with all sim
       error-injection knobs at zero (e.g.
       `sim.set_field_profile(slip_turn_extra=0.0, ...)` and equivalent
       zeroing of OTOS noise/drift — confirm the exact zeroing API by
       inspecting the sim error-injection module).
-- [ ] For each collected TLM frame, `frame.encpose`, `frame.otos`, and
+      Implemented as
+      `tests/simulation/system/test_068_004_zero_error_three_pose_agreement.py`.
+      Zeroing required TWO knobs, not one: `set_field_profile(slip_turn_extra=0.0,
+      fuse_otos=True)` (SimOdometer's own noise/drift/scale-error setters
+      already default to zero on a fresh `Sim()`, so `fuse_otos=True`
+      introduces no error) PLUS `SET rotSlip=0` — `RobotConfig::rotationalSlip`
+      (default 0.92) is Odometry::predict()'s turn-arc correction factor;
+      with the plant's simulated scrub zeroed there is nothing left to
+      correct for, and leaving `rotationalSlip` non-zero produced a real
+      262 mm / 37° `encpose=` disagreement (empirically confirmed while
+      writing this test, documented in the test module's docstring).
+      `SET rotSlip=0` is this project's established "no correction"
+      sentinel (`effectiveSlip()` maps 0 → 1.0).
+- [x] For each collected TLM frame, `frame.encpose`, `frame.otos`, and
       `frame.pose` are compared against `sim.get_true_pose()` (plant
       ground truth) at the same tick; all four agree within a small
       numeric tolerance throughout the maneuver.
-- [ ] The test collects frames via `tick_collect_tlm` (or the project's
+      Tolerances: 5.0 mm (x/y) and 5.0 centidegrees (heading), several
+      times the ~1.4 mm / ~1 centidegree residual actually observed
+      (wire-encoding integer truncation + float32 accumulation).
+- [x] The test collects frames via `tick_collect_tlm` (or the project's
       established equivalent — confirm exact helper name/signature by
       inspecting existing `tests/simulation/system/` tests before writing
       new code).
-- [ ] `tests/_infra/golden_tlm_capture.json` (regenerated in Ticket 001)
+      Ticked in `STEP_MS`-sized (24 ms) increments so `sim.get_true_pose()`
+      can be sampled immediately after the same tick that produced each
+      collected frame (tick_collect_tlm's replyStore-draining semantics
+      discard non-TLM lines every internal tick, so EVT-based completion
+      detection does not compose with a single large collection window —
+      per-leg completion is instead detected from `frame.mode == "I"`
+      within each collected frame).
+- [x] `tests/_infra/golden_tlm_capture.json` (regenerated in Ticket 001)
       remains valid: `test_golden_tlm_unchanged` passes with `encpose=`
       present in every frame of the fixed sequence.
-- [ ] Full default pytest suite green: `uv run python -m pytest` reports
+      Re-confirmed: `uv run python -m pytest tests/simulation/unit/test_golden_tlm.py`
+      → 1 passed.
+- [x] Full default pytest suite green: `uv run python -m pytest` reports
       2520 passed (baseline after sprint 067) plus this sprint's new/
       modified tests, 0 failed. This is the sprint's closing acceptance
       gate — do not consider this ticket (or the sprint) done until the
       full suite is confirmed green.
+      Confirmed: `uv run python -m pytest` → **2528 passed, 0 failed**
+      (2527-passed ticket-004 baseline + 1 new test in this ticket).
 
 ## Testing
 
