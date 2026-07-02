@@ -151,6 +151,26 @@ model: the next atomic-read burst re-primes it.
    (interrupt load); OTOS lag 10 ms vs 100 ms (bus load — raised 06-17,
    pre-rebase).
 
+## 2026-07-02 stand reproduction (fw 0.20260701.14, relay "zavaz", robot on stand)
+
+- **Reproduced once**: 30× (`D 200 200 500` → `RT 9000`) cycles, SNAP-polled,
+  STREAM 50 on. Cycle 2: right encoder latched at exactly 557 mm starting at the
+  D→RT boundary, frozen ~10.5 s through the whole RT, healed exactly at the next
+  D's encoder reset. Zero `EVT enc_wedged` (blind spot confirmed live). No other
+  frozen-frame streaks anywhere in 774 frames — the latch is a discrete event,
+  not noise.
+- **Exact TOUR_1 replay** (testgui cadence: 0.2 s spin-up, 0.3 s SNAP poll,
+  origin-reset preamble): 6 passes = 60 boundaries, **completely clean** (not
+  even a 2-frame repeat in 662 frames).
+- Net stand rate ≈ 1 episode / ~120 boundaries vs ~2 / 5 D-boundaries in the
+  07-01 playfield tour. Same transport (relay), same firmware family ⇒ the big
+  remaining variable is **wheel load** (playfield = robot mass on wheels; decel
+  under load works the PID near zero much harder). Consistent with the
+  decel write-burst hypothesis; unloaded-stand repro is possible but slow.
+- **Tooling gotcha:** every `DBG` reply (`IRQGUARD`, `I2C`, `I2CLOG`) is
+  `ForceReply::SERIAL` — over the relay they return NOTHING. I2CLOG capture
+  requires the robot's own USB serial.
+
 ## Related
 
 - [encoder-wedge-nrf52-twim-irq-load-errata.md](encoder-wedge-nrf52-twim-irq-load-errata.md)
