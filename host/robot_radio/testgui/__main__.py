@@ -1743,6 +1743,19 @@ def _build_main_window():  # type: ignore[return]
         transport.on_telemetry = _on_telemetry_thread_v2
         transport.on_truth = _on_truth_thread
 
+        # Wire the reset-pending signal (CR-09, sprint 066 ticket 004):
+        # Transport classifies reset-inducing outbound commands (D, ZERO enc,
+        # ZERO) at its command()/send() choke point and fires this BEFORE the
+        # command is sent, so TraceModel rebaselines its encoder trace from
+        # host-side knowledge instead of inferring a reset from telemetry
+        # magnitude (unreliable at slow relay TLM rates). Fires on the same
+        # thread as send()/command() (GUI thread for manual Send clicks,
+        # worker threads for tours/GOTO); notify_reset_pending() only mutates
+        # a single Optional[tuple] field, so no cross-thread marshalling is
+        # needed here (unlike on_telemetry/on_truth, which feed the Qt-owned
+        # TraceModel through queued bridges).
+        transport.on_reset_pending = trace_model.notify_reset_pending
+
         # Clear any stale trace data from a previous session.
         trace_model.clear()
 

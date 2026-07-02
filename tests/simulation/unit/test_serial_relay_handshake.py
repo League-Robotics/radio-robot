@@ -361,6 +361,63 @@ class TestRelayHandshake:
         assert ann.get("role") == "RADIOBRIDGE", f"Role mismatch: {ann}"
         assert ann.get("device_name") == "gozop", f"device_name mismatch: {ann}"
 
+    def test_relay_info_in_result(self):
+        """connect() result must surface relay_info (CR-15 item 3).
+
+        _relay_handshake()'s return value (relay_config from '?', and
+        entered_data_plane) was computed but discarded before this fix.
+        """
+        fake = self._build_fake_relay()
+        conn = _make_conn()
+
+        with _patch_serial(fake):
+            result = conn.connect()
+            conn.disconnect()
+
+        relay_info = result.get("relay_info")
+        assert relay_info is not None, f"No relay_info in result: {result}"
+        assert relay_info.get("entered_data_plane") is True, (
+            f"entered_data_plane not surfaced correctly: {relay_info}"
+        )
+        assert "channel:" in relay_info.get("relay_config", ""), (
+            f"relay_config not surfaced: {relay_info}"
+        )
+
+    def test_relay_info_in_result_explicit_relay_mode(self):
+        """The explicit mode='relay' path must also surface relay_info."""
+        from robot_radio.io.serial_conn import SerialConnection
+
+        fake = self._build_fake_relay()
+        conn = SerialConnection(port="/dev/fake", mode="relay")
+
+        with _patch_serial(fake):
+            result = conn.connect()
+            conn.disconnect()
+
+        relay_info = result.get("relay_info")
+        assert relay_info is not None, f"No relay_info in result: {result}"
+        assert relay_info.get("entered_data_plane") is True
+
+    def test_no_relay_info_for_direct_robot(self):
+        """A direct NEZHA2 connection (no relay handshake) has no relay_info."""
+        fake = _FakeSerial()
+
+        def _respond():
+            time.sleep(0.05)
+            fake.inject("DEVICE:NEZHA2:robot:tovez:AB:CD:EF:01")
+            time.sleep(0.05)
+            fake.inject("OK pong t=11 #1")
+
+        t = threading.Thread(target=_respond, daemon=True)
+        t.start()
+
+        conn = _make_conn()
+        with _patch_serial(fake):
+            result = conn.connect()
+            conn.disconnect()
+
+        assert "relay_info" not in result, f"Unexpected relay_info for direct robot: {result}"
+
 
 # ---------------------------------------------------------------------------
 # Direct robot scenario (NEZHA2)

@@ -74,26 +74,34 @@ def _load_lib() -> ctypes.CDLL:
     lib.planner_api_tick.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
 
     # --- Goal application shims ---
+    # 066-002 / CR-11: each apply_* shim gained a trailing now_ms parameter
+    # (threaded through to Planner::apply(cmd, now_ms)). Every call site in
+    # this file applies its goal before the first tick(), so now_ms=0 here
+    # matches this file's own tick cadence (_run_ticks starts at start_ms=0)
+    # — not a workaround, the correct baseline for these fixtures.
     lib.planner_api_apply_velocity.restype = None
     lib.planner_api_apply_velocity.argtypes = [
-        ctypes.c_void_p, ctypes.c_float, ctypes.c_float,
+        ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_uint32,
     ]
 
     lib.planner_api_apply_timed.restype = None
     lib.planner_api_apply_timed.argtypes = [
         ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_uint32,
+        ctypes.c_uint32,
     ]
 
     lib.planner_api_apply_turn.restype = None
-    lib.planner_api_apply_turn.argtypes = [ctypes.c_void_p, ctypes.c_float]
+    lib.planner_api_apply_turn.argtypes = [
+        ctypes.c_void_p, ctypes.c_float, ctypes.c_uint32,
+    ]
 
     lib.planner_api_apply_distance.restype = None
     lib.planner_api_apply_distance.argtypes = [
-        ctypes.c_void_p, ctypes.c_float, ctypes.c_float,
+        ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_uint32,
     ]
 
     lib.planner_api_apply_stop.restype = None
-    lib.planner_api_apply_stop.argtypes = [ctypes.c_void_p]
+    lib.planner_api_apply_stop.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
 
     # --- State reads ---
     lib.planner_api_get_active.restype = ctypes.c_int
@@ -183,6 +191,7 @@ class TestPlannerIsolation:
                 ctypes.c_float(TARGET_VX),
                 ctypes.c_float(0.0),   # omega — straight forward
                 ctypes.c_uint32(DURATION_MS),
+                ctypes.c_uint32(0),    # now_ms — applied before the first tick (t=0)
             )
             records = _run_ticks(lib, h, N_TICKS)
 
@@ -261,7 +270,8 @@ class TestPlannerIsolation:
 
         h = lib.planner_api_create()
         try:
-            lib.planner_api_apply_turn(h, ctypes.c_float(TARGET_HEADING_RAD))
+            lib.planner_api_apply_turn(h, ctypes.c_float(TARGET_HEADING_RAD),
+                                       ctypes.c_uint32(0))
             records = _run_ticks(lib, h, N_TICKS)
 
             omegas  = [r[2] for r in records]
@@ -328,6 +338,7 @@ class TestPlannerIsolation:
                 h,
                 ctypes.c_float(DIST_MM),
                 ctypes.c_float(SPEED_MPS),
+                ctypes.c_uint32(0),
             )
             records = _run_ticks(lib, h, N_TICKS)
 
@@ -393,6 +404,7 @@ class TestPlannerIsolation:
                 ctypes.c_float(200.0),
                 ctypes.c_float(0.0),
                 ctypes.c_uint32(2000),
+                ctypes.c_uint32(0),    # now_ms — applied before the first tick (t=0)
             )
 
             # Tick 5 times — confirm it became active and vx is ramping
@@ -409,7 +421,7 @@ class TestPlannerIsolation:
                 f"vx should be > 0 before stop (ramping); got {vx_before_stop:.2f}"
 
             # Issue STOP — hard cancel; mode goes IDLE immediately
-            lib.planner_api_apply_stop(h)
+            lib.planner_api_apply_stop(h, ctypes.c_uint32(now_ms))
 
             # One tick after stop: is_active must be 0
             lib.planner_api_tick(h, ctypes.c_uint32(now_ms))

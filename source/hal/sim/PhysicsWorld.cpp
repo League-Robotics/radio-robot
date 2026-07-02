@@ -98,6 +98,12 @@ void PhysicsWorld::update(uint32_t dt_ms) {
     _truePoseX += (dL + dR) * 0.5f * cosf(hMid);
     _truePoseY += (dL + dR) * 0.5f * sinf(hMid);
     _truePoseH += dTh;
+    // Wrap heading to (-pi, pi] (CR-15 item 1 / ticket 066-001) — matches the
+    // wrap SimOdometer already applies to its own _odomH accumulator.  Becomes
+    // load-bearing once SimOdometer samples _truePoseH directly (see
+    // SimOdometer::tick()) instead of maintaining an independently-wrapped copy.
+    while (_truePoseH >  static_cast<float>(M_PI)) _truePoseH -= 2.0f * static_cast<float>(M_PI);
+    while (_truePoseH < -static_cast<float>(M_PI)) _truePoseH += 2.0f * static_cast<float>(M_PI);
 }
 
 // ---------------------------------------------------------------------------

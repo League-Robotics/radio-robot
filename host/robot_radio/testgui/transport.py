@@ -133,6 +133,15 @@ TruthPose = tuple[float, float, float]
 TelemetryCB = Callable[[TLMFrame], None]
 TruthCB = Callable[[TruthPose | None], None]
 LogCB = Callable[[str], None]
+ResetPendingCB = Callable[[], None]
+
+# Reset-inducing outbound command verbs (CR-09).  The firmware zeros the
+# wheel encoders at the start of every distance/drive command (``D``), and
+# ``ZERO`` / ``ZERO enc`` explicitly reset the encoder counters.  Matched on
+# the command's leading verb token (case-sensitive, matching the firmware's
+# own dispatch), so a hypothetical verb that merely starts with the same
+# letter (e.g. a future ``DIAG``) would not false-match ``D``.
+_RESET_COMMAND_VERBS = frozenset({"D", "ZERO"})
 
 # Camera polling interval and inter-read pause.
 _TRUTH_POLL_INTERVAL_S = 0.2   # target pose rate ~5 Hz
@@ -143,6 +152,32 @@ _CAMERA_TAG_ID = 100
 def list_ports() -> list[str]:
     """Return a sorted list of USB modem serial ports."""
     return list_serial_ports()
+
+
+def is_reset_inducing_command(line: str) -> bool:
+    """Return True if ``line``'s leading verb is a reset-inducing command.
+
+    Recognizes ``D <left> <right> <mm>`` (the firmware zeros the wheel
+    encoders at the start of every distance/drive command) and ``ZERO`` /
+    ``ZERO enc`` (explicit encoder-counter reset).  Matches only the leading
+    whitespace-separated token, case-sensitively, against
+    ``_RESET_COMMAND_VERBS`` — mirrors sprint 065's firmware-side
+    ``CMD_MOTION_WATCHDOG`` classification pattern, applied host-side at
+    ``Transport``'s single command dispatch choke point instead (CR-09).
+
+    Pure and Qt-free — usable directly in tests without a live transport.
+
+    Parameters
+    ----------
+    line:
+        The raw outbound wire command string, e.g. ``"D 200 200 500"`` or
+        ``"ZERO enc"``.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return False
+    verb = stripped.split(None, 1)[0]
+    return verb in _RESET_COMMAND_VERBS
 
 
 def find_relay_port(
@@ -279,12 +314,23 @@ class Transport(abc.ABC):
     ``on_log``
         Called with a timestamped string for every sent command and
         every received line.  Used to populate the log pane.
+
+    ``on_reset_pending`` (CR-09)
+        Called with no arguments the instant an outbound ``send()``/
+        ``command()`` call classifies its command line as reset-inducing
+        (``D``, ``ZERO enc``, ``ZERO`` — see ``is_reset_inducing_command``),
+        BEFORE the command is actually transmitted.  Wired (in
+        ``__main__.py``) to ``TraceModel.notify_reset_pending()`` so the
+        encoder-odometry trace rebaselines on the host's own knowledge of
+        when it issued a reset, rather than inferring one from telemetry
+        magnitude (unreliable at slow relay TLM rates).  Default no-op.
     """
 
     def __init__(self) -> None:
         self.on_telemetry: TelemetryCB | None = None
         self.on_truth: TruthCB | None = None
         self.on_log: LogCB | None = None
+        self.on_reset_pending: ResetPendingCB | None = None
 
     @property
     def turn_scrub_factor(self) -> float:
@@ -392,6 +438,21 @@ class Transport(abc.ABC):
             except Exception:
                 _log.exception("on_truth callback raised")
 
+    def _maybe_notify_reset_pending(self, line: str) -> None:
+        """Invoke on_reset_pending if ``line`` is a reset-inducing command.
+
+        Called by every concrete ``send()``/``command()`` implementation
+        (the single choke point each outbound wire command passes through)
+        BEFORE the command is actually transmitted — see
+        ``is_reset_inducing_command`` and the ``on_reset_pending`` callback
+        slot documented on this class (CR-09).
+        """
+        if is_reset_inducing_command(line) and self.on_reset_pending:
+            try:
+                self.on_reset_pending()
+            except Exception:
+                _log.exception("on_reset_pending callback raised")
+
 
 # ---------------------------------------------------------------------------
 # Shared hardware-backend mixin
@@ -491,12 +552,14 @@ class _HardwareTransport(Transport):
         """Fire-and-forget write to the robot."""
         if self._conn is None or not self._conn.is_open:
             raise ConnectionError("Transport is not connected")
+        self._maybe_notify_reset_pending(line)
         self._conn.send_fast(line)
 
     def command(self, line: str, read_ms: int = 200) -> str:
         """Send a command and return collected reply lines as a string."""
         if self._conn is None or not self._conn.is_open:
             return ""
+        self._maybe_notify_reset_pending(line)
         result = self._conn.send(line, read_ms=read_ms)
         responses = result.get("responses", [])
         return "\n".join(responses)
@@ -670,6 +733,13 @@ _SIM_TRUTH_EVERY_N_TICKS = max(1, round(200 / _SIM_TICK_STEP_MS))
 _SIM_SLIP_TURN_EXTRA = 0.26   # fractional encoder over-report during turns
 _SIM_OTOS_LINEAR_NOISE = 0.05  # OTOS linear noise sigma (fraction of arc)
 
+# How long connect() waits for the tick-thread to confirm Sim() construction
+# succeeded (or failed) before giving up (CR-15 item 4).  Sim() construction
+# is sub-millisecond in every observed run; this is generous headroom against
+# a hang, not a steady-state expectation (see architecture-update.md sprint
+# 066, Open Question 3).
+_SIM_READY_TIMEOUT_S = 5.0
+
 
 class SimTransport(Transport):
     """Transport backend that drives the ctypes firmware simulator.
@@ -712,6 +782,11 @@ class SimTransport(Transport):
         # For command() (synchronous): reply_list=[""]*1, done_event=Event
         self._cmd_queue: queue.Queue = queue.Queue()
         self._connected = False
+        # Signaled by the tick-thread once Sim() construction has succeeded
+        # or definitively failed (CR-15 item 4) — connect() waits on this
+        # before reporting connected, so an early command()/send() call can
+        # no longer race a not-yet-created Sim.
+        self._sim_ready_event: threading.Event = threading.Event()
         # The last error profile actually applied to a running sim (via
         # connect()'s _apply_field_profile or a live apply_error_profile()
         # call) — issue testgui-sim-error-profile-config. None until then.
@@ -749,6 +824,15 @@ class SimTransport(Transport):
 
         If the sim lib is missing, shows a warning and returns without
         connecting.  Idempotent — does nothing if already connected.
+
+        ``_connected`` is set only after the tick-thread confirms ``Sim()``
+        construction succeeded — NOT immediately after starting the thread
+        (CR-15 item 4).  Before this fix an early ``command()``/``send()``
+        call could race a not-yet-created ``Sim`` (or one that failed to
+        construct), silently enqueuing commands nothing would ever drain.
+        ``connect()`` waits (bounded by ``_SIM_READY_TIMEOUT_S``) on a
+        ``threading.Event`` the tick-thread signals right after ``Sim()``
+        construction completes, or on its own early-failure paths.
         """
         if self._connected:
             return
@@ -766,14 +850,24 @@ class SimTransport(Transport):
             return
 
         self._stop_event.clear()
+        self._sim_ready_event.clear()
         self._tick_thread = threading.Thread(
             target=self._tick_loop,
             name="sim-tick-thread",
             daemon=True,
         )
         self._tick_thread.start()
-        self._connected = True
-        self._log("[INFO] SimTransport connected")
+
+        ready = self._sim_ready_event.wait(timeout=_SIM_READY_TIMEOUT_S)
+        self._connected = ready and self._sim is not None
+        if self._connected:
+            self._log("[INFO] SimTransport connected")
+        else:
+            _log.warning(
+                "SimTransport: Sim() construction did not complete (ready=%s)",
+                ready,
+            )
+            self._log("[ERROR] SimTransport failed to connect: simulator did not start")
 
     def disconnect(self) -> None:
         """Signal the tick-thread to stop and wait for it to exit."""
@@ -798,6 +892,7 @@ class SimTransport(Transport):
         """Fire-and-forget: enqueue a command for the tick-thread to execute."""
         if not self._connected:
             raise ConnectionError("SimTransport is not connected")
+        self._maybe_notify_reset_pending(line)
         self._cmd_queue.put((line, None, None))
         self._log(f"> {line}")
 
@@ -847,6 +942,7 @@ class SimTransport(Transport):
         """
         if not self._connected:
             return ""
+        self._maybe_notify_reset_pending(line)
         reply_list: list[str] = [""]
         done_evt = threading.Event()
         self._cmd_queue.put((line, reply_list, done_evt))
@@ -880,11 +976,14 @@ class SimTransport(Transport):
             _log.error("SimTransport: failed to import Sim: %s", exc)
             self._log(f"[ERROR] Failed to load simulator: {exc}")
             self._connected = False
+            self._sim_ready_event.set()  # unblock connect()'s wait — failed
             return
 
         try:
             with Sim() as sim:
                 self._sim = sim
+                # Sim() construction succeeded — unblock connect()'s wait.
+                self._sim_ready_event.set()
                 self._apply_field_profile(sim)
                 # Send STREAM 50 so the firmware emits TLM every 50 ms.
                 reply = sim.send_command("STREAM 50")
@@ -916,6 +1015,11 @@ class SimTransport(Transport):
         except Exception as exc:
             _log.error("SimTransport tick-loop crashed: %s", exc)
             self._log(f"[ERROR] Sim tick-loop crashed: {exc}")
+            # Sim() construction itself may have raised (before the inner
+            # self._sim_ready_event.set() ran) — unblock connect()'s wait
+            # either way so a failed construction is never mistaken for a
+            # hang. Idempotent if already set.
+            self._sim_ready_event.set()
         finally:
             self._sim = None
 

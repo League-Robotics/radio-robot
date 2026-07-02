@@ -676,6 +676,140 @@ class TestKeyboardDriverStopDeadman:
         driver.detach()
 
 
+class TestKeyboardDriverMultiKeyRelease:
+    """CR-15 item 8: releasing one held arrow key while another is still
+    held falls back to driving the remaining key instead of starting the
+    STOP deadman sequence; the deadman still fires when the LAST held key
+    is released."""
+
+    def test_release_one_of_two_held_keys_continues_driving(self, fake_window, qapp):
+        """Up + Left both held; releasing Up (Left still held) must NOT
+        send STOP -- it must continue driving with Left's command."""
+        from PySide6.QtCore import Qt
+        from robot_radio.testgui.drive import KeyboardDriver
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+
+        up_press = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+        left_press = _make_key_event(Qt.Key.Key_Left, is_auto_repeat=False)
+        up_release = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+
+        fake_window.keyPressEvent(up_press)
+        fake_window.keyPressEvent(left_press)
+        fake_window.keyReleaseEvent(up_release)
+
+        assert "STOP" not in transport.sent, (
+            f"Releasing one of two held keys must not send STOP: {transport.sent}"
+        )
+        assert transport.sent[-1] == "VW 0 500", (
+            f"Expected fallback to Left's command after releasing Up: {transport.sent}"
+        )
+        assert driver._timer is not None and driver._timer.isActive()
+        driver.detach()
+
+    def test_release_last_held_key_starts_deadman(self, fake_window, qapp):
+        """After the fallback key is also released (no keys left held), the
+        bounded STOP deadman sequence must fire as usual."""
+        from PySide6.QtCore import Qt
+        from robot_radio.testgui.drive import KeyboardDriver, STOP_RESEND_COUNT
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+
+        up_press = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+        left_press = _make_key_event(Qt.Key.Key_Left, is_auto_repeat=False)
+        up_release = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+        left_release = _make_key_event(Qt.Key.Key_Left, is_auto_repeat=False)
+
+        fake_window.keyPressEvent(up_press)
+        fake_window.keyPressEvent(left_press)
+        fake_window.keyReleaseEvent(up_release)
+        assert "STOP" not in transport.sent
+
+        fake_window.keyReleaseEvent(left_release)
+        assert "STOP" in transport.sent, (
+            f"Releasing the last held key must start the STOP deadman: {transport.sent}"
+        )
+
+        for _ in range(STOP_RESEND_COUNT - 1):
+            driver._on_timer_tick()
+
+        total_stops = [s for s in transport.sent if s == "STOP"]
+        assert len(total_stops) == STOP_RESEND_COUNT
+        assert driver._timer is None or not driver._timer.isActive()
+        driver.detach()
+
+    def test_held_keys_tracked_across_press_and_release(self, fake_window, qapp):
+        """self._held_keys reflects exactly the keys currently held."""
+        from PySide6.QtCore import Qt
+        from robot_radio.testgui.drive import KeyboardDriver
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+
+        up_key = int(Qt.Key.Key_Up)
+        left_key = int(Qt.Key.Key_Left)
+
+        fake_window.keyPressEvent(_make_key_event(Qt.Key.Key_Up, is_auto_repeat=False))
+        assert driver._held_keys == {up_key}
+
+        fake_window.keyPressEvent(_make_key_event(Qt.Key.Key_Left, is_auto_repeat=False))
+        assert driver._held_keys == {up_key, left_key}
+
+        fake_window.keyReleaseEvent(_make_key_event(Qt.Key.Key_Up, is_auto_repeat=False))
+        assert driver._held_keys == {left_key}
+
+        fake_window.keyReleaseEvent(_make_key_event(Qt.Key.Key_Left, is_auto_repeat=False))
+        assert driver._held_keys == set()
+        driver.detach()
+
+    def test_focus_out_clears_held_keys(self, fake_window, qapp):
+        """Focus loss must clear all tracked held keys, not just stop driving."""
+        from PySide6.QtCore import Qt
+        from robot_radio.testgui.drive import KeyboardDriver, STOP_RESEND_COUNT
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+        driver._orig_focus_out = lambda e: None
+
+        fake_window.keyPressEvent(_make_key_event(Qt.Key.Key_Up, is_auto_repeat=False))
+        fake_window.keyPressEvent(_make_key_event(Qt.Key.Key_Left, is_auto_repeat=False))
+        assert driver._held_keys
+
+        driver._on_focus_out(MagicMock())
+        assert driver._held_keys == set()
+
+        for _ in range(STOP_RESEND_COUNT - 1):
+            driver._on_timer_tick()
+        driver.detach()
+
+    def test_release_non_held_key_falls_back_to_still_held_key(
+        self, fake_window, qapp
+    ):
+        """A stray release of a key that was never pressed (e.g. Right, when
+        only Up is held) must not send STOP -- Up is still logically held,
+        so the fallback command keeps driving it."""
+        from PySide6.QtCore import Qt
+        from robot_radio.testgui.drive import KeyboardDriver
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+
+        fake_window.keyPressEvent(_make_key_event(Qt.Key.Key_Up, is_auto_repeat=False))
+        fake_window.keyReleaseEvent(
+            _make_key_event(Qt.Key.Key_Right, is_auto_repeat=False)
+        )
+
+        assert "STOP" not in transport.sent
+        driver.detach()
+
+
 class TestKeyboardDriverKeepaliveArmDisarm:
     """Keepalive arm/disarm bracket a drive session (sprint 065, ticket 005).
 

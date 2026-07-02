@@ -53,34 +53,44 @@ def _load_lib() -> ctypes.CDLL:
     lib.planner_api_tick.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
 
     # Command application
+    # 066-002 / CR-11: each apply_* shim gained a trailing now_ms parameter
+    # (threaded through to Planner::apply(cmd, now_ms)). Every call site in
+    # this file applies its goal before the first tick(), so now_ms=0 here
+    # matches this file's own tick cadence (ticks start at i*20 from i=0).
     lib.planner_api_apply_velocity.restype  = None
     lib.planner_api_apply_velocity.argtypes = [
-        ctypes.c_void_p, ctypes.c_float, ctypes.c_float,
+        ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_uint32,
     ]
 
     lib.planner_api_apply_stop.restype  = None
-    lib.planner_api_apply_stop.argtypes = [ctypes.c_void_p]
+    lib.planner_api_apply_stop.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
 
     lib.planner_api_apply_turn.restype  = None
-    lib.planner_api_apply_turn.argtypes = [ctypes.c_void_p, ctypes.c_float]
+    lib.planner_api_apply_turn.argtypes = [
+        ctypes.c_void_p, ctypes.c_float, ctypes.c_uint32,
+    ]
 
     lib.planner_api_apply_timed.restype  = None
     lib.planner_api_apply_timed.argtypes = [
         ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_uint32,
+        ctypes.c_uint32,
     ]
 
     lib.planner_api_apply_goto.restype  = None
     lib.planner_api_apply_goto.argtypes = [
         ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float,
+        ctypes.c_uint32,
     ]
 
     lib.planner_api_apply_distance.restype  = None
     lib.planner_api_apply_distance.argtypes = [
-        ctypes.c_void_p, ctypes.c_float, ctypes.c_float,
+        ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_uint32,
     ]
 
     lib.planner_api_apply_rotation.restype  = None
-    lib.planner_api_apply_rotation.argtypes = [ctypes.c_void_p, ctypes.c_float]
+    lib.planner_api_apply_rotation.argtypes = [
+        ctypes.c_void_p, ctypes.c_float, ctypes.c_uint32,
+    ]
 
     # State reads
     lib.planner_api_get_active.restype  = ctypes.c_int
@@ -145,7 +155,8 @@ class TestPlannerSmoke:
         h = lib.planner_api_create()
         try:
             # Stage the velocity goal.
-            lib.planner_api_apply_velocity(h, ctypes.c_float(200.0), ctypes.c_float(0.0))
+            lib.planner_api_apply_velocity(h, ctypes.c_float(200.0), ctypes.c_float(0.0),
+                                           ctypes.c_uint32(0))
             # Run several ticks (20 ms each) to let the BVC ramp up.
             for i in range(20):
                 lib.planner_api_tick(h, ctypes.c_uint32(i * 20))
@@ -160,12 +171,13 @@ class TestPlannerSmoke:
         h = lib.planner_api_create()
         try:
             # Start moving.
-            lib.planner_api_apply_velocity(h, ctypes.c_float(200.0), ctypes.c_float(0.0))
+            lib.planner_api_apply_velocity(h, ctypes.c_float(200.0), ctypes.c_float(0.0),
+                                           ctypes.c_uint32(0))
             for i in range(5):
                 lib.planner_api_tick(h, ctypes.c_uint32(i * 20))
 
             # Issue STOP.
-            lib.planner_api_apply_stop(h)
+            lib.planner_api_apply_stop(h, ctypes.c_uint32(4 * 20))
             # Run ticks to let BVC ramp down.
             for i in range(5, 25):
                 lib.planner_api_tick(h, ctypes.c_uint32(i * 20))

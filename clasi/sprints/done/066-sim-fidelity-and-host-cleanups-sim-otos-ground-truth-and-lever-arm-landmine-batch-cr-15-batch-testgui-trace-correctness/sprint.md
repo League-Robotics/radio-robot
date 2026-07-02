@@ -2,7 +2,7 @@
 id: '066'
 title: 'Sim fidelity and host cleanups: sim-OTOS ground truth and lever arm, landmine
   batch, CR-15 batch, TestGUI trace correctness'
-status: ticketing
+status: done
 branch: sprint/066-sim-fidelity-and-host-cleanups-sim-otos-ground-truth-and-lever-arm-landmine-batch-cr-15-batch-testgui-trace-correctness
 use-cases:
 - SUC-001

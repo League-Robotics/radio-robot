@@ -331,9 +331,14 @@ class SimConnection:
     # ------------------------------------------------------------------
 
     def _raw_command(self, line: str) -> str:
-        """Send one command to the C sim; return the synchronous reply."""
-        buf = ctypes.create_string_buffer(512)
-        n = self._lib.sim_command(self._h, line.encode(), buf, 512)
+        """Send one command to the C sim; return the synchronous reply.
+
+        Buffer is 2048 bytes — matches sim_command()'s C-side ReplyStore
+        capacity (kReplyBufSize in sim_api.cpp), so long synchronous replies
+        (e.g. GET CFG) are not silently truncated (066-002 / CR-14; was 512).
+        """
+        buf = ctypes.create_string_buffer(2048)
+        n = self._lib.sim_command(self._h, line.encode(), buf, 2048)
         return buf.raw[:n].decode(errors="replace") if n > 0 else ""
 
     def _get_evts(self) -> str:

@@ -167,6 +167,54 @@ class TestListPorts:
 
 
 # ---------------------------------------------------------------------------
+# Tests: is_reset_inducing_command (CR-09 classifier — pure, Qt-free)
+# ---------------------------------------------------------------------------
+
+
+class TestIsResetInducingCommand:
+    """The command classifier that drives on_reset_pending (sprint 066-004)."""
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "D 200 200 500",
+            "D",
+            "ZERO enc",
+            "ZERO",
+        ],
+    )
+    def test_reset_inducing_commands_recognized(self, line):
+        from robot_radio.testgui.transport import is_reset_inducing_command
+
+        assert is_reset_inducing_command(line) is True
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "VW 100 0",
+            "S 200 200",
+            "T 200 200 1000",
+            "R 200 500",
+            "TURN 9000",
+            "RT 90",
+            "G 500 500 200",
+            "STOP",
+            "SNAP",
+            "PING",
+            "HELLO",
+            "",
+            "   ",
+            "DRIVE 1 2 3",  # must NOT prefix-match "D"
+            "ZEROX",        # must NOT prefix-match "ZERO"
+        ],
+    )
+    def test_non_reset_commands_not_recognized(self, line):
+        from robot_radio.testgui.transport import is_reset_inducing_command
+
+        assert is_reset_inducing_command(line) is False
+
+
+# ---------------------------------------------------------------------------
 # Tests: SerialTransport connect / disconnect
 # ---------------------------------------------------------------------------
 
@@ -324,6 +372,112 @@ class TestTransportCommands:
             # Not connected — should return empty, not raise.
             result = t.command("PING")
         assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# Tests: on_reset_pending callback (CR-09, sprint 066-004)
+# ---------------------------------------------------------------------------
+
+
+class TestOnResetPendingCallback:
+    """Transport.on_reset_pending fires from send()/command() at the choke
+    point, for reset-inducing commands only, BEFORE the command is
+    transmitted."""
+
+    def _connected_serial(self):
+        from robot_radio.testgui.transport import SerialTransport
+
+        fake = FakeSerialConnection(port="/dev/tty.test0", mode="direct")
+        with patch(
+            "robot_radio.testgui.transport.SerialConnection",
+            return_value=fake,
+        ):
+            t = SerialTransport("/dev/tty.test0")
+            t.connect()
+        return t, fake
+
+    def test_default_on_reset_pending_is_none(self):
+        """The callback slot exists and defaults to None (no-op)."""
+        t, _fake = self._connected_serial()
+        assert t.on_reset_pending is None
+        t.disconnect()
+
+    def test_command_fires_on_reset_pending_for_d(self):
+        t, _fake = self._connected_serial()
+        calls: list[None] = []
+        t.on_reset_pending = lambda: calls.append(None)
+
+        t.command("D 200 200 500")
+        t.disconnect()
+
+        assert len(calls) == 1
+
+    def test_command_fires_on_reset_pending_for_zero_enc(self):
+        t, _fake = self._connected_serial()
+        calls: list[None] = []
+        t.on_reset_pending = lambda: calls.append(None)
+
+        t.command("ZERO enc")
+        t.disconnect()
+
+        assert len(calls) == 1
+
+    def test_send_fires_on_reset_pending_for_d(self):
+        t, fake = self._connected_serial()
+        fake.send_fast = lambda line: None
+        calls: list[None] = []
+        t.on_reset_pending = lambda: calls.append(None)
+
+        t.send("D 200 200 500")
+        t.disconnect()
+
+        assert len(calls) == 1
+
+    def test_non_reset_command_does_not_fire_callback(self):
+        t, _fake = self._connected_serial()
+        calls: list[None] = []
+        t.on_reset_pending = lambda: calls.append(None)
+
+        t.command("VW 100 0")
+        t.command("STOP")
+        t.disconnect()
+
+        assert calls == []
+
+    def test_callback_fires_before_command_is_transmitted(self):
+        """on_reset_pending must fire before the underlying send, so a GUI
+        wiring it to TraceModel.notify_reset_pending() rebaselines ahead of
+        the reset actually landing on the robot."""
+        t, fake = self._connected_serial()
+        order: list[str] = []
+        t.on_reset_pending = lambda: order.append("reset_pending")
+
+        original_send = fake.send
+
+        def _tracking_send(message, **kw):
+            order.append("transmitted")
+            return original_send(message, **kw)
+
+        fake.send = _tracking_send
+
+        t.command("D 200 200 500")
+        t.disconnect()
+
+        assert order == ["reset_pending", "transmitted"]
+
+    def test_callback_exception_does_not_propagate(self):
+        """A raising on_reset_pending must not break the command path."""
+        t, _fake = self._connected_serial()
+
+        def _boom():
+            raise RuntimeError("boom")
+
+        t.on_reset_pending = _boom
+
+        # Must not raise.
+        result = t.command("D 200 200 500")
+        t.disconnect()
+        assert "OK" in result
 
 
 # ---------------------------------------------------------------------------
@@ -861,6 +1015,116 @@ class TestSimTransportConnect:
             t.disconnect()
 
 
+class TestSimTransportConnectedFlagRace:
+    """CR-15 item 4: _connected must not be set until the tick-thread
+    confirms Sim() construction succeeded -- not merely after the
+    tick-thread is started."""
+
+    def test_connect_waits_for_sim_before_returning(self):
+        """connect() must not return until Sim() construction is confirmed
+        -- an early command()/send() must never race a not-yet-created Sim."""
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+        import sys
+
+        fake_sim = FakeSim()
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = True
+        fake_path.parent.parent = str(pathlib.Path("/nonexistent/sim"))
+        fake_fw_module = MagicMock()
+        fake_fw_module.Sim.return_value = fake_sim
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.dict(sys.modules, {"firmware": fake_fw_module}):
+            t = SimTransport()
+            t.on_log = lambda _: None
+            t.connect()
+
+        try:
+            # No sleep here -- connect() itself must have waited for Sim()
+            # construction to be confirmed before returning.
+            assert t._connected
+            assert t._sim is not None, (
+                "connect() returned before Sim() construction was confirmed"
+            )
+        finally:
+            t.disconnect()
+
+    def test_sim_construction_failure_leaves_connected_false(self):
+        """If Sim() itself raises, _connected must stay False (never raced
+        true), and connect() must still return promptly (not hang)."""
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+        import sys
+
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = True
+        fake_path.parent.parent = str(pathlib.Path("/nonexistent/sim"))
+
+        fake_fw_module = MagicMock()
+        fake_fw_module.Sim.side_effect = RuntimeError("boom: construction failed")
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.dict(sys.modules, {"firmware": fake_fw_module}):
+            t = SimTransport()
+            t.on_log = lambda _: None
+            start = time.monotonic()
+            t.connect()
+            elapsed = time.monotonic() - start
+
+        try:
+            assert not t._connected, (
+                "connect() must not report connected when Sim() raised"
+            )
+            assert t._sim is None
+            assert elapsed < 2.0, (
+                f"connect() took {elapsed:.2f}s -- should fail fast, not "
+                f"wait out the full ready-timeout"
+            )
+        finally:
+            t.disconnect()
+
+    def test_import_failure_leaves_connected_false(self):
+        """If importing the 'firmware' module fails, _connected must stay
+        False (regression guard for the pre-existing import-failure path,
+        which must also unblock connect()'s new wait).
+
+        ``sys.modules["firmware"] = None`` is the standard sentinel Python's
+        import system honors to force ``from firmware import Sim`` to raise
+        ImportError, regardless of whether a real 'firmware' module is
+        importable elsewhere on sys.path (tests/conftest.py adds
+        tests/_infra/sim/ to sys.path for the whole session, so a bare
+        missing-module approach would not actually fail here).
+        """
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+        import sys
+
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = True
+        fake_path.parent.parent = str(pathlib.Path("/nonexistent/sim"))
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.dict(sys.modules, {"firmware": None}):
+            t = SimTransport()
+            t.on_log = lambda _: None
+            t.connect()
+
+        try:
+            assert not t._connected
+        finally:
+            t.disconnect()
+
+
 class TestSimTransportErrorProfile:
     """Sim Errors panel backing: apply_error_profile() / turn_scrub_factor.
 
@@ -1139,6 +1403,37 @@ class TestSimTransportCommands:
         t = SimTransport()
         result = t.command("PING")
         assert result == ""
+
+    def test_send_fires_on_reset_pending_for_d(self):
+        t, _fake_sim = self._connected_sim()
+        calls: list[None] = []
+        t.on_reset_pending = lambda: calls.append(None)
+        try:
+            t.send("D 200 200 500")
+            time.sleep(0.1)
+        finally:
+            t.disconnect()
+        assert len(calls) == 1
+
+    def test_command_fires_on_reset_pending_for_zero(self):
+        t, _fake_sim = self._connected_sim()
+        calls: list[None] = []
+        t.on_reset_pending = lambda: calls.append(None)
+        try:
+            t.command("ZERO", read_ms=500)
+        finally:
+            t.disconnect()
+        assert len(calls) == 1
+
+    def test_non_reset_command_does_not_fire_callback(self):
+        t, _fake_sim = self._connected_sim()
+        calls: list[None] = []
+        t.on_reset_pending = lambda: calls.append(None)
+        try:
+            t.command("PING", read_ms=500)
+        finally:
+            t.disconnect()
+        assert calls == []
 
 
 class TestSimTransportTLMDelivery:

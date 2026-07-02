@@ -2,8 +2,12 @@
 id: '002'
 title: 'Landmine defusal batch: Planner::apply timestamp, OdomTracker convention test,
   sim-ABI clock isolation, SimConnection buffer'
-status: open
-use-cases: [SUC-003, SUC-004, SUC-005, SUC-006]
+status: done
+use-cases:
+- SUC-003
+- SUC-004
+- SUC-005
+- SUC-006
 depends-on: []
 github-issue: ''
 issue: landmine-cleanups-planner-apply-now0-sim-abi-buffers.md
@@ -39,31 +43,31 @@ for the full design.
 
 ## Acceptance Criteria
 
-- [ ] `Planner::apply()` takes a `uint32_t now_ms` parameter and uses it in
+- [x] `Planner::apply()` takes a `uint32_t now_ms` parameter and uses it in
       place of the hard-coded `now=0` when calling every `begin*()`.
-- [ ] `tests/_infra/sim/planner_api.cpp`'s seven `apply_*` shim functions
+- [x] `tests/_infra/sim/planner_api.cpp`'s seven `apply_*` shim functions
       (`apply_velocity/stop/turn/timed/goto/distance/rotation`) thread a
       `now_ms` parameter through to `planner.apply(cmd, now_ms)`.
-- [ ] New guard test: a `PlannerCommand`-path TIMED goal staged via
+- [x] New guard test: a `PlannerCommand`-path TIMED goal staged via
       `planner_api_apply_timed(h, vx, omega, duration_ms)` with a realistic
       nonzero `now_ms`, ticked forward, runs its full duration before the
       TIME stop fires (not on the next tick).
-- [ ] New `OdomTracker` convention test: anchor at a known pose, feed a
+- [x] New `OdomTracker` convention test: anchor at a known pose, feed a
       synthetic straight-ahead TLM track, assert `world_pos`/`world_yaw`
       match the expected aprilcam-frame (A1-centred, +x east, +y north)
       coordinates.
-- [ ] `tests/_infra/sim/sim_api.cpp`'s `g_sim_now_ms` becomes
+- [x] `tests/_infra/sim/sim_api.cpp`'s `g_sim_now_ms` becomes
       `thread_local uint32_t g_sim_now_ms = 0;`.
-- [ ] `SimHandle` records its constructing `std::thread::id`;
+- [x] `SimHandle` records its constructing `std::thread::id`;
       `sim_tick()`/`sim_command()` assert the calling thread matches it.
-- [ ] New test (or documented manual verification, programmer's call):
+- [x] New test (or documented manual verification, programmer's call):
       two sequential `Sim()` instances on different threads do not corrupt
       each other's clock.
-- [ ] `host/robot_radio/io/sim_conn.py`'s `SimConnection._raw_command`
+- [x] `host/robot_radio/io/sim_conn.py`'s `SimConnection._raw_command`
       buffer: `ctypes.create_string_buffer(512)` → `2048`.
-- [ ] `GET CFG` via `SimConnection` returns complete, untruncated output
+- [x] `GET CFG` via `SimConnection` returns complete, untruncated output
       (test or manual verification).
-- [ ] Full default test suite green.
+- [x] Full default test suite green.
 
 ## Implementation Plan
 
@@ -111,3 +115,44 @@ per the sprint's own bundling decision — see architecture-update.md Step
 
 **Documentation updates:** None beyond this ticket and
 `architecture-update.md`.
+
+## Implementation Notes (post-execution)
+
+- **(b) genuine bug found and fixed, per the plan's own contingency.** The
+  convention test revealed that `OdomTracker._to_world_mm()`/`world_yaw`
+  implemented a CW-positive world transform, while (1) firmware TLM pose is
+  already a proper Cartesian pose in firmware's own fixed frame — CCW-positive,
+  0 = firmware +X, confirmed by reading `Odometry.cpp`'s
+  `pose.x += d*cos(theta); pose.y += d*sin(theta)` integration — and (2)
+  aprilcam's world frame is independently documented as CCW-positive,
+  0 = east (`odometry.py`'s `_apply()`: "aprilcam.Tag.orientation is now
+  world-CCW-positive — verified empirically 2026-05-28"; `testgui/canvas.py`:
+  "In world space, yaw=0 is east... CCW world"). Empirically verified with a
+  throwaway probe script before touching code: a robot anchored facing north
+  (`world_yaw=+90°`) driving straight ahead moved *south* under the old code.
+  `OdomTracker.world_yaw`/`.world_pos` have zero production consumers
+  (confirmed by repo-wide grep — only `odom_tracker.py` itself and the test
+  file reference them), so this is a zero-blast-radius fix. Per the plan's own
+  authorization ("no production code change... unless the test reveals a
+  genuine bug — not expected"), `_to_world_mm()` and `world_yaw` were corrected
+  to a pure CCW rotation + translation; both the sign flip and the bogus
+  "TLM x=right,y=forward body-frame" comment (contradicted by `Odometry.cpp`)
+  were fixed. Verified by reverting to the old formula and re-running the new
+  test — it fails as expected.
+- **Existing-test fallout from the `apply_*` shim signature change.**
+  `tests/simulation/unit/test_planner_subsystem.py` and
+  `test_planner_subsystem_smoke.py` call the `planner_api_apply_*` shims
+  directly via ctypes with explicit `argtypes`; both needed their `argtypes`
+  lists and call sites updated to pass the new trailing `now_ms` argument
+  (0, matching their own tick loops which all start at `t=0`). Without this,
+  ctypes would call the new 5-arg `planner_api_apply_timed` (etc.) with only
+  4 arguments, leaving `now_ms` as ABI-undefined — this was caught by the
+  full-suite run (`test_timed_goal_twist_profile` failed) before being fixed;
+  not called out explicitly in the architecture doc's Migration Concerns
+  (which only tracked `planner_api.cpp`'s own C++ call site), but required to
+  keep "full default test suite green."
+- Every one of the four sub-fixes' new/updated tests was verified to
+  genuinely fail against a temporarily-reintroduced copy of its bug (CR-11,
+  CR-13, CR-14) or against the wrong sign convention (CR-12) before being
+  confirmed passing against the fix — not just written to pass by
+  construction.

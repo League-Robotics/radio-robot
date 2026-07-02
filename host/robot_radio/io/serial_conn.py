@@ -346,6 +346,7 @@ class SerialConnection:
             # All I/O here is raw (_ser direct); the reader thread is not yet
             # running so DEVICE: lines cannot be silently dropped by it.
             announce: dict[str, Any] | None = None
+            relay_info: dict[str, Any] | None = None
             if self._mode is None:
                 role, banner_line = self._banner_classify(
                     timeout_s=_HELLO_CLASSIFY_TIMEOUT_S)
@@ -392,6 +393,8 @@ class SerialConnection:
             }
             if announce:
                 result["announcement"] = announce
+            if relay_info:
+                result["relay_info"] = relay_info
             return result
 
         except Exception as exc:
@@ -936,9 +939,17 @@ def list_serial_ports() -> list[str]:
 
 
 def probe_devices(read_ms: int = 1200) -> list[dict[str, Any]]:
-    """Probe each USB modem port by sending PING (v2 protocol).
+    """Probe each USB modem port with the HELLO-classify protocol.
 
-    Returns a list of dicts with port, lines, and a 'responsive' flag.
+    Sends ``HELLO`` repeatedly (matching ``_banner_classify``'s protocol; see
+    ``.clasi/knowledge/2026-06-12-relay-go-data-plane-and-docs.md``) and
+    watches for a ``DEVICE:`` announcement line. The retired ``>PING``
+    relay-control-plane prefix is NOT used here: the current relay firmware's
+    data-plane pipe does not recognize it on either a direct or
+    relay-fronted port, so a probe using it can never observe a live device.
+
+    Returns a list of dicts with port, lines, and a 'responsive' flag (True
+    iff a DEVICE: banner line was seen within read_ms).
     """
     results = []
     for port in list_serial_ports():
@@ -946,20 +957,26 @@ def probe_devices(read_ms: int = 1200) -> list[dict[str, Any]]:
             ser = serial.Serial(port, BAUD_RATE, timeout=READ_TIMEOUT_S)
             time.sleep(0.25)
             ser.reset_input_buffer()
-            # Try relay mode first (most common deployment).
-            ser.write(b">PING\n")
-            ser.flush()
             lines: list[str] = []
+            responsive = False
             deadline = time.time() + (read_ms / 1000.0)
+            next_hello = 0.0  # send immediately on the first iteration
             while time.time() < deadline:
+                now = time.time()
+                if now >= next_hello:
+                    ser.write(b"HELLO\n")
+                    ser.flush()
+                    next_hello = now + _HELLO_ATTEMPT_DELAY_S
                 raw = ser.readline()
                 if not raw:
                     continue
                 text = raw.decode("utf-8", "ignore").strip()
                 if text:
                     lines.append(text)
+                    if "DEVICE:" in text:
+                        responsive = True
+                        break
             ser.close()
-            responsive = any("OK pong" in ln or "OK " in ln for ln in lines)
             results.append({"port": port, "lines": lines, "responsive": responsive})
         except Exception as exc:
             results.append({"port": port, "error": str(exc)})

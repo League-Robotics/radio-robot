@@ -1,5 +1,6 @@
 #include "OtosSensor.h"
 #include "Config.h"
+#include "hal/capability/OtosLeverArm.h"
 #include <cmath>
 
 OtosSensor::OtosSensor(I2CBus& i2c, const RobotConfig& cfg)
@@ -123,12 +124,13 @@ bool OtosSensor::readTransformed(OtosPose& poseOut,
     float c = cosf(angRad);
     float s = sinf(angRad);
 
-    // Lever-arm correction (HOST-SIDE).  The chip-side REG_OFFSET approach is
-    // unusable: this OTOS unit silently ignores writes to the offset register
-    // 0x10-0x15 (ACKs them, reads back 0), while position/scalars write fine — so
-    // the chip reports the SENSOR pose, not the tracking-CENTER.  Recover the robot
-    // centre by subtracting the mounting offset rotated by the SAME-INSTANT OTOS
-    // heading hF (read in the same I2C burst as rx,ry):
+    // Lever-arm correction (HOST-SIDE, source/hal/capability/OtosLeverArm.h).
+    // The chip-side REG_OFFSET approach is unusable: this OTOS unit silently
+    // ignores writes to the offset register 0x10-0x15 (ACKs them, reads back
+    // 0), while position/scalars write fine — so the chip reports the SENSOR
+    // pose, not the tracking-CENTER.  Recover the robot centre via
+    // sensorToCentre(), which subtracts the mounting offset rotated by the
+    // SAME-INSTANT OTOS heading hF (read in the same I2C burst as rx,ry):
     //   sensor  = pivot + R(hF)*odomOff      (the chip reports the sensor arc)
     //   centre  = sensor - R(hF)*odomOff = pivot   (exact cancellation)
     // hF (not the caller's headingRad) is required: headingRad is the fused pose
@@ -138,12 +140,12 @@ bool OtosSensor::readTransformed(OtosPose& poseOut,
     // (An earlier hF test "spiralled" only because the offset was wrong (-24 vs the
     // measured -47.7) AND the run was cramped against the fence — not hF's fault.)
     (void)headingRad;
-    float ch = cosf(hF);
-    float sh = sinf(hF);
-    float offXWorld = ch * _cfg.odomOffX - sh * _cfg.odomOffY;
-    float offYWorld = sh * _cfg.odomOffX + ch * _cfg.odomOffY;
-    poseOut.x = c * xF - s * yF - offXWorld;
-    poseOut.y = s * xF + c * yF - offYWorld;
+    float rotX = c * xF - s * yF;
+    float rotY = s * xF + c * yF;
+    float centreX = 0.0f, centreY = 0.0f;
+    sensorToCentre(rotX, rotY, hF, _cfg.odomOffX, _cfg.odomOffY, centreX, centreY);
+    poseOut.x = centreX;
+    poseOut.y = centreY;
     poseOut.h = hF;   // heading takes no mounting offset
     return true;
 }
@@ -321,10 +323,10 @@ void OtosSensor::setWorldPose(float x_mm, float y_mm, float h_rad)
     // Host-side lever-arm (chip can't store REG_OFFSET on this unit): the SENSOR
     // sits at center + R(h_rad)*offset, so to make readTransformed report the world
     // CENTER (x_mm,y_mm) we must set the chip POSITION to the sensor point.
-    float ch = cosf(h_rad);
-    float sh = sinf(h_rad);
-    float px = x_mm + (ch * _cfg.odomOffX - sh * _cfg.odomOffY);
-    float py = y_mm + (sh * _cfg.odomOffX + ch * _cfg.odomOffY);
+    // centreToSensor() (source/hal/capability/OtosLeverArm.h) is the exact
+    // inverse of readTransformed()'s sensorToCentre() call above.
+    float px = 0.0f, py = 0.0f;
+    centreToSensor(x_mm, y_mm, h_rad, _cfg.odomOffX, _cfg.odomOffY, px, py);
 
     float angRad = -_cfg.odomYawDeg * (3.14159265f / 180.0f);
     float c = cosf(angRad);
