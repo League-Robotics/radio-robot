@@ -1,5 +1,6 @@
 ---
 status: pending
+sprint: '064'
 ---
 
 # Bare `DBG IRQGUARD` query disables the IRQ guard (ArgSchema default-fill regression, 051-008)

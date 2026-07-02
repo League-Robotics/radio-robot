@@ -3,6 +3,7 @@ status: pending
 review: docs/code_review/2026-07-01-full-codebase-review.md
 findings: CR-11, CR-12, CR-13, CR-14
 severity: medium
+sprint: '066'
 ---
 
 # Landmine cleanups: Planner::apply now=0, OdomTracker conventions, sim-ABI global clock, SimConnection buffer

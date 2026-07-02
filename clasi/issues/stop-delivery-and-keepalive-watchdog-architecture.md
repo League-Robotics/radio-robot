@@ -3,6 +3,7 @@ status: pending
 review: docs/code_review/2026-07-01-full-codebase-review.md
 findings: CR-04, CR-05
 severity: high
+sprint: '065'
 ---
 
 # STOP delivery is unreliable and the ambient keepalive defeats the motion watchdog

@@ -3,6 +3,7 @@ status: pending
 review: docs/code_review/2026-07-01-full-codebase-review.md
 findings: CR-15
 severity: low
+sprint: '066'
 ---
 
 # Small cleanups from the 2026-07-01 full-codebase review (CR-15 batch)

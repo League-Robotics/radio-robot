@@ -3,6 +3,7 @@ status: pending
 review: docs/code_review/2026-07-01-full-codebase-review.md
 findings: CR-01
 severity: critical
+sprint: '065'
 ---
 
 # Stop-clause overflow aborts the process: D/T with ≥2 stop=/sensor= clauses hits assert(false)

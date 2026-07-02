@@ -3,6 +3,7 @@ status: pending
 review: docs/code_review/2026-07-01-full-codebase-review.md
 findings: CR-07, CR-08
 severity: medium
+sprint: '066'
 ---
 
 # Sim OTOS fidelity: sample plant ground truth and model the lever arm
