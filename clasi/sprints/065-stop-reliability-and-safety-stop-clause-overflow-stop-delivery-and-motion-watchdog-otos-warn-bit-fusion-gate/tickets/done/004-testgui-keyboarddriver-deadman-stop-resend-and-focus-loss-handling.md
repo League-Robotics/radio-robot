@@ -1,8 +1,9 @@
 ---
 id: '004'
 title: 'TestGUI KeyboardDriver: deadman STOP resend and focus-loss handling'
-status: open
-use-cases: [SUC-002]
+status: done
+use-cases:
+- SUC-002
 depends-on: []
 github-issue: ''
 issue: stop-delivery-and-keepalive-watchdog-architecture.md
@@ -36,42 +37,42 @@ in any order relative to them; sequenced after the firmware cluster in
 
 ## Acceptance Criteria
 
-- [ ] `KeyboardDriver._on_key_release` no longer stops the timer and sends a
+- [x] `KeyboardDriver._on_key_release` no longer stops the timer and sends a
       single `STOP`. Instead it sets `self._cmd = "STOP"` and lets the
       existing timer keep firing for a bounded count (`STOP_RESEND_COUNT`,
       a new named constant — e.g. 5 ticks at the existing 100 ms interval)
       before actually stopping the timer.
-- [ ] `_on_timer_tick` resends `self._cmd` unconditionally as it already
+- [x] `_on_timer_tick` resends `self._cmd` unconditionally as it already
       does today — no special-casing needed there beyond `_cmd` now
       sometimes being `"STOP"` instead of a `VW` line during the deadman
       window.
-- [ ] `KeyboardDriver.attach()`/`detach()` additionally save/restore
+- [x] `KeyboardDriver.attach()`/`detach()` additionally save/restore
       `window.focusOutEvent`, monkeypatched the same way
       `keyPressEvent`/`keyReleaseEvent` already are.
-- [ ] A new `_on_focus_out` handler: if a key is currently tracked as held
+- [x] A new `_on_focus_out` handler: if a key is currently tracked as held
       (`self._cmd` is a `VW` line, not `None`/`"STOP"`), triggers the same
       deadman-resend sequence a real key-release would. Forwards to the
       original `focusOutEvent` handler afterward (or before — whichever
       preserves existing Qt semantics; verify no double-handling).
-- [ ] `vw_line_for_key`/`vw_line_for_key_set` (pure, Qt-free helpers) are
+- [x] `vw_line_for_key`/`vw_line_for_key_set` (pure, Qt-free helpers) are
       unchanged — this ticket only touches `KeyboardDriver`'s stateful
       event handlers.
-- [ ] New unit test in `tests/testgui/test_drive.py`: simulate a key press
+- [x] New unit test in `tests/testgui/test_drive.py`: simulate a key press
       followed by a release, assert the driver sends `STOP` on the release
       tick and continues resending it for `STOP_RESEND_COUNT - 1` further
       timer ticks, then stops.
-- [ ] New unit test: simulate a "dropped STOP" by having the fake transport
+- [x] New unit test: simulate a "dropped STOP" by having the fake transport
       raise/no-op on the first `STOP` send — assert a subsequent deadman
       resend still gets through and the timer still stops on schedule
       (mirrors the sprint's "simulate a dropped STOP" acceptance test,
       exercised at the driver level since `drive.py` has no direct sim/bench
       hook of its own).
-- [ ] New unit test: simulate `_on_focus_out` while `self._cmd` is a `VW`
+- [x] New unit test: simulate `_on_focus_out` while `self._cmd` is a `VW`
       line — assert the deadman `STOP` sequence fires exactly as a real
       key-release would.
-- [ ] Existing `tests/testgui/test_drive.py` coverage (key press/release,
+- [x] Existing `tests/testgui/test_drive.py` coverage (key press/release,
       timer start/stop, `vw_line_for_key*` pure functions) stays green.
-- [ ] Full default sim suite green (no firmware files touched by this
+- [x] Full default sim suite green (no firmware files touched by this
       ticket).
 
 ## Implementation Plan

@@ -10,16 +10,33 @@ Key mapping
 - Down arrow: ``VW -<FWD_SPEED_MMS> 0``         (back)
 - Left arrow: ``VW 0 <ROTATE_OMEGA_MRADS>``      (rotate CCW)
 - Right arrow: ``VW 0 -<ROTATE_OMEGA_MRADS>``    (rotate CW)
-- Release:    ``STOP``
+- Release:    bounded ``STOP`` deadman resend (see below)
 
-A ~100 ms ``QTimer`` resends the current ``VW`` command while any arrow key
-is held, doubling as a firmware watchdog keepalive.  Qt auto-repeat is
+A ~100 ms ``QTimer`` resends the current command while any arrow key is
+held, doubling as a firmware watchdog keepalive.  Qt auto-repeat is
 suppressed: held keys emit one logical press (the timer handles re-sends).
 
-Guard
------
+Guard / STOP deadman resend
+----------------------------
 If the transport reply to a ``VW`` command contains ``vw busy``, the warning
-is logged.  ``STOP`` is never suppressed — it is always sent on key release.
+is logged.  ``STOP`` delivery is not a single fire-and-forget send: a direct
+-USB link intermittently drops 15-50% of lines, so a dropped ``STOP`` would
+otherwise leave the robot coasting at the last commanded velocity
+indefinitely.  Instead, on key release ``KeyboardDriver`` sets
+``self._cmd = "STOP"`` and reuses the *existing* non-blocking timer/
+``_send_cmd`` machinery to resend it ``STOP_RESEND_COUNT`` times (counting
+the immediate send-on-release) before actually stopping the timer — no new
+thread, no blocking ``command()`` retry loop on the Qt main thread (a
+blocking acked-retry design was considered and rejected; see
+``architecture-update.md`` Design Rationale Decision 4 in sprint 065). With a
+15-50% per-line drop rate, the odds every resend is lost are bounded by
+``(0.5) ** STOP_RESEND_COUNT`` — vanishingly small at the default count.
+
+Separately, Qt never delivers ``keyReleaseEvent`` if the window loses focus
+while an arrow key is physically held down.  ``KeyboardDriver`` also
+overrides ``focusOutEvent`` and treats focus loss as an implicit release:
+if a key is currently tracked as held, losing focus triggers the same
+bounded STOP deadman-resend sequence a real key-release would.
 
 Units
 -----
@@ -59,6 +76,15 @@ FWD_SPEED_MMS: int = 200
 
 #: Rotate speed in milli-radians/s; positive = CCW.
 ROTATE_OMEGA_MRADS: int = 500
+
+#: Number of times ``STOP`` is (re)sent on key release / focus-loss,
+#: counting the initial send-on-release itself.  Reuses the existing
+#: ``QTimer``/``_send_cmd`` resend machinery (no new thread, no blocking
+#: ``command()`` retry — see architecture-update.md Design Rationale
+#: Decision 4, sprint 065).  At the default 100 ms timer interval this spans
+#: ~400-500 ms of resends; with a 15-50% per-line drop rate the probability
+#: every send is lost is bounded by ``(0.5) ** STOP_RESEND_COUNT``.
+STOP_RESEND_COUNT: int = 5
 
 # ---------------------------------------------------------------------------
 # Key integer constants (mirrors PySide6.QtCore.Qt.Key values).
@@ -159,11 +185,13 @@ class KeyboardDriver:
         self._transport: "Transport | None" = None
         self._window: "object | None" = None
         self._timer: "object | None" = None   # QTimer, created lazily
-        self._cmd: str | None = None          # current VW command
+        self._cmd: str | None = None          # current VW command, or "STOP" during the deadman resend window
+        self._stop_resends_left: int = 0      # remaining bounded STOP resends (see STOP_RESEND_COUNT)
 
         # Original key event handlers (restored on detach).
         self._orig_key_press: "object | None" = None
         self._orig_key_release: "object | None" = None
+        self._orig_focus_out: "object | None" = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -198,9 +226,11 @@ class KeyboardDriver:
         # Save and override key-event handlers on the window.
         self._orig_key_press = window.keyPressEvent  # type: ignore[union-attr]
         self._orig_key_release = window.keyReleaseEvent  # type: ignore[union-attr]
+        self._orig_focus_out = window.focusOutEvent  # type: ignore[union-attr]
 
         window.keyPressEvent = self._on_key_press  # type: ignore[union-attr]
         window.keyReleaseEvent = self._on_key_release  # type: ignore[union-attr]
+        window.focusOutEvent = self._on_focus_out  # type: ignore[union-attr]
 
         _log.debug("KeyboardDriver attached")
 
@@ -211,6 +241,7 @@ class KeyboardDriver:
         """
         self._stop_timer()
         self._cmd = None
+        self._stop_resends_left = 0
         self._transport = None
 
         if self._window is not None:
@@ -218,9 +249,12 @@ class KeyboardDriver:
                 self._window.keyPressEvent = self._orig_key_press  # type: ignore[union-attr]
             if self._orig_key_release is not None:
                 self._window.keyReleaseEvent = self._orig_key_release  # type: ignore[union-attr]
+            if self._orig_focus_out is not None:
+                self._window.focusOutEvent = self._orig_focus_out  # type: ignore[union-attr]
         self._window = None
         self._orig_key_press = None
         self._orig_key_release = None
+        self._orig_focus_out = None
 
         if self._timer is not None:
             self._timer.deleteLater()  # type: ignore[union-attr]
@@ -263,7 +297,9 @@ class KeyboardDriver:
     def _on_key_release(self, event: "object") -> None:
         """Handle a key-release event on the main window.
 
-        Stops the keepalive timer and sends ``STOP``.  Forwarded to the
+        Begins the bounded STOP deadman-resend sequence (see
+        :meth:`_start_stop_deadman`) instead of stopping the timer and
+        sending a single fire-and-forget ``STOP``.  Forwarded to the
         original handler for non-arrow keys.
         """
         if event.isAutoRepeat():  # type: ignore[union-attr]
@@ -276,37 +312,98 @@ class KeyboardDriver:
                 self._orig_key_release(event)
             return
 
-        self._stop_timer()
-        self._cmd = None
+        self._start_stop_deadman()
 
-        if self._transport is None:
-            return
+    def _on_focus_out(self, event: "object") -> None:
+        """Handle the main window losing keyboard focus.
 
-        try:
-            self._transport.send("STOP")
-        except Exception as exc:
-            _log.warning("KeyboardDriver: failed to send STOP: %s", exc)
+        Qt does not deliver ``keyReleaseEvent`` when the window loses focus
+        while an arrow key is physically held down -- a real release would
+        leave the robot driving indefinitely.  Focus loss is treated as an
+        implicit release: if a key is currently tracked as held
+        (``self._cmd`` is a VW line, not ``None``/``"STOP"``), this triggers
+        the same bounded STOP deadman-resend sequence a real key-release
+        would.  Forwarded to the original ``focusOutEvent`` handler
+        afterward.
+        """
+        if self._cmd is not None and self._cmd != "STOP":
+            self._start_stop_deadman()
+
+        if self._orig_focus_out is not None:
+            self._orig_focus_out(event)
 
     # ------------------------------------------------------------------
     # Timer callback
     # ------------------------------------------------------------------
 
     def _on_timer_tick(self) -> None:
-        """Resend the current VW command (keepalive while key is held)."""
+        """Resend the current command.
+
+        While a key is held, ``self._cmd`` is the VW line and this is an
+        unbounded keepalive resend, exactly as before.  During the bounded
+        STOP deadman window after a release or focus-loss, ``self._cmd`` is
+        ``"STOP"`` and this same unconditional resend serves as the next
+        deadman tick -- :meth:`_send_cmd` (not this method) tracks the
+        remaining count and stops the timer once the sequence completes, so
+        no special-casing is needed here.
+        """
         self._send_cmd()
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _start_stop_deadman(self) -> None:
+        """Begin (or restart) the bounded STOP deadman-resend sequence.
+
+        Sets ``self._cmd = "STOP"`` and sends it immediately -- the first of
+        ``STOP_RESEND_COUNT`` total sends -- then leaves the existing
+        keepalive timer running so :meth:`_on_timer_tick` keeps resending
+        ``STOP`` for the remaining ``STOP_RESEND_COUNT - 1`` ticks
+        (:meth:`_send_cmd` counts down and stops the timer once exhausted).
+        Called from both a real key-release and a focus-loss event, since
+        both represent the same "key is no longer held" transition. No new
+        thread, no blocking ``command()`` retry (rejected alternative -- see
+        architecture-update.md Design Rationale Decision 4, sprint 065).
+
+        If no transport is attached there is nothing to protect; the timer
+        is simply stopped and ``self._cmd`` cleared, mirroring the driver's
+        "ignores key events when no transport" invariant.
+        """
+        if self._transport is None:
+            self._stop_timer()
+            self._cmd = None
+            return
+
+        self._cmd = "STOP"
+        self._stop_resends_left = STOP_RESEND_COUNT
+        self._start_timer()
+        self._send_cmd()
+
     def _send_cmd(self) -> None:
-        """Send ``self._cmd`` via the transport if one is set."""
+        """Send ``self._cmd`` via the transport if one is set.
+
+        When ``self._cmd == "STOP"`` (the bounded deadman-resend window),
+        this additionally counts the send against ``STOP_RESEND_COUNT`` and,
+        once exhausted, stops the keepalive timer and clears ``self._cmd``
+        -- this is the single place that ends the deadman sequence, whether
+        called from :meth:`_start_stop_deadman` (the first send) or
+        :meth:`_on_timer_tick` (each subsequent resend). The countdown
+        advances even if ``transport.send`` raises, so a dropped/failed send
+        does not prevent the timer from stopping on schedule.
+        """
         if self._transport is None or self._cmd is None:
             return
         try:
             self._transport.send(self._cmd)
         except Exception as exc:
             _log.warning("KeyboardDriver: failed to send %r: %s", self._cmd, exc)
+
+        if self._cmd == "STOP":
+            self._stop_resends_left -= 1
+            if self._stop_resends_left <= 0:
+                self._stop_timer()
+                self._cmd = None
 
     def _start_timer(self) -> None:
         """Start the keepalive QTimer if not already running."""
