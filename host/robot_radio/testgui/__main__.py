@@ -424,6 +424,16 @@ def _build_main_window():  # type: ignore[return]
         _tour_buttons.append((_tb, _tour_name))
         # Enable/disable together with the Send buttons on connect/disconnect.
         _send_buttons.append(_tb)
+    # Stop Tour — dedicated control to abort a running tour. Deliberately NOT
+    # added to _send_buttons: unlike the tour buttons themselves (which enable
+    # on connect), this button must stay disabled while idle even when
+    # connected — it only enables while a tour is actively running (see
+    # _on_tour_clicked / _stop_tour / _on_tour_finished below).
+    stop_tour_btn = QPushButton("Stop Tour")
+    stop_tour_btn.setObjectName("stop_tour_btn")
+    stop_tour_btn.setEnabled(False)
+    stop_tour_btn.setToolTip("Stop the currently running tour.")
+    tour_layout.addWidget(stop_tour_btn)
     tour_layout.addStretch()
     left_layout.addWidget(tour_row)
 
@@ -1123,7 +1133,19 @@ def _build_main_window():  # type: ignore[return]
         _append_log(text, direction=direction or None)
 
     def _stop_tour() -> None:
-        """Stop a running tour worker and join its thread (safe if idle)."""
+        """Stop a running tour worker and join its thread (safe if idle).
+
+        Re-enables the tour buttons (and disables ``stop_tour_btn``)
+        synchronously, right after the join, instead of relying on the
+        worker's queued ``finished`` signal / ``_on_tour_finished``. That
+        signal can be undelivered for the explicit-stop path: it fires
+        *during* the blocking ``thread.wait()`` call below, but the queued
+        slot cannot run until ``wait()`` returns — and by then this
+        function has already dropped the only reference to the
+        ``_WorkerBridge``, so the pending delivery is lost and the buttons
+        would never re-enable. See ``testgui-tour-stop-reactivation.md`` for
+        the full root-cause analysis.
+        """
         worker = _state.get("tour_worker")
         thread = _state.get("tour_thread")
         if worker is not None:
@@ -1140,9 +1162,18 @@ def _build_main_window():  # type: ignore[return]
         _state["tour_worker"] = None
         _state["tour_thread"] = None
         _state["tour_bridge"] = None
+        if _state.get("transport") is not None:
+            for _tb, _ in _tour_buttons:
+                _tb.setEnabled(True)
+        stop_tour_btn.setEnabled(False)
 
     def _on_tour_finished() -> None:
-        """Main-thread slot: tour ended — join the thread, re-enable buttons."""
+        """Main-thread slot: tour ended — join the thread, re-enable buttons.
+
+        This is the natural-completion path only (the worker finished on
+        its own); the explicit-stop path is handled synchronously inside
+        ``_stop_tour`` itself and does not depend on this slot running.
+        """
         thread = _state.get("tour_thread")
         if thread is not None:
             try:
@@ -1156,6 +1187,7 @@ def _build_main_window():  # type: ignore[return]
         if _state.get("transport") is not None:
             for _tb, _ in _tour_buttons:
                 _tb.setEnabled(True)
+        stop_tour_btn.setEnabled(False)
 
     def _make_tour_handler(name: str, steps: list[str]):
         def _on_tour_clicked() -> None:
@@ -1166,12 +1198,20 @@ def _build_main_window():  # type: ignore[return]
             if _state.get("tour_thread") is not None:
                 _append_log("[WARN] A tour is already running")
                 return
+            from robot_radio.testgui.operations import is_sim_transport
+
+            if is_sim_transport(transport):
+                # Tours remain allowed against the simulator (useful for
+                # dry-runs), but the operator must never be confused about
+                # the target — log it unambiguously.
+                _append_log("[TOUR] running in SIM mode")
             _append_log(f"[TOUR] {name} starting — resetting to origin")
             # Origin reset runs on the main thread (wire commands + display).
             _set_origin()
-            # Disable all tour buttons while one runs.
+            # Disable all tour buttons while one runs; enable Stop Tour.
             for _tb, _ in _tour_buttons:
                 _tb.setEnabled(False)
+            stop_tour_btn.setEnabled(True)
             from PySide6.QtCore import QThread  # type: ignore[import-untyped]
 
             worker = _TourRunner(transport, name, list(steps))
@@ -1195,6 +1235,7 @@ def _build_main_window():  # type: ignore[return]
 
     for _tour_btn, _tour_name in _tour_buttons:
         _tour_btn.clicked.connect(_make_tour_handler(_tour_name, TOURS[_tour_name]))
+    stop_tour_btn.clicked.connect(_stop_tour)
 
     # ----------------------------------------------------------- GOTO controls
 
@@ -1203,7 +1244,17 @@ def _build_main_window():  # type: ignore[return]
         _append_log(text, direction=direction or None)
 
     def _stop_goto() -> None:
-        """Stop a running GOTO worker and join its thread (safe if idle)."""
+        """Stop a running GOTO worker and join its thread (safe if idle).
+
+        Re-enables ``goto_btn`` synchronously right after the join, instead
+        of relying on the worker's queued ``finished`` signal /
+        ``_on_goto_finished`` — mirrors the ``_stop_tour`` fix (see
+        ``testgui-tour-stop-reactivation.md``): that signal can be
+        undelivered for the explicit-stop path because it fires during the
+        blocking ``thread.wait()`` below, and by the time ``wait()``
+        returns this function has already dropped the only reference to the
+        ``_WorkerBridge``.
+        """
         worker = _state.get("goto_worker")
         thread = _state.get("goto_thread")
         if worker is not None:
@@ -1220,6 +1271,8 @@ def _build_main_window():  # type: ignore[return]
         _state["goto_worker"] = None
         _state["goto_thread"] = None
         _state["goto_bridge"] = None
+        if _state.get("transport") is not None:
+            goto_btn.setEnabled(True)
 
     def _stop_all_motion() -> None:
         """Cancel any running tour AND GOTO worker (used by the STOP button).
@@ -1232,7 +1285,12 @@ def _build_main_window():  # type: ignore[return]
         _stop_goto()
 
     def _on_goto_finished() -> None:
-        """Main-thread slot: GOTO ended — join thread, re-enable the button."""
+        """Main-thread slot: GOTO ended — join thread, re-enable the button.
+
+        This is the natural-completion path only (the worker finished on
+        its own); the explicit-stop path is handled synchronously inside
+        ``_stop_goto`` itself and does not depend on this slot running.
+        """
         thread = _state.get("goto_thread")
         if thread is not None:
             try:

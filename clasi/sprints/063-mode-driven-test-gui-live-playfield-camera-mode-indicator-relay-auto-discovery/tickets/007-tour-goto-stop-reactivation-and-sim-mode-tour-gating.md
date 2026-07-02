@@ -1,7 +1,7 @@
 ---
 id: '007'
 title: Tour/GOTO stop reactivation and Sim-mode tour gating
-status: open
+status: done
 use-cases:
 - SUC-008
 - SUC-009
@@ -91,49 +91,49 @@ Two confirmed, related bugs in the Tour/GOTO worker wiring in
 
 ### Stop Tour control
 
-- [ ] A new `QPushButton` (suggested `objectName="stop_tour_btn"`, text "Stop
+- [x] A new `QPushButton` (suggested `objectName="stop_tour_btn"`, text "Stop
       Tour") exists next to the Tour 1 button in the tour row.
-- [ ] `stop_tour_btn` starts disabled (no tour running, and/or not connected).
-- [ ] `stop_tour_btn` becomes enabled exactly when a tour starts
+- [x] `stop_tour_btn` starts disabled (no tour running, and/or not connected).
+- [x] `stop_tour_btn` becomes enabled exactly when a tour starts
       (`_on_tour_clicked`) and disabled again exactly when the tour stops
       (whether via explicit stop or natural completion).
-- [ ] Clicking `stop_tour_btn` calls `_stop_tour()`.
+- [x] Clicking `stop_tour_btn` calls `_stop_tour()`.
 
 ### Synchronous reactivation (Tour)
 
-- [ ] `_stop_tour()` re-enables all tour buttons (`Tour 1`, any future tours)
+- [x] `_stop_tour()` re-enables all tour buttons (`Tour 1`, any future tours)
       and disables `stop_tour_btn`, synchronously, immediately after the
       `thread.quit()` / `thread.wait()` join — provided
       `_state.get("transport")` is not `None` — without depending on the
       worker's `finished` signal being delivered.
-- [ ] Calling `_stop_tour()` when no tour is running remains a safe no-op
+- [x] Calling `_stop_tour()` when no tour is running remains a safe no-op
       (existing behavior preserved).
-- [ ] `_on_tour_finished()` (natural-completion path) continues to re-enable
+- [x] `_on_tour_finished()` (natural-completion path) continues to re-enable
       the buttons correctly; no regression when a tour completes without an
       explicit stop.
-- [ ] After an explicit stop, the Tour 1 button is immediately re-enabled
+- [x] After an explicit stop, the Tour 1 button is immediately re-enabled
       (this is the regression the issue reports — must be fixed).
 
 ### Synchronous reactivation (GOTO)
 
-- [ ] `_stop_goto()` re-enables `goto_btn` synchronously after the join,
+- [x] `_stop_goto()` re-enables `goto_btn` synchronously after the join,
       provided a transport is still connected — mirroring the Tour fix.
-- [ ] `_on_goto_finished()` natural-completion path is unaffected.
+- [x] `_on_goto_finished()` natural-completion path is unaffected.
 
 ### Sim-mode gating
 
-- [ ] Starting a tour (`_on_tour_clicked`) with `is_sim_transport(transport)`
+- [x] Starting a tour (`_on_tour_clicked`) with `is_sim_transport(transport)`
       True logs `[TOUR] running in SIM mode` before the "resetting to origin"
       log line.
-- [ ] Starting a tour with a non-Sim transport does NOT log that line.
-- [ ] Tours are NOT blocked in Sim mode (existing dry-run behavior preserved).
-- [ ] Regression test confirms tour buttons (`tour_btn_tour_1` and the new
+- [x] Starting a tour with a non-Sim transport does NOT log that line.
+- [x] Tours are NOT blocked in Sim mode (existing dry-run behavior preserved).
+- [x] Regression test confirms tour buttons (`tour_btn_tour_1` and the new
       `stop_tour_btn`) are disabled before Connect.
 
 ### No regressions
 
-- [ ] All existing `tests/testgui/` tests pass unchanged.
-- [ ] `uv run python -m pytest tests/simulation -q` remains green (this
+- [x] All existing `tests/testgui/` tests pass unchanged.
+- [x] `uv run python -m pytest tests/simulation -q` remains green (this
       ticket does not touch firmware/sim code, but confirm no import-order
       breakage).
 
