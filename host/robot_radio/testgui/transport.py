@@ -67,9 +67,35 @@ SimTransport()
     - OTOS linear noise (sigma_fraction=0.05) so TLM pose and ground truth
       diverge visibly during motion.
 
-Helper:
+Helpers:
     list_ports() -> list[str]
         Enumerate USB modem serial ports (wraps serial_conn.list_serial_ports).
+
+    find_relay_port(port_list, probe_fn) -> str | None
+        Pure, Qt-free relay auto-discovery.  Calls ``probe_fn(port)`` for
+        each port in order; returns the first port whose banner contains
+        ``"RADIOBRIDGE"``, or ``None``.  Exceptions from ``probe_fn`` are
+        caught and the port is skipped.
+
+    _relay_probe_banner(port, timeout_s) -> str | None
+        Real I/O probe.  Opens the port with DTR asserted (pyserial default),
+        sends ``HELLO`` (re-sent every ~0.4 s within the timeout window) and
+        reads until a ``DEVICE:`` announcement line arrives.  Returns the
+        banner line, or ``None`` on timeout or any I/O error.  Always closes
+        the port before returning.
+
+        A purely passive boot-banner wait (open and listen, never send
+        anything) is wrong on two counts, live-verified against a real relay
+        (see ``.clasi/knowledge/2026-06-12-relay-go-data-plane-and-docs.md``,
+        correction of 2026-06-13 / sprint 036-007): some relays do not reset
+        on open, so no banner is ever emitted; and even when a reset does
+        happen, a micro:bit's boot time can exceed a short passive window.
+        HELLO-classify (send ``HELLO``, read the ``DEVICE:`` reply) is the
+        robust, bench-proven method — the same one ``SerialConnection``
+        already uses. It is safe to send to a non-relay device too: a robot
+        answers ``HELLO`` with its own ``DEVICE:`` banner, which lacks
+        ``RADIOBRIDGE``, so ``find_relay_port``'s substring match still
+        classifies correctly (skips the port).
 """
 
 from __future__ import annotations
@@ -106,6 +132,116 @@ def list_ports() -> list[str]:
     return list_serial_ports()
 
 
+def find_relay_port(
+    port_list: list[str],
+    probe_fn: "Callable[[str], str | None]",
+) -> "str | None":
+    """Return the first port in port_list whose banner contains 'RADIOBRIDGE'.
+
+    Iterates over ``port_list`` in order, calling ``probe_fn(port)`` for each
+    candidate.  Returns the first port for which ``probe_fn`` returns a string
+    containing ``"RADIOBRIDGE"``.  Stops early once a match is found.
+
+    ``probe_fn`` exceptions are caught silently and the port is skipped.
+    Returns ``None`` if no match is found or ``port_list`` is empty.
+
+    This function is pure and Qt-free — it can be imported and tested without
+    a ``QApplication`` instance.
+
+    Parameters
+    ----------
+    port_list:
+        Ordered list of serial port paths to probe.
+    probe_fn:
+        Callable that takes a port path and returns the device banner string
+        or ``None`` if the port does not announce as a relay (or on error).
+    """
+    for port in port_list:
+        try:
+            banner = probe_fn(port)
+        except Exception:
+            continue
+        if banner and "RADIOBRIDGE" in banner:
+            return port
+    return None
+
+
+# Interval between HELLO retries within the probe window. The device may
+# still be mid-boot when the first HELLO is sent, so we keep re-sending it
+# until either a DEVICE: reply arrives or the deadline passes.
+_RELAY_PROBE_HELLO_INTERVAL_S = 0.4
+# Short settle pause after opening the port and before the first HELLO write.
+_RELAY_PROBE_SETTLE_S = 0.15
+
+
+def _relay_probe_banner(port: str, timeout_s: float = 2.0) -> "str | None":
+    """Open port with DTR asserted, HELLO-classify, and return the DEVICE: line.
+
+    A passive boot-banner wait (open and listen, never send anything) is
+    wrong on two counts — live-verified against a real relay (see
+    ``.clasi/knowledge/2026-06-12-relay-go-data-plane-and-docs.md``,
+    correction of 2026-06-13 / sprint 036-007): some relays do not reset on
+    open at all, so no banner is ever emitted; and even when a reset does
+    happen, a micro:bit's boot time can exceed a short passive window.
+
+    Instead this function HELLO-classifies: after opening (DTR asserted by
+    default — do NOT pass ``dtr=False``), it sends ``HELLO\\n`` and reads
+    lines until one starts with ``DEVICE:`` or ``timeout_s`` elapses.
+    ``HELLO`` is re-sent every ``_RELAY_PROBE_HELLO_INTERVAL_S`` in case the
+    first write lands while the device is still mid-boot. This is the same,
+    bench-proven method ``SerialConnection`` already uses for the real
+    connection handshake.
+
+    ``HELLO`` is safe to send to a non-relay device: a robot answers with its
+    own ``DEVICE:`` banner (e.g. ``DEVICE:NEZHA2:robot:tovez:<id>``), which
+    lacks ``RADIOBRIDGE``, so ``find_relay_port``'s substring match still
+    classifies correctly and skips the port.
+
+    Returns ``None`` on timeout or any I/O / OS error.  Always closes the
+    port before returning, regardless of outcome, so that non-relay devices
+    probed along the way are not left open.
+
+    Parameters
+    ----------
+    port:
+        Serial port path, e.g. ``/dev/cu.usbmodem21421201``.
+    timeout_s:
+        Maximum time to wait for the ``DEVICE:`` announcement line.
+    """
+    import serial  # type: ignore[import]
+    ser = None
+    try:
+        # Short per-read timeout so the loop wakes up often enough to
+        # re-send HELLO and re-check the overall deadline — NOT timeout_s,
+        # which would let a single blocking readline() eat the whole budget.
+        ser = serial.Serial(port, 115200, timeout=0.2)
+        ser.reset_input_buffer()
+        time.sleep(_RELAY_PROBE_SETTLE_S)
+
+        deadline = time.monotonic() + timeout_s
+        next_hello = 0.0  # send immediately on the first iteration
+
+        while time.monotonic() < deadline:
+            now = time.monotonic()
+            if now >= next_hello:
+                ser.write(b"HELLO\n")
+                ser.flush()
+                next_hello = now + _RELAY_PROBE_HELLO_INTERVAL_S
+
+            line = ser.readline().decode("ascii", errors="replace").strip()
+            if line.startswith("DEVICE:"):
+                return line
+        return None
+    except Exception:
+        return None
+    finally:
+        if ser is not None:
+            try:
+                ser.close()
+            except Exception:
+                pass
+
+
 # ---------------------------------------------------------------------------
 # Transport ABC
 # ---------------------------------------------------------------------------
@@ -136,6 +272,17 @@ class Transport(abc.ABC):
         self.on_telemetry: TelemetryCB | None = None
         self.on_truth: TruthCB | None = None
         self.on_log: LogCB | None = None
+
+    @property
+    def turn_scrub_factor(self) -> float:
+        """Fractional encoder over-report during turns for this backend.
+
+        Consumers (e.g. the encoder-odometry trace) use this to calibrate
+        heading integration.  0.0 = perfect (no scrub).  Hardware backends
+        report 0.0 until real turn-odometry calibration provides a value;
+        the simulator overrides this with its injected ``slip_turn_extra``.
+        """
+        return 0.0
 
     # ------------------------------------------------------------------
     # Lifecycle (must be implemented)
@@ -237,10 +384,10 @@ class _HardwareTransport(Transport):
 
         # Wire log callbacks through SerialConnection's on_send/on_recv hooks.
         def _on_send(line: str) -> None:
-            self._log(f"TX {line}")
+            self._log(f"> {line}")
 
         def _on_recv(line: str) -> None:
-            self._log(f"RX {line}")
+            self._log(f"< {line}")
 
         self._conn = SerialConnection(
             port=self._port,
@@ -508,6 +655,11 @@ class SimTransport(Transport):
         self._cmd_queue: queue.Queue = queue.Queue()
         self._connected = False
 
+    @property
+    def turn_scrub_factor(self) -> float:
+        """The sim injects ``_SIM_SLIP_TURN_EXTRA`` turn-scrub over-report."""
+        return _SIM_SLIP_TURN_EXTRA
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -567,7 +719,44 @@ class SimTransport(Transport):
         if not self._connected:
             raise ConnectionError("SimTransport is not connected")
         self._cmd_queue.put((line, None, None))
-        self._log(f"TX {line}")
+        self._log(f"> {line}")
+
+    def set_true_pose(self, x_cm: float, y_cm: float, yaw_rad: float) -> None:
+        """Teleport the simulator plant (ground-truth) pose.
+
+        In Sim mode the canvas avatar follows the plant ground truth
+        (``sim.get_true_pose()``), NOT the firmware's belief.  The wire
+        commands ``OZ`` and ``SI`` only reset the firmware's EKF estimate and
+        the OTOS reference — they do NOT move the plant.  On real hardware the
+        operator physically places the robot; in the sim there is no operator,
+        so the plant must be teleported explicitly or the avatar snaps back to
+        the plant's stale pose on the next ground-truth delivery.
+
+        Enqueues a plant action on the tick-thread (the only thread allowed to
+        touch the ``Sim`` object).  True wheel travel and velocity are also
+        zeroed so encoder-based odometry restarts from a clean state.
+
+        Parameters
+        ----------
+        x_cm, y_cm:
+            Target plant position in centimetres (converted to mm for the sim).
+        yaw_rad:
+            Target plant heading in radians (0 = east), passed through as-is.
+        """
+        if not self._connected:
+            return
+
+        def _action(sim: "object") -> None:
+            sim.set_true_pose(x_cm * 10.0, y_cm * 10.0, yaw_rad)  # type: ignore[attr-defined]
+            # Zero true wheel travel and velocity so odom restarts clean.
+            try:
+                sim.set_true_wheel_travel(0.0, 0.0)  # type: ignore[attr-defined]
+                sim.set_true_velocity(0.0, 0.0)      # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+        self._cmd_queue.put((_action, None, None))
+        self._log(f"> [sim] set_true_pose({x_cm:.1f}cm, {y_cm:.1f}cm, {math.degrees(yaw_rad):.1f}°)")
 
     def command(self, line: str, read_ms: int = 200) -> str:
         """Send a command and return the synchronous reply string.
@@ -581,12 +770,12 @@ class SimTransport(Transport):
         reply_list: list[str] = [""]
         done_evt = threading.Event()
         self._cmd_queue.put((line, reply_list, done_evt))
-        self._log(f"TX {line}")
+        self._log(f"> {line}")
         timeout_s = max(read_ms / 1000.0, 1.0)
         done_evt.wait(timeout=timeout_s)
         reply = reply_list[0]
         if reply:
-            self._log(f"RX {reply.strip()}")
+            self._log(f"< {reply.strip()}")
         return reply
 
     # ------------------------------------------------------------------
@@ -658,7 +847,13 @@ class SimTransport(Transport):
                 item = self._cmd_queue.get_nowait()
                 line, reply_list, done_evt = item
                 try:
-                    reply = sim.send_command(line)  # type: ignore[attr-defined]
+                    if callable(line):
+                        # Plant action (e.g. set_true_pose) — run directly on
+                        # the tick-thread which exclusively owns the Sim object.
+                        line(sim)
+                        reply = ""
+                    else:
+                        reply = sim.send_command(line)  # type: ignore[attr-defined]
                 except Exception as exc:
                     reply = f"ERR sim: {exc}"
                 if reply_list is not None:

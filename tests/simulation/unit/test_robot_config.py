@@ -15,8 +15,10 @@ from robot_radio.config.robot_config import (
     RobotConfig,
     _reset_robot_config,
     get_robot_config,
+    list_robots,
     load_robot_config,
     match_robot_by_id,
+    set_active_robot,
 )
 
 # ---------------------------------------------------------------------------
@@ -229,3 +231,33 @@ class TestMatchRobotById:
         assert cfg is not None
         assert cfg.calibration.otos_linear_scale == pytest.approx(1.067)
         assert cfg.calibration.rotation_gain_neg == pytest.approx(0.954)
+
+
+class TestListAndSelectRobots:
+    """list_robots() / set_active_robot() — the GUI robot picker helpers."""
+
+    def test_list_robots_includes_known_bots(self):
+        names = [name for name, _ in list_robots()]
+        assert "tovez" in names
+        assert "togov" in names
+
+    def test_list_robots_excludes_pointer_and_schema(self):
+        paths = [p.name for _, p in list_robots()]
+        assert "active_robot.json" not in paths
+        assert "robot_config.schema.json" not in paths
+
+    def test_set_active_robot_switches_and_restores(self):
+        """set_active_robot() rewrites the pointer and get_robot_config() follows."""
+        original = _ACTIVE_JSON.read_text()
+        try:
+            togov = _ROBOTS_DIR / "togov.json"
+            cfg = set_active_robot(togov)
+            assert cfg.robot_name == "togov"
+            assert get_robot_config().robot_name == "togov"
+            # Pointer file now targets togov.
+            pointer = json.loads(_ACTIVE_JSON.read_text())
+            assert pointer["path"].endswith("togov.json")
+        finally:
+            _ACTIVE_JSON.write_text(original)
+            _reset_robot_config()
+        assert get_robot_config().robot_name == "tovez"

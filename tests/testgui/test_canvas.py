@@ -193,6 +193,82 @@ class TestCanvasRefresh:
 
 
 # ---------------------------------------------------------------------------
+# CanvasController.refresh(update_marker=False) — camera bridge owns the avatar
+# (ticket 063-011: TLM refresh must not move the avatar in live view)
+# ---------------------------------------------------------------------------
+
+
+class TestRefreshUpdateMarkerParam:
+    """refresh(update_marker=False) rebuilds traces but must NOT move the marker."""
+
+    @pytest.fixture
+    def canvas_setup(self, qapp):
+        from robot_radio.testgui.canvas import build_canvas
+
+        model = _make_trace_model()
+        model.anchor(0.0, 0.0, 0.0)
+        widget, ctrl = build_canvas(model)
+        return model, widget, ctrl
+
+    def test_refresh_update_marker_false_does_not_move_marker(self, canvas_setup):
+        """refresh(update_marker=False) leaves the marker position unchanged."""
+        model, widget, ctrl = canvas_setup
+
+        # Establish a baseline marker position away from the origin.
+        model.feed(_make_frame(pose=(0, 0, 0)))
+        model.feed(_make_frame(pose=(1000, 0, 0)))
+        ctrl.refresh(fused_yaw_rad=0.0)
+        pos_before = ctrl._marker_group.pos()
+        rotation_before = ctrl._marker_group.rotation()
+
+        # Feed a fused point that WOULD move the marker if applied.
+        model.feed(_make_frame(pose=(5000, 500, 9000)))
+        ctrl.refresh(fused_yaw_rad=math.pi / 2, update_marker=False)
+
+        pos_after = ctrl._marker_group.pos()
+        rotation_after = ctrl._marker_group.rotation()
+        assert pos_after.x() == pytest.approx(pos_before.x()), (
+            "Marker x must not move when update_marker=False"
+        )
+        assert pos_after.y() == pytest.approx(pos_before.y()), (
+            "Marker y must not move when update_marker=False"
+        )
+        assert rotation_after == pytest.approx(rotation_before), (
+            "Marker rotation must not change when update_marker=False"
+        )
+
+    def test_refresh_update_marker_false_still_updates_traces(self, canvas_setup):
+        """refresh(update_marker=False) still rebuilds the trace paths."""
+        model, widget, ctrl = canvas_setup
+
+        model.feed(_make_frame(pose=(0, 0, 0)))
+        model.feed(_make_frame(pose=(1000, 0, 0)))
+        ctrl.refresh(update_marker=False)
+
+        item = ctrl._trace_items["fused"]
+        path = item.path()
+        assert not path.isEmpty(), "fused trace path must update even with update_marker=False"
+
+    def test_refresh_default_moves_marker(self, canvas_setup):
+        """refresh() with the default update_marker=True DOES move the marker
+        (contrast case proving the parameter, not some other effect, gates
+        the marker update)."""
+        model, widget, ctrl = canvas_setup
+
+        model.feed(_make_frame(pose=(0, 0, 0)))
+        ctrl.refresh(fused_yaw_rad=0.0)
+        pos_before = ctrl._marker_group.pos()
+
+        model.feed(_make_frame(pose=(2000, 0, 0)))
+        ctrl.refresh(fused_yaw_rad=0.0)
+        pos_after = ctrl._marker_group.pos()
+
+        assert pos_after.x() != pytest.approx(pos_before.x()), (
+            "Marker must move on a default refresh() call (update_marker=True)"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Robot marker — red front / blue back, rotation
 # ---------------------------------------------------------------------------
 
@@ -388,6 +464,166 @@ class TestSetBackground:
         model, widget, ctrl = canvas_setup
         null_pm = QPixmap()
         ctrl.set_background(null_pm)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Live-view avatar lock across background swaps
+# (issue testgui-set-background-yanks-avatar: set_background() must not yank
+# the avatar off the camera pose back to the fused/centre fallback)
+# ---------------------------------------------------------------------------
+
+
+class TestLiveAvatarLockAcrossBackgroundSwap:
+    """Once set_avatar_pose() has been called, set_background() must re-lock
+    the marker to that live pose (remapped through the new transform) instead
+    of letting its internal refresh() reposition it from the fused trace."""
+
+    @pytest.fixture
+    def canvas_setup(self, qapp):
+        from robot_radio.testgui.canvas import build_canvas
+
+        model = _make_trace_model()
+        model.anchor(0.0, 0.0, 0.0)
+        widget, ctrl = build_canvas(model)
+        return model, widget, ctrl
+
+    @staticmethod
+    def _expected_px(ctrl, x_cm, y_cm):
+        """Compute expected pixel position using ctrl's CURRENT origin/ppc."""
+        ppc = ctrl._ppc
+        return ppc * (x_cm + ctrl._origin_x), ppc * (ctrl._origin_y - y_cm)
+
+    def test_set_background_relocks_marker_to_live_pose(self, canvas_setup):
+        """After set_avatar_pose(), a subsequent set_background() (with a new
+        origin) must reposition the marker at the live pose remapped through
+        the NEW transform — not the fused/centre fallback."""
+        from PySide6.QtGui import QPixmap, QColor  # type: ignore[import-untyped]
+
+        model, widget, ctrl = canvas_setup
+
+        # Feed a fused point far from the live pose — if set_background fell
+        # back to fused-driven marker update, the marker would jump here.
+        model.feed(_make_frame(pose=(0, 0, 0)))
+        model.feed(_make_frame(pose=(5000, 0, 0)))
+
+        x_cm, y_cm, yaw_rad = 10.0, -5.0, math.pi / 6
+        ctrl.set_avatar_pose(x_cm, y_cm, yaw_rad)
+
+        ppc = ctrl._ppc
+        pm = QPixmap(int(80 * ppc), int(60 * ppc))
+        pm.fill(QColor(90, 90, 90))
+        new_ox, new_oy = 40.0, 30.0
+        ctrl.set_background(pm, origin_x=new_ox, origin_y=new_oy)
+
+        expected_px, expected_py = self._expected_px(ctrl, x_cm, y_cm)
+        pos = ctrl._marker_group.pos()
+        assert pos.x() == pytest.approx(expected_px, abs=0.5), (
+            f"Marker x should stay at live pose {expected_px:.1f}, got {pos.x():.1f}"
+        )
+        assert pos.y() == pytest.approx(expected_py, abs=0.5), (
+            f"Marker y should stay at live pose {expected_py:.1f}, got {pos.y():.1f}"
+        )
+        expected_rot = 90.0 - math.degrees(yaw_rad)
+        assert ctrl._marker_group.rotation() == pytest.approx(expected_rot, abs=0.01), (
+            "Marker rotation must remain locked to the live yaw across the swap"
+        )
+
+    def test_set_background_without_avatar_pose_uses_legacy_fallback(self, canvas_setup):
+        """Without any prior set_avatar_pose() call, set_background() behaves
+        exactly as before: the marker follows the fused trace (legacy
+        behaviour, unchanged by this fix)."""
+        from PySide6.QtGui import QPixmap, QColor  # type: ignore[import-untyped]
+
+        model, widget, ctrl = canvas_setup
+
+        model.feed(_make_frame(pose=(0, 0, 0)))
+        model.feed(_make_frame(pose=(2000, 300, 0)))
+
+        assert ctrl._live_pose is None, "No live pose should be set yet"
+
+        ppc = ctrl._ppc
+        pm = QPixmap(int(80 * ppc), int(60 * ppc))
+        pm.fill(QColor(90, 90, 90))
+        ctrl.set_background(pm)
+
+        last_x, last_y = model.fused[-1]
+        expected_px, expected_py = self._expected_px(ctrl, last_x, last_y)
+        pos = ctrl._marker_group.pos()
+        assert pos.x() == pytest.approx(expected_px, abs=0.5)
+        assert pos.y() == pytest.approx(expected_py, abs=0.5)
+
+    def test_restore_static_background_clears_live_pose_lock(self, canvas_setup):
+        """After restore_static_background(), the live-pose lock is cleared
+        and subsequent set_background() calls fall back to fused-driven
+        marker updates again (SIM/BENCH behaviour restored)."""
+        from PySide6.QtGui import QPixmap, QColor  # type: ignore[import-untyped]
+
+        model, widget, ctrl = canvas_setup
+
+        ctrl.set_avatar_pose(15.0, 8.0, 0.0)
+        assert ctrl._live_pose is not None
+
+        ctrl.restore_static_background()
+        assert ctrl._live_pose is None, "restore_static_background must clear the live-pose lock"
+
+        model.feed(_make_frame(pose=(0, 0, 0)))
+        model.feed(_make_frame(pose=(1200, 0, 0)))
+
+        ppc = ctrl._ppc
+        pm = QPixmap(int(80 * ppc), int(60 * ppc))
+        pm.fill(QColor(90, 90, 90))
+        ctrl.set_background(pm)
+
+        last_x, last_y = model.fused[-1]
+        expected_px, expected_py = self._expected_px(ctrl, last_x, last_y)
+        pos = ctrl._marker_group.pos()
+        assert pos.x() == pytest.approx(expected_px, abs=0.5), (
+            "After restore_static_background, marker must follow the fused trace again"
+        )
+        assert pos.y() == pytest.approx(expected_py, abs=0.5)
+
+    def test_ping_pong_regression_marker_stays_at_live_pose(self, canvas_setup):
+        """The reported bug: alternating set_avatar_pose()/set_background()
+        calls (mimicking the live worker's per-frame swap) must NOT ping-pong
+        the marker — it must stay at the fixed live pose after EVERY call."""
+        from PySide6.QtGui import QPixmap, QColor  # type: ignore[import-untyped]
+
+        model, widget, ctrl = canvas_setup
+
+        # A fused trace present the whole time, to prove it's ignored once locked.
+        model.feed(_make_frame(pose=(0, 0, 0)))
+        model.feed(_make_frame(pose=(9000, 9000, 0)))
+
+        x_cm, y_cm, yaw_rad = -12.0, 6.5, math.pi / 3
+        ppc = ctrl._ppc
+
+        for i in range(4):
+            ctrl.set_avatar_pose(x_cm, y_cm, yaw_rad)
+
+            expected_px, expected_py = self._expected_px(ctrl, x_cm, y_cm)
+            pos = ctrl._marker_group.pos()
+            assert pos.x() == pytest.approx(expected_px, abs=0.5), f"iter {i}: after set_avatar_pose"
+            assert pos.y() == pytest.approx(expected_py, abs=0.5), f"iter {i}: after set_avatar_pose"
+
+            pm = QPixmap(int(80 * ppc), int(60 * ppc))
+            pm.fill(QColor(90, 90, 90))
+            # Vary the origin slightly each swap, like a real live-camera read.
+            ctrl.set_background(pm, origin_x=40.0 + i, origin_y=30.0 - i)
+
+            expected_px, expected_py = self._expected_px(ctrl, x_cm, y_cm)
+            pos = ctrl._marker_group.pos()
+            assert pos.x() == pytest.approx(expected_px, abs=0.5), (
+                f"iter {i}: marker yanked off live pose after set_background "
+                f"(expected {expected_px:.1f}, got {pos.x():.1f})"
+            )
+            assert pos.y() == pytest.approx(expected_py, abs=0.5), (
+                f"iter {i}: marker yanked off live pose after set_background "
+                f"(expected {expected_py:.1f}, got {pos.y():.1f})"
+            )
+            expected_rot = 90.0 - math.degrees(yaw_rad)
+            assert ctrl._marker_group.rotation() == pytest.approx(expected_rot, abs=0.01), (
+                f"iter {i}: marker rotation drifted off the live yaw"
+            )
 
 
 # ---------------------------------------------------------------------------

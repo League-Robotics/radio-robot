@@ -1,7 +1,8 @@
 """robot_radio.testgui.operations — Operations panel for the Robot Test GUI.
 
 Provides :class:`OperationsPanel`, a ``QGroupBox`` containing seven one-click
-action buttons:
+action buttons, plus the Qt-free helper :func:`_deskew_bgr_ndarray` used by
+the live-view worker.
 
 ============================================================  =============================
 Button                                                         Action
@@ -42,9 +43,13 @@ Three callables accepted at construction time (or settable as attributes):
 ``refresh_playfield_cb(pixmap, origin_x, origin_y)``
     Called with a deskewed ``QPixmap`` AND the daemon's A1 origin (cm) when
     the user clicks "Refresh Playfield".  The panel reads the playfield frame
-    and calibration from the aprilcam daemon (camera index ``_PLAYFIELD_CAMERA_INDEX``),
-    deskews via the daemon's live homography H, and passes both the rectified
-    ``QPixmap`` and the A1 origin to this hook.  The canvas wires
+    and calibration from the aprilcam daemon, using ``camera_prefs.select_camera()``
+    (ticket 063-008) to resolve which camera among ``dc.list_cameras()`` to
+    use — the persisted preference if present, else the first camera whose
+    name contains ``_PLAYFIELD_CAMERA_INDEX`` ("3", the historical default),
+    else the first available camera.  It then deskews via the daemon's live
+    homography H, and passes both the rectified ``QPixmap`` and the A1 origin
+    to this hook.  The canvas wires
     ``CanvasController.set_background(pixmap, origin_x=ox, origin_y=oy)`` here
     so the world→pixel transform updates atomically with the background.
     No-ops safely if ``None``.
@@ -79,9 +84,16 @@ import logging
 import math
 from typing import Callable
 
+from robot_radio.testgui import camera_prefs
+
 _log = logging.getLogger(__name__)
 
 # Aprilcam camera index for playfield refresh (ticket design: "cam 3").
+# NOTE (ticket 063-008): this is now only the default `fallback_contains`
+# passed to `camera_prefs.select_camera()` — it is no longer the sole
+# selection mechanism. The persisted preference (camera_prefs.load_camera_pref())
+# takes priority; this index/name-heuristic is the fallback used when nothing
+# is persisted (or the persisted camera is no longer available).
 _PLAYFIELD_CAMERA_INDEX = 3
 
 # Stream interval for "STREAM on".
@@ -122,6 +134,17 @@ def is_sim_transport(transport: object) -> bool:
     return type(transport).__name__ == "SimTransport"
 
 
+def is_relay_transport(transport: object) -> bool:
+    """Return True when *transport* is a ``RelayTransport`` (PLAYFIELD MODE).
+
+    Duck-typed on the class name for the same reason as ``is_sim_transport``.
+    Used to hide "Set Robot @ 0,0" in playfield mode: there the robot's world
+    pose comes from the overhead camera (tag 100), so the operator physically
+    places the robot at world (0, 0) rather than re-seeding the firmware pose.
+    """
+    return type(transport).__name__ == "RelayTransport"
+
+
 # ---------------------------------------------------------------------------
 # Operations panel factory
 # ---------------------------------------------------------------------------
@@ -134,6 +157,7 @@ def build_panel(
     clear_traces_cb: Callable[[], None] | None = None,
     refresh_playfield_cb: "Callable[[object, float, float], None] | None" = None,
     set_origin_cb: Callable[[], None] | None = None,
+    stop_motion_cb: Callable[[], None] | None = None,
 ) -> "tuple[object, object]":
     """Build and return the operations panel ``QGroupBox``.
 
@@ -286,6 +310,7 @@ def build_panel(
         clear_traces_cb=clear_traces_cb,
         refresh_playfield_cb=refresh_playfield_cb,
         set_origin_cb=set_origin_cb,
+        stop_motion_cb=stop_motion_cb,
     )
 
     # Wire buttons to controller handlers.
@@ -344,6 +369,7 @@ class OpsController:
         clear_traces_cb: Callable[[], None] | None = None,
         refresh_playfield_cb: "Callable[[object, float, float], None] | None" = None,
         set_origin_cb: Callable[[], None] | None = None,
+        stop_motion_cb: Callable[[], None] | None = None,
     ) -> None:
         self._transport_ref = transport_ref
         self._log_cb = log_cb
@@ -358,6 +384,7 @@ class OpsController:
         self.clear_traces_cb = clear_traces_cb
         self.refresh_playfield_cb = refresh_playfield_cb
         self.set_origin_cb = set_origin_cb
+        self.stop_motion_cb = stop_motion_cb
         self._stream_on = False  # tracks stream toggle state
 
     # ------------------------------------------------------------------
@@ -368,8 +395,11 @@ class OpsController:
         """Enable or disable transport-dependent buttons.
 
         In Sim mode, the "Sync Pose" button is disabled (no camera) with a
-        tooltip explaining why.  All other transport-dependent buttons are
-        enabled.
+        tooltip explaining why.  In PLAYFIELD MODE (Relay) the "Set Robot @
+        0,0" button is hidden — the robot's world pose comes from the camera,
+        so the operator physically moves the robot to world (0, 0) instead of
+        re-seeding the firmware pose.  All other transport-dependent buttons
+        are enabled.
 
         Parameters
         ----------
@@ -377,10 +407,20 @@ class OpsController:
             ``True`` after a successful ``transport.connect()``;
             ``False`` after ``transport.disconnect()``.
         transport:
-            The active transport (used to detect Sim mode).
+            The active transport (used to detect Sim / Relay mode).
         """
         for btn in self._transport_buttons:
             btn.setEnabled(connected)  # type: ignore[attr-defined]
+
+        # "Set Robot @ 0,0" is meaningless in playfield mode (camera-sourced
+        # pose): hide it when connected via Relay, show it otherwise.
+        if self._origin_btn is not None:
+            hide_origin = (
+                connected
+                and transport is not None
+                and is_relay_transport(transport)
+            )
+            self._origin_btn.setVisible(not hide_origin)  # type: ignore[attr-defined]
 
         if connected and transport is not None and is_sim_transport(transport):
             self._sync_btn.setEnabled(False)  # type: ignore[attr-defined]
@@ -452,16 +492,55 @@ class OpsController:
             self._log(f"[ERROR] Zero Encoders: {exc}")
 
     def on_stop(self) -> None:
-        """Send ``STOP`` (hard motor stop)."""
+        """Full-system halt: cancel workers, stop motors, and stop telemetry.
+
+        A single wire ``STOP`` is not enough:
+
+        1. A running GOTO/tour worker re-issues ``SI``/``G``/tour steps every
+           poll cycle, so a lone STOP is overwritten within milliseconds — and
+           the worker never aborts the firmware's *in-flight* move by itself.
+           ``stop_motion_cb`` cancels AND joins the worker thread first, so
+           nothing re-drives the robot and the transport is no longer touched
+           from the worker thread.
+        2. STOP halts the motors / aborts the active motion goal.
+        3. ``STREAM 0`` stops telemetry — otherwise the firmware keeps emitting
+           TLM after everything else has stopped (the robot "won't stop").
+
+        Steps 2–3 use ``command`` (synchronous, ordered) now that the worker
+        thread is joined, so there is no concurrent transport access.
+        """
+        # 1. Cancel GOTO / tour workers BEFORE any wire command so nothing
+        #    re-drives the robot afterwards.  Joins the worker thread; safe if
+        #    none is running.
+        if self.stop_motion_cb is not None:
+            try:
+                self.stop_motion_cb()
+            except Exception as exc:
+                self._log(f"[ERROR] STOP: stopping motion worker raised: {exc}")
+
         transport = self._transport_ref.get("transport")
         if transport is None:
             self._log("[WARN] STOP: not connected")
             return
+
+        # 2. Halt motors / abort the active motion goal.
         try:
-            transport.send("STOP")
+            transport.command("STOP", read_ms=300)
             self._log("[INFO] STOP sent")
         except Exception as exc:
             self._log(f"[ERROR] STOP: {exc}")
+
+        # 3. Stop telemetry so the firmware stops streaming TLM, and reflect the
+        #    toggle in the UI.  Best-effort — a STREAM-0 failure must not mask
+        #    the motor STOP above.
+        try:
+            transport.command("STREAM 0", read_ms=300)
+            self._stream_on = False
+            self._stream_btn.setChecked(False)  # type: ignore[attr-defined]
+            self._stream_btn.setText("STREAM: off")  # type: ignore[attr-defined]
+            self._log("[INFO] STREAM 0 sent (telemetry stopped)")
+        except Exception as exc:
+            self._log(f"[ERROR] STOP: STREAM 0 failed: {exc}")
 
     def on_clear_traces(self) -> None:
         """Clear all trace polylines (no transport command)."""
@@ -602,14 +681,13 @@ class OpsController:
                 try:
                     result = capture_fn()
                 except Exception as exc:
+                    # IMPORTANT: this runs on a background daemon thread.  Do NOT
+                    # call log_cb here — it writes to the Qt log pane, and Qt
+                    # widget access off the main thread segfaults (QTextEngine).
+                    # Emitting result_ready(None) routes the "no camera" message
+                    # through on_result() on the Qt main thread, which already
+                    # logs the same placeholder notice safely.
                     _log.debug("Auto-grab failed: %s", exc)
-                    try:
-                        log_cb(
-                            "[INFO] Refresh Playfield: no aprilcam camera — "
-                            "showing placeholder; click Refresh after calibrating"
-                        )
-                    except Exception:
-                        pass
                     result = None
                 bridge.result_ready.emit(result)
 
@@ -681,7 +759,11 @@ class OpsController:
                 raise RuntimeError(
                     "aprilcam daemon reports no cameras — is a camera open?"
                 )
-            cam = cams[0]
+            cam = camera_prefs.select_camera(cams, camera_prefs.load_camera_pref())
+            if cam is None:
+                raise RuntimeError(
+                    "aprilcam daemon reports no cameras — is a camera open?"
+                )
             pose = daemon_read_pose(dc, cam, tag_id=100, timeout_s=3.0)
         finally:
             try:
@@ -715,13 +797,14 @@ class OpsController:
             if not cams:
                 raise RuntimeError("aprilcam daemon reports no cameras")
 
-            # Select the playfield camera by name-based heuristic: prefer cameras
-            # whose name contains the index digit, or fall back to cams[0].
-            cam_name: str = cams[0]
-            for c in cams:
-                if str(_PLAYFIELD_CAMERA_INDEX) in str(c):
-                    cam_name = c
-                    break
+            # Resolve the camera via the shared helper (persisted preference >
+            # fallback_contains="3" heuristic > first available). See
+            # camera_prefs.py for the priority order and rationale.
+            cam_name = camera_prefs.select_camera(
+                cams, camera_prefs.load_camera_pref()
+            )
+            if cam_name is None:
+                raise RuntimeError("aprilcam daemon reports no cameras")
             _log.debug("Refresh Playfield: using camera %r", cam_name)
 
             # Capture BGR frame + calibration in a single daemon session.
@@ -760,15 +843,15 @@ def _bgr_ndarray_to_pixmap(bgr: "object") -> "object | None":
         return None
 
 
-def _deskew_bgr_with_tag_frame(
+def _deskew_bgr_ndarray(
     raw_bgr: "object",
     tag_frame: "object",
     ppc: float | None = None,
 ) -> "tuple[object, float, float] | None":
-    """Deskew *raw_bgr* using the daemon TagFrame's homography and return calibration.
+    """Deskew *raw_bgr* using the daemon TagFrame's homography.
 
-    Uses the live daemon homography (not the static JSON) so the rectified image
-    always matches the daemon's current calibration.
+    Qt-free: does not build a QPixmap.  Safe to call from a background thread
+    or in headless tests with no QApplication.
 
     Parameters
     ----------
@@ -777,15 +860,16 @@ def _deskew_bgr_with_tag_frame(
     tag_frame:
         ``TagFrame`` from ``DaemonControl.get_tags()`` — carries ``.homography``
         (3×3), ``.origin_x``, ``.origin_y``, ``.field_width_cm``,
-        ``.field_height_cm``.
+        ``.field_height_cm``, ``.playfield_corners``.
     ppc:
         Pixels per cm.  If ``None``, uses ``canvas._PIXELS_PER_CM`` (8.0).
 
     Returns
     -------
-    ``(QPixmap, origin_x, origin_y)`` on success, or ``None`` on failure.
-    origin_x and origin_y are the cm offset at which world (0,0) / tag 1 lands in
-    the deskewed image, so the canvas world_to_px places the avatar on tag 1.
+    ``(deskewed_bgr_ndarray, origin_x, origin_y)`` on success, or ``None`` on
+    failure.  origin_x and origin_y are the cm offset at which world (0,0) /
+    tag 1 lands in the deskewed image, so the canvas world_to_px places the
+    avatar on tag 1.
     """
     try:
         import numpy as np
@@ -854,12 +938,46 @@ def _deskew_bgr_with_tag_frame(
             "Deskewed: %dx%d px, origin=(%.1f,%.1f) cm",
             out_w, out_h, origin_x, origin_y,
         )
-
-        pixmap = _bgr_ndarray_to_pixmap(deskewed)
-        if pixmap is None:
-            raise RuntimeError("Failed to convert deskewed BGR to QPixmap")
-        return pixmap, origin_x, origin_y
+        return deskewed, origin_x, origin_y
 
     except Exception as exc:
-        _log.debug("_deskew_bgr_with_tag_frame failed (%s)", exc)
+        _log.debug("_deskew_bgr_ndarray failed (%s)", exc)
         return None
+
+
+def _deskew_bgr_with_tag_frame(
+    raw_bgr: "object",
+    tag_frame: "object",
+    ppc: float | None = None,
+) -> "tuple[object, float, float] | None":
+    """Deskew *raw_bgr* using the daemon TagFrame's homography and return calibration.
+
+    Uses the live daemon homography (not the static JSON) so the rectified image
+    always matches the daemon's current calibration.
+
+    Parameters
+    ----------
+    raw_bgr:
+        Raw BGR ndarray from ``DaemonControl.capture_frame()``.
+    tag_frame:
+        ``TagFrame`` from ``DaemonControl.get_tags()`` — carries ``.homography``
+        (3×3), ``.origin_x``, ``.origin_y``, ``.field_width_cm``,
+        ``.field_height_cm``.
+    ppc:
+        Pixels per cm.  If ``None``, uses ``canvas._PIXELS_PER_CM`` (8.0).
+
+    Returns
+    -------
+    ``(QPixmap, origin_x, origin_y)`` on success, or ``None`` on failure.
+    origin_x and origin_y are the cm offset at which world (0,0) / tag 1 lands in
+    the deskewed image, so the canvas world_to_px places the avatar on tag 1.
+    """
+    result = _deskew_bgr_ndarray(raw_bgr, tag_frame, ppc)
+    if result is None:
+        return None
+    bgr, origin_x, origin_y = result
+    pixmap = _bgr_ndarray_to_pixmap(bgr)
+    if pixmap is None:
+        _log.debug("_deskew_bgr_with_tag_frame: _bgr_ndarray_to_pixmap returned None")
+        return None
+    return pixmap, origin_x, origin_y

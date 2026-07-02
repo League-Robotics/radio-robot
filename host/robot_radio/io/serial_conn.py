@@ -336,9 +336,25 @@ class SerialConnection:
                 else:
                     # NEZHA2 or unknown role → treat as direct robot.
                     self._mode = "direct"
+            elif self._mode == "relay":
+                # Caller declared this a relay up-front, so skip role
+                # auto-detection — but the relay STILL must be driven from its
+                # control plane into the transparent data plane.  Opening the
+                # port asserted DTR and reset the relay, so wait for its
+                # DEVICE: banner (boot sync), then run the
+                # !ECHO OFF / !MODE RAW250 / !GO handshake.  Without this every
+                # command hits the relay control plane and comes back as
+                # "# error: unknown command (try !HELP)".
+                _role, banner_line = self._banner_classify(
+                    timeout_s=_HELLO_CLASSIFY_TIMEOUT_S)
+                if banner_line:
+                    announce = _parse_device_banner(banner_line)
+                relay_info = self._relay_handshake(timeout_s=_RELAY_CMD_TIMEOUT_S)
+                self._mode = "direct"  # post-!GO: transparent plain pipe
+                role = "relay"
             else:
-                # Caller supplied an explicit mode; skip classify.
-                role = "relay" if self._mode == "relay" else "direct"
+                # Caller supplied an explicit non-relay mode; skip classify.
+                role = "direct"
 
             # Normal path: active readiness poll via PING.
             # _poll_ready uses _ser directly (reader not running yet).

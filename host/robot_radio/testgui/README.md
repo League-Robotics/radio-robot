@@ -108,6 +108,54 @@ Send assembles the wire string from the current spin-box values and calls
 
 ---
 
+## Tour buttons
+
+Below the command rows, one button per named tour (`commands.TOURS`) runs a
+pre-programmed motion sequence.  Clicking **Tour 1**:
+
+1. Resets the robot to the origin (same as **Set Robot @ 0,0**: `ZERO enc`,
+   `OZ`, `SI 0 0 0` + display reset).
+2. On a background thread, sends each move in the tour one at a time, **waiting
+   for the previous move to finish** before the next.
+
+Completion is detected by polling `SNAP` and reading its `mode` field
+(`mode=I` = idle) — the async `EVT done` event is *not* used because the radio
+relay drops asynchronous events but answers `SNAP` reliably.  Each poll waits
+up to 30 s per move before aborting the tour.
+
+Tour 1 (heading 0 after the reset) traces: `RT 45°`, drive 420 mm, turn to
+absolute heading 180°, drive 700 mm, then `RT 90°` with drives of 500 / 700 /
+500 mm between the turns.  The sequence lives in `commands.TOUR_1` as plain
+wire strings.
+
+The tour is aborted (and the thread joined) on Disconnect and on app quit.
+
+---
+
+## GOTO (camera-based go-to)
+
+Below the tour buttons, the **GOTO** row (`x`, `y`, `eps`, `speed`; all mm /
+mm/s) runs a *synthetic* host-side command — there is no firmware `GOTO` verb.
+Clicking **GOTO** starts a background pure-pursuit loop that, each iteration:
+
+1. Reads the freshest **camera ground-truth pose** (cached from the transport's
+   `on_truth` callback — the same feed that drives the green truth trace).
+2. If the robot is within `eps` of the target → sends `STOP` and finishes.
+3. Otherwise snaps the robot's internal pose to the camera truth
+   (`SI x_mm y_mm h_cdeg`) and re-issues a firmware `G x y speed` toward the
+   fixed target.
+
+Because the camera is authoritative, this corrects for odometry drift: the
+robot re-aims every ~0.3 s until it converges.  A `[GOTO] dist=… mm` progress
+line is logged ~1 Hz; the loop aborts after 60 s, on Disconnect, or on app
+quit.
+
+GOTO works in **Sim mode** (the simulator delivers ground-truth pose) and on
+hardware when the aprilcam daemon is running and tag 100 is visible.  It needs
+a fresh truth pose (< 2 s old) to step; otherwise it waits.
+
+---
+
 ## Operations panel
 
 Below the command rows, the **Operations** group provides six one-click actions:

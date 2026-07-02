@@ -569,6 +569,17 @@ void sim_set_encoder_noise(void* h, int side, float sigma_mm) {
 }
 
 // ---- OTOS sim model ----
+// Initialize the SimOdometer so the OTOS command surface (OZ/OI/OR/OV, see
+// OtosCommands.cpp's otosReady() guard) and Robot::otosCorrect()'s
+// is_initialized() guard both activate, WITHOUT also enabling
+// set_field_profile()'s turn-slip/noise side effects. Mirrors
+// drive_api_begin_otos() (tests/_infra/sim/drive_api.cpp) which does the same
+// thing for the Drive-level test harness; this is the Robot-level equivalent
+// used by tests/simulation system/unit tests via firmware.py's Sim wrapper
+// (ticket 063-006).
+void sim_begin_otos(void* h) {
+    static_cast<SimHandle*>(h)->hal.simOdometer().begin();
+}
 void sim_enable_otos_model(void* h) {
     static_cast<SimHandle*>(h)->hal.simOdometer().enableSimModel(true);
 }

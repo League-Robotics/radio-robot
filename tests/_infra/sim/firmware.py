@@ -211,6 +211,13 @@ class Sim:
         ]
         lib.sim_set_motor_slip.restype = None
 
+        # sim_begin_otos(void* h) — ticket 063-006: initialise the SimOdometer
+        # (Sensor::begin()) without also pulling in set_field_profile()'s /
+        # set_otos_fusion()'s turn-slip and noise side effects.  Mirrors
+        # drive_api_begin_otos() for the Drive-level harness.
+        lib.sim_begin_otos.argtypes = [ctypes.c_void_p]
+        lib.sim_begin_otos.restype = None
+
         # sim_set_otos_fusion(void* h, int on)
         lib.sim_set_otos_fusion.argtypes = [ctypes.c_void_p, ctypes.c_int]
         lib.sim_set_otos_fusion.restype = None
@@ -896,6 +903,21 @@ class Sim:
     # ------------------------------------------------------------------
     # OTOS observation model (SimOdometer) — 040-005 isolation matrix
     # ------------------------------------------------------------------
+
+    def begin_otos(self) -> None:
+        """Initialise the SimOdometer (Sensor::begin()) directly.
+
+        Marks the sim OTOS initialised so the OTOS command surface (OZ, OI,
+        OR, OV — gated by OtosCommands.cpp's otosReady()) and
+        Robot::otosCorrect()'s is_initialized() guard both activate, WITHOUT
+        also enabling set_otos_fusion()'s per-tick EKF correction or
+        set_field_profile()'s turn-slip/noise side effects. Use this (rather
+        than set_otos_fusion(True)) when a test wants a clean, noise-free
+        fixture that only needs the command surface to be live.  Mirrors
+        drive_api_begin_otos() for the Drive-level test harness
+        (ticket 063-006).
+        """
+        self._lib.sim_begin_otos(self._h)
 
     def enable_otos_model(self) -> None:
         """Enable the SimOdometer sim-model integrator (accumulated odom pose).

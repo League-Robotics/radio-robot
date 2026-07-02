@@ -57,6 +57,16 @@ FakeSimTransport.__name__ = "SimTransport"
 FakeSimTransport.__qualname__ = "SimTransport"
 
 
+class FakeRelayTransport(FakeTransport):
+    """Fake transport whose class name is 'RelayTransport' (PLAYFIELD MODE)."""
+
+    pass
+
+
+FakeRelayTransport.__name__ = "RelayTransport"
+FakeRelayTransport.__qualname__ = "RelayTransport"
+
+
 # ---------------------------------------------------------------------------
 # Qt-free pure-helper tests
 # ---------------------------------------------------------------------------
@@ -108,6 +118,44 @@ class TestBuildSetposeCommand:
         assert isinstance(result, str)
 
 
+class TestIsRelayTransport:
+    """is_relay_transport — duck-type check + origin-button gating."""
+
+    def test_relay_named_transport_is_relay(self):
+        from robot_radio.testgui.operations import is_relay_transport
+
+        assert is_relay_transport(FakeRelayTransport())
+
+    def test_sim_and_serial_are_not_relay(self):
+        from robot_radio.testgui.operations import is_relay_transport
+
+        assert not is_relay_transport(FakeSimTransport())
+        assert not is_relay_transport(FakeTransport())
+        assert not is_relay_transport(None)  # type: ignore[arg-type]
+
+    def test_origin_hidden_on_relay_connect(self):
+        """Set Robot @ 0,0 is hidden in PLAYFIELD (Relay) mode."""
+        t = FakeRelayTransport()
+        ctrl, log, state = _make_controller(t)
+        ctrl.set_connected(True, t)
+        assert ctrl._origin_btn.visible is False  # type: ignore[attr-defined]
+
+    def test_origin_visible_on_sim_and_serial_connect(self):
+        for t in (FakeSimTransport(), FakeTransport()):
+            ctrl, log, state = _make_controller(t)
+            ctrl.set_connected(True, t)
+            assert ctrl._origin_btn.visible is True  # type: ignore[attr-defined]
+
+    def test_origin_restored_on_disconnect(self):
+        """After a relay session, disconnect makes the button visible again."""
+        t = FakeRelayTransport()
+        ctrl, log, state = _make_controller(t)
+        ctrl.set_connected(True, t)
+        assert ctrl._origin_btn.visible is False  # type: ignore[attr-defined]
+        ctrl.set_connected(False)
+        assert ctrl._origin_btn.visible is True  # type: ignore[attr-defined]
+
+
 class TestIsSimTransport:
     """is_sim_transport — duck-type check on class name."""
 
@@ -139,6 +187,7 @@ def _make_controller(
     clear_cb=None,
     refresh_cb=None,    # signature: (pixmap, origin_x, origin_y) -> None
     set_origin_cb=None,
+    stop_motion_cb=None,
 ) -> tuple["object", list[str], dict]:
     """Build an OpsController with fake widgets and optional transport."""
     from robot_radio.testgui.operations import OpsController
@@ -153,6 +202,7 @@ def _make_controller(
             self.checked = checked
             self.text_val = text
             self.tooltip = ""
+            self.visible = True
 
         def setEnabled(self, v: bool) -> None:
             self.enabled = v
@@ -165,6 +215,9 @@ def _make_controller(
 
         def setChecked(self, v: bool) -> None:
             self.checked = v
+
+        def setVisible(self, v: bool) -> None:
+            self.visible = v
 
     sync_btn = FakeBtn()
     zero_btn = FakeBtn()
@@ -190,6 +243,7 @@ def _make_controller(
         clear_traces_cb=clear_cb,
         refresh_playfield_cb=refresh_cb,
         set_origin_cb=set_origin_cb,
+        stop_motion_cb=stop_motion_cb,
     )
     return ctrl, log_entries, state
 
@@ -227,7 +281,36 @@ class TestStop:
         t = FakeTransport()
         ctrl, log, state = _make_controller(t)
         ctrl.on_stop()
-        assert "STOP" in t.sent_fire_forget
+        assert "STOP" in t.sent_commands
+
+    def test_stops_telemetry(self):
+        """STOP must also send STREAM 0 so the firmware stops streaming TLM."""
+        t = FakeTransport()
+        ctrl, log, state = _make_controller(t)
+        ctrl.on_stop()
+        assert "STREAM 0" in t.sent_commands, (
+            f"STREAM 0 not sent by STOP: {t.sent_commands}"
+        )
+
+    def test_resets_stream_toggle(self):
+        """STOP must reset the STREAM toggle button to off."""
+        t = FakeTransport()
+        ctrl, log, state = _make_controller(t)
+        # Simulate stream currently on.
+        ctrl._stream_on = True
+        ctrl._stream_btn.checked = True
+        ctrl._stream_btn.text_val = "STREAM: on"
+        ctrl.on_stop()
+        assert ctrl._stream_on is False
+        assert ctrl._stream_btn.checked is False
+        assert ctrl._stream_btn.text_val == "STREAM: off"
+
+    def test_stop_before_stream0(self):
+        """Motors must be halted (STOP) before telemetry is stopped (STREAM 0)."""
+        t = FakeTransport()
+        ctrl, log, state = _make_controller(t)
+        ctrl.on_stop()
+        assert t.sent_commands.index("STOP") < t.sent_commands.index("STREAM 0")
 
     def test_logs_stop(self):
         t = FakeTransport()
@@ -243,6 +326,36 @@ class TestStop:
     def test_no_transport_does_not_raise(self):
         ctrl, log, state = _make_controller(None)
         ctrl.on_stop()
+
+    def test_cancels_motion_worker(self):
+        """STOP must invoke stop_motion_cb (cancels GOTO/tour workers)."""
+        t = FakeTransport()
+        called = []
+        ctrl, log, state = _make_controller(t, stop_motion_cb=lambda: called.append(True))
+        ctrl.on_stop()
+        assert called == [True], "stop_motion_cb was not called by STOP"
+
+    def test_cancels_worker_before_wire_stop(self):
+        """The worker must be cancelled BEFORE the wire STOP, else the worker's
+        next command overwrites it."""
+        t = FakeTransport()
+        order: list[str] = []
+        # Record the order of the cancel vs the wire commands.
+        ctrl, log, state = _make_controller(t, stop_motion_cb=lambda: order.append("cancel"))
+        orig_command = t.command
+        def _tracking_command(line, read_ms=200):
+            order.append(f"cmd:{line}")
+            return orig_command(line, read_ms)
+        t.command = _tracking_command
+        ctrl.on_stop()
+        assert order == ["cancel", "cmd:STOP", "cmd:STREAM 0"], f"wrong order: {order}"
+
+    def test_cancels_worker_even_without_transport(self):
+        """stop_motion_cb must run even if no transport is connected."""
+        called = []
+        ctrl, log, state = _make_controller(None, stop_motion_cb=lambda: called.append(True))
+        ctrl.on_stop()
+        assert called == [True]
 
 
 # --- Clear Traces ---
@@ -277,6 +390,55 @@ class TestClearTraces:
         ctrl, log, state = _make_controller(None, clear_cb=bad_cb)
         ctrl.on_clear_traces()  # Must not raise
         assert any("ERROR" in e or "callback" in e.lower() for e in log)
+
+
+# --- trigger_live_grab thread-safety (crash regression) ---
+
+class TestTriggerLiveGrabThreadSafety:
+    """The background grab thread must NEVER call log_cb directly.
+
+    Regression for a segfault: ``_run_in_thread`` used to call ``log_cb`` (which
+    writes to the Qt log pane) from its daemon thread when the camera capture
+    failed.  Qt widget access off the main thread crashes in QTextEngine.  The
+    "no camera" notice must instead be delivered via ``result_ready(None)`` →
+    ``on_result`` on the GUI thread.
+    """
+
+    def _wait_for_grab_thread(self) -> None:
+        import threading
+        import time
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            if not any(t.name == "playfield-grab" for t in threading.enumerate()):
+                return
+            time.sleep(0.02)
+
+    def test_capture_failure_does_not_log_off_thread(self):
+        from PySide6.QtWidgets import QApplication  # type: ignore[import-untyped]
+
+        app = QApplication.instance() or QApplication([])
+
+        ctrl, log, state = _make_controller(None)
+
+        def _boom():
+            raise RuntimeError("aprilcam daemon unavailable")
+
+        # Force the daemon capture (run on the background thread) to fail.
+        ctrl._capture_playfield_frame_and_calib = _boom  # type: ignore[attr-defined]
+
+        ctrl.trigger_live_grab()
+        self._wait_for_grab_thread()
+
+        # Nothing may have been logged from the worker thread: the notice is
+        # queued to on_result and only surfaces once the GUI event loop runs.
+        assert log == [], f"log written off the worker thread: {log!r}"
+
+        # Draining the event loop delivers the placeholder notice on the GUI
+        # thread — proving the safe path still reports the failure.
+        app.processEvents()
+        assert any("placeholder" in e.lower() or "no aprilcam camera" in e.lower()
+                   for e in log), f"expected deferred camera notice, got {log!r}"
 
 
 # --- STREAM toggle ---
@@ -432,6 +594,90 @@ class TestSyncPoseDaemonUnavailable:
         ctrl, log, state = _make_controller(None)
         ctrl.on_sync_pose()
         assert any("WARN" in e or "not connected" in e for e in log)
+
+
+# --- Camera resolution via the shared camera_prefs.select_camera() helper ---
+
+class TestCameraResolutionSharedHelper:
+    """Both `_read_daemon_pose` and `_capture_playfield_frame_and_calib` must
+    resolve the camera through `camera_prefs.select_camera()` instead of an
+    unconditional `cams[0]` / inline name-matching loop (ticket 063-008).
+
+    The mocked ``dc.list_cameras()`` list intentionally puts the non-playfield
+    camera ("Brio 501") first — the historical bug reported the live-view and
+    pose-read paths silently reading whichever camera happened to be
+    ``cams[0]``.  A persisted preference of "Arducam OV9782 USB Camera" is
+    mocked via ``camera_prefs.load_camera_pref`` (the real Arducam device name
+    does not literally contain the digit "3", so this exercises priority #1 —
+    the persisted preference — rather than the ``fallback_contains`` digit
+    heuristic; see ``camera_prefs`` module docstring / tests for that case).
+    """
+
+    _CAMS = ["Brio 501", "Arducam OV9782 USB Camera"]
+
+    def test_read_daemon_pose_selects_arducam_not_cams0(self):
+        t = FakeTransport()
+        ctrl, log, state = _make_controller(t)
+
+        fake_dc = MagicMock()
+        fake_dc.list_cameras.return_value = list(self._CAMS)
+
+        seen_cam: list[str] = []
+
+        def _fake_daemon_read_pose(dc, cam, tag_id=100, timeout_s=3.0):
+            seen_cam.append(cam)
+            return (1.0, 2.0, 0.0)
+
+        with patch("aprilcam.config.Config") as MockConfig, \
+             patch("aprilcam.client.control.DaemonControl") as MockDC, \
+             patch(
+                 "robot_radio.robot.sync_pose.daemon_read_pose",
+                 side_effect=_fake_daemon_read_pose,
+             ), \
+             patch(
+                 "robot_radio.testgui.camera_prefs.load_camera_pref",
+                 return_value="Arducam OV9782 USB Camera",
+             ):
+            MockConfig.load.return_value = MagicMock()
+            MockDC.connect_default.return_value = fake_dc
+
+            pose = ctrl._read_daemon_pose()
+
+        assert pose == (1.0, 2.0, 0.0)
+        assert seen_cam == ["Arducam OV9782 USB Camera"]
+        assert seen_cam[0] != self._CAMS[0], "must not silently use cams[0]"
+
+    def test_capture_playfield_frame_and_calib_selects_arducam_not_cams0(self):
+        ctrl, log, state = _make_controller(None)
+
+        fake_dc = MagicMock()
+        fake_dc.list_cameras.return_value = list(self._CAMS)
+        fake_dc.capture_frame.return_value = None  # short-circuit before deskew
+
+        with patch("aprilcam.config.Config") as MockConfig, \
+             patch("aprilcam.client.control.DaemonControl") as MockDC, \
+             patch(
+                 "robot_radio.testgui.camera_prefs.load_camera_pref",
+                 return_value="Arducam OV9782 USB Camera",
+             ):
+            MockConfig.load.return_value = MagicMock()
+            MockDC.connect_default.return_value = fake_dc
+
+            result = ctrl._capture_playfield_frame_and_calib()
+
+        assert result is None  # capture_frame returned None -> no image
+        fake_dc.capture_frame.assert_called_once_with("Arducam OV9782 USB Camera")
+        assert fake_dc.capture_frame.call_args[0][0] != self._CAMS[0]
+
+    def test_both_call_sites_agree_given_same_inputs(self):
+        """Given the same available list + persisted preference, both call
+        sites resolve to the identical camera."""
+        from robot_radio.testgui import camera_prefs
+
+        preferred = "Arducam OV9782 USB Camera"
+        pose_choice = camera_prefs.select_camera(self._CAMS, preferred)
+        refresh_choice = camera_prefs.select_camera(self._CAMS, preferred)
+        assert pose_choice == refresh_choice == "Arducam OV9782 USB Camera"
 
 
 # --- Refresh Playfield (daemon unavailable) ---
