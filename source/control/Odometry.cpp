@@ -251,6 +251,23 @@ void Odometry::initEKF(float q_xy, float q_theta, float q_v, float q_omega,
 }
 
 // ---------------------------------------------------------------------------
+// setNoise — live noise update; does NOT reset EKF state/covariance.
+// Sprint 067, Ticket 003.
+// ---------------------------------------------------------------------------
+
+void Odometry::setNoise(float q_xy, float q_theta, float q_v, float q_omega,
+                        float r_otos_xy, float r_otos_v, float r_enc_v,
+                        float r_otos_theta)
+{
+    _ekf.setNoise(q_xy, q_theta, q_v, q_omega, r_otos_xy, r_otos_v, r_enc_v);
+    // Refresh the cached velocity/heading noise params used by correctEKF(),
+    // mirroring initEKF()'s caching exactly.
+    _rOtosV     = r_otos_v;
+    _rEncV      = r_enc_v;
+    _rOtosTheta = r_otos_theta;
+}
+
+// ---------------------------------------------------------------------------
 // correctEKF — apply OTOS position, heading, and velocity observations to
 // the EKF (sprint 024-004: heading fusion added).
 //

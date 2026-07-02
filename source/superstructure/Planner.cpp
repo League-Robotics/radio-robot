@@ -30,7 +30,7 @@ Planner::Planner(MotorController& mc_ctrl, Odometry& odo,
                  const RobotConfig& cfg)
     : _mc_ctrl(mc_ctrl)
     , _odo(odo)
-    , _cfg(cfg)           // local copy — configure() can update motion limits
+    , _cfg(cfg)           // live reference — binds to Robot's single RobotConfig
     , _hwState(nullptr)
     , _robot(nullptr)     // set later by setRobotCtx()
     , _bvc(mc_ctrl, cfg)  // _bvc must be initialised before _activeCmd
@@ -622,25 +622,15 @@ msg::CommandBatch Planner::tick(uint32_t now)
 // ---------------------------------------------------------------------------
 // configure — store updated planner config (motion limits only).
 //
-// Updates the local RobotConfig shadow (_cfg) with the motion-only fields from
-// the PlannerConfig message. These match the mapping in toPlannerConfig()
-// (PlannerConfig.cpp).
+// 067-001: _cfg is now a live `const RobotConfig&` bound to Robot's single
+// RobotConfig, so it already reflects every committed SET — the whitelist
+// patch this function used to apply into a private _cfg copy would no
+// longer compile against a const reference, and is no longer needed.
+// _planCfg is retained as a stored snapshot of the projected PlannerConfig
+// (confirmed-dead — never read anywhere — but left in place; see
+// architecture-update.md Design Rationale Decision 4).
 // ---------------------------------------------------------------------------
 void Planner::configure(const msg::PlannerConfig& cfg)
 {
     _planCfg = cfg;
-
-    // Update the local shadow RobotConfig with the motion-limit fields.
-    if (cfg.a_max       != 0.0f) _cfg.aMax         = cfg.a_max;
-    if (cfg.a_decel     != 0.0f) _cfg.aDecel        = cfg.a_decel;
-    if (cfg.v_body_max  != 0.0f) _cfg.vBodyMax      = cfg.v_body_max;
-    if (cfg.yaw_rate_max!= 0.0f) _cfg.yawRateMax    = cfg.yaw_rate_max;
-    if (cfg.yaw_acc_max != 0.0f) _cfg.yawAccMax     = cfg.yaw_acc_max;
-    if (cfg.j_max       != 0.0f) _cfg.jMax          = cfg.j_max;
-    if (cfg.yaw_jerk_max!= 0.0f) _cfg.yawJerkMax    = cfg.yaw_jerk_max;
-    if (cfg.arrive_tol       != 0.0f) _cfg.arriveTolMm     = cfg.arrive_tol;
-    if (cfg.turn_in_place_gate  != 0.0f) _cfg.turnInPlaceGate = cfg.turn_in_place_gate;
-    if (cfg.turn_threshold   != 0.0f) _cfg.turnThresholdMm = cfg.turn_threshold;
-    if (cfg.done_tol         != 0.0f) _cfg.doneTolMm       = cfg.done_tol;
-    if (cfg.min_speed       != 0.0f) _cfg.minSpeedMms     = (int32_t)cfg.min_speed;
 }

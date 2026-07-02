@@ -50,8 +50,12 @@ struct Robot;
 class Planner {
 public:
     // Constructor — takes MotorController + Odometry + Drive + config directly.
-    // cfg: motion-limits source (aMax, vBodyMax, etc.); stored as local copy
-    // so configure() can update it without disturbing the original.
+    // cfg: motion-limits source (aMax, vBodyMax, etc.); bound as a live
+    // reference to the single RobotConfig Robot owns, matching every sibling
+    // subsystem (Drive, Superstructure, MotorController, Ports,
+    // BodyVelocityController, Motor, OtosSensor). Every plain (unannotated)
+    // SET therefore reaches Planner immediately — no per-field whitelist
+    // needed to keep it current.
     Planner(MotorController& mc_ctrl, Odometry& odo,
             const subsystems::Drive& drive,
             const RobotConfig& cfg);
@@ -187,7 +191,10 @@ private:
     // ---- Primary control members ----
     MotorController&   _mc_ctrl;    // wheel output / encoder access
     Odometry&          _odo;        // pose reads in begin*() (via getPoseFloat())
-    RobotConfig        _cfg;        // local copy of motion limits; configure() updates it
+    const RobotConfig& _cfg;        // live reference to Robot's single RobotConfig —
+                                     // every plain SET is observed immediately, same
+                                     // binding as Drive/Superstructure/MotorController/
+                                     // Ports/BodyVelocityController/Motor/OtosSensor.
     HardwareState*     _hwState;    // authoritative state; set by setHardwareState()
 
     // Robot pointer for _checkSafeOneShot (re-arming config.safetyEnabled).

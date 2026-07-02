@@ -21,9 +21,19 @@ import pytest
 
 
 def _arc_after_rt(sim, cdeg: int = 9000) -> float:
-    """Issue RT <cdeg>, wait for completion, return |encR - encL| / 2 in mm."""
-    # Reset encoders and pose before RT.
-    sim.send_command("ZERO")
+    """Issue RT <cdeg>, wait for completion, return |encR - encL| / 2 in mm.
+
+    067-001: a bare ``ZERO`` (no token) is rejected by ``parseZero()`` with
+    ``ERR badarg`` — it does NOT reset the encoders. The reply was
+    previously unchecked, so encoder readings silently accumulated across
+    the two sequential RT calls each test makes, faking a slip effect that
+    wasn't real. ``ZERO enc`` is the valid, encoder-only reset; the reply
+    is checked so a future rejected ZERO fails loudly instead of silently
+    degrading into an accumulation artifact.
+    """
+    # Reset encoders before RT.
+    reply = sim.send_command("ZERO enc")
+    assert "OK" in reply.upper(), f"ZERO enc → unexpected reply {repr(reply)}"
 
     # Issue RT command.
     r = sim.send_command(f"RT {cdeg}")

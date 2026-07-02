@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Add a noise-only EKF setNoise() path; wire ekfRHead through it
-status: open
+status: done
 use-cases:
 - SUC-002
 depends-on: []
@@ -54,38 +54,38 @@ anyway).
 
 ## Acceptance Criteria
 
-- [ ] `source/state/EKFTiny.h`/`.cpp`: new method `setNoise(q_xy, q_theta,
+- [x] `source/state/EKFTiny.h`/`.cpp`: new method `setNoise(q_xy, q_theta,
       q_v, q_omega, r_otos_xy, r_otos_v, r_enc_v)` that updates `_Q`'s
       diagonal and `_rOtosXy`/`_rOtosV`/`_rEncV` exactly as `init()` does,
       but does NOT touch `_ekf.x[]`, `_ekf.P[]`, or any rejection-streak
       counters.
-- [ ] `EKFTiny::init()` itself is unchanged in behavior — its
+- [x] `EKFTiny::init()` itself is unchanged in behavior — its
       state/covariance reset remains, now explicitly documented (comment)
       as boot-only / not safe to call mid-mission.
-- [ ] `source/control/Odometry.h`/`.cpp`: new `setNoise(...)` method
+- [x] `source/control/Odometry.h`/`.cpp`: new `setNoise(...)` method
       forwarding to `_ekf.setNoise(...)`, additionally refreshing
       `Odometry`'s own cached `_rOtosTheta` (read by `correctEKF()`).
-- [ ] `source/state/PhysicalStateEstimate.h`/`.cpp`: new `setNoise(...)`
+- [x] `source/state/PhysicalStateEstimate.h`/`.cpp`: new `setNoise(...)`
       method forwarding to `_odometry.setNoise(...)`.
-- [ ] `source/subsystems/drive/Drive.cpp`, `Drive::configure()`: gains a
+- [x] `source/subsystems/drive/Drive.cpp`, `Drive::configure()`: gains a
       call to `_est.setNoise(_robCfg.ekfQxy, _robCfg.ekfQtheta,
       _robCfg.ekfQv, _robCfg.ekfQomega, _robCfg.ekfROtosXy,
       _robCfg.ekfROtosV, _robCfg.ekfREncV, _robCfg.ekfROtosTheta)`, sourced
       from the live `_robCfg` (already reflects the just-committed SET) —
       not from the `cfg` parameter passed into `configure()`.
-- [ ] `source/robot/ConfigRegistry.cpp`: `CFG_F("ekfRHead", ekfROtosTheta)`
+- [x] `source/robot/ConfigRegistry.cpp`: `CFG_F("ekfRHead", ekfROtosTheta)`
       changed to `CFG_F_SS("ekfRHead", ekfROtosTheta, "drive")`, routing
       through the existing `driveChanged` → `Drive::configure()` path. No
       other registry row changes.
-- [ ] `SET ekfRHead=<x>` changes how strongly a subsequent OTOS heading
+- [x] `SET ekfRHead=<x>` changes how strongly a subsequent OTOS heading
       disagreement is corrected (observable via a deliberately-injected
       heading disagreement in sim).
-- [ ] Immediately after `SET ekfRHead=<x>`, the fused pose/velocity read
+- [x] Immediately after `SET ekfRHead=<x>`, the fused pose/velocity read
       back identically to their pre-SET values — no reset-to-origin
       regression from reusing `init()`'s state-resetting path. (Verify with
       a robot that has driven to a non-trivial, non-origin pose before the
       SET.)
-- [ ] Full default sim/unit test suite green.
+- [x] Full default sim/unit test suite green.
 
 ## Testing
 

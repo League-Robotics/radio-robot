@@ -1,7 +1,7 @@
 ---
 id: '067'
 title: SET-to-Planner config propagation fix
-status: planning-docs
+status: done
 branch: sprint/067-set-to-planner-config-propagation-fix
 use-cases: []
 issues:

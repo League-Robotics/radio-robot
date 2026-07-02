@@ -69,6 +69,34 @@ void EKFTiny::init(float q_xy, float q_theta, float q_v, float q_omega,
 }
 
 // ===========================================================================
+// setNoise — update noise parameters ONLY; leaves state, covariance, and the
+// rejection-streak counters untouched. See EKFTiny.h for the boot-only vs.
+// live-update contract distinguishing this from init(). Sprint 067, Ticket 003.
+// ===========================================================================
+
+void EKFTiny::setNoise(float q_xy, float q_theta, float q_v, float q_omega,
+                       float r_otos_xy, float r_otos_v, float r_enc_v)
+{
+    // Zero _Q then set diagonal (mirrors init()'s _Q update exactly).
+    for (int i = 0; i < 5; ++i)
+        for (int j = 0; j < 5; ++j)
+            _Q[i][j] = 0.0f;
+
+    _Q[0][0] = q_xy;
+    _Q[1][1] = q_xy;
+    _Q[2][2] = q_theta;
+    _Q[3][3] = q_v;
+    _Q[4][4] = q_omega;
+
+    _rOtosXy = r_otos_xy;
+    _rOtosV  = r_otos_v;
+    _rEncV   = r_enc_v;
+
+    // Deliberately NOT touched: _ekf.x[], _ekf.P[], _rejected,
+    // _rejHead_streak, _rejPos_streak.
+}
+
+// ===========================================================================
 // setPose — overwrite state with known pose; zero v and omega; set sane P-prior.
 //
 // Sane diagonal P-prior (mirrors EKF::setPose exactly):

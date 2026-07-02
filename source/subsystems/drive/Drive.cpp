@@ -124,18 +124,14 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
     // ------------------------------------------------------------------
     // STEP 4: EKF predict — encoder dead-reckoning integrate
     // ------------------------------------------------------------------
-    float trackwidth = (_drvCfg.get_trackwidth() > 0.0f)
-                           ? _drvCfg.get_trackwidth()
-                           : _robCfg.trackwidthMm;
+    float trackwidth = _robCfg.trackwidthMm;
     float rotSlip    = _robCfg.rotationalSlip;
     _est.addOdometryObservation(_hw, trackwidth, rotSlip, now);
 
     // ------------------------------------------------------------------
     // STEP 5: OTOS correction (lag-gated, matches LoopTickOnce pattern)
     // ------------------------------------------------------------------
-    uint32_t lagMs = (_drvCfg.get_lag_otos() > 0)
-                         ? _drvCfg.get_lag_otos()
-                         : _robCfg.lagOtosMs;
+    uint32_t lagMs = _robCfg.lagOtosMs;
     if (lagMs > 0 && _otos.is_initialized()) {
         _hw.otos.lagMs = lagMs;   // keep stamp lag field in sync
         if (!_otosEverReady && !fuseOtos) {
@@ -273,10 +269,21 @@ msg::CommandBatch Drive::tickAction(uint32_t now)
         //
         // The MotorController's own velocity PID (controlTick) still closes the
         // wheel-speed loop; this sets the TARGET, not the PWM duty cycle.
+        //
+        // 067-004: this ternary used to read _drvCfg.get_trackwidth() first,
+        // falling back to _robCfg.trackwidthMm only while _drvCfg's cached
+        // value was <=0.0f -- the same shadow-cache disease Ticket 002 fixed
+        // in tickUpdate()'s EKF-predict step. Robot::Robot() calls
+        // drive.configure(toDriveConfig(config)) once at boot, which
+        // populates _drvCfg.trackwidth with a positive snapshot; since `tw`
+        // is not "drive"-annotated, _drvCfg is never refreshed for it again,
+        // so this read was frozen at the boot-time trackwidth forever
+        // regardless of any later `SET tw=<x>`. Read _robCfg.trackwidthMm
+        // directly -- the same live source Drive's tickUpdate() now uses
+        // (067-002) and the pattern every other plain-key consumer in this
+        // file already follows.
         float vL = 0.0f, vR = 0.0f;
-        float trackwidth = (_drvCfg.get_trackwidth() > 0.0f)
-                               ? _drvCfg.get_trackwidth()
-                               : _robCfg.trackwidthMm;
+        float trackwidth = _robCfg.trackwidthMm;
         BodyKinematics::inverse(vx, omega, trackwidth, vL, vR);
         _mc.setTarget(vL, vR);
         break;
@@ -435,6 +442,20 @@ void Drive::configure(const msg::DrivetrainConfig& cfg)
         // toDriveConfig projection wires them in (ticket 005 / Phase 3).
         _mc.updateVelGains(_robCfg);
     }
+
+    // Push a live EKF noise update (does NOT reset fused pose/covariance —
+    // see EKFTiny::setNoise()). Sourced from the live _robCfg, which already
+    // reflects the just-committed SET, not the `cfg` parameter above (which
+    // only carries the eleven msg::DrivetrainConfig-projected fields).
+    // Fires whenever any "drive"-annotated key is SET; today that's only
+    // ekfRHead (ekfROtosTheta), but the signature already accepts the seven
+    // not-yet-registered EKF noise fields so a future sprint can expose them
+    // via the registry with no further plumbing changes here.
+    // Sprint 067, Ticket 003.
+    _est.setNoise(_robCfg.ekfQxy, _robCfg.ekfQtheta,
+                  _robCfg.ekfQv,   _robCfg.ekfQomega,
+                  _robCfg.ekfROtosXy, _robCfg.ekfROtosV,
+                  _robCfg.ekfREncV,   _robCfg.ekfROtosTheta);
 }
 
 // ---------------------------------------------------------------------------
