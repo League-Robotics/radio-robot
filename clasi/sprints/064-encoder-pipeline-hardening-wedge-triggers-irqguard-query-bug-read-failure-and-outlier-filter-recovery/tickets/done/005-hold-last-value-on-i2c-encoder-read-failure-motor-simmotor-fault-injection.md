@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: Hold-last-value on I2C encoder read failure (Motor + SimMotor fault injection)
-status: in-progress
+status: done
 use-cases:
 - SUC-006
 depends-on: []
