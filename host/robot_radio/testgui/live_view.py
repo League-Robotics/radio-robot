@@ -49,6 +49,13 @@ stored in ``_last_tag`` — the avatar stays where it was last seen.  It does NO
 snap to (0, 0) and is NOT hidden.  ``_last_tag`` is initialised to
 ``(0.0, 0.0, 0.0)`` and updated only when tag 100 is successfully read.
 
+The avatar's yaw is taken from the tag's own orientation (``rec.yaw``), NOT
+``heading_rad``.  ``heading_rad`` from the aprilcam daemon is the velocity
+course-over-ground (``atan2`` of world velocity) — it is sensor noise when the
+robot is stationary and points backwards when reversing.  This matches the
+proven convention in ``robot_radio/robot/sync_pose.py::daemon_read_pose``: tag
+orientation IS the robot's forward heading, with no offset.
+
 PySide6 import policy
 ---------------------
 All PySide6 imports are deferred inside :func:`build_live_view_worker` so this
@@ -201,9 +208,17 @@ def build_live_view_worker() -> object:
                 wxy = getattr(rec, "world_xy", None)
                 if wxy is not None:
                     tx, ty = float(wxy[0]), float(wxy[1])
-                    # heading_rad is the robot's world heading; fall back to raw yaw.
-                    h_rad = getattr(rec, "heading_rad", None)
-                    tyaw = float(h_rad) if h_rad is not None else float(getattr(rec, "yaw", tyaw))
+                    # Avatar yaw comes from the tag's own orientation (rec.yaw),
+                    # NOT heading_rad — heading_rad is the velocity
+                    # course-over-ground (atan2 of world velocity), which is
+                    # sensor noise when stationary and backwards when
+                    # reversing. See sync_pose.daemon_read_pose for the
+                    # canonical convention: tag orientation IS the robot's
+                    # forward heading, no offset.
+                    y = getattr(rec, "yaw", None)
+                    if y is not None:
+                        tyaw = float(y)
+                    # else: hold last-known yaw (existing _last_tag semantics)
                     self._last_tag = (tx, ty, tyaw)
                 # If world_xy is None the tag is uncalibrated; hold last known pose.
 

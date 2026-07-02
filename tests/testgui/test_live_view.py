@@ -343,7 +343,10 @@ class TestLiveViewWorker:
             assert tyaw == 0.5, f"Avatar must hold last known yaw=0.5, got {tyaw}"
 
     def test_worker_updates_last_tag_when_tag_visible(self, qapp):
-        """When tag 100 is visible with world_xy, worker updates _last_tag."""
+        """When tag 100 is visible with world_xy, worker updates _last_tag
+        using rec.yaw (tag orientation) — heading_rad (velocity course) is
+        never consulted.
+        """
         import numpy as np
         from unittest.mock import MagicMock, patch
         from PySide6.QtCore import Qt  # type: ignore[import-untyped]
@@ -361,8 +364,8 @@ class TestLiveViewWorker:
         # Fake TagRecord for tag 100.
         fake_tag_rec = MagicMock()
         fake_tag_rec.world_xy = (55.0, 22.0)
-        fake_tag_rec.heading_rad = 1.2
-        fake_tag_rec.yaw = 0.5  # fallback if heading_rad not used
+        fake_tag_rec.heading_rad = 1.2  # velocity course — must be ignored
+        fake_tag_rec.yaw = 0.5  # tag orientation — this is what must be used
 
         # Fake TagFrame — by_id(100) returns the fake record.
         fake_tag_frame = MagicMock()
@@ -391,9 +394,117 @@ class TestLiveViewWorker:
             tx, ty, tyaw = received[0]
             assert tx == pytest.approx(55.0), f"Expected tx=55.0, got {tx}"
             assert ty == pytest.approx(22.0), f"Expected ty=22.0, got {ty}"
-            assert tyaw == pytest.approx(1.2), f"Expected tyaw=1.2, got {tyaw}"
+            assert tyaw == pytest.approx(0.5), (
+                f"Expected tyaw=0.5 (rec.yaw), got {tyaw} — heading_rad must be ignored"
+            )
             # Also verify _last_tag was updated.
-            assert worker._last_tag == pytest.approx((55.0, 22.0, 1.2))
+            assert worker._last_tag == pytest.approx((55.0, 22.0, 0.5))
+
+    def test_avatar_yaw_ignores_heading_rad_uses_tag_yaw(self, qapp):
+        """Avatar yaw must come from rec.yaw (tag orientation), never
+        heading_rad (velocity course-over-ground) — even when both are
+        present and clearly different values.
+        """
+        import numpy as np
+        from unittest.mock import MagicMock, patch
+        from PySide6.QtCore import Qt  # type: ignore[import-untyped]
+        from robot_radio.testgui.live_view import build_live_view_worker
+
+        received: list = []
+        worker = build_live_view_worker()
+        worker.frame_ready.connect(
+            lambda bgr, ox, oy, tx, ty, tyaw: received.append((tx, ty, tyaw)),
+            Qt.ConnectionType.DirectConnection,
+        )
+
+        fake_bgr = np.zeros((60, 80, 3), dtype=np.uint8)
+
+        fake_tag_rec = MagicMock()
+        fake_tag_rec.world_xy = (1.0, 2.0)
+        fake_tag_rec.yaw = 0.5
+        fake_tag_rec.heading_rad = 2.0  # deliberately different — must be ignored
+
+        fake_tag_frame = MagicMock()
+        fake_tag_frame.homography = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+        fake_tag_frame.playfield_corners = [[0, 0], [80, 0], [80, 60], [0, 60]]
+        fake_tag_frame.field_width_cm = 80.0
+        fake_tag_frame.field_height_cm = 60.0
+        fake_tag_frame.origin_x = 40.0
+        fake_tag_frame.origin_y = 30.0
+        fake_tag_frame.by_id.return_value = fake_tag_rec
+
+        fake_dc = MagicMock()
+        fake_dc.list_cameras.return_value = ["cam0"]
+        fake_dc.capture_frame.return_value = fake_bgr
+        fake_dc.get_tags.return_value = fake_tag_frame
+
+        with patch("aprilcam.config.Config") as MockConfig, \
+             patch("aprilcam.client.control.DaemonControl") as MockDC:
+            MockConfig.load.return_value = MagicMock()
+            MockDC.connect_default.return_value = fake_dc
+
+            worker._capture_and_emit()
+
+        if received:
+            _, _, tyaw = received[0]
+            assert tyaw == pytest.approx(0.5), (
+                f"Expected tyaw=0.5 (rec.yaw); heading_rad=2.0 must be ignored, got {tyaw}"
+            )
+
+    def test_avatar_yaw_none_holds_last_known_not_heading_rad(self, qapp):
+        """When rec.yaw is None (but heading_rad is set), the avatar must hold
+        the last-known yaw — it must NOT fall back to heading_rad.
+        """
+        import numpy as np
+        from unittest.mock import MagicMock, patch
+        from PySide6.QtCore import Qt  # type: ignore[import-untyped]
+        from robot_radio.testgui.live_view import build_live_view_worker
+
+        received: list = []
+        worker = build_live_view_worker()
+        worker.frame_ready.connect(
+            lambda bgr, ox, oy, tx, ty, tyaw: received.append((tx, ty, tyaw)),
+            Qt.ConnectionType.DirectConnection,
+        )
+
+        # Seed a known last yaw.
+        worker._last_tag = (1.0, 2.0, 0.75)
+
+        fake_bgr = np.zeros((60, 80, 3), dtype=np.uint8)
+
+        fake_tag_rec = MagicMock()
+        fake_tag_rec.world_xy = (9.0, 8.0)
+        fake_tag_rec.yaw = None
+        fake_tag_rec.heading_rad = 2.0  # must NOT be used as a fallback
+
+        fake_tag_frame = MagicMock()
+        fake_tag_frame.homography = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+        fake_tag_frame.playfield_corners = [[0, 0], [80, 0], [80, 60], [0, 60]]
+        fake_tag_frame.field_width_cm = 80.0
+        fake_tag_frame.field_height_cm = 60.0
+        fake_tag_frame.origin_x = 40.0
+        fake_tag_frame.origin_y = 30.0
+        fake_tag_frame.by_id.return_value = fake_tag_rec
+
+        fake_dc = MagicMock()
+        fake_dc.list_cameras.return_value = ["cam0"]
+        fake_dc.capture_frame.return_value = fake_bgr
+        fake_dc.get_tags.return_value = fake_tag_frame
+
+        with patch("aprilcam.config.Config") as MockConfig, \
+             patch("aprilcam.client.control.DaemonControl") as MockDC:
+            MockConfig.load.return_value = MagicMock()
+            MockDC.connect_default.return_value = fake_dc
+
+            worker._capture_and_emit()
+
+        if received:
+            tx, ty, tyaw = received[0]
+            assert tx == pytest.approx(9.0), f"Expected tx updated to 9.0, got {tx}"
+            assert ty == pytest.approx(8.0), f"Expected ty updated to 8.0, got {ty}"
+            assert tyaw == pytest.approx(0.75), (
+                f"Expected last-known yaw=0.75 held (not heading_rad=2.0), got {tyaw}"
+            )
 
     def test_worker_uses_by_id_not_tags_dict(self, qapp):
         """Worker must call by_id(100) on the TagFrame, not tags.get(100)."""
