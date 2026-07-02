@@ -1,9 +1,11 @@
 ---
-status: pending
+status: in-progress
 review: docs/code_review/2026-07-01-full-codebase-review.md
 findings: CR-06
 severity: high
 sprint: '065'
+tickets:
+- 065-006
 ---
 
 # OTOS fused despite persistent WARNING bits — "spin on placement" regression re-opened

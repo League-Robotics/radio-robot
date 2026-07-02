@@ -2,9 +2,9 @@
 id: '065'
 title: 'Stop reliability and safety: stop-clause overflow, STOP delivery and motion
   watchdog, OTOS warn-bit fusion gate'
-status: roadmap
+status: ticketing
 branch: sprint/065-stop-reliability-and-safety-stop-clause-overflow-stop-delivery-and-motion-watchdog-otos-warn-bit-fusion-gate
-use-cases: []
+use-cases: [SUC-001, SUC-002, SUC-003, SUC-004]
 issues:
 - stop-clause-overflow-aborts-process.md
 - stop-delivery-and-keepalive-watchdog-architecture.md
@@ -90,13 +90,25 @@ keepalive arming. Full default suite green before close.
 
 ## Definition of Ready
 
-- [ ] Sprint planning documents are complete (sprint.md, use cases, architecture)
-- [ ] Architecture review passed
-- [ ] Stakeholder has approved the sprint plan (auto-approve session)
+- [x] Sprint planning documents are complete (sprint.md, use cases, architecture)
+- [x] Architecture review passed
+- [x] Stakeholder has approved the sprint plan (auto-approve session)
 
 ## Tickets
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 001 | Fix D-command stop-clause double-booking and make addStop overflow a recoverable ERR | — |
+| 002 | Scope firmware motion-watchdog resets to keepalive and motion verbs only | 001 |
+| 003 | Add VW-class velocity-refresh staleness cap independent of the keepalive | 002 |
+| 004 | TestGUI KeyboardDriver: deadman STOP resend and focus-loss handling | — |
+| 005 | Host keepalive armed only while a motion source is active | 004 |
+| 006 | Gate OTOS fusion on warn-bit persistence with sim ABI support | — |
 
-Tickets execute serially in the order listed.
+Tickets execute serially in the order listed. 001-003 are the firmware
+stop-clause and watchdog cluster (002/003 sequenced after 001 for
+file-locality and shared-block continuity, not a hard functional
+dependency beyond 003-on-002). 004-005 are the TestGUI/host STOP-delivery
+cluster (005 depends on 004's arm/disarm call sites). 006 (OTOS fusion gate)
+is fully independent of 001-005 and is sequenced last only to keep the
+critical-severity work (CR-01) and the CR-04/05 cluster first.
