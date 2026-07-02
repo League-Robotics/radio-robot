@@ -2,7 +2,7 @@
 id: '064'
 title: 'Encoder pipeline hardening: wedge triggers, IRQGUARD query bug, read-failure
   and outlier-filter recovery'
-status: ticketed
+status: done
 branch: sprint/064-encoder-pipeline-hardening-wedge-triggers-irqguard-query-bug-read-failure-and-outlier-filter-recovery
 use-cases:
 - SUC-001
