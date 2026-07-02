@@ -181,7 +181,11 @@ class TestFeedEncoder:
         corner" bug: the firmware zeros the wheel encoders at the start of every
         distance command, collapsing the counts back toward zero.  That collapse
         is only tens of mm — below the 5000 mm jump guard — so it used to be
-        integrated as reverse motion whose (dR-dL) cancelled the turn.
+        integrated as reverse motion whose (dR-dL) cancelled the turn.  The
+        reset is now signalled explicitly via ``notify_reset_pending()`` (the
+        old magnitude-based heuristic was removed — CR-09), fired the instant
+        the reset-inducing command is sent, mirroring
+        ``Transport.on_reset_pending``.
         """
         m = self.model
         m.anchor(0.0, 0.0, 0.0)
@@ -192,7 +196,8 @@ class TestFeedEncoder:
         q = math.pi / 2 * (128.0 / 2)
         m.feed(_make_frame(enc=(-round(q), round(q))))
         # Drive command fires → firmware zeros encoders (counts collapse to ~0).
-        m.feed(_make_frame(enc=(4, 4)))       # reset — must be detected
+        m.notify_reset_pending()              # host knows a reset is coming
+        m.feed(_make_frame(enc=(4, 4)))       # reset frame — rebaseline only
         # Now drive 50 cm straight in the NEW (turned) direction.
         m.feed(_make_frame(enc=(504, 504)))
         x, y = m.encoder[-1]
@@ -201,16 +206,76 @@ class TestFeedEncoder:
         assert abs(x) < 5.0, f"drifted east instead of turning: x={x:.1f}"
 
     def test_encoder_reset_detected_not_integrated(self):
-        """A reset-to-zero frame rebaselines without integrating spurious motion."""
+        """A signalled reset rebaselines without integrating spurious motion."""
         m = self.model
         m.anchor(0.0, 0.0, 0.0)
         m.feed(_make_frame(enc=(0, 0)))
         m.feed(_make_frame(enc=(500, 500)))   # 50 cm forward
         x_before, y_before = m.encoder[-1]
+        m.notify_reset_pending()
         m.feed(_make_frame(enc=(3, 3)))       # firmware reset — near zero
         x_after, y_after = m.encoder[-1]
         # Position must not jump backward on the reset.
         assert (x_after, y_after) == pytest.approx((x_before, y_before), abs=0.5)
+
+    def test_delayed_tlm_reset_preserves_heading(self):
+        """Reset detection must not depend on telemetry magnitude at all.
+
+        Regression for CR-09 (testgui-trace-correctness-slow-tlm-and-anchor
+        -rotation.md): over the relay, TLM arrives at ~1-2 Hz while the robot
+        travels 100-200 mm between frames, so the first post-reset frame can
+        land at e.g. 150 mm — well past the old 20 mm epsilon the removed
+        magnitude heuristic used.  ``notify_reset_pending()`` is signalled at
+        command-send time (before the frame arrives), so the reset is
+        recognised regardless of how far the first post-reset reading is from
+        zero: it establishes a fresh baseline from whatever value that frame
+        carries, with no magnitude check at all.
+        """
+        m = self.model
+        m.anchor(0.0, 0.0, 0.0)
+        m.feed(_make_frame(enc=(0, 0)))
+        # In-place CCW turn to +90°.
+        q = math.pi / 2 * (128.0 / 2)
+        m.feed(_make_frame(enc=(-round(q), round(q))))
+        # Host sends the reset-inducing command NOW, before the reply/TLM
+        # for it has arrived.
+        m.notify_reset_pending()
+        # Slow relay TLM: the first post-reset frame lands at 150 mm on both
+        # wheels (robot already moving in the new direction) — far past the
+        # old 20 mm epsilon, which would have missed this reset entirely and
+        # integrated it as spurious reverse motion cancelling the turn.
+        m.feed(_make_frame(enc=(150, 150)))
+        # Continue 50 cm further in the new (turned) direction.
+        m.feed(_make_frame(enc=(650, 650)))
+        x, y = m.encoder[-1]
+        # Heading must still be north (+y), not east — and no spurious
+        # reverse-motion offset from the 150 mm rebaseline point either.
+        assert y == pytest.approx(50.0, abs=2.0), f"heading lost: ({x:.1f},{y:.1f})"
+        assert abs(x) < 5.0, f"drifted instead of turning: x={x:.1f}"
+
+    def test_return_through_zero_without_reset_signal_integrates_normally(self):
+        """A genuine return-through-zero (no reset signalled) must NOT be
+        mistaken for a reset — it should integrate as ordinary reverse motion.
+
+        This is the false-positive half of CR-09: the old magnitude
+        heuristic could misfire on a real return toward zero.  With reset
+        detection now driven entirely by the explicit
+        ``notify_reset_pending()`` signal (never by data), a frame that
+        merely happens to read near zero — with no signalled reset — is
+        always integrated normally.
+        """
+        m = self.model
+        m.anchor(0.0, 0.0, 0.0)
+        m.feed(_make_frame(enc=(0, 0)))
+        m.feed(_make_frame(enc=(500, 500)))   # 50 cm forward
+        # Drive straight back to (near) zero — genuine motion, NOT a reset;
+        # notify_reset_pending() is deliberately not called.
+        m.feed(_make_frame(enc=(10, 10)))
+        x, y = m.encoder[-1]
+        # Integrated as 49 cm of reverse motion from the 50 cm baseline,
+        # landing at 1 cm — NOT snapped back to the 50 cm baseline point.
+        assert x == pytest.approx(1.0, abs=0.5)
+        assert abs(y) < 0.5
 
     def test_turn_scrub_factor_widens_effective_trackwidth(self):
         """A scrub factor compensates encoder turn over-report.
@@ -228,6 +293,7 @@ class TestFeedEncoder:
         raw.anchor(0.0, 0.0, 0.0)
         raw.feed(_make_frame(enc=(0, 0)))
         raw.feed(_make_frame(enc=(-round(q_reported), round(q_reported))))
+        raw.notify_reset_pending()
         raw.feed(_make_frame(enc=(4, 4)))                     # drive reset
         raw.feed(_make_frame(enc=(504, 504)))                 # 50 cm straight
         rx, ry = raw.encoder[-1]
@@ -239,6 +305,7 @@ class TestFeedEncoder:
         comp.set_turn_scrub_factor(0.26)
         comp.feed(_make_frame(enc=(0, 0)))
         comp.feed(_make_frame(enc=(-round(q_reported), round(q_reported))))
+        comp.notify_reset_pending()
         comp.feed(_make_frame(enc=(4, 4)))
         comp.feed(_make_frame(enc=(504, 504)))
         cx, cy = comp.encoder[-1]
@@ -328,6 +395,34 @@ class TestFeedOTOS:
         assert x == pytest.approx(25.0, abs=0.1)
         assert y == pytest.approx(7.0, abs=0.1)
 
+    def test_otos_mid_session_anchor_rotation(self):
+        """Anchoring mid-session (nonzero firmware heading at baseline time)
+        must rotate the otos delta by (anchor_yaw - baseline_hdg), aligning
+        it with the camera trace — not by the anchor heading alone.
+
+        Regression for CR-10: the camera says the robot faces east
+        (anchor heading 0) at the moment of a mid-session anchor, but the
+        firmware's own (never-rezeroed) OTOS heading reads 90° at that same
+        instant — a fixed 90° offset between the firmware's persistent
+        world frame and the camera/anchor frame.  The robot then drives
+        straight (no turn) in the firmware's own frame; the raw firmware
+        delta is expressed in the firmware frame (here: +y, since the
+        firmware's heading is 90°) and must be rotated by -90° to land where
+        the camera would actually see the robot (east of the anchor).
+        """
+        m = self.model
+        m.anchor(0.0, 0.0, 0.0)  # camera: robot faces east at anchor time
+        # Baseline: firmware heading is 90° (9000 cdeg) — NOT zero — at the
+        # instant of this mid-session anchor.
+        m.feed(_make_frame(otos=(1000, 2000, 9000)))
+        # Straight ahead in the firmware's own frame (heading unchanged at
+        # 90°): +500 mm along firmware-y.
+        m.feed(_make_frame(otos=(1000, 2500, 9000)))
+        x, y = m.otos[-1]
+        # Correct (rotated by -90°): east by 50 cm, not north.
+        assert x == pytest.approx(50.0, abs=0.5)
+        assert abs(y) < 0.5
+
 
 # ---------------------------------------------------------------------------
 # feed() — fused trace
@@ -368,6 +463,20 @@ class TestFeedFused:
         for i in range(5):
             m.feed(_make_frame(pose=(i * 100, 0, 0)))
         assert len(m.fused) == 5
+
+    def test_fused_mid_session_anchor_rotation(self):
+        """Same CR-10 rotation fix as otos, applied to the fused trace.
+
+        See TestFeedOTOS.test_otos_mid_session_anchor_rotation for the full
+        scenario rationale.
+        """
+        m = self.model
+        m.anchor(0.0, 0.0, 0.0)  # camera: robot faces east at anchor time
+        m.feed(_make_frame(pose=(1000, 2000, 9000)))  # baseline hdg=90°
+        m.feed(_make_frame(pose=(1000, 2500, 9000)))  # +500 mm firmware-y
+        x, y = m.fused[-1]
+        assert x == pytest.approx(50.0, abs=0.5)
+        assert abs(y) < 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -540,3 +649,46 @@ class TestBodyToWorldTransform:
         expected = dist * math.sqrt(2) / 2
         assert wx == pytest.approx(expected, abs=1e-5)
         assert wy == pytest.approx(expected, abs=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# _rw() firmware-world-frame rotation transform (CR-10)
+# ---------------------------------------------------------------------------
+
+
+class TestRotateWorldTransform:
+    """Direct tests of the internal _rw() transform used by otos/fused."""
+
+    def setup_method(self):
+        from robot_radio.testgui.traces import TraceModel
+        self.model = TraceModel()
+
+    def test_rw_zero_rotation_identity(self):
+        """rot=0 behaves exactly like _tw (fresh-anchor case, baseline hdg=anchor_h)."""
+        m = self.model
+        m.anchor(0.0, 0.0, 0.0)
+        assert m._rw(10.0, 5.0, 0.0) == pytest.approx(m._tw(10.0, 5.0))
+
+    def test_rw_90_degree_rotation(self):
+        """A +90° rotation maps firmware +x to world +y."""
+        m = self.model
+        m.anchor(0.0, 0.0, 0.0)
+        wx, wy = m._rw(10.0, 0.0, math.pi / 2)
+        assert wx == pytest.approx(0.0, abs=1e-6)
+        assert wy == pytest.approx(10.0, abs=1e-6)
+
+    def test_rw_negative_90_degree_rotation(self):
+        """A -90° rotation maps firmware +y to world +x."""
+        m = self.model
+        m.anchor(0.0, 0.0, 0.0)
+        wx, wy = m._rw(0.0, 10.0, -math.pi / 2)
+        assert wx == pytest.approx(10.0, abs=1e-6)
+        assert wy == pytest.approx(0.0, abs=1e-6)
+
+    def test_rw_with_anchor_offset(self):
+        """Anchor world offset is added after rotation."""
+        m = self.model
+        m.anchor(5.0, 3.0, 0.0)
+        wx, wy = m._rw(0.0, 0.0, math.pi / 2)
+        assert wx == pytest.approx(5.0)
+        assert wy == pytest.approx(3.0)

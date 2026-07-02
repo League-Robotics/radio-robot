@@ -2,9 +2,12 @@
 id: '004'
 title: 'TestGUI trace correctness: command-boundary rebaseline and anchor-heading
   rotation'
-status: open
-use-cases: [SUC-008, SUC-009]
-depends-on: ['003']
+status: in-progress
+use-cases:
+- SUC-008
+- SUC-009
+depends-on:
+- '003'
 github-issue: ''
 issue: testgui-trace-correctness-slow-tlm-and-anchor-rotation.md
 completes_issue: true
@@ -44,32 +47,32 @@ integration formula.
 
 ## Acceptance Criteria
 
-- [ ] `TraceModel` gains `notify_reset_pending()`, which forces
+- [x] `TraceModel` gains `notify_reset_pending()`, which forces
       `_enc_baseline = None` so the next `_feed_encoder()` call establishes a
       fresh baseline from whatever value that frame carries (no magnitude
       check).
-- [ ] The `_ENC_RESET_EPS_MM`/`_ENC_RESET_BASE_MM` heuristic and its
+- [x] The `_ENC_RESET_EPS_MM`/`_ENC_RESET_BASE_MM` heuristic and its
       magnitude-based branch in `_feed_encoder()` are removed.
-- [ ] `Transport` (the ABC in `testgui/transport.py`) classifies
+- [x] `Transport` (the ABC in `testgui/transport.py`) classifies
       reset-inducing outbound commands (`D`, `ZERO enc`, `ZERO`) at its
       `command()`/`send()` choke point and invokes a new `on_reset_pending`
       callback (default no-op) before the command is sent.
-- [ ] `__main__.py` wires `transport.on_reset_pending =
+- [x] `__main__.py` wires `transport.on_reset_pending =
       trace_model.notify_reset_pending` (the one wiring line outside
       `sprint.md`'s originally-listed TestGUI file set — see
       architecture-update.md Migration Concerns).
-- [ ] `_feed_otos`/`_feed_fused` rotate the world-frame delta by
+- [x] `_feed_otos`/`_feed_fused` rotate the world-frame delta by
       `(self._anchor_h - math.radians(baseline[2] / 100.0))` instead of
       calling `self._tw()` (which remains unchanged, used only by the
       body-frame encoder trace).
-- [ ] New test: delayed-TLM reset scenario — first post-reset frame at
+- [x] New test: delayed-TLM reset scenario — first post-reset frame at
       ~150 mm (well past the old 20 mm epsilon), reset signalled via
       `notify_reset_pending()` before the frame arrives — preserves
       accumulated heading (no spurious reverse motion, no cancelled turn).
-- [ ] New test: anchor with non-zero firmware heading — otos/fused traces
+- [x] New test: anchor with non-zero firmware heading — otos/fused traces
       align with the camera trace (not rotated by the stale firmware
       heading).
-- [ ] Full default test suite green, including `tests/testgui -q`.
+- [x] Full default test suite green, including `tests/testgui -q`.
 
 ## Implementation Plan
 

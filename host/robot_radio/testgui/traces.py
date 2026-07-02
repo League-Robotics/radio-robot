@@ -45,6 +45,14 @@ TraceModel
         Reset all four lists and the accumulated baselines.  After ``clear()``,
         the anchor remains set; the next ``feed()`` re-establishes baselines.
 
+    ``notify_reset_pending()``
+        Force the next ``feed()``'s encoder handling to rebaseline without
+        integrating, preserving the accumulated heading/position.  Call this
+        the instant a reset-inducing command (``D``, ``ZERO enc``, ``ZERO``)
+        is sent — before the robot's reply/telemetry arrives.  Wired from
+        ``Transport.on_reset_pending`` in ``__main__.py``.  See CR-09 in
+        ``testgui-trace-correctness-slow-tlm-and-anchor-rotation.md``.
+
     ``enabled`` dict
         Per-trace on/off flag: ``model.enabled["camera"]``, ``model.enabled["encoder"]``,
         ``model.enabled["otos"]``, ``model.enabled["fused"]``.
@@ -86,13 +94,18 @@ if TYPE_CHECKING:
 # Wheel track width in mm (matches the ccw_square_50.py constant).
 _TRACK_MM = 128.0
 
-# Encoder-reset detection.  The firmware zeros the wheel encoders at the start
-# of every distance/drive command (see ccw_square_50.py: "D resets encoders ->
-# rebaseline").  After a reset the cumulative counts collapse back toward zero;
-# a reset is recognised when both wheels read near zero while the previous
-# baseline was substantially non-zero.
-_ENC_RESET_EPS_MM = 20.0   # both counts below this ⇒ freshly-zeroed
-_ENC_RESET_BASE_MM = 40.0  # ...and a baseline wheel above this ⇒ it was moving
+# Encoder-reset detection (CR-09).  The firmware zeros the wheel encoders at
+# the start of every distance/drive command (see ccw_square_50.py: "D resets
+# encoders -> rebaseline").  This used to be inferred from telemetry
+# magnitude (both counts reading near zero while the previous baseline was
+# substantially non-zero) — but over the relay, TLM arrives at ~1-2 Hz while
+# the robot moves 100-200 mm between frames, so the first post-reset frame
+# often lands well past any small epsilon and the reset is missed (see
+# testgui-trace-correctness-slow-tlm-and-anchor-rotation.md).  Resets are now
+# signalled explicitly, at command-send time, via
+# ``TraceModel.notify_reset_pending()`` (wired from
+# ``Transport.on_reset_pending`` — see transport.py's command classifier),
+# instead of guessed from data.
 
 
 class TraceModel:
@@ -272,6 +285,30 @@ class TraceModel:
         self.fused.clear()
         self._reset_baselines()
 
+    def notify_reset_pending(self) -> None:
+        """Signal that a reset-inducing command was just sent to the robot.
+
+        Called by the GUI's ``Transport.on_reset_pending`` hook the instant
+        it sends a command that zeroes the firmware's wheel encoders (``D``,
+        ``ZERO enc``, ``ZERO``) — BEFORE the robot's reply/telemetry lands.
+        Replaces the old magnitude-based reset heuristic
+        (``_ENC_RESET_EPS_MM``/``_ENC_RESET_BASE_MM``), which missed resets
+        when the first post-reset TLM frame arrived well past any small
+        epsilon (slow relay TLM: ~1-2 Hz while the robot travels 100-200 mm
+        between frames) — see
+        ``testgui-trace-correctness-slow-tlm-and-anchor-rotation.md`` (CR-09).
+
+        Forces ``_enc_baseline = None`` so the next ``_feed_encoder()`` call
+        establishes a fresh baseline from whatever value that frame carries,
+        no matter how large — no magnitude check.  Deliberately does NOT
+        touch ``_enc_h``/``_enc_bx``/``_enc_by``: the accumulated heading and
+        body-frame displacement must survive the reset (a reset only zeroes
+        the firmware's *encoder counters*, not the robot's actual pose), so
+        the encoder trace keeps following the robot's turns instead of
+        collapsing its heading back toward the anchor orientation.
+        """
+        self._enc_baseline = None
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -305,6 +342,42 @@ class TraceModel:
         wy = self._anchor_y + bx_cm * self._sh + by_cm * self._ch
         return (wx, wy)
 
+    def _rw(self, dx_cm: float, dy_cm: float, rot_rad: float) -> tuple[float, float]:
+        """Rotate a firmware world-frame delta by ``rot_rad`` and add the anchor.
+
+        Used by ``_feed_otos``/``_feed_fused`` (CR-10), which must NOT reuse
+        ``_tw`` (the body-frame-only transform used by the encoder trace).
+        ``otos``/``pose`` deltas are already expressed in the firmware's own
+        (persistent, session-long) world frame — correct to render directly
+        only when that frame happens to be aligned with the GUI's anchor
+        frame, i.e. when the firmware pose was freshly zeroed at anchor time.
+        Anchoring mid-session (a non-zero firmware heading at baseline time)
+        breaks that assumption: the firmware frame is offset from the anchor
+        frame by a fixed rotation, ``rot_rad = anchor_yaw -
+        firmware_heading_at_baseline`` (computed by the caller from the
+        baseline's stored ``hdg_cdeg``), which must be applied to every
+        subsequent delta to keep the trace aligned with the camera trace.
+
+        Parameters
+        ----------
+        dx_cm, dy_cm:
+            Firmware world-frame displacement (cm) since the sensor's
+            baseline reading.
+        rot_rad:
+            Rotation to apply: the angle between the anchor heading and the
+            firmware's own heading at baseline time.
+
+        Returns
+        -------
+        tuple[float, float]
+            World-cm position (x_cm, y_cm), relative to the anchor.
+        """
+        c = math.cos(rot_rad)
+        s = math.sin(rot_rad)
+        wx = self._anchor_x + dx_cm * c - dy_cm * s
+        wy = self._anchor_y + dx_cm * s + dy_cm * c
+        return (wx, wy)
+
     def _feed_encoder(self, enc: tuple[int, int]) -> None:
         """Integrate encoder deltas and append a world point to the encoder trace.
 
@@ -316,38 +389,26 @@ class TraceModel:
             (left_mm, right_mm) cumulative encoder values from TLMFrame.enc.
         """
         if self._enc_baseline is None:
-            # First reading — establish baseline; no displacement yet.
+            # First reading after clear()/anchor(), OR the first reading
+            # after an explicit notify_reset_pending() signal (CR-09) —
+            # establish a fresh baseline from whatever value this frame
+            # carries, no matter how large; no magnitude check.
+            #
+            # Deliberately do NOT zero _enc_h/_enc_bx/_enc_by here: after
+            # clear()/anchor() they are already zero (_reset_baselines()
+            # zeroed them, so this is a no-op in that case); after
+            # notify_reset_pending() they hold the heading/body-frame
+            # displacement accumulated so far, which must survive a
+            # command-boundary rebaseline — a reset only zeroes the
+            # firmware's *encoder counters*, not the robot's actual pose.
+            # Emit a point at the current (possibly non-anchor) pose so the
+            # trace stays continuous across the rebaseline.
             self._enc_baseline = enc
-            self._enc_h = 0.0
-            self._enc_bx = 0.0
-            self._enc_by = 0.0
-            # Emit the anchor point.
-            self.encoder.append(self._tw(0.0, 0.0))
+            self.encoder.append(self._tw(self._enc_bx / 10.0, self._enc_by / 10.0))
             return
 
         dL = enc[0] - self._enc_baseline[0]
         dR = enc[1] - self._enc_baseline[1]
-
-        # Detect a firmware encoder reset (a distance/drive command zeros the
-        # counts).  The collapse is only tens-to-hundreds of mm — far below the
-        # 5000 mm jump guard below — so without this check it is integrated as
-        # spurious reverse motion whose (dR-dL) exactly cancels the heading just
-        # accumulated by the preceding turn.  That freezes the encoder track's
-        # orientation, so it never follows the robot's turns and drifts off into
-        # a corner.  On reset we rebaseline WITHOUT integrating, preserving the
-        # accumulated heading and body displacement.
-        reset_to_zero = (
-            abs(enc[0]) < _ENC_RESET_EPS_MM
-            and abs(enc[1]) < _ENC_RESET_EPS_MM
-            and (abs(self._enc_baseline[0]) > _ENC_RESET_BASE_MM
-                 or abs(self._enc_baseline[1]) > _ENC_RESET_BASE_MM)
-        )
-        if reset_to_zero:
-            self._enc_baseline = enc
-            # Emit a point at the current (unchanged) pose so the trace stays
-            # continuous across the reset.
-            self.encoder.append(self._tw(self._enc_bx / 10.0, self._enc_by / 10.0))
-            return
 
         # Guard against large encoder jumps (e.g. a full ZERO enc pose command).
         if abs(dL) > 5000 or abs(dR) > 5000:
@@ -377,6 +438,13 @@ class TraceModel:
     def _feed_otos(self, otos: tuple[int, int, int]) -> None:
         """Compute OTOS displacement and append to the otos trace.
 
+        Rotates the firmware world-frame delta by
+        ``(anchor_yaw - firmware_heading_at_baseline)`` (CR-10), not the
+        anchor heading alone — see ``_rw``.  This is correct in both cases:
+        when the firmware pose was freshly zeroed at anchor time,
+        ``baseline[2]`` is 0 and this reduces exactly to the old
+        anchor-only rotation.
+
         Parameters
         ----------
         otos:
@@ -389,10 +457,15 @@ class TraceModel:
 
         dx_cm = (otos[0] - self._otos_baseline[0]) / 10.0
         dy_cm = (otos[1] - self._otos_baseline[1]) / 10.0
-        self.otos.append(self._tw(dx_cm, dy_cm))
+        rot = self._anchor_h - math.radians(self._otos_baseline[2] / 100.0)
+        self.otos.append(self._rw(dx_cm, dy_cm, rot))
 
     def _feed_fused(self, pose: tuple[int, int, int]) -> None:
         """Compute fused pose displacement and append to the fused trace.
+
+        Rotates the firmware world-frame delta by
+        ``(anchor_yaw - firmware_heading_at_baseline)`` (CR-10) — see
+        ``_feed_otos``/``_rw``.
 
         Parameters
         ----------
@@ -406,4 +479,5 @@ class TraceModel:
 
         dx_cm = (pose[0] - self._pose_baseline[0]) / 10.0
         dy_cm = (pose[1] - self._pose_baseline[1]) / 10.0
-        self.fused.append(self._tw(dx_cm, dy_cm))
+        rot = self._anchor_h - math.radians(self._pose_baseline[2] / 100.0)
+        self.fused.append(self._rw(dx_cm, dy_cm, rot))
