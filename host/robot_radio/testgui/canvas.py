@@ -503,9 +503,16 @@ class CanvasController:
     :meth:`~TraceModel.feed` or :meth:`~TraceModel.feed_truth` call.
 
     In PLAYFIELD MODE the live-view worker drives the avatar via
-    :meth:`set_avatar_pose` instead of :meth:`refresh`.  On relay disconnect
-    call :meth:`restore_static_background` to revert to the grey placeholder
-    and reset the origin to the field-centre fallback.
+    :meth:`set_avatar_pose` instead of :meth:`refresh`.  Once
+    :meth:`set_avatar_pose` has been called, the avatar is LOCKED to that
+    camera-derived pose (position AND yaw): subsequent background swaps via
+    :meth:`set_background` re-apply the locked pose through the new
+    world→pixel transform instead of falling back to the fused trace / centre
+    — only a fresh :meth:`set_avatar_pose` call (a new tag read) may move the
+    avatar while the lock is held.  On relay disconnect call
+    :meth:`restore_static_background` to revert to the grey placeholder,
+    reset the origin to the field-centre fallback, AND clear the lock so
+    SIM/BENCH fused-driven marker behaviour returns.
 
     Parameters
     ----------
@@ -571,6 +578,13 @@ class CanvasController:
         # Track the last fused pose for the robot marker.
         self._last_fused_pose: tuple[float, float, float] | None = None  # (x_cm, y_cm, yaw_rad)
 
+        # Live-view lock: when set (via set_avatar_pose), the avatar is locked
+        # to this camera-derived pose and set_background must re-apply it
+        # through the new transform instead of falling back to the fused
+        # trace / centre.  Cleared by restore_static_background so SIM/BENCH
+        # fused-driven marker behaviour returns on relay disconnect.
+        self._live_pose: tuple[float, float, float] | None = None
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -615,6 +629,19 @@ class CanvasController:
         Background and transform are updated atomically so that traces and the
         robot avatar always align with the displayed background image.
 
+        In live view (after :meth:`set_avatar_pose` has been called at least
+        once), the avatar is LOCKED to the last camera-derived pose: this
+        method does not re-derive the marker from the fused trace on every
+        swap.  Instead it rebuilds the world→pixel transform first, then
+        re-applies the locked live pose through that new transform, so the
+        avatar stays glued to the tag pixel-accurately even though the origin
+        may have shifted slightly between frames.  Only a fresh
+        :meth:`set_avatar_pose` call (a new camera pose) can move the avatar
+        while a live pose is locked.  Before any :meth:`set_avatar_pose` call
+        (SIM/BENCH, or live view before the first camera fix), behaviour is
+        unchanged: the marker follows the fused trace / centre fallback via
+        :meth:`refresh`.
+
         Parameters
         ----------
         pixmap:
@@ -645,8 +672,15 @@ class CanvasController:
             self._scene.setSceneRect(0, 0, new_w, new_h)  # type: ignore[attr-defined]
             self._img_w = new_w
             self._img_h = new_h
-            # Refresh traces and avatar with the new transform.
-            self.refresh()
+            # Refresh traces always; only fall back to the fused-driven marker
+            # update when no live (camera) pose is locked in.  When a live
+            # pose IS locked, re-apply it through the just-rebuilt transform
+            # instead — this is what keeps the avatar glued to the tag across
+            # the live worker's frequent background swaps (see issue
+            # testgui-set-background-yanks-avatar).
+            self.refresh(update_marker=(self._live_pose is None))
+            if self._live_pose is not None:
+                self.set_avatar_pose(*self._live_pose)
             # Re-fit the view so the new background fills the viewport correctly.
             try:
                 from PySide6.QtCore import Qt  # type: ignore[import-untyped]
@@ -680,6 +714,12 @@ class CanvasController:
         Does not consult ``trace_model.fused``.  Used in PLAYFIELD MODE where
         the camera tag drives the avatar instead of fused telemetry.
 
+        Stores ``(x_cm, y_cm, yaw_rad)`` as the locked live pose so that
+        :meth:`set_background` can re-apply it (through a possibly-updated
+        transform) instead of letting its internal refresh reposition the
+        marker from the fused trace / centre fallback.  This lock persists
+        until :meth:`restore_static_background` clears it.
+
         Parameters
         ----------
         x_cm, y_cm:
@@ -688,6 +728,7 @@ class CanvasController:
             Robot heading in radians.  Converted to Qt rotation via
             ``rotation_deg = 90 - degrees(yaw_rad)``.
         """
+        self._live_pose = (x_cm, y_cm, yaw_rad)
         px, py = self._world_to_px(x_cm, y_cm)
         self._marker_group.setPos(px, py)           # type: ignore[attr-defined]
         rotation_deg = 90.0 - math.degrees(yaw_rad)
@@ -700,14 +741,18 @@ class CanvasController:
 
         Resets the world→pixel origin to the field-centre fallback
         ``(field_w/2, field_h/2)`` so that world (0, 0) maps to the image
-        centre again — correct for Sim and for "no camera" states.  Calls
-        :meth:`refresh` so traces re-render with the restored transform.
+        centre again — correct for Sim and for "no camera" states.  Clears
+        the live-pose lock set by :meth:`set_avatar_pose` so the fused-driven
+        marker behaviour (SIM/BENCH) is fully restored.  Calls :meth:`refresh`
+        so traces (and the now-unlocked marker) re-render with the restored
+        transform.
 
         Call this after stopping the live-view worker on relay disconnect.
         """
         self._origin_x = self._field_w_cm / 2.0
         self._origin_y = self._field_h_cm / 2.0
         self._world_to_px = _make_world_to_px(self._origin_x, self._origin_y, self._ppc)
+        self._live_pose = None
         placeholder = _make_grey_placeholder(self._img_w, self._img_h)
         self._bg_item.setPixmap(placeholder)          # type: ignore[attr-defined]
         self.refresh()
