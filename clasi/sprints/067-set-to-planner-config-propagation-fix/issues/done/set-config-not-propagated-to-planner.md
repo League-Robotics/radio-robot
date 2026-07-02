@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 severity: medium
 sprint: '067'
 tickets:
