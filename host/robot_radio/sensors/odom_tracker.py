@@ -123,7 +123,8 @@ class OdomTracker:
     world_pos_mm:
         Initial world position in mm (x_mm, y_mm).  Defaults to (0, 0).
     world_yaw_rad:
-        Initial world heading in radians (CW-positive).  Defaults to 0.
+        Initial world heading in radians (CCW-positive, 0 = +x/east —
+        matches the aprilcam world convention).  Defaults to 0.
     config:
         Optional ``RobotConfig``.  When supplied, ``trackwidth_mm``,
         ``mm_per_deg_l``, and ``mm_per_deg_r`` are read from it.
@@ -275,38 +276,66 @@ class OdomTracker:
 
     @property
     def world_yaw(self) -> float | None:
-        """Current heading in world frame (CW-positive radians)."""
+        """Current heading in world frame (CCW-positive radians, 0 = +x/east).
+
+        Matches the aprilcam world convention directly (A1-centred, +x east,
+        +y north, CCW-positive — verified empirically, see
+        ``robot_radio.sensors.odometry``'s ``_apply()``). Firmware TLM
+        heading is also CCW-positive (0 = firmware's own +X axis — see
+        ``Odometry.cpp``'s ``pose.x += d*cos(theta); pose.y += d*sin(theta)``
+        integration), so no sign flip is needed: the two frames differ only
+        by the constant rotation offset established at anchor time.
+        """
         if not self.anchored or self._last_pose is None:
             return None
         assert self._ref_pose is not None
-        # TLM heading is CCW-positive centidegrees.
-        # Delta in radians (CCW positive), then flip sign for CW world convention.
+        # Both TLM heading and world_yaw are CCW-positive — straight delta,
+        # no sign flip (066-002 / CR-12: the prior `self._ref_yaw - delta_rad`
+        # implemented a CW-positive world convention, which does not match
+        # aprilcam's actual CCW-positive frame — confirmed by the new
+        # convention test and by direct reading of Odometry.cpp / aprilcam's
+        # own empirically-verified orientation convention).
         delta_rad = math.radians((self._last_pose[2] - self._ref_pose[2]) / 100.0)
-        return self._ref_yaw - delta_rad
+        return self._ref_yaw + delta_rad
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _to_world_mm(self, pose: tuple[int, int, int]) -> tuple[float, float] | None:
-        """Convert a TLM pose to world-frame mm using the anchor pose."""
+        """Convert a TLM pose to world-frame mm using the anchor pose.
+
+        Firmware TLM pose ``(x_mm, y_mm, heading_cdeg)`` is already a proper
+        Cartesian pose in firmware's own fixed (boot/reset-anchored) frame:
+        heading 0 points along firmware's own +X axis and increasing heading
+        rotates CCW — see ``Odometry.cpp``'s dead-reckoning integration,
+        ``pose.x += d*cos(theta); pose.y += d*sin(theta)``. It is NOT a
+        body-relative "x=right, y=forward" reading (066-002 / CR-12: that was
+        this function's previous, untested — and wrong — assumption).
+
+        aprilcam's world frame (A1-centred, +x east, +y north) uses the same
+        CCW-positive, 0-along-+x convention (verified empirically — see
+        ``robot_radio.sensors.odometry``'s ``_apply()``). The two frames
+        therefore differ only by a fixed rotation + translation established
+        at anchor time (no axis reinterpretation, no reflection): rotate the
+        firmware-frame delta by the constant offset ``a`` between the two
+        frames' headings, then translate by the anchor world position.
+        """
         if self._ref_pose is None:
             return None
-        # TLM: x = right, y = forward (robot frame at anchor time)
-        fwd_mm = pose[1] - self._ref_pose[1]
-        right_mm = pose[0] - self._ref_pose[0]
-        # Rotate from robot-anchor-frame to world frame.
-        # a = world yaw at anchor time (CW-positive radians)
-        # Robot body Y=forward, X=right → world transform:
-        #   world_x = cos(a)*fwd - sin(a)*right
-        #   world_y = -sin(a)*fwd - cos(a)*right   (CW rotation convention)
+        dx_mm = pose[0] - self._ref_pose[0]
+        dy_mm = pose[1] - self._ref_pose[1]
+        # a = rotation from firmware-frame heading to world-frame heading,
+        # both CCW-positive — constant once anchored.
         a = self._ref_yaw - math.radians(self._ref_pose[2] / 100.0)
         c, s = math.cos(a), math.sin(a)
-        rx_mm = c * fwd_mm - s * right_mm
-        ry_mm = -s * fwd_mm - c * right_mm
+        # Standard CCW rotation matrix R(a) applied to the firmware-frame
+        # delta, then translated into the anchor's world position.
+        wx_mm = c * dx_mm - s * dy_mm
+        wy_mm = s * dx_mm + c * dy_mm
         return (
-            self._ref_world_mm[0] + rx_mm,
-            self._ref_world_mm[1] + ry_mm,
+            self._ref_world_mm[0] + wx_mm,
+            self._ref_world_mm[1] + wy_mm,
         )
 
     # ------------------------------------------------------------------

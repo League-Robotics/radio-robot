@@ -125,6 +125,76 @@ class TestOdomTrackerFromTLM:
         assert tracker.y_mm == 40     # last frame
 
 
+class TestOdomTrackerAprilcamWorldConvention:
+    """OdomTracker world_pos/world_yaw must match the aprilcam world frame.
+
+    066-002 / CR-12: this class anchors OdomTracker's TLM->world-frame
+    transform to the aprilcam convention (A1-centred, +x east, +y north,
+    CCW-positive heading — verified empirically, see
+    ``robot_radio.sensors.odometry``'s ``_apply()``) instead of leaving it an
+    untested "guessed geometry" stack.
+
+    Firmware TLM pose (x_mm, y_mm, heading_cdeg) is itself already a proper
+    Cartesian pose in firmware's own fixed frame — CCW-positive, 0 = firmware
+    +X — confirmed by reading ``Odometry.cpp``'s dead-reckoning integration
+    (``pose.x += d*cos(theta); pose.y += d*sin(theta)``). Both frames share
+    the same CCW-positive convention, so world_pos/world_yaw is a pure
+    rotation (by the constant anchor-time offset) + translation of the
+    firmware-frame delta — no body-frame ("x=right, y=forward") relabeling.
+    """
+
+    def test_straight_ahead_east_facing_anchor(self) -> None:
+        """Anchored facing east (world_yaw=0): driving straight moves +x (east)."""
+        from robot_radio.sensors.odom_tracker import OdomTracker
+        tracker = OdomTracker(world_pos_mm=(0.0, 0.0), world_yaw_rad=0.0)
+        tracker.update_from_tlm(_tlm(pose=(0, 0, 0)))     # anchor
+        tracker.update_from_tlm(_tlm(pose=(500, 0, 0)))   # drove 500mm straight, no turn
+        wx, wy = tracker.world_pos    # cm
+        assert abs(wx - 50.0) < 1e-6, f"expected +50cm east (x), got {wx}"
+        assert abs(wy - 0.0) < 1e-6, f"expected 0cm north (y), got {wy}"
+        assert abs(tracker.world_yaw - 0.0) < 1e-9
+
+    def test_straight_ahead_north_facing_anchor(self) -> None:
+        """Anchored facing north (world_yaw=+90deg): driving straight moves +y (north).
+
+        This is the case that catches a CW/CCW sign inversion: under the old
+        (buggy) CW-positive implementation this produced -50cm (south)
+        instead of +50cm (north).
+        """
+        from robot_radio.sensors.odom_tracker import OdomTracker
+        tracker = OdomTracker(world_pos_mm=(0.0, 0.0), world_yaw_rad=math.pi / 2.0)
+        tracker.update_from_tlm(_tlm(pose=(0, 0, 0)))     # anchor, firmware heading=0
+        tracker.update_from_tlm(_tlm(pose=(500, 0, 0)))   # same straight-ahead firmware delta
+        wx, wy = tracker.world_pos
+        assert abs(wx - 0.0) < 1e-6, f"expected 0cm east (x), got {wx}"
+        assert abs(wy - 50.0) < 1e-6, f"expected +50cm north (y), got {wy}"
+        assert abs(tracker.world_yaw - math.pi / 2.0) < 1e-9
+
+    def test_pure_ccw_turn_matches_firmware_direction(self) -> None:
+        """A +90deg CCW firmware turn must yield a +90deg (not -90deg) world_yaw.
+
+        aprilcam and firmware TLM heading are both CCW-positive, so a CCW
+        turn as measured by firmware must map onto a CCW (positive) change
+        in world_yaw — same direction, same magnitude, only offset by the
+        constant anchor rotation.
+        """
+        from robot_radio.sensors.odom_tracker import OdomTracker
+        tracker = OdomTracker(world_pos_mm=(0.0, 0.0), world_yaw_rad=0.0)
+        tracker.update_from_tlm(_tlm(pose=(0, 0, 0)))       # anchor
+        tracker.update_from_tlm(_tlm(pose=(0, 0, 9000)))    # +90deg CCW, no translation
+        assert abs(math.degrees(tracker.world_yaw) - 90.0) < 1e-6
+
+    def test_anchor_offset_position_is_preserved(self) -> None:
+        """A nonzero world anchor position is a pure translation on top of the rotation."""
+        from robot_radio.sensors.odom_tracker import OdomTracker
+        tracker = OdomTracker(world_pos_mm=(1000.0, 2000.0), world_yaw_rad=0.0)
+        tracker.update_from_tlm(_tlm(pose=(0, 0, 0)))       # anchor
+        tracker.update_from_tlm(_tlm(pose=(0, 0, 0)))       # no movement
+        wx, wy = tracker.world_pos
+        assert abs(wx - 100.0) < 1e-6   # 1000mm -> 100cm
+        assert abs(wy - 200.0) < 1e-6   # 2000mm -> 200cm
+
+
 class TestOdomTrackerRobotConfig:
     """OdomTracker wires correctly to RobotConfig."""
 

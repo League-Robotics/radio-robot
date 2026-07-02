@@ -36,13 +36,29 @@
 #include <cstring>
 #include <cstdio>
 #include <utility>
+#include <cassert>
+#include <thread>
 
 // Sim-injected clock.  Robot.cpp::system_timer_current_time() reads this so
 // that Robot::systemTime() returns sim time instead of real wall-clock time.
 // Updated at the top of sim_tick() and at the start of sim_command() so that
 // time-based stop conditions (T ms=..., HALT TIME, watchdog) stay in the same
 // epoch as driveAdvance(now_ms) and evaluate(now_ms).
-uint32_t g_sim_now_ms = 0;
+//
+// thread_local (066-002 / CR-13): this used to be a single process-global
+// uint32_t.  SimTransport's actual threading model is one OS thread per
+// Sim() lifetime (a fresh thread per connect(), and disconnect()'s
+// join(timeout=3.0) can time out leaving the prior thread briefly alive) — a
+// second SimHandle constructed on a different thread (a GUI reconnect racing
+// a slow-exiting prior tick thread) would call sim_create(), which resets
+// this global to 0, yanking the clock backwards out from under the still-live
+// first instance's TIME-stop/watchdog deltas. thread_local gives each OS
+// thread its own physically separate storage, so that reset can never affect
+// any other thread's SimHandle. Robot::systemTime() itself must stay a bare
+// zero-arg free call for the ARM target (no SimHandle exists on firmware);
+// see architecture-update.md Design Rationale Decision 4 for why this is
+// thread_local rather than a SimHandle-threaded clock parameter.
+thread_local uint32_t g_sim_now_ms = 0;
 
 // ---------------------------------------------------------------------------
 // ReplyStore — a heap-allocated reply accumulator.
@@ -129,6 +145,16 @@ struct SimHandle {
     // the hand-mirrored watchdog block in sim_tick().
     LoopTickState    _ts;
 
+    // (066-002 / CR-13) The OS thread that constructed this SimHandle.
+    // sim_tick()/sim_command() assert the calling thread matches this —
+    // turning any future cross-thread misuse of a single SimHandle (a
+    // different failure mode than the g_sim_now_ms cross-instance clock
+    // corruption thread_local fixes above) into a loud, immediate failure
+    // instead of a silent replyStore race. replyStore is already a
+    // per-SimHandle member (never shared across handles), so same-thread
+    // multi-handle use remains unaffected by this assert.
+    std::thread::id  _ownerThread;
+
     SimHandle()
         : cfg(defaultRobotConfig())
         , hal(cfg)
@@ -141,6 +167,7 @@ struct SimHandle {
         , dbg(DbgCtx{nullptr, nullptr, nullptr, &robot})
         , cmd(robot.buildCommandTable(&dbg, nullptr))
         , benchOtos()
+        , _ownerThread(std::this_thread::get_id())
     {
         // Initialize the bench OTOS sensor (sets _initialized = true; no I2C).
         benchOtos.begin();
@@ -215,6 +242,13 @@ void sim_destroy(void* h)
 void sim_tick(void* h, uint32_t now_ms)
 {
     SimHandle* s = static_cast<SimHandle*>(h);
+    // (066-002 / CR-13) Assert this call is on the thread that constructed
+    // the SimHandle. g_sim_now_ms is thread_local, so a cross-thread call
+    // would silently read/write the WRONG thread's clock storage instead of
+    // this handle's — a bug we want loud and immediate, not silent.
+    assert(std::this_thread::get_id() == s->_ownerThread &&
+           "sim_tick() called from a different thread than the SimHandle "
+           "was constructed on");
     // Keep the injected clock in sync so Robot::systemTime() returns sim time.
     g_sim_now_ms = now_ms;
     // (034-005) Upgraded to two-arg overload so the HAL plant receives the
@@ -260,6 +294,12 @@ void sim_tick(void* h, uint32_t now_ms)
 int sim_command(void* h, const char* line, char* out_buf, int out_len)
 {
     SimHandle* s = static_cast<SimHandle*>(h);
+
+    // (066-002 / CR-13) Same cross-thread guard as sim_tick() — see its
+    // comment for why this must be same-thread (g_sim_now_ms is thread_local).
+    assert(std::this_thread::get_id() == s->_ownerThread &&
+           "sim_command() called from a different thread than the SimHandle "
+           "was constructed on");
 
     // Sync the injected clock to the current sim time before processing the
     // command.  Command handlers call robot->systemTime() (→ g_sim_now_ms) to

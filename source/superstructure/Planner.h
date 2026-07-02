@@ -60,7 +60,12 @@ public:
 
     // Stage the goal command. No hardware I/O, no emission.
     // Dispatches on PlannerCommand::GoalKind → the appropriate begin*() call.
-    void apply(const msg::PlannerCommand& cmd);
+    // now_ms: the real system time at the point apply() is called — threaded
+    // straight through to every begin*() call as its MotionBaseline.t0Ms
+    // baseline (CR-11: previously hard-coded to 0 inside apply(), which made
+    // every TIME stop compute elapsed = full uptime and fire on the very next
+    // tick once uptime exceeded the timeout).
+    void apply(const msg::PlannerCommand& cmd, uint32_t now_ms);
 
     // Advance goal closure one tick.
     // 1. Populate _hw from _drive.state() (fused pose + twist).

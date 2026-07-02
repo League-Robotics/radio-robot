@@ -20,7 +20,12 @@
 // so that Robot::systemTime() returns sim time rather than real wall-clock time.
 // This ensures time-based stop conditions (T, HALT TIME) use the same epoch as
 // driveAdvance(now_ms) and evaluate(now_ms), preventing immediate false-fire.
-extern uint32_t g_sim_now_ms;
+//
+// thread_local (066-002 / CR-13): must match sim_api.cpp's definition exactly
+// (a thread_local declaration and a non-thread_local declaration of the same
+// name are not link-compatible). HOST_BUILD-only (this whole block is
+// #ifdef HOST_BUILD) — the ARM firmware target never sees this declaration.
+extern thread_local uint32_t g_sim_now_ms;
 
 static uint32_t system_timer_current_time() { return g_sim_now_ms; }
 #endif

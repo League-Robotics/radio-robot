@@ -364,11 +364,17 @@ void Planner::getPoseFloat(float& x, float& y, float& h_rad) const {
 // apply — stage the goal command.
 // Dispatches on PlannerCommand::GoalKind → the appropriate begin*() call.
 // ReplyFn is a no-op sink; EVT routing comes via the command bus.
+//
+// now_ms is the caller-supplied real system time at the point apply() is
+// called (CR-11 fix). It is threaded straight through to every begin*() call,
+// which passes it on to MotionCommand::start() to baseline MotionBaseline.t0Ms.
+// Previously this was a hard-coded local `now = 0`, so t0Ms was always 0 —
+// any TIME stop then computed elapsed = now_ms - 0 = full uptime and fired on
+// the very next tick() once uptime exceeded the stop's duration, instead of
+// after the goal's actual duration had elapsed.
 // ---------------------------------------------------------------------------
-void Planner::apply(const msg::PlannerCommand& cmd)
+void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now_ms)
 {
-    const uint32_t now = 0;  // apply() is called outside the tick loop;
-                             // the actual now_ms is passed in tick().
     // We stage the command into the Planner immediately on apply() so that the
     // next tick() call finds the planner in the correct state. The begin*()
     // calls are idempotent with respect to timing — they just configure the
@@ -385,7 +391,7 @@ void Planner::apply(const msg::PlannerCommand& cmd)
         // beginVelocity takes (v_mms, omega_rads).
         float v     = cmd.goal.velocity.v_x;
         float omega = cmd.goal.velocity.omega;
-        beginVelocity(v, omega, now, _target, _noopReply, nullptr, corrId);
+        beginVelocity(v, omega, now_ms, _target, _noopReply, nullptr, corrId);
         break;
     }
 
@@ -394,7 +400,7 @@ void Planner::apply(const msg::PlannerCommand& cmd)
         float tx    = cmd.goal.goto_goal.x;
         float ty    = cmd.goal.goto_goal.y;
         float speed = cmd.goal.goto_goal.speed;
-        beginGoTo(tx, ty, speed, now, _target, _noopReply, nullptr, corrId);
+        beginGoTo(tx, ty, speed, now_ms, _target, _noopReply, nullptr, corrId);
         break;
     }
 
@@ -404,7 +410,7 @@ void Planner::apply(const msg::PlannerCommand& cmd)
         static constexpr float RAD_TO_CDEG = 18000.0f / 3.14159265f;
         float headingCdeg = cmd.goal.turn.heading * RAD_TO_CDEG;
         float epsCdeg     = 300.0f;  // default 3° tolerance
-        beginTurn(headingCdeg, epsCdeg, now, _target, _noopReply, nullptr, corrId);
+        beginTurn(headingCdeg, epsCdeg, now_ms, _target, _noopReply, nullptr, corrId);
         break;
     }
 
@@ -421,7 +427,7 @@ void Planner::apply(const msg::PlannerCommand& cmd)
         }
         int32_t targetMm = (int32_t)(cmd.goal.distance.distance);
         if (targetMm < 0) targetMm = -targetMm;  // beginDistance takes unsigned magnitude
-        beginDistance(leftMms, rightMms, targetMm, now, _target, _noopReply, nullptr, corrId);
+        beginDistance(leftMms, rightMms, targetMm, now_ms, _target, _noopReply, nullptr, corrId);
         break;
     }
 
@@ -435,7 +441,7 @@ void Planner::apply(const msg::PlannerCommand& cmd)
                                 cmd.goal.timed.omega,
                                 _cfg.trackwidthMm, vL, vR);
         uint32_t durationMs = cmd.goal.timed.duration;
-        beginTimed(vL, vR, durationMs, now, _target, _noopReply, nullptr, corrId);
+        beginTimed(vL, vR, durationMs, now_ms, _target, _noopReply, nullptr, corrId);
         break;
     }
 
@@ -444,7 +450,7 @@ void Planner::apply(const msg::PlannerCommand& cmd)
         // RotationGoal: angle_rad.
         static constexpr float RAD_TO_CDEG = 18000.0f / 3.14159265f;
         float relCdeg = cmd.goal.rotation.angle * RAD_TO_CDEG;
-        beginRotation(relCdeg, now, _target, _noopReply, nullptr, corrId);
+        beginRotation(relCdeg, now_ms, _target, _noopReply, nullptr, corrId);
         break;
     }
 
@@ -456,12 +462,12 @@ void Planner::apply(const msg::PlannerCommand& cmd)
         BodyKinematics::inverse(cmd.goal.stream.v_x,
                                 cmd.goal.stream.omega,
                                 _cfg.trackwidthMm, vL, vR);
-        beginStream(vL, vR, now, _target, _noopReply, nullptr);
+        beginStream(vL, vR, now_ms, _target, _noopReply, nullptr);
         break;
     }
 
     case msg::PlannerCommand::GoalKind::STOP:
-        stop(now, _noopReply, nullptr);
+        stop(now_ms, _noopReply, nullptr);
         break;
 
     case msg::PlannerCommand::GoalKind::NONE:

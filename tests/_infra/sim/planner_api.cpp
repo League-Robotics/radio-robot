@@ -135,7 +135,9 @@ float planner_api_tick(void* h, uint32_t now_ms)
 // ---------------------------------------------------------------------------
 
 // Apply a VELOCITY goal: vx_mmps, omega_rads.
-void planner_api_apply_velocity(void* h, float vx, float omega)
+// now_ms: real system time at apply() (066-002 / CR-11) — baselines
+// MotionBaseline.t0Ms via begin*() -> MotionCommand::start().
+void planner_api_apply_velocity(void* h, float vx, float omega, uint32_t now_ms)
 {
     PlannerHandle* p = static_cast<PlannerHandle*>(h);
     msg::PlannerCommand cmd;
@@ -143,31 +145,35 @@ void planner_api_apply_velocity(void* h, float vx, float omega)
     g.v_x    = vx;
     g.omega = omega;
     cmd.setVelocity(g);
-    p->planner.apply(cmd);
+    p->planner.apply(cmd, now_ms);
 }
 
 // Apply a STOP goal.
-void planner_api_apply_stop(void* h)
+void planner_api_apply_stop(void* h, uint32_t now_ms)
 {
     PlannerHandle* p = static_cast<PlannerHandle*>(h);
     msg::PlannerCommand cmd;
     cmd.setStop(true);
-    p->planner.apply(cmd);
+    p->planner.apply(cmd, now_ms);
 }
 
 // Apply a TURN goal: heading_rad.
-void planner_api_apply_turn(void* h, float heading_rad)
+void planner_api_apply_turn(void* h, float heading_rad, uint32_t now_ms)
 {
     PlannerHandle* p = static_cast<PlannerHandle*>(h);
     msg::PlannerCommand cmd;
     msg::TurnGoal g{};
     g.heading = heading_rad;
     cmd.setTurn(g);
-    p->planner.apply(cmd);
+    p->planner.apply(cmd, now_ms);
 }
 
 // Apply a TIMED goal: vx_mmps, omega_rads, duration_ms.
-void planner_api_apply_timed(void* h, float vx, float omega, uint32_t duration_ms)
+// now_ms: staged as the goal's t0Ms baseline — the guard test
+// (test_planner_apply_now_ms.py) asserts the TIME stop does not fire until
+// now_ms + duration_ms has elapsed, not on the tick immediately after apply().
+void planner_api_apply_timed(void* h, float vx, float omega, uint32_t duration_ms,
+                             uint32_t now_ms)
 {
     PlannerHandle* p = static_cast<PlannerHandle*>(h);
     msg::PlannerCommand cmd;
@@ -176,11 +182,11 @@ void planner_api_apply_timed(void* h, float vx, float omega, uint32_t duration_m
     g.omega = omega;
     g.duration = duration_ms;
     cmd.setTimed(g);
-    p->planner.apply(cmd);
+    p->planner.apply(cmd, now_ms);
 }
 
 // Apply a GOTO_GOAL: x_mm, y_mm, speed_mmps.
-void planner_api_apply_goto(void* h, float x_mm, float y_mm, float speed_mmps)
+void planner_api_apply_goto(void* h, float x_mm, float y_mm, float speed_mmps, uint32_t now_ms)
 {
     PlannerHandle* p = static_cast<PlannerHandle*>(h);
     msg::PlannerCommand cmd;
@@ -189,11 +195,11 @@ void planner_api_apply_goto(void* h, float x_mm, float y_mm, float speed_mmps)
     g.y       = y_mm;
     g.speed = speed_mmps;
     cmd.setGotoGoal(g);
-    p->planner.apply(cmd);
+    p->planner.apply(cmd, now_ms);
 }
 
 // Apply a DISTANCE goal: distance_mm, speed_mmps.
-void planner_api_apply_distance(void* h, float distance_mm, float speed_mmps)
+void planner_api_apply_distance(void* h, float distance_mm, float speed_mmps, uint32_t now_ms)
 {
     PlannerHandle* p = static_cast<PlannerHandle*>(h);
     msg::PlannerCommand cmd;
@@ -201,18 +207,18 @@ void planner_api_apply_distance(void* h, float distance_mm, float speed_mmps)
     g.distance = distance_mm;
     g.speed  = speed_mmps;
     cmd.setDistance(g);
-    p->planner.apply(cmd);
+    p->planner.apply(cmd, now_ms);
 }
 
 // Apply a ROTATION goal: angle_rad.
-void planner_api_apply_rotation(void* h, float angle_rad)
+void planner_api_apply_rotation(void* h, float angle_rad, uint32_t now_ms)
 {
     PlannerHandle* p = static_cast<PlannerHandle*>(h);
     msg::PlannerCommand cmd;
     msg::RotationGoal g{};
     g.angle = angle_rad;
     cmd.setRotation(g);
-    p->planner.apply(cmd);
+    p->planner.apply(cmd, now_ms);
 }
 
 // ---------------------------------------------------------------------------
