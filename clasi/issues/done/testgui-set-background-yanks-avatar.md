@@ -1,5 +1,7 @@
 ---
-status: pending
+status: done
+tickets:
+- NONE
 ---
 
 # TestGUI: set_background() yanks the avatar off the tag — live-view jumping persists after ticket 011
