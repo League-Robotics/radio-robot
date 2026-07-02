@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Fix ArgSchema query-mutates-state bug (DBG IRQGUARD, RF, OL, OA)
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 depends-on: []
