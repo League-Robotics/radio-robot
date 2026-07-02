@@ -4,6 +4,16 @@
 **Sprint:** post-015 (out-of-process bench debugging)
 **Status:** RESOLVED — root cause confirmed, fix implemented and A/B-verified
 
+> **Note (2026-07-01): partially superseded.** A second, distinct wedge flavor is
+> now on record — a **transient boundary latch** that begins at D-command
+> deceleration/stop, is invisible to the enc_wedged detector, and **self-heals at
+> the next encoder reset** (atomic reads re-prime the register; no power-cycle
+> needed). Also: the config history (`DefaultConfig.cpp`, 2026-06-17) documents
+> the wedge persisting at 4-12% in field sweeps *after* the IRQ-guard fix below,
+> so "eliminated" overstates it. See
+> [2026-07-01-encoder-wedge-boundary-latch-flavor.md](2026-07-01-encoder-wedge-boundary-latch-flavor.md).
+> The bench tools referenced below now live in `tests/old/dev/`, not `tests/dev/`.
+
 This is the root cause of the long-standing "encoder wedge": while driving, the
 Nezha motor controller (I2C `0x10`) freezes its encoder readback — it returns a
 constant value forever while the wheels keep spinning — and only a power-cycle of
