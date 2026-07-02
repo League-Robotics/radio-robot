@@ -151,25 +151,79 @@ model: the next atomic-read burst re-primes it.
    (interrupt load); OTOS lag 10 ms vs 100 ms (bus load — raised 06-17,
    pre-rebase).
 
-## 2026-07-02 stand reproduction (fw 0.20260701.14, relay "zavaz", robot on stand)
+## 2026-07-02 stand session (fw 0.20260701.14, tovez): mechanism ISOLATED
 
-- **Reproduced once**: 30× (`D 200 200 500` → `RT 9000`) cycles, SNAP-polled,
-  STREAM 50 on. Cycle 2: right encoder latched at exactly 557 mm starting at the
-  D→RT boundary, frozen ~10.5 s through the whole RT, healed exactly at the next
-  D's encoder reset. Zero `EVT enc_wedged` (blind spot confirmed live). No other
-  frozen-frame streaks anywhere in 774 frames — the latch is a discrete event,
-  not noise.
-- **Exact TOUR_1 replay** (testgui cadence: 0.2 s spin-up, 0.3 s SNAP poll,
-  origin-reset preamble): 6 passes = 60 boundaries, **completely clean** (not
-  even a 2-frame repeat in 662 frames).
-- Net stand rate ≈ 1 episode / ~120 boundaries vs ~2 / 5 D-boundaries in the
-  07-01 playfield tour. Same transport (relay), same firmware family ⇒ the big
-  remaining variable is **wheel load** (playfield = robot mass on wheels; decel
-  under load works the PID near zero much harder). Consistent with the
-  decel write-burst hypothesis; unloaded-stand repro is possible but slow.
-- **Tooling gotcha:** every `DBG` reply (`IRQGUARD`, `I2C`, `I2CLOG`) is
-  `ForceReply::SERIAL` — over the relay they return NOTHING. I2CLOG capture
-  requires the robot's own USB serial.
+Full controlled session, robot on stand. Two phases: passive repro, then a
+five-arm stress matrix that isolated the trigger. **Read this section as the
+current best understanding; it supersedes the write-burst speculation above.**
+
+### Passive repro (relay, as-in-the-field conditions)
+
+- 30× (`D 200 200 500` → `RT 9000`): ONE boundary latch (R at exactly 557 mm at
+  the D→RT boundary, frozen 10.5 s through the whole turn, healed at the next
+  D's at-rest reset, zero EVT — detector blind spot confirmed live).
+- Exact TOUR_1 replay ×6 (testgui cadence): completely clean.
+- Latches are discrete all-or-nothing events: zero near-miss frozen streaks in
+  1,400+ frames around them.
+
+### Stress matrix (robot USB, guard set EXPLICITLY per arm)
+
+`D`-preemption = re-issue a D mid-flight, which fires `Robot::distanceDrive` →
+`resetEncoders()` (atomic 0x46 burst) while wheels rotate. `S`/`RT` never reset.
+
+| Arm | Stress (every 1.2 s) | Resets while moving | Wheel speed | Guard | Result |
+|---|---|---|---|---|---|
+| 1 | `D +400` → `D −400` | yes | ±400 | OFF | **persistent** @ ~8 reversals |
+| 2 | same | yes | ±400 | ON | **persistent** @ ~16 |
+| 3 | `D +400` → `D +400` | yes | +400 | ON | **13 transient** episodes / 10 cycles, persistent @ ~80 |
+| 4 | `RT 9000` → `RT −9000` | no | ~±90 | ON | **12/12 clean** (120 reversals) |
+| 5 | `S +400` → `S −400` | no | ±400 | ON | **persistent** @ ~24–32 |
+
+### Verdict
+
+- **Two independent sufficient triggers**, both amplitude-dependent, both
+  UNAFFECTED by the IRQ guard:
+  1. **Full-speed reversal transients** (arm 5): a max-ΔPWM 0x60 slam while
+     0x46 traffic is in flight latches the readback with no resets involved.
+  2. **Atomic encoder resets while wheels rotate** (arm 3): reliable transient
+     latches (~1.4/cycle), escalating to persistent with repetition.
+  Combined (arms 1–2) they latch ~5–10× faster. Gentle reversals (arm 4,
+  ~±90 mm/s) are harmless ⇒ the driver is electrical/mechanical violence
+  (current + ΔPWM), not reversal or resets per se.
+- **Transient vs persistent is a continuum**: transient latches heal at any
+  at-rest atomic reset (next D from idle, `ZERO enc`); repeated abuse escalates
+  to a persistent latch that no in-band reset clears — only a Nezha power-cycle
+  + full firmware reboot (begin() re-init).
+- This cleanly explains the **playfield-vs-stand rate gap**: loaded
+  deceleration = larger current/PWM transients at every command boundary.
+- `EVT enc_wedged` fired for **none of ~18 observed episodes**.
+- The IRQ guard remains necessary for the 06-07 interrupt-load flavor but is
+  irrelevant here — "the guard is on" is NOT evidence against a wedge.
+
+### Session gotchas (verified)
+
+- Every `DBG` reply is `ForceReply::SERIAL` → over the relay they return
+  NOTHING; over robot-USB they arrive on the corr-id reply path (`send()`).
+- Bare `DBG IRQGUARD` DISABLES the guard (ArgSchema default-fill regression,
+  051-008) — see `clasi/issues/dbg-irqguard-query-disables-guard.md`. All A/B
+  work must SET the guard explicitly.
+- "Nezha power-cycle only" via the robot's switch also cuts OTOS/sensors; the
+  firmware does NOT re-run `begin()`, leaving all I2C devices uninitialized
+  (encoders read 0, OTOS frozen — looks like a super-wedge but isn't). Recover
+  with a FULL power-cycle including USB unplug (micro:bit reboot). A robot
+  booted with the rail off hangs silent on USB (boot blocks in begin()).
+- "S doesn't drive" was an artifact of latched readbacks — S is healthy
+  (drives ±380 mm/s, verified against live encoders).
+
+### Fix directions (filed:
+`clasi/issues/encoder-reset-while-moving-latches-readback.md`)
+
+1. Slew-limit PWM steps in `Motor::setSpeed` (cap ΔPWM per write) — addresses
+   trigger 1 and softens boundary decel transients.
+2. Never fire `resetEncoders()` while wheels may be rotating (defer-until-rest
+   or software-only rebaseline) — addresses trigger 2.
+3. Detector: count identical raw reads regardless of target/arming grace; put
+   `wheel_wedged` in TLM; auto re-prime at idle on detection.
 
 ## Related
 
