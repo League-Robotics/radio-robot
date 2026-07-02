@@ -2,7 +2,7 @@
 id: '004'
 title: 'TestGUI trace correctness: command-boundary rebaseline and anchor-heading
   rotation'
-status: in-progress
+status: done
 use-cases:
 - SUC-008
 - SUC-009
