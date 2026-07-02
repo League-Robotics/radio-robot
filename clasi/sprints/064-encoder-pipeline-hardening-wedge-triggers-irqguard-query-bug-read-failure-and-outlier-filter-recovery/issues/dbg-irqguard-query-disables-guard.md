@@ -1,6 +1,8 @@
 ---
-status: pending
+status: in-progress
 sprint: '064'
+tickets:
+- 064-001
 ---
 
 # Bare `DBG IRQGUARD` query disables the IRQ guard (ArgSchema default-fill regression, 051-008)

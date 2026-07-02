@@ -1,9 +1,12 @@
 ---
-status: pending
+status: in-progress
 review: docs/code_review/2026-07-01-full-codebase-review.md
 findings: CR-02, CR-03
 severity: high
 sprint: '064'
+tickets:
+- 064-005
+- 064-006
 ---
 
 # Encoder integrity: I2C read failures fabricate jumps, and the outlier filter has no recovery path

@@ -2,9 +2,16 @@
 id: '064'
 title: 'Encoder pipeline hardening: wedge triggers, IRQGUARD query bug, read-failure
   and outlier-filter recovery'
-status: roadmap
+status: ticketed
 branch: sprint/064-encoder-pipeline-hardening-wedge-triggers-irqguard-query-bug-read-failure-and-outlier-filter-recovery
-use-cases: []
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+- SUC-006
+- SUC-007
 issues:
 - dbg-irqguard-query-disables-guard.md
 - encoder-reset-while-moving-latches-readback.md
@@ -99,13 +106,19 @@ before close. HITL slam-matrix validation explicitly deferred to stakeholder.
 
 Before tickets can be created, all of the following must be true:
 
-- [ ] Sprint planning documents are complete (sprint.md, use cases, architecture)
-- [ ] Architecture review passed
-- [ ] Stakeholder has approved the sprint plan (auto-approve session)
+- [x] Sprint planning documents are complete (sprint.md, use cases, architecture)
+- [x] Architecture review passed
+- [x] Stakeholder has approved the sprint plan (auto-approve session)
 
 ## Tickets
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 001 | Fix ArgSchema query-mutates-state bug (DBG IRQGUARD, RF, OL, OA) | — |
+| 002 | Add \|ΔPWM\| slew cap to Motor::setSpeed | — |
+| 003 | Software-only encoder rebaseline when drivetrain is not at rest | — |
+| 004 | Remove wedge-detector blind spots, add TLM wedge= field, auto re-prime at idle | 003 |
+| 005 | Hold-last-value on I2C encoder read failure (Motor + SimMotor fault injection) | — |
+| 006 | Restore outlier-filter reject-streak rebaseline and idle refresh in Drive | — |
 
 Tickets execute serially in the order listed.

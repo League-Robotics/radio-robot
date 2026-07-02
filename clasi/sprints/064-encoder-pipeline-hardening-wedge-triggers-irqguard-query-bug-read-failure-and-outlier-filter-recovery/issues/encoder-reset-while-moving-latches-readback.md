@@ -1,6 +1,10 @@
 ---
-status: pending
+status: in-progress
 sprint: '064'
+tickets:
+- 064-002
+- 064-003
+- 064-004
 ---
 
 # High-amplitude motor transients latch the Nezha encoder readback: full-speed reversals AND resets-while-moving (reliable stand repro)
