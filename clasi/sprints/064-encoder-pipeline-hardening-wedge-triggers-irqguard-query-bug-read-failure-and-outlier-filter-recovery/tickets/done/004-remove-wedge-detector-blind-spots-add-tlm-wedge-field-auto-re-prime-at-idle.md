@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Remove wedge-detector blind spots, add TLM wedge= field, auto re-prime at idle
-status: in-progress
+status: done
 use-cases:
 - SUC-004
 - SUC-005
