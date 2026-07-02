@@ -61,11 +61,12 @@ SimTransport()
     QMessageBox.warning is shown (when Qt is available) and connect() returns
     without connecting.
 
-    A realistic field error profile is applied on connect:
-    - Motor turn-slip (slip_turn_extra=0.26) matching the sim_field_profile
-      fixture from tests/conftest.py.
-    - OTOS linear noise (sigma_fraction=0.05) so TLM pose and ground truth
-      diverge visibly during motion.
+    A configurable field error profile is applied on connect, loaded via
+    ``sim_prefs.load_sim_error_profile()`` (defaults: slip_turn_extra=0.26,
+    otos_linear_noise=0.05, encoder_noise_mm=0.0, otos_yaw_noise=0.0 —
+    matching the historical sim_field_profile fixture from
+    tests/conftest.py). ``apply_error_profile(profile)`` re-applies live to
+    a connected sim (the Sim Errors panel's Apply button).
 
 Helpers:
     list_ports() -> list[str]
@@ -112,6 +113,7 @@ from typing import Callable
 
 from robot_radio.io.serial_conn import SerialConnection, list_serial_ports
 from robot_radio.robot.protocol import TLMFrame, parse_tlm
+from robot_radio.testgui import sim_prefs
 
 _log = logging.getLogger(__name__)
 
@@ -654,11 +656,33 @@ class SimTransport(Transport):
         # For command() (synchronous): reply_list=[""]*1, done_event=Event
         self._cmd_queue: queue.Queue = queue.Queue()
         self._connected = False
+        # The last error profile actually applied to a running sim (via
+        # connect()'s _apply_field_profile or a live apply_error_profile()
+        # call) — issue testgui-sim-error-profile-config. None until then.
+        self._error_profile: dict | None = None
 
     @property
     def turn_scrub_factor(self) -> float:
-        """The sim injects ``_SIM_SLIP_TURN_EXTRA`` turn-scrub over-report."""
-        return _SIM_SLIP_TURN_EXTRA
+        """The ``slip_turn_extra`` fraction the sim currently injects.
+
+        Reflects, in priority order: the profile actually applied to a
+        running sim (``self._error_profile``); else the persisted
+        ``sim_prefs`` profile on disk; else the historical hardcoded
+        default. Never raises — this must be safe to read without a
+        connection (e.g. before Connect is pressed).
+        """
+        if self._error_profile is not None:
+            try:
+                return float(
+                    self._error_profile.get("slip_turn_extra", _SIM_SLIP_TURN_EXTRA)
+                )
+            except Exception:
+                return _SIM_SLIP_TURN_EXTRA
+        try:
+            profile = sim_prefs.load_sim_error_profile()
+            return float(profile.get("slip_turn_extra", _SIM_SLIP_TURN_EXTRA))
+        except Exception:
+            return _SIM_SLIP_TURN_EXTRA
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -895,28 +919,98 @@ class SimTransport(Transport):
         self._deliver_truth((x_cm, y_cm, h_rad))
 
     def _apply_field_profile(self, sim: "object") -> None:
-        """Apply realistic field-error profile to the sim.
+        """Load the persisted sim error profile and apply it to ``sim``.
 
-        Mirrors the ``sim_field_profile`` fixture from tests/conftest.py:
-        - Turn-slip over-report (slipTurnExtra=0.26) via set_field_profile().
-        - OTOS linear position noise (sigma_fraction=0.05).
-
-        This makes the TLM pose (firmware estimate) diverge from the ground-
-        truth trace during motion, giving the GUI a realistic split view.
+        Called once from the tick-thread right after the ``Sim`` is created
+        (before the tick loop starts), so the operator's Sim Errors panel
+        settings (persisted via ``sim_prefs``) are live from the first tick.
+        Falls back to ``sim_prefs.DEFAULT_PROFILE`` (the historical
+        hardcoded 0.26 / 0.05 / 0.0 / 0.0 values) if the file is missing or
+        corrupt — ``load_sim_error_profile()`` never raises, but this is
+        belt-and-suspenders.
         """
         try:
+            profile = sim_prefs.load_sim_error_profile()
+        except Exception:
+            profile = dict(sim_prefs.DEFAULT_PROFILE)
+        self._apply_profile_to_sim(sim, profile)
+
+    def _apply_profile_to_sim(self, sim: "object", profile: dict) -> None:
+        """Apply all four sim error knobs in ``profile`` to ``sim``.
+
+        Mirrors the ``sim_field_profile`` fixture from tests/conftest.py for
+        the two historical knobs (turn-slip over-report, OTOS linear noise)
+        and additionally wires the two previously-unused knobs (per-side
+        encoder noise, OTOS yaw noise) — issue
+        testgui-sim-error-profile-config.
+
+        Each knob is applied in its own try/except so a missing sim method
+        (e.g. a stale prebuilt lib without ``sim_set_encoder_noise``) never
+        prevents the other three from applying. Stores the (attempted)
+        profile on ``self._error_profile`` so ``turn_scrub_factor`` reflects
+        it regardless of which individual knobs actually landed.
+        """
+        defaults = sim_prefs.DEFAULT_PROFILE
+        slip_turn_extra = profile.get("slip_turn_extra", defaults["slip_turn_extra"])
+        otos_linear_noise = profile.get("otos_linear_noise", defaults["otos_linear_noise"])
+        otos_yaw_noise = profile.get("otos_yaw_noise", defaults["otos_yaw_noise"])
+        encoder_noise_mm = profile.get("encoder_noise_mm", defaults["encoder_noise_mm"])
+
+        try:
             sim.set_field_profile(  # type: ignore[attr-defined]
-                slip_turn_extra=_SIM_SLIP_TURN_EXTRA,
+                slip_turn_extra=slip_turn_extra,
                 fuse_otos=True,
             )
-            sim.set_otos_linear_noise(_SIM_OTOS_LINEAR_NOISE)  # type: ignore[attr-defined]
-            self._log(
-                f"[INFO] Sim field profile applied "
-                f"(slip_turn_extra={_SIM_SLIP_TURN_EXTRA}, "
-                f"otos_linear_noise={_SIM_OTOS_LINEAR_NOISE})"
-            )
         except Exception as exc:
-            _log.warning("SimTransport: could not apply field profile: %s", exc)
+            _log.warning("SimTransport: could not apply slip_turn_extra: %s", exc)
+        try:
+            sim.set_otos_linear_noise(otos_linear_noise)  # type: ignore[attr-defined]
+        except Exception as exc:
+            _log.warning("SimTransport: could not apply otos_linear_noise: %s", exc)
+        try:
+            sim.set_otos_yaw_noise(otos_yaw_noise)  # type: ignore[attr-defined]
+        except Exception as exc:
+            _log.warning("SimTransport: could not apply otos_yaw_noise: %s", exc)
+        try:
+            sim.set_encoder_noise(0, encoder_noise_mm)  # type: ignore[attr-defined]
+            sim.set_encoder_noise(1, encoder_noise_mm)  # type: ignore[attr-defined]
+        except Exception as exc:
+            _log.warning("SimTransport: could not apply encoder_noise_mm: %s", exc)
+
+        self._error_profile = dict(profile)
+        self._log(
+            f"[INFO] Sim error profile applied "
+            f"(encoder_noise_mm={encoder_noise_mm}, "
+            f"slip_turn_extra={slip_turn_extra}, "
+            f"otos_linear_noise={otos_linear_noise}, "
+            f"otos_yaw_noise={otos_yaw_noise})"
+        )
+
+    def apply_error_profile(self, profile: dict) -> None:
+        """Apply ``profile`` live to a connected sim (Sim Errors "Apply" button).
+
+        Safe to call from the Qt GUI thread: the actual sim mutation is
+        dispatched onto the tick-thread via the same command queue
+        ``set_true_pose`` uses, since the tick-thread exclusively owns the
+        ``Sim`` object.
+
+        No-ops (after logging a warning) if not connected — there is no
+        running sim to mutate. The profile is still persisted separately by
+        the caller (``sim_prefs.save_sim_error_profile``) so it takes effect
+        on the next Connect regardless.
+        """
+        if not self._connected or self._sim is None:
+            _log.warning(
+                "SimTransport.apply_error_profile: not connected, profile not "
+                "applied live (will take effect on next Connect)"
+            )
+            self._log("[WARN] Sim error profile not applied: not connected")
+            return
+
+        def _action(sim: "object") -> None:
+            self._apply_profile_to_sim(sim, profile)
+
+        self._cmd_queue.put((_action, None, None))
 
     # ------------------------------------------------------------------
     # Qt warning helper

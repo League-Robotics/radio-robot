@@ -527,6 +527,13 @@ class FakeSim:
         self._destroyed: bool = False
         # For context manager protocol
         self._t: int = 0
+        # issue testgui-sim-error-profile-config: record the values passed
+        # to each of the four error-profile knobs so tests can assert on
+        # exactly what was applied (not just that some call happened).
+        self.last_slip_turn_extra: float | None = None
+        self.last_otos_linear_noise: float | None = None
+        self.last_otos_yaw_noise: float | None = None
+        self.last_encoder_noise: dict[int, float] = {}
 
     def __enter__(self) -> "FakeSim":
         return self
@@ -565,9 +572,17 @@ class FakeSim:
     def set_field_profile(self, slip_turn_extra: float = 0.26,
                           fuse_otos: bool = True) -> None:
         self._field_profile_applied = True
+        self.last_slip_turn_extra = slip_turn_extra
 
     def set_otos_linear_noise(self, sigma_fraction: float) -> None:
         self._otos_noise_set = True
+        self.last_otos_linear_noise = sigma_fraction
+
+    def set_otos_yaw_noise(self, sigma_fraction: float) -> None:
+        self.last_otos_yaw_noise = sigma_fraction
+
+    def set_encoder_noise(self, side: int, sigma_mm: float) -> None:
+        self.last_encoder_noise[side] = sigma_mm
 
     def inject_tlm(self, line: str) -> None:
         """Add a TLM line to the async event queue."""
@@ -842,6 +857,180 @@ class TestSimTransportConnect:
             assert len(sim_threads) <= 1, (
                 "Multiple tick-threads started by double connect()"
             )
+        finally:
+            t.disconnect()
+
+
+class TestSimTransportErrorProfile:
+    """Sim Errors panel backing: apply_error_profile() / turn_scrub_factor.
+
+    issue testgui-sim-error-profile-config.
+    """
+
+    def _connected_sim(self, fake_sim: "FakeSim | None" = None) -> tuple:
+        """Return (SimTransport, FakeSim) connected against a FakeSim.
+
+        Mirrors ``TestSimTransportConnect._connected_sim`` (duplicated here
+        to keep this test class self-contained and allow a caller-supplied
+        fake_sim for the stale-lib degradation test).
+        """
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+        import sys
+
+        if fake_sim is None:
+            fake_sim = FakeSim()
+
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = True
+        fake_path.parent.parent = str(pathlib.Path("/nonexistent/sim"))
+
+        fake_fw_module = MagicMock()
+        fake_fw_module.Sim.return_value = fake_sim
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.dict(sys.modules, {"firmware": fake_fw_module}):
+            t = SimTransport()
+            t.on_log = lambda _: None
+            t.connect()
+
+        time.sleep(0.15)
+        return t, fake_sim
+
+    def test_apply_field_profile_uses_persisted_profile_on_connect(self, monkeypatch):
+        """connect() must load sim_prefs and apply ALL four knobs, not just two."""
+        from robot_radio.testgui import sim_prefs
+
+        custom_profile = {
+            "encoder_noise_mm": 3.0,
+            "slip_turn_extra": 0.4,
+            "otos_linear_noise": 0.2,
+            "otos_yaw_noise": 0.05,
+        }
+        monkeypatch.setattr(
+            sim_prefs, "load_sim_error_profile", lambda: dict(custom_profile)
+        )
+
+        t, fake_sim = self._connected_sim()
+        try:
+            time.sleep(0.1)
+            assert fake_sim.last_slip_turn_extra == 0.4
+            assert fake_sim.last_otos_linear_noise == 0.2
+            assert fake_sim.last_otos_yaw_noise == 0.05
+            assert fake_sim.last_encoder_noise == {0: 3.0, 1: 3.0}
+        finally:
+            t.disconnect()
+
+    def test_turn_scrub_factor_reflects_applied_profile(self, monkeypatch):
+        from robot_radio.testgui import sim_prefs
+
+        monkeypatch.setattr(
+            sim_prefs,
+            "load_sim_error_profile",
+            lambda: {**sim_prefs.DEFAULT_PROFILE, "slip_turn_extra": 0.77},
+        )
+
+        t, fake_sim = self._connected_sim()
+        try:
+            time.sleep(0.1)
+            assert t.turn_scrub_factor == 0.77
+        finally:
+            t.disconnect()
+
+    def test_turn_scrub_factor_reads_persisted_profile_before_connect(
+        self, monkeypatch, tmp_path
+    ):
+        """Before connect(), turn_scrub_factor still reads sim_prefs off disk."""
+        from robot_radio.testgui import sim_prefs
+        from robot_radio.testgui.transport import SimTransport
+
+        prefs_path = tmp_path / "sim_error_profile.json"
+        prefs_path.write_text('{"slip_turn_extra": 0.5}')
+        monkeypatch.setattr(sim_prefs, "_PREFS_PATH", prefs_path)
+
+        t = SimTransport()
+        assert t.turn_scrub_factor == 0.5
+
+    def test_turn_scrub_factor_default_when_no_persisted_file(
+        self, monkeypatch, tmp_path
+    ):
+        from robot_radio.testgui import sim_prefs
+        from robot_radio.testgui.transport import SimTransport
+
+        monkeypatch.setattr(sim_prefs, "_PREFS_PATH", tmp_path / "missing.json")
+
+        t = SimTransport()
+        assert t.turn_scrub_factor == 0.26
+
+    def test_apply_error_profile_updates_running_sim(self):
+        t, fake_sim = self._connected_sim()
+        try:
+            time.sleep(0.1)
+            new_profile = {
+                "encoder_noise_mm": 7.0,
+                "slip_turn_extra": 0.9,
+                "otos_linear_noise": 0.15,
+                "otos_yaw_noise": 0.03,
+            }
+            t.apply_error_profile(new_profile)
+
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                if fake_sim.last_slip_turn_extra == 0.9:
+                    break
+                time.sleep(0.02)
+
+            assert fake_sim.last_slip_turn_extra == 0.9
+            assert fake_sim.last_otos_linear_noise == 0.15
+            assert fake_sim.last_otos_yaw_noise == 0.03
+            assert fake_sim.last_encoder_noise == {0: 7.0, 1: 7.0}
+            assert t.turn_scrub_factor == 0.9
+        finally:
+            t.disconnect()
+
+    def test_apply_error_profile_noop_when_not_connected(self):
+        from robot_radio.testgui.transport import SimTransport
+
+        t = SimTransport()
+        log_entries: list[str] = []
+        t.on_log = log_entries.append
+
+        # Must not raise.
+        t.apply_error_profile({"slip_turn_extra": 0.5})
+        assert any("not connected" in e.lower() for e in log_entries)
+
+    def test_apply_error_profile_tolerates_missing_encoder_noise_method(self):
+        """A stale FakeSim (no set_encoder_noise) must not break the other knobs."""
+
+        class _StaleFakeSim(FakeSim):
+            def set_encoder_noise(self, side, sigma_mm):
+                raise AttributeError("stale lib: sim_set_encoder_noise missing")
+
+        t, fake_sim = self._connected_sim(fake_sim=_StaleFakeSim())
+        try:
+            time.sleep(0.1)
+            new_profile = {
+                "encoder_noise_mm": 1.0,
+                "slip_turn_extra": 0.33,
+                "otos_linear_noise": 0.11,
+                "otos_yaw_noise": 0.01,
+            }
+            t.apply_error_profile(new_profile)
+
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                if fake_sim.last_slip_turn_extra == 0.33:
+                    break
+                time.sleep(0.02)
+
+            assert fake_sim.last_slip_turn_extra == 0.33
+            assert fake_sim.last_otos_linear_noise == 0.11
+            assert fake_sim.last_otos_yaw_noise == 0.01
+            # Encoder noise silently failed but did not prevent the rest.
+            assert fake_sim.last_encoder_noise == {}
         finally:
             t.disconnect()
 

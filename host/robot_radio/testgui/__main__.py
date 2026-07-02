@@ -277,6 +277,7 @@ def _build_main_window():  # type: ignore[return]
         QApplication,
         QComboBox,
         QDoubleSpinBox,
+        QGroupBox,
         QHBoxLayout,
         QLabel,
         QLineEdit,
@@ -315,6 +316,7 @@ def _build_main_window():  # type: ignore[return]
     from robot_radio.testgui.drive import KeyboardDriver
     from robot_radio.testgui.recorder import SessionRecorder, direction_from_marker
     from robot_radio.testgui import camera_prefs
+    from robot_radio.testgui import sim_prefs
 
     # QApplication must exist before any QWidget is created.  We create one
     # only if one does not already exist (e.g. during testing).
@@ -633,6 +635,90 @@ def _build_main_window():  # type: ignore[return]
     left_layout.addWidget(goto_row)
     # GOTO enables/disables with the Send buttons on connect/disconnect.
     _send_buttons.append(goto_btn)
+
+    # Sim Errors panel (issue testgui-sim-error-profile-config) — makes the
+    # Sim-mode injected encoder/OTOS error configurable instead of the two
+    # historical hardcoded constants. Backed by sim_prefs' persisted JSON
+    # file; visible only when Sim is the selected transport (toggled in
+    # _on_transport_changed below). Editable pre-connect: the normal
+    # workflow is set errors, then Connect — SimTransport picks the saved
+    # file up on connect via _apply_field_profile().
+    sim_errors_group = QGroupBox("Sim Errors")
+    sim_errors_group.setObjectName("sim_errors_group")
+    sim_errors_layout = QVBoxLayout(sim_errors_group)
+    sim_errors_layout.setContentsMargins(4, 4, 4, 4)
+    sim_errors_layout.setSpacing(4)
+
+    _sim_error_profile = sim_prefs.load_sim_error_profile()
+
+    def _make_sim_err_spin(
+        object_name: str, label: str, value: float,
+        lo: float, hi: float, decimals: int,
+    ) -> QDoubleSpinBox:
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(4)
+        lbl = QLabel(label)
+        lbl.setFixedWidth(120)
+        row_layout.addWidget(lbl)
+        spin = QDoubleSpinBox()
+        spin.setObjectName(object_name)
+        spin.setRange(lo, hi)
+        spin.setDecimals(decimals)
+        spin.setValue(value)
+        spin.setFixedWidth(90)
+        row_layout.addWidget(spin)
+        row_layout.addStretch()
+        sim_errors_layout.addWidget(row)
+        return spin
+
+    sim_err_encoder_mm = _make_sim_err_spin(
+        "sim_err_encoder_mm", "encoder noise (mm):",
+        _sim_error_profile["encoder_noise_mm"], 0.0, 50.0, 2,
+    )
+    sim_err_slip_turn = _make_sim_err_spin(
+        "sim_err_slip_turn", "turn slip:",
+        _sim_error_profile["slip_turn_extra"], 0.0, 2.0, 3,
+    )
+    sim_err_otos_linear = _make_sim_err_spin(
+        "sim_err_otos_linear", "OTOS linear noise:",
+        _sim_error_profile["otos_linear_noise"], 0.0, 2.0, 3,
+    )
+    sim_err_otos_yaw = _make_sim_err_spin(
+        "sim_err_otos_yaw", "OTOS yaw noise:",
+        _sim_error_profile["otos_yaw_noise"], 0.0, 2.0, 3,
+    )
+
+    sim_errors_apply_btn = QPushButton("Apply")
+    sim_errors_apply_btn.setObjectName("sim_errors_apply_btn")
+    sim_errors_layout.addWidget(sim_errors_apply_btn)
+
+    def _on_sim_errors_apply() -> None:
+        """Save the Sim Errors fields and, if connected to Sim, apply live."""
+        profile = {
+            "encoder_noise_mm": sim_err_encoder_mm.value(),
+            "slip_turn_extra": sim_err_slip_turn.value(),
+            "otos_linear_noise": sim_err_otos_linear.value(),
+            "otos_yaw_noise": sim_err_otos_yaw.value(),
+        }
+        sim_prefs.save_sim_error_profile(profile)
+        _append_log(
+            f"[INFO] Sim error profile saved "
+            f"(encoder_noise_mm={profile['encoder_noise_mm']}, "
+            f"slip_turn_extra={profile['slip_turn_extra']}, "
+            f"otos_linear_noise={profile['otos_linear_noise']}, "
+            f"otos_yaw_noise={profile['otos_yaw_noise']})"
+        )
+        transport = _state.get("transport")
+        if transport is not None and is_sim_transport(transport):
+            try:
+                transport.apply_error_profile(profile)
+            except Exception as exc:
+                _append_log(f"[ERROR] Failed to apply sim error profile live: {exc}")
+
+    sim_errors_apply_btn.clicked.connect(_on_sim_errors_apply)
+    left_layout.addWidget(sim_errors_group)
 
     left_layout.addStretch()
     splitter.addWidget(left_widget)
@@ -1166,6 +1252,9 @@ def _build_main_window():  # type: ignore[return]
         text, style = transport_name_to_mode_label(name)
         mode_label.setText(text)
         mode_label.setStyleSheet(style)
+        # Sim Errors panel only makes sense for the Sim transport (issue
+        # testgui-sim-error-profile-config).
+        sim_errors_group.setVisible(name == "Sim")
 
     transport_combo.currentIndexChanged.connect(_on_transport_changed)
     # Trigger once to set initial state.

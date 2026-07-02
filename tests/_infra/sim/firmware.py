@@ -234,6 +234,19 @@ class Sim:
         lib.sim_set_otos_yaw_noise.argtypes = [ctypes.c_void_p, ctypes.c_float]
         lib.sim_set_otos_yaw_noise.restype = None
 
+        # sim_set_encoder_noise(void* h, int side, float sigma_mm) — issue
+        # testgui-sim-error-profile-config: per-side encoder noise, exposed
+        # through the Sim Errors GUI panel. Guarded with hasattr() so a stale
+        # prebuilt lib (missing this symbol) degrades gracefully rather than
+        # failing import for every tests/simulation test.
+        if hasattr(lib, "sim_set_encoder_noise"):
+            lib.sim_set_encoder_noise.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_float,
+            ]
+            lib.sim_set_encoder_noise.restype = None
+
         # sim_get_otos_x / _y / _h → float (SimOdometer accumulated odom pose).
         # These read the observation model's reported pose (truth + configured
         # error), used by the 040-005 observation-only isolation matrix.
@@ -953,6 +966,27 @@ class Sim:
         """Set the SimOdometer linear-position noise sigma (fraction of arc)."""
         self._lib.sim_set_otos_linear_noise(
             self._h, ctypes.c_float(sigma_fraction))
+
+    def set_otos_yaw_noise(self, sigma_fraction: float) -> None:
+        """Set the SimOdometer yaw noise sigma (fraction)."""
+        self._lib.sim_set_otos_yaw_noise(
+            self._h, ctypes.c_float(sigma_fraction))
+
+    def set_encoder_noise(self, side: int, sigma_mm: float) -> None:
+        """Set per-side encoder noise sigma, in mm (side: 0=left, 1=right).
+
+        Raises ``AttributeError`` if the loaded lib predates this symbol
+        (see the ``hasattr`` guard in ``_setup_types``) — callers that must
+        tolerate a stale lib should catch that rather than assume this is
+        always a no-op.
+        """
+        if not hasattr(self._lib, "sim_set_encoder_noise"):
+            raise AttributeError(
+                "sim_set_encoder_noise is not present in the loaded "
+                "libfirmware_host — rebuild tests/_infra/sim/ to pick it up"
+            )
+        self._lib.sim_set_encoder_noise(
+            self._h, ctypes.c_int(side), ctypes.c_float(sigma_mm))
 
     def get_otos_pose(self) -> tuple[float, float, float]:
         """Return (x_mm, y_mm, h_rad) from the SimOdometer accumulated odom pose.
