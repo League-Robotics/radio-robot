@@ -1306,12 +1306,6 @@ def _build_main_window():  # type: ignore[return]
     # Trigger once to set initial state.
     _on_transport_changed(transport_combo.currentIndex())
 
-    def _apply_robot_geometry(cfg) -> None:
-        """Push the active robot's geometry into the trace model."""
-        tw = cfg.trackwidth if cfg is not None else None
-        if tw:
-            trace_model.set_trackwidth_mm(float(tw))
-
     def _on_robot_changed(index: int) -> None:
         """Load the robot selected in the dropdown (reloads on every change)."""
         path = robot_combo.itemData(index)
@@ -1322,15 +1316,12 @@ def _build_main_window():  # type: ignore[return]
         except Exception as exc:  # noqa: BLE001 — surface load errors in the log
             _append_log(f"[ERROR] Failed to load robot: {exc}")
             return
-        _apply_robot_geometry(cfg)
         _append_log(
             f"[INFO] Loaded robot: {cfg.robot_name} "
             f"({cfg.hardware_model}, trackwidth={cfg.trackwidth}mm)"
         )
 
     robot_combo.currentIndexChanged.connect(_on_robot_changed)
-    # Apply the initial selection's geometry (without rewriting the pointer).
-    _apply_robot_geometry(get_robot_config())
 
     # Wire Send buttons — must happen after _append_log / _state are in scope.
     for _btn, _spec, _getters in _row_send_getters:
@@ -1731,10 +1722,6 @@ def _build_main_window():  # type: ignore[return]
             # Sim transport — backed by ctypes firmware simulator.
             transport = SimTransport()
 
-        # Calibrate the encoder-odometry trace for this backend's turn scrub
-        # (the sim injects a large over-report; hardware reports ~0).
-        trace_model.set_turn_scrub_factor(getattr(transport, "turn_scrub_factor", 0.0))
-
         # Wire log callback.
         transport.on_log = _on_log_from_thread
 
@@ -1742,19 +1729,6 @@ def _build_main_window():  # type: ignore[return]
         # the bridge marshals them safely to the Qt main thread.
         transport.on_telemetry = _on_telemetry_thread_v2
         transport.on_truth = _on_truth_thread
-
-        # Wire the reset-pending signal (CR-09, sprint 066 ticket 004):
-        # Transport classifies reset-inducing outbound commands (D, ZERO enc,
-        # ZERO) at its command()/send() choke point and fires this BEFORE the
-        # command is sent, so TraceModel rebaselines its encoder trace from
-        # host-side knowledge instead of inferring a reset from telemetry
-        # magnitude (unreliable at slow relay TLM rates). Fires on the same
-        # thread as send()/command() (GUI thread for manual Send clicks,
-        # worker threads for tours/GOTO); notify_reset_pending() only mutates
-        # a single Optional[tuple] field, so no cross-thread marshalling is
-        # needed here (unlike on_telemetry/on_truth, which feed the Qt-owned
-        # TraceModel through queued bridges).
-        transport.on_reset_pending = trace_model.notify_reset_pending
 
         # Clear any stale trace data from a previous session.
         trace_model.clear()

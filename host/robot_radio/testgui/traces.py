@@ -9,7 +9,7 @@ Public surface
 TraceModel
     Holds four lists of (x_cm, y_cm) world points:
       - ``camera``  — ground-truth from aprilcam / SimTransport (green)
-      - ``encoder`` — wheel-odometry integrated host-side (orange)
+      - ``encoder`` — firmware encoder-only dead-reckoned pose (orange)
       - ``otos``    — raw OTOS sensor pose (cyan)
       - ``fused``   — firmware EKF/fused pose (magenta)
 
@@ -29,14 +29,17 @@ TraceModel
 
         where ``h0`` is the heading at the anchor pose (radians).
 
-        Delta/absolute interpretation per sensor:
-          - ``frame.enc`` — absolute cumulative mm values; difference from the
-            baseline (first enc reading after ``anchor()``/``clear()``) gives
-            the displacement, then converted to cm.
+        Delta/absolute interpretation per sensor (all three are absolute
+        firmware world-frame poses, rotated into the display frame by
+        ``_rw()`` — see 068-003 / architecture-update.md Decision 4):
+          - ``frame.encpose`` — absolute encoder-only dead-reckoned pose
+            (firmware ``Odometry::predict()``); difference from baseline
+            (first reading after ``anchor()``/``clear()``) gives the
+            firmware-frame displacement (cm).
           - ``frame.otos`` — absolute mm accumulation since OTOS was zeroed;
-            difference from baseline gives body-frame displacement (cm).
+            difference from baseline gives firmware-frame displacement (cm).
           - ``frame.pose`` — absolute fused mm accumulation; difference from
-            baseline gives body-frame displacement (cm).
+            baseline gives firmware-frame displacement (cm).
 
     ``feed_truth(x_cm, y_cm, yaw_rad)``
         Append a point to the ``camera`` trace directly from a world-cm pose.
@@ -44,14 +47,6 @@ TraceModel
     ``clear()``
         Reset all four lists and the accumulated baselines.  After ``clear()``,
         the anchor remains set; the next ``feed()`` re-establishes baselines.
-
-    ``notify_reset_pending()``
-        Force the next ``feed()``'s encoder handling to rebaseline without
-        integrating, preserving the accumulated heading/position.  Call this
-        the instant a reset-inducing command (``D``, ``ZERO enc``, ``ZERO``)
-        is sent — before the robot's reply/telemetry arrives.  Wired from
-        ``Transport.on_reset_pending`` in ``__main__.py``.  See CR-09 in
-        ``testgui-trace-correctness-slow-tlm-and-anchor-rotation.md``.
 
     ``enabled`` dict
         Per-trace on/off flag: ``model.enabled["camera"]``, ``model.enabled["encoder"]``,
@@ -91,22 +86,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from robot_radio.robot.protocol import TLMFrame
 
-# Wheel track width in mm (matches the ccw_square_50.py constant).
-_TRACK_MM = 128.0
-
-# Encoder-reset detection (CR-09).  The firmware zeros the wheel encoders at
-# the start of every distance/drive command (see ccw_square_50.py: "D resets
-# encoders -> rebaseline").  This used to be inferred from telemetry
-# magnitude (both counts reading near zero while the previous baseline was
-# substantially non-zero) — but over the relay, TLM arrives at ~1-2 Hz while
-# the robot moves 100-200 mm between frames, so the first post-reset frame
-# often lands well past any small epsilon and the reset is missed (see
-# testgui-trace-correctness-slow-tlm-and-anchor-rotation.md).  Resets are now
-# signalled explicitly, at command-send time, via
-# ``TraceModel.notify_reset_pending()`` (wired from
-# ``Transport.on_reset_pending`` — see transport.py's command classifier),
-# instead of guessed from data.
-
 
 class TraceModel:
     """Four-polyline world-cm pose accumulator.
@@ -125,7 +104,7 @@ class TraceModel:
     camera : list[tuple[float, float]]
         World-cm points from ground-truth (aprilcam / sim truth).
     encoder : list[tuple[float, float]]
-        World-cm points from wheel encoder odometry.
+        World-cm points from the firmware's encoder-only dead-reckoned pose.
     otos : list[tuple[float, float]]
         World-cm points from raw OTOS sensor.
     fused : list[tuple[float, float]]
@@ -162,57 +141,16 @@ class TraceModel:
         self._sh: float = 0.0
 
         # --- baselines: the first absolute reading after anchor()/clear() ---
-        # enc baseline: (left_mm, right_mm)
-        self._enc_baseline: tuple[int, int] | None = None
+        # encpose baseline: (x_mm, y_mm, hdg_cdeg)
+        self._encpose_baseline: tuple[int, int, int] | None = None
         # otos baseline: (x_mm, y_mm, hdg_cdeg)
         self._otos_baseline: tuple[int, int, int] | None = None
         # pose/fused baseline: (x_mm, y_mm, hdg_cdeg)
         self._pose_baseline: tuple[int, int, int] | None = None
 
-        # Accumulated encoder heading and xy displacement in body-frame (mm).
-        self._enc_h: float = 0.0   # accumulated encoder heading (radians)
-        self._enc_bx: float = 0.0  # accumulated body-frame x displacement (mm)
-        self._enc_by: float = 0.0  # accumulated body-frame y displacement (mm)
-
-        # Geometric trackwidth (mm) and turn-scrub factor combine into the
-        # effective trackwidth used to convert wheel-delta → heading.
-        self._geom_track_mm: float = _TRACK_MM
-        self._scrub_factor: float = 0.0
-        self._track_mm: float = _TRACK_MM  # effective = geom * (1 + scrub)
-
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
-    def _recompute_track(self) -> None:
-        self._track_mm = self._geom_track_mm * (1.0 + self._scrub_factor)
-
-    def set_trackwidth_mm(self, trackwidth_mm: float) -> None:
-        """Set the geometric trackwidth used for encoder heading integration.
-
-        Sourced from the active robot config (e.g. tovez=128, togov=126).
-        Falls back to the module default when not called.
-        """
-        self._geom_track_mm = float(trackwidth_mm)
-        self._recompute_track()
-
-    def set_turn_scrub_factor(self, factor: float) -> None:
-        """Calibrate the encoder heading integration for turn scrub.
-
-        Differential drives scrub during turns, so the wheel encoders
-        over-report travel: a commanded/actual turn of θ registers as
-        ``θ·(1+factor)`` of wheel-delta.  Raw integration with the geometric
-        trackwidth therefore over-rotates the encoder track by ``(1+factor)``.
-        Compensate by widening the effective trackwidth to
-        ``geometric·(1+factor)`` so ``heading = (dR-dL)/effective`` recovers the
-        true angle.
-
-        ``factor`` is a per-robot calibration constant (0 = perfect, no scrub).
-        In the simulator it equals the injected ``slip_turn_extra`` (0.26); on
-        hardware it comes from turn-odometry calibration and is typically small.
-        """
-        self._scrub_factor = float(factor)
-        self._recompute_track()
 
     def anchor(self, x_cm: float, y_cm: float, yaw_rad: float) -> None:
         """Set the initial world pose for the body-to-world transform.
@@ -248,9 +186,9 @@ class TraceModel:
         if not self._anchor_set:
             self.anchor(0.0, 0.0, 0.0)
 
-        # --- encoder odometry ---
-        if frame.enc is not None:
-            self._feed_encoder(frame.enc)
+        # --- encoder-only dead-reckoned pose (firmware-computed) ---
+        if frame.encpose is not None:
+            self._feed_encpose(frame.encpose)
 
         # --- OTOS odometry ---
         if frame.otos is not None:
@@ -285,42 +223,15 @@ class TraceModel:
         self.fused.clear()
         self._reset_baselines()
 
-    def notify_reset_pending(self) -> None:
-        """Signal that a reset-inducing command was just sent to the robot.
-
-        Called by the GUI's ``Transport.on_reset_pending`` hook the instant
-        it sends a command that zeroes the firmware's wheel encoders (``D``,
-        ``ZERO enc``, ``ZERO``) — BEFORE the robot's reply/telemetry lands.
-        Replaces the old magnitude-based reset heuristic
-        (``_ENC_RESET_EPS_MM``/``_ENC_RESET_BASE_MM``), which missed resets
-        when the first post-reset TLM frame arrived well past any small
-        epsilon (slow relay TLM: ~1-2 Hz while the robot travels 100-200 mm
-        between frames) — see
-        ``testgui-trace-correctness-slow-tlm-and-anchor-rotation.md`` (CR-09).
-
-        Forces ``_enc_baseline = None`` so the next ``_feed_encoder()`` call
-        establishes a fresh baseline from whatever value that frame carries,
-        no matter how large — no magnitude check.  Deliberately does NOT
-        touch ``_enc_h``/``_enc_bx``/``_enc_by``: the accumulated heading and
-        body-frame displacement must survive the reset (a reset only zeroes
-        the firmware's *encoder counters*, not the robot's actual pose), so
-        the encoder trace keeps following the robot's turns instead of
-        collapsing its heading back toward the anchor orientation.
-        """
-        self._enc_baseline = None
-
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _reset_baselines(self) -> None:
-        """Clear all sensor baselines and accumulated encoder state."""
-        self._enc_baseline = None
+        """Clear all sensor baselines."""
+        self._encpose_baseline = None
         self._otos_baseline = None
         self._pose_baseline = None
-        self._enc_h = 0.0
-        self._enc_bx = 0.0
-        self._enc_by = 0.0
 
     def _tw(self, bx_cm: float, by_cm: float) -> tuple[float, float]:
         """Body-to-world transform.
@@ -345,15 +256,15 @@ class TraceModel:
     def _rw(self, dx_cm: float, dy_cm: float, rot_rad: float) -> tuple[float, float]:
         """Rotate a firmware world-frame delta by ``rot_rad`` and add the anchor.
 
-        Used by ``_feed_otos``/``_feed_fused`` (CR-10), which must NOT reuse
-        ``_tw`` (the body-frame-only transform used by the encoder trace).
-        ``otos``/``pose`` deltas are already expressed in the firmware's own
-        (persistent, session-long) world frame — correct to render directly
-        only when that frame happens to be aligned with the GUI's anchor
-        frame, i.e. when the firmware pose was freshly zeroed at anchor time.
-        Anchoring mid-session (a non-zero firmware heading at baseline time)
-        breaks that assumption: the firmware frame is offset from the anchor
-        frame by a fixed rotation, ``rot_rad = anchor_yaw -
+        Used by ``_feed_encpose``/``_feed_otos``/``_feed_fused`` (CR-10),
+        which must NOT reuse ``_tw`` (the anchor-relative-only transform).
+        ``encpose``/``otos``/``pose`` deltas are already expressed in the
+        firmware's own (persistent, session-long) world frame — correct to
+        render directly only when that frame happens to be aligned with the
+        GUI's anchor frame, i.e. when the firmware pose was freshly zeroed at
+        anchor time. Anchoring mid-session (a non-zero firmware heading at
+        baseline time) breaks that assumption: the firmware frame is offset
+        from the anchor frame by a fixed rotation, ``rot_rad = anchor_yaw -
         firmware_heading_at_baseline`` (computed by the caller from the
         baseline's stored ``hdg_cdeg``), which must be applied to every
         subsequent delta to keep the trace aligned with the camera trace.
@@ -378,62 +289,32 @@ class TraceModel:
         wy = self._anchor_y + dx_cm * s + dy_cm * c
         return (wx, wy)
 
-    def _feed_encoder(self, enc: tuple[int, int]) -> None:
-        """Integrate encoder deltas and append a world point to the encoder trace.
+    def _feed_encpose(self, encpose: tuple[int, int, int]) -> None:
+        """Compute encoder-only pose displacement and append to the encoder trace.
 
-        Mirrors the host-side integration in ``ccw_square_50.py``.
+        Structurally identical to ``_feed_otos``/``_feed_fused`` (068-003):
+        ``frame.encpose`` is the firmware's own encoder-only dead-reckoned
+        pose (``Odometry::predict()``), already an absolute world-frame pose
+        — the host no longer re-integrates raw wheel counts host-side.
+        Rotates the firmware world-frame delta by
+        ``(anchor_yaw - firmware_heading_at_baseline)`` (CR-10) — see
+        ``_feed_otos``/``_rw``.
 
         Parameters
         ----------
-        enc:
-            (left_mm, right_mm) cumulative encoder values from TLMFrame.enc.
+        encpose:
+            (x_mm, y_mm, heading_cdeg) absolute encoder-only pose from
+            TLMFrame.encpose.
         """
-        if self._enc_baseline is None:
-            # First reading after clear()/anchor(), OR the first reading
-            # after an explicit notify_reset_pending() signal (CR-09) —
-            # establish a fresh baseline from whatever value this frame
-            # carries, no matter how large; no magnitude check.
-            #
-            # Deliberately do NOT zero _enc_h/_enc_bx/_enc_by here: after
-            # clear()/anchor() they are already zero (_reset_baselines()
-            # zeroed them, so this is a no-op in that case); after
-            # notify_reset_pending() they hold the heading/body-frame
-            # displacement accumulated so far, which must survive a
-            # command-boundary rebaseline — a reset only zeroes the
-            # firmware's *encoder counters*, not the robot's actual pose.
-            # Emit a point at the current (possibly non-anchor) pose so the
-            # trace stays continuous across the rebaseline.
-            self._enc_baseline = enc
-            self.encoder.append(self._tw(self._enc_bx / 10.0, self._enc_by / 10.0))
+        if self._encpose_baseline is None:
+            self._encpose_baseline = encpose
+            self.encoder.append(self._tw(0.0, 0.0))
             return
 
-        dL = enc[0] - self._enc_baseline[0]
-        dR = enc[1] - self._enc_baseline[1]
-
-        # Guard against large encoder jumps (e.g. a full ZERO enc pose command).
-        if abs(dL) > 5000 or abs(dR) > 5000:
-            self._enc_baseline = enc
-            # Don't reset body displacement — keep accumulating from here.
-            return
-
-        dC = (dL + dR) / 2.0
-        dT = (dR - dL) / self._track_mm
-
-        # Midpoint-arc integration (CR-15 item 5): use the heading at the
-        # midpoint of this step, not the post-increment heading, matching the
-        # convention used by PhysicsWorld::update, SimOdometer::tick, and
-        # Odometry::predict. Post-increment integration systematically
-        # over/under-rotates the accumulated (bx, by) on every turning step.
-        hMid = self._enc_h + dT * 0.5
-        self._enc_bx += dC * math.cos(hMid)
-        self._enc_by += dC * math.sin(hMid)
-        self._enc_h += dT
-
-        # Update baseline for incremental delta.
-        self._enc_baseline = enc
-
-        # Convert mm → cm for tw().
-        self.encoder.append(self._tw(self._enc_bx / 10.0, self._enc_by / 10.0))
+        dx_cm = (encpose[0] - self._encpose_baseline[0]) / 10.0
+        dy_cm = (encpose[1] - self._encpose_baseline[1]) / 10.0
+        rot = self._anchor_h - math.radians(self._encpose_baseline[2] / 100.0)
+        self.encoder.append(self._rw(dx_cm, dy_cm, rot))
 
     def _feed_otos(self, otos: tuple[int, int, int]) -> None:
         """Compute OTOS displacement and append to the otos trace.
