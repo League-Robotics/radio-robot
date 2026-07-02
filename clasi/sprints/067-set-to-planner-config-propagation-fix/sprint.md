@@ -1,7 +1,7 @@
 ---
 id: '067'
 title: SET-to-Planner config propagation fix
-status: roadmap
+status: planning-docs
 branch: sprint/067-set-to-planner-config-propagation-fix
 use-cases: []
 issues:
@@ -96,13 +96,24 @@ take effect on the robot).
 
 Before tickets can be created, all of the following must be true:
 
-- [ ] Sprint planning documents are complete (sprint.md, use cases, architecture)
-- [ ] Architecture review passed
-- [ ] Stakeholder has approved the sprint plan
+- [x] Sprint planning documents are complete (sprint.md, use cases, architecture)
+- [x] Architecture review passed (self-review APPROVE; gate recorded 2026-07-02)
+- [ ] Stakeholder has approved the sprint plan — **blocking**. The sprint is
+      parked in the `stakeholder-review` phase; `create_ticket` is hard-gated
+      until `record_gate_result(sprint_id="067", gate="stakeholder_approval",
+      result="passed")` is called and the sprint advances to `ticketing`.
+      `architecture-update.md`'s `## Open Questions` (5 items — most
+      notably OQ1: the OTOS hardware-scalar propagation gap is a real bug
+      being knowingly deferred out of this sprint) should be resolved as
+      part of this review.
 
 ## Tickets
 
 | # | Title | Depends On |
 |---|-------|------------|
+| [001](tickets/001-convert-planner-to-a-live-robotconfig-reference.md) | Convert Planner to a live RobotConfig reference | (none) |
+| [002](tickets/002-fix-drive-s-drvcfg-shadow-cache-for-trackwidth-and-otos-lag.md) | Fix Drive's `_drvCfg` shadow-cache for trackwidth and OTOS lag | (none) |
+| [003](tickets/003-add-a-noise-only-ekf-setnoise-path-wire-ekfrhead-through-it.md) | Add a noise-only EKF `setNoise()` path; wire `ekfRHead` through it | (none) |
+| [004](tickets/004-set-to-consumer-propagation-regression-sweep-and-full-suite-gate.md) | SET-to-consumer propagation regression sweep + final full-suite gate | 001, 002, 003 |
 
 Tickets execute serially in the order listed.

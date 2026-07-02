@@ -1,7 +1,12 @@
 ---
-status: pending
+status: in-progress
 severity: medium
 sprint: '067'
+tickets:
+- 067-001
+- 067-002
+- 067-003
+- 067-004
 ---
 
 # SET silently fails to propagate unannotated config keys to the Planner — rotSlip (and others) frozen at boot-time defaults
