@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Convert Planner to a live RobotConfig reference
-status: open
+status: done
 use-cases:
 - SUC-001
 depends-on: []
@@ -59,46 +59,46 @@ Planner fields).
 
 ## Acceptance Criteria
 
-- [ ] `source/superstructure/Planner.h`: `RobotConfig _cfg;` (owned value)
+- [x] `source/superstructure/Planner.h`: `RobotConfig _cfg;` (owned value)
       changed to `const RobotConfig& _cfg;` (reference). Header comment
       updated to describe the new live-reference contract.
-- [ ] `source/superstructure/Planner.cpp`: constructor's `_cfg(cfg)`
+- [x] `source/superstructure/Planner.cpp`: constructor's `_cfg(cfg)`
       member-init is unchanged (reference members bind with the same
       syntax as value members). `Planner::configure()` loses the lines
       (~634-645 today) that assign into `_cfg.<field>` — these would not
       compile against a `const`-qualified reference and are no longer
       needed since `_cfg` is always current.
-- [ ] `_planCfg = cfg;` (the separate, still-owned `msg::PlannerConfig`
+- [x] `_planCfg = cfg;` (the separate, still-owned `msg::PlannerConfig`
       member written by `configure()`) is retained unchanged — it is
       confirmed-dead (never read anywhere) but out of this ticket's scope
       to remove (see architecture-update.md Design Rationale Decision 4;
       flagged as Open Question 2 for a future cleanup sprint).
-- [ ] `source/control/PlannerBegin.cpp` requires no code changes — verify
+- [x] `source/control/PlannerBegin.cpp` requires no code changes — verify
       by inspection that every `_cfg.<field>` read there is read-only.
-- [ ] `Robot`'s member declaration order still constructs `config` before
+- [x] `Robot`'s member declaration order still constructs `config` before
       `planner` (already required for `Drive`'s existing reference to be
       valid) — verify no reordering is needed.
-- [ ] `tests/simulation/unit/test_rt_slip.py`: `_arc_after_rt()`'s bare
+- [x] `tests/simulation/unit/test_rt_slip.py`: `_arc_after_rt()`'s bare
       `sim.send_command("ZERO")` changed to `sim.send_command("ZERO enc")`,
       with the reply checked (`assert "OK" in reply`) so a future rejected
       `ZERO` fails loudly instead of silently degrading into an
       accumulation artifact.
-- [ ] `test_rt_slip.py`'s three existing tests pass for the right reason:
+- [x] `test_rt_slip.py`'s three existing tests pass for the right reason:
       with `_cfg` live, `SET rotSlip=<a>` vs `SET rotSlip=<b>` genuinely
       produce different RT arcs (confirm by temporarily asserting the arcs
       differ by more than a small epsilon, not just that the test doesn't
       error).
-- [ ] `SET rotSlip=<x>` measurably changes the RT 9000 arc target on the
+- [x] `SET rotSlip=<x>` measurably changes the RT 9000 arc target on the
       next invocation, isolated from any prior RT call.
-- [ ] `SET tw=<x>`, `SET vWheelMax=<x>`, `SET rotGainPos=<x>`,
+- [x] `SET tw=<x>`, `SET vWheelMax=<x>`, `SET rotGainPos=<x>`,
       `SET rotGainNeg=<x>` each change Planner's use of that value without
       requiring any other key to be SET in the same command.
-- [ ] `SET ctrlPeriod=<x>` changes Planner's own tick-throttle cadence.
-- [ ] `test_059_config_routing.py::test_set_amax_routes_to_planner`
+- [x] `SET ctrlPeriod=<x>` changes Planner's own tick-throttle cadence.
+- [x] `test_059_config_routing.py::test_set_amax_routes_to_planner`
       continues to pass unchanged (it asserts the projected
       `PlannerConfig.a_max` reflects the SET value via the still-live
       whitelist path, which remains true after this change).
-- [ ] Full default sim/unit test suite green.
+- [x] Full default sim/unit test suite green.
 
 ## Testing
 
