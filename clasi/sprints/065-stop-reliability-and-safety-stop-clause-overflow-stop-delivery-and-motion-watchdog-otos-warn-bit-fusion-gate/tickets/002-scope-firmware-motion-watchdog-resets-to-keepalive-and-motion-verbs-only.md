@@ -1,9 +1,11 @@
 ---
 id: '002'
 title: Scope firmware motion-watchdog resets to keepalive and motion verbs only
-status: open
-use-cases: [SUC-003]
-depends-on: ['001']
+status: in-progress
+use-cases:
+- SUC-003
+depends-on:
+- '001'
 github-issue: ''
 issue: stop-delivery-and-keepalive-watchdog-architecture.md
 completes_issue: true
@@ -39,38 +41,38 @@ issue archives once all four are done.
 
 ## Acceptance Criteria
 
-- [ ] `source/types/CommandTypes.h` gains `static constexpr uint8_t
+- [x] `source/types/CommandTypes.h` gains `static constexpr uint8_t
       CMD_MOTION_WATCHDOG = 2;` alongside the existing `CMD_ACCESS_HARDWARE`.
-- [ ] Every motion-verb descriptor in `source/commands/MotionCommands.cpp`
+- [x] Every motion-verb descriptor in `source/commands/MotionCommands.cpp`
       (`S`, `T`, `D`, `G`, `R`, `TURN`, `RT`, `VW`, `_VW`, `X`, `STOP`) and
       the `+` descriptor in `source/commands/SystemCommands.cpp` have
       `CMD_MOTION_WATCHDOG` OR'd into their `flags` value. No other
       descriptor changes.
-- [ ] `source/commands/CommandProcessor.{h,cpp}` gains a private
+- [x] `source/commands/CommandProcessor.{h,cpp}` gains a private
       `_lastDispatchFlags` member (set in `dispatchTable()` immediately after
       a successful parse, before the enqueue-vs-immediate-dispatch branch)
       and a public accessor `bool lastCommandResetsWatchdog() const`.
-- [ ] `source/robot/LoopScheduler.cpp`'s `runCommsIn` (both the serial and
+- [x] `source/robot/LoopScheduler.cpp`'s `runCommsIn` (both the serial and
       radio branches) and `run_test` replace their unconditional
       `resetWatchdog(now)` with `if (cmd.lastCommandResetsWatchdog())
       resetWatchdog(now);`.
-- [ ] `tests/_infra/sim/sim_api.cpp`'s `sim_command()` applies the identical
+- [x] `tests/_infra/sim/sim_api.cpp`'s `sim_command()` applies the identical
       gate to its `s->_ts.watchdogMs = ...` line, reading the same
       `CommandProcessor` classification (no separate/duplicated
       "which commands count" logic in the sim).
-- [ ] `SystemCommands.cpp`'s `handleKeepalive` is left unchanged (its own
+- [x] `SystemCommands.cpp`'s `handleKeepalive` is left unchanged (its own
       explicit `resetWatchdog` call is now redundant-but-harmless with the
       gate for the `+` line specifically).
-- [ ] New sim test: an active open-ended `VW` session that receives only
+- [x] New sim test: an active open-ended `VW` session that receives only
       `GET`/`SNAP` traffic (no `+`, no fresh `VW`) for longer than
       `sTimeoutMs` safety-stops.
-- [ ] Regression: an active `VW` session kept alive by `+` alone (no `VW`
+- [x] Regression: an active `VW` session kept alive by `+` alone (no `VW`
       resend) does NOT trip the watchdog — narrowing the classification must
       not break the legitimate keepalive path.
-- [ ] `tests/simulation/unit/test_watchdog_exemption.py` stays green (the
+- [x] `tests/simulation/unit/test_watchdog_exemption.py` stays green (the
       TIME-stop exemption for `T`/`D`/`G`/`TURN`/`RT` is unaffected by this
       change).
-- [ ] Full default sim suite green.
+- [x] Full default sim suite green.
 
 ## Implementation Plan
 

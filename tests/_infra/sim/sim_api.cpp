@@ -293,12 +293,19 @@ int sim_command(void* h, const char* line, char* out_buf, int out_len)
     s->cmd.dequeueOne(s->_queue);  // dispatch the command
     s->cmd.dequeueOne(s->_queue);  // dispatch any VW pushed by a converter
 
-    // Reset system watchdog on every inbound command — mirrors LoopScheduler's
-    // resetWatchdog(now). Reset to the CURRENT sim time so keepalives actually
-    // extend the window: the watchdog fires sTimeoutMs after the LAST command,
-    // not the first. g_sim_now_ms==0 (a command before the first tick) maps to
-    // the sentinel 1 so the timer stays armed (0 means "disarmed / none yet").
-    s->_ts.watchdogMs = (g_sim_now_ms == 0) ? 1u : g_sim_now_ms;
+    // Reset system watchdog only when the inbound command is classified
+    // CMD_MOTION_WATCHDOG (keepalive '+' or a motion verb) — mirrors
+    // LoopScheduler's gated resetWatchdog(now). GET/SNAP/... no longer reset
+    // it. Reads the same CommandProcessor classification set by process()'s
+    // dispatchTable() (no separate/duplicated "which commands count" logic
+    // here). Reset to the CURRENT sim time so keepalives actually extend the
+    // window: the watchdog fires sTimeoutMs after the LAST qualifying
+    // command, not the first. g_sim_now_ms==0 (a command before the first
+    // tick) maps to the sentinel 1 so the timer stays armed (0 means
+    // "disarmed / none yet").
+    if (s->cmd.lastCommandResetsWatchdog()) {
+        s->_ts.watchdogMs = (g_sim_now_ms == 0) ? 1u : g_sim_now_ms;
+    }
 
     // Copy the synchronous reply into the caller's buffer.
     int n = s->replyStore.written;

@@ -58,14 +58,14 @@ static void runCommsIn(LoopScheduler& sched, uint32_t now)
         sched.activeFn  = serialReply;
         sched.activeCtx = &serial;
         cmd.process(buf, serialReply, &serial);
-        sched.resetWatchdog(now);
+        if (cmd.lastCommandResetsWatchdog()) sched.resetWatchdog(now);
     }
 
     while (radio.poll(buf, sizeof(buf))) {
         sched.activeFn  = radioReply;
         sched.activeCtx = &radio;
         cmd.process(buf, radioReply, &radio);
-        sched.resetWatchdog(now);
+        if (cmd.lastCommandResetsWatchdog()) sched.resetWatchdog(now);
     }
 
     // D10 channel binding (028-005): derive the TLM fn from the bound ctx.
@@ -143,7 +143,7 @@ void LoopScheduler::run_test()
         // 1. Drain serial input (no radio — hardware-free loop).
         while (serial.readLine(buf, sizeof(buf))) {
             _cmd.process(buf, serialReply, &serial);
-            resetWatchdog(_uBit.systemTime());
+            if (_cmd.lastCommandResetsWatchdog()) resetWatchdog(_uBit.systemTime());
         }
 
         // 2. Drain queue, filtering hardware commands.

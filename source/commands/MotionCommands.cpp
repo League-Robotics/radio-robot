@@ -1360,16 +1360,16 @@ std::vector<CommandDescriptor> getMotionCommands(MotionCtx* ctx)
     ctx->vwDesc.flags      = CMD_ACCESS_HARDWARE;
 
     return {
-        makeCmd(      "S",    parseS,    handleS,    ctx, "badarg"),                                        // set wheel speeds (mm/s)
-        makeCmd(      "T",    parseT,    handleT,    ctx, "badarg"),                                        // timed drive (ms)
-        makeCmd(      "D",    parseD,    handleD,    ctx, "badarg"),                                        // distance drive (mm)
-        makeSchemaCmd("G",    &gSchema,  handleG,    ctx, "badarg"),                                        // goto encoder position
-        makeCmd(      "R",    parseR,    handleR,    ctx, "badarg"),                                        // arc drive: R <speed> <radius_mm>
-        makeCmd(      "TURN", parseTURN, handleTURN, ctx, "badarg"),                                        // spin in place to absolute heading
-        makeSchemaCmd("RT",   &rtSchema, handleRT,   ctx, "badarg"),                                        // relative spin by <cdeg>
-        makeCmd(      "VW",   parseVW,   handleVW,   ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // body-twist velocity
-        makeCmd(      "_VW",  parse_VW,  handle_VW,  ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // raw velocity (no ramp)
-        makeSchemaCmd("X",    &xSchema,  handleX,    ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // stop / soft stop
-        makeCmd(      "STOP", nullptr,   handleSTOP, ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // hard stop
+        makeCmd(      "S",    parseS,    handleS,    ctx, "badarg", ForceReply::NONE, CMD_MOTION_WATCHDOG),                        // set wheel speeds (mm/s)
+        makeCmd(      "T",    parseT,    handleT,    ctx, "badarg", ForceReply::NONE, CMD_MOTION_WATCHDOG),                        // timed drive (ms)
+        makeCmd(      "D",    parseD,    handleD,    ctx, "badarg", ForceReply::NONE, CMD_MOTION_WATCHDOG),                        // distance drive (mm)
+        makeSchemaCmd("G",    &gSchema,  handleG,    ctx, "badarg", ForceReply::NONE, CMD_MOTION_WATCHDOG),                        // goto encoder position
+        makeCmd(      "R",    parseR,    handleR,    ctx, "badarg", ForceReply::NONE, CMD_MOTION_WATCHDOG),                        // arc drive: R <speed> <radius_mm>
+        makeCmd(      "TURN", parseTURN, handleTURN, ctx, "badarg", ForceReply::NONE, CMD_MOTION_WATCHDOG),                        // spin in place to absolute heading
+        makeSchemaCmd("RT",   &rtSchema, handleRT,   ctx, "badarg", ForceReply::NONE, CMD_MOTION_WATCHDOG),                        // relative spin by <cdeg>
+        makeCmd(      "VW",   parseVW,   handleVW,   ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE | CMD_MOTION_WATCHDOG), // body-twist velocity
+        makeCmd(      "_VW",  parse_VW,  handle_VW,  ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE | CMD_MOTION_WATCHDOG), // raw velocity (no ramp)
+        makeSchemaCmd("X",    &xSchema,  handleX,    ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE | CMD_MOTION_WATCHDOG), // stop / soft stop
+        makeCmd(      "STOP", nullptr,   handleSTOP, ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE | CMD_MOTION_WATCHDOG), // hard stop
     };
 }
