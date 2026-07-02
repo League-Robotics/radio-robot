@@ -104,8 +104,8 @@ static void handlePing(const ArgList& /*args*/, const char* corrId,
 // ECHO — variadic: all tokens passed through as STR args.
 static const ArgSchema echoSchema = { nullptr, 0, 0, true, nullptr };
 
-// STREAM — variadic: period or "fields=..." tokens passed as STR args.
-static const ArgSchema streamSchema = { nullptr, 0, 0, true, nullptr };
+// STREAM — custom parseFn (not a plain variadic ArgSchema): see parseStream
+// below, which reconstructs "fields=<csv>" from kvs[] rather than tokens[].
 
 // SAFE — variadic: "off"/"on"/numeric tokens passed as STR args.
 static const ArgSchema safeSchema = { nullptr, 0, 0, true, nullptr };
@@ -344,8 +344,53 @@ static void handleZero(const ArgList& args, const char* corrId,
 }
 
 // ---------------------------------------------------------------------------
+// parseStream -- custom parseFn for STREAM (068-001).
+//
+// STREAM used to be registered with a plain variadic ArgSchema, which copies
+// tokens[] into args[].sval verbatim. That is broken for "STREAM fields=...":
+// CommandProcessor::parseKV() runs BEFORE dispatch and rewrites any
+// "key=value" token IN PLACE, truncating it at the '=' (tokens[i] becomes
+// just "fields"; the value only survives separately in kvs[i].value). A
+// plain variadic schema therefore never sees the reconstructed
+// "fields=<csv>" string handleStream's own "fields=" prefix scan expects --
+// this went undetected because every prior test exercised handleStream with
+// a hand-built ArgList, never through the real tokenize+parseKV+dispatch
+// pipeline. Fix: reconstruct "fields=<value>" from kvs[] here, mirroring the
+// parseSet idiom already used for SET in ConfigCommands.cpp. Falls back to
+// the original variadic-token behaviour (positional period arg) when no
+// "fields" kv is present.
+// ---------------------------------------------------------------------------
+static ParseResult parseStream(const char* const* tokens, int ntokens,
+                               const KVPair* kvs, int nkv)
+{
+    ParseResult r;
+    r.ok = true;
+
+    const KVPair* fieldsKv = kvFind(kvs, nkv, "fields");
+    if (fieldsKv != nullptr) {
+        char body[64];
+        snprintf(body, sizeof(body), "fields=%s", fieldsKv->value ? fieldsKv->value : "");
+        argStr(r.args.args[0], body);
+        r.args.count = 1;
+        r.args.suppliedCount = 1;
+        return r;
+    }
+
+    // No fields= kv -- replicate the original variadic-schema behaviour
+    // (each token copied verbatim as a STR arg; used for "STREAM <ms>").
+    int n = (ntokens < MAX_ARGS) ? ntokens : MAX_ARGS;
+    r.args.count = n;
+    r.args.suppliedCount = n;
+    for (int i = 0; i < n; ++i) {
+        argStr(r.args.args[i], tokens[i]);
+    }
+    return r;
+}
+
+// ---------------------------------------------------------------------------
 // STREAM -- configure telemetry stream period and/or field mask.
-//   prefix "STREAM"; variadic ArgSchema; passes period int or fields= string.
+//   prefix "STREAM"; custom parseFn (parseStream); passes period int or
+//   fields= string.
 //   Reply: OK stream period=<ms> | OK stream fields=<csv>
 // ---------------------------------------------------------------------------
 
@@ -360,7 +405,7 @@ static void handleStream(const ArgList& args, const char* corrId,
         const char* sv = args.args[i].sval;
         if (strncmp(sv, "fields=", 7) == 0) {
             const char* fp = sv + 7;
-            uint8_t mask = 0;
+            uint16_t mask = 0;
             char fbuf[64];
             int flen = 0;
             for (const char* c = fp; ; ++c) {
@@ -377,6 +422,7 @@ static void handleStream(const ArgList& args, const char* corrId,
                     if (strcmp(fbuf, "twist")   == 0) mask |= TLM_FIELD_TWIST;
                     if (strcmp(fbuf, "otos")    == 0) mask |= TLM_FIELD_OTOS;
                     if (strcmp(fbuf, "ekf_rej") == 0) mask |= TLM_FIELD_EKFREJ;
+                    if (strcmp(fbuf, "encpose") == 0) mask |= TLM_FIELD_ENCPOSE;
                     flen = 0;
                     if (*c == '\0') break;
                 }
@@ -387,20 +433,21 @@ static void handleStream(const ArgList& args, const char* corrId,
             char body[80];
             int bpos = 0;
             bool needComma = false;
-            const struct { uint8_t bit; const char* name; } kFieldNames[] = {
-                { TLM_FIELD_ENC,    "enc"     },
-                { TLM_FIELD_POSE,   "pose"    },
-                { TLM_FIELD_VEL,    "vel"     },
-                { TLM_FIELD_LINE,   "line"    },
-                { TLM_FIELD_COLOR,  "color"   },
-                { TLM_FIELD_TWIST,  "twist"   },
-                { TLM_FIELD_OTOS,   "otos"    },
-                { TLM_FIELD_EKFREJ, "ekf_rej" },
+            const struct { uint16_t bit; const char* name; } kFieldNames[] = {
+                { TLM_FIELD_ENC,     "enc"     },
+                { TLM_FIELD_POSE,    "pose"    },
+                { TLM_FIELD_VEL,     "vel"     },
+                { TLM_FIELD_LINE,    "line"    },
+                { TLM_FIELD_COLOR,   "color"   },
+                { TLM_FIELD_TWIST,   "twist"   },
+                { TLM_FIELD_OTOS,    "otos"    },
+                { TLM_FIELD_EKFREJ,  "ekf_rej" },
+                { TLM_FIELD_ENCPOSE, "encpose" },
             };
             int brem = (int)sizeof(body);
             int bw = snprintf(body + bpos, (size_t)brem, "fields=");
             if (bw > 0 && bw < brem) { bpos += bw; brem -= bw; }
-            for (int fi = 0; fi < 8 && brem > 1; ++fi) {
+            for (int fi = 0; fi < 9 && brem > 1; ++fi) {
                 if (robot->config.tlmFields & kFieldNames[fi].bit) {
                     if (needComma) { body[bpos++] = ','; --brem; }
                     bw = snprintf(body + bpos, (size_t)brem, "%s", kFieldNames[fi].name);
@@ -1082,7 +1129,7 @@ std::vector<CommandDescriptor> Robot::buildCommandTable(
     cmds.push_back(makeCmd("BAUD",   parseBaud, handleBaud,   sysCtxPtr, "badarg")); // set USB serial baud rate
     // Schema-driven commands: variadic STR for ECHO/STREAM/SAFE; positional INT for SI/RF.
     cmds.push_back(makeSchemaCmd("ECHO",   &echoSchema,   handleEcho,   sysCtxPtr, "badarg")); // echo tokens back
-    cmds.push_back(makeSchemaCmd("STREAM", &streamSchema, handleStream, sysCtxPtr, "badarg")); // start/stop periodic TLM stream
+    cmds.push_back(makeCmd("STREAM", parseStream, handleStream, sysCtxPtr, "badarg")); // start/stop periodic TLM stream
     cmds.push_back(makeSchemaCmd("SAFE",   &safeSchema,   handleSafe,   sysCtxPtr, "badarg")); // enable/disable safety watchdog + set timeout
     cmds.push_back(makeSchemaCmd("SI",     &siSchema,     handleSI,     sysCtxPtr, "badarg")); // set odometry world pose (x_mm y_mm h_cdeg)
     cmds.push_back(makeSchemaCmd("RF",     &rfSchema,     handleRf,     sysCtxPtr, "badarg")); // set radio channel

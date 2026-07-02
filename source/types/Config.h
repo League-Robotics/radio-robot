@@ -4,15 +4,16 @@
 // ---------------------------------------------------------------------------
 // Telemetry field bitmask constants (used in RobotConfig::tlmFields)
 // ---------------------------------------------------------------------------
-constexpr uint8_t TLM_FIELD_ENC   = (1u << 0);  // enc=l,r
-constexpr uint8_t TLM_FIELD_POSE  = (1u << 1);  // pose=x,y,h
-constexpr uint8_t TLM_FIELD_VEL   = (1u << 2);  // vel=vL,vR  (per-wheel mm/s, activated Sprint 010)
-constexpr uint8_t TLM_FIELD_LINE  = (1u << 3);  // line=4ch
-constexpr uint8_t TLM_FIELD_COLOR = (1u << 4);  // color=4ch
-constexpr uint8_t TLM_FIELD_TWIST = (1u << 5);  // twist=v,omega  (fused body velocity, Sprint 023)
-constexpr uint8_t TLM_FIELD_OTOS   = (1u << 6);  // otos=x,y,h  (raw OTOS pose mm/mm/cdeg, Sprint 023 bench)
-constexpr uint8_t TLM_FIELD_EKFREJ = (1u << 7);  // ekf_rej=<n> (cumulative EKF rejection count, Sprint 024)
-constexpr uint8_t TLM_FIELD_ALL    = 0xFFu;      // all fields (default)
+constexpr uint16_t TLM_FIELD_ENC   = (1u << 0);  // enc=l,r
+constexpr uint16_t TLM_FIELD_POSE  = (1u << 1);  // pose=x,y,h
+constexpr uint16_t TLM_FIELD_VEL   = (1u << 2);  // vel=vL,vR  (per-wheel mm/s, activated Sprint 010)
+constexpr uint16_t TLM_FIELD_LINE  = (1u << 3);  // line=4ch
+constexpr uint16_t TLM_FIELD_COLOR = (1u << 4);  // color=4ch
+constexpr uint16_t TLM_FIELD_TWIST = (1u << 5);  // twist=v,omega  (fused body velocity, Sprint 023)
+constexpr uint16_t TLM_FIELD_OTOS   = (1u << 6);  // otos=x,y,h  (raw OTOS pose mm/mm/cdeg, Sprint 023 bench)
+constexpr uint16_t TLM_FIELD_EKFREJ = (1u << 7);  // ekf_rej=<n> (cumulative EKF rejection count, Sprint 024)
+constexpr uint16_t TLM_FIELD_ENCPOSE = (1u << 8); // encpose=x,y,h  (encoder-only dead-reckoned pose mm/mm/cdeg, Sprint 068)
+constexpr uint16_t TLM_FIELD_ALL    = 0x1FFu;    // all fields (default) -- widened uint8_t->uint16_t, Sprint 068
 
 struct RobotConfig {
     // Motor forward-direction signs: +1 = CW is forward, -1 = CCW is forward.
@@ -169,9 +170,11 @@ struct RobotConfig {
     int32_t tlmPeriodMs; //FIXME should not have units in name
 
     // Telemetry field-subscription bitmask. Set via STREAM fields=...
-    // Bit 0 = enc, Bit 1 = pose, Bit 2 = vel, Bit 3 = line, Bit 4 = color.
-    // 0xFF = all fields (default).
-    uint8_t tlmFields;
+    // Bit 0 = enc, Bit 1 = pose, Bit 2 = vel, Bit 3 = line, Bit 4 = color,
+    // Bit 5 = twist, Bit 6 = otos, Bit 7 = ekf_rej, Bit 8 = encpose.
+    // uint16_t (Sprint 068: widened from uint8_t -- all 8 original bits
+    // were already assigned). TLM_FIELD_ALL (0x1FF) = all fields (default).
+    uint16_t tlmFields;
 
     // One-shot SNAP pending flag. Set by SNAP command; cleared after one TLM frame.
     bool tlmSnapPending;

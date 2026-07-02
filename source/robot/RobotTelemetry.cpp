@@ -79,8 +79,10 @@ int Robot::buildTlmFrame(char* buf, int len)
                      (unsigned long)t_sample, modeChar, (unsigned)_tlmSeq++);
     if (n > 0 && n < rem) { pos += n; rem -= n; }
     // (064-004) wedge=<L>,<R> is unconditional -- NOT gated by
-    // config.tlmFields (the uint8_t bitmask's 8 bits are all already
-    // assigned; see architecture-update.md Design Rationale 2). The wedge
+    // config.tlmFields (at the time, the uint8_t bitmask's 8 bits were all
+    // already assigned; tlmFields widened to uint16_t in Sprint 068, but
+    // wedge= stays unconditional by design -- see architecture-update.md
+    // Design Rationale 2 for 064-004's original rationale). The wedge
     // detector's only prior output, EVT enc_wedged, is a latched one-shot
     // event that a relay/radio link can drop -- this gives a host a
     // per-frame, poll-safe view of the same latch. L-then-R wire order
@@ -96,6 +98,20 @@ int Robot::buildTlmFrame(char* buf, int len)
     if (config.tlmFields & TLM_FIELD_POSE) {
         n = snprintf(buf + pos, (size_t)rem, " pose=%d,%d,%d",
                      (int)pose_x, (int)pose_y, (int)pose_h);
+        if (n > 0 && n < rem) { pos += n; rem -= n; }
+    }
+    // 068-001: encpose=<x>,<y>,<h> -- encoder-only dead-reckoned world pose
+    // (mm, mm, centidegrees), from ds.encoder.pose (PoseEstimate maintained by
+    // Odometry::predict() since Sprint 047; copied through Drive::state() via
+    // copyPE(_hw.encoder, _state.encoder), Drive.cpp:206 -- unchanged this
+    // sprint). No freshness/staleness gate -- unlike otos=/line=/color=, the
+    // encoder pose updates unconditionally every control tick and is never
+    // "stale" the way an external hardware reading can be.
+    if (config.tlmFields & TLM_FIELD_ENCPOSE) {
+        n = snprintf(buf + pos, (size_t)rem, " encpose=%d,%d,%d",
+                     (int)ds.encoder.pose.x,
+                     (int)ds.encoder.pose.y,
+                     (int)(ds.encoder.pose.h * kRadToCdeg));
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
     if (haveVel) {
@@ -205,7 +221,7 @@ void Robot::telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx)
 
     if ((now_ms - _lastTlmMs) < effectivePeriod) return;
 
-    char tlmBuf[160];
+    char tlmBuf[256];
     buildTlmFrame(tlmBuf, sizeof(tlmBuf));
     fn(tlmBuf, ctx);
     _lastTlmMs = now_ms;
