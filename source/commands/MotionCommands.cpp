@@ -705,8 +705,13 @@ static void handleT(const ArgList& args, const char* corrId,
 //
 // Builds a GoalRequest with goal=DISTANCE (preserving the atomic encoder reset
 // via robot->distanceDrive in Superstructure::requestGoal), leftMms/rightMms
-// as integer wheel speeds, targetMm=mm, stops[0]=makeDistanceStop(mm), and
-// doneLabel="EVT done D".  Eliminates the stringify/inverse round-trip.
+// as integer wheel speeds, targetMm=mm, and doneLabel="EVT done D".
+// Eliminates the stringify/inverse round-trip. gr.stops[] carries only
+// wire-supplied stop=/sensor= clauses (065-001 / CR-01) — the primary
+// DISTANCE+TIME stop pair is installed internally by distanceDrive() ->
+// beginDistance(), NOT pre-populated here (that would double-book it, since
+// Superstructure::requestGoal's DISTANCE case re-adds every entry of
+// gr.stops[] on top of what beginDistance() already installed).
 //
 // Architecture note: Goal::DISTANCE is KEPT (not collapsed to VELOCITY) precisely
 // to preserve the atomic encoder reset (beginDistance + resetEncoders) that
@@ -756,7 +761,14 @@ static void handleD(const ArgList& args, const char* corrId,
         gr.rightMms = (float)r;
         gr.targetMm = (int32_t)mm;
         gr.doneLabel = "EVT done D";
-        gr.stops[gr.nStops++] = makeDistanceStop((float)mm);
+        // NOTE (065-001 / CR-01): do NOT pre-populate gr.stops[0] with a
+        // makeDistanceStop(mm) here. distanceDrive() -> beginDistance() already
+        // installs its own DISTANCE + TIME stops internally; Superstructure::
+        // requestGoal's DISTANCE case re-adds every entry of gr.stops[] on top
+        // of those, so a pre-added stop here double-books the primary DISTANCE
+        // condition (wasted on plain D; overflows kMaxStopConds once 2+ wire
+        // clauses are also supplied). gr.stops[] carries only wire-supplied
+        // stop=/sensor= clauses, starting at index 0.
 
         // Pack any additional stop= / sensor= clauses from args[3..].
         for (int i = 3; i < args.count && gr.nStops < MotionCommand::kMaxStopConds; ++i) {

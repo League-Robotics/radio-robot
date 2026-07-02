@@ -2,8 +2,9 @@
 id: '001'
 title: Fix D-command stop-clause double-booking and make addStop overflow a recoverable
   ERR
-status: open
-use-cases: [SUC-001]
+status: done
+use-cases:
+- SUC-001
 depends-on: []
 github-issue: ''
 issue: stop-clause-overflow-aborts-process.md
@@ -39,17 +40,17 @@ See `architecture-update.md` Step 4-5 item 1 and Design Rationale Decision 1
 
 ## Acceptance Criteria
 
-- [ ] `handleD` (`source/commands/MotionCommands.cpp`) no longer
+- [x] `handleD` (`source/commands/MotionCommands.cpp`) no longer
       pre-populates `gr.stops[0]` with `makeDistanceStop(mm)`; `gr.stops[]`
       carries only wire-supplied `stop=`/`sensor=` clauses, starting at
       index 0.
-- [ ] A plain `D <l> <r> <mm>` (no extra clauses) installs exactly 2 stop
+- [x] A plain `D <l> <r> <mm>` (no extra clauses) installs exactly 2 stop
       conditions (`DISTANCE` + the internal `TIME` safety net) — no
       duplicate.
-- [ ] `MotionCommand::addStop()` (`source/commands/MotionCommand.cpp`) no
+- [x] `MotionCommand::addStop()` (`source/commands/MotionCommand.cpp`) no
       longer calls `assert(false ...)` on overflow; it returns `false` and
       leaves `_nStops` unchanged (matches its existing documented contract).
-- [ ] `Superstructure::requestGoal`'s `Goal::DISTANCE` and `Goal::VELOCITY`
+- [x] `Superstructure::requestGoal`'s `Goal::DISTANCE` and `Goal::VELOCITY`
       cases (`source/superstructure/Superstructure.cpp`) check each
       `addStop()` return value in their `gr.stops[]` re-add loop; on the
       first `false`, the just-started command is cancelled
@@ -57,17 +58,26 @@ See `architecture-update.md` Step 4-5 item 1 and Design Rationale Decision 1
       receives a wire-visible `ERR stopoverflow` (via `gr.corrId`/
       `gr.replyFn`/`gr.replyCtx`) instead of continuing with incomplete stop
       coverage.
-- [ ] Regression test: `D 150 150 300 stop=time:9000 sensor=line0>500` runs
+- [x] Regression test: `D 150 150 300 stop=time:9000 sensor=line0>500` runs
       to completion in sim without process abort and stops on whichever
       clause fires first (exactly 4 stops installed: internal DISTANCE+TIME,
       wire TIME(9000)+SENSOR(line0>500) — no overflow).
-- [ ] New test: a `D`/`T` with enough wire clauses to still overflow (e.g. 3+
+      Implemented as `test_d_two_wire_clauses_completes_without_crash` in
+      `tests/simulation/unit/test_065_001_stop_clause_overflow.py`, using the
+      real wire token syntax (`stop=t:9000 sensor=line0:ge:500`) equivalent to
+      the issue's shorthand; a companion test
+      (`test_d_sensor_clause_wins_when_tripped_early`) confirms the wire
+      sensor clause can itself govern when tripped early.
+- [x] New test: a `D`/`T` with enough wire clauses to still overflow (e.g. 3+
       `stop=` clauses on `D`) is cancelled cleanly and replies `ERR
       stopoverflow` — never crashes, never asserts.
-- [ ] Full default sim suite green (`uv run --with pytest python -m pytest
+      Implemented as `test_d_three_wire_clauses_overflow_is_recoverable_err_not_crash`
+      in `tests/simulation/unit/test_065_001_stop_clause_overflow.py`.
+- [x] Full default sim suite green (`uv run --with pytest python -m pytest
       -q`), including existing stop-clause/`MotionCommand` tests
       (`tests/simulation/unit/test_motion_command.py`,
       `tests/simulation/unit/test_n4_n5_cancel_on_begin_stream_timed_distance.py`).
+      2476 passed, 0 failed (baseline 2473 + 3 new tests).
 
 ## Implementation Plan
 

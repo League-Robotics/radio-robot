@@ -56,7 +56,21 @@ void Superstructure::requestGoal(const GoalRequest& gr)
                                 gr.targetMm, gr.replyFn, gr.replyCtx, gr.corrId);
         if (_planner.hasActiveCommand()) {
             if (gr.doneLabel) _planner.activeCmd().setDoneEvt(gr.doneLabel);
-            for (uint8_t i = 0; i < gr.nStops; ++i) _planner.activeCmd().addStop(gr.stops[i]);
+            // 065-001 / CR-01: addStop() can return false if the wire-supplied
+            // stop=/sensor= clauses would overflow kMaxStopConds on top of the
+            // DISTANCE+TIME pair beginDistance() already installed. Never let
+            // that happen silently (a truncated clause list could drop the
+            // operator's only safety-relevant stop) — cancel the just-started
+            // command and reply a wire-visible ERR instead.
+            for (uint8_t i = 0; i < gr.nStops; ++i) {
+                if (!_planner.activeCmd().addStop(gr.stops[i])) {
+                    _planner.activeCmd().cancel(MotionCommand::StopStyle::HARD);
+                    char rbuf[80];
+                    CommandProcessor::replyErr(rbuf, sizeof(rbuf), "stopoverflow", nullptr,
+                                               gr.corrId, gr.replyFn, gr.replyCtx);
+                    break;
+                }
+            }
         }
         break;
 
@@ -87,7 +101,18 @@ void Superstructure::requestGoal(const GoalRequest& gr)
                                target, gr.replyFn, gr.replyCtx, gr.corrId, gr.streamSeed);
         if (_planner.hasActiveCommand()) {
             if (gr.doneLabel) _planner.activeCmd().setDoneEvt(gr.doneLabel);
-            for (uint8_t i = 0; i < gr.nStops; ++i) _planner.activeCmd().addStop(gr.stops[i]);
+            // 065-001 / CR-01: defense in depth (see Goal::DISTANCE case above).
+            // beginVelocity() installs zero stops internally, so this is not
+            // known to overflow in practice today, but never silently truncate.
+            for (uint8_t i = 0; i < gr.nStops; ++i) {
+                if (!_planner.activeCmd().addStop(gr.stops[i])) {
+                    _planner.activeCmd().cancel(MotionCommand::StopStyle::HARD);
+                    char rbuf[80];
+                    CommandProcessor::replyErr(rbuf, sizeof(rbuf), "stopoverflow", nullptr,
+                                               gr.corrId, gr.replyFn, gr.replyCtx);
+                    break;
+                }
+            }
         }
         break;
 
