@@ -1,9 +1,11 @@
 ---
-status: pending
+status: in-progress
 review: docs/code_review/2026-07-01-full-codebase-review.md
 findings: CR-09, CR-10
 severity: medium
 sprint: '066'
+tickets:
+- 066-004
 ---
 
 # TestGUI traces: encoder-reset heuristic misses resets on slow TLM; otos/fused traces rotated when anchored mid-session

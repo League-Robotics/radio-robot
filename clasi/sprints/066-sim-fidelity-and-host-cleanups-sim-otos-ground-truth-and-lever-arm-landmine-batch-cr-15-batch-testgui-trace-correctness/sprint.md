@@ -2,9 +2,18 @@
 id: '066'
 title: 'Sim fidelity and host cleanups: sim-OTOS ground truth and lever arm, landmine
   batch, CR-15 batch, TestGUI trace correctness'
-status: roadmap
+status: ticketing
 branch: sprint/066-sim-fidelity-and-host-cleanups-sim-otos-ground-truth-and-lever-arm-landmine-batch-cr-15-batch-testgui-trace-correctness
-use-cases: []
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+- SUC-006
+- SUC-007
+- SUC-008
+- SUC-009
 issues:
 - sim-otos-fidelity-ground-truth-and-lever-arm.md
 - landmine-cleanups-planner-apply-now0-sim-abi-buffers.md
@@ -93,13 +102,22 @@ deliverable of the OTOS work. Full default suite green before close.
 
 ## Definition of Ready
 
-- [ ] Sprint planning documents are complete (sprint.md, use cases, architecture)
-- [ ] Architecture review passed
-- [ ] Stakeholder has approved the sprint plan (auto-approve session)
+- [x] Sprint planning documents are complete (sprint.md, use cases, architecture)
+- [x] Architecture review passed
+- [x] Stakeholder has approved the sprint plan (auto-approve session)
 
 ## Tickets
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 001 | Sim OTOS ground-truth sampling and lever-arm compensation | (none) |
+| 002 | Landmine defusal batch: Planner::apply timestamp, OdomTracker convention test, sim-ABI clock isolation, SimConnection buffer | (none) |
+| 003 | CR-15 maintenance batch: eight small independent cleanups | 001 |
+| 004 | TestGUI trace correctness: command-boundary rebaseline and anchor-heading rotation | 003 |
 
-Tickets execute serially in the order listed.
+Tickets execute serially in the order listed. 003 depends on 001 (item 1,
+`PhysicsWorld._truePoseH` wrapping, is verify-only in 003 because it is
+resolved by 001). 004 depends on 003 (both edit
+`TraceModel._feed_encoder()` in `traces.py`; 003's midpoint-integration fix
+should land before 004 rewrites the reset-detection logic in the same
+function).
