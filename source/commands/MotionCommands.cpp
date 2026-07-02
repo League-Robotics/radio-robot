@@ -1233,6 +1233,14 @@ static void handleVW(const ArgList& args, const char* corrId,
         if (ctx->mc->activeCmd().origin() == MotionCommand::Origin::RETARGETABLE) {
             // VW keepalive: update target and re-arm.
             ctx->mc->activeCmd().setTarget((float)v, omega_rads);
+            // 065-003 / CR-05b: this resend bypasses beginVelocity() (that's
+            // the point of the D6 guard — no cancel/reconfigure churn on
+            // every keepalive), so it must independently mark the
+            // velocity-refresh timestamp. Without this, a real VW resend
+            // stream (KeyboardDriver's resend-timer pattern) would go
+            // "stale" after just the FIRST VW despite fresh commands
+            // continuing to arrive.
+            ctx->mc->markVelocityRefreshed(now);
         } else {
             // FIXED command active: reply busy, do not stomp target.
             const char* originName =
@@ -1302,7 +1310,8 @@ static void handle_VW(const ArgList& args, const char* corrId,
     int v     = args.args[0].ival;
     int omega = args.args[1].ival;
     float omega_rads = (float)omega / 1000.0f;  // mrad/s → rad/s
-    ctx->mc->beginRawVelocity((float)v, omega_rads);
+    uint32_t now = ctx->robot->systemTime();
+    ctx->mc->beginRawVelocity((float)v, omega_rads, now);
     char rbuf[64];
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "_VW", nullptr, corrId, replyFn, replyCtx);
 }

@@ -89,13 +89,28 @@ def test_get_snap_only_traffic_does_not_mask_watchdog_during_vw(build_lib):
 # ---------------------------------------------------------------------------
 # 2. Regression guard: narrowing the classification must not break the
 #    legitimate keepalive path.  An active VW session kept alive by '+'
-#    alone (no VW resend at all) must NOT trip the watchdog.
+#    plus periodic VW resends must NOT trip the watchdog.
+#
+#    065-003 / CR-05b note: prior to 065-003, '+' ALONE (no VW resend) was
+#    sufficient to hold VW alive indefinitely, and this test originally
+#    encoded exactly that claim (test_plus_alone_keeps_vw_alive_without_resend,
+#    sending only '+' and never resending VW).  065-003 closes that gap:
+#    Planner now stamps _lastVelocityRefreshMs on every genuine
+#    velocity-target refresh, and Superstructure::evaluateSafety() trips
+#    the watchdog if that timestamp alone goes stale -- an ambient '+'
+#    keepalive thread no longer substitutes for a genuine VW refresh. This
+#    test now resends VW periodically (the realistic KeyboardDriver
+#    pattern) alongside '+', which still demonstrates that '+' correctly
+#    keeps resetting the classification-based watchdog signal from this
+#    ticket. The now-superseded "'+' alone is sufficient forever" claim,
+#    and its replacement ("'+' alone is NOT sufficient past sTimeoutMs"),
+#    are covered by tests/simulation/unit/test_065_003_vw_staleness_cap.py.
 # ---------------------------------------------------------------------------
 
-def test_plus_alone_keeps_vw_alive_without_resend(build_lib):
-    """'+'-only keepalive (no VW resend) must hold an open-ended VW alive --
-    narrowing the watchdog-reset classification to '+'/motion verbs must not
-    break the legitimate keepalive path."""
+def test_plus_and_vw_resend_keep_vw_alive(build_lib):
+    """'+' keepalive plus periodic VW resends must hold an open-ended VW
+    alive -- narrowing the watchdog-reset classification to '+'/motion
+    verbs must not break the legitimate keepalive path."""
     with Sim() as s:
         s.send_command("SET sTimeout=500")
         s.get_async_evts()  # drain
@@ -103,9 +118,9 @@ def test_plus_alone_keeps_vw_alive_without_resend(build_lib):
         resp = s.send_command("VW 200 0")
         assert "OK" in resp.upper(), f"VW not accepted; resp={resp!r}"
 
-        # Send '+' every ~192ms (well under the 500ms window) for 1.44s --
-        # no VW resend at all.  Drain async EVTs before each send_command
-        # call -- see the comment in
+        # Send '+' AND resend VW every ~192ms (well under the 500ms window)
+        # for 1.44s.  Drain async EVTs before each send_command call -- see
+        # the comment in
         # test_get_snap_only_traffic_does_not_mask_watchdog_during_vw.
         evts = ""
         for i in range(60):
@@ -113,18 +128,18 @@ def test_plus_alone_keeps_vw_alive_without_resend(build_lib):
             evts += s.get_async_evts()
             if i % 8 == 0:
                 s.send_command("+")
+                s.send_command("VW 200 0")
 
         evts += s.get_async_evts()
         assert "EVT safety_stop" not in evts, (
-            f"'+'-only keepalive must hold VW alive without any VW resend; "
-            f"evts={evts!r}"
+            f"'+' plus periodic VW resend must hold VW alive; evts={evts!r}"
         )
 
         # The robot should still be actively driving (VW never cancelled).
         vel_l = float(s._lib.sim_get_vel_l(s._h))
         assert abs(vel_l) > 1.0, (
-            f"Expected VW to still be driving after '+'-only keepalive, "
-            f"got vel_l={vel_l}"
+            f"Expected VW to still be driving after '+' + VW-resend "
+            f"keepalive, got vel_l={vel_l}"
         )
 
 

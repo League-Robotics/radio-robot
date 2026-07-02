@@ -167,7 +167,23 @@ void Superstructure::evaluateSafety(CommandProcessor& cmd, CommandQueue& queue,
         if (cfg.safetyEnabled && ts.watchdogMs != 0 &&
             ts.activeFn != nullptr && needsWatchdog) {
             int32_t wdDelta = (int32_t)(now - ts.watchdogMs);
-            if (wdDelta > (int32_t)cfg.sTimeoutMs) {
+            // 065-003 / CR-05b: a second, `+`-independent staleness signal.
+            // wdDelta alone resets on ANY `+`/motion line (ticket 002's
+            // scoped keepalive), which is still satisfied by a background
+            // keepalive thread even if the layer that is supposed to be
+            // refreshing the VW/S/R target has itself stalled (e.g. a
+            // frozen GUI event loop). vwDelta is stamped only by
+            // beginVelocity()/beginRawVelocity() — the actual, authoritative
+            // point of truth for "a velocity target was genuinely
+            // refreshed" — so it catches that gap independent of `+`.
+            // _lastVelocityRefreshMs is causally guaranteed non-zero here:
+            // needsWatchdog can only be true once an open-ended command is
+            // active, and no such command becomes active without first
+            // calling beginVelocity()/beginRawVelocity().
+            int32_t vwDelta = (int32_t)(now - _planner.lastVelocityRefreshMs());
+            bool stale = (wdDelta > (int32_t)cfg.sTimeoutMs) ||
+                         (vwDelta > (int32_t)cfg.sTimeoutMs);
+            if (stale) {
                 ts.watchdogMs = now;  // re-arm to avoid firing every tick
                 char wdBuf[64];
                 CommandProcessor::replyEvt(wdBuf, sizeof(wdBuf),
