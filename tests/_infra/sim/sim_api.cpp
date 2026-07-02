@@ -441,6 +441,27 @@ void sim_set_enc_r(void* h, float mm)
     s->robot.drive.injectEncR(mm);               // sync drive2 private _hw (060-004)
 }
 
+// (064-006) Inject a REPORTED-encoder-only jump — the "hand-rolled/hand-lifted
+// wheel" analogue: the physical sensor now reports a new position (exactly
+// what SimMotor::tick() promotes into positionMm(), mirroring the real
+// Motor's continuously-refreshed _lastPositionMm), but — UNLIKE
+// sim_set_enc_l/r — Drive's private outlier-filter baseline (_hw.encMm[]) and
+// state.actual are deliberately left untouched. This is what creates the
+// genuine baseline-vs-sensor divergence that Drive::_runOutlierFilter's
+// reject-streak rebaseline and idle-refresh logic must recover from;
+// sim_set_enc_l/r cannot exercise that path because it syncs the baseline in
+// the same call, eliminating the divergence. side convention matches
+// PhysicsWorld::setReportedEncoder (0 = L, 1 = R).
+void sim_set_reported_enc_l(void* h, float mm)
+{
+    static_cast<SimHandle*>(h)->hal.plant().setReportedEncoder(0, mm);
+}
+
+void sim_set_reported_enc_r(void* h, float mm)
+{
+    static_cast<SimHandle*>(h)->hal.plant().setReportedEncoder(1, mm);
+}
+
 // Inject an OTOS pose reading into the SimOdometer.  The injected pose is
 // returned by SimOdometer::readTransformed() on the next otosCorrect() call.
 void sim_set_otos_pose(void* h, float x, float y, float hrad)

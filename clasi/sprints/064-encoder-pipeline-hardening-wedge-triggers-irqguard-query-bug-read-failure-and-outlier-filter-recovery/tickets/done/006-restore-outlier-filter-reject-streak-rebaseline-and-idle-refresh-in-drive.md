@@ -1,8 +1,9 @@
 ---
 id: '006'
 title: Restore outlier-filter reject-streak rebaseline and idle refresh in Drive
-status: open
-use-cases: [SUC-007]
+status: done
+use-cases:
+- SUC-007
 depends-on: []
 github-issue: ''
 issue: encoder-integrity-i2c-failures-and-outlier-filter-recovery.md
@@ -32,22 +33,22 @@ touched while parked.
 
 ## Acceptance Criteria
 
-- [ ] Reject-streak rebaseline: when a rejection's retries are exhausted,
+- [x] Reject-streak rebaseline: when a rejection's retries are exhausted,
       increment `_filterRejectStreakW` as today; once it reaches
       `kFilterRejectStreakThreshold` (3), accept the already-computed fresh
       reading (`_motorR.positionMm()`/`_motorL.positionMm()` — the value
       already read this tick, no extra I2C) as the new `_hw.encMm[]` value
       and reset the streak to 0. Apply to both the L and R blocks.
-- [ ] Idle refresh: the `else` branch (not driving) additionally copies
+- [x] Idle refresh: the `else` branch (not driving) additionally copies
       `_hw.encMm[0] = _motorR.positionMm(); _hw.encMm[1] =
       _motorL.positionMm();` every tick, unconditionally (no outlier gate —
       see architecture-update.md Design Rationale 5 for why no gate is
       needed at rest).
-- [ ] The `if (driving)` block's existing retry-then-hold behavior for a
+- [x] The `if (driving)` block's existing retry-then-hold behavior for a
       *transient* outlier (one bad read that recovers within `kRetries`
       attempts) is unchanged — only the *persistent* (3+ consecutive
       rejection) case gets the new rebaseline.
-- [ ] `uv run --with pytest python -m pytest -q` is green (2 known-baseline
+- [x] `uv run --with pytest python -m pytest -q` is green (2 known-baseline
       failures allowed, no new failures).
 
 ## Testing
@@ -70,3 +71,22 @@ touched while parked.
     rebaseline — assert `_filterRejectStreakL/R`-driven behavior only
     engages at exactly the threshold, not before.
 - **Verification command**: `uv run --with pytest python -m pytest -q`
+
+## Implementation Notes
+
+- `sim_set_enc_l/r` also syncs Drive's private `_hw.encMm[]` baseline
+  (`injectEncL/R`) in the same call, which trivially "fixes" any divergence
+  and cannot exercise either the reject-streak or idle-refresh recovery
+  path. Added a new, narrower hook — `sim_set_reported_enc_l/r`
+  (`tests/_infra/sim/sim_api.cpp`, wired into `firmware.py`) — that touches
+  ONLY the plant's reported-encoder accumulator (what `SimMotor::tick()`
+  promotes into `positionMm()`), leaving `_hw.encMm[]` deliberately stale —
+  the actual "hand-rolled wheel" / "diverged sensor" precondition.
+- `tests/_infra/golden_tlm_capture.json` frames 13-14 changed (enc 30→31 at
+  the tick right after `X` stops a moving robot; `ekf_rej` at frame 13
+  changed 1→0, frame 14's cumulative count 6→5). Root cause: the one real
+  tick of encoder motion carried by the actuator-command pipeline lag was
+  previously discarded by the `if (driving)` gate at the idle transition;
+  the idle-refresh fix now correctly absorbs it. Verified isolated to these
+  two frames (no further drift) before regenerating the golden fixture per
+  the regeneration procedure documented in `test_golden_tlm.py`.

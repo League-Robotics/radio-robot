@@ -177,6 +177,17 @@ class Sim:
         lib.sim_set_enc_r.argtypes = [ctypes.c_void_p, ctypes.c_float]
         lib.sim_set_enc_r.restype = None
 
+        # sim_set_reported_enc_l/r(void* h, float mm) — 064-006: REPORTED
+        # -encoder-only injection (does NOT sync Drive's _hw.encMm[] baseline,
+        # unlike sim_set_enc_l/r), for exercising the outlier-filter
+        # reject-streak rebaseline / idle-refresh recovery paths.
+        if hasattr(lib, "sim_set_reported_enc_l"):
+            lib.sim_set_reported_enc_l.argtypes = [ctypes.c_void_p, ctypes.c_float]
+            lib.sim_set_reported_enc_l.restype = None
+        if hasattr(lib, "sim_set_reported_enc_r"):
+            lib.sim_set_reported_enc_r.argtypes = [ctypes.c_void_p, ctypes.c_float]
+            lib.sim_set_reported_enc_r.restype = None
+
         # sim_set_otos_pose(void* h, float x, float y, float hrad)
         lib.sim_set_otos_pose.argtypes = [
             ctypes.c_void_p,
@@ -817,6 +828,41 @@ class Sim:
             )
         self._lib.sim_set_motor_read_failure(
             self._h, ctypes.c_int(side), ctypes.c_int(1 if fail else 0))
+
+    def set_reported_enc_l(self, mm: float) -> None:
+        """Inject a REPORTED-encoder-only value for the left wheel (064-006).
+
+        Unlike ``sim_set_enc_l`` (which also syncs Drive's private outlier
+        -filter baseline, ``_hw.encMm[]``, and ``state.actual``), this touches
+        ONLY the plant's reported-encoder accumulator — exactly what
+        ``SimMotor::tick()`` promotes into ``positionMm()``, mirroring the
+        real ``Motor``'s continuously-refreshed ``_lastPositionMm``. This is
+        the "hand-rolled/hand-lifted wheel" analogue: the physical sensor now
+        reports a new position, but Drive's cached baseline has not (yet)
+        been told, creating the divergence that
+        ``Drive::_runOutlierFilter``'s reject-streak rebaseline / idle
+        -refresh logic must recover from. ``sim_set_enc_l`` cannot exercise
+        that path — it eliminates the divergence in the same call. Raises
+        ``AttributeError`` if the loaded lib predates this symbol.
+        """
+        if not hasattr(self._lib, "sim_set_reported_enc_l"):
+            raise AttributeError(
+                "sim_set_reported_enc_l is not present in the loaded "
+                "libfirmware_host — rebuild tests/_infra/sim/ to pick it up"
+            )
+        self._lib.sim_set_reported_enc_l(self._h, ctypes.c_float(mm))
+
+    def set_reported_enc_r(self, mm: float) -> None:
+        """Inject a REPORTED-encoder-only value for the right wheel (064-006).
+
+        See ``set_reported_enc_l`` — identical semantics, right wheel.
+        """
+        if not hasattr(self._lib, "sim_set_reported_enc_r"):
+            raise AttributeError(
+                "sim_set_reported_enc_r is not present in the loaded "
+                "libfirmware_host — rebuild tests/_infra/sim/ to pick it up"
+            )
+        self._lib.sim_set_reported_enc_r(self._h, ctypes.c_float(mm))
 
     def get_fused_v(self) -> float:
         """Return fusedV (EKF body-frame linear speed, mm/s) from state.inputs."""

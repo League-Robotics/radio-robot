@@ -412,10 +412,18 @@ msg::DrivetrainCapabilities Drive::capabilities() const
 // ---------------------------------------------------------------------------
 // _runOutlierFilter — private: speed-scaled outlier filter + encoder collect.
 //
-// Verbatim from legacy Drive::periodic() with member renaming:
+// Originally verbatim from legacy Drive::periodic() with member renaming:
 //   _commands → _outputs     (MotorCommands)
 //   _inputs   → _hw          (HardwareState)
 //   fn/ctx    → nullptr      (no EVT sink in Drive for now)
+//
+// (064-006) Restores the reject-streak rebaseline that was lost in the
+// sprint-060 cutover: kFilterRejectStreakThreshold consecutive rejected
+// ticks now accept the already-computed fresh reading as the new baseline
+// instead of holding a stale one forever (CR-02). Also refreshes _hw.encMm[]
+// unconditionally while idle (architecture-update.md Design Rationale 5) so
+// a hand-rolled wheel's baseline is absorbed before the next command starts,
+// rather than relying solely on the in-drive streak escape hatch.
 // ---------------------------------------------------------------------------
 void Drive::_runOutlierFilter(uint32_t now)
 {
@@ -428,8 +436,9 @@ void Drive::_runOutlierFilter(uint32_t now)
 
         // Right (M1) first — proven ordering from WedgeTest.
         {
-            float newR = _motorR.positionMm();
-            float dR   = newR - _hw.encMm[0];
+            float freshR = _motorR.positionMm();   // already read this tick, no extra I2C
+            float newR   = freshR;
+            float dR     = newR - _hw.encMm[0];
             if (dR > kMaxDeltaMm || dR < -kMaxDeltaMm) {
                 newR = _hw.encMm[0];
                 for (int k = 0; k < kRetries; ++k) {
@@ -438,6 +447,12 @@ void Drive::_runOutlierFilter(uint32_t now)
                     if (dr2 <= kMaxDeltaMm && dr2 >= -kMaxDeltaMm) { newR = r2; break; }
                 }
                 if (_filterRejectStreakR < 255) ++_filterRejectStreakR;
+                if (_filterRejectStreakR >= kFilterRejectStreakThreshold) {
+                    // Persistent (3+ consecutive) rejection: the baseline is
+                    // stale, not the reading. Rebaseline to the fresh read.
+                    newR = freshR;
+                    _filterRejectStreakR = 0;
+                }
             } else {
                 _filterRejectStreakR = 0;
             }
@@ -446,8 +461,9 @@ void Drive::_runOutlierFilter(uint32_t now)
 
         // Left (M2) second.
         {
-            float newL = _motorL.positionMm();
-            float dL   = newL - _hw.encMm[1];
+            float freshL = _motorL.positionMm();   // already read this tick, no extra I2C
+            float newL   = freshL;
+            float dL     = newL - _hw.encMm[1];
             if (dL > kMaxDeltaMm || dL < -kMaxDeltaMm) {
                 newL = _hw.encMm[1];
                 for (int k = 0; k < kRetries; ++k) {
@@ -456,12 +472,24 @@ void Drive::_runOutlierFilter(uint32_t now)
                     if (dr2 <= kMaxDeltaMm && dr2 >= -kMaxDeltaMm) { newL = r2; break; }
                 }
                 if (_filterRejectStreakL < 255) ++_filterRejectStreakL;
+                if (_filterRejectStreakL >= kFilterRejectStreakThreshold) {
+                    // Persistent (3+ consecutive) rejection: the baseline is
+                    // stale, not the reading. Rebaseline to the fresh read.
+                    newL = freshL;
+                    _filterRejectStreakL = 0;
+                }
             } else {
                 _filterRejectStreakL = 0;
             }
             _hw.encMm[1] = newL;
         }
     } else {
+        // Idle: refresh the baseline unconditionally, no outlier gate.
+        // PWM is 0 here so no PID/EKF stability is at stake, and this
+        // absorbs a hand-rolled wheel's new position before the next
+        // command starts (architecture-update.md Design Rationale 5).
+        _hw.encMm[0] = _motorR.positionMm();
+        _hw.encMm[1] = _motorL.positionMm();
         _filterRejectStreakL = 0;
         _filterRejectStreakR = 0;
     }

@@ -12,6 +12,6 @@
   "TLM t=550 mode=V seq=10 wedge=0,0 enc=18,18 pose=18,0,0 vel=81,81 twist=92,0 ekf_rej=0",
   "TLM t=600 mode=V seq=11 wedge=0,0 enc=22,22 pose=22,0,0 vel=85,85 twist=88,0 ekf_rej=0",
   "TLM t=650 mode=V seq=12 wedge=0,0 enc=26,26 pose=26,0,0 vel=87,87 twist=88,0 ekf_rej=0",
-  "TLM t=700 mode=I seq=13 wedge=0,0 enc=30,30 pose=30,0,0 vel=0,0 twist=88,0 ekf_rej=1",
-  "TLM t=750 mode=I seq=14 wedge=0,0 enc=30,30 pose=30,0,0 vel=0,0 twist=88,0 ekf_rej=6"
+  "TLM t=700 mode=I seq=13 wedge=0,0 enc=31,31 pose=31,0,0 vel=0,0 twist=88,0 ekf_rej=0",
+  "TLM t=750 mode=I seq=14 wedge=0,0 enc=31,31 pose=31,0,0 vel=0,0 twist=88,0 ekf_rej=5"
 ]
