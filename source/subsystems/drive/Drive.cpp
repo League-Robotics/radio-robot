@@ -269,10 +269,21 @@ msg::CommandBatch Drive::tickAction(uint32_t now)
         //
         // The MotorController's own velocity PID (controlTick) still closes the
         // wheel-speed loop; this sets the TARGET, not the PWM duty cycle.
+        //
+        // 067-004: this ternary used to read _drvCfg.get_trackwidth() first,
+        // falling back to _robCfg.trackwidthMm only while _drvCfg's cached
+        // value was <=0.0f -- the same shadow-cache disease Ticket 002 fixed
+        // in tickUpdate()'s EKF-predict step. Robot::Robot() calls
+        // drive.configure(toDriveConfig(config)) once at boot, which
+        // populates _drvCfg.trackwidth with a positive snapshot; since `tw`
+        // is not "drive"-annotated, _drvCfg is never refreshed for it again,
+        // so this read was frozen at the boot-time trackwidth forever
+        // regardless of any later `SET tw=<x>`. Read _robCfg.trackwidthMm
+        // directly -- the same live source Drive's tickUpdate() now uses
+        // (067-002) and the pattern every other plain-key consumer in this
+        // file already follows.
         float vL = 0.0f, vR = 0.0f;
-        float trackwidth = (_drvCfg.get_trackwidth() > 0.0f)
-                               ? _drvCfg.get_trackwidth()
-                               : _robCfg.trackwidthMm;
+        float trackwidth = _robCfg.trackwidthMm;
         BodyKinematics::inverse(vx, omega, trackwidth, vL, vR);
         _mc.setTarget(vL, vR);
         break;
