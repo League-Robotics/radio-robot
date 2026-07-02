@@ -27,16 +27,25 @@ import pytest
 
 
 class FakeTransport:
-    """Minimal fake Transport that records send() calls."""
+    """Minimal fake Transport that records send() and keepalive arm/disarm calls."""
 
     def __init__(self) -> None:
         self.sent: list[str] = []
+        # "arm" / "disarm", in call order -- used to verify KeyboardDriver
+        # correctly brackets a drive session (sprint 065, ticket 005).
+        self.keepalive_events: list[str] = []
 
     def send(self, line: str) -> None:
         self.sent.append(line)
 
     def command(self, line: str, read_ms: int = 200) -> str:
         return "OK"
+
+    def arm_keepalive(self) -> None:
+        self.keepalive_events.append("arm")
+
+    def disarm_keepalive(self) -> None:
+        self.keepalive_events.append("disarm")
 
 
 # ---------------------------------------------------------------------------
@@ -665,6 +674,136 @@ class TestKeyboardDriverStopDeadman:
 
         assert calls == [focus_event]
         driver.detach()
+
+
+class TestKeyboardDriverKeepaliveArmDisarm:
+    """Keepalive arm/disarm bracket a drive session (sprint 065, ticket 005).
+
+    ``SerialConnection.connect()`` no longer arms the ambient '+' keepalive
+    daemon automatically -- ``KeyboardDriver`` (the layer that owns
+    open-ended VW motion sessions) now calls
+    ``transport.arm_keepalive()`` on the first key press of a session and
+    ``transport.disarm_keepalive()`` once the bounded STOP deadman sequence
+    completes (or on ``detach()``, as a safety net).
+    """
+
+    def test_press_release_deadman_complete_brackets_correctly(
+        self, fake_window, qapp
+    ):
+        """arm on first press; NOT disarmed merely on release (STOP still
+        needs bounded resending); disarmed exactly once the deadman
+        sequence completes."""
+        from PySide6.QtCore import Qt
+        from robot_radio.testgui.drive import KeyboardDriver, STOP_RESEND_COUNT
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+
+        press = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+        release = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+
+        fake_window.keyPressEvent(press)
+        assert transport.keepalive_events == ["arm"], (
+            "Keepalive must be armed on the first key press of a drive session"
+        )
+
+        fake_window.keyReleaseEvent(release)
+        assert transport.keepalive_events == ["arm"], (
+            "Keepalive must not be disarmed on release itself -- STOP still "
+            "needs its bounded deadman resend"
+        )
+
+        for _ in range(STOP_RESEND_COUNT - 1):
+            driver._on_timer_tick()
+
+        assert transport.keepalive_events == ["arm", "disarm"], (
+            "Keepalive must be disarmed exactly once, only after the "
+            "deadman sequence completes"
+        )
+
+        # detach() after a clean disarm must not double-disarm.
+        driver.detach()
+        assert transport.keepalive_events == ["arm", "disarm"]
+
+    def test_held_key_direction_change_does_not_rearm(self, fake_window, qapp):
+        """Switching directions mid-drive (still holding a key, never
+        released) must not call arm_keepalive() a second time -- the
+        session is still active."""
+        from PySide6.QtCore import Qt
+        from robot_radio.testgui.drive import KeyboardDriver
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+
+        up = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+        down = _make_key_event(Qt.Key.Key_Down, is_auto_repeat=False)
+        fake_window.keyPressEvent(up)
+        fake_window.keyPressEvent(down)
+
+        assert transport.keepalive_events == ["arm"], (
+            f"arm_keepalive() must only be called once per session: "
+            f"{transport.keepalive_events}"
+        )
+        driver.detach()
+
+    def test_focus_out_deadman_disarms_like_release(self, fake_window, qapp):
+        """Focus-loss triggers the same deadman sequence as a real release,
+        including the disarm once it completes."""
+        from PySide6.QtCore import Qt
+        from robot_radio.testgui.drive import KeyboardDriver, STOP_RESEND_COUNT
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+        driver._orig_focus_out = lambda e: None
+
+        press = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+        fake_window.keyPressEvent(press)
+        assert transport.keepalive_events == ["arm"]
+
+        focus_event = MagicMock()
+        driver._on_focus_out(focus_event)
+        assert transport.keepalive_events == ["arm"]
+
+        for _ in range(STOP_RESEND_COUNT - 1):
+            driver._on_timer_tick()
+
+        assert transport.keepalive_events == ["arm", "disarm"]
+        driver.detach()
+
+    def test_detach_mid_drive_disarms_as_safety_net(self, fake_window, qapp):
+        """detach() (e.g. on transport.disconnect()) mid-drive, before the
+        deadman sequence would otherwise complete, must still disarm."""
+        from PySide6.QtCore import Qt
+        from robot_radio.testgui.drive import KeyboardDriver
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+
+        press = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+        fake_window.keyPressEvent(press)
+        assert transport.keepalive_events == ["arm"]
+
+        driver.detach()
+        assert transport.keepalive_events == ["arm", "disarm"], (
+            "detach() mid-drive must disarm the keepalive as a safety net"
+        )
+
+    def test_no_key_press_never_arms(self, fake_window, qapp):
+        """Attaching (without pressing any key) must never touch the
+        keepalive -- arming is tied strictly to an actual drive session."""
+        from robot_radio.testgui.drive import KeyboardDriver
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+
+        assert transport.keepalive_events == []
+        driver.detach()
+        assert transport.keepalive_events == []
 
 
 class TestKeyboardDriverNoTransport:

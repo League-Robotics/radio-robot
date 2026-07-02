@@ -1,9 +1,11 @@
 ---
 id: '005'
 title: Host keepalive armed only while a motion source is active
-status: open
-use-cases: [SUC-003]
-depends-on: ['004']
+status: done
+use-cases:
+- SUC-003
+depends-on:
+- '004'
 github-issue: ''
 issue: stop-delivery-and-keepalive-watchdog-architecture.md
 completes_issue: true
@@ -39,39 +41,39 @@ ticket's `Transport` methods are called from).
 
 ## Acceptance Criteria
 
-- [ ] `host/robot_radio/io/serial_conn.py`'s `connect()` no longer calls
+- [x] `host/robot_radio/io/serial_conn.py`'s `connect()` no longer calls
       `self.start_keepalive()` on either the fast cache-hit path or the
       normal handshake path. `disconnect()` still calls
       `self.stop_keepalive()` (idempotent cleanup, harmless whether or not
       it was armed).
-- [ ] `SerialConnection.start_keepalive()`/`stop_keepalive()` public API
+- [x] `SerialConnection.start_keepalive()`/`stop_keepalive()` public API
       shape is unchanged — only the caller moves.
-- [ ] `host/robot_radio/testgui/transport.py`'s `Transport` ABC gains two
+- [x] `host/robot_radio/testgui/transport.py`'s `Transport` ABC gains two
       new methods, `arm_keepalive()` and `disarm_keepalive()`, defaulting to
       no-ops (not abstract — existing subclasses must not break).
-- [ ] `_HardwareTransport` (the shared `SerialTransport`/`RelayTransport`
+- [x] `_HardwareTransport` (the shared `SerialTransport`/`RelayTransport`
       base) overrides both to delegate to `self._conn.start_keepalive()`/
       `stop_keepalive()`.
-- [ ] `SimTransport` uses the inherited no-op default (no real serial link;
+- [x] `SimTransport` uses the inherited no-op default (no real serial link;
       the sim's parallel watchdog-classification fix is ticket 002/003,
       exercised directly by `sim_command()`).
-- [ ] `KeyboardDriver` (from ticket 004) calls
+- [x] `KeyboardDriver` (from ticket 004) calls
       `self._transport.arm_keepalive()` when a driving session starts (first
       key press while not already armed) and
       `self._transport.disarm_keepalive()` once the deadman `STOP` sequence
       completes (or on `detach()`).
-- [ ] `tests/simulation/unit/test_serial_relay_handshake.py`'s
+- [x] `tests/simulation/unit/test_serial_relay_handshake.py`'s
       `test_keepalive_is_plain` and `test_keepalive_plain_plus` are updated
       to call `conn.start_keepalive()` explicitly after `conn.connect()`,
       preserving their original intent (verify `+` is sent plain, never
       relay-prefixed) under the new arm-on-demand contract.
-- [ ] New test: after `connect()` alone (no `arm_keepalive()` call), no `+`
+- [x] New test: after `connect()` alone (no `arm_keepalive()` call), no `+`
       is observed on the wire for the test's observation window.
-- [ ] New test (TestGUI-level, in `tests/testgui/test_drive.py` alongside
+- [x] New test (TestGUI-level, in `tests/testgui/test_drive.py` alongside
       ticket 004's new tests): a fake `Transport` records
       `arm_keepalive()`/`disarm_keepalive()` calls; assert they bracket a
       key-press-then-release-then-deadman-complete sequence correctly.
-- [ ] Full default sim suite green, including the two updated
+- [x] Full default sim suite green, including the two updated
       `test_serial_relay_handshake.py` tests.
 
 ## Implementation Plan

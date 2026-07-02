@@ -38,6 +38,20 @@ overrides ``focusOutEvent`` and treats focus loss as an implicit release:
 if a key is currently tracked as held, losing focus triggers the same
 bounded STOP deadman-resend sequence a real key-release would.
 
+Keepalive arm/disarm (sprint 065, ticket 005)
+----------------------------------------------
+``SerialConnection.connect()`` no longer arms the ambient ``+`` keepalive
+daemon automatically — an ambient keepalive that keeps streaming for the
+entire lifetime of an open port, independent of whether anything is
+driving, silently defeats the firmware motion watchdog for any hung host
+process.  ``KeyboardDriver`` is the layer that owns open-ended (``VW``)
+motion sessions, so it calls ``self._transport.arm_keepalive()`` on the
+first key press of a drive session (guarded so a held key / direction
+change never re-arms an already-armed session) and
+``self._transport.disarm_keepalive()`` once the bounded STOP deadman
+sequence above completes, or on ``detach()`` as a safety net.  Both calls
+are no-ops on ``SimTransport`` (inherited ``Transport`` default).
+
 Units
 -----
 ``v_mms``     — linear velocity in mm/s.
@@ -187,6 +201,7 @@ class KeyboardDriver:
         self._timer: "object | None" = None   # QTimer, created lazily
         self._cmd: str | None = None          # current VW command, or "STOP" during the deadman resend window
         self._stop_resends_left: int = 0      # remaining bounded STOP resends (see STOP_RESEND_COUNT)
+        self._keepalive_armed: bool = False   # tracks whether transport.arm_keepalive() is currently in effect
 
         # Original key event handlers (restored on detach).
         self._orig_key_press: "object | None" = None
@@ -237,11 +252,15 @@ class KeyboardDriver:
     def detach(self) -> None:
         """Remove key event overrides and stop the timer.
 
-        Safe to call when not attached.
+        Safe to call when not attached.  Disarms the keepalive first (a
+        safety net for the case where detach() -- e.g. on disconnect() --
+        happens mid-drive or mid-deadman, before the bounded STOP sequence
+        would otherwise have disarmed it itself).
         """
         self._stop_timer()
         self._cmd = None
         self._stop_resends_left = 0
+        self._disarm_keepalive_if_armed()
         self._transport = None
 
         if self._window is not None:
@@ -288,6 +307,14 @@ class KeyboardDriver:
 
         if self._transport is None:
             return
+
+        # A drive session is starting (or continuing) -- arm the ambient
+        # host keepalive.  Only the first press of a session actually arms
+        # it (self._keepalive_armed guards re-arming on every subsequent
+        # press/direction-change while already driving); disarm happens once
+        # the bounded STOP deadman sequence completes (see _send_cmd) or on
+        # detach().
+        self._arm_keepalive_if_needed()
 
         # Switch to the new command and (re)start the timer.
         self._cmd = cmd
@@ -404,6 +431,10 @@ class KeyboardDriver:
             if self._stop_resends_left <= 0:
                 self._stop_timer()
                 self._cmd = None
+                # The bounded STOP deadman sequence has completed -- the
+                # drive session is over, so disarm the ambient keepalive
+                # (see architecture-update.md Step 4-5 item 5, sprint 065).
+                self._disarm_keepalive_if_armed()
 
     def _start_timer(self) -> None:
         """Start the keepalive QTimer if not already running."""
@@ -414,3 +445,40 @@ class KeyboardDriver:
         """Stop the keepalive QTimer."""
         if self._timer is not None and self._timer.isActive():  # type: ignore[union-attr]
             self._timer.stop()
+
+    # ------------------------------------------------------------------
+    # Keepalive arm/disarm (sprint 065, ticket 005)
+    # ------------------------------------------------------------------
+    #
+    # SerialConnection.connect() no longer arms the ambient "+" keepalive
+    # daemon automatically -- an ambient keepalive that outlives whatever is
+    # actually driving silently defeats the firmware motion watchdog for any
+    # hung host process.  KeyboardDriver is the layer that owns open-ended
+    # (VW) motion sessions, so it arms the keepalive when a session starts
+    # and disarms it once the session is unambiguously over (bounded STOP
+    # deadman sequence completed, or detach()).  Both helpers are guarded by
+    # ``self._keepalive_armed`` so arm/disarm calls are only ever made once
+    # per session, matching the "first key press while not already armed" /
+    # "once the deadman sequence completes" bracketing in the ticket's
+    # acceptance criteria.
+
+    def _arm_keepalive_if_needed(self) -> None:
+        """Arm the transport's keepalive if a drive session isn't already armed."""
+        if self._keepalive_armed or self._transport is None:
+            return
+        try:
+            self._transport.arm_keepalive()
+        except Exception as exc:
+            _log.warning("KeyboardDriver: failed to arm keepalive: %s", exc)
+        self._keepalive_armed = True
+
+    def _disarm_keepalive_if_armed(self) -> None:
+        """Disarm the transport's keepalive if this driver armed it."""
+        if not self._keepalive_armed:
+            return
+        if self._transport is not None:
+            try:
+                self._transport.disarm_keepalive()
+            except Exception as exc:
+                _log.warning("KeyboardDriver: failed to disarm keepalive: %s", exc)
+        self._keepalive_armed = False
