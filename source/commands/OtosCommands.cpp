@@ -157,7 +157,7 @@ static void handleOL(const ArgList& args, const char* corrId,
     OtosCtx* c = reinterpret_cast<OtosCtx*>(handlerCtx);
     char rbuf[64];
     if (!otosReady(c, "ol", rbuf, sizeof(rbuf), corrId, replyFn, replyCtx)) return;
-    if (args.count >= 1) {
+    if (args.suppliedCount >= 1) {
         // Cast to int8_t at use site — preserves existing silent truncation behaviour.
         c->otos->setLinearScalar((int8_t)args.args[0].ival);
     }
@@ -174,7 +174,7 @@ static void handleOA(const ArgList& args, const char* corrId,
     OtosCtx* c = reinterpret_cast<OtosCtx*>(handlerCtx);
     char rbuf[64];
     if (!otosReady(c, "oa", rbuf, sizeof(rbuf), corrId, replyFn, replyCtx)) return;
-    if (args.count >= 1) {
+    if (args.suppliedCount >= 1) {
         // Cast to int8_t at use site — preserves existing silent truncation behaviour.
         c->otos->setAngularScalar((int8_t)args.args[0].ival);
     }

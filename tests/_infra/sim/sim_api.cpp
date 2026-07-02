@@ -1161,6 +1161,8 @@ void sim_ekftiny_set_rej_head_streak(void* h, int streak)
 // Parameters (out — caller provides arrays of capacity >= MAX_ARGS):
 //   out_ok           — 1 on success, 0 on failure.
 //   out_count        — number of args in result (undefined on failure).
+//   out_supplied_count — number of positional slots actually supplied by the
+//                      caller (<= out_count; undefined on failure). 064-001.
 //   out_arg_types    — arg type per slot (0=INT,1=FLOAT,2=STR).
 //   out_arg_ivals    — ival per slot.
 //   out_arg_fvals    — fval per slot.
@@ -1177,7 +1179,7 @@ int sim_parse_schema(
     const char* const* def_names, const int* def_kinds,
     const int* def_ranged, const int* def_lo, const int* def_hi, int ndefs,
     int min_tokens, int variadic, const char* pack_kv,
-    int* out_ok, int* out_count,
+    int* out_ok, int* out_count, int* out_supplied_count,
     int* out_arg_types, int* out_arg_ivals, float* out_arg_fvals,
     char* out_arg_svals,            // flat: slot i occupies svals[i*32..i*32+31]
     char* err_detail_buf)           // 64-byte output for error detail
@@ -1216,6 +1218,7 @@ int sim_parse_schema(
 
     if (r.ok) {
         *out_count = r.args.count;
+        *out_supplied_count = r.args.suppliedCount;
         for (int i = 0; i < r.args.count; ++i) {
             out_arg_types[i] = static_cast<int>(r.args.args[i].type);
             out_arg_ivals[i] = r.args.args[i].ival;
@@ -1231,6 +1234,7 @@ int sim_parse_schema(
         if (err_detail_buf) err_detail_buf[0] = '\0';
     } else {
         *out_count = 0;
+        *out_supplied_count = 0;
         // Write error detail into caller's buffer.
         if (err_detail_buf) {
             if (r.err.detail) {

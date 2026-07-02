@@ -32,6 +32,11 @@ static constexpr int MAX_ARGS = 10;
 struct ArgList {
     Argument args[MAX_ARGS];
     int      count;
+    // suppliedCount — number of tokens actually supplied by the caller for
+    // the positional slots (<= count). Lets a handler distinguish "token
+    // omitted" from "token supplied, value happens to equal the default."
+    // Set by parseSchema() and every hand-rolled ParseFn; see ArgParse.cpp.
+    int      suppliedCount;
 };
 
 // ---------------------------------------------------------------------------
