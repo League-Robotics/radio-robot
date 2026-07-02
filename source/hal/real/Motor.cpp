@@ -192,6 +192,13 @@ void Motor::resetEncoder()
     static constexpr int     kMaxRetries       = 2;
     static constexpr int32_t kReadbackThreshold = 2;  // tenths of degrees ≈ <1 mm
 
+    // (064-003) One resetEncoder() call is one hard (hardware atomic-read)
+    // reset, regardless of how many internal retries the snapshot loop below
+    // takes. Counted here, once, so callers (MotorController::
+    // resetEncoderAccumulators() via the at-rest decision) can be verified
+    // to have chosen the hardware path.
+    ++_hardResetCount;
+
     for (int attempt = 0; attempt <= kMaxRetries; ++attempt) {
         // Median-of-3: take three reads and sort to find the middle value.
         int32_t s0 = readEncoderAtomic();
@@ -238,6 +245,39 @@ void Motor::resetEncoder()
     _lastPositionMm   = 0.0f;
     _lastVelocityMmps = 0.0f;
     _hasLastTick      = false;
+}
+
+void Motor::rebaselineSoft()
+{
+    // (064-003) Software-only encoder rebaseline: MotorController::
+    // resetEncoderAccumulators() calls this instead of resetEncoder() when
+    // the drivetrain is NOT at rest, to avoid firing the atomic 0x46 read
+    // burst (3 reads + readback-verify, ~24-32 ms of busy-wait I2C) while the
+    // wheels are rotating — that burst latches the Nezha encoder readback
+    // (see clasi/sprints/064-.../issues/
+    // encoder-reset-while-moving-latches-readback.md). Issues NO I2C
+    // transaction at all: folds the already-tick-cached _lastPositionMm
+    // (populated by the normal per-tick 0x46 read in tick(), not a new
+    // atomic read) back into raw tenths-of-degrees and adds it to
+    // _encOffset, then zeros the cache exactly as resetEncoder()'s success
+    // path does — so positionMm() reads 0 immediately after this call, in
+    // lockstep with the host-side baselines (Robot::resetEncoders() /
+    // Drive::resetEncoders()) that zero unconditionally right after calling
+    // MotorController::resetEncoderAccumulators().
+    //
+    // Inverse of readEncoderMmF()'s conversion (mm = (raw/10) * mmPerDeg *
+    // fwdSign): rawDelta = (mm / (mmPerDeg * fwdSign)) * 10. rawDelta is the
+    // amount by which the offset-subtracted raw reading would need to move
+    // to reach 0, i.e. exactly the increment _encOffset needs.
+    float mmPerDeg = (_motorId == 2) ? _cfg.mmPerDegL : _cfg.mmPerDegR;
+    if (mmPerDeg != 0.0f) {
+        float rawDeltaF = (_lastPositionMm / (mmPerDeg * (float)_fwdSign)) * 10.0f;
+        _encOffset += (int32_t)rawDeltaF;
+    }
+    _lastPositionMm   = 0.0f;
+    _lastVelocityMmps = 0.0f;
+    _hasLastTick      = false;
+    ++_softResetCount;
 }
 
 int32_t Motor::readEncoderAtomic() const

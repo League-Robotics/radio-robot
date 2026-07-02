@@ -76,6 +76,27 @@ public:
     // Zero this motor's encoder accumulator (software offset reset).
     virtual void resetEncoder() = 0;
 
+    // ---- Software-only rebaseline (064-003) ----
+    //
+    // rebaselineSoft(): zero this motor's encoder accumulator WITHOUT issuing
+    // any I2C transaction — folds the already-tick-cached position back into
+    // the software offset instead of firing the hardware atomic-read burst
+    // resetEncoder() uses. MotorController::resetEncoderAccumulators() calls
+    // this instead of resetEncoder() whenever the drivetrain is not at rest,
+    // because firing the atomic 0x46 burst while the wheels are rotating
+    // latches the Nezha encoder readback (see clasi/sprints/064-.../issues/
+    // encoder-reset-while-moving-latches-readback.md). Pure — both current
+    // implementers (Motor, SimMotor) are updated alongside this interface
+    // change, so there is no default body.
+    virtual void rebaselineSoft() = 0;
+
+    // hardResetCount() / softResetCount(): cumulative count of resetEncoder()
+    // / rebaselineSoft() calls respectively, for testability (064-003). Both
+    // default to 0 so any OTHER implementer of this interface (outside
+    // Motor/SimMotor) keeps compiling unmodified.
+    virtual uint32_t hardResetCount() const { return 0; }
+    virtual uint32_t softResetCount() const { return 0; }
+
     // ---- Secondary-capability discovery (039-003) ----
     //
     // asPositionMotor(): RTTI-free downcast to the position-move capability.

@@ -41,6 +41,24 @@ void SimMotor::resetEncoder() {
     _lastPositionMm   = 0.0f;
     _lastVelocityMmps = 0.0f;
     _hasLastTick      = false;
+    ++_hardResetCount;
+}
+
+void SimMotor::rebaselineSoft() {
+    // (064-003) The sim has no I2C timing race to avoid (no real bus, no
+    // atomic-read burst to latch), so this performs the SAME effect
+    // resetEncoder() already does above — zero the reported accumulator.
+    // Only the reset-kind counter differs (_softResetCount, not
+    // _hardResetCount), so a full-pipeline sim test can verify the at-rest
+    // DECISION made by MotorController::resetEncoderAccumulators() (which
+    // path was taken) without any behavioral difference in the resulting
+    // encoder position.
+    _mut.resetReportedEncoder(sideIdx());
+    _cmdSpeed         = 0;
+    _lastPositionMm   = 0.0f;
+    _lastVelocityMmps = 0.0f;
+    _hasLastTick      = false;
+    ++_softResetCount;
 }
 
 void SimMotor::tick(uint32_t now_ms) {

@@ -1275,4 +1275,32 @@ int sim_motor_clamp_slew(int lastWritten, int target, int maxDelta)
                                       (uint8_t)maxDelta);
 }
 
+// ---------------------------------------------------------------------------
+// Reset-kind sim hooks (064-003)
+//
+// Expose SimMotor's hardResetCount()/softResetCount() so a full-pipeline sim
+// test can reproduce the stand session's arm-3 scenario (D preempted
+// mid-flight by a second D): drive, preempt, and assert that
+// resetEncoderAccumulators() chose the software rebaseline (softResetCount
+// incremented) rather than the hardware atomic re-prime (hardResetCount did
+// NOT increment) — and, symmetrically, that a reset from genuine idle still
+// takes the hardware path.
+// ---------------------------------------------------------------------------
+int sim_get_motor_hard_reset_count_l(void* h)
+{
+    return (int)static_cast<SimHandle*>(h)->hal.simMotorL().hardResetCount();
+}
+int sim_get_motor_hard_reset_count_r(void* h)
+{
+    return (int)static_cast<SimHandle*>(h)->hal.simMotorR().hardResetCount();
+}
+int sim_get_motor_soft_reset_count_l(void* h)
+{
+    return (int)static_cast<SimHandle*>(h)->hal.simMotorL().softResetCount();
+}
+int sim_get_motor_soft_reset_count_r(void* h)
+{
+    return (int)static_cast<SimHandle*>(h)->hal.simMotorR().softResetCount();
+}
+
 } // extern "C"

@@ -28,4 +28,5 @@ public:
         (void)cfg; return 0.0f;
     }
     void    resetEncoder() override                 {}
+    void    rebaselineSoft() override                {}
 };

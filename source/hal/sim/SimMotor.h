@@ -63,6 +63,19 @@ public:
     float   readEncoderMmFSettle(const RobotConfig& cfg) const override;
     void    resetEncoder() override;
 
+    // rebaselineSoft() (064-003): sim has no I2C timing race to avoid, so
+    // this performs the SAME effect resetEncoder() already does here (zero
+    // the reported accumulator). Only the reset-kind counter differs
+    // (softResetCount, not hardResetCount) — see hardResetCount()/
+    // softResetCount() below, the testable surface for MotorController's
+    // at-rest DECISION.
+    void    rebaselineSoft() override;
+
+    // Cumulative reset-kind counters (064-003), incremented by resetEncoder()
+    // / rebaselineSoft() respectively.
+    uint32_t hardResetCount() const override { return _hardResetCount; }
+    uint32_t softResetCount() const override { return _softResetCount; }
+
     // Drive-wheel only — no on-chip position-move capability.
     IPositionMotor* asPositionMotor() override { return nullptr; }
 
@@ -106,4 +119,9 @@ private:
     bool     _hasLastTick      = false;
 
     bool     _frozen           = false;
+
+    // Cumulative reset-kind counters (064-003): resetEncoder() increments
+    // _hardResetCount; rebaselineSoft() increments _softResetCount.
+    uint32_t _hardResetCount   = 0;
+    uint32_t _softResetCount   = 0;
 };

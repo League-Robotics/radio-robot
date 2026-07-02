@@ -104,6 +104,27 @@ public:
     void    resetEncoder() override;
 
     /**
+     * rebaselineSoft — software-only encoder rebaseline (064-003).
+     *
+     * Folds the already-tick-cached _lastPositionMm (obtained by the normal
+     * per-tick 0x46 read, NOT a new atomic burst) back into raw tenths-of
+     * -degrees and adds it to _encOffset — issues NO I2C transaction — then
+     * zeros the cache exactly as resetEncoder()'s success path already does.
+     * Called by MotorController::resetEncoderAccumulators() instead of
+     * resetEncoder() whenever the drivetrain is not at rest, so the atomic
+     * read burst (which latches the Nezha readback while the wheels are
+     * rotating) is never fired mid-motion.
+     */
+    void    rebaselineSoft() override;
+
+    // Cumulative reset-kind counters (064-003), incremented by resetEncoder()
+    // / rebaselineSoft() respectively. Testability only (Motor.cpp is not
+    // reachable from HOST_BUILD; verified by code review + the SimMotor
+    // mirror's parallel counters).
+    uint32_t hardResetCount() const override { return _hardResetCount; }
+    uint32_t softResetCount() const override { return _softResetCount; }
+
+    /**
      * requestEncoder — split-phase encoder I/O, phase 1.
      *
      * Issues the 0x46 write command and returns immediately (no busy-wait,
@@ -339,6 +360,12 @@ private:
 
     // Software encoder offset (tenths of degrees), zeroed by resetEncoder().
     mutable int32_t _encOffset;
+
+    // Cumulative reset-kind counters (064-003): resetEncoder() increments
+    // _hardResetCount; rebaselineSoft() increments _softResetCount. Exposed
+    // via hardResetCount()/softResetCount() for testability.
+    uint32_t _hardResetCount = 0;
+    uint32_t _softResetCount = 0;
 
     // Write an 8-byte motor command to the chip.
     void    writeMotorCmd(uint8_t direction, uint8_t speed);

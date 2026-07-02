@@ -181,6 +181,14 @@ private:
     uint32_t _lastPidMs;     // system time (ms) of last controlTick PID update
     bool     _hasPidTick;    // false until the first PID tick
 
+    // Measured per-wheel velocity snapshot (064-003), refreshed each
+    // controlTick() call from inputs.velMms[] AFTER that tick's per-wheel ZOH
+    // velocity update runs. Read by resetEncoderAccumulators() as the
+    // measured component of the at-rest decision (hardware atomic re-prime
+    // vs. software-only rebaseline) — see architecture-update.md ticket 3.
+    float    _lastVelMmsL;
+    float    _lastVelMmsR;
+
     // -------------------------------------------------------------------------
     // Encoder-wedge detector (015-003)
     //

@@ -17,6 +17,7 @@ MotorController::MotorController(IMotor& left, IMotor& right, const RobotConfig&
       _prevTimeMsL(0), _prevTimeMsR(0),
       _hasTimestampL(false), _hasTimestampR(false),
       _lastPidMs(0), _hasPidTick(false),
+      _lastVelMmsL(0.0f), _lastVelMmsR(0.0f),
       _wedgePrevEncL(0.0f), _wedgePrevEncR(0.0f),
       _wedgePrevValidL(false), _wedgePrevValidR(false),
       _stuckCountL(0), _stuckCountR(0),
@@ -262,6 +263,14 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
     }
     // refreshedWheel == 0: first iteration or no collect — both velocities held at 0.
 
+    // (064-003) Refresh the measured-velocity snapshot consumed by
+    // resetEncoderAccumulators()'s at-rest decision, AFTER the per-wheel ZOH
+    // velocity update above (whichever wheel(s) were refreshed this tick;
+    // unrefreshed wheels retain their held/ZOH value here too, which is the
+    // correct "last known" reading for that wheel).
+    _lastVelMmsL = inputs.velMms[1];   // FL = index 1
+    _lastVelMmsR = inputs.velMms[0];   // FR = index 0
+
     // PID runs for BOTH wheels using the held (ZOH) velocities.
 
     // -------------------------------------------------------------------------
@@ -490,8 +499,44 @@ void MotorController::getEncoderPositions(int32_t& leftMm, int32_t& rightMm) con
 
 void MotorController::resetEncoderAccumulators()
 {
-    _motorL.resetEncoder();
-    _motorR.resetEncoder();
+    // (064-003) At-rest decision: firing the hardware atomic-read burst
+    // (Motor::resetEncoder(), 3x 0x46 reads + readback-verify, ~24-32 ms of
+    // busy-wait I2C) while the wheels are actually rotating latches the
+    // Nezha encoder readback — stand-proven ~1.4 transient latches/cycle,
+    // escalating to persistent (see clasi/sprints/064-.../issues/
+    // encoder-reset-while-moving-latches-readback.md). It is safe only when
+    // the drivetrain is genuinely at rest: commanded targets both zero AND
+    // measured |velocity| below a small epsilon. When not at rest, rebaseline
+    // in software only (no I2C transaction) instead — Motor::rebaselineSoft()
+    // / SimMotor::rebaselineSoft().
+    //
+    // Commanded component: read directly off the authoritative MotorCommands
+    // (the same _cmds pointer setTarget()/startDrive()/stop() write through).
+    // Measured component: _lastVelMmsL/R, refreshed every controlTick() call
+    // from the EMA-filtered inputs.velMms[] (see controlTick() above).
+    //
+    // kAtRestVelEpsilonMms is a design-time estimate (BENCH-CONFIRM — see
+    // architecture-update.md "Open Questions"), not yet HITL-validated —
+    // same convention as Motor::setSpeed()'s kMaxDeltaPwmPerWrite.
+    static constexpr float kAtRestVelEpsilonMms = 5.0f;
+
+    bool cmdAtRest = (!_cmds) ||
+                     (_cmds->tgtMms[0] == 0.0f && _cmds->tgtMms[1] == 0.0f);
+    bool velAtRest = (fabsf(_lastVelMmsL) < kAtRestVelEpsilonMms) &&
+                     (fabsf(_lastVelMmsR) < kAtRestVelEpsilonMms);
+
+    if (cmdAtRest && velAtRest) {
+        // At rest: unchanged hardware atomic re-prime. This is ALSO the
+        // transient-wedge self-heal mechanism relied on elsewhere (an
+        // at-rest reset, e.g. the next D from idle or ZERO enc, re-primes and
+        // heals a transient latch) — must stay reachable exactly as today.
+        _motorL.resetEncoder();
+        _motorR.resetEncoder();
+    } else {
+        // Not at rest: software-only rebaseline — no I2C transaction.
+        _motorL.rebaselineSoft();
+        _motorR.rebaselineSoft();
+    }
     _prevEncL = 0.0f;
     _prevEncR = 0.0f;
     _hasTimestampL = false;
