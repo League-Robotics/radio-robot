@@ -54,6 +54,15 @@ public:
     // re-enqueuing when _queue is still set.
     bool dequeueOne(CommandQueue& q);
 
+    // Returns true if the most recently parsed command's descriptor is
+    // flagged CMD_MOTION_WATCHDOG (keepalive '+' or a motion verb). Callers
+    // (LoopScheduler::runCommsIn/run_test, the sim's sim_command()) use this
+    // to gate the motion-watchdog reset so ambient traffic (GET, SNAP, ...)
+    // no longer silently keeps an open-ended motion command alive.
+    // Reflects the last call to process(); false before any command has
+    // been processed or after a line that matched no descriptor.
+    bool lastCommandResetsWatchdog() const { return _lastDispatchFlags & CMD_MOTION_WATCHDOG; }
+
     // -------------------------------------------------------------------------
     // Static parse helpers — public so dependent tickets can call them
     // from within the dispatch table they add to this translation unit.
@@ -150,6 +159,12 @@ private:
     ReplyFn                        _serialFn  = nullptr;
     void*                          _serialCtx = nullptr;
     CommandQueue*                  _queue     = nullptr;
+    // Flags of the most recently successfully-parsed command's descriptor.
+    // Set in dispatchTable() right after a successful parse (schema or
+    // parseFn), before the enqueue-vs-immediate-dispatch branch, so it is
+    // correct for both the production queue path and the sim/no-queue
+    // fallback. See lastCommandResetsWatchdog().
+    uint8_t                        _lastDispatchFlags = CMD_NONE;
 
     void dispatchTable(char** tokens, int ntok, KVPair* kvs, int nkv,
                        const char* corrId, ReplyFn replyFn, void* ctx);

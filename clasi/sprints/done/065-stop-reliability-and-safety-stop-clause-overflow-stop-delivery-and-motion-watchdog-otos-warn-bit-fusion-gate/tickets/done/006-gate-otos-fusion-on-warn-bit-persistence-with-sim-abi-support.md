@@ -1,8 +1,9 @@
 ---
 id: '006'
 title: Gate OTOS fusion on warn-bit persistence with sim ABI support
-status: open
-use-cases: [SUC-004]
+status: done
+use-cases:
+- SUC-004
 depends-on: []
 github-issue: ''
 issue: otos-warn-bit-fusion-spin-on-placement-regression.md
@@ -45,13 +46,13 @@ Independent of tickets 001-005 (disjoint files: `Robot.{h,cpp}`,
 
 ## Acceptance Criteria
 
-- [ ] `source/robot/Robot.h` gains three new private members:
+- [x] `source/robot/Robot.h` gains three new private members:
       `uint8_t _otosWarnStreak = 0;`, `uint8_t _otosCleanStreak = 0;`,
       `bool _otosFusionBlocked = false;`, plus `static constexpr uint8_t
       kOtosWarnPersistK = 3;` and `static constexpr uint8_t
       kOtosCleanReadmitN = 5;` — alongside the existing
       `_otosInvalidStartMs`/`_otosLostEmitted` (unaffected).
-- [ ] `Robot::otosCorrect()`'s existing unreadable-path branch (`!healthy`)
+- [x] `Robot::otosCorrect()`'s existing unreadable-path branch (`!healthy`)
       is unchanged. Immediately after it (i.e. only once the reading is
       readable), a WARNING bit (`otosStatus != 0`, with HARD errors already
       excluded by `readable`) increments `_otosWarnStreak` and sets
@@ -59,12 +60,12 @@ Independent of tickets 001-005 (disjoint files: `Robot.{h,cpp}`,
       `kOtosWarnPersistK`; a clean tick (`otosStatus == 0`) resets
       `_otosWarnStreak` and, if blocked, increments `_otosCleanStreak`,
       clearing `_otosFusionBlocked` once it reaches `kOtosCleanReadmitN`.
-- [ ] When `_otosFusionBlocked` is true, `otosCorrect()` returns before
+- [x] When `_otosFusionBlocked` is true, `otosCorrect()` returns before
       calling `addOtosObservation()`. Raw telemetry
       (`state.actual.optical.pose`, `otos.valid`) is unaffected — it is
       already written earlier in the function, before this gate.
-- [ ] `source/state/EKFTiny.{h,cpp}` is **not** modified by this ticket.
-- [ ] `source/hal/sim/SimOdometer.h`/`.cpp` gain `setWarnOptical(bool on)`
+- [x] `source/state/EKFTiny.{h,cpp}` is **not** modified by this ticket.
+- [x] `source/hal/sim/SimOdometer.h`/`.cpp` gain `setWarnOptical(bool on)`
       (mirrors `setLift`). `readStatus()` reports `out = 0x02` (
       `warnOpticalTracking`), `return true` (readable) when
       `_warnOptical` is true and `_lift`/`_readFailure` are false. `tick()`
@@ -75,24 +76,65 @@ Independent of tickets 001-005 (disjoint files: `Robot.{h,cpp}`,
       `readTransformed()`/`readVelocityTransformed()` are otherwise
       unchanged (still return `true`/readable). Default `_warnOptical =
       false` — no behavior change for any existing test.
-- [ ] `tests/_infra/sim/sim_api.cpp` gains `sim_set_otos_warn(void* h, int
+- [x] `tests/_infra/sim/sim_api.cpp` gains `sim_set_otos_warn(void* h, int
       on)` (mirrors `sim_set_otos_read_failure`). `tests/_infra/sim/
       firmware.py` gains `Sim.set_otos_warn(on: bool)` (mirrors
       `set_otos_read_failure`).
-- [ ] New sim test (in or alongside `tests/simulation/unit/
+- [x] New sim test (in or alongside `tests/simulation/unit/
       test_fusion_validation.py`): with the warn bit persistently set
       (`sim.set_otos_warn(True)`) and wheels commanded to spin, fused pose
       tracks encoder-derived odometry — no snap to the frozen OTOS pose,
       even after 10+ ticks (past `EKFTiny`'s own gate-recovery threshold).
-- [ ] New sim test: a 1-2 tick warn blip (`set_otos_warn(True)` then
+- [x] New sim test: a 1-2 tick warn blip (`set_otos_warn(True)` then
       `False)` within `kOtosWarnPersistK`) does not interrupt fusion — fused
       pose continues to track the (otherwise healthy) OTOS reading normally.
-- [ ] New sim test: after a persistent-warn block, `kOtosCleanReadmitN`
+- [x] New sim test: after a persistent-warn block, `kOtosCleanReadmitN`
       consecutive clean ticks re-admit fusion.
-- [ ] `tests/simulation/unit/test_dbg_otos_commands.py` and
+- [x] `tests/simulation/unit/test_dbg_otos_commands.py` and
       `test_n8_n9_sensor_freshness.py` stay green (raw telemetry visibility
       unchanged).
-- [ ] Full default sim suite green.
+- [x] Full default sim suite green.
+
+## Implementation Note — live-path scope correction (found during implementation)
+
+The architecture-update and this ticket's plan target `Robot::otosCorrect()`
+as *the* OTOS→EKF fusion call site. Reading the call graph
+(`source/robot/LoopTickOnce.cpp`) during implementation showed this is
+**stale post-060-005**: `Robot::otosCorrect()` has zero callers anywhere in
+`source/` or `tests/_infra/sim/` — the legacy loop that called it was
+deleted in the 060 ordered-tick cutover. The sole live OTOS→EKF fusion path
+(both real firmware `run_blocks()`/`run_test()` and the sim's `sim_tick()`,
+both via `loopTickOnce()` → `robot.drive.tickUpdate()`) is
+`subsystems::Drive::tickUpdate()`'s STEP 5, in `source/subsystems/drive/
+Drive.cpp` — an entirely separate `addOtosObservation()` call site with no
+warn-bit gating of its own.
+
+Gating only `Robot::otosCorrect()` per the letter of the ticket's file list
+would have been a fix to dead code with zero effect on the sim tests, HITL
+behaviour, or the "spin on placement" regression this ticket exists to
+close. Confirmed by temporarily bypassing the `Drive.cpp` gate and re-running
+the new tests: `test_persistent_warn_blocks_fusion_no_snap` failed hard
+(112 mm fused/encoder drift vs. a 20 mm threshold, reproducing the exact
+snap-to-frozen-pose symptom) — proving the `Drive.cpp` gate, not the
+`Robot.cpp` one, is what the acceptance tests actually exercise and what
+fixes the regression.
+
+Both are gated, as the ticket's literal file list plus the dispatch
+instructions' explicit "gate the live path (both if both are live)"
+directive requires:
+
+- `source/robot/Robot.{h,cpp}` — implemented exactly per the acceptance
+  criteria above. Currently unreachable (dead code) pending any future
+  re-wiring that restores a caller; kept for API parity / documentation and
+  because the ticket's ACs specify it explicitly.
+- `source/subsystems/drive/Drive.{h,cpp}` — **new, beyond the ticket's
+  original file list** — the operative live-path fix. Same constants
+  (`kOtosWarnPersistK=3`, `kOtosCleanReadmitN=5`), same member names and
+  state-machine shape as `Robot::otosCorrect()`'s gate, added as a private
+  `Drive::_updateOtosFusionGate(bool warnBit)` helper invoked from STEP 5
+  after a successful `readTransformed()`. Raw telemetry (`_hw.otos.valid`/
+  `lastUpdMs`) is written unconditionally, matching `Robot::otosCorrect()`'s
+  contract of telemetry-visibility-unaffected-by-fusion-gating.
 
 ## Implementation Plan
 

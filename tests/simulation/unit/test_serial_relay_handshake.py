@@ -301,12 +301,19 @@ class TestRelayHandshake:
             )
 
     def test_keepalive_is_plain(self):
-        """The keepalive '+' must be sent plain (no > prefix)."""
+        """The keepalive '+' must be sent plain (no > prefix).
+
+        connect() no longer arms the keepalive automatically (sprint 065,
+        ticket 005: arm-on-demand contract) -- start_keepalive() must be
+        called explicitly, mirroring what a motion-owning caller (e.g.
+        KeyboardDriver.arm_keepalive()) would do.
+        """
         fake = self._build_fake_relay()
         conn = _make_conn()
 
         with _patch_serial(fake):
             conn.connect()
+            conn.start_keepalive()
             # Let the keepalive thread run for a bit.
             time.sleep(0.35)
             conn.disconnect()
@@ -316,6 +323,29 @@ class TestRelayHandshake:
         assert ka_sends, "No '+' keepalive seen in writes"
         relay_ka = [s for s in sent if s == ">+"]
         assert not relay_ka, f"Found relay-prefixed keepalive '>+': {relay_ka}"
+
+    def test_connect_alone_does_not_arm_keepalive(self):
+        """connect() alone (no start_keepalive() call) must emit no '+'.
+
+        Sprint 065, ticket 005: the ambient keepalive daemon is armed on
+        demand by whichever layer owns motion (e.g. KeyboardDriver via
+        Transport.arm_keepalive()), not automatically by connect().  A
+        connected-but-idle port must stay silent.
+        """
+        fake = self._build_fake_relay()
+        conn = _make_conn()
+
+        with _patch_serial(fake):
+            conn.connect()
+            # Observation window comfortably longer than the keepalive
+            # period (_KEEPALIVE_PERIOD_S = 0.15 s) -- if the daemon were
+            # (wrongly) still auto-armed, several '+' sends would land here.
+            time.sleep(0.35)
+            conn.disconnect()
+
+        sent = fake.written_text()
+        ka_sends = [s for s in sent if s == "+"]
+        assert not ka_sends, f"'+' keepalive seen without start_keepalive(): {ka_sends}"
 
     def test_announcement_in_result(self):
         """connect() result must include the parsed DEVICE: announcement."""
@@ -629,10 +659,16 @@ class TestCorrIdAndKeepaliveRelay:
             assert "#" in s, f"corr-id suffix missing from SNAP command: {s!r}"
 
     def test_keepalive_plain_plus(self):
-        """Keepalive thread sends plain '+', never '>+'."""
+        """Keepalive thread sends plain '+', never '>+'.
+
+        connect() no longer arms the keepalive automatically (sprint 065,
+        ticket 005: arm-on-demand contract) -- start_keepalive() must be
+        called explicitly.
+        """
         conn, fake = self._build_and_connect()
 
         with _patch_serial(fake):
+            conn.start_keepalive()
             time.sleep(0.4)  # let keepalive tick a few times
             conn.disconnect()
 

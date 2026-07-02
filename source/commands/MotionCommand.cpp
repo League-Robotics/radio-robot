@@ -8,7 +8,6 @@
 #include "BodyVelocityController.h"
 #include <cstdio>
 #include <cstring>
-#include <cassert>
 
 // ---------------------------------------------------------------------------
 // Configuration phase
@@ -53,7 +52,13 @@ void MotionCommand::setDoneEvt(const char* label)
 bool MotionCommand::addStop(const StopCondition& c)
 {
     if (_nStops >= kMaxStopConds) {
-        assert(false && "MotionCommand: addStop overflow — kMaxStopConds reached");
+        // Overflow is a recoverable condition, not a fatal error (065-001 / CR-01):
+        // the caller (Superstructure::requestGoal) checks this return value and
+        // turns it into a safe cancel + wire-visible "ERR stopoverflow" instead of
+        // continuing with silently-incomplete stop coverage. Never assert here —
+        // the sim build carries no NDEBUG, so a live assert would abort the whole
+        // process hosting the sim (pytest run / TestGUI tick-thread); real
+        // firmware would panic mid-drive via the CODAL assert path.
         return false;
     }
     _stops[_nStops++] = c;

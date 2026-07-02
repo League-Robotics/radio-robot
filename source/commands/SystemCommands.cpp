@@ -1075,7 +1075,7 @@ std::vector<CommandDescriptor> Robot::buildCommandTable(
     cmds.push_back(makeCmd("VER",    nullptr, handleVer,       sysCtxPtr, "badarg")); // report firmware version
     cmds.push_back(makeCmd("HELP",   nullptr, handleHelp,      sysCtxPtr, "badarg")); // list available commands
     cmds.push_back(makeCmd("SNAP",   nullptr, handleSnap,      sysCtxPtr, "badarg")); // emit one TLM frame on demand
-    cmds.push_back(makeCmd("+",      nullptr, handleKeepalive, sysCtxPtr, "badarg")); // keepalive: reset watchdog
+    cmds.push_back(makeCmd("+",      nullptr, handleKeepalive, sysCtxPtr, "badarg", ForceReply::NONE, CMD_MOTION_WATCHDOG)); // keepalive: reset watchdog
     // Custom-parseFn commands: ZERO/HALT retain sub-verb dispatch; BAUD uses sval for large int.
     cmds.push_back(makeCmd("ZERO",   parseZero, handleZero,   sysCtxPtr, "badarg")); // zero encoders/pose/halt-baselines
     cmds.push_back(makeCmd("HALT",   parseHalt, handleHalt,   sysCtxPtr, "badarg")); // named stop-condition registry

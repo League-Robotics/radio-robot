@@ -155,6 +155,12 @@ void Planner::beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
     // Re-arm safety if SAFE off was issued (one-shot disable, sprint 024-003).
     _checkSafeOneShot(fn, ctx);
 
+    // 065-003 / CR-05b: stamp the velocity-refresh timestamp. beginVelocity()
+    // covers S, VW, T, R — everything routed through Goal::VELOCITY — so this
+    // is the single point of truth for "an open-ended velocity target was
+    // genuinely refreshed," independent of the `+` keepalive.
+    _lastVelocityRefreshMs = now_ms;
+
     // seedImmediate (S-command path): seed the BVC current state immediately at
     // the target speed so there is no trapezoid ramp-up.  This preserves S's
     // original semantics (beginStream seeded BVC before setTarget).
@@ -556,7 +562,7 @@ void Planner::beginRotation(float relCdeg, uint32_t now_ms,
     target.mode = DriveMode::VELOCITY;
 }
 
-void Planner::beginRawVelocity(float v_mms, float omega_rads)
+void Planner::beginRawVelocity(float v_mms, float omega_rads, uint32_t now_ms)
 {
     // Cancel-if-active: emit EVT cancelled for the preempted command's corrId
     // before seeding the BVC.  _VW (raw velocity, fire-and-forget) must not
@@ -566,6 +572,13 @@ void Planner::beginRawVelocity(float v_mms, float omega_rads)
     if (_activeCmd.active()) {
         _activeCmd.cancel(MotionCommand::StopStyle::HARD);
     }
+
+    // 065-003 / CR-05b: stamp the velocity-refresh timestamp. _VW bypasses
+    // beginVelocity() entirely (fire-and-forget, no MotionCommand), so it
+    // must stamp _lastVelocityRefreshMs itself — otherwise a _VW-only stream
+    // kept alive by ambient `+` would incorrectly go stale under the new
+    // watchdog signal even though fresh _VW commands are still arriving.
+    _lastVelocityRefreshMs = now_ms;
 
     // Seed the profiler's current state to the target — no ramp from zero.
     // Then set the target so advance() holds at this speed immediately.

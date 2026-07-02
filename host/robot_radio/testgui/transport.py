@@ -16,6 +16,17 @@ Transport (ABC)
         send(line)           — fire-and-forget (no reply read).
         command(line, read_ms) — send and collect reply lines joined as str.
 
+    Keepalive (sprint 065, ticket 005; default no-ops, not abstract):
+        arm_keepalive()    — arm the ambient host "+" keepalive for an
+            open-ended (S/VW/R) motion session. connect() no longer arms it
+            automatically; the caller that owns the motion session (e.g.
+            KeyboardDriver) is responsible. Hardware backends
+            (_HardwareTransport) delegate to SerialConnection.start_keepalive();
+            SimTransport uses the inherited no-op default (no real serial
+            link, no ambient-keepalive concept).
+        disarm_keepalive() — disarm it (hardware backends delegate to
+            SerialConnection.stop_keepalive()).
+
     Callbacks (set before connect()):
         on_telemetry: Callable[[TLMFrame], None] | None
             Called from the reader thread for every parsed TLM line.
@@ -322,6 +333,37 @@ class Transport(abc.ABC):
         """
 
     # ------------------------------------------------------------------
+    # Keepalive arm/disarm (sprint 065, ticket 005)
+    # ------------------------------------------------------------------
+    #
+    # SerialConnection no longer arms its ambient "+" keepalive daemon on
+    # connect() -- an ambient keepalive running for the entire lifetime of an
+    # open port silently defeats the firmware motion watchdog for any hung
+    # host process (see architecture-update.md, sprint 065, item 5).  Instead
+    # the daemon is armed/disarmed by whichever layer actually owns an
+    # open-ended motion session (e.g. the TestGUI's ``KeyboardDriver``, which
+    # arms on drive-session start and disarms once its bounded STOP deadman
+    # sequence completes).  These default to no-ops, not abstract methods, so
+    # existing subclasses (and any future ones) do not break; ``SimTransport``
+    # relies on the no-op default since it has no real serial link and no
+    # ambient-keepalive concept -- its watchdog behavior is exercised
+    # directly via ``sim_command()`` (tickets 002/003).
+
+    def arm_keepalive(self) -> None:
+        """Arm the ambient host keepalive for an open-ended motion session.
+
+        No-op by default.  Hardware backends override this to start the
+        underlying ``SerialConnection``'s background ``+`` keepalive thread.
+        """
+
+    def disarm_keepalive(self) -> None:
+        """Disarm the ambient host keepalive.
+
+        No-op by default.  Hardware backends override this to stop the
+        underlying ``SerialConnection``'s background ``+`` keepalive thread.
+        """
+
+    # ------------------------------------------------------------------
     # Internal helpers shared across hardware backends
     # ------------------------------------------------------------------
 
@@ -458,6 +500,20 @@ class _HardwareTransport(Transport):
         result = self._conn.send(line, read_ms=read_ms)
         responses = result.get("responses", [])
         return "\n".join(responses)
+
+    # ------------------------------------------------------------------
+    # Keepalive arm/disarm
+    # ------------------------------------------------------------------
+
+    def arm_keepalive(self) -> None:
+        """Start the underlying ``SerialConnection``'s ``+`` keepalive thread."""
+        if self._conn is not None:
+            self._conn.start_keepalive()
+
+    def disarm_keepalive(self) -> None:
+        """Stop the underlying ``SerialConnection``'s ``+`` keepalive thread."""
+        if self._conn is not None:
+            self._conn.stop_keepalive()
 
     # ------------------------------------------------------------------
     # Background threads

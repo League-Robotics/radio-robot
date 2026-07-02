@@ -270,6 +270,46 @@ void Robot::otosCorrect(uint32_t now_ms)
     _otosInvalidStartMs = 0;
     _otosLostEmitted    = false;
 
+    // -----------------------------------------------------------------------
+    // CR-06 (065-006): WARNING-bit persistence gate.
+    //
+    // `readable` above already excludes HARD errors (kOtosHardErr); a
+    // WARNING bit (warnTiltAngle bit0 / warnOpticalTracking bit1) leaves the
+    // reading READABLE but degraded.  A short warn streak (<= K ticks) is
+    // transient (I2C/IMU noise) and safe to fuse through; a PERSISTENT warn
+    // streak (lifted robot, robot on the stand, freshly placed robot) must
+    // NOT be fused — otherwise EKFTiny's own gate-recovery force-snaps the
+    // fused pose to the frozen observation after 10 consecutive rejections,
+    // reopening the "spin on placement" failure (D9 / 027-005) the original
+    // two-tier gate existed to prevent.
+    // -----------------------------------------------------------------------
+    if (otosStatus != 0) {
+        // Warning tick: accumulate the persistent-warn streak and drop any
+        // partial progress toward re-admission (the clean streak must be
+        // consecutive).
+        if (_otosWarnStreak < 0xFF) ++_otosWarnStreak;
+        _otosCleanStreak = 0;
+        if (_otosWarnStreak > kOtosWarnPersistK) {
+            _otosFusionBlocked = true;
+        }
+    } else {
+        // Clean tick: reset the warn streak; count toward re-admission if
+        // currently blocked.
+        _otosWarnStreak = 0;
+        if (_otosFusionBlocked) {
+            if (++_otosCleanStreak >= kOtosCleanReadmitN) {
+                _otosFusionBlocked = false;
+                _otosCleanStreak   = 0;
+            }
+        }
+    }
+
+    if (_otosFusionBlocked) {
+        // Raw telemetry (state.actual.optical.pose / otos.valid) was already
+        // written above — only the EKF fusion call below is skipped.
+        return;
+    }
+
     // Read OTOS velocity and acceleration; store acceleration for telemetry.
     OtosVelocity vel;
     bool velOk = activeOtos.readVelocityTransformed(vel, headingRad);

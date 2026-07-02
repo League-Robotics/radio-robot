@@ -149,14 +149,30 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
             Pose2D p{};
             bool poseOk = _otos.readTransformed(p, headingRad);
             if (poseOk) {
+                // CR-06 (065-006): WARNING-bit persistence gate. poseOk above
+                // is the READABLE tier (I2C burst succeeded); readStatus()
+                // adds the HEALTHY tier so a persistently degraded-but-
+                // readable reading (lifted / on-stand / freshly-placed
+                // robot) is not fused into the EKF, mirroring
+                // Robot::otosCorrect()'s two-tier D9 gate. A failed status
+                // read is treated the same as a WARNING tick (conservative —
+                // do not count it toward re-admission).
+                uint8_t otosStatus = 0;
+                bool statusOk = _otos.readStatus(otosStatus);
+                _updateOtosFusionGate(!statusOk || (otosStatus != 0));
+
                 BodyTwist vel{};
                 _otos.readVelocityTransformed(vel, headingRad);
-                _est.addOtosObservation(_hw,
-                                        p.x, p.y, p.h,
-                                        vel.v_mmps, vel.omega_rads,
-                                        0.0f, now);
+                if (!_otosFusionBlocked) {
+                    _est.addOtosObservation(_hw,
+                                            p.x, p.y, p.h,
+                                            vel.v_mmps, vel.omega_rads,
+                                            0.0f, now);
+                }
                 // 060-004: Mirror Robot::otosCorrect() — mark otos.valid so
                 // buildTlmFrame's N8 freshness gate emits the otos= field.
+                // Raw telemetry visibility is unaffected by the fusion gate
+                // above (matches Robot::otosCorrect's contract).
                 _hw.otos.lastUpdMs = now;
                 _hw.otos.valid     = true;
             } else {
@@ -371,6 +387,35 @@ void Drive::injectFusedPose(float x, float y, float h_rad)
 void Drive::setEncOmegaHealthy(bool healthy)
 {
     _est.setEncOmegaHealthy(healthy);
+}
+
+// ---------------------------------------------------------------------------
+// _updateOtosFusionGate — CR-06 (065-006) WARNING-bit persistence gate.
+//
+// Mirrors Robot::otosCorrect()'s state machine exactly: a warn tick
+// accumulates _otosWarnStreak and drops any partial re-admission progress; a
+// clean tick resets the warn streak and, once blocked, counts toward
+// re-admission. Called once per STEP 5 OTOS read (readable ticks only —
+// unreadable ticks skip fusion entirely via the existing poseOk branch and
+// do not touch this gate, same as Robot::otosCorrect's unreadable path).
+// ---------------------------------------------------------------------------
+void Drive::_updateOtosFusionGate(bool warnBit)
+{
+    if (warnBit) {
+        if (_otosWarnStreak < 0xFF) ++_otosWarnStreak;
+        _otosCleanStreak = 0;
+        if (_otosWarnStreak > kOtosWarnPersistK) {
+            _otosFusionBlocked = true;
+        }
+    } else {
+        _otosWarnStreak = 0;
+        if (_otosFusionBlocked) {
+            if (++_otosCleanStreak >= kOtosCleanReadmitN) {
+                _otosFusionBlocked = false;
+                _otosCleanStreak   = 0;
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

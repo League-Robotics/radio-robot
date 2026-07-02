@@ -705,8 +705,13 @@ static void handleT(const ArgList& args, const char* corrId,
 //
 // Builds a GoalRequest with goal=DISTANCE (preserving the atomic encoder reset
 // via robot->distanceDrive in Superstructure::requestGoal), leftMms/rightMms
-// as integer wheel speeds, targetMm=mm, stops[0]=makeDistanceStop(mm), and
-// doneLabel="EVT done D".  Eliminates the stringify/inverse round-trip.
+// as integer wheel speeds, targetMm=mm, and doneLabel="EVT done D".
+// Eliminates the stringify/inverse round-trip. gr.stops[] carries only
+// wire-supplied stop=/sensor= clauses (065-001 / CR-01) — the primary
+// DISTANCE+TIME stop pair is installed internally by distanceDrive() ->
+// beginDistance(), NOT pre-populated here (that would double-book it, since
+// Superstructure::requestGoal's DISTANCE case re-adds every entry of
+// gr.stops[] on top of what beginDistance() already installed).
 //
 // Architecture note: Goal::DISTANCE is KEPT (not collapsed to VELOCITY) precisely
 // to preserve the atomic encoder reset (beginDistance + resetEncoders) that
@@ -756,7 +761,14 @@ static void handleD(const ArgList& args, const char* corrId,
         gr.rightMms = (float)r;
         gr.targetMm = (int32_t)mm;
         gr.doneLabel = "EVT done D";
-        gr.stops[gr.nStops++] = makeDistanceStop((float)mm);
+        // NOTE (065-001 / CR-01): do NOT pre-populate gr.stops[0] with a
+        // makeDistanceStop(mm) here. distanceDrive() -> beginDistance() already
+        // installs its own DISTANCE + TIME stops internally; Superstructure::
+        // requestGoal's DISTANCE case re-adds every entry of gr.stops[] on top
+        // of those, so a pre-added stop here double-books the primary DISTANCE
+        // condition (wasted on plain D; overflows kMaxStopConds once 2+ wire
+        // clauses are also supplied). gr.stops[] carries only wire-supplied
+        // stop=/sensor= clauses, starting at index 0.
 
         // Pack any additional stop= / sensor= clauses from args[3..].
         for (int i = 3; i < args.count && gr.nStops < MotionCommand::kMaxStopConds; ++i) {
@@ -1221,6 +1233,14 @@ static void handleVW(const ArgList& args, const char* corrId,
         if (ctx->mc->activeCmd().origin() == MotionCommand::Origin::RETARGETABLE) {
             // VW keepalive: update target and re-arm.
             ctx->mc->activeCmd().setTarget((float)v, omega_rads);
+            // 065-003 / CR-05b: this resend bypasses beginVelocity() (that's
+            // the point of the D6 guard — no cancel/reconfigure churn on
+            // every keepalive), so it must independently mark the
+            // velocity-refresh timestamp. Without this, a real VW resend
+            // stream (KeyboardDriver's resend-timer pattern) would go
+            // "stale" after just the FIRST VW despite fresh commands
+            // continuing to arrive.
+            ctx->mc->markVelocityRefreshed(now);
         } else {
             // FIXED command active: reply busy, do not stomp target.
             const char* originName =
@@ -1290,7 +1310,8 @@ static void handle_VW(const ArgList& args, const char* corrId,
     int v     = args.args[0].ival;
     int omega = args.args[1].ival;
     float omega_rads = (float)omega / 1000.0f;  // mrad/s → rad/s
-    ctx->mc->beginRawVelocity((float)v, omega_rads);
+    uint32_t now = ctx->robot->systemTime();
+    ctx->mc->beginRawVelocity((float)v, omega_rads, now);
     char rbuf[64];
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "_VW", nullptr, corrId, replyFn, replyCtx);
 }
@@ -1348,16 +1369,16 @@ std::vector<CommandDescriptor> getMotionCommands(MotionCtx* ctx)
     ctx->vwDesc.flags      = CMD_ACCESS_HARDWARE;
 
     return {
-        makeCmd(      "S",    parseS,    handleS,    ctx, "badarg"),                                        // set wheel speeds (mm/s)
-        makeCmd(      "T",    parseT,    handleT,    ctx, "badarg"),                                        // timed drive (ms)
-        makeCmd(      "D",    parseD,    handleD,    ctx, "badarg"),                                        // distance drive (mm)
-        makeSchemaCmd("G",    &gSchema,  handleG,    ctx, "badarg"),                                        // goto encoder position
-        makeCmd(      "R",    parseR,    handleR,    ctx, "badarg"),                                        // arc drive: R <speed> <radius_mm>
-        makeCmd(      "TURN", parseTURN, handleTURN, ctx, "badarg"),                                        // spin in place to absolute heading
-        makeSchemaCmd("RT",   &rtSchema, handleRT,   ctx, "badarg"),                                        // relative spin by <cdeg>
-        makeCmd(      "VW",   parseVW,   handleVW,   ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // body-twist velocity
-        makeCmd(      "_VW",  parse_VW,  handle_VW,  ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // raw velocity (no ramp)
-        makeSchemaCmd("X",    &xSchema,  handleX,    ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // stop / soft stop
-        makeCmd(      "STOP", nullptr,   handleSTOP, ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE), // hard stop
+        makeCmd(      "S",    parseS,    handleS,    ctx, "badarg", ForceReply::NONE, CMD_MOTION_WATCHDOG),                        // set wheel speeds (mm/s)
+        makeCmd(      "T",    parseT,    handleT,    ctx, "badarg", ForceReply::NONE, CMD_MOTION_WATCHDOG),                        // timed drive (ms)
+        makeCmd(      "D",    parseD,    handleD,    ctx, "badarg", ForceReply::NONE, CMD_MOTION_WATCHDOG),                        // distance drive (mm)
+        makeSchemaCmd("G",    &gSchema,  handleG,    ctx, "badarg", ForceReply::NONE, CMD_MOTION_WATCHDOG),                        // goto encoder position
+        makeCmd(      "R",    parseR,    handleR,    ctx, "badarg", ForceReply::NONE, CMD_MOTION_WATCHDOG),                        // arc drive: R <speed> <radius_mm>
+        makeCmd(      "TURN", parseTURN, handleTURN, ctx, "badarg", ForceReply::NONE, CMD_MOTION_WATCHDOG),                        // spin in place to absolute heading
+        makeSchemaCmd("RT",   &rtSchema, handleRT,   ctx, "badarg", ForceReply::NONE, CMD_MOTION_WATCHDOG),                        // relative spin by <cdeg>
+        makeCmd(      "VW",   parseVW,   handleVW,   ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE | CMD_MOTION_WATCHDOG), // body-twist velocity
+        makeCmd(      "_VW",  parse_VW,  handle_VW,  ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE | CMD_MOTION_WATCHDOG), // raw velocity (no ramp)
+        makeSchemaCmd("X",    &xSchema,  handleX,    ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE | CMD_MOTION_WATCHDOG), // stop / soft stop
+        makeCmd(      "STOP", nullptr,   handleSTOP, ctx, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE | CMD_MOTION_WATCHDOG), // hard stop
     };
 }

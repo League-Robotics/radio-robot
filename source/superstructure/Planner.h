@@ -135,9 +135,30 @@ public:
 
     void softStop(uint32_t now_ms);
 
-    void beginRawVelocity(float v_mms, float omega_rads);
+    void beginRawVelocity(float v_mms, float omega_rads, uint32_t now_ms);
 
     void disableSafetyOneShot();
+
+    // 065-003 / CR-05b: timestamp of the last genuine open-ended
+    // velocity-target refresh (stamped by beginVelocity() and
+    // beginRawVelocity() — the only two call sites that legitimately
+    // create/refresh an S/VW/R/_VW target). Read by
+    // Superstructure::evaluateSafety() as a second, `+`-independent
+    // watchdog signal: an ambient keepalive alone must not be sufficient
+    // to keep an open-ended command alive if the velocity-issuing layer
+    // itself has stalled.
+    uint32_t lastVelocityRefreshMs() const { return _lastVelocityRefreshMs; }
+
+    // 065-003 / CR-05b: stamp a fresh velocity-target refresh WITHOUT going
+    // through begin*(). The "D6 origin guard" VW-keepalive path
+    // (MotionCommands.cpp handleVW) updates an already-active RETARGETABLE
+    // command's target via activeCmd().setTarget() directly — a deliberate
+    // bypass of beginVelocity() to avoid cancel/reconfigure churn on every
+    // resend (see the D6 comment at that call site). That resend is exactly
+    // a "genuine refresh" for staleness purposes (it is the KeyboardDriver
+    // resend pattern this ticket exists to keep alive), so the wire-layer
+    // caller marks it explicitly here.
+    void markVelocityRefreshed(uint32_t now_ms) { _lastVelocityRefreshMs = now_ms; }
 
     bool hasActiveCommand() const { return _activeCmd.active(); }
 
@@ -176,6 +197,12 @@ private:
 
     // SAFE one-shot disable flag (sprint 024-003).
     bool _safeOneShotDisable = false;
+
+    // 065-003 / CR-05b: last time an open-ended velocity target (S/VW/R/_VW)
+    // was genuinely refreshed by beginVelocity()/beginRawVelocity(). Persists
+    // across commands by design (see architecture-update.md Decision 3) —
+    // its only purpose is "how long since a velocity target was last set."
+    uint32_t _lastVelocityRefreshMs = 0;
 
     // Drive mode
     DriveMode _mode;

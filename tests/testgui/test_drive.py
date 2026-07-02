@@ -27,16 +27,25 @@ import pytest
 
 
 class FakeTransport:
-    """Minimal fake Transport that records send() calls."""
+    """Minimal fake Transport that records send() and keepalive arm/disarm calls."""
 
     def __init__(self) -> None:
         self.sent: list[str] = []
+        # "arm" / "disarm", in call order -- used to verify KeyboardDriver
+        # correctly brackets a drive session (sprint 065, ticket 005).
+        self.keepalive_events: list[str] = []
 
     def send(self, line: str) -> None:
         self.sent.append(line)
 
     def command(self, line: str, read_ms: int = 200) -> str:
         return "OK"
+
+    def arm_keepalive(self) -> None:
+        self.keepalive_events.append("arm")
+
+    def disarm_keepalive(self) -> None:
+        self.keepalive_events.append("disarm")
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +378,11 @@ class TestKeyboardDriverKeyRelease:
 
         assert "STOP" in transport.sent
 
-    def test_release_stops_timer(self, fake_window, qapp):
+    def test_release_starts_deadman_timer_keeps_running(self, fake_window, qapp):
+        """Release begins the bounded STOP deadman resend; the timer keeps
+        running through the deadman window instead of stopping immediately
+        (it stops once the deadman sequence completes -- see
+        TestKeyboardDriverStopDeadman)."""
         from PySide6.QtCore import Qt
         from robot_radio.testgui.drive import KeyboardDriver
 
@@ -383,7 +396,9 @@ class TestKeyboardDriverKeyRelease:
         assert driver._timer is not None and driver._timer.isActive()
 
         fake_window.keyReleaseEvent(release)
-        assert driver._timer is None or not driver._timer.isActive()
+        assert driver._timer is not None and driver._timer.isActive(), (
+            "Timer must stay active through the bounded STOP deadman window"
+        )
         driver.detach()
 
     def test_auto_repeat_release_is_ignored(self, fake_window, qapp):
@@ -465,9 +480,14 @@ class TestKeyboardDriverKeepalive:
         assert transport.sent[-1] == "VW -200 0"
         driver.detach()
 
-    def test_timer_stops_on_release(self, fake_window, qapp):
+    def test_timer_eventually_stops_after_release_deadman_completes(
+        self, fake_window, qapp
+    ):
+        """The timer stops once the bounded STOP deadman sequence completes,
+        not immediately on release (see TestKeyboardDriverStopDeadman for the
+        exact resend-count assertions)."""
         from PySide6.QtCore import Qt
-        from robot_radio.testgui.drive import KeyboardDriver
+        from robot_radio.testgui.drive import KeyboardDriver, STOP_RESEND_COUNT
 
         transport = FakeTransport()
         driver = KeyboardDriver(interval_ms=50)
@@ -479,8 +499,311 @@ class TestKeyboardDriverKeepalive:
         assert driver._timer is not None and driver._timer.isActive()
 
         fake_window.keyReleaseEvent(release)
+        assert driver._timer is not None and driver._timer.isActive()
+
+        # Drive the remaining deadman ticks directly.
+        for _ in range(STOP_RESEND_COUNT - 1):
+            driver._on_timer_tick()
+
         assert driver._timer is None or not driver._timer.isActive()
         driver.detach()
+
+
+class TestKeyboardDriverStopDeadman:
+    """STOP deadman resend (CR-04 / ticket 065-004): a dropped fire-and-
+    forget STOP no longer leaves the robot driving forever.  Release
+    resends STOP a bounded number of times (STOP_RESEND_COUNT) before the
+    timer actually stops, and focus loss triggers the same sequence."""
+
+    def test_release_resends_stop_bounded_count_then_stops(self, fake_window, qapp):
+        """Release sends STOP immediately, then the timer resends it for
+        STOP_RESEND_COUNT - 1 further ticks, then stops -- STOP_RESEND_COUNT
+        total STOP sends, no more."""
+        from PySide6.QtCore import Qt
+        from robot_radio.testgui.drive import KeyboardDriver, STOP_RESEND_COUNT
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+
+        press = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+        release = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+        fake_window.keyPressEvent(press)
+        fake_window.keyReleaseEvent(release)
+
+        # The release tick itself is the first STOP send.
+        stops_after_release = [s for s in transport.sent if s == "STOP"]
+        assert len(stops_after_release) == 1
+        assert driver._timer is not None and driver._timer.isActive()
+
+        # STOP_RESEND_COUNT - 1 further timer ticks each resend STOP.
+        for i in range(STOP_RESEND_COUNT - 1):
+            driver._on_timer_tick()
+            stops_so_far = [s for s in transport.sent if s == "STOP"]
+            assert len(stops_so_far) == 2 + i, (
+                f"Expected {2 + i} STOP sends after tick {i + 1}, "
+                f"got {len(stops_so_far)}"
+            )
+
+        # Total STOP sends == STOP_RESEND_COUNT; timer now stopped.
+        total_stops = [s for s in transport.sent if s == "STOP"]
+        assert len(total_stops) == STOP_RESEND_COUNT
+        assert driver._timer is None or not driver._timer.isActive()
+
+        # One more tick (simulating a straggling timer fire) must not send
+        # another STOP -- the sequence is over.
+        driver._on_timer_tick()
+        total_stops_after_extra_tick = [s for s in transport.sent if s == "STOP"]
+        assert len(total_stops_after_extra_tick) == STOP_RESEND_COUNT
+        driver.detach()
+
+    def test_dropped_first_stop_still_recovers_via_deadman_resend(
+        self, fake_window, qapp
+    ):
+        """Simulate a dropped first STOP (fake transport raises once) --
+        a subsequent deadman resend still gets through, and the timer still
+        stops on schedule (the countdown advances even on a failed send)."""
+        from PySide6.QtCore import Qt
+        from robot_radio.testgui.drive import KeyboardDriver, STOP_RESEND_COUNT
+
+        class DropFirstStopTransport(FakeTransport):
+            """Raises on the first STOP send only; behaves normally after."""
+
+            def __init__(self) -> None:
+                super().__init__()
+                self._stop_sends_seen = 0
+
+            def send(self, line: str) -> None:
+                if line == "STOP":
+                    self._stop_sends_seen += 1
+                    if self._stop_sends_seen == 1:
+                        raise RuntimeError("simulated dropped STOP line")
+                super().send(line)
+
+        transport = DropFirstStopTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+
+        press = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+        release = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+        fake_window.keyPressEvent(press)
+        fake_window.keyReleaseEvent(release)  # first STOP send "dropped"
+
+        # The dropped send must not have been recorded, but the deadman
+        # sequence must still be running (timer active).
+        assert "STOP" not in transport.sent
+        assert driver._timer is not None and driver._timer.isActive()
+
+        # Drive the remaining deadman ticks -- a subsequent resend must get
+        # through despite the first one failing.
+        for _ in range(STOP_RESEND_COUNT - 1):
+            driver._on_timer_tick()
+
+        assert "STOP" in transport.sent, (
+            "A later deadman resend must still deliver STOP after the first "
+            "send was dropped"
+        )
+        # The countdown must have advanced on the dropped send too, so the
+        # timer still stops on schedule (not one tick late).
+        assert driver._timer is None or not driver._timer.isActive()
+        driver.detach()
+
+    def test_focus_out_triggers_deadman_when_key_held(self, fake_window, qapp):
+        """Losing window focus while an arrow key is held triggers the same
+        bounded STOP deadman-resend sequence a real key-release would."""
+        from PySide6.QtCore import Qt
+        from robot_radio.testgui.drive import KeyboardDriver, STOP_RESEND_COUNT
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+        # Avoid forwarding a MagicMock focus event to the real C++ handler.
+        driver._orig_focus_out = lambda e: None
+
+        press = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+        fake_window.keyPressEvent(press)
+        assert "VW 200 0" in transport.sent
+        assert "STOP" not in transport.sent
+
+        focus_event = MagicMock()
+        driver._on_focus_out(focus_event)
+
+        # Focus loss must have started the deadman sequence exactly like a
+        # real key release: one immediate STOP send, timer still active.
+        assert "STOP" in transport.sent
+        assert driver._timer is not None and driver._timer.isActive()
+
+        for _ in range(STOP_RESEND_COUNT - 1):
+            driver._on_timer_tick()
+
+        total_stops = [s for s in transport.sent if s == "STOP"]
+        assert len(total_stops) == STOP_RESEND_COUNT
+        assert driver._timer is None or not driver._timer.isActive()
+        driver.detach()
+
+    def test_focus_out_does_nothing_when_no_key_held(self, fake_window, qapp):
+        """Focus loss while idle (no key held, no deadman in progress) must
+        not send a spurious STOP."""
+        from robot_radio.testgui.drive import KeyboardDriver
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+        driver._orig_focus_out = lambda e: None
+
+        focus_event = MagicMock()
+        driver._on_focus_out(focus_event)
+
+        assert transport.sent == []
+        driver.detach()
+
+    def test_focus_out_forwards_to_original_handler(self, fake_window, qapp):
+        """The original focusOutEvent handler must still be invoked (no
+        double-handling, no silently dropped Qt behavior)."""
+        from robot_radio.testgui.drive import KeyboardDriver
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+
+        calls = []
+        driver._orig_focus_out = lambda e: calls.append(e)
+
+        focus_event = MagicMock()
+        driver._on_focus_out(focus_event)
+
+        assert calls == [focus_event]
+        driver.detach()
+
+
+class TestKeyboardDriverKeepaliveArmDisarm:
+    """Keepalive arm/disarm bracket a drive session (sprint 065, ticket 005).
+
+    ``SerialConnection.connect()`` no longer arms the ambient '+' keepalive
+    daemon automatically -- ``KeyboardDriver`` (the layer that owns
+    open-ended VW motion sessions) now calls
+    ``transport.arm_keepalive()`` on the first key press of a session and
+    ``transport.disarm_keepalive()`` once the bounded STOP deadman sequence
+    completes (or on ``detach()``, as a safety net).
+    """
+
+    def test_press_release_deadman_complete_brackets_correctly(
+        self, fake_window, qapp
+    ):
+        """arm on first press; NOT disarmed merely on release (STOP still
+        needs bounded resending); disarmed exactly once the deadman
+        sequence completes."""
+        from PySide6.QtCore import Qt
+        from robot_radio.testgui.drive import KeyboardDriver, STOP_RESEND_COUNT
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+
+        press = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+        release = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+
+        fake_window.keyPressEvent(press)
+        assert transport.keepalive_events == ["arm"], (
+            "Keepalive must be armed on the first key press of a drive session"
+        )
+
+        fake_window.keyReleaseEvent(release)
+        assert transport.keepalive_events == ["arm"], (
+            "Keepalive must not be disarmed on release itself -- STOP still "
+            "needs its bounded deadman resend"
+        )
+
+        for _ in range(STOP_RESEND_COUNT - 1):
+            driver._on_timer_tick()
+
+        assert transport.keepalive_events == ["arm", "disarm"], (
+            "Keepalive must be disarmed exactly once, only after the "
+            "deadman sequence completes"
+        )
+
+        # detach() after a clean disarm must not double-disarm.
+        driver.detach()
+        assert transport.keepalive_events == ["arm", "disarm"]
+
+    def test_held_key_direction_change_does_not_rearm(self, fake_window, qapp):
+        """Switching directions mid-drive (still holding a key, never
+        released) must not call arm_keepalive() a second time -- the
+        session is still active."""
+        from PySide6.QtCore import Qt
+        from robot_radio.testgui.drive import KeyboardDriver
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+
+        up = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+        down = _make_key_event(Qt.Key.Key_Down, is_auto_repeat=False)
+        fake_window.keyPressEvent(up)
+        fake_window.keyPressEvent(down)
+
+        assert transport.keepalive_events == ["arm"], (
+            f"arm_keepalive() must only be called once per session: "
+            f"{transport.keepalive_events}"
+        )
+        driver.detach()
+
+    def test_focus_out_deadman_disarms_like_release(self, fake_window, qapp):
+        """Focus-loss triggers the same deadman sequence as a real release,
+        including the disarm once it completes."""
+        from PySide6.QtCore import Qt
+        from robot_radio.testgui.drive import KeyboardDriver, STOP_RESEND_COUNT
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+        driver._orig_focus_out = lambda e: None
+
+        press = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+        fake_window.keyPressEvent(press)
+        assert transport.keepalive_events == ["arm"]
+
+        focus_event = MagicMock()
+        driver._on_focus_out(focus_event)
+        assert transport.keepalive_events == ["arm"]
+
+        for _ in range(STOP_RESEND_COUNT - 1):
+            driver._on_timer_tick()
+
+        assert transport.keepalive_events == ["arm", "disarm"]
+        driver.detach()
+
+    def test_detach_mid_drive_disarms_as_safety_net(self, fake_window, qapp):
+        """detach() (e.g. on transport.disconnect()) mid-drive, before the
+        deadman sequence would otherwise complete, must still disarm."""
+        from PySide6.QtCore import Qt
+        from robot_radio.testgui.drive import KeyboardDriver
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+
+        press = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
+        fake_window.keyPressEvent(press)
+        assert transport.keepalive_events == ["arm"]
+
+        driver.detach()
+        assert transport.keepalive_events == ["arm", "disarm"], (
+            "detach() mid-drive must disarm the keepalive as a safety net"
+        )
+
+    def test_no_key_press_never_arms(self, fake_window, qapp):
+        """Attaching (without pressing any key) must never touch the
+        keepalive -- arming is tied strictly to an actual drive session."""
+        from robot_radio.testgui.drive import KeyboardDriver
+
+        transport = FakeTransport()
+        driver = KeyboardDriver()
+        driver.attach(fake_window, transport)
+
+        assert transport.keepalive_events == []
+        driver.detach()
+        assert transport.keepalive_events == []
 
 
 class TestKeyboardDriverNoTransport:

@@ -1,9 +1,11 @@
 ---
 id: '003'
 title: Add VW-class velocity-refresh staleness cap independent of the keepalive
-status: open
-use-cases: [SUC-003]
-depends-on: ['002']
+status: done
+use-cases:
+- SUC-003
+depends-on:
+- '002'
 github-issue: ''
 issue: stop-delivery-and-keepalive-watchdog-architecture.md
 completes_issue: true
@@ -39,35 +41,50 @@ ticket 002 modifies) to avoid rebase friction.
 
 ## Acceptance Criteria
 
-- [ ] `source/superstructure/Planner.h`/`Planner.cpp` (or `PlannerBegin.cpp`)
+- [x] `source/superstructure/Planner.h`/`Planner.cpp` (or `PlannerBegin.cpp`)
       gain a private `uint32_t _lastVelocityRefreshMs = 0;` and a public
       getter `uint32_t lastVelocityRefreshMs() const`.
-- [ ] `Planner::beginVelocity()` stamps `_lastVelocityRefreshMs = now_ms;`
+- [x] `Planner::beginVelocity()` stamps `_lastVelocityRefreshMs = now_ms;`
       (covers `S`, `VW`, `T`, `R` — everything routed through
       `Goal::VELOCITY`).
-- [ ] `Planner::beginRawVelocity()` gains a `uint32_t now_ms` parameter
+- [x] `Planner::beginRawVelocity()` gains a `uint32_t now_ms` parameter
       (currently missing) and stamps the same member; its single call site
       (`MotionCommands.cpp:1293`, `handle_VW`) is updated to pass
       `ctx->robot->systemTime()`.
-- [ ] `Superstructure::evaluateSafety()`'s watchdog block trip condition
+- [x] `Superstructure::evaluateSafety()`'s watchdog block trip condition
       becomes `(wdDelta > sTimeoutMs) || (vwDelta > sTimeoutMs)` where
       `vwDelta = now - _planner.lastVelocityRefreshMs()`, evaluated only
       when `needsWatchdog` is true (i.e. only for open-ended commands — no
       new gating logic duplicated).
-- [ ] No new `RobotConfig` field — `sTimeoutMs` (existing, default 500 ms) is
+- [x] No new `RobotConfig` field — `sTimeoutMs` (existing, default 500 ms) is
       reused for both signals.
-- [ ] New sim test: an active `VW` kept alive by `+` only (no fresh `VW`
+- [x] New sim test: an active `VW` kept alive by `+` only (no fresh `VW`
       resend) for longer than `sTimeoutMs` safety-stops despite the
       continuous `+`.
-- [ ] Regression: an active `VW` refreshed by its own resends (no `+` at
+- [x] Regression: an active `VW` refreshed by its own resends (no `+` at
       all) continues to satisfy the watchdog (`_lastVelocityRefreshMs`
       alone is sufficient) — confirms this doesn't require both signals
       simultaneously.
-- [ ] Regression: `T`/`D`/`G`/`TURN`/`RT` sessions (which never call
+- [x] Regression: `T`/`D`/`G`/`TURN`/`RT` sessions (which never call
       `beginVelocity`/`beginRawVelocity` for their own primary command, or
       whose `TIME` stop already exempts them via `needsWatchdog == false`)
       are unaffected.
-- [ ] Full default sim suite green.
+- [x] Full default sim suite green.
+
+### Implementation note beyond the plan
+
+Investigation of the current code (per "read current code" in the dispatch)
+surfaced a gap the plan's two call sites didn't cover: the VW "D6 origin
+guard" keepalive path in `handleVW` (`MotionCommands.cpp`) updates an
+already-active `RETARGETABLE` command's target via
+`activeCmd().setTarget()` directly, deliberately bypassing
+`beginVelocity()` to avoid cancel/reconfigure churn on every resend. Without
+also stamping the freshness timestamp there, the exact "KeyboardDriver
+resend pattern" scenario this ticket names as a must-keep-alive case would
+have gone stale after the *first* `VW`, defeating the ticket's purpose. Added
+`Planner::markVelocityRefreshed(uint32_t now_ms)` and call it from that one
+additional site. Verified load-bearing by temporarily disabling the call and
+confirming `test_vw_resend_without_plus_keeps_it_alive` fails without it.
 
 ## Implementation Plan
 

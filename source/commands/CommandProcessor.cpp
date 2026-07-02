@@ -151,6 +151,11 @@ void CommandProcessor::dispatchTable(char** tokens, int ntok, KVPair* kvs, int n
         args = result.args;
     }
 
+    // Successful parse: record this descriptor's flags so
+    // lastCommandResetsWatchdog() reflects the command that was just
+    // dispatched/enqueued, regardless of which branch below runs.
+    _lastDispatchFlags = desc.flags;
+
     if (_queue != nullptr) {
         // Queue mode: build a ParsedCommand and enqueue it instead of
         // dispatching immediately. The caller is responsible for draining

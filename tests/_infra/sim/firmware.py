@@ -384,6 +384,11 @@ class Sim:
         lib.sim_set_otos_read_failure.argtypes = [ctypes.c_void_p, ctypes.c_int]
         lib.sim_set_otos_read_failure.restype = None
 
+        # OTOS WARN-bit-set-but-readable helper (065-006)
+        # sim_set_otos_warn(void* h, int on)
+        lib.sim_set_otos_warn.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        lib.sim_set_otos_warn.restype = None
+
         # sim_get_fused_v(void* h) → float
         lib.sim_get_fused_v.argtypes = [ctypes.c_void_p]
         lib.sim_get_fused_v.restype = ctypes.c_float
@@ -807,6 +812,21 @@ class Sim:
         and skip EKF fusion (N9 fix verification).
         """
         self._lib.sim_set_otos_read_failure(self._h, ctypes.c_int(1 if fail else 0))
+
+    def set_otos_warn(self, on: bool) -> None:
+        """Inject or clear a persistent OTOS WARNING status (readable-but-degraded).
+
+        When set, SimOdometer.readStatus() reports a WARNING bit
+        (warnOpticalTracking, out=0x02) while remaining readable:
+        readTransformed()/readVelocityTransformed() still return True, but
+        the pose accumulator freezes and reported velocity/accel zero out
+        (models a lifted / on-stand / freshly-placed robot). Drive's live
+        OTOS-fusion path (and Robot::otosCorrect()) gate `addOtosObservation`
+        on a warn-streak persistence counter: fuse through a short blip,
+        block once the warn streak persists, re-admit after a run of clean
+        reads (065-006).
+        """
+        self._lib.sim_set_otos_warn(self._h, ctypes.c_int(1 if on else 0))
 
     def set_motor_read_failure(self, side: int, fail: bool) -> None:
         """Inject or clear an I2C encoder read failure on one or both wheels.

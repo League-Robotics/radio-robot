@@ -293,12 +293,19 @@ int sim_command(void* h, const char* line, char* out_buf, int out_len)
     s->cmd.dequeueOne(s->_queue);  // dispatch the command
     s->cmd.dequeueOne(s->_queue);  // dispatch any VW pushed by a converter
 
-    // Reset system watchdog on every inbound command — mirrors LoopScheduler's
-    // resetWatchdog(now). Reset to the CURRENT sim time so keepalives actually
-    // extend the window: the watchdog fires sTimeoutMs after the LAST command,
-    // not the first. g_sim_now_ms==0 (a command before the first tick) maps to
-    // the sentinel 1 so the timer stays armed (0 means "disarmed / none yet").
-    s->_ts.watchdogMs = (g_sim_now_ms == 0) ? 1u : g_sim_now_ms;
+    // Reset system watchdog only when the inbound command is classified
+    // CMD_MOTION_WATCHDOG (keepalive '+' or a motion verb) — mirrors
+    // LoopScheduler's gated resetWatchdog(now). GET/SNAP/... no longer reset
+    // it. Reads the same CommandProcessor classification set by process()'s
+    // dispatchTable() (no separate/duplicated "which commands count" logic
+    // here). Reset to the CURRENT sim time so keepalives actually extend the
+    // window: the watchdog fires sTimeoutMs after the LAST qualifying
+    // command, not the first. g_sim_now_ms==0 (a command before the first
+    // tick) maps to the sentinel 1 so the timer stays armed (0 means
+    // "disarmed / none yet").
+    if (s->cmd.lastCommandResetsWatchdog()) {
+        s->_ts.watchdogMs = (g_sim_now_ms == 0) ? 1u : g_sim_now_ms;
+    }
 
     // Copy the synchronous reply into the caller's buffer.
     int n = s->replyStore.written;
@@ -870,6 +877,21 @@ void sim_set_color_rgbc(void* h, uint16_t r, uint16_t g,
 void sim_set_otos_read_failure(void* h, int fail)
 {
     static_cast<SimHandle*>(h)->hal.simOdometer().setReadFailure(fail != 0);
+}
+
+// ---- OTOS WARN-bit-set-but-readable injection (065-006) ----
+
+// Inject / clear a persistent OTOS WARNING status (readStatus() returns
+// out=0x02/readable=true; readTransformed/readVelocityTransformed stay
+// readable but the pose accumulator freezes and velocity/accel zero).
+// Mirrors sim_set_otos_read_failure exactly, one tier up (readable-but-
+// degraded rather than unreadable). Drive::tickUpdate's STEP 5 OTOS
+// correction (the live ordered-tick fusion path) and Robot::otosCorrect()
+// both gate `addOtosObservation` on this via their own warn-streak
+// persistence counters.
+void sim_set_otos_warn(void* h, int on)
+{
+    static_cast<SimHandle*>(h)->hal.simOdometer().setWarnOptical(on != 0);
 }
 
 // Read fusedV from fused estimate (EKF body-frame linear speed, mm/s).

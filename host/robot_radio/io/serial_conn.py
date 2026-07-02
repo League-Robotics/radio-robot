@@ -51,9 +51,17 @@ Connection handshake (sprint 036, ticket 007):
    transparent byte pipe.  All subsequent traffic is **plain** (no ``>`` prefix).
 
 4. After the handshake, ``connect()`` proceeds with the PING readiness poll, then
-   starts the keepalive daemon and reader thread as before.  From the reader
-   thread's perspective the relay connection is indistinguishable from direct: the
-   same plain send, same ``+`` keepalive, same ``#<id>`` corr-id.
+   starts the reader thread.  From the reader thread's perspective the relay
+   connection is indistinguishable from direct: the same plain send, same
+   ``#<id>`` corr-id.
+
+   ``connect()`` does NOT start the keepalive daemon (sprint 065, ticket 005:
+   arm-on-demand contract).  The daemon only runs while a caller has
+   explicitly called ``start_keepalive()`` -- the layer that owns an
+   open-ended motion session (e.g. the TestGUI's ``KeyboardDriver``, via
+   ``Transport.arm_keepalive()``) is responsible for arming/disarming it.
+   ``disconnect()`` still calls ``stop_keepalive()`` unconditionally as
+   harmless, idempotent cleanup.
 
 Radio channel note:
    The relay's channel, group, and mode persist in its flash.  Matching those
@@ -80,10 +88,21 @@ DEFAULT_PORT = "/dev/cu.usbmodem21431202"
 READ_TIMEOUT_S = 0.12
 
 # System safety-stop watchdog keepalive. The firmware safety-stops ANY motion
-# after sTimeoutMs (default 500) of host silence, so the host must continuously
-# send "+" keepalives while connected. We send them from a background daemon
-# thread well inside that window, so if this process dies the keepalives stop
-# and the robot safety-stops on its own. See LoopScheduler.cpp watchdog.
+# after sTimeoutMs (default 500) of host silence, so a host driving open-ended
+# motion (S/VW/R) must continuously send "+" keepalives while doing so. We
+# send them from a background daemon thread well inside that window, so if
+# this process dies the keepalives stop and the robot safety-stops on its
+# own. See LoopScheduler.cpp watchdog.
+#
+# Arm-on-demand contract (sprint 065, ticket 005): start_keepalive() is NOT
+# called automatically by connect() -- the daemon only runs while explicitly
+# armed by the layer that owns motion (e.g. the TestGUI's KeyboardDriver, via
+# Transport.arm_keepalive()/disarm_keepalive()). A connected-but-idle port
+# (bounded commands like T/D/G/TURN/RT carry their own TIME stop and never
+# need it; a hung host process holding the port open must not keep an
+# open-ended motion alive past the watchdog window) sends no ambient "+" at
+# all. disconnect() still calls stop_keepalive() unconditionally as harmless,
+# idempotent cleanup regardless of whether the daemon was ever armed.
 _KEEPALIVE_PERIOD_S = 0.15
 
 # Active readiness-poll constants.
@@ -256,7 +275,10 @@ class SerialConnection:
             ``self._mode`` is set to ``"direct"``.
 
         After the handshake, ``connect()`` proceeds with the PING readiness
-        poll, starts the keepalive daemon, then the reader thread.
+        poll, then starts the reader thread.  It does NOT start the keepalive
+        daemon (sprint 065, ticket 005: arm-on-demand contract) -- call
+        ``start_keepalive()`` explicitly (or use a ``Transport``'s
+        ``arm_keepalive()``) once an open-ended motion session begins.
 
         Notes on HUPCL and DTR:
             On macOS/Linux close() pulses DTR via the HUPCL termios flag.
@@ -311,7 +333,6 @@ class SerialConnection:
                 # Mode was set by the caller from the session cache.
                 if self._mode is None:
                     self._mode = "direct"
-                self.start_keepalive()
                 self._start_reader()
                 return {
                     "status": "connected",
@@ -360,7 +381,6 @@ class SerialConnection:
             # _poll_ready uses _ser directly (reader not running yet).
             lines = self._poll_ready(total_timeout_s=_POLL_TOTAL_NORMAL_S)
 
-            self.start_keepalive()
             self._start_reader()
 
             result: dict[str, Any] = {

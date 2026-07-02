@@ -92,9 +92,13 @@ enum class ForceReply : uint8_t { NONE, SERIAL };
 //   CMD_NONE            — command operates only on cached/config state
 //   CMD_ACCESS_HARDWARE — command reads or writes physical hardware
 //                         (motors, sensors, GPIO, I2C, servo)
+//   CMD_MOTION_WATCHDOG — command legitimately resets the motion watchdog
+//                         (keepalive '+' and motion verbs only — see
+//                         CommandProcessor::lastCommandResetsWatchdog())
 // ---------------------------------------------------------------------------
 static constexpr uint8_t CMD_NONE            = 0;
 static constexpr uint8_t CMD_ACCESS_HARDWARE = 1;
+static constexpr uint8_t CMD_MOTION_WATCHDOG = 2;
 
 // ---------------------------------------------------------------------------
 // CommandDescriptor — one entry in the command dispatch table.

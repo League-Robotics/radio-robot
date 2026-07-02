@@ -2,9 +2,13 @@
 id: '065'
 title: 'Stop reliability and safety: stop-clause overflow, STOP delivery and motion
   watchdog, OTOS warn-bit fusion gate'
-status: ticketing
+status: done
 branch: sprint/065-stop-reliability-and-safety-stop-clause-overflow-stop-delivery-and-motion-watchdog-otos-warn-bit-fusion-gate
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
 issues:
 - stop-clause-overflow-aborts-process.md
 - stop-delivery-and-keepalive-watchdog-architecture.md

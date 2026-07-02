@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 review: docs/code_review/2026-07-01-full-codebase-review.md
 findings: CR-04, CR-05
 severity: high
