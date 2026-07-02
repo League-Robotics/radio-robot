@@ -79,11 +79,23 @@ Helpers:
 
     _relay_probe_banner(port, timeout_s) -> str | None
         Real I/O probe.  Opens the port with DTR asserted (pyserial default),
-        waits up to ``timeout_s`` for a ``DEVICE:`` announcement line, and
-        returns it.  Returns ``None`` on timeout or any I/O error.  Always
-        closes the port before returning.  Does NOT send any commands — only
-        reads the relay's boot announcement
-        (``DEVICE:RADIOBRIDGE:relay:gozop:<id>``).
+        sends ``HELLO`` (re-sent every ~0.4 s within the timeout window) and
+        reads until a ``DEVICE:`` announcement line arrives.  Returns the
+        banner line, or ``None`` on timeout or any I/O error.  Always closes
+        the port before returning.
+
+        A purely passive boot-banner wait (open and listen, never send
+        anything) is wrong on two counts, live-verified against a real relay
+        (see ``.clasi/knowledge/2026-06-12-relay-go-data-plane-and-docs.md``,
+        correction of 2026-06-13 / sprint 036-007): some relays do not reset
+        on open, so no banner is ever emitted; and even when a reset does
+        happen, a micro:bit's boot time can exceed a short passive window.
+        HELLO-classify (send ``HELLO``, read the ``DEVICE:`` reply) is the
+        robust, bench-proven method — the same one ``SerialConnection``
+        already uses. It is safe to send to a non-relay device too: a robot
+        answers ``HELLO`` with its own ``DEVICE:`` banner, which lacks
+        ``RADIOBRIDGE``, so ``find_relay_port``'s substring match still
+        classifies correctly (skips the port).
 """
 
 from __future__ import annotations
@@ -154,22 +166,40 @@ def find_relay_port(
     return None
 
 
-def _relay_probe_banner(port: str, timeout_s: float = 1.2) -> "str | None":
-    """Open port with DTR asserted and read the relay DEVICE: announcement line.
+# Interval between HELLO retries within the probe window. The device may
+# still be mid-boot when the first HELLO is sent, so we keep re-sending it
+# until either a DEVICE: reply arrives or the deadline passes.
+_RELAY_PROBE_HELLO_INTERVAL_S = 0.4
+# Short settle pause after opening the port and before the first HELLO write.
+_RELAY_PROBE_SETTLE_S = 0.15
 
-    The relay resets on the DTR-pulse that occurs when pyserial opens the port
-    (DTR is asserted by default — do NOT pass ``dtr=False``).  After reset the
-    relay announces itself on the control plane:
 
-        DEVICE:RADIOBRIDGE:relay:gozop:<id>
+def _relay_probe_banner(port: str, timeout_s: float = 2.0) -> "str | None":
+    """Open port with DTR asserted, HELLO-classify, and return the DEVICE: line.
 
-    This function waits up to ``timeout_s`` for that line and returns it.
-    Returns ``None`` on timeout or any I/O / OS error.  Always closes the port
-    before returning, regardless of outcome, so that non-relay devices probed
-    along the way are not left open.
+    A passive boot-banner wait (open and listen, never send anything) is
+    wrong on two counts — live-verified against a real relay (see
+    ``.clasi/knowledge/2026-06-12-relay-go-data-plane-and-docs.md``,
+    correction of 2026-06-13 / sprint 036-007): some relays do not reset on
+    open at all, so no banner is ever emitted; and even when a reset does
+    happen, a micro:bit's boot time can exceed a short passive window.
 
-    Does NOT send any commands (no ``!GO``, no ``HELLO``).  Banner reading is
-    purely passive — open, wait, read, close.
+    Instead this function HELLO-classifies: after opening (DTR asserted by
+    default — do NOT pass ``dtr=False``), it sends ``HELLO\\n`` and reads
+    lines until one starts with ``DEVICE:`` or ``timeout_s`` elapses.
+    ``HELLO`` is re-sent every ``_RELAY_PROBE_HELLO_INTERVAL_S`` in case the
+    first write lands while the device is still mid-boot. This is the same,
+    bench-proven method ``SerialConnection`` already uses for the real
+    connection handshake.
+
+    ``HELLO`` is safe to send to a non-relay device: a robot answers with its
+    own ``DEVICE:`` banner (e.g. ``DEVICE:NEZHA2:robot:tovez:<id>``), which
+    lacks ``RADIOBRIDGE``, so ``find_relay_port``'s substring match still
+    classifies correctly and skips the port.
+
+    Returns ``None`` on timeout or any I/O / OS error.  Always closes the
+    port before returning, regardless of outcome, so that non-relay devices
+    probed along the way are not left open.
 
     Parameters
     ----------
@@ -181,9 +211,23 @@ def _relay_probe_banner(port: str, timeout_s: float = 1.2) -> "str | None":
     import serial  # type: ignore[import]
     ser = None
     try:
-        ser = serial.Serial(port, 115200, timeout=timeout_s)
+        # Short per-read timeout so the loop wakes up often enough to
+        # re-send HELLO and re-check the overall deadline — NOT timeout_s,
+        # which would let a single blocking readline() eat the whole budget.
+        ser = serial.Serial(port, 115200, timeout=0.2)
+        ser.reset_input_buffer()
+        time.sleep(_RELAY_PROBE_SETTLE_S)
+
         deadline = time.monotonic() + timeout_s
+        next_hello = 0.0  # send immediately on the first iteration
+
         while time.monotonic() < deadline:
+            now = time.monotonic()
+            if now >= next_hello:
+                ser.write(b"HELLO\n")
+                ser.flush()
+                next_hello = now + _RELAY_PROBE_HELLO_INTERVAL_S
+
             line = ser.readline().decode("ascii", errors="replace").strip()
             if line.startswith("DEVICE:"):
                 return line
