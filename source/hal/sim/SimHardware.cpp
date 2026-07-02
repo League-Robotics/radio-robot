@@ -11,7 +11,7 @@ SimHardware::SimHardware(const RobotConfig& cfg)
     : _plant()
     , _motorL(_plant, _plant, SimMotor::Side::LEFT)
     , _motorR(_plant, _plant, SimMotor::Side::RIGHT)
-    , _odom(_plant)
+    , _odom(_plant, cfg)
     , _line(_plant)
     , _color(_plant)
     , _portIO(_plant)
@@ -60,9 +60,10 @@ void SimHardware::advance(uint32_t now_ms, const MotorCommands& cmds) {
                             static_cast<int8_t>(cmds.pwm[0]));
         _plant.update(udt);
 
-        // OTOS sim model: integrate the TRUE (pre-slip) plant velocities into the
-        // odometer accumulator (mirrors MockHAL::advance → MockOtosSensor::tick).
-        _odom.tick(_plant.trueVelLMms(), _plant.trueVelRMms(), _trackwidthMm, udt);
+        // OTOS sim model: sample the plant's true (post-slip) centre pose into
+        // the odometer accumulator (ticket 066-001 — ground-truth sampling,
+        // replacing the former true-velocity re-integration; see SimOdometer.h).
+        _odom.tick(udt);
 
         // Auxiliary sensor schedules advance on the actuator tick only.
         _line.tick(udt);

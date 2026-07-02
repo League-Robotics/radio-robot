@@ -1,4 +1,6 @@
 #include "SimOdometer.h"
+#include "types/Config.h"
+#include "hal/capability/OtosLeverArm.h"
 #include <cmath>
 
 #ifdef HOST_BUILD
@@ -20,8 +22,23 @@ bool SimOdometer::readTransformed(Pose2D& poseOut, float /*headingRad*/) const {
         return false;
     }
     if (_useSimModel) {
-        poseOut.x = _odomX;
-        poseOut.y = _odomY;
+        // Lever-arm round-trip (ticket 066-001, CR-07/CR-08): project the
+        // accumulated CENTRE estimate through centreToSensor() to synthesize
+        // what the chip's own optical-flow tracker would report (a sim-only
+        // step — real hardware's chip organically observes its own
+        // sensor-frame motion), then immediately call sensorToCentre() — the
+        // SAME function OtosSensor::readTransformed() calls — to recover the
+        // centre.  Correct OtosLeverArm.h math makes this an exact no-op; a
+        // future regression there (the db11b7c failure mode) makes it NOT
+        // cancel, exactly as it would on hardware.
+        float sensorX = 0.0f, sensorY = 0.0f;
+        centreToSensor(_odomX, _odomY, _odomH, _cfg.odomOffX, _cfg.odomOffY,
+                       sensorX, sensorY);
+        float centreX = 0.0f, centreY = 0.0f;
+        sensorToCentre(sensorX, sensorY, _odomH, _cfg.odomOffX, _cfg.odomOffY,
+                       centreX, centreY);
+        poseOut.x = centreX;
+        poseOut.y = centreY;
         poseOut.h = _odomH;
     } else {
         poseOut.x = _injectedX;
@@ -84,25 +101,66 @@ void SimOdometer::setInjectedPose(float x, float y, float h) {
     _odomH = h;
 }
 
-void SimOdometer::tick(float velL, float velR, float tw, uint32_t dt_ms) {
+void SimOdometer::tick(uint32_t dt_ms) {
 #ifdef HOST_BUILD
+    // Ground-truth sampling (ticket 066-001, CR-07/CR-08): read the plant's
+    // current true CENTRE pose.  _prevTrueX/Y/H is rebaselined to this value
+    // on EVERY tick() call below — including the WARN-frozen and
+    // sim-model-disabled early returns — so the accumulator never has to
+    // "catch up" on motion that happened while sampling was skipped; the
+    // next active tick's delta only ever reflects motion since THIS tick.
+    float curTrueX = _plant.truePoseX();
+    float curTrueY = _plant.truePoseY();
+    float curTrueH = _plant.truePoseH();
+
     if (_warnOptical) {
         // WARN (065-006): model "frozen pose, near-zero velocity" — skip the
         // odometry-accumulator update entirely (pose stays pinned at
         // whatever _odomX/Y/H held when the warn condition began) and zero
-        // the velocity/accel outputs.  Encoders (driven independently by
-        // true wheel velocity, not this model) are unaffected.
+        // the velocity/accel outputs.  Encoders (driven independently of
+        // this model) are unaffected.
         _velV     = 0.0f;
         _velOmega = 0.0f;
         _accAx    = 0.0f;
         _accAy    = 0.0f;
         _prevVelV = 0.0f;
+        _prevTrueX = curTrueX;
+        _prevTrueY = curTrueY;
+        _prevTrueH = curTrueH;
         return;
     }
-    if (!_useSimModel || tw <= 0.0f) return;
-    float dt_s    = static_cast<float>(dt_ms) / 1000.0f;
-    float dC      = (velL + velR) * 0.5f * dt_s;
-    float dTh     = (velR - velL) / tw * dt_s;
+    if (!_useSimModel) {
+        _prevTrueX = curTrueX;
+        _prevTrueY = curTrueY;
+        _prevTrueH = curTrueH;
+        return;
+    }
+    float dt_s = static_cast<float>(dt_ms) / 1000.0f;
+
+    // World-frame delta since the previous sample.
+    float dx  = curTrueX - _prevTrueX;
+    float dy  = curTrueY - _prevTrueY;
+    float dTh = curTrueH - _prevTrueH;
+    // Wrap dTh to (-pi, pi] in case _truePoseH wrapped across the boundary
+    // between samples (PhysicsWorld::update() wraps _truePoseH every step —
+    // CR-15 item 1 / ticket 066-001); the true per-tick angular change is
+    // always small, so wrapping the raw diff recovers it exactly.
+    while (dTh >  static_cast<float>(M_PI)) dTh -= 2.0f * static_cast<float>(M_PI);
+    while (dTh <= -static_cast<float>(M_PI)) dTh += 2.0f * static_cast<float>(M_PI);
+
+    // Recover the body-frame forward arc dC by projecting the world-frame
+    // delta onto the plant's own midpoint heading — the exact inverse of the
+    // midpoint-arc integration PhysicsWorld::update() used to produce (dx,dy)
+    // from dC in the first place, so this recovers dC exactly (mod float
+    // rounding) regardless of any chassis-truth slip PhysicsWorld applied to
+    // dTh: whatever actually happened to the plant is what gets sampled here.
+    float plantHMid = _prevTrueH + dTh * 0.5f;
+    float dC = dx * cosf(plantHMid) + dy * sinf(plantHMid);
+
+    _prevTrueX = curTrueX;
+    _prevTrueY = curTrueY;
+    _prevTrueH = curTrueH;
+
     // Gaussian noise (zero-mean, as before).
     float noisyDC  = dC  * (1.0f + otosGaussian(_rng, _linearNoiseSigma));
     float noisyDTh = dTh * (1.0f + otosGaussian(_rng, _yawNoiseSigma));
@@ -135,6 +193,6 @@ void SimOdometer::tick(float velL, float velR, float tw, uint32_t dt_ms) {
         _velOmega = newOmega;
     }
 #else
-    (void)velL; (void)velR; (void)tw; (void)dt_ms;
+    (void)dt_ms;
 #endif
 }

@@ -7,6 +7,8 @@
 #include <random>
 #endif
 
+struct RobotConfig;   // fwd decl — reads odomOffX/odomOffY for the lever-arm round-trip
+
 /**
  * SimOdometer — observation model for the OTOS odometer (Sprint 040 Phase B,
  * 040-002).
@@ -34,11 +36,30 @@
  *
  * Every error setter defaults to a no-op, so a fresh SimOdometer is PERFECT.
  *
+ * Ground-truth sampling + lever arm (ticket 066-001, CR-07/CR-08): tick() no
+ * longer re-integrates commanded wheel speeds (which made the sim OTOS
+ * structurally incapable of disagreeing with the encoders — see the retired
+ * comment this replaces). It instead samples PhysicsWorld::truePoseX/Y/H()
+ * each tick, computes the delta since the previous sample, and applies the
+ * SAME noise/drift/scale-error knobs to that delta as before — only the
+ * delta's SOURCE changed (plant-pose differencing instead of wheel-velocity
+ * kinematics), so any chassis-truth slip configured via sim_set_motor_slip
+ * now shows up in the OTOS accumulator exactly as it does in plant truth,
+ * matching real hardware (the OTOS IS the ground-truth-tracking sensor).
+ * readTransformed() projects the accumulated centre estimate through
+ * centreToSensor() then sensorToCentre() (source/hal/capability/OtosLeverArm.h
+ * — the SAME shared math OtosSensor::readTransformed() uses) before returning,
+ * so the host-side lever-arm compensation a past hardware regression
+ * (db11b7c) broke is now sim-reachable.  The constructor takes a
+ * `const RobotConfig&` (mirrors OtosSensor) to read odomOffX/odomOffY for
+ * that round-trip.
+ *
  * No CODAL dependency.  Compiles with plain clang++ -std=c++11 -I source.
  */
 class SimOdometer : public IOdometer {
 public:
-    explicit SimOdometer(const PhysicsWorld& plant) : _plant(plant) {}
+    SimOdometer(const PhysicsWorld& plant, const RobotConfig& cfg)
+        : _plant(plant), _cfg(cfg) {}
 
     // IOdometer interface ----------------------------------------------------
     bool readTransformed(Pose2D& poseOut, float headingRad = 0.0f) const override;
@@ -129,12 +150,14 @@ public:
     float odomH() const { return _odomH; }
 
     // Advance the OTOS integration model by one step (driven by SimHardware).
-    // velLMms/velRMms: true (pre-slip) wheel velocities, mm/s; tw: trackwidth mm.
-    // Bit-identical to the retired MockOtosSensor::tick.
-    void tick(float velLMms, float velRMms, float trackwidthMm, uint32_t dt_ms);
+    // Samples PhysicsWorld::truePoseX/Y/H() (ground truth) and integrates the
+    // delta since the previous sample into the noisy centre-frame accumulator
+    // (ticket 066-001 — no longer takes wheel velocities; see class comment).
+    void tick(uint32_t dt_ms);
 
 private:
-    const PhysicsWorld& _plant;   // ground-truth read access (forward-compat)
+    const PhysicsWorld& _plant;   // ground-truth read access
+    const RobotConfig&  _cfg;     // odomOffX/odomOffY for the lever-arm round-trip
 
     float   _injectedX     = 0.0f;
     float   _injectedY     = 0.0f;
@@ -155,6 +178,15 @@ private:
     float _odomX            = 0.0f;
     float _odomY            = 0.0f;
     float _odomH            = 0.0f;
+
+    // Ground-truth sampling baseline (ticket 066-001): the plant truePose*()
+    // value as of the previous tick() call, used to compute the world-frame
+    // delta to integrate this tick.  Rebaselined every tick() call (even when
+    // the sim model is disabled or WARN-frozen) so re-enabling never produces
+    // a single-tick "catch up" jump for motion that happened while disabled.
+    float _prevTrueX = 0.0f;
+    float _prevTrueY = 0.0f;
+    float _prevTrueH = 0.0f;
 
     // Deterministic error model (ticket 057-005).
     // All zero by default → a fresh SimOdometer is perfect (no behaviour change).

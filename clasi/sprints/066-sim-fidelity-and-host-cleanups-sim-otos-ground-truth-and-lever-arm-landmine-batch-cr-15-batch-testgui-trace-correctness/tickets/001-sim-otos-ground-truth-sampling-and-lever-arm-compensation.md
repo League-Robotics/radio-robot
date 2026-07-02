@@ -1,8 +1,10 @@
 ---
 id: '001'
 title: Sim OTOS ground-truth sampling and lever-arm compensation
-status: open
-use-cases: [SUC-001, SUC-002]
+status: done
+use-cases:
+- SUC-001
+- SUC-002
 depends-on: []
 github-issue: ''
 issue: sim-otos-fidelity-ground-truth-and-lever-arm.md
@@ -38,42 +40,42 @@ copy.
 
 ## Acceptance Criteria
 
-- [ ] `source/hal/capability/OtosLeverArm.h` exists with `sensorToCentre()`
+- [x] `source/hal/capability/OtosLeverArm.h` exists with `sensorToCentre()`
       and `centreToSensor()` pure functions, extracted verbatim from
       `OtosSensor::readTransformed()`/`OtosSensor::setWorldPose()`'s existing
       formulas (no behavior change to those two functions beyond calling the
       extracted helpers).
-- [ ] `PhysicsWorld::update()` wraps `_truePoseH` to `(-π, π]` after each
+- [x] `PhysicsWorld::update()` wraps `_truePoseH` to `(-π, π]` after each
       accumulation.
-- [ ] `SimOdometer`'s constructor takes `const RobotConfig&` in addition to
+- [x] `SimOdometer`'s constructor takes `const RobotConfig&` in addition to
       `const PhysicsWorld&`; `SimHardware`'s constructor threads its existing
       `cfg` member through.
-- [ ] `SimOdometer::tick()` no longer takes wheel velocities — it samples
+- [x] `SimOdometer::tick()` no longer takes wheel velocities — it samples
       `PhysicsWorld::truePoseX/Y/H()`, computes the delta since the previous
       sample, and applies the existing noise/drift/scale-error knobs to that
       delta (same public setter API: `setLinearNoiseSigma`,
       `setYawNoiseSigma`, `setDriftPerTickMm`, `setLinearScaleError`,
       `setAngularScaleError` — unchanged).
-- [ ] `SimOdometer::readTransformed()` projects the accumulated centre
+- [x] `SimOdometer::readTransformed()` projects the accumulated centre
       estimate through `centreToSensor()` then `sensorToCentre()` (both from
       `OtosLeverArm.h`) before returning — the same round-trip
       `db11b7c` broke on hardware.
-- [ ] New sim test: pure spin with a nonzero `odomOffX`/`odomOffY` configured
+- [x] New sim test: pure spin with a nonzero `odomOffX`/`odomOffY` configured
       → OTOS-derived centre translation stays ≈ 0.
-- [ ] New sim test: turn with chassis-truth slip configured
+- [x] New sim test: turn with chassis-truth slip configured
       (`sim_set_motor_slip` in the effective `[0.5, 1.0]` range, see
       `Odometry.h::effectiveSlip`) → encoder pose and OTOS pose disagree the
       way they do on hardware (OTOS ≈ plant truth, encoder does not); with
       fusion enabled the fused estimate tracks OTOS.
-- [ ] `test_perfect_otos_tracks_truth_on_straight_drive`,
+- [x] `test_perfect_otos_tracks_truth_on_straight_drive`,
       `test_perfect_otos_tracks_turn` (`test_observation_models.py`) and
       every other existing sim-OTOS test pass unmodified (verified, not
       assumed — see architecture-update.md's explicit existing-test-impact
       analysis; no test in the current suite configures chassis-truth slip
       while asserting OTOS/encoder agreement).
-- [ ] Full default test suite green (`uv run --with pytest python -m pytest
+- [x] Full default test suite green (`uv run --with pytest python -m pytest
       -q`).
-- [ ] ARM firmware builds clean (`--clean` build per
+- [x] ARM firmware builds clean (`--clean` build per
       `stale-incremental-build-on-volumes.md`).
 
 ## Implementation Plan
