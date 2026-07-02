@@ -59,6 +59,11 @@ class TLMFrame:
     (left, right), each 0 (healthy) or 1 (latched). Unconditional on the
     firmware side (not gated by STREAM fields=) — always present on any
     firmware new enough to emit it; absent (None) on older firmware.
+    ``encpose`` is the encoder-only dead-reckoned world pose (068-001):
+    (x_mm, y_mm, heading_cdeg), arc-integrated from wheel deltas only —
+    same shape/units as ``otos``/``pose``. Gated by STREAM fields=; absent
+    (None) on older firmware or when explicitly excluded from the
+    subscription.
     """
     t: int | None = None
     mode: str | None = None
@@ -72,6 +77,7 @@ class TLMFrame:
     color: tuple[int, int, int, int] | None = None  # (r, g, b, c)
     ekf_rej: int | None = None                   # cumulative EKF gate rejection count
     wedge: tuple[int, int] | None = None         # (left, right) wedge-latch state, 0/1 each (064-004)
+    encpose: tuple[int, int, int] | None = None  # (x_mm, y_mm, heading_cdeg) — encoder-only pose (068-001)
 
 
 @dataclass
@@ -255,6 +261,14 @@ def parse_tlm(line: str) -> TLMFrame | None:
             parts = kv["pose"].split(",")
             if len(parts) == 3:
                 frame.pose = (int(parts[0]), int(parts[1]), int(parts[2]))
+        except ValueError:
+            pass
+
+    if "encpose" in kv:
+        try:
+            parts = kv["encpose"].split(",")
+            if len(parts) == 3:
+                frame.encpose = (int(parts[0]), int(parts[1]), int(parts[2]))
         except ValueError:
             pass
 
