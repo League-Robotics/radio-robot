@@ -861,6 +861,116 @@ class TestSimTransportConnect:
             t.disconnect()
 
 
+class TestSimTransportConnectedFlagRace:
+    """CR-15 item 4: _connected must not be set until the tick-thread
+    confirms Sim() construction succeeded -- not merely after the
+    tick-thread is started."""
+
+    def test_connect_waits_for_sim_before_returning(self):
+        """connect() must not return until Sim() construction is confirmed
+        -- an early command()/send() must never race a not-yet-created Sim."""
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+        import sys
+
+        fake_sim = FakeSim()
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = True
+        fake_path.parent.parent = str(pathlib.Path("/nonexistent/sim"))
+        fake_fw_module = MagicMock()
+        fake_fw_module.Sim.return_value = fake_sim
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.dict(sys.modules, {"firmware": fake_fw_module}):
+            t = SimTransport()
+            t.on_log = lambda _: None
+            t.connect()
+
+        try:
+            # No sleep here -- connect() itself must have waited for Sim()
+            # construction to be confirmed before returning.
+            assert t._connected
+            assert t._sim is not None, (
+                "connect() returned before Sim() construction was confirmed"
+            )
+        finally:
+            t.disconnect()
+
+    def test_sim_construction_failure_leaves_connected_false(self):
+        """If Sim() itself raises, _connected must stay False (never raced
+        true), and connect() must still return promptly (not hang)."""
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+        import sys
+
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = True
+        fake_path.parent.parent = str(pathlib.Path("/nonexistent/sim"))
+
+        fake_fw_module = MagicMock()
+        fake_fw_module.Sim.side_effect = RuntimeError("boom: construction failed")
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.dict(sys.modules, {"firmware": fake_fw_module}):
+            t = SimTransport()
+            t.on_log = lambda _: None
+            start = time.monotonic()
+            t.connect()
+            elapsed = time.monotonic() - start
+
+        try:
+            assert not t._connected, (
+                "connect() must not report connected when Sim() raised"
+            )
+            assert t._sim is None
+            assert elapsed < 2.0, (
+                f"connect() took {elapsed:.2f}s -- should fail fast, not "
+                f"wait out the full ready-timeout"
+            )
+        finally:
+            t.disconnect()
+
+    def test_import_failure_leaves_connected_false(self):
+        """If importing the 'firmware' module fails, _connected must stay
+        False (regression guard for the pre-existing import-failure path,
+        which must also unblock connect()'s new wait).
+
+        ``sys.modules["firmware"] = None`` is the standard sentinel Python's
+        import system honors to force ``from firmware import Sim`` to raise
+        ImportError, regardless of whether a real 'firmware' module is
+        importable elsewhere on sys.path (tests/conftest.py adds
+        tests/_infra/sim/ to sys.path for the whole session, so a bare
+        missing-module approach would not actually fail here).
+        """
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+        import sys
+
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = True
+        fake_path.parent.parent = str(pathlib.Path("/nonexistent/sim"))
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.dict(sys.modules, {"firmware": None}):
+            t = SimTransport()
+            t.on_log = lambda _: None
+            t.connect()
+
+        try:
+            assert not t._connected
+        finally:
+            t.disconnect()
+
+
 class TestSimTransportErrorProfile:
     """Sim Errors panel backing: apply_error_profile() / turn_scrub_factor.
 

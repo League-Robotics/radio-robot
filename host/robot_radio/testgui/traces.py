@@ -358,9 +358,15 @@ class TraceModel:
         dC = (dL + dR) / 2.0
         dT = (dR - dL) / self._track_mm
 
+        # Midpoint-arc integration (CR-15 item 5): use the heading at the
+        # midpoint of this step, not the post-increment heading, matching the
+        # convention used by PhysicsWorld::update, SimOdometer::tick, and
+        # Odometry::predict. Post-increment integration systematically
+        # over/under-rotates the accumulated (bx, by) on every turning step.
+        hMid = self._enc_h + dT * 0.5
+        self._enc_bx += dC * math.cos(hMid)
+        self._enc_by += dC * math.sin(hMid)
         self._enc_h += dT
-        self._enc_bx += dC * math.cos(self._enc_h)
-        self._enc_by += dC * math.sin(self._enc_h)
 
         # Update baseline for incremental delta.
         self._enc_baseline = enc

@@ -5,6 +5,7 @@
 // Sprint 017, Ticket 003.
 
 #include "StopCondition.h"
+#include "ColorUtil.h"
 #include <math.h>
 #include <stdint.h>
 
@@ -15,46 +16,9 @@
 #define M_PI 3.14159265358979323846f
 #endif
 
-// ---------------------------------------------------------------------------
-// rgbToHSV — convert RGBC raw sensor values to HSV floats.
-//
-// R,G,B are raw uint16_t sensor counts. We normalise by C (clear/ambient)
-// to get [0,1] floating-point channels, then convert to HSV.
-//
-// h returned in [0, 360); s,v in [0, 1].
-// If C == 0 (dark), returns h=0, s=0, v=0.
-// ---------------------------------------------------------------------------
-//FIXME WHy is there a color function in the StopCondition module?  
-static void rgbToHSV(uint16_t rRaw, uint16_t gRaw, uint16_t bRaw, uint16_t cRaw,
-                     float& h, float& s, float& v)
-{
-    if (cRaw == 0) { h = 0.0f; s = 0.0f; v = 0.0f; return; }
-    float r = (float)rRaw / (float)cRaw;
-    float g = (float)gRaw / (float)cRaw;
-    float b = (float)bRaw / (float)cRaw;
-    // Clamp to [0,1].
-    if (r > 1.0f) r = 1.0f;
-    if (g > 1.0f) g = 1.0f;
-    if (b > 1.0f) b = 1.0f;
-
-    float cmax = r; if (g > cmax) cmax = g; if (b > cmax) cmax = b;
-    float cmin = r; if (g < cmin) cmin = g; if (b < cmin) cmin = b;
-    float delta = cmax - cmin;
-    v = cmax;
-    s = (cmax > 0.0f) ? (delta / cmax) : 0.0f;
-    if (delta < 1e-6f) {
-        h = 0.0f;
-        return;
-    }
-    if (cmax == r) {
-        h = 60.0f * ((g - b) / delta);
-    } else if (cmax == g) {
-        h = 60.0f * (((b - r) / delta) + 2.0f);
-    } else {
-        h = 60.0f * (((r - g) / delta) + 4.0f);
-    }
-    if (h < 0.0f) h += 360.0f;
-}
+// rgbToHSV moved to ColorUtil.h/.cpp (CR-15 item 7, sprint 066) — resolves
+// the FIXME that used to sit here ("Why is there a color function in the
+// StopCondition module?"). Kind::COLOR below calls the extracted function.
 
 // ---------------------------------------------------------------------------
 // hueDistance — wrap-aware angular distance between two hue values [0,360).

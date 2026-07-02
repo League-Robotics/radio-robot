@@ -670,6 +670,13 @@ _SIM_TRUTH_EVERY_N_TICKS = max(1, round(200 / _SIM_TICK_STEP_MS))
 _SIM_SLIP_TURN_EXTRA = 0.26   # fractional encoder over-report during turns
 _SIM_OTOS_LINEAR_NOISE = 0.05  # OTOS linear noise sigma (fraction of arc)
 
+# How long connect() waits for the tick-thread to confirm Sim() construction
+# succeeded (or failed) before giving up (CR-15 item 4).  Sim() construction
+# is sub-millisecond in every observed run; this is generous headroom against
+# a hang, not a steady-state expectation (see architecture-update.md sprint
+# 066, Open Question 3).
+_SIM_READY_TIMEOUT_S = 5.0
+
 
 class SimTransport(Transport):
     """Transport backend that drives the ctypes firmware simulator.
@@ -712,6 +719,11 @@ class SimTransport(Transport):
         # For command() (synchronous): reply_list=[""]*1, done_event=Event
         self._cmd_queue: queue.Queue = queue.Queue()
         self._connected = False
+        # Signaled by the tick-thread once Sim() construction has succeeded
+        # or definitively failed (CR-15 item 4) — connect() waits on this
+        # before reporting connected, so an early command()/send() call can
+        # no longer race a not-yet-created Sim.
+        self._sim_ready_event: threading.Event = threading.Event()
         # The last error profile actually applied to a running sim (via
         # connect()'s _apply_field_profile or a live apply_error_profile()
         # call) — issue testgui-sim-error-profile-config. None until then.
@@ -749,6 +761,15 @@ class SimTransport(Transport):
 
         If the sim lib is missing, shows a warning and returns without
         connecting.  Idempotent — does nothing if already connected.
+
+        ``_connected`` is set only after the tick-thread confirms ``Sim()``
+        construction succeeded — NOT immediately after starting the thread
+        (CR-15 item 4).  Before this fix an early ``command()``/``send()``
+        call could race a not-yet-created ``Sim`` (or one that failed to
+        construct), silently enqueuing commands nothing would ever drain.
+        ``connect()`` waits (bounded by ``_SIM_READY_TIMEOUT_S``) on a
+        ``threading.Event`` the tick-thread signals right after ``Sim()``
+        construction completes, or on its own early-failure paths.
         """
         if self._connected:
             return
@@ -766,14 +787,24 @@ class SimTransport(Transport):
             return
 
         self._stop_event.clear()
+        self._sim_ready_event.clear()
         self._tick_thread = threading.Thread(
             target=self._tick_loop,
             name="sim-tick-thread",
             daemon=True,
         )
         self._tick_thread.start()
-        self._connected = True
-        self._log("[INFO] SimTransport connected")
+
+        ready = self._sim_ready_event.wait(timeout=_SIM_READY_TIMEOUT_S)
+        self._connected = ready and self._sim is not None
+        if self._connected:
+            self._log("[INFO] SimTransport connected")
+        else:
+            _log.warning(
+                "SimTransport: Sim() construction did not complete (ready=%s)",
+                ready,
+            )
+            self._log("[ERROR] SimTransport failed to connect: simulator did not start")
 
     def disconnect(self) -> None:
         """Signal the tick-thread to stop and wait for it to exit."""
@@ -880,11 +911,14 @@ class SimTransport(Transport):
             _log.error("SimTransport: failed to import Sim: %s", exc)
             self._log(f"[ERROR] Failed to load simulator: {exc}")
             self._connected = False
+            self._sim_ready_event.set()  # unblock connect()'s wait — failed
             return
 
         try:
             with Sim() as sim:
                 self._sim = sim
+                # Sim() construction succeeded — unblock connect()'s wait.
+                self._sim_ready_event.set()
                 self._apply_field_profile(sim)
                 # Send STREAM 50 so the firmware emits TLM every 50 ms.
                 reply = sim.send_command("STREAM 50")
@@ -916,6 +950,11 @@ class SimTransport(Transport):
         except Exception as exc:
             _log.error("SimTransport tick-loop crashed: %s", exc)
             self._log(f"[ERROR] Sim tick-loop crashed: {exc}")
+            # Sim() construction itself may have raised (before the inner
+            # self._sim_ready_event.set() ran) — unblock connect()'s wait
+            # either way so a failed construction is never mistaken for a
+            # hang. Idempotent if already set.
+            self._sim_ready_event.set()
         finally:
             self._sim = None
 

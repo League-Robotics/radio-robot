@@ -202,6 +202,11 @@ class KeyboardDriver:
         self._cmd: str | None = None          # current VW command, or "STOP" during the deadman resend window
         self._stop_resends_left: int = 0      # remaining bounded STOP resends (see STOP_RESEND_COUNT)
         self._keepalive_armed: bool = False   # tracks whether transport.arm_keepalive() is currently in effect
+        # Currently-held arrow keys (CR-15 item 8). Releasing one key while
+        # another is still held falls back to driving the remaining key
+        # instead of starting the STOP deadman sequence -- see
+        # _on_key_release / vw_line_for_key_set.
+        self._held_keys: set[int] = set()
 
         # Original key event handlers (restored on detach).
         self._orig_key_press: "object | None" = None
@@ -260,6 +265,7 @@ class KeyboardDriver:
         self._stop_timer()
         self._cmd = None
         self._stop_resends_left = 0
+        self._held_keys.clear()
         self._disarm_keepalive_if_armed()
         self._transport = None
 
@@ -316,6 +322,10 @@ class KeyboardDriver:
         # detach().
         self._arm_keepalive_if_needed()
 
+        # Track this key as held (CR-15 item 8) so a later release of a
+        # DIFFERENT key can fall back to whichever key(s) remain held.
+        self._held_keys.add(key)
+
         # Switch to the new command and (re)start the timer.
         self._cmd = cmd
         self._send_cmd()
@@ -324,8 +334,12 @@ class KeyboardDriver:
     def _on_key_release(self, event: "object") -> None:
         """Handle a key-release event on the main window.
 
-        Begins the bounded STOP deadman-resend sequence (see
-        :meth:`_start_stop_deadman`) instead of stopping the timer and
+        If another arrow key is still held after removing the released key
+        from ``self._held_keys``, driving continues with the remaining
+        key's command (CR-15 item 8) -- releasing one arrow while another is
+        held must not stop the robot.  Only when the LAST held key is
+        released does this begin the bounded STOP deadman-resend sequence
+        (see :meth:`_start_stop_deadman`) instead of stopping the timer and
         sending a single fire-and-forget ``STOP``.  Forwarded to the
         original handler for non-arrow keys.
         """
@@ -339,6 +353,17 @@ class KeyboardDriver:
                 self._orig_key_release(event)
             return
 
+        self._held_keys.discard(key)
+
+        fallback_cmd = vw_line_for_key_set(frozenset(self._held_keys))
+        if fallback_cmd is not None:
+            # Another arrow key is still held -- keep driving with its
+            # command instead of starting the STOP deadman sequence.
+            self._cmd = fallback_cmd
+            self._send_cmd()
+            self._start_timer()
+            return
+
         self._start_stop_deadman()
 
     def _on_focus_out(self, event: "object") -> None:
@@ -347,13 +372,14 @@ class KeyboardDriver:
         Qt does not deliver ``keyReleaseEvent`` when the window loses focus
         while an arrow key is physically held down -- a real release would
         leave the robot driving indefinitely.  Focus loss is treated as an
-        implicit release: if a key is currently tracked as held
-        (``self._cmd`` is a VW line, not ``None``/``"STOP"``), this triggers
-        the same bounded STOP deadman-resend sequence a real key-release
-        would.  Forwarded to the original ``focusOutEvent`` handler
-        afterward.
+        implicit release of EVERY currently-held key (``self._held_keys`` is
+        cleared): if a key is currently tracked as held (``self._cmd`` is a
+        VW line, not ``None``/``"STOP"``), this triggers the same bounded
+        STOP deadman-resend sequence a real key-release would.  Forwarded to
+        the original ``focusOutEvent`` handler afterward.
         """
         if self._cmd is not None and self._cmd != "STOP":
+            self._held_keys.clear()
             self._start_stop_deadman()
 
         if self._orig_focus_out is not None:
