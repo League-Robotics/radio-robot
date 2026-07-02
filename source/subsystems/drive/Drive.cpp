@@ -124,18 +124,14 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
     // ------------------------------------------------------------------
     // STEP 4: EKF predict — encoder dead-reckoning integrate
     // ------------------------------------------------------------------
-    float trackwidth = (_drvCfg.get_trackwidth() > 0.0f)
-                           ? _drvCfg.get_trackwidth()
-                           : _robCfg.trackwidthMm;
+    float trackwidth = _robCfg.trackwidthMm;
     float rotSlip    = _robCfg.rotationalSlip;
     _est.addOdometryObservation(_hw, trackwidth, rotSlip, now);
 
     // ------------------------------------------------------------------
     // STEP 5: OTOS correction (lag-gated, matches LoopTickOnce pattern)
     // ------------------------------------------------------------------
-    uint32_t lagMs = (_drvCfg.get_lag_otos() > 0)
-                         ? _drvCfg.get_lag_otos()
-                         : _robCfg.lagOtosMs;
+    uint32_t lagMs = _robCfg.lagOtosMs;
     if (lagMs > 0 && _otos.is_initialized()) {
         _hw.otos.lagMs = lagMs;   // keep stamp lag field in sync
         if (!_otosEverReady && !fuseOtos) {

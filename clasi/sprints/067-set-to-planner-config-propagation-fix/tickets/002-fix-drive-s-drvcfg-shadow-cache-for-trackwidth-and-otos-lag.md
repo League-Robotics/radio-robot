@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Fix Drive's _drvCfg shadow-cache for trackwidth and OTOS lag
-status: open
+status: done
 use-cases:
 - SUC-001
 depends-on: []
@@ -45,24 +45,24 @@ down).
 
 ## Acceptance Criteria
 
-- [ ] `source/subsystems/drive/Drive.cpp`, `tickUpdate()`: the trackwidth
+- [x] `source/subsystems/drive/Drive.cpp`, `tickUpdate()`: the trackwidth
       ternary (`_drvCfg.get_trackwidth() > 0.0f ? ... : _robCfg.trackwidthMm`)
       is replaced with a direct `_robCfg.trackwidthMm` read.
-- [ ] Same function: the OTOS-lag ternary
+- [x] Same function: the OTOS-lag ternary
       (`_drvCfg.get_lag_otos() > 0 ? ... : _robCfg.lagOtosMs`) is replaced
       with a direct `_robCfg.lagOtosMs` read.
-- [ ] `_drvCfg` itself is NOT removed as a type or member — it remains in
+- [x] `_drvCfg` itself is NOT removed as a type or member — it remains in
       use for other fields it legitimately carries (e.g.
       `drivetrain_type`'s capability-reporting use, other
       `msg::DrivetrainConfig` accessor consumers). Only these two read
       sites stop consulting it.
-- [ ] No signature change to `tickUpdate()` or any other `Drive` method.
-- [ ] `SET tw=<x>` alone (not bundled with any `"drive"`-annotated key in
+- [x] No signature change to `tickUpdate()` or any other `Drive` method.
+- [x] `SET tw=<x>` alone (not bundled with any `"drive"`-annotated key in
       the same `SET` line) changes the trackwidth `Drive`'s EKF-predict
       step uses on the very next tick.
-- [ ] `SET lag.otos=<x>` alone changes the OTOS-lag compensation `Drive`'s
+- [x] `SET lag.otos=<x>` alone changes the OTOS-lag compensation `Drive`'s
       EKF-predict step uses on the very next tick.
-- [ ] Full default sim/unit test suite green.
+- [x] Full default sim/unit test suite green.
 
 ## Testing
 
