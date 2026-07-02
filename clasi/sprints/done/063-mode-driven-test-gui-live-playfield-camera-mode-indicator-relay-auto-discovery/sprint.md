@@ -1,7 +1,7 @@
 ---
 id: '063'
 title: 'Mode-driven Test GUI: live playfield camera, mode indicator, relay auto-discovery'
-status: planning-docs
+status: done
 branch: sprint/063-mode-driven-test-gui-live-playfield-camera-mode-indicator-relay-auto-discovery
 use-cases:
 - SUC-001
