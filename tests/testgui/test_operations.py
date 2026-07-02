@@ -544,6 +544,90 @@ class TestSyncPoseDaemonUnavailable:
         assert any("WARN" in e or "not connected" in e for e in log)
 
 
+# --- Camera resolution via the shared camera_prefs.select_camera() helper ---
+
+class TestCameraResolutionSharedHelper:
+    """Both `_read_daemon_pose` and `_capture_playfield_frame_and_calib` must
+    resolve the camera through `camera_prefs.select_camera()` instead of an
+    unconditional `cams[0]` / inline name-matching loop (ticket 063-008).
+
+    The mocked ``dc.list_cameras()`` list intentionally puts the non-playfield
+    camera ("Brio 501") first — the historical bug reported the live-view and
+    pose-read paths silently reading whichever camera happened to be
+    ``cams[0]``.  A persisted preference of "Arducam OV9782 USB Camera" is
+    mocked via ``camera_prefs.load_camera_pref`` (the real Arducam device name
+    does not literally contain the digit "3", so this exercises priority #1 —
+    the persisted preference — rather than the ``fallback_contains`` digit
+    heuristic; see ``camera_prefs`` module docstring / tests for that case).
+    """
+
+    _CAMS = ["Brio 501", "Arducam OV9782 USB Camera"]
+
+    def test_read_daemon_pose_selects_arducam_not_cams0(self):
+        t = FakeTransport()
+        ctrl, log, state = _make_controller(t)
+
+        fake_dc = MagicMock()
+        fake_dc.list_cameras.return_value = list(self._CAMS)
+
+        seen_cam: list[str] = []
+
+        def _fake_daemon_read_pose(dc, cam, tag_id=100, timeout_s=3.0):
+            seen_cam.append(cam)
+            return (1.0, 2.0, 0.0)
+
+        with patch("aprilcam.config.Config") as MockConfig, \
+             patch("aprilcam.client.control.DaemonControl") as MockDC, \
+             patch(
+                 "robot_radio.robot.sync_pose.daemon_read_pose",
+                 side_effect=_fake_daemon_read_pose,
+             ), \
+             patch(
+                 "robot_radio.testgui.camera_prefs.load_camera_pref",
+                 return_value="Arducam OV9782 USB Camera",
+             ):
+            MockConfig.load.return_value = MagicMock()
+            MockDC.connect_default.return_value = fake_dc
+
+            pose = ctrl._read_daemon_pose()
+
+        assert pose == (1.0, 2.0, 0.0)
+        assert seen_cam == ["Arducam OV9782 USB Camera"]
+        assert seen_cam[0] != self._CAMS[0], "must not silently use cams[0]"
+
+    def test_capture_playfield_frame_and_calib_selects_arducam_not_cams0(self):
+        ctrl, log, state = _make_controller(None)
+
+        fake_dc = MagicMock()
+        fake_dc.list_cameras.return_value = list(self._CAMS)
+        fake_dc.capture_frame.return_value = None  # short-circuit before deskew
+
+        with patch("aprilcam.config.Config") as MockConfig, \
+             patch("aprilcam.client.control.DaemonControl") as MockDC, \
+             patch(
+                 "robot_radio.testgui.camera_prefs.load_camera_pref",
+                 return_value="Arducam OV9782 USB Camera",
+             ):
+            MockConfig.load.return_value = MagicMock()
+            MockDC.connect_default.return_value = fake_dc
+
+            result = ctrl._capture_playfield_frame_and_calib()
+
+        assert result is None  # capture_frame returned None -> no image
+        fake_dc.capture_frame.assert_called_once_with("Arducam OV9782 USB Camera")
+        assert fake_dc.capture_frame.call_args[0][0] != self._CAMS[0]
+
+    def test_both_call_sites_agree_given_same_inputs(self):
+        """Given the same available list + persisted preference, both call
+        sites resolve to the identical camera."""
+        from robot_radio.testgui import camera_prefs
+
+        preferred = "Arducam OV9782 USB Camera"
+        pose_choice = camera_prefs.select_camera(self._CAMS, preferred)
+        refresh_choice = camera_prefs.select_camera(self._CAMS, preferred)
+        assert pose_choice == refresh_choice == "Arducam OV9782 USB Camera"
+
+
 # --- Refresh Playfield (daemon unavailable) ---
 
 class TestRefreshPlayfieldDaemonUnavailable:

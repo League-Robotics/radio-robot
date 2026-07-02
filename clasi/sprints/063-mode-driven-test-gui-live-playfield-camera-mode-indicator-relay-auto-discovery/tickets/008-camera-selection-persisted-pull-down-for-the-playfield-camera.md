@@ -1,7 +1,7 @@
 ---
 id: '008'
 title: 'Camera-selection: persisted pull-down for the playfield camera'
-status: open
+status: done
 use-cases:
 - SUC-010
 depends-on: []
@@ -112,58 +112,58 @@ two different camera listings in the daemon client:
 
 ### Shared selection/persistence helper (`camera_prefs.py`, Qt-free)
 
-- [ ] A pure function, e.g. `select_camera(available: list[str], preferred:
+- [x] A pure function, e.g. `select_camera(available: list[str], preferred:
       str | None, fallback_contains: str = "3") -> str | None`, returns:
       the `preferred` name if present in `available`; else the first entry in
       `available` containing `fallback_contains`; else `available[0]`; else
       `None` if `available` is empty. Fully testable without any daemon or Qt.
-- [ ] `load_camera_pref() -> str | None` reads the persisted camera name (or
+- [x] `load_camera_pref() -> str | None` reads the persisted camera name (or
       `None` if the sidecar file doesn't exist or is invalid — never raises).
-- [ ] `save_camera_pref(name: str) -> None` writes the sidecar file
+- [x] `save_camera_pref(name: str) -> None` writes the sidecar file
       (`data/testgui/camera_prefs.json`, creating the `data/testgui/`
       directory if needed).
-- [ ] Round-trip: `save_camera_pref("X")` then `load_camera_pref()` returns
+- [x] Round-trip: `save_camera_pref("X")` then `load_camera_pref()` returns
       `"X"` (headless test, using a temp path override / monkeypatched
       constant — do not write into the real repo `data/` dir from tests).
-- [ ] The module is importable without PySide6 or aprilcam installed.
+- [x] The module is importable without PySide6 or aprilcam installed.
 
 ### Consistent camera resolution across all three call sites
 
-- [ ] `_capture_playfield_frame_and_calib` resolves its camera via the shared
+- [x] `_capture_playfield_frame_and_calib` resolves its camera via the shared
       helper (using `dc.list_cameras()` for `available` and the persisted
       preference), not its own inline name-matching loop.
-- [ ] `_read_daemon_pose` resolves its camera via the same shared helper
+- [x] `_read_daemon_pose` resolves its camera via the same shared helper
       instead of unconditional `cams[0]`.
-- [ ] `live_view.py::_capture_and_emit` resolves its camera via the same
+- [x] `live_view.py::_capture_and_emit` resolves its camera via the same
       shared helper instead of unconditional `cams[0]`.
-- [ ] Given the same `available` list and persisted preference, all three
+- [x] Given the same `available` list and persisted preference, all three
       call sites pick the identical camera (verified by a shared-fixture test
       that calls the resolution logic used by each path with the same inputs).
 
 ### GUI pull-down
 
-- [ ] A `QComboBox` (suggested `objectName="camera_combo"`) is present in the
+- [x] A `QComboBox` (suggested `objectName="camera_combo"`) is present in the
       main window, listing the cameras the daemon reports (via `list_cameras()`
       or `enumerate_cameras()` per the implementation note above).
-- [ ] On window build, the combo's current selection reflects
+- [x] On window build, the combo's current selection reflects
       `load_camera_pref()` (or the index-3/fallback default if nothing
       persisted), without requiring a daemon connection to construct the
       window (must degrade gracefully — empty/placeholder combo — when the
       daemon is unreachable at startup, matching existing "no crash without
       hardware" conventions elsewhere in this file).
-- [ ] Changing the combo selection calls `save_camera_pref(new_name)` and
+- [x] Changing the combo selection calls `save_camera_pref(new_name)` and
       triggers an immediate one-shot playfield grab
       (`trigger_live_grab()`/equivalent) using the newly selected camera.
 
 ### No regressions
 
-- [ ] `_PLAYFIELD_CAMERA_INDEX = 3` remains the documented fallback constant
+- [x] `_PLAYFIELD_CAMERA_INDEX = 3` remains the documented fallback constant
       (used by the shared helper's `fallback_contains` default), so existing
       single-camera setups behave exactly as before.
-- [ ] Existing `tests/testgui/test_operations.py` and `tests/testgui/test_live_view.py`
+- [x] Existing `tests/testgui/test_operations.py` and `tests/testgui/test_live_view.py`
       pass unchanged (update any test that asserted the old `cams[0]`/heuristic
       behavior to instead assert the new shared-helper behavior).
-- [ ] All `tests/testgui/` tests pass headlessly with the aprilcam daemon
+- [x] All `tests/testgui/` tests pass headlessly with the aprilcam daemon
       mocked/faked (no hardware in CI).
 
 ## Implementation Plan

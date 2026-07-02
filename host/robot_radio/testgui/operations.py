@@ -43,9 +43,13 @@ Three callables accepted at construction time (or settable as attributes):
 ``refresh_playfield_cb(pixmap, origin_x, origin_y)``
     Called with a deskewed ``QPixmap`` AND the daemon's A1 origin (cm) when
     the user clicks "Refresh Playfield".  The panel reads the playfield frame
-    and calibration from the aprilcam daemon (camera index ``_PLAYFIELD_CAMERA_INDEX``),
-    deskews via the daemon's live homography H, and passes both the rectified
-    ``QPixmap`` and the A1 origin to this hook.  The canvas wires
+    and calibration from the aprilcam daemon, using ``camera_prefs.select_camera()``
+    (ticket 063-008) to resolve which camera among ``dc.list_cameras()`` to
+    use — the persisted preference if present, else the first camera whose
+    name contains ``_PLAYFIELD_CAMERA_INDEX`` ("3", the historical default),
+    else the first available camera.  It then deskews via the daemon's live
+    homography H, and passes both the rectified ``QPixmap`` and the A1 origin
+    to this hook.  The canvas wires
     ``CanvasController.set_background(pixmap, origin_x=ox, origin_y=oy)`` here
     so the world→pixel transform updates atomically with the background.
     No-ops safely if ``None``.
@@ -80,9 +84,16 @@ import logging
 import math
 from typing import Callable
 
+from robot_radio.testgui import camera_prefs
+
 _log = logging.getLogger(__name__)
 
 # Aprilcam camera index for playfield refresh (ticket design: "cam 3").
+# NOTE (ticket 063-008): this is now only the default `fallback_contains`
+# passed to `camera_prefs.select_camera()` — it is no longer the sole
+# selection mechanism. The persisted preference (camera_prefs.load_camera_pref())
+# takes priority; this index/name-heuristic is the fallback used when nothing
+# is persisted (or the persisted camera is no longer available).
 _PLAYFIELD_CAMERA_INDEX = 3
 
 # Stream interval for "STREAM on".
@@ -724,7 +735,11 @@ class OpsController:
                 raise RuntimeError(
                     "aprilcam daemon reports no cameras — is a camera open?"
                 )
-            cam = cams[0]
+            cam = camera_prefs.select_camera(cams, camera_prefs.load_camera_pref())
+            if cam is None:
+                raise RuntimeError(
+                    "aprilcam daemon reports no cameras — is a camera open?"
+                )
             pose = daemon_read_pose(dc, cam, tag_id=100, timeout_s=3.0)
         finally:
             try:
@@ -758,13 +773,14 @@ class OpsController:
             if not cams:
                 raise RuntimeError("aprilcam daemon reports no cameras")
 
-            # Select the playfield camera by name-based heuristic: prefer cameras
-            # whose name contains the index digit, or fall back to cams[0].
-            cam_name: str = cams[0]
-            for c in cams:
-                if str(_PLAYFIELD_CAMERA_INDEX) in str(c):
-                    cam_name = c
-                    break
+            # Resolve the camera via the shared helper (persisted preference >
+            # fallback_contains="3" heuristic > first available). See
+            # camera_prefs.py for the priority order and rationale.
+            cam_name = camera_prefs.select_camera(
+                cams, camera_prefs.load_camera_pref()
+            )
+            if cam_name is None:
+                raise RuntimeError("aprilcam daemon reports no cameras")
             _log.debug("Refresh Playfield: using camera %r", cam_name)
 
             # Capture BGR frame + calibration in a single daemon session.

@@ -67,12 +67,30 @@ Button enable/disable rules:
 - Idle:      Record enabled; Pause and Stop disabled.
 - Recording: Record disabled; Pause and Stop enabled.
 - Paused:    Record (labelled "Resume") enabled; Pause disabled; Stop enabled.
+
+Camera selection (ticket 063-008)
+------------------------------------
+A ``QComboBox`` (``objectName="camera_combo"``) sits in the right panel above
+the playfield canvas, listing cameras reported by the aprilcam daemon's
+``DaemonControl.list_cameras()``.  It is populated best-effort at window
+build time — if the daemon is unreachable the combo is left empty; this must
+never raise or block window construction.  The initial selection reflects
+``camera_prefs.load_camera_pref()`` (falling back to the "3"/Arducam heuristic,
+then the first available camera) via ``camera_prefs.select_camera()`` — the
+same shared helper used by ``operations.py`` and ``live_view.py`` so all
+camera-consuming code paths agree on which camera to use.  Changing the
+selection calls ``camera_prefs.save_camera_pref()`` and immediately triggers
+``ops_ctrl.trigger_live_grab()`` to refresh the playfield image from the
+newly selected camera.
 """
 
 from __future__ import annotations
 
+import logging
 import math
 import sys
+
+_log = logging.getLogger(__name__)
 
 
 def transport_name_to_mode_label(name: str) -> tuple[str, str]:
@@ -164,6 +182,7 @@ def _build_main_window():  # type: ignore[return]
     from robot_radio.testgui.canvas import build_canvas
     from robot_radio.testgui.drive import KeyboardDriver
     from robot_radio.testgui.recorder import SessionRecorder, direction_from_marker
+    from robot_radio.testgui import camera_prefs
 
     # QApplication must exist before any QWidget is created.  We create one
     # only if one does not already exist (e.g. during testing).
@@ -500,6 +519,26 @@ def _build_main_window():  # type: ignore[return]
     mode_label.setText(_init_text)
     mode_label.setStyleSheet(_init_style)
     right_layout.addWidget(mode_label)
+
+    # Camera-selection pull-down (ticket 063-008) — lists cameras known to
+    # the aprilcam daemon; persisted across sessions via camera_prefs.
+    # Populated best-effort below (_populate_camera_combo); selection change
+    # is wired further down, once ops_ctrl.trigger_live_grab is available.
+    camera_row = QWidget()
+    camera_row_layout = QHBoxLayout(camera_row)
+    camera_row_layout.setContentsMargins(0, 0, 0, 0)
+    camera_row_layout.setSpacing(4)
+    camera_combo_label = QLabel("Camera:")
+    camera_row_layout.addWidget(camera_combo_label)
+    camera_combo = QComboBox()
+    camera_combo.setObjectName("camera_combo")
+    camera_combo.setToolTip(
+        "Select which aprilcam daemon camera to use for the playfield feed.\n"
+        "The selection persists across sessions and triggers an immediate\n"
+        "playfield refresh from the newly selected camera."
+    )
+    camera_row_layout.addWidget(camera_combo, stretch=1)
+    right_layout.addWidget(camera_row)
 
     right_splitter = QSplitter(Qt.Orientation.Vertical)
     right_layout.addWidget(right_splitter)
@@ -1351,6 +1390,61 @@ def _build_main_window():  # type: ignore[return]
     # Insert the ops panel before the addStretch() already added above.
     # Because addStretch() was called already, insert at the position before it.
     left_layout.insertWidget(left_layout.count() - 1, ops_panel)
+
+    # ------------------------------------------------------------ camera combo
+
+    def _populate_camera_combo() -> None:
+        """Populate camera_combo from the aprilcam daemon's open-camera list.
+
+        Best-effort: any daemon-connection or import failure degrades to an
+        empty combo rather than raising, so window construction never blocks
+        on daemon/hardware availability (matching the "no crash without
+        hardware" convention used elsewhere in this file).
+
+        Uses ``DaemonControl.list_cameras()`` (not ``enumerate_cameras()``) —
+        see ``camera_prefs`` module docstring for the rationale: the combo's
+        choices must match what the capture paths can actually use, and the
+        capture paths only ever read already-open cameras.
+        """
+        cams: list[str] = []
+        try:
+            from aprilcam.config import Config  # type: ignore[import]
+            from aprilcam.client.control import DaemonControl  # type: ignore[import]
+
+            dc = DaemonControl.connect_default(Config.load())
+            try:
+                cams = dc.list_cameras()
+            finally:
+                try:
+                    dc.close()
+                except Exception:
+                    pass
+        except Exception as exc:
+            _log.debug("camera_combo: daemon unreachable at startup: %s", exc)
+            cams = []
+
+        camera_combo.blockSignals(True)
+        try:
+            camera_combo.clear()
+            camera_combo.addItems(cams)
+            selected = camera_prefs.select_camera(cams, camera_prefs.load_camera_pref())
+            if selected is not None:
+                idx = camera_combo.findText(selected)
+                if idx >= 0:
+                    camera_combo.setCurrentIndex(idx)
+        finally:
+            camera_combo.blockSignals(False)
+
+    _populate_camera_combo()
+
+    def _on_camera_combo_changed(text: str) -> None:
+        """Persist the newly selected camera and trigger an immediate refresh."""
+        if not text:
+            return
+        camera_prefs.save_camera_pref(text)
+        ops_ctrl.trigger_live_grab()
+
+    camera_combo.currentTextChanged.connect(_on_camera_combo_changed)
 
     def _on_connect() -> None:
         """Instantiate the selected Transport, call connect(), send STREAM 50."""

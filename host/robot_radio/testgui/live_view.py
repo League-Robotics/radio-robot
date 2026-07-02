@@ -29,6 +29,15 @@ Each ``_capture_and_emit()`` call opens a fresh ``DaemonControl`` connection,
 performs the capture, and closes it.  This keeps the session stateless and
 avoids stuck connections on daemon restart.
 
+Camera resolution (ticket 063-008)
+------------------------------------
+The camera to capture from is resolved via
+``camera_prefs.select_camera(dc.list_cameras(), camera_prefs.load_camera_pref())``
+— the same shared helper used by ``operations.py``'s playfield-refresh and
+pose-read paths, so all three camera-consuming code paths agree on which
+aprilcam camera to use instead of each picking independently (e.g. an
+unconditional ``cams[0]``).
+
 On daemon unavailability the worker logs a warning once, backs off 2 s, and
 retries.  It does not raise or stop automatically unless aprilcam is not
 installed at all.
@@ -147,6 +156,7 @@ def build_live_view_worker() -> object:
                 return
 
             from robot_radio.testgui.operations import _deskew_bgr_ndarray
+            from robot_radio.testgui import camera_prefs
 
             try:
                 dc = DaemonControl.connect_default(Config.load())
@@ -158,7 +168,9 @@ def build_live_view_worker() -> object:
                 if not cams:
                     raise _DaemonUnavailable("aprilcam daemon reports no cameras")
 
-                cam = cams[0]
+                cam = camera_prefs.select_camera(cams, camera_prefs.load_camera_pref())
+                if cam is None:
+                    raise _DaemonUnavailable("aprilcam daemon reports no cameras")
                 raw_bgr = dc.capture_frame(cam)
                 tag_frame = dc.get_tags(cam)
             except _DaemonUnavailable:

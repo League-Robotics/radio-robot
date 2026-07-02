@@ -246,6 +246,54 @@ class TestLiveViewWorker:
         if received:
             assert len(received[0]) == 5, "Expected (ox, oy, tx, ty, tyaw)"
 
+    def test_capture_and_emit_selects_camera_via_shared_helper_not_cams0(self, qapp):
+        """_capture_and_emit must resolve the camera via camera_prefs.select_camera(),
+        not an unconditional cams[0] (ticket 063-008).
+
+        Mocks a multi-camera daemon list with the non-playfield camera first
+        (mirroring the reported bug: "Brio 501" was cams[0], not the
+        calibrated Arducam playfield camera) and a persisted preference for
+        the Arducam camera, then asserts capture_frame/get_tags were called
+        with the Arducam name, not cams[0].
+        """
+        import numpy as np
+        from unittest.mock import MagicMock, patch
+        from robot_radio.testgui.live_view import build_live_view_worker
+
+        cams = ["Brio 501", "Arducam OV9782 USB Camera"]
+
+        fake_bgr = np.zeros((60, 80, 3), dtype=np.uint8)
+        fake_tag_frame = MagicMock()
+        fake_tag_frame.homography = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+        fake_tag_frame.playfield_corners = [[0, 0], [80, 0], [80, 60], [0, 60]]
+        fake_tag_frame.field_width_cm = 80.0
+        fake_tag_frame.field_height_cm = 60.0
+        fake_tag_frame.origin_x = 40.0
+        fake_tag_frame.origin_y = 30.0
+        fake_tag_frame.by_id.return_value = None
+
+        fake_dc = MagicMock()
+        fake_dc.list_cameras.return_value = cams
+        fake_dc.capture_frame.return_value = fake_bgr
+        fake_dc.get_tags.return_value = fake_tag_frame
+
+        worker = build_live_view_worker()
+
+        with patch("aprilcam.config.Config") as MockConfig, \
+             patch("aprilcam.client.control.DaemonControl") as MockDC, \
+             patch(
+                 "robot_radio.testgui.camera_prefs.load_camera_pref",
+                 return_value="Arducam OV9782 USB Camera",
+             ):
+            MockConfig.load.return_value = MagicMock()
+            MockDC.connect_default.return_value = fake_dc
+
+            worker._capture_and_emit()
+
+        fake_dc.capture_frame.assert_called_once_with("Arducam OV9782 USB Camera")
+        fake_dc.get_tags.assert_called_once_with("Arducam OV9782 USB Camera")
+        assert fake_dc.capture_frame.call_args[0][0] != cams[0]
+
     def test_worker_holds_last_tag_when_tag_missing(self, qapp):
         """When tag 100 is absent, worker emits last known pose (no snap to 0,0)."""
         import numpy as np
