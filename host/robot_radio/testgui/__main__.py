@@ -223,6 +223,31 @@ def _build_main_window():  # type: ignore[return]
     transport_combo.addItems(["Sim", "Serial", "Relay"])
     left_layout.addWidget(transport_combo)
 
+    # Robot selector — pick which robot config is active.  Selecting a robot
+    # rewrites active_robot.json and reloads that config (wired below, once
+    # trace_model / _append_log are in scope).
+    from robot_radio.config.robot_config import (
+        get_robot_config,
+        list_robots,
+        set_active_robot,
+    )
+
+    robot_label = QLabel("Robot:")
+    left_layout.addWidget(robot_label)
+
+    robot_combo = QComboBox()
+    robot_combo.setObjectName("robot_combo")
+    _robot_choices = list_robots()  # list[(name, path)]
+    for _name, _path in _robot_choices:
+        robot_combo.addItem(_name, str(_path))
+    # Preselect the currently-active robot, if resolvable.
+    _active_cfg = get_robot_config()
+    if _active_cfg is not None:
+        _idx = robot_combo.findText(_active_cfg.robot_name)
+        if _idx >= 0:
+            robot_combo.setCurrentIndex(_idx)
+    left_layout.addWidget(robot_combo)
+
     # Port picker (enabled only for Serial / Relay)
     port_label = QLabel("Port:")
     left_layout.addWidget(port_label)
@@ -976,6 +1001,32 @@ def _build_main_window():  # type: ignore[return]
     # Trigger once to set initial state.
     _on_transport_changed(transport_combo.currentIndex())
 
+    def _apply_robot_geometry(cfg) -> None:
+        """Push the active robot's geometry into the trace model."""
+        tw = cfg.trackwidth if cfg is not None else None
+        if tw:
+            trace_model.set_trackwidth_mm(float(tw))
+
+    def _on_robot_changed(index: int) -> None:
+        """Load the robot selected in the dropdown (reloads on every change)."""
+        path = robot_combo.itemData(index)
+        if not path:
+            return
+        try:
+            cfg = set_active_robot(path)
+        except Exception as exc:  # noqa: BLE001 — surface load errors in the log
+            _append_log(f"[ERROR] Failed to load robot: {exc}")
+            return
+        _apply_robot_geometry(cfg)
+        _append_log(
+            f"[INFO] Loaded robot: {cfg.robot_name} "
+            f"({cfg.hardware_model}, trackwidth={cfg.trackwidth}mm)"
+        )
+
+    robot_combo.currentIndexChanged.connect(_on_robot_changed)
+    # Apply the initial selection's geometry (without rewriting the pointer).
+    _apply_robot_geometry(get_robot_config())
+
     # Wire Send buttons — must happen after _append_log / _state are in scope.
     for _btn, _spec, _getters in _row_send_getters:
         _wire_send_button(_btn, _spec, _getters)
@@ -1004,6 +1055,13 @@ def _build_main_window():  # type: ignore[return]
         then click "Set Robot @ 0,0" to reset everything to (0, 0, heading 0).
 
         Steps:
+        0. Send ``STOP`` to halt motors and abort any in-flight motion goal,
+           so the pose reset starts from a truly idle robot.  In Sim mode this
+           is essential: a plant teleport is overwritten by the next tick if the
+           firmware is still driving toward an old goal (heading drifts back).
+        0b. In Sim mode only, teleport the plant ground-truth to (0, 0, 0°) via
+           ``transport.set_true_pose`` — the sim avatar follows the plant, not
+           the firmware belief, and there is no operator to place the robot.
         1. Send ``ZERO enc`` to clear wheel encoder integrators.
         2. Send ``OZ`` to zero the OTOS sensor's position and heading.
            This is essential: the firmware fuses the OTOS absolute heading
@@ -1024,14 +1082,22 @@ def _build_main_window():  # type: ignore[return]
         """
         transport = _state.get("transport")
         if transport is not None:
-            # 0. Sim only: teleport the plant ground-truth to (0, 0, 0°).
+            # 0. Halt motors and abort any in-flight motion goal (TURN/tour/GOTO)
+            #    BEFORE resetting the pose.  This matters especially in Sim: the
+            #    plant teleport below is overwritten by the next tick if the
+            #    firmware is still driving the motors toward an old goal (the
+            #    heading would drift straight back — the "jumps back to the angle
+            #    it started with" bug).  STOP first so PWM is zero when we
+            #    teleport, and so the reset starts from a truly idle robot.
+            transport.command("STOP", read_ms=300)
+            # 0b. Sim only: teleport the plant ground-truth to (0, 0, 0°).
             #    In Sim mode the avatar follows the plant ground truth, not the
             #    firmware's belief.  On real hardware the operator physically
             #    places the robot at centre; the sim has no operator, so without
             #    this the plant keeps its prior (e.g. turned) pose and the avatar
             #    snaps back to it on the next truth delivery — while OZ/SI below
-            #    would re-reference the OTOS at a stale heading.  Teleport FIRST
-            #    so OZ zeroes at heading 0 and SI 0 0 0 stays consistent.
+            #    would re-reference the OTOS at a stale heading.  Teleport AFTER
+            #    STOP (so it sticks) and before OZ so OZ zeroes at heading 0.
             if is_sim_transport(transport):
                 transport.set_true_pose(0.0, 0.0, 0.0)
             # 1. Zero encoder counters so SI starts from a clean state.
@@ -1155,6 +1221,16 @@ def _build_main_window():  # type: ignore[return]
         _state["goto_thread"] = None
         _state["goto_bridge"] = None
 
+    def _stop_all_motion() -> None:
+        """Cancel any running tour AND GOTO worker (used by the STOP button).
+
+        Either may be re-issuing motion commands (``SI``/``G``/tour steps) on a
+        background thread; cancelling both ensures a subsequent wire ``STOP``
+        is not immediately overwritten.  Safe when nothing is running.
+        """
+        _stop_tour()
+        _stop_goto()
+
     def _on_goto_finished() -> None:
         """Main-thread slot: GOTO ended — join thread, re-enable the button."""
         thread = _state.get("goto_thread")
@@ -1212,6 +1288,7 @@ def _build_main_window():  # type: ignore[return]
         clear_traces_cb=_clear_traces,
         refresh_playfield_cb=_refresh_playfield,
         set_origin_cb=_set_origin,
+        stop_motion_cb=_stop_all_motion,
     )
     # Insert the ops panel before the addStretch() already added above.
     # Because addStretch() was called already, insert at the position before it.
@@ -1245,6 +1322,10 @@ def _build_main_window():  # type: ignore[return]
         else:
             # Sim transport — backed by ctypes firmware simulator.
             transport = SimTransport()
+
+        # Calibrate the encoder-odometry trace for this backend's turn scrub
+        # (the sim injects a large over-report; hardware reports ~0).
+        trace_model.set_turn_scrub_factor(getattr(transport, "turn_scrub_factor", 0.0))
 
         # Wire log callback.
         transport.on_log = _on_log_from_thread

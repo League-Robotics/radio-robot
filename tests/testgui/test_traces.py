@@ -173,6 +173,83 @@ class TestFeedEncoder:
         m.feed(_make_frame(enc=(6000, 6000)))
         assert len(m.encoder) == initial_len
 
+    def test_encoder_reset_preserves_heading(self):
+        """A firmware encoder reset (drive-start zeroing) must NOT cancel the
+        heading accumulated by a preceding turn.
+
+        Regression for the "encoder track ignores turns / drifts off into a
+        corner" bug: the firmware zeros the wheel encoders at the start of every
+        distance command, collapsing the counts back toward zero.  That collapse
+        is only tens of mm — below the 5000 mm jump guard — so it used to be
+        integrated as reverse motion whose (dR-dL) cancelled the turn.
+        """
+        m = self.model
+        m.anchor(0.0, 0.0, 0.0)
+        # Baseline.
+        m.feed(_make_frame(enc=(0, 0)))
+        # In-place CCW turn to +90°: left back, right forward by a quarter turn.
+        # quarter_turn = (pi/2) * track/2 = (pi/2) * 64 ≈ 100.5 mm per wheel.
+        q = math.pi / 2 * (128.0 / 2)
+        m.feed(_make_frame(enc=(-round(q), round(q))))
+        # Drive command fires → firmware zeros encoders (counts collapse to ~0).
+        m.feed(_make_frame(enc=(4, 4)))       # reset — must be detected
+        # Now drive 50 cm straight in the NEW (turned) direction.
+        m.feed(_make_frame(enc=(504, 504)))
+        x, y = m.encoder[-1]
+        # After a +90° turn the straight leg should head north (+y), not east.
+        assert y == pytest.approx(50.0, abs=2.0), f"heading lost: ({x:.1f},{y:.1f})"
+        assert abs(x) < 5.0, f"drifted east instead of turning: x={x:.1f}"
+
+    def test_encoder_reset_detected_not_integrated(self):
+        """A reset-to-zero frame rebaselines without integrating spurious motion."""
+        m = self.model
+        m.anchor(0.0, 0.0, 0.0)
+        m.feed(_make_frame(enc=(0, 0)))
+        m.feed(_make_frame(enc=(500, 500)))   # 50 cm forward
+        x_before, y_before = m.encoder[-1]
+        m.feed(_make_frame(enc=(3, 3)))       # firmware reset — near zero
+        x_after, y_after = m.encoder[-1]
+        # Position must not jump backward on the reset.
+        assert (x_after, y_after) == pytest.approx((x_before, y_before), abs=0.5)
+
+    def test_turn_scrub_factor_widens_effective_trackwidth(self):
+        """A scrub factor compensates encoder turn over-report.
+
+        With a +90° in-place turn whose wheels over-report by 26% (sim scrub),
+        raw integration over-rotates to ~113°, but a 0.26 scrub factor recovers
+        ~90°, so the following straight leg heads north instead of overshooting.
+        """
+        import math as _math
+        q_true = _math.pi / 2 * (128.0 / 2)      # wheel travel for a true 90° turn
+        q_reported = q_true * 1.26               # encoders over-report by 26%
+
+        # Raw (no compensation): over-rotates.
+        raw = self.model
+        raw.anchor(0.0, 0.0, 0.0)
+        raw.feed(_make_frame(enc=(0, 0)))
+        raw.feed(_make_frame(enc=(-round(q_reported), round(q_reported))))
+        raw.feed(_make_frame(enc=(4, 4)))                     # drive reset
+        raw.feed(_make_frame(enc=(504, 504)))                 # 50 cm straight
+        rx, ry = raw.encoder[-1]
+
+        # Compensated: 0.26 scrub → ~90° → straight leg goes north.
+        from robot_radio.testgui.traces import TraceModel
+        comp = TraceModel()
+        comp.anchor(0.0, 0.0, 0.0)
+        comp.set_turn_scrub_factor(0.26)
+        comp.feed(_make_frame(enc=(0, 0)))
+        comp.feed(_make_frame(enc=(-round(q_reported), round(q_reported))))
+        comp.feed(_make_frame(enc=(4, 4)))
+        comp.feed(_make_frame(enc=(504, 504)))
+        cx, cy = comp.encoder[-1]
+
+        # Compensated heads north (+y≈50, x≈0); raw overshoots past 90°.
+        assert cy == pytest.approx(50.0, abs=3.0)
+        assert abs(cx) < 6.0
+        # Raw over-rotates (~113°), so the straight leg veers west (x≪0).
+        assert rx < -10.0
+        assert abs(rx) > abs(cx)
+
     def test_encoder_with_anchor_heading(self):
         """At heading=90° (north), straight forward → world y+."""
         m = self.model

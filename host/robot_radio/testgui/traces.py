@@ -86,6 +86,14 @@ if TYPE_CHECKING:
 # Wheel track width in mm (matches the ccw_square_50.py constant).
 _TRACK_MM = 128.0
 
+# Encoder-reset detection.  The firmware zeros the wheel encoders at the start
+# of every distance/drive command (see ccw_square_50.py: "D resets encoders ->
+# rebaseline").  After a reset the cumulative counts collapse back toward zero;
+# a reset is recognised when both wheels read near zero while the previous
+# baseline was substantially non-zero.
+_ENC_RESET_EPS_MM = 20.0   # both counts below this ⇒ freshly-zeroed
+_ENC_RESET_BASE_MM = 40.0  # ...and a baseline wheel above this ⇒ it was moving
+
 
 class TraceModel:
     """Four-polyline world-cm pose accumulator.
@@ -153,9 +161,45 @@ class TraceModel:
         self._enc_bx: float = 0.0  # accumulated body-frame x displacement (mm)
         self._enc_by: float = 0.0  # accumulated body-frame y displacement (mm)
 
+        # Geometric trackwidth (mm) and turn-scrub factor combine into the
+        # effective trackwidth used to convert wheel-delta → heading.
+        self._geom_track_mm: float = _TRACK_MM
+        self._scrub_factor: float = 0.0
+        self._track_mm: float = _TRACK_MM  # effective = geom * (1 + scrub)
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def _recompute_track(self) -> None:
+        self._track_mm = self._geom_track_mm * (1.0 + self._scrub_factor)
+
+    def set_trackwidth_mm(self, trackwidth_mm: float) -> None:
+        """Set the geometric trackwidth used for encoder heading integration.
+
+        Sourced from the active robot config (e.g. tovez=128, togov=126).
+        Falls back to the module default when not called.
+        """
+        self._geom_track_mm = float(trackwidth_mm)
+        self._recompute_track()
+
+    def set_turn_scrub_factor(self, factor: float) -> None:
+        """Calibrate the encoder heading integration for turn scrub.
+
+        Differential drives scrub during turns, so the wheel encoders
+        over-report travel: a commanded/actual turn of θ registers as
+        ``θ·(1+factor)`` of wheel-delta.  Raw integration with the geometric
+        trackwidth therefore over-rotates the encoder track by ``(1+factor)``.
+        Compensate by widening the effective trackwidth to
+        ``geometric·(1+factor)`` so ``heading = (dR-dL)/effective`` recovers the
+        true angle.
+
+        ``factor`` is a per-robot calibration constant (0 = perfect, no scrub).
+        In the simulator it equals the injected ``slip_turn_extra`` (0.26); on
+        hardware it comes from turn-odometry calibration and is typically small.
+        """
+        self._scrub_factor = float(factor)
+        self._recompute_track()
 
     def anchor(self, x_cm: float, y_cm: float, yaw_rad: float) -> None:
         """Set the initial world pose for the body-to-world transform.
@@ -284,14 +328,35 @@ class TraceModel:
         dL = enc[0] - self._enc_baseline[0]
         dR = enc[1] - self._enc_baseline[1]
 
-        # Guard against encoder reset jumps (e.g. after firmware ZERO enc).
+        # Detect a firmware encoder reset (a distance/drive command zeros the
+        # counts).  The collapse is only tens-to-hundreds of mm — far below the
+        # 5000 mm jump guard below — so without this check it is integrated as
+        # spurious reverse motion whose (dR-dL) exactly cancels the heading just
+        # accumulated by the preceding turn.  That freezes the encoder track's
+        # orientation, so it never follows the robot's turns and drifts off into
+        # a corner.  On reset we rebaseline WITHOUT integrating, preserving the
+        # accumulated heading and body displacement.
+        reset_to_zero = (
+            abs(enc[0]) < _ENC_RESET_EPS_MM
+            and abs(enc[1]) < _ENC_RESET_EPS_MM
+            and (abs(self._enc_baseline[0]) > _ENC_RESET_BASE_MM
+                 or abs(self._enc_baseline[1]) > _ENC_RESET_BASE_MM)
+        )
+        if reset_to_zero:
+            self._enc_baseline = enc
+            # Emit a point at the current (unchanged) pose so the trace stays
+            # continuous across the reset.
+            self.encoder.append(self._tw(self._enc_bx / 10.0, self._enc_by / 10.0))
+            return
+
+        # Guard against large encoder jumps (e.g. a full ZERO enc pose command).
         if abs(dL) > 5000 or abs(dR) > 5000:
             self._enc_baseline = enc
             # Don't reset body displacement — keep accumulating from here.
             return
 
         dC = (dL + dR) / 2.0
-        dT = (dR - dL) / _TRACK_MM
+        dT = (dR - dL) / self._track_mm
 
         self._enc_h += dT
         self._enc_bx += dC * math.cos(self._enc_h)

@@ -174,6 +174,138 @@ status: draft
         `test_ekf_dual_source.py`, `test_dbg_otos_commands.py`, `test_ekf.py`) pass
         unchanged.
 
+## SUC-008: Stop a running Tour and have controls reactivate
+
+- **Actor**: Developer or robot operator running a Tour in PLAYFIELD or BENCH mode
+- **Preconditions**: A transport is connected; a Tour is currently running (Tour 1
+  button was clicked and has not yet finished).
+- **Main Flow**:
+  1. Operator clicks the dedicated **Stop Tour** button (or the shared STOP button).
+  2. The tour worker is signalled to stop and its thread is joined synchronously.
+  3. The Tour 1 button and the Stop Tour button both return to their idle
+     enable/disable state **immediately** (Tour 1 enabled, Stop Tour disabled) —
+     without waiting for, or depending on, the worker's `finished` signal.
+  4. Operator can immediately click Tour 1 again to start a fresh run.
+- **Postconditions**: Tour buttons are never left permanently disabled after a stop.
+  The same reactivation guarantee applies to the GOTO button after a GOTO stop.
+- **Alternate Flow (tour finishes naturally, no explicit stop)**:
+  3a. The tour completes all steps; `_on_tour_finished` still re-enables the
+      buttons via the worker's `finished` signal (this path is unaffected by
+      the fix).
+- **Acceptance Criteria**:
+  - [ ] A visible "Stop Tour" control exists, disabled when no tour is running,
+        enabled while a tour runs.
+  - [ ] Clicking Stop Tour (or shared STOP) re-enables the Tour 1 button
+        synchronously inside `_stop_tour()`, not only via `_on_tour_finished`.
+  - [ ] The same synchronous re-enable is applied to `_stop_goto()` for the
+        GOTO button.
+  - [ ] A tour that finishes naturally (not stopped) still re-enables buttons
+        via `_on_tour_finished` — no regression.
+  - [ ] Headless test reproduces the bug scenario (stop while "running") and
+        asserts buttons re-enable without depending on a `finished` signal
+        delivery.
+
+## SUC-009: Tour is gated to a connected transport and warns in Sim mode
+
+- **Actor**: Developer or robot operator
+- **Preconditions**: Test GUI is open.
+- **Main Flow**:
+  1. Before Connect, all tour buttons are disabled (cannot be clicked).
+  2. Operator selects "Sim" and clicks Connect. Tour buttons enable (Sim is a
+     valid dry-run target).
+  3. Operator clicks Tour 1. The log shows a clear
+     `[TOUR] running in SIM mode` line before the tour's own step-by-step log
+     lines.
+  4. The tour runs against the simulator exactly as it would against real
+     hardware (dry run).
+- **Postconditions**: Tours remain runnable in Sim mode; the operator is never
+  confused about whether the tour targeted real hardware, because the log says so.
+- **Acceptance Criteria**:
+  - [ ] Tour buttons are disabled before Connect (regression test — extends the
+        existing `test_tour_button_present_and_disabled` coverage).
+  - [ ] Starting a tour with a `SimTransport` logs `[TOUR] running in SIM mode`.
+  - [ ] Starting a tour with a hardware transport (Serial/Relay) does NOT log
+        that line.
+  - [ ] Tours are NOT blocked in Sim mode (stakeholder decision: Sim remains a
+        valid dry-run target).
+
+## SUC-010: Camera selection is consistent and user-configurable
+
+- **Actor**: Developer operating the playfield with more than one camera
+  attached to the aprilcam daemon
+- **Preconditions**: aprilcam daemon is running with one or more cameras open;
+  Test GUI is open.
+- **Main Flow**:
+  1. A camera pull-down (combo box) in the GUI lists the cameras the aprilcam
+     daemon knows about, defaulting to the persisted selection from a prior
+     session (falling back to camera index 3, "Arducam OV9782 USB Camera",
+     if nothing is persisted or the persisted camera is no longer available).
+  2. Operator picks a different camera from the pull-down.
+  3. The choice is persisted (survives a GUI restart).
+  4. A fresh one-shot playfield grab runs immediately, updating the canvas
+     background from the newly-selected camera.
+  5. All three camera-consuming code paths — one-shot grab
+     (`_capture_playfield_frame_and_calib`), the live-view worker
+     (`live_view.py::_capture_and_emit`), and pose read (`_read_daemon_pose`) —
+     use the same selected camera from that point on.
+- **Postconditions**: No code path silently reads a different (possibly
+  uncalibrated) camera than the one shown in the GUI.
+- **Acceptance Criteria**:
+  - [ ] A `QComboBox` lists cameras known to the aprilcam daemon.
+  - [ ] The selected camera is persisted to a small config file and reloaded on
+        next GUI start.
+  - [ ] Default falls back to camera index 3 ("Arducam OV9782 USB Camera") when
+        no persisted/available selection matches.
+  - [ ] Changing the pull-down selection triggers an immediate one-shot grab
+        using the newly selected camera.
+  - [ ] `_capture_playfield_frame_and_calib`, `_read_daemon_pose`, and
+        `live_view.py::_capture_and_emit` all resolve the camera through the
+        same shared selection helper (no more `cams[0]` or
+        name-contains-digit heuristics duplicated three ways).
+  - [ ] Headless tests cover the selection/persistence helper and the
+        replacement of all three `cams[0]` call sites, with the aprilcam
+        daemon mocked/faked (no hardware in CI).
+
+## SUC-011: Live playfield background actually updates while connected via Relay
+
+- **Actor**: Developer or robot operator running a playfield trial
+- **Preconditions**: Relay transport connected (PLAYFIELD MODE); aprilcam daemon
+  running with the playfield camera calibrated.
+- **Main Flow**:
+  1. User connects via Relay. The live-view worker starts (as delivered by
+     ticket 003) and begins looping at ~9–12 Hz.
+  2. Unlike the as-shipped ticket 003 behavior — where `frame_ready` is
+     connected directly to a bare function `_on_live_frame` with
+     `Qt.ConnectionType.QueuedConnection`, which this PySide build delivers on
+     the **worker** thread (never processed, because the worker thread never
+     re-enters its event loop) — frames are routed through a main-thread
+     `QObject` bridge (matching the existing `_RXBridge` / `_WorkerBridge`
+     pattern), so they are actually delivered and painted.
+  3. The canvas background image visibly updates at a throttled ~3–4 fps (a
+     new frame is converted to `QPixmap` and set roughly every 3rd worker tick).
+  4. The avatar (red/blue marker) updates at the full worker rate (~9–12 Hz),
+     independent of the background throttle — it does not visibly lag behind
+     robot motion even though the image behind it refreshes more slowly.
+  5. User disconnects; canvas reverts exactly as in SUC-003.
+- **Postconditions**: The operator can watch the robot move on the live camera
+  image in near real time, exactly as it worked in the earlier camera-work
+  milestone that this ticket restores.
+- **Acceptance Criteria**:
+  - [ ] `frame_ready` is connected to a main-thread `QObject` bridge slot (not a
+        bare function) so delivery happens on the GUI thread regardless of
+        PySide connection-type quirks.
+  - [ ] The avatar pose (`canvas_ctrl.set_avatar_pose`) is updated on every
+        received frame (full worker rate, ~9–12 Hz).
+  - [ ] The background `QPixmap` conversion + `canvas_ctrl.set_background`
+        call is throttled to ~3–4 fps (every Nth frame, or time-gated).
+  - [ ] A lower background update rate than 3–4 fps is acceptable; avatar
+        smoothness is the priority.
+  - [ ] Headless test simulates N `frame_ready` emissions and asserts
+        `set_avatar_pose` is called N times while `set_background` is called
+        a throttled subset of N times.
+  - [ ] No regression to SUC-003's disconnect/restore-static-background
+        behavior.
+
 ## SUC-004: SIM/BENCH MODE background unchanged
 
 - **Actor**: Developer using Sim or Serial transport

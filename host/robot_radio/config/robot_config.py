@@ -338,12 +338,60 @@ def load_robot_config(path: "str | Path") -> RobotConfig:
 _config_cache: Optional[RobotConfig] = None
 _cache_loaded: bool = False
 
+_ROBOTS_DIR = _PROJECT_ROOT / "data" / "robots"
+_ACTIVE_ROBOT_POINTER = _ROBOTS_DIR / "active_robot.json"
+
 
 def _reset_robot_config() -> None:
     """Clear the cached singleton. Intended for testing only."""
     global _config_cache, _cache_loaded
     _config_cache = None
     _cache_loaded = False
+
+
+def list_robots() -> "list[tuple[str, Path]]":
+    """List selectable robot configs as ``(robot_name, path)`` pairs.
+
+    Scans ``data/robots/*.json``, skipping the ``active_robot.json`` pointer and
+    the ``*.schema.json`` schema.  Sorted by robot name.  Entries that fail to
+    load are silently skipped.
+    """
+    out: list[tuple[str, Path]] = []
+    if not _ROBOTS_DIR.is_dir():
+        return out
+    for path in sorted(_ROBOTS_DIR.glob("*.json")):
+        if path.name == "active_robot.json" or path.name.endswith(".schema.json"):
+            continue
+        try:
+            cfg = load_robot_config(path)
+        except Exception as e:  # noqa: BLE001 — a bad file shouldn't hide the rest
+            logger.warning("Skipping unreadable robot config %s: %s", path, e)
+            continue
+        out.append((cfg.robot_name, path))
+    out.sort(key=lambda pair: pair[0].lower())
+    return out
+
+
+def set_active_robot(path: "str | Path") -> RobotConfig:
+    """Point ``active_robot.json`` at *path*, reset the cache, and load it.
+
+    Writes the pointer file ``{"path": "data/robots/<name>.json"}`` (repo-root
+    relative when possible), clears the cached singleton so ``get_robot_config``
+    re-reads, and returns the freshly loaded config.
+    """
+    import json
+
+    path = Path(path)
+    cfg = load_robot_config(path)  # validate before writing the pointer
+    try:
+        rel = path.resolve().relative_to(_PROJECT_ROOT.resolve())
+        pointer_path = rel.as_posix()
+    except ValueError:
+        pointer_path = str(path)
+    _ACTIVE_ROBOT_POINTER.write_text(json.dumps({"path": pointer_path}) + "\n")
+    _reset_robot_config()
+    logger.info("Active robot set to %r (%s)", cfg.robot_name, pointer_path)
+    return cfg
 
 
 def get_robot_config() -> Optional[RobotConfig]:

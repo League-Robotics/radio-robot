@@ -135,6 +135,7 @@ def build_panel(
     clear_traces_cb: Callable[[], None] | None = None,
     refresh_playfield_cb: "Callable[[object, float, float], None] | None" = None,
     set_origin_cb: Callable[[], None] | None = None,
+    stop_motion_cb: Callable[[], None] | None = None,
 ) -> "tuple[object, object]":
     """Build and return the operations panel ``QGroupBox``.
 
@@ -287,6 +288,7 @@ def build_panel(
         clear_traces_cb=clear_traces_cb,
         refresh_playfield_cb=refresh_playfield_cb,
         set_origin_cb=set_origin_cb,
+        stop_motion_cb=stop_motion_cb,
     )
 
     # Wire buttons to controller handlers.
@@ -345,6 +347,7 @@ class OpsController:
         clear_traces_cb: Callable[[], None] | None = None,
         refresh_playfield_cb: "Callable[[object, float, float], None] | None" = None,
         set_origin_cb: Callable[[], None] | None = None,
+        stop_motion_cb: Callable[[], None] | None = None,
     ) -> None:
         self._transport_ref = transport_ref
         self._log_cb = log_cb
@@ -359,6 +362,7 @@ class OpsController:
         self.clear_traces_cb = clear_traces_cb
         self.refresh_playfield_cb = refresh_playfield_cb
         self.set_origin_cb = set_origin_cb
+        self.stop_motion_cb = stop_motion_cb
         self._stream_on = False  # tracks stream toggle state
 
     # ------------------------------------------------------------------
@@ -453,16 +457,55 @@ class OpsController:
             self._log(f"[ERROR] Zero Encoders: {exc}")
 
     def on_stop(self) -> None:
-        """Send ``STOP`` (hard motor stop)."""
+        """Full-system halt: cancel workers, stop motors, and stop telemetry.
+
+        A single wire ``STOP`` is not enough:
+
+        1. A running GOTO/tour worker re-issues ``SI``/``G``/tour steps every
+           poll cycle, so a lone STOP is overwritten within milliseconds — and
+           the worker never aborts the firmware's *in-flight* move by itself.
+           ``stop_motion_cb`` cancels AND joins the worker thread first, so
+           nothing re-drives the robot and the transport is no longer touched
+           from the worker thread.
+        2. STOP halts the motors / aborts the active motion goal.
+        3. ``STREAM 0`` stops telemetry — otherwise the firmware keeps emitting
+           TLM after everything else has stopped (the robot "won't stop").
+
+        Steps 2–3 use ``command`` (synchronous, ordered) now that the worker
+        thread is joined, so there is no concurrent transport access.
+        """
+        # 1. Cancel GOTO / tour workers BEFORE any wire command so nothing
+        #    re-drives the robot afterwards.  Joins the worker thread; safe if
+        #    none is running.
+        if self.stop_motion_cb is not None:
+            try:
+                self.stop_motion_cb()
+            except Exception as exc:
+                self._log(f"[ERROR] STOP: stopping motion worker raised: {exc}")
+
         transport = self._transport_ref.get("transport")
         if transport is None:
             self._log("[WARN] STOP: not connected")
             return
+
+        # 2. Halt motors / abort the active motion goal.
         try:
-            transport.send("STOP")
+            transport.command("STOP", read_ms=300)
             self._log("[INFO] STOP sent")
         except Exception as exc:
             self._log(f"[ERROR] STOP: {exc}")
+
+        # 3. Stop telemetry so the firmware stops streaming TLM, and reflect the
+        #    toggle in the UI.  Best-effort — a STREAM-0 failure must not mask
+        #    the motor STOP above.
+        try:
+            transport.command("STREAM 0", read_ms=300)
+            self._stream_on = False
+            self._stream_btn.setChecked(False)  # type: ignore[attr-defined]
+            self._stream_btn.setText("STREAM: off")  # type: ignore[attr-defined]
+            self._log("[INFO] STREAM 0 sent (telemetry stopped)")
+        except Exception as exc:
+            self._log(f"[ERROR] STOP: STREAM 0 failed: {exc}")
 
     def on_clear_traces(self) -> None:
         """Clear all trace polylines (no transport command)."""
@@ -603,14 +646,13 @@ class OpsController:
                 try:
                     result = capture_fn()
                 except Exception as exc:
+                    # IMPORTANT: this runs on a background daemon thread.  Do NOT
+                    # call log_cb here — it writes to the Qt log pane, and Qt
+                    # widget access off the main thread segfaults (QTextEngine).
+                    # Emitting result_ready(None) routes the "no camera" message
+                    # through on_result() on the Qt main thread, which already
+                    # logs the same placeholder notice safely.
                     _log.debug("Auto-grab failed: %s", exc)
-                    try:
-                        log_cb(
-                            "[INFO] Refresh Playfield: no aprilcam camera — "
-                            "showing placeholder; click Refresh after calibrating"
-                        )
-                    except Exception:
-                        pass
                     result = None
                 bridge.result_ready.emit(result)
 

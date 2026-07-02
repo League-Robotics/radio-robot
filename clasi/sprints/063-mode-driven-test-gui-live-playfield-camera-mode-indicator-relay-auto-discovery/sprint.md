@@ -14,6 +14,10 @@ issues:
 - live-camera-view-for-the-test-gui.md
 - testgui-record-pause-stop-command-log.md
 - testgui-set-robot-zero-full-reset.md
+- testgui-tour-stop-reactivation.md
+- testgui-tour-sim-mode-gating.md
+- testgui-playfield-not-live-updating.md
+- testgui-playfield-oneshot-grab-and-camera-selection.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -147,6 +151,9 @@ Before tickets can be created, all of the following must be true:
 | 004 | Set Robot @ 0,0: full pose reset (heading + encoders + SI command) | — |
 | 005 | Record / Pause / Stop command+response logging | — |
 | 006 | Functional simulated OTOS for EKF fusion and heading-reset testing | — |
+| 007 | Tour/GOTO stop reactivation and Sim-mode tour gating | — |
+| 008 | Camera-selection: persisted pull-down for the playfield camera | — |
+| 009 | Live playfield: main-thread frame bridge with throttled background and full-rate avatar | 008 |
 
 Tickets 001–003 are done. Tickets 004, 005, and 006 are independent of each
 other and of 001–003; they may execute in any order after 003 is done. Ticket
@@ -154,3 +161,14 @@ other and of 001–003; they may execute in any order after 003 is done. Ticket
 harness rather than the Test GUI itself, but is included in this sprint
 because it directly enables testing ticket 004's heading-reset behaviour
 (SUC-005) in Sim mode.
+
+Tickets 007–009 were added after four newly-linked issues surfaced live bugs
+in the Test GUI (`testgui-tour-stop-reactivation.md`,
+`testgui-tour-sim-mode-gating.md`,
+`testgui-playfield-not-live-updating.md`,
+`testgui-playfield-oneshot-grab-and-camera-selection.md`). Ticket 007 is
+independent and may run any time after 003. Ticket 008 (camera-selection
+plumbing) must precede ticket 009 (live-view main-thread bridge) because the
+live-view worker's camera resolution is touched by 008 and the live-frame
+delivery fix in 009 is built on top of it — tickets execute serially in
+number order: 007, then 008, then 009.

@@ -212,6 +212,34 @@ class TestRelayHandshake:
         assert pos_echo < pos_mode, "!ECHO OFF must come before !MODE RAW250"
         assert pos_mode < pos_go, "!MODE RAW250 must come before !GO"
 
+    def test_explicit_relay_mode_runs_handshake(self):
+        """mode='relay' (as RelayTransport passes) must still send !GO.
+
+        Regression: when the caller declared mode='relay' up front, connect()
+        took the explicit-mode branch and SKIPPED _relay_handshake(), so the
+        relay stayed in its control plane and every command came back as
+        '# error: unknown command (try !HELP)'.  The explicit-relay path must
+        run the same !ECHO OFF → !MODE RAW250 → !GO handshake as auto-classify.
+        """
+        from robot_radio.io.serial_conn import SerialConnection
+
+        fake = self._build_fake_relay()
+        conn = SerialConnection(port="/dev/fake", mode="relay")
+
+        with _patch_serial(fake):
+            conn.connect()
+            conn.disconnect()
+
+        sent = fake.written_text()
+        assert any("!MODE RAW250" in s for s in sent), (
+            f"!MODE RAW250 not sent in explicit relay mode; writes={sent}"
+        )
+        assert any("!GO" in s for s in sent), (
+            f"!GO not sent in explicit relay mode; writes={sent}"
+        )
+        # After !GO the relay is a transparent pipe → mode collapses to direct.
+        assert conn.mode == "direct", f"expected 'direct' after !GO, got {conn.mode!r}"
+
     def test_post_go_sends_are_plain(self):
         """send() after !GO must NOT use the > prefix."""
         fake = self._build_fake_relay()

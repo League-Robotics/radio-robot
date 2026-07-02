@@ -139,6 +139,7 @@ def _make_controller(
     clear_cb=None,
     refresh_cb=None,    # signature: (pixmap, origin_x, origin_y) -> None
     set_origin_cb=None,
+    stop_motion_cb=None,
 ) -> tuple["object", list[str], dict]:
     """Build an OpsController with fake widgets and optional transport."""
     from robot_radio.testgui.operations import OpsController
@@ -190,6 +191,7 @@ def _make_controller(
         clear_traces_cb=clear_cb,
         refresh_playfield_cb=refresh_cb,
         set_origin_cb=set_origin_cb,
+        stop_motion_cb=stop_motion_cb,
     )
     return ctrl, log_entries, state
 
@@ -227,7 +229,36 @@ class TestStop:
         t = FakeTransport()
         ctrl, log, state = _make_controller(t)
         ctrl.on_stop()
-        assert "STOP" in t.sent_fire_forget
+        assert "STOP" in t.sent_commands
+
+    def test_stops_telemetry(self):
+        """STOP must also send STREAM 0 so the firmware stops streaming TLM."""
+        t = FakeTransport()
+        ctrl, log, state = _make_controller(t)
+        ctrl.on_stop()
+        assert "STREAM 0" in t.sent_commands, (
+            f"STREAM 0 not sent by STOP: {t.sent_commands}"
+        )
+
+    def test_resets_stream_toggle(self):
+        """STOP must reset the STREAM toggle button to off."""
+        t = FakeTransport()
+        ctrl, log, state = _make_controller(t)
+        # Simulate stream currently on.
+        ctrl._stream_on = True
+        ctrl._stream_btn.checked = True
+        ctrl._stream_btn.text_val = "STREAM: on"
+        ctrl.on_stop()
+        assert ctrl._stream_on is False
+        assert ctrl._stream_btn.checked is False
+        assert ctrl._stream_btn.text_val == "STREAM: off"
+
+    def test_stop_before_stream0(self):
+        """Motors must be halted (STOP) before telemetry is stopped (STREAM 0)."""
+        t = FakeTransport()
+        ctrl, log, state = _make_controller(t)
+        ctrl.on_stop()
+        assert t.sent_commands.index("STOP") < t.sent_commands.index("STREAM 0")
 
     def test_logs_stop(self):
         t = FakeTransport()
@@ -243,6 +274,36 @@ class TestStop:
     def test_no_transport_does_not_raise(self):
         ctrl, log, state = _make_controller(None)
         ctrl.on_stop()
+
+    def test_cancels_motion_worker(self):
+        """STOP must invoke stop_motion_cb (cancels GOTO/tour workers)."""
+        t = FakeTransport()
+        called = []
+        ctrl, log, state = _make_controller(t, stop_motion_cb=lambda: called.append(True))
+        ctrl.on_stop()
+        assert called == [True], "stop_motion_cb was not called by STOP"
+
+    def test_cancels_worker_before_wire_stop(self):
+        """The worker must be cancelled BEFORE the wire STOP, else the worker's
+        next command overwrites it."""
+        t = FakeTransport()
+        order: list[str] = []
+        # Record the order of the cancel vs the wire commands.
+        ctrl, log, state = _make_controller(t, stop_motion_cb=lambda: order.append("cancel"))
+        orig_command = t.command
+        def _tracking_command(line, read_ms=200):
+            order.append(f"cmd:{line}")
+            return orig_command(line, read_ms)
+        t.command = _tracking_command
+        ctrl.on_stop()
+        assert order == ["cancel", "cmd:STOP", "cmd:STREAM 0"], f"wrong order: {order}"
+
+    def test_cancels_worker_even_without_transport(self):
+        """stop_motion_cb must run even if no transport is connected."""
+        called = []
+        ctrl, log, state = _make_controller(None, stop_motion_cb=lambda: called.append(True))
+        ctrl.on_stop()
+        assert called == [True]
 
 
 # --- Clear Traces ---
@@ -277,6 +338,55 @@ class TestClearTraces:
         ctrl, log, state = _make_controller(None, clear_cb=bad_cb)
         ctrl.on_clear_traces()  # Must not raise
         assert any("ERROR" in e or "callback" in e.lower() for e in log)
+
+
+# --- trigger_live_grab thread-safety (crash regression) ---
+
+class TestTriggerLiveGrabThreadSafety:
+    """The background grab thread must NEVER call log_cb directly.
+
+    Regression for a segfault: ``_run_in_thread`` used to call ``log_cb`` (which
+    writes to the Qt log pane) from its daemon thread when the camera capture
+    failed.  Qt widget access off the main thread crashes in QTextEngine.  The
+    "no camera" notice must instead be delivered via ``result_ready(None)`` →
+    ``on_result`` on the GUI thread.
+    """
+
+    def _wait_for_grab_thread(self) -> None:
+        import threading
+        import time
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            if not any(t.name == "playfield-grab" for t in threading.enumerate()):
+                return
+            time.sleep(0.02)
+
+    def test_capture_failure_does_not_log_off_thread(self):
+        from PySide6.QtWidgets import QApplication  # type: ignore[import-untyped]
+
+        app = QApplication.instance() or QApplication([])
+
+        ctrl, log, state = _make_controller(None)
+
+        def _boom():
+            raise RuntimeError("aprilcam daemon unavailable")
+
+        # Force the daemon capture (run on the background thread) to fail.
+        ctrl._capture_playfield_frame_and_calib = _boom  # type: ignore[attr-defined]
+
+        ctrl.trigger_live_grab()
+        self._wait_for_grab_thread()
+
+        # Nothing may have been logged from the worker thread: the notice is
+        # queued to on_result and only surfaces once the GUI event loop runs.
+        assert log == [], f"log written off the worker thread: {log!r}"
+
+        # Draining the event loop delivers the placeholder notice on the GUI
+        # thread — proving the safe path still reports the failure.
+        app.processEvents()
+        assert any("placeholder" in e.lower() or "no aprilcam camera" in e.lower()
+                   for e in log), f"expected deferred camera notice, got {log!r}"
 
 
 # --- STREAM toggle ---

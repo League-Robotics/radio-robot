@@ -229,6 +229,17 @@ class Transport(abc.ABC):
         self.on_truth: TruthCB | None = None
         self.on_log: LogCB | None = None
 
+    @property
+    def turn_scrub_factor(self) -> float:
+        """Fractional encoder over-report during turns for this backend.
+
+        Consumers (e.g. the encoder-odometry trace) use this to calibrate
+        heading integration.  0.0 = perfect (no scrub).  Hardware backends
+        report 0.0 until real turn-odometry calibration provides a value;
+        the simulator overrides this with its injected ``slip_turn_extra``.
+        """
+        return 0.0
+
     # ------------------------------------------------------------------
     # Lifecycle (must be implemented)
     # ------------------------------------------------------------------
@@ -599,6 +610,11 @@ class SimTransport(Transport):
         # For command() (synchronous): reply_list=[""]*1, done_event=Event
         self._cmd_queue: queue.Queue = queue.Queue()
         self._connected = False
+
+    @property
+    def turn_scrub_factor(self) -> float:
+        """The sim injects ``_SIM_SLIP_TURN_EXTRA`` turn-scrub over-report."""
+        return _SIM_SLIP_TURN_EXTRA
 
     # ------------------------------------------------------------------
     # Lifecycle
