@@ -89,6 +89,18 @@ public:
     // promoting new plant values, so positionMm() holds its last cached value.
     void setFrozen(bool frozen) { _frozen = frozen; }
 
+    // (064-005) I2C read-failure injection, mirroring SimOdometer::
+    // setReadFailure / sim_set_otos_read_failure — the SimMotor-side
+    // counterpart to the real Motor's hold-last-value fix (CR-03). When
+    // injected: tick() does not promote a fresh reportedEncMm() (holds
+    // _lastPositionMm, same early-return as _frozen), and collectEncoder() /
+    // readEncoderMmF() / readEncoderMmFAtomic() / readEncoderMmFSettle()
+    // likewise return the last cached value instead of a live plant read —
+    // validating the downstream contract (Drive::_runOutlierFilter →
+    // MotorController::controlTick → Odometry/EKF) that the real firmware's
+    // fix exists to protect. Defaults to false (a fresh SimMotor is PERFECT).
+    void setReadFailure(bool fail) { _readFailure = fail; }
+
     // Encoder error injection (ticket 058-001): per-wheel scale error and slip,
     // forwarded to the plant's reported-encoder error model.  Defaults to zero
     // (no-op) so a fresh SimMotor is PERFECT.
@@ -119,6 +131,9 @@ private:
     bool     _hasLastTick      = false;
 
     bool     _frozen           = false;
+
+    // (064-005) I2C read-failure injection — see setReadFailure() above.
+    bool     _readFailure      = false;
 
     // Cumulative reset-kind counters (064-003): resetEncoder() increments
     // _hardResetCount; rebaselineSoft() increments _softResetCount.

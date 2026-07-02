@@ -16,18 +16,25 @@ void SimMotor::setSpeed(int8_t pct) {
 }
 
 int32_t SimMotor::collectEncoder() const {
+    // (064-005) Injected read failure: hold the last tick()-cached value
+    // instead of a live plant read, mirroring the real Motor's hold-last
+    // -value fix (CR-03).
+    if (_readFailure) return static_cast<int32_t>(_lastPositionMm);
     return static_cast<int32_t>(reportedEncMm());
 }
 
 float SimMotor::readEncoderMmF(const RobotConfig& /*cfg*/) const {
+    if (_readFailure) return _lastPositionMm;
     return reportedEncMm();
 }
 
 float SimMotor::readEncoderMmFAtomic(const RobotConfig& /*cfg*/) const {
+    if (_readFailure) return _lastPositionMm;
     return reportedEncMm();
 }
 
 float SimMotor::readEncoderMmFSettle(const RobotConfig& /*cfg*/) const {
+    if (_readFailure) return _lastPositionMm;
     return reportedEncMm();
 }
 
@@ -66,10 +73,11 @@ void SimMotor::tick(uint32_t now_ms) {
     // COPY only (no re-integration); bit-identical to MockMotor::tick.  A simple
     // position-difference velocity is cached for velocityMmps() (not consumed by
     // the PID, so it does not affect the golden-TLM frame).
-    if (_frozen) {
-        // Frozen encoder: hold the last cached value, do NOT advance the
-        // timestamp baseline (so velocity differentiation resumes cleanly on
-        // unfreeze).  Forward-compat: default-off, so MockMotor parity holds.
+    if (_frozen || _readFailure) {
+        // Frozen encoder / injected read failure (064-005): hold the last
+        // cached value, do NOT advance the timestamp baseline (so velocity
+        // differentiation resumes cleanly once unfrozen/cleared).
+        // Forward-compat: both default-off, so MockMotor parity holds.
         return;
     }
     float pos = reportedEncMm();

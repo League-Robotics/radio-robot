@@ -225,6 +225,11 @@ void Motor::resetEncoder()
             _lastPositionMm   = 0.0f;
             _lastVelocityMmps = 0.0f;
             _hasLastTick      = false;
+            // (064-005) Re-zero the held-last-good-read baseline too, so a
+            // failed read immediately after this reset holds ~0 (the fresh
+            // baseline) rather than a stale value computed against the old
+            // offset.
+            _lastGoodRawEnc   = 0;
             return;
         }
         // Readback non-zero: the offset snapshot was corrupted.  Undo this
@@ -245,6 +250,8 @@ void Motor::resetEncoder()
     _lastPositionMm   = 0.0f;
     _lastVelocityMmps = 0.0f;
     _hasLastTick      = false;
+    // (064-005) See the clean-reset path above — same rationale.
+    _lastGoodRawEnc   = 0;
 }
 
 void Motor::rebaselineSoft()
@@ -277,6 +284,10 @@ void Motor::rebaselineSoft()
     _lastPositionMm   = 0.0f;
     _lastVelocityMmps = 0.0f;
     _hasLastTick      = false;
+    // (064-005) See resetEncoder()'s clean-reset path — same rationale: a
+    // failed read immediately after this rebaseline should hold ~0, not a
+    // stale value computed against the pre-rebaseline offset.
+    _lastGoodRawEnc   = 0;
     ++_softResetCount;
 }
 
@@ -308,7 +319,7 @@ int32_t Motor::readEncoderAtomic() const
         0x00, 0xF5,
         0x00
     };
-    _i2c.write((ADDR << 1), (uint8_t*)cmd, 8, false);
+    int writeResult = _i2c.write((ADDR << 1), (uint8_t*)cmd, 8, false);
 
     // Post-write settle: chip prepares the 4-byte encoder response.
     {
@@ -317,7 +328,17 @@ int32_t Motor::readEncoderAtomic() const
     }
 
     uint8_t resp[4] = {0, 0, 0, 0};
-    _i2c.read((ADDR << 1), (uint8_t*)resp, 4, false);
+    int readResult = _i2c.read((ADDR << 1), (uint8_t*)resp, 4, false);
+
+    // (064-005) CR-03: on I2C failure the response buffer stays {0,0,0,0},
+    // which would compute as `0 - _encOffset` — a large fabricated jump.
+    // Hold the last known-good value instead (readSpeedRaw()'s sibling
+    // pattern uses an out-of-band sentinel, -1; no such sentinel exists here
+    // since every int32_t is a valid encoder count, so hold-last-value is
+    // used instead).
+    if (writeResult != MICROBIT_OK || readResult != MICROBIT_OK) {
+        return _lastGoodRawEnc;
+    }
 
     int32_t raw = (int32_t)(
         ((uint32_t)resp[3] << 24) |
@@ -327,7 +348,9 @@ int32_t Motor::readEncoderAtomic() const
     );
 
     // Subtract the software offset captured at last resetEncoder() call.
-    return raw - _encOffset;
+    int32_t result = raw - _encOffset;
+    _lastGoodRawEnc = result;
+    return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -367,7 +390,10 @@ void Motor::requestEncoder()
         0x00, 0xF5,
         0x00
     };
-    _i2c.write((ADDR << 1), (uint8_t*)cmd, 8, false);
+    int writeResult = _i2c.write((ADDR << 1), (uint8_t*)cmd, 8, false);
+    // (064-005) Cache this write's status; collectEncoder() (phase 2) folds
+    // it into its own failure decision (CR-03).
+    _pendingEncRequestOk = (writeResult == MICROBIT_OK);
 }
 
 int32_t Motor::collectEncoder() const
@@ -379,7 +405,16 @@ int32_t Motor::collectEncoder() const
     // loop guarantees this ordering (LoopScheduler alternates wheels).
     // No busy-wait or fiber_sleep.
     uint8_t resp[4] = {0, 0, 0, 0};
-    _i2c.read((ADDR << 1), (uint8_t*)resp, 4, false);
+    int readResult = _i2c.read((ADDR << 1), (uint8_t*)resp, 4, false);
+
+    // (064-005) CR-03: a failed phase-1 write (_pendingEncRequestOk == false)
+    // means this read — even if it itself reports OK — answers a stale prior
+    // request, not this cycle's; treat it as a combined failure. Either way,
+    // hold the last known-good value instead of computing from a zeroed
+    // response buffer.
+    if (!_pendingEncRequestOk || readResult != MICROBIT_OK) {
+        return _lastGoodRawEnc;
+    }
 
     int32_t raw = (int32_t)(
         ((uint32_t)resp[3] << 24) |
@@ -389,7 +424,9 @@ int32_t Motor::collectEncoder() const
     );
 
     // Subtract the software offset captured at last resetEncoder() call.
-    return raw - _encOffset;
+    int32_t result = raw - _encOffset;
+    _lastGoodRawEnc = result;
+    return result;
 }
 
 float Motor::readEncoderMmFAtomic(const RobotConfig& cfg) const
@@ -408,16 +445,25 @@ float Motor::readEncoderMmFSettle(const RobotConfig& cfg) const
     // idle between ticks, so the pre-idle is redundant there. Cost: ~4 ms.
     static constexpr uint32_t kSettleUs = 4000;
     uint8_t cmd[8] = { 0xFF, 0xF9, _motorId, 0x00, 0x46, 0x00, 0xF5, 0x00 };
-    _i2c.write((ADDR << 1), (uint8_t*)cmd, 8, false);
+    int writeResult = _i2c.write((ADDR << 1), (uint8_t*)cmd, 8, false);
     uint64_t deadline = system_timer_current_time_us() + kSettleUs;
     while (system_timer_current_time_us() < deadline) {}
     uint8_t resp[4] = { 0, 0, 0, 0 };
-    _i2c.read((ADDR << 1), (uint8_t*)resp, 4, false);
+    int readResult = _i2c.read((ADDR << 1), (uint8_t*)resp, 4, false);
+
+    float mmPerDeg = (_motorId == 2) ? cfg.mmPerDegL : cfg.mmPerDegR;
+
+    // (064-005) CR-03: on I2C failure, hold the last known-good value
+    // (converted to mm) instead of computing from a zeroed response buffer.
+    if (writeResult != MICROBIT_OK || readResult != MICROBIT_OK) {
+        return (_lastGoodRawEnc / 10.0f) * mmPerDeg * (float)_fwdSign;
+    }
+
     int32_t raw = (int32_t)(
         ((uint32_t)resp[3] << 24) | ((uint32_t)resp[2] << 16) |
         ((uint32_t)resp[1] <<  8) | (uint32_t)resp[0]);
     raw -= _encOffset;
-    float mmPerDeg = (_motorId == 2) ? cfg.mmPerDegL : cfg.mmPerDegR;
+    _lastGoodRawEnc = raw;
     return (raw / 10.0f) * mmPerDeg * (float)_fwdSign;
 }
 

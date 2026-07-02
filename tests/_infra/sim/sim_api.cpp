@@ -537,9 +537,11 @@ float sim_get_estimation_error_h(void* h) {
 // PERFECT" invariant (each error setter defaults to no-op at construction).
 void sim_set_perfect(void* h) {
     SimHandle* s = static_cast<SimHandle*>(h);
-    // Drive-wheel encoders: clear freeze + zero per-side noise.
+    // Drive-wheel encoders: clear freeze + read-failure + zero per-side noise.
     s->hal.simMotorL().setFrozen(false);
     s->hal.simMotorR().setFrozen(false);
+    s->hal.simMotorL().setReadFailure(false);
+    s->hal.simMotorR().setReadFailure(false);
     s->hal.simMotorL().setNoiseSigma(0.0f);
     s->hal.simMotorR().setNoiseSigma(0.0f);
     // OTOS odometer: clear read failure + lift; zero linear/yaw noise.
@@ -567,6 +569,22 @@ void sim_set_motor_slip(void* h, int side, float straight, float turn_extra) {
 }
 void sim_set_encoder_noise(void* h, int side, float sigma_mm) {
     static_cast<SimHandle*>(h)->hal.plant().setEncoderNoise(side, sigma_mm);
+}
+
+// ---- Encoder I2C read-failure injection (064-005, side: 0=left, 1=right, ----
+// ---- other=both — matching the sim_set_motor_slip/setEncoderNoise convention) --
+//
+// Mirrors sim_set_otos_read_failure: while injected, SimMotor::tick() does not
+// promote a fresh reported-encoder value (holds _lastPositionMm), and
+// collectEncoder()/readEncoderMmF()/readEncoderMmFAtomic()/readEncoderMmFSettle()
+// likewise hold their last cached value — the sim-reachable counterpart to the
+// real Motor's hold-last-value fix (CR-03,
+// clasi/issues/encoder-integrity-i2c-failures-and-outlier-filter-recovery.md).
+void sim_set_motor_read_failure(void* h, int side, int fail) {
+    SimHandle* s = static_cast<SimHandle*>(h);
+    bool f = (fail != 0);
+    if (side == 0 || side > 1) s->hal.simMotorL().setReadFailure(f);
+    if (side == 1 || side > 1) s->hal.simMotorR().setReadFailure(f);
 }
 
 // ---- OTOS sim model ----

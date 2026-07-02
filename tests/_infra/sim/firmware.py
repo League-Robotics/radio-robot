@@ -211,6 +211,18 @@ class Sim:
         ]
         lib.sim_set_motor_slip.restype = None
 
+        # sim_set_motor_read_failure(void* h, int side, int fail) — 064-005:
+        # inject/clear an I2C encoder read failure on one or both wheels
+        # (side: 0=left, 1=right, other=both), mirroring
+        # sim_set_otos_read_failure.
+        if hasattr(lib, "sim_set_motor_read_failure"):
+            lib.sim_set_motor_read_failure.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_int,
+            ]
+            lib.sim_set_motor_read_failure.restype = None
+
         # sim_begin_otos(void* h) — ticket 063-006: initialise the SimOdometer
         # (Sensor::begin()) without also pulling in set_field_profile()'s /
         # set_otos_fusion()'s turn-slip and noise side effects.  Mirrors
@@ -784,6 +796,27 @@ class Sim:
         and skip EKF fusion (N9 fix verification).
         """
         self._lib.sim_set_otos_read_failure(self._h, ctypes.c_int(1 if fail else 0))
+
+    def set_motor_read_failure(self, side: int, fail: bool) -> None:
+        """Inject or clear an I2C encoder read failure on one or both wheels.
+
+        side: 0=left, 1=right, other (e.g. 2)=both — matches
+        set_encoder_noise()'s side convention.
+
+        When injected, SimMotor holds its last cached position instead of
+        promoting a fresh plant read (mirrors the real Motor's hold-last
+        -value fix for CR-03 — see
+        clasi/issues/encoder-integrity-i2c-failures-and-outlier-filter-recovery.md).
+        Raises ``AttributeError`` if the loaded lib predates this symbol
+        (see the ``hasattr`` guard in ``_setup_types``).
+        """
+        if not hasattr(self._lib, "sim_set_motor_read_failure"):
+            raise AttributeError(
+                "sim_set_motor_read_failure is not present in the loaded "
+                "libfirmware_host — rebuild tests/_infra/sim/ to pick it up"
+            )
+        self._lib.sim_set_motor_read_failure(
+            self._h, ctypes.c_int(side), ctypes.c_int(1 if fail else 0))
 
     def get_fused_v(self) -> float:
         """Return fusedV (EKF body-frame linear speed, mm/s) from state.inputs."""
