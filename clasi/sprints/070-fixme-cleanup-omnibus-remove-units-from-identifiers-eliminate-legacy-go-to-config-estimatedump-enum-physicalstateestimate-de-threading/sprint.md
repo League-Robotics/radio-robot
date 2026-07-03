@@ -1,7 +1,8 @@
 ---
-id: "070"
-title: "FIXME cleanup omnibus: remove units from identifiers, eliminate legacy go-to config, EstimateDump enum, PhysicalStateEstimate de-threading"
-status: roadmap
+id: '070'
+title: 'FIXME cleanup omnibus: remove units from identifiers, eliminate legacy go-to
+  config, EstimateDump enum, PhysicalStateEstimate de-threading'
+status: planning-docs
 branch: sprint/070-fixme-cleanup-omnibus-remove-units-from-identifiers-eliminate-legacy-go-to-config-estimatedump-enum-physicalstateestimate-de-threading
 use-cases: []
 issues:
@@ -58,6 +59,32 @@ no behavioral change; the full test suite and TLM output stay identical.
   three-pose TLM output must stay byte-identical; 069's `SIMSET`/config keys
   must not be broken by renames.
 
+## Scope Decision (detail planning, architecture-review phase)
+
+Per this sprint.md's own "likely split" note above: detail planning
+confirmed the split. **This sprint (070) covers only issues 2 and 3**
+(`fixme-cleanup-legacy-config-and-estimatedump-enum.md`,
+`physicalstateestimate-remove-hardwarestate-param-threading.md`). Issue 1
+(`remove-units-from-identifier-names.md`, still listed in this file's
+frontmatter for traceability) is recommended for a new sprint 071 — see
+`architecture-update.md` Design Rationale Decision 1 and Open Question 1
+for full rationale. It is not planned or ticketed in this sprint; the
+team-lead should create sprint 071 for it after this sprint closes.
+
+Architecture review: **APPROVE** (self-review recorded; gate passed). Key
+finding: `resetPose`/`zero` have two independent live call-site destinations
+(`Drive::_hw` vs `Robot::state.actual`), so the de-threading design uses
+per-call explicit output-reference parameters rather than a single
+bind-once injection point — see architecture-update.md Decision 3.
+
+One flagged, deliberate wire-behavior change for stakeholder-approval-gate
+attention: `turnThr`/`doneTol` SET/GET keys are removed end-to-end
+(`SET turnThr=`/`SET doneTol=` become `ERR badkey`), reversing a documented
+sprint-011 back-compat decision — see Decision 4.
+
+Confirmed test baseline (this checkout, `master` @ `20e4879`): **2612
+passed, 0 failed.**
+
 ## Definition of Ready
 
 - [ ] Working tree quiesced — stakeholder's in-flight source edits (Config.h,
@@ -71,5 +98,8 @@ no behavioral change; the full test suite and TLM output stay identical.
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 001 | Remove legacy go-to tolerance config (turnThresholdMm/doneTolMm) end-to-end | none |
+| 002 | EstimateDump.source string to enum class EstimateSource, plus FIXME sweep | 001 |
+| 003 | PhysicalStateEstimate/Odometry de-threading: remove HardwareState parameter threading | none (sequenced last by implementation risk) |
 
-(Filled at detail-planning.)
+Tickets execute serially in this order.

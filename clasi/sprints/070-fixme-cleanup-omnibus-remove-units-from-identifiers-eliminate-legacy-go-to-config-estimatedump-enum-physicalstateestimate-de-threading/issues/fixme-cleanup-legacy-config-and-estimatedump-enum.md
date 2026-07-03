@@ -1,6 +1,9 @@
 ---
-status: pending
+status: in-progress
 sprint: '070'
+tickets:
+- 070-001
+- 070-002
 ---
 
 # FIXME cleanup: eliminate legacy go-to config fields; EstimateDump source string → enum

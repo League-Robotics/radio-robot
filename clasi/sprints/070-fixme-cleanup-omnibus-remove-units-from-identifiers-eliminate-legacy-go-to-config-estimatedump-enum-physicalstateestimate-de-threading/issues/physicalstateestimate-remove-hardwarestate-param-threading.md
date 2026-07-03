@@ -1,6 +1,8 @@
 ---
-status: pending
+status: in-progress
 sprint: '070'
+tickets:
+- 070-003
 ---
 
 # PhysicalStateEstimate: stop threading HardwareState through every call; make config and inputs explicit
