@@ -21,6 +21,7 @@
 #include "commands/CommandQueue.h"
 #include "commands/DebugCommands.h"
 #include "commands/SimCommands.h"
+#include "commands/SimSetters.h"
 #include "hal/sim/SimHardware.h"
 #include "hal/sim/PhysicsWorld.h"
 #include "hal/sim/WorldView.h"
@@ -558,10 +559,12 @@ void sim_set_otos_pose(void* h, float x, float y, float hrad)
 }
 
 // Inject a per-wheel speed offset factor (1.0 = symmetric) into the plant.
-// side: 0 = left, 1 = right, other = both.
+// side: 0 = left, 1 = right, other = both. (069-005) Forwards to the shared
+// simsetters::motorOffset -- the same side-passthrough function SimCommands'
+// registry rows call for the per-side motorOffsetL/R SIMSET keys.
 void sim_set_motor_offset(void* h, int side, float factor)
 {
-    static_cast<SimHandle*>(h)->hal.plant().setOffsetFactor(side, factor);
+    simsetters::motorOffset(static_cast<SimHandle*>(h)->hal, side, factor);
 }
 
 // ---- True pose (plant ground truth, not the EKF/dead-reckoning estimate) ----
@@ -676,19 +679,22 @@ void sim_set_motor_slip(void* h, int side, float straight, float turn_extra) {
     (void)side;
     static_cast<SimHandle*>(h)->hal.plant().setSlip(straight, turn_extra);
 }
+// (069-005) Forwards to the shared simsetters::encoderNoise -- the same
+// side-passthrough function that reduces to PhysicsWorld::setEncoderNoise(),
+// matching its own (0=L,1=R,other=both) convention verbatim.
 void sim_set_encoder_noise(void* h, int side, float sigma_mm) {
-    static_cast<SimHandle*>(h)->hal.plant().setEncoderNoise(side, sigma_mm);
+    simsetters::encoderNoise(static_cast<SimHandle*>(h)->hal, side, sigma_mm);
 }
 
 // ---- Body-truth scrub (069-002) — minimal direct-access hook, ahead of the ----
-// ---- general SIMSET surface (ticket 003). Forward directly to the same ----
-// ---- named setters SIMSET's registry will call (single source of truth ----
-// ---- per knob, architecture-update.md Decision 3). ----
+// ---- general SIMSET surface (ticket 003). (069-005) Rebased onto the shared ----
+// ---- simsetters:: functions SIMSET's registry rows call (single source of ----
+// ---- truth per knob, architecture-update.md Decision 3). ----
 void sim_set_body_rot_scrub(void* h, float f) {
-    static_cast<SimHandle*>(h)->hal.plant().setBodyRotationalScrub(f);
+    simsetters::bodyRotScrub(static_cast<SimHandle*>(h)->hal, f);
 }
 void sim_set_body_lin_scrub(void* h, float f) {
-    static_cast<SimHandle*>(h)->hal.plant().setBodyLinearScrub(f);
+    simsetters::bodyLinScrub(static_cast<SimHandle*>(h)->hal, f);
 }
 
 // ---- Encoder I2C read-failure injection (064-005, side: 0=left, 1=right, ----
@@ -730,11 +736,17 @@ void sim_set_otos_fusion(void* h, int on) {
     s->_ts.fuseOtos = (on != 0);
     if (s->_ts.fuseOtos) s->hal.simOdometer().begin();
 }
+// (069-005) Rebased onto the shared simsetters::otosLinNoise/otosYawNoise --
+// previously these called the setLinearNoise()/setYawNoise() back-compat
+// aliases (SimOdometer.h) while SimCommands' registry rows called
+// setLinearNoiseSigma()/setYawNoiseSigma() directly: two textually distinct
+// call paths to the identical field write. Now both go through exactly one
+// function per knob.
 void sim_set_otos_linear_noise(void* h, float sigma_fraction) {
-    static_cast<SimHandle*>(h)->hal.simOdometer().setLinearNoise(sigma_fraction);
+    simsetters::otosLinNoise(static_cast<SimHandle*>(h)->hal, sigma_fraction);
 }
 void sim_set_otos_yaw_noise(void* h, float sigma_fraction) {
-    static_cast<SimHandle*>(h)->hal.simOdometer().setYawNoise(sigma_fraction);
+    simsetters::otosYawNoise(static_cast<SimHandle*>(h)->hal, sigma_fraction);
 }
 float sim_get_otos_x(void* h) {
     return static_cast<SimHandle*>(h)->hal.simOdometer().odomX();
