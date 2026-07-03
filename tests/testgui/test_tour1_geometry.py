@@ -1,54 +1,53 @@
-"""tests/testgui/test_tour1_geometry.py — Tour 1 must actually trace its tour.
+"""tests/testgui/test_tour1_geometry.py — the tour buttons must actually tour.
 
-End-to-end headless GUI test (QT_QPA_PLATFORM=offscreen, real ctypes firmware
-sim).  This is the acceptance test for the Tour 1 button's *geometry*, not its
-plumbing: with every Sim Errors knob at its zero-error value, clicking
-**Tour 1** must drive the plant ground truth through the four field corners
-and back — the "orange → purple → blue → green → orange" tour:
+End-to-end headless GUI tests (QT_QPA_PLATFORM=offscreen, real ctypes
+firmware sim).  These are the acceptance tests for the tour buttons'
+*geometry*, not their plumbing: with every Sim Errors knob at its zero-error
+value, clicking a tour button must drive the plant ground truth through the
+tour's dead-reckoned waypoints, in order, and end on the final waypoint at
+the final heading.
 
-    Set Robot @ 0,0 (origin reset, heading 0 = +x east)
-    RT 4500        turn 45° toward the NE corner        (orange)
-    D 200 200 420  drive to the NE corner               (orange,  ~(297,  297))
-    TURN 18000     turn to face west
-    D 200 200 700  drive to the NW corner               (purple,  ~(-403, 297))
-    RT 9000        turn to face south
-    D 200 200 500  drive to the SW corner               (blue,    ~(-403,-203))
-    RT 9000        turn to face east
-    D 200 200 700  drive to the SE corner               (green,   ~(297, -203))
-    RT 9000        turn to face north
-    D 200 200 500  drive back to the NE corner          (orange)
+Expected waypoints are DERIVED from the tour's wire strings (``RT`` adds a
+relative heading, ``TURN`` sets an absolute one, ``D`` advances along the
+current heading) so the tests track ``commands.TOUR_*`` automatically.
+
+Tour 1 traces the four colored field corners and returns to the first:
+"orange → purple → blue → green → orange" (NE ~(297,297) → NW → SW → SE →
+NE).  Tour 2 is a closed loop of six left 90° turns that must end back at
+the origin facing west.
 
 Zero-error here means what the operator can reach through the Sim Errors
 panel: every additive/noise knob 0.0, every multiplicative knob 1.0, and the
 plant trackwidth equal to the firmware's configured ``trackwidthMm`` (128.0,
 ``DefaultConfig.cpp``) so plant geometry matches the firmware's kinematic
 calibration.  Everything runs through the real GUI objects — the transport
-combo + Connect button, the Sim Errors spinboxes + Apply, the Tour 1
-QPushButton, ``_TourRunner`` on its QThread, and ``SimTransport``'s
+combo + Connect button, the Sim Errors spinboxes + Apply, the tour
+QPushButtons, ``_TourRunner`` on its QThread, and ``SimTransport``'s
 tick-thread — exactly the path an operator exercises.
 
-Currently XFAIL (strict): the tour does NOT trace the rectangle even at zero
-error.  Root cause (measured 2026-07-02, tests/_infra sim, zero-error
-profile):
+Currently XFAIL (strict): the tours do NOT trace their shapes even at zero
+error.  Root cause (measured 2026-07-02/03, tests/_infra sim, zero-error
+profile; being fixed by sprint 073 "sim turn accuracy"):
 
   * ``RT`` is an open-loop encoder-arc turn (``Planner::beginRotation``,
     source/control/PlannerBegin.cpp).  Its per-wheel arc target is inflated
     by the firmware calibration constant ``rotationalSlip`` (default 0.92,
-    ``arc = deg·(π/180)·(tw/2)/slip``) — compensation for real-world wheel
-    scrub that the zero-error plant does not have.  Each RT 9000 physically
-    turns +95.18°, not 90°.
-  * With the slip term neutralized (``SET rotSlip=0``), RT *under*-rotates
-    to 86.95° (operator-observed 87.56°): the fixed coast-anticipation
-    ``kRtCoastArcMm = 8.0`` mm ("~7.3° SOFT-ramp coast at 100°/s",
-    sim-tuned) is stale — ``yawRateMax=70`` now caps the spin rate at
-    70°/s, where the actual SOFT-ramp coast is only ~4.5°.
+    baked into the sim firmware's DefaultConfig.cpp — GUI robot selection
+    does NOT change it) — compensation for real-world wheel scrub that the
+    zero-error plant does not have.
+  * The coast anticipation was a stale hand-tuned constant
+    (``kRtCoastArcMm=8.0``, tuned for 100°/s while ``yawRateMax=70`` caps
+    the spin) — replaced by ramp-dynamics math in ticket 073-001.
+  * Residual after 073-001 (measured): ~+1.1–1.4° per RT from
+    stop-condition tick quantization (the ROTATION stop is polled once per
+    control tick; ~1.4–1.7° passes per tick at 70°/s).
   * ``TURN`` (closed-loop on the fused heading) lands within ~1° and is not
-    the problem.  The three open-loop RT 9000 legs accumulate the heading
-    error, so the last two corners miss by >100 mm and the trace skews —
-    exactly the diagonal-cut quadrilateral seen on the canvas.
+    the problem.  Open-loop RT legs accumulate: measured Tour 2
+    return-to-origin miss at zero error is ~122 mm with heading +56° off
+    (six RT 9000s at ~+99.3° each on the 073-001 work tree).
 
-Delete the xfail marker when the firmware turn model is fixed —
-strict=True makes an unexpected pass loud.
+Sprint 073 ticket 004 owns removing these markers once tickets 001–003
+land — strict=True makes an unexpected pass loud.
 
 Run:
     uv run --group gui python -m pytest tests/testgui/test_tour1_geometry.py -v
@@ -101,29 +100,14 @@ _ZERO_ERROR_SPINS: dict[str, float] = {
     "sim_err_otos_yaw_drift": 0.0,
 }
 
-# Expected corner waypoints (mm, plant world frame, origin at tour start).
-# 420/sqrt(2) = 296.98 — the RT 4500 + D 420 diagonal leg lands on the NE
-# corner; each later leg is axis-aligned from there.
-_D45 = 420.0 / math.sqrt(2.0)
-_CORNERS: list[tuple[str, float, float]] = [
-    ("orange (NE)", _D45, _D45),
-    ("purple (NW)", _D45 - 700.0, _D45),
-    ("blue (SW)", _D45 - 700.0, _D45 - 500.0),
-    ("green (SE)", _D45, _D45 - 500.0),
-    ("orange again (NE)", _D45, _D45),
-]
-
-#: How close (mm) the ground-truth trace must pass to each corner, in order.
-#: Perfect execution dwells ON each corner (turn-in-place), and truth is
-#: sampled every 200 sim-ms (<= 40 mm apart at 200 mm/s), so this is
-#: generous; the current turn bug misses the last corners by >100 mm.
-_CORNER_TOL_MM = 60.0
-#: The tour's last leg drives due north; final heading must be ~90°.
-_FINAL_HEADING_DEG = 90.0
+#: How close (mm) the ground-truth trace must pass to each waypoint, in
+#: order.  Perfect execution dwells ON each waypoint (turn-in-place), and
+#: truth is sampled every 200 sim-ms (<= 40 mm apart at 200 mm/s), so this
+#: is generous; the current turn bug misses late waypoints by >100 mm.
+_WAYPOINT_TOL_MM = 60.0
 _FINAL_HEADING_TOL_DEG = 5.0
 
-#: Wall-clock ceilings (the sim is re-paced ~5x wall speed; a full tour is
-#: ~25 sim-seconds of motion plus per-leg SNAP-poll overhead).
+#: Wall-clock ceilings (the sim is re-paced ~5x wall speed).
 _TOUR_START_DEADLINE_S = 10.0
 _TOUR_DEADLINE_S = 240.0
 
@@ -148,10 +132,7 @@ def _spin_events(qapp, seconds: float) -> None:
 
 
 def _spin_until(qapp, predicate, timeout_s: float) -> bool:
-    """Process Qt events until ``predicate()`` is true or timeout.
-
-    Returns True if the predicate fired within the deadline.
-    """
+    """Process Qt events until ``predicate()`` is true or timeout."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         if predicate():
@@ -166,22 +147,37 @@ def _wrap_deg(d: float) -> float:
     return ((d + 180.0) % 360.0) - 180.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Tour 1 does not trace its rectangle at zero sim error: RT turns are "
-        "open-loop encoder-arc (Planner::beginRotation) with the arc target "
-        "inflated by rotationalSlip=0.92 in a no-scrub world (+5.2° per 90°), "
-        "and a stale kRtCoastArcMm=8mm coast-anticipation tuned for 100°/s "
-        "while yawRateMax=70 caps the spin rate (-3° per turn when the slip "
-        "term is neutral); the three RT 9000 legs accumulate heading error "
-        "and the last corners miss by >100 mm. Fix the firmware turn model, "
-        "then remove this marker (see module docstring)."
-    ),
-)
-def test_tour1_traces_the_tour_at_zero_error(qapp, monkeypatch, tmp_path):
-    """Zero every Sim Errors knob via the GUI, click Tour 1, and assert the
-    plant ground truth visits orange → purple → blue → green → orange."""
+def _ideal_waypoints(tour: list[str]) -> tuple[list[tuple[float, float]], float]:
+    """Dead-reckon a tour's wire strings into ideal waypoints.
+
+    Returns (waypoints, final_heading_deg): one (x_mm, y_mm) waypoint per
+    ``D`` leg (position after the drive), and the heading at tour end.
+    Heading 0 = +x (east), CCW positive — the origin-reset convention.
+    """
+    x = y = h = 0.0
+    pts: list[tuple[float, float]] = []
+    for cmd in tour:
+        parts = cmd.split()
+        if parts[0] == "RT":
+            h += math.radians(int(parts[1]) / 100.0)
+        elif parts[0] == "TURN":
+            h = math.radians(int(parts[1]) / 100.0)
+        elif parts[0] == "D":
+            d = float(parts[3])
+            x += d * math.cos(h)
+            y += d * math.sin(h)
+            pts.append((x, y))
+        else:
+            raise ValueError(f"unknown tour wire command: {cmd!r}")
+    return pts, math.degrees(h)
+
+
+def _run_tour_headless(qapp, monkeypatch, tmp_path, button_name: str):
+    """Zero the Sim Errors panel via the GUI and run one tour button.
+
+    Returns the recorded plant ground-truth trace as (x_mm, y_mm, h_rad)
+    tuples covering the tour run.
+    """
     from PySide6.QtWidgets import (  # type: ignore[import-untyped]
         QComboBox,
         QDoubleSpinBox,
@@ -201,9 +197,7 @@ def test_tour1_traces_the_tour_at_zero_error(qapp, monkeypatch, tmp_path):
     )
 
     # Re-pace the sim tick-thread ~5x wall speed: same 20 ms physics step
-    # (bit-identical dynamics), shorter sleep between steps.  Full wall-clock
-    # pacing would make this a multi-minute test; 5x keeps the Qt event queue
-    # comfortable and the whole tour under ~1 minute.
+    # (bit-identical dynamics), shorter sleep between steps.
     monkeypatch.setattr(transport_mod, "_SIM_TICK_SLEEP_S", 0.004)
 
     # The GUI keeps its live transport in a closure with no accessor; the
@@ -264,10 +258,11 @@ def test_tour1_traces_the_tour_at_zero_error(qapp, monkeypatch, tmp_path):
         # give it a moment to land before the tour starts.
         _spin_events(qapp, 0.3)
 
-        tour_btn = window.findChild(QPushButton, "tour_btn_tour_1")
+        tour_btn = window.findChild(QPushButton, button_name)
         stop_btn = window.findChild(QPushButton, "stop_tour_btn")
-        assert tour_btn is not None and stop_btn is not None
-        assert tour_btn.isEnabled(), "Tour 1 button not enabled after connect"
+        assert tour_btn is not None, f"tour button {button_name!r} not found"
+        assert stop_btn is not None
+        assert tour_btn.isEnabled(), f"{button_name} not enabled after connect"
 
         n_truth_before = len(truth_mm)
         tour_btn.click()
@@ -287,7 +282,14 @@ def test_tour1_traces_the_tour_at_zero_error(qapp, monkeypatch, tmp_path):
             _spin_events(qapp, 0.3)
         window.hide()
 
-    trace = truth_mm[n_truth_before:]
+    return truth_mm[n_truth_before:]
+
+
+def _assert_tour_geometry(trace, tour: list[str], waypoint_labels=None) -> None:
+    """Assert the ground-truth trace hits the tour's ideal waypoints in order."""
+    waypoints, final_heading_deg = _ideal_waypoints(tour)
+    labels = waypoint_labels or [f"waypoint {i + 1}" for i in range(len(waypoints))]
+
     assert len(trace) > 50, (
         f"expected a dense ground-truth trace over the tour, got {len(trace)} "
         "samples — did the sim truth callback run?"
@@ -296,49 +298,90 @@ def test_tour1_traces_the_tour_at_zero_error(qapp, monkeypatch, tmp_path):
     # Sanity: the robot must actually have toured, not idled at the origin.
     span_x = max(p[0] for p in trace) - min(p[0] for p in trace)
     span_y = max(p[1] for p in trace) - min(p[1] for p in trace)
-    assert span_x > 400.0 and span_y > 300.0, (
+    assert span_x > 300.0 and span_y > 200.0, (
         f"plant barely moved (span {span_x:.0f} x {span_y:.0f} mm) — the tour "
         "did not run"
     )
 
-    # Walk the trace: it must pass within tolerance of each corner IN ORDER.
     misses: list[str] = []
     idx = 0
-    for label, cx, cy in _CORNERS:
+    for label, (cx, cy) in zip(labels, waypoints):
         best = None
         hit = None
         for i in range(idx, len(trace)):
             d = math.hypot(trace[i][0] - cx, trace[i][1] - cy)
             if best is None or d < best:
                 best = d
-            if d <= _CORNER_TOL_MM:
+            if d <= _WAYPOINT_TOL_MM:
                 hit = i
                 break
         if hit is None:
             misses.append(
                 f"{label}: expected ({cx:+.0f}, {cy:+.0f}), closest approach "
-                f"after previous corner was {best:.0f} mm (tol "
-                f"{_CORNER_TOL_MM:.0f} mm)"
+                f"after previous waypoint was {best:.0f} mm (tol "
+                f"{_WAYPOINT_TOL_MM:.0f} mm)"
             )
         else:
             idx = hit
     assert not misses, (
-        "Tour 1 missed corner(s) (in visit order):\n  " + "\n  ".join(misses)
+        "tour missed waypoint(s) (in visit order):\n  " + "\n  ".join(misses)
     )
 
-    # The tour's final leg drives due north — heading must end ~90°.
-    final_h_deg = math.degrees(trace[-1][2])
-    dh = _wrap_deg(final_h_deg - _FINAL_HEADING_DEG)
+    # Final pose: on the last waypoint, at the tour's final heading.
+    fx, fy, fh = trace[-1]
+    lx, ly = waypoints[-1]
+    d_final = math.hypot(fx - lx, fy - ly)
+    assert d_final <= _WAYPOINT_TOL_MM, (
+        f"tour ended {d_final:.0f} mm from its final waypoint "
+        f"({lx:+.0f}, {ly:+.0f}) — got ({fx:+.0f}, {fy:+.0f})"
+    )
+    dh = _wrap_deg(math.degrees(fh) - final_heading_deg)
     assert abs(dh) <= _FINAL_HEADING_TOL_DEG, (
-        f"final heading {final_h_deg:.1f}° is {dh:+.1f}° off the expected "
-        f"{_FINAL_HEADING_DEG:.0f}° (north) — turn legs are not turning the "
-        "commanded angle"
+        f"final heading {math.degrees(fh):.1f}° is {dh:+.1f}° off the "
+        f"expected {_wrap_deg(final_heading_deg):.0f}° — turn legs are not "
+        "turning the commanded angle"
     )
 
-    # And it must end back at orange.
-    fx, fy = trace[-1][0], trace[-1][1]
-    d_final = math.hypot(fx - _D45, fy - _D45)
-    assert d_final <= _CORNER_TOL_MM, (
-        f"tour ended {d_final:.0f} mm from the orange corner "
-        f"({_D45:.0f}, {_D45:.0f}) — got ({fx:+.0f}, {fy:+.0f})"
+
+_TURN_BUG_REASON = (
+    "Tours do not trace their shapes at zero sim error: RT turns are "
+    "open-loop encoder-arc (Planner::beginRotation) with the arc target "
+    "inflated by rotationalSlip=0.92 (baked into the sim firmware's "
+    "DefaultConfig — GUI robot selection does not change it) in a no-scrub "
+    "world, plus coast-anticipation/tick-quantization residuals; the RT "
+    "legs accumulate heading error and late waypoints miss by >100 mm. "
+    "Sprint 073 owns the fix; ticket 073-004 removes these markers."
+)
+
+
+@pytest.mark.xfail(strict=True, reason=_TURN_BUG_REASON)
+def test_tour1_traces_the_tour_at_zero_error(qapp, monkeypatch, tmp_path):
+    """Zero every Sim Errors knob via the GUI, click Tour 1, and assert the
+    plant ground truth visits orange → purple → blue → green → orange."""
+    from robot_radio.testgui.commands import TOUR_1
+
+    trace = _run_tour_headless(qapp, monkeypatch, tmp_path, "tour_btn_tour_1")
+    _assert_tour_geometry(
+        trace,
+        TOUR_1,
+        waypoint_labels=[
+            "orange (NE)",
+            "purple (NW)",
+            "blue (SW)",
+            "green (SE)",
+            "orange again (NE)",
+        ],
     )
+
+
+@pytest.mark.xfail(strict=True, reason=_TURN_BUG_REASON)
+def test_tour2_traces_the_tour_at_zero_error(qapp, monkeypatch, tmp_path):
+    """Zero every Sim Errors knob via the GUI, click Tour 2, and assert the
+    closed loop returns to the origin at its dead-reckoned final heading.
+
+    Measured on the 073-001 work tree (2026-07-03): six RT 9000s at ~+99.3°
+    each → return-to-origin miss ~122 mm, heading +56° off."""
+    from robot_radio.testgui.commands import TOUR_2
+
+    trace = _run_tour_headless(qapp, monkeypatch, tmp_path, "tour_btn_tour_2")
+    _assert_tour_geometry(trace, TOUR_2)
