@@ -776,7 +776,15 @@ def _build_main_window():  # type: ignore[return]
 
     sim_errors_apply_btn = QPushButton("Apply")
     sim_errors_apply_btn.setObjectName("sim_errors_apply_btn")
-    sim_errors_layout.addWidget(sim_errors_apply_btn)
+    sim_errors_from_cal_btn = QPushButton("From Calibration")
+    sim_errors_from_cal_btn.setObjectName("sim_errors_from_cal_btn")
+    sim_errors_btn_row = QWidget()
+    sim_errors_btn_layout = QHBoxLayout(sim_errors_btn_row)
+    sim_errors_btn_layout.setContentsMargins(0, 0, 0, 0)
+    sim_errors_btn_layout.setSpacing(4)
+    sim_errors_btn_layout.addWidget(sim_errors_apply_btn)
+    sim_errors_btn_layout.addWidget(sim_errors_from_cal_btn)
+    sim_errors_layout.addWidget(sim_errors_btn_row)
 
     def _on_sim_errors_apply() -> None:
         """Save the Sim Errors fields and, if connected to Sim, apply live."""
@@ -813,7 +821,78 @@ def _build_main_window():  # type: ignore[return]
             except Exception as exc:
                 _append_log(f"[ERROR] Failed to apply sim error profile live: {exc}")
 
+    def _on_sim_errors_from_cal() -> None:
+        """Populate the Sim Errors spin boxes with the inverse of the active
+        robot's calibration, then save + live-apply via ``_on_sim_errors_apply``.
+
+        Issue testgui-sim-errors-from-calibration-button / ticket 070-004: the
+        sim firmware bakes the active robot's calibration into
+        DefaultConfig.cpp (e.g. rotationalSlip=0.92, trackwidthMm=128.0), but
+        the sim plant is ideal (zero scrub) — so PlannerBegin.cpp's rotSlip
+        arc-inflation over-rotates RT commands against the ideal plant. This
+        button injects a matching plant-side scrub (body rot scrub =
+        rotational_slip, trackwidth = geometry.trackwidth) so the firmware's
+        correction and the plant's scrub cancel out. Every other knob is set
+        to its neutral value (mmPerDeg/OTOS-scale calibrations are inert in
+        sim — see the issue's investigated mapping); the three noise fields
+        (sim_err_encoder_mm, sim_err_otos_linear, sim_err_otos_yaw) are never
+        touched.
+
+        Missing config / missing calibration fields never crash the panel —
+        they fall back to the neutral value for that knob and log a [WARN].
+        """
+        cfg = get_robot_config()
+        if cfg is None:
+            rot_slip = 1.0
+            tw = sim_prefs.DEFAULT_PROFILE["trackwidth_mm"]
+            _append_log(
+                "[WARN] From Calibration: no active robot config found — "
+                f"falling back to neutral body_rot_scrub={rot_slip}, "
+                f"trackwidth_mm={tw}"
+            )
+        else:
+            if cfg.calibration.rotational_slip is not None:
+                rot_slip = cfg.calibration.rotational_slip
+            else:
+                rot_slip = 1.0
+                _append_log(
+                    "[WARN] From Calibration: active robot config has no "
+                    f"calibration.rotational_slip — falling back to neutral "
+                    f"body_rot_scrub={rot_slip}"
+                )
+            if cfg.geometry.trackwidth is not None:
+                tw = cfg.geometry.trackwidth
+            else:
+                tw = sim_prefs.DEFAULT_PROFILE["trackwidth_mm"]
+                _append_log(
+                    "[WARN] From Calibration: active robot config has no "
+                    f"geometry.trackwidth — falling back to neutral "
+                    f"trackwidth_mm={tw}"
+                )
+
+        sim_err_slip_turn.setValue(0.0)
+        sim_err_body_rot_scrub.setValue(rot_slip)
+        sim_err_body_lin_scrub.setValue(1.0)
+        sim_err_motor_offset_l.setValue(1.0)
+        sim_err_motor_offset_r.setValue(1.0)
+        sim_err_trackwidth.setValue(tw)
+        sim_err_enc_scale_l.setValue(0.0)
+        sim_err_enc_scale_r.setValue(0.0)
+        sim_err_otos_lin_scale.setValue(0.0)
+        sim_err_otos_ang_scale.setValue(0.0)
+        sim_err_otos_lin_drift.setValue(0.0)
+        sim_err_otos_yaw_drift.setValue(0.0)
+
+        _append_log(
+            f"[INFO] Sim error profile set from inverse calibration "
+            f"(body_rot_scrub={rot_slip}, trackwidth_mm={tw}, all other "
+            f"knobs neutral; noise fields untouched)"
+        )
+
+        _on_sim_errors_apply()
+
     sim_errors_apply_btn.clicked.connect(_on_sim_errors_apply)
+    sim_errors_from_cal_btn.clicked.connect(_on_sim_errors_from_cal)
     left_layout.addWidget(sim_errors_group)
 
     left_layout.addStretch()
