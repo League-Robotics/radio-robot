@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Sim Errors panel three-column reflow
-status: open
+status: done
 use-cases:
 - SUC-003
 depends-on:
@@ -49,11 +49,11 @@ default value; `_on_sim_errors_apply`/`_on_sim_errors_from_cal` and
 
 ## Acceptance Criteria
 
-- [ ] `sim_errors_group`'s content is organized into exactly 3 side-by-side
+- [x] `sim_errors_group`'s content is organized into exactly 3 side-by-side
       column `QVBoxLayout`s (e.g. via a `columns_row` `QWidget`/`QHBoxLayout`
       added as the first child of `sim_errors_layout`, each column a
       `QWidget`/`QVBoxLayout` added to `columns_row`).
-- [ ] LEFT column contains, in order: the "OTOS Error" section label and
+- [x] LEFT column contains, in order: the "OTOS Error" section label and
       its 6 spin rows (`sim_err_otos_linear`, `sim_err_otos_yaw`,
       `sim_err_otos_lin_scale`, `sim_err_otos_ang_scale`,
       `sim_err_otos_lin_drift`, `sim_err_otos_yaw_drift`), followed by the
@@ -61,38 +61,38 @@ default value; `_on_sim_errors_apply`/`_on_sim_errors_from_cal` and
       (`sim_err_motor_offset_l`, `sim_err_motor_offset_r`,
       `sim_err_trackwidth`) — 9 spin rows total in this column, per
       `architecture-update.md` Decision 2.
-- [ ] MIDDLE column contains the "Encoder Report Error" section label and
+- [x] MIDDLE column contains the "Encoder Report Error" section label and
       its 3 spin rows (`sim_err_encoder_mm`, `sim_err_enc_scale_l`,
       `sim_err_enc_scale_r`).
-- [ ] RIGHT column contains the "Body-Truth Scrub" section label and its 3
+- [x] RIGHT column contains the "Body-Truth Scrub" section label and its 3
       spin rows (`sim_err_slip_turn`, `sim_err_body_rot_scrub`,
       `sim_err_body_lin_scrub`).
-- [ ] All 15 `sim_err_*` spin boxes keep their existing `objectName`,
+- [x] All 15 `sim_err_*` spin boxes keep their existing `objectName`,
       `setRange`, `setDecimals`, and default `setValue` arguments — no
       change to any of the 15 `_make_sim_err_spin(...)` call sites' value
       arguments (only which column layout each row lands in changes).
-- [ ] `_make_sim_err_spin()`'s per-row label/spin fixed widths (120px/90px
+- [x] `_make_sim_err_spin()`'s per-row label/spin fixed widths (120px/90px
       at lines 673/680) are narrowed so three columns fit without
       excessive panel widening (exact values are this ticket's
       implementation call — e.g. ~90-100px label, ~65-70px spin).
-- [ ] `sim_errors_apply_btn` and `sim_errors_from_cal_btn` (777-787) keep
+- [x] `sim_errors_apply_btn` and `sim_errors_from_cal_btn` (777-787) keep
       their `objectName`s and click-handler wiring (`_on_sim_errors_apply`,
       `_on_sim_errors_from_cal`, connected at 874-875) unchanged, and their
       row renders below all three columns — not split across or nested
       inside any single column.
-- [ ] `sim_errors_group`'s own `objectName` and its placement in
+- [x] `sim_errors_group`'s own `objectName` and its placement in
       `left_layout` (`left_layout.addWidget(sim_errors_group)` at line
       876) are unchanged.
-- [ ] No change to `_on_sim_errors_apply` (789-822),
+- [x] No change to `_on_sim_errors_apply` (789-822),
       `_on_sim_errors_from_cal` (824-872), `sim_prefs.py`, or
       `SimTransport.apply_error_profile` — none of this ticket's changes
       touch how a value moves from a spin box to the wire.
-- [ ] Headless tests referencing any Sim Errors widget pass unmodified:
+- [x] Headless tests referencing any Sim Errors widget pass unmodified:
       `tests/testgui/test_sim_errors_panel.py`,
       `tests/testgui/test_sim_errors_from_cal_button.py`,
       `tests/testgui/test_sim_errors_from_calibration.py`,
       `tests/testgui/test_calibration_push_on_connect.py`.
-- [ ] Full suite (`uv run python -m pytest -q`) passes at the 2682
+- [x] Full suite (`uv run python -m pytest -q`) passes at the 2682
       baseline (plus ticket 001's changes, which are layout-only and add
       no tests), zero unexplained failures. Ignore any `data/robots`
       drift — noted as environmental in the sprint's hard contract.

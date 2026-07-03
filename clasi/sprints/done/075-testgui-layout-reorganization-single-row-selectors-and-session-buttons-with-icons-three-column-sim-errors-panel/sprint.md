@@ -2,7 +2,7 @@
 id: '075'
 title: 'TestGUI layout reorganization: single-row selectors and session buttons with
   icons, three-column sim-errors panel'
-status: planning-docs
+status: done
 branch: sprint/075-testgui-layout-reorganization-single-row-selectors-and-session-buttons-with-icons-three-column-sim-errors-panel
 use-cases: []
 issues:
