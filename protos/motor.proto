@@ -31,7 +31,7 @@ message MotorState {
 
 // Configuration parameters for a motor.
 message MotorConfig {
-  float  mm_per_deg = 1;  // linear travel per degree of shaft rotation
+  float  travel_calib = 1;  // [mm/deg] linear travel per degree of shaft rotation
   int32  fwd_sign   = 2;  // +1 or -1: physical forward direction correction
 }
 

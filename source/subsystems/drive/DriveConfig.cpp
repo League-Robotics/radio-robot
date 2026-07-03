@@ -20,8 +20,8 @@ msg::DrivetrainConfig toDriveConfig(const RobotConfig& rc)
     cfg.setFwdSignR((int32_t)rc.fwdSignR);
 
     // --- Encoder calibration (mm per degree of motor rotation) ---
-    cfg.setMmPerDegL(rc.wheelTravelCalibL);
-    cfg.setMmPerDegR(rc.wheelTravelCalibR);
+    cfg.setTravelCalibL(rc.wheelTravelCalibL);
+    cfg.setTravelCalibR(rc.wheelTravelCalibR);
 
     // --- Geometry ---
     cfg.setTrackwidth(rc.trackwidth);

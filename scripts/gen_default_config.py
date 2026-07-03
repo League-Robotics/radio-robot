@@ -146,8 +146,8 @@ def generate(cfg: dict, source_path: str) -> str:
     wd = _get(wheels, "wheel_diameter_mm")
     default_mmpd = (math.pi * float(wd) / 360.0) if wd is not None else 0.487
 
-    mm_per_deg_l = _get(cal, "mm_per_wheel_deg_left",  default=default_mmpd)
-    mm_per_deg_r = _get(cal, "mm_per_wheel_deg_right", default=default_mmpd)
+    wheel_travel_calib_l = _get(cal, "mm_per_wheel_deg_left",  default=default_mmpd)
+    wheel_travel_calib_r = _get(cal, "mm_per_wheel_deg_right", default=default_mmpd)
 
     otos_lin  = _get(cal, "otos_linear_scale",    default=1.05)
     otos_ang  = _get(cal, "otos_angular_scale",   default=0.987)
@@ -222,8 +222,8 @@ RobotConfig defaultRobotConfig() {{
     p.fwdSignR        = +1;
 
     // Encoder calibration — baked from robot config
-    p.wheelTravelCalibL = {_f(mm_per_deg_l)};
-    p.wheelTravelCalibR = {_f(mm_per_deg_r)};
+    p.wheelTravelCalibL = {_f(wheel_travel_calib_l)};
+    p.wheelTravelCalibR = {_f(wheel_travel_calib_r)};
 
     // Feed-forward and motor scale factors
     p.kFF             = 0.15f;

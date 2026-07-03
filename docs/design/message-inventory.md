@@ -68,19 +68,19 @@ schema itself rather than a single firmware member.
 | drivetrain.proto | DrivetrainState | connected | bool | (new field — drivetrain connected flag, not in ActualState) |
 | drivetrain.proto | DrivetrainConfig | fwd_sign_l | int32_t | RobotConfig::fwdSignL |
 | drivetrain.proto | DrivetrainConfig | fwd_sign_r | int32_t | RobotConfig::fwdSignR |
-| drivetrain.proto | DrivetrainConfig | mm_per_deg_l | float | RobotConfig::mmPerDegL |
-| drivetrain.proto | DrivetrainConfig | mm_per_deg_r | float | RobotConfig::mmPerDegR |
-| drivetrain.proto | DrivetrainConfig | trackwidth | float | RobotConfig::trackwidthMm |
-| drivetrain.proto | DrivetrainConfig | half_track | float | RobotConfig::halfTrackMm |
-| drivetrain.proto | DrivetrainConfig | half_wheelbase | float | RobotConfig::halfWheelbaseMm |
-| drivetrain.proto | DrivetrainConfig | mm_per_deg_wheel | float[4] | RobotConfig::{mmPerDegFR,mmPerDegFL,mmPerDegBR,mmPerDegBL} |
+| drivetrain.proto | DrivetrainConfig | travel_calib_l | float | RobotConfig::wheelTravelCalibL |
+| drivetrain.proto | DrivetrainConfig | travel_calib_r | float | RobotConfig::wheelTravelCalibR |
+| drivetrain.proto | DrivetrainConfig | trackwidth | float | RobotConfig::trackwidth |
+| drivetrain.proto | DrivetrainConfig | half_track | float | RobotConfig::halfTrack |
+| drivetrain.proto | DrivetrainConfig | half_wheelbase | float | RobotConfig::halfWheelbase |
+| drivetrain.proto | DrivetrainConfig | travel_calib_wheel | float[4] | RobotConfig::{wheelTravelCalibFR,wheelTravelCalibFL,wheelTravelCalibBR,wheelTravelCalibBL} |
 | drivetrain.proto | DrivetrainConfig | fwd_sign_wheel | int32_t[4] | RobotConfig::{fwdSignFR,fwdSignFL,fwdSignBR,fwdSignBL} |
 | drivetrain.proto | DrivetrainConfig | v_wheel_max | float | RobotConfig::vWheelMax |
 | drivetrain.proto | DrivetrainConfig | steer_headroom | float | RobotConfig::steerHeadroom |
 | drivetrain.proto | DrivetrainConfig | vel_gains | Gains | RobotConfig::{velKp,velKi,velKff,velIMax,velKaw} |
 | drivetrain.proto | DrivetrainConfig | vel_filt_alpha | float | RobotConfig::velFiltAlpha |
 | drivetrain.proto | DrivetrainConfig | sync_gain | float | RobotConfig::syncGain |
-| drivetrain.proto | DrivetrainConfig | min_wheel | float | RobotConfig::minWheelMms |
+| drivetrain.proto | DrivetrainConfig | min_wheel | float | RobotConfig::minWheelSpeed |
 | drivetrain.proto | DrivetrainConfig | alpha_pos | float | RobotConfig::alphaPos |
 | drivetrain.proto | DrivetrainConfig | alpha_yaw | float | RobotConfig::alphaYaw |
 | drivetrain.proto | DrivetrainConfig | otos_gate | float | RobotConfig::otosGate |
@@ -88,12 +88,12 @@ schema itself rather than a single firmware member.
 | drivetrain.proto | DrivetrainConfig | otos_angular_scale | float | RobotConfig::otosAngularScale |
 | drivetrain.proto | DrivetrainConfig | rotation_gain_pos | float | RobotConfig::rotationGainPos |
 | drivetrain.proto | DrivetrainConfig | rotation_gain_neg | float | RobotConfig::rotationGainNeg |
-| drivetrain.proto | DrivetrainConfig | rotation_offset | float | RobotConfig::rotationOffsetDeg |
-| drivetrain.proto | DrivetrainConfig | rotation_offset_neg | float | RobotConfig::rotationOffsetDegNeg |
+| drivetrain.proto | DrivetrainConfig | rotation_offset | float | RobotConfig::rotationOffset |
+| drivetrain.proto | DrivetrainConfig | rotation_offset_neg | float | RobotConfig::rotationOffsetNeg |
 | drivetrain.proto | DrivetrainConfig | rotational_slip | float | RobotConfig::rotationalSlip |
 | drivetrain.proto | DrivetrainConfig | odom_off_x | float | RobotConfig::odomOffX |
 | drivetrain.proto | DrivetrainConfig | odom_off_y | float | RobotConfig::odomOffY |
-| drivetrain.proto | DrivetrainConfig | odom_yaw | float | RobotConfig::odomYawDeg |
+| drivetrain.proto | DrivetrainConfig | odom_yaw | float | RobotConfig::odomYaw |
 | drivetrain.proto | DrivetrainConfig | odom_upside_down | bool | RobotConfig::odomUpsideDown |
 | drivetrain.proto | DrivetrainConfig | ekf_q_xy | float | RobotConfig::ekfQxy |
 | drivetrain.proto | DrivetrainConfig | ekf_q_theta | float | RobotConfig::ekfQtheta |
@@ -103,7 +103,7 @@ schema itself rather than a single firmware member.
 | drivetrain.proto | DrivetrainConfig | ekf_q_omega | float | RobotConfig::ekfQomega |
 | drivetrain.proto | DrivetrainConfig | ekf_r_otos_v | float | RobotConfig::ekfROtosV |
 | drivetrain.proto | DrivetrainConfig | ekf_r_enc_v | float | RobotConfig::ekfREncV |
-| drivetrain.proto | DrivetrainConfig | lag_otos | uint32_t | RobotConfig::lagOtosMs |
+| drivetrain.proto | DrivetrainConfig | lag_otos | uint32_t | RobotConfig::lagOtos |
 | drivetrain.proto | DrivetrainConfig | drivetrain_type | int32_t | RobotConfig::drivetrain |
 | drivetrain.proto | DrivetrainCapabilities | holonomic | bool | (new field — holonomic capability flag, Phase 2) |
 | drivetrain.proto | DrivetrainCapabilities | onboard_position | bool | (new field — onboard position capability, Phase 2) |
@@ -126,7 +126,7 @@ schema itself rather than a single firmware member.
 | motor.proto | MotorState | velocity | Opt<float> | IVelocityMotor::velocityMmps() / ActualState::velMms[] |
 | motor.proto | MotorState | applied | Opt<float> | OutputState::pwm[] (applied PWM % — new dedicated readback field) |
 | motor.proto | MotorState | wedged | Opt<bool> | (new field — motor stall flag, related to IBusDiagnostics wedge detection) |
-| motor.proto | MotorConfig | mm_per_deg | float | RobotConfig::{mmPerDegL,mmPerDegR} (per-motor, indexed by channel) |
+| motor.proto | MotorConfig | travel_calib | float | RobotConfig::{wheelTravelCalibL,wheelTravelCalibR} (per-motor, indexed by channel) |
 | motor.proto | MotorConfig | fwd_sign | int32_t | RobotConfig::{fwdSignL,fwdSignR} (per-motor, indexed by channel) |
 | motor.proto | MotorCapabilities | onboard_position | bool | (new field — position-motor capability flag, Phase 2) |
 | motor.proto | MotorCapabilities | has_encoder | bool | (new field — encoder capability flag, Phase 2) |
@@ -183,9 +183,9 @@ schema itself rather than a single firmware member.
 | planner.proto | PlannerConfig | yaw_acc_max | float | RobotConfig::yawAccMax |
 | planner.proto | PlannerConfig | j_max | float | RobotConfig::jMax |
 | planner.proto | PlannerConfig | yaw_jerk_max | float | RobotConfig::yawJerkMax |
-| planner.proto | PlannerConfig | arrive_tol | float | RobotConfig::arriveTolMm |
+| planner.proto | PlannerConfig | arrive_tol | float | RobotConfig::arriveTolerance |
 | planner.proto | PlannerConfig | turn_in_place_gate | float | RobotConfig::turnInPlaceGate |
-| planner.proto | PlannerConfig | min_speed | float | RobotConfig::minSpeedMms |
+| planner.proto | PlannerConfig | min_speed | float | RobotConfig::minSpeed |
 | ports.proto | DigitalOut | value | bool[4] | DesiredState::digitalOut[4] / OutputState::digitalOut[4] |
 | ports.proto | DigitalOut | mask | uint32_t | (new field — channel-enable mask for digital output, Phase 2) |
 | ports.proto | AnalogOut | value | int32_t[4] | DesiredState::analogOut[4] / OutputState::analogOut[4] |
@@ -195,13 +195,13 @@ schema itself rather than a single firmware member.
 | ports.proto | PortState | digital_in | bool[4] | ActualState::digitalIn[4] |
 | ports.proto | PortState | analog_in | int32_t[4] | ActualState::analogIn[4] |
 | ports.proto | PortState | stamp | ValueSet | ActualState::portsVS (ValueSet) |
-| ports.proto | PortConfig | lag_ports | uint32_t | RobotConfig::lagPortsMs |
+| ports.proto | PortConfig | lag_ports | uint32_t | RobotConfig::lagPorts |
 | ports.proto | PortConfig | direction | uint32_t[4] | (new field — per-port direction bitmap, not in RobotConfig) |
 | sensors.proto | LineSensorState | raw | uint32_t[4] | ActualState::line[4] (raw ADC values) |
 | sensors.proto | LineSensorState | normalized | uint32_t[4] | (new field — normalized line values, not yet split in ActualState) |
 | sensors.proto | LineSensorState | stamp | ValueSet | ActualState::lineVS (ValueSet) |
 | sensors.proto | LineSensorState | connected | bool | (new field — line sensor connected flag, capability query) |
-| sensors.proto | LineSensorConfig | lag_line | uint32_t | RobotConfig::lagLineMs |
+| sensors.proto | LineSensorConfig | lag_line | uint32_t | RobotConfig::lagLine |
 | sensors.proto | LineSensorConfig | threshold | uint32_t | (new field — binarization threshold, not in RobotConfig) |
 | sensors.proto | LineSensorConfig | norm_min | uint32_t | (new field — normalization minimum, not in RobotConfig) |
 | sensors.proto | LineSensorConfig | norm_max | uint32_t | (new field — normalization maximum, not in RobotConfig) |
@@ -212,7 +212,7 @@ schema itself rather than a single firmware member.
 | sensors.proto | ColorSensorState | c | uint32_t | ActualState::colorC |
 | sensors.proto | ColorSensorState | stamp | ValueSet | ActualState::colorVS (ValueSet) |
 | sensors.proto | ColorSensorState | connected | bool | (new field — color sensor connected flag, capability query) |
-| sensors.proto | ColorSensorConfig | lag_color | uint32_t | RobotConfig::lagColorMs |
+| sensors.proto | ColorSensorConfig | lag_color | uint32_t | RobotConfig::lagColor |
 | sensors.proto | ColorSensorConfig | integration | uint32_t | (new field — integration time register, not in RobotConfig) |
 | sensors.proto | ColorSensorConfig | gain | uint32_t | (new field — sensor gain register, not in RobotConfig) |
 | sensors.proto | ColorSensorConfig | cal_r | float | (new field — color calibration scale R, not in RobotConfig) |

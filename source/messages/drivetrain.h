@@ -114,13 +114,13 @@ struct DrivetrainState {
 struct DrivetrainConfig {
     int32_t fwd_sign_l = 0;
     int32_t fwd_sign_r = 0;
-    float mm_per_deg_l = 0.0f;
-    float mm_per_deg_r = 0.0f;
+    float travel_calib_l = 0.0f;
+    float travel_calib_r = 0.0f;
     float trackwidth = 0.0f;
     float half_track = 0.0f;
     float half_wheelbase = 0.0f;
-    float mm_per_deg_wheel_[4] = {};
-    uint8_t mm_per_deg_wheel_count = 0;
+    float travel_calib_wheel_[4] = {};
+    uint8_t travel_calib_wheel_count = 0;
     int32_t fwd_sign_wheel_[4] = {};
     uint8_t fwd_sign_wheel_count = 0;
     float v_wheel_max = 0.0f;
@@ -157,13 +157,13 @@ struct DrivetrainConfig {
     // --- getters ---
     int32_t get_fwd_sign_l() const { return fwd_sign_l; }
     int32_t get_fwd_sign_r() const { return fwd_sign_r; }
-    float get_mm_per_deg_l() const { return mm_per_deg_l; }
-    float get_mm_per_deg_r() const { return mm_per_deg_r; }
+    float get_travel_calib_l() const { return travel_calib_l; }
+    float get_travel_calib_r() const { return travel_calib_r; }
     float get_trackwidth() const { return trackwidth; }
     float get_half_track() const { return half_track; }
     float get_half_wheelbase() const { return half_wheelbase; }
-    const float* mm_per_deg_wheel() const { return mm_per_deg_wheel_; }
-    uint8_t mm_per_deg_wheel_count_val() const { return mm_per_deg_wheel_count; }
+    const float* travel_calib_wheel() const { return travel_calib_wheel_; }
+    uint8_t travel_calib_wheel_count_val() const { return travel_calib_wheel_count; }
     const int32_t* fwd_sign_wheel() const { return fwd_sign_wheel_; }
     uint8_t fwd_sign_wheel_count_val() const { return fwd_sign_wheel_count; }
     float get_v_wheel_max() const { return v_wheel_max; }
@@ -200,12 +200,12 @@ struct DrivetrainConfig {
     // --- chainable setters (Command/Config only) ---
     DrivetrainConfig& setFwdSignL(int32_t v) { fwd_sign_l = v; return *this; }
     DrivetrainConfig& setFwdSignR(int32_t v) { fwd_sign_r = v; return *this; }
-    DrivetrainConfig& setMmPerDegL(float v) { mm_per_deg_l = v; return *this; }
-    DrivetrainConfig& setMmPerDegR(float v) { mm_per_deg_r = v; return *this; }
+    DrivetrainConfig& setTravelCalibL(float v) { travel_calib_l = v; return *this; }
+    DrivetrainConfig& setTravelCalibR(float v) { travel_calib_r = v; return *this; }
     DrivetrainConfig& setTrackwidth(float v) { trackwidth = v; return *this; }
     DrivetrainConfig& setHalfTrack(float v) { half_track = v; return *this; }
     DrivetrainConfig& setHalfWheelbase(float v) { half_wheelbase = v; return *this; }
-    DrivetrainConfig& clearMmPerDegWheel() { mm_per_deg_wheel_count = 0; return *this; }
+    DrivetrainConfig& clearTravelCalibWheel() { travel_calib_wheel_count = 0; return *this; }
     DrivetrainConfig& clearFwdSignWheel() { fwd_sign_wheel_count = 0; return *this; }
     DrivetrainConfig& setVWheelMax(float v) { v_wheel_max = v; return *this; }
     DrivetrainConfig& setSteerHeadroom(float v) { steer_headroom = v; return *this; }

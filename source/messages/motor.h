@@ -83,15 +83,15 @@ struct MotorState {
 
 // MotorConfig
 struct MotorConfig {
-    float mm_per_deg = 0.0f;
+    float travel_calib = 0.0f;
     int32_t fwd_sign = 0;
 
     // --- getters ---
-    float get_mm_per_deg() const { return mm_per_deg; }
+    float get_travel_calib() const { return travel_calib; }
     int32_t get_fwd_sign() const { return fwd_sign; }
 
     // --- chainable setters (Command/Config only) ---
-    MotorConfig& setMmPerDeg(float v) { mm_per_deg = v; return *this; }
+    MotorConfig& setTravelCalib(float v) { travel_calib = v; return *this; }
     MotorConfig& setFwdSign(int32_t v) { fwd_sign = v; return *this; }
 };
 
