@@ -21,7 +21,7 @@ import pytest
 
 def _make_frame(
     *,
-    enc: tuple[int, int] | None = None,
+    encpose: tuple[int, int, int] | None = None,
     otos: tuple[int, int, int] | None = None,
     pose: tuple[int, int, int] | None = None,
     t: int = 0,
@@ -29,7 +29,7 @@ def _make_frame(
     """Build a minimal TLMFrame for testing without hitting firmware parse."""
     from robot_radio.robot.protocol import TLMFrame
 
-    return TLMFrame(t=t, enc=enc, otos=otos, pose=pose)
+    return TLMFrame(t=t, encpose=encpose, otos=otos, pose=pose)
 
 
 # ---------------------------------------------------------------------------
@@ -107,11 +107,11 @@ class TestAnchor:
     def test_anchor_resets_baselines(self):
         """Calling anchor() after a feed() must reset baselines."""
         m = self.model
-        frame = _make_frame(enc=(100, 200), pose=(1000, 500, 0))
+        frame = _make_frame(encpose=(100, 200, 0), pose=(1000, 500, 0))
         m.feed(frame)
-        assert m._enc_baseline is not None
+        assert m._encpose_baseline is not None
         m.anchor(0.0, 0.0, 0.0)
-        assert m._enc_baseline is None
+        assert m._encpose_baseline is None
         assert m._pose_baseline is None
 
     def test_anchor_does_not_clear_traces(self):
@@ -124,220 +124,94 @@ class TestAnchor:
 
 
 # ---------------------------------------------------------------------------
-# feed() — encoder trace
+# feed() — encoder trace (068-003: fed from firmware encpose=, structurally
+# identical to _feed_otos()/_feed_fused() — no host-side re-integration, no
+# reset-detection heuristic; see architecture-update.md Decision 4)
 # ---------------------------------------------------------------------------
 
 
-class TestFeedEncoder:
+class TestFeedEncpose:
     def setup_method(self):
         from robot_radio.testgui.traces import TraceModel
         self.model = TraceModel()
         self.model.anchor(0.0, 0.0, 0.0)
 
-    def test_encoder_baseline_on_first_frame(self):
-        """First enc frame sets the baseline; a single anchor point is emitted."""
+    def test_encpose_baseline_on_first_frame(self):
         m = self.model
-        m.feed(_make_frame(enc=(0, 0)))
-        # One anchor point appended.
+        m.feed(_make_frame(encpose=(0, 0, 0)))
         assert len(m.encoder) == 1
         assert m.encoder[0] == pytest.approx((0.0, 0.0), abs=1e-6)
 
-    def test_encoder_straight_forward(self):
-        """Driving straight: both encoders advance by the same amount."""
+    def test_encpose_x_displacement(self):
         m = self.model
-        # Baseline at 0.
-        m.feed(_make_frame(enc=(0, 0)))
-        # Advance 500 mm (50 cm) straight.
-        m.feed(_make_frame(enc=(500, 500)))
-        assert len(m.encoder) == 2
-        # At heading=0 (east), straight forward → world x+50 cm, y≈0.
+        m.feed(_make_frame(encpose=(0, 0, 0)))
+        m.feed(_make_frame(encpose=(500, 0, 0)))  # 500 mm = 50 cm in body x
         x, y = m.encoder[-1]
-        assert x == pytest.approx(50.0, abs=0.5)
-        assert abs(y) < 0.5
+        # At heading=0, body x+ → world x+50 cm.
+        assert x == pytest.approx(50.0, abs=0.1)
+        assert abs(y) < 0.1
 
-    def test_encoder_no_motion(self):
-        """Feeding the same encoder value twice produces the same point."""
+    def test_encpose_y_displacement(self):
         m = self.model
-        m.feed(_make_frame(enc=(1000, 1000)))
-        m.feed(_make_frame(enc=(1000, 1000)))
-        assert len(m.encoder) == 2
-        # Both points should be at the same location (the anchor).
-        assert m.encoder[0] == pytest.approx(m.encoder[1], abs=1e-6)
-
-    def test_encoder_jump_guard(self):
-        """Large encoder jump (>5000 mm) is re-baselined; no garbage point appended."""
-        m = self.model
-        m.feed(_make_frame(enc=(0, 0)))
-        initial_len = len(m.encoder)
-        # Jump by 6000 mm — should trigger re-baseline, not append a point.
-        m.feed(_make_frame(enc=(6000, 6000)))
-        assert len(m.encoder) == initial_len
-
-    def test_encoder_reset_preserves_heading(self):
-        """A firmware encoder reset (drive-start zeroing) must NOT cancel the
-        heading accumulated by a preceding turn.
-
-        Regression for the "encoder track ignores turns / drifts off into a
-        corner" bug: the firmware zeros the wheel encoders at the start of every
-        distance command, collapsing the counts back toward zero.  That collapse
-        is only tens of mm — below the 5000 mm jump guard — so it used to be
-        integrated as reverse motion whose (dR-dL) cancelled the turn.  The
-        reset is now signalled explicitly via ``notify_reset_pending()`` (the
-        old magnitude-based heuristic was removed — CR-09), fired the instant
-        the reset-inducing command is sent, mirroring
-        ``Transport.on_reset_pending``.
-        """
-        m = self.model
-        m.anchor(0.0, 0.0, 0.0)
-        # Baseline.
-        m.feed(_make_frame(enc=(0, 0)))
-        # In-place CCW turn to +90°: left back, right forward by a quarter turn.
-        # quarter_turn = (pi/2) * track/2 = (pi/2) * 64 ≈ 100.5 mm per wheel.
-        q = math.pi / 2 * (128.0 / 2)
-        m.feed(_make_frame(enc=(-round(q), round(q))))
-        # Drive command fires → firmware zeros encoders (counts collapse to ~0).
-        m.notify_reset_pending()              # host knows a reset is coming
-        m.feed(_make_frame(enc=(4, 4)))       # reset frame — rebaseline only
-        # Now drive 50 cm straight in the NEW (turned) direction.
-        m.feed(_make_frame(enc=(504, 504)))
+        m.feed(_make_frame(encpose=(0, 0, 0)))
+        m.feed(_make_frame(encpose=(0, 300, 0)))  # 300 mm = 30 cm in body y
         x, y = m.encoder[-1]
-        # After a +90° turn the straight leg should head north (+y), not east.
-        assert y == pytest.approx(50.0, abs=2.0), f"heading lost: ({x:.1f},{y:.1f})"
-        assert abs(x) < 5.0, f"drifted east instead of turning: x={x:.1f}"
+        # At heading=0, body y+ → world y+30 cm.
+        assert abs(x) < 0.1
+        assert y == pytest.approx(30.0, abs=0.1)
 
-    def test_encoder_reset_detected_not_integrated(self):
-        """A signalled reset rebaselines without integrating spurious motion."""
+    def test_encpose_absent_field_skips_without_crash(self):
+        """frame.encpose is None (e.g. talking to pre-068 firmware): skip,
+        no trace point appended, no crash — same as an absent otos/pose."""
         m = self.model
-        m.anchor(0.0, 0.0, 0.0)
-        m.feed(_make_frame(enc=(0, 0)))
-        m.feed(_make_frame(enc=(500, 500)))   # 50 cm forward
-        x_before, y_before = m.encoder[-1]
-        m.notify_reset_pending()
-        m.feed(_make_frame(enc=(3, 3)))       # firmware reset — near zero
-        x_after, y_after = m.encoder[-1]
-        # Position must not jump backward on the reset.
-        assert (x_after, y_after) == pytest.approx((x_before, y_before), abs=0.5)
+        m.feed(_make_frame(encpose=None, pose=(0, 0, 0)))
+        assert m.encoder == []
+        assert len(m.fused) == 1
 
-    def test_delayed_tlm_reset_preserves_heading(self):
-        """Reset detection must not depend on telemetry magnitude at all.
-
-        Regression for CR-09 (testgui-trace-correctness-slow-tlm-and-anchor
-        -rotation.md): over the relay, TLM arrives at ~1-2 Hz while the robot
-        travels 100-200 mm between frames, so the first post-reset frame can
-        land at e.g. 150 mm — well past the old 20 mm epsilon the removed
-        magnitude heuristic used.  ``notify_reset_pending()`` is signalled at
-        command-send time (before the frame arrives), so the reset is
-        recognised regardless of how far the first post-reset reading is from
-        zero: it establishes a fresh baseline from whatever value that frame
-        carries, with no magnitude check at all.
-        """
-        m = self.model
-        m.anchor(0.0, 0.0, 0.0)
-        m.feed(_make_frame(enc=(0, 0)))
-        # In-place CCW turn to +90°.
-        q = math.pi / 2 * (128.0 / 2)
-        m.feed(_make_frame(enc=(-round(q), round(q))))
-        # Host sends the reset-inducing command NOW, before the reply/TLM
-        # for it has arrived.
-        m.notify_reset_pending()
-        # Slow relay TLM: the first post-reset frame lands at 150 mm on both
-        # wheels (robot already moving in the new direction) — far past the
-        # old 20 mm epsilon, which would have missed this reset entirely and
-        # integrated it as spurious reverse motion cancelling the turn.
-        m.feed(_make_frame(enc=(150, 150)))
-        # Continue 50 cm further in the new (turned) direction.
-        m.feed(_make_frame(enc=(650, 650)))
-        x, y = m.encoder[-1]
-        # Heading must still be north (+y), not east — and no spurious
-        # reverse-motion offset from the 150 mm rebaseline point either.
-        assert y == pytest.approx(50.0, abs=2.0), f"heading lost: ({x:.1f},{y:.1f})"
-        assert abs(x) < 5.0, f"drifted instead of turning: x={x:.1f}"
-
-    def test_return_through_zero_without_reset_signal_integrates_normally(self):
-        """A genuine return-through-zero (no reset signalled) must NOT be
-        mistaken for a reset — it should integrate as ordinary reverse motion.
-
-        This is the false-positive half of CR-09: the old magnitude
-        heuristic could misfire on a real return toward zero.  With reset
-        detection now driven entirely by the explicit
-        ``notify_reset_pending()`` signal (never by data), a frame that
-        merely happens to read near zero — with no signalled reset — is
-        always integrated normally.
-        """
-        m = self.model
-        m.anchor(0.0, 0.0, 0.0)
-        m.feed(_make_frame(enc=(0, 0)))
-        m.feed(_make_frame(enc=(500, 500)))   # 50 cm forward
-        # Drive straight back to (near) zero — genuine motion, NOT a reset;
-        # notify_reset_pending() is deliberately not called.
-        m.feed(_make_frame(enc=(10, 10)))
-        x, y = m.encoder[-1]
-        # Integrated as 49 cm of reverse motion from the 50 cm baseline,
-        # landing at 1 cm — NOT snapped back to the 50 cm baseline point.
-        assert x == pytest.approx(1.0, abs=0.5)
-        assert abs(y) < 0.5
-
-    def test_turn_scrub_factor_widens_effective_trackwidth(self):
-        """A scrub factor compensates encoder turn over-report.
-
-        With a +90° in-place turn whose wheels over-report by 26% (sim scrub),
-        raw integration over-rotates to ~113°, but a 0.26 scrub factor recovers
-        ~90°, so the following straight leg heads north instead of overshooting.
-        """
-        import math as _math
-        q_true = _math.pi / 2 * (128.0 / 2)      # wheel travel for a true 90° turn
-        q_reported = q_true * 1.26               # encoders over-report by 26%
-
-        # Raw (no compensation): over-rotates.
-        raw = self.model
-        raw.anchor(0.0, 0.0, 0.0)
-        raw.feed(_make_frame(enc=(0, 0)))
-        raw.feed(_make_frame(enc=(-round(q_reported), round(q_reported))))
-        raw.notify_reset_pending()
-        raw.feed(_make_frame(enc=(4, 4)))                     # drive reset
-        raw.feed(_make_frame(enc=(504, 504)))                 # 50 cm straight
-        rx, ry = raw.encoder[-1]
-
-        # Compensated: 0.26 scrub → ~90° → straight leg goes north.
-        from robot_radio.testgui.traces import TraceModel
-        comp = TraceModel()
-        comp.anchor(0.0, 0.0, 0.0)
-        comp.set_turn_scrub_factor(0.26)
-        comp.feed(_make_frame(enc=(0, 0)))
-        comp.feed(_make_frame(enc=(-round(q_reported), round(q_reported))))
-        comp.notify_reset_pending()
-        comp.feed(_make_frame(enc=(4, 4)))
-        comp.feed(_make_frame(enc=(504, 504)))
-        cx, cy = comp.encoder[-1]
-
-        # Compensated heads north (+y≈50, x≈0); raw overshoots past 90°.
-        assert cy == pytest.approx(50.0, abs=3.0)
-        assert abs(cx) < 6.0
-        # Raw over-rotates (~113°), so the straight leg veers west (x≪0).
-        assert rx < -10.0
-        assert abs(rx) > abs(cx)
-
-    def test_encoder_with_anchor_heading(self):
+    def test_encpose_with_anchor_heading(self):
         """At heading=90° (north), straight forward → world y+."""
         m = self.model
         m.anchor(0.0, 0.0, math.pi / 2)
-        m.feed(_make_frame(enc=(0, 0)))
-        m.feed(_make_frame(enc=(500, 500)))  # 50 cm forward
+        m.feed(_make_frame(encpose=(0, 0, 0)))
+        m.feed(_make_frame(encpose=(500, 0, 0)))  # 50 cm forward (body x)
         x, y = m.encoder[-1]
-        # North: x≈0, y≈+50
         assert abs(x) < 0.5
         assert y == pytest.approx(50.0, abs=0.5)
 
-    def test_encoder_with_world_anchor(self):
-        """World offset from anchor is correctly added to encoder trace."""
+    def test_encpose_world_offset(self):
+        """World offset from anchor is correctly applied."""
         m = self.model
-        m.anchor(10.0, 20.0, 0.0)
-        m.feed(_make_frame(enc=(0, 0)))
-        m.feed(_make_frame(enc=(1000, 1000)))  # 100 cm straight
+        m.anchor(5.0, 7.0, 0.0)
+        m.feed(_make_frame(encpose=(0, 0, 0)))
+        m.feed(_make_frame(encpose=(200, 0, 0)))  # 20 cm
         x, y = m.encoder[-1]
-        # Anchor at (10, 20); forward 100 cm at heading 0 → (110, 20).
-        assert x == pytest.approx(110.0, abs=0.5)
-        assert y == pytest.approx(20.0, abs=0.5)
+        assert x == pytest.approx(25.0, abs=0.1)
+        assert y == pytest.approx(7.0, abs=0.1)
+
+    def test_encpose_mid_session_anchor_rotation(self):
+        """Anchoring mid-session (nonzero firmware heading at baseline time)
+        must rotate the encpose delta by (anchor_yaw - baseline_hdg) — same
+        CR-10 fix already applied to otos/fused (see
+        TestFeedOTOS.test_otos_mid_session_anchor_rotation)."""
+        m = self.model
+        m.anchor(0.0, 0.0, 0.0)  # camera: robot faces east at anchor time
+        # Baseline: firmware heading is 90° (9000 cdeg) at anchor time.
+        m.feed(_make_frame(encpose=(1000, 2000, 9000)))
+        # Straight ahead in the firmware's own frame: +500 mm along firmware-y.
+        m.feed(_make_frame(encpose=(1000, 2500, 9000)))
+        x, y = m.encoder[-1]
+        # Correct (rotated by -90°): east by 50 cm, not north.
+        assert x == pytest.approx(50.0, abs=0.5)
+        assert abs(y) < 0.5
+
+    def test_encpose_does_not_use_trackwidth_or_scrub(self):
+        """The deleted _feed_encoder() re-integration required a trackwidth
+        and turn-scrub knob; _feed_encpose() plots the firmware's own
+        already-computed pose directly, so TraceModel has no such methods."""
+        assert not hasattr(self.model, "set_trackwidth_mm")
+        assert not hasattr(self.model, "set_turn_scrub_factor")
+        assert not hasattr(self.model, "notify_reset_pending")
+        assert not hasattr(self.model, "_feed_encoder")
 
 
 # ---------------------------------------------------------------------------
@@ -523,8 +397,8 @@ class TestClear:
 
     def test_clear_empties_all_traces(self):
         m = self.model
-        m.feed(_make_frame(enc=(0, 0), otos=(0, 0, 0), pose=(0, 0, 0)))
-        m.feed(_make_frame(enc=(100, 100), otos=(100, 0, 0), pose=(100, 0, 0)))
+        m.feed(_make_frame(encpose=(0, 0, 0), otos=(0, 0, 0), pose=(0, 0, 0)))
+        m.feed(_make_frame(encpose=(100, 0, 0), otos=(100, 0, 0), pose=(100, 0, 0)))
         m.feed_truth(1.0, 2.0, 0.0)
         assert len(m.camera) > 0
         assert len(m.encoder) > 0
@@ -538,10 +412,10 @@ class TestClear:
 
     def test_clear_resets_baselines(self):
         m = self.model
-        m.feed(_make_frame(enc=(1000, 1000)))
-        assert m._enc_baseline is not None
+        m.feed(_make_frame(encpose=(1000, 1000, 0)))
+        assert m._encpose_baseline is not None
         m.clear()
-        assert m._enc_baseline is None
+        assert m._encpose_baseline is None
         assert m._pose_baseline is None
         assert m._otos_baseline is None
 

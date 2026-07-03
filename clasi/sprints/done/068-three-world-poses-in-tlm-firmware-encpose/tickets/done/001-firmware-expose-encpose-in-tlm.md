@@ -1,8 +1,10 @@
 ---
 id: '001'
 title: 'Firmware: expose encpose= in TLM'
-status: open
-use-cases: [SUC-001, SUC-004]
+status: done
+use-cases:
+- SUC-001
+- SUC-004
 depends-on: []
 github-issue: ''
 issue: tlm-three-world-poses-encoder-only-pose.md
@@ -69,47 +71,59 @@ rationale):
 
 ## Acceptance Criteria
 
-- [ ] `source/types/Config.h`: `RobotConfig::tlmFields` widens `uint8_t` →
+- [x] `source/types/Config.h`: `RobotConfig::tlmFields` widens `uint8_t` →
       `uint16_t`; new `constexpr uint16_t TLM_FIELD_ENCPOSE = (1u << 8);`;
       `TLM_FIELD_ALL` widens from `0xFFu` to `0x1FFu` (9 bits).
-- [ ] `source/robot/DefaultConfig.cpp:119`: `p.tlmFields = 0xFF;` →
+- [x] `source/robot/DefaultConfig.cpp:119`: `p.tlmFields = 0xFF;` →
       `p.tlmFields = TLM_FIELD_ALL;` so `encpose=` is on by default (every
       existing `STREAM <ms>` caller in `host/`, `tests/`, and TestGUI uses
       no `fields=` clause and relies on the default subscription).
-- [ ] `source/commands/SystemCommands.cpp::handleStream`: local `mask`
+- [x] `source/commands/SystemCommands.cpp::handleStream`: local `mask`
       widens `uint8_t` → `uint16_t`; add
       `if (strcmp(fbuf, "encpose") == 0) mask |= TLM_FIELD_ENCPOSE;`;
       `kFieldNames[]` table (and its `bit` field type) gains
       `{TLM_FIELD_ENCPOSE, "encpose"}`; the loop bound `fi < 8` → `fi < 9`.
-- [ ] `source/robot/RobotTelemetry.cpp::buildTlmFrame`: new block, gated on
+- [x] `source/robot/RobotTelemetry.cpp::buildTlmFrame`: new block, gated on
       `config.tlmFields & TLM_FIELD_ENCPOSE`, inserted immediately after
       the existing `pose=` block (before `vel=`), emitting
       `encpose=<x>,<y>,<h>` (mm, mm, centidegrees) from
       `ds.encoder.pose.{x,y,h}`. No freshness/staleness gate — the encoder
       pose updates unconditionally every control tick.
-- [ ] `source/robot/RobotTelemetry.cpp::telemetryEmit`: `char tlmBuf[160]`
+- [x] `source/robot/RobotTelemetry.cpp::telemetryEmit`: `char tlmBuf[160]`
       → `char tlmBuf[256]`.
-- [ ] No change to `Odometry::predict()`, `ActualState`,
+- [x] No change to `Odometry::predict()`, `ActualState`,
       `msg::DrivetrainState`, or `Drive::state()`'s `copyPE` call — verify
       by inspection that these are untouched (they already produce/copy
       the data correctly).
-- [ ] `docs/protocol-v2.md` §8 (TLM Frame Format): `encpose=` added to the
+- [x] `docs/protocol-v2.md` §8 (TLM Frame Format): `encpose=` added to the
       field table and example. Do NOT attempt a full backfill of the
       section's pre-existing drift (missing `wedge=`/`twist=`/`otos=`/
       `ekf_rej=` from earlier sprints) — out of scope, flagged as Open
       Question 1 in `architecture-update.md`.
-- [ ] `tests/_infra/golden_tlm_capture.json` regenerated (requires a
+- [x] `tests/_infra/golden_tlm_capture.json` regenerated (requires a
       `--clean` sim build first — stale incremental builds on `/Volumes`
       build silently, per project knowledge) so `test_golden_tlm_unchanged`
       passes with `encpose=` present in every frame of the fixed sequence.
       This regeneration MUST land in this ticket, not a later one — the
       golden-capture test does an exact string match and fails the instant
       `encpose=` appears anywhere.
-- [ ] `STREAM fields=...` with `encpose` included/excluded round-trips
+- [x] `STREAM fields=...` with `encpose` included/excluded round-trips
       correctly through `handleStream`'s parse-and-echo path (`OK stream
-      fields=...` reflects the actual subscription).
-- [ ] Full default pytest suite green (`uv run python -m pytest`) after
-      this ticket lands.
+      fields=...` reflects the actual subscription). **Note**: this exposed
+      a pre-existing, unrelated bug — `CommandProcessor::parseKV()` rewrites
+      any `key=value` token in place before dispatch (truncating it at the
+      `=`), so the old plain-variadic `streamSchema` never actually saw a
+      reconstructed `fields=<csv>` token through the real command pipeline
+      (only direct-ArgList unit tests, which never exercised the real
+      tokenizer, exercised this path). Fixed by giving `STREAM` a custom
+      `parseFn` (`parseStream`) that reconstructs `fields=<value>` from
+      `kvs[]`, mirroring the existing `parseSet` idiom in
+      `ConfigCommands.cpp`. This was a load-bearing fix, not scope creep:
+      without it, this criterion is unsatisfiable for any field name,
+      encpose included. See `source/commands/SystemCommands.cpp`.
+- [x] Full default pytest suite green (`uv run python -m pytest`) after
+      this ticket lands. Result: 2523 passed (baseline 2520 + 3 new
+      `STREAM fields=` round-trip tests), 0 failed.
 
 ## Testing
 

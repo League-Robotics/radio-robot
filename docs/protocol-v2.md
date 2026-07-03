@@ -484,22 +484,27 @@ a `TLM` line (not wrapped in `OK`).  SNAP and STREAM share the same
 ### TLM Frame Format
 
 ```
-TLM t=<ms> mode=<char> seq=<n> [enc=<l>,<r>] [pose=<x>,<y>,<h>] [vel=<vl>,<vr>] [line=<g1>,<g2>,<g3>,<g4>] [color=<r>,<g>,<b>,<c>]
+TLM t=<ms> mode=<char> seq=<n> [enc=<l>,<r>] [pose=<x>,<y>,<h>] [encpose=<x>,<y>,<h>] [vel=<vl>,<vr>] [line=<g1>,<g2>,<g3>,<g4>] [color=<r>,<g>,<b>,<c>]
 ```
 
 Fields are emitted in the order shown; fields whose subscription bit is
-clear, or whose hardware is absent, are omitted.
+clear, or whose hardware is absent, are omitted. (This list has drifted
+behind a few fields shipped in later sprints — `wedge=`, `twist=`,
+`otos=`, `ekf_rej=` — that are not yet documented here; see the sprint-068
+architecture update, Open Question 1. `encpose=` below is current as of
+Sprint 068.)
 
-| Field    | Format                      | Units / notes                                                          |
-|----------|-----------------------------|------------------------------------------------------------------------|
-| `t`      | `%lu` (unsigned long)       | Robot clock in ms at sensor-sample time                                |
-| `mode`   | single character            | `I`=idle, `S`=streaming (`S`/`VW`), `T`=timed, `D`=distance, `G`=go-to |
-| `seq`    | `%u` (uint16, wraps at 65535) | D10 sequence counter — shared by STREAM and SNAP (firmware 028-005+). Absent on older firmware. Use `tlm_drop_rate(frames)` to detect loss. |
-| `enc`    | `%d,%d`                     | Left and right encoder accumulated distance in mm                      |
-| `pose`   | `%d,%d,%d`                  | x mm, y mm, heading in centi-degrees                                   |
-| `vel`    | `%d,%d`                     | Left and right actual velocity in mm/s                                 |
-| `line`   | `%u,%u,%u,%u`               | Four greyscale channels (raw ADC counts)                               |
-| `color`  | `%u,%u,%u,%u`               | R, G, B, clear channels (raw ADC counts)                               |
+| Field      | Format                      | Units / notes                                                          |
+|------------|-----------------------------|------------------------------------------------------------------------|
+| `t`        | `%lu` (unsigned long)       | Robot clock in ms at sensor-sample time                                |
+| `mode`     | single character            | `I`=idle, `S`=streaming (`S`/`VW`), `T`=timed, `D`=distance, `G`=go-to |
+| `seq`      | `%u` (uint16, wraps at 65535) | D10 sequence counter — shared by STREAM and SNAP (firmware 028-005+). Absent on older firmware. Use `tlm_drop_rate(frames)` to detect loss. |
+| `enc`      | `%d,%d`                     | Left and right encoder accumulated distance in mm                      |
+| `pose`     | `%d,%d,%d`                  | x mm, y mm, heading in centi-degrees                                   |
+| `encpose`  | `%d,%d,%d`                  | Encoder-only dead-reckoned world pose (x mm, y mm, heading in centi-degrees) — integrated from wheel-encoder deltas only, independent of `pose=`'s EKF fusion and any OTOS input. Gated by `TLM_FIELD_ENCPOSE`; on by default. No freshness gate (updates every control tick). Sprint 068. |
+| `vel`      | `%d,%d`                     | Left and right actual velocity in mm/s                                 |
+| `line`     | `%u,%u,%u,%u`               | Four greyscale channels (raw ADC counts)                               |
+| `color`    | `%u,%u,%u,%u`               | R, G, B, clear channels (raw ADC counts)                               |
 
 **Timestamp discipline.** `t=` is captured at the start of sensor
 reading (before `snprintf`), not at line-send time.  This ensures the
@@ -524,9 +529,9 @@ pre-028-005 firmware omit this field; `TLMFrame.seq` is `None`.
 Example:
 
 ```
-TLM t=12345 mode=S seq=0 enc=1024,1019 pose=350,-12,1780 vel=198,201 line=120,340,330,118 color=21,30,18,80
-TLM t=12395 mode=S seq=1 enc=1068,1063 pose=352,-12,1780 vel=200,200
-TLM t=12895 mode=I seq=2 enc=1068,1063 pose=352,-12,1780 vel=0,0
+TLM t=12345 mode=S seq=0 enc=1024,1019 pose=350,-12,1780 encpose=349,-11,1779 vel=198,201 line=120,340,330,118 color=21,30,18,80
+TLM t=12395 mode=S seq=1 enc=1068,1063 pose=352,-12,1780 encpose=351,-11,1779 vel=200,200
+TLM t=12895 mode=I seq=2 enc=1068,1063 pose=352,-12,1780 encpose=351,-11,1779 vel=0,0
 ```
 
 ---

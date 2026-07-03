@@ -21,13 +21,13 @@ import pytest
 
 def _make_frame(
     *,
-    enc: tuple[int, int] | None = None,
+    encpose: tuple[int, int, int] | None = None,
     otos: tuple[int, int, int] | None = None,
     pose: tuple[int, int, int] | None = None,
     t: int = 0,
 ):
     from robot_radio.robot.protocol import TLMFrame
-    return TLMFrame(t=t, enc=enc, otos=otos, pose=pose)
+    return TLMFrame(t=t, encpose=encpose, otos=otos, pose=pose)
 
 
 def _make_trace_model():
@@ -170,7 +170,7 @@ class TestCanvasRefresh:
         # Feed several frames across all sensors.
         for i in range(5):
             model.feed(_make_frame(
-                enc=(i * 100, i * 100),
+                encpose=(i * 100, 0, 0),
                 otos=(i * 100, 0, 0),
                 pose=(i * 100, 0, 0),
             ))

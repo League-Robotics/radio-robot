@@ -1,9 +1,11 @@
 ---
 id: '002'
 title: 'Host protocol: parse_tlm() + TLMFrame.encpose'
-status: open
-use-cases: [SUC-001]
-depends-on: ['001']
+status: done
+use-cases:
+- SUC-001
+depends-on:
+- '001'
 github-issue: ''
 issue: tlm-three-world-poses-encoder-only-pose.md
 completes_issue: true
@@ -28,29 +30,29 @@ slightly from a fresh `grep` for `TLMFrame`/`parse_tlm`).
 
 ## Acceptance Criteria
 
-- [ ] `TLMFrame` (dataclass or equivalent) gains an `encpose: tuple[int,
+- [x] `TLMFrame` (dataclass or equivalent) gains an `encpose: tuple[int,
       int, int] | None = None` field, matching the type/shape of the
       existing `otos` field.
-- [ ] `parse_tlm()` gains a parse block for the `"encpose"` key, identical
+- [x] `parse_tlm()` gains a parse block for the `"encpose"` key, identical
       in shape to the existing `"otos"` parse block (splits the
       comma-separated `x,y,h` value, converts to the appropriate numeric
       types, assigns into `frame.encpose`).
-- [ ] A TLM line with `encpose=` present parses correctly into
+- [x] A TLM line with `encpose=` present parses correctly into
       `frame.encpose`.
-- [ ] A TLM line with `encpose=` absent (e.g., a pre-068 firmware, or a
+- [x] A TLM line with `encpose=` absent (e.g., a pre-068 firmware, or a
       `STREAM fields=...` subscription that excludes it) leaves
       `frame.encpose` as `None` — no exception, no crash. This is the
       version-skew case `architecture-update.md`'s Migration Concerns
       section calls out explicitly.
-- [ ] A malformed `encpose=` token (wrong arity, non-numeric component) is
+- [x] A malformed `encpose=` token (wrong arity, non-numeric component) is
       handled the same way the existing `otos=`/`pose=` parse blocks
       handle malformed input (whatever that established behavior is —
       match it, don't invent a new error-handling policy for this one
       field).
-- [ ] New/extended protocol unit tests cover all three cases above:
+- [x] New/extended protocol unit tests cover all three cases above:
       `encpose` present, `encpose` absent, `encpose` malformed.
-- [ ] No other `TLMFrame` field or `parse_tlm()` parse block is changed.
-- [ ] Full default pytest suite green (`uv run python -m pytest`).
+- [x] No other `TLMFrame` field or `parse_tlm()` parse block is changed.
+- [x] Full default pytest suite green (`uv run python -m pytest`).
 
 ## Testing
 

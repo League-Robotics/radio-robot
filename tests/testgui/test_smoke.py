@@ -83,7 +83,7 @@ def _make_fake_transport():
 
 def _make_frame(
     *,
-    enc: tuple[int, int] | None = None,
+    encpose: tuple[int, int, int] | None = None,
     otos: tuple[int, int, int] | None = None,
     pose: tuple[int, int, int] | None = None,
     t: int = 0,
@@ -91,7 +91,7 @@ def _make_frame(
     """Build a minimal TLMFrame without going through the firmware parser."""
     from robot_radio.robot.protocol import TLMFrame
 
-    return TLMFrame(t=t, enc=enc, otos=otos, pose=pose)
+    return TLMFrame(t=t, encpose=encpose, otos=otos, pose=pose)
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +210,7 @@ class TestTraceModelFeedsTlm:
         # incrementally increasing values so each frame produces a new point.
         for i in range(3):
             frame = _make_frame(
-                enc=(i * 100, i * 100),
+                encpose=(i * 100, 0, 0),
                 otos=(i * 100, 0, 0),
                 pose=(i * 100, 0, 0),
                 t=i * 50,

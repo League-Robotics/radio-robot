@@ -133,15 +133,6 @@ TruthPose = tuple[float, float, float]
 TelemetryCB = Callable[[TLMFrame], None]
 TruthCB = Callable[[TruthPose | None], None]
 LogCB = Callable[[str], None]
-ResetPendingCB = Callable[[], None]
-
-# Reset-inducing outbound command verbs (CR-09).  The firmware zeros the
-# wheel encoders at the start of every distance/drive command (``D``), and
-# ``ZERO`` / ``ZERO enc`` explicitly reset the encoder counters.  Matched on
-# the command's leading verb token (case-sensitive, matching the firmware's
-# own dispatch), so a hypothetical verb that merely starts with the same
-# letter (e.g. a future ``DIAG``) would not false-match ``D``.
-_RESET_COMMAND_VERBS = frozenset({"D", "ZERO"})
 
 # Camera polling interval and inter-read pause.
 _TRUTH_POLL_INTERVAL_S = 0.2   # target pose rate ~5 Hz
@@ -152,32 +143,6 @@ _CAMERA_TAG_ID = 100
 def list_ports() -> list[str]:
     """Return a sorted list of USB modem serial ports."""
     return list_serial_ports()
-
-
-def is_reset_inducing_command(line: str) -> bool:
-    """Return True if ``line``'s leading verb is a reset-inducing command.
-
-    Recognizes ``D <left> <right> <mm>`` (the firmware zeros the wheel
-    encoders at the start of every distance/drive command) and ``ZERO`` /
-    ``ZERO enc`` (explicit encoder-counter reset).  Matches only the leading
-    whitespace-separated token, case-sensitively, against
-    ``_RESET_COMMAND_VERBS`` — mirrors sprint 065's firmware-side
-    ``CMD_MOTION_WATCHDOG`` classification pattern, applied host-side at
-    ``Transport``'s single command dispatch choke point instead (CR-09).
-
-    Pure and Qt-free — usable directly in tests without a live transport.
-
-    Parameters
-    ----------
-    line:
-        The raw outbound wire command string, e.g. ``"D 200 200 500"`` or
-        ``"ZERO enc"``.
-    """
-    stripped = line.strip()
-    if not stripped:
-        return False
-    verb = stripped.split(None, 1)[0]
-    return verb in _RESET_COMMAND_VERBS
 
 
 def find_relay_port(
@@ -314,32 +279,23 @@ class Transport(abc.ABC):
     ``on_log``
         Called with a timestamped string for every sent command and
         every received line.  Used to populate the log pane.
-
-    ``on_reset_pending`` (CR-09)
-        Called with no arguments the instant an outbound ``send()``/
-        ``command()`` call classifies its command line as reset-inducing
-        (``D``, ``ZERO enc``, ``ZERO`` — see ``is_reset_inducing_command``),
-        BEFORE the command is actually transmitted.  Wired (in
-        ``__main__.py``) to ``TraceModel.notify_reset_pending()`` so the
-        encoder-odometry trace rebaselines on the host's own knowledge of
-        when it issued a reset, rather than inferring one from telemetry
-        magnitude (unreliable at slow relay TLM rates).  Default no-op.
     """
 
     def __init__(self) -> None:
         self.on_telemetry: TelemetryCB | None = None
         self.on_truth: TruthCB | None = None
         self.on_log: LogCB | None = None
-        self.on_reset_pending: ResetPendingCB | None = None
 
     @property
     def turn_scrub_factor(self) -> float:
         """Fractional encoder over-report during turns for this backend.
 
-        Consumers (e.g. the encoder-odometry trace) use this to calibrate
-        heading integration.  0.0 = perfect (no scrub).  Hardware backends
-        report 0.0 until real turn-odometry calibration provides a value;
-        the simulator overrides this with its injected ``slip_turn_extra``.
+        Backs the Sim Errors panel's display of the simulator's currently
+        injected turn-scrub error (independent of trace display — the
+        encoder trace is plotted directly from the firmware's ``encpose=``
+        since 068-003).  0.0 = perfect (no scrub).  Hardware backends report
+        0.0 until real turn-odometry calibration provides a value; the
+        simulator overrides this with its injected ``slip_turn_extra``.
         """
         return 0.0
 
@@ -437,21 +393,6 @@ class Transport(abc.ABC):
                 self.on_truth(pose)
             except Exception:
                 _log.exception("on_truth callback raised")
-
-    def _maybe_notify_reset_pending(self, line: str) -> None:
-        """Invoke on_reset_pending if ``line`` is a reset-inducing command.
-
-        Called by every concrete ``send()``/``command()`` implementation
-        (the single choke point each outbound wire command passes through)
-        BEFORE the command is actually transmitted — see
-        ``is_reset_inducing_command`` and the ``on_reset_pending`` callback
-        slot documented on this class (CR-09).
-        """
-        if is_reset_inducing_command(line) and self.on_reset_pending:
-            try:
-                self.on_reset_pending()
-            except Exception:
-                _log.exception("on_reset_pending callback raised")
 
 
 # ---------------------------------------------------------------------------
@@ -552,14 +493,12 @@ class _HardwareTransport(Transport):
         """Fire-and-forget write to the robot."""
         if self._conn is None or not self._conn.is_open:
             raise ConnectionError("Transport is not connected")
-        self._maybe_notify_reset_pending(line)
         self._conn.send_fast(line)
 
     def command(self, line: str, read_ms: int = 200) -> str:
         """Send a command and return collected reply lines as a string."""
         if self._conn is None or not self._conn.is_open:
             return ""
-        self._maybe_notify_reset_pending(line)
         result = self._conn.send(line, read_ms=read_ms)
         responses = result.get("responses", [])
         return "\n".join(responses)
@@ -892,7 +831,6 @@ class SimTransport(Transport):
         """Fire-and-forget: enqueue a command for the tick-thread to execute."""
         if not self._connected:
             raise ConnectionError("SimTransport is not connected")
-        self._maybe_notify_reset_pending(line)
         self._cmd_queue.put((line, None, None))
         self._log(f"> {line}")
 
@@ -942,7 +880,6 @@ class SimTransport(Transport):
         """
         if not self._connected:
             return ""
-        self._maybe_notify_reset_pending(line)
         reply_list: list[str] = [""]
         done_evt = threading.Event()
         self._cmd_queue.put((line, reply_list, done_evt))

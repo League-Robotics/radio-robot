@@ -1,7 +1,7 @@
 ---
 id: 068
 title: Three world poses in TLM (firmware encpose)
-status: planning-docs
+status: done
 branch: sprint/068-three-world-poses-in-tlm-firmware-encpose
 use-cases: []
 issues:

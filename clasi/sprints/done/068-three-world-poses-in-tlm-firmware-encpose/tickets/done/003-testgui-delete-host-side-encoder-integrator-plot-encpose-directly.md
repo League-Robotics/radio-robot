@@ -1,9 +1,11 @@
 ---
 id: '003'
 title: 'TestGUI: delete host-side encoder integrator, plot encpose= directly'
-status: open
-use-cases: [SUC-002]
-depends-on: ['002']
+status: done
+use-cases:
+- SUC-002
+depends-on:
+- '002'
 github-issue: ''
 issue: tlm-three-world-poses-encoder-only-pose.md
 completes_issue: true
@@ -45,59 +47,59 @@ the issue explicitly calls out that they must remain user-settable.
 
 ## Acceptance Criteria
 
-- [ ] `host/robot_radio/testgui/traces.py` (`TraceModel`): the following
+- [x] `host/robot_radio/testgui/traces.py` (`TraceModel`): the following
       are deleted entirely — `_TRACK_MM` module constant; `_geom_track_mm`,
       `_scrub_factor`, `_track_mm` instance attributes;
       `_recompute_track()`, `set_trackwidth_mm()`,
       `set_turn_scrub_factor()`, `notify_reset_pending()`,
       `_feed_encoder()`; `_enc_baseline`, `_enc_h`, `_enc_bx`, `_enc_by`
       instance attributes and their resets in `_reset_baselines()`.
-- [ ] `TraceModel` gains `_encpose_baseline` and `_feed_encpose()`,
+- [x] `TraceModel` gains `_encpose_baseline` and `_feed_encpose()`,
       structurally identical to `_feed_otos()`/`_feed_fused()` (absolute
       world pose, baseline-on-first-frame, `_rw()` rotation). `feed()`
       calls `self._feed_encpose(frame.encpose)` in place of
       `self._feed_encoder(frame.enc)`.
-- [ ] `_feed_encpose()` handles `frame.encpose is None` the same way
+- [x] `_feed_encpose()` handles `frame.encpose is None` the same way
       `_feed_otos()`/`_feed_fused()` already handle an absent field: skip,
       no trace point appended that tick, no crash.
-- [ ] The `encoder` trace list, its `enabled` flag, and its rendering are
+- [x] The `encoder` trace list, its `enabled` flag, and its rendering are
       otherwise unchanged — only the data source changes.
-- [ ] `host/robot_radio/testgui/__main__.py`: remove the
+- [x] `host/robot_radio/testgui/__main__.py`: remove the
       `trace_model.set_trackwidth_mm(...)` call (~line 1313), the
       `trace_model.set_turn_scrub_factor(...)` call (~line 1736), and the
       `transport.on_reset_pending = trace_model.notify_reset_pending`
       wiring (~line 1757). Nothing else at these call sites changes.
-- [ ] `host/robot_radio/testgui/transport.py`: remove
+- [x] `host/robot_radio/testgui/transport.py`: remove
       `is_reset_inducing_command()`, the `on_reset_pending` attribute, and
       `_maybe_notify_reset_pending()` (and its four call sites).
-- [ ] `Transport.turn_scrub_factor` (the property backing the Sim Errors
+- [x] `Transport.turn_scrub_factor` (the property backing the Sim Errors
       panel) is UNCHANGED and untouched — verify by diff that this
       property, `apply_error_profile()`, and all Sim-Errors-panel backing
       code have zero lines changed.
-- [ ] Robot-config `tw`/`rotational_slip` fields are unchanged and remain
+- [x] Robot-config `tw`/`rotational_slip` fields are unchanged and remain
       user-settable — verify by inspection that no reference to them was
       removed.
-- [ ] `TraceModel` has no method named `set_trackwidth_mm`,
+- [x] `TraceModel` has no method named `set_trackwidth_mm`,
       `set_turn_scrub_factor`, or `notify_reset_pending`, and no
       `_feed_encoder` method (grep-verifiable).
-- [ ] `Transport.on_reset_pending` and `is_reset_inducing_command` are
+- [x] `Transport.on_reset_pending` and `is_reset_inducing_command` are
       removed from `transport.py`; no call site references them
       (grep-verifiable).
-- [ ] `tests/testgui/test_traces.py`: tests exercising the deleted
+- [x] `tests/testgui/test_traces.py`: tests exercising the deleted
       `notify_reset_pending()`/`set_turn_scrub_factor()`/
       `set_trackwidth_mm()`/`_feed_encoder()` API are removed; new tests
       for `_feed_encpose()` are added, mirroring existing
       `_feed_otos()`/`_feed_fused()` test coverage (present, absent,
       baseline-and-rotation behavior).
-- [ ] `tests/testgui/test_transport.py`: tests for `on_reset_pending`/
+- [x] `tests/testgui/test_transport.py`: tests for `on_reset_pending`/
       `is_reset_inducing_command` are removed; the `turn_scrub_factor` /
       `apply_error_profile()` test class is retained UNCHANGED (Sim Errors
       panel backing — unaffected by this ticket) and still passes.
-- [ ] A slow-TLM (relay-rate, ~1-2 Hz) session shows a correct, un-skipped
+- [x] A slow-TLM (relay-rate, ~1-2 Hz) session shows a correct, un-skipped
       encoder trace across a `D` command boundary — the CR-09 failure mode
       is structurally impossible (no reset-detection heuristic remains to
       miss a reset).
-- [ ] Full default pytest suite green (`uv run python -m pytest`).
+- [x] Full default pytest suite green (`uv run python -m pytest`).
 
 ## Testing
 

@@ -448,6 +448,65 @@ class TestSnapCommandFormat:
 
 
 # ---------------------------------------------------------------------------
+# encpose= real-firmware round trip (068-001)
+#
+# Everything above this point simulates the wire protocol locally (make_tlm /
+# hand-built OK strings) -- it never exercises the actual compiled firmware.
+# These tests use the real `sim` fixture (a live Sim() instance backed by the
+# compiled firmware_host library) to verify handleStream's parse-and-echo
+# path and buildTlmFrame's gating for the new encpose= field end-to-end.
+# ---------------------------------------------------------------------------
+
+class TestEncposeRealSimRoundTrip:
+    """STREAM fields=... round-trips encpose through real firmware."""
+
+    def test_bare_stream_defaults_include_encpose(self, sim) -> None:
+        """Bare 'STREAM <ms>' (no fields=) subscribes encpose by default.
+
+        Every existing call site (TestGUI, sim tests, bench scripts) uses
+        bare STREAM with no fields= clause and relies on the default
+        (TLM_FIELD_ALL) subscription -- Decision 3 in architecture-update.md.
+        """
+        resp = sim.send_command("STREAM 50")
+        assert "period=50" in resp, f"STREAM 50 rejected: {resp!r}"
+        frames = sim.tick_collect_tlm(total_ms=60, step_ms=10)
+        assert frames, "expected at least one TLM frame"
+        assert any("encpose=" in f for f in frames), (
+            f"encpose= missing from default-subscription frames: {frames}"
+        )
+
+    def test_fields_excluding_encpose_omits_it(self, sim) -> None:
+        """STREAM fields=pose,otos (no encpose) excludes encpose= from frames
+        and the echoed subscription."""
+        resp = sim.send_command("STREAM fields=pose,otos")
+        assert resp.startswith("OK stream"), f"unexpected reply: {resp!r}"
+        assert "fields=" in resp
+        assert "encpose" not in resp, f"encpose leaked into echo: {resp!r}"
+        assert "pose" in resp and "otos" in resp
+
+        sim.send_command("STREAM 50")
+        frames = sim.tick_collect_tlm(total_ms=60, step_ms=10)
+        assert frames, "expected at least one TLM frame"
+        assert all("encpose=" not in f for f in frames), (
+            f"encpose= present despite exclusion: {frames}"
+        )
+        assert any("pose=" in f for f in frames)
+
+    def test_fields_including_encpose_emits_it(self, sim) -> None:
+        """STREAM fields=pose,encpose includes encpose= in frames and echo."""
+        resp = sim.send_command("STREAM fields=pose,encpose")
+        assert resp.startswith("OK stream"), f"unexpected reply: {resp!r}"
+        assert "encpose" in resp, f"encpose missing from echo: {resp!r}"
+
+        sim.send_command("STREAM 50")
+        frames = sim.tick_collect_tlm(total_ms=60, step_ms=10)
+        assert frames, "expected at least one TLM frame"
+        assert all("encpose=" in f for f in frames), (
+            f"encpose= missing despite inclusion: {frames}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Field names canonical set
 # ---------------------------------------------------------------------------
 

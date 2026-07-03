@@ -243,6 +243,37 @@ class TestParseTLM:
         assert frame is not None
         assert frame.wedge is None
 
+    def test_encpose_field_present(self) -> None:
+        # encpose= is the encoder-only dead-reckoned world pose (068-001),
+        # same shape as otos=/pose=: (x_mm, y_mm, heading_cdeg).
+        frame = parse_tlm("TLM t=100 pose=350,-12,1780 encpose=340,-8,1750 vel=0,0")
+        assert frame is not None
+        assert frame.encpose == (340, -8, 1750)
+        # Sibling absolute-pose fields parse independently.
+        assert frame.pose == (350, -12, 1780)
+
+    def test_encpose_field_absent_on_older_frame(self) -> None:
+        # Additive field — a TLM frame from pre-068 firmware (or a
+        # STREAM fields= subscription that excludes it) must still parse
+        # cleanly, with encpose staying None.
+        frame = parse_tlm("TLM t=100 mode=I seq=0 pose=350,-12,1780")
+        assert frame is not None
+        assert frame.encpose is None
+        assert frame.pose == (350, -12, 1780)
+
+    def test_encpose_field_malformed_ignored(self) -> None:
+        frame = parse_tlm("TLM t=100 encpose=notanumber,0,0 pose=350,-12,1780")
+        assert frame is not None
+        assert frame.encpose is None
+        assert frame.pose == (350, -12, 1780)
+
+    def test_encpose_field_wrong_arity_ignored(self) -> None:
+        # Same handling as otos=/pose=: a 2-value token doesn't match the
+        # expected 3-tuple shape and is silently skipped (stays None).
+        frame = parse_tlm("TLM t=100 encpose=340,-8")
+        assert frame is not None
+        assert frame.encpose is None
+
 
 # ===========================================================================
 # parse_cfg
