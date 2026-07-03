@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 severity: high
 sprint: 069
 tickets:
