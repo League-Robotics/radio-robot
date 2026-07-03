@@ -145,16 +145,16 @@ int32_t Motor::readEncoder(const RobotConfig& cfg) const
 {
     // motorId 2 = M2 = left wheel; use wheelTravelCalibL.
     // motorId 1 = M1 = right wheel; use wheelTravelCalibR.
-    float mmPerDeg = (_motorId == 2) ? cfg.wheelTravelCalibL : cfg.wheelTravelCalibR;
+    float wheelTravelCalib = (_motorId == 2) ? cfg.wheelTravelCalibL : cfg.wheelTravelCalibR;  // [mm/deg]
 
     // NOTE: split-phase contract — caller must have issued requestEncoder()
     // at least one loop period before calling this. collectEncoder() issues
     // the 4-byte read without any busy-wait. The loop's idle sleep provides
     // the required vendor inter-transaction delay.
     int32_t raw = collectEncoder();   // tenths of degrees
-    // Mirror TypeScript: (raw / 10.0) * mmPerDeg * fwdSign
+    // Mirror TypeScript: (raw / 10.0) * wheelTravelCalib * fwdSign
     float degF  = raw / 10.0f;
-    float mmF   = degF * mmPerDeg * (float)_fwdSign;
+    float mmF   = degF * wheelTravelCalib * (float)_fwdSign;
     return (int32_t)mmF;
 }
 
@@ -167,9 +167,9 @@ float Motor::readEncoderMmF(const RobotConfig& cfg) const
     // NOTE: split-phase contract — caller must have issued requestEncoder()
     // at least one loop period before calling this. collectEncoder() issues
     // the 4-byte read without any busy-wait.
-    float mmPerDeg = (_motorId == 2) ? cfg.wheelTravelCalibL : cfg.wheelTravelCalibR;
+    float wheelTravelCalib = (_motorId == 2) ? cfg.wheelTravelCalibL : cfg.wheelTravelCalibR;  // [mm/deg]
     int32_t raw = collectEncoder();   // tenths of degrees
-    return (raw / 10.0f) * mmPerDeg * (float)_fwdSign;
+    return (raw / 10.0f) * wheelTravelCalib * (float)_fwdSign;
 }
 
 void Motor::resetEncoder()
@@ -222,7 +222,7 @@ void Motor::resetEncoder()
             // accumulator so positionMm()/velocityMmps() and the outlier-filter
             // baseline (state.inputs.encLMm/R, also zeroed in Robot::resetEncoders)
             // stay in lockstep (039-002).
-            _lastPositionMm   = 0.0f;
+            _lastPosition     = 0.0f;
             _lastVelocityMmps = 0.0f;
             _hasLastTick      = false;
             // (064-005) Re-zero the held-last-good-read baseline too, so a
@@ -247,7 +247,7 @@ void Motor::resetEncoder()
     if (mid > hi) { mid = hi; }
     _encOffset += mid;
     // Realign the tick() cache after the (best-effort) reset (039-002).
-    _lastPositionMm   = 0.0f;
+    _lastPosition     = 0.0f;
     _lastVelocityMmps = 0.0f;
     _hasLastTick      = false;
     // (064-005) See the clean-reset path above — same rationale.
@@ -263,7 +263,7 @@ void Motor::rebaselineSoft()
     // wheels are rotating — that burst latches the Nezha encoder readback
     // (see clasi/sprints/064-.../issues/
     // encoder-reset-while-moving-latches-readback.md). Issues NO I2C
-    // transaction at all: folds the already-tick-cached _lastPositionMm
+    // transaction at all: folds the already-tick-cached _lastPosition
     // (populated by the normal per-tick 0x46 read in tick(), not a new
     // atomic read) back into raw tenths-of-degrees and adds it to
     // _encOffset, then zeros the cache exactly as resetEncoder()'s success
@@ -272,16 +272,16 @@ void Motor::rebaselineSoft()
     // Drive::resetEncoders()) that zero unconditionally right after calling
     // MotorController::resetEncoderAccumulators().
     //
-    // Inverse of readEncoderMmF()'s conversion (mm = (raw/10) * mmPerDeg *
-    // fwdSign): rawDelta = (mm / (mmPerDeg * fwdSign)) * 10. rawDelta is the
+    // Inverse of readEncoderMmF()'s conversion (mm = (raw/10) * wheelTravelCalib *
+    // fwdSign): rawDelta = (mm / (wheelTravelCalib * fwdSign)) * 10. rawDelta is the
     // amount by which the offset-subtracted raw reading would need to move
     // to reach 0, i.e. exactly the increment _encOffset needs.
-    float mmPerDeg = (_motorId == 2) ? _cfg.wheelTravelCalibL : _cfg.wheelTravelCalibR;
-    if (mmPerDeg != 0.0f) {
-        float rawDeltaF = (_lastPositionMm / (mmPerDeg * (float)_fwdSign)) * 10.0f;
+    float wheelTravelCalib = (_motorId == 2) ? _cfg.wheelTravelCalibL : _cfg.wheelTravelCalibR;  // [mm/deg]
+    if (wheelTravelCalib != 0.0f) {
+        float rawDeltaF = (_lastPosition / (wheelTravelCalib * (float)_fwdSign)) * 10.0f;
         _encOffset += (int32_t)rawDeltaF;
     }
-    _lastPositionMm   = 0.0f;
+    _lastPosition     = 0.0f;
     _lastVelocityMmps = 0.0f;
     _hasLastTick      = false;
     // (064-005) See resetEncoder()'s clean-reset path — same rationale: a
@@ -433,9 +433,9 @@ float Motor::readEncoderMmFAtomic(const RobotConfig& cfg) const
 {
     // Atomic read in mm (float). Same conversion as readEncoderMmF() but using
     // readEncoderAtomic() so it is safe outside the control tick.
-    float mmPerDeg = (_motorId == 2) ? cfg.wheelTravelCalibL : cfg.wheelTravelCalibR;
+    float wheelTravelCalib = (_motorId == 2) ? cfg.wheelTravelCalibL : cfg.wheelTravelCalibR;  // [mm/deg]
     int32_t raw = readEncoderAtomic();  // tenths of degrees minus offset
-    return (raw / 10.0f) * mmPerDeg * (float)_fwdSign;
+    return (raw / 10.0f) * wheelTravelCalib * (float)_fwdSign;
 }
 
 float Motor::readEncoderMmFSettle(const RobotConfig& cfg) const
@@ -451,12 +451,12 @@ float Motor::readEncoderMmFSettle(const RobotConfig& cfg) const
     uint8_t resp[4] = { 0, 0, 0, 0 };
     int readResult = _i2c.read((ADDR << 1), (uint8_t*)resp, 4, false);
 
-    float mmPerDeg = (_motorId == 2) ? cfg.wheelTravelCalibL : cfg.wheelTravelCalibR;
+    float wheelTravelCalib = (_motorId == 2) ? cfg.wheelTravelCalibL : cfg.wheelTravelCalibR;  // [mm/deg]
 
     // (064-005) CR-03: on I2C failure, hold the last known-good value
     // (converted to mm) instead of computing from a zeroed response buffer.
     if (writeResult != MICROBIT_OK || readResult != MICROBIT_OK) {
-        return (_lastGoodRawEnc / 10.0f) * mmPerDeg * (float)_fwdSign;
+        return (_lastGoodRawEnc / 10.0f) * wheelTravelCalib * (float)_fwdSign;
     }
 
     int32_t raw = (int32_t)(
@@ -464,7 +464,7 @@ float Motor::readEncoderMmFSettle(const RobotConfig& cfg) const
         ((uint32_t)resp[1] <<  8) | (uint32_t)resp[0]);
     raw -= _encOffset;
     _lastGoodRawEnc = raw;
-    return (raw / 10.0f) * mmPerDeg * (float)_fwdSign;
+    return (raw / 10.0f) * wheelTravelCalib * (float)_fwdSign;
 }
 
 void Motor::tick(uint32_t now_ms)
@@ -476,7 +476,7 @@ void Motor::tick(uint32_t now_ms)
     // 4-byte read → convert to mm.  The bytes on the wire are byte-for-byte
     // identical to the pre-039 path; only the call site moved (Robot → here).
     //
-    // The result is cached in _lastPositionMm for positionMm(); the control layer
+    // The result is cached in _lastPosition for positionMm(); the control layer
     // applies the speed-scaled outlier filter against this value (OQ-2 b).  A
     // simple position-difference velocity is cached in _lastVelocityMmps for
     // velocityMmps() — it is NOT consumed by the PID (which keeps its own EMA /
@@ -487,13 +487,13 @@ void Motor::tick(uint32_t now_ms)
     if (_hasLastTick) {
         float elapsed_s = static_cast<float>(now_ms - _lastTickMs) / 1000.0f;
         if (elapsed_s > 0.0f) {
-            _lastVelocityMmps = (pos - _lastPositionMm) / elapsed_s;
+            _lastVelocityMmps = (pos - _lastPosition) / elapsed_s;
         }
     } else {
         _hasLastTick = true;
     }
-    _lastPositionMm = pos;
-    _lastTickMs     = now_ms;
+    _lastPosition = pos;
+    _lastTickMs   = now_ms;
 }
 
 int32_t Motor::readEncoderRaw() const
@@ -753,9 +753,9 @@ bool Motor::readSpeed(float& mmPerSec, const RobotConfig& cfg) const
     //
     // The 0x47 register reports angular velocity in the SAME unit as the
     // 0x46 angle register: tenths of degrees.  This mirrors readEncoder(),
-    // which converts 0x46 raw via: mm = (raw / 10.0) * mmPerDeg * fwdSign.
+    // which converts 0x46 raw via: mm = (raw / 10.0) * wheelTravelCalib * fwdSign.
     //
-    // Therefore: mm/s = (raw / 10.0) * mmPerDeg * sign
+    // Therefore: mm/s = (raw / 10.0) * wheelTravelCalib * sign
     //
     // motorId 2 = M2 = left wheel; use wheelTravelCalibL.
     // motorId 1 = M1 = right wheel; use wheelTravelCalibR.
@@ -773,8 +773,8 @@ bool Motor::readSpeed(float& mmPerSec, const RobotConfig& cfg) const
     // Change kUnitFactor to flip the interpretation after bench confirmation.
     static constexpr float kUnitFactor = 10.0f;  // BENCH-CONFIRM: 10.0 = tenths; 1.0 = whole deg/s
 
-    float mmPerDeg = (_motorId == 2) ? cfg.wheelTravelCalibL : cfg.wheelTravelCalibR;
-    float magnitude = ((float)raw / kUnitFactor) * mmPerDeg;
+    float wheelTravelCalib = (_motorId == 2) ? cfg.wheelTravelCalibL : cfg.wheelTravelCalibR;  // [mm/deg]
+    float magnitude = ((float)raw / kUnitFactor) * wheelTravelCalib;
 
     // Apply direction sign: the chip returns unsigned speed only.
     // _lastDir is +1 (forward), -1 (reverse), or 0 (stopped).

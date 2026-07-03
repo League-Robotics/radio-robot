@@ -72,11 +72,11 @@ public:
     /**
      * tick — per-loop split-phase encoder read (039-002).
      *
-     * Called once per cooperative-loop iteration via NezhaHAL::tick(now_ms),
+     * Called once per cooperative-loop iteration via NezhaHAL::tick(now),
      * BEFORE loopTickOnce.  Issues the split-phase encoder read (the exact
      * 0x46-write + 4-byte-read I2C transaction that controlCollectSplitPhase
      * previously issued via readEncoderMmFSettle) and caches the result in
-     * _lastPositionMm.  Differentiates against the previous cached position over
+     * _lastPosition.  Differentiates against the previous cached position over
      * the elapsed time and caches _lastVelocityMmps.
      *
      * NO outlier filter, NO PID velocity smoothing, NO wedge detection here —
@@ -87,7 +87,7 @@ public:
     void    tick(uint32_t now_ms) override;
 
     // Cheap accessors — return the values cached by the most recent tick(); no I2C.
-    float   positionMm()   const override { return _lastPositionMm; }
+    float   positionMm()   const override { return _lastPosition; }
     float   velocityMmps() const override { return _lastVelocityMmps; }
 
     // Read cumulative encoder in mm using calibration from cfg.
@@ -106,7 +106,7 @@ public:
     /**
      * rebaselineSoft — software-only encoder rebaseline (064-003).
      *
-     * Folds the already-tick-cached _lastPositionMm (obtained by the normal
+     * Folds the already-tick-cached _lastPosition (obtained by the normal
      * per-tick 0x46 read, NOT a new atomic burst) back into raw tenths-of
      * -degrees and adds it to _encOffset — issues NO I2C transaction — then
      * zeros the cache exactly as resetEncoder()'s success path already does.
@@ -163,9 +163,9 @@ public:
      *
      * Issues a readSpeed command (register 0x47) and converts the raw uint16
      * reading to mm/s using:
-     *   mm/s = (raw / kUnitFactor) * mmPerDeg * _lastDir
+     *   mm/s = (raw / kUnitFactor) * wheelTravelCalib * _lastDir
      *
-     * where mmPerDeg = cfg.wheelTravelCalibL (M2/left) or cfg.wheelTravelCalibR (M1/right),
+     * where wheelTravelCalib = cfg.wheelTravelCalibL (M2/left) or cfg.wheelTravelCalibR (M1/right),
      * mirroring readEncoder()'s wheel-selection and calibration.
      *
      * kUnitFactor is a named constant in Motor.cpp (default 10.0 = tenths of
@@ -351,10 +351,10 @@ private:
     const RobotConfig& _cfg;
 
     // ---- Split-phase tick() cache (039-002) ----
-    // _lastPositionMm  : cumulative encoder position in mm cached by tick().
+    // _lastPosition    : cumulative encoder position in mm cached by tick().
     // _lastVelocityMmps: velocity differentiated from successive tick() positions.
     // _lastTickMs / _hasLastTick : timing baseline for the differentiation.
-    float    _lastPositionMm   = 0.0f;
+    float    _lastPosition     = 0.0f;  // [mm]
     float    _lastVelocityMmps = 0.0f;
     uint32_t _lastTickMs       = 0;
     bool     _hasLastTick      = false;
@@ -393,7 +393,7 @@ private:
     // return. Updated on every successful I2C read; returned unchanged on
     // failure so a dropped I2C transaction cannot fabricate a position jump
     // (CR-03). Re-zeroed by resetEncoder()/rebaselineSoft() alongside
-    // _lastPositionMm so a failed read immediately after a reset holds the
+    // _lastPosition so a failed read immediately after a reset holds the
     // fresh (~0) baseline rather than a stale pre-reset value. Starts at 0,
     // matching the pre-first-read state.
     mutable int32_t _lastGoodRawEnc = 0;

@@ -70,7 +70,7 @@ void OtosSensor::init()
     // timeout.  Runs at boot via begin() (after the 2.5 s sensor settle, robot
     // still) and on the OI command (deliberate re-calibration — keep it still).
     calibrateImu(kImuCalibSamples);
-    for (uint32_t waited = 0; waited < kImuCalibTimeoutMs; waited += 4u) {
+    for (uint32_t waited = 0; waited < kImuCalibTimeout; waited += 4u) {
         if (readReg8(REG_IMU_CALIBRATION) == 0) break;  // calibration complete
         fiber_sleep(4);
     }
@@ -89,7 +89,7 @@ void OtosSensor::resetTracking()
 }
 
 bool OtosSensor::readTransformed(OtosPose& poseOut,
-                                  float headingRad) const
+                                  float heading) const  // [rad]
 {
     if (!is_initialized()) {
         poseOut = {0.0f, 0.0f, 0.0f};
@@ -120,9 +120,9 @@ bool OtosSensor::readTransformed(OtosPose& poseOut,
         hF = -hF;
     }
 
-    float angRad = -_cfg.odomYaw * (3.14159265f / 180.0f);
-    float c = cosf(angRad);
-    float s = sinf(angRad);
+    float ang = -_cfg.odomYaw * (3.14159265f / 180.0f);  // [rad]
+    float c = cosf(ang);
+    float s = sinf(ang);
 
     // Lever-arm correction (HOST-SIDE, source/hal/capability/OtosLeverArm.h).
     // The chip-side REG_OFFSET approach is unusable: this OTOS unit silently
@@ -133,13 +133,13 @@ bool OtosSensor::readTransformed(OtosPose& poseOut,
     // SAME-INSTANT OTOS heading hF (read in the same I2C burst as rx,ry):
     //   sensor  = pivot + R(hF)*odomOff      (the chip reports the sensor arc)
     //   centre  = sensor - R(hF)*odomOff = pivot   (exact cancellation)
-    // hF (not the caller's headingRad) is required: headingRad is the fused pose
+    // hF (not the caller's heading) is required: heading is the fused pose
     // heading from the PREVIOUS tick and lags the spin by a constant ~ω*dt (≈29°
     // over the slow relay), leaving a residual lever-arm circle (the corner
     // "D-hook").  hF is same-instant so the arc cancels regardless of spin rate.
     // (An earlier hF test "spiralled" only because the offset was wrong (-24 vs the
     // measured -47.7) AND the run was cramped against the fence — not hF's fault.)
-    (void)headingRad;
+    (void)heading;
     float rotX = c * xF - s * yF;
     float rotY = s * xF + c * yF;
     float centreX = 0.0f, centreY = 0.0f;
@@ -186,14 +186,14 @@ bool OtosSensor::readTransformed(OtosPose& poseOut,
 // ---------------------------------------------------------------------------
 
 bool OtosSensor::readVelocityTransformed(OtosVelocity& velOut,
-                                          float headingRad) const
+                                          float heading) const  // [rad]
 {
     // Delegate to the 3-DOF read and discard the lateral (vy) component.
     // A differential-drive robot cannot act on vy, but the OTOS measures it
     // regardless; dropping it here keeps the 2-DOF caller contract unchanged
     // while sharing one read/scale/flip/rotate path (no duplicated logic).
     BodyTwist3 t3;
-    if (!readVelocityTransformed3(t3, headingRad)) {
+    if (!readVelocityTransformed3(t3, heading)) {
         velOut = {0.0f, 0.0f};
         return false;
     }
@@ -220,7 +220,7 @@ bool OtosSensor::readVelocityTransformed(OtosVelocity& velOut,
 // is zero — only the rotation angle matters for the linear components).
 // ---------------------------------------------------------------------------
 bool OtosSensor::readVelocityTransformed3(BodyTwist3& velOut,
-                                           float /*headingRad*/) const
+                                           float /*heading*/) const  // [rad]
 {
     if (!is_initialized()) {
         velOut = {0.0f, 0.0f, 0.0f};
@@ -249,9 +249,9 @@ bool OtosSensor::readVelocityTransformed3(BodyTwist3& velOut,
         whF = -whF;
     }
 
-    float angRad = -_cfg.odomYaw * (3.14159265f / 180.0f);
-    float c = cosf(angRad);
-    float s = sinf(angRad);
+    float ang = -_cfg.odomYaw * (3.14159265f / 180.0f);  // [rad]
+    float c = cosf(ang);
+    float s = sinf(ang);
 
     // Rotate chip-native (vxF, vyF) into robot body frame.
     // odomYaw is a constant mounting offset; its derivative is zero,
@@ -285,9 +285,9 @@ OtosAccel OtosSensor::readAccelTransformed() const
         ayF = -ayF;
     }
 
-    float angRad = -_cfg.odomYaw * (3.14159265f / 180.0f);
-    float c = cosf(angRad);
-    float s = sinf(angRad);
+    float ang = -_cfg.odomYaw * (3.14159265f / 180.0f);  // [rad]
+    float c = cosf(ang);
+    float s = sinf(ang);
 
     OtosAccel accel;
     accel.ax_mmps2 = c * axF - s * ayF;
@@ -307,34 +307,34 @@ void OtosSensor::setPositionRaw(int16_t x, int16_t y, int16_t h)
     writeXYH(REG_POSITION_XL, x, y, h);
 }
 
-void OtosSensor::setWorldPose(float x_mm, float y_mm, float h_rad)
+void OtosSensor::setWorldPose(float x, float y, float h)  // [mm], [mm], [rad]
 {
     // Exact inverse of readTransformed(): find the chip-frame raw pose that reads
-    // back as world (x_mm, y_mm, h_rad).  Used to anchor the OTOS to a camera fix
+    // back as world (x, y, h).  Used to anchor the OTOS to a camera fix
     // (SI) so its absolute observations agree with the controller pose instead of
     // dragging the EKF toward the boot frame.
     //
-    // Forward (readTransformed): poseOut = R(angRad)*(xF,yF) - R(h_rad)*offset,
-    //   angRad = -odomYaw ; offset = [odomOffX, odomOffY] (host-side lever-arm).
+    // Forward (readTransformed): poseOut = R(ang)*(xF,yF) - R(h)*offset,
+    //   ang = -odomYaw ; offset = [odomOffX, odomOffY] (host-side lever-arm).
     // Inverse: add the lever-arm back (the chip POSITION reg stores the SENSOR
-    // pose), then un-rotate by R(-angRad), undo upside-down, convert -> raw LSBs.
+    // pose), then un-rotate by R(-ang), undo upside-down, convert -> raw LSBs.
     if (!is_initialized()) return;
 
     // Host-side lever-arm (chip can't store REG_OFFSET on this unit): the SENSOR
-    // sits at center + R(h_rad)*offset, so to make readTransformed report the world
-    // CENTER (x_mm,y_mm) we must set the chip POSITION to the sensor point.
+    // sits at center + R(h)*offset, so to make readTransformed report the world
+    // CENTER (x,y) we must set the chip POSITION to the sensor point.
     // centreToSensor() (source/hal/capability/OtosLeverArm.h) is the exact
     // inverse of readTransformed()'s sensorToCentre() call above.
     float px = 0.0f, py = 0.0f;
-    centreToSensor(x_mm, y_mm, h_rad, _cfg.odomOffX, _cfg.odomOffY, px, py);
+    centreToSensor(x, y, h, _cfg.odomOffX, _cfg.odomOffY, px, py);
 
-    float angRad = -_cfg.odomYaw * (3.14159265f / 180.0f);
-    float c = cosf(angRad);
-    float s = sinf(angRad);
-    // (xF,yF) = R(-angRad) * (px,py)
+    float ang = -_cfg.odomYaw * (3.14159265f / 180.0f);  // [rad]
+    float c = cosf(ang);
+    float s = sinf(ang);
+    // (xF,yF) = R(-ang) * (px,py)
     float xF =  c * px + s * py;
     float yF = -s * px + c * py;
-    float hF = h_rad;
+    float hF = h;
 
     if (_cfg.odomUpsideDown) { xF = -xF; yF = -yF; hF = -hF; }
 
