@@ -26,6 +26,16 @@ build:
 build-clean:
     uv run python3 build.py --clean
 
+# Build ONLY the host-simulation library (libfirmware_host) — skips the ARM
+# firmware, so it's fast (~8s clean, <1s incremental) and needs no ARM toolchain.
+# Runs the same codegen steps build.py does so generated sources stay fresh.
+# Note: `just build` already builds BOTH the firmware hex and this sim library.
+build-sim:
+    uv run python3 scripts/gen_default_config.py
+    uv run python3 scripts/gen_messages.py
+    cmake -S tests/_infra/sim -B tests/_infra/sim/build -DROBOT_RUN_MODE=SIM
+    cmake --build tests/_infra/sim/build --parallel
+
 mbd-install:
     pipx install git+https://github.com/Busboombot/mbdeploy.git
 

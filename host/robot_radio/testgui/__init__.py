@@ -2,7 +2,7 @@
 
 This package provides a desktop GUI for interactive robot control and
 pose-trace visualization.  PySide6 is an *optional* dependency declared in
-the ``[dependency-groups] gui`` group of ``host/pyproject.toml``.
+the ``[dependency-groups] gui`` group of the root ``pyproject.toml``.
 
 Importing this package does **not** require PySide6 to be installed.  PySide6
 imports are deferred to the functions and classes that actually use them,

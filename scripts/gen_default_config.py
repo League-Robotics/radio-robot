@@ -321,7 +321,7 @@ RobotConfig defaultRobotConfig() {{
     p.safetyEnabled   = {ov('safetyEnabled', 'true')};
     p.controlPeriodMs = 10;
     p.tlmPeriodMs     = 0;
-    p.tlmFields       = 0xFF;
+    p.tlmFields       = 0x1FF;  // 068: was 0xFF; widened to TLM_FIELD_ALL to include TLM_FIELD_ENCPOSE (bit 8)
     p.tlmSnapPending  = false;
 
     // Sensor lag budgets

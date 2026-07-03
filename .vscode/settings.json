@@ -1,4 +1,7 @@
 {
+    // Single venv at the repo root since 2026-07-02 (host/.venv was folded in).
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+
     // The Microsoft C/C++ IntelliSense parser (EDG) cannot parse the GCC 15.2
     // headers this project's toolchain ships, producing phantom "expected a ';'"
     // squiggles on valid code. Disable it and use clangd (Apple clang 21) instead,

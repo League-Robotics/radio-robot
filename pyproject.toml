@@ -1,7 +1,7 @@
 [project]
 name = "microbit-v2-samples-tools"
 version = "0.20260702.24"
-description = "Utility scripts for building and deploying microbit-v2-samples"
+description = "Build/deploy tooling for microbit-v2-samples plus the robot_radio host controller and rogo CLI"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -10,9 +10,25 @@ dependencies = [
     "jupyter>=1.1.1",
     "opencv-python-headless>=4.13.0.92",
     "pandas>=2.3.3",
+    "pydantic>=2.13.4",
     "pyserial>=3.5",
-    "robot-radio",
+    "robotpy-wpimath>=2024",
 ]
+
+# `rogo` CLI entry point (relay-aware robot control: drive, turn, goto, config,
+# calibrate, sync). Installed on PATH when this project is synced into the venv.
+[project.scripts]
+rogo = "robot_radio.io.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# The importable robot_radio package lives under host/. Ship it as the wheel's
+# top-level package — hatchling strips the host/ prefix, so `import robot_radio`
+# resolves. (Formerly built from a standalone host/pyproject.toml; folded here.)
+[tool.hatch.build.targets.wheel]
+packages = ["host/robot_radio"]
 
 [dependency-groups]
 # Bench calibration / camera-ground-truth tooling (tests/calibrate/). Pulls in
@@ -25,16 +41,35 @@ calibrate = [
 codegen = [
     "grpcio-tools>=1.60,<2.0",
 ]
+# Test tooling. `dev` is a uv default group, so `uv sync` installs pytest and
+# keeps it. (Previously these lived only in host/pyproject.toml, which is why a
+# root-level sync kept pruning pytest — folding the group here fixes that.)
+dev = [
+    "jsonschema>=4.26.0",
+    "pytest>=8.0",
+]
+# The Robot Test GUI needs both PySide6 (widgets) and the aprilcam camera
+# client (live playfield capture, tag pose). aprilcam is an editable path
+# dependency (see [tool.uv.sources]); the GUI imports it lazily so the base
+# robot_radio install stays lightweight for on-robot use. Install with
+# `uv sync --group gui`.
+gui = [
+    "PySide6>=6.0",
+    "aprilcam",
+    # Deskewing a captured playfield frame via the daemon homography uses cv2
+    # (robot_radio.media.movie / testgui.canvas). aprilcam decodes with Pillow
+    # and only imports cv2 lazily, so it must be listed explicitly here.
+    "opencv-python-headless>=4.13.0.92",
+]
 
 [tool.uv]
-package = false
-# Include the calibrate and codegen groups by default so `uv run` commands always
-# have the aprilcam camera client and grpc codegen tools available without
-# explicit --group flags.
-default-groups = ["calibrate", "codegen"]
+# Groups synced by default. Setting default-groups explicitly REPLACES uv's
+# implicit `dev` default, so `dev` must be listed here or `uv sync` prunes pytest
+# (the long-standing "pytest keeps disappearing" gotcha). calibrate + codegen give
+# `uv run` the aprilcam client and grpc codegen tools without explicit --group flags.
+default-groups = ["calibrate", "codegen", "dev"]
 
 [tool.uv.sources]
-robot-radio = { path = "host", editable = true }
 aprilcam = { path = "../AprilTags", editable = true }
 
 [tool.pytest.ini_options]
