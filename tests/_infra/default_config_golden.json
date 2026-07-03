@@ -40,6 +40,7 @@
   "rotOffNeg": 1.158,
   "rotOffPos": 1.045,
   "rotSlip": 0.92,
+  "safetyMargin": 50.0,
   "sTimeout": 500,
   "steerHeadroom": 20.0,
   "sync": 1.0,

@@ -99,10 +99,34 @@ bool StopCondition::evaluate(const HardwareState& s, uint32_t now,
             // Uses raw encoder sum (not filtered) per architecture decision:
             //   "filtered value can stall under outlier filtering" (D-command finding).
             // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
+            //
+            // 072-002: signed/direction-aware.  `raw` is the unsigned-by-nature
+            // encoder delta from baseline; multiplying by base.vSign projects it
+            // onto the COMMANDED direction, so a robot running away the WRONG
+            // way (raw negative when vSign is +1, or vice versa) produces a
+            // NEGATIVE signedTraveled that never satisfies `>= a` — replacing
+            // the old direction-blind fabsf(raw) >= a, which let a backward
+            // runaway self-report a false "EVT done D reason=dist" completion.
+            // When travel matches the commanded direction (the common case),
+            // signedTraveled == fabsf(raw) exactly — bit-identical outcome.
+            //
+            // base.vSign == 0.0 means "no commanded direction" — not just the
+            // degenerate MotionCommand v==0 edge case, but also (in practice)
+            // every MotionBaseline HaltController itself constructs for its
+            // HALT DIST watches: HaltController::add() zero-initializes the
+            // baseline (`e.base = {}`) and has no notion of a "commanded
+            // direction" at all — HALT DIST is a deliberately direction
+            // -agnostic magnitude watch, independent of whatever verb (VW, S,
+            // T, D, G, or none) happens to be driving at registration time.
+            // Falling back to the original undirected |raw| semantics here
+            // preserves that pre-existing, still-correct contract exactly,
+            // rather than a signed gate silently locking it to one direction.
             float enc_avg = (s.encPos[1] + s.encPos[0]) * 0.5f;
-            float traveled = enc_avg - base.enc0;
-            if (traveled < 0.0f) traveled = -traveled;  // fabsf without including math.h twice
-            return traveled >= a;
+            float raw = enc_avg - base.enc0;
+            float signedTraveled = (base.vSign != 0.0f)
+                ? (raw * base.vSign)
+                : ((raw < 0.0f) ? -raw : raw);
+            return signedTraveled >= a;
         }
 
         case Kind::HEADING: {
@@ -168,9 +192,38 @@ bool StopCondition::evaluate(const HardwareState& s, uint32_t now,
             // Per-wheel arc = |Δdiff| / 2.  Uses raw encoder values (not
             // filtered) — same rationale as DISTANCE: the filter can stall.
             // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
+            //
+            // 072-002: signed/direction-aware, same treatment as DISTANCE.
+            // `diff` grows positive for a CCW (positive omega) spin; multiplying
+            // by base.omegaSign projects it onto the commanded spin direction,
+            // so a wrong-direction encoder differential (diff and omegaSign
+            // disagree in sign) never satisfies `>= a` — replacing the old
+            // direction-blind fabsf(diff). When the spin matches the commanded
+            // direction, signedDiff == fabsf(diff) exactly. omegaSign == 0.0
+            // falls back to the undirected |diff| magnitude, same rationale as
+            // DISTANCE's vSign == 0.0 fallback above (no registered caller
+            // currently attaches a direction-agnostic ROTATION watch, but the
+            // fallback keeps this Kind consistent and future-proof against one).
             float diff = (s.encPos[0] - s.encPos[1]) - base.encDiff0;
-            if (diff < 0.0f) diff = -diff;
-            return (diff * 0.5f) >= a;
+            float signedDiff = (base.omegaSign != 0.0f)
+                ? (diff * base.omegaSign)
+                : ((diff < 0.0f) ? -diff : diff);
+            return (signedDiff * 0.5f) >= a;
+        }
+
+        case Kind::SAFETY_MARGIN: {
+            // `a` = positive margin threshold (mm). Runaway safety net
+            // (072-002): fires when signed travel goes more than `a` mm
+            // NEGATIVE relative to the commanded direction — i.e. the robot
+            // is demonstrably moving the WRONG way during a directed D.
+            // Same signed-delta computation as DISTANCE; differs only in the
+            // sign/direction of the comparison and in what MotionCommand does
+            // when it fires (forced HARD teardown + EVT safety_stop,
+            // architecture-update.md Decision 2).
+            float enc_avg = (s.encPos[1] + s.encPos[0]) * 0.5f;
+            float raw = enc_avg - base.enc0;
+            float signedTraveled = raw * base.vSign;
+            return signedTraveled <= -a;
         }
     }
 

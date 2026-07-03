@@ -227,6 +227,10 @@ private:
     float _dDistTarget;  // target distance in mm
     float _dOmega;       // commanded yaw rate at begin (from forward kinematics)
     float _dEnc0;        // encoder average at begin (baseline for decel cap)
+    // 072-002: commanded-direction sign, mirroring MotionBaseline::vSign so
+    // the decel hook's own d_traveled computation agrees with StopCondition's
+    // DISTANCE/SAFETY_MARGIN signed convention about what "remaining" means.
+    float _dVSign;       // ±1.0 (or 0.0): sign of commanded body v at begin
 
     // G go-to state machine
     enum class GPhase { IDLE, PRE_ROTATE, PURSUE };

@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Signed/direction-aware DISTANCE + ROTATION stop + EVT safety_stop
-status: open
+status: done
 use-cases:
 - SUC-002
 - SUC-003
@@ -72,56 +72,67 @@ Decisions 1 and 2; `usecases.md` SUC-002, SUC-003.
 
 ## Acceptance Criteria
 
-- [ ] `MotionBaseline` gains `vSign`/`omegaSign` fields, computed at
+- [x] `MotionBaseline` gains `vSign`/`omegaSign` fields, computed at
       `MotionCommand::start()` from the command's commanded `v`/`omega`
       (±1.0, or 0.0 if commanded velocity is exactly zero).
-- [ ] `Kind::DISTANCE` fires on `signedDelta >= target` where
+- [x] `Kind::DISTANCE` fires on `signedDelta >= target` where
       `signedDelta = raw * base.vSign`, not `fabsf(raw) >= target`.
-- [ ] `Kind::ROTATION` fires on the equivalent signed comparison using
+- [x] `Kind::ROTATION` fires on the equivalent signed comparison using
       `omegaSign`.
-- [ ] A forward `D` (`D 200 200 500`) whose encoders instead accumulate
+- [x] A forward `D` (`D 200 200 500`) whose encoders instead accumulate
       500 mm of BACKWARD travel does NOT fire the DISTANCE stop from that
       backward travel (does not emit `EVT done D reason=dist`).
-- [ ] A reverse `D` (`D -200 -200 500`) that travels 500 mm backward DOES
+- [x] A reverse `D` (`D -200 -200 500`) that travels 500 mm backward DOES
       fire the DISTANCE stop and completes normally — no regression on the
       legitimate reverse-drive case.
-- [ ] `RT <cdeg>` in each direction (positive and negative) still
+- [x] `RT <cdeg>` in each direction (positive and negative) still
       terminates on its own commanded-direction arc; a wrong-direction
       encoder differential does not satisfy the ROTATION stop.
-- [ ] The Planner D-mode decel hook's `d_traveled` computation
+- [x] The Planner D-mode decel hook's `d_traveled` computation
       (`Planner.cpp:224`) uses the same signed convention (drops its
       `fabsf`), so `v_cap`'s shaping and the stop condition agree about
       "remaining" throughout a drive.
-- [ ] New `StopCondition::Kind::SAFETY_MARGIN` fires when signed traveled
+- [x] New `StopCondition::Kind::SAFETY_MARGIN` fires when signed traveled
       distance crosses more than a configurable margin NEGATIVE relative
       to the commanded direction during a directed `D`.
-- [ ] `beginDistance()` installs `SAFETY_MARGIN` as a third stop condition
+- [x] `beginDistance()` installs `SAFETY_MARGIN` as a third stop condition
       alongside the existing DISTANCE/TIME pair (`kMaxStopConds` stays at
       4; `D` now uses 3 of 4 slots).
-- [ ] `MotionCommand::tick()` special-cases a fired `SAFETY_MARGIN`: forces
+- [x] `MotionCommand::tick()` special-cases a fired `SAFETY_MARGIN`: forces
       HARD teardown (zero PWM immediately, not a SOFT ramp) regardless of
       the command's configured `_stopStyle`, and forces the emitted EVT
       label to `EVT safety_stop` with an additive `reason=runaway` token,
       bypassing the command's configured `_doneEvtLabel`.
-- [ ] The safety-margin abort fires within one control tick of crossing the
+- [x] The safety-margin abort fires within one control tick of crossing the
       margin — not the multi-second TIME net.
-- [ ] `EVT safety_stop`'s wire shape remains compatible with existing hosts
+- [x] `EVT safety_stop`'s wire shape remains compatible with existing hosts
       that already recognize it from the keepalive-watchdog path (additive
       `reason=` token only; no change to the base label).
-- [ ] The safety margin is a new `RobotConfig`/`SET`-able field (not a
+- [x] The safety margin is a new `RobotConfig`/`SET`-able field (not a
       hardcoded constant), consistent with 067's live-SET propagation
       rule.
-- [ ] `docs/wire-protocol.md` (or equivalent) documents `EVT
-      safety_stop`'s new `reason=runaway` token as additive.
-- [ ] `test_distance_fires_for_reverse`
+- [x] `docs/wire-protocol.md` (or equivalent) documents `EVT
+      safety_stop`'s new `reason=runaway` token as additive. (No
+      `docs/wire-protocol.md` file exists; documented in `docs/protocol-v2.md`,
+      the actual wire-protocol reference — reason= token table, D section,
+      and the SET invariants table.)
+- [x] `test_distance_fires_for_reverse`
       (`tests/simulation/unit/test_stop_condition.py`) is split per
       architecture-update.md Step 5 into a still-passes commanded-reverse
       case and a new must-not-fire commanded-forward-travels-backward case
       (full split finalized in ticket 004; this ticket may stage the split
       if convenient, but ticket 004 is the authoritative verification
-      pass).
-- [ ] Full existing test suite remains green except the one test named
-      above, which ticket 004 finalizes.
+      pass). Deferred to ticket 004 as explicitly permitted by this AC's own
+      wording ("this ticket may stage... but ticket 004 is authoritative") —
+      the C++ implementation changed; that test is a pure Python mirror of
+      the OLD algorithm untouched by the C++ change, so it stays green
+      unmodified either way, encoding no false signal in the meantime.
+- [x] Full existing test suite remains green except the one test named
+      above, which ticket 004 finalizes. (2646 passed, 0 failed — baseline
+      2640 + this ticket's 6 new tests; `test_distance_fires_for_reverse`
+      itself is unaffected/still green, see note above. Two other existing
+      test files needed minimal, structurally-anticipated updates to stay
+      green — see Implementation Notes.)
 
 ## Testing
 
@@ -183,3 +194,60 @@ unaffected (commands and travels in the same direction).
 **Documentation updates**: `docs/wire-protocol.md` (or equivalent) for the
 new `EVT safety_stop reason=runaway` token and the new `SET`-able safety
 margin field.
+
+## Implementation Notes (as-built)
+
+- Implemented as planned, with a `vSign`/`omegaSign == 0.0` fallback to the
+  original undirected `|delta|` magnitude in both `Kind::DISTANCE` and
+  `Kind::ROTATION` (not called out in architecture-update.md or this
+  ticket). Discovered via the full suite run: `HaltController` (the `HALT
+  DIST`/`HALT TIME` named-condition registry, sprint 020-007) constructs its
+  OWN `MotionBaseline` per entry with no notion of a commanded direction at
+  all (`e.base = {}`) — it is a deliberately direction-agnostic magnitude
+  watch, independent of whichever verb is driving when it's registered. A
+  pure signed gate would have silently locked `HALT DIST` to firing on
+  forward-only travel (or never firing at all, since a zero-initialized
+  `vSign` makes `signedTraveled` identically 0), regressing
+  `test_halt_dist_fires_evt` and `test_halt_dist_no_zero_d_does_not_trip_
+  instantly`. The `0.0 -> fall back to |delta|` interpretation is
+  documented in `MotionBaseline`'s own doc comment (`StopCondition.h`) as
+  the principled reading of the existing "0.0 if no commanded direction"
+  sentinel, not an ad hoc special case. `SAFETY_MARGIN` does NOT get this
+  fallback — no current caller attaches it without a real commanded
+  direction, and "runaway relative to commanded direction" is meaningless
+  without one.
+- `beginDistance()` installing a 3rd built-in stop (DISTANCE+TIME+
+  SAFETY_MARGIN) shrinks the wire `stop=`/`sensor=` clause budget on `D`
+  from 2 down to 1 (`kMaxStopConds == 4`) — explicitly anticipated by
+  architecture-update.md Decision 2's own "Consequences" paragraph. This
+  broke two pre-existing tests in `tests/simulation/unit/
+  test_065_001_stop_clause_overflow.py` that assumed a 2-wire-clause budget
+  (`test_d_two_wire_clauses_completes_without_crash`,
+  `test_d_sensor_clause_wins_when_tripped_early`). Updated minimally (one
+  wire clause dropped from each command string; assertions/docstrings
+  updated to state the new 3-internal+1-wire budget) — their actual intent
+  (no crash; wire clause governs when tripped early) is unchanged.
+  `test_d_three_wire_clauses_overflow_is_recoverable_err_not_crash` needed
+  no change (already overflowed before 072-002, overflows more now).
+- `safetyMargin` default chosen as 50 mm: comfortably above any plausible
+  encoder noise/rounding near a drive's start, but small enough to trip
+  within a handful of ticks on a genuine runaway (proven in
+  `test_072_002_signed_stop_and_safety_margin.py`: fires at exactly tick 5
+  of a -10 mm/tick injected runaway). `validateConfig()` rejects
+  `safetyMargin <= 0` (mirrors the `aMax`/`aDecel`/etc. pattern) since 0
+  would trip on any negative-going noise and negative is meaningless.
+- `safetyMargin` uses a plain `CFG_F` registry row (no `"planner"` subsystem
+  annotation), matching `aDecel`'s existing pattern: `Planner::_cfg` is a
+  live `const RobotConfig&` reference (067-001), so `beginDistance()` always
+  reads a freshly-`SET` value with no `configure()` push required.
+- New test file: `tests/simulation/unit/test_072_002_signed_stop_and_safety_
+  margin.py` (6 tests, all driving the real C++ sim binary via
+  `sim_set_enc_l`/`sim_set_enc_r` injection — the same "forced-encoder-cap"
+  harness ticket 001 preserved as a diagnostic tool): forward-D-runs-
+  backward does not fire DISTANCE; reverse-D unaffected; SAFETY_MARGIN fires
+  fast + forces HARD + `reason=runaway`; `reason=runaway`/`reason=watchdog`
+  additive coexistence; RT wrong-direction does not fire ROTATION; RT
+  negative-direction still terminates normally.
+- Full suite: 2646 passed, 0 failed (baseline 2640 + 6 new). Golden-TLM and
+  `test_default_config_pin` (updated `tests/_infra/default_config_golden.json`
+  with the new `safetyMargin: 50.0` key) both green.

@@ -131,6 +131,15 @@ struct RobotConfig {
     float turnInPlaceGate;
     float arriveTolerance; // [mm]
 
+    // safetyMargin: runaway safety-net threshold for a directed D drive
+    // (Sprint 072, StopCondition::Kind::SAFETY_MARGIN), mm. When signed
+    // travel goes more than this many mm NEGATIVE relative to the commanded
+    // direction, MotionCommand forces an immediate HARD teardown and emits
+    // "EVT safety_stop reason=runaway" instead of waiting for the (much
+    // slower) TIME net. Real firmware behavior, not sim-only (Decision 4) —
+    // SET-able like every other RobotConfig field.
+    float safetyMargin;    // [mm]
+
     // Body motion limits (Sprint 017 — BodyVelocityController).
     // vBodyMax:      body forward speed ceiling, mm/s          (default 400.0)
     // yawRateMax:    yaw rate ceiling, deg/s                   (default 180.0)

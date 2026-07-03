@@ -42,6 +42,7 @@ Planner::Planner(MotorController& mc_ctrl, Odometry& odo,
     , _dDistTarget(0.0f)
     , _dOmega(0.0f)
     , _dEnc0(0.0f)
+    , _dVSign(0.0f)
     , _gPhase(GPhase::IDLE)
     , _gTargetXWorld(0.0f)
     , _gTargetYWorld(0.0f)
@@ -220,8 +221,14 @@ void Planner::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
         // at the same point.  Only clamps downward; does not increase speed.
         if (_mode == DriveMode::DISTANCE) {
             // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
+            // 072-002: signed convention (drops fabsf), matching
+            // StopCondition::DISTANCE's own signed-delta math (base.vSign)
+            // so the decel profile and the stop condition agree about what
+            // "remaining" means throughout the drive.  When travel matches
+            // the commanded direction, d_traveled is bit-identical to the
+            // old fabsf(enc_avg - _dEnc0).
             float enc_avg     = (inputs.encPos[1] + inputs.encPos[0]) * 0.5f;
-            float d_traveled  = fabsf(enc_avg - _dEnc0);
+            float d_traveled  = (enc_avg - _dEnc0) * _dVSign;
             float d_remaining = _dDistTarget - d_traveled;
             if (d_remaining > 0.0f) {
                 float v_cap = sqrtf(2.0f * _cfg.aDecel * d_remaining);

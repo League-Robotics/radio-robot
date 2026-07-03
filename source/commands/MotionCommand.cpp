@@ -111,6 +111,13 @@ void MotionCommand::start(const HardwareState& inputs, uint32_t now)
     _baseline.pose0X     = inputs.fused.pose.x;
     _baseline.pose0Y     = inputs.fused.pose.y;
 
+    // 072-002: commanded-direction signs, captured from the command's
+    // commanded v/omega at start() time. ±1.0, or 0.0 if exactly zero.
+    // Consumed by StopCondition's DISTANCE/ROTATION/SAFETY_MARGIN Kinds to
+    // gate on signed travel in the commanded direction (Decision 1).
+    _baseline.vSign     = (_vTgt > 0.0f)     ? 1.0f : (_vTgt < 0.0f     ? -1.0f : 0.0f);
+    _baseline.omegaSign = (_omegaTgt > 0.0f) ? 1.0f : (_omegaTgt < 0.0f ? -1.0f : 0.0f);
+
     _active   = true;
     _stopping = false;
 
@@ -191,12 +198,20 @@ bool MotionCommand::tick(const HardwareState& inputs, uint32_t now, float dt_s)
     }
 
     if (stopped) {
-        if (_stopStyle == StopStyle::HARD) {
+        // 072-002: SAFETY_MARGIN is safety-class — it forces an immediate HARD
+        // teardown regardless of the command's configured _stopStyle, and
+        // forces the emitted EVT label to "EVT safety_stop" (bypassing
+        // _doneEvtLabel), reusing the exact label the keepalive watchdog
+        // already emits (architecture-update.md Decision 2). This is the same
+        // mechanism the existing _stopStyle == HARD check already uses, not a
+        // new one — just one more condition on the same branch.
+        bool safetyForced = (_firedKind == StopCondition::Kind::SAFETY_MARGIN);
+        if (_stopStyle == StopStyle::HARD || safetyForced) {
             // Immediate teardown.
             if (_bvc) _bvc->reset();
             _active   = false;
             _stopping = false;
-            emitEvt(_doneEvtLabel);
+            emitEvt(safetyForced ? "EVT safety_stop" : _doneEvtLabel);
         } else {
             // SOFT: ramp to (0, 0) over up to kSoftDeadline.
             _stopping     = true;
@@ -270,6 +285,7 @@ static const char* mc_reasonToken(StopCondition::Kind kind, uint8_t channel)
         case K::POSITION: return "pos";
         case K::LINE_ANY: return "line";
         case K::COLOR:    return "color";
+        case K::SAFETY_MARGIN: return "runaway";
         case K::SENSOR: {
             // Channel-name table: matches kSensorChannels in MotionCommands.cpp.
             static const char* kNames[12] = {

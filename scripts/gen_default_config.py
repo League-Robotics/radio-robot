@@ -302,6 +302,7 @@ RobotConfig defaultRobotConfig() {{
     p.aDecel          = 250.0f;
     p.turnInPlaceGate = {ov('turnInPlaceGate', '45.0f')};
     p.arriveTolerance = {ov('arriveTolerance', '5.0f')};
+    p.safetyMargin    = {ov('safetyMargin', '50.0f')};
 
     // Body motion limits
     p.vBodyMax        = 400.0f;

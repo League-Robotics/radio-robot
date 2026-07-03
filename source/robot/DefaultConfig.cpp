@@ -97,6 +97,7 @@ RobotConfig defaultRobotConfig() {
     p.aDecel          = 250.0f;
     p.turnInPlaceGate = 35.0f;
     p.arriveTolerance = 25.0f;
+    p.safetyMargin    = 50.0f;
 
     // Body motion limits
     p.vBodyMax        = 400.0f;

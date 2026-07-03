@@ -71,6 +71,11 @@ const ConfigEntry kRegistry[] = {
     CFG_F   ("aDecel",     aDecel),
     CFG_FI  ("turnGate",   turnInPlaceGate),   // wire: integer degrees; Planner converts to radians at use-site
     CFG_FI_SS("arriveTol", arriveTolerance, "planner"),  // wire: integer mm
+    // Runaway safety-net threshold for a directed D drive (sprint 072-002).
+    // No "planner" SS annotation needed: Planner::_cfg is a live reference
+    // (067-001), so beginDistance() reads a freshly-SET value with no
+    // configure() push required — same pattern as aDecel above.
+    CFG_F   ("safetyMargin", safetyMargin),
     // Body motion limits (Sprint 017 -- BodyVelocityController)
     CFG_F_SS("vBodyMax",   vBodyMax,     "planner"),  // body forward speed ceiling, mm/s
     CFG_F_SS("yawRateMax", yawRateMax,   "planner"),  // yaw rate ceiling, deg/s
@@ -334,6 +339,10 @@ void handleGet(const ArgList& args, const char* corrId,
 //                     keepalive.  200 ms provides margin over the firmware
 //                     tick budget (~25 ms worst-case) and the minimum
 //                     keepalive cadence without being overly restrictive.
+//   safetyMargin > 0 — StopCondition::SAFETY_MARGIN's runaway net (sprint
+//                     072-002) compares signedTraveled <= -safetyMargin;
+//                     zero fires on any negative-going noise, negative is
+//                     nonsensical — either way defeats the safety net.
 // ---------------------------------------------------------------------------
 
 // Minimum allowed sTimeout value.  Below this the watchdog fires before the
@@ -371,6 +380,14 @@ static bool validateConfig(const RobotConfig& c, const char** badKey)
     }
     if (c.aDecel <= 0.0f) {
         *badKey = "aDecel";
+        return false;
+    }
+    // safetyMargin <= 0 would make StopCondition::SAFETY_MARGIN's
+    // `signedTraveled <= -a` comparison fire on any negative-going noise (at
+    // 0) or be trivially always-true/nonsensical (negative) — either way
+    // defeats the runaway safety net it exists to provide (072-002).
+    if (c.safetyMargin <= 0.0f) {
+        *badKey = "safetyMargin";
         return false;
     }
     if (c.vBodyMax <= 0.0f) {
