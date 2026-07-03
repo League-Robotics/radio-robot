@@ -1,6 +1,8 @@
 ---
-status: pending
+status: in-progress
 sprint: 069
+tickets:
+- 069-007
 ---
 
 # Expose the simulator's existing error-model knobs (scale error, drift) in the TestGUI Sim Errors panel

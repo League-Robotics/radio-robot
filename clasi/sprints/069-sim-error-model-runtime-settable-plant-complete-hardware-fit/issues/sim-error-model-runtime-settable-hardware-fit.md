@@ -1,7 +1,16 @@
 ---
-status: pending
+status: in-progress
 severity: high
 sprint: 069
+tickets:
+- 069-001
+- 069-002
+- 069-003
+- 069-004
+- 069-005
+- 069-006
+- 069-007
+- 069-008
 ---
 
 # Sim error model: all error parameters runtime-settable, modeled in the plant, and fittable to real hardware by regression

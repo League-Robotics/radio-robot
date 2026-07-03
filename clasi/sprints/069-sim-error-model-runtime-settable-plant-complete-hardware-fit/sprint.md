@@ -1,7 +1,7 @@
 ---
 id: 069
 title: 'Sim error model: runtime-settable, plant-complete, hardware-fit'
-status: roadmap
+status: planning-docs
 branch: sprint/069-sim-error-model-runtime-settable-plant-complete-hardware-fit
 use-cases: []
 issues:
@@ -133,5 +133,13 @@ Before tickets can be created, all of the following must be true:
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 001 | Expose seven EKF noise fields via SET/GET (close 067 Open Question 5) | none |
+| 002 | PhysicsWorld body-rotational and body-linear scrub (new, independent, multiplicative) | none |
+| 003 | SIMSET/SIMGET wire-command surface (SimCommands, sim-build-only) | 002 |
+| 004 | Surface remaining sim-error knobs through SIMSET/SIMGET (encoder, OTOS) | 003 |
+| 005 | Rebase ctypes sim setters as thin wrappers over shared SIMSET setter functions | 003, 004 |
+| 006 | Comprehensive per-knob telemetry sweep test for the SIMSET registry | 004 |
+| 007 | TestGUI Sim Errors panel: expose full knob set via SIMSET | 004, 005 |
+| 008 | Host-side fit tooling: fit_sim_error_model.py (scipy least_squares, sim-to-sim validated) | 004, 006 |
 
 Tickets execute serially in the order listed.
