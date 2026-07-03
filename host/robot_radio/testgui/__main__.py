@@ -701,7 +701,7 @@ def _build_main_window():  # type: ignore[return]
     _sim_error_profile = sim_prefs.load_sim_error_profile()
 
     def _make_sim_err_spin(
-        object_name: str, label: str, value: float,
+        target_layout: QVBoxLayout, object_name: str, label: str, value: float,
         lo: float, hi: float, decimals: int,
     ) -> QDoubleSpinBox:
         row = QWidget()
@@ -709,71 +709,94 @@ def _build_main_window():  # type: ignore[return]
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(4)
         lbl = QLabel(label)
-        lbl.setFixedWidth(120)
+        lbl.setFixedWidth(96)
         row_layout.addWidget(lbl)
         spin = QDoubleSpinBox()
         spin.setObjectName(object_name)
         spin.setRange(lo, hi)
         spin.setDecimals(decimals)
         spin.setValue(value)
-        spin.setFixedWidth(90)
+        spin.setFixedWidth(68)
         row_layout.addWidget(spin)
         row_layout.addStretch()
-        sim_errors_layout.addWidget(row)
+        target_layout.addWidget(row)
         return spin
 
-    def _add_sim_err_section_label(title: str) -> None:
+    def _add_sim_err_section_label(target_layout: QVBoxLayout, title: str) -> None:
         """Bold sub-heading grouping the spin-box rows that follow it.
 
         Purely visual (069-007's suggested grouping: "Encoder Report Error",
         "Body-Truth Scrub", "Geometry & Actuation", "OTOS Error") — the
-        panel's flat QVBoxLayout has no nested QGroupBoxes, so tests locate
-        individual spin boxes by objectName regardless of grouping.
+        panel's column QVBoxLayouts have no nested QGroupBoxes, so tests
+        locate individual spin boxes by objectName regardless of grouping.
         """
         lbl = QLabel(title)
         bold_font = lbl.font()
         bold_font.setBold(True)
         lbl.setFont(bold_font)
-        sim_errors_layout.addWidget(lbl)
+        target_layout.addWidget(lbl)
 
-    # -- Encoder Report Error --------------------------------------------
-    _add_sim_err_section_label("Encoder Report Error")
-    sim_err_encoder_mm = _make_sim_err_spin(
-        "sim_err_encoder_mm", "encoder noise (mm):",
-        _sim_error_profile["encoder_noise_mm"], 0.0, 50.0, 2,
+    # Three side-by-side columns: LEFT = OTOS Error + Geometry & Actuation,
+    # MIDDLE = Encoder Report Error, RIGHT = Body-Truth Scrub (069-007 /
+    # architecture-update.md Decision 2).
+    columns_row = QWidget()
+    columns_layout = QHBoxLayout(columns_row)
+    columns_layout.setContentsMargins(0, 0, 0, 0)
+    columns_layout.setSpacing(8)
+
+    col_left = QWidget()
+    col_left_layout = QVBoxLayout(col_left)
+    col_left_layout.setContentsMargins(0, 0, 0, 0)
+    col_left_layout.setSpacing(4)
+    columns_layout.addWidget(col_left)
+
+    col_mid = QWidget()
+    col_mid_layout = QVBoxLayout(col_mid)
+    col_mid_layout.setContentsMargins(0, 0, 0, 0)
+    col_mid_layout.setSpacing(4)
+    columns_layout.addWidget(col_mid)
+
+    col_right = QWidget()
+    col_right_layout = QVBoxLayout(col_right)
+    col_right_layout.setContentsMargins(0, 0, 0, 0)
+    col_right_layout.setSpacing(4)
+    columns_layout.addWidget(col_right)
+
+    # -- LEFT column: OTOS Error --------------------------------------------
+    _add_sim_err_section_label(col_left_layout, "OTOS Error")
+    sim_err_otos_linear = _make_sim_err_spin(
+        col_left_layout, "sim_err_otos_linear", "OTOS linear noise:",
+        _sim_error_profile["otos_linear_noise"], 0.0, 2.0, 3,
     )
-    sim_err_enc_scale_l = _make_sim_err_spin(
-        "sim_err_enc_scale_l", "enc scale err L:",
-        _sim_error_profile["enc_scale_err_l"], -0.5, 0.5, 3,
+    sim_err_otos_yaw = _make_sim_err_spin(
+        col_left_layout, "sim_err_otos_yaw", "OTOS yaw noise:",
+        _sim_error_profile["otos_yaw_noise"], 0.0, 2.0, 3,
     )
-    sim_err_enc_scale_r = _make_sim_err_spin(
-        "sim_err_enc_scale_r", "enc scale err R:",
-        _sim_error_profile["enc_scale_err_r"], -0.5, 0.5, 3,
+    sim_err_otos_lin_scale = _make_sim_err_spin(
+        col_left_layout, "sim_err_otos_lin_scale", "OTOS lin scale err:",
+        _sim_error_profile["otos_lin_scale_err"], -0.5, 0.5, 3,
+    )
+    sim_err_otos_ang_scale = _make_sim_err_spin(
+        col_left_layout, "sim_err_otos_ang_scale", "OTOS ang scale err:",
+        _sim_error_profile["otos_ang_scale_err"], -0.5, 0.5, 3,
+    )
+    sim_err_otos_lin_drift = _make_sim_err_spin(
+        col_left_layout, "sim_err_otos_lin_drift", "OTOS lin drift (mm/s):",
+        _sim_error_profile["otos_lin_drift_mms"], -50.0, 50.0, 2,
+    )
+    sim_err_otos_yaw_drift = _make_sim_err_spin(
+        col_left_layout, "sim_err_otos_yaw_drift", "OTOS yaw drift (deg/s):",
+        _sim_error_profile["otos_yaw_drift_degs"], -30.0, 30.0, 2,
     )
 
-    # -- Body-Truth Scrub --------------------------------------------------
-    _add_sim_err_section_label("Body-Truth Scrub")
-    sim_err_slip_turn = _make_sim_err_spin(
-        "sim_err_slip_turn", "turn slip:",
-        _sim_error_profile["slip_turn_extra"], 0.0, 2.0, 3,
-    )
-    sim_err_body_rot_scrub = _make_sim_err_spin(
-        "sim_err_body_rot_scrub", "body rot scrub:",
-        _sim_error_profile["body_rot_scrub"], 0.0, 1.0, 3,
-    )
-    sim_err_body_lin_scrub = _make_sim_err_spin(
-        "sim_err_body_lin_scrub", "body lin scrub:",
-        _sim_error_profile["body_lin_scrub"], 0.0, 1.0, 3,
-    )
-
-    # -- Geometry & Actuation ----------------------------------------------
-    _add_sim_err_section_label("Geometry & Actuation")
+    # -- LEFT column: Geometry & Actuation -----------------------------------
+    _add_sim_err_section_label(col_left_layout, "Geometry & Actuation")
     sim_err_motor_offset_l = _make_sim_err_spin(
-        "sim_err_motor_offset_l", "motor offset L:",
+        col_left_layout, "sim_err_motor_offset_l", "motor offset L:",
         _sim_error_profile["motor_offset_l"], 0.0, 2.0, 3,
     )
     sim_err_motor_offset_r = _make_sim_err_spin(
-        "sim_err_motor_offset_r", "motor offset R:",
+        col_left_layout, "sim_err_motor_offset_r", "motor offset R:",
         _sim_error_profile["motor_offset_r"], 0.0, 2.0, 3,
     )
     # trackwidth_mm has NO safe zero default (PhysicsWorld::update() divides
@@ -782,36 +805,43 @@ def _build_main_window():  # type: ignore[return]
     # with at construction), not a sentinel. Every Apply unconditionally
     # sends this value; there is no "don't touch" case.
     sim_err_trackwidth = _make_sim_err_spin(
-        "sim_err_trackwidth", "trackwidth (mm):",
+        col_left_layout, "sim_err_trackwidth", "trackwidth (mm):",
         _sim_error_profile["trackwidth_mm"], 10.0, 500.0, 1,
     )
 
-    # -- OTOS Error ----------------------------------------------------------
-    _add_sim_err_section_label("OTOS Error")
-    sim_err_otos_linear = _make_sim_err_spin(
-        "sim_err_otos_linear", "OTOS linear noise:",
-        _sim_error_profile["otos_linear_noise"], 0.0, 2.0, 3,
+    # -- MIDDLE column: Encoder Report Error --------------------------------
+    _add_sim_err_section_label(col_mid_layout, "Encoder Report Error")
+    sim_err_encoder_mm = _make_sim_err_spin(
+        col_mid_layout, "sim_err_encoder_mm", "encoder noise (mm):",
+        _sim_error_profile["encoder_noise_mm"], 0.0, 50.0, 2,
     )
-    sim_err_otos_yaw = _make_sim_err_spin(
-        "sim_err_otos_yaw", "OTOS yaw noise:",
-        _sim_error_profile["otos_yaw_noise"], 0.0, 2.0, 3,
+    sim_err_enc_scale_l = _make_sim_err_spin(
+        col_mid_layout, "sim_err_enc_scale_l", "enc scale err L:",
+        _sim_error_profile["enc_scale_err_l"], -0.5, 0.5, 3,
     )
-    sim_err_otos_lin_scale = _make_sim_err_spin(
-        "sim_err_otos_lin_scale", "OTOS lin scale err:",
-        _sim_error_profile["otos_lin_scale_err"], -0.5, 0.5, 3,
+    sim_err_enc_scale_r = _make_sim_err_spin(
+        col_mid_layout, "sim_err_enc_scale_r", "enc scale err R:",
+        _sim_error_profile["enc_scale_err_r"], -0.5, 0.5, 3,
     )
-    sim_err_otos_ang_scale = _make_sim_err_spin(
-        "sim_err_otos_ang_scale", "OTOS ang scale err:",
-        _sim_error_profile["otos_ang_scale_err"], -0.5, 0.5, 3,
+    col_mid_layout.addStretch()
+
+    # -- RIGHT column: Body-Truth Scrub --------------------------------------
+    _add_sim_err_section_label(col_right_layout, "Body-Truth Scrub")
+    sim_err_slip_turn = _make_sim_err_spin(
+        col_right_layout, "sim_err_slip_turn", "turn slip:",
+        _sim_error_profile["slip_turn_extra"], 0.0, 2.0, 3,
     )
-    sim_err_otos_lin_drift = _make_sim_err_spin(
-        "sim_err_otos_lin_drift", "OTOS lin drift (mm/s):",
-        _sim_error_profile["otos_lin_drift_mms"], -50.0, 50.0, 2,
+    sim_err_body_rot_scrub = _make_sim_err_spin(
+        col_right_layout, "sim_err_body_rot_scrub", "body rot scrub:",
+        _sim_error_profile["body_rot_scrub"], 0.0, 1.0, 3,
     )
-    sim_err_otos_yaw_drift = _make_sim_err_spin(
-        "sim_err_otos_yaw_drift", "OTOS yaw drift (deg/s):",
-        _sim_error_profile["otos_yaw_drift_degs"], -30.0, 30.0, 2,
+    sim_err_body_lin_scrub = _make_sim_err_spin(
+        col_right_layout, "sim_err_body_lin_scrub", "body lin scrub:",
+        _sim_error_profile["body_lin_scrub"], 0.0, 1.0, 3,
     )
+    col_right_layout.addStretch()
+
+    sim_errors_layout.addWidget(columns_row)
 
     sim_errors_apply_btn = QPushButton("Apply")
     sim_errors_apply_btn.setObjectName("sim_errors_apply_btn")
