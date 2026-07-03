@@ -1,5 +1,11 @@
 ---
-status: pending
+status: in-progress
+sprint: '073'
+tickets:
+- 073-001
+- 073-002
+- 073-003
+- 073-004
 ---
 
 # SIM turns miss the commanded angle — coast constant + slip bookkeeping (measured)
