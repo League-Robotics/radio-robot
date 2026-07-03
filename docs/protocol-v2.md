@@ -259,7 +259,7 @@ Examples:
 
 ```
 GET
-CFG ml=0.487 mr=0.481 kff=0.150 klf=1.000 klb=1.000 krf=1.000 krb=1.000 adjThr=0.500 adjGain=0.050 tw=120 pid.kp=300.000 pid.ki=0.000 pid.kd=0.000 pid.max=30.000 turnThr=50 doneTol=5 distScale=0.940 turnScale=1.070 minSpeed=50 sTimeout=500 tick=20 tlmPeriod=0
+CFG ml=0.487 mr=0.481 kff=0.150 klf=1.000 klb=1.000 krf=1.000 krb=1.000 adjThr=0.500 adjGain=0.050 tw=120 pid.kp=300.000 pid.ki=0.000 pid.kd=0.000 pid.max=30.000 distScale=0.940 turnScale=1.070 minSpeed=50 sTimeout=500 tick=20 tlmPeriod=0
 
 GET ml pid.kp
 CFG ml=0.487 pid.kp=300.000
@@ -385,8 +385,6 @@ equivalents they replace.
 | `pid.ki`    | float       | `%.3f`      | `0.000`  | Ratio PID integral gain                 | `KCI`     |
 | `pid.kd`    | float       | `%.3f`      | `0.000`  | Ratio PID derivative gain               | `KCD`     |
 | `pid.max`   | float       | `%.3f`      | `30.000` | Ratio PID output clamp                  | `KCM`     |
-| `turnThr`   | float-as-int| `%d`        | `50`     | Go-to pre-rotate threshold (mm/deg)     | `KGT`     |
-| `doneTol`   | float-as-int| `%d`        | `5`      | Go-to done tolerance (mm)               | `KGD`     |
 | `distScale` | float       | `%.3f`      | `0.940`  | Distance command scale factor           | `KDS`     |
 | `turnScale` | float       | `%.3f`      | `1.070`  | Turn command scale factor               | `KTS`     |
 | `minSpeed`  | int32       | `%d`        | `50`     | Minimum drive speed (mm/s)              | `KMS`     |
@@ -621,7 +619,7 @@ produce bare events with no `#id`.
 |------------------------|-------------------------------------------------------|
 | `EVT done T [#id]`     | Timed drive elapsed                                   |
 | `EVT done D [#id]`     | Distance drive target reached (or 5-second timeout)   |
-| `EVT done G [#id]`     | Go-to arc completed within `doneTol` mm               |
+| `EVT done G [#id]`     | Go-to arc completed within `arriveTol` mm             |
 | `EVT safety_stop [#id]`| S/VW watchdog expired (no `S` or `VW` command within `sTimeout` ms) |
 
 `[#id]` is present only when the originating command carried one.  Example:
@@ -806,8 +804,9 @@ Navigate to the relative XY point `(x, y)` (mm) at the given
 `speed` (mm/s).  The coordinate system is robot-relative: +x is forward,
 +y is left.  Heading is in centi-degrees.
 
-The firmware optionally pre-rotates when the bearing angle exceeds
-`turnThr` mm (default 50), then drives an arc to the target.  The
+The firmware optionally pre-rotates in place when the bearing angle to the
+target exceeds `turnGate` degrees (default 35), then pursues the target and
+completes when within `arriveTol` mm (default 25) of the goal.  The
 `G` verb is unambiguously go-to; the gripper is controlled by `GRIP`.
 
 Coordinate range: −10 000 … +10 000 mm per axis.
@@ -1142,7 +1141,7 @@ A ~200-byte payload tests reassembly in both directions over the relay.
 
 ```
 GET
-CFG ml=0.487 mr=0.481 kff=0.150 klf=1.000 klb=1.000 krf=1.000 krb=1.000 adjThr=0.500 adjGain=0.050 tw=120 pid.kp=300.000 pid.ki=0.000 pid.kd=0.000 pid.max=30.000 turnThr=50 doneTol=5 distScale=0.940 turnScale=1.070 minSpeed=50 sTimeout=500 tick=20 tlmPeriod=0
+CFG ml=0.487 mr=0.481 kff=0.150 klf=1.000 klb=1.000 krf=1.000 krb=1.000 adjThr=0.500 adjGain=0.050 tw=120 pid.kp=300.000 pid.ki=0.000 pid.kd=0.000 pid.max=30.000 distScale=0.940 turnScale=1.070 minSpeed=50 sTimeout=500 tick=20 tlmPeriod=0
 ```
 
 ### SET and Verify

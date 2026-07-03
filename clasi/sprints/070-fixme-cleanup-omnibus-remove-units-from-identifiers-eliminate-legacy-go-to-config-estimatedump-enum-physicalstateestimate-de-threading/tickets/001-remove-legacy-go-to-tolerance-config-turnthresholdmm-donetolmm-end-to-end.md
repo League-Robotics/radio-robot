@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Remove legacy go-to tolerance config (turnThresholdMm/doneTolMm) end-to-end
-status: open
+status: done
 use-cases:
 - SUC-001
 depends-on: []
@@ -31,46 +31,46 @@ for full detail; see `usecases.md` SUC-001 for the acceptance contract.
 
 ## Acceptance Criteria
 
-- [ ] `source/types/Config.h` — the "Go-to tolerances (legacy...)" block
+- [x] `source/types/Config.h` — the "Go-to tolerances (legacy...)" block
       (`turnThresholdMm`, `doneTolMm`, and their FIXME comment, ~lines
       124-126) is deleted.
-- [ ] `source/robot/DefaultConfig.cpp:96-97` — the two default assignments
+- [x] `source/robot/DefaultConfig.cpp:96-97` — the two default assignments
       are deleted.
-- [ ] `source/robot/ConfigRegistry.cpp:66-67` — the `turnThr`/`doneTol`
+- [x] `source/robot/ConfigRegistry.cpp:66-67` — the `turnThr`/`doneTol`
       registry rows are deleted. `SET turnThr=1` / `SET doneTol=1` now reply
       `ERR badkey`; `GET` dumps no longer list either key.
-- [ ] `protos/planner.proto` — `turn_threshold`/`done_tol` fields 10/11 are
+- [x] `protos/planner.proto` — `turn_threshold`/`done_tol` fields 10/11 are
       deleted from `message PlannerConfig`, replaced with `reserved 10, 11;`.
-- [ ] `scripts/gen_messages.py` — the two `("PlannerConfig", "...")` field-map
+- [x] `scripts/gen_messages.py` — the two `("PlannerConfig", "...")` field-map
       rows are deleted; `source/messages/planner.h` is regenerated (drops the
       two fields/getters/setters).
-- [ ] `source/superstructure/PlannerConfig.cpp:39-40` (and `.h`) — the
+- [x] `source/superstructure/PlannerConfig.cpp:39-40` (and `.h`) — the
       `cfg.setTurnThreshold(...)`/`cfg.setDoneTol(...)` forwarding calls and
       any doc-comment mentions of the two fields are deleted.
-- [ ] `source/superstructure/Planner.cpp:643-644` — the planner-side
+- [x] `source/superstructure/Planner.cpp:643-644` — the planner-side
       application of the two fields is deleted.
-- [ ] `tests/_infra/default_config_golden.json` regenerated (drops the two
+- [x] `tests/_infra/default_config_golden.json` regenerated (drops the two
       lines).
-- [ ] `tests/simulation/unit/test_config_registry.py` —
+- [x] `tests/simulation/unit/test_config_registry.py` —
       `test_legacy_turnThr_still_present`/`test_legacy_doneTol_still_present`
       rewritten to assert `ERR badkey` instead of presence; any
       `("turnThr", "float_as_int")`/`("doneTol", ...)` table rows and
       `DEFAULT_GET_LINE`/expected-dump-string fixtures updated to drop the two
       keys; any hardcoded total-key-count test (e.g. `test_full_get_36_keys`)
       renamed/renumbered to the new real count.
-- [ ] `docs/protocol-v2.md` — `turnThr`/`doneTol` removed from the Named Key
+- [x] `docs/protocol-v2.md` — `turnThr`/`doneTol` removed from the Named Key
       Table and the two example `CFG ...` dump lines; the stale `G`-command
       prose (currently describes pre-rotate/done gating in terms of
       `turnThr`/`doneTol`, which have not actually gated `G` since sprint 011
       introduced `turnInPlaceGate`/`arriveTolMm`) corrected to name the fields
       that are actually live.
-- [ ] `docs/design/message-inventory.md` regenerated (drops the two rows).
-- [ ] `docs/overview.md`, `docs/architecture.md` — one-line mentions of
+- [x] `docs/design/message-inventory.md` regenerated (drops the two rows).
+- [x] `docs/overview.md`, `docs/architecture.md` — one-line mentions of
       `doneTol`/`turnThresholdMm`/`doneTolMm` updated to the live equivalents.
-- [ ] `grep -rn "turnThresholdMm\|doneTolMm\|\"turnThr\"\|\"doneTol\""
+- [x] `grep -rn "turnThresholdMm\|doneTolMm\|\"turnThr\"\|\"doneTol\""
       source/` (excluding comments/docs already updated above) returns
       nothing.
-- [ ] Full test suite green; TLM output byte-identical (this ticket touches
+- [x] Full test suite green; TLM output byte-identical (this ticket touches
       no TLM field).
 
 ## Testing

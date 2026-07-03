@@ -92,10 +92,6 @@ RobotConfig defaultRobotConfig() {
     p.velFiltAlpha    = 0.15f;
     p.syncGain        = 1.0f;
 
-    // Legacy go-to tolerances
-    p.turnThresholdMm = 50.0f;
-    p.doneTolMm       = 5.0f;
-
     // Pose-control tunables
     p.aMax            = 300.0f;
     p.aDecel          = 250.0f;

@@ -263,8 +263,6 @@ struct PlannerConfig {
     float yaw_jerk_max = 0.0f;
     float arrive_tol = 0.0f;
     float turn_in_place_gate = 0.0f;
-    float turn_threshold = 0.0f;
-    float done_tol = 0.0f;
     float min_speed = 0.0f;
 
     // --- getters ---
@@ -277,8 +275,6 @@ struct PlannerConfig {
     float get_yaw_jerk_max() const { return yaw_jerk_max; }
     float get_arrive_tol() const { return arrive_tol; }
     float get_turn_in_place_gate() const { return turn_in_place_gate; }
-    float get_turn_threshold() const { return turn_threshold; }
-    float get_done_tol() const { return done_tol; }
     float get_min_speed() const { return min_speed; }
 
     // --- chainable setters (Command/Config only) ---
@@ -291,8 +287,6 @@ struct PlannerConfig {
     PlannerConfig& setYawJerkMax(float v) { yaw_jerk_max = v; return *this; }
     PlannerConfig& setArriveTol(float v) { arrive_tol = v; return *this; }
     PlannerConfig& setTurnInPlaceGate(float v) { turn_in_place_gate = v; return *this; }
-    PlannerConfig& setTurnThreshold(float v) { turn_threshold = v; return *this; }
-    PlannerConfig& setDoneTol(float v) { done_tol = v; return *this; }
     PlannerConfig& setMinSpeed(float v) { min_speed = v; return *this; }
 };
 

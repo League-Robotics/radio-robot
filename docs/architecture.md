@@ -36,7 +36,7 @@ No heap allocation occurs in any layer during normal operation.
 **`Config.h`** — Shared plain-old-data structs with no dependencies.
 - `RobotConfig` — single unified config for all runtime-tunable parameters
   (`mmPerDegL/R`, `kFF`, `kScaleLF/LB/RF/RB`, `ratioPid` gains, adj threshold/gain,
-  `trackwidthMm`, `turnThresholdMm`, `doneTolMm`, timing/speed params).
+  `trackwidthMm`, `turnInPlaceGate`, `arriveTolMm`, timing/speed params).
   Owned by `Robot`; held as `const RobotConfig&` by subsystems.
   `defaultRobotConfig()` is the factory function.
 - `MotorGains` — feed-forward and PI gains for MotorController

@@ -83,9 +83,9 @@ REGISTRY = [
     ("minWheelMms",   "float"),
     ("vWheelMax",     "float"),
     ("steerHeadroom", "float"),
-    # Remaining original keys (legacy, retained for backward compatibility)
-    ("turnThr",       "float_as_int"),
-    ("doneTol",       "float_as_int"),
+    # turnThr and doneTol removed in sprint 070-001 (dead legacy go-to
+    # tolerances — see Config.h git history; SET turnThr=/SET doneTol= now
+    # return ERR badkey).
     # distScale and turnScale removed in sprint 024-006 (were registered but dead)
     ("minSpeed",      "int"),
     ("sTimeout",      "int"),
@@ -116,12 +116,12 @@ REGISTRY_KEYS = [k for k, _ in REGISTRY]
 # Sprint 010-004 adds 6 new velocity/saturation keys; sprint 011-001 adds 4 pose-control keys.
 # Sprint 024-006: distScale and turnScale removed (were registered but dead).
 # Sprint 049-004: pid.kp/ki/kd/max removed (RatioPidController deleted).
-# Total 36 keys.
+# Sprint 070-001: turnThr/doneTol removed (dead legacy go-to tolerances).
+# Total 34 keys.
 DEFAULT_GET_LINE = (
     "CFG ml=0.487 mr=0.481 kff=0.150 klf=1.000 klb=1.000 krf=1.000 krb=1.000 "
     "adjThr=0.500 adjGain=0.050 tw=126 vel.kP=0.300 vel.kI=0.050 vel.kFF=0.150 "
     "minWheelMms=20.000 vWheelMax=400.000 steerHeadroom=20.000 "
-    "turnThr=50 doneTol=5 "
     "minSpeed=50 sTimeout=500 tick=20 tlmPeriod=0 "
     "aMax=300.000 aDecel=250.000 turnGate=45 arriveTol=5 "
     "otosLinSc=1.050 otosAngSc=0.987 rotGainPos=1.000 rotGainNeg=1.170 "
@@ -137,9 +137,9 @@ DEFAULT_GET_LINE = (
 class TestRegistrySpec:
     """Validate the registry spec itself is consistent."""
 
-    def test_all_36_keys_present(self) -> None:
-        """Sprint 049-004: pid.* keys removed, leaving 36 keys."""
-        assert len(REGISTRY) == 36, f"Expected 36 registry entries, got {len(REGISTRY)}"
+    def test_all_34_keys_present(self) -> None:
+        """Sprint 070-001: turnThr/doneTol removed, leaving 34 keys."""
+        assert len(REGISTRY) == 34, f"Expected 34 registry entries, got {len(REGISTRY)}"
 
     def test_key_names_unique(self) -> None:
         keys = [k for k, _ in REGISTRY]
@@ -451,28 +451,34 @@ class TestPoseControlTunables:
         assert kv["arriveTol"] == "10"
         assert is_int_formatted(kv["arriveTol"])
 
-    def test_legacy_turnThr_still_present(self) -> None:
-        """Legacy turnThr key must still be in the registry (backward compat)."""
+    def test_legacy_turnThr_removed(self) -> None:
+        """Sprint 070-001: turnThr removed end-to-end; SET turnThr= now ERR badkey."""
         kv = parse_cfg(DEFAULT_GET_LINE)
-        assert "turnThr" in kv, "Legacy turnThr key missing from GET dump"
+        assert "turnThr" not in kv, "Legacy turnThr key should be gone from GET dump"
+        assert "turnThr" not in REGISTRY_KEYS, "turnThr should not be in the registry"
+        err_line = "ERR badkey turnThr"
+        assert err_line == "ERR badkey turnThr"
 
-    def test_legacy_doneTol_still_present(self) -> None:
-        """Legacy doneTol key must still be in the registry (backward compat)."""
+    def test_legacy_doneTol_removed(self) -> None:
+        """Sprint 070-001: doneTol removed end-to-end; SET doneTol= now ERR badkey."""
         kv = parse_cfg(DEFAULT_GET_LINE)
-        assert "doneTol" in kv, "Legacy doneTol key missing from GET dump"
+        assert "doneTol" not in kv, "Legacy doneTol key should be gone from GET dump"
+        assert "doneTol" not in REGISTRY_KEYS, "doneTol should not be in the registry"
+        err_line = "ERR badkey doneTol"
+        assert err_line == "ERR badkey doneTol"
 
     def test_set_bad_key_still_returns_err(self) -> None:
         """SET badkey=1 still returns ERR badkey badkey (no regression)."""
         err_line = "ERR badkey badkey"
         assert err_line == "ERR badkey badkey"
 
-    def test_full_get_36_keys(self) -> None:
-        """Full GET dump has exactly 36 keys (40 from Sprint 024-006, minus 4 pid.* removed in sprint 049-004)."""
+    def test_full_get_34_keys(self) -> None:
+        """Full GET dump has exactly 34 keys (36 minus turnThr/doneTol removed in sprint 070-001)."""
         kv = parse_cfg(DEFAULT_GET_LINE)
-        assert len(kv) == 36, f"Expected 36 keys in full GET, got {len(kv)}"
+        assert len(kv) == 34, f"Expected 34 keys in full GET, got {len(kv)}"
 
     def test_get_dump_under_768_bytes_with_new_keys(self) -> None:
-        """Confirm the 36-key GET dump fits in the 768-byte firmware buffer (expanded Sprint 012-001)."""
+        """Confirm the 34-key GET dump fits in the 768-byte firmware buffer (expanded Sprint 012-001)."""
         length = len(DEFAULT_GET_LINE.encode("utf-8"))
         assert length < 768, (
             f"GET response is {length} bytes — exceeds 768-byte buffer limit"
@@ -626,11 +632,12 @@ class TestOtosAndTurnAsymmetryKeys:
 
         Sprint 024-006: distScale and turnScale removed → dump shrinks from ~565 to ~533 bytes.
         Sprint 049-004: pid.* keys removed → dump shrinks by ~56 bytes.
+        Sprint 070-001: turnThr/doneTol removed → dump shrinks by ~21 bytes.
         """
         length = len(DEFAULT_GET_LINE.encode("utf-8"))
-        # The 36-key GET dump is ~477 bytes; firmware buffer is 768 bytes.
+        # The 34-key GET dump is ~456 bytes; firmware buffer is 768 bytes.
         assert 440 <= length <= 550, (
-            f"GET dump is {length} bytes — outside expected 440-550 byte range for 36 keys"
+            f"GET dump is {length} bytes — outside expected 440-550 byte range for 34 keys"
         )
         assert length < 768, (
             f"GET dump is {length} bytes — exceeds 768-byte firmware buffer"
