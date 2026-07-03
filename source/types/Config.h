@@ -140,6 +140,21 @@ struct RobotConfig {
     // SET-able like every other RobotConfig field.
     float safetyMargin;    // [mm]
 
+    // distArriveTol / stallConfirm: D-mode terminal-completion guarantee
+    // (Sprint 072-003). The D-mode decel hook (Planner::driveAdvance,
+    // DISTANCE branch) tracks whether the remaining distance to travel has
+    // stopped shrinking (within floating-point noise) while it sits inside
+    // distArriveTol of the target. Once that "no progress" condition
+    // persists for stallConfirm consecutive ms, the drive completes NOW via
+    // MotionCommand::forceComplete(reason=arrive) instead of waiting on the
+    // strict DISTANCE crossing or the multi-second TIME net — the backstop
+    // that makes correctness independent of a stiction-stalled motor ever
+    // reaching the target exactly (architecture-update.md Decision 6). Real
+    // firmware behavior, not sim-only (Decision 4) — SET-able like
+    // safetyMargin. Both follow 071's no-unit-suffix identifier convention.
+    float distArriveTol;   // [mm]
+    float stallConfirm;    // [ms]
+
     // Body motion limits (Sprint 017 — BodyVelocityController).
     // vBodyMax:      body forward speed ceiling, mm/s          (default 400.0)
     // yawRateMax:    yaw rate ceiling, deg/s                   (default 180.0)

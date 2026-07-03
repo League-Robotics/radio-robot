@@ -232,6 +232,14 @@ private:
     // DISTANCE/SAFETY_MARGIN signed convention about what "remaining" means.
     float _dVSign;       // ±1.0 (or 0.0): sign of commanded body v at begin
 
+    // 072-003: D-mode stall-confirm tracking.  Detects "d_remaining is
+    // inside distArriveTol and has stopped shrinking" so a stiction-stalled
+    // drive can force a clean completion instead of waiting on the strict
+    // DISTANCE crossing or the TIME net.  Reset at beginDistance(); updated
+    // every driveAdvance() tick while the DISTANCE decel hook is live.
+    float    _dLastRemaining;  // [mm] d_remaining as of the previous tick
+    uint32_t _dStallSince;     // [ms] timestamp since d_remaining last shrank
+
     // G go-to state machine
     enum class GPhase { IDLE, PRE_ROTATE, PURSUE };
     GPhase  _gPhase;

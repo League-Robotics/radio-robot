@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: D-mode terminal completion guarantee
-status: open
+status: done
 use-cases:
 - SUC-004
 depends-on:
@@ -88,46 +88,46 @@ Decisions 4, 5, and 6; `usecases.md` SUC-004.
 
 ## Acceptance Criteria
 
-- [ ] New `RobotConfig` fields `distArriveTol` (mm) and `stallConfirm`
+- [x] New `RobotConfig` fields `distArriveTol` (mm) and `stallConfirm`
       (ms) added via the standard four-file coordinated edit
       (`source/types/Config.h`, `source/robot/DefaultConfig.cpp`,
       `source/robot/ConfigRegistry.cpp`,
       `data/robots/robot_config.schema.json`), following 071's
       no-unit-suffix identifier convention (unit documented in a comment).
       Both are `SET`/`GET`-able.
-- [ ] The D-mode decel hook floors `v_cap` at `minWheelSpeed` once
+- [x] The D-mode decel hook floors `v_cap` at `minWheelSpeed` once
       `d_remaining` is at or below a final-approach threshold, instead of
       allowing `v_cap` to asymptote toward zero.
-- [ ] The decel hook tracks whether `d_remaining` is inside `distArriveTol`
+- [x] The decel hook tracks whether `d_remaining` is inside `distArriveTol`
       and failing to shrink; once this condition persists for
       `stallConfirm`, the hook calls a new `MotionCommand::forceComplete(reason)`.
-- [ ] `MotionCommand::forceComplete(reason)` is a new public method that
+- [x] `MotionCommand::forceComplete(reason)` is a new public method that
       performs the same SOFT-stop teardown (ramp to (0,0), emit the
       configured `_doneEvtLabel` with the given `reason=` token) a normal
       DISTANCE-fired stop already takes, without requiring a
       `StopCondition` to have fired.
-- [ ] Against ticket 001's stiction plant configured to reproduce the field
+- [x] Against ticket 001's stiction plant configured to reproduce the field
       failure signature (lands 1-3 mm short at near-zero commanded speed),
       a `D 200 200 500` drive completes within `distArriveTol` of 500 mm,
       at rest, with no backward travel and no thrash.
-- [ ] The stiction-plant drive completes well before the TIME net would
+- [x] The stiction-plant drive completes well before the TIME net would
       fire.
-- [ ] `EVT done D` is emitted on both a strict-crossing completion
+- [x] `EVT done D` is emitted on both a strict-crossing completion
       (`reason=dist`, unchanged) and a stalled-short completion (a new,
       additive `reason=` token, e.g. `arrive` or `stall`) — hosts that
       only check for `EVT done D` (ignoring `reason=`) see no behavior
       change.
-- [ ] A `D` drive against the ORIGINAL zero-stiction plant (no `SIMSET`
+- [x] A `D` drive against the ORIGINAL zero-stiction plant (no `SIMSET`
       stiction knobs configured) behaves identically to before this
       sprint — proven, not assumed: a control test demonstrates
       `d_remaining` reaches exactly zero via the strict crossing before
       the stall-confirm window could elapse.
-- [ ] Default values for `distArriveTol`/`stallConfirm` are chosen/tuned
+- [x] Default values for `distArriveTol`/`stallConfirm` are chosen/tuned
       against ticket 001's repro test (architecture-update.md Open
       Question 3 intentionally leaves exact numbers to this ticket,
       informed by the field data: 1-3 mm observed overshoot/undershoot,
       sub-second stall before reversal onset).
-- [ ] Full existing test suite remains green (no regression against the
+- [x] Full existing test suite remains green (no regression against the
       zero-stiction control case).
 
 ## Testing
@@ -179,3 +179,84 @@ stiction-configured and zero-stiction plant, then the full suite.
 **Documentation updates**: `docs/wire-protocol.md` (or equivalent) for the
 new `EVT done D` stalled-short `reason=` token and the two new
 `SET`-able fields.
+
+## Implementation Notes (as-built)
+
+- `forceComplete(reason, now)` takes a `StopCondition::Kind` (not a raw
+  string) so it reuses `mc_reasonToken()`'s existing Kind->token table
+  verbatim. A new tag-only `Kind::ARRIVE` was added purely to carry the
+  `reason=arrive` mapping — it is never installed in a `MotionCommand`'s
+  stop array and `StopCondition::evaluate()`'s `Kind::ARRIVE` case
+  unconditionally returns `false` (kept only so the switch stays
+  exhaustive). `forceComplete()` bypasses the stop-array evaluation loop
+  entirely, setting `_firedKind` directly.
+- The internal SOFT-stop teardown (`_stopping=true`; stamp
+  `_softDeadline`; `bvc->setTarget(0,0)`) was factored into a new private
+  `MotionCommand::beginSoftTeardown(now)` helper, shared by three call
+  sites: `tick()`'s normal-fire SOFT branch, `softStop()`, and
+  `forceComplete()` — per the plan's "do not duplicate that logic"
+  instruction. A new public `stopping()` accessor exposes `_stopping` so
+  Planner's decel hook can detect an in-progress ramp-down.
+- The decel hook's entire `if (d_remaining > 0.0f)` block is additionally
+  gated on `!_activeCmd.stopping()` (not in the original plan text, but
+  required for correctness): `forceComplete()` deliberately fires while
+  `d_remaining` is still `> 0` (that is the definition of "stalled
+  short" — there was no crossing), so without this guard the SAME tick's
+  and every subsequent tick's `setTarget(v_cap, ...)` call would fight the
+  (0,0) ramp `forceComplete()` just armed. The natural DISTANCE-crossing
+  completion path doesn't need this guard (`d_remaining` is already `<= 0`
+  by the time `_stopping` becomes true there), but it's harmless and
+  cheap to apply uniformly.
+- "Failing to shrink" (the decel hook's own stall tracker, not a
+  `StopCondition`) is implemented as: reset a `_dStallSince` timestamp to
+  `now` every tick `d_remaining` decreases by more than a `1.0e-3` mm
+  float-noise epsilon; once `d_remaining` is inside `distArriveTol` AND
+  `now - _dStallSince >= stallConfirm`, call `forceComplete()`. This is a
+  STRUCTURAL guarantee, not a tuning coincidence: as long as the plant
+  makes ANY forward progress each tick (true for every zero-stiction
+  drive, since `v_cap`'s floor keeps commanding >= `minWheelSpeed` while
+  `d_remaining > 0`), the reset fires every tick and the debounce timer
+  can never accumulate — proven directly by
+  `test_stall_confirm_cannot_misfire_while_progress_continues` even under
+  an adversarially large `distArriveTol=100`/`stallConfirm=100000`.
+- Defaults: `distArriveTol=5.0` mm (comfortably covers the repro's
+  measured 1.09 mm undershoot with margin, well inside the field's
+  observed 1-3 mm range) and `stallConfirm=300.0` ms (well under the
+  field-observed 0.3-0.5 s reversal-onset window, so the forced completion
+  beats any windup-driven reversal onset, and far under the ~7 s TIME net
+  for a `D 200 200 500`). Validated empirically: against ticket 001's
+  `stictionPwmL=28 stictionPwmR=28` repro, the drive now completes via
+  `EVT done D reason=arrive` at ~3.8 s (was: stalls ~2.16 s then
+  `reason=time` at ~7 s, still short) with zero backward travel anywhere
+  in the encoder trace.
+- `stallConfirm < 0` is rejected by `validateConfig` (mirrors the
+  `safetyMargin`/`aDecel` pattern) — a negative value would make the
+  debounce fire instantly on the very first tick inside `distArriveTol`,
+  even while the robot is still moving normally. `distArriveTol` is left
+  unvalidated, matching the existing `arriveTolerance` field's precedent
+  (a degenerate value just makes the backstop permanently inert, not
+  unsafe).
+- `gen_default_config.py` was also updated (not explicitly listed in this
+  ticket's file list, but required — same as 072-002's precedent for
+  `safetyMargin`): without it, a real firmware rebuild via `build.py`
+  would regenerate `DefaultConfig.cpp` from the robot JSON + schema and
+  silently zero both new fields (neither is set in `tovez.json`).
+- Collateral fix required to stay green: ticket 001's own repro test
+  (`test_072_001_stiction_d_drive_repro.py::
+  test_stiction_reproduces_d_drive_land_short_stall_signature`) asserted
+  the PRE-003 buggy behavior (`max_stall_ms >= 1500`, `reason=time`) with
+  a comment predicting "ticket 004 later flips this assertion." Since this
+  ticket's fix makes that assertion false immediately (not at some later
+  ticket 004 checkpoint), and ticket 004's own file list does not name
+  this file, the assertions were updated here as the minimal anticipated
+  consequence (071-002's own precedent for touching a pre-existing test
+  file outside its nominal ticket boundary to keep the suite green) — see
+  that file's updated docstring for the full explanation. This ticket's
+  own new file, `test_072_003_terminal_completion_guarantee.py`, carries
+  the comprehensive before/after proof (no reversal/thrash, at rest, well
+  before the TIME net) that ticket 001's file only summarizes.
+- Full suite: 2651 passed, 0 failed (baseline 2646 + 5 new tests in
+  `test_072_003_terminal_completion_guarantee.py`), confirmed on two
+  consecutive runs. `test_default_config_pin.py`'s golden snapshot
+  (`tests/_infra/default_config_golden.json`) updated with the two new
+  keys (`distArriveTol: 5.0`, `stallConfirm: 300.0`).

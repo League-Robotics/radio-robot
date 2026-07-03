@@ -280,6 +280,13 @@ void Planner::beginDistance(float left, float right,
     // and StopCondition's DISTANCE/SAFETY_MARGIN agree about "remaining".
     _dVSign      = (v > 0.0f) ? 1.0f : (v < 0.0f ? -1.0f : 0.0f);
 
+    // 072-003: reset stall-confirm tracking for this new drive.
+    // _dLastRemaining starts at the full target distance (d_remaining at
+    // t=0); _dStallSince is stamped at 'now' so a stall window cannot
+    // appear to have already elapsed before the first decel-hook tick runs.
+    _dLastRemaining = (float)targetDistance;
+    _dStallSince    = now;
+
     // Re-arm safety if SAFE off was issued (one-shot disable, sprint 024-003).
     _checkSafeOneShot(fn, ctx);
 

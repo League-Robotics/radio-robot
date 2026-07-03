@@ -225,6 +225,14 @@ bool StopCondition::evaluate(const HardwareState& s, uint32_t now,
             float signedTraveled = raw * base.vSign;
             return signedTraveled <= -a;
         }
+
+        case Kind::ARRIVE:
+            // Tag-only (072-003): never installed in a MotionCommand's stop
+            // array — MotionCommand::forceComplete() sets this directly as
+            // _firedKind to select the "reason=arrive" token, bypassing the
+            // stop-array evaluation loop entirely. This case exists solely
+            // so the switch remains exhaustive; it is unreachable in practice.
+            return false;
     }
 
     // Unreachable; silence compiler warnings.

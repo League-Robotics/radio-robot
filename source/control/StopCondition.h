@@ -59,6 +59,7 @@ struct MotionBaseline {
 //   POSITION      | target Y mm    | radius mm  | target X mm | —      | —
 //   SENSOR        | threshold      | —          | —           | ch     | GE/LE
 //   SAFETY_MARGIN | margin mm      | —          | —           | —      | —
+//   ARRIVE        | — (tag-only; never installed/evaluated — see enum comment)
 //
 // POSITION param note: `ax` = target X and `a` = target Y; `b` = radius.
 // Although `ax`/`a` (X/Y) seems reversed from convention, it matches the
@@ -76,7 +77,15 @@ struct StopCondition {
         COLOR,         // fires when HSV distance from target <= ax
         LINE_ANY,      // fires when any line[0..3] satisfies threshold/cmp
         ROTATION,      // fires when per-wheel encoder arc (from the differential) >= a
-        SAFETY_MARGIN  // fires when signed travel crosses -a (runaway safety net, D only)
+        SAFETY_MARGIN, // fires when signed travel crosses -a (runaway safety net, D only)
+        // ARRIVE (072-003) is TAG-ONLY: never installed in a MotionCommand's
+        // stop array, never evaluated by evaluate() (see the case in
+        // StopCondition.cpp, which unconditionally returns false).
+        // MotionCommand::forceComplete() sets this as _firedKind purely so
+        // mc_reasonToken() emits "reason=arrive" for a D-mode decel hook's
+        // stalled-short forced completion — see Config.h's distArriveTol/
+        // stallConfirm doc comment and architecture-update.md Decision 6.
+        ARRIVE
     };
     enum class Cmp  : uint8_t { GE, LE };
 

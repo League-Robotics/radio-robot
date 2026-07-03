@@ -13,29 +13,45 @@ test drives a real, scripted `D` command against a plant that can genuinely
 fail to respond to small PWM, exactly the gap architecture-update.md Step 1c
 identifies.
 
-This test is the repro VEHICLE tickets 002/003 are validated against; ticket
-004 later flips its "completes via the TIME safety net, short of target"
-assertion once the signed-DISTANCE-stop (002) and terminal-completion (003)
-fixes land. **The behavior asserted here is the CURRENT, PRE-FIX, KNOWN-BUGGY
-firmware behavior** -- it is deliberately captured, not treated as correct.
+This test is the repro VEHICLE tickets 002/003 are validated against.
 
 Empirically determined (`SIMSET stictionPwmL=28 stictionPwmR=28`, deterministic
 -- the sim has no wall-clock/real-RNG dependency for this scenario, confirmed
-by running twice and diffing byte-for-byte): a scripted `D 200 200 500`
-decelerates normally, then the mean encoder distance sticks at 498.91 mm (1.09
-mm short of the 500 mm target -- squarely inside the field-recorded 1-3 mm
-short range) with both wheel velocities pinned at EXACTLY 0 mm/s for ~2.16 s
-(the velocity controller's PI output settles at a constant PWM below the
-stiction threshold once the ratcheted BVC target enters `minWheelSpeed`'s
-integrator-freeze deadband -- see architecture-update.md Step 1b's root-cause
-chain). `StopCondition::DISTANCE`'s strict `>=` crossing never fires during
-the stall; the command only completes because the generous TIME safety net
-(2x nominal + 2 s) eventually times out (`EVT done D reason=time`), itself
-still 1.09 mm short of the commanded distance. The identical scripted `D`
-command with the stiction knob at its default (0, no-op) completes cleanly
-via `reason=dist` in ~3.3 s with no stall at all -- proving the land-short/
-stall signature is caused BY the configured stiction, not some other
-property of the `D` command.
+by running twice and diffing byte-for-byte): against the ORIGINAL (pre-003)
+control code, a scripted `D 200 200 500` decelerates normally, then the mean
+encoder distance sticks at 498.91 mm (1.09 mm short of the 500 mm target --
+squarely inside the field-recorded 1-3 mm short range) with both wheel
+velocities pinned at EXACTLY 0 mm/s for ~2.16 s (the velocity controller's PI
+output settles at a constant PWM below the stiction threshold once the
+ratcheted BVC target enters `minWheelSpeed`'s integrator-freeze deadband --
+see architecture-update.md Step 1b's root-cause chain). `StopCondition::
+DISTANCE`'s strict `>=` crossing never fires during the stall; the command
+only completes because the generous TIME safety net (2x nominal + 2 s)
+eventually times out (`EVT done D reason=time`), itself still 1.09 mm short
+of the commanded distance. The identical scripted `D` command with the
+stiction knob at its default (0, no-op) completes cleanly via `reason=dist`
+in ~3.3 s with no stall at all -- proving the land-short/stall signature is
+caused BY the configured stiction, not some other property of the `D`
+command.
+
+**072-003 update:** `test_stiction_reproduces_d_drive_land_short_stall_
+signature` below originally asserted the paragraph above's PRE-FIX, KNOWN-
+BUGGY behavior verbatim (stall >= 1.5 s, `reason=time`) as a deliberately-
+captured defect, with a note that ticket 004 would flip the assertion once
+002/003 landed. Ticket 003's terminal-completion guarantee (v_cap floored at
+`minWheelSpeed`; a stalled-short forced completion via `MotionCommand::
+forceComplete()` once `d_remaining` sits inside `distArriveTol` with no
+progress for `stallConfirm` ms) now fires WHILE this same file is still on
+`in-progress` -- leaving the old assertions in place would fail the suite
+immediately, not at some later ticket 004 checkpoint, so ticket 003 updates
+them here as the minimal anticipated consequence (071-002's own precedent for
+touching a pre-existing test file outside its nominal ticket boundary to stay
+green). The stiction gate itself (this ticket's own repro vehicle) and the
+plain no-stiction control case are UNCHANGED below; only the buggy-completion
+assertions are updated to the now-fixed behavior. See ticket 072-003's own
+new test file, `test_072_003_terminal_completion_guarantee.py`, for the full
+before/after comparison and the no-reversal/no-thrash/well-before-TIME-net
+assertions this summary-level update does not repeat.
 """
 from __future__ import annotations
 
@@ -46,7 +62,9 @@ def _drive_and_watch(sim, target_mm: float, total_ms: int, step_ms: int = 24) ->
     the target) and recording how/when the command actually completes.
 
     Returns a dict with:
-      done_reason:  "dist" | "time" | "other:<evts>" | None (never completed)
+      done_reason:  "dist" | "time" | "arrive" | "other:<evts>" | None (never
+                    completed) -- "arrive" is the 072-003 stalled-short
+                    forced-completion token.
       done_avg:     mean (enc_l+enc_r)/2 at the SAME tick the completion EVT
                     fired (captured before any post-completion reset).
       stall_avg:    the mean encoder distance during the longest observed
@@ -85,6 +103,8 @@ def _drive_and_watch(sim, target_mm: float, total_ms: int, step_ms: int = 24) ->
                 done_reason = "dist"
             elif "reason=time" in evts:
                 done_reason = "time"
+            elif "reason=arrive" in evts:
+                done_reason = "arrive"
             else:
                 done_reason = f"other:{evts}"
             break
@@ -126,16 +146,22 @@ def test_baseline_no_stiction_completes_cleanly_no_stall(sim) -> None:
 def test_stiction_reproduces_d_drive_land_short_stall_signature(sim) -> None:
     """Main repro: with `stictionPwmL/R` configured above the PWM the D-mode
     decel hook commands in its final approach, the D drive lands measurably
-    short of the target and stalls -- the exact field failure signature.
+    short of the target -- the exact field failure signature -- but (072-003
+    update) now completes CLEANLY instead of stalling for seconds and timing
+    out.
 
-    CURRENT (pre-002/003) BUGGY BEHAVIOR, asserted deliberately: the
-    DISTANCE stop's strict `>=` crossing never fires during the stall, so
-    the command only completes via the TIME safety net, itself still short
-    of the commanded distance. Ticket 002 (signed DISTANCE stop) and ticket
-    003 (terminal-completion guarantee) are what ticket 004 will validate
-    against a FLIPPED version of the completion-path assertions below --
-    this test's stall-detection assertions (the actual repro) are expected
-    to keep passing since they exercise the same stiction-gated plant.
+    FIXED (072-003) behavior, asserted here: the terminal `v_cap` floor and
+    the stalled-short forced-completion path (`MotionCommand::
+    forceComplete()`, `EVT done D reason=arrive`) mean the drive never
+    accumulates a multi-second stall before completing -- the stall-confirm
+    debounce (default 300 ms) fires once `d_remaining` sits inside
+    `distArriveTol` (default 5 mm) with no progress, well before the
+    generous TIME net (7000 ms for this `D 200 200 500`) would ever have
+    fired. See `test_072_003_terminal_completion_guarantee.py` for the full
+    no-reversal/no-thrash/well-before-TIME-net proof; this test only
+    confirms the stiction gate (this ticket's own repro vehicle) still
+    reproduces the land-short signature and that it no longer stalls/times
+    out to get there.
     """
     reply = sim.send_command("SIMSET stictionPwmL=28 stictionPwmR=28")
     assert reply.upper().startswith("OK"), f"SIMSET rejected: {reply!r}"
@@ -145,28 +171,26 @@ def test_stiction_reproduces_d_drive_land_short_stall_signature(sim) -> None:
 
     result = _drive_and_watch(sim, target_mm=500.0, total_ms=8000)
 
-    # --- The repro: a sustained stall, short of the target. -----------------
-    assert result["max_stall_ms"] >= 1500, (
-        f"expected a sustained (>= 1.5 s) stall at near-zero velocity while "
-        f"still short of the 500 mm target -- the field-recorded "
-        f"'stalls 0.3-0.5 s' signature (this sim repro's stall runs longer "
-        f"since nothing here ever breaks the integrator-freeze deadband via "
-        f"noise/disturbance): {result}"
-    )
-    assert result["stall_avg"] is not None and 480.0 < result["stall_avg"] < 499.9, (
-        f"stall plateau should be measurably SHORT of the 500 mm target "
-        f"(field data: 1-3 mm short) -- got {result}"
+    # --- 072-003 fix: no more sustained (>= 1.5 s) stall. --------------------
+    assert result["max_stall_ms"] < 1000, (
+        f"072-003's stall-confirm debounce (default 300 ms) should force a "
+        f"clean completion long before a multi-second stall could "
+        f"accumulate: {result}"
     )
 
-    # --- Current buggy completion path: TIME net, not a clean crossing. -----
-    assert result["done_reason"] == "time", (
-        f"expected the CURRENT buggy behavior: the DISTANCE stop's strict "
-        f">= crossing never fires during the stall, so completion only "
-        f"happens via the generous TIME safety net -- ticket 002/003 fix "
-        f"this; ticket 004 flips this assertion once they land: {result}"
+    # --- Clean forced completion: reason=arrive, still measurably short of ---
+    # --- the target (the documented, bounded, intentional under-travel). ---
+    assert result["done_reason"] == "arrive", (
+        f"expected the 072-003 stalled-short forced-completion path "
+        f"(reason=arrive), not a TIME-net completion or a strict crossing: "
+        f"{result}"
     )
-    assert result["done_avg"] is not None and result["done_avg"] < 499.9, (
-        f"the TIME-net completion should still land measurably SHORT of the "
-        f"500 mm target -- this IS the 'lands short' defect, not a "
-        f"coincidence of when the timeout happens to fire: {result}"
+    assert result["done_avg"] is not None and 495.0 < result["done_avg"] < 500.0, (
+        f"a forced completion should land measurably short of the 500 mm "
+        f"target (field data: 1-3 mm short) but within distArriveTol "
+        f"(default 5 mm): {result}"
+    )
+    assert result["elapsed_ms"] < 6000, (
+        f"the forced completion should land well before the ~7000 ms TIME "
+        f"net for this D 200 200 500: {result}"
     )

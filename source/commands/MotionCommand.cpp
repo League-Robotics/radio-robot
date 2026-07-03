@@ -214,9 +214,7 @@ bool MotionCommand::tick(const HardwareState& inputs, uint32_t now, float dt_s)
             emitEvt(safetyForced ? "EVT safety_stop" : _doneEvtLabel);
         } else {
             // SOFT: ramp to (0, 0) over up to kSoftDeadline.
-            _stopping     = true;
-            _softDeadline = now + kSoftDeadline;
-            if (_bvc) _bvc->setTarget(0.0f, 0.0f);
+            beginSoftTeardown(now);
         }
     }
 
@@ -260,14 +258,37 @@ void MotionCommand::softStop(uint32_t now)
 
     // Arm SOFT ramp-down: BVC target → (0,0); tick() will emit EVT done
     // once the BVC converges or the 3 s deadline passes.
-    _stopping     = true;
-    _softDeadline = now + kSoftDeadline;
-    if (_bvc) _bvc->setTarget(0.0f, 0.0f);
+    beginSoftTeardown(now);
+}
+
+void MotionCommand::forceComplete(StopCondition::Kind reason, uint32_t now)
+{
+    // No-op if not active or already tearing down (072-003): mirrors
+    // softStop()'s guard exactly — forceComplete is just softStop() with a
+    // reason= token attached, so a stall-confirm re-check on a subsequent
+    // tick (before the ramp-down converges) must not restart the deadline
+    // or clobber whichever reason fired first.
+    if (!_active || _stopping) return;
+
+    // Record the reason so emitEvt's mc_reasonToken lookup appends
+    // "reason=arrive" (or whatever Kind the caller passed) exactly like a
+    // real fired StopCondition would — see tick()'s stopped branch above.
+    _firedKind    = reason;
+    _firedChannel = 0;
+
+    beginSoftTeardown(now);
 }
 
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+
+void MotionCommand::beginSoftTeardown(uint32_t now)
+{
+    _stopping     = true;
+    _softDeadline = now + kSoftDeadline;
+    if (_bvc) _bvc->setTarget(0.0f, 0.0f);
+}
 
 // Map StopCondition::Kind + channel to a reason token string.
 // Returns "" (empty) for NONE — no reason token appended for cancel paths.
@@ -286,6 +307,7 @@ static const char* mc_reasonToken(StopCondition::Kind kind, uint8_t channel)
         case K::LINE_ANY: return "line";
         case K::COLOR:    return "color";
         case K::SAFETY_MARGIN: return "runaway";
+        case K::ARRIVE:        return "arrive";
         case K::SENSOR: {
             // Channel-name table: matches kSensorChannels in MotionCommands.cpp.
             static const char* kNames[12] = {
