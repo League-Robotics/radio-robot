@@ -34,15 +34,15 @@ int HaltController::add(const StopCondition& cond, StopStyle style, const char* 
     if (slen > 0) memcpy(e.str, str, (size_t)slen);
     e.str[slen] = '\0';
 
-    // Initialize the per-entry baseline. For TIME conditions, baseline t0Ms to
-    // now_ms (registration time). For DIST conditions, baseline enc0Mm to the
+    // Initialize the per-entry baseline. For TIME conditions, baseline t0 to
+    // now_ms (registration time). For DIST conditions, baseline enc0 to the
     // current encoder position. All other baseline fields start at zero; HEADING
     // and ROTATION conditions are absolute and do not need a t0/enc0 baseline.
     e.base = {};
     if (cond.kind == StopCondition::Kind::TIME) {
-        e.base.t0Ms = now_ms;
+        e.base.t0 = now_ms;
     } else if (cond.kind == StopCondition::Kind::DISTANCE) {
-        e.base.enc0Mm = enc_avg_mm;
+        e.base.enc0 = enc_avg_mm;
     }
 
     ++_count;
@@ -73,7 +73,7 @@ bool HaltController::remove(uint8_t id)
 }
 
 // ---------------------------------------------------------------------------
-// setTimerBaseline — override t0Ms for all currently-active TIME entries.
+// setTimerBaseline — override t0 for all currently-active TIME entries.
 //
 // Called by ZERO T to re-baseline time conditions to a specific instant.
 // Has no effect on entries added after this call (they get their own baseline
@@ -85,13 +85,13 @@ void HaltController::setTimerBaseline(uint32_t now_ms)
     for (int i = 0; i < _count; ++i) {
         if (_entries[i].active &&
             _entries[i].cond.kind == StopCondition::Kind::TIME) {
-            _entries[i].base.t0Ms = now_ms;
+            _entries[i].base.t0 = now_ms;
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// setDistBaseline — override enc0Mm for all currently-active DIST entries.
+// setDistBaseline — override enc0 for all currently-active DIST entries.
 //
 // Called by ZERO D to re-baseline distance conditions to a specific odometry
 // point. Has no effect on entries added after this call.
@@ -102,7 +102,7 @@ void HaltController::setDistBaseline(float enc_avg_mm)
     for (int i = 0; i < _count; ++i) {
         if (_entries[i].active &&
             _entries[i].cond.kind == StopCondition::Kind::DISTANCE) {
-            _entries[i].base.enc0Mm = enc_avg_mm;
+            _entries[i].base.enc0 = enc_avg_mm;
         }
     }
 }

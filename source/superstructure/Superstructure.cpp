@@ -176,11 +176,11 @@ void Superstructure::evaluateSafety(CommandProcessor& cmd, CommandQueue& queue,
             // beginVelocity()/beginRawVelocity() — the actual, authoritative
             // point of truth for "a velocity target was genuinely
             // refreshed" — so it catches that gap independent of `+`.
-            // _lastVelocityRefreshMs is causally guaranteed non-zero here:
+            // _lastVelocityRefresh is causally guaranteed non-zero here:
             // needsWatchdog can only be true once an open-ended command is
             // active, and no such command becomes active without first
             // calling beginVelocity()/beginRawVelocity().
-            int32_t vwDelta = (int32_t)(now - _planner.lastVelocityRefreshMs());
+            int32_t vwDelta = (int32_t)(now - _planner.lastVelocityRefresh());
             bool stale = (wdDelta > (int32_t)cfg.sTimeout) ||
                          (vwDelta > (int32_t)cfg.sTimeout);
             if (stale) {

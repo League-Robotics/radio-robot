@@ -47,8 +47,8 @@ Planner::Planner(MotorController& mc_ctrl, Odometry& odo,
     , _gTargetYWorld(0.0f)
     , _gSpeed(0.0f)
     , _pursueBacktrackTicks(0)
-    , _lastTickMs(0)
-    , _currentTimeMs(0)
+    , _lastTick(0)
+    , _currentTime(0)
     , _drive(drive)
     , _hw{}
     , _cmds{}
@@ -80,7 +80,7 @@ Planner::Planner(MotorController& mc_ctrl, Odometry& odo,
     target.corrId[0] = '\0';  // consumed
 }
 
-void Planner::stop(uint32_t now_ms, ReplyFn fn, void* ctx)
+void Planner::stop(uint32_t now, ReplyFn fn, void* ctx)
 {
     // Cancel any active MotionCommand before calling fullStop().
     if (_activeCmd.active()) {
@@ -88,16 +88,16 @@ void Planner::stop(uint32_t now_ms, ReplyFn fn, void* ctx)
     }
     _gPhase = GPhase::IDLE;  // reset G phase on hard stop
     fullStop(fn, ctx);
-    (void)now_ms;
+    (void)now;
 }
 
-void Planner::cancel(uint32_t now_ms, ReplyFn fn, void* ctx)
+void Planner::cancel(uint32_t now, ReplyFn fn, void* ctx)
 {
     _activeCmd.cancel(MotionCommand::StopStyle::HARD);
     _mc_ctrl.stop();
     _mode   = DriveMode::IDLE;
     _gPhase = GPhase::IDLE;  // reset G phase on any cancel
-    (void)now_ms;
+    (void)now;
     (void)fn;
     (void)ctx;
 }
@@ -107,12 +107,12 @@ void Planner::disableSafetyOneShot()
     _safeOneShotDisable = true;
 }
 
-void Planner::softStop(uint32_t now_ms)
+void Planner::softStop(uint32_t now)
 {
     if (_activeCmd.active()) {
         // Active MotionCommand: arm its SOFT ramp-down.
         // tick() will advance BVC toward (0,0) and emit EVT done when converged.
-        _activeCmd.softStop(now_ms);
+        _activeCmd.softStop(now);
     } else {
         // No active MotionCommand (STREAMING or IDLE mode): just set BVC target
         // to (0,0) and let the profiler ramp down.  No EVT done in this case.
@@ -138,14 +138,14 @@ void Planner::softStop(uint32_t now_ms)
 // ---------------------------------------------------------------------------
 
 void Planner::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
-                           TargetState& target, uint32_t now_ms)
+                           TargetState& target, uint32_t now)
 {
     // Throttle to controlPeriod cadence.
-    if ((now_ms - _lastTickMs) < (uint32_t)_cfg.controlPeriod) return;
+    if ((now - _lastTick) < (uint32_t)_cfg.controlPeriod) return;
 
-    float dt_s      = (float)(now_ms - _lastTickMs) / 1000.0f;
-    _lastTickMs     = now_ms;
-    _currentTimeMs  = now_ms;
+    float dt_s      = (float)(now - _lastTick) / 1000.0f;
+    _lastTick       = now;
+    _currentTime    = now;
 
     // Motor controller tick and odometry predict are called by Robot::controlCollectSplitPhase()
     // and odometry.predict() before driveAdvance() is reached (014-003/004).
@@ -160,13 +160,13 @@ void Planner::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
         // setTarget BEFORE _activeCmd.tick() so the BVC advances with the
         // updated target this tick.
         if (_mode == DriveMode::GO_TO && _gPhase == GPhase::PURSUE) {
-            float x, y, h_rad;
-            getPoseFloat(x, y, h_rad);
+            float x, y, h;
+            getPoseFloat(x, y, h);
 
             float dxW = _gTargetXWorld - x;
             float dyW = _gTargetYWorld - y;
-            float dx  =  dxW * cosf(h_rad) + dyW * sinf(h_rad);
-            float dy  = -dxW * sinf(h_rad) + dyW * cosf(h_rad);
+            float dx  =  dxW * cosf(h) + dyW * sinf(h);
+            float dy  = -dxW * sinf(h) + dyW * cosf(h);
 
             float d2          = dx * dx + dy * dy;
             float d_remaining = sqrtf(d2);
@@ -185,7 +185,7 @@ void Planner::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
                     // PRE_ROTATE), so emitting "EVT cancelled" for the G's corrId
                     // falsely signals to the host that the G has failed.
                     _activeCmd.cancelQuiet();
-                    _startPreRotate(bearing_rf, _gSpeed, now_ms, target);
+                    _startPreRotate(bearing_rf, _gSpeed, now, target);
                     return;
                 }
             } else {
@@ -231,42 +231,42 @@ void Planner::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
             }
         }
 
-        bool still_running = _activeCmd.tick(inputs, now_ms, dt_s);
+        bool still_running = _activeCmd.tick(inputs, now, dt_s);
         if (!still_running) {
             // MotionCommand terminated.
             //
             // PRE_ROTATE special case (sprint 024-001): when the PRE_ROTATE
             // MotionCommand finishes, check the current bearing.
-            //   - bearing <= gateRad (HEADING stop fired) → transition to PURSUE.
-            //   - bearing >  gateRad (TIME net fired)     → runaway; emit "EVT done G"
+            //   - bearing <= gate (HEADING stop fired) → transition to PURSUE.
+            //   - bearing >  gate (TIME net fired)     → runaway; emit "EVT done G"
             //     and go IDLE so the caller gets a clean terminal event.
             if (_mode == DriveMode::GO_TO && _gPhase == GPhase::PRE_ROTATE) {
-                float x, y, h_rad;
-                getPoseFloat(x, y, h_rad);
+                float x, y, h;
+                getPoseFloat(x, y, h);
                 float dxW   = _gTargetXWorld - x;
                 float dyW   = _gTargetYWorld - y;
-                float dx_rf =  dxW * cosf(h_rad) + dyW * sinf(h_rad);
-                float dy_rf = -dxW * sinf(h_rad) + dyW * cosf(h_rad);
+                float dx_rf =  dxW * cosf(h) + dyW * sinf(h);
+                float dy_rf = -dxW * sinf(h) + dyW * cosf(h);
                 float bearingNow = fabsf(atan2f(dy_rf, dx_rf));
-                float gateRad    = _cfg.turnInPlaceGate * (3.14159265f / 180.0f);
+                float gate       = _cfg.turnInPlaceGate * (3.14159265f / 180.0f);   // [rad]
 
-                if (bearingNow <= gateRad) {
+                if (bearingNow <= gate) {
                     // HEADING stop fired → start the PURSUE phase.
                     // Compute distance for the PURSUE TIME net.
-                    float distanceMm     = sqrtf(dxW * dxW + dyW * dyW);
-                    float pursueSpd      = (_gSpeed > 1.0f) ? _gSpeed : 1.0f;
-                    float pursueTimeoutMs = 2.0f * (distanceMm / pursueSpd) * 1000.0f + 4000.0f;
+                    float distance     = sqrtf(dxW * dxW + dyW * dyW);   // [mm]
+                    float pursueSpd    = (_gSpeed > 1.0f) ? _gSpeed : 1.0f;
+                    float pursueTimeout = 2.0f * (distance / pursueSpd) * 1000.0f + 4000.0f;   // [ms]
 
                     _bvc.reset();
                     _activeCmd.configure(_gSpeed, 0.0f, &_bvc);
                     _activeCmd.addStop(makePositionStop(_gTargetXWorld, _gTargetYWorld,
                                                        _cfg.arriveTolerance));
-                    _activeCmd.addStop(makeTimeStop(pursueTimeoutMs));
+                    _activeCmd.addStop(makeTimeStop(pursueTimeout));
                     _activeCmd.setReplySink(target.replyFn, target.replyCtx, target.corrId);
                     _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
                     _activeCmd.setDoneEvt("EVT done G");
                     const HardwareState& hw = _hwState ? *_hwState : inputs;
-                    _activeCmd.start(hw, now_ms);
+                    _activeCmd.start(hw, now);
                     _gPhase = GPhase::PURSUE;
                     // Do NOT go IDLE; PURSUE is now active.
                     return;
@@ -341,13 +341,13 @@ void Planner::fullStop(ReplyFn fn, void* ctx)
 /**
  * Read the current odometry pose and convert to floating-point values.
  *
- * @param x      Output: x position in mm (float)
- * @param y      Output: y position in mm (float)
- * @param h_rad  Output: heading in radians
+ * @param x  Output: x position in mm (float)
+ * @param y  Output: y position in mm (float)
+ * @param h  Output: heading in radians
  */
-void Planner::getPoseFloat(float& x, float& y, float& h_rad) const {
+void Planner::getPoseFloat(float& x, float& y, float& h) const {
     if (_hwState == nullptr) {
-        x = 0.0f; y = 0.0f; h_rad = 0.0f;
+        x = 0.0f; y = 0.0f; h = 0.0f;
         return;
     }
     int32_t xi, yi, hi;
@@ -357,9 +357,9 @@ void Planner::getPoseFloat(float& x, float& y, float& h_rad) const {
     // 070-003: narrowed to take the one PoseEstimate sub-struct it reads,
     // instead of the whole HardwareState.
     PhysicalStateEstimate::getPose(_hwState->fused, xi, yi, hi);
-    x     = static_cast<float>(xi);
-    y     = static_cast<float>(yi);
-    h_rad = static_cast<float>(hi) * (3.14159265f / 18000.0f);  // cdeg → rad
+    x = static_cast<float>(xi);
+    y = static_cast<float>(yi);
+    h = static_cast<float>(hi) * (3.14159265f / 18000.0f);  // cdeg → rad
 }
 
 // ---------------------------------------------------------------------------
@@ -367,15 +367,15 @@ void Planner::getPoseFloat(float& x, float& y, float& h_rad) const {
 // Dispatches on PlannerCommand::GoalKind → the appropriate begin*() call.
 // ReplyFn is a no-op sink; EVT routing comes via the command bus.
 //
-// now_ms is the caller-supplied real system time at the point apply() is
+// now is the caller-supplied real system time at the point apply() is
 // called (CR-11 fix). It is threaded straight through to every begin*() call,
-// which passes it on to MotionCommand::start() to baseline MotionBaseline.t0Ms.
-// Previously this was a hard-coded local `now = 0`, so t0Ms was always 0 —
-// any TIME stop then computed elapsed = now_ms - 0 = full uptime and fired on
+// which passes it on to MotionCommand::start() to baseline MotionBaseline.t0.
+// Previously this was a hard-coded local `now = 0`, so t0 was always 0 —
+// any TIME stop then computed elapsed = now - 0 = full uptime and fired on
 // the very next tick() once uptime exceeded the stop's duration, instead of
 // after the goal's actual duration had elapsed.
 // ---------------------------------------------------------------------------
-void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now_ms)
+void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now)
 {
     // We stage the command into the Planner immediately on apply() so that the
     // next tick() call finds the planner in the correct state. The begin*()
@@ -390,51 +390,51 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now_ms)
     switch (cmd.goal_kind) {
 
     case msg::PlannerCommand::GoalKind::VELOCITY: {
-        // beginVelocity takes (v_mms, omega_rads).
+        // beginVelocity takes (v, omega).
         float v     = cmd.goal.velocity.v_x;
         float omega = cmd.goal.velocity.omega;
-        beginVelocity(v, omega, now_ms, _target, _noopReply, nullptr, corrId);
+        beginVelocity(v, omega, now, _target, _noopReply, nullptr, corrId);
         break;
     }
 
     case msg::PlannerCommand::GoalKind::GOTO_GOAL: {
-        // beginGoTo takes (tx, ty, speedMms).
+        // beginGoTo takes (tx, ty, speed).
         float tx    = cmd.goal.goto_goal.x;
         float ty    = cmd.goal.goto_goal.y;
         float speed = cmd.goal.goto_goal.speed;
-        beginGoTo(tx, ty, speed, now_ms, _target, _noopReply, nullptr, corrId);
+        beginGoTo(tx, ty, speed, now, _target, _noopReply, nullptr, corrId);
         break;
     }
 
     case msg::PlannerCommand::GoalKind::TURN: {
-        // beginTurn takes (headingCdeg, epsCdeg).
+        // beginTurn takes (heading, eps).
         // TurnGoal.heading → convert to centidegrees.
         static constexpr float RAD_TO_CDEG = 18000.0f / 3.14159265f;
-        float headingCdeg = cmd.goal.turn.heading * RAD_TO_CDEG;
-        float epsCdeg     = 300.0f;  // default 3° tolerance
-        beginTurn(headingCdeg, epsCdeg, now_ms, _target, _noopReply, nullptr, corrId);
+        float heading = cmd.goal.turn.heading * RAD_TO_CDEG;
+        float eps     = 300.0f;  // default 3° tolerance
+        beginTurn(heading, eps, now, _target, _noopReply, nullptr, corrId);
         break;
     }
 
     case msg::PlannerCommand::GoalKind::DISTANCE: {
-        // beginDistance takes (leftMms, rightMms, targetMm).
+        // beginDistance takes (left, right, targetDistance).
         // DistanceGoal: distance_mm, speed_mmps.
         // Convert straight speed to wheel speeds: L=R=speed.
-        float leftMms  = cmd.goal.distance.speed;
-        float rightMms = cmd.goal.distance.speed;
+        float left  = cmd.goal.distance.speed;
+        float right = cmd.goal.distance.speed;
         // Negative distance → reverse both wheel directions.
         if (cmd.goal.distance.distance < 0.0f) {
-            leftMms  = -leftMms;
-            rightMms = -rightMms;
+            left  = -left;
+            right = -right;
         }
-        int32_t targetMm = (int32_t)(cmd.goal.distance.distance);
-        if (targetMm < 0) targetMm = -targetMm;  // beginDistance takes unsigned magnitude
-        beginDistance(leftMms, rightMms, targetMm, now_ms, _target, _noopReply, nullptr, corrId);
+        int32_t targetDistance = (int32_t)(cmd.goal.distance.distance);
+        if (targetDistance < 0) targetDistance = -targetDistance;  // beginDistance takes unsigned magnitude
+        beginDistance(left, right, targetDistance, now, _target, _noopReply, nullptr, corrId);
         break;
     }
 
     case msg::PlannerCommand::GoalKind::TIMED: {
-        // beginTimed takes (leftMms, rightMms, durationMs).
+        // beginTimed takes (left, right, duration).
         // TimedGoal: vx_mmps, omega_rads, duration_ms.
         // Convert body twist to differential wheel speeds via inverse kinematics.
         float vL = 0.0f;
@@ -442,34 +442,34 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now_ms)
         BodyKinematics::inverse(cmd.goal.timed.v_x,
                                 cmd.goal.timed.omega,
                                 _cfg.trackwidth, vL, vR);
-        uint32_t durationMs = cmd.goal.timed.duration;
-        beginTimed(vL, vR, durationMs, now_ms, _target, _noopReply, nullptr, corrId);
+        uint32_t duration = cmd.goal.timed.duration;
+        beginTimed(vL, vR, duration, now, _target, _noopReply, nullptr, corrId);
         break;
     }
 
     case msg::PlannerCommand::GoalKind::ROTATION: {
-        // beginRotation takes (relCdeg).
+        // beginRotation takes (relAngle).
         // RotationGoal: angle_rad.
         static constexpr float RAD_TO_CDEG = 18000.0f / 3.14159265f;
-        float relCdeg = cmd.goal.rotation.angle * RAD_TO_CDEG;
-        beginRotation(relCdeg, now_ms, _target, _noopReply, nullptr, corrId);
+        float relAngle = cmd.goal.rotation.angle * RAD_TO_CDEG;
+        beginRotation(relAngle, now, _target, _noopReply, nullptr, corrId);
         break;
     }
 
     case msg::PlannerCommand::GoalKind::STREAM: {
-        // beginStream takes (leftMms, rightMms).
+        // beginStream takes (left, right).
         // StreamGoal: vx_mmps, vy_mmps (ignored for differential), omega_rads.
         float vL = 0.0f;
         float vR = 0.0f;
         BodyKinematics::inverse(cmd.goal.stream.v_x,
                                 cmd.goal.stream.omega,
                                 _cfg.trackwidth, vL, vR);
-        beginStream(vL, vR, now_ms, _target, _noopReply, nullptr);
+        beginStream(vL, vR, now, _target, _noopReply, nullptr);
         break;
     }
 
     case msg::PlannerCommand::GoalKind::STOP:
-        stop(now_ms, _noopReply, nullptr);
+        stop(now, _noopReply, nullptr);
         break;
 
     case msg::PlannerCommand::GoalKind::NONE:

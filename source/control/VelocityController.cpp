@@ -48,8 +48,8 @@ void VelocityController::_configurePid(float dt_s)
 }
 
 VelocityController::VelocityController(float kFF_, float kP_, float kI_,
-                                         float iMax_, float minWheelMms_, float kAw_)
-    : kFF(kFF_), kP(kP_), kI(kI_), iMax(iMax_), minWheelMms(minWheelMms_),
+                                         float iMax_, float minWheelSpeed_, float kAw_)
+    : kFF(kFF_), kP(kP_), kI(kI_), iMax(iMax_), minWheelSpeed(minWheelSpeed_),
       kAw(kAw_), integral(0.0f)
 {
     _pid.SteadyStateInit(0.0f);
@@ -82,7 +82,7 @@ float VelocityController::update(float setpoint, float measured, float dt_s)
     // Advance integrator via cmon-pid (backcalculation_t::Update handles the
     // anti-windup bleed when PI output exceeds ±iMax).
     // Deadband: don't advance the integrator at very low commanded speed.
-    bool inDeadband = (spAbs < minWheelMms);
+    bool inDeadband = (spAbs < minWheelSpeed);
     if (!inDeadband) {
         // Drive backcalculation_t with the error.  It calls pid_bwe::Update(err)
         // which steps I by B3*err = Ki*dt*err, then applies anti-windup correction

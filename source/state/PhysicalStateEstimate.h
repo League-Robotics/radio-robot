@@ -35,38 +35,44 @@ public:
     // destination; called every tick from Drive::tickUpdate() (matching the
     // pre-070-003 every-tick freshness exactly) so sprint 067's live-SET-
     // reaches-the-estimator guarantee is preserved.
-    void setKinematics(float trackwidthMm, float rotationalSlip);
+    void setKinematics(float trackwidth, float rotationalSlip);
 
     // --- Observations in ---
 
     // Encoder dead-reckoning + EKF predict (= Odometry::predict).
-    // encLeftMm/encRightMm: raw cumulative encoder readings (mm).
+    // encLeft/encRight: raw cumulative encoder readings (mm).
     // encoderOut/fusedOut: caller-owned PoseEstimate slots written in place
     // (e.g. Drive's own _hw.encoder/_hw.fused, or Robot::state.actual's).
-    void addOdometryObservation(float encLeftMm, float encRightMm,
-                                uint32_t now_ms,
+    void addOdometryObservation(float encLeft,       // [mm]
+                                float encRight,       // [mm]
+                                uint32_t now,         // [ms]
                                 PoseEstimate& encoderOut, PoseEstimate& fusedOut);
 
     // OTOS EKF correction (= Odometry::correctEKF).
-    // vy_otos_mmps: OTOS lateral velocity (mm/s); always 0.0f on differential builds.
-    // now_ms: robot system clock (ms); used to stamp opticalOut.stamp (047-002).
-    void addOtosObservation(float x_otos, float y_otos, float theta_otos_rad,
-                            float v_otos_mmps, float omega_otos_rads,
-                            float vy_otos_mmps, uint32_t now_ms,
+    // vyOtos: OTOS lateral velocity (mm/s); always 0.0f on differential builds.
+    // now: robot system clock (ms); used to stamp opticalOut.stamp (047-002).
+    void addOtosObservation(float x_otos, float y_otos, float thetaOtos,   // [rad]
+                            float vOtos,        // [mm/s]
+                            float omegaOtos,    // [rad/s]
+                            float vyOtos,       // [mm/s]
+                            uint32_t now,       // [ms]
                             PoseEstimate& opticalOut, PoseEstimate& fusedOut);
 
     // External camera re-anchor / SI verb (= Odometry::setPose).
-    // encLeftMm/encRightMm: current encoder readings, used to re-baseline the
+    // encLeft/encRight: current encoder readings, used to re-baseline the
     // internal previous-encoder snapshot (see Odometry::setPose).
-    void resetPose(float encLeftMm, float encRightMm,
-                   int32_t x_mm, int32_t y_mm, int32_t h_cdeg,
+    void resetPose(float encLeft,        // [mm]
+                   float encRight,       // [mm]
+                   int32_t x,            // [mm]
+                   int32_t y,            // [mm]
+                   int32_t h,            // [cdeg]
                    PoseEstimate& encoderOut, PoseEstimate& fusedOut);
 
     // Zero the fused pose (= Odometry::zero). Used by the ZERO command
     // (SystemCommands::handleZero) when the pose component is reset.
     // OQ-2 (041-001): added so the ZERO call-site can repoint to estimate in
     // T3 without dangling — robot->odometry.zero() has no other forwarder.
-    void zero(float encLeftMm, float encRightMm,
+    void zero(float encLeft, float encRight,
               PoseEstimate& encoderOut, PoseEstimate& fusedOut);
 
     // --- Belief out ---
@@ -75,7 +81,9 @@ public:
     // PoseEstimate struct this reads (070-003: narrowed from the whole
     // HardwareState).
     static void getPose(const PoseEstimate& fused,
-                        int32_t& x_mm, int32_t& y_mm, int32_t& h_cdeg);
+                        int32_t& x,           // [mm]
+                        int32_t& y,           // [mm]
+                        int32_t& h);          // [cdeg]
 
     // --- Initialisation / wiring ---
     void initEKF(float q_xy, float q_theta, float q_v, float q_omega,

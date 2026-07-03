@@ -2,41 +2,41 @@
 
 PhysicalStateEstimate::PhysicalStateEstimate() {}
 
-void PhysicalStateEstimate::setKinematics(float trackwidthMm, float rotationalSlip) {
-    _odometry.setKinematics(trackwidthMm, rotationalSlip);
+void PhysicalStateEstimate::setKinematics(float trackwidth, float rotationalSlip) {
+    _odometry.setKinematics(trackwidth, rotationalSlip);
 }
 
 void PhysicalStateEstimate::addOdometryObservation(
-        float encLeftMm, float encRightMm, uint32_t now_ms,
+        float encLeft, float encRight, uint32_t now,
         PoseEstimate& encoderOut, PoseEstimate& fusedOut) {
-    _odometry.predict(encLeftMm, encRightMm, now_ms, encoderOut, fusedOut);
+    _odometry.predict(encLeft, encRight, now, encoderOut, fusedOut);
 }
 
 void PhysicalStateEstimate::addOtosObservation(
-        float x_otos, float y_otos, float theta_otos_rad,
-        float v_otos_mmps, float omega_otos_rads,
-        float vy_otos_mmps, uint32_t now_ms,
+        float x_otos, float y_otos, float thetaOtos,
+        float vOtos, float omegaOtos,
+        float vyOtos, uint32_t now,
         PoseEstimate& opticalOut, PoseEstimate& fusedOut) {
-    _odometry.correctEKF(x_otos, y_otos, theta_otos_rad,
-                         v_otos_mmps, omega_otos_rads, vy_otos_mmps, now_ms,
+    _odometry.correctEKF(x_otos, y_otos, thetaOtos,
+                         vOtos, omegaOtos, vyOtos, now,
                          opticalOut, fusedOut);
 }
 
 void PhysicalStateEstimate::resetPose(
-        float encLeftMm, float encRightMm,
-        int32_t x_mm, int32_t y_mm, int32_t h_cdeg,
+        float encLeft, float encRight,
+        int32_t x, int32_t y, int32_t h,
         PoseEstimate& encoderOut, PoseEstimate& fusedOut) {
-    _odometry.setPose(encLeftMm, encRightMm, x_mm, y_mm, h_cdeg, encoderOut, fusedOut);
+    _odometry.setPose(encLeft, encRight, x, y, h, encoderOut, fusedOut);
 }
 
-void PhysicalStateEstimate::zero(float encLeftMm, float encRightMm,
+void PhysicalStateEstimate::zero(float encLeft, float encRight,
         PoseEstimate& encoderOut, PoseEstimate& fusedOut) {
-    _odometry.zero(encLeftMm, encRightMm, encoderOut, fusedOut);
+    _odometry.zero(encLeft, encRight, encoderOut, fusedOut);
 }
 
 void PhysicalStateEstimate::getPose(const PoseEstimate& fused,
-        int32_t& x_mm, int32_t& y_mm, int32_t& h_cdeg) {
-    Odometry::getPose(fused, x_mm, y_mm, h_cdeg);
+        int32_t& x, int32_t& y, int32_t& h) {
+    Odometry::getPose(fused, x, y, h);
 }
 
 void PhysicalStateEstimate::initEKF(

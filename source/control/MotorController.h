@@ -33,21 +33,21 @@ public:
     } gains;
 
     // Set speed targets in mm/s. Zero both to coast (not brake).
-    void setTarget(float leftMms, float rightMms);
+    void setTarget(float left, float right);   // [mm/s]
 
     /**
      * startDriveClean — used by T, D, and G commands.
      * Full clean start: snapshot encoders, compute ratio, reset PID.
      * Always call this when starting a new bounded command.
      */
-    void startDriveClean(float leftMms, float rightMms);
+    void startDriveClean(float left, float right);   // [mm/s]
 
     /**
      * startDrive — used by the S (streaming) command only.
      * Re-seeds cmdEncStart to preserve accumulated ratio history across keepalive re-sends.
      * Does NOT reset PID unless the faster/slower assignment changes.
      */
-    void startDrive(float leftMms, float rightMms);
+    void startDrive(float left, float right);   // [mm/s]
 
     // Stop: zero targets, reset PID, and write zero PWM.
     void stop();
@@ -77,10 +77,11 @@ public:
      * Then runs PID for BOTH wheels using the held inputs.velLMms/velRMms,
      * writes cmds.pwmL/R, and calls Motor::setSpeed().
      *
-     * now_ms: current system time in milliseconds (for per-wheel dt).
+     * now: current system time in milliseconds (for per-wheel dt).
      */
     void controlTick(HardwareState& inputs, MotorCommands& cmds,
-                     uint32_t now_ms, int refreshedWheel);
+                     uint32_t now,          // [ms]
+                     int refreshedWheel);
 
     /**
      * setCommandsRef — bind the authoritative MotorCommands struct so that
@@ -138,7 +139,8 @@ public:
     void getVelocitySourceFlags(bool& leftChip, bool& rightChip) const;
 
     // Read cumulative encoder positions in mm (sum since last resetEncoderAccumulators()).
-    void getEncoderPositions(int32_t& leftMm, int32_t& rightMm) const;
+    void getEncoderPositions(int32_t& left,    // [mm]
+                             int32_t& right) const;   // [mm]
 
     // Zero encoder accumulators — delegates to Motor::resetEncoder() for each wheel.
     void resetEncoderAccumulators();
@@ -146,7 +148,7 @@ public:
     /**
      * isAtRest — true when the drivetrain is genuinely at rest (064-003
      * decision: commanded targets both zero AND measured |velocity| below
-     * kAtRestVelEpsilonMms). Exposes the SAME epsilon/decision computation
+     * kAtRestVelEpsilon). Exposes the SAME epsilon/decision computation
      * resetEncoderAccumulators() uses internally to choose hardware-atomic
      * vs. software-only rebaseline — reused (not duplicated) by Drive's
      * auto-re-prime gate (064-004) so it only attempts a re-prime when a
@@ -176,13 +178,13 @@ private:
 
     // Previous encoder snapshots — intermediate compute state for velocity differentiation.
     // These are NOT robot state (they are algorithm state private to MotorController).
-    float    _prevEncL;   // mm at start of last controlTick for left wheel
-    float    _prevEncR;   // mm at start of last controlTick for right wheel
+    float    _prevEncL;   // [mm] at start of last controlTick for left wheel
+    float    _prevEncR;   // [mm] at start of last controlTick for right wheel
 
     // Per-wheel timing for ZOH velocity computation (014-007).
     // lastUpdMs is 0 until the first valid reading (first-sample guard).
-    uint32_t _prevTimeMsL;  // system time (ms) of last left-wheel collect
-    uint32_t _prevTimeMsR;  // system time (ms) of last right-wheel collect
+    uint32_t _prevTimeL;  // [ms] system time of last left-wheel collect
+    uint32_t _prevTimeR;  // [ms] system time of last right-wheel collect
     bool     _hasTimestampL;
     bool     _hasTimestampR;
 
@@ -191,7 +193,7 @@ private:
     // controlPeriod, so using the nominal value made kI act at ~0.4x strength
     // and never close the steady-state error. Use the measured delta, clamped to
     // a sane window so a stalled tick can't spike the integrator.
-    uint32_t _lastPidMs;     // system time (ms) of last controlTick PID update
+    uint32_t _lastPid;       // [ms] system time of last controlTick PID update
     bool     _hasPidTick;    // false until the first PID tick
 
     // Measured per-wheel velocity snapshot (064-003), refreshed each
@@ -199,8 +201,8 @@ private:
     // velocity update runs. Read by resetEncoderAccumulators() as the
     // measured component of the at-rest decision (hardware atomic re-prime
     // vs. software-only rebaseline) — see architecture-update.md ticket 3.
-    float    _lastVelMmsL;
-    float    _lastVelMmsR;
+    float    _lastVelL;  // [mm/s]
+    float    _lastVelR;  // [mm/s]
 
     // -------------------------------------------------------------------------
     // Encoder-wedge detector (015-003; blind spots removed 064-004)
@@ -249,10 +251,10 @@ private:
     // (064-003/064-004) At-rest decision shared by resetEncoderAccumulators()
     // (chooses hardware-atomic vs. software-only rebaseline) and isAtRest()
     // (Drive's auto-re-prime gate) — one computation, two callers.
-    // kAtRestVelEpsilonMms is a design-time estimate (BENCH-CONFIRM — see
+    // kAtRestVelEpsilon is a design-time estimate (BENCH-CONFIRM — see
     // architecture-update.md "Open Questions"), not yet HITL-validated —
     // same convention as Motor::setSpeed()'s kMaxDeltaPwmPerWrite.
-    static constexpr float kAtRestVelEpsilonMms = 5.0f;
+    static constexpr float kAtRestVelEpsilon = 5.0f;  // [mm/s]
     bool computeAtRest() const;
 
     // clamp helper

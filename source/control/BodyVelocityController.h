@@ -17,7 +17,7 @@ class MotorController;
  *
  * Per-tick ordering invariant (must not be reordered):
  *   1. Trapezoid profile step (approach v and omega under limits).
- *   2. BodyKinematics::inverse(v, omega, trackwidthMm, vL, vR).
+ *   2. BodyKinematics::inverse(v, omega, trackwidth, vL, vR).
  *   3. BodyKinematics::saturate(vL, vR, vWheelMax, steerHeadroom, sL, sR).
  *   4. MotorController::setTarget(sL, sR).
  *
@@ -47,10 +47,10 @@ public:
      *
      * Does not step the profiler; call advance() to ramp toward the new target.
      *
-     * @param v_mms      Desired body forward speed, mm/s (signed; forward > 0).
-     * @param omega_rads Desired yaw rate, rad/s (CCW-positive).
+     * @param v      Desired body forward speed, mm/s (signed; forward > 0).
+     * @param omega  Desired yaw rate, rad/s (CCW-positive).
      */
-    void setTarget(float v_mms, float omega_rads);
+    void setTarget(float v, float omega);   // [mm/s], [rad/s]
 
     /**
      * advance — step the profiler one control tick.
@@ -86,10 +86,10 @@ public:
      * Use when handing off from another mode so the next advance() ramps
      * from the current actual twist rather than from zero (avoids a lurch).
      *
-     * @param v_mms      Current body forward speed, mm/s.
-     * @param omega_rads Current yaw rate, rad/s.
+     * @param v      Current body forward speed, mm/s.
+     * @param omega  Current yaw rate, rad/s.
      */
-    void seedCurrent(float v_mms, float omega_rads);
+    void seedCurrent(float v, float omega);   // [mm/s], [rad/s]
 
     /** currentV — live profiled body forward speed, mm/s. */
     float currentV()     const { return _v; }

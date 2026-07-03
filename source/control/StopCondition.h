@@ -8,10 +8,10 @@
 // Captured by MotionCommand::start(); passed by const-ref to evaluate().
 // ---------------------------------------------------------------------------
 struct MotionBaseline {
-    uint32_t t0Ms;          // system time at command start, ms
-    float    enc0Mm;        // (encLMm + encRMm) * 0.5 at start, mm
-    float    encDiff0Mm;    // (encRMm - encLMm) at start, mm — for ROTATION stop
-    float    heading0Rad;   // pose heading at start, rad
+    uint32_t t0;            // [ms] system time at command start
+    float    enc0;          // [mm] (encL + encR) * 0.5 at start
+    float    encDiff0;      // [mm] (encR - encL) at start — for ROTATION stop
+    float    heading0;      // [rad] pose heading at start
     float    pose0X;        // pose X at start, mm
     float    pose0Y;        // pose Y at start, mm
 };
@@ -39,7 +39,7 @@ struct MotionBaseline {
 // POSITION param note: `ax` = target X and `a` = target Y; `b` = radius.
 // Although `ax`/`a` (X/Y) seems reversed from convention, it matches the
 // architecture field names exactly. Callers should use the named helpers
-// makePositionStop(targetX, targetY, radiusMm) to avoid confusion.
+// makePositionStop(targetX, targetY, radius) to avoid confusion.
 // ---------------------------------------------------------------------------
 struct StopCondition {
     enum class Kind : uint8_t {
@@ -64,12 +64,12 @@ struct StopCondition {
     /**
      * evaluate — test whether this stop condition is satisfied this tick.
      *
-     * @param s       Current hardware state.
-     * @param now_ms  Current system time, ms.
-     * @param base    Motion baseline captured at command start.
-     * @return        true when condition fires (command should terminate).
+     * @param s     Current hardware state.
+     * @param now   Current system time, ms.
+     * @param base  Motion baseline captured at command start.
+     * @return      true when condition fires (command should terminate).
      */
-    bool evaluate(const HardwareState& s, uint32_t now_ms,
+    bool evaluate(const HardwareState& s, uint32_t now,   // [ms]
                   const MotionBaseline& base) const;
 };
 
@@ -77,56 +77,56 @@ struct StopCondition {
 // Factory helpers — create named StopConditions for readability.
 // ---------------------------------------------------------------------------
 
-/** Stop after durationMs milliseconds. */
-inline StopCondition makeTimeStop(float durationMs)
+/** Stop after duration milliseconds. */
+inline StopCondition makeTimeStop(float duration)   // [ms]
 {
     StopCondition c;
     c.kind = StopCondition::Kind::TIME;
-    c.a    = durationMs;
+    c.a    = duration;
     return c;
 }
 
-/** Stop when average encoder travel reaches distanceMm (absolute value). */
-inline StopCondition makeDistanceStop(float distanceMm)
+/** Stop when average encoder travel reaches distance (absolute value). */
+inline StopCondition makeDistanceStop(float distance)   // [mm]
 {
     StopCondition c;
     c.kind = StopCondition::Kind::DISTANCE;
-    c.a    = distanceMm;
+    c.a    = distance;
     return c;
 }
 
-/** Stop when per-wheel encoder arc (|Δ(encR-encL)|/2) reaches arcMm.
+/** Stop when per-wheel encoder arc (|Δ(encR-encL)|/2) reaches arc.
  *  Used by RT / beginRotation for spin-in-place dead reckoning. */
-inline StopCondition makeRotationStop(float arcMm)
+inline StopCondition makeRotationStop(float arc)   // [mm]
 {
     StopCondition c;
     c.kind = StopCondition::Kind::ROTATION;
-    c.a    = arcMm;
+    c.a    = arc;
     return c;
 }
 
-/** Stop when heading reaches headingDeltaRad within epsRad tolerance. */
-inline StopCondition makeHeadingStop(float headingDeltaRad, float epsRad)
+/** Stop when heading reaches headingDelta within eps tolerance. */
+inline StopCondition makeHeadingStop(float headingDelta, float eps)   // [rad], [rad]
 {
     StopCondition c;
     c.kind = StopCondition::Kind::HEADING;
-    c.a    = headingDeltaRad;
-    c.b    = epsRad;
+    c.a    = headingDelta;
+    c.b    = eps;
     return c;
 }
 
 /**
- * Stop when the robot pose is within radiusMm of (targetX, targetY).
+ * Stop when the robot pose is within radius of (targetX, targetY).
  *
  * Named parameters avoid the `ax` = X, `a` = Y ambiguity in raw field access.
  */
-inline StopCondition makePositionStop(float targetX, float targetY, float radiusMm)
+inline StopCondition makePositionStop(float targetX, float targetY, float radius)   // [mm]
 {
     StopCondition c;
     c.kind = StopCondition::Kind::POSITION;
     c.ax   = targetX;   // target X, mm
     c.a    = targetY;   // target Y, mm
-    c.b    = radiusMm;  // arrival radius, mm
+    c.b    = radius;    // arrival radius, mm
     return c;
 }
 

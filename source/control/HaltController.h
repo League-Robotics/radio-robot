@@ -73,11 +73,11 @@ public:
     // list — call fn(msg, ctx) once per active entry with a summary line.
     void list(ReplyFn fn, void* ctx) const;
 
-    // setTimerBaseline — override the t0Ms reference for all active TIME entries.
+    // setTimerBaseline — override the t0 reference for all active TIME entries.
     // Called by ZERO T to re-baseline time conditions to a specific instant.
     void setTimerBaseline(uint32_t now_ms);
 
-    // setDistBaseline — override the enc0Mm reference for all active DIST entries.
+    // setDistBaseline — override the enc0 reference for all active DIST entries.
     // Called by ZERO D to re-baseline distance conditions to a specific odometry point.
     void setDistBaseline(float enc_avg_mm);
 
