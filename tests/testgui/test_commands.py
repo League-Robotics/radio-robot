@@ -368,17 +368,31 @@ class TestTours:
             "D 200 200 500",
         ]
 
-    def test_tour_1_all_steps_are_wire_strings(self):
+    def test_tour_2_sequence(self):
+        from robot_radio.testgui.commands import TOUR_2
+        assert TOUR_2 == [
+            "D 200 200 345",
+            "RT 9000",
+            "D 200 200 240",
+            "RT 9000",
+            "D 200 200 700",
+            "RT 9000",
+            "D 200 200 480",
+            "D 200 200 345",
+        ]
+
+    def test_tour_all_steps_are_wire_strings(self):
         """Every step is a non-empty string beginning with a known verb."""
-        from robot_radio.testgui.commands import TOUR_1
+        from robot_radio.testgui.commands import TOUR_1, TOUR_2
         verbs = {"RT", "D", "TURN"}
-        for step in TOUR_1:
+        for step in [*TOUR_1, *TOUR_2]:
             assert isinstance(step, str) and step
             assert step.split()[0] in verbs
 
-    def test_tours_registry_contains_tour_1(self):
-        from robot_radio.testgui.commands import TOURS, TOUR_1
+    def test_tours_registry_contains_all_tours(self):
+        from robot_radio.testgui.commands import TOURS, TOUR_1, TOUR_2
         assert TOURS["Tour 1"] is TOUR_1
+        assert TOURS["Tour 2"] is TOUR_2
 
 
 # ---------------------------------------------------------------------------

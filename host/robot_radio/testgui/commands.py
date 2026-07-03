@@ -259,9 +259,28 @@ TOUR_1: list[str] = [
     "D 200 200 500",
 ]
 
+# Tour 2 (heading 0 = facing +x after the origin reset): three left (CCW)
+# 90° turns with drives between them; the final leg is two consecutive
+# drives on the same heading (345 mm then stop is implicit — the tour ends
+# when the last bounded move completes).
+#   drive 345 mm → RT +90° → drive 240 mm → RT +90° → drive 700 mm
+#   → RT +90° → drive 480 mm → drive 345 mm
+
+TOUR_2: list[str] = [
+    "D 200 200 345",
+    "RT 9000",
+    "D 200 200 240",
+    "RT 9000",
+    "D 200 200 700",
+    "RT 9000",
+    "D 200 200 480",
+    "D 200 200 345",
+]
+
 #: Named tours available to the GUI (label → ordered wire strings).
 TOURS: dict[str, list[str]] = {
     "Tour 1": TOUR_1,
+    "Tour 2": TOUR_2,
 }
 
 
