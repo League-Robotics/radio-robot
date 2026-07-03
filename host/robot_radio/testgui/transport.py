@@ -876,7 +876,10 @@ class SimTransport(Transport):
 
         Enqueues the command with a ``threading.Event`` and waits for the
         tick-thread to process it.  Timeout is derived from ``read_ms``.
-        Returns an empty string on timeout or when not connected.
+        Returns an empty string on timeout or when not connected.  The
+        reply is logged (and, if it parses as TLM, delivered to
+        on_telemetry) by ``_drain_cmd_queue`` on the tick-thread — the one
+        place both this method and ``send()`` funnel through — not here.
         """
         if not self._connected:
             return ""
@@ -886,10 +889,7 @@ class SimTransport(Transport):
         self._log(f"> {line}")
         timeout_s = max(read_ms / 1000.0, 1.0)
         done_evt.wait(timeout=timeout_s)
-        reply = reply_list[0]
-        if reply:
-            self._log(f"< {reply.strip()}")
-        return reply
+        return reply_list[0]
 
     # ------------------------------------------------------------------
     # Background tick-thread
@@ -961,7 +961,17 @@ class SimTransport(Transport):
             self._sim = None
 
     def _drain_cmd_queue(self, sim: "object") -> None:
-        """Drain all pending commands from the queue and execute them on sim."""
+        """Drain all pending commands from the queue and execute them on sim.
+
+        ``sim.send_command()`` returns its reply synchronously — unlike real
+        hardware, where every wire reply flows through one shared reader
+        regardless of whether the outbound side was ``send()`` (fire-and-
+        forget) or ``command()`` (synchronous).  Logging and TLM-delivery
+        happen here, for both call paths, so a fire-and-forget reply (e.g.
+        ``SNAP``, used by idle-detection) is as visible in the console and
+        reaches ``on_telemetry`` the same as a ``command()`` reply does —
+        previously the fire-and-forget path silently discarded it.
+        """
         # Import Sim type for isinstance check would be circular; use duck-typing.
         try:
             while True:
@@ -981,11 +991,28 @@ class SimTransport(Transport):
                     reply_list[0] = reply
                 if done_evt is not None:
                     done_evt.set()
+                for raw_line in reply.split("\n"):
+                    raw_line = raw_line.strip()
+                    if not raw_line:
+                        continue
+                    self._log(f"< {raw_line}")
+                    frame = parse_tlm(raw_line)
+                    if frame is not None:
+                        self._deliver_tlm(frame)
         except queue.Empty:
             pass
 
     def _drain_async_evts(self, sim: "object") -> None:
-        """Drain accumulated async output and deliver TLM frames."""
+        """Drain accumulated async output, log every line, and deliver TLM frames.
+
+        Mirrors ``_HardwareTransport``'s ``on_recv`` hook, which logs every
+        raw wire line unconditionally.  The background ``STREAM 50`` started
+        in ``connect()`` is what actually feeds the canvas pose trace, and it
+        must be visible in the console like any other traffic — previously
+        only the subset that happened to parse as TLM was even processed, and
+        nothing from this path was ever logged, making the trace's data
+        source invisible.
+        """
         try:
             raw = sim.get_async_evts()  # type: ignore[attr-defined]
         except Exception:
@@ -996,6 +1023,7 @@ class SimTransport(Transport):
             line = line.strip()
             if not line:
                 continue
+            self._log(f"< {line}")
             frame = parse_tlm(line)
             if frame is not None:
                 self._deliver_tlm(frame)

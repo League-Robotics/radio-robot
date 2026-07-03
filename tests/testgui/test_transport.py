@@ -534,6 +534,9 @@ class FakeSim:
         self.last_otos_linear_noise: float | None = None
         self.last_otos_yaw_noise: float | None = None
         self.last_encoder_noise: dict[int, float] = {}
+        # A SNAP reply, unlike real hardware, comes back synchronously as
+        # send_command()'s return value — set this to model that.
+        self.snap_reply: str | None = None
 
     def __enter__(self) -> "FakeSim":
         return self
@@ -545,6 +548,8 @@ class FakeSim:
         self.sent.append(line)
         if line.startswith("STREAM"):
             return "OK stream"
+        if line.strip().upper() == "SNAP" and self.snap_reply is not None:
+            return self.snap_reply
         return "OK"
 
     def get_async_evts(self) -> str:
@@ -1250,6 +1255,45 @@ class TestSimTransportCommands:
         result = t.command("PING")
         assert result == ""
 
+    def test_command_reply_logged_exactly_once(self):
+        """Regression: command()'s reply must not be logged twice.
+
+        command() used to log its own reply directly, and _drain_cmd_queue
+        (the tick-thread) independently logs every reply too (needed so
+        send()'s fire-and-forget replies, e.g. SNAP, are visible) — the
+        combination double-logged every command()-based reply.
+        """
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+        import sys
+
+        fake_sim = FakeSim()
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = True
+        fake_path.parent.parent = str(pathlib.Path("/nonexistent/sim"))
+        fake_fw_module = MagicMock()
+        fake_fw_module.Sim.return_value = fake_sim
+
+        log_lines: list[str] = []
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.dict(sys.modules, {"firmware": fake_fw_module}):
+            t = SimTransport()
+            t.on_log = log_lines.append
+            t.connect()
+
+        try:
+            reply = t.command("PING", read_ms=500)
+        finally:
+            t.disconnect()
+
+        assert reply == "OK"
+        rx_lines = [ln for ln in log_lines if "< OK" in ln]
+        assert len(rx_lines) == 1, f"expected exactly one RX log line, got: {rx_lines}"
+
 
 class TestSimTransportTLMDelivery:
     """TLM lines from get_async_evts() are parsed and delivered to on_telemetry."""
@@ -1297,6 +1341,51 @@ class TestSimTransportTLMDelivery:
         assert frame.t == 12345
         assert frame.enc == (100, 200)
 
+    def test_async_tlm_lines_are_logged(self):
+        """Regression: background-stream TLM lines must reach the console log too.
+
+        This is the traffic that actually drives the canvas pose trace (the
+        tick-thread sends STREAM 50 on connect) — previously it was parsed
+        for on_telemetry but never logged, making its raw content invisible
+        even while it was live and working.
+        """
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+        import sys
+
+        fake_sim = FakeSim()
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = True
+        fake_path.parent.parent = str(pathlib.Path("/nonexistent/sim"))
+        fake_fw_module = MagicMock()
+        fake_fw_module.Sim.return_value = fake_sim
+
+        log_lines: list[str] = []
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.dict(sys.modules, {"firmware": fake_fw_module}):
+            t = SimTransport()
+            t.on_log = log_lines.append
+            t.connect()
+
+        fake_sim.inject_tlm("TLM t=99999 enc=1,2 pose=3,4,5")
+
+        try:
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and not any(
+                "99999" in ln for ln in log_lines
+            ):
+                time.sleep(0.05)
+        finally:
+            t.disconnect()
+
+        assert any("< TLM t=99999" in ln for ln in log_lines), (
+            f"background-stream TLM line was not logged, got: {log_lines}"
+        )
+
     def test_non_tlm_lines_not_delivered(self):
         """EVT lines in get_async_evts() do not trigger on_telemetry."""
         from unittest.mock import patch, MagicMock
@@ -1328,6 +1417,100 @@ class TestSimTransportTLMDelivery:
         t.disconnect()
 
         assert received_frames == [], "EVT line should not produce a TLMFrame"
+
+
+class TestSimTransportSnapDelivery:
+    """Regression: a fire-and-forget SNAP reply must reach on_telemetry and the log.
+
+    Unlike real hardware — where every wire reply flows through one shared
+    reader regardless of send()/command() — sim.send_command() returns its
+    reply synchronously. The fire-and-forget path (SimTransport.send(), used
+    by _TourRunner._wait_for_idle for idle-detection) used to throw that
+    return value away entirely: nothing was parsed, nothing reached
+    on_telemetry, nothing was logged. This was masked in practice by the
+    unrelated background STREAM 50 telemetry keeping state["last_tlm"] fresh
+    anyway — but would break the moment that stream was off.
+    """
+
+    def test_send_snap_reply_reaches_on_telemetry(self):
+        """A frame from send("SNAP") — not just command() — reaches on_telemetry."""
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+        import sys
+
+        fake_sim = FakeSim()
+        fake_sim.snap_reply = "TLM t=500 mode=I enc=10,20 pose=30,40,90"
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = True
+        fake_path.parent.parent = str(pathlib.Path("/nonexistent/sim"))
+        fake_fw_module = MagicMock()
+        fake_fw_module.Sim.return_value = fake_sim
+
+        received_frames: list = []
+        done_evt = threading.Event()
+
+        def _on_tlm(frame):
+            received_frames.append(frame)
+            done_evt.set()
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.dict(sys.modules, {"firmware": fake_fw_module}):
+            t = SimTransport()
+            t.on_telemetry = _on_tlm
+            t.on_log = lambda _: None
+            t.connect()
+
+        try:
+            t.send("SNAP")
+            delivered = done_evt.wait(timeout=2.0)
+        finally:
+            t.disconnect()
+
+        assert delivered, "fire-and-forget SNAP reply was not delivered to on_telemetry"
+        assert received_frames[0].mode == "I"
+
+    def test_send_snap_reply_is_logged(self):
+        """The SNAP reply text is written to the console log, not just parsed."""
+        from unittest.mock import patch, MagicMock
+        from robot_radio.testgui.transport import SimTransport
+        import pathlib
+        import sys
+
+        fake_sim = FakeSim()
+        fake_sim.snap_reply = "TLM t=500 mode=I enc=10,20 pose=30,40,90"
+        fake_path = MagicMock(spec=pathlib.Path)
+        fake_path.exists.return_value = True
+        fake_path.parent.parent = str(pathlib.Path("/nonexistent/sim"))
+        fake_fw_module = MagicMock()
+        fake_fw_module.Sim.return_value = fake_sim
+
+        log_lines: list[str] = []
+
+        with patch(
+            "robot_radio.testgui.transport._sim_lib_path",
+            return_value=fake_path,
+        ), patch.dict(sys.modules, {"firmware": fake_fw_module}):
+            t = SimTransport()
+            t.on_log = log_lines.append
+            t.connect()
+
+        try:
+            t.send("SNAP")
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and not any(
+                "mode=I" in ln for ln in log_lines
+            ):
+                time.sleep(0.05)
+        finally:
+            t.disconnect()
+
+        assert any(
+            ln.strip().startswith("[") and "< TLM" in ln and "mode=I" in ln
+            for ln in log_lines
+        ), f"SNAP reply was not logged as an RX line, got: {log_lines}"
 
 
 class TestSimTransportTruthDelivery:

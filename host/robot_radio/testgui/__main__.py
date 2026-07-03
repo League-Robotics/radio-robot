@@ -548,11 +548,12 @@ def _build_main_window():  # type: ignore[return]
                 for param, getter in zip(spec["params"], getters)
             }
             line = build_wire_string(spec, values)
-            _append_log(f"> {line}", direction="TX")
+            # The transport itself logs both the outbound line and its reply
+            # via on_log (routed through _rx_bridge, which infers TX/RX from
+            # the >/< marker for the recorder) — echoing them here too would
+            # duplicate every line in the console and the recording.
             try:
-                reply = transport.command(line, read_ms=500)
-                if reply:
-                    _append_log(f"< {reply.strip()}", direction="RX")
+                transport.command(line, read_ms=500)
             except Exception as exc:
                 _append_log(f"[ERROR] {exc}")
 
@@ -1011,9 +1012,13 @@ def _build_main_window():  # type: ignore[return]
         answers SNAP reliably.
 
         Signals are marshalled to the Qt main thread via QueuedConnection:
-        ``log_line(text, direction)`` mirrors the manual Send path (direction
-        ``"TX"``/``"RX"`` feeds the recorder; ``""`` is a status line), and
-        ``finished()`` re-enables the button and joins the thread.
+        ``log_line(text, direction)`` carries ``[TOUR]`` status narration
+        (direction ``""``, not recorded) — the raw ``>``/``<`` wire traffic
+        for each step is already logged by the transport itself (see
+        ``_GotoRunner``, which follows the same rule), so this class must not
+        echo it again or every step is duplicated in the console and the
+        session recording.  ``finished()`` re-enables the button and joins
+        the thread.
         """
 
         log_line = Signal(str, str)
@@ -1056,14 +1061,11 @@ def _build_main_window():  # type: ignore[return]
                     self.log_line.emit(
                         f"[TOUR] {self._name} step {i}/{total}: {cmd}", ""
                     )
-                    self.log_line.emit(f"> {cmd}", "TX")
                     try:
-                        reply = self._transport.command(cmd, read_ms=500)
+                        self._transport.command(cmd, read_ms=500)
                     except Exception as exc:  # noqa: BLE001
                         self.log_line.emit(f"[TOUR] error sending {cmd!r}: {exc}", "")
                         return
-                    if reply:
-                        self.log_line.emit(f"< {reply.strip()}", "RX")
                     if not self._wait_for_idle(time):
                         self.log_line.emit(
                             f"[TOUR] timed out waiting for '{cmd}' to complete — "
