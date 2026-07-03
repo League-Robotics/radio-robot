@@ -126,7 +126,9 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
     // ------------------------------------------------------------------
     float trackwidth = _robCfg.trackwidthMm;
     float rotSlip    = _robCfg.rotationalSlip;
-    _est.addOdometryObservation(_hw, trackwidth, rotSlip, now);
+    _est.setKinematics(trackwidth, rotSlip);
+    _est.addOdometryObservation(_hw.encMm[1], _hw.encMm[0], now,
+                                _hw.encoder, _hw.fused);
 
     // ------------------------------------------------------------------
     // STEP 5: OTOS correction (lag-gated, matches LoopTickOnce pattern)
@@ -160,10 +162,10 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
                 BodyTwist vel{};
                 _otos.readVelocityTransformed(vel, headingRad);
                 if (!_otosFusionBlocked) {
-                    _est.addOtosObservation(_hw,
-                                            p.x, p.y, p.h,
+                    _est.addOtosObservation(p.x, p.y, p.h,
                                             vel.v_mmps, vel.omega_rads,
-                                            0.0f, now);
+                                            0.0f, now,
+                                            _hw.optical, _hw.fused);
                 }
                 // 060-004: Mirror Robot::otosCorrect() — mark otos.valid so
                 // buildTlmFrame's N8 freshness gate emits the otos= field.
@@ -324,7 +326,8 @@ msg::CommandBatch Drive::tickAction(uint32_t now)
         int32_t pose_x  = (int32_t)_cmd.control.pose.x;
         int32_t pose_y  = (int32_t)_cmd.control.pose.y;
         int32_t h_cdeg  = (int32_t)(_cmd.control.pose.h * RAD_TO_CDEG);
-        _est.resetPose(_hw, pose_x, pose_y, h_cdeg);
+        _est.resetPose(_hw.encMm[1], _hw.encMm[0], pose_x, pose_y, h_cdeg,
+                       _hw.encoder, _hw.fused);
 
         // Refresh fused estimate into _state immediately (field-by-field copy:
         // ::PoseEstimate and msg::PoseEstimate are distinct C++ types).

@@ -127,7 +127,10 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
     _motionCtx.superstructure = &superstructure;
     _motionCtx.robot          = this;
     _motionCtx.queue          = nullptr;
-    estimate.setCtx(&otos, &state.actual);
+    // 070-003: estimate.setCtx() deleted — it was already a documented no-op
+    // (PhysicalStateEstimate::setCtx forwarded to Odometry::setCtx, which
+    // ignored both parameters). No replacement injection point is needed;
+    // every PhysicalStateEstimate method is now explicit per-call.
     // 041-002: the OTOS command handlers (OI/OZ/OR/OV/OL/OA/OP) moved out of
     // Odometry into the app-layer OtosCommands.  Bind the same IOdometer device
     // and cached HardwareState pointers the handlers previously reached through
@@ -334,9 +337,9 @@ void Robot::otosCorrect(uint32_t now_ms)
     // every tick (033-003), so correctEKF() fuses only the OTOS observations.
     // 047-002: now_ms added so correctEKF can stamp actual.optical.stamp.lastUpdMs.
     // Differential build: vy is always 0.0f (no lateral encoder/OTOS observation).
-    estimate.addOtosObservation(state.actual, p.x, p.y,
-                        p.h,
-                        vel.v_mmps, vel.omega_rads, 0.0f, now_ms);
+    estimate.addOtosObservation(p.x, p.y, p.h,
+                        vel.v_mmps, vel.omega_rads, 0.0f, now_ms,
+                        state.actual.optical, state.actual.fused);
 }
 
 // ---------------------------------------------------------------------------
