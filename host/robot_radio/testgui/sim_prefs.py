@@ -28,8 +28,11 @@ every other key below (see ``PROFILE_TO_SIMSET_KEY``'s docstring).
     (fans out to two wire keys — not in ``PROFILE_TO_SIMSET_KEY``).
 ``slip_turn_extra``
     Fractional encoder over-report during turns (turn-slip scrub model).
-    Default ``0.26`` (the historical ``_SIM_SLIP_TURN_EXTRA`` value). No
-    ``SIMSET`` key (see above).
+    Default ``0.0`` (ticket 073-003 — previously ``0.26``, the historical
+    ``_SIM_SLIP_TURN_EXTRA`` value; combined with a neutral ``body_rot_scrub``
+    it under-rotated turns net ~14% out of the box). No ``SIMSET`` key (see
+    above); see ``resolve_calibration_defaults()`` for the reconciliation
+    this default is now part of.
 ``otos_linear_noise``
     OTOS linear-position noise sigma, as a fraction of arc. Default ``0.05``
     (the historical ``_SIM_OTOS_LINEAR_NOISE`` value). ``SIMSET`` key
@@ -63,6 +66,12 @@ Multiplicative terms — ``1.0`` is the genuine no-op, NOT ``0.0`` (see
 ``body_rot_scrub`` / ``body_lin_scrub``
     Body-truth rotational/linear scrub factor, clamped to ``(0, 1]`` on the
     firmware side. ``SIMSET`` keys ``bodyRotScrub`` / ``bodyLinScrub``.
+    ``DEFAULT_PROFILE["body_rot_scrub"]`` itself stays the neutral ``1.0``
+    (a bare, no-calibration-lookup profile dict must remain a genuine
+    no-op) — but ``load_sim_error_profile()``'s FALLBACK path (no persisted
+    file, or a persisted file missing this key) resolves it from the active
+    robot's calibration via ``resolve_calibration_defaults()`` instead,
+    ticket 073-003.
 ``motor_offset_l`` / ``motor_offset_r``
     Per-side motor actuation offset factor (multiplies commanded velocity).
     ``SIMSET`` keys ``motorOffsetL`` / ``motorOffsetR``.
@@ -87,6 +96,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 _log = logging.getLogger(__name__)
@@ -98,10 +108,18 @@ _PREFS_DIR = _PROJECT_ROOT / "data" / "testgui"
 _PREFS_PATH = _PREFS_DIR / "sim_error_profile.json"
 
 #: Default injected-error profile — matches the historical hardcoded
-#: constants (_SIM_SLIP_TURN_EXTRA=0.26, _SIM_OTOS_LINEAR_NOISE=0.05) plus
-#: the two previously-unused knobs (encoder noise, OTOS yaw noise), both
-#: defaulted to 0.0 so existing behavior is unchanged until an operator
-#: opts in.
+#: constant _SIM_OTOS_LINEAR_NOISE=0.05, plus the two previously-unused
+#: knobs (encoder noise, OTOS yaw noise), both defaulted to 0.0 so existing
+#: behavior for those three fields is unchanged until an operator opts in.
+#:
+#: ``slip_turn_extra`` is the exception: ticket 073-003 changed its default
+#: from the historical ``_SIM_SLIP_TURN_EXTRA=0.26`` to ``0.0``. The
+#: encoder-report-only 0.26 combined with a neutral ``body_rot_scrub`` (see
+#: below) under-rotated turns net ~14% out of the box; reconciling
+#: body_rot_scrub against the active robot's real calibration (see
+#: ``resolve_calibration_defaults()`` and ``load_sim_error_profile()``'s
+#: fallback path) is now the factory default instead of a manual opt-in via
+#: the "From Calibration" button.
 #:
 #: 069-007 extends this with the full SIMSET registry (see the module
 #: docstring's "Keys" section for units/semantics and no-op rationale per
@@ -112,7 +130,8 @@ _PREFS_PATH = _PREFS_DIR / "sim_error_profile.json"
 DEFAULT_PROFILE: dict = {
     # -- historical four --
     "encoder_noise_mm": 0.0,
-    "slip_turn_extra": 0.26,
+    # 073-003: was 0.26 -- see the module-level comment above this dict.
+    "slip_turn_extra": 0.0,
     "otos_linear_noise": 0.05,
     "otos_yaw_noise": 0.0,
     # -- 069-007: additive/noise terms (0.0 = no-op) --
@@ -165,16 +184,111 @@ PROFILE_TO_SIMSET_KEY: dict = {
 }
 
 
+def resolve_calibration_defaults(
+    log: Callable[[str], None] | None = None,
+) -> tuple[float, float]:
+    """Resolve ``(body_rot_scrub, trackwidth_mm)`` from the active robot's
+    calibration.
+
+    Ticket 073-003: factored out of ``__main__.py``'s "From Calibration"
+    button handler (``_on_sim_errors_from_cal()``, ticket 070-004), which
+    this function now backs, mirroring its lookup EXACTLY:
+    ``get_robot_config()`` -> ``cfg.calibration.rotational_slip`` /
+    ``cfg.geometry.trackwidth``, each field independently falling back to
+    its neutral value (``1.0`` for body_rot_scrub;
+    ``DEFAULT_PROFILE["trackwidth_mm"]`` for trackwidth) with a logged
+    ``[WARN]`` when the config, or a specific field on it, is missing.
+    Never raises.
+
+    This is the SHARED resolver behind both the manual "From Calibration"
+    button and ``load_sim_error_profile()``'s factory-default fallback for
+    ``body_rot_scrub`` — a fresh TestGUI install (no persisted profile) now
+    turns the commanded angle out of the box instead of requiring the
+    operator to discover and click the button (Design Rationale Decision 4).
+
+    Args:
+        log: optional sink for the exact ``"[WARN] ..."`` line(s) the
+            original button handler appended to the GUI's log pane
+            (``_append_log``). Every fallback branch always logs via the
+            module logger (``_log.warning``) regardless of ``log`` — this
+            module stays Qt-free; passing a callable (e.g. ``_append_log``)
+            is how a caller opts into ALSO surfacing the same message on a
+            GUI widget without this module importing one.
+    """
+    # Local import (mirrors the original _on_sim_errors_from_cal()'s own
+    # per-call import): re-resolves robot_radio.config.robot_config's
+    # get_robot_config attribute fresh on every call, so a test (or a
+    # future caller) that monkeypatches it at the SOURCE module -- the
+    # existing, established patch point (e.g.
+    # test_sim_errors_from_cal_button.py) -- is honored, rather than a
+    # frozen reference captured once at this module's own import time.
+    from robot_radio.config.robot_config import get_robot_config
+
+    def _warn(msg: str) -> None:
+        _log.warning(msg)
+        if log is not None:
+            log(f"[WARN] {msg}")
+
+    cfg = get_robot_config()
+    if cfg is None:
+        rot_slip = 1.0
+        tw = DEFAULT_PROFILE["trackwidth_mm"]
+        _warn(
+            "From Calibration: no active robot config found — falling back "
+            f"to neutral body_rot_scrub={rot_slip}, trackwidth_mm={tw}"
+        )
+        return rot_slip, tw
+
+    if cfg.calibration.rotational_slip is not None:
+        rot_slip = cfg.calibration.rotational_slip
+    else:
+        rot_slip = 1.0
+        _warn(
+            "From Calibration: active robot config has no "
+            f"calibration.rotational_slip — falling back to neutral "
+            f"body_rot_scrub={rot_slip}"
+        )
+
+    if cfg.geometry.trackwidth is not None:
+        tw = cfg.geometry.trackwidth
+    else:
+        tw = DEFAULT_PROFILE["trackwidth_mm"]
+        _warn(
+            "From Calibration: active robot config has no "
+            f"geometry.trackwidth — falling back to neutral "
+            f"trackwidth_mm={tw}"
+        )
+
+    return rot_slip, tw
+
+
 def load_sim_error_profile() -> dict:
     """Return the persisted sim error profile merged over ``DEFAULT_PROFILE``.
 
     Never raises. Missing file, corrupt JSON, or a non-dict top level all
-    fall back to a copy of ``DEFAULT_PROFILE``. Missing keys are defaulted;
-    unknown keys are ignored; a key present but holding a non-numeric (or
-    otherwise unconvertible) value falls back to that key's default rather
-    than aborting the whole load.
+    fall back to a copy of ``DEFAULT_PROFILE`` whose ``body_rot_scrub`` has
+    ALREADY been replaced (ticket 073-003) by
+    ``resolve_calibration_defaults()``'s reconciled value — the active
+    robot's ``calibration.rotational_slip`` (or the neutral ``1.0``, with a
+    logged fallback, if no active robot config is found). Missing keys are
+    defaulted; unknown keys are ignored; a key present but holding a
+    non-numeric (or otherwise unconvertible) value falls back to that key's
+    default rather than aborting the whole load.
+
+    A persisted file that DOES carry an explicit ``body_rot_scrub`` key
+    (every file ``save_sim_error_profile()`` writes does) always wins over
+    the calibration-resolved value below — an operator's existing saved
+    profile is not silently overridden.
     """
     profile = dict(DEFAULT_PROFILE)
+    # 073-003: the fallback default for body_rot_scrub is now the active
+    # robot's reconciled calibration, not the neutral 1.0 literal in
+    # DEFAULT_PROFILE. Computed unconditionally so it takes effect for a
+    # missing file AND for a persisted file that predates this key (both are
+    # "the fallback path" per this function's contract); the merge loop
+    # below overwrites it again if the persisted file has its own value.
+    profile["body_rot_scrub"], _resolved_tw = resolve_calibration_defaults()
+    del _resolved_tw  # trackwidth_mm's own fallback is unaffected by this ticket.
     try:
         data = json.loads(_PREFS_PATH.read_text())
     except Exception:

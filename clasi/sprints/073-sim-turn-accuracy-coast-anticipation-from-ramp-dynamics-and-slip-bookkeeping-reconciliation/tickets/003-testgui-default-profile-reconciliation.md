@@ -1,12 +1,12 @@
 ---
-id: "003"
-title: "TestGUI default-profile reconciliation"
-status: open
+id: '003'
+title: TestGUI default-profile reconciliation
+status: done
 use-cases:
 - SUC-004
 depends-on:
-- "002"
-github-issue: ""
+- '002'
+github-issue: ''
 issue: sim-turn-undershoot.md
 completes_issue: true
 ---
@@ -47,44 +47,44 @@ SUC-004.
 
 ## Acceptance Criteria
 
-- [ ] `host/robot_radio/testgui/sim_prefs.py` gains a new function (e.g.
+- [x] `host/robot_radio/testgui/sim_prefs.py` gains a new function (e.g.
       `resolve_calibration_defaults() -> tuple[float, float]`, returning
       `(body_rot_scrub, trackwidth_mm)`) that mirrors EXACTLY the lookup
       `_on_sim_errors_from_cal()` performs today: `get_robot_config()` →
       `cfg.calibration.rotational_slip` / `cfg.geometry.trackwidth`, with
       the same WARN-and-neutral-fallback semantics for a missing config or
       missing field.
-- [ ] `sim_prefs.py` remains Qt-free (its own module docstring's existing
+- [x] `sim_prefs.py` remains Qt-free (its own module docstring's existing
       constraint) — the new dependency on
       `robot_radio.config.robot_config.get_robot_config()` is a downward
       dependency on a lower-level, Qt-free config module, introducing no
       import cycle.
-- [ ] `DEFAULT_PROFILE["slip_turn_extra"]` changes from `0.26` to `0.0`.
-- [ ] `load_sim_error_profile()`'s fallback path (no persisted file, or a
+- [x] `DEFAULT_PROFILE["slip_turn_extra"]` changes from `0.26` to `0.0`.
+- [x] `load_sim_error_profile()`'s fallback path (no persisted file, or a
       persisted file missing the `body_rot_scrub` key) calls the new
       resolver for `body_rot_scrub` instead of using the literal `1.0`
       default.
-- [ ] `__main__.py::_on_sim_errors_from_cal()` is refactored to call
+- [x] `__main__.py::_on_sim_errors_from_cal()` is refactored to call
       `sim_prefs.resolve_calibration_defaults()` instead of its own
       inline `get_robot_config()`/fallback logic. Its OBSERVABLE behavior
       (values set, log messages, fallback semantics) is byte-identical
       before and after — confirmed by the ticket's own before/after test
       run of `test_070_004_sim_errors_from_cal.py`.
-- [ ] `load_sim_error_profile()` with no persisted file returns
+- [x] `load_sim_error_profile()` with no persisted file returns
       `body_rot_scrub` matching the active robot's `rotational_slip` (or
       neutral `1.0` with a logged fallback if no active robot config is
       found) and `slip_turn_extra == 0.0`.
-- [ ] `tests/testgui/test_sim_prefs.py`, `test_transport.py`, and
+- [x] `tests/testgui/test_sim_prefs.py`, `test_transport.py`, and
       `test_070_004_sim_errors_from_cal.py` are updated for the new
       `DEFAULT_PROFILE` values — deliberately, with the before (`0.26`/
       `1.0` hardcoded) and after (`0.0`/calibration-resolved) values
       documented in the ticket's implementation notes.
-- [ ] An operator with an EXISTING persisted
+- [x] An operator with an EXISTING persisted
       `data/testgui/sim_error_profile.json` is unaffected until they
       delete it or reset fields and re-Apply — this is a documented
       migration note (Open Questions item 4), not a code change; do not
       write logic that rewrites or migrates existing persisted files.
-- [ ] Full suite (`uv run python -m pytest`) passes at 2655 + this
+- [x] Full suite (`uv run python -m pytest`) passes at 2655 + this
       ticket's net new/changed test count, zero unexplained failures.
 
 ## Testing
@@ -140,3 +140,75 @@ suite.
 **Documentation updates**: none beyond inline docstrings for the new
 `resolve_calibration_defaults()` function; no wire-protocol change (this
 is TestGUI-local, host-side only).
+
+## Implementation Notes
+
+**Before / after values** (test_sim_prefs.py, test_transport.py,
+test_070_004_sim_errors_from_cal.py, and — found only by the ticket's own
+full-suite run, not in the original scope list —
+tests/testgui/test_sim_errors_panel.py, which also hardcoded the historical
+`0.26`):
+
+| Field | Before | After |
+|---|---|---|
+| `DEFAULT_PROFILE["slip_turn_extra"]` | `0.26` (hardcoded) | `0.0` |
+| `DEFAULT_PROFILE["body_rot_scrub"]` (the literal dict constant) | `1.0` | `1.0` — UNCHANGED; a bare `dict(DEFAULT_PROFILE)` copy (e.g. `test_defaults_send_the_documented_noop_simset_string`) must stay a genuine no-op with zero config I/O. |
+| `load_sim_error_profile()`'s fallback `body_rot_scrub` (no persisted file, or a persisted file missing that key) | `1.0` (DEFAULT_PROFILE literal) | `resolve_calibration_defaults()`'s first element — the active robot's `calibration.rotational_slip`, or neutral `1.0` with a logged `[WARN]` if no active robot config is found. |
+| `load_sim_error_profile()`'s fallback `trackwidth_mm` | `128.0` (DEFAULT_PROFILE literal) | UNCHANGED — `128.0` (DEFAULT_PROFILE literal); out of this ticket's scope per the acceptance criteria (only `body_rot_scrub`'s fallback is resolver-backed). |
+
+**`resolve_calibration_defaults(log=None)` signature.** Returns
+`tuple[float, float]` as specified. Added an optional `log:
+Callable[[str], None] | None` parameter so `__main__.py`'s
+`_on_sim_errors_from_cal()` can pass `_append_log` and keep the GUI log
+pane's `"[WARN] From Calibration: ..."` lines byte-identical to before the
+refactor, without `__main__.py` re-deriving `cfg`/field-presence itself
+(the acceptance criteria's "instead of its own inline
+`get_robot_config()`/fallback logic" — with `log` omitted, as
+`load_sim_error_profile()` does, the same `[WARN]` still reaches the module
+logger via `_log.warning()`, just not any GUI widget).
+
+**Patch-point gotcha (found via full-suite run, not anticipated in the
+plan).** `resolve_calibration_defaults()` imports `get_robot_config` with a
+LOCAL import inside the function body (mirroring
+`_on_sim_errors_from_cal()`'s own original per-call local import) rather
+than a module-level `from robot_radio.config.robot_config import
+get_robot_config` in `sim_prefs.py`. A first attempt used the module-level
+form; it broke two pre-existing, out-of-scope test files
+(`test_sim_errors_from_cal_button.py`, `test_sim_errors_from_calibration.py`
+— 5 failures) that monkeypatch `get_robot_config` at its SOURCE module
+(`robot_radio.config.robot_config.get_robot_config`), the established
+project convention — a module-level `from...import` in `sim_prefs.py`
+freezes a reference at `sim_prefs`' own first-import time, which predates
+those tests' monkeypatching and is never updated by it. The local-import
+form re-resolves the name fresh on every call, honoring the patch
+regardless of import order. This ticket's own new tests
+(`TestResolveCalibrationDefaults`, `TestLoadFallbackResolvesBodyRotScrubFromCalibration`,
+and the `get_robot_config`-pinning additions to `TestPersistence`) all
+patch at `robot_radio.config.robot_config.get_robot_config`, consistent
+with this.
+
+**`test_070_004_sim_errors_from_cal.py` refactor.** Beyond the acceptance
+criteria's minimum ("updated for the new `DEFAULT_PROFILE` values"), its
+own `_from_calibration_profile()` helper — which pre-dated this ticket and
+independently re-derived the SAME `rot_slip`/`trackwidth` lookup inline (a
+third copy of the logic, alongside the button and, before this ticket, no
+`load_sim_error_profile()` fallback copy) — was refactored to call
+`sim_prefs.resolve_calibration_defaults()` too, fully realizing Design
+Rationale Decision 4's "one source of truth" for this sprint's own test
+suite, not just production code. The test's actual asserted VALUES are
+unchanged (its explicit `.update()` already overrode every mapped key,
+including `slip_turn_extra` to a literal `0.0`, so `DEFAULT_PROFILE`'s
+`slip_turn_extra` change was invisible to this specific test either way).
+
+**Verification.** `test_sim_prefs.py` (29 tests), `test_transport.py` (61
+tests), `test_070_004_sim_errors_from_cal.py` (1 test, run standalone with
+its module-scoped `pin_calibrated_tovez` fixture pinning `ROBOT_CONFIG` to
+`data/robots/tovez.json` — independent of the shared tree's
+`active_robot.json` drift), `test_sim_errors_from_cal_button.py` (8
+tests) and `test_sim_errors_from_calibration.py` (2 tests) all pass. Full
+`tests/testgui/` tier: 579 passed, 2 pre-existing `xfail(strict=True)`
+(owned by ticket 073-004, unrelated). Full default suite (`uv run python -m
+pytest`, the `tests/simulation/` CI gate): 2667 passed, 1 failed —
+`test_069_rt_90deg_body_scrub.py::test_rt_90deg_identity_no_scrub`, the
+ticket's documented pre-existing baseline failure owned by ticket 073-004,
+left untouched.

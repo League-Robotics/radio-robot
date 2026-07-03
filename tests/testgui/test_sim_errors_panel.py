@@ -110,7 +110,7 @@ class TestSimErrorsPanelExistence:
             yaw_spin = window.findChild(QDoubleSpinBox, "sim_err_otos_yaw")
 
             assert encoder_spin.value() == pytest.approx(0.0)
-            assert slip_spin.value() == pytest.approx(0.26)
+            assert slip_spin.value() == pytest.approx(0.0)  # 073-003: was 0.26
             assert linear_spin.value() == pytest.approx(0.05)
             assert yaw_spin.value() == pytest.approx(0.0)
 

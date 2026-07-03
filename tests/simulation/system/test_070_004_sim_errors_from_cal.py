@@ -34,10 +34,7 @@ if str(_HOST_DIR) not in sys.path:
 
 import pytest  # noqa: E402
 
-from robot_radio.config.robot_config import (  # noqa: E402
-    _reset_robot_config,
-    get_robot_config,
-)
+from robot_radio.config.robot_config import _reset_robot_config  # noqa: E402
 from robot_radio.testgui import sim_prefs  # noqa: E402
 
 
@@ -80,18 +77,16 @@ def _from_calibration_profile() -> dict:
     config or a field is missing, exactly like the handler), merged over
     ``sim_prefs.DEFAULT_PROFILE`` — the noise fields are left at their
     defaults, untouched, matching the button's contract.
+
+    073-003: the lookup/fallback itself is now the SHARED
+    ``sim_prefs.resolve_calibration_defaults()`` resolver (Design Rationale
+    Decision 4) — this test no longer keeps its own third copy of that
+    logic alongside ``__main__.py``'s button handler and
+    ``load_sim_error_profile()``'s factory-default fallback.
     """
     profile = dict(sim_prefs.DEFAULT_PROFILE)
 
-    cfg = get_robot_config()
-    if cfg is not None and cfg.calibration.rotational_slip is not None:
-        rot_slip = cfg.calibration.rotational_slip
-    else:
-        rot_slip = 1.0
-    if cfg is not None and cfg.geometry.trackwidth is not None:
-        trackwidth = cfg.geometry.trackwidth
-    else:
-        trackwidth = sim_prefs.DEFAULT_PROFILE["trackwidth_mm"]
+    rot_slip, trackwidth = sim_prefs.resolve_calibration_defaults()
 
     profile.update(
         {

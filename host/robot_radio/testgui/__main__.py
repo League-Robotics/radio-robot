@@ -838,37 +838,17 @@ def _build_main_window():  # type: ignore[return]
         (sim_err_encoder_mm, sim_err_otos_linear, sim_err_otos_yaw) are never
         touched.
 
-        Missing config / missing calibration fields never crash the panel —
-        they fall back to the neutral value for that knob and log a [WARN].
+        Ticket 073-003: the lookup/fallback (``get_robot_config()`` ->
+        ``cfg.calibration.rotational_slip`` / ``cfg.geometry.trackwidth``,
+        missing config/fields never crash the panel — they fall back to the
+        neutral value for that knob and log a [WARN]) is now delegated to
+        the shared ``sim_prefs.resolve_calibration_defaults()`` resolver
+        (Design Rationale Decision 4), which also backs
+        ``load_sim_error_profile()``'s factory-default fallback so a fresh
+        TestGUI install reconciles calibration out of the box, not only on
+        this button's manual click.
         """
-        cfg = get_robot_config()
-        if cfg is None:
-            rot_slip = 1.0
-            tw = sim_prefs.DEFAULT_PROFILE["trackwidth_mm"]
-            _append_log(
-                "[WARN] From Calibration: no active robot config found — "
-                f"falling back to neutral body_rot_scrub={rot_slip}, "
-                f"trackwidth_mm={tw}"
-            )
-        else:
-            if cfg.calibration.rotational_slip is not None:
-                rot_slip = cfg.calibration.rotational_slip
-            else:
-                rot_slip = 1.0
-                _append_log(
-                    "[WARN] From Calibration: active robot config has no "
-                    f"calibration.rotational_slip — falling back to neutral "
-                    f"body_rot_scrub={rot_slip}"
-                )
-            if cfg.geometry.trackwidth is not None:
-                tw = cfg.geometry.trackwidth
-            else:
-                tw = sim_prefs.DEFAULT_PROFILE["trackwidth_mm"]
-                _append_log(
-                    "[WARN] From Calibration: active robot config has no "
-                    f"geometry.trackwidth — falling back to neutral "
-                    f"trackwidth_mm={tw}"
-                )
+        rot_slip, tw = sim_prefs.resolve_calibration_defaults(log=_append_log)
 
         sim_err_slip_turn.setValue(0.0)
         sim_err_body_rot_scrub.setValue(rot_slip)

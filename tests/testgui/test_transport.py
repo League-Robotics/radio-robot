@@ -1111,13 +1111,20 @@ class TestSimTransportErrorProfile:
     def test_turn_scrub_factor_default_when_no_persisted_file(
         self, monkeypatch, tmp_path
     ):
+        """073-003: DEFAULT_PROFILE["slip_turn_extra"] changed 0.26 -> 0.0 --
+        pin get_robot_config to None so turn_scrub_factor's OTHER 073-003
+        change (body_rot_scrub's calibration-resolved fallback) can't
+        introduce environment-dependent noise into this slip_turn_extra-only
+        assertion."""
+        import robot_radio.config.robot_config as robot_config_module
         from robot_radio.testgui import sim_prefs
         from robot_radio.testgui.transport import SimTransport
 
         monkeypatch.setattr(sim_prefs, "_PREFS_PATH", tmp_path / "missing.json")
+        monkeypatch.setattr(robot_config_module, "get_robot_config", lambda: None)
 
         t = SimTransport()
-        assert t.turn_scrub_factor == 0.26
+        assert t.turn_scrub_factor == 0.0
 
     def test_apply_error_profile_updates_running_sim(self):
         t, fake_sim = self._connected_sim()
@@ -1245,7 +1252,8 @@ class TestApplyProfileToSimSimsetString:
         ]
         # slip_turn_extra retains its separate legacy path -- applied via
         # set_field_profile, never folded into the SIMSET string.
-        assert fake_sim.last_slip_turn_extra == 0.26
+        # 073-003: DEFAULT_PROFILE["slip_turn_extra"] changed 0.26 -> 0.0.
+        assert fake_sim.last_slip_turn_extra == 0.0
         assert fake_sim._field_profile_applied is True
 
     def test_custom_profile_sends_the_exact_simset_string(self):
