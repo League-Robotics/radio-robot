@@ -318,7 +318,7 @@ class TestReadLinesDrains:
         conn._start_reader()
         try:
             # read_lines with a short window — queues are already filled.
-            result = conn.read_lines(duration_ms=100)
+            result = conn.read_lines(duration=100)
             assert set(result) == set(tlm_lines + evt_lines), (
                 f"read_lines returned {result!r}, expected {tlm_lines + evt_lines!r}"
             )
@@ -334,7 +334,7 @@ class TestReadLinesDrains:
 
         conn._start_reader()
         try:
-            result = conn.read_lines(duration_ms=200, stop_token="EVT done")
+            result = conn.read_lines(duration=200, stop_token="EVT done")
             # Must include the stop line; may or may not include later lines.
             assert any("EVT done" in ln for ln in result), (
                 f"stop_token line not in result: {result!r}"
@@ -358,7 +358,7 @@ class TestReadLinesDrains:
                 return orig()
             fake.readline = patched_readline  # type: ignore[method-assign]
 
-            conn.read_lines(duration_ms=50)
+            conn.read_lines(duration=50)
             # readline may be called by the *reader thread*, not by read_lines
             # itself.  What we really verify is that the queued line was
             # returned without read_lines blocking on _ser.
@@ -441,7 +441,7 @@ class TestSendNoResetInputBuffer:
         injector = threading.Thread(target=_inject_reply, daemon=True)
         injector.start()
         try:
-            conn.send("PING", read_ms=200)
+            conn.send("PING", read_timeout=200)
         finally:
             conn._stop_reader()
             injector.join(timeout=1.0)
@@ -463,11 +463,11 @@ class TestConcurrentSendIsolation:
         errors: list[str] = []
 
         def send_a() -> None:
-            r = conn.send("PING", read_ms=500, stop_token="OK pong")
+            r = conn.send("PING", read_timeout=500, stop_token="OK pong")
             results["a"] = r.get("responses", [])
 
         def send_b() -> None:
-            r = conn.send("STATUS", read_ms=500, stop_token="OK status")
+            r = conn.send("STATUS", read_timeout=500, stop_token="OK status")
             results["b"] = r.get("responses", [])
 
         # Start both sends concurrently.

@@ -80,7 +80,7 @@ def _make_mock_conn(
         # side_effect must always return something — avoid IndexError OOM spiral.
         _queue = list(_side)
 
-        def _send_fn(cmd, read_ms=500):  # noqa: ARG001
+        def _send_fn(cmd, read_timeout=500):  # noqa: ARG001
             return _queue.pop(0) if _queue else _last
         conn.send.side_effect = _send_fn
     else:

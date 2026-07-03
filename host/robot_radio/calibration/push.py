@@ -160,6 +160,6 @@ def _push_via_conn(conn: Any, config: Any) -> dict[str, Any]:
     """
     sent: list[str] = []
     for cmd, read_ms in calibration_commands(config):
-        conn.send(cmd, read_ms=read_ms)
+        conn.send(cmd, read_timeout=read_ms)
         sent.append(cmd)
     return {"status": "ok", "commands": sent}

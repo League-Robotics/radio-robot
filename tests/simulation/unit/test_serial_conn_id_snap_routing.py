@@ -168,7 +168,7 @@ class TestIDReplyRouting:
                 "proto=2 caps=otos,line,color,portio #1",
                 delay=0.05,
             )
-            result = conn.send("ID", read_ms=300)
+            result = conn.send("ID", read_timeout=300)
             conn.disconnect()
 
         responses = result.get("responses", [])
@@ -222,7 +222,7 @@ class TestIDReplyRouting:
             # Also inject the real PING reply with the correct corr-id.
             fake.inject_after("ID model=Nezha2 name=tovez fw=0.1 proto=2", delay=0.02)
             fake.inject_after("OK pong t=5 #1", delay=0.04)
-            result = conn.send("PING", read_ms=300)
+            result = conn.send("PING", read_timeout=300)
             conn.disconnect()
 
         # The ID line without corr-id should NOT appear in the PING responses.
@@ -363,7 +363,7 @@ class TestOKReplyRoutingRegression:
             conn.connect()
             # First send() after connect() uses corr-id "#1".
             fake.inject_after("OK pong t=99 #1", delay=0.05)
-            result = conn.send("PING", read_ms=300)
+            result = conn.send("PING", read_timeout=300)
             conn.disconnect()
 
         responses = result.get("responses", [])
@@ -407,7 +407,7 @@ class TestOKReplyRoutingRegression:
 
             # First send() after connect() uses corr-id "#1".
             fake.inject_after("ERR badarg #1", delay=0.05)
-            result = conn.send("BOGUS", read_ms=300)
+            result = conn.send("BOGUS", read_timeout=300)
             conn.disconnect()
 
         responses = result.get("responses", [])
@@ -431,7 +431,7 @@ class TestOKReplyRoutingRegression:
 
             fake.inject_after("ERR unknown #1", delay=0.05)
             fake.inject_after("OK rt rot=9000 #2", delay=0.20)
-            result = conn.send("RT 9000", read_ms=400)
+            result = conn.send("RT 9000", read_timeout=400)
             conn.disconnect()
 
         responses = result.get("responses", [])
@@ -450,7 +450,7 @@ class TestOKReplyRoutingRegression:
 
             # First send() after connect() uses corr-id "#1".
             fake.inject_after("CFG alphaYaw=0 yawRateMax=60 #1", delay=0.05)
-            result = conn.send("GET", read_ms=300)
+            result = conn.send("GET", read_timeout=300)
             conn.disconnect()
 
         responses = result.get("responses", [])
@@ -471,7 +471,7 @@ class TestOKReplyRoutingRegression:
             fake.inject_after(_TLM_LINE, delay=0.02)
             # First send() after connect() uses corr-id "#1".
             fake.inject_after("OK pong t=1 #1", delay=0.05)
-            result = conn.send("PING", read_ms=300)
+            result = conn.send("PING", read_timeout=300)
             conn.disconnect()
 
         responses = result.get("responses", [])
@@ -497,7 +497,7 @@ class TestOKReplyRoutingRegression:
             fake.inject_after("# some relay comment", delay=0.02)
             # First send() after connect() uses corr-id "#1".
             fake.inject_after("OK pong t=2 #1", delay=0.05)
-            result = conn.send("PING", read_ms=300)
+            result = conn.send("PING", read_timeout=300)
             conn.disconnect()
 
         responses = result.get("responses", [])

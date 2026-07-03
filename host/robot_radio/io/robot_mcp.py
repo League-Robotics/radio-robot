@@ -545,7 +545,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
                 _robot.send(cmd, read_ms=300)
                 deadline = time.time() + timeout
                 while time.time() < deadline:
-                    for line in _robot._conn.read_lines(duration_ms=500):
+                    for line in _robot._conn.read_lines(duration=500):
                         if "G+DONE" in line:
                             return {"status": "done", "elapsed_s": round(timeout - (deadline - time.time()), 2)}
                 return {"status": "timeout", "elapsed_s": timeout}

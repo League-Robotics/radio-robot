@@ -130,7 +130,7 @@ def _push_calibration(conn: SerialConnection) -> None:
     Source of truth: data/robots/<robot>.json.
     """
     # ── Step 1: identify robot via v2 ID command ──────────────────────────
-    id_resp = conn.send("ID", read_ms=500)
+    id_resp = conn.send("ID", read_timeout=500)
     id_line: str | None = None
     for raw in id_resp.get("responses", []):
         stripped = raw.strip()
@@ -164,31 +164,31 @@ def _push_calibration(conn: SerialConnection) -> None:
 
     if left_mm_per_deg is not None:
         _log(f"push calibration: SET ml {left_mm_per_deg:.6f}")
-        conn.send(f"SET ml={left_mm_per_deg:.6f}", read_ms=200)
+        conn.send(f"SET ml={left_mm_per_deg:.6f}", read_timeout=200)
     if right_mm_per_deg is not None:
         _log(f"push calibration: SET mr {right_mm_per_deg:.6f}")
-        conn.send(f"SET mr={right_mm_per_deg:.6f}", read_ms=200)
+        conn.send(f"SET mr={right_mm_per_deg:.6f}", read_timeout=200)
 
     geom = getattr(cfg, "geometry", None)
     tw = getattr(geom, "trackwidth", None) if geom else None
     if tw is not None:
         tw_int = int(round(float(tw)))
         _log(f"push calibration: SET tw {tw_int}")
-        conn.send(f"SET tw={tw_int}", read_ms=200)
+        conn.send(f"SET tw={tw_int}", read_timeout=200)
 
     # ── Step 5: OTOS init (must precede scalar writes) ────────────────────
     _log("push calibration: OI (OTOS init)")
-    conn.send("OI", read_ms=500)
+    conn.send("OI", read_timeout=500)
 
     # ── Steps 6–7: OTOS distance and heading scalars ──────────────────────
     lin_int8 = _scale_to_int8(getattr(cfg, "otos_linear_scale", 1.0) or 1.0)
     ang_int8 = _scale_to_int8(getattr(cfg, "otos_angular_scale", 1.0) or 1.0)
     _log(f"push calibration: OL {lin_int8:+d} "
          f"(linear_scale={1.0 + lin_int8 * 0.001:.4f})")
-    conn.send(f"OL {lin_int8}", read_ms=200)
+    conn.send(f"OL {lin_int8}", read_timeout=200)
     _log(f"push calibration: OA {ang_int8:+d} "
          f"(angular_scale={1.0 + ang_int8 * 0.001:.4f})")
-    conn.send(f"OA {ang_int8}", read_ms=200)
+    conn.send(f"OA {ang_int8}", read_timeout=200)
 
     # ── Step 8: OTOS mounting offset via SET keys (skip if all zero) ──────
     off = getattr(geom, "odometry_offset_mm", None) if geom else None
@@ -199,9 +199,9 @@ def _push_calibration(conn: SerialConnection) -> None:
         if ox != 0.0 or oy != 0.0 or oyaw_deg != 0.0:
             _log(f"push calibration: SET odomOffX={ox:.3f} odomOffY={oy:.3f} "
                  f"odomYaw={oyaw_deg:.3f}")
-            conn.send(f"SET odomOffX={ox:.3f}", read_ms=200)
-            conn.send(f"SET odomOffY={oy:.3f}", read_ms=200)
-            conn.send(f"SET odomYaw={oyaw_deg:.3f}", read_ms=200)
+            conn.send(f"SET odomOffX={ox:.3f}", read_timeout=200)
+            conn.send(f"SET odomOffY={oy:.3f}", read_timeout=200)
+            conn.send(f"SET odomYaw={oyaw_deg:.3f}", read_timeout=200)
         else:
             _log("push calibration: odom offsets all zero — skipping SET odomOff*")
 
@@ -225,7 +225,7 @@ def _push_calibration(conn: SerialConnection) -> None:
         for key, val in ctrl_sets:
             if val is not None:
                 _log(f"push calibration: SET {key}={val:g}")
-                conn.send(f"SET {key}={val:g}", read_ms=200)
+                conn.send(f"SET {key}={val:g}", read_timeout=200)
 
     # ── Step 10: schema-driven push of the remaining firmware-mapped values ──
     # Bucket B fix: rotation calibration (rotGain*/rotOff*/rotSlip) and the turn
@@ -262,7 +262,7 @@ def _push_calibration(conn: SerialConnection) -> None:
                            if fw.get("kind") in ("int", "float_as_int")
                            else f"{float(val):g}")
                 _log(f"push calibration: SET {fw['set_key']}={literal}")
-                conn.send(f"SET {fw['set_key']}={literal}", read_ms=200)
+                conn.send(f"SET {fw['set_key']}={literal}", read_timeout=200)
 
 
 def cmd_sync_pose(args):
@@ -734,7 +734,7 @@ def cmd_drive(args):
         _log("sending STOP")
         robot.stop()
         _log("waiting for motors to stop")
-        lines = conn.read_lines(duration_ms=500)
+        lines = conn.read_lines(duration=500)
         for line in lines:
             _log(f"RX: {line}")
         _log("disconnecting")
@@ -750,7 +750,7 @@ def cmd_drive(args):
         robot.stop()
         _log("waiting for motors to stop")
         # Give firmware time to process STOP and confirm
-        lines = conn.read_lines(duration_ms=500)
+        lines = conn.read_lines(duration=500)
         for line in lines:
             _log(f"RX: {line}")
         _log("disconnecting")
@@ -1240,7 +1240,7 @@ def _snap_tlm(conn: SerialConnection):
     # first, the TLM after) and is sometimes dropped entirely. Read a generous
     # window and RETRY a few times until a frame with data arrives.
     for _attempt in range(4):
-        result = conn.send("SNAP", read_ms=700)
+        result = conn.send("SNAP", read_timeout=700)
         for raw in result.get("responses", []):
             frame = _parse_tlm(raw)
             if frame is None and "TLM" in raw:

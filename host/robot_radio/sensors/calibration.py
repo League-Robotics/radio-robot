@@ -112,11 +112,11 @@ def apply(conn: SerialConnection, cal: dict[str, Any],
     # Check current firmware state so we can skip redundant setters.
     current: dict[str, int] = {}
     for attempt in range(3):
-        resp = conn.send("K", read_ms=600)
+        resp = conn.send("K", read_timeout=600)
         current = _parse_cal_response(resp.get("responses", []))
         if current:
             break
-        conn.read_lines(duration_ms=250)
+        conn.read_lines(duration=250)
     if log:
         print(f"calibration: current firmware state = {current}")
 
@@ -133,7 +133,7 @@ def apply(conn: SerialConnection, cal: dict[str, Any],
         if log:
             print(f"  → {wire}")
         conn.send_fast(wire)
-        conn.read_lines(duration_ms=settle_ms)
+        conn.read_lines(duration=settle_ms)
 
     if not verify:
         return {}
@@ -152,7 +152,7 @@ def apply(conn: SerialConnection, cal: dict[str, Any],
     reported: dict[str, int] = {}
     last_mismatches: list[str] = []
     for attempt in range(3):
-        resp = conn.send("K", read_ms=600)
+        resp = conn.send("K", read_timeout=600)
         reported = _parse_cal_response(resp.get("responses", []))
         mismatches = []
         for k, v in expected_map.items():
@@ -166,7 +166,7 @@ def apply(conn: SerialConnection, cal: dict[str, Any],
         if log:
             print(f"calibration: verify attempt {attempt+1} incomplete, retrying...")
         # Give the relay a moment before the next query.
-        conn.read_lines(duration_ms=250)
+        conn.read_lines(duration=250)
     else:
         raise CalibrationError(
             "Robot did not accept calibration cleanly: "

@@ -247,7 +247,7 @@ class Nezha(Robot):
     ) -> str:
         """Private tick loop for callback-driven go_to / turn.
 
-        Reads lines from ``self._proto._conn.read_lines(duration_ms=50)``,
+        Reads lines from ``self._proto._conn.read_lines(duration=50)``,
         updates robot state from each TLM frame, and calls ``on_tick(self)``
         after each update.
 
@@ -285,7 +285,7 @@ class Nezha(Robot):
         stopped_since: float | None = None
 
         while time.monotonic() < deadline:
-            lines = self._proto._conn.read_lines(duration_ms=50)
+            lines = self._proto._conn.read_lines(duration=50)
             had_tlm = False
 
             for raw_line in lines:
@@ -494,7 +494,7 @@ class Nezha(Robot):
             self._proto._conn.send_fast(vw_cmd)
             last_send = time.monotonic()
             while True:
-                for raw_line in self._proto._conn.read_lines(duration_ms=50):
+                for raw_line in self._proto._conn.read_lines(duration=50):
                     r = parse_response(raw_line)
                     if r is None:
                         continue

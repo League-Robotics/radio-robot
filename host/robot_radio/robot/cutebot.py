@@ -59,7 +59,7 @@ class Cutebot(Robot):
         try:
             self._conn.send_fast(cmd)
             while True:
-                lines = self._conn.read_lines(duration_ms=100)
+                lines = self._conn.read_lines(duration=100)
                 for line in lines:
                     enc = _parse_enc(line)
                     if enc:
@@ -78,7 +78,7 @@ class Cutebot(Robot):
                 pass
             deadline = time.time() + 0.5
             while time.time() < deadline:
-                lines = self._conn.read_lines(duration_ms=100)
+                lines = self._conn.read_lines(duration=100)
                 for line in lines:
                     if "SAFETY_STOP" in line or "LOG:X" in line:
                         return
@@ -90,7 +90,7 @@ class Cutebot(Robot):
         self._conn.send_fast(cmd)
         deadline = time.time() + timeout_ms / 1000.0
         while time.time() < deadline:
-            lines = self._conn.read_lines(duration_ms=200)
+            lines = self._conn.read_lines(duration=200)
             for line in lines:
                 enc = _parse_enc(line)
                 if enc:
@@ -128,12 +128,12 @@ class Cutebot(Robot):
         """
         speed = max(abs(speed_mms), 1)
         cmd = f"G{_sign(x_mm)}{_sign(y_mm)}{_sign(speed)}"
-        self._conn.send(cmd, read_ms=300)
+        self._conn.send(cmd, read_timeout=300)
 
         deadline = time.time() + timeout_s
         outcome = "HOST_TIMEOUT"
         while time.time() < deadline:
-            lines = self._conn.read_lines(duration_ms=200)
+            lines = self._conn.read_lines(duration=200)
             done = False
             for line in lines:
                 # Relay responses are prefixed with '<'; strip it before matching.
@@ -178,7 +178,7 @@ class Cutebot(Robot):
         cmd = f"ROT{_sign(l_tenths)}{_sign(r_tenths)}{_sign(speed)}"
         left_enc, right_enc = robot.read_encoders()
 
-        return self._conn.send(cmd, read_ms=300)
+        return self._conn.send(cmd, read_timeout=300)
 
     def angle(self, l_deg: float | None, r_deg: float | None,
               mode: int, speed_pct: int) -> dict:
@@ -195,19 +195,19 @@ class Cutebot(Robot):
         l_tenths = -1 if l_deg is None else int(round(l_deg * 10)) % 3600
         r_tenths = -1 if r_deg is None else int(round(r_deg * 10)) % 3600
         cmd = f"ANG{_sign(l_tenths)}{_sign(r_tenths)}{_sign(mode)}{_sign(speed)}"
-        return self._conn.send(cmd, read_ms=300)
+        return self._conn.send(cmd, read_timeout=300)
 
     def _legacy_await_position(self, cmd: str, timeout_s: float) -> tuple[int, int, str]:
         """Legacy: send a position command and wait for P+DONE/TIMEOUT.
         Kept for callers that actually want to block until the move
         finishes (typically only the calibration tests)."""
-        self._conn.send(cmd, read_ms=300)
+        self._conn.send(cmd, read_timeout=300)
         deadline = time.time() + timeout_s
         outcome = "HOST_TIMEOUT"
         actual_l = 0
         actual_r = 0
         while time.time() < deadline:
-            lines = self._conn.read_lines(duration_ms=200)
+            lines = self._conn.read_lines(duration=200)
             done = False
             for line in lines:
                 s = str(line).lstrip("<# ")
@@ -233,7 +233,7 @@ class Cutebot(Robot):
         # Use blocking send (waits for ACK) — fire-and-forget can be
         # discarded by the OS USB driver before bytes drain if the CLI
         # exits immediately after.
-        self._conn.send(f"G{_sign(angle)}", read_ms=300)
+        self._conn.send(f"G{_sign(angle)}", read_timeout=300)
 
     def read_encoders(self) -> tuple[int, int]:
         """Read encoder positions in whole degrees.
@@ -241,7 +241,7 @@ class Cutebot(Robot):
         Returns (left_deg, right_deg).  To convert to mm, multiply by
         the wheel's mm/deg ratio.
         """
-        resp = self._conn.send("ENC", read_ms=200)
+        resp = self._conn.send("ENC", read_timeout=200)
         for line in resp.get("responses", []):
             enc = _parse_enc(line)
             if enc:
@@ -249,7 +249,7 @@ class Cutebot(Robot):
         return (0, 0)
 
     def zero_encoders(self) -> None:
-        self._conn.send("EZ", read_ms=200)
+        self._conn.send("EZ", read_timeout=200)
 
     def send(self, message: str, read_ms: int = 500) -> dict[str, Any]:
         return self._conn.send(message, read_ms)

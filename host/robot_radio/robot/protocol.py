@@ -474,7 +474,7 @@ class NezhaProtocol:
         """
         cmd = "PING" if corr_id is None else f"PING #{corr_id}"
         t0 = time.monotonic()
-        resp_dict = self._conn.send(cmd, read_ms=500)
+        resp_dict = self._conn.send(cmd, read_timeout=500)
         t1 = time.monotonic()
         rtt_ms = (t1 - t0) * 1000.0
 
@@ -490,7 +490,7 @@ class NezhaProtocol:
 
     def echo(self, payload: str) -> str | None:
         """Send ECHO <payload>, return echoed payload string or None."""
-        resp_dict = self._conn.send(f"ECHO {payload}", read_ms=500)
+        resp_dict = self._conn.send(f"ECHO {payload}", read_timeout=500)
         for raw_line in resp_dict.get("responses", []):
             r = parse_response(raw_line)
             if r and r.tag == "OK" and r.tokens and r.tokens[0] == "echo":
@@ -503,7 +503,7 @@ class NezhaProtocol:
 
     def get_id(self) -> dict[str, str] | None:
         """Send ID command. Returns kv dict (model, name, serial, fw, proto, caps) or None."""
-        resp_dict = self._conn.send("ID", read_ms=500)
+        resp_dict = self._conn.send("ID", read_timeout=500)
         for raw_line in resp_dict.get("responses", []):
             r = parse_response(raw_line)
             if r and r.tag == "ID":
@@ -512,7 +512,7 @@ class NezhaProtocol:
 
     def get_ver(self) -> dict[str, str] | None:
         """Send VER command. Returns kv dict (fw, proto) or None."""
-        resp_dict = self._conn.send("VER", read_ms=500)
+        resp_dict = self._conn.send("VER", read_timeout=500)
         for raw_line in resp_dict.get("responses", []):
             r = parse_response(raw_line)
             if r and r.tag == "OK" and r.tokens and r.tokens[0] == "ver":
@@ -521,7 +521,7 @@ class NezhaProtocol:
 
     def get_help(self) -> str | None:
         """Send HELP. Returns the verb-list string or None."""
-        resp_dict = self._conn.send("HELP", read_ms=500)
+        resp_dict = self._conn.send("HELP", read_timeout=500)
         for raw_line in resp_dict.get("responses", []):
             r = parse_response(raw_line)
             if r and r.tag == "OK" and r.tokens and r.tokens[0] == "help":
@@ -539,7 +539,7 @@ class NezhaProtocol:
         Returns None if no CFG line was received.
         """
         cmd = ("GET " + " ".join(keys)) if keys else "GET"
-        resp_dict = self._conn.send(cmd, read_ms=500)
+        resp_dict = self._conn.send(cmd, read_timeout=500)
         result: dict[str, str] = {}
         for raw_line in resp_dict.get("responses", []):
             r = parse_response(raw_line)
@@ -562,7 +562,7 @@ class NezhaProtocol:
             else:
                 pairs.append(f"{k}={v}")
         cmd = "SET " + " ".join(pairs)
-        resp_dict = self._conn.send(cmd, read_ms=500)
+        resp_dict = self._conn.send(cmd, read_timeout=500)
         result: dict[str, str] = {}
         for raw_line in resp_dict.get("responses", []):
             r = parse_response(raw_line)
@@ -680,7 +680,7 @@ class NezhaProtocol:
             cmd += f" sensor={sensor}"
         if stop:
             cmd += " " + " ".join(stop)
-        resp = self._conn.send(cmd, read_ms=300)
+        resp = self._conn.send(cmd, read_timeout=300)
         return resp.get("responses", [])
 
     def distance(self, left_mms: int, right_mms: int, mm: int,
@@ -702,7 +702,7 @@ class NezhaProtocol:
             cmd += f" sensor={sensor}"
         if stop:
             cmd += " " + " ".join(stop)
-        resp = self._conn.send(cmd, read_ms=300)
+        resp = self._conn.send(cmd, read_timeout=300)
         return resp.get("responses", [])
 
     def go_to(self, x_mm: int, y_mm: int, speed_mms: int) -> list[str]:
@@ -711,7 +711,7 @@ class NezhaProtocol:
         Format: G <x> <y> <speed>
         Robot replies OK goto ...; later sends EVT done G.
         """
-        resp = self._conn.send(f"G {x_mm} {y_mm} {speed_mms}", read_ms=300)
+        resp = self._conn.send(f"G {x_mm} {y_mm} {speed_mms}", read_timeout=300)
         return resp.get("responses", [])
 
     def turn(self, heading_cdeg: int, eps_cdeg: int | None = None,
@@ -749,7 +749,7 @@ class NezhaProtocol:
             cmd += " " + " ".join(stop)
         if corr_id is not None:
             cmd += f" #{corr_id}"
-        resp = self._conn.send(cmd, read_ms=300)
+        resp = self._conn.send(cmd, read_timeout=300)
         return resp.get("responses", [])
 
     def drive_until_sensor(self, left_mms: int, right_mms: int,
@@ -791,7 +791,7 @@ class NezhaProtocol:
         Robot replies OK grip deg=<deg>.
         """
         cmd = f"GRIP {deg}" if deg is not None else "GRIP"
-        resp = self._conn.send(cmd, read_ms=300)
+        resp = self._conn.send(cmd, read_timeout=300)
         for raw_line in resp.get("responses", []):
             r = parse_response(raw_line)
             if r and r.tag == "OK" and r.tokens and r.tokens[0] == "grip":
@@ -803,15 +803,15 @@ class NezhaProtocol:
 
     def zero_encoders(self) -> None:
         """Zero encoders (ZERO enc command)."""
-        self._conn.send("ZERO enc", read_ms=200)
+        self._conn.send("ZERO enc", read_timeout=200)
 
     def zero_otos(self) -> None:
         """Zero OTOS pose tracking (ZERO pose command)."""
-        self._conn.send("ZERO pose", read_ms=200)
+        self._conn.send("ZERO pose", read_timeout=200)
 
     def zero_all(self) -> None:
         """Zero both encoders and OTOS pose (ZERO enc pose command)."""
-        self._conn.send("ZERO enc pose", read_ms=200)
+        self._conn.send("ZERO enc pose", read_timeout=200)
 
     # ------------------------------------------------------------------
     # Telemetry streaming
@@ -822,7 +822,7 @@ class NezhaProtocol:
 
         Format: STREAM <ms>
         """
-        self._conn.send(f"STREAM {period_ms}", read_ms=300)
+        self._conn.send(f"STREAM {period_ms}", read_timeout=300)
 
     def stream_fields(self, fields: str) -> None:
         """Set TLM streaming with a field subset.
@@ -830,7 +830,7 @@ class NezhaProtocol:
         Format: STREAM fields=enc,pose,line
         ``fields`` is a comma-separated string of field names.
         """
-        self._conn.send(f"STREAM fields={fields}", read_ms=300)
+        self._conn.send(f"STREAM fields={fields}", read_timeout=300)
 
     def snap(self) -> "TLMFrame | None":
         """Request ONE telemetry frame synchronously and return it (parsed).
@@ -851,7 +851,7 @@ class NezhaProtocol:
         # Step 2: fire SNAP with no corr-id reply wait.
         self._conn.send_fast("SNAP")
         # Step 3: read from the TLM queue path until we get a parseable frame.
-        lines = self._conn.read_lines(duration_ms=400)
+        lines = self._conn.read_lines(duration=400)
         for ln in lines:
             f = parse_tlm(ln)
             if f is not None:
@@ -864,19 +864,19 @@ class NezhaProtocol:
 
     def otos_init(self) -> None:
         """Enable OTOS signal processing (OI command)."""
-        self._conn.send("OI", read_ms=500)
+        self._conn.send("OI", read_timeout=500)
 
     def otos_zero(self) -> None:
         """Zero OTOS position to current location (OZ command)."""
-        self._conn.send("OZ", read_ms=200)
+        self._conn.send("OZ", read_timeout=200)
 
     def otos_reset_tracking(self) -> None:
         """Reset OTOS Kalman filters (OR command)."""
-        self._conn.send("OR", read_ms=200)
+        self._conn.send("OR", read_timeout=200)
 
     def otos_get_position(self) -> tuple[int, int, int] | None:
         """Query OTOS position (OP command). Returns (x_mm, y_mm, h_cdeg) or None."""
-        resp = self._conn.send("OP", read_ms=300)
+        resp = self._conn.send("OP", read_timeout=300)
         for raw_line in resp.get("responses", []):
             r = parse_response(raw_line)
             if r and r.tag == "OK" and r.tokens and r.tokens[0] == "pos":
@@ -893,7 +893,7 @@ class NezhaProtocol:
         readTransformed then rotates by the OTOS mount angle (odomYawDeg) — so a
         world (x,y) passed here lands rotated; that mismatch is why OV must not be
         used to anchor the world pose."""
-        self._conn.send(f"OV {x_mm} {y_mm} {h_cdeg}", read_ms=300)
+        self._conn.send(f"OV {x_mm} {y_mm} {h_cdeg}", read_timeout=300)
 
     def set_internal_pose(self, x_mm: int, y_mm: int, h_cdeg: int) -> None:
         """Set the motion controller's onboard pose from an external (camera) fix
@@ -901,11 +901,11 @@ class NezhaProtocol:
         pose getPose/telemetry report and G/D/TURN drive against — so the robot
         tracks in WORLD coordinates.  Heading is centi-degrees in the camera world
         frame (0 = +x/east, CCW-positive)."""
-        self._conn.send(f"SI {x_mm} {y_mm} {h_cdeg}", read_ms=300)
+        self._conn.send(f"SI {x_mm} {y_mm} {h_cdeg}", read_timeout=300)
 
     def otos_set_linear_scalar(self, val: int) -> int | None:
         """Set OTOS linear scalar (OL <val> command). Returns confirmed value or None."""
-        resp = self._conn.send(f"OL {val}", read_ms=500)
+        resp = self._conn.send(f"OL {val}", read_timeout=500)
         for raw_line in resp.get("responses", []):
             r = parse_response(raw_line)
             if r and r.tag == "OK" and r.tokens and r.tokens[0] == "linear":
@@ -917,7 +917,7 @@ class NezhaProtocol:
 
     def otos_get_linear_scalar(self) -> int | None:
         """Read back OTOS linear scalar (OL no-arg command). Returns value or None."""
-        resp = self._conn.send("OL", read_ms=300)
+        resp = self._conn.send("OL", read_timeout=300)
         for raw_line in resp.get("responses", []):
             r = parse_response(raw_line)
             if r and r.tag == "OK" and r.tokens and r.tokens[0] == "linear":
@@ -929,7 +929,7 @@ class NezhaProtocol:
 
     def otos_set_angular_scalar(self, val: int) -> int | None:
         """Set OTOS angular scalar (OA <val> command). Returns confirmed value or None."""
-        resp = self._conn.send(f"OA {val}", read_ms=500)
+        resp = self._conn.send(f"OA {val}", read_timeout=500)
         for raw_line in resp.get("responses", []):
             r = parse_response(raw_line)
             if r and r.tag == "OK" and r.tokens and r.tokens[0] == "angular":
@@ -941,7 +941,7 @@ class NezhaProtocol:
 
     def otos_get_angular_scalar(self) -> int | None:
         """Read back OTOS angular scalar (OA no-arg command). Returns value or None."""
-        resp = self._conn.send("OA", read_ms=300)
+        resp = self._conn.send("OA", read_timeout=300)
         for raw_line in resp.get("responses", []):
             r = parse_response(raw_line)
             if r and r.tag == "OK" and r.tokens and r.tokens[0] == "angular":
@@ -957,7 +957,7 @@ class NezhaProtocol:
 
     def port_read(self, port: int) -> int | None:
         """Read digital J-port (P <port> command). Returns 0/1 or None."""
-        resp = self._conn.send(f"P {port}", read_ms=300)
+        resp = self._conn.send(f"P {port}", read_timeout=300)
         for raw_line in resp.get("responses", []):
             r = parse_response(raw_line)
             if r and r.tag == "OK" and r.tokens and r.tokens[0] == "port":
@@ -969,11 +969,11 @@ class NezhaProtocol:
 
     def port_write(self, port: int, value: bool) -> None:
         """Write digital J-port (P <port> <val> command)."""
-        self._conn.send(f"P {port} {1 if value else 0}", read_ms=200)
+        self._conn.send(f"P {port} {1 if value else 0}", read_timeout=200)
 
     def port_read_analog(self, port: int) -> int | None:
         """Read analog J-port (PA <port> command). Returns 0-1023 or None."""
-        resp = self._conn.send(f"PA {port}", read_ms=300)
+        resp = self._conn.send(f"PA {port}", read_timeout=300)
         for raw_line in resp.get("responses", []):
             r = parse_response(raw_line)
             if r and r.tag == "OK" and r.tokens and r.tokens[0] == "aport":
@@ -985,7 +985,7 @@ class NezhaProtocol:
 
     def port_write_analog(self, port: int, value: int) -> None:
         """Write PWM (0-1023) to J-port (PA <port> <val> command)."""
-        self._conn.send(f"PA {port} {value}", read_ms=200)
+        self._conn.send(f"PA {port} {value}", read_timeout=200)
 
     # ------------------------------------------------------------------
     # Blocking drive helpers (wait for EVT done or safety_stop)
@@ -1007,7 +1007,7 @@ class NezhaProtocol:
         """
         deadline = time.time() + timeout_ms / 1000.0
         while time.time() < deadline:
-            for raw_line in self._conn.read_lines(duration_ms=100):
+            for raw_line in self._conn.read_lines(duration=100):
                 r = parse_response(raw_line)
                 if r is None:
                     continue
@@ -1064,7 +1064,7 @@ class NezhaProtocol:
             self._conn.send_fast(f"S {speeds[0]} {speeds[1]}")
             last_send = time.monotonic()
             while True:
-                for raw_line in self._conn.read_lines(duration_ms=50):
+                for raw_line in self._conn.read_lines(duration=50):
                     r = parse_response(raw_line)
                     if r is None:
                         continue

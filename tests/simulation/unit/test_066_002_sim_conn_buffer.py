@@ -36,7 +36,7 @@ def test_get_cfg_dump_via_sim_connection_is_not_truncated(build_lib):
     info = conn.connect()
     assert "error" not in info, f"SimConnection.connect() failed: {info}"
     try:
-        reply = conn.send("GET", read_ms=50)
+        reply = conn.send("GET", read_timeout=50)
         responses = reply["responses"]
         combined = "\n".join(responses)
 

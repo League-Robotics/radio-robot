@@ -499,7 +499,7 @@ class _HardwareTransport(Transport):
         """Send a command and return collected reply lines as a string."""
         if self._conn is None or not self._conn.is_open:
             return ""
-        result = self._conn.send(line, read_ms=read_ms)
+        result = self._conn.send(line, read_timeout=read_ms)
         responses = result.get("responses", [])
         return "\n".join(responses)
 
