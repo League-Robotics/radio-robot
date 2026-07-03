@@ -15,7 +15,7 @@ For each PING exchange:
 Assuming a roughly symmetric link delay, the robot clock stamp `t_r`
 corresponds to host mid-time ``(T0+T1)/2``.  Therefore:
 
-    offset_ms = (T0 + T1) / 2 − t_r
+    offset = (T0 + T1) / 2 − t_r
 
 We fire N PINGs and keep the sample with the smallest RTT (= T1 − T0)
 because that sample has the least relay/queuing jitter — this is the
@@ -36,7 +36,7 @@ Usage example::
 
     cs = ClockSync()
     cs.ping_burst(lambda cmd: proto.ping_and_raw(cmd))
-    host_ms = cs.to_host_time(tlm_frame.t)
+    host_time = cs.to_host_time(tlm_frame.t)
 """
 
 from __future__ import annotations
@@ -53,19 +53,19 @@ from typing import Callable
 @dataclass
 class _PingSample:
     """One recorded PING exchange."""
-    t0_ms: float       # host monotonic time before send (ms)
-    t1_ms: float       # host monotonic time after receive (ms)
-    t_robot_ms: float  # robot clock at pong (ms)
+    t0: float       # [ms] host monotonic time before send
+    t1: float       # [ms] host monotonic time after receive
+    t_robot: float  # [ms] robot clock at pong
 
     @property
-    def rtt_ms(self) -> float:
+    def rtt(self) -> float:  # [ms]
         """Round-trip time in ms."""
-        return self.t1_ms - self.t0_ms
+        return self.t1 - self.t0
 
     @property
-    def offset_ms(self) -> float:
+    def offset(self) -> float:  # [ms]
         """Estimated host-minus-robot clock offset (ms)."""
-        return (self.t0_ms + self.t1_ms) / 2.0 - self.t_robot_ms
+        return (self.t0 + self.t1) / 2.0 - self.t_robot
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +77,7 @@ class ClockSync:
 
     Typical use:
     1. Call ``ping_burst(send_fn)`` on connect and every ~30–60 s.
-    2. Call ``to_host_time(t_robot_ms)`` to translate robot timestamps.
+    2. Call ``to_host_time(t_robot)`` to translate robot timestamps.
 
     Args:
         clock_fn: Callable[[], float] that returns host monotonic time in
@@ -92,7 +92,7 @@ class ClockSync:
         self._last_sync_s: float | None = None  # host monotonic seconds of last burst
 
         # Skew model (populated after ≥2 samples with distinct t_robot values)
-        self._skew_a: float | None = None  # slope  (host_mid per robot_ms)
+        self._skew_a: float | None = None  # slope  (host_mid per robot_time)
         self._skew_b: float | None = None  # intercept (ms)
 
     # ------------------------------------------------------------------
@@ -101,22 +101,22 @@ class ClockSync:
 
     def record_ping(
         self,
-        t0_ms: float,
-        t1_ms: float,
-        t_robot_ms: float,
+        t0: float,  # [ms]
+        t1: float,  # [ms]
+        t_robot: float,  # [ms]
     ) -> None:
         """Record one PING sample.
 
         Args:
-            t0_ms: Host monotonic time in ms *before* the PING was sent.
-            t1_ms: Host monotonic time in ms *after* the pong reply arrived.
-            t_robot_ms: Robot clock stamp (ms) from ``OK pong t=<n>``.
+            t0: Host monotonic time in ms *before* the PING was sent.
+            t1: Host monotonic time in ms *after* the pong reply arrived.
+            t_robot: Robot clock stamp (ms) from ``OK pong t=<n>``.
         """
-        sample = _PingSample(t0_ms=t0_ms, t1_ms=t1_ms, t_robot_ms=t_robot_ms)
+        sample = _PingSample(t0=t0, t1=t1, t_robot=t_robot)
         self._samples.append(sample)
 
         # Update the best (min-RTT) sample.
-        if self._best is None or sample.rtt_ms < self._best.rtt_ms:
+        if self._best is None or sample.rtt < self._best.rtt:
             self._best = sample
 
         # Recompute skew model when we have ≥2 samples.
@@ -135,8 +135,8 @@ class ClockSync:
             self._skew_b = None
             return
 
-        xs = [s.t_robot_ms for s in self._samples]
-        ys = [(s.t0_ms + s.t1_ms) / 2.0 for s in self._samples]  # host_mid
+        xs = [s.t_robot for s in self._samples]
+        ys = [(s.t0 + s.t1) / 2.0 for s in self._samples]  # host_mid
 
         x_span = max(xs) - min(xs)
         if x_span < 1.0:
@@ -191,13 +191,13 @@ class ClockSync:
             if not reply:
                 continue
 
-            t_robot_ms = _parse_pong_t(reply)
-            if t_robot_ms is None:
+            t_robot = _parse_pong_t(reply)
+            if t_robot is None:
                 continue
 
-            t0_ms = t0_s * 1000.0
-            t1_ms = t1_s * 1000.0
-            sample = _PingSample(t0_ms=t0_ms, t1_ms=t1_ms, t_robot_ms=float(t_robot_ms))
+            t0 = t0_s * 1000.0
+            t1 = t1_s * 1000.0
+            sample = _PingSample(t0=t0, t1=t1, t_robot=float(t_robot))
             new_samples.append(sample)
 
         if not new_samples:
@@ -205,7 +205,7 @@ class ClockSync:
 
         for s in new_samples:
             self._samples.append(s)
-            if self._best is None or s.rtt_ms < self._best.rtt_ms:
+            if self._best is None or s.rtt < self._best.rtt:
                 self._best = s
 
         self._last_sync_s = self._clock()
@@ -215,37 +215,37 @@ class ClockSync:
     # Query API
     # ------------------------------------------------------------------
 
-    def best_offset_ms(self) -> float | None:
+    def best_offset(self) -> float | None:  # [ms]
         """Return the clock offset from the min-RTT sample (ms).
 
         Returns:
-            offset_ms = (T0+T1)/2 − t_robot  from the best sample,
+            offset = (T0+T1)/2 − t_robot  from the best sample,
             or ``None`` if no samples have been recorded yet.
         """
         if self._best is None:
             return None
-        return self._best.offset_ms
+        return self._best.offset
 
-    def to_host_time(self, t_robot_ms: float) -> float | None:
+    def to_host_time(self, t_robot: float) -> float | None:  # [ms]
         """Translate a robot timestamp to host-monotonic time (ms).
 
         Uses the skew-corrected model when available (≥2 samples spanning
         enough time), otherwise falls back to the offset-only estimate.
 
         Args:
-            t_robot_ms: Robot clock value (ms from robot boot).
+            t_robot: Robot clock value (ms from robot boot).
 
         Returns:
             Estimated host monotonic time in ms, or ``None`` if no
             calibration data is available.
         """
         if self._skew_a is not None and self._skew_b is not None:
-            return self._skew_a * t_robot_ms + self._skew_b
+            return self._skew_a * t_robot + self._skew_b
 
-        offset = self.best_offset_ms()
+        offset = self.best_offset()
         if offset is None:
             return None
-        return t_robot_ms + offset
+        return t_robot + offset
 
     def stale(self, max_age_s: float = 60.0) -> bool:
         """Return True if no ping burst has been recorded within *max_age_s* seconds.
@@ -265,16 +265,16 @@ class ClockSync:
     # ------------------------------------------------------------------
 
     @property
-    def min_rtt_ms(self) -> float | None:
+    def min_rtt(self) -> float | None:  # [ms]
         """Minimum RTT observed across all recorded samples (ms), or None."""
         if self._best is None:
             return None
-        return self._best.rtt_ms
+        return self._best.rtt
 
     @property
-    def offset_ms(self) -> float | None:
-        """Alias for ``best_offset_ms()``."""
-        return self.best_offset_ms()
+    def offset(self) -> float | None:  # [ms]
+        """Alias for ``best_offset()``."""
+        return self.best_offset()
 
     @property
     def skew(self) -> float | None:

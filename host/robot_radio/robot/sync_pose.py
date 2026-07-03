@@ -20,7 +20,7 @@ importable without the aprilcam package installed.
 
 Wire command
 ------------
-The GUI sends ``SI <x_mm> <y_mm> <h_cdeg>`` — the motion controller's internal
+The GUI sends ``SI <x> <y> <heading>`` — the motion controller's internal
 pose (``Odometry::setPose``).  This is preferred over ``OV`` because OV writes
 the raw OTOS chip registers which are subsequently rotated by the OTOS mount
 angle (``odomYawDeg``), causing a position error.  SI writes the pose the
@@ -28,10 +28,10 @@ firmware's motion controller drives against directly.
 
 Unit conversion (mirrors cli.py:cmd_sync_pose)
 -----------------------------------------------
-- world_xy is in cm (daemon A1-centred frame) → SI wants mm: x_mm = round(x_cm * 10)
+- world_xy is in cm (daemon A1-centred frame) → SI wants mm: x = round(x_cm * 10)
 - heading: daemon reports tag orientation in world frame (0 = east, CCW+).
   That orientation IS the robot's forward heading — no offset.
-  SI expects centi-degrees: h_cdeg = round(degrees(yaw_rad) * 100)
+  SI expects centi-degrees: heading = round(degrees(yaw_rad) * 100)
 """
 
 from __future__ import annotations
@@ -101,11 +101,11 @@ def pose_to_setpose_line(x_cm: float, y_cm: float, yaw_rad: float) -> str:
     -----
     Conversion mirrors ``cli.py:cmd_sync_pose``:
 
-    - x_mm = round(x_cm * 10)
-    - y_mm = round(y_cm * 10)
-    - h_cdeg = round(degrees(yaw_rad) * 100)
+    - x = round(x_cm * 10)
+    - y = round(y_cm * 10)
+    - heading = round(degrees(yaw_rad) * 100)
     """
-    x_mm = round(x_cm * 10)
-    y_mm = round(y_cm * 10)
-    h_cdeg = round(math.degrees(yaw_rad) * 100)
-    return f"SI {x_mm} {y_mm} {h_cdeg}"
+    x = round(x_cm * 10)  # [mm]
+    y = round(y_cm * 10)  # [mm]
+    heading = round(math.degrees(yaw_rad) * 100)  # [cdeg]
+    return f"SI {x} {y} {heading}"

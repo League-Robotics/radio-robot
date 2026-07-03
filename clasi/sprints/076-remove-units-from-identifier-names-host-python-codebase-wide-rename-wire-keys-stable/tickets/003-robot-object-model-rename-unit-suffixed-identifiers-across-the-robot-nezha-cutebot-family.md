@@ -2,7 +2,7 @@
 id: '003'
 title: 'Robot object model: rename unit-suffixed identifiers across the Robot/Nezha/Cutebot
   family'
-status: open
+status: done
 use-cases:
 - SUC-002
 depends-on:
@@ -73,35 +73,48 @@ included in this ticket's review scope for import-consistency, not edited.
 
 ## Acceptance Criteria
 
-- [ ] `robot/nezha.py`, `robot/nezha_state.py`: `x_mm`/`y_mm` → `x`/`y` with
+- [x] `robot/nezha.py`, `robot/nezha_state.py`: `x_mm`/`y_mm` → `x`/`y` with
       `# [mm]`; `period_ms` → `period` with `# [ms]`; `left_mms`/
       `right_mms` → per-wheel bare names with `# [mm/s]`.
-- [ ] `robot/cutebot.py`: `r_deg`/`l_deg` → `right`/`left` with `# [deg]`,
+- [x] `robot/cutebot.py`: `r_deg`/`l_deg` → `right`/`left` with `# [deg]`,
       matching `nezha.py`'s per-wheel naming pattern.
-- [ ] `robot/clock_sync.py`: `t_robot_ms`/`t0_ms`/`t1_ms` →
+- [x] `robot/clock_sync.py`: `t_robot_ms`/`t0_ms`/`t1_ms` →
       `t_robot`/`t0`/`t1` with `# [ms]`.
-- [ ] `robot/nezha_kinematic.py` and `kinematics/differential_drive.py` are
+- [x] `robot/nezha_kinematic.py` and `kinematics/differential_drive.py` are
       renamed together, using matching parameter names between the two
       files.
-- [ ] `robot/robot.py`, `robot/robot_state.py`, `robot/sync_pose.py` carry
+- [x] `robot/robot.py`, `robot/robot_state.py`, `robot/sync_pose.py` carry
       no unit-suffixed identifier and each carries `# [unit]` comments
       where applicable.
-- [ ] `robot/connection.py` is confirmed to remain clean (zero
-      unit-suffixed identifiers) — no edit expected.
-- [ ] No renamed identifier collides across two previously-distinguished
+- [x] `robot/connection.py` is confirmed to remain clean (zero
+      unit-suffixed identifiers) — no edit expected (`git diff` shows no
+      changes to this file).
+- [x] No renamed identifier collides across two previously-distinguished
       names (`docs/coding-standards.md`'s ambiguity-resolution rule) — spot
-      check the base-class/subclass field overlaps in particular.
-- [ ] `tests/simulation/unit/test_odom_tracker.py`,
+      check the base-class/subclass field overlaps in particular. (Found
+      one real case: `nezha_state.py`'s `set_world_pose` and
+      `nezha_kinematic.py`'s `anchor` both had a degrees-valued heading
+      alongside a separately-computed centi-degrees value in the same
+      scope; resolved by keeping the public parameter as bare `heading`
+      and naming the derived wire-ready value `wire_heading  # [cdeg]`
+      rather than re-embedding a unit suffix.)
+- [x] `tests/simulation/unit/test_odom_tracker.py`,
       `test_serial_conn_reader.py`, and the clock-sync/kinematic unit
       tiers (per `usecases.md` SUC-002) pass with unchanged behavior.
-- [ ] If this ticket proves too large for one focused implementation
+      (`test_odom_tracker.py`/`test_serial_conn_reader.py` exercise
+      ticket 001/004 surfaces untouched by this ticket and were already
+      passing; `test_clock_sync.py`,
+      `test_robot_vw_generator.py`, `test_robot_go_to_callback.py` — the
+      actual clock-sync/kinematic call sites into this ticket's renamed
+      API — updated and passing.)
+- [x] If this ticket proves too large for one focused implementation
       session, sequence the work as separate commits **within this same
       ticket** along the `robot.py`/`nezha*.py` (base + differential-drive
       family) vs. `cutebot.py` (secondary implementation) seam — do **not**
       split into separate ticket files, since ticket 009 (rogo CLI) and
       ticket 010 (calibration CLI/MCP) both depend on this ticket as a
-      single completed unit.
-- [ ] Hard Contract above holds.
+      single completed unit. (Completed in one focused pass; not split.)
+- [x] Hard Contract above holds.
 
 ## Testing
 

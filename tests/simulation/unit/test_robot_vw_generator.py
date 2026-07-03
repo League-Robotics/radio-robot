@@ -105,7 +105,7 @@ class TestVwYieldsPerTick:
         ]
 
         robot = _nezha(conn)
-        list(robot.vw(200, 500, period_ms=40))
+        list(robot.vw(200, 500, period=40))
 
         all_sends = [c[0][0] for c in conn.send.call_args_list]
         assert any(cmd == "STREAM 40" for cmd in all_sends), \
@@ -155,7 +155,7 @@ class TestVwKeepalive:
 
         robot = _nezha(conn)
         with patch("robot_radio.robot.nezha.time.monotonic", side_effect=_fake_monotonic):
-            list(robot.vw(200, 500, period_ms=40))
+            list(robot.vw(200, 500, period=40))
 
         fast_calls = [c[0][0] for c in conn.send_fast.call_args_list]
         vw_sends = [c for c in fast_calls if c.startswith("VW")]
@@ -175,7 +175,7 @@ class TestVwKeepalive:
 
         robot = _nezha(conn)
         with patch("robot_radio.robot.nezha.time.monotonic", return_value=0.0):
-            list(robot.vw(200, 500, period_ms=40))
+            list(robot.vw(200, 500, period=40))
 
         fast_calls = [c[0][0] for c in conn.send_fast.call_args_list]
         vw_sends = [c for c in fast_calls if c.startswith("VW")]
@@ -217,7 +217,7 @@ class TestVwBreakCleanup:
         ]
 
         robot = _nezha(conn)
-        for _ in robot.vw(200, 500, period_ms=40):
+        for _ in robot.vw(200, 500, period=40):
             break
 
         all_sends = [c[0][0] for c in conn.send.call_args_list]

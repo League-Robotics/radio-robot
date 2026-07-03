@@ -12,7 +12,7 @@ Coordinate conventions:
   Rotation2d and aprilcam.Tag.orientation conventions.
 
 Usage (synchronous):
-    k = NezhaKinematic(conn, trackwidth_mm=126)
+    k = NezhaKinematic(conn, trackwidth=126)
     k.anchor((50.0, 30.0), 0.0)      # set world origin from camera
     k.update(vx=0.2, omega=0.0)      # drive forward at 0.2 m/s, read sensors
     print(k.world_pos_cm, k.world_yaw)
@@ -49,8 +49,8 @@ class NezhaKinematic(NezhaState):
 
     Args:
         proto: NezhaProtocol wrapping the serial connection.
-        trackwidth_mm: Distance between wheel contact patches in mm.
-        wheel_diameter_mm: Wheel diameter in mm. Reserved for future encoder
+        trackwidth: Distance between wheel contact patches in mm.
+        wheel_diameter: Wheel diameter in mm. Reserved for future encoder
             calibration use; the firmware already reports encoder values in mm,
             so this parameter is not used in the current delta calculation.
     """
@@ -58,13 +58,13 @@ class NezhaKinematic(NezhaState):
     def __init__(
         self,
         proto: NezhaProtocol,
-        trackwidth_mm: float,
-        wheel_diameter_mm: float | None = None,
+        trackwidth: float,  # [mm]
+        wheel_diameter: float | None = None,  # [mm]
     ) -> None:
         super().__init__(proto)
-        self._kinematics = DifferentialDriveKinematics(trackwidth_mm)
-        self._trackwidth_m = trackwidth_mm / 1000.0
-        self._wheel_diameter_mm = wheel_diameter_mm  # stored but not needed currently
+        self._kinematics = DifferentialDriveKinematics(trackwidth)
+        self._trackwidth_m = trackwidth / 1000.0
+        self._wheel_diameter = wheel_diameter  # stored but not needed currently
 
         self._odometry = DifferentialDriveOdometry(Rotation2d(0), 0.0, 0.0)
         self._prev_encoders: tuple[int, int] = (0, 0)
@@ -93,8 +93,8 @@ class NezhaKinematic(NezhaState):
         if vx is not None or omega is not None:
             vx = vx or 0.0
             omega = omega or 0.0
-            left_mms, right_mms = self._kinematics.inverse(vx, omega)
-            super().update(int(left_mms), int(right_mms))
+            left, right = self._kinematics.inverse(vx, omega)
+            super().update(int(left), int(right))
         else:
             super().update()
         self._update_odometry()
@@ -160,11 +160,11 @@ class NezhaKinematic(NezhaState):
         """
         self.zero_otos()
 
-        x_mm = world_pos_cm[0] * 10.0
-        y_mm = world_pos_cm[1] * 10.0
+        x = world_pos_cm[0] * 10.0
+        y = world_pos_cm[1] * 10.0
         # CCW radians → CCW degrees for set_world_pose (OTOS convention)
-        h_deg = math.degrees(world_yaw_rad)
-        self.set_world_pose(x_mm, y_mm, h_deg)
+        heading = math.degrees(world_yaw_rad)  # [deg]
+        self.set_world_pose(x, y, heading)
 
         # WPILib Pose2d uses metres and CCW-positive rotation
         init_pose = Pose2d(
@@ -228,15 +228,15 @@ class NezhaKinematic(NezhaState):
         self,
         target_cm: tuple[float, float],
         *,
-        speed_mms: int = 200,
+        speed: int = 200,  # [mm/s]
         timeout_s: float = 15.0,
         on_tick: Callable[[], None] | None = None,
     ) -> str:
         """Drive to a world-frame position using the firmware G arc command.
 
         Converts *target_cm* from world XY (cm) to robot-relative mm using the
-        current world pose, then sends ``self._proto.go_to(dx_mm, dy_mm,
-        speed_mms)`` and polls for the firmware completion token.
+        current world pose, then sends ``self._proto.go_to(dx, dy,
+        speed)`` and polls for the firmware completion token.
 
         Coordinate convention (CCW-positive yaw, 0 = +X world axis):
             dx_robot =  dx_world * cos(yaw) + dy_world * sin(yaw)
@@ -244,7 +244,7 @@ class NezhaKinematic(NezhaState):
 
         Args:
             target_cm: Target position in world frame as (x_cm, y_cm).
-            speed_mms: Drive speed in mm/s (default 200).
+            speed: Drive speed in mm/s (default 200).
             timeout_s: Host-side wall-clock timeout in seconds (default 15.0).
             on_tick: Optional zero-argument callable invoked once per poll cycle.
 
@@ -262,7 +262,7 @@ class NezhaKinematic(NezhaState):
         dx_robot = dx_w * math.cos(yaw) + dy_w * math.sin(yaw)
         dy_robot = -dx_w * math.sin(yaw) + dy_w * math.cos(yaw)
 
-        self._proto.go_to(int(round(dx_robot)), int(round(dy_robot)), int(speed_mms))
+        self._proto.go_to(int(round(dx_robot)), int(round(dy_robot)), int(speed))
 
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
@@ -293,7 +293,7 @@ class NezhaKinematic(NezhaState):
         max_omega: float = 1.0,
         kp: float = 2.5,
         timeout_s: float = 8.0,
-        tick_hz: float = 20.0,
+        tick_rate: float = 20.0,  # [Hz]
         on_tick: Callable[[], None] | None = None,
     ) -> bool:
         """Proportional closed-loop turn to a world-frame heading.
@@ -309,14 +309,14 @@ class NezhaKinematic(NezhaState):
             max_omega: Clamp magnitude on angular velocity command (default 1.0 rad/s).
             kp: Proportional gain (default 2.5).
             timeout_s: Wall-clock timeout in seconds (default 8.0).
-            tick_hz: Control loop rate in Hz (default 20).
+            tick_rate: Control loop rate in Hz (default 20).
             on_tick: Optional zero-argument callable invoked once per control tick.
 
         Returns:
             ``True`` if the heading converged within *tol_rad*, ``False`` if
             the timeout expired first.
         """
-        tick_s = 1.0 / tick_hz
+        tick_s = 1.0 / tick_rate
         deadline = time.monotonic() + timeout_s
 
         while time.monotonic() < deadline:

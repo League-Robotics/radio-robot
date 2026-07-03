@@ -338,13 +338,13 @@ class TestTurnNoCallback:
             f"STREAM must not be called in blocking turn path: {all_sends}"
 
     def test_turn_with_eps_cdeg(self) -> None:
-        """turn(9000, eps_cdeg=100) includes eps=100 in TURN command."""
+        """turn(9000, eps=100) includes eps=100 in TURN command."""
         conn = _mock_conn()
         conn.send.return_value = {"sent": "TURN", "mode": "relay", "responses": ["OK"]}
         conn.read_lines.return_value = ["EVT done TURN"]
 
         robot = _nezha(conn)
-        robot.turn(9000, eps_cdeg=100)
+        robot.turn(9000, eps=100)
 
         all_sends = [c[0][0] for c in conn.send.call_args_list]
         assert any("eps=100" in cmd for cmd in all_sends), \

@@ -7,7 +7,7 @@ and async (daemon thread) operation.
 Usage (manual):
     proto = NezhaProtocol(conn)
     state = NezhaState(proto)
-    state.update(left_mms=100, right_mms=100)
+    state.update(left=100, right=100)
     print(state.encoders, state.otos_pose)
 
 Usage (async):
@@ -54,7 +54,7 @@ class NezhaState:
 
         # Sensor state — always access under _lock
         self.encoders: tuple[int, int] = (0, 0)
-        # otos_pose stores (x_mm, y_mm, h_cdeg) — centi-degrees for heading
+        # otos_pose stores (x, y, heading) — centi-degrees for heading
         self.otos_pose: tuple[float, float, float] = (0.0, 0.0, 0.0)
         # heading_rad: CCW-positive heading in radians, derived from TLM pose cdeg
         self.heading_rad: float = 0.0
@@ -76,7 +76,7 @@ class NezhaState:
 
     @property
     def wheel_speeds(self) -> list[int]:
-        """Current commanded wheel speeds [left_mms, right_mms]."""
+        """Current commanded wheel speeds [left, right]."""
         with self._lock:
             return list(self._wheel_speeds)
 
@@ -90,18 +90,18 @@ class NezhaState:
     # Update cycle
     # ------------------------------------------------------------------
 
-    def update(self, left_mms: int | None = None, right_mms: int | None = None) -> None:
+    def update(self, left: int | None = None, right: int | None = None) -> None:  # [mm/s]
         """Send current wheel speeds and read available TLM lines for 40 ms.
 
-        If ``left_mms`` or ``right_mms`` are provided they are stored as the
+        If ``left`` or ``right`` are provided they are stored as the
         new commanded wheel speeds before sending.
         """
-        if left_mms is not None or right_mms is not None:
+        if left is not None or right is not None:
             with self._lock:
-                if left_mms is not None:
-                    self._wheel_speeds[0] = left_mms
-                if right_mms is not None:
-                    self._wheel_speeds[1] = right_mms
+                if left is not None:
+                    self._wheel_speeds[0] = left
+                if right is not None:
+                    self._wheel_speeds[1] = right
 
         with self._lock:
             l, r = self._wheel_speeds[0], self._wheel_speeds[1]
@@ -124,17 +124,17 @@ class NezhaState:
                 if tlm.enc is not None:
                     self.encoders = tlm.enc
                 if tlm.pose is not None:
-                    x_mm, y_mm, h_cdeg = tlm.pose
-                    self.otos_pose = (float(x_mm), float(y_mm), float(h_cdeg))
+                    x, y, heading = tlm.pose  # [mm], [mm], [cdeg]
+                    self.otos_pose = (float(x), float(y), float(heading))
                     # Convert centidegrees to radians: cdeg / 18000.0 * math.pi
-                    self.heading_rad = h_cdeg / 18000.0 * math.pi
+                    self.heading_rad = heading / 18000.0 * math.pi
 
                     # Build RobotState from pose (mandatory) + twist (optional).
-                    # Pose.x/y are in centimetres (nav convention); firmware x_mm in mm.
+                    # Pose.x/y are in centimetres (nav convention); firmware x in mm.
                     pose_obj = Pose(
-                        x=float(x_mm) / 10.0,
-                        y=float(y_mm) / 10.0,
-                        heading=h_cdeg / 18000.0 * math.pi,
+                        x=float(x) / 10.0,
+                        y=float(y) / 10.0,
+                        heading=heading / 18000.0 * math.pi,
                     )
                     if tlm.twist is not None:
                         v_mmps, omega_mradps = tlm.twist
@@ -183,19 +183,19 @@ class NezhaState:
             self._wheel_speeds = [0, 0]
         self._proto.stop()
 
-    def set_world_pose(self, x_mm: float, y_mm: float, h_deg: float) -> None:
+    def set_world_pose(self, x: float, y: float, heading: float) -> None:  # [mm], [mm], [deg]
         """Set OTOS world-frame pose (OV command). Heading in degrees."""
-        xi, yi = int(round(x_mm)), int(round(y_mm))
+        xi, yi = int(round(x)), int(round(y))
         # Firmware OV expects centi-degrees for heading
-        h_cdeg = int(round(h_deg * 100))
-        self._proto.otos_set_position(xi, yi, h_cdeg)
+        wire_heading = int(round(heading * 100))  # [cdeg]
+        self._proto.otos_set_position(xi, yi, wire_heading)
         with self._lock:
-            self.otos_pose = (float(xi), float(yi), float(h_cdeg))
-            self.heading_rad = h_cdeg / 18000.0 * math.pi
+            self.otos_pose = (float(xi), float(yi), float(wire_heading))
+            self.heading_rad = wire_heading / 18000.0 * math.pi
 
-    def enable_stream(self, period_ms: int = 40) -> None:
+    def enable_stream(self, period: int = 40) -> None:  # [ms]
         """Enable TLM streaming at the given period (STREAM <ms>)."""
-        self._proto.stream(period_ms)
+        self._proto.stream(period)
 
     def disable_stream(self) -> None:
         """Disable TLM streaming (STREAM 0)."""

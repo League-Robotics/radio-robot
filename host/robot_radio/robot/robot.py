@@ -11,18 +11,18 @@ class Robot(ABC):
     """
 
     @abstractmethod
-    def speed(self, left_mms: int, right_mms: int) -> Generator[tuple[int, int], None, None]:
-        """Non-blocking PID speed control. Yields (left_mm, right_mm) encoder
+    def speed(self, left: int, right: int) -> Generator[tuple[int, int], None, None]:  # [mm/s]
+        """Non-blocking PID speed control. Yields (left, right) encoder
         positions as they stream back. Must be consumed (or closed) to keep
         the robot moving — the firmware stops if commands aren't re-sent."""
 
     @abstractmethod
-    def speed_for_time(self, left_mms: int, right_mms: int, ms: int) -> tuple[int, int]:
-        """Blocking: drive at speed for a duration. Returns (left_mm, right_mm)."""
+    def speed_for_time(self, left: int, right: int, ms: int) -> tuple[int, int]:  # [mm/s]
+        """Blocking: drive at speed for a duration. Returns (left, right)."""
 
     @abstractmethod
-    def speed_for_distance(self, left_mms: int, right_mms: int, mm: int) -> tuple[int, int]:
-        """Blocking: drive at speed until distance. Returns (left_mm, right_mm)."""
+    def speed_for_distance(self, left: int, right: int, mm: int) -> tuple[int, int]:  # [mm/s]
+        """Blocking: drive at speed until distance. Returns (left, right)."""
 
     @abstractmethod
     def stop(self) -> None:
@@ -34,14 +34,14 @@ class Robot(ABC):
 
     @abstractmethod
     def read_encoders(self) -> tuple[int, int]:
-        """Read encoder positions in mm. Returns (left_mm, right_mm)."""
+        """Read encoder positions in mm. Returns (left, right)."""
 
     @abstractmethod
     def zero_encoders(self) -> None:
         """Zero both encoder counters."""
 
     @abstractmethod
-    def send(self, message: str, read_ms: int = 500) -> dict[str, Any]:
+    def send(self, message: str, read_timeout: int = 500) -> dict[str, Any]:  # [ms]
         """Send arbitrary command string, return responses."""
 
     @abstractmethod
@@ -50,13 +50,13 @@ class Robot(ABC):
 
     def go_to(
         self,
-        x_mm: int,
-        y_mm: int,
-        speed_mms: int,
+        x: int,  # [mm]
+        y: int,  # [mm]
+        speed: int,  # [mm/s]
         on_tick: Callable | None = None,
         timeout_s: float = 15.0,
     ) -> tuple[int, int, str]:
-        """Blocking go-to (G command). Returns (left_enc_mm, right_enc_mm, outcome).
+        """Blocking go-to (G command). Returns (left_enc, right_enc, outcome).
 
         ``on_tick`` is called after each update cycle if provided; when
         ``None`` (default) the call blocks until the firmware signals completion.
@@ -69,7 +69,7 @@ class Robot(ABC):
 
     def turn(
         self,
-        heading_cdeg: int,
+        heading: int,  # [cdeg]
         on_tick: Callable | None = None,
         timeout_s: float = 15.0,
     ) -> str:
