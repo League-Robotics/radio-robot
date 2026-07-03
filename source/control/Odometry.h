@@ -61,7 +61,7 @@ inline float effectiveSlip(float rawSlip) {
  * Sprint 023, Ticket 003: 5-state EKF wiring — initEKF() extended with
  *   velocity noise params; predict() gains now for dt computation;
  *   correctEKF() extended for OTOS + encoder velocity fusion. setPose
- *   re-baseline fix (_prevEncL = s.encLMm, not 0) prevents spurious
+ *   re-baseline fix (_prevEncL = s.encPos[], not 0) prevents spurious
  *   encoder-delta jumps after camera fixes.
  * Sprint 047, Ticket 002: encoder-only dead-reckoning accumulator added
  *   (_encPoseX/Y/H, _encVx/Vy/Omega); predict() dual-writes encoder and
@@ -338,7 +338,7 @@ private:
     // Wrap heading to (-π, π] using atan2f identity.
     static float wrapPi(float theta);
 
-    static constexpr float PI_F        = 3.14159265f;
-    static constexpr float RAD_TO_CDEG = 18000.0f / 3.14159265f;
-    static constexpr float CDEG_TO_RAD = 3.14159265f / 18000.0f;
+    static constexpr float PI_F         = 3.14159265f;
+    static constexpr float kAngleScale    = 18000.0f / 3.14159265f;  // [cdeg/rad]
+    static constexpr float kAngleScaleInv = 3.14159265f / 18000.0f;  // [rad/cdeg]
 };

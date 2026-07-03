@@ -17,12 +17,12 @@ SimHardware::SimHardware(const RobotConfig& cfg)
     , _portIO(_plant)
     , _servo()
 {
-    _trackwidthMm = cfg.trackwidth;
+    _trackwidth = cfg.trackwidth;
     _plant.setTrackwidth(cfg.trackwidth);
 }
 
 // tick(now) — sensor tick.  Promotes each sim motor's plant reported-encoder
-// position into its positionMm() accessor (mirrors MockHAL::tick).  RIGHT before
+// position into its position() accessor (mirrors MockHAL::tick).  RIGHT before
 // LEFT to match the retired MockHAL ordering (immaterial to values — no I2C —
 // but kept consistent).  Does NOT integrate the plant; integration happens in
 // tick(now,cmds) via advance() (the single integration site).

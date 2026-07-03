@@ -905,8 +905,8 @@ static_assert(sizeof(msg::BodyTwist3) == sizeof(float) * 3,
 static_assert(sizeof(::BodyTwist3) == sizeof(float) * 3,
               "HAL BodyTwist3 must be 3 floats");
 
-// HAL RobotGeometry: { float halfTrackMm, halfWheelbaseMm } — must remain 2 floats.
-// Corresponds to DrivetrainConfig::half_track_mm / half_wheelbase_mm in the
+// HAL RobotGeometry: { float halfTrack, halfWheelbase } — must remain 2 floats.
+// Corresponds to DrivetrainConfig::half_track / half_wheelbase in the
 // generated drivetrain.h (no direct generated RobotGeometry message yet).
 static_assert(sizeof(::RobotGeometry) == sizeof(float) * 2,
               "HAL RobotGeometry must be 2 floats — check hal/capability/Pose2D.h");

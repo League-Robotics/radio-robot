@@ -105,8 +105,8 @@ void MotionCommand::start(const HardwareState& inputs, uint32_t now)
     // Capture motion baseline.
     // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
     _baseline.t0         = now;
-    _baseline.enc0       = (inputs.encMm[1] + inputs.encMm[0]) * 0.5f;
-    _baseline.encDiff0   = inputs.encMm[0] - inputs.encMm[1];
+    _baseline.enc0       = (inputs.encPos[1] + inputs.encPos[0]) * 0.5f;
+    _baseline.encDiff0   = inputs.encPos[0] - inputs.encPos[1];
     _baseline.heading0   = inputs.fused.pose.h;
     _baseline.pose0X     = inputs.fused.pose.x;
     _baseline.pose0Y     = inputs.fused.pose.y;
@@ -172,14 +172,14 @@ bool MotionCommand::tick(const HardwareState& inputs, uint32_t now, float dt_s)
             // base/cur is the outlier pinpoints the garbage encoder read that
             // corrupted the arc baseline.  One line per turn — low radio cost.
             if (_stops[i].kind == StopCondition::Kind::ROTATION && _replyFn) {
-                float d = inputs.encMm[0] - inputs.encMm[1] - _baseline.encDiff0;
+                float d = inputs.encPos[0] - inputs.encPos[1] - _baseline.encDiff0;
                 if (d < 0.0f) d = -d;
                 char dbg[80];
                 snprintf(dbg, sizeof(dbg),
                          "EVT ROTSTOP ms=%u arc=%d tgt=%d base=%d cur=%d",
                          (unsigned)(now - _baseline.t0), (int)(d * 0.5f),
                          (int)_stops[i].a, (int)_baseline.encDiff0,
-                         (int)(inputs.encMm[0] - inputs.encMm[1]));
+                         (int)(inputs.encPos[0] - inputs.encPos[1]));
                 _replyFn(dbg, _replyCtx);
             }
             // Record which condition fired so emitEvt can append reason=<token>.

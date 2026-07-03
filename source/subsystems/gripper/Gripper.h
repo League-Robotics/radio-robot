@@ -73,14 +73,14 @@ public:
 
 private:
     // NullPositionMotor — minimal no-op IPositionMotor for the null-object.
-    // setAngleDeg discards the command; currentAngleDeg always reports 0.
+    // commandAngle discards the command; currentAngle always reports 0.
     struct NullPositionMotor : public IPositionMotor {
-        void     setAngleDeg(uint16_t /*deg*/, uint8_t /*mode*/) override {}
-        uint16_t currentAngleDeg() const override { return 0; }
+        void     commandAngle(uint16_t /*angle*/, uint8_t /*mode*/) override {}
+        uint16_t currentAngle() const override { return 0; }
     };
 
     // A single shared null servo backing every GripperIONull instance.  No state
-    // is mutated through it (setAngleDeg is a no-op), so sharing is safe.
+    // is mutated through it (commandAngle is a no-op), so sharing is safe.
     static IPositionMotor& nullServo() {
         static NullPositionMotor instance;
         return instance;

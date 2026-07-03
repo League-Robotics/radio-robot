@@ -72,14 +72,14 @@ void PhysicsWorld::update(uint32_t dt) {  // [ms]
     // -----------------------------------------------------------------------
     float velL = (_pwmL / 100.0f) * _nominalMaxSpeed * _offsetFactorL;
     float velR = (_pwmR / 100.0f) * _nominalMaxSpeed * _offsetFactorR;
-    _trueEncLMm += velL * dt_s;
-    _trueEncRMm += velR * dt_s;
-    _trueVelLMms = velL;
-    _trueVelRMms = velR;
+    _trueEncL += velL * dt_s;
+    _trueEncR += velR * dt_s;
+    _trueVelL = velL;
+    _trueVelR = velR;
 
     // -----------------------------------------------------------------------
     // Sub-step A': reported-encoder accumulation (OQ-1 Option A — legacy
-    // MockMotor::integrate model, used by SimMotor::positionMm()).
+    // MockMotor::integrate model, used by SimMotor::position()).
     //
     // GOLDEN-TLM CRITICAL — DO NOT REFACTOR / SIMPLIFY.  This is the EXACT
     // MockMotor::integrate body (same float type, same operation order, same
@@ -107,8 +107,8 @@ void PhysicsWorld::update(uint32_t dt) {  // [ms]
     // Both default to zero (1.0f * 1.0f = no change) so golden-TLM is unaffected.
     float deltaL = noisyL * dt_s * (1.0f + _encScaleErrL) * (1.0f - _encSlipL);
     float deltaR = noisyR * dt_s * (1.0f + _encScaleErrR) * (1.0f - _encSlipR);
-    _reportedEncLMm += deltaL;
-    _reportedEncRMm += deltaR;
+    _reportedEncL += deltaL;
+    _reportedEncR += deltaR;
 
     // -----------------------------------------------------------------------
     // Sub-step B: chassis pose integration (NOT on the TLM path; clean formula).
@@ -128,7 +128,7 @@ void PhysicsWorld::update(uint32_t dt) {  // [ms]
     float dL       = velL * dt_s;
     float dR       = velR * dt_s;
     float slip     = effectiveSlip(_rotationalSlip) * clampScrub(_bodyRotationalScrub);
-    float dTh      = ((dR - dL) / _trackwidthMm) * slip;
+    float dTh      = ((dR - dL) / _trackwidth) * slip;
     float hMid     = _truePoseH + dTh * 0.5f;
     float linScrub = clampScrub(_bodyLinearScrub);
     _truePoseX += (dL + dR) * 0.5f * linScrub * cosf(hMid);
@@ -156,13 +156,13 @@ void PhysicsWorld::reset() {
     _truePoseY = 0.0f;
     _truePoseH = 0.0f;
 
-    _trueEncLMm  = 0.0f;
-    _trueEncRMm  = 0.0f;
-    _trueVelLMms = 0.0f;
-    _trueVelRMms = 0.0f;
+    _trueEncL  = 0.0f;
+    _trueEncR  = 0.0f;
+    _trueVelL = 0.0f;
+    _trueVelR = 0.0f;
 
-    _reportedEncLMm = 0.0f;
-    _reportedEncRMm = 0.0f;
+    _reportedEncL = 0.0f;
+    _reportedEncR = 0.0f;
 
     for (int i = 0; i < 4; ++i) {
         _lineRaw[i]   = 0;

@@ -1,12 +1,12 @@
 #include "SimServo.h"
 
-void SimServo::setAngleDeg(uint16_t deg, uint8_t mode) {
+void SimServo::commandAngle(uint16_t angle, uint8_t mode) {
     // Host behaviour preserved from MockServo — store the commanded angle
     // verbatim. A sim hobby servo has no Nezha motion mode, so `mode` is ignored.
     (void)mode;
-    _angle = deg;
+    _angle = angle;
 }
 
-uint16_t SimServo::currentAngleDeg() const {
+uint16_t SimServo::currentAngle() const {
     return _angle;
 }

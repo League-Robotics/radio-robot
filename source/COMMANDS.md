@@ -61,7 +61,7 @@ reason-token table.
 | `D` | distance drive (mm); accepts `stop=` clauses | | [`handleD`](commands/MotionCommands.cpp#L415) | [`parseD`](commands/MotionCommands.cpp#L382) |
 | `G` | go-to a **robot-relative** point — `G <x> <y> <speed>`: `x` = forward mm, `y` = left mm (`+` = left / CCW), `speed` = 1–1000 mm/s (`x`,`y` clamped to ±10000). Arcs to the (forward, left) target in the robot frame; replies `OK goto`, then `EVT done G` on arrival. | | [`handleG`](commands/MotionCommands.cpp#L518) | [`parseG`](commands/MotionCommands.cpp#L486) |
 | `R` | arc drive: forward speed + turn radius mm — `R <speed> <radius>` (`beginArc`, replies `OK arc`); accepts `stop=` clauses | | [`handleR`](commands/MotionCommands.cpp#L585) | [`parseR`](commands/MotionCommands.cpp#L558) |
-| `TURN` | spin in place to absolute heading, centidegrees — `TURN <cdeg> [eps=]` (`beginTurn`, replies `OK turn`); accepts `stop=` clauses | | [`handleTURN`](commands/MotionCommands.cpp#L665) | [`parseTURN`](commands/MotionCommands.cpp#L628) |
+| `TURN` | spin in place to absolute heading, centidegrees — `TURN <heading> [eps=]` (`beginTurn`, replies `OK turn`); accepts `stop=` clauses | | [`handleTURN`](commands/MotionCommands.cpp#L665) | [`parseTURN`](commands/MotionCommands.cpp#L628) |
 | `VW` | velocity + angular vel (unicycle); accepts `stop=` clauses | ✓ | [`handleVW`](commands/MotionCommands.cpp#L825) | [`parseVW`](commands/MotionCommands.cpp#L803) |
 | `_VW` | raw velocity, no ramp (seed+set BVC now) | ✓ | [`handle_VW`](commands/MotionCommands.cpp#L1052) | [`parse_VW`](commands/MotionCommands.cpp#L1030) |
 | `X` | stop immediately (`X soft` = ramp) | ✓ | [`handleX`](commands/MotionCommands.cpp#L1098) | [`parseX`](commands/MotionCommands.cpp#L1076) |
@@ -140,7 +140,7 @@ and `GET VEL` live in [`source/commands/ConfigCommands.cpp`](commands/ConfigComm
 | `RF` | set radio channel | [`handleRf`](commands/SystemCommands.cpp#L525) | [`parseRf`](commands/SystemCommands.cpp#L508) |
 | `+` | keepalive: reset watchdog | [`handleKeepalive`](commands/SystemCommands.cpp#L587) | [`parseKeepalive`](commands/SystemCommands.cpp#L581) |
 | `SAFE [off\|on [ms]]` | enable/disable safety-stop watchdog; optional timeout ms; `SAFE` alone queries. Reply: `OK safety on\|off timeout=<ms>` | [`handleSafe`](commands/SystemCommands.cpp#L634) | [`parseSafe`](commands/SystemCommands.cpp#L615) |
-| `SI` | set odometry world pose — `SI <x_mm> <y_mm> <h_cdeg>` | [`handleSI`](commands/SystemCommands.cpp#L712) | [`parseSI`](commands/SystemCommands.cpp#L695) |
+| `SI` | set odometry world pose — `SI <x> <y> <h>` (mm, mm, cdeg) | [`handleSI`](commands/SystemCommands.cpp#L712) | [`parseSI`](commands/SystemCommands.cpp#L695) |
 | `GET VEL` | get velocity PID params | [`handleGetVel`](commands/ConfigCommands.cpp#L46) | [`parseGetVel`](commands/ConfigCommands.cpp#L40) |
 | `GET` | get config value by key | [`handleGet`](robot/ConfigRegistry.cpp#L170) | [`parseGet`](commands/ConfigCommands.cpp#L63) |
 | `SET` | set config value by key | [`handleSet`](robot/ConfigRegistry.cpp#L396) | [`parseSet`](commands/ConfigCommands.cpp#L86) |

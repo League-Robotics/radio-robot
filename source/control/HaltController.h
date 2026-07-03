@@ -51,13 +51,13 @@ public:
     HaltController() = default;
 
     // add — register a new condition.
-    // now_ms and enc_avg_mm are the current system time and average encoder
+    // now_ms and encAvg are the current system time and average encoder
     // position at registration time; they are used to baseline TIME and DIST
     // conditions so that e.g. "HALT TIME 5000" fires ~5 s after registration
     // even without a prior ZERO T / ZERO D command.
     // Returns the assigned ID (monotonically increasing uint8_t); -1 on full.
     int add(const StopCondition& cond, StopStyle style, const char* str,
-            uint32_t now_ms, float enc_avg_mm);
+            uint32_t now_ms, float encAvg);   // [ms], [mm]
 
     // remove — deactivate the entry with the given id.
     // Returns true if found and removed.
@@ -79,7 +79,7 @@ public:
 
     // setDistBaseline — override the enc0 reference for all active DIST entries.
     // Called by ZERO D to re-baseline distance conditions to a specific odometry point.
-    void setDistBaseline(float enc_avg_mm);
+    void setDistBaseline(float encAvg);   // [mm]
 
     // count — return the number of currently active entries.
     int count() const;

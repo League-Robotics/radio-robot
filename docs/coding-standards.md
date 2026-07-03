@@ -138,3 +138,24 @@ and is out of scope for this convention regardless of whether the string
 happens to also look like a unit-suffixed identifier. They stay stable
 even when the internal C++ (or, later, Python) identifier next to them is
 renamed under this convention.
+
+Also excluded, for the same reason (the text is wire-visible even though
+it lives in a plain string literal, not a wire-key table): the `"usage: HALT
+POS <x_mm> <y_mm> <radius_mm>"` error-reply string in
+`source/commands/SystemCommands.cpp`'s `HALT POS` handler — it is emitted
+verbatim to the client on a bad-argument `ERR`, so changing the placeholder
+text inside it is a wire-format change like any other reply string.
+
+### External/vendor function names are excluded
+
+`system_timer_current_time_us()` (declared by the CODAL/microbit vendor SDK,
+called throughout `source/hal/real/Motor.cpp`, `source/com/SerialPort.cpp`,
+`source/com/I2CBus.cpp`, and `source/robot/WedgeTest.cpp`) is a vendor
+library function, not a project identifier — it is not declared anywhere in
+`source/`, and renaming it is not possible without forking the vendor SDK.
+It is excluded the same way `extern "C"` ctypes-boundary function names are:
+the convention governs names this project controls, not names imposed by an
+external interface. Every *call site's own local variable* that stores or
+derives from its return value (e.g. a cached "now" timestamp or a deadline)
+has been renamed per the normal convention — only the vendor function's own
+name is excluded.

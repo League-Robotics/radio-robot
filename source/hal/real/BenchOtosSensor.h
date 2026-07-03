@@ -77,7 +77,7 @@ public:
 
     void   getPositionRaw(int16_t& x, int16_t& y, int16_t& h) const override;
     void   setPositionRaw(int16_t x, int16_t y, int16_t h) override;
-    void   setWorldPose(float x_mm, float y_mm, float h_rad) override;
+    void   setWorldPose(float x, float y, float h) override;  // [mm], [mm], [rad]
 
     int8_t getLinearScalar()         const override { return 0; }
     void   setLinearScalar(int8_t)         override {}
@@ -97,13 +97,13 @@ public:
     /**
      * tick — integrate one control step into both accumulators.
      *
-     * velLMms, velRMms : commanded left/right wheel velocities, mm/s.
-     * trackwidthMm     : wheel-to-wheel track width, mm.
-     * dt_ms            : elapsed time for this step, ms.
+     * velLeft, velRight : commanded left/right wheel velocities, mm/s.
+     * trackwidth        : wheel-to-wheel track width, mm.
+     * dt_ms             : elapsed time for this step, ms.
      *
-     * No-op when dt_ms == 0, trackwidthMm <= 0, or is_initialized() is false.
+     * No-op when dt_ms == 0, trackwidth <= 0, or is_initialized() is false.
      */
-    void tick(float velLMms, float velRMms, float trackwidthMm, uint32_t dt_ms);
+    void tick(float velLeft, float velRight, float trackwidth, uint32_t dt_ms);  // [mm/s], [mm/s], [mm], [ms]
 
     /**
      * enable / enabled — gate whether tick() advances the accumulators.

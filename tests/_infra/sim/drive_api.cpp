@@ -136,8 +136,8 @@ void drive_api_apply_setpose(void* h, float x, float y, float h_rad)
 // Tick ordering (mirrors the live loopTickOnce pattern):
 //   hal.tick(now, outputs)  — integrate plant physics with the PWM that was
 //                             written by the previous tickAction's controlTick.
-//   hal.tick(now)           — promote integrated encoder into positionMm().
-//   drive.tickUpdate(now)  — read positionMm(), run outlier filter + EKF predict.
+//   hal.tick(now)           — promote integrated encoder into position().
+//   drive.tickUpdate(now)  — read position(), run outlier filter + EKF predict.
 void drive_api_tick_update(void* h, uint32_t now_ms)
 {
     DriveHandle* d = static_cast<DriveHandle*>(h);
@@ -208,7 +208,7 @@ float drive_api_get_target_mms_l(void* h)
     // directly, but PhysicsWorld does.
     // For the test purposes: read sim motor L's current velocity (if 0, braked).
     // We use hal.simMotorL() to read the last commanded speed from PhysicsWorld.
-    // PhysicsWorld::trueVelLMms() returns the ACTUAL velocity (not commanded).
+    // PhysicsWorld::trueVelL() returns the ACTUAL velocity (not commanded).
     // Instead, the simplest correct approach: read state.vel_[1] from Drive.
     const msg::DrivetrainState& st = static_cast<DriveHandle*>(h)->drive.state();
     if (st.vel_count_val() >= 2) return st.vel()[1];

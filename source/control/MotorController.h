@@ -68,13 +68,13 @@ public:
      *                   2 = right wheel was just collected.
      *
      * For the refreshed wheel only: computes velocity as
-     *   (inputs.encWMm - _prevEncW) / elapsed_s
+     *   (inputs.encPos[w] - _prevEncL/R) / elapsed_s
      * using per-wheel timestamps for the correct elapsed time, then
-     * writes inputs.velWMms and updates _prevEncW / _prevTimeMsW.
+     * writes inputs.vel[w] and updates _prevEncL/R / _prevTimeL/R.
      *
-     * For the other wheel: leaves inputs.velWMms unchanged (ZOH).
+     * For the other wheel: leaves inputs.vel[w] unchanged (ZOH).
      *
-     * Then runs PID for BOTH wheels using the held inputs.velLMms/velRMms,
+     * Then runs PID for BOTH wheels using the held inputs.vel[1]/vel[0],
      * writes cmds.pwmL/R, and calls Motor::setSpeed().
      *
      * now: current system time in milliseconds (for per-wheel dt).
@@ -85,7 +85,7 @@ public:
 
     /**
      * setCommandsRef — bind the authoritative MotorCommands struct so that
-     * setTarget / startDrive / stop can write tgtLMms/R directly (014-007).
+     * setTarget / startDrive / stop can write tgtSpeed[] directly (014-007).
      * Must be called before the first setTarget (Robot constructor does this).
      */
     void setCommandsRef(MotorCommands* cmds) { _cmds = cmds; }
@@ -173,7 +173,7 @@ private:
     bool  _fasterIsRight;    // true if right wheel is the commanded-faster wheel
 
     // Pointer to the authoritative MotorCommands (set by Robot via setCommandsRef).
-    // setTarget / startDrive / stop write tgtLMms/R here directly (014-007).
+    // setTarget / startDrive / stop write tgtSpeed[] here directly (014-007).
     MotorCommands* _cmds;
 
     // Previous encoder snapshots — intermediate compute state for velocity differentiation.
@@ -197,7 +197,7 @@ private:
     bool     _hasPidTick;    // false until the first PID tick
 
     // Measured per-wheel velocity snapshot (064-003), refreshed each
-    // controlTick() call from inputs.velMms[] AFTER that tick's per-wheel ZOH
+    // controlTick() call from inputs.vel[] AFTER that tick's per-wheel ZOH
     // velocity update runs. Read by resetEncoderAccumulators() as the
     // measured component of the at-rest decision (hardware atomic re-prime
     // vs. software-only rebaseline) — see architecture-update.md ticket 3.

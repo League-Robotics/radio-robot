@@ -117,8 +117,8 @@ int main() {
         withScrub.update(100);
 
         // Encoders (sub-step A) must be identical — scrub does not touch them.
-        bool encOk = bitEqual(noScrub.trueEncLMm(), withScrub.trueEncLMm()) &&
-                     bitEqual(noScrub.trueEncRMm(), withScrub.trueEncRMm());
+        bool encOk = bitEqual(noScrub.trueEncL(), withScrub.trueEncL()) &&
+                     bitEqual(noScrub.trueEncR(), withScrub.trueEncR());
         // Heading reduced by exactly the scrub factor (rotationalSlip is 0/unset
         // on both, so effectiveSlip() contributes 1.0 to both).
         bool headOk = std::fabs(withScrub.truePoseH() - noScrub.truePoseH() * 0.92f) < 1e-4f;

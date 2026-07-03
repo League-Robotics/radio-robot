@@ -220,7 +220,7 @@ void Planner::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
         // at the same point.  Only clamps downward; does not increase speed.
         if (_mode == DriveMode::DISTANCE) {
             // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
-            float enc_avg     = (inputs.encMm[1] + inputs.encMm[0]) * 0.5f;
+            float enc_avg     = (inputs.encPos[1] + inputs.encPos[0]) * 0.5f;
             float d_traveled  = fabsf(enc_avg - _dEnc0);
             float d_remaining = _dDistTarget - d_traveled;
             if (d_remaining > 0.0f) {
@@ -287,7 +287,7 @@ void Planner::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
             // Without this the last BVC wheel target persists and the motor PID
             // keeps driving it forever (runaway), since IDLE mode no longer
             // advances the BVC to write fresh (zero) setpoints. _mc_ctrl.stop()
-            // zeros tgtLMms/tgtRMms and resets the PID, so driving=false next tick.
+            // zeros tgtSpeed[] and resets the PID, so driving=false next tick.
             _mc_ctrl.stop();
             _bvc.reset();
             _mode = DriveMode::IDLE;
@@ -409,8 +409,8 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now)
     case msg::PlannerCommand::GoalKind::TURN: {
         // beginTurn takes (heading, eps).
         // TurnGoal.heading → convert to centidegrees.
-        static constexpr float RAD_TO_CDEG = 18000.0f / 3.14159265f;
-        float heading = cmd.goal.turn.heading * RAD_TO_CDEG;
+        static constexpr float kAngleScale = 18000.0f / 3.14159265f;  // [cdeg/rad]
+        float heading = cmd.goal.turn.heading * kAngleScale;
         float eps     = 300.0f;  // default 3° tolerance
         beginTurn(heading, eps, now, _target, _noopReply, nullptr, corrId);
         break;
@@ -450,8 +450,8 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now)
     case msg::PlannerCommand::GoalKind::ROTATION: {
         // beginRotation takes (relAngle).
         // RotationGoal: angle_rad.
-        static constexpr float RAD_TO_CDEG = 18000.0f / 3.14159265f;
-        float relAngle = cmd.goal.rotation.angle * RAD_TO_CDEG;
+        static constexpr float kAngleScale = 18000.0f / 3.14159265f;  // [cdeg/rad]
+        float relAngle = cmd.goal.rotation.angle * kAngleScale;
         beginRotation(relAngle, now, _target, _noopReply, nullptr, corrId);
         break;
     }
@@ -508,8 +508,8 @@ msg::CommandBatch Planner::tick(uint32_t now)
     _hw.fused.twist.omega_rads    = drvState.get_fused().get_twist().get_omega();
 
     // Encoder pose (for DISTANCE stop condition evaluation via driveAdvance).
-    _hw.encMm[0] = drvState.enc()[0];  // [0]=R
-    _hw.encMm[1] = drvState.enc()[1];  // [1]=L
+    _hw.encPos[0] = drvState.enc()[0];  // [0]=R
+    _hw.encPos[1] = drvState.enc()[1];  // [1]=L
 
     // Sensor fields (line / color) for SENSOR/LINE_ANY/COLOR stop conditions.
     //

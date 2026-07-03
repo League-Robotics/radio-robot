@@ -220,7 +220,7 @@ void LoopScheduler::run_blocks()
         // (039-002) The encoder READ moved into Hardware::tick(now) → Motor::tick()
         // (right/M1 first, then left/M2 — same ordering as before).  The outlier
         // filter, velocity PID, and wedge push now run at the top of loopTickOnce
-        // (CONTROL COLLECT block) reading positionMm().  This preserves the exact
+        // (CONTROL COLLECT block) reading position().  This preserves the exact
         // pre-loopTickOnce ordering controlCollectSplitPhase had.
         if (enControl) {
             _robot.hal.tick(now);

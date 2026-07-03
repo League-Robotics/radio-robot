@@ -99,7 +99,7 @@ bool StopCondition::evaluate(const HardwareState& s, uint32_t now,
             // Uses raw encoder sum (not filtered) per architecture decision:
             //   "filtered value can stall under outlier filtering" (D-command finding).
             // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
-            float enc_avg = (s.encMm[1] + s.encMm[0]) * 0.5f;
+            float enc_avg = (s.encPos[1] + s.encPos[0]) * 0.5f;
             float traveled = enc_avg - base.enc0;
             if (traveled < 0.0f) traveled = -traveled;  // fabsf without including math.h twice
             return traveled >= a;
@@ -168,7 +168,7 @@ bool StopCondition::evaluate(const HardwareState& s, uint32_t now,
             // Per-wheel arc = |Δdiff| / 2.  Uses raw encoder values (not
             // filtered) — same rationale as DISTANCE: the filter can stall.
             // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
-            float diff = (s.encMm[0] - s.encMm[1]) - base.encDiff0;
+            float diff = (s.encPos[0] - s.encPos[1]) - base.encDiff0;
             if (diff < 0.0f) diff = -diff;
             return (diff * 0.5f) >= a;
         }

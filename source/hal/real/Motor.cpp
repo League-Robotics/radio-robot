@@ -59,7 +59,7 @@ void Motor::setSpeed(int8_t pct)
     // that fast wedges its encoder reads (the read freezes at a constant while
     // the wheels keep spinning). Writing only on a real change keeps the
     // controller healthy. See docs/knowledge encoder-wedge note.
-    if (pct == _lastWrittenPct) {
+    if (pct == _lastWrittenSpeed) {
         return;
     }
 
@@ -71,20 +71,20 @@ void Motor::setSpeed(int8_t pct)
     // (proven: the WedgeTest harness holds a CONSTANT speed so its writes are
     // suppressed for 40-tick stretches → zero wedges over 10 min; the alternating
     // production path wedged in ~165 ticks). We throttle 0x60 writes to
-    // kMinWriteIntervalUs so the bus is dominated by reads, matching WedgeTest —
+    // kMinWriteInterval so the bus is dominated by reads, matching WedgeTest —
     // BUT a stop (pct == 0) or a direction reversal is always written immediately
     // for safety/responsiveness. Between throttled writes the chip simply holds
     // the last 0x60 command (the wheels keep spinning), and the next allowed
     // write applies the freshest PID output.
-    static constexpr uint32_t kMinWriteIntervalUs = 40000;   // 40 ms ≈ 25 Hz max
+    static constexpr uint32_t kMinWriteInterval = 40000;   // [us] 40 ms ≈ 25 Hz max
     bool stopping = (pct == 0);
-    bool reversal = (pct != 0 && _lastWrittenPct != 0 &&
-                     ((pct > 0) != (_lastWrittenPct > 0)));
-    uint64_t nowUs = system_timer_current_time_us();
+    bool reversal = (pct != 0 && _lastWrittenSpeed != 0 &&
+                     ((pct > 0) != (_lastWrittenSpeed > 0)));
+    uint64_t now = system_timer_current_time_us();   // [us]
     if (!stopping && !reversal &&
-        (nowUs - _lastWriteUs) < kMinWriteIntervalUs) {
+        (now - _lastWriteTime) < kMinWriteInterval) {
         // Too soon since the last write and not a stop/reversal — suppress.
-        // _lastWrittenPct is deliberately NOT updated, so the next tick still
+        // _lastWrittenSpeed is deliberately NOT updated, so the next tick still
         // sees a change and writes the latest PID output once the interval ends.
         return;
     }
@@ -97,7 +97,7 @@ void Motor::setSpeed(int8_t pct)
     // above — is stepped by at most kMaxDeltaPwmPerWrite toward the
     // requested target instead of slamming the whole swing in one 0x60
     // transaction. `written`, not the caller's `pct`, becomes the new
-    // _lastWrittenPct below, so the write-on-change guard at the top of this
+    // _lastWrittenSpeed below, so the write-on-change guard at the top of this
     // function causes a large reversal to converge over several consecutive
     // setSpeed() calls rather than one instant step.
     //
@@ -107,10 +107,10 @@ void Motor::setSpeed(int8_t pct)
     static constexpr uint8_t kMaxDeltaPwmPerWrite = 25;  // of the ±100 PWM-percent range
     int8_t written = stopping
         ? pct
-        : MotorSlew::clampStep(_lastWrittenPct, pct, kMaxDeltaPwmPerWrite);
+        : MotorSlew::clampStep(_lastWrittenSpeed, pct, kMaxDeltaPwmPerWrite);
 
-    _lastWriteUs    = nowUs;
-    _lastWrittenPct = written;
+    _lastWriteTime    = now;
+    _lastWrittenSpeed = written;
 
     // Apply fwdSign: positive written = logical forward; fwdSign maps that to
     // the chip's CW/CCW convention.  For the right wheel, fwdSign = -1 so
@@ -219,8 +219,8 @@ void Motor::resetEncoder()
         int32_t readback = readEncoderAtomic();
         if (readback >= -kReadbackThreshold && readback <= kReadbackThreshold) {
             // Clean reset — done.  Realign the tick() cache with the now-zeroed
-            // accumulator so positionMm()/velocityMmps() and the outlier-filter
-            // baseline (state.inputs.encLMm/R, also zeroed in Robot::resetEncoders)
+            // accumulator so position()/velocityMmps() and the outlier-filter
+            // baseline (state.inputs.encPos[], also zeroed in Robot::resetEncoders)
             // stay in lockstep (039-002).
             _lastPosition     = 0.0f;
             _lastVelocityMmps = 0.0f;
@@ -267,7 +267,7 @@ void Motor::rebaselineSoft()
     // (populated by the normal per-tick 0x46 read in tick(), not a new
     // atomic read) back into raw tenths-of-degrees and adds it to
     // _encOffset, then zeros the cache exactly as resetEncoder()'s success
-    // path does — so positionMm() reads 0 immediately after this call, in
+    // path does — so position() reads 0 immediately after this call, in
     // lockstep with the host-side baselines (Robot::resetEncoders() /
     // Drive::resetEncoders()) that zero unconditionally right after calling
     // MotorController::resetEncoderAccumulators().
@@ -304,11 +304,11 @@ int32_t Motor::readEncoderAtomic() const
     // a competing I2C transaction during the window.
     //
     // Cost: ~8 ms per call — acceptable for one-off operations.
-    static constexpr uint32_t kDelayUs = 4000;  // 4 ms each phase (vendor requirement)
+    static constexpr uint32_t kDelay = 4000;  // [us] 4 ms each phase (vendor requirement)
 
     // Pre-write bus-idle delay.
     {
-        uint64_t deadline = system_timer_current_time_us() + kDelayUs;
+        uint64_t deadline = system_timer_current_time_us() + kDelay;
         while (system_timer_current_time_us() < deadline) {}
     }
 
@@ -323,7 +323,7 @@ int32_t Motor::readEncoderAtomic() const
 
     // Post-write settle: chip prepares the 4-byte encoder response.
     {
-        uint64_t deadline = system_timer_current_time_us() + kDelayUs;
+        uint64_t deadline = system_timer_current_time_us() + kDelay;
         while (system_timer_current_time_us() < deadline) {}
     }
 
@@ -443,10 +443,10 @@ float Motor::readEncoderMmFSettle(const RobotConfig& cfg) const
     // Settle-only encoder read — skips the 4 ms pre-write bus-idle used by
     // readEncoderAtomic(). The fixed-rate control loop leaves the bus naturally
     // idle between ticks, so the pre-idle is redundant there. Cost: ~4 ms.
-    static constexpr uint32_t kSettleUs = 4000;
+    static constexpr uint32_t kSettle = 4000;   // [us]
     uint8_t cmd[8] = { 0xFF, 0xF9, _motorId, 0x00, 0x46, 0x00, 0xF5, 0x00 };
     int writeResult = _i2c.write((ADDR << 1), (uint8_t*)cmd, 8, false);
-    uint64_t deadline = system_timer_current_time_us() + kSettleUs;
+    uint64_t deadline = system_timer_current_time_us() + kSettle;
     while (system_timer_current_time_us() < deadline) {}
     uint8_t resp[4] = { 0, 0, 0, 0 };
     int readResult = _i2c.read((ADDR << 1), (uint8_t*)resp, 4, false);
@@ -476,7 +476,7 @@ void Motor::tick(uint32_t now_ms)
     // 4-byte read → convert to mm.  The bytes on the wire are byte-for-byte
     // identical to the pre-039 path; only the call site moved (Robot → here).
     //
-    // The result is cached in _lastPosition for positionMm(); the control layer
+    // The result is cached in _lastPosition for position(); the control layer
     // applies the speed-scaled outlier filter against this value (OQ-2 b).  A
     // simple position-difference velocity is cached in _lastVelocityMmps for
     // velocityMmps() — it is NOT consumed by the PID (which keeps its own EMA /
@@ -559,11 +559,11 @@ int32_t Motor::readSpeedRaw() const
     // as readEncoderRaw(): fiber_sleep() yields to the CODAL scheduler and
     // allows the comms fiber to issue an I2C write mid-transaction, corrupting
     // the speed register read.  Busy-wait keeps the transaction atomic.
-    static constexpr uint32_t kPreWriteDelayUs  = 4000;   // 4 ms
-    static constexpr uint32_t kPostWriteDelayUs = 8000;   // 8 ms (increased from 4 ms, 012-004)
+    static constexpr uint32_t kPreWriteDelay  = 4000;   // [us] 4 ms
+    static constexpr uint32_t kPostWriteDelay = 8000;   // [us] 8 ms (increased from 4 ms, 012-004)
 
     {
-        uint64_t deadline = system_timer_current_time_us() + kPreWriteDelayUs;
+        uint64_t deadline = system_timer_current_time_us() + kPreWriteDelay;
         while (system_timer_current_time_us() < deadline) {}
     }
     uint8_t cmd[8] = {
@@ -575,7 +575,7 @@ int32_t Motor::readSpeedRaw() const
     };
     int writeResult = _i2c.write((ADDR << 1), (uint8_t*)cmd, 8, false);
     {
-        uint64_t deadline = system_timer_current_time_us() + kPostWriteDelayUs;
+        uint64_t deadline = system_timer_current_time_us() + kPostWriteDelay;
         while (system_timer_current_time_us() < deadline) {}
     }
 
@@ -625,7 +625,7 @@ void Motor::moveToAngle(uint16_t angle, uint8_t mode)
     // Clamp to 0-359 (mirrors vendor TS: angle %= 360).
     angle = angle % 360;
 
-    // 039-003: record the clamped angle for IPositionMotor::currentAngleDeg()
+    // 039-003: record the clamped angle for IPositionMotor::currentAngle()
     // (reached via asPositionMotor()).  This is a host-side cache only — it does
     // NOT change any wire byte below.
     _lastAngle = angle;

@@ -460,10 +460,10 @@ static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
     // F1 fix (034-004): CODAL/newlib-nano has no float printf, so %f emits
     // nothing on hardware.  Use scaled integers matching SNAP/TLM convention:
     //   position fields: integer mm  (round to nearest)
-    //   heading field:   integer cdeg = rad * RAD_TO_CDEG = rad * 18000/pi
-    // RAD_TO_CDEG = 18000.0f / 3.14159265f (see Odometry.h:273).
+    //   heading field:   integer cdeg = rad * kAngleScale = rad * 18000/pi
+    // kAngleScale = 18000.0f / 3.14159265f (see Odometry.h).
     // roundf() is available in newlib-nano without float printf.
-    static constexpr float kRadToCdeg = 18000.0f / 3.14159265f;
+    static constexpr float kAngleScale = 18000.0f / 3.14159265f;  // [cdeg/rad]
 
     // Emit the pose comparison line, then the OK reply.
     // Format: ideal=<xmm>,<ymm>,<hcdeg> otos=... fused=... err=...
@@ -478,10 +478,10 @@ static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
     snprintf(pose_buf, sizeof(pose_buf),
              "ideal=%d,%d,%d otos=%d,%d,%d fused=%d,%d,%d err=%d,%d,%d "
              "status=0x%02X statusOk=%d valid=%d",
-             (int)roundf(idealX), (int)roundf(idealY), (int)roundf(idealH * kRadToCdeg),
-             (int)roundf(otosX),  (int)roundf(otosY),  (int)roundf(otosH  * kRadToCdeg),
-             (int)roundf(fusedX), (int)roundf(fusedY), (int)roundf(fusedH * kRadToCdeg),
-             (int)roundf(errX),   (int)roundf(errY),   (int)roundf(errH   * kRadToCdeg),
+             (int)roundf(idealX), (int)roundf(idealY), (int)roundf(idealH * kAngleScale),
+             (int)roundf(otosX),  (int)roundf(otosY),  (int)roundf(otosH  * kAngleScale),
+             (int)roundf(fusedX), (int)roundf(fusedY), (int)roundf(fusedH * kAngleScale),
+             (int)roundf(errX),   (int)roundf(errY),   (int)roundf(errH   * kAngleScale),
              (unsigned)otosStatus, statusOk ? 1 : 0, valid);
     replyFn(pose_buf, replyCtx);
 
@@ -521,8 +521,8 @@ static void handleDbgEst(const ArgList& /*args*/, const char* corrId,
     uint32_t now_ms = ctx.robot->systemTime();
     dumpEstimates(ctx.robot->state.actual, now_ms, dump);
 
-    // RAD_TO_CDEG = 18000/pi — same constant used by Odometry.h.
-    static constexpr float kRadToCdeg  = 18000.0f / 3.14159265f;
+    // kAngleScale = 18000/pi — same constant used by Odometry.h.
+    static constexpr float kAngleScale = 18000.0f / 3.14159265f;  // [cdeg/rad]
     static constexpr float kRadToMrad  = 1000.0f;
 
     for (int i = 0; i < 3; ++i) {
@@ -536,7 +536,7 @@ static void handleDbgEst(const ArgList& /*args*/, const char* corrId,
                  toString(d.source),
                  (int)d.pose.x,
                  (int)d.pose.y,
-                 (int)(d.pose.h * kRadToCdeg),
+                 (int)(d.pose.h * kAngleScale),
                  (int)d.twist.vx_mmps,
                  (int)d.twist.vy_mmps,
                  (int)(d.twist.omega_rads * kRadToMrad),

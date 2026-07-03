@@ -12,7 +12,7 @@ class IPositionMotor;
  * IMotor interface, and `source/hal/IMotor.h` becomes a `using IMotor =
  * IVelocityMotor;` shim so every existing consumer (Motor, MockMotor,
  * MotorController, Robot) compiles unchanged.  The capability-typed method
- * rename (setOutput / positionMm / velocityMmps / tick) and the split-phase
+ * rename (setOutput / position / velocityMmps / tick) and the split-phase
  * move into the Motor impl land in T2/T3 — bodies are not changed here.
  *
  * Allows MotorController and Robot to be written against the interface
@@ -38,7 +38,7 @@ public:
     // Hardware::tick(now_ms)) BEFORE loopTickOnce.  The concrete Motor performs
     // the split-phase encoder read here and caches the last-collected position
     // (mm) and a differentiated velocity (mm/s).  After tick() the control layer
-    // reads those cached values through positionMm() / velocityMmps() without
+    // reads those cached values through position() / velocityMmps() without
     // issuing any further I2C.  Default no-op so non-encoder test doubles (and
     // the MockMotor's separate integration path) need no special handling.
     //
@@ -48,9 +48,9 @@ public:
     // resolution (b) — only the request/collect I2C read moves into the impl.
     virtual void tick(uint32_t now_ms) { (void)now_ms; }
 
-    // positionMm(): last-collected cumulative encoder position in mm (float).
+    // position(): last-collected cumulative encoder position [mm] (float).
     // Cheap accessor — returns the value cached by the most recent tick(); no I2C.
-    virtual float positionMm() const = 0;
+    virtual float position() const = 0;
 
     // velocityMmps(): last-differentiated wheel velocity in mm/s.
     // Cheap accessor — returns the value cached by the most recent tick(); no I2C.

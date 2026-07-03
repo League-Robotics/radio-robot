@@ -317,8 +317,8 @@ void Planner::beginDistance(float left, float right,
     // the mirror plus resetting velocity baselines and the odometry snapshot).
     if (_hwState) {
         // Zero canonical encoder arrays.
-        _hwState->encMm[0] = 0;   // FR = index 0
-        _hwState->encMm[1] = 0;   // FL = index 1
+        _hwState->encPos[0] = 0;   // FR = index 0
+        _hwState->encPos[1] = 0;   // FL = index 1
     }
 
     // Snapshot hardware state for MotionBaseline.  The encoder mirror was just

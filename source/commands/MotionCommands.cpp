@@ -129,7 +129,7 @@ static bool mc_parseSensorToken(const char* value,
 //   line:<ge|le>:<thr>       → makeLineAnyStop(thr, cmp)
 //   sensor:<ch>:<ge|le>:<thr>→ makeSensorStop(ch, thr, cmp)
 //   color:<h>:<s>:<v>:<dist> → makeColorStop(h, s, v, dist)
-//   heading:<cdeg>:<eps_cdeg>→ makeHeadingStop(rad, eps_rad)
+//   heading:<cdeg>:<eps>→ makeHeadingStop(rad, eps_rad)
 //   rot:<arc_mm>             → makeRotationStop(arc_mm)
 // ---------------------------------------------------------------------------
 static bool mc_parseStopTokenInto(const char* value, StopCondition& out)
@@ -213,16 +213,16 @@ static bool mc_parseStopTokenInto(const char* value, StopCondition& out)
     }
 
     if (strcmp(kind, "heading") == 0) {
-        // heading:<cdeg>:<eps_cdeg>
+        // heading:<cdeg>:<eps>
         char* colon2 = strchr(const_cast<char*>(rest), ':');
         if (!colon2) return false;
         *colon2 = '\0';
         const char* eps_str = colon2 + 1;
-        float cdeg     = (float)atof(rest);
-        float eps_cdeg = (float)atof(eps_str);
+        float heading  = (float)atof(rest);      // [cdeg]
+        float eps      = (float)atof(eps_str);   // [cdeg]
         const float kCdegToRad = 3.14159265f / (100.0f * 180.0f);
-        float headingRad = cdeg     * kCdegToRad;
-        float epsRad     = eps_cdeg * kCdegToRad;
+        float headingRad = heading * kCdegToRad;
+        float epsRad     = eps     * kCdegToRad;
         out = makeHeadingStop(headingRad, epsRad);
         return true;
     }
@@ -556,9 +556,9 @@ static void handleS(const ArgList& args, const char* corrId,
     int r = args.args[1].ival;
 
     // Compute body twist via forward kinematics.
-    float v_mms, omega_rads;
+    float v, omega_rads;   // [mm/s], [rad/s]
     BodyKinematics::forward((float)l, (float)r, ctx->robot->config.trackwidth,
-                            v_mms, omega_rads);
+                            v, omega_rads);
 
     uint32_t now = ctx->robot->systemTime();
 
@@ -570,7 +570,7 @@ static void handleS(const ArgList& args, const char* corrId,
     gr.replyFn    = replyFn;
     gr.replyCtx   = replyCtx;
     gr.corrId     = corrId;
-    gr.v_mms      = v_mms;
+    gr.v          = v;
     gr.omega_rads = omega_rads;
     gr.streamSeed = true;
     gr.doneLabel  = "EVT done S";
@@ -643,9 +643,9 @@ static void handleT(const ArgList& args, const char* corrId,
         }
 
         // Compute body twist via forward kinematics (no integer truncation).
-        float v_mms, omega_rads;
+        float v, omega_rads;   // [mm/s], [rad/s]
         BodyKinematics::forward((float)l, (float)r, ctx->robot->config.trackwidth,
-                                v_mms, omega_rads);
+                                v, omega_rads);
 
         uint32_t now = ctx->robot->systemTime();
 
@@ -657,7 +657,7 @@ static void handleT(const ArgList& args, const char* corrId,
         gr.replyFn    = replyFn;
         gr.replyCtx   = replyCtx;
         gr.corrId     = corrId;
-        gr.v_mms      = v_mms;
+        gr.v          = v;
         gr.omega_rads = omega_rads;
         gr.doneLabel  = "EVT done T";
         gr.streamSeed = false;
@@ -704,8 +704,8 @@ static void handleT(const ArgList& args, const char* corrId,
 // handleD — direct requestGoal(DISTANCE) with a DISTANCE stop (053-004).
 //
 // Builds a GoalRequest with goal=DISTANCE (preserving the atomic encoder reset
-// via robot->distanceDrive in Superstructure::requestGoal), leftMms/rightMms
-// as integer wheel speeds, targetMm=mm, and doneLabel="EVT done D".
+// via robot->distanceDrive in Superstructure::requestGoal), left/right
+// as integer wheel speeds, targetDistance=mm, and doneLabel="EVT done D".
 // Eliminates the stringify/inverse round-trip. gr.stops[] carries only
 // wire-supplied stop=/sensor= clauses (065-001 / CR-01) — the primary
 // DISTANCE+TIME stop pair is installed internally by distanceDrive() ->
@@ -749,7 +749,7 @@ static void handleD(const ArgList& args, const char* corrId,
         uint32_t now = ctx->robot->systemTime();
 
         // Build GoalRequest for DISTANCE — wheel speeds passed as integers,
-        // matching distanceDrive's (int32_t vL, int32_t vR, int32_t targetMm) signature.
+        // matching distanceDrive's (int32_t vL, int32_t vR, int32_t targetDistance) signature.
         GoalRequest gr{};
         gr.goal     = Goal::DISTANCE;
         gr.robot    = ctx->robot;
@@ -757,9 +757,9 @@ static void handleD(const ArgList& args, const char* corrId,
         gr.replyFn  = replyFn;
         gr.replyCtx = replyCtx;
         gr.corrId   = corrId;
-        gr.leftMms  = (float)l;   // int32_t cast preserved inside Superstructure
-        gr.rightMms = (float)r;
-        gr.targetMm = (int32_t)mm;
+        gr.left     = (float)l;   // [mm/s] int32_t cast preserved inside Superstructure
+        gr.right    = (float)r;   // [mm/s]
+        gr.targetDistance = (int32_t)mm;   // [mm]
         gr.doneLabel = "EVT done D";
         // NOTE (065-001 / CR-01): do NOT pre-populate gr.stops[0] with a
         // makeDistanceStop(mm) here. distanceDrive() -> beginDistance() already
@@ -890,7 +890,7 @@ static void handleR(const ArgList& args, const char* corrId,
         gr.replyFn    = replyFn;
         gr.replyCtx   = replyCtx;
         gr.corrId     = corrId;
-        gr.v_mms      = (float)speed;
+        gr.v          = (float)speed;
         gr.omega_rads = omega_rads;
         gr.doneLabel  = "EVT done R";
         gr.streamSeed = false;
@@ -935,23 +935,23 @@ static ParseResult parseTURN(const char* const* tokens, int ntokens,
     if (ntokens < 1) {
         res.ok = false; res.err.code = "badarg"; res.err.detail = nullptr; return res;
     }
-    int heading_cdeg = atoi(tokens[0]);
-    if (heading_cdeg < -18000 || heading_cdeg > 18000) {
+    int heading = atoi(tokens[0]);
+    if (heading < -18000 || heading > 18000) {
         res.ok = false; res.err.code = "range"; res.err.detail = "heading"; return res;
     }
     // Parse optional eps=<cdeg> kv; default 300.
-    int eps_cdeg = 300;
+    int eps = 300;
     const KVPair* epsKv = kvFind(kvs, nkv, "eps");
     if (epsKv) {
-        eps_cdeg = atoi(epsKv->value);
-        if (eps_cdeg < 10 || eps_cdeg > 1800) {
+        eps = atoi(epsKv->value);
+        if (eps < 10 || eps > 1800) {
             res.ok = false; res.err.code = "range"; res.err.detail = "eps"; return res;
         }
     }
     res.ok = true;
     res.args.count = 2;
-    argInt(res.args.args[0], heading_cdeg);
-    argInt(res.args.args[1], eps_cdeg);
+    argInt(res.args.args[0], heading);
+    argInt(res.args.args[1], eps);
     // Collect all stop= and sensor= KV pairs into trailing STR args with full
     // prefixes ("stop=<value>", "sensor=<value>") so handleVW mc_applyStopClauses
     // can process them.  mc_packStopKVs handles both keys in a single pass.
@@ -963,15 +963,15 @@ static ParseResult parseTURN(const char* const* tokens, int ntokens,
 // handleTURN — VW converter with "h=<cdeg>", "eps=<cdeg>" stop params.
 //
 // TURN is an absolute-heading rotation: v = 0 (spin-in-place), omega is
-// computed by VW handler from heading_cdeg. Stop params "h=<cdeg>" and
+// computed by VW handler from heading. Stop params "h=<cdeg>" and
 // "eps=<cdeg>" tell VW handler to call beginTurn().
 // Falls back to direct beginTurn() when queue is null.
 static void handleTURN(const ArgList& args, const char* corrId,
                        ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
     MotionCtx* ctx = static_cast<MotionCtx*>(handlerCtx);
-    int heading_cdeg = args.args[0].ival;
-    int eps_cdeg     = args.args[1].ival;
+    int heading = args.args[0].ival;
+    int eps     = args.args[1].ival;
 
     if (ctx->queue != nullptr) {
         // N16 fix (030-009): validate sensor= back-compat clauses BEFORE replying OK.
@@ -994,8 +994,8 @@ static void handleTURN(const ArgList& args, const char* corrId,
         vwArgs.count = 2;
         argInt(vwArgs.args[0], 0);   // v = 0 (spin-in-place; omega computed by VW handler)
         argInt(vwArgs.args[1], 0);   // omega placeholder; VW handler uses "h" param
-        vwArgs.count = packKVArg(vwArgs, 2, "h", heading_cdeg);
-        vwArgs.count = packKVArg(vwArgs, vwArgs.count, "eps", eps_cdeg);
+        vwArgs.count = packKVArg(vwArgs, 2, "h", heading);
+        vwArgs.count = packKVArg(vwArgs, vwArgs.count, "eps", eps);
 
         // Forward all stop= / sensor= tokens from args[2..] into vwArgs.
         for (int i = 2; i < args.count && vwArgs.count < MAX_ARGS; ++i) {
@@ -1003,7 +1003,7 @@ static void handleTURN(const ArgList& args, const char* corrId,
         }
 
         char body[48];
-        snprintf(body, sizeof(body), "heading=%d eps=%d", heading_cdeg, eps_cdeg);
+        snprintf(body, sizeof(body), "heading=%d eps=%d", heading, eps);
         char rbuf[80];
         if (!pushVW(ctx, vwArgs, corrId, replyFn, replyCtx)) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full", nullptr, corrId, replyFn, replyCtx);
@@ -1013,13 +1013,13 @@ static void handleTURN(const ArgList& args, const char* corrId,
     } else {
         // Queue not available: fall back to direct beginTurn().
         uint32_t now = ctx->robot->systemTime();
-        ctx->mc->beginTurn((float)heading_cdeg, (float)eps_cdeg, now,
+        ctx->mc->beginTurn((float)heading, (float)eps, now,
                            ctx->robot->state.desired,
                            replyFn, replyCtx, corrId);
         // Apply any stop= / sensor= clauses packed by parseTURN at args[2..].
         mc_applyStopClauses(args, 2, ctx->mc->activeCmd());
         char body[48];
-        snprintf(body, sizeof(body), "heading=%d eps=%d", heading_cdeg, eps_cdeg);
+        snprintf(body, sizeof(body), "heading=%d eps=%d", heading, eps);
         char rbuf[80];
         CommandProcessor::replyOK(rbuf, sizeof(rbuf), "turn", body, corrId, replyFn, replyCtx);
     }
@@ -1027,23 +1027,23 @@ static void handleTURN(const ArgList& args, const char* corrId,
 
 // ── RT (relative turn, encoder-arc stop) ───────────────────────────────────────
 
-// handleRT — RELATIVE spin-in-place by rel_cdeg, stopped on encoder arc.
+// handleRT — RELATIVE spin-in-place by relAngle, stopped on encoder arc.
 // Enqueues a VW with "rot=<cdeg>" so the VW handler (loop context) calls
 // beginRotation(). Falls back to a direct call when the queue is null.
 static void handleRT(const ArgList& args, const char* corrId,
                      ReplyFn replyFn, void* replyCtx, void* handlerCtx)
 {
     MotionCtx* ctx = static_cast<MotionCtx*>(handlerCtx);
-    int rel_cdeg = args.args[0].ival;
+    int relAngle = args.args[0].ival;
 
     if (ctx->queue != nullptr) {
         ArgList vwArgs;
         vwArgs.count = 2;
         argInt(vwArgs.args[0], 0);   // v = 0 (spin in place)
         argInt(vwArgs.args[1], 0);   // omega placeholder (computed by beginRotation)
-        vwArgs.count = packKVArg(vwArgs, 2, "rot", rel_cdeg);
+        vwArgs.count = packKVArg(vwArgs, 2, "rot", relAngle);
         char body[32];
-        snprintf(body, sizeof(body), "rot=%d", rel_cdeg);
+        snprintf(body, sizeof(body), "rot=%d", relAngle);
         char rbuf[64];
         if (!pushVW(ctx, vwArgs, corrId, replyFn, replyCtx)) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full", nullptr, corrId, replyFn, replyCtx);
@@ -1052,10 +1052,10 @@ static void handleRT(const ArgList& args, const char* corrId,
         CommandProcessor::replyOK(rbuf, sizeof(rbuf), "rt", body, corrId, replyFn, replyCtx);
     } else {
         uint32_t now = ctx->robot->systemTime();
-        ctx->mc->beginRotation((float)rel_cdeg, now, ctx->robot->state.desired,
+        ctx->mc->beginRotation((float)relAngle, now, ctx->robot->state.desired,
                                replyFn, replyCtx, corrId);
         char body[32];
-        snprintf(body, sizeof(body), "rot=%d", rel_cdeg);
+        snprintf(body, sizeof(body), "rot=%d", relAngle);
         char rbuf[64];
         CommandProcessor::replyOK(rbuf, sizeof(rbuf), "rt", body, corrId, replyFn, replyCtx);
     }
@@ -1065,13 +1065,13 @@ static void handleRT(const ArgList& args, const char* corrId,
 //
 // VW — body-twist velocity command (open-ended, keepalive watchdog).
 //
-// Wire format: VW <v_mms> <omega_mrads> [key=value ...]
+// Wire format: VW <v> <omega> [key=value ...]  (mm/s, mrad/s)
 //   args[0].ival = v in mm/s
 //   args[1].ival = omega in mrad/s (wire units; converted to rad/s here)
 //   args[2..] = optional stop params (ArgType::STR "key=value"):
 //     "x=<mm>"+"y=<mm>"+"speed=<mm/s>" → call beginGoTo(x, y, speed, ...)
-//     "h=<cdeg>"+"eps=<cdeg>"           → call beginTurn(h_cdeg, eps_cdeg, ...)
-//     "rot=<cdeg>"                      → call beginRotation(rot_cdeg, ...)
+//     "h=<cdeg>"+"eps=<cdeg>"           → call beginTurn(heading, eps, ...)
+//     "rot=<cdeg>"                      → call beginRotation(rotAngle, ...)
 //     (no stop params) → open-ended velocity (beginVelocity or keepalive re-arm)
 //
 // Note (053-003): the "stream=1" KV branch has been removed.  S is now routed
@@ -1137,7 +1137,7 @@ static void handleVW(const ArgList& args, const char* corrId,
 
     // Check for RT (relative rotation): "rot=<cdeg>" present.
     if (argsHasKey(args, "rot")) {
-        int rot_cdeg = argsScanKV(args, "rot", 0);
+        int rotAngle = argsScanKV(args, "rot", 0);   // [cdeg]
         // Seam 3 (042-001): route through requestGoal — same beginRotation call.
         GoalRequest gr{};
         gr.goal    = Goal::ROTATE;
@@ -1146,7 +1146,7 @@ static void handleVW(const ArgList& args, const char* corrId,
         gr.replyFn = replyFn;
         gr.replyCtx = replyCtx;
         gr.corrId  = corrId;
-        gr.relCdeg = (float)rot_cdeg;
+        gr.relAngle = (float)rotAngle;
         ctx->superstructure->requestGoal(gr);
         // D11: no replyOK here — handleRT already replied.
         return;
@@ -1154,8 +1154,8 @@ static void handleVW(const ArgList& args, const char* corrId,
 
     // Check for TURN: "h=<cdeg>" present (and no "x" key).
     if (argsHasKey(args, "h") && !argsHasKey(args, "x")) {
-        int h_cdeg  = argsScanKV(args, "h",   0);
-        int eps     = argsScanKV(args, "eps", 300);
+        int heading = argsScanKV(args, "h",   0);   // [cdeg]
+        int eps     = argsScanKV(args, "eps", 300); // [cdeg]
 
         // Seam 3 (042-001): route through requestGoal — same beginTurn call.
         GoalRequest gr{};
@@ -1165,8 +1165,8 @@ static void handleVW(const ArgList& args, const char* corrId,
         gr.replyFn     = replyFn;
         gr.replyCtx    = replyCtx;
         gr.corrId      = corrId;
-        gr.headingCdeg = (float)h_cdeg;
-        gr.epsCdeg     = (float)eps;
+        gr.heading     = (float)heading;
+        gr.eps         = (float)eps;
         ctx->superstructure->requestGoal(gr);
 
         // Apply all stop= / sensor= stop clauses from args[2..] (packed by
@@ -1180,8 +1180,8 @@ static void handleVW(const ArgList& args, const char* corrId,
 
     // Check for G (go-to): "x=<mm>" and "y=<mm>" present.
     if (argsHasKey(args, "x") && argsHasKey(args, "y")) {
-        int x_mm    = argsScanKV(args, "x",     0);
-        int y_mm    = argsScanKV(args, "y",     0);
+        int x       = argsScanKV(args, "x",     0);   // [mm]
+        int y       = argsScanKV(args, "y",     0);   // [mm]
         int speed   = argsScanKV(args, "speed", v);  // fallback to v
 
         // Seam 3 (042-001): route through requestGoal — same beginGoTo call.
@@ -1192,9 +1192,9 @@ static void handleVW(const ArgList& args, const char* corrId,
         gr.replyFn  = replyFn;
         gr.replyCtx = replyCtx;
         gr.corrId   = corrId;
-        gr.tx       = (float)x_mm;
-        gr.ty       = (float)y_mm;
-        gr.speedMms = (float)speed;
+        gr.tx       = (float)x;
+        gr.ty       = (float)y;
+        gr.speed    = (float)speed;
         ctx->superstructure->requestGoal(gr);
 
         // D11: no replyOK here — handleG already replied.
@@ -1262,7 +1262,7 @@ static void handleVW(const ArgList& args, const char* corrId,
         gr.replyFn    = replyFn;
         gr.replyCtx   = replyCtx;
         gr.corrId     = corrId;
-        gr.v_mms      = (float)v;
+        gr.v          = (float)v;
         gr.omega_rads = omega_rads;
         ctx->superstructure->requestGoal(gr);
 

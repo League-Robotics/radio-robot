@@ -11,7 +11,7 @@
 // ---------------------------------------------------------------------------
 // add — register a new StopCondition.
 //
-// now_ms and enc_avg_mm are captured at registration time so that TIME and
+// now_ms and encAvg are captured at registration time so that TIME and
 // DIST conditions baseline from the moment HALT TIME/DIST is issued, not the
 // boot epoch. This prevents an unexpected instant trip when HALT TIME is
 // registered minutes after boot without a prior ZERO T command.
@@ -20,7 +20,7 @@
 // ---------------------------------------------------------------------------
 
 int HaltController::add(const StopCondition& cond, StopStyle style, const char* str,
-                         uint32_t now_ms, float enc_avg_mm)
+                         uint32_t now_ms, float encAvg)
 {
     if (_count >= kMaxEntries) return -1;
 
@@ -42,7 +42,7 @@ int HaltController::add(const StopCondition& cond, StopStyle style, const char* 
     if (cond.kind == StopCondition::Kind::TIME) {
         e.base.t0 = now_ms;
     } else if (cond.kind == StopCondition::Kind::DISTANCE) {
-        e.base.enc0 = enc_avg_mm;
+        e.base.enc0 = encAvg;
     }
 
     ++_count;
@@ -97,12 +97,12 @@ void HaltController::setTimerBaseline(uint32_t now_ms)
 // point. Has no effect on entries added after this call.
 // ---------------------------------------------------------------------------
 
-void HaltController::setDistBaseline(float enc_avg_mm)
+void HaltController::setDistBaseline(float encAvg)
 {
     for (int i = 0; i < _count; ++i) {
         if (_entries[i].active &&
             _entries[i].cond.kind == StopCondition::Kind::DISTANCE) {
-            _entries[i].base.enc0 = enc_avg_mm;
+            _entries[i].base.enc0 = encAvg;
         }
     }
 }

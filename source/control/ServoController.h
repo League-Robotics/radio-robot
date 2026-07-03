@@ -10,7 +10,7 @@
  * GRIP        — query current angle; replies "OK grip deg=<current>"
  *
  * 039-003: canonicalized from IServo (now an alias) to IPositionMotor.  The
- * handler calls setAngleDeg(deg, 0) / currentAngleDeg() — same semantics as the
+ * handler calls commandAngle(angle, 0) / currentAngle() — same semantics as the
  * former setAngle/currentAngle; mode 0 is the hobby-servo default (OQ-3).
  *
  * The old switch case in CommandProcessor.cpp remains live until T010.

@@ -87,7 +87,7 @@ void planner_api_destroy(void* h)
 //
 // Ordering mirrors the live loopTickOnce pattern:
 //   hal.tick(now, drive.outputs()) — integrate plant physics
-//   hal.tick(now)                  — promote encoder into positionMm()
+//   hal.tick(now)                  — promote encoder into position()
 //   drive.tickUpdate(now)          — SENSE: encoder collect + EKF predict
 //   planner.tick(now)              — PLAN: driveAdvance + extract twist
 //   drive.apply(cmd)               — stage the twist command in Drive

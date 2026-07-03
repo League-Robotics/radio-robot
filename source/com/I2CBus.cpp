@@ -106,7 +106,7 @@ void I2CBus::logTxn(uint16_t addr7, uint8_t rw, int len, const uint8_t* data, in
 {
     if (!_logOn) return;
     TxnLog& e = _log[_logHead];
-    e.t_us   = (uint32_t)system_timer_current_time_us();
+    e.t      = (uint32_t)system_timer_current_time_us();   // [us]
     e.addr   = addr7;
     e.rw     = rw;
     e.len    = (uint8_t)(len > 255 ? 255 : (len < 0 ? 0 : len));
@@ -133,12 +133,12 @@ void I2CBus::dumpRecent(void (*fn)(const char*, void*), void* ctx) const
     // TX buffer (~255 B) and garble. One ≤255-char line (like DBG I2C) is safe.
     // Token: <addr><R/W><b0>.<dt_us>  e.g. "10W60.0 10R46.4012 43RA6.250"
     char line[256];
-    uint32_t prev_us = 0;
+    uint32_t prevTime = 0;   // [us]
     int pos = snprintf(line, sizeof(line), "I2CLOG ");
     for (int i = 0; i < count; ++i) {
         const TxnLog& e = _log[(start + i) % kLogSize];
-        uint32_t dt = (i == 0) ? 0 : (e.t_us - prev_us);
-        prev_us = e.t_us;
+        uint32_t dt = (i == 0) ? 0 : (e.t - prevTime);
+        prevTime = e.t;
         int w = snprintf(line + pos, sizeof(line) - pos, "%02X%c%02X.%lu ",
                          (unsigned)e.addr, e.rw ? 'R' : 'W',
                          (unsigned)e.b0, (unsigned long)dt);

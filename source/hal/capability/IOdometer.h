@@ -96,11 +96,11 @@ public:
     // position+heading observations AGREE with the controller pose instead of
     // dragging the EKF back toward the boot frame.  This is the exact inverse of
     // readTransformed() (un-rotates the mount angle, adds the lever-arm offset
-    // back).  Units: x_mm/y_mm millimetres, h_rad radians (world frame).
+    // back).  Units: x/y millimetres, h radians (world frame).
     // Default no-op (mocks); the real and bench sensors override.
     // 039-004: calibration data (RobotConfig) is now an impl member, not a param.
-    virtual void setWorldPose(float x_mm, float y_mm, float h_rad) {
-        (void)x_mm; (void)y_mm; (void)h_rad;
+    virtual void setWorldPose(float x, float y, float h) {  // [mm], [mm], [rad]
+        (void)x; (void)y; (void)h;
     }
 
     // Linear and angular scalar access (signed int8, 0.1% per LSB).

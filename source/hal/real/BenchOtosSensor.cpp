@@ -135,13 +135,13 @@ void BenchOtosSensor::getPositionRaw(int16_t& x, int16_t& y, int16_t& h) const {
 
 void BenchOtosSensor::setPositionRaw(int16_t /*x*/, int16_t /*y*/, int16_t /*h*/) {}
 
-void BenchOtosSensor::setWorldPose(float x_mm, float y_mm, float h_rad) {
+void BenchOtosSensor::setWorldPose(float x, float y, float h) {  // [mm], [mm], [rad]
     // The sim OTOS reads back _otos* directly (identity transform — no mount
     // rotation), so a camera fix just re-bases both accumulators to the world
     // pose.  Mirrors OtosSensor::setWorldPose's effect for the host sim.
-    _idealX = _otosX = x_mm;
-    _idealY = _otosY = y_mm;
-    _idealH = _otosH = wrapAngle(h_rad);
+    _idealX = _otosX = x;
+    _idealY = _otosY = y;
+    _idealH = _otosH = wrapAngle(h);
 }
 
 // ---------------------------------------------------------------------------
@@ -168,16 +168,16 @@ void BenchOtosSensor::idealPose(OtosPose& out) const {
 // tick — advance both accumulators one control step
 // ---------------------------------------------------------------------------
 
-void BenchOtosSensor::tick(float velLMms, float velRMms,
-                           float trackwidthMm, uint32_t dt_ms) {
-    if (!_initialized || !_enabled || dt_ms == 0 || trackwidthMm <= 0.0f) return;
+void BenchOtosSensor::tick(float velLeft, float velRight,
+                           float trackwidth, uint32_t dt_ms) {
+    if (!_initialized || !_enabled || dt_ms == 0 || trackwidth <= 0.0f) return;
 
     const float dt_s = static_cast<float>(dt_ms) / 1000.0f;
 
     // -- Ideal (noiseless) accumulator --
     {
-        float dC   = (velLMms + velRMms) * 0.5f * dt_s;
-        float dTh  = (velRMms - velLMms) / trackwidthMm * dt_s;
+        float dC   = (velLeft + velRight) * 0.5f * dt_s;
+        float dTh  = (velRight - velLeft) / trackwidth * dt_s;
         float hMid = _idealH + dTh * 0.5f;
         _idealX   += dC * cosf(hMid);
         _idealY   += dC * sinf(hMid);
@@ -186,8 +186,8 @@ void BenchOtosSensor::tick(float velLMms, float velRMms,
 
     // -- Errored (noisy) accumulator --
     {
-        float dC  = (velLMms + velRMms) * 0.5f * dt_s;
-        float dTh = (velRMms - velLMms) / trackwidthMm * dt_s;
+        float dC  = (velLeft + velRight) * 0.5f * dt_s;
+        float dTh = (velRight - velLeft) / trackwidth * dt_s;
 
         // Per-step Gaussian noise on the arc segments.
 #ifdef HOST_BUILD

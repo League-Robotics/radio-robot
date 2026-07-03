@@ -80,9 +80,9 @@ int main() {
             refL = refEnc(50, 400.0f, 1.0f, 24, refL);
             refR = refEnc(50, 400.0f, 1.0f, 24, refR);
         }
-        if (!bitEqual(w.trueEncLMm(), refL) || !bitEqual(w.trueEncRMm(), refR)) {
+        if (!bitEqual(w.trueEncL(), refL) || !bitEqual(w.trueEncR(), refR)) {
             printf("FAIL bitexact encL=%.9g ref=%.9g encR=%.9g ref=%.9g\n",
-                   w.trueEncLMm(), refL, w.trueEncRMm(), refR);
+                   w.trueEncL(), refL, w.trueEncR(), refR);
             ++failures;
         } else {
             printf("PASS bitexact\n");
@@ -97,15 +97,15 @@ int main() {
         w.setActuators(50, 50);
         w.update(24);
         // velL = velR = (50/100)*400 = 200 mm/s ; enc = 200 * 0.024 = 4.8 mm
-        if (std::fabs(w.trueEncLMm() - 4.8f) > 1e-5f ||
-            std::fabs(w.trueEncRMm() - 4.8f) > 1e-5f) {
-            printf("FAIL enc4p8 L=%.9g R=%.9g\n", w.trueEncLMm(), w.trueEncRMm());
+        if (std::fabs(w.trueEncL() - 4.8f) > 1e-5f ||
+            std::fabs(w.trueEncR() - 4.8f) > 1e-5f) {
+            printf("FAIL enc4p8 L=%.9g R=%.9g\n", w.trueEncL(), w.trueEncR());
             ++failures;
         } else {
             printf("PASS enc4p8\n");
         }
-        if (!(w.trueVelLMms() == 200.0f && w.trueVelRMms() == 200.0f)) {
-            printf("FAIL vel200 L=%.9g R=%.9g\n", w.trueVelLMms(), w.trueVelRMms());
+        if (!(w.trueVelL() == 200.0f && w.trueVelR() == 200.0f)) {
+            printf("FAIL vel200 L=%.9g R=%.9g\n", w.trueVelL(), w.trueVelR());
             ++failures;
         } else {
             printf("PASS vel200\n");
@@ -139,8 +139,8 @@ int main() {
         w.update(24);
         bool ok = (w.truePoseX() == 123.0f) && (w.truePoseY() == -45.0f) &&
                   (w.truePoseH() == 1.5f) &&
-                  (w.trueEncLMm() == 7.0f) && (w.trueEncRMm() == 9.0f) &&
-                  (w.trueVelLMms() == 0.0f) && (w.trueVelRMms() == 0.0f) &&
+                  (w.trueEncL() == 7.0f) && (w.trueEncR() == 9.0f) &&
+                  (w.trueVelL() == 0.0f) && (w.trueVelR() == 0.0f) &&
                   (w.lineRaw(0) == 10) && (w.lineRaw(3) == 40) &&
                   (w.port(0) == 1) && (w.port(3) == 4);
         uint16_t r, g, b, c;
@@ -149,7 +149,7 @@ int main() {
         if (!ok) {
             printf("FAIL inject pose=(%.3g,%.3g,%.3g) enc=(%.3g,%.3g) vel=(%.3g,%.3g)\n",
                    w.truePoseX(), w.truePoseY(), w.truePoseH(),
-                   w.trueEncLMm(), w.trueEncRMm(), w.trueVelLMms(), w.trueVelRMms());
+                   w.trueEncL(), w.trueEncR(), w.trueVelL(), w.trueVelR());
             ++failures;
         } else {
             printf("PASS inject\n");
@@ -169,8 +169,8 @@ int main() {
         w.colorRGBC(r, g, b, c);
         bool ok = (w.truePoseX() == 0.0f) && (w.truePoseY() == 0.0f) &&
                   (w.truePoseH() == 0.0f) &&
-                  (w.trueEncLMm() == 0.0f) && (w.trueEncRMm() == 0.0f) &&
-                  (w.trueVelLMms() == 0.0f) && (w.trueVelRMms() == 0.0f) &&
+                  (w.trueEncL() == 0.0f) && (w.trueEncR() == 0.0f) &&
+                  (w.trueVelL() == 0.0f) && (w.trueVelR() == 0.0f) &&
                   (w.lineRaw(0) == 0) && (w.port(0) == 0) &&
                   (r == 0) && (g == 0) && (b == 0) && (c == 0);
         if (!ok) { printf("FAIL reset\n"); ++failures; }
@@ -193,8 +193,8 @@ int main() {
         noSlip.update(100);
         withSlip.update(100);
         // Encoders identical (slip not on the encoder path).
-        bool encOk = bitEqual(noSlip.trueEncRMm(), withSlip.trueEncRMm()) &&
-                     bitEqual(noSlip.trueEncLMm(), withSlip.trueEncLMm());
+        bool encOk = bitEqual(noSlip.trueEncR(), withSlip.trueEncR()) &&
+                     bitEqual(noSlip.trueEncL(), withSlip.trueEncL());
         // Heading reduced by the slip factor (0.7) in sub-step B.
         bool headOk = std::fabs(withSlip.truePoseH() - noSlip.truePoseH() * 0.7f) < 1e-4f;
         if (!encOk || !headOk) {

@@ -51,7 +51,7 @@
 //   state() returns a const reference to the subsystem's internal State,
 //   which tick() keeps fresh. No device I/O, no allocation. Callers hold
 //   the reference and call getters on it. Pattern: the cached-accessor idiom
-//   (IVelocityMotor::positionMm() is the precedent). What tick() *returns*
+//   (IVelocityMotor::position() is the precedent). What tick() *returns*
 //   is outbound commands; State is always a getter, never a tick() return.
 //
 // ### configure(Config) — delta-apply params; live-safe

@@ -52,8 +52,8 @@ void Superstructure::requestGoal(const GoalRequest& gr)
         // handleVW "dist" branch: robot->distanceDrive(vL, vR, mm, fn, ctx, corrId).
         // Routed through Robot to preserve the atomic encoder reset
         // (beginDistance + resetEncoders).
-        gr.robot->distanceDrive((int32_t)gr.leftMms, (int32_t)gr.rightMms,
-                                gr.targetMm, gr.replyFn, gr.replyCtx, gr.corrId);
+        gr.robot->distanceDrive((int32_t)gr.left, (int32_t)gr.right,
+                                gr.targetDistance, gr.replyFn, gr.replyCtx, gr.corrId);
         if (_planner.hasActiveCommand()) {
             if (gr.doneLabel) _planner.activeCmd().setDoneEvt(gr.doneLabel);
             // 065-001 / CR-01: addStop() can return false if the wire-supplied
@@ -76,19 +76,19 @@ void Superstructure::requestGoal(const GoalRequest& gr)
 
     case Goal::GOTO:
         // handleVW "x"+"y" branch: beginGoTo(x, y, speed, now, target, fn, ctx, corrId).
-        _planner.beginGoTo(gr.tx, gr.ty, gr.speedMms, gr.now_ms,
+        _planner.beginGoTo(gr.tx, gr.ty, gr.speed, gr.now_ms,
                            target, gr.replyFn, gr.replyCtx, gr.corrId);
         break;
 
     case Goal::TURN:
-        // handleVW "h" branch: beginTurn(h_cdeg, eps, now, target, fn, ctx, corrId).
-        _planner.beginTurn(gr.headingCdeg, gr.epsCdeg, gr.now_ms,
+        // handleVW "h" branch: beginTurn(heading, eps, now, target, fn, ctx, corrId).
+        _planner.beginTurn(gr.heading, gr.eps, gr.now_ms,
                            target, gr.replyFn, gr.replyCtx, gr.corrId);
         break;
 
     case Goal::ROTATE:
-        // handleVW "rot" branch: beginRotation(rot_cdeg, now, target, fn, ctx, corrId).
-        _planner.beginRotation(gr.relCdeg, gr.now_ms,
+        // handleVW "rot" branch: beginRotation(relAngle, now, target, fn, ctx, corrId).
+        _planner.beginRotation(gr.relAngle, gr.now_ms,
                                target, gr.replyFn, gr.replyCtx, gr.corrId);
         break;
 
@@ -97,7 +97,7 @@ void Superstructure::requestGoal(const GoalRequest& gr)
         // beginVelocity(v, omega, now, target, fn, ctx, corrId, seedImmediate).
         // When gr.streamSeed is true (S command), the BVC is seeded at the target
         // speed immediately (no trapezoid ramp-up), preserving S's original semantics.
-        _planner.beginVelocity(gr.v_mms, gr.omega_rads, gr.now_ms,
+        _planner.beginVelocity(gr.v, gr.omega_rads, gr.now_ms,
                                target, gr.replyFn, gr.replyCtx, gr.corrId, gr.streamSeed);
         if (_planner.hasActiveCommand()) {
             if (gr.doneLabel) _planner.activeCmd().setDoneEvt(gr.doneLabel);

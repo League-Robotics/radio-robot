@@ -38,17 +38,15 @@ inline float getBodyLinScrub(SimHardware& hal)       { return hal.plant().bodyLi
 
 // ---- Geometry / actuation ---------------------------------------------------
 // SimHardware::setTrackwidth() forwards to both its own cached field and
-// _plant.setTrackwidth(); trackwidth() reads back via _plant.trackwidthMm().
-// (071-007 namespace-collision note: ONLY this wrapper's own function name --
-// which mirrors the "trackwidthMm" SIMSET key 1:1 -- is renamed here.
-// SimHardware::trackwidthMm()/setTrackwidth() and PhysicsWorld::trackwidthMm()
-// keep their existing names: SimHardware.h is outside this ticket's file
-// scope and PhysicsWorld::trackwidthMm() is also read directly by WorldView.h,
-// another out-of-scope consumer. The kSimRegistry[] "trackwidthMm" key string
-// itself is untouched throughout -- see architecture-update.md's
-// Wire-Compatibility Exclusion Table.)
+// _plant.setTrackwidth(); trackwidth() reads back via _plant.trackwidth().
+// (071-008 residual sweep: SimHardware::trackwidth()/PhysicsWorld::trackwidth()
+// -- formerly trackwidthMm() -- are now also renamed, including their
+// WorldView.h consumer. Only the kSimRegistry[] "trackwidthMm" SIMSET/SIMGET
+// key STRING is untouched -- see architecture-update.md's Wire-Compatibility
+// Exclusion Table -- this wrapper's own function name never matched it 1:1
+// anyway, it just forwards to the key's handler.)
 inline void  trackwidth(SimHardware& hal, float trackwidth) { hal.setTrackwidth(trackwidth); }  // [mm]
-inline float getTrackwidth(SimHardware& hal)                { return hal.trackwidthMm(); }
+inline float getTrackwidth(SimHardware& hal)                { return hal.trackwidth(); }
 
 // motorOffsetL/R -- per-side registry rows (SIMSET has no "both" key).
 inline void  motorOffsetL(SimHardware& hal, float f) { hal.plant().setOffsetFactor(0, f); }
@@ -128,8 +126,8 @@ inline float getOtosYawNoise(SimHardware& hal)           { return hal.simOdomete
 // (071-007 namespace-collision note, mirroring the trackwidth one above: only
 // these wrapper FUNCTION NAMES are renamed -- otosLinDriftMmS/otosYawDriftDegS
 // as kSimRegistry[] KEY STRINGS are untouched throughout SimCommands.cpp.)
-static const float kDegToRad = 3.14159265358979323846f / 180.0f;
-static const float kRadToDeg = 180.0f / 3.14159265358979323846f;
+static const float kDegToRadScale = 3.14159265358979323846f / 180.0f;  // [rad/deg]
+static const float kRadToDegScale = 180.0f / 3.14159265358979323846f;  // [deg/rad]
 
 inline void otosLinearDrift(SimHardware& hal, float v) {
     float period = static_cast<float>(hal.simOdometer().controlPeriod());  // [ms]
@@ -143,14 +141,14 @@ inline float getOtosLinearDrift(SimHardware& hal) {
 
 inline void otosYawDrift(SimHardware& hal, float v) {
     float period = static_cast<float>(hal.simOdometer().controlPeriod());  // [ms]
-    float rate   = v * kDegToRad;                                          // [rad/s]
+    float rate   = v * kDegToRadScale;                                     // [rad/s]
     hal.simOdometer().setYawDriftPerTick(rate * (period / 1000.0f));
 }
 inline float getOtosYawDrift(SimHardware& hal) {
     float period = static_cast<float>(hal.simOdometer().controlPeriod());  // [ms]
     if (period <= 0.0f) return 0.0f;
     float rate = hal.simOdometer().yawDriftPerTick() * (1000.0f / period);  // [rad/s]
-    return rate * kRadToDeg;
+    return rate * kRadToDegScale;
 }
 
 }  // namespace simsetters

@@ -171,10 +171,10 @@ void Odometry::getPose(const PoseEstimate& fused,
     x = static_cast<int32_t>(fused.pose.x);
     y = static_cast<int32_t>(fused.pose.y);
 
-    float cdeg = fused.pose.h * RAD_TO_CDEG;
-    if (cdeg >  18000.0f) cdeg =  18000.0f;
-    if (cdeg < -18000.0f) cdeg = -18000.0f;
-    h = static_cast<int32_t>(cdeg);
+    float heading = fused.pose.h * kAngleScale;  // [cdeg]
+    if (heading >  18000.0f) heading =  18000.0f;
+    if (heading < -18000.0f) heading = -18000.0f;
+    h = static_cast<int32_t>(heading);
 }
 
 // ---------------------------------------------------------------------------
@@ -187,7 +187,7 @@ void Odometry::setPose(float encLeft, float encRight,
 {
     float newX = static_cast<float>(x);
     float newY = static_cast<float>(y);
-    float newH = static_cast<float>(h) * CDEG_TO_RAD;
+    float newH = static_cast<float>(h) * kAngleScaleInv;
 
     fusedOut.pose.x = newX;
     fusedOut.pose.y = newY;

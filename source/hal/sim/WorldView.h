@@ -41,10 +41,10 @@ public:
     float truePoseH() const { return _plant.truePoseH(); }
 
     // --- True wheel travel / velocity (plant truth) -------------------------
-    float trueEncLMm() const { return _plant.trueEncLMm(); }
-    float trueEncRMm() const { return _plant.trueEncRMm(); }
-    float trueVelLMms() const { return _plant.trueVelLMms(); }
-    float trueVelRMms() const { return _plant.trueVelRMms(); }
+    float trueEncL() const { return _plant.trueEncL(); }
+    float trueEncR() const { return _plant.trueEncR(); }
+    float trueVelL() const { return _plant.trueVelL(); }
+    float trueVelR() const { return _plant.trueVelR(); }
 
     // --- Estimation error: firmware estimate vs. plant truth ----------------
     // Euclidean distance (mm) between (truePoseX, truePoseY) and the firmware's

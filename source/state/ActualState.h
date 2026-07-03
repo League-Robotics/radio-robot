@@ -28,8 +28,8 @@ struct ActualState {
 
     // ----- Per-wheel arrays (sized by drivetrain, #ifdef-free) -----
     // [0]=FR, [1]=FL, [2]=BR, [3]=BL (mecanum); [0]=R, [1]=L (differential).
-    float    encMm [kWheelCount] = {};  // cumulative, mm
-    float    velMms[kWheelCount] = {};  // per-wheel velocity, mm/s
+    float    encPos[kWheelCount] = {};  // [mm] cumulative
+    float    vel   [kWheelCount] = {};  // [mm/s] per-wheel velocity
 
     // ----- Encoder freshness envelope -----
     ValueSet enc = {};

@@ -59,7 +59,7 @@ public:
      * A Nezha drive motor ALSO supports on-chip move-to-position (0x5D
      * moveToAngle / 0x70 timedMove), so Motor returns a non-null IPositionMotor*
      * here.  The returned pointer is an inner adapter (_posImpl) that forwards
-     * setAngleDeg() to moveToAngle() — NO wire bytes change.  Firmware is
+     * commandAngle() to moveToAngle() — NO wire bytes change.  Firmware is
      * -fno-rtti, so this virtual accessor replaces dynamic_cast.
      */
     IPositionMotor* asPositionMotor() override { return &_posImpl; }
@@ -87,7 +87,7 @@ public:
     void    tick(uint32_t now_ms) override;
 
     // Cheap accessors — return the values cached by the most recent tick(); no I2C.
-    float   positionMm()   const override { return _lastPosition; }
+    float   position()     const override { return _lastPosition; }
     float   velocityMmps() const override { return _lastVelocityMmps; }
 
     // Read cumulative encoder in mm using calibration from cfg.
@@ -317,18 +317,18 @@ private:
      *
      * Folds the Motor on-chip position-move subset into the IPositionMotor
      * capability without multiple inheritance (safer under -fno-rtti, per the
-     * Sprint 039 architecture-update §5 decision).  setAngleDeg() forwards
+     * Sprint 039 architecture-update §5 decision).  commandAngle() forwards
      * VERBATIM to the enclosing Motor's moveToAngle() (0x5D frame, unchanged
-     * wire bytes); currentAngleDeg() returns the last commanded angle.  Returned
+     * wire bytes); currentAngle() returns the last commanded angle.  Returned
      * by Motor::asPositionMotor().
      */
     class MotorPositionImpl : public IPositionMotor {
     public:
         explicit MotorPositionImpl(Motor& outer) : _outer(outer) {}
-        void setAngleDeg(uint16_t deg, uint8_t mode) override {
-            _outer.moveToAngle(deg, mode);
+        void commandAngle(uint16_t angle, uint8_t mode) override {
+            _outer.moveToAngle(angle, mode);
         }
-        uint16_t currentAngleDeg() const override { return _outer._lastAngle; }
+        uint16_t currentAngle() const override { return _outer._lastAngle; }
     private:
         Motor& _outer;
     };
@@ -343,7 +343,7 @@ private:
     MotorPositionImpl _posImpl;
 
     // Last angle commanded through moveToAngle() (the clamped 0..359 value),
-    // returned by MotorPositionImpl::currentAngleDeg(). 0 before any move.
+    // returned by MotorPositionImpl::currentAngle(). 0 before any move.
     uint16_t _lastAngle = 0;
 
     // Calibration reference (039-002) — used by tick() to convert raw encoder
@@ -368,12 +368,12 @@ private:
     // control-loop rate (that write rate wedges the encoder reads). Sentinel
     // sentinel -128 (outside valid ±100) forces the first write. See
     // docs/knowledge encoder-wedge note.
-    int8_t _lastWrittenPct = -128;
+    int8_t _lastWrittenSpeed = -128;   // [%]
 
-    // Timestamp (us) of the last actual 0x60 write, for the write-rate limit in
+    // Timestamp of the last actual 0x60 write, for the write-rate limit in
     // setSpeed(). Throttling 0x60 writes keeps the bus read-dominated, which is
     // what stops the encoder-readback wedge. See setSpeed() + encoder-wedge note.
-    uint64_t _lastWriteUs = 0;
+    uint64_t _lastWriteTime = 0;   // [us]
 
     static constexpr uint8_t ADDR    = 0x10;
     static constexpr uint8_t DIR_CW  = 1;   // positive speed from chip perspective

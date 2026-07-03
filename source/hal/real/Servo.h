@@ -13,7 +13,7 @@
  * 039-003: Servo now implements the capability-typed IPositionMotor (the former
  * IServo, which is an alias shim for IPositionMotor).  The angle-set body is
  * moved VERBATIM — the clamp logic and the pin drive are unchanged.  A hobby
- * servo has no motion mode, so setAngleDeg() ignores the `mode` byte.
+ * servo has no motion mode, so commandAngle() ignores the `mode` byte.
  */
 class Servo : public IPositionMotor {
 public:
@@ -21,18 +21,18 @@ public:
 
     // IPositionMotor interface ----------------------------------------------
 
-    // Set servo angle. Clamps to [0, maxDegrees] before driving the pin.
-    // Records the clamped value; retrieve it with currentAngleDeg().
+    // Set servo angle [deg]. Clamps to [0, maxDegrees] before driving the pin.
+    // Records the clamped value; retrieve it with currentAngle().
     // `mode` is ignored — a hobby servo has no Nezha ServoMotionMode.
-    void setAngleDeg(uint16_t deg, uint8_t mode) override;
+    void commandAngle(uint16_t angle, uint8_t mode) override;
 
-    // Return the last clamped angle passed to setAngleDeg(). Defaults to 0
-    // before any set call.
-    uint16_t currentAngleDeg() const override { return _currentAngle; }
+    // Return the last clamped angle [deg] passed to commandAngle(). Defaults
+    // to 0 before any set call.
+    uint16_t currentAngle() const override { return _currentAngle; }
 
     // Convenience (OQ-3): hobby-servo entry point — forwards to
-    // setAngleDeg(deg, 0).  Mode byte 0 is the hobby-servo default.
-    void setAngle(uint8_t degrees) { setAngleDeg(degrees, 0); }
+    // commandAngle(angle, 0).  Mode byte 0 is the hobby-servo default.
+    void setAngle(uint8_t degrees) { commandAngle(degrees, 0); }
 
 private:
     MicroBitPin& _pin;

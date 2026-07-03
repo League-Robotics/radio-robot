@@ -20,10 +20,10 @@ struct RobotConfig;
  * controller here.
  *
  * Read path:
- *   - tick(now_ms) promotes plant.reportedEncL/RMm() into _lastPositionMm and
+ *   - tick(now_ms) promotes plant.reportedEncL/R() into _lastPosition and
  *     computes a position-difference velocity into _lastVelocityMmps.  This is a
  *     COPY only (no re-integration) — bit-identical to MockMotor::tick.
- *   - positionMm() / velocityMmps() return the cached values (optionally errored).
+ *   - position() / velocityMmps() return the cached values (optionally errored).
  *
  * The reported encoder (PhysicsWorld OQ-1 Option A) carries the legacy encoder-step
  * slip + noise model, so the golden-TLM byte-exact canary and the slip-fence tests
@@ -52,7 +52,7 @@ public:
     // Per-loop sensor tick: promote plant.reportedEnc*Mm() into the accessor
     // cache and compute a differentiated velocity.  COPY only — no integration.
     void    tick(uint32_t now_ms) override;
-    float   positionMm()   const override { return _lastPositionMm; }
+    float   position()     const override { return _lastPosition; }   // [mm]
     float   velocityMmps() const override { return _lastVelocityMmps; }
 
     // Split-phase encoder I/O — no-ops in the sim (encoder always ready).
@@ -83,17 +83,17 @@ public:
 
     // Gaussian encoder noise standard deviation (mm per tick), applied to the
     // plant's reported-encoder accumulator for this side.
-    void setNoiseSigma(float sigmaMm);
+    void setNoiseSigma(float sigma);   // [mm]
 
     // Frozen encoder (simulates a wedged sensor / dropout): tick() stops
-    // promoting new plant values, so positionMm() holds its last cached value.
+    // promoting new plant values, so position() holds its last cached value.
     void setFrozen(bool frozen) { _frozen = frozen; }
 
     // (064-005) I2C read-failure injection, mirroring SimOdometer::
     // setReadFailure / sim_set_otos_read_failure — the SimMotor-side
     // counterpart to the real Motor's hold-last-value fix (CR-03). When
-    // injected: tick() does not promote a fresh reportedEncMm() (holds
-    // _lastPositionMm, same early-return as _frozen), and collectEncoder() /
+    // injected: tick() does not promote a fresh reportedEnc() (holds
+    // _lastPosition, same early-return as _frozen), and collectEncoder() /
     // readEncoderMmF() / readEncoderMmFAtomic() / readEncoderMmFSettle()
     // likewise return the last cached value instead of a live plant read —
     // validating the downstream contract (Drive::_runOutlierFilter →
@@ -116,7 +116,7 @@ private:
     int sideIdx() const { return static_cast<int>(_side); }
 
     // Returns this side's reported (slipped/noisy) encoder from the plant.
-    float reportedEncMm() const;
+    float reportedEnc() const;   // [mm]
 
     const PhysicsWorld& _plant;   // ground-truth read access
     PhysicsWorld&       _mut;     // for setActuator / noise config / reset
@@ -124,8 +124,8 @@ private:
 
     int8_t  _cmdSpeed         = 0;
 
-    // tick() cache — promoted from reportedEncMm() by tick(now_ms).
-    float    _lastPositionMm   = 0.0f;
+    // tick() cache — promoted from reportedEnc() by tick(now_ms).
+    float    _lastPosition     = 0.0f;   // [mm]
     float    _lastVelocityMmps = 0.0f;
     uint32_t _lastTickMs       = 0;
     bool     _hasLastTick      = false;

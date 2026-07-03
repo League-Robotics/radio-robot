@@ -33,13 +33,13 @@ int Robot::buildTlmFrame(char* buf, int len)
 
     // 060-001: pose read from drive.state().fused.pose (msg::Pose2D: x,y mm, h rad).
     // Convert to integer mm (x,y) and centidegrees (h) matching the legacy output.
-    // RAD_TO_CDEG = 18000/pi ≈ 5729.578 — same constant Odometry::getPose uses.
-    static constexpr float kRadToCdeg = 5729.5779513f;
+    // kAngleScale = 18000/pi ≈ 5729.578 — same constant Odometry::getPose uses.
+    static constexpr float kAngleScale = 5729.5779513f;  // [cdeg/rad]
     int32_t pose_x = 0, pose_y = 0, pose_h = 0;
     if (config.tlmFields & TLM_FIELD_POSE) {
         pose_x = static_cast<int32_t>(ds.fused.pose.x);
         pose_y = static_cast<int32_t>(ds.fused.pose.y);
-        pose_h = static_cast<int32_t>(ds.fused.pose.h * kRadToCdeg);
+        pose_h = static_cast<int32_t>(ds.fused.pose.h * kAngleScale);
     }
     // N8 (030-008): gate line/color on freshness, not just the sticky valid bit.
     // A sensor that wedges after boot keeps valid=true forever; consult the
@@ -111,7 +111,7 @@ int Robot::buildTlmFrame(char* buf, int len)
         n = snprintf(buf + pos, (size_t)rem, " encpose=%d,%d,%d",
                      (int)ds.encoder.pose.x,
                      (int)ds.encoder.pose.y,
-                     (int)(ds.encoder.pose.h * kRadToCdeg));
+                     (int)(ds.encoder.pose.h * kAngleScale));
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
     if (haveVel) {
@@ -147,7 +147,7 @@ int Robot::buildTlmFrame(char* buf, int len)
         n = snprintf(buf + pos, (size_t)rem, " otos=%d,%d,%d",
                      (int)ds.optical.pose.x,
                      (int)ds.optical.pose.y,
-                     (int)(ds.optical.pose.h * kRadToCdeg));
+                     (int)(ds.optical.pose.h * kAngleScale));
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
     if (haveLine) {
@@ -219,10 +219,10 @@ void Robot::telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx)
         effectivePeriod = kRadioMinMs;
     }
 
-    if ((now_ms - _lastTlmMs) < effectivePeriod) return;
+    if ((now_ms - _lastTlmTime) < effectivePeriod) return;
 
     char tlmBuf[256];
     buildTlmFrame(tlmBuf, sizeof(tlmBuf));
     fn(tlmBuf, ctx);
-    _lastTlmMs = now_ms;
+    _lastTlmTime = now_ms;
 }
