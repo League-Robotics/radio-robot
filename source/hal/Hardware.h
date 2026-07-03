@@ -12,6 +12,10 @@
 // MotorCommands is now a using-alias for OutputState (sprint 047-001).
 #include "types/Inputs.h"
 
+// Forward declaration only — BenchOtosSensor's full definition is not needed
+// here; benchOtosPtr() only traffics in the pointer (074-001).
+class BenchOtosSensor;
+
 /**
  * Hardware — abstract HAL registry / factory base class.
  *
@@ -59,6 +63,12 @@ public:
     // Returns true when the bench OTOS sensor is currently active (034-003).
     // Default false for HALs that do not support bench mode.
     virtual bool isBenchMode() const { return false; }
+
+    // Direct accessor to the owned BenchOtosSensor, for tick()-driving and
+    // noise tuning by DebugCommands (074-001).  Default nullptr for HALs that
+    // do not own a bench sensor; NezhaHAL/MecanumHAL/SimHardware override to
+    // return their own `&_benchOtos`.
+    virtual BenchOtosSensor* benchOtosPtr() { return nullptr; }
 
     // -----------------------------------------------------------------------
     // Default Noop accessors for rear motors (mecanum build overrides these

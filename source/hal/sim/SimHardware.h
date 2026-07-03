@@ -8,6 +8,7 @@
 #include "SimColorSensor.h"
 #include "SimPortIO.h"
 #include "SimServo.h"
+#include "hal/real/BenchOtosSensor.h"
 
 struct RobotConfig;
 
@@ -31,6 +32,14 @@ struct RobotConfig;
  * MotorController; SimMotor only stores PWM.  No second controller here.
  *
  * Value-member ownership (zero heap).  No CODAL dependency; compiles host-side.
+ *
+ * Active-OTOS pointer (074-001 — bench-swap parity with NezhaHAL/MecanumHAL):
+ *   otos() returns *_otosActive, which starts pointed at _odom (the ground-truth
+ *   SimOdometer).  setOtosBench(true) redirects _otosActive to _benchOtos (an
+ *   owned BenchOtosSensor, reused as-is from source/hal/real/); setOtosBench(false)
+ *   restores _odom.  advance() drives _benchOtos.tick(...) every actuator tick
+ *   using its own dt baseline (_lastBenchTick), gated on isBenchMode() — mirroring
+ *   NezhaHAL::tick(now,cmds)'s anti-spike-on-enable discipline exactly.
  */
 class SimHardware : public Hardware {
 public:
@@ -41,7 +50,9 @@ public:
     IVelocityMotor& motorR()    override { return _motorR; }
     ILineSensor&  lineSensor()  override { return _line; }
     IColorSensor& colorSensor() override { return _color; }
-    IOdometer&    otos()        override { return _odom; }
+    // otos() returns the ACTIVE odometer — real (SimOdometer ground truth) or
+    // bench (BenchOtosSensor), depending on _otosActive (074-001).
+    IOdometer&    otos()        override { return *_otosActive; }
     IPortIO&      portIO()      override { return _portIO; }
     IPositionMotor& gripper()   override { return _servo; }
 
@@ -52,13 +63,27 @@ public:
     void tick(uint32_t now_ms) override;
     void tick(uint32_t now_ms, const MotorCommands& cmds) override;
 
-    // No bench-OTOS SENSOR SWAP in SIM mode — there is no bench OTOS device here
-    // (sim_bench_otos_* drive the standalone SimHandle::benchOtos).  But the flag
-    // is RECORDED so the DBG OTOS BENCH round-trip command can observe the toggle
-    // through isBenchMode() (behaviour preserved from MockHAL, which likewise only
-    // recorded the flag host-side).  otos() always returns the SimOdometer.
-    void setOtosBench(bool on) override { _benchMode = on; }
-    bool isBenchMode() const override { return _benchMode; }
+    // Bench-OTOS swap (074-001): redirect the active OTOS pointer to the owned
+    // BenchOtosSensor (on=true) or restore the real SimOdometer (on=false).
+    // Mirrors NezhaHAL::setOtosBench exactly, giving host-sim the same real
+    // swap firmware already has (previously flag-only: _benchMode recorded the
+    // toggle but nothing read it, and otos() always returned _odom).
+    void setOtosBench(bool on) override {
+        _otosActive = on
+            ? static_cast<IOdometer*>(&_benchOtos)
+            : static_cast<IOdometer*>(&_odom);
+    }
+
+    // Returns true when the bench sensor is currently active.  Overrides
+    // Hardware::isBenchMode (074-001).
+    bool isBenchMode() const override {
+        return _otosActive == static_cast<const IOdometer*>(&_benchOtos);
+    }
+
+    // Direct accessor to the owned BenchOtosSensor.  Overrides
+    // Hardware::benchOtosPtr (074-001) — always non-null for SimHardware,
+    // unlike production firmware without BENCH_OTOS_ENABLED.
+    BenchOtosSensor* benchOtosPtr() override { return &_benchOtos; }
 
     // Test accessors ---------------------------------------------------------
     PhysicsWorld&   plant()          { return _plant; }
@@ -95,8 +120,20 @@ private:
     SimColorSensor _color;
     SimPortIO      _portIO;
     SimServo       _servo;
+    BenchOtosSensor _benchOtos;   // owned bench-OTOS sensor (074-001)
 
     uint32_t       _lastTickMs   = 0;
     float          _trackwidth = 0.0f;
-    bool           _benchMode    = false;   // DBG OTOS BENCH round-trip flag only
+
+    // Bench-tick dt baseline (074-001): mirrors NezhaHAL::_lastBenchTick.
+    // Maintained every advance() call, even when bench mode is off, so the
+    // first tick after `DBG OTOS BENCH 1` does not see a large stale dt and
+    // integrate a spike on the plant.
+    uint32_t       _lastBenchTick = 0u;   // [ms]
+
+    // Active OTOS pointer — initialized to &_odom in the constructor.
+    // Must be declared AFTER both _odom and _benchOtos so those members are
+    // fully constructed before _otosActive is assigned (074-001, mirrors
+    // NezhaHAL::_otosActive).
+    IOdometer*     _otosActive;
 };
