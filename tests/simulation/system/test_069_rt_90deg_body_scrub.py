@@ -55,14 +55,26 @@ def _true_heading_deg_after_rt(
     """Reset ground truth + encoders, configure slip/scrub, run RT <cdeg>,
     return the plant's TRUE heading in degrees.
 
-    ``body_rot_scrub``/``body_lin_scrub`` of ``None`` leaves ``PhysicsWorld``'s
-    own default (1.0 = no-op) untouched — used for the "identity" acceptance
-    point so the test proves the DEFAULT is a no-op, not just that passing
-    1.0 explicitly is a no-op. When calling this helper more than once
-    against the SAME ``sim`` (to compare scenarios), pass explicit values for
-    every scrub field every time — the underlying ``PhysicsWorld`` is a
-    single persistent object for the life of the ``Sim``, so a scrub set by
-    an earlier scenario is NOT reset by ``ZERO enc``/``set_true_pose``.
+    ``body_rot_scrub``/``body_lin_scrub`` of ``None`` skips the ``SIMSET``
+    call entirely, leaving whatever value is ALREADY live on this ``sim``'s
+    ``PhysicsWorld`` untouched.
+
+    073-002 update: this is NO LONGER "``PhysicsWorld``'s own neutral
+    default (1.0)" — ``SimHandle``'s constructor now seeds
+    ``_bodyRotationalScrub`` from ``effectiveSlip(cfg.rotationalSlip)`` (a
+    fresh ``Sim()`` at the default ``rotationalSlip=0.92`` starts with
+    ``bodyRotScrub≈0.92``, not ``1.0``). Passing ``None`` here means "use
+    whatever the plant already has," which is now a NON-neutral,
+    calibration-seeded value at construction — callers that want the
+    genuinely neutral (1.0, no-op) setter value for an identity/no-scrub
+    scenario MUST pass ``body_rot_scrub=1.0`` explicitly (see
+    ``test_rt_90deg_identity_no_scrub`` below).
+
+    When calling this helper more than once against the SAME ``sim`` (to
+    compare scenarios), pass explicit values for every scrub field every
+    time — the underlying ``PhysicsWorld`` is a single persistent object for
+    the life of the ``Sim``, so a scrub set by an earlier scenario (or
+    seeded at construction) is NOT reset by ``ZERO enc``/``set_true_pose``.
 
     Ticket 003: body_rot_scrub/body_lin_scrub are applied via ``SIMSET
     bodyRotScrub=…``/``SIMSET bodyLinScrub=…`` sent through the normal
@@ -120,16 +132,35 @@ def test_rt_90deg_with_body_scrub_matching_rot_slip(sim):
 
 
 def test_rt_90deg_identity_no_scrub(sim):
-    """Headline acceptance point 2: rotSlip=1.0 (identity) with both new
-    scrub fields left at their default (1.0, no-op) lands RT 9000 near 90°
+    """Headline acceptance point 2: rotSlip=1.0 (identity) with the scrub
+    setter explicitly reset to its neutral 1.0 value lands RT 9000 near 90°
     true — the plant is never asked to scrub at all, so this pins the
     "no correction needed" baseline the scrub math must reproduce when
     correction IS needed (point 1, above).
+
+    073-004 update (before/after): this test used to pass
+    ``body_rot_scrub=None`` (i.e. leave ``PhysicsWorld``'s scrub field
+    untouched) to prove "the DEFAULT is a no-op." Ticket 002 changed that
+    premise on purpose — ``SimHandle`` now SEEDS ``_bodyRotationalScrub``
+    from ``effectiveSlip(cfg.rotationalSlip)`` at construction (≈0.92 at the
+    default ``rotationalSlip``), so a fresh sim's default is no longer 1.0;
+    leaving it untouched here previously produced ~83.5° (a real, expected
+    ~6.5° miss — measured directly against this test before the fix) instead
+    of ~90°, because ``rotSlip=1.0`` (no arc inflation) combined with a
+    ~0.92 scrub UNDER-rotates. This test's actual intent was always "the
+    SETTER's neutral value (1.0) composed with rotSlip=1.0 is an identity" —
+    preserved here by passing ``body_rot_scrub=1.0`` explicitly, which is
+    exactly option (a) from ticket 073-004's acceptance criteria. The NEW,
+    non-neutral construction-time default is covered instead by
+    ``tests/simulation/system/test_073_rt_angle_sweep.py``, which exercises
+    a truly zero-configuration ``Sim()`` (no explicit ``SET``/``SIMSET`` at
+    all) against the sprint's tight ~1° bound.
     """
-    true_h_deg = _true_heading_deg_after_rt(sim, rot_slip=1.0)
+    true_h_deg = _true_heading_deg_after_rt(sim, rot_slip=1.0, body_rot_scrub=1.0)
     assert abs(true_h_deg - 90.0) < _NEAR_90_TOL_DEG, (
-        f"RT 9000 with rotSlip=1.0 (identity) and default (no-op) scrub "
-        f"fields should land near 90° true; got {true_h_deg:.2f}°"
+        f"RT 9000 with rotSlip=1.0 (identity) and body_rot_scrub=1.0 "
+        f"(setter's explicit neutral value) should land near 90° true; "
+        f"got {true_h_deg:.2f}°"
     )
 
 
