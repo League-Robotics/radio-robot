@@ -525,10 +525,9 @@ void Planner::beginRotation(float relAngle, uint32_t now,
 {
     const float kDegToRad = 3.14159265f / 180.0f;
     // Spin rate for RT — deliberately moderate (not yawRateMax) so the SOFT
-    // ramp-down coasts little. Coast-anticipation (kRtCoastArc) fires the
-    // ROTATION stop early so the ramp lands on target. Both tuned in sim.
+    // ramp-down coasts little. Coast-anticipation fires the ROTATION stop
+    // early so the ramp lands on target (see coastArc below).
     const float kRtRate     = 100.0f;   // [deg/s]
-    const float kRtCoastArc = 8.0f;     // [mm] ~7.3° SOFT-ramp coast at 100°/s (sim-tuned)
 
     float tw   = _cfg.trackwidth;
     // Per-wheel arc = |deg|·(π/180)·(trackwidth/2) / slip.
@@ -537,9 +536,25 @@ void Planner::beginRotation(float relAngle, uint32_t now,
     // effectiveSlip() applies the same migration-safe clamp as Odometry::predict().
     float slip = effectiveSlip(_cfg.rotationalSlip);
     float arc  = fabsf(relAngle) / 100.0f * kDegToRad * (tw * 0.5f) / slip;   // [mm]
-    float stopArc = arc - kRtCoastArc;   // [mm]
-    if (stopArc < 0.0f) stopArc = 0.0f;
+
+    // Coast anticipation, derived live from ramp-down dynamics (073-001) —
+    // replaces a hand-tuned constant (kRtCoastArc = 8.0mm) that was tuned
+    // for an assumed 100°/s cruise rate and went stale once yawRateMax
+    // dropped to 70°/s (DefaultConfig.cpp). BodyVelocityController::advance()
+    // ramps the yaw channel down as a pure trapezoid (yawJerkMax=0):
+    // domega_max = yawAccMax·dt_s per tick, symmetric accel/decel. Integrated
+    // continuously from the actual commanded cruise rate to zero, the SOFT
+    // ramp-down coasts rate²/(2·yawAccMax) [deg] of additional angle after
+    // the ROTATION stop fires — converted to a per-wheel arc via
+    // (π/180)·(trackwidth/2), this is the amount the stop must fire early so
+    // the ramp lands on target. Computed from live cfg.yawRateMax/yawAccMax/
+    // trackwidth (067's live-reference guarantee), so it self-corrects if
+    // either field changes instead of silently going stale again.
     float rate = (_cfg.yawRateMax < kRtRate) ? _cfg.yawRateMax : kRtRate;   // [deg/s]
+    float coastAngleDeg = rate * rate / (2.0f * _cfg.yawAccMax);           // [deg]
+    float coastArc = coastAngleDeg * kDegToRad * (tw * 0.5f);              // [mm]
+    float stopArc = arc - coastArc;   // [mm]
+    if (stopArc < 0.0f) stopArc = 0.0f;
     float omega_sign = (relAngle >= 0.0f) ? 1.0f : -1.0f;   // + ⇒ CCW
     float omega = omega_sign * rate * kDegToRad;        // rad/s
 
