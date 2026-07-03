@@ -70,11 +70,15 @@ public:
     // Returns {0, 0} — no accelerometer in bench mode.
     OtosAccel readAccelTransformed() const override;
 
-    // Calibration stubs — all no-ops; get* return 0.
+    // Calibration stubs — no-ops (no IMU / tracking engine in bench mode).
     void   init() override {}
     void   calibrateImu(uint8_t samples) override { (void)samples; }
     void   resetTracking() override {}
 
+    // Raw position access with register-scale parity to the real chip:
+    // getPositionRaw reads back the errored accumulator; setPositionRaw
+    // re-references BOTH accumulators (so `OZ` actually re-anchors the bench
+    // frame — mirrors SimOdometer 063-006; see BenchOtosSensor.cpp).
     void   getPositionRaw(int16_t& x, int16_t& y, int16_t& h) const override;
     void   setPositionRaw(int16_t x, int16_t y, int16_t h) override;
     void   setWorldPose(float x, float y, float h) override;  // [mm], [mm], [rad]
@@ -97,13 +101,43 @@ public:
     /**
      * tick — integrate one control step into both accumulators.
      *
-     * velLeft, velRight : commanded left/right wheel velocities, mm/s.
+     * velLeft, velRight : left/right wheel velocities, mm/s.
      * trackwidth        : wheel-to-wheel track width, mm.
      * dt_ms             : elapsed time for this step, ms.
      *
      * No-op when dt_ms == 0, trackwidth <= 0, or is_initialized() is false.
      */
     void tick(float velLeft, float velRight, float trackwidth, uint32_t dt_ms);  // [mm/s], [mm/s], [mm], [ms]
+
+    /**
+     * tickEncoder — integrate one control step from MEASURED cumulative wheel
+     * travel (encoder mm), the preferred feed for bench mode.
+     *
+     * Integrating COMMANDED tgtSpeed made the bench pose blind to what the
+     * wheels actually did — PID lag on ramp-up and, critically, ~10 mm/wheel
+     * of coast past the stop-condition cutoff.  Measured on tovez
+     * (2026-07-03, rotSlip=0): encoders executed ~92°/RT 9000 while the
+     * commanded integral counted only ~82°; the EKF follows the OTOS heading,
+     * so tours lost ~8°/turn and could not close.  Feeding encoder deltas
+     * makes the bench OTOS an errored copy of encoder truth — the same
+     * relationship SimOdometer has to plant truth in sim (ticket 066-001) —
+     * so the two observation streams agree by construction and the injected
+     * noise/drift model is the ONLY disagreement.
+     *
+     * encLeft/encRight are cumulative positions; this method owns the
+     * previous-value baseline.  A per-tick step exceeding kMaxWheelMmps
+     * × dt is treated as an encoder RESET (ZERO enc, per-drive-start
+     * resetEncoder — events the real OTOS never sees): the baseline is
+     * re-based and the step is NOT integrated.  The same clamp self-heals
+     * the stale baseline on the first call after bench mode is re-enabled.
+     *
+     * encLeft, encRight : cumulative wheel travel, mm (Motor/SimMotor
+     *                     position() — the value cached by this tick's
+     *                     sensor read; no I2C).
+     * trackwidth        : wheel-to-wheel track width, mm.
+     * dt_ms             : elapsed time for this step, ms.
+     */
+    void tickEncoder(float encLeft, float encRight, float trackwidth, uint32_t dt_ms);  // [mm], [mm], [mm], [ms]
 
     /**
      * enable / enabled — gate whether tick() advances the accumulators.
@@ -158,6 +192,16 @@ private:
     float _velOmega  = 0.0f;  // yaw rate, rad/s
     float _accAx     = 0.0f;  // forward accel, mm/s^2
     float _prevVelV  = 0.0f;  // for finite-difference accel
+
+    // tickEncoder baseline: previous cumulative wheel positions [mm].
+    // _encBaselineValid gates the very first call (no delta to integrate).
+    float _lastEncL         = 0.0f;
+    float _lastEncR         = 0.0f;
+    bool  _encBaselineValid = false;
+
+    // Per-tick step ceiling for tickEncoder's reset clamp: no physical wheel
+    // exceeds this speed, so a larger step is an encoder reset, not motion.
+    static constexpr float kMaxWheelMmps = 2000.0f;  // [mm/s]
 
     bool _enabled = true;
 

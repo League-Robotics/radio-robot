@@ -132,10 +132,15 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
     // ignored both parameters). No replacement injection point is needed;
     // every PhysicalStateEstimate method is now explicit per-call.
     // 041-002: the OTOS command handlers (OI/OZ/OR/OV/OL/OA/OP) moved out of
-    // Odometry into the app-layer OtosCommands.  Bind the same IOdometer device
-    // and cached HardwareState pointers the handlers previously reached through
-    // Odometry::setCtx, so the verbs dispatch and behave identically.
-    _otosCommands.setCtx(&otos, &state.actual);
+    // Odometry into the app-layer OtosCommands.  Bind the Hardware so the
+    // handlers resolve the ACTIVE odometer live via hal.otos() on every
+    // dispatch — a construction-bound &otos froze them onto the real chip and
+    // OZ/OV could never re-anchor the bench sensor (bench-OTOS issue, 2026-07-03).
+    _otosCommands.setCtx(&hal, &state.actual);
+    // Bind the LIVE config (this Robot-owned copy is what SET mutates) into
+    // the HAL so the bench-OTOS kinematics track runtime SET tw=… updates
+    // instead of the boot-time copy the HAL was constructed with.
+    hal.bindLiveConfig(&config);
     estimate.initEKF(config.ekfQxy, config.ekfQtheta,
                      config.ekfQv, config.ekfQomega,
                      config.ekfROtosXy, config.ekfROtosV, config.ekfREncV,

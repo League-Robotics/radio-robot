@@ -126,14 +126,34 @@ OtosAccel BenchOtosSensor::readAccelTransformed() const {
 }
 
 // ---------------------------------------------------------------------------
-// Calibration stubs — raw position access
+// Raw position access — register-scale parity with the real OtosSensor chip.
+//
+// On hardware the chip's POSITION registers ARE its accumulator, so writing
+// them re-references the reported pose immediately.  A stub here meant `OZ`
+// (setPositionRaw(0,0,0)) never re-anchored the bench accumulators: after any
+// motion, the GUI origin reset zeroed the EKF but the bench sensor kept its
+// old frame and dragged the fused pose back within seconds (bench-OTOS issue,
+// 2026-07-03).  Mirrors SimOdometer::setPositionRaw (ticket 063-006) — same
+// LSB scale constants.
 // ---------------------------------------------------------------------------
 
+static constexpr float kPosMmPerLsb  = 0.305f;
+static constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);
+
 void BenchOtosSensor::getPositionRaw(int16_t& x, int16_t& y, int16_t& h) const {
-    x = 0; y = 0; h = 0;
+    x = static_cast<int16_t>(_otosX / kPosMmPerLsb);
+    y = static_cast<int16_t>(_otosY / kPosMmPerLsb);
+    h = static_cast<int16_t>(_otosH / kHdgRadPerLsb);
 }
 
-void BenchOtosSensor::setPositionRaw(int16_t /*x*/, int16_t /*y*/, int16_t /*h*/) {}
+void BenchOtosSensor::setPositionRaw(int16_t x, int16_t y, int16_t h) {
+    // Re-reference BOTH accumulators via setWorldPose — ideal ground truth and
+    // errored output re-base to the same fix, matching the real chip's
+    // register-write semantics.
+    setWorldPose(static_cast<float>(x) * kPosMmPerLsb,
+                 static_cast<float>(y) * kPosMmPerLsb,
+                 static_cast<float>(h) * kHdgRadPerLsb);
+}
 
 void BenchOtosSensor::setWorldPose(float x, float y, float h) {  // [mm], [mm], [rad]
     // The sim OTOS reads back _otos* directly (identity transform — no mount
@@ -167,6 +187,45 @@ void BenchOtosSensor::idealPose(OtosPose& out) const {
 // ---------------------------------------------------------------------------
 // tick — advance both accumulators one control step
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// tickEncoder — measured-motion feed (see header for the full rationale).
+//
+// Owns the cumulative-position baseline and the reset clamp, then delegates
+// the actual arc integration to tick() with delta/dt velocities — the math is
+// identical (tick multiplies by dt_s again, so distances are exact).
+// ---------------------------------------------------------------------------
+
+void BenchOtosSensor::tickEncoder(float encLeft, float encRight,
+                                  float trackwidth, uint32_t dt_ms) {
+    // dt==0 re-entry: leave the baseline UNTOUCHED and integrate nothing.
+    // The sim loop invokes the actuator tick twice per timestamp (sim_tick
+    // pre-loop + loopTickOnce step 6b, second call dt==0 by design); if the
+    // dt==0 call re-based the baseline to the freshly-promoted encoder
+    // positions, every step would be swallowed before the next dt>0 call
+    // could integrate it.
+    if (dt_ms == 0) return;
+
+    // Re-base the baseline on every dt>0 call — a stale baseline (first
+    // call, or first call after bench mode was off) must never integrate.
+    const float dL = encLeft  - _lastEncL;
+    const float dR = encRight - _lastEncR;
+    const bool  hadBaseline = _encBaselineValid;
+    _lastEncL         = encLeft;
+    _lastEncR         = encRight;
+    _encBaselineValid = true;
+
+    if (!hadBaseline) return;
+
+    // Reset clamp: a step no physical wheel could produce in dt is an encoder
+    // reset (ZERO enc / per-drive-start resetEncoder) or a stale baseline —
+    // events the real OTOS never sees.  Skip integration; baseline is rebased.
+    const float dt_s    = static_cast<float>(dt_ms) / 1000.0f;
+    const float maxStep = kMaxWheelMmps * dt_s;
+    if (dL > maxStep || dL < -maxStep || dR > maxStep || dR < -maxStep) return;
+
+    tick(dL / dt_s, dR / dt_s, trackwidth, dt_ms);
+}
 
 void BenchOtosSensor::tick(float velLeft, float velRight,
                            float trackwidth, uint32_t dt_ms) {

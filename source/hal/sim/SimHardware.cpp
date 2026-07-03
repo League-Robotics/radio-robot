@@ -86,7 +86,12 @@ void SimHardware::advance(uint32_t now_ms, const MotorCommands& cmds) {
     _lastBenchTick = now_ms;
 
     if (isBenchMode()) {
-        // Array convention: [0]=R (FR), [1]=L (FL) — see OutputState.h.
-        _benchOtos.tick(cmds.tgtSpeed[1], cmds.tgtSpeed[0], _trackwidth, benchDt);
+        // Feed MEASURED wheel travel (SimMotor::position(), the reported
+        // encoder value cached by this tick's sensor read), not commanded
+        // tgtSpeed — parity with NezhaHAL::tick's encoder feed so bench mode
+        // behaves identically in sim and on hardware (see
+        // BenchOtosSensor::tickEncoder for the rationale).
+        _benchOtos.tickEncoder(_motorL.position(), _motorR.position(),
+                               _trackwidth, benchDt);
     }
 }

@@ -20,20 +20,24 @@
 // estimator does NOT depend on these.
 // ---------------------------------------------------------------------------
 
+class Hardware;   // fwd decl — handlers resolve the ACTIVE odometer via hal->otos()
+
 /**
  * OtosCtx — context bundle for OtosCommands handlers.
  *
  * Both pointers are populated by OtosCommands::setCtx() before any command
- * can arrive.  OTOS command handlers (OI, OZ, OR, OV, OL, OA) reach the
- * IOdometer through this struct.  handleOP reads hwState directly (cached
- * state from the main loop) instead of calling otos->getPositionRaw().
- *
- * Verbatim from Odometry's OdomCtx, minus the unused `odo` self-pointer
- * (none of the seven handlers reference it — that field served the old
- * correct() path, which is not a command handler).
+ * can arrive.  OTOS command handlers (OI, OZ, OR, OV, OL, OA) resolve the
+ * odometer LIVE through hal->otos() on every dispatch — not through an
+ * IOdometer* bound at construction — so `DBG OTOS BENCH 1` re-seats them
+ * onto the BenchOtosSensor exactly like Drive::tickUpdate's fusion read
+ * (074-002).  A construction-bound pointer here left OZ/OV zeroing the
+ * real chip while the EKF fused the bench accumulators (see
+ * clasi/issues/oz-si-do-not-reanchor-bench-otos.md).  handleOP reads
+ * hwState directly (cached state from the main loop) instead of calling
+ * the device.
  */
 struct OtosCtx {
-    IOdometer*           otos;
+    Hardware*            hal;
     const HardwareState* hwState;  // cached OTOS pose for OP read (no device call)
 };
 
@@ -51,12 +55,12 @@ public:
 
     virtual std::vector<CommandDescriptor> getCommands() const override;
 
-    // Bind the IOdometer device and cached HardwareState pointer.
-    // Call from the Robot constructor after otos and state.inputs are live.
-    // hwState may be nullptr in unit tests that do not exercise OP; handleOP
-    // checks for null before dereferencing.
-    void setCtx(IOdometer* otos, const HardwareState* hwState = nullptr) {
-        _ctx.otos    = otos;
+    // Bind the Hardware (for live otos() resolution) and cached HardwareState
+    // pointer.  Call from the Robot constructor after hal and state.inputs are
+    // live.  hwState may be nullptr in unit tests that do not exercise OP;
+    // handleOP checks for null before dereferencing.
+    void setCtx(Hardware* hal, const HardwareState* hwState = nullptr) {
+        _ctx.hal     = hal;
         _ctx.hwState = hwState;
     }
 

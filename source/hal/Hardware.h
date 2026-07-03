@@ -16,6 +16,9 @@
 // here; benchOtosPtr() only traffics in the pointer (074-001).
 class BenchOtosSensor;
 
+// Forward declaration — bindLiveConfig() only traffics in the pointer.
+struct RobotConfig;
+
 /**
  * Hardware — abstract HAL registry / factory base class.
  *
@@ -69,6 +72,13 @@ public:
     // do not own a bench sensor; NezhaHAL/MecanumHAL/SimHardware override to
     // return their own `&_benchOtos`.
     virtual BenchOtosSensor* benchOtosPtr() { return nullptr; }
+
+    // Bind the LIVE RobotConfig (the copy Robot owns and SET mutates), so
+    // HAL-side consumers — today the bench-OTOS kinematics (trackwidth) —
+    // track runtime SET updates instead of the boot-time copy the HAL was
+    // constructed with.  Called from the Robot constructor.  Default no-op
+    // for HALs with no live-config consumers.
+    virtual void bindLiveConfig(const RobotConfig* cfg) { (void)cfg; }
 
     // -----------------------------------------------------------------------
     // Default Noop accessors for rear motors (mecanum build overrides these

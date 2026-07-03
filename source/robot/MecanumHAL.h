@@ -100,6 +100,10 @@ public:
     bool isBenchMode() const override {
         return _otosActive == static_cast<const IOdometer*>(&_benchOtos);
     }
+
+    // Bind the LIVE RobotConfig (Robot's SET-mutated copy) so the bench tick
+    // reads the same trackwidth Drive's EKF uses.  Mirrors NezhaHAL.
+    void bindLiveConfig(const RobotConfig* cfg) override { _liveCfg = cfg; }
 #endif // BENCH_OTOS_ENABLED
 
 private:
@@ -127,6 +131,10 @@ private:
     float            _halfTrack       = 0.0f;   // [mm]
     float            _halfWheelbase   = 0.0f;   // [mm]
     uint32_t         _lastBenchTickMs = 0u;
+
+    // LIVE RobotConfig bound via bindLiveConfig(); nullptr until Robot's
+    // constructor runs (fallback: the construction-time _halfTrack cache).
+    const RobotConfig* _liveCfg       = nullptr;
 
     // Per-wheel forward signs, cached for bench integration.
     int8_t           _fwdSignFR = -1;

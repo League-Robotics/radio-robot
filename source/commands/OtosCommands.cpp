@@ -1,5 +1,6 @@
 #include "OtosCommands.h"
 #include "CommandProcessor.h"
+#include "hal/Hardware.h"
 #include "types/ArgSchema.h"
 #include <cstdio>
 
@@ -56,7 +57,7 @@ static const ArgSchema oaSchema = { oaDefs, 1, 0, false, nullptr };
 static bool otosReady(OtosCtx* c, const char* verb, char* rbuf, int rbsz,
                       const char* corrId, ReplyFn fn, void* ctx)
 {
-    if (!c->otos->is_initialized()) {
+    if (!c->hal->otos().is_initialized()) {
         CommandProcessor::replyErr(rbuf, rbsz, "nodev", verb, corrId, fn, ctx);
         return false;
     }
@@ -73,7 +74,7 @@ static void handleOI(const ArgList& /*args*/, const char* corrId,
     OtosCtx* c = reinterpret_cast<OtosCtx*>(handlerCtx);
     char rbuf[64];
     if (!otosReady(c, "oi", rbuf, sizeof(rbuf), corrId, replyFn, replyCtx)) return;
-    c->otos->init();
+    c->hal->otos().init();
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "oi", nullptr,
                               corrId, replyFn, replyCtx);
 }
@@ -84,7 +85,7 @@ static void handleOZ(const ArgList& /*args*/, const char* corrId,
     OtosCtx* c = reinterpret_cast<OtosCtx*>(handlerCtx);
     char rbuf[64];
     if (!otosReady(c, "oz", rbuf, sizeof(rbuf), corrId, replyFn, replyCtx)) return;
-    c->otos->setPositionRaw(0, 0, 0);
+    c->hal->otos().setPositionRaw(0, 0, 0);
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "oz", nullptr,
                               corrId, replyFn, replyCtx);
 }
@@ -95,7 +96,7 @@ static void handleOR(const ArgList& /*args*/, const char* corrId,
     OtosCtx* c = reinterpret_cast<OtosCtx*>(handlerCtx);
     char rbuf[64];
     if (!otosReady(c, "or", rbuf, sizeof(rbuf), corrId, replyFn, replyCtx)) return;
-    c->otos->resetTracking();
+    c->hal->otos().resetTracking();
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "or", nullptr,
                               corrId, replyFn, replyCtx);
 }
@@ -144,7 +145,7 @@ static void handleOV(const ArgList& args, const char* corrId,
     int16_t ox = (int16_t)args.args[0].ival;
     int16_t oy = (int16_t)args.args[1].ival;
     int16_t oh = (int16_t)args.args[2].ival;
-    c->otos->setPositionRaw(ox, oy, oh);
+    c->hal->otos().setPositionRaw(ox, oy, oh);
     char body[48];
     snprintf(body, sizeof(body), "x=%d y=%d h=%d", (int)ox, (int)oy, (int)oh);
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "setpos", body,
@@ -159,9 +160,9 @@ static void handleOL(const ArgList& args, const char* corrId,
     if (!otosReady(c, "ol", rbuf, sizeof(rbuf), corrId, replyFn, replyCtx)) return;
     if (args.suppliedCount >= 1) {
         // Cast to int8_t at use site — preserves existing silent truncation behaviour.
-        c->otos->setLinearScalar((int8_t)args.args[0].ival);
+        c->hal->otos().setLinearScalar((int8_t)args.args[0].ival);
     }
-    int8_t val = c->otos->getLinearScalar();
+    int8_t val = c->hal->otos().getLinearScalar();
     char body[24];
     snprintf(body, sizeof(body), "scalar=%d", (int)val);
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "linear", body,
@@ -176,9 +177,9 @@ static void handleOA(const ArgList& args, const char* corrId,
     if (!otosReady(c, "oa", rbuf, sizeof(rbuf), corrId, replyFn, replyCtx)) return;
     if (args.suppliedCount >= 1) {
         // Cast to int8_t at use site — preserves existing silent truncation behaviour.
-        c->otos->setAngularScalar((int8_t)args.args[0].ival);
+        c->hal->otos().setAngularScalar((int8_t)args.args[0].ival);
     }
-    int8_t val = c->otos->getAngularScalar();
+    int8_t val = c->hal->otos().getAngularScalar();
     char body[24];
     snprintf(body, sizeof(body), "scalar=%d", (int)val);
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "angular", body,
