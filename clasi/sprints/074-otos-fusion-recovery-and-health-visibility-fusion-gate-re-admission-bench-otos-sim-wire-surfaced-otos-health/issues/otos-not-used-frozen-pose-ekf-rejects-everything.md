@@ -1,5 +1,11 @@
 ---
-status: pending
+status: in-progress
+sprint: '074'
+tickets:
+- 074-001
+- 074-002
+- 074-003
+- 074-004
 ---
 
 # OTOS not being used — pose frozen all session, ekf_rej climbing every tick, EKF running encoder-only
