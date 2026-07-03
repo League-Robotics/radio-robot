@@ -2,7 +2,7 @@
 id: '076'
 title: "Remove units from identifier names \u2014 host Python (codebase-wide rename,\
   \ wire keys stable)"
-status: planning-docs
+status: done
 branch: sprint/076-remove-units-from-identifier-names-host-python-codebase-wide-rename-wire-keys-stable
 use-cases: []
 issues:
