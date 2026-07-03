@@ -55,7 +55,8 @@ struct SimEntry {
 // Decision 3, Sprint Changes Summary item 1).
 //
 // kSimRegistry[] -- ticket 003's first batch (rows 1-5). Ticket 004 appends
-// the encoder-report-error / OTOS-error rows below (rows 6-17).
+// the encoder-report-error / OTOS-error rows below (rows 6-17). Ticket 072-001
+// appends the motor stiction/breakaway + optional lag rows (rows 18-21).
 // ---------------------------------------------------------------------------
 static const SimEntry kSimRegistry[] = {
     { "bodyRotScrub", simsetters::bodyRotScrub, simsetters::getBodyRotScrub },
@@ -75,6 +76,11 @@ static const SimEntry kSimRegistry[] = {
     { "otosYawNoise",     simsetters::otosYawNoise,     simsetters::getOtosYawNoise },
     { "otosLinDriftMmS",  simsetters::otosLinearDrift, simsetters::getOtosLinearDrift },
     { "otosYawDriftDegS", simsetters::otosYawDrift,    simsetters::getOtosYawDrift },
+    // 072-001: motor stiction/breakaway gate + optional first-order lag.
+    { "stictionPwmL", simsetters::stictionPwmL, simsetters::getStictionPwmL },
+    { "stictionPwmR", simsetters::stictionPwmR, simsetters::getStictionPwmR },
+    { "motorLagMsL",  simsetters::motorLagMsL,  simsetters::getMotorLagMsL },
+    { "motorLagMsR",  simsetters::motorLagMsR,  simsetters::getMotorLagMsR },
 };
 static const int kSimRegistryCount = (int)(sizeof(kSimRegistry) / sizeof(kSimRegistry[0]));
 

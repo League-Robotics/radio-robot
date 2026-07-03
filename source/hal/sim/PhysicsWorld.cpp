@@ -69,9 +69,48 @@ void PhysicsWorld::update(uint32_t dt) {  // [ms]
     // With slip == 0 and noise == 0 the accumulation reduces to vel * dt_s, the
     // exact float operation order below.  Same float type (float, not double),
     // same operation order, no algebraic simplification.
+    //
+    // 072-001: two NEW stages sit between the algebraic formula and the
+    // encoder/pose consumers below — the stiction/breakaway gate and the
+    // optional first-order lag filter (architecture-update.md Step 4b's
+    // insertion diagram). At default parameters (stictionPwm == 0, tau <= 0)
+    // neither stage performs any arithmetic on the value it passes through —
+    // the gate's condition (fabsf(pwm) < 0) is never true, and the lag stage
+    // takes the tau<=0 assignment-only path — so velL/velR below are
+    // BIT-IDENTICAL to algVelL/algVelR, preserving the golden-TLM guarantee.
     // -----------------------------------------------------------------------
-    float velL = (_pwmL / 100.0f) * _nominalMaxSpeed * _offsetFactorL;
-    float velR = (_pwmR / 100.0f) * _nominalMaxSpeed * _offsetFactorR;
+    float algVelL = (_pwmL / 100.0f) * _nominalMaxSpeed * _offsetFactorL;
+    float algVelR = (_pwmR / 100.0f) * _nominalMaxSpeed * _offsetFactorR;
+
+    // NEW: stiction/breakaway gate — stateless PWM dead-zone (Decision 3).
+    // |pwm| < stictionPwmSide => this tick's target velocity is forced to 0,
+    // regardless of the wheel's velocity on the previous tick. Once
+    // |pwm| >= stictionPwmSide, the unmodified algebraic velocity applies.
+    float velTargetL = (fabsf(static_cast<float>(_pwmL)) < _stictionPwmL) ? 0.0f : algVelL;
+    float velTargetR = (fabsf(static_cast<float>(_pwmR)) < _stictionPwmR) ? 0.0f : algVelR;
+
+    // NEW: optional first-order response lag (independent, separately
+    // defaulted-off knob — Decision 3). tau <= 0 skips the expf() call
+    // entirely so vel == velTarget bit-for-bit; tau > 0 exponentially
+    // converges the persistent _lagVelL/R state toward velTarget.
+    float velL;
+    if (_motorLagL <= 0.0f) {
+        velL = velTargetL;
+    } else {
+        float alphaL = 1.0f - expf(-dt_s / (_motorLagL * 0.001f));
+        velL = _lagVelL + (velTargetL - _lagVelL) * alphaL;
+    }
+    _lagVelL = velL;
+
+    float velR;
+    if (_motorLagR <= 0.0f) {
+        velR = velTargetR;
+    } else {
+        float alphaR = 1.0f - expf(-dt_s / (_motorLagR * 0.001f));
+        velR = _lagVelR + (velTargetR - _lagVelR) * alphaR;
+    }
+    _lagVelR = velR;
+
     _trueEncL += velL * dt_s;
     _trueEncR += velR * dt_s;
     _trueVelL = velL;
@@ -163,6 +202,14 @@ void PhysicsWorld::reset() {
 
     _reportedEncL = 0.0f;
     _reportedEncR = 0.0f;
+
+    // 072-001: the lag filter's persistent output state is STATE, not
+    // configuration — zeroed here like every other accumulator above. The
+    // stiction threshold / lag time-constant knobs themselves are
+    // configuration and are left intact, matching this function's existing
+    // convention (see the doc comment above).
+    _lagVelL = 0.0f;
+    _lagVelR = 0.0f;
 
     for (int i = 0; i < 4; ++i) {
         _lineRaw[i]   = 0;
