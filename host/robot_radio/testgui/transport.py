@@ -679,6 +679,13 @@ _SIM_OTOS_LINEAR_NOISE = 0.05  # OTOS linear noise sigma (fraction of arc)
 # 066, Open Question 3).
 _SIM_READY_TIMEOUT_S = 5.0
 
+# Max SIMSET key=value pairs per wire line.  The firmware tokenizer packs
+# arguments into a fixed ArgList of MAX_ARGS = 10 slots
+# (source/types/CommandTypes.h) and silently drops pairs past the tenth
+# while still replying OK — so profile applies MUST be chunked.  8 leaves
+# margin under the cap.
+_SIMSET_MAX_PAIRS_PER_LINE = 8
+
 
 class SimTransport(Transport):
     """Transport backend that drives the ctypes firmware simulator.
@@ -1063,8 +1070,8 @@ class SimTransport(Transport):
     def _apply_profile_to_sim(self, sim: "object", profile: dict) -> None:
         """Apply every sim error knob in ``profile`` to ``sim``.
 
-        069-007: rewritten to send ONE ``SIMSET k1=v1 k2=v2 …`` wire command
-        (via ``sim.send_command()``) covering the full newly-surfaced
+        069-007: rewritten to send the knobs as ``SIMSET k1=v1 k2=v2 …`` wire
+        commands (via ``sim.send_command()``) covering the full newly-surfaced
         registry (``sim_prefs.PROFILE_TO_SIMSET_KEY``) plus the two
         historical knobs that DO have ``SIMSET`` keys
         (``otos_linear_noise`` -> ``otosLinNoise``, ``otos_yaw_noise`` ->
@@ -1072,6 +1079,17 @@ class SimTransport(Transport):
         wire keys (``encNoiseL``/``encNoiseR``, both set to the same value —
         matching the historical ``sim.set_encoder_noise(0, ...)`` +
         ``sim.set_encoder_noise(1, ...)`` pair).
+
+        The pairs are sent in CHUNKS of ``_SIMSET_MAX_PAIRS_PER_LINE``: the
+        firmware's command tokenizer packs arguments into a fixed
+        ``ArgList`` of ``MAX_ARGS = 10`` slots (source/types/CommandTypes.h)
+        and SILENTLY DROPS every kv pair past the tenth while still replying
+        OK.  The full 15-knob profile in one line therefore never applied
+        ``motorOffsetL/R``, ``trackwidthMm``, or ``encNoiseL/R`` (measured
+        2026-07-02: ``SIMSET … trackwidthMm=127.0`` replied OK, ``SIMGET
+        trackwidthMm`` still read 128.000).  Worse, a mid-token cut can
+        parse a truncated value.  Chunking keeps every line safely under
+        the firmware cap so every knob actually lands.
 
         ``slip_turn_extra`` has no ``SIMSET`` key at all — it is the
         pre-existing, untouched ``_rotationalSlip`` test-infra channel
@@ -1097,7 +1115,7 @@ class SimTransport(Transport):
         slip_turn_extra = profile.get("slip_turn_extra", defaults["slip_turn_extra"])
         encoder_noise_mm = profile.get("encoder_noise_mm", defaults["encoder_noise_mm"])
 
-        # Build one SIMSET string: every 1:1-mapped key from the map, plus
+        # Build the SIMSET pairs: every 1:1-mapped key from the map, plus
         # encoder_noise_mm's two-key fan-out.
         pairs = [
             (wire_key, profile.get(key, defaults[key]))
@@ -1105,13 +1123,22 @@ class SimTransport(Transport):
         ]
         pairs.append(("encNoiseL", encoder_noise_mm))
         pairs.append(("encNoiseR", encoder_noise_mm))
-        simset_line = "SIMSET " + " ".join(f"{k}={v}" for k, v in pairs)
 
-        try:
-            reply = sim.send_command(simset_line)  # type: ignore[attr-defined]
-            self._log(f"[INFO] {simset_line} -> {reply.strip() if reply else 'OK'}")
-        except Exception as exc:
-            _log.warning("SimTransport: could not apply SIMSET profile: %s", exc)
+        # Send in chunks under the firmware's MAX_ARGS=10 ArgList cap — see
+        # the docstring: pairs past the cap are silently dropped (reply is
+        # still OK), so one 15-pair line never applied the last five knobs.
+        for i in range(0, len(pairs), _SIMSET_MAX_PAIRS_PER_LINE):
+            chunk = pairs[i:i + _SIMSET_MAX_PAIRS_PER_LINE]
+            simset_line = "SIMSET " + " ".join(f"{k}={v}" for k, v in chunk)
+            try:
+                reply = sim.send_command(simset_line)  # type: ignore[attr-defined]
+                self._log(
+                    f"[INFO] {simset_line} -> {reply.strip() if reply else 'OK'}"
+                )
+            except Exception as exc:
+                _log.warning(
+                    "SimTransport: could not apply SIMSET profile chunk: %s", exc
+                )
 
         try:
             sim.set_field_profile(  # type: ignore[attr-defined]

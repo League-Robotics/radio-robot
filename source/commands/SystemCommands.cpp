@@ -327,7 +327,8 @@ static void handleZero(const ArgList& args, const char* corrId,
     // (N1 fix, sprint 030-001: replaces bare resetEncoderAccumulators() which
     // left state.actual.encLMm/R stale, freezing encoder reads for ~target mm.)
     if (doEnc)  robot->resetEncoders();
-    if (doPose) robot->estimate.zero(robot->state.actual);
+    if (doPose) robot->estimate.zero(robot->state.actual.encMm[1], robot->state.actual.encMm[0],
+                                     robot->state.actual.encoder, robot->state.actual.fused);
     // ZERO T -- set timer baseline for HaltController TIME conditions.
     if (doT) {
         robot->haltController.setTimerBaseline(robot->systemTime());
@@ -728,7 +729,9 @@ static void handleSI(const ArgList& args, const char* corrId,
     int32_t y_mm   = args.args[1].ival;
     int32_t h_cdeg = args.args[2].ival;
     // Direct path (legacy + live loop): reset the shared estimate and state.actual.
-    robot->estimate.resetPose(robot->state.actual, x_mm, y_mm, h_cdeg);
+    robot->estimate.resetPose(robot->state.actual.encMm[1], robot->state.actual.encMm[0],
+                              x_mm, y_mm, h_cdeg,
+                              robot->state.actual.encoder, robot->state.actual.fused);
     // 059-004: also stage via drive.apply(SetPose) so the new-arch Drive subsystem
     // sees the same pose re-anchor.  Drive::tickAction processes the staged command
     // and calls _est.resetPose on its own private _hw estimate.  Both the legacy path

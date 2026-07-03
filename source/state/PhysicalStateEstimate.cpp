@@ -2,40 +2,41 @@
 
 PhysicalStateEstimate::PhysicalStateEstimate() {}
 
+void PhysicalStateEstimate::setKinematics(float trackwidthMm, float rotationalSlip) {
+    _odometry.setKinematics(trackwidthMm, rotationalSlip);
+}
+
 void PhysicalStateEstimate::addOdometryObservation(
-        HardwareState& s, float trackwidthMm,
-        float rotationalSlip, uint32_t now_ms) {
-    _odometry.predict(s, trackwidthMm, rotationalSlip, now_ms);
+        float encLeftMm, float encRightMm, uint32_t now_ms,
+        PoseEstimate& encoderOut, PoseEstimate& fusedOut) {
+    _odometry.predict(encLeftMm, encRightMm, now_ms, encoderOut, fusedOut);
 }
 
 void PhysicalStateEstimate::addOtosObservation(
-        HardwareState& s,
         float x_otos, float y_otos, float theta_otos_rad,
         float v_otos_mmps, float omega_otos_rads,
-        float vy_otos_mmps, uint32_t now_ms) {
-    _odometry.correctEKF(s, x_otos, y_otos, theta_otos_rad,
-                         v_otos_mmps, omega_otos_rads, vy_otos_mmps, now_ms);
+        float vy_otos_mmps, uint32_t now_ms,
+        PoseEstimate& opticalOut, PoseEstimate& fusedOut) {
+    _odometry.correctEKF(x_otos, y_otos, theta_otos_rad,
+                         v_otos_mmps, omega_otos_rads, vy_otos_mmps, now_ms,
+                         opticalOut, fusedOut);
 }
 
 void PhysicalStateEstimate::resetPose(
-        HardwareState& s, int32_t x_mm, int32_t y_mm, int32_t h_cdeg) {
-    _odometry.setPose(s, x_mm, y_mm, h_cdeg);
+        float encLeftMm, float encRightMm,
+        int32_t x_mm, int32_t y_mm, int32_t h_cdeg,
+        PoseEstimate& encoderOut, PoseEstimate& fusedOut) {
+    _odometry.setPose(encLeftMm, encRightMm, x_mm, y_mm, h_cdeg, encoderOut, fusedOut);
 }
 
-void PhysicalStateEstimate::zero(HardwareState& s) {
-    _odometry.zero(s);
+void PhysicalStateEstimate::zero(float encLeftMm, float encRightMm,
+        PoseEstimate& encoderOut, PoseEstimate& fusedOut) {
+    _odometry.zero(encLeftMm, encRightMm, encoderOut, fusedOut);
 }
 
-void PhysicalStateEstimate::getPose(const HardwareState& s,
+void PhysicalStateEstimate::getPose(const PoseEstimate& fused,
         int32_t& x_mm, int32_t& y_mm, int32_t& h_cdeg) {
-    Odometry::getPose(s, x_mm, y_mm, h_cdeg);
-}
-
-void PhysicalStateEstimate::getVelocity(const HardwareState& s,
-        float& v_mmps, float& omega_rads) {
-    // Read from canonical fused.twist fields (written by Odometry — 047-002).
-    v_mmps     = s.fused.twist.vx_mmps;
-    omega_rads = s.fused.twist.omega_rads;
+    Odometry::getPose(fused, x_mm, y_mm, h_cdeg);
 }
 
 void PhysicalStateEstimate::initEKF(
@@ -50,11 +51,6 @@ void PhysicalStateEstimate::setNoise(
         float r_otos_xy, float r_otos_v, float r_enc_v, float r_otos_theta) {
     _odometry.setNoise(q_xy, q_theta, q_v, q_omega,
                        r_otos_xy, r_otos_v, r_enc_v, r_otos_theta);
-}
-
-void PhysicalStateEstimate::setCtx(IOdometer* otos,
-                                   const HardwareState* hwState) {
-    _odometry.setCtx(otos, hwState);
 }
 
 uint32_t PhysicalStateEstimate::otosRejectedCount() const {

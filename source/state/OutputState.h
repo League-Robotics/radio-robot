@@ -24,7 +24,11 @@ struct OutputState {
     // ----- Port outputs and dirty flags -----
     bool     digitalOut[4]   = {};
     int16_t  analogOut[4]    = {};
-    bool     digitalDirty[4] = {}; // FIXME need comments about what dirty means
+    // digitalDirty/analogDirty are currently dead: confirmed by grep, no
+    // producer writes them and no consumer reads them anywhere in source/
+    // (070-002; same disposition as sprint 067 Decision 5 — document dead
+    // things, don't fix them).
+    bool     digitalDirty[4] = {};
     bool     analogDirty[4]  = {};
 };
 

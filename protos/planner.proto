@@ -151,6 +151,7 @@ message PlannerState {
 // Motion-only RobotConfig subset owned by the Planner.
 // Drive geometry/PID are in DrivetrainConfig, not here.
 message PlannerConfig {
+  reserved 10, 11;
   float  a_max              = 1;
   float  a_decel            = 2;
   float  v_body_max         = 3;
@@ -160,7 +161,5 @@ message PlannerConfig {
   float  yaw_jerk_max       = 7;
   float  arrive_tol         = 8;
   float  turn_in_place_gate = 9;
-  float  turn_threshold     = 10;
-  float  done_tol           = 11;
   float  min_speed          = 12;
 }

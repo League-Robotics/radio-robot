@@ -28,5 +28,5 @@ The original TypeScript firmware was developed as a functional prototype. This p
 - The Python host (`robot_radio/`) connects over serial at 115 200 baud and over micro:bit radio at group 10 using the protocol v2 wire format (see `docs/protocol-v2.md`).
 - All command verbs (drive, stop, encoder, odometry, sensor, servo, port IO, config) produce the correct `OK`/`ERR`/`EVT`/`TLM`/`CFG`/`ID` responses defined in the v2 specification.
 - The robot drives a straight 2-meter course with less than 1% encoder divergence between wheels.
-- The G command navigates to a specified XY offset within the done-tolerance (`doneTol`) parameter.
+- The G command navigates to a specified XY offset within the arrival tolerance (`arriveTol`) parameter.
 - Clock-sync: a PING burst aligns robot `t=` timestamps with host-monotonic time to within half the minimum RTT.

@@ -164,3 +164,30 @@ def test_est_dump_emits_three_lines(sim):
             assert field in line, (
                 f"EST {label} line is missing field '{field}': {line!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Test 3: DBG EST reply text is byte-identical to the pre-refactor format
+#
+# 070-002 converted EstimateDump::source from a raw const char* to an
+# EstimateSource enum (rendered via a single toString() at the emit point).
+# This test pins the exact wire text — including the "EST %-4s" padding
+# (two spaces after "enc", one after "otos"/"fuse") — so a future change to
+# either the enum's toString() mapping or the snprintf format string cannot
+# silently alter DBG EST's byte layout.
+# ---------------------------------------------------------------------------
+
+def test_est_dump_byte_identical_format(sim):
+    """DBG EST's exact reply text on a freshly-reset robot must match the
+    pre-refactor (raw const char* source) byte layout exactly."""
+    sim.tick_for(24, step_ms=24)
+
+    reply = sim.send_command("DBG EST")
+
+    expected = (
+        "EST enc  x=0 y=0 h=0 vx=0 vy=0 w=0 age=9999999 v=0\n"
+        "EST otos x=0 y=0 h=0 vx=0 vy=0 w=0 age=9999999 v=0\n"
+        "EST fuse x=0 y=0 h=0 vx=0 vy=0 w=0 age=9999999 v=0\n"
+        "OK dbg est\n"
+    )
+    assert reply == expected, f"DBG EST reply text changed: {reply!r}"

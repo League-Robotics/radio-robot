@@ -352,9 +352,11 @@ void Planner::getPoseFloat(float& x, float& y, float& h_rad) const {
     }
     int32_t xi, yi, hi;
     // 044-001: read pose through the PhysicalStateEstimate seam. getPose is a
-    // static forwarder to Odometry::getPose (same HardwareState pose fields), so
+    // static forwarder to Odometry::getPose (same fused-pose fields), so
     // the returned pose is byte-identical to the prior direct Odometry call.
-    PhysicalStateEstimate::getPose(*_hwState, xi, yi, hi);
+    // 070-003: narrowed to take the one PoseEstimate sub-struct it reads,
+    // instead of the whole HardwareState.
+    PhysicalStateEstimate::getPose(_hwState->fused, xi, yi, hi);
     x     = static_cast<float>(xi);
     y     = static_cast<float>(yi);
     h_rad = static_cast<float>(hi) * (3.14159265f / 18000.0f);  // cdeg → rad

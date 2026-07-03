@@ -2,7 +2,7 @@
 id: '003'
 title: 'PhysicalStateEstimate/Odometry de-threading: remove HardwareState parameter
   threading'
-status: open
+status: done
 use-cases:
 - SUC-004
 - SUC-005
@@ -69,72 +69,72 @@ three-pose telemetry).
 
 ## Acceptance Criteria
 
-- [ ] `source/state/PhysicalStateEstimate.h`/`.cpp` — new `void
+- [x] `source/state/PhysicalStateEstimate.h`/`.cpp` — new `void
       setKinematics(float trackwidthMm, float rotationalSlip);` (forwards to
       `Odometry::setKinematics`).
-- [ ] `addOdometryObservation(HardwareState&, float, float, uint32_t)` →
+- [x] `addOdometryObservation(HardwareState&, float, float, uint32_t)` →
       `addOdometryObservation(float encLeftMm, float encRightMm, uint32_t
       now_ms, PoseEstimate& encoderOut, PoseEstimate& fusedOut)`.
-- [ ] `addOtosObservation(HardwareState&, ...)` →
+- [x] `addOtosObservation(HardwareState&, ...)` →
       `addOtosObservation(float x_otos, float y_otos, float theta_otos_rad,
       float v_otos_mmps, float omega_otos_rads, float vy_otos_mmps, uint32_t
       now_ms, PoseEstimate& opticalOut, PoseEstimate& fusedOut)`.
-- [ ] `resetPose(HardwareState&, int32_t, int32_t, int32_t)` →
+- [x] `resetPose(HardwareState&, int32_t, int32_t, int32_t)` →
       `resetPose(float encLeftMm, float encRightMm, int32_t x_mm, int32_t
       y_mm, int32_t h_cdeg, PoseEstimate& encoderOut, PoseEstimate&
       fusedOut)`.
-- [ ] `zero(HardwareState&)` → `zero(float encLeftMm, float encRightMm,
+- [x] `zero(HardwareState&)` → `zero(float encLeftMm, float encRightMm,
       PoseEstimate& encoderOut, PoseEstimate& fusedOut)`.
-- [ ] `static getPose(const HardwareState&, ...)` → `static getPose(const
+- [x] `static getPose(const HardwareState&, ...)` → `static getPose(const
       PoseEstimate& fused, int32_t&, int32_t&, int32_t&)`.
-- [ ] `getVelocity`, `encoderEstimate`, `opticalEstimate`, `fusedEstimate`,
+- [x] `getVelocity`, `encoderEstimate`, `opticalEstimate`, `fusedEstimate`,
       and `setCtx` are **deleted** from `PhysicalStateEstimate` (confirmed
       zero callers anywhere in `source/` or `tests/_infra/`).
-- [ ] `source/control/Odometry.h`/`.cpp` — every signature above mirrored
+- [x] `source/control/Odometry.h`/`.cpp` — every signature above mirrored
       (it is the wrapped implementation); new `_trackwidthMm`/
       `_rotationalSlip` member fields and `setKinematics()` added;
       `predict()`'s trackwidth/slip parameters removed (read from the new
       members instead); `setCtx` deleted.
-- [ ] `Odometry::correct()` is left untouched, still taking `HardwareState&`
+- [x] `Odometry::correct()` is left untouched, still taking `HardwareState&`
       — confirmed still zero callers; not modified by this ticket (Decision
       6).
-- [ ] `source/subsystems/drive/Drive.cpp` — `tickUpdate()` calls
+- [x] `source/subsystems/drive/Drive.cpp` — `tickUpdate()` calls
       `_est.setKinematics(...)` every tick (feeding the trackwidth/rotSlip
       read that today is passed as observation parameters); the
       `addOdometryObservation`/`addOtosObservation`/`resetPose` call sites
       (including the `SetPose` command handler) pass `_hw.encMm[]`/
       `_hw.encoder`/`_hw.optical`/`_hw.fused` explicitly. No change to
       `Drive.h`'s public API.
-- [ ] `source/robot/Robot.cpp` — the `estimate.setCtx(&otos, &state.actual);`
+- [x] `source/robot/Robot.cpp` — the `estimate.setCtx(&otos, &state.actual);`
       line (line 130) is deleted; the dead `otosCorrect()`'s
       `addOtosObservation` call is updated to the new signature so it still
       compiles (`&state.actual.optical`, `&state.actual.fused`).
-- [ ] `source/commands/SystemCommands.cpp` — `handleZero`'s `estimate.zero(
+- [x] `source/commands/SystemCommands.cpp` — `handleZero`'s `estimate.zero(
       ...)` and `handleSI`'s `estimate.resetPose(...)` calls updated to pass
       `robot->state.actual.encMm[1]/[0]` and `&robot->state.actual.encoder`/
       `&robot->state.actual.fused` explicitly. No change to `SI`/`ZERO`'s
       wire grammar or reply text.
-- [ ] `source/superstructure/Planner.cpp::getPoseFloat` —
+- [x] `source/superstructure/Planner.cpp::getPoseFloat` —
       `PhysicalStateEstimate::getPose(*_hwState, xi, yi, hi)` →
       `PhysicalStateEstimate::getPose(_hwState->fused, xi, yi, hi)`.
-- [ ] No `PhysicalStateEstimate` method takes a `HardwareState&`/
+- [x] No `PhysicalStateEstimate` method takes a `HardwareState&`/
       `ActualState&` parameter (`grep -n "HardwareState&\|ActualState&"
       source/state/PhysicalStateEstimate.h` returns nothing).
-- [ ] New unit test coverage for `Odometry::setKinematics()`/
+- [x] New unit test coverage for `Odometry::setKinematics()`/
       `PhysicalStateEstimate::setKinematics()` as a live-update regression
       (mirrors sprint 067's own methodology: fresh `Sim()`/`ZERO enc`, `SET
       tw=`/`SET rotSlip=` changes the next tick's `predict()` output by the
       expected amount).
-- [ ] New/updated unit test coverage for the narrowed `getPose(const
+- [x] New/updated unit test coverage for the narrowed `getPose(const
       PoseEstimate&, ...)` signature.
-- [ ] `tests/_infra/golden_tlm_capture.json` requires no regeneration (no
+- [x] `tests/_infra/golden_tlm_capture.json` requires no regeneration (no
       TLM field/format change) — `encpose=`/`otos=`/`pose=` TLM fields
       byte-identical.
-- [ ] Immediately after `SET` of `tw`/`rotSlip`/any `ekfQ*`/`ekfR*` key
+- [x] Immediately after `SET` of `tw`/`rotSlip`/any `ekfQ*`/`ekfR*` key
       mid-mission, the fused pose/velocity read back identically to their
       pre-`SET` values (no reset-to-origin regression — mirrors sprint 067's
       own acceptance criterion).
-- [ ] Full test suite green (`uv run python -m pytest`), including
+- [x] Full test suite green (`uv run python -m pytest`), including
       `test_sim_otos_lever_arm.py`, `test_ekf_odometry_commands_coverage.py`,
       and the `SI`/`ZERO` command tests.
 

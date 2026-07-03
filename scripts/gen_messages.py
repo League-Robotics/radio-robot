@@ -306,8 +306,6 @@ _INVENTORY_MAP: dict = {
     ("PlannerConfig", "yaw_jerk_max"):      "RobotConfig::yawJerkMax",
     ("PlannerConfig", "arrive_tol"):        "RobotConfig::arriveTolMm",
     ("PlannerConfig", "turn_in_place_gate"):"RobotConfig::turnInPlaceGate",
-    ("PlannerConfig", "turn_threshold"):    "RobotConfig::turnThresholdMm",
-    ("PlannerConfig", "done_tol"):          "RobotConfig::doneTolMm",
     ("PlannerConfig", "min_speed"):         "RobotConfig::minSpeedMms",
 
     # -----------------------------------------------------------------------

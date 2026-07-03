@@ -10,7 +10,7 @@ existing firmware member corresponds to them; they will be introduced in Phase 2
 Fields annotated **(shared type)** are common value types defined by the message
 schema itself rather than a single firmware member.
 
-**Coverage: 206/206 fields mapped (47 new, 0 missing)**
+**Coverage: 204/204 fields mapped (47 new, 0 missing)**
 
 | Proto file | Message | Field | C++ type | Maps to existing |
 |---|---|---|---|---|
@@ -185,8 +185,6 @@ schema itself rather than a single firmware member.
 | planner.proto | PlannerConfig | yaw_jerk_max | float | RobotConfig::yawJerkMax |
 | planner.proto | PlannerConfig | arrive_tol | float | RobotConfig::arriveTolMm |
 | planner.proto | PlannerConfig | turn_in_place_gate | float | RobotConfig::turnInPlaceGate |
-| planner.proto | PlannerConfig | turn_threshold | float | RobotConfig::turnThresholdMm |
-| planner.proto | PlannerConfig | done_tol | float | RobotConfig::doneTolMm |
 | planner.proto | PlannerConfig | min_speed | float | RobotConfig::minSpeedMms |
 | ports.proto | DigitalOut | value | bool[4] | DesiredState::digitalOut[4] / OutputState::digitalOut[4] |
 | ports.proto | DigitalOut | mask | uint32_t | (new field — channel-enable mask for digital output, Phase 2) |

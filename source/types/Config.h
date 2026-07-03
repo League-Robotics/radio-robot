@@ -121,11 +121,6 @@ struct RobotConfig {
     float odomYawDeg;           // OTOS yaw mounting offset, degrees (default 0.0)
     bool  odomUpsideDown;       // OTOS mounted upside-down (default false)
 
-    // Go-to tolerances (legacy, retained for backward compatibility)
-     // FIXME Eliminate legacies 
-    float turnThresholdMm;  // FIXME should not have units in name
-    float doneTolMm;  // FIXME should not have units in name
-
     // Pose-control tunables (Sprint 011)
     // aMax: acceleration limit, mm/s²
     // aDecel: deceleration limit for v_cap, mm/s²

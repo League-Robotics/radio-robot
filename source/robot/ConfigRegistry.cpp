@@ -61,10 +61,6 @@ const ConfigEntry kRegistry[] = {
     CFG_F("alphaPos",     alphaPos),
     CFG_F("alphaYaw",     alphaYaw),
     CFG_F("otosGate",     otosGate),
-    // Go-to tolerances — stored as float, displayed as integer (mm)
-    // Legacy keys retained for backward compatibility.
-    CFG_FI("turnThr",     turnThresholdMm),
-    CFG_FI("doneTol",     doneTolMm),
     // Pose-control tunables (Sprint 011). aMax/vBodyMax/yawRateMax/arriveTolMm
     // annotated "planner" so SET routes to planner.configure() (059-004).
     CFG_F_SS("aMax",       aMax,         "planner"),

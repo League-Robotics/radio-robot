@@ -35,10 +35,6 @@ msg::PlannerConfig toPlannerConfig(const RobotConfig& rc)
     // goes straight to the goal rather than rotating first.
     cfg.setTurnInPlaceGate(rc.turnInPlaceGate);
 
-    // Legacy go-to tolerances (retained for backward compat / future use).
-    cfg.setTurnThreshold(rc.turnThresholdMm);
-    cfg.setDoneTol(rc.doneTolMm);
-
     // Minimum speed floor (mm/s).  RobotConfig stores as int32_t.
     cfg.setMinSpeed((float)rc.minSpeedMms);
 

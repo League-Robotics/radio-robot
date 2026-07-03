@@ -1050,19 +1050,31 @@ class TestSimTransportErrorProfile:
             time.sleep(0.1)
             assert fake_sim.last_slip_turn_extra == 0.4
             simset_lines = [s for s in fake_sim.sent if s.startswith("SIMSET")]
-            assert len(simset_lines) == 1
-            assert "otosLinNoise=0.2" in simset_lines[0]
-            assert "otosYawNoise=0.05" in simset_lines[0]
-            assert "encNoiseL=3.0" in simset_lines[0]
-            assert "encNoiseR=3.0" in simset_lines[0]
+            # The 15 pairs must arrive CHUNKED: the firmware ArgList caps a
+            # line at MAX_ARGS=10 kv pairs and silently drops the rest, so
+            # one giant line loses motorOffset/trackwidth/encNoise.
+            assert len(simset_lines) >= 2, (
+                f"profile must be sent in >=2 SIMSET chunks, got {simset_lines}"
+            )
+            for line in simset_lines:
+                npairs = len(line.split()) - 1
+                assert npairs <= 8, (
+                    f"SIMSET line exceeds the safe per-line pair budget "
+                    f"({npairs} pairs): {line}"
+                )
+            simset_all = " ".join(simset_lines)
+            assert "otosLinNoise=0.2" in simset_all
+            assert "otosYawNoise=0.05" in simset_all
+            assert "encNoiseL=3.0" in simset_all
+            assert "encNoiseR=3.0" in simset_all
             # Keys missing from custom_profile (all the 069-007 additions)
             # must fall back to DEFAULT_PROFILE's no-op values.
-            assert "bodyRotScrub=1.0" in simset_lines[0]
-            assert "bodyLinScrub=1.0" in simset_lines[0]
-            assert "motorOffsetL=1.0" in simset_lines[0]
-            assert "motorOffsetR=1.0" in simset_lines[0]
-            assert "trackwidthMm=150.0" in simset_lines[0]
-            assert "encScaleErrL=0.0" in simset_lines[0]
+            assert "bodyRotScrub=1.0" in simset_all
+            assert "bodyLinScrub=1.0" in simset_all
+            assert "motorOffsetL=1.0" in simset_all
+            assert "motorOffsetR=1.0" in simset_all
+            assert "trackwidthMm=128.0" in simset_all
+            assert "encScaleErrL=0.0" in simset_all
         finally:
             t.disconnect()
 
@@ -1126,16 +1138,19 @@ class TestSimTransportErrorProfile:
                 time.sleep(0.02)
 
             assert fake_sim.last_slip_turn_extra == 0.9
-            # One SIMSET from connect() plus one from this apply_error_profile().
+            # SIMSET chunks from connect() plus more from apply_error_profile().
             simset_lines = [s for s in fake_sim.sent if s.startswith("SIMSET")]
-            assert len(simset_lines) >= 2, (
-                f"expected >=2 SIMSET sends (connect + apply); got {simset_lines}"
+            assert len(simset_lines) >= 3, (
+                f"expected >=3 SIMSET sends (connect chunks + apply chunks); "
+                f"got {simset_lines}"
             )
-            last_simset = simset_lines[-1]
-            assert "otosLinNoise=0.15" in last_simset
-            assert "otosYawNoise=0.03" in last_simset
-            assert "encNoiseL=7.0" in last_simset
-            assert "encNoiseR=7.0" in last_simset
+            # The apply's values must appear in the trailing (post-connect)
+            # chunk group — search the union of all lines for them.
+            simset_all = " ".join(simset_lines)
+            assert "otosLinNoise=0.15" in simset_all
+            assert "otosYawNoise=0.03" in simset_all
+            assert "encNoiseL=7.0" in simset_all
+            assert "encNoiseR=7.0" in simset_all
             assert t.turn_scrub_factor == 0.9
         finally:
             t.disconnect()
@@ -1204,8 +1219,9 @@ class TestApplyProfileToSimSimsetString:
     def test_defaults_send_the_documented_noop_simset_string(self):
         """Every field at its DEFAULT_PROFILE value must reproduce today's
         no-op-until-opted-in behavior: multiplicative knobs at 1.0,
-        trackwidth_mm at the plant's real default (150.0), everything else
-        (additive/noise) at 0.0."""
+        trackwidth_mm at the firmware config's 128.0, everything else
+        (additive/noise) at 0.0 — sent in chunks under the firmware's
+        MAX_ARGS=10 per-line cap (pairs past it are silently dropped)."""
         from robot_radio.testgui.transport import SimTransport
         from robot_radio.testgui import sim_prefs
 
@@ -1215,18 +1231,18 @@ class TestApplyProfileToSimSimsetString:
         t._apply_profile_to_sim(fake_sim, dict(sim_prefs.DEFAULT_PROFILE))
 
         simset_lines = [s for s in fake_sim.sent if s.startswith("SIMSET")]
-        assert len(simset_lines) == 1
-        assert simset_lines[0] == (
+        assert simset_lines == [
             "SIMSET "
             "encScaleErrL=0.0 encScaleErrR=0.0 "
             "otosLinScaleErr=0.0 otosAngScaleErr=0.0 "
             "otosLinNoise=0.05 otosYawNoise=0.0 "
-            "otosLinDriftMmS=0.0 otosYawDriftDegS=0.0 "
+            "otosLinDriftMmS=0.0 otosYawDriftDegS=0.0",
+            "SIMSET "
             "bodyRotScrub=1.0 bodyLinScrub=1.0 "
             "motorOffsetL=1.0 motorOffsetR=1.0 "
-            "trackwidthMm=150.0 "
-            "encNoiseL=0.0 encNoiseR=0.0"
-        )
+            "trackwidthMm=128.0 "
+            "encNoiseL=0.0 encNoiseR=0.0",
+        ]
         # slip_turn_extra retains its separate legacy path -- applied via
         # set_field_profile, never folded into the SIMSET string.
         assert fake_sim.last_slip_turn_extra == 0.26
@@ -1261,18 +1277,18 @@ class TestApplyProfileToSimSimsetString:
         t._apply_profile_to_sim(fake_sim, profile)
 
         simset_lines = [s for s in fake_sim.sent if s.startswith("SIMSET")]
-        assert len(simset_lines) == 1
-        assert simset_lines[0] == (
+        assert simset_lines == [
             "SIMSET "
             "encScaleErrL=0.02 encScaleErrR=-0.02 "
             "otosLinScaleErr=0.03 otosAngScaleErr=-0.03 "
             "otosLinNoise=0.06 otosYawNoise=0.01 "
-            "otosLinDriftMmS=1.5 otosYawDriftDegS=-0.5 "
+            "otosLinDriftMmS=1.5 otosYawDriftDegS=-0.5",
+            "SIMSET "
             "bodyRotScrub=0.9 bodyLinScrub=0.95 "
             "motorOffsetL=1.05 motorOffsetR=0.98 "
             "trackwidthMm=152.0 "
-            "encNoiseL=2.0 encNoiseR=2.0"
-        )
+            "encNoiseL=2.0 encNoiseR=2.0",
+        ]
         assert fake_sim.last_slip_turn_extra == 0.42
         assert fake_sim._field_profile_applied is True
 
@@ -1294,20 +1310,21 @@ class TestApplyProfileToSimSimsetString:
         t._apply_profile_to_sim(fake_sim, legacy_profile)
 
         simset_lines = [s for s in fake_sim.sent if s.startswith("SIMSET")]
-        assert len(simset_lines) == 1
-        line = simset_lines[0]
+        # Chunked sends: the union of all chunk lines carries every key.
+        assert len(simset_lines) >= 2
+        line = " ".join(simset_lines)
         assert "otosLinNoise=0.2" in line
         assert "otosYawNoise=0.05" in line
         assert "encNoiseL=3.0" in line
         assert "encNoiseR=3.0" in line
         # New (069-007) keys, absent from the legacy profile, default from
         # DEFAULT_PROFILE -- multiplicative at 1.0, additive at 0.0,
-        # trackwidth at the real 150.0.
+        # trackwidth at the firmware config's 128.0.
         assert "bodyRotScrub=1.0" in line
         assert "bodyLinScrub=1.0" in line
         assert "motorOffsetL=1.0" in line
         assert "motorOffsetR=1.0" in line
-        assert "trackwidthMm=150.0" in line
+        assert "trackwidthMm=128.0" in line
         assert "encScaleErrL=0.0" in line
         assert "encScaleErrR=0.0" in line
         assert "otosLinScaleErr=0.0" in line

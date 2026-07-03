@@ -6,11 +6,18 @@
 // physical state (Phase C, Sprint 041). Wraps Odometry by composition.
 //
 // Observations in: addOdometryObservation, addOtosObservation, resetPose.
-// Belief out:      getPose, getVelocity.
+// Belief out:      getPose.
 //
-// HardwareState back-compat: each observation method mirrors the fused pose
-// back into HardwareState fields (poseX/Y/poseHrad/fusedV/fusedOmega) so
-// existing readers (buildTlmFrame, getPoseFloat) work unchanged until Phase F.
+// De-threading (070-003): every observation/reset method now takes exactly
+// the inputs it reads (encoder readings, OTOS readings) and exactly the
+// PoseEstimate& output slot(s) it writes, instead of the whole HardwareState/
+// ActualState blob. This is an explicit, per-call contract rather than a
+// "bind once at construction" one because resetPose()/zero() have TWO
+// independent live destinations in the current call graph (Drive::_hw vs.
+// Robot::state.actual — see architecture-update.md Decision 3); a single
+// bound destination would silently collapse them. Config (trackwidth,
+// rotational slip) is genuinely single-destination, so it uses "set once,
+// refreshed live" instead — see setKinematics().
 //
 // Dependency rule: this header includes no CommandTypes.h, Commandable,
 // MicroBit.h, or Protocol.h. (Odometry.h still pulls CommandTypes.h until T2
@@ -20,40 +27,55 @@ class PhysicalStateEstimate {
 public:
     PhysicalStateEstimate();
 
+    // --- Config (070-003) ---
+
+    // Live trackwidth/rotational-slip update — forwards to
+    // Odometry::setKinematics(). Drive is the only caller of
+    // addOdometryObservation(), so this config is genuinely single-
+    // destination; called every tick from Drive::tickUpdate() (matching the
+    // pre-070-003 every-tick freshness exactly) so sprint 067's live-SET-
+    // reaches-the-estimator guarantee is preserved.
+    void setKinematics(float trackwidthMm, float rotationalSlip);
+
     // --- Observations in ---
 
-    // Encoder dead-reckoning + EKF predict (= Odometry::predict, verbatim).
-    void addOdometryObservation(HardwareState& s, float trackwidthMm,
-                                float rotationalSlip, uint32_t now_ms);
+    // Encoder dead-reckoning + EKF predict (= Odometry::predict).
+    // encLeftMm/encRightMm: raw cumulative encoder readings (mm).
+    // encoderOut/fusedOut: caller-owned PoseEstimate slots written in place
+    // (e.g. Drive's own _hw.encoder/_hw.fused, or Robot::state.actual's).
+    void addOdometryObservation(float encLeftMm, float encRightMm,
+                                uint32_t now_ms,
+                                PoseEstimate& encoderOut, PoseEstimate& fusedOut);
 
-    // OTOS EKF correction (= Odometry::correctEKF, verbatim).
+    // OTOS EKF correction (= Odometry::correctEKF).
     // vy_otos_mmps: OTOS lateral velocity (mm/s); always 0.0f on differential builds.
-    // now_ms: robot system clock (ms); used to stamp actual.optical.stamp (047-002).
-    void addOtosObservation(HardwareState& s,
-                            float x_otos, float y_otos,
-                            float theta_otos_rad,
+    // now_ms: robot system clock (ms); used to stamp opticalOut.stamp (047-002).
+    void addOtosObservation(float x_otos, float y_otos, float theta_otos_rad,
                             float v_otos_mmps, float omega_otos_rads,
-                            float vy_otos_mmps, uint32_t now_ms);
+                            float vy_otos_mmps, uint32_t now_ms,
+                            PoseEstimate& opticalOut, PoseEstimate& fusedOut);
 
-    // External camera re-anchor / SI verb (= Odometry::setPose, verbatim).
-    void resetPose(HardwareState& s,
-                   int32_t x_mm, int32_t y_mm, int32_t h_cdeg);
+    // External camera re-anchor / SI verb (= Odometry::setPose).
+    // encLeftMm/encRightMm: current encoder readings, used to re-baseline the
+    // internal previous-encoder snapshot (see Odometry::setPose).
+    void resetPose(float encLeftMm, float encRightMm,
+                   int32_t x_mm, int32_t y_mm, int32_t h_cdeg,
+                   PoseEstimate& encoderOut, PoseEstimate& fusedOut);
 
-    // Zero the fused pose (= Odometry::zero, verbatim). Used by the ZERO
-    // command (SystemCommands::handleZero) when the pose component is reset.
+    // Zero the fused pose (= Odometry::zero). Used by the ZERO command
+    // (SystemCommands::handleZero) when the pose component is reset.
     // OQ-2 (041-001): added so the ZERO call-site can repoint to estimate in
     // T3 without dangling — robot->odometry.zero() has no other forwarder.
-    void zero(HardwareState& s);
+    void zero(float encLeftMm, float encRightMm,
+              PoseEstimate& encoderOut, PoseEstimate& fusedOut);
 
     // --- Belief out ---
 
-    // Read current fused pose (integer mm + centidegrees).
-    static void getPose(const HardwareState& s,
+    // Read current fused pose (integer mm + centidegrees) from the one
+    // PoseEstimate struct this reads (070-003: narrowed from the whole
+    // HardwareState).
+    static void getPose(const PoseEstimate& fused,
                         int32_t& x_mm, int32_t& y_mm, int32_t& h_cdeg);
-
-    // Read fused velocity (mm/s, rad/s) from HardwareState back-compat fields.
-    static void getVelocity(const HardwareState& s,
-                            float& v_mmps, float& omega_rads);
 
     // --- Initialisation / wiring ---
     void initEKF(float q_xy, float q_theta, float q_v, float q_omega,
@@ -65,26 +87,6 @@ public:
     void setNoise(float q_xy, float q_theta, float q_v, float q_omega,
                   float r_otos_xy, float r_otos_v, float r_enc_v,
                   float r_otos_theta);
-
-    // Bind IOdometer* and HardwareState* for the OTOS command context.
-    // (Passed through to _odometry.setCtx(); also stored for OtosCommands
-    // wiring in T2.)
-    void setCtx(IOdometer* otos, const HardwareState* hwState = nullptr);
-
-    // --- Three-estimate forwarders (047-002) ---
-    // Return const references into the ActualState passed to each observation
-    // method — callers read whichever estimate they need without copying.
-    // NOTE: the returned reference is only valid as long as the ActualState
-    //       passed to the observation methods is in scope.
-    const PoseEstimate& encoderEstimate(const HardwareState& s) const {
-        return s.encoder;
-    }
-    const PoseEstimate& opticalEstimate(const HardwareState& s) const {
-        return s.optical;
-    }
-    const PoseEstimate& fusedEstimate(const HardwareState& s) const {
-        return s.fused;
-    }
 
     // --- Forwarded accessors (used by RobotTelemetry, LoopTickOnce, etc.) ---
     uint32_t otosRejectedCount() const;

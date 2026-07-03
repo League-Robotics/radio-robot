@@ -1,10 +1,10 @@
 // ColorUtil.cpp — RGBC → HSV color-space conversion.
 //
 // Extracted verbatim from StopCondition.cpp (CR-15 item 7, sprint 066);
-// resolves the existing FIXME at StopCondition.cpp:27 ("Why is there a
-// color function in the StopCondition module?"). Behavior-preserving move —
-// the formula is unchanged. StopCondition::evaluate()'s Kind::COLOR branch
-// calls this.
+// resolves the historical concern noted at StopCondition.cpp:20 ("Why is
+// there a color function in the StopCondition module?"). Behavior-preserving
+// move — the formula is unchanged. StopCondition::evaluate()'s Kind::COLOR
+// branch calls this.
 
 #include "ColorUtil.h"
 
