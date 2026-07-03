@@ -436,6 +436,23 @@ def _build_main_window():  # type: ignore[return]
         "playfield refresh from the newly selected camera."
     )
 
+    # Sim fast-forward selector — visible only for the Sim transport
+    # (toggled in _on_transport_changed alongside the Sim Errors panel).
+    # The sim clock is purely virtual; SimTransport's tick-thread paces it
+    # to wall time, so a speed factor just advances more sim-steps per wall
+    # tick (identical physics, compressed wall time).  Applied live via
+    # SimTransport.set_speed_factor() on change and on connect.
+    sim_speed_label = QLabel("Speed:")
+    sim_speed_combo = QComboBox()
+    sim_speed_combo.setObjectName("sim_speed_combo")
+    for _mult in (1, 2, 5, 10, 20):
+        sim_speed_combo.addItem(f"{_mult}×", _mult)
+    sim_speed_combo.setToolTip(
+        "Sim fast-forward: how much sim-time passes per wall-clock second.\n"
+        "Physics integration step is unchanged — trajectories are identical\n"
+        "at every speed. High factors make the console log very busy."
+    )
+
     # Session-initiation selector strip (ticket 075-001): transport, robot,
     # and camera combos collapsed into one row.
     selector_row = QWidget()
@@ -447,6 +464,8 @@ def _build_main_window():  # type: ignore[return]
     selector_layout.addWidget(robot_combo, stretch=1)
     selector_layout.addWidget(camera_combo_label)
     selector_layout.addWidget(camera_combo, stretch=1)
+    selector_layout.addWidget(sim_speed_label)
+    selector_layout.addWidget(sim_speed_combo)
     left_layout.addWidget(selector_row)
 
     # Port picker (enabled only for Serial / Relay)
@@ -1514,10 +1533,26 @@ def _build_main_window():  # type: ignore[return]
         # Sim Errors panel only makes sense for the Sim transport (issue
         # testgui-sim-error-profile-config).
         sim_errors_group.setVisible(name == "Sim")
+        # Same for the sim fast-forward selector.
+        sim_speed_label.setVisible(name == "Sim")
+        sim_speed_combo.setVisible(name == "Sim")
 
     transport_combo.currentIndexChanged.connect(_on_transport_changed)
     # Trigger once to set initial state.
     _on_transport_changed(transport_combo.currentIndex())
+
+    def _apply_sim_speed() -> None:
+        """Push the selected fast-forward factor to a connected SimTransport.
+
+        No-op for hardware transports (real robots run at real time) and
+        when disconnected — the factor is re-applied on the next Sim
+        connect, so a pre-connect selection is honored.
+        """
+        transport = _state.get("transport")
+        if isinstance(transport, SimTransport):
+            transport.set_speed_factor(int(sim_speed_combo.currentData()))
+
+    sim_speed_combo.currentIndexChanged.connect(lambda _i: _apply_sim_speed())
 
     def _push_robot_calibration() -> None:
         """Push the active robot config's calibration to the connected robot.
@@ -2040,6 +2075,10 @@ def _build_main_window():  # type: ignore[return]
                 _append_log(f"[WARN] STREAM 50 failed: {exc}")
 
         _state["transport"] = transport
+
+        # Honor a fast-forward factor selected before Connect (Sim only —
+        # no-op for hardware transports).
+        _apply_sim_speed()
 
         # Push the active robot's calibration to the firmware so the selected
         # robot's values override whatever DefaultConfig.cpp baked in — an

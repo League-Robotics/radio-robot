@@ -661,10 +661,18 @@ def _sim_lib_path() -> pathlib.Path:
 # SimTransport
 # ---------------------------------------------------------------------------
 
-# Tick step in milliseconds — how many sim-ms we advance per wall-clock tick.
+# Tick step in milliseconds — the sim integration granularity.  At speed
+# factor N the tick-thread advances N of these steps per wall-clock tick,
+# so the physics step size (and firmware control tick) is identical at
+# every speed — only wall-clock pacing changes.
 _SIM_TICK_STEP_MS = 20
-# Wall-clock sleep between ticks (real-time pacing at 1.0 speed factor).
+# Wall-clock sleep between ticks (real-time pacing at 1x speed factor).
 _SIM_TICK_SLEEP_S = _SIM_TICK_STEP_MS / 1000.0
+# Speed-factor bounds for set_speed_factor().  20x with STREAM 50 means
+# ~400 TLM lines/s wall into the log pane — busy but workable; anything
+# beyond that has no operator value.
+_SIM_SPEED_MIN = 1
+_SIM_SPEED_MAX = 20
 # Ground-truth pose delivery rate (~5 Hz to match hardware truth polling).
 _SIM_TRUTH_EVERY_N_TICKS = max(1, round(200 / _SIM_TICK_STEP_MS))
 
@@ -737,6 +745,11 @@ class SimTransport(Transport):
         # connect()'s _apply_field_profile or a live apply_error_profile()
         # call) — issue testgui-sim-error-profile-config. None until then.
         self._error_profile: dict | None = None
+        # Fast-forward multiple: sim-time advanced per wall-clock tick.
+        # Written from the GUI thread via set_speed_factor(), read once per
+        # iteration by the tick-thread — a plain int attribute is atomic
+        # under the GIL, no lock needed.
+        self._speed_factor: int = 1
 
     @property
     def turn_scrub_factor(self) -> float:
@@ -878,6 +891,22 @@ class SimTransport(Transport):
         self._cmd_queue.put((_action, None, None))
         self._log(f"> [sim] set_true_pose({x_cm:.1f}cm, {y_cm:.1f}cm, {math.degrees(yaw_rad):.1f}°)")
 
+    def set_speed_factor(self, factor: int) -> None:
+        """Set the sim fast-forward multiple (1 = real time).
+
+        At factor N the tick-thread advances N x ``_SIM_TICK_STEP_MS`` of
+        sim-time per 20 ms wall-clock tick, keeping the integration step
+        (and therefore the trajectory) identical to real-time — only the
+        wall-clock pacing compresses.  Clamped to
+        [``_SIM_SPEED_MIN``, ``_SIM_SPEED_MAX``].  Safe to call at any time,
+        connected or not; takes effect on the tick-thread's next iteration.
+        """
+        clamped = max(_SIM_SPEED_MIN, min(_SIM_SPEED_MAX, int(factor)))
+        if clamped == self._speed_factor:
+            return
+        self._speed_factor = clamped
+        self._log(f"[INFO] Sim speed set to {clamped}x")
+
     def command(self, line: str, read_ms: int = 200) -> str:
         """Send a command and return the synchronous reply string.
 
@@ -903,7 +932,7 @@ class SimTransport(Transport):
     # ------------------------------------------------------------------
 
     def _tick_loop(self) -> None:
-        """Advance the sim at wall-clock rate; drain commands and async events.
+        """Advance the sim at speed_factor x wall-clock rate; drain commands and async events.
 
         This is the only thread that touches the Sim object.  On entry it
         creates the Sim, configures the field-error profile, and sends
@@ -940,11 +969,21 @@ class SimTransport(Transport):
                     # Drain commands from the queue.
                     self._drain_cmd_queue(sim)
 
-                    # Advance simulation by one step.
-                    sim.tick_for(_SIM_TICK_STEP_MS, step_ms=_SIM_TICK_STEP_MS)
-
-                    # Drain async events (TLM/EVT lines) from the sim.
-                    self._drain_async_evts(sim)
+                    # Advance simulation: speed_factor steps per wall tick,
+                    # each at the fixed integration granularity so physics
+                    # is identical at every speed.  Async events (TLM/EVT
+                    # lines) are drained after EVERY step, not once per wall
+                    # tick: sim_get_async_evts() truncates at its 2048-byte
+                    # ReplyStore capacity AND resets the store, so letting a
+                    # fast-forward burst accumulate would silently drop
+                    # lines (including completion EVTs).  Per-step draining
+                    # keeps the per-drain volume identical to 1x.
+                    speed = self._speed_factor
+                    for _ in range(speed):
+                        sim.tick_for(
+                            _SIM_TICK_STEP_MS, step_ms=_SIM_TICK_STEP_MS
+                        )
+                        self._drain_async_evts(sim)
 
                     # Deliver ground-truth pose periodically.
                     tick_count += 1
