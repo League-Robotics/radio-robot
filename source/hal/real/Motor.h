@@ -91,7 +91,7 @@ public:
     float   velocityMmps() const override { return _lastVelocityMmps; }
 
     // Read cumulative encoder in mm using calibration from cfg.
-    // Uses mmPerDegL if motorId==LEFT_MOTOR, mmPerDegR otherwise.
+    // Uses wheelTravelCalibL if motorId==LEFT_MOTOR, wheelTravelCalibR otherwise.
     int32_t readEncoder(const RobotConfig& cfg) const;
 
     // High-resolution variant: cumulative encoder in mm as float (NOT truncated
@@ -165,7 +165,7 @@ public:
      * reading to mm/s using:
      *   mm/s = (raw / kUnitFactor) * mmPerDeg * _lastDir
      *
-     * where mmPerDeg = cfg.mmPerDegL (M2/left) or cfg.mmPerDegR (M1/right),
+     * where mmPerDeg = cfg.wheelTravelCalibL (M2/left) or cfg.wheelTravelCalibR (M1/right),
      * mirroring readEncoder()'s wheel-selection and calibration.
      *
      * kUnitFactor is a named constant in Motor.cpp (default 10.0 = tenths of

@@ -124,7 +124,7 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
     // ------------------------------------------------------------------
     // STEP 4: EKF predict — encoder dead-reckoning integrate
     // ------------------------------------------------------------------
-    float trackwidth = _robCfg.trackwidthMm;
+    float trackwidth = _robCfg.trackwidth;
     float rotSlip    = _robCfg.rotationalSlip;
     _est.setKinematics(trackwidth, rotSlip);
     _est.addOdometryObservation(_hw.encMm[1], _hw.encMm[0], now,
@@ -133,7 +133,7 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
     // ------------------------------------------------------------------
     // STEP 5: OTOS correction (lag-gated, matches LoopTickOnce pattern)
     // ------------------------------------------------------------------
-    uint32_t lagMs = _robCfg.lagOtosMs;
+    uint32_t lagMs = _robCfg.lagOtos;
     if (lagMs > 0 && _otos.is_initialized()) {
         _hw.otos.lagMs = lagMs;   // keep stamp lag field in sync
         if (!_otosEverReady && !fuseOtos) {
@@ -273,19 +273,19 @@ msg::CommandBatch Drive::tickAction(uint32_t now)
         // wheel-speed loop; this sets the TARGET, not the PWM duty cycle.
         //
         // 067-004: this ternary used to read _drvCfg.get_trackwidth() first,
-        // falling back to _robCfg.trackwidthMm only while _drvCfg's cached
+        // falling back to _robCfg.trackwidth only while _drvCfg's cached
         // value was <=0.0f -- the same shadow-cache disease Ticket 002 fixed
         // in tickUpdate()'s EKF-predict step. Robot::Robot() calls
         // drive.configure(toDriveConfig(config)) once at boot, which
         // populates _drvCfg.trackwidth with a positive snapshot; since `tw`
         // is not "drive"-annotated, _drvCfg is never refreshed for it again,
         // so this read was frozen at the boot-time trackwidth forever
-        // regardless of any later `SET tw=<x>`. Read _robCfg.trackwidthMm
+        // regardless of any later `SET tw=<x>`. Read _robCfg.trackwidth
         // directly -- the same live source Drive's tickUpdate() now uses
         // (067-002) and the pattern every other plain-key consumer in this
         // file already follows.
         float vL = 0.0f, vR = 0.0f;
-        float trackwidth = _robCfg.trackwidthMm;
+        float trackwidth = _robCfg.trackwidth;
         BodyKinematics::inverse(vx, omega, trackwidth, vL, vR);
         _mc.setTarget(vL, vR);
         break;

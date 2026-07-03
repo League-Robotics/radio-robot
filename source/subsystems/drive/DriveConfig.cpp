@@ -20,13 +20,13 @@ msg::DrivetrainConfig toDriveConfig(const RobotConfig& rc)
     cfg.setFwdSignR((int32_t)rc.fwdSignR);
 
     // --- Encoder calibration (mm per degree of motor rotation) ---
-    cfg.setMmPerDegL(rc.mmPerDegL);
-    cfg.setMmPerDegR(rc.mmPerDegR);
+    cfg.setMmPerDegL(rc.wheelTravelCalibL);
+    cfg.setMmPerDegR(rc.wheelTravelCalibR);
 
     // --- Geometry ---
-    cfg.setTrackwidth(rc.trackwidthMm);
-    cfg.setHalfTrack(rc.halfTrackMm);
-    cfg.setHalfWheelbase(rc.halfWheelbaseMm);
+    cfg.setTrackwidth(rc.trackwidth);
+    cfg.setHalfTrack(rc.halfTrack);
+    cfg.setHalfWheelbase(rc.halfWheelbase);
 
     // --- Wheel saturation / steering headroom ---
     cfg.setVWheelMax(rc.vWheelMax);
@@ -44,7 +44,7 @@ msg::DrivetrainConfig toDriveConfig(const RobotConfig& rc)
     // --- Velocity filter and sync ---
     cfg.setVelFiltAlpha(rc.velFiltAlpha);
     cfg.setSyncGain(rc.syncGain);
-    cfg.setMinWheel(rc.minWheelMms);
+    cfg.setMinWheel(rc.minWheelSpeed);
 
     // --- OTOS complementary fusion ---
     cfg.setAlphaPos(rc.alphaPos);
@@ -59,7 +59,7 @@ msg::DrivetrainConfig toDriveConfig(const RobotConfig& rc)
     // --- OTOS mounting offsets ---
     cfg.setOdomOffX(rc.odomOffX);
     cfg.setOdomOffY(rc.odomOffY);
-    cfg.setOdomYaw(rc.odomYawDeg);
+    cfg.setOdomYaw(rc.odomYaw);
     cfg.setOdomUpsideDown(rc.odomUpsideDown);
 
     // --- EKF noise parameters ---
@@ -73,7 +73,7 @@ msg::DrivetrainConfig toDriveConfig(const RobotConfig& rc)
     cfg.setEkfREncV(rc.ekfREncV);
 
     // --- OTOS lag budget (ms) ---
-    cfg.setLagOtos(rc.lagOtosMs);
+    cfg.setLagOtos(rc.lagOtos);
 
     // --- Drivetrain type (0 = differential, 1 = mecanum) ---
     cfg.setDrivetrainType((int32_t)rc.drivetrain);
@@ -81,8 +81,8 @@ msg::DrivetrainConfig toDriveConfig(const RobotConfig& rc)
     // --- Rotation asymmetry correction ---
     cfg.setRotationGainPos(rc.rotationGainPos);
     cfg.setRotationGainNeg(rc.rotationGainNeg);
-    cfg.setRotationOffset(rc.rotationOffsetDeg);
-    cfg.setRotationOffsetNeg(rc.rotationOffsetDegNeg);
+    cfg.setRotationOffset(rc.rotationOffset);
+    cfg.setRotationOffsetNeg(rc.rotationOffsetNeg);
 
     return cfg;
 }

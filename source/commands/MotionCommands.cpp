@@ -557,7 +557,7 @@ static void handleS(const ArgList& args, const char* corrId,
 
     // Compute body twist via forward kinematics.
     float v_mms, omega_rads;
-    BodyKinematics::forward((float)l, (float)r, ctx->robot->config.trackwidthMm,
+    BodyKinematics::forward((float)l, (float)r, ctx->robot->config.trackwidth,
                             v_mms, omega_rads);
 
     uint32_t now = ctx->robot->systemTime();
@@ -644,7 +644,7 @@ static void handleT(const ArgList& args, const char* corrId,
 
         // Compute body twist via forward kinematics (no integer truncation).
         float v_mms, omega_rads;
-        BodyKinematics::forward((float)l, (float)r, ctx->robot->config.trackwidthMm,
+        BodyKinematics::forward((float)l, (float)r, ctx->robot->config.trackwidth,
                                 v_mms, omega_rads);
 
         uint32_t now = ctx->robot->systemTime();

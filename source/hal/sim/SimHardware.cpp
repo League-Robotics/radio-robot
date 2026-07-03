@@ -17,8 +17,8 @@ SimHardware::SimHardware(const RobotConfig& cfg)
     , _portIO(_plant)
     , _servo()
 {
-    _trackwidthMm = cfg.trackwidthMm;
-    _plant.setTrackwidth(cfg.trackwidthMm);
+    _trackwidthMm = cfg.trackwidth;
+    _plant.setTrackwidth(cfg.trackwidth);
 }
 
 // tick(now) — sensor tick.  Promotes each sim motor's plant reported-encoder

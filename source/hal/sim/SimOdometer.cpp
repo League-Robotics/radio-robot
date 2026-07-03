@@ -91,7 +91,7 @@ void SimOdometer::setPositionRaw(int16_t x, int16_t y, int16_t h) {
 }
 
 int32_t SimOdometer::controlPeriodMs() const {
-    return _cfg.controlPeriodMs;
+    return _cfg.controlPeriod;
 }
 
 void SimOdometer::setInjectedPose(float x, float y, float h) {

@@ -11,11 +11,11 @@
 
 namespace subsystems {
 
-// Map RobotConfig::lagLineMs (and future threshold / norm fields) into the
+// Map RobotConfig::lagLine (and future threshold / norm fields) into the
 // generated LineSensorConfig message type.
 msg::LineSensorConfig  toLineSensorConfig(const RobotConfig& rc);
 
-// Map RobotConfig::lagColorMs (and future integration/gain/cal fields) into
+// Map RobotConfig::lagColor (and future integration/gain/cal fields) into
 // the generated ColorSensorConfig message type.
 msg::ColorSensorConfig toColorSensorConfig(const RobotConfig& rc);
 

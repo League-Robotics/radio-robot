@@ -102,7 +102,7 @@ inline float getOtosYawNoise(SimHardware& hal)           { return hal.simOdomete
 // caller) are PER-SECOND; SimOdometer::setDriftPerTickMm()/setDriftPerTickRad()
 // (and driftPerTickMm()/driftPerTickRad()) are PER-TICK internally: tick() adds
 // the FULL per-tick value once per call, and tick() fires once per
-// RobotConfig::controlPeriodMs (source/types/Config.h:167; see
+// RobotConfig::controlPeriod (source/types/Config.h; see
 // SimOdometer::tick()'s unconditional `_odomX += _driftPerTickMm` /
 // `_odomH += _driftPerTickRad`, source/hal/sim/SimOdometer.cpp). Conversion
 // formula (both directions read the SAME live controlPeriodMs via

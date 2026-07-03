@@ -549,12 +549,12 @@ class TestOtosAndTurnAsymmetryKeys:
         assert kv["rotGainNeg"] == "1.170", f"rotGainNeg expected '1.170', got {kv['rotGainNeg']!r}"
 
     def test_rotOffPos_default_value(self) -> None:
-        """rotationOffsetDeg default is 0.0 → formatted as 0.000."""
+        """rotationOffset default is 0.0 → formatted as 0.000."""
         kv = parse_cfg(DEFAULT_GET_LINE)
         assert kv["rotOffPos"] == "0.000", f"rotOffPos expected '0.000', got {kv['rotOffPos']!r}"
 
     def test_rotOffNeg_default_value(self) -> None:
-        """rotationOffsetDegNeg default is 0.0 → formatted as 0.000."""
+        """rotationOffsetNeg default is 0.0 → formatted as 0.000."""
         kv = parse_cfg(DEFAULT_GET_LINE)
         assert kv["rotOffNeg"] == "0.000", f"rotOffNeg expected '0.000', got {kv['rotOffNeg']!r}"
 
@@ -574,7 +574,7 @@ class TestOtosAndTurnAsymmetryKeys:
         assert kv["odomOffY"] == "0.000", f"odomOffY expected '0.000', got {kv['odomOffY']!r}"
 
     def test_odomYaw_default_value(self) -> None:
-        """odomYawDeg default is 0.0 → formatted as 0.000."""
+        """odomYaw default is 0.0 → formatted as 0.000."""
         kv = parse_cfg(DEFAULT_GET_LINE)
         assert kv["odomYaw"] == "0.000", f"odomYaw expected '0.000', got {kv['odomYaw']!r}"
 

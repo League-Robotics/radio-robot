@@ -22,12 +22,12 @@ struct RobotConfig {
     int8_t fwdSignL;
     int8_t fwdSignR;
 
-    // Encoder calibration (mm per degree of motor rotation).
+    // Encoder calibration: wheel linear travel per motor-shaft degree of rotation.
     // Also used by Motor::readSpeed() for chip-native velocity conversion:
-    //   mm/s = (raw / kUnitFactor) * mmPerDeg * sign
+    //   mm/s = (raw / kUnitFactor) * wheelTravelCalib * sign
     // (kUnitFactor is a named constant in Motor.cpp; see readSpeed() comment.)
-    float mmPerDegL;
-    float mmPerDegR;
+    float wheelTravelCalibL;  // [mm/deg] wheel linear travel per motor-shaft degree of rotation, left
+    float wheelTravelCalibR;  // [mm/deg] wheel linear travel per motor-shaft degree of rotation, right
 
     // Feed-forward and motor scale factors
     // 
@@ -42,7 +42,7 @@ struct RobotConfig {
     float kAdjGain;
 
     // Geometry
-    float trackwidthMm; // FIXME should not have units in name
+    float trackwidth; // [mm]
 
     // Wheel saturation ceiling and steering headroom (docs/kinematics-model.md §1.7).
     // Effective ceiling = vWheelMax - steerHeadroom.
@@ -58,7 +58,7 @@ struct RobotConfig {
     float velKp;          // proportional gain for per-wheel velocity loop
     float velKi;          // integral gain for per-wheel velocity loop
     float velKff;         // feed-forward coefficient: FF = velKff * |setpoint|
-    float minWheelMms;    // deadband: integrator frozen below this |speed| (default 20.0 mm/s) FIXME should not have units in name
+    float minWheelSpeed;  // [mm/s] deadband: integrator frozen below this |speed| (default 20.0)
     float velIMax;        // integrator clamp (PWM%, ±). SET "vel.iMax". Bounds windup.
     float velKaw;         // back-calc anti-windup gain (1/s). SET "vel.kAw". Bleeds the
                           // integrator while the output is saturated so a held wheel
@@ -103,33 +103,33 @@ struct RobotConfig {
     // otosAngularScale: multiplier for OTOS angular calibration (e.g. 0.987).
     // rotationGainPos: per-direction turn gain for CCW (positive) turns.
     // rotationGainNeg: per-direction turn gain for CW (negative) turns.
-    // rotationOffsetDeg: turn offset added to CCW turns, degrees.
-    // rotationOffsetDegNeg: turn offset added to CW turns, degrees.
+    // rotationOffset: turn offset added to CCW turns, degrees.
+    // rotationOffsetNeg: turn offset added to CW turns, degrees.
     // rotationalSlip: body-rotation efficiency (arc / no-slip estimate).
     // odomOffX/odomOffY: OTOS mounting offset from robot center, mm.
-    // odomYawDeg: OTOS mounting yaw offset, degrees.
+    // odomYaw: OTOS mounting yaw offset, degrees.
     // odomUpsideDown: OTOS mounted upside-down (Z-axis flipped).
     float otosLinearScale;      // OTOS linear calibration multiplier (default 1.05)
     float otosAngularScale;     // OTOS angular calibration multiplier (default 0.987)
     float rotationGainPos;      // CCW turn gain (default 1.0)
     float rotationGainNeg;      // CW turn gain (default 1.17)
-    float rotationOffsetDeg;    // CCW turn offset, degrees (default 0.0) FIXME should not have units in name
-    float rotationOffsetDegNeg; // CW turn offset, degrees (default 0.0)
+    float rotationOffset;       // [deg] CCW turn offset (default 0.0)
+    float rotationOffsetNeg;    // [deg] CW turn offset (default 0.0)
     float rotationalSlip;       // body-rotation efficiency (default 0.74)
     float odomOffX;             // OTOS X mounting offset, mm (default 0.0)
     float odomOffY;             // OTOS Y mounting offset, mm (default 0.0)
-    float odomYawDeg;           // OTOS yaw mounting offset, degrees (default 0.0)
+    float odomYaw;              // [deg] OTOS mounting yaw offset (default 0.0)
     bool  odomUpsideDown;       // OTOS mounted upside-down (default false)
 
     // Pose-control tunables (Sprint 011)
     // aMax: acceleration limit, mm/s²
     // aDecel: deceleration limit for v_cap, mm/s²
     // turnInPlaceGate: bearing threshold for in-place rotate, degrees on wire (default 45.0°)
-    // arriveTolMm: go-to arrival tolerance, mm (float field, integer mm on wire)
+    // arriveTolerance: go-to arrival tolerance, mm (float field, integer mm on wire)
     float aMax;
     float aDecel;
     float turnInPlaceGate;
-    float arriveTolMm; // FIXME should not have units in name
+    float arriveTolerance; // [mm]
 
     // Body motion limits (Sprint 017 — BodyVelocityController).
     // vBodyMax:      body forward speed ceiling, mm/s          (default 400.0)
@@ -145,9 +145,9 @@ struct RobotConfig {
     float yawJerkMax;     // yaw jerk limit, deg/s³    (0=trapezoid) (default 0.0)
 
     // Timing and speed parameters
-    int32_t minSpeedMms;
-    int32_t tickMs;
-    int32_t sTimeoutMs;
+    int32_t minSpeed;  // [mm/s]
+    int32_t tick;      // [ms]
+    int32_t sTimeout;  // [ms]
 
     // System safety-stop watchdog enable. When false the watchdog never fires
     // (host keepalives not required) — for classroom T-driving where students
@@ -156,13 +156,13 @@ struct RobotConfig {
     bool safetyEnabled;
 
     // Control fiber period in ms.  The control fiber (encoder reads → PID →
-    // setSpeed) sleeps this many ms between iterations.  Distinct from tickMs
+    // setSpeed) sleeps this many ms between iterations.  Distinct from tick
     // so the control rate can be tuned independently of the legacy tick cadence.
     // Default 10 ms → target ~100 Hz; actual rate depends on I2C busy-wait cost.
-    int32_t controlPeriodMs;
+    int32_t controlPeriod; // [ms]
 
-    // Telemetry streaming period in ms (0 = off). Set via STREAM command.
-    int32_t tlmPeriodMs; //FIXME should not have units in name
+    // Telemetry streaming period (0 = off). Set via STREAM command.
+    int32_t tlmPeriod; // [ms]
 
     // Telemetry field-subscription bitmask. Set via STREAM fields=...
     // Bit 0 = enc, Bit 1 = pose, Bit 2 = vel, Bit 3 = line, Bit 4 = color,
@@ -174,16 +174,16 @@ struct RobotConfig {
     // One-shot SNAP pending flag. Set by SNAP command; cleared after one TLM frame.
     bool tlmSnapPending;
 
-    // Sensor lag budgets (ms) used by HardwareState freshness envelopes.
+    // Sensor lag budgets used by HardwareState freshness envelopes.
     // Each value is the expected worst-case latency for that sensor group.
-    // lagOtosMs  : OTOS optical odometry sensor  (default 100 ms)
-    // lagLineMs  : 4-channel line sensor          (default  50 ms)
-    // lagColorMs : RGBC color sensor              (default 100 ms)
-    // lagPortsMs : general-purpose I/O ports      (default  50 ms)
-    uint32_t lagOtosMs; // FIXME Remove units, replace with 'Time'
-    uint32_t lagLineMs;
-    uint32_t lagColorMs;
-    uint32_t lagPortsMs;
+    // lagOtos  : OTOS optical odometry sensor  (default 100 ms)
+    // lagLine  : 4-channel line sensor          (default  50 ms)
+    // lagColor : RGBC color sensor              (default 100 ms)
+    // lagPorts : general-purpose I/O ports      (default  50 ms)
+    uint32_t lagOtos;  // [ms]
+    uint32_t lagLine;  // [ms]
+    uint32_t lagColor; // [ms]
+    uint32_t lagPorts; // [ms]
 
     // -----------------------------------------------------------------------
     // Sprint 046: mecanum drivetrain support (baked from robot JSON).
@@ -199,16 +199,17 @@ struct RobotConfig {
     // selection is now unconditionally differential.
     uint8_t drivetrain;
 
-    // Mecanum geometry (mm). Placeholder defaults — MEASURE on the bench.
-    float halfTrackMm;       // half of wheel track width (default 63.0f) FIXME no units in names
-    float halfWheelbaseMm;   // half of wheelbase (default 63.0f)
+    // Mecanum geometry. Placeholder defaults — MEASURE on the bench.
+    float halfTrack;         // [mm] half of wheel track width (default 63.0f)
+    float halfWheelbase;     // [mm] half of wheelbase (default 63.0f)
 
-    // Per-wheel encoder calibration (mecanum, mm per degree of motor rotation).
-    // Defaults derived from wheel_diameter_mm (same formula as mmPerDegL/R).
-    float mmPerDegFR;
-    float mmPerDegFL;
-    float mmPerDegBR;
-    float mmPerDegBL;
+    // Per-wheel encoder calibration (mecanum): wheel linear travel per
+    // motor-shaft degree of rotation. Defaults derived from wheel_diameter_mm
+    // (same formula as wheelTravelCalibL/R).
+    float wheelTravelCalibFR; // [mm/deg]
+    float wheelTravelCalibFL; // [mm/deg]
+    float wheelTravelCalibBR; // [mm/deg]
+    float wheelTravelCalibBL; // [mm/deg]
 
     // Per-wheel forward signs (mecanum): +1 = CCW-is-forward, -1 = CW-is-forward.
     // Bench-confirmed: FL=+1 (primary ref), FR=-1, BL=+1, BR=-1.

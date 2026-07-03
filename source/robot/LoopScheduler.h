@@ -15,7 +15,7 @@ class Communicator;
 // flag and a signed-delta time check (avoids uint32 subtraction underflow).
 //
 // The idle sleep at the bottom of each iteration paces the loop to a fixed
-// controlPeriodMs deadline.
+// controlPeriod deadline.
 //
 // Construction:
 //   LoopScheduler sched(robot, cmd, comm, uBit);

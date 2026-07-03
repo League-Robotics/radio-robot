@@ -123,7 +123,7 @@ void Planner::softStop(uint32_t now_ms)
 // ---------------------------------------------------------------------------
 // driveAdvance — cooperative-loop task entry point (014-005).
 //
-// Runs at a fixed period set by RobotConfig::controlPeriodMs (default 10 ms).
+// Runs at a fixed period set by RobotConfig::controlPeriod (default 10 ms).
 // Executes the drive-mode state machines:
 //   1. STREAMING watchdog — emits EVT safety_stop inline on keepalive timeout.
 //   2. G-mode — advances PRE_ROTATE and PURSUE; emits EVT done G inline.
@@ -140,8 +140,8 @@ void Planner::softStop(uint32_t now_ms)
 void Planner::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
                            TargetState& target, uint32_t now_ms)
 {
-    // Throttle to controlPeriodMs cadence.
-    if ((now_ms - _lastTickMs) < (uint32_t)_cfg.controlPeriodMs) return;
+    // Throttle to controlPeriod cadence.
+    if ((now_ms - _lastTickMs) < (uint32_t)_cfg.controlPeriod) return;
 
     float dt_s      = (float)(now_ms - _lastTickMs) / 1000.0f;
     _lastTickMs     = now_ms;
@@ -201,10 +201,10 @@ void Planner::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
 
             // Curvature clamp (D8 027-004): bound κ so passing abeam the target
             // (small d, dy ≠ 0) cannot drive ω into a tight orbit.
-            // kappaMax = 2 / max(d_remaining, 2·arriveTolMm) limits the turning
-            // radius to at most 0.5·arriveTolMm at the tightest point.
+            // kappaMax = 2 / max(d_remaining, 2·arriveTolerance) limits the turning
+            // radius to at most 0.5·arriveTolerance at the tightest point.
             float kappaMax = 2.0f / fmaxf(d_remaining,
-                                          2.0f * _cfg.arriveTolMm);
+                                          2.0f * _cfg.arriveTolerance);
             float kappa = (d2 > 0.1f)
                 ? fmaxf(-kappaMax, fminf(kappaMax, 2.0f * dy / d2))
                 : 0.0f;
@@ -260,7 +260,7 @@ void Planner::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
                     _bvc.reset();
                     _activeCmd.configure(_gSpeed, 0.0f, &_bvc);
                     _activeCmd.addStop(makePositionStop(_gTargetXWorld, _gTargetYWorld,
-                                                       _cfg.arriveTolMm));
+                                                       _cfg.arriveTolerance));
                     _activeCmd.addStop(makeTimeStop(pursueTimeoutMs));
                     _activeCmd.setReplySink(target.replyFn, target.replyCtx, target.corrId);
                     _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
@@ -301,7 +301,7 @@ void Planner::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
     // S-mode keepalive watchdog has been removed from driveAdvance.
     // The system watchdog in LoopScheduler now handles keepalive enforcement for
     // all modes (STREAMING, VELOCITY, etc.) — it fires EVT safety_stop + X after
-    // sTimeoutMs of inbound command silence (Sprint 020, Ticket 005).
+    // sTimeout of inbound command silence (Sprint 020, Ticket 005).
     (void)inputs;
 
     // ── BVC tick for STREAMING mode ─────────────────────────────────────────
@@ -441,7 +441,7 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now_ms)
         float vR = 0.0f;
         BodyKinematics::inverse(cmd.goal.timed.v_x,
                                 cmd.goal.timed.omega,
-                                _cfg.trackwidthMm, vL, vR);
+                                _cfg.trackwidth, vL, vR);
         uint32_t durationMs = cmd.goal.timed.duration;
         beginTimed(vL, vR, durationMs, now_ms, _target, _noopReply, nullptr, corrId);
         break;
@@ -463,7 +463,7 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now_ms)
         float vR = 0.0f;
         BodyKinematics::inverse(cmd.goal.stream.v_x,
                                 cmd.goal.stream.omega,
-                                _cfg.trackwidthMm, vL, vR);
+                                _cfg.trackwidth, vL, vR);
         beginStream(vL, vR, now_ms, _target, _noopReply, nullptr);
         break;
     }

@@ -239,7 +239,7 @@ struct Robot {
     //   TLM frame (both STREAM and SNAP share the same counter).  Wraps at 65535.
     // _tlmBoundFn / _tlmBoundCtx: the reply channel bound by the last STREAM
     //   command.  Set in handleStream; nullptr means no STREAM has been issued
-    //   (TLM is suppressed, same behaviour as tlmPeriodMs=0 on init).
+    //   (TLM is suppressed, same behaviour as tlmPeriod=0 on init).
     uint16_t _tlmSeq        = 0;
     ReplyFn  _tlmBoundFn    = nullptr;
     void*    _tlmBoundCtx   = nullptr;

@@ -273,7 +273,7 @@ private:
     // (Drive always calls setKinematics() before the first predict()); they
     // exist only so a construction-time predict() call would not divide by
     // zero.
-    float    _trackwidthMm   = 128.0f; // mm; default matches Config.h's trackwidthMm default.
+    float    _trackwidthMm   = 128.0f; // mm; default matches Config.h's trackwidth default.
     float    _rotationalSlip = 0.0f;   // 0 = unset -> effectiveSlip() returns 1.0.
 
     // Intermediate compute state: previous encoder snapshot (not in HardwareState

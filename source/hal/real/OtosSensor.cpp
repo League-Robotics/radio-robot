@@ -120,7 +120,7 @@ bool OtosSensor::readTransformed(OtosPose& poseOut,
         hF = -hF;
     }
 
-    float angRad = -_cfg.odomYawDeg * (3.14159265f / 180.0f);
+    float angRad = -_cfg.odomYaw * (3.14159265f / 180.0f);
     float c = cosf(angRad);
     float s = sinf(angRad);
 
@@ -176,7 +176,7 @@ bool OtosSensor::readTransformed(OtosPose& poseOut,
 //     omega (deg/s per LSB); converted to rad/s below.
 //
 // Body-frame v derivation:
-//   After applying the mounting rotation (odomYawDeg flip+rotation), the
+//   After applying the mounting rotation (odomYaw flip+rotation), the
 //   OTOS x-axis points forward in the robot body frame.  Body speed is
 //   taken as vx_body (the forward-axis component) rather than the vector
 //   magnitude |v|.  For a differential-drive robot vy should be near zero;
@@ -208,7 +208,7 @@ bool OtosSensor::readVelocityTransformed(OtosVelocity& velOut,
 //
 // Reads the REG_VELOCITY_XL burst and returns all three body-frame components:
 // vx (forward), vy (lateral), omega (yaw).  Applies the upside-down flip and
-// odomYawDeg mounting rotation.  This is the OTOS driver's full-fidelity
+// odomYaw mounting rotation.  This is the OTOS driver's full-fidelity
 // velocity read; the OTOS measures all three DOF independently of the robot's
 // drivetrain, so this method is unconditional (no drivetrain dependency).
 // Whether the lateral channel is *used* is a decision for the estimator/EKF
@@ -249,12 +249,12 @@ bool OtosSensor::readVelocityTransformed3(BodyTwist3& velOut,
         whF = -whF;
     }
 
-    float angRad = -_cfg.odomYawDeg * (3.14159265f / 180.0f);
+    float angRad = -_cfg.odomYaw * (3.14159265f / 180.0f);
     float c = cosf(angRad);
     float s = sinf(angRad);
 
     // Rotate chip-native (vxF, vyF) into robot body frame.
-    // odomYawDeg is a constant mounting offset; its derivative is zero,
+    // odomYaw is a constant mounting offset; its derivative is zero,
     // so omega passes through unchanged (same reasoning as readVelocityTransformed).
     float vxBody = c * vxF - s * vyF;
     float vyBody = s * vxF + c * vyF;
@@ -285,7 +285,7 @@ OtosAccel OtosSensor::readAccelTransformed() const
         ayF = -ayF;
     }
 
-    float angRad = -_cfg.odomYawDeg * (3.14159265f / 180.0f);
+    float angRad = -_cfg.odomYaw * (3.14159265f / 180.0f);
     float c = cosf(angRad);
     float s = sinf(angRad);
 
@@ -315,7 +315,7 @@ void OtosSensor::setWorldPose(float x_mm, float y_mm, float h_rad)
     // dragging the EKF toward the boot frame.
     //
     // Forward (readTransformed): poseOut = R(angRad)*(xF,yF) - R(h_rad)*offset,
-    //   angRad = -odomYawDeg ; offset = [odomOffX, odomOffY] (host-side lever-arm).
+    //   angRad = -odomYaw ; offset = [odomOffX, odomOffY] (host-side lever-arm).
     // Inverse: add the lever-arm back (the chip POSITION reg stores the SENSOR
     // pose), then un-rotate by R(-angRad), undo upside-down, convert -> raw LSBs.
     if (!is_initialized()) return;
@@ -328,7 +328,7 @@ void OtosSensor::setWorldPose(float x_mm, float y_mm, float h_rad)
     float px = 0.0f, py = 0.0f;
     centreToSensor(x_mm, y_mm, h_rad, _cfg.odomOffX, _cfg.odomOffY, px, py);
 
-    float angRad = -_cfg.odomYawDeg * (3.14159265f / 180.0f);
+    float angRad = -_cfg.odomYaw * (3.14159265f / 180.0f);
     float c = cosf(angRad);
     float s = sinf(angRad);
     // (xF,yF) = R(-angRad) * (px,py)

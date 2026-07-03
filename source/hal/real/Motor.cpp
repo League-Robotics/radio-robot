@@ -143,9 +143,9 @@ void Motor::setSpeed(int8_t pct)
 
 int32_t Motor::readEncoder(const RobotConfig& cfg) const
 {
-    // motorId 2 = M2 = left wheel; use mmPerDegL.
-    // motorId 1 = M1 = right wheel; use mmPerDegR.
-    float mmPerDeg = (_motorId == 2) ? cfg.mmPerDegL : cfg.mmPerDegR;
+    // motorId 2 = M2 = left wheel; use wheelTravelCalibL.
+    // motorId 1 = M1 = right wheel; use wheelTravelCalibR.
+    float mmPerDeg = (_motorId == 2) ? cfg.wheelTravelCalibL : cfg.wheelTravelCalibR;
 
     // NOTE: split-phase contract — caller must have issued requestEncoder()
     // at least one loop period before calling this. collectEncoder() issues
@@ -167,7 +167,7 @@ float Motor::readEncoderMmF(const RobotConfig& cfg) const
     // NOTE: split-phase contract — caller must have issued requestEncoder()
     // at least one loop period before calling this. collectEncoder() issues
     // the 4-byte read without any busy-wait.
-    float mmPerDeg = (_motorId == 2) ? cfg.mmPerDegL : cfg.mmPerDegR;
+    float mmPerDeg = (_motorId == 2) ? cfg.wheelTravelCalibL : cfg.wheelTravelCalibR;
     int32_t raw = collectEncoder();   // tenths of degrees
     return (raw / 10.0f) * mmPerDeg * (float)_fwdSign;
 }
@@ -276,7 +276,7 @@ void Motor::rebaselineSoft()
     // fwdSign): rawDelta = (mm / (mmPerDeg * fwdSign)) * 10. rawDelta is the
     // amount by which the offset-subtracted raw reading would need to move
     // to reach 0, i.e. exactly the increment _encOffset needs.
-    float mmPerDeg = (_motorId == 2) ? _cfg.mmPerDegL : _cfg.mmPerDegR;
+    float mmPerDeg = (_motorId == 2) ? _cfg.wheelTravelCalibL : _cfg.wheelTravelCalibR;
     if (mmPerDeg != 0.0f) {
         float rawDeltaF = (_lastPositionMm / (mmPerDeg * (float)_fwdSign)) * 10.0f;
         _encOffset += (int32_t)rawDeltaF;
@@ -433,7 +433,7 @@ float Motor::readEncoderMmFAtomic(const RobotConfig& cfg) const
 {
     // Atomic read in mm (float). Same conversion as readEncoderMmF() but using
     // readEncoderAtomic() so it is safe outside the control tick.
-    float mmPerDeg = (_motorId == 2) ? cfg.mmPerDegL : cfg.mmPerDegR;
+    float mmPerDeg = (_motorId == 2) ? cfg.wheelTravelCalibL : cfg.wheelTravelCalibR;
     int32_t raw = readEncoderAtomic();  // tenths of degrees minus offset
     return (raw / 10.0f) * mmPerDeg * (float)_fwdSign;
 }
@@ -451,7 +451,7 @@ float Motor::readEncoderMmFSettle(const RobotConfig& cfg) const
     uint8_t resp[4] = { 0, 0, 0, 0 };
     int readResult = _i2c.read((ADDR << 1), (uint8_t*)resp, 4, false);
 
-    float mmPerDeg = (_motorId == 2) ? cfg.mmPerDegL : cfg.mmPerDegR;
+    float mmPerDeg = (_motorId == 2) ? cfg.wheelTravelCalibL : cfg.wheelTravelCalibR;
 
     // (064-005) CR-03: on I2C failure, hold the last known-good value
     // (converted to mm) instead of computing from a zeroed response buffer.
@@ -757,8 +757,8 @@ bool Motor::readSpeed(float& mmPerSec, const RobotConfig& cfg) const
     //
     // Therefore: mm/s = (raw / 10.0) * mmPerDeg * sign
     //
-    // motorId 2 = M2 = left wheel; use mmPerDegL.
-    // motorId 1 = M1 = right wheel; use mmPerDegR.
+    // motorId 2 = M2 = left wheel; use wheelTravelCalibL.
+    // motorId 1 = M1 = right wheel; use wheelTravelCalibR.
     //
     // BENCH-CONFIRM REQUIRED: The vendor TypeScript formula treats the raw
     // value as whole degrees/s (not tenths), which contradicts the 0x46
@@ -773,7 +773,7 @@ bool Motor::readSpeed(float& mmPerSec, const RobotConfig& cfg) const
     // Change kUnitFactor to flip the interpretation after bench confirmation.
     static constexpr float kUnitFactor = 10.0f;  // BENCH-CONFIRM: 10.0 = tenths; 1.0 = whole deg/s
 
-    float mmPerDeg = (_motorId == 2) ? cfg.mmPerDegL : cfg.mmPerDegR;
+    float mmPerDeg = (_motorId == 2) ? cfg.wheelTravelCalibL : cfg.wheelTravelCalibR;
     float magnitude = ((float)raw / kUnitFactor) * mmPerDeg;
 
     // Apply direction sign: the chip returns unsigned speed only.

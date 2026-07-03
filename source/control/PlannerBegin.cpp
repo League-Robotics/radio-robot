@@ -123,7 +123,7 @@ void Planner::beginStream(float leftMms, float rightMms, uint32_t now_ms,
     // Convert wheel speeds to body twist via forward kinematics, then route
     // through BVC so all wheel commands go through the profiler path.
     float v, omega;
-    BodyKinematics::forward(leftMms, rightMms, _cfg.trackwidthMm, v, omega);
+    BodyKinematics::forward(leftMms, rightMms, _cfg.trackwidth, v, omega);
     _bvc.seedCurrent(v, omega);
     _bvc.setTarget(v, omega);
 
@@ -171,7 +171,7 @@ void Planner::beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
 
     // Configure a fresh MotionCommand for body-twist (v, ω) with:
     //   - No TIME stop (keepalive watchdog is now the system watchdog in
-    //     LoopScheduler — fires EVT safety_stop + X after sTimeoutMs silence).
+    //     LoopScheduler — fires EVT safety_stop + X after sTimeout silence).
     //   - SOFT stop style (ramp to zero before completing).
     //   - No reply sink needed — VW has no correlated EVT done; system watchdog
     //     emits EVT safety_stop directly.
@@ -206,7 +206,7 @@ void Planner::beginTimed(float leftMms, float rightMms,
     // Convert (L, R) wheel speeds to body twist (v, ω) via the forward kinematics map.
     // For equal L=R (straight drive), forward() gives v=(L+R)/2 and omega=0 — no steer bias.
     float v_mms, omega_rads;
-    BodyKinematics::forward(leftMms, rightMms, _cfg.trackwidthMm, v_mms, omega_rads);
+    BodyKinematics::forward(leftMms, rightMms, _cfg.trackwidth, v_mms, omega_rads);
 
     // Cancel-if-active: emit EVT cancelled for the preempted command's corrId
     // before configuring the new T command.  Without this a host awaiting
@@ -251,7 +251,7 @@ void Planner::beginDistance(float leftMms, float rightMms,
 {
     // Convert (L, R) wheel speeds to body twist (v, ω) via forward kinematics.
     float v_mms, omega_rads;
-    BodyKinematics::forward(leftMms, rightMms, _cfg.trackwidthMm, v_mms, omega_rads);
+    BodyKinematics::forward(leftMms, rightMms, _cfg.trackwidth, v_mms, omega_rads);
 
     // Cancel-if-active: emit EVT cancelled for the preempted command's corrId
     // before resetting encoders or configuring the new D command.  Cancel comes
@@ -406,7 +406,7 @@ void Planner::beginGoTo(float tx, float ty, float speedMms, uint32_t now_ms,
 
         _activeCmd.configure(_gSpeed, 0.0f, &_bvc);
         _activeCmd.setOrigin(MotionCommand::Origin::FIXED);
-        _activeCmd.addStop(makePositionStop(_gTargetXWorld, _gTargetYWorld, _cfg.arriveTolMm));
+        _activeCmd.addStop(makePositionStop(_gTargetXWorld, _gTargetYWorld, _cfg.arriveTolerance));
         _activeCmd.addStop(makeTimeStop(pursueTimeoutMs));
         _activeCmd.setReplySink(fn, ctx, corr_id);
         _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
@@ -515,7 +515,7 @@ void Planner::beginRotation(float relCdeg, uint32_t now_ms,
     const float kRtRateDps    = 100.0f;
     const float kRtCoastArcMm = 8.0f;   // ~7.3° SOFT-ramp coast at 100°/s (sim-tuned)
 
-    float tw   = _cfg.trackwidthMm;
+    float tw   = _cfg.trackwidth;
     // Per-wheel arc = |deg|·(π/180)·(trackwidth/2) / slip.
     // Dividing by slip (< 1.0) enlarges the encoder-arc target so wheels travel
     // far enough for the body to reach the commanded angle despite scrub.
@@ -619,8 +619,8 @@ void Planner::_startPreRotate(float bearingRad, float speed,
 
     // omega = 2*(speed/dirGain) / trackwidth  (spin-in-place from inverse kinematics)
     float wheelSpd = speed / dirGain;
-    float omega    = turnSign * 2.0f * wheelSpd / _cfg.trackwidthMm;
-    float omegaMax = 2.0f * _cfg.vWheelMax / _cfg.trackwidthMm;
+    float omega    = turnSign * 2.0f * wheelSpd / _cfg.trackwidth;
+    float omegaMax = 2.0f * _cfg.vWheelMax / _cfg.trackwidth;
     if (omega >  omegaMax) omega =  omegaMax;
     if (omega < -omegaMax) omega = -omegaMax;
 

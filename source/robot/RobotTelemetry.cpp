@@ -179,15 +179,15 @@ int Robot::buildTlmFrame(char* buf, int len)
 // telemetryEmit -- gate and emit the periodic TLM frame.
 //
 // D10 idle-rate change (028-005): the stream no longer goes silent when the
-// robot is stopped.  When idle, the effective period is max(tlmPeriodMs, 500)
+// robot is stopped.  When idle, the effective period is max(tlmPeriod, 500)
 // so the host can distinguish "robot idle" from "serial dropped."
-// The clamp (tlmPeriodMs < 20 -> 20) is enforced in handleStream, not here;
+// The clamp (tlmPeriod < 20 -> 20) is enforced in handleStream, not here;
 // telemetryEmit must NOT write to config.
 // ---------------------------------------------------------------------------
 
 void Robot::telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx)
 {
-    if (config.tlmPeriodMs <= 0) return;
+    if (config.tlmPeriod <= 0) return;
 
     // N3 null guard (030-003): _tlmBoundFn stays nullptr until STREAM binds the
     // channel.  SET tlmPeriod without a prior STREAM must not reach fn(...) -- a
@@ -203,10 +203,10 @@ void Robot::telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx)
     bool stopped = ((now_ms - _lastActiveMs) > kGraceMs);
 
     uint32_t effectivePeriod = stopped
-        ? ((uint32_t)config.tlmPeriodMs > kIdleMinMs
-               ? (uint32_t)config.tlmPeriodMs
+        ? ((uint32_t)config.tlmPeriod > kIdleMinMs
+               ? (uint32_t)config.tlmPeriod
                : kIdleMinMs)
-        : (uint32_t)config.tlmPeriodMs;
+        : (uint32_t)config.tlmPeriod;
 
     // Radio rate cap: the radio/relay link sustains only ~5 Hz of TLM cleanly —
     // bench-measured 2026-06-14, STREAM 200 (5 Hz) delivered ~100% during motion,

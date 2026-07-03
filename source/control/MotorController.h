@@ -188,7 +188,7 @@ private:
 
     // PID integrator dt: actual elapsed control-tick time (ms). The loop runs at
     // ~24 ms (10 ms nominal + 2x4 ms encoder settle + bus), NOT the nominal
-    // controlPeriodMs, so using the nominal value made kI act at ~0.4x strength
+    // controlPeriod, so using the nominal value made kI act at ~0.4x strength
     // and never close the steady-state error. Use the measured delta, clamped to
     // a sane window so a stalled tick can't spike the integrator.
     uint32_t _lastPidMs;     // system time (ms) of last controlTick PID update

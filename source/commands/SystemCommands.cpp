@@ -485,7 +485,7 @@ static void handleStream(const ArgList& args, const char* corrId,
     int32_t ms = (int32_t)atoi(args.args[0].sval);
     if (ms < 0) ms = 0;
     if (ms > 0 && ms < 20) ms = 20;  // clamp to 50 Hz max (D10 028-005: enforced here, NOT in telemetryEmit)
-    robot->config.tlmPeriodMs = ms;
+    robot->config.tlmPeriod = ms;
 
     // D10 channel binding (028-005): bind the TLM stream to the channel that
     // issued this STREAM command.  runCommsIn uses _tlmBoundCtx to identify
@@ -648,7 +648,7 @@ static void handleKeepalive(const ArgList& /*args*/, const char* /*corrId*/,
 // SAFE -- enable/disable the system safety-stop watchdog and set its timeout.
 //   SAFE                 -> query: "OK safety on|off timeout=<ms>"
 //   SAFE off  (or SAFE 0)-> disable the watchdog (no keepalives required)
-//   SAFE on   [<ms>]     -> enable; optional <ms> sets sTimeoutMs
+//   SAFE on   [<ms>]     -> enable; optional <ms> sets sTimeout
 //   SAFE <ms>            -> <ms> > 0: enable + set timeout; 0: disable
 // variadic ArgSchema: tokens passed through as STR args.
 // ---------------------------------------------------------------------------
@@ -682,7 +682,7 @@ static void handleSafe(const ArgList& args, const char* corrId,
             cfg.safetyEnabled = true;
             if (args.count >= 2) {
                 int ms = atoi(args.args[1].sval);
-                if (ms > 0) cfg.sTimeoutMs = ms;
+                if (ms > 0) cfg.sTimeout = ms;
             }
         } else {
             // Numeric form: SAFE <ms>  (0 -> off, >0 -> on with that timeout).
@@ -693,14 +693,14 @@ static void handleSafe(const ArgList& args, const char* corrId,
                 cfg.safetyEnabled = false;
             } else {
                 cfg.safetyEnabled = true;
-                cfg.sTimeoutMs = ms;
+                cfg.sTimeout = ms;
             }
         }
     }
 
     char body[48];
     snprintf(body, sizeof(body), "%s timeout=%d",
-             cfg.safetyEnabled ? "on" : "off", (int)cfg.sTimeoutMs);
+             cfg.safetyEnabled ? "on" : "off", (int)cfg.sTimeout);
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "safety", body,
                               corrId, replyFn, replyCtx);
 }

@@ -24,8 +24,8 @@ MecanumHAL::MecanumHAL(MicroBitI2C& i2c, MicroBitIO& io, const RobotConfig& cfg)
 #ifdef BENCH_OTOS_ENABLED
       ,
       _otosActive(&_otos),
-      _halfTrackMm(cfg.halfTrackMm),
-      _halfWheelbaseMm(cfg.halfWheelbaseMm),
+      _halfTrackMm(cfg.halfTrack),
+      _halfWheelbaseMm(cfg.halfWheelbase),
       _lastBenchTickMs(0u),
       _fwdSignFR(cfg.fwdSignFR),
       _fwdSignFL(cfg.fwdSignFL),

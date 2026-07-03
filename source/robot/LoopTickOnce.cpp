@@ -193,8 +193,8 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // telemetryEmit guards fn == nullptr, so STREAM not issued →
     // no emission.
     // =========================================================
-    if (cfg.tlmPeriodMs > 0 &&
-        (int32_t)(now - ts.lastTlm) >= (int32_t)cfg.tlmPeriodMs) {
+    if (cfg.tlmPeriod > 0 &&
+        (int32_t)(now - ts.lastTlm) >= (int32_t)cfg.tlmPeriod) {
         robot.telemetryEmit(now, robot._tlmBoundFn, robot._tlmBoundCtx);
         ts.lastTlm = now;
     }

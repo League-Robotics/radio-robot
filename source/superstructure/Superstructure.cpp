@@ -144,7 +144,7 @@ void Superstructure::evaluateSafety(CommandProcessor& cmd, CommandQueue& queue,
 {
     const RobotConfig& cfg = _cfg;
 
-    // ===== SYSTEM WATCHDOG: fire safety_stop + X after sTimeoutMs of silence =
+    // ===== SYSTEM WATCHDOG: fire safety_stop + X after sTimeout of silence =
     // ts.watchdogMs == 0 means no command has been received yet this session;
     // the watchdog stays disarmed until the first command arrives.
     // Signed delta avoids uint32 underflow (project memory: watchdog-uint32-underflow).
@@ -181,8 +181,8 @@ void Superstructure::evaluateSafety(CommandProcessor& cmd, CommandQueue& queue,
             // active, and no such command becomes active without first
             // calling beginVelocity()/beginRawVelocity().
             int32_t vwDelta = (int32_t)(now - _planner.lastVelocityRefreshMs());
-            bool stale = (wdDelta > (int32_t)cfg.sTimeoutMs) ||
-                         (vwDelta > (int32_t)cfg.sTimeoutMs);
+            bool stale = (wdDelta > (int32_t)cfg.sTimeout) ||
+                         (vwDelta > (int32_t)cfg.sTimeout);
             if (stale) {
                 ts.watchdogMs = now;  // re-arm to avoid firing every tick
                 char wdBuf[64];

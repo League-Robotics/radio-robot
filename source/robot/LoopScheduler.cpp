@@ -43,7 +43,7 @@ static void radioReply(const char* msg, void* ctx)
 // Instead it is read from robot._tlmBoundFn — the channel that last issued a
 // STREAM command.  This prevents a radio command from silently redirecting
 // the serial TLM stream.  If no STREAM has been issued, _tlmBoundFn is
-// nullptr and TLM is suppressed (same as tlmPeriodMs=0 on init).
+// nullptr and TLM is suppressed (same as tlmPeriod=0 on init).
 // ---------------------------------------------------------------------------
 
 static void runCommsIn(LoopScheduler& sched, uint32_t now)
@@ -226,7 +226,7 @@ void LoopScheduler::run_blocks()
             _robot.hal.tick(now);
         }
         now = _uBit.systemTime();
-        controlDeadline = now + (uint32_t)_robot.config.controlPeriodMs;
+        controlDeadline = now + (uint32_t)_robot.config.controlPeriod;
 
         // ===== COMMS: drain serial + radio (every iteration) ================
         if (enComms) {

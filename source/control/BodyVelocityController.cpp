@@ -124,14 +124,14 @@ bool BodyVelocityController::advance(float dt_s)
     //   profile → inverse → saturate → setTarget
     // ------------------------------------------------------------------
     float vL, vR, sL, sR;
-    BodyKinematics::inverse(_v, _omega, _cfg.trackwidthMm, vL, vR);
+    BodyKinematics::inverse(_v, _omega, _cfg.trackwidth, vL, vR);
     BodyKinematics::saturate(vL, vR, _cfg.vWheelMax, _cfg.steerHeadroom, sL, sR);
     // Anti-windup: if saturation clipped the output, back-calculate the effective
     // body velocity so _v never builds up past the saturation ceiling.  Without
     // this, _v silently overruns during ramp-up and produces a flat-spot plateau
     // at the start of deceleration while _v burns back down to the ceiling.
     if (sL != vL || sR != vR) {
-        BodyKinematics::forward(sL, sR, _cfg.trackwidthMm, _v, _omega);
+        BodyKinematics::forward(sL, sR, _cfg.trackwidth, _v, _omega);
     }
     _mc.setTarget(sL, sR);
 

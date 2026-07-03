@@ -21,12 +21,12 @@ void Ports::updateInputs(uint32_t now)
 
 // ---------------------------------------------------------------------------
 // periodic — VERBATIM PORTS timed block from loopTickOnce (043-001):
-// lag gate on cfg.lagPortsMs / ts.lastPorts, updateInputs(now), bump ts.lastPorts.
+// lag gate on cfg.lagPorts / ts.lastPorts, updateInputs(now), bump ts.lastPorts.
 // ---------------------------------------------------------------------------
 void Ports::periodic(LoopTickState& ts, uint32_t now)
 {
-    if (_cfg.lagPortsMs > 0 &&
-        (int32_t)(now - ts.lastPorts) >= (int32_t)_cfg.lagPortsMs) {
+    if (_cfg.lagPorts > 0 &&
+        (int32_t)(now - ts.lastPorts) >= (int32_t)_cfg.lagPorts) {
         updateInputs(now);
         ts.lastPorts = now;
     }

@@ -8,8 +8,8 @@
 
 MotorController::MotorController(IMotor& left, IMotor& right, const RobotConfig& cal)
     : _motorL(left), _motorR(right), _cal(cal),
-      _vcL(cal.velKff, cal.velKp, cal.velKi, cal.velIMax, cal.minWheelMms, cal.velKaw),
-      _vcR(cal.velKff, cal.velKp, cal.velKi, cal.velIMax, cal.minWheelMms, cal.velKaw),
+      _vcL(cal.velKff, cal.velKp, cal.velKi, cal.velIMax, cal.minWheelSpeed, cal.velKaw),
+      _vcR(cal.velKff, cal.velKp, cal.velKi, cal.velIMax, cal.minWheelSpeed, cal.velKaw),
       _cmdEncStartL(0.0f), _cmdEncStartR(0.0f),
       _cmdRatio(1.0f), _fasterIsRight(false),
       _cmds(nullptr),
@@ -146,7 +146,7 @@ void MotorController::updateVelGains(const RobotConfig& cal)
     _vcL.kI  = cal.velKi;   _vcR.kI  = cal.velKi;
     _vcL.iMax = cal.velIMax; _vcR.iMax = cal.velIMax;
     _vcL.kAw  = cal.velKaw;  _vcR.kAw  = cal.velKaw;
-    _vcL.minWheelMms = cal.minWheelMms; _vcR.minWheelMms = cal.minWheelMms;
+    _vcL.minWheelMms = cal.minWheelSpeed; _vcR.minWheelMms = cal.minWheelSpeed;
     // Reconfigure the cmon-pid instances with the updated gains (049-003).
     // This re-applies ParallelPid/Backcalculation coefficients immediately so
     // the new gains take effect on the very next controlTick, not one tick later.
@@ -388,7 +388,7 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
     }
 
     // PID integrator dt: the ACTUAL elapsed control-tick time, not the nominal
-    // controlPeriodMs. The real loop runs at ~24 ms (10 ms nominal + 2x4 ms
+    // controlPeriod. The real loop runs at ~24 ms (10 ms nominal + 2x4 ms
     // encoder settle + bus time), so using the 10 ms nominal made kI accumulate
     // at ~0.4x strength and never close the steady-state error (wheels held ~190
     // of a 200 mm/s command). Clamp the measured delta to [5, 50] ms so a stalled
@@ -400,7 +400,7 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
         if (dms > 50) dms = 50;
         dt_s = static_cast<float>(dms) / 1000.0f;
     } else {
-        dt_s = static_cast<float>(_cal.controlPeriodMs) / 1000.0f;
+        dt_s = static_cast<float>(_cal.controlPeriod) / 1000.0f;
         _hasPidTick = true;
     }
     _lastPidMs = now_ms;

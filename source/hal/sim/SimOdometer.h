@@ -160,8 +160,8 @@ public:
     // was constructed with (069-004) — NOT a copy, so a runtime `SET
     // ctrlPeriod=…` is reflected immediately (067's live-reference rule).
     // tick() adds the FULL _driftPerTickMm/_driftPerTickRad once per call,
-    // and tick() fires once per RobotConfig::controlPeriodMs
-    // (source/types/Config.h:167) — so this is "how many ms is one tick,"
+    // and tick() fires once per RobotConfig::controlPeriod
+    // (source/types/Config.h) — so this is "how many ms is one tick,"
     // used by SimCommands to convert the wire's per-second
     // otosLinDriftMmS/otosYawDriftDegS keys to/from this class's internal
     // per-tick representation. Out-of-line (SimOdometer.cpp) because the

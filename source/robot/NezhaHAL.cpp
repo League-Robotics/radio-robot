@@ -5,7 +5,7 @@ NezhaHAL::NezhaHAL(MicroBitI2C& i2c, MicroBitIO& io, const RobotConfig& cfg)
     : _bus(i2c),
       // Canonical wiring (verified at the controller): LEFT wheel = M2 (chip id 2),
       // RIGHT = M1 (chip id 1). Calibration follows motorId inside Motor (id 2 ->
-      // mmPerDegL, id 1 -> mmPerDegR), so this honest mapping keeps the per-wheel
+      // wheelTravelCalibL, id 1 -> wheelTravelCalibR), so this honest mapping keeps the per-wheel
       // calibration correct AND makes the encoder-difference heading (encR-encL)/tw
       // CCW+ — matching the (un-negated) OTOS heading and the ENU camera. The motor
       // forward SENSE is inverted, handled separately by fwdSignL/R (flipped in
@@ -27,7 +27,7 @@ NezhaHAL::NezhaHAL(MicroBitI2C& i2c, MicroBitIO& io, const RobotConfig& cfg)
 #ifdef BENCH_OTOS_ENABLED
       ,
       _otosActive(&_otos),              // default: real sensor
-      _trackwidthMm(cfg.trackwidthMm),  // cache for bench tick (034-001)
+      _trackwidthMm(cfg.trackwidth),  // cache for bench tick (034-001)
       _lastBenchTickMs(0u)
 #endif
 {

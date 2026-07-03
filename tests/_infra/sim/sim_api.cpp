@@ -182,7 +182,7 @@ struct SimHandle {
         // Wire robot geometry into SimHardware so the OTOS sim model integrates
         // correctly.  SimHardware's ctor already set this from cfg; the explicit
         // call is harmless (idempotent) and documents the dependency.
-        hal.setTrackwidth(cfg.trackwidthMm);
+        hal.setTrackwidth(cfg.trackwidth);
 
         // Wire the queue into both cmd and Robot's MotionCtx — mirrors LoopScheduler's
         // constructor wiring so converter commands (S, T, D, G, R, TURN, RT) travel

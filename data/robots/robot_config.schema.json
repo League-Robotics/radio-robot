@@ -66,7 +66,7 @@
         "trackwidth": {
           "type": ["number", "null"],
           "description": "Wheel track width (mm).",
-          "firmware": { "field": "trackwidthMm", "set_key": "tw", "kind": "float_as_int" }
+          "firmware": { "field": "trackwidth", "set_key": "tw", "kind": "float_as_int" }
         },
         "wheelbase_mm":            { "type": ["number", "null"] }
       }
@@ -150,12 +150,12 @@
         "mm_per_wheel_deg_left": {
           "type": ["number", "null"],
           "description": "Per-wheel encoder calibration: mm of travel per degree of wheel rotation (left wheel).",
-          "firmware": { "field": "mmPerDegL", "set_key": "ml", "kind": "float" }
+          "firmware": { "field": "wheelTravelCalibL", "set_key": "ml", "kind": "float" }
         },
         "mm_per_wheel_deg_right": {
           "type": ["number", "null"],
           "description": "Per-wheel encoder calibration: mm of travel per degree of wheel rotation (right wheel).",
-          "firmware": { "field": "mmPerDegR", "set_key": "mr", "kind": "float" }
+          "firmware": { "field": "wheelTravelCalibR", "set_key": "mr", "kind": "float" }
         },
         "rotational_slip": {
           "type": ["number", "null"],
@@ -170,7 +170,7 @@
         "rotation_offset_deg": {
           "type": ["number", "null"],
           "description": "Linear correction offset (deg) for CCW (positive) turns.",
-          "firmware": { "field": "rotationOffsetDeg", "set_key": "rotOffPos", "kind": "float" }
+          "firmware": { "field": "rotationOffset", "set_key": "rotOffPos", "kind": "float" }
         },
         "rotation_gain_neg": {
           "type": ["number", "null"],
@@ -180,7 +180,7 @@
         "rotation_offset_deg_neg": {
           "type": ["number", "null"],
           "description": "Linear correction offset (deg) for CW (negative) turns. Falls back to rotation_offset_deg when null.",
-          "firmware": { "field": "rotationOffsetDegNeg", "set_key": "rotOffNeg", "kind": "float" }
+          "firmware": { "field": "rotationOffsetNeg", "set_key": "rotOffNeg", "kind": "float" }
         },
         "ekf_r_otos_theta": {
           "type": ["number", "null"],
@@ -202,10 +202,10 @@
         "vel_kaw":       { "type": ["number", "null"], "description": "Back-calculation anti-windup gain, 1/s.", "subsystem": "drive", "firmware": { "field": "velKaw", "set_key": "vel.kAw", "kind": "float" } },
         "vel_filt":      { "type": ["number", "null"], "description": "Velocity EMA smoothing weight.", "firmware": { "field": "velFiltAlpha", "set_key": "vel.filt", "kind": "float" } },
         "sync":          { "type": ["number", "null"], "description": "Cross-wheel ratio coupling gain.", "firmware": { "field": "syncGain", "set_key": "sync", "kind": "float" } },
-        "min_wheel_mms": { "type": ["number", "null"], "description": "Low-speed integrator deadband, mm/s.", "firmware": { "field": "minWheelMms", "set_key": "minWheelMms", "kind": "float" } },
+        "min_wheel_mms": { "type": ["number", "null"], "description": "Low-speed integrator deadband, mm/s.", "firmware": { "field": "minWheelSpeed", "set_key": "minWheelMms", "kind": "float" } },
         "turn_gate":     { "type": ["number", "null"], "description": "Turn-in-place gate (deg): G/go-to pre-rotates in place until the bearing to the target is within this angle, then arcs. Sim sweep optimum ~35 (host_tests/arc_gate_sweep.ipynb).", "firmware": { "field": "turnInPlaceGate", "set_key": "turnGate", "kind": "float_as_int" } },
         "yaw_rate_max":  { "type": ["number", "null"], "description": "Yaw rate ceiling (deg/s) for TURN and arc rotation; lower reduces in-place turn overshoot (firmware default 180; 60 is camera-calibrated for tovez).", "subsystem": "planner", "firmware": { "field": "yawRateMax", "set_key": "yawRateMax", "kind": "float" } },
-        "arrive_tol_mm": { "type": ["number", "null"], "description": "G arrival tolerance radius (mm): POSITION stop fires when the robot centre is within this disc of the target. Default 5; widened to 25 for carpet (D8 027-004).", "subsystem": "planner", "firmware": { "field": "arriveTolMm", "set_key": "arriveTol", "kind": "float" } },
+        "arrive_tol_mm": { "type": ["number", "null"], "description": "G arrival tolerance radius (mm): POSITION stop fires when the robot centre is within this disc of the target. Default 5; widened to 25 for carpet (D8 027-004).", "subsystem": "planner", "firmware": { "field": "arriveTolerance", "set_key": "arriveTol", "kind": "float" } },
         "max_rot_accel_dps2": { "type": ["number", "null"], "description": "Host-side turn ramp: max rotational acceleration, deg/s^2 (default 300). Host-side only — no firmware mapping." }
       }
     },
@@ -218,12 +218,12 @@
         "half_track_mm": {
           "type": ["number", "null"],
           "description": "Half the wheel track width (mm). Placeholder default 63.0 — MEASURE on the bench.",
-          "firmware": { "field": "halfTrackMm", "kind": "float" }
+          "firmware": { "field": "halfTrack", "kind": "float" }
         },
         "half_wheelbase_mm": {
           "type": ["number", "null"],
           "description": "Half the wheelbase (mm). Placeholder default 63.0 — MEASURE on the bench.",
-          "firmware": { "field": "halfWheelbaseMm", "kind": "float" }
+          "firmware": { "field": "halfWheelbase", "kind": "float" }
         }
       }
     },
@@ -236,22 +236,22 @@
         "mm_per_wheel_deg_fr": {
           "type": ["number", "null"],
           "description": "Per-wheel encoder calibration: mm of travel per degree of motor rotation (front-right). Defaults from wheel_diameter_mm if null.",
-          "firmware": { "field": "mmPerDegFR", "kind": "float" }
+          "firmware": { "field": "wheelTravelCalibFR", "kind": "float" }
         },
         "mm_per_wheel_deg_fl": {
           "type": ["number", "null"],
           "description": "Per-wheel encoder calibration: mm of travel per degree of motor rotation (front-left). Defaults from wheel_diameter_mm if null.",
-          "firmware": { "field": "mmPerDegFL", "kind": "float" }
+          "firmware": { "field": "wheelTravelCalibFL", "kind": "float" }
         },
         "mm_per_wheel_deg_br": {
           "type": ["number", "null"],
           "description": "Per-wheel encoder calibration: mm of travel per degree of motor rotation (back-right). Defaults from wheel_diameter_mm if null.",
-          "firmware": { "field": "mmPerDegBR", "kind": "float" }
+          "firmware": { "field": "wheelTravelCalibBR", "kind": "float" }
         },
         "mm_per_wheel_deg_bl": {
           "type": ["number", "null"],
           "description": "Per-wheel encoder calibration: mm of travel per degree of motor rotation (back-left). Defaults from wheel_diameter_mm if null.",
-          "firmware": { "field": "mmPerDegBL", "kind": "float" }
+          "firmware": { "field": "wheelTravelCalibBL", "kind": "float" }
         },
         "fwd_sign_fr": {
           "type": ["integer", "null"],
