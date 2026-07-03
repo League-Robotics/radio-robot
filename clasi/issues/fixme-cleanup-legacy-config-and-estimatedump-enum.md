@@ -1,5 +1,6 @@
 ---
 status: pending
+sprint: '070'
 ---
 
 # FIXME cleanup: eliminate legacy go-to config fields; EstimateDump source string → enum
