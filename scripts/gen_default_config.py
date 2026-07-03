@@ -297,10 +297,6 @@ RobotConfig defaultRobotConfig() {{
     p.velFiltAlpha    = {_f(vel_filt)};
     p.syncGain        = {_f(sync)};
 
-    // Legacy go-to tolerances
-    p.turnThresholdMm = 50.0f;
-    p.doneTolMm       = 5.0f;
-
     // Pose-control tunables
     p.aMax            = 300.0f;
     p.aDecel          = 250.0f;
@@ -321,7 +317,7 @@ RobotConfig defaultRobotConfig() {{
     p.safetyEnabled   = {ov('safetyEnabled', 'true')};
     p.controlPeriod   = 10;
     p.tlmPeriod       = 0;
-    p.tlmFields       = 0x1FF;  // 068: was 0xFF; widened to TLM_FIELD_ALL to include TLM_FIELD_ENCPOSE (bit 8)
+    p.tlmFields       = TLM_FIELD_ALL;  // 068: was 0xFF; widened to include TLM_FIELD_ENCPOSE (bit 8)
     p.tlmSnapPending  = false;
 
     // Sensor lag budgets

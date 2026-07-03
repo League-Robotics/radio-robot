@@ -282,7 +282,7 @@ Returns the per-wheel measured velocity in mm/s (integer) and the velocity
 source flag for each wheel.  Source flags:
 
 - `C` — chip velocity from register 0x47 (`Motor::readSpeed`), corrected to
-  mm/s via `(raw / 10.0) * mmPerDeg * sign`.
+  mm/s via `(raw / 10.0) * wheelTravelCalib * sign`.
 - `E` — encoder-delta fallback (used when chip I2C read fails or the chip
   reading fails the 2× implausibility gate).
 
@@ -1391,14 +1391,14 @@ encoder-report-error knobs (`PhysicsWorld`) and six OTOS-error knobs
 | `encScaleErrR`      | float | `%.3f`      | `0.000`   | Right-wheel REPORTED-encoder fractional scale error (`PhysicsWorld::setEncoderScaleError(1, err)`) |
 | `encSlipL`          | float | `%.3f`      | `0.000`   | Left-wheel REPORTED-encoder under-report fraction (`PhysicsWorld::setEncoderSlip(0, fraction)`) |
 | `encSlipR`          | float | `%.3f`      | `0.000`   | Right-wheel REPORTED-encoder under-report fraction (`PhysicsWorld::setEncoderSlip(1, fraction)`) |
-| `encNoiseL`         | float | `%.3f`      | `0.000`   | Left-wheel REPORTED-encoder Gaussian noise sigma, mm (`PhysicsWorld::setEncoderNoise(0, sigmaMm)`) |
-| `encNoiseR`         | float | `%.3f`      | `0.000`   | Right-wheel REPORTED-encoder Gaussian noise sigma, mm (`PhysicsWorld::setEncoderNoise(1, sigmaMm)`) |
+| `encNoiseL`         | float | `%.3f`      | `0.000`   | Left-wheel REPORTED-encoder Gaussian noise sigma, mm (`PhysicsWorld::setEncoderNoise(0, sigma)`) |
+| `encNoiseR`         | float | `%.3f`      | `0.000`   | Right-wheel REPORTED-encoder Gaussian noise sigma, mm (`PhysicsWorld::setEncoderNoise(1, sigma)`) |
 | `otosLinScaleErr`   | float | `%.3f`      | `0.000`   | OTOS linear fractional scale error (`SimOdometer::setLinearScaleError()`) |
 | `otosAngScaleErr`   | float | `%.3f`      | `0.000`   | OTOS angular fractional scale error (`SimOdometer::setAngularScaleError()`) |
 | `otosLinNoise`      | float | `%.3f`      | `0.000`   | OTOS linear noise sigma (`SimOdometer::setLinearNoiseSigma()`) |
 | `otosYawNoise`      | float | `%.3f`      | `0.000`   | OTOS yaw noise sigma (`SimOdometer::setYawNoiseSigma()`) |
-| `otosLinDriftMmS`   | float | `%.3f`      | `0.000`   | OTOS linear drift, mm/second (wire unit). Converted to/from `SimOdometer`'s internal PER-TICK `_driftPerTickMm` using `RobotConfig::controlPeriodMs`: `per_tick = per_second * (controlPeriodMs / 1000.0f)`, and the inverse on `SIMGET`. |
-| `otosYawDriftDegS`  | float | `%.3f`      | `0.000`   | OTOS yaw drift, degrees/second (wire unit). Converted to/from `SimOdometer`'s internal PER-TICK `_driftPerTickRad` (radians) using BOTH the same time-domain formula as `otosLinDriftMmS` AND a deg↔rad conversion. |
+| `otosLinDriftMmS`   | float | `%.3f`      | `0.000`   | OTOS linear drift, mm/second (wire unit). Converted to/from `SimOdometer`'s internal PER-TICK `_linearDriftPerTick` using `RobotConfig::controlPeriod`: `per_tick = per_second * (controlPeriod / 1000.0f)`, and the inverse on `SIMGET`. |
+| `otosYawDriftDegS`  | float | `%.3f`      | `0.000`   | OTOS yaw drift, degrees/second (wire unit). Converted to/from `SimOdometer`'s internal PER-TICK `_yawDriftPerTick` (radians) using BOTH the same time-domain formula as `otosLinDriftMmS` AND a deg↔rad conversion. |
 
 ---
 

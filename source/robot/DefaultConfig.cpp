@@ -112,7 +112,7 @@ RobotConfig defaultRobotConfig() {
     p.safetyEnabled   = true;
     p.controlPeriod   = 10;
     p.tlmPeriod       = 0;
-    p.tlmFields       = TLM_FIELD_ALL;
+    p.tlmFields       = TLM_FIELD_ALL;  // 068: was 0xFF; widened to include TLM_FIELD_ENCPOSE (bit 8)
     p.tlmSnapPending  = false;
 
     // Sensor lag budgets

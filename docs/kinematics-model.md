@@ -214,15 +214,15 @@ pose controller must not expect to steer at absolute top speed. Keep a small
 The motor controller reports **wheel angle** at **0.1°/LSB**. We convert angle to
 distance:
 ```
-distance_mm = angle_deg × mmPerDeg
+distance_mm = angle_deg × wheelTravelCalib
 ```
-`mmPerDeg ≈ (π · wheel_diameter) / 360`, but gearing and tire compression make the
-effective value differ, so **calibrate empirically per wheel** (`mmPerDegL`,
-`mmPerDegR`): drive a measured straight distance, divide by the angle turned.
+`wheelTravelCalib ≈ (π · wheel_diameter) / 360`, but gearing and tire compression make the
+effective value differ, so **calibrate empirically per wheel** (`wheelTravelCalibL`,
+`wheelTravelCalibR`): drive a measured straight distance, divide by the angle turned.
 
 **Wheel velocity.** Prefer the chip's on-board velocity read (`readSpeed`,
 returns laps/s) converted to mm/s by an **empirically-pinned** laps→mm scale
-(the chip's "lap" may not equal `360·mmPerDeg`; measure it). Fall back to
+(the chip's "lap" may not equal `360·wheelTravelCalib`; measure it). Fall back to
 encoder-delta/dt only if the chip signal proves unreliable. This is the subject
 of the `nezha-chip-velocity-readspeed-0x47` issue.
 
@@ -300,12 +300,12 @@ scheduler that enforces this lives in the `firmware-architecture-refactor` issue
 
 | Param | Meaning |
 |---|---|
-| `mmPerDegL`, `mmPerDegR` | encoder angle→distance, per wheel (2.2) |
-| `trackwidthMm` (b) | track width / wheel separation (1.3, 2.4) |
+| `wheelTravelCalibL`, `wheelTravelCalibR` | encoder angle→distance, per wheel (2.2) |
+| `trackwidth` (b) | track width / wheel separation (1.3, 2.4) |
 | `lapsToMm` | chip-velocity laps/s → mm/s scale (2.2) |
 | `vel.kP/kI/kFF` (per wheel) | inner velocity-PID gains (2.1) |
 | `aMax`, `aDecel` | accel / decel limits (1.6) |
 | `vWheelMax`, `steerHeadroom` | wheel-speed ceiling + steering reserve (1.7) |
 | `turnInPlaceGate` | bearing error above which we rotate first (1.5) |
-| `arriveTolMm` | go-to completion tolerance (2.5) |
+| `arriveTolerance` | go-to completion tolerance (2.5) |
 | `alphaPos`, `alphaYaw`, `otosGate` | fusion gains + outlier gate (2.4) |
