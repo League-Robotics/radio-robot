@@ -614,9 +614,9 @@ msg::CommandBatch Planner::tick(uint32_t now)
     // Goal position / target fields from _target (DesiredState).
     _state.target_x         = _target.targetXWorld;
     _state.target_y         = _target.targetYWorld;
-    _state.target_speed    = _target.targetSpeedMms;
-    _state.distance_target  = _target.distanceTargetMm;
-    _state.deadline         = _target.deadlineMs;
+    _state.target_speed    = _target.targetSpeed;
+    _state.distance_target  = _target.distanceTarget;
+    _state.deadline         = _target.deadline;
 
     return batch;
 }

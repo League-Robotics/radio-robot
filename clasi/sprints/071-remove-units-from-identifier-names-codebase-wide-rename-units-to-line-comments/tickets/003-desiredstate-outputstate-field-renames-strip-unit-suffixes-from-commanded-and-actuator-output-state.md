@@ -2,9 +2,11 @@
 id: '003'
 title: 'DesiredState/OutputState field renames: strip unit suffixes from commanded
   and actuator-output state'
-status: open
-use-cases: [SUC-003]
-depends-on: ['001']
+status: done
+use-cases:
+- SUC-003
+depends-on:
+- '001'
 github-issue: ''
 issue: remove-units-from-identifier-names.md
 completes_issue: false
@@ -49,27 +51,41 @@ renames"), Decision 4; `usecases.md` SUC-003.
 
 ## Acceptance Criteria
 
-- [ ] `source/state/DesiredState.h`: `wheelMms`→`wheelSpeeds`,
+- [x] `source/state/DesiredState.h`: `wheelMms`→`wheelSpeeds`,
       `targetSpeedMms`→`targetSpeed`, `distanceTargetMm`→`distanceTarget`,
       `deadlineMs`→`deadline`; each carries a `// [unit]` comment.
-- [ ] `grep -rn "FIXME" source/state/DesiredState.h` returns zero results.
-- [ ] `source/state/OutputState.h`: `tgtMms`→`tgtSpeed`, carries a
+- [x] `grep -rn "FIXME" source/state/DesiredState.h` returns zero results.
+- [x] `source/state/OutputState.h`: `tgtMms`→`tgtSpeed`, carries a
       `// [mm/s]` comment (the issue's own worked example, matched
       verbatim).
-- [ ] Consumers updated with no stray reference to an old field name
+- [x] Consumers updated with no stray reference to an old field name
       remaining: `source/control/PlannerBegin.cpp`,
       `source/superstructure/Planner.cpp`, `MotionCommandHandlers`,
-      `source/control/BodyVelocityController.cpp`.
-- [ ] `tests/simulation/unit/test_body_velocity_controller.py` and the
+      `source/control/BodyVelocityController.cpp`. (Implementation note:
+      `MotionCommandHandlers` was renamed to `MotionCommands` in an
+      earlier sprint and does not reference these fields directly;
+      `BodyVelocityController` also does not reference them directly. A
+      full member-access sweep found the actual `OutputState::tgtMms`
+      consumers to be `source/control/MotorController.cpp`,
+      `source/subsystems/drive/Drive.cpp`, `source/robot/MecanumHAL.cpp`,
+      and `source/robot/NezhaHAL.cpp` — all updated, no stray references
+      remain anywhere in `source/`.)
+- [x] `tests/simulation/unit/test_body_velocity_controller.py` and the
       `S`/`T`/`D`/`VW` system/unit test tiers pass with unchanged numeric
       assertions (only identifiers in test code/fixtures change, not
-      expected values).
-- [ ] Motor commands and stop timing are byte-identical to pre-ticket for
+      expected values). (No test code/fixtures referenced the old field
+      names, so zero test files needed changes.)
+- [x] Motor commands and stop timing are byte-identical to pre-ticket for
       the same command sequence (spot-check at least one `S`/`T`/`D`/`VW`
-      scenario before/after).
-- [ ] Full test suite green (`uv run python -m pytest`), no new failures
-      against the 2620-passed baseline.
-- [ ] `--clean` sim build performed before running tests.
+      scenario before/after). (`tests/simulation/unit/test_golden_tlm.py`
+      drives a `T 100 100 10000` sequence — exercising both
+      `OutputState::tgtSpeed` and `DesiredState::deadline` — and asserts
+      byte-identical TLM frames against the committed golden capture;
+      passed unchanged.)
+- [x] Full test suite green (`uv run python -m pytest`), no new failures
+      against the 2620-passed baseline. (2621 passed, 0 failed — same
+      count as post-002 baseline on this branch.)
+- [x] `--clean` sim build performed before running tests.
 
 ## Testing
 

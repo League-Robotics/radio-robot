@@ -45,18 +45,18 @@ void MotorController::resetStuckCounters()
 void MotorController::setTarget(float leftMms, float rightMms)
 {
     if (_cmds) {
-        // Write canonical tgtMms[] arrays ([0]=FR=R, [1]=FL=L).
-        _cmds->tgtMms[1] = leftMms;    // FL = index 1
-        _cmds->tgtMms[0] = rightMms;   // FR = index 0
+        // Write canonical tgtSpeed[] arrays ([0]=FR=R, [1]=FL=L).
+        _cmds->tgtSpeed[1] = leftMms;    // FL = index 1
+        _cmds->tgtSpeed[0] = rightMms;   // FR = index 0
     }
 }
 
 void MotorController::startDriveClean(float leftMms, float rightMms)
 {
     if (_cmds) {
-        // Write canonical tgtMms[] arrays ([0]=FR=R, [1]=FL=L).
-        _cmds->tgtMms[1] = leftMms;    // FL = index 1
-        _cmds->tgtMms[0] = rightMms;   // FR = index 0
+        // Write canonical tgtSpeed[] arrays ([0]=FR=R, [1]=FL=L).
+        _cmds->tgtSpeed[1] = leftMms;    // FL = index 1
+        _cmds->tgtSpeed[0] = rightMms;   // FR = index 0
     }
     _fasterIsRight = (fabsf(rightMms) >= fabsf(leftMms));
     float fasterAbs = _fasterIsRight ? fabsf(rightMms) : fabsf(leftMms);
@@ -73,9 +73,9 @@ void MotorController::startDriveClean(float leftMms, float rightMms)
 void MotorController::startDrive(float leftMms, float rightMms)
 {
     if (_cmds) {
-        // Write canonical tgtMms[] arrays ([0]=FR=R, [1]=FL=L) for all builds.
-        _cmds->tgtMms[1] = leftMms;    // FL = index 1
-        _cmds->tgtMms[0] = rightMms;   // FR = index 0
+        // Write canonical tgtSpeed[] arrays ([0]=FR=R, [1]=FL=L) for all builds.
+        _cmds->tgtSpeed[1] = leftMms;    // FL = index 1
+        _cmds->tgtSpeed[0] = rightMms;   // FR = index 0
     }
 
     bool newFasterIsRight = (fabsf(rightMms) >= fabsf(leftMms));
@@ -115,8 +115,8 @@ void MotorController::startDrive(float leftMms, float rightMms)
 void MotorController::stop()
 {
     if (_cmds) {
-        // Zero canonical tgtMms[] arrays.
-        for (int i = 0; i < kWheelCount; ++i) _cmds->tgtMms[i] = 0.0f;
+        // Zero canonical tgtSpeed[] arrays.
+        for (int i = 0; i < kWheelCount; ++i) _cmds->tgtSpeed[i] = 0.0f;
     }
     _vcL.reset();
     _vcR.reset();
@@ -374,7 +374,7 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
 
     // If no drive command active, ensure motors are stopped.
     // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h / OutputState.h.
-    if (cmds.tgtMms[1] == 0.0f && cmds.tgtMms[0] == 0.0f) {
+    if (cmds.tgtSpeed[1] == 0.0f && cmds.tgtSpeed[0] == 0.0f) {
         cmds.pwm[1] = 0;   // canonical array FL
         cmds.pwm[0] = 0;   // canonical array FR
         _motorL.setSpeed(0);
@@ -419,29 +419,29 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
     // the discrepancy is 100 % (one wheel fully stopped).  Proportional blending
     // prevents the bang-bang setpoint switch that caused oscillation.
     // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h / OutputState.h.
-    float effTgtL = cmds.tgtMms[1];   // FL target
-    float effTgtR = cmds.tgtMms[0];   // FR target
+    float effTgtL = cmds.tgtSpeed[1];   // FL target
+    float effTgtR = cmds.tgtSpeed[0];   // FR target
     // Only couple when BOTH wheels drive the SAME direction (straight / curve).
     // For a spin-in-place the targets are opposite-sign (tgtL=-X, tgtR=+X); the
     // "slowest-wheel-governs" math (coupled = velOther/ratio, ratio<0) then
     // collapses the faster wheel toward the lagging one and the spin degenerates
     // to a single wheel. Same-sign-only (product > 0) keeps spins independent.
-    if (_cal.syncGain > 0.0f && cmds.tgtMms[1] * cmds.tgtMms[0] > 0.0f) {
-        float ratio = cmds.tgtMms[0] / cmds.tgtMms[1];        // commanded vR/vL
-        float achL  = inputs.velMms[1] / cmds.tgtMms[1];      // fraction-of-target each wheel does
-        float achR  = inputs.velMms[0] / cmds.tgtMms[0];
+    if (_cal.syncGain > 0.0f && cmds.tgtSpeed[1] * cmds.tgtSpeed[0] > 0.0f) {
+        float ratio = cmds.tgtSpeed[0] / cmds.tgtSpeed[1];        // commanded vR/vL
+        float achL  = inputs.velMms[1] / cmds.tgtSpeed[1];      // fraction-of-target each wheel does
+        float achR  = inputs.velMms[0] / cmds.tgtSpeed[0];
         const float deadband = 0.08f;
         float disc = achL - achR;                              // positive = left ahead
         if (disc > deadband) {
             float blend = _cal.syncGain * (disc - deadband);
             if (blend > 1.0f) blend = 1.0f;
             float coupled = inputs.velMms[0] / ratio;          // fully-matched target
-            effTgtL = cmds.tgtMms[1] * (1.0f - blend) + coupled * blend;
+            effTgtL = cmds.tgtSpeed[1] * (1.0f - blend) + coupled * blend;
         } else if (-disc > deadband) {
             float blend = _cal.syncGain * (-disc - deadband);
             if (blend > 1.0f) blend = 1.0f;
             float coupled = inputs.velMms[1] * ratio;
-            effTgtR = cmds.tgtMms[0] * (1.0f - blend) + coupled * blend;
+            effTgtR = cmds.tgtSpeed[0] * (1.0f - blend) + coupled * blend;
         }
     }
 
@@ -482,7 +482,7 @@ bool MotorController::computeAtRest() const
     // Measured component: _lastVelMmsL/R, refreshed every controlTick() call
     // from the EMA-filtered inputs.velMms[] (see controlTick() above).
     bool cmdAtRest = (!_cmds) ||
-                     (_cmds->tgtMms[0] == 0.0f && _cmds->tgtMms[1] == 0.0f);
+                     (_cmds->tgtSpeed[0] == 0.0f && _cmds->tgtSpeed[1] == 0.0f);
     bool velAtRest = (fabsf(_lastVelMmsL) < kAtRestVelEpsilonMms) &&
                      (fabsf(_lastVelMmsR) < kAtRestVelEpsilonMms);
     return cmdAtRest && velAtRest;

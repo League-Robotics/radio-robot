@@ -335,7 +335,7 @@ void Planner::beginDistance(float leftMms, float rightMms,
 
     // Update target mode; reply sink captured by _activeCmd (not target.replyFn).
     target.mode             = DriveMode::DISTANCE;
-    target.distanceTargetMm = static_cast<float>(targetMm);
+    target.distanceTarget   = static_cast<float>(targetMm);
 }
 
 void Planner::beginGoTo(float tx, float ty, float speedMms, uint32_t now_ms,
@@ -354,7 +354,7 @@ void Planner::beginGoTo(float tx, float ty, float speedMms, uint32_t now_ms,
     target.mode           = DriveMode::GO_TO;
     target.targetXWorld   = _gTargetXWorld;
     target.targetYWorld   = _gTargetYWorld;
-    target.targetSpeedMms = speedMms;
+    target.targetSpeed    = speedMms;
     target.replyFn        = fn;
     target.replyCtx       = ctx;
     if (corr_id && corr_id[0] != '\0') {

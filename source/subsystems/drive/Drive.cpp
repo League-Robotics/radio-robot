@@ -41,7 +41,7 @@ Drive::Drive(IMotor& motorL, IMotor& motorR,
     , _robCfg(cfg)
 {
     // Seed the MotorController's commands reference so setTarget() writes
-    // _outputs.tgtMms[], which controlTick() reads for the velocity PIDs.
+    // _outputs.tgtSpeed[], which controlTick() reads for the velocity PIDs.
     _mc.setCommandsRef(&_outputs);
 
     // Initialise the EKF with config noise params so predict/correct work.
@@ -80,7 +80,7 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
     // controlTick runs the velocity PID and calls _motorL/R.setSpeed().
     // refreshedWheel=3 means both wheels were just collected (same semantics
     // as Drive::periodic).
-    bool driving = (_outputs.tgtMms[1] != 0.0f || _outputs.tgtMms[0] != 0.0f);
+    bool driving = (_outputs.tgtSpeed[1] != 0.0f || _outputs.tgtSpeed[0] != 0.0f);
     _mc.controlTick(_hw, _outputs, now, driving ? 3 : 0);
 
     // ------------------------------------------------------------------
@@ -496,11 +496,11 @@ msg::DrivetrainCapabilities Drive::capabilities() const
 // ---------------------------------------------------------------------------
 void Drive::_runOutlierFilter(uint32_t now)
 {
-    bool driving = (_outputs.tgtMms[1] != 0.0f || _outputs.tgtMms[0] != 0.0f);
+    bool driving = (_outputs.tgtSpeed[1] != 0.0f || _outputs.tgtSpeed[0] != 0.0f);
     if (driving) {
         const float kMaxDeltaMm = fmaxf(40.0f,
-            fmaxf(fabsf((float)_outputs.tgtMms[1]),
-                  fabsf((float)_outputs.tgtMms[0])) * 0.2f);
+            fmaxf(fabsf((float)_outputs.tgtSpeed[1]),
+                  fabsf((float)_outputs.tgtSpeed[0])) * 0.2f);
         static constexpr int kRetries = 2;
 
         // Right (M1) first — proven ordering from WedgeTest.
