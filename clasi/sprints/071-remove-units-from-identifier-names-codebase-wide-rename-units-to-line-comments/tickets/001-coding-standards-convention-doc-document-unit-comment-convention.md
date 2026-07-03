@@ -1,8 +1,9 @@
 ---
 id: '001'
 title: 'Coding-standards convention doc: document unit-comment convention'
-status: open
-use-cases: [SUC-007]
+status: done
+use-cases:
+- SUC-007
 depends-on: []
 github-issue: ''
 issue: remove-units-from-identifier-names.md
@@ -74,28 +75,28 @@ See `architecture-update.md`'s "Comment Convention" section and Decision 5
 
 ## Acceptance Criteria
 
-- [ ] `docs/coding-standards.md` exists (new file) with a "Units in
+- [x] `docs/coding-standards.md` exists (new file) with a "Units in
       Identifiers" section (or equivalent heading).
-- [ ] Documents the C++ convention: leading `// [unit]` tag as the first
+- [x] Documents the C++ convention: leading `// [unit]` tag as the first
       token of the trailing/block comment, with the issue's own worked
       example (`tgtMms` → `tgtSpeed  // [mm/s]`) reproduced verbatim.
-- [ ] Documents the future Python convention (`# [unit]`, sprint 072) as a
+- [x] Documents the future Python convention (`# [unit]`, sprint 072) as a
       forward reference — not applied to any `host/` file by this ticket
       or this sprint.
-- [ ] States the unit-vocabulary rule: reuse the unit text already used
+- [x] States the unit-vocabulary rule: reuse the unit text already used
       elsewhere in the file; do not invent a second vocabulary.
-- [ ] States the dimensionless-field rule: no tag for dimensionless/
+- [x] States the dimensionless-field rule: no tag for dimensionless/
       boolean/enum fields.
-- [ ] States the compound-unit convention with examples (`mm/s`,
+- [x] States the compound-unit convention with examples (`mm/s`,
       `mm/s²`/`mm/s^2`, `deg/s`, `rad²/s`, `mm²/s`).
-- [ ] States the ambiguity-resolution rule (descriptive replacement over
+- [x] States the ambiguity-resolution rule (descriptive replacement over
       bare strip when a collision would result).
-- [ ] States the derived-unit naming rule with the `mmPerDegL/R` →
+- [x] States the derived-unit naming rule with the `mmPerDegL/R` →
       `wheelTravelCalibL/R` worked example.
-- [ ] States the grep-ability rationale (`grep -rn "// \[mm/s\]" source/`
+- [x] States the grep-ability rationale (`grep -rn "// \[mm/s\]" source/`
       finds every declaration of that unit).
-- [ ] No `source/` or `host/` code is modified by this ticket.
-- [ ] Full test suite remains green (`uv run python -m pytest`, 2620
+- [x] No `source/` or `host/` code is modified by this ticket.
+- [x] Full test suite remains green (`uv run python -m pytest`, 2620
       passed, 0 failed) — expected to be a no-op since no code changes.
 
 ## Testing
