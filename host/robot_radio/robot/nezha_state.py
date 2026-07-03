@@ -109,7 +109,7 @@ class NezhaState:
         self._proto.drive(l, r)
 
         now = time.monotonic()
-        for line in self._proto.read_lines(duration_ms=40):
+        for line in self._proto.read_lines(duration=40):
             self._process_line(line)
 
         with self._lock:

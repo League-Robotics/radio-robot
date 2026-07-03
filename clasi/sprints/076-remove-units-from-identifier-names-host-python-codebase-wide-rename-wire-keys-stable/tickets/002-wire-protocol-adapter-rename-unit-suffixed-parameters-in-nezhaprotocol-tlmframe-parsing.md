@@ -2,7 +2,7 @@
 id: '002'
 title: 'Wire-protocol adapter: rename unit-suffixed parameters in NezhaProtocol/TLMFrame
   parsing'
-status: open
+status: done
 use-cases:
 - SUC-001
 depends-on:
@@ -68,35 +68,81 @@ feeding the format string.
 
 ## Acceptance Criteria
 
-- [ ] Every `NezhaProtocol` method listed above (`send`, `ping`, `echo`,
+- [x] Every `NezhaProtocol` method listed above (`send`, `ping`, `echo`,
       `get_id`, `get_ver`, `get_help`, `get_config`, `set_config`, `timed`,
       `distance`, `go_to`, `turn`, `grip`, OTOS/J-port helpers) renames
       `read_ms` → `read_timeout`, each carrying `# [ms]`.
-- [ ] `arc`/`vw`/`drive`/`timed`/`distance`/`go_to`/`turn`'s `speed_mms`/
+      (Verified by re-reading the file: after ticket 001, only `send()`
+      still had a live `read_ms` parameter — `ping`/`echo`/`get_id`/
+      `get_ver`/`get_help`/`get_config`/`set_config`/`timed`/`distance`/
+      `go_to`/`turn`/`grip`/OTOS/J-port helpers already call
+      `self._conn.send(..., read_timeout=<literal>)` internally with no
+      caller-facing timeout parameter of their own — ticket 001 mechanically
+      updated those internal keyword calls. `send()`'s own `read_ms` is
+      renamed to `read_timeout` with `# [ms]`.)
+- [x] `arc`/`vw`/`drive`/`timed`/`distance`/`go_to`/`turn`'s `speed_mms`/
       `radius_mm`/`v_mms`/`omega_mrads`/`left_mms`/`right_mms`/`x_mm`/
       `y_mm`/`heading_cdeg`/`eps_cdeg` are renamed to their bare quantity
       name with a `# [unit]` comment, reusing whatever unit vocabulary the
       surrounding file/docstring already uses (`mm`, `mm/s`, `deg`,
       `cdeg`/centidegree spelling as currently used in file, etc.).
-- [ ] `stream`/`stream_drive`'s `period_ms`/`watchdog_ms`/`duration_ms` are
+- [x] `stream`/`stream_drive`'s `period_ms`/`watchdog_ms`/`duration_ms` are
       renamed to bare + `# [ms]`.
-- [ ] `Stop`'s classmethod parameters (`ms`, `mm`, `cdeg`, `eps_cdeg`,
+      (`duration_ms` does not occur on `stream`/`stream_drive` themselves;
+      as the sole ticket ever touching this file this pass also renamed
+      every other unit-suffixed parameter/local found by a full-file grep —
+      `read_lines`'s `duration_ms`, `drive_until_sensor`'s `left_mms`/
+      `right_mms`/`duration_ms`, `grip`'s `deg`, `otos_set_position`/
+      `set_internal_pose`'s `x_mm`/`y_mm`/`h_cdeg`, `wait_for_evt_done`'s
+      `timeout_ms`, and `ping`'s local `rtt_ms` — so no residual
+      unit-suffixed identifier is left in this file for ticket 009's final
+      sweep to trip over, mirroring ticket 001's own stated rationale.)
+- [x] `Stop`'s classmethod parameters (`ms`, `mm`, `cdeg`, `eps_cdeg`,
       `arc_mm`) are renamed to descriptive names with `# [unit]` tags.
-- [ ] `TLMFrame`'s dataclass field names are byte-identical to pre-076 (git
+- [x] `TLMFrame`'s dataclass field names are byte-identical to pre-076 (git
       diff shows zero changes to the dataclass definition).
-- [ ] `parse_tlm`'s, `parse_response`'s, and `parse_cfg`'s `kv` dict-key
+- [x] `parse_tlm`'s, `parse_response`'s, and `parse_cfg`'s `kv` dict-key
       lookup string literals (`"t"`, `"mode"`, `"seq"`, `"enc"`, `"pose"`,
       `"encpose"`, `"vel"`, `"twist"`, `"otos"`, `"line"`, `"color"`,
       `"ekf_rej"`, `"otos_health"`, `"wedge"`) are byte-identical to
       pre-076.
-- [ ] Every wire-command f-string builder (e.g. `f"R {speed} {radius}"`
+- [x] Every wire-command f-string builder (e.g. `f"R {speed} {radius}"`
       after rename) is confirmed to still emit the identical byte sequence
       as before, for the same input values — spot-check by running a
       protocol round-trip test or comparing formatted strings pre/post.
-- [ ] Every renamed-parameter keyword call site **inside
+      (Confirmed by the full `tests/simulation/unit/test_protocol_v2.py`
+      and `test_motion_verbs_v2.py` / `test_turn_command.py` wire-format
+      assertions passing unchanged.)
+- [x] Every renamed-parameter keyword call site **inside
       `robot/protocol.py` itself** is updated to the new name in this same
       ticket.
-- [ ] Hard Contract above holds.
+- [x] Hard Contract above holds.
+      (Renaming several cross-cutting parameters — `turn`'s `eps_cdeg`,
+      `wait_for_evt_done`'s `timeout_ms`, `read_lines`'s `duration_ms`,
+      `stream_drive`'s `period_ms`/`watchdog_ms` — required updating the
+      matching keyword at external call sites that target `NezhaProtocol`
+      directly (not the calling function's own still-unrenamed parameter),
+      per Decision 2's stated rule and ticket 001's own precedent:
+      `robot/nezha.py`, `robot/nezha_state.py`, `io/cli.py`,
+      `io/sim_conn.py` (docstring example), and
+      `tests/simulation/unit/test_protocol_v2.py` /
+      `test_motion_verbs_v2.py` / `test_turn_command.py`. `tests/bench/`,
+      `tests/field/`, `tests/_infra/` were left untouched — those are
+      ticket 009's explicit responsibility per the architecture's own
+      Step 5 note that bench/field/_infra call sites "weren't touched by
+      001–008a/b's own file-scoped edits." `uv run python -m pytest -q`:
+      2679 passed, 5 failed — the exact 5 pre-existing environmental
+      failures called out by the team-lead's brief (unrelated to this
+      ticket; caused by stakeholder bench-calibration experiment state in
+      `data/robots/active_robot.json` / `source/robot/DefaultConfig.cpp`).
+      `QT_QPA_PLATFORM=offscreen uv run python -m pytest tests/testgui -q`:
+      585 passed, 2 xfailed, 3 failed — all 3 failures are in
+      `tests/testgui/test_commands.py`'s `TestTours` class, caused by the
+      stakeholder's pre-existing uncommitted Tour-definition edits in
+      `host/robot_radio/testgui/commands.py` (explicitly out of this
+      ticket's scope per the team-lead's brief); confirmed unrelated since
+      those assertions compare static wire-format strings in `TOUR_1`/
+      `TOUR_2`, never touching any renamed identifier.)
 
 ## Testing
 

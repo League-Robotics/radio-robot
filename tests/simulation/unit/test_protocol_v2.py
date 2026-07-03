@@ -710,26 +710,26 @@ class TestEVTDone:
     def test_wait_for_evt_done_returns_done(self) -> None:
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T"]
-        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
+        outcome, reason = proto.wait_for_evt_done("T", timeout=1000)
         assert outcome == "done"
 
     def test_wait_for_evt_done_safety_stop(self) -> None:
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT safety_stop"]
-        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
+        outcome, reason = proto.wait_for_evt_done("T", timeout=1000)
         assert outcome == "safety_stop"
 
     def test_wait_for_evt_done_timeout(self) -> None:
         proto, conn = _proto()
         conn.read_lines.return_value = []  # no replies ever
-        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=10)  # very short
+        outcome, reason = proto.wait_for_evt_done("T", timeout=10)  # very short
         assert outcome == "timeout"
 
     def test_wait_for_evt_done_with_matching_corr_id(self) -> None:
         """wait_for_evt_done accepts EVT done T #12 when corr_id='12'."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T #12"]
-        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="12")
+        outcome, reason = proto.wait_for_evt_done("T", timeout=1000, corr_id="12")
         assert outcome == "done"
 
     def test_wait_for_evt_done_skips_wrong_corr_id(self) -> None:
@@ -738,7 +738,7 @@ class TestEVTDone:
         proto, conn = _proto()
         # Always return the wrong id — the filter should skip it and we time out.
         conn.read_lines.side_effect = itertools.repeat(["EVT done T #99"])
-        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=20, corr_id="12")
+        outcome, reason = proto.wait_for_evt_done("T", timeout=20, corr_id="12")
         # Should not accept the wrong id → times out.
         assert outcome == "timeout"
 
@@ -746,14 +746,14 @@ class TestEVTDone:
         """Bare EVT done T (no id) is accepted even when a corr_id filter is set."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T"]
-        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="12")
+        outcome, reason = proto.wait_for_evt_done("T", timeout=1000, corr_id="12")
         assert outcome == "done"
 
     def test_wait_for_evt_done_corr_id_safety_stop(self) -> None:
         """EVT safety_stop #5 is accepted when waiting for corr_id='5'."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT safety_stop #5"]
-        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="5")
+        outcome, reason = proto.wait_for_evt_done("T", timeout=1000, corr_id="5")
         assert outcome == "safety_stop"
 
 
@@ -988,7 +988,7 @@ class TestWaitForEvtDonePaths:
         """wait_for_evt_done returns ('done', None) when EVT done T is received."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T"]
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
+        result, reason = proto.wait_for_evt_done("T", timeout=1000)
         assert result == "done"
         assert reason is None
 
@@ -996,7 +996,7 @@ class TestWaitForEvtDonePaths:
         """wait_for_evt_done returns ('safety_stop', None) when EVT safety_stop is received."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT safety_stop"]
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
+        result, reason = proto.wait_for_evt_done("T", timeout=1000)
         assert result == "safety_stop"
         assert reason is None
 
@@ -1006,14 +1006,14 @@ class TestWaitForEvtDonePaths:
         proto, conn = _proto()
         # Always return the wrong verb — should not match and we time out.
         conn.read_lines.side_effect = itertools.repeat(["EVT done D"])
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=20)
+        result, reason = proto.wait_for_evt_done("T", timeout=20)
         assert result == "timeout"
 
     def test_wait_for_evt_done_timeout_returns_timeout(self) -> None:
         """wait_for_evt_done returns ('timeout', None) when no matching event arrives."""
         proto, conn = _proto()
         conn.read_lines.return_value = []
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=10)
+        result, reason = proto.wait_for_evt_done("T", timeout=10)
         assert result == "timeout"
         assert reason is None
 
@@ -1021,14 +1021,14 @@ class TestWaitForEvtDonePaths:
         """wait_for_evt_done with corr_id accepts EVT done T #7 when id='7'."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T #7"]
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="7")
+        result, reason = proto.wait_for_evt_done("T", timeout=1000, corr_id="7")
         assert result == "done"
 
     def test_wait_for_evt_done_corr_id_safety_stop(self) -> None:
         """wait_for_evt_done with corr_id accepts EVT safety_stop #7 when id='7'."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT safety_stop #7"]
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="7")
+        result, reason = proto.wait_for_evt_done("T", timeout=1000, corr_id="7")
         assert result == "safety_stop"
 
 
@@ -1161,7 +1161,7 @@ class TestStreamDriveKeepalive:
 
         # Collect all send_fast calls by iterating the generator for a limited
         # number of steps, then close it.
-        gen = proto.stream_drive(speeds, period_ms=40, watchdog_ms=watchdog_ms)
+        gen = proto.stream_drive(speeds, period=40, watchdog=watchdog_ms)
 
         # Let the generator run for just enough time to trigger at least one
         # keepalive resend (sleep slightly longer than the keepalive threshold).
@@ -1219,7 +1219,7 @@ class TestStreamDriveKeepalive:
         proto = NezhaProtocol(conn)
 
         speeds = [200, 200]
-        gen = proto.stream_drive(speeds, period_ms=40, watchdog_ms=500)
+        gen = proto.stream_drive(speeds, period=40, watchdog=500)
         # Start the generator, then immediately close it.
         try:
             next(gen)
@@ -1248,7 +1248,7 @@ class TestStreamDriveKeepalive:
 
         proto = NezhaProtocol(conn)
         speeds = [100, 100]
-        gen = proto.stream_drive(speeds, period_ms=40, watchdog_ms=500)
+        gen = proto.stream_drive(speeds, period=40, watchdog=500)
 
         frames = list(gen)  # Should terminate when safety_stop is seen.
         # No frames yielded (safety_stop causes return before yield).
@@ -1480,7 +1480,7 @@ class TestWaitForEvtDoneReason:
         """EVT done T reason=time → ('done', 'time')."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T reason=time"]
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
+        result, reason = proto.wait_for_evt_done("T", timeout=1000)
         assert result == "done"
         assert reason == "time"
 
@@ -1488,7 +1488,7 @@ class TestWaitForEvtDoneReason:
         """EVT done T (no reason=) → ('done', None)."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T"]
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
+        result, reason = proto.wait_for_evt_done("T", timeout=1000)
         assert result == "done"
         assert reason is None
 
@@ -1496,7 +1496,7 @@ class TestWaitForEvtDoneReason:
         """EVT safety_stop reason=watchdog → ('safety_stop', 'watchdog')."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT safety_stop reason=watchdog"]
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
+        result, reason = proto.wait_for_evt_done("T", timeout=1000)
         assert result == "safety_stop"
         assert reason == "watchdog"
 
@@ -1504,7 +1504,7 @@ class TestWaitForEvtDoneReason:
         """Timeout → ('timeout', None)."""
         proto, conn = _proto()
         conn.read_lines.return_value = []
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=10)
+        result, reason = proto.wait_for_evt_done("T", timeout=10)
         assert result == "timeout"
         assert reason is None
 
@@ -1514,7 +1514,7 @@ class TestWaitForEvtDoneReason:
         proto, conn = _proto()
         # Wrong corr_id should be skipped; should time out.
         conn.read_lines.side_effect = itertools.repeat(["EVT done T reason=dist #99"])
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=20, corr_id="7")
+        result, reason = proto.wait_for_evt_done("T", timeout=20, corr_id="7")
         assert result == "timeout"
         assert reason is None
 
@@ -1522,7 +1522,7 @@ class TestWaitForEvtDoneReason:
         """Correct corr_id with reason= → correct tuple."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T reason=sensor #7"]
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="7")
+        result, reason = proto.wait_for_evt_done("T", timeout=1000, corr_id="7")
         assert result == "done"
         assert reason == "sensor"
 

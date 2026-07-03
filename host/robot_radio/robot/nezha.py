@@ -193,7 +193,7 @@ class Nezha(Robot):
         l, r = _clamp(left_mms), _clamp(right_mms)
         speeds = [l, r]
         try:
-            for resp in self._proto.stream_drive(speeds, period_ms=40, watchdog_ms=200):
+            for resp in self._proto.stream_drive(speeds, period=40, watchdog=200):
                 tlm = parse_tlm(resp.raw) if resp.tag == "TLM" else None
                 if tlm and tlm.enc:
                     self._apply_tlm(tlm)
@@ -232,7 +232,7 @@ class Nezha(Robot):
             self._proto.read_pending_lines()
             self._proto.distance(l, r, hop_mm)
 
-            outcome, _ = self._proto.wait_for_evt_done("D", timeout_ms=6000)
+            outcome, _ = self._proto.wait_for_evt_done("D", timeout=6000)
             if outcome == "timeout":
                 self._proto.stop()
                 raise TimeoutError(
@@ -407,13 +407,13 @@ class Nezha(Robot):
             Maximum wall-clock seconds to wait.
         """
         if on_tick is None:
-            self._proto.turn(heading_cdeg, eps_cdeg=eps_cdeg)
+            self._proto.turn(heading_cdeg, eps=eps_cdeg)
             timeout_ms = int(timeout_s * 1000)
             outcome, _ = self._proto.wait_for_evt_done("TURN", timeout_ms)
             return outcome
         else:
             self._proto.stream(80)
-            self._proto.turn(heading_cdeg, eps_cdeg=eps_cdeg)
+            self._proto.turn(heading_cdeg, eps=eps_cdeg)
             return self._run_until_done("TURN", on_tick, timeout_s)
 
     def read_encoders(self) -> tuple[int, int]:
@@ -538,7 +538,7 @@ class Nezha(Robot):
         loop to change velocity mid-stream. Ends naturally on EVT safety_stop.
         """
         for resp in self._proto.stream_drive(
-            speeds, period_ms=period_ms, watchdog_ms=watchdog_ms
+            speeds, period=period_ms, watchdog=watchdog_ms
         ):
             if resp.tag == "TLM":
                 tlm = parse_tlm(resp.raw)

@@ -1450,10 +1450,10 @@ class TestDriveUntilSensorWrapper:
         assert "TURN 9000" in args[0]
 
     def test_turn_with_eps_and_sensor(self) -> None:
-        """turn() with eps_cdeg and sensor= includes both."""
+        """turn() with eps and sensor= includes both."""
         proto, mock_conn = self._make_proto()
         mock_conn.send.return_value = {"responses": ["OK turn heading=9000 eps=100"]}
-        proto.turn(9000, eps_cdeg=100, sensor="colorR:le:200")
+        proto.turn(9000, eps=100, sensor="colorR:le:200")
         args, _ = mock_conn.send.call_args
         cmd = args[0]
         assert "eps=100" in cmd

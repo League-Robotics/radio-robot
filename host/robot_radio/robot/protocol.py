@@ -122,14 +122,14 @@ class Stop:
     """
 
     @classmethod
-    def time(cls, ms: int) -> str:
-        """Stop after ``ms`` milliseconds."""
-        return f"stop=t:{ms}"
+    def time(cls, duration: int) -> str:  # [ms]
+        """Stop after ``duration`` milliseconds."""
+        return f"stop=t:{duration}"
 
     @classmethod
-    def dist(cls, mm: int) -> str:
-        """Stop after ``mm`` millimetres of travel."""
-        return f"stop=d:{mm}"
+    def dist(cls, distance: int) -> str:  # [mm]
+        """Stop after ``distance`` millimetres of travel."""
+        return f"stop=d:{distance}"
 
     @classmethod
     def line(cls, cmp: str, threshold: int) -> str:
@@ -159,14 +159,14 @@ class Stop:
         return f"stop=color:{h}:{s}:{v}:{dist}"
 
     @classmethod
-    def heading(cls, cdeg: int, eps_cdeg: int) -> str:
-        """Stop when the robot reaches heading ``cdeg`` ± ``eps_cdeg`` (centi-degrees)."""
-        return f"stop=heading:{cdeg}:{eps_cdeg}"
+    def heading(cls, heading: int, eps: int) -> str:  # [cdeg]
+        """Stop when the robot reaches heading ``heading`` ± ``eps`` (centi-degrees)."""
+        return f"stop=heading:{heading}:{eps}"
 
     @classmethod
-    def rot(cls, arc_mm: int) -> str:
-        """Stop after ``arc_mm`` millimetres of arc travel."""
-        return f"stop=rot:{arc_mm}"
+    def rot(cls, arc_length: int) -> str:  # [mm]
+        """Stop after ``arc_length`` millimetres of arc travel."""
+        return f"stop=rot:{arc_length}"
 
 
 # ---------------------------------------------------------------------------
@@ -427,17 +427,17 @@ class NezhaProtocol:
     def mode(self) -> str | None:
         return self._conn.mode
 
-    def send(self, cmd: str, read_ms: int = 500) -> dict:
+    def send(self, cmd: str, read_timeout: int = 500) -> dict:  # [ms]
         """Send a v2 command, return raw response dict (for ad-hoc / pass-through)."""
-        return self._conn.send(cmd, read_ms)
+        return self._conn.send(cmd, read_timeout)
 
     def send_fast(self, cmd: str) -> None:
         """Fire-and-forget send with no response reading."""
         self._conn.send_fast(cmd)
 
-    def read_lines(self, duration_ms: int) -> list[str]:
-        """Blocking read for up to duration_ms milliseconds."""
-        return self._conn.read_lines(duration_ms)
+    def read_lines(self, duration: int) -> list[str]:  # [ms]
+        """Blocking read for up to duration milliseconds."""
+        return self._conn.read_lines(duration)
 
     def read_pending_lines(self) -> list[str]:
         """Drain the pending queues without blocking."""
@@ -469,21 +469,21 @@ class NezhaProtocol:
     def ping(self, corr_id: str | None = None) -> tuple[int, float] | None:
         """Send PING, parse OK pong t=<robot_ms>.
 
-        Returns (t_robot_ms, rtt_ms) or None if no valid response.
-        rtt_ms is the round-trip time measured by this call.
+        Returns (t_robot, rtt) or None if no valid response, both in ms.
+        rtt is the round-trip time measured by this call.
         """
         cmd = "PING" if corr_id is None else f"PING #{corr_id}"
         t0 = time.monotonic()
         resp_dict = self._conn.send(cmd, read_timeout=500)
         t1 = time.monotonic()
-        rtt_ms = (t1 - t0) * 1000.0
+        rtt = (t1 - t0) * 1000.0  # [ms]
 
         for raw_line in resp_dict.get("responses", []):
             r = parse_response(raw_line)
             if r and r.tag == "OK" and r.tokens and r.tokens[0] == "pong":
                 if "t" in r.kv:
                     try:
-                        return (int(r.kv["t"]), rtt_ms)
+                        return (int(r.kv["t"]), rtt)
                     except ValueError:
                         pass
         return None
@@ -582,14 +582,14 @@ class NezhaProtocol:
         """Cancel the active motion command (hard stop). Sends X."""
         self._conn.send_fast("X")
 
-    def arc(self, speed_mms: int, radius_mm: int,
+    def arc(self, speed: int, radius: int,  # [mm/s], [mm]
             corr_id: str | None = None,
             stop: list[str] | None = None) -> None:
         """Send R arc command — sets body arc motion (open-ended, no built-in timeout).
 
-        Format: R <speed_mms> <radius_mm> [stop=<kind>:<args> ...] [#id]
-        - ``speed_mms``: forward speed in mm/s (−1000 … +1000).
-        - ``radius_mm``: arc radius in mm (−10000 … +10000; 0 = straight).
+        Format: R <speed> <radius> [stop=<kind>:<args> ...] [#id]
+        - ``speed``: forward speed in mm/s (−1000 … +1000).
+        - ``radius``: arc radius in mm (−10000 … +10000; 0 = straight).
           **Sign convention: positive radius ⇒ CCW (left arc).**
           Matches BodyKinematics::inverse where CCW-positive ω gives vL < vR.
         - ``corr_id``: optional correlation id; echoed in EVT done R.
@@ -603,21 +603,21 @@ class NezhaProtocol:
         Robot replies ``OK arc speed=… radius=…`` synchronously. On soft-stop
         (speed=0), the firmware emits ``EVT done R`` asynchronously.
         """
-        cmd = f"R {speed_mms} {radius_mm}"
+        cmd = f"R {speed} {radius}"
         if stop:
             cmd += " " + " ".join(stop)
         if corr_id is not None:
             cmd += f" #{corr_id}"
         self._conn.send_fast(cmd)
 
-    def vw(self, v_mms: int, omega_mrads: int,
+    def vw(self, v: int, omega: int,  # [mm/s], [mrad/s]
            corr_id: str | None = None,
            stop: list[str] | None = None) -> None:
         """Send a VW command — sets body-twist velocity, resets system watchdog.
 
-        Format: VW <v> <omega_mrads> [stop=<kind>:<args> ...] [#id]
-        - ``v_mms``: forward speed in mm/s (−1000 … +1000).
-        - ``omega_mrads``: yaw rate in milli-radians/s (−3142 … +3142).
+        Format: VW <v> <omega> [stop=<kind>:<args> ...] [#id]
+        - ``v``: forward speed in mm/s (−1000 … +1000).
+        - ``omega``: yaw rate in milli-radians/s (−3142 … +3142).
           Positive = CCW (left turn).
         - ``corr_id``: optional correlation id; echoed in EVT safety_stop.
         - ``stop``: optional list of stop= clause strings from the Stop builder.
@@ -634,14 +634,14 @@ class NezhaProtocol:
         watchdog for those commands.  Non-VW commands have a built-in TIME
         stop net and do not require keepalives.
         """
-        cmd = f"VW {v_mms} {omega_mrads}"
+        cmd = f"VW {v} {omega}"
         if stop:
             cmd += " " + " ".join(stop)
         if corr_id is not None:
             cmd += f" #{corr_id}"
         self._conn.send_fast(cmd)
 
-    def drive(self, left_mms: int, right_mms: int,
+    def drive(self, left: int, right: int,  # [mm/s]
               stop: list[str] | None = None) -> None:
         """Send an S streaming command — sets streaming wheel speeds, resets watchdog.
 
@@ -654,12 +654,13 @@ class NezhaProtocol:
         ``OK vw busy=<origin>`` without updating the command target.  Non-VW
         commands have a built-in TIME stop net and do not require keepalives.
         """
-        cmd = f"S {left_mms} {right_mms}"
+        cmd = f"S {left} {right}"
         if stop:
             cmd += " " + " ".join(stop)
         self._conn.send_fast(cmd)
 
-    def timed(self, left_mms: int, right_mms: int, ms: int,
+    def timed(self, left: int, right: int,  # [mm/s]
+             duration: int,  # [ms]
              sensor: str | None = None,
              stop: list[str] | None = None) -> list[str]:
         """Send T command; return initial response lines.
@@ -675,7 +676,7 @@ class NezhaProtocol:
         Optional ``stop`` is a list of stop= clause strings from the Stop builder.
         Multiple conditions are appended space-separated before any '#id'.
         """
-        cmd = f"T {left_mms} {right_mms} {ms}"
+        cmd = f"T {left} {right} {duration}"
         if sensor is not None:
             cmd += f" sensor={sensor}"
         if stop:
@@ -683,7 +684,8 @@ class NezhaProtocol:
         resp = self._conn.send(cmd, read_timeout=300)
         return resp.get("responses", [])
 
-    def distance(self, left_mms: int, right_mms: int, mm: int,
+    def distance(self, left: int, right: int,  # [mm/s]
+                travel: int,  # [mm]
                 sensor: str | None = None,
                 stop: list[str] | None = None) -> list[str]:
         """Send D command; return initial response lines.
@@ -697,7 +699,7 @@ class NezhaProtocol:
 
         Optional ``stop`` is a list of stop= clause strings from the Stop builder.
         """
-        cmd = f"D {left_mms} {right_mms} {mm}"
+        cmd = f"D {left} {right} {travel}"
         if sensor is not None:
             cmd += f" sensor={sensor}"
         if stop:
@@ -705,26 +707,27 @@ class NezhaProtocol:
         resp = self._conn.send(cmd, read_timeout=300)
         return resp.get("responses", [])
 
-    def go_to(self, x_mm: int, y_mm: int, speed_mms: int) -> list[str]:
+    def go_to(self, x: int, y: int,  # [mm]
+              speed: int) -> list[str]:  # [mm/s]
         """Send G go-to command; return initial response lines.
 
         Format: G <x> <y> <speed>
         Robot replies OK goto ...; later sends EVT done G.
         """
-        resp = self._conn.send(f"G {x_mm} {y_mm} {speed_mms}", read_timeout=300)
+        resp = self._conn.send(f"G {x} {y} {speed}", read_timeout=300)
         return resp.get("responses", [])
 
-    def turn(self, heading_cdeg: int, eps_cdeg: int | None = None,
+    def turn(self, heading: int, eps: int | None = None,  # [cdeg]
              corr_id: str | None = None,
              sensor: str | None = None,
              stop: list[str] | None = None) -> list[str]:
         """Send TURN command — rotate to an absolute heading and stop within eps.
 
-        Format: TURN <heading_cdeg> [eps=<cdeg>] [sensor=<ch>:<op>:<thr>]
+        Format: TURN <heading> [eps=<cdeg>] [sensor=<ch>:<op>:<thr>]
                      [stop=<kind>:<args> ...] [#id]
-        - ``heading_cdeg``: target heading in centidegrees (−18000 … +18000 = ±180°).
+        - ``heading``: target heading in centidegrees (−18000 … +18000 = ±180°).
           Positive values are CCW (matches OTOS CCW convention).
-        - ``eps_cdeg``: optional tolerance in centidegrees (default 300 = 3°;
+        - ``eps``: optional tolerance in centidegrees (default 300 = 3°;
           range 10–1800). Pass a tighter value for calibration use (e.g. 100 = 1°).
         - ``sensor``: optional early-stop modifier; format ``"<ch>:<op>:<thr>"``
           (same as timed() / distance()). Example: sensor="line0:ge:512"
@@ -734,15 +737,15 @@ class NezhaProtocol:
         Robot replies ``OK turn heading=<cdeg> eps=<cdeg>`` synchronously.
         On arrival within eps (or sensor trip): ``EVT done TURN [#<id>]`` emitted async.
 
-        To wait for completion, use ``wait_for_evt_done("TURN", timeout_ms)``.
+        To wait for completion, use ``wait_for_evt_done("TURN", timeout)``.
         Example::
 
-            proto.turn(9000, eps_cdeg=100, corr_id="1")  # turn to +90° (CCW), 1° eps
-            result, reason = proto.wait_for_evt_done("TURN", timeout_ms=10000, corr_id="1")
+            proto.turn(9000, eps=100, corr_id="1")  # turn to +90° (CCW), 1° eps
+            result, reason = proto.wait_for_evt_done("TURN", timeout=10000, corr_id="1")
         """
-        cmd = f"TURN {heading_cdeg}"
-        if eps_cdeg is not None:
-            cmd += f" eps={eps_cdeg}"
+        cmd = f"TURN {heading}"
+        if eps is not None:
+            cmd += f" eps={eps}"
         if sensor is not None:
             cmd += f" sensor={sensor}"
         if stop:
@@ -752,8 +755,8 @@ class NezhaProtocol:
         resp = self._conn.send(cmd, read_timeout=300)
         return resp.get("responses", [])
 
-    def drive_until_sensor(self, left_mms: int, right_mms: int,
-                           duration_ms: int,
+    def drive_until_sensor(self, left: int, right: int,  # [mm/s]
+                           duration: int,  # [ms]
                            channel: str, threshold: int,
                            op: str = "ge") -> list[str]:
         """Drive timed until a sensor crosses a threshold (or duration expires).
@@ -762,9 +765,9 @@ class NezhaProtocol:
         at whichever comes first: the sensor condition or the time limit.
 
         Args:
-            left_mms:   Left wheel speed in mm/s (−1000 … +1000).
-            right_mms:  Right wheel speed in mm/s (−1000 … +1000).
-            duration_ms: Maximum duration in ms (1 … 30000). Acts as a safety timeout.
+            left:   Left wheel speed in mm/s (−1000 … +1000).
+            right:  Right wheel speed in mm/s (−1000 … +1000).
+            duration: Maximum duration in ms (1 … 30000). Acts as a safety timeout.
             channel:    Sensor channel name: line0–line3, colorR, colorG, colorB, colorC.
             threshold:  Integer threshold in raw sensor units (uint16_t ADC counts).
             op:         Comparison operator: "ge" (≥, default) or "le" (≤).
@@ -773,24 +776,24 @@ class NezhaProtocol:
             Initial response lines from the firmware (OK drive … or ERR …).
             EVT done T is emitted asynchronously; wait with wait_for_evt_done("T").
 
-        Wire format: ``T <left_mms> <right_mms> <duration_ms> sensor=<channel>:<op>:<threshold>``
+        Wire format: ``T <left> <right> <duration> sensor=<channel>:<op>:<threshold>``
 
         Example::
 
             proto.drive_until_sensor(200, 200, 10000, "line0", 512)
-            result, reason = proto.wait_for_evt_done("T", timeout_ms=12000)
+            result, reason = proto.wait_for_evt_done("T", timeout=12000)
             # result is "done" (sensor tripped) or "timeout"; reason is e.g. "sensor" or None
         """
         sensor_token = f"{channel}:{op}:{threshold}"
-        return self.timed(left_mms, right_mms, duration_ms, sensor=sensor_token)
+        return self.timed(left, right, duration, sensor=sensor_token)
 
-    def grip(self, deg: int | None = None) -> int | None:
-        """Send GRIP [deg] command. Returns confirmed degree or None.
+    def grip(self, angle: int | None = None) -> int | None:  # [deg]
+        """Send GRIP [angle] command. Returns confirmed degree or None.
 
-        Format: GRIP <deg>  or  GRIP (query only)
+        Format: GRIP <angle>  or  GRIP (query only)
         Robot replies OK grip deg=<deg>.
         """
-        cmd = f"GRIP {deg}" if deg is not None else "GRIP"
+        cmd = f"GRIP {angle}" if angle is not None else "GRIP"
         resp = self._conn.send(cmd, read_timeout=300)
         for raw_line in resp.get("responses", []):
             r = parse_response(raw_line)
@@ -817,12 +820,12 @@ class NezhaProtocol:
     # Telemetry streaming
     # ------------------------------------------------------------------
 
-    def stream(self, period_ms: int) -> None:
+    def stream(self, period: int) -> None:  # [ms]
         """Set TLM streaming period in ms (0 = off).
 
         Format: STREAM <ms>
         """
-        self._conn.send(f"STREAM {period_ms}", read_timeout=300)
+        self._conn.send(f"STREAM {period}", read_timeout=300)
 
     def stream_fields(self, fields: str) -> None:
         """Set TLM streaming with a field subset.
@@ -875,7 +878,8 @@ class NezhaProtocol:
         self._conn.send("OR", read_timeout=200)
 
     def otos_get_position(self) -> tuple[int, int, int] | None:
-        """Query OTOS position (OP command). Returns (x_mm, y_mm, h_cdeg) or None."""
+        """Query OTOS position (OP command). Returns (x, y, heading) or None
+        (x, y in mm, heading in cdeg)."""
         resp = self._conn.send("OP", read_timeout=300)
         for raw_line in resp.get("responses", []):
             r = parse_response(raw_line)
@@ -886,22 +890,24 @@ class NezhaProtocol:
                     pass
         return None
 
-    def otos_set_position(self, x_mm: int, y_mm: int, h_cdeg: int) -> None:
+    def otos_set_position(self, x: int, y: int,  # [mm]
+                          heading: int) -> None:  # [cdeg]
         """Set OTOS world-frame position (OV command) — nudges the RAW OTOS chip
         only; does NOT set the motion controller's pose.  Prefer set_internal_pose
         (SI) for a camera fix.  NOTE: OV writes the chip's raw registers, which
         readTransformed then rotates by the OTOS mount angle (odomYawDeg) — so a
         world (x,y) passed here lands rotated; that mismatch is why OV must not be
         used to anchor the world pose."""
-        self._conn.send(f"OV {x_mm} {y_mm} {h_cdeg}", read_timeout=300)
+        self._conn.send(f"OV {x} {y} {heading}", read_timeout=300)
 
-    def set_internal_pose(self, x_mm: int, y_mm: int, h_cdeg: int) -> None:
+    def set_internal_pose(self, x: int, y: int,  # [mm]
+                          heading: int) -> None:  # [cdeg]
         """Set the motion controller's onboard pose from an external (camera) fix
         (SI command -> Odometry::setPose).  This writes poseX/poseY/poseHrad — the
         pose getPose/telemetry report and G/D/TURN drive against — so the robot
         tracks in WORLD coordinates.  Heading is centi-degrees in the camera world
         frame (0 = +x/east, CCW-positive)."""
-        self._conn.send(f"SI {x_mm} {y_mm} {h_cdeg}", read_timeout=300)
+        self._conn.send(f"SI {x} {y} {heading}", read_timeout=300)
 
     def otos_set_linear_scalar(self, val: int) -> int | None:
         """Set OTOS linear scalar (OL <val> command). Returns confirmed value or None."""
@@ -991,7 +997,7 @@ class NezhaProtocol:
     # Blocking drive helpers (wait for EVT done or safety_stop)
     # ------------------------------------------------------------------
 
-    def wait_for_evt_done(self, verb: str, timeout_ms: int,
+    def wait_for_evt_done(self, verb: str, timeout: int,  # [ms]
                           corr_id: str | None = None) -> tuple[str, str | None]:
         """Block until 'EVT done <verb>' or 'EVT safety_stop' arrives.
 
@@ -1005,7 +1011,7 @@ class NezhaProtocol:
         EVT lines without any id) are accepted.  This lets the host distinguish
         completions when multiple correlated drives are in flight.
         """
-        deadline = time.time() + timeout_ms / 1000.0
+        deadline = time.time() + timeout / 1000.0
         while time.time() < deadline:
             for raw_line in self._conn.read_lines(duration=100):
                 r = parse_response(raw_line)
@@ -1035,8 +1041,8 @@ class NezhaProtocol:
         self,
         speeds: list[int],
         *,
-        period_ms: int = 40,
-        watchdog_ms: int = 500,
+        period: int = 40,  # [ms]
+        watchdog: int = 500,  # [ms]
     ) -> Generator[ParsedResponse, None, None]:
         """Streaming drive generator. Yields ParsedResponse for each incoming line.
 
@@ -1045,13 +1051,13 @@ class NezhaProtocol:
         Ends naturally on EVT safety_stop.
 
         Args:
-            speeds: Mutable [left_mms, right_mms] list; mutate to steer.
-            period_ms: TLM streaming period in ms.
-            watchdog_ms: S keepalive deadline (ms); must re-send within firmware
+            speeds: Mutable [left, right] list (mm/s); mutate to steer.
+            period: TLM streaming period in ms.
+            watchdog: S keepalive deadline (ms); must re-send within firmware
                 watchdog timeout or motors stop.
         """
-        self.stream(period_ms)
-        keepalive_s = watchdog_ms * 0.30 / 1000.0
+        self.stream(period)
+        keepalive_s = watchdog * 0.30 / 1000.0
 
         def _resend_if_due(last: float) -> float:
             now = time.monotonic()

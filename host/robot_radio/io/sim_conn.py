@@ -12,7 +12,7 @@ Usage::
     conn.connect()
     proto = NezhaProtocol(conn)
     proto.timed(200, 200, 2500)
-    proto.wait_for_evt_done("T", timeout_ms=5000)
+    proto.wait_for_evt_done("T", timeout=5000)
     df = conn.state_df()   # pandas DataFrame of time-series state
 
 The sim backend advances wall-clock time explicitly: every call to
