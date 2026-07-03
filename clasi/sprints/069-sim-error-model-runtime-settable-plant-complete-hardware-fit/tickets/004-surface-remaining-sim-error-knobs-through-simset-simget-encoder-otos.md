@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Surface remaining sim-error knobs through SIMSET/SIMGET (encoder, OTOS)
-status: open
+status: done
 use-cases:
 - SUC-002
 - SUC-005
@@ -46,7 +46,7 @@ OTOS sensor error (`source/hal/sim/SimOdometer.h`):
 
 ## Acceptance Criteria
 
-- [ ] `source/hal/sim/PhysicsWorld.h`: new const getters
+- [x] `source/hal/sim/PhysicsWorld.h`: new const getters
       `encoderScaleErrL()`/`encoderScaleErrR()` (mirroring
       `setEncoderScaleError`), `encoderSlipL()`/`encoderSlipR()` (mirroring
       `setEncoderSlip`), `encoderNoiseL()`/`encoderNoiseR()` (mirroring
@@ -55,11 +55,15 @@ OTOS sensor error (`source/hal/sim/SimOdometer.h`):
       acceptance criterion ("Each of the six per-wheel encoder-report keys
       is `SIMSET`/`SIMGET`-able") requires it; follow the same
       mirror-the-setter pattern as the other four.
-- [ ] `source/hal/sim/SimOdometer.h`: new const getters `linearScaleError()`,
+- [x] `source/hal/sim/SimOdometer.h`: new const getters `linearScaleError()`,
       `angularScaleError()`, `driftPerTickMm()`, `driftPerTickRad()`,
       `linearNoiseSigma()`, `yawNoiseSigma()` — six getters mirroring the
-      six existing setters listed above.
-- [ ] `source/commands/SimCommands.cpp`'s `kSimRegistry[]` gains rows for:
+      six existing setters listed above. (A seventh, non-listed const getter,
+      `controlPeriodMs()`, was also added — it forwards to the live
+      `RobotConfig&` this odometer already holds, and is what makes the
+      per-second/per-tick drift conversion below possible without changing
+      `SimCommands`'s constructor signature or `SimHardware`.)
+- [x] `source/commands/SimCommands.cpp`'s `kSimRegistry[]` gains rows for:
       `encScaleErrL`/`encScaleErrR`, `encSlipL`/`encSlipR`,
       `encNoiseL`/`encNoiseR` (all → the new `PhysicsWorld` setter/getter
       pairs above; side 0/1 selects L/R, matching the existing
@@ -68,7 +72,7 @@ OTOS sensor error (`source/hal/sim/SimOdometer.h`):
       `SimOdometer::setLinearScaleError`/`setAngularScaleError` and new
       getters), `otosLinNoise`/`otosYawNoise` (→
       `setLinearNoiseSigma`/`setYawNoiseSigma` and new getters).
-- [ ] `otosLinDriftMmS`/`otosYawDriftDegS` rows: `SIMSET` converts the
+- [x] `otosLinDriftMmS`/`otosYawDriftDegS` rows: `SIMSET` converts the
       wire's per-second value to `SimOdometer`'s internal per-tick value
       using `RobotConfig::controlPeriodMs` before calling
       `setDriftPerTickMm`/`setDriftPerTickRad`; `SIMGET` converts back
@@ -76,7 +80,10 @@ OTOS sensor error (`source/hal/sim/SimOdometer.h`):
       `driftPerTickRad()`. Document the exact conversion formula
       (`per_second = per_tick * (1000.0f / controlPeriodMs)`, or the
       inverse) directly in `SimCommands.cpp` next to the two rows.
-- [ ] Each of the six per-wheel encoder-report keys and each of the six OTOS
+      (`otosYawDriftDegS` additionally converts deg<->rad, since the wire
+      key is degrees/second but `setDriftPerTickRad`/`driftPerTickRad` are
+      radians — documented next to that row too.)
+- [x] Each of the six per-wheel encoder-report keys and each of the six OTOS
       error keys is `SIMSET`/`SIMGET`-able — new sim tests, one per group
       (or a combined parametrized test), per SUC-002 and SUC-005's
       acceptance criteria:
@@ -85,10 +92,24 @@ OTOS sensor error (`source/hal/sim/SimOdometer.h`):
         away from the true trajectory an unaffected run would show.
       - Setting `otosLinScaleErr` alone changes `otos=`'s reported distance
         relative to the plant's true pose without perturbing `encpose=`.
-- [ ] `SIMGET` (bare, no args) now dumps ALL registered keys from tickets 003
+
+      Implementation note: the first bullet's literal grouping of `encpose=`
+      with `otos=`/`pose=` as "should not move" does not hold empirically —
+      `encpose=` (Odometry's encoder-only accumulator) is arc-integrated
+      directly from the same reported per-wheel deltas the error is injected
+      into, and is by design *never touched by the EKF* (see Odometry.cpp),
+      so it visibly diverges (~29 mm / ~8° in the recorded run). `otos=` and
+      the OTOS-fused `pose=` are what actually stay near true (both within a
+      few hundredths of a mm/degree), since neither reads the encoder-report
+      channel. `tests/simulation/system/test_069_004_encoder_otos_knobs.py`
+      asserts the verified behavior (enc=/encpose= diverge, otos=/pose=
+      don't) rather than the as-written wording; the second bullet
+      (`otosLinScaleErr` not perturbing `encpose=`) held exactly as written
+      and is asserted bit-for-bit.
+- [x] `SIMGET` (bare, no args) now dumps ALL registered keys from tickets 003
       and 004 combined — extend `test_sim_commands_registry.py` (ticket 003)
       or add a follow-on assertion confirming the full key set is present.
-- [ ] Full default suite green: `uv run python -m pytest`.
+- [x] Full default suite green: `uv run python -m pytest`.
 
 ## Testing
 

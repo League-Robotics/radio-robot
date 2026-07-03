@@ -247,6 +247,19 @@ public:
     float offsetFactorL() const { return _offsetFactorL; }
     float offsetFactorR() const { return _offsetFactorR; }
 
+    // Per-wheel encoder-report-error accessors (069-004) — mirror the
+    // existing setEncoderScaleError()/setEncoderSlip()/setEncoderNoise()
+    // setters (058-001 lineage), write-only until now. encoderNoiseL/R()
+    // are not named in architecture-update.md's Step 5 getter list, but
+    // SUC-002 requires all six per-wheel keys to be SIMGET-able, so they
+    // follow the same mirror-the-setter pattern as the other four.
+    float encoderScaleErrL() const { return _encScaleErrL; }
+    float encoderScaleErrR() const { return _encScaleErrR; }
+    float encoderSlipL()     const { return _encSlipL; }
+    float encoderSlipR()     const { return _encSlipR; }
+    float encoderNoiseL()    const { return _encNoiseSigmaL; }
+    float encoderNoiseR()    const { return _encNoiseSigmaR; }
+
 private:
     // --- Commanded actuator state ---
     int8_t _pwmL = 0;

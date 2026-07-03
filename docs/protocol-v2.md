@@ -1370,21 +1370,36 @@ SIMSET motorOffsetL=0.95 motorOffsetR=1.05
 OK simset motorOffsetL=0.95 motorOffsetR=1.05
 ```
 
-### Named Key Table (ticket 003's first batch)
+### Named Key Table
 
 `kSimRegistry[]` (`source/commands/SimCommands.cpp`) dispatches through
 named setter/getter FUNCTION POINTERS over `SimHardware&`, not `offsetof` —
 `PhysicsWorld` is an encapsulated class with invariants, not a POD struct
-(see architecture-update.md Design Rationale Decision 3). Ticket 004 appends
-encoder-report-error and OTOS-error rows to this same table.
+(see architecture-update.md Design Rationale Decision 3). Rows 1–5 are
+ticket 003's first batch; rows 6–17 (069-004) surface six per-wheel
+encoder-report-error knobs (`PhysicsWorld`) and six OTOS-error knobs
+(`SimOdometer`) that were already fully implemented but write-only, reachable
+(if at all) only through legacy per-field ctypes test hooks.
 
-| Key            | Type  | Wire format | Default | Meaning                                          |
-|----------------|-------|-------------|---------|---------------------------------------------------|
-| `bodyRotScrub` | float | `%.3f`      | `1.000` | Independent plant body-rotational scrub (069-002); combines multiplicatively with the legacy `_rotationalSlip`/`setSlip()` channel |
-| `bodyLinScrub` | float | `%.3f`      | `1.000` | Independent plant body-linear scrub (069-002)     |
-| `trackwidthMm` | float | `%.3f`      | `128.000` | Robot trackwidth (mm); forwards to `SimHardware::setTrackwidth()` |
-| `motorOffsetL` | float | `%.3f`      | `1.000` | Left-wheel plant offset factor (`PhysicsWorld::setOffsetFactor(0, f)`) |
-| `motorOffsetR` | float | `%.3f`      | `1.000` | Right-wheel plant offset factor (`PhysicsWorld::setOffsetFactor(1, f)`) |
+| Key                 | Type  | Wire format | Default   | Meaning                                          |
+|---------------------|-------|-------------|-----------|---------------------------------------------------|
+| `bodyRotScrub`      | float | `%.3f`      | `1.000`   | Independent plant body-rotational scrub (069-002); combines multiplicatively with the legacy `_rotationalSlip`/`setSlip()` channel |
+| `bodyLinScrub`      | float | `%.3f`      | `1.000`   | Independent plant body-linear scrub (069-002)     |
+| `trackwidthMm`      | float | `%.3f`      | `128.000` | Robot trackwidth (mm); forwards to `SimHardware::setTrackwidth()` |
+| `motorOffsetL`      | float | `%.3f`      | `1.000`   | Left-wheel plant offset factor (`PhysicsWorld::setOffsetFactor(0, f)`) |
+| `motorOffsetR`      | float | `%.3f`      | `1.000`   | Right-wheel plant offset factor (`PhysicsWorld::setOffsetFactor(1, f)`) |
+| `encScaleErrL`      | float | `%.3f`      | `0.000`   | Left-wheel REPORTED-encoder fractional scale error (`PhysicsWorld::setEncoderScaleError(0, err)`); true accumulator/chassis pose unaffected |
+| `encScaleErrR`      | float | `%.3f`      | `0.000`   | Right-wheel REPORTED-encoder fractional scale error (`PhysicsWorld::setEncoderScaleError(1, err)`) |
+| `encSlipL`          | float | `%.3f`      | `0.000`   | Left-wheel REPORTED-encoder under-report fraction (`PhysicsWorld::setEncoderSlip(0, fraction)`) |
+| `encSlipR`          | float | `%.3f`      | `0.000`   | Right-wheel REPORTED-encoder under-report fraction (`PhysicsWorld::setEncoderSlip(1, fraction)`) |
+| `encNoiseL`         | float | `%.3f`      | `0.000`   | Left-wheel REPORTED-encoder Gaussian noise sigma, mm (`PhysicsWorld::setEncoderNoise(0, sigmaMm)`) |
+| `encNoiseR`         | float | `%.3f`      | `0.000`   | Right-wheel REPORTED-encoder Gaussian noise sigma, mm (`PhysicsWorld::setEncoderNoise(1, sigmaMm)`) |
+| `otosLinScaleErr`   | float | `%.3f`      | `0.000`   | OTOS linear fractional scale error (`SimOdometer::setLinearScaleError()`) |
+| `otosAngScaleErr`   | float | `%.3f`      | `0.000`   | OTOS angular fractional scale error (`SimOdometer::setAngularScaleError()`) |
+| `otosLinNoise`      | float | `%.3f`      | `0.000`   | OTOS linear noise sigma (`SimOdometer::setLinearNoiseSigma()`) |
+| `otosYawNoise`      | float | `%.3f`      | `0.000`   | OTOS yaw noise sigma (`SimOdometer::setYawNoiseSigma()`) |
+| `otosLinDriftMmS`   | float | `%.3f`      | `0.000`   | OTOS linear drift, mm/second (wire unit). Converted to/from `SimOdometer`'s internal PER-TICK `_driftPerTickMm` using `RobotConfig::controlPeriodMs`: `per_tick = per_second * (controlPeriodMs / 1000.0f)`, and the inverse on `SIMGET`. |
+| `otosYawDriftDegS`  | float | `%.3f`      | `0.000`   | OTOS yaw drift, degrees/second (wire unit). Converted to/from `SimOdometer`'s internal PER-TICK `_driftPerTickRad` (radians) using BOTH the same time-domain formula as `otosLinDriftMmS` AND a deg↔rad conversion. |
 
 ---
 

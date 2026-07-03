@@ -90,6 +90,10 @@ void SimOdometer::setPositionRaw(int16_t x, int16_t y, int16_t h) {
     _odomH = static_cast<float>(h) * kHdgRadPerLsb;
 }
 
+int32_t SimOdometer::controlPeriodMs() const {
+    return _cfg.controlPeriodMs;
+}
+
 void SimOdometer::setInjectedPose(float x, float y, float h) {
     _injectedX = x;
     _injectedY = y;

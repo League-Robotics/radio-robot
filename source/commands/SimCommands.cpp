@@ -63,14 +63,121 @@ static float getMotorOffsetL(SimHardware& hal)          { return hal.plant().off
 static void  setMotorOffsetR(SimHardware& hal, float v) { hal.plant().setOffsetFactor(1, v); }
 static float getMotorOffsetR(SimHardware& hal)          { return hal.plant().offsetFactorR(); }
 
-// kSimRegistry[] -- ticket 003's first batch.  Ticket 004 appends the
-// encoder-report-error / OTOS-error rows to this SAME table.
+// ---------------------------------------------------------------------------
+// 069-004 additions below -- six per-wheel encoder-report-error rows (already
+// implemented in PhysicsWorld, 058-001 lineage; only the getters and the wire
+// row were missing) and six OTOS-error rows (already implemented in
+// SimOdometer; same gap).
+// ---------------------------------------------------------------------------
+
+// encScaleErrL / encScaleErrR -- PhysicsWorld::setEncoderScaleError(side, err);
+// new encoderScaleErrL()/encoderScaleErrR() getters (added this ticket).
+static void  setEncScaleErrL(SimHardware& hal, float v) { hal.plant().setEncoderScaleError(0, v); }
+static float getEncScaleErrL(SimHardware& hal)          { return hal.plant().encoderScaleErrL(); }
+
+static void  setEncScaleErrR(SimHardware& hal, float v) { hal.plant().setEncoderScaleError(1, v); }
+static float getEncScaleErrR(SimHardware& hal)          { return hal.plant().encoderScaleErrR(); }
+
+// encSlipL / encSlipR -- PhysicsWorld::setEncoderSlip(side, fraction); new
+// encoderSlipL()/encoderSlipR() getters (added this ticket).
+static void  setEncSlipL(SimHardware& hal, float v) { hal.plant().setEncoderSlip(0, v); }
+static float getEncSlipL(SimHardware& hal)          { return hal.plant().encoderSlipL(); }
+
+static void  setEncSlipR(SimHardware& hal, float v) { hal.plant().setEncoderSlip(1, v); }
+static float getEncSlipR(SimHardware& hal)          { return hal.plant().encoderSlipR(); }
+
+// encNoiseL / encNoiseR -- PhysicsWorld::setEncoderNoise(side, sigmaMm); new
+// encoderNoiseL()/encoderNoiseR() getters (added this ticket -- flagged by
+// the ticket as needed for SUC-002's GET-able requirement even though
+// architecture-update.md's Step 5 getter list didn't name them explicitly).
+static void  setEncNoiseL(SimHardware& hal, float v) { hal.plant().setEncoderNoise(0, v); }
+static float getEncNoiseL(SimHardware& hal)          { return hal.plant().encoderNoiseL(); }
+
+static void  setEncNoiseR(SimHardware& hal, float v) { hal.plant().setEncoderNoise(1, v); }
+static float getEncNoiseR(SimHardware& hal)          { return hal.plant().encoderNoiseR(); }
+
+// otosLinScaleErr / otosAngScaleErr -- SimOdometer::setLinearScaleError()/
+// setAngularScaleError(); new linearScaleError()/angularScaleError() getters.
+static void  setOtosLinScaleErr(SimHardware& hal, float v) { hal.simOdometer().setLinearScaleError(v); }
+static float getOtosLinScaleErr(SimHardware& hal)          { return hal.simOdometer().linearScaleError(); }
+
+static void  setOtosAngScaleErr(SimHardware& hal, float v) { hal.simOdometer().setAngularScaleError(v); }
+static float getOtosAngScaleErr(SimHardware& hal)          { return hal.simOdometer().angularScaleError(); }
+
+// otosLinNoise / otosYawNoise -- SimOdometer::setLinearNoiseSigma()/
+// setYawNoiseSigma(); already reachable write-only via the legacy
+// sim_set_otos_linear_noise/sim_set_otos_yaw_noise ctypes functions
+// (tests/_infra/sim/sim_api.cpp:681,684), never readable or wire-reachable
+// until now.
+static void  setOtosLinNoise(SimHardware& hal, float v) { hal.simOdometer().setLinearNoiseSigma(v); }
+static float getOtosLinNoise(SimHardware& hal)          { return hal.simOdometer().linearNoiseSigma(); }
+
+static void  setOtosYawNoise(SimHardware& hal, float v) { hal.simOdometer().setYawNoiseSigma(v); }
+static float getOtosYawNoise(SimHardware& hal)          { return hal.simOdometer().yawNoiseSigma(); }
+
+// otosLinDriftMmS / otosYawDriftDegS -- the wire keys are PER-SECOND;
+// SimOdometer::setDriftPerTickMm()/setDriftPerTickRad() (and
+// driftPerTickMm()/driftPerTickRad()) are PER-TICK internally: tick() adds
+// the FULL per-tick value once per call, and tick() fires once per
+// RobotConfig::controlPeriodMs (source/types/Config.h:167; see
+// SimOdometer::tick()'s unconditional `_odomX += _driftPerTickMm` /
+// `_odomH += _driftPerTickRad`, source/hal/sim/SimOdometer.cpp). Conversion
+// formula (both directions read the SAME live controlPeriodMs via
+// SimOdometer::controlPeriodMs(), so a runtime `SET ctrlPeriod=…` is honored
+// immediately, per 067's live-reference rule):
+//
+//     per_tick   = per_second * (controlPeriodMs / 1000.0f)
+//     per_second = per_tick   * (1000.0f / controlPeriodMs)
+//
+// otosYawDriftDegS is additionally deg<->rad converted: the wire key is
+// degrees/second (issue-1's plumbing guidance), but setDriftPerTickRad()'s
+// argument -- and the internal _driftPerTickRad accumulator it feeds -- is
+// radians.
+static const float kDegToRad004 = 3.14159265358979323846f / 180.0f;
+static const float kRadToDeg004 = 180.0f / 3.14159265358979323846f;
+
+static void  setOtosLinDriftMmS(SimHardware& hal, float v) {
+    float periodMs = static_cast<float>(hal.simOdometer().controlPeriodMs());
+    hal.simOdometer().setDriftPerTickMm(v * (periodMs / 1000.0f));
+}
+static float getOtosLinDriftMmS(SimHardware& hal) {
+    float periodMs = static_cast<float>(hal.simOdometer().controlPeriodMs());
+    if (periodMs <= 0.0f) return 0.0f;
+    return hal.simOdometer().driftPerTickMm() * (1000.0f / periodMs);
+}
+
+static void  setOtosYawDriftDegS(SimHardware& hal, float v) {
+    float periodMs  = static_cast<float>(hal.simOdometer().controlPeriodMs());
+    float radPerSec = v * kDegToRad004;
+    hal.simOdometer().setDriftPerTickRad(radPerSec * (periodMs / 1000.0f));
+}
+static float getOtosYawDriftDegS(SimHardware& hal) {
+    float periodMs = static_cast<float>(hal.simOdometer().controlPeriodMs());
+    if (periodMs <= 0.0f) return 0.0f;
+    float radPerSec = hal.simOdometer().driftPerTickRad() * (1000.0f / periodMs);
+    return radPerSec * kRadToDeg004;
+}
+
+// kSimRegistry[] -- ticket 003's first batch (rows 1-5). Ticket 004 appends
+// the encoder-report-error / OTOS-error rows below (rows 6-17).
 static const SimEntry kSimRegistry[] = {
     { "bodyRotScrub", setBodyRotScrub, getBodyRotScrub },
     { "bodyLinScrub", setBodyLinScrub, getBodyLinScrub },
     { "trackwidthMm", setTrackwidthMm, getTrackwidthMm },
     { "motorOffsetL", setMotorOffsetL, getMotorOffsetL },
     { "motorOffsetR", setMotorOffsetR, getMotorOffsetR },
+    { "encScaleErrL", setEncScaleErrL, getEncScaleErrL },
+    { "encScaleErrR", setEncScaleErrR, getEncScaleErrR },
+    { "encSlipL",     setEncSlipL,     getEncSlipL },
+    { "encSlipR",     setEncSlipR,     getEncSlipR },
+    { "encNoiseL",    setEncNoiseL,    getEncNoiseL },
+    { "encNoiseR",    setEncNoiseR,    getEncNoiseR },
+    { "otosLinScaleErr",  setOtosLinScaleErr,  getOtosLinScaleErr },
+    { "otosAngScaleErr",  setOtosAngScaleErr,  getOtosAngScaleErr },
+    { "otosLinNoise",     setOtosLinNoise,     getOtosLinNoise },
+    { "otosYawNoise",     setOtosYawNoise,     getOtosYawNoise },
+    { "otosLinDriftMmS",  setOtosLinDriftMmS,  getOtosLinDriftMmS },
+    { "otosYawDriftDegS", setOtosYawDriftDegS, getOtosYawDriftDegS },
 };
 static const int kSimRegistryCount = (int)(sizeof(kSimRegistry) / sizeof(kSimRegistry[0]));
 
