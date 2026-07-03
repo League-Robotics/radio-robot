@@ -94,7 +94,8 @@ public:
             : static_cast<IOdometer*>(&_otos);
     }
 
-    BenchOtosSensor* benchOtosPtr() { return &_benchOtos; }
+    // Overrides Hardware::benchOtosPtr (074-001).
+    BenchOtosSensor* benchOtosPtr() override { return &_benchOtos; }
 
     bool isBenchMode() const override {
         return _otosActive == static_cast<const IOdometer*>(&_benchOtos);

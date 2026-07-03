@@ -105,7 +105,8 @@ public:
     }
 
     // Direct accessor to the BenchOtosSensor for tick() calls and noise tuning.
-    BenchOtosSensor* benchOtosPtr() { return &_benchOtos; }
+    // Overrides Hardware::benchOtosPtr (074-001).
+    BenchOtosSensor* benchOtosPtr() override { return &_benchOtos; }
 
     // Returns true when the bench sensor is currently active.  Overrides
     // Hardware::isBenchMode (034-003).

@@ -4,10 +4,16 @@
 //
 // Message-contract Drive subsystem: composes the existing control components
 // by reference (MotorController, BodyVelocityController, PhysicalStateEstimate,
-// Odometry, two IVelocityMotor, one IOdometer) and exposes the 4-verb contract
+// Odometry, two IVelocityMotor, one Hardware&) and exposes the 4-verb contract
 // plus two-phase tick (tickUpdate / tickAction) per SubsystemContract.h.
 //
 // De-scaffolded in ticket 060-006 (name stabilized).
+//
+// OTOS is resolved LIVE through Hardware every tick (074-002), not bound at
+// construction: STEP 5 of tickUpdate() calls `_hal.otos()` fresh on each read
+// instead of caching an `IOdometer&`, so a runtime `DBG OTOS BENCH` swap of
+// the active odometer is observed on the very next tick. Same live-indirection
+// idiom Robot::otosCorrect() already uses (Robot.cpp) for the identical reason.
 //
 // Constraints: C++11, no heap/STL/RTTI/exceptions, no virtual in the contract.
 // =============================================================================
@@ -16,7 +22,7 @@
 #include "messages/common.h"       // msg::CommandBatch
 #include "subsystems/SubsystemContract.h"  // FluentBuilder<>
 #include "hal/capability/IVelocityMotor.h" // IMotor alias
-#include "hal/capability/IOdometer.h"
+#include "hal/Hardware.h"          // Hardware& — live otos() indirection (074-002)
 #include "types/Config.h"          // RobotConfig
 #include "types/Inputs.h"          // HardwareState (= ActualState), MotorCommands
 
@@ -51,12 +57,18 @@ public:
     // `hw` is the HardwareState that the Odometry/Estimator writes into; Drive
     // owns its own private HardwareState slice (`_hw`) for isolation from the
     // live Robot state.
+    // `hal` (074-002): Drive resolves the ACTIVE odometer through `_hal.otos()`
+    // fresh on every STEP-5 read, rather than caching a boot-time `IOdometer&`.
+    // A plain reference cannot be re-seated, so a runtime `DBG OTOS BENCH` swap
+    // of Hardware's active pointer would otherwise never reach the live
+    // fusion/telemetry path (mirrors Robot::otosCorrect()'s existing live
+    // `hal.otos()` indirection — see that function's header comment).
     Drive(IMotor& motorL, IMotor& motorR,
           MotorController& mc,
           BodyVelocityController& bvc,
           PhysicalStateEstimate& est,
           Odometry& odo,
-          IOdometer& otos,
+          Hardware& hal,
           const RobotConfig& cfg);
 
     // ---- 4-verb contract (no virtual dispatch) ----
@@ -120,7 +132,7 @@ private:
     BodyVelocityController& _bvc;
     PhysicalStateEstimate&  _est;
     Odometry&               _odo;
-    IOdometer&              _otos;
+    Hardware&               _hal;   // live otos() indirection (074-002)
     const RobotConfig&      _robCfg;
 
     // ---- Private state ----
@@ -167,9 +179,51 @@ private:
     static constexpr uint8_t kOtosWarnPersistK  = 3;
     static constexpr uint8_t kOtosCleanReadmitN = 5;
 
+    // ---- OTOS health telemetry (074-004) ----
+    // Raw OTOS STATUS byte from the most recent SUCCESSFUL readStatus() call
+    // (STEP 5 below). Left UNCHANGED on a read failure -- same "preserve
+    // last-known-good" convention as _hw.otos.valid and _prevOtosValid above.
+    // Copied into _state.otos_status every tick (STEP 6) so buildTlmFrame can
+    // emit it unconditionally as otos_health=<status>,<blocked>, independent
+    // of otos='s own freshness gate -- see RobotTelemetry.cpp.
+    uint8_t _lastOtosStatus = 0;
+
+    // ---- OTOS pose-VALUE staleness check (074-003) ----
+    // The STATUS-bit gate above catches a chip that self-reports degraded;
+    // it has no signal for a chip that reports READABLE + STATUS-clean but
+    // simply stops updating its pose register (the field symptom: frozen
+    // otos= alongside a climbing ekf_rej, since a stuck-but-clean reading
+    // sails through the STATUS gate and gets fused/rejected every tick).
+    // _prevOtos{X,Y,H}/_prevOtosValid hold the previous SUCCESSFUL read only
+    // (a read failure leaves them unchanged -- same "preserve last-known-
+    // good" convention as _hw.otos.valid on the same STEP-5 branch) so the
+    // comparison is always tick-to-tick, never against a stale failed read.
+    // otosStuck (computed in Drive.cpp) ORs into the same warnBit passed to
+    // _updateOtosFusionGate above -- this is an additional input to that
+    // already-correct, already-tested state machine, not a second gate.
+    float _prevOtosX = 0.0f;
+    float _prevOtosY = 0.0f;
+    float _prevOtosH = 0.0f;
+    bool  _prevOtosValid = false;
+
+    // Position/heading epsilon below which two consecutive OTOS reads are
+    // considered "the same value" (i.e. not evidence of a live sensor).
+    // Heading epsilon ~0.01 rad (~0.57 deg) and position epsilon 0.5 mm are
+    // well below the real OTOS's typical tick-to-tick sensor noise floor, so
+    // a healthy, live-updating sensor should never trip this by chance.
+    // Per-wheel velocity threshold above which the robot is considered
+    // "commanded to move" (encoder-evidenced motion) -- 5 mm/s is well above
+    // encoder-idle jitter but well below any real driven speed. All three
+    // are HIL-tunable starting points (architecture-update.md Open Question
+    // 4), not yet bench-validated against real sensor noise.
+    static constexpr float kOtosStuckPosEpsMm     = 0.5f;
+    static constexpr float kOtosStuckHeadEpsRad   = 0.01f;
+    static constexpr float kOtosStuckEncMotionMmps = 5.0f;
+
     // Update the WARNING-bit persistence gate for one tick's readStatus()
     // result. warnBit: true when the reading is degraded (a WARNING bit is
-    // set) or the status read itself failed; false for a fully clean tick.
+    // set), the status read itself failed, or the pose value is stuck while
+    // the robot is commanded to move; false for a fully clean, live tick.
     void _updateOtosFusionGate(bool warnBit);
 
     // Per-wheel outlier-filter hold threshold (same as kFilterRejectStreakThreshold).

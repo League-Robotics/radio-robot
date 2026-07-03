@@ -29,19 +29,22 @@
 #include <cstring>
 #include <cmath>
 
-// LoopScheduler, WedgeTest, and NezhaHAL include CODAL/MicroBit headers and
-// must NOT be included in HOST_BUILD.  The handlers that use them are guarded
-// with #ifndef HOST_BUILD so the file compiles in both.
+// LoopScheduler and WedgeTest include CODAL/MicroBit headers and must NOT be
+// included in HOST_BUILD.  The handlers that use them are guarded with
+// #ifndef HOST_BUILD so the file compiles in both.
 //
 // 044-003 (Phase F): the concrete bus header is no longer included here.  The
 // DBG I2C / I2CLOG / IRQGUARD handlers reach the bus through DbgCtx::busDiag
 // (IBusDiagnostics*) and the I2CW / I2CR handlers through DbgCtx::busAccess
 // (IRawBusAccess*) — both capability interfaces from source/io/capability/,
 // sealing the final vendor leak above source/io/.
+//
+// 074-001: "#include "NezhaHAL.h"" removed — handleDbgOtos()/
+// handleDbgOtosBench() no longer downcast to NezhaHAL; both reach the bench
+// sensor through Hardware::benchOtosPtr(), a virtual available in every build.
 #ifndef HOST_BUILD
 #include "LoopScheduler.h"
 #include "WedgeTest.h"
-#include "NezhaHAL.h"
 #endif
 
 // ---------------------------------------------------------------------------
@@ -375,22 +378,25 @@ static void handleDbgOtosBench(const ArgList& args, const char* corrId,
     // observe the toggle (round-trip test: bench=1 comes back correctly).
     ctx.robot->hal.setOtosBench(enable != 0);
 
-// 034-006: benchOtosPtr()/setNoise() are only available with BENCH_OTOS_ENABLED.
-#if !defined(HOST_BUILD) && defined(BENCH_OTOS_ENABLED)
-    // Apply optional noise/drift params when enabling (firmware bench sensor only).
-    // DebugCommands is firmware-only; NezhaHAL downcast is allowed here (034-004).
+    // Apply optional noise/drift params when enabling (074-001: unconditional,
+    // null-checked call through the Hardware::benchOtosPtr() virtual — works
+    // identically in firmware (BENCH_OTOS_ENABLED on) and HOST_BUILD
+    // (SimHardware always owns a real BenchOtosSensor now).  No downcast, no
+    // per-build #if — benchOtosPtr() returns nullptr on any HAL that does not
+    // support bench mode (production firmware without BENCH_OTOS_ENABLED).
     // args[1]=noiseXY, args[2]=noiseH, args[3]=drift.  Sentinel = -1.0f.
     if (enable && args.count >= 4) {
-        auto* nh = static_cast<NezhaHAL*>(&ctx.robot->hal);
-        float noiseXY = args.args[1].fval;
-        float noiseH  = args.args[2].fval;
-        float drift   = args.args[3].fval;
-        if (noiseXY < 0.0f) noiseXY = 0.02f;  // 2% linear sigma default
-        if (noiseH  < 0.0f) noiseH  = 0.01f;  // 1% yaw sigma default
-        if (drift   < 0.0f) drift   = 0.0f;   // no drift default
-        nh->benchOtosPtr()->setNoise(noiseXY, noiseH, drift);
+        BenchOtosSensor* bench = ctx.robot->hal.benchOtosPtr();
+        if (bench != nullptr) {
+            float noiseXY = args.args[1].fval;
+            float noiseH  = args.args[2].fval;
+            float drift   = args.args[3].fval;
+            if (noiseXY < 0.0f) noiseXY = 0.02f;  // 2% linear sigma default
+            if (noiseH  < 0.0f) noiseH  = 0.01f;  // 1% yaw sigma default
+            if (drift   < 0.0f) drift   = 0.0f;   // no drift default
+            bench->setNoise(noiseXY, noiseH, drift);
+        }
     }
-#endif
 
     // Read back the active state via the Hardware interface (034-004).
     int active = ctx.robot->hal.isBenchMode() ? 1 : 0;
@@ -414,8 +420,11 @@ static void handleDbgOtosBench(const ArgList& args, const char* corrId,
 //   fused   = state.actual.otosX/Y/H — EKF-fused pose written by otosCorrect().
 //   err     = ideal − otos (per-axis).
 //
-//   In HOST_BUILD / MockHAL, benchOtosPtr() is unavailable; guard and emit
-//   0,0,0 for ideal/otos.
+//   074-001: HOST_BUILD's SimHardware always owns a real BenchOtosSensor now
+//   (benchOtosPtr() is never null there), so ideal=/otos= reflect the real
+//   accumulator in every sim/TestGUI-sim session.  Production firmware without
+//   BENCH_OTOS_ENABLED still has no bench sensor; benchOtosPtr() returns
+//   nullptr via the Hardware base default and ideal=/otos= stay 0,0,0.
 // ---------------------------------------------------------------------------
 
 static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
@@ -427,13 +436,14 @@ static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
     float idealX = 0.0f, idealY = 0.0f, idealH = 0.0f;
     float otosX  = 0.0f, otosY  = 0.0f, otosH  = 0.0f;
 
-// 034-006: benchOtosPtr() is only available when BENCH_OTOS_ENABLED is
-// defined.  HOST_BUILD skips NezhaHAL entirely (uses MockHAL).
-#if !defined(HOST_BUILD) && defined(BENCH_OTOS_ENABLED)
-    // DebugCommands is firmware-only; NezhaHAL downcast is allowed here
-    // (034-004).  benchOtosPtr() is a NezhaHAL-specific accessor.
-    auto* nh = static_cast<NezhaHAL*>(&ctx.robot->hal);
-    BenchOtosSensor* bench = nh->benchOtosPtr();
+    // 074-001: one path, through the Hardware::benchOtosPtr() virtual — works
+    // identically in firmware (BENCH_OTOS_ENABLED on) and HOST_BUILD.  In
+    // HOST_BUILD, SimHardware always owns a real BenchOtosSensor, so
+    // benchOtosPtr() is never null there and ideal=/otos= reflect the real
+    // accumulator.  On production firmware (no BENCH_OTOS_ENABLED),
+    // benchOtosPtr() returns nullptr via the Hardware base default and
+    // ideal=/otos= stay 0,0,0, matching prior behaviour.
+    BenchOtosSensor* bench = ctx.robot->hal.benchOtosPtr();
     if (bench != nullptr) {
         idealX = bench->idealX();
         idealY = bench->idealY();
@@ -442,10 +452,6 @@ static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
         otosY  = bench->otosY();
         otosH  = bench->otosH();
     }
-#else
-    // HOST_BUILD or production (no BENCH_OTOS_ENABLED): ideal and otos are 0,0,0.
-    (void)ctx;
-#endif
 
     // Raw OTOS pose from state (written by Robot::otosCorrect into optical.pose).
     float fusedX = ctx.robot->state.actual.optical.pose.x;

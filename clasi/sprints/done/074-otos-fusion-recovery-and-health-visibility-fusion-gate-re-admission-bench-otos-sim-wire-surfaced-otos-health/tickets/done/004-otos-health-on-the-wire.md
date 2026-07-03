@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: OTOS health on the wire
-status: open
+status: done
 use-cases:
 - SUC-004
 - SUC-005
@@ -51,7 +51,7 @@ field); `usecases.md` SUC-004, SUC-005.
 
 ## Acceptance Criteria
 
-- [ ] `protos/drivetrain.proto`'s `DrivetrainState` message
+- [x] `protos/drivetrain.proto`'s `DrivetrainState` message
       (`protos/drivetrain.proto:44-51`) gains two new fields at the next
       free field numbers (10, 11): `uint32 otos_status = 10;` (raw STATUS
       byte) and `bool otos_fusion_blocked = 11;`. `python3
@@ -59,21 +59,21 @@ field); `usecases.md` SUC-004, SUC-005.
       `source/messages/drivetrain.h`, adding `uint32_t otos_status = 0;` and
       `bool otos_fusion_blocked = false;` members (plus their `get_*()`
       getters, matching this file's existing generated pattern).
-- [ ] `Drive` (`Drive.h`, near `_otosFusionBlocked`) gains `uint8_t
+- [x] `Drive` (`Drive.h`, near `_otosFusionBlocked`) gains `uint8_t
       _lastOtosStatus = 0;`, updated in STEP 5's `poseOk` branch right after
       `_hal.otos().readStatus(otosStatus)` succeeds (`Drive.cpp:159-160`,
       after ticket 003's changes land there) — `_lastOtosStatus =
       otosStatus;`. On a read failure, `_lastOtosStatus` is left UNCHANGED
       (same "preserve last-known-good" convention as `_hw.otos.valid` and
       ticket 003's `_prevOtosValid`).
-- [ ] `Drive::tickUpdate()`'s STEP 6 (`Drive.cpp:186-233`, the `_hw` → `_state`
+- [x] `Drive::tickUpdate()`'s STEP 6 (`Drive.cpp:186-233`, the `_hw` → `_state`
       copy) gains: `_state.otos_status = _lastOtosStatus;` and
       `_state.otos_fusion_blocked = _otosFusionBlocked;`, alongside the
       existing `_state.otos.lag/last_upd/valid` assignments.
-- [ ] `Config.h` gains `constexpr uint16_t TLM_FIELD_OTOS_HEALTH = (1u <<
+- [x] `Config.h` gains `constexpr uint16_t TLM_FIELD_OTOS_HEALTH = (1u <<
       9);` immediately after `TLM_FIELD_ENCPOSE` (bit 8); `TLM_FIELD_ALL`
       widens from `0x1FFu` to `0x3FFu`.
-- [ ] `RobotTelemetry.cpp`'s `buildTlmFrame` emits `otos_health=<status>,
+- [x] `RobotTelemetry.cpp`'s `buildTlmFrame` emits `otos_health=<status>,
       <blocked>` UNCONDITIONALLY once `config.tlmFields & TLM_FIELD_OTOS_HEALTH`
       is set (no freshness/staleness gate, matching `wedge=`'s precedent at
       lines 81-92) — placed immediately after the existing `ekf_rej=` clause
@@ -81,7 +81,7 @@ field); `usecases.md` SUC-004, SUC-005.
       append-only field-ordering convention this file already documents.
       `<status>` is `ds.otos_status` (integer); `<blocked>` is
       `ds.otos_fusion_blocked` (0 or 1).
-- [ ] A code comment is added at the existing `otos=` emission site
+- [x] A code comment is added at the existing `otos=` emission site
       (`RobotTelemetry.cpp:134-148`) AND at `Drive::tickUpdate()` STEP 5
       (`Drive.cpp`, near the `poseOk`/`else` branches) stating plainly: `otos=`
       reflects the most recent RAW, successfully-read pose from whichever
@@ -89,13 +89,13 @@ field); `usecases.md` SUC-004, SUC-005.
       into EKF fusion — it does NOT go stale or change meaning when
       `_otosFusionBlocked` is true; `otos_health=` is what tells a host
       fusion is blocked.
-- [ ] `host/robot_radio/robot/protocol.py`'s `TLMFrame` dataclass gains
+- [x] `host/robot_radio/robot/protocol.py`'s `TLMFrame` dataclass gains
       `otos_health: tuple[int, bool] | None = None` (with a docstring entry
       matching the style of the existing `wedge`/`encpose` entries), and
       `parse_tlm()` gains a clause parsing `otos_health=<status>,<blocked>`
       into that tuple (mirroring the existing `wedge`/`ekf_rej` parse
       clauses' try/except-ValueError shape).
-- [ ] `tests/_infra/golden_tlm_capture.json` is regenerated using the EXACT
+- [x] `tests/_infra/golden_tlm_capture.json` is regenerated using the EXACT
       documented recipe in `tests/simulation/unit/test_golden_tlm.py`'s
       module docstring (`s = Sim(); ... json.dumps(frames, indent=2)`),
       done in the SAME commit as the firmware and host-parser changes (the
@@ -105,14 +105,14 @@ field); `usecases.md` SUC-004, SUC-005.
       byte, and the field is unconditional/on-by-default).
       `test_golden_tlm.py` passes unmodified against the regenerated
       capture.
-- [ ] New sim test: drive the fusion gate into the blocked state (reusing
+- [x] New sim test: drive the fusion gate into the blocked state (reusing
       ticket 003's stuck-value injection OR the existing STATUS-bit
       `sim.set_otos_warn(True)` injection — either is a valid trigger for
       this field), enable `STREAM`, and assert a captured TLM frame's
       `otos_health=` reflects `blocked=1` while blocked and `blocked=0`
       once re-admitted, using `host/robot_radio/robot/protocol.py`'s
       `parse_tlm()` to decode the frame (not string-matching).
-- [ ] New regression test for SUC-005: `sim.set_otos_read_failure(True)` (or
+- [x] New regression test for SUC-005: `sim.set_otos_read_failure(True)` (or
       the sim's existing equivalent hook), tick past `2 * lagMs` (the
       existing N8 freshness window `otos=` already uses,
       `RobotTelemetry.cpp:140-144`), and assert `otos=` is ABSENT from the
@@ -120,9 +120,9 @@ field); `usecases.md` SUC-004, SUC-005.
       stale-cache-masks-a-read-failure defect exists in the raw path,
       independent of `otos_health=`'s own (unconditional) presence in the
       same frame.
-- [ ] No existing `TLM_FIELD_*` bit, wire key, or field ordering changes
+- [x] No existing `TLM_FIELD_*` bit, wire key, or field ordering changes
       meaning or position — purely additive at the end of the sequence.
-- [ ] Full suite (`uv run python -m pytest`) passes at the running baseline
+- [x] Full suite (`uv run python -m pytest`) passes at the running baseline
       (2672 + tickets 001-003's net additions) + this ticket's net new test
       count, zero unexplained failures. The `data/robots` drift noted in
       the sprint's hard contract is environmental — do not chase or touch

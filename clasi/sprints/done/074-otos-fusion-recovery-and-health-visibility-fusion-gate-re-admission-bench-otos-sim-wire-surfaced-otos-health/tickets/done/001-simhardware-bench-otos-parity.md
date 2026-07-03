@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: SimHardware bench-OTOS parity
-status: open
+status: done
 use-cases:
 - SUC-001
 depends-on: []
@@ -50,17 +50,17 @@ owns its own `BenchOtosSensor` rather than reusing the test-only
 
 ## Acceptance Criteria
 
-- [ ] `Hardware` (`source/hal/Hardware.h`) gains a forward declaration
+- [x] `Hardware` (`source/hal/Hardware.h`) gains a forward declaration
       `class BenchOtosSensor;` and a new virtual accessor
       `virtual BenchOtosSensor* benchOtosPtr() { return nullptr; }`
       (default no-op, mirrors the existing `setOtosBench`/`isBenchMode`
       default pattern at lines 57-61). No existing virtual signature changes.
-- [ ] `NezhaHAL.h`/`MecanumHAL.h`'s EXISTING `BenchOtosSensor* benchOtosPtr()
+- [x] `NezhaHAL.h`/`MecanumHAL.h`'s EXISTING `BenchOtosSensor* benchOtosPtr()
       { return &_benchOtos; }` (inside their `#ifdef BENCH_OTOS_ENABLED`
       blocks, e.g. `NezhaHAL.h:97`) gains the `override` keyword. No other
       change to either file's bench-swap logic (`setOtosBench`/`isBenchMode`/
       `_otosActive`/`tick(now,cmds)`) — it already works correctly.
-- [ ] `SimHardware` (`source/hal/sim/SimHardware.h`) gains a
+- [x] `SimHardware` (`source/hal/sim/SimHardware.h`) gains a
       `BenchOtosSensor _benchOtos;` member and an `IOdometer* _otosActive;`
       member (initialized to `&_odom` in the constructor, mirroring
       `NezhaHAL::_otosActive`'s init at `NezhaHAL.cpp:29`).
@@ -73,7 +73,7 @@ owns its own `BenchOtosSensor` rather than reusing the test-only
       `_benchMode` flag — remove `_benchMode`, its only reader/writer was
       these two methods). `benchOtosPtr() override` returns `&_benchOtos`.
       `#include "hal/real/BenchOtosSensor.h"` added.
-- [ ] `SimHardware::tick(uint32_t now_ms, const MotorCommands& cmds)` drives
+- [x] `SimHardware::tick(uint32_t now_ms, const MotorCommands& cmds)` drives
       `_benchOtos.tick(...)` every call, using the SAME dt-baseline-
       maintained-every-tick discipline `NezhaHAL::tick(now, cmds)` uses
       (`NezhaHAL.cpp:88-101`: the dt baseline is updated unconditionally,
@@ -85,7 +85,7 @@ owns its own `BenchOtosSensor` rather than reusing the test-only
       the bench-mode-gated `_benchOtos.tick(cmds.tgtSpeed[1], cmds.tgtSpeed[0],
       _trackwidth, dt)` call (array convention `[0]=R,[1]=L` matching
       `NezhaHAL.cpp:100`'s call and `OutputState.h`'s documented convention).
-- [ ] `DebugCommands::handleDbgOtosBench()`'s noise-setting branch
+- [x] `DebugCommands::handleDbgOtosBench()`'s noise-setting branch
       (`DebugCommands.cpp:379-393`, currently `#if !defined(HOST_BUILD) &&
       defined(BENCH_OTOS_ENABLED)` guarding a `static_cast<NezhaHAL*>`
       downcast) is replaced by an unconditional, null-checked call through
@@ -95,7 +95,7 @@ owns its own `BenchOtosSensor` rather than reusing the test-only
       firmware (`BENCH_OTOS_ENABLED` on) and `HOST_BUILD` (SimHardware always
       has a real `BenchOtosSensor` now). The `#if`/downcast is removed
       entirely, not left as a second path.
-- [ ] `DebugCommands::handleDbgOtos()` (`DebugCommands.cpp:421-465`) is
+- [x] `DebugCommands::handleDbgOtos()` (`DebugCommands.cpp:421-465`) is
       simplified to one path: `BenchOtosSensor* bench =
       ctx.robot->hal.benchOtosPtr(); if (bench != nullptr) { idealX =
       bench->idealX(); ... }` — the `#if !defined(HOST_BUILD) &&
@@ -105,29 +105,29 @@ owns its own `BenchOtosSensor` rather than reusing the test-only
       firmware without `BENCH_OTOS_ENABLED`, where it returns `nullptr` via
       the `Hardware` base default), so `DBG OTOS`'s `ideal=`/`otos=` fields
       reflect the real accumulator in every `HOST_BUILD` session.
-- [ ] The now-unused `#include "NezhaHAL.h"` at `DebugCommands.cpp:44` is
+- [x] The now-unused `#include "NezhaHAL.h"` at `DebugCommands.cpp:44` is
       removed (drive-by cleanup — confirmed by grep this ticket's own
       change removes the last two `NezhaHAL`-typed references in this file;
       `#include "LoopScheduler.h"`/`#include "WedgeTest.h"` on the
       surrounding lines stay, both still used by other handlers in this
       file: `runWedgeTest`/`ctx.sched`).
-- [ ] A new sim test drives: `DBG OTOS BENCH 1`, then a driving command
+- [x] A new sim test drives: `DBG OTOS BENCH 1`, then a driving command
       (`VW`/`T`), ticks forward, and asserts `DBG OTOS`'s `ideal=`/`otos=`
       reply (or the equivalent `sim_get_bench_otos_*`-style hook added for
       `SimHardware`'s new member — see Testing) is non-zero and tracks the
       commanded arc, matching the noiseless `BenchOtosSensor` accumulator
       math. Must FAIL against pre-fix `SimHardware` (which always reports
       `0,0,0` per the hardcoded `HOST_BUILD` branch).
-- [ ] `DBG OTOS BENCH 0` (disable) restores `otos()`/`benchOtosPtr()`
+- [x] `DBG OTOS BENCH 0` (disable) restores `otos()`/`benchOtosPtr()`
       callers to the real ground-truth `SimOdometer` — no behavior change
       for any session that never enables bench mode.
-- [ ] No change to `Drive`'s behavior in this ticket — `Drive::_otos` is
+- [x] No change to `Drive`'s behavior in this ticket — `Drive::_otos` is
       still the boot-bound reference (fixed in ticket 002); this ticket only
       makes the SUBSTRATE swappable and observable via `DBG OTOS` /
       `benchOtosPtr()`, exactly as `usecases.md` SUC-001's acceptance
       criteria scope it (SUC-002's "live path switches" assertion belongs to
       ticket 002).
-- [ ] Full suite (`uv run python -m pytest`) passes at the 2672 baseline +
+- [x] Full suite (`uv run python -m pytest`) passes at the 2672 baseline +
       this ticket's net new test count, zero unexplained failures. The
       `data/robots` drift noted in the sprint's hard contract is
       environmental — do not chase or touch it.

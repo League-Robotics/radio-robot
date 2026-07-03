@@ -94,6 +94,8 @@ struct DrivetrainState {
     uint8_t wheel_wedged_[4] = {};  // bool[]
     uint8_t wheel_wedged_count = 0;
     bool connected = false;
+    uint32_t otos_status = 0;
+    bool otos_fusion_blocked = false;
 
     // --- getters ---
     const PoseEstimate& get_fused() const { return fused; }
@@ -108,6 +110,8 @@ struct DrivetrainState {
     const uint8_t* wheel_wedged() const { return wheel_wedged_; }
     uint8_t wheel_wedged_count_val() const { return wheel_wedged_count; }
     bool get_connected() const { return connected; }
+    uint32_t get_otos_status() const { return otos_status; }
+    bool get_otos_fusion_blocked() const { return otos_fusion_blocked; }
 };
 
 // DrivetrainConfig

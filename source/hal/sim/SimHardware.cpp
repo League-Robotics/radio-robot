@@ -16,9 +16,12 @@ SimHardware::SimHardware(const RobotConfig& cfg)
     , _color(_plant)
     , _portIO(_plant)
     , _servo()
+    , _benchOtos()
+    , _otosActive(&_odom)   // default: real (ground-truth) odometer (074-001)
 {
     _trackwidth = cfg.trackwidth;
     _plant.setTrackwidth(cfg.trackwidth);
+    _benchOtos.begin();
 }
 
 // tick(now) — sensor tick.  Promotes each sim motor's plant reported-encoder
@@ -70,4 +73,20 @@ void SimHardware::advance(uint32_t now_ms, const MotorCommands& cmds) {
         _color.tick(udt);
     }
     _lastTickMs = now_ms;
+
+    // Bench-OTOS dt baseline (074-001): maintained EVERY call, even when bench
+    // mode is off — exactly the discipline NezhaHAL::tick(now,cmds) uses (see
+    // that function's header comment). If the stamp were only updated while
+    // bench mode was active, the FIRST tick after `DBG OTOS BENCH 1` would
+    // compute a large stale dt and integrate a spike on the bench plant.
+    // Signed-delta avoids uint32 underflow (project memory:
+    // watchdog-uint32-underflow).
+    int32_t  benchDtSigned = static_cast<int32_t>(now_ms - _lastBenchTick);
+    uint32_t benchDt = (benchDtSigned > 0) ? static_cast<uint32_t>(benchDtSigned) : 0u;
+    _lastBenchTick = now_ms;
+
+    if (isBenchMode()) {
+        // Array convention: [0]=R (FR), [1]=L (FL) — see OutputState.h.
+        _benchOtos.tick(cmds.tgtSpeed[1], cmds.tgtSpeed[0], _trackwidth, benchDt);
+    }
 }

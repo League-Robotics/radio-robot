@@ -64,6 +64,15 @@ class TLMFrame:
     same shape/units as ``otos``/``pose``. Gated by STREAM fields=; absent
     (None) on older firmware or when explicitly excluded from the
     subscription.
+    ``otos_health`` is the OTOS fusion-gate health state (074-004):
+    (status, blocked) — ``status`` is the raw OTOS STATUS byte (0 = clean),
+    ``blocked`` is ``Drive::_otosFusionBlocked`` (0/1) as a bool. Note:
+    ``otos`` above is the raw, last-successfully-read pose and does NOT go
+    stale or change meaning when fusion is blocked — ``otos_health`` is what
+    tells a host fusion is currently blocked. Unconditional on the firmware
+    side (not gated by freshness, matching ``wedge``'s precedent) — always
+    present on any firmware new enough to emit it; absent (None) on older
+    firmware.
     """
     t: int | None = None
     mode: str | None = None
@@ -78,6 +87,7 @@ class TLMFrame:
     ekf_rej: int | None = None                   # cumulative EKF gate rejection count
     wedge: tuple[int, int] | None = None         # (left, right) wedge-latch state, 0/1 each (064-004)
     encpose: tuple[int, int, int] | None = None  # (x_mm, y_mm, heading_cdeg) — encoder-only pose (068-001)
+    otos_health: tuple[int, bool] | None = None  # (raw STATUS byte, fusion_blocked) — OTOS health (074-004)
 
 
 @dataclass
@@ -326,6 +336,14 @@ def parse_tlm(line: str) -> TLMFrame | None:
     if "ekf_rej" in kv:
         try:
             frame.ekf_rej = int(kv["ekf_rej"])
+        except ValueError:
+            pass
+
+    if "otos_health" in kv:
+        try:
+            parts = kv["otos_health"].split(",")
+            if len(parts) == 2:
+                frame.otos_health = (int(parts[0]), bool(int(parts[1])))
         except ValueError:
             pass
 

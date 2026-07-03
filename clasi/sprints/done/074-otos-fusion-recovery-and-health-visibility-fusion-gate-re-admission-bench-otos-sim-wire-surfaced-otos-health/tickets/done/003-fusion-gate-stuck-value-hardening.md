@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Fusion-gate stuck-value hardening
-status: open
+status: done
 use-cases:
 - SUC-003
 depends-on:
@@ -57,7 +57,7 @@ See `architecture-update.md` Step 3 "Module: Drive OTOS consumption" (the
 
 ## Acceptance Criteria
 
-- [ ] `Drive` (`Drive.h`, near the existing OTOS gate members at lines
+- [x] `Drive` (`Drive.h`, near the existing OTOS gate members at lines
       164-166) gains: `float _prevOtosX = 0.0f, _prevOtosY = 0.0f,
       _prevOtosH = 0.0f;` and `bool _prevOtosValid = false;` (previous
       tick's successfully-read OTOS pose, for tick-to-tick comparison — NOT
@@ -71,7 +71,7 @@ See `architecture-update.md` Step 3 "Module: Drive OTOS consumption" (the
       4 as HIL-tunable, not yet bench-validated; document the chosen values
       and rationale inline as a comment, matching this file's existing
       practice for `kOtosWarnPersistK`/`kOtosCleanReadmitN`.
-- [ ] Inside STEP 5's `poseOk` branch (`Drive.cpp:149-181`), after reading
+- [x] Inside STEP 5's `poseOk` branch (`Drive.cpp:149-181`), after reading
       `p`/`headingRad` via `_hal.otos().readTransformed(...)` and BEFORE
       overwriting `_prevOtos*`, compute: `bool encMotion =
       (fabsf(_hw.vel[0]) > kOtosStuckEncMotionMmps) ||
@@ -83,23 +83,23 @@ See `architecture-update.md` Step 3 "Module: Drive OTOS consumption" (the
       whenever a read succeeds (whether or not `otosStuck` fired this tick —
       the comparison is always tick-to-tick, not against the first-ever
       value).
-- [ ] The call `_updateOtosFusionGate(!statusOk || (otosStatus != 0));`
+- [x] The call `_updateOtosFusionGate(!statusOk || (otosStatus != 0));`
       (`Drive.cpp:160`) becomes `_updateOtosFusionGate(!statusOk ||
       (otosStatus != 0) || otosStuck);`. No other line inside
       `_updateOtosFusionGate`'s own body changes.
-- [ ] On a READ FAILURE (`poseOk == false`, `Drive.cpp:176-179`),
+- [x] On a READ FAILURE (`poseOk == false`, `Drive.cpp:176-179`),
       `_prevOtosValid` is left UNCHANGED (not reset to false, not updated to
       a bogus value) — matching the existing `_hw.otos.valid` "preserve
       last-known-good" convention on the same branch, and ensuring a
       transient read failure doesn't spuriously arm or disarm the
       staleness check on the next successful read.
-- [ ] A robot that is legitimately stationary (both `_hw.vel[]` below
+- [x] A robot that is legitimately stationary (both `_hw.vel[]` below
       `kOtosStuckEncMotionMmps`) with an unchanging OTOS reading is NEVER
       flagged `otosStuck`, regardless of how long the value has been
       static — `encMotion` gates the whole check. This must be exercised by
       a dedicated test (see Testing) — do not rely on inference from the
       other tests.
-- [ ] New sim test: `sim.set_otos_fusion(True)`, `sim.set_otos_pose(x, y,
+- [x] New sim test: `sim.set_otos_fusion(True)`, `sim.set_otos_pose(x, y,
       h)` ONCE (a fixed value — `readStatus()` stays clean, `readTransformed()`
       returns this same static value every subsequent tick per `SimOdometer`'s
       documented injected-pose behavior when `enableSimModel` is off), then
@@ -109,7 +109,7 @@ See `architecture-update.md` Step 3 "Module: Drive OTOS consumption" (the
       and `sim.get_ekf_rej_count()` stops climbing once the block engages
       (compare the count over two later equal-length tick windows — the
       second window's delta must be ~0, unlike the first).
-- [ ] Same test, recovery phase: stop (`X`) — this drops `encMotion` to
+- [x] Same test, recovery phase: stop (`X`) — this drops `encMotion` to
       false, which disarms the staleness check regardless of the frozen
       injected pose, so `_otosWarnStreak` resets and `_otosCleanStreak`
       accumulates every stopped tick (mirrors
@@ -119,10 +119,10 @@ See `architecture-update.md` Step 3 "Module: Drive OTOS consumption" (the
       fusion, and confirm the fused pose is subsequently pulled toward the
       injected offset (same `fused_pull > 50.0` style assertion as the
       existing STATUS-bit re-admission test).
-- [ ] Existing `test_otos_warn_persistence.py`'s three tests pass UNMODIFIED
+- [x] Existing `test_otos_warn_persistence.py`'s three tests pass UNMODIFIED
       — the STATUS-bit path is untouched; the new check is an additional,
       independently-gated input to the same `warnBit`/state machine.
-- [ ] Full suite (`uv run python -m pytest`) passes at the running baseline
+- [x] Full suite (`uv run python -m pytest`) passes at the running baseline
       (2672 + tickets 001/002's net additions) + this ticket's net new test
       count, zero unexplained failures. The `data/robots` drift noted in
       the sprint's hard contract is environmental — do not chase or touch

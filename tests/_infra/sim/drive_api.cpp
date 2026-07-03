@@ -11,7 +11,7 @@
 //   3. mc           — MotorController(hal.motorL(), hal.motorR(), cfg)
 //   4. bvc          — BodyVelocityController(mc, cfg)
 //   5. est          — PhysicalStateEstimate (default ctor, then initEKF)
-//   6. drive        — Drive(motorL, motorR, mc, bvc, est, est.odometry(), otos, cfg)
+//   6. drive        — Drive(motorL, motorR, mc, bvc, est, est.odometry(), hal, cfg)
 //
 // The DriveHandle owns all control components as value members so they
 // outlive any individual function call (no dangling refs).
@@ -56,7 +56,7 @@ struct DriveHandle {
         , est()
         , drive(hal.motorL(), hal.motorR(),
                 mc, bvc, est, est.odometry(),
-                hal.otos(), cfg)
+                hal, cfg)
     {
         // Apply the default config projection so Drive has live gains/lag.
         drive.configure(toDriveConfig(cfg));

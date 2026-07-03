@@ -48,6 +48,8 @@ message DrivetrainState {
   ValueSet   otos               = 7;   // OTOS freshness
   repeated bool wheel_wedged    = 8  [(max_count) = 4];
   bool       connected          = 9;
+  uint32     otos_status        = 10;  // raw OTOS STATUS byte (074-004)
+  bool       otos_fusion_blocked = 11; // Drive::_otosFusionBlocked (074-004)
 }
 
 // Full drive configuration slice: geometry, PID gains, OTOS fusion, EKF noise.
