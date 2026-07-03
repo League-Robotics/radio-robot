@@ -29,7 +29,7 @@ Drive::Drive(IMotor& motorL, IMotor& motorR,
              BodyVelocityController& bvc,
              PhysicalStateEstimate& est,
              Odometry& odo,
-             IOdometer& otos,
+             Hardware& hal,
              const RobotConfig& cfg)
     : _motorL(motorL)
     , _motorR(motorR)
@@ -37,7 +37,7 @@ Drive::Drive(IMotor& motorL, IMotor& motorR,
     , _bvc(bvc)
     , _est(est)
     , _odo(odo)
-    , _otos(otos)
+    , _hal(hal)
     , _robCfg(cfg)
 {
     // Seed the MotorController's commands reference so setTarget() writes
@@ -134,7 +134,7 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
     // STEP 5: OTOS correction (lag-gated, matches LoopTickOnce pattern)
     // ------------------------------------------------------------------
     uint32_t lagMs = _robCfg.lagOtos;
-    if (lagMs > 0 && _otos.is_initialized()) {
+    if (lagMs > 0 && _hal.otos().is_initialized()) {
         _hw.otos.lagMs = lagMs;   // keep stamp lag field in sync
         if (!_otosEverReady && !fuseOtos) {
             // First time (normal lag-gated path): mark ready and seed the timer
@@ -145,7 +145,7 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
             if (!_otosEverReady) { _otosEverReady = true; }
             float headingRad = _hw.fused.pose.h;
             Pose2D p{};
-            bool poseOk = _otos.readTransformed(p, headingRad);
+            bool poseOk = _hal.otos().readTransformed(p, headingRad);
             if (poseOk) {
                 // CR-06 (065-006): WARNING-bit persistence gate. poseOk above
                 // is the READABLE tier (I2C burst succeeded); readStatus()
@@ -156,11 +156,11 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
                 // read is treated the same as a WARNING tick (conservative —
                 // do not count it toward re-admission).
                 uint8_t otosStatus = 0;
-                bool statusOk = _otos.readStatus(otosStatus);
+                bool statusOk = _hal.otos().readStatus(otosStatus);
                 _updateOtosFusionGate(!statusOk || (otosStatus != 0));
 
                 BodyTwist vel{};
-                _otos.readVelocityTransformed(vel, headingRad);
+                _hal.otos().readVelocityTransformed(vel, headingRad);
                 if (!_otosFusionBlocked) {
                     _est.addOtosObservation(p.x, p.y, p.h,
                                             vel.v_mmps, vel.omega_rads,
@@ -473,7 +473,7 @@ msg::DrivetrainCapabilities Drive::capabilities() const
                         ? _drvCfg.get_drivetrain_type()
                         : (int32_t)_robCfg.drivetrain;
     caps.holonomic        = (dtype > 0);
-    caps.onboard_position = _otos.is_initialized();
+    caps.onboard_position = _hal.otos().is_initialized();
     caps.wheel_count      = 2;
     return caps;
 }

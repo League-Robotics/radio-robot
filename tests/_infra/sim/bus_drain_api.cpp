@@ -72,7 +72,7 @@ struct BusDrainHandle {
         , est()
         , drive(hal.motorL(), hal.motorR(),
                 mc_ctrl, bvc, est, est.odometry(),
-                hal.otos(), cfg)
+                hal, cfg)
         , planner(mc_ctrl, est.odometry(), drive, cfg)
         , queue()
         , cmd_proc()

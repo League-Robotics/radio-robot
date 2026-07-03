@@ -12,7 +12,7 @@
 //   3. mc_ctrl      — MotorController(hal.motorL(), hal.motorR(), cfg)
 //   4. bvc          — BodyVelocityController(mc_ctrl, cfg)
 //   5. est          — PhysicalStateEstimate
-//   6. drive        — Drive(motorL, motorR, mc_ctrl, bvc, est, odo, otos, cfg)
+//   6. drive        — Drive(motorL, motorR, mc_ctrl, bvc, est, odo, hal, cfg)
 //   7. planner      — Planner(mc_ctrl, est.odometry(), drive, cfg)
 //
 // Heap allocation in PlannerHandle is acceptable — the no-heap constraint
@@ -58,7 +58,7 @@ struct PlannerHandle {
         , est()
         , drive(hal.motorL(), hal.motorR(),
                 mc_ctrl, bvc, est, est.odometry(),
-                hal.otos(), cfg)
+                hal, cfg)
         , planner(mc_ctrl, est.odometry(), drive, cfg)
     {
         // Apply Drive config so it has live gains/lag.

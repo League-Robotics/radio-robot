@@ -92,7 +92,7 @@ Robot::Robot(Hardware& h, const RobotConfig& cfg)
       // drive: new-arch Drive, built with the same device refs as the legacy
       // drive subsystem.  Own BVC (bvc), own EKF state (via est + odo).
       drive(motorL, motorR, motorController, bvc, estimate, estimate.odometry(),
-            hal.otos(), config),
+            hal, config),
       // sensors: facade over the existing lineSensor / colorSensor_ subsystems;
       // shares the same HardwareState they write into.
       sensors(lineSensor, colorSensor_, state.actual),

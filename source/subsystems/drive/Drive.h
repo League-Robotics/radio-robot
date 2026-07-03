@@ -4,10 +4,16 @@
 //
 // Message-contract Drive subsystem: composes the existing control components
 // by reference (MotorController, BodyVelocityController, PhysicalStateEstimate,
-// Odometry, two IVelocityMotor, one IOdometer) and exposes the 4-verb contract
+// Odometry, two IVelocityMotor, one Hardware&) and exposes the 4-verb contract
 // plus two-phase tick (tickUpdate / tickAction) per SubsystemContract.h.
 //
 // De-scaffolded in ticket 060-006 (name stabilized).
+//
+// OTOS is resolved LIVE through Hardware every tick (074-002), not bound at
+// construction: STEP 5 of tickUpdate() calls `_hal.otos()` fresh on each read
+// instead of caching an `IOdometer&`, so a runtime `DBG OTOS BENCH` swap of
+// the active odometer is observed on the very next tick. Same live-indirection
+// idiom Robot::otosCorrect() already uses (Robot.cpp) for the identical reason.
 //
 // Constraints: C++11, no heap/STL/RTTI/exceptions, no virtual in the contract.
 // =============================================================================
@@ -16,7 +22,7 @@
 #include "messages/common.h"       // msg::CommandBatch
 #include "subsystems/SubsystemContract.h"  // FluentBuilder<>
 #include "hal/capability/IVelocityMotor.h" // IMotor alias
-#include "hal/capability/IOdometer.h"
+#include "hal/Hardware.h"          // Hardware& — live otos() indirection (074-002)
 #include "types/Config.h"          // RobotConfig
 #include "types/Inputs.h"          // HardwareState (= ActualState), MotorCommands
 
@@ -51,12 +57,18 @@ public:
     // `hw` is the HardwareState that the Odometry/Estimator writes into; Drive
     // owns its own private HardwareState slice (`_hw`) for isolation from the
     // live Robot state.
+    // `hal` (074-002): Drive resolves the ACTIVE odometer through `_hal.otos()`
+    // fresh on every STEP-5 read, rather than caching a boot-time `IOdometer&`.
+    // A plain reference cannot be re-seated, so a runtime `DBG OTOS BENCH` swap
+    // of Hardware's active pointer would otherwise never reach the live
+    // fusion/telemetry path (mirrors Robot::otosCorrect()'s existing live
+    // `hal.otos()` indirection — see that function's header comment).
     Drive(IMotor& motorL, IMotor& motorR,
           MotorController& mc,
           BodyVelocityController& bvc,
           PhysicalStateEstimate& est,
           Odometry& odo,
-          IOdometer& otos,
+          Hardware& hal,
           const RobotConfig& cfg);
 
     // ---- 4-verb contract (no virtual dispatch) ----
@@ -120,7 +132,7 @@ private:
     BodyVelocityController& _bvc;
     PhysicalStateEstimate&  _est;
     Odometry&               _odo;
-    IOdometer&              _otos;
+    Hardware&               _hal;   // live otos() indirection (074-002)
     const RobotConfig&      _robCfg;
 
     // ---- Private state ----

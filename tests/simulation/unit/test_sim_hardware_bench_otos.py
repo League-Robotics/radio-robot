@@ -155,3 +155,96 @@ def test_bench_otos_isbenchmode_round_trip():
     with Sim() as s:
         assert "otos bench=1" in send(s, "DBG OTOS BENCH 1")
         assert "otos bench=0" in send(s, "DBG OTOS BENCH 0")
+
+
+# ---------------------------------------------------------------------------
+# 074-002: Drive's LIVE fusion/telemetry path observes a runtime bench-OTOS
+# swap.
+#
+# The tests above (074-001) prove the SUBSTRATE really swaps the active
+# odometer (Hardware::setOtosBench()/otos(), exercised through the DBG OTOS
+# command, which reads the bench sensor's accumulators directly via
+# benchOtosPtr() -- a code path that never touches Drive at all).
+#
+# These tests prove the SEPARATE, previously-broken half: Drive::tickUpdate()
+# STEP 5 -- the sole live OTOS-read-and-fuse path that feeds the EKF and the
+# `otos=` TLM clause (RobotTelemetry.cpp reads ds.optical.pose, exposed here
+# via get_optical_pose()) -- actually RE-RESOLVES the active odometer on every
+# read instead of forever calling methods on the C++ reference it captured
+# once at Robot construction time (before any DBG OTOS BENCH command could
+# ever run). Pre-fix, that reference is permanently bound to the real
+# SimOdometer regardless of any later bench-mode toggle.
+# ---------------------------------------------------------------------------
+
+def test_drive_live_path_observes_bench_swap_mid_session():
+    """074-002 regression: a runtime DBG OTOS BENCH toggle must reach
+    Drive::tickUpdate() STEP 5 -- the live fusion/telemetry path -- on the
+    VERY NEXT tick.
+
+    Method: inject a deterministic read FAILURE into the real, ground-truth
+    SimOdometer (sim_set_otos_read_failure) and force Drive to attempt an
+    OTOS read every tick (set_otos_fusion bypasses the internal lag gate).
+    While bench mode is off, every read must fail, so Drive's raw optical
+    pose (state().optical, the same field RobotTelemetry's `otos=` clause
+    reads) must stay frozen at its never-successfully-written initial value
+    (0, 0, 0) no matter how long the robot drives.
+
+    Enabling bench mode swaps the ACTIVE odometer to the always-healthy
+    BenchOtosSensor. THE FIX UNDER TEST: the live path must observe a
+    successful read -- and optical.pose must start moving -- starting the
+    very next tick. Pre-fix, `Drive::_otos` is a reference bound once, at
+    construction, to the real (still-failing) SimOdometer; toggling bench
+    mode later is a no-op for it, so optical.pose would stay stuck at
+    (0, 0, 0) forever and this test's central assertion would fail against
+    that code -- confirmed by temporarily reverting Drive's constructor
+    signature to `IOdometer& otos` / `_otos(otos)` locally and re-running
+    this test during implementation.
+    """
+    with Sim() as s:
+        s.set_otos_fusion(True)        # bypass the lag gate: fuse every tick
+        s.set_otos_read_failure(True)  # real SimOdometer.readTransformed() always fails
+
+        send(s, "VW 100 300")
+        s.tick_for(200)
+
+        frozen = s.get_optical_pose()
+        assert frozen == (0.0, 0.0, 0.0), (
+            f"real SimOdometer is failing every read -- Drive's optical pose "
+            f"must stay at its never-successfully-written initial value, "
+            f"got {frozen}"
+        )
+
+        # THE FIX UNDER TEST: swap the live path's active odometer.
+        assert "otos bench=1" in send(s, "DBG OTOS BENCH 1")
+        s.tick_for(48)  # a couple of control periods is enough
+
+        after_toggle = s.get_optical_pose()
+        assert after_toggle != (0.0, 0.0, 0.0), (
+            f"Drive's live fusion/telemetry path must observe the bench "
+            f"sensor's successful read starting the very next tick after "
+            f"DBG OTOS BENCH 1 -- pre-fix Drive keeps reading the stale, "
+            f"still-failing real SimOdometer forever and this would stay "
+            f"(0, 0, 0): {after_toggle}"
+        )
+
+        # Keep ticking: the bench sensor keeps advancing (074-001's
+        # dt-baseline discipline) and the live path must keep observing it.
+        s.tick_for(200)
+        later = s.get_optical_pose()
+        assert later != after_toggle, (
+            f"bench sensor must keep advancing tick-over-tick on the live "
+            f"path: after_toggle={after_toggle} later={later}"
+        )
+
+        # Toggle back off: the live path must observe the real (still
+        # failing) SimOdometer resume being the active sensor -- optical
+        # pose freezes again at whatever the bench sensor last wrote.
+        assert "otos bench=0" in send(s, "DBG OTOS BENCH 0")
+        s.tick_for(200)
+        frozen_again = s.get_optical_pose()
+        assert frozen_again == later, (
+            f"disabling bench mode must restore the real (failing) "
+            f"SimOdometer as Drive's active sensor on the live path -- "
+            f"optical pose must freeze again: before={later} "
+            f"after={frozen_again}"
+        )
