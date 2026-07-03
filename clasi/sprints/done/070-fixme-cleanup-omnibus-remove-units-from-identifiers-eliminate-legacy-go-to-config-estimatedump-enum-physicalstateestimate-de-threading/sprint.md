@@ -2,7 +2,7 @@
 id: '070'
 title: 'FIXME cleanup omnibus: remove units from identifiers, eliminate legacy go-to
   config, EstimateDump enum, PhysicalStateEstimate de-threading'
-status: planning-docs
+status: done
 branch: sprint/070-fixme-cleanup-omnibus-remove-units-from-identifiers-eliminate-legacy-go-to-config-estimatedump-enum-physicalstateestimate-de-threading
 use-cases: []
 issues:
