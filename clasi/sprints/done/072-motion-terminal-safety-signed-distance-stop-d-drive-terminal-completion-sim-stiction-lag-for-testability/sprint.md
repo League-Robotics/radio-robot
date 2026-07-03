@@ -2,7 +2,7 @@
 id: '072'
 title: 'Motion terminal safety: signed DISTANCE stop, D-drive terminal completion,
   sim stiction/lag for testability'
-status: planning-docs
+status: done
 branch: sprint/072-motion-terminal-safety-signed-distance-stop-d-drive-terminal-completion-sim-stiction-lag-for-testability
 use-cases: []
 issues:
