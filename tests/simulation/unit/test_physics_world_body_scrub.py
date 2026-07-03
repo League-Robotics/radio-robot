@@ -67,10 +67,10 @@ int main() {
     {
         PhysicsWorld base, withDefaults;
         base.setTrackwidth(150.0f);
-        base.setNominalMaxMms(400.0f);
+        base.setNominalMaxSpeed(400.0f);
         base.setActuators(-50, 50);   // pure spin: exercises both dTheta and linear terms
         withDefaults.setTrackwidth(150.0f);
-        withDefaults.setNominalMaxMms(400.0f);
+        withDefaults.setNominalMaxSpeed(400.0f);
         withDefaults.setActuators(-50, 50);
         // Defaults are already 1.0f; set explicitly to prove the setter path
         // itself is a no-op at 1.0, not just an untouched field.
@@ -106,10 +106,10 @@ int main() {
     {
         PhysicsWorld noScrub, withScrub;
         noScrub.setTrackwidth(150.0f);
-        noScrub.setNominalMaxMms(400.0f);
+        noScrub.setNominalMaxSpeed(400.0f);
         noScrub.setActuators(-50, 50);
         withScrub.setTrackwidth(150.0f);
-        withScrub.setNominalMaxMms(400.0f);
+        withScrub.setNominalMaxSpeed(400.0f);
         withScrub.setActuators(-50, 50);
         withScrub.setBodyRotationalScrub(0.92f);
 
@@ -117,8 +117,8 @@ int main() {
         withScrub.update(100);
 
         // Encoders (sub-step A) must be identical — scrub does not touch them.
-        bool encOk = bitEqual(noScrub.trueEncLMm(), withScrub.trueEncLMm()) &&
-                     bitEqual(noScrub.trueEncRMm(), withScrub.trueEncRMm());
+        bool encOk = bitEqual(noScrub.trueEncL(), withScrub.trueEncL()) &&
+                     bitEqual(noScrub.trueEncR(), withScrub.trueEncR());
         // Heading reduced by exactly the scrub factor (rotationalSlip is 0/unset
         // on both, so effectiveSlip() contributes 1.0 to both).
         bool headOk = std::fabs(withScrub.truePoseH() - noScrub.truePoseH() * 0.92f) < 1e-4f;
@@ -138,10 +138,10 @@ int main() {
     {
         PhysicsWorld noScrub, withScrub;
         noScrub.setTrackwidth(150.0f);
-        noScrub.setNominalMaxMms(400.0f);
+        noScrub.setNominalMaxSpeed(400.0f);
         noScrub.setActuators(50, 50);   // straight drive: pure linear term, dTheta ~ 0
         withScrub.setTrackwidth(150.0f);
-        withScrub.setNominalMaxMms(400.0f);
+        withScrub.setNominalMaxSpeed(400.0f);
         withScrub.setActuators(50, 50);
         withScrub.setBodyLinearScrub(0.5f);
 
@@ -163,12 +163,12 @@ int main() {
     {
         PhysicsWorld legacyOnly, both;
         legacyOnly.setTrackwidth(150.0f);
-        legacyOnly.setNominalMaxMms(400.0f);
+        legacyOnly.setNominalMaxSpeed(400.0f);
         legacyOnly.setActuators(-50, 50);
         legacyOnly.setSlip(0.7f, 0.0f);      // effectiveSlip(0.7) = 0.7 (066-001's channel)
 
         both.setTrackwidth(150.0f);
-        both.setNominalMaxMms(400.0f);
+        both.setNominalMaxSpeed(400.0f);
         both.setActuators(-50, 50);
         both.setSlip(0.7f, 0.0f);
         both.setBodyRotationalScrub(0.92f);  // additional, independent factor
@@ -184,7 +184,7 @@ int main() {
         // unscrubbed run.
         PhysicsWorld unscrubbed;
         unscrubbed.setTrackwidth(150.0f);
-        unscrubbed.setNominalMaxMms(400.0f);
+        unscrubbed.setNominalMaxSpeed(400.0f);
         unscrubbed.setActuators(-50, 50);
         unscrubbed.update(100);
         bool legacyIntactOk = std::fabs(legacyOnly.truePoseH() - unscrubbed.truePoseH() * 0.7f) < 1e-4f;

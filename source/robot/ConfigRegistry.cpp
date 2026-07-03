@@ -30,8 +30,8 @@
 
 const ConfigEntry kRegistry[] = {
     // Encoder calibration (mm per degree of motor rotation)
-    CFG_F("ml",           mmPerDegL),
-    CFG_F("mr",           mmPerDegR),
+    CFG_F("ml",           wheelTravelCalibL),
+    CFG_F("mr",           wheelTravelCalibR),
     // Feed-forward and motor scale factors
     CFG_F("kff",          kFF),
     CFG_F("klf",          kScaleLF),
@@ -42,7 +42,7 @@ const ConfigEntry kRegistry[] = {
     CFG_F("adjThr",       kAdjThreshold),
     CFG_F("adjGain",      kAdjGain),
     // Geometry — stored as float, displayed as integer (mm)
-    CFG_FI("tw",          trackwidthMm),
+    CFG_FI("tw",          trackwidth),
     // Velocity loop gains (Sprint 010).  Annotated "drive" so SET routes to
     // drive.configure() after the direct-write commit (059-004).
     //   velKp  <-> "vel.kP"   velKi  <-> "vel.kI"   velKff <-> "vel.kFF"
@@ -54,19 +54,23 @@ const ConfigEntry kRegistry[] = {
     CFG_F("vel.filt",     velFiltAlpha),         // velocity EMA weight (smoothing)
     CFG_F("sync",         syncGain),             // cross-wheel ratio coupling gain
     // Velocity deadband and wheel speed ceiling (Sprint 010)
-    CFG_F("minWheelMms",  minWheelMms),
+    // NOTE: the wire key string "minWheelMms" is preserved verbatim (wire
+    // compatibility) even though the C++ field is now minWheelSpeed — this is
+    // the one row in the registry where key and field literal happened to be
+    // spelled identically pre-rename (071-002).
+    CFG_F("minWheelMms",  minWheelSpeed),
     CFG_F("vWheelMax",    vWheelMax),
     CFG_F("steerHeadroom",steerHeadroom),
     // OTOS complementary fusion (Sprint 010, Ticket 006)
     CFG_F("alphaPos",     alphaPos),
     CFG_F("alphaYaw",     alphaYaw),
     CFG_F("otosGate",     otosGate),
-    // Pose-control tunables (Sprint 011). aMax/vBodyMax/yawRateMax/arriveTolMm
+    // Pose-control tunables (Sprint 011). aMax/vBodyMax/yawRateMax/arriveTolerance
     // annotated "planner" so SET routes to planner.configure() (059-004).
     CFG_F_SS("aMax",       aMax,         "planner"),
     CFG_F   ("aDecel",     aDecel),
     CFG_FI  ("turnGate",   turnInPlaceGate),   // wire: integer degrees; Planner converts to radians at use-site
-    CFG_FI_SS("arriveTol", arriveTolMm,  "planner"),  // wire: integer mm
+    CFG_FI_SS("arriveTol", arriveTolerance, "planner"),  // wire: integer mm
     // Body motion limits (Sprint 017 -- BodyVelocityController)
     CFG_F_SS("vBodyMax",   vBodyMax,     "planner"),  // body forward speed ceiling, mm/s
     CFG_F_SS("yawRateMax", yawRateMax,   "planner"),  // yaw rate ceiling, deg/s
@@ -74,29 +78,29 @@ const ConfigEntry kRegistry[] = {
     CFG_F   ("jMax",       jMax),                     // linear jerk limit, mm/s^3 (0=trapezoid)
     CFG_F   ("yawJerkMax", yawJerkMax),               // yaw jerk limit, deg/s^3   (0=trapezoid)
     // Timing and speed (int32_t fields)
-    CFG_I("minSpeed",     minSpeedMms),
-    CFG_I("sTimeout",     sTimeoutMs),
-    CFG_I("tick",         tickMs),
-    CFG_I("ctrlPeriod",   controlPeriodMs),
-    CFG_I("tlmPeriod",    tlmPeriodMs),
+    CFG_I("minSpeed",     minSpeed),
+    CFG_I("sTimeout",     sTimeout),
+    CFG_I("tick",         tick),
+    CFG_I("ctrlPeriod",   controlPeriod),
+    CFG_I("tlmPeriod",    tlmPeriod),
     // Sensor lag budgets (ms) for the cooperative scheduler's low-priority tasks.
     // lag.line / lag.color annotated "sensors" so SET routes to sensors.configure()
-    // (059-004).  SET lag.* N updates cfg.lag*Ms; LoopScheduler syncs periodMs live.
-    CFG_I   ("lag.otos",  lagOtosMs),
-    CFG_I_SS("lag.line",  lagLineMs,    "sensors"),
-    CFG_I_SS("lag.color", lagColorMs,   "sensors"),
-    CFG_I   ("lag.ports", lagPortsMs),
+    // (059-004).  SET lag.* N updates cfg.lag*; LoopScheduler syncs period live.
+    CFG_I   ("lag.otos",  lagOtos),
+    CFG_I_SS("lag.line",  lagLine,      "sensors"),
+    CFG_I_SS("lag.color", lagColor,     "sensors"),
+    CFG_I   ("lag.ports", lagPorts),
     // OTOS calibration and turn asymmetry (Sprint 012)
     CFG_F("otosLinSc",    otosLinearScale),
     CFG_F("otosAngSc",    otosAngularScale),
     CFG_F("rotGainPos",   rotationGainPos),
     CFG_F("rotGainNeg",   rotationGainNeg),
-    CFG_F("rotOffPos",    rotationOffsetDeg),
-    CFG_F("rotOffNeg",    rotationOffsetDegNeg),
+    CFG_F("rotOffPos",    rotationOffset),
+    CFG_F("rotOffNeg",    rotationOffsetNeg),
     CFG_F("rotSlip",      rotationalSlip),
     CFG_F("odomOffX",     odomOffX),
     CFG_F("odomOffY",     odomOffY),
-    CFG_F("odomYaw",      odomYawDeg),
+    CFG_F("odomYaw",      odomYaw),
     // EKF heading fusion noise (sprint 024-004)
     CFG_F_SS("ekfRHead",  ekfROtosTheta, "drive"),
     // EKF process/measurement noise (sprint 069-001, closing 067's Open
@@ -302,9 +306,9 @@ void handleGet(const ArgList& args, const char* corrId,
 // form) and returns false.  Only checks invariants whose violation causes a
 // known runtime failure:
 //
-//   tw > 0          — trackwidthMm divides in odometry arc/heading; zero →
+//   tw > 0          — trackwidth divides in odometry arc/heading; zero →
 //                     division by zero.
-//   ctrlPeriod > 0  — controlPeriodMs is cast to uint32 sleep; zero or
+//   ctrlPeriod > 0  — controlPeriod is cast to uint32 sleep; zero or
 //                     negative wraps to a huge value, starving the control
 //                     fiber.
 //   vWheelMax > steerHeadroom  — effective ceiling = vWheelMax-steerHeadroom;
@@ -324,25 +328,25 @@ void handleGet(const ArgList& args, const char* corrId,
 //                     targets to zero.
 //   yawRateMax > 0  — yaw rate ceiling; zero clamps all yaw targets to zero.
 //   yawAccMax > 0   — yaw acceleration limit; zero stalls BVC yaw channel.
-//   sTimeoutMs >= STIMEOUT_MIN_MS — watchdog compare fires every tick when
-//                     sTimeoutMs ≤ 0 (signed delta ≥ 0 always); even small
+//   sTimeout >= STIMEOUT_MIN_MS — watchdog compare fires every tick when
+//                     sTimeout ≤ 0 (signed delta ≥ 0 always); even small
 //                     values cause X-storms before the host can send a
 //                     keepalive.  200 ms provides margin over the firmware
 //                     tick budget (~25 ms worst-case) and the minimum
 //                     keepalive cadence without being overly restrictive.
 // ---------------------------------------------------------------------------
 
-// Minimum allowed sTimeoutMs value.  Below this the watchdog fires before the
+// Minimum allowed sTimeout value.  Below this the watchdog fires before the
 // host has any chance to send a keepalive (200 ms >> worst-case tick ~25 ms).
 static const int32_t STIMEOUT_MIN_MS = 200;
 
 static bool validateConfig(const RobotConfig& c, const char** badKey)
 {
-    if (c.trackwidthMm <= 0.0f) {
+    if (c.trackwidth <= 0.0f) {
         *badKey = "tw";
         return false;
     }
-    if (c.controlPeriodMs <= 0) {
+    if (c.controlPeriod <= 0) {
         *badKey = "ctrlPeriod";
         return false;
     }
@@ -381,7 +385,7 @@ static bool validateConfig(const RobotConfig& c, const char** badKey)
         *badKey = "yawAccMax";
         return false;
     }
-    if (c.sTimeoutMs < STIMEOUT_MIN_MS) {
+    if (c.sTimeout < STIMEOUT_MIN_MS) {
         *badKey = "sTimeout";
         return false;
     }

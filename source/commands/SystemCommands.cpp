@@ -123,11 +123,13 @@ static const ArgSchema echoSchema = { nullptr, 0, 0, true, nullptr };
 // SAFE — variadic: "off"/"on"/numeric tokens passed as STR args.
 static const ArgSchema safeSchema = { nullptr, 0, 0, true, nullptr };
 
-// SI <x_mm> <y_mm> <h_cdeg> — 3 mandatory INTs; ranged=false (plain atoi, no range check).
+// SI <x> <y> <h> (mm, mm, cdeg) — 3 mandatory INTs; ranged=false (plain atoi, no range check).
+// Names below are labels only (never surfaced: ranged=false means def.name's
+// ArgParse.cpp err.detail path is never reached for this schema).
 static const ArgDef siDefs[3] = {
-    { "x_mm",   ArgKind::INT, false, 0, 0 },
-    { "y_mm",   ArgKind::INT, false, 0, 0 },
-    { "h_cdeg", ArgKind::INT, false, 0, 0 },
+    { "x", ArgKind::INT, false, 0, 0 },
+    { "y", ArgKind::INT, false, 0, 0 },
+    { "h", ArgKind::INT, false, 0, 0 },
 };
 static const ArgSchema siSchema = { siDefs, 3, 3, false, nullptr };
 
@@ -325,9 +327,9 @@ static void handleZero(const ArgList& args, const char* corrId,
     // ZERO enc -- atomic encoder reset: hardware accumulators, MC velocity
     // baselines, outlier-filter baseline, and Odometry encoder snapshot.
     // (N1 fix, sprint 030-001: replaces bare resetEncoderAccumulators() which
-    // left state.actual.encLMm/R stale, freezing encoder reads for ~target mm.)
+    // left state.actual.encPos[] stale, freezing encoder reads for ~target mm.)
     if (doEnc)  robot->resetEncoders();
-    if (doPose) robot->estimate.zero(robot->state.actual.encMm[1], robot->state.actual.encMm[0],
+    if (doPose) robot->estimate.zero(robot->state.actual.encPos[1], robot->state.actual.encPos[0],
                                      robot->state.actual.encoder, robot->state.actual.fused);
     // ZERO T -- set timer baseline for HaltController TIME conditions.
     if (doT) {
@@ -335,7 +337,7 @@ static void handleZero(const ArgList& args, const char* corrId,
     }
     // ZERO D -- set distance baseline for HaltController DISTANCE conditions.
     if (doD) {
-        float enc_avg = (robot->state.actual.encMm[1] + robot->state.actual.encMm[0]) * 0.5f;
+        float enc_avg = (robot->state.actual.encPos[1] + robot->state.actual.encPos[0]) * 0.5f;
         robot->haltController.setDistBaseline(enc_avg);
     }
 
@@ -485,7 +487,7 @@ static void handleStream(const ArgList& args, const char* corrId,
     int32_t ms = (int32_t)atoi(args.args[0].sval);
     if (ms < 0) ms = 0;
     if (ms > 0 && ms < 20) ms = 20;  // clamp to 50 Hz max (D10 028-005: enforced here, NOT in telemetryEmit)
-    robot->config.tlmPeriodMs = ms;
+    robot->config.tlmPeriod = ms;
 
     // D10 channel binding (028-005): bind the TLM stream to the channel that
     // issued this STREAM command.  runCommsIn uses _tlmBoundCtx to identify
@@ -648,7 +650,7 @@ static void handleKeepalive(const ArgList& /*args*/, const char* /*corrId*/,
 // SAFE -- enable/disable the system safety-stop watchdog and set its timeout.
 //   SAFE                 -> query: "OK safety on|off timeout=<ms>"
 //   SAFE off  (or SAFE 0)-> disable the watchdog (no keepalives required)
-//   SAFE on   [<ms>]     -> enable; optional <ms> sets sTimeoutMs
+//   SAFE on   [<ms>]     -> enable; optional <ms> sets sTimeout
 //   SAFE <ms>            -> <ms> > 0: enable + set timeout; 0: disable
 // variadic ArgSchema: tokens passed through as STR args.
 // ---------------------------------------------------------------------------
@@ -682,7 +684,7 @@ static void handleSafe(const ArgList& args, const char* corrId,
             cfg.safetyEnabled = true;
             if (args.count >= 2) {
                 int ms = atoi(args.args[1].sval);
-                if (ms > 0) cfg.sTimeoutMs = ms;
+                if (ms > 0) cfg.sTimeout = ms;
             }
         } else {
             // Numeric form: SAFE <ms>  (0 -> off, >0 -> on with that timeout).
@@ -693,21 +695,21 @@ static void handleSafe(const ArgList& args, const char* corrId,
                 cfg.safetyEnabled = false;
             } else {
                 cfg.safetyEnabled = true;
-                cfg.sTimeoutMs = ms;
+                cfg.sTimeout = ms;
             }
         }
     }
 
     char body[48];
     snprintf(body, sizeof(body), "%s timeout=%d",
-             cfg.safetyEnabled ? "on" : "off", (int)cfg.sTimeoutMs);
+             cfg.safetyEnabled ? "on" : "off", (int)cfg.sTimeout);
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "safety", body,
                               corrId, replyFn, replyCtx);
 }
 
 // ---------------------------------------------------------------------------
 // SI -- set the odometry world pose directly (what G reads via getPoseFloat).
-//   SI <x_mm> <y_mm> <h_cdeg>
+//   SI <x> <y> <h>  (mm, mm, cdeg)
 // Establishes the robot's onboard pose from an external fix (e.g. the camera)
 // so a subsequent G/D/TURN drives in the correct world frame. This is the pose
 // the motion controller reads -- unlike OV, which only nudges the raw OTOS chip.
@@ -725,35 +727,35 @@ static void handleSI(const ArgList& args, const char* corrId,
                                    corrId, replyFn, replyCtx);
         return;
     }
-    int32_t x_mm   = args.args[0].ival;
-    int32_t y_mm   = args.args[1].ival;
-    int32_t h_cdeg = args.args[2].ival;
+    int32_t x = args.args[0].ival;   // [mm]
+    int32_t y = args.args[1].ival;   // [mm]
+    int32_t h = args.args[2].ival;   // [cdeg]
     // Direct path (legacy + live loop): reset the shared estimate and state.actual.
-    robot->estimate.resetPose(robot->state.actual.encMm[1], robot->state.actual.encMm[0],
-                              x_mm, y_mm, h_cdeg,
+    robot->estimate.resetPose(robot->state.actual.encPos[1], robot->state.actual.encPos[0],
+                              x, y, h,
                               robot->state.actual.encoder, robot->state.actual.fused);
     // 059-004: also stage via drive.apply(SetPose) so the new-arch Drive subsystem
     // sees the same pose re-anchor.  Drive::tickAction processes the staged command
     // and calls _est.resetPose on its own private _hw estimate.  Both the legacy path
     // (robot->estimate above) and the new-arch path (drive) are consistent.
-    // h_cdeg → rad: pi/18000 = 1.74532925e-4.
+    // h (cdeg) → rad: pi/18000 = 1.74532925e-4.
     {
         msg::DrivetrainCommand siCmd;
         msg::SetPose sp{};
-        sp.x  = (float)x_mm;
-        sp.y  = (float)y_mm;
-        sp.h  = (float)h_cdeg * 1.74532925e-4f;
+        sp.x  = (float)x;
+        sp.y  = (float)y;
+        sp.h  = (float)h * 1.74532925e-4f;
         siCmd.setPose(sp);
         robot->drive.apply(siCmd);
     }
     // Re-anchor the OTOS to the SAME world fix so its absolute position+heading
     // observations agree with the controller pose, instead of dragging the EKF
     // back toward the OTOS boot frame (the "starts right, then rotates away"
-    // bug).  h_cdeg -> rad: pi/18000 = 1.74532925e-4.
-    robot->otos.setWorldPose((float)x_mm, (float)y_mm,
-                             (float)h_cdeg * 1.74532925e-4f);
+    // bug).  h (cdeg) -> rad: pi/18000 = 1.74532925e-4.
+    robot->otos.setWorldPose((float)x, (float)y,
+                             (float)h * 1.74532925e-4f);
     char body[48];
-    snprintf(body, sizeof(body), "x=%d y=%d h=%d", (int)x_mm, (int)y_mm, (int)h_cdeg);
+    snprintf(body, sizeof(body), "x=%d y=%d h=%d", (int)x, (int)y, (int)h);
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "setpose", body,
                               corrId, replyFn, replyCtx);
 }
@@ -876,7 +878,7 @@ static void handleHalt(const ArgList& args, const char* corrId,
         // Capture registration-time baseline so the condition fires ~ms after
         // now, not ~ms after boot (N10 fix).
         uint32_t now_ms   = robot->systemTime();
-        float    enc_avg  = (robot->state.actual.encMm[1] + robot->state.actual.encMm[0]) * 0.5f;
+        float    enc_avg  = (robot->state.actual.encPos[1] + robot->state.actual.encPos[0]) * 0.5f;
         int id = robot->haltController.add(cond, style, label, now_ms, enc_avg);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
@@ -911,7 +913,7 @@ static void handleHalt(const ArgList& args, const char* corrId,
         // Capture registration-time baseline so the condition fires ~mm after
         // the current encoder position, not from boot (N10 fix).
         uint32_t now_ms_d  = robot->systemTime();
-        float    enc_avg_d = (robot->state.actual.encMm[1] + robot->state.actual.encMm[0]) * 0.5f;
+        float    enc_avg_d = (robot->state.actual.encPos[1] + robot->state.actual.encPos[0]) * 0.5f;
         int id = robot->haltController.add(cond, style, label, now_ms_d, enc_avg_d);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
@@ -968,7 +970,7 @@ static void handleHalt(const ArgList& args, const char* corrId,
         }
         int id = robot->haltController.add(cond, style, label,
                                             robot->systemTime(),
-                                            (robot->state.actual.encMm[1] + robot->state.actual.encMm[0]) * 0.5f);
+                                            (robot->state.actual.encPos[1] + robot->state.actual.encPos[0]) * 0.5f);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
                                        "halt table full (max 8)",
@@ -1006,7 +1008,7 @@ static void handleHalt(const ArgList& args, const char* corrId,
                  (int)x, (int)y, (int)rad);
         int id = robot->haltController.add(cond, style, label,
                                             robot->systemTime(),
-                                            (robot->state.actual.encMm[1] + robot->state.actual.encMm[0]) * 0.5f);
+                                            (robot->state.actual.encPos[1] + robot->state.actual.encPos[0]) * 0.5f);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
                                        "halt table full (max 8)",
@@ -1045,7 +1047,7 @@ static void handleHalt(const ArgList& args, const char* corrId,
                  (double)h, (double)s, (double)v, (double)dist);
         int id = robot->haltController.add(cond, style, label,
                                             robot->systemTime(),
-                                            (robot->state.actual.encMm[1] + robot->state.actual.encMm[0]) * 0.5f);
+                                            (robot->state.actual.encPos[1] + robot->state.actual.encPos[0]) * 0.5f);
         if (id < 0) {
             CommandProcessor::replyErr(rbuf, sizeof(rbuf), "full",
                                        "halt table full (max 8)",
@@ -1161,7 +1163,7 @@ std::vector<CommandDescriptor> Robot::buildCommandTable(
     cmds.push_back(makeSchemaCmd("ECHO",   &echoSchema,   handleEcho,   sysCtxPtr, "badarg")); // echo tokens back
     cmds.push_back(makeCmd("STREAM", parseStream, handleStream, sysCtxPtr, "badarg")); // start/stop periodic TLM stream
     cmds.push_back(makeSchemaCmd("SAFE",   &safeSchema,   handleSafe,   sysCtxPtr, "badarg")); // enable/disable safety watchdog + set timeout
-    cmds.push_back(makeSchemaCmd("SI",     &siSchema,     handleSI,     sysCtxPtr, "badarg")); // set odometry world pose (x_mm y_mm h_cdeg)
+    cmds.push_back(makeSchemaCmd("SI",     &siSchema,     handleSI,     sysCtxPtr, "badarg")); // set odometry world pose (x y h: mm, mm, cdeg)
     cmds.push_back(makeSchemaCmd("RF",     &rfSchema,     handleRf,     sysCtxPtr, "badarg")); // set radio channel
     // GET VEL / GET / SET descriptors live in ConfigCommands.cpp (A3 split).
     // GET VEL is registered first so its longer prefix wins the linear scan.

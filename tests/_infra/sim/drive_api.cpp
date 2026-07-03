@@ -136,8 +136,8 @@ void drive_api_apply_setpose(void* h, float x, float y, float h_rad)
 // Tick ordering (mirrors the live loopTickOnce pattern):
 //   hal.tick(now, outputs)  — integrate plant physics with the PWM that was
 //                             written by the previous tickAction's controlTick.
-//   hal.tick(now)           — promote integrated encoder into positionMm().
-//   drive.tickUpdate(now)  — read positionMm(), run outlier filter + EKF predict.
+//   hal.tick(now)           — promote integrated encoder into position().
+//   drive.tickUpdate(now)  — read position(), run outlier filter + EKF predict.
 void drive_api_tick_update(void* h, uint32_t now_ms)
 {
     DriveHandle* d = static_cast<DriveHandle*>(h);
@@ -208,7 +208,7 @@ float drive_api_get_target_mms_l(void* h)
     // directly, but PhysicsWorld does.
     // For the test purposes: read sim motor L's current velocity (if 0, braked).
     // We use hal.simMotorL() to read the last commanded speed from PhysicsWorld.
-    // PhysicsWorld::trueVelLMms() returns the ACTUAL velocity (not commanded).
+    // PhysicsWorld::trueVelL() returns the ACTUAL velocity (not commanded).
     // Instead, the simplest correct approach: read state.vel_[1] from Drive.
     const msg::DrivetrainState& st = static_cast<DriveHandle*>(h)->drive.state();
     if (st.vel_count_val() >= 2) return st.vel()[1];
@@ -243,17 +243,17 @@ void drive_api_begin_otos(void* h)
 // After this call the SimOdometer integrates from plant velocity with the
 // specified error so the optical estimate diverges from ground truth.
 //
-//   linear_noise_sigma  — Gaussian position noise (mm, zero-mean, per tick)
-//   yaw_noise_sigma     — Gaussian heading noise (rad, zero-mean, per tick)
-//   drift_per_tick_mm   — Deterministic X-axis drift per tick (mm)
-//   drift_per_tick_rad  — Deterministic heading drift per tick (rad)
-//   linear_scale_err    — Fractional linear scale error (0.03 = 3% over-report)
-//   angular_scale_err   — Fractional angular scale error
+//   linear_noise_sigma     — Gaussian position noise (mm, zero-mean, per tick)
+//   yaw_noise_sigma        — Gaussian heading noise (rad, zero-mean, per tick)
+//   linear_drift_per_tick  — Deterministic X-axis drift per tick (mm)
+//   yaw_drift_per_tick     — Deterministic heading drift per tick (rad)
+//   linear_scale_err       — Fractional linear scale error (0.03 = 3% over-report)
+//   angular_scale_err      — Fractional angular scale error
 void drive_api_enable_otos_sim_model(void* h,
                                       float linear_noise_sigma,
                                       float yaw_noise_sigma,
-                                      float drift_per_tick_mm,
-                                      float drift_per_tick_rad,
+                                      float linear_drift_per_tick,   // [mm]
+                                      float yaw_drift_per_tick,      // [rad]
                                       float linear_scale_err,
                                       float angular_scale_err)
 {
@@ -262,8 +262,8 @@ void drive_api_enable_otos_sim_model(void* h,
     odom.enableSimModel(true);
     odom.setLinearNoiseSigma(linear_noise_sigma);
     odom.setYawNoiseSigma(yaw_noise_sigma);
-    odom.setDriftPerTickMm(drift_per_tick_mm);
-    odom.setDriftPerTickRad(drift_per_tick_rad);
+    odom.setLinearDriftPerTick(linear_drift_per_tick);
+    odom.setYawDriftPerTick(yaw_drift_per_tick);
     odom.setLinearScaleError(linear_scale_err);
     odom.setAngularScaleError(angular_scale_err);
 }

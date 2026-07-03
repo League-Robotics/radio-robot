@@ -45,16 +45,16 @@ static float clampScrub(float f) {
 }
 
 // ---------------------------------------------------------------------------
-// update(dt_ms) — one canonical midpoint-arc integration step.
+// update(dt) — one canonical midpoint-arc integration step.
 //
 // Two structurally separate sub-steps, kept apart for golden-TLM bit-exactness:
 //
 //   Sub-step A — encoder accumulation.
 //   Sub-step B — chassis pose integration (slip applied here).
 // ---------------------------------------------------------------------------
-void PhysicsWorld::update(uint32_t dt_ms) {
-    if (dt_ms == 0) return;
-    float dt_s = static_cast<float>(dt_ms) / 1000.0f;
+void PhysicsWorld::update(uint32_t dt) {  // [ms]
+    if (dt == 0) return;
+    float dt_s = static_cast<float>(dt) / 1000.0f;
 
     // -----------------------------------------------------------------------
     // Sub-step A: encoder accumulation (true wheel travel; no slip here).
@@ -70,16 +70,16 @@ void PhysicsWorld::update(uint32_t dt_ms) {
     // exact float operation order below.  Same float type (float, not double),
     // same operation order, no algebraic simplification.
     // -----------------------------------------------------------------------
-    float velL = (_pwmL / 100.0f) * _nominalMaxMms * _offsetFactorL;
-    float velR = (_pwmR / 100.0f) * _nominalMaxMms * _offsetFactorR;
-    _trueEncLMm += velL * dt_s;
-    _trueEncRMm += velR * dt_s;
-    _trueVelLMms = velL;
-    _trueVelRMms = velR;
+    float velL = (_pwmL / 100.0f) * _nominalMaxSpeed * _offsetFactorL;
+    float velR = (_pwmR / 100.0f) * _nominalMaxSpeed * _offsetFactorR;
+    _trueEncL += velL * dt_s;
+    _trueEncR += velR * dt_s;
+    _trueVelL = velL;
+    _trueVelR = velR;
 
     // -----------------------------------------------------------------------
     // Sub-step A': reported-encoder accumulation (OQ-1 Option A — legacy
-    // MockMotor::integrate model, used by SimMotor::positionMm()).
+    // MockMotor::integrate model, used by SimMotor::position()).
     //
     // GOLDEN-TLM CRITICAL — DO NOT REFACTOR / SIMPLIFY.  This is the EXACT
     // MockMotor::integrate body (same float type, same operation order, same
@@ -107,8 +107,8 @@ void PhysicsWorld::update(uint32_t dt_ms) {
     // Both default to zero (1.0f * 1.0f = no change) so golden-TLM is unaffected.
     float deltaL = noisyL * dt_s * (1.0f + _encScaleErrL) * (1.0f - _encSlipL);
     float deltaR = noisyR * dt_s * (1.0f + _encScaleErrR) * (1.0f - _encSlipR);
-    _reportedEncLMm += deltaL;
-    _reportedEncRMm += deltaR;
+    _reportedEncL += deltaL;
+    _reportedEncR += deltaR;
 
     // -----------------------------------------------------------------------
     // Sub-step B: chassis pose integration (NOT on the TLM path; clean formula).
@@ -128,7 +128,7 @@ void PhysicsWorld::update(uint32_t dt_ms) {
     float dL       = velL * dt_s;
     float dR       = velR * dt_s;
     float slip     = effectiveSlip(_rotationalSlip) * clampScrub(_bodyRotationalScrub);
-    float dTh      = ((dR - dL) / _trackwidthMm) * slip;
+    float dTh      = ((dR - dL) / _trackwidth) * slip;
     float hMid     = _truePoseH + dTh * 0.5f;
     float linScrub = clampScrub(_bodyLinearScrub);
     _truePoseX += (dL + dR) * 0.5f * linScrub * cosf(hMid);
@@ -144,7 +144,7 @@ void PhysicsWorld::update(uint32_t dt_ms) {
 
 // ---------------------------------------------------------------------------
 // reset() — zero all ground-truth state.  Dynamics parameters (trackwidth,
-// nominalMaxMms, slip, offset factors) are configuration, not state, and are
+// nominalMaxSpeed, slip, offset factors) are configuration, not state, and are
 // left intact — matching the MockMotor::resetEncoder semantics (which zeros the
 // accumulator but keeps the configured slip / offset / noise).
 // ---------------------------------------------------------------------------
@@ -156,13 +156,13 @@ void PhysicsWorld::reset() {
     _truePoseY = 0.0f;
     _truePoseH = 0.0f;
 
-    _trueEncLMm  = 0.0f;
-    _trueEncRMm  = 0.0f;
-    _trueVelLMms = 0.0f;
-    _trueVelRMms = 0.0f;
+    _trueEncL  = 0.0f;
+    _trueEncR  = 0.0f;
+    _trueVelL = 0.0f;
+    _trueVelR = 0.0f;
 
-    _reportedEncLMm = 0.0f;
-    _reportedEncRMm = 0.0f;
+    _reportedEncL = 0.0f;
+    _reportedEncR = 0.0f;
 
     for (int i = 0; i < 4; ++i) {
         _lineRaw[i]   = 0;

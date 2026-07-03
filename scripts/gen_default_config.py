@@ -146,8 +146,8 @@ def generate(cfg: dict, source_path: str) -> str:
     wd = _get(wheels, "wheel_diameter_mm")
     default_mmpd = (math.pi * float(wd) / 360.0) if wd is not None else 0.487
 
-    mm_per_deg_l = _get(cal, "mm_per_wheel_deg_left",  default=default_mmpd)
-    mm_per_deg_r = _get(cal, "mm_per_wheel_deg_right", default=default_mmpd)
+    wheel_travel_calib_l = _get(cal, "mm_per_wheel_deg_left",  default=default_mmpd)
+    wheel_travel_calib_r = _get(cal, "mm_per_wheel_deg_right", default=default_mmpd)
 
     otos_lin  = _get(cal, "otos_linear_scale",    default=1.05)
     otos_ang  = _get(cal, "otos_angular_scale",   default=0.987)
@@ -181,7 +181,7 @@ def generate(cfg: dict, source_path: str) -> str:
     half_wb    = _get(mgeom, "half_wheelbase_mm")
 
     # Mecanum per-wheel encoder calibration. Falls back to wheel_diameter_mm
-    # derived default (same formula as mmPerDegL/R for differential).
+    # derived default (same formula as wheelTravelCalibL/R for differential).
     mmpd_fr = _get(mcal, "mm_per_wheel_deg_fr")
     mmpd_fl = _get(mcal, "mm_per_wheel_deg_fl")
     mmpd_br = _get(mcal, "mm_per_wheel_deg_br")
@@ -222,8 +222,8 @@ RobotConfig defaultRobotConfig() {{
     p.fwdSignR        = +1;
 
     // Encoder calibration — baked from robot config
-    p.mmPerDegL       = {_f(mm_per_deg_l)};
-    p.mmPerDegR       = {_f(mm_per_deg_r)};
+    p.wheelTravelCalibL = {_f(wheel_travel_calib_l)};
+    p.wheelTravelCalibR = {_f(wheel_travel_calib_r)};
 
     // Feed-forward and motor scale factors
     p.kFF             = 0.15f;
@@ -237,7 +237,7 @@ RobotConfig defaultRobotConfig() {{
     p.kAdjGain        = 0.05f;
 
     // Geometry — baked from robot config
-    p.trackwidthMm    = {_f(trackwidth)};
+    p.trackwidth      = {_f(trackwidth)};
 
     // Wheel saturation ceiling and steering headroom
     p.vWheelMax       = 400.0f;
@@ -251,7 +251,7 @@ RobotConfig defaultRobotConfig() {{
     // EKF sensor fusion
     // N15 fix (030-009): Q values are now per-second spectral densities.
     // EKF::predict() multiplies Q by dt_s before adding to P.  At the default
-    // controlPeriodMs = 10 ms, Q*dt = Q/100 matches the previous per-call values.
+    // controlPeriod = 10 ms, Q*dt = Q/100 matches the previous per-call values.
     // Q_per_second = Q_old / 0.010 s.
     // 2026-06-16: DISTRUST the encoder predict so the EKF prefers the OTOS
     // (optical-flow) absolute pose — the encoder heading is intrinsically noisy
@@ -279,33 +279,29 @@ RobotConfig defaultRobotConfig() {{
     p.otosAngularScale     = {_f(otos_ang)};
     p.rotationGainPos      = {_f(rot_gp)};
     p.rotationGainNeg      = {_f(rot_gn)};
-    p.rotationOffsetDeg    = {_f(rot_op)};
-    p.rotationOffsetDegNeg = {_f(rot_on)};
+    p.rotationOffset       = {_f(rot_op)};
+    p.rotationOffsetNeg    = {_f(rot_on)};
     p.rotationalSlip       = {_f(rot_slip)};
     p.odomOffX             = {_f(odom_x)};
     p.odomOffY             = {_f(odom_y)};
-    p.odomYawDeg           = {_f(odom_yaw_deg)};
+    p.odomYaw              = {_f(odom_yaw_deg)};
     p.odomUpsideDown       = {_b(odom_upside)};
 
     // Velocity-loop gains — baked from robot config
     p.velKp           = {_f(vel_kp)};
     p.velKi           = {_f(vel_ki)};
     p.velKff          = {_f(vel_kff)};
-    p.minWheelMms     = {_f(min_wheel)};
+    p.minWheelSpeed   = {_f(min_wheel)};
     p.velIMax         = {_f(vel_imax)};
     p.velKaw          = {_f(vel_kaw)};
     p.velFiltAlpha    = {_f(vel_filt)};
     p.syncGain        = {_f(sync)};
 
-    // Legacy go-to tolerances
-    p.turnThresholdMm = 50.0f;
-    p.doneTolMm       = 5.0f;
-
     // Pose-control tunables
     p.aMax            = 300.0f;
     p.aDecel          = 250.0f;
     p.turnInPlaceGate = {ov('turnInPlaceGate', '45.0f')};
-    p.arriveTolMm     = {ov('arriveTolMm', '5.0f')};
+    p.arriveTolerance = {ov('arriveTolerance', '5.0f')};
 
     // Body motion limits
     p.vBodyMax        = 400.0f;
@@ -315,13 +311,13 @@ RobotConfig defaultRobotConfig() {{
     p.yawJerkMax      = 0.0f;
 
     // Timing
-    p.minSpeedMms     = 50;
-    p.tickMs          = 20;
-    p.sTimeoutMs      = 500;
+    p.minSpeed        = 50;
+    p.tick            = 20;
+    p.sTimeout        = 500;
     p.safetyEnabled   = {ov('safetyEnabled', 'true')};
-    p.controlPeriodMs = 10;
-    p.tlmPeriodMs     = 0;
-    p.tlmFields       = 0x1FF;  // 068: was 0xFF; widened to TLM_FIELD_ALL to include TLM_FIELD_ENCPOSE (bit 8)
+    p.controlPeriod   = 10;
+    p.tlmPeriod       = 0;
+    p.tlmFields       = TLM_FIELD_ALL;  // 068: was 0xFF; widened to include TLM_FIELD_ENCPOSE (bit 8)
     p.tlmSnapPending  = false;
 
     // Sensor lag budgets
@@ -332,10 +328,10 @@ RobotConfig defaultRobotConfig() {{
     // camera).  Instrumented field sweeps showed the TWIM encoder wedge is roughly
     // RATE-INDEPENDENT (4-12% at 25/50/100Hz alike), so it is NOT mitigated by
     // backing the rate off (a pre-write-idle encoder fix was tried and refuted).
-    p.lagOtosMs       = 10;
-    p.lagLineMs       = 50;
-    p.lagColorMs      = 100;
-    p.lagPortsMs      = 50;
+    p.lagOtos         = 10;
+    p.lagLine         = 50;
+    p.lagColor        = 100;
+    p.lagPorts        = 50;
 
     // Sprint 046: mecanum drivetrain fields (baked from identity.drivetrain_type).
     // Differential-only build carries these fields with safe defaults; they are
@@ -343,14 +339,14 @@ RobotConfig defaultRobotConfig() {{
     p.drivetrain      = {1 if drivetrain_type == 'mecanum' else 0};
 
     // Mecanum geometry (MEASURE placeholders; default 63.0 mm half-track/wheelbase).
-    p.halfTrackMm     = {_f(half_track if half_track is not None else 63.0)};
-    p.halfWheelbaseMm = {_f(half_wb    if half_wb    is not None else 63.0)};
+    p.halfTrack       = {_f(half_track if half_track is not None else 63.0)};
+    p.halfWheelbase   = {_f(half_wb    if half_wb    is not None else 63.0)};
 
     // Per-wheel encoder calibration (mecanum). Defaults from wheel_diameter_mm.
-    p.mmPerDegFR      = {_f(mmpd_fr if mmpd_fr is not None else default_mmpd)};
-    p.mmPerDegFL      = {_f(mmpd_fl if mmpd_fl is not None else default_mmpd)};
-    p.mmPerDegBR      = {_f(mmpd_br if mmpd_br is not None else default_mmpd)};
-    p.mmPerDegBL      = {_f(mmpd_bl if mmpd_bl is not None else default_mmpd)};
+    p.wheelTravelCalibFR = {_f(mmpd_fr if mmpd_fr is not None else default_mmpd)};
+    p.wheelTravelCalibFL = {_f(mmpd_fl if mmpd_fl is not None else default_mmpd)};
+    p.wheelTravelCalibBR = {_f(mmpd_br if mmpd_br is not None else default_mmpd)};
+    p.wheelTravelCalibBL = {_f(mmpd_bl if mmpd_bl is not None else default_mmpd)};
 
     // Per-wheel forward signs (mecanum). Bench-confirmed defaults.
     p.fwdSignFR       = {sign_fr};

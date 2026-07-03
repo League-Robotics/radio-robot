@@ -35,8 +35,8 @@ No heap allocation occurs in any layer during normal operation.
 
 **`Config.h`** — Shared plain-old-data structs with no dependencies.
 - `RobotConfig` — single unified config for all runtime-tunable parameters
-  (`mmPerDegL/R`, `kFF`, `kScaleLF/LB/RF/RB`, `ratioPid` gains, adj threshold/gain,
-  `trackwidthMm`, `turnInPlaceGate`, `arriveTolMm`, timing/speed params).
+  (`wheelTravelCalibL/R`, `kFF`, `kScaleLF/LB/RF/RB`, `ratioPid` gains, adj threshold/gain,
+  `trackwidth`, `turnInPlaceGate`, `arriveTolerance`, timing/speed params).
   Owned by `Robot`; held as `const RobotConfig&` by subsystems.
   `defaultRobotConfig()` is the factory function.
 - `MotorGains` — feed-forward and PI gains for MotorController
@@ -56,7 +56,7 @@ Thin wrappers over CODAL hardware. Each class receives its hardware reference at
 - Constructed with `(MicroBitI2C&, uint8_t motorId, int8_t fwdSign)`.
   motorId: 1=M1/right, 2=M2/left. fwdSign: +1 or -1 from `RobotConfig`.
 - `setSpeed(pct)` — signed PWM (-100..100). Positive = logical forward; `fwdSign` applied internally.
-- `readEncoder(cfg)` → mm — uses `cfg.mmPerDegL` (M2) or `cfg.mmPerDegR` (M1); `fwdSign` ensures forward = positive.
+- `readEncoder(cfg)` → mm — uses `cfg.wheelTravelCalibL` (M2) or `cfg.wheelTravelCalibR` (M1); `fwdSign` ensures forward = positive.
 - `resetEncoder()` — software encoder zero for this motor's channel.
 - `Robot` owns two `Motor` instances: `_motorL` (M2, fwdSign=+1) and `_motorR` (M1, fwdSign=−1).
 
@@ -182,7 +182,7 @@ Constructor takes `MicroBit&`, `SerialPort&`, `Radio&`; receives these from `mai
 - Declares `static MicroBit uBit;` as file-scope; calls `uBit.init()` before constructing Robot.
 - Constructs `static Robot robot(...)` and `static CommandProcessor cmd(robot)`.
 - Visible loop: drain serial with serial sink → drain radio with radio sink →
-  `robot.tick(uBit.systemTime(), activeFn, activeCtx)` → `uBit.sleep(tickMs)`.
+  `robot.tick(uBit.systemTime(), activeFn, activeCtx)` → `uBit.sleep(tick)`.
 - Tracks `activeFn`/`activeCtx` — updated each time a command is dispatched so that
   `robot.tick()` sends async completions (T+DONE, D+DONE, etc.) back to the originating channel.
 
@@ -291,7 +291,7 @@ graph TD
 | Per-drive sink capture in DriveController | Async completions route to originating channel |
 | OTOS injected as nullable pointer | Robot works without OTOS; optional peripherals use null-check |
 | PathFollower copies waypoints (MAX=32) | No lifetime dependency on caller buffer; 256 bytes/follower static cost |
-| `uBit.sleep(tickMs)` not busy-wait | Yields fiber so CODAL radio event handler runs between ticks |
+| `uBit.sleep(tick)` not busy-wait | Yields fiber so CODAL radio event handler runs between ticks |
 | Integrators survive S-command keepalive | `resetIntegrators()` on mode change only; no step response on re-send |
 
 ## Navigation Architecture & Pose Authority

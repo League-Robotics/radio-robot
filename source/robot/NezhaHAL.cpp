@@ -5,7 +5,7 @@ NezhaHAL::NezhaHAL(MicroBitI2C& i2c, MicroBitIO& io, const RobotConfig& cfg)
     : _bus(i2c),
       // Canonical wiring (verified at the controller): LEFT wheel = M2 (chip id 2),
       // RIGHT = M1 (chip id 1). Calibration follows motorId inside Motor (id 2 ->
-      // mmPerDegL, id 1 -> mmPerDegR), so this honest mapping keeps the per-wheel
+      // wheelTravelCalibL, id 1 -> wheelTravelCalibR), so this honest mapping keeps the per-wheel
       // calibration correct AND makes the encoder-difference heading (encR-encL)/tw
       // CCW+ — matching the (un-negated) OTOS heading and the ENU camera. The motor
       // forward SENSE is inverted, handled separately by fwdSignL/R (flipped in
@@ -27,8 +27,8 @@ NezhaHAL::NezhaHAL(MicroBitI2C& i2c, MicroBitIO& io, const RobotConfig& cfg)
 #ifdef BENCH_OTOS_ENABLED
       ,
       _otosActive(&_otos),              // default: real sensor
-      _trackwidthMm(cfg.trackwidthMm),  // cache for bench tick (034-001)
-      _lastBenchTickMs(0u)
+      _trackwidth(cfg.trackwidth),     // [mm] cache for bench tick (034-001)
+      _lastBenchTick(0u)                // [ms]
 #endif
 {
 }
@@ -49,17 +49,17 @@ void NezhaHAL::begin()
 }
 
 // ---------------------------------------------------------------------------
-// tick(now_ms, cmds) — actuator-state tick for bench sensor integration.
+// tick(now, cmds) — actuator-state tick for bench sensor integration.
 //
 // When bench mode is active, integrates the commanded wheel velocities into
 // BenchOtosSensor so that the plant advances position/heading consistently
 // with the control loop's outputs.
 //
-// The dt baseline (_lastBenchTickMs) is maintained EVERY tick — even when bench
+// The dt baseline (_lastBenchTick) is maintained EVERY tick — even when bench
 // mode is off — exactly as the original Robot::benchOtosTick did.  loopTickOnce
 // calls this every loop iteration, so dt tracks the loop period.  If the stamp
 // were only updated while bench mode was active, the FIRST tick after
-// `DBG OTOS BENCH 1` would compute dt = now_ms (a large spike) and integrate a
+// `DBG OTOS BENCH 1` would compute dt = now (a large spike) and integrate a
 // huge step on the plant.  Signed-delta avoids uint32 underflow (project memory:
 // watchdog-uint32-underflow).
 //
@@ -70,7 +70,7 @@ void NezhaHAL::begin()
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// tick(now_ms) — sensor tick: per-loop split-phase encoder read (039-002).
+// tick(now) — sensor tick: per-loop split-phase encoder read (039-002).
 //
 // Replaces the encoder read that Robot::controlCollectSplitPhase performed.
 // RIGHT (M1) is read BEFORE LEFT (M2), matching the proven WedgeTest ordering
@@ -78,29 +78,29 @@ void NezhaHAL::begin()
 // identical 0x46-write + 4-byte-read transaction (via readEncoderMmFSettle),
 // so the bytes on the I2C wire are unchanged.
 // ---------------------------------------------------------------------------
-void NezhaHAL::tick(uint32_t now_ms)
+void NezhaHAL::tick(uint32_t now)   // [ms]
 {
-    _motorR.tick(now_ms);   // Right (M1) first — proven ordering (sprint 015)
-    _motorL.tick(now_ms);   // Left (M2) second
+    _motorR.tick(now);   // Right (M1) first — proven ordering (sprint 015)
+    _motorL.tick(now);   // Left (M2) second
 }
 
-void NezhaHAL::tick(uint32_t now_ms, const MotorCommands& cmds)
+void NezhaHAL::tick(uint32_t now, const MotorCommands& cmds)   // [ms]
 {
 #ifdef BENCH_OTOS_ENABLED
     // Maintain the dt baseline every tick (see header comment) before the
     // bench-mode gate.
-    int32_t  dt_signed = (int32_t)(now_ms - _lastBenchTickMs);
-    uint32_t dt_ms     = (dt_signed > 0) ? (uint32_t)dt_signed : 0u;
-    _lastBenchTickMs   = now_ms;
+    int32_t  dt_signed = (int32_t)(now - _lastBenchTick);
+    uint32_t dt         = (dt_signed > 0) ? (uint32_t)dt_signed : 0u;  // [ms]
+    _lastBenchTick      = now;
 
     // Early-return when bench mode is off (production path — nearly free).
     if (!isBenchMode()) return;
 
     // Array convention: [0]=R (FR), [1]=L (FL) — see OutputState.h.
-    benchOtosPtr()->tick(cmds.tgtMms[1], cmds.tgtMms[0], _trackwidthMm, dt_ms);
+    benchOtosPtr()->tick(cmds.tgtSpeed[1], cmds.tgtSpeed[0], _trackwidth, dt);
 #else
     // Production: no bench sensor; this override is a no-op.  (034-006)
-    (void)now_ms;
+    (void)now;
     (void)cmds;
 #endif
 }

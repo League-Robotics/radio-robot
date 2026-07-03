@@ -134,10 +134,10 @@ public:
 
     // Deterministic drift error: accumulated offset added per tick.
     // A fresh SimOdometer has zero drift (perfect sensor).
-    // _driftPerTickMm is added to the linear odometry accumulator each tick;
-    // _driftPerTickRad is added to the heading accumulator each tick.
-    void setDriftPerTickMm(float mm)   { _driftPerTickMm = mm; }
-    void setDriftPerTickRad(float rad) { _driftPerTickRad = rad; }
+    // _linearDriftPerTick is added to the linear odometry accumulator each tick;
+    // _yawDriftPerTick is added to the heading accumulator each tick.
+    void setLinearDriftPerTick(float drift) { _linearDriftPerTick = drift; }  // [mm]
+    void setYawDriftPerTick(float drift)    { _yawDriftPerTick = drift; }     // [rad]
 
     // Scale error: multiplies the reported delta by (1 + error).
     // 0.0 = perfect, 0.05 = 5% scale error.
@@ -145,12 +145,12 @@ public:
     void setAngularScaleError(float err) { _angularScaleErr = err; }
 
     // Error-state accessors (069-004) — mirror the six setters immediately
-    // above (setDriftPerTickMm/Rad, setLinearScaleError/setAngularScaleError,
-    // setLinearNoiseSigma/setYawNoiseSigma). Write-only was fine when only
-    // ctypes test code set these (057-005/058-001); the SIMSET/SIMGET wire
-    // surface needs to read them back.
-    float driftPerTickMm()    const { return _driftPerTickMm; }
-    float driftPerTickRad()   const { return _driftPerTickRad; }
+    // above (setLinearDriftPerTick/setYawDriftPerTick, setLinearScaleError/
+    // setAngularScaleError, setLinearNoiseSigma/setYawNoiseSigma). Write-only
+    // was fine when only ctypes test code set these (057-005/058-001); the
+    // SIMSET/SIMGET wire surface needs to read them back.
+    float linearDriftPerTick() const { return _linearDriftPerTick; }  // [mm]
+    float yawDriftPerTick()    const { return _yawDriftPerTick; }     // [rad]
     float linearScaleError()  const { return _linearScaleErr; }
     float angularScaleError() const { return _angularScaleErr; }
     float linearNoiseSigma()  const { return _linearNoiseSigma; }
@@ -159,14 +159,14 @@ public:
     // Control-tick period (ms), read from the live RobotConfig this odometer
     // was constructed with (069-004) — NOT a copy, so a runtime `SET
     // ctrlPeriod=…` is reflected immediately (067's live-reference rule).
-    // tick() adds the FULL _driftPerTickMm/_driftPerTickRad once per call,
-    // and tick() fires once per RobotConfig::controlPeriodMs
-    // (source/types/Config.h:167) — so this is "how many ms is one tick,"
+    // tick() adds the FULL _linearDriftPerTick/_yawDriftPerTick once per call,
+    // and tick() fires once per RobotConfig::controlPeriod
+    // (source/types/Config.h) — so this is "how many ms is one tick,"
     // used by SimCommands to convert the wire's per-second
     // otosLinDriftMmS/otosYawDriftDegS keys to/from this class's internal
     // per-tick representation. Out-of-line (SimOdometer.cpp) because the
     // header only forward-declares RobotConfig.
-    int32_t controlPeriodMs() const;
+    int32_t controlPeriod() const;  // [ms]
 
     // Accumulated OTOS odometry (sim-model output; back-compat sim_get_otos_*).
     float odomX() const { return _odomX; }
@@ -177,7 +177,7 @@ public:
     // Samples PhysicsWorld::truePoseX/Y/H() (ground truth) and integrates the
     // delta since the previous sample into the noisy centre-frame accumulator
     // (ticket 066-001 — no longer takes wheel velocities; see class comment).
-    void tick(uint32_t dt_ms);
+    void tick(uint32_t dt);  // [ms]
 
 private:
     const PhysicsWorld& _plant;   // ground-truth read access
@@ -214,10 +214,10 @@ private:
 
     // Deterministic error model (ticket 057-005).
     // All zero by default → a fresh SimOdometer is perfect (no behaviour change).
-    float _driftPerTickMm   = 0.0f;   // linear drift added to odomX accumulator per tick
-    float _driftPerTickRad  = 0.0f;   // heading drift added to odomH per tick
-    float _linearScaleErr   = 0.0f;   // fractional scale error on linear delta (0 = perfect)
-    float _angularScaleErr  = 0.0f;   // fractional scale error on angular delta (0 = perfect)
+    float _linearDriftPerTick = 0.0f;  // [mm] linear drift added to odomX accumulator per tick
+    float _yawDriftPerTick    = 0.0f;  // [rad] heading drift added to odomH per tick
+    float _linearScaleErr     = 0.0f;  // fractional scale error on linear delta (0 = perfect)
+    float _angularScaleErr    = 0.0f;  // fractional scale error on angular delta (0 = perfect)
 
     float _velV             = 0.0f;
     float _velOmega         = 0.0f;

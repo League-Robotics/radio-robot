@@ -57,13 +57,13 @@ message DrivetrainConfig {
   // Differential geometry
   int32  fwd_sign_l           = 1;
   int32  fwd_sign_r           = 2;
-  float  mm_per_deg_l         = 3;
-  float  mm_per_deg_r         = 4;
+  float  travel_calib_l       = 3;  // [mm/deg]
+  float  travel_calib_r       = 4;  // [mm/deg]
   float  trackwidth            = 5;
   // Mecanum/holonomic geometry
   float  half_track            = 6;
   float  half_wheelbase        = 7;
-  repeated float mm_per_deg_wheel = 8  [(max_count) = 4];
+  repeated float travel_calib_wheel = 8  [(max_count) = 4];  // [mm/deg]
   repeated int32 fwd_sign_wheel   = 9  [(max_count) = 4];
   // Velocity saturation
   float  v_wheel_max          = 10;

@@ -42,7 +42,7 @@ inline float effectiveSlip(float rawSlip) {
  * only its previous-encoder snapshot (_prevEncL/_prevEncR) as intermediate
  * compute state — separate from the control task's counters.
  *
- * Primary API: call predict(encLeftMm, encRightMm, now_ms, encoderOut,
+ * Primary API: call predict(encLeft, encRight, now, encoderOut,
  * fusedOut) once per odometry-predict task tick (after setKinematics() has
  * been called with the live trackwidth/rotationalSlip for this tick).
  * Computes deltas against _prevEncL/_prevEncR, applies midpoint (exact-arc)
@@ -59,9 +59,9 @@ inline float effectiveSlip(float rawSlip) {
  * Sprint 022, Ticket 003: EKF integration — predict() drives EKF each tick;
  *   initEKF()/correctEKF() wire noise params and OTOS position updates.
  * Sprint 023, Ticket 003: 5-state EKF wiring — initEKF() extended with
- *   velocity noise params; predict() gains now_ms for dt computation;
+ *   velocity noise params; predict() gains now for dt computation;
  *   correctEKF() extended for OTOS + encoder velocity fusion. setPose
- *   re-baseline fix (_prevEncL = s.encLMm, not 0) prevents spurious
+ *   re-baseline fix (_prevEncL = s.encPos[], not 0) prevents spurious
  *   encoder-delta jumps after camera fixes.
  * Sprint 047, Ticket 002: encoder-only dead-reckoning accumulator added
  *   (_encPoseX/Y/H, _encVx/Vy/Omega); predict() dual-writes encoder and
@@ -71,6 +71,9 @@ inline float effectiveSlip(float rawSlip) {
  *   parameters; trackwidth/rotationalSlip moved to setKinematics() members;
  *   setCtx() deleted (was already a documented no-op). correct() (dead, zero
  *   callers) is untouched and still takes HardwareState& — see Decision 6.
+ * Sprint 071, Ticket 005: stripped unit suffixes from parameter/member names
+ *   (encLeftMm/encRightMm → encLeft/encRight, now_ms → now, etc.) — identifier
+ *   rename only, no behavioral change; see docs/coding-standards.md.
  */
 class Odometry {
 public:
@@ -85,8 +88,8 @@ public:
     // the only caller of predict()), so this preserves the pre-070-003
     // every-tick freshness — and sprint 067's live-SET-reaches-the-estimator
     // guarantee — exactly.
-    void setKinematics(float trackwidthMm, float rotationalSlip) {
-        _trackwidthMm   = trackwidthMm;
+    void setKinematics(float trackwidth, float rotationalSlip) {
+        _trackwidth     = trackwidth;
         _rotationalSlip = rotationalSlip;
     }
 
@@ -95,20 +98,22 @@ public:
     // ---------------------------------------------------------------------------
 
     // Midpoint (exact-arc) integration — primary predict step.
-    // encLeftMm/encRightMm: raw cumulative encoder readings (mm) — computes
+    // encLeft/encRight: raw cumulative encoder readings (mm) — computes
     // deltas against _prevEncL/_prevEncR, then writes the updated pose into
     // fusedOut.pose.{x,y,h} and the encoder-only dead-reckoning accumulator
     // into encoderOut. Also advances the EKF and writes EKF state into
     // fusedOut.{pose,twist,stamp}.
     //
-    // Reads trackwidthMm/rotationalSlip from the members set by the most
+    // Reads trackwidth/rotationalSlip from the members set by the most
     // recent setKinematics() call (070-003).
     //   dTheta = ((dR-dL)/trackwidth) * clamp(rotationalSlip, 0.5, 1.0).
     //   0 / unset → 1.0 (migration-safe: no change for legacy exact-profile configs).
-    // now_ms: robot system clock timestamp (ms). Used to compute dt for the
+    // now: robot system clock timestamp (ms). Used to compute dt for the
     // EKF and encoder-rate velocity. Signed delta cast avoids uint32 underflow
     // (see watchdog-uint32-underflow finding).
-    void predict(float encLeftMm, float encRightMm, uint32_t now_ms,
+    void predict(float encLeft,          // [mm]
+                 float encRight,         // [mm]
+                 uint32_t now,           // [ms]
                  PoseEstimate& encoderOut, PoseEstimate& fusedOut);
 
     // EKF initialisation — set process and measurement noise parameters.
@@ -141,31 +146,33 @@ public:
     // Call order: updatePosition → updateHeading → updateVelocity(OTOS).
     // All channels apply Mahalanobis gating internally. Writes all EKF
     // outputs into fusedOut; the raw OTOS observation into opticalOut.
-    //   x_otos, y_otos         — OTOS position observation (mm)
-    //   theta_otos_rad         — OTOS heading observation (rad) — sprint 024-004
-    //   v_otos_mmps            — OTOS body-frame linear velocity (mm/s)
-    //   omega_otos_rads        — OTOS angular velocity (rad/s)
-    //   vy_otos_mmps           — OTOS lateral velocity (mm/s); always 0.0f on
-    //                            differential builds (captured into optical.twist
-    //                            for logging; not fused into fused.twist.vy).
-    //   now_ms                 — robot system clock (ms); used to stamp
-    //                            opticalOut.stamp.lastUpdMs (047-002)
+    //   x_otos, y_otos — OTOS position observation (mm)
+    //   thetaOtos      — OTOS heading observation (rad) — sprint 024-004
+    //   vOtos          — OTOS body-frame linear velocity (mm/s)
+    //   omegaOtos      — OTOS angular velocity (rad/s)
+    //   vyOtos         — OTOS lateral velocity (mm/s); always 0.0f on
+    //                    differential builds (captured into optical.twist
+    //                    for logging; not fused into fused.twist.vy).
+    //   now            — robot system clock (ms); used to stamp
+    //                    opticalOut.stamp.lastUpdMs (047-002)
     //
     // 033-003: encoder-derived velocity is fused unconditionally in predict(),
     // NOT here — fusing it in both paths would double-count it per OTOS tick.
     //
-    // 047-002: now_ms added for optical.stamp.lastUpdMs; callers must pass
-    // the same now_ms they use for the corresponding predict() call.
+    // 047-002: now added for optical.stamp.lastUpdMs; callers must pass
+    // the same now they use for the corresponding predict() call.
     void correctEKF(float x_otos, float y_otos,
-                    float theta_otos_rad,
-                    float v_otos_mmps, float omega_otos_rads,
-                    float vy_otos_mmps, uint32_t now_ms,
+                    float thetaOtos,     // [rad]
+                    float vOtos,         // [mm/s]
+                    float omegaOtos,     // [rad/s]
+                    float vyOtos,        // [mm/s]
+                    uint32_t now,        // [ms]
                     PoseEstimate& opticalOut, PoseEstimate& fusedOut);
 
     // OTOS complementary correction — correct step of predict/correct.
     // (docs/kinematics-model.md §2.4; EKF upgrade path replaces this later.)
     //
-    // Parameters x_otos, y_otos, theta_otos_rad are passed by the caller
+    // Parameters x_otos, y_otos, thetaOtos are passed by the caller
     // (who reads them from s.otosX/Y/H after unit conversion) for testability.
     //
     // Outlier gate: if distance(otos, predicted pose) > otosGate, the sample
@@ -186,31 +193,36 @@ public:
     // HardwareState& — mirrors sprint 067 Decision 5's "document dead
     // things, don't fix them" precedent.
     void correct(HardwareState& s,
-                 float x_otos, float y_otos, float theta_otos_rad,
+                 float x_otos, float y_otos, float thetaOtos,   // [rad]
                  float alphaPos, float alphaYaw, float otosGate);
 
     // ---------------------------------------------------------------------------
     // Pose read / write helpers (070-003: PoseEstimate-based, not HardwareState&).
     // ---------------------------------------------------------------------------
 
-    // Read current pose from fused.  x_mm and y_mm are integer mm; h_cdeg is
+    // Read current pose from fused.  x and y are integer mm; h is
     // centidegrees (-18000..+18000 clamped).
     static void getPose(const PoseEstimate& fused,
-                        int32_t& x_mm, int32_t& y_mm, int32_t& h_cdeg);
+                        int32_t& x,          // [mm]
+                        int32_t& y,          // [mm]
+                        int32_t& h);         // [cdeg]
 
     // Overwrite pose (used by Robot::distanceDrive / SI command).
-    // h_cdeg is centidegrees; stored internally as radians.
-    // encLeftMm/encRightMm: current encoder readings — re-baselines
+    // h is centidegrees; stored internally as radians.
+    // encLeft/encRight: current encoder readings — re-baselines
     // _prevEncL/_prevEncR to these (not 0) so the next predict() sees a delta
     // of ~0 instead of a spurious jump.
     // (Sprint 023: was = 0.0f, which caused encoder-delta corruption after
     // every camera fix when encoders were non-zero.)
-    void setPose(float encLeftMm, float encRightMm,
-                 int32_t x_mm, int32_t y_mm, int32_t h_cdeg,
+    void setPose(float encLeft,          // [mm]
+                 float encRight,         // [mm]
+                 int32_t x,              // [mm]
+                 int32_t y,              // [mm]
+                 int32_t h,              // [cdeg]
                  PoseEstimate& encoderOut, PoseEstimate& fusedOut);
 
-    // Zero pose: equivalent to setPose(encLeftMm, encRightMm, 0, 0, 0, ...).
-    void zero(float encLeftMm, float encRightMm,
+    // Zero pose: equivalent to setPose(encLeft, encRight, 0, 0, 0, ...).
+    void zero(float encLeft, float encRight,
               PoseEstimate& encoderOut, PoseEstimate& fusedOut);
 
     // rebaselinePrev — reset the internal encoder snapshot to (encL, encR) without
@@ -273,30 +285,30 @@ private:
     // (Drive always calls setKinematics() before the first predict()); they
     // exist only so a construction-time predict() call would not divide by
     // zero.
-    float    _trackwidthMm   = 128.0f; // mm; default matches Config.h's trackwidthMm default.
+    float    _trackwidth     = 128.0f; // [mm] default matches Config.h's trackwidth default.
     float    _rotationalSlip = 0.0f;   // 0 = unset -> effectiveSlip() returns 1.0.
 
     // Intermediate compute state: previous encoder snapshot (not in HardwareState
     // because Odometry runs at a different cadence than the control task).
-    float    _prevEncL;   // last encoder snapshot, mm
-    float    _prevEncR;   // last encoder snapshot, mm
+    float    _prevEncL;   // [mm] last encoder snapshot
+    float    _prevEncR;   // [mm] last encoder snapshot
 
     // Encoder-only dead-reckoning accumulator (047-002).
     // Integrated from wheel deltas only; the EKF NEVER writes here.
     // Used to populate actual.encoder.{pose,twist,stamp} every predict() tick.
     // Reset by setPose()/zero() to the new pose value.
-    float    _encPoseX;    // encoder-only pose X, mm
-    float    _encPoseY;    // encoder-only pose Y, mm
-    float    _encPoseH;    // encoder-only heading, rad
-    float    _encVx;       // encoder-only body linear speed, mm/s
-    float    _encVy;       // encoder-only lateral speed, mm/s (always 0 for differential)
-    float    _encOmega;    // encoder-only yaw rate, rad/s
+    float    _encPoseX;    // [mm] encoder-only pose X
+    float    _encPoseY;    // [mm] encoder-only pose Y
+    float    _encPoseH;    // [rad] encoder-only heading
+    float    _encVx;       // [mm/s] encoder-only body linear speed
+    float    _encVy;       // [mm/s] encoder-only lateral speed (always 0 for differential)
+    float    _encOmega;    // [rad/s] encoder-only yaw rate
 
     uint32_t _otosRejected; // count of OTOS samples rejected by outlier gate
 
     // dt tracking for encoder-rate velocity and EKF timestep.
     // uint32_t but delta is cast to int32_t before arithmetic to avoid underflow.
-    uint32_t _lastPredictMs;  // timestamp of last predict() call (0 = not yet called)
+    uint32_t _lastPredict;  // [ms] timestamp of last predict() call (0 = not yet called)
 
     // Noise params stored from initEKF() — passed to update*() methods.
     // Using _rOtosV for both v and omega of OTOS source (symmetric simplification),
@@ -326,7 +338,7 @@ private:
     // Wrap heading to (-π, π] using atan2f identity.
     static float wrapPi(float theta);
 
-    static constexpr float PI_F        = 3.14159265f;
-    static constexpr float RAD_TO_CDEG = 18000.0f / 3.14159265f;
-    static constexpr float CDEG_TO_RAD = 3.14159265f / 18000.0f;
+    static constexpr float PI_F         = 3.14159265f;
+    static constexpr float kAngleScale    = 18000.0f / 3.14159265f;  // [cdeg/rad]
+    static constexpr float kAngleScaleInv = 3.14159265f / 18000.0f;  // [rad/cdeg]
 };

@@ -360,13 +360,13 @@ void Robot::otosCorrect(uint32_t now_ms)
 // resetEncoders — single canonical atomic encoder reset (N1, sprint 030-001).
 //
 // Atomically resets hardware accumulators, MotorController velocity baselines,
-// the outlier-filter baseline (state.inputs.encLMm/R), and Odometry's internal
+// the outlier-filter baseline (state.inputs.encPos[]), and Odometry's internal
 // encoder snapshot — without touching pose.
 //
 // Previously distanceDrive() reset hardware+MC but left Odometry::_prevEncL/R
 // stale, so the very next predict() computed dL = 0 - _prevEncL (large negative)
 // and teleported the pose backward by the prior segment's travel.  ZERO enc
-// was worse: hardware+MC reset but state.inputs.encLMm/R stayed stale, causing
+// was worse: hardware+MC reset but state.inputs.encPos[] stayed stale, causing
 // the outlier filter to freeze encoder reads until the fresh accumulator climbed
 // back, then a pose jump.
 // ---------------------------------------------------------------------------
@@ -379,15 +379,15 @@ void Robot::resetEncoders()
 
     // 2. Align the outlier-filter baseline with the now-zeroed accumulators.
     // Array convention: [0]=FR=R, [1]=FL=L (sized by kWheelCount; #ifdef-free).
-    for (int i = 0; i < kWheelCount; ++i) state.actual.encMm[i] = 0.0f;
+    for (int i = 0; i < kWheelCount; ++i) state.actual.encPos[i] = 0.0f;
 
     // 3. Re-baseline Odometry's encoder snapshot so predict() sees delta=0
     //    on the very next tick rather than (0 - _prevEncL) = large negative.
     estimate.rebaselinePrev(0.0f, 0.0f);
 
-    // 4. 060-004: Drive owns an independent encoder baseline in _hw.encMm[].
+    // 4. 060-004: Drive owns an independent encoder baseline in _hw.encPos[].
     //    Reset it so tickUpdate() sees 0 delta after the hardware reset, and
-    //    LoopTickOnce.cpp's sync block copies 0 back into state.actual.encMm[]
+    //    LoopTickOnce.cpp's sync block copies 0 back into state.actual.encPos[]
     //    (not the stale pre-reset accumulator).
     drive.resetEncoders();
 }
@@ -396,10 +396,10 @@ void Robot::resetEncoders()
 // distanceDrive — begin a distance drive and atomically reset encoder state.
 // ---------------------------------------------------------------------------
 
-void Robot::distanceDrive(int32_t l, int32_t r, int32_t targetMm,
+void Robot::distanceDrive(int32_t l, int32_t r, int32_t targetDistance,
                                 ReplyFn fn, void* ctx, const char* corr_id)
 {
-    planner.beginDistance((float)l, (float)r, targetMm,
+    planner.beginDistance((float)l, (float)r, targetDistance,
                           systemTime(), state.desired, fn, ctx, corr_id);
     // Atomic encoder reset: aligns hardware accumulators, MC velocity baselines,
     // outlier-filter baseline, and Odometry encoder snapshot in one call.

@@ -36,14 +36,14 @@ constexpr uint8_t  DIR_CCW   = 2;
 // Only the POST-write settle is kept (the chip needs time to prepare its 4-byte
 // response). The old PRE-idle wait is dropped: the fixed-rate loop already
 // leaves the bus idle between ticks, so it was redundant.
-constexpr uint32_t SETTLE_US = 4000;        // post-0x46-write settle before the read
+constexpr uint32_t kSettle = 4000;        // [us] post-0x46-write settle before the read
 
-inline uint64_t nowUs() { return system_timer_current_time_us(); }
+inline uint64_t nowTime() { return system_timer_current_time_us(); }
 
-inline void busyUs(uint32_t us)
+inline void busyWait(uint32_t us)
 {
-    uint64_t deadline = nowUs() + us;
-    while (nowUs() < deadline) {}
+    uint64_t deadline = nowTime() + us;
+    while (nowTime() < deadline) {}
 }
 
 // One 0x60 motor command. pct in [-100, 100]; 0 = coast.
@@ -64,7 +64,7 @@ int32_t readEnc(MicroBitI2C& i2c, uint8_t id, uint8_t reg = 0x46)
 {
     uint8_t cmd[8] = { 0xFF, 0xF9, id, 0x00, reg, 0x00, 0xF5, 0x00 };
     i2c.write(ADDR_W, cmd, 8, false);
-    busyUs(SETTLE_US);
+    busyWait(kSettle);
     uint8_t r[4] = { 0, 0, 0, 0 };
     i2c.read(ADDR_W, r, 4, false);
     return (int32_t)(((uint32_t)r[3] << 24) | ((uint32_t)r[2] << 16) |
@@ -147,32 +147,32 @@ constexpr int NPH = (int)(sizeof(PHASES) / sizeof(PHASES[0]));
 
 }  // namespace
 
-void runWedgeTest(MicroBit& uBit, int rateHz, int writeMs, int busKHz, int dither,
+void runWedgeTest(MicroBit& uBit, int rate, int writeMs, int bus, int dither,   // [Hz], [ms], [kHz]
                   int reg, int sensors, int realCtrl, Robot* robot)
 {
     MicroBitI2C& i2c = uBit.i2c;
     char line[240];
 
-    if (rateHz < 1)   rateHz = 1;
-    if (rateHz > 200) rateHz = 200;
+    if (rate < 1)   rate = 1;
+    if (rate > 200) rate = 200;
     if (writeMs < 0)  writeMs = 0;
-    if (busKHz < 50)  busKHz = 50;
-    if (busKHz > 400) busKHz = 400;
+    if (bus < 50)  bus = 50;
+    if (bus > 400) bus = 400;
     if (dither < 0)   dither = 0;
     uint8_t encReg = (reg == 0x47 || reg == 47) ? 0x47 : 0x46;  // per-tick read register
     bool useSensors = (sensors != 0);
     bool useReal    = (realCtrl != 0) && (robot != nullptr);    // drive via production PID path
-    const uint32_t periodUs   = 1000000u / (uint32_t)rateHz;
-    const uint32_t writeMinUs = (uint32_t)writeMs * 1000u;
+    const uint32_t period   = 1000000u / (uint32_t)rate;
+    const uint32_t writeMinInterval = (uint32_t)writeMs * 1000u;
 
-    i2c.setFrequency((uint32_t)busKHz * 1000u);   // production bus = 400 kHz (restored at exit)
+    i2c.setFrequency((uint32_t)bus * 1000u);   // production bus = 400 kHz (restored at exit)
 
     snprintf(line, sizeof(line),
         "WEDGETEST start: realCtrl=%d reg=0x%02X sensors=%d @ %d Hz "
         "(period %u us, bus %d kHz, settle %u us, writeMin %d ms, dither +-%d). "
         "Any byte stops.\r\n",
         useReal ? 1 : 0, encReg, useSensors ? 1 : 0,
-        rateHz, (unsigned)periodUs, busKHz, (unsigned)SETTLE_US, writeMs, dither);
+        rate, (unsigned)period, bus, (unsigned)kSettle, writeMs, dither);
     uBit.serial.send(line);
 
     // --- state ---
@@ -185,7 +185,7 @@ void runWedgeTest(MicroBit& uBit, int rateHz, int writeMs, int busKHz, int dithe
     int32_t posPrevL = readEnc(i2c, M_LEFT, 0x46);
     bool droveSinceReport = false;
     int lastWrR = 0x7fff, lastWrL = 0x7fff; // last pwm actually WRITTEN (sentinel)
-    uint64_t lastWriteUs = 0;               // for the write-min-interval rate limit
+    uint64_t lastWriteTime = 0;               // for the write-min-interval rate limit
     int stuckR = 0, stuckL = 0;             // consecutive frozen (delta 0) reads
     int fwStuckMax = 0;                     // max firmware stuck counter seen (real mode)
     uint32_t glitches = 0;                  // transient bad reads that re-read OK
@@ -195,19 +195,19 @@ void runWedgeTest(MicroBit& uBit, int rateHz, int writeMs, int busKHz, int dithe
     const char* verdict = "stopped";
 
     // --- explicit fixed-rate scheduler + rate measurement ---
-    uint64_t nextTickUs   = nowUs();        // first tick fires immediately
-    uint64_t reportAtUs   = nowUs() + 1000000u;
+    uint64_t nextTickTime   = nowTime();        // first tick fires immediately
+    uint64_t reportAtTime   = nowTime() + 1000000u;
     uint32_t ticksAtReport = 0;
     uint32_t writesAtReport = 0;
 
     bool stop = false;
     while (!stop) {
-        uint64_t now = nowUs();
-        if (now < nextTickUs) {             // not time for the next tick yet
+        uint64_t now = nowTime();
+        if (now < nextTickTime) {             // not time for the next tick yet
             if (uBit.serial.isReadable()) stop = true;
             continue;                       // spin until the deadline
         }
-        nextTickUs = now + periodUs;        // schedule the next tick
+        nextTickTime = now + period;        // schedule the next tick
 
         // ---- one tick: drive + read BOTH encoders --------------------------
         const Phase& ph = PHASES[pi];
@@ -242,10 +242,10 @@ void runWedgeTest(MicroBit& uBit, int rateHz, int writeMs, int busKHz, int dithe
             int pwmL = (ph.l != 0) ? (ph.l + dv) : 0;
             bool changed  = (pwmR != lastWrR || pwmL != lastWrL);
             bool stopping = (pwmR == 0 && pwmL == 0);
-            if (changed && (stopping || writeMinUs == 0 || (now - lastWriteUs) >= writeMinUs)) {
+            if (changed && (stopping || writeMinInterval == 0 || (now - lastWriteTime) >= writeMinInterval)) {
                 writeMotor(i2c, M_RIGHT, pwmR);
                 writeMotor(i2c, M_LEFT,  pwmL);
-                lastWrR = pwmR; lastWrL = pwmL; lastWriteUs = now;
+                lastWrR = pwmR; lastWrL = pwmL; lastWriteTime = now;
                 ++writes;
             }
             if (useSensors) sensorTraffic(i2c, ticks);
@@ -294,7 +294,7 @@ void runWedgeTest(MicroBit& uBit, int rateHz, int writeMs, int busKHz, int dithe
         if (++pk >= ph.ticks) { pk = 0; if (++pi >= NPH) { pi = 0; ++cycles; } }
 
         // ---- verify the rate + mode-independent wedge check, once a second ----
-        if (now >= reportAtUs) {
+        if (now >= reportAtTime) {
             uint32_t dticks  = ticks - ticksAtReport;     // ticks in the last ~1 s
             uint32_t dwrites = writes - writesAtReport;    // motor writes in the last ~1 s
             // Position check: did we drive but the position NOT move? Use the
@@ -329,7 +329,7 @@ void runWedgeTest(MicroBit& uBit, int rateHz, int writeMs, int busKHz, int dithe
             posPrevR = posR; posPrevL = posL; droveSinceReport = false;
             ticksAtReport  = ticks;
             writesAtReport = writes;
-            reportAtUs += 1000000u;
+            reportAtTime += 1000000u;
         }
     }
 

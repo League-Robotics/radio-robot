@@ -1,9 +1,9 @@
 #include "SimMotor.h"
 #include "types/Config.h"
 
-float SimMotor::reportedEncMm() const {
-    return (_side == Side::LEFT) ? _plant.reportedEncLMm()
-                                 : _plant.reportedEncRMm();
+float SimMotor::reportedEnc() const {
+    return (_side == Side::LEFT) ? _plant.reportedEncL()
+                                 : _plant.reportedEncR();
 }
 
 void SimMotor::setSpeed(int8_t pct) {
@@ -19,23 +19,23 @@ int32_t SimMotor::collectEncoder() const {
     // (064-005) Injected read failure: hold the last tick()-cached value
     // instead of a live plant read, mirroring the real Motor's hold-last
     // -value fix (CR-03).
-    if (_readFailure) return static_cast<int32_t>(_lastPositionMm);
-    return static_cast<int32_t>(reportedEncMm());
+    if (_readFailure) return static_cast<int32_t>(_lastPosition);
+    return static_cast<int32_t>(reportedEnc());
 }
 
 float SimMotor::readEncoderMmF(const RobotConfig& /*cfg*/) const {
-    if (_readFailure) return _lastPositionMm;
-    return reportedEncMm();
+    if (_readFailure) return _lastPosition;
+    return reportedEnc();
 }
 
 float SimMotor::readEncoderMmFAtomic(const RobotConfig& /*cfg*/) const {
-    if (_readFailure) return _lastPositionMm;
-    return reportedEncMm();
+    if (_readFailure) return _lastPosition;
+    return reportedEnc();
 }
 
 float SimMotor::readEncoderMmFSettle(const RobotConfig& /*cfg*/) const {
-    if (_readFailure) return _lastPositionMm;
-    return reportedEncMm();
+    if (_readFailure) return _lastPosition;
+    return reportedEnc();
 }
 
 void SimMotor::resetEncoder() {
@@ -45,7 +45,7 @@ void SimMotor::resetEncoder() {
     // not reset here.
     _mut.resetReportedEncoder(sideIdx());
     _cmdSpeed         = 0;
-    _lastPositionMm   = 0.0f;
+    _lastPosition   = 0.0f;
     _lastVelocityMmps = 0.0f;
     _hasLastTick      = false;
     ++_hardResetCount;
@@ -62,7 +62,7 @@ void SimMotor::rebaselineSoft() {
     // encoder position.
     _mut.resetReportedEncoder(sideIdx());
     _cmdSpeed         = 0;
-    _lastPositionMm   = 0.0f;
+    _lastPosition   = 0.0f;
     _lastVelocityMmps = 0.0f;
     _hasLastTick      = false;
     ++_softResetCount;
@@ -80,21 +80,21 @@ void SimMotor::tick(uint32_t now_ms) {
         // Forward-compat: both default-off, so MockMotor parity holds.
         return;
     }
-    float pos = reportedEncMm();
+    float pos = reportedEnc();
     if (_hasLastTick) {
         float elapsed_s = static_cast<float>(now_ms - _lastTickMs) / 1000.0f;
         if (elapsed_s > 0.0f) {
-            _lastVelocityMmps = (pos - _lastPositionMm) / elapsed_s;
+            _lastVelocityMmps = (pos - _lastPosition) / elapsed_s;
         }
     } else {
         _hasLastTick = true;
     }
-    _lastPositionMm = pos;
+    _lastPosition = pos;
     _lastTickMs     = now_ms;
 }
 
-void SimMotor::setNoiseSigma(float sigmaMm) {
-    _mut.setEncoderNoise(sideIdx(), sigmaMm);
+void SimMotor::setNoiseSigma(float sigma) {
+    _mut.setEncoderNoise(sideIdx(), sigma);
 }
 
 // Encoder error injection (ticket 058-001): forward to the plant's per-wheel

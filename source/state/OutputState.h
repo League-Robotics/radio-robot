@@ -6,7 +6,7 @@
 // OutputState — actuator output commands (047-001).
 //
 // PWM and dirty-flag outputs produced by the control loop.  No #ifdef inside
-// the struct body: pwm[] and tgtMms[] use Kinematics::kWheelCount.
+// the struct body: pwm[] and tgtSpeed[] use Kinematics::kWheelCount.
 //
 // MotorCommands is a using-alias for OutputState so that existing function
 // signatures (void foo(const MotorCommands& c)) continue to compile and
@@ -19,7 +19,7 @@ struct OutputState {
 
     // ----- Per-wheel target speed arrays -----
     // [0]=FR, [1]=FL, [2]=BR, [3]=BL.
-    float    tgtMms[kWheelCount] = {};  // all-wheel speed targets, mm/s
+    float    tgtSpeed[kWheelCount] = {};  // [mm/s] all-wheel speed targets
 
     // ----- Port outputs and dirty flags -----
     bool     digitalOut[4]   = {};

@@ -59,7 +59,7 @@ public:
      * A Nezha drive motor ALSO supports on-chip move-to-position (0x5D
      * moveToAngle / 0x70 timedMove), so Motor returns a non-null IPositionMotor*
      * here.  The returned pointer is an inner adapter (_posImpl) that forwards
-     * setAngleDeg() to moveToAngle() — NO wire bytes change.  Firmware is
+     * commandAngle() to moveToAngle() — NO wire bytes change.  Firmware is
      * -fno-rtti, so this virtual accessor replaces dynamic_cast.
      */
     IPositionMotor* asPositionMotor() override { return &_posImpl; }
@@ -72,11 +72,11 @@ public:
     /**
      * tick — per-loop split-phase encoder read (039-002).
      *
-     * Called once per cooperative-loop iteration via NezhaHAL::tick(now_ms),
+     * Called once per cooperative-loop iteration via NezhaHAL::tick(now),
      * BEFORE loopTickOnce.  Issues the split-phase encoder read (the exact
      * 0x46-write + 4-byte-read I2C transaction that controlCollectSplitPhase
      * previously issued via readEncoderMmFSettle) and caches the result in
-     * _lastPositionMm.  Differentiates against the previous cached position over
+     * _lastPosition.  Differentiates against the previous cached position over
      * the elapsed time and caches _lastVelocityMmps.
      *
      * NO outlier filter, NO PID velocity smoothing, NO wedge detection here —
@@ -87,11 +87,11 @@ public:
     void    tick(uint32_t now_ms) override;
 
     // Cheap accessors — return the values cached by the most recent tick(); no I2C.
-    float   positionMm()   const override { return _lastPositionMm; }
+    float   position()     const override { return _lastPosition; }
     float   velocityMmps() const override { return _lastVelocityMmps; }
 
     // Read cumulative encoder in mm using calibration from cfg.
-    // Uses mmPerDegL if motorId==LEFT_MOTOR, mmPerDegR otherwise.
+    // Uses wheelTravelCalibL if motorId==LEFT_MOTOR, wheelTravelCalibR otherwise.
     int32_t readEncoder(const RobotConfig& cfg) const;
 
     // High-resolution variant: cumulative encoder in mm as float (NOT truncated
@@ -106,7 +106,7 @@ public:
     /**
      * rebaselineSoft — software-only encoder rebaseline (064-003).
      *
-     * Folds the already-tick-cached _lastPositionMm (obtained by the normal
+     * Folds the already-tick-cached _lastPosition (obtained by the normal
      * per-tick 0x46 read, NOT a new atomic burst) back into raw tenths-of
      * -degrees and adds it to _encOffset — issues NO I2C transaction — then
      * zeros the cache exactly as resetEncoder()'s success path already does.
@@ -163,9 +163,9 @@ public:
      *
      * Issues a readSpeed command (register 0x47) and converts the raw uint16
      * reading to mm/s using:
-     *   mm/s = (raw / kUnitFactor) * mmPerDeg * _lastDir
+     *   mm/s = (raw / kUnitFactor) * wheelTravelCalib * _lastDir
      *
-     * where mmPerDeg = cfg.mmPerDegL (M2/left) or cfg.mmPerDegR (M1/right),
+     * where wheelTravelCalib = cfg.wheelTravelCalibL (M2/left) or cfg.wheelTravelCalibR (M1/right),
      * mirroring readEncoder()'s wheel-selection and calibration.
      *
      * kUnitFactor is a named constant in Motor.cpp (default 10.0 = tenths of
@@ -317,18 +317,18 @@ private:
      *
      * Folds the Motor on-chip position-move subset into the IPositionMotor
      * capability without multiple inheritance (safer under -fno-rtti, per the
-     * Sprint 039 architecture-update §5 decision).  setAngleDeg() forwards
+     * Sprint 039 architecture-update §5 decision).  commandAngle() forwards
      * VERBATIM to the enclosing Motor's moveToAngle() (0x5D frame, unchanged
-     * wire bytes); currentAngleDeg() returns the last commanded angle.  Returned
+     * wire bytes); currentAngle() returns the last commanded angle.  Returned
      * by Motor::asPositionMotor().
      */
     class MotorPositionImpl : public IPositionMotor {
     public:
         explicit MotorPositionImpl(Motor& outer) : _outer(outer) {}
-        void setAngleDeg(uint16_t deg, uint8_t mode) override {
-            _outer.moveToAngle(deg, mode);
+        void commandAngle(uint16_t angle, uint8_t mode) override {
+            _outer.moveToAngle(angle, mode);
         }
-        uint16_t currentAngleDeg() const override { return _outer._lastAngle; }
+        uint16_t currentAngle() const override { return _outer._lastAngle; }
     private:
         Motor& _outer;
     };
@@ -343,7 +343,7 @@ private:
     MotorPositionImpl _posImpl;
 
     // Last angle commanded through moveToAngle() (the clamped 0..359 value),
-    // returned by MotorPositionImpl::currentAngleDeg(). 0 before any move.
+    // returned by MotorPositionImpl::currentAngle(). 0 before any move.
     uint16_t _lastAngle = 0;
 
     // Calibration reference (039-002) — used by tick() to convert raw encoder
@@ -351,10 +351,10 @@ private:
     const RobotConfig& _cfg;
 
     // ---- Split-phase tick() cache (039-002) ----
-    // _lastPositionMm  : cumulative encoder position in mm cached by tick().
+    // _lastPosition    : cumulative encoder position in mm cached by tick().
     // _lastVelocityMmps: velocity differentiated from successive tick() positions.
     // _lastTickMs / _hasLastTick : timing baseline for the differentiation.
-    float    _lastPositionMm   = 0.0f;
+    float    _lastPosition     = 0.0f;  // [mm]
     float    _lastVelocityMmps = 0.0f;
     uint32_t _lastTickMs       = 0;
     bool     _hasLastTick      = false;
@@ -368,12 +368,12 @@ private:
     // control-loop rate (that write rate wedges the encoder reads). Sentinel
     // sentinel -128 (outside valid ±100) forces the first write. See
     // docs/knowledge encoder-wedge note.
-    int8_t _lastWrittenPct = -128;
+    int8_t _lastWrittenSpeed = -128;   // [%]
 
-    // Timestamp (us) of the last actual 0x60 write, for the write-rate limit in
+    // Timestamp of the last actual 0x60 write, for the write-rate limit in
     // setSpeed(). Throttling 0x60 writes keeps the bus read-dominated, which is
     // what stops the encoder-readback wedge. See setSpeed() + encoder-wedge note.
-    uint64_t _lastWriteUs = 0;
+    uint64_t _lastWriteTime = 0;   // [us]
 
     static constexpr uint8_t ADDR    = 0x10;
     static constexpr uint8_t DIR_CW  = 1;   // positive speed from chip perspective
@@ -393,7 +393,7 @@ private:
     // return. Updated on every successful I2C read; returned unchanged on
     // failure so a dropped I2C transaction cannot fabricate a position jump
     // (CR-03). Re-zeroed by resetEncoder()/rebaselineSoft() alongside
-    // _lastPositionMm so a failed read immediately after a reset holds the
+    // _lastPosition so a failed read immediately after a reset holds the
     // fresh (~0) baseline rather than a stale pre-reset value. Starts at 0,
     // matching the pre-first-read state.
     mutable int32_t _lastGoodRawEnc = 0;

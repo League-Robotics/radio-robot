@@ -79,26 +79,26 @@ struct GoalRequest {
     const char* corrId;     // originating command correlation id (may be null)
 
     // Wheel-speed goals (STREAM, TIMED, DISTANCE)
-    float     leftMms;
-    float     rightMms;
+    float     left;             // [mm/s]
+    float     right;            // [mm/s]
     uint32_t  durationMs;   // TIMED
-    int32_t   targetMm;     // DISTANCE
+    int32_t   targetDistance;   // [mm] DISTANCE
 
     // GoTo (GOTO)
     float     tx;
     float     ty;
-    float     speedMms;     // GOTO
+    float     speed;            // [mm/s] GOTO
 
     // Heading goal (TURN)
-    float     headingCdeg;
-    float     epsCdeg;
+    float     heading;          // [cdeg]
+    float     eps;              // [cdeg]
 
     // Relative rotation (ROTATE)
-    float     relCdeg;
+    float     relAngle;         // [cdeg]
 
     // Body-twist (VELOCITY) — covers VW, S, T, and R (arc) open-loop commands.
     // R computes omega = speed/radius inline in handleR before building GoalRequest.
-    float     v_mms;
+    float     v;                // [mm/s]
     float     omega_rads;
 
     // Stop-condition plumbing (populated by verb handlers)

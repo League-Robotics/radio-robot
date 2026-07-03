@@ -14,7 +14,7 @@
 class NoopVelocityMotor : public IVelocityMotor {
 public:
     void    setSpeed(int8_t pct) override           { (void)pct; }
-    float   positionMm()   const override           { return 0.0f; }
+    float   position()     const override           { return 0.0f; }
     float   velocityMmps() const override           { return 0.0f; }
     void    requestEncoder() override               {}
     int32_t collectEncoder() const override         { return 0; }

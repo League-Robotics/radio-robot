@@ -14,7 +14,7 @@
  *   piOut  = _pid.Update(err)   [cmon-pid backcalculation<pid_bwe>, PI only]
  *                                (integrator bounded by ±iMax via back-calculation;
  *                                 deadband gate suppresses Update when |setpoint|
- *                                 < minWheelMms)
+ *                                 < minWheelSpeed)
  *   rawPwm = sign(setpoint) * ff + piOut
  *   output = clamp(rawPwm, -100, +100)
  *
@@ -48,13 +48,13 @@ public:
      * @param iMax       Integrator anti-windup clamp (PWM% units, symmetric ±).
      *                   Passed as the output-saturation limit to backcalculation_t;
      *                   the ±100 PWM clamp is applied by the wrapper after FF.
-     * @param minWheelMms Low-speed deadband: integrator frozen below this |setpoint|
+     * @param minWheelSpeed Low-speed deadband: integrator frozen below this |setpoint|, mm/s
      * @param kAw        Back-calculation anti-windup gain (1/s). When the PI output
      *                   saturates at ±iMax, the integrator is bled toward the
      *                   un-saturated value at this rate. 0 = no back-calculation
      *                   (cW becomes 0, integrator only bounded by iMax clamp).
      */
-    VelocityController(float kFF, float kP, float kI, float iMax, float minWheelMms,
+    VelocityController(float kFF, float kP, float kI, float iMax, float minWheelSpeed,
                        float kAw = 0.0f);
 
     /**
@@ -82,7 +82,7 @@ public:
     float kP;
     float kI;
     float iMax;
-    float minWheelMms;
+    float minWheelSpeed;  // [mm/s]
     float kAw;       // back-calculation anti-windup gain (1/s); 0 = no back-calculation
 
     // Integrator state — synced from cmon-pid internal state each tick for

@@ -43,7 +43,7 @@ static void radioReply(const char* msg, void* ctx)
 // Instead it is read from robot._tlmBoundFn — the channel that last issued a
 // STREAM command.  This prevents a radio command from silently redirecting
 // the serial TLM stream.  If no STREAM has been issued, _tlmBoundFn is
-// nullptr and TLM is suppressed (same as tlmPeriodMs=0 on init).
+// nullptr and TLM is suppressed (same as tlmPeriod=0 on init).
 // ---------------------------------------------------------------------------
 
 static void runCommsIn(LoopScheduler& sched, uint32_t now)
@@ -220,13 +220,13 @@ void LoopScheduler::run_blocks()
         // (039-002) The encoder READ moved into Hardware::tick(now) → Motor::tick()
         // (right/M1 first, then left/M2 — same ordering as before).  The outlier
         // filter, velocity PID, and wedge push now run at the top of loopTickOnce
-        // (CONTROL COLLECT block) reading positionMm().  This preserves the exact
+        // (CONTROL COLLECT block) reading position().  This preserves the exact
         // pre-loopTickOnce ordering controlCollectSplitPhase had.
         if (enControl) {
             _robot.hal.tick(now);
         }
         now = _uBit.systemTime();
-        controlDeadline = now + (uint32_t)_robot.config.controlPeriodMs;
+        controlDeadline = now + (uint32_t)_robot.config.controlPeriod;
 
         // ===== COMMS: drain serial + radio (every iteration) ================
         if (enComms) {

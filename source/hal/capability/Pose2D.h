@@ -20,4 +20,4 @@ struct BodyAccel { float ax_mmps2, ay_mmps2; };   // mm/s^2
 // BodyTwist is kept unchanged; existing callers are unaffected.
 struct BodyTwist3    { float vx_mmps, vy_mmps, omega_rads; };  // mm/s, mm/s, rad/s
 // Mecanum robot geometry (046-002).
-struct RobotGeometry { float halfTrackMm, halfWheelbaseMm; };  // mm, mm
+struct RobotGeometry { float halfTrack, halfWheelbase; };  // [mm], [mm]

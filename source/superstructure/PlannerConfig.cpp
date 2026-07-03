@@ -29,14 +29,14 @@ msg::PlannerConfig toPlannerConfig(const RobotConfig& rc)
     cfg.setYawJerkMax(rc.yawJerkMax);
 
     // Go-to arrival tolerance (mm).
-    cfg.setArriveTol(rc.arriveTolMm);
+    cfg.setArriveTol(rc.arriveTolerance);
 
     // Turn-in-place gate: bearing threshold in degrees below which the robot
     // goes straight to the goal rather than rotating first.
     cfg.setTurnInPlaceGate(rc.turnInPlaceGate);
 
     // Minimum speed floor (mm/s).  RobotConfig stores as int32_t.
-    cfg.setMinSpeed((float)rc.minSpeedMms);
+    cfg.setMinSpeed((float)rc.minSpeed);
 
     return cfg;
 }

@@ -47,8 +47,8 @@ static void handleGetVel(const ArgList& /*args*/, const char* corrId,
 {
     Robot* robot = sysCtxFrom(handlerCtx).robot;
     // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
-    float vL = robot->state.actual.velMms[1];
-    float vR = robot->state.actual.velMms[0];
+    float vL = robot->state.actual.vel[1];
+    float vR = robot->state.actual.vel[0];
     char rbuf[64];
     char body[48];
     snprintf(body, sizeof(body), "vel=%d:E,%d:E", (int)vL, (int)vR);

@@ -64,12 +64,12 @@ public:
 
     // Stage the goal command. No hardware I/O, no emission.
     // Dispatches on PlannerCommand::GoalKind → the appropriate begin*() call.
-    // now_ms: the real system time at the point apply() is called — threaded
-    // straight through to every begin*() call as its MotionBaseline.t0Ms
+    // now: the real system time at the point apply() is called — threaded
+    // straight through to every begin*() call as its MotionBaseline.t0
     // baseline (CR-11: previously hard-coded to 0 inside apply(), which made
     // every TIME stop compute elapsed = full uptime and fire on the very next
     // tick once uptime exceeded the timeout).
-    void apply(const msg::PlannerCommand& cmd, uint32_t now_ms);
+    void apply(const msg::PlannerCommand& cmd, uint32_t now);   // [ms]
 
     // Advance goal closure one tick.
     // 1. Populate _hw from _drive.state() (fused pose + twist).
@@ -111,40 +111,40 @@ public:
 
     DriveMode mode() const { return _mode; }
 
-    void beginStream(float leftMms, float rightMms, uint32_t now_ms,
+    void beginStream(float left, float right, uint32_t now,   // [mm/s], [mm/s], [ms]
                      TargetState& target, ReplyFn fn, void* ctx);
 
-    void beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
+    void beginVelocity(float v, float omega, uint32_t now,    // [mm/s], [rad/s], [ms]
                        TargetState& target, ReplyFn fn, void* ctx,
                        const char* corr_id = nullptr, bool seedImmediate = false);
 
-    void beginTimed(float leftMms, float rightMms, uint32_t durationMs, uint32_t now_ms,
+    void beginTimed(float left, float right, uint32_t duration, uint32_t now,   // [mm/s], [mm/s], [ms], [ms]
                     TargetState& target, ReplyFn fn, void* ctx,
                     const char* corr_id = nullptr);
 
-    void beginDistance(float leftMms, float rightMms, int32_t targetMm, uint32_t now_ms,
+    void beginDistance(float left, float right, int32_t targetDistance, uint32_t now,   // [mm/s], [mm/s], [mm], [ms]
                        TargetState& target, ReplyFn fn, void* ctx,
                        const char* corr_id = nullptr);
 
-    void beginGoTo(float tx, float ty, float speedMms, uint32_t now_ms,
+    void beginGoTo(float tx, float ty, float speed, uint32_t now,   // [mm/s], [ms]
                    TargetState& target, ReplyFn fn, void* ctx,
                    const char* corr_id = nullptr);
 
-    void beginTurn(float headingCdeg, float epsCdeg, uint32_t now_ms,
+    void beginTurn(float heading, float eps, uint32_t now,   // [cdeg], [cdeg], [ms]
                    TargetState& target, ReplyFn fn, void* ctx,
                    const char* corr_id = nullptr);
 
-    void beginRotation(float relCdeg, uint32_t now_ms,
+    void beginRotation(float relAngle, uint32_t now,   // [cdeg], [ms]
                        TargetState& target, ReplyFn fn, void* ctx,
                        const char* corr_id = nullptr);
 
-    void stop(uint32_t now_ms, ReplyFn fn, void* ctx);
+    void stop(uint32_t now, ReplyFn fn, void* ctx);   // [ms]
 
-    void cancel(uint32_t now_ms, ReplyFn fn, void* ctx);
+    void cancel(uint32_t now, ReplyFn fn, void* ctx);   // [ms]
 
-    void softStop(uint32_t now_ms);
+    void softStop(uint32_t now);   // [ms]
 
-    void beginRawVelocity(float v_mms, float omega_rads, uint32_t now_ms);
+    void beginRawVelocity(float v, float omega, uint32_t now);   // [mm/s], [rad/s], [ms]
 
     void disableSafetyOneShot();
 
@@ -156,7 +156,7 @@ public:
     // watchdog signal: an ambient keepalive alone must not be sufficient
     // to keep an open-ended command alive if the velocity-issuing layer
     // itself has stalled.
-    uint32_t lastVelocityRefreshMs() const { return _lastVelocityRefreshMs; }
+    uint32_t lastVelocityRefresh() const { return _lastVelocityRefresh; }   // [ms]
 
     // 065-003 / CR-05b: stamp a fresh velocity-target refresh WITHOUT going
     // through begin*(). The "D6 origin guard" VW-keepalive path
@@ -167,7 +167,7 @@ public:
     // a "genuine refresh" for staleness purposes (it is the KeyboardDriver
     // resend pattern this ticket exists to keep alive), so the wire-layer
     // caller marks it explicitly here.
-    void markVelocityRefreshed(uint32_t now_ms) { _lastVelocityRefreshMs = now_ms; }
+    void markVelocityRefreshed(uint32_t now) { _lastVelocityRefresh = now; }   // [ms]
 
     bool hasActiveCommand() const { return _activeCmd.active(); }
 
@@ -214,7 +214,7 @@ private:
     // was genuinely refreshed by beginVelocity()/beginRawVelocity(). Persists
     // across commands by design (see architecture-update.md Decision 3) —
     // its only purpose is "how long since a velocity target was last set."
-    uint32_t _lastVelocityRefreshMs = 0;
+    uint32_t _lastVelocityRefresh = 0;   // [ms]
 
     // Drive mode
     DriveMode _mode;
@@ -239,8 +239,8 @@ private:
     uint8_t _pursueBacktrackTicks = 0;
 
     // Tick timing
-    uint32_t _lastTickMs;
-    uint32_t _currentTimeMs;
+    uint32_t _lastTick;      // [ms]
+    uint32_t _currentTime;   // [ms]
 
     // ---- Drive subsystem (for fused pose/twist in tick()) ----
     const subsystems::Drive&  _drive;
@@ -262,11 +262,11 @@ private:
 
     // ---- Private helpers (implementations in Planner.cpp / PlannerBegin.cpp) ----
     void driveAdvance(HardwareState& inputs, MotorCommands& cmds,
-                      TargetState& target, uint32_t now_ms);
+                      TargetState& target, uint32_t now);   // [ms]
     void fullStop(ReplyFn fn, void* ctx);
-    void getPoseFloat(float& x, float& y, float& h_rad) const;
+    void getPoseFloat(float& x, float& y, float& h) const;   // [rad]
     void _checkSafeOneShot(ReplyFn fn, void* ctx);
-    void _startPreRotate(float bearingRad, float speed,
-                         uint32_t now_ms, TargetState& target);
+    void _startPreRotate(float bearing, float speed,     // [rad], [mm/s]
+                         uint32_t now, TargetState& target);   // [ms]
     static void emitEvt(const char* base, TargetState& target);
 };

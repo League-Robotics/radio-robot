@@ -20,7 +20,7 @@
  * Sim* observation models (added in T2), each of which reads `const PhysicsWorld&`.
  *
  * Two ways in:
- *   1. Evolve mode:  setActuators(pwmL, pwmR) + update(dt_ms) — advances the
+ *   1. Evolve mode:  setActuators(pwmL, pwmR) + update(dt) — advances the
  *      chassis from PWM commands.
  *   2. Truth-injection mode:  setTruePose / setTrueWheelTravel / setTrueVelocity /
  *      setTrueSensorValues — sets ground truth directly for isolation tests.
@@ -36,9 +36,9 @@
  *
  * OQ-1 Option A (040-002): PhysicsWorld tracks BOTH a true (unslipped) encoder
  * accumulator AND a reported (legacy MockMotor encoder-step slip + noise)
- * accumulator.  SimMotor::positionMm() returns the REPORTED value, so the
+ * accumulator.  SimMotor::position() returns the REPORTED value, so the
  * sim_field_profile / slip-fence behaviour is preserved bit-for-bit vs. the old
- * MockMotor model (encoder over-reports arc by 26% on turns).  trueEncL/RMm()
+ * MockMotor model (encoder over-reports arc by 26% on turns).  trueEncL/R()
  * remains the unslipped ground truth for T3's sim_get_true_* / setTrueWheelTravel.
  * In the golden-TLM fixture (zero slip, zero noise, offset-factor 1.0) the
  * reported and true accumulators are bit-identical AND equal to the value the
@@ -47,8 +47,8 @@
 class PhysicsWorld {
 public:
     // Default dynamics parameters — match MockMotor / MockHAL defaults.
-    static constexpr float kNominalMaxMms = 400.0f;   // MockMotor::kNominalMaxMms
-    static constexpr float kDefaultTrackwidthMm = 150.0f;
+    static constexpr float kNominalMaxSpeed = 400.0f;  // [mm/s] MockMotor::kNominalMaxMms
+    static constexpr float kDefaultTrackwidth = 150.0f;
 
     PhysicsWorld() = default;
 
@@ -68,10 +68,10 @@ public:
         else           _pwmR = pwm;
     }
 
-    // Advance the chassis one step of dt_ms milliseconds.  Two structurally
+    // Advance the chassis one step of dt milliseconds.  Two structurally
     // separate sub-steps: (A) encoder accumulation (golden-TLM bit-exact path),
     // (B) chassis pose integration (slip applied here, not on the TLM path).
-    void update(uint32_t dt_ms);
+    void update(uint32_t dt);  // [ms]
 
     // --- Truth-injection mode (isolation tests) ------------------------------
 
@@ -82,13 +82,13 @@ public:
     }
 
     void setTrueWheelTravel(float encL, float encR) {
-        _trueEncLMm = encL;
-        _trueEncRMm = encR;
+        _trueEncL = encL;
+        _trueEncR = encR;
     }
 
     void setTrueVelocity(float velL, float velR) {
-        _trueVelLMms = velL;
-        _trueVelRMms = velR;
+        _trueVelL = velL;
+        _trueVelR = velR;
     }
 
     // Set true auxiliary sensor values (line / color / port raw truth).
@@ -151,14 +151,14 @@ public:
     // OQ-1 Option A — reported-encoder (legacy MockMotor) noise config.  side:
     // 0 = left, 1 = right, 2 = both.  Gaussian encoder noise (mm per tick) added
     // to the REPORTED encoder accumulator only; the true accumulator is unaffected.
-    void setEncoderNoise(int side, float sigmaMm) {
-        if (side == 0 || side > 1) _encNoiseSigmaL = sigmaMm;
-        if (side == 1 || side > 1) _encNoiseSigmaR = sigmaMm;
+    void setEncoderNoise(int side, float sigma) {  // [mm] noise sigma per tick
+        if (side == 0 || side > 1) _encNoiseSigmaL = sigma;
+        if (side == 1 || side > 1) _encNoiseSigmaR = sigma;
     }
 
     // Encoder error injection (ticket 058-001): per-wheel scale error and slip
     // applied to the REPORTED encoder accumulator only.  The true accumulator
-    // (_trueEncLMm / _trueEncRMm) and chassis pose remain unaffected — ground
+    // (_trueEncL / _trueEncR) and chassis pose remain unaffected — ground
     // truth is preserved and golden-TLM parity holds when both are zero (default).
     //
     // side: 0 = left, 1 = right, 2 = both.
@@ -173,8 +173,8 @@ public:
         if (side == 1 || side > 1) _encSlipR = fraction;
     }
 
-    void setTrackwidth(float mm)    { _trackwidthMm = mm; }
-    void setNominalMaxMms(float v)  { _nominalMaxMms = v; }
+    void setTrackwidth(float trackwidth)  { _trackwidth = trackwidth; }  // [mm]
+    void setNominalMaxSpeed(float speed)  { _nominalMaxSpeed = speed; }    // [mm/s]
 
     // --- Read accessors (const ground-truth) ---------------------------------
 
@@ -194,32 +194,32 @@ public:
     float idealY() const { return _truePoseY; }
     float idealH() const { return _truePoseH; }
 
-    float trueEncLMm() const { return _trueEncLMm; }
-    float trueEncRMm() const { return _trueEncRMm; }
+    float trueEncL() const { return _trueEncL; }
+    float trueEncR() const { return _trueEncR; }
 
     // OQ-1 Option A — reported (legacy MockMotor encoder-step slip + noise)
-    // encoder accumulators.  SimMotor::positionMm() reads these.  Equal to the
+    // encoder accumulators.  SimMotor::position() reads these.  Equal to the
     // true accumulators when slip == 0 and noise == 0 (golden-TLM fixture).
-    float reportedEncLMm() const { return _reportedEncLMm; }
-    float reportedEncRMm() const { return _reportedEncRMm; }
+    float reportedEncL() const { return _reportedEncL; }
+    float reportedEncR() const { return _reportedEncR; }
 
     // OQ-1 Option A — directly set the reported encoder accumulator (back-compat
     // for sim_set_enc_l/r which resets+rebuilds the legacy MockMotor encoder).
-    void setReportedEncoder(int side, float mm) {
-        if (side == 0) _reportedEncLMm = mm;
-        else           _reportedEncRMm = mm;
+    void setReportedEncoder(int side, float position) {  // [mm]
+        if (side == 0) _reportedEncL = position;
+        else           _reportedEncR = position;
     }
 
     // OQ-1 Option A — zero one side's reported encoder accumulator (mirrors
     // MockMotor::resetEncoder, which zeros _encoderMm for that one wheel).  The
     // true accumulator is the ground truth and is NOT reset here.
     void resetReportedEncoder(int side) {
-        if (side == 0) _reportedEncLMm = 0.0f;
-        else           _reportedEncRMm = 0.0f;
+        if (side == 0) _reportedEncL = 0.0f;
+        else           _reportedEncR = 0.0f;
     }
 
-    float trueVelLMms() const { return _trueVelLMms; }
-    float trueVelRMms() const { return _trueVelRMms; }
+    float trueVelL() const { return _trueVelL; }
+    float trueVelR() const { return _trueVelR; }
 
     uint16_t lineRaw(int ch) const {
         return (ch >= 0 && ch < 4) ? _lineRaw[ch] : 0;
@@ -232,9 +232,9 @@ public:
     }
 
     // Dynamics-parameter accessors (for tests / observation models).
-    float trackwidthMm()   const { return _trackwidthMm; }
-    float nominalMaxMms()  const { return _nominalMaxMms; }
-    float rotationalSlip() const { return _rotationalSlip; }
+    float trackwidth()    const { return _trackwidth; }
+    float nominalMaxSpeed() const { return _nominalMaxSpeed; }  // [mm/s]
+    float rotationalSlip()  const { return _rotationalSlip; }
     int8_t pwmL()          const { return _pwmL; }
     int8_t pwmR()          const { return _pwmR; }
 
@@ -271,15 +271,15 @@ private:
     float _truePoseH = 0.0f;
 
     // --- True per-wheel travel / velocity (unslipped ground truth) ---
-    float _trueEncLMm  = 0.0f;
-    float _trueEncRMm  = 0.0f;
-    float _trueVelLMms = 0.0f;
-    float _trueVelRMms = 0.0f;
+    float _trueEncL  = 0.0f;
+    float _trueEncR  = 0.0f;
+    float _trueVelL = 0.0f;
+    float _trueVelR = 0.0f;
 
     // --- Reported per-wheel travel (OQ-1 Option A: legacy MockMotor model) ---
-    // encoder-step slip + Gaussian noise; read by SimMotor::positionMm().
-    float _reportedEncLMm = 0.0f;
-    float _reportedEncRMm = 0.0f;
+    // encoder-step slip + Gaussian noise; read by SimMotor::position().
+    float _reportedEncL = 0.0f;
+    float _reportedEncR = 0.0f;
 
     // --- True auxiliary sensor values (zero-initialized) ---
     uint16_t _lineRaw[4]   = {0, 0, 0, 0};
@@ -287,8 +287,8 @@ private:
     uint16_t _port[4]      = {0, 0, 0, 0};
 
     // --- Dynamics parameters ---
-    float _trackwidthMm  = kDefaultTrackwidthMm;
-    float _nominalMaxMms = kNominalMaxMms;
+    float _trackwidth    = kDefaultTrackwidth;
+    float _nominalMaxSpeed = kNominalMaxSpeed;  // [mm/s]
     float _rotationalSlip = 0.0f;             // 0/unset → effectiveSlip → 1.0
     float _slipStraight  = 0.0f;
     float _slipTurnExtra = 0.0f;

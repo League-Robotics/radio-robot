@@ -72,11 +72,11 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     {
         const msg::DrivetrainState& ds = robot.drive.state();
         // Per-wheel encoder accumulator (mm).  [0]=R (FR), [1]=L (FL).
-        robot.state.actual.encMm[0] = ds.enc()[0];
-        robot.state.actual.encMm[1] = ds.enc()[1];
+        robot.state.actual.encPos[0] = ds.enc()[0];
+        robot.state.actual.encPos[1] = ds.enc()[1];
         // Per-wheel velocity (mm/s).
-        robot.state.actual.velMms[0] = ds.vel()[0];
-        robot.state.actual.velMms[1] = ds.vel()[1];
+        robot.state.actual.vel[0] = ds.vel()[0];
+        robot.state.actual.vel[1] = ds.vel()[1];
         // Fused pose (EKF output).
         robot.state.actual.fused.pose.x   = ds.fused.pose.x;
         robot.state.actual.fused.pose.y   = ds.fused.pose.y;
@@ -193,8 +193,8 @@ void loopTickOnce(Robot& robot, CommandProcessor& cmd, CommandQueue& queue,
     // telemetryEmit guards fn == nullptr, so STREAM not issued →
     // no emission.
     // =========================================================
-    if (cfg.tlmPeriodMs > 0 &&
-        (int32_t)(now - ts.lastTlm) >= (int32_t)cfg.tlmPeriodMs) {
+    if (cfg.tlmPeriod > 0 &&
+        (int32_t)(now - ts.lastTlm) >= (int32_t)cfg.tlmPeriod) {
         robot.telemetryEmit(now, robot._tlmBoundFn, robot._tlmBoundCtx);
         ts.lastTlm = now;
     }

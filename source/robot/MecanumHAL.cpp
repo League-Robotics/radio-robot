@@ -24,8 +24,8 @@ MecanumHAL::MecanumHAL(MicroBitI2C& i2c, MicroBitIO& io, const RobotConfig& cfg)
 #ifdef BENCH_OTOS_ENABLED
       ,
       _otosActive(&_otos),
-      _halfTrackMm(cfg.halfTrackMm),
-      _halfWheelbaseMm(cfg.halfWheelbaseMm),
+      _halfTrack(cfg.halfTrack),
+      _halfWheelbase(cfg.halfWheelbase),
       _lastBenchTickMs(0u),
       _fwdSignFR(cfg.fwdSignFR),
       _fwdSignFL(cfg.fwdSignFL),
@@ -76,7 +76,7 @@ void MecanumHAL::tick(uint32_t now_ms)
 //
 // TODO(T5): replace the front-pair-only approximation below with a proper
 // MecanumKinematics::forward call once MotorCommands gains the 4-element
-// tgtMms[] array for mecanum.  For now, use the
+// tgtSpeed[] array for mecanum.  For now, use the
 // same differential approximation as NezhaHAL (front-pair vx, zero vy) so
 // the bench OTOS plant gives a reasonable forward-motion estimate.
 //
@@ -94,10 +94,10 @@ void MecanumHAL::tick(uint32_t now_ms, const MotorCommands& cmds)
     if (!isBenchMode()) return;
 
     // Front-pair approximation: treat as differential using FL(L) and FR(R).
-    // trackwidthMm used here is 2 * halfTrackMm (full track width).
+    // trackwidth used here is 2 * halfTrack (full track width).
     // Array convention: [0]=R (FR), [1]=L (FL) — see OutputState.h.
-    float trackwidthMm = 2.0f * _halfTrackMm;
-    benchOtosPtr()->tick(cmds.tgtMms[1], cmds.tgtMms[0], trackwidthMm, dt_ms);
+    float trackwidth = 2.0f * _halfTrack;   // [mm]
+    benchOtosPtr()->tick(cmds.tgtSpeed[1], cmds.tgtSpeed[0], trackwidth, dt_ms);
 #else
     (void)now_ms;
     (void)cmds;

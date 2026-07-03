@@ -123,8 +123,8 @@ private:
     IOdometer*       _otosActive;
 
     // Bench-tick state (034-001): geometry cached from RobotConfig.
-    float            _halfTrackMm    = 0.0f;
-    float            _halfWheelbaseMm = 0.0f;
+    float            _halfTrack       = 0.0f;   // [mm]
+    float            _halfWheelbase   = 0.0f;   // [mm]
     uint32_t         _lastBenchTickMs = 0u;
 
     // Per-wheel forward signs, cached for bench integration.

@@ -17,8 +17,8 @@ RobotConfig defaultRobotConfig() {
     p.fwdSignR        = +1;
 
     // Encoder calibration — baked from robot config
-    p.mmPerDegL       = 0.7165f;
-    p.mmPerDegR       = 0.7077f;
+    p.wheelTravelCalibL = 0.7165f;
+    p.wheelTravelCalibR = 0.7077f;
 
     // Feed-forward and motor scale factors
     p.kFF             = 0.15f;
@@ -32,7 +32,7 @@ RobotConfig defaultRobotConfig() {
     p.kAdjGain        = 0.05f;
 
     // Geometry — baked from robot config
-    p.trackwidthMm    = 128.0f;
+    p.trackwidth      = 128.0f;
 
     // Wheel saturation ceiling and steering headroom
     p.vWheelMax       = 400.0f;
@@ -46,7 +46,7 @@ RobotConfig defaultRobotConfig() {
     // EKF sensor fusion
     // N15 fix (030-009): Q values are now per-second spectral densities.
     // EKF::predict() multiplies Q by dt_s before adding to P.  At the default
-    // controlPeriodMs = 10 ms, Q*dt = Q/100 matches the previous per-call values.
+    // controlPeriod = 10 ms, Q*dt = Q/100 matches the previous per-call values.
     // Q_per_second = Q_old / 0.010 s.
     // 2026-06-16: DISTRUST the encoder predict so the EKF prefers the OTOS
     // (optical-flow) absolute pose — the encoder heading is intrinsically noisy
@@ -74,19 +74,19 @@ RobotConfig defaultRobotConfig() {
     p.otosAngularScale     = 0.987f;
     p.rotationGainPos      = 0.956f;
     p.rotationGainNeg      = 0.954f;
-    p.rotationOffsetDeg    = 1.045f;
-    p.rotationOffsetDegNeg = 1.158f;
+    p.rotationOffset       = 1.045f;
+    p.rotationOffsetNeg    = 1.158f;
     p.rotationalSlip       = 0.92f;
     p.odomOffX             = -47.7f;
     p.odomOffY             = 3.5f;
-    p.odomYawDeg           = 0.0f;
+    p.odomYaw              = 0.0f;
     p.odomUpsideDown       = false;
 
     // Velocity-loop gains — baked from robot config
     p.velKp           = 0.3f;
     p.velKi           = 0.5f;
     p.velKff          = 0.15f;
-    p.minWheelMms     = 20.0f;
+    p.minWheelSpeed   = 20.0f;
     p.velIMax         = 20.0f;
     p.velKaw          = 3.0f;
     p.velFiltAlpha    = 0.15f;
@@ -96,7 +96,7 @@ RobotConfig defaultRobotConfig() {
     p.aMax            = 300.0f;
     p.aDecel          = 250.0f;
     p.turnInPlaceGate = 35.0f;
-    p.arriveTolMm     = 25.0f;
+    p.arriveTolerance = 25.0f;
 
     // Body motion limits
     p.vBodyMax        = 400.0f;
@@ -106,13 +106,13 @@ RobotConfig defaultRobotConfig() {
     p.yawJerkMax      = 0.0f;
 
     // Timing
-    p.minSpeedMms     = 50;
-    p.tickMs          = 20;
-    p.sTimeoutMs      = 500;
+    p.minSpeed        = 50;
+    p.tick            = 20;
+    p.sTimeout        = 500;
     p.safetyEnabled   = true;
-    p.controlPeriodMs = 10;
-    p.tlmPeriodMs     = 0;
-    p.tlmFields       = TLM_FIELD_ALL;
+    p.controlPeriod   = 10;
+    p.tlmPeriod       = 0;
+    p.tlmFields       = TLM_FIELD_ALL;  // 068: was 0xFF; widened to include TLM_FIELD_ENCPOSE (bit 8)
     p.tlmSnapPending  = false;
 
     // Sensor lag budgets
@@ -123,10 +123,10 @@ RobotConfig defaultRobotConfig() {
     // camera).  Instrumented field sweeps showed the TWIM encoder wedge is roughly
     // RATE-INDEPENDENT (4-12% at 25/50/100Hz alike), so it is NOT mitigated by
     // backing the rate off (a pre-write-idle encoder fix was tried and refuted).
-    p.lagOtosMs       = 10;
-    p.lagLineMs       = 50;
-    p.lagColorMs      = 100;
-    p.lagPortsMs      = 50;
+    p.lagOtos         = 10;
+    p.lagLine         = 50;
+    p.lagColor        = 100;
+    p.lagPorts        = 50;
 
     // Sprint 046: mecanum drivetrain fields (baked from identity.drivetrain_type).
     // Differential-only build carries these fields with safe defaults; they are
@@ -134,14 +134,14 @@ RobotConfig defaultRobotConfig() {
     p.drivetrain      = 0;
 
     // Mecanum geometry (MEASURE placeholders; default 63.0 mm half-track/wheelbase).
-    p.halfTrackMm     = 63.0f;
-    p.halfWheelbaseMm = 63.0f;
+    p.halfTrack       = 63.0f;
+    p.halfWheelbase   = 63.0f;
 
     // Per-wheel encoder calibration (mecanum). Defaults from wheel_diameter_mm.
-    p.mmPerDegFR      = 0.7048512f;
-    p.mmPerDegFL      = 0.7048512f;
-    p.mmPerDegBR      = 0.7048512f;
-    p.mmPerDegBL      = 0.7048512f;
+    p.wheelTravelCalibFR = 0.7048512f;
+    p.wheelTravelCalibFL = 0.7048512f;
+    p.wheelTravelCalibBR = 0.7048512f;
+    p.wheelTravelCalibBL = 0.7048512f;
 
     // Per-wheel forward signs (mecanum). Bench-confirmed defaults.
     p.fwdSignFR       = -1;

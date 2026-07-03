@@ -177,10 +177,10 @@ float config_route_get_robot_amax(void* h)
     return static_cast<ConfigRouteHandle*>(h)->robot.config.aMax;
 }
 
-// Read robot.config.lagLineMs (committed by handleSet).
+// Read robot.config.lagLine (committed by handleSet).
 int32_t config_route_get_robot_lag_line(void* h)
 {
-    return static_cast<ConfigRouteHandle*>(h)->robot.config.lagLineMs;
+    return static_cast<ConfigRouteHandle*>(h)->robot.config.lagLine;
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +259,7 @@ float config_route_drive2_fused_h(void* h)
 //
 // After construction: toDriveConfig(defaultRobotConfig()).vel_gains.kp
 // should be the default velKp value (0.3), not zero.  Similarly,
-// toLineSensorConfig.lag_line_ms should equal defaultRobotConfig().lagLineMs.
+// toLineSensorConfig.lag_line_ms should equal defaultRobotConfig().lagLine.
 // ---------------------------------------------------------------------------
 float config_route_init_drive2_vel_kp(void* h)
 {
@@ -271,8 +271,8 @@ float config_route_init_drive2_vel_kp(void* h)
 int32_t config_route_init_sensors_lag_line(void* h)
 {
     ConfigRouteHandle* cr = static_cast<ConfigRouteHandle*>(h);
-    // robot.config.lagLineMs is the value configure() received for line lag.
-    return (int32_t)cr->robot.config.lagLineMs;
+    // robot.config.lagLine is the value configure() received for line lag.
+    return (int32_t)cr->robot.config.lagLine;
 }
 
 float config_route_init_planner_amax(void* h)

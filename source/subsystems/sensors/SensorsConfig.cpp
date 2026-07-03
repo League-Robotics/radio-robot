@@ -17,7 +17,7 @@ namespace subsystems {
 // toLineSensorConfig — project RobotConfig → msg::LineSensorConfig.
 //
 // Mapped fields:
-//   lagLineMs          → lag_line_ms  (sensor polling budget, ms)
+//   lagLine            → lag_line_ms  (sensor polling budget, ms)
 //
 // Fields with no current RobotConfig counterpart (threshold, norm_min/max,
 // channel_map) default-initialize to zero per the msg:: generated types.
@@ -25,7 +25,7 @@ namespace subsystems {
 msg::LineSensorConfig toLineSensorConfig(const RobotConfig& rc)
 {
     msg::LineSensorConfig cfg;
-    cfg.lag_line = rc.lagLineMs;
+    cfg.lag_line = rc.lagLine;
     // threshold / norm_min / norm_max / channel_map: no RobotConfig mapping;
     // left at zero-initialized defaults.
     return cfg;
@@ -35,7 +35,7 @@ msg::LineSensorConfig toLineSensorConfig(const RobotConfig& rc)
 // toColorSensorConfig — project RobotConfig → msg::ColorSensorConfig.
 //
 // Mapped fields:
-//   lagColorMs         → lag_color_ms  (color sensor polling budget, ms)
+//   lagColor           → lag_color_ms  (color sensor polling budget, ms)
 //
 // Fields with no current RobotConfig counterpart (integration, gain,
 // cal_r/g/b) default-initialize to zero/0.0f.
@@ -43,7 +43,7 @@ msg::LineSensorConfig toLineSensorConfig(const RobotConfig& rc)
 msg::ColorSensorConfig toColorSensorConfig(const RobotConfig& rc)
 {
     msg::ColorSensorConfig cfg;
-    cfg.lag_color = rc.lagColorMs;
+    cfg.lag_color = rc.lagColor;
     // integration / gain / cal_r / cal_g / cal_b: no RobotConfig mapping;
     // left at zero-initialized defaults.
     return cfg;

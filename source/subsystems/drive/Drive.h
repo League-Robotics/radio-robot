@@ -102,8 +102,8 @@ public:
 
     // Inject encoder position directly into _hw (mirrors sim_set_enc_l/r for Drive).
     // Does NOT reset the plant or MotorController — just aligns the private baseline.
-    void injectEncL(float mm) { _hw.encMm[1] = mm; _state.enc_[1] = mm; }
-    void injectEncR(float mm) { _hw.encMm[0] = mm; _state.enc_[0] = mm; }
+    void injectEncL(float mm) { _hw.encPos[1] = mm; _state.enc_[1] = mm; }
+    void injectEncR(float mm) { _hw.encPos[0] = mm; _state.enc_[0] = mm; }
 
     // Inject a fused pose directly into _hw (mirrors sim_set_pose for Drive).
     // Refreshes _state.fused too so the next state() read sees it immediately.

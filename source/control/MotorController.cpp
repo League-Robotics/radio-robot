@@ -8,16 +8,16 @@
 
 MotorController::MotorController(IMotor& left, IMotor& right, const RobotConfig& cal)
     : _motorL(left), _motorR(right), _cal(cal),
-      _vcL(cal.velKff, cal.velKp, cal.velKi, cal.velIMax, cal.minWheelMms, cal.velKaw),
-      _vcR(cal.velKff, cal.velKp, cal.velKi, cal.velIMax, cal.minWheelMms, cal.velKaw),
+      _vcL(cal.velKff, cal.velKp, cal.velKi, cal.velIMax, cal.minWheelSpeed, cal.velKaw),
+      _vcR(cal.velKff, cal.velKp, cal.velKi, cal.velIMax, cal.minWheelSpeed, cal.velKaw),
       _cmdEncStartL(0.0f), _cmdEncStartR(0.0f),
       _cmdRatio(1.0f), _fasterIsRight(false),
       _cmds(nullptr),
       _prevEncL(0.0f), _prevEncR(0.0f),
-      _prevTimeMsL(0), _prevTimeMsR(0),
+      _prevTimeL(0), _prevTimeR(0),
       _hasTimestampL(false), _hasTimestampR(false),
-      _lastPidMs(0), _hasPidTick(false),
-      _lastVelMmsL(0.0f), _lastVelMmsR(0.0f),
+      _lastPid(0), _hasPidTick(false),
+      _lastVelL(0.0f), _lastVelR(0.0f),
       _wedgePrevEncL(0.0f), _wedgePrevEncR(0.0f),
       _wedgePrevValidL(false), _wedgePrevValidR(false),
       _stuckCountL(0), _stuckCountR(0),
@@ -42,25 +42,25 @@ void MotorController::resetStuckCounters()
     _wedgePrevValidR = false;
 }
 
-void MotorController::setTarget(float leftMms, float rightMms)
+void MotorController::setTarget(float left, float right)
 {
     if (_cmds) {
-        // Write canonical tgtMms[] arrays ([0]=FR=R, [1]=FL=L).
-        _cmds->tgtMms[1] = leftMms;    // FL = index 1
-        _cmds->tgtMms[0] = rightMms;   // FR = index 0
+        // Write canonical tgtSpeed[] arrays ([0]=FR=R, [1]=FL=L).
+        _cmds->tgtSpeed[1] = left;    // FL = index 1
+        _cmds->tgtSpeed[0] = right;   // FR = index 0
     }
 }
 
-void MotorController::startDriveClean(float leftMms, float rightMms)
+void MotorController::startDriveClean(float left, float right)
 {
     if (_cmds) {
-        // Write canonical tgtMms[] arrays ([0]=FR=R, [1]=FL=L).
-        _cmds->tgtMms[1] = leftMms;    // FL = index 1
-        _cmds->tgtMms[0] = rightMms;   // FR = index 0
+        // Write canonical tgtSpeed[] arrays ([0]=FR=R, [1]=FL=L).
+        _cmds->tgtSpeed[1] = left;    // FL = index 1
+        _cmds->tgtSpeed[0] = right;   // FR = index 0
     }
-    _fasterIsRight = (fabsf(rightMms) >= fabsf(leftMms));
-    float fasterAbs = _fasterIsRight ? fabsf(rightMms) : fabsf(leftMms);
-    float slowerAbs = _fasterIsRight ? fabsf(leftMms)  : fabsf(rightMms);
+    _fasterIsRight = (fabsf(right) >= fabsf(left));
+    float fasterAbs = _fasterIsRight ? fabsf(right) : fabsf(left);
+    float slowerAbs = _fasterIsRight ? fabsf(left)  : fabsf(right);
     _cmdRatio = (slowerAbs > 0.0f) ? (fasterAbs / slowerAbs) : 1.0f;
     // Use the control loop's cached encoder values (not a fresh atomic read,
     // which wedges the Nezha encoder — see encoder-wedge note).
@@ -70,17 +70,17 @@ void MotorController::startDriveClean(float leftMms, float rightMms)
     _vcR.reset();
 }
 
-void MotorController::startDrive(float leftMms, float rightMms)
+void MotorController::startDrive(float left, float right)
 {
     if (_cmds) {
-        // Write canonical tgtMms[] arrays ([0]=FR=R, [1]=FL=L) for all builds.
-        _cmds->tgtMms[1] = leftMms;    // FL = index 1
-        _cmds->tgtMms[0] = rightMms;   // FR = index 0
+        // Write canonical tgtSpeed[] arrays ([0]=FR=R, [1]=FL=L) for all builds.
+        _cmds->tgtSpeed[1] = left;    // FL = index 1
+        _cmds->tgtSpeed[0] = right;   // FR = index 0
     }
 
-    bool newFasterIsRight = (fabsf(rightMms) >= fabsf(leftMms));
-    float newFasterAbs = newFasterIsRight ? fabsf(rightMms) : fabsf(leftMms);
-    float newSlowerAbs = newFasterIsRight ? fabsf(leftMms)  : fabsf(rightMms);
+    bool newFasterIsRight = (fabsf(right) >= fabsf(left));
+    float newFasterAbs = newFasterIsRight ? fabsf(right) : fabsf(left);
+    float newSlowerAbs = newFasterIsRight ? fabsf(left)  : fabsf(right);
     float newRatio = (newSlowerAbs > 0.0f) ? (newFasterAbs / newSlowerAbs) : 1.0f;
 
     // Use the control loop's cached encoder values (updated every tick) — NOT a
@@ -97,8 +97,8 @@ void MotorController::startDrive(float leftMms, float rightMms)
     float seedFaster = fmaxf(prevDeltaFaster, newFasterAbs);
     float seedSlower = (newRatio > 0.0f) ? (seedFaster / newRatio) : 0.0f;
 
-    float signFaster = ((newFasterIsRight ? rightMms : leftMms) >= 0.0f) ? 1.0f : -1.0f;
-    float signSlower = ((newFasterIsRight ? leftMms  : rightMms) >= 0.0f) ? 1.0f : -1.0f;
+    float signFaster = ((newFasterIsRight ? right : left) >= 0.0f) ? 1.0f : -1.0f;
+    float signSlower = ((newFasterIsRight ? left  : right) >= 0.0f) ? 1.0f : -1.0f;
 
     if (newFasterIsRight) {
         _cmdEncStartR = curFaster - signFaster * seedFaster;
@@ -115,8 +115,8 @@ void MotorController::startDrive(float leftMms, float rightMms)
 void MotorController::stop()
 {
     if (_cmds) {
-        // Zero canonical tgtMms[] arrays.
-        for (int i = 0; i < kWheelCount; ++i) _cmds->tgtMms[i] = 0.0f;
+        // Zero canonical tgtSpeed[] arrays.
+        for (int i = 0; i < kWheelCount; ++i) _cmds->tgtSpeed[i] = 0.0f;
     }
     _vcL.reset();
     _vcR.reset();
@@ -146,7 +146,7 @@ void MotorController::updateVelGains(const RobotConfig& cal)
     _vcL.kI  = cal.velKi;   _vcR.kI  = cal.velKi;
     _vcL.iMax = cal.velIMax; _vcR.iMax = cal.velIMax;
     _vcL.kAw  = cal.velKaw;  _vcR.kAw  = cal.velKaw;
-    _vcL.minWheelMms = cal.minWheelMms; _vcR.minWheelMms = cal.minWheelMms;
+    _vcL.minWheelSpeed = cal.minWheelSpeed; _vcR.minWheelSpeed = cal.minWheelSpeed;
     // Reconfigure the cmon-pid instances with the updated gains (049-003).
     // This re-applies ParallelPid/Backcalculation coefficients immediately so
     // the new gains take effect on the very next controlTick, not one tick later.
@@ -155,7 +155,7 @@ void MotorController::updateVelGains(const RobotConfig& cal)
 }
 
 void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
-                                    uint32_t now_ms, int refreshedWheel)
+                                    uint32_t now, int refreshedWheel)
 {
     // Per-wheel zero-order-hold velocity update (014-007 ZOH fix).
     //
@@ -173,77 +173,77 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
     // of thousands of mm/s). Reject any sample beyond this bound — keep the prev
     // position/time so the NEXT good read computes a correct delta — then EMA the
     // accepted samples.
-    static constexpr float kMaxPlausibleMmps = 1000.0f;
+    static constexpr float kMaxPlausibleSpeed = 1000.0f;
 
     // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
-    // Reads use encMm[] canonical arrays; writes use velMms[] canonical arrays.
+    // Reads use encPos[] canonical arrays; writes use vel[] canonical arrays.
     if (refreshedWheel == 1) {
         // Left wheel was just collected.
-        float encLMm = inputs.encMm[1];   // FL = index 1
+        float encL = inputs.encPos[1];   // FL = index 1
         if (!_hasTimestampL) {
-            _prevEncL = encLMm; _prevTimeMsL = now_ms; _hasTimestampL = true;
+            _prevEncL = encL; _prevTimeL = now; _hasTimestampL = true;
         } else {
-            float elapsed_s = static_cast<float>(now_ms - _prevTimeMsL) / 1000.0f;
+            float elapsed_s = static_cast<float>(now - _prevTimeL) / 1000.0f;
             if (elapsed_s > 0.0f) {
-                float rawV = (encLMm - _prevEncL) / elapsed_s;
-                if (fabsf(rawV) <= kMaxPlausibleMmps) {        // accept plausible
+                float rawV = (encL - _prevEncL) / elapsed_s;
+                if (fabsf(rawV) <= kMaxPlausibleSpeed) {        // accept plausible
                     float a = _cal.velFiltAlpha;               // EMA smoothing
-                    inputs.velMms[1] = a * rawV + (1.0f - a) * inputs.velMms[1];
-                    _prevEncL    = encLMm;
-                    _prevTimeMsL = now_ms;
+                    inputs.vel[1] = a * rawV + (1.0f - a) * inputs.vel[1];
+                    _prevEncL    = encL;
+                    _prevTimeL = now;
                 }
                 // else: garbage read — reject, hold velocity and prev refs.
             }
         }
-        // Right wheel: ZOH — leave velMms[0] unchanged.
+        // Right wheel: ZOH — leave vel[0] unchanged.
     } else if (refreshedWheel == 2) {
         // Right wheel was just collected.
-        float encRMm = inputs.encMm[0];   // FR = index 0
+        float encR = inputs.encPos[0];   // FR = index 0
         if (!_hasTimestampR) {
-            _prevEncR = encRMm; _prevTimeMsR = now_ms; _hasTimestampR = true;
+            _prevEncR = encR; _prevTimeR = now; _hasTimestampR = true;
         } else {
-            float elapsed_s = static_cast<float>(now_ms - _prevTimeMsR) / 1000.0f;
+            float elapsed_s = static_cast<float>(now - _prevTimeR) / 1000.0f;
             if (elapsed_s > 0.0f) {
-                float rawV = (encRMm - _prevEncR) / elapsed_s;
-                if (fabsf(rawV) <= kMaxPlausibleMmps) {        // accept plausible
+                float rawV = (encR - _prevEncR) / elapsed_s;
+                if (fabsf(rawV) <= kMaxPlausibleSpeed) {        // accept plausible
                     float a = _cal.velFiltAlpha;               // EMA smoothing
-                    inputs.velMms[0] = a * rawV + (1.0f - a) * inputs.velMms[0];
-                    _prevEncR    = encRMm;
-                    _prevTimeMsR = now_ms;
+                    inputs.vel[0] = a * rawV + (1.0f - a) * inputs.vel[0];
+                    _prevEncR    = encR;
+                    _prevTimeR = now;
                 }
                 // else: garbage read — reject, hold velocity and prev refs.
             }
         }
-        // Left wheel: ZOH — leave velMms[1] unchanged.
+        // Left wheel: ZOH — leave vel[1] unchanged.
     } else if (refreshedWheel == 3) {
         // Both wheels updated this tick (WedgeTest pattern — sprint 015).
-        float encLMm = inputs.encMm[1];   // FL = index 1
+        float encL = inputs.encPos[1];   // FL = index 1
         if (!_hasTimestampL) {
-            _prevEncL = encLMm; _prevTimeMsL = now_ms; _hasTimestampL = true;
+            _prevEncL = encL; _prevTimeL = now; _hasTimestampL = true;
         } else {
-            float elapsed_s = static_cast<float>(now_ms - _prevTimeMsL) / 1000.0f;
+            float elapsed_s = static_cast<float>(now - _prevTimeL) / 1000.0f;
             if (elapsed_s > 0.0f) {
-                float rawV = (encLMm - _prevEncL) / elapsed_s;
-                if (fabsf(rawV) <= kMaxPlausibleMmps) {
+                float rawV = (encL - _prevEncL) / elapsed_s;
+                if (fabsf(rawV) <= kMaxPlausibleSpeed) {
                     float a = _cal.velFiltAlpha;
-                    inputs.velMms[1] = a * rawV + (1.0f - a) * inputs.velMms[1];
-                    _prevEncL    = encLMm;
-                    _prevTimeMsL = now_ms;
+                    inputs.vel[1] = a * rawV + (1.0f - a) * inputs.vel[1];
+                    _prevEncL    = encL;
+                    _prevTimeL = now;
                 }
             }
         }
-        float encRMm = inputs.encMm[0];   // FR = index 0
+        float encR = inputs.encPos[0];   // FR = index 0
         if (!_hasTimestampR) {
-            _prevEncR = encRMm; _prevTimeMsR = now_ms; _hasTimestampR = true;
+            _prevEncR = encR; _prevTimeR = now; _hasTimestampR = true;
         } else {
-            float elapsed_s = static_cast<float>(now_ms - _prevTimeMsR) / 1000.0f;
+            float elapsed_s = static_cast<float>(now - _prevTimeR) / 1000.0f;
             if (elapsed_s > 0.0f) {
-                float rawV = (encRMm - _prevEncR) / elapsed_s;
-                if (fabsf(rawV) <= kMaxPlausibleMmps) {
+                float rawV = (encR - _prevEncR) / elapsed_s;
+                if (fabsf(rawV) <= kMaxPlausibleSpeed) {
                     float a = _cal.velFiltAlpha;
-                    inputs.velMms[0] = a * rawV + (1.0f - a) * inputs.velMms[0];
-                    _prevEncR    = encRMm;
-                    _prevTimeMsR = now_ms;
+                    inputs.vel[0] = a * rawV + (1.0f - a) * inputs.vel[0];
+                    _prevEncR    = encR;
+                    _prevTimeR = now;
                 }
             }
         }
@@ -255,8 +255,8 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
     // velocity update above (whichever wheel(s) were refreshed this tick;
     // unrefreshed wheels retain their held/ZOH value here too, which is the
     // correct "last known" reading for that wheel).
-    _lastVelMmsL = inputs.velMms[1];   // FL = index 1
-    _lastVelMmsR = inputs.velMms[0];   // FR = index 0
+    _lastVelL = inputs.vel[1];   // FL = index 1
+    _lastVelR = inputs.vel[0];   // FR = index 0
 
     // PID runs for BOTH wheels using the held (ZOH) velocities.
 
@@ -283,7 +283,7 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
     {
         // Left-wheel check — when left (or both) was just collected.
         if (refreshedWheel == 1 || refreshedWheel == 3) {
-            float encL = inputs.encMm[1];    // FL = index 1 ([0]=R, [1]=L)
+            float encL = inputs.encPos[1];    // FL = index 1 ([0]=R, [1]=L)
             if (_wedgePrevValidL) {
                 if (encL != _wedgePrevEncL) {
                     // Encoder moved (or a genuine encoder-reset event shifted
@@ -329,7 +329,7 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
 
         // Right-wheel check — when right (or both) was just collected.
         if (refreshedWheel == 2 || refreshedWheel == 3) {
-            float encR = inputs.encMm[0];    // FR = index 0 ([0]=R, [1]=L)
+            float encR = inputs.encPos[0];    // FR = index 0 ([0]=R, [1]=L)
             if (_wedgePrevValidR) {
                 if (encR != _wedgePrevEncR) {
                     // Encoder moved (or a genuine encoder-reset event shifted
@@ -374,7 +374,7 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
 
     // If no drive command active, ensure motors are stopped.
     // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h / OutputState.h.
-    if (cmds.tgtMms[1] == 0.0f && cmds.tgtMms[0] == 0.0f) {
+    if (cmds.tgtSpeed[1] == 0.0f && cmds.tgtSpeed[0] == 0.0f) {
         cmds.pwm[1] = 0;   // canonical array FL
         cmds.pwm[0] = 0;   // canonical array FR
         _motorL.setSpeed(0);
@@ -382,28 +382,28 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
         // Clear stale EMA velocity: MockMotor stops instantly, so the
         // measurement should reflect 0 immediately rather than freezing
         // at the last filtered value until the next drive command.
-        inputs.velMms[1] = 0.0f;   // canonical array FL
-        inputs.velMms[0] = 0.0f;   // canonical array FR
+        inputs.vel[1] = 0.0f;   // canonical array FL
+        inputs.vel[0] = 0.0f;   // canonical array FR
         return;
     }
 
     // PID integrator dt: the ACTUAL elapsed control-tick time, not the nominal
-    // controlPeriodMs. The real loop runs at ~24 ms (10 ms nominal + 2x4 ms
+    // controlPeriod. The real loop runs at ~24 ms (10 ms nominal + 2x4 ms
     // encoder settle + bus time), so using the 10 ms nominal made kI accumulate
     // at ~0.4x strength and never close the steady-state error (wheels held ~190
     // of a 200 mm/s command). Clamp the measured delta to [5, 50] ms so a stalled
     // or first tick can't spike the integrator (preserves windup bounding).
     float dt_s;
     if (_hasPidTick) {
-        int32_t dms = static_cast<int32_t>(now_ms - _lastPidMs);
+        int32_t dms = static_cast<int32_t>(now - _lastPid);
         if (dms < 5)  dms = 5;
         if (dms > 50) dms = 50;
         dt_s = static_cast<float>(dms) / 1000.0f;
     } else {
-        dt_s = static_cast<float>(_cal.controlPeriodMs) / 1000.0f;
+        dt_s = static_cast<float>(_cal.controlPeriod) / 1000.0f;
         _hasPidTick = true;
     }
-    _lastPidMs = now_ms;
+    _lastPid = now;
     if (dt_s <= 0.0f) return;
 
     // Cross-wheel coupling — "slowest wheel governs" (015). Computed BEFORE the
@@ -419,35 +419,35 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
     // the discrepancy is 100 % (one wheel fully stopped).  Proportional blending
     // prevents the bang-bang setpoint switch that caused oscillation.
     // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h / OutputState.h.
-    float effTgtL = cmds.tgtMms[1];   // FL target
-    float effTgtR = cmds.tgtMms[0];   // FR target
+    float effTgtL = cmds.tgtSpeed[1];   // FL target
+    float effTgtR = cmds.tgtSpeed[0];   // FR target
     // Only couple when BOTH wheels drive the SAME direction (straight / curve).
     // For a spin-in-place the targets are opposite-sign (tgtL=-X, tgtR=+X); the
     // "slowest-wheel-governs" math (coupled = velOther/ratio, ratio<0) then
     // collapses the faster wheel toward the lagging one and the spin degenerates
     // to a single wheel. Same-sign-only (product > 0) keeps spins independent.
-    if (_cal.syncGain > 0.0f && cmds.tgtMms[1] * cmds.tgtMms[0] > 0.0f) {
-        float ratio = cmds.tgtMms[0] / cmds.tgtMms[1];        // commanded vR/vL
-        float achL  = inputs.velMms[1] / cmds.tgtMms[1];      // fraction-of-target each wheel does
-        float achR  = inputs.velMms[0] / cmds.tgtMms[0];
+    if (_cal.syncGain > 0.0f && cmds.tgtSpeed[1] * cmds.tgtSpeed[0] > 0.0f) {
+        float ratio = cmds.tgtSpeed[0] / cmds.tgtSpeed[1];        // commanded vR/vL
+        float achL  = inputs.vel[1] / cmds.tgtSpeed[1];      // fraction-of-target each wheel does
+        float achR  = inputs.vel[0] / cmds.tgtSpeed[0];
         const float deadband = 0.08f;
         float disc = achL - achR;                              // positive = left ahead
         if (disc > deadband) {
             float blend = _cal.syncGain * (disc - deadband);
             if (blend > 1.0f) blend = 1.0f;
-            float coupled = inputs.velMms[0] / ratio;          // fully-matched target
-            effTgtL = cmds.tgtMms[1] * (1.0f - blend) + coupled * blend;
+            float coupled = inputs.vel[0] / ratio;          // fully-matched target
+            effTgtL = cmds.tgtSpeed[1] * (1.0f - blend) + coupled * blend;
         } else if (-disc > deadband) {
             float blend = _cal.syncGain * (-disc - deadband);
             if (blend > 1.0f) blend = 1.0f;
-            float coupled = inputs.velMms[1] * ratio;
-            effTgtR = cmds.tgtMms[0] * (1.0f - blend) + coupled * blend;
+            float coupled = inputs.vel[1] * ratio;
+            effTgtR = cmds.tgtSpeed[0] * (1.0f - blend) + coupled * blend;
         }
     }
 
     // Per-wheel velocity PID (Sprint 010 inner loop) on the (possibly coupled) targets.
-    float uL = _vcL.update(effTgtL, inputs.velMms[1], dt_s);
-    float uR = _vcR.update(effTgtR, inputs.velMms[0], dt_s);
+    float uL = _vcL.update(effTgtL, inputs.vel[1], dt_s);
+    float uR = _vcR.update(effTgtR, inputs.vel[0], dt_s);
 
     // Write canonical pwm[] arrays.
     cmds.pwm[1] = static_cast<int16_t>(roundf(uL));   // FL = index 1
@@ -464,12 +464,12 @@ void MotorController::getVelocitySourceFlags(bool& leftChip, bool& rightChip) co
     rightChip = false;
 }
 
-void MotorController::getEncoderPositions(int32_t& leftMm, int32_t& rightMm) const
+void MotorController::getEncoderPositions(int32_t& left, int32_t& right) const
 {
     // Use atomic reads (request → 4 ms wait → collect) to ensure valid readings
     // outside the split-phase control tick.
-    leftMm  = static_cast<int32_t>(_motorL.readEncoderMmFAtomic(_cal));
-    rightMm = static_cast<int32_t>(_motorR.readEncoderMmFAtomic(_cal));
+    left  = static_cast<int32_t>(_motorL.readEncoderMmFAtomic(_cal));
+    right = static_cast<int32_t>(_motorR.readEncoderMmFAtomic(_cal));
 }
 
 bool MotorController::computeAtRest() const
@@ -479,12 +479,12 @@ bool MotorController::computeAtRest() const
     //
     // Commanded component: read directly off the authoritative MotorCommands
     // (the same _cmds pointer setTarget()/startDrive()/stop() write through).
-    // Measured component: _lastVelMmsL/R, refreshed every controlTick() call
-    // from the EMA-filtered inputs.velMms[] (see controlTick() above).
+    // Measured component: _lastVelL/R, refreshed every controlTick() call
+    // from the EMA-filtered inputs.vel[] (see controlTick() above).
     bool cmdAtRest = (!_cmds) ||
-                     (_cmds->tgtMms[0] == 0.0f && _cmds->tgtMms[1] == 0.0f);
-    bool velAtRest = (fabsf(_lastVelMmsL) < kAtRestVelEpsilonMms) &&
-                     (fabsf(_lastVelMmsR) < kAtRestVelEpsilonMms);
+                     (_cmds->tgtSpeed[0] == 0.0f && _cmds->tgtSpeed[1] == 0.0f);
+    bool velAtRest = (fabsf(_lastVelL) < kAtRestVelEpsilon) &&
+                     (fabsf(_lastVelR) < kAtRestVelEpsilon);
     return cmdAtRest && velAtRest;
 }
 
@@ -520,8 +520,8 @@ void MotorController::resetEncoderAccumulators()
     _prevEncR = 0.0f;
     _hasTimestampL = false;
     _hasTimestampR = false;
-    _prevTimeMsL   = 0;
-    _prevTimeMsR   = 0;
+    _prevTimeL   = 0;
+    _prevTimeR   = 0;
 }
 
 float MotorController::clamp(float v, float lo, float hi)

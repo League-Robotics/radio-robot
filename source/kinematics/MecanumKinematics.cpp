@@ -19,7 +19,7 @@ namespace MecanumKinematics {
 
 void inverse(BodyTwist3 t, const RobotGeometry& geom,
              const int8_t signs[4], float wheels[4]) {
-    float k = geom.halfTrackMm + geom.halfWheelbaseMm;
+    float k = geom.halfTrack + geom.halfWheelbase;
     float vx = t.vx_mmps;
     float vy = t.vy_mmps;
     float om = t.omega_rads;
@@ -38,7 +38,7 @@ void inverse(BodyTwist3 t, const RobotGeometry& geom,
 
 void forward(const float wheels[4], const RobotGeometry& geom,
              const int8_t signs[4], BodyTwist3& t_out) {
-    float k = geom.halfTrackMm + geom.halfWheelbaseMm;
+    float k = geom.halfTrack + geom.halfWheelbase;
 
     // Undo sign encoding: since signs[i] == ±1, multiply == divide.
     float w0 = wheels[0] * static_cast<float>(signs[0]);  // FR

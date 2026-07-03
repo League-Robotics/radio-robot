@@ -121,6 +121,20 @@ class TestSetValidationAccept:
         val = _get_val(sim, "vel.kI")
         assert val == "0.050", f"Expected vel.kI=0.050 after SET, got {val!r}"
 
+    def test_set_minWheelMms_reads_back(self, sim) -> None:
+        """SET minWheelMms=30 → GET minWheelMms returns 30.000.
+
+        071-002 collision-risk spot-check: the wire key "minWheelMms" is the
+        one row in the registry where the pre-rename C++ field name and the
+        wire key literal were spelled identically. The C++ field is now
+        RobotConfig::minWheelSpeed, but the wire key string must stay exactly
+        "minWheelMms" — this round-trip proves the SET/GET wire behavior is
+        byte-identical post-rename.
+        """
+        sim.send_command("SET minWheelMms=30")
+        val = _get_val(sim, "minWheelMms")
+        assert val == "30.000", f"Expected minWheelMms=30.000 after SET, got {val!r}"
+
 
 # ---------------------------------------------------------------------------
 # Additional invariant checks

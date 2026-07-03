@@ -51,10 +51,10 @@ struct RobotStateContainer {
 // ---------------------------------------------------------------------------
 inline RobotStateContainer defaultInputs(const RobotConfig& cfg) {
     RobotStateContainer s{};
-    s.actual.otos.lagMs    = cfg.lagOtosMs;
-    s.actual.lineVS.lagMs  = cfg.lagLineMs;
-    s.actual.colorVS.lagMs = cfg.lagColorMs;
-    s.actual.portsVS.lagMs = cfg.lagPortsMs;
+    s.actual.otos.lagMs    = cfg.lagOtos;
+    s.actual.lineVS.lagMs  = cfg.lagLine;
+    s.actual.colorVS.lagMs = cfg.lagColor;
+    s.actual.portsVS.lagMs = cfg.lagPorts;
     // enc lag: encoder readings are synchronous in the control loop, so lagMs
     // is left at 0 (zero-initialised).
     return s;

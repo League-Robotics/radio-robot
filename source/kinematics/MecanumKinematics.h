@@ -15,7 +15,7 @@
  *   [3] = BL (Back-Left)
  *
  * Combined geometry constant:
- *   k = halfTrackMm + halfWheelbaseMm
+ *   k = halfTrack + halfWheelbase
  *
  * Inverse kinematics (body twist → raw wheel speeds, before sign correction):
  *   FR_raw =  vx - vy - k * omega
@@ -35,7 +35,7 @@
  *   omega   : rad/s (CCW-positive)
  *   wheels  : mm/s (signed, after sign application)
  *   signs   : ±1 (from RobotConfig.fwdSign{FR,FL,BR,BL}; FL=+1 is primary ref)
- *   k       : mm (halfTrackMm + halfWheelbaseMm)
+ *   k       : mm (halfTrack + halfWheelbase)
  */
 namespace MecanumKinematics {
 
@@ -43,7 +43,7 @@ namespace MecanumKinematics {
  * inverse — body twist → 4 wheel speeds.
  *
  * @param t      3-DOF body twist (vx_mmps, vy_mmps, omega_rads)
- * @param geom   robot geometry (halfTrackMm, halfWheelbaseMm)
+ * @param geom   robot geometry (halfTrack, halfWheelbase)
  * @param signs  per-wheel forward signs [FR, FL, BR, BL] (from RobotConfig)
  * @param wheels output wheel speeds [FR, FL, BR, BL], mm/s
  */
@@ -57,7 +57,7 @@ void inverse(BodyTwist3 t, const RobotGeometry& geom,
  * encoding baked into wheels[]).
  *
  * @param wheels  input wheel speeds [FR, FL, BR, BL], mm/s
- * @param geom    robot geometry (halfTrackMm, halfWheelbaseMm)
+ * @param geom    robot geometry (halfTrack, halfWheelbase)
  * @param signs   per-wheel forward signs [FR, FL, BR, BL] (from RobotConfig)
  * @param t_out   output 3-DOF body twist (vx_mmps, vy_mmps, omega_rads)
  */

@@ -50,7 +50,7 @@ _INCLUDE_DIRS = [
 # PASS/FAIL lines the test parses.  Uses the ticket's exact pwm/duration values.
 #
 # Plant config matches the SIM runtime: trackwidth 128 mm (DefaultConfig),
-# nominalMaxMms 400 mm/s (PhysicsWorld::kNominalMaxMms).
+# nominalMaxMms 400 mm/s (PhysicsWorld::kNominalMaxSpeed).
 # ---------------------------------------------------------------------------
 _HARNESS = r"""
 #include "hal/sim/PhysicsWorld.h"
@@ -61,13 +61,13 @@ _HARNESS = r"""
 int main() {
     int failures = 0;
     const float TW  = 128.0f;     // DefaultConfig trackwidthMm (SIM runtime)
-    const float NOM = 400.0f;     // PhysicsWorld::kNominalMaxMms
+    const float NOM = 400.0f;     // PhysicsWorld::kNominalMaxSpeed
 
     // --- A. Straight drive: pwmL=pwmR=50 for 1000 ms → x ≈ 200 mm ---------
     {
         PhysicsWorld w;
         w.setTrackwidth(TW);
-        w.setNominalMaxMms(NOM);
+        w.setNominalMaxSpeed(NOM);
         w.setActuators(50, 50);
         // 1000 ms in 24 ms steps (matches the sim tick granularity).
         for (int t = 0; t < 1000; t += 24) {
@@ -92,7 +92,7 @@ int main() {
     {
         PhysicsWorld w;
         w.setTrackwidth(TW);
-        w.setNominalMaxMms(NOM);
+        w.setNominalMaxSpeed(NOM);
         w.setActuators(-50, 50);
         for (int t = 0; t < 500; t += 24) {
             uint32_t dt = (500 - t) < 24 ? (uint32_t)(500 - t) : 24u;

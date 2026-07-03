@@ -59,9 +59,9 @@ void SerialPort::sendReliable(const char* msg) {
     // overflow exactly as pure ASYNC would.
     ManagedString s = ManagedString(msg) + ManagedString("\r\n");
     const int len = s.length();
-    const uint64_t deadlineUs = system_timer_current_time_us() + 5000;
+    const uint64_t deadline = system_timer_current_time_us() + 5000;   // [us]
     while ((250 - _serial.txBufferedSize()) < len &&
-           system_timer_current_time_us() < deadlineUs) {
+           system_timer_current_time_us() < deadline) {
         // spin briefly; the UART's DMA drains the buffer in the background
     }
     _serial.send(s, ASYNC);
@@ -71,13 +71,13 @@ void SerialPort::setBaud(uint32_t baud) {
     // Drain the TX buffer so the just-sent reply (at the OLD baud) is fully
     // clocked out to the interface chip before retuning — otherwise its trailing
     // bytes are garbled by the switch. Bounded so a stuck buffer can't hang us.
-    const uint64_t drainUs = system_timer_current_time_us() + 20000;   // 20 ms cap
+    const uint64_t drainDeadline = system_timer_current_time_us() + 20000;   // [us] 20 ms cap
     while (_serial.txBufferedSize() > 0 &&
-           system_timer_current_time_us() < drainUs) { /* spin */ }
+           system_timer_current_time_us() < drainDeadline) { /* spin */ }
     // The software buffer is empty, but the UART shift register + DAPLink still
     // need a moment to push the final bytes out. Brief settle before retuning.
-    const uint64_t settleUs = system_timer_current_time_us() + 4000;    // ~4 ms
-    while (system_timer_current_time_us() < settleUs) { /* spin */ }
+    const uint64_t settleDeadline = system_timer_current_time_us() + 4000;    // [us] ~4 ms
+    while (system_timer_current_time_us() < settleDeadline) { /* spin */ }
     _serial.setBaud((int)baud);
 }
 

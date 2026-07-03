@@ -124,12 +124,12 @@ static void handleOP(const ArgList& /*args*/, const char* corrId,
     }
 
     // Convert heading from radians to integer milliradians for the reply.
-    int x_mm   = (int)x;
-    int y_mm   = (int)y;
+    int outX   = (int)x;        // [mm]
+    int outY   = (int)y;        // [mm]
     int h_mrad = (int)(h * 1000.0f);
 
     char body[64];
-    snprintf(body, sizeof(body), "x=%d y=%d h=%d", x_mm, y_mm, h_mrad);
+    snprintf(body, sizeof(body), "x=%d y=%d h=%d", outX, outY, h_mrad);
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "op", body,
                               corrId, replyFn, replyCtx);
 }

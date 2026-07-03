@@ -13,11 +13,11 @@
 // Configuration phase
 // ---------------------------------------------------------------------------
 
-void MotionCommand::configure(float v_mms, float omega_rads, BodyVelocityController* bvc)
+void MotionCommand::configure(float v, float omega, BodyVelocityController* bvc)
 {
     _bvc       = bvc;
-    _vTgt      = v_mms;
-    _omegaTgt  = omega_rads;
+    _vTgt      = v;
+    _omegaTgt  = omega;
 
     // Clear all per-command state so a recycled instance has no residue.
     _nStops          = 0;
@@ -31,7 +31,7 @@ void MotionCommand::configure(float v_mms, float omega_rads, BodyVelocityControl
     _origin          = Origin::RETARGETABLE;   // reset; caller must call setOrigin() to override
     _active          = false;
     _stopping        = false;
-    _softDeadlineMs  = 0;
+    _softDeadline    = 0;
     _baseline        = MotionBaseline{};
     // Reset done EVT label to default; caller must call setDoneEvt() after
     // configure() to override it for the new command.
@@ -100,14 +100,14 @@ bool MotionCommand::hasTimeStop() const
 // Execution phase
 // ---------------------------------------------------------------------------
 
-void MotionCommand::start(const HardwareState& inputs, uint32_t now_ms)
+void MotionCommand::start(const HardwareState& inputs, uint32_t now)
 {
     // Capture motion baseline.
     // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
-    _baseline.t0Ms       = now_ms;
-    _baseline.enc0Mm     = (inputs.encMm[1] + inputs.encMm[0]) * 0.5f;
-    _baseline.encDiff0Mm = inputs.encMm[0] - inputs.encMm[1];
-    _baseline.heading0Rad = inputs.fused.pose.h;
+    _baseline.t0         = now;
+    _baseline.enc0       = (inputs.encPos[1] + inputs.encPos[0]) * 0.5f;
+    _baseline.encDiff0   = inputs.encPos[0] - inputs.encPos[1];
+    _baseline.heading0   = inputs.fused.pose.h;
     _baseline.pose0X     = inputs.fused.pose.x;
     _baseline.pose0Y     = inputs.fused.pose.y;
 
@@ -120,10 +120,10 @@ void MotionCommand::start(const HardwareState& inputs, uint32_t now_ms)
     }
 }
 
-void MotionCommand::setTarget(float v_mms, float omega_rads)
+void MotionCommand::setTarget(float v, float omega)
 {
-    _vTgt     = v_mms;
-    _omegaTgt = omega_rads;
+    _vTgt     = v;
+    _omegaTgt = omega;
 
     if (_bvc) {
         _bvc->setTarget(_vTgt, _omegaTgt);
@@ -131,7 +131,7 @@ void MotionCommand::setTarget(float v_mms, float omega_rads)
 }
 
 
-bool MotionCommand::tick(const HardwareState& inputs, uint32_t now_ms, float dt_s)
+bool MotionCommand::tick(const HardwareState& inputs, uint32_t now, float dt_s)
 {
     if (!_active) return false;
 
@@ -144,7 +144,7 @@ bool MotionCommand::tick(const HardwareState& inputs, uint32_t now_ms, float dt_
 
         // Check termination conditions: converged OR deadline passed.
         bool converged = _bvc ? _bvc->atTarget() : true;
-        int32_t dt_deadline = (int32_t)(now_ms - _softDeadlineMs);
+        int32_t dt_deadline = (int32_t)(now - _softDeadline);
         bool deadline_hit   = (dt_deadline >= 0);
 
         if (converged || deadline_hit) {
@@ -165,21 +165,21 @@ bool MotionCommand::tick(const HardwareState& inputs, uint32_t now_ms, float dt_
     // Evaluate stop conditions (OR-across-array: first hit terminates).
     bool stopped = false;
     for (uint8_t i = 0; i < _nStops; ++i) {
-        if (_stops[i].evaluate(inputs, now_ms, _baseline)) {
+        if (_stops[i].evaluate(inputs, now, _baseline)) {
             // DIAGNOSTIC (transient turn-skip hunt): when a ROTATION arc stop
             // fires, emit how it ended. A healthy turn shows ms~1-2s and arc~tgt;
             // a tick-0 skip shows ms~0 with arc already >= tgt, and whichever of
             // base/cur is the outlier pinpoints the garbage encoder read that
             // corrupted the arc baseline.  One line per turn — low radio cost.
             if (_stops[i].kind == StopCondition::Kind::ROTATION && _replyFn) {
-                float d = inputs.encMm[0] - inputs.encMm[1] - _baseline.encDiff0Mm;
+                float d = inputs.encPos[0] - inputs.encPos[1] - _baseline.encDiff0;
                 if (d < 0.0f) d = -d;
                 char dbg[80];
                 snprintf(dbg, sizeof(dbg),
                          "EVT ROTSTOP ms=%u arc=%d tgt=%d base=%d cur=%d",
-                         (unsigned)(now_ms - _baseline.t0Ms), (int)(d * 0.5f),
-                         (int)_stops[i].a, (int)_baseline.encDiff0Mm,
-                         (int)(inputs.encMm[0] - inputs.encMm[1]));
+                         (unsigned)(now - _baseline.t0), (int)(d * 0.5f),
+                         (int)_stops[i].a, (int)_baseline.encDiff0,
+                         (int)(inputs.encPos[0] - inputs.encPos[1]));
                 _replyFn(dbg, _replyCtx);
             }
             // Record which condition fired so emitEvt can append reason=<token>.
@@ -198,9 +198,9 @@ bool MotionCommand::tick(const HardwareState& inputs, uint32_t now_ms, float dt_
             _stopping = false;
             emitEvt(_doneEvtLabel);
         } else {
-            // SOFT: ramp to (0, 0) over up to kSoftDeadlineMs.
-            _stopping       = true;
-            _softDeadlineMs = now_ms + kSoftDeadlineMs;
+            // SOFT: ramp to (0, 0) over up to kSoftDeadline.
+            _stopping     = true;
+            _softDeadline = now + kSoftDeadline;
             if (_bvc) _bvc->setTarget(0.0f, 0.0f);
         }
     }
@@ -238,15 +238,15 @@ void MotionCommand::cancelQuiet()
     // emitEvt("EVT cancelled") is intentionally omitted — sink cleared above.
 }
 
-void MotionCommand::softStop(uint32_t now_ms)
+void MotionCommand::softStop(uint32_t now)
 {
     // No-op if not active or already ramping down.
     if (!_active || _stopping) return;
 
     // Arm SOFT ramp-down: BVC target → (0,0); tick() will emit EVT done
     // once the BVC converges or the 3 s deadline passes.
-    _stopping       = true;
-    _softDeadlineMs = now_ms + kSoftDeadlineMs;
+    _stopping     = true;
+    _softDeadline = now + kSoftDeadline;
     if (_bvc) _bvc->setTarget(0.0f, 0.0f);
 }
 

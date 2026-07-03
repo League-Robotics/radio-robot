@@ -11,12 +11,13 @@
  *      timedMove) — reached on a Motor via IVelocityMotor::asPositionMotor().
  *
  * Canonical method taxonomy (Sprint 039 architecture §5):
- *   - setAngleDeg(uint16_t deg, uint8_t mode): command an absolute angle.  `mode`
- *     carries the Nezha ServoMotionMode for the on-chip-motor implementation
- *     (1=shortest path, 2=CW, 3=CCW); a hobby servo (Servo impl) ignores `mode`.
- *     OQ-3 resolution: mode byte 0 is the hobby-servo default; concrete impls
- *     expose a convenience `setAngle(uint8_t)` that forwards setAngleDeg(deg, 0).
- *   - currentAngleDeg(): last commanded/clamped angle in degrees.
+ *   - commandAngle(uint16_t angle, uint8_t mode): command an absolute angle
+ *     [deg].  `mode` carries the Nezha ServoMotionMode for the on-chip-motor
+ *     implementation (1=shortest path, 2=CW, 3=CCW); a hobby servo (Servo impl)
+ *     ignores `mode`.  OQ-3 resolution: mode byte 0 is the hobby-servo default;
+ *     concrete impls expose a convenience `setAngle(uint8_t)` that forwards
+ *     commandAngle(angle, 0).
+ *   - currentAngle(): last commanded/clamped angle [deg].
  *
  * `source/hal/IServo.h` is a `using IServo = IPositionMotor;` alias shim so every
  * existing IServo consumer compiles unchanged during the Phase A transition; it
@@ -31,14 +32,14 @@ class IPositionMotor {
 public:
     virtual ~IPositionMotor() = default;
 
-    // Command an absolute angle in degrees.  `mode` is the Nezha ServoMotionMode
+    // Command an absolute angle [deg].  `mode` is the Nezha ServoMotionMode
     // for on-chip motor implementations (1=shortest, 2=CW, 3=CCW); the hobby-servo
     // implementation ignores `mode` and simply clamps + drives the pin.
-    virtual void setAngleDeg(uint16_t deg, uint8_t mode) = 0;
+    virtual void commandAngle(uint16_t angle, uint8_t mode) = 0;
 
-    // Last commanded/clamped angle in degrees.  Defaults to 0 before any
-    // setAngleDeg() call.
-    virtual uint16_t currentAngleDeg() const = 0;
+    // Last commanded/clamped angle [deg].  Defaults to 0 before any
+    // commandAngle() call.
+    virtual uint16_t currentAngle() const = 0;
 };
 
 // 044-004 (Phase F): the former `source/io/IServo.h` alias shim is deleted; its

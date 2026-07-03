@@ -75,7 +75,7 @@ class RobotConfig:
         self.yawJerkMax     = kwargs.get('yawJerkMax',       0.0)
         self.aMax           = kwargs.get('aMax',           300.0)   # mm/s²
         self.aDecel         = kwargs.get('aDecel',         250.0)   # mm/s²
-        self.trackwidthMm   = kwargs.get('trackwidthMm',   126.0)
+        self.trackwidth   = kwargs.get('trackwidth',   126.0)
         self.vWheelMax      = kwargs.get('vWheelMax',      400.0)
         self.steerHeadroom  = kwargs.get('steerHeadroom',   20.0)
 
@@ -157,7 +157,7 @@ class BodyVelocityController:
             self._omega = approach(self._omega, omega_tgt_clamped, domega_max)
 
         # Per-tick ordering invariant: profile → inverse → saturate → setTarget.
-        vL, vR = bk_inverse(self._v, self._omega, self.cfg.trackwidthMm)
+        vL, vR = bk_inverse(self._v, self._omega, self.cfg.trackwidth)
         sL, sR = bk_saturate(vL, vR, self.cfg.vWheelMax, self.cfg.steerHeadroom)
         self.last_sL = sL
         self.last_sR = sR
@@ -648,7 +648,7 @@ class TestWheelMath:
 
     def test_straight_wheel_math(self):
         """Straight drive: sL and sR match manual inverse + saturate computation."""
-        cfg = RobotConfig(vBodyMax=400.0, aMax=300.0, trackwidthMm=126.0,
+        cfg = RobotConfig(vBodyMax=400.0, aMax=300.0, trackwidth=126.0,
                           vWheelMax=400.0, steerHeadroom=20.0)
         bvc = BodyVelocityController(cfg)
 
@@ -668,7 +668,7 @@ class TestWheelMath:
         """Spin-in-place: sL and sR match manual inverse + saturate computation."""
         omega = 1.0  # rad/s CCW
         cfg = RobotConfig(vBodyMax=400.0, yawRateMax=180.0, yawAccMax=720.0,
-                          trackwidthMm=126.0, vWheelMax=400.0, steerHeadroom=20.0)
+                          trackwidth=126.0, vWheelMax=400.0, steerHeadroom=20.0)
         bvc = BodyVelocityController(cfg)
         bvc.seed_current(0.0, omega)
         bvc.set_target(0.0, omega)
@@ -685,7 +685,7 @@ class TestWheelMath:
         v     = 150.0
         omega = 0.5   # rad/s
         cfg = RobotConfig(vBodyMax=400.0, yawRateMax=180.0, yawAccMax=720.0,
-                          aMax=300.0, trackwidthMm=126.0,
+                          aMax=300.0, trackwidth=126.0,
                           vWheelMax=400.0, steerHeadroom=20.0)
         bvc = BodyVelocityController(cfg)
         bvc.seed_current(v, omega)
@@ -704,11 +704,11 @@ class TestWheelMath:
     def test_saturated_wheel_math(self):
         """When inverse output exceeds ceiling, saturate scales both wheels."""
         # v large enough that vR would exceed vWheelMax - steerHeadroom.
-        # With trackwidthMm=126, omega=2.0: vR = v + omega*(63) = 350+126 = 476 > 380.
+        # With trackwidth=126, omega=2.0: vR = v + omega*(63) = 350+126 = 476 > 380.
         v     = 350.0
         omega = 2.0
         cfg = RobotConfig(vBodyMax=500.0, yawRateMax=360.0, yawAccMax=720.0,
-                          aMax=300.0, trackwidthMm=126.0,
+                          aMax=300.0, trackwidth=126.0,
                           vWheelMax=400.0, steerHeadroom=20.0)
         bvc = BodyVelocityController(cfg)
         bvc.seed_current(v, omega)

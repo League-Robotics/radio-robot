@@ -69,14 +69,14 @@ public:
     // I2C transaction ordering controlCollectSplitPhase used ("right motor first,
     // then left" — Robot.cpp / WedgeTest sprint 015).  Called once per
     // cooperative-loop iteration before loopTickOnce.
-    void tick(uint32_t now_ms) override;
+    void tick(uint32_t now) override;  // [ms]
 
     // Actuator-state tick (034-001): integrates commanded velocities into the
     // bench OTOS plant when bench mode is active; no-op when bench mode is off.
     // Ports the signed-delta dt logic from Robot::benchOtosTick so Robot no
     // longer needs a downcast.
     // In production (no BENCH_OTOS_ENABLED) this degenerates to a no-op.
-    void tick(uint32_t now_ms, const MotorCommands& cmds) override;
+    void tick(uint32_t now, const MotorCommands& cmds) override;  // [ms]
 
     // Expose the shared I2CBus for DebugCommands (DBG I2C / I2CW / I2CR).
     I2CBus& bus() { return _bus; }
@@ -144,7 +144,7 @@ private:
     // Bench-tick state (034-001): trackwidth cached from RobotConfig at
     // construction; last-tick timestamp for signed-delta dt computation
     // (mirrors the logic formerly in Robot::benchOtosTick).
-    float            _trackwidthMm    = 0.0f;
-    uint32_t         _lastBenchTickMs = 0u;
+    float            _trackwidth    = 0.0f;  // [mm]
+    uint32_t         _lastBenchTick = 0u;    // [ms]
 #endif // BENCH_OTOS_ENABLED
 };

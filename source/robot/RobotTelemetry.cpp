@@ -33,13 +33,13 @@ int Robot::buildTlmFrame(char* buf, int len)
 
     // 060-001: pose read from drive.state().fused.pose (msg::Pose2D: x,y mm, h rad).
     // Convert to integer mm (x,y) and centidegrees (h) matching the legacy output.
-    // RAD_TO_CDEG = 18000/pi ≈ 5729.578 — same constant Odometry::getPose uses.
-    static constexpr float kRadToCdeg = 5729.5779513f;
+    // kAngleScale = 18000/pi ≈ 5729.578 — same constant Odometry::getPose uses.
+    static constexpr float kAngleScale = 5729.5779513f;  // [cdeg/rad]
     int32_t pose_x = 0, pose_y = 0, pose_h = 0;
     if (config.tlmFields & TLM_FIELD_POSE) {
         pose_x = static_cast<int32_t>(ds.fused.pose.x);
         pose_y = static_cast<int32_t>(ds.fused.pose.y);
-        pose_h = static_cast<int32_t>(ds.fused.pose.h * kRadToCdeg);
+        pose_h = static_cast<int32_t>(ds.fused.pose.h * kAngleScale);
     }
     // N8 (030-008): gate line/color on freshness, not just the sticky valid bit.
     // A sensor that wedges after boot keeps valid=true forever; consult the
@@ -111,7 +111,7 @@ int Robot::buildTlmFrame(char* buf, int len)
         n = snprintf(buf + pos, (size_t)rem, " encpose=%d,%d,%d",
                      (int)ds.encoder.pose.x,
                      (int)ds.encoder.pose.y,
-                     (int)(ds.encoder.pose.h * kRadToCdeg));
+                     (int)(ds.encoder.pose.h * kAngleScale));
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
     if (haveVel) {
@@ -147,7 +147,7 @@ int Robot::buildTlmFrame(char* buf, int len)
         n = snprintf(buf + pos, (size_t)rem, " otos=%d,%d,%d",
                      (int)ds.optical.pose.x,
                      (int)ds.optical.pose.y,
-                     (int)(ds.optical.pose.h * kRadToCdeg));
+                     (int)(ds.optical.pose.h * kAngleScale));
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
     if (haveLine) {
@@ -179,15 +179,15 @@ int Robot::buildTlmFrame(char* buf, int len)
 // telemetryEmit -- gate and emit the periodic TLM frame.
 //
 // D10 idle-rate change (028-005): the stream no longer goes silent when the
-// robot is stopped.  When idle, the effective period is max(tlmPeriodMs, 500)
+// robot is stopped.  When idle, the effective period is max(tlmPeriod, 500)
 // so the host can distinguish "robot idle" from "serial dropped."
-// The clamp (tlmPeriodMs < 20 -> 20) is enforced in handleStream, not here;
+// The clamp (tlmPeriod < 20 -> 20) is enforced in handleStream, not here;
 // telemetryEmit must NOT write to config.
 // ---------------------------------------------------------------------------
 
 void Robot::telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx)
 {
-    if (config.tlmPeriodMs <= 0) return;
+    if (config.tlmPeriod <= 0) return;
 
     // N3 null guard (030-003): _tlmBoundFn stays nullptr until STREAM binds the
     // channel.  SET tlmPeriod without a prior STREAM must not reach fn(...) -- a
@@ -203,10 +203,10 @@ void Robot::telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx)
     bool stopped = ((now_ms - _lastActiveMs) > kGraceMs);
 
     uint32_t effectivePeriod = stopped
-        ? ((uint32_t)config.tlmPeriodMs > kIdleMinMs
-               ? (uint32_t)config.tlmPeriodMs
+        ? ((uint32_t)config.tlmPeriod > kIdleMinMs
+               ? (uint32_t)config.tlmPeriod
                : kIdleMinMs)
-        : (uint32_t)config.tlmPeriodMs;
+        : (uint32_t)config.tlmPeriod;
 
     // Radio rate cap: the radio/relay link sustains only ~5 Hz of TLM cleanly —
     // bench-measured 2026-06-14, STREAM 200 (5 Hz) delivered ~100% during motion,
@@ -219,10 +219,10 @@ void Robot::telemetryEmit(uint32_t now_ms, ReplyFn fn, void* ctx)
         effectivePeriod = kRadioMinMs;
     }
 
-    if ((now_ms - _lastTlmMs) < effectivePeriod) return;
+    if ((now_ms - _lastTlmTime) < effectivePeriod) return;
 
     char tlmBuf[256];
     buildTlmFrame(tlmBuf, sizeof(tlmBuf));
     fn(tlmBuf, ctx);
-    _lastTlmMs = now_ms;
+    _lastTlmTime = now_ms;
 }

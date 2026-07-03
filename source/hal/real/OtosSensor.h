@@ -45,22 +45,22 @@ public:
     void resetTracking() override;
 
     // Read the raw position registers, convert LSBs to mm/rad, apply the
-    // upside-down flip, mounting-offset lever-arm rotation (rotated by headingRad),
+    // upside-down flip, mounting-offset lever-arm rotation (rotated by heading),
     // and write the result to poseOut.  Does NOT write to HardwareState or call
     // odometry.correct — those steps remain with the caller (Robot::otosCorrect).
     // Returns true on I2C success; false if the burst read failed (poseOut = {0,0,0}).
-    // headingRad: current robot heading (radians) used to rotate the mounting offset
+    // heading: current robot heading used to rotate the mounting offset
     //   into the world frame.  No-op when odomOffX/Y are both zero (as in tovez.json).
     // N9 (030-008): callers MUST check the return value and skip fusion on false.
     bool readTransformed(OtosPose& poseOut,
-                         float headingRad = 0.0f) const override;
+                         float heading = 0.0f) const override;  // [rad]
 
     // Read velocity registers (REG_VELOCITY_XL = 0x26), apply the same flip
     // and mounting rotation as readTransformed().  Writes to velOut.
     // Returns true on I2C success; false if the burst read failed (velOut = {0,0}).
-    // headingRad: current robot heading (see readTransformed comment).
+    // heading: current robot heading (see readTransformed comment).
     bool readVelocityTransformed(OtosVelocity& velOut,
-                                 float headingRad = 0.0f) const override;
+                                 float heading = 0.0f) const override;  // [rad]
 
     // Read the OTOS STATUS register (0x1F) via readReg8.
     // Returns true on I2C success; fills out with the raw status byte.
@@ -77,7 +77,7 @@ public:
 
     void getPositionRaw(int16_t& x, int16_t& y, int16_t& h) const override;
     void setPositionRaw(int16_t x, int16_t y, int16_t h) override;
-    void setWorldPose(float x_mm, float y_mm, float h_rad) override;
+    void setWorldPose(float x, float y, float h) override;  // [mm], [mm], [rad]
     void getVelocityRaw(int16_t& x, int16_t& y, int16_t& h) const;
 
     int8_t getLinearScalar() const override;
@@ -92,7 +92,7 @@ public:
     // the OTOS measures 3 DOF regardless of drivetrain; readVelocityTransformed
     // delegates here and drops vy.
     bool readVelocityTransformed3(BodyTwist3& velOut,
-                                  float headingRad = 0.0f) const override;
+                                  float heading = 0.0f) const override;  // [rad]
 
 private:
     I2CBus&            _i2c;
@@ -121,8 +121,8 @@ private:
     // IMU calibration (init()): sample count written to REG_IMU_CALIBRATION and
     // the blocking poll budget.  255 samples ≈ 0.77 s at ~3 ms/sample; the
     // timeout adds margin so a slow bus still completes.
-    static constexpr uint8_t  kImuCalibSamples   = 255;
-    static constexpr uint32_t kImuCalibTimeoutMs = 1500;
+    static constexpr uint8_t  kImuCalibSamples  = 255;
+    static constexpr uint32_t kImuCalibTimeout  = 1500;  // [ms]
 
     // Last readXYH I2C success flag (mutable so readXYH can update it in const methods).
     mutable bool _lastReadOk = false;

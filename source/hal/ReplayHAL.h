@@ -47,8 +47,8 @@ private:
     // ---- No-op position motor (gripper / servo) ----
     class NoopPositionMotor : public IPositionMotor {
     public:
-        void     setAngleDeg(uint16_t deg, uint8_t mode) override { (void)deg; (void)mode; }
-        uint16_t currentAngleDeg() const override { return 0; }
+        void     commandAngle(uint16_t angle, uint8_t mode) override { (void)angle; (void)mode; }
+        uint16_t currentAngle() const override { return 0; }
     };
 
     // ---- No-op odometer ----

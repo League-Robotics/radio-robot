@@ -6,7 +6,7 @@ Odometry::Odometry()
     , _encPoseX(0.0f), _encPoseY(0.0f), _encPoseH(0.0f)
     , _encVx(0.0f), _encVy(0.0f), _encOmega(0.0f)
     , _otosRejected(0)
-    , _lastPredictMs(0)
+    , _lastPredict(0)
     , _rOtosV(0.0f), _rEncV(0.0f), _rOtosTheta(0.0f)
     , _lastEncV(0.0f), _lastEncOmega(0.0f)
 {
@@ -15,39 +15,39 @@ Odometry::Odometry()
 // ---------------------------------------------------------------------------
 // predict — midpoint (exact-arc) integration (docs/kinematics-model.md §2.4)
 //
-// Reads encLeftMm/encRightMm (raw cumulative encoder readings) and the
+// Reads encLeft/encRight (raw cumulative encoder readings) and the
 // trackwidth/rotationalSlip set by the most recent setKinematics() call;
 // writes fusedOut.pose.{x,y,h} and the encoder-only accumulator into
 // encoderOut.
 // ---------------------------------------------------------------------------
 
-void Odometry::predict(float encLeftMm, float encRightMm, uint32_t now_ms,
+void Odometry::predict(float encLeft, float encRight, uint32_t now,
                        PoseEstimate& encoderOut, PoseEstimate& fusedOut)
 {
     // Compute dt — use signed cast to avoid uint32 underflow on rollover.
     // (See watchdog-uint32-underflow project finding: never plain-subtract
     //  two uint32 ms stamps without a signed cast.)
     float dt_s = 0.0f;
-    if (_lastPredictMs == 0) {
+    if (_lastPredict == 0) {
         // First call: seed the timestamp, skip velocity update this tick.
-        _lastPredictMs = now_ms;
+        _lastPredict = now;
     } else {
-        dt_s = (int32_t)(now_ms - _lastPredictMs) * 0.001f;
+        dt_s = (int32_t)(now - _lastPredict) * 0.001f;
     }
 
     float theta_before = fusedOut.pose.h;   // heading before this step — MUST be first
 
-    float dL = encLeftMm  - _prevEncL;
-    float dR = encRightMm - _prevEncR;
-    _prevEncL = encLeftMm;
-    _prevEncR = encRightMm;
+    float dL = encLeft  - _prevEncL;
+    float dR = encRight - _prevEncR;
+    _prevEncL = encLeft;
+    _prevEncR = encRight;
 
     float dCenter   = (dL + dR) * 0.5f;
     // Apply rotational-slip correction: encoder arc over-reports body rotation
     // (wheel scrub during turns).  slip factor in [0.5, 1.0]; 0/unset → 1.0.
     // (024-006: rotationalSlip is now active — was dead before this sprint.)
     float slip      = effectiveSlip(_rotationalSlip);
-    float dTheta    = ((dR - dL) / _trackwidthMm) * slip;
+    float dTheta    = ((dR - dL) / _trackwidth) * slip;
 
     // (033-005e) Wedge defense: while a wheel is wedged its encoder is frozen,
     // so the differential (dR - dL) contains phantom heading rotation.  Suppress
@@ -92,7 +92,7 @@ void Odometry::predict(float encLeftMm, float encRightMm, uint32_t now_ms,
     encoderOut.twist.vx_mmps   = _encVx;
     encoderOut.twist.vy_mmps   = _encVy;
     encoderOut.twist.omega_rads = _encOmega;
-    encoderOut.stamp.lastUpdMs = now_ms;
+    encoderOut.stamp.lastUpdMs = now;
     encoderOut.stamp.valid     = true;
 
     // EKF predict — propagate state and covariance using encoder-derived arc segment.
@@ -125,10 +125,10 @@ void Odometry::predict(float encLeftMm, float encRightMm, uint32_t now_ms,
     fusedOut.twist.vx_mmps    = _ekf.v();
     fusedOut.twist.vy_mmps    = 0.0f;          // updated in correctEKF for mecanum
     fusedOut.twist.omega_rads = _ekf.omega();
-    fusedOut.stamp.lastUpdMs  = now_ms;
+    fusedOut.stamp.lastUpdMs  = now;
     fusedOut.stamp.valid      = true;
 
-    _lastPredictMs = now_ms;
+    _lastPredict = now;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,7 +138,7 @@ void Odometry::predict(float encLeftMm, float encRightMm, uint32_t now_ms,
 // ---------------------------------------------------------------------------
 
 void Odometry::correct(HardwareState& s,
-                       float x_otos, float y_otos, float theta_otos_rad,
+                       float x_otos, float y_otos, float thetaOtos,
                        float alphaPos, float alphaYaw, float otosGate)
 {
     // Outlier gate: reject if OTOS position disagrees with predicted pose
@@ -157,7 +157,7 @@ void Odometry::correct(HardwareState& s,
 
     // Heading blend: angle-wrap-safe — blend on the angular difference,
     // not on the raw angle, to avoid crossing the ±π discontinuity.
-    float dh = wrapPi(theta_otos_rad - s.fused.pose.h);
+    float dh = wrapPi(thetaOtos - s.fused.pose.h);
     s.fused.pose.h = wrapPi(s.fused.pose.h + alphaYaw * dh);
 }
 
@@ -166,28 +166,28 @@ void Odometry::correct(HardwareState& s,
 // ---------------------------------------------------------------------------
 
 void Odometry::getPose(const PoseEstimate& fused,
-                       int32_t& x_mm, int32_t& y_mm, int32_t& h_cdeg)
+                       int32_t& x, int32_t& y, int32_t& h)
 {
-    x_mm = static_cast<int32_t>(fused.pose.x);
-    y_mm = static_cast<int32_t>(fused.pose.y);
+    x = static_cast<int32_t>(fused.pose.x);
+    y = static_cast<int32_t>(fused.pose.y);
 
-    float cdeg = fused.pose.h * RAD_TO_CDEG;
-    if (cdeg >  18000.0f) cdeg =  18000.0f;
-    if (cdeg < -18000.0f) cdeg = -18000.0f;
-    h_cdeg = static_cast<int32_t>(cdeg);
+    float heading = fused.pose.h * kAngleScale;  // [cdeg]
+    if (heading >  18000.0f) heading =  18000.0f;
+    if (heading < -18000.0f) heading = -18000.0f;
+    h = static_cast<int32_t>(heading);
 }
 
 // ---------------------------------------------------------------------------
 // setPose — write pose into fusedOut/encoderOut; also reset prev-encoder snapshot.
 // ---------------------------------------------------------------------------
 
-void Odometry::setPose(float encLeftMm, float encRightMm,
-                       int32_t x_mm, int32_t y_mm, int32_t h_cdeg,
+void Odometry::setPose(float encLeft, float encRight,
+                       int32_t x, int32_t y, int32_t h,
                        PoseEstimate& encoderOut, PoseEstimate& fusedOut)
 {
-    float newX = static_cast<float>(x_mm);
-    float newY = static_cast<float>(y_mm);
-    float newH = static_cast<float>(h_cdeg) * CDEG_TO_RAD;
+    float newX = static_cast<float>(x);
+    float newY = static_cast<float>(y);
+    float newH = static_cast<float>(h) * kAngleScaleInv;
 
     fusedOut.pose.x = newX;
     fusedOut.pose.y = newY;
@@ -197,10 +197,10 @@ void Odometry::setPose(float encLeftMm, float encRightMm,
     // This prevents a spurious encoder-delta jump on the very next predict()
     // call after a camera fix (SI command) when encoders are non-zero.
     // Note: zero() calls setPose(encL, encR, 0, 0, 0, ...) at startup when
-    // encoders read 0, so _prevEncL = encLeftMm = 0 there — identical to the
+    // encoders read 0, so _prevEncL = encLeft = 0 there — identical to the
     // old behaviour on boot.
-    _prevEncL  = encLeftMm;
-    _prevEncR  = encRightMm;
+    _prevEncL  = encLeft;
+    _prevEncR  = encRight;
 
     // 047-002: reset the encoder-only accumulator to the new pose value so the
     // dead-reckoning baseline stays consistent with the absolute fix.
@@ -223,10 +223,10 @@ void Odometry::setPose(float encLeftMm, float encRightMm,
 // zero — reset pose to origin; reset prev-encoder snapshot.
 // ---------------------------------------------------------------------------
 
-void Odometry::zero(float encLeftMm, float encRightMm,
+void Odometry::zero(float encLeft, float encRight,
                     PoseEstimate& encoderOut, PoseEstimate& fusedOut)
 {
-    setPose(encLeftMm, encRightMm, 0, 0, 0, encoderOut, fusedOut);
+    setPose(encLeft, encRight, 0, 0, 0, encoderOut, fusedOut);
 }
 
 // ---------------------------------------------------------------------------
@@ -286,43 +286,43 @@ void Odometry::setNoise(float q_xy, float q_theta, float q_v, float q_omega,
 // ---------------------------------------------------------------------------
 
 void Odometry::correctEKF(float x_otos, float y_otos,
-                          float theta_otos_rad,
-                          float v_otos_mmps, float omega_otos_rads,
-                          float vy_otos_mmps, uint32_t now_ms,
+                          float thetaOtos,
+                          float vOtos, float omegaOtos,
+                          float vyOtos, uint32_t now,
                           PoseEstimate& opticalOut, PoseEstimate& fusedOut)
 {
     // 047-002: capture raw OTOS observation into opticalOut BEFORE EKF update.
     // pose: store the raw OTOS reading (do NOT differentiate; Q4 resolved).
     // twist: reuse the v/omega values passed in as the optical twist estimate.
-    // stamp: mark valid with the current now_ms.
+    // stamp: mark valid with the current now.
     opticalOut.pose.x       = x_otos;
     opticalOut.pose.y       = y_otos;
-    opticalOut.pose.h       = theta_otos_rad;
-    opticalOut.twist.vx_mmps   = v_otos_mmps;
-    opticalOut.twist.vy_mmps   = vy_otos_mmps;
-    opticalOut.twist.omega_rads = omega_otos_rads;
-    opticalOut.stamp.lastUpdMs = now_ms;
+    opticalOut.pose.h       = thetaOtos;
+    opticalOut.twist.vx_mmps   = vOtos;
+    opticalOut.twist.vy_mmps   = vyOtos;
+    opticalOut.twist.omega_rads = omegaOtos;
+    opticalOut.stamp.lastUpdMs = now;
     opticalOut.stamp.valid     = true;
 
     // 1. Fuse OTOS position (Mahalanobis-gated inside EKF).
     _ekf.updatePosition(x_otos, y_otos);
 
     // 2. Fuse OTOS heading (sprint 024-004). H=[0,0,1,0,0]; wrap-safe innovation.
-    _ekf.updateHeading(theta_otos_rad, _rOtosTheta);
+    _ekf.updateHeading(thetaOtos, _rOtosTheta);
 
     // 3. Fuse OTOS velocity (v, omega). Single scalar _rOtosV used for both
     //    v and omega noise (symmetric simplification — v1 design).
-    _ekf.updateVelocity(v_otos_mmps, omega_otos_rads, _rOtosV, _rOtosV);
+    _ekf.updateVelocity(vOtos, omegaOtos, _rOtosV, _rOtosV);
 
     // 047-002: write structured fused estimate from EKF output.
     fusedOut.pose.x          = _ekf.x();
     fusedOut.pose.y          = _ekf.y();
     fusedOut.pose.h          = _ekf.theta();
     fusedOut.twist.vx_mmps   = _ekf.v();
-    fusedOut.twist.vy_mmps   = 0.0f;   // differential: no lateral velocity; vy_otos captured in optical only
+    fusedOut.twist.vy_mmps   = 0.0f;   // differential: no lateral velocity; vyOtos captured in optical only
     fusedOut.twist.omega_rads = _ekf.omega();
-    fusedOut.stamp.lastUpdMs = now_ms;
+    fusedOut.stamp.lastUpdMs = now;
     fusedOut.stamp.valid     = true;
-    // vy_otos_mmps is captured into opticalOut.twist above (before EKF update);
+    // vyOtos is captured into opticalOut.twist above (before EKF update);
     // on the differential build it is always 0.0f and is not fused into fused.twist.
 }

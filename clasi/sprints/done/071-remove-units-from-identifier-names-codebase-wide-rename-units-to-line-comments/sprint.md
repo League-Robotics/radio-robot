@@ -1,7 +1,7 @@
 ---
 id: '071'
 title: Remove units from identifier names (codebase-wide rename; units to line comments)
-status: planning-docs
+status: done
 branch: sprint/071-remove-units-from-identifier-names-codebase-wide-rename-units-to-line-comments
 use-cases: []
 issues:

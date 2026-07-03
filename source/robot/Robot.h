@@ -182,7 +182,7 @@ struct Robot {
     //   1. Calls motorController.resetEncoderAccumulators() — resets hardware
     //      accumulators AND MotorController velocity baselines (_prevEncL/R,
     //      _hasTimestamp*, _prevTimeMsL/R).
-    //   2. Zeroes state.inputs.encLMm / encRMm — aligns the outlier filter
+    //   2. Zeroes state.inputs.encPos[] — aligns the outlier filter
     //      baseline with the fresh accumulators.
     //   3. Calls estimate.rebaselinePrev(0, 0) — prevents Odometry::predict()
     //      from computing a large negative delta (dL = 0 - _prevEncL) on the
@@ -197,7 +197,7 @@ struct Robot {
     // distanceDrive — calls motionController.beginDistance + calls resetEncoders()
     // to atomically reset hardware accumulators, velocity baselines, the outlier
     // filter baseline, and Odometry's encoder snapshot.
-    void distanceDrive(int32_t l, int32_t r, int32_t targetMm,
+    void distanceDrive(int32_t l, int32_t r, int32_t targetDistance,   // [mm]
                        ReplyFn fn, void* ctx, const char* corr_id = nullptr);
 
     // buildTlmFrame — assemble unified TLM frame; shared by STREAM and SNAP.
@@ -231,7 +231,7 @@ struct Robot {
         SimCommands*      sim   = nullptr) const;
 
     // ---- Gating state that pairs with the kept methods ----
-    uint32_t _lastTlmMs     = 0;
+    uint32_t _lastTlmTime   = 0;   // [ms]
     uint32_t _lastActiveMs  = 0;
 
     // ---- D10 telemetry: sequence counter + channel binding (028-005) ----
@@ -239,7 +239,7 @@ struct Robot {
     //   TLM frame (both STREAM and SNAP share the same counter).  Wraps at 65535.
     // _tlmBoundFn / _tlmBoundCtx: the reply channel bound by the last STREAM
     //   command.  Set in handleStream; nullptr means no STREAM has been issued
-    //   (TLM is suppressed, same behaviour as tlmPeriodMs=0 on init).
+    //   (TLM is suppressed, same behaviour as tlmPeriod=0 on init).
     uint16_t _tlmSeq        = 0;
     ReplyFn  _tlmBoundFn    = nullptr;
     void*    _tlmBoundCtx   = nullptr;

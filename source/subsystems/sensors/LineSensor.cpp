@@ -20,12 +20,12 @@ void LineSensor::updateInputs(uint32_t now)
 
 // ---------------------------------------------------------------------------
 // periodic — VERBATIM LINE timed block from loopTickOnce (043-001):
-// lag gate on cfg.lagLineMs / ts.lastLine, updateInputs(now), bump ts.lastLine.
+// lag gate on cfg.lagLine / ts.lastLine, updateInputs(now), bump ts.lastLine.
 // ---------------------------------------------------------------------------
 void LineSensor::periodic(LoopTickState& ts, uint32_t now)
 {
-    if (_cfg.lagLineMs > 0 &&
-        (int32_t)(now - ts.lastLine) >= (int32_t)_cfg.lagLineMs) {
+    if (_cfg.lagLine > 0 &&
+        (int32_t)(now - ts.lastLine) >= (int32_t)_cfg.lagLine) {
         updateInputs(now);
         ts.lastLine = now;
     }

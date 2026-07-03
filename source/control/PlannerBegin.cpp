@@ -94,7 +94,7 @@ void Planner::_checkSafeOneShot(ReplyFn fn, void* ctx)
 // Entry points
 // ---------------------------------------------------------------------------
 
-void Planner::beginStream(float leftMms, float rightMms, uint32_t now_ms,
+void Planner::beginStream(float left, float right, uint32_t now,
                           TargetState& target, ReplyFn fn, void* ctx)
 {
     // Cancel-if-active: emit EVT cancelled for the preempted command's corrId
@@ -123,14 +123,14 @@ void Planner::beginStream(float leftMms, float rightMms, uint32_t now_ms,
     // Convert wheel speeds to body twist via forward kinematics, then route
     // through BVC so all wheel commands go through the profiler path.
     float v, omega;
-    BodyKinematics::forward(leftMms, rightMms, _cfg.trackwidthMm, v, omega);
+    BodyKinematics::forward(left, right, _cfg.trackwidth, v, omega);
     _bvc.seedCurrent(v, omega);
     _bvc.setTarget(v, omega);
 
-    _tgtL = leftMms;
-    _tgtR = rightMms;
+    _tgtL = left;
+    _tgtR = right;
     _mode = DriveMode::STREAMING;
-    (void)now_ms;  // watchdog now lives in LoopScheduler
+    (void)now;  // watchdog now lives in LoopScheduler
 
     target.mode     = DriveMode::STREAMING;
     target.replyFn  = fn;
@@ -140,7 +140,7 @@ void Planner::beginStream(float leftMms, float rightMms, uint32_t now_ms,
     target.sink      = {};  // no async EVT for streaming mode
 }
 
-void Planner::beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
+void Planner::beginVelocity(float v, float omega, uint32_t now,
                             TargetState& target, ReplyFn fn, void* ctx,
                             const char* corr_id, bool seedImmediate)
 {
@@ -159,24 +159,24 @@ void Planner::beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
     // covers S, VW, T, R — everything routed through Goal::VELOCITY — so this
     // is the single point of truth for "an open-ended velocity target was
     // genuinely refreshed," independent of the `+` keepalive.
-    _lastVelocityRefreshMs = now_ms;
+    _lastVelocityRefresh = now;
 
     // seedImmediate (S-command path): seed the BVC current state immediately at
     // the target speed so there is no trapezoid ramp-up.  This preserves S's
     // original semantics (beginStream seeded BVC before setTarget).
     // VW / non-seed path: BVC ramps from its current state (no seedCurrent call).
     if (seedImmediate) {
-        _bvc.seedCurrent(v_mms, omega_rads);
+        _bvc.seedCurrent(v, omega);
     }
 
     // Configure a fresh MotionCommand for body-twist (v, ω) with:
     //   - No TIME stop (keepalive watchdog is now the system watchdog in
-    //     LoopScheduler — fires EVT safety_stop + X after sTimeoutMs silence).
+    //     LoopScheduler — fires EVT safety_stop + X after sTimeout silence).
     //   - SOFT stop style (ramp to zero before completing).
     //   - No reply sink needed — VW has no correlated EVT done; system watchdog
     //     emits EVT safety_stop directly.
     //   - RETARGETABLE origin for VW (S-origin is also RETARGETABLE per ticket 002).
-    _activeCmd.configure(v_mms, omega_rads, &_bvc);
+    _activeCmd.configure(v, omega, &_bvc);
     _activeCmd.setOrigin(MotionCommand::Origin::RETARGETABLE);
     // No addStop: system watchdog in LoopScheduler owns keepalive enforcement.
     // (Stop conditions for S / VW with stop= are added by Superstructure::requestGoal
@@ -187,7 +187,7 @@ void Planner::beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
     // Snapshot hardware state for MotionBaseline; use _hwState if available.
     HardwareState emptyState{};
     const HardwareState& inputs = _hwState ? *_hwState : emptyState;
-    _activeCmd.start(inputs, now_ms);
+    _activeCmd.start(inputs, now);
 
     // Set mode to VELOCITY — distinct from STREAMING so the S-mode watchdog
     // branch in driveAdvance does NOT fire for VW or S.
@@ -198,15 +198,15 @@ void Planner::beginVelocity(float v_mms, float omega_rads, uint32_t now_ms,
     target.mode = DriveMode::VELOCITY;
 }
 
-void Planner::beginTimed(float leftMms, float rightMms,
-                         uint32_t durationMs, uint32_t now_ms,
+void Planner::beginTimed(float left, float right,
+                         uint32_t duration, uint32_t now,
                          TargetState& target, ReplyFn fn, void* ctx,
                          const char* corr_id)
 {
     // Convert (L, R) wheel speeds to body twist (v, ω) via the forward kinematics map.
     // For equal L=R (straight drive), forward() gives v=(L+R)/2 and omega=0 — no steer bias.
-    float v_mms, omega_rads;
-    BodyKinematics::forward(leftMms, rightMms, _cfg.trackwidthMm, v_mms, omega_rads);
+    float v, omega;
+    BodyKinematics::forward(left, right, _cfg.trackwidth, v, omega);
 
     // Cancel-if-active: emit EVT cancelled for the preempted command's corrId
     // before configuring the new T command.  Without this a host awaiting
@@ -221,13 +221,13 @@ void Planner::beginTimed(float leftMms, float rightMms,
     _checkSafeOneShot(fn, ctx);
 
     // Configure a fresh MotionCommand with:
-    //   - TIME stop condition at durationMs.
+    //   - TIME stop condition at duration.
     //   - SOFT stop style (ramp to zero before completing).
     //   - EVT "EVT done T" on completion (preserves wire contract).
     //   - Reply sink for async EVT delivery.
-    _activeCmd.configure(v_mms, omega_rads, &_bvc);
+    _activeCmd.configure(v, omega, &_bvc);
     _activeCmd.setOrigin(MotionCommand::Origin::FIXED);
-    _activeCmd.addStop(makeTimeStop((float)durationMs));
+    _activeCmd.addStop(makeTimeStop((float)duration));
     _activeCmd.setReplySink(fn, ctx, corr_id);
     _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
     _activeCmd.setDoneEvt("EVT done T");
@@ -235,7 +235,7 @@ void Planner::beginTimed(float leftMms, float rightMms,
     // Snapshot hardware state for MotionBaseline.
     HardwareState emptyState{};
     const HardwareState& inputs = _hwState ? *_hwState : emptyState;
-    _activeCmd.start(inputs, now_ms);
+    _activeCmd.start(inputs, now);
 
     // VELOCITY mode — distinct from STREAMING so the S-mode watchdog does not fire.
     _mode = DriveMode::VELOCITY;
@@ -244,14 +244,14 @@ void Planner::beginTimed(float leftMms, float rightMms,
     target.mode = DriveMode::VELOCITY;
 }
 
-void Planner::beginDistance(float leftMms, float rightMms,
-                            int32_t targetMm, uint32_t now_ms,
+void Planner::beginDistance(float left, float right,
+                            int32_t targetDistance, uint32_t now,
                             TargetState& target, ReplyFn fn, void* ctx,
                             const char* corr_id)
 {
     // Convert (L, R) wheel speeds to body twist (v, ω) via forward kinematics.
-    float v_mms, omega_rads;
-    BodyKinematics::forward(leftMms, rightMms, _cfg.trackwidthMm, v_mms, omega_rads);
+    float v, omega;
+    BodyKinematics::forward(left, right, _cfg.trackwidth, v, omega);
 
     // Cancel-if-active: emit EVT cancelled for the preempted command's corrId
     // before resetting encoders or configuring the new D command.  Cancel comes
@@ -262,7 +262,7 @@ void Planner::beginDistance(float leftMms, float rightMms,
     }
 
     // Encoder-reset workaround: reset the accumulator so DISTANCE delta starts
-    // from 0.  The state.inputs.encLMm/R baseline reset is done by Robot::
+    // from 0.  The state.inputs encoder baseline reset is done by Robot::
     // distanceDrive() after this call — do not move that reset here.
     _mc_ctrl.resetEncoderAccumulators();
 
@@ -273,21 +273,21 @@ void Planner::beginDistance(float leftMms, float rightMms,
     _dEnc0       = ((float)encL0_raw + (float)encR0_raw) * 0.5f;
 
     // Store decel-hook state.
-    _dDistTarget = (float)targetMm;
-    _dOmega      = omega_rads;
+    _dDistTarget = (float)targetDistance;
+    _dOmega      = omega;
 
     // Re-arm safety if SAFE off was issued (one-shot disable, sprint 024-003).
     _checkSafeOneShot(fn, ctx);
 
     // Timeout: 2× nominal travel time + 2 s safety margin.
-    // The nominal time is |targetMm| / max(|vL|, |vR|) in seconds.
+    // The nominal time is |targetDistance| / max(|vL|, |vR|) in seconds.
     // With profiled ramp-up the robot covers slightly less ground in the first
     // ~200 ms than at full speed, so actual travel time is slightly longer than
     // nominal — the 2× factor absorbs this comfortably.
-    float spdMax = fmaxf(fabsf(leftMms), fabsf(rightMms));
+    float spdMax = fmaxf(fabsf(left), fabsf(right));
     if (spdMax < 1.0f) spdMax = 1.0f;
-    float nominalMs = ((float)targetMm / spdMax) * 1000.0f;
-    float timeoutMs = nominalMs * 2.0f + 2000.0f;
+    float nominal = ((float)targetDistance / spdMax) * 1000.0f;   // [ms]
+    float timeout = nominal * 2.0f + 2000.0f;                      // [ms]
 
     // Configure a fresh MotionCommand with:
     //   - DISTANCE stop condition as the primary trigger.
@@ -295,10 +295,10 @@ void Planner::beginDistance(float leftMms, float rightMms,
     //   - SOFT stop style (ramp to zero before completing).
     //   - EVT "EVT done D" on completion (preserves wire contract).
     //   - Reply sink for async EVT delivery.
-    _activeCmd.configure(v_mms, omega_rads, &_bvc);
+    _activeCmd.configure(v, omega, &_bvc);
     _activeCmd.setOrigin(MotionCommand::Origin::FIXED);
-    _activeCmd.addStop(makeDistanceStop((float)targetMm));
-    _activeCmd.addStop(makeTimeStop(timeoutMs));
+    _activeCmd.addStop(makeDistanceStop((float)targetDistance));
+    _activeCmd.addStop(makeTimeStop(timeout));
     _activeCmd.setReplySink(fn, ctx, corr_id);
     _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
     _activeCmd.setDoneEvt("EVT done D");
@@ -309,52 +309,52 @@ void Planner::beginDistance(float leftMms, float rightMms,
     // 033-004 baseline-race fix: previously this zeroing happened only in
     // Robot::distanceDrive() AFTER beginDistance() returned, so MotionCommand::
     // start() below captured the PREVIOUS command's stale encoder average as
-    // enc0Mm.  A D following a TURN (with no ZERO enc between) could then
+    // enc0.  A D following a TURN (with no ZERO enc between) could then
     // instant-complete on the first evaluate: once distanceDrive() zeroed the
-    // mirror, traveled = |0 − staleEnc0| already exceeded targetMm.  Zeroing the
-    // mirror here makes enc0Mm and encDiff0Mm both 0 regardless of call order.
+    // mirror, traveled = |0 − staleEnc0| already exceeded targetDistance.  Zeroing
+    // the mirror here makes enc0 and encDiff0 both 0 regardless of call order.
     // Robot::distanceDrive() still calls resetEncoders() after this (re-zeroing
     // the mirror plus resetting velocity baselines and the odometry snapshot).
     if (_hwState) {
         // Zero canonical encoder arrays.
-        _hwState->encMm[0] = 0;   // FR = index 0
-        _hwState->encMm[1] = 0;   // FL = index 1
+        _hwState->encPos[0] = 0;   // FR = index 0
+        _hwState->encPos[1] = 0;   // FL = index 1
     }
 
     // Snapshot hardware state for MotionBaseline.  The encoder mirror was just
     // zeroed above and the hardware accumulators were reset at the top of this
     // function, so the baseline enc0/encDiff0 captured by MotionCommand::start()
     // are both 0 — matching the DISTANCE stop evaluation which reads
-    // (encLMm + encRMm)/2 from HardwareState.
+    // (encL + encR)/2 from HardwareState.
     HardwareState emptyState{};
     const HardwareState& inputs = _hwState ? *_hwState : emptyState;
-    _activeCmd.start(inputs, now_ms);
+    _activeCmd.start(inputs, now);
 
     // DISTANCE mode — distinct from STREAMING so the S-mode watchdog does not fire.
     _mode = DriveMode::DISTANCE;
 
     // Update target mode; reply sink captured by _activeCmd (not target.replyFn).
     target.mode             = DriveMode::DISTANCE;
-    target.distanceTargetMm = static_cast<float>(targetMm);
+    target.distanceTarget   = static_cast<float>(targetDistance);
 }
 
-void Planner::beginGoTo(float tx, float ty, float speedMms, uint32_t now_ms,
+void Planner::beginGoTo(float tx, float ty, float speed, uint32_t now,
                         TargetState& target, ReplyFn fn, void* ctx,
                         const char* corr_id)
 {
     // Store goal in world frame by transforming robot-relative (tx, ty)
     // using the current odometry pose.
-    float x, y, h_rad;
-    getPoseFloat(x, y, h_rad);
-    _gTargetXWorld = x + tx * cosf(h_rad) - ty * sinf(h_rad);
-    _gTargetYWorld = y + tx * sinf(h_rad) + ty * cosf(h_rad);
-    _gSpeed   = speedMms;
+    float x, y, h;
+    getPoseFloat(x, y, h);
+    _gTargetXWorld = x + tx * cosf(h) - ty * sinf(h);
+    _gTargetYWorld = y + tx * sinf(h) + ty * cosf(h);
+    _gSpeed   = speed;
     _mode     = DriveMode::GO_TO;
 
     target.mode           = DriveMode::GO_TO;
     target.targetXWorld   = _gTargetXWorld;
     target.targetYWorld   = _gTargetYWorld;
-    target.targetSpeedMms = speedMms;
+    target.targetSpeed    = speed;
     target.replyFn        = fn;
     target.replyCtx       = ctx;
     if (corr_id && corr_id[0] != '\0') {
@@ -377,16 +377,16 @@ void Planner::beginGoTo(float tx, float ty, float speedMms, uint32_t now_ms,
     // Turn-in-place gate: bearing is computed from the robot-relative input
     // (tx, ty) at command time — the robot frame IS the input frame here.
     float bearing = fabsf(atan2f(ty, tx));
-    float gateRad = _cfg.turnInPlaceGate * (3.14159265f / 180.0f);  // degrees → rad
+    float gate    = _cfg.turnInPlaceGate * (3.14159265f / 180.0f);  // degrees → rad
 
-    if (bearing > gateRad) {
+    if (bearing > gate) {
         // Target is beside or behind the robot — pre-rotate in place first.
         // Cancel any stale MotionCommand before configuring PRE_ROTATE.
         if (_activeCmd.active()) {
             _activeCmd.cancel(MotionCommand::StopStyle::HARD);
         }
         float bearingSigned = atan2f(ty, tx);   // signed angle, robot frame, (-π, π]
-        _startPreRotate(bearingSigned, _gSpeed, now_ms, target);
+        _startPreRotate(bearingSigned, _gSpeed, now, target);
     } else {
         // Target is roughly ahead — enter pursuit directly.
         // Configure MotionCommand with a POSITION stop at the world target.
@@ -395,9 +395,9 @@ void Planner::beginGoTo(float tx, float ty, float speedMms, uint32_t now_ms,
         //
         // PURSUE TIME net (sprint 024-001): bound the end-to-end drive so G is
         // not the only motion verb without a TIME backstop.
-        float distanceMm = sqrtf(tx * tx + ty * ty);
-        float pursueSpd  = (_gSpeed > 1.0f) ? _gSpeed : 1.0f;
-        float pursueTimeoutMs = 2.0f * (distanceMm / pursueSpd) * 1000.0f + 4000.0f;
+        float distance      = sqrtf(tx * tx + ty * ty);   // [mm]
+        float pursueSpd     = (_gSpeed > 1.0f) ? _gSpeed : 1.0f;
+        float pursueTimeout = 2.0f * (distance / pursueSpd) * 1000.0f + 4000.0f;   // [ms]
 
         // Cancel any stale MotionCommand before configuring PURSUE.
         if (_activeCmd.active()) {
@@ -406,52 +406,50 @@ void Planner::beginGoTo(float tx, float ty, float speedMms, uint32_t now_ms,
 
         _activeCmd.configure(_gSpeed, 0.0f, &_bvc);
         _activeCmd.setOrigin(MotionCommand::Origin::FIXED);
-        _activeCmd.addStop(makePositionStop(_gTargetXWorld, _gTargetYWorld, _cfg.arriveTolMm));
-        _activeCmd.addStop(makeTimeStop(pursueTimeoutMs));
+        _activeCmd.addStop(makePositionStop(_gTargetXWorld, _gTargetYWorld, _cfg.arriveTolerance));
+        _activeCmd.addStop(makeTimeStop(pursueTimeout));
         _activeCmd.setReplySink(fn, ctx, corr_id);
         _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
         _activeCmd.setDoneEvt("EVT done G");
         HardwareState emptyState{};
         const HardwareState& inputs = _hwState ? *_hwState : emptyState;
-        _activeCmd.start(inputs, now_ms);
+        _activeCmd.start(inputs, now);
         _gPhase = GPhase::PURSUE;
     }
 }
 
-void Planner::beginTurn(float headingCdeg, float epsCdeg, uint32_t now_ms,
+void Planner::beginTurn(float heading, float eps, uint32_t now,
                         TargetState& target, ReplyFn fn, void* ctx,
                         const char* corr_id)
 {
     // Convert centidegrees → radians for the absolute target heading.
     // 1 cdeg = π/18000 rad (same conversion as getPoseFloat uses for poseHrad).
     const float kCdegToRad = 3.14159265f / 18000.0f;
-    float theta_rad = headingCdeg * kCdegToRad;
-    float eps_rad   = epsCdeg   * kCdegToRad;
 
     // Read current heading from the canonical fused pose (written by Odometry).
-    float currentHeadingRad = 0.0f;
+    float currentHeading = 0.0f;   // [rad]
     if (_hwState != nullptr) {
-        currentHeadingRad = _hwState->fused.pose.h;
+        currentHeading = _hwState->fused.pose.h;
     }
 
     // Compute shortest-path delta: wrap_angle gives the signed angle in (-π, π].
     // delta > 0 ⇒ CCW (positive ω); delta < 0 ⇒ CW (negative ω).
     // Use inline atan2f(sinf, cosf) pattern matching StopCondition.cpp::wrap_angle.
-    float diff       = theta_rad - currentHeadingRad;
-    float delta_rad  = atan2f(sinf(diff), cosf(diff));   // wrap to (-π, π]
-    float omega_sign = (delta_rad >= 0.0f) ? 1.0f : -1.0f;
+    float diff        = heading * kCdegToRad - currentHeading;
+    float delta       = atan2f(sinf(diff), cosf(diff));   // [rad] wrap to (-π, π]
+    float omega_sign  = (delta >= 0.0f) ? 1.0f : -1.0f;
 
     // ω magnitude from yawRateMax (deg/s → rad/s).
     const float kDegToRad = 3.14159265f / 180.0f;
     float omega = omega_sign * _cfg.yawRateMax * kDegToRad;
 
     // HEADING stop uses a delta from the baseline heading captured at start().
-    // The baseline is heading0Rad = currentHeadingRad at start() time.
-    // makeHeadingStop(delta_rad, eps_rad) stores delta_rad as 'a' and eps_rad as 'b'.
+    // The baseline is heading0 = currentHeading at start() time.
+    // makeHeadingStop(delta, eps * kCdegToRad) stores delta as 'a' and eps (rad) as 'b'.
     // evaluate() checks: |wrap(current - heading0 - a)| < b
-    //   = |wrap((currentHeadingRad + delta_rad) - currentHeadingRad - delta_rad)| < eps
-    //   = |wrap(0)| < eps → fires when robot has rotated by delta_rad from baseline.
-    // This matches the absolute target theta_rad exactly (since delta_rad = theta_rad - baseline).
+    //   = |wrap((currentHeading + delta) - currentHeading - delta)| < eps
+    //   = |wrap(0)| < eps → fires when robot has rotated by delta from baseline.
+    // This matches the absolute target heading*kCdegToRad exactly (since delta = heading*kCdegToRad - baseline).
 
     // Cancel any stale MotionCommand before configuring the new one.
     if (_activeCmd.active()) {
@@ -469,25 +467,25 @@ void Planner::beginTurn(float headingCdeg, float epsCdeg, uint32_t now_ms,
     //   - Reply sink for async EVT delivery.
     _activeCmd.configure(0.0f, omega, &_bvc);
     _activeCmd.setOrigin(MotionCommand::Origin::FIXED);
-    _activeCmd.addStop(makeHeadingStop(delta_rad, eps_rad));
+    _activeCmd.addStop(makeHeadingStop(delta, eps * kCdegToRad));
     // Safety time-out net (mirrors beginDistance): a TURN must NEVER run away if
     // the HEADING stop never fires — e.g. odometry heading not advancing because
     // encoders are frozen, or the robot physically cannot reach the target. Bound
     // the turn to ~2x its nominal duration plus 2 s of ramp/settle headroom so a
     // stuck heading produces a clean EVT done instead of an unbounded spin.
-    float nominalMs = (fabsf(omega) > 1e-3f)
-                      ? (fabsf(delta_rad) / fabsf(omega)) * 1000.0f
-                      : 0.0f;
-    float timeoutMs = 2.0f * nominalMs + 2000.0f;
-    _activeCmd.addStop(makeTimeStop(timeoutMs));
+    float nominal = (fabsf(omega) > 1e-3f)
+                   ? (fabsf(delta) / fabsf(omega)) * 1000.0f
+                   : 0.0f;   // [ms]
+    float timeout = 2.0f * nominal + 2000.0f;   // [ms]
+    _activeCmd.addStop(makeTimeStop(timeout));
     _activeCmd.setReplySink(fn, ctx, corr_id);
     _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
     _activeCmd.setDoneEvt("EVT done TURN");
 
-    // Snapshot hardware state for MotionBaseline (captures heading0Rad at start time).
+    // Snapshot hardware state for MotionBaseline (captures heading0 at start time).
     HardwareState emptyState{};
     const HardwareState& inputs = _hwState ? *_hwState : emptyState;
-    _activeCmd.start(inputs, now_ms);
+    _activeCmd.start(inputs, now);
 
     // VELOCITY mode — distinct from STREAMING so S-mode watchdog does not fire.
     _mode = DriveMode::VELOCITY;
@@ -504,29 +502,29 @@ void Planner::beginTurn(float headingCdeg, float epsCdeg, uint32_t now_ms,
 // so it does not depend on poseHrad/OTOS at all. A tight TIME stop bounds the
 // spin so a frozen encoder read can never run away.
 // ---------------------------------------------------------------------------
-void Planner::beginRotation(float relCdeg, uint32_t now_ms,
+void Planner::beginRotation(float relAngle, uint32_t now,
                             TargetState& target, ReplyFn fn, void* ctx,
                             const char* corr_id)
 {
     const float kDegToRad = 3.14159265f / 180.0f;
     // Spin rate for RT — deliberately moderate (not yawRateMax) so the SOFT
-    // ramp-down coasts little. Coast-anticipation (kRtCoastArcMm) fires the
+    // ramp-down coasts little. Coast-anticipation (kRtCoastArc) fires the
     // ROTATION stop early so the ramp lands on target. Both tuned in sim.
-    const float kRtRateDps    = 100.0f;
-    const float kRtCoastArcMm = 8.0f;   // ~7.3° SOFT-ramp coast at 100°/s (sim-tuned)
+    const float kRtRate     = 100.0f;   // [deg/s]
+    const float kRtCoastArc = 8.0f;     // [mm] ~7.3° SOFT-ramp coast at 100°/s (sim-tuned)
 
-    float tw   = _cfg.trackwidthMm;
+    float tw   = _cfg.trackwidth;
     // Per-wheel arc = |deg|·(π/180)·(trackwidth/2) / slip.
     // Dividing by slip (< 1.0) enlarges the encoder-arc target so wheels travel
     // far enough for the body to reach the commanded angle despite scrub.
     // effectiveSlip() applies the same migration-safe clamp as Odometry::predict().
     float slip = effectiveSlip(_cfg.rotationalSlip);
-    float arc  = fabsf(relCdeg) / 100.0f * kDegToRad * (tw * 0.5f) / slip;
-    float stopArc = arc - kRtCoastArcMm;
+    float arc  = fabsf(relAngle) / 100.0f * kDegToRad * (tw * 0.5f) / slip;   // [mm]
+    float stopArc = arc - kRtCoastArc;   // [mm]
     if (stopArc < 0.0f) stopArc = 0.0f;
-    float rateDps = (_cfg.yawRateMax < kRtRateDps) ? _cfg.yawRateMax : kRtRateDps;
-    float omega_sign = (relCdeg >= 0.0f) ? 1.0f : -1.0f;   // + ⇒ CCW
-    float omega = omega_sign * rateDps * kDegToRad;        // rad/s
+    float rate = (_cfg.yawRateMax < kRtRate) ? _cfg.yawRateMax : kRtRate;   // [deg/s]
+    float omega_sign = (relAngle >= 0.0f) ? 1.0f : -1.0f;   // + ⇒ CCW
+    float omega = omega_sign * rate * kDegToRad;        // rad/s
 
     // Cancel any stale MotionCommand before configuring the new one.
     if (_activeCmd.active()) {
@@ -543,9 +541,9 @@ void Planner::beginRotation(float relCdeg, uint32_t now_ms,
     // Tight time bound (runaway guard): nominal spin time = arc / wheel-linear-
     // speed (|omega|·tw/2), plus headroom for ramp + coast.
     float wheelSpeed = fabsf(omega) * (tw * 0.5f);          // mm/s
-    float nominalMs  = (wheelSpeed > 1e-3f) ? (arc / wheelSpeed) * 1000.0f : 0.0f;
-    float timeoutMs  = 2.0f * nominalMs + 1000.0f;
-    _activeCmd.addStop(makeTimeStop(timeoutMs));
+    float nominal    = (wheelSpeed > 1e-3f) ? (arc / wheelSpeed) * 1000.0f : 0.0f;   // [ms]
+    float timeout    = 2.0f * nominal + 1000.0f;   // [ms]
+    _activeCmd.addStop(makeTimeStop(timeout));
 
     _activeCmd.setReplySink(fn, ctx, corr_id);
     // SOFT stop: ramp ω to 0 (this is what actually halts the motors; HARD
@@ -556,13 +554,13 @@ void Planner::beginRotation(float relCdeg, uint32_t now_ms,
 
     HardwareState emptyState{};
     const HardwareState& inputs = _hwState ? *_hwState : emptyState;
-    _activeCmd.start(inputs, now_ms);
+    _activeCmd.start(inputs, now);
 
     _mode = DriveMode::VELOCITY;
     target.mode = DriveMode::VELOCITY;
 }
 
-void Planner::beginRawVelocity(float v_mms, float omega_rads, uint32_t now_ms)
+void Planner::beginRawVelocity(float v, float omega, uint32_t now)
 {
     // Cancel-if-active: emit EVT cancelled for the preempted command's corrId
     // before seeding the BVC.  _VW (raw velocity, fire-and-forget) must not
@@ -575,15 +573,15 @@ void Planner::beginRawVelocity(float v_mms, float omega_rads, uint32_t now_ms)
 
     // 065-003 / CR-05b: stamp the velocity-refresh timestamp. _VW bypasses
     // beginVelocity() entirely (fire-and-forget, no MotionCommand), so it
-    // must stamp _lastVelocityRefreshMs itself — otherwise a _VW-only stream
+    // must stamp _lastVelocityRefresh itself — otherwise a _VW-only stream
     // kept alive by ambient `+` would incorrectly go stale under the new
     // watchdog signal even though fresh _VW commands are still arriving.
-    _lastVelocityRefreshMs = now_ms;
+    _lastVelocityRefresh = now;
 
     // Seed the profiler's current state to the target — no ramp from zero.
     // Then set the target so advance() holds at this speed immediately.
-    _bvc.seedCurrent(v_mms, omega_rads);
-    _bvc.setTarget(v_mms, omega_rads);
+    _bvc.seedCurrent(v, omega);
+    _bvc.setTarget(v, omega);
 
     // _VW is fire-and-forget: no MotionCommand, no stop conditions.
     // The system watchdog in LoopScheduler owns keepalive enforcement.
@@ -596,39 +594,39 @@ void Planner::beginRawVelocity(float v_mms, float omega_rads, uint32_t now_ms)
 // Extracted as a shared helper (D8 027-004) so both beginGoTo()'s PRE_ROTATE
 // branch and the PURSUE re-gate use identical setup logic without duplication.
 //
-// bearingRad: signed robot-frame bearing to the target, atan2f(dy, dx).
-//             Determines turn direction (CCW if > 0, CW if < 0).
-// speed:      commanded travel speed (mm/s) — used to derive omega via
-//             inverse kinematics (spin-in-place).
-// now_ms:     current timestamp; passed to MotionCommand.start().
-// target:     TargetState with replyFn/replyCtx/corrId already wired by
-//             beginGoTo().  The PRE_ROTATE command does NOT set a reply sink;
-//             driveAdvance handles the PRE_ROTATE → PURSUE transition and emits
-//             "EVT done G" on TIME-net expiry directly via target.replyFn.
-void Planner::_startPreRotate(float bearingRad, float speed,
-                              uint32_t now_ms, TargetState& target)
+// bearing:  signed robot-frame bearing to the target, atan2f(dy, dx), rad.
+//           Determines turn direction (CCW if > 0, CW if < 0).
+// speed:    commanded travel speed (mm/s) — used to derive omega via
+//           inverse kinematics (spin-in-place).
+// now:      current timestamp; passed to MotionCommand.start().
+// target:   TargetState with replyFn/replyCtx/corrId already wired by
+//           beginGoTo().  The PRE_ROTATE command does NOT set a reply sink;
+//           driveAdvance handles the PRE_ROTATE → PURSUE transition and emits
+//           "EVT done G" on TIME-net expiry directly via target.replyFn.
+void Planner::_startPreRotate(float bearing, float speed,
+                              uint32_t now, TargetState& target)
 {
-    float gateRad = _cfg.turnInPlaceGate * (3.14159265f / 180.0f);
+    float gate = _cfg.turnInPlaceGate * (3.14159265f / 180.0f);   // [rad]
 
     // Per-direction feedforward gain (012-006): CCW uses rotationGainPos,
     // CW uses rotationGainNeg.  FEEDFORWARD correction only; bearing gate
     // provides closed-loop compensation (no oscillation risk).
-    float turnSign = (bearingRad >= 0.0f) ? 1.0f : -1.0f;
+    float turnSign = (bearing >= 0.0f) ? 1.0f : -1.0f;
     float dirGain  = (turnSign > 0.0f) ? _cfg.rotationGainPos : _cfg.rotationGainNeg;
     if (dirGain < 0.05f) dirGain = 0.05f;
 
     // omega = 2*(speed/dirGain) / trackwidth  (spin-in-place from inverse kinematics)
     float wheelSpd = speed / dirGain;
-    float omega    = turnSign * 2.0f * wheelSpd / _cfg.trackwidthMm;
-    float omegaMax = 2.0f * _cfg.vWheelMax / _cfg.trackwidthMm;
+    float omega    = turnSign * 2.0f * wheelSpd / _cfg.trackwidth;
+    float omegaMax = 2.0f * _cfg.vWheelMax / _cfg.trackwidth;
     if (omega >  omegaMax) omega =  omegaMax;
     if (omega < -omegaMax) omega = -omegaMax;
 
     // TIME net: 2× nominal spin time + 2000 ms guard (sprint 024-001).
-    float nominalMs = (fabsf(omega) > 1e-3f)
-                      ? (fabsf(bearingRad) / fabsf(omega)) * 1000.0f
-                      : 0.0f;
-    float timeoutMs = 2.0f * nominalMs + 2000.0f;
+    float nominal = (fabsf(omega) > 1e-3f)
+                   ? (fabsf(bearing) / fabsf(omega)) * 1000.0f
+                   : 0.0f;   // [ms]
+    float timeout = 2.0f * nominal + 2000.0f;   // [ms]
 
     // Configure PRE_ROTATE as a supervised spin-in-place command.
     // No reply sink: PRE_ROTATE does NOT emit "EVT done G" on HEADING success
@@ -638,13 +636,13 @@ void Planner::_startPreRotate(float bearingRad, float speed,
     _bvc.reset();
     _activeCmd.configure(0.0f, omega, &_bvc);
     _activeCmd.setOrigin(MotionCommand::Origin::FIXED);
-    _activeCmd.addStop(makeHeadingStop(bearingRad, gateRad));
-    _activeCmd.addStop(makeTimeStop(timeoutMs));
+    _activeCmd.addStop(makeHeadingStop(bearing, gate));
+    _activeCmd.addStop(makeTimeStop(timeout));
     // No setReplySink: EVT emission is handled by driveAdvance on termination.
     _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
     HardwareState emptyState{};
     const HardwareState& hwInputs = _hwState ? *_hwState : emptyState;
-    _activeCmd.start(hwInputs, now_ms);
+    _activeCmd.start(hwInputs, now);
     _gPhase = GPhase::PRE_ROTATE;
 
     (void)target;  // target.replyFn used by driveAdvance, not by this helper directly

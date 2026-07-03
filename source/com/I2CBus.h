@@ -151,7 +151,7 @@ private:
 
     // Transaction log ring buffer.
     struct TxnLog {
-        uint32_t t_us;     // timestamp (us)
+        uint32_t t;        // [us] timestamp
         uint16_t addr;     // 7-bit device address
         uint8_t  rw;       // 0 = write, 1 = read
         uint8_t  len;      // transfer length

@@ -6,7 +6,7 @@
 // Planner::configure() and the Phase 3 command-bus initialization.
 //
 // Motion-limits scope only: aMax, aDecel, vBodyMax, yawRateMax, yawAccMax,
-// jMax, yawJerkMax, arriveTolMm, turnInPlaceGate, minSpeedMms.
+// jMax, yawJerkMax, arriveTolerance, turnInPlaceGate, minSpeed.
 //
 // Drive geometry and PID gains are NOT mapped here — those belong to
 // toDriveConfig() in DriveConfig.cpp.

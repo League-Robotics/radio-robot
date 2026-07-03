@@ -52,8 +52,8 @@ void Superstructure::requestGoal(const GoalRequest& gr)
         // handleVW "dist" branch: robot->distanceDrive(vL, vR, mm, fn, ctx, corrId).
         // Routed through Robot to preserve the atomic encoder reset
         // (beginDistance + resetEncoders).
-        gr.robot->distanceDrive((int32_t)gr.leftMms, (int32_t)gr.rightMms,
-                                gr.targetMm, gr.replyFn, gr.replyCtx, gr.corrId);
+        gr.robot->distanceDrive((int32_t)gr.left, (int32_t)gr.right,
+                                gr.targetDistance, gr.replyFn, gr.replyCtx, gr.corrId);
         if (_planner.hasActiveCommand()) {
             if (gr.doneLabel) _planner.activeCmd().setDoneEvt(gr.doneLabel);
             // 065-001 / CR-01: addStop() can return false if the wire-supplied
@@ -76,19 +76,19 @@ void Superstructure::requestGoal(const GoalRequest& gr)
 
     case Goal::GOTO:
         // handleVW "x"+"y" branch: beginGoTo(x, y, speed, now, target, fn, ctx, corrId).
-        _planner.beginGoTo(gr.tx, gr.ty, gr.speedMms, gr.now_ms,
+        _planner.beginGoTo(gr.tx, gr.ty, gr.speed, gr.now_ms,
                            target, gr.replyFn, gr.replyCtx, gr.corrId);
         break;
 
     case Goal::TURN:
-        // handleVW "h" branch: beginTurn(h_cdeg, eps, now, target, fn, ctx, corrId).
-        _planner.beginTurn(gr.headingCdeg, gr.epsCdeg, gr.now_ms,
+        // handleVW "h" branch: beginTurn(heading, eps, now, target, fn, ctx, corrId).
+        _planner.beginTurn(gr.heading, gr.eps, gr.now_ms,
                            target, gr.replyFn, gr.replyCtx, gr.corrId);
         break;
 
     case Goal::ROTATE:
-        // handleVW "rot" branch: beginRotation(rot_cdeg, now, target, fn, ctx, corrId).
-        _planner.beginRotation(gr.relCdeg, gr.now_ms,
+        // handleVW "rot" branch: beginRotation(relAngle, now, target, fn, ctx, corrId).
+        _planner.beginRotation(gr.relAngle, gr.now_ms,
                                target, gr.replyFn, gr.replyCtx, gr.corrId);
         break;
 
@@ -97,7 +97,7 @@ void Superstructure::requestGoal(const GoalRequest& gr)
         // beginVelocity(v, omega, now, target, fn, ctx, corrId, seedImmediate).
         // When gr.streamSeed is true (S command), the BVC is seeded at the target
         // speed immediately (no trapezoid ramp-up), preserving S's original semantics.
-        _planner.beginVelocity(gr.v_mms, gr.omega_rads, gr.now_ms,
+        _planner.beginVelocity(gr.v, gr.omega_rads, gr.now_ms,
                                target, gr.replyFn, gr.replyCtx, gr.corrId, gr.streamSeed);
         if (_planner.hasActiveCommand()) {
             if (gr.doneLabel) _planner.activeCmd().setDoneEvt(gr.doneLabel);
@@ -144,7 +144,7 @@ void Superstructure::evaluateSafety(CommandProcessor& cmd, CommandQueue& queue,
 {
     const RobotConfig& cfg = _cfg;
 
-    // ===== SYSTEM WATCHDOG: fire safety_stop + X after sTimeoutMs of silence =
+    // ===== SYSTEM WATCHDOG: fire safety_stop + X after sTimeout of silence =
     // ts.watchdogMs == 0 means no command has been received yet this session;
     // the watchdog stays disarmed until the first command arrives.
     // Signed delta avoids uint32 underflow (project memory: watchdog-uint32-underflow).
@@ -176,13 +176,13 @@ void Superstructure::evaluateSafety(CommandProcessor& cmd, CommandQueue& queue,
             // beginVelocity()/beginRawVelocity() — the actual, authoritative
             // point of truth for "a velocity target was genuinely
             // refreshed" — so it catches that gap independent of `+`.
-            // _lastVelocityRefreshMs is causally guaranteed non-zero here:
+            // _lastVelocityRefresh is causally guaranteed non-zero here:
             // needsWatchdog can only be true once an open-ended command is
             // active, and no such command becomes active without first
             // calling beginVelocity()/beginRawVelocity().
-            int32_t vwDelta = (int32_t)(now - _planner.lastVelocityRefreshMs());
-            bool stale = (wdDelta > (int32_t)cfg.sTimeoutMs) ||
-                         (vwDelta > (int32_t)cfg.sTimeoutMs);
+            int32_t vwDelta = (int32_t)(now - _planner.lastVelocityRefresh());
+            bool stale = (wdDelta > (int32_t)cfg.sTimeout) ||
+                         (vwDelta > (int32_t)cfg.sTimeout);
             if (stale) {
                 ts.watchdogMs = now;  // re-arm to avoid firing every tick
                 char wdBuf[64];

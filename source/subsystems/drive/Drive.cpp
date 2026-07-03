@@ -41,7 +41,7 @@ Drive::Drive(IMotor& motorL, IMotor& motorR,
     , _robCfg(cfg)
 {
     // Seed the MotorController's commands reference so setTarget() writes
-    // _outputs.tgtMms[], which controlTick() reads for the velocity PIDs.
+    // _outputs.tgtSpeed[], which controlTick() reads for the velocity PIDs.
     _mc.setCommandsRef(&_outputs);
 
     // Initialise the EKF with config noise params so predict/correct work.
@@ -63,8 +63,8 @@ void Drive::apply(const msg::DrivetrainCommand& cmd)
 // ---------------------------------------------------------------------------
 // tickUpdate — SENSE phase.
 //
-// 1. Encoder outlier filter → write _hw.encMm[0/1].
-// 2. controlTick()  → velocity PID for both wheels (reads _hw.encMm[]).
+// 1. Encoder outlier filter → write _hw.encPos[0/1].
+// 2. controlTick()  → velocity PID for both wheels (reads _hw.encPos[]).
 // 3. Wedge push → est.setWedgeActive / setEncOmegaHealthy.
 // 4. addOdometryObservation → EKF predict, update _hw.fused/encoder/optical.
 // 5. OTOS correction (if lag elapsed and device is ready).
@@ -80,7 +80,7 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
     // controlTick runs the velocity PID and calls _motorL/R.setSpeed().
     // refreshedWheel=3 means both wheels were just collected (same semantics
     // as Drive::periodic).
-    bool driving = (_outputs.tgtMms[1] != 0.0f || _outputs.tgtMms[0] != 0.0f);
+    bool driving = (_outputs.tgtSpeed[1] != 0.0f || _outputs.tgtSpeed[0] != 0.0f);
     _mc.controlTick(_hw, _outputs, now, driving ? 3 : 0);
 
     // ------------------------------------------------------------------
@@ -124,16 +124,16 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
     // ------------------------------------------------------------------
     // STEP 4: EKF predict — encoder dead-reckoning integrate
     // ------------------------------------------------------------------
-    float trackwidth = _robCfg.trackwidthMm;
+    float trackwidth = _robCfg.trackwidth;
     float rotSlip    = _robCfg.rotationalSlip;
     _est.setKinematics(trackwidth, rotSlip);
-    _est.addOdometryObservation(_hw.encMm[1], _hw.encMm[0], now,
+    _est.addOdometryObservation(_hw.encPos[1], _hw.encPos[0], now,
                                 _hw.encoder, _hw.fused);
 
     // ------------------------------------------------------------------
     // STEP 5: OTOS correction (lag-gated, matches LoopTickOnce pattern)
     // ------------------------------------------------------------------
-    uint32_t lagMs = _robCfg.lagOtosMs;
+    uint32_t lagMs = _robCfg.lagOtos;
     if (lagMs > 0 && _otos.is_initialized()) {
         _hw.otos.lagMs = lagMs;   // keep stamp lag field in sync
         if (!_otosEverReady && !fuseOtos) {
@@ -209,11 +209,11 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
     copyPE(_hw.optical, _state.optical);
 
     // Per-wheel diagnostics (differential: [0]=R, [1]=L).
-    _state.enc_[0]  = _hw.encMm[0];
-    _state.enc_[1]  = _hw.encMm[1];
+    _state.enc_[0]  = _hw.encPos[0];
+    _state.enc_[1]  = _hw.encPos[1];
     _state.enc_count = 2;
-    _state.vel_[0]  = _hw.velMms[0];
-    _state.vel_[1]  = _hw.velMms[1];
+    _state.vel_[0]  = _hw.vel[0];
+    _state.vel_[1]  = _hw.vel[1];
     _state.vel_count = 2;
 
     // Freshness envelopes: ::ValueSet → msg::ValueSet field-by-field.
@@ -273,19 +273,19 @@ msg::CommandBatch Drive::tickAction(uint32_t now)
         // wheel-speed loop; this sets the TARGET, not the PWM duty cycle.
         //
         // 067-004: this ternary used to read _drvCfg.get_trackwidth() first,
-        // falling back to _robCfg.trackwidthMm only while _drvCfg's cached
+        // falling back to _robCfg.trackwidth only while _drvCfg's cached
         // value was <=0.0f -- the same shadow-cache disease Ticket 002 fixed
         // in tickUpdate()'s EKF-predict step. Robot::Robot() calls
         // drive.configure(toDriveConfig(config)) once at boot, which
         // populates _drvCfg.trackwidth with a positive snapshot; since `tw`
         // is not "drive"-annotated, _drvCfg is never refreshed for it again,
         // so this read was frozen at the boot-time trackwidth forever
-        // regardless of any later `SET tw=<x>`. Read _robCfg.trackwidthMm
+        // regardless of any later `SET tw=<x>`. Read _robCfg.trackwidth
         // directly -- the same live source Drive's tickUpdate() now uses
         // (067-002) and the pattern every other plain-key consumer in this
         // file already follows.
         float vL = 0.0f, vR = 0.0f;
-        float trackwidth = _robCfg.trackwidthMm;
+        float trackwidth = _robCfg.trackwidth;
         BodyKinematics::inverse(vx, omega, trackwidth, vL, vR);
         _mc.setTarget(vL, vR);
         break;
@@ -322,11 +322,11 @@ msg::CommandBatch Drive::tickAction(uint32_t now)
     case msg::DrivetrainCommand::ControlKind::POSE: {
         // SetPose: re-anchor the fused estimate.
         // h_rad → centidegrees for resetPose() API.
-        static constexpr float RAD_TO_CDEG = 18000.0f / 3.14159265f;
+        static constexpr float kAngleScale = 18000.0f / 3.14159265f;  // [cdeg/rad]
         int32_t pose_x  = (int32_t)_cmd.control.pose.x;
         int32_t pose_y  = (int32_t)_cmd.control.pose.y;
-        int32_t h_cdeg  = (int32_t)(_cmd.control.pose.h * RAD_TO_CDEG);
-        _est.resetPose(_hw.encMm[1], _hw.encMm[0], pose_x, pose_y, h_cdeg,
+        int32_t pose_h  = (int32_t)(_cmd.control.pose.h * kAngleScale);  // [cdeg]
+        _est.resetPose(_hw.encPos[1], _hw.encPos[0], pose_x, pose_y, pose_h,
                        _hw.encoder, _hw.fused);
 
         // Refresh fused estimate into _state immediately (field-by-field copy:
@@ -356,7 +356,7 @@ msg::CommandBatch Drive::tickAction(uint32_t now)
 // and ZERO enc keep drive._hw in sync with the hardware motor reset.
 //
 // Three-step reset (verbatim semantics from Robot::resetEncoders):
-//   1. Zero _hw.encMm[]: sets the outlier-filter baseline so the next
+//   1. Zero _hw.encPos[]: sets the outlier-filter baseline so the next
 //      _runOutlierFilter() sees delta=0 on the fresh accumulator.
 //   2. Refresh _state.enc_[] so state() returns 0 immediately this tick.
 //   3. Re-baseline _odo's snapshot: prevents predict() computing dL=0-prev
@@ -365,7 +365,7 @@ msg::CommandBatch Drive::tickAction(uint32_t now)
 void Drive::resetEncoders()
 {
     for (int i = 0; i < kWheelCount; ++i) {
-        _hw.encMm[i]    = 0.0f;
+        _hw.encPos[i]    = 0.0f;
         _state.enc_[i]  = 0.0f;
     }
     _odo.rebaselinePrev(0.0f, 0.0f);
@@ -489,31 +489,31 @@ msg::DrivetrainCapabilities Drive::capabilities() const
 // (064-006) Restores the reject-streak rebaseline that was lost in the
 // sprint-060 cutover: kFilterRejectStreakThreshold consecutive rejected
 // ticks now accept the already-computed fresh reading as the new baseline
-// instead of holding a stale one forever (CR-02). Also refreshes _hw.encMm[]
+// instead of holding a stale one forever (CR-02). Also refreshes _hw.encPos[]
 // unconditionally while idle (architecture-update.md Design Rationale 5) so
 // a hand-rolled wheel's baseline is absorbed before the next command starts,
 // rather than relying solely on the in-drive streak escape hatch.
 // ---------------------------------------------------------------------------
 void Drive::_runOutlierFilter(uint32_t now)
 {
-    bool driving = (_outputs.tgtMms[1] != 0.0f || _outputs.tgtMms[0] != 0.0f);
+    bool driving = (_outputs.tgtSpeed[1] != 0.0f || _outputs.tgtSpeed[0] != 0.0f);
     if (driving) {
-        const float kMaxDeltaMm = fmaxf(40.0f,
-            fmaxf(fabsf((float)_outputs.tgtMms[1]),
-                  fabsf((float)_outputs.tgtMms[0])) * 0.2f);
+        const float kMaxDelta = fmaxf(40.0f,   // [mm]
+            fmaxf(fabsf((float)_outputs.tgtSpeed[1]),
+                  fabsf((float)_outputs.tgtSpeed[0])) * 0.2f);
         static constexpr int kRetries = 2;
 
         // Right (M1) first — proven ordering from WedgeTest.
         {
-            float freshR = _motorR.positionMm();   // already read this tick, no extra I2C
+            float freshR = _motorR.position();   // already read this tick, no extra I2C
             float newR   = freshR;
-            float dR     = newR - _hw.encMm[0];
-            if (dR > kMaxDeltaMm || dR < -kMaxDeltaMm) {
-                newR = _hw.encMm[0];
+            float dR     = newR - _hw.encPos[0];
+            if (dR > kMaxDelta || dR < -kMaxDelta) {
+                newR = _hw.encPos[0];
                 for (int k = 0; k < kRetries; ++k) {
                     float r2  = _motorR.readEncoderMmFSettle(_robCfg);
-                    float dr2 = r2 - _hw.encMm[0];
-                    if (dr2 <= kMaxDeltaMm && dr2 >= -kMaxDeltaMm) { newR = r2; break; }
+                    float dr2 = r2 - _hw.encPos[0];
+                    if (dr2 <= kMaxDelta && dr2 >= -kMaxDelta) { newR = r2; break; }
                 }
                 if (_filterRejectStreakR < 255) ++_filterRejectStreakR;
                 if (_filterRejectStreakR >= kFilterRejectStreakThreshold) {
@@ -525,20 +525,20 @@ void Drive::_runOutlierFilter(uint32_t now)
             } else {
                 _filterRejectStreakR = 0;
             }
-            _hw.encMm[0] = newR;
+            _hw.encPos[0] = newR;
         }
 
         // Left (M2) second.
         {
-            float freshL = _motorL.positionMm();   // already read this tick, no extra I2C
+            float freshL = _motorL.position();   // already read this tick, no extra I2C
             float newL   = freshL;
-            float dL     = newL - _hw.encMm[1];
-            if (dL > kMaxDeltaMm || dL < -kMaxDeltaMm) {
-                newL = _hw.encMm[1];
+            float dL     = newL - _hw.encPos[1];
+            if (dL > kMaxDelta || dL < -kMaxDelta) {
+                newL = _hw.encPos[1];
                 for (int k = 0; k < kRetries; ++k) {
                     float r2  = _motorL.readEncoderMmFSettle(_robCfg);
-                    float dr2 = r2 - _hw.encMm[1];
-                    if (dr2 <= kMaxDeltaMm && dr2 >= -kMaxDeltaMm) { newL = r2; break; }
+                    float dr2 = r2 - _hw.encPos[1];
+                    if (dr2 <= kMaxDelta && dr2 >= -kMaxDelta) { newL = r2; break; }
                 }
                 if (_filterRejectStreakL < 255) ++_filterRejectStreakL;
                 if (_filterRejectStreakL >= kFilterRejectStreakThreshold) {
@@ -550,15 +550,15 @@ void Drive::_runOutlierFilter(uint32_t now)
             } else {
                 _filterRejectStreakL = 0;
             }
-            _hw.encMm[1] = newL;
+            _hw.encPos[1] = newL;
         }
     } else {
         // Idle: refresh the baseline unconditionally, no outlier gate.
         // PWM is 0 here so no PID/EKF stability is at stake, and this
         // absorbs a hand-rolled wheel's new position before the next
         // command starts (architecture-update.md Design Rationale 5).
-        _hw.encMm[0] = _motorR.positionMm();
-        _hw.encMm[1] = _motorL.positionMm();
+        _hw.encPos[0] = _motorR.position();
+        _hw.encPos[1] = _motorL.position();
         _filterRejectStreakL = 0;
         _filterRejectStreakR = 0;
     }

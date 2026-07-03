@@ -78,7 +78,7 @@ static float getSensorValue(const HardwareState& s, uint8_t channel)
 // StopCondition::evaluate
 // ---------------------------------------------------------------------------
 
-bool StopCondition::evaluate(const HardwareState& s, uint32_t now_ms,
+bool StopCondition::evaluate(const HardwareState& s, uint32_t now,
                               const MotionBaseline& base) const
 {
     switch (kind) {
@@ -88,9 +88,9 @@ bool StopCondition::evaluate(const HardwareState& s, uint32_t now_ms,
 
         case Kind::TIME: {
             // `a` holds the threshold in milliseconds.
-            // Use signed delta to guard against uint32 underflow when now_ms is
-            // momentarily less than t0Ms (same pattern as driveAdvance watchdog).
-            int32_t elapsed = (int32_t)(now_ms - base.t0Ms);
+            // Use signed delta to guard against uint32 underflow when now is
+            // momentarily less than t0 (same pattern as driveAdvance watchdog).
+            int32_t elapsed = (int32_t)(now - base.t0);
             return elapsed >= (int32_t)a;
         }
 
@@ -99,8 +99,8 @@ bool StopCondition::evaluate(const HardwareState& s, uint32_t now_ms,
             // Uses raw encoder sum (not filtered) per architecture decision:
             //   "filtered value can stall under outlier filtering" (D-command finding).
             // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
-            float enc_avg = (s.encMm[1] + s.encMm[0]) * 0.5f;
-            float traveled = enc_avg - base.enc0Mm;
+            float enc_avg = (s.encPos[1] + s.encPos[0]) * 0.5f;
+            float traveled = enc_avg - base.enc0;
             if (traveled < 0.0f) traveled = -traveled;  // fabsf without including math.h twice
             return traveled >= a;
         }
@@ -109,7 +109,7 @@ bool StopCondition::evaluate(const HardwareState& s, uint32_t now_ms,
             // `a` = target heading delta (rad); `b` = eps (rad).
             // Fires when the robot's heading is within eps of the target heading.
             // wrap_angle keeps the difference in (-π, π].
-            float current_delta = wrap_angle(s.fused.pose.h - base.heading0Rad);
+            float current_delta = wrap_angle(s.fused.pose.h - base.heading0);
             float error = wrap_angle(current_delta - a);
             float abs_error = (error < 0.0f) ? -error : error;
             return abs_error < b;
@@ -168,7 +168,7 @@ bool StopCondition::evaluate(const HardwareState& s, uint32_t now_ms,
             // Per-wheel arc = |Δdiff| / 2.  Uses raw encoder values (not
             // filtered) — same rationale as DISTANCE: the filter can stall.
             // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
-            float diff = (s.encMm[0] - s.encMm[1]) - base.encDiff0Mm;
+            float diff = (s.encPos[0] - s.encPos[1]) - base.encDiff0;
             if (diff < 0.0f) diff = -diff;
             return (diff * 0.5f) >= a;
         }

@@ -145,19 +145,19 @@ _INVENTORY_MAP: dict = {
     # DrivetrainConfig: maps to RobotConfig members
     ("DrivetrainConfig", "fwd_sign_l"):           "RobotConfig::fwdSignL",
     ("DrivetrainConfig", "fwd_sign_r"):           "RobotConfig::fwdSignR",
-    ("DrivetrainConfig", "mm_per_deg_l"):         "RobotConfig::mmPerDegL",
-    ("DrivetrainConfig", "mm_per_deg_r"):         "RobotConfig::mmPerDegR",
-    ("DrivetrainConfig", "trackwidth"):         "RobotConfig::trackwidthMm",
-    ("DrivetrainConfig", "half_track"):         "RobotConfig::halfTrackMm",
-    ("DrivetrainConfig", "half_wheelbase"):     "RobotConfig::halfWheelbaseMm",
-    ("DrivetrainConfig", "mm_per_deg_wheel"):      "RobotConfig::{mmPerDegFR,mmPerDegFL,mmPerDegBR,mmPerDegBL}",
+    ("DrivetrainConfig", "travel_calib_l"):       "RobotConfig::wheelTravelCalibL",
+    ("DrivetrainConfig", "travel_calib_r"):       "RobotConfig::wheelTravelCalibR",
+    ("DrivetrainConfig", "trackwidth"):         "RobotConfig::trackwidth",
+    ("DrivetrainConfig", "half_track"):         "RobotConfig::halfTrack",
+    ("DrivetrainConfig", "half_wheelbase"):     "RobotConfig::halfWheelbase",
+    ("DrivetrainConfig", "travel_calib_wheel"):    "RobotConfig::{wheelTravelCalibFR,wheelTravelCalibFL,wheelTravelCalibBR,wheelTravelCalibBL}",
     ("DrivetrainConfig", "fwd_sign_wheel"):        "RobotConfig::{fwdSignFR,fwdSignFL,fwdSignBR,fwdSignBL}",
     ("DrivetrainConfig", "v_wheel_max"):           "RobotConfig::vWheelMax",
     ("DrivetrainConfig", "steer_headroom"):        "RobotConfig::steerHeadroom",
     ("DrivetrainConfig", "vel_gains"):             "RobotConfig::{velKp,velKi,velKff,velIMax,velKaw}",
     ("DrivetrainConfig", "vel_filt_alpha"):        "RobotConfig::velFiltAlpha",
     ("DrivetrainConfig", "sync_gain"):             "RobotConfig::syncGain",
-    ("DrivetrainConfig", "min_wheel"):              "RobotConfig::minWheelMms",
+    ("DrivetrainConfig", "min_wheel"):              "RobotConfig::minWheelSpeed",
     ("DrivetrainConfig", "alpha_pos"):             "RobotConfig::alphaPos",
     ("DrivetrainConfig", "alpha_yaw"):             "RobotConfig::alphaYaw",
     ("DrivetrainConfig", "otos_gate"):             "RobotConfig::otosGate",
@@ -165,12 +165,12 @@ _INVENTORY_MAP: dict = {
     ("DrivetrainConfig", "otos_angular_scale"):    "RobotConfig::otosAngularScale",
     ("DrivetrainConfig", "rotation_gain_pos"):     "RobotConfig::rotationGainPos",
     ("DrivetrainConfig", "rotation_gain_neg"):     "RobotConfig::rotationGainNeg",
-    ("DrivetrainConfig", "rotation_offset"):        "RobotConfig::rotationOffsetDeg",
-    ("DrivetrainConfig", "rotation_offset_neg"):    "RobotConfig::rotationOffsetDegNeg",
+    ("DrivetrainConfig", "rotation_offset"):        "RobotConfig::rotationOffset",
+    ("DrivetrainConfig", "rotation_offset_neg"):    "RobotConfig::rotationOffsetNeg",
     ("DrivetrainConfig", "rotational_slip"):       "RobotConfig::rotationalSlip",
     ("DrivetrainConfig", "odom_off_x"):            "RobotConfig::odomOffX",
     ("DrivetrainConfig", "odom_off_y"):            "RobotConfig::odomOffY",
-    ("DrivetrainConfig", "odom_yaw"):               "RobotConfig::odomYawDeg",
+    ("DrivetrainConfig", "odom_yaw"):               "RobotConfig::odomYaw",
     ("DrivetrainConfig", "odom_upside_down"):      "RobotConfig::odomUpsideDown",
     ("DrivetrainConfig", "ekf_q_xy"):              "RobotConfig::ekfQxy",
     ("DrivetrainConfig", "ekf_q_theta"):           "RobotConfig::ekfQtheta",
@@ -180,7 +180,7 @@ _INVENTORY_MAP: dict = {
     ("DrivetrainConfig", "ekf_q_omega"):           "RobotConfig::ekfQomega",
     ("DrivetrainConfig", "ekf_r_otos_v"):          "RobotConfig::ekfROtosV",
     ("DrivetrainConfig", "ekf_r_enc_v"):           "RobotConfig::ekfREncV",
-    ("DrivetrainConfig", "lag_otos"):               "RobotConfig::lagOtosMs",
+    ("DrivetrainConfig", "lag_otos"):               "RobotConfig::lagOtos",
     ("DrivetrainConfig", "drivetrain_type"):       "RobotConfig::drivetrain",
 
     # DrivetrainCapabilities: capability declaration (new Phase 2 type)
@@ -225,7 +225,7 @@ _INVENTORY_MAP: dict = {
     ("MotorState", "wedged"):    "(new field — motor stall flag, related to IBusDiagnostics wedge detection)",
 
     # MotorConfig: per-motor calibration parameters
-    ("MotorConfig", "mm_per_deg"): "RobotConfig::{mmPerDegL,mmPerDegR} (per-motor, indexed by channel)",
+    ("MotorConfig", "travel_calib"): "RobotConfig::{wheelTravelCalibL,wheelTravelCalibR} (per-motor, indexed by channel)",
     ("MotorConfig", "fwd_sign"):   "RobotConfig::{fwdSignL,fwdSignR} (per-motor, indexed by channel)",
 
     # MotorCapabilities: capability declaration
@@ -304,9 +304,9 @@ _INVENTORY_MAP: dict = {
     ("PlannerConfig", "yaw_acc_max"):       "RobotConfig::yawAccMax",
     ("PlannerConfig", "j_max"):             "RobotConfig::jMax",
     ("PlannerConfig", "yaw_jerk_max"):      "RobotConfig::yawJerkMax",
-    ("PlannerConfig", "arrive_tol"):        "RobotConfig::arriveTolMm",
+    ("PlannerConfig", "arrive_tol"):        "RobotConfig::arriveTolerance",
     ("PlannerConfig", "turn_in_place_gate"):"RobotConfig::turnInPlaceGate",
-    ("PlannerConfig", "min_speed"):         "RobotConfig::minSpeedMms",
+    ("PlannerConfig", "min_speed"):         "RobotConfig::minSpeed",
 
     # -----------------------------------------------------------------------
     # ports.proto
@@ -330,7 +330,7 @@ _INVENTORY_MAP: dict = {
     ("PortState", "stamp"):      "ActualState::portsVS (ValueSet)",
 
     # PortConfig: ports configuration
-    ("PortConfig", "lag_ports"): "RobotConfig::lagPortsMs",
+    ("PortConfig", "lag_ports"): "RobotConfig::lagPorts",
     ("PortConfig", "direction"): "(new field — per-port direction bitmap, not in RobotConfig)",
 
     # -----------------------------------------------------------------------
@@ -344,7 +344,7 @@ _INVENTORY_MAP: dict = {
     ("LineSensorState", "connected"):  "(new field — line sensor connected flag, capability query)",
 
     # LineSensorConfig: line sensor configuration
-    ("LineSensorConfig", "lag_line"): "RobotConfig::lagLineMs",
+    ("LineSensorConfig", "lag_line"): "RobotConfig::lagLine",
     ("LineSensorConfig", "threshold"):   "(new field — binarization threshold, not in RobotConfig)",
     ("LineSensorConfig", "norm_min"):    "(new field — normalization minimum, not in RobotConfig)",
     ("LineSensorConfig", "norm_max"):    "(new field — normalization maximum, not in RobotConfig)",
@@ -359,7 +359,7 @@ _INVENTORY_MAP: dict = {
     ("ColorSensorState", "connected"): "(new field — color sensor connected flag, capability query)",
 
     # ColorSensorConfig: color sensor configuration
-    ("ColorSensorConfig", "lag_color"): "RobotConfig::lagColorMs",
+    ("ColorSensorConfig", "lag_color"): "RobotConfig::lagColor",
     ("ColorSensorConfig", "integration"):  "(new field — integration time register, not in RobotConfig)",
     ("ColorSensorConfig", "gain"):         "(new field — sensor gain register, not in RobotConfig)",
     ("ColorSensorConfig", "cal_r"):        "(new field — color calibration scale R, not in RobotConfig)",
@@ -905,8 +905,8 @@ static_assert(sizeof(msg::BodyTwist3) == sizeof(float) * 3,
 static_assert(sizeof(::BodyTwist3) == sizeof(float) * 3,
               "HAL BodyTwist3 must be 3 floats");
 
-// HAL RobotGeometry: { float halfTrackMm, halfWheelbaseMm } — must remain 2 floats.
-// Corresponds to DrivetrainConfig::half_track_mm / half_wheelbase_mm in the
+// HAL RobotGeometry: { float halfTrack, halfWheelbase } — must remain 2 floats.
+// Corresponds to DrivetrainConfig::half_track / half_wheelbase in the
 // generated drivetrain.h (no direct generated RobotGeometry message yet).
 static_assert(sizeof(::RobotGeometry) == sizeof(float) * 2,
               "HAL RobotGeometry must be 2 floats — check hal/capability/Pose2D.h");

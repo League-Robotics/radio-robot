@@ -25,7 +25,7 @@ struct RobotConfig;
  *     odom.tick(trueVelL, trueVelR, tw, dt)  // OTOS sim model
  *     line.tick(dt) ; color.tick(dt)
  *   tick(now):        sensor-read tick — promotes plant reported encoders into
- *     simMotorR/L positionMm() accessors (RIGHT before LEFT, matching MockHAL).
+ *     simMotorR/L position() accessors (RIGHT before LEFT, matching MockHAL).
  *
  * Control law stays ABOVE the device line (Case B): the per-wheel PI+FF runs in
  * MotorController; SimMotor only stores PWM.  No second controller here.
@@ -71,11 +71,11 @@ public:
     SimServo&       servoSim()       { return _servo; }
 
     // Robot trackwidth (mm) so the OTOS sim model integrates correctly.
-    void setTrackwidth(float mm) { _trackwidthMm = mm; _plant.setTrackwidth(mm); }
+    void setTrackwidth(float mm) { _trackwidth = mm; _plant.setTrackwidth(mm); }
 
     // Trackwidth getter (069-003) — forwards to the plant (the single source
-    // of truth); SimHardware's own _trackwidthMm cache always mirrors it.
-    float trackwidthMm() const { return _plant.trackwidthMm(); }
+    // of truth); SimHardware's own _trackwidth cache always mirrors it.
+    float trackwidth() const { return _plant.trackwidth(); }
 
     // Ground-truth pass-throughs (ticket 057-005): expose the plant's authoritative
     // integrated pose so Python test shims can compare fused output vs. ground truth.
@@ -97,6 +97,6 @@ private:
     SimServo       _servo;
 
     uint32_t       _lastTickMs   = 0;
-    float          _trackwidthMm = 0.0f;
+    float          _trackwidth = 0.0f;
     bool           _benchMode    = false;   // DBG OTOS BENCH round-trip flag only
 };

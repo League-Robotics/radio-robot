@@ -23,12 +23,12 @@ void ColorSensor::updateInputs(uint32_t now)
 
 // ---------------------------------------------------------------------------
 // periodic — VERBATIM COLOUR timed block from loopTickOnce (043-001):
-// lag gate on cfg.lagColorMs / ts.lastColor, updateInputs(now), bump ts.lastColor.
+// lag gate on cfg.lagColor / ts.lastColor, updateInputs(now), bump ts.lastColor.
 // ---------------------------------------------------------------------------
 void ColorSensor::periodic(LoopTickState& ts, uint32_t now)
 {
-    if (_cfg.lagColorMs > 0 &&
-        (int32_t)(now - ts.lastColor) >= (int32_t)_cfg.lagColorMs) {
+    if (_cfg.lagColor > 0 &&
+        (int32_t)(now - ts.lastColor) >= (int32_t)_cfg.lagColor) {
         updateInputs(now);
         ts.lastColor = now;
     }

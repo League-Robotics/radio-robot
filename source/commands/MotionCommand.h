@@ -14,8 +14,8 @@ class BodyVelocityController;
 //   2. addStop(c)                 — append stop conditions (up to kMaxStopConds).
 //   3. setReplySink(fn, ctx, id)  — capture EVT reply channel.
 //   4. setStopStyle(s)            — SOFT (default) or HARD teardown.
-//   5. start(inputs, now_ms)      — snapshot MotionBaseline; hand off to BVC.
-//   6. tick(inputs, now_ms, dt_s) — advance BVC; evaluate conditions; handle teardown.
+//   5. start(inputs, now)         — snapshot MotionBaseline; hand off to BVC.
+//   6. tick(inputs, now, dt_s)    — advance BVC; evaluate conditions; handle teardown.
 //   7. cancel(s)                  — abort with EVT cancelled.
 //
 // A single MotionCommand instance is owned by Planner. Calling
@@ -60,11 +60,11 @@ public:
      * Clears the stop-condition array, reply sink, stop style, and active flag.
      * Must be called before addStop / start.
      *
-     * @param v_mms      Commanded body forward speed, mm/s.
-     * @param omega_rads Commanded yaw rate, rad/s.
-     * @param bvc        Pointer to the owning Planner's BVC (non-null).
+     * @param v      Commanded body forward speed, mm/s.
+     * @param omega  Commanded yaw rate, rad/s.
+     * @param bvc    Pointer to the owning Planner's BVC (non-null).
      */
-    void configure(float v_mms, float omega_rads, BodyVelocityController* bvc);
+    void configure(float v, float omega, BodyVelocityController* bvc);   // [mm/s], [rad/s]
 
     /**
      * addStop — append a stop condition to the fixed array.
@@ -131,9 +131,9 @@ public:
      * bvc->setTarget(_vTgt, _omegaTgt); sets active = true.
      *
      * @param inputs  Current hardware state (for baseline snapshot).
-     * @param now_ms  Current system time, ms (for t0Ms baseline).
+     * @param now     Current system time, ms (for t0 baseline).
      */
-    void start(const HardwareState& inputs, uint32_t now_ms);
+    void start(const HardwareState& inputs, uint32_t now);   // [ms]
 
     /**
      * setTarget — live-update the target twist while the command is running.
@@ -142,10 +142,10 @@ public:
      *
      * Safe to call while active or while idle (configure phase).
      *
-     * @param v_mms      New body forward speed, mm/s.
-     * @param omega_rads New yaw rate, rad/s.
+     * @param v      New body forward speed, mm/s.
+     * @param omega  New yaw rate, rad/s.
      */
-    void setTarget(float v_mms, float omega_rads);
+    void setTarget(float v, float omega);   // [mm/s], [rad/s]
 
     /**
      * tick — advance BVC one tick; evaluate stop conditions; handle teardown.
@@ -159,11 +159,11 @@ public:
      *   During SOFT ramp: if bvc->atTarget() or deadline passed, emit EVT done, go IDLE.
      *
      * @param inputs  Current hardware state (for stop evaluation).
-     * @param now_ms  Current system time, ms.
+     * @param now     Current system time, ms.
      * @param dt_s    Elapsed time since last tick, seconds.
      * @return        active()
      */
-    bool tick(const HardwareState& inputs, uint32_t now_ms, float dt_s);
+    bool tick(const HardwareState& inputs, uint32_t now, float dt_s);   // [ms]
 
     /**
      * cancel — abort the command immediately.
@@ -204,9 +204,9 @@ public:
      * tick() will emit EVT done when the BVC converges to zero.
      * No-op if already stopping or not active.
      *
-     * @param now_ms  Current system time (for soft deadline).
+     * @param now  Current system time (for soft deadline).
      */
-    void softStop(uint32_t now_ms);
+    void softStop(uint32_t now);   // [ms]
 
     /**
      * active — true while the command is running or during SOFT ramp-down.
@@ -253,9 +253,9 @@ private:
     StopStyle   _stopStyle                  = StopStyle::SOFT;
     bool        _active                     = false;
     bool        _stopping                   = false;   // true during SOFT ramp-down
-    uint32_t    _softDeadlineMs             = 0;
+    uint32_t    _softDeadline               = 0;        // [ms]
     /** Absolute SOFT-stop deadline: 3000 ms after a stop fires. */
-    static constexpr uint32_t kSoftDeadlineMs = 3000;
+    static constexpr uint32_t kSoftDeadline = 3000;     // [ms]
 
     /** EVT label emitted on normal (non-cancel) completion. Default "EVT done". */
     char        _doneEvtLabel[24]    = "EVT done";
