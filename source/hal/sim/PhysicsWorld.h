@@ -242,6 +242,11 @@ public:
     float bodyRotationalScrub() const { return _bodyRotationalScrub; }
     float bodyLinearScrub()     const { return _bodyLinearScrub; }
 
+    // Per-wheel offset factor accessors (069-003) — mirror the existing
+    // rotationalSlip() accessor shape, for SimCommands' SIMGET row.
+    float offsetFactorL() const { return _offsetFactorL; }
+    float offsetFactorR() const { return _offsetFactorR; }
+
 private:
     // --- Commanded actuator state ---
     int8_t _pwmL = 0;

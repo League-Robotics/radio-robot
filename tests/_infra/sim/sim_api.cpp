@@ -20,6 +20,7 @@
 #include "commands/CommandProcessor.h"
 #include "commands/CommandQueue.h"
 #include "commands/DebugCommands.h"
+#include "commands/SimCommands.h"
 #include "hal/sim/SimHardware.h"
 #include "hal/sim/PhysicsWorld.h"
 #include "hal/sim/WorldView.h"
@@ -131,6 +132,10 @@ struct SimHandle {
     // CODAL-dependent handlers (DBG WEDGE, I2CW, etc.) reply ERR noimpl in
     // HOST_BUILD.  DBG OTOS BENCH and DBG OTOS work via HOST_BUILD paths.
     DebugCommands dbg;
+    // SimCommands (069-003) — sim-build-only SIMSET/SIMGET Commandable, wired
+    // with hal (SimHardware).  Declared after hal (constructed first) and
+    // before cmd (whose buildCommandTable() call needs &_simCmds live).
+    SimCommands      _simCmds;
     CommandProcessor cmd;
     ReplyStore       replyStore;
 
@@ -165,7 +170,8 @@ struct SimHandle {
         // busDiag and busAccess null (DebugCommands's I2C handlers are
         // #ifndef HOST_BUILD, so the null bus path is never exercised host-side).
         , dbg(DbgCtx{nullptr, nullptr, nullptr, &robot})
-        , cmd(robot.buildCommandTable(&dbg, nullptr))
+        , _simCmds(hal)
+        , cmd(robot.buildCommandTable(&dbg, nullptr, &_simCmds))
         , benchOtos()
         , _ownerThread(std::this_thread::get_id())
     {
@@ -360,6 +366,41 @@ int sim_command(void* h, const char* line, char* out_buf, int out_len)
     // from position 0 (overwriting the already-copied synchronous reply).
     s->replyStore.reset();
 
+    return n;
+}
+
+// ---------------------------------------------------------------------------
+// sim_command_no_simcmds (069-003) — dispatch one command against a FRESH,
+// throwaway command table built with sim=nullptr: the exact shape the ARM
+// firmware's own command table has (main.cpp never passes a SimCommands*).
+// Used to prove SIMSET/SIMGET are ERR unknown -- indistinguishable from any
+// other unregistered verb -- when the sim-only registry extension point is
+// absent, without needing to build/flash real ARM firmware.
+//
+// Builds the alternate table from the SAME live robot/dbg the main SimHandle
+// already owns (buildCommandTable() only reads robot state and re-populates
+// its own stable context structs -- calling it twice is idempotent, see
+// SystemCommands.cpp), so this does not disturb s->cmd or s->robot state.
+// The temporary CommandProcessor has no queue attached; SIMSET/SIMGET (like
+// GET/SET) dispatch synchronously and never touch the motion queue, so this
+// is safe for this one-shot use.
+// ---------------------------------------------------------------------------
+int sim_command_no_simcmds(void* h, const char* line, char* out_buf, int out_len)
+{
+    SimHandle* s = static_cast<SimHandle*>(h);
+
+    CommandProcessor noSimCmd(s->robot.buildCommandTable(&s->dbg, nullptr, nullptr));
+
+    ReplyStore localStore;
+    noSimCmd.process(line, storeReply, &localStore);
+
+    int n = localStore.written;
+    if (out_buf && out_len > 0) {
+        int copy = (n < out_len - 1) ? n : out_len - 1;
+        memcpy(out_buf, localStore.buf, (size_t)copy);
+        out_buf[copy] = '\0';
+        n = copy;
+    }
     return n;
 }
 

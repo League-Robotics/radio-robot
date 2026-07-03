@@ -22,6 +22,19 @@
 #include "DebugCommands.h"
 #include "ArgParse.h"
 
+// SimCommands (069-003) is sim-build-only.  This #include is the ONLY place
+// (besides tests/_infra/sim/sim_api.cpp, which constructs one) SimCommands.h
+// is #included in a compilation of this shared translation unit; on the ARM
+// build (HOST_BUILD undefined) it is skipped entirely, so SimCommands is
+// never a complete type there and PhysicsWorld/SimHardware never enter the
+// ARM link (architecture-update.md Design Rationale Decision 1). The root
+// CMakeLists.txt additionally excludes source/commands/SimCommands.cpp
+// itself from the ARM (CODAL) source glob, mirroring the existing hal/sim/
+// exclusion.
+#ifdef HOST_BUILD
+#include "SimCommands.h"
+#endif
+
 #ifndef HOST_BUILD
 #include "MicroBit.h"
 #include "MicroBitDevice.h"
@@ -1077,8 +1090,15 @@ static void handleHalt(const ArgList& args, const char* corrId,
 // ---------------------------------------------------------------------------
 
 std::vector<CommandDescriptor> Robot::buildCommandTable(
-    DebugCommands* dbg, LoopScheduler* sched) const
+    DebugCommands* dbg, LoopScheduler* sched, SimCommands* sim) const
 {
+#ifndef HOST_BUILD
+    // sim is always nullptr on the ARM target (buildCommandTable's default
+    // argument, never overridden by main.cpp) -- silence the unused-parameter
+    // warning without referencing the (here-incomplete) SimCommands type.
+    (void)sim;
+#endif
+
     // Populate stable context structs (members, so pointers are valid for the
     // lifetime of this Robot).
     // 059-004: wire subsystem pointers so handleSet can route annotated fields
@@ -1113,6 +1133,13 @@ std::vector<CommandDescriptor> Robot::buildCommandTable(
     append(portController.getCommands());
     append(servoController.getCommands());
     if (dbg) append(dbg->getCommands());
+    // SIMSET/SIMGET (069-003) -- sim-build-only; see the HOST_BUILD-guarded
+    // #include above.  On the ARM build this whole statement is skipped by
+    // the preprocessor (not merely never entered at runtime), so the ARM
+    // compilation of this TU never requires SimCommands to be a complete type.
+#ifdef HOST_BUILD
+    if (sim) append(sim->getCommands());
+#endif
 
     // ---- System commands ----
     // No-arg commands: parseFn=nullptr — framework passes empty ArgList.

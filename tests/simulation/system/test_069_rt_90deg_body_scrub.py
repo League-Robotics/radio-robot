@@ -13,13 +13,18 @@ zero-error sim plant received the inflated command and executed all of it,
 over-rotating (RT 9000 → ~94-96° true instead of 90°, depending on tick
 granularity; architecture-update.md's own measurement was ~95.2°).
 
-This test drives the new, independent ``sim_set_body_rot_scrub()``/
-``sim_set_body_lin_scrub()`` ctypes hooks (added by this ticket, ahead of the
-general ``SIMSET`` surface landing in ticket 003) through the full
-command-dispatch pipeline (RT is a real wire command) and asserts the
-plant's TRUE pose (``sim.get_true_pose()``, not the encoder/OTOS estimates)
-lands close to the commanded 90° once the body-rotational scrub is
-configured to match ``rotSlip``.
+This test drives ticket 002's new, independent body-rotational/linear scrub
+fields (``PhysicsWorld::setBodyRotationalScrub``/``setBodyLinearScrub``)
+through the ticket 003 ``SIMSET bodyRotScrub=…``/``SIMSET bodyLinScrub=…``
+wire-command surface (rebased from the direct ``sim_set_body_rot_scrub()``/
+``sim_set_body_lin_scrub()`` ctypes hooks ticket 002 used ahead of ``SIMSET``
+landing — those ctypes forwards are NOT deleted; they remain a valid,
+alternate entry point, see architecture-update.md Migration Concerns).  RT is
+already a real wire command, so this exercises the full command-dispatch
+pipeline end to end, and asserts the plant's TRUE pose
+(``sim.get_true_pose()``, not the encoder/OTOS estimates) lands close to the
+commanded 90° once the body-rotational scrub is configured to match
+``rotSlip``.
 
 Tolerance note: RT's own stop-arc coast constant (``PlannerBegin.cpp``'s
 ``kRtCoastArcMm=8mm``, commented "~7.3° SOFT-ramp coast at 100°/s
@@ -58,6 +63,10 @@ def _true_heading_deg_after_rt(
     every scrub field every time — the underlying ``PhysicsWorld`` is a
     single persistent object for the life of the ``Sim``, so a scrub set by
     an earlier scenario is NOT reset by ``ZERO enc``/``set_true_pose``.
+
+    Ticket 003: body_rot_scrub/body_lin_scrub are applied via ``SIMSET
+    bodyRotScrub=…``/``SIMSET bodyLinScrub=…`` sent through the normal
+    command-dispatch pipeline, not the ticket-002 ctypes hooks directly.
     """
     sim.set_true_pose(0.0, 0.0, 0.0)
     reply = sim.send_command("ZERO enc")
@@ -67,9 +76,15 @@ def _true_heading_deg_after_rt(
     assert "OK" in reply.upper(), f"SET rotSlip={rot_slip} → unexpected reply {reply!r}"
 
     if body_rot_scrub is not None:
-        sim.set_body_rot_scrub(body_rot_scrub)
+        reply = sim.send_command(f"SIMSET bodyRotScrub={body_rot_scrub}")
+        assert "OK" in reply.upper(), (
+            f"SIMSET bodyRotScrub={body_rot_scrub} → unexpected reply {reply!r}"
+        )
     if body_lin_scrub is not None:
-        sim.set_body_lin_scrub(body_lin_scrub)
+        reply = sim.send_command(f"SIMSET bodyLinScrub={body_lin_scrub}")
+        assert "OK" in reply.upper(), (
+            f"SIMSET bodyLinScrub={body_lin_scrub} → unexpected reply {reply!r}"
+        )
 
     reply = sim.send_command(f"RT {cdeg}")
     assert "OK" in reply.upper(), f"RT {cdeg} → unexpected reply {reply!r}"

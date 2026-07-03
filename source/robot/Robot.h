@@ -42,6 +42,11 @@
 // Forward declarations — keeps the header-graph shallow.
 class DebugCommands;
 class LoopScheduler;
+// SimCommands (069-003) — sim-build-only Commandable; forward-declared only,
+// exactly like DebugCommands above.  buildCommandTable() takes it as an
+// optional Commandable* the ARM build never constructs and never includes
+// SimCommands.h for (see SystemCommands.cpp's HOST_BUILD-guarded include).
+class SimCommands;
 struct Robot;
 
 // ---------------------------------------------------------------------------
@@ -213,13 +218,17 @@ struct Robot {
     // ---- Command-table building ----
     // Aggregate all command descriptors into a vector:
     //   Commandable members (motionController, _otosCommands, portController,
-    //   servoController), optional DebugCommands, then system commands
-    //   (HELLO, PING, ECHO, ID, VER, HELP, SNAP, ZERO, STREAM, RF,
-    //    GET VEL, GET, SET).
+    //   servoController), optional DebugCommands, optional SimCommands, then
+    //   system commands (HELLO, PING, ECHO, ID, VER, HELP, SNAP, ZERO, STREAM,
+    //   RF, GET VEL, GET, SET).
     // sched may be nullptr; RF will reply ERR noradio if it is.
+    // sim (069-003) is sim-build-only: the ARM target's call site never
+    // passes it (defaults to nullptr), and SIMSET/SIMGET are absent from the
+    // ARM command table entirely -- see SystemCommands.cpp.
     std::vector<CommandDescriptor> buildCommandTable(
         DebugCommands* dbg   = nullptr,
-        LoopScheduler*    sched = nullptr) const;
+        LoopScheduler*    sched = nullptr,
+        SimCommands*      sim   = nullptr) const;
 
     // ---- Gating state that pairs with the kept methods ----
     uint32_t _lastTlmMs     = 0;

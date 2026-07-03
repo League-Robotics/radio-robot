@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: SIMSET/SIMGET wire-command surface (SimCommands, sim-build-only)
-status: open
+status: done
 use-cases:
 - SUC-003
 - SUC-004
@@ -70,7 +70,7 @@ added to the SAME registry once this mechanism exists.
 
 ## Acceptance Criteria
 
-- [ ] New files `source/commands/SimCommands.h`/`.cpp`: a `Commandable`
+- [x] New files `source/commands/SimCommands.h`/`.cpp`: a `Commandable`
       subclass (mirrors `DebugCommands`'s shape) constructed from
       `SimHardware&`. Holds `kSimRegistry[]`: an array of `{key, setterFn,
       getterFn}` rows, function-pointer dispatch over `SimHardware&` (NOT
@@ -94,7 +94,7 @@ added to the SAME registry once this mechanism exists.
       exceeding one line — confirm actual byte budget at implementation
       time); `SIMGET <key>…` returns only the named keys, unknown key →
       `ERR badkey <key>`.
-- [ ] First `kSimRegistry[]` rows: `bodyRotScrub` (→
+- [x] First `kSimRegistry[]` rows: `bodyRotScrub` (→
       `PhysicsWorld::setBodyRotationalScrub`/`bodyRotationalScrub`, from
       ticket 002), `bodyLinScrub` (→ `setBodyLinearScrub`/
       `bodyLinearScrub`), `trackwidthMm` (→
@@ -105,30 +105,30 @@ added to the SAME registry once this mechanism exists.
       `offsetFactorL()`/`offsetFactorR()` — `PhysicsWorld.h` has no such
       getters today; add them, mirroring the existing `rotationalSlip()`
       accessor shape at line 224).
-- [ ] `source/robot/Robot.h`: forward-declares `class SimCommands;` (near
+- [x] `source/robot/Robot.h`: forward-declares `class SimCommands;` (near
       the existing `class DebugCommands;` forward declaration, line 43);
       `buildCommandTable()`'s signature (line 219-221) gains a third
       optional parameter: `SimCommands* sim = nullptr`.
-- [ ] `source/commands/SystemCommands.cpp`: `Robot::buildCommandTable()`
+- [x] `source/commands/SystemCommands.cpp`: `Robot::buildCommandTable()`
       (definition at line 1079) accepts the new `sim` parameter and, at
       line 1115 (immediately after `if (dbg) append(dbg->getCommands());`),
       adds `if (sim) append(sim->getCommands());`.
-- [ ] ARM build path unaffected: the ARM target's `main.cpp` call site
+- [x] ARM build path unaffected: the ARM target's `main.cpp` call site
       passes only `dbg` (or nothing), `sim` defaults to `nullptr`. Confirm by
       inspection that no ARM-build translation unit `#include`s
       `SimCommands.h`.
-- [ ] `tests/_infra/sim/sim_api.cpp`: `SimHandle` (struct, line ~120) gains a
+- [x] `tests/_infra/sim/sim_api.cpp`: `SimHandle` (struct, line ~120) gains a
       `SimCommands _simCmds` member constructed from `hal` (the existing
       `SimHardware` instance); the `SimHandle` → `Robot::buildCommandTable()`
       call site passes `&_simCmds` as the third argument.
-- [ ] On real (non-sim) firmware — verify via a targeted test on a
+- [x] On real (non-sim) firmware — verify via a targeted test on a
       command table built WITHOUT a `SimCommands*` (`sim=nullptr`) — `SIMSET`
       and `SIMGET` reply `ERR unknown SIMSET` / `ERR unknown SIMGET`, exactly
       like any other unrecognized verb.
-- [ ] `docs/protocol-v2.md`: new `## 15. Sim-Only: SIMSET / SIMGET` section,
+- [x] `docs/protocol-v2.md`: new `## 15. Sim-Only: SIMSET / SIMGET` section,
       grammar mirroring §7 exactly, with an explicit note that these verbs
       exist ONLY in sim/`HOST_BUILD` binaries.
-- [ ] Ticket 002's `tests/simulation/system/test_069_rt_90deg_body_scrub.py`
+- [x] Ticket 002's `tests/simulation/system/test_069_rt_90deg_body_scrub.py`
       is REBASED from its ticket-002 direct-ctypes setup
       (`sim_set_body_rot_scrub`/`sim_set_body_lin_scrub`) onto `SIMSET
       bodyRotScrub=… bodyLinScrub=…` sent as a normal command through the
@@ -139,12 +139,12 @@ added to the SAME registry once this mechanism exists.
       explicitly preserved — see `architecture-update.md` Migration
       Concerns); they simply become an alternate, still-valid entry point,
       formally rebased in ticket 005.
-- [ ] New test `tests/simulation/unit/test_sim_commands_registry.py`:
+- [x] New test `tests/simulation/unit/test_sim_commands_registry.py`:
       `SIMSET`/`SIMGET` grammar coverage — unknown key → `ERR badkey`,
       atomic all-or-nothing apply on a mixed valid/invalid `SIMSET`, bare
       `SIMGET` dumps all registered keys, `SIMSET`/`SIMGET` are `ERR unknown`
       on a command table built with `sim=nullptr`.
-- [ ] Full default suite green: `uv run python -m pytest`.
+- [x] Full default suite green: `uv run python -m pytest`.
 
 ## Testing
 

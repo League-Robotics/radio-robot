@@ -1295,6 +1295,99 @@ OK dbg otos
 
 ---
 
+## 15. Sim-Only: `SIMSET` / `SIMGET`
+
+**These verbs exist ONLY in sim / `HOST_BUILD` binaries.** They are
+registered by the optional `SimCommands` Commandable
+(`source/commands/SimCommands.{h,cpp}`), which the ARM firmware target never
+constructs and never links (069-003; see architecture-update.md Design
+Rationale Decision 1). On real hardware, `SIMSET`/`SIMGET` are unrecognised
+verbs and return `ERR unknown`, exactly like any other unregistered command
+— no different from typing a typo'd verb.
+
+`SIMSET`/`SIMGET` give the simulator's plant/error parameters
+(`PhysicsWorld`, `SimHardware`) the same runtime-settable, wire-native
+mechanism `SET`/`GET` gives `RobotConfig` — grammar mirrors §7 exactly.
+
+### SIMGET
+
+```
+SIMGET [<key>…] [#id]
+→ SIMCFG <key>=<value>… [#id]
+```
+
+With no arguments, dumps all registered sim keys. With one or more key
+names, returns only those keys. For each unknown key a separate `ERR
+badkey <key>` is emitted (does not prevent the SIMCFG line from being sent
+for valid keys). A bare-dump `SIMGET` chunks its reply across multiple
+`SIMCFG` lines if the full dump would exceed ~200 content bytes (mirrors
+GET's CFG chunking, §7).
+
+Examples:
+
+```
+SIMGET
+SIMCFG bodyRotScrub=1.000 bodyLinScrub=1.000 trackwidthMm=128.000 motorOffsetL=1.000 motorOffsetR=1.000
+
+SIMGET bodyRotScrub
+SIMCFG bodyRotScrub=1.000
+
+SIMGET badkey
+ERR badkey badkey
+```
+
+### SIMSET
+
+```
+SIMSET <key>=<value>… [#id]
+→ OK simset <applied-key>=<value>… [#id]
+   [ERR badkey <key> [#id]]…
+   [ERR badval <key> [#id]]…
+```
+
+Applies all valid keys atomically to the live plant. The entire SIMSET is
+all-or-nothing: if any key is unknown or its value fails to parse as a
+float, NO keys are applied and the plant is unchanged.
+
+- Unknown key → `ERR badkey <key>`
+- Non-numeric or empty value → `ERR badval <key>` (parse failure only —
+  unlike `SET`, `SIMSET` keys have no cross-field invariant checks in this
+  ticket's registry)
+
+Examples:
+
+```
+SIMSET bodyRotScrub=0.92
+OK simset bodyRotScrub=0.92
+
+SIMSET bodyRotScrub=0.5 notARealKey=1.0
+ERR badkey notARealKey
+
+SIMSET trackwidthMm=abc
+ERR badval trackwidthMm
+
+SIMSET motorOffsetL=0.95 motorOffsetR=1.05
+OK simset motorOffsetL=0.95 motorOffsetR=1.05
+```
+
+### Named Key Table (ticket 003's first batch)
+
+`kSimRegistry[]` (`source/commands/SimCommands.cpp`) dispatches through
+named setter/getter FUNCTION POINTERS over `SimHardware&`, not `offsetof` —
+`PhysicsWorld` is an encapsulated class with invariants, not a POD struct
+(see architecture-update.md Design Rationale Decision 3). Ticket 004 appends
+encoder-report-error and OTOS-error rows to this same table.
+
+| Key            | Type  | Wire format | Default | Meaning                                          |
+|----------------|-------|-------------|---------|---------------------------------------------------|
+| `bodyRotScrub` | float | `%.3f`      | `1.000` | Independent plant body-rotational scrub (069-002); combines multiplicatively with the legacy `_rotationalSlip`/`setSlip()` channel |
+| `bodyLinScrub` | float | `%.3f`      | `1.000` | Independent plant body-linear scrub (069-002)     |
+| `trackwidthMm` | float | `%.3f`      | `128.000` | Robot trackwidth (mm); forwards to `SimHardware::setTrackwidth()` |
+| `motorOffsetL` | float | `%.3f`      | `1.000` | Left-wheel plant offset factor (`PhysicsWorld::setOffsetFactor(0, f)`) |
+| `motorOffsetR` | float | `%.3f`      | `1.000` | Right-wheel plant offset factor (`PhysicsWorld::setOffsetFactor(1, f)`) |
+
+---
+
 ## Appendix: Removed v1 Commands
 
 The following v1 command vocabulary is removed in v2.  Any of these

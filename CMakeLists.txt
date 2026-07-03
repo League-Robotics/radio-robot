@@ -286,6 +286,15 @@ message("${BoldBlue}ROBOT_RUN_MODE: ${ROBOT_RUN_MODE}${ColourReset}")
 # from the REAL firmware build.
 list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/hal/sim/.*")
 list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/hal/ReplayHAL\\.cpp$")
+# SimCommands.cpp (069-003) is the sim-build-only SIMSET/SIMGET Commandable.
+# It lives in source/commands/ (not hal/sim/, since it registers wire commands
+# rather than implementing a device), so it must be excluded here explicitly --
+# otherwise it would compile into the ARM firmware, requiring hal/sim/ types
+# (PhysicsWorld/SimHardware) it depends on. SystemCommands.cpp's HOST_BUILD
+# guard keeps it un-#included from the ARM build regardless; this exclusion
+# additionally keeps it un-compiled, giving it zero ARM footprint (see
+# architecture-update.md Design Rationale Decision 1).
+list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/commands/SimCommands\\.cpp$")
 
 # Production-build toggle (034-006).
 #

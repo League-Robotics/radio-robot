@@ -96,6 +96,30 @@ class Sim:
             return ""
         return buf.raw[:n].decode(errors="replace")
 
+    def send_command_no_simcmds(self, line: str) -> str:
+        """Send one command line to a FRESH, throwaway command table built
+        with sim=nullptr -- the ARM firmware's own command-table shape
+        (069-003). Used to prove SIMSET/SIMGET are ERR unknown, exactly like
+        any other unregistered verb, when the sim-only registry extension
+        point is absent.
+
+        Does not disturb the main command table (``send_command``) or any
+        sim/robot state; see sim_api.cpp's sim_command_no_simcmds() for why
+        this is safe to call standalone.
+
+        Raises ``AttributeError`` if the loaded lib predates this symbol.
+        """
+        if not hasattr(self._lib, "sim_command_no_simcmds"):
+            raise AttributeError(
+                "sim_command_no_simcmds is not present in the loaded "
+                "libfirmware_host — rebuild tests/_infra/sim/ to pick it up"
+            )
+        buf = ctypes.create_string_buffer(2048)
+        n = self._lib.sim_command_no_simcmds(self._h, line.encode(), buf, 2048)
+        if n <= 0:
+            return ""
+        return buf.raw[:n].decode(errors="replace")
+
     def get_async_evts(self) -> str:
         """Return any async EVT replies accumulated since the last send_command call."""
         buf = ctypes.create_string_buffer(2048)
@@ -142,6 +166,20 @@ class Sim:
             ctypes.c_int,
         ]
         lib.sim_command.restype = ctypes.c_int
+
+        # sim_command_no_simcmds(void* h, const char* line, char* out_buf, int out_len) → int
+        # 069-003: dispatches against a throwaway command table built with
+        # sim=nullptr (the ARM-equivalent shape). Guarded with hasattr() —
+        # same stale-prebuilt-lib graceful-degradation precedent as
+        # sim_set_body_rot_scrub below.
+        if hasattr(lib, "sim_command_no_simcmds"):
+            lib.sim_command_no_simcmds.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_char_p,
+                ctypes.c_char_p,
+                ctypes.c_int,
+            ]
+            lib.sim_command_no_simcmds.restype = ctypes.c_int
 
         # sim_get_enc_l / sim_get_enc_r → float
         lib.sim_get_enc_l.argtypes = [ctypes.c_void_p]
