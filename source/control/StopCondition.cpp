@@ -17,8 +17,9 @@
 #endif
 
 // rgbToHSV moved to ColorUtil.h/.cpp (CR-15 item 7, sprint 066) — resolves
-// the FIXME that used to sit here ("Why is there a color function in the
-// StopCondition module?"). Kind::COLOR below calls the extracted function.
+// the historical concern that used to sit here ("Why is there a color
+// function in the StopCondition module?"). Kind::COLOR below calls the
+// extracted function.
 
 // ---------------------------------------------------------------------------
 // hueDistance — wrap-aware angular distance between two hue values [0,360).

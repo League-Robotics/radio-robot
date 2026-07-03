@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: EstimateDump.source string to enum class EstimateSource, plus FIXME sweep
-status: open
+status: done
 use-cases:
 - SUC-002
 - SUC-003
@@ -42,40 +42,40 @@ SUC-002, SUC-003.
 
 ## Acceptance Criteria
 
-- [ ] `source/state/EstimateDump.h:23` — `const char* source;` replaced with
+- [x] `source/state/EstimateDump.h:23` — `const char* source;` replaced with
       `EstimateSource source;` where `enum class EstimateSource : uint8_t {
       Encoder, Optical, Fused };`. FIXME comment removed.
-- [ ] `source/state/EstimateDump.h` — new `inline const char*
+- [x] `source/state/EstimateDump.h` — new `inline const char*
       toString(EstimateSource)` using a `switch` (not a lookup array — a
       `switch` gives a `-Wswitch` warning if a fourth `EstimateSource` value
       is ever added without updating `toString()`), mapping
       `Encoder→"enc"`, `Optical→"otos"`, `Fused→"fuse"`.
-- [ ] `EstimateDump.h`'s `fill()` lambda and `dumpEstimates()`'s three call
+- [x] `EstimateDump.h`'s `fill()` lambda and `dumpEstimates()`'s three call
       sites pass `EstimateSource::Encoder`/`Optical`/`Fused` instead of the
       string literals `"enc"`/`"otos"`/`"fuse"`.
-- [ ] `source/commands/DebugCommands.cpp::handleDbgEst` — the `snprintf`
+- [x] `source/commands/DebugCommands.cpp::handleDbgEst` — the `snprintf`
       call's `d.source` argument becomes `toString(d.source)`.
-- [ ] `grep -rn "EstimateDump" source/` confirms no other file constructs an
+- [x] `grep -rn "EstimateDump" source/` confirms no other file constructs an
       `EstimateDump` with a raw string literal for `source`.
-- [ ] `DBG EST` reply text is byte-identical before/after (verified by
+- [x] `DBG EST` reply text is byte-identical before/after (verified by
       existing `DBG EST` test coverage, or new coverage if none exists).
-- [ ] `source/types/ArgSchema.h` — the FIXME on `ArgKind` replaced with a
+- [x] `source/types/ArgSchema.h` — the FIXME on `ArgKind` replaced with a
       resolved comment explaining why `ArgKind` (schema layer) and
       `CommandTypes::ArgType` (runtime tagged-union layer) are intentionally
       kept separate rather than merged (Decision 5). No code change.
-- [ ] `source/state/OutputState.h` — the FIXME on `digitalDirty`/
+- [x] `source/state/OutputState.h` — the FIXME on `digitalDirty`/
       `analogDirty` replaced with a comment stating the fields are currently
       dead (confirmed by grep: no producer or consumer anywhere in
       `source/`) — same disposition as sprint 067 Decision 5 ("document dead
       things, don't fix them"). No code change.
-- [ ] `source/control/StopCondition.cpp:20`, `source/control/ColorUtil.cpp:4`
+- [x] `source/control/StopCondition.cpp:20`, `source/control/ColorUtil.cpp:4`
       — reworded so neither contains the literal string `FIXME` (both
       already describe an already-resolved historical issue). No code
       change.
-- [ ] `grep -ri FIXME source/` output is exactly the 8 units-suffix markers
+- [x] `grep -ri FIXME source/` output is exactly the 8 units-suffix markers
       cross-referenced in `remove-units-from-identifier-names.md` — zero
       other markers remain.
-- [ ] Full test suite green; TLM output byte-identical (this ticket touches
+- [x] Full test suite green; TLM output byte-identical (this ticket touches
       no TLM field or format, only the in-memory tag type).
 
 ## Testing

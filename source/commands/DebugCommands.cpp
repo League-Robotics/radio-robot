@@ -533,7 +533,7 @@ static void handleDbgEst(const ArgList& /*args*/, const char* corrId,
         char line[160];
         snprintf(line, sizeof(line),
                  "EST %-4s x=%d y=%d h=%d vx=%d vy=%d w=%d age=%u v=%d",
-                 d.source,
+                 toString(d.source),
                  (int)d.pose.x,
                  (int)d.pose.y,
                  (int)(d.pose.h * kRadToCdeg),
