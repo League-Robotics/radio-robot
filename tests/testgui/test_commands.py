@@ -220,48 +220,48 @@ class TestBuildWireStringR:
 class TestBuildWireStringTURN:
     """TURN <heading_cdeg> [eps=<eps_cdeg>]
 
-    heading and eps are in centidegrees on the wire.
+    heading and eps are entered in degrees but sent in centidegrees.
     """
 
-    def test_turn_heading_cdeg(self):
-        """Heading value in cdeg goes through as-is."""
+    def test_turn_heading_deg_to_cdeg(self):
+        """Heading entered in degrees is converted to cdeg on the wire."""
         from robot_radio.testgui.commands import COMMANDS, build_wire_string
         spec = next(s for s in COMMANDS if s["label"] == "TURN")
-        result = build_wire_string(spec, {"heading": 9000, "eps": 0})
+        result = build_wire_string(spec, {"heading": 90, "eps": 0})
         assert result == "TURN 9000"
 
     def test_turn_no_eps_when_zero(self):
         """eps=0 → omitted from wire string."""
         from robot_radio.testgui.commands import COMMANDS, build_wire_string
         spec = next(s for s in COMMANDS if s["label"] == "TURN")
-        result = build_wire_string(spec, {"heading": 4500, "eps": 0})
+        result = build_wire_string(spec, {"heading": 45, "eps": 0})
         assert result == "TURN 4500"
 
     def test_turn_with_nonzero_eps(self):
         """Non-zero eps appears as eps=<cdeg>."""
         from robot_radio.testgui.commands import COMMANDS, build_wire_string
         spec = next(s for s in COMMANDS if s["label"] == "TURN")
-        result = build_wire_string(spec, {"heading": 9000, "eps": 300})
+        result = build_wire_string(spec, {"heading": 90, "eps": 3})
         assert result == "TURN 9000 eps=300"
 
     def test_turn_negative_heading(self):
         from robot_radio.testgui.commands import COMMANDS, build_wire_string
         spec = next(s for s in COMMANDS if s["label"] == "TURN")
-        result = build_wire_string(spec, {"heading": -9000, "eps": 0})
+        result = build_wire_string(spec, {"heading": -90, "eps": 0})
         assert result == "TURN -9000"
 
     def test_turn_max_heading(self):
         from robot_radio.testgui.commands import COMMANDS, build_wire_string
         spec = next(s for s in COMMANDS if s["label"] == "TURN")
-        result = build_wire_string(spec, {"heading": 18000, "eps": 0})
+        result = build_wire_string(spec, {"heading": 180, "eps": 0})
         assert result == "TURN 18000"
 
     def test_turn_eps_small(self):
-        """Small eps value (10 cdeg = 0.1°) is included."""
+        """Smallest non-zero eps (1° = 100 cdeg) is included."""
         from robot_radio.testgui.commands import COMMANDS, build_wire_string
         spec = next(s for s in COMMANDS if s["label"] == "TURN")
-        result = build_wire_string(spec, {"heading": 0, "eps": 10})
-        assert result == "TURN 0 eps=10"
+        result = build_wire_string(spec, {"heading": 0, "eps": 1})
+        assert result == "TURN 0 eps=100"
 
 
 class TestBuildWireStringRT:
@@ -341,7 +341,7 @@ class TestBuildWireStringDefaults:
         from robot_radio.testgui.commands import COMMANDS, build_wire_string
         spec = next(s for s in COMMANDS if s["label"] == "TURN")
         result = build_wire_string(spec, {})
-        # Default heading=9000, eps=0 (omitted)
+        # Default heading=90 deg (9000 cdeg on the wire), eps=0 (omitted)
         assert "eps" not in result
 
 

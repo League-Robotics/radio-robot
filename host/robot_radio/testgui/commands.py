@@ -143,10 +143,11 @@ COMMANDS: list[CommandSpec] = [
     {
         "label": "TURN",
         "params": [
-            {"name": "heading", "type": int, "min": -18000, "max": 18000, "default": 9000, "unit": "cdeg"},
-            {"name": "eps",     "type": int, "min": 0,      "max": 18000, "default": 0,    "unit": "cdeg", "optional": True},
+            {"name": "heading", "type": int, "min": -180, "max": 180, "default": 90, "unit": "deg"},
+            {"name": "eps",     "type": int, "min": 0,    "max": 180, "default": 0,  "unit": "deg", "optional": True},
         ],
-        # No cdeg_fields — TURN takes centidegrees directly (heading and eps are already in cdeg)
+        # heading/eps are entered in degrees (human-friendly) but sent in centidegrees.
+        "cdeg_fields": ["heading", "eps"],
         "optional_zero_fields": ["eps"],
     },
     {

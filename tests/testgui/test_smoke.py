@@ -28,8 +28,8 @@ test_command_rows_emit_correct_wire_strings
     string equals the expected value.
 
 test_turn_row_converts_degrees_to_centidegrees
-    Set the TURN heading field to 9000 (centidegrees = 90°) and assert the
-    wire string contains "9000".
+    Set the TURN heading field to 90 (degrees) and assert the wire string
+    contains "9000" (centidegrees).
 """
 
 from __future__ import annotations
@@ -314,7 +314,7 @@ class TestCommandRowsEmitCorrectWireStrings:
         )
 
     def test_turn_row_wire_string(self):
-        result = self._build_wire("TURN", {"heading": 9000, "eps": 0})
+        result = self._build_wire("TURN", {"heading": 90, "eps": 0})
         assert result == "TURN 9000", (
             f"TURN row: expected 'TURN 9000', got {result!r}"
         )
@@ -338,31 +338,26 @@ class TestCommandRowsEmitCorrectWireStrings:
 
 
 class TestTurnRowCentidegrees:
-    """The TURN command field accepts centidegrees; 9000 cdeg = 90°.
+    """The TURN command field accepts degrees; the wire carries centidegrees.
 
-    The COMMANDS schema stores TURN heading in centidegrees (unit='cdeg').
-    Setting the heading field to 9000 (= 90° in cdeg) must produce a wire
-    string containing '9000'.
+    The COMMANDS schema stores TURN heading in degrees (unit='deg') and lists
+    it in ``cdeg_fields``, so ``build_wire_string`` multiplies by 100.
+    Setting the heading field to 90 must produce a wire string containing
+    '9000'.
     """
 
     def test_turn_row_converts_degrees_to_centidegrees(self):
-        """Setting TURN heading spinbox to 9000 cdeg emits '9000' on the wire.
-
-        The TURN row stores its heading field in centidegrees (1 cdeg = 0.01°).
-        Setting the field value to 9000 represents 90°.  The wire string must
-        contain '9000' (no degree-to-centidegree conversion; the field is
-        already in cdeg).
-        """
+        """Setting TURN heading spinbox to 90 deg emits '9000' on the wire."""
         from robot_radio.testgui.commands import COMMANDS, build_wire_string
 
         turn_spec = next(s for s in COMMANDS if s["label"] == "TURN")
 
-        # Set heading to 9000 cdeg (= 90°).
-        values = {"heading": 9000, "eps": 0}
+        # Set heading to 90 degrees (= 9000 cdeg on the wire).
+        values = {"heading": 90, "eps": 0}
         wire = build_wire_string(turn_spec, values)
 
         assert "9000" in wire, (
-            f"Expected '9000' in TURN wire string for 9000 cdeg heading, got: {wire!r}"
+            f"Expected '9000' in TURN wire string for 90 deg heading, got: {wire!r}"
         )
         assert wire == "TURN 9000", (
             f"Expected 'TURN 9000', got {wire!r}"
