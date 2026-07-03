@@ -132,6 +132,11 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
 
     // ------------------------------------------------------------------
     // STEP 5: OTOS correction (lag-gated, matches LoopTickOnce pattern)
+    //
+    // Two independent warn sources feed the single _updateOtosFusionGate
+    // state machine below: the CR-06 STATUS-bit check (065-006) and the
+    // (074-003) pose-VALUE staleness check. Either one blocking fusion is
+    // surfaced on the wire via otos_health=<status>,<blocked> (074-004).
     // ------------------------------------------------------------------
     uint32_t lagMs = _robCfg.lagOtos;
     if (lagMs > 0 && _hal.otos().is_initialized()) {
@@ -157,7 +162,31 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
                 // do not count it toward re-admission).
                 uint8_t otosStatus = 0;
                 bool statusOk = _hal.otos().readStatus(otosStatus);
-                _updateOtosFusionGate(!statusOk || (otosStatus != 0));
+
+                // (074-003) Pose-VALUE staleness check. STATUS byte alone
+                // cannot catch a reading that is READABLE, STATUS-clean, and
+                // simply stops updating -- the field symptom of a frozen
+                // otos= alongside a climbing ekf_rej (the stuck value keeps
+                // getting fused, keeps disagreeing with the encoder
+                // prediction, keeps getting rejected). encMotion uses the
+                // per-wheel velocity already computed by controlTick() in
+                // STEP 1+2 (above) as the "commanded to move" signal, so a
+                // legitimately stationary robot with an unchanging reading
+                // is never flagged. Comparison is against the PREVIOUS
+                // tick's successfully-read pose (captured before it is
+                // overwritten below), not the first-ever value.
+                bool encMotion = (fabsf(_hw.vel[0]) > kOtosStuckEncMotionMmps) ||
+                                 (fabsf(_hw.vel[1]) > kOtosStuckEncMotionMmps);
+                bool otosStuck = _prevOtosValid && encMotion &&
+                                 (fabsf(p.x - _prevOtosX) < kOtosStuckPosEpsMm) &&
+                                 (fabsf(p.y - _prevOtosY) < kOtosStuckPosEpsMm) &&
+                                 (fabsf(p.h - _prevOtosH) < kOtosStuckHeadEpsRad);
+                _prevOtosX     = p.x;
+                _prevOtosY     = p.y;
+                _prevOtosH     = p.h;
+                _prevOtosValid = true;
+
+                _updateOtosFusionGate(!statusOk || (otosStatus != 0) || otosStuck);
 
                 BodyTwist vel{};
                 _hal.otos().readVelocityTransformed(vel, headingRad);

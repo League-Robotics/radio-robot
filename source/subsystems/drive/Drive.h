@@ -179,9 +179,42 @@ private:
     static constexpr uint8_t kOtosWarnPersistK  = 3;
     static constexpr uint8_t kOtosCleanReadmitN = 5;
 
+    // ---- OTOS pose-VALUE staleness check (074-003) ----
+    // The STATUS-bit gate above catches a chip that self-reports degraded;
+    // it has no signal for a chip that reports READABLE + STATUS-clean but
+    // simply stops updating its pose register (the field symptom: frozen
+    // otos= alongside a climbing ekf_rej, since a stuck-but-clean reading
+    // sails through the STATUS gate and gets fused/rejected every tick).
+    // _prevOtos{X,Y,H}/_prevOtosValid hold the previous SUCCESSFUL read only
+    // (a read failure leaves them unchanged -- same "preserve last-known-
+    // good" convention as _hw.otos.valid on the same STEP-5 branch) so the
+    // comparison is always tick-to-tick, never against a stale failed read.
+    // otosStuck (computed in Drive.cpp) ORs into the same warnBit passed to
+    // _updateOtosFusionGate above -- this is an additional input to that
+    // already-correct, already-tested state machine, not a second gate.
+    float _prevOtosX = 0.0f;
+    float _prevOtosY = 0.0f;
+    float _prevOtosH = 0.0f;
+    bool  _prevOtosValid = false;
+
+    // Position/heading epsilon below which two consecutive OTOS reads are
+    // considered "the same value" (i.e. not evidence of a live sensor).
+    // Heading epsilon ~0.01 rad (~0.57 deg) and position epsilon 0.5 mm are
+    // well below the real OTOS's typical tick-to-tick sensor noise floor, so
+    // a healthy, live-updating sensor should never trip this by chance.
+    // Per-wheel velocity threshold above which the robot is considered
+    // "commanded to move" (encoder-evidenced motion) -- 5 mm/s is well above
+    // encoder-idle jitter but well below any real driven speed. All three
+    // are HIL-tunable starting points (architecture-update.md Open Question
+    // 4), not yet bench-validated against real sensor noise.
+    static constexpr float kOtosStuckPosEpsMm     = 0.5f;
+    static constexpr float kOtosStuckHeadEpsRad   = 0.01f;
+    static constexpr float kOtosStuckEncMotionMmps = 5.0f;
+
     // Update the WARNING-bit persistence gate for one tick's readStatus()
     // result. warnBit: true when the reading is degraded (a WARNING bit is
-    // set) or the status read itself failed; false for a fully clean tick.
+    // set), the status read itself failed, or the pose value is stuck while
+    // the robot is commanded to move; false for a fully clean, live tick.
     void _updateOtosFusionGate(bool warnBit);
 
     // Per-wheel outlier-filter hold threshold (same as kFilterRejectStreakThreshold).
