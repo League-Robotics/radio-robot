@@ -1,1 +1,1 @@
-{"encoder_noise_mm": 0.0, "slip_turn_extra": 0.0, "otos_linear_noise": 0.0, "otos_yaw_noise": 0.0}
+{"encoder_noise_mm": 0.0, "slip_turn_extra": 0.0, "otos_linear_noise": 0.0, "otos_yaw_noise": 0.0, "enc_scale_err_l": 0.0, "enc_scale_err_r": 0.0, "otos_lin_scale_err": 0.0, "otos_ang_scale_err": 0.0, "otos_lin_drift_mms": 0.0, "otos_yaw_drift_degs": 0.0, "body_rot_scrub": 1.0, "body_lin_scrub": 1.0, "motor_offset_l": 1.0, "motor_offset_r": 1.0, "trackwidth_mm": 128.0}

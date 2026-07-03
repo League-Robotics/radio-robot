@@ -70,9 +70,14 @@ Multiplicative terms — ``1.0`` is the genuine no-op, NOT ``0.0`` (see
 ``trackwidth_mm``
     The plant's trackwidth, in millimetres. Has NO safe zero default —
     ``PhysicsWorld::update()``'s sub-step B divides by it. Defaults to
-    ``PhysicsWorld::kDefaultTrackwidthMm`` (150.0, the plant's actual
-    compiled-in default) so Apply-at-defaults is a genuine no-op. This is
-    NOT a sentinel meaning "don't touch" — every Apply unconditionally sends
+    ``128.0``: although ``PhysicsWorld::kDefaultTrackwidthMm`` is 150.0,
+    the sim re-seeds the plant from the firmware config at construction
+    (``sim_api.cpp``: ``hal.setTrackwidth(cfg.trackwidthMm)``,
+    ``DefaultConfig.cpp``: 128.0), so 128.0 — not 150.0 — is the value that
+    makes Apply-at-defaults a genuine no-op AND keeps the plant's geometry
+    matched to the firmware's kinematic calibration (a mismatch makes every
+    encoder-arc turn land off-angle by the ratio). This is NOT a sentinel
+    meaning "don't touch" — every Apply unconditionally sends
     ``trackwidthMm=<value>`` and overwrites the plant's trackwidth (no
     silent 0-means-no-op special-casing inside ``SimCommands``, which would
     violate ticket 069-003's atomic apply-what-was-sent contract). ``SIMSET``
@@ -122,10 +127,13 @@ DEFAULT_PROFILE: dict = {
     "body_lin_scrub": 1.0,
     "motor_offset_l": 1.0,
     "motor_offset_r": 1.0,
-    # -- 069-007: no safe zero default; defaults to the plant's real
-    # trackwidth (PhysicsWorld::kDefaultTrackwidthMm) so Apply-at-default
-    # is a genuine no-op rather than a divide-by-zero sentinel.
-    "trackwidth_mm": 150.0,
+    # -- 069-007: no safe zero default; defaults to the firmware config's
+    # trackwidthMm (DefaultConfig.cpp: 128.0 — what the sim seeds the plant
+    # with at construction) so Apply-at-default is a genuine no-op rather
+    # than a divide-by-zero sentinel. NOT kDefaultTrackwidthMm (150.0): the
+    # plant never actually runs at that value, and applying it would inject
+    # a plant-vs-calibration geometry error into every turn.
+    "trackwidth_mm": 128.0,
 }
 
 #: Maps every profile key that has a 1:1 SIMSET wire-key equivalent to that

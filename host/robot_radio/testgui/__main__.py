@@ -739,8 +739,9 @@ def _build_main_window():  # type: ignore[return]
     )
     # trackwidth_mm has NO safe zero default (PhysicsWorld::update() divides
     # by it) — the spinbox range excludes 0 entirely, and the default is the
-    # plant's real compiled-in trackwidth (150.0mm), not a sentinel. Every
-    # Apply unconditionally sends this value; there is no "don't touch" case.
+    # firmware config's trackwidth (128.0mm, what the sim seeds the plant
+    # with at construction), not a sentinel. Every Apply unconditionally
+    # sends this value; there is no "don't touch" case.
     sim_err_trackwidth = _make_sim_err_spin(
         "sim_err_trackwidth", "trackwidth (mm):",
         _sim_error_profile["trackwidth_mm"], 10.0, 500.0, 1,

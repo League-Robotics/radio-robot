@@ -47,8 +47,9 @@ class TestDefaultProfile:
             "body_lin_scrub": 1.0,
             "motor_offset_l": 1.0,
             "motor_offset_r": 1.0,
-            # 069-007: no safe zero default -- the real plant trackwidth
-            "trackwidth_mm": 150.0,
+            # 069-007: no safe zero default -- the firmware config's
+            # trackwidth (what the sim seeds the plant with at construction)
+            "trackwidth_mm": 128.0,
         }
 
     def test_multiplicative_knobs_default_to_one_not_zero(self):
@@ -64,11 +65,16 @@ class TestDefaultProfile:
 
     def test_trackwidth_defaults_to_real_nonzero_value(self):
         """trackwidth_mm has NO safe zero default -- PhysicsWorld::update()
-        divides by it. Must default to a genuine, non-zero, neutral value
-        (the plant's real compiled-in trackwidth, 150.0mm)."""
+        divides by it. Must default to a genuine, non-zero, neutral value:
+        the firmware config's trackwidthMm (DefaultConfig.cpp, 128.0mm),
+        which is what sim_api.cpp seeds the plant with at construction.
+        NOT PhysicsWorld::kDefaultTrackwidthMm (150.0) -- the plant never
+        actually runs at that value, and applying it would mismatch the
+        plant against the firmware's kinematic calibration (every
+        encoder-arc turn would land off-angle by the ratio)."""
         from robot_radio.testgui.sim_prefs import DEFAULT_PROFILE
 
-        assert DEFAULT_PROFILE["trackwidth_mm"] == 150.0
+        assert DEFAULT_PROFILE["trackwidth_mm"] == 128.0
         assert DEFAULT_PROFILE["trackwidth_mm"] != 0.0
 
     def test_additive_noise_knobs_default_to_zero(self):
