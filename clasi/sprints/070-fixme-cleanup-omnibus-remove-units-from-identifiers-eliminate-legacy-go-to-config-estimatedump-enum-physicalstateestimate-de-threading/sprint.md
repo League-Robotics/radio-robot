@@ -9,6 +9,7 @@ issues:
 - remove-units-from-identifier-names.md
 - fixme-cleanup-legacy-config-and-estimatedump-enum.md
 - physicalstateestimate-remove-hardwarestate-param-threading.md
+- testgui-sim-errors-from-calibration-button.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -101,5 +102,6 @@ passed, 0 failed.**
 | 001 | Remove legacy go-to tolerance config (turnThresholdMm/doneTolMm) end-to-end | none |
 | 002 | EstimateDump.source string to enum class EstimateSource, plus FIXME sweep | 001 |
 | 003 | PhysicalStateEstimate/Odometry de-threading: remove HardwareState parameter threading | none (sequenced last by implementation risk) |
+| 004 | TestGUI Sim Errors: From Calibration button (inverse-calibration plant) | none — independent, host-TestGUI-only, addresses `testgui-sim-errors-from-calibration-button.md` |
 
 Tickets execute serially in this order.
