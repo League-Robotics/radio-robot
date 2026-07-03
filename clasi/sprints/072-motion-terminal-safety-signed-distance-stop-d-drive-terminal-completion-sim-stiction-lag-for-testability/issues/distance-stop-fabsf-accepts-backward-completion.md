@@ -1,5 +1,9 @@
 ---
-status: pending
+status: in-progress
+sprint: '072'
+tickets:
+- 072-002
+- 072-004
 ---
 
 # SAFETY: DISTANCE stop uses fabsf(traveled) — backward runaway "completes" a forward drive

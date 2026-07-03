@@ -1,5 +1,9 @@
 ---
-status: pending
+status: in-progress
+sprint: '072'
+tickets:
+- 072-001
+- 072-003
 ---
 
 # D distance-drive terminal instability — lands short of the `>=` stop, stalls, reverses, thrashes, completes on a lunge
