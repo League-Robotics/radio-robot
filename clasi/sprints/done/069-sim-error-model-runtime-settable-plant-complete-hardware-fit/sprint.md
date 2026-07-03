@@ -1,7 +1,7 @@
 ---
 id: 069
 title: 'Sim error model: runtime-settable, plant-complete, hardware-fit'
-status: planning-docs
+status: done
 branch: sprint/069-sim-error-model-runtime-settable-plant-complete-hardware-fit
 use-cases: []
 issues:
