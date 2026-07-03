@@ -2,7 +2,7 @@
 id: '073'
 title: 'Sim turn accuracy: coast anticipation from ramp dynamics and slip bookkeeping
   reconciliation'
-status: planning-docs
+status: done
 branch: sprint/073-sim-turn-accuracy-coast-anticipation-from-ramp-dynamics-and-slip-bookkeeping-reconciliation
 use-cases: []
 issues:
