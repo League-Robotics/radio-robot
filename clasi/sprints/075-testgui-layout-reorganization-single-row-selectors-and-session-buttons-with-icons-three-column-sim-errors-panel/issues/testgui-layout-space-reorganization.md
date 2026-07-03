@@ -1,5 +1,9 @@
 ---
-status: pending
+status: in-progress
+sprint: '075'
+tickets:
+- 075-001
+- 075-002
 ---
 
 # Reorganize TestGUI layout for better use of space
