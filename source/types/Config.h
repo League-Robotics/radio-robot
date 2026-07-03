@@ -13,7 +13,8 @@ constexpr uint16_t TLM_FIELD_TWIST = (1u << 5);  // twist=v,omega  (fused body v
 constexpr uint16_t TLM_FIELD_OTOS   = (1u << 6);  // otos=x,y,h  (raw OTOS pose mm/mm/cdeg, Sprint 023 bench)
 constexpr uint16_t TLM_FIELD_EKFREJ = (1u << 7);  // ekf_rej=<n> (cumulative EKF rejection count, Sprint 024)
 constexpr uint16_t TLM_FIELD_ENCPOSE = (1u << 8); // encpose=x,y,h  (encoder-only dead-reckoned pose mm/mm/cdeg, Sprint 068)
-constexpr uint16_t TLM_FIELD_ALL    = 0x1FFu;    // all fields (default) -- widened uint8_t->uint16_t, Sprint 068
+constexpr uint16_t TLM_FIELD_OTOS_HEALTH = (1u << 9); // otos_health=<status>,<blocked>  (Sprint 074-004)
+constexpr uint16_t TLM_FIELD_ALL    = 0x3FFu;    // all fields (default) -- widened 0x1FF->0x3FF, Sprint 074-004
 
 struct RobotConfig {
     // Motor forward-direction signs: +1 = CW is forward, -1 = CCW is forward.
@@ -190,9 +191,10 @@ struct RobotConfig {
 
     // Telemetry field-subscription bitmask. Set via STREAM fields=...
     // Bit 0 = enc, Bit 1 = pose, Bit 2 = vel, Bit 3 = line, Bit 4 = color,
-    // Bit 5 = twist, Bit 6 = otos, Bit 7 = ekf_rej, Bit 8 = encpose.
+    // Bit 5 = twist, Bit 6 = otos, Bit 7 = ekf_rej, Bit 8 = encpose,
+    // Bit 9 = otos_health.
     // uint16_t (Sprint 068: widened from uint8_t -- all 8 original bits
-    // were already assigned). TLM_FIELD_ALL (0x1FF) = all fields (default).
+    // were already assigned). TLM_FIELD_ALL (0x3FF) = all fields (default).
     uint16_t tlmFields;
 
     // One-shot SNAP pending flag. Set by SNAP command; cleared after one TLM frame.

@@ -137,6 +137,14 @@ int Robot::buildTlmFrame(char* buf, int len)
     // the freshness check.
     // 060-001: read from drive.state().otos (msg::ValueSet) and
     // drive.state().optical.pose (msg::Pose2D: x,y mm, h rad).
+    // (074-004/SUC-005) otos= reflects the most recent RAW, successfully-read
+    // pose from whichever odometer is currently active -- independent of
+    // whether that reading was admitted into EKF fusion. It does NOT go
+    // stale or change meaning when Drive::_otosFusionBlocked is true (this
+    // freshness gate only reacts to actual read failures, via
+    // Drive::tickUpdate() clearing ds.otos.valid -- see Drive.cpp STEP 5).
+    // otos_health=<status>,<blocked> below is what tells a host fusion is
+    // blocked.
     if ((config.tlmFields & TLM_FIELD_OTOS) &&
         ds.otos.get_valid() &&
         (t_sample - ds.otos.get_last_upd()
@@ -169,6 +177,20 @@ int Robot::buildTlmFrame(char* buf, int len)
         // Sprint 024-005: emitted as ekf_rej=<n> for divergence visibility.
         n = snprintf(buf + pos, (size_t)rem, " ekf_rej=%d",
                      estimate.ekfRejectCount());
+        if (n > 0 && n < rem) { pos += n; rem -= n; }
+    }
+    // (074-004) otos_health=<status>,<blocked> -- UNCONDITIONAL once the bit
+    // is set (no freshness/staleness gate), matching wedge=`'s existing
+    // precedent (064-004, lines 81-92 above): the health field must stay
+    // visible precisely when otos= itself is going stale, so a host can tell
+    // the two conditions apart (architecture-update.md Design Rationale 4).
+    // <status> is the raw OTOS STATUS byte (0 = clean); <blocked> is
+    // Drive::_otosFusionBlocked (0/1). Placed last, preserving the
+    // append-only field-ordering convention this file documents.
+    if (config.tlmFields & TLM_FIELD_OTOS_HEALTH) {
+        n = snprintf(buf + pos, (size_t)rem, " otos_health=%u,%u",
+                     (unsigned)ds.get_otos_status(),
+                     (unsigned)(ds.get_otos_fusion_blocked() ? 1u : 0u));
         if (n > 0 && n < rem) { pos += n; rem -= n; }
     }
     buf[pos] = '\0';

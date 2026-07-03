@@ -504,9 +504,10 @@ TLM t=<ms> mode=<char> seq=<n> [enc=<l>,<r>] [pose=<x>,<y>,<h>] [encpose=<x>,<y>
 Fields are emitted in the order shown; fields whose subscription bit is
 clear, or whose hardware is absent, are omitted. (This list has drifted
 behind a few fields shipped in later sprints — `wedge=`, `twist=`,
-`otos=`, `ekf_rej=` — that are not yet documented here; see the sprint-068
-architecture update, Open Question 1. `encpose=` below is current as of
-Sprint 068.)
+`ekf_rej=` — that are not yet documented here; see the sprint-068
+architecture update, Open Question 1. `encpose=` is current as of Sprint
+068; `otos=`'s semantics and `otos_health=` (new) are current as of Sprint
+074-004 — see the notes below the table.)
 
 | Field      | Format                      | Units / notes                                                          |
 |------------|-----------------------------|------------------------------------------------------------------------|
@@ -528,6 +529,37 @@ variable send latency.
 **Pose source.** When the OTOS sensor is present and detected at boot,
 `pose=` values come from `OtosSensor::getPositionRaw()`.  Otherwise
 they come from the dead-reckoning odometry integrator.
+
+**`otos=` field semantics (074-004).** `otos=<x>,<y>,<h>` (bit
+`TLM_FIELD_OTOS = 0x40`) is the raw, most-recently-**successfully-read**
+pose from whichever odometer is currently active (real chip, or the bench
+sensor when `DBG OTOS BENCH 1` is on) — independent of whether that reading
+was admitted into EKF fusion. It does **not** go stale, freeze, or change
+meaning when the fusion gate blocks a reading (`Drive::_otosFusionBlocked`
+true): `otos=` keeps reporting the live raw reads throughout a block, and
+`otos_health=` below is the field that tells a host fusion is currently
+blocked. `otos=` is gated by the N8 freshness rule (absent if
+`now - last_upd > 2 * lag`, same as `line=`/`color=`); a **read failure**
+clears that freshness envelope the same tick it occurs
+(`Drive::tickUpdate()` STEP 5, `RobotTelemetry.cpp`), so a persistent read
+failure makes `otos=` disappear from TLM rather than repeating the
+last-good value forever (regression-tested,
+`tests/simulation/unit/test_otos_health_tlm.py`).
+
+**`otos_health=` field (Sprint 074-004).** `otos_health=<status>,<blocked>`
+(bit `TLM_FIELD_OTOS_HEALTH = 0x200`, on by default) is the OTOS
+fusion-gate's health state, added to close a diagnosability gap: before
+this field, the only wire-visible symptom of a fusion block was an
+indirectly-inferred one (a climbing `ekf_rej=` counter alongside a
+suspiciously static `otos=`). `<status>` is the raw OTOS chip STATUS byte
+(`%u`, 0 = clean); `<blocked>` is `Drive::_otosFusionBlocked` (`0`/`1`).
+Unlike every other sensor field in this table, `otos_health=` is emitted
+**unconditionally** once its bit is set — no freshness/staleness gate —
+matching `wedge=`'s existing precedent (Sprint 064-004): the health field
+must stay visible precisely when `otos=` itself is going stale or the gate
+is blocked, so a host can tell the two conditions apart without guessing.
+See the sprint-074 architecture update ("OTOS fusion recovery and health
+visibility"), Design Rationale Decision 4, for the full design rationale.
 
 **`vel=` field.** The field bitmask bit is `TLM_FIELD_VEL = 0x04`.  The
 field is populated from `MotorController::getActualVelocity()` (landed in

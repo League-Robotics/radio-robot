@@ -179,6 +179,15 @@ private:
     static constexpr uint8_t kOtosWarnPersistK  = 3;
     static constexpr uint8_t kOtosCleanReadmitN = 5;
 
+    // ---- OTOS health telemetry (074-004) ----
+    // Raw OTOS STATUS byte from the most recent SUCCESSFUL readStatus() call
+    // (STEP 5 below). Left UNCHANGED on a read failure -- same "preserve
+    // last-known-good" convention as _hw.otos.valid and _prevOtosValid above.
+    // Copied into _state.otos_status every tick (STEP 6) so buildTlmFrame can
+    // emit it unconditionally as otos_health=<status>,<blocked>, independent
+    // of otos='s own freshness gate -- see RobotTelemetry.cpp.
+    uint8_t _lastOtosStatus = 0;
+
     // ---- OTOS pose-VALUE staleness check (074-003) ----
     // The STATUS-bit gate above catches a chip that self-reports degraded;
     // it has no signal for a chip that reports READABLE + STATUS-clean but

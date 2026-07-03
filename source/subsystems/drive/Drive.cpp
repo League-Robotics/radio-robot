@@ -162,6 +162,12 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
                 // do not count it toward re-admission).
                 uint8_t otosStatus = 0;
                 bool statusOk = _hal.otos().readStatus(otosStatus);
+                if (statusOk) {
+                    // (074-004) Cache the raw STATUS byte for otos_health=.
+                    // Left unchanged on a failed status read -- last-known-
+                    // good, same convention as _hw.otos.valid below.
+                    _lastOtosStatus = otosStatus;
+                }
 
                 // (074-003) Pose-VALUE staleness check. STATUS byte alone
                 // cannot catch a reading that is READABLE, STATUS-clean, and
@@ -200,11 +206,24 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
                 // buildTlmFrame's N8 freshness gate emits the otos= field.
                 // Raw telemetry visibility is unaffected by the fusion gate
                 // above (matches Robot::otosCorrect's contract).
+                //
+                // (074-004/SUC-005) otos= (RobotTelemetry.cpp) reflects the
+                // most recent RAW, successfully-read pose from whichever
+                // odometer is currently active -- independent of whether
+                // that reading was admitted into EKF fusion. It does NOT go
+                // stale or change meaning when _otosFusionBlocked is true;
+                // otos_health=<status>,<blocked> (unconditional, no
+                // freshness gate) is what tells a host fusion is blocked.
                 _hw.otos.lastUpdMs = now;
                 _hw.otos.valid     = true;
             } else {
-                // Read failed this cycle — valid stays unchanged (preserves
-                // the last-known-good stamp, matching Robot::otosCorrect behaviour).
+                // Read failed this cycle: clear valid immediately so
+                // buildTlmFrame's N8 freshness gate stops emitting otos=
+                // once the freshness window elapses, rather than repeating a
+                // stale pose forever (SUC-005 regression-tested in
+                // test_otos_health_tlm.py). last_upd/lagMs are left as-is
+                // (not advanced) -- the freshness check itself does the
+                // staleness math from those stamps.
                 _hw.otos.valid = false;
             }
             _lastOtosMs = now;
@@ -252,6 +271,11 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
     _state.otos.lag           = _hw.otos.lagMs;
     _state.otos.last_upd      = _hw.otos.lastUpdMs;
     _state.otos.valid         = _hw.otos.valid;
+
+    // OTOS health (074-004): unconditional wire visibility of the fusion
+    // gate's state, independent of otos='s own freshness gate above.
+    _state.otos_status         = _lastOtosStatus;
+    _state.otos_fusion_blocked = _otosFusionBlocked;
 
     // Wedge latch per wheel.
     _state.wheel_wedged_[0]  = _mc.wheelWedgedR() ? 1u : 0u;
