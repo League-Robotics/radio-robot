@@ -103,6 +103,19 @@ const ConfigEntry kRegistry[] = {
     CFG_F("odomYaw",      odomYawDeg),
     // EKF heading fusion noise (sprint 024-004)
     CFG_F_SS("ekfRHead",  ekfROtosTheta, "drive"),
+    // EKF process/measurement noise (sprint 069-001, closing 067's Open
+    // Question 5). The setNoise() consumer path (PhysicalStateEstimate ->
+    // Odometry -> EKFTiny) was already built and wired by 067-003 and
+    // already reads all eight fields live from _robCfg in
+    // Drive::configure() (Drive.cpp:455-458) -- these rows only add wire
+    // reachability, no new C++ behavior.
+    CFG_F_SS("ekfQxy",     ekfQxy,     "drive"),
+    CFG_F_SS("ekfQtheta",  ekfQtheta,  "drive"),
+    CFG_F_SS("ekfQv",      ekfQv,      "drive"),
+    CFG_F_SS("ekfQomega",  ekfQomega,  "drive"),
+    CFG_F_SS("ekfROtosXy", ekfROtosXy, "drive"),
+    CFG_F_SS("ekfROtosV",  ekfROtosV,  "drive"),
+    CFG_F_SS("ekfREncV",   ekfREncV,   "drive"),
 };
 
 #undef CFG_F

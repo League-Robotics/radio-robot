@@ -393,6 +393,20 @@ equivalents they replace.
 | `sTimeout`  | int32       | `%d`        | `500`    | Streaming watchdog timeout (ms)         | `KST`     |
 | `tick`      | int32       | `%d`        | `20`     | Main-loop tick period (ms)              | `KTK`     |
 | `tlmPeriod` | int32       | `%d`        | `0`      | TLM streaming period (ms); 0 = off      | —         |
+| `ekfQxy`    | float       | `%.3f`      | `200.000`| EKF process noise: position (mm²/s)     | —         |
+| `ekfQtheta` | float       | `%.3f`      | `0.500`  | EKF process noise: heading (rad²/s)     | —         |
+| `ekfQv`     | float       | `%.3f`      | `5000.000`| EKF process noise: body speed (mm²/s³) | —         |
+| `ekfQomega` | float       | `%.3f`      | `1.000`  | EKF process noise: yaw rate (rad²/s³)   | —         |
+| `ekfROtosXy`| float       | `%.3f`      | `50.000` | EKF OTOS measurement noise: position (mm²) | —      |
+| `ekfROtosV` | float       | `%.3f`      | `200.000`| EKF OTOS measurement noise: body speed (mm²/s²) | — |
+| `ekfREncV`  | float       | `%.3f`      | `100.000`| EKF encoder measurement noise: body speed (mm²/s²) | — |
+
+(Sprint 069-001: these seven rows close 067's Open Question 5 -- a live
+`SET` routes through `Drive::configure()`'s `setNoise()` push, which
+updates EKF fusion noise WITHOUT resetting fused pose/covariance. This
+table has pre-existing drift from several long-landed keys, e.g. `vel.kP`,
+`ekfRHead` itself -- not backfilled here, out of scope per ticket
+068-001's Open Question 1 precedent.)
 
 Type `float-as-int`: stored internally as `float`, read/written on the
 wire as a decimal integer (no fractional part).  `SET tw=121` writes
