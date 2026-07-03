@@ -484,7 +484,7 @@ def cmd_calibrate_distance(args) -> None:
                 new_scale = otos_linear_scale_current * (actual_cm / otos_cm)
                 new_scale = _clamp_otos_scale(new_scale)
                 ol_int8 = _scale_to_int8(new_scale)
-                conn.send(f"OL{ol_int8:+d}", read_ms=200)
+                conn.send(f"OL{ol_int8:+d}", read_timeout=200)
                 if verbose:
                     print(f"  OL push: {otos_linear_scale_current:.4f} → "
                           f"{new_scale:.4f}  (OL{ol_int8:+d})  "
@@ -750,7 +750,7 @@ def cmd_calibrate_turns(args) -> None:
 
             # ── Step 4: Send TN command ──────────────────────────────────────
             print(f"  Sending {tn_cmd}  (target {signed_target:+.1f}°) …")
-            conn.send(tn_cmd, read_ms=300)
+            conn.send(tn_cmd, read_timeout=300)
 
             # ── Step 5: Read SO stream until TN+DONE / TN+TIMEOUT ───────────
             # The relay echoes each outgoing command as "# TX:<cmd>".
@@ -765,7 +765,7 @@ def cmd_calibrate_turns(args) -> None:
             deadline = time.monotonic() + TN_DEADLINE_S
 
             while time.monotonic() < deadline:
-                lines = conn.read_lines(duration_ms=100)
+                lines = conn.read_lines(duration=100)
                 done_this_burst = False
                 for line in lines:
                     s = str(line).strip()
@@ -863,7 +863,7 @@ def cmd_calibrate_turns(args) -> None:
                 new_scale = otos_angular_scale_current * (abs(gt_deg) / abs(otos_total_deg))
                 new_scale = _clamp_otos_scale(new_scale)
                 oa_int8 = _scale_to_int8(new_scale)
-                conn.send(f"OA{oa_int8:+d}", read_ms=200)
+                conn.send(f"OA{oa_int8:+d}", read_timeout=200)
                 residual = abs(gt_deg) - abs(otos_total_deg)
                 residual_sign = +1 if residual >= 0 else -1
                 residual_signs.append(residual_sign)

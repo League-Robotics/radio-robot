@@ -70,14 +70,14 @@ class Nezha(Robot):
     Streaming drive interface:
       - ``stream_drive(speeds, ...)`` — generator; yields ParsedResponse objects
         and updates robot state (encoders, otos_pose, line_sensor, color)
-      - ``vw(v_mms, omega_mrads, ...)`` — body-velocity generator; yields None
+      - ``vw(v, omega, ...)`` — body-velocity generator; yields None
         each TLM tick; state updated before yield; break sends STOP + STREAM 0
       - ``send_drive(left, right)``   — fire-and-forget S keepalive for manual loops
 
     Typical streaming loop::
 
         speeds = [200, 200]
-        for resp in robot.stream_drive(speeds, period_ms=40):
+        for resp in robot.stream_drive(speeds, period=40):
             tlm = parse_tlm(resp.raw) if resp.tag == "TLM" else None
             if tlm and tlm.enc:
                 print(tlm.enc)
@@ -85,8 +85,8 @@ class Nezha(Robot):
             speeds[0] = new_left
             speeds[1] = new_right
 
-    ``otos_pose`` stores ``(x_mm, y_mm, yaw_rad)`` with CCW-positive yaw in radians.
-    ``encoders`` stores ``(left_mm, right_mm)`` cumulative totals.
+    ``otos_pose`` stores ``(x, y, yaw_rad)`` with CCW-positive yaw in radians.
+    ``encoders`` stores ``(left, right)`` cumulative totals.
     """
 
     # Below this, neither wheel reliably rotates (deadband).
@@ -117,12 +117,12 @@ class Nezha(Robot):
 
     @property
     def encoders(self) -> tuple[int, int]:
-        """Cached encoder totals (left_mm, right_mm). Returns (0, 0) until first TLM frame."""
+        """Cached encoder totals (left, right). Returns (0, 0) until first TLM frame."""
         return self.state.encoders or (0, 0)
 
     @property
     def otos_pose(self) -> tuple[float, float, float]:
-        """Cached OTOS pose (x_mm, y_mm, yaw_rad). Returns (0.0, 0.0, 0.0) until first TLM."""
+        """Cached OTOS pose (x, y, yaw_rad). Returns (0.0, 0.0, 0.0) until first TLM."""
         p = self.state.pose
         return (p.x, p.y, p.heading)
 
@@ -182,18 +182,18 @@ class Nezha(Robot):
         """Set gripper servo angle (GRIP <deg> command)."""
         self._proto.grip(angle)
 
-    def speed(self, left_mms: int, right_mms: int) -> Generator[tuple[int, int], None, None]:
-        """Non-blocking encoder streaming. Yields (left_mm, right_mm) encoder totals.
+    def speed(self, left: int, right: int) -> Generator[tuple[int, int], None, None]:  # [mm/s]
+        """Non-blocking encoder streaming. Yields (left, right) encoder totals.
 
         Sends S keepalives to maintain streaming. Close the generator to stop.
         """
         def _clamp(v: int) -> int:
             return 0 if v == 0 else max(self.MIN_SPEED_MMS, abs(v)) * (1 if v > 0 else -1)
 
-        l, r = _clamp(left_mms), _clamp(right_mms)
+        l, r = _clamp(left), _clamp(right)
         speeds = [l, r]
         try:
-            for resp in self._proto.stream_drive(speeds, period_ms=40, watchdog_ms=200):
+            for resp in self._proto.stream_drive(speeds, period=40, watchdog=200):
                 tlm = parse_tlm(resp.raw) if resp.tag == "TLM" else None
                 if tlm and tlm.enc:
                     self._apply_tlm(tlm)
@@ -201,7 +201,7 @@ class Nezha(Robot):
         except GeneratorExit:
             pass
 
-    def speed_for_time(self, left_mms: int, right_mms: int, ms: int) -> tuple[int, int]:
+    def speed_for_time(self, left: int, right: int, ms: int) -> tuple[int, int]:  # [mm/s]
         """Blocking timed drive (T command). Returns final encoder totals (mm).
 
         Waits for EVT done T or a conservative host-side timeout.
@@ -209,36 +209,36 @@ class Nezha(Robot):
         def _clamp(v: int) -> int:
             return 0 if v == 0 else max(self.MIN_SPEED_MMS, abs(v)) * (1 if v > 0 else -1)
 
-        l, r = _clamp(left_mms), _clamp(right_mms)
+        l, r = _clamp(left), _clamp(right)
         self._proto.timed(l, r, ms)
         self._proto.wait_for_evt_done("T", ms + 2000)  # outcome unused; discard reason
         return self.encoders
 
-    def speed_for_distance(self, left_mms: int, right_mms: int, mm: int) -> tuple[int, int]:
+    def speed_for_distance(self, left: int, right: int, mm: int) -> tuple[int, int]:  # [mm/s]
         """Blocking distance drive (D command). Returns final encoder totals (mm)."""
         def _clamp(v: int) -> int:
             return 0 if v == 0 else max(self.MIN_SPEED_MMS, abs(v)) * (1 if v > 0 else -1)
 
-        l, r = _clamp(left_mms), _clamp(right_mms)
-        remaining_mm = abs(int(mm))
-        if remaining_mm == 0:
+        l, r = _clamp(left), _clamp(right)
+        remaining = abs(int(mm))  # [mm]
+        if remaining == 0:
             return self.encoders
 
-        cruise_mms = max(abs(l), abs(r), 1)
-        hop_mm_max = max(40, int(cruise_mms * 1.5))
+        cruise = max(abs(l), abs(r), 1)  # [mm/s]
+        hop_max = max(40, int(cruise * 1.5))  # [mm]
 
-        while remaining_mm > 0:
-            hop_mm = min(remaining_mm, hop_mm_max)
+        while remaining > 0:
+            hop = min(remaining, hop_max)
             self._proto.read_pending_lines()
-            self._proto.distance(l, r, hop_mm)
+            self._proto.distance(l, r, hop)
 
-            outcome, _ = self._proto.wait_for_evt_done("D", timeout_ms=6000)
+            outcome, _ = self._proto.wait_for_evt_done("D", timeout=6000)
             if outcome == "timeout":
                 self._proto.stop()
                 raise TimeoutError(
-                    f"Distance hop timed out: target={hop_mm}mm at speeds {l},{r}"
+                    f"Distance hop timed out: target={hop}mm at speeds {l},{r}"
                 )
-            remaining_mm -= hop_mm
+            remaining -= hop
 
         return self.encoders
 
@@ -247,7 +247,7 @@ class Nezha(Robot):
     ) -> str:
         """Private tick loop for callback-driven go_to / turn.
 
-        Reads lines from ``self._proto._conn.read_lines(duration_ms=50)``,
+        Reads lines from ``self._proto._conn.read_lines(duration=50)``,
         updates robot state from each TLM frame, and calls ``on_tick(self)``
         after each update.
 
@@ -285,7 +285,7 @@ class Nezha(Robot):
         stopped_since: float | None = None
 
         while time.monotonic() < deadline:
-            lines = self._proto._conn.read_lines(duration_ms=50)
+            lines = self._proto._conn.read_lines(duration=50)
             had_tlm = False
 
             for raw_line in lines:
@@ -340,12 +340,13 @@ class Nezha(Robot):
         self._proto.stream(0)
         return "timeout"
 
-    def go_to(self, x_mm: int, y_mm: int, speed_mms: int,
+    def go_to(self, x: int, y: int,  # [mm]
+              speed: int,  # [mm/s]
               on_tick: Any = None,
               timeout_s: float = 15.0) -> tuple[int, int, str]:
         """Blocking or callback-driven go-to (G command).
 
-        Returns ``(left_enc_mm, right_enc_mm, outcome)`` where ``outcome``
+        Returns ``(left_enc, right_enc, outcome)`` where ``outcome``
         is one of ``"done"``, ``"settled"``, ``"safety_stop"``, ``"aborted"``,
         or ``"timeout"``.  ``"settled"`` (callback path only) means the robot
         moved then held ~zero velocity for ~1.5 s without an ``EVT done`` — used
@@ -353,9 +354,9 @@ class Nezha(Robot):
 
         Parameters
         ----------
-        x_mm, y_mm:
+        x, y:
             Target position in robot-relative mm (forward, left).
-        speed_mms:
+        speed:
             Cruise speed in mm/s (clamped to ≥ 1).
         on_tick:
             When ``None`` (default), the method blocks using
@@ -369,22 +370,22 @@ class Nezha(Robot):
         timeout_s:
             Maximum wall-clock seconds to wait.
         """
-        speed = max(abs(speed_mms), 1)
+        speed = max(abs(speed), 1)
         if on_tick is None:
             # Back-compat blocking path — behaviour unchanged from pre-sprint.
-            self._proto.go_to(x_mm, y_mm, speed)
-            timeout_ms = int(timeout_s * 1000)
-            outcome, _ = self._proto.wait_for_evt_done("G", timeout_ms)
+            self._proto.go_to(x, y, speed)
+            timeout = int(timeout_s * 1000)
+            outcome, _ = self._proto.wait_for_evt_done("G", timeout)
             time.sleep(0.2)
             return self.encoders[0], self.encoders[1], outcome
         else:
             self._proto.stream(80)
-            self._proto.go_to(x_mm, y_mm, speed)
+            self._proto.go_to(x, y, speed)
             outcome = self._run_until_done("G", on_tick, timeout_s)
             return self.encoders[0], self.encoders[1], outcome
 
-    def turn(self, heading_cdeg: int, on_tick: Any = None,
-             eps_cdeg: int | None = None,
+    def turn(self, heading: int, on_tick: Any = None,  # [cdeg]
+             eps: int | None = None,  # [cdeg]
              timeout_s: float = 10.0) -> str:
         """Rotate to an absolute heading (TURN command).
 
@@ -393,7 +394,7 @@ class Nezha(Robot):
 
         Parameters
         ----------
-        heading_cdeg:
+        heading:
             Target heading in centi-degrees.  Positive = CCW (matches OTOS
             CCW convention).  Range −18000 … +18000.
         on_tick:
@@ -401,19 +402,19 @@ class Nezha(Robot):
             When a callable, enables ``STREAM 80``, issues ``TURN``, and
             calls ``on_tick(robot)`` after each TLM tick.  Return ``False``
             from ``on_tick`` to abort.
-        eps_cdeg:
+        eps:
             Optional heading tolerance in centi-degrees (default 300 = 3°).
         timeout_s:
             Maximum wall-clock seconds to wait.
         """
         if on_tick is None:
-            self._proto.turn(heading_cdeg, eps_cdeg=eps_cdeg)
-            timeout_ms = int(timeout_s * 1000)
-            outcome, _ = self._proto.wait_for_evt_done("TURN", timeout_ms)
+            self._proto.turn(heading, eps=eps)
+            timeout = int(timeout_s * 1000)
+            outcome, _ = self._proto.wait_for_evt_done("TURN", timeout)
             return outcome
         else:
             self._proto.stream(80)
-            self._proto.turn(heading_cdeg, eps_cdeg=eps_cdeg)
+            self._proto.turn(heading, eps=eps)
             return self._run_until_done("TURN", on_tick, timeout_s)
 
     def read_encoders(self) -> tuple[int, int]:
@@ -437,9 +438,9 @@ class Nezha(Robot):
             otos_pose=self.state.otos_pose,
         )
 
-    def send(self, message: str, read_ms: int = 500) -> dict[str, Any]:
+    def send(self, message: str, read_timeout: int = 500) -> dict[str, Any]:  # [ms]
         """Send arbitrary v2 command string, return raw response dict."""
-        return self._proto.send(message, read_ms)
+        return self._proto.send(message, read_timeout)
 
     # ------------------------------------------------------------------
     # Streaming drive
@@ -447,10 +448,10 @@ class Nezha(Robot):
 
     def vw(
         self,
-        v_mms: int,
-        omega_mrads: int,
+        v: int,  # [mm/s]
+        omega: int,  # [mrad/s]
         *,
-        period_ms: int = 40,
+        period: int = 40,  # [ms]
     ) -> Generator[None, None, None]:
         """Body-velocity streaming generator.  Yields ``None`` once per TLM tick.
 
@@ -465,36 +466,36 @@ class Nezha(Robot):
 
         Protocol sequence
         -----------------
-        1. ``STREAM <period_ms>`` — enable TLM at the requested period.
-        2. ``VW <v_mms> <omega_mrads>`` — start body-velocity drive.
+        1. ``STREAM <period>`` — enable TLM at the requested period.
+        2. ``VW <v> <omega>`` — start body-velocity drive.
         3. Loop: read lines for 50 ms; for each TLM line call ``_apply_tlm``
            then ``yield``; on ``EVT safety_stop`` exit naturally.
         4. Re-send ``VW`` as a keepalive whenever
-           ``period_ms * 0.30 / 1000`` seconds have elapsed since the last
+           ``period * 0.30 / 1000`` seconds have elapsed since the last
            send (≤30% of the firmware watchdog window).
         5. On ``GeneratorExit`` (caller ``break``): send ``STOP`` then
            ``STREAM 0``; suppress exceptions so the generator exits cleanly.
 
         Parameters
         ----------
-        v_mms:
+        v:
             Forward speed in mm/s (−1000 … +1000).
-        omega_mrads:
+        omega:
             Yaw rate in milli-radians/s (−3142 … +3142); positive = CCW.
-        period_ms:
+        period:
             TLM streaming period and keepalive base interval in milliseconds.
             Default 40 ms (25 Hz).
         """
-        vw_cmd = f"VW {v_mms} {omega_mrads}"
-        keepalive_s = period_ms * 0.30 / 1000.0
+        vw_cmd = f"VW {v} {omega}"
+        keepalive_s = period * 0.30 / 1000.0
 
-        self._proto.stream(period_ms)
+        self._proto.stream(period)
 
         try:
             self._proto._conn.send_fast(vw_cmd)
             last_send = time.monotonic()
             while True:
-                for raw_line in self._proto._conn.read_lines(duration_ms=50):
+                for raw_line in self._proto._conn.read_lines(duration=50):
                     r = parse_response(raw_line)
                     if r is None:
                         continue
@@ -520,16 +521,16 @@ class Nezha(Robot):
             except Exception:
                 pass
 
-    def send_drive(self, left_mms: int, right_mms: int) -> None:
+    def send_drive(self, left: int, right: int) -> None:  # [mm/s]
         """Fire-and-forget S keepalive for manual control loops."""
-        self._proto.drive(left_mms, right_mms)
+        self._proto.drive(left, right)
 
     def stream_drive(
         self,
         speeds: list[int],
         *,
-        period_ms: int = 40,
-        watchdog_ms: int = 500,
+        period: int = 40,  # [ms]
+        watchdog: int = 500,  # [ms]
     ) -> Generator[ParsedResponse, None, None]:
         """Streaming drive generator. Yields ParsedResponse for each incoming line.
 
@@ -538,7 +539,7 @@ class Nezha(Robot):
         loop to change velocity mid-stream. Ends naturally on EVT safety_stop.
         """
         for resp in self._proto.stream_drive(
-            speeds, period_ms=period_ms, watchdog_ms=watchdog_ms
+            speeds, period=period, watchdog=watchdog
         ):
             if resp.tag == "TLM":
                 tlm = parse_tlm(resp.raw)
@@ -556,10 +557,10 @@ class Nezha(Robot):
 
         # Pose: update if the frame carries a pose= field.
         if tlm.pose is not None:
-            x_mm, y_mm, h_cdeg = tlm.pose
+            x, y, heading = tlm.pose  # [mm], [mm], [cdeg]
             # heading is centi-degrees (integer); convert to radians CCW-positive
-            yaw_rad = math.radians(h_cdeg / 100.0)
-            new_pose = Pose(x=float(x_mm), y=float(y_mm), heading=yaw_rad)
+            yaw_rad = math.radians(heading / 100.0)
+            new_pose = Pose(x=float(x), y=float(y), heading=yaw_rad)
         else:
             new_pose = prev.pose
 
@@ -575,8 +576,8 @@ class Nezha(Robot):
         # Raw OTOS pose (optional otos= field): x,y mm and heading centi-degrees,
         # same encoding as pose=. Kept separate from the fused pose above.
         if tlm.otos is not None:
-            ox_mm, oy_mm, oh_cdeg = tlm.otos
-            new_otos = (float(ox_mm), float(oy_mm), math.radians(oh_cdeg / 100.0))
+            ox, oy, oh = tlm.otos  # [mm], [mm], [cdeg]
+            new_otos = (float(ox), float(oy), math.radians(oh / 100.0))
         else:
             new_otos = prev.otos_pose
 
@@ -599,7 +600,7 @@ class Nezha(Robot):
     # ------------------------------------------------------------------
 
     def ping(self) -> tuple[int, float] | None:
-        """Send PING, return (t_robot_ms, rtt_ms) or None."""
+        """Send PING, return (t_robot, rtt) or None."""
         return self._proto.ping()
 
     def get_id(self) -> dict[str, str] | None:
@@ -622,9 +623,9 @@ class Nezha(Robot):
     # Telemetry
     # ------------------------------------------------------------------
 
-    def stream_tlm(self, period_ms: int) -> None:
+    def stream_tlm(self, period: int) -> None:  # [ms]
         """Enable TLM streaming at the given period (STREAM <ms>). 0 = off."""
-        self._proto.stream(period_ms)
+        self._proto.stream(period)
 
     def snap(self) -> None:
         """Request one immediate TLM frame (SNAP command).
@@ -685,9 +686,9 @@ class Nezha(Robot):
         """Reset OTOS Kalman filters (OR command)."""
         self._proto.otos_reset_tracking()
 
-    def set_world_pose(self, x_mm: int, y_mm: int, h_cdeg: int) -> None:
+    def set_world_pose(self, x: int, y: int, heading: int) -> None:  # [mm], [mm], [cdeg]
         """Set OTOS world-frame pose (OV command). Heading in centi-degrees."""
-        self._proto.otos_set_position(x_mm, y_mm, h_cdeg)
+        self._proto.otos_set_position(x, y, heading)
 
     def update_world_pose(self, x_cm: float, y_cm: float, yaw_rad: float) -> None:
         """Set the world-frame pose from camera-native units and record it in state.
@@ -705,9 +706,9 @@ class Nezha(Robot):
         Unit conventions
         ----------------
         Input  (camera-native): centimetres for x/y, radians for heading.
-        Wire   (firmware):      ``x_mm = round(x_cm * 10)``,
-                                ``y_mm = round(y_cm * 10)``,
-                                ``h_cdeg = round(degrees(yaw_rad) * 100)``.
+        Wire   (firmware):      ``x = round(x_cm * 10)``,
+                                ``y = round(y_cm * 10)``,
+                                ``heading = round(degrees(yaw_rad) * 100)``.
         Stored (state):         ``(x_cm, y_cm, yaw_rad)`` — camera units, unchanged.
 
         Parameters
@@ -719,10 +720,10 @@ class Nezha(Robot):
         yaw_rad:
             World heading in radians (CCW-positive, 0 = +x/east, camera frame).
         """
-        x_mm = round(x_cm * 10)
-        y_mm = round(y_cm * 10)
-        h_cdeg = round(math.degrees(yaw_rad) * 100)
-        self._proto.set_internal_pose(x_mm, y_mm, h_cdeg)
+        x = round(x_cm * 10)
+        y = round(y_cm * 10)
+        heading = round(math.degrees(yaw_rad) * 100)
+        self._proto.set_internal_pose(x, y, heading)
         prev = self.state
         self.state = RobotState(
             pose=prev.pose,
@@ -739,7 +740,7 @@ class Nezha(Robot):
         )
 
     def read_otos_pose(self) -> tuple[int, int, int] | None:
-        """Query current OTOS pose (OP command). Returns (x_mm, y_mm, h_cdeg) or None."""
+        """Query current OTOS pose (OP command). Returns (x, y, heading) or None."""
         return self._proto.otos_get_position()
 
     def set_otos_linear_scalar(self, val: int) -> int | None:

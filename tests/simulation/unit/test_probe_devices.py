@@ -111,7 +111,7 @@ class TestProbeDevicesHelloProtocol:
 
         p_serial, p_ports = _patch_probe({"/dev/cu.usbmodemFAKE": fake})
         with p_serial, p_ports:
-            serial_conn.probe_devices(read_ms=300)
+            serial_conn.probe_devices(read_timeout=300)
 
         sent = fake.written_text()
         assert "HELLO" in sent, f"HELLO not sent: {sent}"
@@ -131,7 +131,7 @@ class TestProbeDevicesHelloProtocol:
 
         p_serial, p_ports = _patch_probe({"/dev/cu.usbmodemFAKE": fake})
         with p_serial, p_ports:
-            results = serial_conn.probe_devices(read_ms=300)
+            results = serial_conn.probe_devices(read_timeout=300)
 
         assert len(results) == 1
         assert results[0]["responsive"] is True
@@ -145,7 +145,7 @@ class TestProbeDevicesHelloProtocol:
 
         p_serial, p_ports = _patch_probe({"/dev/cu.usbmodemFAKE": fake})
         with p_serial, p_ports:
-            results = serial_conn.probe_devices(read_ms=150)
+            results = serial_conn.probe_devices(read_timeout=150)
 
         assert len(results) == 1
         assert results[0]["responsive"] is False
@@ -160,7 +160,7 @@ class TestProbeDevicesHelloProtocol:
 
         p_serial, p_ports = _patch_probe({"/dev/cu.usbmodemFAKE": fake})
         with p_serial, p_ports:
-            results = serial_conn.probe_devices(read_ms=300)
+            results = serial_conn.probe_devices(read_timeout=300)
 
         assert len(results) == 1
         entry = results[0]
@@ -181,7 +181,7 @@ class TestProbeDevicesHelloProtocol:
             "/dev/cu.usbmodemB": fake_silent,
         })
         with p_serial, p_ports:
-            results = serial_conn.probe_devices(read_ms=250)
+            results = serial_conn.probe_devices(read_timeout=250)
 
         by_port = {r["port"]: r for r in results}
         assert by_port["/dev/cu.usbmodemA"]["responsive"] is True

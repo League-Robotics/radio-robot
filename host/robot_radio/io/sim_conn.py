@@ -12,7 +12,7 @@ Usage::
     conn.connect()
     proto = NezhaProtocol(conn)
     proto.timed(200, 200, 2500)
-    proto.wait_for_evt_done("T", timeout_ms=5000)
+    proto.wait_for_evt_done("T", timeout=5000)
     df = conn.state_df()   # pandas DataFrame of time-series state
 
 The sim backend advances wall-clock time explicitly: every call to
@@ -48,9 +48,9 @@ class SimConnection:
     Supports the same interface as SerialConnection so NezhaProtocol
     works unchanged:
       - connect() / disconnect()
-      - send(message, read_ms, stop_token) -> dict
+      - send(message, read_timeout, stop_token) -> dict
       - send_fast(message) -> None
-      - read_lines(duration_ms, stop_token) -> list[str]
+      - read_lines(duration, stop_token) -> list[str]
       - is_open property
       - mode property
 
@@ -66,11 +66,11 @@ class SimConnection:
     """
 
     def __init__(self, lib_path: str | pathlib.Path | None = None,
-                 tick_step_ms: int = _DEFAULT_TICK_MS,
+                 tick_step: int = _DEFAULT_TICK_MS,  # [ms]
                  real_time: bool = False,
                  speed_factor: float = 1.0) -> None:
         self._lib_path = pathlib.Path(lib_path) if lib_path else _DEFAULT_LIB
-        self._tick_step_ms = tick_step_ms
+        self._tick_step = tick_step
         self._real_time = real_time
         self._speed_factor = speed_factor
         self._lib: ctypes.CDLL | None = None
@@ -117,7 +117,7 @@ class SimConnection:
             return {"error": "sim_create() returned NULL"}
 
         if not skip_ping:
-            resp = self.send("PING", read_ms=200)
+            resp = self.send("PING", read_timeout=200)
             if not any("pong" in l for l in resp.get("responses", [])):
                 return {"error": "PING failed — sim may not have initialised"}
 
@@ -133,9 +133,9 @@ class SimConnection:
         return {"status": "disconnected", "ticks": self._t}
 
     def send(self, message: str,
-             read_ms: int = 500,
+             read_timeout: int = 500,  # [ms]
              stop_token: str | None = "OK") -> dict[str, Any]:
-        """Send a command; advance sim for read_ms collecting EVTs.
+        """Send a command; advance sim for read_timeout collecting EVTs.
 
         Mirrors SerialConnection.send() return shape:
             {"sent": ..., "mode": "sim", "responses": [line, ...]}
@@ -154,7 +154,7 @@ class SimConnection:
         lines: list[str] = [l for l in sync.strip().split("\n") if l.strip()] if sync else []
 
         # Collect additional EVTs by advancing time; stop early on stop_token.
-        evts = self._advance(read_ms, stop_token, existing_lines=lines)
+        evts = self._advance(read_timeout, stop_token, existing_lines=lines)
         lines.extend(evts)
 
         return {"sent": message, "mode": "sim", "responses": lines}
@@ -165,17 +165,17 @@ class SimConnection:
             raise ConnectionError("Not connected. Call connect() first.")
         self._raw_command(message)
 
-    def read_lines(self, duration_ms: int = 500,
+    def read_lines(self, duration: int = 500,  # [ms]
                    stop_token: str | None = None) -> list[str]:
-        """Tick the sim for duration_ms, collecting and returning EVT lines.
+        """Tick the sim for duration, collecting and returning EVT lines.
 
         This is the hook that NezhaProtocol.wait_for_evt_done() calls
-        repeatedly (with duration_ms=100) to poll for EVT done T/D/TURN.
+        repeatedly (with duration=100) to poll for EVT done T/D/TURN.
         Each 100 ms block advances sim time and records state into state_log.
         """
         if not self.is_open:
             return []
-        return self._advance(duration_ms, stop_token)
+        return self._advance(duration, stop_token)
 
     def read_pending_lines(self) -> list[str]:
         """Non-blocking drain — always empty in sim (no buffered input concept).
@@ -212,19 +212,19 @@ class SimConnection:
         self._lib.sim_set_motor_offset(self._h, ctypes.c_int(side),
                                        ctypes.c_float(factor))
 
-    def set_enc(self, l_mm: float, r_mm: float) -> None:
+    def set_enc(self, left: float, right: float) -> None:  # [mm]
         """Directly inject encoder positions (zeroes physics history)."""
         if not self.is_open:
             raise ConnectionError("Not connected")
-        self._lib.sim_set_enc_l(self._h, ctypes.c_float(l_mm))
-        self._lib.sim_set_enc_r(self._h, ctypes.c_float(r_mm))
+        self._lib.sim_set_enc_l(self._h, ctypes.c_float(left))
+        self._lib.sim_set_enc_r(self._h, ctypes.c_float(right))
 
-    def set_otos_pose(self, x_mm: float, y_mm: float, h_rad: float) -> None:
+    def set_otos_pose(self, x: float, y: float, h_rad: float) -> None:  # [mm]
         """Inject an OTOS pose reading for the next otosCorrect() call."""
         if not self.is_open:
             raise ConnectionError("Not connected")
-        self._lib.sim_set_otos_pose(self._h, ctypes.c_float(x_mm),
-                                    ctypes.c_float(y_mm), ctypes.c_float(h_rad))
+        self._lib.sim_set_otos_pose(self._h, ctypes.c_float(x),
+                                    ctypes.c_float(y), ctypes.c_float(h_rad))
 
     def get_exact_pose(self) -> dict:
         """Return oracle ground truth pose from ExactPoseTracker.
@@ -249,14 +249,14 @@ class SimConnection:
         self._lib.sim_set_motor_slip(self._h, ctypes.c_int(2),
                                      ctypes.c_float(straight), ctypes.c_float(turn_extra))
 
-    def set_encoder_noise(self, sigma_mm: float = 0.05) -> None:
+    def set_encoder_noise(self, sigma: float = 0.05) -> None:  # [mm]
         """Apply Gaussian encoder noise to both wheels.
 
-        sigma_mm: standard deviation of per-tick encoder noise in mm.
+        sigma: standard deviation of per-tick encoder noise in mm.
         """
         if not self.is_open:
             raise ConnectionError("Not connected")
-        self._lib.sim_set_encoder_noise(self._h, ctypes.c_int(2), ctypes.c_float(sigma_mm))
+        self._lib.sim_set_encoder_noise(self._h, ctypes.c_int(2), ctypes.c_float(sigma))
 
     def enable_otos_model(self) -> None:
         """Enable the OTOS simulation model (integrates true velocities with noise)."""
@@ -306,8 +306,9 @@ class SimConnection:
     def state_log(self) -> list[dict[str, float]]:
         """Time-series state recorded during ticking.
 
-        Each entry: {time_ms, vel_l, vel_r, enc_l, enc_r, pose_x, pose_y, pose_h}
-        pose_h is in radians (raw from dead-reckoning odometry).
+        Each entry: {time, vel_l, vel_r, enc_l, enc_r, pose_x, pose_y, pose_h}
+        (``time`` in ms). pose_h is in radians (raw from dead-reckoning
+        odometry).
         """
         return self._state_log
 
@@ -315,7 +316,8 @@ class SimConnection:
         """Return state_log as a pandas DataFrame.
 
         Requires pandas to be installed.  Columns:
-            time_ms, vel_l, vel_r, enc_l, enc_r, pose_x, pose_y, pose_h
+            time, vel_l, vel_r, enc_l, enc_r, pose_x, pose_y, pose_h
+            (``time`` in ms)
         """
         import pandas as pd  # local import — not a hard dependency
         return pd.DataFrame(self._state_log)
@@ -347,9 +349,9 @@ class SimConnection:
         n = self._lib.sim_get_async_evts(self._h, buf, 2048)
         return buf.raw[:n].decode(errors="replace") if n > 0 else ""
 
-    def _advance(self, total_ms: int, stop_token: str | None = None,
+    def _advance(self, total: int, stop_token: str | None = None,  # [ms]
                  existing_lines: list[str] | None = None) -> list[str]:
-        """Tick the sim for total_ms ms, recording state each step.
+        """Tick the sim for total ms, recording state each step.
 
         Returns EVT lines accumulated during the advance.  If stop_token
         is set, returns as soon as a line containing stop_token is seen.
@@ -362,8 +364,8 @@ class SimConnection:
         if stop_token and existing_lines and any(stop_token in l for l in existing_lines):
             return lines
 
-        step = self._tick_step_ms
-        end_t = self._t + total_ms
+        step = self._tick_step
+        end_t = self._t + total
 
         while self._t < end_t:
             dt = min(step, end_t - self._t)
@@ -388,7 +390,7 @@ class SimConnection:
         """Read all sim state getters into a single dict."""
         lib, h = self._lib, self._h
         return {
-            "time_ms":      float(self._t),
+            "time":         float(self._t),  # [ms]
             "vel_l":        float(lib.sim_get_vel_l(h)),
             "vel_r":        float(lib.sim_get_vel_r(h)),
             "enc_l":        float(lib.sim_get_enc_l(h)),

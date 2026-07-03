@@ -2,7 +2,7 @@
 id: '001'
 title: 'Transport primitives: rename unit-suffixed parameters in serial and ctypes-sim
   transport'
-status: open
+status: done
 use-cases:
 - SUC-001
 depends-on: []
@@ -59,24 +59,62 @@ Total scope: 48 rename-eligible occurrences (Step 3).
 
 ## Acceptance Criteria
 
-- [ ] `io/serial_conn.py`'s `SerialConnection.send` (and any sibling method
+- [x] `io/serial_conn.py`'s `SerialConnection.send` (and any sibling method
       carrying the same parameter) renames `read_ms` → `read_timeout`, with
       a `# [ms]` comment at the declaration.
-- [ ] `io/sim_conn.py`'s ctypes-wrapper Python-side parameter/local names are
+- [x] `io/sim_conn.py`'s ctypes-wrapper Python-side parameter/local names are
       renamed to match `io/serial_conn.py`'s renamed names (the two modules
       present the same transport contract to their callers).
-- [ ] `io/preview.py` is reviewed and confirmed to have zero unit-suffixed
+- [x] `io/preview.py` is reviewed and confirmed to have zero unit-suffixed
       identifiers before and after this ticket's edits (no edit expected).
-- [ ] No `extern "C"` ctypes ABI function name is renamed — only
+- [x] No `extern "C"` ctypes ABI function name is renamed — only
       `io/sim_conn.py`'s own Python-side parameter/local names change.
-- [ ] Every `read_ms=` (or positional `read_ms`) call site **inside this
+- [x] Every `read_ms=` (or positional `read_ms`) call site **inside this
       ticket's three files** (`serial_conn.py`, `sim_conn.py`, `preview.py`)
       is updated to `read_timeout` in this same ticket.
-- [ ] `grep -rn "read_ms\b" host/robot_radio/io/serial_conn.py
+- [x] `grep -rn "read_ms\b" host/robot_radio/io/serial_conn.py
       host/robot_radio/io/sim_conn.py host/robot_radio/io/preview.py`
       returns zero results after this ticket (excluding this ticket's own
       historical commit messages).
-- [ ] Hard Contract above holds.
+- [x] Hard Contract above holds.
+
+**Implementation note (scope expansion beyond the 3-file list, required by
+the Hard Contract's "full suite green throughout"):** Renaming
+`SerialConnection`/`SimConnection`'s `send()`/`read_lines()` parameters is a
+breaking change for every **keyword** call site anywhere in the repo (Python
+keyword arguments are part of a function's calling contract). Since this
+ticket's file set (per Step 2/Step 3 of `architecture-update.md`) is the
+**only** ticket in this sprint that touches `io/sim_conn.py`/
+`io/serial_conn.py` — ticket 011's final sweep explicitly does not revisit
+these two files — this ticket renamed **every** unit-suffixed identifier
+census-matched in these two files (all 48: `read_ms`, `duration_ms`,
+`tick_step_ms`, `l_mm`/`r_mm`, `x_mm`/`y_mm`, `sigma_mm`, `total_ms`, and the
+host-internal `time_ms` state-log dict key), not just `read_ms`, so no
+residual is left behind for a ticket that will never revisit this file.
+Doing so required updating the **direct-connection keyword call sites**
+(`self._conn.send(..., read_ms=…)`, `self._conn.read_lines(...,
+duration_ms=…)`, `conn.send(...)`, `serial_conn.probe_devices(...)`,
+`SimConnection.set_otos_pose(...)`) in `robot/protocol.py`, `robot/cutebot.py`,
+`robot/nezha.py`, `testgui/transport.py`, `sensors/calibration.py`,
+`sensors/odom_tracker.py`, `io/calibrate.py`, `io/cli.py`, `io/robot_mcp.py`,
+`calibration/push.py`, and the `tests/simulation/unit/` test files that call
+the connection layer directly or assert on its call signature
+(`test_066_002_sim_conn_buffer.py`, `test_cli.py`, `test_probe_devices.py`,
+`test_protocol_v2.py`, `test_serial_conn_id_snap_routing.py`,
+`test_serial_conn_reader.py`, `test_serial_relay_handshake.py`,
+`test_testkit.py`) — **keyword name only**, never the calling function's own
+still-unrenamed parameter declaration (e.g. `NezhaProtocol.send`'s own
+`read_ms` parameter, `Transport.command`'s own `read_ms` parameter,
+`OdomTracker.drain`'s own `duration_ms` parameter all remain, correctly,
+for their owning tickets — 002, 007, 004 respectively — to rename). Verified
+empirically: without these call-site fixes, `uv run python -m pytest -q`
+failed with 35, then 55, real `TypeError`s; with them, both baselines
+(2682 passed / 579 passed 2 xfailed) hold. `sim_conn.py`'s own module
+docstring usage example (`proto.wait_for_evt_done("T", timeout_ms=5000)`)
+documents `NezhaProtocol`'s own `timeout_ms` parameter (ticket 002's
+declaration, not this file's) and is intentionally left unchanged — ticket
+002's implementer should double check this docstring example when renaming
+`wait_for_evt_done`.
 
 ## Testing
 

@@ -7,7 +7,7 @@ snapshot.  Built by ``Nezha._apply_tlm`` from each incoming TLM frame.
 Unit conventions:
     pose.x / pose.y  : millimetres (body-frame OTOS position, matching TLM)
     pose.heading     : radians (CCW-positive, standard maths convention)
-    encoders         : (left_mm, right_mm) cumulative encoder totals in mm
+    encoders         : (left, right) cumulative encoder totals in mm
     twist            : (v_mmps, omega_mradps) fused body-frame velocity
     line             : (g1, g2, g3, g4) raw line-sensor ADC counts
     color            : (r, g, b, c) raw colour-sensor ADC counts
@@ -40,7 +40,7 @@ class RobotState:
         (matching the TLM wire format); ``heading`` is in radians
         (CCW-positive).
     encoders:
-        Cumulative encoder totals as ``(left_mm, right_mm)`` in mm, or
+        Cumulative encoder totals as ``(left, right)`` in mm, or
         ``None`` if no encoder frame has been received yet.
     twist:
         Fused body-frame velocity as ``(v_mmps, omega_mradps)``, or ``None``
@@ -75,7 +75,7 @@ class RobotState:
     line: tuple[int, int, int, int] | None = None
     color: tuple[int, int, int, int] | None = None
     world_pose: tuple[float, float, float] | None = None
-    # Raw OTOS (optical odometry sensor) pose as ``(x_mm, y_mm, yaw_rad)``,
+    # Raw OTOS (optical odometry sensor) pose as ``(x, y, yaw_rad)``,
     # pre-fusion, from the TLM ``otos=`` field — distinct from ``pose`` (the
     # encoder/EKF-fused pose).  ``None`` until an ``otos=`` field is seen (the
     # firmware omits it when the OTOS read is stale/invalid, e.g. lifted).

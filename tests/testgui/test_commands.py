@@ -220,48 +220,103 @@ class TestBuildWireStringR:
 class TestBuildWireStringTURN:
     """TURN <heading_cdeg> [eps=<eps_cdeg>]
 
-    heading and eps are in centidegrees on the wire.
+    heading and eps are entered in degrees but sent in centidegrees.
     """
 
-    def test_turn_heading_cdeg(self):
-        """Heading value in cdeg goes through as-is."""
+    def test_turn_heading_deg_to_cdeg(self):
+        """Heading entered in degrees is converted to cdeg on the wire."""
         from robot_radio.testgui.commands import COMMANDS, build_wire_string
         spec = next(s for s in COMMANDS if s["label"] == "TURN")
-        result = build_wire_string(spec, {"heading": 9000, "eps": 0})
+        result = build_wire_string(spec, {"heading": 90, "eps": 0})
         assert result == "TURN 9000"
 
     def test_turn_no_eps_when_zero(self):
         """eps=0 → omitted from wire string."""
         from robot_radio.testgui.commands import COMMANDS, build_wire_string
         spec = next(s for s in COMMANDS if s["label"] == "TURN")
-        result = build_wire_string(spec, {"heading": 4500, "eps": 0})
+        result = build_wire_string(spec, {"heading": 45, "eps": 0})
         assert result == "TURN 4500"
 
     def test_turn_with_nonzero_eps(self):
         """Non-zero eps appears as eps=<cdeg>."""
         from robot_radio.testgui.commands import COMMANDS, build_wire_string
         spec = next(s for s in COMMANDS if s["label"] == "TURN")
-        result = build_wire_string(spec, {"heading": 9000, "eps": 300})
+        result = build_wire_string(spec, {"heading": 90, "eps": 3})
         assert result == "TURN 9000 eps=300"
 
     def test_turn_negative_heading(self):
         from robot_radio.testgui.commands import COMMANDS, build_wire_string
         spec = next(s for s in COMMANDS if s["label"] == "TURN")
-        result = build_wire_string(spec, {"heading": -9000, "eps": 0})
+        result = build_wire_string(spec, {"heading": -90, "eps": 0})
         assert result == "TURN -9000"
 
     def test_turn_max_heading(self):
         from robot_radio.testgui.commands import COMMANDS, build_wire_string
         spec = next(s for s in COMMANDS if s["label"] == "TURN")
-        result = build_wire_string(spec, {"heading": 18000, "eps": 0})
+        result = build_wire_string(spec, {"heading": 180, "eps": 0})
         assert result == "TURN 18000"
 
     def test_turn_eps_small(self):
-        """Small eps value (10 cdeg = 0.1°) is included."""
+        """Smallest non-zero eps (1° = 100 cdeg) is included."""
         from robot_radio.testgui.commands import COMMANDS, build_wire_string
         spec = next(s for s in COMMANDS if s["label"] == "TURN")
-        result = build_wire_string(spec, {"heading": 0, "eps": 10})
-        assert result == "TURN 0 eps=10"
+        result = build_wire_string(spec, {"heading": 0, "eps": 1})
+        assert result == "TURN 0 eps=100"
+
+
+class TestTurnHeadingWrap:
+    """TURN heading accepts any angle; out-of-range wraps onto (-180, 180].
+
+    Stakeholder bug 2026-07-03: the GUI clamped heading at ±180, so values
+    like 270 could not be entered at all.  The spinbox now spans ±3600 and
+    the wire builder maps any angle onto the equivalent absolute heading.
+    """
+
+    def _spec(self):
+        from robot_radio.testgui.commands import COMMANDS
+        return next(s for s in COMMANDS if s["label"] == "TURN")
+
+    def test_heading_spinbox_range_exceeds_180(self):
+        """The UI range must allow entry beyond ±180 (the original bug)."""
+        heading = next(p for p in self._spec()["params"] if p["name"] == "heading")
+        assert heading["min"] <= -360
+        assert heading["max"] >= 360
+
+    def test_270_wraps_to_minus_90(self):
+        from robot_radio.testgui.commands import build_wire_string
+        assert build_wire_string(self._spec(), {"heading": 270, "eps": 0}) == "TURN -9000"
+
+    def test_minus_270_wraps_to_90(self):
+        from robot_radio.testgui.commands import build_wire_string
+        assert build_wire_string(self._spec(), {"heading": -270, "eps": 0}) == "TURN 9000"
+
+    def test_450_wraps_to_90(self):
+        from robot_radio.testgui.commands import build_wire_string
+        assert build_wire_string(self._spec(), {"heading": 450, "eps": 0}) == "TURN 9000"
+
+    def test_360_wraps_to_0(self):
+        from robot_radio.testgui.commands import build_wire_string
+        assert build_wire_string(self._spec(), {"heading": 360, "eps": 0}) == "TURN 0"
+
+    def test_540_wraps_to_180(self):
+        """Wrap lands on (-180, 180]: 540 ≡ 180, sent as +18000 not -18000."""
+        from robot_radio.testgui.commands import build_wire_string
+        assert build_wire_string(self._spec(), {"heading": 540, "eps": 0}) == "TURN 18000"
+
+    def test_181_wraps_to_minus_179(self):
+        from robot_radio.testgui.commands import build_wire_string
+        assert build_wire_string(self._spec(), {"heading": 181, "eps": 0}) == "TURN -17900"
+
+    def test_in_range_values_pass_through_unchanged(self):
+        """Values already in [-180, 180] are sent exactly as typed,
+        including both edge representations 180 and -180."""
+        from robot_radio.testgui.commands import build_wire_string
+        assert build_wire_string(self._spec(), {"heading": 180, "eps": 0}) == "TURN 18000"
+        assert build_wire_string(self._spec(), {"heading": -180, "eps": 0}) == "TURN -18000"
+
+    def test_wrap_composes_with_eps(self):
+        from robot_radio.testgui.commands import build_wire_string
+        assert build_wire_string(self._spec(), {"heading": 270, "eps": 3}) == "TURN -9000 eps=300"
 
 
 class TestBuildWireStringRT:
@@ -341,7 +396,7 @@ class TestBuildWireStringDefaults:
         from robot_radio.testgui.commands import COMMANDS, build_wire_string
         spec = next(s for s in COMMANDS if s["label"] == "TURN")
         result = build_wire_string(spec, {})
-        # Default heading=9000, eps=0 (omitted)
+        # Default heading=90 deg (9000 cdeg on the wire), eps=0 (omitted)
         assert "eps" not in result
 
 

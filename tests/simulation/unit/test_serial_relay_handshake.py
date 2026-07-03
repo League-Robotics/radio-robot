@@ -249,7 +249,7 @@ class TestRelayHandshake:
             conn.connect()
             # Inject a reply for the subsequent send().
             fake.inject("OK pong #2")
-            conn.send("PING", read_ms=200)
+            conn.send("PING", read_timeout=200)
             conn.disconnect()
 
         sent = fake.written_text()
@@ -291,7 +291,7 @@ class TestRelayHandshake:
 
             # send() should get only the OK pong, not the # lines.
             fake.inject("OK pong t=99 #3")
-            result = conn.send("PING", read_ms=300)
+            result = conn.send("PING", read_timeout=300)
             conn.disconnect()
 
         responses = result.get("responses", [])
@@ -479,7 +479,7 @@ class TestDirectRobotHandshake:
         with _patch_serial(fake):
             conn.connect()
             fake.inject("OK id model=Nezha2 #2")
-            conn.send("ID", read_ms=200)
+            conn.send("ID", read_timeout=200)
             conn.disconnect()
 
         sent = fake.written_text()
@@ -602,7 +602,7 @@ class TestBannerNotDroppedByReader:
             fake.inject("# some relay status")
             fake.inject("OK pong t=2 #2")
 
-            result = conn.send("PING", read_ms=300)
+            result = conn.send("PING", read_timeout=300)
             conn.disconnect()
 
         responses = result.get("responses", [])
@@ -706,7 +706,7 @@ class TestCorrIdAndKeepaliveRelay:
 
         fake.inject("OK snap #2")
         with _patch_serial(fake):
-            conn.send("SNAP", read_ms=200)
+            conn.send("SNAP", read_timeout=200)
             conn.disconnect()
 
         sent = fake.written_text()

@@ -25,7 +25,7 @@ def _sign(v: int) -> str:
 
 
 def _parse_enc(line: str) -> tuple[int, int] | None:
-    """Parse 'ENC <left> <right>' line into (left_mm, right_mm).
+    """Parse 'ENC <left> <right>' line into (left, right).
     Tolerates relay prefix (e.g. '<ENC 100 200')."""
     # Strip leading non-alpha chars (relay prefix like '<' or '# ')
     stripped = line.lstrip("<# ")
@@ -47,7 +47,7 @@ class Cutebot(Robot):
     def is_connected(self) -> bool:
         return self._conn.is_open
 
-    def speed(self, left_mms: int, right_mms: int) -> Generator[tuple[int, int], None, None]:
+    def speed(self, left: int, right: int) -> Generator[tuple[int, int], None, None]:  # [mm/s]
         """Non-blocking PID speed. Yields encoder positions as they stream.
 
         The firmware streams ENC reports every ~50ms while motors run.
@@ -55,11 +55,11 @@ class Cutebot(Robot):
         so this generator re-sends S periodically to keep motors alive.
         Close the generator to stop.
         """
-        cmd = f"S{_sign(left_mms)}{_sign(right_mms)}"
+        cmd = f"S{_sign(left)}{_sign(right)}"
         try:
             self._conn.send_fast(cmd)
             while True:
-                lines = self._conn.read_lines(duration_ms=100)
+                lines = self._conn.read_lines(duration=100)
                 for line in lines:
                     enc = _parse_enc(line)
                     if enc:
@@ -78,19 +78,19 @@ class Cutebot(Robot):
                 pass
             deadline = time.time() + 0.5
             while time.time() < deadline:
-                lines = self._conn.read_lines(duration_ms=100)
+                lines = self._conn.read_lines(duration=100)
                 for line in lines:
                     if "SAFETY_STOP" in line or "LOG:X" in line:
                         return
 
-    def _send_and_wait_enc(self, cmd: str, timeout_ms: int) -> tuple[int, int]:
+    def _send_and_wait_enc(self, cmd: str, timeout: int) -> tuple[int, int]:  # [ms]
         """Send command, read lines until ENC response arrives.
         If the ENC response is lost (radio is unreliable), fall back
         to sending an explicit ENC command to read encoders."""
         self._conn.send_fast(cmd)
-        deadline = time.time() + timeout_ms / 1000.0
+        deadline = time.time() + timeout / 1000.0
         while time.time() < deadline:
-            lines = self._conn.read_lines(duration_ms=200)
+            lines = self._conn.read_lines(duration=200)
             for line in lines:
                 enc = _parse_enc(line)
                 if enc:
@@ -103,19 +103,20 @@ class Cutebot(Robot):
             time.sleep(0.1)
         return self.read_encoders()
 
-    def speed_for_time(self, left_mms: int, right_mms: int, ms: int) -> tuple[int, int]:
+    def speed_for_time(self, left: int, right: int, ms: int) -> tuple[int, int]:  # [mm/s]
         """Blocking: drive at speed for ms milliseconds. Returns final encoder (mm)."""
-        cmd = f"T{_sign(left_mms)}{_sign(right_mms)}{_sign(ms)}"
+        cmd = f"T{_sign(left)}{_sign(right)}{_sign(ms)}"
         return self._send_and_wait_enc(cmd, ms + 2000)
 
-    def speed_for_distance(self, left_mms: int, right_mms: int, mm: int) -> tuple[int, int]:
+    def speed_for_distance(self, left: int, right: int, mm: int) -> tuple[int, int]:  # [mm/s]
         """Blocking: drive at speed until distance. Returns final encoder (mm)."""
-        cmd = f"D{_sign(left_mms)}{_sign(right_mms)}{_sign(mm)}"
-        min_speed = max(abs(left_mms), abs(right_mms), 1)
-        timeout_ms = int(mm / min_speed * 1000) + 3000
-        return self._send_and_wait_enc(cmd, min(timeout_ms, 8000))
+        cmd = f"D{_sign(left)}{_sign(right)}{_sign(mm)}"
+        min_speed = max(abs(left), abs(right), 1)
+        timeout = int(mm / min_speed * 1000) + 3000
+        return self._send_and_wait_enc(cmd, min(timeout, 8000))
 
-    def go_to(self, x_mm: int, y_mm: int, speed_mms: int,
+    def go_to(self, x: int, y: int,  # [mm]
+              speed: int,  # [mm/s]
               timeout_s: float = 15.0) -> tuple[int, int, str]:
         """Blocking go-to (G command) — pure-pursuit arc to relative (X, Y) in mm.
 
@@ -123,17 +124,17 @@ class Cutebot(Robot):
         straight line after rotation).  Completion is signalled by the
         firmware emitting G+DONE; G+TIMEOUT indicates the deadline fired.
 
-        Returns (left_enc_mm, right_enc_mm, outcome) where outcome is
+        Returns (left_enc, right_enc, outcome) where outcome is
         "DONE" or "TIMEOUT" (or "HOST_TIMEOUT" if our own wait expired).
         """
-        speed = max(abs(speed_mms), 1)
-        cmd = f"G{_sign(x_mm)}{_sign(y_mm)}{_sign(speed)}"
-        self._conn.send(cmd, read_ms=300)
+        speed = max(abs(speed), 1)
+        cmd = f"G{_sign(x)}{_sign(y)}{_sign(speed)}"
+        self._conn.send(cmd, read_timeout=300)
 
         deadline = time.time() + timeout_s
         outcome = "HOST_TIMEOUT"
         while time.time() < deadline:
-            lines = self._conn.read_lines(duration_ms=200)
+            lines = self._conn.read_lines(duration=200)
             done = False
             for line in lines:
                 # Relay responses are prefixed with '<'; strip it before matching.
@@ -158,56 +159,56 @@ class Cutebot(Robot):
     POS_MODE_CCW      = 2
     POS_MODE_SHORTEST = 3
 
-    def rotate(self, l_deg: float | None, r_deg: float | None,
-               speed_pct: int) -> dict:
+    def rotate(self, left: float | None, right: float | None,  # [deg]
+               speed: int) -> dict:  # [%]
         """Send a PR (relative rotate) command and return immediately.
 
-        ``l_deg`` / ``r_deg`` are signed degrees from current position.
+        ``left`` / ``right`` are signed degrees from current position.
         ``None`` for either argument means "skip that wheel" (the
-        firmware just leaves it where it is).  ``speed_pct`` is 1..100
+        firmware just leaves it where it is).  ``speed`` is 1..100
         of max servo speed.
 
         Does NOT wait for completion — the motor controller runs the
         move autonomously.  Returns the raw firmware response dict
         (with the ACK line).
         """
-        speed = max(min(abs(speed_pct), 100), 1)
+        speed = max(min(abs(speed), 100), 1)
         # PR skip sentinel = 0 (no rotation to do).
-        l_tenths = 0 if l_deg is None else int(round(l_deg * 10))
-        r_tenths = 0 if r_deg is None else int(round(r_deg * 10))
+        l_tenths = 0 if left is None else int(round(left * 10))
+        r_tenths = 0 if right is None else int(round(right * 10))
         cmd = f"ROT{_sign(l_tenths)}{_sign(r_tenths)}{_sign(speed)}"
         left_enc, right_enc = robot.read_encoders()
 
-        return self._conn.send(cmd, read_ms=300)
+        return self._conn.send(cmd, read_timeout=300)
 
-    def angle(self, l_deg: float | None, r_deg: float | None,
-              mode: int, speed_pct: int) -> dict:
+    def angle(self, left: float | None, right: float | None,  # [deg]
+              mode: int, speed: int) -> dict:  # [%]
         """Send a PA (absolute angle) command and return immediately.
 
-        ``l_deg`` / ``r_deg`` are 0..360°.  ``None`` for either means
+        ``left`` / ``right`` are 0..360°.  ``None`` for either means
         "skip that wheel".  ``mode`` is POS_MODE_CW, POS_MODE_CCW, or
         POS_MODE_SHORTEST.
 
         Does NOT wait for completion.
         """
-        speed = max(min(abs(speed_pct), 100), 1)
+        speed = max(min(abs(speed), 100), 1)
         # PA skip sentinel = -1 (since 0 is a valid absolute angle).
-        l_tenths = -1 if l_deg is None else int(round(l_deg * 10)) % 3600
-        r_tenths = -1 if r_deg is None else int(round(r_deg * 10)) % 3600
+        l_tenths = -1 if left is None else int(round(left * 10)) % 3600
+        r_tenths = -1 if right is None else int(round(right * 10)) % 3600
         cmd = f"ANG{_sign(l_tenths)}{_sign(r_tenths)}{_sign(mode)}{_sign(speed)}"
-        return self._conn.send(cmd, read_ms=300)
+        return self._conn.send(cmd, read_timeout=300)
 
     def _legacy_await_position(self, cmd: str, timeout_s: float) -> tuple[int, int, str]:
         """Legacy: send a position command and wait for P+DONE/TIMEOUT.
         Kept for callers that actually want to block until the move
         finishes (typically only the calibration tests)."""
-        self._conn.send(cmd, read_ms=300)
+        self._conn.send(cmd, read_timeout=300)
         deadline = time.time() + timeout_s
         outcome = "HOST_TIMEOUT"
         actual_l = 0
         actual_r = 0
         while time.time() < deadline:
-            lines = self._conn.read_lines(duration_ms=200)
+            lines = self._conn.read_lines(duration=200)
             done = False
             for line in lines:
                 s = str(line).lstrip("<# ")
@@ -233,15 +234,15 @@ class Cutebot(Robot):
         # Use blocking send (waits for ACK) — fire-and-forget can be
         # discarded by the OS USB driver before bytes drain if the CLI
         # exits immediately after.
-        self._conn.send(f"G{_sign(angle)}", read_ms=300)
+        self._conn.send(f"G{_sign(angle)}", read_timeout=300)
 
     def read_encoders(self) -> tuple[int, int]:
         """Read encoder positions in whole degrees.
 
-        Returns (left_deg, right_deg).  To convert to mm, multiply by
+        Returns (left, right).  To convert to mm, multiply by
         the wheel's mm/deg ratio.
         """
-        resp = self._conn.send("ENC", read_ms=200)
+        resp = self._conn.send("ENC", read_timeout=200)
         for line in resp.get("responses", []):
             enc = _parse_enc(line)
             if enc:
@@ -249,10 +250,10 @@ class Cutebot(Robot):
         return (0, 0)
 
     def zero_encoders(self) -> None:
-        self._conn.send("EZ", read_ms=200)
+        self._conn.send("EZ", read_timeout=200)
 
-    def send(self, message: str, read_ms: int = 500) -> dict[str, Any]:
-        return self._conn.send(message, read_ms)
+    def send(self, message: str, read_timeout: int = 500) -> dict[str, Any]:  # [ms]
+        return self._conn.send(message, read_timeout)
 
     @property
     def gripper_offset(self) -> float:

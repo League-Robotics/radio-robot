@@ -195,7 +195,7 @@ class TestFirmwarePose:
 
         tr = make_target("sim", sim_otos=False)
         # Inject a known OTOS pose directly via the sim.
-        tr.conn.set_otos_pose(x_mm=100.0, y_mm=200.0, h_rad=0.5)
+        tr.conn.set_otos_pose(x=100.0, y=200.0, h_rad=0.5)
         # Advance so the pose is processed.
         tr.conn.tick(100)
 

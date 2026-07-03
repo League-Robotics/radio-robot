@@ -353,7 +353,7 @@ class OdomTracker:
         import time
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            for line in conn.read_lines(duration_ms=100):
+            for line in conn.read_lines(duration=100):
                 v = parse_so(line)
                 if v is not None:
                     # Convert SO (mm) to TLM-like pose for anchoring.
@@ -365,7 +365,7 @@ class OdomTracker:
 
     def drain(self, conn, duration_ms: int = 40) -> None:
         """[DEPRECATED] Read all available SO lines (v1 legacy path)."""
-        self.feed(conn.read_lines(duration_ms=duration_ms))
+        self.feed(conn.read_lines(duration=duration_ms))
 
     def feed(self, lines) -> None:
         """[DEPRECATED] Process SO lines (v1 legacy path).

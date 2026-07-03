@@ -584,7 +584,6 @@ def _build_main_window():  # type: ignore[return]
                 spin.setRange(float(p_min), float(p_max))
                 spin.setValue(float(p_default))
                 spin.setDecimals(1)
-                spin.setSuffix(f" {unit}" if unit else "")
                 spin.setFixedWidth(80)
                 row_layout.addWidget(spin)
                 field_getters.append(lambda s=spin: s.value())
@@ -592,10 +591,13 @@ def _build_main_window():  # type: ignore[return]
                 spin = QSpinBox()
                 spin.setRange(int(p_min), int(p_max))
                 spin.setValue(int(p_default))
-                spin.setSuffix(f" {unit}" if unit else "")
                 spin.setFixedWidth(80)
                 row_layout.addWidget(spin)
                 field_getters.append(lambda s=spin: s.value())
+
+            # Unit label OUTSIDE the edit box (not a spin-box suffix).
+            if unit:
+                row_layout.addWidget(QLabel(unit))
 
         row_layout.addStretch()
 
@@ -698,9 +700,10 @@ def _build_main_window():  # type: ignore[return]
         sp = QSpinBox()
         sp.setRange(lo, hi)
         sp.setValue(default)
-        sp.setSuffix(f" {unit}")
         sp.setFixedWidth(80)
         goto_layout.addWidget(sp)
+        # Unit label OUTSIDE the edit box (not a spin-box suffix).
+        goto_layout.addWidget(QLabel(unit))
         return sp
 
     goto_x_spin = _make_goto_spin("x", 0, -10000, 10000, "mm")

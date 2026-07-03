@@ -340,39 +340,39 @@ class TestCommandEncoding:
     def test_timed_positive(self) -> None:
         proto, conn = _proto(["OK drive l=200 r=200 ms=1000"])
         proto.timed(200, 200, 1000)
-        conn.send.assert_called_once_with("T 200 200 1000", read_ms=300)
+        conn.send.assert_called_once_with("T 200 200 1000", read_timeout=300)
 
     def test_timed_negative_speeds(self) -> None:
         proto, conn = _proto(["OK drive l=-100 r=-100 ms=500"])
         proto.timed(-100, -100, 500)
-        conn.send.assert_called_once_with("T -100 -100 500", read_ms=300)
+        conn.send.assert_called_once_with("T -100 -100 500", read_timeout=300)
 
     # ── distance ─────────────────────────────────────────────────────────────
 
     def test_distance(self) -> None:
         proto, conn = _proto(["OK drive l=200 r=200 mm=300"])
         proto.distance(200, 200, 300)
-        conn.send.assert_called_once_with("D 200 200 300", read_ms=300)
+        conn.send.assert_called_once_with("D 200 200 300", read_timeout=300)
 
     # ── go_to ────────────────────────────────────────────────────────────────
 
     def test_go_to(self) -> None:
         proto, conn = _proto(["OK goto x=300 y=0 speed=200"])
         proto.go_to(300, 0, 200)
-        conn.send.assert_called_once_with("G 300 0 200", read_ms=300)
+        conn.send.assert_called_once_with("G 300 0 200", read_timeout=300)
 
     # ── grip ─────────────────────────────────────────────────────────────────
 
     def test_grip_with_angle(self) -> None:
         proto, conn = _proto(["OK grip deg=90"])
         result = proto.grip(90)
-        conn.send.assert_called_once_with("GRIP 90", read_ms=300)
+        conn.send.assert_called_once_with("GRIP 90", read_timeout=300)
         assert result == 90
 
     def test_grip_query(self) -> None:
         proto, conn = _proto(["OK grip deg=45"])
         result = proto.grip()
-        conn.send.assert_called_once_with("GRIP", read_ms=300)
+        conn.send.assert_called_once_with("GRIP", read_timeout=300)
         assert result == 45
 
     # ── zero ─────────────────────────────────────────────────────────────────
@@ -380,62 +380,62 @@ class TestCommandEncoding:
     def test_zero_encoders(self) -> None:
         proto, conn = _proto()
         proto.zero_encoders()
-        conn.send.assert_called_once_with("ZERO enc", read_ms=200)
+        conn.send.assert_called_once_with("ZERO enc", read_timeout=200)
 
     def test_zero_otos(self) -> None:
         proto, conn = _proto()
         proto.zero_otos()
-        conn.send.assert_called_once_with("ZERO pose", read_ms=200)
+        conn.send.assert_called_once_with("ZERO pose", read_timeout=200)
 
     def test_zero_all(self) -> None:
         proto, conn = _proto()
         proto.zero_all()
-        conn.send.assert_called_once_with("ZERO enc pose", read_ms=200)
+        conn.send.assert_called_once_with("ZERO enc pose", read_timeout=200)
 
     # ── stream ───────────────────────────────────────────────────────────────
 
     def test_stream_period(self) -> None:
         proto, conn = _proto(["OK stream period=40"])
         proto.stream(40)
-        conn.send.assert_called_once_with("STREAM 40", read_ms=300)
+        conn.send.assert_called_once_with("STREAM 40", read_timeout=300)
 
     def test_stream_off(self) -> None:
         proto, conn = _proto(["OK stream period=0"])
         proto.stream(0)
-        conn.send.assert_called_once_with("STREAM 0", read_ms=300)
+        conn.send.assert_called_once_with("STREAM 0", read_timeout=300)
 
     def test_stream_fields(self) -> None:
         proto, conn = _proto(["OK stream fields=enc,pose"])
         proto.stream_fields("enc,pose")
-        conn.send.assert_called_once_with("STREAM fields=enc,pose", read_ms=300)
+        conn.send.assert_called_once_with("STREAM fields=enc,pose", read_timeout=300)
 
     # ── OTOS commands ─────────────────────────────────────────────────────────
 
     def test_otos_init(self) -> None:
         proto, conn = _proto(["OK oi"])
         proto.otos_init()
-        conn.send.assert_called_once_with("OI", read_ms=500)
+        conn.send.assert_called_once_with("OI", read_timeout=500)
 
     def test_otos_zero(self) -> None:
         proto, conn = _proto(["OK oz"])
         proto.otos_zero()
-        conn.send.assert_called_once_with("OZ", read_ms=200)
+        conn.send.assert_called_once_with("OZ", read_timeout=200)
 
     def test_otos_reset_tracking(self) -> None:
         proto, conn = _proto(["OK or"])
         proto.otos_reset_tracking()
-        conn.send.assert_called_once_with("OR", read_ms=200)
+        conn.send.assert_called_once_with("OR", read_timeout=200)
 
     def test_otos_set_linear_scalar(self) -> None:
         proto, conn = _proto(["OK linear scalar=5"])
         val = proto.otos_set_linear_scalar(5)
-        conn.send.assert_called_once_with("OL 5", read_ms=500)
+        conn.send.assert_called_once_with("OL 5", read_timeout=500)
         assert val == 5
 
     def test_otos_get_linear_scalar(self) -> None:
         proto, conn = _proto(["OK linear scalar=3"])
         val = proto.otos_get_linear_scalar()
-        conn.send.assert_called_once_with("OL", read_ms=300)
+        conn.send.assert_called_once_with("OL", read_timeout=300)
         assert val == 3
 
     # ── J-port ───────────────────────────────────────────────────────────────
@@ -443,29 +443,29 @@ class TestCommandEncoding:
     def test_port_read(self) -> None:
         proto, conn = _proto(["OK port p=1 v=0"])
         val = proto.port_read(1)
-        conn.send.assert_called_once_with("P 1", read_ms=300)
+        conn.send.assert_called_once_with("P 1", read_timeout=300)
         assert val == 0
 
     def test_port_write(self) -> None:
         proto, conn = _proto(["OK port p=2 v=1"])
         proto.port_write(2, True)
-        conn.send.assert_called_once_with("P 2 1", read_ms=200)
+        conn.send.assert_called_once_with("P 2 1", read_timeout=200)
 
     def test_port_write_false(self) -> None:
         proto, conn = _proto()
         proto.port_write(3, False)
-        conn.send.assert_called_once_with("P 3 0", read_ms=200)
+        conn.send.assert_called_once_with("P 3 0", read_timeout=200)
 
     def test_port_read_analog(self) -> None:
         proto, conn = _proto(["OK aport p=1 v=512"])
         val = proto.port_read_analog(1)
-        conn.send.assert_called_once_with("PA 1", read_ms=300)
+        conn.send.assert_called_once_with("PA 1", read_timeout=300)
         assert val == 512
 
     def test_port_write_analog(self) -> None:
         proto, conn = _proto()
         proto.port_write_analog(1, 255)
-        conn.send.assert_called_once_with("PA 1 255", read_ms=200)
+        conn.send.assert_called_once_with("PA 1 255", read_timeout=200)
 
     # ── vw ───────────────────────────────────────────────────────────────────
 
@@ -571,12 +571,12 @@ class TestResponseParsing:
         result = proto.ping(corr_id="42")
         assert result is not None
         assert result[0] == 500
-        conn.send.assert_called_once_with("PING #42", read_ms=500)
+        conn.send.assert_called_once_with("PING #42", read_timeout=500)
 
     def test_echo(self) -> None:
         proto, conn = _proto(["OK echo hello world"])
         result = proto.echo("hello world")
-        conn.send.assert_called_once_with("ECHO hello world", read_ms=500)
+        conn.send.assert_called_once_with("ECHO hello world", read_timeout=500)
         assert result == "hello world"
 
     def test_get_id(self) -> None:
@@ -589,7 +589,7 @@ class TestResponseParsing:
     def test_get_config_full(self) -> None:
         proto, conn = _proto(["CFG ml=0.487 mr=0.481 tw=120"])
         result = proto.get_config()
-        conn.send.assert_called_once_with("GET", read_ms=500)
+        conn.send.assert_called_once_with("GET", read_timeout=500)
         assert result is not None
         assert result["ml"] == "0.487"
         assert result["tw"] == "120"
@@ -597,7 +597,7 @@ class TestResponseParsing:
     def test_get_config_keys(self) -> None:
         proto, conn = _proto(["CFG ml=0.487 vel.kP=0.300"])
         result = proto.get_config("ml", "vel.kP")
-        conn.send.assert_called_once_with("GET ml vel.kP", read_ms=500)
+        conn.send.assert_called_once_with("GET ml vel.kP", read_timeout=500)
         assert result is not None
         assert result["ml"] == "0.487"
 
@@ -710,26 +710,26 @@ class TestEVTDone:
     def test_wait_for_evt_done_returns_done(self) -> None:
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T"]
-        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
+        outcome, reason = proto.wait_for_evt_done("T", timeout=1000)
         assert outcome == "done"
 
     def test_wait_for_evt_done_safety_stop(self) -> None:
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT safety_stop"]
-        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
+        outcome, reason = proto.wait_for_evt_done("T", timeout=1000)
         assert outcome == "safety_stop"
 
     def test_wait_for_evt_done_timeout(self) -> None:
         proto, conn = _proto()
         conn.read_lines.return_value = []  # no replies ever
-        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=10)  # very short
+        outcome, reason = proto.wait_for_evt_done("T", timeout=10)  # very short
         assert outcome == "timeout"
 
     def test_wait_for_evt_done_with_matching_corr_id(self) -> None:
         """wait_for_evt_done accepts EVT done T #12 when corr_id='12'."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T #12"]
-        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="12")
+        outcome, reason = proto.wait_for_evt_done("T", timeout=1000, corr_id="12")
         assert outcome == "done"
 
     def test_wait_for_evt_done_skips_wrong_corr_id(self) -> None:
@@ -738,7 +738,7 @@ class TestEVTDone:
         proto, conn = _proto()
         # Always return the wrong id — the filter should skip it and we time out.
         conn.read_lines.side_effect = itertools.repeat(["EVT done T #99"])
-        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=20, corr_id="12")
+        outcome, reason = proto.wait_for_evt_done("T", timeout=20, corr_id="12")
         # Should not accept the wrong id → times out.
         assert outcome == "timeout"
 
@@ -746,14 +746,14 @@ class TestEVTDone:
         """Bare EVT done T (no id) is accepted even when a corr_id filter is set."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T"]
-        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="12")
+        outcome, reason = proto.wait_for_evt_done("T", timeout=1000, corr_id="12")
         assert outcome == "done"
 
     def test_wait_for_evt_done_corr_id_safety_stop(self) -> None:
         """EVT safety_stop #5 is accepted when waiting for corr_id='5'."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT safety_stop #5"]
-        outcome, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="5")
+        outcome, reason = proto.wait_for_evt_done("T", timeout=1000, corr_id="5")
         assert outcome == "safety_stop"
 
 
@@ -988,7 +988,7 @@ class TestWaitForEvtDonePaths:
         """wait_for_evt_done returns ('done', None) when EVT done T is received."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T"]
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
+        result, reason = proto.wait_for_evt_done("T", timeout=1000)
         assert result == "done"
         assert reason is None
 
@@ -996,7 +996,7 @@ class TestWaitForEvtDonePaths:
         """wait_for_evt_done returns ('safety_stop', None) when EVT safety_stop is received."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT safety_stop"]
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
+        result, reason = proto.wait_for_evt_done("T", timeout=1000)
         assert result == "safety_stop"
         assert reason is None
 
@@ -1006,14 +1006,14 @@ class TestWaitForEvtDonePaths:
         proto, conn = _proto()
         # Always return the wrong verb — should not match and we time out.
         conn.read_lines.side_effect = itertools.repeat(["EVT done D"])
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=20)
+        result, reason = proto.wait_for_evt_done("T", timeout=20)
         assert result == "timeout"
 
     def test_wait_for_evt_done_timeout_returns_timeout(self) -> None:
         """wait_for_evt_done returns ('timeout', None) when no matching event arrives."""
         proto, conn = _proto()
         conn.read_lines.return_value = []
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=10)
+        result, reason = proto.wait_for_evt_done("T", timeout=10)
         assert result == "timeout"
         assert reason is None
 
@@ -1021,14 +1021,14 @@ class TestWaitForEvtDonePaths:
         """wait_for_evt_done with corr_id accepts EVT done T #7 when id='7'."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T #7"]
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="7")
+        result, reason = proto.wait_for_evt_done("T", timeout=1000, corr_id="7")
         assert result == "done"
 
     def test_wait_for_evt_done_corr_id_safety_stop(self) -> None:
         """wait_for_evt_done with corr_id accepts EVT safety_stop #7 when id='7'."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT safety_stop #7"]
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="7")
+        result, reason = proto.wait_for_evt_done("T", timeout=1000, corr_id="7")
         assert result == "safety_stop"
 
 
@@ -1161,7 +1161,7 @@ class TestStreamDriveKeepalive:
 
         # Collect all send_fast calls by iterating the generator for a limited
         # number of steps, then close it.
-        gen = proto.stream_drive(speeds, period_ms=40, watchdog_ms=watchdog_ms)
+        gen = proto.stream_drive(speeds, period=40, watchdog=watchdog_ms)
 
         # Let the generator run for just enough time to trigger at least one
         # keepalive resend (sleep slightly longer than the keepalive threshold).
@@ -1219,7 +1219,7 @@ class TestStreamDriveKeepalive:
         proto = NezhaProtocol(conn)
 
         speeds = [200, 200]
-        gen = proto.stream_drive(speeds, period_ms=40, watchdog_ms=500)
+        gen = proto.stream_drive(speeds, period=40, watchdog=500)
         # Start the generator, then immediately close it.
         try:
             next(gen)
@@ -1248,7 +1248,7 @@ class TestStreamDriveKeepalive:
 
         proto = NezhaProtocol(conn)
         speeds = [100, 100]
-        gen = proto.stream_drive(speeds, period_ms=40, watchdog_ms=500)
+        gen = proto.stream_drive(speeds, period=40, watchdog=500)
 
         frames = list(gen)  # Should terminate when safety_stop is seen.
         # No frames yielded (safety_stop causes return before yield).
@@ -1480,7 +1480,7 @@ class TestWaitForEvtDoneReason:
         """EVT done T reason=time → ('done', 'time')."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T reason=time"]
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
+        result, reason = proto.wait_for_evt_done("T", timeout=1000)
         assert result == "done"
         assert reason == "time"
 
@@ -1488,7 +1488,7 @@ class TestWaitForEvtDoneReason:
         """EVT done T (no reason=) → ('done', None)."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T"]
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
+        result, reason = proto.wait_for_evt_done("T", timeout=1000)
         assert result == "done"
         assert reason is None
 
@@ -1496,7 +1496,7 @@ class TestWaitForEvtDoneReason:
         """EVT safety_stop reason=watchdog → ('safety_stop', 'watchdog')."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT safety_stop reason=watchdog"]
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000)
+        result, reason = proto.wait_for_evt_done("T", timeout=1000)
         assert result == "safety_stop"
         assert reason == "watchdog"
 
@@ -1504,7 +1504,7 @@ class TestWaitForEvtDoneReason:
         """Timeout → ('timeout', None)."""
         proto, conn = _proto()
         conn.read_lines.return_value = []
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=10)
+        result, reason = proto.wait_for_evt_done("T", timeout=10)
         assert result == "timeout"
         assert reason is None
 
@@ -1514,7 +1514,7 @@ class TestWaitForEvtDoneReason:
         proto, conn = _proto()
         # Wrong corr_id should be skipped; should time out.
         conn.read_lines.side_effect = itertools.repeat(["EVT done T reason=dist #99"])
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=20, corr_id="7")
+        result, reason = proto.wait_for_evt_done("T", timeout=20, corr_id="7")
         assert result == "timeout"
         assert reason is None
 
@@ -1522,7 +1522,7 @@ class TestWaitForEvtDoneReason:
         """Correct corr_id with reason= → correct tuple."""
         proto, conn = _proto()
         conn.read_lines.return_value = ["EVT done T reason=sensor #7"]
-        result, reason = proto.wait_for_evt_done("T", timeout_ms=1000, corr_id="7")
+        result, reason = proto.wait_for_evt_done("T", timeout=1000, corr_id="7")
         assert result == "done"
         assert reason == "sensor"
 

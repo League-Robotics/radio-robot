@@ -646,13 +646,14 @@ class SerialConnection:
                 return lines
         return []
 
-    def _poll_read_lines(self, duration_ms: int, stop_token: str | None = None) -> list[str]:
-        """Read lines directly from ``_ser`` for up to ``duration_ms``.
+    def _poll_read_lines(self, duration: int,  # [ms]
+                         stop_token: str | None = None) -> list[str]:
+        """Read lines directly from ``_ser`` for up to ``duration``.
 
         Used exclusively by ``_poll_ready`` (before the reader thread starts).
         """
         lines: list[str] = []
-        deadline = time.time() + (duration_ms / 1000.0)
+        deadline = time.time() + (duration / 1000.0)
         while time.time() < deadline:
             try:
                 raw = self._ser.readline()
@@ -733,12 +734,14 @@ class SerialConnection:
             except Exception:
                 break   # port closed / gone — let the robot safety-stop
 
-    def send(self, message: str, read_ms: int = 500, stop_token: str | None = "OK") -> dict[str, Any]:
+    def send(self, message: str, read_timeout: int = 500,  # [ms]
+             stop_token: str | None = "OK") -> dict[str, Any]:
         """Send a plain command, read and return responses.
 
         Appends a ``#<corr_id>`` suffix to the command so the reader thread
         can route the reply to this call's private queue.  Blocks on that
-        queue until a reply arrives or ``read_ms + 500 ms`` timeout elapses.
+        queue until a reply arrives or ``read_timeout + 500 ms`` timeout
+        elapses.
 
         All commands are sent **plain** (no ``>`` prefix).  After the
         HELLO-classify / !GO handshake the relay is a transparent byte pipe,
@@ -749,13 +752,13 @@ class SerialConnection:
 
         Args:
             message: Command string to send (without newline).
-            read_ms: Maximum time to wait for the primary reply, in
+            read_timeout: Maximum time to wait for the primary reply, in
                 milliseconds.  An extra 500 ms grace is added for queue
                 blocking to account for in-flight bytes.
             stop_token: If set, return as soon as a line containing this
                 substring is received.  Defaults to ``"OK"`` so blocking
                 sends return early on the v2 OK response.  Pass ``None`` to
-                always drain for the full ``read_ms`` window.
+                always drain for the full ``read_timeout`` window.
         """
         if not self.is_open:
             return {"error": "Not connected. Call connect first."}
@@ -792,7 +795,7 @@ class SerialConnection:
                 return {"error": str(exc), "sent": message}
 
             # Drain reply queue until stop_token matched or deadline.
-            timeout_s = (read_ms / 1000.0) + 0.5
+            timeout_s = (read_timeout / 1000.0) + 0.5
             lines = []
             deadline = time.time() + timeout_s
             try:
@@ -806,7 +809,7 @@ class SerialConnection:
                         continue
                     lines.append(line)
                     # An ERR reply is terminal — break immediately so a corrupted
-                    # command retries fast instead of waiting the full read_ms.
+                    # command retries fast instead of waiting the full read_timeout.
                     if (stop_token and stop_token in line) or line.startswith("ERR"):
                         break
             finally:
@@ -837,7 +840,8 @@ class SerialConnection:
             self._ser.flush()
             self._last_write_s = time.monotonic()  # defer the next "+"
 
-    def read_lines(self, duration_ms: int = 500, stop_token: str | None = None) -> list[str]:
+    def read_lines(self, duration: int = 500,  # [ms]
+                   stop_token: str | None = None) -> list[str]:
         """Read lines from the TLM and EVT queues within the given duration.
 
         Drains ``_tlm_queue`` and ``_evt_queue`` — does NOT call
@@ -847,7 +851,7 @@ class SerialConnection:
         is not running (e.g. during ``_poll_ready``).
 
         Args:
-            duration_ms: Maximum time to read for, in milliseconds (ceiling).
+            duration: Maximum time to read for, in milliseconds (ceiling).
             stop_token: If set, return immediately after the first line that
                 contains this substring is received.  Uses a plain substring
                 check (``token in line``) so relay-prefix noise does not
@@ -864,10 +868,10 @@ class SerialConnection:
         # (used by _poll_ready via _poll_read_lines; this branch is a safety
         # net for callers that connect without ping, etc.).
         if self._reader_thread is None or not self._reader_thread.is_alive():
-            return self._poll_read_lines(duration_ms, stop_token=stop_token)
+            return self._poll_read_lines(duration, stop_token=stop_token)
 
         lines: list[str] = []
-        deadline = time.time() + (duration_ms / 1000.0)
+        deadline = time.time() + (duration / 1000.0)
         _sleep = 0.005  # 5 ms between drain attempts
 
         while time.time() < deadline:
@@ -938,7 +942,7 @@ def list_serial_ports() -> list[str]:
     return sorted(glob.glob("/dev/cu.usbmodem*"))
 
 
-def probe_devices(read_ms: int = 1200) -> list[dict[str, Any]]:
+def probe_devices(read_timeout: int = 1200) -> list[dict[str, Any]]:  # [ms]
     """Probe each USB modem port with the HELLO-classify protocol.
 
     Sends ``HELLO`` repeatedly (matching ``_banner_classify``'s protocol; see
@@ -949,7 +953,7 @@ def probe_devices(read_ms: int = 1200) -> list[dict[str, Any]]:
     relay-fronted port, so a probe using it can never observe a live device.
 
     Returns a list of dicts with port, lines, and a 'responsive' flag (True
-    iff a DEVICE: banner line was seen within read_ms).
+    iff a DEVICE: banner line was seen within read_timeout).
     """
     results = []
     for port in list_serial_ports():
@@ -959,7 +963,7 @@ def probe_devices(read_ms: int = 1200) -> list[dict[str, Any]]:
             ser.reset_input_buffer()
             lines: list[str] = []
             responsive = False
-            deadline = time.time() + (read_ms / 1000.0)
+            deadline = time.time() + (read_timeout / 1000.0)
             next_hello = 0.0  # send immediately on the first iteration
             while time.time() < deadline:
                 now = time.time()

@@ -488,9 +488,9 @@ class TestTurnHostWrapper:
         assert args[0] == "TURN 9000", f"Expected 'TURN 9000', got {args[0]!r}"
 
     def test_turn_sends_with_eps(self) -> None:
-        """turn(9000, eps_cdeg=100) sends 'TURN 9000 eps=100'."""
+        """turn(9000, eps=100) sends 'TURN 9000 eps=100'."""
         proto, mock_conn = self._make_proto()
-        proto.turn(9000, eps_cdeg=100)
+        proto.turn(9000, eps=100)
         args, _ = mock_conn.send.call_args
         assert args[0] == "TURN 9000 eps=100", f"Got {args[0]!r}"
 
@@ -502,20 +502,20 @@ class TestTurnHostWrapper:
         assert args[0] == "TURN 9000 #42", f"Got {args[0]!r}"
 
     def test_turn_sends_with_eps_and_corr_id(self) -> None:
-        """turn(9000, eps_cdeg=100, corr_id='1') sends 'TURN 9000 eps=100 #1'."""
+        """turn(9000, eps=100, corr_id='1') sends 'TURN 9000 eps=100 #1'."""
         proto, mock_conn = self._make_proto()
-        proto.turn(9000, eps_cdeg=100, corr_id="1")
+        proto.turn(9000, eps=100, corr_id="1")
         args, _ = mock_conn.send.call_args
         assert args[0] == "TURN 9000 eps=100 #1", f"Got {args[0]!r}"
 
     def test_turn_default_eps_not_in_wire(self) -> None:
-        """turn(9000) with no eps_cdeg does NOT append 'eps=' to the wire command."""
+        """turn(9000) with no eps does NOT append 'eps=' to the wire command."""
         proto, mock_conn = self._make_proto()
         proto.turn(9000)
         args, _ = mock_conn.send.call_args
-        # eps_cdeg=None means no eps= token in wire (firmware uses its default)
+        # eps=None means no eps= token in wire (firmware uses its default)
         assert "eps=" not in args[0], (
-            f"Expected no eps= in wire when eps_cdeg is None, got {args[0]!r}"
+            f"Expected no eps= in wire when eps is None, got {args[0]!r}"
         )
 
     def test_turn_uses_send_not_send_fast(self) -> None:

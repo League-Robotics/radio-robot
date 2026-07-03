@@ -86,7 +86,7 @@ def _record(cs: ClockSync, clock: FakeClock,
     t0_ms = clock.now_ms
     clock.advance_ms(rtt_ms)
     t1_ms = clock.now_ms
-    cs.record_ping(t0_ms=t0_ms, t1_ms=t1_ms, t_robot_ms=t_robot_ms)
+    cs.record_ping(t0=t0_ms, t1=t1_ms, t_robot=t_robot_ms)
 
 
 # ===========================================================================
@@ -137,7 +137,7 @@ class TestNoCalibraton:
 
     def test_best_offset_ms_none(self) -> None:
         cs, _ = _make_cs()
-        assert cs.best_offset_ms() is None
+        assert cs.best_offset() is None
 
     def test_to_host_time_none(self) -> None:
         cs, _ = _make_cs()
@@ -145,11 +145,11 @@ class TestNoCalibraton:
 
     def test_min_rtt_none(self) -> None:
         cs, _ = _make_cs()
-        assert cs.min_rtt_ms is None
+        assert cs.min_rtt is None
 
     def test_offset_ms_alias_none(self) -> None:
         cs, _ = _make_cs()
-        assert cs.offset_ms is None
+        assert cs.offset is None
 
     def test_skew_none(self) -> None:
         cs, _ = _make_cs()
@@ -199,14 +199,14 @@ class TestMinRTTSelection:
             robot_ms = t0_ms + rtt / 2.0 - ROBOT_OFFSET
             clock.advance_ms(rtt)
             t1_ms = clock.now_ms
-            cs.record_ping(t0_ms=t0_ms, t1_ms=t1_ms, t_robot_ms=robot_ms)
+            cs.record_ping(t0=t0_ms, t1=t1_ms, t_robot=robot_ms)
             clock.advance_ms(10.0)  # small inter-ping gap
 
         assert cs.sample_count == 5
-        assert cs.min_rtt_ms == pytest.approx(40.0, abs=1e-6)
+        assert cs.min_rtt == pytest.approx(40.0, abs=1e-6)
 
         # Offset should equal ROBOT_OFFSET (host is 5000 ms ahead of robot).
-        assert cs.best_offset_ms() == pytest.approx(ROBOT_OFFSET, abs=1e-6)
+        assert cs.best_offset() == pytest.approx(ROBOT_OFFSET, abs=1e-6)
 
     def test_single_sample_offset_math(self) -> None:
         """Exact arithmetic check for one sample."""
@@ -216,40 +216,40 @@ class TestMinRTTSelection:
         t1_ms = 140.0   # RTT = 40 ms
         t_robot_ms = 110.0
         # expected: (100+140)/2 - 110 = 120 - 110 = 10.0
-        cs.record_ping(t0_ms=t0_ms, t1_ms=t1_ms, t_robot_ms=t_robot_ms)
-        assert cs.best_offset_ms() == pytest.approx(10.0)
+        cs.record_ping(t0=t0_ms, t1=t1_ms, t_robot=t_robot_ms)
+        assert cs.best_offset() == pytest.approx(10.0)
 
     def test_min_rtt_updates_on_better_sample(self) -> None:
         """Adding a sample with smaller RTT updates the best."""
         cs, clock = _make_cs(start_s=0.0)
 
-        cs.record_ping(t0_ms=0.0, t1_ms=100.0, t_robot_ms=50.0)  # RTT=100
-        assert cs.min_rtt_ms == pytest.approx(100.0)
+        cs.record_ping(t0=0.0, t1=100.0, t_robot=50.0)  # RTT=100
+        assert cs.min_rtt == pytest.approx(100.0)
 
-        cs.record_ping(t0_ms=200.0, t1_ms=240.0, t_robot_ms=220.0)  # RTT=40
-        assert cs.min_rtt_ms == pytest.approx(40.0)
+        cs.record_ping(t0=200.0, t1=240.0, t_robot=220.0)  # RTT=40
+        assert cs.min_rtt == pytest.approx(40.0)
 
     def test_larger_rtt_does_not_replace_best(self) -> None:
         """After the min-RTT sample, a worse sample leaves the best unchanged."""
         cs, clock = _make_cs(start_s=0.0)
 
-        cs.record_ping(t0_ms=0.0, t1_ms=40.0, t_robot_ms=20.0)   # RTT=40  best
-        cs.record_ping(t0_ms=100.0, t1_ms=180.0, t_robot_ms=140.0)  # RTT=80 worse
+        cs.record_ping(t0=0.0, t1=40.0, t_robot=20.0)   # RTT=40  best
+        cs.record_ping(t0=100.0, t1=180.0, t_robot=140.0)  # RTT=80 worse
 
-        assert cs.min_rtt_ms == pytest.approx(40.0)
+        assert cs.min_rtt == pytest.approx(40.0)
 
     def test_equal_rtt_keeps_first(self) -> None:
         """When two samples have equal RTT, the first one stays as best."""
         cs, clock = _make_cs(start_s=0.0)
 
         # Both RTT=50.  First offset=10, second offset=20.
-        cs.record_ping(t0_ms=0.0, t1_ms=50.0, t_robot_ms=15.0)
-        first_offset = cs.best_offset_ms()
+        cs.record_ping(t0=0.0, t1=50.0, t_robot=15.0)
+        first_offset = cs.best_offset()
 
-        cs.record_ping(t0_ms=100.0, t1_ms=150.0, t_robot_ms=115.0)
+        cs.record_ping(t0=100.0, t1=150.0, t_robot=115.0)
         # Second RTT also 50 → strict < fails → best unchanged.
-        assert cs.best_offset_ms() == pytest.approx(first_offset)
-        assert cs.min_rtt_ms == pytest.approx(50.0)
+        assert cs.best_offset() == pytest.approx(first_offset)
+        assert cs.min_rtt == pytest.approx(50.0)
 
 
 # ===========================================================================
@@ -262,16 +262,16 @@ class TestToHostTimeOffsetOnly:
     def test_translation_uses_offset(self) -> None:
         cs, clock = _make_cs(start_s=0.0)
         # offset = 10 ms (host 10 ms ahead of robot)
-        cs.record_ping(t0_ms=100.0, t1_ms=140.0, t_robot_ms=110.0)
+        cs.record_ping(t0=100.0, t1=140.0, t_robot=110.0)
         # offset = (100+140)/2 - 110 = 10
-        assert cs.best_offset_ms() == pytest.approx(10.0)
+        assert cs.best_offset() == pytest.approx(10.0)
         assert cs.to_host_time(500) == pytest.approx(510.0)
 
     def test_translation_negative_offset(self) -> None:
         """Host can be *behind* robot (offset negative)."""
         cs, clock = _make_cs(start_s=0.0)
         # offset = (0 + 40)/2 - 30 = 20 - 30 = -10
-        cs.record_ping(t0_ms=0.0, t1_ms=40.0, t_robot_ms=30.0)
+        cs.record_ping(t0=0.0, t1=40.0, t_robot=30.0)
         assert cs.to_host_time(100) == pytest.approx(90.0)
 
     def test_to_host_time_none_before_samples(self) -> None:
@@ -280,7 +280,7 @@ class TestToHostTimeOffsetOnly:
 
     def test_translation_zero_robot_time(self) -> None:
         cs, _ = _make_cs(start_s=0.0)
-        cs.record_ping(t0_ms=1000.0, t1_ms=1040.0, t_robot_ms=0.0)
+        cs.record_ping(t0=1000.0, t1=1040.0, t_robot=0.0)
         # offset = 1020 - 0 = 1020
         assert cs.to_host_time(0) == pytest.approx(1020.0)
 
@@ -314,7 +314,7 @@ class TestSkewRegression:
             host_mid = a * t_r + b
             t0_ms = host_mid - rtt_ms / 2.0
             t1_ms = host_mid + rtt_ms / 2.0
-            cs.record_ping(t0_ms=t0_ms, t1_ms=t1_ms, t_robot_ms=t_r)
+            cs.record_ping(t0=t0_ms, t1=t1_ms, t_robot=t_r)
 
     def test_skew_one_recovers_perfect_clock(self) -> None:
         """No drift (a=1): regression should return a≈1, b≈offset."""
@@ -358,7 +358,7 @@ class TestSkewRegression:
     def test_skew_none_with_one_sample(self) -> None:
         """One sample → no skew model (need ≥2 distinct t_robot values)."""
         cs, _ = _make_cs()
-        cs.record_ping(t0_ms=0.0, t1_ms=20.0, t_robot_ms=1000.0)
+        cs.record_ping(t0=0.0, t1=20.0, t_robot=1000.0)
         assert cs.skew is None
 
     def test_skew_none_when_samples_too_close(self) -> None:
@@ -366,13 +366,13 @@ class TestSkewRegression:
         cs, _ = _make_cs()
         # All robot stamps at exactly 1000.0 ms (span = 0).
         for _ in range(5):
-            cs.record_ping(t0_ms=0.0, t1_ms=20.0, t_robot_ms=1000.0)
+            cs.record_ping(t0=0.0, t1=20.0, t_robot=1000.0)
         assert cs.skew is None
 
     def test_skew_falls_back_to_offset_when_none(self) -> None:
         """to_host_time() uses offset when skew is not available."""
         cs, _ = _make_cs(start_s=0.0)
-        cs.record_ping(t0_ms=100.0, t1_ms=140.0, t_robot_ms=110.0)
+        cs.record_ping(t0=100.0, t1=140.0, t_robot=110.0)
         # offset = (100+140)/2 - 110 = 10
         # No skew (only 1 sample), so: to_host_time(500) = 500 + 10 = 510
         assert cs.skew is None
@@ -429,7 +429,7 @@ class TestPingBurst:
             return _make_pong(t_r)
 
         cs.ping_burst(send_fn, n=5)
-        assert cs.min_rtt_ms == pytest.approx(40.0, abs=1e-6)
+        assert cs.min_rtt == pytest.approx(40.0, abs=1e-6)
 
     def test_burst_skips_none_replies(self) -> None:
         """Timed-out PINGs (None reply) are skipped; surviving samples are used."""
@@ -451,8 +451,8 @@ class TestPingBurst:
         """If all pings fail, the prior estimate is preserved."""
         cs, clock = _make_cs(start_s=0.0)
         # Establish a prior estimate.
-        cs.record_ping(t0_ms=0.0, t1_ms=40.0, t_robot_ms=10.0)
-        prior_offset = cs.best_offset_ms()
+        cs.record_ping(t0=0.0, t1=40.0, t_robot=10.0)
+        prior_offset = cs.best_offset()
         assert prior_offset is not None
 
         # Burst with all failures.
@@ -461,7 +461,7 @@ class TestPingBurst:
         cs.ping_burst(fn, n=3)
 
         # Prior offset must be intact.
-        assert cs.best_offset_ms() == pytest.approx(prior_offset)
+        assert cs.best_offset() == pytest.approx(prior_offset)
         assert cs.sample_count == 1  # only the pre-burst sample
 
     def test_burst_updates_last_sync(self) -> None:
@@ -497,7 +497,7 @@ class TestStale:
 
     def test_not_stale_immediately_after_burst(self) -> None:
         cs, clock = _make_cs()
-        cs.record_ping(t0_ms=0.0, t1_ms=20.0, t_robot_ms=10.0)
+        cs.record_ping(t0=0.0, t1=20.0, t_robot=10.0)
         # Manually set _last_sync_s to now.
         cs._last_sync_s = clock()
         assert cs.stale(max_age_s=60.0) is False
@@ -531,21 +531,21 @@ class TestReset:
 
     def test_reset_clears_samples(self) -> None:
         cs, _ = _make_cs(start_s=0.0)
-        cs.record_ping(t0_ms=0.0, t1_ms=40.0, t_robot_ms=10.0)
+        cs.record_ping(t0=0.0, t1=40.0, t_robot=10.0)
         assert cs.sample_count == 1
         cs.reset()
         assert cs.sample_count == 0
 
     def test_reset_clears_offset(self) -> None:
         cs, _ = _make_cs(start_s=0.0)
-        cs.record_ping(t0_ms=0.0, t1_ms=40.0, t_robot_ms=10.0)
+        cs.record_ping(t0=0.0, t1=40.0, t_robot=10.0)
         cs.reset()
-        assert cs.best_offset_ms() is None
+        assert cs.best_offset() is None
 
     def test_reset_clears_skew(self) -> None:
         cs, _ = _make_cs()
-        cs.record_ping(t0_ms=0.0, t1_ms=20.0, t_robot_ms=0.0)
-        cs.record_ping(t0_ms=1000.0, t1_ms=1020.0, t_robot_ms=1000.0)
+        cs.record_ping(t0=0.0, t1=20.0, t_robot=0.0)
+        cs.record_ping(t0=1000.0, t1=1020.0, t_robot=1000.0)
         cs.reset()
         assert cs.skew is None
 
@@ -557,11 +557,11 @@ class TestReset:
 
     def test_reset_allows_fresh_calibration(self) -> None:
         cs, _ = _make_cs(start_s=0.0)
-        cs.record_ping(t0_ms=0.0, t1_ms=40.0, t_robot_ms=10.0)
+        cs.record_ping(t0=0.0, t1=40.0, t_robot=10.0)
         cs.reset()
-        cs.record_ping(t0_ms=100.0, t1_ms=120.0, t_robot_ms=105.0)
+        cs.record_ping(t0=100.0, t1=120.0, t_robot=105.0)
         # offset = (100+120)/2 - 105 = 110 - 105 = 5
-        assert cs.best_offset_ms() == pytest.approx(5.0)
+        assert cs.best_offset() == pytest.approx(5.0)
 
 
 # ===========================================================================
@@ -573,18 +573,18 @@ class TestProperties:
 
     def test_offset_ms_alias(self) -> None:
         cs, _ = _make_cs(start_s=0.0)
-        cs.record_ping(t0_ms=100.0, t1_ms=140.0, t_robot_ms=110.0)
-        assert cs.offset_ms == cs.best_offset_ms()
+        cs.record_ping(t0=100.0, t1=140.0, t_robot=110.0)
+        assert cs.offset == cs.best_offset()
 
     def test_min_rtt_ms_property(self) -> None:
         cs, _ = _make_cs(start_s=0.0)
-        cs.record_ping(t0_ms=0.0, t1_ms=60.0, t_robot_ms=30.0)  # RTT=60
-        cs.record_ping(t0_ms=100.0, t1_ms=130.0, t_robot_ms=115.0)  # RTT=30
-        assert cs.min_rtt_ms == pytest.approx(30.0)
+        cs.record_ping(t0=0.0, t1=60.0, t_robot=30.0)  # RTT=60
+        cs.record_ping(t0=100.0, t1=130.0, t_robot=115.0)  # RTT=30
+        assert cs.min_rtt == pytest.approx(30.0)
 
     def test_sample_count_increments(self) -> None:
         cs, _ = _make_cs(start_s=0.0)
         for i in range(7):
-            cs.record_ping(t0_ms=float(i * 100), t1_ms=float(i * 100 + 30),
-                           t_robot_ms=float(i * 100 + 15))
+            cs.record_ping(t0=float(i * 100), t1=float(i * 100 + 30),
+                           t_robot=float(i * 100 + 15))
         assert cs.sample_count == 7
