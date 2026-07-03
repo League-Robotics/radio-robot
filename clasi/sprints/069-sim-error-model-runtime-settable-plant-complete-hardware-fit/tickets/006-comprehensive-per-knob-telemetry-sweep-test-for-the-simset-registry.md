@@ -1,7 +1,7 @@
 ---
 id: '006'
 title: Comprehensive per-knob telemetry sweep test for the SIMSET registry
-status: open
+status: done
 use-cases:
 - SUC-002
 - SUC-003
@@ -40,7 +40,7 @@ knob's perturbation should visibly move).
 
 ## Acceptance Criteria
 
-- [ ] `tests/simulation/system/test_069_knob_telemetry_sweep.py`: for EVERY
+- [x] `tests/simulation/system/test_069_knob_telemetry_sweep.py`: for EVERY
       key returned by a bare `SIMGET` (no args) against a freshly-constructed
       sim, the test:
       1. Records a baseline TLM frame (`SNAP` or one `STREAM` tick) with all
@@ -57,7 +57,7 @@ knob's perturbation should visibly move).
          X" acceptance shape).
       5. Resets the sim (or re-`SIMSET`s the key back to default) before the
          next key in the sweep, so knobs don't accumulate across iterations.
-- [ ] A key→(expected-TLM-field, maneuver-type) mapping table lives in the
+- [x] A key→(expected-TLM-field, maneuver-type) mapping table lives in the
       test file itself (e.g. a Python dict), covering every key introduced
       by tickets 001-004: the seven `SET`-only EKF keys (expected field:
       fused `pose=`'s divergence from `otos=`/`encpose=` under a deliberate
@@ -69,12 +69,12 @@ knob's perturbation should visibly move).
       divergence; `encScaleErrL`/`R`, `encSlipL`/`R`, `encNoiseL`/`R` →
       `enc=`; `otosLinScaleErr`/`otosAngScaleErr`/`otosLinNoise`/
       `otosYawNoise`/`otosLinDriftMmS`/`otosYawDriftDegS` → `otos=`).
-  - [ ] If the test discovers via `SIMGET` a key NOT present in its mapping
+  - [x] If the test discovers via `SIMGET` a key NOT present in its mapping
         table (e.g. a future addition), it FAILS LOUDLY with a clear
         "unmapped key" message rather than silently skipping it — this is
         what makes the test's "automatic coverage of future additions"
         claim actually enforced, not aspirational.
-- [ ] Full default suite green: `uv run python -m pytest`.
+- [x] Full default suite green: `uv run python -m pytest`.
 
 ## Testing
 
