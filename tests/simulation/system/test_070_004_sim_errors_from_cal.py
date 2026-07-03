@@ -32,8 +32,34 @@ _HOST_DIR = Path(__file__).parent.parent.parent.parent / "host"
 if str(_HOST_DIR) not in sys.path:
     sys.path.insert(0, str(_HOST_DIR))
 
-from robot_radio.config.robot_config import get_robot_config  # noqa: E402
+import pytest  # noqa: E402
+
+from robot_radio.config.robot_config import (  # noqa: E402
+    _reset_robot_config,
+    get_robot_config,
+)
 from robot_radio.testgui import sim_prefs  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def pin_calibrated_tovez(monkeypatch):
+    """Pin the active robot to the CALIBRATED tovez config for this module.
+
+    This test's premise is that the active robot's calibration matches what
+    DefaultConfig.cpp bakes (rotationalSlip=0.92, trackwidth=128).  The
+    repo's active_robot.json pointer is operator state (the GUI robot
+    picker rewrites it — e.g. to tovez_nocal.json, which broke this test on
+    2026-07-03), so pin the config explicitly via the ROBOT_CONFIG env var
+    instead of depending on it.
+    """
+    monkeypatch.setenv(
+        "ROBOT_CONFIG",
+        str(Path(__file__).parent.parent.parent.parent
+            / "data" / "robots" / "tovez.json"),
+    )
+    _reset_robot_config()
+    yield
+    _reset_robot_config()
 
 # Wide enough to absorb PlannerBegin.cpp's pre-existing, out-of-scope RT
 # coast-tuning residual (see test_069_rt_90deg_body_scrub.py's module

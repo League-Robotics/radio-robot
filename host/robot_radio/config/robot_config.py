@@ -478,6 +478,16 @@ def match_robot_by_id(id_response: str) -> Optional[RobotConfig]:
     ``connection.device_announcement_name`` in every JSON file found in
     ``data/robots/`` (excluding ``active_robot.json``).
 
+    Several configs may legitimately share one announcement name — e.g.
+    ``tovez.json`` and ``tovez_nocal.json`` (a calibration-stripped variant
+    of the same physical robot) both announce ``tovez``.  Among the
+    announcement-name matches, the config whose ``identity.robot_name``
+    ALSO equals the announced name wins (exact-name preference); otherwise
+    the first match in sorted-filename order is used, so the choice is
+    deterministic rather than filesystem-glob-order dependent.  This keeps
+    a real robot announcing ``name=tovez`` on the calibrated config instead
+    of silently loading an uncalibrated variant.
+
     Falls back to ``get_robot_config()`` when:
     - No ``name=`` field is present in the response.
     - No config file's announcement name matches.
@@ -507,25 +517,44 @@ def match_robot_by_id(id_response: str) -> Optional[RobotConfig]:
         logger.warning("match_robot_by_id: robots dir not found: %s", robots_dir)
         return get_robot_config()
 
-    candidates = [
+    candidates = sorted(
         p for p in robots_dir.glob("*.json")
         if p.name not in ("active_robot.json", "robot_config.schema.json")
            and not p.name.startswith("_")
-    ]
+    )
 
+    # Collect ALL announcement-name matches, then prefer the one whose
+    # identity.robot_name also equals the announced name (see docstring).
+    matches: list[tuple[Path, str]] = []  # (path, robot_name.lower())
     for candidate in candidates:
         try:
             data = json.loads(candidate.read_text())
             conn = data.get("connection", {})
-            dan = conn.get("device_announcement_name", "").lower()
+            dan = (conn.get("device_announcement_name") or "").lower()
             if dan == announced_name:
-                cfg = load_robot_config(candidate)
-                logger.info(
-                    "match_robot_by_id: matched %r -> %s", announced_name, candidate.name
-                )
-                return cfg
+                rn = ((data.get("identity") or {}).get("robot_name") or "").lower()
+                matches.append((candidate, rn))
         except Exception as exc:
             logger.warning("match_robot_by_id: skipping %s: %s", candidate.name, exc)
+
+    if matches:
+        exact = [m for m in matches if m[1] == announced_name]
+        chosen = (exact or matches)[0][0]
+        if len(matches) > 1:
+            logger.info(
+                "match_robot_by_id: %d configs announce %r (%s); chose %s "
+                "(%s)", len(matches), announced_name,
+                ", ".join(p.name for p, _ in matches), chosen.name,
+                "exact robot_name match" if exact else "first in sorted order",
+            )
+        try:
+            cfg = load_robot_config(chosen)
+            logger.info(
+                "match_robot_by_id: matched %r -> %s", announced_name, chosen.name
+            )
+            return cfg
+        except Exception as exc:
+            logger.warning("match_robot_by_id: failed to load %s: %s", chosen.name, exc)
 
     logger.warning(
         "match_robot_by_id: no config matched name=%r; falling back to get_robot_config()",

@@ -178,6 +178,8 @@ def _run_tour_headless(qapp, monkeypatch, tmp_path, button_name: str):
     Returns the recorded plant ground-truth trace as (x_mm, y_mm, h_rad)
     tuples covering the tour run.
     """
+    import json
+
     from PySide6.QtWidgets import (  # type: ignore[import-untyped]
         QComboBox,
         QDoubleSpinBox,
@@ -185,8 +187,27 @@ def _run_tour_headless(qapp, monkeypatch, tmp_path, button_name: str):
     )
 
     import robot_radio.testgui.__main__ as gui_main
+    from robot_radio.config import robot_config as rc_mod
     from robot_radio.testgui import sim_prefs
     from robot_radio.testgui import transport as transport_mod
+
+    # Pin the active robot to a literal config whose calibration EQUALS the
+    # sim firmware's compiled-in DefaultConfig (rotationalSlip=0.92,
+    # trackwidth=128): Connect now pushes the active robot's calibration to
+    # the firmware, and these tests' measured expectations are defined
+    # against the baked values — the pin makes that push a no-op change and
+    # keeps the test independent of the repo's active_robot.json pointer
+    # (operator state).
+    baked_cfg = tmp_path / "baked_tovez.json"
+    baked_cfg.write_text(json.dumps({
+        "schema_version": 2,
+        "identity": {"robot_name": "tovez-baked", "uid": "tovez-baked"},
+        "connection": {"device_announcement_name": "tovez"},
+        "geometry": {"trackwidth": 128},
+        "calibration": {"rotational_slip": 0.92},
+    }))
+    monkeypatch.setenv("ROBOT_CONFIG", str(baked_cfg))
+    rc_mod._reset_robot_config()
 
     # Keep the operator's persisted error profile untouched: point sim_prefs
     # persistence at a temp file for the whole test (the panel's Apply saves
@@ -281,6 +302,8 @@ def _run_tour_headless(qapp, monkeypatch, tmp_path, button_name: str):
             disconnect_btn.click()
             _spin_events(qapp, 0.3)
         window.hide()
+        # Drop the pinned-config singleton so later tests re-resolve.
+        rc_mod._reset_robot_config()
 
     return truth_mm[n_truth_before:]
 

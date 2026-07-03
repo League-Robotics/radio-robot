@@ -74,25 +74,32 @@ def push_calibration(conn_or_proto: Any, config: Any) -> dict[str, Any]:
     return _push_via_conn(conn, config)
 
 
-def _push_via_conn(conn: Any, config: Any) -> dict[str, Any]:
-    """Build and send the v2 SET / OI / OL / OA sequence over *conn*.
+def calibration_commands(config: Any) -> list[tuple[str, int]]:
+    """Build the v2 calibration wire-command sequence for *config*.
 
-    Mirrors the logic in ``robot_radio.io.cli._push_calibration`` so the two
-    stay in sync.  ``_push_calibration`` in cli.py remains authoritative until
-    ticket 028-003 replaces it; changes there should be ported here.
+    Pure function — returns ``(command, read_ms)`` pairs and sends nothing,
+    so any transport (SerialConnection, NezhaProtocol, or the TestGUI's
+    Transport) can push the same sequence.  Mirrors the logic in
+    ``robot_radio.io.cli._push_calibration``; changes there should be
+    ported here.
 
     The sequence:
       1. ``SET ml=<float>``  — mm_per_wheel_deg_left
       2. ``SET mr=<float>``  — mm_per_wheel_deg_right
       3. ``SET tw=<int>``    — trackwidth mm
-      4. ``OI``              — OTOS init (must precede OL/OA)
-      5. ``OL <int8>``       — otos_linear_scale encoded
-      6. ``OA <int8>``       — otos_angular_scale encoded
-      7. ``SET odomOffX/Y/Yaw`` — only when nonzero
-
-    Returns a dict with ``"status": "ok"`` and ``"commands"`` listing sent verbs.
+      4. ``SET rotSlip=<float>`` — calibration.rotational_slip.  ALWAYS
+         sent: an uncalibrated config (rotational_slip null/missing) pushes
+         the documented "no correction" sentinel ``0`` (``effectiveSlip()``
+         maps 0 -> 1.0), so a no-calibration robot NEUTRALIZES whatever
+         value is baked into the firmware's compiled-in DefaultConfig
+         instead of silently inheriting it.  This is what makes "select
+         tovez nocal → turns are geometry-pure" true in the sim.
+      5. ``OI``              — OTOS init (must precede OL/OA)
+      6. ``OL <int8>``       — otos_linear_scale encoded
+      7. ``OA <int8>``       — otos_angular_scale encoded
+      8. ``SET odomOffX/Y/Yaw`` — only when nonzero
     """
-    sent: list[str] = []
+    cmds: list[tuple[str, int]] = []
 
     # ── Wheel encoder calibration and trackwidth ──────────────────────────
     cal = getattr(config, "calibration", None)
@@ -106,26 +113,22 @@ def _push_via_conn(conn: Any, config: Any) -> dict[str, Any]:
     right_mm_per_deg = right_mm_per_deg if right_mm_per_deg is not None else default_mm_per_deg
 
     if left_mm_per_deg is not None:
-        cmd = f"SET ml={left_mm_per_deg:.6f}"
-        conn.send(cmd, read_ms=200)
-        sent.append(cmd)
-
+        cmds.append((f"SET ml={left_mm_per_deg:.6f}", 200))
     if right_mm_per_deg is not None:
-        cmd = f"SET mr={right_mm_per_deg:.6f}"
-        conn.send(cmd, read_ms=200)
-        sent.append(cmd)
+        cmds.append((f"SET mr={right_mm_per_deg:.6f}", 200))
 
     geom = getattr(config, "geometry", None)
     tw = getattr(geom, "trackwidth", None) if geom else None
     if tw is not None:
-        tw_int = int(round(float(tw)))
-        cmd = f"SET tw={tw_int}"
-        conn.send(cmd, read_ms=200)
-        sent.append(cmd)
+        cmds.append((f"SET tw={int(round(float(tw)))}", 200))
+
+    # ── Rotational slip: always pushed, uncalibrated -> sentinel 0 ────────
+    rot_slip = getattr(cal, "rotational_slip", None) if cal else None
+    rot_slip = float(rot_slip) if rot_slip is not None else 0.0
+    cmds.append((f"SET rotSlip={rot_slip:g}", 200))
 
     # ── OTOS init (must precede scalar writes) ────────────────────────────
-    conn.send("OI", read_ms=500)
-    sent.append("OI")
+    cmds.append(("OI", 500))
 
     # ── OTOS scalars ──────────────────────────────────────────────────────
     lin_scale = getattr(cal, "otos_linear_scale",  None) if cal else None
@@ -133,16 +136,8 @@ def _push_via_conn(conn: Any, config: Any) -> dict[str, Any]:
     lin_scale = float(lin_scale) if lin_scale is not None else 1.0
     ang_scale = float(ang_scale) if ang_scale is not None else 1.0
 
-    lin_int8 = scale_to_int8(lin_scale)
-    ang_int8 = scale_to_int8(ang_scale)
-
-    cmd = f"OL {lin_int8}"
-    conn.send(cmd, read_ms=200)
-    sent.append(cmd)
-
-    cmd = f"OA {ang_int8}"
-    conn.send(cmd, read_ms=200)
-    sent.append(cmd)
+    cmds.append((f"OL {scale_to_int8(lin_scale)}", 200))
+    cmds.append((f"OA {scale_to_int8(ang_scale)}", 200))
 
     # ── OTOS mounting offset (skip if all zero) ───────────────────────────
     off = getattr(geom, "odometry_offset_mm", None) if geom else None
@@ -151,12 +146,20 @@ def _push_via_conn(conn: Any, config: Any) -> dict[str, Any]:
         oy = float(off.y) if hasattr(off, "y") else 0.0
         oyaw_deg = math.degrees(float(off.yaw_rad)) if hasattr(off, "yaw_rad") else 0.0
         if ox != 0.0 or oy != 0.0 or oyaw_deg != 0.0:
-            for cmd in (
-                f"SET odomOffX={ox:.3f}",
-                f"SET odomOffY={oy:.3f}",
-                f"SET odomYaw={oyaw_deg:.3f}",
-            ):
-                conn.send(cmd, read_ms=200)
-                sent.append(cmd)
+            cmds.append((f"SET odomOffX={ox:.3f}", 200))
+            cmds.append((f"SET odomOffY={oy:.3f}", 200))
+            cmds.append((f"SET odomYaw={oyaw_deg:.3f}", 200))
 
+    return cmds
+
+
+def _push_via_conn(conn: Any, config: Any) -> dict[str, Any]:
+    """Send ``calibration_commands(config)`` over *conn* (SerialConnection).
+
+    Returns a dict with ``"status": "ok"`` and ``"commands"`` listing sent verbs.
+    """
+    sent: list[str] = []
+    for cmd, read_ms in calibration_commands(config):
+        conn.send(cmd, read_ms=read_ms)
+        sent.append(cmd)
     return {"status": "ok", "commands": sent}
