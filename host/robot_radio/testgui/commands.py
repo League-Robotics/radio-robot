@@ -28,7 +28,10 @@ G  x y speed        ``G <x> <y> <speed>``
 =================== ===========================================
 
 TURN heading and eps are supplied in degrees (human-friendly) but sent in
-centidegrees (``deg * 100``) on the wire.  The eps field is *optional*: when
+centidegrees (``deg * 100``) on the wire.  The heading field accepts any
+angle (e.g. 270, -450); values outside [-180, 180] are wrapped onto the
+equivalent absolute heading in (-180, 180] before conversion, so
+``TURN 270°`` is sent as ``TURN -9000``.  The eps field is *optional*: when
 its value equals the field default (0) it is omitted from the wire string,
 producing a bare ``TURN <heading_cdeg>``.
 
@@ -98,11 +101,17 @@ class CommandSpec(TypedDict, total=False):
     optional_zero_fields : list[str]
         Names of parameters that, when zero, are omitted from the wire string.
         The ``eps`` field of TURN uses this so ``eps=0`` → omit.
+    wrap_deg_fields : list[str]
+        Names of degree-valued parameters normalized onto (-180, 180] before
+        the centidegree conversion.  Values already within [-180, 180] pass
+        through unchanged.  TURN ``heading`` uses this so any entered angle
+        maps to the equivalent absolute heading.
     """
     label: str
     params: list[ParamSpec]
     cdeg_fields: list[str]
     optional_zero_fields: list[str]
+    wrap_deg_fields: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -143,12 +152,14 @@ COMMANDS: list[CommandSpec] = [
     {
         "label": "TURN",
         "params": [
-            {"name": "heading", "type": int, "min": -180, "max": 180, "default": 90, "unit": "deg"},
-            {"name": "eps",     "type": int, "min": 0,    "max": 180, "default": 0,  "unit": "deg", "optional": True},
+            {"name": "heading", "type": int, "min": -3600, "max": 3600, "default": 90, "unit": "deg"},
+            {"name": "eps",     "type": int, "min": 0,     "max": 180,  "default": 0,  "unit": "deg", "optional": True},
         ],
         # heading/eps are entered in degrees (human-friendly) but sent in centidegrees.
+        # heading accepts any angle; it is wrapped onto (-180, 180] on the wire.
         "cdeg_fields": ["heading", "eps"],
         "optional_zero_fields": ["eps"],
+        "wrap_deg_fields": ["heading"],
     },
     {
         "label": "RT",
@@ -193,6 +204,9 @@ def build_wire_string(spec: CommandSpec, values: dict[str, Any]) -> str:
 
     Notes
     -----
+    * Fields listed in ``spec["wrap_deg_fields"]`` that fall outside
+      [-180, 180] are wrapped onto the equivalent angle in (-180, 180]
+      (e.g. 270 → -90); in-range values pass through unchanged.
     * Fields listed in ``spec["cdeg_fields"]`` are multiplied by 100 before
       formatting (degree → centidegree conversion).
     * Fields listed in ``spec["optional_zero_fields"]`` are omitted from the
@@ -202,18 +216,26 @@ def build_wire_string(spec: CommandSpec, values: dict[str, Any]) -> str:
     label = spec["label"]
     cdeg_fields: set[str] = set(spec.get("cdeg_fields", []) or [])
     optional_zero_fields: set[str] = set(spec.get("optional_zero_fields", []) or [])
+    wrap_deg_fields: set[str] = set(spec.get("wrap_deg_fields", []) or [])
 
     tokens: list[str] = [label]
 
     for param in spec["params"]:
         name = param["name"]
         raw = values.get(name, param.get("default", 0))
+        deg = float(raw)
+
+        # Wrap out-of-range angles onto (-180, 180]; leave in-range as typed.
+        if name in wrap_deg_fields and not -180.0 <= deg <= 180.0:
+            deg = ((deg + 180.0) % 360.0) - 180.0
+            if deg == -180.0:
+                deg = 180.0
 
         # Apply centidegree conversion if this field uses degrees on the UI.
         if name in cdeg_fields:
-            wire_val = int(round(float(raw) * 100))
+            wire_val = int(round(deg * 100))
         else:
-            wire_val = int(round(float(raw)))
+            wire_val = int(round(deg))
 
         # Skip optional fields that are at their "omit" value (0).
         if name in optional_zero_fields and wire_val == 0:
