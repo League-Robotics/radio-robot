@@ -2,7 +2,7 @@
 id: '001'
 title: 'Session-initiation controls strip: single-row selectors and iconed session
   buttons'
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-002
@@ -51,50 +51,50 @@ contract (identical — only visual grouping changes).
 
 ## Acceptance Criteria
 
-- [ ] `transport_combo`, `robot_combo`, and `camera_combo` are children of
+- [x] `transport_combo`, `robot_combo`, and `camera_combo` are children of
       one new `QHBoxLayout` (`selector_row`) in the left panel, in that
       order, each preceded by its existing label
       (`transport_label`/`robot_label`/`camera_combo_label`).
-- [ ] `camera_combo`'s construction (currently lines 900-918, inside the
+- [x] `camera_combo`'s construction (currently lines 900-918, inside the
       right-panel block) is relocated so it can be added to `selector_row`
       before the left panel is finalized — `camera_combo`'s `objectName`,
       tooltip text, and the fact that it is populated later by
       `_populate_camera_combo()` are all unchanged.
-- [ ] The old `camera_row` widget/wrapper is removed entirely from the
+- [x] The old `camera_row` widget/wrapper is removed entirely from the
       right panel; `right_layout` goes directly from `mode_label` (890-898)
       to `right_splitter` (920+), with no gap widget left in its place.
-- [ ] `port_label`/`port_edit` (416-428) keep their own row, unchanged,
+- [x] `port_label`/`port_edit` (416-428) keep their own row, unchanged,
       still enabled/disabled the same way on transport change; they are
       NOT merged into `selector_row`.
-- [ ] `connect_btn`, `disconnect_btn`, `record_btn`, `pause_btn`, and
+- [x] `connect_btn`, `disconnect_btn`, `record_btn`, `pause_btn`, and
       `stop_btn` are children of one new `QHBoxLayout` (`session_btn_row`)
       replacing `btn_row` (430-443) and `rec_row` (445-461), in that exact
       order (Connect, Disconnect, Record, Pause, Stop — per SUC-002's Main
       Flow step 2).
-- [ ] Each button has a non-null icon set via
+- [x] Each button has a non-null icon set via
       `style().standardIcon(QStyle.StandardPixmap.SP_...)` (no external
       asset files): `connect_btn`→`SP_DialogYesButton`,
       `disconnect_btn`→`SP_DialogNoButton`, `record_btn`→`SP_MediaPlay`,
       `pause_btn`→`SP_MediaPause`, `stop_btn`→`SP_MediaStop`. No two
       buttons share the same `QStyle.StandardPixmap` value.
-- [ ] No change to any of the eight widgets' `objectName`, to
+- [x] No change to any of the eight widgets' `objectName`, to
       `disconnect_btn`/`pause_btn`/`stop_btn`'s initial
       `setEnabled(False)`, or to any click/change handler
       (`_on_transport_changed`, `_on_robot_changed`,
       `_on_camera_combo_changed`, connect/disconnect click wiring,
       record/pause/stop click wiring) — only parent-layout membership and
       icon assignment change.
-- [ ] `left_layout.insertWidget(left_layout.count() - 1, ops_panel)`
+- [x] `left_layout.insertWidget(left_layout.count() - 1, ops_panel)`
       (~line 1844) still inserts `ops_panel` immediately before the
       trailing `addStretch()`, unaffected by the row consolidation above
       it (verify by inspection/manual run — `ops_panel` should render in
       the same relative position, just with a shorter block of rows above
       it).
-- [ ] `splitter.setSizes([360, 840])` (line 938) is widened modestly for
+- [x] `splitter.setSizes([360, 840])` (line 938) is widened modestly for
       the left pane to comfortably fit the wider `selector_row` (exact
       pixel values are this ticket's implementation call; no test asserts
       a specific size).
-- [ ] Headless tests that reference any of the eight touched widgets pass
+- [x] Headless tests that reference any of the eight touched widgets pass
       unmodified: `tests/testgui/test_camera_combo.py`,
       `tests/testgui/test_transport.py`,
       `tests/testgui/test_mode_indicator.py`,
@@ -102,7 +102,7 @@ contract (identical — only visual grouping changes).
       `tests/testgui/test_recorder.py`,
       `tests/testgui/test_operations.py`,
       `tests/testgui/test_calibration_push_on_connect.py`.
-- [ ] Full suite (`uv run python -m pytest -q`) passes at the 2682
+- [x] Full suite (`uv run python -m pytest -q`) passes at the 2682
       baseline confirmed in `architecture-update.md`, zero unexplained
       failures. Ignore any `data/robots` drift — noted as environmental in
       the sprint's hard contract.
