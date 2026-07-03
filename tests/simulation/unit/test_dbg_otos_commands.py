@@ -191,17 +191,19 @@ def test_dbg_otos_not_dispatched_as_bench():
 # F1 integer format — 034-004 new host sim test
 # ---------------------------------------------------------------------------
 
-def test_dbg_otos_query_integer_format_non_zero_fused():
-    """DBG OTOS reply has integer (not float) format; fused= is non-zero when
-    OTOS pose has been injected and fused via otosCorrect().
+def test_dbg_otos_query_integer_format_non_zero_optical():
+    """DBG OTOS reply has integer (not float) format; optical= is non-zero when
+    an OTOS pose has been injected and read by the live fusion path.
 
     034-004 (F1 fix): CODAL/newlib-nano has no float printf; the reply was
     changed to scaled integers (mm for position, cdeg for heading).
+    Bench-otos cleanup (2026-07-03): the raw-OTOS field is now labeled
+    `optical=` (it was mislabeled `fused=`); `fused=` is the true EKF pose.
     This test verifies:
       1. The reply does NOT contain '.' characters in the numeric fields
          (integer-only format).
-      2. The fused= field is non-zero after a known OTOS pose is injected
-         and fused — confirms the integer-format path produces real numbers,
+      2. The optical= field is non-zero after a known OTOS pose is injected
+         and read — confirms the integer-format path produces real numbers,
          not the empty strings that %f produced on hardware.
     """
     import ctypes
@@ -209,48 +211,47 @@ def test_dbg_otos_query_integer_format_non_zero_fused():
 
     with Sim() as s:
         # Inject a known OTOS pose: x=500 mm, y=-100 mm, h=pi/2 rad (90°).
-        # Enable OTOS fusion so otosCorrect() fuses the injected pose into
-        # state.inputs.otosX/Y/H (the "fused" fields that DBG OTOS reads).
+        # Enable OTOS fusion so Drive::tickUpdate STEP 5 reads the injected
+        # pose into state.actual.optical (the optical= field DBG OTOS reads).
         s._lib.sim_set_otos_pose(
             s._h,
             ctypes.c_float(500.0),
             ctypes.c_float(-100.0),
             ctypes.c_float(math.pi / 2),
         )
-        # enable_otos_model + otos_fusion marks MockOtosSensor initialized and
-        # enables the otosCorrect() EKF path each tick.
+        # enable_otos_model + otos_fusion marks the SimOdometer initialized and
+        # forces the STEP-5 read/fuse path every tick.
         s._lib.sim_enable_otos_model(s._h)
         s._lib.sim_set_otos_fusion(s._h, ctypes.c_int(1))
 
-        # Advance one tick so loopTickOnce calls otosCorrect and fuses the pose.
+        # Advance one tick so the live path reads and fuses the pose.
         s.tick_for(24)
 
         r = send(s, "DBG OTOS")
 
-        # Field-presence sanity.
+        # Field-presence sanity — both the raw and the true-EKF fields.
+        assert "optical=" in r, f"Expected 'optical=' in reply, got: {repr(r)}"
         assert "fused=" in r, f"Expected 'fused=' in reply, got: {repr(r)}"
 
-        # F1 check: the pose triple for fused must not contain a decimal point.
-        # Locate 'fused=' and check the triple that follows.
-        fused_idx = r.find("fused=")
-        assert fused_idx >= 0, f"'fused=' not found in: {repr(r)}"
-        triple_start = fused_idx + len("fused=")
+        # F1 check: the raw-OTOS triple must not contain a decimal point.
+        optical_idx = r.find("optical=")
+        triple_start = optical_idx + len("optical=")
         # The triple ends at the next space or end-of-line.
         triple_end = r.find(" ", triple_start)
         if triple_end < 0:
             triple_end = len(r)
-        fused_triple = r[triple_start:triple_end]
-        assert "." not in fused_triple, (
-            f"fused= triple contains '.' (float format, not integer): "
-            f"fused_triple={repr(fused_triple)}, full reply={repr(r)}"
+        optical_triple = r[triple_start:triple_end]
+        assert "." not in optical_triple, (
+            f"optical= triple contains '.' (float format, not integer): "
+            f"optical_triple={repr(optical_triple)}, full reply={repr(r)}"
         )
 
-        # Non-zero check: after injecting x=500 the fused x should be close to 500.
-        # Extract the first integer in the triple.
-        parts = fused_triple.split(",")
-        assert len(parts) >= 3, f"fused triple should have 3 parts, got: {repr(fused_triple)}"
-        fused_x_mm = int(parts[0])
-        assert abs(fused_x_mm) > 10, (
-            f"fused_x should be non-zero after pose injection, got {fused_x_mm} mm; "
+        # Non-zero check: after injecting x=500 the raw optical x should be
+        # close to 500 (it is the injected reading, pre-EKF).
+        parts = optical_triple.split(",")
+        assert len(parts) >= 3, f"optical triple should have 3 parts, got: {repr(optical_triple)}"
+        optical_x_mm = int(parts[0])
+        assert abs(optical_x_mm) > 10, (
+            f"optical_x should be non-zero after pose injection, got {optical_x_mm} mm; "
             f"full reply: {repr(r)}"
         )

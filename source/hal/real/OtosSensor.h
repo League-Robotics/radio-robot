@@ -47,7 +47,7 @@ public:
     // Read the raw position registers, convert LSBs to mm/rad, apply the
     // upside-down flip, mounting-offset lever-arm rotation (rotated by heading),
     // and write the result to poseOut.  Does NOT write to HardwareState or call
-    // odometry.correct — those steps remain with the caller (Robot::otosCorrect).
+    // odometry.correct — those steps remain with the caller (Drive::tickUpdate STEP 5).
     // Returns true on I2C success; false if the burst read failed (poseOut = {0,0,0}).
     // heading: current robot heading used to rotate the mounting offset
     //   into the world frame.  No-op when odomOffX/Y are both zero (as in tovez.json).

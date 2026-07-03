@@ -166,10 +166,9 @@ struct Robot {
     // wedge push moved (verbatim) into loopTickOnce()'s CONTROL COLLECT block.
     // The streak/wedge state members below remain — the relocated block uses them.
 
-    // otosCorrect — read OTOS device, write state.inputs.otos*, call estimate.addOtosObservation().
-    // Uses otos.readTransformed(pose, heading) — no inlined LSB math.  039-004:
-    // RobotConfig is sealed out of the read signature (held as an OtosSensor impl member).
-    void otosCorrect(uint32_t now_ms);
+    // otosCorrect REMOVED (bench-otos cleanup, 2026-07-03): dead since the
+    // 060-005 ordered-tick cutover.  The live OTOS read/gate/fuse path is
+    // Drive::tickUpdate() STEP 5 (source/subsystems/drive/Drive.cpp).
 
     // Sensor read task entry points REMOVED (043-001, Phase E): lineRead/colorRead/
     // portsRead bodies moved verbatim into the LineSensor/ColorSensor/Ports
@@ -250,26 +249,10 @@ struct Robot {
     //   serial rate drops ~85-100% of frames during motion (bench-measured).
     bool     _tlmBoundIsRadio = false;
 
-    // ---- OTOS validity tracking (D9 — 027-005) ----
-    // _otosInvalidStartMs: system time when OTOS first became invalid in the
-    //   current invalidity window (0 = OTOS is currently valid / no window open).
-    // _otosLostEmitted: true once "EVT otos lost" has been emitted for the
-    //   current invalidity window; reset to false when OTOS becomes valid again.
-    uint32_t _otosInvalidStartMs = 0;
-    bool     _otosLostEmitted    = false;
-
-    // ---- OTOS WARNING-bit persistence gate (CR-06 — 065-006) ----
-    // Restores the transient-vs-persistent distinction the 2026-06-17
-    // `healthy = poseOk` change lost: a READABLE-but-WARNING reading (bench,
-    // lifted, freshly-placed robot) is fused through <= kOtosWarnPersistK
-    // consecutive warn ticks (transient), then blocked until
-    // kOtosCleanReadmitN consecutive clean ticks re-admit it.  See
-    // architecture-update.md Step 4-5 item 6 / Design Rationale Decision 5.
-    uint8_t _otosWarnStreak    = 0;
-    uint8_t _otosCleanStreak   = 0;
-    bool    _otosFusionBlocked = false;
-    static constexpr uint8_t kOtosWarnPersistK  = 3;
-    static constexpr uint8_t kOtosCleanReadmitN = 5;
+    // OTOS validity tracking (D9) and WARNING-bit persistence gate (065-006)
+    // REMOVED with otosCorrect (bench-otos cleanup, 2026-07-03): both live in
+    // Drive now (_otosWarnStreak/_otosCleanStreak/_otosFusionBlocked and the
+    // _updateOtosFusionGate state machine — see Drive.h/Drive.cpp).
 
 private:
     // Stable storage for command contexts; pointers into these are placed in

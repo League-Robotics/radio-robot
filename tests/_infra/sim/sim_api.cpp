@@ -725,7 +725,7 @@ void sim_set_motor_read_failure(void* h, int side, int fail) {
 
 // ---- OTOS sim model ----
 // Initialize the SimOdometer so the OTOS command surface (OZ/OI/OR/OV, see
-// OtosCommands.cpp's otosReady() guard) and Robot::otosCorrect()'s
+// OtosCommands.cpp's otosReady() guard) and Drive::tickUpdate() STEP 5's
 // is_initialized() guard both activate, WITHOUT also enabling
 // set_field_profile()'s turn-slip/noise side effects. Mirrors
 // drive_api_begin_otos() (tests/_infra/sim/drive_api.cpp) which does the same
@@ -739,7 +739,7 @@ void sim_enable_otos_model(void* h) {
     static_cast<SimHandle*>(h)->hal.simOdometer().enableSimModel(true);
 }
 // Enable/disable the firmware OTOS EKF correction inside sim_tick().
-// Also marks the SimOdometer initialised so Robot::otosCorrect() does not
+// Also marks the SimOdometer initialised so Drive::tickUpdate() STEP 5 does not
 // early-return on its is_initialized() guard.
 void sim_set_otos_fusion(void* h, int on) {
     SimHandle* s = static_cast<SimHandle*>(h);
@@ -986,7 +986,7 @@ void sim_set_color_rgbc(void* h, uint16_t r, uint16_t g,
 
 // Inject / clear an OTOS read failure.  When set, MockOtosSensor::readTransformed
 // and readVelocityTransformed return false and emit {0,0,0}/{0,0}.
-// Robot::otosCorrect() must detect this same-tick failure via the return value
+// Drive::tickUpdate() STEP 5 must detect this same-tick failure via the return value
 // and skip EKF fusion — the fusedV/poseX/Y/H state must remain unchanged.
 void sim_set_otos_read_failure(void* h, int fail)
 {
@@ -1000,7 +1000,7 @@ void sim_set_otos_read_failure(void* h, int fail)
 // readable but the pose accumulator freezes and velocity/accel zero).
 // Mirrors sim_set_otos_read_failure exactly, one tier up (readable-but-
 // degraded rather than unreadable). Drive::tickUpdate's STEP 5 OTOS
-// correction (the live ordered-tick fusion path) and Robot::otosCorrect()
+// correction (the live ordered-tick fusion path) and Drive::tickUpdate() STEP 5
 // both gate `addOtosObservation` on this via their own warn-streak
 // persistence counters.
 void sim_set_otos_warn(void* h, int on)

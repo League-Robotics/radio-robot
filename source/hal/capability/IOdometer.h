@@ -55,7 +55,7 @@ public:
     // No-op for zero offsets (as in tovez.json). Default 0.0f for callers that
     // do not yet supply heading.
     // N9 (030-008): return value enables the same-tick failure gate in
-    // Robot::otosCorrect — callers must check the bool and skip fusion on false.
+    // Drive::tickUpdate STEP 5 — callers must check the bool and skip fusion on false.
     // 039-004: calibration data (RobotConfig) is now an impl member, not a param.
     virtual bool readTransformed(Pose2D& poseOut,
                                  float headingRad = 0.0f) const = 0;

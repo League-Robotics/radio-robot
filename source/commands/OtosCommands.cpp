@@ -103,7 +103,7 @@ static void handleOR(const ArgList& /*args*/, const char* corrId,
 
 // handleOP — report current OTOS pose from cached HardwareState.
 //
-// Reads hwState->optical.pose.{x,y,h} (values written by Robot::otosCorrect()
+// Reads hwState->optical.pose.{x,y,h} (values written by Drive::tickUpdate()
 // each OTOS task tick via actual.optical.pose) instead of calling the device.
 // This is the only OTOS command that does NOT access hardware (flag = CMD_NONE).
 // If hwState is null (test harness without OTOS), returns zeros.

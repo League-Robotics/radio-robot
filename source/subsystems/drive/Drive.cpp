@@ -157,7 +157,7 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
                 // adds the HEALTHY tier so a persistently degraded-but-
                 // readable reading (lifted / on-stand / freshly-placed
                 // robot) is not fused into the EKF, mirroring
-                // Robot::otosCorrect()'s two-tier D9 gate. A failed status
+                // the original two-tier D9 gate. A failed status
                 // read is treated the same as a WARNING tick (conservative —
                 // do not count it toward re-admission).
                 uint8_t otosStatus = 0;
@@ -202,10 +202,10 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
                                             0.0f, now,
                                             _hw.optical, _hw.fused);
                 }
-                // 060-004: Mirror Robot::otosCorrect() — mark otos.valid so
+                // 060-004: mark otos.valid so
                 // buildTlmFrame's N8 freshness gate emits the otos= field.
                 // Raw telemetry visibility is unaffected by the fusion gate
-                // above (matches Robot::otosCorrect's contract).
+                // above (raw visibility is independent of the fusion gate).
                 //
                 // (074-004/SUC-005) otos= (RobotTelemetry.cpp) reflects the
                 // most recent RAW, successfully-read pose from whichever
@@ -455,12 +455,12 @@ void Drive::setEncOmegaHealthy(bool healthy)
 // ---------------------------------------------------------------------------
 // _updateOtosFusionGate — CR-06 (065-006) WARNING-bit persistence gate.
 //
-// Mirrors Robot::otosCorrect()'s state machine exactly: a warn tick
+// The warn-persistence state machine: a warn tick
 // accumulates _otosWarnStreak and drops any partial re-admission progress; a
 // clean tick resets the warn streak and, once blocked, counts toward
 // re-admission. Called once per STEP 5 OTOS read (readable ticks only —
 // unreadable ticks skip fusion entirely via the existing poseOk branch and
-// do not touch this gate, same as Robot::otosCorrect's unreadable path).
+// do not touch this gate).
 // ---------------------------------------------------------------------------
 void Drive::_updateOtosFusionGate(bool warnBit)
 {

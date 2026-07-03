@@ -12,8 +12,7 @@
 // OTOS is resolved LIVE through Hardware every tick (074-002), not bound at
 // construction: STEP 5 of tickUpdate() calls `_hal.otos()` fresh on each read
 // instead of caching an `IOdometer&`, so a runtime `DBG OTOS BENCH` swap of
-// the active odometer is observed on the very next tick. Same live-indirection
-// idiom Robot::otosCorrect() already uses (Robot.cpp) for the identical reason.
+// the active odometer is observed on the very next tick.
 //
 // Constraints: C++11, no heap/STL/RTTI/exceptions, no virtual in the contract.
 // =============================================================================
@@ -61,8 +60,7 @@ public:
     // fresh on every STEP-5 read, rather than caching a boot-time `IOdometer&`.
     // A plain reference cannot be re-seated, so a runtime `DBG OTOS BENCH` swap
     // of Hardware's active pointer would otherwise never reach the live
-    // fusion/telemetry path (mirrors Robot::otosCorrect()'s existing live
-    // `hal.otos()` indirection — see that function's header comment).
+    // fusion/telemetry path.
     Drive(IMotor& motorL, IMotor& motorR,
           MotorController& mc,
           BodyVelocityController& bvc,
@@ -165,10 +163,8 @@ private:
     // ---- OTOS WARNING-bit persistence gate (CR-06 — 065-006) ----
     // This is the LIVE ordered-tick OTOS-fusion path (STEP 5 of tickUpdate,
     // exercised by both real firmware and the sim via loopTickOnce ->
-    // drive.tickUpdate); Robot::otosCorrect() carries the same gate for
-    // documentation/API parity but has no caller post-060 cutover (dead
-    // code -- the legacy loop was deleted in 060-005). Mirrors
-    // Robot::otosCorrect()'s state machine and constants exactly: fuse
+    // drive.tickUpdate) — the SOLE implementation since Robot::otosCorrect
+    // (dead post-060 cutover) was removed in the bench-otos cleanup: fuse
     // through <= kOtosWarnPersistK consecutive WARNING ticks (transient),
     // block once the streak persists, re-admit after kOtosCleanReadmitN
     // consecutive clean ticks. See architecture-update.md Step 4-5 item 6 /

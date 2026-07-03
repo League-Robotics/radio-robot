@@ -409,15 +409,22 @@ static void handleDbgOtosBench(const ArgList& args, const char* corrId,
 // ---------------------------------------------------------------------------
 // DBG OTOS
 //   prefix "DBG OTOS" — parseFn=nullptr (no args).
-//   handler: emit ideal / otos / fused pose line, then OK.
+//   handler: emit ideal / otos / optical / fused pose line, then OK.
 //
 //   Reply lines:
-//     ideal=<x>,<y>,<h> otos=<x>,<y>,<h> fused=<x>,<y>,<h> err=<dx>,<dy>,<dh>
+//     ideal=<x>,<y>,<h> otos=<x>,<y>,<h> optical=<x>,<y>,<h> fused=<x>,<y>,<h>
+//         err=<dx>,<dy>,<dh> status=0x.. statusOk=<n> valid=<n>
 //     OK dbg otos
 //
 //   ideal   = BenchOtosSensor noiseless accumulator.
 //   otos    = BenchOtosSensor errored accumulator (what readTransformed returned).
-//   fused   = state.actual.otosX/Y/H — EKF-fused pose written by otosCorrect().
+//   optical = state.actual.optical.pose — the RAW (pre-EKF) reading from the
+//             ACTIVE odometer, as last admitted by the live fusion path
+//             (Drive::tickUpdate STEP 5).  This field was previously
+//             mislabeled `fused=`, which cost real diagnosis time on the
+//             2026-07-03 bench-OTOS session.
+//   fused   = state.actual.fused.pose — the true EKF pose (same value the
+//             TLM `pose=` clause and the stop conditions consume).
 //   err     = ideal − otos (per-axis).
 //
 //   074-001: HOST_BUILD's SimHardware always owns a real BenchOtosSensor now
@@ -453,10 +460,14 @@ static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
         otosH  = bench->otosH();
     }
 
-    // Raw OTOS pose from state (written by Robot::otosCorrect into optical.pose).
-    float fusedX = ctx.robot->state.actual.optical.pose.x;
-    float fusedY = ctx.robot->state.actual.optical.pose.y;
-    float fusedH = ctx.robot->state.actual.optical.pose.h;
+    // Raw OTOS pose from state (written by Drive::tickUpdate STEP 5's fusion
+    // call into optical.pose) and the true EKF-fused pose.
+    float opticalX = ctx.robot->state.actual.optical.pose.x;
+    float opticalY = ctx.robot->state.actual.optical.pose.y;
+    float opticalH = ctx.robot->state.actual.optical.pose.h;
+    float fusedX   = ctx.robot->state.actual.fused.pose.x;
+    float fusedY   = ctx.robot->state.actual.fused.pose.y;
+    float fusedH   = ctx.robot->state.actual.fused.pose.h;
 
     // err = ideal − otos (per axis).
     float errX = idealX - otosX;
@@ -480,14 +491,15 @@ static void handleDbgOtos(const ArgList& /*args*/, const char* corrId,
     bool statusOk = ctx.robot->hal.otos().readStatus(otosStatus);
     int valid = ctx.robot->state.actual.otos.valid ? 1 : 0;
 
-    char pose_buf[200];
+    char pose_buf[256];
     snprintf(pose_buf, sizeof(pose_buf),
-             "ideal=%d,%d,%d otos=%d,%d,%d fused=%d,%d,%d err=%d,%d,%d "
-             "status=0x%02X statusOk=%d valid=%d",
-             (int)roundf(idealX), (int)roundf(idealY), (int)roundf(idealH * kAngleScale),
-             (int)roundf(otosX),  (int)roundf(otosY),  (int)roundf(otosH  * kAngleScale),
-             (int)roundf(fusedX), (int)roundf(fusedY), (int)roundf(fusedH * kAngleScale),
-             (int)roundf(errX),   (int)roundf(errY),   (int)roundf(errH   * kAngleScale),
+             "ideal=%d,%d,%d otos=%d,%d,%d optical=%d,%d,%d fused=%d,%d,%d "
+             "err=%d,%d,%d status=0x%02X statusOk=%d valid=%d",
+             (int)roundf(idealX),   (int)roundf(idealY),   (int)roundf(idealH   * kAngleScale),
+             (int)roundf(otosX),    (int)roundf(otosY),    (int)roundf(otosH    * kAngleScale),
+             (int)roundf(opticalX), (int)roundf(opticalY), (int)roundf(opticalH * kAngleScale),
+             (int)roundf(fusedX),   (int)roundf(fusedY),   (int)roundf(fusedH   * kAngleScale),
+             (int)roundf(errX),     (int)roundf(errY),     (int)roundf(errH     * kAngleScale),
              (unsigned)otosStatus, statusOk ? 1 : 0, valid);
     replyFn(pose_buf, replyCtx);
 
