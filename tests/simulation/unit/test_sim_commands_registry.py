@@ -149,18 +149,27 @@ def test_simget_unknown_key(sim) -> None:
 # ---------------------------------------------------------------------------
 
 def test_simset_atomic_all_or_nothing_bad_key(sim) -> None:
-    """A mixed valid/invalid SIMSET (unknown key) applies NEITHER key."""
-    # Baseline: read the current (default) value.
+    """A mixed valid/invalid SIMSET (unknown key) applies NEITHER key.
+
+    073-002: ``SimHandle``'s constructor now seeds ``bodyRotScrub`` from the
+    baked-in ``RobotConfig.rotationalSlip`` (0.92 by default), so a fresh
+    ``Sim()``'s baseline is no longer the neutral 1.0 this test used to
+    hardcode. The test's actual claim is atomicity (the value is UNCHANGED
+    by a rejected SIMSET), not that the default happens to be any particular
+    number -- read the baseline dynamically instead of assuming it.
+    """
+    # Baseline: read the current (default) value, whatever it is.
     before = sim.send_command("SIMGET bodyRotScrub")
-    assert "bodyRotScrub=1.000" in before
+    assert before.startswith("SIMCFG"), f"SIMGET bodyRotScrub -> {before!r}"
 
     reply = sim.send_command("SIMSET bodyRotScrub=0.5 notARealKey=1.0")
     assert "ERR" in reply.upper()
     assert "badkey" in reply
 
     after = sim.send_command("SIMGET bodyRotScrub")
-    assert "bodyRotScrub=1.000" in after, (
-        f"bodyRotScrub should be UNCHANGED after a rejected SIMSET; got {after!r}"
+    assert after == before, (
+        f"bodyRotScrub should be UNCHANGED after a rejected SIMSET; "
+        f"before={before!r} after={after!r}"
     )
 
 

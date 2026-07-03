@@ -1,12 +1,12 @@
 ---
-id: "002"
-title: "Sim plant scrub reconciliation"
-status: open
+id: '002'
+title: Sim plant scrub reconciliation
+status: done
 use-cases:
 - SUC-002
 - SUC-003
 depends-on: []
-github-issue: ""
+github-issue: ''
 issue: sim-turn-undershoot.md
 completes_issue: true
 ---
@@ -69,49 +69,75 @@ class-level default); `usecases.md` SUC-002, SUC-003.
 
 ## Acceptance Criteria
 
-- [ ] `SimHandle`'s constructor (`tests/_infra/sim/sim_api.cpp`) gains
+- [x] `SimHandle`'s constructor (`tests/_infra/sim/sim_api.cpp`) gains
       `hal.plant().setBodyRotationalScrub(effectiveSlip(cfg.rotationalSlip));`
       immediately after the existing `hal.setTrackwidth(cfg.trackwidth);`
       line.
-- [ ] `Sim()` constructed with zero explicit configuration, `RT 9000` →
+- [x] `Sim()` constructed with zero explicit configuration, `RT 9000` →
       true heading (`sim.get_true_pose()`) lands close to 90° (combined
       with Ticket 001's coast fix — this ticket alone still shows Ticket
       001's ~3.3° coast gap; the combined ≤~1° bar is Ticket 004's).
-- [ ] `SIMSET bodyRotScrub=1.0` (explicit override back to neutral) +
+      Measured: before this ticket (Ticket 001 alone) RT 9000 → 98.921°
+      (+8.921°, +9.91%); after this ticket → 91.007° (+1.007°, +1.12%) —
+      the over-rotation gap collapses to within Ticket 004's own ≤~1° bar
+      already.
+- [x] `SIMSET bodyRotScrub=1.0` (explicit override back to neutral) +
       `SET rotSlip=1.0` (identity) still reproduces the pre-existing
       "no correction needed" identity behavior — the construction-time
       seed is an overridable default, not a floor or a locked value.
-- [ ] `PhysicsWorld`'s own class-level default (`_bodyRotationalScrub =
+      Measured: RT 9000 → 90.756° (+0.756°), matching the small pre-
+      existing Ticket-001 coast residual, not the scrubbed/inflated cases.
+- [x] `PhysicsWorld`'s own class-level default (`_bodyRotationalScrub =
       1.0f`) is UNCHANGED — bare `PhysicsWorld` unit tests that construct
       the class directly (not via `SimHandle`), e.g.
       `test_physics_world_basic.py`, `test_physics_world_body_scrub.py`,
       pass unmodified.
-- [ ] `PhysicsWorld::setSlip(float straight, float turnExtra)`'s body
+- [x] `PhysicsWorld::setSlip(float straight, float turnExtra)`'s body
       changes from `_rotationalSlip = straight + turnExtra;` to
       `_rotationalSlip = straight;`. `_slipStraight`/`_slipTurnExtra`
       (sub-step A′ inputs) are unchanged.
-- [ ] `setSlip(0.0f, <any nonzero turnExtra>)` produces
+- [x] `setSlip(0.0f, <any nonzero turnExtra>)` produces
       `_rotationalSlip() == 0.0f` — verified by a new, direct
       `PhysicsWorld` unit assertion (via the existing public
       `rotationalSlip()` accessor), independent of any end-to-end sim
-      test.
-- [ ] `test_sim_otos_lever_arm.py::test_turn_with_slip_otos_matches_truth_encoder_diverges`
+      test. See `tests/simulation/unit/test_073_002_setslip_decouple.py`
+      (positive AND negative nonzero `turnExtra`, plus a `straight`-only
+      non-effect pin).
+- [x] `test_sim_otos_lever_arm.py::test_turn_with_slip_otos_matches_truth_encoder_diverges`
       (066-001, uses `straight=0.7, turnExtra=0.0`), `test_physics_world_basic.py`,
       and `test_physics_world_body_scrub.py` (both `turnExtra=0.0`) pass
       UNMODIFIED — confirmed by running these three files BY NAME, not
       just trusting the full-suite pass count (arithmetic result is
       identical under the new derivation since all three pass
       `turnExtra=0.0`).
-- [ ] No `RobotConfig` field, wire command, or `SIMSET`/`SIMGET` key is
+- [x] No `RobotConfig` field, wire command, or `SIMSET`/`SIMGET` key is
       added, removed, or renamed. Zero ARM-firmware-linked file touched —
       confirm `sim_api.cpp` and `PhysicsWorld.{h,cpp}` are both
-      HOST_BUILD/sim-only.
-- [ ] `docs/architecture/architecture-update-069.md`'s Open Question 4
+      HOST_BUILD/sim-only. Confirmed: root `CMakeLists.txt` explicitly
+      excludes `hal/sim/` from the ARM build
+      (`list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/hal/sim/.*")`), and
+      `tests/_infra/sim/sim_api.cpp` is a HOST_BUILD-only test-infra file
+      never referenced by the firmware build.
+- [x] `docs/architecture/architecture-update-069.md`'s Open Question 4
       (consolidating `_rotationalSlip`/`bodyRotScrub`) is narrowed by this
       ticket's Design Rationale reference, not closed — full consolidation
       remains a documented future option (Decision 2), not attempted here.
-- [ ] Full suite (`uv run python -m pytest`) passes at 2655 + this
-      ticket's net new test count, zero unexplained failures.
+- [x] Full suite (`uv run python -m pytest`) passes at 2655 + this
+      ticket's net new test count, zero unexplained failures. Result:
+      2647 passed, 14 failed (2661 collected = 2655 + 6 new tests). Of the
+      14 failures: 13 trace to the pre-existing, environmental
+      `data/robots/active_robot.json` → `tovez_nocal.json` drift (unrelated
+      to this ticket, not committed — see Testing notes below); 1
+      (`test_069_rt_90deg_body_scrub.py::test_rt_90deg_identity_no_scrub`)
+      is the documented, Ticket-004-owned "default is no longer a no-op by
+      design" shift called out in architecture-update.md Step 5. Two
+      OTHER tests that hardcoded the old neutral-default assumption
+      (`test_sim_commands_registry.py::test_simset_atomic_all_or_nothing_bad_key`,
+      `test_068_004_zero_error_three_pose_agreement.py::test_zero_error_three_pose_and_truth_agreement`)
+      were deliberately updated in this ticket (not flagged by name in
+      architecture-update.md's Step 1 code reading, but the same class of
+      casualty from the same root cause, Decision 3's construction-time
+      seed) and now pass.
 
 ## Testing
 
@@ -126,6 +152,54 @@ class-level default); `usecases.md` SUC-002, SUC-003.
   the default robot config (optional, useful for isolating a
   construction-wiring bug from a formula bug before Ticket 004's combined
   sweep runs).
+
+### Implementation notes (as executed)
+
+- New test file: `tests/simulation/unit/test_073_002_setslip_decouple.py`
+  — a standalone `PhysicsWorld` compile-and-run harness (same pattern as
+  `test_physics_world_body_scrub.py`) pinning `setSlip(0.0, <nonzero>)` →
+  `rotationalSlip() == 0.0` for both a positive and a negative `turnExtra`
+  (mirroring the TestGUI's negated `slip_turn_extra` convention), plus a
+  `straight`-only non-effect pin; and two `SIMGET bodyRotScrub`-based tests
+  (via the `sim` fixture) confirming the construction-time seed value and
+  that it is overridable, not a floor.
+- Two EXISTING tests were deliberately updated (beyond the three the
+  ticket named as "confirmed unaffected") because Decision 3's
+  construction-time seed changes what "the default" means, and both tests
+  hardcoded the OLD neutral-default assumption without resetting
+  `bodyRotScrub` explicitly:
+  - `tests/simulation/unit/test_sim_commands_registry.py::test_simset_atomic_all_or_nothing_bad_key`
+    hardcoded `"bodyRotScrub=1.000"` as the baseline; the test's actual
+    claim is atomicity (unchanged by a rejected `SIMSET`), not the
+    default's numeric value — changed to read the baseline dynamically and
+    compare before/after.
+  - `tests/simulation/system/test_068_004_zero_error_three_pose_agreement.py`'s
+    `_configure_zero_error()` zeroed `slip_turn_extra` and `SET rotSlip=0`
+    but never reset the plant's own `bodyRotScrub` — added
+    `SIMSET bodyRotScrub=1.0` so "zero error" also neutralizes the new
+    construction-time-seeded plant channel (sub-step A/encoders are never
+    scrubbed, so an un-reset seed made `encpose=` diverge from
+    true/otos/pose on turns). Both changes are additive resets, not
+    assertion-weakening.
+- Environmental, NOT this ticket's: 13 of the 14 full-suite failures trace
+  to a pre-existing `data/robots/active_robot.json` → `tovez_nocal.json`
+  pointer drift in the shared working tree (unrelated stakeholder testing,
+  confirmed by every failure message referencing `tovez_nocal`/a neutral
+  fallback calibration) — `tests/simulation/unit/test_robot_config.py` (8),
+  `tests/simulation/unit/test_push_calibration.py` (4),
+  `tests/simulation/system/test_070_004_sim_errors_from_cal.py` (1). No
+  `data/robots/` file was modified or committed by this ticket.
+- Empirical RT measurement (clean, zero-configuration `Sim()`, `tick_for(8000)`,
+  `sim.get_true_pose()`):
+
+  | Command | Before ticket 002 (Ticket 001 only) | After ticket 002 |
+  |---|---|---|
+  | `RT 9000` (90°) | 98.921° (+8.921°, +9.91%) | 91.007° (+1.007°, +1.12%) |
+  | `RT 4500` (45°) | 50.105° (+5.105°, +11.34%) | 46.097° (+1.097°, +2.44%) |
+
+  Measured by stashing/restoring the two ticket-002 diffs and rebuilding
+  the sim lib (`cmake --build tests/_infra/sim/build --target clean` +
+  rebuild) between runs.
 - **Verification command**: `uv run python -m pytest`
 
 ## Implementation Plan
