@@ -20,6 +20,8 @@
 #include "commands/CommandProcessor.h"
 #include "commands/CommandQueue.h"
 #include "commands/DebugCommands.h"
+#include "commands/SimCommands.h"
+#include "commands/SimSetters.h"
 #include "hal/sim/SimHardware.h"
 #include "hal/sim/PhysicsWorld.h"
 #include "hal/sim/WorldView.h"
@@ -131,6 +133,10 @@ struct SimHandle {
     // CODAL-dependent handlers (DBG WEDGE, I2CW, etc.) reply ERR noimpl in
     // HOST_BUILD.  DBG OTOS BENCH and DBG OTOS work via HOST_BUILD paths.
     DebugCommands dbg;
+    // SimCommands (069-003) — sim-build-only SIMSET/SIMGET Commandable, wired
+    // with hal (SimHardware).  Declared after hal (constructed first) and
+    // before cmd (whose buildCommandTable() call needs &_simCmds live).
+    SimCommands      _simCmds;
     CommandProcessor cmd;
     ReplyStore       replyStore;
 
@@ -165,7 +171,8 @@ struct SimHandle {
         // busDiag and busAccess null (DebugCommands's I2C handlers are
         // #ifndef HOST_BUILD, so the null bus path is never exercised host-side).
         , dbg(DbgCtx{nullptr, nullptr, nullptr, &robot})
-        , cmd(robot.buildCommandTable(&dbg, nullptr))
+        , _simCmds(hal)
+        , cmd(robot.buildCommandTable(&dbg, nullptr, &_simCmds))
         , benchOtos()
         , _ownerThread(std::this_thread::get_id())
     {
@@ -363,6 +370,41 @@ int sim_command(void* h, const char* line, char* out_buf, int out_len)
     return n;
 }
 
+// ---------------------------------------------------------------------------
+// sim_command_no_simcmds (069-003) — dispatch one command against a FRESH,
+// throwaway command table built with sim=nullptr: the exact shape the ARM
+// firmware's own command table has (main.cpp never passes a SimCommands*).
+// Used to prove SIMSET/SIMGET are ERR unknown -- indistinguishable from any
+// other unregistered verb -- when the sim-only registry extension point is
+// absent, without needing to build/flash real ARM firmware.
+//
+// Builds the alternate table from the SAME live robot/dbg the main SimHandle
+// already owns (buildCommandTable() only reads robot state and re-populates
+// its own stable context structs -- calling it twice is idempotent, see
+// SystemCommands.cpp), so this does not disturb s->cmd or s->robot state.
+// The temporary CommandProcessor has no queue attached; SIMSET/SIMGET (like
+// GET/SET) dispatch synchronously and never touch the motion queue, so this
+// is safe for this one-shot use.
+// ---------------------------------------------------------------------------
+int sim_command_no_simcmds(void* h, const char* line, char* out_buf, int out_len)
+{
+    SimHandle* s = static_cast<SimHandle*>(h);
+
+    CommandProcessor noSimCmd(s->robot.buildCommandTable(&s->dbg, nullptr, nullptr));
+
+    ReplyStore localStore;
+    noSimCmd.process(line, storeReply, &localStore);
+
+    int n = localStore.written;
+    if (out_buf && out_len > 0) {
+        int copy = (n < out_len - 1) ? n : out_len - 1;
+        memcpy(out_buf, localStore.buf, (size_t)copy);
+        out_buf[copy] = '\0';
+        n = copy;
+    }
+    return n;
+}
+
 // ---- Async EVT access ----
 
 // Read async EVT replies accumulated in replyStore since the last
@@ -517,10 +559,12 @@ void sim_set_otos_pose(void* h, float x, float y, float hrad)
 }
 
 // Inject a per-wheel speed offset factor (1.0 = symmetric) into the plant.
-// side: 0 = left, 1 = right, other = both.
+// side: 0 = left, 1 = right, other = both. (069-005) Forwards to the shared
+// simsetters::motorOffset -- the same side-passthrough function SimCommands'
+// registry rows call for the per-side motorOffsetL/R SIMSET keys.
 void sim_set_motor_offset(void* h, int side, float factor)
 {
-    static_cast<SimHandle*>(h)->hal.plant().setOffsetFactor(side, factor);
+    simsetters::motorOffset(static_cast<SimHandle*>(h)->hal, side, factor);
 }
 
 // ---- True pose (plant ground truth, not the EKF/dead-reckoning estimate) ----
@@ -635,8 +679,22 @@ void sim_set_motor_slip(void* h, int side, float straight, float turn_extra) {
     (void)side;
     static_cast<SimHandle*>(h)->hal.plant().setSlip(straight, turn_extra);
 }
+// (069-005) Forwards to the shared simsetters::encoderNoise -- the same
+// side-passthrough function that reduces to PhysicsWorld::setEncoderNoise(),
+// matching its own (0=L,1=R,other=both) convention verbatim.
 void sim_set_encoder_noise(void* h, int side, float sigma_mm) {
-    static_cast<SimHandle*>(h)->hal.plant().setEncoderNoise(side, sigma_mm);
+    simsetters::encoderNoise(static_cast<SimHandle*>(h)->hal, side, sigma_mm);
+}
+
+// ---- Body-truth scrub (069-002) — minimal direct-access hook, ahead of the ----
+// ---- general SIMSET surface (ticket 003). (069-005) Rebased onto the shared ----
+// ---- simsetters:: functions SIMSET's registry rows call (single source of ----
+// ---- truth per knob, architecture-update.md Decision 3). ----
+void sim_set_body_rot_scrub(void* h, float f) {
+    simsetters::bodyRotScrub(static_cast<SimHandle*>(h)->hal, f);
+}
+void sim_set_body_lin_scrub(void* h, float f) {
+    simsetters::bodyLinScrub(static_cast<SimHandle*>(h)->hal, f);
 }
 
 // ---- Encoder I2C read-failure injection (064-005, side: 0=left, 1=right, ----
@@ -678,11 +736,17 @@ void sim_set_otos_fusion(void* h, int on) {
     s->_ts.fuseOtos = (on != 0);
     if (s->_ts.fuseOtos) s->hal.simOdometer().begin();
 }
+// (069-005) Rebased onto the shared simsetters::otosLinNoise/otosYawNoise --
+// previously these called the setLinearNoise()/setYawNoise() back-compat
+// aliases (SimOdometer.h) while SimCommands' registry rows called
+// setLinearNoiseSigma()/setYawNoiseSigma() directly: two textually distinct
+// call paths to the identical field write. Now both go through exactly one
+// function per knob.
 void sim_set_otos_linear_noise(void* h, float sigma_fraction) {
-    static_cast<SimHandle*>(h)->hal.simOdometer().setLinearNoise(sigma_fraction);
+    simsetters::otosLinNoise(static_cast<SimHandle*>(h)->hal, sigma_fraction);
 }
 void sim_set_otos_yaw_noise(void* h, float sigma_fraction) {
-    static_cast<SimHandle*>(h)->hal.simOdometer().setYawNoise(sigma_fraction);
+    simsetters::otosYawNoise(static_cast<SimHandle*>(h)->hal, sigma_fraction);
 }
 float sim_get_otos_x(void* h) {
     return static_cast<SimHandle*>(h)->hal.simOdometer().odomX();

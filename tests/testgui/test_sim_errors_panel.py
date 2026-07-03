@@ -1,10 +1,12 @@
 """tests/testgui/test_sim_errors_panel.py — headless tests for the "Sim Errors" panel.
 
-Covers (issue testgui-sim-error-profile-config):
-- The ``sim_errors_group`` QGroupBox and its four spin boxes
-  (``sim_err_encoder_mm``, ``sim_err_slip_turn``, ``sim_err_otos_linear``,
-  ``sim_err_otos_yaw``) exist and are populated from
-  ``sim_prefs.load_sim_error_profile()`` at window build.
+Covers (issue testgui-sim-error-profile-config; extended to the full SIMSET
+knob set by ticket 069-007):
+- The ``sim_errors_group`` QGroupBox and its spin boxes — the historical
+  four (``sim_err_encoder_mm``, ``sim_err_slip_turn``,
+  ``sim_err_otos_linear``, ``sim_err_otos_yaw``) plus the eleven new 069-007
+  knobs (see ``_ALL_SIM_ERR_SPIN_NAMES`` below) — exist and are populated
+  from ``sim_prefs.load_sim_error_profile()`` at window build.
 - Visibility toggles with the transport combo: visible for "Sim", hidden
   for "Serial" / "Relay".
 - Clicking ``sim_errors_apply_btn`` saves the current field values via
@@ -27,6 +29,23 @@ Requirements: PySide6 (uv sync --group gui).
 from __future__ import annotations
 
 import pytest
+
+# objectName -> DEFAULT_PROFILE key, for every 069-007 spin box (the
+# historical four are covered by their own dedicated assertions below since
+# they predate this map and have their own long-standing tests).
+_NEW_SIM_ERR_SPIN_TO_PROFILE_KEY = {
+    "sim_err_enc_scale_l": "enc_scale_err_l",
+    "sim_err_enc_scale_r": "enc_scale_err_r",
+    "sim_err_body_rot_scrub": "body_rot_scrub",
+    "sim_err_body_lin_scrub": "body_lin_scrub",
+    "sim_err_motor_offset_l": "motor_offset_l",
+    "sim_err_motor_offset_r": "motor_offset_r",
+    "sim_err_trackwidth": "trackwidth_mm",
+    "sim_err_otos_lin_scale": "otos_lin_scale_err",
+    "sim_err_otos_ang_scale": "otos_ang_scale_err",
+    "sim_err_otos_lin_drift": "otos_lin_drift_mms",
+    "sim_err_otos_yaw_drift": "otos_yaw_drift_degs",
+}
 
 
 @pytest.fixture(scope="session")
@@ -64,6 +83,7 @@ class TestSimErrorsPanelExistence:
                 "sim_err_slip_turn",
                 "sim_err_otos_linear",
                 "sim_err_otos_yaw",
+                *_NEW_SIM_ERR_SPIN_TO_PROFILE_KEY,
             ):
                 spin = window.findChild(QDoubleSpinBox, object_name)
                 assert spin is not None, f"{object_name} spin box not found"
@@ -93,6 +113,16 @@ class TestSimErrorsPanelExistence:
             assert slip_spin.value() == pytest.approx(0.26)
             assert linear_spin.value() == pytest.approx(0.05)
             assert yaw_spin.value() == pytest.approx(0.0)
+
+            # 069-007: every new knob must reproduce DEFAULT_PROFILE's
+            # value, including the multiplicative knobs at 1.0 (not 0.0)
+            # and trackwidth_mm at the real 150.0 (not 0.0).
+            for object_name, profile_key in _NEW_SIM_ERR_SPIN_TO_PROFILE_KEY.items():
+                spin = window.findChild(QDoubleSpinBox, object_name)
+                assert spin.value() == pytest.approx(sim_prefs.DEFAULT_PROFILE[profile_key]), (
+                    f"{object_name} did not default to "
+                    f"DEFAULT_PROFILE['{profile_key}']"
+                )
         finally:
             window.hide()
 
@@ -109,6 +139,17 @@ class TestSimErrorsPanelExistence:
                 "slip_turn_extra": 0.5,
                 "otos_linear_noise": 0.3,
                 "otos_yaw_noise": 0.07,
+                "enc_scale_err_l": 0.04,
+                "enc_scale_err_r": -0.04,
+                "body_rot_scrub": 0.8,
+                "body_lin_scrub": 0.85,
+                "motor_offset_l": 1.1,
+                "motor_offset_r": 0.9,
+                "trackwidth_mm": 148.0,
+                "otos_lin_scale_err": 0.03,
+                "otos_ang_scale_err": -0.03,
+                "otos_lin_drift_mms": 2.0,
+                "otos_yaw_drift_degs": -1.5,
             }
         )
 
@@ -126,6 +167,23 @@ class TestSimErrorsPanelExistence:
             assert slip_spin.value() == pytest.approx(0.5)
             assert linear_spin.value() == pytest.approx(0.3)
             assert yaw_spin.value() == pytest.approx(0.07)
+
+            expected = {
+                "sim_err_enc_scale_l": 0.04,
+                "sim_err_enc_scale_r": -0.04,
+                "sim_err_body_rot_scrub": 0.8,
+                "sim_err_body_lin_scrub": 0.85,
+                "sim_err_motor_offset_l": 1.1,
+                "sim_err_motor_offset_r": 0.9,
+                "sim_err_trackwidth": 148.0,
+                "sim_err_otos_lin_scale": 0.03,
+                "sim_err_otos_ang_scale": -0.03,
+                "sim_err_otos_lin_drift": 2.0,
+                "sim_err_otos_yaw_drift": -1.5,
+            }
+            for object_name, value in expected.items():
+                spin = window.findChild(QDoubleSpinBox, object_name)
+                assert spin.value() == pytest.approx(value), f"{object_name} mismatch"
         finally:
             window.hide()
 
@@ -232,12 +290,73 @@ class TestSimErrorsApplyButton:
             apply_btn.click()
 
             assert len(saved) == 1
+            # Only the historical four spin boxes were changed above; every
+            # 069-007 knob must be present in the saved profile at its
+            # DEFAULT_PROFILE value (untouched spin boxes keep their
+            # window-build default).
             assert saved[0] == {
+                **sim_prefs.DEFAULT_PROFILE,
                 "encoder_noise_mm": 6.0,
                 "slip_turn_extra": 0.6,
                 "otos_linear_noise": 0.4,
                 "otos_yaw_noise": 0.08,
             }
+        finally:
+            window.hide()
+
+    def test_apply_saves_all_new_knob_field_values(self, qapp, monkeypatch, tmp_path):
+        """069-007: changing a new knob's spin box must be reflected in the
+        saved profile dict, not silently dropped."""
+        from robot_radio.testgui import sim_prefs
+
+        monkeypatch.setattr(sim_prefs, "_PREFS_PATH", tmp_path / "missing.json")
+
+        saved: list[dict] = []
+        monkeypatch.setattr(
+            sim_prefs, "save_sim_error_profile", lambda profile: saved.append(profile)
+        )
+
+        from PySide6.QtWidgets import QDoubleSpinBox, QPushButton  # type: ignore[import-untyped]
+        from robot_radio.testgui.__main__ import _build_main_window
+
+        window, _app = _build_main_window()
+        try:
+            new_values = {
+                "sim_err_enc_scale_l": 0.1,
+                "sim_err_enc_scale_r": -0.1,
+                "sim_err_body_rot_scrub": 0.7,
+                "sim_err_body_lin_scrub": 0.75,
+                "sim_err_motor_offset_l": 1.2,
+                "sim_err_motor_offset_r": 0.8,
+                "sim_err_trackwidth": 160.0,
+                "sim_err_otos_lin_scale": 0.15,
+                "sim_err_otos_ang_scale": -0.15,
+                "sim_err_otos_lin_drift": 3.0,
+                "sim_err_otos_yaw_drift": -2.0,
+            }
+            for object_name, value in new_values.items():
+                spin = window.findChild(QDoubleSpinBox, object_name)
+                spin.setValue(value)
+
+            apply_btn = window.findChild(QPushButton, "sim_errors_apply_btn")
+            apply_btn.click()
+
+            assert len(saved) == 1
+            expected = {
+                **sim_prefs.DEFAULT_PROFILE,
+                "enc_scale_err_l": 0.1,
+                "enc_scale_err_r": -0.1,
+                "body_rot_scrub": 0.7,
+                "body_lin_scrub": 0.75,
+                "motor_offset_l": 1.2,
+                "motor_offset_r": 0.8,
+                "trackwidth_mm": 160.0,
+                "otos_lin_scale_err": 0.15,
+                "otos_ang_scale_err": -0.15,
+                "otos_lin_drift_mms": 3.0,
+                "otos_yaw_drift_degs": -2.0,
+            }
+            assert saved[0] == pytest.approx(expected)
         finally:
             window.hide()
 
@@ -330,6 +449,7 @@ class TestSimErrorsApplyButton:
                 f"connected fake SimTransport; got {applied}"
             )
             assert applied[0] == {
+                **sim_prefs.DEFAULT_PROFILE,
                 "encoder_noise_mm": 9.0,
                 "slip_turn_extra": 0.9,
                 "otos_linear_noise": 0.9,

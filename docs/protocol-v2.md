@@ -393,6 +393,20 @@ equivalents they replace.
 | `sTimeout`  | int32       | `%d`        | `500`    | Streaming watchdog timeout (ms)         | `KST`     |
 | `tick`      | int32       | `%d`        | `20`     | Main-loop tick period (ms)              | `KTK`     |
 | `tlmPeriod` | int32       | `%d`        | `0`      | TLM streaming period (ms); 0 = off      | —         |
+| `ekfQxy`    | float       | `%.3f`      | `200.000`| EKF process noise: position (mm²/s)     | —         |
+| `ekfQtheta` | float       | `%.3f`      | `0.500`  | EKF process noise: heading (rad²/s)     | —         |
+| `ekfQv`     | float       | `%.3f`      | `5000.000`| EKF process noise: body speed (mm²/s³) | —         |
+| `ekfQomega` | float       | `%.3f`      | `1.000`  | EKF process noise: yaw rate (rad²/s³)   | —         |
+| `ekfROtosXy`| float       | `%.3f`      | `50.000` | EKF OTOS measurement noise: position (mm²) | —      |
+| `ekfROtosV` | float       | `%.3f`      | `200.000`| EKF OTOS measurement noise: body speed (mm²/s²) | — |
+| `ekfREncV`  | float       | `%.3f`      | `100.000`| EKF encoder measurement noise: body speed (mm²/s²) | — |
+
+(Sprint 069-001: these seven rows close 067's Open Question 5 -- a live
+`SET` routes through `Drive::configure()`'s `setNoise()` push, which
+updates EKF fusion noise WITHOUT resetting fused pose/covariance. This
+table has pre-existing drift from several long-landed keys, e.g. `vel.kP`,
+`ekfRHead` itself -- not backfilled here, out of scope per ticket
+068-001's Open Question 1 precedent.)
 
 Type `float-as-int`: stored internally as `float`, read/written on the
 wire as a decimal integer (no fractional part).  `SET tw=121` writes
@@ -1278,6 +1292,114 @@ DBG OTOS
 ideal=245.3,0.0,0.0000 otos=242.1,1.2,-0.0031 fused=243.7,0.6,-0.0015 err=3.2,-1.2,0.0031
 OK dbg otos
 ```
+
+---
+
+## 15. Sim-Only: `SIMSET` / `SIMGET`
+
+**These verbs exist ONLY in sim / `HOST_BUILD` binaries.** They are
+registered by the optional `SimCommands` Commandable
+(`source/commands/SimCommands.{h,cpp}`), which the ARM firmware target never
+constructs and never links (069-003; see architecture-update.md Design
+Rationale Decision 1). On real hardware, `SIMSET`/`SIMGET` are unrecognised
+verbs and return `ERR unknown`, exactly like any other unregistered command
+— no different from typing a typo'd verb.
+
+`SIMSET`/`SIMGET` give the simulator's plant/error parameters
+(`PhysicsWorld`, `SimHardware`) the same runtime-settable, wire-native
+mechanism `SET`/`GET` gives `RobotConfig` — grammar mirrors §7 exactly.
+
+### SIMGET
+
+```
+SIMGET [<key>…] [#id]
+→ SIMCFG <key>=<value>… [#id]
+```
+
+With no arguments, dumps all registered sim keys. With one or more key
+names, returns only those keys. For each unknown key a separate `ERR
+badkey <key>` is emitted (does not prevent the SIMCFG line from being sent
+for valid keys). A bare-dump `SIMGET` chunks its reply across multiple
+`SIMCFG` lines if the full dump would exceed ~200 content bytes (mirrors
+GET's CFG chunking, §7).
+
+Examples:
+
+```
+SIMGET
+SIMCFG bodyRotScrub=1.000 bodyLinScrub=1.000 trackwidthMm=128.000 motorOffsetL=1.000 motorOffsetR=1.000
+
+SIMGET bodyRotScrub
+SIMCFG bodyRotScrub=1.000
+
+SIMGET badkey
+ERR badkey badkey
+```
+
+### SIMSET
+
+```
+SIMSET <key>=<value>… [#id]
+→ OK simset <applied-key>=<value>… [#id]
+   [ERR badkey <key> [#id]]…
+   [ERR badval <key> [#id]]…
+```
+
+Applies all valid keys atomically to the live plant. The entire SIMSET is
+all-or-nothing: if any key is unknown or its value fails to parse as a
+float, NO keys are applied and the plant is unchanged.
+
+- Unknown key → `ERR badkey <key>`
+- Non-numeric or empty value → `ERR badval <key>` (parse failure only —
+  unlike `SET`, `SIMSET` keys have no cross-field invariant checks in this
+  ticket's registry)
+
+Examples:
+
+```
+SIMSET bodyRotScrub=0.92
+OK simset bodyRotScrub=0.92
+
+SIMSET bodyRotScrub=0.5 notARealKey=1.0
+ERR badkey notARealKey
+
+SIMSET trackwidthMm=abc
+ERR badval trackwidthMm
+
+SIMSET motorOffsetL=0.95 motorOffsetR=1.05
+OK simset motorOffsetL=0.95 motorOffsetR=1.05
+```
+
+### Named Key Table
+
+`kSimRegistry[]` (`source/commands/SimCommands.cpp`) dispatches through
+named setter/getter FUNCTION POINTERS over `SimHardware&`, not `offsetof` —
+`PhysicsWorld` is an encapsulated class with invariants, not a POD struct
+(see architecture-update.md Design Rationale Decision 3). Rows 1–5 are
+ticket 003's first batch; rows 6–17 (069-004) surface six per-wheel
+encoder-report-error knobs (`PhysicsWorld`) and six OTOS-error knobs
+(`SimOdometer`) that were already fully implemented but write-only, reachable
+(if at all) only through legacy per-field ctypes test hooks.
+
+| Key                 | Type  | Wire format | Default   | Meaning                                          |
+|---------------------|-------|-------------|-----------|---------------------------------------------------|
+| `bodyRotScrub`      | float | `%.3f`      | `1.000`   | Independent plant body-rotational scrub (069-002); combines multiplicatively with the legacy `_rotationalSlip`/`setSlip()` channel |
+| `bodyLinScrub`      | float | `%.3f`      | `1.000`   | Independent plant body-linear scrub (069-002)     |
+| `trackwidthMm`      | float | `%.3f`      | `128.000` | Robot trackwidth (mm); forwards to `SimHardware::setTrackwidth()` |
+| `motorOffsetL`      | float | `%.3f`      | `1.000`   | Left-wheel plant offset factor (`PhysicsWorld::setOffsetFactor(0, f)`) |
+| `motorOffsetR`      | float | `%.3f`      | `1.000`   | Right-wheel plant offset factor (`PhysicsWorld::setOffsetFactor(1, f)`) |
+| `encScaleErrL`      | float | `%.3f`      | `0.000`   | Left-wheel REPORTED-encoder fractional scale error (`PhysicsWorld::setEncoderScaleError(0, err)`); true accumulator/chassis pose unaffected |
+| `encScaleErrR`      | float | `%.3f`      | `0.000`   | Right-wheel REPORTED-encoder fractional scale error (`PhysicsWorld::setEncoderScaleError(1, err)`) |
+| `encSlipL`          | float | `%.3f`      | `0.000`   | Left-wheel REPORTED-encoder under-report fraction (`PhysicsWorld::setEncoderSlip(0, fraction)`) |
+| `encSlipR`          | float | `%.3f`      | `0.000`   | Right-wheel REPORTED-encoder under-report fraction (`PhysicsWorld::setEncoderSlip(1, fraction)`) |
+| `encNoiseL`         | float | `%.3f`      | `0.000`   | Left-wheel REPORTED-encoder Gaussian noise sigma, mm (`PhysicsWorld::setEncoderNoise(0, sigmaMm)`) |
+| `encNoiseR`         | float | `%.3f`      | `0.000`   | Right-wheel REPORTED-encoder Gaussian noise sigma, mm (`PhysicsWorld::setEncoderNoise(1, sigmaMm)`) |
+| `otosLinScaleErr`   | float | `%.3f`      | `0.000`   | OTOS linear fractional scale error (`SimOdometer::setLinearScaleError()`) |
+| `otosAngScaleErr`   | float | `%.3f`      | `0.000`   | OTOS angular fractional scale error (`SimOdometer::setAngularScaleError()`) |
+| `otosLinNoise`      | float | `%.3f`      | `0.000`   | OTOS linear noise sigma (`SimOdometer::setLinearNoiseSigma()`) |
+| `otosYawNoise`      | float | `%.3f`      | `0.000`   | OTOS yaw noise sigma (`SimOdometer::setYawNoiseSigma()`) |
+| `otosLinDriftMmS`   | float | `%.3f`      | `0.000`   | OTOS linear drift, mm/second (wire unit). Converted to/from `SimOdometer`'s internal PER-TICK `_driftPerTickMm` using `RobotConfig::controlPeriodMs`: `per_tick = per_second * (controlPeriodMs / 1000.0f)`, and the inverse on `SIMGET`. |
+| `otosYawDriftDegS`  | float | `%.3f`      | `0.000`   | OTOS yaw drift, degrees/second (wire unit). Converted to/from `SimOdometer`'s internal PER-TICK `_driftPerTickRad` (radians) using BOTH the same time-domain formula as `otosLinDriftMmS` AND a deg↔rad conversion. |
 
 ---
 

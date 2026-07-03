@@ -16,6 +16,35 @@ static float pwGaussianNoise(std::mt19937& rng, float sigma) {
 #endif
 
 // ---------------------------------------------------------------------------
+// clampScrub — 069-002's body-rotational/body-linear scrub clamp.
+//
+// Deliberately NOT effectiveSlip() (Odometry.h). effectiveSlip()'s
+// 0/unset-means-1.0 and [0.5, 1.0] floor encode _rotationalSlip's own
+// migration/hardware-calibration history (see architecture-update.md
+// Decision 2) — history that _bodyRotationalScrub/_bodyLinearScrub, brand-new
+// fields with no prior deployed config, do not share. clampScrub() clamps
+// only at the boundaries that would make the physics nonsensical:
+//   <= 0   → kMinScrub (a small positive floor). A true 0 or negative scrub
+//            would mean the chassis never rotates/translates at all or moves
+//            backwards relative to the commanded arc — not a scrub, a
+//            division-by-zero / sign-flip pathology — so it floors rather
+//            than silently mapping to 1.0 (which would mask a caller passing
+//            a nonsensical value as "no scrub configured").
+//   > 1.0  → 1.0 (ceiling). A value above 1.0 would mean the chassis
+//            rotates/travels MORE than naive kinematics predicts — a
+//            different physical claim ("amplification") this sprint does not
+//            model.
+//   (0, 1] → pass-through.
+// ---------------------------------------------------------------------------
+static constexpr float kMinScrub = 0.01f;
+
+static float clampScrub(float f) {
+    if (f <= 0.0f) return kMinScrub;
+    if (f > 1.0f)  return 1.0f;
+    return f;
+}
+
+// ---------------------------------------------------------------------------
 // update(dt_ms) — one canonical midpoint-arc integration step.
 //
 // Two structurally separate sub-steps, kept apart for golden-TLM bit-exactness:
@@ -89,14 +118,21 @@ void PhysicsWorld::update(uint32_t dt_ms) {
     // maps 0/unset → 1.0 (no slip), so the golden-TLM fixture (which never calls
     // sim_set_motor_slip) leaves this sub-step's heading unscaled and the canary
     // is unaffected.
+    //
+    // 069-002: _bodyRotationalScrub/_bodyLinearScrub are independent,
+    // default-neutral (1.0) multipliers, combined MULTIPLICATIVELY with the
+    // existing, UNCHANGED effectiveSlip(_rotationalSlip) term — see
+    // architecture-update.md §4b/Decision 4. At the 1.0 default this is
+    // byte-identical to the pre-069-002 expression.
     // -----------------------------------------------------------------------
-    float dL   = velL * dt_s;
-    float dR   = velR * dt_s;
-    float slip = effectiveSlip(_rotationalSlip);
-    float dTh  = ((dR - dL) / _trackwidthMm) * slip;
-    float hMid = _truePoseH + dTh * 0.5f;
-    _truePoseX += (dL + dR) * 0.5f * cosf(hMid);
-    _truePoseY += (dL + dR) * 0.5f * sinf(hMid);
+    float dL       = velL * dt_s;
+    float dR       = velR * dt_s;
+    float slip     = effectiveSlip(_rotationalSlip) * clampScrub(_bodyRotationalScrub);
+    float dTh      = ((dR - dL) / _trackwidthMm) * slip;
+    float hMid     = _truePoseH + dTh * 0.5f;
+    float linScrub = clampScrub(_bodyLinearScrub);
+    _truePoseX += (dL + dR) * 0.5f * linScrub * cosf(hMid);
+    _truePoseY += (dL + dR) * 0.5f * linScrub * sinf(hMid);
     _truePoseH += dTh;
     // Wrap heading to (-pi, pi] (CR-15 item 1 / ticket 066-001) — matches the
     // wrap SimOdometer already applies to its own _odomH accumulator.  Becomes

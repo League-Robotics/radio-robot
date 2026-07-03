@@ -73,6 +73,10 @@ public:
     // Robot trackwidth (mm) so the OTOS sim model integrates correctly.
     void setTrackwidth(float mm) { _trackwidthMm = mm; _plant.setTrackwidth(mm); }
 
+    // Trackwidth getter (069-003) — forwards to the plant (the single source
+    // of truth); SimHardware's own _trackwidthMm cache always mirrors it.
+    float trackwidthMm() const { return _plant.trackwidthMm(); }
+
     // Ground-truth pass-throughs (ticket 057-005): expose the plant's authoritative
     // integrated pose so Python test shims can compare fused output vs. ground truth.
     float groundTruthX() const { return _plant.groundTruthX(); }

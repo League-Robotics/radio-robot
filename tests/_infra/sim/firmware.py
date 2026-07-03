@@ -96,6 +96,30 @@ class Sim:
             return ""
         return buf.raw[:n].decode(errors="replace")
 
+    def send_command_no_simcmds(self, line: str) -> str:
+        """Send one command line to a FRESH, throwaway command table built
+        with sim=nullptr -- the ARM firmware's own command-table shape
+        (069-003). Used to prove SIMSET/SIMGET are ERR unknown, exactly like
+        any other unregistered verb, when the sim-only registry extension
+        point is absent.
+
+        Does not disturb the main command table (``send_command``) or any
+        sim/robot state; see sim_api.cpp's sim_command_no_simcmds() for why
+        this is safe to call standalone.
+
+        Raises ``AttributeError`` if the loaded lib predates this symbol.
+        """
+        if not hasattr(self._lib, "sim_command_no_simcmds"):
+            raise AttributeError(
+                "sim_command_no_simcmds is not present in the loaded "
+                "libfirmware_host — rebuild tests/_infra/sim/ to pick it up"
+            )
+        buf = ctypes.create_string_buffer(2048)
+        n = self._lib.sim_command_no_simcmds(self._h, line.encode(), buf, 2048)
+        if n <= 0:
+            return ""
+        return buf.raw[:n].decode(errors="replace")
+
     def get_async_evts(self) -> str:
         """Return any async EVT replies accumulated since the last send_command call."""
         buf = ctypes.create_string_buffer(2048)
@@ -142,6 +166,20 @@ class Sim:
             ctypes.c_int,
         ]
         lib.sim_command.restype = ctypes.c_int
+
+        # sim_command_no_simcmds(void* h, const char* line, char* out_buf, int out_len) → int
+        # 069-003: dispatches against a throwaway command table built with
+        # sim=nullptr (the ARM-equivalent shape). Guarded with hasattr() —
+        # same stale-prebuilt-lib graceful-degradation precedent as
+        # sim_set_body_rot_scrub below.
+        if hasattr(lib, "sim_command_no_simcmds"):
+            lib.sim_command_no_simcmds.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_char_p,
+                ctypes.c_char_p,
+                ctypes.c_int,
+            ]
+            lib.sim_command_no_simcmds.restype = ctypes.c_int
 
         # sim_get_enc_l / sim_get_enc_r → float
         lib.sim_get_enc_l.argtypes = [ctypes.c_void_p]
@@ -221,6 +259,19 @@ class Sim:
             ctypes.c_float,
         ]
         lib.sim_set_motor_slip.restype = None
+
+        # sim_set_body_rot_scrub(void* h, float f) / sim_set_body_lin_scrub —
+        # ticket 069-002: minimal direct-access hook for PhysicsWorld's new,
+        # independent body-truth scrub fields, ahead of the general SIMSET
+        # surface (ticket 003). Guarded with hasattr() so a stale prebuilt lib
+        # (missing these symbols) degrades gracefully — matches the
+        # sim_set_encoder_noise precedent below.
+        if hasattr(lib, "sim_set_body_rot_scrub"):
+            lib.sim_set_body_rot_scrub.argtypes = [ctypes.c_void_p, ctypes.c_float]
+            lib.sim_set_body_rot_scrub.restype = None
+        if hasattr(lib, "sim_set_body_lin_scrub"):
+            lib.sim_set_body_lin_scrub.argtypes = [ctypes.c_void_p, ctypes.c_float]
+            lib.sim_set_body_lin_scrub.restype = None
 
         # sim_set_motor_read_failure(void* h, int side, int fail) — 064-005:
         # inject/clear an I2C encoder read failure on one or both wheels
@@ -1086,6 +1137,39 @@ class Sim:
             )
         self._lib.sim_set_encoder_noise(
             self._h, ctypes.c_int(side), ctypes.c_float(sigma_mm))
+
+    def set_body_rot_scrub(self, f: float) -> None:
+        """Set PhysicsWorld's independent body-rotational scrub (069-002).
+
+        Default 1.0 = no-op; multiplied INTO (not replacing) the existing
+        effectiveSlip(rotationalSlip) term in sub-step B. Ticket 003 will
+        offer the same knob via ``SIMSET bodyRotScrub=...``; this direct
+        ctypes hook exists so this ticket's own system test does not need to
+        wait for that wire surface.
+
+        Raises ``AttributeError`` if the loaded lib predates this symbol.
+        """
+        if not hasattr(self._lib, "sim_set_body_rot_scrub"):
+            raise AttributeError(
+                "sim_set_body_rot_scrub is not present in the loaded "
+                "libfirmware_host — rebuild tests/_infra/sim/ to pick it up"
+            )
+        self._lib.sim_set_body_rot_scrub(self._h, ctypes.c_float(f))
+
+    def set_body_lin_scrub(self, f: float) -> None:
+        """Set PhysicsWorld's independent body-linear scrub (069-002).
+
+        Default 1.0 = no-op; multiplies the sub-step B linear (dL+dR)*0.5f
+        term. See set_body_rot_scrub() for the corresponding rotational knob.
+
+        Raises ``AttributeError`` if the loaded lib predates this symbol.
+        """
+        if not hasattr(self._lib, "sim_set_body_lin_scrub"):
+            raise AttributeError(
+                "sim_set_body_lin_scrub is not present in the loaded "
+                "libfirmware_host — rebuild tests/_infra/sim/ to pick it up"
+            )
+        self._lib.sim_set_body_lin_scrub(self._h, ctypes.c_float(f))
 
     def get_otos_pose(self) -> tuple[float, float, float]:
         """Return (x_mm, y_mm, h_rad) from the SimOdometer accumulated odom pose.

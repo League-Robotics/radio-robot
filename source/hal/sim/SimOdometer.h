@@ -144,6 +144,30 @@ public:
     void setLinearScaleError(float err)  { _linearScaleErr = err; }
     void setAngularScaleError(float err) { _angularScaleErr = err; }
 
+    // Error-state accessors (069-004) — mirror the six setters immediately
+    // above (setDriftPerTickMm/Rad, setLinearScaleError/setAngularScaleError,
+    // setLinearNoiseSigma/setYawNoiseSigma). Write-only was fine when only
+    // ctypes test code set these (057-005/058-001); the SIMSET/SIMGET wire
+    // surface needs to read them back.
+    float driftPerTickMm()    const { return _driftPerTickMm; }
+    float driftPerTickRad()   const { return _driftPerTickRad; }
+    float linearScaleError()  const { return _linearScaleErr; }
+    float angularScaleError() const { return _angularScaleErr; }
+    float linearNoiseSigma()  const { return _linearNoiseSigma; }
+    float yawNoiseSigma()     const { return _yawNoiseSigma; }
+
+    // Control-tick period (ms), read from the live RobotConfig this odometer
+    // was constructed with (069-004) — NOT a copy, so a runtime `SET
+    // ctrlPeriod=…` is reflected immediately (067's live-reference rule).
+    // tick() adds the FULL _driftPerTickMm/_driftPerTickRad once per call,
+    // and tick() fires once per RobotConfig::controlPeriodMs
+    // (source/types/Config.h:167) — so this is "how many ms is one tick,"
+    // used by SimCommands to convert the wire's per-second
+    // otosLinDriftMmS/otosYawDriftDegS keys to/from this class's internal
+    // per-tick representation. Out-of-line (SimOdometer.cpp) because the
+    // header only forward-declares RobotConfig.
+    int32_t controlPeriodMs() const;
+
     // Accumulated OTOS odometry (sim-model output; back-compat sim_get_otos_*).
     float odomX() const { return _odomX; }
     float odomY() const { return _odomY; }

@@ -1,7 +1,8 @@
 ---
-id: '008'
-title: 'Host-side fit tooling: fit_sim_error_model.py (scipy least_squares, sim-to-sim validated)'
-status: open
+id: 008
+title: 'Host-side fit tooling: fit_sim_error_model.py (scipy least_squares, sim-to-sim
+  validated)'
+status: done
 use-cases:
 - SUC-008
 depends-on:
@@ -73,23 +74,23 @@ fresh sim, and confirm the fit recovers the injected values.
 
 ## Acceptance Criteria
 
-- [ ] `host/robot_radio/calibration/fit_sim_error_model.py` (new): CLI
+- [x] `host/robot_radio/calibration/fit_sim_error_model.py` (new): CLI
       script with (at minimum) a `record` mode (drive a `Sim()` instance
       through a maneuver, emit the JSONL recording) and a `fit` mode
       (consume a recording + a candidate parameter-name list, emit the
       fitted-parameter JSON file).
-- [ ] Recording format: JSONL, transport-agnostic — `{"t": <ms>, "cmd":
+- [x] Recording format: JSONL, transport-agnostic — `{"t": <ms>, "cmd":
       "<wire command text>"}` for each issued command, `{"t": <ms>,
       "encpose": [x,y,h], "otos": [x,y,h], "pose": [x,y,h]}` for each parsed
       TLM frame (reuse `TLMFrame`/`parse_tlm()` from `protocol.py`, do not
       hand-roll a second TLM parser).
-- [ ] Fit uses `scipy.optimize.least_squares` with explicit bounds per
+- [x] Fit uses `scipy.optimize.least_squares` with explicit bounds per
       parameter (not unbounded — the whole point of TRF here is respecting
       each `SIMSET` key's valid range, e.g. `(0, 1]` for scrub factors per
       ticket 002's `clampScrub()`), minimizing summed squared position +
       wrapped-heading residual across `pose=`/`otos=`/`encpose=` at every
       recorded timestamp.
-- [ ] Default candidate parameter set is the deterministic/bias-shaped
+- [x] Default candidate parameter set is the deterministic/bias-shaped
       `SIMSET` subset: `bodyRotScrub`, `bodyLinScrub`, `trackwidthMm`,
       `motorOffsetL`, `motorOffsetR`, `encScaleErrL`, `encScaleErrR`,
       `otosLinScaleErr`, `otosAngScaleErr`, `otosLinDriftMmS`,
@@ -98,32 +99,54 @@ fresh sim, and confirm the fit recovers the injected values.
       treated as a pure-variance term rather than a bias term — confirm
       `encSlipL`/`R`'s bias-vs-variance character by inspection of
       `PhysicsWorld::update()`'s sub-step A' before deciding which bucket it
-      belongs in).
-- [ ] Emitted parameter file: JSON, `{"<SIMSET key>": <fitted value>, …}`.
-- [ ] A CLI mode (or a small companion function) loads a parameter file into
+      belongs in). Confirmed by direct inspection of sub-step A'
+      (`deltaL = noisyL * dt_s * (1 + _encScaleErrL) * (1 - _encSlipL)`):
+      `encSlipL`/`R` is a second deterministic multiplicative BIAS factor,
+      structurally identical in kind to `encScaleErrL`/`R` (the actual
+      variance term is `encNoiseL`/`R`'s separate additive Gaussian draw) —
+      so it is not excluded for a variance-vs-bias reason, only because it
+      is not part of this ticket's literal named default list (documented
+      in the module docstring; still fittable via an explicit
+      `candidate_keys` override).
+- [x] Emitted parameter file: JSON, `{"<SIMSET key>": <fitted value>, …}`.
+- [x] A CLI mode (or a small companion function) loads a parameter file into
       a live connection by sending one batched `SIMSET k1=v1 k2=v2 …`
       command (reuses the same wire mechanism ticket 007's TestGUI panel
       uses — a single `SIMSET` string, not per-key round trips).
-- [ ] **Sim-to-sim validation test**: `SIMSET` known values into Sim A
+- [x] **Sim-to-sim validation test**: `SIMSET` known values into Sim A
       (e.g. `bodyRotScrub=0.90`, `encScaleErrL=0.03`), drive a maneuver,
       record; replay the same command sequence against fresh Sim B instances
       across the fit's search; recover each injected parameter within a
       stated tolerance (e.g. ±10% relative, or an absolute floor for
       near-zero true values — pick and document the exact tolerance in the
-      test).
-- [ ] **Replay-fidelity check**: load the fitted parameter file into a THIRD
+      test). Implemented in
+      `tests/simulation/unit/test_fit_sim_error_model.py::test_sim_to_sim_fit_recovers_injected_params_and_replay_is_faithful`
+      — injected `bodyRotScrub=0.80`, `encScaleErrL=0.06`,
+      `otosLinScaleErr=-0.08`; recovered `0.800024`, `0.060107`,
+      `-0.080321` respectively (all under 1% relative error, well within
+      the stated ±10% relative / 0.02 absolute-floor tolerance).
+- [x] **Replay-fidelity check**: load the fitted parameter file into a THIRD
       fresh sim instance (Sim C), replay the same command sequence, and
       confirm its recorded trajectory agrees with Sim A's original
-      recording within a stated tolerance.
-- [ ] `pyproject.toml`: `scipy` added to the `calibrate` dependency group
+      recording within a stated tolerance. Same test: fitted params
+      replayed into a fresh Sim C reproduce Sim A's `pose=` trajectory with
+      0.0mm maximum divergence at any sampled timestamp (tolerance asserted
+      at < 15mm).
+- [x] `pyproject.toml`: `scipy` added to the `calibrate` dependency group
       (NOT a new group, NOT a stale `host/pyproject.toml` — there is none).
       `uv sync` succeeds and `import scipy.optimize` works from a fresh
-      sync.
-- [ ] Real-hardware Tour-1 record→fit→replay is explicitly NOT attempted by
+      sync. (Added and verified working this session per the team-lead's
+      explicit instruction; the `pyproject.toml`/`uv.lock` diff is left in
+      the shared tree's pre-existing uncommitted packaging-restructure
+      state, NOT committed by this ticket — the team-lead reconciles the
+      `scipy` line into the committed `pyproject.toml` separately.)
+- [x] Real-hardware Tour-1 record→fit→replay is explicitly NOT attempted by
       this ticket — note this in the module's docstring, pointing at the
       Open Questions in `architecture-update.md` for the follow-up HIL
       task's scope.
-- [ ] Full default suite green: `uv run python -m pytest`.
+- [x] Full default suite green: `uv run python -m pytest`. (2612 passed —
+      the pre-ticket baseline of 2601 plus this ticket's 11 new tests; the
+      sim-to-sim validation test RAN, not skipped, with scipy installed.)
 
 ## Testing
 

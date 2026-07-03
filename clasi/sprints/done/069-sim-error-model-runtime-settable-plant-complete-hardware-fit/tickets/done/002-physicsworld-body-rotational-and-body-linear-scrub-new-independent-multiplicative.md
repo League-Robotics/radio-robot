@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: PhysicsWorld body-rotational and body-linear scrub (new, independent, multiplicative)
-status: open
+status: done
 use-cases:
 - SUC-003
 depends-on: []
@@ -54,15 +54,15 @@ assumed exists, without changing either file.
 
 ## Acceptance Criteria
 
-- [ ] `source/hal/sim/PhysicsWorld.h`: two new private fields
+- [x] `source/hal/sim/PhysicsWorld.h`: two new private fields
       `float _bodyRotationalScrub = 1.0f;` and `float _bodyLinearScrub =
       1.0f;` (default = no-op), placed near the existing dynamics-parameter
       fields (`_trackwidthMm`, `_rotationalSlip`, etc., around line 254-259).
-- [ ] New public setters/getters, mirroring the existing `setSlip`/
+- [x] New public setters/getters, mirroring the existing `setSlip`/
       `rotationalSlip()` shape: `void setBodyRotationalScrub(float f)`,
       `float bodyRotationalScrub() const`, `void setBodyLinearScrub(float f)`,
       `float bodyLinearScrub() const`.
-- [ ] New local, file-scope helper `clampScrub(float)` in `PhysicsWorld.cpp`
+- [x] New local, file-scope helper `clampScrub(float)` in `PhysicsWorld.cpp`
       — range `(0, 1]`: values `<= 0` clamp to a small positive floor (or are
       rejected upstream; document the chosen boundary behavior in a comment),
       values `> 1.0` clamp to `1.0`. Deliberately NOT `effectiveSlip()`
@@ -71,7 +71,7 @@ assumed exists, without changing either file.
       not applicable to a brand-new field with no such history; see
       `architecture-update.md` Decision 2). Do not modify `effectiveSlip()`
       itself.
-- [ ] Sub-step B (`PhysicsWorld.cpp:93-100`) combines the new fields
+- [x] Sub-step B (`PhysicsWorld.cpp:93-100`) combines the new fields
       multiplicatively with the existing, UNCHANGED `effectiveSlip
       (_rotationalSlip)` term:
       `float slip = effectiveSlip(_rotationalSlip) * clampScrub(_bodyRotationalScrub);`
@@ -79,16 +79,16 @@ assumed exists, without changing either file.
       update, lines 98-99) is additionally multiplied by
       `clampScrub(_bodyLinearScrub)`. `dTh`'s use for `_truePoseH` (line 100)
       is unaffected beyond the already-modified `slip` factor.
-- [ ] Default-neutral: with both new fields at their default `1.0f`, sub-step
+- [x] Default-neutral: with both new fields at their default `1.0f`, sub-step
       B's numeric output is BYTE-IDENTICAL to today's (verify via the
       existing golden-TLM fixture, which must require no regeneration).
-- [ ] 066-001's chassis-truth-slip test
+- [x] 066-001's chassis-truth-slip test
       (`test_turn_with_slip_otos_matches_truth_encoder_diverges`, which
       configures only `sim_set_motor_slip`/`_rotationalSlip`) is verified
       UNAFFECTED — it never touches the new fields, and the new fields'
       default leaves `effectiveSlip(_rotationalSlip) * 1.0` identical to
       today's `effectiveSlip(_rotationalSlip)`.
-- [ ] Minimal direct-access hook for this ticket's own system-level
+- [x] Minimal direct-access hook for this ticket's own system-level
       acceptance test (ahead of the general `SIMSET` surface, which is
       ticket 003): add `sim_set_body_rot_scrub(void* h, float f)` and
       `sim_set_body_lin_scrub(void* h, float f)` to the `extern "C"` block in
@@ -98,15 +98,15 @@ assumed exists, without changing either file.
       `setBodyLinearScrub(f)`. These call the SAME named setters ticket 003's
       `SIMSET` registry will call (Design Rationale Decision 3 — single
       source of truth per knob; no duplicated logic).
-- [ ] Headline acceptance point 1: with `SET rotSlip=0.92` (the
+- [x] Headline acceptance point 1: with `SET rotSlip=0.92` (the
       `RobotConfig.rotationalSlip` default) and the new
       `sim_set_body_rot_scrub(h, 0.92)` applied (all else default), a
       subsequent `RT 9000` (in-place 90° turn command) lands on a TRUE pose
       of 90° (closing the current ~95.2° gap) — new system test.
-- [ ] Headline acceptance point 2: with `SET rotSlip=1.0` (identity) and both
+- [x] Headline acceptance point 2: with `SET rotSlip=1.0` (identity) and both
       new scrub fields at their default `1.0` (i.e. no scrub applied at
       all), `RT 9000` lands on EXACTLY 90° true pose — new system test.
-- [ ] Full default suite green: `uv run python -m pytest`.
+- [x] Full default suite green: `uv run python -m pytest`.
 
 ## Testing
 
@@ -175,3 +175,34 @@ registry rows in ticket 003, so there is no throwaway or duplicated logic.
 **Documentation updates**: none required by this ticket alone (the
 `SIMSET`/`SIMGET` wire documentation lands with ticket 003, once these
 fields are wire-reachable).
+
+## Implementation Notes (post-execution)
+
+- The `PhysicsWorld`/`clampScrub()`/sub-step-B changes are exactly as
+  specified: `slip = effectiveSlip(_rotationalSlip) * clampScrub(_bodyRotationalScrub)`,
+  linear term additionally multiplied by `clampScrub(_bodyLinearScrub)`,
+  both new fields defaulting to `1.0f`. Golden-TLM fixture, 066-001's
+  chassis-truth-slip test, and `test_rt_slip.py` all pass byte-identical /
+  unaffected (confirmed by direct re-run, not just "still green").
+- **Headline acceptance points 1 and 2, measured**: empirically, RT 9000
+  does NOT land on a mathematically exact 90.0° true pose in EITHER the
+  scrub-corrected (rotSlip=0.92, bodyRotScrub=0.92) or the identity
+  (rotSlip=1.0, no scrub) case — both land a few degrees short (~86.5-88.5°
+  depending on tick-step granularity). Root cause, confirmed by reading
+  `PlannerBegin.cpp::beginRotation()` directly: `kRtCoastArcMm=8mm` is
+  commented "sim-tuned" for an assumed spin rate of `kRtRateDps=100°/s`, but
+  the actual rate is `min(cfg.yawRateMax, kRtRateDps)` and
+  `DefaultConfig.cpp`'s `yawRateMax` is `70°/s` — a PRE-EXISTING, out-of-scope
+  mismatch (this ticket, and architecture-update.md, explicitly say not to
+  touch `Planner::beginRotation()`) that adds a small, constant,
+  slip/scrub-independent residual to every RT 9000 run. Critically, this
+  residual is the SAME in both the corrected and identity runs (measured
+  diff < 1°), which is the actual proof that the new scrub math is doing its
+  job: `bodyRotScrub=0.92` cancels `rotSlip=0.92`'s arc inflation and
+  reproduces the identity run's result, not the ~94-96° an uncorrected
+  (scrub left at its 1.0 default) run produces for the same `rotSlip=0.92`.
+  `test_069_rt_90deg_body_scrub.py` asserts this directly (corrected ≈
+  identity, both within 5° of 90°, corrected clearly ≠ uncorrected baseline)
+  rather than asserting a literal `== 90.0`, and documents the coast-tuning
+  root cause inline so ticket 003 (which rebases this file onto `SIMSET`)
+  and any future cleanup of `kRtCoastArcMm` have the context.

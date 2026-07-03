@@ -645,8 +645,9 @@ def _build_main_window():  # type: ignore[return]
     # GOTO enables/disables with the Send buttons on connect/disconnect.
     _send_buttons.append(goto_btn)
 
-    # Sim Errors panel (issue testgui-sim-error-profile-config) — makes the
-    # Sim-mode injected encoder/OTOS error configurable instead of the two
+    # Sim Errors panel (issue testgui-sim-error-profile-config, extended to
+    # the full SIMSET knob set by ticket 069-007) — makes every Sim-mode
+    # injected plant/odometry error runtime-configurable instead of the
     # historical hardcoded constants. Backed by sim_prefs' persisted JSON
     # file; visible only when Sim is the selected transport (toggled in
     # _on_transport_changed below). Editable pre-connect: the normal
@@ -682,14 +683,71 @@ def _build_main_window():  # type: ignore[return]
         sim_errors_layout.addWidget(row)
         return spin
 
+    def _add_sim_err_section_label(title: str) -> None:
+        """Bold sub-heading grouping the spin-box rows that follow it.
+
+        Purely visual (069-007's suggested grouping: "Encoder Report Error",
+        "Body-Truth Scrub", "Geometry & Actuation", "OTOS Error") — the
+        panel's flat QVBoxLayout has no nested QGroupBoxes, so tests locate
+        individual spin boxes by objectName regardless of grouping.
+        """
+        lbl = QLabel(title)
+        bold_font = lbl.font()
+        bold_font.setBold(True)
+        lbl.setFont(bold_font)
+        sim_errors_layout.addWidget(lbl)
+
+    # -- Encoder Report Error --------------------------------------------
+    _add_sim_err_section_label("Encoder Report Error")
     sim_err_encoder_mm = _make_sim_err_spin(
         "sim_err_encoder_mm", "encoder noise (mm):",
         _sim_error_profile["encoder_noise_mm"], 0.0, 50.0, 2,
     )
+    sim_err_enc_scale_l = _make_sim_err_spin(
+        "sim_err_enc_scale_l", "enc scale err L:",
+        _sim_error_profile["enc_scale_err_l"], -0.5, 0.5, 3,
+    )
+    sim_err_enc_scale_r = _make_sim_err_spin(
+        "sim_err_enc_scale_r", "enc scale err R:",
+        _sim_error_profile["enc_scale_err_r"], -0.5, 0.5, 3,
+    )
+
+    # -- Body-Truth Scrub --------------------------------------------------
+    _add_sim_err_section_label("Body-Truth Scrub")
     sim_err_slip_turn = _make_sim_err_spin(
         "sim_err_slip_turn", "turn slip:",
         _sim_error_profile["slip_turn_extra"], 0.0, 2.0, 3,
     )
+    sim_err_body_rot_scrub = _make_sim_err_spin(
+        "sim_err_body_rot_scrub", "body rot scrub:",
+        _sim_error_profile["body_rot_scrub"], 0.0, 1.0, 3,
+    )
+    sim_err_body_lin_scrub = _make_sim_err_spin(
+        "sim_err_body_lin_scrub", "body lin scrub:",
+        _sim_error_profile["body_lin_scrub"], 0.0, 1.0, 3,
+    )
+
+    # -- Geometry & Actuation ----------------------------------------------
+    _add_sim_err_section_label("Geometry & Actuation")
+    sim_err_motor_offset_l = _make_sim_err_spin(
+        "sim_err_motor_offset_l", "motor offset L:",
+        _sim_error_profile["motor_offset_l"], 0.0, 2.0, 3,
+    )
+    sim_err_motor_offset_r = _make_sim_err_spin(
+        "sim_err_motor_offset_r", "motor offset R:",
+        _sim_error_profile["motor_offset_r"], 0.0, 2.0, 3,
+    )
+    # trackwidth_mm has NO safe zero default (PhysicsWorld::update() divides
+    # by it) — the spinbox range excludes 0 entirely, and the default is the
+    # plant's real compiled-in trackwidth (150.0mm), not a sentinel. Every
+    # Apply unconditionally sends this value; there is no "don't touch" case.
+    sim_err_trackwidth = _make_sim_err_spin(
+        "sim_err_trackwidth", "trackwidth (mm):",
+        _sim_error_profile["trackwidth_mm"], 10.0, 500.0, 1,
+    )
+
+    # -- OTOS Error ----------------------------------------------------------
+    _add_sim_err_section_label("OTOS Error")
     sim_err_otos_linear = _make_sim_err_spin(
         "sim_err_otos_linear", "OTOS linear noise:",
         _sim_error_profile["otos_linear_noise"], 0.0, 2.0, 3,
@@ -697,6 +755,22 @@ def _build_main_window():  # type: ignore[return]
     sim_err_otos_yaw = _make_sim_err_spin(
         "sim_err_otos_yaw", "OTOS yaw noise:",
         _sim_error_profile["otos_yaw_noise"], 0.0, 2.0, 3,
+    )
+    sim_err_otos_lin_scale = _make_sim_err_spin(
+        "sim_err_otos_lin_scale", "OTOS lin scale err:",
+        _sim_error_profile["otos_lin_scale_err"], -0.5, 0.5, 3,
+    )
+    sim_err_otos_ang_scale = _make_sim_err_spin(
+        "sim_err_otos_ang_scale", "OTOS ang scale err:",
+        _sim_error_profile["otos_ang_scale_err"], -0.5, 0.5, 3,
+    )
+    sim_err_otos_lin_drift = _make_sim_err_spin(
+        "sim_err_otos_lin_drift", "OTOS lin drift (mm/s):",
+        _sim_error_profile["otos_lin_drift_mms"], -50.0, 50.0, 2,
+    )
+    sim_err_otos_yaw_drift = _make_sim_err_spin(
+        "sim_err_otos_yaw_drift", "OTOS yaw drift (deg/s):",
+        _sim_error_profile["otos_yaw_drift_degs"], -30.0, 30.0, 2,
     )
 
     sim_errors_apply_btn = QPushButton("Apply")
@@ -710,6 +784,17 @@ def _build_main_window():  # type: ignore[return]
             "slip_turn_extra": sim_err_slip_turn.value(),
             "otos_linear_noise": sim_err_otos_linear.value(),
             "otos_yaw_noise": sim_err_otos_yaw.value(),
+            "enc_scale_err_l": sim_err_enc_scale_l.value(),
+            "enc_scale_err_r": sim_err_enc_scale_r.value(),
+            "body_rot_scrub": sim_err_body_rot_scrub.value(),
+            "body_lin_scrub": sim_err_body_lin_scrub.value(),
+            "motor_offset_l": sim_err_motor_offset_l.value(),
+            "motor_offset_r": sim_err_motor_offset_r.value(),
+            "trackwidth_mm": sim_err_trackwidth.value(),
+            "otos_lin_scale_err": sim_err_otos_lin_scale.value(),
+            "otos_ang_scale_err": sim_err_otos_ang_scale.value(),
+            "otos_lin_drift_mms": sim_err_otos_lin_drift.value(),
+            "otos_yaw_drift_degs": sim_err_otos_yaw_drift.value(),
         }
         sim_prefs.save_sim_error_profile(profile)
         _append_log(
@@ -717,7 +802,8 @@ def _build_main_window():  # type: ignore[return]
             f"(encoder_noise_mm={profile['encoder_noise_mm']}, "
             f"slip_turn_extra={profile['slip_turn_extra']}, "
             f"otos_linear_noise={profile['otos_linear_noise']}, "
-            f"otos_yaw_noise={profile['otos_yaw_noise']})"
+            f"otos_yaw_noise={profile['otos_yaw_noise']}, "
+            f"...+{len(profile) - 4} more knobs)"
         )
         transport = _state.get("transport")
         if transport is not None and is_sim_transport(transport):

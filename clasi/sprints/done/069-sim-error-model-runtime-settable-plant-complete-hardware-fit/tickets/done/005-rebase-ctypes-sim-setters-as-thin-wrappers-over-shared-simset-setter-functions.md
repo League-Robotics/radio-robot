@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: Rebase ctypes sim setters as thin wrappers over shared SIMSET setter functions
-status: open
+status: done
 use-cases:
 - SUC-002
 - SUC-003
@@ -56,7 +56,7 @@ modify) the two Python files.
 
 ## Acceptance Criteria
 
-- [ ] Any per-row adapter function introduced by tickets 003/004 inside
+- [x] Any per-row adapter function introduced by tickets 003/004 inside
       `SimCommands.cpp` (e.g. a function that adapts
       `PhysicsWorld::setEncoderScaleError(int side, float)` to the
       per-key, per-side `encScaleErrL`/`encScaleErrR` registry rows) is
@@ -68,34 +68,75 @@ modify) the two Python files.
       dependency direction clean — `SimCommands` and `sim_api.cpp` both
       already depend on `SimHardware`/`PhysicsWorld`, so this introduces no
       new dependency direction).
-- [ ] `tests/_infra/sim/sim_api.cpp`'s existing `sim_set_encoder_noise`,
+      Done: new header-only `source/commands/SimSetters.h`
+      (`namespace simsetters`) holds every one of `kSimRegistry[]`'s 17
+      setter+getter functions (not just the two example rows) as `inline`
+      free functions over `SimHardware&` — `SimCommands.cpp`'s registry now
+      points directly at `simsetters::*` (no local static adapters remain in
+      that file). Two extra side-parameterized pass-throughs
+      (`simsetters::encoderNoise(hal, side, v)`, `simsetters::motorOffset(hal,
+      side, v)`) were added alongside the per-side `encoderNoiseL/R` /
+      `motorOffsetL/R` rows specifically so the legacy ctypes functions
+      (which take a runtime `side` including "both", per
+      `PhysicsWorld::setEncoderNoise`/`setOffsetFactor`'s own convention) can
+      forward with no behavior change — both forms reduce to the exact same
+      one-line call into `PhysicsWorld`, so nothing is duplicated.
+- [x] `tests/_infra/sim/sim_api.cpp`'s existing `sim_set_encoder_noise`,
       `sim_set_otos_linear_noise`, `sim_set_otos_yaw_noise`, and
       `sim_set_motor_offset` bodies are rewritten as one-line forwards to
       the shared `simsetters::` functions (or confirmed, where already a
       direct one-line forward to a `PhysicsWorld`/`SimOdometer` method with
       no per-row adaptation needed, to already satisfy "single source of
       truth" — no change required in that case; document which is which).
-- [ ] The two ticket-002 ctypes forwards (`sim_set_body_rot_scrub`,
+      Done: all four rewritten as one-line forwards
+      (`simsetters::encoderNoise`, `simsetters::otosLinNoise`,
+      `simsetters::otosYawNoise`, `simsetters::motorOffset`). Note:
+      `sim_set_otos_linear_noise`/`sim_set_otos_yaw_noise` previously called
+      the `setLinearNoise()`/`setYawNoise()` back-compat aliases in
+      `SimOdometer.h` while `SimCommands`'s registry rows called
+      `setLinearNoiseSigma()`/`setYawNoiseSigma()` directly — two textually
+      distinct call paths writing the identical field (no behavior
+      difference, but not "exactly the same underlying code path" as the
+      ticket requires). Both now go through `simsetters::otosLinNoise`/
+      `otosYawNoise`, which call `setLinearNoiseSigma()`/`setYawNoiseSigma()`
+      — the `setLinearNoise()`/`setYawNoise()` aliases in `SimOdometer.h` are
+      now unused dead code, left untouched (out of this ticket's file scope:
+      `SimOdometer.h` is not in the ticket's "Files to modify" list).
+- [x] The two ticket-002 ctypes forwards (`sim_set_body_rot_scrub`,
       `sim_set_body_lin_scrub`) are rewritten to call the same
       `simsetters::` function(s) `SimCommands`'s `bodyRotScrub`/
       `bodyLinScrub` registry rows call — no duplicated
       `.hal.plant().setBodyRotationalScrub(...)` call site.
-  - [ ] `sim_set_motor_slip` is explicitly left UNTOUCHED — verify by
+  - [x] `sim_set_motor_slip` is explicitly left UNTOUCHED — verify by
       inspection that no change is made to it or its call site.
-- [ ] `tests/_infra/sim/drive_api.cpp`: confirmed unaffected (no scrub/error
+      Confirmed by inspection: `sim_set_motor_slip` (sim_api.cpp) still
+      calls `static_cast<SimHandle*>(h)->hal.plant().setSlip(straight,
+      turn_extra)` directly, byte-identical to before this ticket.
+- [x] `tests/_infra/sim/drive_api.cpp`: confirmed unaffected (no scrub/error
       field access) — no code change; note this explicitly in the PR/ticket
       close-out rather than silently skipping it.
-- [ ] `host/robot_radio/io/sim_conn.py`: confirmed unaffected in interface —
+      Confirmed: `drive_api.cpp`'s `drive_api_enable_otos_sim_model`/
+      `drive_api_enable_encoder_sim_model` operate on `DriveHandle`'s own
+      `SimOdometer`/`SimMotor` instances via direct method calls
+      (`setLinearScaleError`, `setScaleError`, `setSlip`, etc.) — a
+      completely separate `SimHardware` instance from the one `SimCommands`
+      wires into `SimHandle`/`Robot`. No `simsetters::`/`SimCommands`
+      overlap; no code change made, as expected.
+- [x] `host/robot_radio/io/sim_conn.py`: confirmed unaffected in interface —
       every existing per-field ctypes wrapper method (`set_slip`,
       `set_encoder_noise`, `set_otos_noise`, `set_motor_offset`, etc.) keeps
       its exact Python signature and still calls the same-named ctypes
       function; no code change required (the C-side rebase is
       behavior-preserving by construction). Run the existing pytest
       fixtures that call these methods directly to confirm.
-- [ ] Every existing pytest test that calls one of the rebased ctypes
+      Confirmed by inspection (no code change) and by the full green suite
+      run below, which exercises `sim_conn.py`'s wrapper methods (e.g.
+      `tests/testgui/test_transport.py`).
+- [x] Every existing pytest test that calls one of the rebased ctypes
       functions directly (not through `SIMSET`) passes unchanged —
       behavior-preserving refactor, not a behavior change.
-- [ ] Full default suite green: `uv run python -m pytest`.
+- [x] Full default suite green: `uv run python -m pytest`.
+      2582 passed, 0 failed — identical to the stated post-004 baseline.
 
 ## Testing
 

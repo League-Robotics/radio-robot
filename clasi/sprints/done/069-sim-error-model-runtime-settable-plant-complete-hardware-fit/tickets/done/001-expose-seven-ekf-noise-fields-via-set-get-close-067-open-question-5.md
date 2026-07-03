@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Expose seven EKF noise fields via SET/GET (close 067 Open Question 5)
-status: open
+status: done
 use-cases:
 - SUC-001
 depends-on: []
@@ -45,7 +45,7 @@ hardware and in sim), so it is a `SET` key, not a `SIMSET` key, per
 
 ## Acceptance Criteria
 
-- [ ] `source/robot/ConfigRegistry.cpp`: seven new rows added to `kRegistry[]`
+- [x] `source/robot/ConfigRegistry.cpp`: seven new rows added to `kRegistry[]`
       immediately after the existing `CFG_F_SS("ekfRHead", ekfROtosTheta,
       "drive")` row (line 105), same macro shape:
       `CFG_F_SS("ekfQxy", ekfQxy, "drive")`,
@@ -55,31 +55,31 @@ hardware and in sim), so it is a `SET` key, not a `SIMSET` key, per
       `CFG_F_SS("ekfROtosXy", ekfROtosXy, "drive")`,
       `CFG_F_SS("ekfROtosV", ekfROtosV, "drive")`,
       `CFG_F_SS("ekfREncV", ekfREncV, "drive")`.
-- [ ] No change to `EKFTiny`, `Odometry`, `PhysicalStateEstimate`, or
+- [x] No change to `EKFTiny`, `Odometry`, `PhysicalStateEstimate`, or
       `Drive::configure()` — verify by inspection that `Drive.cpp:455-458`'s
       `setNoise(...)` call is untouched and already reads the live
       `_robCfg` fields these new keys write.
-- [ ] Each of the seven keys is `SET`/`GET`-able:
+- [x] Each of the seven keys is `SET`/`GET`-able:
       `SET ekfQxy=<v>` then `GET ekfQxy` round-trips the value (repeat per
       key, or one parametrized test).
-- [ ] `SET`-ting any one of the seven keys changes EKF fusion behavior
+- [x] `SET`-ting any one of the seven keys changes EKF fusion behavior
       observably — new sim test: drive to a non-trivial pose, inject a
       deliberate OTOS position or velocity disagreement, vary one of the new
       keys (e.g. `ekfROtosXy`) between two values, and confirm the
       correction magnitude differs. Follow the existing pattern in
       `067-003`'s regression tests (same shape, applied to a newly-registered
       key instead of `ekfRHead`).
-- [ ] No existing EKF-state/covariance disturbance: immediately after `SET`
+- [x] No existing EKF-state/covariance disturbance: immediately after `SET`
       of any of the seven keys mid-mission, the fused pose/velocity read back
       identically to their pre-SET values (proves `setNoise()`'s
       non-resetting contract holds for these keys too — mirrors 067-003's
       own "no reset-to-origin regression" acceptance criterion).
-- [ ] `docs/protocol-v2.md` §7 Named Key Table gains the seven new rows.
+- [x] `docs/protocol-v2.md` §7 Named Key Table gains the seven new rows.
       Do NOT attempt to backfill the table's pre-existing drift (it is
       already missing several long-landed keys, e.g. `vel.kP`, `ekfRHead`
       itself — out of scope, same precedent as ticket 068-001's Open
       Question 1).
-- [ ] Full default suite green: `uv run python -m pytest`.
+- [x] Full default suite green: `uv run python -m pytest`.
 
 ## Testing
 
