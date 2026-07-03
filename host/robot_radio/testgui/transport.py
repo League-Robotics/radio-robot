@@ -1061,25 +1061,57 @@ class SimTransport(Transport):
         self._apply_profile_to_sim(sim, profile)
 
     def _apply_profile_to_sim(self, sim: "object", profile: dict) -> None:
-        """Apply all four sim error knobs in ``profile`` to ``sim``.
+        """Apply every sim error knob in ``profile`` to ``sim``.
 
-        Mirrors the ``sim_field_profile`` fixture from tests/conftest.py for
-        the two historical knobs (turn-slip over-report, OTOS linear noise)
-        and additionally wires the two previously-unused knobs (per-side
-        encoder noise, OTOS yaw noise) — issue
-        testgui-sim-error-profile-config.
+        069-007: rewritten to send ONE ``SIMSET k1=v1 k2=v2 …`` wire command
+        (via ``sim.send_command()``) covering the full newly-surfaced
+        registry (``sim_prefs.PROFILE_TO_SIMSET_KEY``) plus the two
+        historical knobs that DO have ``SIMSET`` keys
+        (``otos_linear_noise`` -> ``otosLinNoise``, ``otos_yaw_noise`` ->
+        ``otosYawNoise``) and ``encoder_noise_mm``, which fans out to two
+        wire keys (``encNoiseL``/``encNoiseR``, both set to the same value —
+        matching the historical ``sim.set_encoder_noise(0, ...)`` +
+        ``sim.set_encoder_noise(1, ...)`` pair).
 
-        Each knob is applied in its own try/except so a missing sim method
-        (e.g. a stale prebuilt lib without ``sim_set_encoder_noise``) never
-        prevents the other three from applying. Stores the (attempted)
-        profile on ``self._error_profile`` so ``turn_scrub_factor`` reflects
-        it regardless of which individual knobs actually landed.
+        ``slip_turn_extra`` has no ``SIMSET`` key at all — it is the
+        pre-existing, untouched ``_rotationalSlip`` test-infra channel
+        (Design Rationale Decision 4) and is applied SEPARATELY via the
+        legacy ``sim.set_field_profile()`` call, exactly as before this
+        ticket.
+
+        This runs on the tick-thread (either at ``Sim()`` construction, via
+        ``_apply_field_profile``, or from a queued ``apply_error_profile()``
+        action) — the one thread that exclusively owns ``sim`` — so it talks
+        to ``sim`` directly (``sim.send_command()``), never through
+        ``self.command()``/``self._cmd_queue`` (which would enqueue onto the
+        very queue this call may already be draining).
+
+        The ``SIMSET`` send and the legacy ``slip_turn_extra`` send are each
+        wrapped in their own try/except so one failing (e.g. a stale
+        prebuilt lib without the new registry) never prevents the other
+        from applying. Stores the (attempted) profile on
+        ``self._error_profile`` so ``turn_scrub_factor`` reflects it
+        regardless of which knobs actually landed.
         """
         defaults = sim_prefs.DEFAULT_PROFILE
         slip_turn_extra = profile.get("slip_turn_extra", defaults["slip_turn_extra"])
-        otos_linear_noise = profile.get("otos_linear_noise", defaults["otos_linear_noise"])
-        otos_yaw_noise = profile.get("otos_yaw_noise", defaults["otos_yaw_noise"])
         encoder_noise_mm = profile.get("encoder_noise_mm", defaults["encoder_noise_mm"])
+
+        # Build one SIMSET string: every 1:1-mapped key from the map, plus
+        # encoder_noise_mm's two-key fan-out.
+        pairs = [
+            (wire_key, profile.get(key, defaults[key]))
+            for key, wire_key in sim_prefs.PROFILE_TO_SIMSET_KEY.items()
+        ]
+        pairs.append(("encNoiseL", encoder_noise_mm))
+        pairs.append(("encNoiseR", encoder_noise_mm))
+        simset_line = "SIMSET " + " ".join(f"{k}={v}" for k, v in pairs)
+
+        try:
+            reply = sim.send_command(simset_line)  # type: ignore[attr-defined]
+            self._log(f"[INFO] {simset_line} -> {reply.strip() if reply else 'OK'}")
+        except Exception as exc:
+            _log.warning("SimTransport: could not apply SIMSET profile: %s", exc)
 
         try:
             sim.set_field_profile(  # type: ignore[attr-defined]
@@ -1088,27 +1120,14 @@ class SimTransport(Transport):
             )
         except Exception as exc:
             _log.warning("SimTransport: could not apply slip_turn_extra: %s", exc)
-        try:
-            sim.set_otos_linear_noise(otos_linear_noise)  # type: ignore[attr-defined]
-        except Exception as exc:
-            _log.warning("SimTransport: could not apply otos_linear_noise: %s", exc)
-        try:
-            sim.set_otos_yaw_noise(otos_yaw_noise)  # type: ignore[attr-defined]
-        except Exception as exc:
-            _log.warning("SimTransport: could not apply otos_yaw_noise: %s", exc)
-        try:
-            sim.set_encoder_noise(0, encoder_noise_mm)  # type: ignore[attr-defined]
-            sim.set_encoder_noise(1, encoder_noise_mm)  # type: ignore[attr-defined]
-        except Exception as exc:
-            _log.warning("SimTransport: could not apply encoder_noise_mm: %s", exc)
 
         self._error_profile = dict(profile)
         self._log(
             f"[INFO] Sim error profile applied "
             f"(encoder_noise_mm={encoder_noise_mm}, "
             f"slip_turn_extra={slip_turn_extra}, "
-            f"otos_linear_noise={otos_linear_noise}, "
-            f"otos_yaw_noise={otos_yaw_noise})"
+            f"otos_linear_noise={profile.get('otos_linear_noise', defaults['otos_linear_noise'])}, "
+            f"otos_yaw_noise={profile.get('otos_yaw_noise', defaults['otos_yaw_noise'])})"
         )
 
     def apply_error_profile(self, profile: dict) -> None:

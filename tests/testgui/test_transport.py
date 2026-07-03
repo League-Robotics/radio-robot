@@ -514,6 +514,18 @@ class FakeSim:
 
     Tracks sent commands, provides canned TLM replies in get_async_evts(),
     and exposes get_true_pose() for ground-truth delivery tests.
+
+    069-007: ``SimTransport._apply_profile_to_sim()`` now sends the OTOS
+    linear/yaw noise and per-side encoder noise knobs as part of a single
+    ``SIMSET ...`` string via ``send_command()`` (captured in ``self.sent``)
+    rather than via ``set_otos_linear_noise``/``set_otos_yaw_noise``/
+    ``set_encoder_noise``. Those three methods (and their
+    ``last_otos_linear_noise``/``last_otos_yaw_noise``/``last_encoder_noise``
+    trackers) are kept here because they still mirror the real ``Sim``
+    ctypes API used elsewhere (``host/robot_radio/io/sim_conn.py``, other
+    test modules) -- they are simply no longer exercised by
+    ``_apply_profile_to_sim``. Only ``set_field_profile`` (the
+    ``slip_turn_extra`` legacy path) is still called from there.
     """
 
     def __init__(self) -> None:
@@ -776,8 +788,10 @@ class TestSimTransportConnect:
             assert fake_sim._field_profile_applied, (
                 "set_field_profile was not called on connect"
             )
-            assert fake_sim._otos_noise_set, (
-                "set_otos_linear_noise was not called on connect"
+            # 069-007: OTOS/encoder knobs now travel in one SIMSET string
+            # (sent via send_command), not via set_otos_linear_noise().
+            assert any(s.startswith("SIMSET") for s in fake_sim.sent), (
+                f"SIMSET was not sent on connect: {fake_sim.sent}"
             )
         finally:
             t.disconnect()
@@ -1016,7 +1030,9 @@ class TestSimTransportErrorProfile:
         return t, fake_sim
 
     def test_apply_field_profile_uses_persisted_profile_on_connect(self, monkeypatch):
-        """connect() must load sim_prefs and apply ALL four knobs, not just two."""
+        """connect() must load sim_prefs and apply the full profile: the
+        SIMSET string for the wire-mapped knobs, plus slip_turn_extra on its
+        separate legacy path."""
         from robot_radio.testgui import sim_prefs
 
         custom_profile = {
@@ -1033,9 +1049,20 @@ class TestSimTransportErrorProfile:
         try:
             time.sleep(0.1)
             assert fake_sim.last_slip_turn_extra == 0.4
-            assert fake_sim.last_otos_linear_noise == 0.2
-            assert fake_sim.last_otos_yaw_noise == 0.05
-            assert fake_sim.last_encoder_noise == {0: 3.0, 1: 3.0}
+            simset_lines = [s for s in fake_sim.sent if s.startswith("SIMSET")]
+            assert len(simset_lines) == 1
+            assert "otosLinNoise=0.2" in simset_lines[0]
+            assert "otosYawNoise=0.05" in simset_lines[0]
+            assert "encNoiseL=3.0" in simset_lines[0]
+            assert "encNoiseR=3.0" in simset_lines[0]
+            # Keys missing from custom_profile (all the 069-007 additions)
+            # must fall back to DEFAULT_PROFILE's no-op values.
+            assert "bodyRotScrub=1.0" in simset_lines[0]
+            assert "bodyLinScrub=1.0" in simset_lines[0]
+            assert "motorOffsetL=1.0" in simset_lines[0]
+            assert "motorOffsetR=1.0" in simset_lines[0]
+            assert "trackwidthMm=150.0" in simset_lines[0]
+            assert "encScaleErrL=0.0" in simset_lines[0]
         finally:
             t.disconnect()
 
@@ -1099,9 +1126,16 @@ class TestSimTransportErrorProfile:
                 time.sleep(0.02)
 
             assert fake_sim.last_slip_turn_extra == 0.9
-            assert fake_sim.last_otos_linear_noise == 0.15
-            assert fake_sim.last_otos_yaw_noise == 0.03
-            assert fake_sim.last_encoder_noise == {0: 7.0, 1: 7.0}
+            # One SIMSET from connect() plus one from this apply_error_profile().
+            simset_lines = [s for s in fake_sim.sent if s.startswith("SIMSET")]
+            assert len(simset_lines) >= 2, (
+                f"expected >=2 SIMSET sends (connect + apply); got {simset_lines}"
+            )
+            last_simset = simset_lines[-1]
+            assert "otosLinNoise=0.15" in last_simset
+            assert "otosYawNoise=0.03" in last_simset
+            assert "encNoiseL=7.0" in last_simset
+            assert "encNoiseR=7.0" in last_simset
             assert t.turn_scrub_factor == 0.9
         finally:
             t.disconnect()
@@ -1117,12 +1151,21 @@ class TestSimTransportErrorProfile:
         t.apply_error_profile({"slip_turn_extra": 0.5})
         assert any("not connected" in e.lower() for e in log_entries)
 
-    def test_apply_error_profile_tolerates_missing_encoder_noise_method(self):
-        """A stale FakeSim (no set_encoder_noise) must not break the other knobs."""
+    def test_apply_error_profile_tolerates_stale_simset_lib(self):
+        """069-007: a stale lib (no SIMSET support) must not prevent
+        slip_turn_extra from applying via its separate legacy path.
+
+        Supersedes the pre-069-007 "missing set_encoder_noise" test: that
+        knob is no longer called directly (it travels inside the SIMSET
+        string), so the realistic stale-lib failure mode is now
+        send_command() itself rejecting a SIMSET line.
+        """
 
         class _StaleFakeSim(FakeSim):
-            def set_encoder_noise(self, side, sigma_mm):
-                raise AttributeError("stale lib: sim_set_encoder_noise missing")
+            def send_command(self, line):
+                if line.startswith("SIMSET"):
+                    raise AttributeError("stale lib: SIMSET not supported")
+                return super().send_command(line)
 
         t, fake_sim = self._connected_sim(fake_sim=_StaleFakeSim())
         try:
@@ -1141,13 +1184,159 @@ class TestSimTransportErrorProfile:
                     break
                 time.sleep(0.02)
 
+            # SIMSET failed silently (logged, not raised) but did not
+            # prevent slip_turn_extra's separate legacy path from applying.
             assert fake_sim.last_slip_turn_extra == 0.33
-            assert fake_sim.last_otos_linear_noise == 0.11
-            assert fake_sim.last_otos_yaw_noise == 0.01
-            # Encoder noise silently failed but did not prevent the rest.
-            assert fake_sim.last_encoder_noise == {}
+            assert fake_sim._field_profile_applied is True
         finally:
             t.disconnect()
+
+
+class TestApplyProfileToSimSimsetString:
+    """069-007: _apply_profile_to_sim() direct, non-threaded unit tests.
+
+    Calls SimTransport._apply_profile_to_sim(sim, profile) directly against
+    a bare (unconnected) SimTransport + FakeSim pair -- deterministic, no
+    tick-thread timing races -- to pin the EXACT SIMSET string built from a
+    given profile dict, per the ticket's testing plan.
+    """
+
+    def test_defaults_send_the_documented_noop_simset_string(self):
+        """Every field at its DEFAULT_PROFILE value must reproduce today's
+        no-op-until-opted-in behavior: multiplicative knobs at 1.0,
+        trackwidth_mm at the plant's real default (150.0), everything else
+        (additive/noise) at 0.0."""
+        from robot_radio.testgui.transport import SimTransport
+        from robot_radio.testgui import sim_prefs
+
+        t = SimTransport()
+        fake_sim = FakeSim()
+
+        t._apply_profile_to_sim(fake_sim, dict(sim_prefs.DEFAULT_PROFILE))
+
+        simset_lines = [s for s in fake_sim.sent if s.startswith("SIMSET")]
+        assert len(simset_lines) == 1
+        assert simset_lines[0] == (
+            "SIMSET "
+            "encScaleErrL=0.0 encScaleErrR=0.0 "
+            "otosLinScaleErr=0.0 otosAngScaleErr=0.0 "
+            "otosLinNoise=0.05 otosYawNoise=0.0 "
+            "otosLinDriftMmS=0.0 otosYawDriftDegS=0.0 "
+            "bodyRotScrub=1.0 bodyLinScrub=1.0 "
+            "motorOffsetL=1.0 motorOffsetR=1.0 "
+            "trackwidthMm=150.0 "
+            "encNoiseL=0.0 encNoiseR=0.0"
+        )
+        # slip_turn_extra retains its separate legacy path -- applied via
+        # set_field_profile, never folded into the SIMSET string.
+        assert fake_sim.last_slip_turn_extra == 0.26
+        assert fake_sim._field_profile_applied is True
+
+    def test_custom_profile_sends_the_exact_simset_string(self):
+        """A fully custom profile must produce the exact SIMSET string,
+        with slip_turn_extra applied separately via set_field_profile."""
+        from robot_radio.testgui.transport import SimTransport
+
+        t = SimTransport()
+        fake_sim = FakeSim()
+
+        profile = {
+            "encoder_noise_mm": 2.0,
+            "slip_turn_extra": 0.42,
+            "otos_linear_noise": 0.06,
+            "otos_yaw_noise": 0.01,
+            "enc_scale_err_l": 0.02,
+            "enc_scale_err_r": -0.02,
+            "otos_lin_scale_err": 0.03,
+            "otos_ang_scale_err": -0.03,
+            "otos_lin_drift_mms": 1.5,
+            "otos_yaw_drift_degs": -0.5,
+            "body_rot_scrub": 0.9,
+            "body_lin_scrub": 0.95,
+            "motor_offset_l": 1.05,
+            "motor_offset_r": 0.98,
+            "trackwidth_mm": 152.0,
+        }
+
+        t._apply_profile_to_sim(fake_sim, profile)
+
+        simset_lines = [s for s in fake_sim.sent if s.startswith("SIMSET")]
+        assert len(simset_lines) == 1
+        assert simset_lines[0] == (
+            "SIMSET "
+            "encScaleErrL=0.02 encScaleErrR=-0.02 "
+            "otosLinScaleErr=0.03 otosAngScaleErr=-0.03 "
+            "otosLinNoise=0.06 otosYawNoise=0.01 "
+            "otosLinDriftMmS=1.5 otosYawDriftDegS=-0.5 "
+            "bodyRotScrub=0.9 bodyLinScrub=0.95 "
+            "motorOffsetL=1.05 motorOffsetR=0.98 "
+            "trackwidthMm=152.0 "
+            "encNoiseL=2.0 encNoiseR=2.0"
+        )
+        assert fake_sim.last_slip_turn_extra == 0.42
+        assert fake_sim._field_profile_applied is True
+
+    def test_legacy_four_key_profile_fills_new_keys_from_defaults(self):
+        """A profile persisted before this ticket (only the historical four
+        keys) must still build a complete SIMSET string, with every new key
+        defaulted from DEFAULT_PROFILE."""
+        from robot_radio.testgui.transport import SimTransport
+
+        t = SimTransport()
+        fake_sim = FakeSim()
+
+        legacy_profile = {
+            "encoder_noise_mm": 3.0,
+            "slip_turn_extra": 0.4,
+            "otos_linear_noise": 0.2,
+            "otos_yaw_noise": 0.05,
+        }
+        t._apply_profile_to_sim(fake_sim, legacy_profile)
+
+        simset_lines = [s for s in fake_sim.sent if s.startswith("SIMSET")]
+        assert len(simset_lines) == 1
+        line = simset_lines[0]
+        assert "otosLinNoise=0.2" in line
+        assert "otosYawNoise=0.05" in line
+        assert "encNoiseL=3.0" in line
+        assert "encNoiseR=3.0" in line
+        # New (069-007) keys, absent from the legacy profile, default from
+        # DEFAULT_PROFILE -- multiplicative at 1.0, additive at 0.0,
+        # trackwidth at the real 150.0.
+        assert "bodyRotScrub=1.0" in line
+        assert "bodyLinScrub=1.0" in line
+        assert "motorOffsetL=1.0" in line
+        assert "motorOffsetR=1.0" in line
+        assert "trackwidthMm=150.0" in line
+        assert "encScaleErrL=0.0" in line
+        assert "encScaleErrR=0.0" in line
+        assert "otosLinScaleErr=0.0" in line
+        assert "otosAngScaleErr=0.0" in line
+        assert "otosLinDriftMmS=0.0" in line
+        assert "otosYawDriftDegS=0.0" in line
+        assert fake_sim.last_slip_turn_extra == 0.4
+
+    def test_simset_send_failure_does_not_block_slip_turn_extra(self):
+        """If send_command() raises for the SIMSET line, slip_turn_extra
+        must still apply via its separate set_field_profile() path."""
+        from robot_radio.testgui.transport import SimTransport
+        from robot_radio.testgui import sim_prefs
+
+        class _StaleFakeSim(FakeSim):
+            def send_command(self, line):
+                if line.startswith("SIMSET"):
+                    raise RuntimeError("stale lib: SIMSET not supported")
+                return super().send_command(line)
+
+        t = SimTransport()
+        fake_sim = _StaleFakeSim()
+
+        profile = {**sim_prefs.DEFAULT_PROFILE, "slip_turn_extra": 0.5}
+        # Must not raise even though send_command() raises internally.
+        t._apply_profile_to_sim(fake_sim, profile)
+
+        assert fake_sim.last_slip_turn_extra == 0.5
+        assert fake_sim._field_profile_applied is True
 
 
 class TestSimTransportDisconnect:

@@ -1,7 +1,7 @@
 ---
 id: '007'
 title: 'TestGUI Sim Errors panel: expose full knob set via SIMSET'
-status: open
+status: done
 use-cases:
 - SUC-007
 depends-on:
@@ -71,18 +71,18 @@ would violate ticket 003's atomic apply-what-was-sent contract).
 
 ## Acceptance Criteria
 
-- [ ] `sim_prefs.py`: `DEFAULT_PROFILE` extended with the new keys listed
+- [x] `sim_prefs.py`: `DEFAULT_PROFILE` extended with the new keys listed
       above, with correct no-op defaults (`0.0` for every additive error
       term; `1.0` for `body_rot_scrub`, `body_lin_scrub`,
       `motor_offset_l`, `motor_offset_r`; a documented, non-zero, genuinely
       neutral choice for `trackwidth_mm` if included — see note above).
-- [ ] `sim_prefs.py`: new module-level `PROFILE_TO_SIMSET_KEY: dict[str, str]`
+- [x] `sim_prefs.py`: new module-level `PROFILE_TO_SIMSET_KEY: dict[str, str]`
       (or equivalently named) mapping every profile key to its `SIMSET`
       wire-key name (e.g. `"enc_scale_err_l": "encScaleErrL"`).
       `load_sim_error_profile()`/`save_sim_error_profile()` extended to
       round-trip all new keys (mirroring the existing `for key in
       DEFAULT_PROFILE` loop shape at `sim_prefs.py:72,94`).
-- [ ] `transport.py`: `_apply_profile_to_sim()` rewritten to build one
+- [x] `transport.py`: `_apply_profile_to_sim()` rewritten to build one
       `SIMSET k1=v1 k2=v2 …` string from the full profile (via the new
       key-name map) and send it with `sim.command(...)` — replacing the four
       separate `sim.set_field_profile/set_otos_linear_noise/
@@ -93,27 +93,27 @@ would violate ticket 003's atomic apply-what-was-sent contract).
       Decision 4) is retained as-is, applied SEPARATELY from the new
       `SIMSET` string (do not attempt to fold it into `SIMSET`; it has no
       `SIMSET` key).
-- [ ] `turn_scrub_factor` (`transport.py:734-755`) is UNCHANGED — it reads
+- [x] `turn_scrub_factor` (`transport.py:734-755`) is UNCHANGED — it reads
       `slip_turn_extra` from the same profile dict, unrelated to any new key.
-- [ ] `__main__.py`: Sim Errors panel gains grouped spinbox rows (suggested
+- [x] `__main__.py`: Sim Errors panel gains grouped spinbox rows (suggested
       grouping: "Encoder Report Error", "Body-Truth Scrub", "Geometry &
       Actuation", "OTOS Error"), reusing the existing `_make_sim_err_spin()`
       helper (`__main__.py:663-683`) for each new field, with ranges
       appropriate to each knob's semantics (e.g. scrub factors `[0.0, 2.0]`
       or narrower per Decision 2's clamp discussion, not `[0.0, 50.0]` like
       `encoder_noise_mm`).
-- [ ] `_on_sim_errors_apply()` (`__main__.py:706-727`) extended to read all
+- [x] `_on_sim_errors_apply()` (`__main__.py:706-727`) extended to read all
       new spinbox values into the `profile` dict passed to
       `sim_prefs.save_sim_error_profile()`/`transport.apply_error_profile()`
       — same call shape, larger dict.
-- [ ] Existing 4 knobs' behavior is EXACTLY preserved (byte-identical
+- [x] Existing 4 knobs' behavior is EXACTLY preserved (byte-identical
       `SIMSET`/ctypes calls for those four, or an equivalent-effect `SIMSET`
       translation for the three that ARE `SIMSET` keys — `otos_linear_noise`
       → `otosLinNoise`, `otos_yaw_noise` → `otosYawNoise`,
       `encoder_noise_mm` → `encNoiseL`+`encNoiseR` both set to the same
       value, matching today's `sim.set_encoder_noise(0, ...)` +
       `sim.set_encoder_noise(1, ...)` pair).
-  - [ ] Threading: `_apply_profile_to_sim()`'s new `SIMSET`-string body
+  - [x] Threading: `_apply_profile_to_sim()`'s new `SIMSET`-string body
       continues to run via the existing `_action`/`self._cmd_queue.put(...)`
       dispatch (`transport.py:1135-1138`), which already marshals the
       mutation onto the tick-thread that exclusively owns the `Sim` object —
@@ -124,13 +124,13 @@ would violate ticket 003's atomic apply-what-was-sent contract).
       `QueuedConnection` (project knowledge: sprint 063/007-009's
       PySide QueuedConnection bare-function gotcha — a `QueuedConnection` to
       a bare function silently runs on the wrong thread or drops frames).
-- [ ] Defaults reproduce today's no-op-until-opted-in behavior exactly: with
+- [x] Defaults reproduce today's no-op-until-opted-in behavior exactly: with
       every new field at its default, the sim's observable behavior after
       Apply is unchanged from before this ticket.
-- [ ] The profile persists to `data/testgui/sim_error_profile.json` (existing
+- [x] The profile persists to `data/testgui/sim_error_profile.json` (existing
       mechanism, extended with the new keys) — verify by inspecting the
       written file after Apply.
-- [ ] Full default suite green: `uv run python -m pytest`.
+- [x] Full default suite green: `uv run python -m pytest`.
 
 ## Testing
 
@@ -171,3 +171,24 @@ keys and rewires the wire-transport half of `_apply_profile_to_sim()` only.
 
 **Documentation updates**: none beyond in-code docstrings — no wire-protocol
 change (this ticket is a client of `SIMSET`, not a producer).
+
+## Implementation Note (as-built)
+
+The AC text says "send it with `sim.command(...)`" — but the raw ctypes
+`Sim` object (`tests/_infra/sim/firmware.py`) has no `command()` method,
+only `send_command()` (confirmed against `firmware.py` and the `FakeSim`
+test double). `SimTransport.command()` (`transport.py:874`) is a
+*different*, `self`-scoped method that enqueues onto `self._cmd_queue` and
+blocks waiting for the tick-thread to drain it — calling it from inside
+`_apply_profile_to_sim()` would deadlock (up to its 1s timeout) because
+`_apply_profile_to_sim()` already runs ON the tick-thread (either at
+`Sim()` construction or while draining `_cmd_queue` for a queued
+`apply_error_profile()` action), so it would be enqueuing onto a queue only
+it itself can drain. The implementation therefore calls
+`sim.send_command(simset_line)` directly — the same call `_drain_cmd_queue`
+already uses for every other outbound command — which achieves the AC's
+actual intent (one synchronous `SIMSET` wire send per Apply) without the
+self-deadlock. Verified against the real compiled sim lib
+(`tests/_infra/sim/build/libfirmware_host.dylib`): a `SIMSET` string built
+by `_apply_profile_to_sim()`'s logic round-trips correctly through
+`SIMGET`.

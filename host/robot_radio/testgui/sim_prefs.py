@@ -15,16 +15,68 @@ same ``host/robot_radio/testgui/`` depth).
 
 Keys
 ----
+The first four keys are the historical set, applied directly via dedicated
+ctypes methods on the ``Sim`` object (``transport.py``'s
+``_apply_profile_to_sim()``). ``slip_turn_extra`` has no ``SIMSET`` wire-key
+equivalent — it drives the pre-existing ``_rotationalSlip`` test-infra
+channel (``sim.set_field_profile()``) and is applied on a separate path from
+every other key below (see ``PROFILE_TO_SIMSET_KEY``'s docstring).
+
 ``encoder_noise_mm``
-    Per-side encoder noise sigma, in millimetres. Default ``0.0``.
+    Per-side encoder noise sigma, in millimetres. Default ``0.0``. Applied to
+    both sides equally via the ``SIMSET`` keys ``encNoiseL``/``encNoiseR``
+    (fans out to two wire keys — not in ``PROFILE_TO_SIMSET_KEY``).
 ``slip_turn_extra``
     Fractional encoder over-report during turns (turn-slip scrub model).
-    Default ``0.26`` (the historical ``_SIM_SLIP_TURN_EXTRA`` value).
+    Default ``0.26`` (the historical ``_SIM_SLIP_TURN_EXTRA`` value). No
+    ``SIMSET`` key (see above).
 ``otos_linear_noise``
     OTOS linear-position noise sigma, as a fraction of arc. Default ``0.05``
-    (the historical ``_SIM_OTOS_LINEAR_NOISE`` value).
+    (the historical ``_SIM_OTOS_LINEAR_NOISE`` value). ``SIMSET`` key
+    ``otosLinNoise``.
 ``otos_yaw_noise``
-    OTOS yaw noise sigma, as a fraction. Default ``0.0``.
+    OTOS yaw noise sigma, as a fraction. Default ``0.0``. ``SIMSET`` key
+    ``otosYawNoise``.
+
+The remaining keys (ticket 069-007) are the full newly-surfaced ``SIMSET``
+registry (tickets 069-002..004), each mapped 1:1 to its wire key by
+``PROFILE_TO_SIMSET_KEY`` and sent in a single ``SIMSET k1=v1 k2=v2 …``
+command by ``transport.py``'s ``_apply_profile_to_sim()``.
+
+Additive/noise terms — ``0.0`` is a genuine no-op:
+
+``enc_scale_err_l`` / ``enc_scale_err_r``
+    Fractional per-side encoder over/under-report (0 = perfect). ``SIMSET``
+    keys ``encScaleErrL`` / ``encScaleErrR``.
+``otos_lin_scale_err`` / ``otos_ang_scale_err``
+    Fractional OTOS linear/angular scale error (0 = perfect). ``SIMSET``
+    keys ``otosLinScaleErr`` / ``otosAngScaleErr``.
+``otos_lin_drift_mms`` / ``otos_yaw_drift_degs``
+    OTOS linear/yaw drift rate, in mm/s and deg/s respectively (wire-level
+    per-second units; ``SimCommands`` converts to per-tick internally).
+    ``SIMSET`` keys ``otosLinDriftMmS`` / ``otosYawDriftDegS``.
+
+Multiplicative terms — ``1.0`` is the genuine no-op, NOT ``0.0`` (see
+``PhysicsWorld``'s ``_bodyRotationalScrub``/``_bodyLinearScrub``/
+``_offsetFactorL``/``_offsetFactorR`` field defaults, all ``1.0f``):
+
+``body_rot_scrub`` / ``body_lin_scrub``
+    Body-truth rotational/linear scrub factor, clamped to ``(0, 1]`` on the
+    firmware side. ``SIMSET`` keys ``bodyRotScrub`` / ``bodyLinScrub``.
+``motor_offset_l`` / ``motor_offset_r``
+    Per-side motor actuation offset factor (multiplies commanded velocity).
+    ``SIMSET`` keys ``motorOffsetL`` / ``motorOffsetR``.
+
+``trackwidth_mm``
+    The plant's trackwidth, in millimetres. Has NO safe zero default —
+    ``PhysicsWorld::update()``'s sub-step B divides by it. Defaults to
+    ``PhysicsWorld::kDefaultTrackwidthMm`` (150.0, the plant's actual
+    compiled-in default) so Apply-at-defaults is a genuine no-op. This is
+    NOT a sentinel meaning "don't touch" — every Apply unconditionally sends
+    ``trackwidthMm=<value>`` and overwrites the plant's trackwidth (no
+    silent 0-means-no-op special-casing inside ``SimCommands``, which would
+    violate ticket 069-003's atomic apply-what-was-sent contract). ``SIMSET``
+    key ``trackwidthMm``.
 """
 from __future__ import annotations
 
@@ -45,11 +97,63 @@ _PREFS_PATH = _PREFS_DIR / "sim_error_profile.json"
 #: the two previously-unused knobs (encoder noise, OTOS yaw noise), both
 #: defaulted to 0.0 so existing behavior is unchanged until an operator
 #: opts in.
+#:
+#: 069-007 extends this with the full SIMSET registry (see the module
+#: docstring's "Keys" section for units/semantics and no-op rationale per
+#: key). Every default below reproduces today's no-op-until-opted-in
+#: behavior: additive/noise terms default 0.0, multiplicative terms default
+#: 1.0, and trackwidth_mm defaults to the plant's real compiled-in trackwidth
+#: (150.0mm) rather than an unsafe 0.0.
 DEFAULT_PROFILE: dict = {
+    # -- historical four --
     "encoder_noise_mm": 0.0,
     "slip_turn_extra": 0.26,
     "otos_linear_noise": 0.05,
     "otos_yaw_noise": 0.0,
+    # -- 069-007: additive/noise terms (0.0 = no-op) --
+    "enc_scale_err_l": 0.0,
+    "enc_scale_err_r": 0.0,
+    "otos_lin_scale_err": 0.0,
+    "otos_ang_scale_err": 0.0,
+    "otos_lin_drift_mms": 0.0,
+    "otos_yaw_drift_degs": 0.0,
+    # -- 069-007: multiplicative terms (1.0 = no-op, NOT 0.0) --
+    "body_rot_scrub": 1.0,
+    "body_lin_scrub": 1.0,
+    "motor_offset_l": 1.0,
+    "motor_offset_r": 1.0,
+    # -- 069-007: no safe zero default; defaults to the plant's real
+    # trackwidth (PhysicsWorld::kDefaultTrackwidthMm) so Apply-at-default
+    # is a genuine no-op rather than a divide-by-zero sentinel.
+    "trackwidth_mm": 150.0,
+}
+
+#: Maps every profile key that has a 1:1 SIMSET wire-key equivalent to that
+#: wire-key name (e.g. ``"enc_scale_err_l": "encScaleErrL"``), keyed exactly
+#: to source/commands/SimCommands.cpp's kSimRegistry[] rows.
+#:
+#: Deliberately excludes two DEFAULT_PROFILE keys that do NOT have a 1:1
+#: mapping:
+#:   - "encoder_noise_mm": fans out to TWO wire keys (encNoiseL AND
+#:     encNoiseR, both set to the same value) — handled specially by
+#:     transport.py's _apply_profile_to_sim(), not via this map.
+#:   - "slip_turn_extra": has no SIMSET key at all — drives the legacy
+#:     _rotationalSlip test-infra channel (sim.set_field_profile()) on a
+#:     separate path, per Design Rationale Decision 4.
+PROFILE_TO_SIMSET_KEY: dict = {
+    "enc_scale_err_l": "encScaleErrL",
+    "enc_scale_err_r": "encScaleErrR",
+    "otos_lin_scale_err": "otosLinScaleErr",
+    "otos_ang_scale_err": "otosAngScaleErr",
+    "otos_linear_noise": "otosLinNoise",
+    "otos_yaw_noise": "otosYawNoise",
+    "otos_lin_drift_mms": "otosLinDriftMmS",
+    "otos_yaw_drift_degs": "otosYawDriftDegS",
+    "body_rot_scrub": "bodyRotScrub",
+    "body_lin_scrub": "bodyLinScrub",
+    "motor_offset_l": "motorOffsetL",
+    "motor_offset_r": "motorOffsetR",
+    "trackwidth_mm": "trackwidthMm",
 }
 
 
@@ -83,11 +187,13 @@ def load_sim_error_profile() -> dict:
 def save_sim_error_profile(profile: dict) -> None:
     """Persist ``profile`` (creates ``data/testgui/`` if needed).
 
-    Only the four known keys are written, each coerced to ``float``; a key
-    missing from ``profile`` falls back to ``DEFAULT_PROFILE``'s value for
-    it, and a key with a non-numeric value falls back the same way. Best
-    effort: logs a warning and returns on failure rather than raising, so a
-    persistence error never breaks the Sim Errors panel's Apply flow.
+    Only the known keys (``DEFAULT_PROFILE``'s keys — the historical four
+    plus the full 069-007 ``SIMSET`` knob set) are written, each coerced to
+    ``float``; a key missing from ``profile`` falls back to
+    ``DEFAULT_PROFILE``'s value for it, and a key with a non-numeric value
+    falls back the same way. Best effort: logs a warning and returns on
+    failure rather than raising, so a persistence error never breaks the Sim
+    Errors panel's Apply flow.
     """
     try:
         out = {}
