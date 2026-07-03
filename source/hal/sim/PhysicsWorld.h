@@ -128,6 +128,19 @@ public:
         _rotationalSlip = straight + turnExtra;
     }
 
+    // Body-truth scrub (069-002): independent, wire-settable rotational/linear
+    // efficiency applied in sub-step B, MULTIPLICATIVELY combined with (not
+    // replacing) the effectiveSlip(_rotationalSlip) term above — see
+    // PhysicsWorld.cpp's sub-step B and architecture-update.md §4b/Decision 4.
+    // Default 1.0 = no-op: every existing test that never calls these setters
+    // observes byte-identical sub-step B output. Unlike _rotationalSlip (a
+    // test-infra encoder-defect knob with a migration-safe 0-means-unset
+    // history), these are brand-new fields with no such history, so they are
+    // clamped by the new, simpler clampScrub() (range (0, 1]) in
+    // PhysicsWorld.cpp — deliberately NOT effectiveSlip() (Decision 2).
+    void setBodyRotationalScrub(float f) { _bodyRotationalScrub = f; }
+    void setBodyLinearScrub(float f)     { _bodyLinearScrub = f; }
+
     // Per-wheel offset factor.  side: 0 = left, 1 = right, 2 = both.
     void setOffsetFactor(int side, float f) {
         if (side == 0)      { _offsetFactorL = f; }
@@ -225,6 +238,10 @@ public:
     int8_t pwmL()          const { return _pwmL; }
     int8_t pwmR()          const { return _pwmR; }
 
+    // Body-truth scrub (069-002) — see setBodyRotationalScrub()/setBodyLinearScrub().
+    float bodyRotationalScrub() const { return _bodyRotationalScrub; }
+    float bodyLinearScrub()     const { return _bodyLinearScrub; }
+
 private:
     // --- Commanded actuator state ---
     int8_t _pwmL = 0;
@@ -257,6 +274,12 @@ private:
     float _rotationalSlip = 0.0f;             // 0/unset → effectiveSlip → 1.0
     float _slipStraight  = 0.0f;
     float _slipTurnExtra = 0.0f;
+
+    // --- Body-truth scrub (069-002) — independent, multiplicative with the
+    // effectiveSlip(_rotationalSlip) term above; default 1.0 = no-op. See
+    // setBodyRotationalScrub()/setBodyLinearScrub() above for full rationale.
+    float _bodyRotationalScrub = 1.0f;
+    float _bodyLinearScrub     = 1.0f;
 
     // --- Per-wheel offset factors (default symmetric) ---
     float _offsetFactorL = 1.0f;

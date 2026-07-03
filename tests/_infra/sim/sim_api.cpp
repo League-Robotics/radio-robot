@@ -639,6 +639,17 @@ void sim_set_encoder_noise(void* h, int side, float sigma_mm) {
     static_cast<SimHandle*>(h)->hal.plant().setEncoderNoise(side, sigma_mm);
 }
 
+// ---- Body-truth scrub (069-002) — minimal direct-access hook, ahead of the ----
+// ---- general SIMSET surface (ticket 003). Forward directly to the same ----
+// ---- named setters SIMSET's registry will call (single source of truth ----
+// ---- per knob, architecture-update.md Decision 3). ----
+void sim_set_body_rot_scrub(void* h, float f) {
+    static_cast<SimHandle*>(h)->hal.plant().setBodyRotationalScrub(f);
+}
+void sim_set_body_lin_scrub(void* h, float f) {
+    static_cast<SimHandle*>(h)->hal.plant().setBodyLinearScrub(f);
+}
+
 // ---- Encoder I2C read-failure injection (064-005, side: 0=left, 1=right, ----
 // ---- other=both — matching the sim_set_motor_slip/setEncoderNoise convention) --
 //
