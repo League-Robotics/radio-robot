@@ -337,6 +337,8 @@ Validated invariants (sprint 028-004):
 | `ctrlPeriod > 0`                 | Scheduler sleep wraps to huge uint32     |
 | `vWheelMax > steerHeadroom`      | Saturation ceiling goes negative         |
 | `rotSlip` in [0.5, 1.0]          | Nonsensical arc estimates break odometry |
+| `safetyMargin > 0`               | D's runaway safety net would fire on any negative-going noise (at 0) or be meaningless (negative) — sprint 072 |
+| `stallConfirm >= 0`               | D's stall-confirm debounce would fire instantly on the first tick inside `distArriveTol`, even while still moving — sprint 072 |
 
 If all keys parse and validate, `cfg = candidate` is applied atomically and
 `OK set <applied>` is emitted.  Changing any of `pid.kp`, `pid.ki`, `pid.kd`,
@@ -648,22 +650,32 @@ The field follows any `#<id>` token:
 | `time`        | Time stop (`stop=t:` or T/D built-in time stop)                           |
 | `dist`        | Distance stop (`stop=d:` or D built-in distance stop)                     |
 | `rot`         | Rotation stop (`stop=rot:`)                                               |
-| `heading`     | Heading stop (`stop=heading:`)                                            |
+| `heading`     | Heading stop (`stop=heading:`)                                           |
 | `pos`         | Position stop (G/GOTO arrival)                                            |
 | `line`        | Line-any stop (`stop=line:`)                                              |
 | `color`       | Color-match stop (`stop=color:`)                                          |
 | `<channel>`   | Sensor stop (`stop=sensor:<ch>:`) — token is the channel name (e.g. `line0`) |
 | `watchdog`    | Safety watchdog expired (`EVT safety_stop reason=watchdog`)               |
+| `runaway`     | D runaway safety net tripped (`EVT safety_stop reason=runaway`, sprint 072) |
+| `arrive`      | D stalled short of target, forced complete (`EVT done D reason=arrive`, sprint 072) |
 
 The `reason=` token is additive: existing hosts that match on the verb
-(`EVT done T`) continue to work unchanged.
+(`EVT done T`) continue to work unchanged. `runaway` (sprint 072) is an
+additive new VALUE on the existing `EVT safety_stop` label — hosts that
+already recognize `EVT safety_stop` from the keepalive-watchdog path need no
+changes; the base label is identical, only the `reason=` value differs
+(`watchdog` vs `runaway`). `arrive` (sprint 072) is likewise an additive new
+VALUE on the existing `EVT done D` label — hosts that only check for
+`EVT done D` (ignoring `reason=`) see no behavior change.
 
 Examples:
 
 ```
 EVT done T #12 reason=time
 EVT done D reason=dist
+EVT done D reason=arrive
 EVT safety_stop reason=watchdog
+EVT safety_stop reason=runaway
 ```
 
 ### stop= Clauses
@@ -767,12 +779,56 @@ D <l> <r> <mm> [stop=<kind>:<args>]… [#id]
   EVT done D [#id] reason=<token>
 ```
 
-Drives at the given speeds until the average of the absolute encoder
-travel on both wheels reaches `mm` millimetres (1 … 10 000), or until
-a 5-second hard timeout fires.  Optional `stop=` clauses may be appended;
-each fires an early stop (OR-combined with the built-in distance stop).
+Drives at the given speeds until the average encoder travel **in the
+commanded direction** reaches `mm` millimetres (1 … 10 000), or until a
+generous (2× nominal + 2 s) timeout fires.  A reverse-commanded drive
+(negative `l`/`r`) completes on that same magnitude of BACKWARD travel; a
+wrong-direction encoder reading (e.g. a forward-commanded `D` that instead
+travels backward) does **not** satisfy the distance stop from that
+wrong-direction travel (sprint 072 — previously this compared the absolute
+value of the travel, so a runaway wrong-direction drive could self-report a
+false completion). Optional `stop=` clauses may be appended; each fires an
+early stop (OR-combined with the built-in distance stop) — only 1 slot
+remains free out of `kMaxStopConds`'s 4 (the built-in DISTANCE/TIME/
+SAFETY_MARGIN trio occupies the other 3, sprint 072); a second `stop=`
+clause overflows and the drive is cancelled with `ERR stopoverflow`.
 
 Velocity range: −1000 … +1000 mm/s.  Distance range: 1 … 10 000 mm.
+
+**Runaway safety net (sprint 072).** If signed travel goes more than
+`safetyMargin` mm (default 50; `SET`-able) NEGATIVE relative to the
+commanded direction — the robot demonstrably moving the wrong way — the
+firmware forces an immediate hard stop and emits `EVT safety_stop
+reason=runaway` instead of the configured `EVT done D`, within one control
+tick of crossing the margin (far faster than the timeout above):
+
+```
+D 200 200 500
+OK drive l=200 r=200 mm=500
+… (encoders instead run backward past the margin) …
+EVT safety_stop reason=runaway
+```
+
+**Terminal-completion guarantee (sprint 072).** The decel profile's commanded
+speed is floored at `minWheelSpeed` once it enters the final approach zone
+(instead of asymptotically approaching zero AT the target), so a real motor's
+stiction/deadband is less likely to stall the drive right at the finish.  As
+a backstop independent of that floor being high enough for a given robot:
+if the remaining distance sits within `distArriveTol` mm (default 5;
+`SET`-able) of the target and stops shrinking for `stallConfirm` ms (default
+300; `SET`-able), the drive completes now — `EVT done D reason=arrive` —
+instead of leaving the robot stalled short until the TIME net fires.  This
+trades a small, bounded, known under-travel (up to `distArriveTol`) for
+eliminating an unbounded stall/reversal/thrash failure mode; a drive that
+reaches its target via the normal strict crossing is unaffected
+(`reason=dist`, unchanged):
+
+```
+D 200 200 500
+OK drive l=200 r=200 mm=500
+… (motor stiction stalls the drive 1-3 mm short of target) …
+EVT done D reason=arrive
+```
 
 Example:
 

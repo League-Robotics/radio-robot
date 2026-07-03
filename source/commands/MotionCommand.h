@@ -216,6 +216,43 @@ public:
     bool active() const { return _active; }
 
     /**
+     * stopping — true while a SOFT ramp-down to (0,0) is in progress,
+     * whether it was armed by a fired StopCondition, an external softStop()
+     * call, or forceComplete().
+     *
+     * Callers that shape a live target (e.g. Planner's D-mode decel hook)
+     * check this to avoid overriding the ramp-down's own (0,0) target once
+     * teardown has begun (072-003).
+     */
+    bool stopping() const { return _stopping; }
+
+    /**
+     * forceComplete — force a clean completion NOW, without a StopCondition
+     * having fired.
+     *
+     * Mirrors the internal SOFT-stop teardown path a normal StopCondition-
+     * fired stop already takes (ramp to (0,0); emit the configured
+     * _doneEvtLabel tagged with reason's token once the ramp converges or
+     * the SOFT deadline passes) via the shared beginSoftTeardown() helper.
+     * Planner's D-mode decel hook calls this when a drive has sat inside
+     * distArriveTol with no progress for stallConfirm ms (072-003,
+     * architecture-update.md Decision 6) — the backstop that completes a
+     * stiction-stalled drive instead of leaving the down-only ratchet
+     * pinned indefinitely.
+     *
+     * No-op if not active or already tearing down (ramp-down in progress,
+     * from either a fired StopCondition, softStop(), or a prior
+     * forceComplete() call).
+     *
+     * @param reason  Kind used solely to select the emitted reason= token
+     *                (mc_reasonToken) — never evaluated as a real stop
+     *                condition; forceComplete() bypasses the stop array
+     *                entirely.
+     * @param now     Current system time, ms (for the SOFT deadline).
+     */
+    void forceComplete(StopCondition::Kind reason, uint32_t now);   // [ms]
+
+    /**
      * isOpenEnded — true when the command has no stop conditions.
      *
      * Open-ended commands (VW, R) run indefinitely until cancelled or timed
@@ -272,4 +309,16 @@ private:
      * Mirrors Planner::emitEvt.
      */
     void emitEvt(const char* base);
+
+    /**
+     * beginSoftTeardown — arm the SOFT ramp-down (072-003).
+     *
+     * Shared by three call sites that all need identical teardown-start
+     * behavior: tick()'s normal-fire SOFT branch, softStop(), and
+     * forceComplete(). Sets _stopping, stamps _softDeadline, and drives the
+     * BVC target to (0,0). Does NOT touch _firedKind/_firedChannel or check
+     * _active/_stopping — callers are responsible for those (tick() has
+     * already confirmed a fire; softStop()/forceComplete() guard themselves).
+     */
+    void beginSoftTeardown(uint32_t now);   // [ms]
 };

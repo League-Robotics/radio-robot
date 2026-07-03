@@ -14,6 +14,29 @@ struct MotionBaseline {
     float    heading0;      // [rad] pose heading at start
     float    pose0X;        // pose X at start, mm
     float    pose0Y;        // pose Y at start, mm
+
+    // Commanded-direction signs (072-002), captured by MotionCommand::start()
+    // from the command's commanded v/omega at the moment start() is called.
+    // ±1.0, or 0.0 if the commanded velocity component is exactly zero.
+    // DISTANCE/ROTATION multiply the raw (unsigned-by-nature) encoder delta
+    // by these signs to gate on travel in the COMMANDED direction instead of
+    // a direction-blind fabsf() magnitude — see architecture-update.md
+    // Decision 1 (why these live here, not as a StopCondition param or a
+    // call-site pre-negation trick). SAFETY_MARGIN also reads vSign.
+    //
+    // 0.0 (unset) is not just the degenerate MotionCommand v/omega==0 case:
+    // it is also the value every OTHER caller of these Kinds' evaluate() gets
+    // by construction when it builds its OWN MotionBaseline with no notion of
+    // a "commanded direction" at all (e.g. HaltController's HALT DIST watches
+    // — a deliberately direction-agnostic magnitude watch, independent of
+    // whatever verb happens to be driving at registration time). DISTANCE and
+    // ROTATION's evaluate() branches treat 0.0 as "fall back to the original
+    // undirected |delta| magnitude" for exactly this reason — a caller that
+    // never had a commanded direction to report gets the pre-072-002 behavior
+    // back, rather than a signed gate that would silently lock it to one
+    // arbitrary direction.
+    float    vSign;          // ±1.0 (0.0 = no commanded direction; magnitude fallback)
+    float    omegaSign;      // ±1.0 (0.0 = no commanded direction; magnitude fallback)
 };
 
 // ---------------------------------------------------------------------------
@@ -27,26 +50,42 @@ struct MotionBaseline {
 //
 // Param layout per Kind (from architecture-update.md §StopCondition):
 //
-//   KIND     | a              | b          | ax          | sensor | cmp
-//   ---------|----------------|------------|-------------|--------|----
-//   NONE     | —              | —          | —           | —      | —
-//   TIME     | threshold ms   | —          | —           | —      | —
-//   DISTANCE | threshold mm   | —          | —           | —      | —
-//   HEADING  | target Δrad    | eps rad    | —           | —      | —
-//   POSITION | target Y mm    | radius mm  | target X mm | —      | —
-//   SENSOR   | threshold      | —          | —           | ch     | GE/LE
+//   KIND          | a              | b          | ax          | sensor | cmp
+//   --------------|----------------|------------|-------------|--------|----
+//   NONE          | —              | —          | —           | —      | —
+//   TIME          | threshold ms   | —          | —           | —      | —
+//   DISTANCE      | threshold mm   | —          | —           | —      | —
+//   HEADING       | target Δrad    | eps rad    | —           | —      | —
+//   POSITION      | target Y mm    | radius mm  | target X mm | —      | —
+//   SENSOR        | threshold      | —          | —           | ch     | GE/LE
+//   SAFETY_MARGIN | margin mm      | —          | —           | —      | —
+//   ARRIVE        | — (tag-only; never installed/evaluated — see enum comment)
 //
 // POSITION param note: `ax` = target X and `a` = target Y; `b` = radius.
 // Although `ax`/`a` (X/Y) seems reversed from convention, it matches the
 // architecture field names exactly. Callers should use the named helpers
 // makePositionStop(targetX, targetY, radius) to avoid confusion.
+//
+// DISTANCE/ROTATION/SAFETY_MARGIN direction-awareness (072-002): these three
+// Kinds all gate on the SIGNED delta (raw * base.vSign or raw * base.omegaSign),
+// not a direction-blind fabsf() magnitude — see MotionBaseline's vSign/omegaSign
+// doc comment above.
 // ---------------------------------------------------------------------------
 struct StopCondition {
     enum class Kind : uint8_t {
         NONE, TIME, DISTANCE, HEADING, POSITION, SENSOR,
-        COLOR,    // fires when HSV distance from target <= ax
-        LINE_ANY, // fires when any line[0..3] satisfies threshold/cmp
-        ROTATION  // fires when per-wheel encoder arc (from the differential) >= a
+        COLOR,         // fires when HSV distance from target <= ax
+        LINE_ANY,      // fires when any line[0..3] satisfies threshold/cmp
+        ROTATION,      // fires when per-wheel encoder arc (from the differential) >= a
+        SAFETY_MARGIN, // fires when signed travel crosses -a (runaway safety net, D only)
+        // ARRIVE (072-003) is TAG-ONLY: never installed in a MotionCommand's
+        // stop array, never evaluated by evaluate() (see the case in
+        // StopCondition.cpp, which unconditionally returns false).
+        // MotionCommand::forceComplete() sets this as _firedKind purely so
+        // mc_reasonToken() emits "reason=arrive" for a D-mode decel hook's
+        // stalled-short forced completion — see Config.h's distArriveTol/
+        // stallConfirm doc comment and architecture-update.md Decision 6.
+        ARRIVE
     };
     enum class Cmp  : uint8_t { GE, LE };
 
@@ -102,6 +141,26 @@ inline StopCondition makeRotationStop(float arc)   // [mm]
     StopCondition c;
     c.kind = StopCondition::Kind::ROTATION;
     c.a    = arc;
+    return c;
+}
+
+/**
+ * Stop (safety-class) when signed travel crosses more than margin mm
+ * NEGATIVE relative to the commanded direction — i.e. the robot is
+ * demonstrably moving the WRONG way during a directed D (072-002).
+ *
+ * `margin` is a positive threshold, mm. Fires when
+ * (raw traveled) * base.vSign <= -margin.
+ *
+ * MotionCommand::tick() special-cases this Kind: forced HARD teardown and
+ * the emitted EVT label forced to "EVT safety_stop" (reason=runaway),
+ * regardless of the command's configured stop style / done-EVT label.
+ */
+inline StopCondition makeSafetyMarginStop(float margin)   // [mm]
+{
+    StopCondition c;
+    c.kind = StopCondition::Kind::SAFETY_MARGIN;
+    c.a    = margin;
     return c;
 }
 

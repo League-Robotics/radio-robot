@@ -176,6 +176,30 @@ public:
     void setTrackwidth(float trackwidth)  { _trackwidth = trackwidth; }  // [mm]
     void setNominalMaxSpeed(float speed)  { _nominalMaxSpeed = speed; }    // [mm/s]
 
+    // Motor stiction/breakaway gate (072-001): a stateless per-tick PWM
+    // dead-zone. |pwm| < stictionPwm => this tick's target velocity is
+    // forced to 0, regardless of the wheel's velocity on any previous tick
+    // (no "was moving" memory) -- see PhysicsWorld.cpp sub-step A and
+    // architecture-update.md Step 4b / Decision 3. Default 0 => the gate
+    // condition (fabsf(pwm) < 0) is never true for any representable pwm,
+    // so this is a no-op by construction. side: 0 = left, 1 = right,
+    // 2 = both (mirrors setEncoderNoise()'s side convention).
+    void setStictionPwm(int side, float pwm) {  // [PWM units, 0-100]
+        if (side == 0 || side > 1) _stictionPwmL = pwm;
+        if (side == 1 || side > 1) _stictionPwmR = pwm;
+    }
+
+    // Optional first-order motor response lag (072-001): per-wheel time
+    // constant. tau <= 0 (default) takes a no-exp()-call path so the output
+    // velocity equals the (possibly stiction-gated) target velocity
+    // bit-for-bit; tau > 0 converges the reported velocity toward the target
+    // exponentially over successive ticks -- see PhysicsWorld.cpp sub-step A.
+    // side: 0 = left, 1 = right, 2 = both.
+    void setMotorLag(int side, float tauMs) {  // [ms]
+        if (side == 0 || side > 1) _motorLagL = tauMs;
+        if (side == 1 || side > 1) _motorLagR = tauMs;
+    }
+
     // --- Read accessors (const ground-truth) ---------------------------------
 
     float truePoseX() const { return _truePoseX; }
@@ -260,6 +284,13 @@ public:
     float encoderNoiseL()    const { return _encNoiseSigmaL; }
     float encoderNoiseR()    const { return _encNoiseSigmaR; }
 
+    // Stiction/breakaway + optional lag accessors (072-001) — mirror the
+    // setStictionPwm()/setMotorLag() setters above, for SimCommands' SIMGET rows.
+    float stictionPwmL() const { return _stictionPwmL; }
+    float stictionPwmR() const { return _stictionPwmR; }
+    float motorLagL()    const { return _motorLagL; }
+    float motorLagR()    const { return _motorLagR; }
+
 private:
     // --- Commanded actuator state ---
     int8_t _pwmL = 0;
@@ -317,6 +348,19 @@ private:
     float _encScaleErrR = 0.0f;
     float _encSlipL     = 0.0f;  // fraction of motion not registered (0 = perfect)
     float _encSlipR     = 0.0f;
+
+    // --- Stiction/breakaway gate + optional lag (072-001) ---
+    // _stictionPwmL/R: per-wheel PWM dead-zone threshold, default 0 => gate
+    // never fires (no-op). _motorLagL/R: per-wheel first-order response time
+    // constant [ms], default 0 => no-op (no exp() call). _lagVelL/R: the
+    // filter's persistent state (last output velocity); zeroed in reset().
+    // See setStictionPwm()/setMotorLag() above and PhysicsWorld.cpp sub-step A.
+    float _stictionPwmL = 0.0f;
+    float _stictionPwmR = 0.0f;
+    float _motorLagL    = 0.0f;  // [ms]
+    float _motorLagR    = 0.0f;  // [ms]
+    float _lagVelL      = 0.0f;  // [mm/s] persistent lag-filter state
+    float _lagVelR      = 0.0f;  // [mm/s] persistent lag-filter state
 
 public:
     // Per-tick turn rate (set by SimHardware before update()); used only by the

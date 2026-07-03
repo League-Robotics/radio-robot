@@ -71,6 +71,16 @@ const ConfigEntry kRegistry[] = {
     CFG_F   ("aDecel",     aDecel),
     CFG_FI  ("turnGate",   turnInPlaceGate),   // wire: integer degrees; Planner converts to radians at use-site
     CFG_FI_SS("arriveTol", arriveTolerance, "planner"),  // wire: integer mm
+    // Runaway safety-net threshold for a directed D drive (sprint 072-002).
+    // No "planner" SS annotation needed: Planner::_cfg is a live reference
+    // (067-001), so beginDistance() reads a freshly-SET value with no
+    // configure() push required — same pattern as aDecel above.
+    CFG_F   ("safetyMargin", safetyMargin),
+    // D-mode terminal-completion guarantee tunables (sprint 072-003). No
+    // "planner" SS annotation needed — same live-_cfg-reference reasoning as
+    // aDecel/safetyMargin above; the decel hook reads both freshly every tick.
+    CFG_F   ("distArriveTol", distArriveTol),
+    CFG_F   ("stallConfirm",  stallConfirm),
     // Body motion limits (Sprint 017 -- BodyVelocityController)
     CFG_F_SS("vBodyMax",   vBodyMax,     "planner"),  // body forward speed ceiling, mm/s
     CFG_F_SS("yawRateMax", yawRateMax,   "planner"),  // yaw rate ceiling, deg/s
@@ -334,6 +344,17 @@ void handleGet(const ArgList& args, const char* corrId,
 //                     keepalive.  200 ms provides margin over the firmware
 //                     tick budget (~25 ms worst-case) and the minimum
 //                     keepalive cadence without being overly restrictive.
+//   safetyMargin > 0 — StopCondition::SAFETY_MARGIN's runaway net (sprint
+//                     072-002) compares signedTraveled <= -safetyMargin;
+//                     zero fires on any negative-going noise, negative is
+//                     nonsensical — either way defeats the safety net.
+//   stallConfirm >= 0 — the D-mode decel hook's stall-confirm debounce
+//                     (sprint 072-003) computes elapsed = now - stallSince
+//                     (>= 0 by construction) and fires forceComplete() once
+//                     elapsed >= stallConfirm; a negative value would make
+//                     that comparison trivially true on the very first tick
+//                     a drive enters distArriveTol, even while still moving
+//                     normally, forcing premature completion.
 // ---------------------------------------------------------------------------
 
 // Minimum allowed sTimeout value.  Below this the watchdog fires before the
@@ -371,6 +392,22 @@ static bool validateConfig(const RobotConfig& c, const char** badKey)
     }
     if (c.aDecel <= 0.0f) {
         *badKey = "aDecel";
+        return false;
+    }
+    // safetyMargin <= 0 would make StopCondition::SAFETY_MARGIN's
+    // `signedTraveled <= -a` comparison fire on any negative-going noise (at
+    // 0) or be trivially always-true/nonsensical (negative) — either way
+    // defeats the runaway safety net it exists to provide (072-002).
+    if (c.safetyMargin <= 0.0f) {
+        *badKey = "safetyMargin";
+        return false;
+    }
+    // stallConfirm < 0 would make the D-mode stall-confirm debounce fire
+    // instantly the first tick a drive enters distArriveTol (see comment
+    // above) — reject; 0 is a valid (if aggressive) "complete immediately
+    // on entry" degenerate choice, so only negative is rejected.
+    if (c.stallConfirm < 0.0f) {
+        *badKey = "stallConfirm";
         return false;
     }
     if (c.vBodyMax <= 0.0f) {

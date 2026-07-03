@@ -275,6 +275,17 @@ void Planner::beginDistance(float left, float right,
     // Store decel-hook state.
     _dDistTarget = (float)targetDistance;
     _dOmega      = omega;
+    // 072-002: commanded-direction sign, mirrors MotionBaseline::vSign's
+    // computation (MotionCommand::start()) so the decel hook's d_traveled
+    // and StopCondition's DISTANCE/SAFETY_MARGIN agree about "remaining".
+    _dVSign      = (v > 0.0f) ? 1.0f : (v < 0.0f ? -1.0f : 0.0f);
+
+    // 072-003: reset stall-confirm tracking for this new drive.
+    // _dLastRemaining starts at the full target distance (d_remaining at
+    // t=0); _dStallSince is stamped at 'now' so a stall window cannot
+    // appear to have already elapsed before the first decel-hook tick runs.
+    _dLastRemaining = (float)targetDistance;
+    _dStallSince    = now;
 
     // Re-arm safety if SAFE off was issued (one-shot disable, sprint 024-003).
     _checkSafeOneShot(fn, ctx);
@@ -292,13 +303,19 @@ void Planner::beginDistance(float left, float right,
     // Configure a fresh MotionCommand with:
     //   - DISTANCE stop condition as the primary trigger.
     //   - TIME stop as safety net (generous; tolerates profiled ramp-up).
-    //   - SOFT stop style (ramp to zero before completing).
-    //   - EVT "EVT done D" on completion (preserves wire contract).
+    //   - SAFETY_MARGIN stop as a faster runaway net (072-002): fires within
+    //     one control tick of the robot demonstrably moving the WRONG way,
+    //     well before the generous TIME net would ever catch it.
+    //   - SOFT stop style (ramp to zero before completing) — overridden to
+    //     HARD by MotionCommand::tick() specifically when SAFETY_MARGIN fires.
+    //   - EVT "EVT done D" on completion (preserves wire contract; overridden
+    //     to "EVT safety_stop" specifically when SAFETY_MARGIN fires).
     //   - Reply sink for async EVT delivery.
     _activeCmd.configure(v, omega, &_bvc);
     _activeCmd.setOrigin(MotionCommand::Origin::FIXED);
     _activeCmd.addStop(makeDistanceStop((float)targetDistance));
     _activeCmd.addStop(makeTimeStop(timeout));
+    _activeCmd.addStop(makeSafetyMarginStop(_cfg.safetyMargin));
     _activeCmd.setReplySink(fn, ctx, corr_id);
     _activeCmd.setStopStyle(MotionCommand::StopStyle::SOFT);
     _activeCmd.setDoneEvt("EVT done D");

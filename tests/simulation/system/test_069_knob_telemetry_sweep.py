@@ -75,6 +75,14 @@ trivially: there is no persistent sim for state to accumulate on.
      perturbed on ``otos=``/``pose=`` (designated), bit-exact-unchanged on
      ``enc=``/``encpose=`` (isolated).
 
+  5. MOTOR_RESPONSE (072-001: stictionPwmL/R, motorLagMsL/R) -- like
+     PHYSICAL_ASYMMETRY, these perturb PhysicsWorld's per-wheel velL/velR
+     BEFORE every sub-step reads it, so the effect is a genuine plant-truth
+     change with no isolable "stays unchanged" channel. Reuses
+     PHYSICAL_ASYMMETRY's exact check function: per-wheel ``enc=`` divergence
+     after a `T 200 200 2000` straight drive (whose PWM ramp-up from 0 gives
+     both knobs a window to visibly delay/soften the wheel's response).
+
 All non-default values and thresholds below were picked empirically (a
 throwaway probe script, not checked in) against this sim build, with
 generous margin below the smallest observed divergence and above the
@@ -372,6 +380,31 @@ PHYSICAL_ASYMMETRY = {
     "motorOffsetR": dict(value=0.8, side=1),
 }
 
+# ---------------------------------------------------------------------------
+# Group 5 (072-001): MOTOR_RESPONSE (stictionPwmL/R, motorLagMsL/R) -- like
+# PHYSICAL_ASYMMETRY, these perturb PhysicsWorld's per-wheel velL/velR
+# BEFORE sub-steps A/A'/B all read it (source/hal/sim/PhysicsWorld.cpp), so
+# the effect is a genuine plant-truth change that legitimately propagates
+# into every downstream signal (enc=, encpose=, otos=, pose= all move
+# together) -- no isolable "stays unchanged" channel, same as motorOffsetL/R.
+# Reuses _check_physical_asymmetry verbatim.
+#
+# Designated signal: per-wheel enc=[side] divergence after a `T 200 200 2000`
+# straight drive (PWM ramps up from 0 at the start, giving both knobs a
+# window to visibly delay/soften the wheel's response). Empirically probed
+# against this sim build: stictionPwmL/R=40 (a threshold safely above the
+# PWM the ramp commands in its first ~150 ms) -> enc=[side] delta 26 mm;
+# motorLagMsL/R=500 (a lag time constant comparable to the whole 2 s drive)
+# -> delta 30 mm. Both comfortably clear the >= 20 mm threshold
+# _check_physical_asymmetry already asserts.
+# ---------------------------------------------------------------------------
+MOTOR_RESPONSE = {
+    "stictionPwmL": dict(value=40.0, side=0),
+    "stictionPwmR": dict(value=40.0, side=1),
+    "motorLagMsL": dict(value=500.0, side=0),
+    "motorLagMsR": dict(value=500.0, side=1),
+}
+
 ENCODER_REPORT_ERROR = {
     "encScaleErrL": dict(value=0.05, side=0),
     "encScaleErrR": dict(value=-0.05, side=1),
@@ -403,6 +436,8 @@ KNOB_MAP: dict[str, tuple] = {}
 for _k, _cfg in GROUND_TRUTH_SCRUB.items():
     KNOB_MAP[_k] = (_check_scrub_or_otos_error, _cfg)
 for _k, _cfg in PHYSICAL_ASYMMETRY.items():
+    KNOB_MAP[_k] = (_check_physical_asymmetry, _cfg)
+for _k, _cfg in MOTOR_RESPONSE.items():
     KNOB_MAP[_k] = (_check_physical_asymmetry, _cfg)
 for _k, _cfg in ENCODER_REPORT_ERROR.items():
     KNOB_MAP[_k] = (_check_encoder_report_error, _cfg)

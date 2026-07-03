@@ -111,6 +111,13 @@ void MotionCommand::start(const HardwareState& inputs, uint32_t now)
     _baseline.pose0X     = inputs.fused.pose.x;
     _baseline.pose0Y     = inputs.fused.pose.y;
 
+    // 072-002: commanded-direction signs, captured from the command's
+    // commanded v/omega at start() time. ±1.0, or 0.0 if exactly zero.
+    // Consumed by StopCondition's DISTANCE/ROTATION/SAFETY_MARGIN Kinds to
+    // gate on signed travel in the commanded direction (Decision 1).
+    _baseline.vSign     = (_vTgt > 0.0f)     ? 1.0f : (_vTgt < 0.0f     ? -1.0f : 0.0f);
+    _baseline.omegaSign = (_omegaTgt > 0.0f) ? 1.0f : (_omegaTgt < 0.0f ? -1.0f : 0.0f);
+
     _active   = true;
     _stopping = false;
 
@@ -191,17 +198,23 @@ bool MotionCommand::tick(const HardwareState& inputs, uint32_t now, float dt_s)
     }
 
     if (stopped) {
-        if (_stopStyle == StopStyle::HARD) {
+        // 072-002: SAFETY_MARGIN is safety-class — it forces an immediate HARD
+        // teardown regardless of the command's configured _stopStyle, and
+        // forces the emitted EVT label to "EVT safety_stop" (bypassing
+        // _doneEvtLabel), reusing the exact label the keepalive watchdog
+        // already emits (architecture-update.md Decision 2). This is the same
+        // mechanism the existing _stopStyle == HARD check already uses, not a
+        // new one — just one more condition on the same branch.
+        bool safetyForced = (_firedKind == StopCondition::Kind::SAFETY_MARGIN);
+        if (_stopStyle == StopStyle::HARD || safetyForced) {
             // Immediate teardown.
             if (_bvc) _bvc->reset();
             _active   = false;
             _stopping = false;
-            emitEvt(_doneEvtLabel);
+            emitEvt(safetyForced ? "EVT safety_stop" : _doneEvtLabel);
         } else {
             // SOFT: ramp to (0, 0) over up to kSoftDeadline.
-            _stopping     = true;
-            _softDeadline = now + kSoftDeadline;
-            if (_bvc) _bvc->setTarget(0.0f, 0.0f);
+            beginSoftTeardown(now);
         }
     }
 
@@ -245,14 +258,37 @@ void MotionCommand::softStop(uint32_t now)
 
     // Arm SOFT ramp-down: BVC target → (0,0); tick() will emit EVT done
     // once the BVC converges or the 3 s deadline passes.
-    _stopping     = true;
-    _softDeadline = now + kSoftDeadline;
-    if (_bvc) _bvc->setTarget(0.0f, 0.0f);
+    beginSoftTeardown(now);
+}
+
+void MotionCommand::forceComplete(StopCondition::Kind reason, uint32_t now)
+{
+    // No-op if not active or already tearing down (072-003): mirrors
+    // softStop()'s guard exactly — forceComplete is just softStop() with a
+    // reason= token attached, so a stall-confirm re-check on a subsequent
+    // tick (before the ramp-down converges) must not restart the deadline
+    // or clobber whichever reason fired first.
+    if (!_active || _stopping) return;
+
+    // Record the reason so emitEvt's mc_reasonToken lookup appends
+    // "reason=arrive" (or whatever Kind the caller passed) exactly like a
+    // real fired StopCondition would — see tick()'s stopped branch above.
+    _firedKind    = reason;
+    _firedChannel = 0;
+
+    beginSoftTeardown(now);
 }
 
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+
+void MotionCommand::beginSoftTeardown(uint32_t now)
+{
+    _stopping     = true;
+    _softDeadline = now + kSoftDeadline;
+    if (_bvc) _bvc->setTarget(0.0f, 0.0f);
+}
 
 // Map StopCondition::Kind + channel to a reason token string.
 // Returns "" (empty) for NONE — no reason token appended for cancel paths.
@@ -270,6 +306,8 @@ static const char* mc_reasonToken(StopCondition::Kind kind, uint8_t channel)
         case K::POSITION: return "pos";
         case K::LINE_ANY: return "line";
         case K::COLOR:    return "color";
+        case K::SAFETY_MARGIN: return "runaway";
+        case K::ARRIVE:        return "arrive";
         case K::SENSOR: {
             // Channel-name table: matches kSensorChannels in MotionCommands.cpp.
             static const char* kNames[12] = {

@@ -32,6 +32,20 @@ and architecture-update.md Step 4-5 item 1):
   wrapper), not a Python mirror -- if the live assert regressed, the test
   process would abort (SIGABRT) rather than fail cleanly, which is itself the
   strongest possible signal something is wrong here.
+
+  Update (sprint 072, ticket 002): `beginDistance()` now installs a THIRD
+  built-in stop condition (`SAFETY_MARGIN`, the runaway safety net --
+  architecture-update.md Decision 2), so a plain D now installs 3 stops
+  (DISTANCE+TIME+SAFETY_MARGIN), not 2. This shrinks the wire-clause budget
+  from 2 down to 1 (3 internal + 1 wire == 4, still exactly at
+  `kMaxStopConds`) -- an explicitly-anticipated consequence of 072-002's own
+  Design Rationale ("headroom for one more... out of this sprint's scope").
+  The two "two wire clauses fit" tests below are updated to one wire clause
+  each to match the new (still-exactly-at-the-ceiling) budget; their actual
+  intent (prove no crash / prove the wire clause governs when tripped early)
+  is unchanged. `test_d_three_wire_clauses_overflow_is_recoverable_err_not_crash`
+  needed no change -- it already overflowed before 072-002 and overflows more
+  now.
 """
 import ctypes
 
@@ -51,19 +65,27 @@ def _tick_collect(s: Sim, n: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Sprint's exact regression scenario: D with 2 wire clauses (stop= + sensor=).
+# Sprint's exact regression scenario: D with 1 wire clause (sensor=).
 #
-# Pre-fix total stop count: 2 internal (DISTANCE+TIME) + 1 duplicate DISTANCE
-# + 2 wire (TIME+SENSOR) == 5 > kMaxStopConds(4) -> live assert -> process
-# abort.  Post-fix: 2 internal + 2 wire == 4, exactly at the ceiling, no
-# overflow.  Neither wire clause fires (the wire TIME is 9000ms, far past the
-# ~2s the DISTANCE target takes at 150mm/s; the sensor is never tripped), so
-# the DISTANCE stop -- the earliest-firing condition -- governs.
+# Pre-065-001-fix total stop count: 2 internal (DISTANCE+TIME) + 1 duplicate
+# DISTANCE + 2 wire (TIME+SENSOR) == 5 > kMaxStopConds(4) -> live assert ->
+# process abort.  Post-065-001-fix, pre-072-002: 2 internal + 2 wire == 4,
+# exactly at the ceiling, no overflow.  Post-072-002 (this sprint):
+# beginDistance() installs a THIRD internal stop (SAFETY_MARGIN, the runaway
+# safety net), so the budget is now 3 internal + 1 wire == 4 -- still exactly
+# at the ceiling, just with one fewer wire-clause slot (an explicitly
+# anticipated consequence of 072-002's Design Rationale Decision 2). The wire
+# clause never fires (the sensor is never tripped), so the DISTANCE stop --
+# the earliest-firing condition -- governs.
 # ---------------------------------------------------------------------------
 
 def test_d_two_wire_clauses_completes_without_crash(build_lib):
-    """D 150 150 300 stop=t:9000 sensor=line0:ge:500 must not crash the sim
-    and must honor the earliest-firing clause (DISTANCE)."""
+    """D 150 150 300 sensor=line0:ge:500 must not crash the sim and must
+    honor the earliest-firing clause (DISTANCE).
+
+    Only 1 wire clause now (072-002 shrank the budget to 3 internal + 1 wire
+    == 4; see module docstring) -- the test's original 2-wire-clause name is
+    kept for continuity with the ticket 065-001 history it regression-guards."""
     with Sim() as s:
         s.send_command("SET sTimeout=60000")
         s.init_line_sensor()
@@ -71,10 +93,10 @@ def test_d_two_wire_clauses_completes_without_crash(build_lib):
         _tick_collect(s, 3)
         s.get_async_evts()  # drain
 
-        resp = s.send_command("D 150 150 300 stop=t:9000 sensor=line0:ge:500")
+        resp = s.send_command("D 150 150 300 sensor=line0:ge:500")
         assert "OK drive" in resp, f"D command not accepted; resp={resp!r}"
         assert "ERR stopoverflow" not in resp, (
-            f"Unexpected overflow with only 2 wire clauses; resp={resp!r}"
+            f"Unexpected overflow with only 1 wire clause; resp={resp!r}"
         )
 
         evts = _tick_collect(s, 120)  # ~2.9s, generous for 300mm @ 150mm/s (~2s)
@@ -84,11 +106,10 @@ def test_d_two_wire_clauses_completes_without_crash(build_lib):
         )
         assert "reason=dist" in evts, (
             f"Expected the DISTANCE clause (earliest-firing) to govern, not "
-            f"the far-off wire TIME(9000) or the un-tripped sensor; "
-            f"evts={evts!r}"
+            f"the un-tripped sensor; evts={evts!r}"
         )
         assert "ERR stopoverflow" not in evts, (
-            f"Unexpected overflow with only 2 wire clauses; evts={evts!r}"
+            f"Unexpected overflow with only 1 wire clause; evts={evts!r}"
         )
 
 
@@ -99,7 +120,7 @@ def test_d_sensor_clause_wins_when_tripped_early(build_lib):
     acceptance criterion.
 
     Uses a large DISTANCE target (3000mm) so the DISTANCE stop cannot race
-    the early sensor trip.
+    the early sensor trip. Only 1 wire clause (see module docstring, 072-002).
     """
     with Sim() as s:
         s.send_command("SET sTimeout=60000")
@@ -108,13 +129,12 @@ def test_d_sensor_clause_wins_when_tripped_early(build_lib):
         _tick_collect(s, 3)
         s.get_async_evts()  # drain
 
-        resp = s.send_command("D 150 150 3000 stop=t:9000 sensor=line0:ge:500")
+        resp = s.send_command("D 150 150 3000 sensor=line0:ge:500")
         assert "OK drive" in resp, f"D command not accepted; resp={resp!r}"
 
         _tick_collect(s, 3)  # let the command start
         s.set_line_values(800, 0, 0, 0)  # trip line0 above 500
-        evts = _tick_collect(s, 40)  # ~1s -- well before the 9000ms wire TIME
-                                      # and the ~20s DISTANCE target
+        evts = _tick_collect(s, 40)  # ~1s -- well before the ~20s DISTANCE target
 
         assert "EVT done D" in evts, f"Expected sensor stop to fire; evts={evts!r}"
         assert "reason=line0" in evts, (

@@ -11,9 +11,13 @@ Tests verify:
   - SENSOR GE and LE fire correctly.
   - Zero stop conditions: no self-termination.
   - Baseline delta (distance / heading) computed from snapshot.
+  - DISTANCE is direction-aware (072-004): gates on the SIGNED delta
+    (raw * base.vSign), not fabsf(raw) — see TestDistance.
 
 Implementation note: these tests mirror the C++ evaluate() logic in Python.
 They do NOT test the C++ binary — they validate the algorithm independently.
+For the real-binary/end-to-end direction-aware + SAFETY_MARGIN coverage,
+see tests/simulation/unit/test_072_002_signed_stop_and_safety_margin.py.
 """
 
 from __future__ import annotations
@@ -59,6 +63,12 @@ class MotionBaseline:
         self.heading0Rad = kwargs.get('heading0Rad', 0.0)
         self.pose0X     = kwargs.get('pose0X',     0.0)
         self.pose0Y     = kwargs.get('pose0Y',     0.0)
+        # vSign (072-004): commanded-direction sign captured at
+        # MotionCommand::start(), mirrors source/control/StopCondition.h's
+        # MotionBaseline.vSign. Default +1.0 (forward) so every pre-existing
+        # DISTANCE test above, which only ever drives positive (forward)
+        # travel, is unaffected by the signed-delta change below.
+        self.vSign      = kwargs.get('vSign',      1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -98,9 +108,17 @@ def evaluate(kind: str, a: float, b: float, ax: float,
         return elapsed >= int(a)
 
     elif kind == 'DISTANCE':
+        # 072-004: signed-delta gate (was fabsf(raw) >= a), mirroring
+        # source/control/StopCondition.cpp's Kind::DISTANCE fix
+        # (distance-stop-fabsf-accepts-backward-completion.md). A drive that
+        # travels in the commanded direction is unaffected (signedDelta ==
+        # |raw| when raw already agrees with base.vSign); a drive that runs
+        # the WRONG way no longer satisfies the stop from that wrong-way
+        # travel alone.
         enc_avg = (s.encLMm + s.encRMm) * 0.5
-        traveled = abs(enc_avg - base.enc0Mm)
-        return traveled >= a
+        raw = enc_avg - base.enc0Mm
+        signed_delta = raw * base.vSign
+        return signed_delta >= a
 
     elif kind == 'HEADING':
         current_delta = wrap_angle(s.poseHrad - base.heading0Rad)
@@ -216,7 +234,9 @@ class TestTime:
 # ---------------------------------------------------------------------------
 
 class TestDistance:
-    """DISTANCE fires when |enc_avg - enc0| >= threshold; not one mm short."""
+    """DISTANCE fires when signed(enc_avg - enc0) >= threshold; not one mm
+    short, and not from wrong-direction travel (072-004:
+    distance-stop-fabsf-accepts-backward-completion.md)."""
 
     def test_distance_fires_at_threshold(self):
         """Exactly 200 mm of travel fires DISTANCE(a=200)."""
@@ -240,12 +260,32 @@ class TestDistance:
         s = HardwareState(encLMm=300.0, encRMm=100.0)
         assert evaluate('DISTANCE', 200.0, 0.0, 0.0, 0, 'GE', s, 0, base) is True
 
-    def test_distance_fires_for_reverse(self):
-        """Reverse travel (negative) fires once abs(traveled) >= threshold."""
-        base = MotionBaseline(enc0Mm=200.0)
-        # enc_avg = 0 → traveled = -200 → |traveled| = 200
+    def test_distance_fires_for_commanded_reverse(self):
+        """072-004 (split from test_distance_fires_for_reverse): a
+        commanded-reverse D (vSign=-1) still completes on backward travel —
+        no regression on the legitimate reverse-drive case.
+        signedDelta = raw * vSign flips the negative raw delta positive,
+        exactly matching the fabsf outcome for this direction-matching case.
+        """
+        base = MotionBaseline(enc0Mm=200.0, vSign=-1.0)
+        # enc_avg = 0 → raw = -200 (backward travel, matches commanded reverse)
         s = HardwareState(encLMm=0.0, encRMm=0.0)
         assert evaluate('DISTANCE', 200.0, 0.0, 0.0, 0, 'GE', s, 0, base) is True
+
+    def test_distance_does_not_fire_for_wrong_direction_travel(self):
+        """072-004 (split from test_distance_fires_for_reverse, NEW case):
+        a forward-commanded D (vSign=+1) that instead travels BACKWARD must
+        NOT fire — this is the exact scenario
+        distance-stop-fabsf-accepts-backward-completion.md reports (a
+        forward D running away backward used to self-report
+        `EVT done D reason=dist` once it had gone the target magnitude the
+        WRONG way). This test encodes the fix, not just documents it: under
+        the OLD fabsf(raw) >= a semantics this would have fired (traveled).
+        """
+        base = MotionBaseline(enc0Mm=200.0, vSign=1.0)
+        # enc_avg = 0 → raw = -200 (backward travel), commanded forward
+        s = HardwareState(encLMm=0.0, encRMm=0.0)
+        assert evaluate('DISTANCE', 200.0, 0.0, 0.0, 0, 'GE', s, 0, base) is False
 
     def test_distance_zero_threshold_fires_immediately(self):
         """DISTANCE(a=0) fires when enc_avg == enc0 (zero travel)."""

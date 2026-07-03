@@ -42,6 +42,9 @@ Planner::Planner(MotorController& mc_ctrl, Odometry& odo,
     , _dDistTarget(0.0f)
     , _dOmega(0.0f)
     , _dEnc0(0.0f)
+    , _dVSign(0.0f)
+    , _dLastRemaining(0.0f)
+    , _dStallSince(0)
     , _gPhase(GPhase::IDLE)
     , _gTargetXWorld(0.0f)
     , _gTargetYWorld(0.0f)
@@ -220,13 +223,65 @@ void Planner::driveAdvance(HardwareState& inputs, MotorCommands& cmds,
         // at the same point.  Only clamps downward; does not increase speed.
         if (_mode == DriveMode::DISTANCE) {
             // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
+            // 072-002: signed convention (drops fabsf), matching
+            // StopCondition::DISTANCE's own signed-delta math (base.vSign)
+            // so the decel profile and the stop condition agree about what
+            // "remaining" means throughout the drive.  When travel matches
+            // the commanded direction, d_traveled is bit-identical to the
+            // old fabsf(enc_avg - _dEnc0).
             float enc_avg     = (inputs.encPos[1] + inputs.encPos[0]) * 0.5f;
-            float d_traveled  = fabsf(enc_avg - _dEnc0);
+            float d_traveled  = (enc_avg - _dEnc0) * _dVSign;
             float d_remaining = _dDistTarget - d_traveled;
-            if (d_remaining > 0.0f) {
+            // 072-003: skip the whole decel hook once teardown has begun
+            // (a StopCondition fired, softStop() was called, or a prior
+            // forceComplete() this same drive already armed the ramp-down).
+            // Without this guard, a forceComplete()-triggered ramp-down
+            // would keep seeing d_remaining > 0 (that is the definition of
+            // "stalled short" — there was no crossing) and setTarget() below
+            // would fight the (0,0) ramp MotionCommand just armed.
+            if (d_remaining > 0.0f && !_activeCmd.stopping()) {
+                // 072-003(a): floor the terminal v_cap at minWheelSpeed
+                // instead of letting it asymptote toward zero as
+                // d_remaining -> 0.  The old formula implicitly assumed the
+                // plant/controller could track an arbitrarily small
+                // commanded speed all the way to zero; real motors
+                // (stiction, cogging, driver deadband) stop responding
+                // before that, and VelocityController freezes its own
+                // integrator below minWheelSpeed anyway
+                // (VelocityController.cpp:85-96), so asking for less than
+                // minWheelSpeed here buys nothing.  This floor only ever
+                // RAISES the computed v_cap; the down-only ratchet below
+                // (only lower the BVC target) is unchanged, so it still
+                // never re-approaches after the ratchet has settled.
                 float v_cap = sqrtf(2.0f * _cfg.aDecel * d_remaining);
+                if (v_cap < _cfg.minWheelSpeed) v_cap = _cfg.minWheelSpeed;
                 if (v_cap < _bvc.targetV()) {
                     _activeCmd.setTarget(v_cap, _dOmega);
+                }
+
+                // 072-003(b): stalled-short forced completion — the
+                // backstop that makes correctness independent of (a)'s
+                // floor being high enough to break a given robot's actual
+                // stiction (architecture-update.md Decision 6).  Track
+                // whether d_remaining is still shrinking tick-to-tick
+                // (kShrinkEps guards against float noise reading as
+                // progress — far below any real per-tick travel increment).
+                // Once it stops shrinking while inside distArriveTol for
+                // stallConfirm ms, force a clean completion instead of
+                // leaving the ratchet pinned indefinitely — re-approaching
+                // after a retreat was rejected (Decision 5) as reproducing
+                // the windup/thrash failure mode this ticket fixes.
+                constexpr float kShrinkEps = 1.0e-3f;   // [mm]
+                if (d_remaining < _dLastRemaining - kShrinkEps) {
+                    _dStallSince = now;
+                }
+                _dLastRemaining = d_remaining;
+
+                if (fabsf(d_remaining) <= _cfg.distArriveTol) {
+                    int32_t stalledMs = (int32_t)(now - _dStallSince);
+                    if (stalledMs >= (int32_t)_cfg.stallConfirm) {
+                        _activeCmd.forceComplete(StopCondition::Kind::ARRIVE, now);
+                    }
                 }
             }
         }

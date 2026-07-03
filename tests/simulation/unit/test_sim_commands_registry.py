@@ -1,20 +1,24 @@
 """
 test_sim_commands_registry.py — ticket 069-003 (SIMSET/SIMGET wire surface),
-extended by ticket 069-004 (per-wheel encoder-report-error + OTOS-error rows).
+extended by ticket 069-004 (per-wheel encoder-report-error + OTOS-error rows)
+and ticket 072-001 (motor stiction/breakaway + optional lag rows).
 
 Covers the SimCommands grammar/dispatch contract directly (not the
 higher-level RT-90 physical scenario, which lives in
 tests/simulation/system/test_069_rt_90deg_body_scrub.py; nor the behavioral
 error-isolation scenarios, which live in
-tests/simulation/system/test_069_004_encoder_otos_knobs.py):
+tests/simulation/system/test_069_004_encoder_otos_knobs.py; nor the D-drive
+stiction repro, which lives in
+tests/simulation/system/test_072_001_stiction_d_drive_repro.py):
 
-  - SIMSET/SIMGET round-trip for every ticket-003 AND ticket-004 registry key.
+  - SIMSET/SIMGET round-trip for every ticket-003, ticket-004, AND
+    ticket-072-001 registry key.
   - Unknown key -> ERR badkey (both SIMSET and SIMGET).
   - SIMSET atomicity: a mixed valid/invalid SIMSET applies NONE of the keys
     (matches SET's existing all-or-nothing semantics -- see
     ConfigRegistry.cpp's handleSet).
-  - Bare SIMGET dumps every registered key (tickets 003 + 004 combined) in
-    one SIMCFG reply.
+  - Bare SIMGET dumps every registered key (tickets 003, 004, and 072-001
+    combined) in one SIMCFG reply.
   - SIMSET/SIMGET are ERR unknown on a command table built with sim=nullptr
     -- the exact shape the ARM firmware's own command table has (main.cpp
     never passes a SimCommands*), proving the sim-only surface never leaks
@@ -49,6 +53,11 @@ import pytest
         ("otosAngScaleErr", -0.02),
         ("otosLinNoise", 0.5),
         ("otosYawNoise", 0.01),
+        # ---- 072-001: motor stiction/breakaway + optional lag rows ---------
+        ("stictionPwmL", 12.0),
+        ("stictionPwmR", 18.0),
+        ("motorLagMsL", 50.0),
+        ("motorLagMsR", 75.0),
     ],
 )
 def test_simset_simget_roundtrip(sim, key: str, value: float) -> None:
@@ -191,6 +200,8 @@ def test_simget_bare_dumps_all_keys(sim) -> None:
         # ticket 004: OTOS error
         "otosLinScaleErr", "otosAngScaleErr", "otosLinNoise", "otosYawNoise",
         "otosLinDriftMmS", "otosYawDriftDegS",
+        # 072-001: motor stiction/breakaway + optional lag
+        "stictionPwmL", "stictionPwmR", "motorLagMsL", "motorLagMsR",
     ):
         assert key in reply, f"bare SIMGET should include {key}: {reply!r}"
 

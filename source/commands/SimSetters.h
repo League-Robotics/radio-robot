@@ -151,4 +151,23 @@ inline float getOtosYawDrift(SimHardware& hal) {
     return rate * kRadToDegScale;
 }
 
+// ---- Motor stiction/breakaway + optional lag (072-001) --------------------
+// Per-wheel PWM dead-zone threshold and optional first-order response-lag
+// time constant -- see PhysicsWorld::setStictionPwm()/setMotorLag() for the
+// full model (both default to 0 = no-op). Plain per-side names, matching this
+// header's existing convention (no side-parameterized ctypes counterpart
+// exists for these knobs yet -- 069-005's rule: add one only when a caller
+// needs it outside SIMSET).
+inline void  stictionPwmL(SimHardware& hal, float pwm) { hal.plant().setStictionPwm(0, pwm); }  // [PWM units]
+inline float getStictionPwmL(SimHardware& hal)         { return hal.plant().stictionPwmL(); }
+
+inline void  stictionPwmR(SimHardware& hal, float pwm) { hal.plant().setStictionPwm(1, pwm); }  // [PWM units]
+inline float getStictionPwmR(SimHardware& hal)         { return hal.plant().stictionPwmR(); }
+
+inline void  motorLagMsL(SimHardware& hal, float ms) { hal.plant().setMotorLag(0, ms); }  // [ms]
+inline float getMotorLagMsL(SimHardware& hal)        { return hal.plant().motorLagL(); }
+
+inline void  motorLagMsR(SimHardware& hal, float ms) { hal.plant().setMotorLag(1, ms); }  // [ms]
+inline float getMotorLagMsR(SimHardware& hal)        { return hal.plant().motorLagR(); }
+
 }  // namespace simsetters

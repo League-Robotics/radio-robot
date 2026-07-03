@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Sim stiction/breakaway plant + SIMSET knobs + repro test
-status: open
+status: done
 use-cases:
 - SUC-001
 depends-on: []
@@ -58,39 +58,39 @@ Decision 3; `usecases.md` SUC-001.
 
 ## Acceptance Criteria
 
-- [ ] `stictionPwmL`/`stictionPwmR` (per-wheel breakaway threshold, PWM
+- [x] `stictionPwmL`/`stictionPwmR` (per-wheel breakaway threshold, PWM
       units 0-100, default 0) are `SIMSET`/`SIMGET`-able.
-- [ ] With `stictionPwmL/R` at default (0), every existing test that never
+- [x] With `stictionPwmL/R` at default (0), every existing test that never
       configures the knob observes byte-identical `PhysicsWorld::update()`
       output (golden-TLM canary unaffected) — confirmed by running the
       existing zero-slip/zero-noise/offset-factor-1.0 golden-TLM test
       unmodified.
-- [ ] A commanded `|pwm| < stictionPwmSide` produces exactly zero velocity
+- [x] A commanded `|pwm| < stictionPwmSide` produces exactly zero velocity
       for that wheel this tick, regardless of the wheel's velocity on the
       previous tick (stateless — no "was moving" memory); once
       `|pwm| >= stictionPwmSide`, velocity follows the existing unmodified
       algebraic formula.
-- [ ] Boundary behavior is tested explicitly: `|pwm|` exactly at
+- [x] Boundary behavior is tested explicitly: `|pwm|` exactly at
       `stictionPwmSide` does NOT gate (formula applies); `|pwm|` one unit
       below does gate (`vel = 0`).
-- [ ] (If implemented per Open Question 8) `motorLagMsL`/`motorLagMsR`
+- [x] (If implemented per Open Question 8) `motorLagMsL`/`motorLagMsR`
       (per-wheel first-order response time constant, ms, default 0 = no-op)
       are `SIMSET`/`SIMGET`-able; `tau <= 0` takes a no-`exp()`-call path
       producing `vel == velTarget` bit-for-bit; `tau > 0` converges the
       lag-filtered velocity toward `velTarget` correctly over successive
       ticks. Persistent lag-filter state (`_lagVelL/R`) is zeroed in
       `PhysicsWorld::reset()`.
-- [ ] A new end-to-end scenario test, running the actual firmware control
+- [x] A new end-to-end scenario test, running the actual firmware control
       code (not an artificial encoder-cap harness), configures
       `stictionPwmL/R` above the terminal-decel PWM a `D` drive commands
       near its target and demonstrates a scripted `D` drive measurably
       lands short of the target distance in sim — this is the repro
       vehicle tickets 002/003 are validated against and ticket 004 later
       flips.
-- [ ] The existing forced-encoder-cap sim harness (used to diagnose the
+- [x] The existing forced-encoder-cap sim harness (used to diagnose the
       issue against real firmware code, per the issue text) is not removed
       or broken — it remains available as an independent diagnostic tool.
-- [ ] Full existing test suite (`uv run python -m pytest`) remains green at
+- [x] Full existing test suite (`uv run python -m pytest`) remains green at
       the confirmed pre-sprint baseline (2621 passed, 0 failed), plus this
       ticket's new tests.
 
