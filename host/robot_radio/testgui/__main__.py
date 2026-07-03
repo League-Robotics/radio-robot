@@ -838,37 +838,17 @@ def _build_main_window():  # type: ignore[return]
         (sim_err_encoder_mm, sim_err_otos_linear, sim_err_otos_yaw) are never
         touched.
 
-        Missing config / missing calibration fields never crash the panel —
-        they fall back to the neutral value for that knob and log a [WARN].
+        Ticket 073-003: the lookup/fallback (``get_robot_config()`` ->
+        ``cfg.calibration.rotational_slip`` / ``cfg.geometry.trackwidth``,
+        missing config/fields never crash the panel — they fall back to the
+        neutral value for that knob and log a [WARN]) is now delegated to
+        the shared ``sim_prefs.resolve_calibration_defaults()`` resolver
+        (Design Rationale Decision 4), which also backs
+        ``load_sim_error_profile()``'s factory-default fallback so a fresh
+        TestGUI install reconciles calibration out of the box, not only on
+        this button's manual click.
         """
-        cfg = get_robot_config()
-        if cfg is None:
-            rot_slip = 1.0
-            tw = sim_prefs.DEFAULT_PROFILE["trackwidth_mm"]
-            _append_log(
-                "[WARN] From Calibration: no active robot config found — "
-                f"falling back to neutral body_rot_scrub={rot_slip}, "
-                f"trackwidth_mm={tw}"
-            )
-        else:
-            if cfg.calibration.rotational_slip is not None:
-                rot_slip = cfg.calibration.rotational_slip
-            else:
-                rot_slip = 1.0
-                _append_log(
-                    "[WARN] From Calibration: active robot config has no "
-                    f"calibration.rotational_slip — falling back to neutral "
-                    f"body_rot_scrub={rot_slip}"
-                )
-            if cfg.geometry.trackwidth is not None:
-                tw = cfg.geometry.trackwidth
-            else:
-                tw = sim_prefs.DEFAULT_PROFILE["trackwidth_mm"]
-                _append_log(
-                    "[WARN] From Calibration: active robot config has no "
-                    f"geometry.trackwidth — falling back to neutral "
-                    f"trackwidth_mm={tw}"
-                )
+        rot_slip, tw = sim_prefs.resolve_calibration_defaults(log=_append_log)
 
         sim_err_slip_turn.setValue(0.0)
         sim_err_body_rot_scrub.setValue(rot_slip)
@@ -1474,8 +1454,63 @@ def _build_main_window():  # type: ignore[return]
     # Trigger once to set initial state.
     _on_transport_changed(transport_combo.currentIndex())
 
+    def _push_robot_calibration() -> None:
+        """Push the active robot config's calibration to the connected robot.
+
+        Selecting a robot must be authoritative: every calibration value the
+        firmware exposes as a SET key is overwritten from the robot's JSON,
+        so whatever calibration is compiled into the firmware
+        (DefaultConfig.cpp — in Sim mode that is tovez's rotationalSlip=0.92)
+        never silently leaks into a run.  An uncalibrated config ("tovez
+        nocal") pushes NEUTRAL values — in particular ``SET rotSlip=0`` (the
+        documented no-correction sentinel) — which is what makes
+        "no-calibration robot + zero sim errors = geometry-pure turns" hold.
+        Works identically for Sim and hardware transports.
+
+        No-op when not connected; the push re-runs on the next Connect (and
+        on every robot change while connected).
+        """
+        transport = _state.get("transport")
+        if transport is None:
+            return
+        cfg = get_robot_config()
+        if cfg is None:
+            _append_log("[CAL] no active robot config — calibration push skipped")
+            return
+        from robot_radio.calibration.push import calibration_commands
+
+        cmds = calibration_commands(cfg)
+        n_bad = 0
+        n_nodev = 0
+        for cmd, read_ms in cmds:
+            try:
+                reply = transport.command(cmd, read_ms=read_ms)
+            except Exception as exc:  # noqa: BLE001 — log, don't kill the GUI
+                _append_log(f"[CAL] push failed at {cmd!r}: {exc}")
+                return
+            upper = (reply or "").upper()
+            if "NODEV" in upper:
+                # Physical-device command (OI/OL/OA) on a target without that
+                # device — normal in Sim mode, where the OTOS *model* is
+                # configured via SIMSET instead. Skip quietly.
+                n_nodev += 1
+            elif "ERR" in upper:
+                n_bad += 1
+                _append_log(f"[CAL] {cmd!r} rejected: {(reply or '').strip()}")
+        _append_log(
+            f"[CAL] pushed {len(cmds) - n_bad - n_nodev}/{len(cmds)} "
+            f"calibration values from robot '{cfg.robot_name}'"
+            + (f" ({n_nodev} device cmds skipped: no device)" if n_nodev else "")
+            + (f" ({n_bad} REJECTED)" if n_bad else "")
+        )
+
     def _on_robot_changed(index: int) -> None:
-        """Load the robot selected in the dropdown (reloads on every change)."""
+        """Load the robot selected in the dropdown (reloads on every change).
+
+        When a transport is connected, the new robot's calibration is pushed
+        immediately so the firmware always runs the SELECTED robot's values
+        (see _push_robot_calibration).
+        """
         path = robot_combo.itemData(index)
         if not path:
             return
@@ -1488,6 +1523,8 @@ def _build_main_window():  # type: ignore[return]
             f"[INFO] Loaded robot: {cfg.robot_name} "
             f"({cfg.hardware_model}, trackwidth={cfg.trackwidth}mm)"
         )
+        if _state.get("transport") is not None:
+            _push_robot_calibration()
 
     robot_combo.currentIndexChanged.connect(_on_robot_changed)
 
@@ -1938,6 +1975,11 @@ def _build_main_window():  # type: ignore[return]
                 _append_log(f"[WARN] STREAM 50 failed: {exc}")
 
         _state["transport"] = transport
+
+        # Push the active robot's calibration to the firmware so the selected
+        # robot's values override whatever DefaultConfig.cpp baked in — an
+        # uncalibrated robot pushes neutral values (SET rotSlip=0 etc.).
+        _push_robot_calibration()
 
         # Start the live-view worker for Relay (PLAYFIELD MODE) only.
         # Sim and Serial have no playfield camera.

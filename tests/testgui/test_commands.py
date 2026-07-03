@@ -378,8 +378,37 @@ class TestTours:
             "D 200 200 700",
             "RT 9000",
             "D 200 200 480",
+            "RT 9000",
+            "D 200 200 700",
+            "RT 9000",
+            "D 200 200 240",
+            "RT 9000",
             "D 200 200 345",
         ]
+
+    def test_tour_2_is_a_closed_loop(self):
+        """Tour 2's defining property: dead-reckoned ideally, it returns to
+        the origin (stakeholder spec 2026-07-03: 'starts from the origin,
+        makes a loop, and returns back to its location')."""
+        import math
+
+        from robot_radio.testgui.commands import TOUR_2
+
+        x = y = h = 0.0
+        for cmd in TOUR_2:
+            parts = cmd.split()
+            if parts[0] == "RT":
+                h += math.radians(int(parts[1]) / 100.0)
+            elif parts[0] == "TURN":
+                h = math.radians(int(parts[1]) / 100.0)
+            elif parts[0] == "D":
+                d = float(parts[3])
+                x += d * math.cos(h)
+                y += d * math.sin(h)
+        assert math.hypot(x, y) < 1e-6, (
+            f"Tour 2 must dead-reckon back to the origin; ends at "
+            f"({x:.1f}, {y:.1f}) mm"
+        )
 
     def test_tour_all_steps_are_wire_strings(self):
         """Every step is a non-empty string beginning with a known verb."""

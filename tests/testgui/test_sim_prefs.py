@@ -1,11 +1,19 @@
 """tests/testgui/test_sim_prefs.py — headless, Qt-free tests for sim_prefs.
 
 Covers:
-- DEFAULT_PROFILE keys/values (0.0 / 0.26 / 0.05 / 0.0).
+- DEFAULT_PROFILE keys/values (0.0 / 0.0 / 0.05 / 0.0 — ticket 073-003
+  changed slip_turn_extra from the historical 0.26 to 0.0).
+- resolve_calibration_defaults() -- the shared calibration lookup (ticket
+  073-003) backing both __main__.py's "From Calibration" button and
+  load_sim_error_profile()'s factory-default fallback: found-config and
+  missing-config/missing-field fallback paths.
 - save_sim_error_profile / load_sim_error_profile round-trip via a
   monkeypatched _PREFS_PATH / _PREFS_DIR pointed at tmp_path (never touches
   the real repo data/ directory).
-- Missing file / corrupt JSON -> DEFAULT_PROFILE (copy).
+- Missing file / corrupt JSON -> DEFAULT_PROFILE, except body_rot_scrub,
+  which resolves from calibration (ticket 073-003) -- these tests
+  monkeypatch get_robot_config to None so the fallback is deterministically
+  the neutral 1.0, matching DEFAULT_PROFILE.
 - Partial file merged with defaults for the missing keys.
 - Non-numeric value for a known key falls back to that key's default.
 - Unknown keys in the persisted file are ignored.
@@ -30,9 +38,9 @@ class TestDefaultProfile:
         from robot_radio.testgui.sim_prefs import DEFAULT_PROFILE
 
         assert DEFAULT_PROFILE == {
-            # historical four
+            # historical four -- slip_turn_extra changed 0.26 -> 0.0 (073-003)
             "encoder_noise_mm": 0.0,
-            "slip_turn_extra": 0.26,
+            "slip_turn_extra": 0.0,
             "otos_linear_noise": 0.05,
             "otos_yaw_noise": 0.0,
             # 069-007: additive/noise terms -- 0.0 is a genuine no-op
@@ -99,7 +107,7 @@ class TestDefaultProfile:
 
         profile = sim_prefs.load_sim_error_profile()
         profile["slip_turn_extra"] = 999.0
-        assert sim_prefs.DEFAULT_PROFILE["slip_turn_extra"] == 0.26
+        assert sim_prefs.DEFAULT_PROFILE["slip_turn_extra"] == 0.0  # 073-003: was 0.26
 
 
 # ---------------------------------------------------------------------------
@@ -152,28 +160,42 @@ class TestPersistence:
         assert sim_prefs.load_sim_error_profile()["encoder_noise_mm"] == 1.0
 
     def test_load_missing_file_returns_defaults(self, tmp_path, monkeypatch):
+        """073-003: body_rot_scrub's fallback is now calibration-resolved,
+        not the DEFAULT_PROFILE literal -- pin get_robot_config to None (at
+        its SOURCE module -- resolve_calibration_defaults() re-imports it
+        per call, exactly like the original "From Calibration" button
+        handler did, so patching robot_radio.config.robot_config is the
+        real patch point, not sim_prefs) so this test's "==
+        DEFAULT_PROFILE" claim is deterministic (the neutral 1.0 fallback)
+        regardless of what robot happens to be active."""
+        import robot_radio.config.robot_config as robot_config_module
         from robot_radio.testgui import sim_prefs
 
         prefs_path = tmp_path / "does_not_exist.json"
         monkeypatch.setattr(sim_prefs, "_PREFS_PATH", prefs_path)
+        monkeypatch.setattr(robot_config_module, "get_robot_config", lambda: None)
 
         assert sim_prefs.load_sim_error_profile() == sim_prefs.DEFAULT_PROFILE
 
     def test_load_corrupt_json_returns_defaults(self, tmp_path, monkeypatch):
+        import robot_radio.config.robot_config as robot_config_module
         from robot_radio.testgui import sim_prefs
 
         prefs_path = tmp_path / "sim_error_profile.json"
         prefs_path.write_text("not valid json {{{")
         monkeypatch.setattr(sim_prefs, "_PREFS_PATH", prefs_path)
+        monkeypatch.setattr(robot_config_module, "get_robot_config", lambda: None)
 
         assert sim_prefs.load_sim_error_profile() == sim_prefs.DEFAULT_PROFILE
 
     def test_load_non_dict_json_returns_defaults(self, tmp_path, monkeypatch):
+        import robot_radio.config.robot_config as robot_config_module
         from robot_radio.testgui import sim_prefs
 
         prefs_path = tmp_path / "sim_error_profile.json"
         prefs_path.write_text(json.dumps([1, 2, 3]))
         monkeypatch.setattr(sim_prefs, "_PREFS_PATH", prefs_path)
+        monkeypatch.setattr(robot_config_module, "get_robot_config", lambda: None)
 
         assert sim_prefs.load_sim_error_profile() == sim_prefs.DEFAULT_PROFILE
 
@@ -186,7 +208,7 @@ class TestPersistence:
 
         profile = sim_prefs.load_sim_error_profile()
         assert profile["encoder_noise_mm"] == 5.0
-        assert profile["slip_turn_extra"] == 0.26
+        assert profile["slip_turn_extra"] == 0.0  # 073-003: was 0.26
         assert profile["otos_linear_noise"] == 0.05
         assert profile["otos_yaw_noise"] == 0.0
 
@@ -202,15 +224,19 @@ class TestPersistence:
         monkeypatch.setattr(sim_prefs, "_PREFS_PATH", prefs_path)
 
         profile = sim_prefs.load_sim_error_profile()
-        assert profile["slip_turn_extra"] == 0.26
+        assert profile["slip_turn_extra"] == 0.0  # 073-003: was 0.26
         assert profile["encoder_noise_mm"] == 3.0
 
     def test_unknown_keys_are_ignored(self, tmp_path, monkeypatch):
+        """073-003: pin get_robot_config to None, same rationale as
+        test_load_missing_file_returns_defaults above."""
+        import robot_radio.config.robot_config as robot_config_module
         from robot_radio.testgui import sim_prefs
 
         prefs_path = tmp_path / "sim_error_profile.json"
         prefs_path.write_text(json.dumps({"some_future_knob": 42.0}))
         monkeypatch.setattr(sim_prefs, "_PREFS_PATH", prefs_path)
+        monkeypatch.setattr(robot_config_module, "get_robot_config", lambda: None)
 
         profile = sim_prefs.load_sim_error_profile()
         assert profile == sim_prefs.DEFAULT_PROFILE
@@ -241,6 +267,172 @@ class TestPersistence:
 
         # Must not raise.
         sim_prefs.save_sim_error_profile({"encoder_noise_mm": 1.0})
+
+
+# ---------------------------------------------------------------------------
+# resolve_calibration_defaults() -- shared calibration lookup (073-003)
+# ---------------------------------------------------------------------------
+
+
+def _fake_robot_config(*, rotational_slip, trackwidth):
+    """A real (pydantic) RobotConfig with only the fields this resolver
+    cares about overridden -- mirrors test_sim_errors_from_cal_button.py's
+    own helper of the same shape."""
+    from robot_radio.config.robot_config import (
+        CalibrationConfig,
+        GeometryConfig,
+        IdentityConfig,
+        RobotConfig,
+    )
+
+    return RobotConfig(
+        identity=IdentityConfig(robot_name="fake", uid="fake-uid"),
+        geometry=GeometryConfig(trackwidth=trackwidth),
+        calibration=CalibrationConfig(rotational_slip=rotational_slip),
+    )
+
+
+class TestResolveCalibrationDefaults:
+    def test_resolves_from_active_robot_config(self, monkeypatch):
+        import robot_radio.config.robot_config as robot_config_module
+        from robot_radio.testgui import sim_prefs
+
+        fake_cfg = _fake_robot_config(rotational_slip=0.85, trackwidth=140.0)
+        monkeypatch.setattr(robot_config_module, "get_robot_config", lambda: fake_cfg)
+
+        rot_slip, tw = sim_prefs.resolve_calibration_defaults()
+        assert rot_slip == 0.85
+        assert tw == 140.0
+
+    def test_falls_back_to_neutral_when_no_config(self, monkeypatch, caplog):
+        import robot_radio.config.robot_config as robot_config_module
+        from robot_radio.testgui import sim_prefs
+
+        monkeypatch.setattr(robot_config_module, "get_robot_config", lambda: None)
+
+        with caplog.at_level("WARNING"):
+            rot_slip, tw = sim_prefs.resolve_calibration_defaults()
+
+        assert rot_slip == 1.0
+        assert tw == sim_prefs.DEFAULT_PROFILE["trackwidth_mm"]
+        assert any(
+            "no active robot config found" in r.message for r in caplog.records
+        )
+
+    def test_falls_back_when_rotational_slip_missing(self, monkeypatch):
+        """geometry.trackwidth present, calibration.rotational_slip missing:
+        only body_rot_scrub falls back; trackwidth still comes from config."""
+        import robot_radio.config.robot_config as robot_config_module
+        from robot_radio.testgui import sim_prefs
+
+        fake_cfg = _fake_robot_config(rotational_slip=None, trackwidth=140.0)
+        monkeypatch.setattr(robot_config_module, "get_robot_config", lambda: fake_cfg)
+
+        rot_slip, tw = sim_prefs.resolve_calibration_defaults()
+        assert rot_slip == 1.0
+        assert tw == 140.0
+
+    def test_falls_back_when_trackwidth_missing(self, monkeypatch):
+        """calibration.rotational_slip present, geometry.trackwidth missing:
+        only trackwidth falls back; body_rot_scrub still comes from config."""
+        import robot_radio.config.robot_config as robot_config_module
+        from robot_radio.testgui import sim_prefs
+
+        fake_cfg = _fake_robot_config(rotational_slip=0.85, trackwidth=None)
+        monkeypatch.setattr(robot_config_module, "get_robot_config", lambda: fake_cfg)
+
+        rot_slip, tw = sim_prefs.resolve_calibration_defaults()
+        assert rot_slip == 0.85
+        assert tw == sim_prefs.DEFAULT_PROFILE["trackwidth_mm"]
+
+    def test_log_callback_receives_warn_prefixed_message_on_fallback(
+        self, monkeypatch
+    ):
+        """The optional ``log`` callback (used by __main__.py's "From
+        Calibration" button to keep its GUI log-pane behavior byte-identical
+        after the 073-003 refactor) receives the same "[WARN] ..." text the
+        module logger gets, just prefixed for a plain-text log widget."""
+        import robot_radio.config.robot_config as robot_config_module
+        from robot_radio.testgui import sim_prefs
+
+        monkeypatch.setattr(robot_config_module, "get_robot_config", lambda: None)
+
+        messages: list[str] = []
+        rot_slip, tw = sim_prefs.resolve_calibration_defaults(log=messages.append)
+
+        assert len(messages) == 1
+        assert messages[0].startswith("[WARN]")
+        assert "no active robot config found" in messages[0]
+
+    def test_log_callback_not_called_when_no_fallback_needed(self, monkeypatch):
+        import robot_radio.config.robot_config as robot_config_module
+        from robot_radio.testgui import sim_prefs
+
+        fake_cfg = _fake_robot_config(rotational_slip=0.85, trackwidth=140.0)
+        monkeypatch.setattr(robot_config_module, "get_robot_config", lambda: fake_cfg)
+
+        messages: list[str] = []
+        sim_prefs.resolve_calibration_defaults(log=messages.append)
+        assert messages == []
+
+
+# ---------------------------------------------------------------------------
+# load_sim_error_profile()'s calibration-resolved body_rot_scrub fallback
+# (073-003)
+# ---------------------------------------------------------------------------
+
+
+class TestLoadFallbackResolvesBodyRotScrubFromCalibration:
+    def test_load_missing_file_resolves_body_rot_scrub_from_calibration(
+        self, tmp_path, monkeypatch
+    ):
+        import robot_radio.config.robot_config as robot_config_module
+        from robot_radio.testgui import sim_prefs
+
+        prefs_path = tmp_path / "does_not_exist.json"
+        monkeypatch.setattr(sim_prefs, "_PREFS_PATH", prefs_path)
+
+        fake_cfg = _fake_robot_config(rotational_slip=0.92, trackwidth=140.0)
+        monkeypatch.setattr(robot_config_module, "get_robot_config", lambda: fake_cfg)
+
+        profile = sim_prefs.load_sim_error_profile()
+        assert profile["body_rot_scrub"] == 0.92
+        assert profile["slip_turn_extra"] == 0.0
+        # trackwidth_mm's own fallback is unaffected by this ticket -- stays
+        # DEFAULT_PROFILE's static value, not resolve_calibration_defaults()'s.
+        assert profile["trackwidth_mm"] == sim_prefs.DEFAULT_PROFILE["trackwidth_mm"]
+
+    def test_load_missing_file_falls_back_to_neutral_when_no_config(
+        self, tmp_path, monkeypatch
+    ):
+        import robot_radio.config.robot_config as robot_config_module
+        from robot_radio.testgui import sim_prefs
+
+        prefs_path = tmp_path / "does_not_exist.json"
+        monkeypatch.setattr(sim_prefs, "_PREFS_PATH", prefs_path)
+        monkeypatch.setattr(robot_config_module, "get_robot_config", lambda: None)
+
+        profile = sim_prefs.load_sim_error_profile()
+        assert profile["body_rot_scrub"] == 1.0
+
+    def test_persisted_body_rot_scrub_wins_over_calibration_resolution(
+        self, tmp_path, monkeypatch
+    ):
+        """An operator's EXISTING persisted profile is not silently
+        overridden by the calibration-resolved default (Open Questions item
+        4 -- no migration of existing persisted files)."""
+        import robot_radio.config.robot_config as robot_config_module
+        from robot_radio.testgui import sim_prefs
+
+        prefs_path = tmp_path / "sim_error_profile.json"
+        prefs_path.write_text(json.dumps({"body_rot_scrub": 0.5}))
+        monkeypatch.setattr(sim_prefs, "_PREFS_PATH", prefs_path)
+
+        fake_cfg = _fake_robot_config(rotational_slip=0.92, trackwidth=140.0)
+        monkeypatch.setattr(robot_config_module, "get_robot_config", lambda: fake_cfg)
+
+        profile = sim_prefs.load_sim_error_profile()
+        assert profile["body_rot_scrub"] == 0.5
 
 
 # ---------------------------------------------------------------------------

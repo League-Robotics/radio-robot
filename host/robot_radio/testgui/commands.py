@@ -274,7 +274,12 @@ TOUR_2: list[str] = [
     "D 200 200 700",
     "RT 9000",
     "D 200 200 480",
-    "D 200 200 345",
+    "RT 9000",
+    "D 200 200 700",
+    "RT 9000",
+    "D 200 200 240",
+    "RT 9000",
+    "D 200 200 345"
 ]
 
 #: Named tours available to the GUI (label → ordered wire strings).

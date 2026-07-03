@@ -32,8 +32,31 @@ _HOST_DIR = Path(__file__).parent.parent.parent.parent / "host"
 if str(_HOST_DIR) not in sys.path:
     sys.path.insert(0, str(_HOST_DIR))
 
-from robot_radio.config.robot_config import get_robot_config  # noqa: E402
+import pytest  # noqa: E402
+
+from robot_radio.config.robot_config import _reset_robot_config  # noqa: E402
 from robot_radio.testgui import sim_prefs  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def pin_calibrated_tovez(monkeypatch):
+    """Pin the active robot to the CALIBRATED tovez config for this module.
+
+    This test's premise is that the active robot's calibration matches what
+    DefaultConfig.cpp bakes (rotationalSlip=0.92, trackwidth=128).  The
+    repo's active_robot.json pointer is operator state (the GUI robot
+    picker rewrites it — e.g. to tovez_nocal.json, which broke this test on
+    2026-07-03), so pin the config explicitly via the ROBOT_CONFIG env var
+    instead of depending on it.
+    """
+    monkeypatch.setenv(
+        "ROBOT_CONFIG",
+        str(Path(__file__).parent.parent.parent.parent
+            / "data" / "robots" / "tovez.json"),
+    )
+    _reset_robot_config()
+    yield
+    _reset_robot_config()
 
 # Wide enough to absorb PlannerBegin.cpp's pre-existing, out-of-scope RT
 # coast-tuning residual (see test_069_rt_90deg_body_scrub.py's module
@@ -54,18 +77,16 @@ def _from_calibration_profile() -> dict:
     config or a field is missing, exactly like the handler), merged over
     ``sim_prefs.DEFAULT_PROFILE`` — the noise fields are left at their
     defaults, untouched, matching the button's contract.
+
+    073-003: the lookup/fallback itself is now the SHARED
+    ``sim_prefs.resolve_calibration_defaults()`` resolver (Design Rationale
+    Decision 4) — this test no longer keeps its own third copy of that
+    logic alongside ``__main__.py``'s button handler and
+    ``load_sim_error_profile()``'s factory-default fallback.
     """
     profile = dict(sim_prefs.DEFAULT_PROFILE)
 
-    cfg = get_robot_config()
-    if cfg is not None and cfg.calibration.rotational_slip is not None:
-        rot_slip = cfg.calibration.rotational_slip
-    else:
-        rot_slip = 1.0
-    if cfg is not None and cfg.geometry.trackwidth is not None:
-        trackwidth = cfg.geometry.trackwidth
-    else:
-        trackwidth = sim_prefs.DEFAULT_PROFILE["trackwidth_mm"]
+    rot_slip, trackwidth = sim_prefs.resolve_calibration_defaults()
 
     profile.update(
         {

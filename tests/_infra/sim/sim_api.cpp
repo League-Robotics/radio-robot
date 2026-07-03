@@ -184,6 +184,16 @@ struct SimHandle {
         // call is harmless (idempotent) and documents the dependency.
         hal.setTrackwidth(cfg.trackwidth);
 
+        // 073-002: seed the plant's body-rotational scrub from the loaded
+        // RobotConfig's rotationalSlip so a fresh, zero-configuration Sim()
+        // genuinely scrubs by the factor Planner::beginRotation()'s arc
+        // inflation (effectiveSlip(cfg.rotationalSlip)) already assumes it
+        // does — closing the "clean sim over-rotates" gap without touching
+        // any ARM-firmware-linked file. Overridable at any time via
+        // SIMSET bodyRotScrub / hal.plant().setBodyRotationalScrub() —
+        // this is a construction-time default, not a floor or lock.
+        hal.plant().setBodyRotationalScrub(effectiveSlip(cfg.rotationalSlip));
+
         // Wire the queue into both cmd and Robot's MotionCtx — mirrors LoopScheduler's
         // constructor wiring so converter commands (S, T, D, G, R, TURN, RT) travel
         // the queue path on the next sim_tick(), not the direct begin*() fallback.

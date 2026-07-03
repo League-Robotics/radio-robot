@@ -120,12 +120,25 @@ public:
     // forward sim_set_motor_slip calls here in T2.  In PhysicsWorld the slip is
     // applied at the chassis body-rotation step (sub-step B), parallel to
     // Odometry::predict (architecture-update.md §"Slip moves to chassis
-    // body-rotation step").  rotationalSlip = straight + turnExtra contributes the
-    // configured factor; effectiveSlip() clamps/maps it (0/unset → 1.0 = no slip).
+    // body-rotation step").
+    //
+    // 073-002 (Decision 2): _rotationalSlip (body truth) is derived from
+    // `straight` ONLY — `turnExtra` no longer contributes to it. `turnExtra`
+    // is an encoder-report-only knob (see _slipTurnExtra / sub-step A′,
+    // still set below, unaffected); the only current caller of a nonzero
+    // turnExtra (the TestGUI's slip_turn_extra control) was, before this
+    // change, able to perturb body truth by accident, relying on
+    // effectiveSlip()'s <=0 clamp to neutralize a negated value rather than
+    // the channel being structurally unreachable. Every other caller that
+    // wants a genuine body-truth effect via this channel already passes
+    // turnExtra=0.0 (test_sim_otos_lever_arm.py, test_physics_world_basic.py,
+    // test_physics_world_body_scrub.py), so this narrowing is arithmetically
+    // a no-op for them. effectiveSlip() clamps/maps _rotationalSlip
+    // (0/unset → 1.0 = no slip).
     void setSlip(float straight, float turnExtra) {
         _slipStraight  = straight;
         _slipTurnExtra = turnExtra;
-        _rotationalSlip = straight + turnExtra;
+        _rotationalSlip = straight;
     }
 
     // Body-truth scrub (069-002): independent, wire-settable rotational/linear

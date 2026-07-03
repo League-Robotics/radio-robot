@@ -53,6 +53,18 @@ Zeroing "all sim error-injection knobs" requires two things, not one:
      ``tests/simulation/unit/test_rt_slip.py``). Zeroing it here is the
      "equivalent zeroing" the ticket calls for beyond the sim's own
      error-injection module.
+  3. (073-002) ``SimHandle``'s constructor now seeds the PLANT's own
+     ``bodyRotScrub`` from the baked-in ``RobotConfig.rotationalSlip``
+     (0.92 by default) so a fresh, zero-configuration ``Sim()`` genuinely
+     scrubs rotation -- independently of ``SET rotSlip`` above, which only
+     affects the FIRMWARE's encoder-arc correction, not the plant's true
+     rotation. Sub-step A (encoder accumulation) is never scrubbed, so an
+     un-reset construction-time plant scrub makes ``encpose=`` (which
+     follows the un-scrubbed wheel arc) diverge from true/otos/pose (which
+     read the now-genuinely-scrubbed plant) on any turn -- ``SIMSET
+     bodyRotScrub=1.0`` resets the plant side of "zero error" exactly as
+     ``SET rotSlip=0`` resets the firmware side (Design Rationale Decision
+     3's own documented consequence: "the seed is a default, not a lock").
 """
 from __future__ import annotations
 
@@ -89,9 +101,11 @@ def _wrap_cdeg(delta: float) -> float:
 def _configure_zero_error(s) -> None:
     """Zero every sim error-injection knob (plant slip + calibration slip).
 
-    See the module docstring for why both `slip_turn_extra` (plant/sim) and
-    `rotSlip` (firmware calibration constant, `SET rotSlip=0`) must be
-    zeroed for the three pose estimators to actually agree with zero error.
+    See the module docstring for why `slip_turn_extra` (plant/sim), `rotSlip`
+    (firmware calibration constant, `SET rotSlip=0`), AND (073-002)
+    `bodyRotScrub` (the plant's own construction-time-seeded scrub) must all
+    be zeroed/neutralized for the three pose estimators to actually agree
+    with zero error.
     """
     # slip_turn_extra=0.0: no plant-level encoder over-report on turns.
     # fuse_otos=True: enable the (already-perfect, noise/drift/scale all
@@ -100,6 +114,16 @@ def _configure_zero_error(s) -> None:
 
     reply = s.send_command("SET rotSlip=0")
     assert "OK" in reply.upper(), f"SET rotSlip=0 rejected: {reply!r}"
+
+    # 073-002: SimHandle's constructor seeds the plant's bodyRotScrub from
+    # RobotConfig.rotationalSlip (0.92 by default) -- reset it to neutral
+    # (1.0) so the plant's TRUE rotation is genuinely un-scrubbed, matching
+    # encpose= (sub-step A, never scrubbed) exactly. `SET rotSlip=0` above
+    # only zeroes the FIRMWARE's encoder-arc correction; it does not touch
+    # this independent plant-truth knob (see architecture-update.md Decision
+    # 3: "the seed is a default, not a lock").
+    reply = s.send_command("SIMSET bodyRotScrub=1.0")
+    assert "OK" in reply.upper(), f"SIMSET bodyRotScrub=1.0 rejected: {reply!r}"
 
 
 def _drive_tour_collecting_frames(s, tour: list[str]) -> list[tuple[TLMFrame, tuple[float, float, float]]]:
