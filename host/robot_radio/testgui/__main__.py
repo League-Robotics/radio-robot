@@ -366,7 +366,16 @@ def _build_main_window():  # type: ignore[return]
     # ------------------------------------------------------------------ window
     window = QMainWindow()
     window.setWindowTitle("Robot Test GUI")
-    window.resize(1200, 700)
+    # Open large so the playfield view gets real estate, clamped to the
+    # screen (with an allowance for the title bar) so the window still
+    # fits on smaller displays.
+    win_w, win_h = 1920, 1110
+    screen = app.primaryScreen()
+    if screen is not None:
+        avail = screen.availableGeometry()
+        win_w = min(win_w, avail.width())
+        win_h = min(win_h, avail.height() - 40)
+    window.resize(win_w, win_h)
 
     # ------------------------------------------------------------ central widget
     central = QWidget()
@@ -983,10 +992,15 @@ def _build_main_window():  # type: ignore[return]
 
     splitter.addWidget(right_widget)
 
-    # Initial splitter proportions, widened on the left (ticket 075-001) to
-    # comfortably fit the single-row selector strip and five-icon session
-    # button row: 35% left / 65% right
-    splitter.setSizes([420, 780])
+    # Initial splitter proportions: the left controls column gets its
+    # natural ~900 px (fits the sprint-075 three-column Sim Errors panel);
+    # ALL remaining width goes to the playfield pane.  Stretch factors
+    # ensure later window growth also flows to the playfield, not the
+    # controls column.
+    splitter.setStretchFactor(0, 0)
+    splitter.setStretchFactor(1, 1)
+    left_pane_w = 900
+    splitter.setSizes([left_pane_w, max(400, win_w - left_pane_w)])
 
     # ---------------------------------------------------------------- wiring
 
