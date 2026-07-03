@@ -38,9 +38,17 @@ inline float getBodyLinScrub(SimHardware& hal)       { return hal.plant().bodyLi
 
 // ---- Geometry / actuation ---------------------------------------------------
 // SimHardware::setTrackwidth() forwards to both its own cached field and
-// _plant.setTrackwidth(); trackwidthMm() reads back via _plant.trackwidthMm().
-inline void  trackwidthMm(SimHardware& hal, float mm) { hal.setTrackwidth(mm); }
-inline float getTrackwidthMm(SimHardware& hal)        { return hal.trackwidthMm(); }
+// _plant.setTrackwidth(); trackwidth() reads back via _plant.trackwidthMm().
+// (071-007 namespace-collision note: ONLY this wrapper's own function name --
+// which mirrors the "trackwidthMm" SIMSET key 1:1 -- is renamed here.
+// SimHardware::trackwidthMm()/setTrackwidth() and PhysicsWorld::trackwidthMm()
+// keep their existing names: SimHardware.h is outside this ticket's file
+// scope and PhysicsWorld::trackwidthMm() is also read directly by WorldView.h,
+// another out-of-scope consumer. The kSimRegistry[] "trackwidthMm" key string
+// itself is untouched throughout -- see architecture-update.md's
+// Wire-Compatibility Exclusion Table.)
+inline void  trackwidth(SimHardware& hal, float trackwidth) { hal.setTrackwidth(trackwidth); }  // [mm]
+inline float getTrackwidth(SimHardware& hal)                { return hal.trackwidthMm(); }
 
 // motorOffsetL/R -- per-side registry rows (SIMSET has no "both" key).
 inline void  motorOffsetL(SimHardware& hal, float f) { hal.plant().setOffsetFactor(0, f); }
@@ -68,17 +76,17 @@ inline float getEncoderSlipL(SimHardware& hal)          { return hal.plant().enc
 inline void  encoderSlipR(SimHardware& hal, float frac) { hal.plant().setEncoderSlip(1, frac); }
 inline float getEncoderSlipR(SimHardware& hal)          { return hal.plant().encoderSlipR(); }
 
-inline void  encoderNoiseL(SimHardware& hal, float sigmaMm) { hal.plant().setEncoderNoise(0, sigmaMm); }
-inline float getEncoderNoiseL(SimHardware& hal)             { return hal.plant().encoderNoiseL(); }
+inline void  encoderNoiseL(SimHardware& hal, float sigma) { hal.plant().setEncoderNoise(0, sigma); }  // [mm]
+inline float getEncoderNoiseL(SimHardware& hal)           { return hal.plant().encoderNoiseL(); }
 
-inline void  encoderNoiseR(SimHardware& hal, float sigmaMm) { hal.plant().setEncoderNoise(1, sigmaMm); }
-inline float getEncoderNoiseR(SimHardware& hal)             { return hal.plant().encoderNoiseR(); }
+inline void  encoderNoiseR(SimHardware& hal, float sigma) { hal.plant().setEncoderNoise(1, sigma); }  // [mm]
+inline float getEncoderNoiseR(SimHardware& hal)           { return hal.plant().encoderNoiseR(); }
 
-// encoderNoise(side, sigmaMm) -- side-parameterized pass-through, matching
+// encoderNoise(side, sigma) -- side-parameterized pass-through, matching
 // PhysicsWorld::setEncoderNoise's own (0=L,1=R,other=both) convention
 // verbatim. This is what the legacy sim_set_encoder_noise(h, side, sigma_mm)
 // ctypes C-ABI (runtime side, including "both") forwards to.
-inline void encoderNoise(SimHardware& hal, int side, float sigmaMm) { hal.plant().setEncoderNoise(side, sigmaMm); }
+inline void encoderNoise(SimHardware& hal, int side, float sigma) { hal.plant().setEncoderNoise(side, sigma); }  // [mm]
 
 // ---- OTOS sim-model error state (057-005/058-001 lineage, 069-004 getters) ----
 inline void  otosLinScaleErr(SimHardware& hal, float err) { hal.simOdometer().setLinearScaleError(err); }
@@ -99,46 +107,50 @@ inline float getOtosYawNoise(SimHardware& hal)           { return hal.simOdomete
 
 // ---- OTOS drift (per-second wire/ctypes value <-> per-tick internal value) --
 // otosLinDriftMmS / otosYawDriftDegS -- the wire keys (and any future ctypes
-// caller) are PER-SECOND; SimOdometer::setDriftPerTickMm()/setDriftPerTickRad()
-// (and driftPerTickMm()/driftPerTickRad()) are PER-TICK internally: tick() adds
-// the FULL per-tick value once per call, and tick() fires once per
-// RobotConfig::controlPeriod (source/types/Config.h; see
-// SimOdometer::tick()'s unconditional `_odomX += _driftPerTickMm` /
-// `_odomH += _driftPerTickRad`, source/hal/sim/SimOdometer.cpp). Conversion
-// formula (both directions read the SAME live controlPeriodMs via
-// SimOdometer::controlPeriodMs(), so a runtime `SET ctrlPeriod=…` is honored
+// caller) are PER-SECOND; SimOdometer::setLinearDriftPerTick()/
+// setYawDriftPerTick() (and linearDriftPerTick()/yawDriftPerTick()) are
+// PER-TICK internally: tick() adds the FULL per-tick value once per call, and
+// tick() fires once per RobotConfig::controlPeriod (source/types/Config.h;
+// see SimOdometer::tick()'s unconditional `_odomX += _linearDriftPerTick` /
+// `_odomH += _yawDriftPerTick`, source/hal/sim/SimOdometer.cpp). Conversion
+// formula (both directions read the SAME live controlPeriod() via
+// SimOdometer::controlPeriod(), so a runtime `SET ctrlPeriod=…` is honored
 // immediately, per 067's live-reference rule):
 //
-//     per_tick   = per_second * (controlPeriodMs / 1000.0f)
-//     per_second = per_tick   * (1000.0f / controlPeriodMs)
+//     per_tick   = per_second * (period / 1000.0f)   // period: [ms]
+//     per_second = per_tick   * (1000.0f / period)
 //
 // otosYawDriftDegS is additionally deg<->rad converted: the wire key is
-// degrees/second (issue-1's plumbing guidance), but setDriftPerTickRad()'s
-// argument -- and the internal _driftPerTickRad accumulator it feeds -- is
+// degrees/second (issue-1's plumbing guidance), but setYawDriftPerTick()'s
+// argument -- and the internal _yawDriftPerTick accumulator it feeds -- is
 // radians.
+//
+// (071-007 namespace-collision note, mirroring the trackwidth one above: only
+// these wrapper FUNCTION NAMES are renamed -- otosLinDriftMmS/otosYawDriftDegS
+// as kSimRegistry[] KEY STRINGS are untouched throughout SimCommands.cpp.)
 static const float kDegToRad = 3.14159265358979323846f / 180.0f;
 static const float kRadToDeg = 180.0f / 3.14159265358979323846f;
 
-inline void otosLinDriftMmS(SimHardware& hal, float v) {
-    float periodMs = static_cast<float>(hal.simOdometer().controlPeriodMs());
-    hal.simOdometer().setDriftPerTickMm(v * (periodMs / 1000.0f));
+inline void otosLinearDrift(SimHardware& hal, float v) {
+    float period = static_cast<float>(hal.simOdometer().controlPeriod());  // [ms]
+    hal.simOdometer().setLinearDriftPerTick(v * (period / 1000.0f));
 }
-inline float getOtosLinDriftMmS(SimHardware& hal) {
-    float periodMs = static_cast<float>(hal.simOdometer().controlPeriodMs());
-    if (periodMs <= 0.0f) return 0.0f;
-    return hal.simOdometer().driftPerTickMm() * (1000.0f / periodMs);
+inline float getOtosLinearDrift(SimHardware& hal) {
+    float period = static_cast<float>(hal.simOdometer().controlPeriod());  // [ms]
+    if (period <= 0.0f) return 0.0f;
+    return hal.simOdometer().linearDriftPerTick() * (1000.0f / period);
 }
 
-inline void otosYawDriftDegS(SimHardware& hal, float v) {
-    float periodMs  = static_cast<float>(hal.simOdometer().controlPeriodMs());
-    float radPerSec = v * kDegToRad;
-    hal.simOdometer().setDriftPerTickRad(radPerSec * (periodMs / 1000.0f));
+inline void otosYawDrift(SimHardware& hal, float v) {
+    float period = static_cast<float>(hal.simOdometer().controlPeriod());  // [ms]
+    float rate   = v * kDegToRad;                                          // [rad/s]
+    hal.simOdometer().setYawDriftPerTick(rate * (period / 1000.0f));
 }
-inline float getOtosYawDriftDegS(SimHardware& hal) {
-    float periodMs = static_cast<float>(hal.simOdometer().controlPeriodMs());
-    if (periodMs <= 0.0f) return 0.0f;
-    float radPerSec = hal.simOdometer().driftPerTickRad() * (1000.0f / periodMs);
-    return radPerSec * kRadToDeg;
+inline float getOtosYawDrift(SimHardware& hal) {
+    float period = static_cast<float>(hal.simOdometer().controlPeriod());  // [ms]
+    if (period <= 0.0f) return 0.0f;
+    float rate = hal.simOdometer().yawDriftPerTick() * (1000.0f / period);  // [rad/s]
+    return rate * kRadToDeg;
 }
 
 }  // namespace simsetters

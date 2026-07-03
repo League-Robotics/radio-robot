@@ -45,16 +45,16 @@ static float clampScrub(float f) {
 }
 
 // ---------------------------------------------------------------------------
-// update(dt_ms) — one canonical midpoint-arc integration step.
+// update(dt) — one canonical midpoint-arc integration step.
 //
 // Two structurally separate sub-steps, kept apart for golden-TLM bit-exactness:
 //
 //   Sub-step A — encoder accumulation.
 //   Sub-step B — chassis pose integration (slip applied here).
 // ---------------------------------------------------------------------------
-void PhysicsWorld::update(uint32_t dt_ms) {
-    if (dt_ms == 0) return;
-    float dt_s = static_cast<float>(dt_ms) / 1000.0f;
+void PhysicsWorld::update(uint32_t dt) {  // [ms]
+    if (dt == 0) return;
+    float dt_s = static_cast<float>(dt) / 1000.0f;
 
     // -----------------------------------------------------------------------
     // Sub-step A: encoder accumulation (true wheel travel; no slip here).
@@ -70,8 +70,8 @@ void PhysicsWorld::update(uint32_t dt_ms) {
     // exact float operation order below.  Same float type (float, not double),
     // same operation order, no algebraic simplification.
     // -----------------------------------------------------------------------
-    float velL = (_pwmL / 100.0f) * _nominalMaxMms * _offsetFactorL;
-    float velR = (_pwmR / 100.0f) * _nominalMaxMms * _offsetFactorR;
+    float velL = (_pwmL / 100.0f) * _nominalMaxSpeed * _offsetFactorL;
+    float velR = (_pwmR / 100.0f) * _nominalMaxSpeed * _offsetFactorR;
     _trueEncLMm += velL * dt_s;
     _trueEncRMm += velR * dt_s;
     _trueVelLMms = velL;
@@ -144,7 +144,7 @@ void PhysicsWorld::update(uint32_t dt_ms) {
 
 // ---------------------------------------------------------------------------
 // reset() — zero all ground-truth state.  Dynamics parameters (trackwidth,
-// nominalMaxMms, slip, offset factors) are configuration, not state, and are
+// nominalMaxSpeed, slip, offset factors) are configuration, not state, and are
 // left intact — matching the MockMotor::resetEncoder semantics (which zeros the
 // accumulator but keeps the configured slip / offset / noise).
 // ---------------------------------------------------------------------------

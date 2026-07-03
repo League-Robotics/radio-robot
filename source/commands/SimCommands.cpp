@@ -60,7 +60,7 @@ struct SimEntry {
 static const SimEntry kSimRegistry[] = {
     { "bodyRotScrub", simsetters::bodyRotScrub, simsetters::getBodyRotScrub },
     { "bodyLinScrub", simsetters::bodyLinScrub, simsetters::getBodyLinScrub },
-    { "trackwidthMm", simsetters::trackwidthMm, simsetters::getTrackwidthMm },
+    { "trackwidthMm", simsetters::trackwidth, simsetters::getTrackwidth },
     { "motorOffsetL", simsetters::motorOffsetL, simsetters::getMotorOffsetL },
     { "motorOffsetR", simsetters::motorOffsetR, simsetters::getMotorOffsetR },
     { "encScaleErrL", simsetters::encoderScaleErrorL, simsetters::getEncoderScaleErrorL },
@@ -73,8 +73,8 @@ static const SimEntry kSimRegistry[] = {
     { "otosAngScaleErr",  simsetters::otosAngScaleErr,  simsetters::getOtosAngScaleErr },
     { "otosLinNoise",     simsetters::otosLinNoise,     simsetters::getOtosLinNoise },
     { "otosYawNoise",     simsetters::otosYawNoise,     simsetters::getOtosYawNoise },
-    { "otosLinDriftMmS",  simsetters::otosLinDriftMmS,  simsetters::getOtosLinDriftMmS },
-    { "otosYawDriftDegS", simsetters::otosYawDriftDegS, simsetters::getOtosYawDriftDegS },
+    { "otosLinDriftMmS",  simsetters::otosLinearDrift, simsetters::getOtosLinearDrift },
+    { "otosYawDriftDegS", simsetters::otosYawDrift,    simsetters::getOtosYawDrift },
 };
 static const int kSimRegistryCount = (int)(sizeof(kSimRegistry) / sizeof(kSimRegistry[0]));
 

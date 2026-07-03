@@ -50,9 +50,9 @@ _HARNESS = r"""
 
 // Reference encoder accumulation — the EXACT golden MockMotor::integrate path
 // (zero slip, zero noise, offset 1.0).  Used to assert sub-step A bit-exactness.
-static float refEnc(int8_t pwm, float nominalMaxMms, float offset,
+static float refEnc(int8_t pwm, float nominalMaxSpeed, float offset,
                     uint32_t dt_ms, float prior) {
-    float vel = (pwm / 100.0f) * nominalMaxMms * offset;
+    float vel = (pwm / 100.0f) * nominalMaxSpeed * offset;
     float noisy = vel * (1.0f - 0.0f) + 0.0f;   // golden: slip=0, noise=0
     return prior + noisy * (static_cast<float>(dt_ms) / 1000.0f);
 }
@@ -71,7 +71,7 @@ int main() {
     {
         PhysicsWorld w;
         w.setTrackwidth(150.0f);
-        w.setNominalMaxMms(400.0f);
+        w.setNominalMaxSpeed(400.0f);
         w.setActuators(50, 50);
 
         float refL = 0.0f, refR = 0.0f;
@@ -93,7 +93,7 @@ int main() {
     {
         PhysicsWorld w;
         w.setTrackwidth(150.0f);
-        w.setNominalMaxMms(400.0f);
+        w.setNominalMaxSpeed(400.0f);
         w.setActuators(50, 50);
         w.update(24);
         // velL = velR = (50/100)*400 = 200 mm/s ; enc = 200 * 0.024 = 4.8 mm
@@ -184,10 +184,10 @@ int main() {
         // reducing the body heading (slip applied in sub-step B).
         PhysicsWorld noSlip, withSlip;
         noSlip.setTrackwidth(150.0f);
-        noSlip.setNominalMaxMms(400.0f);
+        noSlip.setNominalMaxSpeed(400.0f);
         noSlip.setActuators(-50, 50);
         withSlip.setTrackwidth(150.0f);
-        withSlip.setNominalMaxMms(400.0f);
+        withSlip.setNominalMaxSpeed(400.0f);
         withSlip.setActuators(-50, 50);
         withSlip.setSlip(0.7f, 0.0f);   // effectiveSlip(0.7) = 0.7
         noSlip.update(100);

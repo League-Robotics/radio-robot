@@ -90,7 +90,7 @@ void SimOdometer::setPositionRaw(int16_t x, int16_t y, int16_t h) {
     _odomH = static_cast<float>(h) * kHdgRadPerLsb;
 }
 
-int32_t SimOdometer::controlPeriodMs() const {
+int32_t SimOdometer::controlPeriod() const {  // [ms]
     return _cfg.controlPeriod;
 }
 
@@ -105,7 +105,7 @@ void SimOdometer::setInjectedPose(float x, float y, float h) {
     _odomH = h;
 }
 
-void SimOdometer::tick(uint32_t dt_ms) {
+void SimOdometer::tick(uint32_t dt) {  // [ms]
 #ifdef HOST_BUILD
     // Ground-truth sampling (ticket 066-001, CR-07/CR-08): read the plant's
     // current true CENTRE pose.  _prevTrueX/Y/H is rebaselined to this value
@@ -139,7 +139,7 @@ void SimOdometer::tick(uint32_t dt_ms) {
         _prevTrueH = curTrueH;
         return;
     }
-    float dt_s = static_cast<float>(dt_ms) / 1000.0f;
+    float dt_s = static_cast<float>(dt) / 1000.0f;
 
     // World-frame delta since the previous sample.
     float dx  = curTrueX - _prevTrueX;
@@ -178,9 +178,9 @@ void SimOdometer::tick(uint32_t dt_ms) {
     _odomY += noisyDC * sinf(hMid);
     _odomH += noisyDTh;
     // Deterministic drift (ticket 057-005): additive offset accumulated per tick.
-    // Default _driftPerTickMm == 0 and _driftPerTickRad == 0 → no-op.
-    _odomX += _driftPerTickMm;
-    _odomH += _driftPerTickRad;
+    // Default _linearDriftPerTick == 0 and _yawDriftPerTick == 0 → no-op.
+    _odomX += _linearDriftPerTick;
+    _odomH += _yawDriftPerTick;
     // Wrap heading to [-pi, pi].
     while (_odomH >  static_cast<float>(M_PI)) _odomH -= 2.0f * static_cast<float>(M_PI);
     while (_odomH < -static_cast<float>(M_PI)) _odomH += 2.0f * static_cast<float>(M_PI);
@@ -197,6 +197,6 @@ void SimOdometer::tick(uint32_t dt_ms) {
         _velOmega = newOmega;
     }
 #else
-    (void)dt_ms;
+    (void)dt;
 #endif
 }

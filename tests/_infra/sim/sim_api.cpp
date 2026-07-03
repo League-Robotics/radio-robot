@@ -510,24 +510,24 @@ int sim_get_ekf_rej_count(void* h)
 // positionMm(), and loopTickOnce writes it back to state.actual.encLMm.
 // state.actual is also patched here to keep the current tick in sync before the
 // next sim_tick() runs.
-void sim_set_enc_l(void* h, float mm)
+void sim_set_enc_l(void* h, float position)  // [mm]
 {
     SimHandle* s = static_cast<SimHandle*>(h);
     PhysicsWorld& p = s->hal.plant();
-    p.setTrueWheelTravel(mm, p.trueEncRMm());     // TRUE travel (ground truth)
-    p.setReportedEncoder(0, mm);                  // REPORTED accumulator (side 0 = L)
-    s->robot.state.actual.encMm[1] = mm;          // FL = index 1: keep state.actual in sync
-    s->robot.drive.injectEncL(mm);               // sync drive2 private _hw (060-004)
+    p.setTrueWheelTravel(position, p.trueEncRMm());  // TRUE travel (ground truth)
+    p.setReportedEncoder(0, position);               // REPORTED accumulator (side 0 = L)
+    s->robot.state.actual.encMm[1] = position;       // FL = index 1: keep state.actual in sync
+    s->robot.drive.injectEncL(position);             // sync drive2 private _hw (060-004)
 }
 
-void sim_set_enc_r(void* h, float mm)
+void sim_set_enc_r(void* h, float position)  // [mm]
 {
     SimHandle* s = static_cast<SimHandle*>(h);
     PhysicsWorld& p = s->hal.plant();
-    p.setTrueWheelTravel(p.trueEncLMm(), mm);     // TRUE travel (ground truth)
-    p.setReportedEncoder(1, mm);                  // REPORTED accumulator (side 1 = R)
-    s->robot.state.actual.encMm[0] = mm;          // FR = index 0: keep state.actual in sync
-    s->robot.drive.injectEncR(mm);               // sync drive2 private _hw (060-004)
+    p.setTrueWheelTravel(p.trueEncLMm(), position);  // TRUE travel (ground truth)
+    p.setReportedEncoder(1, position);               // REPORTED accumulator (side 1 = R)
+    s->robot.state.actual.encMm[0] = position;       // FR = index 0: keep state.actual in sync
+    s->robot.drive.injectEncR(position);             // sync drive2 private _hw (060-004)
 }
 
 // (064-006) Inject a REPORTED-encoder-only jump — the "hand-rolled/hand-lifted
@@ -541,21 +541,21 @@ void sim_set_enc_r(void* h, float mm)
 // sim_set_enc_l/r cannot exercise that path because it syncs the baseline in
 // the same call, eliminating the divergence. side convention matches
 // PhysicsWorld::setReportedEncoder (0 = L, 1 = R).
-void sim_set_reported_enc_l(void* h, float mm)
+void sim_set_reported_enc_l(void* h, float position)  // [mm]
 {
-    static_cast<SimHandle*>(h)->hal.plant().setReportedEncoder(0, mm);
+    static_cast<SimHandle*>(h)->hal.plant().setReportedEncoder(0, position);
 }
 
-void sim_set_reported_enc_r(void* h, float mm)
+void sim_set_reported_enc_r(void* h, float position)  // [mm]
 {
-    static_cast<SimHandle*>(h)->hal.plant().setReportedEncoder(1, mm);
+    static_cast<SimHandle*>(h)->hal.plant().setReportedEncoder(1, position);
 }
 
 // Inject an OTOS pose reading into the SimOdometer.  The injected pose is
 // returned by SimOdometer::readTransformed() on the next otosCorrect() call.
-void sim_set_otos_pose(void* h, float x, float y, float hrad)
+void sim_set_otos_pose(void* h, float x, float y, float heading)  // [rad]
 {
-    static_cast<SimHandle*>(h)->hal.simOdometer().setInjectedPose(x, y, hrad);
+    static_cast<SimHandle*>(h)->hal.simOdometer().setInjectedPose(x, y, heading);
 }
 
 // Inject a per-wheel speed offset factor (1.0 = symmetric) into the plant.
@@ -615,20 +615,20 @@ float sim_get_true_vel_r(void* h) {
 // overwrite it unless that tick integrates the actuator path (non-zero PWM +
 // dt>0).  At 0 PWM, update() adds 0 to encoders and integrates 0 chassis motion,
 // so an injected pose persists.
-void sim_set_true_pose(void* h, float x, float y, float h_rad) {
-    static_cast<SimHandle*>(h)->hal.plant().setTruePose(x, y, h_rad);
+void sim_set_true_pose(void* h, float x, float y, float heading) {  // [rad]
+    static_cast<SimHandle*>(h)->hal.plant().setTruePose(x, y, heading);
 }
 
 // Set the plant's TRUE wheel travel accumulators directly (ground truth).  Unlike
 // sim_set_enc_l/r this touches ONLY the true accumulators (not the reported path
 // or state.actual) — for pure plant-truth isolation tests.
-void sim_set_true_wheel_travel(void* h, float enc_l_mm, float enc_r_mm) {
-    static_cast<SimHandle*>(h)->hal.plant().setTrueWheelTravel(enc_l_mm, enc_r_mm);
+void sim_set_true_wheel_travel(void* h, float enc_l, float enc_r) {  // [mm]
+    static_cast<SimHandle*>(h)->hal.plant().setTrueWheelTravel(enc_l, enc_r);
 }
 
 // Set the plant's TRUE per-wheel velocity directly (ground truth, mm/s).
-void sim_set_true_velocity(void* h, float vel_l_mms, float vel_r_mms) {
-    static_cast<SimHandle*>(h)->hal.plant().setTrueVelocity(vel_l_mms, vel_r_mms);
+void sim_set_true_velocity(void* h, float vel_l, float vel_r) {  // [mm/s]
+    static_cast<SimHandle*>(h)->hal.plant().setTrueVelocity(vel_l, vel_r);
 }
 
 // ---- Estimation error: firmware estimate vs. plant truth ----
@@ -682,8 +682,8 @@ void sim_set_motor_slip(void* h, int side, float straight, float turn_extra) {
 // (069-005) Forwards to the shared simsetters::encoderNoise -- the same
 // side-passthrough function that reduces to PhysicsWorld::setEncoderNoise(),
 // matching its own (0=L,1=R,other=both) convention verbatim.
-void sim_set_encoder_noise(void* h, int side, float sigma_mm) {
-    simsetters::encoderNoise(static_cast<SimHandle*>(h)->hal, side, sigma_mm);
+void sim_set_encoder_noise(void* h, int side, float sigma) {  // [mm]
+    simsetters::encoderNoise(static_cast<SimHandle*>(h)->hal, side, sigma);
 }
 
 // ---- Body-truth scrub (069-002) — minimal direct-access hook, ahead of the ----

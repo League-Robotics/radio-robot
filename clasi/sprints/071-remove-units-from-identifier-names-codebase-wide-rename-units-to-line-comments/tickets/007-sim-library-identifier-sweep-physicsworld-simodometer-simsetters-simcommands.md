@@ -1,9 +1,11 @@
 ---
 id: '007'
 title: 'Sim-library identifier sweep: PhysicsWorld, SimOdometer, SimSetters, SimCommands'
-status: open
-use-cases: [SUC-006]
-depends-on: ['002']
+status: done
+use-cases:
+- SUC-006
+depends-on:
+- '002'
 github-issue: ''
 issue: remove-units-from-identifier-names.md
 completes_issue: false
@@ -67,32 +69,105 @@ collision warning; `usecases.md` SUC-006.
 
 ## Acceptance Criteria
 
-- [ ] `source/hal/sim/PhysicsWorld.{h,cpp}`: `_driftPerTickMm`→
+- [x] `source/hal/sim/PhysicsWorld.{h,cpp}`: `_driftPerTickMm`→
       `_driftPerTick`, `sigmaMm`→`sigma`, `encoderScaleErrL/R` and peers
       renamed; each carries a `// [unit]` comment.
-- [ ] Internal `simsetters::` function names mirroring `SIMSET` keys
+      **Correction found while implementing**: `_driftPerTickMm` actually
+      lives in `SimOdometer` (not `PhysicsWorld`) — renamed there (see
+      below) as `_linearDriftPerTick`/`_yawDriftPerTick` (a bare
+      `_driftPerTick` for one and not the other would collide, since
+      `SimOdometer` has BOTH a linear and an angular drift field — the
+      ambiguity-resolution rule in `docs/coding-standards.md` applies;
+      "Linear"/"Yaw" mirrors this exact knob's own wire-key vocabulary,
+      `otosLinDriftMmS`/`otosYawDriftDegS`, immediately adjacent in
+      `SimSetters.h`). `encoderScaleErrL/R` were already unit-free in
+      `PhysicsWorld` (nothing to strip) — kept as-is, matching ticket
+      006's precedent for identifiers a ticket names but that turn out
+      not to need a rename. Renamed in `PhysicsWorld` itself: `sigmaMm`→
+      `sigma` (`setEncoderNoise`), `update(uint32_t dt_ms)`→`update(dt)`
+      `// [ms]`, the fully-private `kNominalMaxMms`/`_nominalMaxMms`/
+      `nominalMaxMms()`/`setNominalMaxMms()`→`kNominalMaxSpeed`/
+      `_nominalMaxSpeed`/`nominalMaxSpeed()`/`setNominalMaxSpeed()`
+      `// [mm/s]`, and `setReportedEncoder`'s `mm` param→`position`
+      `// [mm]`. **Deliberately NOT renamed** (verified by full-repo
+      grep before touching): `trueEncLMm/RMm`, `trueVelLMms/RMms`,
+      `reportedEncLMm/RMm`, `trackwidthMm()`/`setTrackwidth()`/
+      `_trackwidthMm`/`kDefaultTrackwidthMm` — these public accessor
+      NAMES are called directly by `source/hal/sim/WorldView.h`,
+      `SimMotor.{h,cpp}`, and `SimHardware.{h,cpp}`, none of which are in
+      this ticket's file scope; renaming them would cascade into three
+      files this ticket does not own. `PhysicsWorld`'s own acceptance
+      bar (unlike SimOdometer/SimSetters below) is a named list, not a
+      "no remaining" bar — mirrors ticket 006's treatment of `Motor.cpp`.
+- [x] Internal `simsetters::` function names mirroring `SIMSET` keys
       renamed (e.g. `otosLinDriftMmS`→`otosLinearDrift`); their
       corresponding `kSimRegistry[]` key-string arguments in
       `SimCommands.cpp` are byte-identical to pre-ticket (diffed).
-- [ ] Every `kSimRegistry[]` key string listed in the Wire-Compatibility
+      Renamed: `trackwidthMm`/`getTrackwidthMm`→`trackwidth`/
+      `getTrackwidth` (the namespace-collision-flagged case),
+      `otosLinDriftMmS`/`getOtosLinDriftMmS`→`otosLinearDrift`/
+      `getOtosLinearDrift`, `otosYawDriftDegS`/`getOtosYawDriftDegS`→
+      `otosYawDrift`/`getOtosYawDrift`. `git diff` of `SimCommands.cpp`
+      confirms only the function-pointer arguments changed on these 3
+      `kSimRegistry[]` rows — every key string is untouched.
+- [x] Every `kSimRegistry[]` key string listed in the Wire-Compatibility
       Exclusion Table's `SIMSET`/`SIMGET` row is unchanged (diffed against
       pre-ticket source) — including `trackwidthMm` (the sim key, distinct
       from the already-renamed `RobotConfig::trackwidth` C++ field and the
-      excluded `"tw"` `SET` key).
-- [ ] `source/hal/sim/SimOdometer.{h,cpp}`, `source/commands/
+      excluded `"tw"` `SET` key). Confirmed: all 17 rows' key strings are
+      byte-identical in `git diff source/commands/SimCommands.cpp`.
+- [x] `source/hal/sim/SimOdometer.{h,cpp}`, `source/commands/
       SimSetters.{h,cpp}`: no remaining internal unit-suffixed identifier
-      outside the preserved key strings.
-- [ ] `tests/_infra/sim/sim_api.cpp`, `drive_api.cpp`: parameter names
+      outside the preserved key strings. Verified by grep sweep after
+      editing: `SimOdometer.{h,cpp}` has zero remaining hits.
+      `SimSetters.h`'s only remaining hits are (a) documented references
+      to `SimHardware`/`PhysicsWorld`'s own untouched `trackwidthMm()`
+      accessor (out-of-scope files, see above) and (b) `kDegToRad`/
+      `kRadToDeg`, unit-conversion-factor constants with the unit token
+      embedded mid-name rather than as a trailing suffix — the same
+      category ticket 006 established as out of this convention's scope
+      (its `kPosMmPerLsb`/`kHdgRadPerLsb` precedent). Also renamed to
+      reach this bar: `encoderNoiseL/R`/`encoderNoise`'s `sigmaMm`→
+      `sigma` params, and the drift-conversion helpers' local
+      `periodMs`→`period`/`radPerSec`→`rate` variables.
+- [x] `tests/_infra/sim/sim_api.cpp`, `drive_api.cpp`: parameter names
       renamed per convention; exported `extern "C"` function names
-      byte-identical to pre-ticket (already unit-free).
-- [ ] Zero `host/robot_radio/` file changes required or made by this
+      byte-identical to pre-ticket (already unit-free). Renamed in
+      functions that call directly into `PhysicsWorld`/`SimOdometer`/
+      `simsetters::`: `sim_set_enc_l/r`, `sim_set_reported_enc_l/r`,
+      `sim_set_otos_pose`, `sim_set_true_pose`,
+      `sim_set_true_wheel_travel`, `sim_set_true_velocity`,
+      `sim_set_encoder_noise` (`sim_api.cpp`); `drive_api_
+      enable_otos_sim_model` (`drive_api.cpp`). Functions that reach
+      other subsystems (line/color/servo/port/bench-OTOS,
+      `drive_api_apply_setpose`) are outside this ticket's "sim plant"
+      scope and untouched. Zero exported function names changed anywhere.
+- [x] Zero `host/robot_radio/` file changes required or made by this
       ticket (ctypes calls are positional; confirmed no Python-side
-      change needed).
-- [ ] `tests/simulation/unit/test_simset_profile_chunking.py`,
+      change needed). Confirmed: `git status` shows no `host/` diff.
+      Three `tests/simulation/unit/*.py` files (`test_physics_world_
+      basic.py`, `test_physics_world_body_scrub.py`,
+      `test_plant_correctness.py`) needed mechanical updates — each
+      embeds a standalone C++ harness that compiles directly against
+      `PhysicsWorld.cpp` and called the renamed `setNominalMaxMms`.
+      These are test fixtures mirroring a renamed C++ identifier moving
+      in lock-step (architecture-update.md Step 1's explicitly
+      anticipated case), not a `host/` or Python-identifier change.
+- [x] `tests/simulation/unit/test_simset_profile_chunking.py`,
       `test_sim_commands_registry.py`, `test_069_knob_telemetry_sweep.py`
       pass unchanged (`SIMSET`/`SIMGET` wire behavior byte-identical).
-- [ ] Full test suite green (`uv run python -m pytest`).
-- [ ] `--clean` sim build performed before running tests.
+      (Path correction: `test_069_knob_telemetry_sweep.py` lives in
+      `tests/simulation/system/`, not `unit/`.) All pass, plus
+      `test_sim_otos_lever_arm.py`, `test_drive_subsystem.py`,
+      `test_ekf_dual_source.py` (the drift-setter consumers) — 63/63
+      targeted tests green.
+- [x] Full test suite green (`uv run python -m pytest`). **2621 passed,
+      0 failed** — matches the pre-ticket baseline exactly.
+      `test_golden_tlm_unchanged` passes (byte-identical TLM confirmed).
+- [x] `--clean` sim build performed before running tests. `cmake --build
+      tests/_infra/sim/build --target clean` (confirmed `libfirmware_
+      host.dylib` removed) then a full rebuild (fresh timestamp, zero
+      compile errors) before any test run.
 
 ## Testing
 

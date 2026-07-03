@@ -20,7 +20,7 @@
  * Sim* observation models (added in T2), each of which reads `const PhysicsWorld&`.
  *
  * Two ways in:
- *   1. Evolve mode:  setActuators(pwmL, pwmR) + update(dt_ms) — advances the
+ *   1. Evolve mode:  setActuators(pwmL, pwmR) + update(dt) — advances the
  *      chassis from PWM commands.
  *   2. Truth-injection mode:  setTruePose / setTrueWheelTravel / setTrueVelocity /
  *      setTrueSensorValues — sets ground truth directly for isolation tests.
@@ -47,7 +47,7 @@
 class PhysicsWorld {
 public:
     // Default dynamics parameters — match MockMotor / MockHAL defaults.
-    static constexpr float kNominalMaxMms = 400.0f;   // MockMotor::kNominalMaxMms
+    static constexpr float kNominalMaxSpeed = 400.0f;  // [mm/s] MockMotor::kNominalMaxMms
     static constexpr float kDefaultTrackwidthMm = 150.0f;
 
     PhysicsWorld() = default;
@@ -68,10 +68,10 @@ public:
         else           _pwmR = pwm;
     }
 
-    // Advance the chassis one step of dt_ms milliseconds.  Two structurally
+    // Advance the chassis one step of dt milliseconds.  Two structurally
     // separate sub-steps: (A) encoder accumulation (golden-TLM bit-exact path),
     // (B) chassis pose integration (slip applied here, not on the TLM path).
-    void update(uint32_t dt_ms);
+    void update(uint32_t dt);  // [ms]
 
     // --- Truth-injection mode (isolation tests) ------------------------------
 
@@ -151,9 +151,9 @@ public:
     // OQ-1 Option A — reported-encoder (legacy MockMotor) noise config.  side:
     // 0 = left, 1 = right, 2 = both.  Gaussian encoder noise (mm per tick) added
     // to the REPORTED encoder accumulator only; the true accumulator is unaffected.
-    void setEncoderNoise(int side, float sigmaMm) {
-        if (side == 0 || side > 1) _encNoiseSigmaL = sigmaMm;
-        if (side == 1 || side > 1) _encNoiseSigmaR = sigmaMm;
+    void setEncoderNoise(int side, float sigma) {  // [mm] noise sigma per tick
+        if (side == 0 || side > 1) _encNoiseSigmaL = sigma;
+        if (side == 1 || side > 1) _encNoiseSigmaR = sigma;
     }
 
     // Encoder error injection (ticket 058-001): per-wheel scale error and slip
@@ -173,8 +173,8 @@ public:
         if (side == 1 || side > 1) _encSlipR = fraction;
     }
 
-    void setTrackwidth(float mm)    { _trackwidthMm = mm; }
-    void setNominalMaxMms(float v)  { _nominalMaxMms = v; }
+    void setTrackwidth(float trackwidth)  { _trackwidthMm = trackwidth; }  // [mm]
+    void setNominalMaxSpeed(float speed)  { _nominalMaxSpeed = speed; }    // [mm/s]
 
     // --- Read accessors (const ground-truth) ---------------------------------
 
@@ -205,9 +205,9 @@ public:
 
     // OQ-1 Option A — directly set the reported encoder accumulator (back-compat
     // for sim_set_enc_l/r which resets+rebuilds the legacy MockMotor encoder).
-    void setReportedEncoder(int side, float mm) {
-        if (side == 0) _reportedEncLMm = mm;
-        else           _reportedEncRMm = mm;
+    void setReportedEncoder(int side, float position) {  // [mm]
+        if (side == 0) _reportedEncLMm = position;
+        else           _reportedEncRMm = position;
     }
 
     // OQ-1 Option A — zero one side's reported encoder accumulator (mirrors
@@ -232,9 +232,9 @@ public:
     }
 
     // Dynamics-parameter accessors (for tests / observation models).
-    float trackwidthMm()   const { return _trackwidthMm; }
-    float nominalMaxMms()  const { return _nominalMaxMms; }
-    float rotationalSlip() const { return _rotationalSlip; }
+    float trackwidthMm()    const { return _trackwidthMm; }
+    float nominalMaxSpeed() const { return _nominalMaxSpeed; }  // [mm/s]
+    float rotationalSlip()  const { return _rotationalSlip; }
     int8_t pwmL()          const { return _pwmL; }
     int8_t pwmR()          const { return _pwmR; }
 
@@ -287,8 +287,8 @@ private:
     uint16_t _port[4]      = {0, 0, 0, 0};
 
     // --- Dynamics parameters ---
-    float _trackwidthMm  = kDefaultTrackwidthMm;
-    float _nominalMaxMms = kNominalMaxMms;
+    float _trackwidthMm    = kDefaultTrackwidthMm;
+    float _nominalMaxSpeed = kNominalMaxSpeed;  // [mm/s]
     float _rotationalSlip = 0.0f;             // 0/unset → effectiveSlip → 1.0
     float _slipStraight  = 0.0f;
     float _slipTurnExtra = 0.0f;
