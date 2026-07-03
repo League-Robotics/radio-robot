@@ -2,7 +2,7 @@
 id: '074'
 title: 'OTOS fusion recovery and health visibility: fusion-gate re-admission, bench-OTOS-sim,
   wire-surfaced OTOS health'
-status: planning-docs
+status: done
 branch: sprint/074-otos-fusion-recovery-and-health-visibility-fusion-gate-re-admission-bench-otos-sim-wire-surfaced-otos-health
 use-cases: []
 issues:
