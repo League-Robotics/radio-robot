@@ -260,36 +260,8 @@ def build_wire_string(spec: CommandSpec, values: dict[str, Any]) -> str:
 # by a "Set Robot @ 0,0" origin reset performed by the GUI itself, so the list
 # below contains only the motion steps.
 #
-# Tour 1 (heading 0 = facing +x after the origin reset):
-#   RT 45°           → RT 4500      (relative in-place turn, +CCW)
-#   drive 420 mm     → D 200 200 420
-#   turn to 180°     → TURN 18000   (absolute heading, centidegrees)
-#   drive 700 mm     → D 200 200 700
-#   RT 90° ×3 with drives of 500 / 700 / 500 mm between them.
-#
-# D speeds use the schema default of 200 mm/s (both wheels forward).
 
 TOUR_1: list[str] = [
-    "RT 4500",
-    "D 200 200 420",
-    "TURN 18000",
-    "D 200 200 700",
-    "RT 9000",
-    "D 200 200 500",
-    "RT 9000",
-    "D 200 200 700",
-    "RT 9000",
-    "D 200 200 500",
-]
-
-# Tour 2 (heading 0 = facing +x after the origin reset): three left (CCW)
-# 90° turns with drives between them; the final leg is two consecutive
-# drives on the same heading (345 mm then stop is implicit — the tour ends
-# when the last bounded move completes).
-#   drive 345 mm → RT +90° → drive 240 mm → RT +90° → drive 700 mm
-#   → RT +90° → drive 480 mm → drive 345 mm
-
-TOUR_2: list[str] = [
     "D 200 200 345",
     "RT 9000",
     "D 200 200 240",
@@ -305,10 +277,31 @@ TOUR_2: list[str] = [
     "D 200 200 345"
 ]
 
+
+TOUR_2: list[str] = [
+    "D 200 200 345",
+    "RT 9000",
+    "D 200 200 240",
+    "RT 12400",
+    "D 200 200 850",
+    "RT -21700",
+    "D 200 200 700",
+    "RT 14600",
+    "D 200 200 850",
+    "RT 21500",
+    "D 200 200 700",
+    "RT -9000",
+    "D 200 200 240",
+    "RT -9000",
+    "D 200 200 345",
+]
+
+
+
 #: Named tours available to the GUI (label → ordered wire strings).
 TOURS: dict[str, list[str]] = {
     "Tour 1": TOUR_1,
-    "Tour 2": TOUR_2,
+    "Tour 2": TOUR_2
 }
 
 
