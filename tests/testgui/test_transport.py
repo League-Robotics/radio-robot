@@ -62,7 +62,7 @@ class FakeSerialConnection:
 
     # ---- I/O ----
 
-    def send(self, message: str, read_ms: int = 200, **_kw) -> dict[str, Any]:
+    def send(self, message: str, read_timeout: int = 200, **_kw) -> dict[str, Any]:  # [ms]
         if self.on_send:
             self.on_send(message)
         return {"sent": message, "mode": self._mode, "responses": ["OK"]}
@@ -1457,7 +1457,7 @@ class TestSimTransportCommands:
     def test_command_returns_reply(self):
         t, fake_sim = self._connected_sim()
         try:
-            reply = t.command("PING", read_ms=500)
+            reply = t.command("PING", read_timeout=500)
             assert reply == "OK", f"Expected 'OK' reply, got {reply!r}"
         finally:
             t.disconnect()
@@ -1500,7 +1500,7 @@ class TestSimTransportCommands:
             t.connect()
 
         try:
-            reply = t.command("PING", read_ms=500)
+            reply = t.command("PING", read_timeout=500)
         finally:
             t.disconnect()
 

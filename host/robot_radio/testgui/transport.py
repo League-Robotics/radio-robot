@@ -14,7 +14,7 @@ Transport (ABC)
 
     Commands:
         send(line)           — fire-and-forget (no reply read).
-        command(line, read_ms) — send and collect reply lines joined as str.
+        command(line, read_timeout) — send and collect reply lines joined as str.
 
     Keepalive (sprint 065, ticket 005; default no-ops, not abstract):
         arm_keepalive()    — arm the ambient host "+" keepalive for an
@@ -63,7 +63,7 @@ SimTransport()
     sim.get_async_evts() for TLM/EVT lines, and delivers ground-truth pose
     from sim_get_true_pose_x/y/h via the on_truth callback.
 
-    Unit conversion: sim true-pose is (x_mm, y_mm, h_rad); on_truth receives
+    Unit conversion: sim true-pose is (x, y, h) in (mm, mm, rad); on_truth receives
     (x_cm, y_cm, yaw_rad) — x and y are divided by 10; heading is passed
     through unchanged (already radians).
 
@@ -328,7 +328,7 @@ class Transport(abc.ABC):
         """Fire-and-forget: write ``line`` to the robot, no reply read."""
 
     @abc.abstractmethod
-    def command(self, line: str, read_ms: int = 200) -> str:
+    def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
         """Send ``line`` and collect reply lines; return joined as string.
 
         Returns an empty string on error or timeout.
@@ -495,11 +495,11 @@ class _HardwareTransport(Transport):
             raise ConnectionError("Transport is not connected")
         self._conn.send_fast(line)
 
-    def command(self, line: str, read_ms: int = 200) -> str:
+    def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
         """Send a command and return collected reply lines as a string."""
         if self._conn is None or not self._conn.is_open:
             return ""
-        result = self._conn.send(line, read_timeout=read_ms)
+        result = self._conn.send(line, read_timeout=read_timeout)
         responses = result.get("responses", [])
         return "\n".join(responses)
 
@@ -665,16 +665,16 @@ def _sim_lib_path() -> pathlib.Path:
 # factor N the tick-thread advances N of these steps per wall-clock tick,
 # so the physics step size (and firmware control tick) is identical at
 # every speed — only wall-clock pacing changes.
-_SIM_TICK_STEP_MS = 20
+_SIM_TICK_STEP_DURATION = 20  # [ms]
 # Wall-clock sleep between ticks (real-time pacing at 1x speed factor).
-_SIM_TICK_SLEEP_S = _SIM_TICK_STEP_MS / 1000.0
+_SIM_TICK_SLEEP_S = _SIM_TICK_STEP_DURATION / 1000.0
 # Speed-factor bounds for set_speed_factor().  20x with STREAM 50 means
 # ~400 TLM lines/s wall into the log pane — busy but workable; anything
 # beyond that has no operator value.
 _SIM_SPEED_MIN = 1
 _SIM_SPEED_MAX = 20
 # Ground-truth pose delivery rate (~5 Hz to match hardware truth polling).
-_SIM_TRUTH_EVERY_N_TICKS = max(1, round(200 / _SIM_TICK_STEP_MS))
+_SIM_TRUTH_EVERY_N_TICKS = max(1, round(200 / _SIM_TICK_STEP_DURATION))
 
 # Field-profile error parameters (mirrors tests/conftest.py sim_field_profile).
 _SIM_SLIP_TURN_EXTRA = 0.26   # fractional encoder over-report during turns
@@ -705,7 +705,7 @@ class SimTransport(Transport):
 
     Unit conversion
     ---------------
-    Sim true-pose returns ``(x_mm, y_mm, h_rad)``.  The ``on_truth`` callback
+    Sim true-pose returns ``(x, y, h)`` in (mm, mm, rad).  The ``on_truth`` callback
     receives ``(x_cm, y_cm, yaw_rad)`` — x and y are divided by 10 to convert
     from mm to cm; heading is passed through unchanged (already in radians).
 
@@ -894,7 +894,7 @@ class SimTransport(Transport):
     def set_speed_factor(self, factor: int) -> None:
         """Set the sim fast-forward multiple (1 = real time).
 
-        At factor N the tick-thread advances N x ``_SIM_TICK_STEP_MS`` of
+        At factor N the tick-thread advances N x ``_SIM_TICK_STEP_DURATION`` of
         sim-time per 20 ms wall-clock tick, keeping the integration step
         (and therefore the trajectory) identical to real-time — only the
         wall-clock pacing compresses.  Clamped to
@@ -907,11 +907,11 @@ class SimTransport(Transport):
         self._speed_factor = clamped
         self._log(f"[INFO] Sim speed set to {clamped}x")
 
-    def command(self, line: str, read_ms: int = 200) -> str:
+    def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
         """Send a command and return the synchronous reply string.
 
         Enqueues the command with a ``threading.Event`` and waits for the
-        tick-thread to process it.  Timeout is derived from ``read_ms``.
+        tick-thread to process it.  Timeout is derived from ``read_timeout``.
         Returns an empty string on timeout or when not connected.  The
         reply is logged (and, if it parses as TLM, delivered to
         on_telemetry) by ``_drain_cmd_queue`` on the tick-thread — the one
@@ -923,7 +923,7 @@ class SimTransport(Transport):
         done_evt = threading.Event()
         self._cmd_queue.put((line, reply_list, done_evt))
         self._log(f"> {line}")
-        timeout_s = max(read_ms / 1000.0, 1.0)
+        timeout_s = max(read_timeout / 1000.0, 1.0)
         done_evt.wait(timeout=timeout_s)
         return reply_list[0]
 
@@ -981,7 +981,7 @@ class SimTransport(Transport):
                     speed = self._speed_factor
                     for _ in range(speed):
                         sim.tick_for(
-                            _SIM_TICK_STEP_MS, step_ms=_SIM_TICK_STEP_MS
+                            _SIM_TICK_STEP_DURATION, step_ms=_SIM_TICK_STEP_DURATION
                         )
                         self._drain_async_evts(sim)
 
@@ -1077,16 +1077,16 @@ class SimTransport(Transport):
     def _deliver_sim_truth(self, sim: "object") -> None:
         """Read ground-truth pose from the sim and deliver to on_truth callback.
 
-        Converts from simulator units (x_mm, y_mm, h_rad) to the callback
+        Converts from simulator units (x, y in mm; h in rad) to the callback
         convention (x_cm, y_cm, yaw_rad): x and y are divided by 10.
         Heading is already in radians and is passed through unchanged.
         """
         try:
-            x_mm, y_mm, h_rad = sim.get_true_pose()  # type: ignore[attr-defined]
+            x, y, h_rad = sim.get_true_pose()  # type: ignore[attr-defined]
         except Exception:
             return
-        x_cm = x_mm / 10.0
-        y_cm = y_mm / 10.0
+        x_cm = x / 10.0
+        y_cm = y / 10.0
         self._deliver_truth((x_cm, y_cm, h_rad))
 
     def _apply_field_profile(self, sim: "object") -> None:
@@ -1152,7 +1152,7 @@ class SimTransport(Transport):
         """
         defaults = sim_prefs.DEFAULT_PROFILE
         slip_turn_extra = profile.get("slip_turn_extra", defaults["slip_turn_extra"])
-        encoder_noise_mm = profile.get("encoder_noise_mm", defaults["encoder_noise_mm"])
+        encoder_noise = profile.get("encoder_noise_mm", defaults["encoder_noise_mm"])  # [mm]
 
         # Build the SIMSET pairs: every 1:1-mapped key from the map, plus
         # encoder_noise_mm's two-key fan-out.
@@ -1160,8 +1160,8 @@ class SimTransport(Transport):
             (wire_key, profile.get(key, defaults[key]))
             for key, wire_key in sim_prefs.PROFILE_TO_SIMSET_KEY.items()
         ]
-        pairs.append(("encNoiseL", encoder_noise_mm))
-        pairs.append(("encNoiseR", encoder_noise_mm))
+        pairs.append(("encNoiseL", encoder_noise))
+        pairs.append(("encNoiseR", encoder_noise))
 
         # Send in chunks under the firmware's MAX_ARGS=10 ArgList cap — see
         # the docstring: pairs past the cap are silently dropped (reply is
@@ -1190,7 +1190,7 @@ class SimTransport(Transport):
         self._error_profile = dict(profile)
         self._log(
             f"[INFO] Sim error profile applied "
-            f"(encoder_noise_mm={encoder_noise_mm}, "
+            f"(encoder_noise_mm={encoder_noise}, "
             f"slip_turn_extra={slip_turn_extra}, "
             f"otos_linear_noise={profile.get('otos_linear_noise', defaults['otos_linear_noise'])}, "
             f"otos_yaw_noise={profile.get('otos_yaw_noise', defaults['otos_yaw_noise'])})"

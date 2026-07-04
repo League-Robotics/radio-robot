@@ -485,15 +485,15 @@ class TestTours:
 
 
 class TestGotoGeometry:
-    """goto_distance_mm / goto_reached pure geometry (no Qt)."""
+    """goto_distance / goto_reached pure geometry (no Qt)."""
 
     def test_distance_zero_at_target(self):
-        from robot_radio.testgui.commands import goto_distance_mm
-        assert goto_distance_mm(100, 200, 100, 200) == 0.0
+        from robot_radio.testgui.commands import goto_distance
+        assert goto_distance(100, 200, 100, 200) == 0.0
 
     def test_distance_3_4_5(self):
-        from robot_radio.testgui.commands import goto_distance_mm
-        assert goto_distance_mm(300, 400, 0, 0) == 500.0
+        from robot_radio.testgui.commands import goto_distance
+        assert goto_distance(300, 400, 0, 0) == 500.0
 
     def test_reached_within_eps(self):
         from robot_radio.testgui.commands import goto_reached

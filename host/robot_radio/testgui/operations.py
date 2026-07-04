@@ -468,7 +468,7 @@ class OpsController:
             f"{math.degrees(yaw_rad):.1f}°) → {line}"
         )
         try:
-            reply = transport.command(line, read_ms=500)
+            reply = transport.command(line, read_timeout=500)
             if reply:
                 self._log(f"[INFO] Sync Pose reply: {reply.strip()}")
             else:
@@ -483,7 +483,7 @@ class OpsController:
             self._log("[WARN] Zero Encoders: not connected")
             return
         try:
-            reply = transport.command("ZERO enc", read_ms=300)
+            reply = transport.command("ZERO enc", read_timeout=300)
             if reply:
                 self._log(f"[INFO] Zero Encoders: {reply.strip()}")
             else:
@@ -525,7 +525,7 @@ class OpsController:
 
         # 2. Halt motors / abort the active motion goal.
         try:
-            transport.command("STOP", read_ms=300)
+            transport.command("STOP", read_timeout=300)
             self._log("[INFO] STOP sent")
         except Exception as exc:
             self._log(f"[ERROR] STOP: {exc}")
@@ -534,7 +534,7 @@ class OpsController:
         #    toggle in the UI.  Best-effort — a STREAM-0 failure must not mask
         #    the motor STOP above.
         try:
-            transport.command("STREAM 0", read_ms=300)
+            transport.command("STREAM 0", read_timeout=300)
             self._stream_on = False
             self._stream_btn.setChecked(False)  # type: ignore[attr-defined]
             self._stream_btn.setText("STREAM: off")  # type: ignore[attr-defined]
@@ -713,7 +713,7 @@ class OpsController:
             label = "STREAM: off"
 
         try:
-            reply = transport.command(cmd, read_ms=300)
+            reply = transport.command(cmd, read_timeout=300)
             self._stream_on = checked
             self._stream_btn.setText(label)  # type: ignore[attr-defined]
             if reply:

@@ -55,7 +55,7 @@ class _RelayLikeTransport:
         self.command_calls = 0
         self.send_calls = 0
 
-    def command(self, line: str, read_ms: int = 200) -> str:
+    def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
         self.command_calls += 1
         return ""  # relay: SNAP's TLM reply never reaches command()
 

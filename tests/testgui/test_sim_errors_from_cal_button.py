@@ -292,7 +292,7 @@ class TestSimErrorsFromCalSamePath:
             def send(self, line: str) -> None:
                 pass
 
-            def command(self, line: str, read_ms: int = 200) -> str:
+            def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
                 return "OK"
 
             def apply_error_profile(self, profile: dict) -> None:

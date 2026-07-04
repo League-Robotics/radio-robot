@@ -128,12 +128,12 @@ def test_connect_pushes_nocal_neutral_calibration_into_firmware(
         qapp, monkeypatch, tmp_path, _nocal_config()
     )
     try:
-        reply = transport.command("GET rotSlip", read_ms=500)
+        reply = transport.command("GET rotSlip", read_timeout=500)
         assert "rotSlip=0.000" in reply, (
             f"nocal connect must neutralize the baked rotationalSlip; "
             f"firmware reports {reply.strip()!r}"
         )
-        assert "tw=128" in transport.command("GET tw", read_ms=500)
+        assert "tw=128" in transport.command("GET tw", read_timeout=500)
     finally:
         _teardown(qapp, window)
 
@@ -148,7 +148,7 @@ def test_connect_pushes_calibrated_values_into_firmware(
     cfg["calibration"] = {"rotational_slip": 0.85}
     window, transport = _connect_gui_with_config(qapp, monkeypatch, tmp_path, cfg)
     try:
-        reply = transport.command("GET rotSlip", read_ms=500)
+        reply = transport.command("GET rotSlip", read_timeout=500)
         assert "rotSlip=0.850" in reply, (
             f"connect must push the active robot's calibration; firmware "
             f"reports {reply.strip()!r}"

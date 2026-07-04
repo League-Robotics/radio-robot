@@ -38,7 +38,7 @@ class FakeTransport:
     def send(self, line: str) -> None:
         self.sent.append(line)
 
-    def command(self, line: str, read_ms: int = 200) -> str:
+    def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
         return "OK"
 
     def arm_keepalive(self) -> None:
@@ -71,17 +71,17 @@ class TestVwLineForKey:
 
     def test_up_returns_forward(self):
         from PySide6.QtCore import Qt
-        from robot_radio.testgui.drive import vw_line_for_key, FWD_SPEED_MMS
+        from robot_radio.testgui.drive import vw_line_for_key, FWD_SPEED
 
         line = vw_line_for_key(int(Qt.Key.Key_Up))
-        assert line == f"VW {FWD_SPEED_MMS} 0"
+        assert line == f"VW {FWD_SPEED} 0"
 
     def test_down_returns_back(self):
         from PySide6.QtCore import Qt
-        from robot_radio.testgui.drive import vw_line_for_key, FWD_SPEED_MMS
+        from robot_radio.testgui.drive import vw_line_for_key, FWD_SPEED
 
         line = vw_line_for_key(int(Qt.Key.Key_Down))
-        assert line == f"VW -{FWD_SPEED_MMS} 0"
+        assert line == f"VW -{FWD_SPEED} 0"
 
     def test_left_returns_ccw(self):
         from PySide6.QtCore import Qt
@@ -107,9 +107,9 @@ class TestVwLineForKey:
 
     def test_default_speed_constants(self):
         """Named constants must match the ticket-specified defaults."""
-        from robot_radio.testgui.drive import FWD_SPEED_MMS, ROTATE_OMEGA_MRADS
+        from robot_radio.testgui.drive import FWD_SPEED, ROTATE_OMEGA_MRADS
 
-        assert FWD_SPEED_MMS == 200
+        assert FWD_SPEED == 200
         assert ROTATE_OMEGA_MRADS == 500
 
     def test_up_wire_string_literal(self):
@@ -146,10 +146,10 @@ class TestVwLineForKeySet:
 
     def test_single_up_key(self):
         from PySide6.QtCore import Qt
-        from robot_radio.testgui.drive import vw_line_for_key_set, FWD_SPEED_MMS
+        from robot_radio.testgui.drive import vw_line_for_key_set, FWD_SPEED
 
         held = frozenset([int(Qt.Key.Key_Up)])
-        assert vw_line_for_key_set(held) == f"VW {FWD_SPEED_MMS} 0"
+        assert vw_line_for_key_set(held) == f"VW {FWD_SPEED} 0"
 
     def test_single_left_key(self):
         from PySide6.QtCore import Qt
@@ -449,7 +449,7 @@ class TestKeyboardDriverKeepalive:
         from robot_radio.testgui.drive import KeyboardDriver
 
         transport = FakeTransport()
-        driver = KeyboardDriver(interval_ms=50)
+        driver = KeyboardDriver(interval=50)
         driver.attach(fake_window, transport)
 
         press = _make_key_event(Qt.Key.Key_Up, is_auto_repeat=False)
@@ -465,7 +465,7 @@ class TestKeyboardDriverKeepalive:
         from robot_radio.testgui.drive import KeyboardDriver
 
         transport = FakeTransport()
-        driver = KeyboardDriver(interval_ms=100)
+        driver = KeyboardDriver(interval=100)
         driver.attach(fake_window, transport)
 
         press = _make_key_event(Qt.Key.Key_Down, is_auto_repeat=False)
@@ -490,7 +490,7 @@ class TestKeyboardDriverKeepalive:
         from robot_radio.testgui.drive import KeyboardDriver, STOP_RESEND_COUNT
 
         transport = FakeTransport()
-        driver = KeyboardDriver(interval_ms=50)
+        driver = KeyboardDriver(interval=50)
         driver.attach(fake_window, transport)
 
         press = _make_key_event(Qt.Key.Key_Left, is_auto_repeat=False)
@@ -971,14 +971,14 @@ class TestKeyboardDriverNoTransport:
 class TestKeyboardDriverImportWithoutPySide6:
     """drive module is importable without a live QApplication.
 
-    The constants FWD_SPEED_MMS and ROTATE_OMEGA_MRADS must be accessible at
+    The constants FWD_SPEED and ROTATE_OMEGA_MRADS must be accessible at
     the module level (no lazy guard needed for them).
     """
 
     def test_constants_importable(self):
-        from robot_radio.testgui.drive import FWD_SPEED_MMS, ROTATE_OMEGA_MRADS
+        from robot_radio.testgui.drive import FWD_SPEED, ROTATE_OMEGA_MRADS
 
-        assert isinstance(FWD_SPEED_MMS, int)
+        assert isinstance(FWD_SPEED, int)
         assert isinstance(ROTATE_OMEGA_MRADS, int)
 
     def test_keyboard_driver_class_importable(self):
