@@ -51,3 +51,9 @@ install_manifest.txt
 compile_commands.json
 DEPFILE
 _deps/
+
+# wedgelab standalone project artifacts
+wedgelab/build/
+wedgelab/out/
+wedgelab/MICROBIT.hex
+wedgelab/MICROBIT.bin
