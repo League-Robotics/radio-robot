@@ -118,7 +118,8 @@ EKF omega gating).  Candidates for the fix sprint:
    the EKF omega gate already does this for the velocity channel.
 4. Root cause below all of that: why does the Nezha 0x46 read latch
    (I2C traffic pattern at decel? register read-settle?) — see
-   docs/knowledge/2026-07-01-encoder-wedge-boundary-latch-flavor.md.
+   docs/knowledge/2026-07-04-encoder-wedge.md (consolidated; answered
+   by the WEDGELAB campaign below).
 
 ## Impact
 

@@ -55,29 +55,29 @@ _INVENTORY_MAP: dict = {
     # common.proto — shared geometric and utility types
     # -----------------------------------------------------------------------
 
-    # Pose2D: 2-D pose value type matching hal/capability/Pose2D.h {x,y,h}
-    ("Pose2D", "x"):     "Pose2D::x (hal/capability/Pose2D.h)",
-    ("Pose2D", "y"):     "Pose2D::y (hal/capability/Pose2D.h)",
-    ("Pose2D", "h"):     "Pose2D::h (hal/capability/Pose2D.h)",
+    # Pose2D: 2-D pose value type matching hal/capability/pose2d.h {x,y,h}
+    ("Pose2D", "x"):     "Pose2D::x (hal/capability/pose2d.h)",
+    ("Pose2D", "y"):     "Pose2D::y (hal/capability/pose2d.h)",
+    ("Pose2D", "h"):     "Pose2D::h (hal/capability/pose2d.h)",
 
     # BodyTwist: 2-DOF differential twist; not used standalone in ActualState
     # (BodyTwist3 is used everywhere); BodyTwist is retained for wire-compat.
     ("BodyTwist", "v"):     "(new field — BodyTwist2 not in ActualState; BodyTwist3 used instead)",
     ("BodyTwist", "omega"): "(new field — BodyTwist2 not in ActualState; BodyTwist3 used instead)",
 
-    # BodyTwist3: 3-DOF holonomic twist matching hal/capability/Pose2D.h BodyTwist3
-    ("BodyTwist3", "v_x"):   "BodyTwist3::vx_mmps (hal/capability/Pose2D.h)",
-    ("BodyTwist3", "v_y"):   "BodyTwist3::vy_mmps (hal/capability/Pose2D.h)",
-    ("BodyTwist3", "omega"): "BodyTwist3::omega_rads (hal/capability/Pose2D.h)",
+    # BodyTwist3: 3-DOF holonomic twist matching hal/capability/pose2d.h BodyTwist3
+    ("BodyTwist3", "v_x"):   "BodyTwist3::vx_mmps (hal/capability/pose2d.h)",
+    ("BodyTwist3", "v_y"):   "BodyTwist3::vy_mmps (hal/capability/pose2d.h)",
+    ("BodyTwist3", "omega"): "BodyTwist3::omega_rads (hal/capability/pose2d.h)",
 
     # BodyAccel: used by OTOS passthrough telemetry; not a named member of ActualState
     ("BodyAccel", "a_x"): "ActualState::otosAccelX (passthroughtelemetry)",
     ("BodyAccel", "a_y"): "ActualState::otosAccelY (passthroughtelemetry)",
 
-    # ValueSet: sensor freshness/validity stamp matching types/ValueSet.h ValueSet
-    ("ValueSet", "lag"):      "ValueSet::lagMs (types/ValueSet.h)",
-    ("ValueSet", "last_upd"): "ValueSet::lastUpdMs (types/ValueSet.h)",
-    ("ValueSet", "valid"):       "ValueSet::valid (types/ValueSet.h)",
+    # ValueSet: sensor freshness/validity stamp matching types/value_set.h ValueSet
+    ("ValueSet", "lag"):      "ValueSet::lagMs (types/value_set.h)",
+    ("ValueSet", "last_upd"): "ValueSet::lastUpdMs (types/value_set.h)",
+    ("ValueSet", "valid"):       "ValueSet::valid (types/value_set.h)",
 
     # PoseEstimate: pose+twist+stamp; matches source/state/PoseEstimate.h
     ("PoseEstimate", "pose"):  "PoseEstimate::pose (state/PoseEstimate.h)",
@@ -141,6 +141,8 @@ _INVENTORY_MAP: dict = {
     ("DrivetrainState", "otos"):         "ActualState::otos (ValueSet)",
     ("DrivetrainState", "wheel_wedged"): "(new field — wheel-stall flag, not yet in ActualState)",
     ("DrivetrainState", "connected"):    "(new field — drivetrain connected flag, not in ActualState)",
+    ("DrivetrainState", "otos_status"):         "Drive::_lastOtosStatus (subsystems/drive/Drive.h, 074-004)",
+    ("DrivetrainState", "otos_fusion_blocked"):  "Drive::_otosFusionBlocked (subsystems/drive/Drive.h, 074-004)",
 
     # DrivetrainConfig: maps to RobotConfig members
     ("DrivetrainConfig", "fwd_sign_l"):           "RobotConfig::fwdSignL",
@@ -216,6 +218,7 @@ _INVENTORY_MAP: dict = {
     ("MotorCommand", "position"):    "portable-motor-interface: POSITION verb / IPositionMotor::setAngleDeg()",
     ("MotorCommand", "neutral"):     "portable-motor-interface: NEUTRAL verb (BRAKE/COAST) / OutputState::pwm[]",
     ("MotorCommand", "feedforward"): "RobotConfig::velKff (feed-forward coefficient in vel loop)",
+    ("MotorCommand", "reset_position"): "(new field — zero the encoder this tick, Motor::resetPosition(), 077-002)",
 
     # MotorState: per-motor observable state
     ("MotorState", "connected"): "(new field — motor I2C connected flag, via IBusDiagnostics::errorCount())",
@@ -224,13 +227,21 @@ _INVENTORY_MAP: dict = {
     ("MotorState", "applied"):   "OutputState::pwm[] (applied PWM % — new dedicated readback field)",
     ("MotorState", "wedged"):    "(new field — motor stall flag, related to IBusDiagnostics wedge detection)",
 
-    # MotorConfig: per-motor calibration parameters
+    # MotorConfig: per-motor calibration parameters (077-002 accuracy pass)
     ("MotorConfig", "travel_calib"): "RobotConfig::{wheelTravelCalibL,wheelTravelCalibR} (per-motor, indexed by channel)",
     ("MotorConfig", "fwd_sign"):   "RobotConfig::{fwdSignL,fwdSignR} (per-motor, indexed by channel)",
+    ("MotorConfig", "vel_gains"):      "RobotConfig::{velKp,velKi,velKff,velIMax,velKaw} (per-motor velocity loop, moved from DrivetrainConfig)",
+    ("MotorConfig", "vel_filt_alpha"): "RobotConfig::velFiltAlpha (moved from DrivetrainConfig, now per-motor)",
+    ("MotorConfig", "min_duty"):       "RobotConfig::minWheelSpeed (stiction floor, moved from DrivetrainConfig.min_wheel, now duty-domain)",
+    ("MotorConfig", "slew_rate"):      "hal/real/MotorSlew.h clampStep() kMaxDeltaPwmPerWrite (duty slew limit)",
+    ("MotorConfig", "port"):           "(new field — Nezha motor port 1..4, identity moved from class to Config, 077-002)",
 
-    # MotorCapabilities: capability declaration
-    ("MotorCapabilities", "onboard_position"): "(new field — position-motor capability flag, Phase 2)",
-    ("MotorCapabilities", "has_encoder"):      "(new field — encoder capability flag, Phase 2)",
+    # MotorCapabilities: capability declaration (077-002: one bool per control mode)
+    ("MotorCapabilities", "duty_cycle"): "(new field — duty-cycle control mode capability flag)",
+    ("MotorCapabilities", "voltage"):    "(new field — voltage control mode capability flag; false on Nezha)",
+    ("MotorCapabilities", "velocity"):   "(new field — velocity control mode capability flag; true on Nezha)",
+    ("MotorCapabilities", "position"):   "(new field — onboard position-move capability flag, Nezha 0x5D)",
+    ("MotorCapabilities", "has_encoder"): "(new field — encoder capability flag, Phase 2)",
 
     # -----------------------------------------------------------------------
     # planner.proto
@@ -329,9 +340,9 @@ _INVENTORY_MAP: dict = {
     ("PortState", "analog_in"):  "ActualState::analogIn[4]",
     ("PortState", "stamp"):      "ActualState::portsVS (ValueSet)",
 
-    # PortConfig: ports configuration
+    # PortConfig: ports configuration (077-002: direction field removed — no
+    # hardware counterpart, see protos/ports.proto comment)
     ("PortConfig", "lag_ports"): "RobotConfig::lagPorts",
-    ("PortConfig", "direction"): "(new field — per-port direction bitmap, not in RobotConfig)",
 
     # -----------------------------------------------------------------------
     # sensors.proto
@@ -343,12 +354,14 @@ _INVENTORY_MAP: dict = {
     ("LineSensorState", "stamp"):      "ActualState::lineVS (ValueSet)",
     ("LineSensorState", "connected"):  "(new field — line sensor connected flag, capability query)",
 
-    # LineSensorConfig: line sensor configuration
-    ("LineSensorConfig", "lag_line"): "RobotConfig::lagLine",
-    ("LineSensorConfig", "threshold"):   "(new field — binarization threshold, not in RobotConfig)",
-    ("LineSensorConfig", "norm_min"):    "(new field — normalization minimum, not in RobotConfig)",
-    ("LineSensorConfig", "norm_max"):    "(new field — normalization maximum, not in RobotConfig)",
-    ("LineSensorConfig", "channel_map"): "(new field — channel remapping table, not in RobotConfig)",
+    # LineSensorConfig: line sensor configuration (077-002 accuracy pass:
+    # threshold/norm_min/norm_max/channel_map removed — no hardware
+    # counterpart; cal_min/cal_max/filt_alpha added — real per-channel
+    # calibration + EMA smoothing, see protos/sensors.proto comment)
+    ("LineSensorConfig", "lag_line"):   "RobotConfig::lagLine",
+    ("LineSensorConfig", "cal_min"):    "hal/real/LineSensor.h LineSensor::_calMin[4] (captureCalibMin())",
+    ("LineSensorConfig", "cal_max"):    "hal/real/LineSensor.h LineSensor::_calMax[4] (captureCalibMax())",
+    ("LineSensorConfig", "filt_alpha"): "hal/real/LineSensor.h LineSensor::_alpha (setSmoothingAlpha())",
 
     # ColorSensorState: color sensor read-only state
     ("ColorSensorState", "r"):         "ActualState::colorR",
@@ -358,13 +371,13 @@ _INVENTORY_MAP: dict = {
     ("ColorSensorState", "stamp"):     "ActualState::colorVS (ValueSet)",
     ("ColorSensorState", "connected"): "(new field — color sensor connected flag, capability query)",
 
-    # ColorSensorConfig: color sensor configuration
-    ("ColorSensorConfig", "lag_color"): "RobotConfig::lagColor",
-    ("ColorSensorConfig", "integration"):  "(new field — integration time register, not in RobotConfig)",
-    ("ColorSensorConfig", "gain"):         "(new field — sensor gain register, not in RobotConfig)",
-    ("ColorSensorConfig", "cal_r"):        "(new field — color calibration scale R, not in RobotConfig)",
-    ("ColorSensorConfig", "cal_g"):        "(new field — color calibration scale G, not in RobotConfig)",
-    ("ColorSensorConfig", "cal_b"):        "(new field — color calibration scale B, not in RobotConfig)",
+    # ColorSensorConfig: color sensor configuration (077-002 accuracy pass:
+    # cal_r/cal_g/cal_b removed — no RGBC scaling exists anywhere in
+    # source_old; integration/gain kept — real APDS9960 registers, currently
+    # hardcoded in ColorSensor::initApds(), fallback-chip-only)
+    ("ColorSensorConfig", "lag_color"):   "RobotConfig::lagColor",
+    ("ColorSensorConfig", "integration"): "hal/real/ColorSensor.cpp initApds() ATIME write 0x81 (APDS9960 fallback only)",
+    ("ColorSensorConfig", "gain"):        "hal/real/ColorSensor.cpp initApds() CONTROL write 0x8F (APDS9960 fallback only)",
 }
 
 # ---------------------------------------------------------------------------
@@ -878,7 +891,7 @@ def _emit_bridges_header() -> str:
 //   Include bridges.h from any firmware TU that needs the HAL types or
 //   the generated message types — both are now safe to include together.
 #pragma once
-#include "hal/capability/Pose2D.h"
+#include "hal/capability/pose2d.h"
 #include "messages/common.h"
 
 // --- Cross-namespace layout-compatibility checks (Phase 2) ---
@@ -909,7 +922,7 @@ static_assert(sizeof(::BodyTwist3) == sizeof(float) * 3,
 // Corresponds to DrivetrainConfig::half_track / half_wheelbase in the
 // generated drivetrain.h (no direct generated RobotGeometry message yet).
 static_assert(sizeof(::RobotGeometry) == sizeof(float) * 2,
-              "HAL RobotGeometry must be 2 floats — check hal/capability/Pose2D.h");
+              "HAL RobotGeometry must be 2 floats — check hal/capability/pose2d.h");
 """
 
 

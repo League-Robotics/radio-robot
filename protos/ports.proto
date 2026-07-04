@@ -37,7 +37,14 @@ message PortState {
 }
 
 // Configuration for the ports subsystem.
+//
+// 077-002 accuracy pass: the former `direction` per-port bitmap field is
+// removed -- field-checked against source_old/hal/real/PortIO.{h,cpp} (the
+// real device driver) and found to have no hardware counterpart. Each RJ11
+// port always exposes BOTH a digital line (S2) and an analog line (S1)
+// simultaneously; CODAL's MicroBitPin switches electrical direction
+// per-call (setDigitalValue/getDigitalValue), so there is no persistent
+// per-port mode to configure.
 message PortConfig {
-  uint32          lag_ports    = 1;
-  repeated uint32 direction    = 2 [(max_count) = 4];  // per-port direction bitmap
+  uint32 lag_ports = 1;
 }

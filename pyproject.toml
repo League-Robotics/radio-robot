@@ -1,6 +1,6 @@
 [project]
 name = "microbit-v2-samples-tools"
-version = "0.20260704.2"
+version = "0.20260704.15"
 description = "Build/deploy tooling for microbit-v2-samples plus the robot_radio host controller and rogo CLI"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -80,22 +80,27 @@ aprilcam = { path = "../AprilTags", editable = true }
 # exhaust memory on a small machine. Keep collection scoped and never descend
 # into vendored sims, the build tree, or the venv.
 #
-# Tier layout (038 reorganization):
-#   tests/simulation/unit/   — library + firmware-logic + firmware-sim pytest suites (CI gate)
-#   tests/simulation/system/ — whole-robot scenario tests (also CI gate)
-#   tests/_infra/sim/        — sim infrastructure (CMakeLists.txt, firmware.py) — no tests collected
-#   tests/bench/             — real-hardware bench tests (opt-in, not collected by default)
-#   tests/field/             — playfield tests (opt-in, not collected by default)
+# Three-domain layout (sprint 077 greenfield rebuild, ticket 006 — see
+# tests/CLAUDE.md). `tests/` was rebuilt from scratch (`git mv tests
+# tests_old`, ticket 001) alongside `source/`; only `tests/sim/` is
+# pytest-collected, and it has no real content yet — the new-tree sim harness
+# is later-ticket work — so this collects a trivial placeholder test until
+# that harness lands (a clean, near-empty collection is this ticket's pass
+# condition, not a nonempty count).
+#   tests/sim/{unit,system}/   — CI gate (no hardware); skeleton only for now
+#   tests/bench/               — HITL Python CLI tools against real hardware
+#                                 on the bench; NOT pytest-collected
+#   tests/playfield/           — HITL Python CLI tools against real hardware
+#                                 on the camera-covered playfield; NOT
+#                                 pytest-collected
+#   tests/unit/, tests/tools/  — kept categories; skeleton only for now
 #
-# vendor/ sims are excluded via norecursedirs below.
-testpaths = ["tests/simulation"]
+# tests_old/ and source_old/ are the parked pre-rebuild trees (rollback =
+# codal.json application flip back to source_old) — never collected, never
+# descended into. vendor/ sims are excluded below too.
+testpaths = ["tests/sim"]
 norecursedirs = [
-    "tests/old",
-    "tests/_infra/sim/build",
-    "tests/bench",
-    "tests/field",
-    "tests/_infra/calibrate",
-    "tests/_infra/tools",
+    "tests_old", "source_old",
     "vendor", "build", ".venv", "node_modules",
     "*.egg", ".*", "dist", "{arch}", "__pycache__",
 ]

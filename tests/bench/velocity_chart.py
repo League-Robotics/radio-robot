@@ -1,21 +1,41 @@
 #!/usr/bin/env python3
 """velocity_chart.py — interactive real-time robot bench dashboard.
 
-Streams live telemetry and renders a multi-panel matplotlib dashboard while you
-drive and physically interfere with the robot (grab wheels, slide colors/lines
-under the sensors). Designed for tuning the velocity loop and watching the
-sensors at the same time.
+REINVIGORATED for ticket 077-006: this is the same tool as
+`tests_old/bench/velocity_chart.py`, rewired from the old TLM-streaming
+telemetry path onto the `DEV` protocol (`docs/protocol-v2.md` §16). It
+drives via `DEV DT WHEELS <left> <right>` (per-wheel velocity targets,
+ratio-governed — the same command family as `DEV DT VW`, chosen here because
+this tool's whole UX is stepping a per-wheel ratio, which `WHEELS` sets
+directly without going through body-twist kinematics) and samples
+`DEV M <left-port> STATE` / `DEV M <right-port> STATE` for velocity and
+applied duty. There is no TLM push-streaming in this bench-only dev
+firmware — the worker thread polls STATE in a tight loop instead; every DEV
+line it sends also feeds the serial-silence watchdog, so no separate
+keepalive stream is needed.
 
 PANELS (left column shares the time axis):
-  - Wheel velocity (vL, vR) with 200 ms moving-average overlay + commanded setpoints
-  - Jitter metric: rolling RMSE of each wheel vs its own 200 ms moving average
-  - Colour strip: reconstructed RGB under the colour sensor (0x43)
-  - Line strip: 4 line-sensor channels as on/off bands (adaptive threshold)
+  - Wheel velocity (vL, vR) with 200 ms moving-average overlay + commanded setpoints  [KEPT]
+  - Jitter metric: rolling RMSE of each wheel vs its own 200 ms moving average       [KEPT]
+  - Applied duty (aL, aR) — NEW, replaces the old colour-sensor strip: the DEV
+    protocol's Motor faceplate has no colour/line sensor exposed (only Motor is
+    implemented this sprint — see the sprint-077 issue's Step 3), but it does
+    give us `applied=` directly, which is arguably more useful here anyway: this
+    tool's purpose is tuning the in-motor velocity PID, and applied-duty-vs-
+    velocity is exactly the step-response signal for that.
+  - Status strip: wedged/conn flags per side — NEW, replaces the old 4-channel
+    line-sensor strip (same reason: no line sensor exposed over DEV).
 RIGHT column:
-  - Phase plot: vR vs vL (the wheel-ratio diagonal) with commanded-target dot
-  - Odometry: OTOS pose x,y (mm) vs time
+  - Phase plot: vR vs vL (the wheel-ratio diagonal) with commanded-target dot  [KEPT —
+    this is explicitly the ratio governor's diagonal made visible, per the sprint issue]
+  - Position delta panel — NEW, replaces the old OTOS-odometry panel: DEV exposes
+    no world pose (no OTOS/odometry faceplate implemented this sprint), but
+    `DEV M <n> STATE`'s `pos=` (onboard encoder position, degrees) is available.
+    Plotted relative to each side's first sample after connect (a raw absolute
+    reading isn't bounded around zero the way OTOS was), so this becomes a
+    wheel-rotation/drift-since-connect view instead of a world-frame trace.
 
-KEYS (focus the plot window):
+KEYS (focus the plot window) — unchanged from the old tool:
   SPACE        connect / disconnect (fresh serial each time — survives reboots)
   1..9         set speed: 1 = below the dead-zone (~crawl), 9 = max wheel speed
   0            stop (speed 0)
@@ -23,10 +43,28 @@ KEYS (focus the plot window):
                "right wheel only" (vL→0, vertical); LEFT toward "left wheel only"
                (vR→0, horizontal). Centre = balanced (vL=vR). 5 stops each side.
 
+Dependencies: matplotlib, numpy (both already project dependencies via the
+`calibrate` uv dependency-group — see pyproject.toml). Only imported in the
+interactive (non-headless, non---selftest) path.
+
+Safety: the worker widens the serial-silence watchdog (`DEV WD 3000`) on
+connect and always sends `DEV DT STOP` + `DEV STOP` + restores `DEV WD 1000`
+on disconnect/SPACE-stop/exit — motors must never be left running.
+
 Usage:
     uv run python tests/bench/velocity_chart.py [--port DEV] [--speed MMPS]
-        [--window S] [--max-speed MMPS] [--stream-ms MS]
+        [--window S] [--max-speed MMPS] [--left-port N] [--right-port N]
+        [--poll-period S]
+
+    # No GUI: run the worker for SECS seconds, print a text summary.
+    uv run python tests/bench/velocity_chart.py --headless 5
+
+    # No hardware, no GUI: exercise arg parsing + the ratio/jitter math only
+    # (this is the testable-without-hardware part per ticket 077-006).
+    uv run python tests/bench/velocity_chart.py --selftest
 """
+
+from __future__ import annotations
 
 import argparse
 import collections
@@ -36,27 +74,73 @@ import threading
 import time
 
 RATIO_STOPS = 5          # arrow steps from balanced to one-wheel-only (each side)
-MEASURE_AGE = 1.0        # seconds-ago mark where the jitter RMSE is read (settled)
+MEASURE_AGE = 1.0         # seconds-ago mark where the jitter RMSE is read (settled)
+SESSION_WATCHDOG_WINDOW = 3000    # [ms]
+BOOT_WATCHDOG_WINDOW = 1000       # [ms] firmware default — restored on disconnect
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Interactive robot bench dashboard")
+    p = argparse.ArgumentParser(description="Interactive robot bench dashboard (DEV protocol)")
     p.add_argument("--port", default=None, help="Serial port (auto-detect if omitted)")
+    p.add_argument("--left-port", type=int, default=1, help="DEV DT PORTS left (default 1)")
+    p.add_argument("--right-port", type=int, default=2, help="DEV DT PORTS right (default 2)")
     p.add_argument("--speed", type=int, default=200,
                    help="Initial wheel speed mm/s (default 200)")
     p.add_argument("--window", type=float, default=8.0,
                    help="Rolling window seconds (default 8)")
     p.add_argument("--max-speed", type=int, default=400,
-                   help="Speed for key 9 / max wheel speed mm/s (default 400 = vWheelMax)")
-    p.add_argument("--stream-ms", type=int, default=40,
-                   help="TLM stream period ms (default 40 = 25 Hz, for jitter resolution)")
+                   help="Speed for key 9 / max wheel speed mm/s (default 400)")
+    p.add_argument("--poll-period", type=float, default=0.03,
+                   help="Target seconds between DEV M STATE polls (default 0.03; actual "
+                        "rate is bounded by serial round-trip latency, not this value — "
+                        "there is no TLM push-stream in this bench firmware)")
     p.add_argument("--headless", type=float, default=None, metavar="SECS",
                    help="No GUI: run the stream worker for SECS seconds and print "
-                        "the collected (vL,vR) samples + summary.")
-    p.add_argument("--set", dest="sets", action="append", default=[], metavar="K=V",
-                   help="Apply a SET override on connect (repeatable), e.g. "
-                        "--set sync=1 --set vel.kI=0.15.")
+                        "the collected samples + summary.")
+    p.add_argument("--selftest", action="store_true",
+                   help="No GUI, no hardware: exercise argument parsing, the ratio-target "
+                        "math, and the moving-average/jitter math against synthetic data, "
+                        "then exit. The testable-without-hardware part of this tool.")
     return p.parse_args()
+
+
+# ---------------------------------------------------------------------------
+# Pure helpers — shared by the worker, the GUI, and --selftest.
+# ---------------------------------------------------------------------------
+
+def ratio_targets(base_speed: float, ratio_idx: int,
+                   ratio_stops: int = RATIO_STOPS) -> tuple[int, int]:
+    """Map (base_speed, ratio_idx) to (left, right) wheel targets, mm/s.
+
+    ratio_idx in [-ratio_stops, +ratio_stops]: 0 = balanced (vL=vR=base_speed);
+    +ratio_stops -> right-wheel-only (vL=0); -ratio_stops -> left-wheel-only (vR=0).
+    """
+    frac = ratio_idx / float(ratio_stops)      # -1..+1
+    if frac >= 0:                              # toward right-wheel-only (vL→0)
+        vL, vR = base_speed * (1.0 - frac), base_speed
+    else:                                      # toward left-wheel-only (vR→0)
+        vL, vR = base_speed, base_speed * (1.0 + frac)
+    return int(round(vL)), int(round(vR))
+
+
+def dev_send(proto, cmd: str, timeout: int = 300):  # [ms]
+    """Send one DEV command, return the first OK/ERR reply line, parsed."""
+    from robot_radio.robot.protocol import parse_response
+    resp = proto.send(cmd, timeout)
+    for raw in resp.get("responses", []):
+        r = parse_response(raw)
+        if r is not None and r.tag in ("OK", "ERR"):
+            return r
+    return None
+
+
+def _kv_float(r, key: str) -> float | None:
+    if r is None or key not in r.kv:
+        return None
+    try:
+        return float(r.kv[key])
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -64,27 +148,25 @@ def _parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 def _stream_worker(
-    port: str,
+    port: str | None,
     cmd_box: list,                     # cmd_box[0] = (vL, vR) target, updated by main
-    data_queue: "queue.Queue",         # pushes (t, vel, pose, line, color) tuples
+    data_queue: "queue.Queue",         # pushes (t, vL, vR, aL, aR, pL, pR, wL, wR) tuples
     stop_event: threading.Event,
     status_queue: "queue.Queue[str]",
-    sets: "list[str] | None" = None,
-    stream: int = 40,
+    left_port: int = 1,
+    right_port: int = 2,
+    poll_period: float = 0.03,
 ) -> None:
-    """Open a fresh serial connection, drive cmd_box, push telemetry samples.
+    """Open a fresh serial connection, drive cmd_box, push DEV STATE samples.
 
-    Same robust connect/calibrate/zero logic as before; differences:
-      - drives the LIVE cmd_box[0] = (vL, vR) (not a fixed speed) so the GUI can
-        change speed / wheel-ratio on the fly.
-      - streams ALL fields (enc,vel,pose,line,color) so the dashboard can show
-        the sensors, not just velocity.
+    Polls `DEV M <left_port> STATE` / `DEV M <right_port> STATE` in a tight
+    loop and re-issues `DEV DT WHEELS <vL> <vR>` whenever cmd_box changes (so
+    the GUI can change speed/ratio on the fly). Every DEV line sent — polls
+    included — resets the firmware's serial-silence watchdog, so this loop
+    alone keeps the connection alive; no separate keepalive is needed.
     """
     from robot_radio.io.serial_conn import SerialConnection
-    from robot_radio.robot.protocol import NezhaProtocol, parse_response, parse_tlm
-    from robot_radio.robot.nezha import Nezha
-
-    KEEPALIVE_S = 0.150
+    from robot_radio.robot.protocol import NezhaProtocol
 
     def _cmd():
         try:
@@ -93,115 +175,57 @@ def _stream_worker(
             return (0, 0)
 
     conn = None
+    proto = None
     try:
-        conn = SerialConnection(port=port, mode="direct")
-        conn.connect(skip_ping=True)
-
-        proto = NezhaProtocol(conn)
-        nezha = Nezha(proto)
-
+        conn = SerialConnection(port=port)   # mode=None: auto-detect direct vs. relay
         status_queue.put("CONNECTING")
-        deadline = time.monotonic() + 12.0
-        identity = None
-        while time.monotonic() < deadline and not stop_event.is_set():
-            try:
-                identity = nezha.connect()
-                break
-            except Exception:
-                time.sleep(0.4)
-
-        if identity is None or stop_event.is_set():
-            status_queue.put("FAILED")
+        info = conn.connect()
+        if "error" in info:
+            status_queue.put(f"FAILED: {info['error']}")
+            return
+        if stop_event.is_set():
             return
 
-        # Flush stale buffer.
-        try:
-            conn.send_fast("STOP")
-            conn.send_fast("STREAM 0")
-            time.sleep(0.05)
-            conn._ser.reset_input_buffer()
-        except Exception:
-            pass
-
-        # Push calibration (DTR reset boots uncalibrated → wheels won't drive).
-        try:
-            from robot_radio.io.cli import _push_calibration
-            _push_calibration(conn)
-            status_queue.put("calibration pushed")
-        except Exception as exc:
-            status_queue.put(f"WARN: calibration push failed: {exc}")
-
-        # Zero encoders (fresh boot freezes readback at 0 until ZERO enc).
-        try:
-            proto.zero_encoders()
-        except Exception as exc:
-            status_queue.put(f"WARN: zero encoders failed: {exc}")
-
-        # Live SET overrides.
-        for kv in (sets or []):
-            try:
-                r = proto.send(f"SET {kv}", 250)
-                status_queue.put(f"SET {kv} -> {r.get('responses', ['?'])[-1]}")
-            except Exception as exc:
-                status_queue.put(f"WARN: SET {kv} failed: {exc}")
-
-        # Generous watchdog.
-        try:
-            proto.send("SET sTimeout=10000", 300)
-        except Exception:
-            pass
-
-        # Stream ALL fields so the sensors show up, then start streaming.
-        try:
-            proto.stream_fields("enc,vel,pose,line,color,otos")
-        except Exception as exc:
-            status_queue.put(f"WARN: stream_fields failed: {exc}")
-        proto.stream(stream)
-
-        status_queue.put(f"RUNNING — {identity.get('name', '?')}")
+        proto = NezhaProtocol(conn)
+        dev_send(proto, f"DEV WD {SESSION_WATCHDOG_WINDOW}")
+        dev_send(proto, f"DEV DT PORTS {left_port} {right_port}")
 
         vL, vR = _cmd()
-        conn.send_fast(f"S {vL} {vR}")
-        last_send = time.monotonic()
+        dev_send(proto, f"DEV DT WHEELS {vL} {vR}")
 
-        # The raw OTOS pose (pre-fusion optical-flow track) rides in the TLM
-        # 'otos=' field, requested via stream_fields above. We use it for the
-        # odom panel instead of the fused pose= (which includes encoder
-        # dead-reckoning and drifts when the wheels spin freely).
-        #
-        # The old `OP` command path was removed: send_fast("OP") issues an
-        # un-correlated command, so the firmware's `OK op ...` reply (no #id)
-        # is routed to the reader thread's reply queue, which read_lines() does
-        # NOT drain — the reply was silently dropped and the panel stayed blank.
-        # The TLM field is delivered through the same queue read_lines() reads.
+        status_queue.put(f"RUNNING — mode={info.get('mode')}")
+
+        pos_baseline: tuple[float | None, float | None] | None = None
 
         while not stop_event.is_set():
-            for raw_line in conn.read_lines(duration=30):
-                r = parse_response(raw_line)
-                if r is None:
-                    continue
-                if r.tag == "EVT" and r.tokens and r.tokens[0] == "safety_stop":
-                    vL, vR = _cmd()
-                    conn.send_fast(f"S {vL} {vR}")
-                    last_send = time.monotonic()
-                    continue
-                if r.tag == "TLM":
-                    tlm = parse_tlm(r.raw)
-                    if tlm is not None:
-                        # Raw OTOS (x, y) for the odom panel; None when the
-                        # frame carried no otos= (OTOS read invalid that tick).
-                        odom = (tlm.otos[0], tlm.otos[1], 0) if tlm.otos else None
-                        data_queue.put((time.monotonic(), tlm.vel, odom,
-                                        tlm.line, tlm.color))
+            t = time.monotonic()
+            left_state = dev_send(proto, f"DEV M {left_port} STATE", timeout=200)
+            right_state = dev_send(proto, f"DEV M {right_port} STATE", timeout=200)
 
-            now = time.monotonic()
-            if now - last_send >= KEEPALIVE_S:
-                vL, vR = _cmd()
-                conn.send_fast(f"S {vL} {vR}")
-                last_send = now
+            vl, vr = _kv_float(left_state, "vel"), _kv_float(right_state, "vel")
+            al, ar = _kv_float(left_state, "applied"), _kv_float(right_state, "applied")
+            pl, pr = _kv_float(left_state, "pos"), _kv_float(right_state, "pos")
+            wl = left_state.kv.get("wedged") if left_state else None
+            wr = right_state.kv.get("wedged") if right_state else None
+            cl = left_state.kv.get("conn") if left_state else None
+            cr = right_state.kv.get("conn") if right_state else None
+
+            if pos_baseline is None:
+                pos_baseline = (pl, pr)
+            dl = None if pl is None or pos_baseline[0] is None else pl - pos_baseline[0]
+            dr = None if pr is None or pos_baseline[1] is None else pr - pos_baseline[1]
+
+            data_queue.put((t, vl, vr, al, ar, dl, dr, wl, wr, cl, cr))
+
+            nvL, nvR = _cmd()
+            if (nvL, nvR) != (vL, vR):
+                dev_send(proto, f"DEV DT WHEELS {nvL} {nvR}", timeout=200)
+                vL, vR = nvL, nvR
+
+            time.sleep(poll_period)
 
     except OSError as exc:
-        if exc.errno == 6:
+        if getattr(exc, "errno", None) == 6:
             status_queue.put("DISCONNECTED — power cycle detected, press SPACE to reconnect")
         else:
             status_queue.put(f"ERROR: {exc}")
@@ -209,19 +233,71 @@ def _stream_worker(
         status_queue.put(f"ERROR: {exc}")
     finally:
         status_queue.put("STOPPED")
-        if conn is not None:
+        if proto is not None:
             try:
-                for _ in range(3):
-                    conn.send_fast("STOP")
-                    time.sleep(0.05)
-                from robot_radio.robot.protocol import NezhaProtocol
-                NezhaProtocol(conn).stream(0)
+                dev_send(proto, "DEV DT STOP")
+                dev_send(proto, "DEV STOP")
+                dev_send(proto, f"DEV WD {BOOT_WATCHDOG_WINDOW}")
             except Exception:
                 pass
+        if conn is not None:
             try:
                 conn.disconnect()
             except Exception:
                 pass
+
+
+# ---------------------------------------------------------------------------
+# --selftest — no hardware, no GUI: exercise parsing + math only.
+# ---------------------------------------------------------------------------
+
+def _run_selftest() -> int:
+    from robot_radio.robot.protocol import parse_response
+
+    checks: list[tuple[str, bool, str]] = []
+
+    def check(name: str, ok: bool, detail: str = "") -> None:
+        checks.append((name, ok, detail))
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f"  ({detail})" if detail else ""))
+
+    # 1. Ratio-target math at the extremes and centre.
+    check("ratio_targets balanced", ratio_targets(200, 0) == (200, 200))
+    check("ratio_targets full-right (vL->0)", ratio_targets(200, RATIO_STOPS) == (0, 200))
+    check("ratio_targets full-left (vR->0)", ratio_targets(200, -RATIO_STOPS) == (200, 0))
+    mid = ratio_targets(200, RATIO_STOPS // 2)
+    check("ratio_targets midpoint is between balanced and full-right",
+          0 < mid[0] < 200 and mid[1] == 200, str(mid))
+
+    # 2. DEV STATE reply parsing (the same shape the worker's dev_send() reads).
+    line = "OK DEV M 1 pos=123.4 vel=80.1 applied=0.28 wedged=0 conn=1"
+    r = parse_response(line)
+    check("parse_response reads DEV M STATE reply", r is not None and r.tag == "OK", str(r))
+    check("kv fields extracted",
+          r is not None and _kv_float(r, "vel") == 80.1 and _kv_float(r, "applied") == 0.28,
+          str(r.kv) if r else "")
+    check("wedged/conn tokens readable",
+          r is not None and r.kv.get("wedged") == "0" and r.kv.get("conn") == "1")
+
+    err_line = "ERR unsupported volt"
+    er = parse_response(err_line)
+    check("parse_response reads ERR reply", er is not None and er.tag == "ERR", str(er))
+
+    # 3. Moving-average / jitter math (the exact numpy calls _update() uses),
+    #    run against a synthetic velocity series.
+    import numpy as np
+    t = np.linspace(0, 8, 400)
+    v = 200 + 5 * np.sin(t * 3.0)   # noisy-ish synthetic wheel velocity
+    n200 = max(2, int(round(0.2 / max(1e-3, float(np.median(np.diff(t)))))))
+    k = np.ones(n200) / n200
+    ma = np.convolve(v, k, mode="same")
+    check("moving average shape matches input", ma.shape == v.shape)
+    rmse = np.sqrt(np.convolve((v - ma) ** 2, k, mode="same"))
+    check("jitter RMSE is finite and non-negative", bool(np.all(np.isfinite(rmse)) and np.all(rmse >= 0)))
+
+    passed = sum(1 for _, ok, _ in checks if ok)
+    total = len(checks)
+    print(f"\n{passed}/{total} selftest checks passed")
+    return 0 if passed == total else 1
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +306,9 @@ def _stream_worker(
 
 def main() -> int:
     args = _parse_args()
+
+    if args.selftest:
+        return _run_selftest()
 
     if args.port is None:
         from robot_radio.io.serial_conn import list_serial_ports
@@ -240,7 +319,8 @@ def main() -> int:
         port = ports[0]
     else:
         port = args.port
-    print(f"  port: {port}   speed: {args.speed} mm/s   window: {args.window} s")
+    print(f"  port: {port}   speed: {args.speed} mm/s   window: {args.window} s"
+          f"   DEV DT PORTS {args.left_port} {args.right_port}")
 
     # ---- headless diagnostic ----
     if args.headless is not None:
@@ -250,7 +330,8 @@ def main() -> int:
         stop_ev = threading.Event()
         th = threading.Thread(
             target=_stream_worker,
-            args=(port, cmd_box, data_q, stop_ev, status_q, args.sets, args.stream),
+            args=(port, cmd_box, data_q, stop_ev, status_q,
+                  args.left_port, args.right_port, args.poll_period),
             daemon=True,
         )
         th.start()
@@ -270,20 +351,21 @@ def main() -> int:
             time.sleep(0.1)
         stop_ev.set()
         th.join(timeout=3.0)
-        vel = [(t, v) for (t, v, *_rest) in samples if v is not None]
+        vel = [(t, s[0], s[1]) for (t, *s) in samples if s[0] is not None or s[1] is not None]
         print(f"\n  collected {len(samples)} samples ({len(vel)} with vel)")
         if vel:
             t0 = vel[0][0]
-            for ts, v in vel[::max(1, len(vel) // 30)]:
-                print(f"    t={ts - t0:5.2f}s  vL={v[0]:>5}  vR={v[1]:>5} mm/s")
-            vls = [v[0] for _, v in vel]
-            vrs = [v[1] for _, v in vel]
-            nz = sum(1 for _, v in vel if v[0] or v[1])
-            print(f"  vL range [{min(vls)}, {max(vls)}]  vR range [{min(vrs)}, {max(vrs)}]")
+            for ts, vl, vr in vel[::max(1, len(vel) // 30)]:
+                print(f"    t={ts - t0:5.2f}s  vL={vl}  vR={vr} mm/s")
+            vls = [v for _, v, _ in vel if v is not None]
+            vrs = [v for _, _, v in vel if v is not None]
+            nz = sum(1 for _, vl, vr in vel if vl or vr)
+            if vls and vrs:
+                print(f"  vL range [{min(vls)}, {max(vls)}]  vR range [{min(vrs)}, {max(vrs)}]")
             print(f"  nonzero: {nz}/{len(vel)}  "
                   + (">>> WHEELS DROVE" if nz else ">>> ALL ZERO"))
         else:
-            print("  no vel samples — check connection/fields")
+            print("  no vel samples — check connection")
         return 0
 
     print("  Keys: SPACE connect | 1-9 speed | 0 stop | LEFT/RIGHT wheel-ratio")
@@ -300,56 +382,49 @@ def main() -> int:
     plt.style.use("dark_background")
 
     window_s = args.window
-    maxlen   = int(window_s * 60)          # generous: up to 60 Hz of samples
+    maxlen = int(window_s * 60)          # generous: up to 60 Hz of samples
     # Speed map for keys 1..9: 1 = below dead-zone crawl, 9 = max wheel speed.
     SPEEDS = list(np.linspace(15, args.max_speed, 9).round().astype(int))
 
     # ---- shared command state (read by worker, written by key handler) ----
-    cmd_box   = [(args.speed, args.speed)]
+    cmd_box = [(args.speed, args.speed)]
     base_speed = [args.speed]              # mm/s magnitude
-    ratio_idx  = [0]                       # -RATIO_STOPS..+RATIO_STOPS
+    ratio_idx = [0]                         # -RATIO_STOPS..+RATIO_STOPS
 
     def _recompute_cmd():
-        b = base_speed[0]
-        frac = ratio_idx[0] / float(RATIO_STOPS)   # -1..+1
-        if frac >= 0:                              # toward right-wheel-only (vL→0)
-            vL, vR = b * (1.0 - frac), b
-        else:                                      # toward left-wheel-only (vR→0)
-            vL, vR = b, b * (1.0 + frac)
-        cmd_box[0] = (int(round(vL)), int(round(vR)))
+        cmd_box[0] = ratio_targets(base_speed[0], ratio_idx[0])
     _recompute_cmd()
 
     # ---- telemetry buffers ----
-    t_buf  = collections.deque(maxlen=maxlen)
+    t_buf = collections.deque(maxlen=maxlen)
     vL_buf = collections.deque(maxlen=maxlen)
     vR_buf = collections.deque(maxlen=maxlen)
-    px_buf = collections.deque(maxlen=maxlen)
-    py_buf = collections.deque(maxlen=maxlen)
-    col_buf = collections.deque(maxlen=maxlen)        # (r,g,b) floats 0..1
-    line_buf = collections.deque(maxlen=maxlen)       # (4,) raw ints
-    # carry-forward holders for fields missing on a given frame
-    last = {"vel": (0, 0), "pose": (0, 0, 0), "line": (0, 0, 0, 0),
-            "color": (0, 0, 0, 0)}
-    line_lo = [1e9, 1e9, 1e9, 1e9]
-    line_hi = [1.0, 1.0, 1.0, 1.0]
+    aL_buf = collections.deque(maxlen=maxlen)
+    aR_buf = collections.deque(maxlen=maxlen)
+    pL_buf = collections.deque(maxlen=maxlen)
+    pR_buf = collections.deque(maxlen=maxlen)
+    # carry-forward holders for fields missing on a given poll
+    last = {"vel": (0.0, 0.0), "applied": (0.0, 0.0), "pos": (0.0, 0.0),
+            "wedged": ("0", "0"), "conn": ("0", "0")}
 
-    data_queue   = queue.Queue()
+    data_queue = queue.Queue()
     status_queue = queue.Queue()
     worker_state = {"thread": None, "stop": None}
 
-    # ---- figure / layout ----
+    # ---- figure / layout (same shape as the old dashboard; contents swapped
+    # per the module docstring's panel notes) ----
     fig = plt.figure(figsize=(14, 9))
     title_text = fig.suptitle("Robot bench dashboard  [SPACE = connect]",
                               color="white", fontsize=12)
     gs = fig.add_gridspec(4, 2, width_ratios=[2.2, 1.0],
-                          height_ratios=[3.0, 1.6, 0.7, 0.9],
+                          height_ratios=[3.0, 1.6, 0.9, 0.7],
                           hspace=0.55, wspace=0.22)
-    ax_vel   = fig.add_subplot(gs[0, 0])
-    ax_jit   = fig.add_subplot(gs[1, 0], sharex=ax_vel)
-    ax_color = fig.add_subplot(gs[2, 0], sharex=ax_vel)
-    ax_line  = fig.add_subplot(gs[3, 0], sharex=ax_vel)
-    ax_phase = fig.add_subplot(gs[0:2, 1])
-    ax_odom  = fig.add_subplot(gs[2:4, 1])
+    ax_vel     = fig.add_subplot(gs[0, 0])
+    ax_jit     = fig.add_subplot(gs[1, 0], sharex=ax_vel)
+    ax_applied = fig.add_subplot(gs[2, 0], sharex=ax_vel)
+    ax_status  = fig.add_subplot(gs[3, 0])
+    ax_phase   = fig.add_subplot(gs[0:2, 1])
+    ax_pos     = fig.add_subplot(gs[2:4, 1])
 
     # velocity panel
     ax_vel.set_title("Wheel velocity (mm/s)", fontsize=10)
@@ -378,21 +453,23 @@ def main() -> int:
                            fontsize=8, color="white", va="top")
     ax_jit.legend(fontsize=7, loc="upper right", ncol=2)
 
-    # colour strip (imshow updated each frame)
-    ax_color.set_title("Colour under sensor (0x43)", fontsize=9)
-    ax_color.set_yticks([])
-    img_color = ax_color.imshow(np.zeros((1, 2, 3)), aspect="auto",
-                                extent=[window_s, 0, 0, 1], origin="lower",
-                                interpolation="nearest", vmin=0, vmax=1)
+    # applied-duty panel (replaces the old colour-sensor strip — see docstring)
+    ax_applied.set_title("Applied duty (fraction, DEV M STATE applied=)", fontsize=9)
+    ax_applied.set_ylabel("duty", fontsize=8)
+    ax_applied.set_xlim(window_s, 0)
+    ax_applied.set_ylim(-1.05, 1.05)
+    ax_applied.grid(True, alpha=0.3)
+    (ln_aL,) = ax_applied.plot([], [], color="deepskyblue", lw=1.2, label="aL")
+    (ln_aR,) = ax_applied.plot([], [], color="tomato",      lw=1.2, label="aR")
+    ax_applied.legend(fontsize=7, loc="upper right", ncol=2)
 
-    # line-sensor strip (4 channels, on/off)
-    ax_line.set_title("Line sensor 0x1A — 4 ch on/off (adaptive thresh)", fontsize=9)
-    ax_line.set_xlabel("seconds ago", fontsize=8)
-    ax_line.set_yticks([0.5, 1.5, 2.5, 3.5])
-    ax_line.set_yticklabels(["c0", "c1", "c2", "c3"], fontsize=7)
-    img_line = ax_line.imshow(np.zeros((4, 2)), aspect="auto",
-                              extent=[window_s, 0, 0, 4], origin="lower",
-                              interpolation="nearest", cmap="inferno", vmin=0, vmax=1)
+    # status strip (replaces the old 4-channel line-sensor strip — see docstring)
+    ax_status.set_title("Status (wedged / conn)", fontsize=9)
+    ax_status.set_xlabel("seconds ago", fontsize=8)
+    ax_status.set_xticks([])
+    ax_status.set_yticks([])
+    status_text = ax_status.text(0.02, 0.5, "", transform=ax_status.transAxes,
+                                 fontsize=9, color="white", va="center", family="monospace")
 
     # phase plot
     lim = args.max_speed + 40
@@ -425,15 +502,15 @@ def main() -> int:
                             [-lim * dR / md, lim * dR / md])
     _update_ratio_line()
 
-    # odometry
-    ax_odom.set_title("OTOS raw position (mm)", fontsize=10)
-    ax_odom.set_xlabel("seconds ago", fontsize=8)
-    ax_odom.set_ylabel("mm", fontsize=8)
-    ax_odom.set_xlim(window_s, 0)
-    ax_odom.grid(True, alpha=0.3)
-    (ln_px,) = ax_odom.plot([], [], color="limegreen", lw=1.2, label="x")
-    (ln_py,) = ax_odom.plot([], [], color="violet",    lw=1.2, label="y")
-    ax_odom.legend(fontsize=7, loc="upper left", ncol=2)
+    # position-delta panel (replaces the old OTOS-odometry panel — see docstring)
+    ax_pos.set_title("Position Δ since connect (deg, DEV M STATE pos=)", fontsize=10)
+    ax_pos.set_xlabel("seconds ago", fontsize=8)
+    ax_pos.set_ylabel("deg", fontsize=8)
+    ax_pos.set_xlim(window_s, 0)
+    ax_pos.grid(True, alpha=0.3)
+    (ln_pL,) = ax_pos.plot([], [], color="limegreen", lw=1.2, label="L")
+    (ln_pR,) = ax_pos.plot([], [], color="violet",    lw=1.2, label="R")
+    ax_pos.legend(fontsize=7, loc="upper left", ncol=2)
 
     # ---- key handler ----
     def _start_worker():
@@ -441,8 +518,8 @@ def main() -> int:
         worker_state["stop"] = stop_ev
         worker_state["thread"] = threading.Thread(
             target=_stream_worker,
-            args=(port, cmd_box, data_queue, stop_ev, status_queue, args.sets,
-                  args.stream),
+            args=(port, cmd_box, data_queue, stop_ev, status_queue,
+                  args.left_port, args.right_port, args.poll_period),
             daemon=True,
         )
         worker_state["thread"].start()
@@ -484,72 +561,70 @@ def main() -> int:
         k = np.ones(n) / n
         return np.convolve(v, k, mode="same")
 
-    # ---- update ----
     def _safe_set(line, x, y):
         # Trim x and y to the SAME (shortest) length before set_data(). The
         # worker thread appends to the plot deques while we read them here, so
         # a single time-series can still be momentarily 1 sample out of step
         # even after the n=min snapshot below — and matplotlib crashes when it
-        # later recaches a line whose x/y lengths differ. Mirror of the guard
-        # in robot_radio/testkit/dash.py::_redraw.
+        # later recaches a line whose x/y lengths differ.
         m = min(len(x), len(y))
         line.set_data(x[-m:], y[-m:])
 
+    # ---- update ----
     def _update():
         while not status_queue.empty():
             msg = status_queue.get_nowait()
             if msg.startswith("RUNNING"):
                 title_text.set_text(f"Robot bench dashboard  ▶ {msg}")
-            elif msg.startswith(("DISCONNECTED", "ERROR")):
+            elif msg.startswith(("DISCONNECTED", "ERROR", "FAILED")):
                 title_text.set_text(f"Robot bench dashboard  ⚠ {msg}  [SPACE=retry]")
 
         try:
             while True:
-                t, vel, pose, line, color = data_queue.get_nowait()
-                if vel is not None:
-                    last["vel"] = vel
-                if pose is not None:
-                    last["pose"] = pose
-                if line is not None:
-                    last["line"] = line
-                if color is not None:
-                    last["color"] = color
+                t, vl, vr, al, ar, dl, dr, wl, wr, cl, cr = data_queue.get_nowait()
+                if vl is not None or vr is not None:
+                    last["vel"] = (vl if vl is not None else last["vel"][0],
+                                    vr if vr is not None else last["vel"][1])
+                if al is not None or ar is not None:
+                    last["applied"] = (al if al is not None else last["applied"][0],
+                                        ar if ar is not None else last["applied"][1])
+                if dl is not None or dr is not None:
+                    last["pos"] = (dl if dl is not None else last["pos"][0],
+                                    dr if dr is not None else last["pos"][1])
+                if wl is not None or wr is not None:
+                    last["wedged"] = (wl if wl is not None else last["wedged"][0],
+                                       wr if wr is not None else last["wedged"][1])
+                if cl is not None or cr is not None:
+                    last["conn"] = (cl if cl is not None else last["conn"][0],
+                                     cr if cr is not None else last["conn"][1])
                 t_buf.append(t)
                 vL_buf.append(last["vel"][0])
                 vR_buf.append(last["vel"][1])
-                px_buf.append(last["pose"][0])
-                py_buf.append(last["pose"][1])
-                # reconstruct colour (assume channel order R,G,B,C)
-                c = last["color"]
-                m = max(c[0], c[1], c[2], 1)
-                col_buf.append((min(c[0] / m, 1.0), min(c[1] / m, 1.0),
-                                min(c[2] / m, 1.0)))
-                ln = last["line"][:4]
-                for i in range(4):
-                    line_lo[i] = min(line_lo[i], ln[i])
-                    line_hi[i] = max(line_hi[i], ln[i])
-                line_buf.append(tuple(ln))
+                aL_buf.append(last["applied"][0])
+                aR_buf.append(last["applied"][1])
+                pL_buf.append(last["pos"][0])
+                pR_buf.append(last["pos"][1])
         except queue.Empty:
             pass
 
         # update commanded markers (in case ratio changed)
         phase_cmd.set_data([cmd_box[0][0]], [cmd_box[0][1]])
-        title_text.set_text(title_text.get_text())  # keep
         ax_vel.set_title(
             f"Wheel velocity (mm/s)   cmd L={cmd_box[0][0]} R={cmd_box[0][1]}"
             f"   speed={base_speed[0]}  ratio={ratio_idx[0]:+d}/{RATIO_STOPS}",
             fontsize=10)
+        status_text.set_text(
+            f"wedged  L={last['wedged'][0]}  R={last['wedged'][1]}\n"
+            f"conn    L={last['conn'][0]}  R={last['conn'][1]}")
 
         if not t_buf:
             return
 
-        # Snapshot the buffers to a COMMON length first. The worker thread
-        # appends to these deques while we read them here, so they can be
-        # momentarily unequal — and matplotlib crashes when an x/y pair given
-        # to set_data() has mismatched lengths. Slice all to the shortest.
+        # Snapshot the buffers to a COMMON length first (see _safe_set's note).
         tl, vll, vrl = list(t_buf), list(vL_buf), list(vR_buf)
-        pxl, pyl = list(px_buf), list(py_buf)
-        n = min(len(tl), len(vll), len(vrl), len(pxl), len(pyl))
+        all_, arl = list(aL_buf), list(aR_buf)
+        pll, prl = list(pL_buf), list(pR_buf)
+        n = min(len(tl), len(vll), len(vrl), len(all_), len(arl), len(pll), len(prl))
         if n < 1:
             return
         t_arr = np.array(tl[-n:])
@@ -557,11 +632,15 @@ def main() -> int:
         age = now - t_arr            # 0 = newest (right edge), grows to the left
         vl = np.array(vll[-n:], dtype=float)
         vr = np.array(vrl[-n:], dtype=float)
-        px_arr = np.array(pxl[-n:], dtype=float)
-        py_arr = np.array(pyl[-n:], dtype=float)
+        al = np.array(all_[-n:], dtype=float)
+        ar = np.array(arl[-n:], dtype=float)
+        pl_arr = np.array(pll[-n:], dtype=float)
+        pr_arr = np.array(prl[-n:], dtype=float)
 
         _safe_set(ln_vL, age, vl)
         _safe_set(ln_vR, age, vr)
+        _safe_set(ln_aL, age, al)
+        _safe_set(ln_aR, age, ar)
 
         # 200 ms moving average + rolling RMSE jitter metric. Measured at the
         # 1 s-ago mark (MEASURE_AGE) where the averaging window is fully settled
@@ -584,34 +663,18 @@ def main() -> int:
             top = max(8.0, float(np.nanmax(np.concatenate([rmsL, rmsR]))) * 1.2)
             ax_jit.set_ylim(0, top)
 
-        # colour strip (columns oldest→newest; extent maps to age, newest at 0)
-        if col_buf:
-            cimg = np.array(col_buf, dtype=float).reshape(1, -1, 3)
-            img_color.set_data(cimg)
-            img_color.set_extent([age[0], age[-1], 0, 1])
-
-        # line strip — adaptive midpoint threshold per channel → on/off
-        if line_buf:
-            larr = np.array(line_buf, dtype=float)          # (N,4)
-            on = np.zeros((4, larr.shape[0]))
-            for i in range(4):
-                mid = (line_lo[i] + line_hi[i]) / 2.0
-                on[i] = (larr[:, i] > mid).astype(float)
-            img_line.set_data(on)
-            img_line.set_extent([age[0], age[-1], 0, 4])
-
         # phase
         _safe_set(phase_trace, vl, vr)
         phase_dot.set_data([vl[-1]], [vr[-1]])
 
-        # odometry
-        _safe_set(ln_px, age, px_arr)
-        _safe_set(ln_py, age, py_arr)
-        pmin = min(px_arr.min(), py_arr.min())
-        pmax = max(px_arr.max(), py_arr.max())
+        # position delta
+        _safe_set(ln_pL, age, pl_arr)
+        _safe_set(ln_pR, age, pr_arr)
+        pmin = min(pl_arr.min(), pr_arr.min())
+        pmax = max(pl_arr.max(), pr_arr.max())
         if pmax > pmin:
             pad = 0.1 * (pmax - pmin) + 5
-            ax_odom.set_ylim(pmin - pad, pmax + pad)
+            ax_pos.set_ylim(pmin - pad, pmax + pad)
 
     plt.ion()
     plt.show(block=False)

@@ -10,7 +10,7 @@ existing firmware member corresponds to them; they will be introduced in Phase 2
 Fields annotated **(shared type)** are common value types defined by the message
 schema itself rather than a single firmware member.
 
-**Coverage: 204/204 fields mapped (47 new, 0 missing)**
+**Coverage: 210/210 fields mapped (42 new, 0 missing)**
 
 | Proto file | Message | Field | C++ type | Maps to existing |
 |---|---|---|---|---|
@@ -66,6 +66,8 @@ schema itself rather than a single firmware member.
 | drivetrain.proto | DrivetrainState | otos | ValueSet | ActualState::otos (ValueSet) |
 | drivetrain.proto | DrivetrainState | wheel_wedged | bool[4] | (new field — wheel-stall flag, not yet in ActualState) |
 | drivetrain.proto | DrivetrainState | connected | bool | (new field — drivetrain connected flag, not in ActualState) |
+| drivetrain.proto | DrivetrainState | otos_status | uint32_t | Drive::_lastOtosStatus (subsystems/drive/Drive.h, 074-004) |
+| drivetrain.proto | DrivetrainState | otos_fusion_blocked | bool | Drive::_otosFusionBlocked (subsystems/drive/Drive.h, 074-004) |
 | drivetrain.proto | DrivetrainConfig | fwd_sign_l | int32_t | RobotConfig::fwdSignL |
 | drivetrain.proto | DrivetrainConfig | fwd_sign_r | int32_t | RobotConfig::fwdSignR |
 | drivetrain.proto | DrivetrainConfig | travel_calib_l | float | RobotConfig::wheelTravelCalibL |
@@ -121,6 +123,7 @@ schema itself rather than a single firmware member.
 | motor.proto | MotorCommand | position | float | portable-motor-interface: POSITION verb / IPositionMotor::setAngleDeg() |
 | motor.proto | MotorCommand | neutral | Neutral | portable-motor-interface: NEUTRAL verb (BRAKE/COAST) / OutputState::pwm[] |
 | motor.proto | MotorCommand | feedforward | Opt<float> | RobotConfig::velKff (feed-forward coefficient in vel loop) |
+| motor.proto | MotorCommand | reset_position | Opt<bool> | (new field — zero the encoder this tick, Motor::resetPosition(), 077-002) |
 | motor.proto | MotorState | connected | bool | (new field — motor I2C connected flag, via IBusDiagnostics::errorCount()) |
 | motor.proto | MotorState | position | Opt<float> | IVelocityMotor::positionMm() / ActualState::encMm[] |
 | motor.proto | MotorState | velocity | Opt<float> | IVelocityMotor::velocityMmps() / ActualState::velMms[] |
@@ -128,7 +131,15 @@ schema itself rather than a single firmware member.
 | motor.proto | MotorState | wedged | Opt<bool> | (new field — motor stall flag, related to IBusDiagnostics wedge detection) |
 | motor.proto | MotorConfig | travel_calib | float | RobotConfig::{wheelTravelCalibL,wheelTravelCalibR} (per-motor, indexed by channel) |
 | motor.proto | MotorConfig | fwd_sign | int32_t | RobotConfig::{fwdSignL,fwdSignR} (per-motor, indexed by channel) |
-| motor.proto | MotorCapabilities | onboard_position | bool | (new field — position-motor capability flag, Phase 2) |
+| motor.proto | MotorConfig | vel_gains | Gains | RobotConfig::{velKp,velKi,velKff,velIMax,velKaw} (per-motor velocity loop, moved from DrivetrainConfig) |
+| motor.proto | MotorConfig | vel_filt_alpha | float | RobotConfig::velFiltAlpha (moved from DrivetrainConfig, now per-motor) |
+| motor.proto | MotorConfig | min_duty | float | RobotConfig::minWheelSpeed (stiction floor, moved from DrivetrainConfig.min_wheel, now duty-domain) |
+| motor.proto | MotorConfig | slew_rate | float | hal/real/MotorSlew.h clampStep() kMaxDeltaPwmPerWrite (duty slew limit) |
+| motor.proto | MotorConfig | port | uint32_t | (new field — Nezha motor port 1..4, identity moved from class to Config, 077-002) |
+| motor.proto | MotorCapabilities | duty_cycle | bool | (new field — duty-cycle control mode capability flag) |
+| motor.proto | MotorCapabilities | voltage | bool | (new field — voltage control mode capability flag; false on Nezha) |
+| motor.proto | MotorCapabilities | velocity | bool | (new field — velocity control mode capability flag; true on Nezha) |
+| motor.proto | MotorCapabilities | position | bool | (new field — onboard position-move capability flag, Nezha 0x5D) |
 | motor.proto | MotorCapabilities | has_encoder | bool | (new field — encoder capability flag, Phase 2) |
 | planner.proto | StopCondition | kind | StopKind | StopCondition::Kind (control/StopCondition.h) |
 | planner.proto | StopCondition | a | float | StopCondition::a (primary param: time ms / distance mm / heading rad / sensor threshold) |
@@ -196,16 +207,14 @@ schema itself rather than a single firmware member.
 | ports.proto | PortState | analog_in | int32_t[4] | ActualState::analogIn[4] |
 | ports.proto | PortState | stamp | ValueSet | ActualState::portsVS (ValueSet) |
 | ports.proto | PortConfig | lag_ports | uint32_t | RobotConfig::lagPorts |
-| ports.proto | PortConfig | direction | uint32_t[4] | (new field — per-port direction bitmap, not in RobotConfig) |
 | sensors.proto | LineSensorState | raw | uint32_t[4] | ActualState::line[4] (raw ADC values) |
 | sensors.proto | LineSensorState | normalized | uint32_t[4] | (new field — normalized line values, not yet split in ActualState) |
 | sensors.proto | LineSensorState | stamp | ValueSet | ActualState::lineVS (ValueSet) |
 | sensors.proto | LineSensorState | connected | bool | (new field — line sensor connected flag, capability query) |
 | sensors.proto | LineSensorConfig | lag_line | uint32_t | RobotConfig::lagLine |
-| sensors.proto | LineSensorConfig | threshold | uint32_t | (new field — binarization threshold, not in RobotConfig) |
-| sensors.proto | LineSensorConfig | norm_min | uint32_t | (new field — normalization minimum, not in RobotConfig) |
-| sensors.proto | LineSensorConfig | norm_max | uint32_t | (new field — normalization maximum, not in RobotConfig) |
-| sensors.proto | LineSensorConfig | channel_map | uint32_t[4] | (new field — channel remapping table, not in RobotConfig) |
+| sensors.proto | LineSensorConfig | cal_min | uint32_t[4] | hal/real/LineSensor.h LineSensor::_calMin[4] (captureCalibMin()) |
+| sensors.proto | LineSensorConfig | cal_max | uint32_t[4] | hal/real/LineSensor.h LineSensor::_calMax[4] (captureCalibMax()) |
+| sensors.proto | LineSensorConfig | filt_alpha | float | hal/real/LineSensor.h LineSensor::_alpha (setSmoothingAlpha()) |
 | sensors.proto | ColorSensorState | r | uint32_t | ActualState::colorR |
 | sensors.proto | ColorSensorState | g | uint32_t | ActualState::colorG |
 | sensors.proto | ColorSensorState | b | uint32_t | ActualState::colorB |
@@ -213,8 +222,5 @@ schema itself rather than a single firmware member.
 | sensors.proto | ColorSensorState | stamp | ValueSet | ActualState::colorVS (ValueSet) |
 | sensors.proto | ColorSensorState | connected | bool | (new field — color sensor connected flag, capability query) |
 | sensors.proto | ColorSensorConfig | lag_color | uint32_t | RobotConfig::lagColor |
-| sensors.proto | ColorSensorConfig | integration | uint32_t | (new field — integration time register, not in RobotConfig) |
-| sensors.proto | ColorSensorConfig | gain | uint32_t | (new field — sensor gain register, not in RobotConfig) |
-| sensors.proto | ColorSensorConfig | cal_r | float | (new field — color calibration scale R, not in RobotConfig) |
-| sensors.proto | ColorSensorConfig | cal_g | float | (new field — color calibration scale G, not in RobotConfig) |
-| sensors.proto | ColorSensorConfig | cal_b | float | (new field — color calibration scale B, not in RobotConfig) |
+| sensors.proto | ColorSensorConfig | integration | uint32_t | hal/real/ColorSensor.cpp initApds() ATIME write 0x81 (APDS9960 fallback only) |
+| sensors.proto | ColorSensorConfig | gain | uint32_t | hal/real/ColorSensor.cpp initApds() CONTROL write 0x8F (APDS9960 fallback only) |

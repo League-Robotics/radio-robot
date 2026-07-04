@@ -1,0 +1,243 @@
+#include "MicroBit.h"
+#include "Robot.h"
+#include "NezhaHAL.h"
+#include "CommandProcessor.h"
+#include "LoopScheduler.h"
+#include "Communicator.h"
+#include "Config.h"
+#include "Icons.h"
+#include "RadioChannel.h"
+#include "DebugCommands.h"
+
+// ---------------------------------------------------------------------------
+// MicroBit uBit singleton — file-scope so CODAL peripherals are fully
+// initialised before any device is constructed in main().
+// ---------------------------------------------------------------------------
+static MicroBit uBit;
+
+// ---------------------------------------------------------------------------
+// bootSelectRadioChannel — resolve the radio channel at boot, with display.
+//
+// Loads the persisted channel (default 0), shown as a single base-36 character
+// (0-9 then A-Z, so channel 10 = 'A').
+//
+//   * Normal boot (A+B not both held): flash the channel character briefly,
+//     then the heart. Returns the stored channel unchanged.
+//   * Edit boot (hold A+B at power-on): the channel character stays on the LED
+//     while you press A (−1) / B (+1); each press updates the character in
+//     place (clamped 0..35). After ~5 s with no input it saves if changed,
+//     flashes a checkmark, then shows the heart.
+//
+// The `RF` command (USB serial) is the precise/scripted path. Either way the
+// display ends on the boot heart.
+// ---------------------------------------------------------------------------
+static int bootSelectRadioChannel(MicroBit& uBit)
+{
+    int channel = radiochan::load(uBit.storage);
+
+    // Enter edit mode only when BOTH buttons are held at boot. Any other case
+    // (nothing held, or a single button) is a normal boot: flash the channel
+    // character, then the heart.
+    if (!(uBit.buttonA.isPressed() && uBit.buttonB.isPressed())) {
+        uBit.display.printCharAsync(radiochan::toChar(channel));
+        uBit.sleep(900);
+        uBit.display.printAsync(icons::boot());
+        return channel;
+    }
+
+    // Edit mode — show the channel statically and keep it on as buttons change it.
+    const int original = channel;
+    uBit.display.printCharAsync(radiochan::toChar(channel));
+
+    // Wait for the boot-held button(s) to be released before honoring input.
+    // Otherwise holding A or B (or A+B) to ENTER edit mode is immediately read
+    // as a step or as the A+B confirm, and we exit before you can adjust.
+    while (uBit.buttonA.isPressed() || uBit.buttonB.isPressed()) {
+        uBit.sleep(20);
+    }
+
+    bool prevA = false, prevB = false;        // buttons are now released
+    uint32_t lastInputMs = uBit.systemTime(); // start the idle timer after release
+
+    while (uBit.systemTime() - lastInputMs < 5000) {
+        bool a = uBit.buttonA.isPressed();
+        bool b = uBit.buttonB.isPressed();
+
+        // Confirm + exit on a simultaneous A+B press.
+        if (a && b) {
+            break;
+        }
+        // Rising-edge detect so one press = one step; redraw the character in place.
+        if (a && !prevA) {
+            channel = radiochan::clamp(channel - 1);
+            uBit.display.printCharAsync(radiochan::toChar(channel));
+            lastInputMs = uBit.systemTime();
+        } else if (b && !prevB) {
+            channel = radiochan::clamp(channel + 1);
+            uBit.display.printCharAsync(radiochan::toChar(channel));
+            lastInputMs = uBit.systemTime();
+        }
+        prevA = a;
+        prevB = b;
+        uBit.sleep(20);
+    }
+
+    if (channel != original) {
+        radiochan::save(uBit.storage, channel);
+    }
+    // Confirm: flash a checkmark, then settle on the heart.
+    uBit.display.printAsync(icons::tick());
+    uBit.sleep(900);
+    uBit.display.printAsync(icons::boot());
+    return channel;
+}
+
+// ---------------------------------------------------------------------------
+// serialReply — thin adapter used for the boot HELLO banner.
+// ---------------------------------------------------------------------------
+static void serialReply(const char* msg, void* ctx)
+{
+    static_cast<SerialPort*>(ctx)->send(msg);
+}
+
+// ---------------------------------------------------------------------------
+// main — construct all devices, call begin() explicitly, then run the single
+// cooperative loop.
+//
+// Device ordering:
+//   1. uBit.init() — all CODAL peripherals ready.
+//   2. Static RobotConfig cfg — Motor constructors need fwdSign values.
+//   3. Device singletons — each holds a reference to the CODAL bus/pin.
+//   4. Communicator — begin() enables serial and radio.
+//   5. Sensor begin() calls — straight-line, before the loop.
+//      Comment a line out to disable that sensor; its task skips via
+//      is_initialized() on every subsequent read.
+//   6. Robot — built from its devices; owns config, state, and controllers.
+//   7. CommandProcessor / LoopScheduler — wired and started.
+//
+// Sensor detection rationale:
+//   * NOT in the Robot constructor — detecting that early reads the line/color
+//     chips before they have powered up and wedges the I2C bus.
+//   * NOT inside the loop — the per-sensor retries would freeze the loop.
+//   A short settle delay gives the sensors time to power up; each begin()
+//   internally retries until the chip answers (mirrors the old firmware).
+// ---------------------------------------------------------------------------
+int main() {
+    uBit.init();
+
+    // Radio channel: load persisted channel (default 0); hold A/B at boot to
+    // edit it. Resolved BEFORE the radio starts so it comes up on the right band.
+    // Flashes the channel character then the heart (handles its own display).
+    int rfChannel = bootSelectRadioChannel(uBit);
+
+    // -----------------------------------------------------------------------
+    // 2. Config (needed by Motor constructor for fwdSign values).
+    // -----------------------------------------------------------------------
+    static RobotConfig cfg = defaultRobotConfig();
+
+    // -----------------------------------------------------------------------
+    // 3. Hardware HAL — owns the I2CBus and all seven device objects.
+    //
+    // NezhaHAL wraps I2CBus (between uBit.i2c and every device) so per-device
+    // transaction counts, error rates, and re-entrancy violations remain
+    // observable via the DBG I2C command (ticket 015-003).
+    // -----------------------------------------------------------------------
+
+    // I2C bus speed — 100 kHz, set explicitly.
+    //
+    // 100 kHz is also the CODAL default for this EXTERNAL bus: the NRF52I2C
+    // constructor (via redirect()) programs TWIM to 100 kHz, and it is what
+    // MakeCode/pxt runs the Nezha at. (The 400 kHz call in MicroBit::init()
+    // is the INTERNAL sensor bus _i2c, not the edge connector.) The explicit
+    // set is kept as a guard because DBG WEDGE retunes the bus at runtime and
+    // must restore this value on exit — see WedgeTest.cpp.
+    //
+    // The Nezha V2 motor controller's encoder readback (0x46) latches —
+    // freezes at a constant while the wheels keep spinning. ROOT CAUSE
+    // (wedgelab, 2026-07-04): an immediate drive-direction REVERSAL written
+    // under way (including the PID's sign-dither micro-reversals at decel
+    // stops). Bus speed is NOT causal (25/100 kHz both wedged historically;
+    // the old "400 kHz" claim was a garble), and write rate/interleave is
+    // NOT causal (disproven in the lab). 100 kHz is kept because it is the
+    // CODAL default and the vendor-habitat speed. Proven fix (pending
+    // ticket): >=50 ms commanded-zero dwell across any sign change.
+    // See docs/knowledge/2026-07-04-encoder-latch-reversal-write-train.md.
+    uBit.i2c.setFrequency(100000);
+
+    // To build for mecanum: replace NezhaHAL with MecanumHAL and update IKinematics.h
+    static NezhaHAL hardware(uBit.i2c, uBit.io, cfg);
+
+    // -----------------------------------------------------------------------
+    // 4. Communications — begin() enables serial + radio.
+    // -----------------------------------------------------------------------
+    static Communicator comm(uBit.serial, uBit.radio, uBit.messageBus);
+    comm.begin(rfChannel);
+
+    // -----------------------------------------------------------------------
+    // 5. Device initialisation — NezhaHAL::begin() calls otos, line, color
+    //    begin().  Comment individual lines inside NezhaHAL::begin() to
+    //    disable a sensor; is_initialized() gates each read task.
+    // -----------------------------------------------------------------------
+    // Settle so the sensors have time to power up before begin() probes them.
+    uBit.sleep(1500);
+    hardware.begin();
+
+    // OTOS (mandatory) detection is occasionally lost to a transient nRF52 TWIM
+    // glitch on its single boot probe, leaving the sensor "nodev" until the next
+    // power cycle even though the encoder bus is healthy. Retry the probe a few
+    // times with a short settle so one bad read self-recovers at boot.
+    for (int i = 0; i < 10 && !hardware.otos().is_initialized(); ++i) {
+        uBit.sleep(50);
+        hardware.otos().begin();
+    }
+
+    // -----------------------------------------------------------------------
+    // 6. Robot — built from HAL; owns config, state, and controllers.
+    //    No direct i2c/serial/radio/MicroBit refs — fully encapsulated by
+    //    NezhaHAL and the device objects it owns.
+    // -----------------------------------------------------------------------
+    static Robot robot(hardware, cfg);
+
+    // -----------------------------------------------------------------------
+    // 7. Run the cooperative main loop — never returns.
+    //
+    // Initialisation order:
+    //   cmd   needs the full command table, including DBG descriptors.
+    //   sched needs cmd& (reference, so cmd must exist first).
+    //   dbgCmd needs &sched.
+    //
+    // Resolution: build cmd without DBG first, construct sched + dbgCmd,
+    // then replace cmd with the full table.  std::vector makes the
+    // re-assignment safe — no shared static buffer.
+    // -----------------------------------------------------------------------
+
+    // Phase 1 — all commands except DBG/I2CW/I2CR.
+    static CommandProcessor cmd(robot.buildCommandTable());
+    cmd.setSerialReply(serialReply, &comm.serial());
+
+    // Phase 2 — LoopScheduler and DebugCommands are now constructable.
+    static LoopScheduler sched(robot, cmd, comm, uBit);
+    // 044-003 (Phase F): DbgCtx now carries two capability pointers instead of
+    // the vendor I2CBus* — busDiag (IBusDiagnostics) for DBG I2C/I2CLOG/IRQGUARD
+    // and busAccess (IRawBusAccess) for I2CW/I2CR — sealing the final vendor leak.
+    static DbgCtx dbgCtx = { &sched, &hardware.busDiagnostics(),
+                             &hardware.rawBusAccess(), &robot };
+    static DebugCommands dbgCmd(dbgCtx);
+
+    // Phase 3 — replace cmd with the full table including DBG descriptors.
+    cmd = CommandProcessor(robot.buildCommandTable(&dbgCmd, &sched));
+    cmd.setSerialReply(serialReply, &comm.serial());
+
+    // DEVICE: identification banner once at boot over serial.
+    cmd.process("HELLO", serialReply, &comm.serial());
+
+    // Wire the bus-diagnostics capability and EVT sink into MotorController so
+    // enc_wedged events are emitted with bus stats and go to the active
+    // serial/radio channel (039-001: capability-typed, was setI2CBus).
+    robot.motorController.setBusDiagnostics(&hardware.busDiagnostics());
+    robot.motorController.setEvtSink(&sched.activeFn, &sched.activeCtx);
+
+    sched.run_blocks();
+
+    return 0;
+}

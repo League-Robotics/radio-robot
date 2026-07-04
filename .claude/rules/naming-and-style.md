@@ -13,8 +13,9 @@
    semantic, not units, and are fine: `x_b` (body frame), `velocity_b`.
 
 3. **CamelCase, Google's case rules overridden.** The project follows the Google
-   C++ Style Guide (vendored, with inline override banners, at
-   `docs/reference/google-cppguide.html`) EXCEPT naming case:
+   C++ Style Guide (condensed, with the overrides applied inline, at
+   `docs/reference/google-cppguide-condensed.md` — the operative reference)
+   EXCEPT naming case:
    - **Capitalize the first letter, including all letters in an acronym, in a
      class, struct, protocol, or namespace name**: `Motor`, `HTTPServer`,
      `namespace Hal`.
@@ -25,7 +26,10 @@
    - Class data members keep the trailing underscore (`lastPosition_`).
      Mathematical subscripts keep their underscore (`v_x`, `x_b`) — notation,
      not word separation. Filenames stay snake_case. Generated
-     `source/messages/*` exempt.
+     `source/messages/*` files are never hand-edited, but the generator
+     (`scripts/gen_messages.py`) must emit conforming API — its trivial
+     `get_*` accessors are slated for removal after sprint 077
+     (`clasi/issues/remove-generated-get-accessors.md`).
 
 4. **Edge (command-out) types are named by their endpoints**:
    `<Producer>To<Consumer>Command` — e.g. `DrivetrainToMotorCommand` for what the

@@ -1,243 +1,266 @@
-#include "MicroBit.h"
-#include "Robot.h"
-#include "NezhaHAL.h"
-#include "CommandProcessor.h"
-#include "LoopScheduler.h"
-#include "Communicator.h"
-#include "Config.h"
-#include "Icons.h"
-#include "RadioChannel.h"
-#include "DebugCommands.h"
+// ---------------------------------------------------------------------------
+// main.cpp -- the dev loop (077-005): comms poll -> HAL tick -> (if bound)
+// Drivetrain tick/apply -> bound-motor tick -> serial-silence watchdog check.
+//
+// This supersedes 077-001/003/004's smoke wiring: the DEV command family
+// (commands/dev_commands.*) is now registered alongside the liveness family
+// (system_commands.*), and the HAL/Drivetrain instances built here are
+// actually driven by DEV M / DEV DT rather than sitting untouched.
+//
+// Loop shape matches the locked sketch in clasi/sprints/077-greenfield-
+// faceplate-hal-drivetrain-and-dev-bench-system/issues/greenfield-rebuild-
+// faceplate-hal-in-a-fresh-source-old-tree-parked.md, Step 5, exactly:
+//
+//   pollComms();                  // dispatch DEV/PING via CommandProcessor
+//   hal.tick(now);                // split-phase encoder schedule, all 4 ports
+//   if (drivetrainActive) {
+//       auto out = drivetrain.tick(now, left.state(), right.state());
+//       left.apply(out.left);
+//       right.apply(out.right);
+//   }
+//   left.tick(now);                // staged commands execute (PID runs here)
+//   right.tick(now);
+//   watchdog.check(now);          // silence -> all neutral
+//
+// `left`/`right` are whichever two NezhaMotors DEV DT PORTS last bound
+// (DevLoopState::leftPort/rightPort, default 1/2) -- this loop never
+// hardcodes which ports they are. Note the bound pair is ticked TWICE per
+// iteration (once inside hal.tick()'s uniform 4-port sweep, once more
+// explicitly here) so a freshly drivetrain-governed target actuates in the
+// SAME cycle it was computed, rather than waiting for next iteration's
+// hal.tick() -- this is the locked shape, not an oversight.
+//
+// Build gating: the DEV family (and the HAL/Drivetrain wiring it needs) is
+// compiled in only when ROBOT_DEV_BUILD is set (codal.json's "config"
+// object; see dev_commands.h's file header for the full rationale). This
+// sprint's codal.json sets it to 1 for this tree -- there is no production
+// loop yet, so the #else branch below is a minimal liveness-only fallback
+// (PING/VER/HELP/ECHO/ID, no HAL) proving the gate is a real fork, not
+// decoration.
+// ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// MicroBit uBit singleton — file-scope so CODAL peripherals are fully
-// initialised before any device is constructed in main().
-// ---------------------------------------------------------------------------
+#include "MicroBit.h"
+#include "communicator.h"
+#include "radio_channel.h"
+#include "commands/command_processor.h"
+#include "commands/system_commands.h"
+
+#if ROBOT_DEV_BUILD
+#include "com/i2c_bus.h"
+#include "hal/nezha/nezha_hal.h"
+#include "subsystems/drivetrain.h"
+#include "commands/dev_commands.h"
+#include "messages/motor.h"
+#include "messages/drivetrain.h"
+#include <vector>
+#endif
+
 static MicroBit uBit;
 
 // ---------------------------------------------------------------------------
-// bootSelectRadioChannel — resolve the radio channel at boot, with display.
-//
-// Loads the persisted channel (default 0), shown as a single base-36 character
-// (0-9 then A-Z, so channel 10 = 'A').
-//
-//   * Normal boot (A+B not both held): flash the channel character briefly,
-//     then the heart. Returns the stored channel unchanged.
-//   * Edit boot (hold A+B at power-on): the channel character stays on the LED
-//     while you press A (−1) / B (+1); each press updates the character in
-//     place (clamped 0..35). After ~5 s with no input it saves if changed,
-//     flashes a checkmark, then shows the heart.
-//
-// The `RF` command (USB serial) is the precise/scripted path. Either way the
-// display ends on the boot heart.
+// serialReply / radioReply -- reply adapters. CommandProcessor calls one of
+// these per response line, routing the reply back out on whichever channel
+// (serial or radio) the command arrived on.
 // ---------------------------------------------------------------------------
-static int bootSelectRadioChannel(MicroBit& uBit)
-{
-    int channel = radiochan::load(uBit.storage);
-
-    // Enter edit mode only when BOTH buttons are held at boot. Any other case
-    // (nothing held, or a single button) is a normal boot: flash the channel
-    // character, then the heart.
-    if (!(uBit.buttonA.isPressed() && uBit.buttonB.isPressed())) {
-        uBit.display.printCharAsync(radiochan::toChar(channel));
-        uBit.sleep(900);
-        uBit.display.printAsync(icons::boot());
-        return channel;
-    }
-
-    // Edit mode — show the channel statically and keep it on as buttons change it.
-    const int original = channel;
-    uBit.display.printCharAsync(radiochan::toChar(channel));
-
-    // Wait for the boot-held button(s) to be released before honoring input.
-    // Otherwise holding A or B (or A+B) to ENTER edit mode is immediately read
-    // as a step or as the A+B confirm, and we exit before you can adjust.
-    while (uBit.buttonA.isPressed() || uBit.buttonB.isPressed()) {
-        uBit.sleep(20);
-    }
-
-    bool prevA = false, prevB = false;        // buttons are now released
-    uint32_t lastInputMs = uBit.systemTime(); // start the idle timer after release
-
-    while (uBit.systemTime() - lastInputMs < 5000) {
-        bool a = uBit.buttonA.isPressed();
-        bool b = uBit.buttonB.isPressed();
-
-        // Confirm + exit on a simultaneous A+B press.
-        if (a && b) {
-            break;
-        }
-        // Rising-edge detect so one press = one step; redraw the character in place.
-        if (a && !prevA) {
-            channel = radiochan::clamp(channel - 1);
-            uBit.display.printCharAsync(radiochan::toChar(channel));
-            lastInputMs = uBit.systemTime();
-        } else if (b && !prevB) {
-            channel = radiochan::clamp(channel + 1);
-            uBit.display.printCharAsync(radiochan::toChar(channel));
-            lastInputMs = uBit.systemTime();
-        }
-        prevA = a;
-        prevB = b;
-        uBit.sleep(20);
-    }
-
-    if (channel != original) {
-        radiochan::save(uBit.storage, channel);
-    }
-    // Confirm: flash a checkmark, then settle on the heart.
-    uBit.display.printAsync(icons::tick());
-    uBit.sleep(900);
-    uBit.display.printAsync(icons::boot());
-    return channel;
-}
-
-// ---------------------------------------------------------------------------
-// serialReply — thin adapter used for the boot HELLO banner.
-// ---------------------------------------------------------------------------
-static void serialReply(const char* msg, void* ctx)
-{
+static void serialReply(const char* msg, void* ctx) {
     static_cast<SerialPort*>(ctx)->send(msg);
 }
 
+static void radioReply(const char* msg, void* ctx) {
+    static_cast<Radio*>(ctx)->send(msg);
+}
+
+#if ROBOT_DEV_BUILD
+
 // ---------------------------------------------------------------------------
-// main — construct all devices, call begin() explicitly, then run the single
-// cooperative loop.
+// initDefaultMotorConfigs -- one msg::MotorConfig per port (1..4). No
+// source/robot/ (RobotConfig/ConfigRegistry) exists in this tree this sprint
+// (architecture-update.md Step 1), so these are bench placeholders, not a
+// per-robot calibration load: fwd_sign=+1 and travel_calib=0.487 mm/deg (the
+// legacy firmware's ml/mr default, docs/protocol-v2.md's Named Key Table) so
+// DEV M <n> STATE reports a plausible non-zero position/velocity out of the
+// box. `DEV M <n> CFG` is exactly the mechanism to correct these live over
+// the wire once a specific motor's real calibration is known (ticket 7).
 //
-// Device ordering:
-//   1. uBit.init() — all CODAL peripherals ready.
-//   2. Static RobotConfig cfg — Motor constructors need fwdSign values.
-//   3. Device singletons — each holds a reference to the CODAL bus/pin.
-//   4. Communicator — begin() enables serial and radio.
-//   5. Sensor begin() calls — straight-line, before the loop.
-//      Comment a line out to disable that sensor; its task skips via
-//      is_initialized() on every subsequent read.
-//   6. Robot — built from its devices; owns config, state, and controllers.
-//   7. CommandProcessor / LoopScheduler — wired and started.
-//
-// Sensor detection rationale:
-//   * NOT in the Robot constructor — detecting that early reads the line/color
-//     chips before they have powered up and wedges the I2C bus.
-//   * NOT inside the loop — the per-sensor retries would freeze the loop.
-//   A short settle delay gives the sensors time to power up; each begin()
-//   internally retries until the chip answers (mirrors the old firmware).
+// vel_gains/vel_filt_alpha (077-007): ticket 7's HITL bench pass found the
+// embedded velocity PID (ticket 3) could never actually close the loop with
+// an all-zero boot default -- not just because kp/ki/kff were 0 (expected,
+// tunable live via `DEV M <n> CFG`), but because vel_filt_alpha was ALSO 0,
+// which is the EMA coefficient in NezhaMotor::tick()'s
+// `filteredVelocity_ = a * rawVel + (1 - a) * filteredVelocity_` --
+// a=0 means filteredVelocity_ never incorporates a new sample and reports
+// exactly 0 forever, regardless of real motion (confirmed live: position
+// climbed under `DEV M 1 VEL 120` while `vel=` stayed pinned at 0.0 with
+// vel_filt_alpha=0; setting vel_filt_alpha=0.3 over `DEV M 1 CFG` on the
+// SAME motor immediately produced real, converging vel= readings). This is
+// a silent-failure gap no unit test could have caught (ticket 3/4's scope
+// never bench-tested a live velocity reading) -- exactly the kind of defect
+// this ticket's bench pass exists to catch. Bench-tuned on the stand
+// (Tovez, ports 1/3, targets 120/150/-100 mm/s): converges within ~1.5 s,
+// small (~10%) overshoot, holds within the dev_exercise.py/pid_hold_speed.py
+// tolerance bands (see this ticket's results section for the recorded step
+// responses). Still bench placeholders like travel_calib above -- `DEV M
+// <n> CFG` remains the live-correction mechanism for a specific motor's
+// real tuning.
 // ---------------------------------------------------------------------------
+static msg::MotorConfig defaultMotorConfigs[Hal::NezhaHal::kPortCount];
+
+static void initDefaultMotorConfigs() {
+    msg::Gains velGains;
+    velGains.kp = 0.0022f;
+    velGains.ki = 0.0018f;
+    velGains.kff = 0.0038f;
+    velGains.i_max = 0.3f;
+
+    for (uint32_t i = 0; i < Hal::NezhaHal::kPortCount; ++i) {
+        defaultMotorConfigs[i] = msg::MotorConfig();
+        defaultMotorConfigs[i].setPort(i + 1);
+        defaultMotorConfigs[i].setFwdSign(1);
+        defaultMotorConfigs[i].setTravelCalib(0.487f);   // [mm/deg] bench placeholder
+        defaultMotorConfigs[i].setVelGains(velGains);
+        defaultMotorConfigs[i].setVelFiltAlpha(0.3f);    // EMA coeff -- see comment above
+    }
+}
+
+// ---------------------------------------------------------------------------
+// pollComms -- drains one line from each comms channel that has one ready,
+// feeding the serial-silence watchdog on every line that arrives (regardless
+// of content or dispatch outcome -- see dev_commands.h's watchdog contract)
+// and dispatching it through the shared CommandProcessor.
+// ---------------------------------------------------------------------------
+static void pollComms(Communicator& comm, CommandProcessor& cmd,
+                      SerialSilenceWatchdog& watchdog, uint32_t now,
+                      char* serialLine, int serialLineSize,
+                      char* radioLine, int radioLineSize) {
+    if (comm.serial().readLine(serialLine, static_cast<uint16_t>(serialLineSize))) {
+        watchdog.feed(now);
+        cmd.process(serialLine, serialReply, &comm.serial());
+    }
+    if (comm.radio().poll(radioLine, static_cast<uint16_t>(radioLineSize))) {
+        watchdog.feed(now);
+        cmd.process(radioLine, radioReply, &comm.radio());
+    }
+}
+
+#endif  // ROBOT_DEV_BUILD
+
 int main() {
     uBit.init();
-
-    // Radio channel: load persisted channel (default 0); hold A/B at boot to
-    // edit it. Resolved BEFORE the radio starts so it comes up on the right band.
-    // Flashes the channel character then the heart (handles its own display).
-    int rfChannel = bootSelectRadioChannel(uBit);
-
-    // -----------------------------------------------------------------------
-    // 2. Config (needed by Motor constructor for fwdSign values).
-    // -----------------------------------------------------------------------
-    static RobotConfig cfg = defaultRobotConfig();
-
-    // -----------------------------------------------------------------------
-    // 3. Hardware HAL — owns the I2CBus and all seven device objects.
-    //
-    // NezhaHAL wraps I2CBus (between uBit.i2c and every device) so per-device
-    // transaction counts, error rates, and re-entrancy violations remain
-    // observable via the DBG I2C command (ticket 015-003).
-    // -----------------------------------------------------------------------
-
-    // I2C bus speed — 100 kHz, set explicitly.
-    //
-    // 100 kHz is also the CODAL default for this EXTERNAL bus: the NRF52I2C
-    // constructor (via redirect()) programs TWIM to 100 kHz, and it is what
-    // MakeCode/pxt runs the Nezha at. (The 400 kHz call in MicroBit::init()
-    // is the INTERNAL sensor bus _i2c, not the edge connector.) The explicit
-    // set is kept as a guard because DBG WEDGE retunes the bus at runtime and
-    // must restore this value on exit — see WedgeTest.cpp.
-    //
-    // The Nezha V2 motor controller's encoder readback (0x46) latches —
-    // freezes at a constant while the wheels keep spinning. ROOT CAUSE
-    // (wedgelab, 2026-07-04): an immediate drive-direction REVERSAL written
-    // under way (including the PID's sign-dither micro-reversals at decel
-    // stops). Bus speed is NOT causal (25/100 kHz both wedged historically;
-    // the old "400 kHz" claim was a garble), and write rate/interleave is
-    // NOT causal (disproven in the lab). 100 kHz is kept because it is the
-    // CODAL default and the vendor-habitat speed. Proven fix (pending
-    // ticket): >=50 ms commanded-zero dwell across any sign change.
-    // See docs/knowledge/2026-07-04-encoder-latch-reversal-write-train.md.
     uBit.i2c.setFrequency(100000);
 
-    // To build for mecanum: replace NezhaHAL with MecanumHAL and update IKinematics.h
-    static NezhaHAL hardware(uBit.i2c, uBit.io, cfg);
-
-    // -----------------------------------------------------------------------
-    // 4. Communications — begin() enables serial + radio.
-    // -----------------------------------------------------------------------
+    // Comms: serial + radio, both enabled. radio_channel.cpp (persisted boot
+    // channel selection, button-edit UI) is not copied this ticket -- the
+    // radio simply comes up on radiochan::kDefault every boot.
     static Communicator comm(uBit.serial, uBit.radio, uBit.messageBus);
-    comm.begin(rfChannel);
+    comm.begin(radiochan::kDefault);
 
-    // -----------------------------------------------------------------------
-    // 5. Device initialisation — NezhaHAL::begin() calls otos, line, color
-    //    begin().  Comment individual lines inside NezhaHAL::begin() to
-    //    disable a sensor; is_initialized() gates each read task.
-    // -----------------------------------------------------------------------
-    // Settle so the sensors have time to power up before begin() probes them.
-    uBit.sleep(1500);
-    hardware.begin();
+#if ROBOT_DEV_BUILD
+    // --- HAL: one NezhaMotor per port (1-4) over the shared I2CBus. ---
+    initDefaultMotorConfigs();
+    static I2CBus i2cBus(uBit.i2c);
+    static Hal::NezhaHal hal(i2cBus, defaultMotorConfigs);
+    hal.begin();
 
-    // OTOS (mandatory) detection is occasionally lost to a transient nRF52 TWIM
-    // glitch on its single boot probe, leaving the sensor "nodev" until the next
-    // power cycle even though the encoder bus is healthy. Retry the probe a few
-    // times with a short settle so one bad read self-recovers at boot.
-    for (int i = 0; i < 10 && !hardware.otos().is_initialized(); ++i) {
-        uBit.sleep(50);
-        hardware.otos().begin();
+    // --- Drivetrain: differential (Tovez), bench-placeholder trackwidth. ---
+    // sync_gain is deliberately left at its zero default here (governor OFF
+    // at boot) -- ticket 7's HITL bench pass found no live way to turn it on
+    // short of a reflash and added `DEV DT CFG sync_gain=...`
+    // (commands/dev_commands.cpp) for exactly that; bench scripts that need
+    // the governor set it explicitly over the wire rather than this getting
+    // a nonzero boot default.
+    static Subsystems::Drivetrain drivetrain;
+    msg::DrivetrainConfig dtConfig;
+    dtConfig.setTrackwidth(128.0f);   // [mm] bench placeholder -- tuned in ticket 7
+    drivetrain.configure(dtConfig);
+
+    // --- Dev loop shared state: watchdog + DEV command wiring. ---
+    static SerialSilenceWatchdog watchdog;
+
+    static DevLoopState devState;
+    devState.hal = &hal;
+    devState.drivetrain = &drivetrain;
+    devState.watchdog = &watchdog;
+    // Seed the CFG-delta shadow so the first `DEV M <n> CFG kp=...` merges
+    // onto the SAME calibration the motor was actually constructed with,
+    // rather than an all-zero blank (see DevLoopState's field comment).
+    for (uint32_t i = 0; i < Hal::NezhaHal::kPortCount; ++i) {
+        devState.motorConfigShadow[i] = defaultMotorConfigs[i];
     }
+    // Seed the drivetrain CFG-delta shadow the same way, so the first
+    // `DEV DT CFG sync_gain=...` merges onto the SAME dtConfig the
+    // Drivetrain was actually configured with above (trackwidth=128),
+    // rather than an all-zero blank -- see DevLoopState's field comment.
+    devState.drivetrainConfigShadow = dtConfig;
+    // Prime the capabilities cache for the default DEV DT PORTS binding
+    // (1, 2) -- see drivetrain.h's setMotorCapabilities() doc comment.
+    drivetrain.setMotorCapabilities(hal.motor(devState.leftPort).capabilities(),
+                                     hal.motor(devState.rightPort).capabilities());
 
-    // -----------------------------------------------------------------------
-    // 6. Robot — built from HAL; owns config, state, and controllers.
-    //    No direct i2c/serial/radio/MicroBit refs — fully encapsulated by
-    //    NezhaHAL and the device objects it owns.
-    // -----------------------------------------------------------------------
-    static Robot robot(hardware, cfg);
-
-    // -----------------------------------------------------------------------
-    // 7. Run the cooperative main loop — never returns.
-    //
-    // Initialisation order:
-    //   cmd   needs the full command table, including DBG descriptors.
-    //   sched needs cmd& (reference, so cmd must exist first).
-    //   dbgCmd needs &sched.
-    //
-    // Resolution: build cmd without DBG first, construct sched + dbgCmd,
-    // then replace cmd with the full table.  std::vector makes the
-    // re-assignment safe — no shared static buffer.
-    // -----------------------------------------------------------------------
-
-    // Phase 1 — all commands except DBG/I2CW/I2CR.
-    static CommandProcessor cmd(robot.buildCommandTable());
+    // --- Command table: liveness (PING/VER/HELP/ECHO/ID) + DEV. ---
+    std::vector<CommandDescriptor> allCommands = systemCommands();
+    std::vector<CommandDescriptor> dev = devCommands(devState);
+    allCommands.insert(allCommands.end(), dev.begin(), dev.end());
+    static CommandProcessor cmd(allCommands);
     cmd.setSerialReply(serialReply, &comm.serial());
 
-    // Phase 2 — LoopScheduler and DebugCommands are now constructable.
-    static LoopScheduler sched(robot, cmd, comm, uBit);
-    // 044-003 (Phase F): DbgCtx now carries two capability pointers instead of
-    // the vendor I2CBus* — busDiag (IBusDiagnostics) for DBG I2C/I2CLOG/IRQGUARD
-    // and busAccess (IRawBusAccess) for I2CW/I2CR — sealing the final vendor leak.
-    static DbgCtx dbgCtx = { &sched, &hardware.busDiagnostics(),
-                             &hardware.rawBusAccess(), &robot };
-    static DebugCommands dbgCmd(dbgCtx);
+    char serialLine[256];
+    char radioLine[256];
 
-    // Phase 3 — replace cmd with the full table including DBG descriptors.
-    cmd = CommandProcessor(robot.buildCommandTable(&dbgCmd, &sched));
+    // Start the serial-silence watchdog's window counting from boot (see
+    // SerialSilenceWatchdog::feed()'s doc comment) rather than from an
+    // uninitialized "last command" time.
+    watchdog.feed(uBit.systemTime());
+
+    while (true) {
+        uint32_t now = uBit.systemTime();
+
+        pollComms(comm, cmd, watchdog, now, serialLine, sizeof(serialLine),
+                 radioLine, sizeof(radioLine));
+
+        hal.tick(now);
+
+        if (devState.drivetrainActive) {
+            Subsystems::DrivetrainToMotorCommand out = drivetrain.tick(
+                now,
+                hal.motor(devState.leftPort).state(),
+                hal.motor(devState.rightPort).state());
+            hal.motor(devState.leftPort).apply(out.left);
+            hal.motor(devState.rightPort).apply(out.right);
+        }
+
+        // Bound pair ticks again here (on top of hal.tick()'s uniform sweep
+        // above) so a fresh drivetrain-governed target actuates THIS cycle --
+        // see the file header for why this is the locked shape, not a bug.
+        hal.motor(devState.leftPort).tick(now);
+        hal.motor(devState.rightPort).tick(now);
+
+        if (watchdog.check(now)) {
+            neutralizeAll(devState);
+            char wbuf[32];
+            CommandProcessor::replyEvt(wbuf, sizeof(wbuf), "dev_watchdog", nullptr,
+                                       serialReply, &comm.serial());
+        }
+    }
+#else
+    // ROBOT_DEV_BUILD == 0: no production loop exists yet this sprint (see
+    // the file header) -- this minimal liveness-only fallback (no HAL, no
+    // DEV) is what proves the ROBOT_DEV_BUILD gate is a real fork rather
+    // than a decorative #if 1.
+    static CommandProcessor cmd(systemCommands());
     cmd.setSerialReply(serialReply, &comm.serial());
 
-    // DEVICE: identification banner once at boot over serial.
-    cmd.process("HELLO", serialReply, &comm.serial());
+    char serialLine[256];
+    char radioLine[256];
 
-    // Wire the bus-diagnostics capability and EVT sink into MotorController so
-    // enc_wedged events are emitted with bus stats and go to the active
-    // serial/radio channel (039-001: capability-typed, was setI2CBus).
-    robot.motorController.setBusDiagnostics(&hardware.busDiagnostics());
-    robot.motorController.setEvtSink(&sched.activeFn, &sched.activeCtx);
-
-    sched.run_blocks();
+    while (true) {
+        if (comm.serial().readLine(serialLine, sizeof(serialLine))) {
+            cmd.process(serialLine, serialReply, &comm.serial());
+        }
+        if (comm.radio().poll(radioLine, sizeof(radioLine))) {
+            cmd.process(radioLine, radioReply, &comm.radio());
+        }
+    }
+#endif
 
     return 0;
 }

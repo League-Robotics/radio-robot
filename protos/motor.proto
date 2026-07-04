@@ -12,12 +12,13 @@ import "common.proto";
 message MotorCommand {
   oneof control {
     float   duty_cycle  = 1;  // fractional [-1, 1]
-    float   voltage     = 2;  // volts
-    float   velocity    = 3;  // mm/s
-    float   position    = 4;  // mm (requires onboard_position capability)
+    float   voltage     = 2;  // volts (capability-gated; Nezha rejects)
+    float   velocity    = 3;  // mm/s -- closed by the motor's internal PID
+    float   position    = 4;  // deg via onboard 0x5D (capability-gated)
     Neutral neutral     = 5;  // BRAKE or COAST
   }
-  optional float feedforward = 6;  // voltage feedforward added on top of PID output
+  optional float feedforward    = 6;  // voltage feedforward added on top of PID output
+  optional bool  reset_position = 7;  // zero the encoder this tick; rides beside any other arm
 }
 
 // Read-only snapshot of a motor's observed state.
@@ -31,12 +32,20 @@ message MotorState {
 
 // Configuration parameters for a motor.
 message MotorConfig {
-  float  travel_calib = 1;  // [mm/deg] linear travel per degree of shaft rotation
-  int32  fwd_sign   = 2;  // +1 or -1: physical forward direction correction
+  float  travel_calib   = 1;  // [mm/deg] linear travel per degree of shaft rotation
+  int32  fwd_sign       = 2;  // +1 or -1: physical forward direction correction
+  Gains  vel_gains      = 3;  // per-motor velocity loop (kp, ki, kff, i_max, kaw)
+  float  vel_filt_alpha = 4;  // EMA weight on the filtered velocity sample
+  float  min_duty       = 5;  // stiction floor / integrator-freeze threshold
+  float  slew_rate      = 6;  // duty slew limit (MotorSlew semantics)
+  uint32 port           = 7;  // Nezha motor port (1..4) -- identity lives in Config, not the class
 }
 
 // Declared motor capabilities.
 message MotorCapabilities {
-  bool onboard_position = 1;
-  bool has_encoder      = 2;
+  bool duty_cycle  = 1;
+  bool voltage     = 2;  // false on Nezha
+  bool velocity    = 3;  // true on Nezha (software PID in the leaf)
+  bool position    = 4;  // true on Nezha (onboard 0x5D)
+  bool has_encoder = 5;
 }

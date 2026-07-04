@@ -15,10 +15,12 @@ conform to it — naming, formatting, header layout, and idiom. When editing
 existing code that predates this rule, bring the touched code into conformance
 rather than matching the old style.
 
-**Project overrides take precedence over the Google guide where they conflict**
-— see `.claude/rules/naming-and-style.md` and `.claude/rules/coding-standards.md`;
-the vendored guide at `docs/reference/google-cppguide.html` carries inline
-override banners. Notably: CamelCase naming — UpperCamelCase for class/struct/
+**The operative reference is the condensed guide at
+`docs/reference/google-cppguide-condensed.md`** — project overrides already
+applied inline; read it, not the full vendored HTML. Project overrides take
+precedence over the Google guide where they conflict — see
+`.claude/rules/naming-and-style.md` and `.claude/rules/coding-standards.md`.
+Notably: CamelCase naming — UpperCamelCase for class/struct/
 protocol/namespace names (acronyms fully capitalized), lowerCamelCase for
 variable and function names (function names NEVER start with an uppercase
 letter; we do not use Google's PascalCase functions) — and units never appear

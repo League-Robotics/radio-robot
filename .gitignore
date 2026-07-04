@@ -57,3 +57,8 @@ wedgelab/build/
 wedgelab/out/
 wedgelab/MICROBIT.hex
 wedgelab/MICROBIT.bin
+
+# tests/bench/ HITL run artifacts (CSV logs from pid_hold_speed.py,
+# ratio_governor_curve.py, etc.) -- paths are recorded in ticket results,
+# not committed.
+tests/bench/out/

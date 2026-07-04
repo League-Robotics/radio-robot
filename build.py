@@ -72,9 +72,22 @@ if options.revision:
 
 # Regenerate DefaultConfig.cpp from the active robot JSON config so
 # calibration values are baked into the firmware at compile time.
+#
+# 077-001: skipped while source/robot/ does not exist. gen_default_config.py
+# writes to source/robot/DefaultConfig.cpp -- a directory the greenfield
+# rebuild's new source/ tree deliberately does not create until a later
+# sprint adds a Robot/ConfigRegistry back. The check is structural (does
+# source/robot/ exist?), not a version flag, so it self-heals the moment that
+# directory reappears (architecture-update.md Design Rationale Decision 4).
+# check_config_sync.py is a separate CI lint (.github/workflows/build.yml),
+# not something build.py itself calls -- nothing to condition for it here.
 import subprocess as _sp
-_gen = os.path.join(os.path.dirname(__file__), "scripts", "gen_default_config.py")
-_sp.run([sys.executable, _gen], check=True)
+_source_robot_dir = os.path.join(os.path.dirname(__file__), "source", "robot")
+if os.path.isdir(_source_robot_dir):
+    _gen = os.path.join(os.path.dirname(__file__), "scripts", "gen_default_config.py")
+    _sp.run([sys.executable, _gen], check=True)
+else:
+    print("build.py: source/robot/ absent -- skipping gen_default_config.py (077-001)")
 
 # Regenerate source/messages/*.h from protos/*.proto (C++11 POD headers).
 _gen_msgs = os.path.join(os.path.dirname(__file__), "scripts", "gen_messages.py")
@@ -179,6 +192,12 @@ def build_host_sim(clean):
     subprocess.run(["cmake", "--build", build_dir, "--parallel"], check=True)
 
 
+def _host_sim_dir():
+    """Absolute path to the host-sim CMake project, wherever tests/ currently lives."""
+    root = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(root, "tests", "_infra", "sim")
+
+
 def print_build_summary(fw_only):
     """Print a one-glance summary so there is no guessing which versions exist."""
     ver = _project_version()
@@ -186,6 +205,8 @@ def print_build_summary(fw_only):
     print("  firmware hex   v%s   (bench, BENCH_OTOS_ENABLED)   -> MICROBIT.hex" % ver)
     if fw_only:
         print("  host sim lib   (skipped: --fw-only)")
+    elif not os.path.isdir(_host_sim_dir()):
+        print("  host sim lib   (skipped: tests/_infra/sim/ absent -- parked in tests_old/, 077-001)")
     else:
         print("  host sim lib   v%s   (HOST_BUILD)   -> tests/_infra/sim/build/libfirmware_host" % ver)
     print()
@@ -207,8 +228,18 @@ if not options.test_platform:
     # build the full-simulation library (libfirmware_host, HOST_BUILD) so a single
     # build always leaves both artifacts in sync — no guessing which you have.
     # --fw-only skips this. The host-sim build is fast (~8s clean, <1s incremental).
+    #
+    # 077-001: also skipped (structurally) while tests/_infra/sim/ does not
+    # exist -- it is parked under tests_old/ by the greenfield rebuild's test
+    # rename, and a fresh sim harness under tests/sim/ is later-ticket work
+    # (architecture-update.md: "Host-side sim/test builds reference old paths
+    # — expected broken; do not chase them this ticket"). Self-heals once
+    # tests/_infra/sim/ (or its replacement) reappears.
     if not options.fw_only:
-        build_host_sim(options.clean)
+        if os.path.isdir(_host_sim_dir()):
+            build_host_sim(options.clean)
+        else:
+            print("\nbuild.py: tests/_infra/sim/ absent -- skipping host-sim build (077-001)")
 
     print_build_summary(options.fw_only)
     exit(0)

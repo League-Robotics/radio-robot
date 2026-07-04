@@ -1,10 +1,11 @@
 # Google C++ Style Guide — Condensed
 
-Operative digest of [google-cppguide.html](google-cppguide.html) (the vendored
-full guide) with this project's **PROJECT OVERRIDE** banners applied inline.
-Where this file and the full guide disagree, the override wins. Override
-rationale and full detail: `.claude/rules/naming-and-style.md` and
-`.claude/rules/coding-standards.md`.
+Operative digest of the
+[Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html)
+with this project's **PROJECT OVERRIDE** rules applied inline. This file is
+the project's style reference; where it and the upstream guide disagree, the
+override wins. Override rationale and full detail:
+`.claude/rules/naming-and-style.md` and `.claude/rules/coding-standards.md`.
 
 Meta-rules: optimize for the reader, not the writer. Be consistent with
 surrounding code. Avoid clever, surprising, or tricky constructs — when in
@@ -15,7 +16,8 @@ doubt, write the boring version.
 - Target **C++20**; do not use C++23 features.
 - No nonstandard compiler extensions (`__attribute__`, `#pragma`, inline asm,
   VLAs/`alloca`, `a?:b`, `__builtin_*`, compound statement expressions) except
-  through a designated project-wide portability wrapper.
+  through a designated project-wide portability wrapper. Sole exception:
+  `#pragma once` as the header guard (project deviation).
 
 ## Naming — PROJECT OVERRIDE (CamelCase; replaces Google's case rules)
 
@@ -30,7 +32,7 @@ doubt, write the boring version.
 | Constants (const/constexpr with static storage) | `k` + UpperCamelCase | `kDaysInAWeek`, `kTableVersion` |
 | Enumerators (scoped and unscoped) | like constants, never MACRO_STYLE | `kOutOfMemory` |
 | Macros (avoid) | project-prefixed ALL_CAPS | `MYPROJECT_ROUND` |
-| Files | lowercase snake_case per the guide; follow the tree's existing convention where it differs (e.g. `source/`'s `CommandProcessor.cpp`) | `motor_controller.h` |
+| Files | lowercase snake_case; this repo uses `.cpp`/`.h` (CODAL build requirement), not the guide's `.cc` | `command_processor.cpp` |
 
 - Acronyms follow the case of their position: `HTTPServer` (type),
   `httpRequest` (variable/function).
@@ -53,18 +55,19 @@ doubt, write the boring version.
 
 ## Header files
 
-- Every `.cc` has a matching `.h` (exceptions: tests, `main()`-only files).
+- Every `.cpp` has a matching `.h` (exceptions: tests, `main()`-only files).
 - Headers are self-contained: header guards, and they include everything they
   use. Include-fragments that aren't self-contained end in `.inc` (rare).
-- Guard format: `<PROJECT>_<PATH>_<FILE>_H_`.
+- Guard: `#pragma once` (recorded project deviation, conventional tree-wide;
+  the guide's `<PROJECT>_<PATH>_<FILE>_H_` `#define` guards are not used here).
 - Include what you use; never rely on transitive includes.
 - Avoid forward declarations; include the header instead. Never
   forward-declare entities you don't own, and never from `std::`.
 - Define a function in a header only if it's ~10 lines or fewer; longer bodies
-  go in the `.cc`, or (templates/constexpr) in an internal section below the
+  go in the `.cpp`, or (templates/constexpr) in an internal section below the
   public API. Header definitions must be ODR-safe (`inline` or implicitly so).
 - Include order, groups separated by one blank line, alphabetical within each:
-  1. the related header (`foo.h` first in `foo.cc`),
+  1. the related header (`foo.h` first in `foo.cpp`),
   2. C/system headers in `<...>` with `.h`,
   3. C++ standard library headers,
   4. other libraries' headers,
@@ -80,7 +83,7 @@ doubt, write the boring version.
 - Never `using namespace foo;`. Never inline namespaces. No namespace aliases
   at namespace scope in headers (internal-marked namespaces excepted). Never
   declare anything in `namespace std`.
-- Give `.cc`-only helpers internal linkage (unnamed namespace or `static`);
+- Give `.cpp`-only helpers internal linkage (unnamed namespace or `static`);
   never do this in headers.
 - Prefer nonmember functions in a namespace over global functions; do not
   create a class just to group static members.
@@ -121,9 +124,9 @@ doubt, write the boring version.
 - Annotate every override with exactly one of `override`/`final`; do not
   repeat `virtual` on overrides.
 - Data members are `private` (constants excepted; GoogleTest fixtures in a
-  `.cc` may use protected). Limit `protected` to member functions.
+  `.cpp` may use protected). Limit `protected` to member functions.
 - Operator overloading: only with obvious, conventional meaning. Define
-  operators in the same header/`.cc`/namespace as their type; non-modifying
+  operators in the same header/`.cpp`/namespace as their type; non-modifying
   binary operators as non-member functions. Define `operator==` for
   value-comparable types; `operator<=>` only with one obvious ordering. Never
   overload `&&`, `||`, `,`, unary `&`, or `operator""` — no user-defined
@@ -232,7 +235,7 @@ doubt, write the boring version.
   syntax, not `template <Concept T>`; no concepts the compiler can't enforce;
   new concept definitions rare and library-internal.
 - Aliases: `using`, not `typedef`. Public aliases only when clients are meant
-  to use them, with documented intent. Convenience aliases belong in `.cc`
+  to use them, with documented intent. Convenience aliases belong in `.cpp`
   files, function bodies, or private sections — never a header's public API.
 - `switch`: if not exhaustively switching an enum, always provide `default`
   (treat unreachable defaults as fatal errors). Annotate intentional
@@ -271,11 +274,11 @@ doubt, write the boring version.
   if deferred.
 - New files: license boilerplate; no author lines. File-level comment only
   when a file holds several related abstractions (don't duplicate the `.h`
-  comment in the `.cc`).
+  comment in the `.cpp`).
 
 ## Formatting
 
-- **80 columns max** (exempt: unsplittable comments/strings/URLs, includes,
+- ** 120 columns max** (exempt: unsplittable comments/strings/URLs, includes,
   header guards, using-declarations). **2-space indent, spaces only, never
   tabs.** No trailing whitespace.
 - Functions: return type on the same line as the name; open paren tight

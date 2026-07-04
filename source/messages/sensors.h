@@ -29,26 +29,25 @@ struct LineSensorState {
 // LineSensorConfig
 struct LineSensorConfig {
     uint32_t lag_line = 0;
-    uint32_t threshold = 0;
-    uint32_t norm_min = 0;
-    uint32_t norm_max = 0;
-    uint32_t channel_map_[4] = {};
-    uint8_t channel_map_count = 0;
+    uint32_t cal_min_[4] = {};
+    uint8_t cal_min_count = 0;
+    uint32_t cal_max_[4] = {};
+    uint8_t cal_max_count = 0;
+    float filt_alpha = 0.0f;
 
     // --- getters ---
     uint32_t get_lag_line() const { return lag_line; }
-    uint32_t get_threshold() const { return threshold; }
-    uint32_t get_norm_min() const { return norm_min; }
-    uint32_t get_norm_max() const { return norm_max; }
-    const uint32_t* channel_map() const { return channel_map_; }
-    uint8_t channel_map_count_val() const { return channel_map_count; }
+    const uint32_t* cal_min() const { return cal_min_; }
+    uint8_t cal_min_count_val() const { return cal_min_count; }
+    const uint32_t* cal_max() const { return cal_max_; }
+    uint8_t cal_max_count_val() const { return cal_max_count; }
+    float get_filt_alpha() const { return filt_alpha; }
 
     // --- chainable setters (Command/Config only) ---
     LineSensorConfig& setLagLine(uint32_t v) { lag_line = v; return *this; }
-    LineSensorConfig& setThreshold(uint32_t v) { threshold = v; return *this; }
-    LineSensorConfig& setNormMin(uint32_t v) { norm_min = v; return *this; }
-    LineSensorConfig& setNormMax(uint32_t v) { norm_max = v; return *this; }
-    LineSensorConfig& clearChannelMap() { channel_map_count = 0; return *this; }
+    LineSensorConfig& clearCalMin() { cal_min_count = 0; return *this; }
+    LineSensorConfig& clearCalMax() { cal_max_count = 0; return *this; }
+    LineSensorConfig& setFiltAlpha(float v) { filt_alpha = v; return *this; }
 };
 
 // ColorSensorState
@@ -74,25 +73,16 @@ struct ColorSensorConfig {
     uint32_t lag_color = 0;
     uint32_t integration = 0;
     uint32_t gain = 0;
-    float cal_r = 0.0f;
-    float cal_g = 0.0f;
-    float cal_b = 0.0f;
 
     // --- getters ---
     uint32_t get_lag_color() const { return lag_color; }
     uint32_t get_integration() const { return integration; }
     uint32_t get_gain() const { return gain; }
-    float get_cal_r() const { return cal_r; }
-    float get_cal_g() const { return cal_g; }
-    float get_cal_b() const { return cal_b; }
 
     // --- chainable setters (Command/Config only) ---
     ColorSensorConfig& setLagColor(uint32_t v) { lag_color = v; return *this; }
     ColorSensorConfig& setIntegration(uint32_t v) { integration = v; return *this; }
     ColorSensorConfig& setGain(uint32_t v) { gain = v; return *this; }
-    ColorSensorConfig& setCalR(float v) { cal_r = v; return *this; }
-    ColorSensorConfig& setCalG(float v) { cal_g = v; return *this; }
-    ColorSensorConfig& setCalB(float v) { cal_b = v; return *this; }
 };
 
 }  // namespace msg
