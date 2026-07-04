@@ -125,3 +125,41 @@ EKF omega gating).  Candidates for the fix sprint:
 Dominant remaining bench failure.  Until fixed, expect 1–3 corrupted
 legs per tour and closures degrading from ~50 mm to 200–700 mm at
 random.
+
+## WEDGELAB campaign (2026-07-04, overnight): ROOT CAUSE ISOLATED, FIX PROVEN ON BENCH
+
+Standalone lab (`wedgelab/`, self-contained CODAL project) with 4 motors:
+M1/M2 = old latch-prone pair, M3/M4 = fresh. Dual driver: raw from-scratch
+wire functions vs VERBATIM production Motor/I2CBus copies.
+
+1. **Reproducer**: `run reset` — cruise, production `Motor::resetEncoder()`
+   mid-motion, immediate reversal (a D-preemption mimic). Old motors latch
+   on essentially EVERY hot +->- flip; fresh motors never (immune to the
+   whole trigger battery all night).
+2. **Chip-confirmed**: at each latch, two raw-path 0x46 reads 60 ms apart
+   (independent of the production driver) return identical values while
+   the wheel spins, all transactions ACK, zero bus errors ever (XCHECK
+   CHIP, exp10). Not driver error-masking. The register truly latches.
+3. **The trigger is the REVERSAL WRITE TRAIN, not the read burst**:
+   burst-only arm clean (0/20); reversal-only arm (rebaselineSoft = zero
+   burst I2C) latches 5/5 of +->- flips when hot. Direction-asymmetric
+   (only +->- on these motors; rhymes with the L-dominant field data).
+   Production `setSpeed`'s reversal exemption writes the flip immediately,
+   slew-stepped +-25 through zero across consecutive 10 ms ticks
+   interleaved with encoder reads — that sequence is the latch inducer.
+   Production decel sign-dither at every stop boundary = a train of
+   micro-reversals through this same path (the boundary-latch signature).
+4. **Fixes proven (exp12-14)**, hot controls bracketing every run:
+   - **Zero-dwell reversal**: command 0 and hold >=50 ms before the new
+     direction. 0 latches / ~75 hot susceptible flips (soak n=150).
+     20 ms is NOT enough (12/12 latched); threshold in (20, 50] ms.
+   - **Gentle reversal ramp** (<=5 PWM-pct per 10 ms through zero):
+     0/25 hot cycles.
+   - Stop-verified-then-reset (mode 2): clean; good D-boundary discipline.
+5. **Production fix recommendation**: in `Motor::setSpeed`, replace the
+   immediate reversal exemption with a two-phase reversal — write 0, hold
+   >=50 ms (100 ms conservative), then apply the new direction (or ramp
+   at <=5/tick). Apply to ANY sign change; keep stop (pct==0) immediate.
+   Also keep 064-003 rebaselineSoft (hard resets only at verified rest).
+
+Data: `wedgelab/out/*exp09..14*`. Lab usage: `wedgelab/README.md`.

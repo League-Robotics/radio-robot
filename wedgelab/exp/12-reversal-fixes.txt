@@ -1,0 +1,28 @@
+# Experiment 12 — interleaved repeats for run-to-run variance + the two
+# reversal-fix candidates. All arms: soft or hard reset per mode, 10 cycles.
+# 1 = reversal, no burst (the isolated trigger; expect +->- latches)
+# 0 = burst + reversal (the disease; variance check)
+# 3 = burst, no reversal
+# 4 = zero-dwell reversal (fix A)
+# 5 = gentle +-5/tick reversal (fix B)
+set nwheels 2
+set tickus 10000
+set sensors 1
+set resetmode 1
+run reset 10
+set resetmode 0
+run reset 10
+set resetmode 4
+run reset 10
+set resetmode 5
+run reset 10
+set resetmode 1
+run reset 10
+set resetmode 3
+run reset 10
+set resetmode 4
+run reset 10
+set resetmode 5
+run reset 10
+stat
+heal

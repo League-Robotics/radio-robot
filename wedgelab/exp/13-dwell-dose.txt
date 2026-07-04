@@ -1,0 +1,22 @@
+# Experiment 13 — dwell dose-response + fix soak.
+# Controls (mode 1) bracket the run so "hot" susceptibility is proven
+# present while the fixes hold. Dwell swept 150 -> 50 -> 20 ms; gentle
+# slew at n=25 for statistics.
+set nwheels 2
+set tickus 10000
+set sensors 1
+set resetmode 1
+run reset 10
+set resetmode 4
+set zerodwell 150
+run reset 25
+set zerodwell 50
+run reset 25
+set zerodwell 20
+run reset 25
+set resetmode 5
+run reset 25
+set resetmode 1
+run reset 10
+stat
+heal

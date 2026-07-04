@@ -99,6 +99,7 @@ static int kNWheels     = 4;      // active motor ports (1..kNWheels)
 static int kRatchet     = 0;      // 1 = D-terminal stall/reverse/lunge tail on legs
 static int kSensors     = 0;      // 1 = production-mimic OTOS read (0x17) each tick
 static int kDriver      = 1;      // 1 = production Motor class, 0 = raw lab driver
+static int kResetMode   = 0;      // reset pattern: 0=hard-moving 1=soft 2=stop-first 3=no-reversal
 static int kVerbose     = 0;      // 1 = per-leg lines during runs
 
 static const Knob kKnobs[] = {
@@ -123,6 +124,7 @@ static const Knob kKnobs[] = {
     {"ratchet",   &kRatchet,     "1 = stall/reverse/lunge decel tail"},
     {"sensors",   &kSensors,     "1 = OTOS 0x17 read each tick (bus mix)"},
     {"driver",    &kDriver,      "1 = production Motor class, 0 = raw"},
+    {"resetmode", &kResetMode,   "0=hard-moving 1=soft 2=stopfirst 3=noflip"},
     {"verbose",   &kVerbose,     "1 = per-leg lines"},
 };
 static const int kNumKnobs = sizeof(kKnobs) / sizeof(kKnobs[0]);
@@ -842,25 +844,67 @@ static void runReset(int n)
         // cycle by construction — 20/20 false positives, caught because
         // heal showed live readbacks. Detector bugs get post-mortems too.)
         blindCheckAll("reset", tick);
-        // the trigger: full guarded atomic-read reset burst, wheels MOVING.
-        // driver=1: the REAL Motor::resetEncoder() — median-of-3 atomic reads
-        // + readback-verify; on a MOVING wheel the verify fails, so it
-        // retries up to 3 full attempts = up to ~16 atomic reads. This is
-        // the exact production D-preemption burst, much heavier than the
-        // raw mimic below.
+        // the trigger (resetmode 0): full atomic-read reset burst, wheels
+        // MOVING — the REAL Motor::resetEncoder(): median-of-3 + readback
+        // verify + retries; on a moving wheel that's up to ~16 atomic reads.
+        // CHIP-CONFIRMED reproducer (exp10): latches the 0x46 register on
+        // essentially every cycle on the old motors.
+        //
+        // FIX MATRIX (resetmode knob):
+        //   0 = hard resetEncoder mid-motion + reversal   (the disease)
+        //   1 = rebaselineSoft mid-motion + reversal      (064-003 candidate:
+        //       software-only offset fold, ZERO I2C)
+        //   2 = stop, verify standstill, THEN hard reset, then reverse
+        //       (production-viable D-boundary discipline)
+        //   3 = hard reset mid-motion, NO reversal        (isolates burst vs
+        //       burst+reversal)
         bool ok;
-        for (int w = 0; w < nW(); ++w) {
+        if (kResetMode >= 4) {
+            // fix-candidate arms: soft rebaseline only (no burst I2C)
+            for (int w = 0; w < nW(); ++w)
+                if (kDriver && gMot[w]) gMot[w]->rebaselineSoft();
+        } else if (kResetMode == 2) {
+            pwmAll(0);                       // production stop (exempt write)
+            uBit.sleep(350);                 // coast-down
+            bool still; (void)standstillDelta(150, still);
+        }
+        if (kResetMode < 4) for (int w = 0; w < nW(); ++w) {
             if (kDriver && gMot[w]) {
-                gMot[w]->resetEncoder();
+                if (kResetMode == 1) gMot[w]->rebaselineSoft();
+                else                 gMot[w]->resetEncoder();
             } else {
                 for (int k = 0; k < 3; ++k) { busyUs(4000); nzReadAngle(gW[w].id, ok, false); }
                 busyUs(4000); (void)nzReadAngle(gW[w].id, ok, false);   // verify read
             }
         }
-        // ...followed immediately by a new command (alternate direction),
-        // exactly like a D-preemption reset+retarget.
-        pct = -pct;
-        pwmAllRaw(pct);
+        // ...followed immediately by a new command, exactly like a
+        // D-preemption reset+retarget (reversal unless resetmode 3).
+        //
+        //   4 = soft rebaseline + ZERO-DWELL reversal (command 0, hold
+        //       150 ms, then the new direction) — fix candidate A.
+        //   5 = soft rebaseline + GENTLE reversal (step the command in
+        //       +-5/tick increments through zero) — fix candidate B.
+        if (kResetMode != 3) pct = -pct;
+        if (kResetMode == 4) {
+            pwmAll(0);
+            // dwell length from the zerodwell knob (ms; default 150) so the
+            // minimum protective dwell can be swept without reflashing
+            int dwellMs = (kZeroDwellMs > 0) ? kZeroDwellMs : 150;
+            uint64_t dl = nowUs() + (uint64_t)dwellMs * 1000u;
+            while (nowUs() < dl) {}
+            pwmAllRaw(pct);
+        } else if (kResetMode == 5) {
+            int cur = -pct;                     // old direction
+            while (cur != pct && !userAbort()) {
+                cur += (pct > cur) ? 5 : -5;
+                if ((pct > 0 && cur > pct) || (pct < 0 && cur < pct)) cur = pct;
+                pwmAll(cur);
+                uint64_t dl = nowUs() + (uint64_t)kTickUs;
+                while (nowUs() < dl) {}
+            }
+        } else {
+            pwmAllRaw(pct);
+        }
         onsetAll();
     }
     stopVerified("reset-end");

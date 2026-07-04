@@ -1,0 +1,10 @@
+# Experiment 10 — reproduce + discriminate. Reset-while-moving through the
+# production Motor layer (the proven ~50%/cycle reproducer), now with a
+# raw-path cross-read fired at each LATCH: CHIP = 0x46 register truly
+# latched; DRIVER = raw path still counting while Motor's view is frozen.
+set nwheels 2
+set tickus 10000
+set sensors 1
+run reset 20
+stat
+heal

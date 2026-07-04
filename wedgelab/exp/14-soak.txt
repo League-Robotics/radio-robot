@@ -1,0 +1,14 @@
+# Experiment 14 — soak validation: zero-dwell 50 ms, 150 reversal cycles
+# (~75 susceptible +->- flips), hot controls before and after.
+set nwheels 2
+set tickus 10000
+set sensors 1
+set resetmode 1
+run reset 10
+set resetmode 4
+set zerodwell 50
+run reset 150
+set resetmode 1
+run reset 10
+stat
+heal

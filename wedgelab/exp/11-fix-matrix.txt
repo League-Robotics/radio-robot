@@ -1,0 +1,18 @@
+# Experiment 11 — fix matrix against the chip-confirmed reproducer.
+# Arm 0: the disease (hard reset mid-motion + reversal) — positive control.
+# Arm 1: rebaselineSoft (software-only offset, zero I2C) — 064-003 candidate.
+# Arm 2: stop + verified standstill, THEN hard reset — D-boundary discipline.
+# Arm 3: hard reset mid-motion, NO reversal — burst-alone vs burst+reversal.
+set nwheels 2
+set tickus 10000
+set sensors 1
+set resetmode 0
+run reset 10
+set resetmode 1
+run reset 10
+set resetmode 2
+run reset 10
+set resetmode 3
+run reset 10
+stat
+heal
