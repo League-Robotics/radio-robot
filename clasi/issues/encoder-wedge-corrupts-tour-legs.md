@@ -83,6 +83,25 @@ candidate fix: run 60 legs before/after, compare episodes/leg.
 (time-to-latch per config); WedgeTest's instant-verdict quirk needs review
 before its numbers are trusted (see script docstring).
 
+## PIVOTAL: motor-swap experiment (2026-07-03 20:05)
+
+Eric physically replaced both motors and re-ran the 60-leg reproducer:
+**0.63 episodes/leg -> 0.05/leg (12x reduction; 1 EVT latch + 2 blind
+boundary classifications).**  The latch susceptibility is dominantly in
+the MOTOR UNIT itself — the removed left motor (was port M2, 34 latches
+in 60 legs) is a pathologically latch-prone article and explains the
+evening's rate escalation and most tour wreckage.
+
+Consequences:
+- KEEP the bad motor, labeled — a 0.63/leg reproducer unit is the
+  perfect test article for the fix sprint.
+- The reproducer doubles as an incoming-inspection tool: 60 legs per
+  motor, episodes/leg as the accept metric.
+- The residual 0.05/leg on fresh motors has the same decel-boundary
+  signature (enc=146) — the firmware-side trigger work remains valid
+  but drops in priority; the bench-mode substitution defense covers the
+  residual rate.
+
 ## Direction
 
 The wedge detector already fires (`EVT enc_wedged`, TLM `wedge=` flags,
