@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 sprint: '077'
 tickets:
 - 077-001
@@ -46,8 +46,9 @@ minimal dev loop. Nothing else.
   `<Producer>To<Consumer>Command`, e.g. `DrivetrainToMotorCommand`. Never by
   mechanism or moment (`…Tick`, `…Output`, `…Batch`) — long is fine, ambiguous
   is not.
-- **Google C++ Style** for all new code — vendored (with inline PROJECT OVERRIDE
-  banners) at `docs/reference/google-cppguide.html`; deviations recorded in
+- **Google C++ Style** for all new code — operative reference is the condensed
+  guide (PROJECT OVERRIDE rules applied inline) at
+  `docs/reference/google-cppguide-condensed.md`; deviations recorded in
   `.claude/rules/naming-and-style.md` and `.claude/rules/coding-standards.md`:
   `.cpp` extension (CODAL build requirement), `#pragma once` if already
   conventional, generated `source/messages/*` never hand-edited. ALL files in
@@ -59,8 +60,8 @@ minimal dev loop. Nothing else.
   `namespace Hal`); lower-case the first letter (including all letters of a
   leading acronym) in a variable or function name (`tick()`, `setVelocity()`,
   `leftObs`) — **functions are never PascalCase**; trailing-underscore members,
-  `kConstant` constants. The vendored guide at
-  `docs/reference/google-cppguide.html` carries inline override banners.
+  `kConstant` constants. The condensed guide at
+  `docs/reference/google-cppguide-condensed.md` applies these overrides inline.
   **No units in ANY identifier** — method, property, or parameter
   (`speed`, never `speed_mms`; `setVelocity(float velocity)`, never
   `(float mm_per_s)`); units go in the `// [unit]` leading-tag trailing comment
@@ -89,11 +90,12 @@ minimal dev loop. Nothing else.
 
 ## Step 0 — Style guide + scaffold
 
-1. DONE 2026-07-04: Google C++ Style Guide vendored at
-   `docs/reference/google-cppguide.html` with inline PROJECT OVERRIDE banners
-   (Naming, Function Names, Variable Names, Namespace Names); deviations
-   recorded in `.claude/rules/naming-and-style.md` and
-   `.claude/rules/coding-standards.md`.
+1. DONE 2026-07-04: Google C++ Style Guide condensed to
+   `docs/reference/google-cppguide-condensed.md` with the PROJECT OVERRIDE
+   rules (Naming, Function Names, Variable Names, Namespace Names) applied
+   inline; deviations recorded in `.claude/rules/naming-and-style.md` and
+   `.claude/rules/coding-standards.md`. (The originally vendored full HTML
+   guide was superseded by the condensed version and removed.)
 2. `git mv source source_old` (one commit, pure rename — history follows).
    Rollback at any time = set codal.json `"application": "source_old"`.
 3. Create new `source/` with `main.cpp` stub; codal.json keeps
@@ -451,6 +453,6 @@ coupled rig and the stand.
 ## Session notes (for memory after approval)
 
 Faceplate/channel terminology; Google C++ style adopted with CamelCase override
-(docs/reference/google-cppguide.html + .claude/rules/coding-standards.md);
+(docs/reference/google-cppguide-condensed.md + .claude/rules/coding-standards.md);
 Eric prefers greenfield parallel rebuild over incremental refactor — parks old tree,
 builds fresh; motor PID in leaf, ratio governor in drivetrain.

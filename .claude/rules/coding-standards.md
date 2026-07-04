@@ -187,10 +187,10 @@ name is excluded.
 
 ## Naming Case (CamelCase — Google's case rules overridden)
 
-The project follows the Google C++ Style Guide — vendored with inline
-override banners at `docs/reference/google-cppguide.html` — EXCEPT its
-naming-case rules, which are replaced by this stakeholder-set rule
-(2026-07-04):
+The project follows the Google C++ Style Guide — condensed, with the
+overrides applied inline, at `docs/reference/google-cppguide-condensed.md`
+(the operative reference) — EXCEPT its naming-case rules, which are
+replaced by this stakeholder-set rule (2026-07-04):
 
 > Use CamelCase. **Capitalize the first letter, including all letters in
 > an acronym, in a class, struct, protocol, or namespace name.**
