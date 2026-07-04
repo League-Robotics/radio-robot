@@ -18,6 +18,10 @@ Usage:
         [--dist 150] [--speed 250]
 
 Robot must be ON THE STAND (motors spin).  Direct USB (EVT frames needed).
+
+Port mapping (NezhaHAL.cpp, fixed): wheel L = Nezha port M2 (chip id 2),
+wheel R = port M1 (chip id 1).  All reporting below is BY PORT so motor-swap
+experiments (does the latch follow the motor or the port?) read directly.
 """
 from __future__ import annotations
 
@@ -33,6 +37,9 @@ import serial
 _REPO = pathlib.Path(__file__).resolve().parents[2]
 OUTDIR = _REPO / "tests" / "bench" / "out"
 OUTDIR.mkdir(parents=True, exist_ok=True)
+
+# Fixed HAL wiring (NezhaHAL.cpp): LEFT wheel = chip M2, RIGHT wheel = chip M1.
+PORT_OF_WHEEL = {"L": "M2", "R": "M1", "?": "?"}
 
 
 def main() -> int:
@@ -94,21 +101,22 @@ def main() -> int:
             for w in wedged:
                 m = re.search(r"wheel=([LR]) enc=(-?\d+)", w)
                 wheel = m.group(1) if m else "?"
+                port = PORT_OF_WHEEL[wheel]
                 enc = int(m.group(2)) if m else None
-                episodes.append({"leg": leg, "wheel": wheel, "enc": enc,
-                                 "time_stop": timeout_stop})
-                log(f"  leg {leg:3d}: LATCH wheel={wheel} @enc={enc}mm"
+                episodes.append({"leg": leg, "port": port, "wheel": wheel,
+                                 "enc": enc, "time_stop": timeout_stop})
+                log(f"  leg {leg:3d}: LATCH port={port} @enc={enc}mm"
                     f"{'  (leg died on TIME backstop)' if timeout_stop else ''}")
             if timeout_stop and not wedged:
-                episodes.append({"leg": leg, "wheel": "?", "enc": None,
-                                 "time_stop": True})
+                episodes.append({"leg": leg, "port": "?", "wheel": "?",
+                                 "enc": None, "time_stop": True})
                 log(f"  leg {leg:3d}: reason=time without EVT (boundary latch, "
                     f"detector blind)")
             if leg % 10 == 0:
-                n_l = sum(1 for e in episodes if e["wheel"] == "L")
-                n_r = sum(1 for e in episodes if e["wheel"] == "R")
+                n_m2 = sum(1 for e in episodes if e["port"] == "M2")
+                n_m1 = sum(1 for e in episodes if e["port"] == "M1")
                 log(f"[{leg}/{args.legs}] episodes: {len(episodes)} "
-                    f"({len(episodes)/leg:.2f}/leg)  L={n_l} R={n_r}")
+                    f"({len(episodes)/leg:.2f}/leg)  M2={n_m2} M1={n_m1}")
             time.sleep(0.4)            # settle between legs
     finally:
         send("X")
@@ -124,14 +132,14 @@ def main() -> int:
         out = OUTDIR / "wedge_latch_repro.json"
         out.write_text(json.dumps(result, indent=1))
         (OUTDIR / "wedge_latch_repro_raw.log").write_text("\n".join(raw_log))
-        n_l = sum(1 for e in episodes if e["wheel"] == "L")
-        n_r = sum(1 for e in episodes if e["wheel"] == "R")
-        n_q = len(episodes) - n_l - n_r
-        result["by_wheel"] = {"L": n_l, "R": n_r, "unattributed": n_q}
+        n_m2 = sum(1 for e in episodes if e["port"] == "M2")
+        n_m1 = sum(1 for e in episodes if e["port"] == "M1")
+        n_q = len(episodes) - n_m2 - n_m1
+        result["by_port"] = {"M2": n_m2, "M1": n_m1, "unattributed": n_q}
         out.write_text(json.dumps(result, indent=1))
         log(f"==== {len(episodes)} episodes in {legs_run} legs "
             f"({result['episodes_per_leg']}/leg): "
-            f"L={n_l} R={n_r} unattributed={n_q} -> {out}")
+            f"port M2={n_m2} port M1={n_m1} unattributed={n_q} -> {out}")
 
     return 0
 
