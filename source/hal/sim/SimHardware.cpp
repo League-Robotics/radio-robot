@@ -75,30 +75,8 @@ void SimHardware::advance(uint32_t now_ms, const MotorCommands& cmds) {
     }
     _lastTickMs = now_ms;
 
-    // Bench-OTOS dt baseline (074-001): maintained EVERY call, even when bench
-    // mode is off — exactly the discipline NezhaHAL::tick(now,cmds) uses (see
-    // that function's header comment). If the stamp were only updated while
-    // bench mode was active, the FIRST tick after `DBG OTOS BENCH 1` would
-    // compute a large stale dt and integrate a spike on the bench plant.
-    // Signed-delta avoids uint32 underflow (project memory:
-    // watchdog-uint32-underflow).
-    int32_t  benchDtSigned = static_cast<int32_t>(now_ms - _lastBenchTick);
-    uint32_t benchDt = (benchDtSigned > 0) ? static_cast<uint32_t>(benchDtSigned) : 0u;
-    _lastBenchTick = now_ms;
+    // Bench-OTOS feed REMOVED (bench-wedge fix, 2026-07-03) — moved to
+    // Drive::tickUpdate, which integrates the post-filter, wedge-substituted
+    // encoder stream (see NezhaHAL::tick for the rationale).
 
-    if (isBenchMode()) {
-        // Feed MEASURED wheel travel (SimMotor::position(), the reported
-        // encoder value cached by this tick's sensor read), not commanded
-        // tgtSpeed — parity with NezhaHAL::tick's encoder feed so bench mode
-        // behaves identically in sim and on hardware (see
-        // BenchOtosSensor::tickEncoder for the rationale).
-        // Same heading law as encpose: dTheta scaled by effectiveSlip
-        // (via tw/slip — algebraically identical).  See NezhaHAL::tick.
-        const float tw   = (_liveCfg != nullptr) ? _liveCfg->trackwidth
-                                                 : _trackwidth;
-        const float slip = effectiveSlip((_liveCfg != nullptr)
-                                             ? _liveCfg->rotationalSlip : 0.0f);
-        _benchOtos.tickEncoder(_motorL.position(), _motorR.position(),
-                               tw / slip, benchDt);
-    }
 }

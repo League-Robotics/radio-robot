@@ -137,7 +137,12 @@ public:
      * trackwidth        : wheel-to-wheel track width, mm.
      * dt_ms             : elapsed time for this step, ms.
      */
-    void tickEncoder(float encLeft, float encRight, float trackwidth, uint32_t dt_ms);  // [mm], [mm], [mm], [ms]
+    // holdHeading: integrate distance but hold heading this step — set while
+    // a wheel-freeze (wedge latch) is detected, mirroring Odometry::predict's
+    // dTheta hold so the bench frame cannot accumulate phantom rotation from
+    // a frozen differential.
+    void tickEncoder(float encLeft, float encRight, float trackwidth, uint32_t dt_ms,
+                     bool holdHeading = false);  // [mm], [mm], [mm], [ms]
 
     /**
      * enable / enabled — gate whether tick() advances the accumulators.

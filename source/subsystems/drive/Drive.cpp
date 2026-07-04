@@ -9,6 +9,10 @@
 // C++11, no heap in Drive, no virtual dispatch in the contract path.
 
 #include "Drive.h"
+// Bench-OTOS feed (bench-wedge fix): full type needed for tickEncoder().
+#if defined(BENCH_OTOS_ENABLED) || defined(HOST_BUILD)
+#include "hal/real/BenchOtosSensor.h"
+#endif
 
 #include "MotorController.h"
 #include "BodyVelocityController.h"
@@ -73,35 +77,31 @@ void Drive::apply(const msg::DrivetrainCommand& cmd)
 void Drive::tickUpdate(uint32_t now, bool fuseOtos)
 {
     // ------------------------------------------------------------------
-    // STEP 1+2: Outlier filter → encoder collect → controlTick
+    // STEP 1+2: Outlier filter → freeze substitution → controlTick
     // ------------------------------------------------------------------
     _runOutlierFilter(now);
 
-    // controlTick runs the velocity PID and calls _motorL/R.setSpeed().
-    // refreshedWheel=3 means both wheels were just collected (same semantics
-    // as Drive::periodic).
-    bool driving = (_outputs.tgtSpeed[1] != 0.0f || _outputs.tgtSpeed[0] != 0.0f);
-    _mc.controlTick(_hw, _outputs, now, driving ? 3 : 0);
-
-    // ------------------------------------------------------------------
-    // STEP 3: Wedge push (mirrors Drive::periodic — 033-005e)
+    // Wedge freeze detection + HEALTHY-WHEEL SUBSTITUTION (bench-wedge fix,
+    // 2026-07-03).  The MotorController detector is structurally blind to
+    // the boundary-latch flavor (resets on target==0, arming grace — KB doc
+    // 2026-07-01-encoder-wedge-boundary-latch-flavor.md), so latches
+    // poisoned whole legs: +100.2° phantom rotation measured on a straight
+    // D 700, legs dying on the TIME backstop 222 mm short.
     //
-    // Secondary VALUE-BASED freeze detector + MID-LEG re-prime (bench-wedge
-    // fix, 2026-07-03).  The MotorController detector is structurally blind
-    // to the boundary-latch flavor (it resets on target==0 and its arming
-    // grace requires post-command motion — see the KB doc
-    // 2026-07-01-encoder-wedge-boundary-latch-flavor.md), so latches at
-    // D-decel poisoned whole legs: measured +100.2° phantom rotation on a
-    // straight D 700 and legs dying at the TIME backstop 222 mm short.
-    // This detector needs no arming: a wheel whose cached position() is
-    // EXACTLY constant for kFreezeTicksN consecutive ticks while commanded
-    // > kFreezeMinCmdMmps is latched.  Recovery is the KB doc's own
-    // finding — "an atomic-read sequence re-primes the latched readback
-    // register, in-band and cheap" — issued ONCE per episode, from the
-    // cooperative control path (sequential with the normal reads, so it
-    // cannot interleave adversarially).  The release catch-up step is then
-    // swallowed by the per-tick step clamps in Odometry::predict and
-    // BenchOtosSensor::tickEncoder.
+    // Detector: a wheel whose post-filter encoder is EXACTLY constant for
+    // kFreezeTicksN ticks while commanded > kFreezeMinCmdMmps is latched
+    // (no arming needed, ~60 ms latency).
+    //
+    // Recovery: NO mid-leg I2C — the atomic-read "re-prime" idea is
+    // documented to LATCH the readback when fired while wheels rotate (see
+    // sprint-064 issue encoder-reset-while-moving-latches-readback; it also
+    // made runs measurably worse when tried on 2026-07-03).  The register
+    // unlatches at the next drive-start atomic reset (safe at rest); until
+    // then the flags below raise wedgeActive (predict holds dTheta) and the
+    // bench feed holds its heading.  Full healthy-wheel substitution (which
+    // would also rescue leg LENGTH under a mid-leg freeze) is deliberately
+    // NOT done here — it changes _hw.encPos semantics for every consumer;
+    // see clasi/issues/encoder-wedge-corrupts-tour-legs.md for that design.
     // ------------------------------------------------------------------
     static constexpr float   kFreezeMinCmdMmps = 30.0f;
     static constexpr uint8_t kFreezeTicksN     = 3;
@@ -114,37 +114,67 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
         // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
         const float rawL = _hw.encPos[1];
         const float rawR = _hw.encPos[0];
+        const float dRawL = rawL - _frzLastRawL;
+        const float dRawR = rawR - _frzLastRawR;
         const bool  cmdL = (_outputs.tgtSpeed[1] >  kFreezeMinCmdMmps) ||
                            (_outputs.tgtSpeed[1] < -kFreezeMinCmdMmps);
         const bool  cmdR = (_outputs.tgtSpeed[0] >  kFreezeMinCmdMmps) ||
                            (_outputs.tgtSpeed[0] < -kFreezeMinCmdMmps);
-        if (cmdL && rawL == _frzLastRawL) {
+        if (cmdL && dRawL == 0.0f) {
             if (_frzTicksL < 0xFF) ++_frzTicksL;
         } else {
-            _frzTicksL    = 0;
-            _frzReprimedL = false;
+            _frzTicksL = 0;
         }
-        if (cmdR && rawR == _frzLastRawR) {
+        if (cmdR && dRawR == 0.0f) {
             if (_frzTicksR < 0xFF) ++_frzTicksR;
         } else {
-            _frzTicksR    = 0;
-            _frzReprimedR = false;
+            _frzTicksR = 0;
         }
         _frzLastRawL = rawL;
         _frzLastRawR = rawR;
 
-        if (_frzTicksL >= kFreezeTicksN && !_frzReprimedL) {
-            _motorL.readEncoderMmFAtomic(_robCfg);   // re-prime latched register
-            _frzReprimedL = true;
-        }
-        if (_frzTicksR >= kFreezeTicksN && !_frzReprimedR) {
-            _motorR.readEncoderMmFAtomic(_robCfg);
-            _frzReprimedR = true;
+        _frzActiveL = _frzTicksL >= kFreezeTicksN;
+        _frzActiveR = _frzTicksR >= kFreezeTicksN;
+    }
+    const bool frozenNow = _frzActiveL || _frzActiveR;
+
+    // controlTick runs the velocity PID and calls _motorL/R.setSpeed().
+    // refreshedWheel=3 means both wheels were just collected (same semantics
+    // as Drive::periodic).  Runs on the SUBSTITUTED encoder stream so the
+    // PID does not fight a frozen reading with runaway PWM.
+    bool driving = (_outputs.tgtSpeed[1] != 0.0f || _outputs.tgtSpeed[0] != 0.0f);
+    _mc.controlTick(_hw, _outputs, now, driving ? 3 : 0);
+
+    // ------------------------------------------------------------------
+    // Bench-OTOS feed (bench-wedge fix, 2026-07-03): moved HERE from the HAL
+    // actuator ticks (NezhaHAL/MecanumHAL::tick(now,cmds), SimHardware::
+    // advance) so the bench plant integrates the SUBSTITUTED post-filter
+    // encoder stream above — a latched register can no longer inject phantom
+    // rotation into the bench frame for the length of a leg.  Same
+    // dt-baseline discipline the HALs used; same slip-unified heading law
+    // (tw / effectiveSlip — one heading law for every pose frame); live
+    // _robCfg so SET tw/rotSlip apply immediately.
+    // ------------------------------------------------------------------
+#if defined(BENCH_OTOS_ENABLED) || defined(HOST_BUILD)
+    {
+        int32_t  dtSigned = (int32_t)(now - _lastBenchFeedMs);
+        uint32_t benchDt  = (dtSigned > 0) ? (uint32_t)dtSigned : 0u;
+        _lastBenchFeedMs  = now;
+        if (_hal.isBenchMode()) {
+            BenchOtosSensor* bench = _hal.benchOtosPtr();
+            if (bench != nullptr) {
+                const float tw   = _robCfg.trackwidth;
+                const float slip = effectiveSlip(_robCfg.rotationalSlip);
+                bench->tickEncoder(_hw.encPos[1], _hw.encPos[0],
+                                   tw / slip, benchDt, frozenNow);
+            }
         }
     }
-    const bool frozenNow = (_frzTicksL >= kFreezeTicksN) ||
-                           (_frzTicksR >= kFreezeTicksN);
+#endif
 
+    // ------------------------------------------------------------------
+    // STEP 3: Wedge push (mirrors Drive::periodic — 033-005e)
+    // ------------------------------------------------------------------
     bool anyWedged = _mc.wheelWedgedL() || _mc.wheelWedgedR() || frozenNow;
     _est.setWedgeActive(anyWedged);
     if (anyWedged) {
@@ -337,8 +367,12 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
     _state.otos_fusion_blocked = _otosFusionBlocked;
 
     // Wedge latch per wheel.
-    _state.wheel_wedged_[0]  = _mc.wheelWedgedR() ? 1u : 0u;
-    _state.wheel_wedged_[1]  = _mc.wheelWedgedL() ? 1u : 0u;
+    // OR in the substitution detector's live flags: under healthy-wheel
+    // substitution the MotorController detector sees a "moving" stream and
+    // can no longer latch, so these flags are the wedge's only wire-visible
+    // signal (TLM wedge= / sim getters).
+    _state.wheel_wedged_[0]  = (_mc.wheelWedgedR() || _frzActiveR) ? 1u : 0u;
+    _state.wheel_wedged_[1]  = (_mc.wheelWedgedL() || _frzActiveL) ? 1u : 0u;
     _state.wheel_wedged_count = 2;
 
     // connected: true once the MotorController has seen at least one tick.

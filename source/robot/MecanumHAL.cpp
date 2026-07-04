@@ -86,29 +86,8 @@ void MecanumHAL::tick(uint32_t now_ms)
 // ---------------------------------------------------------------------------
 void MecanumHAL::tick(uint32_t now_ms, const MotorCommands& cmds)
 {
-#ifdef BENCH_OTOS_ENABLED
-    int32_t  dt_signed = (int32_t)(now_ms - _lastBenchTickMs);
-    uint32_t dt_ms     = (dt_signed > 0) ? (uint32_t)dt_signed : 0u;
-    _lastBenchTickMs   = now_ms;
-
-    if (!isBenchMode()) return;
-    (void)cmds;
-
-    // Front-pair approximation: treat as differential using FL(L) and FR(R).
-    // trackwidth used here is 2 * halfTrack (full track width).
-    // Feed MEASURED wheel travel, not commanded tgtSpeed — same rationale as
-    // NezhaHAL::tick (commanded integration is blind to PID lag and coast;
-    // see BenchOtosSensor::tickEncoder).
-    float trackwidth = (_liveCfg != nullptr) ? _liveCfg->trackwidth
-                                             : 2.0f * _halfTrack;   // [mm]
-    // Same heading law as encpose: scale dTheta by effectiveSlip(rotSlip)
-    // (via tw/slip — algebraically identical).  See NezhaHAL::tick.
-    const float slip = effectiveSlip((_liveCfg != nullptr)
-                                         ? _liveCfg->rotationalSlip : 0.0f);
-    benchOtosPtr()->tickEncoder(_motorFL.position(), _motorFR.position(),
-                                trackwidth / slip, dt_ms);
-#else
+    // Bench-OTOS feed REMOVED (bench-wedge fix, 2026-07-03) — moved to
+    // Drive::tickUpdate (see NezhaHAL::tick for the rationale).
     (void)now_ms;
     (void)cmds;
-#endif
 }

@@ -156,18 +156,24 @@ private:
     // tick. Clears when anyWedged next goes false (mirrors _prevAnyWedged).
     bool     _wedgeReprimeAttempted = false;
 
-    // Secondary value-based freeze detector + MID-LEG re-prime state
-    // (bench-wedge fix, 2026-07-03 — see tickUpdate STEP 3).  A wheel whose
-    // cached position() is exactly constant for kFreezeTicksN ticks while
-    // commanded to move is a latched 0x46 readback register; one in-band
-    // atomic read per episode re-primes it (KB doc
-    // 2026-07-01-encoder-wedge-boundary-latch-flavor.md).
+    // Secondary value-based freeze detector state (bench-wedge fix,
+    // 2026-07-03 — see tickUpdate).  A wheel whose post-filter encoder is
+    // exactly constant for kFreezeTicksN ticks while commanded to move is a
+    // latched 0x46 readback register; the flags raise wedgeActive (dTheta
+    // hold) and the bench feed's heading hold.  NO mid-leg I2C recovery —
+    // atomic operations while wheels rotate are themselves a latch trigger
+    // (sprint-064 issue encoder-reset-while-moving-latches-readback).
     float    _frzLastRawL  = 0.0f;
     float    _frzLastRawR  = 0.0f;
     uint8_t  _frzTicksL    = 0;
     uint8_t  _frzTicksR    = 0;
-    bool     _frzReprimedL = false;
-    bool     _frzReprimedR = false;
+    bool     _frzActiveL   = false;  // live per-wheel frozen flags (this tick)
+    bool     _frzActiveR   = false;
+
+    // Bench-OTOS feed dt baseline (feed moved here from the HAL actuator
+    // ticks — see tickUpdate).  Maintained every tick, same anti-spike
+    // discipline the HALs used.
+    uint32_t _lastBenchFeedMs = 0;
 
     // OTOS timing for the lag gate.
     uint32_t _lastOtosMs = 0;

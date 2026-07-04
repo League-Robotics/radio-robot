@@ -1120,6 +1120,10 @@ void sim_bench_otos_set_noise(void* h, float noise_xy, float noise_h,
 // Returns 1 if the wedge EVT latch is set (wheel is wedged), 0 otherwise.
 int sim_get_wheel_wedged_l(void* h)
 {
+    // Reads the MotorController latch specifically (the n=10 detector the
+    // coverage/blindspot tests characterize).  Drive's faster value-based
+    // freeze flag is OR'd into drive.state().wheel_wedged_ (TLM wedge=) and
+    // surfaces via sim_get_odometry_wedge_active().
     return static_cast<SimHandle*>(h)->robot.motorController.wheelWedgedL() ? 1 : 0;
 }
 int sim_get_wheel_wedged_r(void* h)

@@ -88,43 +88,11 @@ void NezhaHAL::tick(uint32_t now)   // [ms]
 
 void NezhaHAL::tick(uint32_t now, const MotorCommands& cmds)   // [ms]
 {
-#ifdef BENCH_OTOS_ENABLED
-    // Maintain the dt baseline every tick (see header comment) before the
-    // bench-mode gate.
-    int32_t  dt_signed = (int32_t)(now - _lastBenchTick);
-    uint32_t dt         = (dt_signed > 0) ? (uint32_t)dt_signed : 0u;  // [ms]
-    _lastBenchTick      = now;
-
-    // Early-return when bench mode is off (production path — nearly free).
-    if (!isBenchMode()) return;
-    (void)cmds;
-
-    // Feed MEASURED wheel travel, not commanded tgtSpeed: the commanded
-    // integral is blind to PID lag and post-cutoff coast (~8°/turn heading
-    // loss on tovez), so the bench pose disagreed with the encoder pose and
-    // tours could not close (see BenchOtosSensor::tickEncoder).  position()
-    // returns the value cached by this tick's sensor read — no I2C here.
-    // tickEncoder owns the delta baseline and the encoder-reset clamp.
-    // Trackwidth from the LIVE config when bound (same value Drive's EKF
-    // prediction uses, tracks runtime SET tw=…); construction cache otherwise.
-    const float tw = (_liveCfg != nullptr) ? _liveCfg->trackwidth : _trackwidth;
-    // Apply the SAME heading law Odometry::predict uses for encpose:
-    // dTheta = ((dR-dL)/tw) * effectiveSlip(rotSlip).  On the floor the real
-    // OTOS measures scrubbed body rotation; rotationalSlip is the calibrated
-    // estimate of that scrub, so the bench sensor must model it too — or a
-    // calibrated profile over-rotates every believed turn on the stand by
-    // 1/slip (~+8°/RT 9000 at 0.92: the 2026-07-03 "tour spirals off the
-    // table" run).  Dividing tw by effectiveSlip is algebraically identical
-    // to scaling dTheta by it, and keeps ideal/otos/optical/fused/encpose on
-    // ONE heading law under ANY pushed calibration.  nocal (rotSlip=0 → 1.0)
-    // is unchanged.
-    const float slip = effectiveSlip((_liveCfg != nullptr)
-                                         ? _liveCfg->rotationalSlip : 0.0f);
-    benchOtosPtr()->tickEncoder(_motorL.position(), _motorR.position(),
-                                tw / slip, dt);
-#else
-    // Production: no bench sensor; this override is a no-op.  (034-006)
+    // Bench-OTOS feed REMOVED (bench-wedge fix, 2026-07-03): the feed moved
+    // to Drive::tickUpdate, which integrates the post-filter, wedge-
+    // substituted encoder stream — this HAL-level feed read the raw Motor
+    // cache and let a latched register poison the bench frame for a whole
+    // leg.  The override remains for interface stability.
     (void)now;
     (void)cmds;
-#endif
 }

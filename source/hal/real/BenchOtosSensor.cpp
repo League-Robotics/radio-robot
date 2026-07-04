@@ -197,7 +197,8 @@ void BenchOtosSensor::idealPose(OtosPose& out) const {
 // ---------------------------------------------------------------------------
 
 void BenchOtosSensor::tickEncoder(float encLeft, float encRight,
-                                  float trackwidth, uint32_t dt_ms) {
+                                  float trackwidth, uint32_t dt_ms,
+                                  bool holdHeading) {
     // dt==0 re-entry: leave the baseline UNTOUCHED and integrate nothing.
     // The sim loop invokes the actuator tick twice per timestamp (sim_tick
     // pre-loop + loopTickOnce step 6b, second call dt==0 by design); if the
@@ -224,7 +225,15 @@ void BenchOtosSensor::tickEncoder(float encLeft, float encRight,
     const float maxStep = kMaxWheelMmps * dt_s;
     if (dL > maxStep || dL < -maxStep || dR > maxStep || dR < -maxStep) return;
 
-    tick(dL / dt_s, dR / dt_s, trackwidth, dt_ms);
+    if (holdHeading) {
+        // Wedge freeze: a frozen wheel's differential is phantom rotation.
+        // Integrate the average distance with dTheta == 0 (mirrors
+        // Odometry::predict's _wedgeActive hold).
+        const float dAvg = (dL + dR) * 0.5f;
+        tick(dAvg / dt_s, dAvg / dt_s, trackwidth, dt_ms);
+    } else {
+        tick(dL / dt_s, dR / dt_s, trackwidth, dt_ms);
+    }
 }
 
 void BenchOtosSensor::tick(float velLeft, float velRight,
