@@ -50,8 +50,10 @@ minimal dev loop. Nothing else.
   banners) at `docs/reference/google-cppguide.html`; deviations recorded in
   `.claude/rules/naming-and-style.md` and `.claude/rules/coding-standards.md`:
   `.cpp` extension (CODAL build requirement), `#pragma once` if already
-  conventional, generated `source/messages/*` exempt, verbatim-copied infra
-  keeps its old filenames/style until touched. New files: snake_case filenames; **CamelCase naming, overriding
+  conventional, generated `source/messages/*` never hand-edited. ALL files in
+  the new `source/` tree use snake_case filenames — including verbatim copies
+  (renamed wholesale in commit 1bb0d96; the earlier keep-old-names exemption is
+  dead). Copied file CONTENT keeps its legacy style until touched. **CamelCase naming, overriding
   Google's case rules** — capitalize the first letter (including all letters of
   an acronym) in a class/struct/protocol/namespace name (`Motor`, `HTTPServer`,
   `namespace Hal`); lower-case the first letter (including all letters of a

@@ -226,5 +226,14 @@ Details:
   notation, not word separation.
 - Filenames stay snake_case; `kConstant` constants stay.
 - Legacy code (`source_old`, verbatim copies) is already lowerCamelCase
-  for functions and stays as-is until touched. Generated code
-  (`source/messages/*.h`) is exempt.
+  for functions and stays as-is until touched.
+- Generated code (`source/messages/*.h`) is exempt **only in the sense
+  that the output files are never hand-edited** — fixes go in the
+  generator, not the headers. The generator template itself
+  (`scripts/gen_messages.py`) must emit conforming API. In particular,
+  the trivial protobuf-style `get_*` accessors it currently emits
+  (`get_kind()`, `get_ax()`, …) are non-conforming and unused, and
+  **must not be generated**; getters, where needed at all, are bare-name
+  lowerCamelCase (`kind()`). Removal is scheduled after sprint 077 —
+  see `clasi/issues/remove-generated-get-accessors.md` (stakeholder
+  decision 2026-07-04).
