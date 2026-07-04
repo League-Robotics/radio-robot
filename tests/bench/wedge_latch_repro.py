@@ -93,18 +93,22 @@ def main() -> int:
             timeout_stop = any("reason=time" in ln for ln in lines)
             for w in wedged:
                 m = re.search(r"wheel=([LR]) enc=(-?\d+)", w)
-                episodes.append({"leg": leg, "wheel": m.group(1) if m else "?",
-                                 "enc": int(m.group(2)) if m else None,
+                wheel = m.group(1) if m else "?"
+                enc = int(m.group(2)) if m else None
+                episodes.append({"leg": leg, "wheel": wheel, "enc": enc,
                                  "time_stop": timeout_stop})
-                log(f"  leg {leg:3d}: LATCH {w[:70]}")
+                log(f"  leg {leg:3d}: LATCH wheel={wheel} @enc={enc}mm"
+                    f"{'  (leg died on TIME backstop)' if timeout_stop else ''}")
             if timeout_stop and not wedged:
                 episodes.append({"leg": leg, "wheel": "?", "enc": None,
                                  "time_stop": True})
-                log(f"  leg {leg:3d}: reason=time without EVT (boundary latch)")
+                log(f"  leg {leg:3d}: reason=time without EVT (boundary latch, "
+                    f"detector blind)")
             if leg % 10 == 0:
-                rate = len(episodes) / leg
-                log(f"[{leg}/{args.legs}] episodes so far: {len(episodes)} "
-                    f"({rate:.2f}/leg)")
+                n_l = sum(1 for e in episodes if e["wheel"] == "L")
+                n_r = sum(1 for e in episodes if e["wheel"] == "R")
+                log(f"[{leg}/{args.legs}] episodes: {len(episodes)} "
+                    f"({len(episodes)/leg:.2f}/leg)  L={n_l} R={n_r}")
             time.sleep(0.4)            # settle between legs
     finally:
         send("X")
@@ -120,8 +124,14 @@ def main() -> int:
         out = OUTDIR / "wedge_latch_repro.json"
         out.write_text(json.dumps(result, indent=1))
         (OUTDIR / "wedge_latch_repro_raw.log").write_text("\n".join(raw_log))
+        n_l = sum(1 for e in episodes if e["wheel"] == "L")
+        n_r = sum(1 for e in episodes if e["wheel"] == "R")
+        n_q = len(episodes) - n_l - n_r
+        result["by_wheel"] = {"L": n_l, "R": n_r, "unattributed": n_q}
+        out.write_text(json.dumps(result, indent=1))
         log(f"==== {len(episodes)} episodes in {legs_run} legs "
-            f"({result['episodes_per_leg']}/leg) -> {out}")
+            f"({result['episodes_per_leg']}/leg): "
+            f"L={n_l} R={n_r} unattributed={n_q} -> {out}")
 
     return 0
 
