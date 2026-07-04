@@ -19,7 +19,7 @@ terminate). Drives TURN x4 closure, a D+TURN square, and D/T velocity profiles,
 logging every SNAP frame and validating for bad starts/stops, velocity jumps,
 runaway spin, and EKF health.
 
-Units: pose=x_mm,y_mm,h_centideg ; twist=v_mmps,omega_mrad/s ; enc=L_mm,R_mm.
+Units: pose=x,y,h_centideg ; twist=v_mmps,omega_mrad/s ; enc=L,R.
 
 Usage: uv run python tests/bench/bench_validation_032.py [--port /dev/cu.usbmodemXXXX]
 """
@@ -55,15 +55,15 @@ def _make_connection(port: str):
         raise RuntimeError(f"Could not connect to {port}: {result['error']}")
     if not result.get("pinged"):
         # Try sending PING explicitly.
-        pr = conn.send("PING", read_ms=600, stop_token="OK pong")
+        pr = conn.send("PING", read_timeout=600, stop_token="OK pong")
         if not any("pong" in ln.lower() for ln in pr.get("responses", [])):
             print(f"WARNING: PING did not confirm pong from {port}. Proceeding anyway.")
     return conn
 
 
-def _tx(conn, cmd: str, read_ms: int = 450) -> str:
+def _tx(conn, cmd: str, read_timeout: int = 450) -> str:
     """Send a command and return the first response line (or empty string)."""
-    result = conn.send(cmd, read_ms=read_ms, stop_token="OK")
+    result = conn.send(cmd, read_timeout=read_timeout, stop_token="OK")
     lines = result.get("responses", [])
     return lines[0].strip() if lines else ""
 
@@ -86,7 +86,7 @@ def parse(ln):
     d = {"mode": kv.get("mode", "?")}
     if "pose" in kv:
         p = kv["pose"].split(",")
-        if len(p) >= 3: d["x"], d["y"], d["h_deg"] = int(p[0]), int(p[1]), int(p[2]) / 100.0
+        if len(p) >= 3: d["x"], d["y"], d["h"] = int(p[0]), int(p[1]), int(p[2]) / 100.0
     if "twist" in kv:
         t = kv["twist"].split(",")
         if len(t) >= 2: d["v"], d["omega"] = int(t[0]), int(t[1]) / 1000.0
@@ -101,7 +101,7 @@ def parse(ln):
 
 def drive(conn, label, cmd, dur_s, log):
     frames = []
-    _tx(conn, cmd, read_ms=300)
+    _tx(conn, cmd, read_timeout=300)
     t0 = time.time()
     while time.time() - t0 < dur_s:
         ln = _snap(conn)
@@ -116,7 +116,7 @@ def drive(conn, label, cmd, dur_s, log):
 def analyze(label, frames, problems):
     vs = [f["v"] for f in frames if "v" in f]
     oms = [f["omega"] for f in frames if "omega" in f]
-    hs = [f["h_deg"] for f in frames if "h_deg" in f]
+    hs = [f["h"] for f in frames if "h" in f]
     rej = [f["ekf_rej"] for f in frames if "ekf_rej" in f]
     m = {"label": label, "n": len(frames)}
     if vs:
@@ -157,19 +157,19 @@ def main():
     log, report, problems = [], [], []
 
     conn = _make_connection(port)
-    print("PING:", _tx(conn, "PING", read_ms=500).strip())
-    print("SET sTimeout=60000:", _tx(conn, "SET sTimeout=60000", read_ms=400).strip())
-    print("STREAM fields    :", _tx(conn, "STREAM 50 fields=mode,pose,twist,enc,ekf_rej", read_ms=400).strip())
-    print("DBG OTOS BENCH 1 :", _tx(conn, "DBG OTOS BENCH 1 20 10 0", read_ms=500).strip())
-    print("DBG OTOS         :", _tx(conn, "DBG OTOS", read_ms=600).strip())
+    print("PING:", _tx(conn, "PING", read_timeout=500).strip())
+    print("SET sTimeout=60000:", _tx(conn, "SET sTimeout=60000", read_timeout=400).strip())
+    print("STREAM fields    :", _tx(conn, "STREAM 50 fields=mode,pose,twist,enc,ekf_rej", read_timeout=400).strip())
+    print("DBG OTOS BENCH 1 :", _tx(conn, "DBG OTOS BENCH 1 20 10 0", read_timeout=500).strip())
+    print("DBG OTOS         :", _tx(conn, "DBG OTOS", read_timeout=600).strip())
 
     try:
         # Seq 1: TURN x4
-        _tx(conn, "ZERO enc", read_ms=300); _tx(conn, "SI 0 0 0", read_ms=300)
+        _tx(conn, "ZERO enc", read_timeout=300); _tx(conn, "SI 0 0 0", read_timeout=300)
         for i in range(4):
             report.append(analyze(f"turn{i+1}", drive(conn, f"turn{i+1}", "TURN 9000", 3.0, log), problems))
         # Seq 2: square D+TURN
-        _tx(conn, "ZERO enc", read_ms=300); _tx(conn, "SI 0 0 0", read_ms=300)
+        _tx(conn, "ZERO enc", read_timeout=300); _tx(conn, "SI 0 0 0", read_timeout=300)
         for i in range(4):
             report.append(analyze(f"sqD{i+1}", drive(conn, f"sqD{i+1}", "D 300 250 250", 3.0, log), problems))
             report.append(analyze(f"sqT{i+1}", drive(conn, f"sqT{i+1}", "TURN 9000", 3.0, log), problems))
@@ -178,12 +178,12 @@ def main():
                                  ("D_med_300", "D 400 300 300", 2.8),
                                  ("D_fast_500", "D 500 500 500", 2.4),
                                  ("T_timed_1500", "T 1500 300 300", 2.6)]:
-            _tx(conn, "ZERO enc", read_ms=300); _tx(conn, "SI 0 0 0", read_ms=300)
+            _tx(conn, "ZERO enc", read_timeout=300); _tx(conn, "SI 0 0 0", read_timeout=300)
             report.append(analyze(label, drive(conn, label, cmd, dur, log), problems))
-        print("DBG OTOS (final):", _tx(conn, "DBG OTOS", read_ms=600).strip())
+        print("DBG OTOS (final):", _tx(conn, "DBG OTOS", read_timeout=600).strip())
     finally:
-        _tx(conn, "X", read_ms=300); _tx(conn, "STREAM 0", read_ms=300)
-        _tx(conn, "DBG OTOS BENCH 0", read_ms=300)
+        _tx(conn, "X", read_timeout=300); _tx(conn, "STREAM 0", read_timeout=300)
+        _tx(conn, "DBG OTOS BENCH 0", read_timeout=300)
         conn.disconnect()
 
     (OUTDIR / "tlm_log.txt").write_text("\n".join(log))

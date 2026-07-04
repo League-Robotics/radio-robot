@@ -40,11 +40,11 @@ _NEW_SIM_ERR_SPIN_TO_PROFILE_KEY = {
     "sim_err_body_lin_scrub": "body_lin_scrub",
     "sim_err_motor_offset_l": "motor_offset_l",
     "sim_err_motor_offset_r": "motor_offset_r",
-    "sim_err_trackwidth": "trackwidth_mm",
+    "sim_err_trackwidth": "trackwidth",
     "sim_err_otos_lin_scale": "otos_lin_scale_err",
     "sim_err_otos_ang_scale": "otos_ang_scale_err",
-    "sim_err_otos_lin_drift": "otos_lin_drift_mms",
-    "sim_err_otos_yaw_drift": "otos_yaw_drift_degs",
+    "sim_err_otos_lin_drift": "otos_lin_drift",
+    "sim_err_otos_yaw_drift": "otos_yaw_drift",
 }
 
 
@@ -116,7 +116,7 @@ class TestSimErrorsPanelExistence:
 
             # 069-007: every new knob must reproduce DEFAULT_PROFILE's
             # value, including the multiplicative knobs at 1.0 (not 0.0)
-            # and trackwidth_mm at the real 150.0 (not 0.0).
+            # and trackwidth at the real 150.0 (not 0.0).
             for object_name, profile_key in _NEW_SIM_ERR_SPIN_TO_PROFILE_KEY.items():
                 spin = window.findChild(QDoubleSpinBox, object_name)
                 assert spin.value() == pytest.approx(sim_prefs.DEFAULT_PROFILE[profile_key]), (
@@ -135,7 +135,7 @@ class TestSimErrorsPanelExistence:
         monkeypatch.setattr(sim_prefs, "_PREFS_DIR", tmp_path)
         sim_prefs.save_sim_error_profile(
             {
-                "encoder_noise_mm": 4.0,
+                "encoder_noise": 4.0,
                 "slip_turn_extra": 0.5,
                 "otos_linear_noise": 0.3,
                 "otos_yaw_noise": 0.07,
@@ -145,11 +145,11 @@ class TestSimErrorsPanelExistence:
                 "body_lin_scrub": 0.85,
                 "motor_offset_l": 1.1,
                 "motor_offset_r": 0.9,
-                "trackwidth_mm": 148.0,
+                "trackwidth": 148.0,
                 "otos_lin_scale_err": 0.03,
                 "otos_ang_scale_err": -0.03,
-                "otos_lin_drift_mms": 2.0,
-                "otos_yaw_drift_degs": -1.5,
+                "otos_lin_drift": 2.0,
+                "otos_yaw_drift": -1.5,
             }
         )
 
@@ -296,7 +296,7 @@ class TestSimErrorsApplyButton:
             # window-build default).
             assert saved[0] == {
                 **sim_prefs.DEFAULT_PROFILE,
-                "encoder_noise_mm": 6.0,
+                "encoder_noise": 6.0,
                 "slip_turn_extra": 0.6,
                 "otos_linear_noise": 0.4,
                 "otos_yaw_noise": 0.08,
@@ -350,11 +350,11 @@ class TestSimErrorsApplyButton:
                 "body_lin_scrub": 0.75,
                 "motor_offset_l": 1.2,
                 "motor_offset_r": 0.8,
-                "trackwidth_mm": 160.0,
+                "trackwidth": 160.0,
                 "otos_lin_scale_err": 0.15,
                 "otos_ang_scale_err": -0.15,
-                "otos_lin_drift_mms": 3.0,
-                "otos_yaw_drift_degs": -2.0,
+                "otos_lin_drift": 3.0,
+                "otos_yaw_drift": -2.0,
             }
             assert saved[0] == pytest.approx(expected)
         finally:
@@ -403,7 +403,7 @@ class TestSimErrorsApplyButton:
             def send(self, line: str) -> None:
                 pass
 
-            def command(self, line: str, read_ms: int = 200) -> str:
+            def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
                 return "OK"
 
             def apply_error_profile(self, profile: dict) -> None:
@@ -450,7 +450,7 @@ class TestSimErrorsApplyButton:
             )
             assert applied[0] == {
                 **sim_prefs.DEFAULT_PROFILE,
-                "encoder_noise_mm": 9.0,
+                "encoder_noise": 9.0,
                 "slip_turn_extra": 0.9,
                 "otos_linear_noise": 0.9,
                 "otos_yaw_noise": 0.09,

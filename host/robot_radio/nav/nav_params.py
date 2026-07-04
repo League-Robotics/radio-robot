@@ -36,24 +36,24 @@ class NavParams:
     crawl_cm_per_pulse: float = 0.3
     crawl_deg_per_pulse: float = 0.8
     crawl_speed: float = 50
-    crawl_ms: float = 20
+    crawl_duration: float = 20  # [ms]
     crawl_spin_max: float = 2
     crawl_fwd_max: float = 15
     crawl_angle: float = 25
     # Navigate loop
-    cmd_duration_ms: float = 150
-    nav_loop_hz: float = 15
+    cmd_duration: float = 150  # [ms]
+    nav_loop_rate: float = 15  # [Hz]
     frames_before_stop: float = 5
     crawl_turns: float = 0
     # Path planning
     bezier_tangent_frac: float = 0.33
     path_spacing_cm: float = 1.0
     # Spin-align phase (follow_pose_path)
-    spin_align_threshold_deg: float = 90.0
-    spin_align_tolerance_deg: float = 15.0
+    spin_align_threshold: float = 90.0  # [deg]
+    spin_align_tolerance: float = 15.0  # [deg]
     spin_align_max_frames: float = 60.0
     # Final-turn phase (follow_pose_path)
-    final_turn_tolerance_deg: float = 5.0
+    final_turn_tolerance: float = 5.0  # [deg]
     final_turn_speed: float = 45.0
     final_turn_max_frames: float = 60.0
     # Shared spin speed used by both phases (when not overridden)

@@ -366,11 +366,11 @@ def preflight_nudge(proto, dc, cam, fence, nudge_cm, pump, record):
     moved = math.hypot(dx, dy)
     if moved < nudge_cm * 0.35:
         return False, f"robot barely moved ({moved:.1f}cm) — motors/relay?"
-    err_deg = math.degrees(_ang_err(math.atan2(dy, dx), fwd0))
-    if err_deg > 60.0:
-        return False, (f"moved {err_deg:.0f}° off its facing — world→robot sign "
+    err = math.degrees(_ang_err(math.atan2(dy, dx), fwd0))
+    if err > 60.0:
+        return False, (f"moved {err:.0f}° off its facing — world→robot sign "
                        f"looks wrong; refusing the cross-table drive")
-    return True, f"moved {moved:.1f}cm, {err_deg:.0f}° off facing — direction OK"
+    return True, f"moved {moved:.1f}cm, {err:.0f}° off facing — direction OK"
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +385,7 @@ def run_cycle(args, dc, cam, proto, nezha, playfield, *, avoid_slug=None,
     from wpimath.kinematics import DifferentialDriveOdometry
 
     geom = _robot_geometry()
-    trackwidth_mm = geom["trackwidth_mm"]
+    trackwidth = geom["trackwidth"]
 
     # 1. Where is the robot (camera truth)?
     pose = read_cam_pose(dc, cam, timeout_s=3.0)
@@ -467,7 +467,7 @@ def run_cycle(args, dc, cam, proto, nezha, playfield, *, avoid_slug=None,
         """Drain serial; update OTOS + WPILib encoder odometry. Return EVT or ''."""
         nonlocal cur_otos, cur_enc, enc_off
         evt = ""
-        for line in proto.read_lines(duration_ms=20):
+        for line in proto.read_lines(duration=20):
             if "EVT done G" in line:
                 evt = "DONE"
             elif "EVT safety_stop" in line:
@@ -615,10 +615,10 @@ def _robot_geometry() -> dict:
         cfg = get_robot_config()
         tw = getattr(getattr(cfg, "geometry", None), "trackwidth", None)
         if tw:
-            return {"trackwidth_mm": float(tw)}
+            return {"trackwidth": float(tw)}
     except Exception:
         pass
-    return {"trackwidth_mm": 126.0}
+    return {"trackwidth": 126.0}
 
 
 # ---------------------------------------------------------------------------

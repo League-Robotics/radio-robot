@@ -28,7 +28,7 @@ class _FakeTransport:
     def __init__(self):
         self.commands_sent: list[str] = []
 
-    def command(self, line: str, read_ms: int = 300) -> str:
+    def command(self, line: str, read_timeout: int = 300) -> str:  # [ms]
         self.commands_sent.append(line)
         return ""
 
@@ -88,10 +88,10 @@ def test_set_origin_sends_zero_enc_oz_then_si(monkeypatch):
     def _set_origin() -> None:
         transport = state.get("transport")
         if transport is not None:
-            transport.command("ZERO enc", read_ms=300)
-            transport.command("OZ", read_ms=300)
+            transport.command("ZERO enc", read_timeout=300)
+            transport.command("OZ", read_timeout=300)
             si_cmd = build_setpose_command(0.0, 0.0, 0.0)
-            transport.command(si_cmd, read_ms=300)
+            transport.command(si_cmd, read_timeout=300)
         else:
             _append_log("[WARN] Set Robot @ 0,0: no robot connected — display only")
         trace_model.anchor(0.0, 0.0, 0.0)
@@ -140,10 +140,10 @@ def test_set_origin_command_ordering():
     def _set_origin() -> None:
         transport = state.get("transport")
         if transport is not None:
-            transport.command("ZERO enc", read_ms=300)
-            transport.command("OZ", read_ms=300)
+            transport.command("ZERO enc", read_timeout=300)
+            transport.command("OZ", read_timeout=300)
             si_cmd = build_setpose_command(0.0, 0.0, 0.0)
-            transport.command(si_cmd, read_ms=300)
+            transport.command(si_cmd, read_timeout=300)
         else:
             _append_log("[WARN] Set Robot @ 0,0: no robot connected — display only")
         trace_model.anchor(0.0, 0.0, 0.0)
@@ -185,10 +185,10 @@ def test_set_origin_no_transport_skips_wire_commands():
     def _set_origin() -> None:
         transport = state.get("transport")
         if transport is not None:
-            transport.command("ZERO enc", read_ms=300)
-            transport.command("OZ", read_ms=300)
+            transport.command("ZERO enc", read_timeout=300)
+            transport.command("OZ", read_timeout=300)
             si_cmd = build_setpose_command(0.0, 0.0, 0.0)
-            transport.command(si_cmd, read_ms=300)
+            transport.command(si_cmd, read_timeout=300)
         else:
             _append_log("[WARN] Set Robot @ 0,0: no robot connected — display only")
         trace_model.anchor(0.0, 0.0, 0.0)
@@ -233,10 +233,10 @@ def test_set_origin_no_transport_display_reset_still_runs():
     def _set_origin() -> None:
         transport = state.get("transport")
         if transport is not None:
-            transport.command("ZERO enc", read_ms=300)
-            transport.command("OZ", read_ms=300)
+            transport.command("ZERO enc", read_timeout=300)
+            transport.command("OZ", read_timeout=300)
             si_cmd = build_setpose_command(0.0, 0.0, 0.0)
-            transport.command(si_cmd, read_ms=300)
+            transport.command(si_cmd, read_timeout=300)
         else:
             _append_log("[WARN] Set Robot @ 0,0: no robot connected — display only")
         trace_model.anchor(0.0, 0.0, 0.0)

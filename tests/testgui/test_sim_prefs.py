@@ -39,7 +39,7 @@ class TestDefaultProfile:
 
         assert DEFAULT_PROFILE == {
             # historical four -- slip_turn_extra changed 0.26 -> 0.0 (073-003)
-            "encoder_noise_mm": 0.0,
+            "encoder_noise": 0.0,
             "slip_turn_extra": 0.0,
             "otos_linear_noise": 0.05,
             "otos_yaw_noise": 0.0,
@@ -48,8 +48,8 @@ class TestDefaultProfile:
             "enc_scale_err_r": 0.0,
             "otos_lin_scale_err": 0.0,
             "otos_ang_scale_err": 0.0,
-            "otos_lin_drift_mms": 0.0,
-            "otos_yaw_drift_degs": 0.0,
+            "otos_lin_drift": 0.0,
+            "otos_yaw_drift": 0.0,
             # 069-007: multiplicative terms -- 1.0 is the genuine no-op
             "body_rot_scrub": 1.0,
             "body_lin_scrub": 1.0,
@@ -57,7 +57,7 @@ class TestDefaultProfile:
             "motor_offset_r": 1.0,
             # 069-007: no safe zero default -- the firmware config's
             # trackwidth (what the sim seeds the plant with at construction)
-            "trackwidth_mm": 128.0,
+            "trackwidth": 128.0,
         }
 
     def test_multiplicative_knobs_default_to_one_not_zero(self):
@@ -72,7 +72,7 @@ class TestDefaultProfile:
             assert DEFAULT_PROFILE[key] == 1.0, f"{key} must default to 1.0, not 0.0"
 
     def test_trackwidth_defaults_to_real_nonzero_value(self):
-        """trackwidth_mm has NO safe zero default -- PhysicsWorld::update()
+        """trackwidth has NO safe zero default -- PhysicsWorld::update()
         divides by it. Must default to a genuine, non-zero, neutral value:
         the firmware config's trackwidthMm (DefaultConfig.cpp, 128.0mm),
         which is what sim_api.cpp seeds the plant with at construction.
@@ -82,8 +82,8 @@ class TestDefaultProfile:
         encoder-arc turn would land off-angle by the ratio)."""
         from robot_radio.testgui.sim_prefs import DEFAULT_PROFILE
 
-        assert DEFAULT_PROFILE["trackwidth_mm"] == 128.0
-        assert DEFAULT_PROFILE["trackwidth_mm"] != 0.0
+        assert DEFAULT_PROFILE["trackwidth"] == 128.0
+        assert DEFAULT_PROFILE["trackwidth"] != 0.0
 
     def test_additive_noise_knobs_default_to_zero(self):
         from robot_radio.testgui.sim_prefs import DEFAULT_PROFILE
@@ -93,8 +93,8 @@ class TestDefaultProfile:
             "enc_scale_err_r",
             "otos_lin_scale_err",
             "otos_ang_scale_err",
-            "otos_lin_drift_mms",
-            "otos_yaw_drift_degs",
+            "otos_lin_drift",
+            "otos_yaw_drift",
         ):
             assert DEFAULT_PROFILE[key] == 0.0, f"{key} must default to 0.0"
 
@@ -124,7 +124,7 @@ class TestPersistence:
         monkeypatch.setattr(sim_prefs, "_PREFS_DIR", tmp_path)
 
         profile = {
-            "encoder_noise_mm": 2.5,
+            "encoder_noise": 2.5,
             "slip_turn_extra": 0.3,
             "otos_linear_noise": 0.1,
             "otos_yaw_noise": 0.02,
@@ -132,13 +132,13 @@ class TestPersistence:
             "enc_scale_err_r": -0.01,
             "otos_lin_scale_err": 0.02,
             "otos_ang_scale_err": -0.02,
-            "otos_lin_drift_mms": 1.0,
-            "otos_yaw_drift_degs": -1.0,
+            "otos_lin_drift": 1.0,
+            "otos_yaw_drift": -1.0,
             "body_rot_scrub": 0.9,
             "body_lin_scrub": 0.95,
             "motor_offset_l": 1.02,
             "motor_offset_r": 0.98,
-            "trackwidth_mm": 151.0,
+            "trackwidth": 151.0,
         }
         assert set(profile.keys()) == set(sim_prefs.DEFAULT_PROFILE.keys()), (
             "test profile must cover every DEFAULT_PROFILE key for a full round-trip"
@@ -155,9 +155,9 @@ class TestPersistence:
         monkeypatch.setattr(sim_prefs, "_PREFS_DIR", nested_dir)
 
         assert not nested_dir.exists()
-        sim_prefs.save_sim_error_profile({"encoder_noise_mm": 1.0})
+        sim_prefs.save_sim_error_profile({"encoder_noise": 1.0})
         assert prefs_path.exists()
-        assert sim_prefs.load_sim_error_profile()["encoder_noise_mm"] == 1.0
+        assert sim_prefs.load_sim_error_profile()["encoder_noise"] == 1.0
 
     def test_load_missing_file_returns_defaults(self, tmp_path, monkeypatch):
         """073-003: body_rot_scrub's fallback is now calibration-resolved,
@@ -203,11 +203,11 @@ class TestPersistence:
         from robot_radio.testgui import sim_prefs
 
         prefs_path = tmp_path / "sim_error_profile.json"
-        prefs_path.write_text(json.dumps({"encoder_noise_mm": 5.0}))
+        prefs_path.write_text(json.dumps({"encoder_noise": 5.0}))
         monkeypatch.setattr(sim_prefs, "_PREFS_PATH", prefs_path)
 
         profile = sim_prefs.load_sim_error_profile()
-        assert profile["encoder_noise_mm"] == 5.0
+        assert profile["encoder_noise"] == 5.0
         assert profile["slip_turn_extra"] == 0.0  # 073-003: was 0.26
         assert profile["otos_linear_noise"] == 0.05
         assert profile["otos_yaw_noise"] == 0.0
@@ -219,13 +219,13 @@ class TestPersistence:
 
         prefs_path = tmp_path / "sim_error_profile.json"
         prefs_path.write_text(
-            json.dumps({"slip_turn_extra": "not-a-number", "encoder_noise_mm": 3.0})
+            json.dumps({"slip_turn_extra": "not-a-number", "encoder_noise": 3.0})
         )
         monkeypatch.setattr(sim_prefs, "_PREFS_PATH", prefs_path)
 
         profile = sim_prefs.load_sim_error_profile()
         assert profile["slip_turn_extra"] == 0.0  # 073-003: was 0.26
-        assert profile["encoder_noise_mm"] == 3.0
+        assert profile["encoder_noise"] == 3.0
 
     def test_unknown_keys_are_ignored(self, tmp_path, monkeypatch):
         """073-003: pin get_robot_config to None, same rationale as
@@ -250,7 +250,7 @@ class TestPersistence:
         monkeypatch.setattr(sim_prefs, "_PREFS_DIR", tmp_path)
 
         sim_prefs.save_sim_error_profile(
-            {"encoder_noise_mm": 1.0, "bogus_key": "ignored"}
+            {"encoder_noise": 1.0, "bogus_key": "ignored"}
         )
         on_disk = json.loads(prefs_path.read_text())
         assert set(on_disk.keys()) == set(sim_prefs.DEFAULT_PROFILE.keys())
@@ -266,7 +266,7 @@ class TestPersistence:
         monkeypatch.setattr(sim_prefs, "_PREFS_PATH", bad_dir / "sim_error_profile.json")
 
         # Must not raise.
-        sim_prefs.save_sim_error_profile({"encoder_noise_mm": 1.0})
+        sim_prefs.save_sim_error_profile({"encoder_noise": 1.0})
 
 
 # ---------------------------------------------------------------------------
@@ -314,7 +314,7 @@ class TestResolveCalibrationDefaults:
             rot_slip, tw = sim_prefs.resolve_calibration_defaults()
 
         assert rot_slip == 1.0
-        assert tw == sim_prefs.DEFAULT_PROFILE["trackwidth_mm"]
+        assert tw == sim_prefs.DEFAULT_PROFILE["trackwidth"]
         assert any(
             "no active robot config found" in r.message for r in caplog.records
         )
@@ -343,7 +343,7 @@ class TestResolveCalibrationDefaults:
 
         rot_slip, tw = sim_prefs.resolve_calibration_defaults()
         assert rot_slip == 0.85
-        assert tw == sim_prefs.DEFAULT_PROFILE["trackwidth_mm"]
+        assert tw == sim_prefs.DEFAULT_PROFILE["trackwidth"]
 
     def test_log_callback_receives_warn_prefixed_message_on_fallback(
         self, monkeypatch
@@ -398,9 +398,9 @@ class TestLoadFallbackResolvesBodyRotScrubFromCalibration:
         profile = sim_prefs.load_sim_error_profile()
         assert profile["body_rot_scrub"] == 0.92
         assert profile["slip_turn_extra"] == 0.0
-        # trackwidth_mm's own fallback is unaffected by this ticket -- stays
+        # trackwidth's own fallback is unaffected by this ticket -- stays
         # DEFAULT_PROFILE's static value, not resolve_calibration_defaults()'s.
-        assert profile["trackwidth_mm"] == sim_prefs.DEFAULT_PROFILE["trackwidth_mm"]
+        assert profile["trackwidth"] == sim_prefs.DEFAULT_PROFILE["trackwidth"]
 
     def test_load_missing_file_falls_back_to_neutral_when_no_config(
         self, tmp_path, monkeypatch
@@ -451,13 +451,13 @@ class TestProfileToSimsetKeyMap:
             "otos_ang_scale_err": "otosAngScaleErr",
             "otos_linear_noise": "otosLinNoise",
             "otos_yaw_noise": "otosYawNoise",
-            "otos_lin_drift_mms": "otosLinDriftMmS",
-            "otos_yaw_drift_degs": "otosYawDriftDegS",
+            "otos_lin_drift": "otosLinDriftMmS",
+            "otos_yaw_drift": "otosYawDriftDegS",
             "body_rot_scrub": "bodyRotScrub",
             "body_lin_scrub": "bodyLinScrub",
             "motor_offset_l": "motorOffsetL",
             "motor_offset_r": "motorOffsetR",
-            "trackwidth_mm": "trackwidthMm",
+            "trackwidth": "trackwidthMm",
         }
 
     def test_map_keys_are_all_valid_profile_keys(self):
@@ -468,12 +468,12 @@ class TestProfileToSimsetKeyMap:
             assert key in DEFAULT_PROFILE, f"{key} is not a DEFAULT_PROFILE key"
 
     def test_map_excludes_encoder_noise_mm_and_slip_turn_extra(self):
-        """encoder_noise_mm fans out to two wire keys (encNoiseL/encNoiseR)
+        """encoder_noise fans out to two wire keys (encNoiseL/encNoiseR)
         and slip_turn_extra has no SIMSET key at all -- both are handled
         specially by transport.py, not via this 1:1 map."""
         from robot_radio.testgui.sim_prefs import PROFILE_TO_SIMSET_KEY
 
-        assert "encoder_noise_mm" not in PROFILE_TO_SIMSET_KEY
+        assert "encoder_noise" not in PROFILE_TO_SIMSET_KEY
         assert "slip_turn_extra" not in PROFILE_TO_SIMSET_KEY
 
     def test_map_is_a_bijection(self):

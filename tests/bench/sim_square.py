@@ -23,7 +23,7 @@ from robot_radio.io.sim_conn import SimConnection
 CORNERS = [("purple-NW", -35, 24), ("orange-NE", 35, 24),
            ("green-SE", 35, -24), ("blue-SW", -35, -24), ("purple-NW", -35, 24)]
 SPEED = 160
-TRACKWIDTH_MM = 143.0
+TRACKWIDTH = 143.0
 
 
 def main() -> None:
@@ -42,11 +42,11 @@ def main() -> None:
     # SI/OTOS MUST be set to that actual pose (on hardware this is the camera
     # reading); setting it to anything else makes the firmware drive on a lie.
     s0 = c.get_state()
-    x0_mm, y0_mm, h0 = s0["exact_pose_x"], s0["exact_pose_y"], s0["exact_pose_h"]
-    c.send(f"SI {int(round(x0_mm))} {int(round(y0_mm))} {int(round(h0 * 5729.578))}")
-    c.set_otos_pose(x0_mm, y0_mm, h0)
-    start_x_cm = x0_mm / 10.0
-    start_y_cm = y0_mm / 10.0
+    x0, y0, h0 = s0["exact_pose_x"], s0["exact_pose_y"], s0["exact_pose_h"]
+    c.send(f"SI {int(round(x0))} {int(round(y0))} {int(round(h0 * 5729.578))}")
+    c.set_otos_pose(x0, y0, h0)
+    start_x_cm = x0 / 10.0
+    start_y_cm = y0 / 10.0
     start_yaw = h0 - math.pi / 2
 
     rows, cam = [], []
@@ -55,7 +55,7 @@ def main() -> None:
     def sample():
         st = c.get_state()
         rows.append({
-            "host_t": st["time_ms"] / 1000.0, "robot_t": int(st["time_ms"]), "mode": "G",
+            "host_t": st["time"] / 1000.0, "robot_t": int(st["time"]), "mode": "G",
             "enc_l": st["enc_l"], "enc_r": st["enc_r"],
             "pose_x": int(st["pose_x"]), "pose_y": int(st["pose_y"]),
             "pose_h": int(st["pose_h"] * 5729.578),
@@ -63,7 +63,7 @@ def main() -> None:
             "otos_h": int(st["otos_h"] * 5729.578),
             "v": int(st.get("vel_l", 0)), "omega": 0,
         })
-        cam.append({"host_t": st["time_ms"] / 1000.0,
+        cam.append({"host_t": st["time"] / 1000.0,
                     "cam_x": st["exact_pose_x"] / 10.0,
                     "cam_y": st["exact_pose_y"] / 10.0,
                     "cam_yaw": st["exact_pose_h"] - math.pi / 2})
@@ -89,7 +89,7 @@ def main() -> None:
 
     # write CSVs in square_run.py schema
     import csv
-    meta = {"trackwidth_mm": TRACKWIDTH_MM, "start_x_cm": start_x_cm,
+    meta = {"trackwidth": TRACKWIDTH, "start_x_cm": start_x_cm,
             "start_y_cm": start_y_cm, "start_yaw_rad": start_yaw,
             "speed": SPEED, "route": [n for n, _, _ in CORNERS]}
     out = _REPO / "host_tests" / "square_run_log.csv"

@@ -6,8 +6,8 @@ over a connected transport.
 
 Key mapping
 -----------
-- Up arrow:   ``VW <FWD_SPEED_MMS> 0``          (forward)
-- Down arrow: ``VW -<FWD_SPEED_MMS> 0``         (back)
+- Up arrow:   ``VW <FWD_SPEED> 0``          (forward)
+- Down arrow: ``VW -<FWD_SPEED> 0``         (back)
 - Left arrow: ``VW 0 <ROTATE_OMEGA_MRADS>``      (rotate CCW)
 - Right arrow: ``VW 0 -<ROTATE_OMEGA_MRADS>``    (rotate CW)
 - Release:    bounded ``STOP`` deadman resend (see below)
@@ -54,7 +54,7 @@ are no-ops on ``SimTransport`` (inherited ``Transport`` default).
 
 Units
 -----
-``v_mms``     — linear velocity in mm/s.
+``v``     — linear velocity in mm/s.
 ``omega_mrads`` — angular velocity in milli-radians/s; positive = CCW.
 
 Lazy PySide6 import
@@ -85,8 +85,8 @@ _log = logging.getLogger(__name__)
 # Named constants — edit here to change drive speeds.
 # ---------------------------------------------------------------------------
 
-#: Forward / back speed in mm/s.
-FWD_SPEED_MMS: int = 200
+#: Forward / back speed.
+FWD_SPEED: int = 200  # [mm/s]
 
 #: Rotate speed in milli-radians/s; positive = CCW.
 ROTATE_OMEGA_MRADS: int = 500
@@ -126,8 +126,8 @@ def _qt_arrow_keys() -> dict[int, str]:
         from PySide6.QtCore import Qt  # type: ignore[import-untyped]
 
         _ARROW_KEYS = {
-            int(Qt.Key.Key_Up):    f"VW {FWD_SPEED_MMS} 0",
-            int(Qt.Key.Key_Down):  f"VW -{FWD_SPEED_MMS} 0",
+            int(Qt.Key.Key_Up):    f"VW {FWD_SPEED} 0",
+            int(Qt.Key.Key_Down):  f"VW -{FWD_SPEED} 0",
             int(Qt.Key.Key_Left):  f"VW 0 {ROTATE_OMEGA_MRADS}",
             int(Qt.Key.Key_Right): f"VW 0 -{ROTATE_OMEGA_MRADS}",
         }
@@ -190,12 +190,12 @@ class KeyboardDriver:
 
     Parameters
     ----------
-    interval_ms:
+    interval:
         QTimer interval in milliseconds.  Defaults to 100.
     """
 
-    def __init__(self, interval_ms: int = 100) -> None:
-        self._interval_ms = interval_ms
+    def __init__(self, interval: int = 100) -> None:  # [ms]
+        self._interval = interval
         self._transport: "Transport | None" = None
         self._window: "object | None" = None
         self._timer: "object | None" = None   # QTimer, created lazily
@@ -240,7 +240,7 @@ class KeyboardDriver:
         from PySide6.QtCore import QTimer  # type: ignore[import-untyped]
 
         self._timer = QTimer()
-        self._timer.setInterval(self._interval_ms)
+        self._timer.setInterval(self._interval)
         self._timer.timeout.connect(self._on_timer_tick)
 
         # Save and override key-event handlers on the window.

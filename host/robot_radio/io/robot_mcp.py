@@ -192,11 +192,11 @@ async def list_tools() -> list[types.Tool]:
                                "Robot-relative: X=forward, Y=left. Pre-rotates if heading error > KGT degrees, "
                                "then follows a pure-pursuit arc. Waits for G+DONE (firmware sprint 005+).",
                    inputSchema={"type": "object", "properties": {
-                       "x_mm": {"type": "integer", "description": "Target X in mm (forward)"},
-                       "y_mm": {"type": "integer", "description": "Target Y in mm (left)"},
-                       "speed_mm_s": {"type": "integer", "description": "Drive speed in mm/s (1–999)"},
+                       "x": {"type": "integer", "description": "Target X in mm (forward)"},
+                       "y": {"type": "integer", "description": "Target Y in mm (left)"},
+                       "speed": {"type": "integer", "description": "Drive speed in mm/s (1–999)"},
                        "timeout": {"type": "number", "default": 30, "description": "Seconds to wait for G+DONE"},
-                   }, "required": ["x_mm", "y_mm", "speed_mm_s"]}),
+                   }, "required": ["x", "y", "speed"]}),
         types.Tool(name="stop",
                    description="Stop motors.",
                    inputSchema={"type": "object", "properties": {}, "required": []}),
@@ -209,7 +209,7 @@ async def list_tools() -> list[types.Tool]:
                    description="Send arbitrary command string.",
                    inputSchema={"type": "object", "properties": {
                        "message": {"type": "string"},
-                       "read_ms": {"type": "integer", "default": 500},
+                       "read_timeout": {"type": "integer", "default": 500},
                    }, "required": ["message"]}),
 
         # Navigation
@@ -223,7 +223,7 @@ async def list_tools() -> list[types.Tool]:
                        "camera": {"type": "integer", "default": 3},
                        "robot_tag": {"type": "integer", "default": 1},
                        "timeout": {"type": "number", "default": 30},
-                       "speed_mms": {"type": "integer", "default": 200,
+                       "speed": {"type": "integer", "default": 200,
                                      "description": "Navigation speed in mm/s"},
                    }, "required": ["x", "y"]}),
         types.Tool(name="visit_tags",
@@ -260,7 +260,7 @@ async def list_tools() -> list[types.Tool]:
                        "target": {"type": "array", "items": {"type": "number"},
                                   "minItems": 2, "maxItems": 2,
                                   "description": "[x, y] target in cm"},
-                       "tolerance_mm": {"type": "number", "default": 5,
+                       "tolerance": {"type": "number", "default": 5,
                                         "description": "Arrival radius in mm"},
                        "timeout": {"type": "number", "default": 20,
                                    "description": "Max seconds to run"},
@@ -280,7 +280,7 @@ async def list_tools() -> list[types.Tool]:
                        "robot_tag": {"type": "integer", "default": 1},
                        "timeout": {"type": "number", "default": 30.0,
                                    "description": "Per-waypoint timeout in seconds"},
-                       "speed_mms": {"type": "integer", "default": 200,
+                       "speed": {"type": "integer", "default": 200,
                                      "description": "Navigation speed in mm/s"},
                    }, "required": ["path"]}),
 
@@ -314,7 +314,7 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(name="probe_devices",
                    description="Probe each USB modem port for device announcements.",
                    inputSchema={"type": "object", "properties": {
-                       "read_ms": {"type": "integer", "default": 1200},
+                       "read_timeout": {"type": "integer", "default": 1200},
                    }, "required": []}),
 
         # Utility
@@ -350,7 +350,7 @@ async def list_tools() -> list[types.Tool]:
                        "session_name": {"type": "string"},
                        "pixels_per_cm": {"type": "number", "default": 8.0},
                        "diff_threshold": {"type": "number", "default": 2.0},
-                       "min_interval_ms": {"type": "integer", "default": 0},
+                       "min_interval": {"type": "integer", "default": 0},
                        "max_gap_s": {"type": "number", "default": 1.0},
                        "image_format": {"type": "string", "enum": ["jpg", "png"], "default": "jpg"},
                        "jpeg_quality": {"type": "integer", "default": 90},
@@ -523,26 +523,26 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
             left_enc, right_enc = await asyncio.to_thread(
                 _robot.speed_for_time,
                 int(arguments["left"]), int(arguments["right"]), int(arguments["ms"]))
-            result = {"left_enc_mm": left_enc, "right_enc_mm": right_enc}
+            result = {"left_enc": left_enc, "right_enc": right_enc}
 
     elif name == "goto":
         err = _require_robot()
         if err:
             result = err
         else:
-            x_mm = int(arguments["x_mm"])
-            y_mm = int(arguments["y_mm"])
-            speed = max(1, min(999, int(arguments["speed_mm_s"])))
+            x = int(arguments["x"])
+            y = int(arguments["y"])
+            speed = max(1, min(999, int(arguments["speed"])))
             timeout = float(arguments.get("timeout", 30))
 
             def _s(v: int) -> str:
                 return f"+{v}" if v >= 0 else str(v)
 
-            cmd = f"G{_s(x_mm)}{_s(y_mm)}{_s(speed)}"
+            cmd = f"G{_s(x)}{_s(y)}{_s(speed)}"
 
             import time
             def _goto_blocking() -> dict:
-                _robot.send(cmd, read_ms=300)
+                _robot.send(cmd, read_timeout=300)
                 deadline = time.time() + timeout
                 while time.time() < deadline:
                     for line in _robot._conn.read_lines(duration=500):
@@ -574,7 +574,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
             result = err
         else:
             result = _robot.send(str(arguments["message"]),
-                                 int(arguments.get("read_ms", 500)))
+                                 int(arguments.get("read_timeout", 500)))
 
     # -- Navigation --
 
@@ -589,7 +589,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
                 (float(target[0]), float(target[1])),
                 camera_index=int(arguments.get("camera", 3)),
                 robot_tag=int(arguments.get("robot_tag", _default_robot_tag())),
-                tolerance_mm=float(arguments.get("tolerance_mm", 5)),
+                tolerance=float(arguments.get("tolerance", 5)),
                 timeout=float(arguments.get("timeout", 20)))
 
     elif name == "navigate_to":
@@ -603,7 +603,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
                 camera_index=int(arguments.get("camera", 3)),
                 robot_tag=int(arguments.get("robot_tag", _default_robot_tag())),
                 timeout=float(arguments.get("timeout", 30)),
-                speed_mms=int(arguments.get("speed_mms", 200)))
+                speed=int(arguments.get("speed", 200)))
 
     elif name == "follow_path":
         err = _require_navigator()
@@ -617,7 +617,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
                 camera_index=int(arguments.get("camera_index", 3)),
                 robot_tag=int(arguments.get("robot_tag", _default_robot_tag())),
                 timeout=float(arguments.get("timeout", 30.0)),
-                speed_mms=int(arguments.get("speed_mms", 200)))
+                speed=int(arguments.get("speed", 200)))
 
     elif name == "visit_tags":
         err = _require_navigator()
@@ -686,7 +686,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
 
     elif name == "probe_devices":
         result = await asyncio.to_thread(
-            probe_devices, int(arguments.get("read_ms", 1200)))
+            probe_devices, int(arguments.get("read_timeout", 1200)))
 
     # -- Utility --
 
@@ -721,7 +721,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
                           else str(arguments.get("session_name"))),
             pixels_per_cm=float(arguments.get("pixels_per_cm", 8.0)),
             diff_threshold=float(arguments.get("diff_threshold", 2.0)),
-            min_interval_ms=int(arguments.get("min_interval_ms", 0)),
+            min_interval=int(arguments.get("min_interval", 0)),
             max_gap_s=float(arguments.get("max_gap_s", 1.0)),
             image_format=str(arguments.get("image_format", "jpg")),
             jpeg_quality=int(arguments.get("jpeg_quality", 90)),

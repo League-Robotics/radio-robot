@@ -26,12 +26,12 @@ from robot_radio.robot.protocol import parse_tlm
 # Constants
 # ---------------------------------------------------------------------------
 
-DRIVE_SPEED_MMS = 200        # mm/s forward
+DRIVE_SPEED = 200            # [mm/s] forward
 DEFAULT_DISTANCE_CM = 50.0   # default target distance for a single trial
 OTOS_FW_MIN_SCALE = 0.872    # int8 = -128
 OTOS_FW_MAX_SCALE = 1.127    # int8 = +127
 BAUD = 115200
-WATCHDOG_MS = 3000
+WATCHDOG = 3000  # [ms]
 
 
 # ---------------------------------------------------------------------------
@@ -39,17 +39,17 @@ WATCHDOG_MS = 3000
 # ---------------------------------------------------------------------------
 
 def compute_new_linear_scale(
-    actual_mm: float,
-    otos_mm: float,
+    actual: float,
+    otos: float,
     current_scale: float,
 ) -> tuple[float, int]:
-    """Compute recommended new OTOS linear scale.
+    """Compute recommended new OTOS linear scale.  actual/otos in [mm].
 
-    Formula: new_scale = (actual_mm / otos_mm) * current_scale.
+    Formula: new_scale = (actual / otos) * current_scale.
     Returns (new_scale_float, new_scale_int8).
     Clamps to firmware representable range.
     """
-    ratio = actual_mm / otos_mm
+    ratio = actual / otos
     raw = ratio * current_scale
     clamped = max(OTOS_FW_MIN_SCALE, min(OTOS_FW_MAX_SCALE, raw))
     int8_val = scale_to_int8(clamped)
@@ -59,7 +59,7 @@ def compute_new_linear_scale(
 def mean_ratio_stats(
     samples: list[tuple[float, float]],
 ) -> tuple[float, float, float]:
-    """Compute (mean_ratio, stdev_ratio, sem) from (otos_mm, actual_mm) pairs."""
+    """Compute (mean_ratio, stdev_ratio, sem) from (otos, actual) pairs [mm]."""
     ratios = [a / o for (o, a) in samples if o > 0]
     if not ratios:
         return 0.0, 0.0, 0.0
@@ -143,7 +143,7 @@ def calibrate_distance(
     ser,
     config_path: Optional[Path],
     target_cm: float = DEFAULT_DISTANCE_CM,
-    speed_mms: int = DRIVE_SPEED_MMS,
+    speed: int = DRIVE_SPEED,  # [mm/s]
     dry_run: bool = False,
 ) -> None:
     """Run interactive linear scale calibration.
@@ -154,7 +154,7 @@ def calibrate_distance(
 
     *config_path* is the Path to the active robot JSON (may be None).
     """
-    target_mm = round(target_cm * 10)
+    wire_target = round(target_cm * 10)  # [mm]
 
     current_scale = 1.0
     if config_path and config_path.exists():
@@ -180,11 +180,11 @@ def calibrate_distance(
     print(f"  Setting OL {current_int8:+d} (scale={current_scale:.4f}) on hardware...")
     _send_and_wait(ser, f"OL {current_int8}", "OK", timeout=2.0)
 
-    print(f"\n  Target distance: {target_cm:.1f} cm  Speed: {speed_mms} mm/s")
+    print(f"\n  Target distance: {target_cm:.1f} cm  Speed: {speed} mm/s")
     print("  Mark the robot's starting position on the floor.")
     print("  Press Enter to drive each trial, 'q' to finish and see results.\n")
 
-    samples: list[tuple[float, float]] = []  # (otos_mm, actual_mm)
+    samples: list[tuple[float, float]] = []  # (otos, actual) [mm]
 
     try:
         while True:
@@ -202,8 +202,8 @@ def calibrate_distance(
             time.sleep(0.15)
 
             print(f"  Driving {target_cm:.1f} cm ...")
-            timeout_s = (target_mm / max(speed_mms, 1)) * 2.5 + 5.0
-            _send_and_wait(ser, f"D {speed_mms} {speed_mms} {target_mm}",
+            timeout_s = (wire_target / max(speed, 1)) * 2.5 + 5.0
+            _send_and_wait(ser, f"D {speed} {speed} {wire_target}",
                            "OK", timeout=2.0)
             done = _wait_evt_done(ser, "D", timeout=timeout_s)
             if not done:
@@ -215,11 +215,11 @@ def calibrate_distance(
                 print("  WARNING: Could not read OTOS pose — skipping trial.")
                 continue
 
-            otos_x_mm = pose[0]
+            otos_x = pose[0]  # [mm]
             enc = _snap_enc(ser, timeout=2.0)
             enc_mm_str = f"L={enc[0]}mm R={enc[1]}mm" if enc else "N/A"
 
-            print(f"  OTOS pose: x={otos_x_mm}mm  y={pose[1]}mm  "
+            print(f"  OTOS pose: x={otos_x}mm  y={pose[1]}mm  "
                   f"h={pose[2]/100:.1f}")
             print(f"  Encoders:  {enc_mm_str}")
             print("  Measure the actual distance traveled with a tape measure.")
@@ -242,22 +242,22 @@ def calibrate_distance(
                 print("  Actual distance must be > 0 — discarded.")
                 continue
 
-            actual_mm = actual_cm * 10.0
-            if abs(otos_x_mm) < 1:
+            actual = actual_cm * 10.0  # [mm]
+            if abs(otos_x) < 1:
                 print("  OTOS x ~ 0 — sensor may not be responding. Discarded.")
                 continue
 
-            ratio = actual_mm / abs(otos_x_mm)
+            ratio = actual / abs(otos_x)
             if not (0.4 <= ratio <= 2.5):
                 print(f"  WARNING: ratio {ratio:.3f} is out of range [0.4, 2.5] — "
                       f"check units (enter cm, not mm). Discarded.")
                 continue
 
-            samples.append((abs(otos_x_mm), actual_mm))
-            err = actual_mm - abs(otos_x_mm)
-            print(f"  Sample {len(samples)}: otos={otos_x_mm}mm  "
-                  f"actual={actual_mm:.1f}mm  "
-                  f"err={err:+.1f}mm ({err / abs(otos_x_mm) * 100:+.1f}%)  "
+            samples.append((abs(otos_x), actual))
+            err = actual - abs(otos_x)
+            print(f"  Sample {len(samples)}: otos={otos_x}mm  "
+                  f"actual={actual:.1f}mm  "
+                  f"err={err:+.1f}mm ({err / abs(otos_x) * 100:+.1f}%)  "
                   f"ratio={ratio:.4f}")
 
     except KeyboardInterrupt:
@@ -276,7 +276,7 @@ def calibrate_distance(
         print("No usable samples — nothing to compute.")
         return
 
-    print(f"\n{'#':>3}  {'otos_mm':>8}  {'actual_mm':>10}  {'ratio':>7}")
+    print(f"\n{'#':>3}  {'otos':>8}  {'actual':>10}  {'ratio':>7}")
     for i, (o, a) in enumerate(samples, 1):
         print(f"{i:>3}  {o:>8.1f}  {a:>10.1f}  {a / o:>7.4f}")
 

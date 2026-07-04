@@ -305,7 +305,7 @@ def _build_main_window():  # type: ignore[return]
         COMMANDS,
         TOURS,
         build_wire_string,
-        goto_distance_mm,
+        goto_distance,
         goto_reached,
     )
     from robot_radio.testgui.operations import (
@@ -622,7 +622,7 @@ def _build_main_window():  # type: ignore[return]
             # the >/< marker for the recorder) — echoing them here too would
             # duplicate every line in the console and the recording.
             try:
-                transport.command(line, read_ms=500)
+                transport.command(line, read_timeout=500)
             except Exception as exc:
                 _append_log(f"[ERROR] {exc}")
 
@@ -813,11 +813,11 @@ def _build_main_window():  # type: ignore[return]
     )
     sim_err_otos_lin_drift = _make_sim_err_spin(
         col_left_layout, "sim_err_otos_lin_drift", "OTOS lin drift (mm/s):",
-        _sim_error_profile["otos_lin_drift_mms"], -50.0, 50.0, 2,
+        _sim_error_profile["otos_lin_drift"], -50.0, 50.0, 2,
     )
     sim_err_otos_yaw_drift = _make_sim_err_spin(
         col_left_layout, "sim_err_otos_yaw_drift", "OTOS yaw drift (deg/s):",
-        _sim_error_profile["otos_yaw_drift_degs"], -30.0, 30.0, 2,
+        _sim_error_profile["otos_yaw_drift"], -30.0, 30.0, 2,
     )
 
     # -- LEFT column: Geometry & Actuation -----------------------------------
@@ -830,21 +830,21 @@ def _build_main_window():  # type: ignore[return]
         col_left_layout, "sim_err_motor_offset_r", "motor offset R:",
         _sim_error_profile["motor_offset_r"], 0.0, 2.0, 3,
     )
-    # trackwidth_mm has NO safe zero default (PhysicsWorld::update() divides
+    # trackwidth has NO safe zero default (PhysicsWorld::update() divides
     # by it) — the spinbox range excludes 0 entirely, and the default is the
     # firmware config's trackwidth (128.0mm, what the sim seeds the plant
     # with at construction), not a sentinel. Every Apply unconditionally
     # sends this value; there is no "don't touch" case.
     sim_err_trackwidth = _make_sim_err_spin(
         col_left_layout, "sim_err_trackwidth", "trackwidth (mm):",
-        _sim_error_profile["trackwidth_mm"], 10.0, 500.0, 1,
+        _sim_error_profile["trackwidth"], 10.0, 500.0, 1,
     )
 
     # -- MIDDLE column: Encoder Report Error --------------------------------
     _add_sim_err_section_label(col_mid_layout, "Encoder Report Error")
-    sim_err_encoder_mm = _make_sim_err_spin(
+    sim_err_encoder = _make_sim_err_spin(
         col_mid_layout, "sim_err_encoder_mm", "encoder noise (mm):",
-        _sim_error_profile["encoder_noise_mm"], 0.0, 50.0, 2,
+        _sim_error_profile["encoder_noise"], 0.0, 50.0, 2,
     )
     sim_err_enc_scale_l = _make_sim_err_spin(
         col_mid_layout, "sim_err_enc_scale_l", "enc scale err L:",
@@ -889,7 +889,7 @@ def _build_main_window():  # type: ignore[return]
     def _on_sim_errors_apply() -> None:
         """Save the Sim Errors fields and, if connected to Sim, apply live."""
         profile = {
-            "encoder_noise_mm": sim_err_encoder_mm.value(),
+            "encoder_noise": sim_err_encoder.value(),
             "slip_turn_extra": sim_err_slip_turn.value(),
             "otos_linear_noise": sim_err_otos_linear.value(),
             "otos_yaw_noise": sim_err_otos_yaw.value(),
@@ -899,16 +899,16 @@ def _build_main_window():  # type: ignore[return]
             "body_lin_scrub": sim_err_body_lin_scrub.value(),
             "motor_offset_l": sim_err_motor_offset_l.value(),
             "motor_offset_r": sim_err_motor_offset_r.value(),
-            "trackwidth_mm": sim_err_trackwidth.value(),
+            "trackwidth": sim_err_trackwidth.value(),
             "otos_lin_scale_err": sim_err_otos_lin_scale.value(),
             "otos_ang_scale_err": sim_err_otos_ang_scale.value(),
-            "otos_lin_drift_mms": sim_err_otos_lin_drift.value(),
-            "otos_yaw_drift_degs": sim_err_otos_yaw_drift.value(),
+            "otos_lin_drift": sim_err_otos_lin_drift.value(),
+            "otos_yaw_drift": sim_err_otos_yaw_drift.value(),
         }
         sim_prefs.save_sim_error_profile(profile)
         _append_log(
             f"[INFO] Sim error profile saved "
-            f"(encoder_noise_mm={profile['encoder_noise_mm']}, "
+            f"(encoder_noise={profile['encoder_noise']}, "
             f"slip_turn_extra={profile['slip_turn_extra']}, "
             f"otos_linear_noise={profile['otos_linear_noise']}, "
             f"otos_yaw_noise={profile['otos_yaw_noise']}, "
@@ -935,7 +935,7 @@ def _build_main_window():  # type: ignore[return]
         correction and the plant's scrub cancel out. Every other knob is set
         to its neutral value (mmPerDeg/OTOS-scale calibrations are inert in
         sim — see the issue's investigated mapping); the three noise fields
-        (sim_err_encoder_mm, sim_err_otos_linear, sim_err_otos_yaw) are never
+        (sim_err_encoder, sim_err_otos_linear, sim_err_otos_yaw) are never
         touched.
 
         Ticket 073-003: the lookup/fallback (``get_robot_config()`` ->
@@ -965,7 +965,7 @@ def _build_main_window():  # type: ignore[return]
 
         _append_log(
             f"[INFO] Sim error profile set from inverse calibration "
-            f"(body_rot_scrub={rot_slip}, trackwidth_mm={tw}, all other "
+            f"(body_rot_scrub={rot_slip}, trackwidth={tw}, all other "
             f"knobs neutral; noise fields untouched)"
         )
 
@@ -1295,7 +1295,7 @@ def _build_main_window():  # type: ignore[return]
                         f"[TOUR] {self._name} step {i}/{total}: {cmd}", ""
                     )
                     try:
-                        self._transport.command(cmd, read_ms=500)
+                        self._transport.command(cmd, read_timeout=500)
                     except Exception as exc:  # noqa: BLE001
                         self.log_line.emit(f"[TOUR] error sending {cmd!r}: {exc}", "")
                         return
@@ -1377,17 +1377,17 @@ def _build_main_window():  # type: ignore[return]
             self,
             transport: "object",
             state: dict,
-            target_x_mm: int,
-            target_y_mm: int,
-            eps_mm: int,
+            target_x: int,  # [mm]
+            target_y: int,  # [mm]
+            eps: int,  # [mm]
             speed: int,
         ) -> None:
             super().__init__()
             self._transport = transport
             self._state = state
-            self._tx = target_x_mm
-            self._ty = target_y_mm
-            self._eps = eps_mm
+            self._tx = target_x
+            self._ty = target_y
+            self._eps = eps
             self._speed = speed
             self._stop = False
 
@@ -1424,10 +1424,10 @@ def _build_main_window():  # type: ignore[return]
                         continue
 
                     x_cm, y_cm, yaw_rad, _ = truth
-                    cur_x_mm = x_cm * 10.0
-                    cur_y_mm = y_cm * 10.0
+                    cur_x = x_cm * 10.0  # [mm]
+                    cur_y = y_cm * 10.0  # [mm]
 
-                    if goto_reached(self._tx, self._ty, cur_x_mm, cur_y_mm, self._eps):
+                    if goto_reached(self._tx, self._ty, cur_x, cur_y, self._eps):
                         self._safe_stop()
                         self.log_line.emit("[GOTO] reached target — complete", "")
                         return
@@ -1437,8 +1437,8 @@ def _build_main_window():  # type: ignore[return]
                     si = build_setpose_command(x_cm, y_cm, yaw_rad)
                     g = f"G {self._tx} {self._ty} {self._speed}"
                     try:
-                        self._transport.command(si, read_ms=200)
-                        self._transport.command(g, read_ms=200)
+                        self._transport.command(si, read_timeout=200)
+                        self._transport.command(g, read_timeout=200)
                     except Exception as exc:  # noqa: BLE001
                         self.log_line.emit(f"[GOTO] send failed: {exc}", "")
                         return
@@ -1446,8 +1446,8 @@ def _build_main_window():  # type: ignore[return]
                     # Throttled progress line (~1 Hz) — the raw SI/G traffic is
                     # visible via the transport, so we summarise here.
                     if now - last_status >= 1.0:
-                        dist = goto_distance_mm(
-                            self._tx, self._ty, cur_x_mm, cur_y_mm
+                        dist = goto_distance(
+                            self._tx, self._ty, cur_x, cur_y
                         )
                         self.log_line.emit(f"[GOTO] dist={dist:.0f} mm", "")
                         last_status = now
@@ -1585,9 +1585,9 @@ def _build_main_window():  # type: ignore[return]
         cmds = calibration_commands(cfg)
         n_bad = 0
         n_nodev = 0
-        for cmd, read_ms in cmds:
+        for cmd, read_timeout in cmds:
             try:
-                reply = transport.command(cmd, read_ms=read_ms)
+                reply = transport.command(cmd, read_timeout=read_timeout)
             except Exception as exc:  # noqa: BLE001 — log, don't kill the GUI
                 _append_log(f"[CAL] push failed at {cmd!r}: {exc}")
                 return
@@ -1623,7 +1623,7 @@ def _build_main_window():  # type: ignore[return]
         import re as _re
 
         try:
-            reply = transport.command("VER", read_ms=600) or ""
+            reply = transport.command("VER", read_timeout=600) or ""
         except Exception as exc:  # noqa: BLE001
             _append_log(f"[WARN] VER query failed: {exc}")
             return
@@ -1737,7 +1737,7 @@ def _build_main_window():  # type: ignore[return]
             #    heading would drift straight back — the "jumps back to the angle
             #    it started with" bug).  STOP first so PWM is zero when we
             #    teleport, and so the reset starts from a truly idle robot.
-            transport.command("STOP", read_ms=300)
+            transport.command("STOP", read_timeout=300)
             # 0b. Sim only: teleport the plant ground-truth to (0, 0, 0°).
             #    In Sim mode the avatar follows the plant ground truth, not the
             #    firmware's belief.  On real hardware the operator physically
@@ -1749,12 +1749,12 @@ def _build_main_window():  # type: ignore[return]
             if is_sim_transport(transport):
                 transport.set_true_pose(0.0, 0.0, 0.0)
             # 1. Zero encoder counters so SI starts from a clean state.
-            transport.command("ZERO enc", read_ms=300)
+            transport.command("ZERO enc", read_timeout=300)
             # 2. Zero the OTOS sensor (re-references heading to current orientation).
-            transport.command("OZ", read_ms=300)
+            transport.command("OZ", read_timeout=300)
             # 3. Snap the fused/EKF pose to (0, 0, heading 0°).
             si_cmd = build_setpose_command(0.0, 0.0, 0.0)
-            transport.command(si_cmd, read_ms=300)
+            transport.command(si_cmd, read_timeout=300)
         else:
             _append_log("[WARN] Set Robot @ 0,0: no robot connected — display only")
 
@@ -2116,7 +2116,7 @@ def _build_main_window():  # type: ignore[return]
             # the sim library is always built from this tree).
             _check_firmware_version(transport)
             try:
-                reply = transport.command("STREAM 50", read_ms=300)
+                reply = transport.command("STREAM 50", read_timeout=300)
                 if reply:
                     _append_log(f"[INFO] STREAM 50 → {reply}")
                 else:
@@ -2144,7 +2144,7 @@ def _build_main_window():  # type: ignore[return]
         # works on the stand.  Relay (playfield) and Sim keep their odometer.
         if name == "Serial":
             try:
-                reply = transport.command("DBG OTOS BENCH 1", read_ms=500)
+                reply = transport.command("DBG OTOS BENCH 1", read_timeout=500)
                 _append_log(
                     "[BENCH] bench OTOS enabled (Serial = bench mode) → "
                     f"{(reply or '').strip() or '(no reply)'}"
@@ -2222,7 +2222,7 @@ def _build_main_window():  # type: ignore[return]
         # session, so a later playfield run doesn't inherit bench mode.
         if isinstance(transport, SerialTransport):
             try:
-                transport.command("DBG OTOS BENCH 0", read_ms=300)
+                transport.command("DBG OTOS BENCH 0", read_timeout=300)
             except Exception:  # noqa: BLE001
                 pass
         try:

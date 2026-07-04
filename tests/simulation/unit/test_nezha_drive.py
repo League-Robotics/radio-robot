@@ -229,21 +229,21 @@ class TestSpeedForTime:
         assert isinstance(result, tuple)
 
     def test_speed_for_time_clamps_min_speed(self) -> None:
-        """Very slow non-zero speed is clamped to MIN_SPEED_MMS."""
+        """Very slow non-zero speed is clamped to MIN_SPEED."""
         conn = _mock_conn()
         conn.send.return_value = {"sent": "T", "mode": "relay", "responses": []}
         conn.read_lines.return_value = ["EVT done T"]
 
         robot, _ = _nezha_with_conn(conn)
-        robot.speed_for_time(1, 1, 200)  # speed=1 < MIN_SPEED_MMS
+        robot.speed_for_time(1, 1, 200)  # speed=1 < MIN_SPEED
 
         sent_cmds = [c[0][0] for c in conn.send.call_args_list]
         t_cmd = next((c for c in sent_cmds if c.startswith("T ")), None)
         assert t_cmd is not None
         parts = t_cmd.split()
-        # l and r should be clamped to at least MIN_SPEED_MMS (12)
-        assert int(parts[1]) >= Nezha.MIN_SPEED_MMS
-        assert int(parts[2]) >= Nezha.MIN_SPEED_MMS
+        # l and r should be clamped to at least MIN_SPEED (12)
+        assert int(parts[1]) >= Nezha.MIN_SPEED
+        assert int(parts[2]) >= Nezha.MIN_SPEED
 
     def test_speed_for_time_no_v1_commands(self) -> None:
         """speed_for_time must not use v1 sign-prefix format (T+200+200+1000)."""

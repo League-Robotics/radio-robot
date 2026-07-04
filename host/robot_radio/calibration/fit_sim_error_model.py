@@ -18,10 +18,11 @@ JSONL, transport-agnostic — one JSON object per line, one of two shapes:
     {"t": <ms>, "cmd": "<wire command text>"}
         One per issued command (e.g. ``"T 200 200 2000"``).
 
-    {"t": <ms>, "encpose": [x_mm, y_mm, h_cdeg],
-                "otos":    [x_mm, y_mm, h_cdeg],
-                "pose":    [x_mm, y_mm, h_cdeg]}
-        One per sampled TLM frame. Any of the three pose keys may be
+    {"t": <ms>, "encpose": [x, y, h],
+                "otos":    [x, y, h],
+                "pose":    [x, y, h]}
+        One per sampled TLM frame; each ``[x, y, h]`` triple is
+        (mm, mm, cdeg). Any of the three pose keys may be
         omitted/null if that field was absent from the sampled frame (e.g.
         ``encpose=`` on older firmware, or ``otos=``/``pose=`` before OTOS
         fusion is enabled).
@@ -203,30 +204,30 @@ def default_maneuver() -> tuple[list[tuple[int, str]], int]:
     already validated as clearly observable (``T 200 200`` straight drive;
     ``RT 9000``).
 
-    Returns ``(commands, total_ms)``: ``commands`` is a list of
-    ``(t_ms, wire_command)`` pairs, ``t_ms`` relative to the start of the
-    run; ``total_ms`` is long enough to cover both phases.
+    Returns ``(commands, total_duration)``: ``commands`` is a list of
+    ``(t, wire_command)`` pairs, ``t`` [ms] relative to the start of the
+    run; ``total_duration`` [ms] is long enough to cover both phases.
     """
     commands = [
         (0, "T 200 200 2000"),
         (2500, "RT 9000"),
     ]
-    total_ms = 10500
-    return commands, total_ms
+    total_duration = 10500  # [ms]
+    return commands, total_duration
 
 
 def _iter_run(
     sim: Any,
     commands: Iterable[tuple[int, str]],
-    total_ms: int,
-    sample_period_ms: int,
+    total_duration: int,  # [ms]
+    sample_period: int,  # [ms]
 ):
     """Drive *sim* through *commands*, yielding one ``(t, sent, frame)`` per
     sample tick.
 
-    *commands* is a list of ``(t_ms, wire_command)`` pairs (need not be
-    pre-sorted). At each sample tick ``t`` (0, sample_period_ms, ... up to
-    and including ``total_ms``), every not-yet-sent command due at or
+    *commands* is a list of ``(t, wire_command)`` pairs [ms] (need not be
+    pre-sorted). At each sample tick ``t`` (0, sample_period, ... up to
+    and including ``total_duration``), every not-yet-sent command due at or
     before ``t`` is sent (in ascending-``t`` order, via ``sim.send_command``)
     BEFORE that tick's ``SNAP``; ``sent`` is the list of command strings
     sent at this tick (usually empty). ``frame`` is the parsed ``TLMFrame``
@@ -250,9 +251,9 @@ def _iter_run(
         reply = sim.send_command("SNAP")
         frame = parse_tlm(reply)
         yield t, sent, frame
-        if t >= total_ms:
+        if t >= total_duration:
             break
-        step = min(sample_period_ms, total_ms - t)
+        step = min(sample_period, total_duration - t)
         sim.tick_for(step)
         t += step
 
@@ -260,8 +261,8 @@ def _iter_run(
 def record_sim_run(
     sim: Any,
     commands: Iterable[tuple[int, str]],
-    total_ms: int,
-    sample_period_ms: int = 100,
+    total_duration: int,  # [ms]
+    sample_period: int = 100,  # [ms]
 ) -> list[dict[str, Any]]:
     """Drive *sim* (an already-constructed, already-configured ``Sim()``)
     through *commands* and return a JSONL-shaped list of records (see the
@@ -273,7 +274,7 @@ def record_sim_run(
     nor mutates sim error parameters itself, it only drives and observes).
     """
     records: list[dict[str, Any]] = []
-    for t, sent, frame in _iter_run(sim, commands, total_ms, sample_period_ms):
+    for t, sent, frame in _iter_run(sim, commands, total_duration, sample_period):
         for cmd in sent:
             records.append({"t": t, "cmd": cmd})
         if frame is None:
@@ -293,15 +294,15 @@ def record_sim_run(
 def replay_samples(
     sim: Any,
     commands: Iterable[tuple[int, str]],
-    total_ms: int,
-    sample_period_ms: int = 100,
+    total_duration: int,  # [ms]
+    sample_period: int = 100,  # [ms]
 ) -> dict[int, TLMFrame]:
-    """Like ``record_sim_run`` but returns ``{t_ms: TLMFrame}`` samples
+    """Like ``record_sim_run`` but returns ``{t: TLMFrame}`` samples (t [ms])
     directly (no JSONL shaping) — the form ``fit_sim_error_model()`` needs
     for residual computation.
     """
     samples: dict[int, TLMFrame] = {}
-    for t, _sent, frame in _iter_run(sim, commands, total_ms, sample_period_ms):
+    for t, _sent, frame in _iter_run(sim, commands, total_duration, sample_period):
         if frame is not None:
             samples[t] = frame
     return samples
@@ -336,8 +337,8 @@ def split_recording(
 ) -> tuple[list[tuple[int, str]], dict[int, TLMFrame]]:
     """Split a loaded recording into ``(commands, pose_samples)``.
 
-    ``commands`` is a list of ``(t_ms, wire_command)`` pairs. ``pose_samples``
-    is ``{t_ms: TLMFrame}`` — reconstructed directly onto the canonical
+    ``commands`` is a list of ``(t, wire_command)`` pairs (t [ms]). ``pose_samples``
+    is ``{t: TLMFrame}`` (t [ms]) — reconstructed directly onto the canonical
     ``TLMFrame`` dataclass (``host/robot_radio/robot/protocol.py``), not a
     second hand-rolled parser: the JSONL pose records already carry
     structured ``[x, y, h]`` lists (they were produced by ``parse_tlm()`` in
@@ -366,7 +367,7 @@ def split_recording(
 # Residual computation (position + wrapped-heading, across all three poses)
 # ---------------------------------------------------------------------------
 
-def _wrap_deg(deg: float) -> float:
+def _wrap_angle(deg: float) -> float:
     """Wrap an angle in degrees to (-180, 180]."""
     d = math.fmod(deg + 180.0, 360.0)
     if d <= 0.0:
@@ -375,7 +376,7 @@ def _wrap_deg(deg: float) -> float:
 
 
 def _pose_residual(recorded: tuple[int, int, int], replayed: tuple[int, int, int]) -> list[float]:
-    """[dx_mm, dy_mm, dh_deg] between two ``(x_mm, y_mm, h_cdeg)`` poses.
+    """[dx, dy, dh] (mm, mm, deg) between two ``(x, y, heading)`` poses (mm, mm, cdeg).
 
     Heading is wrapped to (-180, 180] before differencing — an unwrapped
     difference near the +/-180 deg boundary would otherwise dominate the
@@ -383,7 +384,7 @@ def _pose_residual(recorded: tuple[int, int, int], replayed: tuple[int, int, int
     """
     dx = float(replayed[0] - recorded[0])
     dy = float(replayed[1] - recorded[1])
-    dh = _wrap_deg((replayed[2] - recorded[2]) / 100.0)
+    dh = _wrap_angle((replayed[2] - recorded[2]) / 100.0)
     return [dx, dy, dh]
 
 
@@ -521,8 +522,8 @@ def fit_sim_error_model(
     candidate_keys: Sequence[str] = DEFAULT_CANDIDATE_KEYS,
     bounds: Optional[dict[str, tuple[float, float]]] = None,
     x0: Optional[dict[str, float]] = None,
-    total_ms: Optional[int] = None,
-    sample_period_ms: int = 100,
+    total_duration: Optional[int] = None,  # [ms]
+    sample_period: int = 100,  # [ms]
     **least_squares_kwargs: Any,
 ) -> FitResult:
     """Fit *candidate_keys* SIMSET values against a recorded trajectory.
@@ -539,16 +540,16 @@ def fit_sim_error_model(
     ``otos=``/``encpose=`` — see ``_residual_vector``).
 
     *records* is a loaded JSONL recording (``load_jsonl()``'s return value,
-    or an equivalent in-memory list of the same dict shape). *sample_period_ms*
+    or an equivalent in-memory list of the same dict shape). *sample_period*
     MUST match the period the recording was made with (``record_sim_run()``'s
-    own *sample_period_ms*) — replay timestamps are generated the same way
-    recording timestamps were (0, sample_period_ms, 2*sample_period_ms, ...),
+    own *sample_period*) — replay timestamps are generated the same way
+    recording timestamps were (0, sample_period, 2*sample_period, ...),
     and the residual is only computed where a recorded and a replayed
     timestamp coincide exactly.
 
     *bounds* defaults to ``DEFAULT_BOUNDS``; *x0* (initial guess, by SIMSET
     key) defaults to ``NEUTRAL_VALUE`` for each candidate key, clipped into
-    that key's bounds. *total_ms* defaults to the recording's own last
+    that key's bounds. *total_duration* defaults to the recording's own last
     sampled timestamp.
 
     The Jacobian is estimated with this module's own bounds-aware, ABSOLUTE
@@ -581,8 +582,8 @@ def fit_sim_error_model(
     commands, recorded_samples = split_recording(records)
     if not recorded_samples:
         raise ValueError("recording contains no pose samples to fit against")
-    if total_ms is None:
-        total_ms = max(recorded_samples)
+    if total_duration is None:
+        total_duration = max(recorded_samples)
 
     lb = [bounds[k][0] for k in candidate_keys]
     ub = [bounds[k][1] for k in candidate_keys]
@@ -596,7 +597,7 @@ def fit_sim_error_model(
         sim = sim_factory()
         try:
             apply_params(sim, params)
-            replayed = replay_samples(sim, commands, total_ms, sample_period_ms)
+            replayed = replay_samples(sim, commands, total_duration, sample_period)
         finally:
             _close_sim(sim)
         return np.asarray(_residual_vector(recorded_samples, replayed), dtype=float)
@@ -735,8 +736,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Optional 'key=value,key=value' SIMSET params to inject before "
              "recording (for sim-to-sim testing of this tool itself).",
     )
-    rec_p.add_argument("--total-ms", type=int, default=None)
-    rec_p.add_argument("--sample-period-ms", type=int, default=100)
+    rec_p.add_argument("--total", type=int, default=None)
+    rec_p.add_argument("--sample-period", type=int, default=100)
 
     fit_p = sub.add_parser("fit", help="Fit SIMSET params against a recording.")
     fit_p.add_argument("--recording", required=True, type=Path, help="Input JSONL path.")
@@ -746,8 +747,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Comma-separated candidate SIMSET keys (default: the "
              "deterministic/bias-shaped subset, DEFAULT_CANDIDATE_KEYS).",
     )
-    fit_p.add_argument("--total-ms", type=int, default=None)
-    fit_p.add_argument("--sample-period-ms", type=int, default=100)
+    fit_p.add_argument("--total", type=int, default=None)
+    fit_p.add_argument("--sample-period", type=int, default=100)
 
     push_p = sub.add_parser(
         "push", help="Push a fitted parameter file to a live connection as one SIMSET command."
@@ -776,9 +777,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         try:
             if inject:
                 apply_params(sim, inject)
-            commands, default_total_ms = default_maneuver()
-            total_ms = args.total_ms if args.total_ms is not None else default_total_ms
-            records = record_sim_run(sim, commands, total_ms, args.sample_period_ms)
+            commands, default_total_duration = default_maneuver()
+            total_duration = args.total if args.total is not None else default_total_duration
+            records = record_sim_run(sim, commands, total_duration, args.sample_period)
         finally:
             _close_sim(sim)
         save_jsonl(records, args.out)
@@ -795,8 +796,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             records,
             sim_factory=_default_sim_factory(),
             candidate_keys=candidate_keys,
-            total_ms=args.total_ms,
-            sample_period_ms=args.sample_period_ms,
+            total_duration=args.total,
+            sample_period=args.sample_period,
         )
         save_param_file(args.out, result.params)
         status = "converged" if result.success else "DID NOT CONVERGE"

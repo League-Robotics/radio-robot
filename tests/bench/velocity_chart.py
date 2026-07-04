@@ -70,7 +70,7 @@ def _stream_worker(
     stop_event: threading.Event,
     status_queue: "queue.Queue[str]",
     sets: "list[str] | None" = None,
-    stream_ms: int = 40,
+    stream: int = 40,
 ) -> None:
     """Open a fresh serial connection, drive cmd_box, push telemetry samples.
 
@@ -156,7 +156,7 @@ def _stream_worker(
             proto.stream_fields("enc,vel,pose,line,color,otos")
         except Exception as exc:
             status_queue.put(f"WARN: stream_fields failed: {exc}")
-        proto.stream(stream_ms)
+        proto.stream(stream)
 
         status_queue.put(f"RUNNING — {identity.get('name', '?')}")
 
@@ -176,7 +176,7 @@ def _stream_worker(
         # The TLM field is delivered through the same queue read_lines() reads.
 
         while not stop_event.is_set():
-            for raw_line in conn.read_lines(duration_ms=30):
+            for raw_line in conn.read_lines(duration=30):
                 r = parse_response(raw_line)
                 if r is None:
                     continue
@@ -188,7 +188,7 @@ def _stream_worker(
                 if r.tag == "TLM":
                     tlm = parse_tlm(r.raw)
                     if tlm is not None:
-                        # Raw OTOS (x_mm, y_mm) for the odom panel; None when the
+                        # Raw OTOS (x, y) for the odom panel; None when the
                         # frame carried no otos= (OTOS read invalid that tick).
                         odom = (tlm.otos[0], tlm.otos[1], 0) if tlm.otos else None
                         data_queue.put((time.monotonic(), tlm.vel, odom,
@@ -250,7 +250,7 @@ def main() -> int:
         stop_ev = threading.Event()
         th = threading.Thread(
             target=_stream_worker,
-            args=(port, cmd_box, data_q, stop_ev, status_q, args.sets, args.stream_ms),
+            args=(port, cmd_box, data_q, stop_ev, status_q, args.sets, args.stream),
             daemon=True,
         )
         th.start()
@@ -442,7 +442,7 @@ def main() -> int:
         worker_state["thread"] = threading.Thread(
             target=_stream_worker,
             args=(port, cmd_box, data_queue, stop_ev, status_queue, args.sets,
-                  args.stream_ms),
+                  args.stream),
             daemon=True,
         )
         worker_state["thread"].start()

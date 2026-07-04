@@ -67,7 +67,7 @@ def tw(rx, ry):  # robot-zeroed body coords (cm) -> world via start pose
     return (cx0 + rx * ch0 - ry * sh0, cy0 + rx * sh0 + ry * ch0)
 
 def pump():
-    for ln in conn.read_lines(duration_ms=40):
+    for ln in conn.read_lines(duration=40):
         f = parse_tlm(ln)
         if not f or f.pose is None: continue
         if f.otos:

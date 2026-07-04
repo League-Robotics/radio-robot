@@ -8,7 +8,7 @@ the live-view worker.
 Button                                                         Action
 ============================================================  =============================
 Sync Pose from Camera                                          Read tag-100 from aprilcam;
-                                                               send ``SI x_mm y_mm h_cdeg``
+                                                               send ``SI x y h`` (mm, mm, cdeg)
 Zero Encoders                                                  Send ``ZERO enc``
 STOP                                                           Send ``STOP``
 Clear Traces                                                   Call ``clear_traces_cb`` hook
@@ -97,7 +97,7 @@ _log = logging.getLogger(__name__)
 _PLAYFIELD_CAMERA_INDEX = 3
 
 # Stream interval for "STREAM on".
-_STREAM_ON_MS = 50
+_STREAM_ON_PERIOD = 50  # [ms]
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +215,7 @@ def build_panel(
     sync_btn = QPushButton("Sync Pose")
     sync_btn.setObjectName("ops_btn_sync_pose")
     sync_btn.setToolTip(
-        "Read tag-100 from aprilcam daemon; send SI x_mm y_mm h_cdeg to firmware.\n"
+        "Read tag-100 from aprilcam daemon; send SI x y h (mm, mm, cdeg) to firmware.\n"
         "Disabled in Sim mode (no camera)."
     )
     sync_btn.setEnabled(False)
@@ -441,7 +441,7 @@ class OpsController:
     # ------------------------------------------------------------------
 
     def on_sync_pose(self) -> None:
-        """Read tag-100 from the aprilcam daemon; send ``SI x_mm y_mm h_cdeg``."""
+        """Read tag-100 from the aprilcam daemon; send ``SI x y h`` (mm, mm, cdeg)."""
         transport = self._transport_ref.get("transport")
         if transport is None:
             self._log("[WARN] Sync Pose: not connected")
@@ -468,7 +468,7 @@ class OpsController:
             f"{math.degrees(yaw_rad):.1f}°) → {line}"
         )
         try:
-            reply = transport.command(line, read_ms=500)
+            reply = transport.command(line, read_timeout=500)
             if reply:
                 self._log(f"[INFO] Sync Pose reply: {reply.strip()}")
             else:
@@ -483,7 +483,7 @@ class OpsController:
             self._log("[WARN] Zero Encoders: not connected")
             return
         try:
-            reply = transport.command("ZERO enc", read_ms=300)
+            reply = transport.command("ZERO enc", read_timeout=300)
             if reply:
                 self._log(f"[INFO] Zero Encoders: {reply.strip()}")
             else:
@@ -525,7 +525,7 @@ class OpsController:
 
         # 2. Halt motors / abort the active motion goal.
         try:
-            transport.command("STOP", read_ms=300)
+            transport.command("STOP", read_timeout=300)
             self._log("[INFO] STOP sent")
         except Exception as exc:
             self._log(f"[ERROR] STOP: {exc}")
@@ -534,7 +534,7 @@ class OpsController:
         #    toggle in the UI.  Best-effort — a STREAM-0 failure must not mask
         #    the motor STOP above.
         try:
-            transport.command("STREAM 0", read_ms=300)
+            transport.command("STREAM 0", read_timeout=300)
             self._stream_on = False
             self._stream_btn.setChecked(False)  # type: ignore[attr-defined]
             self._stream_btn.setText("STREAM: off")  # type: ignore[attr-defined]
@@ -706,14 +706,14 @@ class OpsController:
             return
 
         if checked:
-            cmd = f"STREAM {_STREAM_ON_MS}"
+            cmd = f"STREAM {_STREAM_ON_PERIOD}"
             label = "STREAM: on"
         else:
             cmd = "STREAM 0"
             label = "STREAM: off"
 
         try:
-            reply = transport.command(cmd, read_ms=300)
+            reply = transport.command(cmd, read_timeout=300)
             self._stream_on = checked
             self._stream_btn.setText(label)  # type: ignore[attr-defined]
             if reply:

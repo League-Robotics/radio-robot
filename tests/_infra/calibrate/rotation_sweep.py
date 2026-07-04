@@ -75,11 +75,11 @@ def main() -> int:
     cam = _Cam(tag_id=tag)
 
     def heading():
-        return cam.heading_deg()
+        return cam.heading()
 
-    def raw_turn(cmd_deg, speed):
-        arc = max(1, int(round(abs(cmd_deg) * DEG2ARC)))
-        left, right = (speed, -speed) if (cmd_deg > 0) == lpos_ccw else (-speed, speed)
+    def raw_turn(cmd, speed):
+        arc = max(1, int(round(abs(cmd) * DEG2ARC)))
+        left, right = (speed, -speed) if (cmd > 0) == lpos_ccw else (-speed, speed)
         proto.distance(left, right, arc)
         time.sleep(arc / max(speed, 1) * 1.3 + 1.2)
         proto.stop()
@@ -101,8 +101,8 @@ def main() -> int:
     with open(outp, "a", newline="") as f:
         w = csv.writer(f)
         if new_file:
-            w.writerow(["cmd_deg", "speed_mms", "dir", "actual_deg",
-                        "error_deg", "h0_deg", "h1_deg"])
+            w.writerow(["cmd", "speed", "dir", "actual",
+                        "error", "h0", "h1"])
         for _rep in range(args.reps):
             for speed in speeds:
                 for ang in angles:

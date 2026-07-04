@@ -550,7 +550,7 @@ class TestDriveStreamResend:
         """--resend 150 → watchdog_ms = round(150/0.30) = 500."""
         calls = self._run_drive_stream(150)
         assert len(calls) >= 1, "stream_drive was not called"
-        wdg = calls[0].get("watchdog_ms")
+        wdg = calls[0].get("watchdog")
         # keepalive = watchdog_ms * 0.30 → 150ms when watchdog_ms=500
         assert wdg is not None
         assert abs(wdg - 500) <= 2, f"expected watchdog_ms≈500, got {wdg}"
@@ -559,7 +559,7 @@ class TestDriveStreamResend:
         """--resend 300 → watchdog_ms = round(300/0.30) = 1000."""
         calls = self._run_drive_stream(300)
         assert len(calls) >= 1
-        wdg = calls[0].get("watchdog_ms")
+        wdg = calls[0].get("watchdog")
         assert abs(wdg - 1000) <= 2, f"expected watchdog_ms≈1000, got {wdg}"
 
     def test_resend_zero_rejected(self):

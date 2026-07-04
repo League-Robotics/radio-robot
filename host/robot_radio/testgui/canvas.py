@@ -431,7 +431,7 @@ def build_canvas(trace_model: "TraceModel") -> "tuple[object, object]":
     # With the A1 origin, world (0,0) maps to tag 1's pixel position.
     cx, cy = world_to_px(0.0, 0.0)
     marker_group.setPos(cx, cy)
-    marker_group.setRotation(90.0)   # heading 0 = east; rotation_deg = 90 - 0 = 90
+    marker_group.setRotation(90.0)   # heading 0 = east; rotation = 90 - 0 = 90
     marker_group.setVisible(True)
 
     # ------------------------------------------------------------------ Checkboxes
@@ -726,13 +726,13 @@ class CanvasController:
             World position in centimetres (A1-centred frame).
         yaw_rad:
             Robot heading in radians.  Converted to Qt rotation via
-            ``rotation_deg = 90 - degrees(yaw_rad)``.
+            ``rotation = 90 - degrees(yaw_rad)``.
         """
         self._live_pose = (x_cm, y_cm, yaw_rad)
         px, py = self._world_to_px(x_cm, y_cm)
         self._marker_group.setPos(px, py)           # type: ignore[attr-defined]
-        rotation_deg = 90.0 - math.degrees(yaw_rad)
-        self._marker_group.setRotation(rotation_deg)  # type: ignore[attr-defined]
+        rotation = 90.0 - math.degrees(yaw_rad)  # [deg]
+        self._marker_group.setRotation(rotation)  # type: ignore[attr-defined]
         self._marker_group.setVisible(True)           # type: ignore[attr-defined]
         self._scene.update()                          # type: ignore[attr-defined]
 
@@ -766,7 +766,7 @@ class CanvasController:
 
         Heading is reset to 0° (east, red-front pointing +x / right) so the
         avatar orientation matches the assumed starting pose.  The Qt rotation
-        formula ``rotation_deg = 90 - degrees(yaw_rad)`` gives 90 - 0 = 90°.
+        formula ``rotation = 90 - degrees(yaw_rad)`` gives 90 - 0 = 90°.
         """
         cx, cy = self._world_to_px(0.0, 0.0)
         self._marker_group.setPos(cx, cy)       # type: ignore[attr-defined]
@@ -830,11 +830,11 @@ class CanvasController:
             # Qt's default "up" in item space is -y (towards top of screen).
             # The marker's "front half" is placed at negative y in item coords
             # (top of the rect), so to make it face east (yaw=0) we rotate by:
-            #   -yaw_deg (CCW world → CW Qt)
+            #   -yaw in degrees (CCW world → CW Qt)
             #   + 90° to align item-north with screen-right (east)
-            # Net: rotation_deg = 90 - degrees(yaw_rad)
-            rotation_deg = 90.0 - math.degrees(fused_yaw_rad)
-            self._marker_group.setRotation(rotation_deg)  # type: ignore[attr-defined]
+            # Net: rotation = 90 - degrees(yaw_rad)
+            rotation = 90.0 - math.degrees(fused_yaw_rad)  # [deg]
+            self._marker_group.setRotation(rotation)  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------

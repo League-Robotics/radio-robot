@@ -62,7 +62,7 @@ class FakeSerialConnection:
 
     # ---- I/O ----
 
-    def send(self, message: str, read_ms: int = 200, **_kw) -> dict[str, Any]:
+    def send(self, message: str, read_timeout: int = 200, **_kw) -> dict[str, Any]:  # [ms]
         if self.on_send:
             self.on_send(message)
         return {"sent": message, "mode": self._mode, "responses": ["OK"]}
@@ -531,8 +531,8 @@ class FakeSim:
     def __init__(self) -> None:
         self.sent: list[str] = []
         self._async_evts: list[str] = []
-        self._pose_x_mm: float = 100.0
-        self._pose_y_mm: float = 200.0
+        self._pose_x: float = 100.0
+        self._pose_y: float = 200.0
         self._pose_h_rad: float = 0.5
         self._field_profile_applied: bool = False
         self._otos_noise_set: bool = False
@@ -573,18 +573,18 @@ class FakeSim:
         self._t += total_ms
 
     def get_true_pose(self) -> tuple[float, float, float]:
-        return (self._pose_x_mm, self._pose_y_mm, self._pose_h_rad)
+        return (self._pose_x, self._pose_y, self._pose_h_rad)
 
-    def set_true_pose(self, x_mm: float, y_mm: float, h_rad: float) -> None:
-        self._pose_x_mm = x_mm
-        self._pose_y_mm = y_mm
+    def set_true_pose(self, x: float, y: float, h_rad: float) -> None:
+        self._pose_x = x
+        self._pose_y = y
         self._pose_h_rad = h_rad
 
-    def set_true_wheel_travel(self, enc_l_mm: float, enc_r_mm: float) -> None:
-        self._true_enc = (enc_l_mm, enc_r_mm)
+    def set_true_wheel_travel(self, enc_l: float, enc_r: float) -> None:
+        self._true_enc = (enc_l, enc_r)
 
-    def set_true_velocity(self, vel_l_mms: float, vel_r_mms: float) -> None:
-        self._true_vel = (vel_l_mms, vel_r_mms)
+    def set_true_velocity(self, vel_l: float, vel_r: float) -> None:
+        self._true_vel = (vel_l, vel_r)
 
     def set_field_profile(self, slip_turn_extra: float = 0.26,
                           fuse_otos: bool = True) -> None:
@@ -598,8 +598,8 @@ class FakeSim:
     def set_otos_yaw_noise(self, sigma_fraction: float) -> None:
         self.last_otos_yaw_noise = sigma_fraction
 
-    def set_encoder_noise(self, side: int, sigma_mm: float) -> None:
-        self.last_encoder_noise[side] = sigma_mm
+    def set_encoder_noise(self, side: int, sigma: float) -> None:
+        self.last_encoder_noise[side] = sigma
 
     def inject_tlm(self, line: str) -> None:
         """Add a TLM line to the async event queue."""
@@ -1036,7 +1036,7 @@ class TestSimTransportErrorProfile:
         from robot_radio.testgui import sim_prefs
 
         custom_profile = {
-            "encoder_noise_mm": 3.0,
+            "encoder_noise": 3.0,
             "slip_turn_extra": 0.4,
             "otos_linear_noise": 0.2,
             "otos_yaw_noise": 0.05,
@@ -1131,7 +1131,7 @@ class TestSimTransportErrorProfile:
         try:
             time.sleep(0.1)
             new_profile = {
-                "encoder_noise_mm": 7.0,
+                "encoder_noise": 7.0,
                 "slip_turn_extra": 0.9,
                 "otos_linear_noise": 0.15,
                 "otos_yaw_noise": 0.03,
@@ -1193,7 +1193,7 @@ class TestSimTransportErrorProfile:
         try:
             time.sleep(0.1)
             new_profile = {
-                "encoder_noise_mm": 1.0,
+                "encoder_noise": 1.0,
                 "slip_turn_extra": 0.33,
                 "otos_linear_noise": 0.11,
                 "otos_yaw_noise": 0.01,
@@ -1226,7 +1226,7 @@ class TestApplyProfileToSimSimsetString:
     def test_defaults_send_the_documented_noop_simset_string(self):
         """Every field at its DEFAULT_PROFILE value must reproduce today's
         no-op-until-opted-in behavior: multiplicative knobs at 1.0,
-        trackwidth_mm at the firmware config's 128.0, everything else
+        trackwidth at the firmware config's 128.0, everything else
         (additive/noise) at 0.0 — sent in chunks under the firmware's
         MAX_ARGS=10 per-line cap (pairs past it are silently dropped)."""
         from robot_radio.testgui.transport import SimTransport
@@ -1265,7 +1265,7 @@ class TestApplyProfileToSimSimsetString:
         fake_sim = FakeSim()
 
         profile = {
-            "encoder_noise_mm": 2.0,
+            "encoder_noise": 2.0,
             "slip_turn_extra": 0.42,
             "otos_linear_noise": 0.06,
             "otos_yaw_noise": 0.01,
@@ -1273,13 +1273,13 @@ class TestApplyProfileToSimSimsetString:
             "enc_scale_err_r": -0.02,
             "otos_lin_scale_err": 0.03,
             "otos_ang_scale_err": -0.03,
-            "otos_lin_drift_mms": 1.5,
-            "otos_yaw_drift_degs": -0.5,
+            "otos_lin_drift": 1.5,
+            "otos_yaw_drift": -0.5,
             "body_rot_scrub": 0.9,
             "body_lin_scrub": 0.95,
             "motor_offset_l": 1.05,
             "motor_offset_r": 0.98,
-            "trackwidth_mm": 152.0,
+            "trackwidth": 152.0,
         }
 
         t._apply_profile_to_sim(fake_sim, profile)
@@ -1310,7 +1310,7 @@ class TestApplyProfileToSimSimsetString:
         fake_sim = FakeSim()
 
         legacy_profile = {
-            "encoder_noise_mm": 3.0,
+            "encoder_noise": 3.0,
             "slip_turn_extra": 0.4,
             "otos_linear_noise": 0.2,
             "otos_yaw_noise": 0.05,
@@ -1457,7 +1457,7 @@ class TestSimTransportCommands:
     def test_command_returns_reply(self):
         t, fake_sim = self._connected_sim()
         try:
-            reply = t.command("PING", read_ms=500)
+            reply = t.command("PING", read_timeout=500)
             assert reply == "OK", f"Expected 'OK' reply, got {reply!r}"
         finally:
             t.disconnect()
@@ -1500,7 +1500,7 @@ class TestSimTransportCommands:
             t.connect()
 
         try:
-            reply = t.command("PING", read_ms=500)
+            reply = t.command("PING", read_timeout=500)
         finally:
             t.disconnect()
 
@@ -1739,8 +1739,8 @@ class TestSimTransportTruthDelivery:
 
         fake_sim = FakeSim()
         # Set a known true pose (mm units from sim).
-        fake_sim._pose_x_mm = 1000.0   # 100.0 cm
-        fake_sim._pose_y_mm = 500.0    # 50.0 cm
+        fake_sim._pose_x = 1000.0   # 100.0 cm
+        fake_sim._pose_y = 500.0    # 50.0 cm
         fake_sim._pose_h_rad = 1.2
 
         fake_path = MagicMock(spec=pathlib.Path)

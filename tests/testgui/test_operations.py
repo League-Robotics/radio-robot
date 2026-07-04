@@ -37,7 +37,7 @@ class FakeTransport:
         self.sent_fire_forget: list[str] = []
         self.command_reply: str = "OK"
 
-    def command(self, line: str, read_ms: int = 200) -> str:
+    def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
         self.sent_commands.append(line)
         return self.command_reply
 
@@ -100,8 +100,8 @@ class TestBuildSetposeCommand:
         from robot_radio.testgui.operations import build_setpose_command
 
         line = build_setpose_command(-5.0, -10.0, math.pi)
-        # x_mm = round(-5 * 10) = -50; y_mm = round(-10 * 10) = -100
-        # h_cdeg = round(180 * 100) = 18000
+        # x = round(-5 * 10) = -50 [mm]; y = round(-10 * 10) = -100 [mm]
+        # heading = round(180 * 100) = 18000 [cdeg]
         assert line == "SI -50 -100 18000"
 
     def test_fractional_cm_rounds(self):
@@ -343,9 +343,9 @@ class TestStop:
         # Record the order of the cancel vs the wire commands.
         ctrl, log, state = _make_controller(t, stop_motion_cb=lambda: order.append("cancel"))
         orig_command = t.command
-        def _tracking_command(line, read_ms=200):
+        def _tracking_command(line, read_timeout=200):
             order.append(f"cmd:{line}")
-            return orig_command(line, read_ms)
+            return orig_command(line, read_timeout)
         t.command = _tracking_command
         ctrl.on_stop()
         assert order == ["cancel", "cmd:STOP", "cmd:STREAM 0"], f"wrong order: {order}"

@@ -22,7 +22,7 @@ equivalent — it drives the pre-existing ``_rotationalSlip`` test-infra
 channel (``sim.set_field_profile()``) and is applied on a separate path from
 every other key below (see ``PROFILE_TO_SIMSET_KEY``'s docstring).
 
-``encoder_noise_mm``
+``encoder_noise``
     Per-side encoder noise sigma, in millimetres. Default ``0.0``. Applied to
     both sides equally via the ``SIMSET`` keys ``encNoiseL``/``encNoiseR``
     (fans out to two wire keys — not in ``PROFILE_TO_SIMSET_KEY``).
@@ -54,7 +54,7 @@ Additive/noise terms — ``0.0`` is a genuine no-op:
 ``otos_lin_scale_err`` / ``otos_ang_scale_err``
     Fractional OTOS linear/angular scale error (0 = perfect). ``SIMSET``
     keys ``otosLinScaleErr`` / ``otosAngScaleErr``.
-``otos_lin_drift_mms`` / ``otos_yaw_drift_degs``
+``otos_lin_drift`` / ``otos_yaw_drift``
     OTOS linear/yaw drift rate, in mm/s and deg/s respectively (wire-level
     per-second units; ``SimCommands`` converts to per-tick internally).
     ``SIMSET`` keys ``otosLinDriftMmS`` / ``otosYawDriftDegS``.
@@ -76,7 +76,7 @@ Multiplicative terms — ``1.0`` is the genuine no-op, NOT ``0.0`` (see
     Per-side motor actuation offset factor (multiplies commanded velocity).
     ``SIMSET`` keys ``motorOffsetL`` / ``motorOffsetR``.
 
-``trackwidth_mm``
+``trackwidth``
     The plant's trackwidth, in millimetres. Has NO safe zero default —
     ``PhysicsWorld::update()``'s sub-step B divides by it. Defaults to
     ``128.0``: although ``PhysicsWorld::kDefaultTrackwidthMm`` is 150.0,
@@ -125,11 +125,11 @@ _PREFS_PATH = _PREFS_DIR / "sim_error_profile.json"
 #: docstring's "Keys" section for units/semantics and no-op rationale per
 #: key). Every default below reproduces today's no-op-until-opted-in
 #: behavior: additive/noise terms default 0.0, multiplicative terms default
-#: 1.0, and trackwidth_mm defaults to the plant's real compiled-in trackwidth
+#: 1.0, and trackwidth defaults to the plant's real compiled-in trackwidth
 #: (150.0mm) rather than an unsafe 0.0.
 DEFAULT_PROFILE: dict = {
     # -- historical four --
-    "encoder_noise_mm": 0.0,
+    "encoder_noise": 0.0,
     # 073-003: was 0.26 -- see the module-level comment above this dict.
     "slip_turn_extra": 0.0,
     "otos_linear_noise": 0.05,
@@ -139,8 +139,8 @@ DEFAULT_PROFILE: dict = {
     "enc_scale_err_r": 0.0,
     "otos_lin_scale_err": 0.0,
     "otos_ang_scale_err": 0.0,
-    "otos_lin_drift_mms": 0.0,
-    "otos_yaw_drift_degs": 0.0,
+    "otos_lin_drift": 0.0,
+    "otos_yaw_drift": 0.0,
     # -- 069-007: multiplicative terms (1.0 = no-op, NOT 0.0) --
     "body_rot_scrub": 1.0,
     "body_lin_scrub": 1.0,
@@ -152,7 +152,7 @@ DEFAULT_PROFILE: dict = {
     # than a divide-by-zero sentinel. NOT kDefaultTrackwidthMm (150.0): the
     # plant never actually runs at that value, and applying it would inject
     # a plant-vs-calibration geometry error into every turn.
-    "trackwidth_mm": 128.0,
+    "trackwidth": 128.0,
 }
 
 #: Maps every profile key that has a 1:1 SIMSET wire-key equivalent to that
@@ -161,7 +161,7 @@ DEFAULT_PROFILE: dict = {
 #:
 #: Deliberately excludes two DEFAULT_PROFILE keys that do NOT have a 1:1
 #: mapping:
-#:   - "encoder_noise_mm": fans out to TWO wire keys (encNoiseL AND
+#:   - "encoder_noise": fans out to TWO wire keys (encNoiseL AND
 #:     encNoiseR, both set to the same value) — handled specially by
 #:     transport.py's _apply_profile_to_sim(), not via this map.
 #:   - "slip_turn_extra": has no SIMSET key at all — drives the legacy
@@ -174,20 +174,20 @@ PROFILE_TO_SIMSET_KEY: dict = {
     "otos_ang_scale_err": "otosAngScaleErr",
     "otos_linear_noise": "otosLinNoise",
     "otos_yaw_noise": "otosYawNoise",
-    "otos_lin_drift_mms": "otosLinDriftMmS",
-    "otos_yaw_drift_degs": "otosYawDriftDegS",
+    "otos_lin_drift": "otosLinDriftMmS",
+    "otos_yaw_drift": "otosYawDriftDegS",
     "body_rot_scrub": "bodyRotScrub",
     "body_lin_scrub": "bodyLinScrub",
     "motor_offset_l": "motorOffsetL",
     "motor_offset_r": "motorOffsetR",
-    "trackwidth_mm": "trackwidthMm",
+    "trackwidth": "trackwidthMm",
 }
 
 
 def resolve_calibration_defaults(
     log: Callable[[str], None] | None = None,
 ) -> tuple[float, float]:
-    """Resolve ``(body_rot_scrub, trackwidth_mm)`` from the active robot's
+    """Resolve ``(body_rot_scrub, trackwidth)`` from the active robot's
     calibration.
 
     Ticket 073-003: factored out of ``__main__.py``'s "From Calibration"
@@ -196,7 +196,7 @@ def resolve_calibration_defaults(
     ``get_robot_config()`` -> ``cfg.calibration.rotational_slip`` /
     ``cfg.geometry.trackwidth``, each field independently falling back to
     its neutral value (``1.0`` for body_rot_scrub;
-    ``DEFAULT_PROFILE["trackwidth_mm"]`` for trackwidth) with a logged
+    ``DEFAULT_PROFILE["trackwidth"]`` for trackwidth) with a logged
     ``[WARN]`` when the config, or a specific field on it, is missing.
     Never raises.
 
@@ -232,10 +232,10 @@ def resolve_calibration_defaults(
     cfg = get_robot_config()
     if cfg is None:
         rot_slip = 1.0
-        tw = DEFAULT_PROFILE["trackwidth_mm"]
+        tw = DEFAULT_PROFILE["trackwidth"]
         _warn(
             "From Calibration: no active robot config found — falling back "
-            f"to neutral body_rot_scrub={rot_slip}, trackwidth_mm={tw}"
+            f"to neutral body_rot_scrub={rot_slip}, trackwidth={tw}"
         )
         return rot_slip, tw
 
@@ -252,11 +252,11 @@ def resolve_calibration_defaults(
     if cfg.geometry.trackwidth is not None:
         tw = cfg.geometry.trackwidth
     else:
-        tw = DEFAULT_PROFILE["trackwidth_mm"]
+        tw = DEFAULT_PROFILE["trackwidth"]
         _warn(
             "From Calibration: active robot config has no "
             f"geometry.trackwidth — falling back to neutral "
-            f"trackwidth_mm={tw}"
+            f"trackwidth={tw}"
         )
 
     return rot_slip, tw
@@ -288,7 +288,7 @@ def load_sim_error_profile() -> dict:
     # "the fallback path" per this function's contract); the merge loop
     # below overwrites it again if the persisted file has its own value.
     profile["body_rot_scrub"], _resolved_tw = resolve_calibration_defaults()
-    del _resolved_tw  # trackwidth_mm's own fallback is unaffected by this ticket.
+    del _resolved_tw  # trackwidth's own fallback is unaffected by this ticket.
     try:
         data = json.loads(_PREFS_PATH.read_text())
     except Exception:

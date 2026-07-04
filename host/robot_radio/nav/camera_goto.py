@@ -8,11 +8,11 @@ unit-testable without importing the full CLI module.
 
 Public API:
     go_to_world_camera(proto, read_pose, target_x, target_y,
-                       cruise, turn_speed, gate_deg, arrive_cm,
+                       cruise, turn_speed, gate, arrive_cm,
                        max_secs, log=None)
-    spin_to_yaw_camera(proto, read_pose, target_deg, speed,
-                       tol_deg, max_secs=8.0, log=None)
-    crawl_drive_distance(robot, speed_mms, target_mm, log=None)
+    spin_to_yaw_camera(proto, read_pose, target, speed,
+                       tol, max_secs=8.0, log=None)
+    crawl_drive_distance(robot, speed, target, log=None)
 
 Import constraint: this module must NOT import from robot_radio.io.cli.
 """
@@ -28,7 +28,7 @@ from typing import Callable
 # These are calibrated values; keep them in sync if cli.py changes.
 # ---------------------------------------------------------------------------
 CRAWL_PULSE_SPEED = 300   # mm/s commanded during the pulse
-CRAWL_PULSE_MS = 80
+CRAWL_PULSE_DURATION = 80  # [ms]
 CRAWL_DELAY_MS_MIN = 20
 CRAWL_MM_PER_PULSE = 6.53
 
@@ -39,69 +39,69 @@ def _noop(msg: str) -> None:  # noqa: ARG001
 
 def crawl_drive_distance(
     robot,
-    speed_mms: int,
-    target_mm: int,
+    speed: int,  # [mm/s]
+    target: int,  # [mm]
     log: Callable[[str], None] = _noop,
 ) -> tuple[int, int]:
     """Pulse-train slow drive when |speed| is below the firmware MIN clamp.
 
-    Each pulse is a short T command at CRAWL_PULSE_SPEED for CRAWL_PULSE_MS,
-    followed by ``delay_ms`` of coast.  We choose ``delay_ms`` so the average
-    speed across pulse+delay matches ``speed_mms``, clamped at the calibration
-    floor (delay >= CRAWL_DELAY_MS_MIN).
+    Each pulse is a short T command at CRAWL_PULSE_SPEED for
+    CRAWL_PULSE_DURATION, followed by ``delay`` of coast.  We choose
+    ``delay`` so the average speed across pulse+delay matches ``speed``,
+    clamped at the calibration floor (delay >= CRAWL_DELAY_MS_MIN).
 
-    Stops after the number of pulses needed to cover ``target_mm`` at the
+    Stops after the number of pulses needed to cover ``target`` at the
     calibrated mm-per-pulse.  Returns the firmware's final encoder reading.
 
     Extracted from cli.py ``_crawl_drive_distance`` (ticket 035-001).
     """
-    eff_v = abs(speed_mms)
+    eff_v = abs(speed)
     if eff_v < 1:
         raise SystemExit("Error: crawl speed must be > 0")
-    target_mm = abs(target_mm)
-    if target_mm < 1:
+    target = abs(target)
+    if target < 1:
         raise SystemExit("Error: crawl distance must be > 0")
 
     # Cycle period to hit the requested effective speed.
-    cycle_ms = max(
-        CRAWL_PULSE_MS + CRAWL_DELAY_MS_MIN,
+    cycle_duration = max(
+        CRAWL_PULSE_DURATION + CRAWL_DELAY_MS_MIN,
         int(round(CRAWL_MM_PER_PULSE * 1000.0 / eff_v)),
-    )
-    delay_ms = cycle_ms - CRAWL_PULSE_MS
-    pulses = max(1, int(round(target_mm / CRAWL_MM_PER_PULSE)))
-    sign = 1 if speed_mms >= 0 else -1
+    )  # [ms]
+    delay = cycle_duration - CRAWL_PULSE_DURATION  # [ms]
+    pulses = max(1, int(round(target / CRAWL_MM_PER_PULSE)))
+    sign = 1 if speed >= 0 else -1
     pulse_v = sign * CRAWL_PULSE_SPEED
 
     # Cap the actual effective speed reported back if we hit the floor.
-    eff_actual = CRAWL_MM_PER_PULSE * 1000.0 / cycle_ms
+    eff_actual = CRAWL_MM_PER_PULSE * 1000.0 / cycle_duration
 
     log(
-        f"crawl mode: {pulses} pulses × T+{pulse_v}+{pulse_v}+{CRAWL_PULSE_MS} "
-        f"(delay {delay_ms} ms, eff ≈ {eff_actual:.1f} mm/s, "
-        f"target {target_mm} mm ≈ {pulses * CRAWL_MM_PER_PULSE:.1f} mm)"
+        f"crawl mode: {pulses} pulses × T+{pulse_v}+{pulse_v}+{CRAWL_PULSE_DURATION} "
+        f"(delay {delay} ms, eff ≈ {eff_actual:.1f} mm/s, "
+        f"target {target} mm ≈ {pulses * CRAWL_MM_PER_PULSE:.1f} mm)"
     )
 
     enc_l, enc_r = 0, 0
     for _i in range(pulses):
-        enc_l, enc_r = robot.speed_for_time(pulse_v, pulse_v, CRAWL_PULSE_MS)
-        if delay_ms > 0:
-            time.sleep(delay_ms / 1000.0)
+        enc_l, enc_r = robot.speed_for_time(pulse_v, pulse_v, CRAWL_PULSE_DURATION)
+        if delay > 0:
+            time.sleep(delay / 1000.0)
     return enc_l, enc_r
 
 
 def spin_to_yaw_camera(
     proto,
     read_pose: Callable[..., tuple[float, float, float] | None],
-    target_deg: float,
+    target: float,  # [deg]
     speed: int,
-    tol_deg: float,
+    tol: float,  # [deg]
     max_secs: float = 8.0,
     log: Callable[[str], None] = _noop,
 ) -> float | None:
     """Velocity-projected closed-loop spin to an absolute world yaw (deg).
 
     Reads yaw from ``read_pose()`` (a callable returning (x, y, yaw_rad) or
-    None).  Computes the shortest signed delta to ``target_deg``, then drives
+    None).  Computes the shortest signed delta to ``target``, then drives
     a streaming-S spin with velocity-projected stop.  Returns the final signed
     yaw error in degrees, or None if the pose source never reported the robot.
 
@@ -111,8 +111,8 @@ def spin_to_yaw_camera(
     p = read_pose(3.0)
     if p is None:
         return None
-    cur_deg = math.degrees(p[2])
-    diff = ((target_deg - cur_deg + 180.0) % 360.0) - 180.0
+    cur = math.degrees(p[2])  # [deg]
+    diff = ((target - cur + 180.0) % 360.0) - 180.0
     # v2: no set_watchdog verb; use SET sTimeout=<ms> to configure firmware watchdog.
     proto.set_config(sTimeout=500)
     prev_cam = p[2]
@@ -124,17 +124,17 @@ def spin_to_yaw_camera(
         p = read_pose(0.2)
         now = time.monotonic()
         if p is not None:
-            d = ((p[2] - prev_cam + math.pi) % (2.0 * math.pi)) - math.pi
-            d_deg = math.degrees(d)
+            raw = ((p[2] - prev_cam + math.pi) % (2.0 * math.pi)) - math.pi
+            delta = math.degrees(raw)
             dt = now - prev_t
-            if abs(d_deg) <= 30.0 and dt > 0:
-                ang_vel = 0.6 * ang_vel + 0.4 * (d_deg / dt)
-                total += d_deg
+            if abs(delta) <= 30.0 and dt > 0:
+                ang_vel = 0.6 * ang_vel + 0.4 * (delta / dt)
+                total += delta
             prev_cam = p[2]
             prev_t = now
         remaining = diff - total
         projected_err = diff - (total + ang_vel * COAST_S)
-        if abs(projected_err) <= tol_deg and abs(ang_vel) > 5.0:
+        if abs(projected_err) <= tol and abs(ang_vel) > 5.0:
             proto.stop()
             time.sleep(max(COAST_S * 1.5, 0.4))
             break
@@ -147,7 +147,7 @@ def spin_to_yaw_camera(
     p = read_pose(1.5)
     if p is None:
         return None
-    return ((target_deg - math.degrees(p[2]) + 180.0) % 360.0) - 180.0
+    return ((target - math.degrees(p[2]) + 180.0) % 360.0) - 180.0
 
 
 def go_to_world_camera(
@@ -157,7 +157,7 @@ def go_to_world_camera(
     target_y: float,
     cruise: int,
     turn_speed: int,
-    gate_deg: float,
+    gate: float,  # [deg]
     arrive_cm: float,
     max_secs: float,
     log: Callable[[str], None] = _noop,
@@ -185,8 +185,8 @@ def go_to_world_camera(
         Forward drive speed in mm/s.
     turn_speed:
         Wheel speed during in-place turns in mm/s.
-    gate_deg:
-        Turn-in-place threshold: if heading error exceeds this, spin to aim.
+    gate:
+        Turn-in-place threshold (deg): if heading error exceeds this, spin to aim.
     arrive_cm:
         Arrival tolerance in cm.
     max_secs:
@@ -202,10 +202,10 @@ def go_to_world_camera(
 
     # Control parameters (kept identical to original cmd_goto).
     TICK_S = 0.05
-    WATCHDOG_MS = 800
-    AIM_GATE_DEG = gate_deg
-    REAIM_GATE_DEG = gate_deg * 1.8
-    SPIN_TOL_DEG = 4.0
+    WATCHDOG = 800  # [ms]
+    AIM_GATE = gate  # [deg]
+    REAIM_GATE = gate * 1.8  # [deg]
+    SPIN_TOL = 4.0  # [deg]
     STEER_KP = 1.0
     SLOW_RADIUS_CM = 18.0
     MIN_DRIVE = 70
@@ -230,7 +230,7 @@ def go_to_world_camera(
         return
 
     # v2: no set_watchdog verb; use SET sTimeout=<ms> to configure firmware watchdog.
-    proto.set_config(sTimeout=WATCHDOG_MS)
+    proto.set_config(sTimeout=WATCHDOG)
     t_start = time.monotonic()
 
     while True:
@@ -255,14 +255,14 @@ def go_to_world_camera(
         head_err = _wrap(req_yaw - yaw)
 
         # Aim with the proven velocity-projected spin if badly off heading.
-        if abs(head_err) > math.radians(AIM_GATE_DEG):
+        if abs(head_err) > math.radians(AIM_GATE):
             log(
                 f"aim: head_err={math.degrees(head_err):+.0f}° → "
                 f"spin to {math.degrees(req_yaw):+.0f}°"
             )
             spin_to_yaw_camera(
                 proto, read_pose, math.degrees(req_yaw),
-                turn_speed, SPIN_TOL_DEG, log=log,
+                turn_speed, SPIN_TOL, log=log,
             )
             continue
 
@@ -281,7 +281,7 @@ def go_to_world_camera(
             if dist <= arrive_cm:
                 break
             he = _wrap(math.atan2(dy, dx) - yaw)
-            if abs(he) > math.radians(REAIM_GATE_DEG):
+            if abs(he) > math.radians(REAIM_GATE):
                 break
             if dist > best + 2.0:   # overshot / moving away → re-aim
                 break

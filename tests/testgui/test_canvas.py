@@ -362,9 +362,9 @@ class TestRobotMarker:
         yaw = math.pi / 4  # 45°
         ctrl.refresh(fused_yaw_rad=yaw)
         # Expected rotation: 90 - degrees(yaw) = 90 - 45 = 45°
-        expected_deg = 90.0 - math.degrees(yaw)
-        actual_deg = ctrl._marker_group.rotation()
-        assert actual_deg == pytest.approx(expected_deg, abs=0.01)
+        expected = 90.0 - math.degrees(yaw)
+        actual = ctrl._marker_group.rotation()
+        assert actual == pytest.approx(expected, abs=0.01)
 
     def test_marker_position_follows_fused_trace(self, qapp):
         """Marker is positioned at the last fused world point."""
@@ -1160,8 +1160,8 @@ class TestSimFallbackOrigin:
 class TestResetAvatarHeading:
     """reset_avatar_to_center() must reset the avatar heading to 0° (east).
 
-    The Qt rotation formula is ``rotation_deg = 90 - degrees(yaw_rad)``.
-    For yaw_rad=0 (east), rotation_deg = 90.0.  The reset must leave
+    The Qt rotation formula is ``rotation = 90 - degrees(yaw_rad)``.
+    For yaw_rad=0 (east), rotation = 90.0.  The reset must leave
     marker_group.rotation() == 90.0.
     """
 

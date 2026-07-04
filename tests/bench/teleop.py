@@ -85,7 +85,7 @@ def main() -> int:
     if res.get("error"):
         print(f"connect failed: {res['error']}")
         return 2
-    png = conn.send("PING", read_ms=800, stop_token="OK").get("responses")
+    png = conn.send("PING", read_timeout=800, stop_token="OK").get("responses")
     if not any("pong" in r for r in png):
         print(f"robot not responding (PING -> {png}). Power/relay OK?")
         conn.disconnect()

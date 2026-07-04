@@ -90,7 +90,7 @@ class Nezha(Robot):
     """
 
     # Below this, neither wheel reliably rotates (deadband).
-    MIN_SPEED_MMS = 12
+    MIN_SPEED = 12  # [mm/s]
 
     def __init__(self, proto: NezhaProtocol) -> None:
         self._proto = proto
@@ -188,7 +188,7 @@ class Nezha(Robot):
         Sends S keepalives to maintain streaming. Close the generator to stop.
         """
         def _clamp(v: int) -> int:
-            return 0 if v == 0 else max(self.MIN_SPEED_MMS, abs(v)) * (1 if v > 0 else -1)
+            return 0 if v == 0 else max(self.MIN_SPEED, abs(v)) * (1 if v > 0 else -1)
 
         l, r = _clamp(left), _clamp(right)
         speeds = [l, r]
@@ -207,7 +207,7 @@ class Nezha(Robot):
         Waits for EVT done T or a conservative host-side timeout.
         """
         def _clamp(v: int) -> int:
-            return 0 if v == 0 else max(self.MIN_SPEED_MMS, abs(v)) * (1 if v > 0 else -1)
+            return 0 if v == 0 else max(self.MIN_SPEED, abs(v)) * (1 if v > 0 else -1)
 
         l, r = _clamp(left), _clamp(right)
         self._proto.timed(l, r, ms)
@@ -217,7 +217,7 @@ class Nezha(Robot):
     def speed_for_distance(self, left: int, right: int, mm: int) -> tuple[int, int]:  # [mm/s]
         """Blocking distance drive (D command). Returns final encoder totals (mm)."""
         def _clamp(v: int) -> int:
-            return 0 if v == 0 else max(self.MIN_SPEED_MMS, abs(v)) * (1 if v > 0 else -1)
+            return 0 if v == 0 else max(self.MIN_SPEED, abs(v)) * (1 if v > 0 else -1)
 
         l, r = _clamp(left), _clamp(right)
         remaining = abs(int(mm))  # [mm]

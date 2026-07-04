@@ -196,7 +196,7 @@ def main() -> int:
     args = ap.parse_args()
 
     rng = random.Random(args.seed)
-    timeout_s = args.timeout_ms / 1000.0
+    timeout_s = args.timeout / 1000.0
     sizes = [s for s in args.sizes if s > 0]
 
     print(f"Opening {args.port} @ {args.baud} ...")
@@ -255,7 +255,7 @@ def main() -> int:
         print()
 
         print(f"id-correlated, lag-tolerant; window={args.window}, "
-              f"{args.duration:.0f}s/size, timeout={args.timeout_ms}ms")
+              f"{args.duration:.0f}s/size, timeout={args.timeout}ms")
         print(f"  {'size':>5} {'sent':>5} {'ok':>5} {'corr':>5} {'err':>4} {'lost':>5} "
               f"{'deliv':>6} {'msg/s':>7} {'goodput':>14} "
               f"{'rtt ms (min/med/p90/max)':>26}")

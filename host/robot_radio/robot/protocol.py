@@ -60,7 +60,7 @@ class TLMFrame:
     firmware side (not gated by STREAM fields=) — always present on any
     firmware new enough to emit it; absent (None) on older firmware.
     ``encpose`` is the encoder-only dead-reckoned world pose (068-001):
-    (x_mm, y_mm, heading_cdeg), arc-integrated from wheel deltas only —
+    (x, y, heading) in (mm, mm, cdeg), arc-integrated from wheel deltas only —
     same shape/units as ``otos``/``pose``. Gated by STREAM fields=; absent
     (None) on older firmware or when explicitly excluded from the
     subscription.
@@ -77,16 +77,16 @@ class TLMFrame:
     t: int | None = None
     mode: str | None = None
     seq: int | None = None                       # D10 sequence counter (uint16, wraps at 65535)
-    enc: tuple[int, int] | None = None          # (left_mm, right_mm)
-    pose: tuple[int, int, int] | None = None    # (x_mm, y_mm, heading_cdeg)
+    enc: tuple[int, int] | None = None          # (left, right) [mm]
+    pose: tuple[int, int, int] | None = None    # (x, y, heading) [mm, mm, cdeg]
     vel: tuple[int, ...] | None = None          # differential: (vL, vR); mecanum: (vFR, vFL, vBR, vBL) mm/s
     twist: tuple[int, ...] | None = None        # differential: (v, omega_mrad); mecanum: (vx, vy, omega_mrad)
-    otos: tuple[int, int, int] | None = None    # (x_mm, y_mm, heading_cdeg) — raw OTOS pose
+    otos: tuple[int, int, int] | None = None    # (x, y, heading) [mm, mm, cdeg] — raw OTOS pose
     line: tuple[int, int, int, int] | None = None   # (g1, g2, g3, g4)
     color: tuple[int, int, int, int] | None = None  # (r, g, b, c)
     ekf_rej: int | None = None                   # cumulative EKF gate rejection count
     wedge: tuple[int, int] | None = None         # (left, right) wedge-latch state, 0/1 each (064-004)
-    encpose: tuple[int, int, int] | None = None  # (x_mm, y_mm, heading_cdeg) — encoder-only pose (068-001)
+    encpose: tuple[int, int, int] | None = None  # (x, y, heading) [mm, mm, cdeg] — encoder-only pose (068-001)
     otos_health: tuple[int, bool] | None = None  # (raw STATUS byte, fusion_blocked) — OTOS health (074-004)
 
 
@@ -117,8 +117,8 @@ class Stop:
       stop=line:<ge|le>:<thr>
       stop=sensor:<ch>:<ge|le>:<thr>
       stop=color:<h>:<s>:<v>:<dist>
-      stop=heading:<cdeg>:<eps_cdeg>
-      stop=rot:<arc_mm>
+      stop=heading:<heading>:<eps>  (cdeg, cdeg)
+      stop=rot:<arc>  (mm)
     """
 
     @classmethod
@@ -467,7 +467,7 @@ class NezhaProtocol:
     # ------------------------------------------------------------------
 
     def ping(self, corr_id: str | None = None) -> tuple[int, float] | None:
-        """Send PING, parse OK pong t=<robot_ms>.
+        """Send PING, parse OK pong t=<t_robot> (ms).
 
         Returns (t_robot, rtt) or None if no valid response, both in ms.
         rtt is the round-trip time measured by this call.

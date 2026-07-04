@@ -39,7 +39,7 @@ _DEFAULT_LIB = (_HERE / "../../../tests/_infra/sim/build" / _LIB_NAME).resolve()
 
 # Default tick step: 24 ms matches the conftest fixture and is fine for the
 # 25 ms control period.  Smaller = smoother state log, more CPU.
-_DEFAULT_TICK_MS = 24
+_DEFAULT_TICK_DURATION = 24
 
 
 class SimConnection:
@@ -66,7 +66,7 @@ class SimConnection:
     """
 
     def __init__(self, lib_path: str | pathlib.Path | None = None,
-                 tick_step: int = _DEFAULT_TICK_MS,  # [ms]
+                 tick_step: int = _DEFAULT_TICK_DURATION,  # [ms]
                  real_time: bool = False,
                  speed_factor: float = 1.0) -> None:
         self._lib_path = pathlib.Path(lib_path) if lib_path else _DEFAULT_LIB

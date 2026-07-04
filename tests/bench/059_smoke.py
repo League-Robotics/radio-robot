@@ -69,10 +69,10 @@ STEP_FAIL = "FAIL"
 STEP_SKIP = "SKIP"
 
 # How long (ms) to wait for a SNAP reply in steady-state.
-SNAP_READ_MS = 400
+SNAP_READ = 400
 
 # STREAM period for check 3 (100 ms = 10 Hz).
-STREAM_PERIOD_MS = 100
+STREAM_PERIOD = 100
 
 # Target TLM frames to collect in check 3 (relay may drop async frames; we
 # collect via SNAP polling so this is a minimum via polling, not STREAM).
@@ -81,9 +81,9 @@ STREAM_COLLECT_S = 3.0   # seconds to poll; 5 SNAPs at 100 ms each + slack
 
 # RT 1800 = 180° relative turn.
 RT_CDEG = 1800
-RT_EXPECTED_DEG = 180.0
-RT_TOL_DEG = 25.0         # ±25° tolerance on heading change
-RT_TIMEOUT_MS = 10_000    # 10 s; a 180° on-stand spin should complete well within this
+RT_EXPECTED = 180.0
+RT_TOL = 25.0         # ±25° tolerance on heading change
+RT_TIMEOUT = 10_000    # 10 s; a 180° on-stand spin should complete well within this
 
 # Velocity near-zero threshold for check 6.
 VELOCITY_ZERO_MMPS = 30   # |twist.v| below this → "near zero"
@@ -107,7 +107,7 @@ def _result(num: int, name: str, status: str, note: str = "") -> None:
     print(f"  [{sym}] Check {num}: {name} -- {status}{extra}")
 
 
-def _wrap_deg(a: float) -> float:
+def _wrap(a: float) -> float:
     """Wrap angle in degrees to [-180, 180]."""
     return math.degrees(
         math.atan2(math.sin(math.radians(a)), math.cos(math.radians(a)))
@@ -134,7 +134,7 @@ def _snap_raw(conn) -> dict | None:
     """
     for _ in range(3):
         conn.send_fast("SNAP")
-        for ln in conn.read_lines(SNAP_READ_MS, stop_token="TLM"):
+        for ln in conn.read_lines(SNAP_READ, stop_token="TLM"):
             if "TLM" in ln:
                 d = _parse_raw_tlm(ln)
                 if d:
@@ -142,7 +142,7 @@ def _snap_raw(conn) -> dict | None:
     return None
 
 
-def _snap_heading_deg(conn) -> float | None:
+def _snap_heading(conn) -> float | None:
     """Return pose heading in degrees via SNAP, or None."""
     f = _snap_raw(conn)
     if f is None or "pose" not in f:
@@ -156,18 +156,18 @@ def _snap_heading_deg(conn) -> float | None:
         return None
 
 
-def _wait_mode_idle(conn, timeout_ms: int = RT_TIMEOUT_MS, min_ms: int = 500) -> str:
+def _wait_mode_idle(conn, timeout: int = RT_TIMEOUT, min: int = 500) -> str:
     """Poll SNAP until mode == 'I' (idle).  Returns 'done' or 'timeout'.
 
     Relay-safe motion-done detector.  Async EVT done lines are dropped by the
     bridge, so we poll the synchronous SNAP ``mode`` field instead.
 
-    ``min_ms`` floor: require at least one active-mode frame before accepting
-    idle, OR that min_ms has elapsed since the first poll — prevents a fast
+    ``min`` floor: require at least one active-mode frame before accepting
+    idle, OR that min has elapsed since the first poll — prevents a fast
     move from being declared done before it ever started.
     """
     t0 = time.time()
-    deadline = t0 + timeout_ms / 1000.0
+    deadline = t0 + timeout / 1000.0
     saw_active = False
     idle_streak = 0
     while time.time() < deadline:
@@ -177,8 +177,8 @@ def _wait_mode_idle(conn, timeout_ms: int = RT_TIMEOUT_MS, min_ms: int = 500) ->
             saw_active = True
             idle_streak = 0
         elif mode == "I":
-            elapsed_ms = (time.time() - t0) * 1000.0
-            if saw_active or elapsed_ms >= min_ms:
+            elapsed = (time.time() - t0) * 1000.0
+            if saw_active or elapsed >= min:
                 idle_streak += 1
                 if idle_streak >= (2 if saw_active else 3):
                     return "done"
@@ -194,7 +194,7 @@ def check1_hello(conn) -> str:
     """HELLO → assert firmware banner contains expected token."""
     _banner("Check 1: HELLO (firmware banner)")
 
-    resp = conn.send("HELLO", read_ms=600, stop_token="DEVICE")
+    resp = conn.send("HELLO", read_timeout=600, stop_token="DEVICE")
     lines = resp.get("responses", []) + resp.get("lines", [])
     print(f"  HELLO responses ({len(lines)} line(s)):")
     for ln in lines:
@@ -224,7 +224,7 @@ def check2_ping(conn) -> str:
     """PING → assert 'pong' in response."""
     _banner("Check 2: PING (assert PONG)")
 
-    resp = conn.send("PING", read_ms=500, stop_token="OK")
+    resp = conn.send("PING", read_timeout=500, stop_token="OK")
     lines = resp.get("responses", [])
     print(f"  PING response: {lines}")
     for ln in lines:
@@ -242,11 +242,11 @@ def check2_ping(conn) -> str:
 
 def check3_stream(conn) -> str:
     """STREAM 100 → collect >= 5 TLM frames via SNAP polling; validate fields."""
-    _banner(f"Check 3: STREAM {STREAM_PERIOD_MS} ms + TLM field validation")
+    _banner(f"Check 3: STREAM {STREAM_PERIOD} ms + TLM field validation")
 
     # Start STREAM (the relay may drop async frames — we collect via SNAP).
-    conn.send(f"STREAM {STREAM_PERIOD_MS}", read_ms=300)
-    print(f"  STREAM {STREAM_PERIOD_MS} ms enabled (10 Hz).")
+    conn.send(f"STREAM {STREAM_PERIOD}", read_timeout=300)
+    print(f"  STREAM {STREAM_PERIOD} ms enabled (10 Hz).")
     print(f"  Collecting >= {STREAM_TARGET_FRAMES} TLM frames via SNAP polling"
           f" over {STREAM_COLLECT_S:.0f} s ...")
 
@@ -262,9 +262,9 @@ def check3_stream(conn) -> str:
         f = _snap_raw(conn)
         if f:
             frames.append(f)
-        time.sleep(STREAM_PERIOD_MS / 1000.0 * 0.8)
+        time.sleep(STREAM_PERIOD / 1000.0 * 0.8)
 
-    conn.send("STREAM 0", read_ms=200)
+    conn.send("STREAM 0", read_timeout=200)
     print(f"  STREAM 0 (disabled).  Collected {len(frames)} TLM frame(s).")
 
     if len(frames) < STREAM_TARGET_FRAMES:
@@ -277,7 +277,7 @@ def check3_stream(conn) -> str:
     print(f"  Sample frame keys: {[k for k in sample if not k.startswith('_')]}")
 
     problems = []
-    # pose=x_mm,y_mm,h_cdeg — all should be parseable integers.
+    # pose=x,y,h_cdeg — all should be parseable integers.
     if "pose" not in sample:
         problems.append("missing 'pose' field")
     else:
@@ -379,48 +379,48 @@ def check5_on_stand_rotation(conn, confirmed: bool) -> str:
         return STEP_SKIP
 
     print("  [ON-STAND CONFIRMED] Starting 180° rotation ...")
-    h0 = _snap_heading_deg(conn)
+    h0 = _snap_heading(conn)
     if h0 is None:
         print("  FAIL: cannot read starting heading via SNAP.")
         return STEP_FAIL
     print(f"  Starting heading: {h0:.1f}°")
 
     # Send RT 1800 (relative turn, 1800 cdeg = 180°).
-    resp = conn.send(f"RT {RT_CDEG}", read_ms=400, stop_token="OK")
+    resp = conn.send(f"RT {RT_CDEG}", read_timeout=400, stop_token="OK")
     lines = resp.get("responses", [])
     print(f"  RT {RT_CDEG} response: {lines}")
 
     # Wait for motion to complete via SNAP mode polling (relay-safe).
     print(f"  Waiting for rotation to complete"
-          f" (SNAP poll, timeout {RT_TIMEOUT_MS // 1000} s) ...")
-    outcome = _wait_mode_idle(conn, timeout_ms=RT_TIMEOUT_MS)
+          f" (SNAP poll, timeout {RT_TIMEOUT // 1000} s) ...")
+    outcome = _wait_mode_idle(conn, timeout=RT_TIMEOUT)
     print(f"  Motion outcome: {outcome}")
 
     # Read final heading.
-    h1 = _snap_heading_deg(conn)
+    h1 = _snap_heading(conn)
     if h1 is None:
         print("  FAIL: cannot read final heading via SNAP.")
         return STEP_FAIL
     print(f"  Final heading: {h1:.1f}°")
 
     # Heading delta, wrapped to [-180, 180].
-    delta_deg = abs(_wrap_deg(h1 - h0))
+    delta = abs(_wrap(h1 - h0))
     # Accept the supplement too (some robots turn the short way).
-    delta_eff = min(delta_deg, abs(180.0 - delta_deg))
-    print(f"  |Δheading| = {delta_deg:.1f}° "
+    delta_eff = min(delta, abs(180.0 - delta))
+    print(f"  |Δheading| = {delta:.1f}° "
           f"(effective deviation from 180° = {delta_eff:.1f}°, "
-          f"tolerance ±{RT_TOL_DEG}°)")
+          f"tolerance ±{RT_TOL}°)")
 
     if outcome != "done":
         print(f"  WARNING: motion outcome was '{outcome}', not 'done'."
               f"  Checking heading anyway ...")
 
-    if delta_eff <= RT_TOL_DEG:
-        print(f"  Heading change within tolerance ({delta_deg:.1f}° ≈ 180°).")
+    if delta_eff <= RT_TOL:
+        print(f"  Heading change within tolerance ({delta:.1f}° ≈ 180°).")
         return STEP_PASS
 
-    print(f"  FAIL: heading change {delta_deg:.1f}° deviates {delta_eff:.1f}°"
-          f" from expected 180° (tolerance ±{RT_TOL_DEG}°).")
+    print(f"  FAIL: heading change {delta:.1f}° deviates {delta_eff:.1f}°"
+          f" from expected 180° (tolerance ±{RT_TOL}°).")
     return STEP_FAIL
 
 
@@ -432,7 +432,7 @@ def check6_cancel(conn) -> str:
     """X (cancel); assert near-zero twist velocity."""
     _banner("Check 6: CANCEL (X) — near-zero velocity")
 
-    resp = conn.send("X", read_ms=400, stop_token="OK")
+    resp = conn.send("X", read_timeout=400, stop_token="OK")
     lines = resp.get("responses", [])
     print(f"  X response: {lines}")
 
@@ -551,7 +551,7 @@ def main() -> None:
     # We talk at the raw connection level for this smoke script (like
     # bench_validation_032) so we can inspect raw TLM lines.  The
     # NezhaProtocol object is robot._proto; use it for ping() which
-    # returns (uptime_ms, rtt_ms) and is cleaner.
+    # returns (uptime, rtt) and is cleaner.
     proto = robot._proto
     conn = proto._conn   # underlying SerialConnection
 
@@ -588,8 +588,8 @@ def main() -> None:
         print()
         print("[safe-stop] Sending X + STREAM 0 ...")
         try:
-            conn.send("X", read_ms=300)
-            conn.send("STREAM 0", read_ms=200)
+            conn.send("X", read_timeout=300)
+            conn.send("STREAM 0", read_timeout=200)
         except Exception:
             pass
         conn.disconnect()

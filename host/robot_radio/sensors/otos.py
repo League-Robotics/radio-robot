@@ -7,8 +7,8 @@ Communicates with the robot firmware via v2 command names only:
     OZ  — zero tracked position: ``ACK:OZ``
     OR  — reset tracking: ``ACK:OR``
     OC  — config dump: ``OC <spcfg> <self_test>``
-    OP  — pose: ``OP <x_mm> <y_mm> <h_deg>``
-    OV  — velocity: ``OV <vx_mms> <vy_mms> <vh_dps>``
+    OP  — pose: ``OP <x> <y> <h>`` (mm, mm, deg)
+    OV  — velocity: ``OV <vx> <vy> <vh>`` (mm/s, mm/s, deg/s)
     OL  — set linear scalar: ``OL <n>``
     OA  — set angular scalar: ``OA <n>``
 
@@ -40,9 +40,9 @@ from robot_radio.nav.pose import Pose
 from robot_radio.io.serial_conn import SerialConnection
 
 # Default timeout for commands that just need a short ACK
-_ACK_MS = 500
+_ACK_TIMEOUT = 500  # [ms]
 # Timeout for pose read — firmware replies quickly
-_POSE_MS = 300
+_POSE_TIMEOUT = 300  # [ms]
 
 
 def _find_line(responses: list[str], prefix: str) -> str | None:
@@ -83,9 +83,9 @@ class Otos:
     # Wire helpers
     # ------------------------------------------------------------------
 
-    def _send(self, cmd: str, read_ms: int = _ACK_MS) -> dict[str, Any]:
+    def _send(self, cmd: str, read_timeout: int = _ACK_TIMEOUT) -> dict[str, Any]:  # [ms]
         """Send *cmd* and return the raw result dict from SerialConnection."""
-        return self._conn.send(cmd, read_ms)
+        return self._conn.send(cmd, read_timeout)
 
     # ------------------------------------------------------------------
     # Command methods
@@ -162,11 +162,11 @@ class Otos:
         return {"spcfg": parts[1], "self_test": parts[2]}
 
     def read_pose_raw(self) -> tuple[float, float, float] | None:
-        """Send ``OP`` and return ``(x_mm, y_mm, h_deg)`` in sensor frame.
+        """Send ``OP`` and return ``(x, y, heading)`` in sensor frame (mm, mm, deg).
 
         Returns ``None`` if the reply cannot be parsed.
         """
-        result = self._send("OP", read_ms=_POSE_MS)
+        result = self._send("OP", read_timeout=_POSE_TIMEOUT)
         line = _find_line(result.get("responses", []), "OP ")
         if line is None:
             return None
@@ -179,11 +179,11 @@ class Otos:
             return None
 
     def read_velocity_raw(self) -> tuple[float, float, float] | None:
-        """Send ``OV`` and return ``(vx_mms, vy_mms, vh_dps)`` in sensor frame.
+        """Send ``OV`` and return ``(vx, vy, vh)`` in sensor frame (mm/s, mm/s, deg/s).
 
         Returns ``None`` if the reply cannot be parsed.
         """
-        result = self._send("OV", read_ms=_POSE_MS)
+        result = self._send("OV", read_timeout=_POSE_TIMEOUT)
         line = _find_line(result.get("responses", []), "OV ")
         if line is None:
             return None
@@ -228,11 +228,11 @@ class Otos:
         raw = self.read_pose_raw()
         if raw is None:
             return None
-        x_mm, y_mm, h_deg = raw
+        x, y, heading = raw  # [mm], [mm], [deg]
         # Convert sensor units to cm and radians
-        x_s = x_mm / 10.0
-        y_s = y_mm / 10.0
-        h_s = math.radians(h_deg)
+        x_s = x / 10.0
+        y_s = y / 10.0
+        h_s = math.radians(heading)
         # Apply SE(2) rotation + translation
         cos_t = math.cos(self._theta)
         sin_t = math.sin(self._theta)

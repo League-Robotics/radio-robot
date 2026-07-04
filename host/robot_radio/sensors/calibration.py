@@ -97,7 +97,7 @@ def to_wire_values(cal: dict[str, Any]) -> list[tuple[str, int]]:
 
 
 def apply(conn: SerialConnection, cal: dict[str, Any],
-          verify: bool = True, settle_ms: int = 120,
+          verify: bool = True, settle: int = 120,  # [ms]
           log: bool = False) -> dict[str, int]:
     """Send K commands based on ``cal``.  Queries the robot first and
     skips any setters whose firmware value already matches — reduces
@@ -133,7 +133,7 @@ def apply(conn: SerialConnection, cal: dict[str, Any],
         if log:
             print(f"  → {wire}")
         conn.send_fast(wire)
-        conn.read_lines(duration=settle_ms)
+        conn.read_lines(duration=settle)
 
     if not verify:
         return {}

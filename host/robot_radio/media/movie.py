@@ -223,7 +223,7 @@ def save_movie_frames(
     session_name: str | None = None,
     pixels_per_cm: float = 8.0,
     diff_threshold: float = 2.0,
-    min_interval_ms: int = 0,
+    min_interval: int = 0,  # [ms]
     max_gap_s: float = 1.0,
     image_format: str = "jpg",
     jpeg_quality: int = 90,
@@ -247,7 +247,7 @@ def save_movie_frames(
                        8.0 = typical playfield ~40x30cm becomes ~320x240px per frame.
         diff_threshold: Motion sensitivity (0-255 scale). Frames saved if grayscale difference
                         from last saved frame >= this threshold. Default 2.0 (very sensitive).
-        min_interval_ms: Min delay between consecutive saves after motion triggers. 0=no throttle.
+        min_interval: Min delay between consecutive saves after motion triggers. 0=no throttle.
         max_gap_s: Force-save at least every N seconds even if no motion (keeps long still scenes
                    from becoming completely empty). Default 1.0.
         image_format: 'jpg' (smaller) or 'png' (lossless). Default 'jpg'.
@@ -324,7 +324,7 @@ def save_movie_frames(
         "source_resolution": [source_width, source_height],
         "deskewed_resolution": [out_w, out_h],
         "diff_threshold": diff_threshold,
-        "min_interval_ms": min_interval_ms,
+        "min_interval": min_interval,
         "max_gap_s": max_gap_s,
         "image_format": image_format,
         "jpeg_quality": jpeg_quality,
@@ -359,8 +359,8 @@ def save_movie_frames(
             save_due_to_diff = diff_score >= diff_threshold
             respects_min_interval = (
                 last_saved_monotonic is None
-                or min_interval_ms <= 0
-                or (now - last_saved_monotonic) * 1000.0 >= min_interval_ms
+                or min_interval <= 0
+                or (now - last_saved_monotonic) * 1000.0 >= min_interval
             )
             should_save = last_saved_monotonic is None or save_due_to_gap or (
                 save_due_to_diff and respects_min_interval
@@ -631,7 +631,7 @@ def main() -> None:
     save_parser.add_argument("--session-name", type=str, default=None)
     save_parser.add_argument("--pixels-per-cm", type=float, default=8.0)
     save_parser.add_argument("--diff-threshold", type=float, default=2.0)
-    save_parser.add_argument("--min-interval-ms", type=int, default=0)
+    save_parser.add_argument("--min-interval", type=int, default=0)
     save_parser.add_argument("--max-gap-s", type=float, default=1.0)
     save_parser.add_argument("--image-format", type=str, default="jpg")
     save_parser.add_argument("--jpeg-quality", type=int, default=90)
@@ -663,7 +663,7 @@ def main() -> None:
             session_name=args.session_name,
             pixels_per_cm=args.pixels_per_cm,
             diff_threshold=args.diff_threshold,
-            min_interval_ms=args.min_interval_ms,
+            min_interval=args.min_interval,
             max_gap_s=args.max_gap_s,
             image_format=args.image_format,
             jpeg_quality=args.jpeg_quality,

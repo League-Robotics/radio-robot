@@ -214,15 +214,15 @@ def _within_tolerance(true_value: float, fitted_value: float) -> bool:
 def test_sim_to_sim_fit_recovers_injected_params_and_replay_is_faithful():
     pytest.importorskip("scipy")
 
-    commands, total_ms = default_maneuver()
-    sample_period_ms = 200
+    commands, total_duration = default_maneuver()
+    sample_period = 200
 
     # --- 1. Inject KNOWN params into Sim A, drive the maneuver, record. ---
     sim_a = _otos_sim()
     sim_a.send_command(
         "SIMSET " + " ".join(f"{k}={v}" for k, v in INJECTED_PARAMS.items())
     )
-    records = record_sim_run(sim_a, commands, total_ms, sample_period_ms)
+    records = record_sim_run(sim_a, commands, total_duration, sample_period)
 
     assert any("cmd" in r for r in records), "recording captured no issued commands"
     assert any(
@@ -234,8 +234,8 @@ def test_sim_to_sim_fit_recovers_injected_params_and_replay_is_faithful():
         records,
         sim_factory=_otos_sim,
         candidate_keys=FIT_KEYS,
-        total_ms=total_ms,
-        sample_period_ms=sample_period_ms,
+        total_duration=total_duration,
+        sample_period=sample_period,
     )
 
     assert result.success, (
@@ -259,7 +259,7 @@ def test_sim_to_sim_fit_recovers_injected_params_and_replay_is_faithful():
         "SIMSET " + " ".join(f"{k}={v}" for k, v in result.params.items())
     )
     _, recorded_samples = split_recording(records)
-    replayed_samples = replay_samples(sim_c, commands, total_ms, sample_period_ms)
+    replayed_samples = replay_samples(sim_c, commands, total_duration, sample_period)
 
     checked = 0
     for t, rec_frame in recorded_samples.items():

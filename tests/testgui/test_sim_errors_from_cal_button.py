@@ -241,13 +241,13 @@ class TestSimErrorsFromCalSamePath:
                 "body_lin_scrub": 1.0,
                 "motor_offset_l": 1.0,
                 "motor_offset_r": 1.0,
-                "trackwidth_mm": 140.0,
+                "trackwidth": 140.0,
                 "enc_scale_err_l": 0.0,
                 "enc_scale_err_r": 0.0,
                 "otos_lin_scale_err": 0.0,
                 "otos_ang_scale_err": 0.0,
-                "otos_lin_drift_mms": 0.0,
-                "otos_yaw_drift_degs": 0.0,
+                "otos_lin_drift": 0.0,
+                "otos_yaw_drift": 0.0,
             }
             assert saved[0] == pytest.approx(expected)
         finally:
@@ -292,7 +292,7 @@ class TestSimErrorsFromCalSamePath:
             def send(self, line: str) -> None:
                 pass
 
-            def command(self, line: str, read_ms: int = 200) -> str:
+            def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
                 return "OK"
 
             def apply_error_profile(self, profile: dict) -> None:
@@ -329,13 +329,13 @@ class TestSimErrorsFromCalSamePath:
                 "body_lin_scrub": 1.0,
                 "motor_offset_l": 1.0,
                 "motor_offset_r": 1.0,
-                "trackwidth_mm": 140.0,
+                "trackwidth": 140.0,
                 "enc_scale_err_l": 0.0,
                 "enc_scale_err_r": 0.0,
                 "otos_lin_scale_err": 0.0,
                 "otos_ang_scale_err": 0.0,
-                "otos_lin_drift_mms": 0.0,
-                "otos_yaw_drift_degs": 0.0,
+                "otos_lin_drift": 0.0,
+                "otos_yaw_drift": 0.0,
             }
             assert applied[0] == pytest.approx(expected)
         finally:
@@ -384,9 +384,9 @@ class TestSimErrorsFromCalMissingConfigFallback:
                 "get_robot_config() returns None"
             )
             assert tw_spin.value() == pytest.approx(
-                sim_prefs.DEFAULT_PROFILE["trackwidth_mm"]
+                sim_prefs.DEFAULT_PROFILE["trackwidth"]
             ), (
-                "trackwidth must fall back to DEFAULT_PROFILE['trackwidth_mm'] "
+                "trackwidth must fall back to DEFAULT_PROFILE['trackwidth'] "
                 "when get_robot_config() returns None"
             )
 
@@ -470,9 +470,9 @@ class TestSimErrorsFromCalMissingConfigFallback:
                 "when only trackwidth is missing"
             )
             assert tw_spin.value() == pytest.approx(
-                sim_prefs.DEFAULT_PROFILE["trackwidth_mm"]
+                sim_prefs.DEFAULT_PROFILE["trackwidth"]
             ), (
-                "trackwidth must fall back to DEFAULT_PROFILE['trackwidth_mm'] "
+                "trackwidth must fall back to DEFAULT_PROFILE['trackwidth'] "
                 "when geometry.trackwidth is None"
             )
 

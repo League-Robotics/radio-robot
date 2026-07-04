@@ -69,7 +69,7 @@ def _make_fake_transport():
         def send(self, line: str) -> None:
             self.sent.append(line)
 
-        def command(self, line: str, read_ms: int = 200) -> str:
+        def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
             self.sent.append(line)
             return "OK"
 

@@ -113,7 +113,7 @@ _KEEPALIVE_PERIOD_S = 0.15
 #
 # Per-attempt read window: long enough to catch a single readline() from a
 # responsive device, short enough that the poll loop is tight.
-_POLL_ATTEMPT_MS = 130  # ms per PING attempt
+_POLL_ATTEMPT_DURATION = 130  # ms per PING attempt
 # Total readiness budget for the normal (full PING) path.
 _POLL_TOTAL_NORMAL_S = 1.5
 # Total readiness budget for the fast (skip_ping / cache-hit) path.
@@ -627,7 +627,7 @@ class SerialConnection:
         """Poll PING until the device responds or total_timeout_s is exceeded.
 
         Sends PING (always plain — after the !GO handshake the relay is a
-        transparent pipe), reads for _POLL_ATTEMPT_MS, and returns immediately
+        transparent pipe), reads for _POLL_ATTEMPT_DURATION, and returns immediately
         if any non-empty response is received. Retries until total_timeout_s
         expires.  Returns the response lines from the first successful attempt
         (or []).
@@ -641,7 +641,7 @@ class SerialConnection:
             self._ser.reset_input_buffer()
             self._ser.write(cmd)
             self._ser.flush()
-            lines = self._poll_read_lines(_POLL_ATTEMPT_MS, stop_token="OK pong")
+            lines = self._poll_read_lines(_POLL_ATTEMPT_DURATION, stop_token="OK pong")
             if lines:
                 return lines
         return []

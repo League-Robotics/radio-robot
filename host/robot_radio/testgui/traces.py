@@ -141,11 +141,11 @@ class TraceModel:
         self._sh: float = 0.0
 
         # --- baselines: the first absolute reading after anchor()/clear() ---
-        # encpose baseline: (x_mm, y_mm, hdg_cdeg)
+        # encpose baseline: (x, y, heading) in (mm, mm, cdeg)
         self._encpose_baseline: tuple[int, int, int] | None = None
-        # otos baseline: (x_mm, y_mm, hdg_cdeg)
+        # otos baseline: (x, y, heading) in (mm, mm, cdeg)
         self._otos_baseline: tuple[int, int, int] | None = None
-        # pose/fused baseline: (x_mm, y_mm, hdg_cdeg)
+        # pose/fused baseline: (x, y, heading) in (mm, mm, cdeg)
         self._pose_baseline: tuple[int, int, int] | None = None
 
     # ------------------------------------------------------------------
@@ -303,7 +303,7 @@ class TraceModel:
         Parameters
         ----------
         encpose:
-            (x_mm, y_mm, heading_cdeg) absolute encoder-only pose from
+            (x, y, heading) in (mm, mm, cdeg) absolute encoder-only pose from
             TLMFrame.encpose.
         """
         if self._encpose_baseline is None:
@@ -329,7 +329,7 @@ class TraceModel:
         Parameters
         ----------
         otos:
-            (x_mm, y_mm, heading_cdeg) absolute OTOS pose from TLMFrame.otos.
+            (x, y, heading) in (mm, mm, cdeg) absolute OTOS pose from TLMFrame.otos.
         """
         if self._otos_baseline is None:
             self._otos_baseline = otos
@@ -351,7 +351,7 @@ class TraceModel:
         Parameters
         ----------
         pose:
-            (x_mm, y_mm, heading_cdeg) absolute fused pose from TLMFrame.pose.
+            (x, y, heading) in (mm, mm, cdeg) absolute fused pose from TLMFrame.pose.
         """
         if self._pose_baseline is None:
             self._pose_baseline = pose

@@ -316,27 +316,27 @@ TOURS: dict[str, list[str]] = {
 # drift.  The loop stops when the robot is within ``eps`` of the target.
 
 
-def goto_distance_mm(
-    target_x_mm: float,
-    target_y_mm: float,
-    cur_x_mm: float,
-    cur_y_mm: float,
+def goto_distance(
+    target_x: float,  # [mm]
+    target_y: float,  # [mm]
+    cur_x: float,  # [mm]
+    cur_y: float,  # [mm]
 ) -> float:
     """Return the Euclidean distance (mm) from the current point to the target."""
-    dx = target_x_mm - cur_x_mm
-    dy = target_y_mm - cur_y_mm
+    dx = target_x - cur_x
+    dy = target_y - cur_y
     return (dx * dx + dy * dy) ** 0.5
 
 
 def goto_reached(
-    target_x_mm: float,
-    target_y_mm: float,
-    cur_x_mm: float,
-    cur_y_mm: float,
-    eps_mm: float,
+    target_x: float,  # [mm]
+    target_y: float,  # [mm]
+    cur_x: float,  # [mm]
+    cur_y: float,  # [mm]
+    eps: float,  # [mm]
 ) -> bool:
-    """Return ``True`` when the current point is within ``eps_mm`` of the target."""
-    return goto_distance_mm(target_x_mm, target_y_mm, cur_x_mm, cur_y_mm) <= eps_mm
+    """Return ``True`` when the current point is within ``eps`` of the target."""
+    return goto_distance(target_x, target_y, cur_x, cur_y) <= eps
 
 
 # ---------------------------------------------------------------------------
