@@ -261,6 +261,34 @@ bool applyMotorCfgKey(msg::MotorConfig& cfg, const char* key, const char* value,
 }
 
 // ---------------------------------------------------------------------------
+// applyDrivetrainCfgKey -- one key=value delta onto a shadow
+// msg::DrivetrainConfig. Mirrors applyMotorCfgKey (DEV M CFG) above, but only
+// recognizes the two keys the bench rig needs live: sync_gain (the ratio
+// governor's gain -- see drivetrain.h's governRatio() doc comment; boots at
+// 0 = OFF, and before this ticket there was no way to change it without a
+// reflash) and trackwidth (the TWIST arm's kinematics input, main.cpp's
+// other dtConfig field). Returns false (key untouched) for an unrecognized
+// key; the caller reports ERR badkey.
+// ---------------------------------------------------------------------------
+bool applyDrivetrainCfgKey(msg::DrivetrainConfig& cfg, const char* key, const char* value,
+                           char* appliedOut, int appliedOutSize) {
+    char numStr[16];
+    if (strcmp(key, "sync_gain") == 0) {
+        cfg.sync_gain = static_cast<float>(atof(value));
+        formatFixed(numStr, sizeof(numStr), cfg.sync_gain, 3);
+        snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "sync_gain=%s", numStr);
+        return true;
+    }
+    if (strcmp(key, "trackwidth") == 0) {
+        cfg.trackwidth = static_cast<float>(atof(value));
+        formatFixed(numStr, sizeof(numStr), cfg.trackwidth, 1);
+        snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "trackwidth=%s", numStr);
+        return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // emitMotorState / emitDrivetrainState -- shared line-builders. Used both by
 // the per-component STATE handlers (DEV M <n> STATE, DEV DT STATE) and by
 // the aggregate DEV STATE handler (one call per component).
@@ -466,7 +494,7 @@ void handleDevM(const ArgList& args, const char* corrId,
 // ---------------------------------------------------------------------------
 // DEV DT -- sub-mode keyword table and hand-rolled ParseFn/HandlerFn.
 // ---------------------------------------------------------------------------
-enum class DtMode : uint8_t { PORTS, VW, WHEELS, NEUTRAL, STATE, STOP };
+enum class DtMode : uint8_t { PORTS, VW, WHEELS, NEUTRAL, STATE, STOP, CFG };
 
 bool dtModeFromToken(const char* tok, DtMode* mode) {
     if (strcmp(tok, "PORTS") == 0)   { *mode = DtMode::PORTS;   return true; }
@@ -475,14 +503,20 @@ bool dtModeFromToken(const char* tok, DtMode* mode) {
     if (strcmp(tok, "NEUTRAL") == 0) { *mode = DtMode::NEUTRAL; return true; }
     if (strcmp(tok, "STATE") == 0)   { *mode = DtMode::STATE;   return true; }
     if (strcmp(tok, "STOP") == 0)    { *mode = DtMode::STOP;    return true; }
+    if (strcmp(tok, "CFG") == 0)     { *mode = DtMode::CFG;     return true; }
     return false;
 }
 
 // parseDevDt -- argTokens after the "DEV DT" prefix is stripped:
 //   tokens[0] = sub-mode keyword
-//   tokens[1..] = mode-specific positional values (ports/twist/wheels/neutral)
+//   tokens[1..] = mode-specific positional values (ports/twist/wheels/neutral),
+//                 or nothing here for CFG -- CFG's k=v pairs arrive via kvs
+//                 (already split out by CommandProcessor::parseKV over the
+//                 whole line before dispatch), re-serialized below into
+//                 ArgList as STR "key=value" entries, same mechanism as
+//                 parseDevM's MotorMode::CFG case.
 ParseResult parseDevDt(const char* const* tokens, int ntokens,
-                       const KVPair* /*kvs*/, int /*nkv*/) {
+                       const KVPair* kvs, int nkv) {
     ParseResult res;
 
     if (ntokens < 1) {
@@ -548,6 +582,20 @@ ParseResult parseDevDt(const char* const* tokens, int ntokens,
             argStr(res.args.args[count++], tokens[1]);
             break;
         }
+        case DtMode::CFG: {
+            if (nkv == 0) {
+                res.ok = false; res.err.code = nullptr; res.err.detail = "no keys";
+                return res;
+            }
+            for (int i = 0; i < nkv && count < MAX_ARGS; ++i) {
+                char kvbuf[32];
+                snprintf(kvbuf, sizeof(kvbuf), "%s=%s",
+                         kvs[i].key ? kvs[i].key : "",
+                         kvs[i].value ? kvs[i].value : "");
+                argStr(res.args.args[count++], kvbuf);
+            }
+            break;
+        }
         case DtMode::STATE:
         case DtMode::STOP:
         default:
@@ -557,6 +605,55 @@ ParseResult parseDevDt(const char* const* tokens, int ntokens,
     res.args.count = count;
     res.args.suppliedCount = count;
     return res;
+}
+
+// handleDevDtCfg -- CFG delta: apply each supplied key onto the shared
+// drivetrainConfigShadow, ERR badkey per unrecognized key, one OK ack line
+// listing only the keys that actually applied (if any). Mirrors
+// handleDevMCfg above, except there is exactly one Drivetrain instance (no
+// per-port indexing) and args[0] is the mode keyword ("CFG") rather than a
+// port number, so kv pairs start at args[1], not args[2].
+void handleDevDtCfg(DevLoopState& state, const ArgList& args,
+                    const char* corrId, ReplyFn replyFn, void* replyCtx) {
+    msg::DrivetrainConfig& cfg = state.drivetrainConfigShadow;
+    char appliedBody[256];
+    int bodyLen = 0;
+    appliedBody[0] = '\0';
+    bool anyApplied = false;
+
+    for (int i = 1; i < args.count; ++i) {
+        const char* kvtok = args.args[i].sval;
+        const char* eq = strchr(kvtok, '=');
+        if (!eq) continue;   // shouldn't happen -- parseDevDt only packs "key=value"
+
+        char key[24];
+        int klen = static_cast<int>(eq - kvtok);
+        if (klen >= static_cast<int>(sizeof(key))) klen = sizeof(key) - 1;
+        memcpy(key, kvtok, static_cast<size_t>(klen));
+        key[klen] = '\0';
+        const char* value = eq + 1;
+
+        char oneApplied[40];
+        if (applyDrivetrainCfgKey(cfg, key, value, oneApplied, sizeof(oneApplied))) {
+            anyApplied = true;
+            if (bodyLen > 0 && bodyLen < static_cast<int>(sizeof(appliedBody)) - 1) {
+                appliedBody[bodyLen++] = ' ';
+            }
+            int n = snprintf(appliedBody + bodyLen, sizeof(appliedBody) - static_cast<size_t>(bodyLen),
+                             "%s", oneApplied);
+            if (n > 0) bodyLen += n;
+        } else {
+            char rbuf[64];
+            CommandProcessor::replyErr(rbuf, sizeof(rbuf), "badkey", key, corrId, replyFn, replyCtx);
+        }
+    }
+
+    if (anyApplied) {
+        state.drivetrain->configure(cfg);
+        char rbuf[300];
+        CommandProcessor::replyOKf(rbuf, sizeof(rbuf), "DEV DT", corrId, replyFn, replyCtx,
+                                   "%s", appliedBody);
+    }
 }
 
 void handleDevDt(const ArgList& args, const char* corrId,
@@ -639,6 +736,9 @@ void handleDevDt(const ArgList& args, const char* corrId,
             CommandProcessor::replyOK(rbuf, sizeof(rbuf), "DEV DT STOP", nullptr, corrId, replyFn, replyCtx);
             break;
         }
+        case DtMode::CFG:
+            handleDevDtCfg(state, args, corrId, replyFn, replyCtx);
+            break;
     }
 }
 

@@ -16,21 +16,23 @@ PASS: sampled `DEV DT STATE` (commanded, pre-governor targets) + per-motor
 within --tolerance of the commanded ratio, once settled.
 
 Negative control (`--sync-gain 0`): the ticket calls for "a governor-off run
-for the drift control comparison". IMPORTANT — as of ticket 077-005, there
-is no wire command to set `DrivetrainConfig.sync_gain` live: the DEV DT
-family is `PORTS`/`VW`/`WHEELS`/`NEUTRAL`/`STATE`/`STOP` only (no `DEV DT
-CFG`), and `source/main.cpp` boots the Drivetrain with `sync_gain` left at
-its zero default — i.e. **the governor is OFF by default on this firmware
-today** (`Drivetrain::governRatio()` returns immediately when
-`sync_gain <= 0`). `--sync-gain` here is therefore a **label, not a live
-command**: it records which condition this run is meant to represent in the
-CSV header and console banner, for an operator who has flashed (or plans to
-flash) firmware built with a different `dtConfig.setSyncGain(...)` in
-`main.cpp` for the comparison. It sends nothing to the robot. Wiring a real
-`DEV DT CFG sync_gain=...` verb (or a nonzero boot default) is exactly the
-kind of thing ticket 077-007's HITL bench pass may need to add if it finds
-the governor doesn't actually engage — see that ticket's "fix it here if a
-prior ticket's acceptance criterion wasn't met" note.
+for the drift control comparison". As of ticket 077-005 there was no wire
+command to set `DrivetrainConfig.sync_gain` live (the DEV DT family was
+`PORTS`/`VW`/`WHEELS`/`NEUTRAL`/`STATE`/`STOP` only), and `source/main.cpp`
+boots the Drivetrain with `sync_gain` left at its zero default — i.e. **the
+governor is OFF by default on this firmware**
+(`Drivetrain::governRatio()` returns immediately when `sync_gain <= 0`).
+Ticket 077-007's HITL bench pass added the missing live setter,
+`DEV DT CFG sync_gain=<value>` (and `trackwidth=<value>`) — see
+`docs/protocol-v2.md` §16 and `source/commands/dev_commands.cpp`'s
+`handleDevDtCfg`. `--sync-gain`, when given, now sends that command before
+the curve is commanded (echoing the firmware's confirmed applied value in
+the console banner and CSV header) — pass `0` for the negative control and
+a value in the governor's useful range (e.g. `0.5`-`1.0`) for the governed
+comparison run. Omitting `--sync-gain` sends no CFG at all and uses
+whatever `sync_gain` the firmware currently has configured (boot default
+0 = ungoverned, unless a previous command this session changed it) — this
+preserves the original "no live control" behavior for a bare run.
 
 Logs every sample to --csv. Ends with `DEV DT STOP` (+ `DEV STOP` for
 belt-and-suspenders) regardless of outcome.
@@ -38,7 +40,8 @@ belt-and-suspenders) regardless of outcome.
 Usage:
     uv run python tests/bench/ratio_governor_curve.py
     uv run python tests/bench/ratio_governor_curve.py --left 200 --right 80
-    uv run python tests/bench/ratio_governor_curve.py --sync-gain 0   # negative control (see note above)
+    uv run python tests/bench/ratio_governor_curve.py --sync-gain 0     # negative control (governor off)
+    uv run python tests/bench/ratio_governor_curve.py --sync-gain 0.8   # governed run
 """
 
 from __future__ import annotations
@@ -79,10 +82,11 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--sample-period", type=float, default=0.1,
                    help="Seconds between state polls (default 0.1)")
     p.add_argument("--sync-gain", type=float, default=None,
-                   help="LABEL ONLY (see module docstring) — records the intended "
-                        "governor condition (e.g. 0 for the negative control) in the "
-                        "CSV/banner. Sends no wire command; there is no live "
-                        "DEV DT CFG sync_gain=... verb as of this ticket.")
+                   help="Sends 'DEV DT CFG sync_gain=<value>' before commanding the "
+                        "curve (see module docstring). Pass 0 for the negative "
+                        "control (governor off) or e.g. 0.5-1.0 for the governed "
+                        "comparison run. Omit to send no CFG and use whatever "
+                        "sync_gain the firmware currently has configured.")
     p.add_argument("--csv",
                    default=str(_REPO_ROOT / "tests" / "bench" / "out" / "ratio_governor_curve.csv"),
                    help="CSV output path")
@@ -93,12 +97,26 @@ def _parse_args() -> argparse.Namespace:
 # Small helpers (kept local per tests/bench/'s locked, standalone-script layout).
 # ---------------------------------------------------------------------------
 
-def dev_send(proto: NezhaProtocol, cmd: str, timeout: int = 500) -> ParsedResponse | None:  # [ms]
-    resp = proto.send(cmd, timeout)
-    for raw in resp.get("responses", []):
-        r = parse_response(raw)
-        if r is not None and r.tag in ("OK", "ERR"):
-            return r
+def dev_send(proto: NezhaProtocol, cmd: str, timeout: int = 500,  # [ms]
+            retries: int = 6) -> ParsedResponse | None:
+    """Send one DEV command, retrying on a totally silent reply.
+
+    See dev_exercise.py's dev_send() docstring — 077-007's HITL bench pass
+    found this bench's direct-USB CDC link occasionally, burstily drops
+    replies outright; a multi-sample burst-loss can blank out this script's
+    settled-sample window and turn a real PASS into a false FAIL on pure
+    transport noise. Safe to retry unconditionally: every command here is a
+    pure query (STATE) or an idempotent absolute-value write (WHEELS/PORTS/
+    CFG/WD/STOP).
+    """
+    for attempt in range(retries):
+        resp = proto.send(cmd, timeout)
+        for raw in resp.get("responses", []):
+            r = parse_response(raw)
+            if r is not None and r.tag in ("OK", "ERR"):
+                return r
+        if attempt < retries - 1:
+            time.sleep(0.1)
     return None
 
 
@@ -114,10 +132,10 @@ def _kv_float(r: ParsedResponse | None, key: str) -> float | None:
 def main() -> int:
     args = _parse_args()
     commanded_ratio = args.left / args.right if args.right else float("inf")
-    gain_label = "default (no live control)" if args.sync_gain is None else f"{args.sync_gain:g} (label only)"
     print(f"  port: {args.port}   DEV DT PORTS {args.dt_left} {args.dt_right}"
           f"   left={args.left:g} right={args.right:g} mm/s"
-          f"   commanded_ratio={commanded_ratio:.3f}   sync_gain={gain_label}")
+          f"   commanded_ratio={commanded_ratio:.3f}"
+          f"   sync_gain={'unset (no live command)' if args.sync_gain is None else f'{args.sync_gain:g} (requested)'}")
 
     csv_path = pathlib.Path(args.csv)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -126,6 +144,7 @@ def main() -> int:
     proto: NezhaProtocol | None = None
     csv_file = None
     overall_pass = False
+    gain_label = "unset"
 
     try:
         info = conn.connect()
@@ -136,6 +155,19 @@ def main() -> int:
         proto = NezhaProtocol(conn)
 
         dev_send(proto, f"DEV WD {SESSION_WATCHDOG_WINDOW}")
+
+        # Live sync_gain control (077-007): DEV DT CFG did not exist when this
+        # script was first written (see module docstring) — now it does, so
+        # --sync-gain actually sets the governor instead of merely labeling
+        # the run. Sent before DEV DT PORTS/WHEELS since sync_gain lives on
+        # the single shared Drivetrain instance, not per bound pair.
+        if args.sync_gain is not None:
+            cfg_resp = dev_send(proto, f"DEV DT CFG sync_gain={args.sync_gain}")
+            print(f"  {cfg_resp.raw if cfg_resp else '(no reply)'}")
+            applied = _kv_float(cfg_resp, "sync_gain")
+            gain_label = f"{applied:g} (confirmed)" if applied is not None else f"{args.sync_gain:g} (unconfirmed — CFG reply lost)"
+        else:
+            gain_label = "unset (firmware's currently-configured value, unknown to this run)"
 
         csv_file = open(csv_path, "w", newline="")
         writer = csv.writer(csv_file)

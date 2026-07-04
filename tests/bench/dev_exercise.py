@@ -91,19 +91,63 @@ def _parse_args() -> argparse.Namespace:
 # Small helpers
 # ---------------------------------------------------------------------------
 
-def dev_send(proto: NezhaProtocol, cmd: str, timeout: int = 500) -> ParsedResponse | None:  # [ms]
+def dev_send(proto: NezhaProtocol, cmd: str, timeout: int = 500,  # [ms]
+            retries: int = 6) -> ParsedResponse | None:
     """Send one DEV command, return the first OK/ERR reply line, parsed.
 
     DEV replies are synchronous, one line per command — the standard
     OK/ERR taxonomy with plain tokens (``DEV``, ``M``, ``1``, ...) and
     trailing ``k=v`` pairs, which ``parse_response()`` already handles.
+
+    Retries up to `retries` times on a totally silent reply (no OK/ERR line
+    at all within `timeout`) — this ticket's HITL bench pass measured this
+    bench's direct-USB CDC link outright, occasionally BURSTILY dropping
+    replies (a 3.5 s single-command budget still saw one hard loss in 20
+    back-to-back queries; a rapid-fire run saw streaks of 2-3 consecutive
+    drops), independent of DEV, independent of firmware processing time —
+    same family as the already-documented
+    `.clasi/knowledge/radio-link-max-data-rate.md` finding, "direct USB...
+    intermittently drops 15-50% (NOT firmware)". Without this retry, this
+    script's one-shot checks (DUTY/VEL/RESET) fail on pure transport noise
+    at a rate that defeats their purpose as a bench acceptance gate — a
+    real regression this ticket's bench pass caught in ticket 6's own
+    tooling (see this ticket's results section). `retries=6` at 100 ms
+    spacing is sized to ride out the observed multi-drop bursts, not just
+    an isolated single miss. Safe to retry unconditionally: every command
+    dev_exercise.py sends through dev_send() is either a pure query
+    (STATE/CAPS) or an idempotent absolute-value write (DUTY/VEL/VOLT/
+    NEUTRAL/RESET/WD) — re-sending an unacknowledged one just re-applies
+    the same value. Does NOT retry once a reply line IS seen (including an
+    ERR) — a real reply, even an error one, is authoritative.
     """
-    resp = proto.send(cmd, timeout)
-    for raw in resp.get("responses", []):
-        r = parse_response(raw)
-        if r is not None and r.tag in ("OK", "ERR"):
-            return r
+    for attempt in range(retries):
+        resp = proto.send(cmd, timeout)
+        for raw in resp.get("responses", []):
+            r = parse_response(raw)
+            if r is not None and r.tag in ("OK", "ERR"):
+                return r
+        if attempt < retries - 1:
+            time.sleep(0.1)
     return None
+
+
+def _retry_liveness(fn, retries: int = 6, delay: float = 0.1):
+    """Retry a zero-arg liveness callable (VER/PING) until it returns non-None.
+
+    ``proto.get_ver()``/``proto.ping()`` are one-shot calls that bypass
+    ``dev_send()`` (they parse their own reply shape), so they need the same
+    burst-tolerant retry treatment for the same reason — see dev_send()'s
+    docstring. Both are pure, side-effect-free liveness queries, so
+    resending on silence is always safe.
+    """
+    result = None
+    for attempt in range(retries):
+        result = fn()
+        if result is not None:
+            return result
+        if attempt < retries - 1:
+            time.sleep(delay)
+    return result
 
 
 def _kv_float(r: ParsedResponse | None, key: str) -> float | None:
@@ -152,9 +196,9 @@ def _run_checks(proto: NezhaProtocol, conn: SerialConnection,
     motor = args.motor
 
     # 1. Liveness.
-    ver = proto.get_ver()
+    ver = _retry_liveness(proto.get_ver)
     result.record("VER", ver is not None, str(ver))
-    ping = proto.ping()
+    ping = _retry_liveness(proto.ping)
     result.record("PING", ping is not None, str(ping))
 
     # 2. Per-port STATE / CAPS.

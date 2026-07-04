@@ -27,6 +27,7 @@
 //   DEV DT NEUTRAL <B|C>
 //   DEV DT STATE
 //   DEV DT STOP                 -- drivetrain-scoped stop: bound pair + drivetrain idle
+//   DEV DT CFG k=v ...          -- drivetrain.configure() delta (sync_gain=0.8 trackwidth=128 ...)
 //   DEV STATE                   -- everything: one line per motor + drivetrain
 //   DEV STOP                    -- all four motors neutral, drivetrain idle
 //   DEV WD <window>             -- [ms] set the serial-silence watchdog window
@@ -48,7 +49,8 @@
 // acceptance criteria). `DEV M <n> CFG k=v ...`'s arbitrary-count key=value
 // pairs are threaded through by re-serializing each KVPair back into a
 // "key=value" STR Argument (ArgList has no separate kv channel reaching the
-// handler) -- see dev_commands.cpp's parseDevM().
+// handler) -- see dev_commands.cpp's parseDevM(). `DEV DT CFG k=v ...`
+// (077-007) reuses the identical re-serialization mechanism in parseDevDt().
 //
 // --- Open Question 4 (bench-rig port binding persistence) -- RESOLVED ---
 // `DEV DT PORTS <left> <right>` persists across `DEV STOP` and a watchdog
@@ -154,6 +156,15 @@ class SerialSilenceWatchdog {
 // per-port shadow copy is the read-modify-write staging area: main.cpp seeds
 // it with the same configs passed to NezhaHal's constructor, and every CFG
 // command mutates shadow[port-1] in place before calling motor.configure().
+//
+// drivetrainConfigShadow exists for the identical reason, one level up:
+// Subsystems::Drivetrain::configure() is also a full replace with no getter
+// for the live msg::DrivetrainConfig, so `DEV DT CFG k=v ...` (077-007,
+// added to close a gap found in this ticket's HITL bench pass -- sync_gain
+// booted at 0 with no live setter, so the ratio governor could never be
+// turned on without a reflash) is a delta against this single shared shadow
+// (one Drivetrain instance, not per-port). main.cpp seeds it with the same
+// msg::DrivetrainConfig passed to Drivetrain::configure() at boot.
 // ---------------------------------------------------------------------------
 struct DevLoopState {
   Hal::NezhaHal* hal = nullptr;
@@ -165,6 +176,7 @@ struct DevLoopState {
   bool drivetrainActive = false;
 
   msg::MotorConfig motorConfigShadow[Hal::NezhaHal::kPortCount] = {};
+  msg::DrivetrainConfig drivetrainConfigShadow = {};
 };
 
 // ---------------------------------------------------------------------------

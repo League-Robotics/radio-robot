@@ -81,15 +81,44 @@ static void radioReply(const char* msg, void* ctx) {
 // DEV M <n> STATE reports a plausible non-zero position/velocity out of the
 // box. `DEV M <n> CFG` is exactly the mechanism to correct these live over
 // the wire once a specific motor's real calibration is known (ticket 7).
+//
+// vel_gains/vel_filt_alpha (077-007): ticket 7's HITL bench pass found the
+// embedded velocity PID (ticket 3) could never actually close the loop with
+// an all-zero boot default -- not just because kp/ki/kff were 0 (expected,
+// tunable live via `DEV M <n> CFG`), but because vel_filt_alpha was ALSO 0,
+// which is the EMA coefficient in NezhaMotor::tick()'s
+// `filteredVelocity_ = a * rawVel + (1 - a) * filteredVelocity_` --
+// a=0 means filteredVelocity_ never incorporates a new sample and reports
+// exactly 0 forever, regardless of real motion (confirmed live: position
+// climbed under `DEV M 1 VEL 120` while `vel=` stayed pinned at 0.0 with
+// vel_filt_alpha=0; setting vel_filt_alpha=0.3 over `DEV M 1 CFG` on the
+// SAME motor immediately produced real, converging vel= readings). This is
+// a silent-failure gap no unit test could have caught (ticket 3/4's scope
+// never bench-tested a live velocity reading) -- exactly the kind of defect
+// this ticket's bench pass exists to catch. Bench-tuned on the stand
+// (Tovez, ports 1/3, targets 120/150/-100 mm/s): converges within ~1.5 s,
+// small (~10%) overshoot, holds within the dev_exercise.py/pid_hold_speed.py
+// tolerance bands (see this ticket's results section for the recorded step
+// responses). Still bench placeholders like travel_calib above -- `DEV M
+// <n> CFG` remains the live-correction mechanism for a specific motor's
+// real tuning.
 // ---------------------------------------------------------------------------
 static msg::MotorConfig defaultMotorConfigs[Hal::NezhaHal::kPortCount];
 
 static void initDefaultMotorConfigs() {
+    msg::Gains velGains;
+    velGains.kp = 0.0022f;
+    velGains.ki = 0.0018f;
+    velGains.kff = 0.0038f;
+    velGains.i_max = 0.3f;
+
     for (uint32_t i = 0; i < Hal::NezhaHal::kPortCount; ++i) {
         defaultMotorConfigs[i] = msg::MotorConfig();
         defaultMotorConfigs[i].setPort(i + 1);
         defaultMotorConfigs[i].setFwdSign(1);
         defaultMotorConfigs[i].setTravelCalib(0.487f);   // [mm/deg] bench placeholder
+        defaultMotorConfigs[i].setVelGains(velGains);
+        defaultMotorConfigs[i].setVelFiltAlpha(0.3f);    // EMA coeff -- see comment above
     }
 }
 
@@ -133,6 +162,12 @@ int main() {
     hal.begin();
 
     // --- Drivetrain: differential (Tovez), bench-placeholder trackwidth. ---
+    // sync_gain is deliberately left at its zero default here (governor OFF
+    // at boot) -- ticket 7's HITL bench pass found no live way to turn it on
+    // short of a reflash and added `DEV DT CFG sync_gain=...`
+    // (commands/dev_commands.cpp) for exactly that; bench scripts that need
+    // the governor set it explicitly over the wire rather than this getting
+    // a nonzero boot default.
     static Subsystems::Drivetrain drivetrain;
     msg::DrivetrainConfig dtConfig;
     dtConfig.setTrackwidth(128.0f);   // [mm] bench placeholder -- tuned in ticket 7
@@ -151,6 +186,11 @@ int main() {
     for (uint32_t i = 0; i < Hal::NezhaHal::kPortCount; ++i) {
         devState.motorConfigShadow[i] = defaultMotorConfigs[i];
     }
+    // Seed the drivetrain CFG-delta shadow the same way, so the first
+    // `DEV DT CFG sync_gain=...` merges onto the SAME dtConfig the
+    // Drivetrain was actually configured with above (trackwidth=128),
+    // rather than an all-zero blank -- see DevLoopState's field comment.
+    devState.drivetrainConfigShadow = dtConfig;
     // Prime the capabilities cache for the default DEV DT PORTS binding
     // (1, 2) -- see drivetrain.h's setMotorCapabilities() doc comment.
     drivetrain.setMotorCapabilities(hal.motor(devState.leftPort).capabilities(),

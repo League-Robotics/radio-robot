@@ -92,12 +92,31 @@ def _parse_args() -> argparse.Namespace:
 # shared library module).
 # ---------------------------------------------------------------------------
 
-def dev_send(proto: NezhaProtocol, cmd: str, timeout: int = 500) -> ParsedResponse | None:  # [ms]
-    resp = proto.send(cmd, timeout)
-    for raw in resp.get("responses", []):
-        r = parse_response(raw)
-        if r is not None and r.tag in ("OK", "ERR"):
-            return r
+def dev_send(proto: NezhaProtocol, cmd: str, timeout: int = 500,  # [ms]
+            retries: int = 6) -> ParsedResponse | None:
+    """Send one DEV command, retrying on a totally silent reply.
+
+    077-007's HITL bench pass found this bench's direct-USB CDC link
+    outright, occasionally burstily drops replies (same finding as
+    dev_exercise.py's dev_send() — see its docstring for the measurements
+    and rationale). Without this retry, a dropped sample here just reads as
+    a `None` velocity/applied point for one row of the CSV (the sampling
+    loop below already tolerates the occasional single miss) — but a
+    multi-sample burst-loss can blank out an entire settle window and turn
+    a real PASS into a false FAIL on pure transport noise, which this
+    ticket's bench pass caught. Safe to retry unconditionally: every command
+    this script sends is either a pure query (STATE) or an idempotent
+    absolute-value write (VEL/DUTY/WD/STOP) — re-sending an unacknowledged
+    one just re-applies the same value.
+    """
+    for attempt in range(retries):
+        resp = proto.send(cmd, timeout)
+        for raw in resp.get("responses", []):
+            r = parse_response(raw)
+            if r is not None and r.tag in ("OK", "ERR"):
+                return r
+        if attempt < retries - 1:
+            time.sleep(0.1)
     return None
 
 

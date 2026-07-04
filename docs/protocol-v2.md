@@ -1636,6 +1636,7 @@ DEV DT WHEELS <left> <right>         [mm/s] → OK DEV DT left=.. right=..
 DEV DT NEUTRAL <B|C>                  → OK DEV DT neutral=<B|C>
 DEV DT STATE                          → OK DEV DT active=<0|1> ports=<l>,<r> vel=<vL>,<vR>
 DEV DT STOP                           → OK DEV DT STOP
+DEV DT CFG k=v ...                     → OK DEV DT <applied k=v ...>
 ```
 
 - `PORTS <left> <right>` — see "Port binding" above. Also refreshes the
@@ -1664,6 +1665,22 @@ DEV DT STOP                           → OK DEV DT STOP
   currently-bound pair, and drops drivetrain authority — but leaves any
   OTHER motor (independently under `DEV M` control) untouched. Contrast
   with the global `DEV STOP` below.
+- `CFG k=v ...` — a **delta**, not a full replace, against the single
+  shared `msg::DrivetrainConfig` (one Drivetrain instance, not per bound
+  pair — unlike `DEV M <n> CFG`, this is not indexed by port). Added in
+  077-007 to close a gap found in this ticket's HITL bench pass: `sync_gain`
+  (the ratio governor's gain) boots at `0` (governor OFF) with no other way
+  to change it short of a reflash. Never capability-gated, never changes
+  authority. Recognized keys:
+
+  | Key           | `DrivetrainConfig` field | Wire format |
+  |---------------|--------------------------|-------------|
+  | `sync_gain`   | `sync_gain`              | `%.3f`      |
+  | `trackwidth`  | `trackwidth`             | `%.1f`      |
+
+  An unrecognized key emits `ERR badkey <key>` (mirrors `DEV M <n> CFG`'s
+  per-key error reporting); the final `OK` line lists only the keys that
+  actually applied.
 
 Examples:
 
@@ -1679,6 +1696,9 @@ OK DEV DT active=1 ports=3,4 vel=150.0,150.0
 
 DEV DT WHEELS 80 40
 OK DEV DT left=80.0 right=40.0
+
+DEV DT CFG sync_gain=0.8
+OK DEV DT sync_gain=0.800
 
 DEV DT STOP
 OK DEV DT STOP
