@@ -67,7 +67,7 @@ class ThrashMonitor:
                  ang_accel_thresh: float = 1500.0,  # deg/s^2
                  min_speed: float = 3.0,            # cm/s, below this ignore linear dir
                  min_omega: float = 30.0,           # deg/s, below this ignore angular dir
-                 reversal_deg: float = 120.0,       # vel-dir change counted as a reversal
+                 reversal: float = 120.0,           # [deg] vel-dir change counted as a reversal
                  window_s: float = 1.2,             # events within this window...
                  trip_count: int = 2,               # ...this many -> thrashing
                  gap_s: float = 0.5):               # dt over this resets velocity tracking
@@ -76,7 +76,7 @@ class ThrashMonitor:
         self.ang_accel_thresh = ang_accel_thresh
         self.min_speed = min_speed
         self.min_omega = min_omega
-        self.reversal_rad = math.radians(reversal_deg)
+        self.reversal_rad = math.radians(reversal)
         self.window_s = window_s
         self.trip_count = trip_count
         self.gap_s = gap_s
@@ -163,12 +163,12 @@ class ThrashMonitor:
             ang_acc = abs(omega - pv["omega"]) / dt                  # deg/s^2
 
             # Linear reversal: both samples actually moving, the velocity
-            # direction swung past reversal_deg, and the lurch was hard.
+            # direction swung past reversal (deg), and the lurch was hard.
             if (speed > self.min_speed and pv["speed"] > self.min_speed):
                 turn = _angle_between(pv["vx"], pv["vy"], vx, vy)
                 if turn > self.reversal_rad and lin_acc > self.lin_accel_thresh:
                     self._add_event(t, "linear_reversal", {
-                        "dir_change_deg": round(math.degrees(turn), 1),
+                        "dir_change": round(math.degrees(turn), 1),  # [deg]
                         "lin_acc": round(lin_acc, 1),
                         "speed": round(speed, 2),
                         "prev_speed": round(pv["speed"], 2),

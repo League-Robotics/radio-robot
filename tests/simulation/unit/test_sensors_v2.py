@@ -49,27 +49,27 @@ class TestOdomTrackerFromTLM:
         frame = _tlm(pose=(100, 50, 900))
         result = tracker.update_from_tlm(frame)
         assert result is True
-        assert tracker.x_mm == 100
-        assert tracker.y_mm == 50
-        assert tracker.heading_cdeg == 900
+        assert tracker.x == 100
+        assert tracker.y == 50
+        assert tracker.heading == 900
 
     def test_tlm_with_zero_pose(self) -> None:
         from robot_radio.sensors.odom_tracker import OdomTracker
         tracker = OdomTracker()
         frame = _tlm(pose=(0, 0, 0))
         tracker.update_from_tlm(frame)
-        assert tracker.x_mm == 0
-        assert tracker.y_mm == 0
-        assert tracker.heading_cdeg == 0
+        assert tracker.x == 0
+        assert tracker.y == 0
+        assert tracker.heading == 0
 
     def test_tlm_negative_values(self) -> None:
         from robot_radio.sensors.odom_tracker import OdomTracker
         tracker = OdomTracker()
         frame = _tlm(pose=(-200, -50, -9000))
         tracker.update_from_tlm(frame)
-        assert tracker.x_mm == -200
-        assert tracker.y_mm == -50
-        assert tracker.heading_cdeg == -9000
+        assert tracker.x == -200
+        assert tracker.y == -50
+        assert tracker.heading == -9000
 
     def test_tlm_no_pose_field_returns_false(self) -> None:
         from robot_radio.sensors.odom_tracker import OdomTracker
@@ -90,20 +90,20 @@ class TestOdomTrackerFromTLM:
         from robot_radio.sensors.odom_tracker import OdomTracker
         tracker = OdomTracker()
         tracker.update_from_tlm(_tlm(pose=(0, 0, 9000)))
-        assert tracker.heading_cdeg == 9000
-        assert abs(tracker.heading_deg - 90.0) < 0.001
-        assert abs(tracker.heading_rad - math.radians(90.0)) < 1e-6
+        assert tracker.heading == 9000
+        assert abs(tracker.heading_degrees - 90.0) < 0.001
+        assert abs(tracker.heading_radians - math.radians(90.0)) < 1e-6
 
     def test_heading_cdeg_360_degrees(self) -> None:
         from robot_radio.sensors.odom_tracker import OdomTracker
         tracker = OdomTracker()
         tracker.update_from_tlm(_tlm(pose=(0, 0, 36000)))
-        assert tracker.heading_cdeg == 36000
-        assert abs(tracker.heading_deg - 360.0) < 0.001
+        assert tracker.heading == 36000
+        assert abs(tracker.heading_degrees - 360.0) < 0.001
 
     def test_path_appended_on_movement(self) -> None:
         from robot_radio.sensors.odom_tracker import OdomTracker
-        tracker = OdomTracker(world_pos_mm=(0.0, 0.0), world_yaw_rad=0.0)
+        tracker = OdomTracker(ref_world_pos=(0.0, 0.0), ref_world_yaw=0.0)
         tracker.update_from_tlm(_tlm(pose=(0, 0, 0)))     # anchor
         tracker.update_from_tlm(_tlm(pose=(0, 100, 0)))   # move forward 100 mm
         assert len(tracker.path) >= 2
@@ -112,7 +112,7 @@ class TestOdomTrackerFromTLM:
         from robot_radio.sensors.odom_tracker import OdomTracker
         tracker = OdomTracker()
         tracker.update_from_tlm(_tlm(pose=(0, 0, 0)))   # anchor → 1 path entry
-        tracker.update_from_tlm(_tlm(pose=(0, 1, 0)))   # 1 mm < MIN_MOVE_MM=3
+        tracker.update_from_tlm(_tlm(pose=(0, 1, 0)))   # 1 mm < MIN_MOVE=3
         assert len(tracker.path) == 1                    # no new entry
 
     def test_multiple_frames_tracked(self) -> None:
@@ -122,7 +122,7 @@ class TestOdomTrackerFromTLM:
             tracker.update_from_tlm(_tlm(pose=(0, i * 10, 0)))
         # First frame anchors; subsequent ones accumulate
         assert tracker.anchored
-        assert tracker.y_mm == 40     # last frame
+        assert tracker.y == 40     # last frame
 
 
 class TestOdomTrackerAprilcamWorldConvention:
@@ -134,7 +134,7 @@ class TestOdomTrackerAprilcamWorldConvention:
     ``robot_radio.sensors.odometry``'s ``_apply()``) instead of leaving it an
     untested "guessed geometry" stack.
 
-    Firmware TLM pose (x_mm, y_mm, heading_cdeg) is itself already a proper
+    Firmware TLM pose (x, y, heading) [mm, mm, cdeg] is itself already a proper
     Cartesian pose in firmware's own fixed frame — CCW-positive, 0 = firmware
     +X — confirmed by reading ``Odometry.cpp``'s dead-reckoning integration
     (``pose.x += d*cos(theta); pose.y += d*sin(theta)``). Both frames share
@@ -146,7 +146,7 @@ class TestOdomTrackerAprilcamWorldConvention:
     def test_straight_ahead_east_facing_anchor(self) -> None:
         """Anchored facing east (world_yaw=0): driving straight moves +x (east)."""
         from robot_radio.sensors.odom_tracker import OdomTracker
-        tracker = OdomTracker(world_pos_mm=(0.0, 0.0), world_yaw_rad=0.0)
+        tracker = OdomTracker(ref_world_pos=(0.0, 0.0), ref_world_yaw=0.0)
         tracker.update_from_tlm(_tlm(pose=(0, 0, 0)))     # anchor
         tracker.update_from_tlm(_tlm(pose=(500, 0, 0)))   # drove 500mm straight, no turn
         wx, wy = tracker.world_pos    # cm
@@ -162,7 +162,7 @@ class TestOdomTrackerAprilcamWorldConvention:
         instead of +50cm (north).
         """
         from robot_radio.sensors.odom_tracker import OdomTracker
-        tracker = OdomTracker(world_pos_mm=(0.0, 0.0), world_yaw_rad=math.pi / 2.0)
+        tracker = OdomTracker(ref_world_pos=(0.0, 0.0), ref_world_yaw=math.pi / 2.0)
         tracker.update_from_tlm(_tlm(pose=(0, 0, 0)))     # anchor, firmware heading=0
         tracker.update_from_tlm(_tlm(pose=(500, 0, 0)))   # same straight-ahead firmware delta
         wx, wy = tracker.world_pos
@@ -179,7 +179,7 @@ class TestOdomTrackerAprilcamWorldConvention:
         constant anchor rotation.
         """
         from robot_radio.sensors.odom_tracker import OdomTracker
-        tracker = OdomTracker(world_pos_mm=(0.0, 0.0), world_yaw_rad=0.0)
+        tracker = OdomTracker(ref_world_pos=(0.0, 0.0), ref_world_yaw=0.0)
         tracker.update_from_tlm(_tlm(pose=(0, 0, 0)))       # anchor
         tracker.update_from_tlm(_tlm(pose=(0, 0, 9000)))    # +90deg CCW, no translation
         assert abs(math.degrees(tracker.world_yaw) - 90.0) < 1e-6
@@ -187,7 +187,7 @@ class TestOdomTrackerAprilcamWorldConvention:
     def test_anchor_offset_position_is_preserved(self) -> None:
         """A nonzero world anchor position is a pure translation on top of the rotation."""
         from robot_radio.sensors.odom_tracker import OdomTracker
-        tracker = OdomTracker(world_pos_mm=(1000.0, 2000.0), world_yaw_rad=0.0)
+        tracker = OdomTracker(ref_world_pos=(1000.0, 2000.0), ref_world_yaw=0.0)
         tracker.update_from_tlm(_tlm(pose=(0, 0, 0)))       # anchor
         tracker.update_from_tlm(_tlm(pose=(0, 0, 0)))       # no movement
         wx, wy = tracker.world_pos
@@ -198,11 +198,11 @@ class TestOdomTrackerAprilcamWorldConvention:
 class TestOdomTrackerRobotConfig:
     """OdomTracker wires correctly to RobotConfig."""
 
-    def _make_config(self, trackwidth=126.0, mm_per_deg_l=0.487, mm_per_deg_r=0.481):
+    def _make_config(self, trackwidth=126.0, wheel_travel_calib_left=0.487, wheel_travel_calib_right=0.481):
         """Build a minimal RobotConfig-like object."""
         cal = SimpleNamespace(
-            mm_per_wheel_deg_left=mm_per_deg_l,
-            mm_per_wheel_deg_right=mm_per_deg_r,
+            mm_per_wheel_deg_left=wheel_travel_calib_left,
+            mm_per_wheel_deg_right=wheel_travel_calib_right,
         )
         return SimpleNamespace(trackwidth=trackwidth, calibration=cal)
 
@@ -210,14 +210,14 @@ class TestOdomTrackerRobotConfig:
         from robot_radio.sensors.odom_tracker import OdomTracker
         cfg = self._make_config(trackwidth=126.0)
         tracker = OdomTracker(config=cfg)
-        assert tracker.trackwidth_mm == 126.0
+        assert tracker.trackwidth == 126.0
 
     def test_config_wires_mm_per_deg(self) -> None:
         from robot_radio.sensors.odom_tracker import OdomTracker
-        cfg = self._make_config(mm_per_deg_l=0.487, mm_per_deg_r=0.481)
+        cfg = self._make_config(wheel_travel_calib_left=0.487, wheel_travel_calib_right=0.481)
         tracker = OdomTracker(config=cfg)
-        assert abs(tracker.mm_per_deg_l - 0.487) < 1e-6
-        assert abs(tracker.mm_per_deg_r - 0.481) < 1e-6
+        assert abs(tracker.wheel_travel_calib_left - 0.487) < 1e-6
+        assert abs(tracker.wheel_travel_calib_right - 0.481) < 1e-6
 
     def test_real_robot_config(self) -> None:
         """Load the real tovez.json config and verify OdomTracker accepts it."""
@@ -226,23 +226,23 @@ class TestOdomTrackerRobotConfig:
         cfg_path = _HOST.parent / "data" / "robots" / "tovez.json"
         cfg = load_robot_config(cfg_path)
         tracker = OdomTracker(config=cfg)
-        assert tracker.trackwidth_mm == 128.0
-        assert abs(tracker.mm_per_deg_l - 0.7165) < 1e-6
-        assert abs(tracker.mm_per_deg_r - 0.7077) < 1e-6
+        assert tracker.trackwidth == 128.0
+        assert abs(tracker.wheel_travel_calib_left - 0.7165) < 1e-6
+        assert abs(tracker.wheel_travel_calib_right - 0.7077) < 1e-6
 
     def test_bare_keyword_args(self) -> None:
         from robot_radio.sensors.odom_tracker import OdomTracker
-        tracker = OdomTracker(trackwidth_mm=130.0, mm_per_deg_l=0.5, mm_per_deg_r=0.5)
-        assert tracker.trackwidth_mm == 130.0
+        tracker = OdomTracker(trackwidth=130.0, wheel_travel_calib_left=0.5, wheel_travel_calib_right=0.5)
+        assert tracker.trackwidth == 130.0
 
     def test_tlm_still_works_with_config(self) -> None:
         from robot_radio.sensors.odom_tracker import OdomTracker
         cfg = self._make_config()
         tracker = OdomTracker(config=cfg)
         tracker.update_from_tlm(_tlm(pose=(100, 50, 900)))
-        assert tracker.x_mm == 100
-        assert tracker.y_mm == 50
-        assert tracker.heading_cdeg == 900
+        assert tracker.x == 100
+        assert tracker.y == 50
+        assert tracker.heading == 900
 
 
 class TestOdomTrackerRealProtocol:
@@ -256,9 +256,9 @@ class TestOdomTrackerRealProtocol:
         tracker = OdomTracker()
         result = tracker.update_from_tlm(frame)
         assert result is True
-        assert tracker.x_mm == 100
-        assert tracker.y_mm == 50
-        assert tracker.heading_cdeg == 900
+        assert tracker.x == 100
+        assert tracker.y == 50
+        assert tracker.heading == 900
 
     def test_enc_only_frame_returns_false(self) -> None:
         from robot_radio.robot.protocol import parse_tlm

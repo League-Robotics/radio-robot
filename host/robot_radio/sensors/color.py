@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 
-# Hue buckets — (upper_bound_deg, name).  Checked in order, exclusive
+# Hue buckets — (upper_bound, name) in degrees.  Checked in order, exclusive
 # upper bound.  Red wraps around 0° and is handled separately by the
 # `red_low` / `red_high` fields below; everything else goes here.
 DEFAULT_HUE_BUCKETS_NEZHA: list[tuple[float, str]] = [
@@ -98,13 +98,13 @@ class ColorClassifier:
                  ) -> tuple[str, int, int, int]:
         """Classify a raw RGBC reading.
 
-        Returns ``(name, hue_deg, spread_pct, brightness_pct)`` where:
+        Returns ``(name, hue, spread, brightness)`` where:
 
         * **name** is one of: black, white, gray, red, orange, yellow,
           green, cyan, blue, purple, magenta.
-        * **hue_deg** is 0..360 (0 for neutrals).
-        * **spread_pct** is the normalized chromatic spread × 100.
-        * **brightness_pct** is c/white_c × 100.
+        * **hue** is 0..360 degrees (0 for neutrals).
+        * **spread** is the normalized chromatic spread × 100 (percent).
+        * **brightness** is c/white_c × 100 (percent).
 
         Raises :class:`RuntimeError` if no white reference is set.
         """
@@ -114,7 +114,7 @@ class ColorClassifier:
                 "calibrate_white() first.")
 
         c_ratio = c / self.white_c
-        brightness_pct = round(c_ratio * 100)
+        brightness = round(c_ratio * 100)  # [%]
 
         # White-balance: a surface that matches the white reference
         # produces (1, 1, 1) here.
@@ -132,22 +132,22 @@ class ColorClassifier:
             m = max(r_b, g_b, b_b)
             rr, gg, bb = r_b / m, g_b / m, b_b / m
             h, _, _ = colorsys.rgb_to_hls(rr, gg, bb)
-            h_deg = h * 360.0
-            return (self._bucket_for_hue(h_deg),
-                    round(h_deg), round(spread * 100), brightness_pct)
+            hue = h * 360.0  # [deg]
+            return (self._bucket_for_hue(hue),
+                    round(hue), round(spread * 100), brightness)
 
         # Low spread (or too dim for chroma) — decide by brightness alone.
         if c_ratio < self.black_brightness_max:
-            return ("black", 0, round(spread * 100), brightness_pct)
+            return ("black", 0, round(spread * 100), brightness)
         if c_ratio > self.white_brightness_min:
-            return ("white", 0, round(spread * 100), brightness_pct)
-        return ("gray", 0, round(spread * 100), brightness_pct)
+            return ("white", 0, round(spread * 100), brightness)
+        return ("gray", 0, round(spread * 100), brightness)
 
-    def _bucket_for_hue(self, h_deg: float) -> str:
-        if h_deg < self.red_low or h_deg >= self.red_high:
+    def _bucket_for_hue(self, hue: float) -> str:  # [deg]
+        if hue < self.red_low or hue >= self.red_high:
             return "red"
         for upper, name in self.hue_buckets:
-            if h_deg < upper:
+            if hue < upper:
                 return name
         return "red"  # unreached if buckets cover up to red_high
 
