@@ -37,7 +37,7 @@ _verbose = False
 # to crawl mode.  Override per-invocation with `--min-speed N` or
 # globally with the `ROGO_MIN_SPEED` env var.  Varies per robot (200
 # was the Cutebot floor; the Nezha runs much slower reliably).
-DEFAULT_MIN_SPEED_MMS = 50
+DEFAULT_MIN_SPEED = 50  # [mm/s]
 
 
 def _resolve_min_speed(args) -> int:
@@ -50,20 +50,20 @@ def _resolve_min_speed(args) -> int:
             return int(env)
         except ValueError:
             pass
-    return DEFAULT_MIN_SPEED_MMS
+    return DEFAULT_MIN_SPEED
 
 # Crawl-mode (pulse-train) parameters from data/crawl_calibration.json.
-# Each pulse is a short T command at CRAWL_PULSE_SPEED for CRAWL_PULSE_MS,
+# Each pulse is a short T command at CRAWL_PULSE_SPEED for CRAWL_PULSE_DURATION,
 # followed by CRAWL_DELAY_MS_BASE of coast.  The robot moves
 # CRAWL_MM_PER_PULSE millimetres per pulse (camera-measured average).
 # Effective speed at the calibration delay = 6.53 mm / 100 ms ≈ 65 mm/s.
 # To get a slower effective speed, lengthen the per-pulse delay.
 CRAWL_PULSE_SPEED  = 300   # mm/s commanded during the pulse
-CRAWL_PULSE_MS     = 80
+CRAWL_PULSE_DURATION = 80  # [ms]
 CRAWL_DELAY_MS_MIN = 20
 CRAWL_MM_PER_PULSE = 6.53
 CRAWL_MAX_EFF_SPEED = (CRAWL_MM_PER_PULSE * 1000.0
-                       / (CRAWL_PULSE_MS + CRAWL_DELAY_MS_MIN))  # ≈ 65 mm/s
+                       / (CRAWL_PULSE_DURATION + CRAWL_DELAY_MS_MIN))  # ≈ 65 mm/s
 
 
 def _load_robot_calibration() -> dict:
@@ -155,19 +155,19 @@ def _push_calibration(conn: SerialConnection) -> None:
 
     # Derive mm/deg from per-wheel overrides, then from wheel_diameter_mm.
     wd = getattr(getattr(cfg, "wheels", None), "wheel_diameter_mm", None)
-    default_mm_per_deg = (math.pi * wd / 360.0) if wd is not None else None
+    default_wheel_travel_calib = (math.pi * wd / 360.0) if wd is not None else None  # [mm/deg]
 
-    left_mm_per_deg  = getattr(cal, "mm_per_wheel_deg_left",  None) if cal else None
-    right_mm_per_deg = getattr(cal, "mm_per_wheel_deg_right", None) if cal else None
-    left_mm_per_deg  = left_mm_per_deg  if left_mm_per_deg  is not None else default_mm_per_deg
-    right_mm_per_deg = right_mm_per_deg if right_mm_per_deg is not None else default_mm_per_deg
+    wheel_travel_calib_left  = getattr(cal, "mm_per_wheel_deg_left",  None) if cal else None
+    wheel_travel_calib_right = getattr(cal, "mm_per_wheel_deg_right", None) if cal else None
+    wheel_travel_calib_left  = wheel_travel_calib_left  if wheel_travel_calib_left  is not None else default_wheel_travel_calib
+    wheel_travel_calib_right = wheel_travel_calib_right if wheel_travel_calib_right is not None else default_wheel_travel_calib
 
-    if left_mm_per_deg is not None:
-        _log(f"push calibration: SET ml {left_mm_per_deg:.6f}")
-        conn.send(f"SET ml={left_mm_per_deg:.6f}", read_timeout=200)
-    if right_mm_per_deg is not None:
-        _log(f"push calibration: SET mr {right_mm_per_deg:.6f}")
-        conn.send(f"SET mr={right_mm_per_deg:.6f}", read_timeout=200)
+    if wheel_travel_calib_left is not None:
+        _log(f"push calibration: SET ml {wheel_travel_calib_left:.6f}")
+        conn.send(f"SET ml={wheel_travel_calib_left:.6f}", read_timeout=200)
+    if wheel_travel_calib_right is not None:
+        _log(f"push calibration: SET mr {wheel_travel_calib_right:.6f}")
+        conn.send(f"SET mr={wheel_travel_calib_right:.6f}", read_timeout=200)
 
     geom = getattr(cfg, "geometry", None)
     tw = getattr(geom, "trackwidth", None) if geom else None
@@ -195,13 +195,13 @@ def _push_calibration(conn: SerialConnection) -> None:
     if off is not None:
         ox = float(off.x)
         oy = float(off.y)
-        oyaw_deg = math.degrees(float(off.yaw_rad))
-        if ox != 0.0 or oy != 0.0 or oyaw_deg != 0.0:
+        oyaw = math.degrees(float(off.yaw_rad))  # [deg]
+        if ox != 0.0 or oy != 0.0 or oyaw != 0.0:
             _log(f"push calibration: SET odomOffX={ox:.3f} odomOffY={oy:.3f} "
-                 f"odomYaw={oyaw_deg:.3f}")
+                 f"odomYaw={oyaw:.3f}")
             conn.send(f"SET odomOffX={ox:.3f}", read_timeout=200)
             conn.send(f"SET odomOffY={oy:.3f}", read_timeout=200)
-            conn.send(f"SET odomYaw={oyaw_deg:.3f}", read_timeout=200)
+            conn.send(f"SET odomYaw={oyaw:.3f}", read_timeout=200)
         else:
             _log("push calibration: odom offsets all zero — skipping SET odomOff*")
 
@@ -273,12 +273,11 @@ def cmd_sync_pose(args):
     Converts to mm and firmware heading, then sends SI<x><y><h> to firmware.
 
     Unit conversions:
-      - world_xy (cm) → mm: x_mm = round(x_cm * 10), y_mm = round(y_cm * 10)
+      - world_xy (cm) → mm: x = round(x_cm * 10), y = round(y_cm * 10)
       - heading: firmware heading (drive-forward direction) = degrees(tag.yaw)
         The daemon reports tag orientation in the world frame (0 = east,
         CCW-positive), and that orientation IS the robot's forward heading —
-        no offset is applied. The firmware SI/OV command uses the same
-        CCW-positive convention. Result: h_deg = round(degrees(yaw)).
+        no offset is applied. Result: heading (deg) = round(degrees(yaw)).
 
     Does NOT open data/homography.json or construct a local Playfield.
     The local homography was deleted on 2026-05-29 as stale (~30% scale error).
@@ -331,25 +330,25 @@ def cmd_sync_pose(args):
 
     # Convert daemon world pose (cm, rad) to firmware SI units (mm, deg).
     # world_xy is in cm → firmware SI wants mm: multiply by 10.
-    x_mm = round(x_cm * 10)
-    y_mm = round(y_cm * 10)
+    x = round(x_cm * 10)  # [mm]
+    y = round(y_cm * 10)  # [mm]
     # Heading: the daemon already reports tag orientation in the world frame
     # (0 = east, CCW+), and that IS the robot's forward heading — no offset.
-    h_deg = round(_math.degrees(yaw_rad))
+    heading = round(_math.degrees(yaw_rad))  # [deg]
 
     robot, conn, _ = _make_robot(args)
     if not isinstance(robot, Nezha):
         conn.disconnect()
         sys.exit("Error: rogo sync pose requires a Nezha robot.")
 
-    # v2: use OV command via Nezha.set_world_pose(x_mm, y_mm, h_cdeg).
+    # v2: use OV command via Nezha.set_world_pose(x, y, h_cdeg).
     # Heading is in degrees here; OV expects centi-degrees.
-    h_cdeg = round(h_deg * 100)
-    robot.set_world_pose(x_mm, y_mm, h_cdeg)
+    h_cdeg = round(heading * 100)
+    robot.set_world_pose(x, y, h_cdeg)
     print(
         f"sync pose: daemon=({x_cm:.1f}cm, {y_cm:.1f}cm, "
         f"{_math.degrees(yaw_rad):.1f}°)  "
-        f"sent OV {x_mm} {y_mm} {h_cdeg}  (v2, OV command)"
+        f"sent OV {x} {y} {h_cdeg}  (v2, OV command)"
     )
     conn.disconnect()
 
@@ -401,12 +400,12 @@ def cmd_sync_cal(args):
         return
 
     wd = getattr(getattr(cfg_display, "wheels", None), "wheel_diameter_mm", None)
-    default_mm_per_deg = (math.pi * wd / 360.0) if wd is not None else None
+    default_wheel_travel_calib = (math.pi * wd / 360.0) if wd is not None else None  # [mm/deg]
     cal = getattr(cfg_display, "calibration", None)
-    left_mm_per_deg  = getattr(cal, "mm_per_wheel_deg_left",  None) if cal else None
-    right_mm_per_deg = getattr(cal, "mm_per_wheel_deg_right", None) if cal else None
-    left_mm_per_deg  = left_mm_per_deg  if left_mm_per_deg  is not None else default_mm_per_deg
-    right_mm_per_deg = right_mm_per_deg if right_mm_per_deg is not None else default_mm_per_deg
+    wheel_travel_calib_left  = getattr(cal, "mm_per_wheel_deg_left",  None) if cal else None
+    wheel_travel_calib_right = getattr(cal, "mm_per_wheel_deg_right", None) if cal else None
+    wheel_travel_calib_left  = wheel_travel_calib_left  if wheel_travel_calib_left  is not None else default_wheel_travel_calib
+    wheel_travel_calib_right = wheel_travel_calib_right if wheel_travel_calib_right is not None else default_wheel_travel_calib
 
     lin_int8 = _scale_to_int8(getattr(cfg_display, "otos_linear_scale", 1.0) or 1.0)
     ang_int8 = _scale_to_int8(getattr(cfg_display, "otos_angular_scale", 1.0) or 1.0)
@@ -415,10 +414,10 @@ def cmd_sync_cal(args):
     off = getattr(geom, "odometry_offset_mm", None) if geom else None
 
     print("sync cal: calibration pushed successfully (v2 verbs)")
-    if left_mm_per_deg is not None:
-        print(f"  SET ml={left_mm_per_deg:.6f}  (mm/deg={left_mm_per_deg:.4f})")
-    if right_mm_per_deg is not None:
-        print(f"  SET mr={right_mm_per_deg:.6f}  (mm/deg={right_mm_per_deg:.4f})")
+    if wheel_travel_calib_left is not None:
+        print(f"  SET ml={wheel_travel_calib_left:.6f}  (mm/deg={wheel_travel_calib_left:.4f})")
+    if wheel_travel_calib_right is not None:
+        print(f"  SET mr={wheel_travel_calib_right:.6f}  (mm/deg={wheel_travel_calib_right:.4f})")
     if tw is not None:
         print(f"  SET tw={int(round(float(tw)))}  (trackwidth mm)")
     print("  OI  (OTOS init)")
@@ -431,9 +430,9 @@ def cmd_sync_cal(args):
     if off is not None:
         ox = float(off.x)
         oy = float(off.y)
-        oyaw_deg = math.degrees(float(off.yaw_rad))
-        if ox != 0.0 or oy != 0.0 or oyaw_deg != 0.0:
-            print(f"  SET odomOffX={ox:.3f} odomOffY={oy:.3f} odomYaw={oyaw_deg:.3f}")
+        oyaw = math.degrees(float(off.yaw_rad))  # [deg]
+        if ox != 0.0 or oy != 0.0 or oyaw != 0.0:
+            print(f"  SET odomOffX={ox:.3f} odomOffY={oy:.3f} odomYaw={oyaw:.3f}")
         else:
             print("  (odom offsets all zero — SET odomOff* skipped)")
 
@@ -443,17 +442,17 @@ def cmd_sync_cal(args):
 # ── Rotation model (mirror of test/rotation_calibrate/RotationModel) ──────
 
 
-def _turn_command(angle_deg: float, speed_mms: int,
+def _turn_command(angle: float, speed: int,  # [deg], [mm/s]
                   cal: dict) -> tuple[int, int, int]:
-    """Compute (cmd_left, cmd_right, duration_ms) for an in-place rotation
-    of `angle_deg` degrees (positive = CCW / left).
+    """Compute (cmd_left, cmd_right, duration) [ms] for an in-place rotation
+    of `angle` degrees (positive = CCW / left).
 
     Resolution order for wheelbase / slip / motor model:
       1. data/robot_calibration.json (full firmware-calibrated rotation
          model, including a bivariate-polynomial motor model).
       2. data/robots/<active>.json via get_robot_config() — uses
          geometry.trackwidth as wheelbase and falls back to a no-slip
-         linear model (t_ms = 1000 · target_arc / speed_mms).  Accuracy
+         linear model (duration = 1000 · target_arc / speed, in ms).  Accuracy
          depends on motors; expect ~10-20% error on first try until a
          proper rotation calibration is run.
     """
@@ -481,14 +480,14 @@ def _turn_command(angle_deg: float, speed_mms: int,
     W = float(rot["wheelbase_mm"])
     slip = float(rot["rotational_slip"])
 
-    # Optional linear correction: compensated_deg = (target_deg - offset) / gain.
+    # Optional linear correction: compensated = (angle - offset) / gain (deg).
     # When configured (in nezha-1.json calibration section), this captures
     # angle-dependent error that a single slip factor can't — e.g. fixed
     # startup loss makes small turns under-rotate more proportionally than
     # large turns.
     cfg_for_corr = get_robot_config()
     cal_corr = getattr(cfg_for_corr, "calibration", None) if cfg_for_corr else None
-    if angle_deg >= 0:
+    if angle >= 0:
         gain   = getattr(cal_corr, "rotation_gain",       None) if cal_corr else None
         offset = getattr(cal_corr, "rotation_offset_deg", None) if cal_corr else None
     else:
@@ -500,12 +499,12 @@ def _turn_command(angle_deg: float, speed_mms: int,
             offset = getattr(cal_corr, "rotation_offset_deg", None) if cal_corr else None
     gain   = float(gain)   if gain   is not None else 1.0
     offset = float(offset) if offset is not None else 0.0
-    compensated_deg = (angle_deg - offset) / gain
+    compensated = (angle - offset) / gain  # [deg]
     if gain != 1.0 or offset != 0.0:
-        _log(f"turn: linear correction (target {angle_deg:+.1f}° → command {compensated_deg:+.2f}°) "
+        _log(f"turn: linear correction (target {angle:+.1f}° → command {compensated:+.2f}°) "
              f"with gain={gain:.4f}, offset={offset:.2f}°")
 
-    theta = math.radians(compensated_deg)
+    theta = math.radians(compensated)
     sign = 1 if theta >= 0 else -1
     target_arc = abs(theta) * W / (2.0 * slip)   # mm of arc per wheel
 
@@ -523,7 +522,7 @@ def _turn_command(angle_deg: float, speed_mms: int,
         # Coefficients of the polynomial in t at this v, indexed by power.
         by_q: dict[int, float] = {}
         for (p, q, c) in terms:
-            by_q[q] = by_q.get(q, 0.0) + c * (float(speed_mms) ** p)
+            by_q[q] = by_q.get(q, 0.0) + c * (float(speed) ** p)
         max_q = max(by_q) if by_q else 0
         coeffs = [0.0] * (max_q + 1)
         for q, c in by_q.items():
@@ -536,38 +535,38 @@ def _turn_command(angle_deg: float, speed_mms: int,
                     if abs(r.imag) < 1e-6 and r.real > 0.0]
         if not positive:
             raise SystemExit(
-                f"Error: no positive real duration for {angle_deg:+.1f}° "
-                f"at v={speed_mms} mm/s (target outside calibrated range?)"
+                f"Error: no positive real duration for {angle:+.1f}° "
+                f"at v={speed} mm/s (target outside calibrated range?)"
             )
-        t_ms = int(round(min(positive)))
+        duration = int(round(min(positive)))  # [ms]
     elif "arc_efficiency" in rot and "startup_loss_mm" in rot:
-        # Legacy linear inverse:  t_ms = 1000·(target_arc + β) / (α·v)
+        # Legacy linear inverse:  duration = 1000·(target_arc + β) / (α·v)
         alpha = float(rot["arc_efficiency"])
         beta = float(rot["startup_loss_mm"])
-        t_ms = int(round(1000.0 * (target_arc + beta) / (alpha * speed_mms)))
+        duration = int(round(1000.0 * (target_arc + beta) / (alpha * speed)))  # [ms]
     else:
         # No motor model — use plain kinematic estimate.  At commanded
         # wheel speed v (mm/s) each wheel travels v*t mm of arc.
-        # Pick t such that arc = target_arc:  t_ms = 1000 · target_arc / v.
-        t_ms = int(round(1000.0 * target_arc / float(speed_mms)))
+        # Pick t such that arc = target_arc:  duration = 1000 · target_arc / v.
+        duration = int(round(1000.0 * target_arc / float(speed)))  # [ms]
 
     # World-frame CCW = drive(-L, +R) on this Nezha. aprilcam.Tag.orientation
     # reports image-space (Y-down) yaw which is CW-positive in world frame, so
     # drive(+L, -R) produces image-positive but world-CW motion. To match the
     # user-facing convention (positive degrees = world CCW), we flip the sign.
-    return (-sign * speed_mms, sign * speed_mms, t_ms)
+    return (-sign * speed, sign * speed, duration)
 
 
 # ── Crawl-mode pulse-train drive ─────────────────────────────────────────────
 
 
-def _crawl_drive_distance(robot: QBotPro, speed_mms: int,
-                          target_mm: int) -> tuple[int, int]:
+def _crawl_drive_distance(robot: QBotPro, speed: int,  # [mm/s]
+                          target: int) -> tuple[int, int]:  # [mm]
     """Thin wrapper — delegates to nav.camera_goto.crawl_drive_distance.
 
     Logic extracted to nav/camera_goto.py (ticket 035-001).
     """
-    return _crawl_drive_distance_impl(robot, speed_mms, target_mm,
+    return _crawl_drive_distance_impl(robot, speed, target,
                                       log=_log)
 
 
@@ -634,7 +633,7 @@ def cmd_drive(args):
 
     When |left| or |right| is below the configured crawl threshold,
     drive falls back to crawl mode (pulse-train).  Threshold comes from
-    --min-speed, then $ROGO_MIN_SPEED, else DEFAULT_MIN_SPEED_MMS.
+    --min-speed, then $ROGO_MIN_SPEED, else DEFAULT_MIN_SPEED.
     Crawl requires --mm and symmetric wheel speeds (left == right).
 
     Stream mode (rogo drive <L> <R> stream [--resend MS]) sends S keepalives
@@ -653,11 +652,11 @@ def cmd_drive(args):
 
     # Validate --resend.
     # Note: do not use `or 150` here — that would silently convert 0 to 150.
-    resend_ms = getattr(args, "resend", None)
-    if resend_ms is None:
-        resend_ms = 150
-    if args.stream_mode and resend_ms <= 0:
-        print(f"Error: --resend must be > 0, got {resend_ms}", file=sys.stderr)
+    resend = getattr(args, "resend", None)  # [ms]
+    if resend is None:
+        resend = 150
+    if args.stream_mode and resend <= 0:
+        print(f"Error: --resend must be > 0, got {resend}", file=sys.stderr)
         sys.exit(1)
 
     if args.stream_mode and (args.ms is not None or args.mm is not None):
@@ -709,18 +708,18 @@ def cmd_drive(args):
     elif args.stream_mode:
         # Stream mode: rogo drive <L> <R> stream [--resend MS] [--secs N]
         # --resend controls the S keepalive cadence sent to the firmware.
-        # stream_drive(watchdog_ms=...) uses keepalive_s = watchdog_ms * 0.30 / 1000.
-        # To achieve a resend cadence of resend_ms, set watchdog_ms = resend_ms / 0.30.
-        # Example: resend_ms=150, watchdog_ms=500 → keepalive = 500*0.30 = 150 ms.
+        # stream_drive(watchdog=...) uses keepalive_s = watchdog * 0.30 / 1000.
+        # To achieve a resend cadence of resend, set watchdog = resend / 0.30.
+        # Example: resend=150, watchdog=500 → keepalive = 500*0.30 = 150 ms.
         # --secs N: auto-stop after N seconds (None = run until Ctrl-C).
-        watchdog_ms = int(resend_ms / 0.30)  # keepalive = watchdog_ms * 0.30
-        _log(f"stream mode: resend={resend_ms}ms → watchdog_ms={watchdog_ms}ms")
+        watchdog = int(resend / 0.30)  # [ms] keepalive = watchdog * 0.30
+        _log(f"stream mode: resend={resend}ms → watchdog={watchdog}ms")
         secs = getattr(args, "secs", None)
         deadline = (time.monotonic() + secs) if secs is not None else None
         left_enc, right_enc = initial
         speeds = [args.left, args.right]
         try:
-            for resp in robot.stream_drive(speeds, period_ms=40, watchdog_ms=watchdog_ms):
+            for resp in robot.stream_drive(speeds, period=40, watchdog=watchdog):
                 if deadline is not None and time.monotonic() >= deadline:
                     break
                 tlm = parse_tlm(resp.raw) if resp.tag == "TLM" else None
@@ -792,11 +791,11 @@ def cmd_turn(args):
     """
     if getattr(args, "open_loop", False):
         cal = _load_robot_calibration()
-        cmd_l, cmd_r, t_ms = _turn_command(args.degrees, args.speed, cal)
-        _log(f"turn {args.degrees:+.1f}° → T{cmd_l:+d}{cmd_r:+d}{t_ms:+d} (open-loop)")
+        cmd_l, cmd_r, duration = _turn_command(args.degrees, args.speed, cal)
+        _log(f"turn {args.degrees:+.1f}° → T{cmd_l:+d}{cmd_r:+d}{duration:+d} (open-loop)")
         robot, conn, _ = _make_robot(args)
         _maybe_zero(robot, args)
-        left_enc, right_enc = robot.speed_for_time(cmd_l, cmd_r, t_ms)
+        left_enc, right_enc = robot.speed_for_time(cmd_l, cmd_r, duration)
         print(f"ENC {left_enc} {right_enc}")
         conn.disconnect()
         return
@@ -847,9 +846,9 @@ def cmd_turnto(args):
     from aprilcam.client.control import DaemonControl
     from robot_radio.robot.protocol import NezhaProtocol
 
-    target_deg = float(args.degrees)
+    target = float(args.degrees)  # [deg]
     speed = int(args.speed)
-    tol_deg = float(args.tol)
+    tol = float(args.tol)  # [deg]
     cfg = get_robot_config()
     tag_id = cfg.vision.robot_tag_id if cfg else 100
 
@@ -875,17 +874,17 @@ def cmd_turnto(args):
             pass
         sys.exit("Error: rogo turnto requires a Nezha robot with NezhaProtocol.")
 
-    _log(f"turnto: target={target_deg:+.1f}°  speed={speed}mm/s  cam={cam}")
+    _log(f"turnto: target={target:+.1f}°  speed={speed}mm/s  cam={cam}")
 
     def read_pose(timeout_s=1.0):
         return _daemon_read_pose(dc, cam, tag_id, timeout_s=timeout_s)
 
     try:
-        err = _spin_to_yaw_camera_impl(proto, read_pose, target_deg, speed, tol_deg,
+        err = _spin_to_yaw_camera_impl(proto, read_pose, target, speed, tol,
                                        log=_log)
         if err is None:
             sys.exit(f"Error: daemon could not see robot tag {tag_id}.")
-        print(f"final error={err:+.1f}°  (target={target_deg:+.1f}°)")
+        print(f"final error={err:+.1f}°  (target={target:+.1f}°)")
     finally:
         try:
             proto.stop()
@@ -945,7 +944,7 @@ def cmd_goto(args):
     target_y = float(args.y)
     cruise = int(args.speed)
     turn_speed = int(args.turn_speed)
-    gate_deg = float(args.tol)          # turn-in-place if heading error exceeds this
+    gate = float(args.tol)  # [deg] turn-in-place if heading error exceeds this
     arrive_cm = float(args.arrive)
     max_secs = float(args.timeout)
     cfg = get_robot_config()
@@ -973,7 +972,7 @@ def cmd_goto(args):
         _go_to_world_camera_impl(
             proto, read_pose,
             target_x, target_y,
-            cruise, turn_speed, gate_deg, arrive_cm, max_secs,
+            cruise, turn_speed, gate, arrive_cm, max_secs,
             log=_log,
         )
     finally:
@@ -1097,7 +1096,7 @@ def cmd_port(args):
             conn.disconnect()
             sys.exit(1)
         wire = f"P {args.jack} {args.value}"
-    result = robot.send(wire, read_ms=400)
+    result = robot.send(wire, read_timeout=400)
     for line in result.get("responses", []):
         s = str(line).lstrip("<# ")
         if s.startswith(("OK port", "ACK:P ", "P ", "ERR")):
@@ -1128,7 +1127,7 @@ def cmd_pwm(args):
             conn.disconnect()
             sys.exit(1)
         wire = f"PA {args.jack} {args.value}"
-    result = robot.send(wire, read_ms=400)
+    result = robot.send(wire, read_timeout=400)
     for line in result.get("responses", []):
         s = str(line).lstrip("<# ")
         if s.startswith(("OK port", "OK analog", "ACK:PA ", "PA ", "ERR")):
@@ -1179,11 +1178,11 @@ def cmd_enc(args):
 def cmd_opos(args):
     """Read robot OTOS fused pose via v2 SNAP → TLM.
 
-    Outputs: POSE <x_mm> <y_mm> <h_deg> where h_deg is the heading in degrees
-    (converted from the firmware's centi-degrees).
+    Outputs: POSE <x> <y> <heading> (mm, mm, deg) where heading is converted
+    from the firmware's centi-degrees.
 
     v2 firmware does not support the v1 SO (Sensor Output) verb.  Fused pose
-    is read via SNAP → TLM pose= field (x_mm, y_mm, h_cdeg).
+    is read via SNAP → TLM pose= field (x, y, h_cdeg) in (mm, mm, cdeg).
     """
     robot, conn, _ = _make_robot(args)
     # v2: use SNAP → TLM to read OTOS fused pose; v1 SO verb is not supported.
@@ -1193,9 +1192,9 @@ def cmd_opos(args):
               file=sys.stderr)
         conn.disconnect()
         sys.exit(1)
-    x_mm, y_mm, h_cdeg = frame.pose
-    h_deg = h_cdeg / 100.0
-    print(f"POSE {x_mm} {y_mm} {h_deg:.1f}")
+    x, y, h_cdeg = frame.pose
+    heading = h_cdeg / 100.0  # [deg]
+    print(f"POSE {x} {y} {heading:.1f}")
     conn.disconnect()
 
 
@@ -1210,7 +1209,7 @@ def cmd_ez(args):
 def cmd_send(args):
     """Send arbitrary command."""
     robot, conn, _ = _make_robot(args)
-    result = robot.send(args.message, read_ms=args.read_ms)
+    result = robot.send(args.message, read_timeout=args.read_timeout)
     if "error" in result:
         print(f"Error: {result['error']}", file=sys.stderr)
     else:
@@ -1335,12 +1334,12 @@ def cmd_color(args):
         print(f"RGB {round(rr_f * 255)} {round(gg_f * 255)} {round(bb_f * 255)}")
         return
     h, l, s_hls = colorsys.rgb_to_hls(rr_f, gg_f, bb_f)
-    h_deg = h * 360.0
+    hue = h * 360.0  # [deg]
     if args.hsv:
         _, s_hsv, v = colorsys.rgb_to_hsv(rr_f, gg_f, bb_f)
-        print(f"HSV {round(h_deg)} {round(s_hsv * 100)} {round(v * 100)}")
+        print(f"HSV {round(hue)} {round(s_hsv * 100)} {round(v * 100)}")
         return
-    print(f"HSL {round(h_deg)} {round(s_hls * 100)} {round(l * 100)}")
+    print(f"HSL {round(hue)} {round(s_hls * 100)} {round(l * 100)}")
 
 
 def cmd_pose(args):
@@ -1389,7 +1388,7 @@ def cmd_pose(args):
             sys.exit(3)
 
         angle_rad = tag.orientation
-        angle_deg = math.degrees(angle_rad)
+        angle = math.degrees(angle_rad)  # [deg]
         print(f"tag {args.tag}")
         if want_world:
             if tag.wx is None:
@@ -1404,7 +1403,7 @@ def cmd_pose(args):
         else:
             print(f"  x: {tag.cx:.1f} px")
             print(f"  y: {tag.cy:.1f} px")
-        print(f"  angle: {angle_rad:.4f} rad ({angle_deg:.1f}°)")
+        print(f"  angle: {angle_rad:.4f} rad ({angle:.1f}°)")
     finally:
         try:
             field.stop()
@@ -1439,7 +1438,7 @@ def main():
         "drive",
         help="Drive: rogo drive <L> <R> [--ms N | --mm N | stream]. "
              f"|speed| below the crawl threshold (default "
-             f"{DEFAULT_MIN_SPEED_MMS} mm/s, override with --min-speed "
+             f"{DEFAULT_MIN_SPEED} mm/s, override with --min-speed "
              "or $ROGO_MIN_SPEED) with --mm uses crawl mode (pulse-train, "
              "requires equal wheel speeds).",
     )
@@ -1461,7 +1460,7 @@ def main():
     p_drive.add_argument("--ez", action="store_true", help="Zero encoders before driving")
     p_drive.add_argument(
         "--min-speed", type=int, default=None,
-        help=f"Crawl-mode threshold in mm/s (default: {DEFAULT_MIN_SPEED_MMS}, "
+        help=f"Crawl-mode threshold in mm/s (default: {DEFAULT_MIN_SPEED}, "
              "or $ROGO_MIN_SPEED if set).",
     )
     p_drive.add_argument(
@@ -1602,7 +1601,7 @@ def main():
     p_grip.add_argument("value", help="'open', 'close', or servo angle (0-180)")
 
     sub.add_parser("enc", help="Read encoder positions (mm) via v2 SNAP → TLM")
-    sub.add_parser("opos", help="Read robot OTOS fused pose (x_mm, y_mm, h_deg) via v2 SNAP → TLM")
+    sub.add_parser("opos", help="Read robot OTOS fused pose (x, y in mm; heading in deg) via v2 SNAP → TLM")
     sub.add_parser("ez", help="Zero encoders")
     sub.add_parser("line", help="Read 4-channel line sensor (grayscale 0..255) via v2 SNAP → TLM")
     p_color = sub.add_parser(
@@ -1620,7 +1619,7 @@ def main():
 
     p_send = sub.add_parser("send", help="Send arbitrary command")
     p_send.add_argument("message", help="Command string to send")
-    p_send.add_argument("--read-ms", type=int, default=500, help="Response read timeout (ms)")
+    p_send.add_argument("--read-timeout", type=int, default=500, help="Response read timeout (ms)")
 
     p_pose = sub.add_parser(
         "pose",
