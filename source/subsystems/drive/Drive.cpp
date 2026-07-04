@@ -144,7 +144,16 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
         _frzActiveL = _frzTicksL >= kFreezeTicksN && _frzTicksL <= kFreezeHoldMaxTicks;
         _frzActiveR = _frzTicksR >= kFreezeTicksN && _frzTicksR <= kFreezeHoldMaxTicks;
     }
-    const bool frozenNow = _frzActiveL || _frzActiveR;
+    // Hold ONLY on commanded-STRAIGHT maneuvers.  On a straight leg a frozen
+    // differential is pure phantom rotation (the +100.2° D-700 bug) — hold
+    // is exactly right.  During a commanded SPIN (targets of opposite sign)
+    // the differential is half REAL: holding erases real rotation and loses
+    // the corner (measured: v26 hold variants degraded closure 53 mm →
+    // 570 mm at similar wedge counts; raw half-rate integration plus the
+    // verb's TIME backstop approximates a latched turn far better).
+    const bool cmdStraight =
+        (_outputs.tgtSpeed[0] * _outputs.tgtSpeed[1]) > 0.0f;
+    const bool frozenNow = (_frzActiveL || _frzActiveR) && cmdStraight;
 
     // controlTick runs the velocity PID and calls _motorL/R.setSpeed().
     // refreshedWheel=3 means both wheels were just collected (same semantics
