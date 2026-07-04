@@ -105,6 +105,7 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
     // ------------------------------------------------------------------
     static constexpr float   kFreezeMinCmdMmps = 30.0f;
     static constexpr uint8_t kFreezeTicksN     = 3;
+    static constexpr uint8_t kFreezeHoldMaxTicks = 25;   // ~500 ms @ 20 ms tick
     {
         // Watch the SAME post-filter encoder values predict consumes
         // (_hw.encPos, written by _runOutlierFilter above) — NOT the raw
@@ -133,8 +134,15 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
         _frzLastRawL = rawL;
         _frzLastRawR = rawR;
 
-        _frzActiveL = _frzTicksL >= kFreezeTicksN;
-        _frzActiveR = _frzTicksR >= kFreezeTicksN;
+        // Hold window: the dTheta/bench heading hold is only CORRECT for
+        // short latches.  A latch that persists (boundary latch spanning a
+        // whole RT) would have its REAL rotation erased by the hold — a lost
+        // corner (measured 599 mm closure, 2026-07-03 v26b run).  Past
+        // kFreezeHoldMaxTicks the hold releases: raw half-rate integration
+        // plus the verb's TIME backstop approximates the maneuver far better
+        // than a zeroed turn.
+        _frzActiveL = _frzTicksL >= kFreezeTicksN && _frzTicksL <= kFreezeHoldMaxTicks;
+        _frzActiveR = _frzTicksR >= kFreezeTicksN && _frzTicksR <= kFreezeHoldMaxTicks;
     }
     const bool frozenNow = _frzActiveL || _frzActiveR;
 
