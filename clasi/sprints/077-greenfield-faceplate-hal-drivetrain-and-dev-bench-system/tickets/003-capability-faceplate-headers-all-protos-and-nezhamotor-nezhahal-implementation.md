@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Capability faceplate headers (all protos) and NezhaMotor/NezhaHal implementation
-status: open
+status: done
 use-cases:
 - SUC-003
 depends-on:
@@ -35,7 +35,7 @@ byte-for-byte, not by re-deriving it from the register-map comments alone.
 
 ### Faceplate headers (`source/hal/capability/`, all in `namespace Hal`)
 
-- [ ] `motor.h` — matches the issue's locked interface exactly: primitive
+- [x] `motor.h` — matches the issue's locked interface exactly: primitive
       setters (`setDutyCycle`, `setVoltage`, `setVelocity`, `setPosition`,
       `setNeutral`, `setFeedforward`, `resetPosition`), primitive getters
       (`position`, `velocity`, `appliedDuty`, `connected`, `wedged`),
@@ -44,7 +44,7 @@ byte-for-byte, not by re-deriving it from the register-map comments alone.
       pair `apply(const msg::MotorCommand&)` / `state() const` implemented
       ONCE in this base class (non-virtual, calling the virtual
       setters/getters above) — not left to each leaf to reimplement.
-- [ ] `gripper.h`, `line_sensor.h`, `color_sensor.h`, `ports.h`, `odometer.h`
+- [x] `gripper.h`, `line_sensor.h`, `color_sensor.h`, `ports.h`, `odometer.h`
       — one faceplate header each, following the same primitive-setters/
       -getters + `configure`/`tick`/`capabilities` + shared `apply`/`state`
       shape, sized to each proto's actual Command/State/Config/Capabilities
@@ -57,7 +57,7 @@ byte-for-byte, not by re-deriving it from the register-map comments alone.
       that includes the header requires it to be complete against a leaf
       that doesn't exist yet — programmer's call on the exact mechanism,
       documented in the header comment).
-- [ ] Naming: `namespace Hal`, class names UpperCamelCase (`Motor`,
+- [x] Naming: `namespace Hal`, class names UpperCamelCase (`Motor`,
       `Gripper`, ...), methods lowerCamelCase, no unit suffixes on any
       identifier (units in `// [unit]` trailing comment tags per
       `.claude/rules/coding-standards.md`) — e.g. `setVelocity(float
@@ -65,10 +65,10 @@ byte-for-byte, not by re-deriving it from the register-map comments alone.
 
 ### `NezhaMotor` (`source/hal/nezha/nezha_motor.{h,cpp}`)
 
-- [ ] Constructible per-port: `NezhaMotor(I2CBus&, const msg::MotorConfig&)`
+- [x] Constructible per-port: `NezhaMotor(I2CBus&, const msg::MotorConfig&)`
       with `config.port` in 1..4 — no baked-in left/right pair, no hardcoded
       motor-id-to-role mapping anywhere in this class.
-- [ ] Register map ported from `source_old/hal/real/Motor.cpp`, frames
+- [x] Register map ported from `source_old/hal/real/Motor.cpp`, frames
       verified byte-identical against the existing file's documented wire
       bytes: 0x60 (run), 0x5F (stop — NOT used for coast; 0x60 with speed 0
       is the coast path, exactly as `source_old` does it and for the same
@@ -80,7 +80,7 @@ byte-for-byte, not by re-deriving it from the register-map comments alone.
       timedMove, 0x77, 0x88, 0x1D) may be ported as private wrappers for
       completeness (matching `source_old`'s coverage) without being reachable
       from the public faceplate this sprint.
-- [ ] **Split-phase encoder sequencing preserved exactly**: a
+- [x] **Split-phase encoder sequencing preserved exactly**: a
       `requestEncoder()` (phase 1 — issue the 0x46 write, non-repeated-start,
       return immediately, no busy-wait) / `collectEncoder()` (phase 2 — read
       the 4-byte response, no busy-wait) pair, called once per loop tick each
@@ -97,58 +97,58 @@ byte-for-byte, not by re-deriving it from the register-map comments alone.
       **fixed, deterministic port order** across ticks (e.g., ascending port
       number) and document it, since the old ordering's purpose was
       determinism, not a specific L/R priority.
-- [ ] Encoder offset/reset semantics ported: `resetEncoder()`-equivalent
+- [x] Encoder offset/reset semantics ported: `resetEncoder()`-equivalent
       (median-of-3 atomic read + readback-verify + retry, matching
       `source_old`'s `kMaxRetries`/`kReadbackThreshold` constants) reachable
       via `MotorCommand.reset_position`. A soft/no-I2C rebaseline
       (`rebaselineSoft`-equivalent) may be ported too but is not required to
       be reachable from `apply()` this sprint if nothing calls it yet —
       note the decision either way.
-- [ ] Slew limiting ported: the `MotorSlew::clampStep`-equivalent
+- [x] Slew limiting ported: the `MotorSlew::clampStep`-equivalent
       |ΔPWM|-per-write cap, driven by `MotorConfig.slew_rate` (defaulting to
       the existing `kMaxDeltaPwmPerWrite = 25` value — see architecture-
       update.md Design Rationale 2 for why this default, not the newer
       unvalidated zero-dwell fix, is what's ported this sprint). A stop
       (`pct == 0`) remains the explicit, unclamped, immediate-write
       exemption, matching `source_old`.
-- [ ] Wedge detection surfaced in `MotorState.wedged` — port whatever
+- [x] Wedge detection surfaced in `MotorState.wedged` — port whatever
       signal `source_old` uses to populate its analogous field (do not
       invent a new detector; this sprint explicitly excludes any
       `DBG WEDGE`-equivalent diagnostic command, per the issue).
-- [ ] `tick(uint32_t now)` executes the staged command per mode: DUTY → slew
+- [x] `tick(uint32_t now)` executes the staged command per mode: DUTY → slew
       → register write; VELOCITY → embedded PID (encoder-derived filtered
       velocity vs. target; gains/anti-windup/min-duty from `MotorConfig`) →
       duty; POSITION → onboard 0x5D; NEUTRAL; `reset_position` rides beside
       any arm and zeroes the encoder that tick.
-- [ ] `apply()` rejects any command mode not present in `capabilities()`
+- [x] `apply()` rejects any command mode not present in `capabilities()`
       before touching hardware — proven by `VOLT` on Nezha returning
       `ERR unsupported` at the command layer (ticket 5 wires this to `DEV`,
       but the rejection itself is `NezhaMotor`'s/the base faceplate's
       responsibility).
-- [ ] Encoder plumbing and raw register verbs are **private** to
+- [x] Encoder plumbing and raw register verbs are **private** to
       `NezhaMotor`. Nothing outside this class calls `readEncoderAtomic`,
       `requestEncoder`, `collectEncoder`, or any 0x-register wrapper
       directly — the public surface is the `Hal::Motor` faceplate only.
-- [ ] Google/CamelCase style: `namespace Hal`, class `NezhaMotor`
+- [x] Google/CamelCase style: `namespace Hal`, class `NezhaMotor`
       (UpperCamelCase), methods lowerCamelCase, `.cpp` extension, snake_case
       filenames (`nezha_motor.h`/`nezha_motor.cpp`), trailing-underscore
       private members.
 
 ### `NezhaHal` (`source/hal/nezha/nezha_hal.{h,cpp}`)
 
-- [ ] Owns `I2CBus` + up to four `NezhaMotor` instances (one per configured
+- [x] Owns `I2CBus` + up to four `NezhaMotor` instances (one per configured
       port), value members (no heap allocation).
-- [ ] `tick(uint32_t now)` orchestrates the split-phase bus schedule across
+- [x] `tick(uint32_t now)` orchestrates the split-phase bus schedule across
       however many ports are configured, in the fixed deterministic order
       established above.
-- [ ] The dev build (wired in ticket 5's `main.cpp`) instantiates a
+- [x] The dev build (wired in ticket 5's `main.cpp`) instantiates a
       `NezhaMotor` on all four ports so the bench rig can address any of
       them, and so the coupled rig (ports 3+4) is reachable without any
       `NezhaHal`-level special-casing.
 
 ### Build
 
-- [ ] `python build.py --clean` succeeds with `NezhaMotor`/`NezhaHal`
+- [x] `python build.py --clean` succeeds with `NezhaMotor`/`NezhaHal`
       compiled in (even if nothing in `main.cpp` calls them yet — that's
       ticket 5; this ticket may need a minimal smoke call in `main.cpp` or a
       throwaway compile-only reference to prove the translation units build,
