@@ -1,0 +1,11 @@
+# Experiment 7 — reset-while-moving with the detector ordering fixed.
+# 40 cycles for statistics; old pair, production density, cruise 45.
+set nwheels 2
+set tickus 10000
+set cruise 45
+run reset 40
+stat
+heal
+set cruise 32
+set nwheels 4
+set tickus 20000

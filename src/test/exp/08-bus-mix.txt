@@ -1,0 +1,16 @@
+# Experiment 8 — the last missing production ingredient: mixed-device bus
+# traffic (OTOS 0x17 read every tick, between motor transactions).
+# Old pair, production density, both boundary and reset triggers.
+set nwheels 2
+set tickus 10000
+set cruise 45
+set sensors 1
+run legs 30
+stat
+run reset 20
+stat
+heal
+set sensors 0
+set cruise 32
+set nwheels 4
+set tickus 20000

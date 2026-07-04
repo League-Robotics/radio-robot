@@ -1,0 +1,125 @@
+OK pong t=16423
+OK set sTimeout=60000
+OK set rotSlip=0
+OK drive l=250 r=250 mm=150
+OK drive l=250 r=250 mm=150
+EVT cancelled
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=time
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=time
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+OK drive l=250 r=250 mm=150
+EVT cancelled
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+OK drive l=250 r=250 mm=150
+EVT cancelled
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+OK drive l=250 r=250 mm=150
+EVT cancelled
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=time
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=time
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+OK drive l=250 r=250 mm=150
+EVT cancelled
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+OK drive l=250 r=250 mm=150
+EVT cancelled
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+OK drive l=250 r=250 mm=150
+EVT cancelled
+EVT done D reason=time
+OK drive l=250 r=250 mm=150
+OK drive l=250 r=250 mm=150
+EVT cancelled
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+OK drive l=250 r=250 mm=150
+EVT cancelled
+EVT done D reason=time
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=time
+OK drive l=250 r=250 mm=150
+OK drive l=250 r=250 mm=150
+EVT cancelled
+EVT done D reason=time
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK drive l=250 r=250 mm=150
+EVT done D reason=dist
+OK x
+OK set sTimeout=500

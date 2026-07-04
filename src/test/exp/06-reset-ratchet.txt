@@ -1,0 +1,20 @@
+# Experiment 6 — the two remaining production-faithful triggers, old pair only.
+# reset: cruise + full guarded atomic-read burst mid-motion + immediate
+#        direction flip (D-preemption mimic; arm 3 = 13 latches/10 cycles
+#        on the old drivetrain).
+# legs+ratchet: decel ending in stall/reverse-kick/lunge (D-terminal mimic,
+#        the 0.63/leg signature location).
+set nwheels 2
+set tickus 10000
+set cruise 45
+run reset 20
+stat
+heal
+set ratchet 1
+run legs 30
+stat
+heal
+set ratchet 0
+set cruise 32
+set nwheels 4
+set tickus 20000

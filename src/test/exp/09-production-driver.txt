@@ -1,0 +1,15 @@
+# Experiment 9 — VERBATIM production Motor layer (driver=1, default):
+# Motor::setSpeed policy, Motor::tick settle-reads, I2CBus IRQ guard,
+# Motor::resetEncoder mid-motion bursts. Old pair, production density,
+# bus mix on. If this latches where the raw lab didn't, the difference
+# is inside the production motor layer.
+set nwheels 2
+set tickus 10000
+set sensors 1
+run legs 30
+stat
+run reset 20
+stat
+heal
+set sensors 0
+set nwheels 4

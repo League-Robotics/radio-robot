@@ -1,0 +1,69 @@
+{
+ "legs": 60,
+ "dist": 150,
+ "speed": 250,
+ "episodes": [
+  {
+   "leg": 7,
+   "port": "?",
+   "wheel": "?",
+   "enc": null,
+   "time_stop": true
+  },
+  {
+   "leg": 9,
+   "port": "?",
+   "wheel": "?",
+   "enc": null,
+   "time_stop": true
+  },
+  {
+   "leg": 29,
+   "port": "?",
+   "wheel": "?",
+   "enc": null,
+   "time_stop": true
+  },
+  {
+   "leg": 31,
+   "port": "?",
+   "wheel": "?",
+   "enc": null,
+   "time_stop": true
+  },
+  {
+   "leg": 46,
+   "port": "?",
+   "wheel": "?",
+   "enc": null,
+   "time_stop": true
+  },
+  {
+   "leg": 53,
+   "port": "?",
+   "wheel": "?",
+   "enc": null,
+   "time_stop": true
+  },
+  {
+   "leg": 55,
+   "port": "?",
+   "wheel": "?",
+   "enc": null,
+   "time_stop": true
+  },
+  {
+   "leg": 57,
+   "port": "?",
+   "wheel": "?",
+   "enc": null,
+   "time_stop": true
+  }
+ ],
+ "episodes_per_leg": 0.133,
+ "by_port": {
+  "M2": 0,
+  "M1": 0,
+  "unattributed": 8
+ }
+}

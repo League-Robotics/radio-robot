@@ -1,0 +1,11 @@
+# Experiment 3 — decel-boundary volume + combined trigger.
+# Arm A: 60 production-like decel-to-stop boundaries (~90s motor time).
+#        Every-tick writes + sign dither near zero = the KB trigger.
+# Arm B: combo (slam + mid-rotation read bursts) x10 — the historically
+#        fastest latch inducer; recovery ladder is loaded if it escalates.
+run legs 60
+stat
+heal
+run combo 10
+stat
+heal

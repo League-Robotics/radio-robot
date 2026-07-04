@@ -1,0 +1,17 @@
+# Experiment 5 — production-faithful density on the OLD pair only.
+# nwheels 2 => only M1/M2 driven and read; tick 10ms => 100 Hz per-wheel
+# reads (exact production cadence); cruise 45 and slam 100 for amplitude.
+set nwheels 2
+set tickus 10000
+set cruise 45
+run legs 30
+stat
+set slam 100
+run slam 30
+stat
+heal
+# restore
+set cruise 32
+set slam 80
+set nwheels 4
+set tickus 20000

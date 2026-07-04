@@ -26,7 +26,7 @@ struct DbgCtx {
 // ---------------------------------------------------------------------------
 // DebugCommands — Commandable that owns all diagnostic commands:
 //   DBG LOOP RESET, DBG LOOP, DBG I2CLOG, DBG I2C, DBG IRQGUARD,
-//   DBG WEDGE, I2CW, I2CR.
+//   DBG WEDGE, I2CW, I2CR, PWM.
 //
 // All descriptors use ForceReply::SERIAL so debug output always goes to
 // the serial port regardless of which channel the command arrived on.

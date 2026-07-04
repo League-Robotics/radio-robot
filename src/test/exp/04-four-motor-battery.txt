@@ -1,0 +1,12 @@
+# Experiment 4 — old (M1/M2) vs fresh (M3/M4), same stimulus, per-port score.
+# 30 decel boundaries (the production latch signature), then burst, then slam.
+set verbose 1
+run legs 30
+stat
+heal
+run burst 10
+stat
+heal
+run slam 10
+stat
+heal

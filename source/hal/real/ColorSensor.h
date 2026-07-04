@@ -1,5 +1,5 @@
 #pragma once
-#include "MicroBit.h"
+
 #include "I2CBus.h"
 #include "hal/capability/IColorSensor.h"
 #include <stdint.h>

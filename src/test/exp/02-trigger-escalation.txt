@@ -1,0 +1,22 @@
+# Experiment 2 — trigger escalation on fresh motors, one variable at a time.
+# Baseline knobs are production-like. Each block ends with heal + stat.
+# Motor time: ~36s burst + ~24s slam + ~30s alt-read spin = ~90s total,
+# broken into separately-stopped, verified segments.
+
+# --- arm A: read-burst-while-moving, 3x the dose of exp01 ---
+run burst 30
+stat
+heal
+
+# --- arm B: full reversals (matrix arm 5; amplitude-dependent trigger) ---
+run slam 20
+stat
+heal
+
+# --- arm C: fw-mimic ALTERNATING single-wheel reads (historic mode-3,
+#     wedged production-era motors at it=165) at constant cruise ---
+set readmode 1
+run spin 30
+set readmode 0
+stat
+heal

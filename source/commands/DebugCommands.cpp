@@ -1,7 +1,7 @@
 // DebugCommands.cpp — Commandable for all diagnostic commands.
 //
 // Owns: DBG LOOP RESET, DBG LOOP, DBG I2CLOG, DBG I2C, DBG IRQGUARD,
-//       DBG WEDGE, DBG OTOS BENCH, DBG OTOS, DBG EST, I2CW, I2CR.
+//       DBG WEDGE, DBG OTOS BENCH, DBG OTOS, DBG EST, I2CW, I2CR, PWM.
 //
 // All descriptors use ForceReply::SERIAL.
 // Handler logic mirrors the existing switch cases in CommandProcessor.cpp
@@ -77,6 +77,15 @@ static const ArgDef dbgIrqguardDefs[1] = {
     { "enable", ArgKind::INT, false, 0, 0 },
 };
 static const ArgSchema dbgIrqguardSchema = { dbgIrqguardDefs, 1, 0, false, nullptr };
+
+// PWM — 2 required INT tokens: motor id (1|2, native Nezha id — 1=right/M1,
+// 2=left/M2, same convention as WedgeTest.cpp and wedge_latch_repro.py) and
+// signed speed (-100..100, raw duty-cycle percent).
+static const ArgDef pwmDefs[2] = {
+    { "motor", ArgKind::INT, true, 1,    2   },
+    { "speed", ArgKind::INT, true, -100, 100 },
+};
+static const ArgSchema pwmSchema = { pwmDefs, 2, 2, false, nullptr };
 
 // ---------------------------------------------------------------------------
 // DBG LOOP RESET
@@ -707,6 +716,51 @@ static void handleI2cr(const ArgList& args, const char* corrId,
 }
 
 // ---------------------------------------------------------------------------
+// PWM
+//   prefix "PWM" — pwmSchema = [<motor 1|2>, <speed -100..100>]
+//   handler: writes the raw Nezha 0x60 move-command frame directly via
+//   busAccess, bypassing MotorController/Motor::setSpeed entirely — no
+//   write-on-change dedup, no write-rate throttle, no slew-rate clamp.  An
+//   open-loop probe for dead-band/stiction sweeps (commanded duty cycle vs.
+//   actual wheel motion).  Frame format matches Motor.cpp / WedgeTest.cpp:
+//   [0xFF, 0xF9, motorId, dir(1=CW/2=CCW), 0x60, |speed|, 0xF5, 0x00].
+//
+//   SAFETY: because this bypasses Motor::_lastWrittenSpeed, the normal
+//   STOP/X path may not reliably re-stop a motor left spinning by PWM (its
+//   write-on-change check can see no change and skip the write). A sweep
+//   script should send "PWM <motor> 0" directly to stop, not rely on X/STOP.
+// ---------------------------------------------------------------------------
+
+static void handlePwm(const ArgList& args, const char* corrId,
+                       ReplyFn replyFn, void* replyCtx, void* handlerCtx)
+{
+#ifndef HOST_BUILD
+    DbgCtx ctx = dbgCtxFrom(handlerCtx);
+    char rbuf[64];
+    if (ctx.busAccess == nullptr) {
+        CommandProcessor::replyErr(rbuf, sizeof(rbuf), "noimpl", "no i2c bus",
+                                   corrId, replyFn, replyCtx);
+        return;
+    }
+    int motor = args.args[0].ival;
+    int speed = args.args[1].ival;
+    uint8_t dir = (speed >= 0) ? 1 : 2;   // Nezha DIR_CW=1, DIR_CCW=2
+    uint8_t sp  = (uint8_t)(speed >= 0 ? speed : -speed);
+    uint8_t buf[8] = { 0xFF, 0xF9, (uint8_t)motor, dir, 0x60, sp, 0xF5, 0x00 };
+    int status = ctx.busAccess->write((uint16_t)(0x10 << 1), buf, 8);
+    char body[48];
+    snprintf(body, sizeof(body), "motor=%d speed=%d status=%d", motor, speed, status);
+    CommandProcessor::replyOK(rbuf, sizeof(rbuf), "pwm", body,
+                              corrId, replyFn, replyCtx);
+#else
+    (void)args; (void)corrId; (void)handlerCtx;
+    char rbuf[64];
+    CommandProcessor::replyErr(rbuf, sizeof(rbuf), "noimpl", "no i2c bus",
+                               corrId, replyFn, replyCtx);
+#endif
+}
+
+// ---------------------------------------------------------------------------
 // dbgCtxFrom — extract DbgCtx from handlerCtx.
 // handlerCtx is always const_cast<DebugCommands*>(this).
 // ---------------------------------------------------------------------------
@@ -747,5 +801,6 @@ std::vector<CommandDescriptor> DebugCommands::getCommands() const
         makeCmd(      "DBG EST",         nullptr,               handleDbgEst,        ctx, "badarg", ForceReply::SERIAL),                          // dump enc/otos/fuse EstimateDump lines
         makeCmd(      "I2CW",            parseI2cw,            handleI2cw,          ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // raw I2C write (addr reg data…)
         makeCmd(      "I2CR",            parseI2cr,            handleI2cr,          ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE),     // raw I2C read (addr reg count)
+        makeSchemaCmd("PWM",             &pwmSchema,           handlePwm,           ctx, "badarg", ForceReply::SERIAL, CMD_ACCESS_HARDWARE | CMD_MOTION_WATCHDOG), // raw motor PWM (motor 1|2, speed -100..100)
     };
 }

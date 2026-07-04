@@ -1,0 +1,8 @@
+# Experiment 1 — trigger check: atomic read bursts while wheels rotate
+# (stress-matrix arm 3, the historically fastest transient-latch trigger).
+# Defaults otherwise production-like: settle 4 ms, no pre-idle, 100 kHz.
+# Motor time: ~12 s at 32% PWM.
+stat
+run burst 10
+stat
+heal
