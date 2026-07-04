@@ -145,13 +145,33 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
         const float tgtR  = _outputs.tgtSpeed[0];
         const bool  cmdL  = (tgtL > kFreezeMinCmdMmps) || (tgtL < -kFreezeMinCmdMmps);
         const bool  cmdR  = (tgtR > kFreezeMinCmdMmps) || (tgtR < -kFreezeMinCmdMmps);
-        if (cmdL && dRawL == 0.0f) {
+        // ARMING: a wheel may only be declared frozen after it has MOVED
+        // under the current command.  Without this, ordinary stiction
+        // breakaway at every leg start (targets exceed the cmd gate ~50-150
+        // ms before the wheels physically move) false-arms the detector and
+        // injects a phantom heading kick per leg — hardware-only (the sim
+        // has no stiction), measured as turns failing to register.  A true
+        // mid-leg latch is always armed (the wheel was moving); a boundary
+        // latch frozen through an entire command stays unarmed and falls
+        // back to raw integration + the verb's TIME backstop.
+        if (!cmdL) {
+            _frzArmedL = false;
+        } else if (dRawL != 0.0f) {
+            _frzArmedL = true;
+        }
+        if (!cmdR) {
+            _frzArmedR = false;
+        } else if (dRawR != 0.0f) {
+            _frzArmedR = true;
+        }
+
+        if (cmdL && _frzArmedL && dRawL == 0.0f) {
             if (_frzTicksL < 0xFF) ++_frzTicksL;
         } else {
             _frzTicksL  = 0;
             _frzOffsetL = 0.0f;   // raw is authoritative again
         }
-        if (cmdR && dRawR == 0.0f) {
+        if (cmdR && _frzArmedR && dRawR == 0.0f) {
             if (_frzTicksR < 0xFF) ++_frzTicksR;
         } else {
             _frzTicksR  = 0;
