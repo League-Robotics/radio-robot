@@ -8,7 +8,7 @@ the live-view worker.
 Button                                                         Action
 ============================================================  =============================
 Sync Pose from Camera                                          Read tag-100 from aprilcam;
-                                                               send ``SI x_mm y_mm h_cdeg``
+                                                               send ``SI x y h`` (mm, mm, cdeg)
 Zero Encoders                                                  Send ``ZERO enc``
 STOP                                                           Send ``STOP``
 Clear Traces                                                   Call ``clear_traces_cb`` hook
@@ -97,7 +97,7 @@ _log = logging.getLogger(__name__)
 _PLAYFIELD_CAMERA_INDEX = 3
 
 # Stream interval for "STREAM on".
-_STREAM_ON_MS = 50
+_STREAM_ON_PERIOD = 50  # [ms]
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +215,7 @@ def build_panel(
     sync_btn = QPushButton("Sync Pose")
     sync_btn.setObjectName("ops_btn_sync_pose")
     sync_btn.setToolTip(
-        "Read tag-100 from aprilcam daemon; send SI x_mm y_mm h_cdeg to firmware.\n"
+        "Read tag-100 from aprilcam daemon; send SI x y h (mm, mm, cdeg) to firmware.\n"
         "Disabled in Sim mode (no camera)."
     )
     sync_btn.setEnabled(False)
@@ -441,7 +441,7 @@ class OpsController:
     # ------------------------------------------------------------------
 
     def on_sync_pose(self) -> None:
-        """Read tag-100 from the aprilcam daemon; send ``SI x_mm y_mm h_cdeg``."""
+        """Read tag-100 from the aprilcam daemon; send ``SI x y h`` (mm, mm, cdeg)."""
         transport = self._transport_ref.get("transport")
         if transport is None:
             self._log("[WARN] Sync Pose: not connected")
@@ -706,7 +706,7 @@ class OpsController:
             return
 
         if checked:
-            cmd = f"STREAM {_STREAM_ON_MS}"
+            cmd = f"STREAM {_STREAM_ON_PERIOD}"
             label = "STREAM: on"
         else:
             cmd = "STREAM 0"

@@ -813,11 +813,11 @@ def _build_main_window():  # type: ignore[return]
     )
     sim_err_otos_lin_drift = _make_sim_err_spin(
         col_left_layout, "sim_err_otos_lin_drift", "OTOS lin drift (mm/s):",
-        _sim_error_profile["otos_lin_drift_mms"], -50.0, 50.0, 2,
+        _sim_error_profile["otos_lin_drift"], -50.0, 50.0, 2,
     )
     sim_err_otos_yaw_drift = _make_sim_err_spin(
         col_left_layout, "sim_err_otos_yaw_drift", "OTOS yaw drift (deg/s):",
-        _sim_error_profile["otos_yaw_drift_degs"], -30.0, 30.0, 2,
+        _sim_error_profile["otos_yaw_drift"], -30.0, 30.0, 2,
     )
 
     # -- LEFT column: Geometry & Actuation -----------------------------------
@@ -830,21 +830,21 @@ def _build_main_window():  # type: ignore[return]
         col_left_layout, "sim_err_motor_offset_r", "motor offset R:",
         _sim_error_profile["motor_offset_r"], 0.0, 2.0, 3,
     )
-    # trackwidth_mm has NO safe zero default (PhysicsWorld::update() divides
+    # trackwidth has NO safe zero default (PhysicsWorld::update() divides
     # by it) — the spinbox range excludes 0 entirely, and the default is the
     # firmware config's trackwidth (128.0mm, what the sim seeds the plant
     # with at construction), not a sentinel. Every Apply unconditionally
     # sends this value; there is no "don't touch" case.
     sim_err_trackwidth = _make_sim_err_spin(
         col_left_layout, "sim_err_trackwidth", "trackwidth (mm):",
-        _sim_error_profile["trackwidth_mm"], 10.0, 500.0, 1,
+        _sim_error_profile["trackwidth"], 10.0, 500.0, 1,
     )
 
     # -- MIDDLE column: Encoder Report Error --------------------------------
     _add_sim_err_section_label(col_mid_layout, "Encoder Report Error")
-    sim_err_encoder_mm = _make_sim_err_spin(
+    sim_err_encoder = _make_sim_err_spin(
         col_mid_layout, "sim_err_encoder_mm", "encoder noise (mm):",
-        _sim_error_profile["encoder_noise_mm"], 0.0, 50.0, 2,
+        _sim_error_profile["encoder_noise"], 0.0, 50.0, 2,
     )
     sim_err_enc_scale_l = _make_sim_err_spin(
         col_mid_layout, "sim_err_enc_scale_l", "enc scale err L:",
@@ -889,7 +889,7 @@ def _build_main_window():  # type: ignore[return]
     def _on_sim_errors_apply() -> None:
         """Save the Sim Errors fields and, if connected to Sim, apply live."""
         profile = {
-            "encoder_noise_mm": sim_err_encoder_mm.value(),
+            "encoder_noise": sim_err_encoder.value(),
             "slip_turn_extra": sim_err_slip_turn.value(),
             "otos_linear_noise": sim_err_otos_linear.value(),
             "otos_yaw_noise": sim_err_otos_yaw.value(),
@@ -899,16 +899,16 @@ def _build_main_window():  # type: ignore[return]
             "body_lin_scrub": sim_err_body_lin_scrub.value(),
             "motor_offset_l": sim_err_motor_offset_l.value(),
             "motor_offset_r": sim_err_motor_offset_r.value(),
-            "trackwidth_mm": sim_err_trackwidth.value(),
+            "trackwidth": sim_err_trackwidth.value(),
             "otos_lin_scale_err": sim_err_otos_lin_scale.value(),
             "otos_ang_scale_err": sim_err_otos_ang_scale.value(),
-            "otos_lin_drift_mms": sim_err_otos_lin_drift.value(),
-            "otos_yaw_drift_degs": sim_err_otos_yaw_drift.value(),
+            "otos_lin_drift": sim_err_otos_lin_drift.value(),
+            "otos_yaw_drift": sim_err_otos_yaw_drift.value(),
         }
         sim_prefs.save_sim_error_profile(profile)
         _append_log(
             f"[INFO] Sim error profile saved "
-            f"(encoder_noise_mm={profile['encoder_noise_mm']}, "
+            f"(encoder_noise={profile['encoder_noise']}, "
             f"slip_turn_extra={profile['slip_turn_extra']}, "
             f"otos_linear_noise={profile['otos_linear_noise']}, "
             f"otos_yaw_noise={profile['otos_yaw_noise']}, "
@@ -935,7 +935,7 @@ def _build_main_window():  # type: ignore[return]
         correction and the plant's scrub cancel out. Every other knob is set
         to its neutral value (mmPerDeg/OTOS-scale calibrations are inert in
         sim — see the issue's investigated mapping); the three noise fields
-        (sim_err_encoder_mm, sim_err_otos_linear, sim_err_otos_yaw) are never
+        (sim_err_encoder, sim_err_otos_linear, sim_err_otos_yaw) are never
         touched.
 
         Ticket 073-003: the lookup/fallback (``get_robot_config()`` ->
@@ -965,7 +965,7 @@ def _build_main_window():  # type: ignore[return]
 
         _append_log(
             f"[INFO] Sim error profile set from inverse calibration "
-            f"(body_rot_scrub={rot_slip}, trackwidth_mm={tw}, all other "
+            f"(body_rot_scrub={rot_slip}, trackwidth={tw}, all other "
             f"knobs neutral; noise fields untouched)"
         )
 

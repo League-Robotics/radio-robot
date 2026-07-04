@@ -1036,7 +1036,7 @@ class TestSimTransportErrorProfile:
         from robot_radio.testgui import sim_prefs
 
         custom_profile = {
-            "encoder_noise_mm": 3.0,
+            "encoder_noise": 3.0,
             "slip_turn_extra": 0.4,
             "otos_linear_noise": 0.2,
             "otos_yaw_noise": 0.05,
@@ -1131,7 +1131,7 @@ class TestSimTransportErrorProfile:
         try:
             time.sleep(0.1)
             new_profile = {
-                "encoder_noise_mm": 7.0,
+                "encoder_noise": 7.0,
                 "slip_turn_extra": 0.9,
                 "otos_linear_noise": 0.15,
                 "otos_yaw_noise": 0.03,
@@ -1193,7 +1193,7 @@ class TestSimTransportErrorProfile:
         try:
             time.sleep(0.1)
             new_profile = {
-                "encoder_noise_mm": 1.0,
+                "encoder_noise": 1.0,
                 "slip_turn_extra": 0.33,
                 "otos_linear_noise": 0.11,
                 "otos_yaw_noise": 0.01,
@@ -1226,7 +1226,7 @@ class TestApplyProfileToSimSimsetString:
     def test_defaults_send_the_documented_noop_simset_string(self):
         """Every field at its DEFAULT_PROFILE value must reproduce today's
         no-op-until-opted-in behavior: multiplicative knobs at 1.0,
-        trackwidth_mm at the firmware config's 128.0, everything else
+        trackwidth at the firmware config's 128.0, everything else
         (additive/noise) at 0.0 — sent in chunks under the firmware's
         MAX_ARGS=10 per-line cap (pairs past it are silently dropped)."""
         from robot_radio.testgui.transport import SimTransport
@@ -1265,7 +1265,7 @@ class TestApplyProfileToSimSimsetString:
         fake_sim = FakeSim()
 
         profile = {
-            "encoder_noise_mm": 2.0,
+            "encoder_noise": 2.0,
             "slip_turn_extra": 0.42,
             "otos_linear_noise": 0.06,
             "otos_yaw_noise": 0.01,
@@ -1273,13 +1273,13 @@ class TestApplyProfileToSimSimsetString:
             "enc_scale_err_r": -0.02,
             "otos_lin_scale_err": 0.03,
             "otos_ang_scale_err": -0.03,
-            "otos_lin_drift_mms": 1.5,
-            "otos_yaw_drift_degs": -0.5,
+            "otos_lin_drift": 1.5,
+            "otos_yaw_drift": -0.5,
             "body_rot_scrub": 0.9,
             "body_lin_scrub": 0.95,
             "motor_offset_l": 1.05,
             "motor_offset_r": 0.98,
-            "trackwidth_mm": 152.0,
+            "trackwidth": 152.0,
         }
 
         t._apply_profile_to_sim(fake_sim, profile)
@@ -1310,7 +1310,7 @@ class TestApplyProfileToSimSimsetString:
         fake_sim = FakeSim()
 
         legacy_profile = {
-            "encoder_noise_mm": 3.0,
+            "encoder_noise": 3.0,
             "slip_turn_extra": 0.4,
             "otos_linear_noise": 0.2,
             "otos_yaw_noise": 0.05,

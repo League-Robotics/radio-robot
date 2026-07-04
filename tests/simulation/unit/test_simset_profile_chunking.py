@@ -29,7 +29,7 @@ from robot_radio.testgui.transport import (
 # Distinct, non-default value for every profile knob so a dropped pair is
 # unambiguous on readback (defaults could false-pass).
 _DISTINCT_PROFILE: dict = {
-    "encoder_noise_mm": 0.75,
+    "encoder_noise": 0.75,
     "slip_turn_extra": 0.13,       # legacy set_field_profile path, no SIMGET
     "otos_linear_noise": 0.031,
     "otos_yaw_noise": 0.032,
@@ -37,13 +37,13 @@ _DISTINCT_PROFILE: dict = {
     "enc_scale_err_r": 0.012,
     "otos_lin_scale_err": 0.021,
     "otos_ang_scale_err": 0.022,
-    "otos_lin_drift_mms": 1.5,
-    "otos_yaw_drift_degs": 2.5,
+    "otos_lin_drift": 1.5,
+    "otos_yaw_drift": 2.5,
     "body_rot_scrub": 0.91,
     "body_lin_scrub": 0.92,
     "motor_offset_l": 1.05,
     "motor_offset_r": 0.95,
-    "trackwidth_mm": 131.0,
+    "trackwidth": 131.0,
 }
 
 
@@ -66,8 +66,8 @@ def test_apply_profile_lands_every_simset_knob(sim):
         wire_key: _DISTINCT_PROFILE[key]
         for key, wire_key in sim_prefs.PROFILE_TO_SIMSET_KEY.items()
     }
-    expected_by_wire_key["encNoiseL"] = _DISTINCT_PROFILE["encoder_noise_mm"]
-    expected_by_wire_key["encNoiseR"] = _DISTINCT_PROFILE["encoder_noise_mm"]
+    expected_by_wire_key["encNoiseL"] = _DISTINCT_PROFILE["encoder_noise"]
+    expected_by_wire_key["encNoiseR"] = _DISTINCT_PROFILE["encoder_noise"]
 
     mismatches = []
     for wire_key, expected in expected_by_wire_key.items():

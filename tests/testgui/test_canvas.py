@@ -1160,8 +1160,8 @@ class TestSimFallbackOrigin:
 class TestResetAvatarHeading:
     """reset_avatar_to_center() must reset the avatar heading to 0° (east).
 
-    The Qt rotation formula is ``rotation_deg = 90 - degrees(yaw_rad)``.
-    For yaw_rad=0 (east), rotation_deg = 90.0.  The reset must leave
+    The Qt rotation formula is ``rotation = 90 - degrees(yaw_rad)``.
+    For yaw_rad=0 (east), rotation = 90.0.  The reset must leave
     marker_group.rotation() == 90.0.
     """
 

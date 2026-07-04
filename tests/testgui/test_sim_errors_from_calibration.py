@@ -176,9 +176,9 @@ def test_nocal_robot_yields_zero_error_panel(
     # noise sentinels) must be persisted.
     saved = sim_prefs.load_sim_error_profile()
     assert saved["body_rot_scrub"] == pytest.approx(1.0)
-    assert saved["trackwidth_mm"] == pytest.approx(128.0)
+    assert saved["trackwidth"] == pytest.approx(128.0)
     assert saved["slip_turn_extra"] == pytest.approx(0.0)
-    assert saved["encoder_noise_mm"] == pytest.approx(
+    assert saved["encoder_noise"] == pytest.approx(
         _NOISE_SENTINELS["sim_err_encoder_mm"]
     )
 

@@ -574,13 +574,13 @@ class TestSetAvatarPose:
         )
 
     def test_set_avatar_pose_rotation(self, canvas_ctrl):
-        """set_avatar_pose applies rotation_deg = 90 - degrees(yaw_rad)."""
-        yaw = math.pi / 2  # 90 degrees → rotation_deg = 90 - 90 = 0
+        """set_avatar_pose applies rotation = 90 - degrees(yaw_rad)."""
+        yaw = math.pi / 2  # 90 degrees → rotation = 90 - 90 = 0
         canvas_ctrl.set_avatar_pose(0.0, 0.0, yaw)
         expected_deg = 90.0 - math.degrees(yaw)
         actual_deg = canvas_ctrl._marker_group.rotation()
         assert actual_deg == pytest.approx(expected_deg, abs=0.01), (
-            f"rotation_deg: expected {expected_deg:.2f}, got {actual_deg:.2f}"
+            f"rotation: expected {expected_deg:.2f}, got {actual_deg:.2f}"
         )
 
     def test_set_avatar_pose_position(self, canvas_ctrl):

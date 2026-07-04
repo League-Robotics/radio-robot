@@ -95,13 +95,13 @@ def _from_calibration_profile() -> dict:
             "body_lin_scrub": 1.0,
             "motor_offset_l": 1.0,
             "motor_offset_r": 1.0,
-            "trackwidth_mm": trackwidth,
+            "trackwidth": trackwidth,
             "enc_scale_err_l": 0.0,
             "enc_scale_err_r": 0.0,
             "otos_lin_scale_err": 0.0,
             "otos_ang_scale_err": 0.0,
-            "otos_lin_drift_mms": 0.0,
-            "otos_yaw_drift_degs": 0.0,
+            "otos_lin_drift": 0.0,
+            "otos_yaw_drift": 0.0,
         }
     )
     return profile
@@ -118,8 +118,8 @@ def _apply_profile_via_simset(sim, profile: dict) -> None:
         (wire_key, profile[key])
         for key, wire_key in sim_prefs.PROFILE_TO_SIMSET_KEY.items()
     ]
-    pairs.append(("encNoiseL", profile["encoder_noise_mm"]))
-    pairs.append(("encNoiseR", profile["encoder_noise_mm"]))
+    pairs.append(("encNoiseL", profile["encoder_noise"]))
+    pairs.append(("encNoiseR", profile["encoder_noise"]))
 
     for i in range(0, len(pairs), _SIMSET_MAX_PAIRS_PER_LINE):
         chunk = pairs[i:i + _SIMSET_MAX_PAIRS_PER_LINE]
@@ -177,7 +177,7 @@ def test_rt_90deg_with_inverse_calibration_profile_from_active_robot_config(sim)
     assert abs(true_h_deg - 90.0) < _NEAR_90_TOL_DEG, (
         f"RT 9000 with the inverse-calibration profile "
         f"(body_rot_scrub={profile['body_rot_scrub']}, "
-        f"trackwidth_mm={profile['trackwidth_mm']}) should land near 90° "
+        f"trackwidth={profile['trackwidth']}) should land near 90° "
         f"true (closing the ideal-plant over-rotation gap); got "
         f"{true_h_deg:.2f}°"
     )

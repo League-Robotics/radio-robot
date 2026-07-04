@@ -74,7 +74,7 @@ SimTransport()
 
     A configurable field error profile is applied on connect, loaded via
     ``sim_prefs.load_sim_error_profile()`` (defaults: slip_turn_extra=0.26,
-    otos_linear_noise=0.05, encoder_noise_mm=0.0, otos_yaw_noise=0.0 —
+    otos_linear_noise=0.05, encoder_noise=0.0, otos_yaw_noise=0.0 —
     matching the historical sim_field_profile fixture from
     tests/conftest.py). ``apply_error_profile(profile)`` re-applies live to
     a connected sim (the Sim Errors panel's Apply button).
@@ -1114,7 +1114,7 @@ class SimTransport(Transport):
         registry (``sim_prefs.PROFILE_TO_SIMSET_KEY``) plus the two
         historical knobs that DO have ``SIMSET`` keys
         (``otos_linear_noise`` -> ``otosLinNoise``, ``otos_yaw_noise`` ->
-        ``otosYawNoise``) and ``encoder_noise_mm``, which fans out to two
+        ``otosYawNoise``) and ``encoder_noise``, which fans out to two
         wire keys (``encNoiseL``/``encNoiseR``, both set to the same value —
         matching the historical ``sim.set_encoder_noise(0, ...)`` +
         ``sim.set_encoder_noise(1, ...)`` pair).
@@ -1152,10 +1152,10 @@ class SimTransport(Transport):
         """
         defaults = sim_prefs.DEFAULT_PROFILE
         slip_turn_extra = profile.get("slip_turn_extra", defaults["slip_turn_extra"])
-        encoder_noise = profile.get("encoder_noise_mm", defaults["encoder_noise_mm"])  # [mm]
+        encoder_noise = profile.get("encoder_noise", defaults["encoder_noise"])  # [mm]
 
         # Build the SIMSET pairs: every 1:1-mapped key from the map, plus
-        # encoder_noise_mm's two-key fan-out.
+        # encoder_noise's two-key fan-out.
         pairs = [
             (wire_key, profile.get(key, defaults[key]))
             for key, wire_key in sim_prefs.PROFILE_TO_SIMSET_KEY.items()
@@ -1190,7 +1190,7 @@ class SimTransport(Transport):
         self._error_profile = dict(profile)
         self._log(
             f"[INFO] Sim error profile applied "
-            f"(encoder_noise_mm={encoder_noise}, "
+            f"(encoder_noise={encoder_noise}, "
             f"slip_turn_extra={slip_turn_extra}, "
             f"otos_linear_noise={profile.get('otos_linear_noise', defaults['otos_linear_noise'])}, "
             f"otos_yaw_noise={profile.get('otos_yaw_noise', defaults['otos_yaw_noise'])})"
