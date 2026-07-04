@@ -40,22 +40,38 @@ MODES = {
 }
 
 
-def run_mode(lab: Lab, mode: str, cycles: int) -> int:
-    print(f"\n=== {mode.upper()} mode: {cycles} reversal cycles "
-          f"({'production immediate flip' if mode == 'latch' else '50 ms zero-dwell flip'}) ===")
-    for cmd in SETUP + MODES[mode]:
-        lab.send(cmd)
-        lab.pump(0.5)
-    lab.send(f"run reset {cycles}")
-    lab.pump(cycles * 1.5 + 60, ("RESULT ",))
-    lab.send("heal")
-    lab.pump(30, ("(heal-end)",))
+def last_result(lab: Lab) -> int:
     # last RESULT line is in the log; re-parse from the log file tail
     for line in reversed(open(lab.log.name).read().splitlines()):
         m = re.search(r"RESULT reset n=\d+ ep=(\d+),(\d+)", line)
         if m:
             return int(m.group(1)) + int(m.group(2))
     return -1
+
+
+def run_mode(lab: Lab, mode: str, cycles: int) -> int:
+    print(f"\n=== {mode.upper()} mode: {cycles} reversal cycles "
+          f"({'production immediate flip' if mode == 'latch' else '50 ms zero-dwell flip'}) ===")
+    for cmd in SETUP + MODES[mode]:
+        lab.send(cmd)
+        lab.pump(0.5)
+    # Susceptibility is state-dependent: after a long rest the first block
+    # is often clean. LATCH mode self-warms — up to 3 blocks, stopping at
+    # the first one that locks up. FIXED mode runs once (its point is the
+    # absence of lockups on a WARM system, right after latch mode).
+    blocks = 3 if mode == "latch" else 1
+    total = 0
+    for b in range(blocks):
+        if b:
+            print(f"--- no lockups yet (cold state) — warm-up block {b + 1} ---")
+        lab.send(f"run reset {cycles}")
+        lab.pump(cycles * 1.5 + 60, ("RESULT ",))
+        total = last_result(lab)
+        if total != 0:
+            break
+    lab.send("heal")
+    lab.pump(30, ("(heal-end)",))
+    return total
 
 
 def main() -> int:
@@ -78,7 +94,8 @@ def main() -> int:
         if m == "latch":
             verdict = (f"LOCKED UP {n} times in {args.cycles} cycles"
                        if n > 0 else
-                       "0 latches — motors were in a cold state; run again")
+                       "0 latches in 3 warm-up blocks — unexpected; check that "
+                       "the latch-prone motors are on M1/M2")
         else:
             verdict = (f"0 latches in {args.cycles} cycles — fix holds"
                        if n == 0 else
