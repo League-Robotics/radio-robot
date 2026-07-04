@@ -531,8 +531,8 @@ class FakeSim:
     def __init__(self) -> None:
         self.sent: list[str] = []
         self._async_evts: list[str] = []
-        self._pose_x_mm: float = 100.0
-        self._pose_y_mm: float = 200.0
+        self._pose_x: float = 100.0
+        self._pose_y: float = 200.0
         self._pose_h_rad: float = 0.5
         self._field_profile_applied: bool = False
         self._otos_noise_set: bool = False
@@ -573,18 +573,18 @@ class FakeSim:
         self._t += total_ms
 
     def get_true_pose(self) -> tuple[float, float, float]:
-        return (self._pose_x_mm, self._pose_y_mm, self._pose_h_rad)
+        return (self._pose_x, self._pose_y, self._pose_h_rad)
 
-    def set_true_pose(self, x_mm: float, y_mm: float, h_rad: float) -> None:
-        self._pose_x_mm = x_mm
-        self._pose_y_mm = y_mm
+    def set_true_pose(self, x: float, y: float, h_rad: float) -> None:
+        self._pose_x = x
+        self._pose_y = y
         self._pose_h_rad = h_rad
 
-    def set_true_wheel_travel(self, enc_l_mm: float, enc_r_mm: float) -> None:
-        self._true_enc = (enc_l_mm, enc_r_mm)
+    def set_true_wheel_travel(self, enc_l: float, enc_r: float) -> None:
+        self._true_enc = (enc_l, enc_r)
 
-    def set_true_velocity(self, vel_l_mms: float, vel_r_mms: float) -> None:
-        self._true_vel = (vel_l_mms, vel_r_mms)
+    def set_true_velocity(self, vel_l: float, vel_r: float) -> None:
+        self._true_vel = (vel_l, vel_r)
 
     def set_field_profile(self, slip_turn_extra: float = 0.26,
                           fuse_otos: bool = True) -> None:
@@ -598,8 +598,8 @@ class FakeSim:
     def set_otos_yaw_noise(self, sigma_fraction: float) -> None:
         self.last_otos_yaw_noise = sigma_fraction
 
-    def set_encoder_noise(self, side: int, sigma_mm: float) -> None:
-        self.last_encoder_noise[side] = sigma_mm
+    def set_encoder_noise(self, side: int, sigma: float) -> None:
+        self.last_encoder_noise[side] = sigma
 
     def inject_tlm(self, line: str) -> None:
         """Add a TLM line to the async event queue."""
@@ -1739,8 +1739,8 @@ class TestSimTransportTruthDelivery:
 
         fake_sim = FakeSim()
         # Set a known true pose (mm units from sim).
-        fake_sim._pose_x_mm = 1000.0   # 100.0 cm
-        fake_sim._pose_y_mm = 500.0    # 50.0 cm
+        fake_sim._pose_x = 1000.0   # 100.0 cm
+        fake_sim._pose_y = 500.0    # 50.0 cm
         fake_sim._pose_h_rad = 1.2
 
         fake_path = MagicMock(spec=pathlib.Path)

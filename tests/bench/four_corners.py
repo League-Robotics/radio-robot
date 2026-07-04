@@ -114,7 +114,7 @@ def main():
 
     def rt(deg):
         proto.send(f"RT {int(round(deg * 100))} #1", 200)
-        proto.wait_for_evt_done("RT", timeout_ms=12000, corr_id="1")
+        proto.wait_for_evt_done("RT", timeout=12000, corr_id="1")
         time.sleep(0.2); stop()
 
     def tgt_yaw(rx, ry, tx, ty):

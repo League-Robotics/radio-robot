@@ -86,7 +86,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def world_to_robot(x_cm, y_cm, yaw_rad, tx_cm, ty_cm) -> tuple[float, float]:
-    """World target → robot-relative (fwd_mm, left_mm).
+    """World target → robot-relative (fwd, left).
 
     Plain rigid-body projection.  ``yaw_rad`` is the robot's FORWARD heading in
     world — the camera's tag orientation directly (0 = east, CCW+), with NO
@@ -106,15 +106,15 @@ def world_to_robot(x_cm, y_cm, yaw_rad, tx_cm, ty_cm) -> tuple[float, float]:
     return fwd * 10.0, lft * 10.0
 
 
-def robot_to_world(fwd_mm, lft_mm, rx_cm, ry_cm, yaw_rad) -> tuple[float, float]:
-    """Robot-relative (fwd_mm, left_mm) displacement → world (x_cm, y_cm).
+def robot_to_world(fwd, lft, rx_cm, ry_cm, yaw_rad) -> tuple[float, float]:
+    """Robot-relative (fwd, left) displacement → world (x_cm, y_cm).
 
     Inverse rotation of world_to_robot (a proper rotation, transpose-inverse):
         dx = fwd*cosH - lft*sinH
         dy = fwd*sinH + lft*cosH
     """
-    dx = fwd_mm * math.cos(yaw_rad) - lft_mm * math.sin(yaw_rad)
-    dy = fwd_mm * math.sin(yaw_rad) + lft_mm * math.cos(yaw_rad)
+    dx = fwd * math.cos(yaw_rad) - lft * math.sin(yaw_rad)
+    dy = fwd * math.sin(yaw_rad) + lft * math.cos(yaw_rad)
     return rx_cm + dx / 10.0, ry_cm + dy / 10.0
 
 
@@ -205,7 +205,7 @@ def pick_random_rect(rects, ry, rng) -> tuple[str, float, float]:
     return rng.choice(cands)
 
 
-def simulate(fwd_mm, lft_mm, speed, rx, ry, yaw, half_x, half_y, tx, ty, arrive):
+def simulate(fwd, lft, speed, rx, ry, yaw, half_x, half_y, tx, ty, arrive):
     """Run the G in the firmware sim; return (ok, reason, path_world, final, err)."""
     from robot_radio.testkit import make_target
 
@@ -217,7 +217,7 @@ def simulate(fwd_mm, lft_mm, speed, rx, ry, yaw, half_x, half_y, tx, ty, arrive)
         path.append(robot_to_world(s.x, s.y, rx, ry, yaw))
 
     try:
-        sim.robot.go_to(int(round(fwd_mm)), int(round(lft_mm)), speed,
+        sim.robot.go_to(int(round(fwd)), int(round(lft)), speed,
                         on_tick=on_tick, timeout_s=30.0)
     finally:
         try:
@@ -276,7 +276,7 @@ def drive_to_target(robot, pf, pose_src, tx, ty, *, speed=160, arrive=8.0,
     #   dTheta = ((dR - dL) / trackwidthMm) * rotationalSlip
     # trackwidth is now the real 128mm physical track; rotational_slip absorbs the
     # residual wheel scrub.  The encoder heading is still noisier than the OTOS.
-    TRACKWIDTH_MM = 128.0                          # tovez.json geometry.trackwidth (physical)
+    TRACKWIDTH = 128.0                          # tovez.json geometry.trackwidth (physical)
     ROT_SLIP = 0.92                                # tovez.json calibration.rotational_slip
     try:
         robot._proto.stream_fields("enc,pose,otos")    # ensure all sources stream
@@ -319,7 +319,7 @@ def drive_to_target(robot, pf, pose_src, tx, ty, *, speed=160, arrive=8.0,
                     dR = enc[1] - enc_state["eR"]
                     enc_state["eL"], enc_state["eR"] = enc[0], enc[1]
                     dC = (dL + dR) / 2.0                   # mm
-                    dTh = ((dR - dL) / TRACKWIDTH_MM) * ROT_SLIP   # rad, CCW+ (firmware calc)
+                    dTh = ((dR - dL) / TRACKWIDTH) * ROT_SLIP   # rad, CCW+ (firmware calc)
                     th_mid = enc_state["th"] + dTh / 2.0
                     enc_state["x"] += (dC / 10.0) * math.cos(th_mid)
                     enc_state["y"] += (dC / 10.0) * math.sin(th_mid)
@@ -348,12 +348,12 @@ def drive_to_target(robot, pf, pose_src, tx, ty, *, speed=160, arrive=8.0,
             p(f"[drive] pass {attempt}: within tol ({dist:.1f}cm ≤ {arrive:.0f}cm) — arrived.")
             break
 
-        fwd_mm, lft_mm = world_to_robot(rx, ry, yaw, tx, ty)
+        fwd, lft = world_to_robot(rx, ry, yaw, tx, ty)
         p(f"[drive] pass {attempt}: @ ({rx:+.1f},{ry:+.1f}) yaw={math.degrees(yaw):+.0f}°  "
-          f"{dist:.1f}cm out → G fwd={fwd_mm:+.0f} left={lft_mm:+.0f} @ {speed}mm/s")
+          f"{dist:.1f}cm out → G fwd={fwd:+.0f} left={lft:+.0f} @ {speed}mm/s")
 
         ok, reason, _path, _sfinal, serr = simulate(
-            fwd_mm, lft_mm, speed, rx, ry, yaw, field_x, field_y, tx, ty, arrive,
+            fwd, lft, speed, rx, ry, yaw, field_x, field_y, tx, ty, arrive,
         )
         if not ok:
             p(f"[drive]   SIM FAIL: {reason} — NOT driving this leg.")
@@ -373,7 +373,7 @@ def drive_to_target(robot, pf, pose_src, tx, ty, *, speed=160, arrive=8.0,
             enc0 = robot.refresh().encoders or (0, 0)
 
         timeout_s = dist * 10.0 / max(speed, 1) + 6.0
-        _el, _er, outcome = robot.go_to(int(round(fwd_mm)), int(round(lft_mm)),
+        _el, _er, outcome = robot.go_to(int(round(fwd)), int(round(lft)),
                                         speed, on_tick=on_tick, timeout_s=timeout_s)
         p(f"[drive]   leg outcome={outcome}")
         if aborted["hit"]:

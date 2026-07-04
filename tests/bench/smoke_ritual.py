@@ -74,13 +74,13 @@ def _result(step: int, name: str, status: str, note: str = "") -> None:
     print(f"  [{tick}] Check {step}: {name} -- {status}{extra}")
 
 
-def _wrap_deg(a: float) -> float:
+def _wrap(a: float) -> float:
     """Wrap angle (degrees) to [-180, 180]."""
     return math.degrees(math.atan2(math.sin(math.radians(a)),
                                    math.cos(math.radians(a))))
 
 
-def _otos_heading_deg(proto) -> float | None:
+def _otos_heading(proto) -> float | None:
     """Read fused-pose heading in degrees via SNAP (pose=x,y,h_cdeg).
 
     The current firmware emits the fused EKF pose as ``pose=`` in the TLM
@@ -93,7 +93,7 @@ def _otos_heading_deg(proto) -> float | None:
     return frame.pose[2] / 100.0  # cdeg -> deg
 
 
-def _otos_pos_mm(proto) -> tuple[int, int] | None:
+def _otos_pos(proto) -> tuple[int, int] | None:
     """Read fused-pose x,y position in mm via SNAP."""
     frame = proto.snap()
     if frame is None or frame.pose is None:
@@ -101,7 +101,7 @@ def _otos_pos_mm(proto) -> tuple[int, int] | None:
     return frame.pose[0], frame.pose[1]
 
 
-def _wait_motion_done(proto, timeout_ms: int, min_ms: int = 400) -> str:
+def _wait_motion_done(proto, timeout: int, min: int = 400) -> str:
     """Wait for the active motion verb to finish, by polling SNAP 'mode'.
 
     Relay-safe completion detector.  The radio bridge drops async ``EVT done``
@@ -112,11 +112,11 @@ def _wait_motion_done(proto, timeout_ms: int, min_ms: int = 400) -> str:
     ``wait_for_evt_done`` contract the checks compare against).
 
     A fast move that returns to idle before the first poll is handled by the
-    ``min_ms`` floor: if no active frame was ever seen, require idle to persist
-    past ``min_ms`` before declaring done.
+    ``min`` floor: if no active frame was ever seen, require idle to persist
+    past ``min`` before declaring done.
     """
     t0 = time.time()
-    deadline = t0 + timeout_ms / 1000.0
+    deadline = t0 + timeout / 1000.0
     saw_active = False
     idle_streak = 0
     while time.time() < deadline:
@@ -126,7 +126,7 @@ def _wait_motion_done(proto, timeout_ms: int, min_ms: int = 400) -> str:
             saw_active = True
             idle_streak = 0
         elif mode == "I":
-            if saw_active or (time.time() - t0) * 1000.0 >= min_ms:
+            if saw_active or (time.time() - t0) * 1000.0 >= min:
                 idle_streak += 1
                 if idle_streak >= (2 if saw_active else 3):
                     return "done"
@@ -148,7 +148,7 @@ def _keepalive_thread(proto: NezhaProtocol, stop: list[bool]) -> None:
 def check1_safety_check(proto: NezhaProtocol) -> str:
     """SAFE query must return 'on'."""
     _banner("Check 1: Safety check (SAFE query)")
-    resp = proto.send("SAFE", read_ms=400)
+    resp = proto.send("SAFE", read_timeout=400)
     for line in resp.get("responses", []):
         r = parse_response(line)
         if r and r.tag == "OK" and "safety" in r.tokens:
@@ -182,9 +182,9 @@ def check2_turn_closure(robot) -> str:
     _banner("Check 2: RT x4 closure (4x relative +90)")
     RT_STEP_CDEG = 9000    # +90 deg relative (CCW)
     RT_TIMEOUT = 15_000    # ms per turn
-    CLOSURE_TOL_DEG = 12.0
+    CLOSURE_TOL = 12.0
 
-    h0 = _otos_heading_deg(proto)
+    h0 = _otos_heading(proto)
     if h0 is None:
         print("  Cannot read starting heading -- is fused pose reporting?")
         return STEP_FAIL
@@ -194,8 +194,8 @@ def check2_turn_closure(robot) -> str:
         with BenchRun(robot, max_seconds=90) as _bench:
             for i in range(4):
                 print(f"  RT {RT_STEP_CDEG} cdeg (relative +90, turn {i+1}/4) ...")
-                proto.send(f"RT {RT_STEP_CDEG} #{i + 1}", read_ms=200)
-                outcome = _wait_motion_done(proto, timeout_ms=RT_TIMEOUT)
+                proto.send(f"RT {RT_STEP_CDEG} #{i + 1}", read_timeout=200)
+                outcome = _wait_motion_done(proto, timeout=RT_TIMEOUT)
                 if outcome != "done":
                     print(f"  RT {i+1} outcome: {outcome} (expected 'done')")
                     return STEP_FAIL
@@ -204,17 +204,17 @@ def check2_turn_closure(robot) -> str:
         print(f"  BenchRun aborted: {exc}")
         return STEP_FAIL
 
-    h1 = _otos_heading_deg(proto)
+    h1 = _otos_heading(proto)
     if h1 is None:
         print("  Cannot read final heading.")
         return STEP_FAIL
     print(f"  Final heading:    {h1:.1f} deg")
 
-    delta = abs(_wrap_deg(h1 - h0))
-    print(f"  Heading closure error: {delta:.1f} deg (tolerance: {CLOSURE_TOL_DEG} deg)")
-    if delta <= CLOSURE_TOL_DEG:
+    delta = abs(_wrap(h1 - h0))
+    print(f"  Heading closure error: {delta:.1f} deg (tolerance: {CLOSURE_TOL} deg)")
+    if delta <= CLOSURE_TOL:
         return STEP_PASS
-    print(f"  FAIL -- closure error {delta:.1f} deg exceeds {CLOSURE_TOL_DEG} deg")
+    print(f"  FAIL -- closure error {delta:.1f} deg exceeds {CLOSURE_TOL} deg")
     return STEP_FAIL
 
 
@@ -223,16 +223,16 @@ def check2_turn_closure(robot) -> str:
 # ---------------------------------------------------------------------------
 
 # 200 mm square via robot-relative G forward legs + relative RT +90 turns.
-# G is ROBOT-RELATIVE (G <forward_mm> <left_mm> <speed>), so each leg drives
-# forward SQUARE_SIDE_MM and a relative RT +90 reorients for the next side;
+# G is ROBOT-RELATIVE (G <forward> <left> <speed>), so each leg drives
+# forward SQUARE_SIDE and a relative RT +90 reorients for the next side;
 # four legs + three turns trace a square back to the origin.  20 cm sides keep
 # the path well inside the playfield (corners reach ~283 mm from start).
-SQUARE_SIDE_MM = 200     # 20 cm sides
+SQUARE_SIDE = 200     # 20 cm sides
 SQUARE_SPEED = 150       # mm/s
 LEG_TIMEOUT = 20_000     # ms per forward leg
 TURN_TIMEOUT = 15_000    # ms per corner turn
-SQUARE_GEOFENCE_MM = 400  # abort if displacement from origin exceeds this (ideal corner ~283 mm)
-SQUARE_ARRIVE_MM = 120   # fused-pose return error tolerance at origin
+SQUARE_GEOFENCE = 400  # abort if displacement from origin exceeds this (ideal corner ~283 mm)
+SQUARE_ARRIVE = 120   # fused-pose return error tolerance at origin
 
 
 def check3_g_square(robot) -> str:
@@ -250,36 +250,36 @@ def check3_g_square(robot) -> str:
     time.sleep(0.3)
     print("  Fused pose zeroed at start position (origin).")
 
-    def _disp_mm() -> float | None:
-        p = _otos_pos_mm(proto)
+    def _disp() -> float | None:
+        p = _otos_pos(proto)
         return None if p is None else math.hypot(p[0], p[1])
 
     try:
         with BenchRun(robot, max_seconds=120) as _bench:
             for i in range(4):
-                print(f"  leg {i+1}/4: G {SQUARE_SIDE_MM} 0 {SQUARE_SPEED} "
-                      f"(forward {SQUARE_SIDE_MM} mm) ...")
-                proto.send(f"G {SQUARE_SIDE_MM} 0 {SQUARE_SPEED} #{i + 1}", read_ms=300)
-                outcome = _wait_motion_done(proto, timeout_ms=LEG_TIMEOUT)
-                p = _otos_pos_mm(proto)
-                h = _otos_heading_deg(proto)
+                print(f"  leg {i+1}/4: G {SQUARE_SIDE} 0 {SQUARE_SPEED} "
+                      f"(forward {SQUARE_SIDE} mm) ...")
+                proto.send(f"G {SQUARE_SIDE} 0 {SQUARE_SPEED} #{i + 1}", read_timeout=300)
+                outcome = _wait_motion_done(proto, timeout=LEG_TIMEOUT)
+                p = _otos_pos(proto)
+                h = _otos_heading(proto)
                 d = math.hypot(p[0], p[1]) if p is not None else None
                 if p is not None and h is not None:
                     print(f"    leg {i+1} end: x={p[0]:+d} y={p[1]:+d} mm  "
                           f"h={h:+.0f} deg  disp={d:.0f} mm")
-                if d is not None and d > SQUARE_GEOFENCE_MM:
-                    print(f"  GEOFENCE -- {d:.0f} mm from origin > {SQUARE_GEOFENCE_MM} mm; aborting")
+                if d is not None and d > SQUARE_GEOFENCE:
+                    print(f"  GEOFENCE -- {d:.0f} mm from origin > {SQUARE_GEOFENCE} mm; aborting")
                     return STEP_FAIL
                 if outcome != "done":
                     print(f"  leg {i+1}: outcome={outcome} (expected 'done')")
                     return STEP_FAIL
                 if i < 3:   # reorient for the next side (no turn after the last leg)
                     print("  RT 9000 (relative +90) ...")
-                    proto.send(f"RT 9000 #{i + 1}", read_ms=200)
-                    if _wait_motion_done(proto, timeout_ms=TURN_TIMEOUT) != "done":
+                    proto.send(f"RT 9000 #{i + 1}", read_timeout=200)
+                    if _wait_motion_done(proto, timeout=TURN_TIMEOUT) != "done":
                         print(f"  corner turn {i+1}: not done")
                         return STEP_FAIL
-                    th = _otos_heading_deg(proto)
+                    th = _otos_heading(proto)
                     if th is not None:
                         print(f"    turn {i+1} end: h={th:+.0f} deg")
                 time.sleep(0.3)
@@ -288,18 +288,18 @@ def check3_g_square(robot) -> str:
         return STEP_FAIL
 
     # Check fused position back at origin.
-    pos = _otos_pos_mm(proto)
+    pos = _otos_pos(proto)
     if pos is None:
         print("  Cannot read final position.")
         return STEP_FAIL
 
-    err_mm = math.hypot(pos[0], pos[1])
+    err = math.hypot(pos[0], pos[1])
     print(f"  Final fused position: x={pos[0]} mm, y={pos[1]} mm")
-    print(f"  Return error from origin: {err_mm:.0f} mm"
-          f"  (tolerance: {SQUARE_ARRIVE_MM} mm)")
-    if err_mm <= SQUARE_ARRIVE_MM:
+    print(f"  Return error from origin: {err:.0f} mm"
+          f"  (tolerance: {SQUARE_ARRIVE} mm)")
+    if err <= SQUARE_ARRIVE:
         return STEP_PASS
-    print(f"  FAIL -- return error {err_mm:.0f} mm > {SQUARE_ARRIVE_MM} mm")
+    print(f"  FAIL -- return error {err:.0f} mm > {SQUARE_ARRIVE} mm")
     return STEP_FAIL
 
 
@@ -322,9 +322,9 @@ def check4_lift_test(robot) -> str:
     proto = robot._proto
     _banner("Check 4: Lift test (EVT otos lost)")
 
-    EVT_WAIT_MS = 5_000   # time to wait for EVT otos lost after lift
-    SPIN_CHECK_MS = 2_000  # duration to check heading stability after replace
-    SPIN_TOL_DEG = 30.0   # heading drift threshold for 'no spin'
+    EVT_WAIT = 5_000   # time to wait for EVT otos lost after lift
+    SPIN_CHECK = 2_000  # duration to check heading stability after replace
+    SPIN_TOL = 30.0   # heading drift threshold for 'no spin'
 
     try:
         with BenchRun(robot, max_seconds=60) as _bench:
@@ -337,9 +337,9 @@ def check4_lift_test(robot) -> str:
 
             # Poll for 'EVT otos lost' in the next 5 s.
             otos_lost_seen = False
-            deadline = time.time() + EVT_WAIT_MS / 1000.0
+            deadline = time.time() + EVT_WAIT / 1000.0
             while time.time() < deadline:
-                lines = proto.read_lines(duration_ms=200)
+                lines = proto.read_lines(duration=200)
                 for ln in lines:
                     if "otos lost" in ln or "EVT otos lost" in ln:
                         otos_lost_seen = True
@@ -357,22 +357,22 @@ def check4_lift_test(robot) -> str:
             time.sleep(1.0)  # brief settle
 
             # Check heading stability (no spin on placement).
-            h0 = _otos_heading_deg(proto)
+            h0 = _otos_heading(proto)
             if h0 is None:
                 print("  Cannot read heading after replace -- PASS assumed (no spin detected).")
                 return STEP_PASS
 
-            time.sleep(SPIN_CHECK_MS / 1000.0)
+            time.sleep(SPIN_CHECK / 1000.0)
 
-            h1 = _otos_heading_deg(proto)
+            h1 = _otos_heading(proto)
             if h1 is None:
                 print("  Cannot read heading after settle -- PASS assumed.")
                 return STEP_PASS
 
-            drift = abs(_wrap_deg(h1 - h0))
+            drift = abs(_wrap(h1 - h0))
             print(f"  Heading before/after settle: {h0:.1f} / {h1:.1f} deg"
-                  f"  drift={drift:.1f} deg (tolerance: {SPIN_TOL_DEG} deg)")
-            if drift <= SPIN_TOL_DEG:
+                  f"  drift={drift:.1f} deg (tolerance: {SPIN_TOL} deg)")
+            if drift <= SPIN_TOL:
                 print("  No spin on placement detected.")
                 return STEP_PASS
             print(f"  FAIL -- heading drifted {drift:.1f} deg after re-placement "
@@ -397,20 +397,20 @@ def check5_tlm_drop_rate(proto: NezhaProtocol) -> str:
     """
     _banner("Check 5: TLM drop-rate (STREAM 40 for 10 s)")
 
-    STREAM_PERIOD_MS = 40   # 25 Hz
+    STREAM_PERIOD = 40   # 25 Hz
     MEASURE_SECS = 10.0
-    EXPECTED_FRAMES = int(MEASURE_SECS * 1000.0 / STREAM_PERIOD_MS)
+    EXPECTED_FRAMES = int(MEASURE_SECS * 1000.0 / STREAM_PERIOD)
     MIN_FRAMES = int(EXPECTED_FRAMES * 0.80)   # 80% threshold
 
-    proto.stream(STREAM_PERIOD_MS)
+    proto.stream(STREAM_PERIOD)
     time.sleep(0.15)  # let first frames arrive
-    print(f"  STREAM {STREAM_PERIOD_MS} ms enabled. Counting for {MEASURE_SECS:.0f} s ...")
+    print(f"  STREAM {STREAM_PERIOD} ms enabled. Counting for {MEASURE_SECS:.0f} s ...")
 
     tlm_count = 0
     t_start = time.monotonic()
     t_end = t_start + MEASURE_SECS
     while time.monotonic() < t_end:
-        for ln in proto.read_lines(duration_ms=200):
+        for ln in proto.read_lines(duration=200):
             if parse_tlm(ln) is not None:
                 tlm_count += 1
 
@@ -421,7 +421,7 @@ def check5_tlm_drop_rate(proto: NezhaProtocol) -> str:
     print(f"  TLM frames received: {tlm_count} over {elapsed:.1f} s"
           f"  (observed rate: {obs_rate:.1f} Hz)")
     print(f"  Expected >= {MIN_FRAMES} frames ({EXPECTED_FRAMES} ideal at"
-          f" {1000.0/STREAM_PERIOD_MS:.0f} Hz x 0.80)")
+          f" {1000.0/STREAM_PERIOD:.0f} Hz x 0.80)")
 
     if tlm_count >= MIN_FRAMES:
         return STEP_PASS

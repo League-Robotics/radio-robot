@@ -86,13 +86,13 @@ class TestCalibrationMath:
 
     def test_dist2d_mm_converts_cm_to_mm(self) -> None:
         """dist2d_mm with 10 cm apart in x → 100 mm."""
-        result = cal_mod.dist2d_mm((0.0, 0.0), (10.0, 0.0))
+        result = cal_mod.dist2d((0.0, 0.0), (10.0, 0.0))
         assert result is not None
         assert abs(result - 100.0) < 1e-9
 
     def test_dist2d_mm_none_if_either_missing(self) -> None:
-        assert cal_mod.dist2d_mm(None, (1.0, 1.0)) is None
-        assert cal_mod.dist2d_mm((1.0, 1.0), None) is None
+        assert cal_mod.dist2d(None, (1.0, 1.0)) is None
+        assert cal_mod.dist2d((1.0, 1.0), None) is None
 
 
 # ---------------------------------------------------------------------------

@@ -69,7 +69,7 @@ class _Cam:
                 out.append((float(t.world_xy[0]), float(t.world_xy[1]), float(t.yaw)))
         return out
 
-    def heading_deg(self, samples: int = 6, settle: float = 0.05):
+    def heading(self, samples: int = 6, settle: float = 0.05):
         """Median robot-tag yaw in degrees, or None if the tag isn't seen."""
         yaws = []
         attempts = 0
@@ -137,12 +137,12 @@ def main() -> int:
     cam = _Cam(tag_id=tag)
 
     def heading():
-        return cam.heading_deg()
+        return cam.heading()
 
-    def raw_turn(left, right, arc_mm):
-        arc_mm = max(1, int(round(arc_mm)))
-        proto.distance(left, right, arc_mm)
-        time.sleep(arc_mm / max(SPD, 1) * 1.3 + 1.5)   # time-based (robust over radio)
+    def raw_turn(left, right, arc):
+        arc = max(1, int(round(arc)))
+        proto.distance(left, right, arc)
+        time.sleep(arc / max(SPD, 1) * 1.3 + 1.5)   # time-based (robust over radio)
         proto.stop()
         time.sleep(0.6)
 
@@ -164,25 +164,25 @@ def main() -> int:
         else:
             raw_turn(-SPD, SPD, arc)
 
-    def orient_to(target_deg, gain):
+    def orient_to(target, gain):
         for _ in range(6):
             h = heading()
             if h is None:
                 time.sleep(0.3); continue
-            err = wrap180(target_deg - h)
+            err = wrap180(target - h)
             if abs(err) < 6.0:
                 return h
             turn(err, gain)
         return heading()
 
-    def measure_spin(target_deg, gain):
-        """Spin target_deg (using gain); return the actual rotation (camera)."""
+    def measure_spin(target, gain):
+        """Spin target (using gain); return the actual rotation (camera)."""
         h0 = heading()
-        turn(target_deg, gain)
+        turn(target, gain)
         h1 = heading()
         if h0 is None or h1 is None:
             return None
-        base = round(target_deg / 360.0) * 360.0
+        base = round(target / 360.0) * 360.0
         return base + wrap180(h1 - h0)
 
     # ── Phase 1: fit the gain from ±360° raw (gain=1) ────────────────────────

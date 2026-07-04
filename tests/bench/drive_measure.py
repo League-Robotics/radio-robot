@@ -157,7 +157,7 @@ def main() -> int:
                 if now - last_send >= 0.15:
                     proto.drive(args.speed, args.speed)
                     last_send = now
-                for line in proto.read_lines(duration_ms=25):
+                for line in proto.read_lines(duration=25):
                     if "EVT safety_stop" in line:
                         proto.drive(args.speed, args.speed)  # re-arm
                     tlm = parse_tlm(line)
@@ -215,7 +215,7 @@ def main() -> int:
                 print("  --- scale factors to match camera ---")
                 if enc_cm > 1.0:
                     print(f"  encoder: camera/enc = {cam_cm/enc_cm:.4f}  "
-                          f"(mm_per_wheel_deg ×{cam_cm/enc_cm:.4f})")
+                          f"(mm_per_wheel ×{cam_cm/enc_cm:.4f})")
                 if otos_cm > 1.0 and ol is not None:
                     new_ol = (ol / 100.0 if abs(ol) > 5 else ol)  # OL is int8-ish
                     print(f"  OTOS: camera/otos = {cam_cm/otos_cm:.4f}  "

@@ -56,7 +56,7 @@ from robot_radio.config.robot_config import load_robot_config, RobotConfig
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_DISTANCE_MM = 900     # 90 cm
+DEFAULT_DISTANCE = 900     # 90 cm
 DEFAULT_SPEED_MMPS = 80       # slow: D drives straighter/cleaner at low speed
 ROBOT_TAG = 100               # tovez wears AprilTag 100
 LASER_PORT_DEFAULT = 4        # J4 digital port — the line laser
@@ -82,19 +82,19 @@ def int8_to_scale(n: int) -> float:
 # Geometry helpers
 # ---------------------------------------------------------------------------
 
-def dist2d_mm(a_cm: tuple | None, b_cm: tuple | None) -> float | None:
+def dist2d(a_cm: tuple | None, b_cm: tuple | None) -> float | None:
     """Euclidean distance between two (x_cm, y_cm) camera points, in mm."""
     if not a_cm or not b_cm:
         return None
     return math.hypot(b_cm[0] - a_cm[0], b_cm[1] - a_cm[1]) * 10.0
 
 
-def predict_end_mm(pos_cm: tuple, yaw_rad: float, distance_mm: float) -> tuple:
-    """Predicted end (x_mm, y_mm) if robot drives distance_mm along its yaw."""
-    x_mm = pos_cm[0] * 10.0
-    y_mm = pos_cm[1] * 10.0
-    return (x_mm + distance_mm * math.cos(yaw_rad),
-            y_mm + distance_mm * math.sin(yaw_rad))
+def predict_end(pos_cm: tuple, yaw_rad: float, distance: float) -> tuple:
+    """Predicted end (x, y) if robot drives distance along its yaw."""
+    x = pos_cm[0] * 10.0
+    y = pos_cm[1] * 10.0
+    return (x + distance * math.cos(yaw_rad),
+            y + distance * math.sin(yaw_rad))
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +175,7 @@ class _Cam:
 # ---------------------------------------------------------------------------
 
 def _snap_enc(proto: NezhaProtocol) -> tuple[int, int] | None:
-    """Send SNAP and return enc (left_mm, right_mm) from the TLM response, or None."""
+    """Send SNAP and return enc (left, right) from the TLM response, or None."""
     resp = proto.send("SNAP", 500)
     for line in resp.get("responses", []):
         frame = parse_tlm(line)
@@ -197,7 +197,7 @@ def _read_latest_tlm(conn, ms: int = 400):
     latest = None
     deadline = time.monotonic() + ms / 1000.0
     while time.monotonic() < deadline:
-        for raw in conn.read_lines(duration_ms=50):
+        for raw in conn.read_lines(duration=50):
             f = parse_tlm(raw)
             if f is not None:
                 latest = f
@@ -266,17 +266,17 @@ def _print_table(samples: list[dict]) -> None:
 # Calibration math helpers (importable for unit tests, no hardware)
 # ---------------------------------------------------------------------------
 
-def compute_encoder_correction(tape_mm: float, enc_mm: float,
+def compute_encoder_correction(tape: float, enc: float,
                                ml: float, mr: float) -> tuple[float, float]:
-    """Scale ml/mr proportionally so future enc readings match tape_mm."""
-    k = tape_mm / enc_mm
+    """Scale ml/mr proportionally so future enc readings match tape."""
+    k = tape / enc
     return ml * k, mr * k
 
 
-def compute_otos_scale_correction(tape_mm: float, otos_mm: float,
+def compute_otos_scale_correction(tape: float, otos: float,
                                   current_scale: float) -> float:
-    """Return updated OTOS float scale that corrects toward tape_mm."""
-    return current_scale * (tape_mm / otos_mm)
+    """Return updated OTOS float scale that corrects toward tape."""
+    return current_scale * (tape / otos)
 
 
 # ---------------------------------------------------------------------------
@@ -286,8 +286,8 @@ def compute_otos_scale_correction(tape_mm: float, otos_mm: float,
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--distance", type=int, default=DEFAULT_DISTANCE_MM,
-                    help=f"target drive distance mm (default {DEFAULT_DISTANCE_MM})")
+    ap.add_argument("--distance", type=int, default=DEFAULT_DISTANCE,
+                    help=f"target drive distance mm (default {DEFAULT_DISTANCE})")
     ap.add_argument("--speed", type=int, default=DEFAULT_SPEED_MMPS,
                     help=f"drive speed mm/s (default {DEFAULT_SPEED_MMPS})")
     ap.add_argument("--port", default=None, help="relay serial port")
@@ -407,9 +407,9 @@ def main() -> int:
                 print("  camera can't see tag 100 — reposition into view. Skipping.")
                 continue
             # c0 is (x_cm, y_cm, yaw_rad); convert for display
-            x0_mm, y0_mm = c0[0] * 10.0, c0[1] * 10.0
-            end = predict_end_mm(c0, c0[2], args.distance)
-            print(f"  start (cam): x={x0_mm:.0f} y={y0_mm:.0f} mm  "
+            x0, y0 = c0[0] * 10.0, c0[1] * 10.0
+            end = predict_end(c0, c0[2], args.distance)
+            print(f"  start (cam): x={x0:.0f} y={y0:.0f} mm  "
                   f"heading={math.degrees(c0[2]):.0f}°  → predicted end "
                   f"x={end[0]:.0f} y={end[1]:.0f} mm")
             if field and not (0 <= end[0] <= field[0] and 0 <= end[1] <= field[1]):
@@ -426,9 +426,9 @@ def main() -> int:
 
             # ---- drive (one deliberate blocking command) --------------------
             print(f"  driving {args.distance} mm…")
-            timeout_ms = int(args.distance / max(args.speed, 1) * 1000) + 4000
+            timeout = int(args.distance / max(args.speed, 1) * 1000) + 4000
             proto.distance(args.speed, args.speed, args.distance)
-            outcome, _ = proto.wait_for_evt_done("D", timeout_ms)
+            outcome, _ = proto.wait_for_evt_done("D", timeout)
             proto.stop()
             time.sleep(0.4)
 
@@ -441,34 +441,34 @@ def main() -> int:
             c1 = cam.pose()
 
             # ---- distances -------------------------------------------------
-            enc_mm: float | None = None
+            enc: float | None = None
             dL = dR = 0.0
             if enc1 is not None:
                 dL = float(enc1[0]); dR = float(enc1[1])
-                enc_mm = (abs(dL) + abs(dR)) / 2.0
+                enc = (abs(dL) + abs(dR)) / 2.0
 
-            otos_mm: float | None = None
+            otos: float | None = None
             if op1 is not None:
-                # pose is (x_mm, y_mm, h_cdeg); displacement from the otos_zero
-                otos_mm = math.hypot(op1[0], op1[1])
+                # pose is (x, y, h_cdeg); displacement from the otos_zero
+                otos = math.hypot(op1[0], op1[1])
 
-            # dist2d_mm takes (x_cm, y_cm) tuples and returns mm
-            cam_mm = dist2d_mm(c0, c1)
+            # dist2d takes (x_cm, y_cm) tuples and returns mm
+            cam_dist = dist2d(c0, c1)
 
             print(f"  done={outcome}")
-            if cam_mm is not None:
-                print(f"  VISION (camera) actual : {cam_mm:.1f} mm")
+            if cam_dist is not None:
+                print(f"  VISION (camera) actual : {cam_dist:.1f} mm")
             else:
                 print("  VISION (camera) actual : (tag lost — no validation)")
-            if enc_mm is not None:
+            if enc is not None:
                 diff = dL - dR
-                dpct = (diff / enc_mm * 100.0) if enc_mm else 0.0
-                print(f"  ENCODERS think         : {enc_mm:.1f} mm  "
+                dpct = (diff / enc * 100.0) if enc else 0.0
+                print(f"  ENCODERS think         : {enc:.1f} mm  "
                       f"(L={dL:.1f}  R={dR:.1f}  L−R={diff:+.1f} mm = {dpct:+.1f}%)")
             else:
                 print("  ENCODERS think         : (no enc)")
-            if otos_mm is not None:
-                print(f"  OTOS thinks            : {otos_mm:.1f} mm")
+            if otos is not None:
+                print(f"  OTOS thinks            : {otos:.1f} mm")
             else:
                 print("  OTOS thinks            : (no OTOS)")
 
@@ -505,37 +505,37 @@ def main() -> int:
                 break
             if raw.lower() in ("q", "quit", "exit"):
                 break
-            tape_mm = None
+            tape = None
             if raw:
                 try:
-                    tape_mm = float(raw) * 10.0
+                    tape = float(raw) * 10.0
                 except ValueError:
                     print(f"  invalid number {raw!r}.")
-            if tape_mm is None or tape_mm <= 0:
+            if tape is None or tape <= 0:
                 print("  no tape measurement — trial recorded, NOT calibrated.")
-                samples.append(dict(target=args.distance, enc=enc_mm, otos=otos_mm,
-                                    cam=cam_mm, tape=None,
+                samples.append(dict(target=args.distance, enc=enc, otos=otos,
+                                    cam=cam_dist, tape=None,
                                     enc_err=None, otos_err=None, cam_err=None))
                 continue
-            truth = tape_mm
+            truth = tape
 
             # ---- error of EVERY estimator vs the tape (incl. the camera) --
-            enc_err = (enc_mm - truth) / truth * 100 if enc_mm else None
-            otos_err = (otos_mm - truth) / truth * 100 if otos_mm else None
-            cam_err = (cam_mm - truth) / truth * 100 if cam_mm else None
+            enc_err = (enc - truth) / truth * 100 if enc else None
+            otos_err = (otos - truth) / truth * 100 if otos else None
+            cam_err = (cam_dist - truth) / truth * 100 if cam_dist else None
 
             # ---- closed-loop correction of the ONBOARD estimators ----------
-            if enc_mm and enc_mm > 0:
-                ml, mr = compute_encoder_correction(truth, enc_mm, ml, mr)
+            if enc and enc > 0:
+                ml, mr = compute_encoder_correction(truth, enc, ml, mr)
                 proto.set_config(ml=ml, mr=mr)
-            if otos_mm and otos_mm > 0:
-                otos_scale = compute_otos_scale_correction(truth, otos_mm, otos_scale)
+            if otos and otos > 0:
+                otos_scale = compute_otos_scale_correction(truth, otos, otos_scale)
                 otos_int8 = scale_to_int8(otos_scale)
                 rb = proto.otos_set_linear_scalar(otos_int8)
                 otos_scale = int8_to_scale(rb if rb is not None else otos_int8)
 
-            samples.append(dict(target=args.distance, enc=enc_mm, otos=otos_mm,
-                                cam=cam_mm, tape=tape_mm,
+            samples.append(dict(target=args.distance, enc=enc, otos=otos,
+                                cam=cam_dist, tape=tape,
                                 enc_err=enc_err, otos_err=otos_err, cam_err=cam_err))
 
             # ---- report this trial + running stats -------------------------

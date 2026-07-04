@@ -80,7 +80,7 @@ pytestmark = pytest.mark.skipif(
 # firmware's configured trackwidthMm (DefaultConfig.cpp: 128.0) so the plant's
 # geometry agrees with the firmware's kinematic calibration.
 # ---------------------------------------------------------------------------
-_FIRMWARE_TRACKWIDTH_MM = 128.0
+_FIRMWARE_TRACKWIDTH = 128.0
 
 _ZERO_ERROR_SPINS: dict[str, float] = {
     "sim_err_encoder_mm": 0.0,
@@ -91,7 +91,7 @@ _ZERO_ERROR_SPINS: dict[str, float] = {
     "sim_err_body_lin_scrub": 1.0,
     "sim_err_motor_offset_l": 1.0,
     "sim_err_motor_offset_r": 1.0,
-    "sim_err_trackwidth": _FIRMWARE_TRACKWIDTH_MM,
+    "sim_err_trackwidth": _FIRMWARE_TRACKWIDTH,
     "sim_err_otos_linear": 0.0,
     "sim_err_otos_yaw": 0.0,
     "sim_err_otos_lin_scale": 0.0,
@@ -104,8 +104,8 @@ _ZERO_ERROR_SPINS: dict[str, float] = {
 #: order.  Perfect execution dwells ON each waypoint (turn-in-place), and
 #: truth is sampled every 200 sim-ms (<= 40 mm apart at 200 mm/s), so this
 #: is generous; the current turn bug misses late waypoints by >100 mm.
-_WAYPOINT_TOL_MM = 60.0
-_FINAL_HEADING_TOL_DEG = 5.0
+_WAYPOINT_TOL = 60.0
+_FINAL_HEADING_TOL = 5.0
 
 #: Wall-clock ceilings (the sim is re-paced ~5x wall speed).
 _TOUR_START_DEADLINE_S = 10.0
@@ -142,7 +142,7 @@ def _spin_until(qapp, predicate, timeout_s: float) -> bool:
     return predicate()
 
 
-def _wrap_deg(d: float) -> float:
+def _wrap(d: float) -> float:
     """Wrap a degree difference into (-180, 180]."""
     return ((d + 180.0) % 360.0) - 180.0
 
@@ -150,8 +150,8 @@ def _wrap_deg(d: float) -> float:
 def _ideal_waypoints(tour: list[str]) -> tuple[list[tuple[float, float]], float]:
     """Dead-reckon a tour's wire strings into ideal waypoints.
 
-    Returns (waypoints, final_heading_deg): one (x_mm, y_mm) waypoint per
-    ``D`` leg (position after the drive), and the heading at tour end.
+    Returns (waypoints, final_heading): one (x, y) waypoint (mm, mm) per
+    ``D`` leg (position after the drive), and the heading (deg) at tour end.
     Heading 0 = +x (east), CCW positive — the origin-reset convention.
     """
     x = y = h = 0.0
@@ -175,8 +175,8 @@ def _ideal_waypoints(tour: list[str]) -> tuple[list[tuple[float, float]], float]
 def _run_tour_headless(qapp, monkeypatch, tmp_path, button_name: str):
     """Zero the Sim Errors panel via the GUI and run one tour button.
 
-    Returns the recorded plant ground-truth trace as (x_mm, y_mm, h_rad)
-    tuples covering the tour run.
+    Returns the recorded plant ground-truth trace as (x, y, h) tuples
+    (mm, mm, rad) covering the tour run.
     """
     import json
 
@@ -238,7 +238,7 @@ def _run_tour_headless(qapp, monkeypatch, tmp_path, button_name: str):
     monkeypatch.setattr(transport_mod, "SimTransport", SimTransport)
 
     window, _app = gui_main._build_main_window()
-    truth_mm: list[tuple[float, float, float]] = []  # (x_mm, y_mm, h_rad)
+    truth: list[tuple[float, float, float]] = []  # (x, y, h) in (mm, mm, rad)
 
     try:
         combo = window.findChild(QComboBox, "transport_combo")
@@ -261,7 +261,7 @@ def _run_tour_headless(qapp, monkeypatch, tmp_path, button_name: str):
         def _truth_spy(pose) -> None:
             if pose is not None:
                 x_cm, y_cm, h_rad = pose
-                truth_mm.append((x_cm * 10.0, y_cm * 10.0, h_rad))
+                truth.append((x_cm * 10.0, y_cm * 10.0, h_rad))
             if gui_truth_cb is not None:
                 gui_truth_cb(pose)
 
@@ -285,7 +285,7 @@ def _run_tour_headless(qapp, monkeypatch, tmp_path, button_name: str):
         assert stop_btn is not None
         assert tour_btn.isEnabled(), f"{button_name} not enabled after connect"
 
-        n_truth_before = len(truth_mm)
+        n_truth_before = len(truth)
         tour_btn.click()
 
         assert _spin_until(qapp, stop_btn.isEnabled, _TOUR_START_DEADLINE_S), (
@@ -305,12 +305,12 @@ def _run_tour_headless(qapp, monkeypatch, tmp_path, button_name: str):
         # Drop the pinned-config singleton so later tests re-resolve.
         rc_mod._reset_robot_config()
 
-    return truth_mm[n_truth_before:]
+    return truth[n_truth_before:]
 
 
 def _assert_tour_geometry(trace, tour: list[str], waypoint_labels=None) -> None:
     """Assert the ground-truth trace hits the tour's ideal waypoints in order."""
-    waypoints, final_heading_deg = _ideal_waypoints(tour)
+    waypoints, final_heading = _ideal_waypoints(tour)
     labels = waypoint_labels or [f"waypoint {i + 1}" for i in range(len(waypoints))]
 
     assert len(trace) > 50, (
@@ -335,14 +335,14 @@ def _assert_tour_geometry(trace, tour: list[str], waypoint_labels=None) -> None:
             d = math.hypot(trace[i][0] - cx, trace[i][1] - cy)
             if best is None or d < best:
                 best = d
-            if d <= _WAYPOINT_TOL_MM:
+            if d <= _WAYPOINT_TOL:
                 hit = i
                 break
         if hit is None:
             misses.append(
                 f"{label}: expected ({cx:+.0f}, {cy:+.0f}), closest approach "
                 f"after previous waypoint was {best:.0f} mm (tol "
-                f"{_WAYPOINT_TOL_MM:.0f} mm)"
+                f"{_WAYPOINT_TOL:.0f} mm)"
             )
         else:
             idx = hit
@@ -354,14 +354,14 @@ def _assert_tour_geometry(trace, tour: list[str], waypoint_labels=None) -> None:
     fx, fy, fh = trace[-1]
     lx, ly = waypoints[-1]
     d_final = math.hypot(fx - lx, fy - ly)
-    assert d_final <= _WAYPOINT_TOL_MM, (
+    assert d_final <= _WAYPOINT_TOL, (
         f"tour ended {d_final:.0f} mm from its final waypoint "
         f"({lx:+.0f}, {ly:+.0f}) — got ({fx:+.0f}, {fy:+.0f})"
     )
-    dh = _wrap_deg(math.degrees(fh) - final_heading_deg)
-    assert abs(dh) <= _FINAL_HEADING_TOL_DEG, (
+    dh = _wrap(math.degrees(fh) - final_heading)
+    assert abs(dh) <= _FINAL_HEADING_TOL, (
         f"final heading {math.degrees(fh):.1f}° is {dh:+.1f}° off the "
-        f"expected {_wrap_deg(final_heading_deg):.0f}° — turn legs are not "
+        f"expected {_wrap(final_heading):.0f}° — turn legs are not "
         "turning the commanded angle"
     )
 

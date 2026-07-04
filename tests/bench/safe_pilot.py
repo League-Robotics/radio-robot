@@ -46,7 +46,7 @@ ARC_DUR_S = 1.6
 SETTLE_S = 0.5            # post-stop wait before the 'after' read — must clear the
                          # ~0.33s coast tail (robot drifts ~50mm/10deg after stop())
 
-TRACKWIDTH_MM = 128.0     # physical, measured (centerline-to-centerline). FIXED.
+TRACKWIDTH = 128.0     # physical, measured (centerline-to-centerline). FIXED.
 # Per-wheel calibration to the camera: encoder dist AND yaw both come from ml,mr
 # (slip folded in = 1.0, firmware yaw = (dR-dL)/tw). Each arc inverts to the true
 # wheel ground-travel via differential-drive kinematics:
@@ -211,7 +211,7 @@ def _arc_deltas(c0, f0, c1, f1):
     dL, dR = f1.enc[0] - f0.enc[0], f1.enc[1] - f0.enc[1]
     out["enc_dL"], out["enc_dR"] = dL, dR
     out["enc_dist"] = (dL + dR) / 2.0
-    out["enc_yaw"] = math.degrees((dR - dL) / TRACKWIDTH_MM * ROT_SLIP)
+    out["enc_yaw"] = math.degrees((dR - dL) / TRACKWIDTH * ROT_SLIP)
     d, y = _geo(f0.otos[0], f0.otos[1], math.radians(f0.otos[2] / 100.0),
                 f1.otos[0], f1.otos[1], math.radians(f1.otos[2] / 100.0))
     out["otos_dist"], out["otos_yaw"] = d, y
@@ -227,7 +227,7 @@ CSV_COLS = ["kind", "cmd_L", "cmd_R", "speed", "dur", "reason", "recovered",
 
 
 def probe(p):
-    p.proto.send("SET tw=128", read_ms=300)
+    p.proto.send("SET tw=128", read_timeout=300)
     p.proto.stream_fields("enc,pose,otos")
     p.proto.stream(150)
     time.sleep(0.5)
@@ -247,8 +247,8 @@ def probe(p):
 def settle_probe(p, L=110, R=150):
     """Drive one guarded arc; log the camera densely THROUGH the stop and coast,
     so we can see when the tag truly settles vs where the 0.35s 'after' read lands."""
-    print("SET tw   ->", p.proto.send("SET tw=128", read_ms=300).get("responses"))
-    print("SET slip ->", p.proto.send(f"SET rotSlip={ROT_SLIP}", read_ms=300).get("responses"))
+    print("SET tw   ->", p.proto.send("SET tw=128", read_timeout=300).get("responses"))
+    print("SET slip ->", p.proto.send(f"SET rotSlip={ROT_SLIP}", read_timeout=300).get("responses"))
     p.recenter()
     if not p.is_safe(p.read(), 1):
         print("refused (not safe to start)"); return
@@ -285,10 +285,10 @@ def settle_probe(p, L=110, R=150):
 
 
 def collect_arcs(p):
-    print("SET tw   ->", p.proto.send("SET tw=128", read_ms=300).get("responses"))
-    print("SET slip ->", p.proto.send(f"SET rotSlip={ROT_SLIP}", read_ms=300).get("responses"))
-    print("SET ml   ->", p.proto.send(f"SET ml={ML_CAL}", read_ms=300).get("responses"))
-    print("SET mr   ->", p.proto.send(f"SET mr={MR_CAL}", read_ms=300).get("responses"))
+    print("SET tw   ->", p.proto.send("SET tw=128", read_timeout=300).get("responses"))
+    print("SET slip ->", p.proto.send(f"SET rotSlip={ROT_SLIP}", read_timeout=300).get("responses"))
+    print("SET ml   ->", p.proto.send(f"SET ml={ML_CAL}", read_timeout=300).get("responses"))
+    print("SET mr   ->", p.proto.send(f"SET mr={MR_CAL}", read_timeout=300).get("responses"))
     p.proto.stream_fields("enc,pose,otos")
     p.proto.stream(0)                        # snap on demand; no lossy continuous stream
     moves = []
@@ -367,7 +367,7 @@ def main():
     p = SafePilot()
     try:
         if args.tw is not None:
-            print("SET tw ->", p.proto.send(f"SET tw={int(args.tw)}", read_ms=400).get("responses"))
+            print("SET tw ->", p.proto.send(f"SET tw={int(args.tw)}", read_timeout=400).get("responses"))
         c = p.read()
         print(f"tag @ ({c[0]:+.1f},{c[1]:+.1f}) yaw={math.degrees(c[2]):+.0f}" if c else "NO TAG")
         if args.probe:

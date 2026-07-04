@@ -362,9 +362,9 @@ class TestRobotMarker:
         yaw = math.pi / 4  # 45°
         ctrl.refresh(fused_yaw_rad=yaw)
         # Expected rotation: 90 - degrees(yaw) = 90 - 45 = 45°
-        expected_deg = 90.0 - math.degrees(yaw)
-        actual_deg = ctrl._marker_group.rotation()
-        assert actual_deg == pytest.approx(expected_deg, abs=0.01)
+        expected = 90.0 - math.degrees(yaw)
+        actual = ctrl._marker_group.rotation()
+        assert actual == pytest.approx(expected, abs=0.01)
 
     def test_marker_position_follows_fused_trace(self, qapp):
         """Marker is positioned at the last fused world point."""

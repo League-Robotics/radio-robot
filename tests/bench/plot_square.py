@@ -58,7 +58,7 @@ def _f(row, key):
 
 def _encoder_only(rows, meta):
     """Integrate the streamed encoders host-side (cm), from the start pose."""
-    tw = float(meta.get("trackwidth_mm") or 143.0)
+    tw = float(meta.get("trackwidth") or 143.0)
     sx = meta.get("start_x_cm"); sy = meta.get("start_y_cm"); syaw = meta.get("start_yaw_rad")
     x = (float(sx) * 10.0) if sx is not None else None
     y = (float(sy) * 10.0) if sy is not None else None

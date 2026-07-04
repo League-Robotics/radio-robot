@@ -56,7 +56,7 @@ def main(argv=None) -> int:
     tgt = int(round(((h0 + a.turn * 100) + 18000) % 36000 - 18000))  # wrap ±180°
     print(f"onboard before: fused={h0/100:+.1f}° otos={o0/100 if o0 is not None else 'na'}  "
           f"→ TURN to {tgt/100:+.1f}° (Δcmd {a.turn:+.0f}°)")
-    proto.turn(tgt, eps_cdeg=100)
+    proto.turn(tgt, eps=100)
     proto.wait_for_evt_done("TURN", 12000)
     proto.stop(); time.sleep(0.8)
 

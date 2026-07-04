@@ -44,7 +44,7 @@ ROBOT_TAG = 100
 # Field is 134.3 x 89.3 cm (origin = AprilTag 1 centre). Abort if the tag centre
 # leaves this inset box (robot footprint ~8 cm beyond the tag → stays on table).
 X_MAX, Y_MAX = 57.0, 36.0
-SIDE_MM = 200          # 20 cm square sides
+SIDE = 200          # 20 cm square sides
 SPEED = 150            # mm/s
 
 conn = SerialConnection(PORT)
@@ -56,7 +56,7 @@ cam = None
 # Robot transport (relay, SNAP-poll completion)                               #
 # --------------------------------------------------------------------------- #
 def send(cmd, ms=250):
-    return conn.send(cmd, read_ms=ms, stop_token="OK").get("responses", [])
+    return conn.send(cmd, read_timeout=ms, stop_token="OK").get("responses", [])
 
 
 def snap_mode():
@@ -95,9 +95,9 @@ def snap_vy():
     return None
 
 
-def wait_idle(timeout_ms, min_ms=400):
+def wait_idle(timeout, min=400):
     t0 = time.time()
-    deadline = t0 + timeout_ms / 1000.0
+    deadline = t0 + timeout / 1000.0
     saw_active = False
     idle = 0
     while time.time() < deadline:
@@ -106,7 +106,7 @@ def wait_idle(timeout_ms, min_ms=400):
             saw_active = True
             idle = 0
         elif m == "I":
-            if saw_active or (time.time() - t0) * 1000.0 >= min_ms:
+            if saw_active or (time.time() - t0) * 1000.0 >= min:
                 idle += 1
                 if idle >= (2 if saw_active else 3):
                     return True
@@ -123,21 +123,21 @@ def safe_stop():
         time.sleep(0.04)
 
 
-def rt(cdeg, timeout_ms=15000):
+def rt(cdeg, timeout=15000):
     send(f"RT {int(cdeg)}")
-    return wait_idle(timeout_ms)
+    return wait_idle(timeout)
 
 
-def g_fwd(mm, timeout_ms=20000):
+def g_fwd(mm, timeout=20000):
     send(f"G {int(mm)} 0 {SPEED}")
-    return wait_idle(timeout_ms)
+    return wait_idle(timeout)
 
 
 # --------------------------------------------------------------------------- #
 # Camera ground truth                                                         #
 # --------------------------------------------------------------------------- #
 def cam_pose(timeout=1.5):
-    """(x_cm, y_cm, yaw_deg) for the robot tag, or None. yaw: 0=+x, CCW+."""
+    """(x_cm, y_cm, yaw) for the robot tag, or None. yaw: 0=+x, CCW+."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         for t in dc.get_tags(cam).tags:
@@ -148,7 +148,7 @@ def cam_pose(timeout=1.5):
     return None
 
 
-def wrap_deg(a):
+def wrap(a):
     return (a + 180.0) % 360.0 - 180.0
 
 
@@ -177,8 +177,8 @@ def recenter(tol_cm=8.0, max_iters=10):
     ya = require_on_field()[2]
     rt(3000)
     yb = require_on_field()[2]
-    sign = 1.0 if wrap_deg(yb - ya) >= 0 else -1.0
-    print(f"  RT-sign probe: cmd +30 deg, camera measured {wrap_deg(yb - ya):+.0f} deg -> sign={sign:+.0f}")
+    sign = 1.0 if wrap(yb - ya) >= 0 else -1.0
+    print(f"  RT-sign probe: cmd +30 deg, camera measured {wrap(yb - ya):+.0f} deg -> sign={sign:+.0f}")
     for i in range(max_iters):
         x, y, yaw = require_on_field()
         d = math.hypot(x, y)
@@ -187,7 +187,7 @@ def recenter(tol_cm=8.0, max_iters=10):
             print(f"  centred ({d:.0f} cm from origin).")
             return True
         bearing = math.degrees(math.atan2(-y, -x))     # heading toward origin
-        dyaw = wrap_deg(bearing - yaw)
+        dyaw = wrap(bearing - yaw)
         rt(int(round(sign * dyaw * 100)))
         require_on_field()
         p = cam_pose()
@@ -209,18 +209,18 @@ def turn_closure():
         p = require_on_field()
         print(f"  after RT {k+1}/4: yaw={p[2]:+.0f}  at ({p[0]:+.0f},{p[1]:+.0f})")
     yaw1 = cam_pose()[2]
-    err = abs(wrap_deg(yaw1 - yaw0))
+    err = abs(wrap(yaw1 - yaw0))
     print(f"  closure error = {err:.1f} deg  (start {yaw0:+.0f} -> end {yaw1:+.0f})")
     return err
 
 
 def square():
-    print(f"\n== SQUARE: {SIDE_MM} mm, G forward + RT +90, camera-measured ==")
+    print(f"\n== SQUARE: {SIDE} mm, G forward + RT +90, camera-measured ==")
     start = require_on_field()
     print(f"  start corner: ({start[0]:+.0f},{start[1]:+.0f}) cm")
     corners = [(start[0], start[1])]
     for i in range(4):
-        g_fwd(SIDE_MM)
+        g_fwd(SIDE)
         p = require_on_field()
         corners.append((p[0], p[1]))
         print(f"  leg {i+1}/4 end: ({p[0]:+.0f},{p[1]:+.0f}) cm  yaw={p[2]:+.0f}")
@@ -232,7 +232,7 @@ def square():
     side_lens = [math.hypot(corners[j+1][0]-corners[j][0], corners[j+1][1]-corners[j][1])
                  for j in range(4)]
     print(f"  corners (cm): {['(%+.0f,%+.0f)' % c for c in corners]}")
-    print(f"  side lengths (cm): {['%.1f' % s for s in side_lens]}  (commanded {SIDE_MM/10:.0f})")
+    print(f"  side lengths (cm): {['%.1f' % s for s in side_lens]}  (commanded {SIDE/10:.0f})")
     print(f"  RETURN ERROR (camera) = {ret:.1f} cm")
     return ret
 
@@ -252,7 +252,7 @@ def strafe_leg():
       |delta_x| < |delta_y| * 0.15  — forward drift less than 15% of lateral
 
     Camera coordinates are in cm; displacement thresholds are converted accordingly.
-    Returns (delta_x_cm, delta_y_cm, snap_vy_mms).
+    Returns (delta_x_cm, delta_y_cm, snap_vy).
     """
     # Gate: skip entirely for differential robots
     cfg = get_robot_config()
@@ -271,15 +271,15 @@ def strafe_leg():
 
     # Sample vy while robot is in motion (~1 s into the move)
     time.sleep(1.0)
-    vy_mms = snap_vy()
-    print(f"  SNAP vy during strafe: {vy_mms} mm/s")
+    vy = snap_vy()
+    print(f"  SNAP vy during strafe: {vy} mm/s")
 
     # Wait for the remainder of the 2 s move window, then stop
     time.sleep(1.5)
     send("STOP")
 
     # Allow the robot to settle
-    wait_idle(3000, min_ms=200)
+    wait_idle(3000, min=200)
 
     p1 = require_on_field()
     x1_cm, y1_cm = p1[0], p1[1]
@@ -304,9 +304,9 @@ def strafe_leg():
           f"{'PASS' if drift_ok else 'FAIL'}")
 
     # vy= sign check: STRAFE 150 is positive vy body command; vy sample should be > 0
-    if vy_mms is not None:
-        vy_sign_ok = vy_mms > 0
-        print(f"  SNAP vy sign: {vy_mms:+.0f} mm/s (expected > 0): "
+    if vy is not None:
+        vy_sign_ok = vy > 0
+        print(f"  SNAP vy sign: {vy:+.0f} mm/s (expected > 0): "
               f"{'PASS' if vy_sign_ok else 'FAIL'}")
     else:
         print("  SNAP vy: no sample captured (skipping sign check)")
@@ -321,7 +321,7 @@ def strafe_leg():
         "suspect fwd_sign_* or geometry error"
     )
 
-    return delta_x_cm, delta_y_cm, vy_mms
+    return delta_x_cm, delta_y_cm, vy
 
 
 def main():
@@ -333,7 +333,7 @@ def main():
     dc = DaemonControl.connect_default(Config.load())
     cam = dc.list_cameras()[0]
     print(f"camera: {cam}")
-    png = conn.send("PING", read_ms=600, stop_token="OK").get("responses")
+    png = conn.send("PING", read_timeout=600, stop_token="OK").get("responses")
     print(f"PING -> {png}")
 
     t0 = time.time()

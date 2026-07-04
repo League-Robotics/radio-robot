@@ -151,7 +151,7 @@ def main(argv=None) -> int:
         eps_cdeg = max(1, int(round(a.eps * 100)))
         print(f"turning    : -> {tgt/100:+.1f}° world (Δ {wrap(tgt - h0)/100:+.1f}°, "
               f"eps {eps_cdeg/100:.2f}°), on odometry")
-        proto.turn(tgt, eps_cdeg=eps_cdeg)
+        proto.turn(tgt, eps=eps_cdeg)
         proto.wait_for_evt_done("TURN", 12000)
         proto.stop(); time.sleep(0.8)
 
@@ -165,9 +165,9 @@ def main(argv=None) -> int:
         if not a.no_verify:
             cpose2 = cam.pose()
             if cpose2 is not None:
-                world_deg = math.degrees(cpose2[2])
-                err = wrap(int(round(world_deg * 100)) - tgt) / 100.0
-                print(f"camera vfy : world heading {world_deg:+.1f}°  "
+                world = math.degrees(cpose2[2])
+                err = wrap(int(round(world * 100)) - tgt) / 100.0
+                print(f"camera vfy : world heading {world:+.1f}°  "
                       f"err {err:+.2f}° from target {tgt/100:+.1f}°")
         return 0
     finally:

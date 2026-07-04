@@ -24,7 +24,7 @@ from rotation_cal import _Cam, wrap180   # reuse camera + helper
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _TOVEZ_JSON = _REPO_ROOT / "data" / "robots" / "tovez.json"
-PROFILE_HZ = 20            # velocity-stream rate during a turn
+PROFILE = 20            # velocity-stream rate during a turn
 
 
 def main() -> int:
@@ -45,7 +45,7 @@ def main() -> int:
     ctrl = getattr(cfg, "control", None)
     gain_ccw = float(getattr(cal, "rotation_gain", None) or 1.0)
     gain_cw = float(getattr(cal, "rotation_gain_neg", None) or gain_ccw)
-    off_ccw = float(getattr(cal, "rotation_offset_deg", None) or 0.0)
+    off_ccw = float(getattr(cal, "rotation_offset", None) or 0.0)
     off_cw = float(getattr(cal, "rotation_offset_deg_neg", None) or 0.0)
     max_accel = args.accel or float(getattr(ctrl, "max_rot_accel_dps2", None) or 300.0)
     DEG2ARC = (math.pi / 180.0) * (tw / 2.0)   # wheel mm/s per deg/s (and mm per deg)
@@ -76,7 +76,7 @@ def main() -> int:
     cam = _Cam(tag_id=tag)
 
     def heading():
-        return cam.heading_deg()
+        return cam.heading()
 
     def _profile_time(A):
         """(t_ramp, t_cruise, t_total, peak) for a trapezoid covering A deg."""
@@ -89,14 +89,14 @@ def main() -> int:
         t_cruise = (A - 2.0 * ramp_ang) / vpk
         return t_ramp, t_cruise, 2.0 * t_ramp + t_cruise, vpk
 
-    def _stream_turn(geom_deg):
-        """Trapezoidal spin of |geom_deg| (already model-corrected), streamed."""
-        A = abs(geom_deg)
+    def _stream_turn(geom):
+        """Trapezoidal spin of |geom| (already model-corrected), streamed."""
+        A = abs(geom)
         if A <= 0.5:
             return
         t_ramp, t_cruise, t_total, vpk = _profile_time(A)
-        lpos = (geom_deg > 0) == lpos_ccw      # which wheel goes positive
-        dt = 1.0 / PROFILE_HZ
+        lpos = (geom > 0) == lpos_ccw      # which wheel goes positive
+        dt = 1.0 / PROFILE
         t0 = time.monotonic()
         while True:
             t = time.monotonic() - t0
@@ -138,7 +138,7 @@ def main() -> int:
     while time.monotonic() - t0 < 0.5:
         v = int(round(50.0 * DEG2ARC))
         proto.drive(v, -v)
-        time.sleep(1.0 / PROFILE_HZ)
+        time.sleep(1.0 / PROFILE)
     proto.stop(); time.sleep(0.4)
     hb = heading()
     lpos_ccw = wrap180((hb or 0.0) - (ha or 0.0)) > 0.0

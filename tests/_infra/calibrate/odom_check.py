@@ -134,7 +134,7 @@ def main(argv=None) -> int:
                 tgt_cdeg = int(round((raw + 18000) % 36000 - 18000))  # wrap to ±180°
                 print(f"\n[turn {'CCW' if sgn>0 else 'CW'} {i+1}] cam head={math.degrees(ch0):+.0f}°"
                       f" onboard={p0[2]/100:+.0f}° → target {tgt_cdeg/100:+.0f}°")
-                proto.turn(tgt_cdeg, eps_cdeg=100)
+                proto.turn(tgt_cdeg, eps=100)
                 proto.wait_for_evt_done("TURN", 12000)
                 proto.stop(); time.sleep(1.2)
                 p1, o1, _ = snap()
@@ -143,10 +143,10 @@ def main(argv=None) -> int:
                     print("  lost tag/snap after turn — SKIP."); continue
                 cx1, cy1, ch1 = c1
                 # All deltas wrapped to ±180° (headings cross the wrap point).
-                wrap_deg = lambda d: (d + 180) % 360 - 180
+                wrap = lambda d: (d + 180) % 360 - 180
                 d_truth = math.degrees(_wrap(ch1 - ch0))
-                d_fused = wrap_deg((p1[2] - p0[2]) / 100.0)
-                d_otos = wrap_deg((o1[2] - o0[2]) / 100.0) if o0 and o1 else float("nan")
+                d_fused = wrap((p1[2] - p0[2]) / 100.0)
+                d_otos = wrap((o1[2] - o0[2]) / 100.0) if o0 and o1 else float("nan")
                 r = (d_fused / d_truth) if d_truth else float("nan")
                 print(f"  cmd Δ={sgn*a.turn:+.0f}° | TRUTH(cam)Δ={d_truth:+6.1f}° | "
                       f"fusedΔ={d_fused:+6.1f}° otosΔ={d_otos:+6.1f}°  fused/truth={r:5.3f}")

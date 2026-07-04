@@ -8,8 +8,8 @@ Identifier names describe the **kind** of quantity a variable holds
 (`speed`, `position`, `deadline`), never the **unit** it is measured in.
 Units live in a trailing comment, not in the name. This is a durable,
 cross-cutting convention — it applies to every identifier renamed by
-sprint 071 (C++, `source/`) and, in the future, sprint 072 (Python,
-`host/`), and to any new identifier added after either sprint closes.
+sprint 071 (C++, `source/`) and sprint 076 (Python, `host/`), and to
+any new identifier added after either sprint closes.
 
 Why: a unit suffix embedded in a name (`tgtMms`, `read_ms`) drifts
 silently the moment the underlying representation changes (e.g. a field
@@ -31,18 +31,16 @@ float tgtMms[kWheelCount] = {};  // all-wheel speed targets, mm/s
 float tgtSpeed[kWheelCount] = {};  // [mm/s] all-wheel speed targets
 ```
 
-### Python convention (forward reference — sprint 072)
+### Python convention
 
-The same tag format applies to Python, using `#` instead of `//`. This
-convention is documented here for forward reference only — it is **not**
-applied to any `host/` file by sprint 071 or by this document's own
-creation; sprint 072 is the sprint that will apply it to `host/`.
+The same tag format applies to Python, using `#` instead of `//`. Sprint
+076 applied this convention across `host/`.
 
 ```python
 # Before
 def send(self, cmd: str, read_ms: int = 500) -> dict: ...
 
-# After (sprint 072 — not applied to any host/ file by this sprint)
+# After (sprint 076)
 def send(self, cmd: str, read_timeout: int = 500) -> dict:  # [ms]
     ...
 ```
@@ -107,7 +105,7 @@ can be found independent of identifier spelling:
 grep -rn "// \[mm/s\]" source/
 ```
 
-and, once sprint 072 applies the convention to `host/`:
+and, for `host/` (sprint 076):
 
 ```
 grep -rn "# \[ms\]" host/

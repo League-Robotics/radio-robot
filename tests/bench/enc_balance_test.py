@@ -71,9 +71,9 @@ def _make_connection(port: str):
     return conn
 
 
-def _tx(conn, cmd: str, read_ms: int = 400) -> str:
+def _tx(conn, cmd: str, read_timeout: int = 400) -> str:
     """Send a command and return the concatenated response text."""
-    result = conn.send(cmd, read_ms=read_ms, stop_token="OK")
+    result = conn.send(cmd, read_timeout=read_timeout, stop_token="OK")
     return " ".join(result.get("responses", []))
 
 
@@ -108,7 +108,7 @@ def main():
     conn = _make_connection(port)
 
     # Confirm robot is alive.
-    pong = _tx(conn, "PING", read_ms=600)
+    pong = _tx(conn, "PING", read_timeout=600)
     if "pong" not in pong.lower():
         print("Robot not responding. Is it powered on and the robot USB plugged in?")
         conn.disconnect()
@@ -119,8 +119,8 @@ def main():
     print(f"{'trial':>5} {'encL':>7} {'encR':>7} {'R/L':>6}  note")
     rows = []
     for i in range(args.trials):
-        _tx(conn, "ZERO enc", read_ms=300)
-        evt = _tx(conn, f"D {args.speed} {args.speed} {args.dist}", read_ms=300)
+        _tx(conn, "ZERO enc", read_timeout=300)
+        evt = _tx(conn, f"D {args.speed} {args.speed} {args.dist}", read_timeout=300)
         time.sleep(args.dist / args.speed + 1.6)     # wait for the move to finish
         e = _read_enc(conn)
         note = "EVT enc_wedged" if "enc_wedged" in evt.lower() else ""
@@ -140,7 +140,7 @@ def main():
         else:
             print(f"{i+1:>5} {'?':>7} {'?':>7}        no telemetry")
 
-    _tx(conn, "X", read_ms=300)
+    _tx(conn, "X", read_timeout=300)
     conn.disconnect()
 
     print()

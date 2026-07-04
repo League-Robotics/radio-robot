@@ -69,7 +69,7 @@ class _ProtoShim:
     """Minimal robot interface wrapping a bare NezhaProtocol.
 
     Allows SafeRun to accept legacy ``BenchRun(proto, ...)`` call patterns.
-    ``proto`` must provide ``.send(cmd, read_ms)`` and ``.ping()``.
+    ``proto`` must provide ``.send(cmd, read_timeout)`` and ``.ping()``.
 
     The ``_proto`` attribute is the wrapped NezhaProtocol, exposed so that
     SafeRun can call ``self._robot._proto.ping()`` and ``.send()`` via the
@@ -134,7 +134,7 @@ class SafeRun:
             self._is_sim = False
             self._proto_compat = False
         else:
-            # Legacy NezhaProtocol interface: .send(cmd, read_ms) and .ping().
+            # Legacy NezhaProtocol interface: .send(cmd, read_timeout) and .ping().
             # Wrap it in a thin shim that delegates stop/stream/ping.
             self._robot = _ProtoShim(testrobot_or_nezha)
             self._is_sim = False

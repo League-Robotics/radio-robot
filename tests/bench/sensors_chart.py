@@ -39,7 +39,7 @@ def _parse_args() -> argparse.Namespace:
 
 def _stream_worker(
     port: str,
-    period_ms: int,
+    period: int,
     data_queue: "queue.Queue",
     stop_event: threading.Event,
     status_queue: "queue.Queue[str]",
@@ -80,11 +80,11 @@ def _stream_worker(
             conn._ser.reset_input_buffer()
         except Exception:
             pass
-        proto.stream(period_ms)
+        proto.stream(period)
         status_queue.put(f"RUNNING — {identity.get('name', '?')}")
 
         while not stop_event.is_set():
-            for raw_line in conn.read_lines(duration_ms=50):
+            for raw_line in conn.read_lines(duration=50):
                 r = parse_response(raw_line)
                 if r is None or r.tag != "TLM":
                     continue

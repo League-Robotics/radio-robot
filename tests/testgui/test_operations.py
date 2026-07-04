@@ -100,8 +100,8 @@ class TestBuildSetposeCommand:
         from robot_radio.testgui.operations import build_setpose_command
 
         line = build_setpose_command(-5.0, -10.0, math.pi)
-        # x_mm = round(-5 * 10) = -50; y_mm = round(-10 * 10) = -100
-        # h_cdeg = round(180 * 100) = 18000
+        # x = round(-5 * 10) = -50 [mm]; y = round(-10 * 10) = -100 [mm]
+        # heading = round(180 * 100) = 18000 [cdeg]
         assert line == "SI -50 -100 18000"
 
     def test_fractional_cm_rounds(self):

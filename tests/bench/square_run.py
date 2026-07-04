@@ -14,7 +14,7 @@ Pipeline:
   1. PING the robot (hard-fail if silent).
   2. Read the robot's AprilTag-100 world pose from the camera; SI-set the
      firmware world pose to it (firmware frame := playfield A1-centred frame).
-  3. For each colored box: `G <x_mm> <y_mm> <speed>`; poll SNAP + camera until
+  3. For each colored box: `G <x> <y> <speed>`; poll SNAP + camera until
      the fused pose reaches the box (or timeout); stream "+" keepalives.
   4. Save the log CSV.
 
@@ -133,8 +133,8 @@ def main() -> None:
     # sTimeout uses the firmware default (500 ms); TIME-stopped commands
     # (G, TURN, D, T, RT) are exempt from the keepalive requirement after
     # sprint 024-003, so the 60 s override is no longer needed here.
-    trackwidth_mm = _get_trackwidth(proto)
-    print(f"trackwidth = {trackwidth_mm:.1f} mm")
+    trackwidth = _get_trackwidth(proto)
+    print(f"trackwidth = {trackwidth:.1f} mm")
 
     dc, cam = (None, None) if (args.no_camera or args.verify) else open_camera()
     x0_cm = y0_cm = yaw0 = None
@@ -154,7 +154,7 @@ def main() -> None:
 
     def snap_once():
         """One SNAP request/reply -> (TLMFrame|None, saw_done_G)."""
-        r = conn.send("SNAP", read_ms=120, stop_token="TLM")
+        r = conn.send("SNAP", read_timeout=120, stop_token="TLM")
         tlm, done = None, False
         for ln in r.get("responses", []):
             if "done G" in ln:
@@ -173,7 +173,7 @@ def main() -> None:
         tlm_rows.append(row)
         return row
 
-    def poll(duration_s, *, keepalive, target_mm=None, arrive_mm=70.0):
+    def poll(duration_s, *, keepalive, target=None, arrive=70.0):
         """Poll SNAP + camera for duration_s; early-exit on arrival/done-G."""
         end = time.monotonic() + duration_s
         arrived = False
@@ -183,8 +183,8 @@ def main() -> None:
             tlm, done = snap_once()
             if tlm is not None:
                 row = log_tlm(tlm)
-                if target_mm and "pose_x" in row:
-                    if math.hypot(row["pose_x"] - target_mm[0], row["pose_y"] - target_mm[1]) <= arrive_mm:
+                if target and "pose_x" in row:
+                    if math.hypot(row["pose_x"] - target[0], row["pose_y"] - target[1]) <= arrive:
                         arrived = True
             if dc is not None:
                 cp = read_tag(dc, cam, timeout_s=0.0)
@@ -207,7 +207,7 @@ def main() -> None:
     route = (args.boxes.split(",") if args.boxes else DEFAULT_RING)
     print(f"route: {route}")
     poll(0.5, keepalive=False)
-    arrive_mm = args.arrive_cm * 10.0
+    arrive = args.arrive_cm * 10.0
     with BenchRun(proto, max_seconds=len(route) * args.timeout_s + 30):
         for name in route:
             if name not in SITES:
@@ -216,7 +216,7 @@ def main() -> None:
             tgt = (bx_cm * 10.0, by_cm * 10.0)
             print(f"  -> {name} ({bx_cm},{by_cm} cm)")
             proto.send(f"G {int(tgt[0])} {int(tgt[1])} {args.speed}", 250)
-            ok = poll(args.timeout_s, keepalive=True, target_mm=tgt, arrive_mm=arrive_mm)
+            ok = poll(args.timeout_s, keepalive=True, target=tgt, arrive=arrive)
             print(f"     {'reached' if ok else 'timeout'}")
             conn.send_fast("X")
             poll(args.settle_s, keepalive=False)
@@ -230,7 +230,7 @@ def main() -> None:
 
     conn.disconnect()
 
-    meta = {"trackwidth_mm": trackwidth_mm,
+    meta = {"trackwidth": trackwidth,
             "start_x_cm": x0_cm, "start_y_cm": y0_cm, "start_yaw_rad": yaw0,
             "speed": args.speed, "route": route}
     _save(args.out, tlm_rows, cam_rows, meta)

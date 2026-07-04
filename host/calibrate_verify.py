@@ -38,7 +38,7 @@ class Cam:
         self.cam = cams[0] if isinstance(cams[0], str) else getattr(cams[0], "id", cams[0])
 
     def pose(self, samples=5):
-        """Median (x_mm, y_mm, yaw_rad) of the robot tag over a few frames."""
+        """Median (x, y, yaw) of the robot tag over a few frames (mm, mm, rad)."""
         xs, ys, yaws = [], [], []
         for _ in range(samples):
             tf = self.dc.get_tags(self.cam)

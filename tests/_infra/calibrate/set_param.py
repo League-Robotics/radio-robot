@@ -37,7 +37,7 @@ def main(argv=None) -> int:
     )
     ok = False
     for attempt in range(6):
-        r = conn.send(cmd, read_ms=600)
+        r = conn.send(cmd, read_timeout=600)
         lines = r.get("responses", [])
         if any("OK set" in ln for ln in lines):
             print(f"  applied (try {attempt+1}): {[l for l in lines if 'OK set' in l]}")

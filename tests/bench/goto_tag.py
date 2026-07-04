@@ -122,7 +122,7 @@ def main():
 
     def rt(deg):
         proto.send(f"RT {int(round(deg * 100))} #1", 200)
-        proto.wait_for_evt_done("RT", timeout_ms=15000, corr_id="1")
+        proto.wait_for_evt_done("RT", timeout=15000, corr_id="1")
         time.sleep(0.25)
         stop()
 

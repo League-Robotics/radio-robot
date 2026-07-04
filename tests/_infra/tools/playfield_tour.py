@@ -11,7 +11,7 @@ Control loop (per leg)::
   1. Read pose via ``tr.pose.read()`` → (x_cm, y_cm, yaw_rad).
   2. For camera/production runs: anchor firmware OTOS to camera fix via
      ``robot.update_world_pose(x_cm, y_cm, yaw_rad)``.
-  3. Compute robot-relative (fwd_mm, left_mm) from the world delta — a plain
+  3. Compute robot-relative (fwd, left) from the world delta — a plain
      rigid-body projection by the robot's forward heading H (the camera's tag
      orientation directly: 0 = east, CCW+), same as Navigator/go_to_world::
 
@@ -20,7 +20,7 @@ Control loop (per leg)::
 
      No handedness fudge: the camera reports the truth, so no correction.
 
-  4. Call ``robot.go_to(fwd_mm, left_mm, speed, on_tick=on_tick_cb)``.
+  4. Call ``robot.go_to(fwd, left, speed, on_tick=on_tick_cb)``.
      ``on_tick_cb`` updates the camera track, checks bounds, and returns
      False to abort if the robot leaves the safe box.
   5. After the leg, check camera arrival within ``--arrive`` tolerance.
@@ -190,7 +190,7 @@ def _compute_robot_relative(
     x_cm: float, y_cm: float, yaw_rad: float,
     tx_cm: float, ty_cm: float,
 ) -> tuple[float, float]:
-    """Convert world-frame target to robot-relative (fwd_mm, left_mm).
+    """Convert world-frame target to robot-relative (fwd, left).
 
     Plain rigid-body projection by the robot's forward heading H (the camera's
     tag orientation directly: 0 = east, CCW+).  Forward unit = (cosH, sinH);
@@ -348,14 +348,14 @@ def main(argv: list[str] | None = None) -> int:
                     time.sleep(0.1)
 
                 # Compute robot-relative target in mm.
-                fwd_mm, lft_mm = _compute_robot_relative(x_cm, y_cm, yaw_rad, tx, ty)
+                fwd, lft = _compute_robot_relative(x_cm, y_cm, yaw_rad, tx, ty)
 
                 # Timeout: generous distance/speed + 6 s margin.
                 timeout_s = dist_cm * 10.0 / max(args.speed, 1) + 6.0
 
                 _el, _er, outcome = tr.robot.go_to(
-                    int(round(fwd_mm)),
-                    int(round(lft_mm)),
+                    int(round(fwd)),
+                    int(round(lft)),
                     args.speed,
                     on_tick=on_tick,
                     timeout_s=timeout_s,

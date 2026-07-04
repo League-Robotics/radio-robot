@@ -64,9 +64,9 @@ class Bench:
         if res.get("error"):
             raise ConnectionError(f"connect {port}: {res['error']}")
 
-    def send(self, cmd, read_ms=500):
+    def send(self, cmd, read_timeout=500):
         """Send a command; return its reply lines (corr-id matched)."""
-        return self.conn.send(cmd, read_ms=read_ms, stop_token="OK").get("responses", [])
+        return self.conn.send(cmd, read_timeout=read_timeout, stop_token="OK").get("responses", [])
 
     def snap(self):
         """Return the SNAP TLM frame as a dict of parsed fields, or None.

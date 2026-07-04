@@ -48,14 +48,14 @@ V_MAX = 150
 V_MIN = 60
 SLOW_RADIUS_CM = 30
 ARRIVE_CM = 4.0
-FACE_TOL_DEG = 7.0       # re-turn in place when heading error exceeds this
+FACE_TOL = 7.0       # re-turn in place when heading error exceeds this
 SEG_DT = 0.45            # straight-segment drive time (s) between camera re-checks
 NUDGE_SPEED = 80         # heading-calibration nudge speed (mm/s)
 NUDGE_DT = 0.6           # heading-calibration nudge time (s)
 NUDGE_MIN_CM = 1.5       # nudge must move at least this far or we abort
 CAM_POLL_S = 0.1
 LOST_ABORT_S = 3.0       # give up only after the tag is gone this long
-S_TIMEOUT_MS = 500       # firmware keepalive watchdog
+S_TIMEOUT = 500       # firmware keepalive watchdog
 GEOFENCE_MARGIN_CM = 14.0
 
 
@@ -226,13 +226,13 @@ def main() -> int:
         """RT relative turn, blocking on EVT done RT."""
         corr = "1"
         proto.send(f"RT {int(round(deg * 100))} #{corr}", 400)
-        proto.wait_for_evt_done("RT", timeout_ms=15000, corr_id=corr)
+        proto.wait_for_evt_done("RT", timeout=15000, corr_id=corr)
         time.sleep(0.15)
 
     status = "?"
     try:
         with BenchRun(proto, max_seconds=int(args.timeout) + 60):
-            proto.send(f"SET sTimeout={S_TIMEOUT_MS}", 200)
+            proto.send(f"SET sTimeout={S_TIMEOUT}", 200)
 
             # ---- 0) MEASURE forward heading with a small straight nudge ----
             p0 = read_pose(dc, cam, 1.5)
@@ -296,7 +296,7 @@ def main() -> int:
                     break
 
                 # 1) face the target if we're off by more than the tolerance
-                if abs(err) > math.radians(FACE_TOL_DEG):
+                if abs(err) > math.radians(FACE_TOL):
                     print(f"  turn {math.degrees(err):+.0f}° to face (dist {dist:.0f}cm)")
                     turn_in_place(math.degrees(err))
                     fwd = wrap(fwd + err)        # predicted; corrected by the next segment

@@ -75,12 +75,12 @@ def main() -> int:
     proto.stream(50)
     time.sleep(0.4)
 
-    def read_latest_enc(drain_ms=500):
+    def read_latest_enc(drain=500):
         """Drain to the newest TLM frame and return its enc (robust to backlog)."""
         e = None
-        end = time.monotonic() + drain_ms / 1000.0
+        end = time.monotonic() + drain / 1000.0
         while time.monotonic() < end:
-            for raw in conn.read_lines(duration_ms=60):
+            for raw in conn.read_lines(duration=60):
                 f = parse_tlm(raw)
                 if f is not None and f.enc is not None:
                     e = f.enc
@@ -96,7 +96,7 @@ def main() -> int:
         done = None
         end = time.monotonic() + (args.mm / max(args.spd, 1)) * 2.0 + 4.0
         while time.monotonic() < end and done != "D":
-            for raw in conn.read_lines(duration_ms=150):
+            for raw in conn.read_lines(duration=150):
                 r = parse_response(raw)
                 if r and r.tag == "EVT" and r.tokens and r.tokens[0] == "done":
                     done = r.tokens[1] if len(r.tokens) > 1 else "?"
@@ -108,7 +108,7 @@ def main() -> int:
         L, R = e[0], e[1]
         avg = (abs(L) + abs(R)) / 2.0
         imb = L - R
-        imb_pct = (imb / avg * 100.0) if avg else 0.0
+        imb = (imb / avg * 100.0) if avg else 0.0
         # Pass on the actual calibration data: distance + balance. (No stale-guard:
         # this robot is repeatable enough that consecutive drives land on identical
         # integers — that's not a stale read. The real freeze it once caught is
@@ -123,7 +123,7 @@ def main() -> int:
         evt = "" if done == "D" else "  (evt dropped)"
         tag = "OK  " if ok else "FAIL"
         print(f"  drive {i+1}: [{tag}] L={L:+5.0f} R={R:+5.0f} avg={avg:.0f} "
-              f"L-R={imb:+.0f}({imb_pct:+.0f}%){evt}"
+              f"L-R={imb:+.0f}({imb:+.0f}%){evt}"
               + ("  <- " + ", ".join(issues) if issues else ""))
 
     safe_stop()

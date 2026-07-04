@@ -82,7 +82,7 @@ def measured_turn(dc, cam, proto, deg: float, settle=0.4, timeout=14.0):
     """Send RT(deg); sample the camera throughout; return signed measured° (yaw).
 
     Rotation is accumulated from per-sample yaw deltas (unwrap-safe for any
-    total angle). Returns (measured_deg, start_yaw, end_yaw).
+    total angle). Returns (measured, start_yaw, end_yaw).
     """
     p = read_pose(dc, cam, 1.5)
     if p is None:
@@ -98,7 +98,7 @@ def measured_turn(dc, cam, proto, deg: float, settle=0.4, timeout=14.0):
         if q is not None:
             acc += wrap(q[2] - prev)
             prev = q[2]
-        for ln in proto.read_lines(duration_ms=25):
+        for ln in proto.read_lines(duration=25):
             if "done" in ln and "RT" in ln:
                 done = True
         if done:
@@ -119,14 +119,14 @@ def measured_turn(dc, cam, proto, deg: float, settle=0.4, timeout=14.0):
 def rt_turn(proto, deg, timeout=14.0):
     """Blocking RT relative turn (RT+ = CCW)."""
     proto.send(f"RT {int(round(deg * 100))} #1", 200)
-    proto.wait_for_evt_done("RT", timeout_ms=int(timeout * 1000), corr_id="1")
+    proto.wait_for_evt_done("RT", timeout=int(timeout * 1000), corr_id="1")
     time.sleep(0.3)
     for _ in range(2):
         proto.stop()
         time.sleep(0.03)
 
 
-def crawl_turn(proto, deg, omega_dps=25.0):
+def crawl_turn(proto, deg, omega=25.0):
     """One short, NO-RAMP open-loop spin pulse (~deg°) via _VW, then stop.
 
     Bypasses the RT coast-anticipation (which can't do small angles) and the
@@ -134,8 +134,8 @@ def crawl_turn(proto, deg, omega_dps=25.0):
     Caller should under-correct (pass a fraction of the error) and re-measure."""
     if abs(deg) < 0.3:
         return
-    omega_mrad = int(round(math.copysign(omega_dps, deg) * math.pi / 180.0 * 1000.0))
-    dur = max(0.06, min(0.5, abs(deg) / omega_dps))
+    omega_mrad = int(round(math.copysign(omega, deg) * math.pi / 180.0 * 1000.0))
+    dur = max(0.06, min(0.5, abs(deg) / omega))
     proto.send(f"_VW 0 {omega_mrad}", 80)
     time.sleep(dur)
     for _ in range(2):
@@ -206,15 +206,15 @@ def heading_now(dc, cam, offset, n=4):
     return math.atan2(my, mx) if got else None
 
 
-def turnto(dc, cam, proto, offset, target_world, tol_deg=3.0, iters=12):
+def turnto(dc, cam, proto, offset, target_world, tol=3.0, iters=12):
     """Closed-loop turn to an absolute heading. First PROBES the RT sign with a
     small in-place turn (so a wrong sign can never run the robot away), then
     converges: RT for the bulk, under-correcting crawl pulses for the fine
-    approach. Returns (final_forward_world, err_deg)."""
+    approach. Returns (final_forward_world, err)."""
     f0 = heading_now(dc, cam, offset)
     if f0 is None:
         return 0.0, 999.0
-    if abs(math.degrees(wrap(target_world - f0))) <= tol_deg:
+    if abs(math.degrees(wrap(target_world - f0))) <= tol:
         return f0, math.degrees(wrap(target_world - f0))
 
     # Probe: a small in-place turn; see which way the measured heading moved.
@@ -228,13 +228,13 @@ def turnto(dc, cam, proto, offset, target_world, tol_deg=3.0, iters=12):
         fwd = heading_now(dc, cam, offset)
         if fwd is None:
             continue
-        e_deg = math.degrees(wrap(target_world - fwd))
-        if abs(e_deg) <= tol_deg:
+        e = math.degrees(wrap(target_world - fwd))
+        if abs(e) <= tol:
             f2 = heading_now(dc, cam, offset)     # confirm on a fresh read
-            if f2 is not None and abs(math.degrees(wrap(target_world - f2))) <= tol_deg:
+            if f2 is not None and abs(math.degrees(wrap(target_world - f2))) <= tol:
                 return f2, math.degrees(wrap(target_world - f2))
             continue
-        cmd = s * e_deg                           # RT command that moves heading toward target
+        cmd = s * e                           # RT command that moves heading toward target
         if abs(cmd) > 20.0:
             rt_turn(proto, cmd)
         else:
@@ -252,7 +252,7 @@ def step_turnto(dc, cam, proto, args):
     print(f"  {'target':>7} {'final compass°':>15} {'err°':>7}")
     errs = []
     for name, tw in targets:
-        fwd, err = turnto(dc, cam, proto, offset, tw, tol_deg=args.tol)
+        fwd, err = turnto(dc, cam, proto, offset, tw, tol=args.tol)
         errs.append(abs(err))
         print(f"  {name:>7} {compass(fwd):15.0f} {err:+7.1f}")
         time.sleep(0.3)
@@ -340,7 +340,7 @@ def step_fwd(dc, cam, proto, args):
                  (math.pi / 2, fence[3] - ry), (-math.pi / 2, ry - fence[2])]
         heading, room = max(cands, key=lambda c: c[1])
         d_cmd = min(target, room - 5.0)
-        turnto(dc, cam, proto, offset, heading, tol_deg=args.tol)
+        turnto(dc, cam, proto, offset, heading, tol=args.tol)
         st, meas, _ = drive_forward(dc, cam, proto, fence, d_cmd)
         err = meas - d_cmd
         if st == "OK":
@@ -377,7 +377,7 @@ def goto_xy(dc, cam, proto, offset, fence, tx, ty, arrive=4.0, hop=14.0, timeout
             for _ in range(2):
                 proto.stop()
             return "DIVERGING", (rx, ry), d
-        turnto(dc, cam, proto, offset, math.atan2(ty - ry, tx - rx), tol_deg=4.0)
+        turnto(dc, cam, proto, offset, math.atan2(ty - ry, tx - rx), tol=4.0)
 
         # ENDPOINT GUARD — read the robot's ACTUAL heading from the tag, confirm
         # forward points at the target, and project where a hop lands. Never
@@ -510,13 +510,13 @@ def step_circle(dc, cam, proto, args):
     print("\n=== STEP 3: orient to north, then step around the circle ===")
     offset = calibrate_forward(dc, cam, proto)
     print("  orienting to north (compass 0°)…")
-    turnto(dc, cam, proto, offset, math.radians(90), tol_deg=args.tol)
+    turnto(dc, cam, proto, offset, math.radians(90), tol=args.tol)
     headings = [0, 45, 90, 135, 180, 225, 270, 315, 0]
     print(f"  {'go to compass°':>15} {'measured compass°':>18} {'err°':>7}")
     errs = []
     for h in headings:
         target_world = wrap(math.radians(90.0 - h))   # compass→math heading
-        fwd, err = turnto(dc, cam, proto, offset, target_world, tol_deg=args.tol)
+        fwd, err = turnto(dc, cam, proto, offset, target_world, tol=args.tol)
         errs.append(abs(err))
         print(f"  {h:15d} {compass(fwd):18.0f} {err:+7.1f}")
         time.sleep(0.25)
