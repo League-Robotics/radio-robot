@@ -1,7 +1,7 @@
 ---
 id: '077'
 title: Greenfield Faceplate HAL, Drivetrain, and DEV Bench System
-status: ticketing
+status: done
 branch: sprint/077-greenfield-faceplate-hal-drivetrain-and-dev-bench-system
 use-cases: []
 issues:
