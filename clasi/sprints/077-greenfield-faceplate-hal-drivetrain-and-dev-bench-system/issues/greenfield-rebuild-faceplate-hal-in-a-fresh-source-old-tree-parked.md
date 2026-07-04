@@ -1,5 +1,14 @@
 ---
-status: pending
+status: in-progress
+sprint: '077'
+tickets:
+- 077-001
+- 077-002
+- 077-003
+- 077-004
+- 077-005
+- 077-006
+- 077-007
 ---
 
 # Greenfield Rebuild: Faceplate HAL in a Fresh source/, Old Tree Parked
