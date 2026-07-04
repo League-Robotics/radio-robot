@@ -77,7 +77,7 @@ void NezhaHAL::begin()
 // Replaces the encoder read that Robot::controlCollectSplitPhase performed.
 // RIGHT (M1) is read BEFORE LEFT (M2), matching the proven WedgeTest ordering
 // the old controlCollectSplitPhase relied on.  Each Motor::tick() issues the
-// identical 0x46-write + 4-byte-read transaction (via readEncoderMmFSettle),
+// identical 0x46-write + 4-byte-read transaction (via readEncoderSettle),
 // so the bytes on the I2C wire are unchanged.
 // ---------------------------------------------------------------------------
 void NezhaHAL::tick(uint32_t now)   // [ms]

@@ -64,16 +64,25 @@ class Lab:
         self.ser.write((cmd + "\n").encode())
         self.ser.flush()
 
+    STALL_S = 45.0  # no output for this long during a marker-wait => stalled
+
     def pump(self, secs: float, until_markers: tuple[str, ...] | None = None) -> bool:
-        """Stream output for up to `secs`; True if an until-marker arrived."""
+        """Stream output for up to `secs`; True if an until-marker arrived.
+        Aborts early (False) if a marker-wait sees NO output for STALL_S —
+        a silently-hung run must never eat the whole timeout again."""
         t0 = time.monotonic()
+        last = t0
         while time.monotonic() - t0 < secs:
             raw = self.ser.readline()
             if not raw:
+                if until_markers and time.monotonic() - last > self.STALL_S:
+                    self.emit(f"!! no output for {self.STALL_S:.0f}s — treating as stalled")
+                    return False
                 continue
             line = raw.decode("utf-8", "ignore").rstrip()
             if not line:
                 continue
+            last = time.monotonic()
             self.emit(line)
             if until_markers and any(m in line for m in until_markers):
                 return True

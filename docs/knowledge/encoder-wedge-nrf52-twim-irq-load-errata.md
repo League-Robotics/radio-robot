@@ -108,7 +108,7 @@ because it was the mechanism:
   was busier, but the real link is interrupt load. Disabling individual sensors
   (`SET lag.color=0`, `lag.line=0`) only moved the wedge within the stochastic
   noise (#55-#112).
-- **Read method** (`readEncoderMmFSettle` vs atomic, `SET encAtomic`): no effect —
+- **Read method** (`readEncoderSettle` vs atomic, `SET encAtomic`): no effect —
   atomic wedged too.
 - **Write rate**: already throttled to 40 ms in `Motor::setSpeed`
   (`kMinWriteIntervalUs`), same as the clean harness. Forcing a write right before

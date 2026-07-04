@@ -97,7 +97,7 @@ graph TD
     MC -->|"setSpeed() per tick"| MOTOR
     MC -.impl via IVelocityMotor.-> SIMMOTOR
     MC -->|"resetEncoder() / rebaselineSoft()"| MOTOR
-    DRV -->|"positionMm() / readEncoderMmFSettle()"| MOTOR
+    DRV -->|"positionMm() / readEncoderSettle()"| MOTOR
     DRV -->|controlTick| MC
     DRV -->|"wheelWedgedL/R()"| MC
     DRV -->|"resetEncoderAccumulators() (auto re-prime)"| MC
@@ -340,7 +340,7 @@ idle tick.
 ### 5. Encoder read-failure hold-last-value (`Motor.{h,cpp}`, `SimMotor.{h,cpp}`)
 
 **Real firmware fix.** `collectEncoder()`, `readEncoderAtomic()`,
-`readEncoderMmFSettle()`, and `requestEncoder()` currently ignore
+`readEncoderSettle()`, and `requestEncoder()` currently ignore
 `_i2c.read()`/`_i2c.write()` return codes; on failure the response buffer
 stays `{0,0,0,0}`, so the computed "position" becomes `0 - _encOffset` — a
 jump to a large, arbitrary value. `readSpeedRaw()` (same file) already
@@ -353,7 +353,7 @@ computing from a zeroed buffer. The split-phase pair is closed too:
 `requestEncoder()`'s write-status is cached in `_pendingEncRequestOk`;
 `collectEncoder()` treats either half failing as a combined failure (a
 failed phase-1 write means phase 2's response, even if its own read()
-call reports OK, is for a stale prior request). `readEncoderMmF()` already
+call reports OK, is for a stale prior request). `readEncoder()` already
 delegates to `collectEncoder()`, so it is protected automatically with no
 separate change. `resetEncoder()`'s median-of-3 + readback-verify + retry
 loop is **not** separately instrumented — it already self-corrects: if all
@@ -373,7 +373,7 @@ exists to protect. `SimMotor` gains `setReadFailure(bool)` (mirroring the
 existing `SimOdometer::setReadFailure`, used identically by
 `sim_set_otos_read_failure`): when injected, `tick()` does not promote a
 fresh `reportedEncMm()` (holds `_lastPositionMm`), and
-`readEncoderMmFSettle()`/`readEncoderMmFAtomic()`/`collectEncoder()`
+`readEncoderSettle()`/`readEncoderAtomic()`/`collectEncoder()`
 likewise hold. New hook `sim_set_motor_read_failure(h, side, fail)`. A new
 sim test drives the full pipeline (`Drive::_runOutlierFilter` →
 `MotorController::controlTick` → `Odometry`/EKF) with an injected failure
@@ -433,7 +433,7 @@ planning pass.
 | `source/commands/ArgParse.cpp` | **Modified.** `parseSchema()` additionally sets `suppliedCount`; parsing/validation behavior (what makes a call `ok`, what values land in `args[]`) is byte-for-byte unchanged. |
 | `source/commands/DebugCommands.cpp`, `SystemCommands.cpp`, `OtosCommands.cpp` | **Modified.** One guard-condition line changes in each of `handleDbgIrqguard`, `handleRf`, `handleOL`, `handleOA`. No other handler changes. |
 | `source/hal/capability/IVelocityMotor.h` | **Modified.** Two new methods: `rebaselineSoft()` (pure virtual — both current implementers, `Motor` and `SimMotor`, are updated in this sprint) and `hardResetCount()`/`softResetCount()` (default-returning-zero, so any *other* implementer outside this sprint's reach keeps compiling). |
-| `source/hal/real/Motor.{h,cpp}` | **Modified.** `setSpeed()` gains the slew cap; `resetEncoder()`/new `rebaselineSoft()` gain reset-kind counters; `collectEncoder`/`readEncoderAtomic`/`readEncoderMmFSettle`/`requestEncoder` gain I2C-status checks + hold-last-value. Not reachable by `pytest` (pre-existing `HOST_BUILD` exclusion). |
+| `source/hal/real/Motor.{h,cpp}` | **Modified.** `setSpeed()` gains the slew cap; `resetEncoder()`/new `rebaselineSoft()` gain reset-kind counters; `collectEncoder`/`readEncoderAtomic`/`readEncoderSettle`/`requestEncoder` gain I2C-status checks + hold-last-value. Not reachable by `pytest` (pre-existing `HOST_BUILD` exclusion). |
 | `source/hal/real/MotorSlew.h` | **New.** Pure, CODAL-free header; included by `Motor.cpp` and by the new sim test hook. |
 | `source/hal/sim/SimMotor.{h,cpp}` | **Modified.** `rebaselineSoft()`, reset-kind counters, `setReadFailure()` fault injection. `setSpeed()` is **not** changed (no slewing added in sim — see Design Rationale). |
 | `source/control/MotorController.{h,cpp}` | **Modified.** `resetEncoderAccumulators()` gains the at-rest decision (new `_lastVelMmsL/R` members, updated each `controlTick()`); the wedge-detector block loses the `tgtW==0` reset and the `_hasMovedL/R` arming-grace gate (fields deleted). `controlTick()`'s PID/ZOH velocity logic is otherwise untouched. |

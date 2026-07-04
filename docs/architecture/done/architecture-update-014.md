@@ -119,7 +119,7 @@ SUC-004 (round-robin budget gate).
 
 **Change**: `readEncoderRaw()` (private) split into `requestEncoder()` (public,
 8-byte write, no wait) and `collectEncoder()` (public, 4-byte read, no wait).
-The two 4 ms busy-wait loops are deleted. `readEncoderMmF` and `readEncoder`
+The two 4 ms busy-wait loops are deleted. `readEncoder` and `readEncoder`
 are rerouted to use `collectEncoder` internally, or are replaced by the control
 task calling `collectEncoder` directly and converting to mm.
 

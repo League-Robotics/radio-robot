@@ -712,7 +712,7 @@ void sim_set_body_lin_scrub(void* h, float f) {
 //
 // Mirrors sim_set_otos_read_failure: while injected, SimMotor::tick() does not
 // promote a fresh reported-encoder value (holds _lastPositionMm), and
-// collectEncoder()/readEncoderMmF()/readEncoderMmFAtomic()/readEncoderMmFSettle()
+// collectEncoder()/readEncoder()/readEncoderAtomic()/readEncoderSettle()
 // likewise hold their last cached value — the sim-reachable counterpart to the
 // real Motor's hold-last-value fix (CR-03,
 // clasi/issues/encoder-integrity-i2c-failures-and-outlier-filter-recovery.md).

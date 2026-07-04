@@ -23,17 +23,17 @@ int32_t SimMotor::collectEncoder() const {
     return static_cast<int32_t>(reportedEnc());
 }
 
-float SimMotor::readEncoderMmF(const RobotConfig& /*cfg*/) const {
+float SimMotor::readEncoder(const RobotConfig& /*cfg*/) const {
     if (_readFailure) return _lastPosition;
     return reportedEnc();
 }
 
-float SimMotor::readEncoderMmFAtomic(const RobotConfig& /*cfg*/) const {
+float SimMotor::readEncoderAtomic(const RobotConfig& /*cfg*/) const {
     if (_readFailure) return _lastPosition;
     return reportedEnc();
 }
 
-float SimMotor::readEncoderMmFSettle(const RobotConfig& /*cfg*/) const {
+float SimMotor::readEncoderSettle(const RobotConfig& /*cfg*/) const {
     if (_readFailure) return _lastPosition;
     return reportedEnc();
 }

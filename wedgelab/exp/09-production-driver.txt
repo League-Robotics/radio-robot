@@ -6,6 +6,7 @@
 set nwheels 2
 set tickus 10000
 set sensors 1
+set verbose 1
 run legs 30
 stat
 run reset 20

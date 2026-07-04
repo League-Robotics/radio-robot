@@ -107,7 +107,7 @@ Motor::tick(now_ms)
 The cooperative-loop idle period (≥ 10 ms) provides the inter-phase settling time the
 hardware requires between requestEncoder and collectEncoder — this is unchanged.
 
-`MotorController::controlTick()` replaces `readEncoderMmFSettle(cfg)` calls with
+`MotorController::controlTick()` replaces `readEncoderSettle(cfg)` calls with
 `positionMm()` and `velocityMmps()` accessor calls. It still calls `setSpeed()` (→
 `setOutput()`).
 
@@ -363,8 +363,8 @@ graph TD
 graph TD
     subgraph "Split-phase state machine — BEFORE Sprint 039"
         R_CSSP["Robot::controlCollectSplitPhase(now)"]
-        R_CSSP --> RR["motorR.readEncoderMmFSettle(cfg)"]
-        R_CSSP --> RL["motorL.readEncoderMmFSettle(cfg)"]
+        R_CSSP --> RR["motorR.readEncoderSettle(cfg)"]
+        R_CSSP --> RL["motorL.readEncoderSettle(cfg)"]
         R_CSSP --> FILTER["outlier filter (speed-scaled)"]
         R_CSSP --> WEDGE["wedge push → Odometry"]
         R_CSSP --> MC_TICK["MotorController::controlTick()"]
@@ -512,14 +512,14 @@ graph TD
    integration) is: keep `MockHAL::tick(now_ms, cmds)` as the only integration site;
    `MockMotor::tick(now_ms)` is a no-op or copies `_encoderMm` → `_lastPositionMm`.
 
-3. **`readEncoderMmFAtomic` / `readEncoderMmFSettle` retention.** These two methods
+3. **`readEncoderAtomic` / `readEncoderSettle` retention.** These two methods
    exist on the current `IMotor` interface and are used by `startDriveClean` / `stop`
    in `MotorController` for position snapshots outside the control tick. After the
    interface split, they are not on `IVelocityMotor` (they leak the "two timing
    variants" protocol detail). Do they move to `IPositionMotor`, or remain only on the
    `Motor` concrete impl (accessed via `asPositionMotor()` cast), or stay as additional
    methods on `IVelocityMotor`?
-   **Recommendation:** Keep `readEncoderMmFAtomic` as a concrete-Motor-only method for
+   **Recommendation:** Keep `readEncoderAtomic` as a concrete-Motor-only method for
    now (called via `static_cast<Motor*>(&motorL)` in the one `startDriveClean` site
    that needs an atomic snapshot), or expose it on `IVelocityMotor` as a default-no-op
    with the Motor override. The latter is cleaner and avoids a downcast. Phase F can

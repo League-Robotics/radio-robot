@@ -58,9 +58,9 @@ public:
     // Split-phase encoder I/O — no-ops in the sim (encoder always ready).
     void    requestEncoder() override {}
     int32_t collectEncoder() const override;
-    float   readEncoderMmF(const RobotConfig& cfg) const override;
-    float   readEncoderMmFAtomic(const RobotConfig& cfg) const override;
-    float   readEncoderMmFSettle(const RobotConfig& cfg) const override;
+    float   readEncoder(const RobotConfig& cfg) const override;
+    float   readEncoderAtomic(const RobotConfig& cfg) const override;
+    float   readEncoderSettle(const RobotConfig& cfg) const override;
     void    resetEncoder() override;
 
     // rebaselineSoft() (064-003): sim has no I2C timing race to avoid, so
@@ -94,7 +94,7 @@ public:
     // counterpart to the real Motor's hold-last-value fix (CR-03). When
     // injected: tick() does not promote a fresh reportedEnc() (holds
     // _lastPosition, same early-return as _frozen), and collectEncoder() /
-    // readEncoderMmF() / readEncoderMmFAtomic() / readEncoderMmFSettle()
+    // readEncoder() / readEncoderAtomic() / readEncoderSettle()
     // likewise return the last cached value instead of a live plant read —
     // validating the downstream contract (Drive::_runOutlierFilter →
     // MotorController::controlTick → Odometry/EKF) that the real firmware's

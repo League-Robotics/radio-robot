@@ -141,27 +141,9 @@ void Motor::setSpeed(int8_t pct)
     }
 }
 
-int32_t Motor::readEncoder(const RobotConfig& cfg) const
+float Motor::readEncoder(const RobotConfig& cfg) const
 {
-    // motorId 2 = M2 = left wheel; use wheelTravelCalibL.
-    // motorId 1 = M1 = right wheel; use wheelTravelCalibR.
-    float wheelTravelCalib = (_motorId == 2) ? cfg.wheelTravelCalibL : cfg.wheelTravelCalibR;  // [mm/deg]
-
-    // NOTE: split-phase contract — caller must have issued requestEncoder()
-    // at least one loop period before calling this. collectEncoder() issues
-    // the 4-byte read without any busy-wait. The loop's idle sleep provides
-    // the required vendor inter-transaction delay.
-    int32_t raw = collectEncoder();   // tenths of degrees
-    // Mirror TypeScript: (raw / 10.0) * wheelTravelCalib * fwdSign
-    float degF  = raw / 10.0f;
-    float mmF   = degF * wheelTravelCalib * (float)_fwdSign;
-    return (int32_t)mmF;
-}
-
-float Motor::readEncoderMmF(const RobotConfig& cfg) const
-{
-    // Same as readEncoder() but returns full float resolution (no truncation to
-    // whole mm). The velocity loop differentiates position, so 1 mm truncation
+    // Full float resolution (no truncation to whole mm). The velocity loop differentiates position, so 1 mm truncation
     // becomes ±~17 mm/s quantization noise at the ~58 ms loop rate.
     //
     // NOTE: split-phase contract — caller must have issued requestEncoder()
@@ -272,7 +254,7 @@ void Motor::rebaselineSoft()
     // Drive::resetEncoders()) that zero unconditionally right after calling
     // MotorController::resetEncoderAccumulators().
     //
-    // Inverse of readEncoderMmF()'s conversion (mm = (raw/10) * wheelTravelCalib *
+    // Inverse of readEncoder()'s conversion (mm = (raw/10) * wheelTravelCalib *
     // fwdSign): rawDelta = (mm / (wheelTravelCalib * fwdSign)) * 10. rawDelta is the
     // amount by which the offset-subtracted raw reading would need to move
     // to reach 0, i.e. exactly the increment _encOffset needs.
@@ -429,16 +411,16 @@ int32_t Motor::collectEncoder() const
     return result;
 }
 
-float Motor::readEncoderMmFAtomic(const RobotConfig& cfg) const
+float Motor::readEncoderAtomic(const RobotConfig& cfg) const
 {
-    // Atomic read in mm (float). Same conversion as readEncoderMmF() but using
+    // Atomic read in mm (float). Same conversion as readEncoder() but using
     // readEncoderAtomic() so it is safe outside the control tick.
     float wheelTravelCalib = (_motorId == 2) ? cfg.wheelTravelCalibL : cfg.wheelTravelCalibR;  // [mm/deg]
     int32_t raw = readEncoderAtomic();  // tenths of degrees minus offset
     return (raw / 10.0f) * wheelTravelCalib * (float)_fwdSign;
 }
 
-float Motor::readEncoderMmFSettle(const RobotConfig& cfg) const
+float Motor::readEncoderSettle(const RobotConfig& cfg) const
 {
     // Settle-only encoder read — skips the 4 ms pre-write bus-idle used by
     // readEncoderAtomic(). The fixed-rate control loop leaves the bus naturally
@@ -472,7 +454,7 @@ void Motor::tick(uint32_t now_ms)
     // Per-loop split-phase encoder read (039-002).
     //
     // Issues the SAME I2C transaction controlCollectSplitPhase previously issued
-    // per wheel — readEncoderMmFSettle: 0x46 write → 4 ms post-write settle →
+    // per wheel — readEncoderSettle: 0x46 write → 4 ms post-write settle →
     // 4-byte read → convert to mm.  The bytes on the wire are byte-for-byte
     // identical to the pre-039 path; only the call site moved (Robot → here).
     //
@@ -482,7 +464,7 @@ void Motor::tick(uint32_t now_ms)
     // velocityMmps() — it is NOT consumed by the PID (which keeps its own EMA /
     // plausibility-gated differentiation in MotorController::controlTick), so the
     // golden-TLM frame is unaffected.
-    float pos = readEncoderMmFSettle(_cfg);
+    float pos = readEncoderSettle(_cfg);
 
     if (_hasLastTick) {
         float elapsed_s = static_cast<float>(now_ms - _lastTickMs) / 1000.0f;

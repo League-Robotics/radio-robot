@@ -2,7 +2,7 @@
 test_encoder_read_failure.py — 064-005 regression tests.
 
 CR-03 (clasi/issues/encoder-integrity-i2c-failures-and-outlier-filter-recovery.md):
-Motor::collectEncoder()/readEncoderAtomic()/readEncoderMmFSettle()/
+Motor::collectEncoder()/readEncoderAtomic()/readEncoderSettle()/
 requestEncoder() (source/hal/real/Motor.cpp) never checked the I2C write/read
 return codes; on failure the response buffer stayed {0,0,0,0}, so the computed
 position became `0 - _encOffset` — a jump to a large, arbitrary value. The fix

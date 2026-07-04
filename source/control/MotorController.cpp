@@ -310,9 +310,9 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
                     // (033-005c) Include a fresh raw read alongside the filtered
                     // value.  raw frozen + enc frozen → real chip/I2C wedge or
                     // stall; raw moving + enc frozen → outlier-filter hold.
-                    // readEncoderMmFSettle is used (not Atomic) to avoid the
+                    // readEncoderSettle is used (not Atomic) to avoid the
                     // extra 4 ms pre-write idle during the EVT emit path.
-                    int rawL = (int)_motorL.readEncoderMmFSettle(_cal);
+                    int rawL = (int)_motorL.readEncoderSettle(_cal);
                     char evtBuf[112];
                     snprintf(evtBuf, sizeof(evtBuf),
                              "EVT enc_wedged wheel=L enc=%d raw=%d n=%u err=%lu reentry=%lu lastErr=%d",
@@ -356,7 +356,7 @@ void MotorController::controlTick(HardwareState& inputs, MotorCommands& cmds,
                     // (033-005c) Include a fresh raw read alongside the filtered
                     // value.  raw frozen + enc frozen → real chip/I2C wedge or
                     // stall; raw moving + enc frozen → outlier-filter hold.
-                    int rawR = (int)_motorR.readEncoderMmFSettle(_cal);
+                    int rawR = (int)_motorR.readEncoderSettle(_cal);
                     char evtBuf[112];
                     snprintf(evtBuf, sizeof(evtBuf),
                              "EVT enc_wedged wheel=R enc=%d raw=%d n=%u err=%lu reentry=%lu lastErr=%d",
@@ -468,8 +468,8 @@ void MotorController::getEncoderPositions(int32_t& left, int32_t& right) const
 {
     // Use atomic reads (request → 4 ms wait → collect) to ensure valid readings
     // outside the split-phase control tick.
-    left  = static_cast<int32_t>(_motorL.readEncoderMmFAtomic(_cal));
-    right = static_cast<int32_t>(_motorR.readEncoderMmFAtomic(_cal));
+    left  = static_cast<int32_t>(_motorL.readEncoderAtomic(_cal));
+    right = static_cast<int32_t>(_motorR.readEncoderAtomic(_cal));
 }
 
 bool MotorController::computeAtRest() const

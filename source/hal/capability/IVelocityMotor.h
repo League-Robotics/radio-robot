@@ -63,15 +63,15 @@ public:
     virtual int32_t collectEncoder() const = 0;
 
     // High-resolution encoder read in mm as float (used by velocity loop).
-    // readEncoderMmF is the generic name; concrete variants below for
+    // readEncoder is the generic name; concrete variants below for
     // specific timing contexts.
-    virtual float readEncoderMmF(const RobotConfig& cfg) const = 0;
+    virtual float readEncoder(const RobotConfig& cfg) const = 0;
 
     // Atomic single-shot encoder read (~8 ms, safe outside control loop).
-    virtual float readEncoderMmFAtomic(const RobotConfig& cfg) const = 0;
+    virtual float readEncoderAtomic(const RobotConfig& cfg) const = 0;
 
     // Settle-only encoder read (~4 ms, safe inside fixed-rate control loop).
-    virtual float readEncoderMmFSettle(const RobotConfig& cfg) const = 0;
+    virtual float readEncoderSettle(const RobotConfig& cfg) const = 0;
 
     // Zero this motor's encoder accumulator (software offset reset).
     virtual void resetEncoder() = 0;

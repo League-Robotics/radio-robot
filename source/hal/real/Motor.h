@@ -75,7 +75,7 @@ public:
      * Called once per cooperative-loop iteration via NezhaHAL::tick(now),
      * BEFORE loopTickOnce.  Issues the split-phase encoder read (the exact
      * 0x46-write + 4-byte-read I2C transaction that controlCollectSplitPhase
-     * previously issued via readEncoderMmFSettle) and caches the result in
+     * previously issued via readEncoderSettle) and caches the result in
      * _lastPosition.  Differentiates against the previous cached position over
      * the elapsed time and caches _lastVelocityMmps.
      *
@@ -90,14 +90,11 @@ public:
     float   position()     const override { return _lastPosition; }
     float   velocityMmps() const override { return _lastVelocityMmps; }
 
-    // Read cumulative encoder in mm using calibration from cfg.
-    // Uses wheelTravelCalibL if motorId==LEFT_MOTOR, wheelTravelCalibR otherwise.
-    int32_t readEncoder(const RobotConfig& cfg) const;
-
-    // High-resolution variant: cumulative encoder in mm as float (NOT truncated
-    // to whole mm). Used by the velocity loop so the encoder-delta velocity
-    // estimate isn't quantized to ±1 mm/tick (a throb source on the inner loop).
-    float   readEncoderMmF(const RobotConfig& cfg) const override;
+    // Read cumulative encoder in mm as float using calibration from cfg
+    // (wheelTravelCalibL if motorId==LEFT_MOTOR, wheelTravelCalibR otherwise).
+    // Float (NOT truncated to whole mm): used by the velocity loop so the
+    // encoder-delta velocity estimate isn't quantized to ±1 mm/tick (a throb source on the inner loop).
+    float   readEncoder(const RobotConfig& cfg) const override;
 
     // Zero this motor's encoder accumulator (software offset reset,
     // matches chip TypeScript resetRelAngleValue() behaviour).
@@ -281,35 +278,35 @@ public:
      *
      * (064-005) On I2C failure (either the write or the read reports
      * non-OK) returns the last known-good value (_lastGoodRawEnc) instead
-     * of computing from a zeroed response buffer (CR-03). readEncoderMmFAtomic()
+     * of computing from a zeroed response buffer (CR-03). readEncoderAtomic()
      * delegates to this method, so it is protected automatically.
      */
     int32_t readEncoderAtomic() const;
 
     /**
-     * readEncoderMmFAtomic — safe single-shot encoder read in mm (float).
+     * readEncoderAtomic — safe single-shot encoder read in mm (float).
      *
      * Same as readEncoderAtomic() but converts to mm using calibration from cfg.
      * Use for: startDrive(), startDriveClean(), stop() — any position snapshot
      * outside the normal control tick.  Cost: ~8 ms.
      */
-    float readEncoderMmFAtomic(const RobotConfig& cfg) const override;
+    float readEncoderAtomic(const RobotConfig& cfg) const override;
 
     /**
-     * readEncoderMmFSettle — control-loop encoder read in mm (float).
+     * readEncoderSettle — control-loop encoder read in mm (float).
      *
      * Skips the 4 ms pre-write bus-idle; uses only the 4 ms post-write settle.
      * Safe in the fixed-rate control loop: the loop's natural inter-tick idle
      * provides the bus recovery time that the pre-idle would supply. Cost: ~4 ms.
      *
      * Use for: controlCollectSplitPhase() — both-encoder read every tick.
-     * Do NOT use for one-off reads (use readEncoderMmFAtomic instead).
+     * Do NOT use for one-off reads (use readEncoderAtomic instead).
      *
      * (064-005) On I2C failure (either the write or the read reports
      * non-OK) returns the last known-good value (_lastGoodRawEnc, converted
      * to mm) instead of computing from a zeroed response buffer (CR-03).
      */
-    float readEncoderMmFSettle(const RobotConfig& cfg) const override;
+    float readEncoderSettle(const RobotConfig& cfg) const override;
 
 private:
     /**

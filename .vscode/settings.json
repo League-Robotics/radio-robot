@@ -10,8 +10,13 @@
 
     "clangd.path": "/usr/bin/clangd",
     "clangd.arguments": [
-        // Read the real per-file flags the build uses.
-        "--compile-commands-dir=/Volumes/Proj/proj/RobotProjects/radio-robot-elite/build",
+        // Read the real per-file flags the build uses — from a stable merged
+        // copy OUTSIDE the repo, because rebuilds regenerate
+        // build/compile_commands.json and (when codal.json pointed at the
+        // wedge lab) repeatedly dropped every source/ entry, causing the
+        // recurring phantom-squiggle storms. Refresh this copy from
+        // build/compile_commands.json after a production build.
+        "--compile-commands-dir=/Users/eric/.cache/clangd-cdb/radio-robot-elite",
         // Let clangd run the ARM GCC driver to import its newlib + libstdc++
         // system include paths (so cross-target headers resolve correctly).
         "--query-driver=/opt/homebrew/bin/arm-none-eabi-*",

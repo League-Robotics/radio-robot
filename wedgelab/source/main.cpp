@@ -365,6 +365,29 @@ static bool wheelFeed(Wheel& w, int32_t raw, int cmdPct, const char* phase,
                     newLatch = true;
                     P("LATCH M%d raw=%ld tick=%lu phase=%s pwm=%d\r\n",
                       (int)w.id, (long)raw, (unsigned long)tick, phase, cmdPct);
+                    // DISCRIMINATOR (driver=1): production Motor holds the
+                    // last-good value on I2C failure, so a frozen position()
+                    // is EITHER the chip's 0x46 register latched OR the
+                    // driver masking failing reads. Two raw reads through
+                    // THIS lab's independent path, 60 ms apart, decide:
+                    //   raw frozen too   -> chip-register latch (XCHECK CHIP)
+                    //   raw still moving -> driver-layer artifact (XCHECK DRIVER)
+                    if (kDriver) {
+                        bool xo1, xo2;
+                        busyUs(4000);
+                        int32_t x1 = nzReadAngle(w.id, xo1, false);
+                        uBit.sleep(60);
+                        busyUs(4000);
+                        int32_t x2 = nzReadAngle(w.id, xo2, false);
+                        int32_t xd = x2 - x1; if (xd < 0) xd = -xd;
+                        P("XCHECK M%d %s x1=%ld x2=%ld d=%ld ok=%d,%d "
+                          "buserr10=%lu\r\n",
+                          (int)w.id,
+                          (!xo1 || !xo2) ? "BUSFAIL"
+                              : (xd <= 3 ? "CHIP" : "DRIVER"),
+                          (long)x1, (long)x2, (long)xd, (int)xo1, (int)xo2,
+                          gBus ? (unsigned long)gBus->errCount(0x10) : 0ul);
+                    }
                     ringDump();
                 }
             } else {
@@ -443,6 +466,14 @@ static void readWheels(const char* phase, uint32_t tick, bool pwmChanging)
 
 static void nzPwmGuarded(uint8_t motor, int pct)
 {
+    // Keep the production driver's write-on-change cache COHERENT with the
+    // wire: route through Motor::setSpeed first (it writes or legitimately
+    // skips), then put the raw command on the wire as the safety backstop.
+    // After this, Motor's cache == wire state, so no later setSpeed call
+    // can be wrongly suppressed by a raw write it never saw. (v3 bug: raw
+    // stops left Motor believing its old speed was still on the wire.)
+    if (kDriver && gMot[motor - 1]) gMot[motor - 1]->setSpeed((int8_t)pct);
+    gReqPwm[motor] = pct;
     busyUs(4000);
     nzPwmRaw(motor, pct);
 }
@@ -593,11 +624,15 @@ static void runLegs(int n)
             ++tick;
             int prev = pwm;
             if (phase[0] == 'r') {                       // ramp
+                // Command the target; the active driver's own slew shapes
+                // the ramp (production: MotorSlew inside setSpeed). Exit is
+                // TIME-based — 6 ticks covers 0->cruise in both drivers.
+                // (v3 bug: exit tested gLastPwm[], which the production
+                // driver never updates — legs never left ramp; Eric caught
+                // the "nothing happening" runs.)
                 pwm = target;
-                bool allAt = true;
-                for (int m = 1; m <= nW(); ++m)
-                    if (gLastPwm[m] != target) allAt = false;
-                if (allAt) { phase = "hold"; holdSet = false; }
+                if (++ditherLeft >= 6) { phase = "hold"; holdSet = false;
+                                         ditherLeft = 0; }
             } else if (phase[0] == 'h') {                // hold
                 if (!holdSet) { phaseEnd = t + 400000u; holdSet = true; }
                 pwm = target;
@@ -608,11 +643,10 @@ static void runLegs(int n)
                     phase = "decel";
                 }
             } else if (phase[0] == 'd') {                // decel
-                // Step |pwm| toward zero relative to the CURRENT value —
-                // never a fixed direction. (v1 stepped a fixed -1 on
-                // forward legs; one -1 dither write escaped the band and
-                // walked to -100. See the 2026-07-03 post-mortem.)
-                int cur = gLastPwm[1];
+                // Step |pwm| toward zero relative to the last COMMANDED
+                // value — never a fixed direction (2026-07-03 post-mortem)
+                // and never a driver-internal variable (v3 ramp bug).
+                int cur = prev;
                 int mag = (cur >= 0) ? cur : -cur;
                 if (mag > kDither) {
                     pwm = (cur > 0) ? cur - 1 : cur + 1;  // toward zero
@@ -654,16 +688,8 @@ static void runLegs(int n)
                 stopVerified("pwm-invariant");
                 return;
             }
-            int before = gLastPwm[1];
             pwmAll(pwm);
-            bool changing = (gLastPwm[1] != before) || (prev != pwm);
-            readWheels(phase, tick, changing);
-            if (phase[0] == 'd') {
-                bool allZero = (pwm == 0);
-                for (int m = 1; m <= nW(); ++m)
-                    if (gLastPwm[m] != 0) allZero = false;
-                if (allZero) phase = "stop";
-            }
+            readWheels(phase, tick, prev != pwm);
         }
         // inter-leg rest; auto-heal if latched
         bool anyLatched = false;

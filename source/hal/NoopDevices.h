@@ -18,13 +18,13 @@ public:
     float   velocityMmps() const override           { return 0.0f; }
     void    requestEncoder() override               {}
     int32_t collectEncoder() const override         { return 0; }
-    float   readEncoderMmF(const RobotConfig& cfg) const override {
+    float   readEncoder(const RobotConfig& cfg) const override {
         (void)cfg; return 0.0f;
     }
-    float   readEncoderMmFAtomic(const RobotConfig& cfg) const override {
+    float   readEncoderAtomic(const RobotConfig& cfg) const override {
         (void)cfg; return 0.0f;
     }
-    float   readEncoderMmFSettle(const RobotConfig& cfg) const override {
+    float   readEncoderSettle(const RobotConfig& cfg) const override {
         (void)cfg; return 0.0f;
     }
     void    resetEncoder() override                 {}

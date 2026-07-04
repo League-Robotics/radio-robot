@@ -722,7 +722,7 @@ void Drive::_runOutlierFilter(uint32_t now)
             if (dR > kMaxDelta || dR < -kMaxDelta) {
                 newR = _hw.encPos[0];
                 for (int k = 0; k < kRetries; ++k) {
-                    float r2  = _motorR.readEncoderMmFSettle(_robCfg);
+                    float r2  = _motorR.readEncoderSettle(_robCfg);
                     float dr2 = r2 - _hw.encPos[0];
                     if (dr2 <= kMaxDelta && dr2 >= -kMaxDelta) { newR = r2; break; }
                 }
@@ -747,7 +747,7 @@ void Drive::_runOutlierFilter(uint32_t now)
             if (dL > kMaxDelta || dL < -kMaxDelta) {
                 newL = _hw.encPos[1];
                 for (int k = 0; k < kRetries; ++k) {
-                    float r2  = _motorL.readEncoderMmFSettle(_robCfg);
+                    float r2  = _motorL.readEncoderSettle(_robCfg);
                     float dr2 = r2 - _hw.encPos[1];
                     if (dr2 <= kMaxDelta && dr2 >= -kMaxDelta) { newL = r2; break; }
                 }

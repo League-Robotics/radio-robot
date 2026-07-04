@@ -49,7 +49,7 @@ The sim CMake build sets no `CMAKE_BUILD_TYPE`/`NDEBUG`, so `assert` is live: th
 
 ### CR-03 · HIGH · Encoder I2C reads ignore failure — a failed read manufactures a phantom jump
 
-[Motor.cpp:305-325](../../source/hal/real/Motor.cpp#L305-L325) (`collectEncoder`), [Motor.cpp:336-354](../../source/hal/real/Motor.cpp#L336-L354) (`readEncoderMmFSettle`, the per-tick path), [Motor.cpp:215-263](../../source/hal/real/Motor.cpp#L215-L263) (`readEncoderAtomic`)
+[Motor.cpp:305-325](../../source/hal/real/Motor.cpp#L305-L325) (`collectEncoder`), [Motor.cpp:336-354](../../source/hal/real/Motor.cpp#L336-L354) (`readEncoderSettle`, the per-tick path), [Motor.cpp:215-263](../../source/hal/real/Motor.cpp#L215-L263) (`readEncoderAtomic`)
 
 All three encoder read paths ignore the return codes of `_i2c.read()`/`write()` — on failure the response buffer stays `{0,0,0,0}`, so the "position" becomes `0 − _encOffset`, i.e. a jump to a large arbitrary value for that tick. Contrast `readSpeedRaw` ([Motor.cpp:462-478](../../source/hal/real/Motor.cpp#L462-L478)) which checks both and returns a sentinel. Downstream consequences: (a) while driving, the outlier filter absorbs a *single* bad tick — but see CR-02 for what happens on sustained failure; (b) `resetEncoder()`'s median-of-3 uses `readEncoderAtomic` — **three failing reads produce a confidently-wrong offset** (median of garbage); the readback check helps only if reads start succeeding again; (c) the `EVT ROTSTOP` diagnostic in [MotionCommand.cpp:163-179](../../source/commands/MotionCommand.cpp#L163-L179) exists precisely because garbage reads have been observed corrupting turn baselines — this is the untreated source.
 
