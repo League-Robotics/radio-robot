@@ -136,8 +136,9 @@ void Planner::softStop(uint32_t now)
 // — safe because there is no fiber boundary in the single cooperative main loop.
 //
 // NOTE: OTOS correction is NOT done here.  It is the sole responsibility of
-// Robot::otosCorrect() called at the slow cadence in LoopScheduler
-// (ticket 005 wired this; ticket 006 moved it to the scheduler task).
+// Drive::tickUpdate() STEP 5 (lag-gated live hal.otos() read + fusion gate),
+// running in loopTickOnce's SENSE phase.  (Robot::otosCorrect, which older
+// comments referenced, was dead since the 060-005 cutover and was removed.)
 // ---------------------------------------------------------------------------
 
 void Planner::driveAdvance(HardwareState& inputs, MotorCommands& cmds,

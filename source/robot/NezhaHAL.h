@@ -113,6 +113,12 @@ public:
     bool isBenchMode() const override {
         return _otosActive == static_cast<const IOdometer*>(&_benchOtos);
     }
+
+    // Bind the LIVE RobotConfig (Robot's owned copy, mutated by SET) so the
+    // bench tick reads the same trackwidth Drive's EKF prediction uses.  The
+    // construction-time _trackwidth cache stays as the fallback.  Overrides
+    // Hardware::bindLiveConfig.
+    void bindLiveConfig(const RobotConfig* cfg) override { _liveCfg = cfg; }
 #endif // BENCH_OTOS_ENABLED
 
 private:
@@ -147,5 +153,10 @@ private:
     // (mirrors the logic formerly in Robot::benchOtosTick).
     float            _trackwidth    = 0.0f;  // [mm]
     uint32_t         _lastBenchTick = 0u;    // [ms]
+
+    // LIVE RobotConfig (Robot's SET-mutated copy), bound post-construction
+    // via bindLiveConfig().  nullptr until Robot's constructor runs; the
+    // bench tick falls back to the construction-time _trackwidth cache.
+    const RobotConfig* _liveCfg     = nullptr;
 #endif // BENCH_OTOS_ENABLED
 };

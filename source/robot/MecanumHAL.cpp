@@ -71,14 +71,13 @@ void MecanumHAL::tick(uint32_t now_ms)
 // ---------------------------------------------------------------------------
 // tick(now_ms, cmds) — actuator-state tick for bench sensor integration.
 //
-// When bench mode is active, integrates the commanded wheel velocities into
-// BenchOtosSensor.
+// When bench mode is active, integrates the MEASURED front-pair wheel travel
+// into BenchOtosSensor (encoder feed — see BenchOtosSensor::tickEncoder).
 //
 // TODO(T5): replace the front-pair-only approximation below with a proper
-// MecanumKinematics::forward call once MotorCommands gains the 4-element
-// tgtSpeed[] array for mecanum.  For now, use the
-// same differential approximation as NezhaHAL (front-pair vx, zero vy) so
-// the bench OTOS plant gives a reasonable forward-motion estimate.
+// MecanumKinematics::forward call over all four measured wheels.  For now,
+// use the same differential approximation as NezhaHAL (front-pair vx, zero
+// vy) so the bench OTOS plant gives a reasonable forward-motion estimate.
 //
 // dt baseline is maintained every tick (even when bench mode is off) to
 // avoid a large spike on the first tick after bench mode is enabled —
@@ -92,12 +91,17 @@ void MecanumHAL::tick(uint32_t now_ms, const MotorCommands& cmds)
     _lastBenchTickMs   = now_ms;
 
     if (!isBenchMode()) return;
+    (void)cmds;
 
     // Front-pair approximation: treat as differential using FL(L) and FR(R).
     // trackwidth used here is 2 * halfTrack (full track width).
-    // Array convention: [0]=R (FR), [1]=L (FL) — see OutputState.h.
-    float trackwidth = 2.0f * _halfTrack;   // [mm]
-    benchOtosPtr()->tick(cmds.tgtSpeed[1], cmds.tgtSpeed[0], trackwidth, dt_ms);
+    // Feed MEASURED wheel travel, not commanded tgtSpeed — same rationale as
+    // NezhaHAL::tick (commanded integration is blind to PID lag and coast;
+    // see BenchOtosSensor::tickEncoder).
+    float trackwidth = (_liveCfg != nullptr) ? _liveCfg->trackwidth
+                                             : 2.0f * _halfTrack;   // [mm]
+    benchOtosPtr()->tickEncoder(_motorFL.position(), _motorFR.position(),
+                                trackwidth, dt_ms);
 #else
     (void)now_ms;
     (void)cmds;

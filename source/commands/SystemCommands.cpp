@@ -752,8 +752,12 @@ static void handleSI(const ArgList& args, const char* corrId,
     // observations agree with the controller pose, instead of dragging the EKF
     // back toward the OTOS boot frame (the "starts right, then rotates away"
     // bug).  h (cdeg) -> rad: pi/18000 = 1.74532925e-4.
-    robot->otos.setWorldPose((float)x, (float)y,
-                             (float)h * 1.74532925e-4f);
+    // Resolve the ACTIVE odometer live via hal.otos() — the cached robot->otos
+    // ref is construction-bound to the real chip, so in bench mode SI would
+    // re-anchor the wrong sensor and the EKF got dragged back to the stale
+    // bench frame within seconds (bench-OTOS issue, 2026-07-03).
+    robot->hal.otos().setWorldPose((float)x, (float)y,
+                                   (float)h * 1.74532925e-4f);
     char body[48];
     snprintf(body, sizeof(body), "x=%d y=%d h=%d", (int)x, (int)y, (int)h);
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "setpose", body,

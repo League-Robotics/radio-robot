@@ -95,9 +95,18 @@ void NezhaHAL::tick(uint32_t now, const MotorCommands& cmds)   // [ms]
 
     // Early-return when bench mode is off (production path — nearly free).
     if (!isBenchMode()) return;
+    (void)cmds;
 
-    // Array convention: [0]=R (FR), [1]=L (FL) — see OutputState.h.
-    benchOtosPtr()->tick(cmds.tgtSpeed[1], cmds.tgtSpeed[0], _trackwidth, dt);
+    // Feed MEASURED wheel travel, not commanded tgtSpeed: the commanded
+    // integral is blind to PID lag and post-cutoff coast (~8°/turn heading
+    // loss on tovez), so the bench pose disagreed with the encoder pose and
+    // tours could not close (see BenchOtosSensor::tickEncoder).  position()
+    // returns the value cached by this tick's sensor read — no I2C here.
+    // tickEncoder owns the delta baseline and the encoder-reset clamp.
+    // Trackwidth from the LIVE config when bound (same value Drive's EKF
+    // prediction uses, tracks runtime SET tw=…); construction cache otherwise.
+    const float tw = (_liveCfg != nullptr) ? _liveCfg->trackwidth : _trackwidth;
+    benchOtosPtr()->tickEncoder(_motorL.position(), _motorR.position(), tw, dt);
 #else
     // Production: no bench sensor; this override is a no-op.  (034-006)
     (void)now;

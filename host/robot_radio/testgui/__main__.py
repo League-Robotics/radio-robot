@@ -1607,6 +1607,50 @@ def _build_main_window():  # type: ignore[return]
             + (f" ({n_bad} REJECTED)" if n_bad else "")
         )
 
+    def _check_firmware_version(transport: "Transport") -> None:
+        """Compare the robot's `VER` firmware version against the host package.
+
+        The 2026-07-03 bench-OTOS session lost hours to a robot silently
+        running the previous day's firmware (which predated the sprint-074
+        OTOS fusion fixes).  The host knows both sides: the robot answers
+        `VER` with `fw=<version>` and the installed package version tracks
+        the tree (`dotconfig version bump` keeps pyproject / Protocol.h in
+        lockstep), so a mismatch is loud from now on.
+
+        Best-effort: link drops or an unknown host version log an INFO/WARN
+        line instead of blocking the connect.
+        """
+        import re as _re
+
+        try:
+            reply = transport.command("VER", read_ms=600) or ""
+        except Exception as exc:  # noqa: BLE001
+            _append_log(f"[WARN] VER query failed: {exc}")
+            return
+        m = _re.search(r"fw=([0-9][^\s#]*)", reply)
+        if m is None:
+            _append_log(
+                "[WARN] VER gave no parseable reply (link drop?) — firmware "
+                "version unverified"
+            )
+            return
+        fw = m.group(1)
+        try:
+            from importlib.metadata import version as _pkg_version
+
+            host_ver = _pkg_version("microbit-v2-samples-tools")
+        except Exception:  # noqa: BLE001
+            _append_log(f"[INFO] robot firmware {fw} (host version unknown)")
+            return
+        if fw == host_ver:
+            _append_log(f"[INFO] robot firmware {fw} matches host {host_ver}")
+        else:
+            _append_log(
+                f"[WARN] *** ROBOT FIRMWARE {fw} != HOST {host_ver} — reflash "
+                "before trusting bench/playfield behaviour (a stale flash "
+                "masked the 2026-07-03 bench-OTOS bugs) ***"
+            )
+
     def _on_robot_changed(index: int) -> None:
         """Load the robot selected in the dropdown (reloads on every change).
 
@@ -2068,6 +2112,9 @@ def _build_main_window():  # type: ignore[return]
         # For Sim transport, STREAM 50 is sent internally by the tick-thread.
         # For hardware transports, send STREAM 50 here.
         if not isinstance(transport, SimTransport):
+            # Loudly flag a robot running stale firmware (hardware only —
+            # the sim library is always built from this tree).
+            _check_firmware_version(transport)
             try:
                 reply = transport.command("STREAM 50", read_ms=300)
                 if reply:
@@ -2087,6 +2134,23 @@ def _build_main_window():  # type: ignore[return]
         # robot's values override whatever DefaultConfig.cpp baked in — an
         # uncalibrated robot pushes neutral values (SET rotSlip=0 etc.).
         _push_robot_calibration()
+
+        # Serial = BENCH MODE: the robot is on the stand, where the real OTOS
+        # optically tracks nothing yet often reads status-clean — the EKF then
+        # fuses "stationary at the last anchor" and pins the fused pose while
+        # the encoders move, and the heading-hold fights the phantom heading
+        # (bench-OTOS diagnosis, 2026-07-03).  Swap in the bench OTOS (an
+        # errored copy of measured wheel travel) so pose-dependent behaviour
+        # works on the stand.  Relay (playfield) and Sim keep their odometer.
+        if name == "Serial":
+            try:
+                reply = transport.command("DBG OTOS BENCH 1", read_ms=500)
+                _append_log(
+                    "[BENCH] bench OTOS enabled (Serial = bench mode) → "
+                    f"{(reply or '').strip() or '(no reply)'}"
+                )
+            except Exception as exc:  # noqa: BLE001
+                _append_log(f"[WARN] Could not enable bench OTOS: {exc}")
 
         # Start the live-view worker for Relay (PLAYFIELD MODE) only.
         # Sim and Serial have no playfield camera.
@@ -2154,6 +2218,13 @@ def _build_main_window():  # type: ignore[return]
         _stop_live_worker()
         # Detach cursor-key driving before the transport goes away.
         _driver.detach()
+        # Best-effort: restore the real OTOS if this was a bench (Serial)
+        # session, so a later playfield run doesn't inherit bench mode.
+        if isinstance(transport, SerialTransport):
+            try:
+                transport.command("DBG OTOS BENCH 0", read_ms=300)
+            except Exception:  # noqa: BLE001
+                pass
         try:
             transport.disconnect()
         except Exception as exc:

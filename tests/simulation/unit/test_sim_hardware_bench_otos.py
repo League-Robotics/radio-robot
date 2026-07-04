@@ -157,6 +157,87 @@ def test_bench_otos_isbenchmode_round_trip():
         assert "otos bench=0" in send(s, "DBG OTOS BENCH 0")
 
 
+def test_oz_reanchors_bench_accumulators():
+    """`OZ` in bench mode must zero the bench accumulators (both ideal and
+    errored), not the real chip.
+
+    Regression for the OZ/SI re-anchor fix: OtosCommands resolved the
+    odometer through a pointer bound at Robot construction (always the real
+    sensor) and BenchOtosSensor::setPositionRaw was a stub — so after any
+    motion, the GUI origin reset zeroed the EKF but left the bench frame
+    stale, and the EKF was dragged back to the stale pose within seconds
+    (hardware-confirmed on tovez, 2026-07-03).
+    """
+    with Sim() as s:
+        send(s, "DBG OTOS BENCH 1")
+        send(s, "VW 100 300")
+        s.tick_for(400)
+        send(s, "X")
+        s.tick_for(100)
+        reply = send(s, "DBG OTOS")
+        assert parse_triple(reply, "otos") != (0, 0, 0), f"need motion first: {reply!r}"
+
+        send(s, "OZ")
+        s.tick_for(50)
+        reply = send(s, "DBG OTOS")
+        assert parse_triple(reply, "otos") == (0, 0, 0), (
+            f"OZ must zero the bench errored accumulator: {reply!r}"
+        )
+        assert parse_triple(reply, "ideal") == (0, 0, 0), (
+            f"OZ must zero the bench ideal accumulator: {reply!r}"
+        )
+
+
+def test_si_reanchors_bench_accumulators():
+    """`SI x y h` in bench mode must re-anchor the bench accumulators to the
+    same world fix as the EKF (via the live hal.otos().setWorldPose route),
+    so the OTOS observations agree with the just-set pose instead of dragging
+    the EKF back to the pre-SI frame."""
+    with Sim() as s:
+        send(s, "DBG OTOS BENCH 1")
+        send(s, "VW 100 300")
+        s.tick_for(400)
+        send(s, "X")
+        s.tick_for(100)
+        assert parse_triple(send(s, "DBG OTOS"), "otos") != (0, 0, 0)
+
+        send(s, "SI 0 0 0")
+        s.tick_for(50)
+        reply = send(s, "DBG OTOS")
+        assert parse_triple(reply, "otos") == (0, 0, 0), (
+            f"SI 0 0 0 must re-anchor the bench errored accumulator: {reply!r}"
+        )
+
+
+def test_bench_otos_ignores_encoder_reset():
+    """An encoder reset (ZERO enc) must NOT teleport the bench pose.
+
+    The bench plant integrates MEASURED cumulative wheel travel
+    (BenchOtosSensor::tickEncoder, bench-otos measured-motion fix): a reset
+    steps position() by the whole accumulated travel in one tick — an event
+    no physical wheel produces and the real OTOS never sees.  The reset
+    clamp must swallow that step (re-basing the baseline), leaving the
+    accumulated pose intact.
+    """
+    with Sim() as s:
+        send(s, "DBG OTOS BENCH 1")
+        send(s, "VW 100 0")
+        s.tick_for(700)   # accumulate well past the per-tick clamp ceiling
+        send(s, "X")
+        s.tick_for(100)
+        ideal_stop = parse_triple(send(s, "DBG OTOS"), "ideal")
+        assert ideal_stop[0] > 30, f"need real travel before the reset: {ideal_stop}"
+
+        send(s, "ZERO enc")
+        s.tick_for(100)
+        ideal_after = parse_triple(send(s, "DBG OTOS"), "ideal")
+
+        assert abs(ideal_after[0] - ideal_stop[0]) <= 2 and abs(ideal_after[1] - ideal_stop[1]) <= 2, (
+            f"encoder reset must not move the bench pose: "
+            f"before={ideal_stop} after={ideal_after}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # 074-002: Drive's LIVE fusion/telemetry path observes a runtime bench-OTOS
 # swap.

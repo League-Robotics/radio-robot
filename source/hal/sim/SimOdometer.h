@@ -32,7 +32,7 @@ struct RobotConfig;   // fwd decl — reads odomOffX/odomOffY for the lever-arm 
  * readTransformed() re-reads and rescales those SAME registers every tick, so
  * there is no separate accumulator to fall out of sync there.  `OZ`
  * (setPositionRaw(0,0,0)) therefore actually zeroes the pose the EKF fuses via
- * Robot::otosCorrect(), matching hardware (ticket 063-006).
+ * Drive::tickUpdate STEP 5, matching hardware (ticket 063-006).
  *
  * Every error setter defaults to a no-op, so a fresh SimOdometer is PERFECT.
  *
