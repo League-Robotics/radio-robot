@@ -20,12 +20,21 @@ message LineSensorState {
 }
 
 // Configuration for the line sensor array.
+//
+// 077-002 accuracy pass: field-checked against source_old/hal/real/LineSensor.{h,cpp}
+// (the real device driver). The former `threshold`/`channel_map` fields had no
+// hardware counterpart (no binarization step, no channel remap table anywhere
+// in the driver) and are removed. `norm_min`/`norm_max` were single scalars but
+// the real calibration bounds are per-channel (LineSensor::_calMin[4]/_calMax[4]
+// via captureCalibMin()/captureCalibMax()) -- replaced with per-channel
+// cal_min/cal_max. `filt_alpha` is added: the real driver has an EMA smoothing
+// coefficient (LineSensor::_alpha, set via setSmoothingAlpha()) that had no
+// config field at all.
 message LineSensorConfig {
-  uint32 lag_line               = 1;
-  uint32 threshold              = 2;
-  uint32 norm_min               = 3;
-  uint32 norm_max               = 4;
-  repeated uint32 channel_map   = 5 [(max_count) = 4];
+  uint32          lag_line  = 1;
+  repeated uint32 cal_min   = 2 [(max_count) = 4];  // per-channel calibration floor (white)
+  repeated uint32 cal_max   = 3 [(max_count) = 4];  // per-channel calibration ceiling (black)
+  float           filt_alpha = 4;  // EMA smoothing weight on readNormalized(); 0 = none
 }
 
 // Read-only snapshot of the color sensor.
@@ -39,11 +48,20 @@ message ColorSensorState {
 }
 
 // Configuration for the color sensor.
+//
+// 077-002 accuracy pass: field-checked against source_old/hal/real/ColorSensor.{h,cpp}
+// (the real device driver). `integration`/`gain` correspond to real APDS9960
+// registers (ATIME 0x81, CONTROL 0x8F) currently hardcoded in initApds() --
+// kept as legitimate forward config, but they apply ONLY to the APDS9960
+// fallback chip variant; the primary alt/PlanetX chip at 0x43 has no
+// equivalent registers in this driver (its begin() sequence is two fixed wake
+// writes, no gain/integration knobs). The former `cal_r`/`cal_g`/`cal_b`
+// fields are removed: no RGBC scaling of raw counts exists anywhere in
+// source_old (readRGBC()/pollRGBC() return the raw register values
+// unmodified; the subsystem passthrough is verbatim raw copy) -- these were
+// pure invention with zero hardware grounding.
 message ColorSensorConfig {
-  uint32 lag_color    = 1;
-  uint32 integration  = 2;
-  uint32 gain         = 3;
-  float  cal_r        = 4;  // color calibration scale factors
-  float  cal_g        = 5;
-  float  cal_b        = 6;
+  uint32 lag_color   = 1;
+  uint32 integration = 2;  // APDS9960 ATIME (fallback chip only)
+  uint32 gain        = 3;  // APDS9960 CONTROL gain (fallback chip only)
 }

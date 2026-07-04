@@ -71,9 +71,18 @@ message DrivetrainConfig {
   float  v_wheel_max          = 10;
   float  steer_headroom       = 11;
   // Velocity PID
+  // vel_gains: DEPRECATED -- superseded by per-motor MotorConfig.vel_gains
+  // (077-002: the velocity loop moved from the drivetrain into the motor).
+  // Retained for wire-shape stability for any host tooling still reading the
+  // old shape; do not wire this into new Drivetrain code.
   Gains  vel_gains            = 12;
   float  vel_filt_alpha       = 13;
+  // sync_gain: still live -- now the ratio governor's cross-wheel coupling knob.
   float  sync_gain            = 14;
+  // min_wheel: DEPRECATED -- superseded by per-motor MotorConfig.min_duty
+  // (077-002: the stiction floor / integrator-freeze threshold moved into the
+  // motor's duty domain). Retained for wire-shape stability; do not wire this
+  // into new Drivetrain code.
   float  min_wheel            = 15;
   // OTOS fusion
   float  alpha_pos            = 16;

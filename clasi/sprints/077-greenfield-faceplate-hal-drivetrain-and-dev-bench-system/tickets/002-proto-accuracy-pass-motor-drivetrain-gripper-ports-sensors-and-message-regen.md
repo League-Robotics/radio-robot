@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Proto accuracy pass (motor/drivetrain/gripper/ports/sensors) and message regen
-status: open
+status: done
 use-cases:
 - SUC-002
 depends-on:
@@ -26,7 +26,7 @@ itself — it produces the wire types ticket 3 (`NezhaMotor`) and ticket 4
 
 ## Acceptance Criteria
 
-- [ ] `protos/motor.proto` updated exactly per the issue's locked schema:
+- [x] `protos/motor.proto` updated exactly per the issue's locked schema:
   - `MotorCommand`: existing `oneof control` (`duty_cycle`, `voltage`,
     `velocity`, `position`, `neutral`) unchanged; add `optional bool
     reset_position = 7;` (zero the encoder this tick; rides beside any
@@ -41,7 +41,7 @@ itself — it produces the wire types ticket 3 (`NezhaMotor`) and ticket 4
     bool per control mode: `duty_cycle`, `voltage` (false on Nezha),
     `velocity` (true on Nezha), `position` (true on Nezha, via onboard
     0x5D), plus keep `has_encoder`.
-- [ ] `protos/drivetrain.proto`: add a comment on `DrivetrainConfig.vel_gains`
+- [x] `protos/drivetrain.proto`: add a comment on `DrivetrainConfig.vel_gains`
       and `DrivetrainConfig.min_wheel` marking them deprecated/superseded by
       per-motor `MotorConfig.vel_gains`/`min_duty` (the velocity loop moved
       into the motor). Do not delete the fields (wire-shape stability for any
@@ -49,26 +49,65 @@ itself — it produces the wire types ticket 3 (`NezhaMotor`) and ticket 4
       the ratio governor's knob. Verify `DrivetrainCommand`/`DrivetrainState`
       still fit a minimal two-wheel Drivetrain (twist + wheels + neutral
       arms) — no structural change expected, just confirm.
-  - [ ] `protos/gripper.proto`, `protos/ports.proto`, `protos/sensors.proto`:
+  - [x] `protos/gripper.proto`, `protos/ports.proto`, `protos/sensors.proto`:
       field-check each against `source_old` reality (do the fields still
       match what the corresponding `source_old` device/controller actually
       reads/writes?). Correct any drift found; if none, note "no drift
       found" in the PR description. These generate the capability headers
       ticket 3 writes (as headers only, unimplemented except motor).
-- [ ] `python scripts/gen_messages.py` runs clean against the updated protos
+- [x] `python scripts/gen_messages.py` runs clean against the updated protos
       and regenerates `source/messages/motor.h` and any other changed
       headers with no manual post-edits required.
-- [ ] `python scripts/gen_messages.py --emit-inventory` refreshes
+- [x] `python scripts/gen_messages.py --emit-inventory` refreshes
       `docs/design/message-inventory.md` to reflect the updated message set.
-- [ ] Regenerated `msg::MotorConfig` exposes `port`, `travel_calib`,
+- [x] Regenerated `msg::MotorConfig` exposes `port`, `travel_calib`,
       `fwd_sign`, `vel_gains`, `vel_filt_alpha`, `min_duty`, `slew_rate`
       with chainable setters (per `gen_messages.py`'s existing
       Command/Config setter convention).
-- [ ] Regenerated `msg::MotorCapabilities` exposes `duty_cycle`, `voltage`,
+- [x] Regenerated `msg::MotorCapabilities` exposes `duty_cycle`, `voltage`,
       `velocity`, `position`, `has_encoder` as plain bools.
-- [ ] `python build.py --clean` still succeeds (messages regen is part of
+- [x] `python build.py --clean` still succeeds (messages regen is part of
       the build; confirm the new fields don't break the C++11 POD codegen
       constraints — no STL containers, no heap, no exceptions, no RTTI).
+
+## Field-check results (gripper/ports/sensors)
+
+- **gripper.proto**: no drift found. `ServoController`/`Servo` are stateless
+  command wrappers with no config surface to compare against; `has_gripper`,
+  `gripper_offset`, `min`, `max` are pre-existing (sprint-056) forward-looking
+  additions already documented as such in `message-inventory.md`, consistent
+  with `Servo(pin, maxDegrees)` and the robot-JSON `has_gripper`/
+  `gripper_offset_mm` identity fields. Left unchanged.
+- **ports.proto**: drift found and corrected. `PortConfig.direction` (a
+  per-port direction bitmap) has no hardware counterpart —
+  `source_old/hal/real/PortIO.{h,cpp}` shows every RJ11 port always exposes
+  BOTH a digital line (S2) and an analog line (S1) simultaneously; CODAL's
+  `MicroBitPin` switches electrical direction per call
+  (`setDigitalValue`/`getDigitalValue`), so there is no persistent per-port
+  mode to configure. Field removed; `lag_ports` kept (matches
+  `RobotConfig::lagPorts`).
+- **sensors.proto**: drift found and corrected in both configs.
+  - `LineSensorConfig`: `threshold` and `channel_map` had no backing anywhere
+    in `LineSensor.{h,cpp}` (no binarization step, no channel remap table) —
+    removed. `norm_min`/`norm_max` were single scalars, but the real
+    calibration bounds are per-channel (`LineSensor::_calMin[4]`/`_calMax[4]`
+    via `captureCalibMin()`/`captureCalibMax()`) — replaced with per-channel
+    `cal_min`/`cal_max`. Added `filt_alpha`: the real driver has an EMA
+    smoothing coefficient (`_alpha`/`setSmoothingAlpha()`) with no config
+    field at all. `lag_line` kept (matches `RobotConfig::lagLine`).
+  - `ColorSensorConfig`: `cal_r`/`cal_g`/`cal_b` had zero grounding — no RGBC
+    scaling of raw counts exists anywhere in `source_old`
+    (`readRGBC()`/`pollRGBC()` return raw register values unmodified) —
+    removed. `integration`/`gain` kept: they correspond to real APDS9960
+    registers (`ATIME` 0x81, `CONTROL` 0x8F) currently hardcoded in
+    `ColorSensor::initApds()`; comment added noting they apply only to the
+    APDS9960 fallback chip variant (the primary alt/PlanetX chip at 0x43 has
+    no equivalent registers in this driver). `lag_color` kept (matches
+    `RobotConfig::lagColor`).
+- Also refreshed two stale `**MISSING**` entries surfaced by the
+  `--emit-inventory` regen for `DrivetrainState.otos_status`/
+  `otos_fusion_blocked` (074-004 fields that predate this ticket and were
+  never added to `_INVENTORY_MAP`). Coverage is now 210/210 mapped.
 
 ## Testing
 

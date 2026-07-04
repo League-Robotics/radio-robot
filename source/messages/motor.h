@@ -28,10 +28,12 @@ struct MotorCommand {
     } control = {};
 
     Opt<float> feedforward = {};
+    Opt<bool> reset_position = {};
 
     // --- getters ---
     ControlKind get_control_kind() const { return control_kind; }
     const Opt<float>& get_feedforward() const { return feedforward; }
+    const Opt<bool>& get_reset_position() const { return reset_position; }
 
     // --- chainable setters (Command/Config only) ---
     MotorCommand& setDutyCycle(float v) {
@@ -63,6 +65,10 @@ struct MotorCommand {
         feedforward.has = true; feedforward.val = v;
         return *this;
     }
+    MotorCommand& setResetPosition(bool v) {
+        reset_position.has = true; reset_position.val = v;
+        return *this;
+    }
 };
 
 // MotorState
@@ -85,23 +91,44 @@ struct MotorState {
 struct MotorConfig {
     float travel_calib = 0.0f;
     int32_t fwd_sign = 0;
+    Gains vel_gains = {};
+    float vel_filt_alpha = 0.0f;
+    float min_duty = 0.0f;
+    float slew_rate = 0.0f;
+    uint32_t port = 0;
 
     // --- getters ---
     float get_travel_calib() const { return travel_calib; }
     int32_t get_fwd_sign() const { return fwd_sign; }
+    const Gains& get_vel_gains() const { return vel_gains; }
+    float get_vel_filt_alpha() const { return vel_filt_alpha; }
+    float get_min_duty() const { return min_duty; }
+    float get_slew_rate() const { return slew_rate; }
+    uint32_t get_port() const { return port; }
 
     // --- chainable setters (Command/Config only) ---
     MotorConfig& setTravelCalib(float v) { travel_calib = v; return *this; }
     MotorConfig& setFwdSign(int32_t v) { fwd_sign = v; return *this; }
+    MotorConfig& setVelGains(const Gains& v) { vel_gains = v; return *this; }
+    MotorConfig& setVelFiltAlpha(float v) { vel_filt_alpha = v; return *this; }
+    MotorConfig& setMinDuty(float v) { min_duty = v; return *this; }
+    MotorConfig& setSlewRate(float v) { slew_rate = v; return *this; }
+    MotorConfig& setPort(uint32_t v) { port = v; return *this; }
 };
 
 // MotorCapabilities
 struct MotorCapabilities {
-    bool onboard_position = false;
+    bool duty_cycle = false;
+    bool voltage = false;
+    bool velocity = false;
+    bool position = false;
     bool has_encoder = false;
 
     // --- getters ---
-    bool get_onboard_position() const { return onboard_position; }
+    bool get_duty_cycle() const { return duty_cycle; }
+    bool get_voltage() const { return voltage; }
+    bool get_velocity() const { return velocity; }
+    bool get_position() const { return position; }
     bool get_has_encoder() const { return has_encoder; }
 };
 
