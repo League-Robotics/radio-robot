@@ -77,7 +77,7 @@ def push_calibration(conn_or_proto: Any, config: Any) -> dict[str, Any]:
 def calibration_commands(config: Any) -> list[tuple[str, int]]:
     """Build the v2 calibration wire-command sequence for *config*.
 
-    Pure function — returns ``(command, read_ms)`` pairs and sends nothing,
+    Pure function — returns ``(command, read_timeout)`` pairs and sends nothing,
     so any transport (SerialConnection, NezhaProtocol, or the TestGUI's
     Transport) can push the same sequence.  Mirrors the logic in
     ``robot_radio.io.cli._push_calibration``; changes there should be
@@ -105,17 +105,17 @@ def calibration_commands(config: Any) -> list[tuple[str, int]]:
     cal = getattr(config, "calibration", None)
 
     wd = getattr(getattr(config, "wheels", None), "wheel_diameter_mm", None)
-    default_mm_per_deg = (math.pi * wd / 360.0) if wd is not None else None
+    default_wheel_travel_calib = (math.pi * wd / 360.0) if wd is not None else None  # [mm/deg]
 
-    left_mm_per_deg  = getattr(cal, "mm_per_wheel_deg_left",  None) if cal else None
-    right_mm_per_deg = getattr(cal, "mm_per_wheel_deg_right", None) if cal else None
-    left_mm_per_deg  = left_mm_per_deg  if left_mm_per_deg  is not None else default_mm_per_deg
-    right_mm_per_deg = right_mm_per_deg if right_mm_per_deg is not None else default_mm_per_deg
+    wheel_travel_calib_left  = getattr(cal, "mm_per_wheel_deg_left",  None) if cal else None
+    wheel_travel_calib_right = getattr(cal, "mm_per_wheel_deg_right", None) if cal else None
+    wheel_travel_calib_left  = wheel_travel_calib_left  if wheel_travel_calib_left  is not None else default_wheel_travel_calib
+    wheel_travel_calib_right = wheel_travel_calib_right if wheel_travel_calib_right is not None else default_wheel_travel_calib
 
-    if left_mm_per_deg is not None:
-        cmds.append((f"SET ml={left_mm_per_deg:.6f}", 200))
-    if right_mm_per_deg is not None:
-        cmds.append((f"SET mr={right_mm_per_deg:.6f}", 200))
+    if wheel_travel_calib_left is not None:
+        cmds.append((f"SET ml={wheel_travel_calib_left:.6f}", 200))
+    if wheel_travel_calib_right is not None:
+        cmds.append((f"SET mr={wheel_travel_calib_right:.6f}", 200))
 
     geom = getattr(config, "geometry", None)
     tw = getattr(geom, "trackwidth", None) if geom else None
@@ -144,11 +144,11 @@ def calibration_commands(config: Any) -> list[tuple[str, int]]:
     if off is not None:
         ox = float(off.x) if hasattr(off, "x") else 0.0
         oy = float(off.y) if hasattr(off, "y") else 0.0
-        oyaw_deg = math.degrees(float(off.yaw_rad)) if hasattr(off, "yaw_rad") else 0.0
-        if ox != 0.0 or oy != 0.0 or oyaw_deg != 0.0:
+        oyaw = math.degrees(float(off.yaw_rad)) if hasattr(off, "yaw_rad") else 0.0  # [deg]
+        if ox != 0.0 or oy != 0.0 or oyaw != 0.0:
             cmds.append((f"SET odomOffX={ox:.3f}", 200))
             cmds.append((f"SET odomOffY={oy:.3f}", 200))
-            cmds.append((f"SET odomYaw={oyaw_deg:.3f}", 200))
+            cmds.append((f"SET odomYaw={oyaw:.3f}", 200))
 
     return cmds
 
@@ -159,7 +159,7 @@ def _push_via_conn(conn: Any, config: Any) -> dict[str, Any]:
     Returns a dict with ``"status": "ok"`` and ``"commands"`` listing sent verbs.
     """
     sent: list[str] = []
-    for cmd, read_ms in calibration_commands(config):
-        conn.send(cmd, read_timeout=read_ms)
+    for cmd, read_timeout in calibration_commands(config):
+        conn.send(cmd, read_timeout=read_timeout)
         sent.append(cmd)
     return {"status": "ok", "commands": sent}

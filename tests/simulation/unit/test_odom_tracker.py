@@ -239,7 +239,7 @@ class TestAngularScaleMath:
         self.mod.scale_to_int8 = _h.scale_to_int8
         self.mod.mean_stdev = _h.mean_stdev
         self.mod.compute_new_angular_scale = _a.compute_new_angular_scale
-        self.mod.heading_delta_cdeg = _a.heading_delta_cdeg
+        self.mod.heading_delta_cdeg = _a.heading_delta
         self.mod.save_angular_calibration_to_config = _a.save_angular_calibration_to_config
 
     def test_scale_to_int8_typical(self) -> None:
@@ -470,7 +470,7 @@ class TestScriptImportability:
         import robot_radio.calibration.helpers as _h
         assert hasattr(_h, "scale_to_int8")
         assert hasattr(_a, "compute_new_angular_scale")
-        assert hasattr(_a, "heading_delta_cdeg")
+        assert hasattr(_a, "heading_delta")
         assert hasattr(_a, "save_angular_calibration_to_config")
 
     def test_calibrate_linear_does_not_import_parse_so(self) -> None:
