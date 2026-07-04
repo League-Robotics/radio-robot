@@ -132,6 +132,7 @@ message MotorCommand {
 }
 
 message MotorConfig {
+  uint32 port          = 7;  // Nezha motor port (1..4) — identity lives in Config
   float travel_calib   = 1;  // mm/deg
   int32 fwd_sign       = 2;
   Gains vel_gains      = 3;  // per-motor loop (kp, ki, kff, i_max, kaw)
@@ -219,8 +220,14 @@ history**), slew limiting, wedge detection (→ `MotorState.wedged`). New here:
 - Encoder plumbing and raw register verbs are **private**. The public surface is
   the faceplate above — nothing else.
 
-`source/hal/nezha/nezha_hal.{h,cpp}` — minimal factory/owner: I2CBus + left/right
-NezhaMotor + `tick(now)` orchestrating the split-phase bus schedule.
+**A motor is instantiated on a port.** `NezhaMotor(I2CBus&, config)` with
+`config.port` ∈ 1..4 — any port, not a baked-in left/right pair. The dev build
+instantiates a Motor on **all four ports** so the bench rig can address any of
+them; the PID/governor rig couples two motors mechanically on **ports 3 and 4**
+(linked shafts — running one loads the other).
+
+`source/hal/nezha/nezha_hal.{h,cpp}` — minimal factory/owner: I2CBus + one
+NezhaMotor per port + `tick(now)` orchestrating the split-phase bus schedule.
 
 ## Step 4 — Drivetrain subsystem (drive motors together)
 
@@ -293,6 +300,8 @@ DEV M <n> RESET                → encoder zero via reset_position
 DEV M <n> STATE                → OK DEV M 1 pos=123.4 vel=80.1 applied=0.28 wedged=0 conn=1
 DEV M <n> CAPS                 → OK DEV M 1 duty=1 volt=0 vel=1 pos=1 enc=1
 DEV M <n> CFG k=v ...          → motor.configure delta (kp=0.8 slew=400 ...)
+DEV DT PORTS <left> <right>    → bind Drivetrain to a motor-port pair (default:
+                                 the robot's drive pair; coupled bench rig: 3 4)
 DEV DT VW <vx> <vy> <omega>    → [mm/s mm/s rad/s] body twist (ratio-governed;
                                  vy honored only when holonomic — 0 on Tovez)
 DEV DT WHEELS <left> <right>   → [mm/s] per-wheel velocity targets
@@ -301,9 +310,11 @@ DEV STATE                 → everything, one line per component
 DEV STOP                  → all motors neutral, drivetrain idle
 ```
 
-DEV handlers build a `msg::MotorCommand`/`msg::DrivetrainCommand` and go through
-`apply()` — exercising the full message plane (capability validation included; the
-`VOLT` rejection above comes from `apply`), which in turn exercises the setters.
+`<n>` is the motor **port** (1..4) — DEV addresses motors by port, matching how
+they are instantiated. DEV handlers build a `msg::MotorCommand`/
+`msg::DrivetrainCommand` and go through `apply()` — exercising the full message
+plane (capability validation included; the `VOLT` rejection above comes from
+`apply`), which in turn exercises the setters.
 
 Authority is trivial by construction: this firmware runs **only** the dev loop —
 there is no planner/drive to fight. `DEV M …` motion deactivates drivetrain mode;
@@ -329,6 +340,55 @@ while (true) {
 
 Document the family in `docs/protocol-v2.md` §"Development commands".
 
+## Step 6 — All-new test structure (tests → tests_old)
+
+Tests get the same treatment as source: park the old tree, build fresh.
+
+1. `git mv tests tests_old` (one commit, pure rename). The old suite ran against
+   the old firmware; its `_infra` sim shims compile `source/` paths and are
+   expected broken against the new tree — do not chase them this ticket.
+2. New `tests/` skeleton. **Three separate test domains — they are different
+   test regimes on different machines and are never combined**: `sim/` (the
+   simulator), `bench/` (the robot on the stand), `playfield/` (the robot
+   driving on the camera-covered playfield; renamed from the old `field/`, per
+   the standing playfield-not-floor terminology). Only the old `sim/` +
+   `simulation/` pair merges (into `sim/`).
+
+```text
+tests/
+  CLAUDE.md          # fresh: structure, the three domains, pointer to .claude/rules/
+  conftest.py
+  sim/               # SIM domain — old sim/ + simulation/ combined. Populated in
+    unit/            #   later tickets when the new tree grows a sim harness;
+    system/          #   skeleton + conftest only this ticket.
+  bench/             # BENCH domain — HITL, robot on the stand:
+    dev_exercise.py         # NEW: scripted DEV validation (see Verification)
+    pid_hold_speed.py       # NEW: coupled-rig PID disturbance rejection (ports 3+4)
+    ratio_governor_curve.py # NEW: coupled-rig curve test of the ratio governor
+    velocity_chart.py       # pulled back & REINVIGORATED against DEV (this ticket)
+  playfield/         # PLAYFIELD domain — robot on the playfield, camera truth:
+    plot_square.py        # carried over; parked until motion+odometry return
+    world_goto_chart.py   # carried over; parked until goto/OTOS/camera return
+  unit/              # kept category: host-side unit tests (protocol parsing etc.)
+  tools/             # kept category: test tooling/helpers
+```
+
+3. **`velocity_chart.py` is reinvigorated now** (bench domain): rewire its data
+   source to the DEV protocol (drive via `DEV DT VW` / `DEV M <n> VEL`, sample
+   `DEV M <n> STATE` for velocity + applied duty). It is exactly the tool for
+   tuning the in-motor velocity PID, and its vR-vs-vL phase plot is the ratio
+   governor's diagonal made visible.
+4. `plot_square.py` and `world_goto_chart.py` land in `tests/playfield/`,
+   carried over verbatim with a header note ("parked — needs new-tree
+   motion/odometry"); they reactivate in the later tickets that restore square
+   runs, G/goto, OTOS, and camera sync.
+5. **Dropped**: `testgui/` (whole category retired), the empty `calibrate/`
+   shell, and the old `_infra` sim shims (a fresh sim harness gets built under
+   `tests/sim/` in later tickets).
+6. Plumbing: pytest discovery points at the new `tests/` only — add `tests_old`
+   (and `source_old`) to `norecursedirs`/exclusions in the pytest config so
+   `uv run python -m pytest` collects the new tree and never the parked one.
+
 ## Verification
 
 - Build: `python build.py --clean` produces the new hex; `source_old` untouched
@@ -343,18 +403,39 @@ Document the family in `docs/protocol-v2.md` §"Development commands".
   - Watchdog: stop sending → motors neutral within the window.
 - Host: `tests/bench/dev_exercise.py` (new) scripting the above over
   `NezhaProtocol.send()` through serial and relay (`!GO` data plane).
+- Interactive: the reinvigorated `tests/bench/velocity_chart.py` — live wheel
+  velocity + applied-duty panels while hand-loading wheels; used to tune the
+  in-motor PID gains and to watch the ratio governor hold the vR/vL diagonal.
+- **Coupled-rig acceptance** (two motors mechanically linked on ports 3 and 4 —
+  running one loads the other; both scripts are Python over the DEV protocol):
+  - `tests/bench/pid_hold_speed.py` — motor 3 holds a VEL target while motor 4
+    steps through load duties (assist → freewheel → drag → reverse). PASS:
+    motor-3 measured velocity stays inside a tolerance band and recovers within
+    a bounded settle time after each load step, with applied duty visibly
+    rising as load increases (the PID is actually working, not coasting).
+  - `tests/bench/ratio_governor_curve.py` — `DEV DT PORTS 3 4`, then command a
+    curve (unequal wheel targets); the coupling drags the faster motor down.
+    PASS: the governor lowers BOTH targets so the measured wheel-speed ratio
+    holds the commanded ratio within tolerance; re-run with the governor off
+    (sync gain 0) to show the ratio drifting as the control.
 
 ## Later tickets (not this one)
 
-Sensors/gripper/ports leaf implementations, sim leaves + host test harness for the
-new tree, subsystem/planner tiers, production motion commands, telemetry, mecanum,
-retiring `source_old/`.
+Sensors/gripper/ports leaf implementations, sim leaves + a fresh sim harness
+under `tests/sim/`, subsystem/planner tiers, production motion commands,
+telemetry, mecanum, reactivating `tests/playfield/plot_square.py` and
+`tests/playfield/world_goto_chart.py` (need square runs, goto, OTOS, camera
+sync), retiring `source_old/` and `tests_old/`.
 
 ## Process
 
-One CLASI sprint; tickets ≈ (1) style guide + scaffold + infra move, (2) protos +
-regen, (3) capability headers + NezhaMotor + HAL, (4) Drivetrain + governor,
-(5) DEV commands + loop + protocol doc, (6) bench validation script + HITL run.
+One CLASI sprint; tickets ≈ (1) scaffold + infra move (style guide already
+vendored), (2) protos + regen, (3) capability headers + NezhaMotor + HAL,
+(4) Drivetrain + governor, (5) DEV commands + loop + protocol doc, (6) test
+structure rewrite (tests → tests_old, new skeleton, velocity_chart
+reinvigorated, plot_square/world_goto_chart carried), (7) bench validation
+scripts (dev_exercise, pid_hold_speed, ratio_governor_curve) + HITL run on the
+coupled rig and the stand.
 
 ## Session notes (for memory after approval)
 
