@@ -109,8 +109,10 @@ public:
      * zeros the cache exactly as resetEncoder()'s success path already does.
      * Called by MotorController::resetEncoderAccumulators() instead of
      * resetEncoder() whenever the drivetrain is not at rest, so the atomic
-     * read burst (which latches the Nezha readback while the wheels are
-     * rotating) is never fired mid-motion.
+     * read burst is never fired mid-motion. (2026-07-04: the burst alone
+     * was shown NOT to latch the readback — the reversal write train is
+     * the trigger — but at-rest-only hard resets remain correct practice;
+     * see docs/knowledge/2026-07-04-encoder-latch-reversal-write-train.md.)
      */
     void    rebaselineSoft() override;
 
@@ -361,15 +363,15 @@ private:
     int8_t _lastDir;
 
     // Last PWM% written to the Nezha. setSpeed() skips the I2C write when the
-    // command is unchanged, so the controller is never hammered at the ~100 Hz
-    // control-loop rate (that write rate wedges the encoder reads). Sentinel
-    // sentinel -128 (outside valid ±100) forces the first write. See
-    // docs/knowledge encoder-wedge note.
+    // command is unchanged (bus hygiene; write RATE is NOT a latch trigger —
+    // see docs/knowledge/2026-07-04-encoder-latch-reversal-write-train.md).
+    // Sentinel -128 (outside valid ±100) forces the first write.
     int8_t _lastWrittenSpeed = -128;   // [%]
 
     // Timestamp of the last actual 0x60 write, for the write-rate limit in
-    // setSpeed(). Throttling 0x60 writes keeps the bus read-dominated, which is
-    // what stops the encoder-readback wedge. See setSpeed() + encoder-wedge note.
+    // setSpeed(). Bus hygiene only — throttling does not prevent the latch
+    // (its stop/reversal exemptions pass the real trigger through; see the
+    // 2026-07-04 knowledge doc).
     uint64_t _lastWriteTime = 0;   // [us]
 
     static constexpr uint8_t ADDR    = 0x10;

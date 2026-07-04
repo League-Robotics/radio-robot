@@ -62,8 +62,11 @@ void MotorController::startDriveClean(float left, float right)
     float fasterAbs = _fasterIsRight ? fabsf(right) : fabsf(left);
     float slowerAbs = _fasterIsRight ? fabsf(left)  : fabsf(right);
     _cmdRatio = (slowerAbs > 0.0f) ? (fasterAbs / slowerAbs) : 1.0f;
-    // Use the control loop's cached encoder values (not a fresh atomic read,
-    // which wedges the Nezha encoder — see encoder-wedge note).
+    // Use the control loop's cached encoder values — no extra atomic read
+    // from this path. (2026-07-04: mid-motion reads alone were shown NOT to
+    // latch the readback — the reversal write train is the trigger — but
+    // cached values remain correct here; see docs/knowledge/
+    // 2026-07-04-encoder-latch-reversal-write-train.md.)
     _cmdEncStartL = _prevEncL;
     _cmdEncStartR = _prevEncR;
     _vcL.reset();
@@ -83,10 +86,11 @@ void MotorController::startDrive(float left, float right)
     float newSlowerAbs = newFasterIsRight ? fabsf(left)  : fabsf(right);
     float newRatio = (newSlowerAbs > 0.0f) ? (newFasterAbs / newSlowerAbs) : 1.0f;
 
-    // Use the control loop's cached encoder values (updated every tick) — NOT a
-    // fresh atomic read. Firing an atomic 0x46 read from this comms-path call,
-    // butted against the control task's own reads / the 0x5F stop, wedges the
-    // Nezha encoder. See docs/knowledge encoder-wedge note.
+    // Use the control loop's cached encoder values (updated every tick) — NOT
+    // a fresh atomic read from this comms-path call. (2026-07-04: such reads
+    // alone were shown NOT to latch the readback; the reversal write train
+    // is the trigger. Cached values remain the right choice — no extra bus
+    // traffic, no cross-fiber I2C. See the 2026-07-04 knowledge doc.)
     float curL = _prevEncL;
     float curR = _prevEncR;
     float curFaster   = newFasterIsRight ? curR : curL;
@@ -120,8 +124,10 @@ void MotorController::stop()
     }
     _vcL.reset();
     _vcR.reset();
-    // Use the control loop's cached encoder values (not a fresh atomic read,
-    // which — butted against the 0x5F stop below — wedges the Nezha encoder).
+    // Use the control loop's cached encoder values — no extra atomic read
+    // next to the stop below. (Causal claim superseded 2026-07-04: the
+    // reversal write train, not reads, latches the readback; see the
+    // 2026-07-04 knowledge doc. Cached values remain correct here.)
     _cmdEncStartL = _prevEncL;
     _cmdEncStartR = _prevEncR;
     _motorL.setSpeed(0);

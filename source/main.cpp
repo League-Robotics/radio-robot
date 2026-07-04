@@ -152,19 +152,16 @@ int main() {
     // set is kept as a guard because DBG WEDGE retunes the bus at runtime and
     // must restore this value on exit — see WedgeTest.cpp.
     //
-    // The Nezha V2 motor controller's encoder readback (0x46) wedges — freezes
-    // at a constant while the wheels keep spinning — under the firmware's
-    // alternating 0x60-write / 0x46-read traffic PATTERN, not bus speed. In
-    // the sprint-015 exploration logs (tests/bench/out/wedge_*.log, commit
-    // f80a4dd) the fw-mimic alternating mode wedged at it=165 on the DEFAULT
-    // 100 kHz bus, while write-on-change + read-both-M1-first ran 10 min
-    // clean at the same speed; slowing the bus did NOT help (25 kHz wedged
-    // at it=1246, explicit 100 kHz with 8 ms settle at it=4845). The durable
-    // mitigations are Motor.cpp's write-rate limit / write-on-change and the
-    // M1-first read order. (An older version of this comment attributed the
-    // it=165 wedge to "400 kHz" — a garble: that run was at the 100 kHz
-    // default. 400 kHz has never been production-tested at length.)
-    // See docs/knowledge encoder-wedge note + WedgeTest.cpp.
+    // The Nezha V2 motor controller's encoder readback (0x46) latches —
+    // freezes at a constant while the wheels keep spinning. ROOT CAUSE
+    // (wedgelab, 2026-07-04): an immediate drive-direction REVERSAL written
+    // under way (including the PID's sign-dither micro-reversals at decel
+    // stops). Bus speed is NOT causal (25/100 kHz both wedged historically;
+    // the old "400 kHz" claim was a garble), and write rate/interleave is
+    // NOT causal (disproven in the lab). 100 kHz is kept because it is the
+    // CODAL default and the vendor-habitat speed. Proven fix (pending
+    // ticket): >=50 ms commanded-zero dwell across any sign change.
+    // See docs/knowledge/2026-07-04-encoder-latch-reversal-write-train.md.
     uBit.i2c.setFrequency(100000);
 
     // To build for mecanum: replace NezhaHAL with MecanumHAL and update IKinematics.h

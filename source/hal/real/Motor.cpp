@@ -54,28 +54,26 @@ void Motor::setSpeed(int8_t pct)
     if (pct >  100) pct =  100;
     if (pct < -100) pct = -100;
 
-    // Write-on-change: skip the I2C write if the command is unchanged. The
-    // control loop calls setSpeed() every tick (~100 Hz); writing the Nezha
-    // that fast wedges its encoder reads (the read freezes at a constant while
-    // the wheels keep spinning). Writing only on a real change keeps the
-    // controller healthy. See docs/knowledge encoder-wedge note.
+    // Write-on-change: skip the I2C write if the command is unchanged.
+    // Bus hygiene only. (The old claim that the write RATE wedges the
+    // encoder readback was disproven 2026-07-04 — the wedgelab drove
+    // every-tick writes interleaved with reads for tens of thousands of
+    // transactions with zero latches. The real trigger is the REVERSAL
+    // write train; see docs/knowledge/2026-07-04-encoder-latch-reversal-
+    // write-train.md.)
     if (pct == _lastWrittenSpeed) {
         return;
     }
 
-    // Write-rate limit (sprint 015 — wedge root cause). The velocity PID emits
-    // a slightly different PWM EVERY 10 ms tick, so plain write-on-change does
-    // NOT suppress writes — the chip gets a fresh 0x60 write nearly every tick,
-    // interleaved between the two 0x46 encoder reads. That high-frequency
-    // write/read interleave is exactly what wedges the Nezha encoder readback
-    // (proven: the WedgeTest harness holds a CONSTANT speed so its writes are
-    // suppressed for 40-tick stretches → zero wedges over 10 min; the alternating
-    // production path wedged in ~165 ticks). We throttle 0x60 writes to
-    // kMinWriteInterval so the bus is dominated by reads, matching WedgeTest —
-    // BUT a stop (pct == 0) or a direction reversal is always written immediately
-    // for safety/responsiveness. Between throttled writes the chip simply holds
-    // the last 0x60 command (the wheels keep spinning), and the next allowed
-    // write applies the freshest PID output.
+    // Write-rate limit (sprint 015). Retained as bus hygiene — it keeps the
+    // bus read-dominated and the PID's every-tick PWM chatter off the wire.
+    // NOTE (2026-07-04): this throttle is NOT a wedge fix, and its stop/
+    // reversal exemptions pass the actual latch trigger straight through:
+    // an immediate sign flip under way (and the PID's sign-dither micro-
+    // reversals at every decel stop) latches the 0x46 readback on
+    // susceptible motor units. Proven fix (wedgelab exp12-14, pending
+    // ticket): two-phase reversal — command 0, hold >=50 ms, then the new
+    // direction (or ramp <=5 pct/tick through zero).
     static constexpr uint32_t kMinWriteInterval = 40000;   // [us] 40 ms ≈ 25 Hz max
     bool stopping = (pct == 0);
     bool reversal = (pct != 0 && _lastWrittenSpeed != 0 &&
@@ -240,11 +238,12 @@ void Motor::rebaselineSoft()
 {
     // (064-003) Software-only encoder rebaseline: MotorController::
     // resetEncoderAccumulators() calls this instead of resetEncoder() when
-    // the drivetrain is NOT at rest, to avoid firing the atomic 0x46 read
-    // burst (3 reads + readback-verify, ~24-32 ms of busy-wait I2C) while the
-    // wheels are rotating — that burst latches the Nezha encoder readback
-    // (see clasi/sprints/064-.../issues/
-    // encoder-reset-while-moving-latches-readback.md). Issues NO I2C
+    // the drivetrain is NOT at rest, so the atomic 0x46 read burst
+    // (3 reads + readback-verify, ~24-32 ms of busy-wait I2C) never fires
+    // mid-motion. (2026-07-04: the wedgelab showed the burst ALONE does not
+    // latch the readback — the reversal write train does — but hard resets
+    // at verified rest remain the correct discipline; see docs/knowledge/
+    // 2026-07-04-encoder-latch-reversal-write-train.md.) Issues NO I2C
     // transaction at all: folds the already-tick-cached _lastPosition
     // (populated by the normal per-tick 0x46 read in tick(), not a new
     // atomic read) back into raw tenths-of-degrees and adds it to

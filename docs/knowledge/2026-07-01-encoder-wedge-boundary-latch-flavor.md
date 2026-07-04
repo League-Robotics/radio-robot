@@ -6,6 +6,13 @@ related-tickets: []
 
 # The encoder wedge, revisited: a transient boundary-latch flavor the detector cannot see
 
+> **SUPERSEDED (mechanism) 2026-07-04:** the root cause is the REVERSAL
+> write train through Motor::setSpeed, not write/read interleave — proven
+> with a chip-confirmed reproducer and a validated ≥50 ms zero-dwell fix in
+> [2026-07-04-encoder-latch-reversal-write-train.md](2026-07-04-encoder-latch-reversal-write-train.md).
+> This doc's OBSERVATIONS (boundary-correlated, transient, detector-blind,
+> heals at at-rest resets) remain accurate and were what the lab confirmed.
+
 **Status:** analysis complete, mechanism hypothesis NOT yet bench-proven (I2CLOG capture
 pending). This doc **supersedes parts of**
 [encoder-wedge-nrf52-twim-irq-load-errata.md](encoder-wedge-nrf52-twim-irq-load-errata.md):

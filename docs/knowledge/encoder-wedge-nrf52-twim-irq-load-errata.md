@@ -4,6 +4,14 @@
 **Sprint:** post-015 (out-of-process bench debugging)
 **Status:** RESOLVED — root cause confirmed, fix implemented and A/B-verified
 
+> **Note (2026-07-04): boundary-latch flavor ROOT-CAUSED.** The transient
+> latch flavor described below is triggered by the REVERSAL write train
+> (immediate sign flips under way, incl. PID decel sign-dither), is
+> per-motor-unit, and is prevented by a ≥50 ms commanded-zero dwell — see
+> [2026-07-04-encoder-latch-reversal-write-train.md](2026-07-04-encoder-latch-reversal-write-train.md).
+> The IRQ-guard fix below remains valid for ITS flavor (persistent,
+> interrupt-load-correlated) only.
+>
 > **Note (2026-07-01): partially superseded.** A second, distinct wedge flavor is
 > now on record — a **transient boundary latch** that begins at D-command
 > deceleration/stop, is invisible to the enc_wedged detector, and **self-heals at
