@@ -153,12 +153,17 @@ int main() {
     // must restore this value on exit — see WedgeTest.cpp.
     //
     // The Nezha V2 motor controller's encoder readback (0x46) wedges — freezes
-    // at a constant while the wheels keep spinning — under fast, frequently
-    // interleaved 0x60-write / 0x46-read traffic at 400 kHz. The WedgeTest bench
-    // harness (DBG WEDGE) showed 400 kHz wedging within ~165 ticks while 100 kHz,
-    // reading BOTH encoders every tick (M1 first) and writing motors only on
-    // change, runs 10 min / zero wedges. The other sensors (OTOS/line/color)
-    // are speed-agnostic for correctness, so 100 kHz is safe bus-wide.
+    // at a constant while the wheels keep spinning — under the firmware's
+    // alternating 0x60-write / 0x46-read traffic PATTERN, not bus speed. In
+    // the sprint-015 exploration logs (tests/bench/out/wedge_*.log, commit
+    // f80a4dd) the fw-mimic alternating mode wedged at it=165 on the DEFAULT
+    // 100 kHz bus, while write-on-change + read-both-M1-first ran 10 min
+    // clean at the same speed; slowing the bus did NOT help (25 kHz wedged
+    // at it=1246, explicit 100 kHz with 8 ms settle at it=4845). The durable
+    // mitigations are Motor.cpp's write-rate limit / write-on-change and the
+    // M1-first read order. (An older version of this comment attributed the
+    // it=165 wedge to "400 kHz" — a garble: that run was at the 100 kHz
+    // default. 400 kHz has never been production-tested at length.)
     // See docs/knowledge encoder-wedge note + WedgeTest.cpp.
     uBit.i2c.setFrequency(100000);
 
