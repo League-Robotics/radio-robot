@@ -26,9 +26,8 @@ later tickets (out of this sprint) implement them.
 
 **This is the highest-risk ticket in the sprint.** The split-phase 0x46
 encoder request/collect sequencing in `source_old/hal/real/Motor.cpp` is the
-direct fix for a recurring wedge-latch class of bug (see
-`docs/knowledge/2026-07-01-encoder-wedge-boundary-latch-flavor.md` and
-`docs/knowledge/2026-07-04-encoder-latch-reversal-write-train.md`). Port it
+direct fix for a recurring wedge-latch class of bug (see the consolidated
+`docs/knowledge/2026-07-04-encoder-wedge.md`). Port it
 byte-for-byte, not by re-deriving it from the register-map comments alone.
 
 ## Acceptance Criteria

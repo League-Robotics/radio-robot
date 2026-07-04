@@ -125,9 +125,8 @@ work, not this sprint's.
 redesign opportunity.** `source_old/hal/real/Motor.cpp`'s `requestEncoder()`
 (phase 1: issue the 0x46 write, return immediately) / `collectEncoder()`
 (phase 2: read the 4-byte response, no busy-wait) split is the direct fix for
-the wedge-latch class of bug (see `docs/knowledge/2026-07-01-encoder-wedge-
-boundary-latch-flavor.md` and the superseding root-cause doc,
-`docs/knowledge/2026-07-04-encoder-latch-reversal-write-train.md`). The port
+the wedge-latch class of bug (see the consolidated
+`docs/knowledge/2026-07-04-encoder-wedge.md`). The port
 into `NezhaMotor` must reproduce the exact byte sequence and the exact
 one-request-then-one-collect-per-loop-tick cadence — this sprint does not
 introduce any new wedge mitigation (see Open Questions) and does not add a

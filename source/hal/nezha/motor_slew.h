@@ -20,7 +20,7 @@
 //
 // Sprint 077 (ticket 003) ports this unchanged, per architecture-update.md
 // Design Rationale 2: the newer zero-dwell reversal fix (docs/knowledge/
-// 2026-07-04-encoder-latch-reversal-write-train.md) is validated but out of
+// 2026-07-04-encoder-wedge.md) is validated but out of
 // this sprint's locked scope — this slew-cap mitigation is what source_old
 // ships today, and that is what gets ported.
 // ---------------------------------------------------------------------------
