@@ -143,16 +143,23 @@ int main() {
     // observable via the DBG I2C command (ticket 015-003).
     // -----------------------------------------------------------------------
 
-    // I2C bus speed — 100 kHz (uBit.init() defaults to 400 kHz).
+    // I2C bus speed — 100 kHz, set explicitly.
+    //
+    // 100 kHz is also the CODAL default for this EXTERNAL bus: the NRF52I2C
+    // constructor (via redirect()) programs TWIM to 100 kHz, and it is what
+    // MakeCode/pxt runs the Nezha at. (The 400 kHz call in MicroBit::init()
+    // is the INTERNAL sensor bus _i2c, not the edge connector.) The explicit
+    // set is kept as a guard because DBG WEDGE retunes the bus at runtime and
+    // must restore this value on exit — see WedgeTest.cpp.
     //
     // The Nezha V2 motor controller's encoder readback (0x46) wedges — freezes
     // at a constant while the wheels keep spinning — under fast, frequently
     // interleaved 0x60-write / 0x46-read traffic at 400 kHz. The WedgeTest bench
-    // harness (DBG WEDGE) proved that dropping the bus to 100 kHz, reading BOTH
-    // encoders every tick (M1 first), and writing motors only on change runs
-    // 10 min / zero wedges. 400 kHz wedged within ~165 ticks. The other sensors
-    // (OTOS/line/color) are speed-agnostic for correctness, so 100 kHz is safe
-    // bus-wide. See docs/knowledge encoder-wedge note + WedgeTest.cpp.
+    // harness (DBG WEDGE) showed 400 kHz wedging within ~165 ticks while 100 kHz,
+    // reading BOTH encoders every tick (M1 first) and writing motors only on
+    // change, runs 10 min / zero wedges. The other sensors (OTOS/line/color)
+    // are speed-agnostic for correctness, so 100 kHz is safe bus-wide.
+    // See docs/knowledge encoder-wedge note + WedgeTest.cpp.
     uBit.i2c.setFrequency(100000);
 
     // To build for mecanum: replace NezhaHAL with MecanumHAL and update IKinematics.h

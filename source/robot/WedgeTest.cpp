@@ -165,7 +165,7 @@ void runWedgeTest(MicroBit& uBit, int rate, int writeMs, int bus, int dither,   
     const uint32_t period   = 1000000u / (uint32_t)rate;
     const uint32_t writeMinInterval = (uint32_t)writeMs * 1000u;
 
-    i2c.setFrequency((uint32_t)bus * 1000u);   // production bus = 400 kHz (restored at exit)
+    i2c.setFrequency((uint32_t)bus * 1000u);   // production bus = 100 kHz (restored at exit; see main.cpp)
 
     snprintf(line, sizeof(line),
         "WEDGETEST start: realCtrl=%d reg=0x%02X sensors=%d @ %d Hz "
@@ -335,7 +335,7 @@ void runWedgeTest(MicroBit& uBit, int rate, int writeMs, int bus, int dither,   
 
     writeMotor(i2c, M_RIGHT, 0);
     writeMotor(i2c, M_LEFT, 0);
-    i2c.setFrequency(400000);               // restore default bus for the rest of the firmware
+    i2c.setFrequency(100000);               // restore the production bus speed (main.cpp boot value)
     snprintf(line, sizeof(line),
              "WEDGETEST end (%s, %lu ticks, %lu writes, %lu cycles, %lu glitches)\r\n",
              verdict, (unsigned long)ticks, (unsigned long)writes,
