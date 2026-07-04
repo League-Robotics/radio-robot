@@ -4,11 +4,11 @@
 // This is the first hex out of the new source/ tree: MicroBit init, comms
 // (serial + radio) wired through the copied Communicator, and the copied
 // CommandProcessor dispatching only the liveness command family
-// (system_commands.cpp: PING/VER/HELP/ECHO/ID). There is no Drivetrain and
-// no DEV command family yet -- those land in tickets 4-5. The full dev loop
-// (comms poll -> hal.tick -> drivetrain.tick -> motor.tick -> watchdog.check,
-// per architecture-update.md's Component Diagram) is ticket 5's job; this
-// loop is comms poll -> dispatch -> hal.tick.
+// (system_commands.cpp: PING/VER/HELP/ECHO/ID). There is no DEV command
+// family yet -- that lands in ticket 5. The full dev loop (comms poll ->
+// hal.tick -> drivetrain.tick -> motor.tick -> watchdog.check, per
+// architecture-update.md's Component Diagram) is ticket 5's job; this loop
+// is comms poll -> dispatch -> hal.tick.
 //
 // 077-003: instantiates NezhaHal on all four ports and ticks it every loop
 // iteration -- this is the "minimal smoke call...to prove the translation
@@ -17,6 +17,11 @@
 // nezha_hal.cpp). Nothing addresses individual motors yet (no DEV commands,
 // no apply() calls) -- that wiring is ticket 5's job, which supersedes the
 // bare defaultMotorConfigs()/hal below with real per-robot configuration.
+//
+// 077-004: a single static Subsystems::Drivetrain, configured once, is the
+// equivalent smoke reference proving drivetrain.cpp/body_kinematics.cpp
+// link into the firmware -- it is not yet bound to a motor pair or ticked
+// from the loop (no DEV DT PORTS binding exists yet); ticket 5 wires that.
 // ---------------------------------------------------------------------------
 
 #include "MicroBit.h"
@@ -27,6 +32,8 @@
 #include "com/i2c_bus.h"
 #include "hal/nezha/nezha_hal.h"
 #include "messages/motor.h"
+#include "messages/drivetrain.h"
+#include "subsystems/drivetrain.h"
 
 static MicroBit uBit;
 
@@ -77,6 +84,14 @@ int main() {
     static I2CBus i2cBus(uBit.i2c);
     static Hal::NezhaHal hal(i2cBus, defaultMotorConfigs);
     hal.begin();
+
+    // 077-004 smoke wiring: configure a Drivetrain so drivetrain.cpp (and,
+    // through it, kinematics/body_kinematics.cpp) link into this firmware --
+    // not bound to a motor pair or ticked from the loop yet (ticket 5's job,
+    // once DEV DT PORTS exists to decide which two NezhaHal ports are
+    // "left"/"right" for a session).
+    static Subsystems::Drivetrain drivetrain;
+    drivetrain.configure(msg::DrivetrainConfig());
 
     char serialLine[256];
     char radioLine[256];

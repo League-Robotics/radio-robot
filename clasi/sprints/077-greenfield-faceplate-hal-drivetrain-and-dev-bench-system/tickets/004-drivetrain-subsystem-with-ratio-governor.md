@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Drivetrain subsystem with ratio governor
-status: open
+status: done
 use-cases:
 - SUC-004
 depends-on:
@@ -26,7 +26,7 @@ velocity commands for two `Hal::Motor`s, returned (never pushed) as a
 
 ## Acceptance Criteria
 
-- [ ] `namespace Subsystems`, class `Drivetrain`, matching the issue's locked
+- [x] `namespace Subsystems`, class `Drivetrain`, matching the issue's locked
       shape: primitive setters `setTwist(float v_x, float v_y, float
       omega)` (`v_y` honored only when `capabilities().holonomic` — always
       false this sprint, differential-only; see the note below),
@@ -37,15 +37,15 @@ velocity commands for two `Hal::Motor`s, returned (never pushed) as a
       const msg::MotorState& rightObs)` returning a
       `DrivetrainToMotorCommand`, `state() const` returning
       `msg::DrivetrainState`, `capabilities() const`.
-- [ ] `DrivetrainToMotorCommand` (edge type, `<Producer>To<Consumer>Command`
+- [x] `DrivetrainToMotorCommand` (edge type, `<Producer>To<Consumer>Command`
       naming per `.claude/rules/naming-and-style.md`) has exactly `left` and
       `right` fields of type `msg::MotorCommand`.
-- [ ] `tick()` takes observations as **arguments only** — no clock reads
+- [x] `tick()` takes observations as **arguments only** — no clock reads
       beyond the `now` parameter, no motor handles or references stored
       inside `Drivetrain`. This keeps `Drivetrain` free of any dependency on
       `Hal::Motor`'s concrete leaf (`NezhaMotor`) — it only knows the
       faceplate's message types.
-- [ ] `tick()` computes: kinematics (twist → wheel velocity targets, via
+- [x] `tick()` computes: kinematics (twist → wheel velocity targets, via
       `BodyKinematics::inverse(v_x, omega, trackwidth, vL_out, vR_out)` — use
       the **scalar** differential overload, not the `BodyTwist3`
       array-form overload, since the latter's parameter type
@@ -56,8 +56,14 @@ velocity commands for two `Hal::Motor`s, returned (never pushed) as a
       types when the scalar overload sidesteps the issue entirely) → ratio
       governor → two `msg::MotorCommand{velocity}` (or duty/neutral
       pass-throughs when the WHEELS/NEUTRAL arms were the last-applied
-      command, not the twist arm).
-- [ ] Ratio governor (`governRatio`-equivalent private method): if one
+      command, not the twist arm). **Deviation** (documented in
+      `drivetrain.h`'s file header): the ratio governor runs for both the
+      TWIST arm and the WHEELS arm, not only after kinematics — the WHEELS
+      arm is exactly how ticket 7's coupled-rig curve test
+      (`ratio_governor_curve.py`: "command a curve (unequal wheel targets)")
+      exercises the governor, so it must be governed too. Only NEUTRAL is a
+      true, ungoverned pass-through.
+- [x] Ratio governor (`governRatio`-equivalent private method): if one
       wheel's observed velocity underachieves its target (bogged down), the
       shared speed ceiling for BOTH wheels is lowered so the commanded
       left/right ratio (curvature) is held, rather than letting the healthy
@@ -65,23 +71,41 @@ velocity commands for two `Hal::Motor`s, returned (never pushed) as a
       embedded PIDs — never on duty cycle. This is the ported concept from
       `source_old/control/VelocityController.*`'s `syncGain`, re-targeted at
       velocity targets instead of duties; `DrivetrainConfig.sync_gain` is
-      its tuning knob (kept, per ticket 2's proto pass).
-- [ ] `v_y` is explicitly ignored for this sprint's differential-only
+      its tuning knob (kept, per ticket 2's proto pass). Implemented as a
+      single shared scale factor applied to both targets (derived from the
+      more-bogged-down wheel's achievement fraction, blended in by
+      `sync_gain`) — ratio-exact by construction, rather than
+      `source_old`'s one-sided "nudge the leading wheel" blend (the concept
+      is ported, not the byte-for-byte formula; architecture-update.md does
+      not require literal parity here, unlike ticket 3's encoder sequencing).
+- [x] `v_y` is explicitly ignored for this sprint's differential-only
       Drivetrain, with an inline comment at the ignore site stating that a
       future mecanum ticket wires it in once `capabilities().holonomic` can
       be true (per architecture-update.md Open Question 6) — do not
       silently drop it with no trace.
-- [ ] `capabilities()` reports `holonomic = false`, `wheel_count = 2`,
+- [x] `capabilities()` reports `holonomic = false`, `wheel_count = 2`,
       `onboard_position` matching whether the bound motors' capabilities
-      both report `position = true`.
-- [ ] Naming/style: `namespace Subsystems`, class `Drivetrain`
+      both report `position = true`. **Deviation** (documented in
+      `drivetrain.h`): added `setMotorCapabilities(const
+      msg::MotorCapabilities& left, const msg::MotorCapabilities& right)` —
+      a plain-data setter (not a motor handle/reference) the wiring layer
+      calls once after binding a motor pair, needed because `Drivetrain`
+      cannot query bound motors' capabilities without holding a `Hal::Motor`
+      reference, which is disallowed. Same category of documented,
+      rationale-backed deviation ticket 3 set precedent for
+      (`Motor::apply()` returning `bool`).
+- [x] Naming/style: `namespace Subsystems`, class `Drivetrain`
       (UpperCamelCase), methods lowerCamelCase, no unit suffixes in any
       identifier — e.g. `setTwist(float v_x, float v_y, float omega); //
       [mm/s] [mm/s] [rad/s]`.
-- [ ] `python build.py --clean` succeeds with `Drivetrain` compiled in (it
+- [x] `python build.py --clean` succeeds with `Drivetrain` compiled in (it
       does not need to be wired into `main.cpp` yet — that's ticket 5 — but
       it must compile standalone against `Hal::Motor`'s faceplate types and
-      the regenerated `msg::` headers).
+      the regenerated `msg::` headers). A minimal smoke reference
+      (`drivetrain.configure(msg::DrivetrainConfig())`) was added to
+      `main.cpp`, matching ticket 3's precedent, to prove
+      `drivetrain.cpp`/`body_kinematics.cpp` link into the firmware; ticket
+      5 supersedes it with the real `DEV DT` wiring.
 
 ## Testing
 
