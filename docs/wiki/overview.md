@@ -59,7 +59,7 @@ linked throughout.
 | Read the full architecture | [docs/architecture.md](https://github.com/League-Robotics/radio-robot/blob/master/docs/architecture.md) |
 | Read the feature spec | [docs/specification.md](https://github.com/League-Robotics/radio-robot/blob/master/docs/specification.md) |
 | Use the Python host library | [host/robot_radio/README.md](https://github.com/League-Robotics/radio-robot/blob/master/host/robot_radio/README.md) |
-| Debug firmware over SWD | [docs/debugging.md](https://github.com/League-Robotics/radio-robot/blob/master/docs/debugging.md) |
+| Debug firmware over SWD | [.claude/rules/debugging.md](https://github.com/League-Robotics/radio-robot/blob/master/.claude/rules/debugging.md) |
 
 > **Source of truth lives in the repo.** This wiki summarizes and points back to
 > [League-Robotics/radio-robot](https://github.com/League-Robotics/radio-robot);

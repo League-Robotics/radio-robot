@@ -183,7 +183,7 @@ To use it, simply copy the additional json entries into your `codal.json` file, 
 
 # Debugging
 
-See **[docs/debugging.md](docs/debugging.md)** for the full guide — the `just`
+See **[.claude/rules/debugging.md](.claude/rules/debugging.md)** for the full guide — the `just`
 recipes (`just debug`, `just gdb`, `just commander`, `just erase`), the pyOCD/SWD
 hardware path, agent-oriented (non-interactive) workflows, and recovery from an
 APPROTECT-locked chip.

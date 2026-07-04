@@ -30,7 +30,7 @@ are all immediately unblocked; 008 ← 007; 009 ← 004+005+006; 010 ← 005+007
 
 **Key references:** the sprint 076 archive (architecture-update.md contains
 the authoritative exclusion table, naming decisions, and per-file occurrence
-counts), `docs/coding-standards.md` (leading `# [unit]` comment convention,
+counts), `.claude/rules/coding-standards.md` (leading `# [unit]` comment convention,
 established sprint 071), and the parent issue
 `remove-units-from-identifier-names-host-python.md` (in the sprint 076
 archive's `issues/` directory).
@@ -1083,7 +1083,7 @@ Scope:
   Python attribute name (Decision 4). This ticket's job is to re-confirm
   that exclusion still holds on the checked-out code, not to edit the
   file.
-- `docs/coding-standards.md` — update the Python-convention section's
+- `.claude/rules/coding-standards.md` — update the Python-convention section's
   status line from "not yet applied to any `host/` file ... sprint 072 is
   the sprint that will apply it" to state that **sprint 076** applied it
   (the work slipped five sprints per the roadmap; the convention text
@@ -1142,7 +1142,7 @@ ticket incidentally touching the same file.
       (13 classes, no `Field(alias=...)`), it does not edit this file.
 - [ ] `data/robots/*.json` and `robot_config.schema.json`: `git diff` shows
       zero changes attributable to this ticket.
-- [ ] `docs/coding-standards.md`'s Python-convention section states the
+- [ ] `.claude/rules/coding-standards.md`'s Python-convention section states the
       convention has been applied by **sprint 076** (not the originally
       forward-referenced "072"); no other text in that section changes.
 - [ ] Final repo-wide grep:
@@ -1207,7 +1207,7 @@ then do the final full-suite runs.
    unexpected hit by tracing it back to the ticket that should have caught
    it, or by renaming it here if it's genuinely a missed occurrence in
    this ticket's own scope.
-9. Update `docs/coding-standards.md`'s status line to reference sprint 076.
+9. Update `.claude/rules/coding-standards.md`'s status line to reference sprint 076.
 10. Run the full default suite, then the testgui tier, confirming both
     baselines.
 11. Note in the ticket's completion notes that a stakeholder should
@@ -1224,7 +1224,7 @@ then do the final full-suite runs.
 - `tests/_infra/tools/*.py` (2 files)
 - `host/robot_radio/config/robot_config.py` — confirm-only, no edit
   expected.
-- `docs/coding-standards.md` — one status-line edit.
+- `.claude/rules/coding-standards.md` — one status-line edit.
 
 **Testing plan**: Run `uv run python -m pytest -q` (2682 passed, 0
 failed), `QT_QPA_PLATFORM=offscreen uv run python -m pytest tests/testgui/ -q`
@@ -1233,6 +1233,6 @@ stakeholder-run bench script (e.g. `tests/bench/smoke_ritual.py`) as a
 post-sprint manual gate, since bench/field/infra trees have no automated
 coverage.
 
-**Documentation updates**: `docs/coding-standards.md`'s Python-convention
+**Documentation updates**: `.claude/rules/coding-standards.md`'s Python-convention
 status line, updated to state sprint 076 (not 072) applied the convention
 to `host/`.

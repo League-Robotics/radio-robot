@@ -11,6 +11,33 @@ cross-cutting convention — it applies to every identifier renamed by
 sprint 071 (C++, `source/`) and sprint 076 (Python, `host/`), and to
 any new identifier added after either sprint closes.
 
+The rule covers **every identifier the project controls: fields,
+properties, methods, functions, AND parameters.** A parameter named for
+its unit is the same violation as a field named for its unit:
+
+```cpp
+// WRONG — the parameter names are units, not quantities
+void setTwist(float v_mmps, float omega_radps);
+void setVelocity(float mm_per_s);
+
+// RIGHT — quantity names; units in the bracketed comment tag
+void setTwist(float v_x, float v_y, float omega);  // [mm/s] [mm/s] [rad/s]
+void setVelocity(float velocity);                  // [mm/s] signed
+```
+
+### Naming the quantity
+
+Name what the value *is*, precisely:
+
+- **`speed`** is a directionless magnitude. **`velocity`** is directed.
+  A body twist is never a bare `v` with no direction — it has components
+  (`v_x`, `v_y`, `omega`), because a drivetrain may be holonomic (forward
+  *and* sideways). If a value truly has no direction, call it `speed`.
+- Positions are **`x`** and **`y`** — never `position_1_mm`.
+- Frame and axis subscripts are *semantic* qualifiers, not units, and are
+  encouraged: `x_b` (x in the body frame), `velocity_b` (body-frame
+  velocity).
+
 Why: a unit suffix embedded in a name (`tgtMms`, `read_ms`) drifts
 silently the moment the underlying representation changes (e.g. a field
 that used to store centidegrees switches to degrees) — nothing forces the
@@ -157,3 +184,47 @@ external interface. Every *call site's own local variable* that stores or
 derives from its return value (e.g. a cached "now" timestamp or a deadline)
 has been renamed per the normal convention — only the vendor function's own
 name is excluded.
+
+## Naming Case (CamelCase — Google's case rules overridden)
+
+The project follows the Google C++ Style Guide — vendored with inline
+override banners at `docs/reference/google-cppguide.html` — EXCEPT its
+naming-case rules, which are replaced by this stakeholder-set rule
+(2026-07-04):
+
+> Use CamelCase. **Capitalize the first letter, including all letters in
+> an acronym, in a class, struct, protocol, or namespace name.**
+> **Lower-case the first letter, including all letters in an acronym, in
+> a variable or function name.**
+
+Explicitly: **we are not capitalizing function names** — functions and
+methods are never PascalCase. Variable and function names always start
+lowercase.
+
+```cpp
+namespace Hal {                       // namespace: UpperCamelCase
+
+class Motor {                         // type: UpperCamelCase
+ public:
+  void configure(const msg::MotorConfig& config);
+  void apply(const msg::MotorCommand& command);
+  void tick(uint32_t now);            // [ms] lowerCamelCase functions
+  void setVelocity(float velocity);   // [mm/s] signed
+  float velocity() const;             // [mm/s] signed
+ private:
+  float lastPosition_;                // [mm] member: trailing underscore
+};
+
+}  // namespace Hal
+```
+
+Details:
+- Acronyms follow the case of the position: `HTTPServer` (type),
+  `httpRequest` (variable/function).
+- Class data members keep Google's trailing underscore (`lastPosition_`).
+- Mathematical subscripts keep their underscore (`v_x`, `x_b`) — they are
+  notation, not word separation.
+- Filenames stay snake_case; `kConstant` constants stay.
+- Legacy code (`source_old`, verbatim copies) is already lowerCamelCase
+  for functions and stays as-is until touched. Generated code
+  (`source/messages/*.h`) is exempt.

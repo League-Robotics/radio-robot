@@ -92,5 +92,5 @@ uv run python tests/calibrate/calibrate_linear.py
 
 - [Protocol & Commands](protocol.md) — the wire format and command reference
 - [Overview](overview.md) — how firmware and host fit together
-- [docs/debugging.md](https://github.com/League-Robotics/radio-robot/blob/master/docs/debugging.md) — SWD/pyOCD debugging and chip recovery
-- [docs/hardware-bench-testing.md](https://github.com/League-Robotics/radio-robot/blob/master/docs/hardware-bench-testing.md) — bench verification gate
+- [.claude/rules/debugging.md](https://github.com/League-Robotics/radio-robot/blob/master/.claude/rules/debugging.md) — SWD/pyOCD debugging and chip recovery
+- [.claude/rules/hardware-bench-testing.md](https://github.com/League-Robotics/radio-robot/blob/master/.claude/rules/hardware-bench-testing.md) — bench verification gate

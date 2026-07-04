@@ -77,9 +77,9 @@ reattach gdb without restarting it. Stop it with Ctrl-C when done.
 
 ### VS Code flow
 
-[.vscode/launch.json](../.vscode/launch.json) defines cortex-debug configs (the
+[.vscode/launch.json](../../.vscode/launch.json) defines cortex-debug configs (the
 `marus25.cortex-debug` extension is recommended in
-[.vscode/extensions.json](../.vscode/extensions.json)):
+[.vscode/extensions.json](../../.vscode/extensions.json)):
 
 - **micro:bit PyOCD Cortex Debug** — launch: cortex-debug spawns its own pyOCD
   server, flashes, and stops. Use this for a normal F5 debug session.
@@ -172,8 +172,8 @@ This section is the contract for autonomous agents debugging the board.
 
 ## Reference
 
-- Recipes: [justfile](../justfile) (`debug`, `gdb`, `commander`, `erase`)
-- VS Code configs: [.vscode/launch.json](../.vscode/launch.json)
+- Recipes: [justfile](../../justfile) (`debug`, `gdb`, `commander`, `erase`)
+- VS Code configs: [.vscode/launch.json](../../.vscode/launch.json)
 - SVD (peripheral decode): `libraries/codal-nrf52/nrfx/mdk/nrf52833.svd`
 - Flash/deploy tooling that shares pyOCD: `mbdeploy/src/mbdeploy/cli.py`
 - pyOCD docs: <https://pyocd.io>

@@ -30,3 +30,12 @@ The original TypeScript firmware was developed as a functional prototype. This p
 - The robot drives a straight 2-meter course with less than 1% encoder divergence between wheels.
 - The G command navigates to a specified XY offset within the arrival tolerance (`arriveTol`) parameter.
 - Clock-sync: a PING burst aligns robot `t=` timestamps with host-monotonic time to within half the minimum RTT.
+
+## Rules vs. docs
+
+Process and conventions agents must follow — coding standards, naming, on-chip
+debugging workflow, hardware bench testing, git, CLASI — are **rules** and live in
+[.claude/rules/](../.claude/rules/). `docs/` holds project knowledge: the
+architecture, the protocol spec (`protocol-v2.md`), design notes, decisions, and
+post-mortems. Former docs pages that became rules (`coding-standards.md`,
+`debugging.md`, `hardware-bench-testing.md`) leave pointer stubs here.

@@ -34,11 +34,16 @@ mbdeploy deploy --build # build firmware and flash the robot
 ```
 
 Then open the serial port (or drive through the radio relay) and issue commands.
-See the current command set in [source/app/CommandProcessor.cpp](../source/app/CommandProcessor.cpp)
-and, once Sprint 009 lands, the [protocol v2 spec](kinematics-model.md) command
-surface (PING/ECHO/ID, SET/GET, TLM/STREAM, motion verbs).
+The current command surface is protocol v2 — see
+[docs/protocol-v2.md](../../docs/protocol-v2.md) (PING/ECHO/ID, SET/GET,
+TLM/STREAM/SNAP, motion verbs) — dispatched by
+[source/commands/CommandProcessor.cpp](../../source/commands/CommandProcessor.cpp).
 
-### Quick smoke sequence (current protocol)
+### Quick smoke sequence (STALE — predates protocol v2)
+
+> The table below is the pre-v2 command set and needs a refresh; for current
+> sequences use [docs/protocol-v2.md](../../docs/protocol-v2.md) §13 verification
+> examples and the bench scripts under `tests/bench/`.
 
 | Step | Command | Expect |
 |---|---|---|
