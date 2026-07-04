@@ -102,6 +102,7 @@ bare events with no `#id`.
 | `badkey`  | Unknown `key=value` key; detail is the offending key name    |
 | `nodev`   | Hardware device not present; detail is the command verb      |
 | `range`   | Numeric argument outside the allowed range; detail is param  |
+| `unsupported` | Mode rejected by `capabilities()` (e.g. `DEV M <n> VOLT` on a Nezha motor); detail is the mode keyword — §16 |
 
 ---
 
@@ -1487,6 +1488,269 @@ encoder-report-error knobs (`PhysicsWorld`) and six OTOS-error knobs
 | `otosYawNoise`      | float | `%.3f`      | `0.000`   | OTOS yaw noise sigma (`SimOdometer::setYawNoiseSigma()`) |
 | `otosLinDriftMmS`   | float | `%.3f`      | `0.000`   | OTOS linear drift, mm/second (wire unit). Converted to/from `SimOdometer`'s internal PER-TICK `_linearDriftPerTick` using `RobotConfig::controlPeriod`: `per_tick = per_second * (controlPeriod / 1000.0f)`, and the inverse on `SIMGET`. |
 | `otosYawDriftDegS`  | float | `%.3f`      | `0.000`   | OTOS yaw drift, degrees/second (wire unit). Converted to/from `SimOdometer`'s internal PER-TICK `_yawDriftPerTick` (radians) using BOTH the same time-domain formula as `otosLinDriftMmS` AND a deg↔rad conversion. |
+
+---
+
+## 16. Development Commands (`DEV …`, dev builds only)
+
+**These verbs exist ONLY when the firmware is built with `ROBOT_DEV_BUILD`
+set** (`codal.json`'s `"config"` object — force-included into every
+translation unit as a preprocessor `#define`, the same mechanism
+`MICROBIT_BLE_ENABLED` already uses; see `source/commands/dev_commands.h`).
+Sprint 077's `source/` tree sets `ROBOT_DEV_BUILD=1` — there is no
+production motion firmware yet, so this dev-bench build IS the only build.
+A future production firmware flips the define to `0` and `DEV` disappears
+(`ERR unknown`), exactly like `SIMSET`/`SIMGET` disappear on real hardware
+(§15) — same idea, different gating mechanism (`#if` here vs. a CMake
+source-file exclusion there).
+
+`DEV` drives the HAL directly for bench bring-up: individual motors by
+**port** (1..4 — matching how `NezhaHal` instantiates one `NezhaMotor` per
+port; never an L/R role name) and, through a bound port pair, the
+`Drivetrain` subsystem. Every `DEV` handler that changes a motor or
+drivetrain's commanded state builds a `msg::MotorCommand`/
+`msg::DrivetrainCommand` and dispatches it through `apply()` — the full
+message plane, capability validation included — rather than calling a
+primitive setter directly. Replies use the standard taxonomy exclusively
+(§3): `OK`/`ERR`, `EVT dev_watchdog` for the one asynchronous event this
+family emits. No new reply tag is introduced.
+
+### Authority: `DEV M` vs. `DEV DT`
+
+This firmware runs only the dev loop — there is no planner to fight — so
+there is exactly one authority conflict: a single motor commanded directly
+by `DEV M` vs. the same motor being driven by the `Drivetrain` under
+`DEV DT`. Rule:
+
+- Any `DEV M <n>` verb that actually changes the motor's commanded state
+  (`DUTY`, `VEL`, `POS`, `VOLT`, `NEUTRAL`, `RESET`) drops drivetrain
+  authority — but only when the command is **accepted**; a capability
+  rejection (`VOLT` on Nezha) never touched the motor and so never steals
+  authority.
+- Any `DEV DT` verb that commands the drivetrain (`VW`, `WHEELS`, `NEUTRAL`)
+  (re)activates drivetrain authority.
+- `DEV DT PORTS`, `DEV M <n> STATE`, `DEV M <n> CAPS`, `DEV DT STATE` are
+  queries/bindings and never change authority.
+- `DEV STOP` and `DEV DT STOP` always drop authority (see below).
+
+### Port binding: `DEV DT PORTS`
+
+`DEV DT PORTS <left> <right>` selects which two motor ports the
+`Drivetrain` treats as its wheel pair. Default at boot: `1 2` (the robot's
+normal drive pair). The coupled PID/governor bench rig uses ports `3 4`
+(two motors with mechanically linked shafts — running one loads the
+other). The binding **persists** across `DEV STOP` and a serial-silence
+watchdog neutral event; it resets only on reboot.
+
+### `DEV M <n> …` — Single-Motor Control
+
+```
+DEV M <n> DUTY <duty>        [%, -100..100]   → OK DEV M <n> applied=<duty/100>
+DEV M <n> VEL <velocity>     [mm/s] signed    → OK DEV M <n> vel=<velocity>
+DEV M <n> POS <position>     [deg]            → OK DEV M <n> pos=<position>
+DEV M <n> VOLT <voltage>     [V]              → ERR unsupported volt (Nezha has no voltage mode)
+DEV M <n> NEUTRAL <B|C>                        → OK DEV M <n> neutral=<B|C>
+DEV M <n> RESET                                → OK DEV M <n> reset=1
+DEV M <n> STATE                                → OK DEV M <n> pos=.. vel=.. applied=.. wedged=.. conn=..
+DEV M <n> CAPS                                  → OK DEV M <n> duty=.. volt=.. vel=.. pos=.. enc=..
+DEV M <n> CFG k=v ...                          → OK DEV M <n> <applied k=v ...>
+```
+
+`<n>` is the motor port, `1..4`.
+
+- `DUTY <duty>` — open-loop duty cycle as a percentage (`-100..100`);
+  converted to the `[-1, 1]` fraction `Motor::setDutyCycle()` takes before
+  `apply()`. The `applied=` field echoes that fraction, not a hardware
+  readback (the physical write happens on the next `tick()`).
+- `VEL <velocity>` — `mm/s`, signed. Closed by the embedded velocity PID
+  inside `NezhaMotor::tick()` (gains from `DEV M <n> CFG`); `VEL` alone does
+  not guarantee motion if `kp`/`kff` are still at their zero boot default —
+  see `CFG` below.
+- `POS <position>` — `deg`. Onboard absolute-angle move via the Nezha's
+  `0x5D` register; no PID involved.
+- `VOLT <voltage>` — always `ERR unsupported volt` on a Nezha motor
+  (`capabilities().voltage == false`). This is `Motor::apply()`'s capability
+  gate firing, not a special case in the `DEV` handler — the same code path
+  a future voltage-capable leaf would accept through.
+- `NEUTRAL <B|C>` — `B` = brake, `C` = coast. Nezha has one physical stop
+  path (duty 0 via `0x60`); both letters currently produce the same
+  hardware action but are accepted and echoed distinctly for forward
+  compatibility.
+- `RESET` — zeroes the encoder (`MotorCommand.reset_position`); always
+  accepted (not capability-gated).
+- `STATE` — one line, always all five fields even when a leaf lacks an
+  encoder (unset fields report `0`/`false`, never a blank).
+- `CAPS` — `1`/`0` per capability flag (`duty`, `volt`, `vel`, `pos`,
+  `enc` = `has_encoder`).
+- `CFG k=v ...` — a **delta**, not a full replace: only the named keys
+  change; every other field of the motor's current `msg::MotorConfig`
+  (already applied, or the bench-placeholder boot default) is preserved.
+  Recognized keys:
+
+  | Key              | `MotorConfig` field         | Wire format |
+  |------------------|------------------------------|-------------|
+  | `kp`             | `vel_gains.kp`               | `%.3f`      |
+  | `ki`             | `vel_gains.ki`               | `%.3f`      |
+  | `kff`            | `vel_gains.kff`               | `%.3f`      |
+  | `i_max`          | `vel_gains.i_max`             | `%.3f`      |
+  | `kaw`            | `vel_gains.kaw`               | `%.3f`      |
+  | `slew`           | `slew_rate`                   | `%.1f`      |
+  | `min_duty`       | `min_duty`                    | `%.3f`      |
+  | `travel_calib`   | `travel_calib`                | `%.4f`      |
+  | `fwd_sign`       | `fwd_sign`                     | `%d`        |
+  | `vel_filt_alpha` | `vel_filt_alpha`               | `%.3f`      |
+
+  An unrecognized key emits `ERR badkey <key>` (does not prevent the
+  other, valid keys in the same command from applying — mirrors `SET`'s
+  per-key error reporting, §7). The final `OK` line lists only the keys
+  that actually applied.
+
+Examples:
+
+```
+DEV M 1 DUTY 30
+OK DEV M 1 applied=0.30
+
+DEV M 1 STATE
+OK DEV M 1 pos=177.8 vel=0.0 applied=0.30 wedged=0 conn=1
+
+DEV M 1 VOLT 3
+ERR unsupported volt
+
+DEV M 1 RESET
+OK DEV M 1 reset=1
+
+DEV M 1 CAPS
+OK DEV M 1 duty=1 volt=0 vel=1 pos=1 enc=1
+
+DEV M 3 CFG kp=0.8 slew=400
+OK DEV M 3 kp=0.800 slew=400.0
+```
+
+### `DEV DT …` — Drivetrain Control
+
+```
+DEV DT PORTS <left> <right>          → OK DEV DT ports=<left>,<right>
+DEV DT VW <v_x> <v_y> <omega>        [mm/s mm/s rad/s] → OK DEV DT vx=.. vy=.. omega=..
+DEV DT WHEELS <left> <right>         [mm/s] → OK DEV DT left=.. right=..
+DEV DT NEUTRAL <B|C>                  → OK DEV DT neutral=<B|C>
+DEV DT STATE                          → OK DEV DT active=<0|1> ports=<l>,<r> vel=<vL>,<vR>
+DEV DT STOP                           → OK DEV DT STOP
+```
+
+- `PORTS <left> <right>` — see "Port binding" above. Also refreshes the
+  Drivetrain's cached capability read of the newly-bound pair
+  (`DrivetrainCapabilities.onboard_position`).
+- `VW <v_x> <v_y> <omega>` — a body twist in `mm/s`, `mm/s`, `rad/s`.
+  `v_y` is accepted on the wire but ignored: this Drivetrain is
+  differential-only this sprint (`capabilities().holonomic == false`), so
+  only `v_x`/`omega` reach `BodyKinematics::inverse()`. Ratio-governed (see
+  below).
+- `WHEELS <left> <right>` — direct per-wheel velocity targets (`mm/s`,
+  signed), bypassing kinematics. Also ratio-governed. This is the arm the
+  coupled bench rig's curve tests drive (ports `3 4`).
+- Both `VW` and `WHEELS` pass through the ratio (sync) governor
+  (`Drivetrain::governRatio()`): if one wheel is bogged down relative to
+  its own commanded target, BOTH wheel targets are scaled down together so
+  the commanded left/right ratio (curvature) is held rather than letting
+  the healthy wheel run away. Observable by hand-loading one wheel while
+  polling `DEV DT STATE`.
+- `NEUTRAL <B|C>` — same B/C semantics as `DEV M`'s `NEUTRAL`, applied to
+  the whole Drivetrain.
+- `STATE` — `vel=` reports the current commanded (pre-governor) per-wheel
+  targets, `active=` is the authority flag (§ above), `ports=` is the
+  current `PORTS` binding.
+- `STOP` — the drivetrain-scoped stop: neutrals the Drivetrain AND its
+  currently-bound pair, and drops drivetrain authority — but leaves any
+  OTHER motor (independently under `DEV M` control) untouched. Contrast
+  with the global `DEV STOP` below.
+
+Examples:
+
+```
+DEV DT PORTS 3 4
+OK DEV DT ports=3,4
+
+DEV DT VW 150 0 0
+OK DEV DT vx=150.0 vy=0.0 omega=0.000
+
+DEV DT STATE
+OK DEV DT active=1 ports=3,4 vel=150.0,150.0
+
+DEV DT WHEELS 80 40
+OK DEV DT left=80.0 right=40.0
+
+DEV DT STOP
+OK DEV DT STOP
+```
+
+### `DEV STATE` / `DEV STOP` — Everything, at Once
+
+```
+DEV STATE   → one OK line per motor (ports 1..4, DEV M <n> STATE's shape)
+              + one OK DEV DT line (DEV DT STATE's shape) -- 5 lines total
+DEV STOP    → all four motors neutral, drivetrain idle, authority dropped
+              → OK DEV STOP
+```
+
+`DEV STATE` is a pure query (no authority change); `DEV STOP` is the same
+"neutralize everything" action the serial-silence watchdog fires on
+expiry (see below) — both go through the identical code path so there is
+exactly one "make it safe" implementation to audit.
+
+Example:
+
+```
+DEV STATE
+OK DEV M 1 pos=177.8 vel=0.0 applied=0.00 wedged=0 conn=1
+OK DEV M 2 pos=0.0 vel=0.0 applied=0.00 wedged=1 conn=1
+OK DEV M 3 pos=0.0 vel=0.0 applied=0.00 wedged=1 conn=1
+OK DEV M 4 pos=0.0 vel=0.0 applied=0.00 wedged=1 conn=1
+OK DEV DT active=0 ports=1,2 vel=0.0,0.0
+
+DEV STOP
+OK DEV STOP
+```
+
+### `DEV WD <window>` — Serial-Silence Watchdog Window
+
+```
+DEV WD <window>   [ms, 50..60000] → OK DEV WD window=<window>
+```
+
+Sets the serial-silence watchdog's window at runtime. Default at boot:
+`1000` ms.
+
+### Serial-Silence Watchdog — Non-Negotiable
+
+Every `DEV`/liveness command **line** that arrives on either comms channel
+(serial or radio) resets a wall-clock timer — regardless of the line's
+content or whether it parsed to a known verb. If no line arrives within
+the current window, the firmware:
+
+1. Commands **all four** motors to neutral (`Neutral::BRAKE`), regardless
+   of which family (`DEV M` or `DEV DT`) was last authoritative.
+2. Idles the Drivetrain and drops drivetrain authority.
+3. Emits `EVT dev_watchdog` (no body, no `#id` — this is not tied to any
+   single originating command) on the serial channel.
+
+This is deliberately **not** the legacy motion-watchdog flag mechanism
+(only certain command kinds reset that one) — a silent host is a silent
+host whether it stopped sending `PING` or `DEV DT VW`. This exists even
+though this is a bench-only build with no planner to fight: the robot's
+runaway history (`.claude/rules/hardware-bench-testing.md` and prior
+incident notes) makes it a hard requirement, not a nice-to-have.
+
+Example:
+
+```
+DEV M 1 VEL 100
+OK DEV M 1 vel=100.0
+… (host goes silent for > the current window) …
+EVT dev_watchdog
+DEV M 1 STATE
+OK DEV M 1 pos=412.0 vel=0.0 applied=0.00 wedged=0 conn=1
+```
 
 ---
 

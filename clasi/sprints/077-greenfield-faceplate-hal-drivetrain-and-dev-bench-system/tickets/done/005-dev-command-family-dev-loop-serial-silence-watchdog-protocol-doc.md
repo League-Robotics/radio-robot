@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: DEV command family, dev loop, serial-silence watchdog, protocol doc
-status: open
+status: done
 use-cases:
 - SUC-005
 - SUC-006
@@ -27,7 +27,7 @@ tickets 3 and 4 reachable from outside the firmware for the first time.
 
 ### `DEV` command family (`source/commands/dev_commands.{h,cpp}`)
 
-- [ ] Full vocabulary implemented exactly per the issue's locked table:
+- [x] Full vocabulary implemented exactly per the issue's locked table:
   - `DEV M <n> DUTY <duty>` → `motor.apply({duty_cycle})` → `OK DEV M <n>
     applied=<duty>`
   - `DEV M <n> VEL <velocity>` → `[mm/s]` → embedded PID closes the loop
@@ -52,22 +52,22 @@ tickets 3 and 4 reachable from outside the firmware for the first time.
   - `DEV DT NEUTRAL <B|C>` / `DEV DT STATE` / `DEV DT STOP`
   - `DEV STATE` → one line per component (all motors + drivetrain)
   - `DEV STOP` → all motors neutral, drivetrain idle
-- [ ] `<n>` addresses motors by **port** (1..4), matching how `NezhaHal`
+- [x] `<n>` addresses motors by **port** (1..4), matching how `NezhaHal`
       instantiates them (ticket 3) — never by an L/R role name.
-- [ ] Every `DEV` handler builds a `msg::MotorCommand`/
+- [x] Every `DEV` handler builds a `msg::MotorCommand`/
       `msg::DrivetrainCommand` and dispatches through `apply()` — exercising
       the full message plane (capability validation included) rather than
       calling any primitive setter directly from the command layer.
-- [ ] Argument parsing: resolve architecture-update.md Open Question 3
+- [x] Argument parsing: resolve architecture-update.md Open Question 3
       (hand-rolled `ParseFn` per subcommand vs. extending `ArgSchema`) and
       document the choice in a header comment in `dev_commands.h`. Either
       approach is acceptable; consistency across all `DEV` subcommands is
       not required if a mix is simpler (e.g., `ArgSchema` for pure-positional
       forms like `DEV M <n> DUTY <duty>`, hand-rolled for `CFG k=v ...`).
-- [ ] Replies use the standard taxonomy exclusively:
+- [x] Replies use the standard taxonomy exclusively:
       `CommandProcessor::replyOK`/`replyOKf` for success,
       `replyErr`/`replyErrf` for failure — no ad hoc reply formatting.
-- [ ] `DEV M …` motion deactivates drivetrain mode; `DEV DT …` reactivates
+- [x] `DEV M …` motion deactivates drivetrain mode; `DEV DT …` reactivates
       it — only one authority (single-motor or drivetrain) drives the
       motors at a time. Since this firmware runs only the dev loop (no
       planner), this arbitration is the only authority conflict that exists
@@ -75,7 +75,7 @@ tickets 3 and 4 reachable from outside the firmware for the first time.
 
 ### Dev loop (`source/main.cpp`)
 
-- [ ] Loop body matches the issue's locked shape:
+- [x] Loop body matches the issue's locked shape:
   ```
   while (true) {
       pollComms();                 // dispatch DEV/PING via CommandProcessor
@@ -92,26 +92,26 @@ tickets 3 and 4 reachable from outside the firmware for the first time.
   ```
   (`left`/`right` here are whichever two `NezhaMotor`s `DEV DT PORTS` last
   bound — the loop itself does not hardcode which ports.)
-- [ ] `Communicator` (or an equivalent inline poll loop, per architecture-
+- [x] `Communicator` (or an equivalent inline poll loop, per architecture-
       update.md Open Question 5 — default to reusing `Communicator` since it
       is confirmed dependency-clean) drives `pollComms()`.
 
 ### Serial-silence watchdog — NON-NEGOTIABLE
 
-- [ ] Default window ~1 s; settable (a `DEV`/config verb or equivalent — not
+- [x] Default window ~1 s; settable (a `DEV`/config verb or equivalent — not
       hardcoded-only). Document the exact mechanism chosen (which verb sets
       it) in `dev_commands.h` and in the protocol doc.
-- [ ] On silence exceeding the window: all motors → neutral, drivetrain →
+- [x] On silence exceeding the window: all motors → neutral, drivetrain →
       idle, regardless of which command family (single-motor or drivetrain)
       was last active.
-- [ ] This behavior is present even though this is a bench-only firmware
+- [x] This behavior is present even though this is a bench-only firmware
       build with no planner to fight — the runaway history (see
       `.claude/rules/hardware-bench-testing.md` and prior incident notes)
       makes this a hard requirement, not a nice-to-have.
 
 ### Protocol documentation
 
-- [ ] `docs/protocol-v2.md` gains a new "Development commands" section
+- [x] `docs/protocol-v2.md` gains a new "Development commands" section
       (after §14 Debug Commands, or wherever the document's existing section
       numbering makes sense) documenting the full `DEV` vocabulary above,
       following the same format as the existing Motion Commands (§10)
@@ -119,7 +119,7 @@ tickets 3 and 4 reachable from outside the firmware for the first time.
 
 ### Build
 
-- [ ] `python build.py --clean` succeeds with the dev loop fully wired.
+- [x] `python build.py --clean` succeeds with the dev loop fully wired.
 
 ## Testing
 
