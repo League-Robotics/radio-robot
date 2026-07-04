@@ -169,6 +169,8 @@ private:
     uint8_t  _frzTicksR    = 0;
     bool     _frzActiveL   = false;  // live per-wheel frozen flags (this tick)
     bool     _frzActiveR   = false;
+    float    _frzOffsetL   = 0.0f;   // [mm] bench-mode substituted travel (L)
+    float    _frzOffsetR   = 0.0f;   // [mm] bench-mode substituted travel (R)
 
     // Bench-OTOS feed dt baseline (feed moved here from the HAL actuator
     // ticks — see tickUpdate).  Maintained every tick, same anti-spike

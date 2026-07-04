@@ -245,6 +245,57 @@ def test_bench_heading_applies_slip_model():
         )
 
 
+def test_bench_substitution_survives_frozen_wheel_mid_leg():
+    """BENCH-MODE healthy-wheel substitution: a D leg whose wheel counter
+    freezes MID-LEG (the Nezha 0x46 register latch) still stops at the
+    commanded distance, because the frozen wheel's stream is substituted
+    with the healthy wheel's deltas (sign-aware, bench-gated).
+
+    Without the substitution the distance stop starves at half rate and the
+    leg runs on until the TIME backstop — the plant ends far past the
+    commanded distance (the 2026-07-03 bench signature: D 700 legs dying
+    short/long with tours off by hundreds of mm).
+    """
+    import ctypes
+
+    with Sim() as s:
+        send(s, "DBG OTOS BENCH 1")
+        send(s, "SET rotSlip=0")
+        send(s, "SET sTimeout=60000")
+        send(s, "ZERO enc")
+        send(s, "OZ")
+        send(s, "SI 0 0 0")
+        s.tick_for(100)
+
+        reply = send(s, "D 200 200 400")
+        assert "OK" in reply.upper(), reply
+        s.tick_for(400)   # rolling
+        # Latch the RIGHT wheel's readback EXACTLY (read-failure model: reads
+        # succeed, value stale — the true Nezha register-latch flavor; the
+        # motor_offset trick produces a wobbling value the detector correctly
+        # ignores).  side 1 = right.
+        s._lib.sim_set_motor_read_failure(s._h, 1, 1)
+        s.tick_for(8000)  # far beyond nominal 2 s — would expose a time-stop overrun
+
+        # Assert on the BELIEVED pose (what tour geometry consumes): the
+        # substituted encoder stream keeps the distance stop measuring, so
+        # the leg ends at the commanded 400 mm in the belief frame.  (The
+        # sim plant itself curls during the freeze because the wheel PID
+        # deliberately still reads the raw frozen feedback — on the stand
+        # that has no pose consequence.)  Without substitution the stop
+        # starves at half rate: the believed leg ends near ~800 mm of
+        # healthy-wheel travel (avg 400 of frozen+healthy) or on the TIME
+        # backstop — far outside the window below.
+        import math
+        px = float(s._lib.sim_get_pose_x(s._h))
+        py = float(s._lib.sim_get_pose_y(s._h))
+        dist = math.hypot(px, py)
+        assert 330.0 <= dist <= 470.0, (
+            f"believed leg length should be ~400 mm despite the frozen right "
+            f"counter; got {dist:.0f} mm"
+        )
+
+
 def test_bench_otos_ignores_encoder_reset():
     """An encoder reset (ZERO enc) must NOT teleport the bench pose.
 

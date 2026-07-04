@@ -81,86 +81,114 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
     // ------------------------------------------------------------------
     _runOutlierFilter(now);
 
-    // Wedge freeze detection + HEALTHY-WHEEL SUBSTITUTION (bench-wedge fix,
-    // 2026-07-03).  The MotorController detector is structurally blind to
-    // the boundary-latch flavor (resets on target==0, arming grace — KB doc
-    // 2026-07-01-encoder-wedge-boundary-latch-flavor.md), so latches
-    // poisoned whole legs: +100.2° phantom rotation measured on a straight
-    // D 700, legs dying on the TIME backstop 222 mm short.
+    // controlTick runs the velocity PID and calls _motorL/R.setSpeed().
+    // refreshedWheel=3 means both wheels were just collected (same semantics
+    // as Drive::periodic).  Runs on the RAW post-filter stream — the PID and
+    // the MotorController wedge detector keep their historical behavior.
+    bool driving = (_outputs.tgtSpeed[1] != 0.0f || _outputs.tgtSpeed[0] != 0.0f);
+    _mc.controlTick(_hw, _outputs, now, driving ? 3 : 0);
+
+    // ------------------------------------------------------------------
+    // Wedge freeze detection + BENCH-MODE healthy-wheel SUBSTITUTION
+    // (bench-wedge fix, 2026-07-03).
+    //
+    // The Nezha 0x46 readback register latches at random (KB doc
+    // 2026-07-01-encoder-wedge-boundary-latch-flavor.md): the wheel keeps
+    // turning but its counter freezes, so every distance/rotation stop
+    // starves and every pose frame integrates a phantom differential —
+    // measured +100.2° on a straight D 700 and D legs dying 222 mm short.
     //
     // Detector: a wheel whose post-filter encoder is EXACTLY constant for
-    // kFreezeTicksN ticks while commanded > kFreezeMinCmdMmps is latched
-    // (no arming needed, ~60 ms latency).
+    // kFreezeTicksN ticks while commanded > kFreezeMinCmdMmps.
     //
-    // Recovery: NO mid-leg I2C — the atomic-read "re-prime" idea is
-    // documented to LATCH the readback when fired while wheels rotate (see
-    // sprint-064 issue encoder-reset-while-moving-latches-readback; it also
-    // made runs measurably worse when tried on 2026-07-03).  The register
-    // unlatches at the next drive-start atomic reset (safe at rest); until
-    // then the flags below raise wedgeActive (predict holds dTheta) and the
-    // bench feed holds its heading.  Full healthy-wheel substitution (which
-    // would also rescue leg LENGTH under a mid-leg freeze) is deliberately
-    // NOT done here — it changes _hw.encPos semantics for every consumer;
-    // see clasi/issues/encoder-wedge-corrupts-tour-legs.md for that design.
+    // Fix (BENCH MODE ONLY): substitute the frozen wheel's per-tick delta
+    // with the healthy wheel's delta, sign-projected through the commanded
+    // targets (straight → same sign, spin → opposite), accumulated in
+    // _frzOffsetL/R and applied to _hw.encPos.  Distance and rotation keep
+    // being MEASURED through the freeze, so D stops at the commanded spot
+    // and RT at the commanded angle even mid-latch.  Downstream (EKF
+    // predict, encpose, stop conditions via the state sync, TLM enc=, the
+    // bench-OTOS feed below) all read the substituted stream; the PID/MC
+    // detector above deliberately keep the raw stream.
+    //
+    // WHY bench-gated: on the stand the wheels are unloaded — a commanded
+    // wheel with a frozen counter is ALWAYS the register latch, never a
+    // physical stall, so substitution cannot mask a collision.  On the
+    // floor (bench mode off) this is a real ambiguity; extending the fix
+    // there (PWM/effort discrimination) is the wedge sprint's ticket —
+    // clasi/issues/encoder-wedge-corrupts-tour-legs.md.
+    //
+    // NO mid-leg I2C recovery — atomic operations while wheels rotate are
+    // themselves a latch trigger (sprint-064 issue
+    // encoder-reset-while-moving-latches-readback).  The register unlatches
+    // at the next drive-start atomic reset; a natural release (raw catches
+    // up in one unphysical step) or any reset zeroes the offsets and the
+    // raw register becomes authoritative again (the predict/tickEncoder
+    // step clamps swallow the discontinuity).
     // ------------------------------------------------------------------
     static constexpr float   kFreezeMinCmdMmps = 30.0f;
     static constexpr uint8_t kFreezeTicksN     = 3;
-    static constexpr uint8_t kFreezeHoldMaxTicks = 25;   // ~500 ms @ 20 ms tick
     {
-        // Watch the SAME post-filter encoder values predict consumes
-        // (_hw.encPos, written by _runOutlierFilter above) — NOT the raw
-        // Motor cache — so injected-encoder test harnesses (which bypass the
-        // motor cache) never false-latch, while a real register latch (which
-        // freezes _hw.encPos identically) still trips.
+        // Detect on the RAW motor cache (Motor/SimMotor::position()) — the
+        // register latch freezes it EXACTLY (bench evidence: n=10 identical
+        // reads, err=0).  The outlier filter above must NOT be the source:
+        // it manufactures apparent motion out of a frozen raw input (its
+        // reject/adopt fallback), which both defeats exact-equality
+        // detection and corrupts _hw.encPos during a latch.  Harnesses that
+        // inject encoders without commanding motion never trip the cmd gate.
         // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
-        const float rawL = _hw.encPos[1];
-        const float rawR = _hw.encPos[0];
+        const float rawL  = _motorL.position();
+        const float rawR  = _motorR.position();
         const float dRawL = rawL - _frzLastRawL;
         const float dRawR = rawR - _frzLastRawR;
-        const bool  cmdL = (_outputs.tgtSpeed[1] >  kFreezeMinCmdMmps) ||
-                           (_outputs.tgtSpeed[1] < -kFreezeMinCmdMmps);
-        const bool  cmdR = (_outputs.tgtSpeed[0] >  kFreezeMinCmdMmps) ||
-                           (_outputs.tgtSpeed[0] < -kFreezeMinCmdMmps);
+        const float tgtL  = _outputs.tgtSpeed[1];
+        const float tgtR  = _outputs.tgtSpeed[0];
+        const bool  cmdL  = (tgtL > kFreezeMinCmdMmps) || (tgtL < -kFreezeMinCmdMmps);
+        const bool  cmdR  = (tgtR > kFreezeMinCmdMmps) || (tgtR < -kFreezeMinCmdMmps);
         if (cmdL && dRawL == 0.0f) {
             if (_frzTicksL < 0xFF) ++_frzTicksL;
         } else {
-            _frzTicksL = 0;
+            _frzTicksL  = 0;
+            _frzOffsetL = 0.0f;   // raw is authoritative again
         }
         if (cmdR && dRawR == 0.0f) {
             if (_frzTicksR < 0xFF) ++_frzTicksR;
         } else {
-            _frzTicksR = 0;
+            _frzTicksR  = 0;
+            _frzOffsetR = 0.0f;
         }
         _frzLastRawL = rawL;
         _frzLastRawR = rawR;
 
-        // Hold window: the dTheta/bench heading hold is only CORRECT for
-        // short latches.  A latch that persists (boundary latch spanning a
-        // whole RT) would have its REAL rotation erased by the hold — a lost
-        // corner (measured 599 mm closure, 2026-07-03 v26b run).  Past
-        // kFreezeHoldMaxTicks the hold releases: raw half-rate integration
-        // plus the verb's TIME backstop approximates the maneuver far better
-        // than a zeroed turn.
-        _frzActiveL = _frzTicksL >= kFreezeTicksN && _frzTicksL <= kFreezeHoldMaxTicks;
-        _frzActiveR = _frzTicksR >= kFreezeTicksN && _frzTicksR <= kFreezeHoldMaxTicks;
+        _frzActiveL = _frzTicksL >= kFreezeTicksN;
+        _frzActiveR = _frzTicksR >= kFreezeTicksN;
+
+        // BENCH-MODE substitution: while exactly one wheel's raw cache is
+        // latched, its believed stream becomes latched_raw + accumulated
+        // healthy-wheel deltas, sign-projected through the commanded targets
+        // (straight → same sign, spin → opposite).  This REPLACES the filter
+        // output for that wheel (the filter's fabricated motion is dropped),
+        // so distance/rotation stops keep measuring and the pose frames
+        // integrate sane deltas through the freeze.
+        if (_hal.isBenchMode()) {
+            const float rel = (tgtL * tgtR >= 0.0f) ? 1.0f : -1.0f;
+            if (_frzActiveL && !_frzActiveR) {
+                _frzOffsetL += rel * dRawR;
+                _hw.encPos[1] = rawL + _frzOffsetL;
+            }
+            if (_frzActiveR && !_frzActiveL) {
+                _frzOffsetR += rel * dRawL;
+                _hw.encPos[0] = rawR + _frzOffsetR;
+            }
+        }
     }
-    // Hold ONLY on commanded-STRAIGHT maneuvers.  On a straight leg a frozen
-    // differential is pure phantom rotation (the +100.2° D-700 bug) — hold
-    // is exactly right.  During a commanded SPIN (targets of opposite sign)
-    // the differential is half REAL: holding erases real rotation and loses
-    // the corner (measured: v26 hold variants degraded closure 53 mm →
-    // 570 mm at similar wedge counts; raw half-rate integration plus the
-    // verb's TIME backstop approximates a latched turn far better).
+    // Outside bench mode the substitution is off: keep the straight-only
+    // phantom-rotation hold as the floor-side defense (spin holds erase real
+    // rotation — measured; see the wedge issue).
     const bool cmdStraight =
         (_outputs.tgtSpeed[0] * _outputs.tgtSpeed[1]) > 0.0f;
-    const bool frozenNow = (_frzActiveL || _frzActiveR) && cmdStraight;
-
-    // controlTick runs the velocity PID and calls _motorL/R.setSpeed().
-    // refreshedWheel=3 means both wheels were just collected (same semantics
-    // as Drive::periodic).  Runs on the SUBSTITUTED encoder stream so the
-    // PID does not fight a frozen reading with runaway PWM.
-    bool driving = (_outputs.tgtSpeed[1] != 0.0f || _outputs.tgtSpeed[0] != 0.0f);
-    _mc.controlTick(_hw, _outputs, now, driving ? 3 : 0);
+    const bool frozenNow = (_frzActiveL || _frzActiveR) &&
+                           cmdStraight && !_hal.isBenchMode();
 
     // ------------------------------------------------------------------
     // Bench-OTOS feed (bench-wedge fix, 2026-07-03): moved HERE from the HAL
@@ -183,7 +211,7 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
                 const float tw   = _robCfg.trackwidth;
                 const float slip = effectiveSlip(_robCfg.rotationalSlip);
                 bench->tickEncoder(_hw.encPos[1], _hw.encPos[0],
-                                   tw / slip, benchDt, frozenNow);
+                                   tw / slip, benchDt);
             }
         }
     }
