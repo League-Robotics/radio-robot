@@ -1,5 +1,5 @@
 #pragma once
-#include "CommandTypes.h"
+#include "command_types.h"
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -14,7 +14,7 @@
 // the old Robot*/RobotSysCtx handlerCtx coupling removed -- this firmware has
 // no Robot class. Every handler reads only free vendor functions
 // (microbit_friendly_name(), microbit_serial_number(), system_timer_current_time())
-// and the wire constants in types/Protocol.h, so handlerCtx is unused
+// and the wire constants in types/protocol.h, so handlerCtx is unused
 // (nullptr) for all five descriptors.
 // ---------------------------------------------------------------------------
 

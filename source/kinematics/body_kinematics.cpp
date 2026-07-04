@@ -1,14 +1,14 @@
 /**
- * BodyKinematics.cpp — implementation of stateless differential-drive maps.
+ * body_kinematics.cpp — implementation of stateless differential-drive maps.
  *
- * See BodyKinematics.h for full API documentation and unit conventions.
+ * See body_kinematics.h for full API documentation and unit conventions.
  *
  * References:
  *   docs/kinematics-model.md §1.3 (inverse/forward maps)
  *   docs/kinematics-model.md §1.7 (saturation scaling, curvature preservation)
  */
-#include "BodyKinematics.h"
-#include "Pose2D.h"
+#include "body_kinematics.h"
+#include "pose2d.h"
 #include <math.h>
 
 namespace BodyKinematics {

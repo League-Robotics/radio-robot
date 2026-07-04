@@ -1,11 +1,11 @@
 #pragma once
 #include <stdint.h>
 #include <vector>
-#include "Protocol.h"
-#include "ArgSchema.h"
+#include "protocol.h"
+#include "arg_schema.h"
 
 // ---------------------------------------------------------------------------
-// CommandTypes.h — foundational types for the registration-based command
+// command_types.h — foundational types for the registration-based command
 // dispatch system.
 // Constraint: -std=c++11 -fno-exceptions -fno-rtti
 // ---------------------------------------------------------------------------
@@ -35,7 +35,7 @@ struct ArgList {
     // suppliedCount — number of tokens actually supplied by the caller for
     // the positional slots (<= count). Lets a handler distinguish "token
     // omitted" from "token supplied, value happens to equal the default."
-    // Set by parseSchema() and every hand-rolled ParseFn; see ArgParse.cpp.
+    // Set by parseSchema() and every hand-rolled ParseFn; see arg_parse.cpp.
     int      suppliedCount;
 };
 

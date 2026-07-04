@@ -15,7 +15,7 @@
 //   Include bridges.h from any firmware TU that needs the HAL types or
 //   the generated message types — both are now safe to include together.
 #pragma once
-#include "hal/capability/Pose2D.h"
+#include "hal/capability/pose2d.h"
 #include "messages/common.h"
 
 // --- Cross-namespace layout-compatibility checks (Phase 2) ---
@@ -46,4 +46,4 @@ static_assert(sizeof(::BodyTwist3) == sizeof(float) * 3,
 // Corresponds to DrivetrainConfig::half_track / half_wheelbase in the
 // generated drivetrain.h (no direct generated RobotGeometry message yet).
 static_assert(sizeof(::RobotGeometry) == sizeof(float) * 2,
-              "HAL RobotGeometry must be 2 floats — check hal/capability/Pose2D.h");
+              "HAL RobotGeometry must be 2 floats — check hal/capability/pose2d.h");

@@ -1,11 +1,11 @@
 #pragma once
 /**
- * IKinematics.h — compile-time kinematics namespace alias (046-002).
+ * i_kinematics.h — compile-time kinematics namespace alias (046-002).
  *
  * Differential-only build. The alias and kWheelCount are unconditional.
  *
  * Usage:
- *   #include "IKinematics.h"
+ *   #include "i_kinematics.h"
  *   // Then call Kinematics::inverse(...), Kinematics::forward(...), etc.
  *   // kWheelCount gives the number of driven wheels.
  *
@@ -20,6 +20,6 @@
  *   2. In source/main.cpp, replace NezhaHAL with MecanumHAL.
  * (git history preserves the full mecanum integration prior to sprint 048.)
  */
-#include "BodyKinematics.h"
+#include "body_kinematics.h"
 namespace Kinematics = BodyKinematics;
 constexpr int kWheelCount = 2;

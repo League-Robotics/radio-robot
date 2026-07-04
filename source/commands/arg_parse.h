@@ -1,19 +1,19 @@
 #pragma once
 // ---------------------------------------------------------------------------
-// ArgParse.h — schema-driven argument parser and inline helpers.
+// arg_parse.h — schema-driven argument parser and inline helpers.
 //
 // Provides:
 //   parseSchema()  — generic parser covering variadic, positional, and packKv
-//                    shapes; declared here, implemented in ArgParse.cpp.
+//                    shapes; declared here, implemented in arg_parse.cpp.
 //   argStr/argInt/argFloat — ONE-TRUE bounded Argument initializers.
 //   kvFind/kvInt/kvFloat/kvHas — KV lookup helpers.
 //
 // Constraint: -std=c++11 -fno-exceptions -fno-rtti; no heap; inline/stack-only.
 // ---------------------------------------------------------------------------
 
-#include "types/ArgSchema.h"
-#include "types/CommandTypes.h"
-#include "types/Protocol.h"  // KVPair
+#include "types/arg_schema.h"
+#include "types/command_types.h"
+#include "types/protocol.h"  // KVPair
 
 #include <cstdlib>  // atoi, atof
 #include <cstring>  // strcmp

@@ -1,5 +1,5 @@
 #pragma once
-#include "CommandTypes.h"
+#include "command_types.h"
 
 // ---------------------------------------------------------------------------
 // CommandQueue — fixed-capacity FIFO ring buffer for ParsedCommand items.

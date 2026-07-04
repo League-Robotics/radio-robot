@@ -10,7 +10,7 @@
 // ---------------------------------------------------------------------------
 
 #include "system_commands.h"
-#include "CommandProcessor.h"
+#include "command_processor.h"
 #include "MicroBit.h"
 
 #include <cstdio>

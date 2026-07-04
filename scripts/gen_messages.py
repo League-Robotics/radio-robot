@@ -55,29 +55,29 @@ _INVENTORY_MAP: dict = {
     # common.proto — shared geometric and utility types
     # -----------------------------------------------------------------------
 
-    # Pose2D: 2-D pose value type matching hal/capability/Pose2D.h {x,y,h}
-    ("Pose2D", "x"):     "Pose2D::x (hal/capability/Pose2D.h)",
-    ("Pose2D", "y"):     "Pose2D::y (hal/capability/Pose2D.h)",
-    ("Pose2D", "h"):     "Pose2D::h (hal/capability/Pose2D.h)",
+    # Pose2D: 2-D pose value type matching hal/capability/pose2d.h {x,y,h}
+    ("Pose2D", "x"):     "Pose2D::x (hal/capability/pose2d.h)",
+    ("Pose2D", "y"):     "Pose2D::y (hal/capability/pose2d.h)",
+    ("Pose2D", "h"):     "Pose2D::h (hal/capability/pose2d.h)",
 
     # BodyTwist: 2-DOF differential twist; not used standalone in ActualState
     # (BodyTwist3 is used everywhere); BodyTwist is retained for wire-compat.
     ("BodyTwist", "v"):     "(new field — BodyTwist2 not in ActualState; BodyTwist3 used instead)",
     ("BodyTwist", "omega"): "(new field — BodyTwist2 not in ActualState; BodyTwist3 used instead)",
 
-    # BodyTwist3: 3-DOF holonomic twist matching hal/capability/Pose2D.h BodyTwist3
-    ("BodyTwist3", "v_x"):   "BodyTwist3::vx_mmps (hal/capability/Pose2D.h)",
-    ("BodyTwist3", "v_y"):   "BodyTwist3::vy_mmps (hal/capability/Pose2D.h)",
-    ("BodyTwist3", "omega"): "BodyTwist3::omega_rads (hal/capability/Pose2D.h)",
+    # BodyTwist3: 3-DOF holonomic twist matching hal/capability/pose2d.h BodyTwist3
+    ("BodyTwist3", "v_x"):   "BodyTwist3::vx_mmps (hal/capability/pose2d.h)",
+    ("BodyTwist3", "v_y"):   "BodyTwist3::vy_mmps (hal/capability/pose2d.h)",
+    ("BodyTwist3", "omega"): "BodyTwist3::omega_rads (hal/capability/pose2d.h)",
 
     # BodyAccel: used by OTOS passthrough telemetry; not a named member of ActualState
     ("BodyAccel", "a_x"): "ActualState::otosAccelX (passthroughtelemetry)",
     ("BodyAccel", "a_y"): "ActualState::otosAccelY (passthroughtelemetry)",
 
-    # ValueSet: sensor freshness/validity stamp matching types/ValueSet.h ValueSet
-    ("ValueSet", "lag"):      "ValueSet::lagMs (types/ValueSet.h)",
-    ("ValueSet", "last_upd"): "ValueSet::lastUpdMs (types/ValueSet.h)",
-    ("ValueSet", "valid"):       "ValueSet::valid (types/ValueSet.h)",
+    # ValueSet: sensor freshness/validity stamp matching types/value_set.h ValueSet
+    ("ValueSet", "lag"):      "ValueSet::lagMs (types/value_set.h)",
+    ("ValueSet", "last_upd"): "ValueSet::lastUpdMs (types/value_set.h)",
+    ("ValueSet", "valid"):       "ValueSet::valid (types/value_set.h)",
 
     # PoseEstimate: pose+twist+stamp; matches source/state/PoseEstimate.h
     ("PoseEstimate", "pose"):  "PoseEstimate::pose (state/PoseEstimate.h)",
@@ -891,7 +891,7 @@ def _emit_bridges_header() -> str:
 //   Include bridges.h from any firmware TU that needs the HAL types or
 //   the generated message types — both are now safe to include together.
 #pragma once
-#include "hal/capability/Pose2D.h"
+#include "hal/capability/pose2d.h"
 #include "messages/common.h"
 
 // --- Cross-namespace layout-compatibility checks (Phase 2) ---
@@ -922,7 +922,7 @@ static_assert(sizeof(::BodyTwist3) == sizeof(float) * 3,
 // Corresponds to DrivetrainConfig::half_track / half_wheelbase in the
 // generated drivetrain.h (no direct generated RobotGeometry message yet).
 static_assert(sizeof(::RobotGeometry) == sizeof(float) * 2,
-              "HAL RobotGeometry must be 2 floats — check hal/capability/Pose2D.h");
+              "HAL RobotGeometry must be 2 floats — check hal/capability/pose2d.h");
 """
 
 

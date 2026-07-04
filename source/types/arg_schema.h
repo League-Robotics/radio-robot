@@ -2,20 +2,20 @@
 #include <stdint.h>
 
 // ---------------------------------------------------------------------------
-// ArgSchema.h — declarative argument-schema types for the schema-driven
+// arg_schema.h — declarative argument-schema types for the schema-driven
 // command parser layer.
 //
 // Constraint: -std=c++11 -fno-exceptions -fno-rtti
 // No heap allocation; all data is static/const.
 //
-// Placed in source/types/ (alongside CommandTypes.h) so that CommandTypes.h
+// Placed in source/types/ (alongside command_types.h) so that command_types.h
 // can include it without creating a circular dependency (commands/ -> types/
 // -> commands/ would be circular; this direction is types/ -> types/).
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // ArgKind — discriminator for a declared argument slot.
-// Mirrors ArgType in CommandTypes.h but belongs to the schema layer, not the
+// Mirrors ArgType in command_types.h but belongs to the schema layer, not the
 // runtime tagged-union layer.
 // ---------------------------------------------------------------------------
 // Deliberately separate from CommandTypes::ArgType (the runtime tagged-union

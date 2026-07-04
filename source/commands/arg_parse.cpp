@@ -1,4 +1,4 @@
-// ArgParse.cpp — implementation of the schema-driven argument parser.
+// arg_parse.cpp — implementation of the schema-driven argument parser.
 //
 // parseSchema() drives all three parse shapes defined by ArgSchema:
 //   variadic, positional (with optional range check and packKv), and no-arg.
@@ -15,7 +15,7 @@
 //
 // Constraint: -std=c++11 -fno-exceptions -fno-rtti; no heap.
 
-#include "commands/ArgParse.h"
+#include "commands/arg_parse.h"
 #include <cstdlib>   // atoi, atof
 
 // ---------------------------------------------------------------------------

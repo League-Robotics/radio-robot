@@ -1,4 +1,4 @@
-#include "I2CBus.h"
+#include "i2c_bus.h"
 #include "codal_target_hal.h"   // target_disable_irq() / target_enable_irq()
 #include "MicroBit.h"           // system_timer_current_time_us()
 #include <cstdio>
@@ -43,7 +43,7 @@ int I2CBus::write(uint16_t address, uint8_t* data, int len, bool repeated)
 
     // Always mask IRQs for the flag check-and-set. When _irqGuard is on we KEEP
     // them masked through the whole _bus transaction (nRF52 TWIM errata fix —
-    // see I2CBus.h / NRF52I2C::waitForStop); when off, we re-enable before the
+    // see i2c_bus.h / NRF52I2C::waitForStop); when off, we re-enable before the
     // transaction (original narrow-guard behaviour).
     target_disable_irq();
     bool alreadyInUse = _inUse;

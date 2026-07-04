@@ -12,9 +12,9 @@
 // ---------------------------------------------------------------------------
 
 #include "MicroBit.h"
-#include "Communicator.h"
-#include "RadioChannel.h"
-#include "CommandProcessor.h"
+#include "communicator.h"
+#include "radio_channel.h"
+#include "command_processor.h"
 #include "system_commands.h"
 
 static MicroBit uBit;
@@ -35,7 +35,7 @@ static void radioReply(const char* msg, void* ctx) {
 int main() {
     uBit.init();
 
-    // Comms: serial + radio, both enabled. RadioChannel.cpp (persisted boot
+    // Comms: serial + radio, both enabled. radio_channel.cpp (persisted boot
     // channel selection, button-edit UI) is not copied this ticket -- the
     // radio simply comes up on radiochan::kDefault every boot.
     static Communicator comm(uBit.serial, uBit.radio, uBit.messageBus);

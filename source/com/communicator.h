@@ -1,7 +1,7 @@
 #pragma once
 #include "MicroBit.h"
-#include "SerialPort.h"
-#include "Radio.h"
+#include "serial_port.h"
+#include "radio.h"
 
 /**
  * Communicator — owns both communication wrappers (serial + radio).

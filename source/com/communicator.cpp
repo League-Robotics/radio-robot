@@ -1,4 +1,4 @@
-#include "Communicator.h"
+#include "communicator.h"
 
 Communicator::Communicator(NRF52Serial& serial, MicroBitRadio& radio, MessageBus& bus)
     : _serial(serial),

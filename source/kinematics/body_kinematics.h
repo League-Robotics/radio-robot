@@ -1,5 +1,5 @@
 #pragma once
-#include "Pose2D.h"
+#include "pose2d.h"
 
 /**
  * BodyKinematics — stateless differential-drive kinematic maps and saturation.
@@ -78,7 +78,7 @@ void saturate(float vL, float vR,
 /**
  * Array-form overloads — differential adapter for the shared IKinematics
  * contract (046-002). These allow BodyKinematics to be used via the
- * compile-time namespace alias in IKinematics.h alongside MecanumKinematics.
+ * compile-time namespace alias in i_kinematics.h alongside MecanumKinematics.
  *
  * wheels[2] = {vL, vR} (same sign convention as the scalar forms above).
  * vy is always 0 for a differential drivetrain; inverse ignores t.vy_mmps and

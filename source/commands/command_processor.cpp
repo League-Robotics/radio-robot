@@ -1,13 +1,13 @@
-// CommandProcessor.cpp — protocol v2 wire-protocol parser and dispatcher.
+// command_processor.cpp — protocol v2 wire-protocol parser and dispatcher.
 //
 // Sprint 009, Ticket 002: v2 tokenizer, verb-only uppercasing, #id
 // correlation, OK/ERR/EVT/TLM/CFG/ID response taxonomy.
 // Sprint 019, Ticket 011: old Robot& constructor and switch statement removed;
 // all commands now go through the table-dispatch path.
 
-#include "CommandProcessor.h"
-#include "CommandQueue.h"
-#include "ArgParse.h"
+#include "command_processor.h"
+#include "command_queue.h"
+#include "arg_parse.h"
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -24,7 +24,7 @@ CommandProcessor::CommandProcessor(std::vector<CommandDescriptor> cmds)
 }
 
 // ---------------------------------------------------------------------------
-// setSerialReply — override implemented inline in CommandProcessor.h
+// setSerialReply — override implemented inline in command_processor.h
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------

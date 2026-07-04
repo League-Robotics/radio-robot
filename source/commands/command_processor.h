@@ -1,7 +1,7 @@
 #pragma once
-#include "Protocol.h"
-#include "CommandTypes.h"
-#include "CommandQueue.h"
+#include "protocol.h"
+#include "command_types.h"
+#include "command_queue.h"
 
 /**
  * CommandProcessor — protocol v2 wire-protocol parser and dispatcher.
