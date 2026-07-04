@@ -7,7 +7,7 @@ Two subcommands:
       otos_linear_scale and mm_per_wheel_deg_{left,right} to the active config.
 
   rogo calibrate turns [--auto] [--trials N]
-      Spins target_deg per trial (even=CCW, odd=CW) via firmware TN closed-loop
+      Spins the target angle (deg) per trial (even=CCW, odd=CW) via firmware TN closed-loop
       command.  Reads before/after yaw from aprilcam daemon (DaemonControl) as
       camera ground truth.  Accumulates OTOS yaw from the SO streaming channel
       during the spin.  After each trial, pushes an updated OA value to firmware
@@ -23,14 +23,14 @@ Design notes (turns):
   closed-loop turn.  Replies ACK:TN immediately, then TN+DONE <achieved>
   on success or TN+TIMEOUT <achieved>.  e.g. TN+900 = +90° CCW.
 - SO stream and TN+DONE reply arrive on the same serial channel — parsed in
-  one read loop using read_lines(duration_ms=100) bursts.  TX echo lines
+  one read loop using read_lines(duration=100) bursts.  TX echo lines
   (containing "TX:") are skipped; leading "<" is stripped by parse_so() via
   _strip() which does lstrip("<# ").
 - DaemonControl is ground truth (authoritative A1-centred world frame).
   The known +90° yaw offset between daemon yaw and drive-forward CANCELS
   when computing before/after yaw DELTAS — only deltas are used for turn
   calibration, so no correction is needed.
-- Adaptive OA push: new_scale = current * (cam_deg / otos_total_deg).
+- Adaptive OA push: new_scale = current * (cam / otos_total).
   Clamped to the firmware representable range [0.872, 1.128].
 - Arrow-key nudges use termios/tty.setraw (same pattern as
   test/system/carriage_explorer.py:_read_key).  Nudge size: 50ms at ±30 mm/s.
@@ -195,18 +195,18 @@ def _get_tag_yaw(field, tag_id: int, timeout_s: float = 3.0) -> Optional[float]:
     return None
 
 
-def _signed_turn_deg(yaw_before_rad: float, yaw_after_rad: float,
-                     expected_deg: float = 360.0) -> float:
+def _signed_turn(yaw_before_rad: float, yaw_after_rad: float,
+                 expected: float = 360.0) -> float:  # [deg]
     """Compute actual signed turn in degrees from before/after yaw readings,
-    picking the multiple of 360° closest to `expected_deg`.
+    picking the multiple of 360° closest to `expected`.
 
     Camera yaw is reported wrapped to (-π, π]. A full 360° spin reads as a
     delta near 0; we re-add the integer-turn count nearest the expectation.
     """
-    delta = (yaw_after_rad - yaw_before_rad + math.pi) % (2.0 * math.pi) - math.pi
-    delta_deg = math.degrees(delta)
-    n_full = round((expected_deg - delta_deg) / 360.0)
-    return n_full * 360.0 + delta_deg
+    delta_rad = (yaw_after_rad - yaw_before_rad + math.pi) % (2.0 * math.pi) - math.pi
+    delta = math.degrees(delta_rad)  # [deg]
+    n_full = round((expected - delta) / 360.0)
+    return n_full * 360.0 + delta
 
 
 def _get_tag_world_xy(field, tag_id: int, timeout_s: float = 3.0) -> Optional[tuple[float, float]]:
@@ -306,8 +306,8 @@ def cmd_calibrate_distance(args) -> None:
     verbose = bool(getattr(_cli, "_verbose", False) or getattr(args, "verbose", False))
 
     target_cm = float(args.distance)    # cm
-    target_mm = int(round(target_cm * 10))
-    speed_mms = int(args.speed)
+    target = int(round(target_cm * 10))
+    speed = int(args.speed)
 
     proto, conn, cfg = _make_proto_cfg(args)
 
@@ -315,12 +315,12 @@ def cmd_calibrate_distance(args) -> None:
 
     # Derive current mm/deg from calibration or wheel_diameter
     cal = getattr(cfg, "calibration", None)
-    left_mm_per_deg_current = getattr(cal, "mm_per_wheel_deg_left", None) if cal else None
-    right_mm_per_deg_current = getattr(cal, "mm_per_wheel_deg_right", None) if cal else None
+    wheel_travel_calib_left_current = getattr(cal, "mm_per_wheel_deg_left", None) if cal else None
+    wheel_travel_calib_right_current = getattr(cal, "mm_per_wheel_deg_right", None) if cal else None
     wd = getattr(getattr(cfg, "wheels", None), "wheel_diameter_mm", None)
-    default_mm_per_deg = (math.pi * wd / 360.0) if wd is not None else None
-    left_mm_per_deg_current = left_mm_per_deg_current or default_mm_per_deg
-    right_mm_per_deg_current = right_mm_per_deg_current or default_mm_per_deg
+    default_wheel_travel_calib = (math.pi * wd / 360.0) if wd is not None else None
+    wheel_travel_calib_left_current = wheel_travel_calib_left_current or default_wheel_travel_calib
+    wheel_travel_calib_right_current = wheel_travel_calib_right_current or default_wheel_travel_calib
 
     otos_linear_scale_current = getattr(cal, "otos_linear_scale", 1.0) if cal else 1.0
 
@@ -360,11 +360,11 @@ def cmd_calibrate_distance(args) -> None:
 
     if auto_mode:
         print(f"\nDistance calibration: AUTO mode, {auto_trials} trials, "
-              f"target={target_cm:.1f} cm  speed={speed_mms} mm/s")
+              f"target={target_cm:.1f} cm  speed={speed} mm/s")
         print("Camera (daemon) provides ground truth — no tape measure prompts.")
         print(f"Starting otos_linear_scale = {otos_linear_scale_current:.4f}\n")
     else:
-        print(f"\nDistance calibration: target={target_cm:.1f} cm  speed={speed_mms} mm/s")
+        print(f"\nDistance calibration: target={target_cm:.1f} cm  speed={speed} mm/s")
         print("Position the robot facing forward, press Enter to start each trial.")
         print("Type 'q' to finish and compute statistics.\n")
 
@@ -402,16 +402,16 @@ def cmd_calibrate_distance(args) -> None:
             time.sleep(0.1)
 
             # Step 3: drive straight
-            print(f"  Driving {target_cm:.1f} cm at {speed_mms} mm/s …")
-            proto.distance(speed_mms, speed_mms, target_mm)
+            print(f"  Driving {target_cm:.1f} cm at {speed} mm/s …")
+            proto.distance(speed, speed, target)
             # D command returns when encoders reach target; wait for completion
             # The command is blocking on the firmware side; allow generous timeout
-            timeout_s = (target_mm / max(speed_mms, 1)) * 2.0 + 3.0
+            timeout_s = (target / max(speed, 1)) * 2.0 + 3.0
             deadline = time.monotonic() + timeout_s
             while time.monotonic() < deadline:
                 time.sleep(0.2)
                 enc = proto.read_encoders()
-                if enc[0] >= target_mm * 0.95 or enc[1] >= target_mm * 0.95:
+                if enc[0] >= target * 0.95 or enc[1] >= target * 0.95:
                     break
             time.sleep(0.3)
 
@@ -424,10 +424,10 @@ def cmd_calibrate_distance(args) -> None:
                 if pose1 is not None:
                     pos1 = (pose1[0], pose1[1])
 
-            enc_left_mm  = float(enc[0]) if enc else 0.0
-            enc_right_mm = float(enc[1]) if enc else 0.0
-            enc_left_cm  = enc_left_mm  / 10.0
-            enc_right_cm = enc_right_mm / 10.0
+            enc_left  = float(enc[0]) if enc else 0.0
+            enc_right = float(enc[1]) if enc else 0.0
+            enc_left_cm  = enc_left  / 10.0
+            enc_right_cm = enc_right / 10.0
 
             if otos is not None:
                 otos_cm = math.hypot(otos[0], otos[1]) / 10.0
@@ -541,8 +541,8 @@ def cmd_calibrate_distance(args) -> None:
     mean_cam,  std_cam  = _mean_stdev(cam_ratios)
 
     new_otos_linear_scale      = otos_linear_scale_current * mean_otos
-    new_mm_per_deg_left        = left_mm_per_deg_current  * mean_encL if left_mm_per_deg_current  and mean_encL else None
-    new_mm_per_deg_right       = right_mm_per_deg_current * mean_encR if right_mm_per_deg_current and mean_encR else None
+    new_mm_per_deg_left        = wheel_travel_calib_left_current  * mean_encL if wheel_travel_calib_left_current  and mean_encL else None
+    new_mm_per_deg_right       = wheel_travel_calib_right_current * mean_encR if wheel_travel_calib_right_current and mean_encR else None
 
     print(f"\nRatio statistics (actual / measured):")
     print(f"  OTOS:          mean={mean_otos:.4f}  stdev={std_otos:.4f}  (n={len(otos_ratios)})")
@@ -553,9 +553,9 @@ def cmd_calibrate_distance(args) -> None:
     print(f"\nRecommended new values:")
     print(f"  otos_linear_scale:   {otos_linear_scale_current:.4f} × {mean_otos:.4f} = {new_otos_linear_scale:.4f}")
     if new_mm_per_deg_left is not None:
-        print(f"  mm_per_wheel_deg_left:  {left_mm_per_deg_current:.6f} × {mean_encL:.4f} = {new_mm_per_deg_left:.6f}")
+        print(f"  mm_per_wheel_deg_left:  {wheel_travel_calib_left_current:.6f} × {mean_encL:.4f} = {new_mm_per_deg_left:.6f}")
     if new_mm_per_deg_right is not None:
-        print(f"  mm_per_wheel_deg_right: {right_mm_per_deg_current:.6f} × {mean_encR:.4f} = {new_mm_per_deg_right:.6f}")
+        print(f"  mm_per_wheel_deg_right: {wheel_travel_calib_right_current:.6f} × {mean_encR:.4f} = {new_mm_per_deg_right:.6f}")
 
     updates: dict = {"calibration": {"otos_linear_scale": round(new_otos_linear_scale, 6)}}
     if new_mm_per_deg_left is not None:
@@ -625,9 +625,9 @@ def cmd_calibrate_turns(args) -> None:
       3. Send TN<deg_tenths> (firmware OTOS closed-loop turn).
       4. While waiting for TN+DONE, accumulate OTOS yaw deltas from SO stream.
       5. Send SSO+0 to stop streaming.
-      6. Read camera yaw after; compute cam_deg = after - before (unwrapped).
+      6. Read camera yaw after; compute cam = after - before (unwrapped).
       7. Read final encoders.
-      8. Adaptive OA push: new_scale = current * (cam_deg / otos_total_deg).
+      8. Adaptive OA push: new_scale = current * (cam / otos_total).
          Push OA to firmware so next trial uses the improved scale.
       9. Compute trackwidth estimate from encoder mm.
 
@@ -641,7 +641,7 @@ def cmd_calibrate_turns(args) -> None:
 
     auto_mode  = bool(getattr(args, "auto", False))
     auto_trials = int(getattr(args, "trials", 6))
-    target_real_deg = 360.0   # firmware TN will handle this exactly
+    target_real = 360.0   # firmware TN will handle this exactly
 
     proto, conn, cfg = _make_proto_cfg(args)
 
@@ -650,14 +650,14 @@ def cmd_calibrate_turns(args) -> None:
     # Calibration state from config
     cal = getattr(cfg, "calibration", None)
     otos_angular_scale_current = getattr(cal, "otos_angular_scale", 1.0) if cal else 1.0
-    left_mm_per_deg_current  = getattr(cal, "mm_per_wheel_deg_left",  None) if cal else None
-    right_mm_per_deg_current = getattr(cal, "mm_per_wheel_deg_right", None) if cal else None
+    wheel_travel_calib_left_current  = getattr(cal, "mm_per_wheel_deg_left",  None) if cal else None
+    wheel_travel_calib_right_current = getattr(cal, "mm_per_wheel_deg_right", None) if cal else None
     wd = getattr(getattr(cfg, "wheels", None), "wheel_diameter_mm", None)
-    default_mm_per_deg = (math.pi * wd / 360.0) if wd is not None else None
-    left_mm_per_deg_current  = left_mm_per_deg_current  or default_mm_per_deg
-    right_mm_per_deg_current = right_mm_per_deg_current or default_mm_per_deg
+    default_wheel_travel_calib = (math.pi * wd / 360.0) if wd is not None else None
+    wheel_travel_calib_left_current  = wheel_travel_calib_left_current  or default_wheel_travel_calib
+    wheel_travel_calib_right_current = wheel_travel_calib_right_current or default_wheel_travel_calib
 
-    trackwidth_mm_cfg = getattr(getattr(cfg, "geometry", None), "trackwidth", None) if cfg else None
+    trackwidth_cfg = getattr(getattr(cfg, "geometry", None), "trackwidth", None) if cfg else None
 
     # ── Connect to aprilcam daemon (best-effort; degrade gracefully if absent) ──
     dc = None
@@ -682,12 +682,12 @@ def cmd_calibrate_turns(args) -> None:
         dc = None
 
     # ── Per-trial samples ────────────────────────────────────────────────────
-    # Each entry: (direction_sign, cam_deg, otos_total_deg, enc_left_mm, enc_right_mm)
+    # Each entry: (direction_sign, cam, otos_total, enc_left, enc_right)
     # direction_sign: +1 = CCW, -1 = CW
     samples: list[tuple[int, float, float, float, float]] = []
 
     # Residual sign tracking for convergence detection.
-    # residual = cam_deg - otos_total_deg (positive means OTOS under-counts).
+    # residual = cam - otos_total (positive means OTOS under-counts).
     residual_signs: list[int] = []   # +1 or -1 per trial
     converged = False
 
@@ -695,11 +695,11 @@ def cmd_calibrate_turns(args) -> None:
 
     if auto_mode:
         print(f"\nTurn calibration: AUTO mode, {auto_trials} trials  "
-              f"target={target_real_deg:.0f}°")
+              f"target={target_real:.0f}°")
         print("Even trials CCW (+), odd trials CW (-).  OA pushed after each trial.")
         print(f"Starting otos_angular_scale = {otos_angular_scale_current:.4f}\n")
     else:
-        print(f"\nTurn calibration: target={target_real_deg:.0f}°")
+        print(f"\nTurn calibration: target={target_real:.0f}°")
         print("Even trials CCW (+), odd trials CW (-).  Press Enter before each trial.")
         print("Type 'q' at prompt to stop.\n")
 
@@ -725,7 +725,7 @@ def cmd_calibrate_turns(args) -> None:
             # Even trial index (1-based) = CCW (+), odd = CW (-)
             # Trial 1 → CCW, Trial 2 → CW, Trial 3 → CCW, ...
             direction = +1 if (trial % 2 == 1) else -1
-            signed_target = target_real_deg * direction    # degrees, signed
+            signed_target = target_real * direction    # degrees, signed
             deg_tenths = round(signed_target * 10)
             tn_cmd = f"TN{deg_tenths:+d}"
 
@@ -757,9 +757,9 @@ def cmd_calibrate_turns(args) -> None:
             # Skip any line containing "TX:".  Strip leading "<" from replies
             # (parse_so / _strip already handles this, but TN+DONE detection
             # needs it too).
-            otos_total_deg = 0.0
+            otos_total = 0.0
             prev_raw_h: Optional[int] = None
-            achieved_deg: Optional[float] = None
+            achieved: Optional[float] = None
             timed_out = False
             TN_DEADLINE_S = 25.0
             deadline = time.monotonic() + TN_DEADLINE_S
@@ -786,7 +786,7 @@ def cmd_calibrate_turns(args) -> None:
                                 delta -= 360
                             elif delta < -180:
                                 delta += 360
-                            otos_total_deg += delta
+                            otos_total += delta
                         prev_raw_h = h
 
                     # Detect TN terminal reply
@@ -794,7 +794,7 @@ def cmd_calibrate_turns(args) -> None:
                         parts = clean.split()
                         if len(parts) > 1:
                             try:
-                                achieved_deg = float(parts[1])
+                                achieved = float(parts[1])
                             except ValueError:
                                 pass
                         done_this_burst = True
@@ -804,7 +804,7 @@ def cmd_calibrate_turns(args) -> None:
                         parts = clean.split()
                         if len(parts) > 1:
                             try:
-                                achieved_deg = float(parts[1])
+                                achieved = float(parts[1])
                             except ValueError:
                                 pass
                         done_this_burst = True
@@ -814,23 +814,23 @@ def cmd_calibrate_turns(args) -> None:
                     break
 
             # Report spin result
-            if achieved_deg is not None:
+            if achieved is not None:
                 if timed_out:
-                    print(f"  TN+TIMEOUT: achieved={achieved_deg:.1f}°  "
-                          f"OTOS stream total={otos_total_deg:+.2f}°")
+                    print(f"  TN+TIMEOUT: achieved={achieved:.1f}°  "
+                          f"OTOS stream total={otos_total:+.2f}°")
                 else:
-                    print(f"  TN+DONE:    achieved={achieved_deg:.1f}°  "
-                          f"OTOS stream total={otos_total_deg:+.2f}°")
+                    print(f"  TN+DONE:    achieved={achieved:.1f}°  "
+                          f"OTOS stream total={otos_total:+.2f}°")
             else:
                 print(f"  Warning: no TN+DONE/TIMEOUT received — "
-                      f"OTOS stream total={otos_total_deg:+.2f}°", file=sys.stderr)
+                      f"OTOS stream total={otos_total:+.2f}°", file=sys.stderr)
 
             # ── Step 6: Disable SO streaming ─────────────────────────────────
             proto.set_stream_otos(False)
             time.sleep(0.10)   # let the port settle
 
             # ── Step 7: Read camera yaw AFTER ────────────────────────────────
-            cam_deg: Optional[float] = None
+            cam: Optional[float] = None
             if dc is not None and daemon_cam is not None and cam_yaw_before_rad is not None:
                 pose_after = _daemon_read_pose_local(dc, daemon_cam, tag_id, timeout_s=3.0)
                 if pose_after is not None:
@@ -838,10 +838,10 @@ def cmd_calibrate_turns(args) -> None:
                     print(f"  Cam yaw after:  {math.degrees(cam_yaw_after_rad):+.2f}°")
                     # Unwrap delta to nearest multiple of signed_target.
                     # The daemon +90° offset CANCELS in the delta — no correction needed.
-                    cam_deg = _signed_turn_deg(
+                    cam = _signed_turn(
                         cam_yaw_before_rad, cam_yaw_after_rad,
-                        expected_deg=signed_target)
-                    print(f"  Camera Δyaw:    {cam_deg:+.2f}°  "
+                        expected=signed_target)
+                    print(f"  Camera Δyaw:    {cam:+.2f}°  "
                           f"(target={signed_target:+.1f}°)")
                 else:
                     print(f"  Warning: tag {tag_id} not seen after spin — cam GT skipped.",
@@ -849,22 +849,22 @@ def cmd_calibrate_turns(args) -> None:
 
             # ── Step 8: Read final encoders ──────────────────────────────────
             enc_final = proto.read_encoders()
-            enc_left_mm  = float(enc_final[0])
-            enc_right_mm = float(enc_final[1])
-            print(f"  Encoders: L={enc_left_mm:+.1f}mm  R={enc_right_mm:+.1f}mm")
+            enc_left  = float(enc_final[0])
+            enc_right = float(enc_final[1])
+            print(f"  Encoders: L={enc_left:+.1f}mm  R={enc_right:+.1f}mm")
 
             # ── Step 9: Adaptive OA push ─────────────────────────────────────
-            # Ground truth source: camera delta if available, else achieved_deg.
-            gt_deg: Optional[float] = cam_deg if cam_deg is not None else (
-                achieved_deg if achieved_deg is not None else None
+            # Ground truth source: camera delta if available, else achieved.
+            gt: Optional[float] = cam if cam is not None else (
+                achieved if achieved is not None else None
             )
 
-            if gt_deg is not None and abs(otos_total_deg) > 5.0:
-                new_scale = otos_angular_scale_current * (abs(gt_deg) / abs(otos_total_deg))
+            if gt is not None and abs(otos_total) > 5.0:
+                new_scale = otos_angular_scale_current * (abs(gt) / abs(otos_total))
                 new_scale = _clamp_otos_scale(new_scale)
                 oa_int8 = _scale_to_int8(new_scale)
                 conn.send(f"OA{oa_int8:+d}", read_timeout=200)
-                residual = abs(gt_deg) - abs(otos_total_deg)
+                residual = abs(gt) - abs(otos_total)
                 residual_sign = +1 if residual >= 0 else -1
                 residual_signs.append(residual_sign)
                 print(f"  OA push: {otos_angular_scale_current:.4f} → {new_scale:.4f}  "
@@ -878,25 +878,25 @@ def cmd_calibrate_turns(args) -> None:
                         converged = True
                         print(f"  *** Converged! Residual signs alternating for 3 trials. ***")
             else:
-                if abs(otos_total_deg) <= 5.0:
-                    print(f"  Warning: OTOS stream total too small ({otos_total_deg:.2f}°) "
+                if abs(otos_total) <= 5.0:
+                    print(f"  Warning: OTOS stream total too small ({otos_total:.2f}°) "
                           f"— OA push skipped.", file=sys.stderr)
-                if gt_deg is None:
+                if gt is None:
                     print(f"  Warning: no ground truth available — OA push skipped.",
                           file=sys.stderr)
 
             # ── Step 10: Record sample ───────────────────────────────────────
-            if gt_deg is not None and abs(otos_total_deg) > 5.0:
-                # Trackwidth estimate: tw = (|encR| + |encL|) / (2 × |cam_deg|_rad)
+            if gt is not None and abs(otos_total) > 5.0:
+                # Trackwidth estimate: tw = (|encR| + |encL|) / (2 × |cam|_rad)
                 tw_this: Optional[float] = None
-                if abs(gt_deg) > 1.0:
-                    tw_this = (abs(enc_right_mm) + abs(enc_left_mm)) / (
-                        2.0 * math.radians(abs(gt_deg)))
-                samples.append((direction, gt_deg, otos_total_deg,
-                                enc_left_mm, enc_right_mm))
+                if abs(gt) > 1.0:
+                    tw_this = (abs(enc_right) + abs(enc_left)) / (
+                        2.0 * math.radians(abs(gt)))
+                samples.append((direction, gt, otos_total,
+                                enc_left, enc_right))
                 print(f"  Sample {len(samples)} recorded: "
                       f"dir={'CCW' if direction > 0 else 'CW'}  "
-                      f"cam={gt_deg:+.2f}°  otos={otos_total_deg:+.2f}°"
+                      f"cam={gt:+.2f}°  otos={otos_total:+.2f}°"
                       + (f"  tw_est={tw_this:.1f}mm" if tw_this is not None else ""))
 
             if converged and auto_mode:
@@ -932,18 +932,18 @@ def cmd_calibrate_turns(args) -> None:
     cw_samples  = [(g, o, el, er) for (d, g, o, el, er) in samples if d < 0]
 
     # Overall ratio table
-    print(f"\n{'#':>3}  {'dir':>4}  {'cam_deg':>9}  {'otos_deg':>9}  "
-          f"{'encL_mm':>9}  {'encR_mm':>9}  {'ratio':>7}  {'residual':>9}")
+    print(f"\n{'#':>3}  {'dir':>4}  {'cam':>9}  {'otos':>9}  "
+          f"{'encL':>9}  {'encR':>9}  {'ratio':>7}  {'residual':>9}")
 
     overall_ratios: list[float] = []
     ccw_ratios: list[float] = []
     cw_ratios:  list[float] = []
     tw_estimates: list[float] = []
 
-    for i, (direction, gt_deg, otos_deg, enc_l, enc_r) in enumerate(samples, 1):
+    for i, (direction, gt, otos, enc_l, enc_r) in enumerate(samples, 1):
         dir_label = "CCW" if direction > 0 else "CW"
-        if abs(otos_deg) > 0.1:
-            ratio = abs(gt_deg) / abs(otos_deg)
+        if abs(otos) > 0.1:
+            ratio = abs(gt) / abs(otos)
             overall_ratios.append(ratio)
             if direction > 0:
                 ccw_ratios.append(ratio)
@@ -951,13 +951,13 @@ def cmd_calibrate_turns(args) -> None:
                 cw_ratios.append(ratio)
         else:
             ratio = 0.0
-        residual = abs(gt_deg) - abs(otos_deg)
-        if abs(gt_deg) > 1.0:
-            tw = (abs(enc_r) + abs(enc_l)) / (2.0 * math.radians(abs(gt_deg)))
+        residual = abs(gt) - abs(otos)
+        if abs(gt) > 1.0:
+            tw = (abs(enc_r) + abs(enc_l)) / (2.0 * math.radians(abs(gt)))
             tw_estimates.append(tw)
         else:
             tw = float("nan")
-        print(f"{i:>3}  {dir_label:>4}  {gt_deg:>+9.2f}  {otos_deg:>+9.2f}  "
+        print(f"{i:>3}  {dir_label:>4}  {gt:>+9.2f}  {otos:>+9.2f}  "
               f"{enc_l:>+9.1f}  {enc_r:>+9.1f}  {ratio:>7.4f}  {residual:>+9.2f}°")
 
     mean_all,  std_all  = _mean_stdev(overall_ratios)
@@ -967,7 +967,7 @@ def cmd_calibrate_turns(args) -> None:
 
     directional_bias = mean_ccw - mean_cw if (ccw_ratios and cw_ratios) else 0.0
 
-    print(f"\nRatio statistics (|cam_deg| / |otos_deg|):")
+    print(f"\nRatio statistics (|cam| / |otos|):")
     print(f"  Overall:  mean={mean_all:.4f}  stdev={std_all:.4f}  (n={len(overall_ratios)})")
     print(f"  CCW:      mean={mean_ccw:.4f}  stdev={std_ccw:.4f}  (n={len(ccw_ratios)})")
     print(f"  CW:       mean={mean_cw:.4f}  stdev={std_cw:.4f}  (n={len(cw_ratios)})")
@@ -980,9 +980,9 @@ def cmd_calibrate_turns(args) -> None:
     if tw_estimates:
         print(f"\nTrackwidth estimate:  mean={mean_tw:.1f}mm  stdev={std_tw:.1f}mm  "
               f"(n={len(tw_estimates)})")
-        if trackwidth_mm_cfg is not None:
-            print(f"  Config value:        {float(trackwidth_mm_cfg):.1f}mm  "
-                  f"(difference={mean_tw - float(trackwidth_mm_cfg):+.1f}mm)")
+        if trackwidth_cfg is not None:
+            print(f"  Config value:        {float(trackwidth_cfg):.1f}mm  "
+                  f"(difference={mean_tw - float(trackwidth_cfg):+.1f}mm)")
 
     # Final recommended scale from the last OA push (already adaptive).
     # The adaptive loop already converged otos_angular_scale_current; for the
@@ -1006,26 +1006,26 @@ def cmd_calibrate_turns(args) -> None:
     _prompt_save(scale_updates, "Save updated otos_angular_scale?")
 
     # ── Offer trackwidth / per-wheel encoder push ────────────────────────────
-    if tw_estimates and left_mm_per_deg_current and right_mm_per_deg_current:
-        tw_mm = round(mean_tw, 1)
-        print(f"\nTrackwidth push: K+TW{tw_mm:.0f}  (mean={mean_tw:.1f}mm)")
+    if tw_estimates and wheel_travel_calib_left_current and wheel_travel_calib_right_current:
+        tw_push = round(mean_tw, 1)
+        print(f"\nTrackwidth push: K+TW{tw_push:.0f}  (mean={mean_tw:.1f}mm)")
         print("Also offer to update mm_per_wheel_deg_left/right from encoder totals?")
         # Compute per-wheel mm/deg from encoder averages across all trials.
         enc_l_vals = [abs(el) for (_, g, _, el, _) in samples if abs(g) > 1.0]
         enc_r_vals = [abs(er) for (_, g, _, _, er) in samples if abs(g) > 1.0]
         gt_rads    = [math.radians(abs(g)) for (_, g, _, _, _) in samples if abs(g) > 1.0]
         if enc_l_vals and enc_r_vals and gt_rads:
-            # mm/deg = (enc_mm per trial) / (body_deg per trial)
+            # mm/deg = (enc mm per trial) / (body angle in deg per trial)
             # For a pure spin: each wheel travels trackwidth/2 * body_rad
-            # → mm_per_deg = enc_mm / body_deg  (using |enc| and |cam_deg|)
+            # → mm/deg = enc (mm) / body angle (deg)  (using |enc| and |cam| in deg)
             ml_vals = [el / math.degrees(r) for el, r in zip(enc_l_vals, gt_rads)]
             mr_vals = [er / math.degrees(r) for er, r in zip(enc_r_vals, gt_rads)]
             mean_ml, _ = _mean_stdev(ml_vals)
             mean_mr, _ = _mean_stdev(mr_vals)
             print(f"  mm/deg_left  (from encoder): {mean_ml:.6f}  "
-                  f"(config: {left_mm_per_deg_current:.6f})")
+                  f"(config: {wheel_travel_calib_left_current:.6f})")
             print(f"  mm/deg_right (from encoder): {mean_mr:.6f}  "
-                  f"(config: {right_mm_per_deg_current:.6f})")
+                  f"(config: {wheel_travel_calib_right_current:.6f})")
 
             try:
                 raw = input("\nPush K+TW, K+ML, K+MR to firmware and save? [y/N] ").strip()
@@ -1049,7 +1049,7 @@ def cmd_calibrate_turns(args) -> None:
                         "mm_per_wheel_deg_left":  round(mean_ml, 8),
                         "mm_per_wheel_deg_right": round(mean_mr, 8),
                     },
-                    "geometry": {"trackwidth": tw_mm},
+                    "geometry": {"trackwidth": tw_push},
                 }
                 _prompt_save(tw_updates, "Save trackwidth + per-wheel mm/deg?")
             else:
