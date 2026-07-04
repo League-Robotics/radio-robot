@@ -378,6 +378,20 @@ void handleDevMCfg(DevLoopState& state, uint32_t port, const ArgList& args,
     }
 }
 
+// isBoundPort -- true if `port` is one of the Drivetrain's currently-bound
+// left/right ports (DEV DT PORTS). 077-007 fix: a DEV M motion verb must
+// only steal drivetrain authority when it targets a motor the Drivetrain is
+// actually driving -- an independent, unbound motor (e.g. a load knob on a
+// port the Drivetrain never touches, per docs/protocol-v2.md §16's
+// coupled-rig test protocol) has nothing to do with drivetrain authority and
+// must leave `drivetrainActive` alone. Before this fix every accepted DEV M
+// motion verb unconditionally cleared drivetrainActive regardless of port,
+// so driving an unbound motor (e.g. `DEV M 4 DUTY ...` while DEV DT PORTS
+// 2 3 is bound) silently killed the governor mid-test.
+bool isBoundPort(const DevLoopState& state, uint32_t port) {
+    return port == state.leftPort || port == state.rightPort;
+}
+
 // handleDevM -- dispatches on the mode keyword parseDevM already validated.
 void handleDevM(const ArgList& args, const char* corrId,
                 ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
@@ -400,7 +414,7 @@ void handleDevM(const ArgList& args, const char* corrId,
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "duty", corrId, replyFn, replyCtx);
                 break;
             }
-            state.drivetrainActive = false;
+            if (isBoundPort(state, port)) { state.drivetrainActive = false; }
             char dutyStr[16];
             formatFixed(dutyStr, sizeof(dutyStr), duty, 2);
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
@@ -415,7 +429,7 @@ void handleDevM(const ArgList& args, const char* corrId,
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "vel", corrId, replyFn, replyCtx);
                 break;
             }
-            state.drivetrainActive = false;
+            if (isBoundPort(state, port)) { state.drivetrainActive = false; }
             char velStr[16];
             formatFixed(velStr, sizeof(velStr), velocity, 1);
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
@@ -430,7 +444,7 @@ void handleDevM(const ArgList& args, const char* corrId,
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "pos", corrId, replyFn, replyCtx);
                 break;
             }
-            state.drivetrainActive = false;
+            if (isBoundPort(state, port)) { state.drivetrainActive = false; }
             char posStr[16];
             formatFixed(posStr, sizeof(posStr), position, 1);
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
@@ -447,7 +461,7 @@ void handleDevM(const ArgList& args, const char* corrId,
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "volt", corrId, replyFn, replyCtx);
                 break;
             }
-            state.drivetrainActive = false;
+            if (isBoundPort(state, port)) { state.drivetrainActive = false; }
             char voltStr[16];
             formatFixed(voltStr, sizeof(voltStr), voltage, 2);
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
@@ -461,7 +475,7 @@ void handleDevM(const ArgList& args, const char* corrId,
             msg::MotorCommand cmd;
             cmd.setNeutral(nm);
             motor.apply(cmd);   // NEUTRAL is never capability-gated -- always accepted
-            state.drivetrainActive = false;
+            if (isBoundPort(state, port)) { state.drivetrainActive = false; }
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
                                        "neutral=%s", bc);
             break;
@@ -470,7 +484,7 @@ void handleDevM(const ArgList& args, const char* corrId,
             msg::MotorCommand cmd;
             cmd.setResetPosition(true);
             motor.apply(cmd);
-            state.drivetrainActive = false;
+            if (isBoundPort(state, port)) { state.drivetrainActive = false; }
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx, "reset=1");
             break;
         }

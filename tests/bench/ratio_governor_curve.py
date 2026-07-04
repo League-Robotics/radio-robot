@@ -1,47 +1,64 @@
 #!/usr/bin/env python3
-"""ratio_governor_curve.py — coupled-rig ratio-governor curve test (ticket 077-006).
+"""ratio_governor_curve.py — ratio-governor acceptance test (ticket 077-006/077-007).
 
-Bench setup: the coupled rig, two motors mechanically linked (ports 3 and 4
-by default — running one loads the other, same rig as pid_hold_speed.py).
-Binds the Drivetrain to that pair (`DEV DT PORTS 3 4`), then commands an
-unequal-wheel-target "curve" (`DEV DT WHEELS <left> <right>`) so the
-mechanical coupling drags the faster-commanded wheel down. The ratio (sync)
-governor (`Subsystems::Drivetrain::governRatio()`, `docs/protocol-v2.md`
-§16) is supposed to scale BOTH targets down together so the measured
-wheel-speed ratio holds the commanded ratio, rather than letting the
-under-loaded wheel run away.
+Two test modes, selected by --disturb-port:
 
-PASS: sampled `DEV DT STATE` (commanded, pre-governor targets) + per-motor
-`DEV M <n> STATE` (measured velocity) show the measured left/right ratio
-within --tolerance of the commanded ratio, once settled.
+**Primary protocol (077-007, stakeholder-specified) — --disturb-port set
+(default 4):** the Drivetrain is bound to a pair that is NOT the friction-
+coupled rig itself — default `DEV DT PORTS 2 3` (port 2: an otherwise
+unloaded wheel; port 3: the wheel friction-coupled to port 4 — see
+pid_hold_speed.py's docstring for the coupling physics). An unequal curve
+is commanded (`DEV DT WHEELS <left> <right>`), then port 4 (independent of
+the drivetrain — `DEV M 4 DUTY ...`, never `DEV DT`) is stepped through
+--load-schedule with a dwell per step. This varies the friction drag on
+wheel 3 ONLY — an asymmetric disturbance the paired wheel 2 never feels —
+which is exactly the scenario `Drivetrain::governRatio()` exists for: if
+wheel 3 sags below its own target under load, the governor should scale
+BOTH targets down together so the 2:3 ratio holds, rather than only wheel
+3 drifting off while wheel 2 runs its target unaffected.
 
-Negative control (`--sync-gain 0`): the ticket calls for "a governor-off run
-for the drift control comparison". As of ticket 077-005 there was no wire
-command to set `DrivetrainConfig.sync_gain` live (the DEV DT family was
-`PORTS`/`VW`/`WHEELS`/`NEUTRAL`/`STATE`/`STOP` only), and `source/main.cpp`
-boots the Drivetrain with `sync_gain` left at its zero default — i.e. **the
-governor is OFF by default on this firmware**
-(`Drivetrain::governRatio()` returns immediately when `sync_gain <= 0`).
-Ticket 077-007's HITL bench pass added the missing live setter,
-`DEV DT CFG sync_gain=<value>` (and `trackwidth=<value>`) — see
-`docs/protocol-v2.md` §16 and `source/commands/dev_commands.cpp`'s
-`handleDevDtCfg`. `--sync-gain`, when given, now sends that command before
-the curve is commanded (echoing the firmware's confirmed applied value in
-the console banner and CSV header) — pass `0` for the negative control and
-a value in the governor's useful range (e.g. `0.5`-`1.0`) for the governed
-comparison run. Omitting `--sync-gain` sends no CFG at all and uses
-whatever `sync_gain` the firmware currently has configured (boot default
-0 = ungoverned, unless a previous command this session changed it) — this
-preserves the original "no live control" behavior for a bare run.
+077-007 found and fixed a real bug this protocol exposed: `DEV M 4 DUTY
+...` (port 4, NOT in the bound pair) was unconditionally dropping
+drivetrain authority (`DevLoopState::drivetrainActive`), regardless of
+which port was targeted — silently killing the governor the instant the
+load step ran. Fixed in `source/commands/dev_commands.cpp` (`isBoundPort()`
+gates the authority drop to the actually-bound ports only) — see
+`docs/protocol-v2.md` §16's Authority section.
 
-Logs every sample to --csv. Ends with `DEV DT STOP` (+ `DEV STOP` for
-belt-and-suspenders) regardless of outcome.
+PASS (primary protocol): the measured wheel-2:wheel-3 velocity ratio stays
+within --tolerance of the commanded ratio across EVERY load step (not just
+one settled window) — governed runs (`--sync-gain` 0.5-1.0) should hold
+this; ungoverned (`--sync-gain 0`) is the negative control and may drift
+when a step bogs wheel 3 down.
+
+**Legacy mode (077-006) — --disturb-port 0:** the original single-curve
+test, unchanged: bind the Drivetrain directly to the coupled pair itself
+(e.g. `DEV DT PORTS 3 4`) and command an unequal `DEV DT WHEELS <left>
+<right>` curve with no separate disturbance step — the coupling between
+the SAME two commanded wheels is the only load. Useful for a quick sanity
+check; the primary protocol above is the one that isolates an asymmetric
+disturbance and is the acceptance-gate default.
+
+Negative control (`--sync-gain 0`) / governed run (`--sync-gain 0.5`-`1.0`):
+sends `DEV DT CFG sync_gain=<value>` before the curve is commanded (see
+`docs/protocol-v2.md` §16's `DEV DT CFG`, added this ticket to close the
+gap that `sync_gain` boots at 0 with no other live setter) and echoes the
+firmware-confirmed applied value. Omitting `--sync-gain` sends no CFG and
+uses whatever `sync_gain` the firmware currently has configured.
+
+Logs every sample to --csv. Ends with `DEV M <disturb-port> NEUTRAL`,
+`DEV DT STOP`, and `DEV STOP` regardless of outcome.
 
 Usage:
-    uv run python tests/bench/ratio_governor_curve.py
-    uv run python tests/bench/ratio_governor_curve.py --left 200 --right 80
-    uv run python tests/bench/ratio_governor_curve.py --sync-gain 0     # negative control (governor off)
-    uv run python tests/bench/ratio_governor_curve.py --sync-gain 0.8   # governed run
+    # primary protocol (default): DT on 2/3, disturbance from 4
+    uv run python tests/bench/ratio_governor_curve.py --sync-gain 0.8
+    uv run python tests/bench/ratio_governor_curve.py --sync-gain 0      # negative control
+    uv run python tests/bench/ratio_governor_curve.py --left 200 --right 120 \\
+        --load-schedule 40,0,-20,-40
+
+    # legacy single-curve mode on the coupled pair itself
+    uv run python tests/bench/ratio_governor_curve.py --disturb-port 0 \\
+        --dt-left 3 --dt-right 4 --left 200 --right 80
 """
 
 from __future__ import annotations
@@ -60,22 +77,46 @@ SESSION_WATCHDOG_WINDOW = 3000    # [ms]
 BOOT_WATCHDOG_WINDOW = 1000       # [ms] firmware default — restored on exit
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
+# Default disturbance schedule (--disturb-port duty, percent) — dwelled in
+# order, per the stakeholder-specified protocol.
+_DEFAULT_LOAD_SCHEDULE = (40.0, 0.0, -20.0, -40.0)
+
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--port", default=DEFAULT_PORT, help=f"Serial port (default {DEFAULT_PORT})")
-    p.add_argument("--dt-left", type=int, default=3, help="DEV DT PORTS left (default 3)")
-    p.add_argument("--dt-right", type=int, default=4, help="DEV DT PORTS right (default 4)")
+    p.add_argument("--dt-left", type=int, default=2,
+                   help="DEV DT PORTS left (default 2 — an unloaded wheel; "
+                        "primary protocol's Drivetrain pair)")
+    p.add_argument("--dt-right", type=int, default=3,
+                   help="DEV DT PORTS right (default 3 — friction-coupled to "
+                        "--disturb-port)")
+    p.add_argument("--disturb-port", type=int, default=4,
+                   help="Motor port driven independently (DEV M, never DEV DT) "
+                        "through --load-schedule to disturb --dt-right's "
+                        "friction load. 0 disables (legacy single-curve mode "
+                        "— bind --dt-left/--dt-right directly to the coupled "
+                        "pair instead, e.g. 3 4).")
+    p.add_argument("--load-schedule", type=str,
+                   default=",".join(str(d) for d in _DEFAULT_LOAD_SCHEDULE),
+                   help="Comma-separated --disturb-port duty schedule, percent "
+                        "-100..100 (default '40,0,-20,-40')")
     p.add_argument("--left", type=float, default=200.0,
-                   help="Commanded left wheel target, mm/s (default 200)")
-    p.add_argument("--right", type=float, default=80.0,
-                   help="Commanded right wheel target, mm/s (default 80 — a 2.5:1 curve)")
+                   help="Commanded --dt-left wheel target, mm/s (default 200)")
+    p.add_argument("--right", type=float, default=120.0,
+                   help="Commanded --dt-right wheel target, mm/s (default 120)")
     p.add_argument("--run-time", type=float, default=6.0,
-                   help="Seconds to hold the curve and sample (default 6)")
-    p.add_argument("--settle-time", type=float, default=2.0,
-                   help="Seconds at the END of --run-time counted as 'settled' "
-                        "for the ratio check (default 2, must be < --run-time)")
+                   help="Legacy mode only: seconds to hold the curve and sample (default 6)")
+    p.add_argument("--step-time", type=float, default=8.0,
+                   help="Primary protocol: seconds to hold each load-schedule "
+                        "step (default 8 — wide enough to absorb dev_send()'s "
+                        "worst-case retry budget without starving the settled "
+                        "window; see 077-007 bench notes)")
+    p.add_argument("--settle-time", type=float, default=4.0,
+                   help="Seconds at the END of --run-time (legacy) or each "
+                        "load step (primary) counted as 'settled' for the "
+                        "ratio check (default 4, must be < --run-time/--step-time)")
     p.add_argument("--tolerance", type=float, default=0.25,
                    help="Acceptable |measured_ratio - commanded_ratio| / commanded_ratio, "
                         "fractional (default 0.25 = 25%%)")
@@ -83,10 +124,10 @@ def _parse_args() -> argparse.Namespace:
                    help="Seconds between state polls (default 0.1)")
     p.add_argument("--sync-gain", type=float, default=None,
                    help="Sends 'DEV DT CFG sync_gain=<value>' before commanding the "
-                        "curve (see module docstring). Pass 0 for the negative "
-                        "control (governor off) or e.g. 0.5-1.0 for the governed "
-                        "comparison run. Omit to send no CFG and use whatever "
-                        "sync_gain the firmware currently has configured.")
+                        "curve. Pass 0 for the negative control (governor off) or "
+                        "e.g. 0.5-1.0 for the governed comparison run. Omit to "
+                        "send no CFG and use whatever sync_gain the firmware "
+                        "currently has configured.")
     p.add_argument("--csv",
                    default=str(_REPO_ROOT / "tests" / "bench" / "out" / "ratio_governor_curve.csv"),
                    help="CSV output path")
@@ -107,7 +148,7 @@ def dev_send(proto: NezhaProtocol, cmd: str, timeout: int = 500,  # [ms]
     settled-sample window and turn a real PASS into a false FAIL on pure
     transport noise. Safe to retry unconditionally: every command here is a
     pure query (STATE) or an idempotent absolute-value write (WHEELS/PORTS/
-    CFG/WD/STOP).
+    CFG/WD/STOP/DUTY/NEUTRAL).
     """
     for attempt in range(retries):
         resp = proto.send(cmd, timeout)
@@ -129,13 +170,40 @@ def _kv_float(r: ParsedResponse | None, key: str) -> float | None:
         return None
 
 
+def _ratio_check(measured_left: float | None, measured_right: float | None,
+                 commanded_ratio: float, tolerance: float) -> tuple[bool, str]:
+    if measured_left is None or measured_right is None or abs(measured_right) < 1e-6:
+        return False, "insufficient settled samples (or zero measured_right) to judge"
+    measured_ratio = measured_left / measured_right
+    rel_err = abs(measured_ratio - commanded_ratio) / commanded_ratio
+    held = rel_err <= tolerance
+    return held, (f"commanded={commanded_ratio:.3f} measured={measured_ratio:.3f} "
+                  f"rel_err={rel_err:.3f} tol={tolerance:.3f}")
+
+
+def _settled_avg(samples: list[tuple[float, float | None, float | None]],
+                 window: float, span: float) -> tuple[float | None, float | None]:
+    settled = [s for s in samples if s[0] >= span - window]
+    lefts = [l for _, l, _ in settled if l is not None]
+    rights = [r for _, _, r in settled if r is not None]
+    avg_l = sum(lefts) / len(lefts) if lefts else None
+    avg_r = sum(rights) / len(rights) if rights else None
+    return avg_l, avg_r
+
+
 def main() -> int:
     args = _parse_args()
     commanded_ratio = args.left / args.right if args.right else float("inf")
+    load_schedule = [float(tok) for tok in args.load_schedule.split(",") if tok.strip()]
+    primary_mode = args.disturb_port and args.disturb_port > 0
     print(f"  port: {args.port}   DEV DT PORTS {args.dt_left} {args.dt_right}"
           f"   left={args.left:g} right={args.right:g} mm/s"
           f"   commanded_ratio={commanded_ratio:.3f}"
           f"   sync_gain={'unset (no live command)' if args.sync_gain is None else f'{args.sync_gain:g} (requested)'}")
+    if primary_mode:
+        print(f"  primary protocol: disturb_port={args.disturb_port}  load_schedule={load_schedule}")
+    else:
+        print("  legacy single-curve mode (--disturb-port 0)")
 
     csv_path = pathlib.Path(args.csv)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -157,10 +225,10 @@ def main() -> int:
         dev_send(proto, f"DEV WD {SESSION_WATCHDOG_WINDOW}")
 
         # Live sync_gain control (077-007): DEV DT CFG did not exist when this
-        # script was first written (see module docstring) — now it does, so
-        # --sync-gain actually sets the governor instead of merely labeling
-        # the run. Sent before DEV DT PORTS/WHEELS since sync_gain lives on
-        # the single shared Drivetrain instance, not per bound pair.
+        # script was first written — now it does, so --sync-gain actually
+        # sets the governor instead of merely labeling the run. Sent before
+        # DEV DT PORTS/WHEELS since sync_gain lives on the single shared
+        # Drivetrain instance, not per bound pair.
         if args.sync_gain is not None:
             cfg_resp = dev_send(proto, f"DEV DT CFG sync_gain={args.sync_gain}")
             print(f"  {cfg_resp.raw if cfg_resp else '(no reply)'}")
@@ -172,7 +240,7 @@ def main() -> int:
         csv_file = open(csv_path, "w", newline="")
         writer = csv.writer(csv_file)
         writer.writerow(["t", "sync_gain_label", "commanded_left", "commanded_right",
-                          "measured_left", "measured_right", "dt_active"])
+                          "measured_left", "measured_right", "dt_active", "disturb_duty"])
 
         bind_resp = dev_send(proto, f"DEV DT PORTS {args.dt_left} {args.dt_right}")
         print(f"  {bind_resp.raw if bind_resp else '(no reply)'}")
@@ -180,47 +248,73 @@ def main() -> int:
         curve_resp = dev_send(proto, f"DEV DT WHEELS {args.left} {args.right}")
         print(f"  {curve_resp.raw if curve_resp else '(no reply)'}")
 
-        t0 = time.monotonic()
-        samples: list[tuple[float, float | None, float | None]] = []
-        while time.monotonic() - t0 < args.run_time:
-            t = time.monotonic() - t0
-            dt_state = dev_send(proto, "DEV DT STATE")
-            left_state = dev_send(proto, f"DEV M {args.dt_left} STATE")
-            right_state = dev_send(proto, f"DEV M {args.dt_right} STATE")
-            m_left = _kv_float(left_state, "vel")
-            m_right = _kv_float(right_state, "vel")
-            dt_active = dt_state.kv.get("active") if dt_state is not None else None
-            writer.writerow([f"{t:.3f}", gain_label, args.left, args.right,
-                              m_left, m_right, dt_active])
-            samples.append((t, m_left, m_right))
-            time.sleep(args.sample_period)
+        # Let the drivetrain settle onto the curve before disturbing it —
+        # both wheels need to actually be spinning for the friction coupling
+        # to transmit anything (see pid_hold_speed.py's docstring).
+        time.sleep(2.0)
 
-        settled = [s for s in samples if s[0] >= args.run_time - args.settle_time]
-        ratios = []
-        for _, l, r in settled:
-            if l is not None and r is not None and abs(r) > 1e-6:
-                ratios.append(l / r)
-        avg_ratio = sum(ratios) / len(ratios) if ratios else None
-        avg_left = sum(l for _, l, _ in settled if l is not None) / max(
-            1, len([l for _, l, _ in settled if l is not None]))
-        avg_right = sum(r for _, _, r in settled if r is not None) / max(
-            1, len([r for _, _, r in settled if r is not None]))
+        t_start = time.monotonic()
 
-        if avg_ratio is None or commanded_ratio in (0.0, float("inf")):
-            ratio_held = False
-            detail = "insufficient settled samples (or zero/inf commanded ratio) to judge"
+        if primary_mode:
+            step_results: list[dict] = []
+            for duty in load_schedule:
+                print(f"\n  step [disturb_port={args.disturb_port} duty={duty:+.0f}%]")
+                dev_send(proto, f"DEV M {args.disturb_port} DUTY {duty}")
+                step_t0 = time.monotonic()
+                samples: list[tuple[float, float | None, float | None]] = []
+                while time.monotonic() - step_t0 < args.step_time:
+                    dt_state = dev_send(proto, "DEV DT STATE")
+                    left_state = dev_send(proto, f"DEV M {args.dt_left} STATE")
+                    right_state = dev_send(proto, f"DEV M {args.dt_right} STATE")
+                    # Timestamp captured AFTER the (possibly retried) reads —
+                    # see pid_hold_speed.py's identical fix (077-007 Defect 3).
+                    t_step = time.monotonic() - step_t0
+                    m_left = _kv_float(left_state, "vel")
+                    m_right = _kv_float(right_state, "vel")
+                    dt_active = dt_state.kv.get("active") if dt_state is not None else None
+                    writer.writerow([f"{time.monotonic() - t_start:.3f}", gain_label,
+                                     args.left, args.right, m_left, m_right, dt_active, duty])
+                    samples.append((t_step, m_left, m_right))
+                    time.sleep(args.sample_period)
+
+                avg_l, avg_r = _settled_avg(samples, args.settle_time, args.step_time)
+                held, detail = _ratio_check(avg_l, avg_r, commanded_ratio, args.tolerance)
+                step_results.append({"duty": duty, "held": held, "detail": detail,
+                                     "avg_l": avg_l, "avg_r": avg_r})
+                print(f"    settled avg measured left={avg_l} right={avg_r}"
+                      f"  {'PASS' if held else 'FAIL'}: {detail}")
+
+            overall_pass = all(r["held"] for r in step_results)
+            print(f"\n  {'PASS' if overall_pass else 'FAIL'}: measured ratio held commanded "
+                  f"ratio within tolerance across ALL {len(step_results)} load steps")
+            for r in step_results:
+                print(f"    duty={r['duty']:+.0f}%  {'PASS' if r['held'] else 'FAIL'}  {r['detail']}")
+            print(f"\n  CSV: {csv_path}")
+
         else:
-            rel_err = abs(avg_ratio - commanded_ratio) / commanded_ratio
-            ratio_held = rel_err <= args.tolerance
-            detail = (f"commanded={commanded_ratio:.3f} measured={avg_ratio:.3f} "
-                      f"rel_err={rel_err:.3f} tol={args.tolerance:.3f}")
+            # Legacy single-curve mode (077-006): unchanged behavior — one
+            # continuous run-time window, one settled check at the end.
+            samples = []
+            while time.monotonic() - t_start < args.run_time:
+                dt_state = dev_send(proto, "DEV DT STATE")
+                left_state = dev_send(proto, f"DEV M {args.dt_left} STATE")
+                right_state = dev_send(proto, f"DEV M {args.dt_right} STATE")
+                t = time.monotonic() - t_start
+                m_left = _kv_float(left_state, "vel")
+                m_right = _kv_float(right_state, "vel")
+                dt_active = dt_state.kv.get("active") if dt_state is not None else None
+                writer.writerow([f"{t:.3f}", gain_label, args.left, args.right,
+                                 m_left, m_right, dt_active, ""])
+                samples.append((t, m_left, m_right))
+                time.sleep(args.sample_period)
 
-        print(f"\n  settled avg measured left={avg_left:.1f} right={avg_right:.1f} mm/s")
-        print(f"  {'PASS' if ratio_held else 'FAIL'}: measured ratio holds commanded "
-              f"ratio within tolerance — {detail}")
-        print(f"\n  CSV: {csv_path}")
-
-        overall_pass = ratio_held
+            avg_l, avg_r = _settled_avg(samples, args.settle_time, args.run_time)
+            held, detail = _ratio_check(avg_l, avg_r, commanded_ratio, args.tolerance)
+            print(f"\n  settled avg measured left={avg_l} right={avg_r} mm/s")
+            print(f"  {'PASS' if held else 'FAIL'}: measured ratio holds commanded "
+                  f"ratio within tolerance — {detail}")
+            print(f"\n  CSV: {csv_path}")
+            overall_pass = held
 
     except KeyboardInterrupt:
         print("\n  interrupted — stopping motors...")
@@ -229,6 +323,11 @@ def main() -> int:
         if csv_file is not None:
             csv_file.close()
         if proto is not None:
+            if primary_mode:
+                try:
+                    dev_send(proto, f"DEV M {args.disturb_port} NEUTRAL B")
+                except Exception as exc:
+                    print(f"  WARN: disturb-port NEUTRAL failed during cleanup: {exc}")
             try:
                 dev_send(proto, "DEV DT STOP")
             except Exception as exc:

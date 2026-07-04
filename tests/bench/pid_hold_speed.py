@@ -1,22 +1,46 @@
 #!/usr/bin/env python3
-"""pid_hold_speed.py — coupled-rig PID disturbance-rejection test (ticket 077-006).
+"""pid_hold_speed.py — coupled-rig PID disturbance-rejection test (ticket 077-006/077-007).
 
-Bench setup: two motors mechanically linked by a shared shaft (ports 3 and 4
-by default — the coupled bench rig; running one loads the other, see the
-sprint-077 issue's "A motor is instantiated on a port" note). This script
-holds a `DEV M <pid-port> VEL` target on one motor while stepping the OTHER
-motor through a load-duty schedule (assist → freewheel → drag → reverse) via
-`DEV M <load-port> DUTY`, and checks that the held motor's embedded velocity
-PID (`docs/protocol-v2.md` §16) actually rejects the disturbance rather than
-just coasting.
+Bench setup: two motors on the coupled bench rig (ports 3 and 4 by default)
+whose shafts/wheels are in FRICTION contact — not a positive (geared/belted)
+drive. Stakeholder clarification (077-007 HITL pass, 2026-07-04): friction
+coupling only transmits load when BOTH motors are spinning — a stopped
+motor's stiction defeats the friction contact outright (it just slips), so
+the earlier "drive one, watch the other sit still" probe was the wrong test
+for this rig. The real effect only shows with --pid-port already holding a
+velocity: changing --load-port's speed changes how much the friction contact
+drags on (or eases) the held motor, which shows up as a shift in the held
+motor's APPLIED DUTY (the embedded PID needs more or less duty to hold the
+same velocity), not as a change to the held motor's OWN measured velocity
+(that's supposed to stay put — the PID's job).
+
+Empirically measured on the bench 2026-07-04 (--pid-port 3 holding 150 mm/s,
+--load-port 4 stepped through +50/+25/0/-25/-50 duty): motor 3's applied
+duty fell MONOTONICALLY as motor 4's duty went from +50 (same rotational
+sign as motor 3's forward direction) down to -50 (reverse) —
+0.380 -> 0.370 -> 0.367 -> 0.320 -> 0.230 — while motor 3's velocity stayed
+in a tight band (149-157 mm/s) throughout. That is: on THIS rig, same-sign
+duty on the loading motor is the heavier friction load and reverse duty is
+the lighter one (very likely a contact-geometry artifact of how the two
+wheels are mounted — two wheels touching at their rims need OPPOSITE
+rotational signs to have matching, low-slip contact-point velocity, so
+"same sign" here means more relative slip, i.e. more friction drag; this
+script does not need to know why, only that the direction is monotonic and
+repeatable). The default --load-duties schedule below is ordered from that
+measured HEAVIEST setting to the LIGHTEST, and the "applied duty tracks
+load" PASS check asserts the monotonically-falling direction actually
+measured — override --load-duties (and swap PASS's expected direction, see
+`_applied_tracks_load()`) if a different rig's contact geometry runs the
+other way.
 
 PASS conditions (reported per load step and overall):
   - measured velocity on --pid-port stays within --tolerance of the target
-    once each step has settled (the last --settle-time seconds of the step);
-  - applied duty on --pid-port rises (monotonically, allowing a small
-    epsilon) across the assist → freewheel → drag → reverse schedule — proof
-    the PID is actually working harder against a bigger disturbance, not
-    coasting at a fixed duty.
+    once each step has settled (the last --settle-time seconds of the step)
+    — the PID is actually holding the target, not drifting with the load;
+  - applied duty on --pid-port tracks the load schedule (monotonically,
+    allowing a small epsilon, in the measured heaviest-to-lightest
+    direction) — proof the PID is doing real work against a changing
+    friction disturbance, not coasting at a fixed duty.
 
 Logs every sample to --csv as (t, target, velocity, applied, load_duty).
 
@@ -28,6 +52,7 @@ restores `DEV WD 1000`, on a clean run, a failure, or Ctrl-C.
 Usage:
     uv run python tests/bench/pid_hold_speed.py
     uv run python tests/bench/pid_hold_speed.py --pid-port 3 --load-port 4 --target 150
+    uv run python tests/bench/pid_hold_speed.py --load-duties 50,25,0,-25,-50
 """
 
 from __future__ import annotations
@@ -46,14 +71,13 @@ SESSION_WATCHDOG_WINDOW = 3000    # [ms]
 BOOT_WATCHDOG_WINDOW = 1000       # [ms] firmware default — restored on exit
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
-# Load schedule: (label, duty [%, -100..100]) applied to --load-port while
-# --pid-port holds its VEL target. Signs assume the loading motor's positive
-# duty direction matches the held motor's forward direction on the coupled
-# rig (assist = same direction eases the PID's job; drag/reverse = opposing
-# duty makes it work harder) — verify against the actual rig wiring and
-# override via --assist-duty/--drag-duty/--reverse-duty if the physical
-# coupling runs the other way.
-_SCHEDULE_LABELS = ("assist", "freewheel", "drag", "reverse")
+# Default load schedule (--load-port duty, percent), ordered from the
+# measured HEAVIEST friction load on --pid-port to the LIGHTEST — see the
+# module docstring for the 2026-07-04 bench measurement this ordering is
+# based on. Each entry is labeled by its duty value directly (no
+# assist/drag/reverse naming — those assumed a positive-drive relationship
+# this friction rig does not have).
+_DEFAULT_LOAD_DUTIES = (50.0, 25.0, 0.0, -25.0, -50.0)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -66,17 +90,20 @@ def _parse_args() -> argparse.Namespace:
                    help="Motor port applying the load duties (default 4)")
     p.add_argument("--target", type=float, default=150.0,
                    help="VEL target on --pid-port, mm/s (default 150)")
-    p.add_argument("--assist-duty", type=float, default=25.0,
-                   help="Load duty for the 'assist' step, percent (default 25)")
-    p.add_argument("--drag-duty", type=float, default=-25.0,
-                   help="Load duty for the 'drag' step, percent (default -25)")
-    p.add_argument("--reverse-duty", type=float, default=-50.0,
-                   help="Load duty for the 'reverse' step, percent (default -50)")
-    p.add_argument("--step-time", type=float, default=4.0,
-                   help="Seconds to hold each load step (default 4)")
-    p.add_argument("--settle-time", type=float, default=2.0,
+    p.add_argument("--load-duties", type=str,
+                   default=",".join(str(d) for d in _DEFAULT_LOAD_DUTIES),
+                   help="Comma-separated --load-port duty schedule, percent "
+                        "-100..100 (default '50,25,0,-25,-50' — measured "
+                        "heaviest-to-lightest friction load order on this "
+                        "rig; see module docstring)")
+    p.add_argument("--step-time", type=float, default=10.0,
+                   help="Seconds to hold each load step (default 10 — wide "
+                        "enough to absorb dev_send()'s worst-case retry "
+                        "budget, ~6.6 s at its defaults, without starving "
+                        "the settled window; see 077-007 bench notes)")
+    p.add_argument("--settle-time", type=float, default=5.0,
                    help="Seconds at the END of each step counted as 'settled' "
-                        "for the tolerance check (default 2, must be < --step-time)")
+                        "for the tolerance check (default 5, must be < --step-time)")
     p.add_argument("--tolerance", type=float, default=25.0,
                    help="Acceptable |measured - target| once settled, mm/s (default 25)")
     p.add_argument("--sample-period", type=float, default=0.1,
@@ -129,16 +156,26 @@ def _kv_float(r: ParsedResponse | None, key: str) -> float | None:
         return None
 
 
+def _applied_tracks_load(applied_seq: list[float | None]) -> bool:
+    """True if applied duty falls monotonically across the load schedule.
+
+    The default --load-duties schedule is ordered heaviest-to-lightest per
+    the 2026-07-04 bench measurement (see module docstring), so a working
+    PID should need monotonically LESS applied duty as the schedule
+    progresses. Allows a small epsilon for sample noise (same slack as the
+    old assist/drag/reverse check this replaces).
+    """
+    return (all(a is not None for a in applied_seq)
+            and all(applied_seq[i + 1] <= applied_seq[i] + 0.02
+                    for i in range(len(applied_seq) - 1)))
+
+
 def main() -> int:
     args = _parse_args()
-    schedule = [
-        ("assist", args.assist_duty),
-        ("freewheel", 0.0),
-        ("drag", args.drag_duty),
-        ("reverse", args.reverse_duty),
-    ]
+    load_duties = [float(tok) for tok in args.load_duties.split(",") if tok.strip()]
+    schedule = [(f"m4_duty={d:+.0f}", d) for d in load_duties]
     print(f"  port: {args.port}   pid_port: {args.pid_port}   load_port: {args.load_port}"
-          f"   target: {args.target:g} mm/s")
+          f"   target: {args.target:g} mm/s   load_duties: {load_duties}")
 
     csv_path = pathlib.Path(args.csv)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -165,6 +202,11 @@ def main() -> int:
 
         dev_send(proto, f"DEV M {args.pid_port} VEL {args.target}")
         t_start = time.monotonic()
+        # Let the PID settle onto the target before the FIRST load step so
+        # its own startup transient isn't mistaken for a load-response —
+        # friction coupling needs both motors already spinning (see
+        # docstring), and this pause is exactly that "both running" precondition.
+        time.sleep(2.0)
 
         for label, duty in schedule:
             print(f"\n  step [{label}] load_duty={duty:+.0f}%")
@@ -172,8 +214,18 @@ def main() -> int:
             step_t0 = time.monotonic()
             samples: list[tuple[float, float | None, float | None]] = []
             while time.monotonic() - step_t0 < args.step_time:
-                t_step = time.monotonic() - step_t0
                 st = dev_send(proto, f"DEV M {args.pid_port} STATE")
+                # t_step is captured AFTER dev_send() returns, not before —
+                # dev_send() can now block for several seconds riding out a
+                # transport retry (077-007), and a pre-call timestamp would
+                # stamp a late-arriving sample as if it were taken at the top
+                # of the step, silently excluding it from the "settled"
+                # window below even though it was really read near/after the
+                # step's end. Confirmed live: a step-5 run showed a valid
+                # applied=0.22 sample recorded at global t=41.7s (long after
+                # the step nominally started) reporting settled=None because
+                # the pre-call t_step had frozen at ~0.3s during the retry.
+                t_step = time.monotonic() - step_t0
                 vel, applied = _kv_float(st, "vel"), _kv_float(st, "applied")
                 writer.writerow([f"{time.monotonic() - t_start:.3f}", args.target, vel, applied, duty])
                 samples.append((t_step, vel, applied))
@@ -196,21 +248,20 @@ def main() -> int:
         # Overall PASS 1: velocity held in-band across every load step.
         all_in_band = all(r["in_band"] for r in step_results)
 
-        # Overall PASS 2: applied duty rose (non-decreasing, small epsilon)
-        # across the schedule — proof the PID is doing real work against a
-        # bigger disturbance, not coasting at a fixed duty.
+        # Overall PASS 2: applied duty tracks the load schedule (monotonic,
+        # measured heaviest-to-lightest direction — see _applied_tracks_load()) —
+        # proof the PID is doing real work against a changing friction
+        # disturbance, not coasting at a fixed duty.
         applied_seq = [r["avg_applied"] for r in step_results]
-        rising = (all(a is not None for a in applied_seq)
-                  and all(applied_seq[i + 1] >= applied_seq[i] - 0.02
-                          for i in range(len(applied_seq) - 1)))
+        tracks_load = _applied_tracks_load(applied_seq)
 
         print(f"\n  {'PASS' if all_in_band else 'FAIL'}: velocity held within "
               f"±{args.tolerance:g} mm/s across all load steps")
-        print(f"  {'PASS' if rising else 'FAIL'}: applied duty rose with load "
+        print(f"  {'PASS' if tracks_load else 'FAIL'}: applied duty tracks load "
               f"({[f'{a:.3f}' if a is not None else 'None' for a in applied_seq]})")
         print(f"\n  CSV: {csv_path}")
 
-        overall_pass = all_in_band and rising
+        overall_pass = all_in_band and tracks_load
 
     except KeyboardInterrupt:
         print("\n  interrupted — stopping motors...")

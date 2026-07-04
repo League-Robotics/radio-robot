@@ -1519,19 +1519,31 @@ family emits. No new reply tag is introduced.
 
 This firmware runs only the dev loop — there is no planner to fight — so
 there is exactly one authority conflict: a single motor commanded directly
-by `DEV M` vs. the same motor being driven by the `Drivetrain` under
-`DEV DT`. Rule:
+by `DEV M` vs. that **same** motor being driven by the `Drivetrain` under
+`DEV DT`. Rule (refined in 077-007 — see the note below):
 
 - Any `DEV M <n>` verb that actually changes the motor's commanded state
   (`DUTY`, `VEL`, `POS`, `VOLT`, `NEUTRAL`, `RESET`) drops drivetrain
-  authority — but only when the command is **accepted**; a capability
-  rejection (`VOLT` on Nezha) never touched the motor and so never steals
-  authority.
+  authority **only when `<n>` is one of the Drivetrain's currently-bound
+  `PORTS`** (the port it is actually driving) — but only when the command is
+  also **accepted**; a capability rejection (`VOLT` on Nezha) never touched
+  the motor and so never steals authority. A `DEV M <n>` on a port the
+  Drivetrain is NOT bound to (e.g. an independent load motor used by a bench
+  test — see the coupled-rig section below) is unrelated to the Drivetrain
+  and leaves its authority/`active` state untouched.
 - Any `DEV DT` verb that commands the drivetrain (`VW`, `WHEELS`, `NEUTRAL`)
   (re)activates drivetrain authority.
 - `DEV DT PORTS`, `DEV M <n> STATE`, `DEV M <n> CAPS`, `DEV DT STATE` are
   queries/bindings and never change authority.
 - `DEV STOP` and `DEV DT STOP` always drop authority (see below).
+
+077-007 found and fixed the pre-existing behavior, which unconditionally
+dropped drivetrain authority on ANY accepted `DEV M` motion verb regardless
+of port: this silently killed the governor mid-test whenever a bench script
+drove an independent load motor (e.g. `DEV M 4 DUTY ...`) while the
+Drivetrain was bound to a different pair (`DEV DT PORTS 2 3`) — exactly the
+coupled-rig test pattern where one bound wheel is friction-loaded by a
+separate, unbound motor. `isBoundPort()` in `dev_commands.cpp` is the fix.
 
 ### Port binding: `DEV DT PORTS`
 
