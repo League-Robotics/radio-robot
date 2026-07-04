@@ -589,7 +589,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
                 (float(target[0]), float(target[1])),
                 camera_index=int(arguments.get("camera", 3)),
                 robot_tag=int(arguments.get("robot_tag", _default_robot_tag())),
-                tolerance_mm=float(arguments.get("tolerance_mm", 5)),
+                tolerance=float(arguments.get("tolerance_mm", 5)),
                 timeout=float(arguments.get("timeout", 20)))
 
     elif name == "navigate_to":
@@ -603,7 +603,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
                 camera_index=int(arguments.get("camera", 3)),
                 robot_tag=int(arguments.get("robot_tag", _default_robot_tag())),
                 timeout=float(arguments.get("timeout", 30)),
-                speed_mms=int(arguments.get("speed_mms", 200)))
+                speed=int(arguments.get("speed_mms", 200)))
 
     elif name == "follow_path":
         err = _require_navigator()
@@ -617,7 +617,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
                 camera_index=int(arguments.get("camera_index", 3)),
                 robot_tag=int(arguments.get("robot_tag", _default_robot_tag())),
                 timeout=float(arguments.get("timeout", 30.0)),
-                speed_mms=int(arguments.get("speed_mms", 200)))
+                speed=int(arguments.get("speed_mms", 200)))
 
     elif name == "visit_tags":
         err = _require_navigator()

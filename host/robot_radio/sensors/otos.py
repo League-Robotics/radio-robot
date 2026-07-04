@@ -7,8 +7,8 @@ Communicates with the robot firmware via v2 command names only:
     OZ  — zero tracked position: ``ACK:OZ``
     OR  — reset tracking: ``ACK:OR``
     OC  — config dump: ``OC <spcfg> <self_test>``
-    OP  — pose: ``OP <x_mm> <y_mm> <h_deg>``
-    OV  — velocity: ``OV <vx_mms> <vy_mms> <vh_dps>``
+    OP  — pose: ``OP <x> <y> <h>`` (mm, mm, deg)
+    OV  — velocity: ``OV <vx> <vy> <vh>`` (mm/s, mm/s, deg/s)
     OL  — set linear scalar: ``OL <n>``
     OA  — set angular scalar: ``OA <n>``
 

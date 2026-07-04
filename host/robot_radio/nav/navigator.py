@@ -28,9 +28,9 @@ from robot_radio.nav._approach_utils import (
     load_approach_calibration,
 )
 
-# Default navigation speed for firmware G commands (mm/s).
+# Default navigation speed for firmware G commands.
 # Corresponds roughly to motor command 40 at the robot's calibration.
-_DEFAULT_NAV_SPEED_MMS = 200
+_DEFAULT_NAV_SPEED = 200  # [mm/s]
 
 
 def _load_motor_deadband() -> int:
@@ -76,14 +76,14 @@ class Navigator:
 
     ## approach()
 
-    ``approach(target_xy, tolerance_mm=5, timeout=20.0)`` drives the robot
+    ``approach(target_xy, tolerance=5, timeout=20.0)`` drives the robot
     tag to a world-coordinate target using a two-phase closed-loop controller:
 
     - **Far phase** (r > 100 mm): issue a single calibrated ``speed_for_time``
       command, re-read pose, repeat.
     - **Near phase** (r <= 100 mm): issue short crawl pulses and re-read pose
       after each pulse.
-    - **Done** (r <= tolerance_mm): stop and return.
+    - **Done** (r <= tolerance): stop and return.
 
     Returns a dict with keys:
     ``success``, ``elapsed_s``, ``final_error_mm``, ``phases_used``,
@@ -149,7 +149,7 @@ class Navigator:
     # -- Core navigation (G-command wrappers, ticket 035-002) --
 
     def navigate(self, target_xy, camera_index=3, robot_tag=1,
-                 timeout=30.0, speed_mms: int = _DEFAULT_NAV_SPEED_MMS,
+                 timeout=30.0, speed: int = _DEFAULT_NAV_SPEED,  # [mm/s]
                  forward_only=False) -> dict[str, Any]:
         """Drive to *target_xy* via the firmware G command (035-002).
 
@@ -167,7 +167,7 @@ class Navigator:
             AprilTag ID on the robot (default 1).
         timeout:
             Maximum wall-clock seconds to wait for completion (default 30).
-        speed_mms:
+        speed:
             Navigation speed in mm/s sent to the firmware G command
             (default 200).
         forward_only:
@@ -200,16 +200,16 @@ class Navigator:
 
             # Convert world-cm target to robot-relative mm.
             # The firmware G command takes robot-relative coordinates:
-            #   dx_robot =  dx_world_mm * cos(yaw) + dy_world_mm * sin(yaw)
-            #   dy_robot = -dx_world_mm * sin(yaw) + dy_world_mm * cos(yaw)
-            dx_mm = (target_xy[0] - robot_pos[0]) * 10.0  # cm → mm
-            dy_mm = (target_xy[1] - robot_pos[1]) * 10.0
-            dx_robot = int(round(dx_mm * math.cos(robot_yaw) + dy_mm * math.sin(robot_yaw)))
-            dy_robot = int(round(-dx_mm * math.sin(robot_yaw) + dy_mm * math.cos(robot_yaw)))
+            #   dx_robot =  dx * cos(yaw) + dy * sin(yaw)
+            #   dy_robot = -dx * sin(yaw) + dy * cos(yaw)
+            dx = (target_xy[0] - robot_pos[0]) * 10.0  # cm → mm
+            dy = (target_xy[1] - robot_pos[1]) * 10.0
+            dx_robot = int(round(dx * math.cos(robot_yaw) + dy * math.sin(robot_yaw)))
+            dy_robot = int(round(-dx * math.sin(robot_yaw) + dy * math.cos(robot_yaw)))
 
             # Issue the firmware G command and wait for EVT done G.
             enc_l, enc_r, outcome = self._robot.go_to(
-                dx_robot, dy_robot, speed_mms, timeout_s=timeout
+                dx_robot, dy_robot, speed, timeout_s=timeout
             )
 
             elapsed = round(time.monotonic() - start, 1)
@@ -232,7 +232,7 @@ class Navigator:
         camera_index: int = 3,
         robot_tag: int = 1,
         timeout: float = 30.0,
-        speed_mms: int = _DEFAULT_NAV_SPEED_MMS,
+        speed: int = _DEFAULT_NAV_SPEED,  # [mm/s]
         # Legacy parameters accepted for API compatibility but unused:
         lookahead: float = 15.0,
         trackwidth: float = 9.0,
@@ -256,7 +256,7 @@ class Navigator:
             AprilTag ID on the robot (default 1).
         timeout:
             Per-waypoint timeout in seconds (default 30.0).
-        speed_mms:
+        speed:
             Navigation speed in mm/s for each G command (default 200).
         lookahead, trackwidth, base_speed, stop_dist, controller:
             Accepted for API compatibility; ignored.
@@ -281,7 +281,7 @@ class Navigator:
                 camera_index=camera_index,
                 robot_tag=robot_tag,
                 timeout=timeout,
-                speed_mms=speed_mms,
+                speed=speed,
             )
             if result.get("error"):
                 return {
@@ -370,12 +370,12 @@ class Navigator:
             "total": len(tag_ids),
         }
 
-    def adaptive_turn(self, target_deg, camera_index=3, robot_tag=1,
+    def adaptive_turn(self, target, camera_index=3, robot_tag=1,  # [deg]
                       tolerance=5.0, max_steps=15):
         """Closed-loop turn using adaptive GO commands.
 
         Scales speed and duration to remaining angle for fast convergence.
-        Returns (actual_rotation_deg, steps, elapsed_seconds).
+        Returns (actual_rotation, steps, elapsed_seconds) — actual_rotation in degrees.
         """
         field = self._get_playfield(camera_index)
 
@@ -395,8 +395,7 @@ class Navigator:
         if yaw0 is None:
             return None, 0, 0
 
-        target_yaw = normalize_angle(math.radians(yaw0 + target_deg))
-        target_yaw_deg = math.degrees(target_yaw)
+        target_yaw = math.degrees(normalize_angle(math.radians(yaw0 + target)))
         start = time.monotonic()
         steps = 0
 
@@ -412,7 +411,7 @@ class Navigator:
             if yaw is None:
                 continue
 
-            remaining = math.degrees(normalize_angle(math.radians(target_yaw_deg - yaw)))
+            remaining = math.degrees(normalize_angle(math.radians(target_yaw - yaw)))
             if abs(remaining) < tolerance:
                 break
 
@@ -604,30 +603,30 @@ class Navigator:
         target_xy: tuple[float, float],
         camera_index: int = 3,
         robot_tag: int = 1,
-        tolerance_mm: float = 5.0,
+        tolerance: float = 5.0,  # [mm]
         timeout: float = 20.0,
-        far_threshold_mm: float = 100.0,
+        far_threshold: float = 100.0,  # [mm]
     ) -> dict[str, Any]:
         """Drive the robot to *target_xy* using a two-phase closed-loop controller.
 
-        **Far phase** (r > far_threshold_mm):
+        **Far phase** (r > far_threshold):
             Issue a single ``speed_for_time`` command derived from the linear
             calibration model, re-read pose, repeat.
 
-        **Near phase** (tolerance_mm < r <= far_threshold_mm):
+        **Near phase** (tolerance < r <= far_threshold):
             Issue crawl pulses at the global_best crawl settings and re-read
             pose after each pulse.
 
-        **Done** (r <= tolerance_mm):
+        **Done** (r <= tolerance):
             Stop and return success dict.
 
         Args:
             target_xy: World coordinate (x, y) in **centimetres**.
             camera_index: AprilCam camera index.
             robot_tag: Tag ID of the robot.
-            tolerance_mm: Arrival radius in millimetres (default 5).
+            tolerance: Arrival radius in millimetres (default 5).
             timeout: Maximum seconds to run (default 20).
-            far_threshold_mm: Radius (mm) below which we switch to near phase
+            far_threshold: Radius (mm) below which we switch to near phase
                 (default 100).
 
         Returns:
@@ -644,7 +643,7 @@ class Navigator:
         n_far = 0
         n_crawl = 0
         phases_used: set[str] = set()
-        last_r_mm: float = 0.0
+        last_r: float = 0.0  # [mm]
 
         try:
             while True:
@@ -666,7 +665,7 @@ class Navigator:
                         "success": False,
                         "reason": "lost_robot_tag",
                         "elapsed_s": round(time.monotonic() - start, 2),
-                        "final_error_mm": round(last_r_mm, 1),
+                        "final_error_mm": round(last_r, 1),
                         "phases_used": sorted(phases_used),
                         "n_far_commands": n_far,
                         "n_crawl_pulses": n_crawl,
@@ -674,20 +673,20 @@ class Navigator:
 
                 dx = (target_xy[0] - robot_pos[0]) * 10.0  # cm → mm
                 dy = (target_xy[1] - robot_pos[1]) * 10.0
-                r_mm = math.sqrt(dx * dx + dy * dy)
-                last_r_mm = r_mm
+                r = math.sqrt(dx * dx + dy * dy)  # [mm]
+                last_r = r
 
                 # ── Choose phase ───────────────────────────────────────────
-                phase = choose_phase(r_mm,
-                                     far_threshold_mm=far_threshold_mm,
-                                     tolerance_mm=tolerance_mm)
+                phase = choose_phase(r,
+                                     far_threshold=far_threshold,
+                                     tolerance=tolerance)
 
                 if phase == "done":
                     self._robot.stop()
                     return {
                         "success": True,
                         "elapsed_s": round(time.monotonic() - start, 2),
-                        "final_error_mm": round(r_mm, 1),
+                        "final_error_mm": round(r, 1),
                         "phases_used": sorted(phases_used),
                         "n_far_commands": n_far,
                         "n_crawl_pulses": n_crawl,
@@ -701,28 +700,28 @@ class Navigator:
                         "success": False,
                         "reason": "timeout",
                         "elapsed_s": round(elapsed, 2),
-                        "final_error_mm": round(r_mm, 1),
+                        "final_error_mm": round(r, 1),
                         "phases_used": sorted(phases_used),
                         "n_far_commands": n_far,
                         "n_crawl_pulses": n_crawl,
                     }
 
                 if phase == "far":
-                    v, t_ms = compute_far_command(r_mm, cal)
-                    if t_ms > 0:
+                    v, duration = compute_far_command(r, cal)  # [mm/s], [ms]
+                    if duration > 0:
                         # speed_for_time is blocking; it returns after the
                         # firmware finishes the drive.  No extra sleep needed.
-                        self._robot.speed_for_time(int(v), int(v), t_ms)
+                        self._robot.speed_for_time(int(v), int(v), duration)
                     n_far += 1
                     phases_used.add("far")
 
                 else:  # near
                     crawl = cal["crawl"]
                     spd = int(crawl["speed_mms"])
-                    pulse_ms = int(crawl["pulse_ms"])
-                    delay_ms = int(crawl["delay_ms"])
-                    self._robot.speed_for_time(spd, spd, pulse_ms)
-                    time.sleep(delay_ms / 1000.0)
+                    pulse_duration = int(crawl["pulse_ms"])  # [ms]
+                    delay = int(crawl["delay_ms"])  # [ms]
+                    self._robot.speed_for_time(spd, spd, pulse_duration)
+                    time.sleep(delay / 1000.0)
                     n_crawl += 1
                     phases_used.add("near")
 

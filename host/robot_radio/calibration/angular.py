@@ -384,7 +384,7 @@ def calibrate_turns(
     ccw = [d for (sign, d) in samples if sign > 0]
     cw  = [d for (sign, d) in samples if sign < 0]
 
-    print(f"\n{'#':>3}  {'dir':>4}  {'otos_deg':>9}  {'ratio':>7}  {'err':>7}")
+    print(f"\n{'#':>3}  {'dir':>4}  {'otos':>9}  {'ratio':>7}  {'err':>7}")
     ratios: list[float] = []
     for i, (sign, d) in enumerate(samples, 1):
         label = "CCW" if sign > 0 else "CW"
@@ -408,9 +408,9 @@ def calibrate_turns(
     print(f"\nRatio statistics (target / otos, deg):")
     print(f"  Overall: mean={mean_all:.4f}  stdev={std_all:.4f}  (n={len(ratios)})")
     if ccw:
-        print(f"  CCW otos_deg: mean={mean_ccw:.2f}  stdev={std_ccw:.2f}  (n={len(ccw)})")
+        print(f"  CCW otos: mean={mean_ccw:.2f}  stdev={std_ccw:.2f}  (n={len(ccw)})")
     if cw:
-        print(f"  CW  otos_deg: mean={mean_cw:.2f}  stdev={std_cw:.2f}  (n={len(cw)})")
+        print(f"  CW  otos: mean={mean_cw:.2f}  stdev={std_cw:.2f}  (n={len(cw)})")
 
     print(f"\nRecommended values:")
     print(f"  otos_angular_scale = {current_scale:.4f} x {mean_all:.4f} = {new_scale_raw:.4f}")
