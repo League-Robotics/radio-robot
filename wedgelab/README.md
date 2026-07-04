@@ -43,3 +43,11 @@ watchdog force-stops on any un-commanded motion.
 serial monitor auto-reconnects after each flash — disconnect it first).
 Bench config 2026-07-04: ports M1/M2 = old (latch-prone) motors, M3/M4 =
 fresh.
+
+## Demo
+
+```sh
+uv run python wedgelab/demo.py            # lockup, then the fix (A/B)
+uv run python wedgelab/demo.py latch      # just the lockup
+uv run python wedgelab/demo.py fixed      # same motion, 50 ms zero-dwell
+```
