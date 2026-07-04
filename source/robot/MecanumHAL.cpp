@@ -1,4 +1,5 @@
 #include "MecanumHAL.h"
+#include "control/Odometry.h"   // effectiveSlip() — same heading law as encpose
 #include "Inputs.h"   // MotorCommands full definition (034-001)
 
 MecanumHAL::MecanumHAL(MicroBitI2C& i2c, MicroBitIO& io, const RobotConfig& cfg)
@@ -100,8 +101,12 @@ void MecanumHAL::tick(uint32_t now_ms, const MotorCommands& cmds)
     // see BenchOtosSensor::tickEncoder).
     float trackwidth = (_liveCfg != nullptr) ? _liveCfg->trackwidth
                                              : 2.0f * _halfTrack;   // [mm]
+    // Same heading law as encpose: scale dTheta by effectiveSlip(rotSlip)
+    // (via tw/slip — algebraically identical).  See NezhaHAL::tick.
+    const float slip = effectiveSlip((_liveCfg != nullptr)
+                                         ? _liveCfg->rotationalSlip : 0.0f);
     benchOtosPtr()->tickEncoder(_motorFL.position(), _motorFR.position(),
-                                trackwidth, dt_ms);
+                                trackwidth / slip, dt_ms);
 #else
     (void)now_ms;
     (void)cmds;

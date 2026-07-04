@@ -1,4 +1,5 @@
 #include "SimHardware.h"
+#include "control/Odometry.h"   // effectiveSlip() — same heading law as encpose
 #include "types/Config.h"             // RobotConfig, defaultRobotConfig()
 #include "types/Inputs.h"       // MotorCommands
 #include <cmath>
@@ -91,7 +92,13 @@ void SimHardware::advance(uint32_t now_ms, const MotorCommands& cmds) {
         // tgtSpeed — parity with NezhaHAL::tick's encoder feed so bench mode
         // behaves identically in sim and on hardware (see
         // BenchOtosSensor::tickEncoder for the rationale).
+        // Same heading law as encpose: dTheta scaled by effectiveSlip
+        // (via tw/slip — algebraically identical).  See NezhaHAL::tick.
+        const float tw   = (_liveCfg != nullptr) ? _liveCfg->trackwidth
+                                                 : _trackwidth;
+        const float slip = effectiveSlip((_liveCfg != nullptr)
+                                             ? _liveCfg->rotationalSlip : 0.0f);
         _benchOtos.tickEncoder(_motorL.position(), _motorR.position(),
-                               _trackwidth, benchDt);
+                               tw / slip, benchDt);
     }
 }

@@ -85,6 +85,11 @@ public:
     // unlike production firmware without BENCH_OTOS_ENABLED.
     BenchOtosSensor* benchOtosPtr() override { return &_benchOtos; }
 
+    // Bind the LIVE RobotConfig (Robot's SET-mutated copy) so the bench
+    // branch reads the same rotationalSlip/trackwidth the firmware's encpose
+    // heading law uses.  Mirrors NezhaHAL.  Overrides Hardware::bindLiveConfig.
+    void bindLiveConfig(const RobotConfig* cfg) override { _liveCfg = cfg; }
+
     // Test accessors ---------------------------------------------------------
     PhysicsWorld&   plant()          { return _plant; }
     SimMotor&       simMotorL()      { return _motorL; }
@@ -124,6 +129,10 @@ private:
 
     uint32_t       _lastTickMs   = 0;
     float          _trackwidth = 0.0f;
+
+    // LIVE RobotConfig bound via bindLiveConfig(); nullptr until Robot's
+    // constructor runs (fallback: _trackwidth cache, slip=1).
+    const RobotConfig* _liveCfg = nullptr;
 
     // Bench-tick dt baseline (074-001): mirrors NezhaHAL::_lastBenchTick.
     // Maintained every advance() call, even when bench mode is off, so the

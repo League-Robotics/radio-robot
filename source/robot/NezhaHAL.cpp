@@ -1,5 +1,7 @@
 #include "NezhaHAL.h"
 #include "Inputs.h"   // MotorCommands full definition (034-001)
+#include "control/Odometry.h"   // effectiveSlip() — the SAME helper Odometry::predict
+                                // uses for encpose (precedent: PhysicsWorld.cpp)
 
 NezhaHAL::NezhaHAL(MicroBitI2C& i2c, MicroBitIO& io, const RobotConfig& cfg)
     : _bus(i2c),
@@ -106,7 +108,20 @@ void NezhaHAL::tick(uint32_t now, const MotorCommands& cmds)   // [ms]
     // Trackwidth from the LIVE config when bound (same value Drive's EKF
     // prediction uses, tracks runtime SET tw=…); construction cache otherwise.
     const float tw = (_liveCfg != nullptr) ? _liveCfg->trackwidth : _trackwidth;
-    benchOtosPtr()->tickEncoder(_motorL.position(), _motorR.position(), tw, dt);
+    // Apply the SAME heading law Odometry::predict uses for encpose:
+    // dTheta = ((dR-dL)/tw) * effectiveSlip(rotSlip).  On the floor the real
+    // OTOS measures scrubbed body rotation; rotationalSlip is the calibrated
+    // estimate of that scrub, so the bench sensor must model it too — or a
+    // calibrated profile over-rotates every believed turn on the stand by
+    // 1/slip (~+8°/RT 9000 at 0.92: the 2026-07-03 "tour spirals off the
+    // table" run).  Dividing tw by effectiveSlip is algebraically identical
+    // to scaling dTheta by it, and keeps ideal/otos/optical/fused/encpose on
+    // ONE heading law under ANY pushed calibration.  nocal (rotSlip=0 → 1.0)
+    // is unchanged.
+    const float slip = effectiveSlip((_liveCfg != nullptr)
+                                         ? _liveCfg->rotationalSlip : 0.0f);
+    benchOtosPtr()->tickEncoder(_motorL.position(), _motorR.position(),
+                                tw / slip, dt);
 #else
     // Production: no bench sensor; this override is a no-op.  (034-006)
     (void)now;

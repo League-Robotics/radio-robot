@@ -209,6 +209,42 @@ def test_si_reanchors_bench_accumulators():
         )
 
 
+def test_bench_heading_applies_slip_model():
+    """With a calibrated rotSlip pushed, the bench OTOS heading must apply
+    the SAME effectiveSlip law as encpose (Odometry::predict), so a
+    commanded RT lands at the commanded angle in the believed frame.
+
+    Regression for the 2026-07-03 "tour spirals off the table" run: the
+    calibrated profile (rotSlip=0.92) inflates the RT encoder-arc target by
+    1/0.92, and on a stand there is no floor scrub to absorb it.  The bench
+    sensor integrated RAW (dR-dL)/tw and reported ~97.8 deg per RT 9000
+    while encpose (slip-scaled) read ~90 — two heading laws, and the EKF
+    believed the wrong one.  The bench sensor now models the calibrated
+    scrub (tw/effectiveSlip), so fused ~= encpose ~= 90 under ANY profile.
+    """
+    with Sim() as s:
+        s.set_field_profile(slip_turn_extra=0.0, fuse_otos=True)
+        s.send_command("SIMSET bodyRotScrub=1.0")
+        assert "OK" in s.send_command("SET rotSlip=0.92").upper()
+        send(s, "DBG OTOS BENCH 1")
+        send(s, "ZERO enc")
+        send(s, "OZ")
+        send(s, "SI 0 0 0")
+        s.tick_for(100)
+
+        send(s, "RT 9000")
+        s.tick_for(5000)  # RT 9000 completes in ~1.5 s; generous margin
+
+        reply = send(s, "DBG OTOS")
+        h_cdeg = parse_triple(reply, "otos")[2]
+        # Pre-fix this read ~9780 (90/0.92); now the slip model brings it to
+        # the commanded 9000 +/- coast (sim coast is small).
+        assert 8600 <= h_cdeg <= 9400, (
+            f"bench heading must follow the slip-scaled law (~9000 cdeg for "
+            f"RT 9000 with rotSlip=0.92), got {h_cdeg}: {reply!r}"
+        )
+
+
 def test_bench_otos_ignores_encoder_reset():
     """An encoder reset (ZERO enc) must NOT teleport the bench pose.
 
