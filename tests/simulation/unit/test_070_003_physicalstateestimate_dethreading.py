@@ -50,8 +50,12 @@ from firmware import Sim
 # ---------------------------------------------------------------------------
 
 def _ekf_predict_heading(tw_value: float, rotslip_value: float,
-                          enc_r_mm: float = 200.0) -> float:
+                          enc_r_mm: float = 40.0) -> float:
     """Isolate Drive::tickUpdate() STEP 4 (EKF predict): inject an encoder
+    Injection magnitude: 40 mm in one 24 ms tick (~1667 mm/s) — deliberately
+    below Odometry::predict's per-tick physical-step clamp (2000 mm/s, the
+    bench-wedge release-jump defense, 2026-07-03); the previous 200 mm
+    single-tick injection is now correctly rejected as unphysical.
     differential directly into the plant, tick exactly once, and return the
     resulting fused heading (radians).
 

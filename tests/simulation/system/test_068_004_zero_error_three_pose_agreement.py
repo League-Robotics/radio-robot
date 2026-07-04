@@ -191,10 +191,17 @@ def test_zero_error_three_pose_and_truth_agreement(sim):
 
     # The maneuver must have actually moved the robot -- otherwise the
     # agreement assertion below would be trivially true at the origin.
-    final_x, final_y, _ = s.get_true_pose()
-    assert math.hypot(final_x, final_y) > 200.0, (
-        f"plant barely moved over the tour: final true pose "
-        f"({final_x:.1f}, {final_y:.1f})"
+    # TOUR_1 is a CLOSING tour since 2026-07-03 (returns to its start), so
+    # assert on cumulative true PATH LENGTH, not final displacement.
+    path_mm = 0.0
+    prev_xy = None
+    for _frame, (tx, ty, _th) in samples:
+        if prev_xy is not None:
+            path_mm += math.hypot(tx - prev_xy[0], ty - prev_xy[1])
+        prev_xy = (tx, ty)
+    assert path_mm > 1000.0, (
+        f"plant barely moved over the tour: cumulative true path "
+        f"{path_mm:.0f} mm"
     )
 
     for frame, (true_x, true_y, true_h_rad) in samples:

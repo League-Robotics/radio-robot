@@ -213,11 +213,15 @@ def test_frozen_wheel_no_phantom_dtheta():
         # Freeze right wheel.
         _freeze_right(s)
 
-        # Tick until the wedge latches; cap the poll so a non-firing detector
-        # fails loudly instead of hanging.
+        # Tick until the MotorController detector latches; cap the poll so a
+        # non-firing detector fails loudly instead of hanging.  NOTE: since
+        # the bench-wedge fix (2026-07-03), Drive's secondary value-based
+        # freeze detector raises odometry.wedgeActive() after only 3 frozen
+        # ticks — well before wheelWedgedR()'s n=10 — so the poll must wait
+        # on the flag this test actually asserts, not on wedgeActive.
         for _ in range(WEDGE_THRESHOLD + 20):
             t = _tick_n(s, 1, t)
-            if s.get_odometry_wedge_active():
+            if s.get_wheel_wedged_r():
                 break
 
         assert s.get_wheel_wedged_r(), (

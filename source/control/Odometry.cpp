@@ -42,6 +42,25 @@ void Odometry::predict(float encLeft, float encRight, uint32_t now,
     _prevEncL = encLeft;
     _prevEncR = encRight;
 
+    // Wedge-release / unbaselined-reset clamp (bench-wedge fix, 2026-07-03):
+    // a per-tick step no physical wheel can produce is not motion — it is a
+    // latched 0x46 register releasing its catch-up jump (the Nezha wedge, see
+    // docs/knowledge/2026-07-01-encoder-wedge-boundary-latch-flavor.md) or an
+    // encoder reset that bypassed the explicit rebaseline paths.  Integrating
+    // such a step teleports encpose/fused — measured +100.2° of phantom
+    // rotation on a straight D 700 leg (recording 2026-07-03 17:45).  Skip
+    // the step entirely: the baselines above are already re-based, so the
+    // pose simply holds for one tick.  BenchOtosSensor::tickEncoder applies
+    // the same clamp, keeping all pose frames consistent through a release.
+    {
+        static constexpr float kMaxWheelMmps = 2000.0f;  // no wheel is faster
+        float maxStep = kMaxWheelMmps * ((dt_s > 0.0f) ? dt_s : 0.02f) + 2.0f;
+        if (dL > maxStep || dL < -maxStep || dR > maxStep || dR < -maxStep) {
+            dL = 0.0f;
+            dR = 0.0f;
+        }
+    }
+
     float dCenter   = (dL + dR) * 0.5f;
     // Apply rotational-slip correction: encoder arc over-reports body rotation
     // (wheel scrub during turns).  slip factor in [0.5, 1.0]; 0/unset → 1.0.

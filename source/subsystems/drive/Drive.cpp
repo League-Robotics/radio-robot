@@ -85,8 +85,67 @@ void Drive::tickUpdate(uint32_t now, bool fuseOtos)
 
     // ------------------------------------------------------------------
     // STEP 3: Wedge push (mirrors Drive::periodic — 033-005e)
+    //
+    // Secondary VALUE-BASED freeze detector + MID-LEG re-prime (bench-wedge
+    // fix, 2026-07-03).  The MotorController detector is structurally blind
+    // to the boundary-latch flavor (it resets on target==0 and its arming
+    // grace requires post-command motion — see the KB doc
+    // 2026-07-01-encoder-wedge-boundary-latch-flavor.md), so latches at
+    // D-decel poisoned whole legs: measured +100.2° phantom rotation on a
+    // straight D 700 and legs dying at the TIME backstop 222 mm short.
+    // This detector needs no arming: a wheel whose cached position() is
+    // EXACTLY constant for kFreezeTicksN consecutive ticks while commanded
+    // > kFreezeMinCmdMmps is latched.  Recovery is the KB doc's own
+    // finding — "an atomic-read sequence re-primes the latched readback
+    // register, in-band and cheap" — issued ONCE per episode, from the
+    // cooperative control path (sequential with the normal reads, so it
+    // cannot interleave adversarially).  The release catch-up step is then
+    // swallowed by the per-tick step clamps in Odometry::predict and
+    // BenchOtosSensor::tickEncoder.
     // ------------------------------------------------------------------
-    bool anyWedged = _mc.wheelWedgedL() || _mc.wheelWedgedR();
+    static constexpr float   kFreezeMinCmdMmps = 30.0f;
+    static constexpr uint8_t kFreezeTicksN     = 3;
+    {
+        // Watch the SAME post-filter encoder values predict consumes
+        // (_hw.encPos, written by _runOutlierFilter above) — NOT the raw
+        // Motor cache — so injected-encoder test harnesses (which bypass the
+        // motor cache) never false-latch, while a real register latch (which
+        // freezes _hw.encPos identically) still trips.
+        // Array convention: [0]=R (FR), [1]=L (FL) — see ActualState.h.
+        const float rawL = _hw.encPos[1];
+        const float rawR = _hw.encPos[0];
+        const bool  cmdL = (_outputs.tgtSpeed[1] >  kFreezeMinCmdMmps) ||
+                           (_outputs.tgtSpeed[1] < -kFreezeMinCmdMmps);
+        const bool  cmdR = (_outputs.tgtSpeed[0] >  kFreezeMinCmdMmps) ||
+                           (_outputs.tgtSpeed[0] < -kFreezeMinCmdMmps);
+        if (cmdL && rawL == _frzLastRawL) {
+            if (_frzTicksL < 0xFF) ++_frzTicksL;
+        } else {
+            _frzTicksL    = 0;
+            _frzReprimedL = false;
+        }
+        if (cmdR && rawR == _frzLastRawR) {
+            if (_frzTicksR < 0xFF) ++_frzTicksR;
+        } else {
+            _frzTicksR    = 0;
+            _frzReprimedR = false;
+        }
+        _frzLastRawL = rawL;
+        _frzLastRawR = rawR;
+
+        if (_frzTicksL >= kFreezeTicksN && !_frzReprimedL) {
+            _motorL.readEncoderMmFAtomic(_robCfg);   // re-prime latched register
+            _frzReprimedL = true;
+        }
+        if (_frzTicksR >= kFreezeTicksN && !_frzReprimedR) {
+            _motorR.readEncoderMmFAtomic(_robCfg);
+            _frzReprimedR = true;
+        }
+    }
+    const bool frozenNow = (_frzTicksL >= kFreezeTicksN) ||
+                           (_frzTicksR >= kFreezeTicksN);
+
+    bool anyWedged = _mc.wheelWedgedL() || _mc.wheelWedgedR() || frozenNow;
     _est.setWedgeActive(anyWedged);
     if (anyWedged) {
         _est.setEncOmegaHealthy(false);

@@ -156,6 +156,19 @@ private:
     // tick. Clears when anyWedged next goes false (mirrors _prevAnyWedged).
     bool     _wedgeReprimeAttempted = false;
 
+    // Secondary value-based freeze detector + MID-LEG re-prime state
+    // (bench-wedge fix, 2026-07-03 — see tickUpdate STEP 3).  A wheel whose
+    // cached position() is exactly constant for kFreezeTicksN ticks while
+    // commanded to move is a latched 0x46 readback register; one in-band
+    // atomic read per episode re-primes it (KB doc
+    // 2026-07-01-encoder-wedge-boundary-latch-flavor.md).
+    float    _frzLastRawL  = 0.0f;
+    float    _frzLastRawR  = 0.0f;
+    uint8_t  _frzTicksL    = 0;
+    uint8_t  _frzTicksR    = 0;
+    bool     _frzReprimedL = false;
+    bool     _frzReprimedR = false;
+
     // OTOS timing for the lag gate.
     uint32_t _lastOtosMs = 0;
     bool     _otosEverReady = false;
