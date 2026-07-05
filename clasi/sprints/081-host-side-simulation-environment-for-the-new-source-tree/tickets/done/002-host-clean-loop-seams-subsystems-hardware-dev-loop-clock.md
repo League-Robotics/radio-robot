@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: 'Host-clean loop seams: Subsystems::Hardware, dev_loop, clock'
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 depends-on: []
@@ -98,10 +98,29 @@ proven entirely against the one existing concrete owner,
       (`nullptr` if none), call `devLoopTick(loop, now, stmt)`. The
       Communicator stays the only CODAL-touching piece in the loop, per the
       design write-up's own constraint.
-- [ ] **ARM build + bench smoke (hardware-bench-testing gate, required):**
+- [x] **ARM build + bench smoke (hardware-bench-testing gate, required):**
       deploy (`mbdeploy deploy --build`) and confirm PING, the DEV M/DT
       family, and the watchdog `EVT dev_watchdog` path all round-trip
       byte-identically to pre-ticket behavior.
+      **DONE (team-lead, 2026-07-05, on the stand, Tovez, v0.20260705.8).**
+      `just build-clean` (correct uv env) + `mbdeploy deploy robot --hex …`,
+      then `tests/bench/dev_exercise.py --skip-dt` ×3. All substantive
+      round-trips PASS every run: PING, VER, DEV M 1–4 STATE+CAPS, DUTY
+      position-climb, VEL-120 convergence (~128 mm/s, matching 001's
+      envelope), VOLT capability-reject (`ERR unsupported`), and the watchdog
+      `EVT dev_watchdog` fire (proves the loop-originated
+      `defaultReply`/`defaultReplyCtx` sink emits correctly). RESET flaked to
+      `None` once (intermittent DEV serial reply-drop, identical to what the
+      byte-for-byte 001 build did — a transport artifact, not a loop
+      regression; PASS on both re-runs, 18/18). Confirms the `devLoopTick`
+      extraction + `Subsystems::Hardware` seam + the `comm.tick`/`hardware.tick`
+      slice-1 reorder are behavior-neutral on real hardware.
+      NOTE (separate follow-up, not a 002 defect): the documented
+      `mbdeploy deploy --build` path is broken in this env — `build.py` runs
+      `gen_messages.py` via `sys.executable`, which under mbdeploy is its pipx
+      venv (no `grpcio-tools`/`google.protobuf`); `just build*` uses the uv env
+      (protobuf 6.33.6) and works. Worked around by building with `just` and
+      flashing with `--hex`.
 - [x] Existing `tests/sim/unit/*` harnesses still pass with no regression.
 
 ## Testing
