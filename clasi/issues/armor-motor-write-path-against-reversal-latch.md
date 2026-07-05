@@ -1,5 +1,6 @@
 ---
 status: pending
+sprint: 078
 ---
 
 # Armor the motor write path against the encoder reversal latch (zero-dwell reversal + guarded resets)

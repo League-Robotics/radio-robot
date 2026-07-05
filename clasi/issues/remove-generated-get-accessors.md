@@ -1,5 +1,6 @@
 ---
 status: pending
+sprint: 080
 ---
 
 # Remove trivial `get_*` accessors from generated message headers

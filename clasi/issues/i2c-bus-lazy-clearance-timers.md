@@ -1,5 +1,6 @@
 ---
 status: pending
+sprint: 079
 ---
 
 # I2CBus lazy per-device pre/post clearance timers — reclaim the ~8 ms/tick encoder settle spins
