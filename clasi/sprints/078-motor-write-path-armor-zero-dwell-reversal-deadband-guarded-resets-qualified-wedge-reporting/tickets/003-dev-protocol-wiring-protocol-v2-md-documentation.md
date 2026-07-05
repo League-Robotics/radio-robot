@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: DEV protocol wiring + protocol-v2.md documentation
-status: open
+status: done
 use-cases:
 - SUC-002
 - SUC-003
@@ -69,27 +69,27 @@ through `dev_commands.cpp`.
 
 ## Acceptance Criteria
 
-- [ ] `DEV M <n> CFG dwell=<value>` and `DEV M <n> CFG deadband=<value>`
+- [x] `DEV M <n> CFG dwell=<value>` and `DEV M <n> CFG deadband=<value>`
       are accepted, apply to the named `MotorConfig` field with `.has =
       true`, and echo the applied value in the `OK` reply, matching the
       existing `CFG` key-table row format (unrecognized keys still emit
       `ERR badkey <key>` without blocking other valid keys in the same
       command — unchanged existing behavior, verify it still holds).
-- [ ] `DEV M <n> STATE` and `DEV STATE` both emit `wsus=`, `hrc=`, `src=`
+- [x] `DEV M <n> STATE` and `DEV STATE` both emit `wsus=`, `hrc=`, `src=`
       in the documented position and format.
-- [ ] `docs/protocol-v2.md`'s CFG key table, STATE examples, "always all
+- [x] `docs/protocol-v2.md`'s CFG key table, STATE examples, "always all
       N fields" language, and `RESET` semantics paragraph are all updated
       to match the shipped wire format exactly (no drift between doc and
       code in the same ticket).
-- [ ] The `deadband`-vs-`min_duty` distinction is documented explicitly in
+- [x] The `deadband`-vs-`min_duty` distinction is documented explicitly in
       the CFG key table (not just in this ticket file) — this is the
       carried-forward architecture-review item; do not close this ticket
       without it.
-- [ ] `host/robot_radio/robot/protocol.py`'s `parse_response()` verified
+- [x] `host/robot_radio/robot/protocol.py`'s `parse_response()` verified
       (by a quick manual round-trip or existing test) to read the new
       tokens correctly with no code change (it is a generic key=value
       splitter).
-- [ ] `just build` succeeds; a manual bench smoke check (or ticket 005's
+- [x] `just build` succeeds; a manual bench smoke check (or ticket 005's
       later soak) confirms `DEV M 1 CFG dwell=0` round-trips and
       `DEV M 1 STATE` shows all eight fields.
 
