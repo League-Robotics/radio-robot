@@ -121,6 +121,10 @@ static void initDefaultMotorConfigs() {
     velGains.kff = 0.0038f;
     velGains.i_max = 0.3f;
 
+    // reversal_dwell / output_deadband (sprint 078) are left unset (.has ==
+    // false) here on purpose -- Hal::Motor::configure() (078-002) applies
+    // the real ship defaults (100 ms / 0.03) whenever a config arrives
+    // unset; that is the one place those defaults live.
     for (uint32_t i = 0; i < Hal::NezhaHal::kPortCount; ++i) {
         defaultMotorConfigs[i] = msg::MotorConfig();
         defaultMotorConfigs[i].setPort(i + 1);

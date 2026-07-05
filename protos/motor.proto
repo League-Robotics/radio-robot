@@ -28,6 +28,13 @@ message MotorState {
   optional float  velocity  = 3;
   optional float  applied   = 4;  // applied duty cycle fraction [-1, 1]
   optional bool   wedged    = 5;  // true if motor appears stalled/jammed
+  optional bool   wedge_suspect     = 6;  // motion-qualified wedge: stuck
+      // latch held WHILE |appliedDuty| > output_deadband for the same
+      // window -- "wedged AND was actually asked to move"
+  optional uint32 hard_reset_count  = 7;  // cumulative count of hard
+      // (encoder-zeroing) resets; testability/bench verification
+  optional uint32 soft_reset_count  = 8;  // cumulative count of soft
+      // (non-zeroing) rebaseline resets; testability/bench verification
 }
 
 // Configuration parameters for a motor.
@@ -39,6 +46,15 @@ message MotorConfig {
   float  min_duty       = 5;  // stiction floor / integrator-freeze threshold
   float  slew_rate      = 6;  // duty slew limit (MotorSlew semantics)
   uint32 port           = 7;  // Nezha motor port (1..4) -- identity lives in Config, not the class
+  optional float reversal_dwell  = 8;  // [ms] hold at commanded-zero on any
+      // sign change. Unset (.has == false) -> ship default (100 ms,
+      // applied in Hal::Motor::configure()). An explicit 0 is a valid,
+      // meaningful value: legacy immediate-reversal, A/B bench comparison
+      // only -- never ship 0 as a default.
+  optional float output_deadband = 9;  // [-1,1] fraction; |duty| below this
+      // writes 0 instead of a signed value. Unset (.has == false) -> ship
+      // default (0.03, applied in Hal::Motor::configure()). An explicit 0
+      // is a valid, meaningful value (deadband disabled).
 }
 
 // Declared motor capabilities.

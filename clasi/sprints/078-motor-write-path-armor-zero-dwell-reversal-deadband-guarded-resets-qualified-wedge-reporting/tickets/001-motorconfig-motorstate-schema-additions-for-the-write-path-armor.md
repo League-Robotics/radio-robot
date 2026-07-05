@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: MotorConfig/MotorState schema additions for the write-path armor
-status: open
+status: done
 use-cases:
 - SUC-004
 depends-on: []
@@ -57,32 +57,32 @@ does not go hunting for them.
 
 ## Acceptance Criteria
 
-- [ ] `protos/motor.proto`'s `MotorConfig` message gains `reversal_dwell`
+- [x] `protos/motor.proto`'s `MotorConfig` message gains `reversal_dwell`
       (field 8) and `output_deadband` (field 9), both `optional float`,
       with a comment on each documenting units, the ship default that
       ticket 002 will apply, and the "0 is a valid, explicit, legacy-only
       value" semantics.
-- [ ] `protos/motor.proto`'s `MotorState` message gains `wedge_suspect`
+- [x] `protos/motor.proto`'s `MotorState` message gains `wedge_suspect`
       (field 6, `optional bool`), `hard_reset_count` (field 7,
       `optional uint32`), `soft_reset_count` (field 8, `optional uint32`),
       each with a one-line doc comment.
-- [ ] `scripts/gen_messages.py`'s per-field annotation tables gain entries
+- [x] `scripts/gen_messages.py`'s per-field annotation tables gain entries
       for all five new fields, following the existing style at
       `("MotorConfig", "port")`/`("MotorState", "wedged")` (e.g.
       `("MotorConfig", "reversal_dwell"): "(new field — sprint 078: ..."`).
-- [ ] `uv run python3 scripts/gen_messages.py` run and `source/messages/motor.h`
+- [x] `uv run python3 scripts/gen_messages.py` run and `source/messages/motor.h`
       regenerated; the diff shows only the five new fields (as
       `Opt<T>` members with matching getters/chainable setters, mirroring
       the existing `MotorCommand.feedforward`/`reset_position` shape) —
       no unrelated fields change.
-- [ ] `source/main.cpp`'s `initDefaultMotorConfigs()` gains a one-line
+- [x] `source/main.cpp`'s `initDefaultMotorConfigs()` gains a one-line
       comment pointing at `Hal::Motor::configure()` (ticket 002) as where
       the real ship defaults (100 ms / 0.03) are applied — no functional
       change to `initDefaultMotorConfigs()` itself.
-- [ ] `just build` (or the ARM firmware build) still succeeds — the new
+- [x] `just build` (or the ARM firmware build) still succeeds — the new
       fields are inert (nothing reads them yet), so this must be a clean,
       no-behavior-change build.
-- [ ] Generated `source/messages/motor.h` is confirmed NOT hand-edited
+- [x] Generated `source/messages/motor.h` is confirmed NOT hand-edited
       (per project convention — only `protos/motor.proto` and
       `scripts/gen_messages.py` are hand-edited; the header is
       regenerated).
