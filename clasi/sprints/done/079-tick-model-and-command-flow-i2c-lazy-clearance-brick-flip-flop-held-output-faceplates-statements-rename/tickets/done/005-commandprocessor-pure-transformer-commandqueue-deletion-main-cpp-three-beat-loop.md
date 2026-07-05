@@ -2,9 +2,16 @@
 id: '005'
 title: CommandProcessor pure transformer, CommandQueue deletion, main.cpp three-beat
   loop
-status: open
-use-cases: [SUC-004, SUC-005, SUC-006, SUC-007]
-depends-on: ['002', '003', '004']
+status: done
+use-cases:
+- SUC-004
+- SUC-005
+- SUC-006
+- SUC-007
+depends-on:
+- '002'
+- '003'
+- '004'
 github-issue: ''
 issue:
 - tick-model-command-flow-and-the-command-board-design-sketch.md
@@ -98,39 +105,89 @@ after the main sweep) — it's superseded by the sanctioned double
 
 ## Acceptance Criteria
 
-- [ ] No `dev_commands.cpp` handler calls `Hal::Motor::apply()` or
+- [x] No `dev_commands.cpp` handler calls `Hal::Motor::apply()` or
       `Subsystems::Drivetrain::apply()` directly for a setpoint-shaped verb
       (DUTY/VEL/POS/VOLT/NEUTRAL/RESET/VW/WHEELS/NEUTRAL/STOP/STOP) — grep
       confirms; CFG/PORTS/WD handlers still call `configure()`/
       `setWindow()` directly (unchanged, config-plane).
-- [ ] `Hal::motorCommandAllowed()` exists in `hal/capability/motor.h`;
+- [x] `Hal::motorCommandAllowed()` exists in `hal/capability/motor.h`;
       `Motor::apply()` uses it; `dev_commands.cpp` uses it for
       pre-validation before staging.
-- [ ] `DevLoopState` has the outbox fields; `leftPort`/`rightPort`/
+- [x] `DevLoopState` has the outbox fields; `leftPort`/`rightPort`/
       `drivetrainActive` are gone.
-- [ ] `isBoundPort()` reads `drivetrain->ports()`.
-- [ ] `DEV DT STOP` stages an addressed (count=2, the bound pair) HAL
+- [x] `isBoundPort()` reads `drivetrain->ports()`.
+- [x] `DEV DT STOP` stages an addressed (count=2, the bound pair) HAL
       command, not a broadcast — host test confirms an independent,
       unbound motor is untouched by `DEV DT STOP`.
-- [ ] `DEV STOP`/watchdog fire both use `buildBroadcastNeutral()`/
+- [x] `DEV STOP`/watchdog fire both use `buildBroadcastNeutral()`/
       `buildDrivetrainStop()`; watchdog fire applies them immediately
       (not via the outbox); `DEV STOP` stages them.
-- [ ] `source/commands/command_queue.h` is deleted; no remaining reference
+- [x] `source/commands/command_queue.h` is deleted; no remaining reference
       to `CommandQueue` anywhere in `source/` (grep confirms, matching the
       source issue's own pre-verified isolation).
-- [ ] `main.cpp` matches the three-beat loop shape (both `hal.tick()`
+- [x] `main.cpp` matches the three-beat loop shape (both `hal.tick()`
       slices, outbox drain, no old bound-pair explicit double-tick).
-- [ ] Host tests (structs in/out, no fakes — per the Test Strategy) cover:
+- [x] Host tests (structs in/out, no fakes — per the Test Strategy) cover:
       capability pre-validation rejecting an unsupported mode before
       staging; a bound-port DUTY/VEL/etc. staging both a HAL command and a
       standby-only Drivetrain command; an unbound-port command leaving
       Drivetrain untouched; `DEV STOP`'s broadcast shape;
       `DEV DT STOP`'s addressed-pair shape.
-- [ ] Both `ROBOT_DEV_BUILD` forks build; the non-`ROBOT_DEV_BUILD` `#else`
+- [x] Both `ROBOT_DEV_BUILD` forks build; the non-`ROBOT_DEV_BUILD` `#else`
       fallback in `main.cpp` still builds and still has no DEV/HAL wiring.
-- [ ] Wire behavior is unchanged: every `OK`/`ERR` reply text, verb, and
+- [x] Wire behavior is unchanged: every `OK`/`ERR` reply text, verb, and
       `DEV STATE`/`CAPS` field shape is byte-identical to before this
       ticket (bench smoke check — full stand pass is ticket 006).
+
+## Stand-Smoke Findings (important — read before ticket 006)
+
+The required light bench smoke (PING, `DEV M 1 DUTY 30` + `STATE`,
+`DEV DT VW`/`STATE`, `DEV STOP`, watchdog fire) confirms wire text is
+byte-identical to before this ticket. But driving the smoke sequence on the
+real robot (NEZHA2, `/dev/cu.usbmodem2121102`) surfaced two real findings,
+isolated by bisecting with `git stash` (this ticket's changes vs. ticket
+004's landing, both flashed and driven on the same hardware):
+
+1. **Ticket 004's `dev_commands.cpp` (pre-this-ticket) never actually
+   activated the brick flip-flop.** Every DEV M/DEV DT handler called
+   `Hal::Motor::apply()` on the leaf reference returned by
+   `hal->motor(port)` directly — never `Hal::NezhaHal::apply()` (the
+   distribution overload that sets `portInUse_[port] = true`). With no
+   port ever marked in-use, `NezhaHal::tick()`'s `anyPortInUse()` guard
+   was permanently false, so `NezhaMotor::tick()` — and therefore
+   `armoredWrite()`/`collectEncoder()` — never ran for ANY port since
+   ticket 004 landed. Confirmed on hardware: pre-ticket, `DEV M 1 DUTY 30`
+   replies `OK ... applied=0.30` but every subsequent `STATE` poll reports
+   `applied=0.00`, `wedged=0` (the wedge detector never even runs).
+   **This ticket's outbox reshape fixes this as a byproduct** — `main.cpp`
+   now drains `devState.halCommand` through the real `hal.apply()`, which
+   does mark ports in-use, so this is the first code to correctly engage
+   the flip-flop for DEV-sourced commands, exactly per decision 1.
+2. **Once genuinely activated, the flip-flop's encoder collect never
+   reflects real motion.** Post-ticket, on ALL FOUR ports, `DEV M <n> DUTY
+   30` drives `applied` to the commanded value and the port's wedge
+   detector fires (`wedged=1`) within ~1 s (proving `tick()`/
+   `collectEncoder()` are now really running every cycle), but `pos`/`vel`
+   never move from their post-reset baseline — the same symptom `DEV M <n>
+   VEL 120` produces (PID integrator saturates to `applied=1.00` chasing a
+   permanently-zero feedback). This matches architecture-update.md's own
+   flagged, explicitly-unverified **Risk 1 ("Shared-0x10 clobber... an
+   abandoned collect... is a hardware timing question, not a code-review
+   one, and stays ticket 006's stand-gate responsibility")** — ticket 004
+   itself was never stand-tested ("No stand pass required in this ticket
+   (ticket 006 covers hardware)"), so this is very likely the first time
+   the real flip-flop timing has been exercised against actual hardware.
+
+Neither finding is in this ticket's scope to fix (both live in
+`nezha_hal.cpp`/`nezha_motor.cpp`/the request-collect timing, not the
+command layer this ticket touches), and the wire-level acceptance criterion
+above is satisfied regardless. Flagging prominently for the team lead /
+ticket 006: **real closed-loop motor motion is not currently confirmed
+working on the stand** — ticket 006's stand gate needs to budget real
+investigation into the collect timing (not just a `vel_filt_alpha`
+retune) before its own acceptance can be met. The robot was left in a
+safe, fully-neutral state (`DEV STOP`, `DEV WD 1000` restored) at the end
+of every session.
 
 ## Implementation Plan
 

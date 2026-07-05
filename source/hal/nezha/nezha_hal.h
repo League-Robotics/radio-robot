@@ -2,16 +2,25 @@
 // port (up to four), and orchestrates the split-phase bus schedule across
 // them.
 //
-// Design Rationale 3 (architecture-update.md): NezhaHal is a small, dumb
-// owner/factory over up to four ports — no left/right pairing, no port-
-// role special-casing. That belongs one tier up (Drivetrain / the DEV
-// command family's PORTS binding, both later tickets). NezhaHal only knows
-// about ports.
+// Sprint 079-004 gives this class two new roles on top of its 077 shape
+// (Design Rationale 3, architecture-update.md): it is now the BRICK
+// FLIP-FLOP SEQUENCER — a small activePort_/phase_ state machine that
+// issues at most one bus action (a 0x46 encoder request OR a settled
+// collect) per tick() slice, cycling only the ports some command has
+// actually addressed ("in-use" — see apply() below) — and the HAL's
+// DISTRIBUTION POINT — the two apply() overloads that mark ports in-use
+// and forward an addressed msg::MotorCommand to the right concrete
+// NezhaMotor(s), expanding broadcasts to every port. Neither role
+// reintroduces left/right pairing or port-role special-casing: apply()'s
+// addressing comes entirely from the caller (CommandProcessor's staged
+// DEV M target, Drivetrain's own port binding) — NezhaHal itself still
+// only knows about ports, never which one is "left."
 #pragma once
 
 #include <stdint.h>
 
 #include "com/i2c_bus.h"
+#include "hal/capability/hal_command.h"
 #include "hal/capability/motor.h"
 #include "hal/nezha/nezha_motor.h"
 #include "messages/motor.h"
@@ -31,11 +40,19 @@ class NezhaHal {
   // Primes all four ports' encoders (see NezhaMotor::begin()).
   void begin();
 
-  // Ticks all four ports in a fixed, deterministic ascending-port order
-  // (1, 2, 3, 4). source_old/robot/NezhaHAL.h's "right-before-left"
-  // convention existed for determinism, not a specific priority (per this
-  // ticket's acceptance criteria); ascending port order preserves that
-  // determinism at a tier with no L/R concept.
+  // The brick flip-flop sequencer (sprint 079-004; architecture-update.md
+  // "The flip-flop and the 078 base-class contract"). Idle (no port
+  // in-use): returns immediately, zero bus actions (decision 1). Otherwise
+  // issues exactly one bus-facing action per call: REQUEST_DUE fires the
+  // active in-use port's 0x46 encoder request (requestSample()) and
+  // advances to COLLECT_DUE; COLLECT_DUE checks bus_.clear(kNezhaDeviceAddr)
+  // — if the settle window has not yet elapsed, this call is a no-op pass;
+  // once clear, it collects (the active port's full NezhaMotor::tick(),
+  // the 078 base/leaf 5-step contract) and advances to the next in-use
+  // port's REQUEST_DUE. Two calls per main-loop pass (the sanctioned
+  // "slice 1 collects due, slice 2 requests/writes go out" double call,
+  // ticket 005) drive one full request/collect pair per pass under typical
+  // timing.
   void tick(uint32_t now);   // [ms]
 
   // Port-indexed accessor, port in [1, kPortCount]. Always returns the
@@ -46,11 +63,54 @@ class NezhaHal {
   // firmware.
   Motor& motor(uint32_t port);
 
+  // Distribution (sprint 079-004; architecture-update.md "The command-edge
+  // types"). Both overloads forward the addressed msg::MotorCommand(s) to
+  // the target NezhaMotor(s) via their own apply(); addressed (non-
+  // broadcast) targets are also marked in-use, which is what brings them
+  // into tick()'s cycling schedule (decision 1: sampling turns on because
+  // someone commanded that port, never as a side effect of a broadcast —
+  // see Design Rationale 5).
+  //
+  // allPorts==true never marks any port in-use, even though it still
+  // forwards addressed[0].command to every port's setter.
+  void apply(const CommandProcessorToHalCommand& cmd);
+
+  // Both wheels are always addressed (never a broadcast) — the Drivetrain's
+  // governed pair is exactly the ports its own DrivetrainConfig binds.
+  void apply(const DrivetrainToHalCommand& cmd);
+
  private:
+  // REQUEST_DUE: the next bus action is a fresh 0x46 request on
+  // activePort_. COLLECT_DUE: the next bus action (once
+  // bus_.clear(kNezhaDeviceAddr) confirms the settle window elapsed) is
+  // that same port's collect + full tick().
+  enum class Phase : uint8_t { REQUEST_DUE, COLLECT_DUE };
+
+  // motorAt(): the concrete NezhaMotor& behind a port, for the scheduler's
+  // and apply()'s internal use. motor() (public, above) returns the same
+  // object narrowed to the Hal::Motor faceplate — implemented in terms of
+  // this so the port-indexing switch exists exactly once.
+  NezhaMotor& motorAt(uint32_t port);
+
+  // The next in-use port at or after cur, wrapping 1..kPortCount. Only
+  // ever called when anyPortInUse() is true (tick()'s idle-schedule guard),
+  // so a match always exists; if none did, cur is returned unchanged
+  // (defensive — should not be reached).
+  uint32_t nextPortInUse(uint32_t cur) const;
+
+  // True if at least one port has ever been individually addressed (see
+  // apply()'s in-use marking) — the idle-schedule gate (decision 1).
+  bool anyPortInUse() const;
+
+  I2CBus& bus_;
   NezhaMotor motor1_;
   NezhaMotor motor2_;
   NezhaMotor motor3_;
   NezhaMotor motor4_;
+
+  uint32_t activePort_ = 1;
+  Phase phase_ = Phase::REQUEST_DUE;
+  bool portInUse_[kPortCount] = {false, false, false, false};
 };
 
 }  // namespace Hal

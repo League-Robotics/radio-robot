@@ -1,43 +1,56 @@
 // ---------------------------------------------------------------------------
-// main.cpp -- the dev loop (077-005): Communicator tick -> dispatch -> HAL
-// tick -> (if bound) Drivetrain tick/apply -> bound-motor tick ->
-// serial-silence watchdog check.
+// main.cpp -- the dev loop: sprint 079's three-beat "feed it, tick it, ask
+// it" shape (architecture-update.md "The Part-2 loop"; issue's Part 2).
 //
-// This supersedes 077-001/003/004's smoke wiring: the DEV command family
-// (commands/dev_commands.*) is now registered alongside the liveness family
-// (system_commands.*), and the HAL/Drivetrain instances built here are
-// actually driven by DEV M / DEV DT rather than sitting untouched.
+// This supersedes 077-001/003/004's smoke wiring and 079-004's minimal loop
+// adaptation: CommandProcessor/DevLoopState are now a pure transformer
+// (statements in, commands + replies out -- see dev_commands.h) and
+// main.cpp is the SOLE caller of Hal::NezhaHal::apply()/
+// Subsystems::Drivetrain::apply() for anything DEV-sourced, draining
+// DevLoopState's outbox once per pass instead of DEV handlers calling
+// either subsystem's write methods directly.
 //
-// Comms are a subsystem now (Subsystems::Communicator,
-// subsystems/communicator.h): its tick(now) is the command-out channel,
-// returning at most ONE complete line per iteration plus the channel it
-// arrived on (the edge's returnPath routes the reply). The old free-function
-// pollComms() and the stack line buffers it was threaded through are gone --
-// the Communicator internalizes the drivers and the line buffer.
+// The loop, exactly per architecture-update.md's "The Part-2 loop":
 //
-// Loop shape matches the locked sketch in clasi/sprints/077-greenfield-
-// faceplate-hal-drivetrain-and-dev-bench-system/issues/greenfield-rebuild-
-// faceplate-hal-in-a-fresh-source-old-tree-parked.md, Step 5 (comms poll
-// since folded into the Communicator subsystem's tick):
+//   hal.tick(now);                          // slice 1: due collects land
 //
-//   in = comm.tick(now);          // one line max; dispatch via CommandProcessor
-//   hal.tick(now);                // split-phase encoder schedule, all 4 ports
-//   if (drivetrainActive) {
-//       auto out = drivetrain.tick(now, left.state(), right.state());
-//       left.apply(out.left);
-//       right.apply(out.right);
+//   comm.tick(now);
+//   if (comm.hasStatement()) {
+//       in = comm.takeStatement();          // feed (copies line + returnPath)
+//       watchdog.feed(now);
+//       cmd.process(in.line, ...);           // parse -> stage into devState's outbox + replies
 //   }
-//   left.tick(now);                // staged commands execute (PID runs here)
-//   right.tick(now);
-//   watchdog.check(now);          // silence -> all neutral
 //
-// `left`/`right` are whichever two NezhaMotors DEV DT PORTS last bound
-// (DevLoopState::leftPort/rightPort, default 1/2) -- this loop never
-// hardcodes which ports they are. Note the bound pair is ticked TWICE per
-// iteration (once inside hal.tick()'s uniform 4-port sweep, once more
-// explicitly here) so a freshly drivetrain-governed target actuates in the
-// SAME cycle it was computed, rather than waiting for next iteration's
-// hal.tick() -- this is the locked shape, not an oversight.
+//   if (devState.hasHalCommand)        hal.apply(devState.halCommand);
+//   if (devState.hasDrivetrainCommand) drivetrain.apply(devState.drivetrainCommand);
+//
+//   if (drivetrain.active()) {
+//       drivetrain.tick(now, hal.motor(p.left).state(), hal.motor(p.right).state());
+//       if (drivetrain.hasCommand()) hal.apply(drivetrain.takeCommand());
+//   }
+//
+//   hal.tick(now);                          // slice 2: requests/writes go out
+//
+//   if (watchdog.check(now)) {
+//       hal.apply(buildBroadcastNeutral(...));        // applied immediately --
+//       drivetrain.apply(buildDrivetrainStop(...));   // main.cpp is top-of-tree
+//   }
+//
+// Same-pass latency (the design sketch's own worked Case 1): a statement is
+// fed, parsed, staged, the Drivetrain re-governs against fresh observations,
+// and slice 2 actuates -- all in one pass. `hal.tick()` is called TWICE per
+// iteration (slice 1 lets any due collect land before this pass's dispatch
+// reads state; slice 2 sends out whatever request/write this pass's
+// dispatch just staged) -- decision 6, replacing the old explicit bound-pair
+// re-tick hack with the sanctioned second call; NezhaHal's own flip-flop now
+// cycles every in-use port evenly, including whichever pair the Drivetrain
+// is bound to, with no main.cpp-level special-casing.
+//
+// `p.left`/`p.right` (Subsystems::DrivetrainPorts, from `drivetrain.ports()`)
+// are whichever two NezhaMotors `DEV DT PORTS` last bound -- this loop never
+// hardcodes which ports they are, and never holds its own copy of the
+// binding (DevLoopState's old leftPort/rightPort fields are gone; the
+// binding lives in DrivetrainConfig -- sprint 079 decision 8).
 //
 // Build gating: the DEV family (and the HAL/Drivetrain wiring it needs) is
 // compiled in only when ROBOT_DEV_BUILD is set (codal.json's "config"
@@ -167,6 +180,16 @@ int main() {
     static Subsystems::Drivetrain drivetrain;
     msg::DrivetrainConfig dtConfig;
     dtConfig.setTrackwidth(128.0f);   // [mm] bench placeholder -- tuned in ticket 7
+    // left_port/right_port (sprint 079 decision 8): the binding moved off
+    // DevLoopState and into DrivetrainConfig -- this is the 1:1 migration of
+    // the old DevLoopState::leftPort{1}/rightPort{2} member-initializer
+    // defaults (the robot's normal drive pair; the coupled bench rig uses
+    // `DEV DT PORTS 3 4` at runtime). Seeding this explicitly matters: an
+    // unseeded (zero-valued) port would address motor(0), which NezhaHal::
+    // motor() clamps to port 4 rather than trapping -- silently wrong, not a
+    // crash (architecture-update.md Migration Concerns).
+    dtConfig.setLeftPort(1);
+    dtConfig.setRightPort(2);
     drivetrain.configure(dtConfig);
 
     // --- Dev loop shared state: watchdog + DEV command wiring. ---
@@ -183,14 +206,18 @@ int main() {
         devState.motorConfigShadow[i] = defaultMotorConfigs[i];
     }
     // Seed the drivetrain CFG-delta shadow the same way, so the first
-    // `DEV DT CFG sync_gain=...` merges onto the SAME dtConfig the
-    // Drivetrain was actually configured with above (trackwidth=128),
-    // rather than an all-zero blank -- see DevLoopState's field comment.
+    // `DEV DT CFG sync_gain=...`/`DEV DT PORTS ...` merges onto the SAME
+    // dtConfig the Drivetrain was actually configured with above
+    // (trackwidth=128, ports=1,2), rather than an all-zero blank -- see
+    // DevLoopState's field comment.
     devState.drivetrainConfigShadow = dtConfig;
-    // Prime the capabilities cache for the default DEV DT PORTS binding
-    // (1, 2) -- see drivetrain.h's setMotorCapabilities() doc comment.
-    drivetrain.setMotorCapabilities(hal.motor(devState.leftPort).capabilities(),
-                                     hal.motor(devState.rightPort).capabilities());
+    // Prime the capabilities cache for the default DEV DT PORTS binding --
+    // read back via ports() (not a local copy) since the binding now lives
+    // in DrivetrainConfig -- see drivetrain.h's setMotorCapabilities() doc
+    // comment.
+    Subsystems::DrivetrainPorts bootPorts = drivetrain.ports();
+    drivetrain.setMotorCapabilities(hal.motor(bootPorts.left).capabilities(),
+                                     hal.motor(bootPorts.right).capabilities());
 
     // --- Command table: liveness (PING/VER/HELP/ECHO/ID) + DEV. ---
     std::vector<CommandDescriptor> allCommands = systemCommands();
@@ -207,36 +234,63 @@ int main() {
     while (true) {
         uint32_t now = uBit.systemTime();
 
-        Subsystems::CommunicatorToCommandProcessorCommand in = comm.tick(now);
-        if (in.line) {
+        hal.tick(now);   // slice 1: any due collect lands before this pass's dispatch reads state
+
+        comm.tick(now);
+        if (comm.hasStatement()) {
+            Subsystems::CommunicatorToCommandProcessorStatement in = comm.takeStatement();
             // Feed on any line, either channel, regardless of content or
             // dispatch outcome -- see dev_commands.h's watchdog contract.
             watchdog.feed(now);
+            // Parse happens inside process(): replies go out the
+            // statement's own return path directly (unaffected by this
+            // sprint); setpoint-shaped DEV commands land in devState's
+            // outbox instead of calling Hal/Drivetrain write methods --
+            // see dev_commands.h/.cpp's pure-transformer reshape.
             cmd.process(in.line,
                         in.returnPath == Subsystems::Channel::RADIO ? radioReply
                                                                     : serialReply,
                         &comm);
         }
 
-        hal.tick(now);
-
-        if (devState.drivetrainActive) {
-            Subsystems::DrivetrainToMotorCommand out = drivetrain.tick(
-                now,
-                hal.motor(devState.leftPort).state(),
-                hal.motor(devState.rightPort).state());
-            hal.motor(devState.leftPort).apply(out.left);
-            hal.motor(devState.rightPort).apply(out.right);
+        // Drain the outbox: main.cpp is the sole caller of
+        // hal.apply()/drivetrain.apply() for anything DEV-sourced.
+        if (devState.hasHalCommand) {
+            hal.apply(devState.halCommand);
+            devState.hasHalCommand = false;
+        }
+        if (devState.hasDrivetrainCommand) {
+            drivetrain.apply(devState.drivetrainCommand);
+            devState.hasDrivetrainCommand = false;
         }
 
-        // Bound pair ticks again here (on top of hal.tick()'s uniform sweep
-        // above) so a fresh drivetrain-governed target actuates THIS cycle --
-        // see the file header for why this is the locked shape, not a bug.
-        hal.motor(devState.leftPort).tick(now);
-        hal.motor(devState.rightPort).tick(now);
+        if (drivetrain.active()) {
+            // Binding queried, not duplicated -- ports() reads straight from
+            // DrivetrainConfig (sprint 079 decision 8; DevLoopState no
+            // longer holds its own leftPort/rightPort copy).
+            Subsystems::DrivetrainPorts p = drivetrain.ports();
+            drivetrain.tick(now, hal.motor(p.left).state(), hal.motor(p.right).state());
+            if (drivetrain.hasCommand()) {
+                hal.apply(drivetrain.takeCommand());
+            }
+        }
+
+        // Slice 2: whatever request/write this pass's dispatch (or the
+        // Drivetrain's own re-governed target) just staged goes out now --
+        // the sanctioned second hal.tick() call (architecture-update.md
+        // decision 6) replaces the old explicit bound-pair re-tick hack.
+        hal.tick(now);
 
         if (watchdog.check(now)) {
-            neutralizeAll(devState);
+            // Applied IMMEDIATELY, not staged via the outbox -- main.cpp is
+            // the top of the call tree, already the visible mover of every
+            // command; an emergency stop gains nothing from an extra pass
+            // of outbox latency (architecture-update.md's narrow, deliberate
+            // exception to "never call apply() outside main/the HAL"). The
+            // SAME buildBroadcastNeutral()/buildDrivetrainStop() construction
+            // path `DEV STOP`'s handler stages is used here directly.
+            hal.apply(buildBroadcastNeutral(msg::Neutral::BRAKE));
+            drivetrain.apply(buildDrivetrainStop(msg::Neutral::BRAKE));
             char wbuf[32];
             CommandProcessor::replyEvt(wbuf, sizeof(wbuf), "dev_watchdog", nullptr,
                                        serialReply, &comm);
@@ -253,8 +307,9 @@ int main() {
     while (true) {
         uint32_t now = uBit.systemTime();
 
-        Subsystems::CommunicatorToCommandProcessorCommand in = comm.tick(now);
-        if (in.line) {
+        comm.tick(now);
+        if (comm.hasStatement()) {
+            Subsystems::CommunicatorToCommandProcessorStatement in = comm.takeStatement();
             cmd.process(in.line,
                         in.returnPath == Subsystems::Channel::RADIO ? radioReply
                                                                     : serialReply,

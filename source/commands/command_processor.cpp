@@ -6,7 +6,6 @@
 // all commands now go through the table-dispatch path.
 
 #include "command_processor.h"
-#include "command_queue.h"
 #include "arg_parse.h"
 #include <cstring>
 #include <cstdio>
@@ -153,31 +152,11 @@ void CommandProcessor::dispatchTable(char** tokens, int ntok, KVPair* kvs, int n
 
     // Successful parse: record this descriptor's flags so
     // lastCommandResetsWatchdog() reflects the command that was just
-    // dispatched/enqueued, regardless of which branch below runs.
+    // dispatched, then dispatch immediately (decision 5: the vestigial
+    // CommandQueue -- wired to nothing -- is deleted; every command goes
+    // straight to its handlerFn now).
     _lastDispatchFlags = desc.flags;
-
-    if (_queue != nullptr) {
-        // Queue mode: build a ParsedCommand and enqueue it instead of
-        // dispatching immediately. The caller is responsible for draining
-        // the queue via dequeueOne().
-        ParsedCommand pc;
-        pc.desc    = &desc;
-        pc.args    = args;
-        pc.replyFn = effectiveFn;
-        pc.replyCtx = effectiveCtx;
-        // corrId is a local char array; copy into pc.corrId (8-byte field).
-        int cidLen = 0;
-        while (corrId[cidLen] != '\0' && cidLen < (int)(sizeof(pc.corrId) - 1)) {
-            pc.corrId[cidLen] = corrId[cidLen];
-            ++cidLen;
-        }
-        pc.corrId[cidLen] = '\0';
-        if (!_queue->push_back(pc)) {
-            replyErr(rbuf, sizeof(rbuf), "full", nullptr, corrId, effectiveFn, effectiveCtx);
-        }
-    } else {
-        desc.handlerFn(args, corrId, effectiveFn, effectiveCtx, desc.handlerCtx);
-    }
+    desc.handlerFn(args, corrId, effectiveFn, effectiveCtx, desc.handlerCtx);
 }
 
 // ---------------------------------------------------------------------------
@@ -414,22 +393,4 @@ void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
     }
 
     dispatchTable(tokens, ntok, kvs, nkv, corr_id, replyFn, ctx);
-}
-
-// ---------------------------------------------------------------------------
-// dequeueOne — dispatch one item from q directly (bypasses queue branch).
-//
-// Calls the descriptor's handlerFn directly rather than going through process()
-// to avoid re-enqueuing when _queue is still set on this CommandProcessor.
-// ---------------------------------------------------------------------------
-
-bool CommandProcessor::dequeueOne(CommandQueue& q)
-{
-    ParsedCommand pc;
-    if (!q.pop_front(pc)) return false;
-    if (pc.desc != nullptr) {
-        pc.desc->handlerFn(pc.args, pc.corrId, pc.replyFn, pc.replyCtx,
-                           pc.desc->handlerCtx);
-    }
-    return true;
 }

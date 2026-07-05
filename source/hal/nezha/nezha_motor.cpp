@@ -1,8 +1,24 @@
 #include "hal/nezha/nezha_motor.h"
 #include "hal/nezha/motor_slew.h"
 
+#ifndef HOST_BUILD
 #include "MicroBit.h"   // MICROBIT_OK, system_timer_current_time_us() (vendor SDK; excluded from the
                         // no-units-in-identifiers rename per .claude/rules/coding-standards.md)
+#else
+// HOST_BUILD (sprint 079-004's flip-flop host harness,
+// tests/sim/unit/nezha_flipflop_harness.cpp): no CODAL, so no MicroBit.h.
+// Mirrors i2c_bus.h's own #ifndef HOST_BUILD guard. MICROBIT_OK is CODAL's
+// well-known convention (0 == success — see i2c_bus_host.cpp's identical
+// note); system_timer_current_time_us() delegates to I2CBus's own shared,
+// test-settable fake clock (nezha_motor.h already pulls in com/i2c_bus.h)
+// so writeRawDuty()'s 40ms write-rate throttle stays deterministic and
+// test-controllable under the SAME clock the scripted bus itself runs
+// against, rather than reading a wall clock that does not exist here.
+namespace {
+constexpr int MICROBIT_OK = 0;
+uint64_t system_timer_current_time_us() { return I2CBus::clock(); }   // [us]
+}  // namespace
+#endif
 #include <math.h>
 
 // ---------------------------------------------------------------------------
@@ -170,10 +186,16 @@ void NezhaMotor::tick(uint32_t nowMs)
     // 1. Standstill-guarded reset dispatch.
     processResetIfPending(nowMs);
 
-    // 2. Per-tick position sample — settle-read path (0x46 write -> 4ms
-    // post-write busy-wait -> 4-byte read, no pre-write idle), exactly as
-    // source_old's Motor::tick() via readEncoderSettle().
-    float pos = readEncoderSettle();
+    // 2. Per-tick position sample — sprint 079-004: collects a sample that
+    // NezhaHal's brick flip-flop REQUESTED in a previous slice (requestSample()
+    // -> requestEncoder()) and has already confirmed is safe to collect
+    // (bus_.clear(kNezhaDeviceAddr) gated the call into this tick() at all —
+    // see nezha_hal.cpp). Non-blocking: no write here, no spin, just the 4-byte
+    // read. Replaces the former fused, always-blocking readEncoderSettle()
+    // (deleted — see nezha_motor.h).
+    int32_t raw = collectEncoder();
+    float pos = (static_cast<float>(raw) / 10.0f)
+              * config_.travel_calib * static_cast<float>(config_.fwd_sign);
 
     float elapsedTime = 0.0f;
     bool haveElapsed = false;
@@ -357,7 +379,37 @@ void NezhaMotor::writeRawDuty(float duty)
     // |ΔPWM| slew cap — a stop is the explicit, unclamped, immediate-write
     // exemption; every other write is stepped by at most config_.slew_rate
     // toward the requested target.
-    int8_t written = stopping
+    //
+    // 079-006 root-cause fix: the very first write for a port sees
+    // lastWrittenPct_ still at its -128 "no write yet" sentinel.
+    // MotorSlew::clampStep() has no concept of that sentinel — fed -128
+    // unconditionally, it computes a step toward pct that OVERSHOOTS the
+    // valid ±100 range on the low side (e.g. clampStep(-128, 30, 25) = -103)
+    // and, critically, has the OPPOSITE SIGN of the actually-requested
+    // duty. writeMotorRun() below dispatches direction from written's sign,
+    // so this sent a full-swing, wrong-direction 0x60 write (an unrequested
+    // reversal, with an out-of-spec speed byte > the register's documented
+    // 0-100 range) as literally the first command ever issued to a fresh
+    // port -- exactly docs/knowledge/2026-07-04-encoder-wedge.md's confirmed
+    // reversal-write-train latch trigger, on the very first tick a
+    // never-before-addressed port is ever driven. Confirmed on hardware
+    // (079-006 stand campaign): every fresh port's first DUTY/VEL command
+    // latched its 0x46 readback (wedged=1 within ~1s, pos/vel frozen at the
+    // post-reset baseline forever after, surviving even a genuine
+    // standstill-guarded hard reset -- consistent with the doc's
+    // "repeated abuse escalates to a persistent latch" escalation path
+    // once this fires on every cold-started test). The armor's own
+    // reversal-dwell gate (Motor::armoredWrite(), 078) cannot catch this:
+    // it compares the commanded float duty against lastRequestedDuty_
+    // (sane 0.0f default), sees no sign change relative to that baseline,
+    // and forwards straight to writeRawDuty() -- the bogus reversal is
+    // manufactured one layer further down, from a SEPARATE sentinel this
+    // function alone owns. Fix: treat "no write yet" as the same
+    // unclamped-write exemption stop() already gets -- there is no prior
+    // direction to slew from, so the first write goes straight to the
+    // requested pct, matching what a genuinely fresh motor should see.
+    bool firstWrite = (lastWrittenPct_ == -128);
+    int8_t written = (stopping || firstWrite)
         ? pct
         : MotorSlew::clampStep(lastWrittenPct_, pct,
                                 static_cast<uint8_t>(config_.slew_rate));
@@ -390,7 +442,31 @@ void NezhaMotor::writeMotorRun(uint8_t direction, uint8_t speed)
         0xF5,
         0x00
     };
-    bus_.write((kAddr << 1), buf, 8, false);
+    // 079-006 root-cause fix: postClear=4000 holds off the next transaction
+    // to 0x10 (in this single-in-use-port flip-flop, that's the SAME port's
+    // own next 0x46 encoder request) for a real >=4ms gap after this duty
+    // write, mirroring requestEncoder()'s own postClear on the other side of
+    // the cycle. Before this fix, writeMotorRun() carried no clearance at
+    // all: a single in-use port's own REQUEST_DUE fires again on the very
+    // next NezhaHal::tick() call with no other port to interleave, so the
+    // 0x46 request could re-issue with ~0us real gap since this write ended.
+    // Confirmed on hardware (079-006 stand campaign, via pyOCD/gdb
+    // backtraces caught mid-stall): that back-to-back cadence reliably
+    // parked the firmware for several seconds at a time inside vendor CODAL
+    // code (libraries/codal-nrf52/source/NRF52I2C.cpp's waitForStop(),
+    // stuck spinning up to its own ~10s internal timeout waiting for a
+    // TWIM STOPPED event that never arrived) -- the entire main loop,
+    // including serial command processing, froze for the stall's duration.
+    // The OLD fused/blocking readEncoderSettle() never hit this because its
+    // own hand-rolled spins gave every 0x10 transaction real elapsed time on
+    // both sides; the split-phase design's whole point (issuing more bus
+    // work per main-loop pass) removed that incidental protection. Long-
+    // duration hardware soaks (tests/bench/, see this ticket's stand
+    // results) confirmed this single postClear addition (paired with
+    // requestEncoder()'s own preClear=4000 below) collapses the multi-
+    // second stalls down to the ordinary, already-documented USB-CDC
+    // transport drop rate.
+    bus_.write((kNezhaDeviceAddr << 1), buf, 8, false, /*preClear=*/0, /*postClear=*/4000);
 }
 
 void NezhaMotor::writePositionMove(float positionDeg)
@@ -415,71 +491,43 @@ void NezhaMotor::writePositionMove(float positionDeg)
         kShortestPath,
         static_cast<uint8_t>(angle & 0xFF)
     };
-    bus_.write((kAddr << 1), buf, 8, false);
-
-    // BUG-CRITICAL post-write busy-wait (ported verbatim — see
-    // source_old/hal/real/Motor.cpp::moveToAngle() for the vendor
-    // rationale: no task/fiber may interleave during this window).
-    uint64_t deadline = system_timer_current_time_us() + 4000;
-    while (system_timer_current_time_us() < deadline) {}
+    // BUG-CRITICAL post-write settle (ported verbatim — see source_old/
+    // hal/real/Motor.cpp::moveToAngle() for the vendor rationale: no task/
+    // fiber may interleave during this window). Sprint 079: the busy-wait
+    // moves into I2CBus itself as a lazy postClear deadline on this write
+    // (architecture-update.md's "I2CBus lazy-clearance mechanism" section)
+    // instead of a hand-rolled spin here.
+    bus_.write((kNezhaDeviceAddr << 1), buf, 8, false, /*preClear=*/0, /*postClear=*/4000);
 }
 
 // ---------------------------------------------------------------------------
 // Encoder reads — all ported byte-for-byte from source_old/hal/real/
 // Motor.cpp. See nezha_motor.h for which of these tick() actually calls.
+//
+// readEncoderSettle() (the fused, always-blocking write -> 4ms spin -> read)
+// is DELETED as of sprint 079-004 — its sole caller was tick()'s step 2,
+// which now calls collectEncoder() instead (see tick() above). Deleting
+// rather than keeping it as unreferenced dead code matches 078's Design
+// Rationale 6 precedent (writeDuty()'s reversal-exemption branch).
 // ---------------------------------------------------------------------------
-
-float NezhaMotor::readEncoderSettle()
-{
-    // Settle-only read — skips the 4ms pre-write bus-idle (redundant in the
-    // fixed-rate tick loop, which leaves the bus naturally idle between
-    // ticks). Cost: ~4ms. This is the path tick() uses every cycle.
-    static constexpr uint32_t kSettleUs = 4000;
-    uint8_t cmd[8] = { 0xFF, 0xF9, static_cast<uint8_t>(config_.port), 0x00, 0x46, 0x00, 0xF5, 0x00 };
-    int writeResult = bus_.write((kAddr << 1), cmd, 8, false);
-    uint64_t deadline = system_timer_current_time_us() + kSettleUs;
-    while (system_timer_current_time_us() < deadline) {}
-    uint8_t resp[4] = { 0, 0, 0, 0 };
-    int readResult = bus_.read((kAddr << 1), resp, 4, false);
-
-    connected_ = (writeResult == MICROBIT_OK && readResult == MICROBIT_OK);
-
-    int32_t raw;
-    if (!connected_) {
-        // CR-03 pattern: hold the last known-good value instead of
-        // computing from a zeroed response buffer (which would read as a
-        // fabricated large jump).
-        raw = lastGoodRawEnc_;
-    } else {
-        raw = static_cast<int32_t>(
-            (static_cast<uint32_t>(resp[3]) << 24) |
-            (static_cast<uint32_t>(resp[2]) << 16) |
-            (static_cast<uint32_t>(resp[1]) << 8) |
-            static_cast<uint32_t>(resp[0]));
-        raw -= encOffset_;
-        lastGoodRawEnc_ = raw;
-    }
-    return (static_cast<float>(raw) / 10.0f) * config_.travel_calib * static_cast<float>(config_.fwd_sign);
-}
 
 int32_t NezhaMotor::readEncoderAtomicRaw()
 {
     // Full vendor timing: 4ms pre-write bus-idle -> 0x46 write -> 4ms
     // post-write settle -> read 4 bytes. Cost: ~8ms. Used only by
-    // hardReset()'s median-of-3 snapshot + readback verification.
+    // hardReset()'s median-of-3 snapshot + readback verification. Sprint
+    // 079: both hand-rolled spins move into I2CBus itself as lazy
+    // preClear/postClear deadlines on the write (architecture-update.md's
+    // "I2CBus lazy-clearance mechanism" section) instead of manual
+    // while-loops here.
     static constexpr uint32_t kDelayUs = 4000;
 
-    uint64_t deadline = system_timer_current_time_us() + kDelayUs;
-    while (system_timer_current_time_us() < deadline) {}
-
     uint8_t cmd[8] = { 0xFF, 0xF9, static_cast<uint8_t>(config_.port), 0x00, 0x46, 0x00, 0xF5, 0x00 };
-    int writeResult = bus_.write((kAddr << 1), cmd, 8, false);
-
-    deadline = system_timer_current_time_us() + kDelayUs;
-    while (system_timer_current_time_us() < deadline) {}
+    int writeResult = bus_.write((kNezhaDeviceAddr << 1), cmd, 8, false,
+                                 /*preClear=*/kDelayUs, /*postClear=*/kDelayUs);
 
     uint8_t resp[4] = { 0, 0, 0, 0 };
-    int readResult = bus_.read((kAddr << 1), resp, 4, false);
+    int readResult = bus_.read((kNezhaDeviceAddr << 1), resp, 4, false);
 
     connected_ = (writeResult == MICROBIT_OK && readResult == MICROBIT_OK);
     if (!connected_) {
@@ -496,30 +544,74 @@ int32_t NezhaMotor::readEncoderAtomicRaw()
     return result;
 }
 
+void NezhaMotor::requestSample()
+{
+    // Public split-phase phase-1 entry point (sprint 079-004) — the ONLY
+    // caller is NezhaHal's brick flip-flop sequencer (nezha_hal.cpp's
+    // REQUEST_DUE case), once per bus slice, only for the currently-active
+    // in-use port. See nezha_motor.h's declaration for why this is not a
+    // Hal::Motor virtual.
+    requestEncoder();
+}
+
 void NezhaMotor::requestEncoder()
 {
     // Split-phase phase 1 — ported byte-for-byte from Motor::
-    // requestEncoder(). Not called by tick() this ticket: source_old's own
-    // live NezhaHAL::tick() also does not call this pair (it uses
-    // readEncoderSettle() per motor, same as this class's tick()) — this
-    // pair exists in source_old today as an available-but-currently-unused
-    // API surface (still required by IVelocityMotor there), and this port
-    // preserves that same shape/availability rather than inventing a new
-    // call site for it.
+    // requestEncoder(). As of sprint 079-004 this IS wired into the live
+    // schedule: NezhaHal::tick()'s REQUEST_DUE case calls requestSample()
+    // (above), which wraps this. postClear=4000 attaches the settle window
+    // to THIS write's I2CBus deadline (per-device, not per-call-site),
+    // holding off any subsequent transaction to 0x10 -- including a stray
+    // 0x60 velocity write mid-settle -- until collectEncoder() (or any
+    // other 0x10 call) is due (architecture-update.md's "I2CBus
+    // lazy-clearance mechanism" section, constraint 4).
+    //
+    // 079-006 root-cause fix: preClear=4000 (originally 0) holds THIS write
+    // back until a real >=4ms has elapsed since the LAST transaction to
+    // 0x10 -- whatever it was (this same port's own preceding duty write in
+    // the common single-in-use-port case; another port's traffic when 2+
+    // are in use). Ticket 004/005 landed this write with no preClear at
+    // all, on the theory the flip-flop's own scheduling gap would always
+    // be ample (the way the old fused readEncoderSettle()'s per-tick
+    // cadence always left slack) -- confirmed FALSE on hardware for a
+    // single in-use port: REQUEST_DUE fires again on the very next
+    // NezhaHal::tick() call with no other port to interleave, so this
+    // write could re-issue with ~0us real gap since the preceding
+    // COLLECT_DUE's duty write. Root-caused via pyOCD/gdb backtraces caught
+    // mid-stall (this ticket's stand campaign): the firmware was parked for
+    // several seconds inside vendor CODAL's NRF52I2C::waitForStop()
+    // (libraries/codal-nrf52/source/NRF52I2C.cpp), spinning toward its own
+    // ~10s internal timeout waiting for a TWIM STOPPED event that never
+    // arrived -- the whole main loop (serial included) froze for the
+    // stall's duration. Restoring the real ">=4ms since the last 0x10
+    // transaction" gap the old fused code always had (paired with
+    // writeMotorRun()'s new postClear=4000 below) collapsed these stalls
+    // down to the ordinary, already-documented USB-CDC transport drop rate
+    // in long-duration hardware soaks (see this ticket's stand results).
     uint8_t cmd[8] = { 0xFF, 0xF9, static_cast<uint8_t>(config_.port), 0x00, 0x46, 0x00, 0xF5, 0x00 };
-    int writeResult = bus_.write((kAddr << 1), cmd, 8, false);
+    int writeResult = bus_.write((kNezhaDeviceAddr << 1), cmd, 8, false,
+                                 /*preClear=*/4000, /*postClear=*/4000);
     pendingEncRequestOk_ = (writeResult == MICROBIT_OK);
 }
 
 int32_t NezhaMotor::collectEncoder()
 {
     // Split-phase phase 2 — ported byte-for-byte from Motor::
-    // collectEncoder(). See requestEncoder()'s comment for why this is not
-    // wired into tick() this ticket.
+    // collectEncoder(), PLUS the one line it was missing to be tick()-safe
+    // (sprint 079-004): connected_ now reflects BOTH halves of the split
+    // transaction (the request's write status AND this collect's read
+    // status), not just the read — a request whose 0x46 write itself
+    // failed must not be reported as connected merely because the
+    // subsequent read happened to succeed against stale/garbage state.
+    // As of this ticket, tick()'s step 2 calls this directly (see tick()
+    // above) once NezhaHal's flip-flop has confirmed the settle window
+    // elapsed (bus_.clear(kNezhaDeviceAddr)).
     uint8_t resp[4] = { 0, 0, 0, 0 };
-    int readResult = bus_.read((kAddr << 1), resp, 4, false);
+    int readResult = bus_.read((kNezhaDeviceAddr << 1), resp, 4, false);
 
-    if (!pendingEncRequestOk_ || readResult != MICROBIT_OK) {
+    connected_ = pendingEncRequestOk_ && (readResult == MICROBIT_OK);
+
+    if (!connected_) {
         return lastGoodRawEnc_;
     }
 
@@ -588,12 +680,12 @@ void NezhaMotor::softRebaseline()
 {
     // Ported from source_old's Motor::rebaselineSoft() (064-003):
     // software-only encoder rebaseline — folds the already-tick-cached
-    // lastPosition_ (populated by this tick's readEncoderSettle(), not a
+    // lastPosition_ (populated by this tick's collectEncoder() call, not a
     // new atomic read) back into raw tenths-of-degrees and adds it to
     // encOffset_, then zeroes the cache exactly as hardReset()'s success
     // path does. Issues NO I2C transaction at all.
     //
-    // Inverse of readEncoderSettle()'s conversion (mm = (raw/10) *
+    // Inverse of tick()'s collectEncoder()-based conversion (mm = (raw/10) *
     // travel_calib * fwd_sign): rawDelta = (mm / (travel_calib * fwd_sign))
     // * 10. The new tree has one travel_calib/fwd_sign per port, not per
     // L/R side (nezha_motor.h's class comment, Design Rationale 3), so no
@@ -633,7 +725,7 @@ void NezhaMotor::timedMove(uint8_t dir, int16_t value, uint8_t mode)
         mode,
         static_cast<uint8_t>(static_cast<uint16_t>(value) & 0xFF)
     };
-    bus_.write((kAddr << 1), buf, 8, false);
+    bus_.write((kNezhaDeviceAddr << 1), buf, 8, false);
 }
 
 void NezhaMotor::resetHome()
@@ -648,7 +740,7 @@ void NezhaMotor::resetHome()
         0x00, 0xF5,
         0x00
     };
-    bus_.write((kAddr << 1), buf, 8, false);
+    bus_.write((kNezhaDeviceAddr << 1), buf, 8, false);
 }
 
 void NezhaMotor::setGlobalSpeed(uint8_t speed)
@@ -667,7 +759,7 @@ void NezhaMotor::setGlobalSpeed(uint8_t speed)
         0x00,
         static_cast<uint8_t>(speedEnc & 0xFF)
     };
-    bus_.write((kAddr << 1), buf, 8, false);
+    bus_.write((kNezhaDeviceAddr << 1), buf, 8, false);
 }
 
 bool NezhaMotor::readVersion(uint8_t& maj, uint8_t& min, uint8_t& patch)
@@ -679,13 +771,13 @@ bool NezhaMotor::readVersion(uint8_t& maj, uint8_t& min, uint8_t& patch)
         0x88,
         0x00, 0x00, 0x00
     };
-    int writeResult = bus_.write((kAddr << 1), cmd, 8, false);
+    int writeResult = bus_.write((kNezhaDeviceAddr << 1), cmd, 8, false);
     if (writeResult != MICROBIT_OK) {
         maj = min = patch = 0;
         return false;
     }
     uint8_t resp[3] = { 0, 0, 0 };
-    int readResult = bus_.read((kAddr << 1), resp, 3, false);
+    int readResult = bus_.read((kNezhaDeviceAddr << 1), resp, 3, false);
     if (readResult != MICROBIT_OK) {
         maj = min = patch = 0;
         return false;

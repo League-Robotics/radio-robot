@@ -48,10 +48,12 @@ struct DrivetrainCommand {
     } control = {};
 
     Opt<bool> seed = {};
+    Opt<bool> standby = {};
 
     // --- getters ---
     ControlKind get_control_kind() const { return control_kind; }
     const Opt<bool>& get_seed() const { return seed; }
+    const Opt<bool>& get_standby() const { return standby; }
 
     // --- chainable setters (Command/Config only) ---
     DrivetrainCommand& setTwist(const BodyTwist3& v) {
@@ -76,6 +78,10 @@ struct DrivetrainCommand {
     }
     DrivetrainCommand& setSeed(bool v) {
         seed.has = true; seed.val = v;
+        return *this;
+    }
+    DrivetrainCommand& setStandby(bool v) {
+        standby.has = true; standby.val = v;
         return *this;
     }
 };
@@ -157,6 +163,8 @@ struct DrivetrainConfig {
     float ekf_r_enc_v = 0.0f;
     uint32_t lag_otos = 0;
     int32_t drivetrain_type = 0;
+    uint32_t left_port = 0;
+    uint32_t right_port = 0;
 
     // --- getters ---
     int32_t get_fwd_sign_l() const { return fwd_sign_l; }
@@ -200,6 +208,8 @@ struct DrivetrainConfig {
     float get_ekf_r_enc_v() const { return ekf_r_enc_v; }
     uint32_t get_lag_otos() const { return lag_otos; }
     int32_t get_drivetrain_type() const { return drivetrain_type; }
+    uint32_t get_left_port() const { return left_port; }
+    uint32_t get_right_port() const { return right_port; }
 
     // --- chainable setters (Command/Config only) ---
     DrivetrainConfig& setFwdSignL(int32_t v) { fwd_sign_l = v; return *this; }
@@ -241,6 +251,8 @@ struct DrivetrainConfig {
     DrivetrainConfig& setEkfREncV(float v) { ekf_r_enc_v = v; return *this; }
     DrivetrainConfig& setLagOtos(uint32_t v) { lag_otos = v; return *this; }
     DrivetrainConfig& setDrivetrainType(int32_t v) { drivetrain_type = v; return *this; }
+    DrivetrainConfig& setLeftPort(uint32_t v) { left_port = v; return *this; }
+    DrivetrainConfig& setRightPort(uint32_t v) { right_port = v; return *this; }
 };
 
 // DrivetrainCapabilities

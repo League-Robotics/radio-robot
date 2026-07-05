@@ -1504,14 +1504,23 @@ A future production firmware flips the define to `0` and `DEV` disappears
 (§15) — same idea, different gating mechanism (`#if` here vs. a CMake
 source-file exclusion there).
 
-`DEV` drives the HAL directly for bench bring-up: individual motors by
-**port** (1..4 — matching how `NezhaHal` instantiates one `NezhaMotor` per
-port; never an L/R role name) and, through a bound port pair, the
-`Drivetrain` subsystem. Every `DEV` handler that changes a motor or
-drivetrain's commanded state builds a `msg::MotorCommand`/
-`msg::DrivetrainCommand` and dispatches it through `apply()` — the full
-message plane, capability validation included — rather than calling a
-primitive setter directly. Replies use the standard taxonomy exclusively
+`DEV` drives the HAL for bench bring-up: individual motors by **port**
+(1..4 — matching how `NezhaHal` instantiates one `NezhaMotor` per port;
+never an L/R role name) and, through a bound port pair, the `Drivetrain`
+subsystem. Every `DEV` handler that changes a motor or drivetrain's
+commanded state builds a `msg::MotorCommand`/`msg::DrivetrainCommand`,
+pre-validates it against the target's `capabilities()`
+(`Hal::motorCommandAllowed()` for motor commands — the same capability gate
+`Motor::apply()` itself uses), and **stages** it into `DevLoopState`'s
+per-consumer outbox (`hasHalCommand`/`hasDrivetrainCommand`) rather than
+calling `apply()` directly — `main.cpp`'s loop is the sole caller of
+`Hal::NezhaHal::apply()`/`Subsystems::Drivetrain::apply()` for anything
+DEV-sourced, draining the outbox once per pass (sprint 079,
+architecture-update.md's "The processor is a pure transformer"). `OK` still
+means parsed + validated + delivered-for-staging — the same wire behavior as
+before this reshape (pre-validating against the same capability gate makes
+the guarantee before staging instead of after applying, with no observable
+difference at the wire). Replies use the standard taxonomy exclusively
 (§3): `OK`/`ERR`, `EVT dev_watchdog` for the one asynchronous event this
 family emits. No new reply tag is introduced.
 
@@ -1553,6 +1562,13 @@ normal drive pair). The coupled PID/governor bench rig uses ports `3 4`
 (two motors with mechanically linked shafts — running one loads the
 other). The binding **persists** across `DEV STOP` and a serial-silence
 watchdog neutral event; it resets only on reboot.
+
+Sprint 079: the binding is now backed by `DrivetrainConfig.left_port`/
+`right_port` (read via `Subsystems::Drivetrain::ports()`) rather than a
+`DevLoopState` field — a config-plane statement like any other `CFG` key,
+per architecture-update.md's "Config-plane vs. command-plane". The wire
+text is unchanged: `DEV DT PORTS <left> <right>` → `OK DEV DT
+ports=<left>,<right>`.
 
 ### `DEV M <n> …` — Single-Motor Control
 
@@ -1828,7 +1844,7 @@ Sets the serial-silence watchdog's window at runtime. Default at boot:
 
 ### Serial-Silence Watchdog — Non-Negotiable
 
-Every `DEV`/liveness command **line** that arrives on either comms channel
+Every `DEV`/liveness statement line that arrives on either comms channel
 (serial or radio) resets a wall-clock timer — regardless of the line's
 content or whether it parsed to a known verb. If no line arrives within
 the current window, the firmware:

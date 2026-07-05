@@ -2,7 +2,7 @@
 id: 079
 title: 'Tick model and command flow: I2C lazy clearance, brick flip-flop, held-output
   faceplates, statements rename'
-status: ticketing
+status: done
 branch: sprint/079-tick-model-and-command-flow-i2c-lazy-clearance-brick-flip-flop-held-output-faceplates-statements-rename
 use-cases: []
 issues:

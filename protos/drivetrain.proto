@@ -33,6 +33,13 @@ message DrivetrainCommand {
     SetPose      pose    = 4;  // imperative pose re-anchor
   }
   optional bool seed = 5;  // immediate-seed (S-command semantics)
+  // standby: relinquish drivetrain authority, no mode change (079: Drivetrain-
+  // owned authority arbitration). Rides beside the oneof exactly like `seed`
+  // above -- Drivetrain::apply() processes the oneof first, then this
+  // side-channel, so `{control=neutral, standby=true}` sets mode AND drops
+  // authority in one call. See architecture-update.md "Authority
+  // arbitration".
+  optional bool standby = 6;
 }
 
 // Read-only snapshot of the drivetrain's belief and diagnostics.
@@ -111,6 +118,11 @@ message DrivetrainConfig {
   uint32 lag_otos             = 38;
   // Drivetrain type selector (kinematics variant)
   int32  drivetrain_type      = 39;
+  // Bound motor-port pair (079: moved from DevLoopState::leftPort/rightPort
+  // -- which wheels are mine is the same kind of fact as my trackwidth).
+  // `DEV DT PORTS <l> <r>` merges these two fields; wire text unchanged.
+  uint32 left_port            = 40;
+  uint32 right_port           = 41;
 }
 
 // Declared drivetrain capabilities.

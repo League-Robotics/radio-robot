@@ -1,6 +1,9 @@
 #pragma once
 #ifndef HOST_BUILD
 #include "MicroBit.h"
+#else
+#include <deque>
+#include <vector>
 #endif
 #include <stdint.h>
 
@@ -51,6 +54,11 @@ public:
 
 #ifndef HOST_BUILD
     explicit I2CBus(MicroBitI2C& bus);
+#else
+    // HOST_BUILD scripted fake — no MicroBitI2C to wire. See the
+    // "HOST_BUILD scripted-fake surface" section below (source/com/
+    // i2c_bus_host.cpp) for the script/clock API this fork adds.
+    I2CBus();
 #endif
 
     // -----------------------------------------------------------------------
@@ -58,10 +66,21 @@ public:
     //
     // address: 8-bit wire address (7-bit addr << 1), as the callers pass it.
     // Returns: CODAL status int (MICROBIT_OK == 0 on success).
+    //
+    // preClear/postClear (// [us], default 0): lazy per-device clearance
+    // timers (architecture-update.md's "I2CBus lazy-clearance mechanism"
+    // section). At entry, BEFORE the re-entrancy guard's critical section,
+    // the call spins until max(slot.readyAt, slot.lastEnd + preClear); after
+    // the transaction, slot.lastEnd is stamped to now and slot.readyAt to
+    // lastEnd + postClear. Defaults collapse the entry deadline to lastEnd,
+    // already in the past by the next call, so every 4-argument call site is
+    // byte-identical to before this parameter pair existed.
     // -----------------------------------------------------------------------
 
-    int write(uint16_t address, uint8_t* data, int len, bool repeated = false);
-    int read (uint16_t address, uint8_t* data, int len, bool repeated = false);
+    int write(uint16_t address, uint8_t* data, int len, bool repeated = false,
+              uint32_t preClear = 0, uint32_t postClear = 0);
+    int read (uint16_t address, uint8_t* data, int len, bool repeated = false,
+              uint32_t preClear = 0, uint32_t postClear = 0);
 
     // -----------------------------------------------------------------------
     // Per-device statistics (keyed by 7-bit address)
@@ -75,6 +94,20 @@ public:
 
     /** Last non-OK CODAL status returned for the device. 0 if no errors. */
     int lastErr(uint16_t addr) const;
+
+    // -----------------------------------------------------------------------
+    // Lazy per-device clearance timers — non-spinning peek.
+    // -----------------------------------------------------------------------
+
+    /** True if the device at the bare 7-bit addr7 is past its clearance
+     *  deadline (write()/read()'s postClear-derived readyAt) — the
+     *  non-spinning counterpart to the entry-side spin inside write()/
+     *  read(). Callers poll this before a would-be-blocking collect to
+     *  decide whether the wait has already elapsed. Takes the SAME 7-bit
+     *  convention as txnCount()/errCount()/lastErr() — NOT the 8-bit wire
+     *  address write()/read() take (an easy off-by-one-bit trap). A device
+     *  never transacted with (no slot yet) is always clear. */
+    bool clear(uint16_t addr7) const;
 
     // -----------------------------------------------------------------------
     // Re-entrancy diagnostics
@@ -120,6 +153,40 @@ public:
     void setIrqGuard(bool on) { _irqGuard = on; }
     bool irqGuard() const { return _irqGuard; }
 
+#ifdef HOST_BUILD
+    // -----------------------------------------------------------------------
+    // HOST_BUILD scripted-fake surface (source/com/i2c_bus_host.cpp) — never
+    // compiled alongside the real i2c_bus.cpp. Real MicroBitI2C traffic is
+    // replaced by a scripted, in-order FIFO of expected transactions; the
+    // fake still runs the exact lastEnd/readyAt clearance bookkeeping in
+    // write()/read() above against an injectable, steppable clock — no
+    // wall-clock reads, no real sleeps — so a host test can assert
+    // clearance-timer behavior deterministically.
+    // -----------------------------------------------------------------------
+
+    /** Script the next write() call (FIFO order): returns `status`
+     *  (0 == OK). A write() whose address doesn't match what was scripted,
+     *  or one with no script queued, returns a distinct mismatch status
+     *  rather than crashing the test process. */
+    void scriptWrite(uint16_t address, int status = 0);
+
+    /** Script the next read() call (FIFO order): returns `status` and
+     *  copies up to `len` bytes of `data` into the caller's buffer. */
+    void scriptRead(uint16_t address, const uint8_t* data, int len, int status = 0);
+
+    /** Test-only fake clock — HOST_BUILD has no wall clock to read. Starts
+     *  at 0; set or advance it explicitly to script clearance deadlines
+     *  deterministically. A single counter shared by every I2CBus instance
+     *  in the process (architecture-update.md's "static test-settable
+     *  counter" shape) — a live entry-spin inside write()/read() also
+     *  self-advances this by 1us per iteration so a scripted preClear/
+     *  postClear deadline always terminates even if a test forgets to
+     *  advance the clock itself. */
+    static void setClock(uint64_t us);        // [us]
+    static void advanceClock(uint64_t us);    // [us]
+    static uint64_t clock();                  // [us]
+#endif
+
 private:
     // Maximum number of distinct devices tracked (including the "other" bucket
     // at index kMaxDevices-1).
@@ -130,10 +197,25 @@ private:
         uint32_t txnCount;
         uint32_t errCount;
         int      lastErr;
+        uint64_t lastEnd;    // [us] end time of the most recent transaction to this device
+        uint64_t readyAt;    // [us] max(lastEnd, previous readyAt) + that transaction's postClear
     };
 
 #ifndef HOST_BUILD
     MicroBitI2C& _bus;
+#else
+    // HOST_BUILD scripted-fake queues (FIFO) — see scriptWrite()/scriptRead().
+    struct ScriptedWrite {
+        uint16_t addr;               // expected 8-bit wire address
+        int      status;             // status to return
+    };
+    struct ScriptedRead {
+        uint16_t addr;                // expected 8-bit wire address
+        std::vector<uint8_t> data;    // canned response bytes
+        int      status;              // status to return
+    };
+    std::deque<ScriptedWrite> _scriptedWrites;
+    std::deque<ScriptedRead>  _scriptedReads;
 #endif
 
     // Re-entrancy guard state.
@@ -171,6 +253,17 @@ private:
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
+
+    /**
+     * clockUs — current time [us]. The real fork wraps
+     * system_timer_current_time_us(); the HOST_BUILD fork returns a
+     * test-settable fake counter (source/com/i2c_bus_host.cpp) instead of a
+     * wall clock. Every "now" read in this class (entry-spin check,
+     * lastEnd/readyAt stamping, clear()'s peek, the transaction log
+     * timestamp) goes through this single point so the two forks stay
+     * structurally parallel.
+     */
+    static uint64_t clockUs();
 
     /**
      * findOrAdd — return the slot index for the given 7-bit address.

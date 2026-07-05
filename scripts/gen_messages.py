@@ -131,6 +131,7 @@ _INVENTORY_MAP: dict = {
     ("DrivetrainCommand", "neutral"): "OutputState::pwm[] (BRAKE/COAST via HaltController)",
     ("DrivetrainCommand", "pose"):    "Superstructure::handleSI() / estimate.resetPose",
     ("DrivetrainCommand", "seed"):    "(new field — immediate-seed flag, SI S-command semantics)",
+    ("DrivetrainCommand", "standby"): "(new field — sprint 079: relinquish drivetrain authority side-channel, Subsystems::Drivetrain::standby(), architecture-update.md \"Authority arbitration\")",
 
     # DrivetrainState: maps to ActualState members
     ("DrivetrainState", "fused"):        "ActualState::fused (PoseEstimate)",
@@ -185,6 +186,8 @@ _INVENTORY_MAP: dict = {
     ("DrivetrainConfig", "ekf_r_enc_v"):           "RobotConfig::ekfREncV",
     ("DrivetrainConfig", "lag_otos"):               "RobotConfig::lagOtos",
     ("DrivetrainConfig", "drivetrain_type"):       "RobotConfig::drivetrain",
+    ("DrivetrainConfig", "left_port"):             "(new field — sprint 079: bound wheel-motor port, moved from DevLoopState::leftPort, architecture-update.md \"Authority arbitration\")",
+    ("DrivetrainConfig", "right_port"):            "(new field — sprint 079: bound wheel-motor port, moved from DevLoopState::rightPort, architecture-update.md \"Authority arbitration\")",
 
     # DrivetrainCapabilities: capability declaration (new Phase 2 type)
     ("DrivetrainCapabilities", "holonomic"):        "(new field — holonomic capability flag, Phase 2)",

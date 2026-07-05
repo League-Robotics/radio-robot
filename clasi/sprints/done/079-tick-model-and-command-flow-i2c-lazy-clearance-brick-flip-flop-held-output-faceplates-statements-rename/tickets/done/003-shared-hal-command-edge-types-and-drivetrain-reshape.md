@@ -1,9 +1,13 @@
 ---
 id: '003'
 title: Shared HAL command-edge types and Drivetrain reshape
-status: open
-use-cases: [SUC-004, SUC-005, SUC-006]
-depends-on: ['002']
+status: done
+use-cases:
+- SUC-004
+- SUC-005
+- SUC-006
+depends-on:
+- '002'
 github-issue: ''
 issue: tick-model-command-flow-and-the-command-board-design-sketch.md
 completes_issue: true
@@ -68,29 +72,29 @@ direction argument. Do not relitigate that placement in this ticket.
 
 ## Acceptance Criteria
 
-- [ ] `hal/capability/hal_command.h` exists with the three types above,
+- [x] `hal/capability/hal_command.h` exists with the three types above,
       headers-only, no new `.cpp`.
-- [ ] `protos/drivetrain.proto` has `left_port`/`right_port` on
+- [x] `protos/drivetrain.proto` has `left_port`/`right_port` on
       `DrivetrainConfig` and `standby` on `DrivetrainCommand`; regenerated
       messages compile (`scripts/gen_messages.py` run, `messages/drivetrain.h`
       updated — do not hand-edit the generated file).
-- [ ] `Drivetrain::ports()`/`active()`/`standby()` exist with the exact
+- [x] `Drivetrain::ports()`/`active()`/`standby()` exist with the exact
       semantics above; `setTwist`/`setWheelTargets`/`setNeutral` set
       `active_ = true`.
-- [ ] `Drivetrain::tick()` is `void`; `hasCommand()`/`takeCommand()` exist
+- [x] `Drivetrain::tick()` is `void`; `hasCommand()`/`takeCommand()` exist
       and yield `Hal::DrivetrainToHalCommand` addressed via
       `config_.left_port`/`right_port`.
-- [ ] `DrivetrainToMotorCommand` is deleted (no remaining references).
-- [ ] A command with `{control_kind=NEUTRAL(mode), standby=true}` results in
+- [x] `DrivetrainToMotorCommand` is deleted (no remaining references).
+- [x] A command with `{control_kind=NEUTRAL(mode), standby=true}` results in
       `mode_==NEUTRAL && active_==false` after `apply()` (host test).
-- [ ] A command with `{control_kind=NONE, standby=true}` results in
+- [x] A command with `{control_kind=NONE, standby=true}` results in
       `active_==false` with `mode_`/targets **unchanged** (host test —
       this is the authority-steal case, and must NOT reset the last
       commanded target, matching today's exact quirk).
-- [ ] Ratio governor, kinematics, `state()`, `capabilities()` behavior is
+- [x] Ratio governor, kinematics, `state()`, `capabilities()` behavior is
       unchanged (existing Drivetrain tests, if any, still pass; if none
       exist yet, this ticket adds baseline coverage per the Testing plan).
-- [ ] `main.cpp`/`dev_commands.cpp` do **not** yet call the new
+- [x] `main.cpp`/`dev_commands.cpp` do **not** yet call the new
       `ports()`/`active()`/`standby()`/`hasCommand()`/`takeCommand()` API —
       that wiring is ticket 005's job. This ticket may leave `main.cpp`
       temporarily calling the old `Drivetrain::tick(now, l, r)` returning

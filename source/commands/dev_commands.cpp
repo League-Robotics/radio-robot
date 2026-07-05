@@ -332,6 +332,7 @@ void emitMotorState(Hal::Motor& motor, uint32_t port, const char* corrId,
 void emitDrivetrainState(DevLoopState& state, const char* corrId,
                          ReplyFn replyFn, void* replyCtx) {
     msg::DrivetrainState s = state.drivetrain->state();
+    Subsystems::DrivetrainPorts p = state.drivetrain->ports();
     float vL = (s.vel_count_val() > 0) ? s.vel()[0] : 0.0f;
     float vR = (s.vel_count_val() > 1) ? s.vel()[1] : 0.0f;
 
@@ -342,9 +343,37 @@ void emitDrivetrainState(DevLoopState& state, const char* corrId,
     char rbuf[200];
     CommandProcessor::replyOKf(rbuf, sizeof(rbuf), "DEV DT", corrId, replyFn, replyCtx,
         "active=%d ports=%u,%u vel=%s,%s",
-        state.drivetrainActive ? 1 : 0,
-        static_cast<unsigned>(state.leftPort), static_cast<unsigned>(state.rightPort),
+        state.drivetrain->active() ? 1 : 0,
+        static_cast<unsigned>(p.left), static_cast<unsigned>(p.right),
         vLStr, vRStr);
+}
+
+// ---------------------------------------------------------------------------
+// stageHalCommand -- stage a single addressed HAL command (DEV M's motion
+// verbs) into the outbox, per architecture-update.md's "Config-plane vs.
+// command-plane" table. Overwrites any previously-staged, un-drained command
+// (latest-wins, matching the outbox's setpoint semantics).
+// ---------------------------------------------------------------------------
+void stageHalCommand(DevLoopState& state, uint32_t port, const msg::MotorCommand& cmd) {
+    state.halCommand.allPorts = false;
+    state.halCommand.count = 1;
+    state.halCommand.addressed[0].port = port;
+    state.halCommand.addressed[0].command = cmd;
+    state.hasHalCommand = true;
+}
+
+// ---------------------------------------------------------------------------
+// stealDrivetrainAuthority -- stage {control_kind=NONE, standby=true} into
+// the Drivetrain outbox: authority-steal only, mode_/the last commanded
+// target are left untouched (see drivetrain.h's "Authority arbitration" and
+// dev_commands.h's authority-arbitration note). Called when an ACCEPTED
+// DEV M motion verb targets one of the Drivetrain's currently-bound ports.
+// ---------------------------------------------------------------------------
+void stealDrivetrainAuthority(DevLoopState& state) {
+    msg::DrivetrainCommand cmd;   // control_kind defaults to NONE
+    cmd.setStandby(true);
+    state.drivetrainCommand = cmd;
+    state.hasDrivetrainCommand = true;
 }
 
 // handleDevMCfg -- CFG delta: apply each supplied key onto the port's shadow
@@ -396,17 +425,21 @@ void handleDevMCfg(DevLoopState& state, uint32_t port, const ArgList& args,
 }
 
 // isBoundPort -- true if `port` is one of the Drivetrain's currently-bound
-// left/right ports (DEV DT PORTS). 077-007 fix: a DEV M motion verb must
-// only steal drivetrain authority when it targets a motor the Drivetrain is
-// actually driving -- an independent, unbound motor (e.g. a load knob on a
-// port the Drivetrain never touches, per docs/protocol-v2.md §16's
-// coupled-rig test protocol) has nothing to do with drivetrain authority and
-// must leave `drivetrainActive` alone. Before this fix every accepted DEV M
-// motion verb unconditionally cleared drivetrainActive regardless of port,
-// so driving an unbound motor (e.g. `DEV M 4 DUTY ...` while DEV DT PORTS
-// 2 3 is bound) silently killed the governor mid-test.
+// left/right ports, read via `drivetrain->ports()` (sprint 079 moved the
+// binding off DevLoopState and into DrivetrainConfig -- see dev_commands.h).
+// 077-007 fix: a DEV M motion verb must only steal drivetrain authority when
+// it targets a motor the Drivetrain is actually driving -- an independent,
+// unbound motor (e.g. a load knob on a port the Drivetrain never touches,
+// per docs/protocol-v2.md §16's coupled-rig test protocol) has nothing to do
+// with drivetrain authority and must leave it alone (sprint 079: this now
+// means the accepted command never stages a Drivetrain outbox entry at all
+// -- see stealDrivetrainAuthority()). Before the 077-007 fix every accepted
+// DEV M motion verb unconditionally cleared drivetrain authority regardless
+// of port, so driving an unbound motor (e.g. `DEV M 4 DUTY ...` while
+// DEV DT PORTS 2 3 is bound) silently killed the governor mid-test.
 bool isBoundPort(const DevLoopState& state, uint32_t port) {
-    return port == state.leftPort || port == state.rightPort;
+    Subsystems::DrivetrainPorts p = state.drivetrain->ports();
+    return port == p.left || port == p.right;
 }
 
 // handleDevM -- dispatches on the mode keyword parseDevM already validated.
@@ -427,11 +460,12 @@ void handleDevM(const ArgList& args, const char* corrId,
             float duty = args.args[2].fval / 100.0f;
             msg::MotorCommand cmd;
             cmd.setDutyCycle(duty);
-            if (!motor.apply(cmd)) {
+            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.get_control_kind())) {
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "duty", corrId, replyFn, replyCtx);
                 break;
             }
-            if (isBoundPort(state, port)) { state.drivetrainActive = false; }
+            stageHalCommand(state, port, cmd);
+            if (isBoundPort(state, port)) { stealDrivetrainAuthority(state); }
             char dutyStr[16];
             formatFixed(dutyStr, sizeof(dutyStr), duty, 2);
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
@@ -442,11 +476,12 @@ void handleDevM(const ArgList& args, const char* corrId,
             float velocity = args.args[2].fval;
             msg::MotorCommand cmd;
             cmd.setVelocity(velocity);
-            if (!motor.apply(cmd)) {
+            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.get_control_kind())) {
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "vel", corrId, replyFn, replyCtx);
                 break;
             }
-            if (isBoundPort(state, port)) { state.drivetrainActive = false; }
+            stageHalCommand(state, port, cmd);
+            if (isBoundPort(state, port)) { stealDrivetrainAuthority(state); }
             char velStr[16];
             formatFixed(velStr, sizeof(velStr), velocity, 1);
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
@@ -457,11 +492,12 @@ void handleDevM(const ArgList& args, const char* corrId,
             float position = args.args[2].fval;
             msg::MotorCommand cmd;
             cmd.setPosition(position);
-            if (!motor.apply(cmd)) {
+            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.get_control_kind())) {
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "pos", corrId, replyFn, replyCtx);
                 break;
             }
-            if (isBoundPort(state, port)) { state.drivetrainActive = false; }
+            stageHalCommand(state, port, cmd);
+            if (isBoundPort(state, port)) { stealDrivetrainAuthority(state); }
             char posStr[16];
             formatFixed(posStr, sizeof(posStr), position, 1);
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
@@ -472,13 +508,14 @@ void handleDevM(const ArgList& args, const char* corrId,
             float voltage = args.args[2].fval;
             msg::MotorCommand cmd;
             cmd.setVoltage(voltage);
-            if (!motor.apply(cmd)) {
+            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.get_control_kind())) {
                 // Expected on Nezha: capabilities().voltage == false -- proves
-                // apply()'s capability gate, not a DEV-layer special case.
+                // the shared capability gate, not a DEV-layer special case.
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "volt", corrId, replyFn, replyCtx);
                 break;
             }
-            if (isBoundPort(state, port)) { state.drivetrainActive = false; }
+            stageHalCommand(state, port, cmd);
+            if (isBoundPort(state, port)) { stealDrivetrainAuthority(state); }
             char voltStr[16];
             formatFixed(voltStr, sizeof(voltStr), voltage, 2);
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
@@ -491,8 +528,16 @@ void handleDevM(const ArgList& args, const char* corrId,
             neutralModeFromToken(bc, &nm);
             msg::MotorCommand cmd;
             cmd.setNeutral(nm);
-            motor.apply(cmd);   // NEUTRAL is never capability-gated -- always accepted
-            if (isBoundPort(state, port)) { state.drivetrainActive = false; }
+            // NEUTRAL is never capability-gated -- motorCommandAllowed() always
+            // accepts it, but it still runs through the same one path as every
+            // other motion verb (pre-validate, then stage) rather than a
+            // special case.
+            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.get_control_kind())) {
+                CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "neutral", corrId, replyFn, replyCtx);
+                break;
+            }
+            stageHalCommand(state, port, cmd);
+            if (isBoundPort(state, port)) { stealDrivetrainAuthority(state); }
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
                                        "neutral=%s", bc);
             break;
@@ -500,8 +545,15 @@ void handleDevM(const ArgList& args, const char* corrId,
         case MotorMode::RESET: {
             msg::MotorCommand cmd;
             cmd.setResetPosition(true);
-            motor.apply(cmd);
-            if (isBoundPort(state, port)) { state.drivetrainActive = false; }
+            // RESET's control_kind is NONE (reset_position rides the side
+            // channel) -- motorCommandAllowed() always accepts NONE, but this
+            // still goes through the same pre-validate-then-stage path.
+            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.get_control_kind())) {
+                CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "reset", corrId, replyFn, replyCtx);
+                break;
+            }
+            stageHalCommand(state, port, cmd);
+            if (isBoundPort(state, port)) { stealDrivetrainAuthority(state); }
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx, "reset=1");
             break;
         }
@@ -696,10 +748,17 @@ void handleDevDt(const ArgList& args, const char* corrId,
 
     switch (mode) {
         case DtMode::PORTS: {
+            // Config-plane (architecture-update.md's "Config-plane vs.
+            // command-plane" table): direct call, no outbox. left_port/
+            // right_port merge into the shared drivetrainConfigShadow like
+            // any other CFG key, then configure() applies the full delta --
+            // sprint 079 moved the binding off DevLoopState and into
+            // DrivetrainConfig (decision 8).
             uint32_t left = static_cast<uint32_t>(args.args[1].ival);
             uint32_t right = static_cast<uint32_t>(args.args[2].ival);
-            state.leftPort = left;
-            state.rightPort = right;
+            state.drivetrainConfigShadow.setLeftPort(left);
+            state.drivetrainConfigShadow.setRightPort(right);
+            state.drivetrain->configure(state.drivetrainConfigShadow);
             // Refresh the capabilities cache so DrivetrainCapabilities.
             // onboard_position stays accurate for the newly-bound pair --
             // see drivetrain.h's setMotorCapabilities() doc comment.
@@ -719,8 +778,13 @@ void handleDevDt(const ArgList& args, const char* corrId,
             twist.omega = omega;
             msg::DrivetrainCommand cmd;
             cmd.setTwist(twist);
-            state.drivetrain->apply(cmd);
-            state.drivetrainActive = true;
+            // Command-plane: stage, do not call drivetrain->apply() directly
+            // -- main.cpp drains the outbox once per pass (see "The Part-2
+            // loop"). Drivetrain::apply()'s TWIST arm sets active_=true
+            // itself once main.cpp applies this, per docs/protocol-v2.md's
+            // "DEV DT verbs (re)activate authority" rule.
+            state.drivetrainCommand = cmd;
+            state.hasDrivetrainCommand = true;
             char vxStr[16], vyStr[16], omegaStr[16];
             formatFixed(vxStr, sizeof(vxStr), vx, 1);
             formatFixed(vyStr, sizeof(vyStr), vy, 1);
@@ -738,8 +802,8 @@ void handleDevDt(const ArgList& args, const char* corrId,
             wt.w_count = 2;
             msg::DrivetrainCommand cmd;
             cmd.setWheels(wt);
-            state.drivetrain->apply(cmd);
-            state.drivetrainActive = true;
+            state.drivetrainCommand = cmd;
+            state.hasDrivetrainCommand = true;
             char leftStr[16], rightStr[16];
             formatFixed(leftStr, sizeof(leftStr), left, 1);
             formatFixed(rightStr, sizeof(rightStr), right, 1);
@@ -753,8 +817,8 @@ void handleDevDt(const ArgList& args, const char* corrId,
             neutralModeFromToken(bc, &nm);
             msg::DrivetrainCommand cmd;
             cmd.setNeutral(nm);
-            state.drivetrain->apply(cmd);
-            state.drivetrainActive = true;
+            state.drivetrainCommand = cmd;
+            state.hasDrivetrainCommand = true;
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), "DEV DT", corrId, replyFn, replyCtx,
                                        "neutral=%s", bc);
             break;
@@ -763,7 +827,28 @@ void handleDevDt(const ArgList& args, const char* corrId,
             emitDrivetrainState(state, corrId, replyFn, replyCtx);
             break;
         case DtMode::STOP: {
-            neutralizeDrivetrain(state);
+            // The narrower, bound-pair-only stop (decision 4): stage an
+            // ADDRESSED (count=2), non-broadcast HAL command targeting
+            // exactly the bound pair, read via drivetrain->ports() -- an
+            // independent, unbound motor is never placed in the addressed
+            // array and so is untouched. Reuses buildDrivetrainStop() for
+            // the Drivetrain side (identical {NEUTRAL, standby=true} shape
+            // as DEV STOP's) -- see dev_commands.h's doc comment.
+            Subsystems::DrivetrainPorts p = state.drivetrain->ports();
+            msg::MotorCommand neutralCmd;
+            neutralCmd.setNeutral(msg::Neutral::BRAKE);
+
+            state.halCommand.allPorts = false;
+            state.halCommand.count = 2;
+            state.halCommand.addressed[0].port = p.left;
+            state.halCommand.addressed[0].command = neutralCmd;
+            state.halCommand.addressed[1].port = p.right;
+            state.halCommand.addressed[1].command = neutralCmd;
+            state.hasHalCommand = true;
+
+            state.drivetrainCommand = buildDrivetrainStop(msg::Neutral::BRAKE);
+            state.hasDrivetrainCommand = true;
+
             CommandProcessor::replyOK(rbuf, sizeof(rbuf), "DEV DT STOP", nullptr, corrId, replyFn, replyCtx);
             break;
         }
@@ -788,12 +873,17 @@ void handleDevState(const ArgList& /*args*/, const char* corrId,
 
 // ---------------------------------------------------------------------------
 // DEV STOP -- global: all four motors neutral, drivetrain idle, authority
-// dropped. Shares neutralizeAll() with the watchdog fire path.
+// dropped. STAGES buildBroadcastNeutral()/buildDrivetrainStop()'s output
+// (the same "one audited path" main.cpp's watchdog-fire path APPLIES
+// immediately -- see dev_commands.h's doc comment on those two functions).
 // ---------------------------------------------------------------------------
 void handleDevStop(const ArgList& /*args*/, const char* corrId,
                    ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
     DevLoopState& state = *static_cast<DevLoopState*>(handlerCtx);
-    neutralizeAll(state);
+    state.halCommand = buildBroadcastNeutral(msg::Neutral::BRAKE);
+    state.hasHalCommand = true;
+    state.drivetrainCommand = buildDrivetrainStop(msg::Neutral::BRAKE);
+    state.hasDrivetrainCommand = true;
     char rbuf[32];
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "DEV STOP", nullptr, corrId, replyFn, replyCtx);
 }
@@ -814,34 +904,23 @@ void handleDevWd(const ArgList& args, const char* corrId,
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// neutralizeAll / neutralizeDrivetrain -- see dev_commands.h.
+// buildBroadcastNeutral / buildDrivetrainStop -- see dev_commands.h.
 // ---------------------------------------------------------------------------
-void neutralizeAll(DevLoopState& state, msg::Neutral mode) {
-    for (uint32_t port = 1; port <= Hal::NezhaHal::kPortCount; ++port) {
-        msg::MotorCommand cmd;
-        cmd.setNeutral(mode);
-        state.hal->motor(port).apply(cmd);
-    }
-    msg::DrivetrainCommand cmd;
-    cmd.setNeutral(mode);
-    state.drivetrain->apply(cmd);
-    state.drivetrainActive = false;
+Hal::CommandProcessorToHalCommand buildBroadcastNeutral(msg::Neutral mode) {
+    Hal::CommandProcessorToHalCommand cmd;
+    cmd.allPorts = true;
+    cmd.count = 0;
+    msg::MotorCommand neutralCmd;
+    neutralCmd.setNeutral(mode);
+    cmd.addressed[0].command = neutralCmd;   // port unused for a broadcast
+    return cmd;
 }
 
-void neutralizeDrivetrain(DevLoopState& state, msg::Neutral mode) {
+msg::DrivetrainCommand buildDrivetrainStop(msg::Neutral mode) {
     msg::DrivetrainCommand cmd;
     cmd.setNeutral(mode);
-    state.drivetrain->apply(cmd);
-
-    msg::MotorCommand leftCmd;
-    leftCmd.setNeutral(mode);
-    state.hal->motor(state.leftPort).apply(leftCmd);
-
-    msg::MotorCommand rightCmd;
-    rightCmd.setNeutral(mode);
-    state.hal->motor(state.rightPort).apply(rightCmd);
-
-    state.drivetrainActive = false;
+    cmd.setStandby(true);
+    return cmd;
 }
 
 // ---------------------------------------------------------------------------

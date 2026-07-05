@@ -1,7 +1,6 @@
 #pragma once
 #include "protocol.h"
 #include "command_types.h"
-#include "command_queue.h"
 
 /**
  * CommandProcessor — protocol v2 wire-protocol parser and dispatcher.
@@ -33,26 +32,13 @@ public:
     CommandProcessor() = default;
     explicit CommandProcessor(std::vector<CommandDescriptor> cmds);
 
-    // Parse and dispatch one command line. line must be NUL-terminated.
+    // Parse and dispatch one statement line. line must be NUL-terminated.
     // Calls replyFn(msg, ctx) for each response line.
     void process(const char* line, ReplyFn replyFn, void* ctx);
 
     // Override the serial reply channel for ForceReply::SERIAL descriptors.
     // Optional — if unset, ForceReply::SERIAL uses the incoming replyFn/ctx.
     void setSerialReply(ReplyFn fn, void* ctx) { _serialFn = fn; _serialCtx = ctx; }
-
-    // Attach a CommandQueue. When non-null, process() enqueues parsed commands
-    // into the queue instead of dispatching them immediately.
-    void setQueue(CommandQueue* q) { _queue = q; }
-
-    // Returns true if a queue is currently attached (non-null). Used by tests
-    // to assert the queue survives a Phase-3 CommandProcessor reassignment.
-    bool hasQueue() const { return _queue != nullptr; }
-
-    // Dispatch one item from q. Returns false if q is empty.
-    // Calls the descriptor's handlerFn directly (not process()) to avoid
-    // re-enqueuing when _queue is still set.
-    bool dequeueOne(CommandQueue& q);
 
     // Returns true if the most recently parsed command's descriptor is
     // flagged CMD_MOTION_WATCHDOG (keepalive '+' or a motion verb). Callers
@@ -158,12 +144,9 @@ private:
     std::vector<CommandDescriptor> _cmds;
     ReplyFn                        _serialFn  = nullptr;
     void*                          _serialCtx = nullptr;
-    CommandQueue*                  _queue     = nullptr;
     // Flags of the most recently successfully-parsed command's descriptor.
     // Set in dispatchTable() right after a successful parse (schema or
-    // parseFn), before the enqueue-vs-immediate-dispatch branch, so it is
-    // correct for both the production queue path and the sim/no-queue
-    // fallback. See lastCommandResetsWatchdog().
+    // parseFn), before handlerFn is called. See lastCommandResetsWatchdog().
     uint8_t                        _lastDispatchFlags = CMD_NONE;
 
     void dispatchTable(char** tokens, int ntok, KVPair* kvs, int nkv,

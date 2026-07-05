@@ -244,6 +244,88 @@ convention — reproduce with `uv run python tests/bench/friction_rig_soak.py
 
 ---
 
+### Sprint 079-006 stand campaign (2026-07-05, three sessions): the split-phase request/collect design surfaces two NEW triggers — both fixed and confirmed on a clean build
+
+Sprint 079 wires the previously-fused, always-blocking encoder read
+(`readEncoderSettle()`) into a split-phase `requestEncoder()`/
+`collectEncoder()` pair, scheduled by a new HAL-level "brick flip-flop"
+(`Hal::NezhaHal::tick()`) instead of a hand-rolled per-tick spin. Ticket
+079-005's own stand-smoke pass first found "pos/vel frozen, `wedged=1`
+within ~1 s" once this was genuinely wired up; ticket 079-006's stand
+campaign root-caused two real, independent defects in that design (both
+now fixed in `source/hal/nezha/nezha_motor.cpp`):
+
+1. **A severe TWIM hardware stall — a NEW manifestation, not the two
+   flavors above.** `requestEncoder()`'s 0x46 write and `writeMotorRun()`'s
+   0x60 write carried no `preClear`/`postClear` clearance at all. With only
+   one port in use, the flip-flop's own `REQUEST_DUE` fires again on the
+   very next `NezhaHal::tick()` call — no other port to interleave — so the
+   next 0x46 request could re-issue with ~0 µs real gap since the
+   immediately-preceding duty write. Caught directly via `pyocd`/
+   `arm-none-eabi-gdb` backtraces mid-stall: the firmware was parked for
+   several seconds at a time inside vendor CODAL's `NRF52I2C::waitForStop()`
+   (`libraries/codal-nrf52/source/NRF52I2C.cpp`), busy-spinning toward its
+   own ~10 s internal timeout waiting for a TWIM STOPPED event that never
+   arrived — freezing the ENTIRE main loop (serial included), not just the
+   encoder. **Fix**: `preClear=4000`/`postClear=4000` on both writes,
+   restoring the real ≥4 ms gap around every 0x10 transaction the old
+   fused/blocking code always had incidentally. Verified via 60-90 s
+   PING-availability hardware soaks: multi-second sustained blackouts
+   collapsed to isolated single-poll misses (consistent with the
+   already-documented ordinary USB-CDC drop rate).
+2. **A wrong-direction first-write bug in `writeRawDuty()`'s slew clamp —
+   pre-existing since source_old/077/078, newly exercised.** The slew
+   clamp fed `lastWrittenPct_`'s `-128` "no write yet" sentinel into
+   `MotorSlew::clampStep()` unconditionally (every prior sprint's own
+   comment documented this as intentional, ported-unchanged behavior).
+   `clampStep(-128, 30, 25)` returns `-103` — opposite sign from the
+   requested duty, and a speed byte outside the register's documented
+   0-100 range — sent as literally the **first command ever issued to a
+   fresh port**. This is exactly this doc's own confirmed reversal-write-
+   train latch trigger (see "Root cause of the latch" above), just never
+   exercised before because no prior sprint's soak methodology cold-started
+   a motor from the sentinel (078's own friction-rig soak, above, used
+   repeated flips against an already-primed `lastWrittenPct_`, not a
+   from-boot first write). **Fix**: the first-ever write is now exempted
+   from the slew clamp, the same way a stop already is — no prior direction
+   exists to slew from, so it goes straight to the requested value.
+3. **Sessions 1-2 both reported "still frozen even after a fix / even after
+   a physical power-cycle," and both were wrong — a stale incremental
+   build, not a persistent latch.** After landing the two fixes above,
+   session 1's own hardware repro kept showing pos/vel frozen at exactly
+   the post-reset baseline on every port, surviving a genuine
+   verified-standstill hard reset. The working hypothesis at the end of
+   session 1 was this doc's own documented escalation path ("repeated
+   abuse escalates to a persistent latch... only a Nezha power-domain
+   cycle... clears it"), since session 1 ran dozens of cold-start DUTY
+   tests that each hit the reversal-latch trigger before either fix
+   landed. Session 2: the stakeholder performed a genuine physical
+   power-cycle; `pos`/`vel` were STILL frozen on a clean reflash, at every
+   duty level tried, on every port — seemingly falsifying the
+   persistent-latch hypothesis entirely. **Session 3 resolved it**: a
+   separate debug pass did a genuine `build.py --clean` + flash and
+   confirmed real, working encoder motion (forward drive climbing
+   `pos`/`vel`, closed-loop `VEL 150` converging at the default
+   `vel_filt_alpha`, zero TWIM hangs, 8/8 pings after `DUTY`) — the two
+   fixes were correct and sufficient all along; sessions 1-2 had simply
+   kept re-flashing a **stale hex that still contained the pre-fix
+   sentinel bug**, which re-triggered the reversal-write-train latch on
+   every single cold-start test regardless of what the source tree said.
+   **Verification lesson**: `VER`'s `fw=` reply reports
+   `source/types/protocol.h`'s hand-maintained `FIRMWARE_VERSION`
+   constant, NOT the `pyproject.toml`/`dotconfig` version — the latter is
+   never compiled into the firmware and is a red herring for confirming
+   what's actually running. The real guard against this trap is
+   procedural: always `build.py --clean` immediately before a HITL
+   verification flash, and treat "should be fixed but still shows the old
+   behavior" as a stale-build suspect before reaching for a new hardware
+   hypothesis. See ticket 079-006's own results section (all three
+   sessions) and
+   `clasi/issues/nezha-encoder-latch-persists-after-079-006-fixes-power-cycle-needed.md`
+   (updated, ready to close) for the full account.
+
+---
+
 ## The second flavor: nRF52 TWIM errata under background interrupt load (2026-06-07)
 
 The historical "driving wedge": mid-drive, persistent until the Nezha's
@@ -422,6 +504,11 @@ trust the EVT as ground truth for "no wedge"** — diagnose from TLM (below).
 - [watchdog-uint32-underflow-velocity-notches.md](watchdog-uint32-underflow-velocity-notches.md)
 - Issues: `clasi/issues/encoder-wedge-corrupts-tour-legs.md` (field impact
   + wedgelab campaign log); sprint 064 `issues/done/` for the
-  reset-while-moving and IRQGUARD-query issues.
+  reset-while-moving and IRQGUARD-query issues;
+  `clasi/issues/nezha-encoder-latch-persists-after-079-006-fixes-power-cycle-needed.md`
+  (sprint 079-006's stand campaign — two new fixes, confirmed correct and
+  sufficient; the frozen-readback symptom that outlasted a physical
+  power-cycle turned out to be a stale incremental build, not a
+  persistent latch — resolved, ready to close).
 - Recording: `host/recordings/recording_20260701_210332.jsonl` (episodes at
   t+15.28 R@748 and t+25.23 L@−501; EVT at t+22.30).

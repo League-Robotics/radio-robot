@@ -1,9 +1,16 @@
 ---
 id: '004'
 title: NezhaHal brick flip-flop and distribution; NezhaMotor split-phase wiring
-status: open
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-008, SUC-009]
-depends-on: ['001', '003']
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-008
+- SUC-009
+depends-on:
+- '001'
+- '003'
 github-issue: ''
 issue:
 - i2c-bus-lazy-clearance-timers.md
@@ -73,28 +80,48 @@ nezha_hal.{h,cpp}`):
 
 ## Acceptance Criteria
 
-- [ ] `NezhaMotor::requestSample()` exists (public, wraps `requestEncoder()`).
-- [ ] `collectEncoder()` sets `connected_` correctly (both halves ANDed).
-- [ ] `NezhaMotor::tick()`'s step 2 uses `collectEncoder()`, not
+- [x] `NezhaMotor::requestSample()` exists (public, wraps `requestEncoder()`).
+- [x] `collectEncoder()` sets `connected_` correctly (both halves ANDed).
+- [x] `NezhaMotor::tick()`'s step 2 uses `collectEncoder()`, not
       `readEncoderSettle()`; `readEncoderSettle()` is deleted; steps 1/3/4/5
       are unchanged (diff review confirms no reordering).
-- [ ] `NezhaHal::tick()` implements the REQUEST_DUE/COLLECT_DUE flip-flop;
+- [x] `NezhaHal::tick()` implements the REQUEST_DUE/COLLECT_DUE flip-flop;
       only in-use ports are cycled; idle schedule (`anyPortInUse()==false`)
       performs zero bus actions.
-- [ ] `NezhaHal::apply(CommandProcessorToHalCommand)` and
+- [x] `NezhaHal::apply(CommandProcessorToHalCommand)` and
       `apply(DrivetrainToHalCommand)` mark the correct port(s) in-use
       (addressed) or none (broadcast), and forward to the right motor(s).
-- [ ] `bus_.clear(kNezhaDeviceAddr)` is called with the **bare** `0x10`
+- [x] `bus_.clear(kNezhaDeviceAddr)` is called with the **bare** `0x10`
       (7-bit), not `(0x10 << 1)` — host test asserts this explicitly
       (regression guard against the off-by-one-bit trap from ticket 001).
-- [ ] Host tests (against ticket 001's `HOST_BUILD` scripted `I2CBus` fake)
+- [x] Host tests (against ticket 001's `HOST_BUILD` scripted `I2CBus` fake)
       cover: flip-flop sequencing (request → settle-not-elapsed pass →
       collect), the 40 ms write throttle interaction, dwell interaction
       (078's armor still holds through a scripted reversal), in-use
       tracking (an unaddressed port never gets a bus transaction scripted
       against it), and the `apply()` broadcast-vs-addressed distinction.
-- [ ] Both `ROBOT_DEV_BUILD` forks build (`just build`).
-- [ ] No stand pass required in this ticket (ticket 006 covers hardware).
+- [x] Both `ROBOT_DEV_BUILD` forks build (`just build`).
+- [x] No stand pass required in this ticket (ticket 006 covers hardware).
+
+## Implementation Notes (post-hoc)
+
+- `main.cpp` also received a minimal loop adaptation beyond this ticket's
+  own "Files to modify" list, per explicit team-lead direction at dispatch
+  time: `hal.apply(drivetrain.takeCommand())` now drains the Drivetrain's
+  held output (closing the gap ticket 079-003 left open), and the old
+  explicit bound-pair re-tick is replaced by the sanctioned second
+  `hal.tick(now)` call per pass (architecture-update.md decision 6). The
+  full three-beat loop / `DevLoopState` outbox reshape remains ticket 005's
+  job — comms dispatch position and DEV-handler wiring are untouched here.
+- Host coverage lives in `tests/sim/unit/nezha_flipflop_harness.cpp` (7
+  scenarios) + `tests/sim/unit/test_nezha_flipflop.py`, compiling the REAL
+  `nezha_motor.cpp`/`nezha_hal.cpp` under `-DHOST_BUILD` against ticket
+  001's scripted `I2CBus` fake. `nezha_motor.cpp` gained an `#ifndef
+  HOST_BUILD` guard around its `MicroBit.h` include (mirroring
+  `i2c_bus.h`'s own pattern) so it can be compiled host-side at all; the
+  `HOST_BUILD` fork defines `MICROBIT_OK` and a `system_timer_current_time_us()`
+  shim that delegates to `I2CBus::clock()`, the same fake clock the
+  scripted bus itself runs against.
 
 ## Implementation Plan
 

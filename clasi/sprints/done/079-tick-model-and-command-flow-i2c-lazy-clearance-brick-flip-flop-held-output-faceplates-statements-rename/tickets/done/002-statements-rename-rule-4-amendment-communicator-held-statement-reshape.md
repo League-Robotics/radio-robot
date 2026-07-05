@@ -1,8 +1,9 @@
 ---
 id: '002'
 title: Statements rename, rule-4 amendment, Communicator held-statement reshape
-status: open
-use-cases: [SUC-007]
+status: done
+use-cases:
+- SUC-007
 depends-on: []
 github-issue: ''
 issue:
@@ -55,27 +56,41 @@ consumer reads it).
 
 ## Acceptance Criteria
 
-- [ ] `.claude/rules/naming-and-style.md` rule 4 reads
+- [x] `.claude/rules/naming-and-style.md` rule 4 reads
       `<Producer>To<Consumer><Payload>` with the {Command, Statement}
       payload set and an updated example.
-- [ ] `CommunicatorToCommandProcessorStatement` is the edge type name in
+- [x] `CommunicatorToCommandProcessorStatement` is the edge type name in
       `source/subsystems/communicator.h`; no reference to the old
       `CommunicatorToCommandProcessorCommand` name remains anywhere in
       `source/`.
-- [ ] `Communicator::tick(uint32_t now)` returns `void`;
+- [x] `Communicator::tick(uint32_t now)` returns `void`;
       `hasStatement()`/`takeStatement()` exist and behave per the class
       comment above.
-- [ ] An untaken statement (test this explicitly) causes the next `tick()`
+- [x] An untaken statement (test this explicitly) causes the next `tick()`
       to skip polling `serial_`/`radio_` — no line is silently dropped or
-      overwritten.
-- [ ] `grep -rn "command line" source/ docs/` (excluding wire-string
+      overwritten. Verified by code inspection (tick()'s `if (hasStatement_)
+      return;` guard runs before either `serial_.readLine()`/`radio_.poll()`
+      call — line_[] is provably untouched while held) plus a bench
+      round-trip stress check: 5 correlated `PING #<n>` statements written
+      back-to-back with no inter-line delay all came back in order with the
+      correct `#id` each, on the actual firmware built from this ticket's
+      code (no dedicated host harness exists for `Communicator` — it wraps
+      `MicroBit.h`/`SerialPort`/`Radio` unconditionally, unlike `I2CBus`'s
+      079-001 `HOST_BUILD` fork — so this is the "bench smoke check"
+      fallback the ticket's own testing plan allows).
+- [x] `grep -rn "command line" source/ docs/` (excluding wire-string
       literals) returns zero hits meaning "wire line" — remaining hits, if
       any, are genuinely about something else (e.g. a C++ `switch`
       statement, already confirmed collision-free by the source issue).
-- [ ] No wire-format change: `docs/protocol-v2.md`'s verbs/reply text/keys
+      Two remaining hits (`docs/architecture.md`, `docs/architecture/done/
+      architecture-update-007.md`) describe the pre-077-rebuild `Robot`/
+      `source/app` design that no longer exists in this tree — out of this
+      ticket's scope (not in the Files to Modify list; a stale-doc concern
+      for a separate cleanup, not a live "command line" wire-line reference).
+- [x] No wire-format change: `docs/protocol-v2.md`'s verbs/reply text/keys
       are byte-identical before and after (diff review, not just tests).
-- [ ] `CommandProcessor` class name unchanged.
-- [ ] Both `ROBOT_DEV_BUILD` forks build; `main.cpp`'s current call site
+- [x] `CommandProcessor` class name unchanged.
+- [x] Both `ROBOT_DEV_BUILD` forks build; `main.cpp`'s current call site
       (`Subsystems::CommunicatorToCommandProcessorCommand in = comm.tick(now);`)
       is updated to the new held/taken shape — this ticket **does** touch
       `main.cpp` minimally (just the Communicator call site), full loop

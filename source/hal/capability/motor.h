@@ -158,6 +158,26 @@ class Motor {
   static constexpr uint8_t kWedgeThreshold = 10;
 };
 
+// motorCommandAllowed() -- sprint 079 extraction (architecture-update.md
+// Design Rationale 3): the capability-gate rule ("which MotorCapabilities
+// bit gates which ControlKind") lives here ONCE so Motor::apply() and
+// commands/dev_commands.cpp's pre-validation (staging into DevLoopState's
+// outbox instead of calling apply() to discover rejection after the fact)
+// can never drift apart. NEUTRAL/NONE (and any future default) are never
+// gated -- every motor must be able to go neutral regardless of drive mode.
+inline bool motorCommandAllowed(const msg::MotorCapabilities& caps,
+                                msg::MotorCommand::ControlKind kind) {
+  switch (kind) {
+    case msg::MotorCommand::ControlKind::DUTY_CYCLE: return caps.duty_cycle;
+    case msg::MotorCommand::ControlKind::VOLTAGE:    return caps.voltage;
+    case msg::MotorCommand::ControlKind::VELOCITY:   return caps.velocity;
+    case msg::MotorCommand::ControlKind::POSITION:   return caps.position;
+    case msg::MotorCommand::ControlKind::NEUTRAL:
+    case msg::MotorCommand::ControlKind::NONE:
+    default: return true;   // never gated
+  }
+}
+
 // --- resetPosition()/wedged()/wedgeSuspect()/hardResetCount()/
 // softResetCount()/configure(): small concrete accessors and the config
 // cache, defined inline here (same headers-only style as apply()/state()
@@ -185,23 +205,21 @@ inline void Motor::configure(const msg::MotorConfig& config) {
 
 inline bool Motor::apply(const msg::MotorCommand& command) {
   const msg::MotorCapabilities caps = capabilities();
-  bool accepted = true;
+  const msg::MotorCommand::ControlKind kind = command.get_control_kind();
 
-  switch (command.get_control_kind()) {
+  if (!motorCommandAllowed(caps, kind)) return false;
+
+  switch (kind) {
     case msg::MotorCommand::ControlKind::DUTY_CYCLE:
-      if (!caps.duty_cycle) { accepted = false; break; }
       setDutyCycle(command.control.duty_cycle);
       break;
     case msg::MotorCommand::ControlKind::VOLTAGE:
-      if (!caps.voltage) { accepted = false; break; }
       setVoltage(command.control.voltage);
       break;
     case msg::MotorCommand::ControlKind::VELOCITY:
-      if (!caps.velocity) { accepted = false; break; }
       setVelocity(command.control.velocity);
       break;
     case msg::MotorCommand::ControlKind::POSITION:
-      if (!caps.position) { accepted = false; break; }
       setPosition(command.control.position);
       break;
     case msg::MotorCommand::ControlKind::NEUTRAL:
@@ -227,7 +245,7 @@ inline bool Motor::apply(const msg::MotorCommand& command) {
     resetPosition();
   }
 
-  return accepted;
+  return true;
 }
 
 inline msg::MotorState Motor::state() const {

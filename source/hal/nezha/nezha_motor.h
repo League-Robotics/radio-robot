@@ -32,6 +32,16 @@
 
 namespace Hal {
 
+// 7-bit I2C address shared by all four Nezha V2 motor channels (the
+// motorId byte in each frame selects the channel, not the address).
+// Promoted from NezhaMotor's former private kAddr constant (sprint 079-004)
+// to a namespace Hal constant so NezhaHal's brick flip-flop sequencer can
+// name it too (its bus_.clear(kNezhaDeviceAddr) gate — architecture-
+// update.md's "clear()'s address convention" section — must use the SAME
+// bare 7-bit value every NezhaMotor register write/read shifts left by one
+// to form the 8-bit wire address).
+constexpr uint8_t kNezhaDeviceAddr = 0x10;
+
 class NezhaMotor : public Motor {
  public:
   NezhaMotor(I2CBus& bus, const msg::MotorConfig& config);
@@ -41,6 +51,15 @@ class NezhaMotor : public Motor {
   // Motor::begin() (which calls resetEncoder()) exactly; NezhaHal::begin()
   // calls this once per port before the main loop starts.
   void begin() override;
+
+  // Split-phase phase 1, public entry point — sprint 079-004. Wraps the
+  // already-ported requestEncoder() so NezhaHal's brick flip-flop sequencer
+  // (nezha_hal.cpp) can request this port's encoder sample without reaching
+  // into NezhaMotor's private register-verb surface. NOT a Hal::Motor
+  // virtual: request/collect splitting is a Nezha-specific consequence of
+  // four ports sharing one device address (0x10), not a universal HAL
+  // concept a future SimMotor leaf would need.
+  void requestSample();
 
   // --- Primitive setters (Hal::Motor) ---
   void setDutyCycle(float dutyCycle) override;         // [-1, 1]
@@ -105,7 +124,8 @@ class NezhaMotor : public Motor {
   bool pendingEncRequestOk_ = true;     // requestEncoder()/collectEncoder() pairing
 
   // ---- Register-map wire constants ----
-  static constexpr uint8_t kAddr = 0x10;    // 7-bit I2C address (all four ports share it; the motorId byte selects the channel)
+  // kAddr promoted to the namespace-Hal kNezhaDeviceAddr constant above
+  // (sprint 079-004) — shared with NezhaHal's flip-flop sequencer.
   static constexpr uint8_t kDirCw = 1;      // positive speed from chip perspective
   static constexpr uint8_t kDirCcw = 2;     // negative speed from chip perspective
   static constexpr float kDefaultSlewRate = 25.0f;   // architecture-update.md Design Rationale 2: ports kMaxDeltaPwmPerWrite's default
@@ -115,10 +135,12 @@ class NezhaMotor : public Motor {
   void writePositionMove(float positionDeg);            // ported Motor::moveToAngle() (0x5D)
 
   // ---- Private helpers: encoder read paths (all ported from Motor.cpp) ----
-  float readEncoderSettle();            // per-tick sample: 0x46 write -> 4ms post-write settle -> read (no pre-idle)
+  // readEncoderSettle() (the fused, always-blocking write+4ms-spin+read) is
+  // DELETED (sprint 079-004) — its sole caller (tick()'s step 2) now calls
+  // collectEncoder() instead; see nezha_motor.cpp's tick() for the mapping.
   int32_t readEncoderAtomicRaw();       // one-off sample: 4ms pre-idle -> 0x46 write -> 4ms settle -> read
-  void requestEncoder();                // split-phase phase 1 (ported byte-for-byte; not wired into tick() this ticket — see .cpp)
-  int32_t collectEncoder();             // split-phase phase 2 (ported byte-for-byte; not wired into tick() this ticket — see .cpp)
+  void requestEncoder();                // split-phase phase 1 (ported byte-for-byte); wrapped by the public requestSample() above
+  int32_t collectEncoder();             // split-phase phase 2 (ported byte-for-byte); now wired into tick()'s step 2 (sprint 079-004)
 
   // ---- Private helpers: control ----
   float runVelocityPid(float target, float measured, float dt);   // [mm/s] [mm/s] [s] -> duty [-1,1]
