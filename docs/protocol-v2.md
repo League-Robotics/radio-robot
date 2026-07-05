@@ -1383,111 +1383,21 @@ OK dbg otos
 
 ---
 
-## 15. Sim-Only: `SIMSET` / `SIMGET`
+## 15. Sim parameters and telemetry — ctypes-only (no `SIMSET` / `SIMGET`)
 
-**These verbs exist ONLY in sim / `HOST_BUILD` binaries.** They are
-registered by the optional `SimCommands` Commandable
-(`source/commands/SimCommands.{h,cpp}`), which the ARM firmware target never
-constructs and never links (069-003; see architecture-update.md Design
-Rationale Decision 1). On real hardware, `SIMSET`/`SIMGET` are unrecognised
-verbs and return `ERR unknown`, exactly like any other unregistered command
-— no different from typing a typo'd verb.
+There is **no `SIMSET`/`SIMGET` wire command family, and no sim-specific `TLM`
+field.** Simulator plant and error-model parameters, ground-truth reads, and
+sim-only telemetry are reachable **exclusively** through the host simulation
+library's direct ctypes ABI (`tests/_infra/sim/sim_api.cpp`'s `sim_*`
+functions) — never over the wire. The protocol a physical robot speaks and the
+protocol a simulator speaks are therefore identical, and a test harness can
+never accidentally teach the real robot to answer a sim-only verb (sprint 081
+architecture decision).
 
-`SIMSET`/`SIMGET` give the simulator's plant/error parameters
-(`PhysicsWorld`, `SimHardware`) the same runtime-settable, wire-native
-mechanism `SET`/`GET` gives `RobotConfig` — grammar mirrors §7 exactly.
-
-### SIMGET
-
-```
-SIMGET [<key>…] [#id]
-→ SIMCFG <key>=<value>… [#id]
-```
-
-With no arguments, dumps all registered sim keys. With one or more key
-names, returns only those keys. For each unknown key a separate `ERR
-badkey <key>` is emitted (does not prevent the SIMCFG line from being sent
-for valid keys). A bare-dump `SIMGET` chunks its reply across multiple
-`SIMCFG` lines if the full dump would exceed ~200 content bytes (mirrors
-GET's CFG chunking, §7).
-
-Examples:
-
-```
-SIMGET
-SIMCFG bodyRotScrub=1.000 bodyLinScrub=1.000 trackwidthMm=128.000 motorOffsetL=1.000 motorOffsetR=1.000
-
-SIMGET bodyRotScrub
-SIMCFG bodyRotScrub=1.000
-
-SIMGET badkey
-ERR badkey badkey
-```
-
-### SIMSET
-
-```
-SIMSET <key>=<value>… [#id]
-→ OK simset <applied-key>=<value>… [#id]
-   [ERR badkey <key> [#id]]…
-   [ERR badval <key> [#id]]…
-```
-
-Applies all valid keys atomically to the live plant. The entire SIMSET is
-all-or-nothing: if any key is unknown or its value fails to parse as a
-float, NO keys are applied and the plant is unchanged.
-
-- Unknown key → `ERR badkey <key>`
-- Non-numeric or empty value → `ERR badval <key>` (parse failure only —
-  unlike `SET`, `SIMSET` keys have no cross-field invariant checks in this
-  ticket's registry)
-
-Examples:
-
-```
-SIMSET bodyRotScrub=0.92
-OK simset bodyRotScrub=0.92
-
-SIMSET bodyRotScrub=0.5 notARealKey=1.0
-ERR badkey notARealKey
-
-SIMSET trackwidthMm=abc
-ERR badval trackwidthMm
-
-SIMSET motorOffsetL=0.95 motorOffsetR=1.05
-OK simset motorOffsetL=0.95 motorOffsetR=1.05
-```
-
-### Named Key Table
-
-`kSimRegistry[]` (`source/commands/SimCommands.cpp`) dispatches through
-named setter/getter FUNCTION POINTERS over `SimHardware&`, not `offsetof` —
-`PhysicsWorld` is an encapsulated class with invariants, not a POD struct
-(see architecture-update.md Design Rationale Decision 3). Rows 1–5 are
-ticket 003's first batch; rows 6–17 (069-004) surface six per-wheel
-encoder-report-error knobs (`PhysicsWorld`) and six OTOS-error knobs
-(`SimOdometer`) that were already fully implemented but write-only, reachable
-(if at all) only through legacy per-field ctypes test hooks.
-
-| Key                 | Type  | Wire format | Default   | Meaning                                          |
-|---------------------|-------|-------------|-----------|---------------------------------------------------|
-| `bodyRotScrub`      | float | `%.3f`      | `1.000`   | Independent plant body-rotational scrub (069-002); combines multiplicatively with the legacy `_rotationalSlip`/`setSlip()` channel |
-| `bodyLinScrub`      | float | `%.3f`      | `1.000`   | Independent plant body-linear scrub (069-002)     |
-| `trackwidthMm`      | float | `%.3f`      | `128.000` | Robot trackwidth (mm); forwards to `SimHardware::setTrackwidth()` |
-| `motorOffsetL`      | float | `%.3f`      | `1.000`   | Left-wheel plant offset factor (`PhysicsWorld::setOffsetFactor(0, f)`) |
-| `motorOffsetR`      | float | `%.3f`      | `1.000`   | Right-wheel plant offset factor (`PhysicsWorld::setOffsetFactor(1, f)`) |
-| `encScaleErrL`      | float | `%.3f`      | `0.000`   | Left-wheel REPORTED-encoder fractional scale error (`PhysicsWorld::setEncoderScaleError(0, err)`); true accumulator/chassis pose unaffected |
-| `encScaleErrR`      | float | `%.3f`      | `0.000`   | Right-wheel REPORTED-encoder fractional scale error (`PhysicsWorld::setEncoderScaleError(1, err)`) |
-| `encSlipL`          | float | `%.3f`      | `0.000`   | Left-wheel REPORTED-encoder under-report fraction (`PhysicsWorld::setEncoderSlip(0, fraction)`) |
-| `encSlipR`          | float | `%.3f`      | `0.000`   | Right-wheel REPORTED-encoder under-report fraction (`PhysicsWorld::setEncoderSlip(1, fraction)`) |
-| `encNoiseL`         | float | `%.3f`      | `0.000`   | Left-wheel REPORTED-encoder Gaussian noise sigma, mm (`PhysicsWorld::setEncoderNoise(0, sigma)`) |
-| `encNoiseR`         | float | `%.3f`      | `0.000`   | Right-wheel REPORTED-encoder Gaussian noise sigma, mm (`PhysicsWorld::setEncoderNoise(1, sigma)`) |
-| `otosLinScaleErr`   | float | `%.3f`      | `0.000`   | OTOS linear fractional scale error (`SimOdometer::setLinearScaleError()`) |
-| `otosAngScaleErr`   | float | `%.3f`      | `0.000`   | OTOS angular fractional scale error (`SimOdometer::setAngularScaleError()`) |
-| `otosLinNoise`      | float | `%.3f`      | `0.000`   | OTOS linear noise sigma (`SimOdometer::setLinearNoiseSigma()`) |
-| `otosYawNoise`      | float | `%.3f`      | `0.000`   | OTOS yaw noise sigma (`SimOdometer::setYawNoiseSigma()`) |
-| `otosLinDriftMmS`   | float | `%.3f`      | `0.000`   | OTOS linear drift, mm/second (wire unit). Converted to/from `SimOdometer`'s internal PER-TICK `_linearDriftPerTick` using `RobotConfig::controlPeriod`: `per_tick = per_second * (controlPeriod / 1000.0f)`, and the inverse on `SIMGET`. |
-| `otosYawDriftDegS`  | float | `%.3f`      | `0.000`   | OTOS yaw drift, degrees/second (wire unit). Converted to/from `SimOdometer`'s internal PER-TICK `_yawDriftPerTick` (radians) using BOTH the same time-domain formula as `otosLinDriftMmS` AND a deg↔rad conversion. |
+Earlier drafts of this section documented a `SIMSET`/`SIMGET` verb family backed
+by a `source/commands/SimCommands.{h,cpp}`. That command surface does **not**
+exist in the current `source/` tree and has been removed — it contradicted the
+decision above.
 
 ---
 
@@ -1500,9 +1410,8 @@ translation unit as a preprocessor `#define`, the same mechanism
 Sprint 077's `source/` tree sets `ROBOT_DEV_BUILD=1` — there is no
 production motion firmware yet, so this dev-bench build IS the only build.
 A future production firmware flips the define to `0` and `DEV` disappears
-(`ERR unknown`), exactly like `SIMSET`/`SIMGET` disappear on real hardware
-(§15) — same idea, different gating mechanism (`#if` here vs. a CMake
-source-file exclusion there).
+(`ERR unknown`) — the verbs simply become unrecognised, no different from any
+other unregistered command.
 
 `DEV` drives the HAL for bench bring-up: individual motors by **port**
 (1..4 — matching how `NezhaHal` instantiates one `NezhaMotor` per port;
@@ -1607,10 +1516,9 @@ DEV M <n> CFG k=v ...                          → OK DEV M <n> <applied k=v ...
   supported identically to a real Nezha motor. This is a capability
   divergence to be aware of when writing a test that is meant to run
   against both a bench robot and the sim, not a wire-format change — no new
-  verb, reply field, or `SET`/`GET`/`CFG` key is introduced by the sim
-  (see §15's `SIMSET`/`SIMGET` family for the one pre-existing exception to
-  "no sim-specific wire surface," which predates this ticket and which this
-  ticket does not extend).
+  verb, reply field, or `SET`/`GET`/`CFG` key is introduced by the sim — the
+  simulator adds no wire surface at all (sim parameters are ctypes-only; see
+  §15).
 - `VOLT <voltage>` — always `ERR unsupported volt` on a Nezha motor
   (`capabilities().voltage == false`). This is `Motor::apply()`'s capability
   gate firing, not a special case in the `DEV` handler — the same code path
