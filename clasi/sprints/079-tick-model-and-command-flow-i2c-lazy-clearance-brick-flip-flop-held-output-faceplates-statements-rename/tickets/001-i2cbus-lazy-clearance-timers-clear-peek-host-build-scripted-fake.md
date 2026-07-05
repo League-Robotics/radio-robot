@@ -1,8 +1,10 @@
 ---
 id: '001'
 title: I2CBus lazy clearance timers, clear() peek, HOST_BUILD scripted fake
-status: open
-use-cases: [SUC-008, SUC-009]
+status: done
+use-cases:
+- SUC-008
+- SUC-009
 depends-on: []
 github-issue: ''
 issue: i2c-bus-lazy-clearance-timers.md
@@ -66,24 +68,24 @@ exactly as before, just without their own manual spins).
 
 ## Acceptance Criteria
 
-- [ ] `I2CBus::DeviceSlot` has `lastEnd`/`readyAt` (`uint64_t`, `// [us]`).
-- [ ] `write()`/`read()` accept `preClear`/`postClear` defaulted to 0; every
+- [x] `I2CBus::DeviceSlot` has `lastEnd`/`readyAt` (`uint64_t`, `// [us]`).
+- [x] `write()`/`read()` accept `preClear`/`postClear` defaulted to 0; every
       existing call site (grep confirms) is unchanged and still compiles.
-- [ ] The entry-side clearance spin happens **before**
+- [x] The entry-side clearance spin happens **before**
       `target_disable_irq()` (verify by reading the diff, not just tests —
       this is the IRQ-guard-window constraint from the source issue).
-- [ ] `bool I2CBus::clear(uint16_t addr7) const` exists, is non-spinning, and
+- [x] `bool I2CBus::clear(uint16_t addr7) const` exists, is non-spinning, and
       takes the bare 7-bit address.
-- [ ] `requestEncoder()` passes `postClear = 4000` on its 0x46 write.
-- [ ] `readEncoderAtomicRaw()`'s two manual spin loops are deleted, replaced
+- [x] `requestEncoder()` passes `postClear = 4000` on its 0x46 write.
+- [x] `readEncoderAtomicRaw()`'s two manual spin loops are deleted, replaced
       by `preClear = 4000`/`postClear = 4000` on its write call.
-- [ ] `writePositionMove()`'s trailing manual spin is deleted, replaced by
+- [x] `writePositionMove()`'s trailing manual spin is deleted, replaced by
       `postClear = 4000` on its write call.
-- [ ] `source/com/i2c_bus_host.cpp` exists, builds under `HOST_BUILD`, and
+- [x] `source/com/i2c_bus_host.cpp` exists, builds under `HOST_BUILD`, and
       implements `write`/`read`/`clear`/`txnCount`/`errCount`/`lastErr` with
       a scripted queue + injectable clock.
-- [ ] Both `ROBOT_DEV_BUILD` forks still build (`just build`).
-- [ ] Host tests (new, see Testing) pass under `uv run python -m pytest`.
+- [x] Both `ROBOT_DEV_BUILD` forks still build (`just build`).
+- [x] Host tests (new, see Testing) pass under `uv run python -m pytest`.
 
 ## Implementation Plan
 

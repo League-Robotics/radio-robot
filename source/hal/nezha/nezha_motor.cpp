@@ -415,13 +415,13 @@ void NezhaMotor::writePositionMove(float positionDeg)
         kShortestPath,
         static_cast<uint8_t>(angle & 0xFF)
     };
-    bus_.write((kAddr << 1), buf, 8, false);
-
-    // BUG-CRITICAL post-write busy-wait (ported verbatim — see
-    // source_old/hal/real/Motor.cpp::moveToAngle() for the vendor
-    // rationale: no task/fiber may interleave during this window).
-    uint64_t deadline = system_timer_current_time_us() + 4000;
-    while (system_timer_current_time_us() < deadline) {}
+    // BUG-CRITICAL post-write settle (ported verbatim — see source_old/
+    // hal/real/Motor.cpp::moveToAngle() for the vendor rationale: no task/
+    // fiber may interleave during this window). Sprint 079: the busy-wait
+    // moves into I2CBus itself as a lazy postClear deadline on this write
+    // (architecture-update.md's "I2CBus lazy-clearance mechanism" section)
+    // instead of a hand-rolled spin here.
+    bus_.write((kAddr << 1), buf, 8, false, /*preClear=*/0, /*postClear=*/4000);
 }
 
 // ---------------------------------------------------------------------------
@@ -466,17 +466,16 @@ int32_t NezhaMotor::readEncoderAtomicRaw()
 {
     // Full vendor timing: 4ms pre-write bus-idle -> 0x46 write -> 4ms
     // post-write settle -> read 4 bytes. Cost: ~8ms. Used only by
-    // hardReset()'s median-of-3 snapshot + readback verification.
+    // hardReset()'s median-of-3 snapshot + readback verification. Sprint
+    // 079: both hand-rolled spins move into I2CBus itself as lazy
+    // preClear/postClear deadlines on the write (architecture-update.md's
+    // "I2CBus lazy-clearance mechanism" section) instead of manual
+    // while-loops here.
     static constexpr uint32_t kDelayUs = 4000;
 
-    uint64_t deadline = system_timer_current_time_us() + kDelayUs;
-    while (system_timer_current_time_us() < deadline) {}
-
     uint8_t cmd[8] = { 0xFF, 0xF9, static_cast<uint8_t>(config_.port), 0x00, 0x46, 0x00, 0xF5, 0x00 };
-    int writeResult = bus_.write((kAddr << 1), cmd, 8, false);
-
-    deadline = system_timer_current_time_us() + kDelayUs;
-    while (system_timer_current_time_us() < deadline) {}
+    int writeResult = bus_.write((kAddr << 1), cmd, 8, false,
+                                 /*preClear=*/kDelayUs, /*postClear=*/kDelayUs);
 
     uint8_t resp[4] = { 0, 0, 0, 0 };
     int readResult = bus_.read((kAddr << 1), resp, 4, false);
@@ -505,9 +504,15 @@ void NezhaMotor::requestEncoder()
     // pair exists in source_old today as an available-but-currently-unused
     // API surface (still required by IVelocityMotor there), and this port
     // preserves that same shape/availability rather than inventing a new
-    // call site for it.
+    // call site for it. Sprint 079: postClear=4000 attaches the settle
+    // window to THIS write's I2CBus deadline (per-device, not per-call-
+    // site), holding off any subsequent transaction to 0x10 -- including a
+    // stray 0x60 velocity write mid-settle -- until collectEncoder() (or
+    // any other 0x10 call) is due (architecture-update.md's "I2CBus
+    // lazy-clearance mechanism" section, constraint 4).
     uint8_t cmd[8] = { 0xFF, 0xF9, static_cast<uint8_t>(config_.port), 0x00, 0x46, 0x00, 0xF5, 0x00 };
-    int writeResult = bus_.write((kAddr << 1), cmd, 8, false);
+    int writeResult = bus_.write((kAddr << 1), cmd, 8, false,
+                                 /*preClear=*/0, /*postClear=*/4000);
     pendingEncRequestOk_ = (writeResult == MICROBIT_OK);
 }
 

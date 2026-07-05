@@ -295,6 +295,15 @@ list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/hal/ReplayHAL\\.cpp$")
 # additionally keeps it un-compiled, giving it zero ARM footprint (see
 # architecture-update.md Design Rationale Decision 1).
 list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/commands/SimCommands\\.cpp$")
+# i2c_bus_host.cpp (079-001) is the HOST_BUILD scripted-fake I2CBus
+# implementation (source/com/i2c_bus_host.cpp) -- it defines the same
+# I2CBus:: symbols as i2c_bus.cpp against the header's #ifdef HOST_BUILD
+# fork, so it must never be compiled into the ARM firmware (which does not
+# define HOST_BUILD): compiling it there would both duplicate i2c_bus.cpp's
+# symbols and mismatch the header's non-HOST_BUILD declarations. Used only
+# by the host pytest harness (tests/sim/unit/), which compiles it directly
+# with -DHOST_BUILD via the system C++ compiler, not through this CMake file.
+list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/com/i2c_bus_host\\.cpp$")
 
 # Production-build toggle (034-006).
 #
