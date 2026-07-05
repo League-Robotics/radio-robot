@@ -1,8 +1,9 @@
 ---
 id: '002'
 title: 'Host-clean loop seams: Subsystems::Hardware, dev_loop, clock'
-status: open
-use-cases: [SUC-002]
+status: done
+use-cases:
+- SUC-002
 depends-on: []
 github-issue: ''
 issue: host-side-simulation-environment-for-the-new-tree-design-write-up.md
@@ -48,20 +49,20 @@ proven entirely against the one existing concrete owner,
 
 ## Acceptance Criteria
 
-- [ ] `Subsystems::Hardware` (`source/subsystems/hardware.h`) declares
+- [x] `Subsystems::Hardware` (`source/subsystems/hardware.h`) declares
       `virtual Hal::Motor& motor(uint32_t port) = 0;`,
       `virtual void tick(uint32_t now) = 0;`,
       `virtual void apply(const Hal::CommandProcessorToHardwareCommand&) = 0;`,
       `virtual void apply(const Hal::DrivetrainToHardwareCommand&) = 0;`,
       a virtual no-op `begin()`, and `static constexpr uint32_t kPortCount = 4;`
       — no more, no less (no speculative extra methods).
-- [ ] `Subsystems::NezhaHardware` becomes `: public Subsystems::Hardware`;
+- [x] `Subsystems::NezhaHardware` becomes `: public Subsystems::Hardware`;
       `override` added to all four methods; its own `kPortCount`
       redeclaration is removed (inherited from the base); no method body
       changes. `main.cpp`'s existing
       `static_assert(Config::kMotorConfigCount == Subsystems::NezhaHardware::kPortCount, ...)`
       still compiles unchanged (inherited static member lookup).
-- [ ] `source/dev_loop.{h,cpp}` compiles with no `#include "MicroBit.h"` and
+- [x] `source/dev_loop.{h,cpp}` compiles with no `#include "MicroBit.h"` and
       no `Subsystems::Communicator` dependency. `devLoopTick`'s body
       reproduces `main.cpp`'s current loop **exactly**: `hardware.tick(now)`
       (slice 1), statement-triggered `watchdog->feed(now)` +
@@ -71,14 +72,14 @@ proven entirely against the one existing concrete owner,
       2), then the watchdog check that applies
       `buildBroadcastNeutral()`/`buildDrivetrainStop()` and emits
       `EVT dev_watchdog` via `DevLoop`'s `defaultReply`/`defaultReplyCtx`.
-- [ ] `commands/dev_commands.h`'s `DevLoopState::hardware` retypes from
+- [x] `commands/dev_commands.h`'s `DevLoopState::hardware` retypes from
       `Subsystems::NezhaHardware*` to `Subsystems::Hardware*`; its
       `#include "subsystems/nezha_hardware.h"` is replaced with
       `#include "subsystems/hardware.h"`. `dev_commands.cpp`'s
       `handleDevState`'s port-count loop bound reads
       `Subsystems::Hardware::kPortCount` (no file in `commands/` names the
       concrete `NezhaHardware` type any more).
-- [ ] `source/types/clock.h` declares `uint32_t systemClockNow(); // [ms]`;
+- [x] `source/types/clock.h` declares `uint32_t systemClockNow(); // [ms]`;
       `source/types/clock.cpp` (on-target) implements it as
       `return system_timer_current_time();`; `source/types/clock_host.cpp`
       (new, host-only — not yet linked into any build until ticket 004's
@@ -92,16 +93,35 @@ proven entirely against the one existing concrete owner,
       `#ifdef HOST_BUILD` branch returning fixed host identity strings
       (e.g. `"HOST-SIM"` / a fixed serial number), with the on-target
       branch unchanged.
-- [ ] `source/main.cpp`'s loop body collapses to: read the clock, tick the
+- [x] `source/main.cpp`'s loop body collapses to: read the clock, tick the
       Communicator, build a `DevLoopStatement` from any taken statement
       (`nullptr` if none), call `devLoopTick(loop, now, stmt)`. The
       Communicator stays the only CODAL-touching piece in the loop, per the
       design write-up's own constraint.
-- [ ] **ARM build + bench smoke (hardware-bench-testing gate, required):**
+- [x] **ARM build + bench smoke (hardware-bench-testing gate, required):**
       deploy (`mbdeploy deploy --build`) and confirm PING, the DEV M/DT
       family, and the watchdog `EVT dev_watchdog` path all round-trip
       byte-identically to pre-ticket behavior.
-- [ ] Existing `tests/sim/unit/*` harnesses still pass with no regression.
+      **DONE (team-lead, 2026-07-05, on the stand, Tovez, v0.20260705.8).**
+      `just build-clean` (correct uv env) + `mbdeploy deploy robot --hex …`,
+      then `tests/bench/dev_exercise.py --skip-dt` ×3. All substantive
+      round-trips PASS every run: PING, VER, DEV M 1–4 STATE+CAPS, DUTY
+      position-climb, VEL-120 convergence (~128 mm/s, matching 001's
+      envelope), VOLT capability-reject (`ERR unsupported`), and the watchdog
+      `EVT dev_watchdog` fire (proves the loop-originated
+      `defaultReply`/`defaultReplyCtx` sink emits correctly). RESET flaked to
+      `None` once (intermittent DEV serial reply-drop, identical to what the
+      byte-for-byte 001 build did — a transport artifact, not a loop
+      regression; PASS on both re-runs, 18/18). Confirms the `devLoopTick`
+      extraction + `Subsystems::Hardware` seam + the `comm.tick`/`hardware.tick`
+      slice-1 reorder are behavior-neutral on real hardware.
+      NOTE (separate follow-up, not a 002 defect): the documented
+      `mbdeploy deploy --build` path is broken in this env — `build.py` runs
+      `gen_messages.py` via `sys.executable`, which under mbdeploy is its pipx
+      venv (no `grpcio-tools`/`google.protobuf`); `just build*` uses the uv env
+      (protobuf 6.33.6) and works. Worked around by building with `just` and
+      flashing with `--hex`.
+- [x] Existing `tests/sim/unit/*` harnesses still pass with no regression.
 
 ## Testing
 

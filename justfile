@@ -31,7 +31,15 @@ build-clean:
 # Runs the same codegen steps build.py does so generated sources stay fresh.
 # Note: `just build` already builds BOTH the firmware hex and this sim library.
 build-sim:
-    uv run python3 scripts/gen_default_config.py
+    # 077-001 / 081-004: gen_default_config.py writes to source/robot/
+    # DefaultConfig.cpp -- a directory the greenfield rebuild's new source/
+    # tree deliberately does not (yet) create. build.py already guards this
+    # structurally (see its own 077-001 comment); this recipe had never been
+    # updated to match, so it hard-failed the moment tests/_infra/sim/
+    # existed for this recipe to reach the cmake steps below. Mirror
+    # build.py's guard here so it self-heals the same way once source/robot/
+    # reappears.
+    if [ -d source/robot ]; then uv run python3 scripts/gen_default_config.py; fi
     uv run python3 scripts/gen_messages.py
     uv run python3 scripts/gen_boot_config.py
     cmake -S tests/_infra/sim -B tests/_infra/sim/build -DROBOT_RUN_MODE=SIM

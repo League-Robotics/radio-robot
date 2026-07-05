@@ -229,7 +229,8 @@ void NezhaMotor::tick(uint32_t nowMs)
             break;
         case Mode::VELOCITY: {
             float dt = haveElapsed ? elapsedTime : kNominalDt;
-            float duty = runVelocityPid(velocityTarget_, filteredVelocity_, dt);
+            float duty = pid_.compute(velocityTarget_, filteredVelocity_, dt,
+                                       config_.vel_gains, config_.min_duty);
             armoredWrite(clampf(duty + feedforward_, -1.0f, 1.0f), nowMs);
             break;
         }
@@ -256,81 +257,17 @@ void NezhaMotor::tick(uint32_t nowMs)
 }
 
 // ---------------------------------------------------------------------------
-// Embedded velocity PID — ported control law from
-// source_old/control/VelocityController.cpp::update().
-//
-// VelocityController composes cmon-pid's backcalculation_t<pid_bwe> with
-// Kd=0, Tf=kTinyTf (~1e-6s). For that configuration, pid_bwe's transfer-
-// function coefficients collapse (A1 = Tf/(h+Tf) ~ 0, C3 = Kd/Tf = 0, A3 ~
-// Kp), so the general transfer-function machinery reduces to a plain
-// discrete PI with back-calculation anti-windup. This function implements
-// that reduced form directly rather than pulling in cmon-pid, avoiding a
-// second vendored dependency for a fresh (not-yet-bench-tuned) config
-// surface (MotorConfig.vel_gains) with no established prior calibration to
-// match bit-for-bit. Ticket 003's Verification section gates this ticket
-// on "compiles, and the ported [I2C] sequencing matches source_old
-// byte-for-byte" — not PID numerical fidelity, which is ticket 7's bench
-// pass.
-//
-// One documented divergence from source_old's literal behavior: in the
-// deadband (integrator-freeze) branch, source_old calls cmon-pid's
-// ReInit(0, I_old), which (per the derivation above, with the D register
-// holding a stale Kp*err term from the last non-deadband tick) does not
-// exactly hold the integrator at I_old despite the code comment's stated
-// intent ("keep I where it is"). This port implements that STATED intent
-// literally (freeze the integrator unchanged) rather than reproducing the
-// stale-D subtraction, which reads as an unintended quirk of the composed
-// transfer-function shim rather than a deliberate design element.
-//
-// Output domain: duty fraction [-1, 1] (matching Hal::Motor::setDutyCycle's
-// contract), not the old [-100, 100] PWM-percent domain — MotorConfig.vel_
-// gains is a brand-new surface this sprint, so there is no compatibility
-// requirement to preserve the old scale; Gains are tuned against this scale
-// in ticket 7's bench pass.
+// Embedded velocity PID — sprint 081-001: the control law itself (formerly
+// this file's own runVelocityPid(), ported from source_old/control/
+// VelocityController.cpp::update()) has moved byte-for-byte into
+// Hal::MotorVelocityPid (source/hal/velocity_pid.{h,cpp} — see that file
+// for the full derivation comment, the iOld-ordering rationale, and the
+// documented source_old ReInit() stale-D divergence note, all carried
+// forward verbatim). tick()'s Mode::VELOCITY case above calls
+// pid_.compute(velocityTarget_, filteredVelocity_, dt, config_.vel_gains,
+// config_.min_duty) in its place — config_ remains the single source of
+// truth for calibration; pid_ owns only the integrator's persistent state.
 // ---------------------------------------------------------------------------
-float NezhaMotor::runVelocityPid(float target, float measured, float dt)
-{
-    if (dt <= 0.0f) dt = kNominalDt;
-
-    const msg::Gains& gains = config_.vel_gains;
-    float err = target - measured;
-    float spAbs = fabsf(target);
-    float spSign = (target >= 0.0f) ? 1.0f : -1.0f;
-    float ff = gains.kff * spAbs;
-
-    // Output uses the OLD integrator (pre-update), matching
-    // VelocityController::update()'s I_old ordering.
-    float iOld = integral_;
-    float rawDuty = spSign * ff + gains.kp * err + iOld;
-    float output = clampf(rawDuty, -1.0f, 1.0f);
-
-    // config_.min_duty plays minWheelSpeed's role here (integrator-freeze
-    // deadband threshold on |target|) despite its proto name — see
-    // nezha_motor.h's field comment and the ticket's own note that
-    // MotorConfig.min_duty's doc string ("stiction floor / integrator-
-    // freeze threshold") is exactly VelocityController's minWheelSpeed
-    // semantics, just carried under a different generated field name.
-    bool inDeadband = spAbs < config_.min_duty;
-    if (!inDeadband) {
-        float newIntegral = iOld + gains.ki * dt * err;
-        // Anti-windup back-calculation against +/- i_max (mirrors
-        // backcalculation_t<pid_bwe>::Update's saturation check on
-        // kp*err + newIntegral, with C3=0 and D~=kp*err for Kd=0).
-        float u = gains.kp * err + newIntegral;
-        float tw = (gains.kaw > 0.0f) ? (1.0f / gains.kaw) : 1e6f;
-        float cW = (tw > dt) ? (dt / tw) : 1.0f;
-        if (u > gains.i_max) {
-            newIntegral += cW * (gains.i_max - u);
-        } else if (u < -gains.i_max) {
-            newIntegral += cW * (-gains.i_max - u);
-        }
-        integral_ = newIntegral;
-    }
-    // else: frozen — integral_ left unchanged (see file-level comment on
-    // the deliberate divergence from source_old's ReInit() call here).
-
-    return output;
-}
 
 // ---------------------------------------------------------------------------
 // Write path — ported from Motor::setSpeed(). Byte-for-byte identical

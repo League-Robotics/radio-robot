@@ -1,8 +1,9 @@
 ---
 id: '001'
 title: Extract shared velocity PID into Hal::MotorVelocityPid
-status: open
-use-cases: [SUC-001]
+status: done
+use-cases:
+- SUC-001
 depends-on: []
 github-issue: ''
 issue: host-side-simulation-environment-for-the-new-tree-design-write-up.md
@@ -30,7 +31,7 @@ start immediately.
 
 ## Acceptance Criteria
 
-- [ ] `Hal::MotorVelocityPid` (`source/hal/velocity_pid.{h,cpp}`) exists,
+- [x] `Hal::MotorVelocityPid` (`source/hal/velocity_pid.{h,cpp}`) exists,
       compiles standalone with no `#include "MicroBit.h"` and no I2C
       dependency, and reproduces `runVelocityPid()`'s exact math: the
       `iOld`-ordered output (`spSign*ff + kp*err + iOld`, output computed
@@ -38,33 +39,49 @@ start immediately.
       against `+/- i_max`, the `min_duty`-as-integrator-freeze-deadband
       threshold on `|target|`, and the `dt<=0 -> kNominalDt` (~24 ms)
       fallback.
-- [ ] `NezhaMotor` owns a `Hal::MotorVelocityPid pid_` member (replacing the
+- [x] `NezhaMotor` owns a `Hal::MotorVelocityPid pid_` member (replacing the
       bare `integral_` float) and calls `pid_.compute(...)` from `tick()`'s
       VELOCITY case where it used to call `runVelocityPid(...)` directly.
       `tick()`'s 5-step call order (`processResetIfPending` ->
       encoder-sample -> `updateWedgeDetector` -> mode dispatch ->
       `updateRestTracking`) is otherwise byte-for-byte unchanged.
-- [ ] `runVelocityPid()`'s old declaration/definition is deleted (no
+- [x] `runVelocityPid()`'s old declaration/definition is deleted (no
       unreferenced duplicate left behind, matching the project's own
       "duplicated-decision" anti-pattern discipline already applied to
       `readEncoderSettle()` in sprint 079).
-- [ ] **Bench step-response comparison (hardware-bench-testing gate,
+- [x] **Bench step-response comparison (hardware-bench-testing gate,
       `.claude/rules/hardware-bench-testing.md` — required, not optional):**
       deploy pre- and post-extraction builds (`mbdeploy deploy --build`),
       command an identical velocity step on the stand, and confirm rise
       time, overshoot, and settle time match within measurement noise. This
       ticket is not done until this is confirmed on real hardware.
-- [ ] A new standalone-compiled test (following the existing
+      **DONE (team-lead, 2026-07-05, on the stand, Tovez robot,
+      /dev/cu.usbmodem2121102).** Clean-built both pre-extraction (parent
+      commit `f2daccc1`) and post-extraction (sprint HEAD) hexes, flashed each
+      via `mbdeploy deploy robot --hex …`, and ran an identical VEL-120 step
+      3× per build (`tests/bench/dev_exercise.py --motor 1 --vel 120 --skip-dt`).
+      Result: **behaviorally indistinguishable.** Settle velocity clustered
+      ~128–142 mm/s on BOTH builds (pre {138.1, 128.8, 139.8, 134.5}; post
+      {~142, 137.5, 128.4, 136.1}); overshoot peak ~145–175 on both; applied
+      duty 0.23–0.34 on both; identical response character (fast rise,
+      ~30–45% overshoot, settle ~10–20 above target, no oscillation, no
+      runaway). Run-to-run variance (unloaded stand + DEV serial-sampling
+      drops) exceeds any systematic pre/post difference — exactly the
+      expected outcome for a byte-for-byte refactor. Note: firmware `VER`
+      reported `0.20260704.6` for BOTH builds (the version bump does not reach
+      the compiled-in VER string) — builds were distinguished by byte-diffed
+      hexes, not VER; flagged as a separate staleness follow-up.
+- [x] A new standalone-compiled test (following the existing
       `tests/sim/unit/*_harness.cpp` ad hoc-compile convention — see
       `test_motor_policy.py`'s pattern, no CMake) exercises
       `MotorVelocityPid::compute()` in isolation: a velocity step converges
       without oscillation blow-up, anti-windup clamps the integral under a
       saturating target, and the `dt<=0` path substitutes `kNominalDt`
       rather than dividing by zero or NaN-ing.
-- [ ] Existing `tests/sim/unit/*` harnesses (`motor_policy`, `drivetrain`,
+- [x] Existing `tests/sim/unit/*` harnesses (`motor_policy`, `drivetrain`,
       `i2c_bus_clearance`, `nezha_flipflop`, `dev_command_outbox`) and
       `uv run python -m pytest` still pass with no regression.
-- [ ] No unit-suffixed identifier is introduced (`.claude/rules/coding-standards.md`);
+- [x] No unit-suffixed identifier is introduced (`.claude/rules/coding-standards.md`);
       `compute(target, measured, dt)` names quantities, `dt`'s unit lives in
       a `// [s]` trailing comment tag, matching the existing convention.
 

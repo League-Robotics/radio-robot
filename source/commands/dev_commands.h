@@ -115,7 +115,7 @@
 
 #include "command_types.h"
 #include "hal/capability/hal_command.h"
-#include "subsystems/nezha_hardware.h"
+#include "subsystems/hardware.h"
 #include "subsystems/drivetrain.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
@@ -196,7 +196,7 @@ class SerialSilenceWatchdog {
 // Drivetrain::configure() at boot.
 // ---------------------------------------------------------------------------
 struct DevLoopState {
-  Subsystems::NezhaHardware* hardware = nullptr;
+  Subsystems::Hardware* hardware = nullptr;
   Subsystems::Drivetrain* drivetrain = nullptr;
   SerialSilenceWatchdog* watchdog = nullptr;   // set by main.cpp; DEV WD's target
 
@@ -208,7 +208,7 @@ struct DevLoopState {
   bool hasDrivetrainCommand = false;
   msg::DrivetrainCommand drivetrainCommand = {};
 
-  msg::MotorConfig motorConfigShadow[Subsystems::NezhaHardware::kPortCount] = {};
+  msg::MotorConfig motorConfigShadow[Subsystems::Hardware::kPortCount] = {};
   msg::DrivetrainConfig drivetrainConfigShadow = {};
 };
 

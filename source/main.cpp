@@ -2,63 +2,40 @@
 // main.cpp -- the dev loop: sprint 079's three-beat "feed it, tick it, ask
 // it" shape (architecture-update.md "The Part-2 loop"; issue's Part 2).
 //
+// 081-002: the loop body itself (the "tick it, ask it" beats) is no longer
+// written inline here -- it moved, verbatim, into devLoopTick()
+// (source/dev_loop.{h,cpp}), the shared function a future simulated caller
+// (ticket 081-004's sim_api.cpp) can run too, with no hand-mirrored second
+// copy. main.cpp's own loop now collapses to exactly the "feed it" beat plus
+// one call into the shared body: read the clock, tick the Communicator
+// (comms is Communicator's job ALONE -- it never enters the shared body,
+// see dev_loop.h's file header and architecture-update.md (081) Decision 3),
+// build a DevLoopStatement from whatever statement (if any) Communicator
+// just handed back, and call devLoopTick(). See dev_loop.cpp for the
+// line-by-line shape of what used to live here (the two hardware.tick()
+// slices, the outbox drain, Drivetrain governance, and the watchdog check).
+//
 // This supersedes 077-001/003/004's smoke wiring and 079-004's minimal loop
-// adaptation: CommandProcessor/DevLoopState are now a pure transformer
-// (statements in, commands + replies out -- see dev_commands.h) and
-// main.cpp is the SOLE caller of Subsystems::NezhaHardware::apply()/
-// Subsystems::Drivetrain::apply() for anything DEV-sourced, draining
+// adaptation: CommandProcessor/DevLoopState are still a pure transformer
+// (statements in, commands + replies out -- see dev_commands.h) and the
+// SOLE caller of Subsystems::Hardware::apply()/Subsystems::Drivetrain::
+// apply() for anything DEV-sourced is now devLoopTick() itself, draining
 // DevLoopState's outbox once per pass instead of DEV handlers calling
 // either subsystem's write methods directly.
 //
-// The loop, exactly per architecture-update.md's "The Part-2 loop":
-//
-//   hardware.tick(now);                          // slice 1: due collects land
-//
-//   comm.tick(now);
-//   if (comm.hasStatement()) {
-//       in = comm.takeStatement();          // feed (copies line + returnPath)
-//       watchdog.feed(now);
-//       cmd.process(in.line, ...);           // parse -> stage into devState's outbox + replies
-//   }
-//
-//   if (devState.hasHardwareCommand)        hardware.apply(devState.hardwareCommand);
-//   if (devState.hasDrivetrainCommand) drivetrain.apply(devState.drivetrainCommand);
-//
-//   if (drivetrain.active()) {
-//       drivetrain.tick(now, hardware.motor(p.left).state(), hardware.motor(p.right).state());
-//       if (drivetrain.hasCommand()) hardware.apply(drivetrain.takeCommand());
-//   }
-//
-//   hardware.tick(now);                          // slice 2: requests/writes go out
-//
-//   if (watchdog.check(now)) {
-//       hardware.apply(buildBroadcastNeutral(...));        // applied immediately --
-//       drivetrain.apply(buildDrivetrainStop(...));   // main.cpp is top-of-tree
-//   }
-//
-// Same-pass latency (the design sketch's own worked Case 1): a statement is
-// fed, parsed, staged, the Drivetrain re-governs against fresh observations,
-// and slice 2 actuates -- all in one pass. `hardware.tick()` is called TWICE per
-// iteration (slice 1 lets any due collect land before this pass's dispatch
-// reads state; slice 2 sends out whatever request/write this pass's
-// dispatch just staged) -- decision 6, replacing the old explicit bound-pair
-// re-tick hack with the sanctioned second call; NezhaHardware's own flip-flop now
-// cycles every in-use port evenly, including whichever pair the Drivetrain
-// is bound to, with no main.cpp-level special-casing.
-//
 // `p.left`/`p.right` (Subsystems::DrivetrainPorts, from `drivetrain.ports()`)
-// are whichever two NezhaMotors `DEV DT PORTS` last bound -- this loop never
-// hardcodes which ports they are, and never holds its own copy of the
+// are whichever two NezhaMotors `DEV DT PORTS` last bound -- devLoopTick()
+// never hardcodes which ports they are, and never holds its own copy of the
 // binding (DevLoopState's old leftPort/rightPort fields are gone; the
 // binding lives in DrivetrainConfig -- sprint 079 decision 8).
 //
-// Build gating: the DEV family (and the HAL/Drivetrain wiring it needs) is
-// compiled in only when ROBOT_DEV_BUILD is set (codal.json's "config"
-// object; see dev_commands.h's file header for the full rationale). This
-// sprint's codal.json sets it to 1 for this tree -- there is no production
-// loop yet, so the #else branch below is a minimal liveness-only fallback
-// (PING/VER/HELP/ECHO/ID, no HAL) proving the gate is a real fork, not
-// decoration.
+// Build gating: the DEV family (and the HAL/Drivetrain/dev_loop wiring it
+// needs) is compiled in only when ROBOT_DEV_BUILD is set (codal.json's
+// "config" object; see dev_commands.h's file header for the full
+// rationale). This sprint's codal.json sets it to 1 for this tree -- there
+// is no production loop yet, so the #else branch below is a minimal
+// liveness-only fallback (PING/VER/HELP/ECHO/ID, no HAL) proving the gate
+// is a real fork, not decoration.
 // ---------------------------------------------------------------------------
 
 #include "MicroBit.h"
@@ -72,6 +49,7 @@
 #include "subsystems/nezha_hardware.h"
 #include "subsystems/drivetrain.h"
 #include "commands/dev_commands.h"
+#include "dev_loop.h"
 #include "messages/motor.h"
 #include "messages/drivetrain.h"
 #include <vector>
@@ -178,6 +156,19 @@ int main() {
     static CommandProcessor cmd(allCommands);
     cmd.setSerialReply(serialReply, &comm);
 
+    // --- Shared dev-loop wiring (081-002; source/dev_loop.h). defaultReply/
+    // defaultReplyCtx is the loop-originated reply sink devLoopTick() uses
+    // for the watchdog-fire EVT (not triggered by any inbound statement) --
+    // byte-identical to this loop's pre-extraction serialReply/&comm.
+    static DevLoop loop;
+    loop.hardware = &hardware;
+    loop.drivetrain = &drivetrain;
+    loop.processor = &cmd;
+    loop.watchdog = &watchdog;
+    loop.devState = &devState;
+    loop.defaultReply = serialReply;
+    loop.defaultReplyCtx = &comm;
+
     // Start the serial-silence watchdog's window counting from boot (see
     // SerialSilenceWatchdog::feed()'s doc comment) rather than from an
     // uninitialized "last command" time.
@@ -186,67 +177,29 @@ int main() {
     while (true) {
         uint32_t now = uBit.systemTime();
 
-        hardware.tick(now);   // slice 1: any due collect lands before this pass's dispatch reads state
-
+        // Feed it: comms is Communicator's job alone -- it never enters the
+        // shared body (dev_loop.h's file header; architecture-update.md
+        // (081) Decision 3). A taken statement is copied into a
+        // DevLoopStatement (a plain, caller-owned, single-call-lifetime
+        // pointer -- Communicator's own line buffer is only valid until its
+        // next tick(), so this copy must happen before devLoopTick() runs).
         comm.tick(now);
+        DevLoopStatement stmt;
+        const DevLoopStatement* stmtPtr = nullptr;
         if (comm.hasStatement()) {
             Subsystems::CommunicatorToCommandProcessorStatement in = comm.takeStatement();
-            // Feed on any line, either channel, regardless of content or
-            // dispatch outcome -- see dev_commands.h's watchdog contract.
-            watchdog.feed(now);
-            // Parse happens inside process(): replies go out the
-            // statement's own return path directly (unaffected by this
-            // sprint); setpoint-shaped DEV commands land in devState's
-            // outbox instead of calling Hal/Drivetrain write methods --
-            // see dev_commands.h/.cpp's pure-transformer reshape.
-            cmd.process(in.line,
-                        in.returnPath == Subsystems::Channel::RADIO ? radioReply
-                                                                    : serialReply,
-                        &comm);
+            stmt.line = in.line;
+            stmt.replyFn = in.returnPath == Subsystems::Channel::RADIO ? radioReply
+                                                                        : serialReply;
+            stmt.replyCtx = &comm;
+            stmtPtr = &stmt;
         }
 
-        // Drain the outbox: main.cpp is the sole caller of
-        // hardware.apply()/drivetrain.apply() for anything DEV-sourced.
-        if (devState.hasHardwareCommand) {
-            hardware.apply(devState.hardwareCommand);
-            devState.hasHardwareCommand = false;
-        }
-        if (devState.hasDrivetrainCommand) {
-            drivetrain.apply(devState.drivetrainCommand);
-            devState.hasDrivetrainCommand = false;
-        }
-
-        if (drivetrain.active()) {
-            // Binding queried, not duplicated -- ports() reads straight from
-            // DrivetrainConfig (sprint 079 decision 8; DevLoopState no
-            // longer holds its own leftPort/rightPort copy).
-            Subsystems::DrivetrainPorts p = drivetrain.ports();
-            drivetrain.tick(now, hardware.motor(p.left).state(), hardware.motor(p.right).state());
-            if (drivetrain.hasCommand()) {
-                hardware.apply(drivetrain.takeCommand());
-            }
-        }
-
-        // Slice 2: whatever request/write this pass's dispatch (or the
-        // Drivetrain's own re-governed target) just staged goes out now --
-        // the sanctioned second hardware.tick() call (architecture-update.md
-        // decision 6) replaces the old explicit bound-pair re-tick hack.
-        hardware.tick(now);
-
-        if (watchdog.check(now)) {
-            // Applied IMMEDIATELY, not staged via the outbox -- main.cpp is
-            // the top of the call tree, already the visible mover of every
-            // command; an emergency stop gains nothing from an extra pass
-            // of outbox latency (architecture-update.md's narrow, deliberate
-            // exception to "never call apply() outside main/the HAL"). The
-            // SAME buildBroadcastNeutral()/buildDrivetrainStop() construction
-            // path `DEV STOP`'s handler stages is used here directly.
-            hardware.apply(buildBroadcastNeutral(msg::Neutral::BRAKE));
-            drivetrain.apply(buildDrivetrainStop(msg::Neutral::BRAKE));
-            char wbuf[32];
-            CommandProcessor::replyEvt(wbuf, sizeof(wbuf), "dev_watchdog", nullptr,
-                                       serialReply, &comm);
-        }
+        // Tick it, ask it: the shared dev-loop body (source/dev_loop.cpp) --
+        // the two hardware.tick() slices, statement dispatch, outbox drain,
+        // Drivetrain governance, and the watchdog check, byte-identical to
+        // this loop's pre-081-002 inline body.
+        devLoopTick(loop, now, stmtPtr);
     }
 #else
     // ROBOT_DEV_BUILD == 0: no production loop exists yet this sprint (see

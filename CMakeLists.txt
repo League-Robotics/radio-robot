@@ -304,6 +304,26 @@ list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/commands/SimCommands\\.cpp$")
 # by the host pytest harness (tests/sim/unit/), which compiles it directly
 # with -DHOST_BUILD via the system C++ compiler, not through this CMake file.
 list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/com/i2c_bus_host\\.cpp$")
+# clock_host.cpp (081-002) is the HOST_BUILD fake implementation of
+# Types::systemClockNow() (source/types/clock_host.cpp) -- it defines the
+# same Types:: symbol as clock.cpp against clock.h's #ifdef HOST_BUILD fork,
+# so it must never be compiled into the ARM firmware (which does not define
+# HOST_BUILD), for the identical reason i2c_bus_host.cpp is excluded above.
+# Not yet consumed by any build as of 081-002; ticket 081-004's host sim
+# CMakeLists.txt is what links it in.
+list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/types/clock_host\\.cpp$")
+# sim_hardware.cpp (081-003) is Subsystems::SimHardware, the simulated-
+# device owner/scheduler (source/subsystems/sim_hardware.cpp). It depends on
+# source/hal/sim/* (Hal::PhysicsWorld/SimMotor/SimOdometer, already excluded
+# above by the blanket ".*/hal/sim/.*" regex -- e.g. PhysicsWorld's
+# HOST_BUILD-gated std::mt19937 members) and is never linked into the ARM
+# firmware, only into the host sim library (ticket 004's tests/_infra/sim/
+# CMakeLists.txt). Unlike hal/sim/*, it lives under source/subsystems/ (per
+# architecture-update.md (081) Decision 2: SimHardware is a Subsystems-tier
+# peer of NezhaHardware, not a Hal:: leaf), so the blanket hal/sim/
+# exclusion above does not catch it -- it needs its own explicit exclusion,
+# mirroring the i2c_bus_host.cpp/clock_host.cpp pattern immediately above.
+list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/subsystems/sim_hardware\\.cpp$")
 
 # Production-build toggle (034-006).
 #

@@ -4,14 +4,24 @@
 // New file (077-001). Handler bodies ported from
 // source_old/commands/SystemCommands.cpp, with the old Robot*/RobotSysCtx
 // coupling removed -- this firmware has no Robot class. Device identity
-// (microbit_friendly_name() / microbit_serial_number()) and the clock
-// (system_timer_current_time()) are free CODAL vendor functions, so none of
-// the five handlers below need a handlerCtx.
+// (microbit_friendly_name() / microbit_serial_number()) is a free CODAL
+// vendor function, so none of the five handlers below need a handlerCtx.
+//
+// 081-002: the clock read moved behind Types::systemClockNow()
+// (types/clock.h) -- this was the one remaining direct
+// system_timer_current_time() call in the host-clean command set. handleId's
+// identity calls are gated #ifdef HOST_BUILD (fixed host identity strings)
+// so this file can compile host-side ahead of a future sim build; the
+// on-target branch is unchanged.
 // ---------------------------------------------------------------------------
 
 #include "system_commands.h"
 #include "command_processor.h"
-#include "MicroBit.h"
+#include "types/clock.h"
+
+#ifndef HOST_BUILD
+#include "MicroBit.h"   // microbit_friendly_name() / microbit_serial_number() (on-target identity)
+#endif
 
 #include <cstdio>
 
@@ -24,7 +34,7 @@ namespace {
 // ---------------------------------------------------------------------------
 void handlePing(const ArgList& /*args*/, const char* corrId,
                 ReplyFn replyFn, void* replyCtx, void* /*handlerCtx*/) {
-  uint32_t now = system_timer_current_time();  // [ms]
+  uint32_t now = Types::systemClockNow();  // [ms]
   char rbuf[64];
   char body[32];
   snprintf(body, sizeof(body), "t=%lu", (unsigned long)now);
@@ -91,8 +101,15 @@ void handleEcho(const ArgList& args, const char* corrId,
 // ---------------------------------------------------------------------------
 void handleId(const ArgList& /*args*/, const char* corrId,
               ReplyFn replyFn, void* replyCtx, void* /*handlerCtx*/) {
+#ifdef HOST_BUILD
+  // No CODAL identity to read host-side -- fixed placeholder identity (see
+  // this file's header note and architecture-update.md's Impact table).
+  const char* name   = "HOST-SIM";
+  uint32_t    serial = 0;
+#else
   const char* name   = microbit_friendly_name();
   uint32_t    serial = microbit_serial_number();
+#endif
 
   char rbuf[160];
   if (corrId && corrId[0] != '\0') {

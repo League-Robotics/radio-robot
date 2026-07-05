@@ -865,7 +865,7 @@ void handleDevDt(const ArgList& args, const char* corrId,
 void handleDevState(const ArgList& /*args*/, const char* corrId,
                     ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
     DevLoopState& state = *static_cast<DevLoopState*>(handlerCtx);
-    for (uint32_t port = 1; port <= Subsystems::NezhaHardware::kPortCount; ++port) {
+    for (uint32_t port = 1; port <= Subsystems::Hardware::kPortCount; ++port) {
         emitMotorState(state.hardware->motor(port), port, corrId, replyFn, replyCtx);
     }
     emitDrivetrainState(state, corrId, replyFn, replyCtx);

@@ -38,6 +38,10 @@ _TYPES_DIR = _SOURCE_DIR / "types"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "dev_command_outbox_harness.cpp"
 _HOST_FAKE_SRC = _SOURCE_DIR / "com" / "i2c_bus_host.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "hal" / "nezha" / "nezha_motor.cpp"
+# 081-001: nezha_motor.cpp now calls into Hal::MotorVelocityPid::compute()
+# (source/hal/velocity_pid.cpp) instead of its own former runVelocityPid()
+# member — that translation unit must link in alongside it.
+_VELOCITY_PID_SRC = _SOURCE_DIR / "hal" / "velocity_pid.cpp"
 _NEZHA_HARDWARE_SRC = _SOURCE_DIR / "subsystems" / "nezha_hardware.cpp"
 _DRIVETRAIN_SRC = _SOURCE_DIR / "subsystems" / "drivetrain.cpp"
 _BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
@@ -49,6 +53,7 @@ _SOURCES = [
     _HARNESS_SRC,
     _HOST_FAKE_SRC,
     _NEZHA_MOTOR_SRC,
+    _VELOCITY_PID_SRC,
     _NEZHA_HARDWARE_SRC,
     _DRIVETRAIN_SRC,
     _BODY_KINEMATICS_SRC,
