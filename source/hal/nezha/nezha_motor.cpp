@@ -177,13 +177,13 @@ void NezhaMotor::tick(uint32_t nowMs)
     // MotorController::controlTick's per-wheel detector).
     updateWedgeDetector(pos);
 
-    float elapsedS = 0.0f;
+    float elapsedTime = 0.0f;
     bool haveElapsed = false;
     if (hasLastTick_) {
-        elapsedS = static_cast<float>(nowMs - lastTickMs_) / 1000.0f;
-        if (elapsedS > 0.0f) {
+        elapsedTime = static_cast<float>(nowMs - lastTick_) / 1000.0f;
+        if (elapsedTime > 0.0f) {
             haveElapsed = true;
-            float rawVel = (pos - lastPosition_) / elapsedS;
+            float rawVel = (pos - lastPosition_) / elapsedTime;
             if (fabsf(rawVel) <= kMaxPlausibleSpeed) {
                 float a = config_.vel_filt_alpha;   // EMA smoothing
                 filteredVelocity_ = a * rawVel + (1.0f - a) * filteredVelocity_;
@@ -195,14 +195,14 @@ void NezhaMotor::tick(uint32_t nowMs)
         hasLastTick_ = true;
     }
     lastPosition_ = pos;
-    lastTickMs_ = nowMs;
+    lastTick_ = nowMs;
 
     switch (mode_) {
         case Mode::DUTY:
             writeDuty(dutyTarget_);
             break;
         case Mode::VELOCITY: {
-            float dt = haveElapsed ? elapsedS : kNominalDt;
+            float dt = haveElapsed ? elapsedTime : kNominalDt;
             float duty = runVelocityPid(velocityTarget_, filteredVelocity_, dt);
             writeDuty(clampf(duty + feedforward_, -1.0f, 1.0f));
             break;

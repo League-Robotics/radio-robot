@@ -75,7 +75,7 @@ class NezhaMotor : public Motor {
   // _lastPosition/_lastVelocityMmps) ----
   float lastPosition_ = 0.0f;          // [mm]
   float filteredVelocity_ = 0.0f;      // [mm/s] EMA-filtered (vel_filt_alpha); fed to the embedded PID and velocity()
-  uint32_t lastTickMs_ = 0;            // [ms]
+  uint32_t lastTick_ = 0;            // [ms]
   bool hasLastTick_ = false;
   bool connected_ = false;
 
