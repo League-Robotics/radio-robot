@@ -257,6 +257,20 @@ bool applyMotorCfgKey(msg::MotorConfig& cfg, const char* key, const char* value,
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "vel_filt_alpha=%s", numStr);
         return true;
     }
+    if (strcmp(key, "dwell") == 0) {
+        cfg.reversal_dwell.has = true;
+        cfg.reversal_dwell.val = static_cast<float>(atof(value));
+        formatFixed(numStr, sizeof(numStr), cfg.reversal_dwell.val, 1);
+        snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "dwell=%s", numStr);
+        return true;
+    }
+    if (strcmp(key, "deadband") == 0) {
+        cfg.output_deadband.has = true;
+        cfg.output_deadband.val = static_cast<float>(atof(value));
+        formatFixed(numStr, sizeof(numStr), cfg.output_deadband.val, 3);
+        snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "deadband=%s", numStr);
+        return true;
+    }
     return false;
 }
 
@@ -306,9 +320,12 @@ void emitMotorState(Hal::Motor& motor, uint32_t port, const char* corrId,
 
     char rbuf[200];
     CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
-        "pos=%s vel=%s applied=%s wedged=%d conn=%d",
+        "pos=%s vel=%s applied=%s wedged=%d wsus=%d hrc=%u src=%u conn=%d",
         posStr, velStr, appliedStr,
         (s.wedged.has && s.wedged.val) ? 1 : 0,
+        (s.wedge_suspect.has && s.wedge_suspect.val) ? 1 : 0,
+        s.hard_reset_count.has ? static_cast<unsigned>(s.hard_reset_count.val) : 0u,
+        s.soft_reset_count.has ? static_cast<unsigned>(s.soft_reset_count.val) : 0u,
         s.connected ? 1 : 0);
 }
 

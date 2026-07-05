@@ -2,7 +2,7 @@
 id: 078
 title: 'Motor write-path armor: zero-dwell reversal, deadband, guarded resets, qualified
   wedge reporting'
-status: ticketing
+status: done
 branch: sprint/078-motor-write-path-armor-zero-dwell-reversal-deadband-guarded-resets-qualified-wedge-reporting
 use-cases:
 - SUC-001

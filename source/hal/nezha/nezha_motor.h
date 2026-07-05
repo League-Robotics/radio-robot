@@ -13,6 +13,15 @@
 // (1..4) sent in every frame — NOT a left/right pair (Design Rationale 3).
 // All encoder plumbing and raw register verbs are private; the only public
 // surface is the Hal::Motor faceplate.
+//
+// Sprint 078 refit — the reversal-latch armor (zero-dwell reversal, output
+// deadband, standstill-guarded resets, motion-qualified wedge reporting) is
+// now shared Hal::Motor base-class policy (source/hal/capability/motor.h),
+// not owned here. This class supplies only the four device-specific
+// protected primitives the base calls (writeRawDuty()/hardReset()/
+// softRebaseline()/configureDevice()) plus its own write shaping (40 ms
+// throttle, ±slew_rate) and encoder sampling — see architecture-update.md,
+// "The base/leaf split — exact contract".
 #pragma once
 
 #include <stdint.h>
@@ -40,19 +49,23 @@ class NezhaMotor : public Motor {
   void setPosition(float position) override;            // [deg]
   void setNeutral(msg::Neutral mode) override;
   void setFeedforward(float feedforward) override;      // [V]
-  void resetPosition() override;
 
   // --- Primitive getters (Hal::Motor) ---
   float position() const override;       // [mm]
   float velocity() const override;       // [mm/s] signed, filtered
   float appliedDuty() const override;    // [-1, 1]
   bool connected() const override;
-  bool wedged() const override;
 
   // --- Faceplate verbs (Hal::Motor) ---
-  void configure(const msg::MotorConfig& config) override;
   void tick(uint32_t now) override;      // [ms]
   msg::MotorCapabilities capabilities() const override;
+
+ protected:
+  // --- Device-specific armor primitives (Hal::Motor, sprint 078) ---
+  void writeRawDuty(float duty) override;    // ported Motor::setSpeed(), minus the reversal-exemption branch (structurally unreachable — see .cpp)
+  void hardReset() override;                 // ported Motor::resetEncoder() (median-of-3 + readback-verify + retry), unchanged
+  void softRebaseline() override;            // new — ported from source_old's Motor::rebaselineSoft() (064-003)
+  void configureDevice(const msg::MotorConfig& config) override;   // slew_rate defaulting etc., minus the two base-owned armor fields
 
  private:
   enum class Mode : uint8_t { NONE, DUTY, VELOCITY, POSITION, NEUTRAL };
@@ -69,7 +82,6 @@ class NezhaMotor : public Motor {
   bool positionCommandPending_ = false;               // write-on-change gate for 0x5D
   msg::Neutral neutralTarget_ = msg::Neutral::COAST;
   float feedforward_ = 0.0f;                          // additive term, folded into the raw PID output before the final clamp
-  bool resetPending_ = false;                         // reset_position rides beside any arm; processed in tick()
 
   // ---- tick() encoder-sample cache (ported from Motor::tick()'s
   // _lastPosition/_lastVelocityMmps) ----
@@ -82,14 +94,6 @@ class NezhaMotor : public Motor {
   // ---- Write path (ported from Motor::setSpeed()) ----
   int8_t lastWrittenPct_ = -128;        // [%] sentinel (outside ±100) forces the first write
   uint64_t lastWriteTimeUs_ = 0;        // [us]
-
-  // ---- Wedge detector (ported from MotorController::controlTick's
-  // per-wheel stuck-encoder detector; folded down to per-motor here since
-  // there is no L/R pairing at this tier) ----
-  float wedgePrevEnc_ = 0.0f;
-  bool wedgePrevValid_ = false;
-  uint8_t stuckCount_ = 0;
-  bool wedgeLatched_ = false;
 
   // ---- Embedded velocity PID state (see nezha_motor.cpp for the control
   // law derivation from VelocityController::update()) ----
@@ -107,7 +111,6 @@ class NezhaMotor : public Motor {
   static constexpr float kDefaultSlewRate = 25.0f;   // architecture-update.md Design Rationale 2: ports kMaxDeltaPwmPerWrite's default
 
   // ---- Private helpers: write path ----
-  void writeDuty(float duty);                          // ported Motor::setSpeed() (write-on-change, rate-limit, slew, coast-at-zero)
   void writeMotorRun(uint8_t direction, uint8_t speed);  // ported Motor::writeMotorCmd() (0x60)
   void writePositionMove(float positionDeg);            // ported Motor::moveToAngle() (0x5D)
 
@@ -116,22 +119,9 @@ class NezhaMotor : public Motor {
   int32_t readEncoderAtomicRaw();       // one-off sample: 4ms pre-idle -> 0x46 write -> 4ms settle -> read
   void requestEncoder();                // split-phase phase 1 (ported byte-for-byte; not wired into tick() this ticket — see .cpp)
   int32_t collectEncoder();             // split-phase phase 2 (ported byte-for-byte; not wired into tick() this ticket — see .cpp)
-  void hardResetEncoder();              // ported Motor::resetEncoder() (median-of-3 + readback-verify + retry)
-
-  // Decision (ticket 003, explicitly optional per its acceptance criteria):
-  // Motor::rebaselineSoft() — a no-I2C software-only rebaseline used by
-  // source_old's MotorController when the drivetrain is mid-motion, so the
-  // atomic 0x46 read burst never fires while moving — is NOT ported this
-  // ticket. Nothing in this ticket's scope calls it: resetPosition() always
-  // takes the hard-reset path (hardResetEncoder()), since MotorCommand has
-  // only one reset arm (reset_position) and no "the drivetrain is mid-
-  // motion, use the soft path" signal reaches this class yet (that
-  // decision, if still needed, lives one tier up in Drivetrain/DEV — later
-  // tickets). Revisit if a future ticket finds it needs the soft path.
 
   // ---- Private helpers: control ----
   float runVelocityPid(float target, float measured, float dt);   // [mm/s] [mm/s] [s] -> duty [-1,1]
-  void updateWedgeDetector(float pos);
 
   // ---- Vendor register wrappers ported for completeness (matching
   // source_old's coverage) but NOT reachable from the public faceplate

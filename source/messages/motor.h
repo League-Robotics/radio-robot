@@ -78,6 +78,9 @@ struct MotorState {
     Opt<float> velocity = {};
     Opt<float> applied = {};
     Opt<bool> wedged = {};
+    Opt<bool> wedge_suspect = {};
+    Opt<uint32_t> hard_reset_count = {};
+    Opt<uint32_t> soft_reset_count = {};
 
     // --- getters ---
     bool get_connected() const { return connected; }
@@ -85,6 +88,9 @@ struct MotorState {
     const Opt<float>& get_velocity() const { return velocity; }
     const Opt<float>& get_applied() const { return applied; }
     const Opt<bool>& get_wedged() const { return wedged; }
+    const Opt<bool>& get_wedge_suspect() const { return wedge_suspect; }
+    const Opt<uint32_t>& get_hard_reset_count() const { return hard_reset_count; }
+    const Opt<uint32_t>& get_soft_reset_count() const { return soft_reset_count; }
 };
 
 // MotorConfig
@@ -96,6 +102,8 @@ struct MotorConfig {
     float min_duty = 0.0f;
     float slew_rate = 0.0f;
     uint32_t port = 0;
+    Opt<float> reversal_dwell = {};
+    Opt<float> output_deadband = {};
 
     // --- getters ---
     float get_travel_calib() const { return travel_calib; }
@@ -105,6 +113,8 @@ struct MotorConfig {
     float get_min_duty() const { return min_duty; }
     float get_slew_rate() const { return slew_rate; }
     uint32_t get_port() const { return port; }
+    const Opt<float>& get_reversal_dwell() const { return reversal_dwell; }
+    const Opt<float>& get_output_deadband() const { return output_deadband; }
 
     // --- chainable setters (Command/Config only) ---
     MotorConfig& setTravelCalib(float v) { travel_calib = v; return *this; }
@@ -114,6 +124,14 @@ struct MotorConfig {
     MotorConfig& setMinDuty(float v) { min_duty = v; return *this; }
     MotorConfig& setSlewRate(float v) { slew_rate = v; return *this; }
     MotorConfig& setPort(uint32_t v) { port = v; return *this; }
+    MotorConfig& setReversalDwell(float v) {
+        reversal_dwell.has = true; reversal_dwell.val = v;
+        return *this;
+    }
+    MotorConfig& setOutputDeadband(float v) {
+        output_deadband.has = true; output_deadband.val = v;
+        return *this;
+    }
 };
 
 // MotorCapabilities

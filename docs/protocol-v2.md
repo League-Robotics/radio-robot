@@ -1563,7 +1563,7 @@ DEV M <n> POS <position>     [deg]            → OK DEV M <n> pos=<position>
 DEV M <n> VOLT <voltage>     [V]              → ERR unsupported volt (Nezha has no voltage mode)
 DEV M <n> NEUTRAL <B|C>                        → OK DEV M <n> neutral=<B|C>
 DEV M <n> RESET                                → OK DEV M <n> reset=1
-DEV M <n> STATE                                → OK DEV M <n> pos=.. vel=.. applied=.. wedged=.. conn=..
+DEV M <n> STATE                                → OK DEV M <n> pos=.. vel=.. applied=.. wedged=.. wsus=.. hrc=.. src=.. conn=..
 DEV M <n> CAPS                                  → OK DEV M <n> duty=.. volt=.. vel=.. pos=.. enc=..
 DEV M <n> CFG k=v ...                          → OK DEV M <n> <applied k=v ...>
 ```
@@ -1588,10 +1588,39 @@ DEV M <n> CFG k=v ...                          → OK DEV M <n> <applied k=v ...
   path (duty 0 via `0x60`); both letters currently produce the same
   hardware action but are accepted and echoed distinctly for forward
   compatibility.
-- `RESET` — zeroes the encoder (`MotorCommand.reset_position`); always
-  accepted (not capability-gated).
-- `STATE` — one line, always all five fields even when a leaf lacks an
+- `RESET` — stages a reset (`MotorCommand.reset_position`); always accepted
+  (not capability-gated). The `OK reset=1` reply reports **acceptance, not
+  completion-kind**: the hard-reset-vs-soft-rebaseline decision is made at
+  the top of the *next* `tick()` (`Motor::processResetIfPending()`), based
+  on whether the motor has been at a verified standstill for several
+  consecutive ticks —
+  - **verified standstill** (several consecutive at-rest ticks observed) →
+    a **hard reset**: an atomic hardware re-prime burst that zeroes the
+    encoder. Increments `hrc=`.
+  - **not at rest** (the motor is still moving when the reset is
+    dispatched) → a **soft rebaseline**: a software-only rebaseline that
+    issues no bus transaction. Increments `src=`.
+
+  Either way, `position()` reads ~0 on the very next `STATE` poll — the
+  wire contract is the same regardless of which internal path fired. The
+  `RESET` reply itself never reveals which kind ran; only a subsequent
+  `STATE` poll's `hrc=`/`src=` deltas do.
+- `STATE` — one line, always all eight fields even when a leaf lacks an
   encoder (unset fields report `0`/`false`, never a blank).
+  - `wedged=` — the **raw, unconditional** stuck-encoder latch: several
+    consecutive identical position reads, with no gating on whether the
+    motor is currently commanded to move. It latches (and stays latched)
+    even for an **idle** motor sitting at rest — that is benign and
+    expected, not a fault. Bench operators reading logs should not treat a
+    lone `wedged=1` on an otherwise-idle motor as an alarm.
+  - `wsus=` ("wedge-suspect") — the same identical-reads test, but
+    additionally qualified on `|applied|` exceeding the `deadband`
+    threshold — i.e. the motor is genuinely being commanded to move *right
+    now* and the encoder isn't responding. This is the field to alarm on;
+    `wedged=` alone is not sufficient evidence of a real stuck-motor fault.
+  - `hrc=` / `src=` — cumulative hard-reset / soft-rebaseline counters (see
+    `RESET` above). Monotonically increasing for the life of the process;
+    never reset by `STATE` itself.
 - `CAPS` — `1`/`0` per capability flag (`duty`, `volt`, `vel`, `pos`,
   `enc` = `has_encoder`).
 - `CFG k=v ...` — a **delta**, not a full replace: only the named keys
@@ -1611,11 +1640,45 @@ DEV M <n> CFG k=v ...                          → OK DEV M <n> <applied k=v ...
   | `travel_calib`   | `travel_calib`                | `%.4f`      |
   | `fwd_sign`       | `fwd_sign`                     | `%d`        |
   | `vel_filt_alpha` | `vel_filt_alpha`               | `%.3f`      |
+  | `dwell`          | `reversal_dwell`               | `%.1f`      |
+  | `deadband`       | `output_deadband`              | `%.3f`      |
 
   An unrecognized key emits `ERR badkey <key>` (does not prevent the
   other, valid keys in the same command from applying — mirrors `SET`'s
   per-key error reporting, §7). The final `OK` line lists only the keys
   that actually applied.
+
+  `dwell` and `deadband` are `optional` fields (not the `slew`-style
+  "`<= 0` means unconfigured" sentinel): an explicit `0` is a valid,
+  meaningful configuration for each, distinct from "never configured."
+  Never sending either key leaves the motor on its ship-safe defaults
+  (`100` ms dwell, `0.03` deadband).
+
+  - `dwell` — `[ms]`. How long the write path holds the output at
+    commanded-zero after detecting a commanded sign change (reversal),
+    before forwarding the new-direction duty. `0` is the explicit
+    legacy/A-B-test configuration: reversals fall straight through to an
+    immediate write with no dwell, reproducing pre-sprint-078 behavior.
+    Default when unset: `100` ms.
+  - `deadband` — `[-1,1]` fraction of the write-path's output duty. `|duty|`
+    below this threshold writes `0` immediately (never dwelt, never
+    clamped) instead of the commanded value; it also gates the
+    motion-qualified `wsus=` wedge-suspect signal (`STATE` above). Default
+    when unset: `0.03`.
+
+    **`deadband` is NOT the same knob as `min_duty`, despite both being
+    "deadband-shaped."** They gate different layers, at different points
+    in the pipeline, over different quantities:
+    - `min_duty` gates the **velocity PID's integrator-freeze threshold**,
+      tested against `|target|` in **mm/s** (a velocity magnitude) —
+      despite its name, it is not an output-duty gate at all.
+    - `deadband` gates the **write path's output duty fraction**, tested
+      against `|duty|` in the **`[-1, 1]`** unitless fraction range, after
+      the PID (or any other mode) has already produced a duty to write.
+
+    Tuning one has no effect on the other; a bench operator adjusting
+    "the deadband" via `DEV M <n> CFG` must pick the correct key for the
+    layer they actually mean to affect.
 
 Examples:
 
@@ -1624,7 +1687,7 @@ DEV M 1 DUTY 30
 OK DEV M 1 applied=0.30
 
 DEV M 1 STATE
-OK DEV M 1 pos=177.8 vel=0.0 applied=0.30 wedged=0 conn=1
+OK DEV M 1 pos=177.8 vel=0.0 applied=0.30 wedged=0 wsus=0 hrc=0 src=0 conn=1
 
 DEV M 1 VOLT 3
 ERR unsupported volt
@@ -1637,6 +1700,9 @@ OK DEV M 1 duty=1 volt=0 vel=1 pos=1 enc=1
 
 DEV M 3 CFG kp=0.8 slew=400
 OK DEV M 3 kp=0.800 slew=400.0
+
+DEV M 1 CFG dwell=0
+OK DEV M 1 dwell=0.0
 ```
 
 ### `DEV DT …` — Drivetrain Control
@@ -1734,15 +1800,22 @@ Example:
 
 ```
 DEV STATE
-OK DEV M 1 pos=177.8 vel=0.0 applied=0.00 wedged=0 conn=1
-OK DEV M 2 pos=0.0 vel=0.0 applied=0.00 wedged=1 conn=1
-OK DEV M 3 pos=0.0 vel=0.0 applied=0.00 wedged=1 conn=1
-OK DEV M 4 pos=0.0 vel=0.0 applied=0.00 wedged=1 conn=1
+OK DEV M 1 pos=177.8 vel=0.0 applied=0.00 wedged=0 wsus=0 hrc=0 src=0 conn=1
+OK DEV M 2 pos=0.0 vel=0.0 applied=0.00 wedged=1 wsus=0 hrc=0 src=1 conn=1
+OK DEV M 3 pos=0.0 vel=0.0 applied=0.00 wedged=1 wsus=0 hrc=0 src=0 conn=1
+OK DEV M 4 pos=0.0 vel=0.0 applied=0.00 wedged=1 wsus=0 hrc=0 src=0 conn=1
 OK DEV DT active=0 ports=1,2 vel=0.0,0.0
 
 DEV STOP
 OK DEV STOP
 ```
+
+Motors 2-4 above illustrate the `wedged=`-vs-`wsus=` distinction directly: all
+three show the raw `wedged=1` latch (several consecutive identical position
+reads), but since none is currently being commanded to move (`applied=0.00`,
+below the `deadband` threshold), `wsus=0` on every one — a benign, at-rest
+latch, not a fault. Motor 2's `src=1` shows a soft rebaseline having fired
+while it was not at a verified standstill.
 
 ### `DEV WD <window>` — Serial-Silence Watchdog Window
 
@@ -1781,7 +1854,7 @@ OK DEV M 1 vel=100.0
 … (host goes silent for > the current window) …
 EVT dev_watchdog
 DEV M 1 STATE
-OK DEV M 1 pos=412.0 vel=0.0 applied=0.00 wedged=0 conn=1
+OK DEV M 1 pos=412.0 vel=0.0 applied=0.00 wedged=0 wsus=0 hrc=0 src=0 conn=1
 ```
 
 ---

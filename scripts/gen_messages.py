@@ -227,6 +227,9 @@ _INVENTORY_MAP: dict = {
     ("MotorState", "velocity"):  "IVelocityMotor::velocityMmps() / ActualState::velMms[]",
     ("MotorState", "applied"):   "OutputState::pwm[] (applied PWM % — new dedicated readback field)",
     ("MotorState", "wedged"):    "(new field — motor stall flag, related to IBusDiagnostics wedge detection)",
+    ("MotorState", "wedge_suspect"): "(new field — sprint 078: motion-qualified wedge signal, wedged AND |appliedDuty| > output_deadband, Hal::Motor write-path armor)",
+    ("MotorState", "hard_reset_count"): "(new field — sprint 078: cumulative hard-reset count, ported idea from source_old 064-003 Motor::hardResetCount())",
+    ("MotorState", "soft_reset_count"): "(new field — sprint 078: cumulative soft-reset count, ported idea from source_old 064-003 Motor::softResetCount())",
 
     # MotorConfig: per-motor calibration parameters (077-002 accuracy pass)
     ("MotorConfig", "travel_calib"): "RobotConfig::{wheelTravelCalibL,wheelTravelCalibR} (per-motor, indexed by channel)",
@@ -236,6 +239,8 @@ _INVENTORY_MAP: dict = {
     ("MotorConfig", "min_duty"):       "RobotConfig::minWheelSpeed (stiction floor, moved from DrivetrainConfig.min_wheel, now duty-domain)",
     ("MotorConfig", "slew_rate"):      "hal/real/MotorSlew.h clampStep() kMaxDeltaPwmPerWrite (duty slew limit)",
     ("MotorConfig", "port"):           "(new field — Nezha motor port 1..4, identity moved from class to Config, 077-002)",
+    ("MotorConfig", "reversal_dwell"): "(new field — sprint 078: reversal-dwell hold time, Opt<float> unset -> ship default 100 ms applied in Hal::Motor::configure(), ticket 078-002)",
+    ("MotorConfig", "output_deadband"): "(new field — sprint 078: write-path output deadband fraction, Opt<float> unset -> ship default 0.03 applied in Hal::Motor::configure(), ticket 078-002)",
 
     # MotorCapabilities: capability declaration (077-002: one bool per control mode)
     ("MotorCapabilities", "duty_cycle"): "(new field — duty-cycle control mode capability flag)",

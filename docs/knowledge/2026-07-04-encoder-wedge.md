@@ -32,7 +32,7 @@ different persistence, and different fixes:
 
 | Flavor | Trigger | Persistence | Fix | Status |
 |---|---|---|---|---|
-| **Reversal latch** | The reversal write train: an immediate H-bridge sign flip written to 0x60 while the motor is under way — including the velocity PID's sign-dither at every decel/stop | Transient (heals at the next **at-rest** atomic 0x46 read burst: D-start reset, `ZERO enc`); escalates to persistent under repeated abuse | **≥50 ms commanded-zero dwell** on any sign change (ship 100 ms), or ramp ≤5 PWM-%/10 ms tick through zero | Root cause isolated and fix proven on bench 2026-07-04 (wedgelab, commit `5499fa7`). **Not yet in production firmware** — production ships the ±25 ΔPWM slew cap (064-002) only; zero-dwell is a pending sprint ticket |
+| **Reversal latch** | The reversal write train: an immediate H-bridge sign flip written to 0x60 while the motor is under way — including the velocity PID's sign-dither at every decel/stop | Transient (heals at the next **at-rest** atomic 0x46 read burst: D-start reset, `ZERO enc`); escalates to persistent under repeated abuse | **≥50 ms commanded-zero dwell** on any sign change (ship 100 ms), or ramp ≤5 PWM-%/10 ms tick through zero | Root cause isolated and fix proven on bench 2026-07-04 (wedgelab, commit `5499fa7`). **Shipped in the new `source/` tree** as `Hal::Motor`'s base-class armor policy (sprint 078: zero-dwell reversal + output deadband + standstill-guarded resets + motion-qualified wedge-suspect reporting, `source/hal/capability/motor.h`) — acceptance-soaked on the real friction rig 2026-07-04/05 (ticket 078-005): 0 motion-armed latches over 300 hot flips (150 legacy `dwell=0` + 150 armored `dwell=100`), reset-guard soft/hard paths both verified. See "Sprint 078 acceptance soak" below |
 | **Interrupt-load wedge** | nRF52 TWIM (I2C master) silicon errata: hardware SHORTS fail under high background interrupt load (telemetry UART + radio IRQs), corrupting a transfer to the Nezha | Persistent until the Nezha's power domain cycles | **IRQ guard**: mask interrupts across each I2C transaction (`I2CBus.cpp`, `_irqGuard`, default ON; live toggle `DBG IRQGUARD 1\|0`) | A/B proven 2026-06-07. Necessary for its flavor, **irrelevant to the reversal latch** — "the guard is on" is NOT evidence against a wedge |
 
 **Dead theories** (do not resurrect from older comments/docs — each was
@@ -146,19 +146,101 @@ deceleration = larger current/PWM transients at every command boundary.
 
 ### Production guidance
 
-1. **Production fix (pending sprint ticket):** two-phase reversal in the
-   motor write path — on sign change, write 0, hold ≥50 ms (100 ms
-   conservative), then the new direction (or ramp ≤5/tick). Keep stop
-   (pct==0) immediate. Applies to ALL sign changes including PID dither;
-   pair with an output deadband so near-zero dither cannot request flips.
-   Until it ships, production carries the ±25 ΔPWM slew cap (064-002,
-   ported to `source/hal/nezha/motor_slew.h` in sprint 077) — a
-   mitigation, not the fix.
-2. **Hard encoder resets only at verified standstill** (keep 064-003
-   `rebaselineSoft` for in-motion rebaselines).
+1. **Production fix — SHIPPED (sprint 078):** two-phase reversal in the
+   motor write path — on sign change, write 0, hold `reversal_dwell` ms
+   (ship default 100 ms; `dwell=0` is the explicit legacy/A-B config), then
+   the new direction (the leaf's own slew cap ramps it from zero). Stop
+   (`duty==0`, or sub-deadband) stays immediate and unclamped even mid-dwell.
+   Applies to every sign change including PID dither, paired with an
+   `output_deadband` (ship default `0.03`) so near-zero dither cannot
+   request a flip. Implemented ONCE in `Hal::Motor::armoredWrite()`
+   (`source/hal/capability/motor.h`) — shared by every leaf, not
+   Nezha-specific — with `NezhaMotor` supplying only the device-specific
+   `writeRawDuty()`/`hardReset()`/`softRebaseline()` primitives. The
+   pre-existing ±25 ΔPWM slew cap (064-002, `source/hal/nezha/motor_slew.h`)
+   is unchanged and still ramps every write regardless of `dwell` — see the
+   acceptance soak below for how the two mitigations interact.
+2. **Hard encoder resets only at verified standstill — SHIPPED (sprint
+   078):** `Hal::Motor::processResetIfPending()` dispatches a hard reset
+   only after `kRestTicksRequired` consecutive at-rest ticks
+   (`kRestVelocity`/`kRestTicksRequired`, `source/hal/capability/motor.h`);
+   otherwise it performs an immediate `softRebaseline()` (064-003's
+   `rebaselineSoft`, ported) — never an atomic burst while rotating. Bench-
+   confirmed adequate, see below; not adjusted.
 3. **Incoming inspection:** `wedgelab/` `run reset 10` (resetmode 1) on a
    mounted motor answers "latch-prone or clean" in ~15 s per direction.
    Fresh motors: 0 latches across the entire campaign battery.
+
+### Sprint 078 acceptance soak (2026-07-04/05, ticket 078-005)
+
+Ran `tests/bench/friction_rig_soak.py` against the real NEZHA2 "robot" unit
+(serial `9906360200052820a8fdb5e413abb276000000006e052820`) on the stand,
+friction rig on ports 3 (flip-tested motor) / 4 (constant-duty load motor,
+±40%/30% duty respectively — friction coupling only transmits load with
+both spinning, per `pid_hold_speed.py`'s docstring). This unit's history/
+susceptibility going into the soak was **unknown** — not a known-bad pair
+like the wedgelab's M1/M2.
+
+| Arm | `dwell` | Flips | Motion-armed (`wsus=1`) latches |
+|---|---|---|---|
+| Control (explicit legacy) | 0 ms | 150 | **0** |
+| Treatment (ship default) | 100 ms | 150 | **0** |
+
+Reset-guard check (SUC-002): mid-motion `RESET` took the soft path
+(`src=` +1, `hrc=` unchanged, position rebased to ~0 — verified via a
+timing-aware bound rather than a fixed tolerance, since this bench's
+already-documented USB CDC burst-drop-rate makes wall-clock latency
+unpredictable); at-rest `RESET` took the hard path (`hrc=` +1). Both PASS,
+reproduced across multiple repeated trials this session.
+
+**Caveat — 0 latches in the control arm is NOT standalone proof the sprint
+078 armor is what's protecting this hardware.** Two independent reasons,
+both flagged in-band by the soak script and neither silently omitted:
+- Susceptibility is motor-unit- and state-dependent (this doc's own
+  wedgelab data: fresh motors were immune at every dose the campaign threw
+  at them). This robot's ports 3/4 units' history and hot/cold state were
+  unknown going in — a clean run does not establish they are the
+  wedgelab's susceptible old pair.
+- The pre-existing ±25 ΔPWM/write slew cap (064-002) ramps every write
+  regardless of `dwell`, in BOTH arms — so `dwell=0` here is "sprint-077's
+  already-slew-mitigated legacy" (per `armoredWrite()`'s own contract), not
+  the fully raw, unclamped pre-064-002 flip the original wedgelab campaign
+  characterized. A clean control arm is thus also consistent with "the
+  slew cap alone already provides meaningful protection at this duty," not
+  only with "these motor units are immune."
+
+Bottom line: the armor's write-path state machine, reset-guard dispatch,
+and wedge-suspect reporting were all exercised and behaved exactly per
+spec on real hardware, with zero regressions — but this session's evidence
+brackets "no observed trigger", it does not independently isolate the new
+`dwell` mechanism's own marginal contribution on this specific rig. A
+future soak against a known-susceptible motor pair (if one becomes
+available) would close that gap.
+
+**`kRestVelocity`/`kRestTicksRequired` (proposed 5 mm/s / 5 ticks,
+`source/hal/capability/motor.h`) — reviewed, CONFIRMED ADEQUATE, not
+adjusted.** Across every reset-guard trial this session (repeated
+independently several times): the at-rest hard path fired reliably every
+time after a 2 s post-neutral settle, with velocity already reading exactly
+0 mm/s at that checkpoint; the mid-motion soft path never misfired into a
+hard burst while genuinely spinning at 170-220 mm/s (well above the 5 mm/s
+threshold). No instance of firing early (a hard-reset burst while the rig
+was still audibly/measurably rotating) or unreasonably late (an operator
+never waited more than ~2 s for a hard reset to be honored at genuine
+rest) was observed. A precise sub-second velocity-decay curve was
+attempted but abandoned as unreliable: this bench session's live packet
+loss was heavy enough that individual `STATE` polls occasionally took
+several seconds (dev_send's own retry budget), swamping any fine-grained
+timing signal — the qualitative verdict above rests on the repeated
+reset-guard pass/fail evidence, not a fabricated decay number this session
+could not actually measure cleanly.
+
+Evidence: `tests/bench/out/friction_rig_soak_control.csv`,
+`friction_rig_soak_treatment.csv`, `friction_rig_soak_reset_guard.csv`, and
+the full session transcript `friction_rig_soak.transcript.log` (all
+gitignored HITL run artifacts, per this repo's existing `tests/bench/out/`
+convention — reproduce with `uv run python tests/bench/friction_rig_soak.py
+--port <port>`).
 
 ---
 

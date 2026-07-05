@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Off-hardware policy unit tests (MockMotor host harness)
-status: open
+status: done
 use-cases:
 - SUC-005
 - SUC-002
@@ -74,23 +74,26 @@ the testability benefit of placing the armor in the base class (Decision
 
 ## Acceptance Criteria
 
-- [ ] `MockMotor` implements only the four new protected virtuals plus the
+- [x] `MockMotor` implements only the four new protected virtuals plus the
       minimal existing public primitives needed to drive scenarios — no
       I2C, no CODAL, no dependency beyond `capability/motor.h` and
       `messages/*.h`.
-- [ ] All six scenarios from the Description pass.
-- [ ] The pytest wrapper is collected by `uv run python -m pytest` (runs
+- [x] All six scenarios from the Description pass.
+- [x] The pytest wrapper is collected by `uv run python -m pytest` (runs
       as part of the existing `tests/sim` domain, no `pyproject.toml`
       change required) and completes in well under a second with no
       connected hardware and no ARM toolchain.
-- [ ] The harness/test is self-contained: compiling and running it does
+- [x] The harness/test is self-contained: compiling and running it does
       not require `just build`, `mbdeploy`, or any CODAL/ARM toolchain
       component.
-- [ ] `tests/sim/unit/test_placeholder.py` is left in place or removed
+- [x] `tests/sim/unit/test_placeholder.py` is left in place or removed
       only if this ticket's test makes `tests/sim/unit/` non-empty in a
       way that satisfies the placeholder's own stated purpose (its
       docstring says delete it "once `tests/sim/unit/` gains real tests")
-      — reviewer's call, not required either way.
+      — reviewer's call, not required either way. Left in place: it
+      still serves its stated purpose (proving bare collection is clean)
+      independent of this ticket's test, and removing it is explicitly
+      not required.
 
 ## Testing
 
