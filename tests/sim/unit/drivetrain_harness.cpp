@@ -239,9 +239,9 @@ void scenarioHeldCommandPortsMatchBindingAndCarryTargets() {
 
   checkUintEq(cmd.wheel[0].port, 3, "held command wheel[0].port == left_port");
   checkUintEq(cmd.wheel[1].port, 4, "held command wheel[1].port == right_port");
-  checkKindEq(cmd.wheel[0].command.get_control_kind(),
+  checkKindEq(cmd.wheel[0].command.control_kind,
               msg::MotorCommand::ControlKind::VELOCITY, "wheel[0] is a VELOCITY command");
-  checkKindEq(cmd.wheel[1].command.get_control_kind(),
+  checkKindEq(cmd.wheel[1].command.control_kind,
               msg::MotorCommand::ControlKind::VELOCITY, "wheel[1] is a VELOCITY command");
   checkFloatEq(cmd.wheel[0].command.control.velocity, 42.0f, "wheel[0] velocity target");
   checkFloatEq(cmd.wheel[1].command.control.velocity, -17.0f, "wheel[1] velocity target");
@@ -260,9 +260,9 @@ void scenarioHeldCommandReflectsNeutralMode() {
   dt.tick(3000, obsVelocity(0.0f), obsVelocity(0.0f));
 
   Hal::DrivetrainToHalCommand held = dt.takeCommand();
-  checkKindEq(held.wheel[0].command.get_control_kind(),
+  checkKindEq(held.wheel[0].command.control_kind,
               msg::MotorCommand::ControlKind::NEUTRAL, "wheel[0] is a NEUTRAL command");
-  checkKindEq(held.wheel[1].command.get_control_kind(),
+  checkKindEq(held.wheel[1].command.control_kind,
               msg::MotorCommand::ControlKind::NEUTRAL, "wheel[1] is a NEUTRAL command");
   checkTrue(held.wheel[0].command.control.neutral == msg::Neutral::COAST,
             "wheel[0] neutral mode matches setNeutral(COAST)");

@@ -2,7 +2,7 @@
 id: '001'
 title: 'Remove get_* accessors from generated message headers: generator, regen, full
   call-site sweep, and regression guard'
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-002
@@ -96,32 +96,38 @@ buildable checkpoint between "regen" and "sweep" to split across tickets.
 
 ## Acceptance Criteria
 
-- [ ] `scripts/gen_messages.py`'s `_emit_message` no longer emits any
+- [x] `scripts/gen_messages.py`'s `_emit_message` no longer emits any
       `get_*`-prefixed method for any field shape (oneof-kind, `Opt<T>`,
       message, enum, string, plain scalar).
-- [ ] Chainable setters, the oneof union/kind-enum machinery, and the
+- [x] Chainable setters, the oneof union/kind-enum machinery, and the
       repeated-field array accessors (`{field}()` / `{field}_count_val()`)
       are unchanged.
-- [ ] All 9 files under `source/messages/` are regenerated and committed.
-- [ ] `grep -rn "get_[a-z_]*(" source/messages/` returns nothing.
-- [ ] `grep -rn "\.get_[a-z_]*(" source/ tests/ --include=*.cpp --include=*.h`
+- [x] All 9 files under `source/messages/` are regenerated and committed.
+- [x] `grep -rn "get_[a-z_]*(" source/messages/` returns nothing.
+- [x] `grep -rn "\.get_[a-z_]*(" source/ tests/ --include=*.cpp --include=*.h`
       (excluding `source/messages/`) returns nothing — all 54 call sites
       listed above converted to direct field reads.
-- [ ] New guard test `tests/unit/test_gen_messages_no_getters.py` exists,
+- [x] New guard test `tests/unit/test_gen_messages_no_getters.py` exists,
       passes against the sprint's regenerated generator output, and fails
       if a `get_*` branch is manually reintroduced into `_emit_message`.
-- [ ] `just build` is green for **both** `ROBOT_DEV_BUILD` forks —
+      (`pyproject.toml`'s `testpaths` was extended to include `tests/unit`
+      so this new test is actually collected by `uv run python -m pytest` —
+      previously only `tests/sim` was collected.)
+- [x] `just build` is green for **both** `ROBOT_DEV_BUILD` forks —
       `dev_commands.cpp` is the only fork-gated file among the six
       (`#if ROBOT_DEV_BUILD`), so its 6 call sites only compile under the
       dev fork; the other 5 files compile in both forks.
-- [ ] `uv run python -m pytest` is fully green, including the compiled
+- [x] `uv run python -m pytest` is fully green, including the compiled
       `tests/sim/unit/drivetrain_harness.cpp` and
       `tests/sim/unit/dev_command_outbox_harness.cpp` binaries (driven by
       `test_drivetrain.py` / `test_dev_command_outbox.py`).
-- [ ] No wire/schema/field-layout change — `source/messages/bridges.h`'s
+- [x] No wire/schema/field-layout change — `source/messages/bridges.h`'s
       static_asserts are unaffected; `docs/design/message-inventory.md`
       content (if regenerated) is unchanged since it maps fields, not
-      accessor methods.
+      accessor methods. (Regen was attempted and reverted: it surfaced
+      unrelated pre-existing staleness from sprints 078/079 never having
+      been synced into the doc before this ticket — out of scope for this
+      atomic getter-removal commit, left untouched.)
 
 ## Testing
 

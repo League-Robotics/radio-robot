@@ -205,7 +205,7 @@ inline void Motor::configure(const msg::MotorConfig& config) {
 
 inline bool Motor::apply(const msg::MotorCommand& command) {
   const msg::MotorCapabilities caps = capabilities();
-  const msg::MotorCommand::ControlKind kind = command.get_control_kind();
+  const msg::MotorCommand::ControlKind kind = command.control_kind;
 
   if (!motorCommandAllowed(caps, kind)) return false;
 
@@ -238,10 +238,10 @@ inline bool Motor::apply(const msg::MotorCommand& command) {
   // Feedforward and reset_position ride beside whichever arm (or lack of
   // one) was just processed — never gated by capabilities(), since they
   // are not control modes themselves.
-  if (command.get_feedforward().has) {
-    setFeedforward(command.get_feedforward().val);
+  if (command.feedforward.has) {
+    setFeedforward(command.feedforward.val);
   }
-  if (command.get_reset_position().has && command.get_reset_position().val) {
+  if (command.reset_position.has && command.reset_position.val) {
     resetPosition();
   }
 

@@ -674,14 +674,19 @@ def _emit_message(md, want_setters: bool, lines: list[str],
             ft = _scalar_cpp_type(field)
             lines.append(f"    {ft} {fname} = {default};")
 
-    # --- Getters ---
+    # --- Array / optional-string accessors ---
+    # 080-001: every get_*-prefixed accessor (oneof-kind discriminator,
+    # Opt<T>, message, enum, string, plain scalar) has been removed -- each of
+    # those fields is already a plain public struct member with no invariant
+    # or computation behind it, so callers read the field directly
+    # (x.foo, x.foo_kind, x.foo.has / x.foo.val for Opt<T>). The two accessors
+    # below are NOT get_-prefixed and stay in scope (architecture-update.md
+    # "Unchanged"): the repeated-field array pair exists only because its
+    # backing member is suffixed `{field}_` to dodge a name collision with the
+    # accessor, and has_{field}() is the only way to read the has-flag of an
+    # optional string (the value itself is still a bare field, {field}).
     lines.append("")
-    lines.append("    // --- getters ---")
-    for oi, oneof_name, oneof_fields in real_oneofs:
-        kind_name = f"{_cap_camel(oneof_name)}Kind"
-        lines.append(f"    {kind_name} get_{oneof_name}_kind() const"
-                     f" {{ return {oneof_name}_kind; }}")
-
+    lines.append("    // --- array / optional-string accessors ---")
     for field in md.field:
         fname = field.name
         is_repeated = field.label == _LABEL_REPEATED
@@ -700,31 +705,16 @@ def _emit_message(md, want_setters: bool, lines: list[str],
             else:
                 ft_arr = ft
             if field.type == _TYPE_STRING:
-                pass  # skip getter for char[][] — too messy
+                pass  # skip accessor for char[][] — too messy
             else:
-                # Data member is {fname}_ to avoid collision with getter method.
+                # Data member is {fname}_ to avoid collision with the accessor.
                 lines.append(f"    const {ft_arr}* {fname}() const {{ return {fname}_; }}")
                 lines.append(f"    uint8_t {fname}_count_val() const"
                              f" {{ return {fname}_count; }}")
-        elif is_opt:
-            if field.type == _TYPE_STRING:
-                lines.append(f"    bool has_{fname}() const {{ return {fname}_has; }}")
-                lines.append(f"    const char* get_{fname}() const {{ return {fname}; }}")
-            else:
-                ft = _cpp_field_type(field)
-                lines.append(f"    const Opt<{ft}>& get_{fname}() const"
-                             f" {{ return {fname}; }}")
-        elif field.type == _TYPE_MESSAGE:
-            ft = _short_type_name(field.type_name)
-            lines.append(f"    const {ft}& get_{fname}() const {{ return {fname}; }}")
-        elif field.type == _TYPE_ENUM:
-            ft = _short_type_name(field.type_name)
-            lines.append(f"    {ft} get_{fname}() const {{ return {fname}; }}")
-        elif field.type == _TYPE_STRING:
-            lines.append(f"    const char* get_{fname}() const {{ return {fname}; }}")
-        else:
-            ft = _scalar_cpp_type(field)
-            lines.append(f"    {ft} get_{fname}() const {{ return {fname}; }}")
+        elif is_opt and field.type == _TYPE_STRING:
+            lines.append(f"    bool has_{fname}() const {{ return {fname}_has; }}")
+        # Opt<T> (non-string), message, enum, string, and plain-scalar fields
+        # are plain public members -- no accessor emitted here.
 
     # --- Setters (Command/Config types only) ---
     if want_setters:
@@ -1013,29 +1003,32 @@ def _emit_inventory(file_descriptors) -> str:
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# Main entry point
-# ---------------------------------------------------------------------------
-def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Generate C++11 POD headers from proto3 message definitions."
-    )
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Print what would be written; do not touch files.")
-    parser.add_argument("--emit-inventory", action="store_true",
-                        help="Also write docs/design/message-inventory.md.")
-    args = parser.parse_args(argv)
+class GenMessagesError(RuntimeError):
+    """Raised by _run_codegen_pipeline() on a codegen pipeline failure."""
 
+
+def _run_codegen_pipeline():
+    """Run protoc over protos/*.proto and emit every header's content in-memory.
+
+    Returns (outputs, fds):
+      outputs: {header_name: content} for the 8 proto-derived headers plus the
+        hand-authored bridges.h -- no filesystem writes.
+      fds: the parsed FileDescriptorSet (needed by --emit-inventory).
+
+    Raises GenMessagesError on any pipeline failure (missing grpcio-tools,
+    protoc syntax error) instead of printing + returning an exit code, so this
+    function is reusable outside main()'s CLI shape.
+    """
     # ------------------------------------------------------------------
     # Locate grpcio-tools _proto directory for well-known imports
     # ------------------------------------------------------------------
     try:
         import grpc_tools
-    except ImportError:
-        print("gen_messages: grpcio-tools is not installed.\n"
-              "  Run: uv sync  (grpcio-tools is in the 'codegen' dependency group)",
-              file=sys.stderr)
-        return 1
+    except ImportError as exc:
+        raise GenMessagesError(
+            "grpcio-tools is not installed.\n"
+            "  Run: uv sync  (grpcio-tools is in the 'codegen' dependency group)"
+        ) from exc
 
     well_known_dir = str(Path(grpc_tools.__file__).parent / "_proto")
 
@@ -1064,8 +1057,7 @@ def main(argv=None) -> int:
         ] + proto_paths)
 
         if ret != 0:
-            print("gen_messages: protoc failed — check proto syntax.", file=sys.stderr)
-            return 1
+            raise GenMessagesError("protoc failed — check proto syntax.")
 
         fds_bytes = Path(tmp_path).read_bytes()
     finally:
@@ -1109,6 +1101,42 @@ def main(argv=None) -> int:
 
     # bridges.h is hand-authored in this generator (not from a proto file)
     outputs["bridges.h"] = _emit_bridges_header()
+
+    return outputs, fds
+
+
+def generate_headers() -> dict:
+    """Run the codegen pipeline and return {header_name: content} in-memory.
+
+    Public entry point for anything that needs generated header text without
+    writing to source/messages/ — currently the getter regression-guard test
+    (tests/unit/test_gen_messages_no_getters.py), which scans this output for
+    a reintroduced get_*-prefixed method (architecture-update.md Decision 3:
+    the guard must run the same codegen path a real build runs, not a grep
+    over the checked-in headers alone).
+    """
+    outputs, _fds = _run_codegen_pipeline()
+    return outputs
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Generate C++11 POD headers from proto3 message definitions."
+    )
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print what would be written; do not touch files.")
+    parser.add_argument("--emit-inventory", action="store_true",
+                        help="Also write docs/design/message-inventory.md.")
+    args = parser.parse_args(argv)
+
+    try:
+        outputs, fds = _run_codegen_pipeline()
+    except GenMessagesError as exc:
+        print(f"gen_messages: {exc}", file=sys.stderr)
+        return 1
 
     # ------------------------------------------------------------------
     # Write or dry-run

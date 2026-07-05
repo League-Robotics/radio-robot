@@ -460,7 +460,7 @@ void handleDevM(const ArgList& args, const char* corrId,
             float duty = args.args[2].fval / 100.0f;
             msg::MotorCommand cmd;
             cmd.setDutyCycle(duty);
-            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.get_control_kind())) {
+            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.control_kind)) {
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "duty", corrId, replyFn, replyCtx);
                 break;
             }
@@ -476,7 +476,7 @@ void handleDevM(const ArgList& args, const char* corrId,
             float velocity = args.args[2].fval;
             msg::MotorCommand cmd;
             cmd.setVelocity(velocity);
-            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.get_control_kind())) {
+            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.control_kind)) {
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "vel", corrId, replyFn, replyCtx);
                 break;
             }
@@ -492,7 +492,7 @@ void handleDevM(const ArgList& args, const char* corrId,
             float position = args.args[2].fval;
             msg::MotorCommand cmd;
             cmd.setPosition(position);
-            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.get_control_kind())) {
+            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.control_kind)) {
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "pos", corrId, replyFn, replyCtx);
                 break;
             }
@@ -508,7 +508,7 @@ void handleDevM(const ArgList& args, const char* corrId,
             float voltage = args.args[2].fval;
             msg::MotorCommand cmd;
             cmd.setVoltage(voltage);
-            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.get_control_kind())) {
+            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.control_kind)) {
                 // Expected on Nezha: capabilities().voltage == false -- proves
                 // the shared capability gate, not a DEV-layer special case.
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "volt", corrId, replyFn, replyCtx);
@@ -532,7 +532,7 @@ void handleDevM(const ArgList& args, const char* corrId,
             // accepts it, but it still runs through the same one path as every
             // other motion verb (pre-validate, then stage) rather than a
             // special case.
-            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.get_control_kind())) {
+            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.control_kind)) {
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "neutral", corrId, replyFn, replyCtx);
                 break;
             }
@@ -548,7 +548,7 @@ void handleDevM(const ArgList& args, const char* corrId,
             // RESET's control_kind is NONE (reset_position rides the side
             // channel) -- motorCommandAllowed() always accepts NONE, but this
             // still goes through the same pre-validate-then-stage path.
-            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.get_control_kind())) {
+            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.control_kind)) {
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "reset", corrId, replyFn, replyCtx);
                 break;
             }

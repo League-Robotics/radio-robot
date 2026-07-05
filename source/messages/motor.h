@@ -30,10 +30,7 @@ struct MotorCommand {
     Opt<float> feedforward = {};
     Opt<bool> reset_position = {};
 
-    // --- getters ---
-    ControlKind get_control_kind() const { return control_kind; }
-    const Opt<float>& get_feedforward() const { return feedforward; }
-    const Opt<bool>& get_reset_position() const { return reset_position; }
+    // --- array / optional-string accessors ---
 
     // --- chainable setters (Command/Config only) ---
     MotorCommand& setDutyCycle(float v) {
@@ -82,15 +79,7 @@ struct MotorState {
     Opt<uint32_t> hard_reset_count = {};
     Opt<uint32_t> soft_reset_count = {};
 
-    // --- getters ---
-    bool get_connected() const { return connected; }
-    const Opt<float>& get_position() const { return position; }
-    const Opt<float>& get_velocity() const { return velocity; }
-    const Opt<float>& get_applied() const { return applied; }
-    const Opt<bool>& get_wedged() const { return wedged; }
-    const Opt<bool>& get_wedge_suspect() const { return wedge_suspect; }
-    const Opt<uint32_t>& get_hard_reset_count() const { return hard_reset_count; }
-    const Opt<uint32_t>& get_soft_reset_count() const { return soft_reset_count; }
+    // --- array / optional-string accessors ---
 };
 
 // MotorConfig
@@ -105,16 +94,7 @@ struct MotorConfig {
     Opt<float> reversal_dwell = {};
     Opt<float> output_deadband = {};
 
-    // --- getters ---
-    float get_travel_calib() const { return travel_calib; }
-    int32_t get_fwd_sign() const { return fwd_sign; }
-    const Gains& get_vel_gains() const { return vel_gains; }
-    float get_vel_filt_alpha() const { return vel_filt_alpha; }
-    float get_min_duty() const { return min_duty; }
-    float get_slew_rate() const { return slew_rate; }
-    uint32_t get_port() const { return port; }
-    const Opt<float>& get_reversal_dwell() const { return reversal_dwell; }
-    const Opt<float>& get_output_deadband() const { return output_deadband; }
+    // --- array / optional-string accessors ---
 
     // --- chainable setters (Command/Config only) ---
     MotorConfig& setTravelCalib(float v) { travel_calib = v; return *this; }
@@ -142,12 +122,7 @@ struct MotorCapabilities {
     bool position = false;
     bool has_encoder = false;
 
-    // --- getters ---
-    bool get_duty_cycle() const { return duty_cycle; }
-    bool get_voltage() const { return voltage; }
-    bool get_velocity() const { return velocity; }
-    bool get_position() const { return position; }
-    bool get_has_encoder() const { return has_encoder; }
+    // --- array / optional-string accessors ---
 };
 
 }  // namespace msg

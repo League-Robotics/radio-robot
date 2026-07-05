@@ -82,23 +82,26 @@ aprilcam = { path = "../AprilTags", editable = true }
 #
 # Three-domain layout (sprint 077 greenfield rebuild, ticket 006 — see
 # tests/CLAUDE.md). `tests/` was rebuilt from scratch (`git mv tests
-# tests_old`, ticket 001) alongside `source/`; only `tests/sim/` is
-# pytest-collected, and it has no real content yet — the new-tree sim harness
-# is later-ticket work — so this collects a trivial placeholder test until
-# that harness lands (a clean, near-empty collection is this ticket's pass
-# condition, not a nonempty count).
+# tests_old`, ticket 001) alongside `source/`; `tests/sim/` and `tests/unit/`
+# are pytest-collected.
 #   tests/sim/{unit,system}/   — CI gate (no hardware); skeleton only for now
 #   tests/bench/               — HITL Python CLI tools against real hardware
 #                                 on the bench; NOT pytest-collected
 #   tests/playfield/           — HITL Python CLI tools against real hardware
 #                                 on the camera-covered playfield; NOT
 #                                 pytest-collected
-#   tests/unit/, tests/tools/  — kept categories; skeleton only for now
+#   tests/unit/                — kept category for host-side unit/tooling
+#                                 checks that aren't sim/bench/playfield-
+#                                 scoped (e.g. the gen_messages.py getter
+#                                 regression guard, ticket 080-001); no
+#                                 hardware, CI gate like tests/sim/.
+#   tests/tools/                — kept category; skeleton only for now, not
+#                                 collected until it holds real tests.
 #
 # tests_old/ and source_old/ are the parked pre-rebuild trees (rollback =
 # codal.json application flip back to source_old) — never collected, never
 # descended into. vendor/ sims are excluded below too.
-testpaths = ["tests/sim"]
+testpaths = ["tests/sim", "tests/unit"]
 norecursedirs = [
     "tests_old", "source_old",
     "vendor", "build", ".venv", "node_modules",
