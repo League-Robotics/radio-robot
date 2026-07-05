@@ -12,8 +12,7 @@ namespace msg {
 struct GripperCommand {
     Opt<float> angle = {};
 
-    // --- getters ---
-    const Opt<float>& get_angle() const { return angle; }
+    // --- array / optional-string accessors ---
 
     // --- chainable setters (Command/Config only) ---
     GripperCommand& setAngle(float v) {
@@ -27,9 +26,7 @@ struct GripperState {
     Opt<float> angle = {};
     bool connected = false;
 
-    // --- getters ---
-    const Opt<float>& get_angle() const { return angle; }
-    bool get_connected() const { return connected; }
+    // --- array / optional-string accessors ---
 };
 
 // GripperConfig
@@ -39,11 +36,7 @@ struct GripperConfig {
     float min = 0.0f;
     float max = 0.0f;
 
-    // --- getters ---
-    bool get_has_gripper() const { return has_gripper; }
-    float get_gripper_offset() const { return gripper_offset; }
-    float get_min() const { return min; }
-    float get_max() const { return max; }
+    // --- array / optional-string accessors ---
 
     // --- chainable setters (Command/Config only) ---
     GripperConfig& setHasGripper(bool v) { has_gripper = v; return *this; }

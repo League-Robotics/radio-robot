@@ -14,10 +14,9 @@ struct DigitalOut {
     uint8_t value_count = 0;
     uint32_t mask = 0;
 
-    // --- getters ---
+    // --- array / optional-string accessors ---
     const uint8_t* value() const { return value_; }
     uint8_t value_count_val() const { return value_count; }
-    uint32_t get_mask() const { return mask; }
 };
 
 // AnalogOut
@@ -26,10 +25,9 @@ struct AnalogOut {
     uint8_t value_count = 0;
     uint32_t mask = 0;
 
-    // --- getters ---
+    // --- array / optional-string accessors ---
     const int32_t* value() const { return value_; }
     uint8_t value_count_val() const { return value_count; }
-    uint32_t get_mask() const { return mask; }
 };
 
 // PortCommand
@@ -46,8 +44,7 @@ struct PortCommand {
     } control = {};
 
 
-    // --- getters ---
-    ControlKind get_control_kind() const { return control_kind; }
+    // --- array / optional-string accessors ---
 };
 
 // PortState
@@ -58,20 +55,18 @@ struct PortState {
     uint8_t analog_in_count = 0;
     ValueSet stamp = {};
 
-    // --- getters ---
+    // --- array / optional-string accessors ---
     const uint8_t* digital_in() const { return digital_in_; }
     uint8_t digital_in_count_val() const { return digital_in_count; }
     const int32_t* analog_in() const { return analog_in_; }
     uint8_t analog_in_count_val() const { return analog_in_count; }
-    const ValueSet& get_stamp() const { return stamp; }
 };
 
 // PortConfig
 struct PortConfig {
     uint32_t lag_ports = 0;
 
-    // --- getters ---
-    uint32_t get_lag_ports() const { return lag_ports; }
+    // --- array / optional-string accessors ---
 
     // --- chainable setters (Command/Config only) ---
     PortConfig& setLagPorts(uint32_t v) { lag_ports = v; return *this; }

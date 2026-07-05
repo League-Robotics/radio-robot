@@ -24,10 +24,7 @@ struct Pose2D {
     float y = 0.0f;
     float h = 0.0f;
 
-    // --- getters ---
-    float get_x() const { return x; }
-    float get_y() const { return y; }
-    float get_h() const { return h; }
+    // --- array / optional-string accessors ---
 };
 
 // BodyTwist
@@ -35,9 +32,7 @@ struct BodyTwist {
     float v = 0.0f;
     float omega = 0.0f;
 
-    // --- getters ---
-    float get_v() const { return v; }
-    float get_omega() const { return omega; }
+    // --- array / optional-string accessors ---
 };
 
 // BodyTwist3
@@ -46,10 +41,7 @@ struct BodyTwist3 {
     float v_y = 0.0f;
     float omega = 0.0f;
 
-    // --- getters ---
-    float get_v_x() const { return v_x; }
-    float get_v_y() const { return v_y; }
-    float get_omega() const { return omega; }
+    // --- array / optional-string accessors ---
 };
 
 // BodyAccel
@@ -57,9 +49,7 @@ struct BodyAccel {
     float a_x = 0.0f;
     float a_y = 0.0f;
 
-    // --- getters ---
-    float get_a_x() const { return a_x; }
-    float get_a_y() const { return a_y; }
+    // --- array / optional-string accessors ---
 };
 
 // ValueSet
@@ -68,10 +58,7 @@ struct ValueSet {
     uint32_t last_upd = 0;
     bool valid = false;
 
-    // --- getters ---
-    uint32_t get_lag() const { return lag; }
-    uint32_t get_last_upd() const { return last_upd; }
-    bool get_valid() const { return valid; }
+    // --- array / optional-string accessors ---
 };
 
 // PoseEstimate
@@ -80,10 +67,7 @@ struct PoseEstimate {
     BodyTwist3 twist = {};
     ValueSet stamp = {};
 
-    // --- getters ---
-    const Pose2D& get_pose() const { return pose; }
-    const BodyTwist3& get_twist() const { return twist; }
-    const ValueSet& get_stamp() const { return stamp; }
+    // --- array / optional-string accessors ---
 };
 
 // WheelTarget
@@ -91,9 +75,7 @@ struct WheelTarget {
     Opt<float> speed = {};
     Opt<float> position = {};
 
-    // --- getters ---
-    const Opt<float>& get_speed() const { return speed; }
-    const Opt<float>& get_position() const { return position; }
+    // --- array / optional-string accessors ---
 };
 
 // Gains
@@ -104,12 +86,7 @@ struct Gains {
     float i_max = 0.0f;
     float kaw = 0.0f;
 
-    // --- getters ---
-    float get_kp() const { return kp; }
-    float get_ki() const { return ki; }
-    float get_kff() const { return kff; }
-    float get_i_max() const { return i_max; }
-    float get_kaw() const { return kaw; }
+    // --- array / optional-string accessors ---
 };
 
 // OutCommand
@@ -120,12 +97,9 @@ struct OutCommand {
     uint32_t argc = 0;
     bool priority = false;
 
-    // --- getters ---
-    uint32_t get_verb_id() const { return verb_id; }
+    // --- array / optional-string accessors ---
     const float* args() const { return args_; }
     uint8_t args_count_val() const { return args_count; }
-    uint32_t get_argc() const { return argc; }
-    bool get_priority() const { return priority; }
 };
 
 // CommandBatch
@@ -134,10 +108,9 @@ struct CommandBatch {
     uint8_t cmds_count = 0;
     uint32_t count = 0;
 
-    // --- getters ---
+    // --- array / optional-string accessors ---
     const OutCommand* cmds() const { return cmds_; }
     uint8_t cmds_count_val() const { return cmds_count; }
-    uint32_t get_count() const { return count; }
 };
 
 // Capabilities
@@ -150,14 +123,11 @@ struct Capabilities {
     bool onboard_position = false;
     uint32_t wheel_count = 0;
 
-    // --- getters ---
+    // --- array / optional-string accessors ---
     const uint32_t* command_modes() const { return command_modes_; }
     uint8_t command_modes_count_val() const { return command_modes_count; }
     const uint32_t* state_fields() const { return state_fields_; }
     uint8_t state_fields_count_val() const { return state_fields_count; }
-    bool get_holonomic() const { return holonomic; }
-    bool get_onboard_position() const { return onboard_position; }
-    uint32_t get_wheel_count() const { return wheel_count; }
 };
 
 }  // namespace msg

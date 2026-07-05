@@ -12,8 +12,7 @@ namespace msg {
 struct CommunicatorConfig {
     uint32_t radio_channel = 0;
 
-    // --- getters ---
-    uint32_t get_radio_channel() const { return radio_channel; }
+    // --- array / optional-string accessors ---
 
     // --- chainable setters (Command/Config only) ---
     CommunicatorConfig& setRadioChannel(uint32_t v) { radio_channel = v; return *this; }
@@ -25,10 +24,7 @@ struct CommunicatorState {
     uint32_t serial_lines = 0;
     uint32_t radio_lines = 0;
 
-    // --- getters ---
-    uint32_t get_radio_channel() const { return radio_channel; }
-    uint32_t get_serial_lines() const { return serial_lines; }
-    uint32_t get_radio_lines() const { return radio_lines; }
+    // --- array / optional-string accessors ---
 };
 
 // CommunicatorCapabilities
@@ -36,9 +32,7 @@ struct CommunicatorCapabilities {
     bool serial = false;
     bool radio = false;
 
-    // --- getters ---
-    bool get_serial() const { return serial; }
-    bool get_radio() const { return radio; }
+    // --- array / optional-string accessors ---
 };
 
 }  // namespace msg

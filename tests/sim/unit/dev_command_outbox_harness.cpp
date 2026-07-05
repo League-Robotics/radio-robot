@@ -179,16 +179,16 @@ void scenarioBoundPortStagesHalAndDrivetrainSteal() {
   checkFalse(f.state.halCommand.allPorts, "single-motor stage is addressed, not a broadcast");
   checkUintEq(f.state.halCommand.count, 1, "single-motor stage addresses exactly one port");
   checkUintEq(f.state.halCommand.addressed[0].port, 1, "addressed port matches the commanded port");
-  checkMotorKindEq(f.state.halCommand.addressed[0].command.get_control_kind(),
+  checkMotorKindEq(f.state.halCommand.addressed[0].command.control_kind,
                    msg::MotorCommand::ControlKind::VELOCITY, "staged command is VELOCITY");
   checkFloatEq(f.state.halCommand.addressed[0].command.control.velocity, 120.0f,
                "staged velocity target");
 
   checkTrue(f.state.hasDrivetrainCommand, "a bound-port motion verb also steals drivetrain authority");
-  checkDtKindEq(f.state.drivetrainCommand.get_control_kind(),
+  checkDtKindEq(f.state.drivetrainCommand.control_kind,
                msg::DrivetrainCommand::ControlKind::NONE,
                "authority steal leaves mode_ untouched (control_kind stays NONE)");
-  checkTrue(f.state.drivetrainCommand.get_standby().has && f.state.drivetrainCommand.get_standby().val,
+  checkTrue(f.state.drivetrainCommand.standby.has && f.state.drivetrainCommand.standby.val,
             "authority steal sets standby=true");
 }
 
@@ -217,15 +217,15 @@ void scenarioDevStopBroadcastShape() {
 
   checkTrue(f.state.hasHalCommand, "DEV STOP stages a HAL command");
   checkTrue(f.state.halCommand.allPorts, "DEV STOP's HAL command is a broadcast");
-  checkMotorKindEq(f.state.halCommand.addressed[0].command.get_control_kind(),
+  checkMotorKindEq(f.state.halCommand.addressed[0].command.control_kind,
                    msg::MotorCommand::ControlKind::NEUTRAL, "broadcast command is NEUTRAL");
   checkTrue(f.state.halCommand.addressed[0].command.control.neutral == msg::Neutral::BRAKE,
             "broadcast neutral mode is BRAKE");
 
   checkTrue(f.state.hasDrivetrainCommand, "DEV STOP stages a Drivetrain command");
-  checkDtKindEq(f.state.drivetrainCommand.get_control_kind(),
+  checkDtKindEq(f.state.drivetrainCommand.control_kind,
                msg::DrivetrainCommand::ControlKind::NEUTRAL, "Drivetrain command sets mode NEUTRAL");
-  checkTrue(f.state.drivetrainCommand.get_standby().has && f.state.drivetrainCommand.get_standby().val,
+  checkTrue(f.state.drivetrainCommand.standby.has && f.state.drivetrainCommand.standby.val,
             "Drivetrain command also drops authority (standby=true)");
 
   checkTrue(!cap.lines.empty() && cap.lines.back() == "OK DEV STOP", "wire reply text is unchanged");
@@ -252,9 +252,9 @@ void scenarioDevDtStopAddressedPairShape() {
             "an independent, unbound motor (port 3) is never placed in the addressed array");
 
   checkTrue(f.state.hasDrivetrainCommand, "DEV DT STOP also stages a Drivetrain command");
-  checkDtKindEq(f.state.drivetrainCommand.get_control_kind(),
+  checkDtKindEq(f.state.drivetrainCommand.control_kind,
                msg::DrivetrainCommand::ControlKind::NEUTRAL, "Drivetrain command sets mode NEUTRAL");
-  checkTrue(f.state.drivetrainCommand.get_standby().has && f.state.drivetrainCommand.get_standby().val,
+  checkTrue(f.state.drivetrainCommand.standby.has && f.state.drivetrainCommand.standby.val,
             "Drivetrain command drops authority (standby=true), scoped to the bound pair only");
 }
 
@@ -326,14 +326,14 @@ void scenarioNeutralAndResetAlsoStageThroughTheOutbox() {
 
   f.cmd.process("DEV M 1 NEUTRAL B", captureReply, &cap);
   checkTrue(f.state.hasHalCommand, "NEUTRAL stages a HAL command");
-  checkMotorKindEq(f.state.halCommand.addressed[0].command.get_control_kind(),
+  checkMotorKindEq(f.state.halCommand.addressed[0].command.control_kind,
                    msg::MotorCommand::ControlKind::NEUTRAL, "staged command is NEUTRAL");
 
   f.state.hasHalCommand = false;   // simulate main.cpp draining between statements
   f.cmd.process("DEV M 1 RESET", captureReply, &cap);
   checkTrue(f.state.hasHalCommand, "RESET stages a HAL command");
-  checkTrue(f.state.halCommand.addressed[0].command.get_reset_position().has &&
-            f.state.halCommand.addressed[0].command.get_reset_position().val,
+  checkTrue(f.state.halCommand.addressed[0].command.reset_position.has &&
+            f.state.halCommand.addressed[0].command.reset_position.val,
             "staged command carries reset_position=true");
 }
 
@@ -346,15 +346,15 @@ void scenarioBuildBroadcastNeutralAndDrivetrainStopShapes() {
   beginScenario("buildBroadcastNeutral()/buildDrivetrainStop() -- the shapes the watchdog-fire path applies immediately");
   Hal::CommandProcessorToHalCommand halCmd = buildBroadcastNeutral(msg::Neutral::BRAKE);
   checkTrue(halCmd.allPorts, "buildBroadcastNeutral() is a broadcast");
-  checkMotorKindEq(halCmd.addressed[0].command.get_control_kind(),
+  checkMotorKindEq(halCmd.addressed[0].command.control_kind,
                    msg::MotorCommand::ControlKind::NEUTRAL, "buildBroadcastNeutral()'s command is NEUTRAL");
   checkTrue(halCmd.addressed[0].command.control.neutral == msg::Neutral::BRAKE,
             "buildBroadcastNeutral() honors the requested mode");
 
   msg::DrivetrainCommand dtCmd = buildDrivetrainStop(msg::Neutral::BRAKE);
-  checkDtKindEq(dtCmd.get_control_kind(), msg::DrivetrainCommand::ControlKind::NEUTRAL,
+  checkDtKindEq(dtCmd.control_kind, msg::DrivetrainCommand::ControlKind::NEUTRAL,
                "buildDrivetrainStop() sets mode NEUTRAL");
-  checkTrue(dtCmd.get_standby().has && dtCmd.get_standby().val,
+  checkTrue(dtCmd.standby.has && dtCmd.standby.val,
             "buildDrivetrainStop() also drops authority (standby=true)");
 }
 

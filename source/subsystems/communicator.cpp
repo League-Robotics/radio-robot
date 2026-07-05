@@ -13,7 +13,7 @@ Communicator::Communicator(NRF52Serial& serial, MicroBitRadio& radio,
 }
 
 void Communicator::configure(const msg::CommunicatorConfig& config) {
-  int channel = radiochan::clamp(static_cast<int>(config.get_radio_channel()));
+  int channel = radiochan::clamp(static_cast<int>(config.radio_channel));
   if (begun_ && channel != channel_) {
     // Live retune. Radio::setChannel() rejects an invalid band, but the
     // clamp above keeps us inside radiochan's range, which is a subset of

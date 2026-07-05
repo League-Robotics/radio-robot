@@ -32,7 +32,7 @@ void Drivetrain::configure(const msg::DrivetrainConfig& config) {
 }
 
 void Drivetrain::apply(const msg::DrivetrainCommand& command) {
-    switch (command.get_control_kind()) {
+    switch (command.control_kind) {
         case msg::DrivetrainCommand::ControlKind::TWIST: {
             const msg::BodyTwist3& twist = command.control.twist;
             setTwist(twist.v_x, twist.v_y, twist.omega);
@@ -47,11 +47,11 @@ void Drivetrain::apply(const msg::DrivetrainCommand& command) {
             // at 0 rather than reading past w_count.
             float left = 0.0f;
             float right = 0.0f;
-            if (wheels.w_count_val() > 0 && wheels.w()[0].get_speed().has) {
-                left = wheels.w()[0].get_speed().val;
+            if (wheels.w_count_val() > 0 && wheels.w()[0].speed.has) {
+                left = wheels.w()[0].speed.val;
             }
-            if (wheels.w_count_val() > 1 && wheels.w()[1].get_speed().has) {
-                right = wheels.w()[1].get_speed().val;
+            if (wheels.w_count_val() > 1 && wheels.w()[1].speed.has) {
+                right = wheels.w()[1].speed.val;
             }
             setWheelTargets(left, right);
             break;
@@ -80,7 +80,7 @@ void Drivetrain::apply(const msg::DrivetrainCommand& command) {
     // MotorCommand's feedforward/reset_position -- processed AFTER the oneof
     // above so `{control=NEUTRAL, standby=true}` sets mode_ AND drops
     // authority in the same call (see the class comment).
-    if (command.get_standby().has && command.get_standby().val) {
+    if (command.standby.has && command.standby.val) {
         standby();
     }
 }
@@ -97,7 +97,7 @@ void Drivetrain::commandedWheelTargets(float* targetLeft, float* targetRight) co
             // (vx_mmps/vy_mmps/omega_rads) is a different, old-style-named
             // type from msg::BodyTwist3 (v_x/v_y/omega) -- the scalar
             // differential overload sidesteps any conversion between them.
-            BodyKinematics::inverse(v_x_, omega_, config_.get_trackwidth(),
+            BodyKinematics::inverse(v_x_, omega_, config_.trackwidth,
                                      *targetLeft, *targetRight);
             break;
         case Mode::WHEELS:
@@ -115,7 +115,7 @@ void Drivetrain::commandedWheelTargets(float* targetLeft, float* targetRight) co
 void Drivetrain::governRatio(float* targetLeft, float* targetRight,
                               const msg::MotorState& leftObs,
                               const msg::MotorState& rightObs) const {
-    if (config_.get_sync_gain() <= 0.0f) return;   // SET sync=0 -> independent (ported semantics)
+    if (config_.sync_gain <= 0.0f) return;   // SET sync=0 -> independent (ported semantics)
 
     // Only couple when both wheels are commanded in the SAME direction
     // (straight or curve). A spin-in-place has opposite-signed targets;
@@ -126,13 +126,13 @@ void Drivetrain::governRatio(float* targetLeft, float* targetRight,
     if (*targetLeft == 0.0f || *targetRight == 0.0f) return;
     if ((*targetLeft) * (*targetRight) <= 0.0f) return;
 
-    if (!leftObs.get_velocity().has || !rightObs.get_velocity().has) return;
+    if (!leftObs.velocity.has || !rightObs.velocity.has) return;
 
     // Achievement fraction: how much of ITS OWN commanded target each wheel
     // is actually hitting. 1.0 = on target; < 1.0 = bogged down (or
     // reversing relative to its command, which clamps to 0 below).
-    float achievedLeft = leftObs.get_velocity().val / *targetLeft;
-    float achievedRight = rightObs.get_velocity().val / *targetRight;
+    float achievedLeft = leftObs.velocity.val / *targetLeft;
+    float achievedRight = rightObs.velocity.val / *targetRight;
     float achievedMin = (achievedLeft < achievedRight) ? achievedLeft : achievedRight;
 
     if (achievedMin >= 1.0f) return;   // neither wheel is bogged down
@@ -146,7 +146,7 @@ void Drivetrain::governRatio(float* targetLeft, float* targetRight,
     // wheel's effective target toward a computed "coupled" value) onto
     // velocity targets: a single shared scale is the ratio-exact form of the
     // same idea, and never touches duty cycle.
-    float scale = 1.0f - config_.get_sync_gain() * (1.0f - achievedMin);
+    float scale = 1.0f - config_.sync_gain * (1.0f - achievedMin);
     if (scale < 0.0f) scale = 0.0f;
     *targetLeft *= scale;
     *targetRight *= scale;
@@ -182,9 +182,9 @@ void Drivetrain::tick(uint32_t now,
     // straight through Hal::NezhaHal::apply(const Hal::DrivetrainToHalCommand&)
     // without ever naming a port itself. Set unconditionally whenever tick()
     // runs -- see the class comment and hasCommand()'s doc comment.
-    heldCommand_.wheel[0].port = config_.get_left_port();
+    heldCommand_.wheel[0].port = config_.left_port;
     heldCommand_.wheel[0].command = leftCmd;
-    heldCommand_.wheel[1].port = config_.get_right_port();
+    heldCommand_.wheel[1].port = config_.right_port;
     heldCommand_.wheel[1].command = rightCmd;
     hasCommand_ = true;
 }
@@ -225,7 +225,7 @@ msg::DrivetrainCapabilities Drivetrain::capabilities() const {
     msg::DrivetrainCapabilities caps;
     caps.holonomic = false;   // differential-only this sprint (Tovez) -- see setTwist()
     caps.wheel_count = 2;
-    caps.onboard_position = leftMotorCaps_.get_position() && rightMotorCaps_.get_position();
+    caps.onboard_position = leftMotorCaps_.position && rightMotorCaps_.position;
     return caps;
 }
 
@@ -236,7 +236,7 @@ void Drivetrain::setMotorCapabilities(const msg::MotorCapabilities& left,
 }
 
 DrivetrainPorts Drivetrain::ports() const {
-    return {config_.get_left_port(), config_.get_right_port()};
+    return {config_.left_port, config_.right_port};
 }
 
 bool Drivetrain::active() const { return active_; }

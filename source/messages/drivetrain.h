@@ -14,10 +14,7 @@ struct SetPose {
     float y = 0.0f;
     float h = 0.0f;
 
-    // --- getters ---
-    float get_x() const { return x; }
-    float get_y() const { return y; }
-    float get_h() const { return h; }
+    // --- array / optional-string accessors ---
 };
 
 // WheelTargets
@@ -25,7 +22,7 @@ struct WheelTargets {
     WheelTarget w_[4] = {};
     uint8_t w_count = 0;
 
-    // --- getters ---
+    // --- array / optional-string accessors ---
     const WheelTarget* w() const { return w_; }
     uint8_t w_count_val() const { return w_count; }
 };
@@ -50,10 +47,7 @@ struct DrivetrainCommand {
     Opt<bool> seed = {};
     Opt<bool> standby = {};
 
-    // --- getters ---
-    ControlKind get_control_kind() const { return control_kind; }
-    const Opt<bool>& get_seed() const { return seed; }
-    const Opt<bool>& get_standby() const { return standby; }
+    // --- array / optional-string accessors ---
 
     // --- chainable setters (Command/Config only) ---
     DrivetrainCommand& setTwist(const BodyTwist3& v) {
@@ -103,21 +97,13 @@ struct DrivetrainState {
     uint32_t otos_status = 0;
     bool otos_fusion_blocked = false;
 
-    // --- getters ---
-    const PoseEstimate& get_fused() const { return fused; }
-    const PoseEstimate& get_encoder() const { return encoder; }
-    const PoseEstimate& get_optical() const { return optical; }
+    // --- array / optional-string accessors ---
     const float* enc() const { return enc_; }
     uint8_t enc_count_val() const { return enc_count; }
     const float* vel() const { return vel_; }
     uint8_t vel_count_val() const { return vel_count; }
-    const ValueSet& get_enc_stamp() const { return enc_stamp; }
-    const ValueSet& get_otos() const { return otos; }
     const uint8_t* wheel_wedged() const { return wheel_wedged_; }
     uint8_t wheel_wedged_count_val() const { return wheel_wedged_count; }
-    bool get_connected() const { return connected; }
-    uint32_t get_otos_status() const { return otos_status; }
-    bool get_otos_fusion_blocked() const { return otos_fusion_blocked; }
 };
 
 // DrivetrainConfig
@@ -166,50 +152,11 @@ struct DrivetrainConfig {
     uint32_t left_port = 0;
     uint32_t right_port = 0;
 
-    // --- getters ---
-    int32_t get_fwd_sign_l() const { return fwd_sign_l; }
-    int32_t get_fwd_sign_r() const { return fwd_sign_r; }
-    float get_travel_calib_l() const { return travel_calib_l; }
-    float get_travel_calib_r() const { return travel_calib_r; }
-    float get_trackwidth() const { return trackwidth; }
-    float get_half_track() const { return half_track; }
-    float get_half_wheelbase() const { return half_wheelbase; }
+    // --- array / optional-string accessors ---
     const float* travel_calib_wheel() const { return travel_calib_wheel_; }
     uint8_t travel_calib_wheel_count_val() const { return travel_calib_wheel_count; }
     const int32_t* fwd_sign_wheel() const { return fwd_sign_wheel_; }
     uint8_t fwd_sign_wheel_count_val() const { return fwd_sign_wheel_count; }
-    float get_v_wheel_max() const { return v_wheel_max; }
-    float get_steer_headroom() const { return steer_headroom; }
-    const Gains& get_vel_gains() const { return vel_gains; }
-    float get_vel_filt_alpha() const { return vel_filt_alpha; }
-    float get_sync_gain() const { return sync_gain; }
-    float get_min_wheel() const { return min_wheel; }
-    float get_alpha_pos() const { return alpha_pos; }
-    float get_alpha_yaw() const { return alpha_yaw; }
-    float get_otos_gate() const { return otos_gate; }
-    float get_otos_linear_scale() const { return otos_linear_scale; }
-    float get_otos_angular_scale() const { return otos_angular_scale; }
-    float get_rotation_gain_pos() const { return rotation_gain_pos; }
-    float get_rotation_gain_neg() const { return rotation_gain_neg; }
-    float get_rotation_offset() const { return rotation_offset; }
-    float get_rotation_offset_neg() const { return rotation_offset_neg; }
-    float get_rotational_slip() const { return rotational_slip; }
-    float get_odom_off_x() const { return odom_off_x; }
-    float get_odom_off_y() const { return odom_off_y; }
-    float get_odom_yaw() const { return odom_yaw; }
-    bool get_odom_upside_down() const { return odom_upside_down; }
-    float get_ekf_q_xy() const { return ekf_q_xy; }
-    float get_ekf_q_theta() const { return ekf_q_theta; }
-    float get_ekf_r_otos_xy() const { return ekf_r_otos_xy; }
-    float get_ekf_r_otos_theta() const { return ekf_r_otos_theta; }
-    float get_ekf_q_v() const { return ekf_q_v; }
-    float get_ekf_q_omega() const { return ekf_q_omega; }
-    float get_ekf_r_otos_v() const { return ekf_r_otos_v; }
-    float get_ekf_r_enc_v() const { return ekf_r_enc_v; }
-    uint32_t get_lag_otos() const { return lag_otos; }
-    int32_t get_drivetrain_type() const { return drivetrain_type; }
-    uint32_t get_left_port() const { return left_port; }
-    uint32_t get_right_port() const { return right_port; }
 
     // --- chainable setters (Command/Config only) ---
     DrivetrainConfig& setFwdSignL(int32_t v) { fwd_sign_l = v; return *this; }
@@ -261,10 +208,7 @@ struct DrivetrainCapabilities {
     bool onboard_position = false;
     uint32_t wheel_count = 0;
 
-    // --- getters ---
-    bool get_holonomic() const { return holonomic; }
-    bool get_onboard_position() const { return onboard_position; }
-    uint32_t get_wheel_count() const { return wheel_count; }
+    // --- array / optional-string accessors ---
 };
 
 }  // namespace msg

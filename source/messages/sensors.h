@@ -17,13 +17,11 @@ struct LineSensorState {
     ValueSet stamp = {};
     bool connected = false;
 
-    // --- getters ---
+    // --- array / optional-string accessors ---
     const uint32_t* raw() const { return raw_; }
     uint8_t raw_count_val() const { return raw_count; }
     const uint32_t* normalized() const { return normalized_; }
     uint8_t normalized_count_val() const { return normalized_count; }
-    const ValueSet& get_stamp() const { return stamp; }
-    bool get_connected() const { return connected; }
 };
 
 // LineSensorConfig
@@ -35,13 +33,11 @@ struct LineSensorConfig {
     uint8_t cal_max_count = 0;
     float filt_alpha = 0.0f;
 
-    // --- getters ---
-    uint32_t get_lag_line() const { return lag_line; }
+    // --- array / optional-string accessors ---
     const uint32_t* cal_min() const { return cal_min_; }
     uint8_t cal_min_count_val() const { return cal_min_count; }
     const uint32_t* cal_max() const { return cal_max_; }
     uint8_t cal_max_count_val() const { return cal_max_count; }
-    float get_filt_alpha() const { return filt_alpha; }
 
     // --- chainable setters (Command/Config only) ---
     LineSensorConfig& setLagLine(uint32_t v) { lag_line = v; return *this; }
@@ -59,13 +55,7 @@ struct ColorSensorState {
     ValueSet stamp = {};
     bool connected = false;
 
-    // --- getters ---
-    uint32_t get_r() const { return r; }
-    uint32_t get_g() const { return g; }
-    uint32_t get_b() const { return b; }
-    uint32_t get_c() const { return c; }
-    const ValueSet& get_stamp() const { return stamp; }
-    bool get_connected() const { return connected; }
+    // --- array / optional-string accessors ---
 };
 
 // ColorSensorConfig
@@ -74,10 +64,7 @@ struct ColorSensorConfig {
     uint32_t integration = 0;
     uint32_t gain = 0;
 
-    // --- getters ---
-    uint32_t get_lag_color() const { return lag_color; }
-    uint32_t get_integration() const { return integration; }
-    uint32_t get_gain() const { return gain; }
+    // --- array / optional-string accessors ---
 
     // --- chainable setters (Command/Config only) ---
     ColorSensorConfig& setLagColor(uint32_t v) { lag_color = v; return *this; }
