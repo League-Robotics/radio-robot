@@ -55,19 +55,32 @@
 // --- Open Question 4 (bench-rig port binding persistence) -- RESOLVED ---
 // `DEV DT PORTS <left> <right>` persists across `DEV STOP` and a watchdog
 // neutral event; it resets only on reboot. Neutralizing (STOP or watchdog)
-// drops drivetrain AUTHORITY (drivetrainActive=false) and commands hardware
-// neutral, but never touches DevLoopState::leftPort/rightPort themselves.
+// drops drivetrain AUTHORITY (Subsystems::Drivetrain::standby(), sprint 079)
+// and commands hardware neutral, but never touches the port binding itself
+// (`DrivetrainConfig.left_port`/`right_port`, read via `drivetrain->ports()`
+// -- sprint 079 moved the binding off `DevLoopState` and into config, see
+// below).
 //
-// --- Authority arbitration ---
-// This firmware runs only the dev loop (no planner) -- DEV M's motion verbs
-// (DUTY/VEL/POS/VOLT/NEUTRAL/RESET) deactivate DevLoopState::drivetrainActive
-// on ACCEPTANCE (a capability-rejected command, e.g. VOLT on Nezha, does not
-// steal authority since it never actually touched the motor); DEV DT's
-// motion verbs (VW/WHEELS/NEUTRAL) reactivate it. Queries (STATE/CAPS) and
-// CFG never touch authority. `DEV STOP`/the watchdog fully drop authority;
-// `DEV DT STOP` drops it too, but scoped to only the bound pair. This is the
-// ONLY authority conflict this firmware has, and is trivial to verify by
-// reading main.cpp's loop plus the handlers below.
+// --- Authority arbitration (sprint 079 reshape) ---
+// This firmware runs only the dev loop (no planner) -- authority ("am I the
+// one actually driving my bound pair right now") is now owned by
+// `Subsystems::Drivetrain` itself (`active()`/`standby()`), not by a
+// `DevLoopState` flag. `DEV M`'s motion verbs (DUTY/VEL/POS/VOLT/NEUTRAL/
+// RESET) stage a standby-only `msg::DrivetrainCommand`
+// ({control_kind=NONE, standby=true}) into the Drivetrain outbox ON
+// ACCEPTANCE, but ONLY when the targeted port is one of the Drivetrain's
+// currently-bound `ports()` (a capability-rejected command, e.g. VOLT on
+// Nezha, never touched the motor and so never steals authority; an
+// independent, unbound motor is unrelated to the Drivetrain and leaves its
+// outbox untouched). `DEV DT`'s motion verbs (VW/WHEELS/NEUTRAL) stage a
+// command that reactivates authority once `main.cpp` applies it (see
+// `Subsystems::Drivetrain::apply()`'s oneof dispatch). Queries (STATE/CAPS)
+// and CFG never touch authority or either outbox. `DEV STOP`/the watchdog
+// fully drop authority (broadcast HAL neutral + `{NEUTRAL, standby=true}`);
+// `DEV DT STOP` drops it too, but scoped to only the bound pair (addressed,
+// not broadcast, HAL command). This is the ONLY authority conflict this
+// firmware has, and is trivial to verify by reading main.cpp's loop plus the
+// handlers below.
 //
 // --- Serial-silence watchdog -- NON-NEGOTIABLE (runaway history) ---
 // SerialSilenceWatchdog tracks the wall-clock time of the last COMMAND LINE
@@ -78,10 +91,11 @@
 // a silent host, whether it stopped sending PING or DEV DT VW. Default
 // window is kDefaultWindow (~1 s); `DEV WD <window>` is the mechanism that
 // changes it at runtime (settable, not hardcoded-only, per the ticket's
-// acceptance criteria). On expiry, main.cpp calls neutralizeAll() (ALL four
-// motors -> neutral, drivetrain -> idle, drivetrainActive cleared) and emits
-// `EVT dev_watchdog` on serial -- see docs/protocol-v2.md's "Development
-// commands" section for the wire contract.
+// acceptance criteria). On expiry, main.cpp applies `buildBroadcastNeutral()`/
+// `buildDrivetrainStop()` (see below) IMMEDIATELY -- not via the outbox,
+// since main.cpp is the top of the call tree -- and emits `EVT dev_watchdog`
+// on serial -- see docs/protocol-v2.md's "Development commands" section for
+// the wire contract.
 //
 // --- Build gating ---
 // The locked spec says DEV compiles out of production firmware. This sprint
@@ -100,8 +114,10 @@
 #include <vector>
 
 #include "command_types.h"
+#include "hal/capability/hal_command.h"
 #include "hal/nezha/nezha_hal.h"
 #include "subsystems/drivetrain.h"
+#include "messages/drivetrain.h"
 #include "messages/motor.h"
 
 // ---------------------------------------------------------------------------
@@ -145,10 +161,24 @@ class SerialSilenceWatchdog {
 // DevLoopState -- the dev loop's shared wiring, owned by main.cpp (as
 // function-static instances, per this tree's existing main.cpp convention)
 // and handed to devCommands() as the handlerCtx every DEV descriptor shares.
-// main.cpp's loop also reads leftPort/rightPort/drivetrainActive directly
-// each iteration -- this struct IS the "which two ports does 'left'/'right'
-// mean right now, and who has authority" single source of truth the issue's
-// loop sketch refers to.
+//
+// Sprint 079 reshape (architecture-update.md "The processor is DevLoopState
+// + CommandProcessor", "Config-plane vs. command-plane"): handlers no longer
+// call Hal::Motor/Subsystems::Drivetrain write methods directly. Setpoint-
+// shaped verbs (DEV M's DUTY/VEL/POS/VOLT/NEUTRAL/RESET; DEV DT's VW/WHEELS/
+// NEUTRAL/STOP; DEV STOP) pre-validate against read-only capabilities() and
+// STAGE into the outbox fields below; main.cpp (ticket 079-005) is the sole
+// drainer, calling hal.apply()/drivetrain.apply() once per pass -- see "The
+// Part-2 loop". `leftPort`/`rightPort`/`drivetrainActive` are GONE -- the
+// port binding moved into DrivetrainConfig (read via `drivetrain->ports()`)
+// and authority arbitration moved into Drivetrain itself
+// (`drivetrain->active()`/`->standby()`) per decision 8.
+//
+// hal/drivetrain/watchdog pointers, and motorConfigShadow[]/
+// drivetrainConfigShadow, are UNCHANGED -- still needed for reads (STATE/
+// CAPS), config-plane writes (CFG/PORTS/WD stay direct, parse-time calls --
+// see the config-plane/command-plane table in architecture-update.md), and
+// capability-cache refresh.
 //
 // motorConfigShadow[] exists because Hal::Motor exposes configure() (a full
 // replace) but no getter for the CURRENTLY configured msg::MotorConfig --
@@ -159,40 +189,50 @@ class SerialSilenceWatchdog {
 //
 // drivetrainConfigShadow exists for the identical reason, one level up:
 // Subsystems::Drivetrain::configure() is also a full replace with no getter
-// for the live msg::DrivetrainConfig, so `DEV DT CFG k=v ...` (077-007,
-// added to close a gap found in this ticket's HITL bench pass -- sync_gain
-// booted at 0 with no live setter, so the ratio governor could never be
-// turned on without a reflash) is a delta against this single shared shadow
-// (one Drivetrain instance, not per-port). main.cpp seeds it with the same
-// msg::DrivetrainConfig passed to Drivetrain::configure() at boot.
+// for the live msg::DrivetrainConfig, so `DEV DT CFG k=v ...` and
+// `DEV DT PORTS <left> <right>` (both config-plane, sprint 079) are deltas
+// against this single shared shadow (one Drivetrain instance, not
+// per-port). main.cpp seeds it with the same msg::DrivetrainConfig passed to
+// Drivetrain::configure() at boot.
 // ---------------------------------------------------------------------------
 struct DevLoopState {
   Hal::NezhaHal* hal = nullptr;
   Subsystems::Drivetrain* drivetrain = nullptr;
   SerialSilenceWatchdog* watchdog = nullptr;   // set by main.cpp; DEV WD's target
 
-  uint32_t leftPort = 1;    // DEV DT PORTS binding -- default drive pair
-  uint32_t rightPort = 2;   // (coupled bench rig: DEV DT PORTS 3 4)
-  bool drivetrainActive = false;
+  // The outbox (sprint 079) -- setpoint-shaped DEV M/DEV DT verbs stage
+  // here; main.cpp drains hasHalCommand/hasDrivetrainCommand once per pass.
+  // Latest-wins: staging again before a drain overwrites the held value.
+  bool hasHalCommand = false;
+  Hal::CommandProcessorToHalCommand halCommand = {};
+  bool hasDrivetrainCommand = false;
+  msg::DrivetrainCommand drivetrainCommand = {};
 
   msg::MotorConfig motorConfigShadow[Hal::NezhaHal::kPortCount] = {};
   msg::DrivetrainConfig drivetrainConfigShadow = {};
 };
 
 // ---------------------------------------------------------------------------
-// neutralizeAll -- commands every HAL motor (not just the DT-bound pair) and
-// the Drivetrain to neutral, and drops drivetrain authority. Shared by the
-// top-level `DEV STOP` handler and main.cpp's serial-silence watchdog fire
-// path so there is exactly one "make everything safe" code path to audit.
+// buildBroadcastNeutral / buildDrivetrainStop -- the one audited "make
+// everything safe" construction path (architecture-update.md "The Part-2
+// loop"), replacing 077's neutralizeAll()/neutralizeDrivetrain() free
+// functions now that HAL/Drivetrain writes are staged through DevLoopState's
+// outbox rather than called directly from a handler. Shared by:
+//   - `DEV STOP`'s handler, which STAGES the result into the outbox (it
+//     runs from inside a parsed statement and must respect the held/taken
+//     discipline like every other setpoint-shaped verb).
+//   - main.cpp's serial-silence watchdog-fire path, which APPLIES the
+//     result IMMEDIATELY (main.cpp is the top of the call tree, not a
+//     subsystem; an emergency stop gains nothing from an extra pass of
+//     outbox latency -- see architecture-update.md's narrow, documented
+//     exception to "never call apply() outside main/the HAL").
+// `DEV DT STOP` (the narrower, bound-pair-only stop) reuses
+// buildDrivetrainStop() for its Drivetrain-side neutral+standby (identical
+// shape to DEV STOP's) but builds its own addressed, non-broadcast HAL
+// command -- see handleDevDt's STOP case in dev_commands.cpp.
 // ---------------------------------------------------------------------------
-void neutralizeAll(DevLoopState& state, msg::Neutral mode = msg::Neutral::BRAKE);
-
-// ---------------------------------------------------------------------------
-// neutralizeDrivetrain -- the narrower `DEV DT STOP` action: neutrals only
-// the Drivetrain and its currently-bound pair, drops drivetrain authority,
-// but leaves any OTHER motor (independently under DEV M control) untouched.
-// ---------------------------------------------------------------------------
-void neutralizeDrivetrain(DevLoopState& state, msg::Neutral mode = msg::Neutral::BRAKE);
+Hal::CommandProcessorToHalCommand buildBroadcastNeutral(msg::Neutral mode = msg::Neutral::BRAKE);
+msg::DrivetrainCommand buildDrivetrainStop(msg::Neutral mode = msg::Neutral::BRAKE);
 
 // Returns the DEV command table (DEV M, DEV DT, DEV STATE, DEV STOP, DEV WD),
 // bound to the given shared state (state.watchdog must be set before this is

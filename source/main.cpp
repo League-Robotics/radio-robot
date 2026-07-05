@@ -1,64 +1,56 @@
 // ---------------------------------------------------------------------------
-// main.cpp -- the dev loop (077-005): Communicator tick -> dispatch -> HAL
-// tick -> (if bound) Drivetrain tick/apply -> bound-motor tick ->
-// serial-silence watchdog check.
+// main.cpp -- the dev loop: sprint 079's three-beat "feed it, tick it, ask
+// it" shape (architecture-update.md "The Part-2 loop"; issue's Part 2).
 //
-// This supersedes 077-001/003/004's smoke wiring: the DEV command family
-// (commands/dev_commands.*) is now registered alongside the liveness family
-// (system_commands.*), and the HAL/Drivetrain instances built here are
-// actually driven by DEV M / DEV DT rather than sitting untouched.
+// This supersedes 077-001/003/004's smoke wiring and 079-004's minimal loop
+// adaptation: CommandProcessor/DevLoopState are now a pure transformer
+// (statements in, commands + replies out -- see dev_commands.h) and
+// main.cpp is the SOLE caller of Hal::NezhaHal::apply()/
+// Subsystems::Drivetrain::apply() for anything DEV-sourced, draining
+// DevLoopState's outbox once per pass instead of DEV handlers calling
+// either subsystem's write methods directly.
 //
-// Comms are a subsystem now (Subsystems::Communicator,
-// subsystems/communicator.h): its tick(now) latches at most ONE complete
-// statement per iteration (void return -- held/taken via
-// hasStatement()/takeStatement(), the edge's returnPath routes the reply).
-// The old free-function pollComms() and the stack line buffers it was
-// threaded through are gone -- the Communicator internalizes the drivers
-// and the line buffer. (079-002: tick() reshaped from returning the edge to
-// this held/taken pair -- see communicator.h's held-output contract.)
+// The loop, exactly per architecture-update.md's "The Part-2 loop":
 //
-// Loop shape matches the locked sketch in clasi/sprints/077-greenfield-
-// faceplate-hal-drivetrain-and-dev-bench-system/issues/greenfield-rebuild-
-// faceplate-hal-in-a-fresh-source-old-tree-parked.md, Step 5 (comms poll
-// since folded into the Communicator subsystem's tick):
+//   hal.tick(now);                          // slice 1: due collects land
 //
-//   comm.tick(now);                // held/taken; at most one line latched
+//   comm.tick(now);
 //   if (comm.hasStatement()) {
-//       in = comm.takeStatement(); // dispatch via CommandProcessor
+//       in = comm.takeStatement();          // feed (copies line + returnPath)
+//       watchdog.feed(now);
+//       cmd.process(in.line, ...);           // parse -> stage into devState's outbox + replies
 //   }
-//   hal.tick(now);                // split-phase encoder schedule, all 4 ports
-//   if (drivetrainActive) {
-//       auto out = drivetrain.tick(now, left.state(), right.state());
-//       left.apply(out.left);
-//       right.apply(out.right);
+//
+//   if (devState.hasHalCommand)        hal.apply(devState.halCommand);
+//   if (devState.hasDrivetrainCommand) drivetrain.apply(devState.drivetrainCommand);
+//
+//   if (drivetrain.active()) {
+//       drivetrain.tick(now, hal.motor(p.left).state(), hal.motor(p.right).state());
+//       if (drivetrain.hasCommand()) hal.apply(drivetrain.takeCommand());
 //   }
-//   left.tick(now);                // staged commands execute (PID runs here)
-//   right.tick(now);
-//   watchdog.check(now);          // silence -> all neutral
 //
-// (079-004: Hal::NezhaHal::apply(const Hal::DrivetrainToHalCommand&) now
-// exists, so this loop drains drivetrain.hasCommand()/takeCommand() for
-// real via hal.apply() below -- closing the gap 079-003 left open. This is
-// a MINIMAL loop adaptation, not the full three-beat reshape: comms
-// dispatch still runs where it always has (DEV handlers still call into
-// Hal/Drivetrain directly, unchanged -- CommandProcessor's pure-transformer
-// rework and the DevLoopState outbox are ticket 005's job). The one shape
-// change here is replacing the old explicit bound-pair re-tick (see below)
-// with the sanctioned SECOND hal.tick() call per pass -- architecture-
-// update.md's "The Part-2 loop" decision 6 -- now that NezhaHal's own
-// tick() is the brick flip-flop sequencer, not a fixed 4-port sweep.)
+//   hal.tick(now);                          // slice 2: requests/writes go out
 //
-// `left`/`right` are whichever two NezhaMotors DEV DT PORTS last bound
-// (DevLoopState::leftPort/rightPort, default 1/2) -- this loop never
-// hardcodes which ports they are. hal.tick() is called TWICE per iteration
-// (slice 1 lets any due collect land before comms/drivetrain read this
-// pass's state; slice 2 sends out whatever request/write the pass's
-// dispatch just staged) so a freshly drivetrain-governed target actuates in
-// the SAME cycle it was computed, rather than waiting for next iteration's
-// hal.tick() -- this is the locked shape, not an oversight. The bound pair
-// is no longer ticked a third time explicitly (the old hack) -- the flip-
-// flop's own two-per-pass cadence now covers it uniformly with every other
-// in-use port.
+//   if (watchdog.check(now)) {
+//       hal.apply(buildBroadcastNeutral(...));        // applied immediately --
+//       drivetrain.apply(buildDrivetrainStop(...));   // main.cpp is top-of-tree
+//   }
+//
+// Same-pass latency (the design sketch's own worked Case 1): a statement is
+// fed, parsed, staged, the Drivetrain re-governs against fresh observations,
+// and slice 2 actuates -- all in one pass. `hal.tick()` is called TWICE per
+// iteration (slice 1 lets any due collect land before this pass's dispatch
+// reads state; slice 2 sends out whatever request/write this pass's
+// dispatch just staged) -- decision 6, replacing the old explicit bound-pair
+// re-tick hack with the sanctioned second call; NezhaHal's own flip-flop now
+// cycles every in-use port evenly, including whichever pair the Drivetrain
+// is bound to, with no main.cpp-level special-casing.
+//
+// `p.left`/`p.right` (Subsystems::DrivetrainPorts, from `drivetrain.ports()`)
+// are whichever two NezhaMotors `DEV DT PORTS` last bound -- this loop never
+// hardcodes which ports they are, and never holds its own copy of the
+// binding (DevLoopState's old leftPort/rightPort fields are gone; the
+// binding lives in DrivetrainConfig -- sprint 079 decision 8).
 //
 // Build gating: the DEV family (and the HAL/Drivetrain wiring it needs) is
 // compiled in only when ROBOT_DEV_BUILD is set (codal.json's "config"
@@ -188,6 +180,16 @@ int main() {
     static Subsystems::Drivetrain drivetrain;
     msg::DrivetrainConfig dtConfig;
     dtConfig.setTrackwidth(128.0f);   // [mm] bench placeholder -- tuned in ticket 7
+    // left_port/right_port (sprint 079 decision 8): the binding moved off
+    // DevLoopState and into DrivetrainConfig -- this is the 1:1 migration of
+    // the old DevLoopState::leftPort{1}/rightPort{2} member-initializer
+    // defaults (the robot's normal drive pair; the coupled bench rig uses
+    // `DEV DT PORTS 3 4` at runtime). Seeding this explicitly matters: an
+    // unseeded (zero-valued) port would address motor(0), which NezhaHal::
+    // motor() clamps to port 4 rather than trapping -- silently wrong, not a
+    // crash (architecture-update.md Migration Concerns).
+    dtConfig.setLeftPort(1);
+    dtConfig.setRightPort(2);
     drivetrain.configure(dtConfig);
 
     // --- Dev loop shared state: watchdog + DEV command wiring. ---
@@ -204,14 +206,18 @@ int main() {
         devState.motorConfigShadow[i] = defaultMotorConfigs[i];
     }
     // Seed the drivetrain CFG-delta shadow the same way, so the first
-    // `DEV DT CFG sync_gain=...` merges onto the SAME dtConfig the
-    // Drivetrain was actually configured with above (trackwidth=128),
-    // rather than an all-zero blank -- see DevLoopState's field comment.
+    // `DEV DT CFG sync_gain=...`/`DEV DT PORTS ...` merges onto the SAME
+    // dtConfig the Drivetrain was actually configured with above
+    // (trackwidth=128, ports=1,2), rather than an all-zero blank -- see
+    // DevLoopState's field comment.
     devState.drivetrainConfigShadow = dtConfig;
-    // Prime the capabilities cache for the default DEV DT PORTS binding
-    // (1, 2) -- see drivetrain.h's setMotorCapabilities() doc comment.
-    drivetrain.setMotorCapabilities(hal.motor(devState.leftPort).capabilities(),
-                                     hal.motor(devState.rightPort).capabilities());
+    // Prime the capabilities cache for the default DEV DT PORTS binding --
+    // read back via ports() (not a local copy) since the binding now lives
+    // in DrivetrainConfig -- see drivetrain.h's setMotorCapabilities() doc
+    // comment.
+    Subsystems::DrivetrainPorts bootPorts = drivetrain.ports();
+    drivetrain.setMotorCapabilities(hal.motor(bootPorts.left).capabilities(),
+                                     hal.motor(bootPorts.right).capabilities());
 
     // --- Command table: liveness (PING/VER/HELP/ECHO/ID) + DEV. ---
     std::vector<CommandDescriptor> allCommands = systemCommands();
@@ -228,42 +234,63 @@ int main() {
     while (true) {
         uint32_t now = uBit.systemTime();
 
+        hal.tick(now);   // slice 1: any due collect lands before this pass's dispatch reads state
+
         comm.tick(now);
         if (comm.hasStatement()) {
             Subsystems::CommunicatorToCommandProcessorStatement in = comm.takeStatement();
             // Feed on any line, either channel, regardless of content or
             // dispatch outcome -- see dev_commands.h's watchdog contract.
             watchdog.feed(now);
+            // Parse happens inside process(): replies go out the
+            // statement's own return path directly (unaffected by this
+            // sprint); setpoint-shaped DEV commands land in devState's
+            // outbox instead of calling Hal/Drivetrain write methods --
+            // see dev_commands.h/.cpp's pure-transformer reshape.
             cmd.process(in.line,
                         in.returnPath == Subsystems::Channel::RADIO ? radioReply
                                                                     : serialReply,
                         &comm);
         }
 
-        hal.tick(now);   // slice 1: any due collect lands before this pass's dispatch
+        // Drain the outbox: main.cpp is the sole caller of
+        // hal.apply()/drivetrain.apply() for anything DEV-sourced.
+        if (devState.hasHalCommand) {
+            hal.apply(devState.halCommand);
+            devState.hasHalCommand = false;
+        }
+        if (devState.hasDrivetrainCommand) {
+            drivetrain.apply(devState.drivetrainCommand);
+            devState.hasDrivetrainCommand = false;
+        }
 
-        if (devState.drivetrainActive) {
-            // 079-004: drivetrain.tick() holds a Hal::DrivetrainToHalCommand
-            // (hasCommand()/takeCommand()) rather than returning one --
-            // Hal::NezhaHal::apply(const Hal::DrivetrainToHalCommand&) now
-            // exists (this ticket), so the held command is drained and
-            // dispatched for real, closing the gap 079-003 left open.
-            drivetrain.tick(now,
-                             hal.motor(devState.leftPort).state(),
-                             hal.motor(devState.rightPort).state());
+        if (drivetrain.active()) {
+            // Binding queried, not duplicated -- ports() reads straight from
+            // DrivetrainConfig (sprint 079 decision 8; DevLoopState no
+            // longer holds its own leftPort/rightPort copy).
+            Subsystems::DrivetrainPorts p = drivetrain.ports();
+            drivetrain.tick(now, hal.motor(p.left).state(), hal.motor(p.right).state());
             if (drivetrain.hasCommand()) {
                 hal.apply(drivetrain.takeCommand());
             }
         }
 
-        // Slice 2: whatever request/write this pass's dispatch just staged
-        // goes out now -- the sanctioned second hal.tick() call
-        // (architecture-update.md decision 6) replaces the old explicit
-        // bound-pair re-tick that used to live here.
+        // Slice 2: whatever request/write this pass's dispatch (or the
+        // Drivetrain's own re-governed target) just staged goes out now --
+        // the sanctioned second hal.tick() call (architecture-update.md
+        // decision 6) replaces the old explicit bound-pair re-tick hack.
         hal.tick(now);
 
         if (watchdog.check(now)) {
-            neutralizeAll(devState);
+            // Applied IMMEDIATELY, not staged via the outbox -- main.cpp is
+            // the top of the call tree, already the visible mover of every
+            // command; an emergency stop gains nothing from an extra pass
+            // of outbox latency (architecture-update.md's narrow, deliberate
+            // exception to "never call apply() outside main/the HAL"). The
+            // SAME buildBroadcastNeutral()/buildDrivetrainStop() construction
+            // path `DEV STOP`'s handler stages is used here directly.
+            hal.apply(buildBroadcastNeutral(msg::Neutral::BRAKE));
+            drivetrain.apply(buildDrivetrainStop(msg::Neutral::BRAKE));
             char wbuf[32];
             CommandProcessor::replyEvt(wbuf, sizeof(wbuf), "dev_watchdog", nullptr,
                                        serialReply, &comm);
