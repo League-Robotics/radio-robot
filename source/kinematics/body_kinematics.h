@@ -1,5 +1,5 @@
 #pragma once
-#include "pose2d.h"
+#include "messages/common.h"
 
 /**
  * BodyKinematics — stateless differential-drive kinematic maps and saturation.
@@ -81,15 +81,15 @@ void saturate(float vL, float vR,
  * compile-time namespace alias in i_kinematics.h alongside MecanumKinematics.
  *
  * wheels[2] = {vL, vR} (same sign convention as the scalar forms above).
- * vy is always 0 for a differential drivetrain; inverse ignores t.vy_mmps and
- * forward sets t_out.vy_mmps = 0.
+ * v_y is always 0 for a differential drivetrain; inverse ignores t.v_y and
+ * forward sets t_out.v_y = 0.
  *
- * @param t          body twist input (vy_mmps ignored)
+ * @param t          body twist input (v_y ignored)
  * @param b          track width, mm
  * @param wheels     wheel speed array [vL, vR], mm/s (in/out)
  */
-void inverse(BodyTwist3 t, float b, float wheels[2]);
-void forward(const float wheels[2], float b, BodyTwist3& t_out);
+void inverse(msg::BodyTwist3 t, float b, float wheels[2]);
+void forward(const float wheels[2], float b, msg::BodyTwist3& t_out);
 
 /**
  * Array-form saturate — uniform scale when any |wheel| > (vWheelMax - steerHeadroom).

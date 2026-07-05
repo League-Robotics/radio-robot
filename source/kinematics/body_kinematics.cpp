@@ -8,7 +8,7 @@
  *   docs/kinematics-model.md §1.7 (saturation scaling, curvature preservation)
  */
 #include "body_kinematics.h"
-#include "pose2d.h"
+#include "messages/common.h"
 #include <math.h>
 
 namespace BodyKinematics {
@@ -44,20 +44,20 @@ void saturate(float vL, float vR,
 
 // ---------------------------------------------------------------------------
 // Array-form overloads (046-002) — differential adapter for IKinematics.
-// wheels[2] = {vL, vR}. vy is always 0 for differential.
+// wheels[2] = {vL, vR}. v_y is always 0 for differential.
 // ---------------------------------------------------------------------------
 
-void inverse(BodyTwist3 t, float b, float wheels[2]) {
-    // vy is ignored (differential cannot strafe).
-    inverse(t.vx_mmps, t.omega_rads, b, wheels[0], wheels[1]);
+void inverse(msg::BodyTwist3 t, float b, float wheels[2]) {
+    // v_y is ignored (differential cannot strafe).
+    inverse(t.v_x, t.omega, b, wheels[0], wheels[1]);
 }
 
-void forward(const float wheels[2], float b, BodyTwist3& t_out) {
+void forward(const float wheels[2], float b, msg::BodyTwist3& t_out) {
     float v, omega;
     forward(wheels[0], wheels[1], b, v, omega);
-    t_out.vx_mmps   = v;
-    t_out.vy_mmps   = 0.0f;
-    t_out.omega_rads = omega;
+    t_out.v_x   = v;
+    t_out.v_y   = 0.0f;
+    t_out.omega = omega;
 }
 
 void saturate(float wheels[2], float vWheelMax, float steerHeadroom, float out[2]) {
