@@ -4,10 +4,9 @@
 // Ports the register map, split-phase 0x46 encoder sequencing, slew
 // limiting, and wedge-latch signal from source_old/hal/real/Motor.cpp
 // (sequencing preserved exactly — see nezha_motor.cpp for the byte-for-byte
-// notes), and embeds the velocity PID directly (no separate controller
-// object — see architecture-update.md Design Rationale / Control-
-// architecture decision 1), following the control law in
-// source_old/control/VelocityController.cpp.
+// notes), and embeds a velocity PID (a `Hal::MotorVelocityPid pid_` member,
+// one per motor — NOT a shared/singleton controller object), following the
+// control law in source_old/control/VelocityController.cpp.
 //
 // Instantiated per-port: config.port selects the vendor motorId byte
 // (1..4) sent in every frame — NOT a left/right pair (Design Rationale 3).
@@ -22,11 +21,21 @@
 // softRebaseline()/configureDevice()) plus its own write shaping (40 ms
 // throttle, ±slew_rate) and encoder sampling — see architecture-update.md,
 // "The base/leaf split — exact contract".
+//
+// Sprint 081-001 refit — the velocity control law itself (former
+// NezhaMotor::runVelocityPid(), file-local `integral_` state) moved
+// byte-for-byte into `Hal::MotorVelocityPid` (source/hal/velocity_pid.{h,cpp},
+// pure host-clean math, no I2C/CODAL) so a future simulated leaf can run the
+// IDENTICAL control law rather than a re-derived approximation. This class
+// still owns the pid_ member and passes its own config_ (vel_gains,
+// min_duty) into pid_.compute() every VELOCITY-mode tick — config_ remains
+// the single source of truth for calibration.
 #pragma once
 
 #include <stdint.h>
 
 #include "hal/capability/motor.h"
+#include "hal/velocity_pid.h"
 #include "com/i2c_bus.h"
 #include "messages/motor.h"
 
@@ -114,9 +123,13 @@ class NezhaMotor : public Motor {
   int8_t lastWrittenPct_ = -128;        // [%] sentinel (outside ±100) forces the first write
   uint64_t lastWriteTimeUs_ = 0;        // [us]
 
-  // ---- Embedded velocity PID state (see nezha_motor.cpp for the control
-  // law derivation from VelocityController::update()) ----
-  float integral_ = 0.0f;
+  // ---- Embedded velocity PID (sprint 081-001: extracted byte-for-byte into
+  // Hal::MotorVelocityPid — source/hal/velocity_pid.{h,cpp} — so a future
+  // simulated leaf can run the identical control law; see that file for the
+  // control-law derivation from VelocityController::update()). config_
+  // stays the single source of truth for calibration (vel_gains, min_duty);
+  // pid_ owns only the integrator's persistent state. ----
+  Hal::MotorVelocityPid pid_;
 
   // ---- Encoder software offset / failure-hold state (ported from Motor) ----
   int32_t encOffset_ = 0;               // [tenths of degrees]
@@ -141,9 +154,6 @@ class NezhaMotor : public Motor {
   int32_t readEncoderAtomicRaw();       // one-off sample: 4ms pre-idle -> 0x46 write -> 4ms settle -> read
   void requestEncoder();                // split-phase phase 1 (ported byte-for-byte); wrapped by the public requestSample() above
   int32_t collectEncoder();             // split-phase phase 2 (ported byte-for-byte); now wired into tick()'s step 2 (sprint 079-004)
-
-  // ---- Private helpers: control ----
-  float runVelocityPid(float target, float measured, float dt);   // [mm/s] [mm/s] [s] -> duty [-1,1]
 
   // ---- Vendor register wrappers ported for completeness (matching
   // source_old's coverage) but NOT reachable from the public faceplate

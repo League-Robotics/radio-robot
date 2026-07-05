@@ -28,6 +28,10 @@ _SOURCE_DIR = _REPO_ROOT / "source"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "nezha_flipflop_harness.cpp"
 _HOST_FAKE_SRC = _SOURCE_DIR / "com" / "i2c_bus_host.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "hal" / "nezha" / "nezha_motor.cpp"
+# 081-001: nezha_motor.cpp now calls into Hal::MotorVelocityPid::compute()
+# (source/hal/velocity_pid.cpp) instead of its own former runVelocityPid()
+# member — that translation unit must link in alongside it.
+_VELOCITY_PID_SRC = _SOURCE_DIR / "hal" / "velocity_pid.cpp"
 _NEZHA_HARDWARE_SRC = _SOURCE_DIR / "subsystems" / "nezha_hardware.cpp"
 
 # messages/common.h documents its own target as "CODAL C++11" -- build the
@@ -53,6 +57,7 @@ def test_nezha_flipflop_harness_compiles_and_passes(tmp_path):
     assert _HARNESS_SRC.is_file(), f"harness source missing: {_HARNESS_SRC}"
     assert _HOST_FAKE_SRC.is_file(), f"HOST_BUILD fake missing: {_HOST_FAKE_SRC}"
     assert _NEZHA_MOTOR_SRC.is_file(), f"nezha_motor.cpp missing: {_NEZHA_MOTOR_SRC}"
+    assert _VELOCITY_PID_SRC.is_file(), f"velocity_pid.cpp missing: {_VELOCITY_PID_SRC}"
     assert _NEZHA_HARDWARE_SRC.is_file(), f"nezha_hardware.cpp missing: {_NEZHA_HARDWARE_SRC}"
     assert _SOURCE_DIR.is_dir(), f"source/ tree missing: {_SOURCE_DIR}"
 
@@ -73,6 +78,7 @@ def test_nezha_flipflop_harness_compiles_and_passes(tmp_path):
             str(_HARNESS_SRC),
             str(_HOST_FAKE_SRC),
             str(_NEZHA_MOTOR_SRC),
+            str(_VELOCITY_PID_SRC),
             str(_NEZHA_HARDWARE_SRC),
         ],
         capture_output=True,

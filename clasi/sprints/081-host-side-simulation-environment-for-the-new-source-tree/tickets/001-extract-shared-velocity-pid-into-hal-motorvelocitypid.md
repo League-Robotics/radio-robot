@@ -1,8 +1,9 @@
 ---
 id: '001'
 title: Extract shared velocity PID into Hal::MotorVelocityPid
-status: open
-use-cases: [SUC-001]
+status: in-progress
+use-cases:
+- SUC-001
 depends-on: []
 github-issue: ''
 issue: host-side-simulation-environment-for-the-new-tree-design-write-up.md
@@ -30,7 +31,7 @@ start immediately.
 
 ## Acceptance Criteria
 
-- [ ] `Hal::MotorVelocityPid` (`source/hal/velocity_pid.{h,cpp}`) exists,
+- [x] `Hal::MotorVelocityPid` (`source/hal/velocity_pid.{h,cpp}`) exists,
       compiles standalone with no `#include "MicroBit.h"` and no I2C
       dependency, and reproduces `runVelocityPid()`'s exact math: the
       `iOld`-ordered output (`spSign*ff + kp*err + iOld`, output computed
@@ -38,13 +39,13 @@ start immediately.
       against `+/- i_max`, the `min_duty`-as-integrator-freeze-deadband
       threshold on `|target|`, and the `dt<=0 -> kNominalDt` (~24 ms)
       fallback.
-- [ ] `NezhaMotor` owns a `Hal::MotorVelocityPid pid_` member (replacing the
+- [x] `NezhaMotor` owns a `Hal::MotorVelocityPid pid_` member (replacing the
       bare `integral_` float) and calls `pid_.compute(...)` from `tick()`'s
       VELOCITY case where it used to call `runVelocityPid(...)` directly.
       `tick()`'s 5-step call order (`processResetIfPending` ->
       encoder-sample -> `updateWedgeDetector` -> mode dispatch ->
       `updateRestTracking`) is otherwise byte-for-byte unchanged.
-- [ ] `runVelocityPid()`'s old declaration/definition is deleted (no
+- [x] `runVelocityPid()`'s old declaration/definition is deleted (no
       unreferenced duplicate left behind, matching the project's own
       "duplicated-decision" anti-pattern discipline already applied to
       `readEncoderSettle()` in sprint 079).
@@ -54,17 +55,21 @@ start immediately.
       command an identical velocity step on the stand, and confirm rise
       time, overshoot, and settle time match within measurement noise. This
       ticket is not done until this is confirmed on real hardware.
-- [ ] A new standalone-compiled test (following the existing
+      **NOT YET DONE — deliberately deferred to the team-lead per this
+      ticket's dispatch instructions (physical-hardware step withheld from
+      the implementing agent as a supervised, separate step). See the
+      programmer's closing report for a ready-to-run procedure.**
+- [x] A new standalone-compiled test (following the existing
       `tests/sim/unit/*_harness.cpp` ad hoc-compile convention — see
       `test_motor_policy.py`'s pattern, no CMake) exercises
       `MotorVelocityPid::compute()` in isolation: a velocity step converges
       without oscillation blow-up, anti-windup clamps the integral under a
       saturating target, and the `dt<=0` path substitutes `kNominalDt`
       rather than dividing by zero or NaN-ing.
-- [ ] Existing `tests/sim/unit/*` harnesses (`motor_policy`, `drivetrain`,
+- [x] Existing `tests/sim/unit/*` harnesses (`motor_policy`, `drivetrain`,
       `i2c_bus_clearance`, `nezha_flipflop`, `dev_command_outbox`) and
       `uv run python -m pytest` still pass with no regression.
-- [ ] No unit-suffixed identifier is introduced (`.claude/rules/coding-standards.md`);
+- [x] No unit-suffixed identifier is introduced (`.claude/rules/coding-standards.md`);
       `compute(target, measured, dt)` names quantities, `dt`'s unit lives in
       a `// [s]` trailing comment tag, matching the existing convention.
 
