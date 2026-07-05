@@ -36,22 +36,29 @@
 //   right.tick(now);
 //   watchdog.check(now);          // silence -> all neutral
 //
-// (079-003: drivetrain.tick() is now void; it HOLDS a
-// Hal::DrivetrainToHalCommand internally (hasCommand()/takeCommand()) rather
-// than returning it -- see drivetrain.h. The apply(out.left/right) pair above
-// is NOT called below this ticket: dispatching a held command through the
-// HAL needs Hal::NezhaHal::apply(const Hal::DrivetrainToHalCommand&), which
-// ticket 004 introduces. Ticket 005's three-beat loop reshape
-// (architecture-update.md "The Part-2 loop") drains hasCommand()/
-// takeCommand() for real; this pseudocode block is updated there, not here.)
+// (079-004: Hal::NezhaHal::apply(const Hal::DrivetrainToHalCommand&) now
+// exists, so this loop drains drivetrain.hasCommand()/takeCommand() for
+// real via hal.apply() below -- closing the gap 079-003 left open. This is
+// a MINIMAL loop adaptation, not the full three-beat reshape: comms
+// dispatch still runs where it always has (DEV handlers still call into
+// Hal/Drivetrain directly, unchanged -- CommandProcessor's pure-transformer
+// rework and the DevLoopState outbox are ticket 005's job). The one shape
+// change here is replacing the old explicit bound-pair re-tick (see below)
+// with the sanctioned SECOND hal.tick() call per pass -- architecture-
+// update.md's "The Part-2 loop" decision 6 -- now that NezhaHal's own
+// tick() is the brick flip-flop sequencer, not a fixed 4-port sweep.)
 //
 // `left`/`right` are whichever two NezhaMotors DEV DT PORTS last bound
 // (DevLoopState::leftPort/rightPort, default 1/2) -- this loop never
-// hardcodes which ports they are. Note the bound pair is ticked TWICE per
-// iteration (once inside hal.tick()'s uniform 4-port sweep, once more
-// explicitly here) so a freshly drivetrain-governed target actuates in the
-// SAME cycle it was computed, rather than waiting for next iteration's
-// hal.tick() -- this is the locked shape, not an oversight.
+// hardcodes which ports they are. hal.tick() is called TWICE per iteration
+// (slice 1 lets any due collect land before comms/drivetrain read this
+// pass's state; slice 2 sends out whatever request/write the pass's
+// dispatch just staged) so a freshly drivetrain-governed target actuates in
+// the SAME cycle it was computed, rather than waiting for next iteration's
+// hal.tick() -- this is the locked shape, not an oversight. The bound pair
+// is no longer ticked a third time explicitly (the old hack) -- the flip-
+// flop's own two-per-pass cadence now covers it uniformly with every other
+// in-use port.
 //
 // Build gating: the DEV family (and the HAL/Drivetrain wiring it needs) is
 // compiled in only when ROBOT_DEV_BUILD is set (codal.json's "config"
@@ -233,30 +240,27 @@ int main() {
                         &comm);
         }
 
-        hal.tick(now);
+        hal.tick(now);   // slice 1: any due collect lands before this pass's dispatch
 
         if (devState.drivetrainActive) {
-            // 079-003 minimal build-fix (flagged for ticket 005): tick() no
-            // longer returns a Subsystems::DrivetrainToMotorCommand (deleted)
-            // -- it holds a Hal::DrivetrainToHalCommand internally instead
-            // (hasCommand()/takeCommand()). Draining that held command and
-            // dispatching it needs Hal::NezhaHal::apply(const
-            // Hal::DrivetrainToHalCommand&), which does not exist until
-            // ticket 004, so it is intentionally left untaken here -- this
-            // ticket only needs main.cpp to keep BUILDING against the new
-            // void signature. The bound pair does not receive a fresh
-            // drivetrain-governed target until ticket 005's full three-beat
-            // loop reshape (architecture-update.md "The Part-2 loop") lands.
+            // 079-004: drivetrain.tick() holds a Hal::DrivetrainToHalCommand
+            // (hasCommand()/takeCommand()) rather than returning one --
+            // Hal::NezhaHal::apply(const Hal::DrivetrainToHalCommand&) now
+            // exists (this ticket), so the held command is drained and
+            // dispatched for real, closing the gap 079-003 left open.
             drivetrain.tick(now,
                              hal.motor(devState.leftPort).state(),
                              hal.motor(devState.rightPort).state());
+            if (drivetrain.hasCommand()) {
+                hal.apply(drivetrain.takeCommand());
+            }
         }
 
-        // Bound pair ticks again here (on top of hal.tick()'s uniform sweep
-        // above) so a fresh drivetrain-governed target actuates THIS cycle --
-        // see the file header for why this is the locked shape, not a bug.
-        hal.motor(devState.leftPort).tick(now);
-        hal.motor(devState.rightPort).tick(now);
+        // Slice 2: whatever request/write this pass's dispatch just staged
+        // goes out now -- the sanctioned second hal.tick() call
+        // (architecture-update.md decision 6) replaces the old explicit
+        // bound-pair re-tick that used to live here.
+        hal.tick(now);
 
         if (watchdog.check(now)) {
             neutralizeAll(devState);
