@@ -33,6 +33,7 @@ build-clean:
 build-sim:
     uv run python3 scripts/gen_default_config.py
     uv run python3 scripts/gen_messages.py
+    uv run python3 scripts/gen_boot_config.py
     cmake -S tests/_infra/sim -B tests/_infra/sim/build -DROBOT_RUN_MODE=SIM
     cmake --build tests/_infra/sim/build --parallel
 

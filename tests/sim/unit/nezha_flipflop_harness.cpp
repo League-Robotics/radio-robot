@@ -1,6 +1,6 @@
 // nezha_flipflop_harness.cpp — off-hardware acceptance harness for ticket
 // 079-004 (SUC-001/SUC-002/SUC-003/SUC-008/SUC-009): exercises the REAL
-// Hal::NezhaHal brick flip-flop sequencer + distribution role, and the
+// Subsystems::NezhaHardware brick flip-flop sequencer + distribution role, and the
 // REAL Hal::NezhaMotor split-phase encoder wiring, against ticket 001's
 // HOST_BUILD scripted I2CBus fake — no MicroBitI2C, no CODAL, no wall
 // clock, no real 4ms sleeps.
@@ -9,7 +9,7 @@
 // is the confined, sanctioned hardware-fake exception — see
 // architecture-update.md and motor_policy_harness.cpp's own header for the
 // precedent), this compiles and links the ACTUAL source/hal/nezha/
-// nezha_motor.cpp and nezha_hal.cpp against the SAME source/hal/nezha/*.h
+// nezha_motor.cpp and subsystems/nezha_hardware.cpp against the SAME headers
 // every ARM build compiles, with -DHOST_BUILD selecting i2c_bus_host.cpp's
 // fake in place of the real MicroBitI2C-backed i2c_bus.cpp (see
 // nezha_motor.cpp's own #ifndef HOST_BUILD guard for how it sheds its
@@ -49,7 +49,7 @@
 // appliedDuty()) — see each scenario's comments.
 //
 // --- Two independent clocks ---
-// NezhaHal::tick(uint32_t now) takes a MILLISECOND "now" that only matters
+// NezhaHardware::tick(uint32_t now) takes a MILLISECOND "now" that only matters
 // once collectEncoder() lands and NezhaMotor::tick() dispatches
 // armoredWrite(duty, now) (078's reversal-dwell timing runs on this axis
 // — requestSample() takes no "now" at all, so REQUEST_DUE ticks may pass
@@ -67,7 +67,7 @@
 #include <string>
 
 #include "com/i2c_bus.h"
-#include "hal/nezha/nezha_hal.h"
+#include "subsystems/nezha_hardware.h"
 
 namespace {
 
@@ -119,10 +119,10 @@ void checkFloatEq(float actual, float expected, const std::string& what) {
 constexpr uint16_t kAddr7 = 0x10;                                   // bare 7-bit (clear()'s convention)
 constexpr uint16_t kWireAddr = static_cast<uint16_t>(kAddr7 << 1);  // 0x20 (write()/read()'s convention)
 
-msg::MotorConfig defaultConfigs[Hal::NezhaHal::kPortCount];
+msg::MotorConfig defaultConfigs[Subsystems::NezhaHardware::kPortCount];
 
 void resetDefaultConfigs() {
-  for (uint32_t i = 0; i < Hal::NezhaHal::kPortCount; ++i) {
+  for (uint32_t i = 0; i < Subsystems::NezhaHardware::kPortCount; ++i) {
     defaultConfigs[i] = msg::MotorConfig{};
     defaultConfigs[i].setPort(i + 1).setFwdSign(1).setTravelCalib(1.0f);
   }
@@ -141,10 +141,10 @@ void scriptGenerousPool(I2CBus& bus, int count) {
 }
 
 // Addresses a single port with `command` (non-broadcast) — the `DEV M <n>`
-// shape (CommandProcessorToHalCommand, count=1).
-Hal::CommandProcessorToHalCommand addressedOne(uint32_t port,
+// shape (CommandProcessorToHardwareCommand, count=1).
+Hal::CommandProcessorToHardwareCommand addressedOne(uint32_t port,
                                                 const msg::MotorCommand& command) {
-  Hal::CommandProcessorToHalCommand cmd;
+  Hal::CommandProcessorToHardwareCommand cmd;
   cmd.allPorts = false;
   cmd.count = 1;
   cmd.addressed[0].port = port;
@@ -153,12 +153,12 @@ Hal::CommandProcessorToHalCommand addressedOne(uint32_t port,
 }
 
 // Addresses two ports in ONE call (non-broadcast) — the `DEV DT STOP`
-// shape (CommandProcessorToHalCommand, count=2, the bound pair).
-Hal::CommandProcessorToHalCommand addressedTwo(uint32_t portA,
+// shape (CommandProcessorToHardwareCommand, count=2, the bound pair).
+Hal::CommandProcessorToHardwareCommand addressedTwo(uint32_t portA,
                                                 const msg::MotorCommand& cmdA,
                                                 uint32_t portB,
                                                 const msg::MotorCommand& cmdB) {
-  Hal::CommandProcessorToHalCommand cmd;
+  Hal::CommandProcessorToHardwareCommand cmd;
   cmd.allPorts = false;
   cmd.count = 2;
   cmd.addressed[0].port = portA;
@@ -180,7 +180,7 @@ msg::MotorCommand neutralCommand() {
 // deadline). `nowRequestMs`/`nowCollectMs` are the ms values passed to
 // each tick() — irrelevant to REQUEST_DUE, load-bearing for COLLECT_DUE's
 // armoredWrite()/dwell timing.
-void runOneCycle(Hal::NezhaHal& hal, uint32_t nowRequestMs,
+void runOneCycle(Subsystems::NezhaHardware& hal, uint32_t nowRequestMs,
                   uint32_t nowCollectMs, uint64_t postClearUs = 4000) {
   hal.tick(nowRequestMs);
   I2CBus::advanceClock(postClearUs);
@@ -196,7 +196,7 @@ void scenarioIdleScheduleNoBusActions() {
   resetDefaultConfigs();
   I2CBus::setClock(1000000);
   I2CBus bus;
-  Hal::NezhaHal hal(bus, defaultConfigs);   // no apply() calls at all -- nothing ever in-use
+  Subsystems::NezhaHardware hal(bus, defaultConfigs);   // no apply() calls at all -- nothing ever in-use
 
   for (uint32_t i = 0; i < 20; ++i) {
     hal.tick(100 + i);
@@ -210,7 +210,7 @@ void scenarioIdleScheduleNoBusActions() {
 //    still open) -> COLLECT_DUE, write-at-collect-only, and write-on-change
 //    suppression on an unchanged repeat command. The "pass while unclear"
 //    step is ALSO this ticket's required regression guard for
-//    bus_.clear(kNezhaDeviceAddr) using the bare 7-bit address: if NezhaHal
+//    bus_.clear(kNezhaDeviceAddr) using the bare 7-bit address: if NezhaHardware
 //    mistakenly called bus_.clear(kNezhaDeviceAddr << 1) (0x20) instead,
 //    that queries a DeviceSlot NO real write()/read() ever populates (every
 //    NezhaMotor transaction's 8-bit wire address collapses back to 7-bit
@@ -223,7 +223,7 @@ void scenarioFlipFlopSequencingAndClearConvention() {
   resetDefaultConfigs();
   I2CBus::setClock(1000000);
   I2CBus bus;
-  Hal::NezhaHal hal(bus, defaultConfigs);
+  Subsystems::NezhaHardware hal(bus, defaultConfigs);
   scriptGenerousPool(bus, 20);
 
   hal.apply(addressedOne(1, neutralCommand()));   // marks port 1 in-use
@@ -259,7 +259,7 @@ void scenarioFlipFlopSequencingAndClearConvention() {
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run across the whole sequence");
 }
 
-// 3. Two in-use ports (addressed via ONE count=2 CommandProcessorToHalCommand
+// 3. Two in-use ports (addressed via ONE count=2 CommandProcessorToHardwareCommand
 //    -- the `DEV DT STOP`-shaped call): the flip-flop alternates strictly
 //    between them in ascending-then-wrapping order, and the two UNADDRESSED
 //    ports are never touched at all (in-use tracking).
@@ -268,7 +268,7 @@ void scenarioInUseTrackingAndRotation() {
   resetDefaultConfigs();
   I2CBus::setClock(1000000);
   I2CBus bus;
-  Hal::NezhaHal hal(bus, defaultConfigs);
+  Subsystems::NezhaHardware hal(bus, defaultConfigs);
   scriptGenerousPool(bus, 40);
 
   hal.apply(addressedTwo(1, neutralCommand(), 3, neutralCommand()));
@@ -307,9 +307,9 @@ void scenarioBroadcastNeverMarksInUse() {
   resetDefaultConfigs();
   I2CBus::setClock(1000000);
   I2CBus bus;
-  Hal::NezhaHal hal(bus, defaultConfigs);
+  Subsystems::NezhaHardware hal(bus, defaultConfigs);
 
-  Hal::CommandProcessorToHalCommand broadcast;
+  Hal::CommandProcessorToHardwareCommand broadcast;
   broadcast.allPorts = true;
   broadcast.addressed[0].command = neutralCommand();
   hal.apply(broadcast);
@@ -329,18 +329,18 @@ void scenarioBroadcastNeverMarksInUse() {
                "direct tick() proves the broadcast staged NEUTRAL on motor 1's setter");
 }
 
-// 5. DrivetrainToHalCommand (wheel[0]=left, wheel[1]=right): both wheels are
+// 5. DrivetrainToHardwareCommand (wheel[0]=left, wheel[1]=right): both wheels are
 //    ALWAYS addressed (never a broadcast) -- both get marked in-use and
 //    forwarded, cycling between exactly those two ports.
-void scenarioDrivetrainToHalCommandForwarding() {
-  beginScenario("apply(DrivetrainToHalCommand): both wheels marked in-use and forwarded");
+void scenarioDrivetrainToHardwareCommandForwarding() {
+  beginScenario("apply(DrivetrainToHardwareCommand): both wheels marked in-use and forwarded");
   resetDefaultConfigs();
   I2CBus::setClock(1000000);
   I2CBus bus;
-  Hal::NezhaHal hal(bus, defaultConfigs);
+  Subsystems::NezhaHardware hal(bus, defaultConfigs);
   scriptGenerousPool(bus, 40);
 
-  Hal::DrivetrainToHalCommand dtCmd;
+  Hal::DrivetrainToHardwareCommand dtCmd;
   dtCmd.wheel[0].port = 1;
   dtCmd.wheel[0].command = neutralCommand();
   dtCmd.wheel[1].port = 2;
@@ -380,7 +380,7 @@ void scenarioWriteThrottleInteraction() {
   uint64_t t0 = 1000000;
   I2CBus::setClock(t0);
   I2CBus bus;
-  Hal::NezhaHal hal(bus, defaultConfigs);
+  Subsystems::NezhaHardware hal(bus, defaultConfigs);
   scriptGenerousPool(bus, 40);
 
   hal.apply(addressedOne(1, msg::MotorCommand{}.setDutyCycle(0.5f)));
@@ -431,7 +431,7 @@ void scenarioReversalDwellHoldsAtNewCadence() {
   resetDefaultConfigs();
   I2CBus::setClock(10000000);
   I2CBus bus;
-  Hal::NezhaHal hal(bus, defaultConfigs);
+  Subsystems::NezhaHardware hal(bus, defaultConfigs);
   scriptGenerousPool(bus, 40);
   const uint64_t kUsGap = 50000;   // >> 40ms throttle, >> 4ms postClear -- isolates the dwell
 
@@ -476,7 +476,7 @@ void scenarioFirstWriteExemptFromSentinelSlew() {
   resetDefaultConfigs();
   I2CBus::setClock(1000000);
   I2CBus bus;
-  Hal::NezhaHal hal(bus, defaultConfigs);
+  Subsystems::NezhaHardware hal(bus, defaultConfigs);
   scriptGenerousPool(bus, 20);
 
   hal.apply(addressedOne(1, msg::MotorCommand{}.setDutyCycle(0.30f)));
@@ -508,7 +508,7 @@ void scenarioRequestHonorsClearanceAfterDutyWrite() {
   resetDefaultConfigs();
   I2CBus::setClock(1000000);
   I2CBus bus;
-  Hal::NezhaHal hal(bus, defaultConfigs);
+  Subsystems::NezhaHardware hal(bus, defaultConfigs);
   scriptGenerousPool(bus, 40);
 
   hal.apply(addressedOne(1, msg::MotorCommand{}.setDutyCycle(0.30f)));
@@ -537,17 +537,17 @@ int main() {
   scenarioFlipFlopSequencingAndClearConvention();
   scenarioInUseTrackingAndRotation();
   scenarioBroadcastNeverMarksInUse();
-  scenarioDrivetrainToHalCommandForwarding();
+  scenarioDrivetrainToHardwareCommandForwarding();
   scenarioWriteThrottleInteraction();
   scenarioReversalDwellHoldsAtNewCadence();
   scenarioFirstWriteExemptFromSentinelSlew();
   scenarioRequestHonorsClearanceAfterDutyWrite();
 
   if (g_failureCount == 0) {
-    std::printf("OK: all NezhaHal flip-flop scenarios passed\n");
+    std::printf("OK: all NezhaHardware flip-flop scenarios passed\n");
     return 0;
   }
-  std::printf("FAILED: %d assertion(s) across the NezhaHal flip-flop scenarios\n",
+  std::printf("FAILED: %d assertion(s) across the NezhaHardware flip-flop scenarios\n",
               g_failureCount);
   return 1;
 }

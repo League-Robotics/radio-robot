@@ -5,7 +5,7 @@ Compiles ``dev_command_outbox_harness.cpp`` together with the REAL
 ``source/commands/dev_commands.cpp``, ``source/commands/command_processor.cpp``,
 ``source/commands/arg_parse.cpp``, ``source/subsystems/drivetrain.cpp``,
 ``source/kinematics/body_kinematics.cpp``, ``source/hal/nezha/nezha_motor.cpp``,
-and ``source/hal/nezha/nezha_hal.cpp``, plus ticket 001's HOST_BUILD scripted-fake
+and ``source/subsystems/nezha_hardware.cpp``, plus ticket 001's HOST_BUILD scripted-fake
 ``source/com/i2c_bus_host.cpp``, against the SAME headers every ARM build
 compiles, with ``-DHOST_BUILD`` (sheds nezha_motor.cpp's MicroBit.h dependency,
 see nezha_flipflop_harness.cpp) AND ``-DROBOT_DEV_BUILD=1`` (codal.json's value --
@@ -38,7 +38,7 @@ _TYPES_DIR = _SOURCE_DIR / "types"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "dev_command_outbox_harness.cpp"
 _HOST_FAKE_SRC = _SOURCE_DIR / "com" / "i2c_bus_host.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "hal" / "nezha" / "nezha_motor.cpp"
-_NEZHA_HAL_SRC = _SOURCE_DIR / "hal" / "nezha" / "nezha_hal.cpp"
+_NEZHA_HARDWARE_SRC = _SOURCE_DIR / "subsystems" / "nezha_hardware.cpp"
 _DRIVETRAIN_SRC = _SOURCE_DIR / "subsystems" / "drivetrain.cpp"
 _BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
 _DEV_COMMANDS_SRC = _SOURCE_DIR / "commands" / "dev_commands.cpp"
@@ -49,7 +49,7 @@ _SOURCES = [
     _HARNESS_SRC,
     _HOST_FAKE_SRC,
     _NEZHA_MOTOR_SRC,
-    _NEZHA_HAL_SRC,
+    _NEZHA_HARDWARE_SRC,
     _DRIVETRAIN_SRC,
     _BODY_KINEMATICS_SRC,
     _DEV_COMMANDS_SRC,

@@ -355,11 +355,11 @@ void emitDrivetrainState(DevLoopState& state, const char* corrId,
 // (latest-wins, matching the outbox's setpoint semantics).
 // ---------------------------------------------------------------------------
 void stageHalCommand(DevLoopState& state, uint32_t port, const msg::MotorCommand& cmd) {
-    state.halCommand.allPorts = false;
-    state.halCommand.count = 1;
-    state.halCommand.addressed[0].port = port;
-    state.halCommand.addressed[0].command = cmd;
-    state.hasHalCommand = true;
+    state.hardwareCommand.allPorts = false;
+    state.hardwareCommand.count = 1;
+    state.hardwareCommand.addressed[0].port = port;
+    state.hardwareCommand.addressed[0].command = cmd;
+    state.hasHardwareCommand = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -415,7 +415,7 @@ void handleDevMCfg(DevLoopState& state, uint32_t port, const ArgList& args,
     }
 
     if (anyApplied) {
-        state.hal->motor(port).configure(cfg);
+        state.hardware->motor(port).configure(cfg);
         char verb[16];
         snprintf(verb, sizeof(verb), "DEV M %u", static_cast<unsigned>(port));
         char rbuf[300];
@@ -450,7 +450,7 @@ void handleDevM(const ArgList& args, const char* corrId,
     MotorMode mode;
     motorModeFromToken(args.args[1].sval, &mode);   // already validated by parseDevM
 
-    Hal::Motor& motor = state.hal->motor(port);
+    Hal::Motor& motor = state.hardware->motor(port);
     char verb[16];
     snprintf(verb, sizeof(verb), "DEV M %u", static_cast<unsigned>(port));
     char rbuf[200];
@@ -762,8 +762,8 @@ void handleDevDt(const ArgList& args, const char* corrId,
             // Refresh the capabilities cache so DrivetrainCapabilities.
             // onboard_position stays accurate for the newly-bound pair --
             // see drivetrain.h's setMotorCapabilities() doc comment.
-            state.drivetrain->setMotorCapabilities(state.hal->motor(left).capabilities(),
-                                                    state.hal->motor(right).capabilities());
+            state.drivetrain->setMotorCapabilities(state.hardware->motor(left).capabilities(),
+                                                    state.hardware->motor(right).capabilities());
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), "DEV DT", corrId, replyFn, replyCtx,
                                        "ports=%u,%u", static_cast<unsigned>(left), static_cast<unsigned>(right));
             break;
@@ -838,13 +838,13 @@ void handleDevDt(const ArgList& args, const char* corrId,
             msg::MotorCommand neutralCmd;
             neutralCmd.setNeutral(msg::Neutral::BRAKE);
 
-            state.halCommand.allPorts = false;
-            state.halCommand.count = 2;
-            state.halCommand.addressed[0].port = p.left;
-            state.halCommand.addressed[0].command = neutralCmd;
-            state.halCommand.addressed[1].port = p.right;
-            state.halCommand.addressed[1].command = neutralCmd;
-            state.hasHalCommand = true;
+            state.hardwareCommand.allPorts = false;
+            state.hardwareCommand.count = 2;
+            state.hardwareCommand.addressed[0].port = p.left;
+            state.hardwareCommand.addressed[0].command = neutralCmd;
+            state.hardwareCommand.addressed[1].port = p.right;
+            state.hardwareCommand.addressed[1].command = neutralCmd;
+            state.hasHardwareCommand = true;
 
             state.drivetrainCommand = buildDrivetrainStop(msg::Neutral::BRAKE);
             state.hasDrivetrainCommand = true;
@@ -865,8 +865,8 @@ void handleDevDt(const ArgList& args, const char* corrId,
 void handleDevState(const ArgList& /*args*/, const char* corrId,
                     ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
     DevLoopState& state = *static_cast<DevLoopState*>(handlerCtx);
-    for (uint32_t port = 1; port <= Hal::NezhaHal::kPortCount; ++port) {
-        emitMotorState(state.hal->motor(port), port, corrId, replyFn, replyCtx);
+    for (uint32_t port = 1; port <= Subsystems::NezhaHardware::kPortCount; ++port) {
+        emitMotorState(state.hardware->motor(port), port, corrId, replyFn, replyCtx);
     }
     emitDrivetrainState(state, corrId, replyFn, replyCtx);
 }
@@ -880,8 +880,8 @@ void handleDevState(const ArgList& /*args*/, const char* corrId,
 void handleDevStop(const ArgList& /*args*/, const char* corrId,
                    ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
     DevLoopState& state = *static_cast<DevLoopState*>(handlerCtx);
-    state.halCommand = buildBroadcastNeutral(msg::Neutral::BRAKE);
-    state.hasHalCommand = true;
+    state.hardwareCommand = buildBroadcastNeutral(msg::Neutral::BRAKE);
+    state.hasHardwareCommand = true;
     state.drivetrainCommand = buildDrivetrainStop(msg::Neutral::BRAKE);
     state.hasDrivetrainCommand = true;
     char rbuf[32];
@@ -906,8 +906,8 @@ void handleDevWd(const ArgList& args, const char* corrId,
 // ---------------------------------------------------------------------------
 // buildBroadcastNeutral / buildDrivetrainStop -- see dev_commands.h.
 // ---------------------------------------------------------------------------
-Hal::CommandProcessorToHalCommand buildBroadcastNeutral(msg::Neutral mode) {
-    Hal::CommandProcessorToHalCommand cmd;
+Hal::CommandProcessorToHardwareCommand buildBroadcastNeutral(msg::Neutral mode) {
+    Hal::CommandProcessorToHardwareCommand cmd;
     cmd.allPorts = true;
     cmd.count = 0;
     msg::MotorCommand neutralCmd;

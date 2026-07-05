@@ -218,12 +218,12 @@ void scenarioHasCommandTakeCommandClears() {
   dt.tick(1000, obsVelocity(0.0f), obsVelocity(0.0f));
   checkTrue(dt.hasCommand(), "tick() unconditionally holds a command");
 
-  Hal::DrivetrainToHalCommand held = dt.takeCommand();
+  Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
   (void)held;
   checkFalse(dt.hasCommand(), "takeCommand() clears hasCommand()");
 }
 
-// 6. The held Hal::DrivetrainToHalCommand's wheel[].port matches the
+// 6. The held Hal::DrivetrainToHardwareCommand's wheel[].port matches the
 // configured binding, and (with sync_gain==0, the governor a no-op) the
 // commanded velocities pass through exactly.
 void scenarioHeldCommandPortsMatchBindingAndCarryTargets() {
@@ -235,7 +235,7 @@ void scenarioHeldCommandPortsMatchBindingAndCarryTargets() {
   dt.tick(2000, obsVelocity(0.0f), obsVelocity(0.0f));
 
   checkTrue(dt.hasCommand(), "tick() held a command");
-  Hal::DrivetrainToHalCommand cmd = dt.takeCommand();
+  Hal::DrivetrainToHardwareCommand cmd = dt.takeCommand();
 
   checkUintEq(cmd.wheel[0].port, 3, "held command wheel[0].port == left_port");
   checkUintEq(cmd.wheel[1].port, 4, "held command wheel[1].port == right_port");
@@ -259,7 +259,7 @@ void scenarioHeldCommandReflectsNeutralMode() {
   dt.apply(cmd);
   dt.tick(3000, obsVelocity(0.0f), obsVelocity(0.0f));
 
-  Hal::DrivetrainToHalCommand held = dt.takeCommand();
+  Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
   checkKindEq(held.wheel[0].command.control_kind,
               msg::MotorCommand::ControlKind::NEUTRAL, "wheel[0] is a NEUTRAL command");
   checkKindEq(held.wheel[1].command.control_kind,
@@ -288,7 +288,7 @@ void scenarioRatioGovernorTwistRegression() {
   dt.apply(cmd);
   dt.tick(4000, obsVelocity(80.0f), obsVelocity(100.0f));
 
-  Hal::DrivetrainToHalCommand held = dt.takeCommand();
+  Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
   checkFloatEq(held.wheel[0].command.control.velocity, 90.0f, "governed left target");
   checkFloatEq(held.wheel[1].command.control.velocity, 90.0f, "governed right target");
 }
@@ -304,7 +304,7 @@ void scenarioRatioGovernorWheelsRegression() {
   dt.apply(wheelsCommand(50.0f, 100.0f));
   dt.tick(5000, obsVelocity(50.0f), obsVelocity(50.0f));
 
-  Hal::DrivetrainToHalCommand held = dt.takeCommand();
+  Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
   checkFloatEq(held.wheel[0].command.control.velocity, 37.5f, "governed left target");
   checkFloatEq(held.wheel[1].command.control.velocity, 75.0f, "governed right target");
 }

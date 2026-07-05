@@ -35,7 +35,7 @@ namespace Hal {
 // 7-bit I2C address shared by all four Nezha V2 motor channels (the
 // motorId byte in each frame selects the channel, not the address).
 // Promoted from NezhaMotor's former private kAddr constant (sprint 079-004)
-// to a namespace Hal constant so NezhaHal's brick flip-flop sequencer can
+// to a namespace Hal constant so NezhaHardware's brick flip-flop sequencer can
 // name it too (its bus_.clear(kNezhaDeviceAddr) gate — architecture-
 // update.md's "clear()'s address convention" section — must use the SAME
 // bare 7-bit value every NezhaMotor register write/read shifts left by one
@@ -48,13 +48,13 @@ class NezhaMotor : public Motor {
 
   // Primes the encoder: the Nezha 0x46 register sits frozen at 0 until the
   // chip receives its first atomic read transaction. Ports source_old's
-  // Motor::begin() (which calls resetEncoder()) exactly; NezhaHal::begin()
+  // Motor::begin() (which calls resetEncoder()) exactly; NezhaHardware::begin()
   // calls this once per port before the main loop starts.
   void begin() override;
 
   // Split-phase phase 1, public entry point — sprint 079-004. Wraps the
-  // already-ported requestEncoder() so NezhaHal's brick flip-flop sequencer
-  // (nezha_hal.cpp) can request this port's encoder sample without reaching
+  // already-ported requestEncoder() so NezhaHardware's brick flip-flop sequencer
+  // (subsystems/nezha_hardware.cpp) can request this port's encoder sample without reaching
   // into NezhaMotor's private register-verb surface. NOT a Hal::Motor
   // virtual: request/collect splitting is a Nezha-specific consequence of
   // four ports sharing one device address (0x10), not a universal HAL
@@ -125,7 +125,7 @@ class NezhaMotor : public Motor {
 
   // ---- Register-map wire constants ----
   // kAddr promoted to the namespace-Hal kNezhaDeviceAddr constant above
-  // (sprint 079-004) — shared with NezhaHal's flip-flop sequencer.
+  // (sprint 079-004) — shared with NezhaHardware's flip-flop sequencer.
   static constexpr uint8_t kDirCw = 1;      // positive speed from chip perspective
   static constexpr uint8_t kDirCcw = 2;     // negative speed from chip perspective
   static constexpr float kDefaultSlewRate = 25.0f;   // architecture-update.md Design Rationale 2: ports kMaxDeltaPwmPerWrite's default

@@ -93,6 +93,12 @@ else:
 _gen_msgs = os.path.join(os.path.dirname(__file__), "scripts", "gen_messages.py")
 _sp.run([sys.executable, _gen_msgs], check=True)
 
+# Regenerate source/config/boot_config.cpp from the active robot JSON so the
+# subsystems tree's boot MotorConfig/DrivetrainConfig defaults are baked in at
+# compile time -- main.cpp no longer hardcodes calibration.
+_gen_boot = os.path.join(os.path.dirname(__file__), "scripts", "gen_boot_config.py")
+_sp.run([sys.executable, _gen_boot], check=True)
+
 # out of source build!
 os.chdir("build")
 

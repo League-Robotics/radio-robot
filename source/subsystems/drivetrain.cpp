@@ -42,7 +42,7 @@ void Drivetrain::apply(const msg::DrivetrainCommand& command) {
             const msg::WheelTargets& wheels = command.control.wheels;
             // This Drivetrain has exactly two wheels (capabilities().wheel_count
             // == 2): index 0 is left, index 1 is right, matching
-            // Hal::DrivetrainToHalCommand's wheel[0]/wheel[1] fields. A
+            // Hal::DrivetrainToHardwareCommand's wheel[0]/wheel[1] fields. A
             // WheelTargets with fewer than 2 entries leaves the missing side
             // at 0 rather than reading past w_count.
             float left = 0.0f;
@@ -179,7 +179,7 @@ void Drivetrain::tick(uint32_t now,
 
     // Held, not returned (architecture-update.md "The command-edge types"):
     // addressed via ports() so the wiring layer (ticket 079-005) can dispatch
-    // straight through Hal::NezhaHal::apply(const Hal::DrivetrainToHalCommand&)
+    // straight through Subsystems::NezhaHardware::apply(const Hal::DrivetrainToHardwareCommand&)
     // without ever naming a port itself. Set unconditionally whenever tick()
     // runs -- see the class comment and hasCommand()'s doc comment.
     heldCommand_.wheel[0].port = config_.left_port;
@@ -191,7 +191,7 @@ void Drivetrain::tick(uint32_t now,
 
 bool Drivetrain::hasCommand() const { return hasCommand_; }
 
-Hal::DrivetrainToHalCommand Drivetrain::takeCommand() {
+Hal::DrivetrainToHardwareCommand Drivetrain::takeCommand() {
     hasCommand_ = false;
     return heldCommand_;
 }

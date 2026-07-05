@@ -1,8 +1,8 @@
-#include "hal/nezha/nezha_hal.h"
+#include "subsystems/nezha_hardware.h"
 
-namespace Hal {
+namespace Subsystems {
 
-NezhaHal::NezhaHal(I2CBus& bus, const msg::MotorConfig configs[kPortCount])
+NezhaHardware::NezhaHardware(I2CBus& bus, const msg::MotorConfig configs[kPortCount])
     : bus_(bus),
       motor1_(bus, configs[0]),
       motor2_(bus, configs[1]),
@@ -11,7 +11,7 @@ NezhaHal::NezhaHal(I2CBus& bus, const msg::MotorConfig configs[kPortCount])
 {
 }
 
-void NezhaHal::begin()
+void NezhaHardware::begin()
 {
     motor1_.begin();
     motor2_.begin();
@@ -21,7 +21,7 @@ void NezhaHal::begin()
 
 // The brick flip-flop sequencer — implemented exactly per architecture-
 // update.md's "The flip-flop and the 078 base-class contract" code block.
-void NezhaHal::tick(uint32_t now)
+void NezhaHardware::tick(uint32_t now)
 {
     if (!anyPortInUse()) return;                    // idle schedule (decision 1)
     if (!portInUse_[activePort_ - 1]) {
@@ -33,7 +33,7 @@ void NezhaHal::tick(uint32_t now)
             phase_ = Phase::COLLECT_DUE;
             break;
         case Phase::COLLECT_DUE:
-            if (!bus_.clear(kNezhaDeviceAddr)) return;   // settle window still open -- pass
+            if (!bus_.clear(Hal::kNezhaDeviceAddr)) return;   // settle window still open -- pass
             motorAt(activePort_).tick(now);              // the 5-step contract (base/leaf split)
             activePort_ = nextPortInUse(activePort_);
             phase_ = Phase::REQUEST_DUE;
@@ -41,12 +41,12 @@ void NezhaHal::tick(uint32_t now)
     }
 }
 
-Motor& NezhaHal::motor(uint32_t port)
+Hal::Motor& NezhaHardware::motor(uint32_t port)
 {
     return motorAt(port);
 }
 
-void NezhaHal::apply(const CommandProcessorToHalCommand& cmd)
+void NezhaHardware::apply(const Hal::CommandProcessorToHardwareCommand& cmd)
 {
     if (cmd.allPorts) {
         for (uint32_t p = 1; p <= kPortCount; ++p) {
@@ -60,7 +60,7 @@ void NezhaHal::apply(const CommandProcessorToHalCommand& cmd)
     }
 }
 
-void NezhaHal::apply(const DrivetrainToHalCommand& cmd)
+void NezhaHardware::apply(const Hal::DrivetrainToHardwareCommand& cmd)
 {
     for (int i = 0; i < 2; ++i) {
         portInUse_[cmd.wheel[i].port - 1] = true;
@@ -68,7 +68,7 @@ void NezhaHal::apply(const DrivetrainToHalCommand& cmd)
     }
 }
 
-NezhaMotor& NezhaHal::motorAt(uint32_t port)
+Hal::NezhaMotor& NezhaHardware::motorAt(uint32_t port)
 {
     switch (port) {
         case 1: return motor1_;
@@ -78,7 +78,7 @@ NezhaMotor& NezhaHal::motorAt(uint32_t port)
     }
 }
 
-uint32_t NezhaHal::nextPortInUse(uint32_t cur) const
+uint32_t NezhaHardware::nextPortInUse(uint32_t cur) const
 {
     for (uint32_t i = 1; i <= kPortCount; ++i) {
         uint32_t candidate = ((cur - 1 + i) % kPortCount) + 1;
@@ -87,7 +87,7 @@ uint32_t NezhaHal::nextPortInUse(uint32_t cur) const
     return cur;   // no in-use port found -- defensive only, see header comment
 }
 
-bool NezhaHal::anyPortInUse() const
+bool NezhaHardware::anyPortInUse() const
 {
     for (uint32_t i = 0; i < kPortCount; ++i) {
         if (portInUse_[i]) return true;
@@ -95,4 +95,4 @@ bool NezhaHal::anyPortInUse() const
     return false;
 }
 
-}  // namespace Hal
+}  // namespace Subsystems

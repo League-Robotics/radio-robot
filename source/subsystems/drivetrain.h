@@ -1,7 +1,7 @@
 // drivetrain.h -- Subsystems::Drivetrain: the two-wheel differential
 // Drivetrain faceplate. Turns a body twist or per-wheel velocity targets
 // into a ratio-governed pair of msg::MotorCommands for two Hal::Motors,
-// held (never pushed) as a Hal::DrivetrainToHalCommand -- see
+// held (never pushed) as a Hal::DrivetrainToHardwareCommand -- see
 // hasCommand()/takeCommand() below.
 //
 // Ported from the locked interface sketch in clasi/sprints/077-greenfield-
@@ -16,9 +16,9 @@
 //
 // Drivetrain holds NO Hal::Motor reference or pointer: tick() takes the two
 // wheels' observations (msg::MotorState) as arguments and HOLDS the
-// Hal::DrivetrainToHalCommand it wants applied -- the wiring layer
+// Hal::DrivetrainToHardwareCommand it wants applied -- the wiring layer
 // (main.cpp, ticket 079-005) is the only place that drains hasCommand()/
-// takeCommand() and calls Hal::Motor::apply()/Hal::NezhaHal::apply() with
+// takeCommand() and calls Hal::Motor::apply()/Subsystems::NezhaHardware::apply() with
 // the result. This keeps Drivetrain free of any dependency on Hal::Motor's
 // concrete leaf (NezhaMotor); it only knows the faceplate's message types
 // plus the shared, data-only Hal::capability edge type
@@ -111,7 +111,7 @@ class Drivetrain {
   // now: [ms]. leftObs/rightObs: this tick's sampled MotorState for the two
   // bound wheels -- arguments only, never stored, never read from a clock or
   // a Motor reference. See the class comment. HOLDS its output (a
-  // Hal::DrivetrainToHalCommand, addressed via ports()) rather than
+  // Hal::DrivetrainToHardwareCommand, addressed via ports()) rather than
   // returning it -- see hasCommand()/takeCommand() below. Sets hasCommand()
   // unconditionally whenever it runs; main.cpp (ticket 079-005) only calls
   // tick() when active().
@@ -120,7 +120,7 @@ class Drivetrain {
             const msg::MotorState& rightObs);
 
   bool hasCommand() const;                      // true once tick() has run and the output is untaken
-  Hal::DrivetrainToHalCommand takeCommand();     // clears hasCommand()
+  Hal::DrivetrainToHardwareCommand takeCommand();     // clears hasCommand()
 
   msg::DrivetrainState state() const;          // assembled from getters
   msg::DrivetrainCapabilities capabilities() const;
@@ -198,7 +198,7 @@ class Drivetrain {
   // "Authority arbitration" section and tick()/hasCommand()/takeCommand().
   bool active_ = false;
   bool hasCommand_ = false;
-  Hal::DrivetrainToHalCommand heldCommand_ = {};
+  Hal::DrivetrainToHardwareCommand heldCommand_ = {};
 };
 
 }  // namespace Subsystems

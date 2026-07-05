@@ -187,10 +187,10 @@ void NezhaMotor::tick(uint32_t nowMs)
     processResetIfPending(nowMs);
 
     // 2. Per-tick position sample — sprint 079-004: collects a sample that
-    // NezhaHal's brick flip-flop REQUESTED in a previous slice (requestSample()
+    // NezhaHardware's brick flip-flop REQUESTED in a previous slice (requestSample()
     // -> requestEncoder()) and has already confirmed is safe to collect
     // (bus_.clear(kNezhaDeviceAddr) gated the call into this tick() at all —
-    // see nezha_hal.cpp). Non-blocking: no write here, no spin, just the 4-byte
+    // see subsystems/nezha_hardware.cpp). Non-blocking: no write here, no spin, just the 4-byte
     // read. Replaces the former fused, always-blocking readEncoderSettle()
     // (deleted — see nezha_motor.h).
     int32_t raw = collectEncoder();
@@ -448,7 +448,7 @@ void NezhaMotor::writeMotorRun(uint8_t direction, uint8_t speed)
     // write, mirroring requestEncoder()'s own postClear on the other side of
     // the cycle. Before this fix, writeMotorRun() carried no clearance at
     // all: a single in-use port's own REQUEST_DUE fires again on the very
-    // next NezhaHal::tick() call with no other port to interleave, so the
+    // next NezhaHardware::tick() call with no other port to interleave, so the
     // 0x46 request could re-issue with ~0us real gap since this write ended.
     // Confirmed on hardware (079-006 stand campaign, via pyOCD/gdb
     // backtraces caught mid-stall): that back-to-back cadence reliably
@@ -547,7 +547,7 @@ int32_t NezhaMotor::readEncoderAtomicRaw()
 void NezhaMotor::requestSample()
 {
     // Public split-phase phase-1 entry point (sprint 079-004) — the ONLY
-    // caller is NezhaHal's brick flip-flop sequencer (nezha_hal.cpp's
+    // caller is NezhaHardware's brick flip-flop sequencer (subsystems/nezha_hardware.cpp's
     // REQUEST_DUE case), once per bus slice, only for the currently-active
     // in-use port. See nezha_motor.h's declaration for why this is not a
     // Hal::Motor virtual.
@@ -558,7 +558,7 @@ void NezhaMotor::requestEncoder()
 {
     // Split-phase phase 1 — ported byte-for-byte from Motor::
     // requestEncoder(). As of sprint 079-004 this IS wired into the live
-    // schedule: NezhaHal::tick()'s REQUEST_DUE case calls requestSample()
+    // schedule: NezhaHardware::tick()'s REQUEST_DUE case calls requestSample()
     // (above), which wraps this. postClear=4000 attaches the settle window
     // to THIS write's I2CBus deadline (per-device, not per-call-site),
     // holding off any subsequent transaction to 0x10 -- including a stray
@@ -575,7 +575,7 @@ void NezhaMotor::requestEncoder()
     // be ample (the way the old fused readEncoderSettle()'s per-tick
     // cadence always left slack) -- confirmed FALSE on hardware for a
     // single in-use port: REQUEST_DUE fires again on the very next
-    // NezhaHal::tick() call with no other port to interleave, so this
+    // NezhaHardware::tick() call with no other port to interleave, so this
     // write could re-issue with ~0us real gap since the preceding
     // COLLECT_DUE's duty write. Root-caused via pyOCD/gdb backtraces caught
     // mid-stall (this ticket's stand campaign): the firmware was parked for
@@ -604,7 +604,7 @@ int32_t NezhaMotor::collectEncoder()
     // failed must not be reported as connected merely because the
     // subsequent read happened to succeed against stale/garbage state.
     // As of this ticket, tick()'s step 2 calls this directly (see tick()
-    // above) once NezhaHal's flip-flop has confirmed the settle window
+    // above) once NezhaHardware's flip-flop has confirmed the settle window
     // elapsed (bus_.clear(kNezhaDeviceAddr)).
     uint8_t resp[4] = { 0, 0, 0, 0 };
     int readResult = bus_.read((kNezhaDeviceAddr << 1), resp, 4, false);

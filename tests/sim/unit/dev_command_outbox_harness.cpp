@@ -1,6 +1,6 @@
 // dev_command_outbox_harness.cpp -- off-hardware acceptance harness for
 // ticket 079-005 (SUC-004/SUC-005/SUC-006/SUC-007): exercises the REAL
-// CommandProcessor + DevLoopState + Subsystems::Drivetrain + Hal::NezhaHal
+// CommandProcessor + DevLoopState + Subsystems::Drivetrain + Subsystems::NezhaHardware
 // pure-transformer reshape -- statements in, staged commands (+ replies)
 // out, no handler ever calling Hal::Motor::apply()/Subsystems::Drivetrain::
 // apply() directly.
@@ -8,7 +8,7 @@
 // Per the design sketch's "subsystem is the unit of test" principle, this
 // drives the REAL parse path: full ASCII statement lines through
 // CommandProcessor::process() (built from the REAL devCommands() table),
-// asserting on DevLoopState's outbox fields (hasHalCommand/halCommand,
+// asserting on DevLoopState's outbox fields (hasHardwareCommand/hardwareCommand,
 // hasDrivetrainCommand/drivetrainCommand) and the captured reply text
 // afterward -- exactly the "statements in, commands + replies out" contract
 // architecture-update.md describes. Mirrors nezha_flipflop_harness.cpp's
@@ -20,10 +20,10 @@
 //
 // None of these scenarios need to script the I2CBus at all: capability
 // pre-validation, port binding, and outbox construction never touch the
-// bus (that only happens inside NezhaHal::tick()'s flip-flop, which no
-// scenario here calls) -- a freshly constructed NezhaHal is enough. This
+// bus (that only happens inside NezhaHardware::tick()'s flip-flop, which no
+// scenario here calls) -- a freshly constructed NezhaHardware is enough. This
 // mirrors the ticket's own testing-plan note: "Drivetrain/processor need no
-// fakes at all" -- the REAL NezhaHal, unticked, behaves exactly like a
+// fakes at all" -- the REAL NezhaHardware, unticked, behaves exactly like a
 // minimal test stand-in for everything this ticket's acceptance criteria
 // care about.
 
@@ -36,7 +36,7 @@
 #include "com/i2c_bus.h"
 #include "commands/command_processor.h"
 #include "commands/dev_commands.h"
-#include "hal/nezha/nezha_hal.h"
+#include "subsystems/nezha_hardware.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
 #include "subsystems/drivetrain.h"
@@ -97,10 +97,10 @@ void checkDtKindEq(msg::DrivetrainCommand::ControlKind actual,
 
 // --- Fixture: a fresh, boot-equivalent DEV command stack per scenario ---
 
-msg::MotorConfig g_configsTemplate[Hal::NezhaHal::kPortCount];
+msg::MotorConfig g_configsTemplate[Subsystems::NezhaHardware::kPortCount];
 
 void initConfigsTemplate() {
-  for (uint32_t i = 0; i < Hal::NezhaHal::kPortCount; ++i) {
+  for (uint32_t i = 0; i < Subsystems::NezhaHardware::kPortCount; ++i) {
     g_configsTemplate[i] = msg::MotorConfig{};
     g_configsTemplate[i].setPort(i + 1).setFwdSign(1).setTravelCalib(1.0f);
   }
@@ -127,7 +127,7 @@ void captureReply(const char* msg, void* ctx) {
 
 struct Fixture {
   I2CBus bus;
-  Hal::NezhaHal hal;
+  Subsystems::NezhaHardware hal;
   Subsystems::Drivetrain drivetrain;
   SerialSilenceWatchdog watchdog;
   DevLoopState state;
@@ -136,10 +136,10 @@ struct Fixture {
   Fixture() : hal(bus, g_configsTemplate) {
     drivetrain.configure(defaultDrivetrainConfig());
 
-    state.hal = &hal;
+    state.hardware = &hal;
     state.drivetrain = &drivetrain;
     state.watchdog = &watchdog;
-    for (uint32_t i = 0; i < Hal::NezhaHal::kPortCount; ++i) {
+    for (uint32_t i = 0; i < Subsystems::NezhaHardware::kPortCount; ++i) {
       state.motorConfigShadow[i] = g_configsTemplate[i];
     }
     state.drivetrainConfigShadow = defaultDrivetrainConfig();
@@ -160,7 +160,7 @@ void scenarioCapabilityRejectionBlocksStaging() {
   ReplyCapture cap;
   f.cmd.process("DEV M 1 VOLT 5", captureReply, &cap);
 
-  checkFalse(f.state.hasHalCommand, "a rejected command must not stage a HAL command");
+  checkFalse(f.state.hasHardwareCommand, "a rejected command must not stage a HAL command");
   checkFalse(f.state.hasDrivetrainCommand, "a rejected command must not touch the Drivetrain outbox");
   checkTrue(!cap.lines.empty() && cap.lines.back() == "ERR unsupported volt",
             "wire reply is unchanged: ERR unsupported volt");
@@ -175,13 +175,13 @@ void scenarioBoundPortStagesHalAndDrivetrainSteal() {
   ReplyCapture cap;
   f.cmd.process("DEV M 1 VEL 120", captureReply, &cap);
 
-  checkTrue(f.state.hasHalCommand, "accepted VEL stages a HAL command");
-  checkFalse(f.state.halCommand.allPorts, "single-motor stage is addressed, not a broadcast");
-  checkUintEq(f.state.halCommand.count, 1, "single-motor stage addresses exactly one port");
-  checkUintEq(f.state.halCommand.addressed[0].port, 1, "addressed port matches the commanded port");
-  checkMotorKindEq(f.state.halCommand.addressed[0].command.control_kind,
+  checkTrue(f.state.hasHardwareCommand, "accepted VEL stages a HAL command");
+  checkFalse(f.state.hardwareCommand.allPorts, "single-motor stage is addressed, not a broadcast");
+  checkUintEq(f.state.hardwareCommand.count, 1, "single-motor stage addresses exactly one port");
+  checkUintEq(f.state.hardwareCommand.addressed[0].port, 1, "addressed port matches the commanded port");
+  checkMotorKindEq(f.state.hardwareCommand.addressed[0].command.control_kind,
                    msg::MotorCommand::ControlKind::VELOCITY, "staged command is VELOCITY");
-  checkFloatEq(f.state.halCommand.addressed[0].command.control.velocity, 120.0f,
+  checkFloatEq(f.state.hardwareCommand.addressed[0].command.control.velocity, 120.0f,
                "staged velocity target");
 
   checkTrue(f.state.hasDrivetrainCommand, "a bound-port motion verb also steals drivetrain authority");
@@ -201,8 +201,8 @@ void scenarioUnboundPortLeavesDrivetrainUntouched() {
   ReplyCapture cap;
   f.cmd.process("DEV M 3 DUTY 40", captureReply, &cap);
 
-  checkTrue(f.state.hasHalCommand, "accepted DUTY on an unbound port still stages a HAL command");
-  checkUintEq(f.state.halCommand.addressed[0].port, 3, "addressed to the commanded (unbound) port");
+  checkTrue(f.state.hasHardwareCommand, "accepted DUTY on an unbound port still stages a HAL command");
+  checkUintEq(f.state.hardwareCommand.addressed[0].port, 3, "addressed to the commanded (unbound) port");
   checkFalse(f.state.hasDrivetrainCommand,
              "an unbound port's motion verb must not stage a Drivetrain command");
 }
@@ -215,11 +215,11 @@ void scenarioDevStopBroadcastShape() {
   ReplyCapture cap;
   f.cmd.process("DEV STOP", captureReply, &cap);
 
-  checkTrue(f.state.hasHalCommand, "DEV STOP stages a HAL command");
-  checkTrue(f.state.halCommand.allPorts, "DEV STOP's HAL command is a broadcast");
-  checkMotorKindEq(f.state.halCommand.addressed[0].command.control_kind,
+  checkTrue(f.state.hasHardwareCommand, "DEV STOP stages a HAL command");
+  checkTrue(f.state.hardwareCommand.allPorts, "DEV STOP's HAL command is a broadcast");
+  checkMotorKindEq(f.state.hardwareCommand.addressed[0].command.control_kind,
                    msg::MotorCommand::ControlKind::NEUTRAL, "broadcast command is NEUTRAL");
-  checkTrue(f.state.halCommand.addressed[0].command.control.neutral == msg::Neutral::BRAKE,
+  checkTrue(f.state.hardwareCommand.addressed[0].command.control.neutral == msg::Neutral::BRAKE,
             "broadcast neutral mode is BRAKE");
 
   checkTrue(f.state.hasDrivetrainCommand, "DEV STOP stages a Drivetrain command");
@@ -235,7 +235,7 @@ void scenarioDevStopBroadcastShape() {
 // -- NEVER a broadcast -- so an independent, unbound motor is never placed
 // in the addressed array at all (the acceptance criterion's "untouched"
 // proof, at the layer dev_commands.cpp is responsible for; ticket 004's own
-// harness already proves NezhaHal::apply() only ever reaches addressed
+// harness already proves NezhaHardware::apply() only ever reaches addressed
 // ports).
 void scenarioDevDtStopAddressedPairShape() {
   beginScenario("DEV DT STOP stages an addressed (count=2) bound-pair HAL command, not a broadcast");
@@ -243,12 +243,12 @@ void scenarioDevDtStopAddressedPairShape() {
   ReplyCapture cap;
   f.cmd.process("DEV DT STOP", captureReply, &cap);
 
-  checkTrue(f.state.hasHalCommand, "DEV DT STOP stages a HAL command");
-  checkFalse(f.state.halCommand.allPorts, "DEV DT STOP is addressed, never a broadcast");
-  checkUintEq(f.state.halCommand.count, 2, "DEV DT STOP addresses exactly the bound pair");
-  checkUintEq(f.state.halCommand.addressed[0].port, 1, "addressed[0] is the bound left port");
-  checkUintEq(f.state.halCommand.addressed[1].port, 2, "addressed[1] is the bound right port");
-  checkTrue(f.state.halCommand.addressed[0].port != 3 && f.state.halCommand.addressed[1].port != 3,
+  checkTrue(f.state.hasHardwareCommand, "DEV DT STOP stages a HAL command");
+  checkFalse(f.state.hardwareCommand.allPorts, "DEV DT STOP is addressed, never a broadcast");
+  checkUintEq(f.state.hardwareCommand.count, 2, "DEV DT STOP addresses exactly the bound pair");
+  checkUintEq(f.state.hardwareCommand.addressed[0].port, 1, "addressed[0] is the bound left port");
+  checkUintEq(f.state.hardwareCommand.addressed[1].port, 2, "addressed[1] is the bound right port");
+  checkTrue(f.state.hardwareCommand.addressed[0].port != 3 && f.state.hardwareCommand.addressed[1].port != 3,
             "an independent, unbound motor (port 3) is never placed in the addressed array");
 
   checkTrue(f.state.hasDrivetrainCommand, "DEV DT STOP also stages a Drivetrain command");
@@ -270,7 +270,7 @@ void scenarioQueryProducesReplyNoOutboxTraffic() {
   f.cmd.process("DEV DT STATE", captureReply, &cap);
   f.cmd.process("DEV STATE", captureReply, &cap);
 
-  checkFalse(f.state.hasHalCommand, "queries never stage a HAL command");
+  checkFalse(f.state.hasHardwareCommand, "queries never stage a HAL command");
   checkFalse(f.state.hasDrivetrainCommand, "queries never stage a Drivetrain command");
   checkTrue(cap.lines.size() >= 4, "every query produced at least one reply line");
   for (const std::string& line : cap.lines) {
@@ -288,14 +288,14 @@ void scenarioConfigStatementDirectEffectNoOutbox() {
   f.cmd.process("DEV M 2 CFG kp=0.5", captureReply, &cap);
   checkFloatEq(f.state.motorConfigShadow[1].vel_gains.kp, 0.5f,
                "DEV M CFG merges directly into the shadow config");
-  checkFalse(f.state.hasHalCommand, "CFG never stages a HAL command");
+  checkFalse(f.state.hasHardwareCommand, "CFG never stages a HAL command");
 
   f.cmd.process("DEV DT PORTS 3 4", captureReply, &cap);
   Subsystems::DrivetrainPorts p = f.state.drivetrain->ports();
   checkUintEq(p.left, 3, "DEV DT PORTS updates the live binding (left)");
   checkUintEq(p.right, 4, "DEV DT PORTS updates the live binding (right)");
   checkFalse(f.state.hasDrivetrainCommand, "DEV DT PORTS never stages a Drivetrain command");
-  checkFalse(f.state.hasHalCommand, "DEV DT PORTS never stages a HAL command either");
+  checkFalse(f.state.hasHardwareCommand, "DEV DT PORTS never stages a HAL command either");
 
   checkTrue(!cap.lines.empty() && cap.lines.back() == "OK DEV DT ports=3,4",
             "DEV DT PORTS wire reply is unchanged");
@@ -310,9 +310,9 @@ void scenarioLatestWinsOverwrite() {
   f.cmd.process("DEV M 1 DUTY 20", captureReply, &cap);
   f.cmd.process("DEV M 1 DUTY 60", captureReply, &cap);
 
-  checkTrue(f.state.hasHalCommand, "still exactly one held command after two undrained stages");
-  checkUintEq(f.state.halCommand.count, 1, "still a single addressed entry");
-  checkFloatEq(f.state.halCommand.addressed[0].command.control.duty_cycle, 0.60f,
+  checkTrue(f.state.hasHardwareCommand, "still exactly one held command after two undrained stages");
+  checkUintEq(f.state.hardwareCommand.count, 1, "still a single addressed entry");
+  checkFloatEq(f.state.hardwareCommand.addressed[0].command.control.duty_cycle, 0.60f,
                "latest-wins: the outbox holds only the SECOND command's value");
 }
 
@@ -325,15 +325,15 @@ void scenarioNeutralAndResetAlsoStageThroughTheOutbox() {
   ReplyCapture cap;
 
   f.cmd.process("DEV M 1 NEUTRAL B", captureReply, &cap);
-  checkTrue(f.state.hasHalCommand, "NEUTRAL stages a HAL command");
-  checkMotorKindEq(f.state.halCommand.addressed[0].command.control_kind,
+  checkTrue(f.state.hasHardwareCommand, "NEUTRAL stages a HAL command");
+  checkMotorKindEq(f.state.hardwareCommand.addressed[0].command.control_kind,
                    msg::MotorCommand::ControlKind::NEUTRAL, "staged command is NEUTRAL");
 
-  f.state.hasHalCommand = false;   // simulate main.cpp draining between statements
+  f.state.hasHardwareCommand = false;   // simulate main.cpp draining between statements
   f.cmd.process("DEV M 1 RESET", captureReply, &cap);
-  checkTrue(f.state.hasHalCommand, "RESET stages a HAL command");
-  checkTrue(f.state.halCommand.addressed[0].command.reset_position.has &&
-            f.state.halCommand.addressed[0].command.reset_position.val,
+  checkTrue(f.state.hasHardwareCommand, "RESET stages a HAL command");
+  checkTrue(f.state.hardwareCommand.addressed[0].command.reset_position.has &&
+            f.state.hardwareCommand.addressed[0].command.reset_position.val,
             "staged command carries reset_position=true");
 }
 
@@ -344,11 +344,11 @@ void scenarioNeutralAndResetAlsoStageThroughTheOutbox() {
 // what the watchdog-fire path calls directly.
 void scenarioBuildBroadcastNeutralAndDrivetrainStopShapes() {
   beginScenario("buildBroadcastNeutral()/buildDrivetrainStop() -- the shapes the watchdog-fire path applies immediately");
-  Hal::CommandProcessorToHalCommand halCmd = buildBroadcastNeutral(msg::Neutral::BRAKE);
-  checkTrue(halCmd.allPorts, "buildBroadcastNeutral() is a broadcast");
-  checkMotorKindEq(halCmd.addressed[0].command.control_kind,
+  Hal::CommandProcessorToHardwareCommand hardwareCmd = buildBroadcastNeutral(msg::Neutral::BRAKE);
+  checkTrue(hardwareCmd.allPorts, "buildBroadcastNeutral() is a broadcast");
+  checkMotorKindEq(hardwareCmd.addressed[0].command.control_kind,
                    msg::MotorCommand::ControlKind::NEUTRAL, "buildBroadcastNeutral()'s command is NEUTRAL");
-  checkTrue(halCmd.addressed[0].command.control.neutral == msg::Neutral::BRAKE,
+  checkTrue(hardwareCmd.addressed[0].command.control.neutral == msg::Neutral::BRAKE,
             "buildBroadcastNeutral() honors the requested mode");
 
   msg::DrivetrainCommand dtCmd = buildDrivetrainStop(msg::Neutral::BRAKE);

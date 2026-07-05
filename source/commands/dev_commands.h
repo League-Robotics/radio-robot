@@ -32,7 +32,7 @@
 //   DEV STOP                    -- all four motors neutral, drivetrain idle
 //   DEV WD <window>             -- [ms] set the serial-silence watchdog window
 //
-// <n> is always a motor PORT (1..4), matching how NezhaHal instantiates one
+// <n> is always a motor PORT (1..4), matching how NezhaHardware instantiates one
 // NezhaMotor per port (ticket 3) -- never an L/R role name.
 //
 // --- Open Question 3 (argument parsing mechanism) -- RESOLVED ---
@@ -115,7 +115,7 @@
 
 #include "command_types.h"
 #include "hal/capability/hal_command.h"
-#include "hal/nezha/nezha_hal.h"
+#include "subsystems/nezha_hardware.h"
 #include "subsystems/drivetrain.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
@@ -168,7 +168,7 @@ class SerialSilenceWatchdog {
 // shaped verbs (DEV M's DUTY/VEL/POS/VOLT/NEUTRAL/RESET; DEV DT's VW/WHEELS/
 // NEUTRAL/STOP; DEV STOP) pre-validate against read-only capabilities() and
 // STAGE into the outbox fields below; main.cpp (ticket 079-005) is the sole
-// drainer, calling hal.apply()/drivetrain.apply() once per pass -- see "The
+// drainer, calling hardware.apply()/drivetrain.apply() once per pass -- see "The
 // Part-2 loop". `leftPort`/`rightPort`/`drivetrainActive` are GONE -- the
 // port binding moved into DrivetrainConfig (read via `drivetrain->ports()`)
 // and authority arbitration moved into Drivetrain itself
@@ -184,7 +184,7 @@ class SerialSilenceWatchdog {
 // replace) but no getter for the CURRENTLY configured msg::MotorConfig --
 // `DEV M <n> CFG k=v ...` is a DELTA (only the named keys change), so this
 // per-port shadow copy is the read-modify-write staging area: main.cpp seeds
-// it with the same configs passed to NezhaHal's constructor, and every CFG
+// it with the same configs passed to NezhaHardware's constructor, and every CFG
 // command mutates shadow[port-1] in place before calling motor.configure().
 //
 // drivetrainConfigShadow exists for the identical reason, one level up:
@@ -196,19 +196,19 @@ class SerialSilenceWatchdog {
 // Drivetrain::configure() at boot.
 // ---------------------------------------------------------------------------
 struct DevLoopState {
-  Hal::NezhaHal* hal = nullptr;
+  Subsystems::NezhaHardware* hardware = nullptr;
   Subsystems::Drivetrain* drivetrain = nullptr;
   SerialSilenceWatchdog* watchdog = nullptr;   // set by main.cpp; DEV WD's target
 
   // The outbox (sprint 079) -- setpoint-shaped DEV M/DEV DT verbs stage
-  // here; main.cpp drains hasHalCommand/hasDrivetrainCommand once per pass.
+  // here; main.cpp drains hasHardwareCommand/hasDrivetrainCommand once per pass.
   // Latest-wins: staging again before a drain overwrites the held value.
-  bool hasHalCommand = false;
-  Hal::CommandProcessorToHalCommand halCommand = {};
+  bool hasHardwareCommand = false;
+  Hal::CommandProcessorToHardwareCommand hardwareCommand = {};
   bool hasDrivetrainCommand = false;
   msg::DrivetrainCommand drivetrainCommand = {};
 
-  msg::MotorConfig motorConfigShadow[Hal::NezhaHal::kPortCount] = {};
+  msg::MotorConfig motorConfigShadow[Subsystems::NezhaHardware::kPortCount] = {};
   msg::DrivetrainConfig drivetrainConfigShadow = {};
 };
 
@@ -231,7 +231,7 @@ struct DevLoopState {
 // shape to DEV STOP's) but builds its own addressed, non-broadcast HAL
 // command -- see handleDevDt's STOP case in dev_commands.cpp.
 // ---------------------------------------------------------------------------
-Hal::CommandProcessorToHalCommand buildBroadcastNeutral(msg::Neutral mode = msg::Neutral::BRAKE);
+Hal::CommandProcessorToHardwareCommand buildBroadcastNeutral(msg::Neutral mode = msg::Neutral::BRAKE);
 msg::DrivetrainCommand buildDrivetrainStop(msg::Neutral mode = msg::Neutral::BRAKE);
 
 // Returns the DEV command table (DEV M, DEV DT, DEV STATE, DEV STOP, DEV WD),
