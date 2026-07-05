@@ -2,7 +2,7 @@
 id: 079
 title: 'Tick model and command flow: I2C lazy clearance, brick flip-flop, held-output
   faceplates, statements rename'
-status: roadmap
+status: ticketing
 branch: sprint/079-tick-model-and-command-flow-i2c-lazy-clearance-brick-flip-flop-held-output-faceplates-statements-rename
 use-cases: []
 issues:
@@ -115,15 +115,27 @@ responses.
 
 ## Definition of Ready
 
-Before tickets can be created, all of the following must be true:
-
-- [ ] Sprint planning documents are complete (sprint.md, use cases, architecture)
-- [ ] Architecture review passed
-- [ ] Stakeholder has approved the sprint plan
+- [x] Sprint planning documents are complete (sprint.md, use cases, architecture)
+- [x] Architecture review passed (self-review recorded 2026-07-05, verdict APPROVE)
+- [x] Stakeholder has approved the sprint plan — recorded 2026-07-05
+      (auto-approve mode; planner's latitude decisions accepted as-is: `hal_command.h`
+      contract-type placement, config-plane statements as direct calls,
+      Drivetrain-owned authority arbitration, `DevLoopState` as the concrete
+      outbox with `CommandProcessor` kept domain-blind, the 2-entry+broadcast
+      outbox shape, `CommandProcessor` name kept). Sprint is in `ticketing`
+      phase; all six tickets below are created.
 
 ## Tickets
 
-| # | Title | Depends On |
-|---|-------|------------|
+| # | Title | Depends On | Issue(s) |
+|---|-------|------------|----------|
+| [001](tickets/001-i2cbus-lazy-clearance-timers-clear-peek-host-build-scripted-fake.md) | I2CBus lazy clearance timers, `clear()` peek, `HOST_BUILD` scripted fake | — | i2c-bus-lazy-clearance-timers.md |
+| [002](tickets/002-statements-rename-rule-4-amendment-communicator-held-statement-reshape.md) | Statements rename, rule-4 amendment, Communicator held-statement reshape | — | rename-wire-lines-to-statements.md, tick-model-command-flow-and-the-command-board-design-sketch.md |
+| [003](tickets/003-shared-hal-command-edge-types-and-drivetrain-reshape.md) | Shared HAL command-edge types + Drivetrain reshape (ports/active/standby) | 002 | tick-model-command-flow-and-the-command-board-design-sketch.md |
+| [004](tickets/004-nezhahal-brick-flip-flop-and-distribution-nezhamotor-split-phase-wiring.md) | NezhaHal brick flip-flop + distribution; NezhaMotor split-phase wiring | 001, 003 | i2c-bus-lazy-clearance-timers.md, tick-model-command-flow-and-the-command-board-design-sketch.md |
+| [005](tickets/005-commandprocessor-pure-transformer-commandqueue-deletion-main-cpp-three-beat-loop.md) | CommandProcessor pure transformer, `CommandQueue` deletion, main.cpp three-beat loop | 002, 003, 004 | tick-model-command-flow-and-the-command-board-design-sketch.md, rename-wire-lines-to-statements.md |
+| [006](tickets/006-stand-verification-cadence-in-use-cycling-a-b-gate-alpha-retune-watchdog-latency-round-trips.md) | Stand verification: cadence/evenness, A/B gate, alpha retune, watchdog latency, round-trips | 001, 002, 003, 004, 005 | i2c-bus-lazy-clearance-timers.md, tick-model-command-flow-and-the-command-board-design-sketch.md, rename-wire-lines-to-statements.md |
 
-Tickets execute serially in the order listed.
+Tickets execute serially in the order listed. No execution lock or branch
+has been acquired — the sprint-planner stops here per its charter (planning
+only, no code, no lock, no branch).

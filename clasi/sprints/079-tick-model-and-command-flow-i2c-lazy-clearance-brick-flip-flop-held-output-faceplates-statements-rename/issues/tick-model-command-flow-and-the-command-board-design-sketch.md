@@ -1,6 +1,12 @@
 ---
-status: pending
+status: in-progress
 sprint: 079
+tickets:
+- 079-002
+- 079-003
+- 079-004
+- 079-005
+- 079-006
 ---
 
 # Tick Model, Command Flow, and the Command Board — design sketch

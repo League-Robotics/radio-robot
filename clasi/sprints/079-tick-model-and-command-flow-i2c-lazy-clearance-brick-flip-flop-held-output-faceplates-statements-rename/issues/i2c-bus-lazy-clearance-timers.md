@@ -1,6 +1,10 @@
 ---
-status: pending
+status: in-progress
 sprint: 079
+tickets:
+- 079-001
+- 079-004
+- 079-006
 ---
 
 # I2CBus lazy per-device pre/post clearance timers — reclaim the ~8 ms/tick encoder settle spins

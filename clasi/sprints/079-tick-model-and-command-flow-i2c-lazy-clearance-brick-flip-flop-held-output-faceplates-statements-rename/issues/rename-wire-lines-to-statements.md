@@ -1,6 +1,10 @@
 ---
-status: pending
+status: in-progress
 sprint: 079
+tickets:
+- 079-002
+- 079-005
+- 079-006
 ---
 
 # Rename wire-protocol lines from "commands" to "statements"
