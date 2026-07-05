@@ -1,9 +1,12 @@
 ---
 id: '003'
 title: 'Plant and simulated devices: PhysicsWorld, SimMotor, SimOdometer, SimHardware'
-status: open
-use-cases: [SUC-003]
-depends-on: ['001', '002']
+status: done
+use-cases:
+- SUC-003
+depends-on:
+- '001'
+- '002'
 github-issue: ''
 issue: host-side-simulation-environment-for-the-new-tree-design-write-up.md
 completes_issue: true
@@ -40,7 +43,7 @@ PID in sim if `SimHardware` forwarded both slices straight through to each
 
 ## Acceptance Criteria
 
-- [ ] `Hal::PhysicsWorld` (`source/hal/sim/physics_world.{h,cpp}`) ports the
+- [x] `Hal::PhysicsWorld` (`source/hal/sim/physics_world.{h,cpp}`) ports the
       motor/pose/encoder plant from `source_old/hal/sim/PhysicsWorld.{h,cpp}`
       — midpoint-arc integration, true pose + true wheel travel, plus the
       separate *reported* (errored) encoder accumulator (scale/slip/noise,
@@ -48,7 +51,7 @@ PID in sim if `SimHardware` forwarded both slices straight through to each
       line/color/port truth channels (`_lineRaw`/`_colorRGBC`/`_port` +
       their setters/getters) are **dropped**, per the design's resolved
       decision 2 — do not port them.
-- [ ] `Hal::SimMotor : public Hal::Motor` (`source/hal/sim/sim_motor.{h,cpp}`)
+- [x] `Hal::SimMotor : public Hal::Motor` (`source/hal/sim/sim_motor.{h,cpp}`)
       implements the full `Hal::Motor` contract: DUTY mode stages duty
       straight to the plant (stiction gate + lag applied there); VELOCITY
       mode calls `Hal::MotorVelocityPid::compute(...)` (ticket 001's class,
@@ -61,19 +64,19 @@ PID in sim if `SimHardware` forwarded both slices straight through to each
       `connected()=true`, `wedged()=false` in v1 (fault injection is
       out of scope — see `clasi/issues/later/sim-hardware-fault-injection.md`,
       already filed, referenced here rather than re-filed).
-- [ ] `Hal::SimOdometer : public Hal::Odometer` (`source/hal/sim/sim_odometer.{h,cpp}`)
+- [x] `Hal::SimOdometer : public Hal::Odometer` (`source/hal/sim/sim_odometer.{h,cpp}`)
       is the first concrete leaf of `Hal::Odometer`
       (`source/hal/capability/odometer.h`, currently declared only):
       `pose()` returns `msg::PoseEstimate` sampled from the plant's true
       pose each tick, differenced, with independent OTOS noise/scale/drift
       error applied in its own accumulator (never sharing state with the
       encoder error model).
-- [ ] `Subsystems::SimHardware : public Subsystems::Hardware`
+- [x] `Subsystems::SimHardware : public Subsystems::Hardware`
       (`source/subsystems/sim_hardware.{h,cpp}`) owns one `PhysicsWorld` +
       four `SimMotor`s + the `SimOdometer`; binds port 1->plant LEFT,
       port 2->plant RIGHT by default (ports 3/4 unbound, trivial standalone
       integrators), rebindable to mirror `DEV DT PORTS`.
-- [ ] **The dt=0 re-entry guard**: `SimHardware::tick(now)` tracks its own
+- [x] **The dt=0 re-entry guard**: `SimHardware::tick(now)` tracks its own
       `lastAdvancedNow_` and is a complete no-op — no `SimMotor::tick()`
       call, no `PhysicsWorld::update()` call — when `now == lastAdvancedNow_`.
       A standalone-compiled harness (ad hoc compile, matching the existing
@@ -82,10 +85,10 @@ PID in sim if `SimHardware` forwarded both slices straight through to each
       same `now` while a `SimMotor` is in VELOCITY mode, and assert its
       duty/integral state is identical after the second call (not advanced
       a second time).
-- [ ] **Zero-error determinism gate**: with every error knob at its zero
+- [x] **Zero-error determinism gate**: with every error knob at its zero
       default, true encoder == reported encoder == OTOS accumulator,
       bit-for-bit, over a scripted sequence of ticks.
-- [ ] `source/hal/sim/sim_setters.h` adds one **`Hal::` free function per
+- [x] `source/hal/sim/sim_setters.h` adds one **`Hal::` free function per
       error knob** (motor scale/slip/noise, stiction/lag, OTOS noise/scale/
       drift, trackwidth, body scrub, plant port binding) — **not** a new
       `simsetters::` namespace (the design write-up's own sketch used a
@@ -94,11 +97,11 @@ PID in sim if `SimHardware` forwarded both slices straight through to each
       `architecture-update.md` Decision 2). One canonical call site per
       knob, callable both by ticket 004's ctypes ABI and by this ticket's
       own tests.
-- [ ] No `SIMSET`/`SIMGET` wire command and no sim-specific `TLM` field is
+- [x] No `SIMSET`/`SIMGET` wire command and no sim-specific `TLM` field is
       introduced anywhere in `source/commands/` or `docs/protocol-v2.md`.
-- [ ] `docs/protocol-v2.md` gains a short sim-notes addition documenting the
+- [x] `docs/protocol-v2.md` gains a short sim-notes addition documenting the
       `position=false` capability divergence (Open Question 4).
-- [ ] Existing `tests/sim/unit/*` harnesses still pass with no regression.
+- [x] Existing `tests/sim/unit/*` harnesses still pass with no regression.
 
 ## Testing
 

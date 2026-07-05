@@ -1596,6 +1596,21 @@ DEV M <n> CFG k=v ...                          → OK DEV M <n> <applied k=v ...
   see `CFG` below.
 - `POS <position>` — `deg`. Onboard absolute-angle move via the Nezha's
   `0x5D` register; no PID involved.
+
+  **Sim note (081-003):** `Hal::SimMotor` (`source/hal/sim/sim_motor.{h,cpp}`)
+  reports `capabilities().position == false` — the simulated plant has no
+  onboard absolute-angle move to model, unlike a real Nezha's `0x5D`
+  register. `DEV M <n> POS` therefore answers `ERR unsupported` in a sim
+  build, exactly like `VOLT` does on real hardware (the identical
+  `Motor::apply()` capability gate firing, not a sim-specific special
+  case). `DUTY`/`VEL`/`NEUTRAL`/`RESET`/`STATE`/`CAPS`/`CFG` are all
+  supported identically to a real Nezha motor. This is a capability
+  divergence to be aware of when writing a test that is meant to run
+  against both a bench robot and the sim, not a wire-format change — no new
+  verb, reply field, or `SET`/`GET`/`CFG` key is introduced by the sim
+  (see §15's `SIMSET`/`SIMGET` family for the one pre-existing exception to
+  "no sim-specific wire surface," which predates this ticket and which this
+  ticket does not extend).
 - `VOLT <voltage>` — always `ERR unsupported volt` on a Nezha motor
   (`capabilities().voltage == false`). This is `Motor::apply()`'s capability
   gate firing, not a special case in the `DEV` handler — the same code path
