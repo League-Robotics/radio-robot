@@ -35,6 +35,9 @@ recordings/
 # Never check that in — the real aprilcam data dir lives outside this repo.
 data/aprilcam/
 
+# Generated firmware version header (scripts/gen_version.py, from pyproject.toml).
+source/types/version_generated.h
+
 # CMake-generated files, wherever they land in the tree.
 # These names are always generated and are never checked-in source
 # (real .cmake modules live under utils/cmake/ and are unaffected).

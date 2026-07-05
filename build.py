@@ -99,6 +99,12 @@ _sp.run([sys.executable, _gen_msgs], check=True)
 _gen_boot = os.path.join(os.path.dirname(__file__), "scripts", "gen_boot_config.py")
 _sp.run([sys.executable, _gen_boot], check=True)
 
+# Regenerate source/types/version_generated.h from pyproject.toml so the
+# firmware's compiled-in FIRMWARE_VERSION (reported by VER/ID) tracks the
+# canonical project version instead of drifting from a hand-edited constant.
+_gen_version = os.path.join(os.path.dirname(__file__), "scripts", "gen_version.py")
+_sp.run([sys.executable, _gen_version], check=True)
+
 # out of source build!
 os.chdir("build")
 
