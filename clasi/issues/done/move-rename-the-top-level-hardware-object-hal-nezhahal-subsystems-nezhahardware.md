@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 # Move + rename the top-level hardware object: `Hal::NezhaHal` → `Subsystems::NezhaHardware`
