@@ -11,17 +11,20 @@ void Drivetrain::setTwist(float v_x, float v_y, float omega) {
     v_x_ = v_x;
     v_y_ = v_y;   // stored but never consumed -- see commandedWheelTargets()
     omega_ = omega;
+    active_ = true;
 }
 
 void Drivetrain::setWheelTargets(float left, float right) {
     mode_ = Mode::WHEELS;
     wheelTargetLeft_ = left;
     wheelTargetRight_ = right;
+    active_ = true;
 }
 
 void Drivetrain::setNeutral(msg::Neutral mode) {
     mode_ = Mode::NEUTRAL;
     neutralMode_ = mode;
+    active_ = true;
 }
 
 void Drivetrain::configure(const msg::DrivetrainConfig& config) {
@@ -39,9 +42,9 @@ void Drivetrain::apply(const msg::DrivetrainCommand& command) {
             const msg::WheelTargets& wheels = command.control.wheels;
             // This Drivetrain has exactly two wheels (capabilities().wheel_count
             // == 2): index 0 is left, index 1 is right, matching
-            // DrivetrainToMotorCommand's left/right fields. A WheelTargets
-            // with fewer than 2 entries leaves the missing side at 0 rather
-            // than reading past w_count.
+            // Hal::DrivetrainToHalCommand's wheel[0]/wheel[1] fields. A
+            // WheelTargets with fewer than 2 entries leaves the missing side
+            // at 0 rather than reading past w_count.
             float left = 0.0f;
             float right = 0.0f;
             if (wheels.w_count_val() > 0 && wheels.w()[0].get_speed().has) {
@@ -66,7 +69,19 @@ void Drivetrain::apply(const msg::DrivetrainCommand& command) {
             break;
         case msg::DrivetrainCommand::ControlKind::NONE:
         default:
+            // No control arm set -- e.g. an authority-steal command whose
+            // only payload is standby=true (see below). Nothing to dispatch
+            // here; mode_/the last commanded target are left untouched, on
+            // purpose (the class comment's "Authority arbitration" section).
             break;
+    }
+
+    // The standby side-channel rides beside the oneof exactly like
+    // MotorCommand's feedforward/reset_position -- processed AFTER the oneof
+    // above so `{control=NEUTRAL, standby=true}` sets mode_ AND drops
+    // authority in the same call (see the class comment).
+    if (command.get_standby().has && command.get_standby().val) {
+        standby();
     }
 }
 
@@ -137,31 +152,48 @@ void Drivetrain::governRatio(float* targetLeft, float* targetRight,
     *targetRight *= scale;
 }
 
-DrivetrainToMotorCommand Drivetrain::tick(uint32_t now,
-                                           const msg::MotorState& leftObs,
-                                           const msg::MotorState& rightObs) {
+void Drivetrain::tick(uint32_t now,
+                       const msg::MotorState& leftObs,
+                       const msg::MotorState& rightObs) {
     // now: no clock read happens here -- this ticket's governor is a purely
     // per-tick algebraic correction with no timing-dependent behavior yet.
     // Kept as a parameter per the locked faceplate shape for a future ticket
     // that needs it (e.g. a governor ease-in rate).
     (void)now;
 
-    DrivetrainToMotorCommand out;
+    msg::MotorCommand leftCmd;
+    msg::MotorCommand rightCmd;
 
     if (mode_ == Mode::NEUTRAL) {
-        out.left.setNeutral(neutralMode_);
-        out.right.setNeutral(neutralMode_);
-        return out;
+        leftCmd.setNeutral(neutralMode_);
+        rightCmd.setNeutral(neutralMode_);
+    } else {
+        float targetLeft = 0.0f;
+        float targetRight = 0.0f;
+        commandedWheelTargets(&targetLeft, &targetRight);
+        governRatio(&targetLeft, &targetRight, leftObs, rightObs);
+
+        leftCmd.setVelocity(targetLeft);
+        rightCmd.setVelocity(targetRight);
     }
 
-    float targetLeft = 0.0f;
-    float targetRight = 0.0f;
-    commandedWheelTargets(&targetLeft, &targetRight);
-    governRatio(&targetLeft, &targetRight, leftObs, rightObs);
+    // Held, not returned (architecture-update.md "The command-edge types"):
+    // addressed via ports() so the wiring layer (ticket 079-005) can dispatch
+    // straight through Hal::NezhaHal::apply(const Hal::DrivetrainToHalCommand&)
+    // without ever naming a port itself. Set unconditionally whenever tick()
+    // runs -- see the class comment and hasCommand()'s doc comment.
+    heldCommand_.wheel[0].port = config_.get_left_port();
+    heldCommand_.wheel[0].command = leftCmd;
+    heldCommand_.wheel[1].port = config_.get_right_port();
+    heldCommand_.wheel[1].command = rightCmd;
+    hasCommand_ = true;
+}
 
-    out.left.setVelocity(targetLeft);
-    out.right.setVelocity(targetRight);
-    return out;
+bool Drivetrain::hasCommand() const { return hasCommand_; }
+
+Hal::DrivetrainToHalCommand Drivetrain::takeCommand() {
+    hasCommand_ = false;
+    return heldCommand_;
 }
 
 msg::DrivetrainState Drivetrain::state() const {
@@ -202,5 +234,13 @@ void Drivetrain::setMotorCapabilities(const msg::MotorCapabilities& left,
     leftMotorCaps_ = left;
     rightMotorCaps_ = right;
 }
+
+DrivetrainPorts Drivetrain::ports() const {
+    return {config_.get_left_port(), config_.get_right_port()};
+}
+
+bool Drivetrain::active() const { return active_; }
+
+void Drivetrain::standby() { active_ = false; }
 
 }  // namespace Subsystems

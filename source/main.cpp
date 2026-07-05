@@ -36,6 +36,15 @@
 //   right.tick(now);
 //   watchdog.check(now);          // silence -> all neutral
 //
+// (079-003: drivetrain.tick() is now void; it HOLDS a
+// Hal::DrivetrainToHalCommand internally (hasCommand()/takeCommand()) rather
+// than returning it -- see drivetrain.h. The apply(out.left/right) pair above
+// is NOT called below this ticket: dispatching a held command through the
+// HAL needs Hal::NezhaHal::apply(const Hal::DrivetrainToHalCommand&), which
+// ticket 004 introduces. Ticket 005's three-beat loop reshape
+// (architecture-update.md "The Part-2 loop") drains hasCommand()/
+// takeCommand() for real; this pseudocode block is updated there, not here.)
+//
 // `left`/`right` are whichever two NezhaMotors DEV DT PORTS last bound
 // (DevLoopState::leftPort/rightPort, default 1/2) -- this loop never
 // hardcodes which ports they are. Note the bound pair is ticked TWICE per
@@ -227,12 +236,20 @@ int main() {
         hal.tick(now);
 
         if (devState.drivetrainActive) {
-            Subsystems::DrivetrainToMotorCommand out = drivetrain.tick(
-                now,
-                hal.motor(devState.leftPort).state(),
-                hal.motor(devState.rightPort).state());
-            hal.motor(devState.leftPort).apply(out.left);
-            hal.motor(devState.rightPort).apply(out.right);
+            // 079-003 minimal build-fix (flagged for ticket 005): tick() no
+            // longer returns a Subsystems::DrivetrainToMotorCommand (deleted)
+            // -- it holds a Hal::DrivetrainToHalCommand internally instead
+            // (hasCommand()/takeCommand()). Draining that held command and
+            // dispatching it needs Hal::NezhaHal::apply(const
+            // Hal::DrivetrainToHalCommand&), which does not exist until
+            // ticket 004, so it is intentionally left untaken here -- this
+            // ticket only needs main.cpp to keep BUILDING against the new
+            // void signature. The bound pair does not receive a fresh
+            // drivetrain-governed target until ticket 005's full three-beat
+            // loop reshape (architecture-update.md "The Part-2 loop") lands.
+            drivetrain.tick(now,
+                             hal.motor(devState.leftPort).state(),
+                             hal.motor(devState.rightPort).state());
         }
 
         // Bound pair ticks again here (on top of hal.tick()'s uniform sweep
