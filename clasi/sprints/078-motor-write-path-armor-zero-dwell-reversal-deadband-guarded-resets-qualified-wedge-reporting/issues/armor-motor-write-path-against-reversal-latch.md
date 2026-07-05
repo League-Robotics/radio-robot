@@ -1,6 +1,12 @@
 ---
-status: pending
+status: in-progress
 sprint: 078
+tickets:
+- 078-001
+- 078-002
+- 078-003
+- 078-004
+- 078-005
 ---
 
 # Armor the motor write path against the encoder reversal latch (zero-dwell reversal + guarded resets)
@@ -41,6 +47,19 @@ needed for it; do not regress it.
 Bench tests on the friction rig are already reporting wedge flags; at-rest
 `wedged=1` is benign detector semantics (see item 4), but hot reversals in the
 load schedules are genuine trigger exposure.
+
+## Placement (stakeholder correction, 2026-07-04, sprint-078 planning)
+
+The armor is **motor-generic policy, not Nezha-specific code**. The reversal
+dwell, output deadband, standstill reset guard, and wedge detection/
+qualification go at the **`Hal::Motor` level** (`source/hal/capability/
+motor.h`), implemented once in the base the same way `apply()`/`state()`
+already are — any leaf (future SimMotor/MockMotor, other vendor motors) gets
+them for free. `NezhaMotor` keeps only the device-specific primitives (the
+actual duty write to the brick, the atomic 0x46 reset burst, encoder
+sampling) plus Nezha-only write shaping (40 ms throttle, ±25 slew). Item
+references to `NezhaMotor::writeDuty()` below should be read as "the motor
+write path" with the policy layer in the base class.
 
 ## What to change (per the knowledge doc's Production guidance)
 
