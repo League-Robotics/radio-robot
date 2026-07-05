@@ -1,7 +1,7 @@
 ---
 id: 081
 title: Host-side simulation environment for the new source/ tree
-status: ticketing
+status: done
 branch: sprint/081-host-side-simulation-environment-for-the-new-source-tree
 use-cases:
 - SUC-001
