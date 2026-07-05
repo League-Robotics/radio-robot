@@ -1,19 +1,32 @@
 // communicator.h -- Subsystems::Communicator: the comms faceplate. Owns both
 // communication drivers (SerialPort + Radio, source/com/ infrastructure
-// leaves) and the line buffer, and turns "a complete command line arrived on
-// some channel" into a returned CommunicatorToCommandProcessorCommand edge.
+// leaves) and the line buffer, and turns "a complete statement line arrived
+// on some channel" into a held CommunicatorToCommandProcessorStatement edge
+// (hasStatement()/takeStatement()).
 //
-// This subsystem is a *source* of commands, not a sink: it deliberately has
-// NO command-in channel -- no apply(), no CommunicatorCommand message
+// This subsystem is a *source* of statements, not a sink: it deliberately
+// has NO command-in channel -- no apply(), no CommunicatorCommand message
 // (protos/communicator.proto documents the same from the wire side). Its
-// tick() PRODUCES the command line the wiring layer (main.cpp) dispatches
-// through CommandProcessor.
+// tick() latches the statement line the wiring layer (main.cpp) dispatches
+// through CommandProcessor; hasStatement()/takeStatement() are the held/
+// taken pair that surfaces it.
+//
+// Held-output contract: tick() polls serial first, then radio, and latches
+// at most ONE complete statement at a time. While a statement is still held
+// (not yet taken), tick() declines to poll either transport -- it must not
+// overwrite line_[] out from under a consumer that has not read it yet. An
+// untaken statement is therefore backpressure, not data loss: the next
+// tick() simply leaves the held statement in place until takeStatement()
+// clears it. The intended wiring (main.cpp) always takes a held statement
+// the same pass it appears, so this should never actually stall in
+// practice -- but the contract holds regardless of call discipline.
 //
 // Faceplate channels:
 //   config       -- configure(msg::CommunicatorConfig): radio channel
 //                   (clamped to radiochan's 0..35), live-retuned after begin().
 //   command-in   -- absent by design (see above).
-//   command-out  -- returned from tick(now): at most ONE line per tick.
+//   command-out  -- hasStatement()/takeStatement(): at most ONE statement
+//                   held at a time (see the held-output contract above).
 //   observation  -- state(): channel + received-line counters per channel.
 //   capabilities -- capabilities(): which comms channels exist.
 //
@@ -32,18 +45,20 @@
 
 namespace Subsystems {
 
-// Which comms channel a command line arrived on -- and therefore where its
+// Which comms channel a statement line arrived on -- and therefore where its
 // reply must be sent.
 enum class Channel : uint8_t { NONE, SERIAL, RADIO };
 
-// Command-out edge type, named by its endpoints (<Producer>To<Consumer>Command
-// per .claude/rules/naming-and-style.md): one parsable command line plus its
-// return path.
-struct CommunicatorToCommandProcessorCommand {
-  // nullptr when no complete line arrived this tick. Otherwise aliases the
-  // Communicator's internal line buffer: valid only until the next tick() --
-  // consumers must dispatch (or copy) before then. Safe with today's only
-  // consumer: CommandProcessor::process() copies the line before parsing.
+// Command-out edge type, named by its endpoints
+// (<Producer>To<Consumer><Payload> per .claude/rules/naming-and-style.md,
+// payload=Statement): one parsable statement line plus its return path.
+struct CommunicatorToCommandProcessorStatement {
+  // nullptr when takeStatement() is called with nothing held. Otherwise
+  // aliases the Communicator's internal line buffer: valid only until the
+  // next tick() that resumes polling. CONTRACT: the consumer copies the
+  // line before that happens -- today's only consumer,
+  // CommandProcessor::process(), copies it into its own working buffer
+  // synchronously before returning, so this holds.
   const char* line;
   Channel returnPath;  // where the reply to this line must be sent
 };
@@ -65,12 +80,23 @@ class Communicator {
   // pointer (Radio::_instance), so a second begin() would steal it.
   void begin();
 
-  // Command-out channel. now: [ms]. Polls serial first, then radio, and
-  // returns at most ONE complete line per tick ({nullptr, NONE} when idle).
-  // A radio message not taken this tick stays latched in the Radio driver
-  // until the next poll, and the loop runs ~kHz vs the radio's <=12 msg/s --
-  // nothing is lost and radio never starves behind serial.
-  CommunicatorToCommandProcessorCommand tick(uint32_t now);
+  // Command-out channel, held half. now: [ms]. While a statement is already
+  // held (hasStatement()==true), declines to poll either transport -- see
+  // the held-output contract in the file header. Otherwise polls serial
+  // first, then radio, and latches at most ONE complete statement. A radio
+  // message not taken this tick stays latched in the Radio driver until the
+  // next poll -- so nothing is lost either way, and radio never starves
+  // behind serial.
+  void tick(uint32_t now);
+
+  // True when a complete statement is currently held, awaiting
+  // takeStatement().
+  bool hasStatement() const { return hasStatement_; }
+
+  // Command-out channel, taken half. Clears the held flag so the next
+  // tick() may resume polling. See the struct's own comment for the
+  // aliasing/copy contract on the returned line.
+  CommunicatorToCommandProcessorStatement takeStatement();
 
   msg::CommunicatorState state() const;
   msg::CommunicatorCapabilities capabilities() const;
@@ -87,11 +113,14 @@ class Communicator {
   int channel_ = 0;      // clamped configured radio channel (frequency band)
   bool begun_ = false;   // gates configure()'s live retune
 
-  // Single shared line buffer: serial and radio command lines are the same
+  // Single shared line buffer: serial and radio statement lines are the same
   // format (the relay's !GO data plane carries plain lines both ways), and
-  // tick() surfaces one line at a time. 256 bytes, byte-identical to the
+  // tick() latches one line at a time. 256 bytes, byte-identical to the
   // stack buffers main.cpp used to thread through pollComms().
   char line_[256];
+
+  bool hasStatement_ = false;               // a statement is held, unread
+  Channel heldReturnPath_ = Channel::NONE;  // return path for the held statement
 
   uint32_t serialLines_ = 0;  // complete lines received over serial
   uint32_t radioLines_ = 0;   // complete lines received over radio

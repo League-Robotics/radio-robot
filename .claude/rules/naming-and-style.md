@@ -32,10 +32,15 @@
      (`clasi/issues/remove-generated-get-accessors.md`).
 
 4. **Edge (command-out) types are named by their endpoints**:
-   `<Producer>To<Consumer>Command` — e.g. `DrivetrainToMotorCommand` for what the
-   Drivetrain sends its wheel Motors. Never name an edge type by mechanism or
-   moment (`…Tick`, `…Output`, `…Batch`): the name must say what it is and who
-   it is between. Long is fine; ambiguous is not.
+   `<Producer>To<Consumer><Payload>`, payload ∈ {Command, Statement} — e.g.
+   `DrivetrainToMotorCommand` for what the Drivetrain sends its wheel Motors
+   (payload=Command: a parsed `msg::*Command`), or
+   `CommunicatorToCommandProcessorStatement` for the raw wire line the
+   Communicator hands the processor (payload=Statement: one unparsed wire
+   line — verb, args, kv pairs, correlation id — before it becomes a
+   command). Never name an edge type by mechanism or moment (`…Tick`,
+   `…Output`, `…Batch`): the name must say what it is and who it is between.
+   Long is fine; ambiguous is not.
 
 5. When you encounter a violating name — proposed, inherited, or in your own
    draft/example code — rename toward these rules. Never propagate a violation,

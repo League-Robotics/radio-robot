@@ -29,26 +29,37 @@ void Communicator::begin() {
   begun_ = true;
 }
 
-CommunicatorToCommandProcessorCommand Communicator::tick(uint32_t now) {
+void Communicator::tick(uint32_t now) {
   // now: no clock read or timing behavior here yet -- kept per the locked
   // faceplate shape (every subsystem tick takes now).
   (void)now;
 
-  CommunicatorToCommandProcessorCommand out;
-  out.line = nullptr;
-  out.returnPath = Channel::NONE;
+  if (hasStatement_) {
+    // Backpressure: an untaken statement is still held -- do not poll
+    // either transport, which would overwrite line_[] before the consumer
+    // reads it. See the file header's held-output contract.
+    return;
+  }
 
   // Serial first; a radio line not taken this tick stays latched in the
   // Radio driver until the next poll -- see the header's tick() comment.
   if (serial_.readLine(line_, sizeof(line_))) {
     ++serialLines_;
-    out.line = line_;
-    out.returnPath = Channel::SERIAL;
+    hasStatement_ = true;
+    heldReturnPath_ = Channel::SERIAL;
   } else if (radio_.poll(line_, sizeof(line_))) {
     ++radioLines_;
-    out.line = line_;
-    out.returnPath = Channel::RADIO;
+    hasStatement_ = true;
+    heldReturnPath_ = Channel::RADIO;
   }
+}
+
+CommunicatorToCommandProcessorStatement Communicator::takeStatement() {
+  CommunicatorToCommandProcessorStatement out;
+  out.line = hasStatement_ ? line_ : nullptr;
+  out.returnPath = hasStatement_ ? heldReturnPath_ : Channel::NONE;
+  hasStatement_ = false;
+  heldReturnPath_ = Channel::NONE;
   return out;
 }
 

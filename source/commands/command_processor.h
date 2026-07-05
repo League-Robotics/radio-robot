@@ -33,7 +33,7 @@ public:
     CommandProcessor() = default;
     explicit CommandProcessor(std::vector<CommandDescriptor> cmds);
 
-    // Parse and dispatch one command line. line must be NUL-terminated.
+    // Parse and dispatch one statement line. line must be NUL-terminated.
     // Calls replyFn(msg, ctx) for each response line.
     void process(const char* line, ReplyFn replyFn, void* ctx);
 

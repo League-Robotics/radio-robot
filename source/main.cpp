@@ -9,18 +9,23 @@
 // actually driven by DEV M / DEV DT rather than sitting untouched.
 //
 // Comms are a subsystem now (Subsystems::Communicator,
-// subsystems/communicator.h): its tick(now) is the command-out channel,
-// returning at most ONE complete line per iteration plus the channel it
-// arrived on (the edge's returnPath routes the reply). The old free-function
-// pollComms() and the stack line buffers it was threaded through are gone --
-// the Communicator internalizes the drivers and the line buffer.
+// subsystems/communicator.h): its tick(now) latches at most ONE complete
+// statement per iteration (void return -- held/taken via
+// hasStatement()/takeStatement(), the edge's returnPath routes the reply).
+// The old free-function pollComms() and the stack line buffers it was
+// threaded through are gone -- the Communicator internalizes the drivers
+// and the line buffer. (079-002: tick() reshaped from returning the edge to
+// this held/taken pair -- see communicator.h's held-output contract.)
 //
 // Loop shape matches the locked sketch in clasi/sprints/077-greenfield-
 // faceplate-hal-drivetrain-and-dev-bench-system/issues/greenfield-rebuild-
 // faceplate-hal-in-a-fresh-source-old-tree-parked.md, Step 5 (comms poll
 // since folded into the Communicator subsystem's tick):
 //
-//   in = comm.tick(now);          // one line max; dispatch via CommandProcessor
+//   comm.tick(now);                // held/taken; at most one line latched
+//   if (comm.hasStatement()) {
+//       in = comm.takeStatement(); // dispatch via CommandProcessor
+//   }
 //   hal.tick(now);                // split-phase encoder schedule, all 4 ports
 //   if (drivetrainActive) {
 //       auto out = drivetrain.tick(now, left.state(), right.state());
@@ -207,8 +212,9 @@ int main() {
     while (true) {
         uint32_t now = uBit.systemTime();
 
-        Subsystems::CommunicatorToCommandProcessorCommand in = comm.tick(now);
-        if (in.line) {
+        comm.tick(now);
+        if (comm.hasStatement()) {
+            Subsystems::CommunicatorToCommandProcessorStatement in = comm.takeStatement();
             // Feed on any line, either channel, regardless of content or
             // dispatch outcome -- see dev_commands.h's watchdog contract.
             watchdog.feed(now);
@@ -253,8 +259,9 @@ int main() {
     while (true) {
         uint32_t now = uBit.systemTime();
 
-        Subsystems::CommunicatorToCommandProcessorCommand in = comm.tick(now);
-        if (in.line) {
+        comm.tick(now);
+        if (comm.hasStatement()) {
+            Subsystems::CommunicatorToCommandProcessorStatement in = comm.takeStatement();
             cmd.process(in.line,
                         in.returnPath == Subsystems::Channel::RADIO ? radioReply
                                                                     : serialReply,

@@ -1828,7 +1828,7 @@ Sets the serial-silence watchdog's window at runtime. Default at boot:
 
 ### Serial-Silence Watchdog — Non-Negotiable
 
-Every `DEV`/liveness command **line** that arrives on either comms channel
+Every `DEV`/liveness statement line that arrives on either comms channel
 (serial or radio) resets a wall-clock timer — regardless of the line's
 content or whether it parsed to a known verb. If no line arrives within
 the current window, the firmware:

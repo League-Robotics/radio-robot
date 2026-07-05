@@ -115,7 +115,7 @@ class SerialSilenceWatchdog {
       : windowMs_(window) {}
 
   // Call once at boot (so the window starts counting from power-on, not from
-  // an uninitialized lastFeedMs_) and again every time a command line
+  // an uninitialized lastFeedMs_) and again every time a statement line
   // arrives on either comms channel -- see the class comment.
   void feed(uint32_t now) { lastFeedMs_ = now; fired_ = false; }
 
