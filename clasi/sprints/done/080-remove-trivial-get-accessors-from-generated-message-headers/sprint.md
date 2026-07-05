@@ -1,7 +1,7 @@
 ---
 id: 080
 title: Remove trivial get_* accessors from generated message headers
-status: ticketing
+status: done
 branch: sprint/080-remove-trivial-get-accessors-from-generated-message-headers
 use-cases:
 - SUC-001
