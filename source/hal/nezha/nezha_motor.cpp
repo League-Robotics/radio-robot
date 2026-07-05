@@ -379,7 +379,37 @@ void NezhaMotor::writeRawDuty(float duty)
     // |ΔPWM| slew cap — a stop is the explicit, unclamped, immediate-write
     // exemption; every other write is stepped by at most config_.slew_rate
     // toward the requested target.
-    int8_t written = stopping
+    //
+    // 079-006 root-cause fix: the very first write for a port sees
+    // lastWrittenPct_ still at its -128 "no write yet" sentinel.
+    // MotorSlew::clampStep() has no concept of that sentinel — fed -128
+    // unconditionally, it computes a step toward pct that OVERSHOOTS the
+    // valid ±100 range on the low side (e.g. clampStep(-128, 30, 25) = -103)
+    // and, critically, has the OPPOSITE SIGN of the actually-requested
+    // duty. writeMotorRun() below dispatches direction from written's sign,
+    // so this sent a full-swing, wrong-direction 0x60 write (an unrequested
+    // reversal, with an out-of-spec speed byte > the register's documented
+    // 0-100 range) as literally the first command ever issued to a fresh
+    // port -- exactly docs/knowledge/2026-07-04-encoder-wedge.md's confirmed
+    // reversal-write-train latch trigger, on the very first tick a
+    // never-before-addressed port is ever driven. Confirmed on hardware
+    // (079-006 stand campaign): every fresh port's first DUTY/VEL command
+    // latched its 0x46 readback (wedged=1 within ~1s, pos/vel frozen at the
+    // post-reset baseline forever after, surviving even a genuine
+    // standstill-guarded hard reset -- consistent with the doc's
+    // "repeated abuse escalates to a persistent latch" escalation path
+    // once this fires on every cold-started test). The armor's own
+    // reversal-dwell gate (Motor::armoredWrite(), 078) cannot catch this:
+    // it compares the commanded float duty against lastRequestedDuty_
+    // (sane 0.0f default), sees no sign change relative to that baseline,
+    // and forwards straight to writeRawDuty() -- the bogus reversal is
+    // manufactured one layer further down, from a SEPARATE sentinel this
+    // function alone owns. Fix: treat "no write yet" as the same
+    // unclamped-write exemption stop() already gets -- there is no prior
+    // direction to slew from, so the first write goes straight to the
+    // requested pct, matching what a genuinely fresh motor should see.
+    bool firstWrite = (lastWrittenPct_ == -128);
+    int8_t written = (stopping || firstWrite)
         ? pct
         : MotorSlew::clampStep(lastWrittenPct_, pct,
                                 static_cast<uint8_t>(config_.slew_rate));
@@ -412,7 +442,31 @@ void NezhaMotor::writeMotorRun(uint8_t direction, uint8_t speed)
         0xF5,
         0x00
     };
-    bus_.write((kNezhaDeviceAddr << 1), buf, 8, false);
+    // 079-006 root-cause fix: postClear=4000 holds off the next transaction
+    // to 0x10 (in this single-in-use-port flip-flop, that's the SAME port's
+    // own next 0x46 encoder request) for a real >=4ms gap after this duty
+    // write, mirroring requestEncoder()'s own postClear on the other side of
+    // the cycle. Before this fix, writeMotorRun() carried no clearance at
+    // all: a single in-use port's own REQUEST_DUE fires again on the very
+    // next NezhaHal::tick() call with no other port to interleave, so the
+    // 0x46 request could re-issue with ~0us real gap since this write ended.
+    // Confirmed on hardware (079-006 stand campaign, via pyOCD/gdb
+    // backtraces caught mid-stall): that back-to-back cadence reliably
+    // parked the firmware for several seconds at a time inside vendor CODAL
+    // code (libraries/codal-nrf52/source/NRF52I2C.cpp's waitForStop(),
+    // stuck spinning up to its own ~10s internal timeout waiting for a
+    // TWIM STOPPED event that never arrived) -- the entire main loop,
+    // including serial command processing, froze for the stall's duration.
+    // The OLD fused/blocking readEncoderSettle() never hit this because its
+    // own hand-rolled spins gave every 0x10 transaction real elapsed time on
+    // both sides; the split-phase design's whole point (issuing more bus
+    // work per main-loop pass) removed that incidental protection. Long-
+    // duration hardware soaks (tests/bench/, see this ticket's stand
+    // results) confirmed this single postClear addition (paired with
+    // requestEncoder()'s own preClear=4000 below) collapses the multi-
+    // second stalls down to the ordinary, already-documented USB-CDC
+    // transport drop rate.
+    bus_.write((kNezhaDeviceAddr << 1), buf, 8, false, /*preClear=*/0, /*postClear=*/4000);
 }
 
 void NezhaMotor::writePositionMove(float positionDeg)
@@ -511,9 +565,32 @@ void NezhaMotor::requestEncoder()
     // 0x60 velocity write mid-settle -- until collectEncoder() (or any
     // other 0x10 call) is due (architecture-update.md's "I2CBus
     // lazy-clearance mechanism" section, constraint 4).
+    //
+    // 079-006 root-cause fix: preClear=4000 (originally 0) holds THIS write
+    // back until a real >=4ms has elapsed since the LAST transaction to
+    // 0x10 -- whatever it was (this same port's own preceding duty write in
+    // the common single-in-use-port case; another port's traffic when 2+
+    // are in use). Ticket 004/005 landed this write with no preClear at
+    // all, on the theory the flip-flop's own scheduling gap would always
+    // be ample (the way the old fused readEncoderSettle()'s per-tick
+    // cadence always left slack) -- confirmed FALSE on hardware for a
+    // single in-use port: REQUEST_DUE fires again on the very next
+    // NezhaHal::tick() call with no other port to interleave, so this
+    // write could re-issue with ~0us real gap since the preceding
+    // COLLECT_DUE's duty write. Root-caused via pyOCD/gdb backtraces caught
+    // mid-stall (this ticket's stand campaign): the firmware was parked for
+    // several seconds inside vendor CODAL's NRF52I2C::waitForStop()
+    // (libraries/codal-nrf52/source/NRF52I2C.cpp), spinning toward its own
+    // ~10s internal timeout waiting for a TWIM STOPPED event that never
+    // arrived -- the whole main loop (serial included) froze for the
+    // stall's duration. Restoring the real ">=4ms since the last 0x10
+    // transaction" gap the old fused code always had (paired with
+    // writeMotorRun()'s new postClear=4000 below) collapsed these stalls
+    // down to the ordinary, already-documented USB-CDC transport drop rate
+    // in long-duration hardware soaks (see this ticket's stand results).
     uint8_t cmd[8] = { 0xFF, 0xF9, static_cast<uint8_t>(config_.port), 0x00, 0x46, 0x00, 0xF5, 0x00 };
     int writeResult = bus_.write((kNezhaDeviceAddr << 1), cmd, 8, false,
-                                 /*preClear=*/0, /*postClear=*/4000);
+                                 /*preClear=*/4000, /*postClear=*/4000);
     pendingEncRequestOk_ = (writeResult == MICROBIT_OK);
 }
 

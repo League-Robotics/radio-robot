@@ -364,6 +364,16 @@ void scenarioDrivetrainToHalCommandForwarding() {
 //    once >=40ms has elapsed. Uses appliedDuty() before/after each collect
 //    as the ground truth for "did writeRawDuty() actually reach the bus
 //    this cycle", independent of the exact slew-clamped value.
+//
+// 079-006 update: cycle 1 now targets 0.5 (not 0.9) and asserts the EXACT
+// post-cycle-1 value. Before this ticket's sentinel-slew fix (scenario 8
+// below), a fresh port's first write always landed exactly at the
+// requested target regardless of magnitude, which is still true post-fix --
+// what changed is that a first write to 0.9 now converges in ONE write
+// (see scenario 8), leaving nothing left to throttle in cycles 2/3. Using
+// 0.5 then RETARGETING to 0.9 before cycle 2 keeps this scenario's actual
+// subject (the throttle, on a genuinely still-converging SECOND write)
+// intact and independent of scenario 8's fix.
 void scenarioWriteThrottleInteraction() {
   beginScenario("40ms write-rate throttle gates collect-time duty writes, not requests");
   resetDefaultConfigs();
@@ -373,14 +383,20 @@ void scenarioWriteThrottleInteraction() {
   Hal::NezhaHal hal(bus, defaultConfigs);
   scriptGenerousPool(bus, 40);
 
-  hal.apply(addressedOne(1, msg::MotorCommand{}.setDutyCycle(0.9f)));
+  hal.apply(addressedOne(1, msg::MotorCommand{}.setDutyCycle(0.5f)));
 
   // Cycle 1: lastWriteTimeUs_ defaults to 0, so "now - 0" is astronomically
   // over 40ms regardless of the fake clock's absolute value -- the first
-  // write always goes through.
+  // write always goes through, landing exactly at the requested 0.5 (the
+  // -128 sentinel is exempted from the slew clamp -- scenario 8).
   runOneCycle(hal, 0, 1);
   float afterCycle1 = hal.motor(1).appliedDuty();
-  checkTrue(afterCycle1 != 0.0f, "cycle 1: first duty write reached the bus (nonzero applied)");
+  checkFloatEq(afterCycle1, 0.5f, "cycle 1: first-ever write reaches the full requested duty");
+
+  // Retarget to 0.9 -- no longer the first write, so THIS one is genuinely
+  // slew-clamped (|0.9-0.5| step of 40 > the 25 maxDelta), giving cycles 2/3
+  // a real not-yet-converged value to test the throttle against.
+  hal.apply(addressedOne(1, msg::MotorCommand{}.setDutyCycle(0.9f)));
 
   // Cycle 2: only the request/collect's own postClear (4000us) elapses
   // since cycle 1's write -- well under 40000us -- so the throttle
@@ -392,7 +408,8 @@ void scenarioWriteThrottleInteraction() {
                "cycle 2 (only ~4ms since the last write): throttled -- appliedDuty() unchanged");
 
   // Cycle 3: advance the fake clock well past the 40ms mark since cycle 1's
-  // write -- the still-unconverged 0.9 target now gets through.
+  // write -- the still-unconverged 0.9 target now gets through (slew-capped
+  // toward it, not landing exactly at 0.9 yet).
   runOneCycle(hal, 4, 5, /*postClearUs=*/50000);
   float afterCycle3 = hal.motor(1).appliedDuty();
   checkTrue(afterCycle3 != afterCycle2,
@@ -439,6 +456,80 @@ void scenarioReversalDwellHoldsAtNewCadence() {
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
 }
 
+// 8. 079-006 stand-campaign root-cause regression #1: the very first duty
+//    write for a freshly-constructed motor must NOT slew-clamp from
+//    writeRawDuty()'s -128 "no write yet" sentinel. MotorSlew::clampStep()
+//    has no concept of that sentinel: fed -128 unconditionally (as every
+//    prior sprint's own comment documented as intentional, ported-unchanged
+//    behavior), clampStep(-128, 30, 25) returns -103 -- a WRONG-SIGN,
+//    out-of-range (the Nezha 0x60 register's speed byte is documented 0-100)
+//    intermediate write, i.e. an unrequested full-swing reversal as the
+//    very first command ever sent to a fresh port. Confirmed on hardware
+//    (079-006 stand campaign) as a real trigger for
+//    docs/knowledge/2026-07-04-encoder-wedge.md's reversal-write-train
+//    latch. Existing scenario 6 above only asserted "!= 0.0f" after the
+//    first write, which the pre-fix -1.03 value also satisfies -- this is
+//    why the bug went uncaught through 077/078/079-004/005; this scenario
+//    asserts the actual value.
+void scenarioFirstWriteExemptFromSentinelSlew() {
+  beginScenario("first-ever duty write skips the -128 sentinel's slew clamp (079-006 root cause)");
+  resetDefaultConfigs();
+  I2CBus::setClock(1000000);
+  I2CBus bus;
+  Hal::NezhaHal hal(bus, defaultConfigs);
+  scriptGenerousPool(bus, 20);
+
+  hal.apply(addressedOne(1, msg::MotorCommand{}.setDutyCycle(0.30f)));
+  runOneCycle(hal, 1000, 1010, /*postClearUs=*/50000);
+
+  checkFloatEq(hal.motor(1).appliedDuty(), 0.30f,
+               "first-ever write reaches the FULL requested duty directly -- before the "
+               "fix this computed clampStep(-128, 30, 25) = -103 (appliedDuty() = -1.03): "
+               "wrong sign, magnitude > 1.0");
+
+  checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
+}
+
+// 9. 079-006 stand-campaign root-cause regression #2: the encoder request
+//    (requestEncoder()'s 0x46 write, preClear=4000) and the duty write
+//    (writeMotorRun()'s 0x60 write, postClear=4000) together guarantee a
+//    real >=4ms gap around every 0x10 transaction, mirroring the
+//    always->=4ms-apart transactions the OLD fused/blocking readEncoderSettle()
+//    implicitly had. Before this fix, requestEncoder() carried no preClear
+//    and writeMotorRun() carried no postClear at all, so a single in-use
+//    port's own request-collect-write-request cycle could re-issue the next
+//    0x46 request with ~0us real gap since the immediately-preceding duty
+//    write -- confirmed on hardware as the trigger for a severe (multi-
+//    second) NRF52I2C::waitForStop() TWIM stall (vendor CODAL driver,
+//    libraries/codal-nrf52/source/NRF52I2C.cpp) once a fresh port was
+//    actually driven with DUTY, not just addressed with a no-op command.
+void scenarioRequestHonorsClearanceAfterDutyWrite() {
+  beginScenario("079-006 root-cause fix: request/duty writes keep >=4ms real clearance around 0x10");
+  resetDefaultConfigs();
+  I2CBus::setClock(1000000);
+  I2CBus bus;
+  Hal::NezhaHal hal(bus, defaultConfigs);
+  scriptGenerousPool(bus, 40);
+
+  hal.apply(addressedOne(1, msg::MotorCommand{}.setDutyCycle(0.30f)));
+
+  hal.tick(1000);                // REQUEST_DUE
+  I2CBus::advanceClock(4000);    // satisfy the request's own postClear
+  hal.tick(1010);                // COLLECT_DUE: collects + dispatches the first duty write
+  checkTrue(hal.motor(1).appliedDuty() != 0.0f, "duty write landed at collect");
+
+  uint64_t clockBefore = I2CBus::clock();
+  hal.tick(1020);                // next REQUEST_DUE -- deliberately NO manual clock advance
+  uint64_t clockAfter = I2CBus::clock();
+
+  checkTrue(clockAfter - clockBefore >= 4000,
+            "the next 0x46 request's entry spin held for >=4000us of real (fake-clock) "
+            "time since the preceding duty write -- before this fix that gap was ~0us, "
+            "the observed hardware TWIM-stall trigger");
+
+  checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
+}
+
 }  // namespace
 
 int main() {
@@ -449,6 +540,8 @@ int main() {
   scenarioDrivetrainToHalCommandForwarding();
   scenarioWriteThrottleInteraction();
   scenarioReversalDwellHoldsAtNewCadence();
+  scenarioFirstWriteExemptFromSentinelSlew();
+  scenarioRequestHonorsClearanceAfterDutyWrite();
 
   if (g_failureCount == 0) {
     std::printf("OK: all NezhaHal flip-flop scenarios passed\n");
