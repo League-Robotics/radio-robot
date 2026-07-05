@@ -1,7 +1,7 @@
 ---
 id: 080
 title: Remove trivial get_* accessors from generated message headers
-status: stakeholder-review
+status: ticketing
 branch: sprint/080-remove-trivial-get-accessors-from-generated-message-headers
 use-cases:
 - SUC-001
@@ -76,24 +76,13 @@ Before tickets can be created, all of the following must be true:
 
 - [x] Sprint planning documents are complete (sprint.md, use cases, architecture)
 - [x] Architecture review passed
-- [ ] Stakeholder has approved the sprint plan
+- [x] Stakeholder has approved the sprint plan (auto-approve mode, 2026-07-05)
 
 ## Tickets
 
-**Not yet created** — `create_ticket` is refused by the CLASI server until
-the `stakeholder_approval` gate is recorded (sprint is parked at the
-`stakeholder-review` phase; see architecture-update.md and the
-sprint-planner's final report). The table below is the fully-specified
-proposal, ready to create verbatim the moment the gate passes.
-
 | # | Title | Depends On | Issue Ref |
 |---|-------|------------|-----------|
-| 001 (proposed) | Remove get_* accessors from generated message headers: generator, regen, full call-site sweep, and regression guard | — | remove-generated-get-accessors.md |
+| 001 | Remove get_* accessors from generated message headers: generator, regen, full call-site sweep, and regression guard | — | remove-generated-get-accessors.md |
 
-Tickets execute serially in the order listed.
-
-**Next step for the team-lead**: get real stakeholder approval of this
-plan, then either call `record_gate_result(sprint_id="080",
-gate="stakeholder_approval", result="passed")` + `advance_sprint_phase` and
-create ticket 001 per the full spec in the sprint-planner's report, or
-re-invoke the sprint-planner to do so.
+Tickets execute serially in the order listed. Ticket 001:
+`tickets/001-remove-get-accessors-from-generated-message-headers-generator-regen-full-call-site-sweep-and-regression-guard.md`
