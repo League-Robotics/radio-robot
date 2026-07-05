@@ -40,10 +40,6 @@ constexpr float kMaxPlausibleSpeed = 1000.0f;   // [mm/s]
 // (ported from VelocityController.cpp's kNominalDt).
 constexpr float kNominalDt = 0.024f;   // [s]
 
-// Consecutive-identical-reading threshold for the wedge latch (ported from
-// MotorController.cpp's kWedgeThreshold).
-constexpr uint8_t kWedgeThreshold = 10;
-
 float clampf(float v, float lo, float hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -52,28 +48,35 @@ float clampf(float v, float lo, float hi) {
 }  // namespace
 
 NezhaMotor::NezhaMotor(I2CBus& bus, const msg::MotorConfig& config)
-    : bus_(bus), config_(config)
+    : bus_(bus)
 {
-    if (config_.slew_rate <= 0.0f) {
-        // architecture-update.md Design Rationale 2: MotorConfig.slew_rate
-        // defaults to the existing kMaxDeltaPwmPerWrite value (25) when
-        // unconfigured (zero-initialized), matching source_old's file-local
-        // constexpr default.
-        config_.slew_rate = kDefaultSlewRate;
-    }
+    // configure() (Hal::Motor, base) caches the two armor fields
+    // (reversal_dwell/output_deadband, defaulting when unset) then calls
+    // back into configureDevice() (this class) for the device-specific
+    // fields (slew_rate defaulting, etc.). Called from the constructor
+    // BODY, not a Motor(...) base constructor — architecture-update.md's
+    // Construction note: by this point the object's dynamic type is already
+    // NezhaMotor, so the virtual dispatch into configureDevice() resolves
+    // correctly (unlike a call from Motor's own constructor, which would
+    // not dispatch to this override).
+    configure(config);
 }
 
 void NezhaMotor::begin()
 {
     // Ported from Motor::begin(): un-freezes the 0x46 readback and zeros
     // the software offset — the correct initial state for a fresh boot.
-    hardResetEncoder();
+    hardReset();
 }
 
-void NezhaMotor::configure(const msg::MotorConfig& config)
+void NezhaMotor::configureDevice(const msg::MotorConfig& config)
 {
     config_ = config;
     if (config_.slew_rate <= 0.0f) {
+        // architecture-update.md Design Rationale 2: MotorConfig.slew_rate
+        // defaults to the existing kMaxDeltaPwmPerWrite value (25) when
+        // unconfigured (zero-initialized), matching source_old's file-local
+        // constexpr default.
         config_.slew_rate = kDefaultSlewRate;
     }
 }
@@ -132,15 +135,6 @@ void NezhaMotor::setFeedforward(float feedforward)
     feedforward_ = feedforward;
 }
 
-void NezhaMotor::resetPosition()
-{
-    // Staged, not immediate: "reset_position rides beside any arm and
-    // zeroes the encoder that tick" (ticket 003 acceptance criteria) —
-    // processed at the top of the next tick(), alongside whichever mode is
-    // active.
-    resetPending_ = true;
-}
-
 // ---------------------------------------------------------------------------
 // Primitive getters.
 // ---------------------------------------------------------------------------
@@ -155,27 +149,31 @@ float NezhaMotor::appliedDuty() const
 }
 
 bool NezhaMotor::connected() const { return connected_; }
-bool NezhaMotor::wedged() const { return wedgeLatched_; }
 
 // ---------------------------------------------------------------------------
-// tick() — sample the encoder, then execute the staged command per mode.
+// tick() — the leaf's 5-step call-order contract (architecture-update.md,
+// "The base/leaf split — exact contract"):
+//   1. processResetIfPending(now)  — base armor policy, before this tick's
+//      encoder sample.
+//   2. sample + cache this motor's own encoder (device-specific, unchanged).
+//   3. updateWedgeDetector()       — base armor policy; reads position()/
+//      appliedDuty(), both now reflecting this tick's fresh sample and last
+//      tick's write.
+//   4. mode dispatch — DUTY/VELOCITY/NEUTRAL route through armoredWrite();
+//      POSITION calls writePositionMove() directly (out of the armor's
+//      scope — a discrete onboard move, not a streamed signed duty).
+//   5. updateRestTracking()        — base armor policy; reads velocity()
+//      and lastRequestedDuty_, the latter possibly just updated by step 4.
 // ---------------------------------------------------------------------------
-
 void NezhaMotor::tick(uint32_t nowMs)
 {
-    if (resetPending_) {
-        hardResetEncoder();
-        resetPending_ = false;
-    }
+    // 1. Standstill-guarded reset dispatch.
+    processResetIfPending(nowMs);
 
-    // Per-tick position sample — settle-read path (0x46 write -> 4ms
+    // 2. Per-tick position sample — settle-read path (0x46 write -> 4ms
     // post-write busy-wait -> 4-byte read, no pre-write idle), exactly as
     // source_old's Motor::tick() via readEncoderSettle().
     float pos = readEncoderSettle();
-
-    // Wedge detector — unconditional, every tick (ported from
-    // MotorController::controlTick's per-wheel detector).
-    updateWedgeDetector(pos);
 
     float elapsedTime = 0.0f;
     bool haveElapsed = false;
@@ -197,14 +195,20 @@ void NezhaMotor::tick(uint32_t nowMs)
     lastPosition_ = pos;
     lastTick_ = nowMs;
 
+    // 3. Wedge detector — reads position() (== pos, just cached above) and
+    // appliedDuty() (last tick's write; this tick's mode dispatch has not
+    // run yet).
+    updateWedgeDetector();
+
+    // 4. Mode dispatch.
     switch (mode_) {
         case Mode::DUTY:
-            writeDuty(dutyTarget_);
+            armoredWrite(dutyTarget_, nowMs);
             break;
         case Mode::VELOCITY: {
             float dt = haveElapsed ? elapsedTime : kNominalDt;
             float duty = runVelocityPid(velocityTarget_, filteredVelocity_, dt);
-            writeDuty(clampf(duty + feedforward_, -1.0f, 1.0f));
+            armoredWrite(clampf(duty + feedforward_, -1.0f, 1.0f), nowMs);
             break;
         }
         case Mode::POSITION:
@@ -218,12 +222,15 @@ void NezhaMotor::tick(uint32_t nowMs)
             // 0x5F note) — both BRAKE and COAST map to the same 0x60
             // speed-0 coast path, the only safe stop source_old provides.
             (void)neutralTarget_;
-            writeDuty(0.0f);
+            armoredWrite(0.0f, nowMs);
             break;
         case Mode::NONE:
         default:
             break;
     }
+
+    // 5. Rest tracking.
+    updateRestTracking();
 }
 
 // ---------------------------------------------------------------------------
@@ -304,32 +311,6 @@ float NezhaMotor::runVelocityPid(float target, float measured, float dt)
 }
 
 // ---------------------------------------------------------------------------
-// Wedge detector — ported from MotorController::controlTick's per-wheel
-// stuck-encoder detector (source_old/control/MotorController.cpp), folded
-// to a single motor here (no L/R pairing at this tier). Unconditional: not
-// gated by commanded target, not gated by an arming grace (both blind
-// spots were removed upstream in 064-004; this port preserves the fixed
-// version, not the original one).
-// ---------------------------------------------------------------------------
-void NezhaMotor::updateWedgeDetector(float pos)
-{
-    if (wedgePrevValid_) {
-        if (pos != wedgePrevEnc_) {
-            stuckCount_ = 0;
-            wedgeLatched_ = false;
-        } else if (stuckCount_ < 255) {
-            ++stuckCount_;
-        }
-    }
-    wedgePrevEnc_ = pos;
-    wedgePrevValid_ = true;
-
-    if (stuckCount_ >= kWedgeThreshold) {
-        wedgeLatched_ = true;
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Write path — ported from Motor::setSpeed(). Byte-for-byte identical
 // write-on-change guard, write-rate limit, slew cap, and coast-at-zero
 // exemption, including the -128 sentinel's interaction with the slew clamp
@@ -337,8 +318,19 @@ void NezhaMotor::updateWedgeDetector(float pos)
 // MotorSlew::clampStep() unconditionally, sentinel included — this port
 // does the same rather than special-casing the sentinel, per the ticket's
 // "port the current behavior... unchanged" directive).
+//
+// Sprint 078: this is now writeRawDuty(), Hal::Motor's protected device-
+// specific primitive, called only from armoredWrite() (base). The former
+// `reversal` boolean and its 40-ms-throttle exemption branch are DELETED,
+// not preserved as dead code (architecture-update.md Design Rationale 6):
+// armoredWrite() never forwards a raw sign flip here any more — it always
+// writes 0 first and holds through the dwell, so by the time a new-
+// direction duty reaches this function, lastWrittenPct_ is already 0 (from
+// the dwell's own zero-writes). Every write this function ever sees is
+// either unchanged, a transition to/from zero, or a same-sign change —
+// never a direct opposite-sign jump.
 // ---------------------------------------------------------------------------
-void NezhaMotor::writeDuty(float duty)
+void NezhaMotor::writeRawDuty(float duty)
 {
     duty = clampf(duty, -1.0f, 1.0f);
     int8_t pct = static_cast<int8_t>(lroundf(duty * 100.0f));
@@ -351,21 +343,20 @@ void NezhaMotor::writeDuty(float duty)
     }
 
     // Write-rate limit — bus hygiene only (NOT a wedge fix; see
-    // motor_slew.h and docs/knowledge/2026-07-04-encoder-latch-reversal-
-    // write-train.md for the actual trigger). Stop and reversal are exempt.
+    // motor_slew.h and docs/knowledge/2026-07-04-encoder-wedge.md for the
+    // actual trigger). Stop is the only throttle exemption; see the
+    // function-level comment above for why a reversal exemption is no
+    // longer needed here.
     static constexpr uint32_t kMinWriteIntervalUs = 40000;   // [us] 40 ms ~= 25 Hz max
     bool stopping = (pct == 0);
-    bool reversal = (pct != 0 && lastWrittenPct_ != 0 &&
-                     ((pct > 0) != (lastWrittenPct_ > 0)));
     uint64_t now = system_timer_current_time_us();   // [us]
-    if (!stopping && !reversal &&
-        (now - lastWriteTimeUs_) < kMinWriteIntervalUs) {
+    if (!stopping && (now - lastWriteTimeUs_) < kMinWriteIntervalUs) {
         return;
     }
 
     // |ΔPWM| slew cap — a stop is the explicit, unclamped, immediate-write
-    // exemption; every other write (including a full reversal) is stepped
-    // by at most config_.slew_rate toward the requested target.
+    // exemption; every other write is stepped by at most config_.slew_rate
+    // toward the requested target.
     int8_t written = stopping
         ? pct
         : MotorSlew::clampStep(lastWrittenPct_, pct,
@@ -475,7 +466,7 @@ int32_t NezhaMotor::readEncoderAtomicRaw()
 {
     // Full vendor timing: 4ms pre-write bus-idle -> 0x46 write -> 4ms
     // post-write settle -> read 4 bytes. Cost: ~8ms. Used only by
-    // hardResetEncoder()'s median-of-3 snapshot + readback verification.
+    // hardReset()'s median-of-3 snapshot + readback verification.
     static constexpr uint32_t kDelayUs = 4000;
 
     uint64_t deadline = system_timer_current_time_us() + kDelayUs;
@@ -542,11 +533,14 @@ int32_t NezhaMotor::collectEncoder()
     return result;
 }
 
-void NezhaMotor::hardResetEncoder()
+void NezhaMotor::hardReset()
 {
     // Ported from Motor::resetEncoder(): median-of-3 atomic-read snapshot +
     // readback-verify + retry, matching source_old's kMaxRetries/
-    // kReadbackThreshold constants exactly.
+    // kReadbackThreshold constants exactly. Unchanged from the pre-078
+    // hardResetEncoder() body — see architecture-update.md's leaf mapping
+    // table. processResetIfPending() (base) increments hardResetCount_
+    // after calling this.
     static constexpr int kMaxRetries = 2;
     static constexpr int32_t kReadbackThreshold = 2;
 
@@ -588,6 +582,37 @@ void NezhaMotor::hardResetEncoder()
     filteredVelocity_ = 0.0f;
     hasLastTick_ = false;
     lastGoodRawEnc_ = 0;
+}
+
+void NezhaMotor::softRebaseline()
+{
+    // Ported from source_old's Motor::rebaselineSoft() (064-003):
+    // software-only encoder rebaseline — folds the already-tick-cached
+    // lastPosition_ (populated by this tick's readEncoderSettle(), not a
+    // new atomic read) back into raw tenths-of-degrees and adds it to
+    // encOffset_, then zeroes the cache exactly as hardReset()'s success
+    // path does. Issues NO I2C transaction at all.
+    //
+    // Inverse of readEncoderSettle()'s conversion (mm = (raw/10) *
+    // travel_calib * fwd_sign): rawDelta = (mm / (travel_calib * fwd_sign))
+    // * 10. The new tree has one travel_calib/fwd_sign per port, not per
+    // L/R side (nezha_motor.h's class comment, Design Rationale 3), so no
+    // L/R selection is needed here (unlike source_old's _motorId-gated
+    // wheelTravelCalibL/wheelTravelCalibR pick).
+    if (config_.travel_calib != 0.0f) {
+        float rawDeltaF = (lastPosition_ / (config_.travel_calib * static_cast<float>(config_.fwd_sign))) * 10.0f;
+        encOffset_ += static_cast<int32_t>(rawDeltaF);
+    }
+    lastPosition_ = 0.0f;
+    filteredVelocity_ = 0.0f;
+    hasLastTick_ = false;
+    lastGoodRawEnc_ = 0;
+
+    // softResetCount_ is base-owned (Hal::Motor); this leaf increments it
+    // directly (it is protected, inherited) rather than duplicating a
+    // counter here — mirrors source_old's rebaselineSoft(), which
+    // increments its own _softResetCount as its last statement.
+    ++softResetCount_;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Hal::Motor base-class armor policy + NezhaMotor leaf refit
-status: open
+status: done
 use-cases:
 - SUC-002
 - SUC-003
@@ -103,34 +103,34 @@ split — exact contract" section verbatim.
 
 ## Acceptance Criteria
 
-- [ ] `Hal::Motor` gains the four protected pure virtuals and all listed
+- [x] `Hal::Motor` gains the four protected pure virtuals and all listed
       protected state/methods; `resetPosition()`/`wedged()`/`configure()`
       are concrete; `wedgeSuspect()`/`hardResetCount()`/`softResetCount()`
       are new concrete public methods.
-- [ ] All new `Hal::Motor` methods are `inline`; `source/hal/capability/`
+- [x] All new `Hal::Motor` methods are `inline`; `source/hal/capability/`
       remains headers-only (no new `.cpp`).
-- [ ] `NezhaMotor` implements all four new protected virtuals per the
+- [x] `NezhaMotor` implements all four new protected virtuals per the
       mapping above; its old wedge-detector fields/method and
       `resetPending_` are deleted (not left as dead code); the
       reversal-exemption branch is deleted from the write path.
-- [ ] `NezhaMotor::tick()` follows the exact 5-step call-order contract
+- [x] `NezhaMotor::tick()` follows the exact 5-step call-order contract
       from architecture-update.md.
-- [ ] A commanded sign change (verified by code inspection / a quick
+- [x] A commanded sign change (verified by code inspection / a quick
       manual trace, since ticket 004 provides the automated proof) writes
       0 immediately, then suppresses non-zero writes for `reversalDwell_`
       ms, then proceeds in the new direction; a commanded stop (`duty ==
       0` or sub-deadband) is immediate and unclamped even mid-dwell.
-- [ ] A `resetPosition()` request dispatches `hardReset()` when
+- [x] A `resetPosition()` request dispatches `hardReset()` when
       `restTicks_ >= kRestTicksRequired`, else `softRebaseline()` —
       never an atomic burst while `lastRequestedDuty_ != 0`.
-- [ ] `wedged()` reports the raw, unconditional stuck-encoder latch exactly
+- [x] `wedged()` reports the raw, unconditional stuck-encoder latch exactly
       as before (unchanged semantics — do not reintroduce target-gating or
       arming-grace); `wedgeSuspect()` reports true only when the raw latch
       is held while `|appliedDuty()|` exceeds `outputDeadband_`.
-- [ ] `kRestVelocity`/`kRestTicksRequired` are documented in-code as
+- [x] `kRestVelocity`/`kRestTicksRequired` are documented in-code as
       starting guesses, explicitly flagged for retuning in ticket 005's
       bench pass (do not silently treat them as final).
-- [ ] `just build` succeeds; the firmware boots and `NezhaHal` constructs
+- [x] `just build` succeeds; the firmware boots and `NezhaHal` constructs
       all four ports without change to `main.cpp`'s `NezhaHal`
       construction or `Drivetrain` (verify no other call site needed a
       change — `dev_commands.cpp:372`'s `configure()` call site keeps its
