@@ -12,6 +12,12 @@
 // unchanged and un-inverted: Subsystems depends on Hal (this subsystem names
 // Hal::NezhaMotor / Hal::Motor / Hal::*Command), never the reverse.
 //
+// 081-002: implements the abstract Subsystems::Hardware owner base
+// (subsystems/hardware.h) — see that file's header and
+// architecture-update.md (081) Decision 1 for why the seam lives here, not
+// in namespace Hal. kPortCount is now inherited from Hardware, not
+// redeclared here.
+//
 // This class has two roles on top of its 077 shape (Design Rationale 3,
 // clasi/sprints/079-.../architecture-update.md): it is the BRICK FLIP-FLOP
 // SEQUENCER — a small activePort_/phase_ state machine that issues at most one
@@ -34,13 +40,12 @@
 #include "hal/capability/motor.h"
 #include "hal/nezha/nezha_motor.h"
 #include "messages/motor.h"
+#include "subsystems/hardware.h"
 
 namespace Subsystems {
 
-class NezhaHardware {
+class NezhaHardware : public Hardware {
  public:
-  static constexpr uint32_t kPortCount = 4;
-
   // configs must supply exactly kPortCount entries; configs[i].port should
   // equal i+1 (1..4) — the constructing caller's (main.cpp, ticket 5's)
   // responsibility. NezhaHardware does not itself validate or force this,
@@ -48,7 +53,7 @@ class NezhaHardware {
   NezhaHardware(I2CBus& bus, const msg::MotorConfig configs[kPortCount]);
 
   // Primes all four ports' encoders (see NezhaMotor::begin()).
-  void begin();
+  void begin() override;
 
   // The brick flip-flop sequencer (sprint 079-004; architecture-update.md
   // "The flip-flop and the 078 base-class contract"). Idle (no port
@@ -63,7 +68,7 @@ class NezhaHardware {
   // "slice 1 collects due, slice 2 requests/writes go out" double call,
   // ticket 005) drive one full request/collect pair per pass under typical
   // timing.
-  void tick(uint32_t now);   // [ms]
+  void tick(uint32_t now) override;   // [ms]
 
   // Port-indexed accessor, port in [1, kPortCount]. Always returns the
   // Hal::Motor faceplate — callers (DEV commands, Drivetrain; both later
@@ -71,7 +76,7 @@ class NezhaHardware {
   // clamp to port 4 rather than trapping, since a bad port from a DEV
   // command should surface as ERR at the command layer, not crash the
   // firmware.
-  Hal::Motor& motor(uint32_t port);
+  Hal::Motor& motor(uint32_t port) override;
 
   // Distribution (sprint 079-004; architecture-update.md "The command-edge
   // types"). Both overloads forward the addressed msg::MotorCommand(s) to
@@ -83,11 +88,11 @@ class NezhaHardware {
   //
   // allPorts==true never marks any port in-use, even though it still
   // forwards addressed[0].command to every port's setter.
-  void apply(const Hal::CommandProcessorToHardwareCommand& cmd);
+  void apply(const Hal::CommandProcessorToHardwareCommand& cmd) override;
 
   // Both wheels are always addressed (never a broadcast) — the Drivetrain's
   // governed pair is exactly the ports its own DrivetrainConfig binds.
-  void apply(const Hal::DrivetrainToHardwareCommand& cmd);
+  void apply(const Hal::DrivetrainToHardwareCommand& cmd) override;
 
  private:
   // REQUEST_DUE: the next bus action is a fresh 0x46 request on

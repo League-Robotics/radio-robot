@@ -1,8 +1,9 @@
 ---
 id: '002'
 title: 'Host-clean loop seams: Subsystems::Hardware, dev_loop, clock'
-status: open
-use-cases: [SUC-002]
+status: in-progress
+use-cases:
+- SUC-002
 depends-on: []
 github-issue: ''
 issue: host-side-simulation-environment-for-the-new-tree-design-write-up.md
@@ -48,20 +49,20 @@ proven entirely against the one existing concrete owner,
 
 ## Acceptance Criteria
 
-- [ ] `Subsystems::Hardware` (`source/subsystems/hardware.h`) declares
+- [x] `Subsystems::Hardware` (`source/subsystems/hardware.h`) declares
       `virtual Hal::Motor& motor(uint32_t port) = 0;`,
       `virtual void tick(uint32_t now) = 0;`,
       `virtual void apply(const Hal::CommandProcessorToHardwareCommand&) = 0;`,
       `virtual void apply(const Hal::DrivetrainToHardwareCommand&) = 0;`,
       a virtual no-op `begin()`, and `static constexpr uint32_t kPortCount = 4;`
       — no more, no less (no speculative extra methods).
-- [ ] `Subsystems::NezhaHardware` becomes `: public Subsystems::Hardware`;
+- [x] `Subsystems::NezhaHardware` becomes `: public Subsystems::Hardware`;
       `override` added to all four methods; its own `kPortCount`
       redeclaration is removed (inherited from the base); no method body
       changes. `main.cpp`'s existing
       `static_assert(Config::kMotorConfigCount == Subsystems::NezhaHardware::kPortCount, ...)`
       still compiles unchanged (inherited static member lookup).
-- [ ] `source/dev_loop.{h,cpp}` compiles with no `#include "MicroBit.h"` and
+- [x] `source/dev_loop.{h,cpp}` compiles with no `#include "MicroBit.h"` and
       no `Subsystems::Communicator` dependency. `devLoopTick`'s body
       reproduces `main.cpp`'s current loop **exactly**: `hardware.tick(now)`
       (slice 1), statement-triggered `watchdog->feed(now)` +
@@ -71,14 +72,14 @@ proven entirely against the one existing concrete owner,
       2), then the watchdog check that applies
       `buildBroadcastNeutral()`/`buildDrivetrainStop()` and emits
       `EVT dev_watchdog` via `DevLoop`'s `defaultReply`/`defaultReplyCtx`.
-- [ ] `commands/dev_commands.h`'s `DevLoopState::hardware` retypes from
+- [x] `commands/dev_commands.h`'s `DevLoopState::hardware` retypes from
       `Subsystems::NezhaHardware*` to `Subsystems::Hardware*`; its
       `#include "subsystems/nezha_hardware.h"` is replaced with
       `#include "subsystems/hardware.h"`. `dev_commands.cpp`'s
       `handleDevState`'s port-count loop bound reads
       `Subsystems::Hardware::kPortCount` (no file in `commands/` names the
       concrete `NezhaHardware` type any more).
-- [ ] `source/types/clock.h` declares `uint32_t systemClockNow(); // [ms]`;
+- [x] `source/types/clock.h` declares `uint32_t systemClockNow(); // [ms]`;
       `source/types/clock.cpp` (on-target) implements it as
       `return system_timer_current_time();`; `source/types/clock_host.cpp`
       (new, host-only — not yet linked into any build until ticket 004's
@@ -92,7 +93,7 @@ proven entirely against the one existing concrete owner,
       `#ifdef HOST_BUILD` branch returning fixed host identity strings
       (e.g. `"HOST-SIM"` / a fixed serial number), with the on-target
       branch unchanged.
-- [ ] `source/main.cpp`'s loop body collapses to: read the clock, tick the
+- [x] `source/main.cpp`'s loop body collapses to: read the clock, tick the
       Communicator, build a `DevLoopStatement` from any taken statement
       (`nullptr` if none), call `devLoopTick(loop, now, stmt)`. The
       Communicator stays the only CODAL-touching piece in the loop, per the
@@ -101,7 +102,7 @@ proven entirely against the one existing concrete owner,
       deploy (`mbdeploy deploy --build`) and confirm PING, the DEV M/DT
       family, and the watchdog `EVT dev_watchdog` path all round-trip
       byte-identically to pre-ticket behavior.
-- [ ] Existing `tests/sim/unit/*` harnesses still pass with no regression.
+- [x] Existing `tests/sim/unit/*` harnesses still pass with no regression.
 
 ## Testing
 

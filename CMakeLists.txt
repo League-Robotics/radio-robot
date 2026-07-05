@@ -304,6 +304,14 @@ list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/commands/SimCommands\\.cpp$")
 # by the host pytest harness (tests/sim/unit/), which compiles it directly
 # with -DHOST_BUILD via the system C++ compiler, not through this CMake file.
 list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/com/i2c_bus_host\\.cpp$")
+# clock_host.cpp (081-002) is the HOST_BUILD fake implementation of
+# Types::systemClockNow() (source/types/clock_host.cpp) -- it defines the
+# same Types:: symbol as clock.cpp against clock.h's #ifdef HOST_BUILD fork,
+# so it must never be compiled into the ARM firmware (which does not define
+# HOST_BUILD), for the identical reason i2c_bus_host.cpp is excluded above.
+# Not yet consumed by any build as of 081-002; ticket 081-004's host sim
+# CMakeLists.txt is what links it in.
+list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/types/clock_host\\.cpp$")
 
 # Production-build toggle (034-006).
 #
