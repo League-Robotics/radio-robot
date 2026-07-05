@@ -39,6 +39,7 @@ _SETTER_TYPES = frozenset([
     "LineSensorConfig",  "ColorSensorConfig",
     "GripperConfig",     "PortConfig",
     "GripperCommand",
+    "CommunicatorConfig",
 ])
 
 # ---------------------------------------------------------------------------
@@ -378,6 +379,23 @@ _INVENTORY_MAP: dict = {
     ("ColorSensorConfig", "lag_color"):   "RobotConfig::lagColor",
     ("ColorSensorConfig", "integration"): "hal/real/ColorSensor.cpp initApds() ATIME write 0x81 (APDS9960 fallback only)",
     ("ColorSensorConfig", "gain"):        "hal/real/ColorSensor.cpp initApds() CONTROL write 0x8F (APDS9960 fallback only)",
+
+    # -----------------------------------------------------------------------
+    # communicator.proto — no CommunicatorCommand by design (the Communicator
+    # is a source of commands; its faceplate has no command-in channel)
+    # -----------------------------------------------------------------------
+
+    # CommunicatorConfig: comms configuration
+    ("CommunicatorConfig", "radio_channel"): "com/radio.h Radio::_channel (begin()/setChannel(); radiochan::clamp bounds)",
+
+    # CommunicatorState: read-only comms snapshot
+    ("CommunicatorState", "radio_channel"): "com/radio.h Radio::channel()",
+    ("CommunicatorState", "serial_lines"):  "(new field — received-line counter, subsystems/communicator.cpp tick())",
+    ("CommunicatorState", "radio_lines"):   "(new field — received-line counter, subsystems/communicator.cpp tick())",
+
+    # CommunicatorCapabilities: declared comms channels
+    ("CommunicatorCapabilities", "serial"): "com/serial_port.h SerialPort (owned by value)",
+    ("CommunicatorCapabilities", "radio"):  "com/radio.h Radio (owned by value)",
 }
 
 # ---------------------------------------------------------------------------

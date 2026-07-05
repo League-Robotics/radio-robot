@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package robot;
+
+// ---------------------------------------------------------------------------
+// Communicator subsystem messages.
+//
+// There is intentionally NO CommunicatorCommand: the Communicator is a
+// *source* of commands, not a sink — its tick() PRODUCES the command lines
+// the rest of the firmware consumes (see
+// source/subsystems/communicator.h). Its faceplate therefore has no
+// command-in channel and no apply().
+//
+// All fields are dimensionless — no (units) options.
+// ---------------------------------------------------------------------------
+
+// Configuration for the Communicator.
+//
+// radio_channel is the nRF frequency band, clamped to radiochan's 0..35
+// display range (single base-36 LED digit). The proto zero default equals
+// radiochan::kDefault (0), which matches the RadioRelay's default channel.
+// There is no baud field: nothing drives SerialPort::setBaud today; runtime
+// baud stays a SerialPort primitive until a real consumer exists.
+message CommunicatorConfig {
+  uint32 radio_channel = 1;
+}
+
+// Read-only snapshot: current channel plus received-line counters per
+// comms channel (DEV bench visibility).
+message CommunicatorState {
+  uint32 radio_channel = 1;
+  uint32 serial_lines  = 2;  // complete command lines received over serial
+  uint32 radio_lines   = 3;  // complete command lines received over radio
+}
+
+// Declared Communicator capabilities.
+message CommunicatorCapabilities {
+  bool serial = 1;
+  bool radio  = 2;
+}
