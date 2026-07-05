@@ -244,7 +244,7 @@ convention — reproduce with `uv run python tests/bench/friction_rig_soak.py
 
 ---
 
-### Sprint 079-006 stand campaign (2026-07-05, two sessions): the split-phase request/collect design surfaces two NEW triggers, plus a still-unresolved (and NOT persistent-latch) frozen readback
+### Sprint 079-006 stand campaign (2026-07-05, three sessions): the split-phase request/collect design surfaces two NEW triggers — both fixed and confirmed on a clean build
 
 Sprint 079 wires the previously-fused, always-blocking encoder read
 (`readEncoderSettle()`) into a split-phase `requestEncoder()`/
@@ -289,29 +289,40 @@ now fixed in `source/hal/nezha/nezha_motor.cpp`):
    from-boot first write). **Fix**: the first-ever write is now exempted
    from the slew clamp, the same way a stop already is — no prior direction
    exists to slew from, so it goes straight to the requested value.
-3. **Still open, and NOT the escalated-persistent-latch flavor after all**:
-   even with both fixes, the bench unit used for this session (NEZHA2
-   "robot") never showed real pos/vel motion afterward — frozen at exactly
-   the post-reset baseline on every port, `conn=1`/`err=0` throughout,
-   surviving a genuine verified-standstill **hard** reset. The working
-   hypothesis at the end of session 1 was this doc's own documented
-   escalation path ("repeated abuse escalates to a persistent latch...
-   only a Nezha power-domain cycle... clears it") — session 1 ran dozens
-   of cold-start DUTY tests that each hit the reversal-latch trigger before
-   either fix landed. **Session 2 (2026-07-05) falsified this**: the
-   stakeholder performed a genuine physical power-cycle; on a clean
-   reflash, `pos`/`vel` were still frozen at 0.0 on every port tried, at
-   duty levels from 20-80% (ruling out mechanical stiction too). A real
-   power-cycle should clear a persistent latch per this doc's own recovery
-   guidance — it did not restore any encoder motion here, so **whatever is
-   freezing this bench unit's readback is a still-unidentified defect, not
-   (or not only) the reversal-write-train latch this doc otherwise
-   documents so thoroughly**. See
+3. **Sessions 1-2 both reported "still frozen even after a fix / even after
+   a physical power-cycle," and both were wrong — a stale incremental
+   build, not a persistent latch.** After landing the two fixes above,
+   session 1's own hardware repro kept showing pos/vel frozen at exactly
+   the post-reset baseline on every port, surviving a genuine
+   verified-standstill hard reset. The working hypothesis at the end of
+   session 1 was this doc's own documented escalation path ("repeated
+   abuse escalates to a persistent latch... only a Nezha power-domain
+   cycle... clears it"), since session 1 ran dozens of cold-start DUTY
+   tests that each hit the reversal-latch trigger before either fix
+   landed. Session 2: the stakeholder performed a genuine physical
+   power-cycle; `pos`/`vel` were STILL frozen on a clean reflash, at every
+   duty level tried, on every port — seemingly falsifying the
+   persistent-latch hypothesis entirely. **Session 3 resolved it**: a
+   separate debug pass did a genuine `build.py --clean` + flash and
+   confirmed real, working encoder motion (forward drive climbing
+   `pos`/`vel`, closed-loop `VEL 150` converging at the default
+   `vel_filt_alpha`, zero TWIM hangs, 8/8 pings after `DUTY`) — the two
+   fixes were correct and sufficient all along; sessions 1-2 had simply
+   kept re-flashing a **stale hex that still contained the pre-fix
+   sentinel bug**, which re-triggered the reversal-write-train latch on
+   every single cold-start test regardless of what the source tree said.
+   **Verification lesson**: `VER`'s `fw=` reply reports
+   `source/types/protocol.h`'s hand-maintained `FIRMWARE_VERSION`
+   constant, NOT the `pyproject.toml`/`dotconfig` version — the latter is
+   never compiled into the firmware and is a red herring for confirming
+   what's actually running. The real guard against this trap is
+   procedural: always `build.py --clean` immediately before a HITL
+   verification flash, and treat "should be fixed but still shows the old
+   behavior" as a stale-build suspect before reaching for a new hardware
+   hypothesis. See ticket 079-006's own results section (all three
+   sessions) and
    `clasi/issues/nezha-encoder-latch-persists-after-079-006-fixes-power-cycle-needed.md`
-   for the full account and the updated (post-falsification) next steps —
-   top of the list is simply confirming, physically/visually, that the
-   wheel is actually turning during these tests, which no session so far
-   has directly observed.
+   (updated, ready to close) for the full account.
 
 ---
 
@@ -495,8 +506,9 @@ trust the EVT as ground truth for "no wedge"** — diagnose from TLM (below).
   + wedgelab campaign log); sprint 064 `issues/done/` for the
   reset-while-moving and IRQGUARD-query issues;
   `clasi/issues/nezha-encoder-latch-persists-after-079-006-fixes-power-cycle-needed.md`
-  (sprint 079-006's stand campaign — two new fixes; a frozen-readback
-  symptom the power-cycle did NOT clear, falsifying the persistent-latch
-  hypothesis — root cause still open).
+  (sprint 079-006's stand campaign — two new fixes, confirmed correct and
+  sufficient; the frozen-readback symptom that outlasted a physical
+  power-cycle turned out to be a stale incremental build, not a
+  persistent latch — resolved, ready to close).
 - Recording: `host/recordings/recording_20260701_210332.jsonl` (episodes at
   t+15.28 R@748 and t+25.23 L@−501; EVT at t+22.30).
