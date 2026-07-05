@@ -62,3 +62,8 @@ wedgelab/MICROBIT.bin
 # ratio_governor_curve.py, etc.) -- paths are recorded in ticket results,
 # not committed.
 tests/bench/out/
+
+# SQLite WAL-mode sidecar files for the CLASI state DB (.clasi/.clasi.db) --
+# transient; the checkpointed .clasi.db is the tracked source of truth.
+.clasi/*.db-wal
+.clasi/*.db-shm
