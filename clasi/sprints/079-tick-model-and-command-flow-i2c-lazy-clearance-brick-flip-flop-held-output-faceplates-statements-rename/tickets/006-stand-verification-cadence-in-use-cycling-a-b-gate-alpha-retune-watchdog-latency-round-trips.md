@@ -90,10 +90,11 @@ crashing"):
 - [ ] Cadence measurement recorded: per-motor sample period with 2 ports in
       use is within (or better than) the design sketch's ~11-13 ms band.
       **BLOCKED** — see "Stand Campaign Results" below: the encoder value
-      itself never moved this session (a suspected persistent hardware
-      latch, not a cadence defect), so there is no time-varying signal to
-      measure a sample period from. Not measurable until the follow-up
-      issue's power-cycle is done.
+      itself never moved, even after the stakeholder's physical power-cycle
+      (session 2) and a clean reflash, so there is no time-varying signal
+      to measure a sample period from. The persistent-latch hypothesis that
+      motivated the power-cycle recommendation is now falsified; this is an
+      unresolved defect, not a "just needs a power-cycle" situation.
 - [x] In-use-port cycling confirmed: idle ports generate zero bus traffic;
       a newly-addressed port joins the cycle without disturbing existing
       ones. Confirmed by code inspection (`NezhaHal::anyPortInUse()`/
@@ -129,9 +130,11 @@ crashing"):
       blocking.
 - [ ] Lazy-timer A/B run; result recorded (pass or a filed follow-up issue
       if it fails). **BLOCKED** — the diagnostic signal (encoder-constancy)
-      is already constant regardless of the A/B condition this session
-      (see results); a filed follow-up issue covers this
-      (`clasi/issues/nezha-encoder-latch-persists-after-079-006-fixes-power-cycle-needed.md`).
+      is already constant regardless of the A/B condition, confirmed still
+      true after the physical power-cycle (session 2); a filed follow-up
+      issue covers this
+      (`clasi/issues/nezha-encoder-latch-persists-after-079-006-fixes-power-cycle-needed.md`,
+      updated with the falsified-hypothesis finding).
 - [x] Shared-0x10 clobber check run; result recorded. This ticket's own
       root-cause campaign **was** this check, run far more thoroughly than
       a single scripted scenario: it found and fixed a real clobber-
@@ -139,10 +142,10 @@ crashing"):
       hardware inspection, not just a scripted abandon-and-observe pass.
 - [ ] `vel_filt_alpha` retuned via step response; new value(s) recorded and
       applied to `main.cpp`'s bench-placeholder defaults if changed.
-      **BLOCKED** — no working velocity feedback to step-tune against this
-      session (see results); default (`0.3`) left unchanged, per this
-      criterion's own instruction to record evidence either way rather
-      than guess.
+      **BLOCKED** — no working velocity feedback to step-tune against, even
+      after the physical power-cycle (session 2); default (`0.3`) left
+      unchanged, per this criterion's own instruction to record evidence
+      either way rather than guess.
 - [x] 078's standstill-guard constants (`kRestVelocity`/`kRestTicksRequired`)
       watched for spurious/missed hard-reset dispatches during the above —
       if evidence of a problem appears, file a follow-up issue rather than
@@ -158,15 +161,21 @@ crashing"):
       numbers does not satisfy this ticket. See "Stand Campaign Results"
       below.
 
-**Overall gate status: NOT PASSED.** Two real defects were root-caused and
-fixed (see below), but the ticket's central acceptance condition — real,
-working closed-loop motor motion confirmed on the stand — was not achieved
-this session. Per this ticket's own instructions ("If the campaign FAILS
-on a gate you cannot fix within scope, report honestly and leave
-in-progress with a full account"), `status` stays `in-progress`, not
-`done`. See "Stand Campaign Results" for the full account and the
-recommended next step (a physical power-cycle, tracked in the follow-up
-issue).
+**Overall gate status: NOT PASSED (two sessions).** Session 1 root-caused
+and fixed two real defects (a severe TWIM hardware stall and a
+wrong-direction first-write bug — both kept, both real, both covered by
+new host tests) but could not confirm real encoder motion, hypothesizing a
+persistent Nezha-side latch requiring a physical power-cycle. Session 2:
+the stakeholder performed that power-cycle; the hypothesis is **falsified**
+— `pos`/`vel` are still frozen on a clean reflash, at every duty level
+tried, on every port tested. The ticket's central acceptance condition —
+real, working closed-loop motor motion confirmed on the stand — remains
+unmet. Per this ticket's own instructions ("If the campaign FAILS on a
+gate you cannot fix within scope, report honestly and leave in-progress
+with a full account"), `status` stays `in-progress`, not `done`. See
+"Stand Campaign Results" (both sessions) for the full account; the
+follow-up issue has been updated to reflect the falsified hypothesis and
+now needs a rethink, not just another power-cycle.
 
 ## Stand Campaign Results (2026-07-05)
 
@@ -268,18 +277,81 @@ and 9 — `scenarioFirstWriteExemptFromSentinelSlew` /
 `scenarioWriteThrottleInteraction` updated to keep testing the throttle
 specifically now that a first write always converges in one step).
 
+### Power-cycle re-test (2026-07-05, session 2) — persistent-latch hypothesis FALSIFIED
+
+The stakeholder physically power-cycled the robot (full USB unplug, not
+just a reflash). Re-verification steps taken:
+
+1. `mbdeploy list`/`probe` — robot present, `NEZHA2 "robot"`, same UID.
+2. Clean rebuild (`uv run python -m pytest` green, `build.py --clean`) and
+   fresh `mbdeploy deploy robot` to remove any doubt about what was on the
+   chip (both fixes from the section above included).
+3. Confirmed a genuinely fresh boot (`VER`/`PING` showed a low uptime
+   counter immediately after flashing).
+4. Drove `DEV M <n> DUTY` on three different ports (1, 2, 4) in three
+   separate fresh-boot sessions, with `travel_calib` amplified 1000x
+   (`DEV M <n> CFG travel_calib=500`) so even a single raw encoder-count
+   tick would show as a large, easily-visible `pos` swing.
+5. Also drove port 1 at 80% duty (vs. the earlier 20-30% tests) for ~17 s
+   to rule out mechanical stiction/stall as an innocent explanation for
+   "no movement."
+
+**Result: `pos`/`vel` were STILL pinned at exactly 0.0 on every port
+tested, at every duty level tried, immediately after the power-cycle and a
+clean reflash.** `conn=1`/`err=0` throughout; `wsus=1` (motion-qualified)
+fired within ~1 s each time, exactly as before. The firmware itself is
+demonstrably NOT stalled this time (`Root cause 1`'s TWIM-stall fix is
+holding — occasional single-poll misses only, no more multi-second
+blackouts), so this is not the same failure mode as the pre-fix sessions.
+
+**This falsifies the persistent-Nezha-latch hypothesis** from the prior
+session (a physical power-cycle should clear a persistent latch per
+`docs/knowledge/2026-07-04-encoder-wedge.md`'s own recovery guidance, and
+it did not restore any encoder motion). The root cause of the frozen
+`pos`/`vel` value is still unresolved and is NOT explained by either of
+this ticket's two confirmed-and-fixed defects (the TWIM stall and the
+sentinel-write bug) — both are real, both are kept, but neither one is
+*the* explanation for the frozen encoder value itself. Per the
+coordinator's explicit instruction for this outcome, hardware
+experimentation stopped here rather than continuing to guess; see the
+follow-up issue (updated) for a list of what remains untried (a working
+pyOCD/gdb breakpoint session to inspect `resp[]` bytes directly was
+attempted in the prior session but breakpoints were unreliable when
+attaching to an already-running target — this needs either a cleaner gdb
+recipe or a different inspection tool; a visual/physical confirmation
+that the wheel is actually rotating during these tests was never obtained
+by this agent, since it has no way to observe the stand directly).
+
+Because the encoder is still not producing any observable signal, checks
+1 (cadence), 6 (lazy-timer A/B), and 8 (`vel_filt_alpha` retune) remain
+**BLOCKED** — none of them are meaningfully answerable without a working
+`pos`/`vel` reading, and running them against a known-frozen signal would
+produce a false, unusable "result" rather than real data. They are not
+re-attempted this session.
+
 ### Check-by-check results
 
 | # | Check | Result |
 |---|---|---|
-| 1 | Cadence + evenness | **Blocked** — no time-varying encoder signal to measure a sample period from this session (see above). |
+| 1 | Cadence + evenness | **Blocked** — no time-varying encoder signal to measure a sample period from, even after the physical power-cycle (session 2). |
 | 2 | In-use-port cycling | **Pass** — structural (code) + behavioral (hardware) confirmation; see acceptance criteria above. |
 | 3 | Reversal/armor | **Pass (structural + host test)**; hardware timing precision inconclusive due to this session's transport jitter, not a regression finding. |
 | 4 | Watchdog fire latency | **Pass** — 1.011 s vs. 1000 ms configured window (~11 ms check-latency overshoot), via `send_fast` + passive `EVT dev_watchdog` capture (round-trip retries would otherwise feed the watchdog and mask the measurement — a real gotcha hit and worked around this session). |
-| 5 | Statement round-trips | **Pass (serial, required)** — `PING`, `VER`, `DEV M STATE`/`CAPS`, `DEV DT STATE`, `DEV M VOLT` (`ERR unsupported`) all round-tripped correctly. **Radio: skipped, no relay physically present** (`mbdeploy list`/`probe` + `ls /dev/cu.usbmodem*` checked). |
-| 6 | Lazy-timer A/B | **Blocked** — see root-cause campaign; encoder-constancy is the required diagnostic signal and it is already constant regardless of condition this session. Follow-up issue filed. |
-| 7 | Shared-0x10 clobber | **Done** — this ticket's whole root-cause campaign (above) was a far more thorough version of this check: two real defects found and fixed via direct pyOCD/gdb hardware inspection. |
-| 8 | `vel_filt_alpha` retune | **Blocked** — no working velocity feedback to tune against; default (`0.3`) left unchanged. |
+| 5 | Statement round-trips | **Pass (serial, required)** — `PING`, `VER`, `DEV M STATE`/`CAPS`, `DEV DT STATE`, `DEV M VOLT` (`ERR unsupported`) all round-tripped correctly. **Radio: skipped, no relay physically present** (`mbdeploy list`/`probe` + `ls /dev/cu.usbmodem*` checked, both sessions). |
+| 6 | Lazy-timer A/B | **Blocked** — encoder-constancy is the required diagnostic signal; it is constant regardless of condition, even post-power-cycle (session 2). Follow-up issue updated with this finding. |
+| 7 | Shared-0x10 clobber | **Done** — this ticket's whole root-cause campaign (above) was a far more thorough version of this check: two real defects found and fixed via direct pyOCD/gdb hardware inspection. Neither one turned out to be the frozen-encoder-value root cause (see session 2), but both are real, verified fixes kept regardless. |
+| 8 | `vel_filt_alpha` retune | **Blocked** — no working velocity feedback to tune against, even post-power-cycle; default (`0.3`) left unchanged. |
+
+**Session 2 update**: the persistent-Nezha-latch hypothesis that motivated
+recommending a power-cycle is **falsified** — the stakeholder performed a
+full physical power-cycle and, on a clean reflash, `pos`/`vel` are still
+pinned at exactly 0.0 on every port tested (1, 2, 4), at duty levels from
+20% to 80%, with `travel_calib` amplified 1000x. Checks 1, 6, and 8 remain
+blocked; this is a genuinely unresolved defect requiring a rethink (new
+tooling — a working gdb/pyOCD breakpoint session, or a human visually/
+physically confirming the wheel actually turns during a `DUTY` test — not
+just more clearance-timing guesses). See the "Power-cycle re-test" section
+above and the updated follow-up issue.
 
 ### Artifacts
 

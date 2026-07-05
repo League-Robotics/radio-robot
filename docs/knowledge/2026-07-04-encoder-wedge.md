@@ -244,7 +244,7 @@ convention — reproduce with `uv run python tests/bench/friction_rig_soak.py
 
 ---
 
-### Sprint 079-006 stand campaign (2026-07-05): the split-phase request/collect design surfaces two NEW triggers, plus an unresolved persistent latch
+### Sprint 079-006 stand campaign (2026-07-05, two sessions): the split-phase request/collect design surfaces two NEW triggers, plus a still-unresolved (and NOT persistent-latch) frozen readback
 
 Sprint 079 wires the previously-fused, always-blocking encoder read
 (`readEncoderSettle()`) into a split-phase `requestEncoder()`/
@@ -289,20 +289,29 @@ now fixed in `source/hal/nezha/nezha_motor.cpp`):
    from-boot first write). **Fix**: the first-ever write is now exempted
    from the slew clamp, the same way a stop already is — no prior direction
    exists to slew from, so it goes straight to the requested value.
-3. **Still open**: even with both fixes, the bench unit used for this
-   session (NEZHA2 "robot") never showed real pos/vel motion afterward —
-   frozen at exactly the post-reset baseline on every port, `conn=1`/`err=0`
-   throughout, surviving a genuine verified-standstill **hard** reset. Given
-   this session ran dozens of cold-start DUTY tests against the
-   pre-fix code (each one a confirmed reversal-latch trigger, back to
-   back, on every port) before either fix landed, the most likely
-   explanation is this doc's own documented escalation path: "repeated
-   abuse escalates to a persistent latch that no in-band reset clears —
-   only a Nezha power-domain cycle... clears it." A physical power-cycle
-   (not just a reflash) is needed before the fixes above can be
-   conclusively re-verified against a clean unit. See
+3. **Still open, and NOT the escalated-persistent-latch flavor after all**:
+   even with both fixes, the bench unit used for this session (NEZHA2
+   "robot") never showed real pos/vel motion afterward — frozen at exactly
+   the post-reset baseline on every port, `conn=1`/`err=0` throughout,
+   surviving a genuine verified-standstill **hard** reset. The working
+   hypothesis at the end of session 1 was this doc's own documented
+   escalation path ("repeated abuse escalates to a persistent latch...
+   only a Nezha power-domain cycle... clears it") — session 1 ran dozens
+   of cold-start DUTY tests that each hit the reversal-latch trigger before
+   either fix landed. **Session 2 (2026-07-05) falsified this**: the
+   stakeholder performed a genuine physical power-cycle; on a clean
+   reflash, `pos`/`vel` were still frozen at 0.0 on every port tried, at
+   duty levels from 20-80% (ruling out mechanical stiction too). A real
+   power-cycle should clear a persistent latch per this doc's own recovery
+   guidance — it did not restore any encoder motion here, so **whatever is
+   freezing this bench unit's readback is a still-unidentified defect, not
+   (or not only) the reversal-write-train latch this doc otherwise
+   documents so thoroughly**. See
    `clasi/issues/nezha-encoder-latch-persists-after-079-006-fixes-power-cycle-needed.md`
-   for the full account and next steps.
+   for the full account and the updated (post-falsification) next steps —
+   top of the list is simply confirming, physically/visually, that the
+   wheel is actually turning during these tests, which no session so far
+   has directly observed.
 
 ---
 
@@ -486,7 +495,8 @@ trust the EVT as ground truth for "no wedge"** — diagnose from TLM (below).
   + wedgelab campaign log); sprint 064 `issues/done/` for the
   reset-while-moving and IRQGUARD-query issues;
   `clasi/issues/nezha-encoder-latch-persists-after-079-006-fixes-power-cycle-needed.md`
-  (sprint 079-006's stand campaign — two new fixes, one still-open
-  suspected persistent latch pending a physical power-cycle).
+  (sprint 079-006's stand campaign — two new fixes; a frozen-readback
+  symptom the power-cycle did NOT clear, falsifying the persistent-latch
+  hypothesis — root cause still open).
 - Recording: `host/recordings/recording_20260701_210332.jsonl` (episodes at
   t+15.28 R@748 and t+25.23 L@−501; EVT at t+22.30).

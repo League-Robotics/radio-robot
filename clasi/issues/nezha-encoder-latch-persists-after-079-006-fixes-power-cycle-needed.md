@@ -5,9 +5,40 @@ tickets:
 - 079-006
 ---
 
-# Nezha 0x46 readback still frozen after 079-006's fixes — likely a persistent latch requiring a physical power-cycle to verify
+# Nezha 0x46 readback still frozen after 079-006's fixes — power-cycle done, persistent-latch hypothesis FALSIFIED, root cause still open
 
-## Summary
+## UPDATE (2026-07-05, session 2) — power-cycle performed, hypothesis falsified
+
+The stakeholder physically power-cycled the robot (full USB unplug, not
+just a reflash) specifically to test this issue's hypothesis. Re-verified
+with a clean rebuild + fresh `mbdeploy deploy robot` (removing any doubt
+about what was on the chip), then drove `DEV M <n> DUTY` on three ports
+(1, 2, 4) across separate fresh-boot sessions, with `travel_calib`
+amplified 1000x (`DEV M <n> CFG travel_calib=500`) so even a single raw
+encoder count would show as a large `pos` swing, and at duty levels from
+20% up to 80% (to rule out mechanical stiction as an innocent
+explanation).
+
+**Result: `pos`/`vel` are still pinned at exactly 0.0 on every port, at
+every duty level, immediately after the power-cycle and a clean reflash.**
+`conn=1`/`err=0` throughout; `wsus=1` fires within ~1 s each time, same as
+before. The TWIM-stall fix (root cause 1 below) is confirmed still
+holding — no more multi-second blackouts, just ordinary single-poll
+transport misses — so the firmware itself is not stalled this time.
+
+**This falsifies the persistent-latch hypothesis** below: a genuine
+power-cycle should clear a persistent Nezha-side latch per
+`docs/knowledge/2026-07-04-encoder-wedge.md`'s own recovery guidance, and
+it did not restore any encoder motion. **The root cause of the frozen
+`pos`/`vel` reading remains open and unexplained.** Neither of ticket
+079-006's two confirmed, real, hardware-verified fixes (the TWIM stall,
+the sentinel-write bug) turns out to be *the* explanation for the frozen
+encoder value — both are kept regardless (they fix real, independently-
+verified defects), but this issue's core question is still unanswered.
+This needs a rethink, not another power-cycle. See "Updated next steps"
+below (replacing the original "What's needed to close this out").
+
+## Original summary (session 1, superseded by the update above)
 
 Ticket 079-006's stand campaign root-caused and fixed two real defects in
 the sprint 079 split-phase encoder path (see the ticket's "Root-cause
@@ -83,36 +114,54 @@ first surfaced "pos/vel frozen" as a finding) may have already started
 this escalation, since it too exercised `DEV M 1 DUTY 30` through the
 newly-activated flip-flop for the first time ever.
 
-## What's needed to close this out
+## Updated next steps (session 2 — the power-cycle path is exhausted)
 
-1. **A full physical power-cycle** of the robot (USB unplug/replug, or the
-   robot's own power switch if separate from the micro:bit's USB power) —
-   per the doc's own recovery guidance. A microcontroller reflash alone is
-   **not** sufficient; the latch lives in the Nezha board's own
-   (battery-backed) state, independent of the micro:bit's firmware.
-2. **After the power-cycle**, re-run this ticket's stand checks (cadence,
-   in-use cycling, the lazy-timer A/B gate, the shared-0x10 clobber check,
-   `vel_filt_alpha` retune) against a genuinely clean encoder — none of
-   these could be conclusively completed this session, since they all
-   depend on being able to see the encoder actually move.
-3. If the fixes above (clearance timing + sentinel exemption) hold up on a
-   clean unit, this issue can close. If pos/vel STILL never move on a
-   freshly power-cycled unit, that is new, stronger evidence of a deeper
-   defect (possibly still in the request/collect split's interaction with
-   this specific brick, or a hardware fault on this unit) warranting
-   further investigation — ideally starting from the pyOCD/gdb technique
-   this session used to catch the TWIM stall directly (breakpoints on
-   `Hal::NezhaMotor::collectEncoder`/`::tick` were unreliable when attaching
-   to an already-running target via `pyocd gdbserver -M attach`; the default
-   `-M halt` connect mode was more reliable for backtraces but disrupts
-   serial for a few seconds on attach — worth a cleaner recipe for whoever
-   picks this up).
+Since a genuine power-cycle did not help, the remaining candidate
+explanations are all either a deeper software defect or a hardware fault,
+neither of which more blind clearance-timing/firmware guessing is likely
+to resolve efficiently. Ranked by how cheap they are to try:
+
+1. **Physically/visually confirm the wheel actually rotates** during a
+   `DEV M <n> DUTY 80` command. This agent has no way to observe the stand
+   directly and has been trusting ticket 005's original "duty writes work
+   (motors spin)" claim at face value. If the wheel does NOT actually turn
+   (motor stalled, gearbox/coupling issue, wrong motor wired to that
+   channel), the frozen encoder is *correct* behavior and the real bug is
+   elsewhere (or there is no bug — a bench wiring issue). This is the
+   single highest-value, cheapest thing to check next and should happen
+   before any more firmware changes.
+2. **A working gdb/pyOCD inspection of `collectEncoder()`'s `resp[]` bytes
+   live.** Session 1 tried this and could not get breakpoints to reliably
+   fire when attaching to an already-running target via
+   `pyocd gdbserver -M attach`; the default `-M halt` connect mode was more
+   reliable for one-shot backtraces (used successfully to catch the TWIM
+   stall) but halts the target on connect, disrupting serial for a few
+   seconds. Worth trying: `-M halt` + immediately `continue` before setting
+   breakpoints (giving the target a chance to resume normal scheduling
+   first), or a completely different technique (e.g. `DBG I2CLOG`-style
+   instrumentation added to the firmware temporarily, exposing raw
+   transaction bytes over the wire instead of relying on a live debugger
+   attach at all).
+3. **Check whether `hardReset()`'s own atomic path (`readEncoderAtomicRaw()`)
+   ever computes a nonzero snapshot at all**, independent of the split-phase
+   design entirely — if `encOffset_` is *always* 0 across repeated hard
+   resets (not just "unchanged from before," but genuinely always
+   recomputed as 0), that points at the shared atomic-read primitive
+   itself (used at boot and by every hard reset, unmodified since sprint
+   077) rather than anything specific to 079's request/collect split. Not
+   directly observable over the wire today (no verb exposes the raw
+   register or `encOffset_`); would need either a temporary debug verb or
+   the gdb approach above.
+4. Compare directly against a **different Nezha board/unit** if one is
+   available, to separate "this specific unit's hardware" from "the
+   current firmware."
 
 ## Evidence / how to reproduce
 
-See ticket 079-006's own results section for the full session log
-(reproduction commands, gdb backtraces, timing measurements). Quick
-repro once a clean unit is available:
+See ticket 079-006's own results section for the full session log (both
+sessions — reproduction commands, gdb backtraces, timing measurements).
+This reproduces reliably, immediately, on a freshly power-cycled and
+freshly reflashed unit — no special setup or waiting needed:
 
 ```
 mbdeploy deploy robot
