@@ -1,7 +1,7 @@
 ---
 id: 084
 title: Firmware motion verbs and config/pose-set surface
-status: roadmap
+status: planning-docs
 branch: sprint/084-firmware-motion-verbs-and-config-pose-set-surface
 use-cases: []
 issues:
@@ -113,13 +113,29 @@ config-registry wiring into `PoseEstimator::configure()`.
 
 Before tickets can be created, all of the following must be true:
 
-- [ ] Sprint planning documents are complete (sprint.md, use cases, architecture)
-- [ ] Architecture review passed
-- [ ] Stakeholder has approved the sprint plan
+- [x] Sprint planning documents are complete (sprint.md, use cases, architecture)
+- [x] Architecture review passed (self-review APPROVE, `architecture_review` gate recorded 2026-07-06)
+- [x] Stakeholder has approved the sprint plan (`stakeholder_approval` gate
+      recorded 2026-07-06; approved as ONE sprint, no split, all 9 tickets
+      as designed)
 
 ## Tickets
 
-| # | Title | Depends On |
-|---|-------|------------|
+Stakeholder-approved 2026-07-06 (recorded via `stakeholder_approval` gate);
+all nine tickets created. Tickets execute serially in the order listed.
 
-Tickets execute serially in the order listed.
+| # | Title | Issue | Depends On |
+|---|-------|-------|------------|
+| [001](tickets/001-motion-executor-core-planner-ramp-and-stop-condition-engine.md) | Motion executor core: Planner ramp + stop-condition engine | firmware-closed-loop-motion-verbs.md | — |
+| [002](tickets/002-velocity-and-bounded-drive-verbs-s-t-d-stop-plus-stop-clauses.md) | Velocity and bounded-drive verbs: S / T / D / STOP + `stop=` clauses | firmware-closed-loop-motion-verbs.md | 001 |
+| [003](tickets/003-arc-and-turn-verbs-r-turn-rt.md) | Arc and turn verbs: R / TURN / RT | firmware-closed-loop-motion-verbs.md | 002 |
+| [004](tickets/004-go-to-verb-g.md) | Go-to verb: G | firmware-closed-loop-motion-verbs.md | 003 |
+| [005](tickets/005-mode-machine-extend-tlm-mode-to-i-s-t-d-g.md) | Mode machine: extend `TLM mode=` to I/S/T/D/G | firmware-closed-loop-motion-verbs.md | 004 |
+| [006](tickets/006-config-registry-top-level-set-get.md) | Config registry: top-level `SET`/`GET` | firmware-config-and-pose-set-surface.md | 001 |
+| [007](tickets/007-pose-set-surface-si-and-zero-enc.md) | Pose-set surface: `SI` + `ZERO enc` | firmware-config-and-pose-set-surface.md | 006 |
+| [008](tickets/008-otos-command-surface-oi-oz-or-op-ov-ol-oa.md) | OTOS command surface: OI/OZ/OR/OP/OV/OL/OA | firmware-config-and-pose-set-surface.md | 007 |
+| [009](tickets/009-sim-and-hardware-bench-verification.md) | Sim + hardware bench verification (completes both issues) | both | 005, 008 |
+
+See `architecture-update.md` Step 6 (Design Rationale) and the "Sizing /
+structure" section for the full rationale, key-by-key `SET`/`GET` mapping,
+and the no-split recommendation.

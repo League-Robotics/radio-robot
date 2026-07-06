@@ -1,6 +1,13 @@
 ---
-status: pending
+status: in-progress
 sprint: 084
+tickets:
+- 084-001
+- 084-002
+- 084-003
+- 084-004
+- 084-005
+- 084-009
 ---
 
 # Firmware closed-loop motion verbs for the new source/ tree

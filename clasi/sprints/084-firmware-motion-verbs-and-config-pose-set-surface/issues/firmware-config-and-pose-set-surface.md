@@ -1,6 +1,11 @@
 ---
-status: pending
+status: in-progress
 sprint: 084
+tickets:
+- 084-006
+- 084-007
+- 084-008
+- 084-009
 ---
 
 # Firmware config + pose-set surface for the new source/ tree
