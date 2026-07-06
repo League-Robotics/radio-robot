@@ -1,7 +1,7 @@
 ---
 id: 085
 title: Host TestGUI full revival
-status: roadmap
+status: planning-docs
 branch: sprint/085-host-testgui-full-revival
 use-cases: []
 issues:
@@ -91,13 +91,26 @@ time) will cover how the GUI's runners/panels bind to 084's verb surface.
 
 Before tickets can be created, all of the following must be true:
 
-- [ ] Sprint planning documents are complete (sprint.md, use cases, architecture)
-- [ ] Architecture review passed
-- [ ] Stakeholder has approved the sprint plan
+- [x] Sprint planning documents are complete (sprint.md, use cases, architecture)
+- [x] Architecture review passed
+- [x] Stakeholder has approved the sprint plan
 
 ## Tickets
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 001 | Command-row wire-shape audit and fix | — |
+| 002 | Tours: SNAP-poll completion verification and test port | 001 |
+| 003 | Camera GOTO: pure-pursuit verification and new test | 001 |
+| 004 | Operations panel verification: Sync-Pose, Zero-Encoders, Set-Origin, STREAM | — |
+| 005 | Connect-time calibration push verification | — |
+| 006 | Sim-Errors panel verification | — |
+| 007 | Live camera view verification | — |
+| 008 | Camera/relay selection, mode label, and session recorder test port | — |
+| 009 | Final acceptance sweep: full suite green, sim smoke pass, close the program epic | 001, 002, 003, 004, 005, 006, 007, 008 |
 
-Tickets execute serially in the order listed.
+Tickets execute serially in the order listed. Tickets 002-008 have no code
+dependency on each other (independent host modules — see
+`architecture-update.md` Step 4's dependency graph); 001 is sequenced first
+as a fast, low-risk foundation. Ticket 009 depends on all eight and closes
+the program epic (`completes_issue: true`).

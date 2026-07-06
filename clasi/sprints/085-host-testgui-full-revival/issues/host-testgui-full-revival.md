@@ -1,6 +1,16 @@
 ---
-status: pending
+status: in-progress
 sprint: 085
+tickets:
+- 085-001
+- 085-002
+- 085-003
+- 085-004
+- 085-005
+- 085-006
+- 085-007
+- 085-008
+- 085-009
 ---
 
 # Host TestGUI full revival — tours, GOTO, calibration, live view
