@@ -6,7 +6,7 @@ use-cases: [SUC-008]
 depends-on: []
 github-issue: ""
 issue: flip-flop-cadence-below-design-target.md
-completes_issue: true
+completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

@@ -6,7 +6,7 @@ use-cases: [SUC-001, SUC-002, SUC-004]
 depends-on: ["001"]
 github-issue: ""
 issue: motion-turn-drive-terminal-overshoot.md
-completes_issue: true
+completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

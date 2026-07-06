@@ -6,7 +6,7 @@ use-cases: [SUC-005, SUC-006]
 depends-on: []
 github-issue: ""
 issue: nezha-hardware-otos-driver-for-new-source-tree.md
-completes_issue: true
+completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
