@@ -75,7 +75,7 @@ deferrals, not gaps to silently reintroduce without a fresh reason.
       to sprint 083's motion verbs).
 - [x] `source/main.cpp` concatenates `telemetryCommands(telemetryState)` into
       the command table alongside `systemCommands()`/`devCommands(devState)`.
-- [ ] Hardware bench smoke: `STREAM`/`SNAP` round-trip over real serial,
+- [x] Hardware bench smoke: `STREAM`/`SNAP` round-trip over real serial,
       producing well-formed frames with `enc=`/`vel=` visibly changing as the
       robot is driven on the stand. **Deferred to ticket 005's HITL session**
       per this ticket's dispatch instructions (consolidating the bench gate

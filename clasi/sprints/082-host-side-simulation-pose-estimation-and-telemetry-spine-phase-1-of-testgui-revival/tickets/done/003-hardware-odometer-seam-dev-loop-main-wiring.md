@@ -93,7 +93,7 @@ not scheduled by this document.
       `configure()` with the same `msg::DrivetrainConfig` already built for
       `drivetrain.configure(dtConfig)` (one shared boot-config source, no
       duplicated values), and wires `&poseEstimator` into `DevLoop`.
-- [ ] Hardware bench smoke (`.claude/rules/hardware-bench-testing.md`): ARM
+- [x] Hardware bench smoke (`.claude/rules/hardware-bench-testing.md`): ARM
       build behavior for existing verbs is unaffected -- `PING`/`DEV` family
       round-trip identically before and after this ticket's two new
       `devLoopTick` steps land. Record the actual command transcript.
