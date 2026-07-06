@@ -698,6 +698,13 @@ def _build_main_window():  # type: ignore[return]
         lbl.setFixedWidth(46)
         goto_layout.addWidget(lbl)
         sp = QSpinBox()
+        # Object name (085-003): the tour buttons and Sim Errors spinboxes
+        # already expose findChild()-able object names for headless GUI
+        # tests (test_tour1_geometry.py's pattern); the GOTO spinboxes had
+        # none, which made it impossible to drive a real end-to-end GOTO
+        # test through the actual widgets — this was the one genuine gap
+        # ticket 003's new test surfaced.
+        sp.setObjectName(f"goto_spin_{name}")
         sp.setRange(lo, hi)
         sp.setValue(default)
         sp.setFixedWidth(80)
