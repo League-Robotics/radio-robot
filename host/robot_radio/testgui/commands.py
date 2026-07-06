@@ -117,6 +117,37 @@ class CommandSpec(TypedDict, total=False):
 # ---------------------------------------------------------------------------
 # Command schema table
 # ---------------------------------------------------------------------------
+#
+# Wire-shape range audit (sprint 085 ticket 001).  Every ``min``/``max`` below
+# was checked by hand against ``docs/protocol-v2.md`` §10 (Motion Commands),
+# implemented in sprint 084 — the citation is repeated per row so a future
+# editor can re-verify a single row without re-reading the whole section.
+# ``min``/``max`` here are in the UI's units (degrees for ``cdeg_fields``
+# members; the firmware's own cdeg ceiling is noted alongside). Rows NOT
+# listed as degree fields are already in the firmware's native unit (mm,
+# mm/s, ms) and the UI range equals the wire range exactly.
+#
+#   S    -- "### S — Streaming (Watchdog) Drive": left/right -1000..1000 mm/s
+#   T    -- "### T — Timed Drive": left/right -1000..1000 mm/s;
+#           ms 1..30000 ms
+#   D    -- "### D — Distance Drive": left/right -1000..1000 mm/s;
+#           mm 1..10000 mm
+#   R    -- "### R — Arc Drive (constant curvature, open-loop)":
+#           speed -1000..1000 mm/s; radius -10000..10000 mm
+#   TURN -- "### TURN — Absolute-Heading Turn-in-Place (closed-loop, fused
+#           heading)": heading -18000..+18000 cdeg (±180°) — the UI's
+#           heading field instead wraps any entered angle onto (-180, 180]
+#           before conversion (see ``wrap_deg_fields`` below), so it need not
+#           be range-limited to match; eps 10..1800 cdeg (0.1°..18°), i.e.
+#           0.1..18 deg, default 300 cdeg (3°). The UI's eps min stays 0
+#           (below the firmware's own 10 cdeg floor) as the sentinel for
+#           "omit eps entirely, let the firmware apply its own 300 cdeg
+#           default" — see ``optional_zero_fields`` below — but the UI max
+#           must be 18 (deg) = 1800 cdeg, the firmware ceiling.
+#   RT   -- "### RT — Relative Turn-in-Place (closed-loop, encoder arc)":
+#           relAngle -180000..+180000 cdeg (±1800°) = deg -1800..1800.
+#   G    -- "### G — Go-To (relative XY)": x/y -10000..10000 mm;
+#           speed 1..1000 mm/s
 
 COMMANDS: list[CommandSpec] = [
     {
@@ -153,7 +184,7 @@ COMMANDS: list[CommandSpec] = [
         "label": "TURN",
         "params": [
             {"name": "heading", "type": int, "min": -3600, "max": 3600, "default": 90, "unit": "deg"},
-            {"name": "eps",     "type": int, "min": 0,     "max": 180,  "default": 0,  "unit": "deg", "optional": True},
+            {"name": "eps",     "type": int, "min": 0,     "max": 18,   "default": 0,  "unit": "deg", "optional": True},
         ],
         # heading/eps are entered in degrees (human-friendly) but sent in centidegrees.
         # heading accepts any angle; it is wrapped onto (-180, 180] on the wire.
@@ -164,7 +195,7 @@ COMMANDS: list[CommandSpec] = [
     {
         "label": "RT",
         "params": [
-            {"name": "deg", "type": int, "min": -3600, "max": 3600, "default": 90, "unit": "deg"},
+            {"name": "deg", "type": int, "min": -1800, "max": 1800, "default": 90, "unit": "deg"},
         ],
         # deg is entered in degrees (human-friendly) but sent in centidegrees.
         "cdeg_fields": ["deg"],

@@ -1,10 +1,11 @@
 ---
-id: "001"
-title: "Command-row wire-shape audit and fix"
-status: open
-use-cases: [SUC-002]
+id: '001'
+title: Command-row wire-shape audit and fix
+status: done
+use-cases:
+- SUC-002
 depends-on: []
-github-issue: ""
+github-issue: ''
 issue: host-testgui-full-revival.md
 completes_issue: false
 ---
@@ -48,23 +49,23 @@ sprint.
 
 ## Acceptance Criteria
 
-- [ ] `commands.py`'s `TURN` row's `eps` param spec has `max: 18` (degrees;
+- [x] `commands.py`'s `TURN` row's `eps` param spec has `max: 18` (degrees;
       18° × 100 = 1800 cdeg, matching the firmware ceiling). `min` stays 0
       (the omit-if-zero sentinel for "use firmware default of 300 cdeg").
-- [ ] `commands.py`'s `RT` row's `deg` param spec has `min: -1800`,
+- [x] `commands.py`'s `RT` row's `deg` param spec has `min: -1800`,
       `max: 1800` (degrees; ±1800° × 100 = ±180000 cdeg, matching the
       firmware ceiling).
-- [ ] A code comment above `COMMANDS` (or inline on each row) records the
+- [x] A code comment above `COMMANDS` (or inline on each row) records the
       firmware-range citation (`docs/protocol-v2.md` §10 section name) each
       row's `min`/`max` was checked against, so future edits have the
       reference in one place.
-- [ ] `tests/testgui/test_commands.py` (already ported, sprint 083) gains
+- [x] `tests/testgui/test_commands.py` (already ported, sprint 083) gains
       test cases asserting the corrected `TURN.eps` and `RT.deg` bounds,
       and a table-driven test (or equivalent) confirming every row's
       declared range is within the corresponding `docs/protocol-v2.md` §10
       range — so a future accidental range widening is caught by CI, not
       by another manual audit.
-- [ ] No other row's `min`/`max`/`default` changes — this ticket is a
+- [x] No other row's `min`/`max`/`default` changes — this ticket is a
       two-field fix, not a schema rewrite.
 
 ## Testing
