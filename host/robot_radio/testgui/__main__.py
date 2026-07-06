@@ -315,6 +315,10 @@ def _build_main_window():  # type: ignore[return]
     )
     from robot_radio.testgui.traces import TraceModel
     from robot_radio.testgui.canvas import build_canvas
+    from robot_radio.testgui.telemetry_panel import (
+        build_telemetry_panel,
+        is_telemetry_log_line,
+    )
     from robot_radio.testgui.drive import KeyboardDriver
     from robot_radio.testgui.recorder import SessionRecorder, direction_from_marker
     from robot_radio.testgui import camera_prefs
@@ -1031,16 +1035,43 @@ def _build_main_window():  # type: ignore[return]
     right_layout.addWidget(right_splitter)
 
     # Playfield canvas — replaces the ticket-005 placeholder QGraphicsView.
+    # The image is aligned to the TOP of its viewport (was centred): the
+    # playfield rides up under the mode label and any letterbox slack collects
+    # below it, where the telemetry panel and console now live.
     canvas_widget, canvas_ctrl = build_canvas(trace_model)
+    _canvas_view = canvas_widget.findChild(QWidget, "canvas_view")
+    if _canvas_view is not None:
+        _canvas_view.setAlignment(
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
+        )
     right_splitter.addWidget(canvas_widget)
 
-    # Log pane (QPlainTextEdit) — receives timestamped TX/RX lines
+    # Parsed-telemetry breakout panel — sits between the canvas and the
+    # console.  Fed structured TLMFrames by on_frame_ready(); the raw TLM
+    # wire lines are filtered out of the console (see _append_log).
+    telemetry_widget, telemetry_ctrl = build_telemetry_panel()
+    right_splitter.addWidget(telemetry_widget)
+
+    # Log pane (QPlainTextEdit) — receives timestamped TX/RX lines, minus the
+    # telemetry frames (those are broken out in the panel above).
     log_pane = QPlainTextEdit()
     log_pane.setObjectName("log_pane")
     log_pane.setReadOnly(True)
     log_pane.setPlaceholderText("(log output will appear here)")
-    log_pane.setMaximumHeight(200)
+    log_pane.setMinimumHeight(160)
     right_splitter.addWidget(log_pane)
+
+    # Vertical proportions: playfield gets the top third-plus, the telemetry
+    # panel takes its natural compact height, and the console gets a generous
+    # share (larger than the old fixed 200 px cap).  The canvas and console
+    # stretch on resize; the telemetry panel stays fixed.
+    right_splitter.setStretchFactor(0, 5)   # canvas
+    right_splitter.setStretchFactor(1, 0)   # telemetry panel (fixed)
+    right_splitter.setStretchFactor(2, 4)   # console
+    _tlm_h = telemetry_widget.sizeHint().height()
+    _canvas_h = max(360, int((win_h - 60 - _tlm_h) * 0.58))
+    _console_h = max(240, win_h - 60 - _tlm_h - _canvas_h)
+    right_splitter.setSizes([_canvas_h, _tlm_h, _console_h])
 
     splitter.addWidget(right_widget)
 
@@ -1070,10 +1101,14 @@ def _build_main_window():  # type: ignore[return]
             recorder.  Pass ``None`` (default) for internal GUI status messages
             that should not be recorded.
         """
-        log_pane.appendPlainText(text)
-        # Auto-scroll to bottom.
-        sb = log_pane.verticalScrollBar()
-        sb.setValue(sb.maximum())
+        # Telemetry (TLM) frames are broken out in the telemetry panel; keep
+        # them out of the console so command/reply traffic stays readable.
+        # They are still fed to the recorders below so recordings stay complete.
+        if not is_telemetry_log_line(text):
+            log_pane.appendPlainText(text)
+            # Auto-scroll to bottom.
+            sb = log_pane.verticalScrollBar()
+            sb.setValue(sb.maximum())
         # Route TX/RX lines to both recorders: the manual one (only records
         # when the operator started it) and the always-on latest capture.
         if direction is not None:
@@ -1193,11 +1228,13 @@ def _build_main_window():  # type: ignore[return]
             to avoid fighting the worker for the marker's position — only the
             trace paths redraw at the (faster) TLM rate.
             """
+            last_frame = None
             while True:
                 try:
                     frame = _pending_frames.get_nowait()
                 except Exception:
                     break
+                last_frame = frame
                 trace_model.feed(frame)
                 fused_yaw_rad = None
                 if frame.pose is not None:
@@ -1206,6 +1243,9 @@ def _build_main_window():  # type: ignore[return]
                     canvas_ctrl.refresh(update_marker=False)
                 else:
                     canvas_ctrl.refresh(fused_yaw_rad)
+            # Refresh the parsed-telemetry breakout with the freshest frame.
+            if last_frame is not None:
+                telemetry_ctrl.update_frame(last_frame)
 
         @Slot(float, float, float)
         def on_truth_ready(self, x_cm: float, y_cm: float, yaw_rad: float) -> None:
