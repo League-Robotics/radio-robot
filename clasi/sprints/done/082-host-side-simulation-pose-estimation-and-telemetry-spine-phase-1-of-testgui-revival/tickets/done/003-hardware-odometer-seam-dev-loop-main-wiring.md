@@ -1,9 +1,11 @@
 ---
 id: '003'
 title: Hardware::odometer() seam + dev-loop/main wiring
-status: open
-use-cases: [SUC-003]
-depends-on: ['002']
+status: done
+use-cases:
+- SUC-003
+depends-on:
+- '002'
 github-issue: ''
 issue: plan-revive-testgui-against-the-new-tree-simulator.md
 completes_issue: false
@@ -38,20 +40,28 @@ not scheduled by this document.
 
 ## Acceptance Criteria
 
-- [ ] `Subsystems::Hardware` (`source/subsystems/hardware.h`) gains
+- [x] `Subsystems::Hardware` (`source/subsystems/hardware.h`) gains
       `virtual Hal::Odometer* odometer() { return nullptr; }` -- a defaulted,
       non-pure virtual (matching that class's existing `begin()` no-op
       precedent), NOT a pure virtual every owner must implement.
-- [ ] `Subsystems::SimHardware::odometer()` overrides it, returning
+- [x] `Subsystems::SimHardware::odometer()` overrides it, returning
       `&odometer_` (the already-existing `Hal::SimOdometer` member from
-      sprint 081 ticket 003) -- a one-line addition.
-- [ ] `Subsystems::NezhaHardware` requires **zero** source changes -- it
+      sprint 081 ticket 003) -- a one-line addition. (Required one
+      accompanying rename: the class already had a concrete, non-virtual
+      `Hal::SimOdometer& odometer()` test/ctypes accessor that collides with
+      the new virtual `Hal::Odometer* odometer()` seam -- C++ cannot overload
+      on return type alone. Renamed the pre-existing accessor to
+      `simOdometer()`, the same "sim-prefixed concrete twin" pattern already
+      used for `motor()`/`simMotor()` in the same class; updated its 8 call
+      sites in `tests/_infra/sim/sim_api.cpp` and 3 in
+      `tests/sim/unit/sim_hardware_harness.cpp`.)
+- [x] `Subsystems::NezhaHardware` requires **zero** source changes -- it
       compiles and links unchanged, inheriting the `nullptr` default. This is
       verified explicitly (diff shows no touch to `nezha_hardware.{h,cpp}`),
-      not merely assumed.
-- [ ] `source/dev_loop.h`'s `DevLoop` struct gains a
+      not merely assumed. Confirmed via `git diff --stat -- source/subsystems/nezha_hardware.h source/subsystems/nezha_hardware.cpp` (empty output).
+- [x] `source/dev_loop.h`'s `DevLoop` struct gains a
       `Subsystems::PoseEstimator* poseEstimator = nullptr;` field.
-- [ ] `devLoopTick()` gains exactly one new step: after the SECOND
+- [x] `devLoopTick()` gains exactly one new step: after the SECOND
       `hardware.tick(now)` slice (freshest encoder reads) and before the
       watchdog check, it:
       1. Queries `drivetrain.ports()` **unconditionally** (not only inside
@@ -64,21 +74,32 @@ not scheduled by this document.
       4. Calls `loop.poseEstimator->tick(now, leftObs, rightObs,
          odometer present ? &sampledPose : nullptr)` **exactly once** per
          `devLoopTick()` call.
-- [ ] A standalone harness (matching `tests/sim/unit/*_harness.cpp`'s
+- [x] A standalone harness (matching `tests/sim/unit/*_harness.cpp`'s
       ad hoc-compile convention) proves `poseEstimator->tick()` is invoked
       exactly once per `devLoopTick()` pass, not twice -- the same class of
       double-integration hazard sprint 081's `SimHardware` dt=0 guard
       documents for `MotorVelocityPid::compute()`. This is the single most
       important correctness check in this ticket; do not treat it as
-      optional.
-- [ ] `source/main.cpp` constructs a `Subsystems::PoseEstimator`, calls its
+      optional. `tests/sim/unit/dev_loop_pose_estimator_harness.cpp`
+      (+ `test_dev_loop_pose_estimator.py` wrapper): proves this via exact
+      (bit-for-bit) agreement, across many passes, between the REAL
+      `devLoopTick()` and an independently hand-driven once-per-pass
+      reference pipeline -- across drivetrain-inactive, drivetrain-active,
+      and rebound-port-pair scenarios. See the harness's own file header for
+      why a literal "same-instant duplicate call" mutant is a proven
+      mathematical no-op for this exact accumulator+EKF (not evidence of a
+      test gap).
+- [x] `source/main.cpp` constructs a `Subsystems::PoseEstimator`, calls its
       `configure()` with the same `msg::DrivetrainConfig` already built for
       `drivetrain.configure(dtConfig)` (one shared boot-config source, no
       duplicated values), and wires `&poseEstimator` into `DevLoop`.
-- [ ] Hardware bench smoke (`.claude/rules/hardware-bench-testing.md`): ARM
+- [x] Hardware bench smoke (`.claude/rules/hardware-bench-testing.md`): ARM
       build behavior for existing verbs is unaffected -- `PING`/`DEV` family
       round-trip identically before and after this ticket's two new
       `devLoopTick` steps land. Record the actual command transcript.
+      **Deferred to ticket 005 per team-lead direction**: 003's and 004's
+      bench smokes are being consolidated into ticket 005's single HITL
+      session rather than run twice.
 
 ## Implementation Plan
 
@@ -114,6 +135,32 @@ not scheduled by this document.
 - `source/main.cpp` -- construct/configure/wire `PoseEstimator`.
 - `source/subsystems/nezha_hardware.{h,cpp}` -- explicitly **not** modified;
   confirm this in the ticket's own PR/diff review.
+
+**Discovered during execution, not in the plan above, both forced by
+`devLoopTick()`'s own new unconditional `loop.poseEstimator->tick(...)`
+call:**
+
+- `tests/_infra/sim/sim_api.cpp` -- `SimHandle` is the OTHER production
+  caller of the shared `devLoopTick()` (besides `main.cpp`); without wiring a
+  real `Subsystems::PoseEstimator` into its own `DevLoop loop` the same way
+  `main.cpp` now does, every `sim_tick()`/`sim_command()` call would
+  null-deref on `loop.poseEstimator->tick(...)`, crashing the entire
+  `tests/sim` pytest gate. Added a `Subsystems::PoseEstimator poseEstimator`
+  member, `configure()`d from the same `dtConfig` `drivetrain.configure()`
+  already takes, wired via `loop.poseEstimator = &poseEstimator;`.
+- `tests/_infra/sim/sim_api.cpp` / `tests/sim/unit/sim_hardware_harness.cpp`
+  -- `Subsystems::SimHardware` already had a concrete, non-virtual
+  `Hal::SimOdometer& odometer()` test/ctypes accessor predating this ticket
+  (sprint 081-003); it collides with the new virtual `Hal::Odometer*
+  odometer()` override (C++ cannot overload on return type alone). Renamed
+  the pre-existing accessor to `simOdometer()` (matching the class's own
+  `motor()`/`simMotor()` precedent for the identical duality) and updated its
+  8 + 3 call sites respectively.
+- `tests/_infra/sim/CMakeLists.txt` -- added `source/subsystems/
+  pose_estimator.cpp` and `source/estimation/ekf_tiny.cpp` to
+  `FIRMWARE_SOURCES` (now referenced transitively via `dev_loop.cpp` ->
+  `pose_estimator.h`) and `libraries/tinyekf` to the include path
+  (`ekf_tiny.h`'s `tinyekf.h`), per the ticket's own "Build/CMake" note.
 
 ### Testing plan
 

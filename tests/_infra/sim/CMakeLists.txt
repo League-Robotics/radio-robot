@@ -37,9 +37,15 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #   kinematics/*.cpp                        -- pure math, no CODAL deps
 #   subsystems/drivetrain.cpp               -- the Drivetrain faceplate
 #   subsystems/sim_hardware.cpp             -- ticket 003's SimHardware
-#   commands/{arg_parse,command_processor,dev_commands,system_commands}.cpp
-#                                            -- the command dispatch + DEV family
-#   dev_loop.cpp                            -- ticket 002's shared loop body
+#   subsystems/pose_estimator.cpp           -- 082-002/082-003's PoseEstimator
+#   estimation/ekf_tiny.cpp                 -- 082-001's EkfTiny (PoseEstimator's EKF core)
+#   telemetry/tlm_frame.cpp                 -- 082-004's pure TLM frame formatter
+#   commands/{arg_parse,command_processor,dev_commands,system_commands,
+#             telemetry_commands}.cpp       -- the command dispatch + DEV +
+#                                               telemetry (STREAM/SNAP) families
+#   dev_loop.cpp                            -- ticket 002's shared loop body,
+#                                               082-003's pose-estimation step,
+#                                               082-004's periodic TLM step
 #   hal/sim/*.cpp                           -- PhysicsWorld/SimMotor/SimOdometer
 #   hal/velocity_pid.cpp                    -- ticket 001's shared PID
 #   types/clock_host.cpp                    -- HOST_BUILD fake clock
@@ -64,10 +70,14 @@ set(FIRMWARE_SOURCES
     ${KINEMATICS_SOURCES}
     "${SOURCE_DIR}/subsystems/drivetrain.cpp"
     "${SOURCE_DIR}/subsystems/sim_hardware.cpp"
+    "${SOURCE_DIR}/subsystems/pose_estimator.cpp"
+    "${SOURCE_DIR}/estimation/ekf_tiny.cpp"
+    "${SOURCE_DIR}/telemetry/tlm_frame.cpp"
     "${SOURCE_DIR}/commands/arg_parse.cpp"
     "${SOURCE_DIR}/commands/command_processor.cpp"
     "${SOURCE_DIR}/commands/dev_commands.cpp"
     "${SOURCE_DIR}/commands/system_commands.cpp"
+    "${SOURCE_DIR}/commands/telemetry_commands.cpp"
     "${SOURCE_DIR}/dev_loop.cpp"
     ${HAL_SIM_SOURCES}
     "${SOURCE_DIR}/hal/velocity_pid.cpp"
@@ -91,7 +101,12 @@ add_library(firmware_host SHARED
 # "commands/dev_commands.h", ...) — TYPES_DIR is needed only for the bare
 # forms above. Mirrors tests/sim/unit/test_dev_command_outbox.py's two -I
 # flags exactly.
+#
+# libraries/tinyekf: header-only EKF linear-algebra backend (mirrors the root
+# CMakeLists.txt's own include_directories() for the ARM build) --
+# estimation/ekf_tiny.h's #include <tinyekf.h> needs this on the path.
 target_include_directories(firmware_host PRIVATE
     "${SOURCE_DIR}"
     "${SOURCE_DIR}/types"
+    "${REPO_ROOT}/libraries/tinyekf"
 )

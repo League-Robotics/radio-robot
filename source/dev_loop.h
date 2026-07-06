@@ -29,8 +29,10 @@
 
 #include "commands/command_processor.h"
 #include "commands/dev_commands.h"
+#include "commands/telemetry_commands.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
+#include "subsystems/pose_estimator.h"
 
 #if ROBOT_DEV_BUILD
 
@@ -59,6 +61,19 @@ struct DevLoopStatement {
 struct DevLoop {
   Subsystems::Hardware* hardware = nullptr;
   Subsystems::Drivetrain* drivetrain = nullptr;
+  // 082-003: advanced exactly once per devLoopTick() pass, after the
+  // second hardware.tick(now) slice -- see devLoopTick()'s own doc comment
+  // and dev_loop.cpp for the exact call. Never dereferenced if null is ever
+  // assigned here, so every caller (main.cpp; sim_api.cpp) MUST wire a real
+  // Subsystems::PoseEstimator before its first devLoopTick() call, the same
+  // way every caller already must wire hardware/drivetrain.
+  Subsystems::PoseEstimator* poseEstimator = nullptr;
+  // 082-004: read (never mutated by devLoopTick() itself beyond
+  // lastEmitMs/hasLastEmit) by the periodic-emission step below -- every
+  // caller (main.cpp; sim_api.cpp) must wire a real TelemetryState before
+  // its first devLoopTick() call, the same way hardware/drivetrain/
+  // poseEstimator already must be wired.
+  TelemetryState* telemetry = nullptr;
   CommandProcessor* processor = nullptr;
   SerialSilenceWatchdog* watchdog = nullptr;
   DevLoopState* devState = nullptr;
@@ -69,10 +84,33 @@ struct DevLoop {
 
 // devLoopTick -- runs exactly one pass of the shared dev-loop body: the
 // two-slice hardware tick, statement-triggered parse (only when statement !=
-// nullptr), the outbox drain, Drivetrain governance, and the watchdog check
-// -- reproducing main.cpp's pre-081-002 loop body exactly (see dev_loop.cpp
-// for the line-by-line correspondence). now: [ms]. statement: nullptr when
-// no statement is being fed this pass.
+// nullptr), the outbox drain, Drivetrain governance, pose estimation
+// (082-003 -- see below), periodic TLM emission (082-004 -- see below), and
+// the watchdog check -- reproducing main.cpp's pre-081-002 loop body
+// exactly, plus 082-003's and 082-004's additions (see dev_loop.cpp for the
+// line-by-line correspondence). now: [ms]. statement: nullptr when no
+// statement is being fed this pass.
+//
+// Pose estimation (082-003): after the second (freshest-read) hardware.tick()
+// slice, this pass's bound wheel pair (drivetrain.ports(), queried
+// UNCONDITIONALLY -- not gated on drivetrain.active(), since pose estimation
+// passively OBSERVES the bound wheels rather than requiring authority over
+// them) and the active Hardware owner's Hal::Odometer (hardware.odometer(),
+// nullptr for Subsystems::NezhaHardware this sprint) feed EXACTLY ONE
+// loop.poseEstimator->tick() call per pass -- never zero (unconditional),
+// never twice (a single, unbranched call site) -- see pose_estimator.h's own
+// class comment for what tick() does with these.
+//
+// Periodic TLM emission (082-004): the ONE new step, immediately after the
+// pose-estimation call above. If loop.telemetry->periodMs > 0 and enough
+// time has elapsed since loop.telemetry->lastEmitMs (or no frame has been
+// emitted yet -- hasLastEmit), formats and sends exactly one TLM frame on
+// the STREAM-bound loop.telemetry->replyFn/replyCtx, then updates
+// lastEmitMs/hasLastEmit. Never runs when periodMs == 0 (STREAM 0 disabled
+// it) or when no channel has ever issued STREAM (replyFn stays null --
+// telemetryEmit() itself no-ops on a null replyFn). SNAP is unrelated to
+// this step -- it is dispatched like any other command, synchronously,
+// during the statement-parse beat above.
 void devLoopTick(DevLoop& loop, uint32_t now, const DevLoopStatement* statement);
 
 #endif  // ROBOT_DEV_BUILD

@@ -31,12 +31,14 @@
 #include "commands/command_processor.h"
 #include "commands/dev_commands.h"
 #include "commands/system_commands.h"
+#include "commands/telemetry_commands.h"
 #include "dev_loop.h"
 #include "hal/sim/sim_setters.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
+#include "subsystems/pose_estimator.h"
 #include "subsystems/sim_hardware.h"
 #include "types/clock.h"
 
@@ -120,25 +122,36 @@ msg::DrivetrainConfig defaultSimDrivetrainConfig() {
 // ---------------------------------------------------------------------------
 // buildAndWireCommandTable — wires DevLoopState's hardware/drivetrain/
 // watchdog pointers (devCommands()'s own doc comment requires state.watchdog
-// be set before it is called — DEV WD dereferences it) and returns the full
-// command table (liveness + DEV), mirroring main.cpp's own
-// systemCommands()+devCommands() assembly exactly. Packaged as a function
-// (rather than inline in main.cpp's style) so it can run from SimHandle's
-// member-initializer list, wiring devState as a side effect at the exact
-// point CommandProcessor needs the finished table.
+// be set before it is called — DEV WD dereferences it), wires
+// TelemetryState's hardware/drivetrain/poseEstimator pointers (082-004,
+// telemetryCommands()'s own doc comment requires the same before any call),
+// and returns the full command table (liveness + DEV + telemetry), mirroring
+// main.cpp's own systemCommands()+devCommands()+telemetryCommands()
+// assembly exactly. Packaged as a function (rather than inline in main.cpp's
+// style) so it can run from SimHandle's member-initializer list, wiring
+// devState/telemetryState as a side effect at the exact point
+// CommandProcessor needs the finished table.
 // ---------------------------------------------------------------------------
 std::vector<CommandDescriptor> buildAndWireCommandTable(
     DevLoopState& devState,
+    TelemetryState& telemetryState,
     Subsystems::Hardware& hardware,
     Subsystems::Drivetrain& drivetrain,
+    Subsystems::PoseEstimator& poseEstimator,
     SerialSilenceWatchdog& watchdog) {
     devState.hardware = &hardware;
     devState.drivetrain = &drivetrain;
     devState.watchdog = &watchdog;
 
+    telemetryState.hardware = &hardware;
+    telemetryState.drivetrain = &drivetrain;
+    telemetryState.poseEstimator = &poseEstimator;
+
     std::vector<CommandDescriptor> all = systemCommands();
     std::vector<CommandDescriptor> dev = devCommands(devState);
     all.insert(all.end(), dev.begin(), dev.end());
+    std::vector<CommandDescriptor> telemetry = telemetryCommands(telemetryState);
+    all.insert(all.end(), telemetry.begin(), telemetry.end());
     return all;
 }
 
@@ -155,8 +168,10 @@ struct SimHandle {
     MotorConfigSet motorConfigs;
     Subsystems::SimHardware hardware;
     Subsystems::Drivetrain drivetrain;
+    Subsystems::PoseEstimator poseEstimator;   // 082-003: wired into loop below
     SerialSilenceWatchdog watchdog;
     DevLoopState devState;
+    TelemetryState telemetryState;   // 082-004: wired into loop below
     CommandProcessor processor;
     DevLoop loop;
 
@@ -174,7 +189,8 @@ struct SimHandle {
 SimHandle::SimHandle()
     : motorConfigs(defaultMotorConfigSet()),
       hardware(motorConfigs.cfg),
-      processor(buildAndWireCommandTable(devState, hardware, drivetrain, watchdog))
+      processor(buildAndWireCommandTable(devState, telemetryState, hardware, drivetrain,
+                                          poseEstimator, watchdog))
 {
     // Primes all four ports' encoders — parity with main.cpp's
     // hardware.begin() call, before the Drivetrain is configured.
@@ -182,6 +198,10 @@ SimHandle::SimHandle()
 
     msg::DrivetrainConfig dtConfig = defaultSimDrivetrainConfig();
     drivetrain.configure(dtConfig);
+    // 082-003: PoseEstimator reads the SAME dtConfig drivetrain.configure()
+    // just took -- one shared boot-config source, mirroring main.cpp's own
+    // wiring (source/main.cpp).
+    poseEstimator.configure(dtConfig);
 
     // Seed the CFG-delta shadows the same way main.cpp does (DevLoopState's
     // own field comment): the first `DEV M <n> CFG ...`/`DEV DT CFG ...`
@@ -200,6 +220,8 @@ SimHandle::SimHandle()
 
     loop.hardware = &hardware;
     loop.drivetrain = &drivetrain;
+    loop.poseEstimator = &poseEstimator;
+    loop.telemetry = &telemetryState;
     loop.processor = &processor;
     loop.watchdog = &watchdog;
     loop.devState = &devState;
@@ -359,9 +381,9 @@ float sim_get_pwm_r(void* h) {
     return static_cast<float>(static_cast<SimHandle*>(h)->hardware.plant().pwmR());
 }
 
-float sim_get_otos_x(void* h) { return static_cast<SimHandle*>(h)->hardware.odometer().odomX(); }
-float sim_get_otos_y(void* h) { return static_cast<SimHandle*>(h)->hardware.odometer().odomY(); }
-float sim_get_otos_h(void* h) { return static_cast<SimHandle*>(h)->hardware.odometer().odomH(); }
+float sim_get_otos_x(void* h) { return static_cast<SimHandle*>(h)->hardware.simOdometer().odomX(); }
+float sim_get_otos_y(void* h) { return static_cast<SimHandle*>(h)->hardware.simOdometer().odomY(); }
+float sim_get_otos_h(void* h) { return static_cast<SimHandle*>(h)->hardware.simOdometer().odomH(); }
 
 // ---------------------------------------------------------------------------
 // Error-knob setters — each forwards to EXACTLY ONE hal/sim/sim_setters.h
@@ -402,27 +424,27 @@ void sim_set_body_linear_scrub(void* h, float scrub) {
 }
 
 void sim_set_otos_linear_noise(void* h, float sigma) {
-    Hal::setSimOtosLinearNoise(static_cast<SimHandle*>(h)->hardware.odometer(), sigma);
+    Hal::setSimOtosLinearNoise(static_cast<SimHandle*>(h)->hardware.simOdometer(), sigma);
 }
 
 void sim_set_otos_yaw_noise(void* h, float sigma) {
-    Hal::setSimOtosYawNoise(static_cast<SimHandle*>(h)->hardware.odometer(), sigma);
+    Hal::setSimOtosYawNoise(static_cast<SimHandle*>(h)->hardware.simOdometer(), sigma);
 }
 
 void sim_set_otos_linear_scale_error(void* h, float err) {
-    Hal::setSimOtosLinearScaleError(static_cast<SimHandle*>(h)->hardware.odometer(), err);
+    Hal::setSimOtosLinearScaleError(static_cast<SimHandle*>(h)->hardware.simOdometer(), err);
 }
 
 void sim_set_otos_angular_scale_error(void* h, float err) {
-    Hal::setSimOtosAngularScaleError(static_cast<SimHandle*>(h)->hardware.odometer(), err);
+    Hal::setSimOtosAngularScaleError(static_cast<SimHandle*>(h)->hardware.simOdometer(), err);
 }
 
 void sim_set_otos_linear_drift(void* h, float drift) {
-    Hal::setSimOtosLinearDrift(static_cast<SimHandle*>(h)->hardware.odometer(), drift);
+    Hal::setSimOtosLinearDrift(static_cast<SimHandle*>(h)->hardware.simOdometer(), drift);
 }
 
 void sim_set_otos_yaw_drift(void* h, float drift) {
-    Hal::setSimOtosYawDrift(static_cast<SimHandle*>(h)->hardware.odometer(), drift);
+    Hal::setSimOtosYawDrift(static_cast<SimHandle*>(h)->hardware.simOdometer(), drift);
 }
 
 }  // extern "C"

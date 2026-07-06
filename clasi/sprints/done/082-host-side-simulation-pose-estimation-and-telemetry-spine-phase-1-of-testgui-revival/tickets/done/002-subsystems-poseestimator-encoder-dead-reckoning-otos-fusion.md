@@ -1,9 +1,11 @@
 ---
 id: '002'
 title: Subsystems::PoseEstimator -- encoder dead-reckoning + OTOS fusion
-status: open
-use-cases: [SUC-002]
-depends-on: ['001']
+status: done
+use-cases:
+- SUC-002
+depends-on:
+- '001'
 github-issue: ''
 issue: plan-revive-testgui-against-the-new-tree-simulator.md
 completes_issue: false
@@ -35,51 +37,51 @@ two independent readings:
 
 ## Acceptance Criteria
 
-- [ ] `configure(const msg::DrivetrainConfig&)` reads `trackwidth`,
+- [x] `configure(const msg::DrivetrainConfig&)` reads `trackwidth`,
       `rotational_slip`, `ekf_q_xy`, `ekf_q_theta`, `ekf_r_otos_xy`,
       `ekf_r_otos_theta` -- the SAME `msg::DrivetrainConfig` type
       `Drivetrain::configure()` already takes (no new config message; no
       proto change).
-- [ ] Any of the four EKF noise fields arriving as exactly `0.0f` (the proto
+- [x] Any of the four EKF noise fields arriving as exactly `0.0f` (the proto
       zero-default, meaning "never configured") is substituted with a small,
       hardcoded, documented default before being passed to
       `Hal::EkfTiny::init()` -- mirroring the existing `effectiveSlip()`
       zero-as-unset-sentinel pattern already present in the ported
       `Odometry` source (see architecture-update.md Decision 4). A non-zero
       configured value passes through unchanged.
-- [ ] `tick(now, leftObs, rightObs, otosObs)` -- `leftObs`/`rightObs` are
+- [x] `tick(now, leftObs, rightObs, otosObs)` -- `leftObs`/`rightObs` are
       `msg::MotorState` (the SAME per-wheel observation shape
       `Drivetrain::tick()` already takes); `otosObs` is
       `const msg::PoseEstimate*`, nullable.
-- [ ] Encoder delta is computed from `leftObs.position`/`rightObs.position`
+- [x] Encoder delta is computed from `leftObs.position`/`rightObs.position`
       (`Opt<float>`) -- if either lacks `.has`, this tick's update is skipped
       (no update, no crash, no stale-data corruption).
-- [ ] Midpoint-arc integration into `encoderPose()`'s accumulator matches the
+- [x] Midpoint-arc integration into `encoderPose()`'s accumulator matches the
       same `dCenter = (dL+dR)/2`, `dTheta = ((dR-dL)/trackwidth) *
       clampedRotationalSlip` math as the ported `Odometry::predict()`
       (`effectiveSlip()`'s clamp semantics preserved: 0/negative -> 1.0,
       (0, 0.5) -> 0.5 floor, >1.0 -> 1.0 ceiling).
-- [ ] `Hal::EkfTiny::predict(dCenter, dTheta, thetaBefore, dt)` runs every
+- [x] `Hal::EkfTiny::predict(dCenter, dTheta, thetaBefore, dt)` runs every
       tick unconditionally (dead-reckoning always advances, whether or not an
       odometer is present).
-- [ ] `Hal::EkfTiny::updatePosition()`/`updateHeading()` run ONLY when
+- [x] `Hal::EkfTiny::updatePosition()`/`updateHeading()` run ONLY when
       `otosObs != nullptr` AND `otosObs->stamp.valid` is true.
-- [ ] Host unit test: with `otosObs` always `nullptr` across a multi-tick
+- [x] Host unit test: with `otosObs` always `nullptr` across a multi-tick
       sequence, `fusedPose()` equals `encoderPose()` exactly at every tick
       (no correction applied when there is nothing to correct with).
-- [ ] Host unit test: with a synthetic `otosObs` diverging from the
+- [x] Host unit test: with a synthetic `otosObs` diverging from the
       encoder-only path (e.g. offset by a known amount), `fusedPose()`
       differs measurably from `encoderPose()` after several ticks -- proves
       the correction step actually executes when an odometer is present.
-- [ ] Host unit test: a `DrivetrainConfig` with all four EKF fields at
+- [x] Host unit test: a `DrivetrainConfig` with all four EKF fields at
       `0.0f` still produces a finite, non-NaN, non-degenerate `fusedPose()`
       after several predict+correct ticks (the sentinel-default fallback
       prevents the degenerate `Q=0, R=0` case).
-- [ ] `PoseEstimator` holds no `Hal::Motor`/`Hal::Odometer` reference or
+- [x] `PoseEstimator` holds no `Hal::Motor`/`Hal::Odometer` reference or
       pointer as a member -- observations are tick() arguments only, matching
       `Drivetrain`'s own no-stored-HAL-reference discipline (see
       `drivetrain.h`'s class comment).
-- [ ] All new identifiers are lowerCamelCase (methods/functions), no
+- [x] All new identifiers are lowerCamelCase (methods/functions), no
       unit-suffixed names, units in `// [unit]` comment tags; uses only
       `msg::` pose types (never `kinematics/pose2d.h`'s parallel family).
 
