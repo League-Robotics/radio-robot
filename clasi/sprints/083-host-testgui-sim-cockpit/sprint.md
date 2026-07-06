@@ -1,9 +1,9 @@
 ---
 id: 083
 title: Host TestGUI sim cockpit
-status: roadmap
+status: planning-docs
 branch: sprint/083-host-testgui-sim-cockpit
-use-cases: []
+use-cases: [SUC-001, SUC-002, SUC-003, SUC-004, SUC-005, SUC-006]
 issues:
 - host-testgui-sim-cockpit.md
 ---
@@ -90,13 +90,17 @@ reconciliation only, wiring existing TestGUI modules to the existing
 
 Before tickets can be created, all of the following must be true:
 
-- [ ] Sprint planning documents are complete (sprint.md, use cases, architecture)
-- [ ] Architecture review passed
-- [ ] Stakeholder has approved the sprint plan
+- [x] Sprint planning documents are complete (sprint.md, use cases, architecture)
+- [x] Architecture review passed
+- [x] Stakeholder has approved the sprint plan
 
 ## Tickets
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 001 | Reconcile SimTransport and sim-error injection to the 081/082 ctypes ABI | — |
+| 002 | Map keyboard driving to DEV DT VW/STOP/PORTS and fix Operations STOP | 001 |
+| 003 | Fix playfield asset paths and verify trace accumulation end-to-end | 001 |
+| 004 | Package for `uv sync --group gui`, add justfile launch recipe, and port headless TestGUI tests | 001, 002, 003 |
 
 Tickets execute serially in the order listed.

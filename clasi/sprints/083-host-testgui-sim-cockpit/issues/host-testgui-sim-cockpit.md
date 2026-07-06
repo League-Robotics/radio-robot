@@ -1,6 +1,11 @@
 ---
-status: pending
+status: in-progress
 sprint: 083
+tickets:
+- 083-001
+- 083-002
+- 083-003
+- 083-004
 ---
 
 # Host TestGUI sim cockpit — drive + traces + sim-error injection against the new sim
