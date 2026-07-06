@@ -46,6 +46,35 @@ constexpr float kDegToRad = 3.14159265f / 180.0f;
 // sim-testable precedent ticket 084-003 already established for TURN/RT.
 constexpr float kPreRotateOmega = 1.2217f;  // [rad/s]
 
+// velocityShapedMode -- 084-005's Decision 6: the TLM `mode=` wire mapping
+// for every "velocity-shaped" goal kind (VELOCITY/TURN/ROTATION -- the three
+// that stage a raw (v, omega) ramp target with no goal-kind-intrinsic stop
+// of their own, unlike DISTANCE/TIMED/GOTO_GOAL). architecture-update.md
+// (084) Decision 6 (Alternative b, the chosen one): a command that carries
+// at least one stop condition self-terminates and reports
+// `DriveMode::TIMED` ('T' on the wire) -- the SAME bucket plain `T` already
+// uses; an unbounded one reports `DriveMode::STREAMING` ('S') -- the SAME
+// bucket plain `S` already uses. `TURN`/`RT` (source/commands/
+// motion_commands.cpp's handleTURN/handleRT) unconditionally append their
+// own built-in HEADING/ROTATION stop before staging, so cmd.stops_count_val()
+// is never 0 for them -- they always land in the TIMED/'T' bucket, matching
+// the approved mapping table (this ticket's own doc comment) exactly. `R`
+// (handleR) adds a stop only when the wire carries a `stop=` clause -- a
+// bare `R` is open-ended (STREAMING/'S'), a bounded one self-terminates
+// (TIMED/'T'). This is a data-driven rule, not a per-verb special case: it
+// reads only the STAGED msg::PlannerCommand's own stop count, matching
+// source_old's own internal STREAM/TIMED/ARC -> single Goal::VELOCITY
+// collapse (this ticket does the inverse: one Planner-internal GoalKind::
+// VELOCITY collapses back out to two DriveMode values by this one
+// property). No `msg::DriveMode` schema change -- STREAMING/TIMED already
+// exist; this only changes which of the two apply()'s VELOCITY/TURN/
+// ROTATION cases pass to stageGoal() (previously always the bespoke
+// DriveMode::VELOCITY, now never emitted at all -- see dev_loop.cpp's
+// motionVerbForMode(), whose own VELOCITY case is now dead/defensive-only).
+msg::DriveMode velocityShapedMode(const msg::PlannerCommand& cmd) {
+  return cmd.stops_count_val() > 0 ? msg::DriveMode::TIMED : msg::DriveMode::STREAMING;
+}
+
 }  // namespace
 
 void Planner::copyCallerStops(const msg::PlannerCommand& cmd) {
@@ -101,7 +130,7 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now) {
       // v_y-ignored precedent (differential-only this sprint).
       copyCallerStops(cmd);
       targetSpeed_ = cmd.goal.velocity.v_x;
-      stageGoal(cmd.goal.velocity.v_x, cmd.goal.velocity.omega, msg::DriveMode::VELOCITY, cmd);
+      stageGoal(cmd.goal.velocity.v_x, cmd.goal.velocity.omega, velocityShapedMode(cmd), cmd);
       break;
     }
 
@@ -146,9 +175,13 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now) {
 
     case msg::PlannerCommand::GoalKind::TURN: {
       // TurnGoal.speed is an already-signed angular rate -- see class
-      // comment. Turn-in-place: v = 0.
+      // comment. Turn-in-place: v = 0. velocityShapedMode() always resolves
+      // to TIMED here -- handleTURN (motion_commands.cpp) unconditionally
+      // appends its own built-in HEADING stop before staging, so
+      // cmd.stops_count_val() is never 0 (see velocityShapedMode()'s own
+      // doc comment above).
       copyCallerStops(cmd);
-      stageGoal(0.0f, cmd.goal.turn.speed, msg::DriveMode::VELOCITY, cmd);
+      stageGoal(0.0f, cmd.goal.turn.speed, velocityShapedMode(cmd), cmd);
       break;
     }
 
@@ -189,9 +222,12 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now) {
       // RotationGoal.speed is an already-signed angular rate -- see class
       // comment (the arc-target ROTATION stop needs Drivetrain's
       // trackwidth, which this class does not have -- the caller resolves
-      // it). Turn-in-place: v = 0.
+      // it). Turn-in-place: v = 0. velocityShapedMode() always resolves to
+      // TIMED here -- handleRT (motion_commands.cpp) unconditionally
+      // appends its own built-in ROTATION stop before staging (same
+      // reasoning as the TURN case above).
       copyCallerStops(cmd);
-      stageGoal(0.0f, cmd.goal.rotation.speed, msg::DriveMode::VELOCITY, cmd);
+      stageGoal(0.0f, cmd.goal.rotation.speed, velocityShapedMode(cmd), cmd);
       break;
     }
 

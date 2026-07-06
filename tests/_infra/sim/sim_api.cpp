@@ -168,6 +168,7 @@ std::vector<CommandDescriptor> buildAndWireCommandTable(
     Subsystems::Hardware& hardware,
     Subsystems::Drivetrain& drivetrain,
     Subsystems::PoseEstimator& poseEstimator,
+    Subsystems::Planner& planner,
     SerialSilenceWatchdog& watchdog) {
     devState.hardware = &hardware;
     devState.drivetrain = &drivetrain;
@@ -176,6 +177,9 @@ std::vector<CommandDescriptor> buildAndWireCommandTable(
     telemetryState.hardware = &hardware;
     telemetryState.drivetrain = &drivetrain;
     telemetryState.poseEstimator = &poseEstimator;
+    // 084-005: mode='s sole source (Decision 6) -- see telemetry_commands.h's
+    // file header comment.
+    telemetryState.planner = &planner;
 
     motionState.poseEstimator = &poseEstimator;
 
@@ -226,7 +230,7 @@ SimHandle::SimHandle()
     : motorConfigs(defaultMotorConfigSet()),
       hardware(motorConfigs.cfg),
       processor(buildAndWireCommandTable(devState, telemetryState, motionState, hardware,
-                                          drivetrain, poseEstimator, watchdog))
+                                          drivetrain, poseEstimator, planner, watchdog))
 {
     // Primes all four ports' encoders — parity with main.cpp's
     // hardware.begin() call, before the Drivetrain is configured.

@@ -5,6 +5,14 @@ source_old/commands/MotionCommand.{h,cpp} onto the already-generated
 msg::PlannerCommand/PlannerState/PlannerConfig/StopCondition types. This
 ticket lands no wire verb -- Planner is built and tested here in isolation.
 
+``planner_harness.cpp`` also carries ticket 084-005's own `state().mode`
+coverage (Decision 6's `velocityShapedMode()` fold: an unbounded VELOCITY
+goal reports `STREAMING`, a bounded one -- or TURN/RT, which always carry
+their own built-in stop -- reports `TIMED`), since it is the natural
+isolated-Planner-level home for that assertion; the wire-facing `mode=`
+character itself is covered end to end in ``tests/sim/unit/
+test_mode_machine.py``.
+
 Compiles ``planner_harness.cpp`` together with ``source/subsystems/
 planner.cpp`` and its two real dependencies, ``source/motion/
 velocity_ramp.cpp`` and ``source/motion/stop_condition.cpp`` (all

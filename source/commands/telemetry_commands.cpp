@@ -62,6 +62,34 @@ void handleSnap(const ArgList& /*args*/, const char* /*corrId*/,
   telemetryEmit(state, now, replyFn, replyCtx);
 }
 
+// ---------------------------------------------------------------------------
+// modeChar -- 084-005: maps Subsystems::Planner::state().mode (msg::
+// DriveMode) to TLM's single-character `mode=` wire value, per
+// docs/protocol-v2.md §8's I/S/T/D/G vocabulary and architecture-update.md
+// (084) Decision 6. IDLE/STREAMING/TIMED/DISTANCE/GO_TO each map to their
+// own documented character directly -- Decision 6's self-terminating-vs-
+// open-ended collapse (which is what lets STREAMING/TIMED each be shared by
+// more than one wire verb) happens entirely inside planner.cpp's
+// velocityShapedMode(), before this function ever sees the value; this
+// switch has no knowledge of, and does not need, which verb produced a
+// given mode. `VELOCITY` is no longer emitted by planner.cpp at all (see
+// velocityShapedMode()'s own doc comment) -- kept here only as a defensive
+// fallback (mapped to 'I', matching the "no active command" default) rather
+// than assuming that invariant holds forever.
+// ---------------------------------------------------------------------------
+char modeChar(msg::DriveMode mode) {
+  switch (mode) {
+    case msg::DriveMode::IDLE: return 'I';
+    case msg::DriveMode::STREAMING: return 'S';
+    case msg::DriveMode::TIMED: return 'T';
+    case msg::DriveMode::DISTANCE: return 'D';
+    case msg::DriveMode::GO_TO: return 'G';
+    case msg::DriveMode::VELOCITY:
+    default:
+      return 'I';
+  }
+}
+
 }  // namespace
 
 void telemetryEmit(TelemetryState& state, uint32_t now, ReplyFn replyFn, void* replyCtx) {
@@ -84,7 +112,13 @@ void telemetryEmit(TelemetryState& state, uint32_t now, ReplyFn replyFn, void* r
 
   Telemetry::TlmFrameInput in;
   in.now = now;
-  in.mode = state.drivetrain->active() ? 'S' : 'I';
+  // mode= -- 084-005: Subsystems::Planner::state().mode is the SOLE source
+  // (architecture-update.md (084) Decision 6; see this file's header
+  // comment) -- no longer drivetrain.active() (082's minimal I/S-only
+  // precedent). Reading state() fresh here (never cached) also satisfies
+  // the ticket's polling requirement: mode= reflects Planner's true current
+  // mode independent of whether any EVT has been drained.
+  in.mode = modeChar(state.planner->state().mode);
   in.seq = state.seq++;   // shared by every STREAM-driven frame AND SNAP
 
   in.hasEnc = true;

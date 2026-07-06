@@ -442,8 +442,11 @@ Value conventions:
 > - **No channel-rebinding nuance** beyond "the channel that most recently
 >   issued `STREAM` is the bound recipient" — described below under
 >   *Channel binding*.
-> - `mode=` is only ever `I` or `S` this sprint (no `T`/`D`/`G` — those are
->   sprint 083's motion verbs, not yet implemented in `source/`).
+> - `mode=` implements the full `I`/`S`/`T`/`D`/`G` vocabulary as of sprint
+>   084 (ticket 005) — see the *`mode=` field verb-sharing* note below the
+>   table for exactly which verb produces which character, including the
+>   deliberate `TURN`/`RT`/bounded-`R` → `T` collapse (architecture-
+>   update.md (084) Decision 6).
 > - `line=`/`color=`/`ekf_rej=`/`otos_health=`/`wedge=` do not exist in
 >   `source/` yet (no line/color sensor leaves, no EKF rejection counters,
 >   no OTOS health/wedge detector wiring this sprint).
@@ -547,6 +550,30 @@ architecture update, Open Question 1. `encpose=` is current as of Sprint
 | `vel`      | `%d,%d`                     | Left and right actual velocity in mm/s                                 |
 | `line`     | `%u,%u,%u,%u`               | Four greyscale channels (raw ADC counts)                               |
 | `color`    | `%u,%u,%u,%u`               | R, G, B, clear channels (raw ADC counts)                               |
+
+**`mode=` field verb-sharing (084-005).** In `source/` (as opposed to
+`source_old/`, where this table's characters originate), `mode=` is derived
+from exactly one source — `Subsystems::Planner::state().mode` — and is `I`
+if and only if `Planner::hasActiveCommand()` is false. Each character below
+is shared by every verb family listed, not just the one it is named after:
+
+| Wire char | `Planner` state              | Verbs that produce it                                  |
+|-----------|-------------------------------|----------------------------------------------------------|
+| `I`       | no active `Planner` command   | boot; after any `EVT done`/`safety_stop`; after `STOP`   |
+| `S`       | `DriveMode::STREAMING`         | `S`, `VW`, a bare `R` (no `stop=` clause)                |
+| `T`       | `DriveMode::TIMED`             | `T`, an `R` with a `stop=` clause, `TURN`, `RT`          |
+| `D`       | `DriveMode::DISTANCE`          | `D`                                                       |
+| `G`       | `DriveMode::GO_TO`             | `G`                                                       |
+
+`TURN`/`RT`/a `stop=`-bearing `R` sharing `T` with a plain timed drive is a
+**deliberate, approved scope decision** (architecture-update.md (084)
+Decision 6), not an oversight: `msg::DriveMode` has no dedicated `TURN`/
+`ROTATE` value (mirroring `source_old`'s own internal collapse of
+`STREAM`/`TIMED`/`ARC` into a single `Goal::VELOCITY`), and no present
+consumer — including TestGUI's tour-completion logic, which only needs
+`mode=I` at idle — needs to distinguish "turning" from "driving a bounded
+straight" over the wire. A future sprint may revisit this (Decision 6's own
+Open Question 2) if that ever changes; it is not revisited here.
 
 **Timestamp discipline.** `t=` is captured at the start of sensor
 reading (before `snprintf`), not at line-send time.  This ensures the

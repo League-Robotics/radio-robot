@@ -26,21 +26,25 @@ namespace {
 // tick() call (planner.cpp) -- reading state() after tick() would always
 // see IDLE for a just-completed goal.
 //
-// STREAMING/TIMED/DISTANCE each uniquely identify their own verb (S/T/D,
-// 084-002). VELOCITY is shared by THREE verbs (R/TURN/RT, 084-003) --
-// planner.cpp's apply() stages the VELOCITY, TURN, and ROTATION goal kinds
-// identically as DriveMode::VELOCITY -- so DriveMode alone cannot
-// disambiguate them; `activeVelocityVerb` (MotionLoopState, set by
-// handleR/handleTURN/handleRT) is exactly the "different mechanism (e.g.
-// tracking the actual verb string)" this comment used to flag as a future
-// ticket's problem -- see motion_commands.h's field doc comment. GO_TO maps
-// directly onto "G" (084-004): it is `G`'s own unique DriveMode value (both
-// GOTO_GOAL's PRE_ROTATE and PURSUE sub-phases stage DriveMode::GO_TO), so no
-// activeVelocityVerb-style disambiguation is needed here.
+// DISTANCE/GO_TO each still uniquely identify their own verb (D/G). STREAMING
+// and TIMED, as of 084-005's Decision 6 (planner.cpp's velocityShapedMode()),
+// are each now shared by MORE than one verb: STREAMING is `S` or a bare `R`
+// (no stop=); TIMED is `T`, a stop=-bearing `R`, `TURN`, or `RT`. DriveMode
+// alone cannot disambiguate any of these -- `activeVelocityVerb`
+// (MotionLoopState, set by handleR/handleTURN/handleRT, and CLEARED by
+// handleS/handleT/handleD/handleG -- see motion_commands.h's field doc
+// comment) is the disambiguation mechanism: non-empty means the active goal
+// was staged by R/TURN/RT, so it names the actual wire verb; empty falls
+// back to the mode's own plain verb (S/T). `VELOCITY` itself is no longer
+// ever emitted by planner.cpp (see velocityShapedMode()'s doc comment) --
+// this switch keeps a defensive case for it rather than assuming that
+// invariant holds forever.
 const char* motionVerbForMode(msg::DriveMode mode, const char* activeVelocityVerb) {
   switch (mode) {
-    case msg::DriveMode::STREAMING: return "S";
-    case msg::DriveMode::TIMED: return "T";
+    case msg::DriveMode::STREAMING:
+      return (activeVelocityVerb[0] != '\0') ? activeVelocityVerb : "S";
+    case msg::DriveMode::TIMED:
+      return (activeVelocityVerb[0] != '\0') ? activeVelocityVerb : "T";
     case msg::DriveMode::DISTANCE: return "D";
     case msg::DriveMode::VELOCITY: return activeVelocityVerb;
     case msg::DriveMode::GO_TO: return "G";
@@ -167,17 +171,24 @@ void devLoopTick(DevLoop& loop, uint32_t now, const DevLoopStatement* statement)
     // sTimeout (084-002): the streaming-drive watchdog, DISTINCT from
     // loop.watchdog (SerialSilenceWatchdog, fed by ANY statement regardless
     // of content) -- sTimeout is fed ONLY by S's own handler and only
-    // matters while a STREAMING goal is the one actually active; gating the
-    // check on that mode is what "armed" means here (no separate bool is
-    // needed -- a fresh S always re-feeds it on (re)entry to STREAMING, and
-    // a later T/D/STOP simply stops this check from ever running again
-    // until the next S). Firing applies a silent STOP directly to the
-    // Planner (never through its stops_[]/Event mechanism -- that would
-    // misreport reason=time instead of reason=watchdog) and emits the EVT
-    // itself, on the loop-originated reply sink (mirrors the DEV WD
-    // watchdog-fire path below: this EVT was not triggered by any inbound
-    // statement, so it has no per-command replyFn/replyCtx to reuse).
-    if (loop.planner->state().mode == msg::DriveMode::STREAMING && motionState.sTimeout.check(now)) {
+    // matters while a STREAMING goal S/VW itself staged is the one actually
+    // active; a later T/D/STOP simply stops this check from ever running
+    // again until the next S.
+    //
+    // Gating on `mode == STREAMING` ALONE stopped being sufficient once
+    // 084-005's Decision 6 (planner.cpp's velocityShapedMode()) made a bare
+    // `R` (no stop=) ALSO report DriveMode::STREAMING: `R`'s own ticket
+    // (084-003) acceptance is "no stop of its own" -- it must run
+    // open-ended until an explicit STOP or its own stop= clause, NEVER
+    // subject to S's sTimeout (which R's handler never feeds). The extra
+    // `activeVelocityVerb[0] == '\0'` check restores that scoping: `handleS`
+    // clears activeVelocityVerb when it stages a goal (motion_commands.cpp),
+    // so a genuine S/VW-driven STREAMING session always has it empty, while
+    // a bare-R-driven one always has it set to "R" -- excluding exactly the
+    // one case this watchdog must never fire for.
+    if (loop.planner->state().mode == msg::DriveMode::STREAMING &&
+        motionState.activeVelocityVerb[0] == '\0' &&
+        motionState.sTimeout.check(now)) {
         msg::PlannerCommand stopCmd;
         stopCmd.setStop(true);
         loop.planner->apply(stopCmd, now);

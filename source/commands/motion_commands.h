@@ -103,25 +103,40 @@ struct MotionLoopState {
   msg::PlannerCommand command = {};
 
   // Fed only by S's handler; checked once per pass by dev_loop.cpp's new
-  // step, gated on Planner::state().mode == STREAMING (see dev_loop.cpp's
-  // own comment for why that gate is what "armed" means here, rather than a
-  // separate bool).
+  // step, gated on Planner::state().mode == STREAMING AND
+  // activeVelocityVerb[0] == '\0' (see dev_loop.cpp's own comment). The
+  // second half of that gate is 084-005's own addition: once Decision 6
+  // made a bare `R` also report DriveMode::STREAMING, gating on mode alone
+  // would let this S-only watchdog fire on an R-driven session that never
+  // feeds it -- excluded by checking that activeVelocityVerb is empty
+  // (i.e. the active goal is NOT R/TURN/RT).
   StreamingDriveWatchdog sTimeout;
 
   // activeVelocityVerb -- 084-003: disambiguates which wire verb (R, TURN,
   // RT) staged the currently-active goal, for dev_loop.cpp's "EVT done
-  // <verb>" text. Subsystems::Planner's own msg::DriveMode::VELOCITY value
-  // is shared by all three (planner.cpp's apply() stages the VELOCITY,
-  // TURN, and ROTATION goal kinds identically as msg::DriveMode::VELOCITY),
-  // so DriveMode alone cannot disambiguate them -- dev_loop.cpp's own
-  // motionVerbForMode() comment (084-002) flagged this exact ambiguity as
-  // "a different mechanism (e.g. tracking the actual verb string)" for a
-  // later ticket to add; this field is that mechanism. Set by
-  // handleR/handleTURN/handleRT ONLY (never by S/T/D/STOP, which stage
-  // their own unambiguous DriveMode values already handled by
-  // motionVerbForMode()) -- so a stale value here can never leak into an
-  // S/T/D EVT: dev_loop.cpp only reads this field when Planner::state().mode
-  // == VELOCITY, which is reached exclusively via R/TURN/RT.
+  // <verb>" text (and, as of 084-005, for excluding a bare-R-driven
+  // STREAMING session from the sTimeout gate above). Subsystems::Planner's
+  // own msg::DriveMode::VELOCITY value was originally shared by all three
+  // (planner.cpp's apply() staged the VELOCITY, TURN, and ROTATION goal
+  // kinds identically as msg::DriveMode::VELOCITY), so DriveMode alone
+  // could not disambiguate them -- this field is that disambiguation
+  // mechanism, read by dev_loop.cpp's motionVerbForMode().
+  //
+  // 084-005 (Decision 6) update: planner.cpp's velocityShapedMode() now
+  // folds VELOCITY/TURN/ROTATION into msg::DriveMode::STREAMING or ::TIMED
+  // (never ::VELOCITY) depending on whether the staged command carries a
+  // stop condition -- the SAME two DriveMode values plain `S`/`T` already
+  // use. This means the "S/T/D/STOP stage their own unambiguous DriveMode
+  // values" invariant this comment used to state no longer holds: a plain
+  // `T` and a stop=-bearing `R`/`TURN`/`RT` can now both report
+  // DriveMode::TIMED, and a plain `S` and a bare `R` can both report
+  // DriveMode::STREAMING. To keep this field from leaking a STALE R/TURN/RT
+  // verb into a later S/T/D/G completion's EVT text, handleS/handleT/
+  // handleD/handleG (motion_commands.cpp) now explicitly CLEAR this field
+  // (set it to "") when staging their own goal, in addition to handleR/
+  // handleTURN/handleRT SETTING it -- so it is empty whenever the active
+  // goal is NOT one of R/TURN/RT, and motionVerbForMode() falls back to the
+  // mode's own plain verb ("S"/"T") in that case.
   char activeVelocityVerb[8] = "";
 };
 

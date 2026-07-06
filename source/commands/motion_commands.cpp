@@ -406,6 +406,12 @@ void handleS(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
 
   state.command = cmd;
   state.hasCommand = true;
+  // Clear activeVelocityVerb -- 084-005: S stages its own DriveMode::
+  // STREAMING unconditionally, but a bare R also reports STREAMING now
+  // (planner.cpp's velocityShapedMode(), Decision 6); a stale R/TURN/RT
+  // value here must not leak into THIS goal's own "EVT done" text -- see
+  // motion_commands.h's field doc comment.
+  state.activeVelocityVerb[0] = '\0';
 
   // sTimeout: fed HERE, exactly the way DEV DT VW feeds SerialSilenceWatchdog
   // today (i.e. the arriving-command's own dispatch beat) -- but only S
@@ -457,6 +463,12 @@ void handleT(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
 
   state.command = cmd;
   state.hasCommand = true;
+  // Clear activeVelocityVerb -- 084-005: T stages its own DriveMode::TIMED
+  // unconditionally, but a stop=-bearing R/TURN/RT also report TIMED now
+  // (planner.cpp's velocityShapedMode(), Decision 6); a stale R/TURN/RT
+  // value here must not leak into THIS goal's own "EVT done" text -- see
+  // motion_commands.h's field doc comment.
+  state.activeVelocityVerb[0] = '\0';
 
   char body[48];
   snprintf(body, sizeof(body), "l=%d r=%d ms=%d", l, r, ms);
@@ -507,6 +519,12 @@ void handleD(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
 
   state.command = cmd;
   state.hasCommand = true;
+  // Clear activeVelocityVerb -- 084-005: D's DriveMode::DISTANCE is not
+  // itself shared with R/TURN/RT, but clearing here anyway keeps the
+  // invariant uniform (non-empty iff the active goal is R/TURN/RT) rather
+  // than relying on DISTANCE's own non-collision as an implicit assumption
+  // -- see motion_commands.h's field doc comment.
+  state.activeVelocityVerb[0] = '\0';
 
   char body[48];
   snprintf(body, sizeof(body), "l=%d r=%d mm=%d", l, r, mm);
@@ -777,6 +795,11 @@ void handleG(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
 
   state.command = cmd;
   state.hasCommand = true;
+  // Clear activeVelocityVerb -- 084-005: G's DriveMode::GO_TO is not itself
+  // shared with R/TURN/RT, but clearing here anyway keeps the invariant
+  // uniform -- see motion_commands.h's field doc comment (and D's handler
+  // above for the identical reasoning).
+  state.activeVelocityVerb[0] = '\0';
 
   char body[48];
   snprintf(body, sizeof(body), "x=%d y=%d speed=%d", x, y, speed);

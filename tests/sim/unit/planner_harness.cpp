@@ -146,8 +146,12 @@ void scenarioConfigureReachesOwnedRamp() {
 }
 
 // 4. VELOCITY goal_kind: open-ended (no stops_[], no implicit synthesis) --
-// ramps to the commanded twist and stays active indefinitely; state().mode
-// reports VELOCITY.
+// ramps to the commanded twist and stays active indefinitely. 084-005
+// (Decision 6, planner.cpp's velocityShapedMode()): a VELOCITY goal with no
+// caller-supplied stop condition is "open-ended" and reports
+// DriveMode::STREAMING -- the SAME wire-facing bucket a bare `S`/`R` uses --
+// NOT its own bespoke DriveMode::VELOCITY (which planner.cpp no longer ever
+// emits; see that function's own doc comment).
 void scenarioVelocityGoalRampsAndStaysOpenEnded() {
   beginScenario("VELOCITY goal_kind ramps to target and never self-terminates");
   Subsystems::Planner planner;
@@ -160,7 +164,8 @@ void scenarioVelocityGoalRampsAndStaysOpenEnded() {
   planner.apply(cmd, 0);
 
   checkTrue(planner.hasActiveCommand(), "apply() activates the command");
-  checkTrue(planner.state().mode == msg::DriveMode::VELOCITY, "state().mode == VELOCITY");
+  checkTrue(planner.state().mode == msg::DriveMode::STREAMING,
+            "state().mode == STREAMING (084-005: no stop => open-ended)");
 
   for (int i = 0; i < 20; ++i) {
     planner.tick(1000 + i * 100, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});
@@ -172,6 +177,29 @@ void scenarioVelocityGoalRampsAndStaysOpenEnded() {
   msg::DrivetrainCommand held = planner.takeCommand();
   checkFloatNear(held.control.twist.v_x, 80.0f, 0.5f, "ramped to the commanded v_x");
   checkFloatNear(held.control.twist.omega, 1.0f, 0.001f, "ramped to the commanded omega");
+}
+
+// 4b. VELOCITY goal_kind WITH a caller-supplied stop condition: 084-005's
+// velocityShapedMode() reports DriveMode::TIMED instead of ::STREAMING for
+// this SAME goal kind -- the mapping is purely data-driven (stops_count_val()
+// > 0), not a distinct GoalKind. This is the isolated-Planner-level proof
+// that a bounded `R` (motion_commands.cpp's handleR, when the wire carries a
+// stop= clause) lands in the same wire bucket as a plain `T`.
+void scenarioVelocityGoalWithStopReportsTimed() {
+  beginScenario("VELOCITY goal_kind WITH a caller stop reports TIMED, not STREAMING");
+  Subsystems::Planner planner;
+  planner.configure(generousConfig());
+
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::VELOCITY;
+  cmd.goal.velocity.v_x = 80.0f;
+  cmd.stops_count = 1;
+  cmd.stops_[0].kind = msg::StopKind::STOP_TIME;
+  cmd.stops_[0].a = 500.0f;  // [ms]
+  planner.apply(cmd, 0);
+
+  checkTrue(planner.state().mode == msg::DriveMode::TIMED,
+            "state().mode == TIMED (084-005: a caller stop => self-terminating)");
 }
 
 // 5. DISTANCE goal_kind: Planner synthesizes the DISTANCE stop itself from
@@ -285,6 +313,13 @@ void scenarioTurnGoalUsesSignedSpeedAndCallerStop() {
                                         // separately by the TIMED scenario)
   planner.apply(cmd, 0);
 
+  // 084-005: TURN always carries its own caller-supplied HEADING stop (see
+  // handleTURN, motion_commands.cpp), so velocityShapedMode() always
+  // resolves to TIMED here -- never STREAMING, never the retired
+  // DriveMode::VELOCITY.
+  checkTrue(planner.state().mode == msg::DriveMode::TIMED,
+            "state().mode == TIMED (084-005: TURN always self-terminates)");
+
   planner.tick(1000, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, 0.0f));  // baseline
   msg::DrivetrainCommand held = planner.takeCommand();
   checkFloatNear(held.control.twist.v_x, 0.0f, 1e-6f, "TURN commands v=0 (turn-in-place)");
@@ -318,6 +353,12 @@ void scenarioRotationGoalUsesSignedSpeedAndCallerStop() {
                                         // from the SMOOTH ramp-down (covered
                                         // separately by the TIMED scenario)
   planner.apply(cmd, 0);
+
+  // 084-005: RT always carries its own caller-supplied ROTATION stop (see
+  // handleRT, motion_commands.cpp), so velocityShapedMode() always resolves
+  // to TIMED here -- same reasoning as the TURN scenario above.
+  checkTrue(planner.state().mode == msg::DriveMode::TIMED,
+            "state().mode == TIMED (084-005: RT always self-terminates)");
 
   planner.tick(1000, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});  // baseline
   planner.takeCommand();
@@ -490,6 +531,7 @@ int main() {
   scenarioHasCommandTakeCommandClearsEvenWhileIdle();
   scenarioConfigureReachesOwnedRamp();
   scenarioVelocityGoalRampsAndStaysOpenEnded();
+  scenarioVelocityGoalWithStopReportsTimed();
   scenarioDistanceGoalFiresImplicitStopAbrupt();
   scenarioTimedGoalSmoothRampDown();
   scenarioTurnGoalUsesSignedSpeedAndCallerStop();

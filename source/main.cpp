@@ -178,6 +178,9 @@ int main() {
     telemetryState.hardware = &hardware;
     telemetryState.drivetrain = &drivetrain;
     telemetryState.poseEstimator = &poseEstimator;
+    // 084-005: mode='s sole source (Decision 6) -- see telemetry_commands.h's
+    // file header comment.
+    telemetryState.planner = &planner;
 
     // --- Dev loop shared state: watchdog + DEV command wiring. ---
     static SerialSilenceWatchdog watchdog;

@@ -45,9 +45,17 @@
 //                 -- a pure kinematic transform of directly-measured rates,
 //                 never Drivetrain::state(), never EKF velocity-channel state
 //                 (EkfTiny implements none -- see estimation/ekf_tiny.h).
-//   mode=      -- 'I' when !drivetrain.active(), 'S' when active. Exactly
-//                 two values this sprint (no T/D/G -- sprint 083's motion
-//                 verbs).
+//   mode=      -- 084-005: Subsystems::Planner::state().mode (msg::DriveMode),
+//                 mapped to a single wire character -- I/S/T/D/G, per
+//                 docs/protocol-v2.md §8 and architecture-update.md (084)
+//                 Decision 6. 'I' iff Planner::hasActiveCommand() is false;
+//                 STREAMING/TIMED are each shared by more than one verb
+//                 family (Decision 6's self-terminating-vs-open-ended
+//                 collapse -- see planner.cpp's velocityShapedMode()), but
+//                 that collapse is entirely Planner-internal -- this file
+//                 only ever reads the single resulting mode value, never
+//                 Drivetrain::active() (the 082-era source, now fully
+//                 replaced, not supplemented).
 // ---------------------------------------------------------------------------
 
 #include <stdint.h>
@@ -56,6 +64,7 @@
 #include "command_types.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
+#include "subsystems/planner.h"
 #include "subsystems/pose_estimator.h"
 
 #if ROBOT_DEV_BUILD
@@ -69,6 +78,12 @@ struct TelemetryState {
   Subsystems::Hardware* hardware = nullptr;
   Subsystems::Drivetrain* drivetrain = nullptr;
   Subsystems::PoseEstimator* poseEstimator = nullptr;
+  // 084-005: mode='s sole source -- see this file's header comment (Decision
+  // 7 field-sourcing table) and telemetryEmit()'s own use. Never
+  // dereferenced if null, so every caller (main.cpp; sim_api.cpp) MUST wire
+  // a real Subsystems::Planner before its first telemetryEmit()/SNAP call,
+  // the same way hardware/drivetrain/poseEstimator already must be wired.
+  Subsystems::Planner* planner = nullptr;
 
   uint32_t periodMs = 0;      // [ms] 0 = disabled; set (clamped) by STREAM
   uint16_t seq = 0;           // shared by every STREAM-driven frame AND SNAP
