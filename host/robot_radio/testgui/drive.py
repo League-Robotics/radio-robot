@@ -1,16 +1,21 @@
 """robot_radio.testgui.drive — Cursor-key interactive driving with keepalive timer.
 
 Defines ``KeyboardDriver``, which wires ``keyPressEvent`` /
-``keyReleaseEvent`` onto a ``QMainWindow`` and dispatches ``VW`` commands
-over a connected transport.
+``keyReleaseEvent`` onto a ``QMainWindow`` and dispatches ``DEV DT VW``
+commands over a connected transport.
 
 Key mapping
 -----------
-- Up arrow:   ``VW <FWD_SPEED> 0``          (forward)
-- Down arrow: ``VW -<FWD_SPEED> 0``         (back)
-- Left arrow: ``VW 0 <ROTATE_OMEGA_MRADS>``      (rotate CCW)
-- Right arrow: ``VW 0 -<ROTATE_OMEGA_MRADS>``    (rotate CW)
-- Release:    bounded ``STOP`` deadman resend (see below)
+- Up arrow:   ``DEV DT VW <FWD_SPEED> 0 0``           (forward)
+- Down arrow: ``DEV DT VW -<FWD_SPEED> 0 0``          (back)
+- Left arrow: ``DEV DT VW 0 0 <ROTATE_OMEGA>``        (rotate CCW)
+- Right arrow: ``DEV DT VW 0 0 -<ROTATE_OMEGA>``      (rotate CW)
+- Release:    bounded ``DEV DT STOP`` deadman resend (see below)
+
+``attach()`` additionally sends ``DEV DT PORTS <left> <right>`` exactly once
+per drive session — before any ``DEV DT VW`` — using the module-level
+``DEFAULT_PORTS`` pair, so the drivetrain is bound to the ports this driver
+assumes it commands (083-002).
 
 A ~100 ms ``QTimer`` resends the current command while any arrow key is
 held, doubling as a firmware watchdog keepalive.  Qt auto-repeat is
@@ -18,16 +23,16 @@ suppressed: held keys emit one logical press (the timer handles re-sends).
 
 Guard / STOP deadman resend
 ----------------------------
-If the transport reply to a ``VW`` command contains ``vw busy``, the warning
-is logged.  ``STOP`` delivery is not a single fire-and-forget send: a direct
--USB link intermittently drops 15-50% of lines, so a dropped ``STOP`` would
-otherwise leave the robot coasting at the last commanded velocity
-indefinitely.  Instead, on key release ``KeyboardDriver`` sets
-``self._cmd = "STOP"`` and reuses the *existing* non-blocking timer/
-``_send_cmd`` machinery to resend it ``STOP_RESEND_COUNT`` times (counting
-the immediate send-on-release) before actually stopping the timer — no new
-thread, no blocking ``command()`` retry loop on the Qt main thread (a
-blocking acked-retry design was considered and rejected; see
+If the transport reply to a ``DEV DT VW`` command contains ``vw busy``, the
+warning is logged.  ``DEV DT STOP`` delivery is not a single fire-and-forget
+send: a direct-USB link intermittently drops 15-50% of lines, so a dropped
+``DEV DT STOP`` would otherwise leave the robot coasting at the last
+commanded velocity indefinitely.  Instead, on key release ``KeyboardDriver``
+sets ``self._cmd = _STOP_CMD`` (``"DEV DT STOP"``) and reuses the *existing*
+non-blocking timer/``_send_cmd`` machinery to resend it ``STOP_RESEND_COUNT``
+times (counting the immediate send-on-release) before actually stopping the
+timer — no new thread, no blocking ``command()`` retry loop on the Qt main
+thread (a blocking acked-retry design was considered and rejected; see
 ``architecture-update.md`` Design Rationale Decision 4 in sprint 065). With a
 15-50% per-line drop rate, the odds every resend is lost are bounded by
 ``(0.5) ** STOP_RESEND_COUNT`` — vanishingly small at the default count.
@@ -55,7 +60,7 @@ are no-ops on ``SimTransport`` (inherited ``Transport`` default).
 Units
 -----
 ``v``     — linear velocity in mm/s.
-``omega_mrads`` — angular velocity in milli-radians/s; positive = CCW.
+``omega`` — angular velocity in rad/s; positive = CCW.
 
 Lazy PySide6 import
 -------------------
@@ -88,10 +93,22 @@ _log = logging.getLogger(__name__)
 #: Forward / back speed.
 FWD_SPEED: int = 200  # [mm/s]
 
-#: Rotate speed in milli-radians/s; positive = CCW.
-ROTATE_OMEGA_MRADS: int = 500
+#: Rotate speed; positive = CCW.
+ROTATE_OMEGA: float = 0.5  # [rad/s]
 
-#: Number of times ``STOP`` is (re)sent on key release / focus-loss,
+#: Default drivetrain port pair (left, right) bound once per drive session
+#: via ``DEV DT PORTS`` — matches the firmware boot default and the sim's
+#: default plant binding (see tests/_infra/sim/firmware.py's ``vel()``
+#: docstring: "port 1=LEFT, port 2=RIGHT").
+DEFAULT_PORTS: tuple[int, int] = (1, 2)
+
+#: Wire command sent by the bounded STOP deadman-resend sequence (see
+#: STOP_RESEND_COUNT below).  Also doubles as ``self._cmd``'s sentinel value
+#: during that resend window (compared via ``_cmd == _STOP_CMD`` /
+#: ``_cmd != _STOP_CMD``).
+_STOP_CMD: str = "DEV DT STOP"
+
+#: Number of times ``_STOP_CMD`` is (re)sent on key release / focus-loss,
 #: counting the initial send-on-release itself.  Reuses the existing
 #: ``QTimer``/``_send_cmd`` resend machinery (no new thread, no blocking
 #: ``command()`` retry — see architecture-update.md Design Rationale
@@ -126,10 +143,10 @@ def _qt_arrow_keys() -> dict[int, str]:
         from PySide6.QtCore import Qt  # type: ignore[import-untyped]
 
         _ARROW_KEYS = {
-            int(Qt.Key.Key_Up):    f"VW {FWD_SPEED} 0",
-            int(Qt.Key.Key_Down):  f"VW -{FWD_SPEED} 0",
-            int(Qt.Key.Key_Left):  f"VW 0 {ROTATE_OMEGA_MRADS}",
-            int(Qt.Key.Key_Right): f"VW 0 -{ROTATE_OMEGA_MRADS}",
+            int(Qt.Key.Key_Up):    f"DEV DT VW {FWD_SPEED} 0 0",
+            int(Qt.Key.Key_Down):  f"DEV DT VW -{FWD_SPEED} 0 0",
+            int(Qt.Key.Key_Left):  f"DEV DT VW 0 0 {ROTATE_OMEGA}",
+            int(Qt.Key.Key_Right): f"DEV DT VW 0 0 -{ROTATE_OMEGA}",
         }
     return _ARROW_KEYS
 
@@ -199,7 +216,7 @@ class KeyboardDriver:
         self._transport: "Transport | None" = None
         self._window: "object | None" = None
         self._timer: "object | None" = None   # QTimer, created lazily
-        self._cmd: str | None = None          # current VW command, or "STOP" during the deadman resend window
+        self._cmd: str | None = None          # current VW command, or _STOP_CMD during the deadman resend window
         self._stop_resends_left: int = 0      # remaining bounded STOP resends (see STOP_RESEND_COUNT)
         self._keepalive_armed: bool = False   # tracks whether transport.arm_keepalive() is currently in effect
         # Currently-held arrow keys (CR-15 item 8). Releasing one key while
@@ -235,6 +252,19 @@ class KeyboardDriver:
 
         self._transport = transport
         self._window = window
+
+        # One-time DEV DT PORTS bind for this drive session -- must happen
+        # before any DEV DT VW so the drivetrain is bound to the ports this
+        # driver assumes it commands.  Module-level DEFAULT_PORTS matches
+        # the firmware boot default and the sim's default plant binding (see
+        # tests/_infra/sim/firmware.py's vel() docstring: "port 1=LEFT, port
+        # 2=RIGHT").  Transport-agnostic: sent for every Transport subclass,
+        # not just SimTransport.
+        left, right = DEFAULT_PORTS
+        try:
+            transport.send(f"DEV DT PORTS {left} {right}")
+        except Exception as exc:
+            _log.warning("KeyboardDriver: failed to bind DEV DT PORTS: %s", exc)
 
         # Create the keepalive timer (lazy PySide6 import).
         from PySide6.QtCore import QTimer  # type: ignore[import-untyped]
@@ -374,11 +404,11 @@ class KeyboardDriver:
         leave the robot driving indefinitely.  Focus loss is treated as an
         implicit release of EVERY currently-held key (``self._held_keys`` is
         cleared): if a key is currently tracked as held (``self._cmd`` is a
-        VW line, not ``None``/``"STOP"``), this triggers the same bounded
-        STOP deadman-resend sequence a real key-release would.  Forwarded to
-        the original ``focusOutEvent`` handler afterward.
+        VW line, not ``None``/``_STOP_CMD``), this triggers the same bounded
+        ``DEV DT STOP`` deadman-resend sequence a real key-release would.
+        Forwarded to the original ``focusOutEvent`` handler afterward.
         """
-        if self._cmd is not None and self._cmd != "STOP":
+        if self._cmd is not None and self._cmd != _STOP_CMD:
             self._held_keys.clear()
             self._start_stop_deadman()
 
@@ -395,10 +425,10 @@ class KeyboardDriver:
         While a key is held, ``self._cmd`` is the VW line and this is an
         unbounded keepalive resend, exactly as before.  During the bounded
         STOP deadman window after a release or focus-loss, ``self._cmd`` is
-        ``"STOP"`` and this same unconditional resend serves as the next
-        deadman tick -- :meth:`_send_cmd` (not this method) tracks the
-        remaining count and stops the timer once the sequence completes, so
-        no special-casing is needed here.
+        ``_STOP_CMD`` (``"DEV DT STOP"``) and this same unconditional resend
+        serves as the next deadman tick -- :meth:`_send_cmd` (not this
+        method) tracks the remaining count and stops the timer once the
+        sequence completes, so no special-casing is needed here.
         """
         self._send_cmd()
 
@@ -407,12 +437,12 @@ class KeyboardDriver:
     # ------------------------------------------------------------------
 
     def _start_stop_deadman(self) -> None:
-        """Begin (or restart) the bounded STOP deadman-resend sequence.
+        """Begin (or restart) the bounded ``DEV DT STOP`` deadman-resend sequence.
 
-        Sets ``self._cmd = "STOP"`` and sends it immediately -- the first of
-        ``STOP_RESEND_COUNT`` total sends -- then leaves the existing
+        Sets ``self._cmd = _STOP_CMD`` and sends it immediately -- the first
+        of ``STOP_RESEND_COUNT`` total sends -- then leaves the existing
         keepalive timer running so :meth:`_on_timer_tick` keeps resending
-        ``STOP`` for the remaining ``STOP_RESEND_COUNT - 1`` ticks
+        ``DEV DT STOP`` for the remaining ``STOP_RESEND_COUNT - 1`` ticks
         (:meth:`_send_cmd` counts down and stops the timer once exhausted).
         Called from both a real key-release and a focus-loss event, since
         both represent the same "key is no longer held" transition. No new
@@ -428,7 +458,7 @@ class KeyboardDriver:
             self._cmd = None
             return
 
-        self._cmd = "STOP"
+        self._cmd = _STOP_CMD
         self._stop_resends_left = STOP_RESEND_COUNT
         self._start_timer()
         self._send_cmd()
@@ -436,7 +466,7 @@ class KeyboardDriver:
     def _send_cmd(self) -> None:
         """Send ``self._cmd`` via the transport if one is set.
 
-        When ``self._cmd == "STOP"`` (the bounded deadman-resend window),
+        When ``self._cmd == _STOP_CMD`` (the bounded deadman-resend window),
         this additionally counts the send against ``STOP_RESEND_COUNT`` and,
         once exhausted, stops the keepalive timer and clears ``self._cmd``
         -- this is the single place that ends the deadman sequence, whether
@@ -452,7 +482,7 @@ class KeyboardDriver:
         except Exception as exc:
             _log.warning("KeyboardDriver: failed to send %r: %s", self._cmd, exc)
 
-        if self._cmd == "STOP":
+        if self._cmd == _STOP_CMD:
             self._stop_resends_left -= 1
             if self._stop_resends_left <= 0:
                 self._stop_timer()
