@@ -88,6 +88,23 @@ void devLoopTick(DevLoop& loop, uint32_t now, const DevLoopStatement* statement)
     }
     loop.poseEstimator->tick(now, leftObs, rightObs, odometer != nullptr ? &sampledPose : nullptr);
 
+    // Periodic TLM emission (082-004; dev_loop.h's own doc comment has the
+    // full rationale). Gated on periodMs > 0 (STREAM 0 disables this
+    // entirely) and on enough time having elapsed since the last emission --
+    // or no emission having happened yet (hasLastEmit), so the very first
+    // pass after a channel issues STREAM emits immediately rather than
+    // waiting a full period. telemetryEmit() itself no-ops on a null
+    // replyFn (no channel has ever issued STREAM), so this is safe to call
+    // unconditionally once the time gate opens.
+    TelemetryState& telemetry = *loop.telemetry;
+    if (telemetry.periodMs > 0 &&
+        (!telemetry.hasLastEmit ||
+         (now - telemetry.lastEmitMs) >= telemetry.periodMs)) {
+        telemetryEmit(telemetry, now, telemetry.replyFn, telemetry.replyCtx);
+        telemetry.lastEmitMs = now;
+        telemetry.hasLastEmit = true;
+    }
+
     if (loop.watchdog->check(now)) {
         // Applied IMMEDIATELY, not staged via the outbox -- the caller is
         // the top of the call tree, already the visible mover of every

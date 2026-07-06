@@ -1,0 +1,92 @@
+"""Off-hardware acceptance proof for ticket 082-004 (SUC-004): Telemetry::
+buildTlmFrame() (source/telemetry/tlm_frame.{h,cpp}) -- the pure, stateless
+TLM frame-formatting function the STREAM/SNAP command family
+(commands/telemetry_commands.{h,cpp}) builds on.
+
+Compiles ``tlm_frame_harness.cpp`` together with ``source/telemetry/
+tlm_frame.cpp`` using the system C++ compiler, runs the resulting binary,
+and asserts it exits 0. Mirrors ``test_velocity_pid.py``'s compile-and-run
+pattern (081-001): no hardware, no CODAL, no CMake -- just tlm_frame.{h,cpp}
+and messages/common.h (header-only) compiled standalone, since
+Telemetry::buildTlmFrame() has no DevLoop/Hardware/Drivetrain/PoseEstimator
+dependency at all (that impure wiring lives in
+commands/telemetry_commands.cpp instead, exercised end-to-end via the
+ctypes sim harness in ticket 005).
+
+Collected under ``tests/sim/unit/`` alongside the existing
+``test_velocity_pid.py``/``test_dev_loop_pose_estimator.py`` -- already
+within ``pyproject.toml``'s ``testpaths = ["tests/sim", "tests/unit"]``, no
+configuration change needed.
+"""
+
+import pathlib
+import subprocess
+import sys
+
+import pytest
+
+# tests/sim/unit/test_tlm_frame.py -> unit -> sim -> tests -> repo root
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+_SOURCE_DIR = _REPO_ROOT / "source"
+_HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "tlm_frame_harness.cpp"
+_TLM_FRAME_SRC = _SOURCE_DIR / "telemetry" / "tlm_frame.cpp"
+
+# messages/common.h documents its own target as "CODAL C++11" -- build the
+# host harness to the same standard so it exercises exactly the language
+# subset the firmware itself uses.
+_CXX_STANDARD = "c++11"
+
+
+def _find_cxx_compiler() -> str:
+    """Locate a usable system C++ compiler, preferring c++ then clang++/g++."""
+    import shutil
+
+    for candidate in ("c++", "clang++", "g++"):
+        found = shutil.which(candidate)
+        if found:
+            return found
+    pytest.skip("no system C++ compiler (c++/clang++/g++) found on PATH")
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def test_tlm_frame_harness_compiles_and_passes(tmp_path):
+    """Compile the Telemetry::buildTlmFrame() harness and assert every scenario passes."""
+    assert _HARNESS_SRC.is_file(), f"harness source missing: {_HARNESS_SRC}"
+    assert _TLM_FRAME_SRC.is_file(), f"tlm_frame.cpp missing: {_TLM_FRAME_SRC}"
+    assert _SOURCE_DIR.is_dir(), f"source/ tree missing: {_SOURCE_DIR}"
+
+    cxx = _find_cxx_compiler()
+    binary = tmp_path / "tlm_frame_harness"
+
+    compile_result = subprocess.run(
+        [
+            cxx,
+            f"-std={_CXX_STANDARD}",
+            "-Wall",
+            "-Wextra",
+            "-I",
+            str(_SOURCE_DIR),
+            "-o",
+            str(binary),
+            str(_HARNESS_SRC),
+            str(_TLM_FRAME_SRC),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert compile_result.returncode == 0, (
+        "tlm_frame_harness.cpp failed to compile:\n"
+        f"stdout:\n{compile_result.stdout}\nstderr:\n{compile_result.stderr}"
+    )
+
+    run_result = subprocess.run(
+        [str(binary)], capture_output=True, text=True,
+    )
+    assert run_result.returncode == 0, (
+        "tlm_frame_harness reported a scenario failure "
+        f"(exit {run_result.returncode}):\n{run_result.stdout}\n{run_result.stderr}"
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__, "-v"]))

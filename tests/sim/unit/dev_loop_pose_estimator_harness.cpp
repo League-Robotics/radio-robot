@@ -65,6 +65,7 @@
 
 #include "commands/command_processor.h"
 #include "commands/dev_commands.h"
+#include "commands/telemetry_commands.h"
 #include "dev_loop.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
@@ -221,11 +222,20 @@ void runComparison(uint32_t leftPort, uint32_t rightPort, float leftDuty, float 
   poseA.configure(dtConfig);
   SerialSilenceWatchdog watchdogA;   // default 1000ms window; never fed, never fires (see below)
   DevLoopState devStateA;
+  // 082-004: TelemetryState's periodMs defaults to 0 (STREAM never issued in
+  // this harness), so devLoopTick()'s periodic-emission step is a no-op --
+  // wired only to satisfy DevLoop::telemetry's non-null contract (dev_loop.h),
+  // never affecting the encoder/fused-pose comparison this harness makes.
+  TelemetryState telemetryA;
+  telemetryA.hardware = &hardwareA;
+  telemetryA.drivetrain = &drivetrainA;
+  telemetryA.poseEstimator = &poseA;
   CommandProcessor processorA;   // empty table -- never dispatched (statement is always nullptr)
   DevLoop loopA;
   loopA.hardware = &hardwareA;
   loopA.drivetrain = &drivetrainA;
   loopA.poseEstimator = &poseA;
+  loopA.telemetry = &telemetryA;
   loopA.processor = &processorA;
   loopA.watchdog = &watchdogA;
   loopA.devState = &devStateA;

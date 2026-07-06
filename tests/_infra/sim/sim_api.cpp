@@ -31,6 +31,7 @@
 #include "commands/command_processor.h"
 #include "commands/dev_commands.h"
 #include "commands/system_commands.h"
+#include "commands/telemetry_commands.h"
 #include "dev_loop.h"
 #include "hal/sim/sim_setters.h"
 #include "messages/drivetrain.h"
@@ -121,25 +122,36 @@ msg::DrivetrainConfig defaultSimDrivetrainConfig() {
 // ---------------------------------------------------------------------------
 // buildAndWireCommandTable — wires DevLoopState's hardware/drivetrain/
 // watchdog pointers (devCommands()'s own doc comment requires state.watchdog
-// be set before it is called — DEV WD dereferences it) and returns the full
-// command table (liveness + DEV), mirroring main.cpp's own
-// systemCommands()+devCommands() assembly exactly. Packaged as a function
-// (rather than inline in main.cpp's style) so it can run from SimHandle's
-// member-initializer list, wiring devState as a side effect at the exact
-// point CommandProcessor needs the finished table.
+// be set before it is called — DEV WD dereferences it), wires
+// TelemetryState's hardware/drivetrain/poseEstimator pointers (082-004,
+// telemetryCommands()'s own doc comment requires the same before any call),
+// and returns the full command table (liveness + DEV + telemetry), mirroring
+// main.cpp's own systemCommands()+devCommands()+telemetryCommands()
+// assembly exactly. Packaged as a function (rather than inline in main.cpp's
+// style) so it can run from SimHandle's member-initializer list, wiring
+// devState/telemetryState as a side effect at the exact point
+// CommandProcessor needs the finished table.
 // ---------------------------------------------------------------------------
 std::vector<CommandDescriptor> buildAndWireCommandTable(
     DevLoopState& devState,
+    TelemetryState& telemetryState,
     Subsystems::Hardware& hardware,
     Subsystems::Drivetrain& drivetrain,
+    Subsystems::PoseEstimator& poseEstimator,
     SerialSilenceWatchdog& watchdog) {
     devState.hardware = &hardware;
     devState.drivetrain = &drivetrain;
     devState.watchdog = &watchdog;
 
+    telemetryState.hardware = &hardware;
+    telemetryState.drivetrain = &drivetrain;
+    telemetryState.poseEstimator = &poseEstimator;
+
     std::vector<CommandDescriptor> all = systemCommands();
     std::vector<CommandDescriptor> dev = devCommands(devState);
     all.insert(all.end(), dev.begin(), dev.end());
+    std::vector<CommandDescriptor> telemetry = telemetryCommands(telemetryState);
+    all.insert(all.end(), telemetry.begin(), telemetry.end());
     return all;
 }
 
@@ -159,6 +171,7 @@ struct SimHandle {
     Subsystems::PoseEstimator poseEstimator;   // 082-003: wired into loop below
     SerialSilenceWatchdog watchdog;
     DevLoopState devState;
+    TelemetryState telemetryState;   // 082-004: wired into loop below
     CommandProcessor processor;
     DevLoop loop;
 
@@ -176,7 +189,8 @@ struct SimHandle {
 SimHandle::SimHandle()
     : motorConfigs(defaultMotorConfigSet()),
       hardware(motorConfigs.cfg),
-      processor(buildAndWireCommandTable(devState, hardware, drivetrain, watchdog))
+      processor(buildAndWireCommandTable(devState, telemetryState, hardware, drivetrain,
+                                          poseEstimator, watchdog))
 {
     // Primes all four ports' encoders — parity with main.cpp's
     // hardware.begin() call, before the Drivetrain is configured.
@@ -207,6 +221,7 @@ SimHandle::SimHandle()
     loop.hardware = &hardware;
     loop.drivetrain = &drivetrain;
     loop.poseEstimator = &poseEstimator;
+    loop.telemetry = &telemetryState;
     loop.processor = &processor;
     loop.watchdog = &watchdog;
     loop.devState = &devState;

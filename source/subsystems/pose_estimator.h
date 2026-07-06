@@ -96,6 +96,18 @@ class PoseEstimator {
   // default (same rationale as encoderPose()).
   msg::PoseEstimate fusedPose() const;
 
+  // trackwidth -- the SAME configured trackwidth used internally by tick()'s
+  // dead-reckoning kinematics (configure()'s config.trackwidth). Small,
+  // read-only addition (082, ticket 004): commands/telemetry_commands.cpp's
+  // TLM `twist=` field is a pure kinematic transform of the two DIRECTLY-read
+  // wheel velocities (BodyKinematics::forward(velLeft, velRight, trackwidth,
+  // ...)) -- never Drivetrain::state(), never EKF velocity-channel state
+  // (architecture-update.md Decision 7) -- and needs the same trackwidth this
+  // class already holds, rather than a second, independently-configured
+  // copy. Mirrors Hal::PhysicsWorld::trackwidth()'s existing pure-getter
+  // precedent (source/hal/sim/physics_world.h).
+  float trackwidth() const { return trackwidth_; }
+
  private:
   // sentinelOr — zero-as-unset substitution: returns fallback when
   // configured is exactly 0.0f, otherwise returns configured unchanged.

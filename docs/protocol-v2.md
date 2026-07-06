@@ -427,6 +427,32 @@ Value conventions:
 
 ## 8. Telemetry: `TLM` Frame
 
+> **Sprint 082 note — minimal subset in `source/`.** This section documents
+> the OLD tree's (`source_old/`) full `STREAM`/`SNAP`/`TLM` richness, kept
+> here as the field-syntax/wire-format reference. As of sprint 082 (ticket
+> 004), the new `source/` tree implements only a deliberately minimal
+> subset (architecture-update.md Decision 5):
+>
+> - **No `STREAM fields=<csv>` subscription.** Every frame always carries
+>   the full fixed field set below (`enc= vel= pose= encpose= otos= twist=`);
+>   there is no second, smaller field set to select between yet.
+> - **No D10 idle-rate refinement.** The periodic emission period is
+>   exactly `periodMs` (clamped to the 20ms floor) at all times — it does
+>   NOT relax to `max(period, 500ms)` when idle.
+> - **No channel-rebinding nuance** beyond "the channel that most recently
+>   issued `STREAM` is the bound recipient" — described below under
+>   *Channel binding*.
+> - `mode=` is only ever `I` or `S` this sprint (no `T`/`D`/`G` — those are
+>   sprint 083's motion verbs, not yet implemented in `source/`).
+> - `line=`/`color=`/`ekf_rej=`/`otos_health=`/`wedge=` do not exist in
+>   `source/` yet (no line/color sensor leaves, no EKF rejection counters,
+>   no OTOS health/wedge detector wiring this sprint).
+>
+> Do not assume the new tree already has the old tree's full richness
+> documented below just because this section is unchanged — check
+> `source/telemetry/tlm_frame.{h,cpp}` and `source/commands/
+> telemetry_commands.{h,cpp}` for what actually ships.
+
 ### STREAM
 
 ```

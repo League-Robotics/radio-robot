@@ -39,10 +39,13 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #   subsystems/sim_hardware.cpp             -- ticket 003's SimHardware
 #   subsystems/pose_estimator.cpp           -- 082-002/082-003's PoseEstimator
 #   estimation/ekf_tiny.cpp                 -- 082-001's EkfTiny (PoseEstimator's EKF core)
-#   commands/{arg_parse,command_processor,dev_commands,system_commands}.cpp
-#                                            -- the command dispatch + DEV family
+#   telemetry/tlm_frame.cpp                 -- 082-004's pure TLM frame formatter
+#   commands/{arg_parse,command_processor,dev_commands,system_commands,
+#             telemetry_commands}.cpp       -- the command dispatch + DEV +
+#                                               telemetry (STREAM/SNAP) families
 #   dev_loop.cpp                            -- ticket 002's shared loop body,
-#                                               082-003's pose-estimation step
+#                                               082-003's pose-estimation step,
+#                                               082-004's periodic TLM step
 #   hal/sim/*.cpp                           -- PhysicsWorld/SimMotor/SimOdometer
 #   hal/velocity_pid.cpp                    -- ticket 001's shared PID
 #   types/clock_host.cpp                    -- HOST_BUILD fake clock
@@ -69,10 +72,12 @@ set(FIRMWARE_SOURCES
     "${SOURCE_DIR}/subsystems/sim_hardware.cpp"
     "${SOURCE_DIR}/subsystems/pose_estimator.cpp"
     "${SOURCE_DIR}/estimation/ekf_tiny.cpp"
+    "${SOURCE_DIR}/telemetry/tlm_frame.cpp"
     "${SOURCE_DIR}/commands/arg_parse.cpp"
     "${SOURCE_DIR}/commands/command_processor.cpp"
     "${SOURCE_DIR}/commands/dev_commands.cpp"
     "${SOURCE_DIR}/commands/system_commands.cpp"
+    "${SOURCE_DIR}/commands/telemetry_commands.cpp"
     "${SOURCE_DIR}/dev_loop.cpp"
     ${HAL_SIM_SOURCES}
     "${SOURCE_DIR}/hal/velocity_pid.cpp"

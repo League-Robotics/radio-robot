@@ -6,14 +6,17 @@ Compiles ``dev_loop_pose_estimator_harness.cpp`` together with the REAL
 ``source/subsystems/{drivetrain,sim_hardware,pose_estimator}.cpp``,
 ``source/estimation/ekf_tiny.cpp`` (082 ticket 001), ``source/kinematics/
 body_kinematics.cpp``, ``source/commands/{arg_parse,command_processor,
-dev_commands}.cpp``, ``source/hal/sim/*.cpp``, and ``source/hal/velocity_pid.cpp``,
-with ``-DHOST_BUILD`` (sheds MicroBit.h/CODAL dependencies) AND
-``-DROBOT_DEV_BUILD=1`` (codal.json's value -- compiles in dev_loop.cpp/
-dev_commands.cpp's DEV family, see dev_loop.h's file header), plus
-``libraries/tinyekf/`` on the include path (``estimation/ekf_tiny.h``'s
-``tinyekf.h`` is header-only). Mirrors test_dev_command_outbox.py/
-test_sim_hardware.py's shape exactly: compile with the system C++ compiler,
-run the resulting binary, assert it exits 0.
+dev_commands,telemetry_commands}.cpp``, ``source/telemetry/tlm_frame.cpp``
+(082 ticket 004 -- ``dev_loop.cpp`` gained a ``telemetryEmit()`` call site
+for its periodic-TLM step, so this harness's link now needs both), ``source/
+hal/sim/*.cpp``, and ``source/hal/velocity_pid.cpp``, with ``-DHOST_BUILD``
+(sheds MicroBit.h/CODAL dependencies) AND ``-DROBOT_DEV_BUILD=1``
+(codal.json's value -- compiles in dev_loop.cpp/dev_commands.cpp's DEV
+family, see dev_loop.h's file header), plus ``libraries/tinyekf/`` on the
+include path (``estimation/ekf_tiny.h``'s ``tinyekf.h`` is header-only).
+Mirrors test_dev_command_outbox.py/test_sim_hardware.py's shape exactly:
+compile with the system C++ compiler, run the resulting binary, assert it
+exits 0.
 
 Collected under ``tests/sim/unit/`` alongside the other harness wrappers --
 already within ``pyproject.toml``'s ``testpaths = ["tests/sim", "tests/unit"]``,
@@ -46,10 +49,17 @@ _BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
 _ARG_PARSE_SRC = _SOURCE_DIR / "commands" / "arg_parse.cpp"
 _COMMAND_PROCESSOR_SRC = _SOURCE_DIR / "commands" / "command_processor.cpp"
 _DEV_COMMANDS_SRC = _SOURCE_DIR / "commands" / "dev_commands.cpp"
+_TELEMETRY_COMMANDS_SRC = _SOURCE_DIR / "commands" / "telemetry_commands.cpp"
+_TLM_FRAME_SRC = _SOURCE_DIR / "telemetry" / "tlm_frame.cpp"
 _PHYSICS_WORLD_SRC = _SOURCE_DIR / "hal" / "sim" / "physics_world.cpp"
 _SIM_MOTOR_SRC = _SOURCE_DIR / "hal" / "sim" / "sim_motor.cpp"
 _SIM_ODOMETER_SRC = _SOURCE_DIR / "hal" / "sim" / "sim_odometer.cpp"
 _VELOCITY_PID_SRC = _SOURCE_DIR / "hal" / "velocity_pid.cpp"
+# 082-004: telemetry_commands.cpp's SNAP handler reads Types::systemClockNow()
+# (mirrors system_commands.cpp's PING handler) -- the HOST_BUILD fake-clock
+# definition must link in, same as every other harness that pulls in a TU
+# calling this seam.
+_CLOCK_HOST_SRC = _SOURCE_DIR / "types" / "clock_host.cpp"
 
 _SOURCES = [
     _HARNESS_SRC,
@@ -62,10 +72,13 @@ _SOURCES = [
     _ARG_PARSE_SRC,
     _COMMAND_PROCESSOR_SRC,
     _DEV_COMMANDS_SRC,
+    _TELEMETRY_COMMANDS_SRC,
+    _TLM_FRAME_SRC,
     _PHYSICS_WORLD_SRC,
     _SIM_MOTOR_SRC,
     _SIM_ODOMETER_SRC,
     _VELOCITY_PID_SRC,
+    _CLOCK_HOST_SRC,
 ]
 
 # messages/common.h documents its own target as "CODAL C++11" -- build the

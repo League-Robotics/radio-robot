@@ -50,6 +50,7 @@
 #include "subsystems/drivetrain.h"
 #include "subsystems/pose_estimator.h"
 #include "commands/dev_commands.h"
+#include "commands/telemetry_commands.h"
 #include "dev_loop.h"
 #include "messages/motor.h"
 #include "messages/drivetrain.h"
@@ -132,6 +133,17 @@ int main() {
     static Subsystems::PoseEstimator poseEstimator;
     poseEstimator.configure(dtConfig);
 
+    // --- Telemetry (082-004): STREAM/SNAP wiring, a Subsystems-tier
+    // observer alongside Drivetrain/PoseEstimator -- see
+    // source/commands/telemetry_commands.h's class comment for the full
+    // field-sourcing rule table. periodMs/seq/replyFn/replyCtx/lastEmitMs
+    // all start at their zero/null defaults (streaming off, unbound) until
+    // a channel issues its first STREAM command.
+    static TelemetryState telemetryState;
+    telemetryState.hardware = &hardware;
+    telemetryState.drivetrain = &drivetrain;
+    telemetryState.poseEstimator = &poseEstimator;
+
     // --- Dev loop shared state: watchdog + DEV command wiring. ---
     static SerialSilenceWatchdog watchdog;
 
@@ -159,10 +171,13 @@ int main() {
     drivetrain.setMotorCapabilities(hardware.motor(bootPorts.left).capabilities(),
                                      hardware.motor(bootPorts.right).capabilities());
 
-    // --- Command table: liveness (PING/VER/HELP/ECHO/ID) + DEV. ---
+    // --- Command table: liveness (PING/VER/HELP/ECHO/ID) + DEV + telemetry
+    // (STREAM/SNAP). ---
     std::vector<CommandDescriptor> allCommands = systemCommands();
     std::vector<CommandDescriptor> dev = devCommands(devState);
     allCommands.insert(allCommands.end(), dev.begin(), dev.end());
+    std::vector<CommandDescriptor> telemetry = telemetryCommands(telemetryState);
+    allCommands.insert(allCommands.end(), telemetry.begin(), telemetry.end());
     static CommandProcessor cmd(allCommands);
     cmd.setSerialReply(serialReply, &comm);
 
@@ -174,6 +189,7 @@ int main() {
     loop.hardware = &hardware;
     loop.drivetrain = &drivetrain;
     loop.poseEstimator = &poseEstimator;
+    loop.telemetry = &telemetryState;
     loop.processor = &cmd;
     loop.watchdog = &watchdog;
     loop.devState = &devState;
