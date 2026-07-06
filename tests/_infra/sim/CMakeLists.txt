@@ -44,9 +44,11 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #   subsystems/planner.cpp                  -- 084-001's goal-closure engine
 #   estimation/ekf_tiny.cpp                 -- 082-001's EkfTiny (PoseEstimator's EKF core)
 #   telemetry/tlm_frame.cpp                 -- 082-004's pure TLM frame formatter
-#   commands/{arg_parse,command_processor,dev_commands,system_commands,
-#             telemetry_commands}.cpp       -- the command dispatch + DEV +
-#                                               telemetry (STREAM/SNAP) families
+#   commands/{arg_parse,command_processor,dev_commands,motion_commands,
+#             system_commands,telemetry_commands}.cpp -- the command dispatch
+#                                               + DEV + motion (S/T/D/STOP,
+#                                               084-002) + telemetry
+#                                               (STREAM/SNAP) families
 #   dev_loop.cpp                            -- ticket 002's shared loop body,
 #                                               082-003's pose-estimation step,
 #                                               082-004's periodic TLM step
@@ -83,6 +85,7 @@ set(FIRMWARE_SOURCES
     "${SOURCE_DIR}/commands/arg_parse.cpp"
     "${SOURCE_DIR}/commands/command_processor.cpp"
     "${SOURCE_DIR}/commands/dev_commands.cpp"
+    "${SOURCE_DIR}/commands/motion_commands.cpp"
     "${SOURCE_DIR}/commands/system_commands.cpp"
     "${SOURCE_DIR}/commands/telemetry_commands.cpp"
     "${SOURCE_DIR}/dev_loop.cpp"

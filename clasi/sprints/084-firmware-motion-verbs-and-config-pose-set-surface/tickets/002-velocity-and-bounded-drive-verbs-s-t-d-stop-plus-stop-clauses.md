@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: 'Velocity and bounded-drive verbs: S / T / D / STOP plus stop= clauses'
-status: open
+status: done
 use-cases: [SUC-001]
 depends-on: ['001']
 github-issue: ''
@@ -41,37 +41,43 @@ it.
 
 ## Acceptance Criteria
 
-- [ ] New `source/commands/motion_commands.{h,cpp}` registers `S <l> <r>`,
+- [x] New `source/commands/motion_commands.{h,cpp}` registers `S <l> <r>`,
       `T <l> <r> <ms> [stop=...]`, `D <l> <r> <mm> [stop=...]`, `STOP` as
       top-level verbs, matching `docs/protocol-v2.md` §10's existing wire
       shape and range checks (`S`/`T`/`D` velocity range ±1000 mm/s; `T`
       duration 1-30000 ms; `D` distance 1-10000 mm) exactly.
-- [ ] A new `MotionLoopState` struct (own file/header, **not**
+- [x] A new `MotionLoopState` struct (own file/header, **not**
       `DevLoopState`) holds the staged `msg::PlannerCommand` outbox and the
       `sTimeout` watchdog state; `source/dev_loop.{h,cpp}` gains one field
       (`Subsystems::Planner*`) and one step: feed `leftObs`/`rightObs`/
       `fusedPose` into `planner.tick()`, drain `hasCommand()`/
       `takeCommand()` into `drivetrain.apply()`, drain `hasEvent()`/
-      `takeEvent()` into the captured reply sink.
-- [ ] `stop=t:<ms>`, `stop=d:<mm>`, `stop=heading:<cdeg>:<eps_cdeg>`,
+      `takeEvent()` into the captured reply sink. (Implementation note: a
+      second field, `MotionLoopState*`, was also added to `DevLoop` — see
+      the closing report/commit for why the outbox-drain and `sTimeout`
+      check need it too, and why gating the `drivetrain.apply()` drain on
+      Planner actually having something to say was required to avoid
+      Planner's always-held zero-twist permanently stealing `DEV DT`/`DEV
+      M`'s authority.)
+- [x] `stop=t:<ms>`, `stop=d:<mm>`, `stop=heading:<cdeg>:<eps_cdeg>`,
       `stop=rot:<arc_mm>` parse and fire per §10's existing clause table;
       up to `kMaxStopConds` (4) clauses per command, OR-combined with the
       verb's own built-in stop.
-- [ ] `stop=sensor:...`/`stop=color:...`/`stop=line:...` are recognized
+- [x] `stop=sensor:...`/`stop=color:...`/`stop=line:...` are recognized
       syntactically (do not fall through to `ERR unknown`/`badarg
       missing key`-class parse failures meant for genuinely malformed
       input) but rejected with `ERR badarg` — documented in
       `docs/protocol-v2.md` as "not yet supported; requires a future
       sensor `Hal` leaf," not silently ignored.
-- [ ] `D 200 200 500` moves true pose ~500 mm (sim) and emits
+- [x] `D 200 200 500` moves true pose ~500 mm (sim) and emits
       `EVT done D reason=dist`; `T`/`S` behave per §10; `STOP` halts
       immediately with no `EVT`.
-- [ ] `S`'s streaming watchdog (`sTimeout`, default matching the old
+- [x] `S`'s streaming watchdog (`sTimeout`, default matching the old
       table's 500 ms) fires `EVT safety_stop reason=watchdog` when no `S`
       arrives within the window — verified distinct from `DEV WD`'s
       watchdog (different state, different default, independently
       settable once ticket 006 wires `sTimeout` into `SET`/`GET`).
-- [ ] No wire key/verb/reply-string renamed from what `docs/protocol-v2.md`
+- [x] No wire key/verb/reply-string renamed from what `docs/protocol-v2.md`
       §10 already documents.
 
 ## Implementation Plan

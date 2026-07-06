@@ -230,6 +230,15 @@ void runComparison(uint32_t leftPort, uint32_t rightPort, float leftDuty, float 
   telemetryA.hardware = &hardwareA;
   telemetryA.drivetrain = &drivetrainA;
   telemetryA.poseEstimator = &poseA;
+  // 084-002: devLoopTick() now dereferences DevLoop::planner/motionState
+  // unconditionally every pass (the new motion-executor step) -- wired here
+  // only to satisfy that non-null contract; this harness never stages an
+  // S/T/D/STOP command (statement is always nullptr, see below), so Planner
+  // is never actually engaged and any config is fine.
+  Subsystems::Planner plannerA;
+  plannerA.configure(msg::PlannerConfig());
+  MotionLoopState motionStateA;
+  motionStateA.poseEstimator = &poseA;
   CommandProcessor processorA;   // empty table -- never dispatched (statement is always nullptr)
   DevLoop loopA;
   loopA.hardware = &hardwareA;
@@ -239,6 +248,8 @@ void runComparison(uint32_t leftPort, uint32_t rightPort, float leftDuty, float 
   loopA.processor = &processorA;
   loopA.watchdog = &watchdogA;
   loopA.devState = &devStateA;
+  loopA.planner = &plannerA;
+  loopA.motionState = &motionStateA;
   loopA.defaultReply = nullptr;   // never invoked -- the watchdog never fires this test
   loopA.defaultReplyCtx = nullptr;
 

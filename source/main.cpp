@@ -48,12 +48,15 @@
 #include "config/boot_config.h"
 #include "subsystems/nezha_hardware.h"
 #include "subsystems/drivetrain.h"
+#include "subsystems/planner.h"
 #include "subsystems/pose_estimator.h"
 #include "commands/dev_commands.h"
+#include "commands/motion_commands.h"
 #include "commands/telemetry_commands.h"
 #include "dev_loop.h"
 #include "messages/motor.h"
 #include "messages/drivetrain.h"
+#include "messages/planner.h"
 #include <vector>
 #endif
 
@@ -82,6 +85,31 @@ static void radioReply(const char* msg, void* ctx) {
 // fill this array below. `DEV M <n> CFG` remains the live-correction mechanism
 // for a specific motor's real tuning.
 static msg::MotorConfig defaultMotorConfigs[Subsystems::NezhaHardware::kPortCount];
+
+// defaultPlannerConfig -- 084-002: unlike the motor/drivetrain configs above,
+// there is no Config::defaultPlannerConfig() generator yet (no robot-JSON
+// field maps onto msg::PlannerConfig today -- ticket 084-006's SET/GET only
+// wires `minSpeed`, per architecture-update.md (084) Decision 2's key
+// table; a_max/a_decel/v_body_max/yaw_rate_max/yaw_acc_max have no live-tune
+// path this sprint). These are fixed, conservative-but-workable ramp limits
+// -- generous headroom above S/T/D's documented +-1000 mm/s wire range
+// (docs/protocol-v2.md §10) so a max-speed command is never silently
+// clamped, matching the values ticket 084-001's own planner_harness.cpp
+// test fixture (generousConfig()) already exercises this engine against.
+msg::PlannerConfig defaultPlannerConfig() {
+    msg::PlannerConfig cfg;
+    cfg.a_max = 800.0f;              // [mm/s^2]
+    cfg.a_decel = 800.0f;            // [mm/s^2]
+    cfg.v_body_max = 1000.0f;        // [mm/s]
+    cfg.yaw_rate_max = 6.0f;         // [rad/s]
+    cfg.yaw_acc_max = 20.0f;         // [rad/s^2]
+    cfg.j_max = 0.0f;                // trapezoid ramp, no S-curve, this sprint
+    cfg.yaw_jerk_max = 0.0f;
+    cfg.arrive_tol = 25.0f;          // [mm] matches docs/protocol-v2.md §10's G default
+    cfg.turn_in_place_gate = 35.0f;  // matches docs/protocol-v2.md §10's G default
+    cfg.min_speed = 0.0f;
+    return cfg;
+}
 
 #endif  // ROBOT_DEV_BUILD
 
@@ -133,6 +161,13 @@ int main() {
     static Subsystems::PoseEstimator poseEstimator;
     poseEstimator.configure(dtConfig);
 
+    // --- Motion executor (084-002): the goal-closure engine S/T/D/STOP
+    // stage a msg::PlannerCommand into -- see source/subsystems/planner.h's
+    // class comment. Configured with defaultPlannerConfig() (above) since no
+    // boot-config generator exists for msg::PlannerConfig yet.
+    static Subsystems::Planner planner;
+    planner.configure(defaultPlannerConfig());
+
     // --- Telemetry (082-004): STREAM/SNAP wiring, a Subsystems-tier
     // observer alongside Drivetrain/PoseEstimator -- see
     // source/commands/telemetry_commands.h's class comment for the full
@@ -171,13 +206,24 @@ int main() {
     drivetrain.setMotorCapabilities(hardware.motor(bootPorts.left).capabilities(),
                                      hardware.motor(bootPorts.right).capabilities());
 
+    // --- Motion command state (084-002): S/T/D/STOP's own outbox + sTimeout
+    // watchdog -- an independent struct, NOT DevLoopState (architecture-
+    // update.md (084) Decision 7). poseEstimator is wired so the handlers'
+    // wheel-speed (l, r) -> body-twist (v, omega) conversion (BodyKinematics::
+    // forward()) shares the SAME trackwidth telemetry_commands.cpp's twist=
+    // field already reads, never a second, independently-configured copy.
+    static MotionLoopState motionState;
+    motionState.poseEstimator = &poseEstimator;
+
     // --- Command table: liveness (PING/VER/HELP/ECHO/ID) + DEV + telemetry
-    // (STREAM/SNAP). ---
+    // (STREAM/SNAP) + motion (S/T/D/STOP). ---
     std::vector<CommandDescriptor> allCommands = systemCommands();
     std::vector<CommandDescriptor> dev = devCommands(devState);
     allCommands.insert(allCommands.end(), dev.begin(), dev.end());
     std::vector<CommandDescriptor> telemetry = telemetryCommands(telemetryState);
     allCommands.insert(allCommands.end(), telemetry.begin(), telemetry.end());
+    std::vector<CommandDescriptor> motion = motionCommands(motionState);
+    allCommands.insert(allCommands.end(), motion.begin(), motion.end());
     static CommandProcessor cmd(allCommands);
     cmd.setSerialReply(serialReply, &comm);
 
@@ -193,6 +239,8 @@ int main() {
     loop.processor = &cmd;
     loop.watchdog = &watchdog;
     loop.devState = &devState;
+    loop.planner = &planner;
+    loop.motionState = &motionState;
     loop.defaultReply = serialReply;
     loop.defaultReplyCtx = &comm;
 

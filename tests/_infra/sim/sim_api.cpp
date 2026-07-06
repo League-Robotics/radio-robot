@@ -30,14 +30,17 @@
 // devLoopTick() still run normally on every call.
 #include "commands/command_processor.h"
 #include "commands/dev_commands.h"
+#include "commands/motion_commands.h"
 #include "commands/system_commands.h"
 #include "commands/telemetry_commands.h"
 #include "dev_loop.h"
 #include "hal/sim/sim_setters.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
+#include "messages/planner.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
+#include "subsystems/planner.h"
 #include "subsystems/pose_estimator.h"
 #include "subsystems/sim_hardware.h"
 #include "types/clock.h"
@@ -119,22 +122,49 @@ msg::DrivetrainConfig defaultSimDrivetrainConfig() {
     return cfg;
 }
 
+// defaultSimPlannerConfig — 084-002: mirrors source/main.cpp's own
+// defaultPlannerConfig() (no Config::defaultPlannerConfig() generator exists
+// for either build — see that function's doc comment); same generous,
+// headroom-above-the-wire-range ramp limits so a sim test's `D`/`T`/`S`
+// converges to its commanded speed in a bounded, predictable number of
+// ticks instead of the ramp being clamped to zero (an all-zero, never-
+// configured msg::PlannerConfig — see tests/sim/unit/planner_harness.cpp's
+// own "a_max == 0 (never configured) means the ramp never leaves zero"
+// scenario).
+msg::PlannerConfig defaultSimPlannerConfig() {
+    msg::PlannerConfig cfg;
+    cfg.a_max = 800.0f;              // [mm/s^2]
+    cfg.a_decel = 800.0f;            // [mm/s^2]
+    cfg.v_body_max = 1000.0f;        // [mm/s]
+    cfg.yaw_rate_max = 6.0f;         // [rad/s]
+    cfg.yaw_acc_max = 20.0f;         // [rad/s^2]
+    cfg.j_max = 0.0f;
+    cfg.yaw_jerk_max = 0.0f;
+    cfg.arrive_tol = 25.0f;          // [mm]
+    cfg.turn_in_place_gate = 35.0f;
+    cfg.min_speed = 0.0f;
+    return cfg;
+}
+
 // ---------------------------------------------------------------------------
 // buildAndWireCommandTable — wires DevLoopState's hardware/drivetrain/
 // watchdog pointers (devCommands()'s own doc comment requires state.watchdog
 // be set before it is called — DEV WD dereferences it), wires
 // TelemetryState's hardware/drivetrain/poseEstimator pointers (082-004,
 // telemetryCommands()'s own doc comment requires the same before any call),
-// and returns the full command table (liveness + DEV + telemetry), mirroring
-// main.cpp's own systemCommands()+devCommands()+telemetryCommands()
+// wires MotionLoopState's poseEstimator pointer (084-002, motionCommands()'s
+// own doc comment requires the same before any call), and returns the full
+// command table (liveness + DEV + telemetry + motion), mirroring main.cpp's
+// own systemCommands()+devCommands()+telemetryCommands()+motionCommands()
 // assembly exactly. Packaged as a function (rather than inline in main.cpp's
 // style) so it can run from SimHandle's member-initializer list, wiring
-// devState/telemetryState as a side effect at the exact point
+// devState/telemetryState/motionState as a side effect at the exact point
 // CommandProcessor needs the finished table.
 // ---------------------------------------------------------------------------
 std::vector<CommandDescriptor> buildAndWireCommandTable(
     DevLoopState& devState,
     TelemetryState& telemetryState,
+    MotionLoopState& motionState,
     Subsystems::Hardware& hardware,
     Subsystems::Drivetrain& drivetrain,
     Subsystems::PoseEstimator& poseEstimator,
@@ -147,11 +177,15 @@ std::vector<CommandDescriptor> buildAndWireCommandTable(
     telemetryState.drivetrain = &drivetrain;
     telemetryState.poseEstimator = &poseEstimator;
 
+    motionState.poseEstimator = &poseEstimator;
+
     std::vector<CommandDescriptor> all = systemCommands();
     std::vector<CommandDescriptor> dev = devCommands(devState);
     all.insert(all.end(), dev.begin(), dev.end());
     std::vector<CommandDescriptor> telemetry = telemetryCommands(telemetryState);
     all.insert(all.end(), telemetry.begin(), telemetry.end());
+    std::vector<CommandDescriptor> motion = motionCommands(motionState);
+    all.insert(all.end(), motion.begin(), motion.end());
     return all;
 }
 
@@ -169,9 +203,11 @@ struct SimHandle {
     Subsystems::SimHardware hardware;
     Subsystems::Drivetrain drivetrain;
     Subsystems::PoseEstimator poseEstimator;   // 082-003: wired into loop below
+    Subsystems::Planner planner;               // 084-002: wired into loop below
     SerialSilenceWatchdog watchdog;
     DevLoopState devState;
     TelemetryState telemetryState;   // 082-004: wired into loop below
+    MotionLoopState motionState;     // 084-002: wired into loop below
     CommandProcessor processor;
     DevLoop loop;
 
@@ -189,8 +225,8 @@ struct SimHandle {
 SimHandle::SimHandle()
     : motorConfigs(defaultMotorConfigSet()),
       hardware(motorConfigs.cfg),
-      processor(buildAndWireCommandTable(devState, telemetryState, hardware, drivetrain,
-                                          poseEstimator, watchdog))
+      processor(buildAndWireCommandTable(devState, telemetryState, motionState, hardware,
+                                          drivetrain, poseEstimator, watchdog))
 {
     // Primes all four ports' encoders — parity with main.cpp's
     // hardware.begin() call, before the Drivetrain is configured.
@@ -202,6 +238,11 @@ SimHandle::SimHandle()
     // just took -- one shared boot-config source, mirroring main.cpp's own
     // wiring (source/main.cpp).
     poseEstimator.configure(dtConfig);
+
+    // 084-002: Planner configured with defaultSimPlannerConfig() (above) --
+    // mirrors main.cpp's own planner.configure(defaultPlannerConfig()) boot
+    // call.
+    planner.configure(defaultSimPlannerConfig());
 
     // Seed the CFG-delta shadows the same way main.cpp does (DevLoopState's
     // own field comment): the first `DEV M <n> CFG ...`/`DEV DT CFG ...`
@@ -225,6 +266,8 @@ SimHandle::SimHandle()
     loop.processor = &processor;
     loop.watchdog = &watchdog;
     loop.devState = &devState;
+    loop.planner = &planner;
+    loop.motionState = &motionState;
     // The loop-originated reply sink (Decision 3) — devLoopTick()'s watchdog-
     // fire EVT goes here, never into syncStore (which belongs solely to the
     // statement currently being dispatched by sim_command(), if any).

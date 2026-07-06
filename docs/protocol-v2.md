@@ -752,7 +752,7 @@ OR-combined.  Up to 4 `stop=` clauses are accepted per command
 | `stop=line:<ge\|le>:<thr>`          | Any of line[0..3] satisfies the threshold                         |
 | `stop=sensor:<ch>:<ge\|le>:<thr>`   | Named channel satisfies the threshold                             |
 | `stop=color:<h>:<s>:<v>:<dist>`     | HSV colour distance from target ≤ dist                            |
-| `stop=heading:<cdeg>:<eps_cdeg>`    | Heading within eps of target (centi-degrees)                      |
+| `stop=heading:<cdeg>:<eps_cdeg>`    | Heading within eps of target (centi-degrees; delta from the drive's own starting heading, not an absolute compass heading) |
 | `stop=rot:<arc_mm>`                 | Per-wheel encoder arc ≥ arc_mm                                    |
 
 Channel names for `stop=sensor:`: `line0`..`line3`, `colorR`..`colorC`,
@@ -760,6 +760,18 @@ Channel names for `stop=sensor:`: `line0`..`line3`, `colorR`..`colorC`,
 
 `sensor=<ch>:<op>:<thr>` is accepted as a back-compat alias for
 `stop=sensor:<ch>:<op>:<thr>`.
+
+**`sensor`/`color`/`line` — recognized, not yet supported (sprint 084).**
+The greenfield-rebuilt `source/` tree's motion executor (`Subsystems::
+Planner`, sprint 084 ticket 001) implements `t`/`d`/`heading`/`rot` in full.
+`stop=sensor:...`, `stop=color:...`, `stop=line:...`, and the `sensor=...`
+back-compat alias are all recognized syntactically — the wire parser matches
+their kind prefix and does not fall through to a generic `ERR unknown`/`ERR
+badarg missing key`-class failure meant for genuinely malformed input — but
+every one of them is rejected with `ERR badarg`, since no line or color
+sensor `Hal` leaf exists yet in that tree. A future sprint that lands the
+corresponding sensor leaf can implement these three without any wire-shape
+change (sprint 084 architecture-update.md, Decision 4).
 
 `T` and `D` retain their positional time/distance arguments AND may carry
 additional `stop=` clauses (OR-combined with the built-in stop):
@@ -783,6 +795,15 @@ S <l> <r> [#id]
 Sets left and right wheel velocities (mm/s) and resets the streaming
 watchdog.  If no `S` command arrives within `sTimeout` ms (default 500),
 the firmware stops the motors and emits `EVT safety_stop reason=watchdog`.
+
+**`sTimeout` is a live, production watchdog (sprint 084).** It is a
+separate timer from `DEV WD`'s bench-only serial-silence watchdog (which
+resets on *any* statement, on *any* channel, regardless of content):
+`sTimeout` is fed *only* by `S`, and only matters while a streaming
+(`S`-driven) goal is the one actually active — conflating the two would
+defeat the point of either. It is not yet `SET`/`GET`-able (still a fixed
+500&nbsp;ms default) — sprint 084 ticket 006 wires it into the top-level
+config-registry surface alongside the rest of §7's key table.
 
 Velocity range: −1000 … +1000 mm/s per wheel.  Values outside this
 range return `ERR range l` or `ERR range r`.
