@@ -1,7 +1,7 @@
 ---
 id: "002"
 title: "Tours: SNAP-poll completion verification and test port"
-status: open
+status: done
 use-cases: [SUC-001]
 depends-on: ["001"]
 github-issue: ""
@@ -37,22 +37,22 @@ merely that they exist (see `architecture-update.md` Migration Concerns,
 
 ## Acceptance Criteria
 
-- [ ] `tests_old/testgui/test_tour_idle_detection.py`,
+- [x] `tests_old/testgui/test_tour_idle_detection.py`,
       `test_tour_stop.py`, and `test_tour1_geometry.py` are ported to
       `tests/testgui/`, updated for any API drift since they were written,
       and pass under `QT_QPA_PLATFORM=offscreen`.
-- [ ] Tour 1 (`commands.TOUR_1`) runs to completion against the sim
+- [x] Tour 1 (`commands.TOUR_1`) runs to completion against the sim
       (`SimTransport`) with no step timing out, and the robot's fused pose
       ends near world origin (the tour is a closed geometric loop).
-- [ ] Tour 2 (`commands.TOUR_2`) likewise runs to completion.
-- [ ] `_wait_for_idle`'s stale-frame rejection (a cached `TLMFrame`
+- [x] Tour 2 (`commands.TOUR_2`) likewise runs to completion.
+- [x] `_wait_for_idle`'s stale-frame rejection (a cached `TLMFrame`
       timestamped before the current step began must not end the wait
       early) is exercised and holds against the real `mode=` machine.
-- [ ] Stopping a running tour re-enables the tour buttons synchronously
+- [x] Stopping a running tour re-enables the tour buttons synchronously
       (not dependent on the `finished` signal being delivered during the
       blocking `thread.wait()` — see the existing
       `testgui-tour-stop-reactivation.md` root-cause doc).
-- [ ] Any bug a real run surfaces (e.g. a `SNAP`-poll timing constant that
+- [x] Any bug a real run surfaces (e.g. a `SNAP`-poll timing constant that
       needs retuning against actual 084 mode-machine latency — flagged as
       Open Question 1 in `architecture-update.md`) is fixed in this ticket
       and the fix is documented in this ticket's file, not silently folded
@@ -66,3 +66,67 @@ merely that they exist (see `architecture-update.md` Migration Concerns,
   no net-new test file (unlike ticket 003).
 - **Verification command**: `QT_QPA_PLATFORM=offscreen uv run pytest
   tests/testgui -q`
+
+## Findings (real-run verification against sprint-084 firmware/sim)
+
+**Result: zero production-code changes.** `_TourRunner`'s SNAP-poll
+`mode=I` completion-detection design (fire-and-forget `transport.send("SNAP")`
++ read `state["last_tlm"]`, stale-frame rejected by `ts >= t_start`) works
+correctly against the real sprint-084 `mode=` machine exactly as designed —
+no timing-constant retuning was needed (`SPINUP_S`/`POLL_S`/
+`SNAP_REPLY_TIMEOUT_S`/`MOVE_TIMEOUT_S` are unchanged). Both tours ran to
+completion, every one of the 26 combined per-step idle-waits (13 steps ×
+2 tours) succeeded with no timeout, and the stop-button reactivation is
+synchronous against a live running tour (new test:
+`test_stopping_a_running_tour_reenables_buttons_synchronously` in
+`test_tour1_geometry.py`).
+
+**Investigated: a real, but out-of-scope, motion-accuracy characteristic.**
+The ported `test_tour1_geometry.py` originally (`tests_old/`) asserted
+strict per-waypoint/final-heading tracing, `xfail(strict=True)`,
+root-caused to `source_old`'s `rotationalSlip=0.92` baked into the compiled
+firmware in a way GUI robot selection could never reach. Direct
+investigation this ticket found:
+
+- That specific bug is FIXED in this tree: the active robot
+  (`data/robots/tovez_nocal.json`) pushes `SET rotSlip=0` on Connect (the
+  documented no-correction sentinel), which the firmware's
+  `PoseEstimator::effectiveSlip()` maps to `1.0` (no inflation) — confirmed
+  by direct read of `config_commands.cpp`/`pose_estimator.cpp`.
+- However, per-waypoint/heading tracing STILL does not hold exactly, for a
+  different, already-documented, already out-of-scope reason:
+  `handleRT` (`source/commands/motion_commands.cpp`) is explicitly
+  open-loop and slip-uncorrected by design ("minus its
+  rotational-slip/coast-anticipation refinement ... coast-anticipation is
+  not part of this ticket's [084-003] acceptance bar" — its own doc
+  comment), and `tests/sim/unit/test_motion_commands_arc_turn.py`
+  independently measures ~4-5° coast overshoot per isolated `RT 9000`
+  (its own tolerance is ±10°). Chained across a 6-7 turn tour this
+  compounds into tens of degrees of final-heading drift.
+- This was reproduced identically (same order of magnitude) via TWO
+  independent harnesses — the real GUI/`SimTransport`/`QThread` stack, and
+  a raw single-threaded `tests/_infra/sim` `firmware.Sim` script with no
+  GUI/threading involved at all — ruling out a tour-plumbing/GUI-polling
+  bug. It is a firmware motion-control-accuracy characteristic, explicitly
+  deferred by ticket 084-003's own architecture decision, not a defect in
+  this ticket's scope (SNAP-poll completion verification).
+
+Per this ticket's own acceptance criteria (position-only "ends near world
+origin", not exact waypoint tracing), the ported `test_tour1_geometry.py`
+was rewritten to assert fused-pose position closure with a documented,
+measured-and-margined tolerance (300 mm), and to drop the strict
+per-waypoint/heading assertion (documented in the file's own module
+docstring, not silently dropped). Measured fused-pose distance from origin,
+across repeated runs, real 1x sim pacing:
+
+| Tour | Measured (mm) | Assertion tolerance |
+|---|---|---|
+| Tour 1 | ~20-40 | 300 mm |
+| Tour 2 | ~95-175 | 300 mm |
+
+**Note for a future ticket (085-005, calibration push):** `_push_robot_calibration()`'s
+`SET odomOffX=`/`odomOffY=`/`odomYaw=` pushes are rejected
+(`ERR badkey`) by the current `config_commands.cpp` — observed on every
+Connect during this ticket's verification runs, unrelated to tours (the
+push already treats `ERR`/`NODEV` as non-fatal and continues). Flagged here
+for ticket 005's scope, not fixed in this ticket.
