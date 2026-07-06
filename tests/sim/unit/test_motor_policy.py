@@ -26,6 +26,13 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _SOURCE_DIR = _REPO_ROOT / "source"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "motor_policy_harness.cpp"
 
+# 086-002: the harness's Invariant A/B scenarios drive the REAL
+# Hal::MotorVelocityPid (not just capability/motor.h's header-only armor
+# policy), so compute()'s own translation unit must be compiled in
+# alongside the harness — mirrors test_velocity_pid.py's identical
+# _PID_SRC precedent.
+_PID_SRC = _SOURCE_DIR / "hal" / "velocity_pid.cpp"
+
 # messages/common.h documents its own target as "CODAL C++11" — build the
 # host harness to the same standard so it exercises exactly the language
 # subset the firmware itself uses.
@@ -47,6 +54,7 @@ def _find_cxx_compiler() -> str:
 def test_motor_policy_harness_compiles_and_passes(tmp_path):
     """Compile the MockMotor harness and assert every scenario passes."""
     assert _HARNESS_SRC.is_file(), f"harness source missing: {_HARNESS_SRC}"
+    assert _PID_SRC.is_file(), f"velocity_pid.cpp missing: {_PID_SRC}"
     assert _SOURCE_DIR.is_dir(), f"source/ tree missing: {_SOURCE_DIR}"
 
     cxx = _find_cxx_compiler()
@@ -63,6 +71,7 @@ def test_motor_policy_harness_compiles_and_passes(tmp_path):
             "-o",
             str(binary),
             str(_HARNESS_SRC),
+            str(_PID_SRC),
         ],
         capture_output=True,
         text=True,

@@ -23,6 +23,20 @@ measured plant behavior, documented at each assertion.
 import math
 
 
+def _wrap_pi(angle: float) -> float:   # [rad]
+    """Wrap an angle into (-pi, pi] -- 086-002 helper. 180 deg is the
+    heading representation's own branch cut: a converged heading an epsilon
+    PAST it reads back as slightly UNDER -180 deg, so a raw ``h - expected``
+    difference against a target of exactly +180 deg can blow up to ~2*pi
+    even though the true angular distance is tiny. Only
+    ``test_turn_reaches_absolute_heading_from_nonzero_start`` targets
+    exactly +-180 deg (the sole target sitting on the branch cut); every
+    other assertion in this file targets a heading far enough from it that
+    the raw difference was never at risk, so this helper is applied there
+    only rather than rewriting every assertion in the file."""
+    return (angle + math.pi) % (2.0 * math.pi) - math.pi
+
+
 def test_rt_rotates_about_90_degrees_and_emits_done_rot(sim):
     reply = sim.command("RT 9000")
     assert reply.strip() == "OK rt rot=9000"
@@ -113,20 +127,31 @@ def test_turn_reaches_absolute_heading_from_nonzero_start(sim):
 
     sim.tick_for(3000)
     _x, _y, h = sim.true_pose()
-    expected = math.pi   # 180 degrees
-    # Measured plant behavior (2026-07-05): converges to ~169.6 deg (~10.4
-    # deg short). Traced via per-100ms true_pose()/true_velocity() logging:
-    # the HEADING stop fires and the ramp correctly converges (~181.7 deg,
-    # matching the target + the usual coast), but the wheels then cross
-    # through zero velocity, and the existing Hal::Motor zero-crossing
-    # reset-guard/dwell policy (source/hal/velocity_pid.cpp, sprint 081 --
-    # unrelated to this ticket, and out of this ticket's file scope to
-    # change) produces a further ~600-800ms settle with small opposite-sign
-    # wheel speeds, backing off part of the rotation before finally
-    # settling. +-13 degrees covers this measured settle plus variance.
-    assert abs(h - expected) < math.radians(13.0), (
+    expected = math.pi   # 180 degrees -- exactly on the heading wrap's own branch cut
+    # Measured plant behavior (2026-07-05, pre-086-002): converged to ~169.6
+    # deg (~10.4 deg short) -- the HEADING stop fired and the ramp correctly
+    # converged (~181.7 deg, matching the target + the usual coast), but the
+    # wheels then crossed through zero velocity, and the (then-unfixed)
+    # Hal::Motor zero-crossing reset-guard/dwell interaction with
+    # Hal::MotorVelocityPid's integrator-freeze deadband (086 issue's own
+    # root cause) produced a further ~600-800ms settle with small
+    # opposite-sign wheel speeds, backing off part of the rotation before
+    # finally settling.
+    #
+    # 086-002 update: that interaction is now fixed (velocity_pid.cpp's
+    # deadband-entry integrator reset) -- this converges to ~182.9 deg now
+    # (~2.9 deg over), a tighter residual than before, but on the FAR side
+    # of the +-180 deg branch cut: a raw ``h - expected`` blows up to ~2*pi
+    # even though the true angular distance is small, so the comparison
+    # below wraps the difference into (-pi, pi] first (see this file's
+    # ``_wrap_pi`` helper). The +-13 degree bound itself is left unchanged
+    # (a further tightening is ticket 086-004's retune, per
+    # architecture-update.md's "Impact on Existing Components" table) --
+    # this is a measurement-correctness fix, not a loosened tolerance.
+    diff = _wrap_pi(h - expected)
+    assert abs(diff) < math.radians(13.0), (
         f"expected heading near {expected:.4f} rad (180 deg), got {h:.4f} rad "
-        f"({math.degrees(h):.2f} deg)"
+        f"({math.degrees(h):.2f} deg), wrapped diff {math.degrees(diff):.2f} deg"
     )
 
     evts = sim.get_async_evts()

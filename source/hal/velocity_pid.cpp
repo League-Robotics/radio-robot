@@ -53,24 +53,55 @@ float MotorVelocityPid::compute(float target, float measured, float dt,
 {
     if (dt <= 0.0f) dt = kNominalDt;
 
-    float err = target - measured;
     float spAbs = fabsf(target);
-    float spSign = (target >= 0.0f) ? 1.0f : -1.0f;
-    float ff = gains.kff * spAbs;
-
-    // Output uses the OLD integrator (pre-update), matching
-    // VelocityController::update()'s I_old ordering.
-    float iOld = integral_;
-    float rawDuty = spSign * ff + gains.kp * err + iOld;
-    float output = clampf(rawDuty, -1.0f, 1.0f);
 
     // minDuty plays minWheelSpeed's role here (integrator-freeze deadband
     // threshold on |target|) despite its proto name — see nezha_motor.h's
     // field comment and the ticket's own note that MotorConfig.min_duty's
     // doc string ("stiction floor / integrator-freeze threshold") is
     // exactly VelocityController's minWheelSpeed semantics, just carried
-    // under a different generated field name.
-    bool inDeadband = spAbs < minDuty;
+    // under a different generated field name. <= (not <) so an exact
+    // target==0.0f still counts as "in the deadband" even when minDuty
+    // itself is 0.0 (unconfigured) — the common case for a fresh boot
+    // config (086-002): a literal zero target always means "come to a
+    // stop," independent of whether a stiction floor has been tuned.
+    bool inDeadband = spAbs <= minDuty;
+
+    // 086-002 root fix (architecture-update.md Grounding fact 2 / Design
+    // Rationale 1, Invariant B): a plain FREEZE (leave integral_ at
+    // whatever it held) preserves whatever bias the integrator built up
+    // sustaining the PRIOR, unrelated motion (e.g. a fast turn) straight
+    // into the new near-zero-target regime. Once the ramp's target lands
+    // at (or below) the deadband, that carried-over bias — combined with a
+    // fresh, still-large kp*err — is exactly what the issue's own
+    // instrumentation shows landing as an oversized, wrong-signed
+    // correction once the wheel coasts past zero: not because the fresh
+    // correction is undamped, but because it is riding on top of a stale
+    // one. Resetting the integrator on the tick the deadband is FIRST
+    // entered (edge-triggered on wasInDeadband_, not level-held — a
+    // continuing low/zero target keeps freezing exactly as before, so a
+    // genuine bench-tuned low-speed creep still gets zero ongoing integral
+    // action, unchanged from the pre-fix behavior) clears that stale bias
+    // before it can leak into the stop, while never touching
+    // armoredWrite()'s own reversal-dwell gate — Invariant A (an
+    // unrequested full-scale reversal never passes through this deadband
+    // at all, since |target| stays large on both sides of that flip) is
+    // preserved by construction, not by a special case.
+    if (inDeadband && !wasInDeadband_) {
+        integral_ = 0.0f;
+    }
+    wasInDeadband_ = inDeadband;
+
+    float err = target - measured;
+    float spSign = (target >= 0.0f) ? 1.0f : -1.0f;
+    float ff = gains.kff * spAbs;
+
+    // Output uses the OLD integrator (pre-update, but post-reset above),
+    // matching VelocityController::update()'s I_old ordering.
+    float iOld = integral_;
+    float rawDuty = spSign * ff + gains.kp * err + iOld;
+    float output = clampf(rawDuty, -1.0f, 1.0f);
+
     if (!inDeadband) {
         float newIntegral = iOld + gains.ki * dt * err;
         // Anti-windup back-calculation against +/- i_max (mirrors
@@ -87,7 +118,9 @@ float MotorVelocityPid::compute(float target, float measured, float dt,
         integral_ = newIntegral;
     }
     // else: frozen — integral_ left unchanged (see file-level comment on
-    // the deliberate divergence from source_old's ReInit() call here).
+    // the deliberate divergence from source_old's ReInit() call here, and
+    // the reset-on-entry comment above for the one behavior change from
+    // that original freeze semantics).
 
     return output;
 }

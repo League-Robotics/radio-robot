@@ -10,14 +10,22 @@ the real motor loop can track, so the loop drives the wheel PAST zero into a
 reverse spin that lingers for hundreds of ms before settling, backtracking
 the turn's heading and rolling a completed drive back off its stop point.
 
-This ticket is test-only -- no ``source/`` changes. Both tests below assert
-the TIGHT, CORRECT post-fix behavior (not the buggy behavior itself), so
-they currently FAIL against today's firmware and are marked
-``xfail(strict=True)``: ticket 086-002 (motor-velocity-loop fix) and 086-003
-(terminal decel/coast anticipation) are expected to make the underlying
-assertions pass, at which point ``strict=True`` turns an unexpected PASS
-into a hard failure -- forcing the xfail marker's removal instead of letting
-the regression silently go unnoticed.
+This ticket (086-001) is test-only -- no ``source/`` changes -- and both
+tests below originally asserted the TIGHT, CORRECT post-fix behavior (not
+the buggy behavior itself) against firmware that did not yet implement it,
+so both were marked ``xfail(strict=True)``: ticket 086-002 (motor-velocity-
+loop fix) and 086-003 (terminal decel/coast anticipation) were expected to
+make the underlying assertions pass, at which point ``strict=True`` would
+turn an unexpected PASS into a hard failure -- forcing the xfail marker's
+removal instead of letting the regression silently go unnoticed.
+
+**086-002 update:** the turn (RT 9000) test's xfail marker is REMOVED below
+-- 086-002's integrator-reset-on-deadband-entry fix (``velocity_pid.cpp``)
+makes it pass outright; see that ticket's completion notes for the
+mechanism and the before/after residual numbers. The drive (D 200 200 500)
+test's xfail marker stays -- 086-002 alone does not close its distance
+tolerance; ticket 086-003 (terminal decel/coast anticipation) is expected to
+remove it next.
 
 Drives ``libfirmware_host`` through the full wire dispatch (``Sim.command()``
 via the ``sim`` fixture, ``tests/sim/conftest.py``) exactly like
@@ -84,15 +92,6 @@ _RESIDUAL_BOUND = 2.0   # [mm/s]
 _RT_BUDGET = 4000   # [ms] ample for the turn itself plus the full settle tail
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "086-001: reproduces the 086 motion terminal-overshoot bug (sustained "
-        "reverse-spin residual after RT completes); ticket 086-002 (motor "
-        "velocity-loop fix) and 086-003 (terminal decel anticipation) are "
-        "expected to remove this xfail marker."
-    ),
-)
 def test_rt_9000_settles_without_sustained_reverse_spin_residual(sim):
     """RT 9000 (+90 deg) must settle to near-zero per-wheel velocity shortly
     after ``EVT done RT`` fires and STAY there -- no sustained reverse-sign
