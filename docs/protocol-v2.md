@@ -369,45 +369,65 @@ ERR badarg no key=value pairs
 
 ### Named Key Table
 
-All 22 registered config keys, their types, defaults, and the v1
-equivalents they replace.
+All 22 registered config keys (plus five added since, see the sprint notes
+below the table), their types, defaults, and the v1 equivalents they
+replace. **Status** marks which keys `source/`'s `SET`/`GET`
+(`source/commands/config_commands.cpp`, sprint 084 ticket 006) actually
+implements as of this sprint — see architecture-update.md (084) Decision 2
+for the full key-by-key rationale. `current` rows are live in `source/`
+today; `superseded`/`not carried forward` rows are `source_old`-only —
+`SET`/`GET` against them in `source/` returns `ERR badkey`, identical wire
+behavior to any never-existed key. This is not a case of a key being
+forgotten; each disposition below was a deliberate sprint-084 decision.
 
-| Key         | Type        | Wire format | Default  | Meaning                                 | v1 equiv  |
-|-------------|-------------|-------------|----------|-----------------------------------------|-----------|
-| `ml`        | float       | `%.3f`      | `0.487`  | mm per degree of rotation, left wheel   | `KCL`     |
-| `mr`        | float       | `%.3f`      | `0.481`  | mm per degree of rotation, right wheel  | `KCR`     |
-| `kff`       | float       | `%.3f`      | `0.150`  | Feed-forward gain                       | `KFF`     |
-| `klf`       | float       | `%.3f`      | `1.000`  | Left-forward motor scale factor         | `KLF`     |
-| `klb`       | float       | `%.3f`      | `1.000`  | Left-backward motor scale factor        | `KLB`     |
-| `krf`       | float       | `%.3f`      | `1.000`  | Right-forward motor scale factor        | `KRF`     |
-| `krb`       | float       | `%.3f`      | `1.000`  | Right-backward motor scale factor       | `KRB`     |
-| `adjThr`    | float       | `%.3f`      | `0.500`  | Slower-wheel adjustment threshold       | —         |
-| `adjGain`   | float       | `%.3f`      | `0.050`  | Slower-wheel adjustment gain            | —         |
-| `tw`        | float-as-int| `%d`        | `120`    | Track width in mm                       | `KAT`     |
-| `pid.kp`    | float       | `%.3f`      | `300.000`| Ratio PID proportional gain             | `KCP`     |
-| `pid.ki`    | float       | `%.3f`      | `0.000`  | Ratio PID integral gain                 | `KCI`     |
-| `pid.kd`    | float       | `%.3f`      | `0.000`  | Ratio PID derivative gain               | `KCD`     |
-| `pid.max`   | float       | `%.3f`      | `30.000` | Ratio PID output clamp                  | `KCM`     |
-| `distScale` | float       | `%.3f`      | `0.940`  | Distance command scale factor           | `KDS`     |
-| `turnScale` | float       | `%.3f`      | `1.070`  | Turn command scale factor               | `KTS`     |
-| `minSpeed`  | int32       | `%d`        | `50`     | Minimum drive speed (mm/s)              | `KMS`     |
-| `sTimeout`  | int32       | `%d`        | `500`    | Streaming watchdog timeout (ms)         | `KST`     |
-| `tick`      | int32       | `%d`        | `20`     | Main-loop tick period (ms)              | `KTK`     |
-| `tlmPeriod` | int32       | `%d`        | `0`      | TLM streaming period (ms); 0 = off      | —         |
-| `ekfQxy`    | float       | `%.3f`      | `200.000`| EKF process noise: position (mm²/s)     | —         |
-| `ekfQtheta` | float       | `%.3f`      | `0.500`  | EKF process noise: heading (rad²/s)     | —         |
-| `ekfQv`     | float       | `%.3f`      | `5000.000`| EKF process noise: body speed (mm²/s³) | —         |
-| `ekfQomega` | float       | `%.3f`      | `1.000`  | EKF process noise: yaw rate (rad²/s³)   | —         |
-| `ekfROtosXy`| float       | `%.3f`      | `50.000` | EKF OTOS measurement noise: position (mm²) | —      |
-| `ekfROtosV` | float       | `%.3f`      | `200.000`| EKF OTOS measurement noise: body speed (mm²/s²) | — |
-| `ekfREncV`  | float       | `%.3f`      | `100.000`| EKF encoder measurement noise: body speed (mm²/s²) | — |
+| Key             | Type        | Wire format | Default  | Meaning                                 | v1 equiv  | Status (`source/`) |
+|-----------------|-------------|-------------|----------|------------------------------------------|-----------|---------------------|
+| `ml`            | float       | `%.3f`      | `0.487`  | mm per degree of rotation, left wheel   | `KCL`     | current (084-006) — `MotorConfig.travel_calib`, bound-pair left |
+| `mr`            | float       | `%.3f`      | `0.481`  | mm per degree of rotation, right wheel  | `KCR`     | current (084-006) — `MotorConfig.travel_calib`, bound-pair right |
+| `kff`           | float       | `%.3f`      | `0.150`  | Feed-forward gain                       | `KFF`     | superseded (084-006 Decision 2) — folded into `pid.kff` below |
+| `klf`           | float       | `%.3f`      | `1.000`  | Left-forward motor scale factor         | `KLF`     | superseded (084-006 Decision 2) — no per-direction scale concept in the new motor model |
+| `klb`           | float       | `%.3f`      | `1.000`  | Left-backward motor scale factor        | `KLB`     | superseded (084-006 Decision 2) — see `klf` |
+| `krf`           | float       | `%.3f`      | `1.000`  | Right-forward motor scale factor        | `KRF`     | superseded (084-006 Decision 2) — see `klf` |
+| `krb`           | float       | `%.3f`      | `1.000`  | Right-backward motor scale factor       | `KRB`     | superseded (084-006 Decision 2) — see `klf` |
+| `adjThr`        | float       | `%.3f`      | `0.500`  | Slower-wheel adjustment threshold       | —         | superseded (084-006 Decision 2) — replaced by `DrivetrainConfig.sync_gain` (`DEV DT CFG sync_gain=`) |
+| `adjGain`       | float       | `%.3f`      | `0.050`  | Slower-wheel adjustment gain            | —         | superseded (084-006 Decision 2) — see `adjThr` |
+| `tw`            | float-as-int| `%d`        | `120`    | Track width in mm                       | `KAT`     | current (084-006) — `DrivetrainConfig.trackwidth` |
+| `pid.kp`        | float       | `%.3f`      | `300.000`| Ratio PID proportional gain             | `KCP`     | current (084-006) — both bound motors' `MotorConfig.vel_gains.kp` |
+| `pid.ki`        | float       | `%.3f`      | `0.000`  | Ratio PID integral gain                 | `KCI`     | current (084-006) — both bound motors' `MotorConfig.vel_gains.ki` |
+| `pid.kd`        | float       | `%.3f`      | `0.000`  | Ratio PID derivative gain               | `KCD`     | superseded (084-006 Decision 2) — no `kd` term in the new `Gains{kp,ki,kff,i_max,kaw}` shape |
+| `pid.max`       | float       | `%.3f`      | `30.000` | Ratio PID output clamp                  | `KCM`     | superseded (084-006 Decision 2) — replaced by `pid.iMax` (the `Gains.i_max` integrator clamp) below |
+| `pid.kff`       | float       | `%.3f`      | `0.004`  | Velocity-loop feed-forward gain         | —         | **new, current (084-006)** — both bound motors' `MotorConfig.vel_gains.kff`; supersedes standalone `kff` above |
+| `pid.iMax`      | float       | `%.3f`      | `0.300`  | Velocity-loop integrator clamp          | —         | **new, current (084-006)** — both bound motors' `MotorConfig.vel_gains.i_max`; supersedes `pid.max` above |
+| `pid.kaw`       | float       | `%.3f`      | `0.000`  | Velocity-loop back-calc anti-windup gain | —        | **new, current (084-006)** — both bound motors' `MotorConfig.vel_gains.kaw` |
+| `rotSlip`       | float       | `%.3f`      | `0.000`  | Rotational-slip correction factor (0 = unset -> 1.0) | — | **new, current (084-006)** — `DrivetrainConfig.rotational_slip`; not implemented in `source/` before this ticket |
+| `distScale`     | float       | `%.3f`      | `0.940`  | Distance command scale factor           | `KDS`     | superseded (084-006 Decision 2) — no fudge factor needed against correctly-modeled `BodyKinematics` |
+| `turnScale`     | float       | `%.3f`      | `1.070`  | Turn command scale factor               | `KTS`     | superseded (084-006 Decision 2) — see `distScale` |
+| `minSpeed`      | int32       | `%d`        | `50`     | Minimum drive speed (mm/s)              | `KMS`     | current (084-006) — `PlannerConfig.min_speed` (float-as-int wire encoding; the new-tree field is a `float`) |
+| `sTimeout`      | int32       | `%d`        | `500`    | Streaming watchdog timeout (ms)         | `KST`     | current (084-006) — ticket 002's `StreamingDriveWatchdog` window (plain field, no message) |
+| `tick`          | int32       | `%d`        | `20`     | Main-loop tick period (ms)              | `KTK`     | superseded (084-006 Decision 2) — loop cadence is structural (sprint 079), not a runtime knob |
+| `tlmPeriod`     | int32       | `%d`        | `0`      | TLM streaming period (ms); 0 = off      | —         | superseded (084-006 Decision 2) — redundant with the `STREAM <ms>` verb itself (082) |
+| `ekfQxy`        | float       | `%.3f`      | `200.000`| EKF process noise: position (mm²/s)     | —         | current (084-006) — `DrivetrainConfig.ekf_q_xy` |
+| `ekfQtheta`     | float       | `%.3f`      | `0.500`  | EKF process noise: heading (rad²/s)     | —         | current (084-006) — `DrivetrainConfig.ekf_q_theta` |
+| `ekfQv`         | float       | `%.3f`      | `5000.000`| EKF process noise: body speed (mm²/s³) | —         | not carried forward (084-006) — `DrivetrainConfig.ekf_q_v` exists but is outside this sprint's approved key table |
+| `ekfQomega`     | float       | `%.3f`      | `1.000`  | EKF process noise: yaw rate (rad²/s³)   | —         | not carried forward (084-006) — see `ekfQv` |
+| `ekfROtosXy`    | float       | `%.3f`      | `50.000` | EKF OTOS measurement noise: position (mm²) | —      | current (084-006) — `DrivetrainConfig.ekf_r_otos_xy` |
+| `ekfROtosTheta` | float       | `%.3f`      | `0.000`  | EKF OTOS measurement noise: heading (rad²) | —      | **new, current (084-006)** — `DrivetrainConfig.ekf_r_otos_theta`; closes 082 Decision 4's deferred item (`source_old` called this field's key `ekfRHead`, itself pre-existing drift never backfilled into this table — the new tree uses the field-matching spelling instead) |
+| `ekfROtosV`     | float       | `%.3f`      | `200.000`| EKF OTOS measurement noise: body speed (mm²/s²) | — | not carried forward (084-006) — see `ekfQv` |
+| `ekfREncV`      | float       | `%.3f`      | `100.000`| EKF encoder measurement noise: body speed (mm²/s²) | — | not carried forward (084-006) — see `ekfQv` |
 
-(Sprint 069-001: these seven rows close 067's Open Question 5 -- a live
-`SET` routes through `Drive::configure()`'s `setNoise()` push, which
-updates EKF fusion noise WITHOUT resetting fused pose/covariance. This
-table has pre-existing drift from several long-landed keys, e.g. `vel.kP`,
-`ekfRHead` itself -- not backfilled here, out of scope per ticket
-068-001's Open Question 1 precedent.)
+(Sprint 069-001: the `ekfQxy`/`ekfQtheta`/`ekfQv`/`ekfQomega`/`ekfROtosXy`/
+`ekfROtosV`/`ekfREncV` rows closed 067's Open Question 5 in `source_old` --
+a live `SET` routed through `Drive::configure()`'s `setNoise()` push, which
+updated EKF fusion noise WITHOUT resetting fused pose/covariance. `source/`'s
+sprint-084 `SET`/`GET` does not preserve that non-resetting behavior --
+`PoseEstimator::configure()` (the `source/` equivalent) calls
+`EkfTiny::init()` unconditionally, which DOES re-zero the fused
+pose/covariance on every drivetrain-scoped `SET` (`tw`/`rotSlip`/`ekf*`) --
+see architecture-update.md (084) Decision 2 and `config_commands.h`'s file
+header for this known, deliberate consequence. This table has pre-existing
+drift from several long-landed `source_old` keys, e.g. `vel.kP`, `ekfRHead`
+itself -- not backfilled here, out of scope per ticket 068-001's Open
+Question 1 precedent.)
 
 Type `float-as-int`: stored internally as `float`, read/written on the
 wire as a decimal integer (no fractional part).  `SET tw=121` writes

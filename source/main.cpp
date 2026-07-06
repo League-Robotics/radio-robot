@@ -50,6 +50,7 @@
 #include "subsystems/drivetrain.h"
 #include "subsystems/planner.h"
 #include "subsystems/pose_estimator.h"
+#include "commands/config_commands.h"
 #include "commands/dev_commands.h"
 #include "commands/motion_commands.h"
 #include "commands/telemetry_commands.h"
@@ -218,8 +219,27 @@ int main() {
     static MotionLoopState motionState;
     motionState.poseEstimator = &poseEstimator;
 
+    // --- Config command state (084-006): SET/GET's own config-plane shadow
+    // -- an independent struct, NOT DevLoopState's motorConfigShadow[]/
+    // drivetrainConfigShadow (architecture-update.md (084) Decision 7). Seeded
+    // from the SAME boot configs passed to NezhaHardware/Drivetrain/Planner
+    // above, mirroring devState's own seeding contract. sTimeoutWatchdog
+    // points at ticket 002's MotionLoopState::sTimeout -- see
+    // config_commands.h's file header.
+    static ConfigCommandState configState;
+    configState.hardware = &hardware;
+    configState.drivetrain = &drivetrain;
+    configState.poseEstimator = &poseEstimator;
+    configState.planner = &planner;
+    configState.sTimeoutWatchdog = &motionState.sTimeout;
+    for (uint32_t i = 0; i < Subsystems::NezhaHardware::kPortCount; ++i) {
+        configState.motorShadow[i] = defaultMotorConfigs[i];
+    }
+    configState.drivetrainShadow = dtConfig;
+    configState.plannerShadow = defaultPlannerConfig();
+
     // --- Command table: liveness (PING/VER/HELP/ECHO/ID) + DEV + telemetry
-    // (STREAM/SNAP) + motion (S/T/D/STOP). ---
+    // (STREAM/SNAP) + motion (S/T/D/STOP) + config (SET/GET). ---
     std::vector<CommandDescriptor> allCommands = systemCommands();
     std::vector<CommandDescriptor> dev = devCommands(devState);
     allCommands.insert(allCommands.end(), dev.begin(), dev.end());
@@ -227,6 +247,8 @@ int main() {
     allCommands.insert(allCommands.end(), telemetry.begin(), telemetry.end());
     std::vector<CommandDescriptor> motion = motionCommands(motionState);
     allCommands.insert(allCommands.end(), motion.begin(), motion.end());
+    std::vector<CommandDescriptor> config = configCommands(configState);
+    allCommands.insert(allCommands.end(), config.begin(), config.end());
     static CommandProcessor cmd(allCommands);
     cmd.setSerialReply(serialReply, &comm);
 

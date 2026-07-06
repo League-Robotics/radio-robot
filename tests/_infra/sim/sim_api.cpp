@@ -29,6 +29,7 @@
 // no-op; the statement dispatch, outbox drain, and watchdog check inside
 // devLoopTick() still run normally on every call.
 #include "commands/command_processor.h"
+#include "commands/config_commands.h"
 #include "commands/dev_commands.h"
 #include "commands/motion_commands.h"
 #include "commands/system_commands.h"
@@ -165,6 +166,7 @@ std::vector<CommandDescriptor> buildAndWireCommandTable(
     DevLoopState& devState,
     TelemetryState& telemetryState,
     MotionLoopState& motionState,
+    ConfigCommandState& configState,
     Subsystems::Hardware& hardware,
     Subsystems::Drivetrain& drivetrain,
     Subsystems::PoseEstimator& poseEstimator,
@@ -183,6 +185,17 @@ std::vector<CommandDescriptor> buildAndWireCommandTable(
 
     motionState.poseEstimator = &poseEstimator;
 
+    // 084-006: SET/GET's own config-plane shadow -- an independent struct,
+    // NOT devState's (architecture-update.md (084) Decision 7). Pointer
+    // wiring only here; the shadow fields themselves are seeded from
+    // SimHandle's own boot configs in the constructor below, mirroring
+    // devState.motorConfigShadow[]/drivetrainConfigShadow's seeding.
+    configState.hardware = &hardware;
+    configState.drivetrain = &drivetrain;
+    configState.poseEstimator = &poseEstimator;
+    configState.planner = &planner;
+    configState.sTimeoutWatchdog = &motionState.sTimeout;
+
     std::vector<CommandDescriptor> all = systemCommands();
     std::vector<CommandDescriptor> dev = devCommands(devState);
     all.insert(all.end(), dev.begin(), dev.end());
@@ -190,6 +203,8 @@ std::vector<CommandDescriptor> buildAndWireCommandTable(
     all.insert(all.end(), telemetry.begin(), telemetry.end());
     std::vector<CommandDescriptor> motion = motionCommands(motionState);
     all.insert(all.end(), motion.begin(), motion.end());
+    std::vector<CommandDescriptor> config = configCommands(configState);
+    all.insert(all.end(), config.begin(), config.end());
     return all;
 }
 
@@ -212,6 +227,7 @@ struct SimHandle {
     DevLoopState devState;
     TelemetryState telemetryState;   // 082-004: wired into loop below
     MotionLoopState motionState;     // 084-002: wired into loop below
+    ConfigCommandState configState;  // 084-006: SET/GET's own config shadow
     CommandProcessor processor;
     DevLoop loop;
 
@@ -229,8 +245,8 @@ struct SimHandle {
 SimHandle::SimHandle()
     : motorConfigs(defaultMotorConfigSet()),
       hardware(motorConfigs.cfg),
-      processor(buildAndWireCommandTable(devState, telemetryState, motionState, hardware,
-                                          drivetrain, poseEstimator, planner, watchdog))
+      processor(buildAndWireCommandTable(devState, telemetryState, motionState, configState,
+                                          hardware, drivetrain, poseEstimator, planner, watchdog))
 {
     // Primes all four ports' encoders — parity with main.cpp's
     // hardware.begin() call, before the Drivetrain is configured.
@@ -256,6 +272,17 @@ SimHandle::SimHandle()
         devState.motorConfigShadow[i] = motorConfigs.cfg[i];
     }
     devState.drivetrainConfigShadow = dtConfig;
+
+    // 084-006: seed configState's OWN, independent config-plane shadow the
+    // same way -- SET/GET's first delta must merge onto the SAME
+    // calibration the motors/drivetrain/planner were actually constructed/
+    // configured with, not an all-zero blank (config_commands.h's file
+    // header; mirrors devState's seeding immediately above).
+    for (uint32_t i = 0; i < Subsystems::Hardware::kPortCount; ++i) {
+        configState.motorShadow[i] = motorConfigs.cfg[i];
+    }
+    configState.drivetrainShadow = dtConfig;
+    configState.plannerShadow = defaultSimPlannerConfig();
 
     // Prime the capabilities cache for the default DEV DT PORTS binding —
     // read back via ports() (not a local copy), mirroring main.cpp exactly.
