@@ -1,7 +1,7 @@
 ---
 id: 085
 title: Host TestGUI full revival
-status: planning-docs
+status: done
 branch: sprint/085-host-testgui-full-revival
 use-cases: []
 issues:
