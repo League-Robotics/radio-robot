@@ -248,6 +248,58 @@ void scenarioDistanceGoalFiresImplicitStopAbrupt() {
   checkFalse(planner.hasEvent(), "takeEvent() clears hasEvent()");
 }
 
+// 5b. DISTANCE goal_kind: ticket 086-003's terminal anticipation caps the
+// commanded speed as the implicit DISTANCE stop's remaining distance
+// shrinks -- BEFORE the stop itself fires -- the same pattern pursueSteer()
+// already applies for GOTO_GOAL's STOP_POSITION. generousConfig()'s
+// a_decel=1000mm/s^2 makes the cap bind only in the last few mm of this
+// 100mm goal (vCap < 100mm/s once remaining < 100^2/(2*1000) = 5mm) --
+// distinctly demonstrating "capped, but not yet fired" mid-goal.
+void scenarioDistanceGoalAnticipatesStopWithSpeedCap() {
+  beginScenario("DISTANCE goal_kind: terminal speed cap anticipates the DISTANCE stop (086-003)");
+  Subsystems::Planner planner;
+  planner.configure(generousConfig());  // a_decel = 1000 mm/s^2
+
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::DISTANCE;
+  cmd.goal.distance.distance = 100.0f;  // [mm]
+  cmd.goal.distance.speed = 100.0f;     // [mm/s]
+  cmd.style = msg::StopStyle::ABRUPT;   // isolate the anticipation cap from the
+                                        // SMOOTH ramp-down (covered elsewhere)
+  planner.apply(cmd, 0);
+
+  // Tick 1: baseline captured (enc0 = 0mm).
+  planner.tick(1000, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});
+  planner.takeCommand();
+
+  // Tick 2: 0mm traveled, 100mm remaining -- vCap = sqrt(2*1000*100) =
+  // 447mm/s, far above the 100mm/s commanded speed: the cap does not bind,
+  // full commanded speed (large a_max/a_decel + 1s dt converge within this
+  // one tick).
+  planner.tick(2000, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});
+  msg::DrivetrainCommand held = planner.takeCommand();
+  checkFloatNear(held.control.twist.v_x, 100.0f, 0.5f,
+                 "far from the stop -- anticipation cap does not bind, full commanded speed");
+
+  // Tick 3: 98mm traveled, 2mm remaining -- vCap = sqrt(2*1000*2) =
+  // sqrt(4000) mm/s, BELOW the 100mm/s commanded speed: the cap now binds,
+  // well before the DISTANCE stop itself would fire at 100mm.
+  planner.tick(3000, obsPosition(98.0f), obsPosition(98.0f), msg::PoseEstimate{});
+  held = planner.takeCommand();
+  checkTrue(planner.hasActiveCommand(), "98mm traveled -- short of the 100mm DISTANCE stop, still running");
+  checkFloatNear(held.control.twist.v_x, std::sqrt(4000.0f), 1.0f,
+                 "anticipation caps the commanded speed as the DISTANCE stop's remaining distance shrinks");
+  checkTrue(held.control.twist.v_x < 99.0f,
+            "the anticipatory cap measurably reduces speed BEFORE the stop fires (086-003)");
+
+  // Finally, reaching the target distance exactly still fires the stop --
+  // anticipation only reshapes the approach, not WHEN the stop itself fires.
+  planner.tick(4000, obsPosition(100.0f), obsPosition(100.0f), msg::PoseEstimate{});
+  planner.takeCommand();
+  checkFalse(planner.hasActiveCommand(), "DISTANCE stop still fires once the target distance is reached");
+  checkStrEq(planner.takeEvent().reason, "dist", "reason token is \"dist\"");
+}
+
 // 6. TIMED goal_kind: Planner synthesizes an implicit TIME stop from
 // duration; default (SMOOTH) style ramps to (0,0) before completing, and the
 // event is queued only once convergence (or the soft deadline) is reached --
@@ -336,6 +388,61 @@ void scenarioTurnGoalUsesSignedSpeedAndCallerStop() {
   checkStrEq(planner.takeEvent().reason, "heading", "reason token is \"heading\"");
 }
 
+// 7b. TURN goal_kind: ticket 086-003's terminal anticipation caps the
+// commanded turn rate as the HEADING stop's remaining heading error shrinks
+// -- BEFORE the stop itself fires -- the angular-rate analog of 5b's linear
+// cap. Uses generousConfig()'s yaw_acc_max=100 rad/s^2 UNCHANGED (needed so
+// the 0.1s ticks below still converge the ramp to target within a single
+// tick, exactly like scenario 7 above) with a tighter eps (0.01 rad instead
+// of scenario 7's 0.05) so the cap's binding window (remaining <
+// omega^2/(2*yaw_acc_max) = 0.02 rad here) sits comfortably OUTSIDE eps --
+// distinguishing "capped, but not yet fired" mid-turn.
+void scenarioTurnGoalAnticipatesHeadingStopWithRateCap() {
+  beginScenario("TURN goal_kind: terminal rate cap anticipates the HEADING stop (086-003)");
+  Subsystems::Planner planner;
+  planner.configure(generousConfig());  // yaw_acc_max = 100 rad/s^2
+
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::TURN;
+  cmd.goal.turn.speed = -2.0f;  // already-signed: CW
+  cmd.stops_count = 1;
+  cmd.stops_[0].kind = msg::StopKind::STOP_HEADING;
+  cmd.stops_[0].a = -1.5707963f;  // target delta: -90 deg
+  cmd.stops_[0].b = 0.01f;        // tight eps -- see comment above on why
+  cmd.style = msg::StopStyle::ABRUPT;
+  planner.apply(cmd, 0);
+
+  planner.tick(1000, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, 0.0f));  // baseline
+  planner.takeCommand();
+
+  // Far from the target heading (90 deg of error remains) -- omegaCap =
+  // sqrt(2*100*1.5708) = 17.7 rad/s, way above the 2.0 rad/s commanded
+  // rate: the cap does not bind (a_max/yaw_acc_max=100 + 0.1s dt converge
+  // within this one tick, exactly like scenario 7).
+  planner.tick(1100, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, 0.0f));
+  msg::DrivetrainCommand held = planner.takeCommand();
+  checkFloatNear(held.control.twist.omega, -2.0f, 1e-3f,
+                 "far from the target heading -- anticipation cap does not bind");
+
+  // 0.015 rad (~0.86 deg) of heading error remains -- omegaCap =
+  // sqrt(2*100*0.015) = sqrt(3) rad/s, BELOW the 2.0 rad/s commanded rate,
+  // but still outside the 0.01 rad eps -- the goal is still running.
+  planner.tick(1200, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, -1.5557963f));
+  held = planner.takeCommand();
+  checkTrue(planner.hasActiveCommand(),
+            "0.015rad of heading error remains -- still outside eps, still running");
+  checkFloatNear(held.control.twist.omega, -std::sqrt(3.0f), 1e-2f,
+                 "anticipation caps the commanded rate as the HEADING stop's remaining angle shrinks");
+  checkTrue(held.control.twist.omega > -1.9f,
+            "the anticipatory cap measurably reduces the rate BEFORE the stop fires (086-003)");
+
+  // Finally, reaching the target heading exactly still fires the stop.
+  planner.tick(1300, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, -1.5707963f));
+  planner.takeCommand();
+  checkFalse(planner.hasActiveCommand(), "HEADING stop still fires once the target heading is reached");
+  checkStrEq(planner.takeEvent().reason, "heading", "reason token is \"heading\"");
+}
+
 // 8. ROTATION goal_kind: RotationGoal.speed is an already-signed omega;
 // relies on a caller-supplied ROTATION stop (encoder-arc based).
 void scenarioRotationGoalUsesSignedSpeedAndCallerStop() {
@@ -370,6 +477,62 @@ void scenarioRotationGoalUsesSignedSpeedAndCallerStop() {
   planner.tick(1200, obsPosition(-50.0f), obsPosition(50.0f), msg::PoseEstimate{});
   planner.takeCommand();
   checkFalse(planner.hasActiveCommand(), "arc=50mm reaches the ROTATION stop");
+  checkStrEq(planner.takeEvent().reason, "rot", "reason token is \"rot\"");
+}
+
+// 8b. ROTATION goal_kind: ticket 086-003's terminal anticipation caps the
+// commanded turn rate as the ROTATION stop's remaining per-wheel arc
+// shrinks -- BEFORE the stop itself fires. yaw_acc_max is overridden down
+// to 2.0 rad/s^2 (from generousConfig()'s 100 rad/s^2 default) so the cap's
+// binding window (remaining < omega^2/(2*yaw_acc_max) = 0.5625mm here) is
+// comfortably sized against round encoder-arc fixture values, and 1s ticks
+// (mirroring 5b's own cadence choice) keep the ramp converging to each new
+// target within a single tick despite the smaller yaw_acc_max (domegaMax =
+// yaw_acc_max*dt = 2.0 rad/s, >= the 1.5 rad/s omega magnitude ramped
+// through). See applyStopAnticipation()'s own comment (planner.cpp) on why
+// STOP_ROTATION's remaining (a per-wheel arc, mm) is applied to this
+// formula as a documented approximation rather than a unit-correct one.
+void scenarioRotationGoalAnticipatesStopWithRateCap() {
+  beginScenario("ROTATION goal_kind: terminal rate cap anticipates the ROTATION stop (086-003)");
+  Subsystems::Planner planner;
+  msg::PlannerConfig cfg = generousConfig();
+  cfg.yaw_acc_max = 2.0f;  // [rad/s^2] -- see comment above on why
+  planner.configure(cfg);
+
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::ROTATION;
+  cmd.goal.rotation.speed = 1.5f;  // already-signed: CCW
+  cmd.stops_count = 1;
+  cmd.stops_[0].kind = msg::StopKind::STOP_ROTATION;
+  cmd.stops_[0].a = 50.0f;  // [mm] target per-wheel arc
+  cmd.style = msg::StopStyle::ABRUPT;
+  planner.apply(cmd, 0);
+
+  planner.tick(1000, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});  // baseline
+  planner.takeCommand();
+
+  // arc=0mm, 50mm remaining -- omegaCap = sqrt(2*2.0*50) = sqrt(200) rad/s,
+  // way above the 1.5 rad/s commanded rate: the cap does not bind.
+  planner.tick(2000, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});
+  msg::DrivetrainCommand held = planner.takeCommand();
+  checkFloatNear(held.control.twist.omega, 1.5f, 1e-2f,
+                 "far from the stop -- anticipation cap does not bind");
+
+  // arc=49.7mm, 0.3mm remaining -- omegaCap = sqrt(2*2.0*0.3) = sqrt(1.2)
+  // rad/s, BELOW the 1.5 rad/s commanded rate: the cap now binds, well
+  // before the ROTATION stop itself would fire at 50mm.
+  planner.tick(3000, obsPosition(-49.7f), obsPosition(49.7f), msg::PoseEstimate{});
+  held = planner.takeCommand();
+  checkTrue(planner.hasActiveCommand(), "arc=49.7mm -- short of the 50mm ROTATION stop, still running");
+  checkFloatNear(held.control.twist.omega, std::sqrt(1.2f), 1e-2f,
+                 "anticipation caps the commanded rate as the ROTATION stop's remaining arc shrinks");
+  checkTrue(held.control.twist.omega < 1.4f,
+            "the anticipatory cap measurably reduces the rate BEFORE the stop fires (086-003)");
+
+  // Finally, reaching the target arc exactly still fires the stop.
+  planner.tick(4000, obsPosition(-50.0f), obsPosition(50.0f), msg::PoseEstimate{});
+  planner.takeCommand();
+  checkFalse(planner.hasActiveCommand(), "ROTATION stop still fires once the target arc is reached");
   checkStrEq(planner.takeEvent().reason, "rot", "reason token is \"rot\"");
 }
 
@@ -533,9 +696,12 @@ int main() {
   scenarioVelocityGoalRampsAndStaysOpenEnded();
   scenarioVelocityGoalWithStopReportsTimed();
   scenarioDistanceGoalFiresImplicitStopAbrupt();
+  scenarioDistanceGoalAnticipatesStopWithSpeedCap();
   scenarioTimedGoalSmoothRampDown();
   scenarioTurnGoalUsesSignedSpeedAndCallerStop();
+  scenarioTurnGoalAnticipatesHeadingStopWithRateCap();
   scenarioRotationGoalUsesSignedSpeedAndCallerStop();
+  scenarioRotationGoalAnticipatesStopWithRateCap();
   scenarioGotoGoalPursuesDirectlyWhenBearingWithinGate();
   scenarioGotoGoalPreRotatesThenPursuesAndArrives();
   scenarioStopGoalKindHaltsSilently();

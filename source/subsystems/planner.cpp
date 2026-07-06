@@ -333,6 +333,57 @@ void Planner::pursueSteer(const msg::PoseEstimate& fusedPose) {
   ramp_.setTarget(v, omega);
 }
 
+void Planner::applyStopAnticipation(const msg::MotorState& leftObs, const msg::MotorState& rightObs,
+                                    const msg::PoseEstimate& fusedPose) {
+  // Start from the staged (v, omega) -- the ramp's own eventual target
+  // absent any cap -- and tighten whichever component an active DISTANCE/
+  // ROTATION/HEADING stop's remaining-to-go geometry says to tighten. See
+  // planner.h's class comment for why GO_TO never reaches this method.
+  float v = stagedV_;
+  float omega = stagedOmega_;
+
+  for (uint8_t i = 0; i < stopsCount_; ++i) {
+    const msg::StopCondition& cond = stops_[i];
+    float remaining = 0.0f;
+    Motion::StopEvalResult r =
+        Motion::remainingToStop(cond, baseline_, leftObs, rightObs, fusedPose, &remaining);
+    if (r == Motion::StopEvalResult::UNSUPPORTED) continue;  // STOP_TIME etc -- no geometry here
+
+    if (cond.kind == msg::StopKind::STOP_DISTANCE) {
+      // pursueSteer()-style linear terminal decel cap.
+      float vCap = sqrtf(fmaxf(0.0f, 2.0f * config_.a_decel * remaining));
+      float mag = fminf(fabsf(v), vCap);
+      v = (stagedV_ < 0.0f) ? -mag : mag;
+    } else if (cond.kind == msg::StopKind::STOP_HEADING) {
+      // TURN's angular-rate cap: remaining is a genuine heading error (rad),
+      // dimensionally consistent with yaw_acc_max (rad/s^2) -- exact analog
+      // of the DISTANCE cap above.
+      float omegaCap = sqrtf(fmaxf(0.0f, 2.0f * config_.yaw_acc_max * remaining));
+      float mag = fminf(fabsf(omega), omegaCap);
+      omega = (stagedOmega_ < 0.0f) ? -mag : mag;
+    } else if (cond.kind == msg::StopKind::STOP_ROTATION) {
+      // ROTATION's angular-rate cap: remaining here is a per-wheel ARC (mm,
+      // see evaluateStopCondition()'s own STOP_ROTATION comment), not an
+      // angle -- Planner has no DrivetrainConfig.trackwidth to convert arc
+      // mm <-> rad with (see class comment on why RotationGoal.speed is
+      // accepted pre-signed instead). Applying yaw_acc_max (rad/s^2)
+      // directly to an mm-valued remaining is therefore a deliberate,
+      // documented approximation, not a unit-correct derivation: it still
+      // gives the right SHAPE of cap (0 at remaining==0, growing with
+      // remaining, so it never binds far from the stop and always binds at
+      // it) using the only two numbers this class actually has (omega,
+      // yaw_acc_max) -- the same concept-not-byte-for-byte simplification
+      // precedent already established for RT's coast-anticipation/
+      // rotational-slip (planner.h's GOTO_GOAL class comment).
+      float omegaCap = sqrtf(fmaxf(0.0f, 2.0f * config_.yaw_acc_max * remaining));
+      float mag = fminf(fabsf(omega), omegaCap);
+      omega = (stagedOmega_ < 0.0f) ? -mag : mag;
+    }
+  }
+
+  ramp_.setTarget(v, omega);
+}
+
 void Planner::queueEvent(const char* reason) {
   hasEvent_ = true;
   heldEvent_ = Event{};
@@ -378,6 +429,16 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
       // converges (the `stopping_` branch below), so without this guard
       // PURSUE would fight its own completion indefinitely.
       pursueSteer(fusedPose);
+    } else if (mode_ != msg::DriveMode::GO_TO && !stopping_) {
+      // 086-003: the same anticipation pattern, extended to DISTANCE/TURN/
+      // ROTATION -- GO_TO is excluded (PURSUE's pursueSteer() above already
+      // owns its own anticipation; PRE_ROTATE's STOP_HEADING is a
+      // phase-handoff gate, not a terminal stop -- see planner.h's class
+      // comment on applyStopAnticipation()). Gated on !stopping_ for the
+      // same reason pursueSteer()'s own call is: once a stop condition has
+      // armed the SMOOTH ramp-down (ramp_.setTarget(0, 0) below), this must
+      // not keep re-targeting the ramp away from zero.
+      applyStopAnticipation(leftObs, rightObs, fusedPose);
     }
 
     ramp_.advance(dt);

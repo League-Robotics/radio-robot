@@ -181,15 +181,6 @@ _DRIVE_TOLERANCE_FRACTION = 0.015   # 1.5% of the commanded 500 mm (7.5 mm)
 _D_BUDGET = 4000   # [ms] ample for the drive itself plus completion
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "086-001: reproduces the 086 motion terminal-overshoot bug (D "
-        "command overshoots its commanded distance on stop); ticket 086-002 "
-        "(motor velocity-loop fix) and 086-003 (terminal decel anticipation) "
-        "are expected to remove this xfail marker."
-    ),
-)
 def test_d_200_200_500_stops_within_tight_tolerance_of_commanded_distance(sim):
     """D 200 200 500 (500 mm straight-line drive) must stop within a tight
     tolerance of the commanded 500 mm, measured (ground-truth pose) at the
@@ -210,8 +201,20 @@ def test_d_200_200_500_stops_within_tight_tolerance_of_commanded_distance(sim):
 
     The assertion below measures at the 'EVT done D' completion tick itself
     (matching how a real caller -- e.g. a Planner-chained tour leg --
-    would observe "done") against a tight 1.5% tolerance, which the ~5.14%
-    pre-fix overshoot fails.
+    would observe "done") against a tight 1.5% tolerance.
+
+    **086-002 update:** confirmed unaffected by the motor-velocity-loop fix
+    alone -- still ~532.5mm/+6.50% at 'EVT done D' (see that ticket's own
+    Completion Notes); the xfail marker stayed.
+
+    **086-003 update:** the xfail marker is REMOVED below -- Planner::tick()'s
+    new terminal-decel anticipation (Motion::remainingToStop() capping the
+    commanded speed as the DISTANCE stop's remaining-to-go shrinks, the same
+    pattern pursueSteer() already used for GOTO) hands ticket 002's fixed
+    motor loop a MUCH gentler "arrest" to perform: measured true x =
+    505.73mm at 'EVT done D reason=dist' (t=2376ms elapsed), +1.15% over the
+    500mm target -- comfortably inside this test's 1.5% (7.5mm) tolerance,
+    down from the pre-086-003 +6.50%/532.51mm.
     """
     reply = sim.command("D 200 200 500")
     assert reply.strip() == "OK drive l=200 r=200 mm=500"
