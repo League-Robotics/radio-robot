@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package robot;
+
+import "common.proto";
+
+// ---------------------------------------------------------------------------
+// Odometer (OTOS-style optical odometry sensor) subsystem messages (084-008,
+// SUC-007). Fills the gap hal/capability/odometer.h's own file header (081)
+// flagged: "a later ticket that adds a concrete odometer leaf... and finds it
+// needs tunable parameters should add a dedicated proto at that point rather
+// than retrofitting one now."
+// ---------------------------------------------------------------------------
+
+// Command for the odometer: one action per dispatch (oneof). `init`/`zero`/
+// `reset_tracking` carry no payload of their own -- each is a bool marker
+// (`true` selects that arm, matching protos/planner.proto's
+// `PlannerCommand.stop` precedent: "explicit stop (true = stop now)").
+// `set_pose` carries the explicit world-frame pose OV sets.
+//
+// Deviation note: `set_pose`'s payload type is common.proto's `Pose2D`
+// (x, y, h -- the identical shape architecture-update.md (084)'s Decision 5
+// sketch names "SetPose"), NOT drivetrain.proto's own `SetPose` message.
+// Two reasons: (1) scripts/gen_messages.py emits exactly one cross-file
+// include for every generated header (`#include "messages/common.h"`) --
+// there is no generator support for pulling in a second, non-common proto
+// file's type, so referencing drivetrain.proto's `SetPose` from here would
+// generate a header that fails to compile; (2) protoc itself rejects a
+// second `message SetPose` defined in this file (same `package robot;` --
+// the fully-qualified name `robot.SetPose` would collide with drivetrain.
+// proto's existing definition). `Pose2D` is the exact same shape, already
+// generator-visible via the automatic common.h include, and already the
+// canonical shared value type PoseEstimate.pose reuses -- the same
+// "reused rather than duplicated" call PoseEstimate/WheelTarget/Gains
+// already made in common.proto. Noted here explicitly per this ticket's own
+// instruction to record any wire/message-shape discrepancy rather than
+// silently reconciling it.
+message OdometerCommand {
+  oneof action {
+    bool   init           = 1;
+    bool   zero           = 2;
+    bool   reset_tracking = 3;
+    Pose2D set_pose       = 4;
+  }
+}
+
+// Calibration scalars for the odometer (OL/OA wire verbs, docs/protocol-v2.md
+// §11). Hal::SimOdometer's implementation is a deliberate store-and-echo this
+// sprint -- no scale error is modeled in sim for these to meaningfully
+// correct (architecture-update.md (084) Decision 5's Consequences).
+message OdometerConfig {
+  float linear_scalar  = 1;
+  float angular_scalar = 2;
+}

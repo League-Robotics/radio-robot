@@ -11,6 +11,7 @@
 #include "commands/arg_parse.h"
 #include "commands/command_processor.h"
 #include "messages/drivetrain.h"
+#include "messages/odometer.h"
 
 namespace {
 
@@ -44,6 +45,20 @@ const ArgSchema kSiSchema = {kSiDefs, 3, 3, false, nullptr};
 // fused pose on its very next tick, which may produce a visible course
 // correction rather than a smooth continuation -- observed, not
 // specifically engineered, behavior.
+//
+// 084-008 gap closure: ALSO re-anchors the active Hal::Odometer (if any)
+// via apply()'s SET_POSE arm, in the SAME wire dispatch -- mirrors
+// source_old's own two-call handleSI (PoseEstimator reset + `hal.otos().
+// setWorldPose()`). Before this, SI re-anchored PoseEstimator alone
+// (ticket 007's own documented caveat -- see test_pose_commands.py's module
+// docstring): the very next devLoopTick() pass fused a fresh, un-reanchored
+// OTOS reading into the EKF, pulling the fused `pose=` back toward the
+// odometer's own (unrelated) frame. Re-anchoring both in the same dispatch
+// means that next fusion pass reads an odometer sample that ALREADY agrees
+// with the just-set anchor, so the EKF update's residual is zero and
+// `pose=` reads back exactly `x`,`y`,`h` too, not just `encpose=`.
+// hardware.odometer() is nullptr on Subsystems::NezhaHardware -- a no-op
+// there, unchanged from ticket 007's behavior on that build.
 // ---------------------------------------------------------------------------
 void handleSI(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
               void* handlerCtx) {
@@ -57,6 +72,17 @@ void handleSI(const ArgList& args, const char* corrId, ReplyFn replyFn, void* re
   pose.y = static_cast<float>(y);
   pose.h = static_cast<float>(h) * kCdegToRad;  // [rad] -- PoseEstimator's internal convention
   state.poseEstimator->setPose(pose);
+
+  Hal::Odometer* odometer = state.hardware->odometer();
+  if (odometer != nullptr) {
+    msg::Pose2D otosPose;
+    otosPose.x = pose.x;
+    otosPose.y = pose.y;
+    otosPose.h = pose.h;
+    msg::OdometerCommand otosCmd;
+    otosCmd.setSetPose(otosPose);
+    odometer->apply(otosCmd);
+  }
 
   char body[48];
   snprintf(body, sizeof(body), "x=%d y=%d h=%d", static_cast<int>(x), static_cast<int>(y),

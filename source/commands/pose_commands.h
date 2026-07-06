@@ -22,6 +22,14 @@
 // Consequences for the full rationale -- do not re-route `SI` through
 // `Drivetrain` without revisiting that decision.
 //
+// 084-008 gap closure: `SI`'s handler ALSO re-anchors the active
+// `Hal::Odometer` (via `hardware.odometer()`, ticket 008's `apply()`
+// `SET_POSE` arm) in the SAME wire dispatch, so the very next fusion pass
+// reads an odometer sample that already agrees with the freshly-set anchor
+// -- see handleSI()'s own doc comment (pose_commands.cpp) for the "fused
+// `pose=` used to read back only partially re-anchored" hazard this closes.
+// A no-op on `Subsystems::NezhaHardware` (`odometer()` still nullptr).
+//
 // `ZERO enc` reuses the SAME bound-pair-encoder-reset primitive `DEV M <n>
 // RESET` already exercises (`Hal::Motor::resetPosition()` -- a concrete,
 // synchronous-TO-CALL method: it only stages `resetPending_ = true`: see

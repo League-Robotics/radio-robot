@@ -40,6 +40,7 @@ _SETTER_TYPES = frozenset([
     "GripperConfig",     "PortConfig",
     "GripperCommand",
     "CommunicatorConfig",
+    "OdometerCommand",   "OdometerConfig",
 ])
 
 # ---------------------------------------------------------------------------

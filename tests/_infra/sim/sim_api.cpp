@@ -32,6 +32,7 @@
 #include "commands/config_commands.h"
 #include "commands/dev_commands.h"
 #include "commands/motion_commands.h"
+#include "commands/otos_commands.h"
 #include "commands/pose_commands.h"
 #include "commands/system_commands.h"
 #include "commands/telemetry_commands.h"
@@ -157,14 +158,16 @@ msg::PlannerConfig defaultSimPlannerConfig() {
 // wires MotionLoopState's poseEstimator pointer (084-002, motionCommands()'s
 // own doc comment requires the same before any call), wires PoseCommandState's
 // hardware/drivetrain/poseEstimator pointers (084-007, poseCommands()'s own
-// doc comment requires the same before any call), and returns the full
-// command table (liveness + DEV + telemetry + motion + config + pose-set),
-// mirroring main.cpp's own systemCommands()+devCommands()+
-// telemetryCommands()+motionCommands()+configCommands()+poseCommands()
-// assembly exactly. Packaged as a function (rather than inline in main.cpp's
-// style) so it can run from SimHandle's member-initializer list, wiring
-// devState/telemetryState/motionState/poseState as a side effect at the
-// exact point CommandProcessor needs the finished table.
+// doc comment requires the same before any call), wires OtosCommandState's
+// hardware pointer (084-008, otosCommands()'s own doc comment requires the
+// same before any call), and returns the full command table (liveness + DEV
+// + telemetry + motion + config + pose-set + OTOS), mirroring main.cpp's own
+// systemCommands()+devCommands()+telemetryCommands()+motionCommands()+
+// configCommands()+poseCommands()+otosCommands() assembly exactly. Packaged
+// as a function (rather than inline in main.cpp's style) so it can run from
+// SimHandle's member-initializer list, wiring devState/telemetryState/
+// motionState/poseState/otosState as a side effect at the exact point
+// CommandProcessor needs the finished table.
 // ---------------------------------------------------------------------------
 std::vector<CommandDescriptor> buildAndWireCommandTable(
     DevLoopState& devState,
@@ -172,6 +175,7 @@ std::vector<CommandDescriptor> buildAndWireCommandTable(
     MotionLoopState& motionState,
     ConfigCommandState& configState,
     PoseCommandState& poseState,
+    OtosCommandState& otosState,
     Subsystems::Hardware& hardware,
     Subsystems::Drivetrain& drivetrain,
     Subsystems::PoseEstimator& poseEstimator,
@@ -207,6 +211,13 @@ std::vector<CommandDescriptor> buildAndWireCommandTable(
     poseState.drivetrain = &drivetrain;
     poseState.poseEstimator = &poseEstimator;
 
+    // 084-008: OI/OZ/OR/OP/OV/OL/OA's own state -- an independent struct,
+    // NOT devState's/configState's/poseState's (otos_commands.h's file
+    // header). odometer() resolves &hardware.simOdometer() through
+    // Subsystems::SimHardware's own override -- every verb acks OK here,
+    // unlike main.cpp's NezhaHardware-backed table.
+    otosState.hardware = &hardware;
+
     std::vector<CommandDescriptor> all = systemCommands();
     std::vector<CommandDescriptor> dev = devCommands(devState);
     all.insert(all.end(), dev.begin(), dev.end());
@@ -218,6 +229,8 @@ std::vector<CommandDescriptor> buildAndWireCommandTable(
     all.insert(all.end(), config.begin(), config.end());
     std::vector<CommandDescriptor> pose = poseCommands(poseState);
     all.insert(all.end(), pose.begin(), pose.end());
+    std::vector<CommandDescriptor> otos = otosCommands(otosState);
+    all.insert(all.end(), otos.begin(), otos.end());
     return all;
 }
 
@@ -242,6 +255,7 @@ struct SimHandle {
     MotionLoopState motionState;     // 084-002: wired into loop below
     ConfigCommandState configState;  // 084-006: SET/GET's own config shadow
     PoseCommandState poseState;      // 084-007: SI/ZERO's own bound-pair + estimator wiring
+    OtosCommandState otosState;      // 084-008: OI/OZ/OR/OP/OV/OL/OA's own state
     CommandProcessor processor;
     DevLoop loop;
 
@@ -260,8 +274,8 @@ SimHandle::SimHandle()
     : motorConfigs(defaultMotorConfigSet()),
       hardware(motorConfigs.cfg),
       processor(buildAndWireCommandTable(devState, telemetryState, motionState, configState,
-                                          poseState, hardware, drivetrain, poseEstimator, planner,
-                                          watchdog))
+                                          poseState, otosState, hardware, drivetrain,
+                                          poseEstimator, planner, watchdog))
 {
     // Primes all four ports' encoders — parity with main.cpp's
     // hardware.begin() call, before the Drivetrain is configured.

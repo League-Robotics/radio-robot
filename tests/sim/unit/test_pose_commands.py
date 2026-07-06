@@ -12,27 +12,31 @@ Drives ``libfirmware_host`` through the full wire dispatch (``Sim.command()``)
 directory's existing ``test_tlm_stream_snap.py``/``test_motion_commands_*``
 pattern.
 
-**`SI`'s `pose=` (fused) caveat -- recorded, not silently hidden.** `SI`
-re-anchors `PoseEstimator::setPose()` alone (Decision 1's exact scope);
-it does NOT re-anchor the active `Hal::Odometer`'s own world-frame reading
--- that capability (`Hal::Odometer::apply()`'s new `set_pose` arm, wired to
-the `OV` wire verb) is added by ticket 084-008, sequenced directly after
-this one (`008-otos-command-surface-*.md`'s `depends-on: ['007']`). Since
-the sim always has a live odometer (`Subsystems::SimHardware::odometer()`
-is never null), the very next `devLoopTick()` pass fuses a fresh,
-un-reanchored OTOS reading into the EKF, pulling `pose=` partway back
-toward the odometer's own (unrelated) frame -- measured (2026-07-06): gain
-`P/(P+R) = 100/(100+50) ~= 0.667` (`EkfTiny::setPose()`'s `kPriorXY=100`
-vs. `PoseEstimator::configure()`'s default `ekf_r_otos_xy` fallback of 50),
+**`SI`'s `pose=` (fused) gap -- CLOSED by ticket 084-008.** `SI` originally
+re-anchored `PoseEstimator::setPose()` alone (Decision 1's exact scope); it
+did NOT re-anchor the active `Hal::Odometer`'s own world-frame reading, so
+-- since the sim always has a live odometer
+(`Subsystems::SimHardware::odometer()` is never null) -- the very next
+`devLoopTick()` pass fused a fresh, un-reanchored OTOS reading into the EKF,
+pulling `pose=` partway back toward the odometer's own (unrelated) frame
+(measured 2026-07-06, pre-008: gain `P/(P+R) = 100/(100+50) ~= 0.667`,
 landing `pose=` roughly a third of the way from the pre-SI value to the new
-anchor rather than exactly at it. This is the SAME "starts right, then
+anchor rather than exactly at it). This was the SAME "starts right, then
 rotates away" hazard `source_old/commands/SystemCommands.cpp`'s own
 `handleSI` comment names, which that implementation patched with a SECOND
-call (`hal.otos().setWorldPose()`) this ticket's `Hal::Odometer` faceplate
-does not yet expose -- a known, ticket-008-sequenced gap, not a defect in
-this ticket's own `PoseEstimator::setPose()`/`SI` wiring. `encpose=` (pure
-dead reckoning -- the EKF never writes there) is fully immune to this and
-reads back EXACTLY.
+call (`hal.otos().setWorldPose()`).
+
+Ticket 084-008 added exactly that capability to this tree
+(`Hal::Odometer::apply()`'s `SET_POSE` arm, wired to the `OV` wire verb) and
+extended `handleSI` (`source/commands/pose_commands.cpp`) to call it in the
+SAME wire dispatch, immediately after `PoseEstimator::setPose()`. The next
+fusion pass now reads an odometer sample that ALREADY agrees with the
+freshly-set anchor, so the EKF update's residual is zero and `pose=` reads
+back EXACTLY `x`,`y`,`h` too -- see
+`test_si_reanchors_both_encpose_and_the_fused_pose_exactly`, below, which
+replaces the old "substantially shifts, not exact" test this same gap used
+to require. `encpose=` (pure dead reckoning -- the EKF never writes there)
+was always immune to this and reads back EXACTLY either way.
 
 **`ZERO enc`'s deferred-hardware-effect subtlety.** `Hal::Motor::
 resetPosition()` is itself STAGED ("zero encoder (staged, not immediate)"
@@ -94,29 +98,23 @@ def test_si_encpose_reads_back_exactly_on_the_next_snap(sim):
     assert tlm["encpose"] == "1000,500,900"
 
 
-def test_si_substantially_shifts_the_fused_pose_toward_the_new_anchor(sim):
-    """pose= (PoseEstimator::fusedPose()) is ALSO re-anchored by setPose()
-    -- confirmed here by a large, unambiguous shift away from its pre-SI
-    value -- but is immediately partially pulled back toward the (un-
-    reanchored) live sim odometer's own frame by the very next OTOS fusion
-    (see this file's module docstring for the measured ~0.667 gain and the
-    ticket-008 sequencing that closes this gap). This test records that
-    substantial-but-partial shift rather than asserting an exact readback.
-    """
+def test_si_reanchors_both_encpose_and_the_fused_pose_exactly(sim):
+    """084-008 gap closure: pose= (PoseEstimator::fusedPose()) now reads back
+    EXACTLY what SI set, not just a substantial-but-partial shift toward it
+    -- because handleSI ALSO re-anchors the active Hal::Odometer (via
+    apply()'s SET_POSE arm) in the SAME wire dispatch, so the very next OTOS
+    fusion pass reads a sample that already agrees with the anchor (zero
+    residual). See this file's module docstring for the pre-008 behavior
+    this replaces."""
     before = _snap(sim)
     assert before["pose"] == "0,0,0"
 
-    sim.command("SI 1000 500 900")
+    reply = sim.command("SI 1000 500 900")
+    assert reply.strip() == "OK setpose x=1000 y=500 h=900"
+
     tlm = _snap(sim)
-    x, y, h = (int(v) for v in tlm["pose"].split(","))
-    # Measured (2026-07-06): lands near (333, 166, 510) -- a substantial,
-    # unambiguous shift toward (1000, 500, 900), not a no-op and not an
-    # exact match. Loose bounds below only prove "moved substantially
-    # toward the anchor," not the exact converged value (which depends on
-    # EKF noise constants this ticket does not own).
-    assert x > 200, f"expected a substantial shift toward x=1000, got x={x}"
-    assert y > 100, f"expected a substantial shift toward y=500, got y={y}"
-    assert h > 200, f"expected a substantial shift toward h=900, got h={h}"
+    assert tlm["pose"] == "1000,500,900"
+    assert tlm["encpose"] == "1000,500,900"
 
 
 def test_si_too_few_args_rejected_with_badarg(sim):

@@ -53,6 +53,7 @@
 #include "commands/config_commands.h"
 #include "commands/dev_commands.h"
 #include "commands/motion_commands.h"
+#include "commands/otos_commands.h"
 #include "commands/pose_commands.h"
 #include "commands/telemetry_commands.h"
 #include "dev_loop.h"
@@ -249,9 +250,18 @@ int main() {
     poseState.drivetrain = &drivetrain;
     poseState.poseEstimator = &poseEstimator;
 
+    // --- OTOS command state (084-008): OI/OZ/OR/OP/OV/OL/OA's own state --
+    // an independent struct, NOT DevLoopState's/ConfigCommandState's/
+    // PoseCommandState's (architecture-update.md (084) Decision 7's same
+    // reasoning). odometer() resolves nullptr on this build's
+    // Subsystems::NezhaHardware -- every one of the seven verbs replies
+    // ERR nodev (no real-hardware OTOS driver this program).
+    static OtosCommandState otosState;
+    otosState.hardware = &hardware;
+
     // --- Command table: liveness (PING/VER/HELP/ECHO/ID) + DEV + telemetry
     // (STREAM/SNAP) + motion (S/T/D/STOP) + config (SET/GET) + pose-set
-    // (SI/ZERO). ---
+    // (SI/ZERO) + OTOS (OI/OZ/OR/OP/OV/OL/OA). ---
     std::vector<CommandDescriptor> allCommands = systemCommands();
     std::vector<CommandDescriptor> dev = devCommands(devState);
     allCommands.insert(allCommands.end(), dev.begin(), dev.end());
@@ -263,6 +273,8 @@ int main() {
     allCommands.insert(allCommands.end(), config.begin(), config.end());
     std::vector<CommandDescriptor> pose = poseCommands(poseState);
     allCommands.insert(allCommands.end(), pose.begin(), pose.end());
+    std::vector<CommandDescriptor> otos = otosCommands(otosState);
+    allCommands.insert(allCommands.end(), otos.begin(), otos.end());
     static CommandProcessor cmd(allCommands);
     cmd.setSerialReply(serialReply, &comm);
 

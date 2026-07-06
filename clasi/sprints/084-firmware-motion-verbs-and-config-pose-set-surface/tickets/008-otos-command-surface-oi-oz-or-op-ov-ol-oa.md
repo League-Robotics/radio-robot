@@ -1,7 +1,7 @@
 ---
 id: '008'
 title: 'OTOS command surface: OI OZ OR OP OV OL OA'
-status: open
+status: done
 use-cases: [SUC-007]
 depends-on: ['007']
 github-issue: ''
@@ -55,34 +55,56 @@ without renaming or reshaping it.
 
 ## Acceptance Criteria
 
-- [ ] New `protos/odometer.proto`: `OdometerCommand` (oneof: `init` |
+- [x] New `protos/odometer.proto`: `OdometerCommand` (oneof: `init` |
       `zero` | `reset_tracking` | `set_pose(SetPose)`), `OdometerConfig`
       (`linear_scalar`, `angular_scalar`); `source/messages/odometer.h`
-      regenerated.
-- [ ] `source/hal/capability/odometer.h` gains
+      regenerated. **Deviation (documented in `protos/odometer.proto`
+      itself):** `set_pose`'s payload type is `common.proto`'s `Pose2D`,
+      not a new/reused `SetPose` message — `scripts/gen_messages.py` only
+      ever auto-includes `messages/common.h` for a non-common proto file
+      (no generator support for a second cross-file include), and protoc
+      itself rejects a second `message SetPose` in the same `package
+      robot;` (it would collide with `drivetrain.proto`'s existing
+      definition). `Pose2D` is the identical shape, already
+      generator-visible, and already the established reused-not-duplicated
+      value type (`PoseEstimate.pose` does the same).
+- [x] `source/hal/capability/odometer.h` gains
       `apply(const msg::OdometerCommand&)` and
-      `configure(const msg::OdometerConfig&)`.
-- [ ] `source/hal/sim/sim_odometer.{h,cpp}` implements both: `init`/
+      `configure(const msg::OdometerConfig&)` — concrete (defined once in
+      the header), dispatching onto five new primitive virtuals
+      (`init()`/`resetTracking()`/`setPose()`/`setLinearScalar()`/
+      `setAngularScalar()`), mirroring `capability/motor.h`'s own
+      apply()/configure()-over-primitives split.
+- [x] `source/hal/sim/sim_odometer.{h,cpp}` implements both: `init`/
       `zero`/`reset_tracking`/`set_pose` act on `SimOdometer`'s own
       accumulator (`odomX_`/`odomY_`/`odomH_`); `configure()` stores
       `linear_scalar`/`angular_scalar` in two new fields, independent of
       the existing error-injection knobs, with a documented no-physical-
       effect this sprint (Decision 5's Consequences).
-- [ ] New `source/commands/otos_commands.{h,cpp}` registers `OI`/`OZ`/
+- [x] New `source/commands/otos_commands.{h,cpp}` registers `OI`/`OZ`/
       `OR`/`OP`/`OV`/`OL`/`OA`, matching `docs/protocol-v2.md` §11's
       existing wire shape exactly, resolving the odometer via
       `hardware.odometer()` each dispatch (not a construction-time-bound
       pointer — mirrors `source_old/commands/OtosCommands.h`'s own
       documented rationale for live resolution).
-- [ ] All seven verbs ack (`OK ...`) against the sim
-      (`Subsystems::SimHardware`).
-- [ ] All seven verbs return `ERR nodev <verb>` against
+- [x] All seven verbs ack (`OK ...`) against the sim
+      (`Subsystems::SimHardware`) — `tests/sim/unit/test_otos_commands.py`.
+- [x] All seven verbs return `ERR nodev <verb>` against
       `Subsystems::NezhaHardware` (`odometer()` still `nullptr`) — no
       crash, verified by an explicit test for every one of the seven, not
-      just a subset.
-- [ ] `OP` reads cached `HardwareState`/telemetry-sampled pose (matching
+      just a subset — `tests/sim/unit/test_otos_commands_nodev.py` +
+      `otos_commands_harness.cpp` (an ad hoc host harness, since
+      `tests/_infra/sim/CMakeLists.txt` never compiles
+      `subsystems/nezha_hardware.cpp` into `libfirmware_host`).
+- [x] `OP` reads cached `HardwareState`/telemetry-sampled pose (matching
       `source_old/commands/OtosCommands.h`'s `OtosCtx::hwState` precedent
-      — no direct device call on every `OP` poll).
+      — no direct device call on every `OP` poll). **Deviation (documented
+      in `otos_commands.h`/`.cpp`):** the new tree has no equivalent cached
+      `HardwareState` struct — `OP` instead calls `Hal::Odometer::pose()`
+      directly, a cheap accessor (not `tick()`), the SAME call
+      `telemetry_commands.cpp`'s SNAP handler already makes for its `otos=`
+      field (also flagged `CMD_NONE` there) — a read, not a hardware write,
+      which is the substance of source_old's own distinction.
 
 ## Implementation Plan
 

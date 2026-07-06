@@ -1,30 +1,29 @@
 // odometer.h — the Odometer faceplate (e.g. an OTOS-style optical
-// odometry sensor). Declaration only this ticket — see
-// capability/gripper.h's file header for the "declared, not defined"
-// mechanism; the same applies here.
+// odometry sensor).
 //
-// Gap note (flagged for the team lead / a follow-up ticket): unlike the
-// other four unimplemented faceplates, ticket 002 (protos + message regen)
-// generated no dedicated Odometer{Command,Config,Capabilities} message at
-// all — no protos/odometer.proto exists, only the shared msg::PoseEstimate
-// observation type (protos/common.proto), which DrivetrainState already
-// reuses for its fused/encoder/optical fields. This faceplate is built
-// against that gap as follows:
-//  - State: msg::PoseEstimate (pose + twist + freshness stamp) — an honest
-//    fit, reused rather than duplicated.
-//  - Command: none. An odometer is a pure sensor; there is nothing to
-//    apply() until a leaf needs one (e.g. a pose-reset command), so no
-//    apply() exists on this faceplate at all.
-//  - Config / Capabilities: none generated, so neither configure() nor
-//    capabilities() appears here. A later ticket that adds a concrete
-//    odometer leaf (OTOS wrapper or similar) and finds it needs tunable
-//    parameters should add a dedicated proto at that point rather than
-//    retrofitting one now with no leaf to validate it against.
+// 084-008 fills the gap this file's own header used to flag: protos/
+// odometer.proto now exists (OdometerCommand{oneof: init | zero |
+// reset_tracking | set_pose}, OdometerConfig{linear_scalar,
+// angular_scalar}), so this faceplate gains a real message plane —
+// apply()/configure() — matching the same primitive-setters + shared-
+// dispatch discipline capability/motor.h's own apply()/configure() already
+// established (Hal::Motor::apply() switches over MotorCommand's oneof and
+// calls the leaf's primitive setDutyCycle()/setVelocity()/etc.; the two
+// methods below do the same over OdometerCommand/OdometerConfig against the
+// five primitives declared just below them). capabilities() still does not
+// exist — OdometerCommand's four actions are never capability-gated (every
+// odometer, real or simulated, supports all four), unlike Motor's five-way
+// control-mode oneof, so there is nothing to gate the way
+// motorCommandAllowed() gates Motor's.
+//
+// State: msg::PoseEstimate (pose + twist + freshness stamp) — unchanged,
+// still the honest, reused-not-duplicated fit.
 #pragma once
 
 #include <stdint.h>
 
 #include "messages/common.h"
+#include "messages/odometer.h"
 
 namespace Hal {
 
@@ -37,13 +36,61 @@ class Odometer {
   virtual msg::PoseEstimate pose() const = 0;
   virtual bool connected() const = 0;
 
-  // Faceplate verb (no Config/Capabilities message exists — see file
-  // header).
   virtual void tick(uint32_t now) = 0;   // [ms]
 
-  // Message plane — declared, not defined (no concrete leaf this sprint).
-  // No apply(): read-only sensor, no Command message.
+  // --- Primitive setters (084-008) — one per OdometerCommand action /
+  // OdometerConfig field. apply()/configure() below dispatch onto these,
+  // never onto a leaf's own storage directly — mirrors capability/motor.h's
+  // setDutyCycle()/setVelocity()/etc. split exactly. ---
+  virtual void init() = 0;                            // OI — re-init signal processing / tracking
+  virtual void resetTracking() = 0;                   // OR — reset Kalman/tracking state
+  virtual void setPose(const msg::Pose2D& pose) = 0;  // OZ (zero pose) / OV — set world-frame position
+  virtual void setLinearScalar(float scalar) = 0;     // OL
+  virtual void setAngularScalar(float scalar) = 0;    // OA
+
+  // Message plane — apply()/configure() are concrete (defined once, below),
+  // built on the primitives above; no leaf overrides either (same
+  // discipline as capability/motor.h's apply()/configure()).
+  void apply(const msg::OdometerCommand& command);
+  void configure(const msg::OdometerConfig& config);
+
+  // Message plane — declared, not defined (no caller needs this yet;
+  // dev_loop.cpp/telemetry_commands.cpp both read pose() directly instead —
+  // see capability/gripper.h's file header for the "declared, not defined"
+  // mechanism this relies on).
   msg::PoseEstimate state() const;
 };
+
+// --- apply()/configure(): the shared message plane, defined once here (same
+// headers-only style as capability/motor.h's apply()/state() — no
+// capability/odometer.cpp exists). ---
+
+inline void Odometer::apply(const msg::OdometerCommand& command) {
+  switch (command.action_kind) {
+    case msg::OdometerCommand::ActionKind::INIT:
+      init();
+      break;
+    case msg::OdometerCommand::ActionKind::ZERO:
+      // Real-hardware effect is setPositionRaw(0, 0, 0) (docs/protocol-v2.md
+      // §11's "OZ" section) — the SAME primitive SET_POSE uses, just with an
+      // all-zero Pose2D rather than the caller-supplied one.
+      setPose(msg::Pose2D());
+      break;
+    case msg::OdometerCommand::ActionKind::RESET_TRACKING:
+      resetTracking();
+      break;
+    case msg::OdometerCommand::ActionKind::SET_POSE:
+      setPose(command.action.set_pose);
+      break;
+    case msg::OdometerCommand::ActionKind::NONE:
+    default:
+      break;
+  }
+}
+
+inline void Odometer::configure(const msg::OdometerConfig& config) {
+  setLinearScalar(config.linear_scalar);
+  setAngularScalar(config.angular_scalar);
+}
 
 }  // namespace Hal

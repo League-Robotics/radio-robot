@@ -53,6 +53,29 @@ class SimOdometer : public Odometer {
   // object's own accumulator. now: [ms].
   void tick(uint32_t now) override;
 
+  // --- Hal::Odometer's primitive setters (084-008) — see hal/capability/
+  // odometer.h's apply()/configure() for the shared dispatch that calls
+  // these. init()/resetTracking() both rebaseline the ground-truth sampling
+  // accumulator (hasLastTick_) rather than moving odomX_/odomY_/odomH_ —
+  // see sim_odometer.cpp's doc comments on each for why that is the honest
+  // sim analog of OtosSensor::init()/resetTracking()'s real register writes
+  // (source_old/hal/real/OtosSensor.cpp), neither of which touches the
+  // POSITION_XL registers OZ/OV do. setPose() is the one primitive that DOES
+  // move the accumulator (used by both OZ, via an all-zero Pose2D, and OV).
+  void init() override;
+  void resetTracking() override;
+  void setPose(const msg::Pose2D& pose) override;
+  void setLinearScalar(float scalar) override;
+  void setAngularScalar(float scalar) override;
+
+  // Calibration mirrors (test / future SIMGET-style read-back) — 084-008:
+  // two NEW fields, kept independent of the error-injection knobs below
+  // (Decision 5's Consequences: "the calibration surface and the
+  // error-injection surface never share state"). Store-and-echo only this
+  // sprint — see linearScalar_/angularScalar_'s own field comments.
+  float linearScalar() const { return linearScalar_; }
+  float angularScalar() const { return angularScalar_; }
+
   // --- Error-knob setters — each mutates exactly ONE field below; mirrored
   // 1:1 by sim_setters.h's free Hal:: functions (the canonical call sites
   // ticket 004's ctypes ABI uses). All default to zero -> a fresh
@@ -104,6 +127,13 @@ class SimOdometer : public Odometer {
   float angularScaleErr_    = 0.0f;   // fractional scale error on angular delta
   float linearDriftPerTick_ = 0.0f;   // [mm] additive drift per tick
   float yawDriftPerTick_    = 0.0f;   // [rad] additive drift per tick
+
+  // Calibration surface (084-008, OL/OA) — deliberately separate fields from
+  // the error-injection knobs immediately above (Decision 5's Consequences).
+  // Store-and-echo only: no scale error is modeled in sim for these to
+  // meaningfully correct, so neither field is read by tick() anywhere.
+  float linearScalar_  = 0.0f;   // OL
+  float angularScalar_ = 0.0f;   // OA
 
 #ifdef HOST_BUILD
   // Independent noise stream from PhysicsWorld's own rngL_/rngR_ (different
