@@ -62,6 +62,19 @@ void PoseEstimator::tick(uint32_t now, const msg::MotorState& leftObs,
   float dt = haveLastTick_ ? static_cast<int32_t>(now - lastTick_) * 0.001f
                            : 0.0f;
 
+  // 084-007 (SUC-006): apply a pending resetEncoderBaseline() request only
+  // on a GENUINELY time-advancing tick (dt > 0) -- see that method's own
+  // doc comment (pose_estimator.h) for why a dt == 0 tick (this same
+  // command's own dispatch pass, or any further synchronous command
+  // dispatched before the next real tick) must NOT consume this one-shot
+  // guard: the staged hardware encoder reset (Hal::Motor::resetPosition())
+  // may not have landed yet, so left/right here could still be the STALE
+  // pre-reset reading.
+  if (encBaselineResetPending_ && dt > 0.0f) {
+    haveEncBaseline_ = false;
+    encBaselineResetPending_ = false;
+  }
+
   // Encoder delta against the previous-encoder baseline. Zero on the very
   // first valid tick (no prior baseline yet) -- see haveEncBaseline_'s doc
   // comment in the header for why this is a "no motion yet" default rather
@@ -128,6 +141,25 @@ msg::PoseEstimate PoseEstimator::fusedPose() const {
   result.stamp.valid = haveLastTick_;
   result.stamp.last_upd = lastTick_;
   return result;
+}
+
+void PoseEstimator::setPose(const msg::SetPose& pose) {
+  // pose.h arrives already in radians (the caller -- SI's handler -- did
+  // the wire cdeg->rad conversion) -- see this method's header doc comment.
+  float theta = wrapPi(pose.h);
+  encX_ = pose.x;
+  encY_ = pose.y;
+  encTheta_ = theta;
+  // EkfTiny::setPose() (082-001) overwrites state with a sane diagonal
+  // P-prior instead of zeroing P -- see ekf_tiny.h's own doc comment.
+  ekf_.setPose(pose.x, pose.y, theta);
+}
+
+void PoseEstimator::resetEncoderBaseline() {
+  // Deferred to the next genuinely time-advancing tick() -- see this
+  // method's own doc comment (pose_estimator.h) and tick()'s matching
+  // dt > 0 gate above.
+  encBaselineResetPending_ = true;
 }
 
 }  // namespace Subsystems

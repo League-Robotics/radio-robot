@@ -32,6 +32,7 @@
 #include "commands/config_commands.h"
 #include "commands/dev_commands.h"
 #include "commands/motion_commands.h"
+#include "commands/pose_commands.h"
 #include "commands/system_commands.h"
 #include "commands/telemetry_commands.h"
 #include "dev_loop.h"
@@ -154,19 +155,23 @@ msg::PlannerConfig defaultSimPlannerConfig() {
 // TelemetryState's hardware/drivetrain/poseEstimator pointers (082-004,
 // telemetryCommands()'s own doc comment requires the same before any call),
 // wires MotionLoopState's poseEstimator pointer (084-002, motionCommands()'s
-// own doc comment requires the same before any call), and returns the full
-// command table (liveness + DEV + telemetry + motion), mirroring main.cpp's
-// own systemCommands()+devCommands()+telemetryCommands()+motionCommands()
+// own doc comment requires the same before any call), wires PoseCommandState's
+// hardware/drivetrain/poseEstimator pointers (084-007, poseCommands()'s own
+// doc comment requires the same before any call), and returns the full
+// command table (liveness + DEV + telemetry + motion + config + pose-set),
+// mirroring main.cpp's own systemCommands()+devCommands()+
+// telemetryCommands()+motionCommands()+configCommands()+poseCommands()
 // assembly exactly. Packaged as a function (rather than inline in main.cpp's
 // style) so it can run from SimHandle's member-initializer list, wiring
-// devState/telemetryState/motionState as a side effect at the exact point
-// CommandProcessor needs the finished table.
+// devState/telemetryState/motionState/poseState as a side effect at the
+// exact point CommandProcessor needs the finished table.
 // ---------------------------------------------------------------------------
 std::vector<CommandDescriptor> buildAndWireCommandTable(
     DevLoopState& devState,
     TelemetryState& telemetryState,
     MotionLoopState& motionState,
     ConfigCommandState& configState,
+    PoseCommandState& poseState,
     Subsystems::Hardware& hardware,
     Subsystems::Drivetrain& drivetrain,
     Subsystems::PoseEstimator& poseEstimator,
@@ -196,6 +201,12 @@ std::vector<CommandDescriptor> buildAndWireCommandTable(
     configState.planner = &planner;
     configState.sTimeoutWatchdog = &motionState.sTimeout;
 
+    // 084-007: SI/ZERO's own bound-pair + estimator wiring -- an independent
+    // struct, NOT devState's/configState's (pose_commands.h's file header).
+    poseState.hardware = &hardware;
+    poseState.drivetrain = &drivetrain;
+    poseState.poseEstimator = &poseEstimator;
+
     std::vector<CommandDescriptor> all = systemCommands();
     std::vector<CommandDescriptor> dev = devCommands(devState);
     all.insert(all.end(), dev.begin(), dev.end());
@@ -205,6 +216,8 @@ std::vector<CommandDescriptor> buildAndWireCommandTable(
     all.insert(all.end(), motion.begin(), motion.end());
     std::vector<CommandDescriptor> config = configCommands(configState);
     all.insert(all.end(), config.begin(), config.end());
+    std::vector<CommandDescriptor> pose = poseCommands(poseState);
+    all.insert(all.end(), pose.begin(), pose.end());
     return all;
 }
 
@@ -228,6 +241,7 @@ struct SimHandle {
     TelemetryState telemetryState;   // 082-004: wired into loop below
     MotionLoopState motionState;     // 084-002: wired into loop below
     ConfigCommandState configState;  // 084-006: SET/GET's own config shadow
+    PoseCommandState poseState;      // 084-007: SI/ZERO's own bound-pair + estimator wiring
     CommandProcessor processor;
     DevLoop loop;
 
@@ -246,7 +260,8 @@ SimHandle::SimHandle()
     : motorConfigs(defaultMotorConfigSet()),
       hardware(motorConfigs.cfg),
       processor(buildAndWireCommandTable(devState, telemetryState, motionState, configState,
-                                          hardware, drivetrain, poseEstimator, planner, watchdog))
+                                          poseState, hardware, drivetrain, poseEstimator, planner,
+                                          watchdog))
 {
     // Primes all four ports' encoders — parity with main.cpp's
     // hardware.begin() call, before the Drivetrain is configured.

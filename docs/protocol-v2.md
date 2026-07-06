@@ -1262,6 +1262,46 @@ GRIP
 OK grip deg=90
 ```
 
+### SI — Set World Pose
+
+```
+SI <x> <y> <h> [#id]   → OK setpose x=<x> y=<y> h=<h> [#id]
+```
+
+Re-anchors the robot's **believed** world pose — the pose motion verbs
+(`G`/`TURN`/`RT`) steer against — to `(x, y, h)` without moving the robot
+itself.  Establishes the onboard pose from an external fix (e.g. a
+downward-facing playfield camera), so a subsequent `G`/`D`/`TURN` drives in
+the correct world frame.
+
+- `x`, `y` — position, mm.
+- `h` — heading, centi-degrees.
+
+All three arguments are plain integers with no range check (values are cast
+internally; an absurd input is the caller's mistake, not a wire error). Too
+few arguments → `ERR badarg`.
+
+`SI` re-anchors both the encoder-only dead-reckoning reading (`encpose=`)
+and the EKF's fused belief (`pose=`) — see `TLM`'s field list (§8). It does
+**not** re-anchor the active OTOS/odometer's own world-frame reading (`OV`,
+§11); until an `OV` fix is also issued, a live odometer's next reading will
+partially correct `pose=` back toward its own (un-reanchored) frame,
+identically to how a plain `SI` interacted with the OTOS chip in the
+pre-v2 firmware. Issue `SI` and `OV` together (same world fix) for a full
+re-anchor, exactly as an external camera-fix workflow already does.
+
+`SI` does not itself cancel an active drive: a `G`/`TURN` in progress keeps
+pursuing its goal using the newly-anchored pose on its very next tick,
+which may produce a visible course correction rather than a smooth
+continuation.
+
+Example:
+
+```
+SI 1230 450 2700
+OK setpose x=1230 y=450 h=2700
+```
+
 ### ZERO — Zero Encoders / Odometry
 
 ```
@@ -1276,6 +1316,11 @@ odometry integrator to `(0, 0, 0)` (calls `Odometry::zero()`).  Both
 may be specified in one command.
 
 At least one of `enc` or `pose` must be present; otherwise `ERR badarg`.
+
+`enc`'s effect additionally resets `PoseEstimator`'s own encoder-delta
+baseline in the same call, so the next tick's dead-reckoning delta is
+computed against the freshly-zeroed encoders rather than a stale
+pre-zero baseline (which would otherwise fabricate a phantom jump).
 
 Example:
 

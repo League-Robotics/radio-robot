@@ -96,6 +96,57 @@ class PoseEstimator {
   // default (same rationale as encoderPose()).
   msg::PoseEstimate fusedPose() const;
 
+  // setPose -- 084-007 (SUC-006): re-anchor BOTH encoderPose() and
+  // fusedPose() to the given world pose (pose.x, pose.y, pose.h). `SI`'s
+  // handler (source/commands/pose_commands.cpp) is this method's one wire
+  // caller -- it converts SI's wire centi-degrees to radians BEFORE calling
+  // this method, matching every other pose field's existing radians
+  // convention (pose.h here is already in radians, like fusedPose().pose.h/
+  // encoderPose().pose.h). Deliberately does NOT touch haveEncBaseline_/
+  // prevEncLeft_/prevEncRight_/haveLastTick_: SI re-anchors the BELIEVED
+  // pose only -- it never rezeroes the encoders themselves (that is
+  // ZERO enc's/resetEncoderBaseline()'s job, immediately below) -- so
+  // encoder-delta tracking continues uninterrupted from wherever the wheels
+  // actually are. Wraps pose.h through wrapPi() before storing, matching
+  // encTheta_'s own always-wrapped invariant (tick()'s own wrapPi() call).
+  void setPose(const msg::SetPose& pose);
+
+  // resetEncoderBaseline -- 084-007 (SUC-006): `ZERO enc`'s own effect on
+  // this class (source/commands/pose_commands.cpp's handleZero(), called
+  // in the SAME wire dispatch that also stages the bound pair's hardware
+  // encoder zero via Hal::Motor::resetPosition()). Does NOT touch encX_/
+  // encY_/encTheta_ or the EKF's own state -- the believed pose itself is
+  // untouched; only the encoder-delta bookkeeping is (eventually) resynced.
+  //
+  // Deferred, not immediate: Hal::Motor::resetPosition() is itself STAGED
+  // ("zero encoder (staged, not immediate)" -- hal/capability/motor.h) --
+  // its actual hardware effect lands only at the top of the leaf's next
+  // tick(), which is not necessarily THIS pass's tick() (NezhaHardware's
+  // per-port I2C round-robin may take several passes to reach the affected
+  // port; the sim harness's dt=0 synchronous-command replay -- see
+  // tests/_infra/sim/sim_api.cpp's own Decision 4 doc comment -- makes THIS
+  // pass's tick() a guaranteed no-op for the encoder read). If this method
+  // cleared haveEncBaseline_ synchronously, the very next tick() call --
+  // which may still observe the STALE, not-yet-zeroed encoder reading --
+  // would immediately consume the one-shot guard and re-baseline against
+  // that stale value, so the LATER tick() where the reading actually snaps
+  // to zero would then diff the fresh zero against the stale baseline,
+  // fabricating exactly the large phantom jump this method exists to
+  // prevent (empirically confirmed against the sim harness while
+  // implementing this ticket).
+  //
+  // Instead, this method only arms encBaselineResetPending_. tick() applies
+  // the actual haveEncBaseline_/prevEncLeft_/prevEncRight_ reset (and clears
+  // the pending flag) on the FIRST subsequent tick() whose dt is genuinely
+  // > 0 -- i.e., the first tick that reflects real elapsed time, which is
+  // exactly the first tick() call any staged hardware effect (including the
+  // paired resetPosition() calls) has had a chance to actually land by. A
+  // dt == 0 tick() (this same pass, or any further synchronous command
+  // dispatched before the next real tick) leaves the pending flag armed and
+  // falls through to ordinary processing unaffected (a zero encoder delta
+  // regardless, since the reading has not changed yet).
+  void resetEncoderBaseline();
+
   // trackwidth -- the SAME configured trackwidth used internally by tick()'s
   // dead-reckoning kinematics (configure()'s config.trackwidth). Small,
   // read-only addition (082, ticket 004): commands/telemetry_commands.cpp's
@@ -150,6 +201,12 @@ class PoseEstimator {
   bool haveEncBaseline_ = false;
   float prevEncLeft_ = 0.0f;    // [mm]
   float prevEncRight_ = 0.0f;   // [mm]
+
+  // encBaselineResetPending_ -- 084-007 (SUC-006): armed by
+  // resetEncoderBaseline(), consumed by tick() on the first subsequent call
+  // whose dt is genuinely > 0 (see resetEncoderBaseline()'s own doc comment
+  // for why this must be deferred rather than applied synchronously).
+  bool encBaselineResetPending_ = false;
 
   // Encoder-only dead-reckoning accumulator (this class's own state — the
   // EKF never writes here). Backs encoderPose().

@@ -53,6 +53,7 @@
 #include "commands/config_commands.h"
 #include "commands/dev_commands.h"
 #include "commands/motion_commands.h"
+#include "commands/pose_commands.h"
 #include "commands/telemetry_commands.h"
 #include "dev_loop.h"
 #include "messages/motor.h"
@@ -238,8 +239,19 @@ int main() {
     configState.drivetrainShadow = dtConfig;
     configState.plannerShadow = defaultPlannerConfig();
 
+    // --- Pose command state (084-007): SI/ZERO's own bound-pair + estimator
+    // wiring -- an independent struct, NOT DevLoopState's/ConfigCommandState's
+    // (architecture-update.md (084) Decision 7's same reasoning: SI/ZERO are
+    // synchronous, one-shot verbs with nothing to hold across a tick
+    // boundary -- see pose_commands.h's file header).
+    static PoseCommandState poseState;
+    poseState.hardware = &hardware;
+    poseState.drivetrain = &drivetrain;
+    poseState.poseEstimator = &poseEstimator;
+
     // --- Command table: liveness (PING/VER/HELP/ECHO/ID) + DEV + telemetry
-    // (STREAM/SNAP) + motion (S/T/D/STOP) + config (SET/GET). ---
+    // (STREAM/SNAP) + motion (S/T/D/STOP) + config (SET/GET) + pose-set
+    // (SI/ZERO). ---
     std::vector<CommandDescriptor> allCommands = systemCommands();
     std::vector<CommandDescriptor> dev = devCommands(devState);
     allCommands.insert(allCommands.end(), dev.begin(), dev.end());
@@ -249,6 +261,8 @@ int main() {
     allCommands.insert(allCommands.end(), motion.begin(), motion.end());
     std::vector<CommandDescriptor> config = configCommands(configState);
     allCommands.insert(allCommands.end(), config.begin(), config.end());
+    std::vector<CommandDescriptor> pose = poseCommands(poseState);
+    allCommands.insert(allCommands.end(), pose.begin(), pose.end());
     static CommandProcessor cmd(allCommands);
     cmd.setSerialReply(serialReply, &comm);
 
