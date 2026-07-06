@@ -2,9 +2,14 @@
 id: 082
 title: Host-side simulation pose estimation and telemetry spine (Phase 1 of TestGUI
   revival)
-status: ticketing
+status: done
 branch: sprint/082-host-side-simulation-pose-estimation-and-telemetry-spine-phase-1-of-testgui-revival
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004, SUC-005]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
 issues:
 - plan-revive-testgui-against-the-new-tree-simulator.md
 ---
