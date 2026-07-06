@@ -129,6 +129,108 @@ class TestCommandsSchema:
 
 
 # ---------------------------------------------------------------------------
+# Wire-shape range audit (sprint 085 ticket 001)
+# ---------------------------------------------------------------------------
+#
+# Firmware ranges transcribed directly from docs/protocol-v2.md §10 (Motion
+# Commands, implemented sprint 084), expressed in the SAME units the UI spec
+# uses -- degrees for ``cdeg_fields`` members, not centidegrees. TURN's
+# ``heading`` field is intentionally excluded from the table-driven check
+# below: it is a ``wrap_deg_field`` whose UI range is deliberately wider than
+# the firmware's own +/-180 deg so any entered angle (e.g. 270) can be
+# normalized onto (-180, 180] before conversion -- see
+# ``TestTurnHeadingWrap`` above and ``commands.py``'s own range-audit
+# docstring above ``COMMANDS``.
+
+FIRMWARE_RANGES: dict[tuple[str, str], tuple[float, float]] = {
+    ("S", "left"): (-1000, 1000),
+    ("S", "right"): (-1000, 1000),
+    ("T", "left"): (-1000, 1000),
+    ("T", "right"): (-1000, 1000),
+    ("T", "ms"): (1, 30000),
+    ("D", "left"): (-1000, 1000),
+    ("D", "right"): (-1000, 1000),
+    ("D", "mm"): (1, 10000),
+    ("R", "speed"): (-1000, 1000),
+    ("R", "radius"): (-10000, 10000),
+    # eps: firmware is 10..1800 cdeg (0.1..18 deg); the UI's min stays 0 as
+    # the omit-if-zero sentinel (below the firmware's own 10 cdeg floor is
+    # fine -- 0 is never sent literally, see optional_zero_fields).
+    ("TURN", "eps"): (0, 18),
+    ("RT", "deg"): (-1800, 1800),
+    ("G", "x"): (-10000, 10000),
+    ("G", "y"): (-10000, 10000),
+    ("G", "speed"): (1, 1000),
+}
+
+_WRAP_EXEMPT_FIELDS = {("TURN", "heading")}
+
+
+class TestCorrectedRangeBounds:
+    """Sprint 085-001: TURN.eps and RT.deg were widened past the firmware's
+    documented ceiling; these pin the corrected bounds directly."""
+
+    def test_turn_eps_max_is_18_degrees(self):
+        """18 deg * 100 = 1800 cdeg, the firmware ceiling (docs/protocol-v2.md
+        §10 ### TURN)."""
+        from robot_radio.testgui.commands import COMMANDS
+        turn_spec = next(s for s in COMMANDS if s["label"] == "TURN")
+        eps = next(p for p in turn_spec["params"] if p["name"] == "eps")
+        assert eps["min"] == 0
+        assert eps["max"] == 18
+
+    def test_rt_deg_bounds_are_plus_minus_1800_degrees(self):
+        """+/-1800 deg * 100 = +/-180000 cdeg, the firmware ceiling
+        (docs/protocol-v2.md §10 ### RT)."""
+        from robot_radio.testgui.commands import COMMANDS
+        rt_spec = next(s for s in COMMANDS if s["label"] == "RT")
+        deg = next(p for p in rt_spec["params"] if p["name"] == "deg")
+        assert deg["min"] == -1800
+        assert deg["max"] == 1800
+
+
+class TestCommandRangesMatchFirmware:
+    """Table-driven check: every declared UI range must sit within the
+    firmware's own documented range (docs/protocol-v2.md §10), so a future
+    accidental widening is caught here instead of by another manual audit."""
+
+    def test_every_declared_range_is_within_firmware_range(self):
+        from robot_radio.testgui.commands import COMMANDS
+
+        checked: set[tuple[str, str]] = set()
+        for spec in COMMANDS:
+            label = spec["label"]
+            for param in spec["params"]:
+                key = (label, param["name"])
+                if key in _WRAP_EXEMPT_FIELDS:
+                    continue
+                assert key in FIRMWARE_RANGES, (
+                    f"{label}.{param['name']} has no entry in this test's "
+                    f"FIRMWARE_RANGES table -- add one transcribed from "
+                    f"docs/protocol-v2.md §10"
+                )
+                fw_min, fw_max = FIRMWARE_RANGES[key]
+                assert param["min"] >= fw_min, (
+                    f"{label}.{param['name']} min={param['min']} is below "
+                    f"the firmware floor {fw_min} (docs/protocol-v2.md §10) "
+                    f"-- the firmware will reject in-range-looking UI input"
+                )
+                assert param["max"] <= fw_max, (
+                    f"{label}.{param['name']} max={param['max']} exceeds "
+                    f"the firmware ceiling {fw_max} (docs/protocol-v2.md "
+                    f"§10) -- the firmware will reply ERR range for values "
+                    f"the UI allows entering"
+                )
+                checked.add(key)
+
+        # Catch stale FIRMWARE_RANGES entries left behind by a future rename.
+        assert checked == set(FIRMWARE_RANGES), (
+            "FIRMWARE_RANGES has entries with no matching COMMANDS param: "
+            f"{set(FIRMWARE_RANGES) - checked}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Wire-string builder — pure function tests (no Qt required)
 # ---------------------------------------------------------------------------
 
