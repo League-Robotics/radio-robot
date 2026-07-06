@@ -97,7 +97,20 @@ def calibration_commands(config: Any) -> list[tuple[str, int]]:
       5. ``OI``              — OTOS init (must precede OL/OA)
       6. ``OL <int8>``       — otos_linear_scale encoded
       7. ``OA <int8>``       — otos_angular_scale encoded
-      8. ``SET odomOffX/Y/Yaw`` — only when nonzero
+
+    Does NOT push ``config.geometry.odometry_offset_mm`` (the OTOS
+    mounting-offset/lever-arm): ``odomOffX``/``odomOffY``/``odomYaw`` are not
+    in ``config_commands.cpp``'s registered `SET` key table
+    (architecture-update.md (084) Decision 2's closed 15-key surface) — a
+    push of any of them gets ``ERR badkey`` from the current firmware/sim
+    (ticket 085-005 finding; also observed independently during ticket
+    085-002/003's manual runs). This is not new drift 084 introduced: the
+    OTOS lever-arm has no real hardware driver in this program at all, and
+    OTOS pose is otherwise configured entirely via ``OI``/``OL``/``OA``/``OV``,
+    never `SET` — so dropping the dead push is the correct fix, not a
+    workaround. ``config.geometry.odometry_offset_mm`` itself (e.g.
+    ``data/robots/tovez.json``'s non-zero ``x: -47.7``) is left as-is in the
+    schema — this function is simply no longer one of its consumers.
     """
     cmds: list[tuple[str, int]] = []
 
@@ -139,16 +152,10 @@ def calibration_commands(config: Any) -> list[tuple[str, int]]:
     cmds.append((f"OL {scale_to_int8(lin_scale)}", 200))
     cmds.append((f"OA {scale_to_int8(ang_scale)}", 200))
 
-    # ── OTOS mounting offset (skip if all zero) ───────────────────────────
-    off = getattr(geom, "odometry_offset_mm", None) if geom else None
-    if off is not None:
-        ox = float(off.x) if hasattr(off, "x") else 0.0
-        oy = float(off.y) if hasattr(off, "y") else 0.0
-        oyaw = math.degrees(float(off.yaw_rad)) if hasattr(off, "yaw_rad") else 0.0  # [deg]
-        if ox != 0.0 or oy != 0.0 or oyaw != 0.0:
-            cmds.append((f"SET odomOffX={ox:.3f}", 200))
-            cmds.append((f"SET odomOffY={oy:.3f}", 200))
-            cmds.append((f"SET odomYaw={oyaw:.3f}", 200))
+    # NOTE (ticket 085-005): no OTOS mounting-offset (`odomOffX`/`odomOffY`/
+    # `odomYaw`) push here — see this function's docstring for why. Those
+    # keys are not registered by `config_commands.cpp` and get `ERR badkey`
+    # on the current firmware/sim.
 
     return cmds
 
