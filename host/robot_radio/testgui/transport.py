@@ -57,11 +57,14 @@ Both concrete hardware backends:
 - Join all threads on disconnect().
 
 SimTransport()
-    Drives the ctypes firmware simulator (tests/_infra/sim/firmware.py Sim
-    class) instead of real hardware.  Owns a background tick-thread that
-    advances sim.tick_for() at wall-clock rate (~20 ms/step), drains
-    sim.get_async_evts() for TLM/EVT lines, and delivers ground-truth pose
-    from sim_get_true_pose_x/y/h via the on_truth callback.
+    Drives the ctypes firmware simulator through a ``SimConnection``
+    (``robot_radio.io.sim_conn`` — sprint 081/082's ctypes ABI) instead of
+    real hardware.  Owns a background tick-thread that constructs the
+    ``SimConnection`` via ``connect()``, advances it one ``conn.tick(...)``
+    call per wall-clock iteration (~20 ms/step by default), and delivers
+    ground-truth pose from ``conn.get_true_pose()`` via the on_truth
+    callback.  The ``SimConnection`` is destroyed via ``disconnect()`` when
+    the tick-thread exits.
 
     Unit conversion: sim true-pose is (x, y, h) in (mm, mm, rad); on_truth receives
     (x_cm, y_cm, yaw_rad) — x and y are divided by 10; heading is passed
@@ -73,11 +76,12 @@ SimTransport()
     without connecting.
 
     A configurable field error profile is applied on connect, loaded via
-    ``sim_prefs.load_sim_error_profile()`` (defaults: slip_turn_extra=0.26,
-    otos_linear_noise=0.05, encoder_noise=0.0, otos_yaw_noise=0.0 —
-    matching the historical sim_field_profile fixture from
-    tests/conftest.py). ``apply_error_profile(profile)`` re-applies live to
-    a connected sim (the Sim Errors panel's Apply button).
+    ``sim_prefs.load_sim_error_profile()`` and applied directly through the
+    ``SimConnection`` ctypes setters named in ``sim_prefs.PROFILE_TO_SIM_SETTER``
+    (083-001: no ``SIMSET`` wire verb exists any more — see
+    ``_apply_profile_to_sim()``'s docstring for the full mapping, including
+    the knobs with no ctypes backing at all). ``apply_error_profile(profile)``
+    re-applies live to a connected sim (the Sim Errors panel's Apply button).
 
 Helpers:
     list_ports() -> list[str]
@@ -123,6 +127,7 @@ import time
 from typing import Callable
 
 from robot_radio.io.serial_conn import SerialConnection, list_serial_ports
+from robot_radio.io.sim_conn import SimConnection
 from robot_radio.robot.protocol import TLMFrame, parse_tlm
 from robot_radio.testgui import sim_prefs
 
@@ -295,7 +300,9 @@ class Transport(abc.ABC):
         encoder trace is plotted directly from the firmware's ``encpose=``
         since 068-003).  0.0 = perfect (no scrub).  Hardware backends report
         0.0 until real turn-odometry calibration provides a value; the
-        simulator overrides this with its injected ``slip_turn_extra``.
+        simulator overrides this with its injected ``body_rot_scrub``
+        (083-001: ``slip_turn_extra`` no longer has a live ctypes effect —
+        see ``sim_prefs``'s module docstring).
         """
         return 0.0
 
@@ -676,32 +683,21 @@ _SIM_SPEED_MAX = 20
 # Ground-truth pose delivery rate (~5 Hz to match hardware truth polling).
 _SIM_TRUTH_EVERY_N_TICKS = max(1, round(200 / _SIM_TICK_STEP_DURATION))
 
-# Field-profile error parameters (mirrors tests/conftest.py sim_field_profile).
-_SIM_SLIP_TURN_EXTRA = 0.26   # fractional encoder over-report during turns
-_SIM_OTOS_LINEAR_NOISE = 0.05  # OTOS linear noise sigma (fraction of arc)
-
-# How long connect() waits for the tick-thread to confirm Sim() construction
-# succeeded (or failed) before giving up (CR-15 item 4).  Sim() construction
+# How long connect() waits for the tick-thread to confirm SimConnection.connect()
+# succeeded (or failed) before giving up (CR-15 item 4).  SimConnection.connect()
 # is sub-millisecond in every observed run; this is generous headroom against
 # a hang, not a steady-state expectation (see architecture-update.md sprint
 # 066, Open Question 3).
 _SIM_READY_TIMEOUT_S = 5.0
 
-# Max SIMSET key=value pairs per wire line.  The firmware tokenizer packs
-# arguments into a fixed ArgList of MAX_ARGS = 10 slots
-# (source/types/CommandTypes.h) and silently drops pairs past the tenth
-# while still replying OK — so profile applies MUST be chunked.  8 leaves
-# margin under the cap.
-_SIMSET_MAX_PAIRS_PER_LINE = 8
-
 
 class SimTransport(Transport):
     """Transport backend that drives the ctypes firmware simulator.
 
-    Owns a ``Sim`` instance (from ``tests/_infra/sim/firmware.py``) and a
-    daemon tick-thread that advances simulation at wall-clock rate, drains
-    ``sim.get_async_evts()`` for TLM/EVT lines, and delivers ground-truth
-    pose via ``on_truth``.
+    Owns a ``SimConnection`` instance (``robot_radio.io.sim_conn`` —
+    sprint 081/082's ctypes ABI) and a daemon tick-thread that advances
+    simulation at wall-clock rate via ``conn.tick(...)``, and delivers
+    ground-truth pose via ``on_truth``.
 
     Unit conversion
     ---------------
@@ -711,24 +707,26 @@ class SimTransport(Transport):
 
     Thread safety
     -------------
-    The ``Sim`` ctypes object is NOT thread-safe for concurrent ``tick_for()``
-    and ``send_command()``.  The tick-thread owns the ``Sim`` exclusively.
-    Commands submitted via ``send()`` / ``command()`` are placed in a
-    ``queue.Queue``; the tick-thread drains that queue between ticks.
-    ``command()`` provides a synchronous reply by pairing each command with a
-    ``threading.Event`` and a one-element list for the response.
+    The ``SimConnection`` ctypes object is NOT thread-safe for concurrent
+    access.  The tick-thread owns it exclusively — constructed via
+    ``connect()`` at tick-thread startup, destroyed via ``disconnect()`` at
+    tick-thread exit.  Commands submitted via ``send()`` / ``command()`` are
+    placed in a ``queue.Queue``; the tick-thread drains that queue between
+    ticks.  ``command()`` provides a synchronous reply by pairing each
+    command with a ``threading.Event`` and a one-element list for the
+    response.
 
     Lib build check
     ---------------
-    ``connect()`` checks for the sim lib before loading ``Sim``.  If the lib
-    is missing, a ``QMessageBox.warning`` is shown (when Qt is available) and
-    ``connect()`` returns without connecting.  If Qt is not available, a
-    message is emitted via ``on_log`` instead.
+    ``connect()`` checks for the sim lib before starting the tick-thread.  If
+    the lib is missing, a ``QMessageBox.warning`` is shown (when Qt is
+    available) and ``connect()`` returns without connecting.  If Qt is not
+    available, a message is emitted via ``on_log`` instead.
     """
 
     def __init__(self) -> None:
         super().__init__()
-        self._sim: "object | None" = None   # Sim instance, owned by tick-thread
+        self._conn: SimConnection | None = None   # owned by the tick-thread
         self._tick_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         # Queue items: (line: str, reply_list: list[str] | None, done_event: Event | None)
@@ -736,10 +734,10 @@ class SimTransport(Transport):
         # For command() (synchronous): reply_list=[""]*1, done_event=Event
         self._cmd_queue: queue.Queue = queue.Queue()
         self._connected = False
-        # Signaled by the tick-thread once Sim() construction has succeeded
-        # or definitively failed (CR-15 item 4) — connect() waits on this
-        # before reporting connected, so an early command()/send() call can
-        # no longer race a not-yet-created Sim.
+        # Signaled by the tick-thread once SimConnection.connect() has
+        # succeeded or definitively failed (CR-15 item 4) — connect() waits
+        # on this before reporting connected, so an early command()/send()
+        # call can no longer race a not-yet-connected SimConnection.
         self._sim_ready_event: threading.Event = threading.Event()
         # The last error profile actually applied to a running sim (via
         # connect()'s _apply_field_profile or a live apply_error_profile()
@@ -753,26 +751,33 @@ class SimTransport(Transport):
 
     @property
     def turn_scrub_factor(self) -> float:
-        """The ``slip_turn_extra`` fraction the sim currently injects.
+        """The ``body_rot_scrub`` factor the sim currently injects.
 
         Reflects, in priority order: the profile actually applied to a
         running sim (``self._error_profile``); else the persisted
-        ``sim_prefs`` profile on disk; else the historical hardcoded
-        default. Never raises — this must be safe to read without a
+        ``sim_prefs`` profile on disk; else the neutral default (1.0 — no
+        scrub).  Never raises — this must be safe to read without a
         connection (e.g. before Connect is pressed).
+
+        083-001: reads ``body_rot_scrub`` rather than the historical
+        ``slip_turn_extra`` — the latter has no live ctypes effect against
+        the current sim ABI (see ``sim_prefs``'s module docstring), so
+        ``body_rot_scrub`` is now the field that actually carries the
+        rotational-scrub concept.
         """
+        neutral = sim_prefs.DEFAULT_PROFILE.get("body_rot_scrub", 1.0)
         if self._error_profile is not None:
             try:
                 return float(
-                    self._error_profile.get("slip_turn_extra", _SIM_SLIP_TURN_EXTRA)
+                    self._error_profile.get("body_rot_scrub", neutral)
                 )
             except Exception:
-                return _SIM_SLIP_TURN_EXTRA
+                return neutral
         try:
             profile = sim_prefs.load_sim_error_profile()
-            return float(profile.get("slip_turn_extra", _SIM_SLIP_TURN_EXTRA))
+            return float(profile.get("body_rot_scrub", neutral))
         except Exception:
-            return _SIM_SLIP_TURN_EXTRA
+            return neutral
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -784,14 +789,15 @@ class SimTransport(Transport):
         If the sim lib is missing, shows a warning and returns without
         connecting.  Idempotent — does nothing if already connected.
 
-        ``_connected`` is set only after the tick-thread confirms ``Sim()``
-        construction succeeded — NOT immediately after starting the thread
-        (CR-15 item 4).  Before this fix an early ``command()``/``send()``
-        call could race a not-yet-created ``Sim`` (or one that failed to
-        construct), silently enqueuing commands nothing would ever drain.
-        ``connect()`` waits (bounded by ``_SIM_READY_TIMEOUT_S``) on a
-        ``threading.Event`` the tick-thread signals right after ``Sim()``
-        construction completes, or on its own early-failure paths.
+        ``_connected`` is set only after the tick-thread confirms
+        ``SimConnection.connect()`` succeeded — NOT immediately after
+        starting the thread (CR-15 item 4).  Before this fix an early
+        ``command()``/``send()`` call could race a not-yet-connected
+        ``SimConnection`` (or one that failed to connect), silently
+        enqueuing commands nothing would ever drain.  ``connect()`` waits
+        (bounded by ``_SIM_READY_TIMEOUT_S``) on a ``threading.Event`` the
+        tick-thread signals right after ``SimConnection.connect()``
+        completes, or on its own early-failure paths.
         """
         if self._connected:
             return
@@ -818,12 +824,12 @@ class SimTransport(Transport):
         self._tick_thread.start()
 
         ready = self._sim_ready_event.wait(timeout=_SIM_READY_TIMEOUT_S)
-        self._connected = ready and self._sim is not None
+        self._connected = ready and self._conn is not None
         if self._connected:
             self._log("[INFO] SimTransport connected")
         else:
             _log.warning(
-                "SimTransport: Sim() construction did not complete (ready=%s)",
+                "SimTransport: SimConnection.connect() did not complete (ready=%s)",
                 ready,
             )
             self._log("[ERROR] SimTransport failed to connect: simulator did not start")
@@ -840,7 +846,7 @@ class SimTransport(Transport):
 
         self._tick_thread = None
         self._connected = False
-        self._sim = None
+        self._conn = None
         self._log("[INFO] SimTransport disconnected")
 
     # ------------------------------------------------------------------
@@ -858,7 +864,7 @@ class SimTransport(Transport):
         """Teleport the simulator plant (ground-truth) pose.
 
         In Sim mode the canvas avatar follows the plant ground truth
-        (``sim.get_true_pose()``), NOT the firmware's belief.  The wire
+        (``conn.get_true_pose()``), NOT the firmware's belief.  The wire
         commands ``OZ`` and ``SI`` only reset the firmware's EKF estimate and
         the OTOS reference — they do NOT move the plant.  On real hardware the
         operator physically places the robot; in the sim there is no operator,
@@ -866,8 +872,11 @@ class SimTransport(Transport):
         the plant's stale pose on the next ground-truth delivery.
 
         Enqueues a plant action on the tick-thread (the only thread allowed to
-        touch the ``Sim`` object).  True wheel travel and velocity are also
-        zeroed so encoder-based odometry restarts from a clean state.
+        touch the ``SimConnection`` object).  True wheel travel is also
+        zeroed so encoder-based odometry restarts from a clean state.  (There
+        is no ``set_true_velocity()`` call any more — 083-001: no ctypes ABI
+        entry point backs it in this tree; see ``SimConnection``'s module
+        docstring.)
 
         Parameters
         ----------
@@ -879,14 +888,10 @@ class SimTransport(Transport):
         if not self._connected:
             return
 
-        def _action(sim: "object") -> None:
-            sim.set_true_pose(x_cm * 10.0, y_cm * 10.0, yaw_rad)  # type: ignore[attr-defined]
-            # Zero true wheel travel and velocity so odom restarts clean.
-            try:
-                sim.set_true_wheel_travel(0.0, 0.0)  # type: ignore[attr-defined]
-                sim.set_true_velocity(0.0, 0.0)      # type: ignore[attr-defined]
-            except Exception:
-                pass
+        def _action(conn: SimConnection) -> None:
+            conn.set_true_pose(x_cm * 10.0, y_cm * 10.0, yaw_rad)
+            # Zero true wheel travel so odom restarts clean.
+            conn.set_true_wheel_travel(0.0, 0.0)
 
         self._cmd_queue.put((_action, None, None))
         self._log(f"> [sim] set_true_pose({x_cm:.1f}cm, {y_cm:.1f}cm, {math.degrees(yaw_rad):.1f}°)")
@@ -932,105 +937,136 @@ class SimTransport(Transport):
     # ------------------------------------------------------------------
 
     def _tick_loop(self) -> None:
-        """Advance the sim at speed_factor x wall-clock rate; drain commands and async events.
+        """Own a ``SimConnection`` for the tick-thread's lifetime.
 
-        This is the only thread that touches the Sim object.  On entry it
-        creates the Sim, configures the field-error profile, and sends
-        ``STREAM 50`` to start TLM streaming.  On exit it destroys the Sim.
+        This is the only thread that touches the ``SimConnection`` object.
+        On entry it constructs and connects it (``SimConnection.connect()``),
+        configures the field-error profile, and sends ``STREAM 50`` to start
+        TLM streaming.  On exit it disconnects it (``SimConnection.disconnect()``).
         """
-        # Import here — only loaded after the lib is verified present.
+        conn = SimConnection()
         try:
-            import sys as _sys
-            _SIM_DIR = str(_sim_lib_path().parent.parent)
-            if _SIM_DIR not in _sys.path:
-                _sys.path.insert(0, _SIM_DIR)
-            from firmware import Sim  # type: ignore[import]
+            result = conn.connect()
         except Exception as exc:
-            _log.error("SimTransport: failed to import Sim: %s", exc)
+            _log.error("SimTransport: SimConnection.connect() raised: %s", exc)
             self._log(f"[ERROR] Failed to load simulator: {exc}")
-            self._connected = False
             self._sim_ready_event.set()  # unblock connect()'s wait — failed
             return
 
+        if "error" in result:
+            _log.error(
+                "SimTransport: SimConnection.connect() failed: %s", result["error"]
+            )
+            self._log(f"[ERROR] Failed to connect simulator: {result['error']}")
+            self._sim_ready_event.set()  # unblock connect()'s wait — failed
+            return
+
+        self._conn = conn
+        # SimConnection.connect() succeeded — unblock connect()'s wait.
+        self._sim_ready_event.set()
+
         try:
-            with Sim() as sim:
-                self._sim = sim
-                # Sim() construction succeeded — unblock connect()'s wait.
-                self._sim_ready_event.set()
-                self._apply_field_profile(sim)
-                # Send STREAM 50 so the firmware emits TLM every 50 ms.
-                reply = sim.send_command("STREAM 50")
-                self._log(f"[INFO] STREAM 50 → {reply.strip() if reply else 'OK'}")
+            self._apply_field_profile(conn)
+            # Send STREAM 50 so the firmware emits TLM every 50 ms.  Zero-time
+            # -advance synchronous send (083-001) so starting the stream
+            # never itself consumes sim time.
+            #
+            # NOTE (083-001, verified against the built libfirmware_host):
+            # STREAM's periodic re-emission does NOT flow through the async
+            # EVT sink in this ABI -- conn.tick() never returns a "TLM ..."
+            # line on its own, no matter how long the sim is ticked (checked
+            # directly against sim_get_async_evts()).  The only way to read a
+            # fresh TLM sample in this ABI is a synchronous SNAP query -- see
+            # the per-iteration SNAP poll below, which is what actually feeds
+            # on_telemetry (STREAM 50 is still sent so the firmware's STREAM
+            # period state matches the hardware backends' setup call).
+            reply = conn.send("STREAM 50", read_timeout=0, stop_token=None)
+            responses = "\n".join(reply.get("responses", []))
+            self._log(f"[INFO] STREAM 50 → {responses or 'OK'}")
 
-                tick_count = 0
-                while not self._stop_event.is_set():
-                    t0 = time.monotonic()
+            tick_count = 0
+            while not self._stop_event.is_set():
+                t0 = time.monotonic()
 
-                    # Drain commands from the queue.
-                    self._drain_cmd_queue(sim)
+                # Drain commands from the queue.
+                self._drain_cmd_queue(conn)
 
-                    # Advance simulation: speed_factor steps per wall tick,
-                    # each at the fixed integration granularity so physics
-                    # is identical at every speed.  Async events (TLM/EVT
-                    # lines) are drained after EVERY step, not once per wall
-                    # tick: sim_get_async_evts() truncates at its 2048-byte
-                    # ReplyStore capacity AND resets the store, so letting a
-                    # fast-forward burst accumulate would silently drop
-                    # lines (including completion EVTs).  Per-step draining
-                    # keeps the per-drain volume identical to 1x.
-                    speed = self._speed_factor
-                    for _ in range(speed):
-                        sim.tick_for(
-                            _SIM_TICK_STEP_DURATION, step_ms=_SIM_TICK_STEP_DURATION
-                        )
-                        self._drain_async_evts(sim)
+                # Advance simulation: one conn.tick() call per wall-clock
+                # iteration, speed_factor x the base step duration — the
+                # SimConnection's own internal advance loop (sim_conn.py's
+                # _advance()) steps at its configured granularity and drains
+                # async EVT/TLM lines after every internal step, returning
+                # them all here in one list (replacing the old manual
+                # sim.tick_for() + sim.get_async_evts() pair).
+                speed = self._speed_factor
+                evt_lines = conn.tick(speed * _SIM_TICK_STEP_DURATION)
+                self._handle_evt_lines(evt_lines)
 
-                    # Deliver ground-truth pose periodically.
-                    tick_count += 1
-                    if tick_count % _SIM_TRUTH_EVERY_N_TICKS == 0:
-                        self._deliver_sim_truth(sim)
+                # Poll one fresh TLM sample per iteration (see the NOTE
+                # above) — a zero-time-advance synchronous SNAP, exactly the
+                # same primitive the Tour idle-detector already uses
+                # (__main__.py's _wait_for_idle()), just run continuously so
+                # on_telemetry gets a steady stream in Sim mode too.
+                try:
+                    snap = conn.send("SNAP", read_timeout=0, stop_token=None)
+                    self._handle_evt_lines(snap.get("responses", []))
+                except Exception as exc:
+                    _log.debug("SimTransport: SNAP telemetry poll failed: %s", exc)
 
-                    # Pace to wall-clock rate.
-                    elapsed = time.monotonic() - t0
-                    sleep_s = _SIM_TICK_SLEEP_S - elapsed
-                    if sleep_s > 0:
-                        self._stop_event.wait(timeout=sleep_s)
+                # Bound the state log (built for bounded pytest runs, not an
+                # open-ended GUI session) — SimTransport never reads it.
+                conn.clear_state_log()
+
+                # Deliver ground-truth pose periodically.
+                tick_count += 1
+                if tick_count % _SIM_TRUTH_EVERY_N_TICKS == 0:
+                    self._deliver_sim_truth(conn)
+
+                # Pace to wall-clock rate.
+                elapsed = time.monotonic() - t0
+                sleep_s = _SIM_TICK_SLEEP_S - elapsed
+                if sleep_s > 0:
+                    self._stop_event.wait(timeout=sleep_s)
         except Exception as exc:
             _log.error("SimTransport tick-loop crashed: %s", exc)
             self._log(f"[ERROR] Sim tick-loop crashed: {exc}")
-            # Sim() construction itself may have raised (before the inner
-            # self._sim_ready_event.set() ran) — unblock connect()'s wait
-            # either way so a failed construction is never mistaken for a
-            # hang. Idempotent if already set.
-            self._sim_ready_event.set()
         finally:
-            self._sim = None
+            try:
+                conn.disconnect()
+            except Exception:
+                _log.exception("SimTransport: SimConnection.disconnect() failed")
+            self._conn = None
 
-    def _drain_cmd_queue(self, sim: "object") -> None:
-        """Drain all pending commands from the queue and execute them on sim.
+    def _drain_cmd_queue(self, conn: SimConnection) -> None:
+        """Drain all pending commands from the queue and execute them on ``conn``.
 
-        ``sim.send_command()`` returns its reply synchronously — unlike real
-        hardware, where every wire reply flows through one shared reader
-        regardless of whether the outbound side was ``send()`` (fire-and-
-        forget) or ``command()`` (synchronous).  Logging and TLM-delivery
-        happen here, for both call paths, so a fire-and-forget reply (e.g.
-        ``SNAP``, used by idle-detection) is as visible in the console and
-        reaches ``on_telemetry`` the same as a ``command()`` reply does —
-        previously the fire-and-forget path silently discarded it.
+        Three kinds of queue item:
+
+        - A callable (e.g. ``set_true_pose``'s plant action) — run directly
+          on the tick-thread, which exclusively owns ``conn``.
+        - A ``send()``-originated line (``reply_list is None and done_evt is
+          None``): a one-way drive/stop command — dispatched via
+          ``conn.send_fast(line)``, fire-and-forget, no forced time advance,
+          no reply captured (083-001).
+        - A ``command()``-originated line (``reply_list``/``done_evt`` set):
+          a synchronous command needing a reply — dispatched via
+          ``conn.send(line, read_timeout=0, stop_token=None)``, a
+          zero-time-advance synchronous reply.
         """
-        # Import Sim type for isinstance check would be circular; use duck-typing.
         try:
             while True:
                 item = self._cmd_queue.get_nowait()
                 line, reply_list, done_evt = item
                 try:
                     if callable(line):
-                        # Plant action (e.g. set_true_pose) — run directly on
-                        # the tick-thread which exclusively owns the Sim object.
-                        line(sim)
+                        line(conn)
+                        reply = ""
+                    elif reply_list is None and done_evt is None:
+                        conn.send_fast(line)
                         reply = ""
                     else:
-                        reply = sim.send_command(line)  # type: ignore[attr-defined]
+                        result = conn.send(line, read_timeout=0, stop_token=None)
+                        reply = "\n".join(result.get("responses", []))
                 except Exception as exc:
                     reply = f"ERR sim: {exc}"
                 if reply_list is not None:
@@ -1048,24 +1084,15 @@ class SimTransport(Transport):
         except queue.Empty:
             pass
 
-    def _drain_async_evts(self, sim: "object") -> None:
-        """Drain accumulated async output, log every line, and deliver TLM frames.
+    def _handle_evt_lines(self, lines: list[str]) -> None:
+        """Log every EVT/TLM line returned by ``conn.tick()`` and deliver TLM frames.
 
         Mirrors ``_HardwareTransport``'s ``on_recv`` hook, which logs every
         raw wire line unconditionally.  The background ``STREAM 50`` started
-        in ``connect()`` is what actually feeds the canvas pose trace, and it
-        must be visible in the console like any other traffic — previously
-        only the subset that happened to parse as TLM was even processed, and
-        nothing from this path was ever logged, making the trace's data
-        source invisible.
+        in ``_tick_loop`` is what actually feeds the canvas pose trace, and it
+        must be visible in the console like any other traffic.
         """
-        try:
-            raw = sim.get_async_evts()  # type: ignore[attr-defined]
-        except Exception:
-            return
-        if not raw:
-            return
-        for line in raw.split("\n"):
+        for line in lines:
             line = line.strip()
             if not line:
                 continue
@@ -1074,7 +1101,7 @@ class SimTransport(Transport):
             if frame is not None:
                 self._deliver_tlm(frame)
 
-    def _deliver_sim_truth(self, sim: "object") -> None:
+    def _deliver_sim_truth(self, conn: SimConnection) -> None:
         """Read ground-truth pose from the sim and deliver to on_truth callback.
 
         Converts from simulator units (x, y in mm; h in rad) to the callback
@@ -1082,116 +1109,125 @@ class SimTransport(Transport):
         Heading is already in radians and is passed through unchanged.
         """
         try:
-            x, y, h_rad = sim.get_true_pose()  # type: ignore[attr-defined]
+            pose = conn.get_true_pose()
         except Exception:
             return
-        x_cm = x / 10.0
-        y_cm = y / 10.0
-        self._deliver_truth((x_cm, y_cm, h_rad))
+        x_cm = pose["x"] / 10.0
+        y_cm = pose["y"] / 10.0
+        self._deliver_truth((x_cm, y_cm, pose["h"]))
 
-    def _apply_field_profile(self, sim: "object") -> None:
-        """Load the persisted sim error profile and apply it to ``sim``.
+    def _apply_field_profile(self, conn: SimConnection) -> None:
+        """Load the persisted sim error profile and apply it to ``conn``.
 
-        Called once from the tick-thread right after the ``Sim`` is created
-        (before the tick loop starts), so the operator's Sim Errors panel
-        settings (persisted via ``sim_prefs``) are live from the first tick.
-        Falls back to ``sim_prefs.DEFAULT_PROFILE`` (the historical
-        hardcoded 0.26 / 0.05 / 0.0 / 0.0 values) if the file is missing or
-        corrupt — ``load_sim_error_profile()`` never raises, but this is
-        belt-and-suspenders.
+        Called once from the tick-thread right after ``SimConnection`` is
+        connected (before the tick loop starts), so the operator's Sim
+        Errors panel settings (persisted via ``sim_prefs``) are live from the
+        first tick.  Falls back to ``sim_prefs.DEFAULT_PROFILE`` if the file
+        is missing or corrupt — ``load_sim_error_profile()`` never raises,
+        but this is belt-and-suspenders.
         """
         try:
             profile = sim_prefs.load_sim_error_profile()
         except Exception:
             profile = dict(sim_prefs.DEFAULT_PROFILE)
-        self._apply_profile_to_sim(sim, profile)
+        self._apply_profile_to_sim(conn, profile)
 
-    def _apply_profile_to_sim(self, sim: "object", profile: dict) -> None:
-        """Apply every sim error knob in ``profile`` to ``sim``.
+    def _apply_profile_to_sim(self, conn: SimConnection, profile: dict) -> None:
+        """Apply every sim error knob in ``profile`` directly to ``conn``.
 
-        069-007: rewritten to send the knobs as ``SIMSET k1=v1 k2=v2 …`` wire
-        commands (via ``sim.send_command()``) covering the full newly-surfaced
-        registry (``sim_prefs.PROFILE_TO_SIMSET_KEY``) plus the two
-        historical knobs that DO have ``SIMSET`` keys
-        (``otos_linear_noise`` -> ``otosLinNoise``, ``otos_yaw_noise`` ->
-        ``otosYawNoise``) and ``encoder_noise``, which fans out to two
-        wire keys (``encNoiseL``/``encNoiseR``, both set to the same value —
-        matching the historical ``sim.set_encoder_noise(0, ...)`` +
-        ``sim.set_encoder_noise(1, ...)`` pair).
+        083-001: rewritten against the sprint-081/082 ctypes ABI — no
+        ``SIMSET`` wire verb exists in ``source/commands/`` any more (see
+        this ticket's description).  Every knob is now applied by calling a
+        ``SimConnection`` setter method directly.
 
-        The pairs are sent in CHUNKS of ``_SIMSET_MAX_PAIRS_PER_LINE``: the
-        firmware's command tokenizer packs arguments into a fixed
-        ``ArgList`` of ``MAX_ARGS = 10`` slots (source/types/CommandTypes.h)
-        and SILENTLY DROPS every kv pair past the tenth while still replying
-        OK.  The full 15-knob profile in one line therefore never applied
-        ``motorOffsetL/R``, ``trackwidthMm``, or ``encNoiseL/R`` (measured
-        2026-07-02: ``SIMSET … trackwidthMm=127.0`` replied OK, ``SIMGET
-        trackwidthMm`` still read 128.000).  Worse, a mid-token cut can
-        parse a truncated value.  Chunking keeps every line safely under
-        the firmware cap so every knob actually lands.
+        Most knobs are a 1:1 (profile key -> setter method, called with the
+        single profile value as its only argument) mapping, given by
+        ``sim_prefs.PROFILE_TO_SIM_SETTER``.  Five keys are excluded from
+        that map and handled explicitly here because they need more than a
+        bare value, or have no ctypes backing at all:
 
-        ``slip_turn_extra`` has no ``SIMSET`` key at all — it is the
-        pre-existing, untouched ``_rotationalSlip`` test-infra channel
-        (Design Rationale Decision 4) and is applied SEPARATELY via the
-        legacy ``sim.set_field_profile()`` call, exactly as before this
-        ticket.
+          - ``encoder_noise`` fans out to ONE call, both sides at once:
+            ``conn.set_enc_noise(2, value)`` (side=2 = both — matches the
+            historical ``sim.set_encoder_noise(0, ...)`` +
+            ``sim.set_encoder_noise(1, ...)`` pair's net effect in a single
+            call).
+          - ``enc_scale_err_l``/``enc_scale_err_r`` each need an explicit
+            ``side`` argument: ``conn.set_enc_scale_error(0/1, value)``.
+          - ``motor_offset_l``/``motor_offset_r`` have NO ctypes entry point
+            in this ABI at all (``Hal::PhysicsWorld::setOffsetFactor()`` is
+            deliberately left unwrapped by ticket 081-004's sim_api.cpp —
+            see ``SimConnection.set_motor_offset()``'s own docstring).
+          - ``slip_turn_extra`` likewise has NO ctypes backing (no turn-
+            rate-dependent slip knob is wired into this ABI — see
+            ``SimConnection.set_slip()``'s own docstring).
 
-        This runs on the tick-thread (either at ``Sim()`` construction, via
-        ``_apply_field_profile``, or from a queued ``apply_error_profile()``
-        action) — the one thread that exclusively owns ``sim`` — so it talks
-        to ``sim`` directly (``sim.send_command()``), never through
+        Applying these last three is SKIPPED outright (not attempted, not
+        silently retried); a ``[WARN]`` is logged if any of the three is set
+        away from its neutral value (1.0/1.0/0.0 respectively) so a
+        persisted profile carrying a stale non-neutral value never silently
+        looks "applied".  The corresponding Sim Errors panel spin boxes
+        (``sim_err_motor_offset_l/r``, ``sim_err_slip_turn`` in
+        ``__main__.py``) stay visible with a "not supported in sim" tooltip
+        (stakeholder decision) rather than being hidden/removed.
+
+        This runs on the tick-thread (either at ``SimConnection.connect()``
+        time, via ``_apply_field_profile``, or from a queued
+        ``apply_error_profile()`` action) — the one thread that exclusively
+        owns ``conn`` — so it talks to ``conn`` directly, never through
         ``self.command()``/``self._cmd_queue`` (which would enqueue onto the
         very queue this call may already be draining).
 
-        The ``SIMSET`` send and the legacy ``slip_turn_extra`` send are each
-        wrapped in their own try/except so one failing (e.g. a stale
-        prebuilt lib without the new registry) never prevents the other
-        from applying. Stores the (attempted) profile on
+        Each setter call is wrapped in its own try/except so one failing
+        (e.g. a stale prebuilt lib missing a newer setter) never prevents
+        the others from applying.  Stores the (attempted) profile on
         ``self._error_profile`` so ``turn_scrub_factor`` reflects it
         regardless of which knobs actually landed.
         """
         defaults = sim_prefs.DEFAULT_PROFILE
-        slip_turn_extra = profile.get("slip_turn_extra", defaults["slip_turn_extra"])
-        encoder_noise = profile.get("encoder_noise", defaults["encoder_noise"])  # [mm]
 
-        # Build the SIMSET pairs: every 1:1-mapped key from the map, plus
-        # encoder_noise's two-key fan-out.
-        pairs = [
-            (wire_key, profile.get(key, defaults[key]))
-            for key, wire_key in sim_prefs.PROFILE_TO_SIMSET_KEY.items()
-        ]
-        pairs.append(("encNoiseL", encoder_noise))
-        pairs.append(("encNoiseR", encoder_noise))
-
-        # Send in chunks under the firmware's MAX_ARGS=10 ArgList cap — see
-        # the docstring: pairs past the cap are silently dropped (reply is
-        # still OK), so one 15-pair line never applied the last five knobs.
-        for i in range(0, len(pairs), _SIMSET_MAX_PAIRS_PER_LINE):
-            chunk = pairs[i:i + _SIMSET_MAX_PAIRS_PER_LINE]
-            simset_line = "SIMSET " + " ".join(f"{k}={v}" for k, v in chunk)
+        for key, setter_name in sim_prefs.PROFILE_TO_SIM_SETTER.items():
+            value = profile.get(key, defaults[key])
             try:
-                reply = sim.send_command(simset_line)  # type: ignore[attr-defined]
-                self._log(
-                    f"[INFO] {simset_line} -> {reply.strip() if reply else 'OK'}"
-                )
+                getattr(conn, setter_name)(value)
             except Exception as exc:
                 _log.warning(
-                    "SimTransport: could not apply SIMSET profile chunk: %s", exc
+                    "SimTransport: could not apply %s via conn.%s(): %s",
+                    key, setter_name, exc,
                 )
 
+        encoder_noise = profile.get("encoder_noise", defaults["encoder_noise"])  # [mm]
         try:
-            sim.set_field_profile(  # type: ignore[attr-defined]
-                slip_turn_extra=slip_turn_extra,
-                fuse_otos=True,
-            )
+            conn.set_enc_noise(2, encoder_noise)
         except Exception as exc:
-            _log.warning("SimTransport: could not apply slip_turn_extra: %s", exc)
+            _log.warning("SimTransport: could not apply encoder_noise: %s", exc)
+
+        for key, side in (("enc_scale_err_l", 0), ("enc_scale_err_r", 1)):
+            value = profile.get(key, defaults[key])
+            try:
+                conn.set_enc_scale_error(side, value)
+            except Exception as exc:
+                _log.warning("SimTransport: could not apply %s: %s", key, exc)
+
+        # No ctypes backing at all — skip applying, warn once if non-neutral.
+        for key, neutral in (
+            ("motor_offset_l", 1.0), ("motor_offset_r", 1.0),
+            ("slip_turn_extra", 0.0),
+        ):
+            value = profile.get(key, defaults[key])
+            if value != neutral:
+                msg = (
+                    f"{key}={value} has no effect in sim — no ctypes ABI entry "
+                    f"point backs this knob against the current sim_api.cpp "
+                    f"surface (see SimConnection's module docstring)"
+                )
+                _log.warning("SimTransport: %s", msg)
+                self._log(f"[WARN] {msg}")
 
         self._error_profile = dict(profile)
         self._log(
             f"[INFO] Sim error profile applied "
             f"(encoder_noise={encoder_noise}, "
-            f"slip_turn_extra={slip_turn_extra}, "
+            f"body_rot_scrub={profile.get('body_rot_scrub', defaults['body_rot_scrub'])}, "
             f"otos_linear_noise={profile.get('otos_linear_noise', defaults['otos_linear_noise'])}, "
             f"otos_yaw_noise={profile.get('otos_yaw_noise', defaults['otos_yaw_noise'])})"
         )
@@ -1202,14 +1238,14 @@ class SimTransport(Transport):
         Safe to call from the Qt GUI thread: the actual sim mutation is
         dispatched onto the tick-thread via the same command queue
         ``set_true_pose`` uses, since the tick-thread exclusively owns the
-        ``Sim`` object.
+        ``SimConnection`` object.
 
         No-ops (after logging a warning) if not connected — there is no
         running sim to mutate. The profile is still persisted separately by
         the caller (``sim_prefs.save_sim_error_profile``) so it takes effect
         on the next Connect regardless.
         """
-        if not self._connected or self._sim is None:
+        if not self._connected or self._conn is None:
             _log.warning(
                 "SimTransport.apply_error_profile: not connected, profile not "
                 "applied live (will take effect on next Connect)"
@@ -1217,8 +1253,8 @@ class SimTransport(Transport):
             self._log("[WARN] Sim error profile not applied: not connected")
             return
 
-        def _action(sim: "object") -> None:
-            self._apply_profile_to_sim(sim, profile)
+        def _action(conn: SimConnection) -> None:
+            self._apply_profile_to_sim(conn, profile)
 
         self._cmd_queue.put((_action, None, None))
 

@@ -1,6 +1,6 @@
 [project]
 name = "microbit-v2-samples-tools"
-version = "0.20260705.21"
+version = "0.20260705.26"
 description = "Build/deploy tooling for microbit-v2-samples plus the robot_radio host controller and rogo CLI"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -97,11 +97,18 @@ aprilcam = { path = "../AprilTags", editable = true }
 #                                 hardware, CI gate like tests/sim/.
 #   tests/tools/                — kept category; skeleton only for now, not
 #                                 collected until it holds real tests.
+#   tests/testgui/              — headless PySide6 GUI tests for the Robot
+#                                 Test GUI cockpit (ticket 083-004), offscreen
+#                                 (QT_QPA_PLATFORM=offscreen), no hardware.
+#                                 Requires `uv sync --group gui`; tests that
+#                                 also need the compiled sim lib additionally
+#                                 skip cleanly (not error) if `just build-sim`
+#                                 hasn't been run.
 #
 # tests_old/ and source_old/ are the parked pre-rebuild trees (rollback =
 # codal.json application flip back to source_old) — never collected, never
 # descended into. vendor/ sims are excluded below too.
-testpaths = ["tests/sim", "tests/unit"]
+testpaths = ["tests/sim", "tests/unit", "tests/testgui"]
 norecursedirs = [
     "tests_old", "source_old",
     "vendor", "build", ".venv", "node_modules",

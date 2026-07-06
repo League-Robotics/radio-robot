@@ -10,7 +10,7 @@ Button                                                         Action
 Sync Pose from Camera                                          Read tag-100 from aprilcam;
                                                                send ``SI x y h`` (mm, mm, cdeg)
 Zero Encoders                                                  Send ``ZERO enc``
-STOP                                                           Send ``STOP``
+STOP                                                           Send ``DEV DT STOP``
 Clear Traces                                                   Call ``clear_traces_cb`` hook
 Refresh Playfield                                              Read cam-3 frame + calib from
                                                                daemon; deskew via daemon H;
@@ -494,7 +494,7 @@ class OpsController:
     def on_stop(self) -> None:
         """Full-system halt: cancel workers, stop motors, and stop telemetry.
 
-        A single wire ``STOP`` is not enough:
+        A single wire ``DEV DT STOP`` is not enough:
 
         1. A running GOTO/tour worker re-issues ``SI``/``G``/tour steps every
            poll cycle, so a lone STOP is overwritten within milliseconds — and
@@ -502,7 +502,7 @@ class OpsController:
            ``stop_motion_cb`` cancels AND joins the worker thread first, so
            nothing re-drives the robot and the transport is no longer touched
            from the worker thread.
-        2. STOP halts the motors / aborts the active motion goal.
+        2. ``DEV DT STOP`` halts the motors / aborts the active motion goal.
         3. ``STREAM 0`` stops telemetry — otherwise the firmware keeps emitting
            TLM after everything else has stopped (the robot "won't stop").
 
@@ -525,8 +525,8 @@ class OpsController:
 
         # 2. Halt motors / abort the active motion goal.
         try:
-            transport.command("STOP", read_timeout=300)
-            self._log("[INFO] STOP sent")
+            transport.command("DEV DT STOP", read_timeout=300)
+            self._log("[INFO] DEV DT STOP sent")
         except Exception as exc:
             self._log(f"[ERROR] STOP: {exc}")
 

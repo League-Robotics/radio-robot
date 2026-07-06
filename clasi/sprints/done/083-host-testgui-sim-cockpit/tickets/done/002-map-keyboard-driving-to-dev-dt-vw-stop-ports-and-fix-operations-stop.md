@@ -1,9 +1,12 @@
 ---
 id: '002'
 title: Map keyboard driving to DEV DT VW/STOP/PORTS and fix Operations STOP
-status: open
-use-cases: [SUC-002, SUC-005]
-depends-on: ['001']
+status: done
+use-cases:
+- SUC-002
+- SUC-005
+depends-on:
+- '001'
 github-issue: ''
 issue: host-testgui-sim-cockpit.md
 completes_issue: false
@@ -32,34 +35,34 @@ does not name that file — same bug, safety-relevant, one line).
 
 ## Acceptance Criteria
 
-- [ ] `drive.py`'s `ROTATE_OMEGA_MRADS` module constant is renamed to drop
+- [x] `drive.py`'s `ROTATE_OMEGA_MRADS` module constant is renamed to drop
       the embedded unit (`naming-and-style.md` rule 1) and its value changes
       from milli-rad/s to rad/s (e.g. `ROTATE_OMEGA: float = 0.5  # [rad/s]`
       replacing `ROTATE_OMEGA_MRADS: int = 500`). All references to the old
       name in this module and its tests are updated in the same commit.
-- [ ] `_qt_arrow_keys()` builds `"DEV DT VW {FWD_SPEED} 0 0"` (Up),
+- [x] `_qt_arrow_keys()` builds `"DEV DT VW {FWD_SPEED} 0 0"` (Up),
       `"DEV DT VW -{FWD_SPEED} 0 0"` (Down), `"DEV DT VW 0 0 {ROTATE_OMEGA}"`
       (Left/CCW), `"DEV DT VW 0 0 -{ROTATE_OMEGA}"` (Right/CW) — matching
       `docs/protocol-v2.md`'s `DEV DT VW <v_x> <v_y> <omega>` (mm/s, mm/s,
       rad/s) signature.
-- [ ] `vw_line_for_key`/`vw_line_for_key_set` remain pure, Qt-free functions
+- [x] `vw_line_for_key`/`vw_line_for_key_set` remain pure, Qt-free functions
       importable and testable without a `QApplication` (unchanged contract,
       only the returned strings change).
-- [ ] `KeyboardDriver.attach()` sends `DEV DT PORTS <left> <right>` exactly
+- [x] `KeyboardDriver.attach()` sends `DEV DT PORTS <left> <right>` exactly
       once per attach (before any `DEV DT VW`), using a module-level default
       port pair `(1, 2)` matching the firmware boot default and the sim's
       default plant binding (`tests/_infra/sim/firmware.py`'s `vel()`
       docstring: "port 1=LEFT, port 2=RIGHT"). This send happens for every
       `Transport` subclass, not just `SimTransport` (transport-agnostic, per
       Decision 2).
-- [ ] `_send_cmd()`'s `"STOP"` sentinel value is replaced with `"DEV DT STOP"`
+- [x] `_send_cmd()`'s `"STOP"` sentinel value is replaced with `"DEV DT STOP"`
       everywhere it is sent (the deadman resend sequence itself —
       `STOP_RESEND_COUNT`, the resend timer, the focus-loss handling — is
       unchanged).
-- [ ] `operations.py`'s `OpsController.on_stop()` sends `"DEV DT STOP"`
+- [x] `operations.py`'s `OpsController.on_stop()` sends `"DEV DT STOP"`
       instead of `"STOP"`. The rest of `on_stop()` (cancel worker threads
       first, then `STREAM 0`) is unchanged.
-- [ ] Module docstring's "Units" section in `drive.py` is updated to state
+- [x] Module docstring's "Units" section in `drive.py` is updated to state
       `omega` is rad/s (matching the renamed constant), not milli-rad/s.
 
 ## Testing

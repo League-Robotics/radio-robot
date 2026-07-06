@@ -191,8 +191,8 @@ independently.  All four traces continue to accumulate data regardless of
 whether they are visible.
 
 The **playfield image** and calibration data are loaded from
-`tests/old/playfield_tour/playfield.jpg` and
-`tests/old/playfield_tour/playfield_calibration.json` relative to the repo
+`tests_old/old/playfield_tour/playfield.jpg` and
+`tests_old/old/playfield_tour/playfield_calibration.json` relative to the repo
 root.  If the files are not found, the canvas falls back to a grey rectangle
 at the default field size (134 × 89.3 cm).
 
