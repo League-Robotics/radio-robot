@@ -1,7 +1,7 @@
 ---
 id: 084
 title: Firmware motion verbs and config/pose-set surface
-status: planning-docs
+status: done
 branch: sprint/084-firmware-motion-verbs-and-config-pose-set-surface
 use-cases: []
 issues:
