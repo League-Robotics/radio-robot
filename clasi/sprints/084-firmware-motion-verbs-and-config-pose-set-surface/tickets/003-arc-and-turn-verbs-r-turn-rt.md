@@ -1,9 +1,11 @@
 ---
 id: '003'
 title: 'Arc and turn verbs: R / TURN / RT'
-status: open
-use-cases: [SUC-002]
-depends-on: ['002']
+status: done
+use-cases:
+- SUC-002
+depends-on:
+- '002'
 github-issue: ''
 issue: firmware-closed-loop-motion-verbs.md
 completes_issue: true
@@ -47,29 +49,29 @@ contract, once, here.
 
 ## Acceptance Criteria
 
-- [ ] `R <speed> <radius> [stop=...]` registered: computes
+- [x] `R <speed> <radius> [stop=...]` registered: computes
       `omega = speed/radius` (0 when `radius == 0`), stages a
       `VelocityGoal`; open-loop, runs until stopped/`stop=` fires; ranges
       `speed` ±1000 mm/s, `radius` ±10000 mm.
-- [ ] `TURN <heading> [eps=<cdeg>] [stop=...]` registered: absolute-heading
+- [x] `TURN <heading> [eps=<cdeg>] [stop=...]` registered: absolute-heading
       turn-in-place, closes against `Planner::tick()`'s `fusedPose`
       heading argument; completes within `eps` (default 300 cdeg);
       `heading` range ±18000 cdeg, `eps` range 10-1800 cdeg.
-- [ ] `RT <relAngle> [stop=...]` registered: relative turn-in-place,
+- [x] `RT <relAngle> [stop=...]` registered: relative turn-in-place,
       closes against per-wheel encoder arc (a `ROTATION` stop condition,
       `Motion::evaluateStopCondition`'s existing kind from ticket 001).
-- [ ] `RT 9000` rotates ~90° (within plant tolerance, sim) and emits
+- [x] `RT 9000` rotates ~90° (within plant tolerance, sim) and emits
       `EVT done RT reason=<token>`; `TURN <heading>` reaches the commanded
       absolute heading within `eps`; `R <speed> <radius>`'s realized arc
       curvature matches `speed`/`radius` within plant tolerance.
-- [ ] All three accept `stop=` clauses from ticket 002's implemented set
+- [x] All three accept `stop=` clauses from ticket 002's implemented set
       (`{t, d, heading, pos, rot}`), OR-combined with each verb's own
       built-in stop (none for `R`; heading/rotation for `TURN`/`RT`).
-- [ ] New `docs/protocol-v2.md` §10 subsections `### R`, `### TURN`,
+- [x] New `docs/protocol-v2.md` §10 subsections `### R`, `### TURN`,
       `### RT` are written, matching this ticket's implemented wire shape
       exactly (verb grammar, ranges, `OK`/`EVT` examples) — closing the
       doc gap identified in architecture-update.md Grounding fact 5.
-- [ ] No change to ticket 001/002's files beyond the new verb
+- [x] No change to ticket 001/002's files beyond the new verb
       registrations and doc additions (no `Planner`/`Drivetrain`/
       `PoseEstimator` signature changes).
 

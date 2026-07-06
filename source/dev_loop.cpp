@@ -26,19 +26,23 @@ namespace {
 // tick() call (planner.cpp) -- reading state() after tick() would always
 // see IDLE for a just-completed goal.
 //
-// Scoped to this ticket's S/T/D verbs only: STREAMING/TIMED/DISTANCE each
-// uniquely identify their own verb. GO_TO/VELOCITY are deliberately
-// unmapped (empty string) -- ticket 084-003/004's R/TURN/RT/G all map onto
-// DriveMode::VELOCITY or GO_TO in planner.cpp's own apply() (e.g. TURN and
-// ROTATION both stage DriveMode::VELOCITY), so DriveMode alone cannot
-// disambiguate them; those tickets will need a different mechanism (e.g.
-// tracking the actual verb string, not just the DriveMode) for their own
-// EVT text, not an extension of this switch.
-const char* motionVerbForMode(msg::DriveMode mode) {
+// STREAMING/TIMED/DISTANCE each uniquely identify their own verb (S/T/D,
+// 084-002). VELOCITY is shared by THREE verbs (R/TURN/RT, 084-003) --
+// planner.cpp's apply() stages the VELOCITY, TURN, and ROTATION goal kinds
+// identically as DriveMode::VELOCITY -- so DriveMode alone cannot
+// disambiguate them; `activeVelocityVerb` (MotionLoopState, set by
+// handleR/handleTURN/handleRT) is exactly the "different mechanism (e.g.
+// tracking the actual verb string)" this comment used to flag as a future
+// ticket's problem -- see motion_commands.h's field doc comment. GO_TO
+// remains deliberately unmapped (empty string) -- ticket 084-004's `G` maps
+// onto DriveMode::GO_TO, its own unique value, so no further disambiguation
+// mechanism is needed there; that ticket only needs to extend this switch.
+const char* motionVerbForMode(msg::DriveMode mode, const char* activeVelocityVerb) {
   switch (mode) {
     case msg::DriveMode::STREAMING: return "S";
     case msg::DriveMode::TIMED: return "T";
     case msg::DriveMode::DISTANCE: return "D";
+    case msg::DriveMode::VELOCITY: return activeVelocityVerb;
     default: return "";
   }
 }
@@ -205,7 +209,8 @@ void devLoopTick(DevLoop& loop, uint32_t now, const DevLoopStatement* statement)
             snprintf(body, sizeof(body), "reason=%s", ev.reason);
         }
         char name[16];
-        snprintf(name, sizeof(name), "done %s", motionVerbForMode(activeModeBeforeTick));
+        snprintf(name, sizeof(name), "done %s",
+                 motionVerbForMode(activeModeBeforeTick, motionState.activeVelocityVerb));
         char wbuf[96];
         CommandProcessor::replyEvt(wbuf, sizeof(wbuf), name, body, loop.defaultReply,
                                    loop.defaultReplyCtx);

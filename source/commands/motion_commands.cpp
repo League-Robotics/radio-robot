@@ -288,6 +288,90 @@ ParseResult parseD(const char* const* tokens, int ntokens, const KVPair* kvs, in
 }
 
 // ---------------------------------------------------------------------------
+// parseR -- R <speed> <radius> [stop=...] [sensor=...]
+// ---------------------------------------------------------------------------
+ParseResult parseR(const char* const* tokens, int ntokens, const KVPair* kvs, int nkv) {
+  ParseResult res;
+  if (ntokens < 2) {
+    res.ok = false; res.err.code = nullptr; res.err.detail = nullptr; return res;
+  }
+  int speed = atoi(tokens[0]);
+  int radius = atoi(tokens[1]);
+  if (speed < -1000 || speed > 1000) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "speed"; return res;
+  }
+  if (radius < -10000 || radius > 10000) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "radius"; return res;
+  }
+  res.ok = true;
+  res.args.count = 2;
+  argInt(res.args.args[0], speed);
+  argInt(res.args.args[1], radius);
+  int idx = 2;
+  packStopKVs(kvs, nkv, res.args, idx);
+  res.args.suppliedCount = res.args.count;
+  return res;
+}
+
+// ---------------------------------------------------------------------------
+// parseTURN -- TURN <heading> [eps=<cdeg>] [stop=...] [sensor=...]
+// ---------------------------------------------------------------------------
+ParseResult parseTURN(const char* const* tokens, int ntokens, const KVPair* kvs, int nkv) {
+  ParseResult res;
+  if (ntokens < 1) {
+    res.ok = false; res.err.code = "badarg"; res.err.detail = nullptr; return res;
+  }
+  int heading = atoi(tokens[0]);
+  if (heading < -18000 || heading > 18000) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "heading"; return res;
+  }
+  // Optional eps=<cdeg>; default 300 (docs/protocol-v2.md section 10's
+  // documented default once this ticket's section lands).
+  int eps = 300;
+  const KVPair* epsKv = kvFind(kvs, nkv, "eps");
+  if (epsKv) {
+    eps = atoi(epsKv->value);
+    if (eps < 10 || eps > 1800) {
+      res.ok = false; res.err.code = "range"; res.err.detail = "eps"; return res;
+    }
+  }
+  res.ok = true;
+  res.args.count = 2;
+  argInt(res.args.args[0], heading);
+  argInt(res.args.args[1], eps);
+  int idx = 2;
+  packStopKVs(kvs, nkv, res.args, idx);
+  res.args.suppliedCount = res.args.count;
+  return res;
+}
+
+// ---------------------------------------------------------------------------
+// parseRT -- RT <relAngle> [stop=...] [sensor=...]
+//
+// relAngle range +-180000 cdeg (+-1800 degrees, up to 5 full turns) --
+// ported verbatim from source_old/commands/MotionCommands.cpp's rtSchema;
+// unlike TURN's absolute-heading target (naturally bounded to +-180 degrees
+// of travel either way), a RELATIVE turn has no such natural bound.
+// ---------------------------------------------------------------------------
+ParseResult parseRT(const char* const* tokens, int ntokens, const KVPair* kvs, int nkv) {
+  ParseResult res;
+  if (ntokens < 1) {
+    res.ok = false; res.err.code = nullptr; res.err.detail = nullptr; return res;
+  }
+  int relAngle = atoi(tokens[0]);
+  if (relAngle < -180000 || relAngle > 180000) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "relAngle"; return res;
+  }
+  res.ok = true;
+  res.args.count = 1;
+  argInt(res.args.args[0], relAngle);
+  int idx = 1;
+  packStopKVs(kvs, nkv, res.args, idx);
+  res.args.suppliedCount = res.args.count;
+  return res;
+}
+
+// ---------------------------------------------------------------------------
 // handleS -- streams a body twist (converted from wheel speeds l/r via
 // BodyKinematics::forward(), the same conversion telemetry_commands.cpp's
 // twist= field already performs) into a STREAM goal, and feeds sTimeout --
@@ -431,6 +515,211 @@ void handleD(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
 }
 
 // ---------------------------------------------------------------------------
+// kCdegToRad -- centidegrees -> radians, shared by handleTURN/handleRT below.
+// Same conversion factor as parseStopClauseValue()'s own inline heading:eps
+// conversion above (duplicated at this scope since C++ has no clean way to
+// share a function-local constant across sibling functions).
+// ---------------------------------------------------------------------------
+constexpr float kCdegToRad = 3.14159265f / 18000.0f;
+
+// kTurnOmega/kRotationOmega -- fixed spin-in-place rates for TURN/RT.
+// Subsystems::Planner exposes no live PlannerConfig getter this ticket (its
+// config is write-only via configure() -- see planner.h), so the wire
+// handler cannot read yaw_rate_max the way source_old/control/
+// PlannerBegin.cpp's beginTurn() read _cfg.yawRateMax. Both constants are
+// fixed wire-layer values, well under defaultPlannerConfig()'s 6.0 rad/s
+// yaw_rate_max (source/main.cpp) so Motion::VelocityRamp's own clamp never
+// kicks in -- deterministic, sim-testable convergence. kTurnOmega mirrors
+// source_old/robot/DefaultConfig.cpp's yawRateMax default (70 deg/s);
+// kRotationOmega matches source_old's own RT-specific kRtRate constant
+// exactly (MotionCommand.cpp's beginRotation, 100 deg/s) -- that ported
+// source deliberately used its own fixed rate rather than yawRateMax, and
+// this port preserves that same distinction.
+constexpr float kTurnOmega = 1.2217f;      // [rad/s] ~70 deg/s
+constexpr float kRotationOmega = 1.7453f;  // [rad/s] ~100 deg/s
+
+// wrapAngle -- wrap x into (-pi, pi]. Same atan2f(sinf, cosf) identity
+// Motion::evaluateStopCondition's own (private) wrapAngle() uses
+// (motion/stop_condition.cpp) -- duplicated here since that helper has no
+// external linkage, mirroring source/subsystems/pose_estimator.h's own
+// documented precedent for this exact kind of independent-copy duplication.
+float wrapAngle(float x) { return atan2f(sinf(x), cosf(x)); }
+
+// ---------------------------------------------------------------------------
+// handleR -- open-loop constant-curvature arc: omega = speed/radius (kappa =
+// 1/radius; 0 when radius == 0), v = speed. Stages a VELOCITY goal exactly
+// like a bare S -- runs until an explicit STOP or a stop= clause fires (no
+// stop of its own -- ticket 084-003's acceptance: "none for R").
+// ---------------------------------------------------------------------------
+void handleR(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
+            void* handlerCtx) {
+  MotionLoopState& state = *static_cast<MotionLoopState*>(handlerCtx);
+  int speed = args.args[0].ival;
+  int radius = args.args[1].ival;
+
+  msg::StopCondition stops[kMaxStopConds];
+  uint8_t stopsCount = 0;
+  if (!collectStopClauses(args, 2, stops, stopsCount)) {
+    replyStopBadarg(corrId, replyFn, replyCtx);
+    return;
+  }
+
+  // omega = speed/radius (kappa = 1/radius); 0 when radius == 0. Positive
+  // radius -> positive omega -> CCW (left) arc -- matches source_old/
+  // commands/MotionCommands.cpp's handleR sign convention exactly.
+  float omega = (radius != 0) ? (static_cast<float>(speed) / static_cast<float>(radius)) : 0.0f;
+
+  msg::PlannerCommand cmd;
+  msg::VelocityGoal goal;
+  goal.v_x = static_cast<float>(speed);
+  goal.v_y = 0.0f;
+  goal.omega = omega;
+  cmd.setVelocity(goal);
+  for (uint8_t i = 0; i < stopsCount; ++i) cmd.stops_[i] = stops[i];
+  cmd.stops_count = stopsCount;
+  copyCorrId(cmd, corrId);
+
+  state.command = cmd;
+  state.hasCommand = true;
+  // R stages msg::DriveMode::VELOCITY -- the SAME DriveMode TURN/RT also
+  // stage (planner.cpp's apply()) -- see MotionLoopState::activeVelocityVerb's
+  // own doc comment (motion_commands.h) for why this field exists.
+  snprintf(state.activeVelocityVerb, sizeof(state.activeVelocityVerb), "R");
+
+  char body[48];
+  snprintf(body, sizeof(body), "speed=%d radius=%d", speed, radius);
+  char rbuf[80];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "arc", body, corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
+// handleTURN -- absolute-heading turn-in-place, closed-loop against
+// Planner::tick()'s fusedPose heading argument (this + RT are the FIRST real
+// consumers of that already-threaded argument -- see subsystems/planner.h's
+// class comment on TurnGoal.speed being an ALREADY-SIGNED rate the caller
+// resolves). Ported concept from source_old/control/PlannerBegin.cpp's
+// beginTurn(): reads the current fused heading, computes the shortest-path
+// signed delta to the absolute target, and stages a fixed-rate spin in that
+// direction plus a HEADING stop at the resolved delta -- the "matching stop
+// condition" ticket 084-003's own architecture-update.md Decision text
+// calls for (singular: no secondary runaway-timeout stop is added here,
+// matching the acceptance criterion's "built-in stop (... heading for
+// TURN)" wording exactly).
+// ---------------------------------------------------------------------------
+void handleTURN(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
+                void* handlerCtx) {
+  MotionLoopState& state = *static_cast<MotionLoopState*>(handlerCtx);
+  int heading = args.args[0].ival;   // [cdeg] absolute target heading
+  int eps = args.args[1].ival;       // [cdeg]
+
+  // Reserve 1 of kMaxStopConds's 4 slots for the built-in HEADING stop; up
+  // to kMaxStopConds - 1 caller stop= clauses are accepted (extras silently
+  // dropped, matching collectStopClauses()'s own cap discipline above).
+  msg::StopCondition userStops[kMaxStopConds];
+  uint8_t userCount = 0;
+  if (!collectStopClauses(args, 2, userStops, userCount)) {
+    replyStopBadarg(corrId, replyFn, replyCtx);
+    return;
+  }
+  if (userCount > kMaxStopConds - 1) userCount = kMaxStopConds - 1;
+
+  float currentHeading = state.poseEstimator->fusedPose().pose.h;   // [rad]
+  float diff = static_cast<float>(heading) * kCdegToRad - currentHeading;
+  float delta = wrapAngle(diff);   // [rad] shortest-path signed delta, (-pi, pi]
+  float omega = (delta >= 0.0f) ? kTurnOmega : -kTurnOmega;
+
+  msg::PlannerCommand cmd;
+  msg::TurnGoal goal;
+  // heading: informational only -- planner.cpp's TURN case reads only
+  // goal.turn.speed (the already-signed rate); see planner.h's class comment.
+  goal.heading = static_cast<float>(heading) * kCdegToRad;
+  goal.speed = omega;
+  cmd.setTurn(goal);
+
+  msg::StopCondition headingStop;
+  headingStop.kind = msg::StopKind::STOP_HEADING;
+  headingStop.a = delta;
+  headingStop.b = static_cast<float>(eps) * kCdegToRad;
+
+  uint8_t total = 0;
+  cmd.stops_[total++] = headingStop;
+  for (uint8_t i = 0; i < userCount; ++i) cmd.stops_[total++] = userStops[i];
+  cmd.stops_count = total;
+  copyCorrId(cmd, corrId);
+
+  state.command = cmd;
+  state.hasCommand = true;
+  snprintf(state.activeVelocityVerb, sizeof(state.activeVelocityVerb), "TURN");
+
+  char body[48];
+  snprintf(body, sizeof(body), "heading=%d eps=%d", heading, eps);
+  char rbuf[80];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "turn", body, corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
+// handleRT -- relative turn-in-place, closed-loop against the per-wheel
+// encoder arc (a ROTATION stop condition -- ticket 001's Motion::
+// evaluateStopCondition's existing kind), not against fused heading. Ported
+// concept from source_old/control/PlannerBegin.cpp's beginRotation(), minus
+// its rotational-slip/coast-anticipation refinement: Subsystems::
+// PoseEstimator exposes no rotationalSlip getter (only trackwidth()), and
+// coast-anticipation is not part of this ticket's acceptance bar -- the sim
+// test measures and documents the resulting plant tolerance instead (ticket
+// 084-003's own testing note: "RT/TURN accuracy may show small under/over-
+// rotation -- set test tolerances to the plant's actual behavior").
+// ---------------------------------------------------------------------------
+void handleRT(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
+              void* handlerCtx) {
+  MotionLoopState& state = *static_cast<MotionLoopState*>(handlerCtx);
+  int relAngle = args.args[0].ival;   // [cdeg]
+
+  // Reserve 1 of kMaxStopConds's 4 slots for the built-in ROTATION stop; up
+  // to kMaxStopConds - 1 caller stop= clauses are accepted (extras silently
+  // dropped, matching collectStopClauses()'s own cap discipline above).
+  msg::StopCondition userStops[kMaxStopConds];
+  uint8_t userCount = 0;
+  if (!collectStopClauses(args, 1, userStops, userCount)) {
+    replyStopBadarg(corrId, replyFn, replyCtx);
+    return;
+  }
+  if (userCount > kMaxStopConds - 1) userCount = kMaxStopConds - 1;
+
+  float trackwidth = state.poseEstimator->trackwidth();   // [mm]
+  // Per-wheel arc = |relAngle| (rad) * (trackwidth/2) -- the ideal
+  // spin-in-place geometry, no slip correction (see doc comment above).
+  float arc = fabsf(static_cast<float>(relAngle)) * kCdegToRad * (trackwidth * 0.5f);   // [mm]
+  float omega = (relAngle >= 0) ? kRotationOmega : -kRotationOmega;   // + => CCW (left)
+
+  msg::PlannerCommand cmd;
+  msg::RotationGoal goal;
+  // angle: informational only -- planner.cpp's ROTATION case reads only
+  // goal.rotation.speed (the already-signed rate); see planner.h's class comment.
+  goal.angle = static_cast<float>(relAngle) * kCdegToRad;
+  goal.speed = omega;
+  cmd.setRotation(goal);
+
+  msg::StopCondition rotStop;
+  rotStop.kind = msg::StopKind::STOP_ROTATION;
+  rotStop.a = arc;
+
+  uint8_t total = 0;
+  cmd.stops_[total++] = rotStop;
+  for (uint8_t i = 0; i < userCount; ++i) cmd.stops_[total++] = userStops[i];
+  cmd.stops_count = total;
+  copyCorrId(cmd, corrId);
+
+  state.command = cmd;
+  state.hasCommand = true;
+  snprintf(state.activeVelocityVerb, sizeof(state.activeVelocityVerb), "RT");
+
+  char body[32];
+  snprintf(body, sizeof(body), "rot=%d", relAngle);
+  char rbuf[64];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "rt", body, corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
 // handleStop -- STOP: immediate halt, no EVT (docs/protocol-v2.md §10:
 // "Stops motors immediately... No EVT is emitted"). Stages goal_kind=STOP;
 // Subsystems::Planner::apply()'s STOP case resets the ramp and clears the
@@ -458,6 +747,10 @@ std::vector<CommandDescriptor> motionCommands(MotionLoopState& state) {
   cmds.push_back(makeCmd("S", parseS, handleS, &state, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
   cmds.push_back(makeCmd("T", parseT, handleT, &state, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
   cmds.push_back(makeCmd("D", parseD, handleD, &state, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
+  cmds.push_back(makeCmd("R", parseR, handleR, &state, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
+  cmds.push_back(
+      makeCmd("TURN", parseTURN, handleTURN, &state, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
+  cmds.push_back(makeCmd("RT", parseRT, handleRT, &state, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
   cmds.push_back(makeCmd("STOP", nullptr, handleStop, &state, "badarg", ForceReply::NONE,
                          CMD_ACCESS_HARDWARE));
   return cmds;

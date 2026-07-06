@@ -107,6 +107,22 @@ struct MotionLoopState {
   // own comment for why that gate is what "armed" means here, rather than a
   // separate bool).
   StreamingDriveWatchdog sTimeout;
+
+  // activeVelocityVerb -- 084-003: disambiguates which wire verb (R, TURN,
+  // RT) staged the currently-active goal, for dev_loop.cpp's "EVT done
+  // <verb>" text. Subsystems::Planner's own msg::DriveMode::VELOCITY value
+  // is shared by all three (planner.cpp's apply() stages the VELOCITY,
+  // TURN, and ROTATION goal kinds identically as msg::DriveMode::VELOCITY),
+  // so DriveMode alone cannot disambiguate them -- dev_loop.cpp's own
+  // motionVerbForMode() comment (084-002) flagged this exact ambiguity as
+  // "a different mechanism (e.g. tracking the actual verb string)" for a
+  // later ticket to add; this field is that mechanism. Set by
+  // handleR/handleTURN/handleRT ONLY (never by S/T/D/STOP, which stage
+  // their own unambiguous DriveMode values already handled by
+  // motionVerbForMode()) -- so a stale value here can never leak into an
+  // S/T/D EVT: dev_loop.cpp only reads this field when Planner::state().mode
+  // == VELOCITY, which is reached exclusively via R/TURN/RT.
+  char activeVelocityVerb[8] = "";
 };
 
 // Returns the S/T/D/STOP command table, bound to the given shared state

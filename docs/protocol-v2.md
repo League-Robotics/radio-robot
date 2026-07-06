@@ -681,6 +681,9 @@ produce bare events with no `#id`.
 | `EVT done T [#id]`     | Timed drive elapsed                                   |
 | `EVT done D [#id]`     | Distance drive target reached (or 5-second timeout)   |
 | `EVT done G [#id]`     | Go-to arc completed within `arriveTol` mm             |
+| `EVT done R [#id]`     | Arc drive ended via a `stop=` clause (a bare `R` runs open-ended until `STOP`, which emits no event) |
+| `EVT done TURN [#id]`  | Absolute-heading turn reached the target within `eps` (or a `stop=` clause fired) |
+| `EVT done RT [#id]`    | Relative turn reached the target per-wheel encoder arc (or a `stop=` clause fired) |
 | `EVT safety_stop [#id]`| S/VW watchdog expired (no `S` or `VW` command within `sTimeout` ms) |
 
 `[#id]` is present only when the originating command carried one.  Example:
@@ -739,11 +742,14 @@ EVT safety_stop reason=runaway
 
 ### stop= Clauses
 
-Any open-loop motion command (`VW`, `S`, `R`, `T`, `D`, `TURN`) may carry one
-or more `stop=<kind>:<args>` clauses as `key=value` pairs.  Each clause adds a
-stop condition that fires when its condition is satisfied; conditions are
-OR-combined.  Up to 4 `stop=` clauses are accepted per command
-(`kMaxStopConds = 4`).
+Any open-loop motion command (`VW`, `S`, `R`, `T`, `D`, `TURN`, `RT`) may
+carry one or more `stop=<kind>:<args>` clauses as `key=value` pairs.  Each
+clause adds a stop condition that fires when its condition is satisfied;
+conditions are OR-combined.  Up to 4 `stop=` clauses are accepted per
+command (`kMaxStopConds = 4`) — `TURN` and `RT` each reserve one of those 4
+slots for their own built-in stop (`heading` / `rot` respectively), so up to
+3 additional `stop=` clauses are accepted on those two; clauses beyond the
+available slots are silently dropped, not an error.
 
 | Clause                              | Fires when                                                        |
 |-------------------------------------|-------------------------------------------------------------------|
@@ -925,6 +931,129 @@ D 200 200 500 stop=t:3000
 OK drive l=200 r=200 mm=500
 … (stops at 500 mm or 3 s, whichever comes first) …
 EVT done D reason=dist
+```
+
+### R — Arc Drive (constant curvature, open-loop)
+
+```
+R <speed> <radius> [stop=<kind>:<args>]… [#id]
+→ OK arc speed=<speed> radius=<radius> [#id]
+  … (only if a stop= clause fires) …
+  EVT done R [#id] reason=<token>
+```
+
+Drives a constant-curvature arc: `speed` is the forward body speed (mm/s)
+and `radius` is the arc radius (mm).  The firmware computes the yaw rate as
+`omega = speed / radius` (0 when `radius` is 0, i.e. a straight line) and
+enters `VELOCITY` mode — open-loop, matching `S`'s family: **`R` has no
+built-in stop of its own.**  A bare `R` (no `stop=` clause) runs open-ended
+until `STOP` (which emits no event, same as `S`/`VW`); optional `stop=`
+clauses may be appended, and the first one that fires ends the drive and
+emits `EVT done R [#id] reason=<token>`.
+
+Positive `radius` is a CCW (left) arc; negative `radius` is a CW (right)
+arc; `radius = 0` degenerates to a straight-line body-velocity command
+(same effect as `VW <speed> 0`).
+
+Ranges:
+- `speed` — −1 000 … +1 000 mm/s.  Out of range → `ERR range speed`.
+- `radius` — −10 000 … +10 000 mm.  Out of range → `ERR range radius`.
+
+Example:
+
+```
+R 200 500
+OK arc speed=200 radius=500
+
+R 200 500 stop=d:400
+OK arc speed=200 radius=500
+… (stops after 400 mm of average encoder travel) …
+EVT done R reason=dist
+
+R 200 500 #9
+OK arc speed=200 radius=500 #9
+… (runs open-ended; a later STOP halts it with no EVT) …
+```
+
+### TURN — Absolute-Heading Turn-in-Place (closed-loop, fused heading)
+
+```
+TURN <heading> [eps=<cdeg>] [stop=<kind>:<args>]… [#id]
+→ OK turn heading=<heading> eps=<eps> [#id]
+  … (later, asynchronously) …
+  EVT done TURN [#id] reason=<token>
+```
+
+Rotates in place to the **absolute** heading `heading` (centi-degrees,
+compass-style: 0 is the heading at boot/last `ZERO pose`/`SI`).  The
+firmware reads the current fused pose heading (`PoseEstimator::fusedPose()`)
+at command time, resolves the shortest-path signed turn direction, and spins
+at a fixed rate until the fused heading is within `eps` (centi-degrees,
+default 300 = 3°) of the target — a **`heading` stop condition**, the one
+built-in stop this verb always carries.  Optional `stop=` clauses may be
+appended (up to 3 more, since one of the 4 available slots is reserved for
+the built-in `heading` stop); the first condition that fires ends the turn
+and emits `EVT done TURN [#id] reason=<token>`.
+
+Ranges:
+- `heading` — −18 000 … +18 000 cdeg (±180°).  Out of range →
+  `ERR range heading`.
+- `eps` — 10 … 1 800 cdeg (0.1° … 18°), default 300.  Out of range →
+  `ERR range eps`.
+
+Example:
+
+```
+TURN 9000
+OK turn heading=9000 eps=300
+EVT done TURN reason=heading
+
+TURN -9000 eps=100
+OK turn heading=-9000 eps=100
+EVT done TURN reason=heading
+
+TURN 9000 stop=t:2000
+OK turn heading=9000 eps=300
+… (stops at 90° or 2 s, whichever comes first) …
+EVT done TURN reason=time
+```
+
+### RT — Relative Turn-in-Place (closed-loop, encoder arc)
+
+```
+RT <relAngle> [stop=<kind>:<args>]… [#id]
+→ OK rt rot=<relAngle> [#id]
+  … (later, asynchronously) …
+  EVT done RT [#id] reason=<token>
+```
+
+Rotates in place by the **relative** angle `relAngle` (centi-degrees;
+positive is CCW/left, negative is CW/right) from the robot's current
+heading.  Unlike `TURN`, `RT` closes the loop against the **per-wheel
+encoder arc** (a `rot` stop condition — the geometry-verified arc for the
+requested angle, independent of the fused pose/OTOS), the one built-in stop
+this verb always carries.  Optional `stop=` clauses may be appended (up to 3
+more, same 4-slot budget as `TURN`); the first condition that fires ends the
+turn and emits `EVT done RT [#id] reason=<token>`.
+
+Range: `relAngle` — −180 000 … +180 000 cdeg (±1 800°, up to 5 full turns).
+Out of range → `ERR range relAngle`.
+
+Example:
+
+```
+RT 9000
+OK rt rot=9000
+EVT done RT reason=rot
+
+RT -9000
+OK rt rot=-9000
+EVT done RT reason=rot
+
+RT 9000 stop=t:500
+OK rt rot=9000
+… (stops at 90° of arc or 500 ms, whichever comes first) …
+EVT done RT reason=time
 ```
 
 ### G — Go-To (relative XY)
