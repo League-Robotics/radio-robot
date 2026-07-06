@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Motor velocity-loop / armor fix (root fix, phase 1) + armor regression re-verification
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 - SUC-002
