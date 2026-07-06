@@ -44,14 +44,29 @@ def test_rt_rotates_about_90_degrees_and_emits_done_rot(sim):
     sim.tick_for(3000)
 
     _x, _y, h = sim.true_pose()
-    # Measured plant behavior (2026-07-05): the ROTATION stop fires once the
-    # per-wheel arc target is reached (a ">=" threshold, no early-fire
-    # margin), then the SMOOTH stop style ramps yaw rate to zero -- coasting
-    # a further ~4-5 degrees past the target before fully stopping (no
-    # coast-anticipation this ticket -- see handleRT's doc comment). +-10
-    # degrees covers that coast plus ordinary plant/ramp variance.
+    # Measured plant behavior (2026-07-05, pre-086): the ROTATION stop fires
+    # once the per-wheel arc target is reached (a ">=" threshold, no
+    # early-fire margin), then the SMOOTH stop style ramps yaw rate to zero
+    # -- coasting a further ~4-5 degrees past the target before fully
+    # stopping (no coast-anticipation this ticket -- see handleRT's doc
+    # comment).
+    #
+    # 086-004 retune: re-measured against 086-002 (motor-loop reverse-spin
+    # fix) + 086-003 (Planner terminal-decel anticipation, extended to
+    # STOP_ROTATION too) -- this converges to a fully deterministic
+    # 96.3669 deg (+6.37 deg over 90), bit-exact across repeated runs (this
+    # is a pure sim tick loop, no wall-clock jitter). Still the same
+    # already-documented, deliberately-open-loop RT coast characteristic
+    # (086-003's ROTATION anticipation is a documented approximation, per
+    # that ticket's own completion notes, and does not close this residual
+    # to near-zero the way it closed D 200 200 500's) -- not a regression.
+    # tests/sim/system/test_tour_geometry.py's own per-leg tolerance
+    # (+-8 deg, set from the widest RT leg observed across Tour 1/2) uses
+    # the same measured behavior. +-7 degrees here keeps ~1.1x headroom over
+    # the exact 6.37 deg measured, tightened from the old +-10 deg (which
+    # was never measured this precisely).
     expected = math.pi / 2.0
-    assert abs(h - expected) < math.radians(10.0), (
+    assert abs(h - expected) < math.radians(7.0), (
         f"expected heading near {expected:.4f} rad (90 deg), got {h:.4f} rad "
         f"({math.degrees(h):.2f} deg)"
     )
@@ -67,8 +82,12 @@ def test_rt_negative_relangle_rotates_the_opposite_direction(sim):
     sim.tick_for(3000)
 
     _x, _y, h = sim.true_pose()
+    # 086-004 retune: mirrors test_rt_rotates_about_90_degrees_and_emits_
+    # done_rot's own retune above -- measured -96.3669 deg (-6.37 deg over
+    # -90), bit-exact and symmetric with the positive-angle case. Same +-7
+    # deg tightened bound (was +-10 deg).
     expected = -math.pi / 2.0
-    assert abs(h - expected) < math.radians(10.0), (
+    assert abs(h - expected) < math.radians(7.0), (
         f"expected heading near {expected:.4f} rad (-90 deg), got {h:.4f} rad "
         f"({math.degrees(h):.2f} deg)"
     )
@@ -144,12 +163,18 @@ def test_turn_reaches_absolute_heading_from_nonzero_start(sim):
     # of the +-180 deg branch cut: a raw ``h - expected`` blows up to ~2*pi
     # even though the true angular distance is small, so the comparison
     # below wraps the difference into (-pi, pi] first (see this file's
-    # ``_wrap_pi`` helper). The +-13 degree bound itself is left unchanged
-    # (a further tightening is ticket 086-004's retune, per
-    # architecture-update.md's "Impact on Existing Components" table) --
-    # this is a measurement-correctness fix, not a loosened tolerance.
+    # ``_wrap_pi`` helper).
+    #
+    # 086-004 retune: with 086-003 (Planner terminal-decel anticipation for
+    # STOP_HEADING, this TURN's own stop kind) landed on top of 086-002, this
+    # converges even tighter -- a fully deterministic 1.95 deg wrapped
+    # residual (bit-exact across repeated runs, plain sim tick loop). The
+    # +-13 deg bound (never actually re-measured before this ticket, per the
+    # comment above) is tightened here to +-5 deg -- ~2.6x headroom over the
+    # 1.95 deg measured, per architecture-update.md's "Impact on Existing
+    # Components" table entry earmarking this exact test for 086-004.
     diff = _wrap_pi(h - expected)
-    assert abs(diff) < math.radians(13.0), (
+    assert abs(diff) < math.radians(5.0), (
         f"expected heading near {expected:.4f} rad (180 deg), got {h:.4f} rad "
         f"({math.degrees(h):.2f} deg), wrapped diff {math.degrees(diff):.2f} deg"
     )
