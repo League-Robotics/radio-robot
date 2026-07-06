@@ -1,5 +1,9 @@
 ---
-status: pending
+status: in-progress
+sprint: 086
+tickets:
+- 086-008
+- 086-009
 ---
 
 # Flip-flop per-motor sample cadence is ~half the design target (~44–52 Hz vs ~80–90 Hz)

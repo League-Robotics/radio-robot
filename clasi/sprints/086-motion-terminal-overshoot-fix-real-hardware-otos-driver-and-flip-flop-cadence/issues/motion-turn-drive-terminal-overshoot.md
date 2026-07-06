@@ -1,5 +1,11 @@
 ---
-status: pending
+status: in-progress
+sprint: 086
+tickets:
+- 086-001
+- 086-002
+- 086-003
+- 086-004
 ---
 
 # Turn/drive terminal overshoot: motor velocity-loop reverse-spin makes turns backtrack and tours wreck

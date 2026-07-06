@@ -1,5 +1,10 @@
 ---
-status: pending
+status: in-progress
+sprint: 086
+tickets:
+- 086-005
+- 086-006
+- 086-007
 ---
 
 # Real-hardware OTOS driver for NezhaHardware (new source/ tree)
