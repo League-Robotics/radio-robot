@@ -1281,14 +1281,28 @@ All three arguments are plain integers with no range check (values are cast
 internally; an absurd input is the caller's mistake, not a wire error). Too
 few arguments → `ERR badarg`.
 
-`SI` re-anchors both the encoder-only dead-reckoning reading (`encpose=`)
-and the EKF's fused belief (`pose=`) — see `TLM`'s field list (§8). It does
-**not** re-anchor the active OTOS/odometer's own world-frame reading (`OV`,
-§11); until an `OV` fix is also issued, a live odometer's next reading will
-partially correct `pose=` back toward its own (un-reanchored) frame,
-identically to how a plain `SI` interacted with the OTOS chip in the
-pre-v2 firmware. Issue `SI` and `OV` together (same world fix) for a full
-re-anchor, exactly as an external camera-fix workflow already does.
+`SI` re-anchors the encoder-only dead-reckoning reading (`encpose=`), the
+EKF's fused belief (`pose=`) — see `TLM`'s field list (§8) — **and** (as of
+sprint 084 ticket 008) the active `Hal::Odometer`'s own world-frame reading
+(`OV`, §11), issuing all three in the SAME wire dispatch. `source/`'s
+`handleSI` (`source/commands/pose_commands.cpp`) calls
+`PoseEstimator::setPose()` and then, if `hardware->odometer()` is non-null,
+also stages an `OdometerCommand::SET_POSE` matching the same `(x, y, h)` —
+mirroring `source_old`'s own two-call `handleSI` (`PoseEstimator` reset +
+`hal.otos().setWorldPose()`). Because the very next fusion pass therefore
+reads an odometer sample that already agrees with the freshly-set anchor,
+the EKF update's residual is zero and `pose=` reads back **exactly**
+`x`,`y`,`h` too — a separate `OV` fix is no longer needed to avoid the
+partial-correction-back-toward-the-old-frame hazard earlier drafts of this
+section described (see `tests/sim/unit/test_pose_commands.py`'s
+`test_si_reanchors_both_encpose_and_the_fused_pose_exactly` and
+`tests/sim/unit/test_config_pose_set_otos_surface.py`'s
+`test_si_teleports_fused_pose_confirmed_via_snap_and_through_otos_op`, both
+of which read the post-`SI` pose back through `OP` too).
+`Subsystems::NezhaHardware::odometer()` is null (no real OTOS driver this
+program — see `clasi/issues/nezha-hardware-otos-driver-for-new-source-tree.md`),
+so on hardware `SI`'s odometer re-anchor step is a no-op, unchanged from its
+pre-008 behavior there.
 
 `SI` does not itself cancel an active drive: a `G`/`TURN` in progress keeps
 pursuing its goal using the newly-anchored pose on its very next tick,
@@ -1309,6 +1323,15 @@ ZERO enc          [#id]  → OK zero enc [#id]
 ZERO pose         [#id]  → OK zero pose [#id]
 ZERO enc pose     [#id]  → OK zero enc pose [#id]
 ```
+
+> **Sprint 084 note — `enc` only in `source/`.** This section documents the
+> full `source_old/` grammar (all three forms). As of sprint 084 (ticket
+> 007), `source/`'s `ZERO` (`source/commands/pose_commands.cpp`'s
+> `parseZero`) implements only the `enc` sub-verb — a deliberate scope
+> decision (see that file's own doc comment), not an oversight. `ZERO`
+> (bare), `ZERO pose`, and `ZERO enc pose` all return `ERR badarg` in
+> `source/` today; only the exact literal `ZERO enc` succeeds. A future
+> sprint may add `pose` without any wire-shape change.
 
 `enc` resets the encoder accumulators (calls
 `MotorController::resetEncoderAccumulators()`).  `pose` resets the
