@@ -61,14 +61,15 @@ All PySide6 imports are deferred inside methods and factory functions so that
 Startup background policy
 --------------------------
 On launch the canvas always shows a **neutral grey placeholder** — the bundled
-test-fixture images in ``tests/old/`` are NEVER loaded for live display.  A
-live grab (via the aprilcam daemon) is triggered automatically on window show
-and again on each hardware connect; the grey placeholder is replaced once the
-grab succeeds.  In sim mode (no camera) the grey placeholder is permanent.
+test-fixture images in ``tests_old/old/playfield_tour/`` are NEVER loaded for
+live display.  A live grab (via the aprilcam daemon) is triggered automatically
+on window show and again on each hardware connect; the grey placeholder is
+replaced once the grab succeeds.  In sim mode (no camera) the grey placeholder
+is permanent.
 
-The bundled calibration JSON (``tests/old/playfield_tour/playfield_calibration.json``)
-is still read for field dimensions (cm) so the placeholder is the correct
-aspect ratio.
+The bundled calibration JSON
+(``tests_old/old/playfield_tour/playfield_calibration.json``) is still read
+for field dimensions (cm) so the placeholder is the correct aspect ratio.
 
 Debug override
 --------------
@@ -104,9 +105,9 @@ _HERE = pathlib.Path(__file__).parent        # host/robot_radio/testgui/
 _HOST = _HERE.parent.parent                  # host/
 _REPO = _HOST.parent                         # repo root
 
-_PLAYFIELD_IMAGE = _REPO / "tests" / "old" / "playfield_tour" / "playfield.jpg"
-_PLAYFIELD_DESKEWED = _REPO / "tests" / "old" / "playfield_tour" / "playfield_deskewed.jpg"
-_PLAYFIELD_CALIB = _REPO / "tests" / "old" / "playfield_tour" / "playfield_calibration.json"
+_PLAYFIELD_IMAGE = _REPO / "tests_old" / "old" / "playfield_tour" / "playfield.jpg"
+_PLAYFIELD_DESKEWED = _REPO / "tests_old" / "old" / "playfield_tour" / "playfield_deskewed.jpg"
+_PLAYFIELD_CALIB = _REPO / "tests_old" / "old" / "playfield_tour" / "playfield_calibration.json"
 
 # Default field dimensions (cm) — used if calibration file is missing.
 _FIELD_WIDTH_CM_DEFAULT = 134.0
@@ -367,8 +368,8 @@ def build_canvas(trace_model: "TraceModel") -> "tuple[object, object]":
     # ------------------------------------------------------------------ Background pixmap
     # Always start with a grey placeholder.  The live-camera grab (triggered by
     # the window show-event or a hardware connect) will replace it.  The bundled
-    # test images in tests/old/ are NEVER shown for live display; they only exist
-    # as unit-test fixtures.
+    # test images in tests_old/old/ are NEVER shown for live display; they only
+    # exist as unit-test fixtures.
     # Debug override: TESTGUI_LOAD_STATIC_PLAYFIELD=1 re-enables the old path.
     import os as _os
     if _os.environ.get("TESTGUI_LOAD_STATIC_PLAYFIELD") == "1":

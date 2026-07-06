@@ -1,9 +1,11 @@
 ---
 id: '003'
 title: Fix playfield asset paths and verify trace accumulation end-to-end
-status: open
-use-cases: [SUC-003]
-depends-on: ['001']
+status: done
+use-cases:
+- SUC-003
+depends-on:
+- '001'
 github-issue: ''
 issue: host-testgui-sim-cockpit.md
 completes_issue: false
@@ -34,11 +36,11 @@ opened but did not itself fix.
 
 ## Acceptance Criteria
 
-- [ ] `canvas.py`'s three asset-path constants (`_PLAYFIELD_IMAGE`,
+- [x] `canvas.py`'s three asset-path constants (`_PLAYFIELD_IMAGE`,
       `_PLAYFIELD_DESKEWED`, `_PLAYFIELD_CALIB`) are corrected to resolve
       under `tests_old/old/playfield_tour/` instead of
       `tests/old/playfield_tour/`.
-- [ ] `_load_calibration()` and `_build_playfield_calibration()` successfully
+- [x] `_load_calibration()` and `_build_playfield_calibration()` successfully
       read the real calibration JSON (no longer silently falling back to
       `_FIELD_WIDTH_CM_DEFAULT`/`_FIELD_HEIGHT_CM_DEFAULT`) — verified by a
       test asserting the loaded field dimensions match the JSON's actual
@@ -47,17 +49,17 @@ opened but did not itself fix.
     `aprilcam` daemon grab, or `TESTGUI_LOAD_STATIC_PLAYFIELD=1` to force the
     static image) is unchanged — this ticket only fixes what path the
     debug-override / calibration-dimension code resolves to.
-- [ ] An integration test drives a connected `SimTransport` (ticket 001)
+- [x] An integration test drives a connected `SimTransport` (ticket 001)
       directly (bypassing `KeyboardDriver`, e.g. via `transport.send("DEV DT
       PORTS 1 2")` + `transport.send("DEV DT VW 200 0 0")`), ticks it forward,
       feeds the resulting `TLMFrame`s into a `TraceModel`, and asserts the
       `encoder`, `otos`, and `fused` trace lists all grow with plausible
       forward-motion points.
-- [ ] A second scenario in the same test (or a follow-on) feeds ground-truth
+- [x] A second scenario in the same test (or a follow-on) feeds ground-truth
       poses via `feed_truth()` (sourced from `SimTransport`'s `on_truth`
       callback / `conn.get_true_pose()`) and asserts the `camera` trace grows
       in step with the others during a short straight drive.
-- [ ] No changes to `traces.py`'s transform math (`_tw`/`_rw`/baseline
+- [x] No changes to `traces.py`'s transform math (`_tw`/`_rw`/baseline
       handling) — if the existing logic is found to be wrong during this
       verification, that is a separate bug to report, not silently patched
       here without updating the architecture doc first.

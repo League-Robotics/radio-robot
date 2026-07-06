@@ -63,16 +63,20 @@ OQ-2 resolution (playfield image path)
 ---------------------------------------
 The default playfield image and calibration data live at:
 
-    tests/old/playfield_tour/playfield.jpg
-    tests/old/playfield_tour/playfield_calibration.json
+    tests_old/old/playfield_tour/playfield.jpg
+    tests_old/old/playfield_tour/playfield_calibration.json
+
+(sprint 077's greenfield rebuild parked the pre-rebuild tree at ``tests_old/``,
+not ``tests/old/`` — fixed in 083-003.)
 
 Both files are located relative to the *installed package* source tree, not to
 the current working directory.  ``canvas.py`` resolves them as:
 
-    pathlib.Path(__file__).parents[4] / "tests" / "old" / "playfield_tour" / ...
+    pathlib.Path(__file__).parent.parent.parent / "tests_old" / "old" / "playfield_tour" / ...
 
 ``__file__`` for this module is
-``host/robot_radio/testgui/traces.py``, so ``parents[4]`` is the repo root.
+``host/robot_radio/testgui/traces.py``; walking up three parents (``testgui/``
+-> ``robot_radio/`` -> ``host/``) then up once more lands at the repo root.
 This works when the package is installed editable (``pip install -e .`` or
 ``uv sync``).  If the assets are not found, ``canvas.py`` gracefully degrades
 to a solid-colour background.
