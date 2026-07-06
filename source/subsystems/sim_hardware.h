@@ -79,6 +79,15 @@ class SimHardware : public Hardware {
   void apply(const Hal::CommandProcessorToHardwareCommand& cmd) override;
   void apply(const Hal::DrivetrainToHardwareCommand& cmd) override;
 
+  // The one Hal::Odometer leaf this owner has (082-003's Subsystems::Hardware
+  // seam override) — never nullptr for SimHardware, unlike
+  // Subsystems::NezhaHardware's inherited default. Returns the SAME
+  // odometer_ member simOdometer() (below) exposes concretely; this overload
+  // is reached through the abstract Subsystems::Hardware* base pointer
+  // (devLoopTick()'s own call site), simOdometer() through the concrete
+  // type (error-knob setters, ground-truth reads).
+  Hal::Odometer* odometer() override { return &odometer_; }
+
   // --- Test / ctypes-facing surface (concrete type only — reached by
   // holding Subsystems::SimHardware directly, never through the abstract
   // Subsystems::Hardware* base pointer; architecture-update.md (081)
@@ -86,7 +95,16 @@ class SimHardware : public Hardware {
   // these accessors' return types directly, e.g.
   // `Hal::setSimMotorScaleError(simHardware.plant(), 0, 0.05f)`. ---
   Hal::PhysicsWorld& plant() { return plant_; }
-  Hal::SimOdometer& odometer() { return odometer_; }
+
+  // simOdometer() — the CONCRETE Hal::SimOdometer, needed for error-knob
+  // setters and truth reads that use SimOdometer's own surface (e.g.
+  // sim_setters.h's OTOS-noise functions), not just the Hal::Odometer*
+  // faceplate seam odometer() (above) exposes. Renamed from this class's
+  // pre-082-003 `odometer()` accessor the moment Hardware's own odometer()
+  // became a real virtual seam that had to return Hal::Odometer* — same
+  // "sim-prefixed concrete twin" naming already established by simMotor()
+  // (below) for the identical motor()/simMotor() duality.
+  Hal::SimOdometer& simOdometer() { return odometer_; }
 
   // Port-indexed accessor to the CONCRETE Hal::SimMotor, port in [1,
   // kPortCount] — for error-knob setters and truth reads that need

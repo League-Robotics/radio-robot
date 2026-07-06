@@ -219,10 +219,10 @@ void scenarioZeroErrorDeterminism() {
             "no heading drift on a straight-line drive, exactly 0");
   checkTrue(hw.plant().truePoseX() == hw.plant().trueEncL(),
             "world-frame X == wheel encoder travel on a heading-0 straight drive, bit-for-bit");
-  checkTrue(hw.odometer().odomX() == hw.plant().truePoseX(),
+  checkTrue(hw.simOdometer().odomX() == hw.plant().truePoseX(),
             "OTOS accumulator == plant true pose X, bit-for-bit — the zero-error determinism gate");
-  checkTrue(hw.odometer().odomY() == 0.0f, "OTOS Y accumulator stays exactly 0 on a straight drive");
-  checkTrue(hw.odometer().odomH() == 0.0f, "OTOS heading accumulator stays exactly 0 on a straight drive");
+  checkTrue(hw.simOdometer().odomY() == 0.0f, "OTOS Y accumulator stays exactly 0 on a straight drive");
+  checkTrue(hw.simOdometer().odomH() == 0.0f, "OTOS heading accumulator stays exactly 0 on a straight drive");
   checkTrue(hw.plant().trueEncL() > 0.0f, "sanity: the scripted drive actually moved");
 }
 

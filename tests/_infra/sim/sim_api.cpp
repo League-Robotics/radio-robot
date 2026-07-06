@@ -37,6 +37,7 @@
 #include "messages/motor.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
+#include "subsystems/pose_estimator.h"
 #include "subsystems/sim_hardware.h"
 #include "types/clock.h"
 
@@ -155,6 +156,7 @@ struct SimHandle {
     MotorConfigSet motorConfigs;
     Subsystems::SimHardware hardware;
     Subsystems::Drivetrain drivetrain;
+    Subsystems::PoseEstimator poseEstimator;   // 082-003: wired into loop below
     SerialSilenceWatchdog watchdog;
     DevLoopState devState;
     CommandProcessor processor;
@@ -182,6 +184,10 @@ SimHandle::SimHandle()
 
     msg::DrivetrainConfig dtConfig = defaultSimDrivetrainConfig();
     drivetrain.configure(dtConfig);
+    // 082-003: PoseEstimator reads the SAME dtConfig drivetrain.configure()
+    // just took -- one shared boot-config source, mirroring main.cpp's own
+    // wiring (source/main.cpp).
+    poseEstimator.configure(dtConfig);
 
     // Seed the CFG-delta shadows the same way main.cpp does (DevLoopState's
     // own field comment): the first `DEV M <n> CFG ...`/`DEV DT CFG ...`
@@ -200,6 +206,7 @@ SimHandle::SimHandle()
 
     loop.hardware = &hardware;
     loop.drivetrain = &drivetrain;
+    loop.poseEstimator = &poseEstimator;
     loop.processor = &processor;
     loop.watchdog = &watchdog;
     loop.devState = &devState;
@@ -359,9 +366,9 @@ float sim_get_pwm_r(void* h) {
     return static_cast<float>(static_cast<SimHandle*>(h)->hardware.plant().pwmR());
 }
 
-float sim_get_otos_x(void* h) { return static_cast<SimHandle*>(h)->hardware.odometer().odomX(); }
-float sim_get_otos_y(void* h) { return static_cast<SimHandle*>(h)->hardware.odometer().odomY(); }
-float sim_get_otos_h(void* h) { return static_cast<SimHandle*>(h)->hardware.odometer().odomH(); }
+float sim_get_otos_x(void* h) { return static_cast<SimHandle*>(h)->hardware.simOdometer().odomX(); }
+float sim_get_otos_y(void* h) { return static_cast<SimHandle*>(h)->hardware.simOdometer().odomY(); }
+float sim_get_otos_h(void* h) { return static_cast<SimHandle*>(h)->hardware.simOdometer().odomH(); }
 
 // ---------------------------------------------------------------------------
 // Error-knob setters — each forwards to EXACTLY ONE hal/sim/sim_setters.h
@@ -402,27 +409,27 @@ void sim_set_body_linear_scrub(void* h, float scrub) {
 }
 
 void sim_set_otos_linear_noise(void* h, float sigma) {
-    Hal::setSimOtosLinearNoise(static_cast<SimHandle*>(h)->hardware.odometer(), sigma);
+    Hal::setSimOtosLinearNoise(static_cast<SimHandle*>(h)->hardware.simOdometer(), sigma);
 }
 
 void sim_set_otos_yaw_noise(void* h, float sigma) {
-    Hal::setSimOtosYawNoise(static_cast<SimHandle*>(h)->hardware.odometer(), sigma);
+    Hal::setSimOtosYawNoise(static_cast<SimHandle*>(h)->hardware.simOdometer(), sigma);
 }
 
 void sim_set_otos_linear_scale_error(void* h, float err) {
-    Hal::setSimOtosLinearScaleError(static_cast<SimHandle*>(h)->hardware.odometer(), err);
+    Hal::setSimOtosLinearScaleError(static_cast<SimHandle*>(h)->hardware.simOdometer(), err);
 }
 
 void sim_set_otos_angular_scale_error(void* h, float err) {
-    Hal::setSimOtosAngularScaleError(static_cast<SimHandle*>(h)->hardware.odometer(), err);
+    Hal::setSimOtosAngularScaleError(static_cast<SimHandle*>(h)->hardware.simOdometer(), err);
 }
 
 void sim_set_otos_linear_drift(void* h, float drift) {
-    Hal::setSimOtosLinearDrift(static_cast<SimHandle*>(h)->hardware.odometer(), drift);
+    Hal::setSimOtosLinearDrift(static_cast<SimHandle*>(h)->hardware.simOdometer(), drift);
 }
 
 void sim_set_otos_yaw_drift(void* h, float drift) {
-    Hal::setSimOtosYawDrift(static_cast<SimHandle*>(h)->hardware.odometer(), drift);
+    Hal::setSimOtosYawDrift(static_cast<SimHandle*>(h)->hardware.simOdometer(), drift);
 }
 
 }  // extern "C"

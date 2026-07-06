@@ -64,6 +64,30 @@ void devLoopTick(DevLoop& loop, uint32_t now, const DevLoopStatement* statement)
     // decision 6).
     hardware.tick(now);
 
+    // Pose estimation (082-003; dev_loop.h's own doc comment has the full
+    // rationale): ports() is queried UNCONDITIONALLY -- unlike the
+    // drivetrain.active() governance block above, pose estimation is a
+    // passive observer of whatever the bound wheels are doing, never an
+    // authority-gated actor. leftObs/rightObs are this pass's FRESHEST
+    // reads (post-slice-2). hardware.odometer() is nullptr for
+    // Subsystems::NezhaHardware (no real-hardware OTOS driver this sprint)
+    // and non-null for Subsystems::SimHardware -- when non-null, its
+    // tick(now) is called and its pose() sampled before
+    // Subsystems::PoseEstimator::tick() runs, so the fresh sample is ready
+    // the same pass it was produced. Exactly ONE loop.poseEstimator->tick()
+    // call follows, unconditionally -- the single most important
+    // correctness property in this step (see dev_loop_pose_estimator_harness.cpp).
+    Subsystems::DrivetrainPorts p = drivetrain.ports();
+    msg::MotorState leftObs = hardware.motor(p.left).state();
+    msg::MotorState rightObs = hardware.motor(p.right).state();
+    Hal::Odometer* odometer = hardware.odometer();
+    msg::PoseEstimate sampledPose = {};
+    if (odometer != nullptr) {
+        odometer->tick(now);
+        sampledPose = odometer->pose();
+    }
+    loop.poseEstimator->tick(now, leftObs, rightObs, odometer != nullptr ? &sampledPose : nullptr);
+
     if (loop.watchdog->check(now)) {
         // Applied IMMEDIATELY, not staged via the outbox -- the caller is
         // the top of the call tree, already the visible mover of every

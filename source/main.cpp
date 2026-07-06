@@ -48,6 +48,7 @@
 #include "config/boot_config.h"
 #include "subsystems/nezha_hardware.h"
 #include "subsystems/drivetrain.h"
+#include "subsystems/pose_estimator.h"
 #include "commands/dev_commands.h"
 #include "dev_loop.h"
 #include "messages/motor.h"
@@ -122,6 +123,15 @@ int main() {
     msg::DrivetrainConfig dtConfig = Config::defaultDrivetrainConfig();
     drivetrain.configure(dtConfig);
 
+    // --- Pose estimation (082-003): encoder dead-reckoning + OTOS (EkfTiny)
+    // fusion, a Subsystems-tier peer of Drivetrain -- see
+    // source/subsystems/pose_estimator.h's class comment. configure() reads
+    // the SAME dtConfig drivetrain.configure() just took (one shared
+    // boot-config source, no duplicated values) -- trackwidth/
+    // rotational_slip plus the four EKF noise fields.
+    static Subsystems::PoseEstimator poseEstimator;
+    poseEstimator.configure(dtConfig);
+
     // --- Dev loop shared state: watchdog + DEV command wiring. ---
     static SerialSilenceWatchdog watchdog;
 
@@ -163,6 +173,7 @@ int main() {
     static DevLoop loop;
     loop.hardware = &hardware;
     loop.drivetrain = &drivetrain;
+    loop.poseEstimator = &poseEstimator;
     loop.processor = &cmd;
     loop.watchdog = &watchdog;
     loop.devState = &devState;
@@ -197,8 +208,9 @@ int main() {
 
         // Tick it, ask it: the shared dev-loop body (source/dev_loop.cpp) --
         // the two hardware.tick() slices, statement dispatch, outbox drain,
-        // Drivetrain governance, and the watchdog check, byte-identical to
-        // this loop's pre-081-002 inline body.
+        // Drivetrain governance, pose estimation (082-003), and the
+        // watchdog check, byte-identical to this loop's pre-081-002 inline
+        // body plus 082-003's one addition.
         devLoopTick(loop, now, stmtPtr);
     }
 #else

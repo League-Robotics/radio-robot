@@ -28,6 +28,17 @@
 // equivalent bus latency to lean on and must guard this deliberately (its
 // own same-now re-entry guard, ticket 003).
 //
+// odometer() (082-003): a SECOND, independent seam alongside motor()/tick() —
+// the active owner's Hal::Odometer leaf, if it has one at all. Defaulted to
+// nullptr (a virtual no-op default, NOT pure) rather than every owner having
+// to implement it, for the same reason begin() is a no-op default (Open
+// Question 1, above): Subsystems::NezhaHardware has no real-hardware OTOS
+// driver this sprint (stakeholder-approved, 2026-07-05 — sim-only fused pose
+// for 082; a real-hardware Hal::Odometer leaf is deferred to its own later
+// sprint) and must compile/link unchanged inheriting this default.
+// Subsystems::SimHardware (ticket 081-003's Hal::SimOdometer member) is the
+// only override this sprint.
+//
 // Headers-only — no hardware.cpp: a pure interface, matching
 // hal/capability/*.h's own headers-only convention (see e.g.
 // capability/motor.h's file header). Every method here is either pure
@@ -38,6 +49,7 @@
 
 #include "hal/capability/hal_command.h"
 #include "hal/capability/motor.h"
+#include "hal/capability/odometer.h"
 
 namespace Subsystems {
 
@@ -71,6 +83,13 @@ class Hardware {
   // than beside either producer or this consumer.
   virtual void apply(const Hal::CommandProcessorToHardwareCommand& cmd) = 0;
   virtual void apply(const Hal::DrivetrainToHardwareCommand& cmd) = 0;
+
+  // The active owner's Hal::Odometer leaf, or nullptr if it has none — see
+  // the file header's "odometer()" section for the defaulted-nullptr
+  // rationale. devLoopTick() (source/dev_loop.cpp) is this seam's one
+  // caller: it queries this every pass and, when non-null, feeds the
+  // sample into Subsystems::PoseEstimator.
+  virtual Hal::Odometer* odometer() { return nullptr; }
 };
 
 }  // namespace Subsystems
