@@ -48,6 +48,15 @@ build-sim:
 mbd-install:
     pipx install git+https://github.com/Busboombot/mbdeploy.git
 
+# Launch the Robot Test GUI (PySide6 cockpit) against the simulator or real
+# hardware (083-004). One-time prerequisite: `uv sync --group gui` (installs
+# PySide6 + aprilcam -- see pyproject.toml's [dependency-groups] gui comment).
+# Depends on build-sim so Sim mode always has a freshly (re)built
+# libfirmware_host to Connect to -- build-sim is fast on an unchanged tree
+# (<1s incremental), so gating on it here costs nothing on the common case.
+testgui: build-sim
+    uv run python -m robot_radio.testgui
+
 list:
     mbdeploy list
 
