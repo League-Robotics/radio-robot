@@ -48,17 +48,41 @@
 //   - DISTANCE: an implicit STOP_DISTANCE at |distance|, plus a generous
 //     STOP_TIME safety net (2x nominal travel time + 2s).
 //   - TIMED: an implicit STOP_TIME at `duration`, when duration > 0.
-// Every other goal kind (VELOCITY/STREAM: open-ended by nature; TURN/
-// ROTATION/GOTO_GOAL: their natural stop needs pose and/or DrivetrainConfig's
-// trackwidth, which this class does not have) relies entirely on the
-// caller-supplied cmd.stops_[].
+// VELOCITY/STREAM (open-ended by nature) and TURN/ROTATION (their natural
+// stop needs the CURRENT fused pose AT COMMAND TIME to resolve a sign/target,
+// which apply() cannot read -- the wire-layer caller resolves it instead;
+// see the class comment above on TurnGoal.speed/RotationGoal.speed) rely
+// entirely on the caller-supplied cmd.stops_[].
 //
-// GOTO_GOAL is a placeholder this ticket: it holds a straight v=speed,
-// omega=0 twist with no pre-rotate/pursue phasing (architecture-update.md:
-// "ticket 001's apply()/tick() already has a goal_kind switch with a
-// GOTO_GOAL arm reserved from the schema -- ticket 004 is the first to
-// implement it meaningfully"). Termination relies entirely on the
-// caller-supplied stops_[] (e.g. a POSITION stop) until then.
+// GOTO_GOAL (ticket 084-004) is a third case: it owns stops_[] END TO END
+// and accepts NO caller-supplied stops at all -- copyCallerStops() is never
+// called for this goal kind, matching docs/protocol-v2.md sec 10's G
+// contract, which defines no stop= clause for G. It ports the PRE_ROTATE/
+// PURSUE state machine from source_old/superstructure/Planner.cpp's
+// driveAdvance() G-phase branch + source_old/control/PlannerBegin.cpp's
+// beginGoTo(), adapted to this class's "apply() gets no pose" constraint:
+//   - apply() decides PRE_ROTATE vs PURSUE from the bearing to the relative
+//     (x, y) target ALONE (atan2f(y, x) -- no pose needed, since (x, y) is
+//     already expressed in the robot's own frame at command time) against
+//     PlannerConfig.turn_in_place_gate (degrees, not radians). PRE_ROTATE's
+//     HEADING + TIME-net stops are pose-independent deltas/durations and are
+//     staged immediately, right there in apply().
+//   - The world-frame anchor for (x, y) -- and, when starting straight into
+//     PURSUE, PURSUE's own POSITION + TIME-net stops -- are resolved on the
+//     FIRST tick() (captureBaseline(), which DOES receive fusedPose; see
+//     enterPursue()), the equivalent "at command time" moment since no
+//     movement occurs between apply() and that first tick.
+//   - Mid-goal, when PRE_ROTATE's HEADING stop fires, tick() hands off
+//     straight to PURSUE (enterPursue()) instead of completing the goal --
+//     no event, no ramp-down -- ported from driveAdvance()'s own
+//     PRE_ROTATE-terminated branch.
+//   - PURSUE re-steers (v, omega) toward the world-frame anchor from the
+//     live fusedPose every tick (pursueSteer()) -- terminal decel cap plus a
+//     curvature clamp, ported from driveAdvance()'s PURSUE hook -- MINUS the
+//     backtrack re-gate counter and D-mode-style stall-forced-completion
+//     (out of this ticket's acceptance bar; concept-not-byte-for-byte, the
+//     same simplification precedent RT/TURN already established for
+//     coast-anticipation/rotational-slip).
 //
 // "Reply sink" capture: apply()'s locked signature takes no ReplyFn/ctx (a
 // wire message cannot carry a function pointer), so the only "reply sink"
@@ -140,17 +164,43 @@ class Planner {
   void copyCallerStops(const msg::PlannerCommand& cmd);
 
   // appendStop -- append one goal-kind-intrinsic stop condition (DISTANCE/
-  // TIMED's implicit stops -- see class comment). Silently drops the
-  // addition if the 4-slot cap is already full (matches source_old/commands/
-  // MotionCommand.cpp's addStop() overflow behavior; there is no wire ERR
-  // reply path at this layer to signal it).
-  void appendStop(msg::StopKind kind, float a);
+  // TIMED's implicit stops, and GOTO_GOAL's PRE_ROTATE/PURSUE stops -- see
+  // class comment). `b`/`ax` default to 0.0f for the single-field kinds
+  // (DISTANCE/TIME); GOTO_GOAL's HEADING (a, b) and POSITION (ax, a, b)
+  // stops pass them explicitly -- parameter order mirrors msg::
+  // StopCondition's own field declaration order. Silently drops the
+  // addition if the 4-slot cap is already full (matches source_old/
+  // commands/MotionCommand.cpp's addStop() overflow behavior; there is no
+  // wire ERR reply path at this layer to signal it).
+  void appendStop(msg::StopKind kind, float a, float b = 0.0f, float ax = 0.0f);
 
   // captureBaseline -- snapshot a Motion::MotionBaseline from this tick's
   // observations. Called once, on the first tick() after a goal is staged
-  // (see class comment for why this cannot happen in apply()).
+  // (see class comment for why this cannot happen in apply()). For
+  // GOTO_GOAL, also resolves the world-frame anchor (gTargetXWorld_/
+  // gTargetYWorld_) from this tick's fusedPose -- see class comment.
   void captureBaseline(uint32_t now, const msg::MotorState& leftObs,
                        const msg::MotorState& rightObs, const msg::PoseEstimate& fusedPose);
+
+  // enterPursue -- (re)configure GOTO_GOAL's PURSUE sub-phase: resets
+  // stops_[] to PURSUE's own POSITION stop (at gTargetXWorld_/
+  // gTargetYWorld_, radius PlannerConfig.arrive_tol) plus a generous TIME
+  // safety net, re-baselines baseline_.t0 for that net (ported concept:
+  // source_old's MotionCommand::start() re-baselines when PURSUE is
+  // (re)configured), and resets the ramp for a fresh ramp-up. Called from
+  // captureBaseline() (goal starts straight into PURSUE) and from tick()'s
+  // stop-evaluation loop (PRE_ROTATE's HEADING stop handing off to PURSUE
+  // mid-goal) -- see class comment.
+  void enterPursue(uint32_t now);
+
+  // pursueSteer -- recompute PURSUE's (v, omega) target from the live
+  // fusedPose vs. the world-frame goal anchor: a terminal decel cap (v
+  // capped so the robot can still stop within arrive_tol) plus a curvature
+  // clamp (bounds omega so passing abeam the target cannot orbit tightly).
+  // Ported from source_old/superstructure/Planner.cpp's driveAdvance()
+  // PURSUE hook, minus the backtrack re-gate counter (see class comment).
+  // Called once per tick, BEFORE ramp_.advance(), while gPhase_ == PURSUE.
+  void pursueSteer(const msg::PoseEstimate& fusedPose);
 
   // queueEvent -- hold a completed-goal Event (reason token + the staged
   // goal's corr_id).
@@ -186,6 +236,14 @@ class Planner {
   Motion::MotionBaseline baseline_ = {};
 
   msg::DriveMode mode_ = msg::DriveMode::IDLE;
+
+  // GOTO_GOAL (G) state machine (ticket 084-004) -- ported concept from
+  // source_old/superstructure/Planner.h's GPhase/_gTargetXWorld/
+  // _gTargetYWorld. Only meaningful while mode_ == GO_TO; see class comment.
+  enum class GPhase : uint8_t { IDLE, PRE_ROTATE, PURSUE };
+  GPhase gPhase_ = GPhase::IDLE;
+  float gTargetXWorld_ = 0.0f;  // [mm] world-frame goal X, resolved on the first tick()
+  float gTargetYWorld_ = 0.0f;  // [mm] world-frame goal Y, resolved on the first tick()
 
   // PlannerState reporting fields (mirrors source_old's TargetState-derived
   // fields) -- set by apply(), read back by state().

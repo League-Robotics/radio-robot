@@ -720,6 +720,71 @@ void handleRT(const ArgList& args, const char* corrId, ReplyFn replyFn, void* re
 }
 
 // ---------------------------------------------------------------------------
+// parseG -- G <x> <y> <speed>. No stop=/sensor= support -- unlike every
+// other verb in this file, docs/protocol-v2.md section 10's G contract
+// defines no stop= clause for G at all (this ticket's acceptance criterion:
+// "G accepts no stop= clauses beyond what docs/protocol-v2.md already
+// documents for it") -- no packStopKVs()/collectStopClauses() call here.
+// ---------------------------------------------------------------------------
+ParseResult parseG(const char* const* tokens, int ntokens, const KVPair* kvs, int nkv) {
+  ParseResult res;
+  (void)kvs;
+  (void)nkv;
+  if (ntokens < 3) {
+    res.ok = false; res.err.code = nullptr; res.err.detail = nullptr; return res;
+  }
+  int x = atoi(tokens[0]);
+  int y = atoi(tokens[1]);
+  int speed = atoi(tokens[2]);
+  if (x < -10000 || x > 10000) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "x"; return res;
+  }
+  if (y < -10000 || y > 10000) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "y"; return res;
+  }
+  if (speed < 1 || speed > 1000) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "speed"; return res;
+  }
+  res.ok = true;
+  res.args.count = 3;
+  argInt(res.args.args[0], x);
+  argInt(res.args.args[1], y);
+  argInt(res.args.args[2], speed);
+  res.args.suppliedCount = res.args.count;
+  return res;
+}
+
+// ---------------------------------------------------------------------------
+// handleG -- relative-XY go-to: stages a GOTO_GOAL goal. Subsystems::Planner
+// owns the entire PRE_ROTATE/PURSUE state machine internally (planner.cpp,
+// ticket 084-004) -- this handler only builds the msg::GotoGoal and stages
+// it, mirroring handleD's shape.
+// ---------------------------------------------------------------------------
+void handleG(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
+            void* handlerCtx) {
+  MotionLoopState& state = *static_cast<MotionLoopState*>(handlerCtx);
+  int x = args.args[0].ival;
+  int y = args.args[1].ival;
+  int speed = args.args[2].ival;
+
+  msg::PlannerCommand cmd;
+  msg::GotoGoal goal;
+  goal.x = static_cast<float>(x);
+  goal.y = static_cast<float>(y);
+  goal.speed = static_cast<float>(speed);
+  cmd.setGotoGoal(goal);
+  copyCorrId(cmd, corrId);
+
+  state.command = cmd;
+  state.hasCommand = true;
+
+  char body[48];
+  snprintf(body, sizeof(body), "x=%d y=%d speed=%d", x, y, speed);
+  char rbuf[80];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "goto", body, corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
 // handleStop -- STOP: immediate halt, no EVT (docs/protocol-v2.md §10:
 // "Stops motors immediately... No EVT is emitted"). Stages goal_kind=STOP;
 // Subsystems::Planner::apply()'s STOP case resets the ramp and clears the
@@ -751,6 +816,7 @@ std::vector<CommandDescriptor> motionCommands(MotionLoopState& state) {
   cmds.push_back(
       makeCmd("TURN", parseTURN, handleTURN, &state, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
   cmds.push_back(makeCmd("RT", parseRT, handleRT, &state, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
+  cmds.push_back(makeCmd("G", parseG, handleG, &state, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
   cmds.push_back(makeCmd("STOP", nullptr, handleStop, &state, "badarg", ForceReply::NONE,
                          CMD_ACCESS_HARDWARE));
   return cmds;

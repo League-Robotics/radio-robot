@@ -332,36 +332,39 @@ void scenarioRotationGoalUsesSignedSpeedAndCallerStop() {
   checkStrEq(planner.takeEvent().reason, "rot", "reason token is \"rot\"");
 }
 
-// 9. GOTO_GOAL goal_kind: this ticket's placeholder holds a straight
-// v=speed, omega=0 twist; termination relies entirely on a caller-supplied
-// POSITION stop (no pre-rotate/pursue phasing yet -- ticket 084-004).
-void scenarioGotoGoalPlaceholderHoldsStraightLine() {
-  beginScenario("GOTO_GOAL placeholder: straight-line hold, caller-supplied POSITION stop");
+// 9. GOTO_GOAL goal_kind, PURSUE-only path (ticket 084-004): when the
+// initial bearing to the relative target is within turn_in_place_gate,
+// PRE_ROTATE is skipped and PURSUE starts immediately, driving straight
+// toward the (world-frame) target and completing -- a self-synthesized
+// POSITION stop, reason "pos" -- once within arrive_tol. GOTO_GOAL accepts
+// no caller-supplied stops_[] at all (unlike TURN/ROTATION above) -- see
+// planner.h's class comment -- so PlannerConfig.turn_in_place_gate/
+// arrive_tol (not a caller-supplied stop) drive this scenario.
+void scenarioGotoGoalPursuesDirectlyWhenBearingWithinGate() {
+  beginScenario("GOTO_GOAL: bearing within the gate skips PRE_ROTATE, PURSUE drives straight and arrives");
   Subsystems::Planner planner;
-  planner.configure(generousConfig());
+  msg::PlannerConfig cfg = generousConfig();
+  cfg.turn_in_place_gate = 35.0f;  // [deg]
+  cfg.arrive_tol = 10.0f;          // [mm]
+  planner.configure(cfg);
 
   msg::PlannerCommand cmd;
   cmd.goal_kind = msg::PlannerCommand::GoalKind::GOTO_GOAL;
   cmd.goal.goto_goal.x = 300.0f;
-  cmd.goal.goto_goal.y = 0.0f;
+  cmd.goal.goto_goal.y = 0.0f;   // bearing = 0 deg -- well within the 35 deg gate
   cmd.goal.goto_goal.speed = 120.0f;
-  cmd.stops_count = 1;
-  cmd.stops_[0].kind = msg::StopKind::STOP_POSITION;
-  cmd.stops_[0].ax = 300.0f;
-  cmd.stops_[0].a = 0.0f;
-  cmd.stops_[0].b = 10.0f;
   cmd.style = msg::StopStyle::ABRUPT;  // isolate the stop-condition mechanics
                                         // from the SMOOTH ramp-down (covered
                                         // separately by the TIMED scenario)
   planner.apply(cmd, 0);
 
   checkTrue(planner.state().mode == msg::DriveMode::GO_TO, "state().mode == GO_TO");
-  checkFloatNear(planner.state().target_x, 300.0f, 1e-6f, "state().target_x reports the goal x");
+  checkFloatNear(planner.state().target_x, 300.0f, 1e-6f, "state().target_x reports the goal's relative x");
   checkFloatNear(planner.state().target_speed, 120.0f, 1e-6f, "state().target_speed reports the goal speed");
 
-  planner.tick(1000, msg::MotorState{}, msg::MotorState{}, poseAt(0.0f, 0.0f, 0.0f));  // baseline
+  planner.tick(1000, msg::MotorState{}, msg::MotorState{}, poseAt(0.0f, 0.0f, 0.0f));  // baseline; PURSUE starts immediately
   msg::DrivetrainCommand held = planner.takeCommand();
-  checkFloatNear(held.control.twist.omega, 0.0f, 1e-6f, "placeholder never steers");
+  checkFloatNear(held.control.twist.omega, 0.0f, 1e-6f, "target is straight ahead -- no steering needed");
 
   planner.tick(1100, msg::MotorState{}, msg::MotorState{}, poseAt(0.0f, 0.0f, 0.0f));
   planner.takeCommand();
@@ -369,8 +372,64 @@ void scenarioGotoGoalPlaceholderHoldsStraightLine() {
 
   planner.tick(1200, msg::MotorState{}, msg::MotorState{}, poseAt(300.0f, 0.0f, 0.0f));
   planner.takeCommand();
-  checkFalse(planner.hasActiveCommand(), "POSITION stop fires once within radius of the target");
+  checkFalse(planner.hasActiveCommand(), "POSITION stop fires once within arrive_tol of the target");
   checkStrEq(planner.takeEvent().reason, "pos", "reason token is \"pos\"");
+}
+
+// 9b. GOTO_GOAL goal_kind, PRE_ROTATE -> PURSUE handoff (ticket 084-004):
+// when the initial bearing exceeds turn_in_place_gate, PRE_ROTATE engages
+// (spin-in-place toward the bearing) and hands off to PURSUE -- with no
+// event, no ramp-down -- once the bearing gate is reached; PURSUE then
+// drives to the (world-frame) target and completes with reason "pos".
+void scenarioGotoGoalPreRotatesThenPursuesAndArrives() {
+  beginScenario("GOTO_GOAL: bearing beyond the gate pre-rotates, hands off to PURSUE, and arrives");
+  Subsystems::Planner planner;
+  msg::PlannerConfig cfg = generousConfig();
+  cfg.turn_in_place_gate = 35.0f;  // [deg]
+  cfg.arrive_tol = 10.0f;          // [mm]
+  planner.configure(cfg);
+
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::GOTO_GOAL;
+  cmd.goal.goto_goal.x = 0.0f;
+  cmd.goal.goto_goal.y = 300.0f;  // bearing = atan2(300, 0) = +90 deg -- well past the 35 deg gate
+  cmd.goal.goto_goal.speed = 120.0f;
+  cmd.style = msg::StopStyle::ABRUPT;  // isolate the stop-condition mechanics
+                                        // from the SMOOTH ramp-down (covered
+                                        // separately by the TIMED scenario)
+  planner.apply(cmd, 0);
+
+  checkTrue(planner.state().mode == msg::DriveMode::GO_TO, "state().mode == GO_TO");
+
+  // Tick 1: baseline captured; PRE_ROTATE has been staged (v=0, omega > 0).
+  planner.tick(1000, msg::MotorState{}, msg::MotorState{}, poseAt(0.0f, 0.0f, 0.0f));
+  msg::DrivetrainCommand held = planner.takeCommand();
+  checkFloatNear(held.control.twist.v_x, 0.0f, 1e-6f, "PRE_ROTATE commands v=0 (turn-in-place)");
+
+  planner.tick(1100, msg::MotorState{}, msg::MotorState{}, poseAt(0.0f, 0.0f, 0.0f));
+  planner.takeCommand();
+  checkTrue(planner.state().body_twist.omega > 0.0f, "PRE_ROTATE spins CCW toward the +90 deg bearing");
+  checkTrue(planner.hasActiveCommand(), "still pre-rotating");
+
+  // Heading reaches the +90 deg bearing (within the 35 deg gate) -- PRE_ROTATE
+  // hands off to PURSUE with no event (not a goal completion).
+  planner.tick(1200, msg::MotorState{}, msg::MotorState{}, poseAt(0.0f, 0.0f, 1.5707963f));
+  planner.takeCommand();
+  checkTrue(planner.hasActiveCommand(), "PRE_ROTATE->PURSUE handoff keeps the goal active");
+  checkFalse(planner.hasEvent(), "the PRE_ROTATE->PURSUE handoff queues no event");
+
+  // Now facing the target (heading=+90 deg); PURSUE should drive it (v > 0).
+  planner.tick(1300, msg::MotorState{}, msg::MotorState{}, poseAt(0.0f, 0.0f, 1.5707963f));
+  planner.takeCommand();
+  checkTrue(planner.state().body_twist.v_x > 0.0f, "PURSUE drives toward the target once facing it");
+
+  // Arrive at the world-frame target: (x=0, y=300) rotated by the baseline
+  // heading0=0 -- gTargetXWorld_/gTargetYWorld_ == (0, 300) directly.
+  planner.tick(1400, msg::MotorState{}, msg::MotorState{}, poseAt(0.0f, 300.0f, 1.5707963f));
+  planner.takeCommand();
+  checkFalse(planner.hasActiveCommand(), "POSITION stop fires once within arrive_tol of the target");
+  checkTrue(planner.hasEvent(), "arrival queues a completion event");
+  checkStrEq(planner.takeEvent().reason, "pos", "reason token is \"pos\" for a fired STOP_POSITION");
 }
 
 // 10. STOP goal_kind: halts an in-progress goal immediately, with NO event
@@ -435,7 +494,8 @@ int main() {
   scenarioTimedGoalSmoothRampDown();
   scenarioTurnGoalUsesSignedSpeedAndCallerStop();
   scenarioRotationGoalUsesSignedSpeedAndCallerStop();
-  scenarioGotoGoalPlaceholderHoldsStraightLine();
+  scenarioGotoGoalPursuesDirectlyWhenBearingWithinGate();
+  scenarioGotoGoalPreRotatesThenPursuesAndArrives();
   scenarioStopGoalKindHaltsSilently();
   scenarioStreamGoalIsOpenEnded();
 

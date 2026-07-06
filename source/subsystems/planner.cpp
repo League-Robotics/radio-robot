@@ -32,6 +32,20 @@ const char* reasonTokenFor(msg::StopKind kind) {
   }
 }
 
+// kDegToRad -- degrees -> radians, for PlannerConfig.turn_in_place_gate
+// (stored in DEGREES, not radians -- main.cpp's defaultPlannerConfig()'s own
+// comment: "matches docs/protocol-v2.md sec 10's G default", 35 deg).
+constexpr float kDegToRad = 3.14159265f / 180.0f;
+
+// kPreRotateOmega -- fixed spin-in-place rate for GOTO_GOAL's PRE_ROTATE
+// phase. Matches source/commands/motion_commands.cpp's kTurnOmega exactly
+// (~70 deg/s): Planner has no DrivetrainConfig.trackwidth to derive a
+// wheel-speed-based rate the way source_old's _startPreRotate() did (see
+// planner.h's class comment on why this class cannot gain that dependency);
+// a fixed, well-under-yaw_rate_max rate is the same deterministic,
+// sim-testable precedent ticket 084-003 already established for TURN/RT.
+constexpr float kPreRotateOmega = 1.2217f;  // [rad/s]
+
 }  // namespace
 
 void Planner::copyCallerStops(const msg::PlannerCommand& cmd) {
@@ -42,11 +56,13 @@ void Planner::copyCallerStops(const msg::PlannerCommand& cmd) {
   }
 }
 
-void Planner::appendStop(msg::StopKind kind, float a) {
+void Planner::appendStop(msg::StopKind kind, float a, float b, float ax) {
   if (stopsCount_ >= 4) return;  // cap already full -- see class comment
   msg::StopCondition c;
   c.kind = kind;
   c.a = a;
+  c.b = b;
+  c.ax = ax;
   stops_[stopsCount_++] = c;
 }
 
@@ -73,6 +89,11 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now) {
   targetY_ = 0.0f;
   targetSpeed_ = 0.0f;
   distanceTarget_ = 0.0f;
+  // Reset unconditionally so a new non-GOTO_GOAL command issued while a G
+  // goal was still in-flight leaves no stale phase behind (gPhase_ is only
+  // ever consulted while mode_ == GO_TO, so this matters for hygiene/
+  // debuggability more than correctness -- see class comment).
+  gPhase_ = GPhase::IDLE;
 
   switch (cmd.goal_kind) {
     case msg::PlannerCommand::GoalKind::VELOCITY: {
@@ -85,14 +106,41 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now) {
     }
 
     case msg::PlannerCommand::GoalKind::GOTO_GOAL: {
-      // Placeholder this ticket -- see class comment (ticket 084-004 ports
-      // the PRE_ROTATE/PURSUE state machine here). Straight-line hold at the
-      // commanded speed; termination relies entirely on cmd.stops_[].
-      copyCallerStops(cmd);
-      targetX_ = cmd.goal.goto_goal.x;
-      targetY_ = cmd.goal.goto_goal.y;
-      targetSpeed_ = cmd.goal.goto_goal.speed;
-      stageGoal(cmd.goal.goto_goal.speed, 0.0f, msg::DriveMode::GO_TO, cmd);
+      // GOTO_GOAL manages its own stops_[] end to end -- copyCallerStops()
+      // is never called here (see class comment): docs/protocol-v2.md
+      // sec 10's G contract accepts no stop= clauses, and the PRE_ROTATE ->
+      // PURSUE handoff (enterPursue()) needs a clean stop-set swap with no
+      // caller-supplied slot to preserve.
+      stopsCount_ = 0;
+
+      float x = cmd.goal.goto_goal.x;
+      float y = cmd.goal.goto_goal.y;
+      float speed = cmd.goal.goto_goal.speed;
+      targetX_ = x;
+      targetY_ = y;
+      targetSpeed_ = speed;
+
+      // Bearing to the relative target, robot frame, AT COMMAND TIME -- no
+      // pose needed: (x, y) is already expressed in the robot's own frame
+      // (ported concept, source_old/control/PlannerBegin.cpp's beginGoTo()).
+      float bearing = atan2f(y, x);
+      float gate = config_.turn_in_place_gate * kDegToRad;
+
+      if (fabsf(bearing) > gate) {
+        gPhase_ = GPhase::PRE_ROTATE;
+        float omega = (bearing >= 0.0f) ? kPreRotateOmega : -kPreRotateOmega;
+        appendStop(msg::StopKind::STOP_HEADING, bearing, gate);
+        float nominal = (fabsf(omega) > 1e-3f) ? (fabsf(bearing) / fabsf(omega)) * 1000.0f
+                                                : 0.0f;  // [ms]
+        appendStop(msg::StopKind::STOP_TIME, nominal * 2.0f + 2000.0f);
+        stageGoal(0.0f, omega, msg::DriveMode::GO_TO, cmd);
+      } else {
+        // World-frame anchor + PURSUE's own stops_[] are resolved on the
+        // FIRST tick() (captureBaseline()/enterPursue()) -- apply() has no
+        // pose to convert (x, y) into world coordinates with (class comment).
+        gPhase_ = GPhase::PURSUE;
+        stageGoal(speed, 0.0f, msg::DriveMode::GO_TO, cmd);
+      }
       break;
     }
 
@@ -159,6 +207,7 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now) {
       activeCmd_ = false;
       stopping_ = false;
       mode_ = msg::DriveMode::IDLE;
+      gPhase_ = GPhase::IDLE;
       // No EVT -- STOP is a silent, immediate halt (ticket 084-002
       // acceptance: "STOP halts immediately with no EVT").
       break;
@@ -185,6 +234,67 @@ void Planner::captureBaseline(uint32_t now, const msg::MotorState& leftObs,
   baseline_.pose0Y = fusedPose.pose.y;
   baseline_.vSign = (stagedV_ > 0.0f) ? 1.0f : (stagedV_ < 0.0f ? -1.0f : 0.0f);
   baseline_.omegaSign = (stagedOmega_ > 0.0f) ? 1.0f : (stagedOmega_ < 0.0f ? -1.0f : 0.0f);
+
+  if (mode_ == msg::DriveMode::GO_TO) {
+    // World-frame anchor for the relative (targetX_, targetY_) offset --
+    // resolved HERE, not apply() (which has no pose to convert with; see
+    // class comment), at the equivalent "at command time" moment, since no
+    // movement occurs between apply() and this first tick(). Computed
+    // unconditionally for BOTH phases -- matches source_old's beginGoTo(),
+    // which resolves the world target before branching into PRE_ROTATE vs
+    // PURSUE.
+    float h = baseline_.heading0;
+    gTargetXWorld_ = baseline_.pose0X + targetX_ * cosf(h) - targetY_ * sinf(h);
+    gTargetYWorld_ = baseline_.pose0Y + targetX_ * sinf(h) + targetY_ * cosf(h);
+    if (gPhase_ == GPhase::PURSUE) {
+      enterPursue(now);
+    }
+  }
+}
+
+void Planner::enterPursue(uint32_t now) {
+  gPhase_ = GPhase::PURSUE;
+  // Fresh TIME-net baseline for the pursue phase -- ported concept:
+  // source_old's MotionCommand::start() re-baselines t0 when PURSUE is
+  // (re)configured, distinct from PRE_ROTATE's own baseline. heading0/
+  // pose0X/pose0Y are not read again after this point -- gTargetXWorld_/
+  // gTargetYWorld_ already captured them.
+  baseline_.t0 = now;
+  stopsCount_ = 0;
+  float distance = sqrtf(targetX_ * targetX_ + targetY_ * targetY_);  // [mm]
+  float pursueSpeed = (targetSpeed_ > 1.0f) ? targetSpeed_ : 1.0f;
+  float timeout = 2.0f * (distance / pursueSpeed) * 1000.0f + 4000.0f;  // [ms]
+  appendStop(msg::StopKind::STOP_POSITION, gTargetYWorld_, config_.arrive_tol, gTargetXWorld_);
+  appendStop(msg::StopKind::STOP_TIME, timeout);
+  // Fresh ramp-up into the pursue speed -- ported: source_old's _bvc.reset()
+  // before (re)configuring the PURSUE MotionCommand.
+  ramp_.reset();
+}
+
+void Planner::pursueSteer(const msg::PoseEstimate& fusedPose) {
+  float h = fusedPose.pose.h;
+  float dxW = gTargetXWorld_ - fusedPose.pose.x;
+  float dyW = gTargetYWorld_ - fusedPose.pose.y;
+  float dx = dxW * cosf(h) + dyW * sinf(h);
+  float dy = -dxW * sinf(h) + dyW * cosf(h);
+  float d2 = dx * dx + dy * dy;
+  float dRemaining = sqrtf(d2);
+
+  // Terminal decel cap: clamp the commanded speed so the ramp has time to
+  // decelerate to zero before the POSITION stop fires.
+  float v = targetSpeed_;
+  float vCap = sqrtf(2.0f * config_.a_decel * dRemaining);
+  if (vCap < v) v = vCap;
+
+  // Curvature clamp: bound kappa so passing abeam the target (small
+  // dRemaining, dy != 0) cannot drive omega into a tight orbit. kappaMax =
+  // 2 / max(dRemaining, 2*arrive_tol) limits the turning radius to at most
+  // 0.5*arrive_tol at the tightest point.
+  float kappaMax = 2.0f / fmaxf(dRemaining, 2.0f * config_.arrive_tol);
+  float kappa = (d2 > 0.1f) ? fmaxf(-kappaMax, fminf(kappaMax, 2.0f * dy / d2)) : 0.0f;
+  float omega = v * kappa;
+
+  ramp_.setTarget(v, omega);
 }
 
 void Planner::queueEvent(const char* reason) {
@@ -221,6 +331,19 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
       baselineCaptured_ = true;
     }
 
+    if (mode_ == msg::DriveMode::GO_TO && gPhase_ == GPhase::PURSUE && !stopping_) {
+      // Re-steer toward the world-frame anchor from THIS tick's fusedPose,
+      // BEFORE the ramp advances -- ported ordering from source_old's
+      // driveAdvance() PURSUE hook (recompute (v, omega), THEN tick the
+      // profiler). Gated on !stopping_: once a stop condition has armed the
+      // SMOOTH ramp-down (ramp_.setTarget(0, 0) below), this hook must NOT
+      // keep re-targeting the ramp away from zero every subsequent tick --
+      // mode_/gPhase_ only flip back to IDLE once the ramp-down actually
+      // converges (the `stopping_` branch below), so without this guard
+      // PURSUE would fight its own completion indefinitely.
+      pursueSteer(fusedPose);
+    }
+
     ramp_.advance(dt);
 
     if (stopping_) {
@@ -234,6 +357,7 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
         activeCmd_ = false;
         stopping_ = false;
         mode_ = msg::DriveMode::IDLE;
+        gPhase_ = GPhase::IDLE;
       }
     } else {
       // Normal running sub-phase: evaluate stop conditions, OR-combined --
@@ -242,6 +366,15 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
         Motion::StopEvalResult r =
             Motion::evaluateStopCondition(stops_[i], baseline_, now, leftObs, rightObs, fusedPose);
         if (r == Motion::StopEvalResult::FIRED) {
+          if (mode_ == msg::DriveMode::GO_TO && gPhase_ == GPhase::PRE_ROTATE &&
+              stops_[i].kind == msg::StopKind::STOP_HEADING) {
+            // Bearing gate reached: hand off to PURSUE -- not a goal
+            // completion (no event, no ramp-down). Ported concept:
+            // source_old's driveAdvance() PRE_ROTATE-terminated branch's
+            // HEADING-fired case.
+            enterPursue(now);
+            break;
+          }
           const char* reason = reasonTokenFor(stops_[i].kind);
           if (style_ == msg::StopStyle::ABRUPT) {
             ramp_.reset();
@@ -249,6 +382,7 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
             activeCmd_ = false;
             stopping_ = false;
             mode_ = msg::DriveMode::IDLE;
+            gPhase_ = GPhase::IDLE;
           } else {
             // SMOOTH: ramp to (0,0); tick() emits the event once converged
             // or the soft deadline passes (the `stopping_` branch above).

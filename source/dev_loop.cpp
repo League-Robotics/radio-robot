@@ -33,16 +33,17 @@ namespace {
 // disambiguate them; `activeVelocityVerb` (MotionLoopState, set by
 // handleR/handleTURN/handleRT) is exactly the "different mechanism (e.g.
 // tracking the actual verb string)" this comment used to flag as a future
-// ticket's problem -- see motion_commands.h's field doc comment. GO_TO
-// remains deliberately unmapped (empty string) -- ticket 084-004's `G` maps
-// onto DriveMode::GO_TO, its own unique value, so no further disambiguation
-// mechanism is needed there; that ticket only needs to extend this switch.
+// ticket's problem -- see motion_commands.h's field doc comment. GO_TO maps
+// directly onto "G" (084-004): it is `G`'s own unique DriveMode value (both
+// GOTO_GOAL's PRE_ROTATE and PURSUE sub-phases stage DriveMode::GO_TO), so no
+// activeVelocityVerb-style disambiguation is needed here.
 const char* motionVerbForMode(msg::DriveMode mode, const char* activeVelocityVerb) {
   switch (mode) {
     case msg::DriveMode::STREAMING: return "S";
     case msg::DriveMode::TIMED: return "T";
     case msg::DriveMode::DISTANCE: return "D";
     case msg::DriveMode::VELOCITY: return activeVelocityVerb;
+    case msg::DriveMode::GO_TO: return "G";
     default: return "";
   }
 }
