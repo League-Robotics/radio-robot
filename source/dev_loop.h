@@ -29,9 +29,11 @@
 
 #include "commands/command_processor.h"
 #include "commands/dev_commands.h"
+#include "commands/motion_commands.h"
 #include "commands/telemetry_commands.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
+#include "subsystems/planner.h"
 #include "subsystems/pose_estimator.h"
 
 #if ROBOT_DEV_BUILD
@@ -78,6 +80,26 @@ struct DevLoop {
   SerialSilenceWatchdog* watchdog = nullptr;
   DevLoopState* devState = nullptr;
 
+  // 084-002: Subsystems::Planner -- the goal-closure engine S/T/D/STOP
+  // (source/commands/motion_commands.cpp) stage a msg::PlannerCommand into
+  // via motionState's outbox below. Ticked exactly once per pass,
+  // unconditionally (mirrors poseEstimator's own always-run contract) --
+  // see devLoopTick()'s own doc comment and dev_loop.cpp for the exact
+  // sequencing relative to the pose-estimation step. Never dereferenced if
+  // null, so every caller (main.cpp; sim_api.cpp) MUST wire a real
+  // Subsystems::Planner before its first devLoopTick() call.
+  Subsystems::Planner* planner = nullptr;
+  // 084-002: MotionLoopState -- read for its staged msg::PlannerCommand
+  // outbox (drained into planner->apply() before planner->tick() runs) and
+  // its sTimeout streaming-drive watchdog (checked once per pass, fed only
+  // by S's own handler -- see motion_commands.h's class comment). A second
+  // new field alongside `planner` above: MotionLoopState's own per-pass
+  // upkeep (the outbox drain, the sTimeout check) needs the SAME "one
+  // caller, no hand-mirrored copy between main.cpp and sim_api.cpp"
+  // guarantee devLoopTick() already gives poseEstimator/telemetry, so it is
+  // wired here rather than via a second call site in main.cpp's own loop.
+  MotionLoopState* motionState = nullptr;
+
   ReplyFn defaultReply = nullptr;
   void* defaultReplyCtx = nullptr;
 };
@@ -111,6 +133,18 @@ struct DevLoop {
 // telemetryEmit() itself no-ops on a null replyFn). SNAP is unrelated to
 // this step -- it is dispatched like any other command, synchronously,
 // during the statement-parse beat above.
+//
+// Motion executor (084-002): the ONE new step, immediately after the
+// pose-estimation call above (and before periodic TLM emission). Drains
+// loop.motionState's staged msg::PlannerCommand outbox into
+// loop.planner->apply(), checks/fires loop.motionState's sTimeout
+// streaming-drive watchdog (gated on loop.planner->state().mode ==
+// STREAMING -- see motion_commands.h), then ticks loop.planner
+// unconditionally with this pass's leftObs/rightObs and
+// loop.poseEstimator->fusedPose(), draining its held command into
+// drivetrain.apply() and its held completion Event into an `EVT done
+// <verb> ...` reply on loop.defaultReply/loop.defaultReplyCtx -- see
+// dev_loop.cpp for the exact sequencing and the DriveMode -> verb mapping.
 void devLoopTick(DevLoop& loop, uint32_t now, const DevLoopStatement* statement);
 
 #endif  // ROBOT_DEV_BUILD

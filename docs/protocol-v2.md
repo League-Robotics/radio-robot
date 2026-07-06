@@ -369,45 +369,65 @@ ERR badarg no key=value pairs
 
 ### Named Key Table
 
-All 22 registered config keys, their types, defaults, and the v1
-equivalents they replace.
+All 22 registered config keys (plus five added since, see the sprint notes
+below the table), their types, defaults, and the v1 equivalents they
+replace. **Status** marks which keys `source/`'s `SET`/`GET`
+(`source/commands/config_commands.cpp`, sprint 084 ticket 006) actually
+implements as of this sprint — see architecture-update.md (084) Decision 2
+for the full key-by-key rationale. `current` rows are live in `source/`
+today; `superseded`/`not carried forward` rows are `source_old`-only —
+`SET`/`GET` against them in `source/` returns `ERR badkey`, identical wire
+behavior to any never-existed key. This is not a case of a key being
+forgotten; each disposition below was a deliberate sprint-084 decision.
 
-| Key         | Type        | Wire format | Default  | Meaning                                 | v1 equiv  |
-|-------------|-------------|-------------|----------|-----------------------------------------|-----------|
-| `ml`        | float       | `%.3f`      | `0.487`  | mm per degree of rotation, left wheel   | `KCL`     |
-| `mr`        | float       | `%.3f`      | `0.481`  | mm per degree of rotation, right wheel  | `KCR`     |
-| `kff`       | float       | `%.3f`      | `0.150`  | Feed-forward gain                       | `KFF`     |
-| `klf`       | float       | `%.3f`      | `1.000`  | Left-forward motor scale factor         | `KLF`     |
-| `klb`       | float       | `%.3f`      | `1.000`  | Left-backward motor scale factor        | `KLB`     |
-| `krf`       | float       | `%.3f`      | `1.000`  | Right-forward motor scale factor        | `KRF`     |
-| `krb`       | float       | `%.3f`      | `1.000`  | Right-backward motor scale factor       | `KRB`     |
-| `adjThr`    | float       | `%.3f`      | `0.500`  | Slower-wheel adjustment threshold       | —         |
-| `adjGain`   | float       | `%.3f`      | `0.050`  | Slower-wheel adjustment gain            | —         |
-| `tw`        | float-as-int| `%d`        | `120`    | Track width in mm                       | `KAT`     |
-| `pid.kp`    | float       | `%.3f`      | `300.000`| Ratio PID proportional gain             | `KCP`     |
-| `pid.ki`    | float       | `%.3f`      | `0.000`  | Ratio PID integral gain                 | `KCI`     |
-| `pid.kd`    | float       | `%.3f`      | `0.000`  | Ratio PID derivative gain               | `KCD`     |
-| `pid.max`   | float       | `%.3f`      | `30.000` | Ratio PID output clamp                  | `KCM`     |
-| `distScale` | float       | `%.3f`      | `0.940`  | Distance command scale factor           | `KDS`     |
-| `turnScale` | float       | `%.3f`      | `1.070`  | Turn command scale factor               | `KTS`     |
-| `minSpeed`  | int32       | `%d`        | `50`     | Minimum drive speed (mm/s)              | `KMS`     |
-| `sTimeout`  | int32       | `%d`        | `500`    | Streaming watchdog timeout (ms)         | `KST`     |
-| `tick`      | int32       | `%d`        | `20`     | Main-loop tick period (ms)              | `KTK`     |
-| `tlmPeriod` | int32       | `%d`        | `0`      | TLM streaming period (ms); 0 = off      | —         |
-| `ekfQxy`    | float       | `%.3f`      | `200.000`| EKF process noise: position (mm²/s)     | —         |
-| `ekfQtheta` | float       | `%.3f`      | `0.500`  | EKF process noise: heading (rad²/s)     | —         |
-| `ekfQv`     | float       | `%.3f`      | `5000.000`| EKF process noise: body speed (mm²/s³) | —         |
-| `ekfQomega` | float       | `%.3f`      | `1.000`  | EKF process noise: yaw rate (rad²/s³)   | —         |
-| `ekfROtosXy`| float       | `%.3f`      | `50.000` | EKF OTOS measurement noise: position (mm²) | —      |
-| `ekfROtosV` | float       | `%.3f`      | `200.000`| EKF OTOS measurement noise: body speed (mm²/s²) | — |
-| `ekfREncV`  | float       | `%.3f`      | `100.000`| EKF encoder measurement noise: body speed (mm²/s²) | — |
+| Key             | Type        | Wire format | Default  | Meaning                                 | v1 equiv  | Status (`source/`) |
+|-----------------|-------------|-------------|----------|------------------------------------------|-----------|---------------------|
+| `ml`            | float       | `%.3f`      | `0.487`  | mm per degree of rotation, left wheel   | `KCL`     | current (084-006) — `MotorConfig.travel_calib`, bound-pair left |
+| `mr`            | float       | `%.3f`      | `0.481`  | mm per degree of rotation, right wheel  | `KCR`     | current (084-006) — `MotorConfig.travel_calib`, bound-pair right |
+| `kff`           | float       | `%.3f`      | `0.150`  | Feed-forward gain                       | `KFF`     | superseded (084-006 Decision 2) — folded into `pid.kff` below |
+| `klf`           | float       | `%.3f`      | `1.000`  | Left-forward motor scale factor         | `KLF`     | superseded (084-006 Decision 2) — no per-direction scale concept in the new motor model |
+| `klb`           | float       | `%.3f`      | `1.000`  | Left-backward motor scale factor        | `KLB`     | superseded (084-006 Decision 2) — see `klf` |
+| `krf`           | float       | `%.3f`      | `1.000`  | Right-forward motor scale factor        | `KRF`     | superseded (084-006 Decision 2) — see `klf` |
+| `krb`           | float       | `%.3f`      | `1.000`  | Right-backward motor scale factor       | `KRB`     | superseded (084-006 Decision 2) — see `klf` |
+| `adjThr`        | float       | `%.3f`      | `0.500`  | Slower-wheel adjustment threshold       | —         | superseded (084-006 Decision 2) — replaced by `DrivetrainConfig.sync_gain` (`DEV DT CFG sync_gain=`) |
+| `adjGain`       | float       | `%.3f`      | `0.050`  | Slower-wheel adjustment gain            | —         | superseded (084-006 Decision 2) — see `adjThr` |
+| `tw`            | float-as-int| `%d`        | `120`    | Track width in mm                       | `KAT`     | current (084-006) — `DrivetrainConfig.trackwidth` |
+| `pid.kp`        | float       | `%.3f`      | `300.000`| Ratio PID proportional gain             | `KCP`     | current (084-006) — both bound motors' `MotorConfig.vel_gains.kp` |
+| `pid.ki`        | float       | `%.3f`      | `0.000`  | Ratio PID integral gain                 | `KCI`     | current (084-006) — both bound motors' `MotorConfig.vel_gains.ki` |
+| `pid.kd`        | float       | `%.3f`      | `0.000`  | Ratio PID derivative gain               | `KCD`     | superseded (084-006 Decision 2) — no `kd` term in the new `Gains{kp,ki,kff,i_max,kaw}` shape |
+| `pid.max`       | float       | `%.3f`      | `30.000` | Ratio PID output clamp                  | `KCM`     | superseded (084-006 Decision 2) — replaced by `pid.iMax` (the `Gains.i_max` integrator clamp) below |
+| `pid.kff`       | float       | `%.3f`      | `0.004`  | Velocity-loop feed-forward gain         | —         | **new, current (084-006)** — both bound motors' `MotorConfig.vel_gains.kff`; supersedes standalone `kff` above |
+| `pid.iMax`      | float       | `%.3f`      | `0.300`  | Velocity-loop integrator clamp          | —         | **new, current (084-006)** — both bound motors' `MotorConfig.vel_gains.i_max`; supersedes `pid.max` above |
+| `pid.kaw`       | float       | `%.3f`      | `0.000`  | Velocity-loop back-calc anti-windup gain | —        | **new, current (084-006)** — both bound motors' `MotorConfig.vel_gains.kaw` |
+| `rotSlip`       | float       | `%.3f`      | `0.000`  | Rotational-slip correction factor (0 = unset -> 1.0) | — | **new, current (084-006)** — `DrivetrainConfig.rotational_slip`; not implemented in `source/` before this ticket |
+| `distScale`     | float       | `%.3f`      | `0.940`  | Distance command scale factor           | `KDS`     | superseded (084-006 Decision 2) — no fudge factor needed against correctly-modeled `BodyKinematics` |
+| `turnScale`     | float       | `%.3f`      | `1.070`  | Turn command scale factor               | `KTS`     | superseded (084-006 Decision 2) — see `distScale` |
+| `minSpeed`      | int32       | `%d`        | `50`     | Minimum drive speed (mm/s)              | `KMS`     | current (084-006) — `PlannerConfig.min_speed` (float-as-int wire encoding; the new-tree field is a `float`) |
+| `sTimeout`      | int32       | `%d`        | `500`    | Streaming watchdog timeout (ms)         | `KST`     | current (084-006) — ticket 002's `StreamingDriveWatchdog` window (plain field, no message) |
+| `tick`          | int32       | `%d`        | `20`     | Main-loop tick period (ms)              | `KTK`     | superseded (084-006 Decision 2) — loop cadence is structural (sprint 079), not a runtime knob |
+| `tlmPeriod`     | int32       | `%d`        | `0`      | TLM streaming period (ms); 0 = off      | —         | superseded (084-006 Decision 2) — redundant with the `STREAM <ms>` verb itself (082) |
+| `ekfQxy`        | float       | `%.3f`      | `200.000`| EKF process noise: position (mm²/s)     | —         | current (084-006) — `DrivetrainConfig.ekf_q_xy` |
+| `ekfQtheta`     | float       | `%.3f`      | `0.500`  | EKF process noise: heading (rad²/s)     | —         | current (084-006) — `DrivetrainConfig.ekf_q_theta` |
+| `ekfQv`         | float       | `%.3f`      | `5000.000`| EKF process noise: body speed (mm²/s³) | —         | not carried forward (084-006) — `DrivetrainConfig.ekf_q_v` exists but is outside this sprint's approved key table |
+| `ekfQomega`     | float       | `%.3f`      | `1.000`  | EKF process noise: yaw rate (rad²/s³)   | —         | not carried forward (084-006) — see `ekfQv` |
+| `ekfROtosXy`    | float       | `%.3f`      | `50.000` | EKF OTOS measurement noise: position (mm²) | —      | current (084-006) — `DrivetrainConfig.ekf_r_otos_xy` |
+| `ekfROtosTheta` | float       | `%.3f`      | `0.000`  | EKF OTOS measurement noise: heading (rad²) | —      | **new, current (084-006)** — `DrivetrainConfig.ekf_r_otos_theta`; closes 082 Decision 4's deferred item (`source_old` called this field's key `ekfRHead`, itself pre-existing drift never backfilled into this table — the new tree uses the field-matching spelling instead) |
+| `ekfROtosV`     | float       | `%.3f`      | `200.000`| EKF OTOS measurement noise: body speed (mm²/s²) | — | not carried forward (084-006) — see `ekfQv` |
+| `ekfREncV`      | float       | `%.3f`      | `100.000`| EKF encoder measurement noise: body speed (mm²/s²) | — | not carried forward (084-006) — see `ekfQv` |
 
-(Sprint 069-001: these seven rows close 067's Open Question 5 -- a live
-`SET` routes through `Drive::configure()`'s `setNoise()` push, which
-updates EKF fusion noise WITHOUT resetting fused pose/covariance. This
-table has pre-existing drift from several long-landed keys, e.g. `vel.kP`,
-`ekfRHead` itself -- not backfilled here, out of scope per ticket
-068-001's Open Question 1 precedent.)
+(Sprint 069-001: the `ekfQxy`/`ekfQtheta`/`ekfQv`/`ekfQomega`/`ekfROtosXy`/
+`ekfROtosV`/`ekfREncV` rows closed 067's Open Question 5 in `source_old` --
+a live `SET` routed through `Drive::configure()`'s `setNoise()` push, which
+updated EKF fusion noise WITHOUT resetting fused pose/covariance. `source/`'s
+sprint-084 `SET`/`GET` does not preserve that non-resetting behavior --
+`PoseEstimator::configure()` (the `source/` equivalent) calls
+`EkfTiny::init()` unconditionally, which DOES re-zero the fused
+pose/covariance on every drivetrain-scoped `SET` (`tw`/`rotSlip`/`ekf*`) --
+see architecture-update.md (084) Decision 2 and `config_commands.h`'s file
+header for this known, deliberate consequence. This table has pre-existing
+drift from several long-landed `source_old` keys, e.g. `vel.kP`, `ekfRHead`
+itself -- not backfilled here, out of scope per ticket 068-001's Open
+Question 1 precedent.)
 
 Type `float-as-int`: stored internally as `float`, read/written on the
 wire as a decimal integer (no fractional part).  `SET tw=121` writes
@@ -442,8 +462,11 @@ Value conventions:
 > - **No channel-rebinding nuance** beyond "the channel that most recently
 >   issued `STREAM` is the bound recipient" — described below under
 >   *Channel binding*.
-> - `mode=` is only ever `I` or `S` this sprint (no `T`/`D`/`G` — those are
->   sprint 083's motion verbs, not yet implemented in `source/`).
+> - `mode=` implements the full `I`/`S`/`T`/`D`/`G` vocabulary as of sprint
+>   084 (ticket 005) — see the *`mode=` field verb-sharing* note below the
+>   table for exactly which verb produces which character, including the
+>   deliberate `TURN`/`RT`/bounded-`R` → `T` collapse (architecture-
+>   update.md (084) Decision 6).
 > - `line=`/`color=`/`ekf_rej=`/`otos_health=`/`wedge=` do not exist in
 >   `source/` yet (no line/color sensor leaves, no EKF rejection counters,
 >   no OTOS health/wedge detector wiring this sprint).
@@ -547,6 +570,30 @@ architecture update, Open Question 1. `encpose=` is current as of Sprint
 | `vel`      | `%d,%d`                     | Left and right actual velocity in mm/s                                 |
 | `line`     | `%u,%u,%u,%u`               | Four greyscale channels (raw ADC counts)                               |
 | `color`    | `%u,%u,%u,%u`               | R, G, B, clear channels (raw ADC counts)                               |
+
+**`mode=` field verb-sharing (084-005).** In `source/` (as opposed to
+`source_old/`, where this table's characters originate), `mode=` is derived
+from exactly one source — `Subsystems::Planner::state().mode` — and is `I`
+if and only if `Planner::hasActiveCommand()` is false. Each character below
+is shared by every verb family listed, not just the one it is named after:
+
+| Wire char | `Planner` state              | Verbs that produce it                                  |
+|-----------|-------------------------------|----------------------------------------------------------|
+| `I`       | no active `Planner` command   | boot; after any `EVT done`/`safety_stop`; after `STOP`   |
+| `S`       | `DriveMode::STREAMING`         | `S`, `VW`, a bare `R` (no `stop=` clause)                |
+| `T`       | `DriveMode::TIMED`             | `T`, an `R` with a `stop=` clause, `TURN`, `RT`          |
+| `D`       | `DriveMode::DISTANCE`          | `D`                                                       |
+| `G`       | `DriveMode::GO_TO`             | `G`                                                       |
+
+`TURN`/`RT`/a `stop=`-bearing `R` sharing `T` with a plain timed drive is a
+**deliberate, approved scope decision** (architecture-update.md (084)
+Decision 6), not an oversight: `msg::DriveMode` has no dedicated `TURN`/
+`ROTATE` value (mirroring `source_old`'s own internal collapse of
+`STREAM`/`TIMED`/`ARC` into a single `Goal::VELOCITY`), and no present
+consumer — including TestGUI's tour-completion logic, which only needs
+`mode=I` at idle — needs to distinguish "turning" from "driving a bounded
+straight" over the wire. A future sprint may revisit this (Decision 6's own
+Open Question 2) if that ever changes; it is not revisited here.
 
 **Timestamp discipline.** `t=` is captured at the start of sensor
 reading (before `snprintf`), not at line-send time.  This ensures the
@@ -681,6 +728,9 @@ produce bare events with no `#id`.
 | `EVT done T [#id]`     | Timed drive elapsed                                   |
 | `EVT done D [#id]`     | Distance drive target reached (or 5-second timeout)   |
 | `EVT done G [#id]`     | Go-to arc completed within `arriveTol` mm             |
+| `EVT done R [#id]`     | Arc drive ended via a `stop=` clause (a bare `R` runs open-ended until `STOP`, which emits no event) |
+| `EVT done TURN [#id]`  | Absolute-heading turn reached the target within `eps` (or a `stop=` clause fired) |
+| `EVT done RT [#id]`    | Relative turn reached the target per-wheel encoder arc (or a `stop=` clause fired) |
 | `EVT safety_stop [#id]`| S/VW watchdog expired (no `S` or `VW` command within `sTimeout` ms) |
 
 `[#id]` is present only when the originating command carried one.  Example:
@@ -739,11 +789,14 @@ EVT safety_stop reason=runaway
 
 ### stop= Clauses
 
-Any open-loop motion command (`VW`, `S`, `R`, `T`, `D`, `TURN`) may carry one
-or more `stop=<kind>:<args>` clauses as `key=value` pairs.  Each clause adds a
-stop condition that fires when its condition is satisfied; conditions are
-OR-combined.  Up to 4 `stop=` clauses are accepted per command
-(`kMaxStopConds = 4`).
+Any open-loop motion command (`VW`, `S`, `R`, `T`, `D`, `TURN`, `RT`) may
+carry one or more `stop=<kind>:<args>` clauses as `key=value` pairs.  Each
+clause adds a stop condition that fires when its condition is satisfied;
+conditions are OR-combined.  Up to 4 `stop=` clauses are accepted per
+command (`kMaxStopConds = 4`) — `TURN` and `RT` each reserve one of those 4
+slots for their own built-in stop (`heading` / `rot` respectively), so up to
+3 additional `stop=` clauses are accepted on those two; clauses beyond the
+available slots are silently dropped, not an error.
 
 | Clause                              | Fires when                                                        |
 |-------------------------------------|-------------------------------------------------------------------|
@@ -752,7 +805,7 @@ OR-combined.  Up to 4 `stop=` clauses are accepted per command
 | `stop=line:<ge\|le>:<thr>`          | Any of line[0..3] satisfies the threshold                         |
 | `stop=sensor:<ch>:<ge\|le>:<thr>`   | Named channel satisfies the threshold                             |
 | `stop=color:<h>:<s>:<v>:<dist>`     | HSV colour distance from target ≤ dist                            |
-| `stop=heading:<cdeg>:<eps_cdeg>`    | Heading within eps of target (centi-degrees)                      |
+| `stop=heading:<cdeg>:<eps_cdeg>`    | Heading within eps of target (centi-degrees; delta from the drive's own starting heading, not an absolute compass heading) |
 | `stop=rot:<arc_mm>`                 | Per-wheel encoder arc ≥ arc_mm                                    |
 
 Channel names for `stop=sensor:`: `line0`..`line3`, `colorR`..`colorC`,
@@ -760,6 +813,18 @@ Channel names for `stop=sensor:`: `line0`..`line3`, `colorR`..`colorC`,
 
 `sensor=<ch>:<op>:<thr>` is accepted as a back-compat alias for
 `stop=sensor:<ch>:<op>:<thr>`.
+
+**`sensor`/`color`/`line` — recognized, not yet supported (sprint 084).**
+The greenfield-rebuilt `source/` tree's motion executor (`Subsystems::
+Planner`, sprint 084 ticket 001) implements `t`/`d`/`heading`/`rot` in full.
+`stop=sensor:...`, `stop=color:...`, `stop=line:...`, and the `sensor=...`
+back-compat alias are all recognized syntactically — the wire parser matches
+their kind prefix and does not fall through to a generic `ERR unknown`/`ERR
+badarg missing key`-class failure meant for genuinely malformed input — but
+every one of them is rejected with `ERR badarg`, since no line or color
+sensor `Hal` leaf exists yet in that tree. A future sprint that lands the
+corresponding sensor leaf can implement these three without any wire-shape
+change (sprint 084 architecture-update.md, Decision 4).
 
 `T` and `D` retain their positional time/distance arguments AND may carry
 additional `stop=` clauses (OR-combined with the built-in stop):
@@ -783,6 +848,15 @@ S <l> <r> [#id]
 Sets left and right wheel velocities (mm/s) and resets the streaming
 watchdog.  If no `S` command arrives within `sTimeout` ms (default 500),
 the firmware stops the motors and emits `EVT safety_stop reason=watchdog`.
+
+**`sTimeout` is a live, production watchdog (sprint 084).** It is a
+separate timer from `DEV WD`'s bench-only serial-silence watchdog (which
+resets on *any* statement, on *any* channel, regardless of content):
+`sTimeout` is fed *only* by `S`, and only matters while a streaming
+(`S`-driven) goal is the one actually active — conflating the two would
+defeat the point of either. It is not yet `SET`/`GET`-able (still a fixed
+500&nbsp;ms default) — sprint 084 ticket 006 wires it into the top-level
+config-registry surface alongside the rest of §7's key table.
 
 Velocity range: −1000 … +1000 mm/s per wheel.  Values outside this
 range return `ERR range l` or `ERR range r`.
@@ -904,6 +978,129 @@ D 200 200 500 stop=t:3000
 OK drive l=200 r=200 mm=500
 … (stops at 500 mm or 3 s, whichever comes first) …
 EVT done D reason=dist
+```
+
+### R — Arc Drive (constant curvature, open-loop)
+
+```
+R <speed> <radius> [stop=<kind>:<args>]… [#id]
+→ OK arc speed=<speed> radius=<radius> [#id]
+  … (only if a stop= clause fires) …
+  EVT done R [#id] reason=<token>
+```
+
+Drives a constant-curvature arc: `speed` is the forward body speed (mm/s)
+and `radius` is the arc radius (mm).  The firmware computes the yaw rate as
+`omega = speed / radius` (0 when `radius` is 0, i.e. a straight line) and
+enters `VELOCITY` mode — open-loop, matching `S`'s family: **`R` has no
+built-in stop of its own.**  A bare `R` (no `stop=` clause) runs open-ended
+until `STOP` (which emits no event, same as `S`/`VW`); optional `stop=`
+clauses may be appended, and the first one that fires ends the drive and
+emits `EVT done R [#id] reason=<token>`.
+
+Positive `radius` is a CCW (left) arc; negative `radius` is a CW (right)
+arc; `radius = 0` degenerates to a straight-line body-velocity command
+(same effect as `VW <speed> 0`).
+
+Ranges:
+- `speed` — −1 000 … +1 000 mm/s.  Out of range → `ERR range speed`.
+- `radius` — −10 000 … +10 000 mm.  Out of range → `ERR range radius`.
+
+Example:
+
+```
+R 200 500
+OK arc speed=200 radius=500
+
+R 200 500 stop=d:400
+OK arc speed=200 radius=500
+… (stops after 400 mm of average encoder travel) …
+EVT done R reason=dist
+
+R 200 500 #9
+OK arc speed=200 radius=500 #9
+… (runs open-ended; a later STOP halts it with no EVT) …
+```
+
+### TURN — Absolute-Heading Turn-in-Place (closed-loop, fused heading)
+
+```
+TURN <heading> [eps=<cdeg>] [stop=<kind>:<args>]… [#id]
+→ OK turn heading=<heading> eps=<eps> [#id]
+  … (later, asynchronously) …
+  EVT done TURN [#id] reason=<token>
+```
+
+Rotates in place to the **absolute** heading `heading` (centi-degrees,
+compass-style: 0 is the heading at boot/last `ZERO pose`/`SI`).  The
+firmware reads the current fused pose heading (`PoseEstimator::fusedPose()`)
+at command time, resolves the shortest-path signed turn direction, and spins
+at a fixed rate until the fused heading is within `eps` (centi-degrees,
+default 300 = 3°) of the target — a **`heading` stop condition**, the one
+built-in stop this verb always carries.  Optional `stop=` clauses may be
+appended (up to 3 more, since one of the 4 available slots is reserved for
+the built-in `heading` stop); the first condition that fires ends the turn
+and emits `EVT done TURN [#id] reason=<token>`.
+
+Ranges:
+- `heading` — −18 000 … +18 000 cdeg (±180°).  Out of range →
+  `ERR range heading`.
+- `eps` — 10 … 1 800 cdeg (0.1° … 18°), default 300.  Out of range →
+  `ERR range eps`.
+
+Example:
+
+```
+TURN 9000
+OK turn heading=9000 eps=300
+EVT done TURN reason=heading
+
+TURN -9000 eps=100
+OK turn heading=-9000 eps=100
+EVT done TURN reason=heading
+
+TURN 9000 stop=t:2000
+OK turn heading=9000 eps=300
+… (stops at 90° or 2 s, whichever comes first) …
+EVT done TURN reason=time
+```
+
+### RT — Relative Turn-in-Place (closed-loop, encoder arc)
+
+```
+RT <relAngle> [stop=<kind>:<args>]… [#id]
+→ OK rt rot=<relAngle> [#id]
+  … (later, asynchronously) …
+  EVT done RT [#id] reason=<token>
+```
+
+Rotates in place by the **relative** angle `relAngle` (centi-degrees;
+positive is CCW/left, negative is CW/right) from the robot's current
+heading.  Unlike `TURN`, `RT` closes the loop against the **per-wheel
+encoder arc** (a `rot` stop condition — the geometry-verified arc for the
+requested angle, independent of the fused pose/OTOS), the one built-in stop
+this verb always carries.  Optional `stop=` clauses may be appended (up to 3
+more, same 4-slot budget as `TURN`); the first condition that fires ends the
+turn and emits `EVT done RT [#id] reason=<token>`.
+
+Range: `relAngle` — −180 000 … +180 000 cdeg (±1 800°, up to 5 full turns).
+Out of range → `ERR range relAngle`.
+
+Example:
+
+```
+RT 9000
+OK rt rot=9000
+EVT done RT reason=rot
+
+RT -9000
+OK rt rot=-9000
+EVT done RT reason=rot
+
+RT 9000 stop=t:500
+OK rt rot=9000
+… (stops at 90° of arc or 500 ms, whichever comes first) …
+EVT done RT reason=time
 ```
 
 ### G — Go-To (relative XY)
@@ -1065,6 +1262,60 @@ GRIP
 OK grip deg=90
 ```
 
+### SI — Set World Pose
+
+```
+SI <x> <y> <h> [#id]   → OK setpose x=<x> y=<y> h=<h> [#id]
+```
+
+Re-anchors the robot's **believed** world pose — the pose motion verbs
+(`G`/`TURN`/`RT`) steer against — to `(x, y, h)` without moving the robot
+itself.  Establishes the onboard pose from an external fix (e.g. a
+downward-facing playfield camera), so a subsequent `G`/`D`/`TURN` drives in
+the correct world frame.
+
+- `x`, `y` — position, mm.
+- `h` — heading, centi-degrees.
+
+All three arguments are plain integers with no range check (values are cast
+internally; an absurd input is the caller's mistake, not a wire error). Too
+few arguments → `ERR badarg`.
+
+`SI` re-anchors the encoder-only dead-reckoning reading (`encpose=`), the
+EKF's fused belief (`pose=`) — see `TLM`'s field list (§8) — **and** (as of
+sprint 084 ticket 008) the active `Hal::Odometer`'s own world-frame reading
+(`OV`, §11), issuing all three in the SAME wire dispatch. `source/`'s
+`handleSI` (`source/commands/pose_commands.cpp`) calls
+`PoseEstimator::setPose()` and then, if `hardware->odometer()` is non-null,
+also stages an `OdometerCommand::SET_POSE` matching the same `(x, y, h)` —
+mirroring `source_old`'s own two-call `handleSI` (`PoseEstimator` reset +
+`hal.otos().setWorldPose()`). Because the very next fusion pass therefore
+reads an odometer sample that already agrees with the freshly-set anchor,
+the EKF update's residual is zero and `pose=` reads back **exactly**
+`x`,`y`,`h` too — a separate `OV` fix is no longer needed to avoid the
+partial-correction-back-toward-the-old-frame hazard earlier drafts of this
+section described (see `tests/sim/unit/test_pose_commands.py`'s
+`test_si_reanchors_both_encpose_and_the_fused_pose_exactly` and
+`tests/sim/unit/test_config_pose_set_otos_surface.py`'s
+`test_si_teleports_fused_pose_confirmed_via_snap_and_through_otos_op`, both
+of which read the post-`SI` pose back through `OP` too).
+`Subsystems::NezhaHardware::odometer()` is null (no real OTOS driver this
+program — see `clasi/issues/nezha-hardware-otos-driver-for-new-source-tree.md`),
+so on hardware `SI`'s odometer re-anchor step is a no-op, unchanged from its
+pre-008 behavior there.
+
+`SI` does not itself cancel an active drive: a `G`/`TURN` in progress keeps
+pursuing its goal using the newly-anchored pose on its very next tick,
+which may produce a visible course correction rather than a smooth
+continuation.
+
+Example:
+
+```
+SI 1230 450 2700
+OK setpose x=1230 y=450 h=2700
+```
+
 ### ZERO — Zero Encoders / Odometry
 
 ```
@@ -1073,12 +1324,26 @@ ZERO pose         [#id]  → OK zero pose [#id]
 ZERO enc pose     [#id]  → OK zero enc pose [#id]
 ```
 
+> **Sprint 084 note — `enc` only in `source/`.** This section documents the
+> full `source_old/` grammar (all three forms). As of sprint 084 (ticket
+> 007), `source/`'s `ZERO` (`source/commands/pose_commands.cpp`'s
+> `parseZero`) implements only the `enc` sub-verb — a deliberate scope
+> decision (see that file's own doc comment), not an oversight. `ZERO`
+> (bare), `ZERO pose`, and `ZERO enc pose` all return `ERR badarg` in
+> `source/` today; only the exact literal `ZERO enc` succeeds. A future
+> sprint may add `pose` without any wire-shape change.
+
 `enc` resets the encoder accumulators (calls
 `MotorController::resetEncoderAccumulators()`).  `pose` resets the
 odometry integrator to `(0, 0, 0)` (calls `Odometry::zero()`).  Both
 may be specified in one command.
 
 At least one of `enc` or `pose` must be present; otherwise `ERR badarg`.
+
+`enc`'s effect additionally resets `PoseEstimator`'s own encoder-delta
+baseline in the same call, so the next tick's dead-reckoning delta is
+computed against the freshly-zeroed encoders rather than a stale
+pre-zero baseline (which would otherwise fabricate a phantom jump).
 
 Example:
 

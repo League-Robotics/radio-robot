@@ -1,9 +1,11 @@
 ---
 id: '006'
 title: 'Config registry: top-level SET/GET'
-status: open
-use-cases: [SUC-005]
-depends-on: ['001']
+status: done
+use-cases:
+- SUC-005
+depends-on:
+- '001'
 github-issue: ''
 issue: firmware-config-and-pose-set-surface.md
 completes_issue: true
@@ -56,26 +58,26 @@ excluded" section).
 
 ## Acceptance Criteria
 
-- [ ] New `source/commands/config_commands.{h,cpp}` registers top-level
+- [x] New `source/commands/config_commands.{h,cpp}` registers top-level
       `SET`/`GET`, matching `docs/protocol-v2.md` §7's existing grammar
       exactly: atomic all-or-nothing `SET` (`ERR badkey`/`ERR badval` on
       first failure, no partial application), `GET` with no args dumps
       all registered keys, `GET <key>...` returns only those, unknown
       keys each emit a separate `ERR badkey <key>`.
-- [ ] Own config shadow state (a new struct, **not** `DevLoopState`'s
+- [x] Own config shadow state (a new struct, **not** `DevLoopState`'s
       `motorConfigShadow[]`/`drivetrainConfigShadow`) per
       architecture-update.md Decision 7 — `SET`/`GET` must exist
       independent of the `DEV` family's build-time scoping story.
-- [ ] All keys in the approved table above implemented, reading/writing
+- [x] All keys in the approved table above implemented, reading/writing
       the real-tree targets listed; every dropped key returns
       `ERR badkey` (verified by an explicit test asserting this, not just
       absence of a handler).
-- [ ] `SET tw=130` then `GET tw` round-trips to `130` and visibly changes
+- [x] `SET tw=130` then `GET tw` round-trips to `130` and visibly changes
       arc/turn geometry (sim) — the sprint's own headline acceptance
       example.
-- [ ] `SET` validates atomically: a `SET pid.kp=1.5 tw=0` (where `tw=0`
+- [x] `SET` validates atomically: a `SET pid.kp=1.5 tw=0` (where `tw=0`
       is invalid) applies **neither** key and returns `ERR badval tw=0`.
-- [ ] `ml`/`mr`/`pid.*` writes reach the CURRENTLY bound pair (read via
+- [x] `ml`/`mr`/`pid.*` writes reach the CURRENTLY bound pair (read via
       `drivetrain.ports()` at `SET`-time, not a hardcoded port) —
       verified by a test that rebinds `DEV DT PORTS` then confirms `SET
       ml=...` affects the newly-bound motor, not the original one.

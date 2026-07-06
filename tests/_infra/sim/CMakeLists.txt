@@ -35,14 +35,24 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #
 # Present (mirrors the architecture doc's Step 4 dependency graph):
 #   kinematics/*.cpp                        -- pure math, no CODAL deps
+#   motion/*.cpp                            -- 084-001's VelocityRamp/
+#                                               evaluateStopCondition (pure
+#                                               math, no CODAL deps)
 #   subsystems/drivetrain.cpp               -- the Drivetrain faceplate
 #   subsystems/sim_hardware.cpp             -- ticket 003's SimHardware
 #   subsystems/pose_estimator.cpp           -- 082-002/082-003's PoseEstimator
+#   subsystems/planner.cpp                  -- 084-001's goal-closure engine
 #   estimation/ekf_tiny.cpp                 -- 082-001's EkfTiny (PoseEstimator's EKF core)
 #   telemetry/tlm_frame.cpp                 -- 082-004's pure TLM frame formatter
-#   commands/{arg_parse,command_processor,dev_commands,system_commands,
-#             telemetry_commands}.cpp       -- the command dispatch + DEV +
-#                                               telemetry (STREAM/SNAP) families
+#   commands/{arg_parse,command_processor,config_commands,dev_commands,
+#             motion_commands,otos_commands,pose_commands,system_commands,
+#             telemetry_commands}.cpp -- the command dispatch + DEV +
+#                                               motion (S/T/D/STOP, 084-002)
+#                                               + telemetry (STREAM/SNAP) +
+#                                               config (SET/GET, 084-006) +
+#                                               pose-set (SI/ZERO, 084-007) +
+#                                               OTOS (OI/OZ/OR/OP/OV/OL/OA,
+#                                               084-008) families
 #   dev_loop.cpp                            -- ticket 002's shared loop body,
 #                                               082-003's pose-estimation step,
 #                                               082-004's periodic TLM step
@@ -64,18 +74,25 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #                                      which exist/link host-side)
 # ---------------------------------------------------------------------------
 file(GLOB KINEMATICS_SOURCES "${SOURCE_DIR}/kinematics/*.cpp")
+file(GLOB MOTION_SOURCES     "${SOURCE_DIR}/motion/*.cpp")
 file(GLOB HAL_SIM_SOURCES    "${SOURCE_DIR}/hal/sim/*.cpp")
 
 set(FIRMWARE_SOURCES
     ${KINEMATICS_SOURCES}
+    ${MOTION_SOURCES}
     "${SOURCE_DIR}/subsystems/drivetrain.cpp"
     "${SOURCE_DIR}/subsystems/sim_hardware.cpp"
     "${SOURCE_DIR}/subsystems/pose_estimator.cpp"
+    "${SOURCE_DIR}/subsystems/planner.cpp"
     "${SOURCE_DIR}/estimation/ekf_tiny.cpp"
     "${SOURCE_DIR}/telemetry/tlm_frame.cpp"
     "${SOURCE_DIR}/commands/arg_parse.cpp"
     "${SOURCE_DIR}/commands/command_processor.cpp"
+    "${SOURCE_DIR}/commands/config_commands.cpp"
     "${SOURCE_DIR}/commands/dev_commands.cpp"
+    "${SOURCE_DIR}/commands/motion_commands.cpp"
+    "${SOURCE_DIR}/commands/otos_commands.cpp"
+    "${SOURCE_DIR}/commands/pose_commands.cpp"
     "${SOURCE_DIR}/commands/system_commands.cpp"
     "${SOURCE_DIR}/commands/telemetry_commands.cpp"
     "${SOURCE_DIR}/dev_loop.cpp"

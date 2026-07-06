@@ -9,7 +9,13 @@ body_kinematics.cpp``, ``source/commands/{arg_parse,command_processor,
 dev_commands,telemetry_commands}.cpp``, ``source/telemetry/tlm_frame.cpp``
 (082 ticket 004 -- ``dev_loop.cpp`` gained a ``telemetryEmit()`` call site
 for its periodic-TLM step, so this harness's link now needs both), ``source/
-hal/sim/*.cpp``, and ``source/hal/velocity_pid.cpp``, with ``-DHOST_BUILD``
+hal/sim/*.cpp``, and ``source/hal/velocity_pid.cpp`` -- plus, since 084-002,
+``source/commands/motion_commands.cpp``, ``source/subsystems/planner.cpp``,
+and its two real dependencies ``source/motion/{velocity_ramp,
+stop_condition}.cpp`` (``dev_loop.cpp`` gained a new motion-executor step
+that calls into ``Subsystems::Planner`` unconditionally every pass, so this
+harness's link needs it too even though it never stages a motion command) --
+with ``-DHOST_BUILD``
 (sheds MicroBit.h/CODAL dependencies) AND ``-DROBOT_DEV_BUILD=1``
 (codal.json's value -- compiles in dev_loop.cpp/dev_commands.cpp's DEV
 family, see dev_loop.h's file header), plus ``libraries/tinyekf/`` on the
@@ -50,6 +56,14 @@ _ARG_PARSE_SRC = _SOURCE_DIR / "commands" / "arg_parse.cpp"
 _COMMAND_PROCESSOR_SRC = _SOURCE_DIR / "commands" / "command_processor.cpp"
 _DEV_COMMANDS_SRC = _SOURCE_DIR / "commands" / "dev_commands.cpp"
 _TELEMETRY_COMMANDS_SRC = _SOURCE_DIR / "commands" / "telemetry_commands.cpp"
+# 084-002: dev_loop.cpp's new motion-executor step calls into
+# Subsystems::Planner (and, transitively, its two real dependencies) --
+# this harness links the real dev_loop.cpp, so it must link these too, even
+# though the harness itself never stages an S/T/D/STOP command.
+_MOTION_COMMANDS_SRC = _SOURCE_DIR / "commands" / "motion_commands.cpp"
+_PLANNER_SRC = _SOURCE_DIR / "subsystems" / "planner.cpp"
+_VELOCITY_RAMP_SRC = _SOURCE_DIR / "motion" / "velocity_ramp.cpp"
+_STOP_CONDITION_SRC = _SOURCE_DIR / "motion" / "stop_condition.cpp"
 _TLM_FRAME_SRC = _SOURCE_DIR / "telemetry" / "tlm_frame.cpp"
 _PHYSICS_WORLD_SRC = _SOURCE_DIR / "hal" / "sim" / "physics_world.cpp"
 _SIM_MOTOR_SRC = _SOURCE_DIR / "hal" / "sim" / "sim_motor.cpp"
@@ -72,6 +86,10 @@ _SOURCES = [
     _ARG_PARSE_SRC,
     _COMMAND_PROCESSOR_SRC,
     _DEV_COMMANDS_SRC,
+    _MOTION_COMMANDS_SRC,
+    _PLANNER_SRC,
+    _VELOCITY_RAMP_SRC,
+    _STOP_CONDITION_SRC,
     _TELEMETRY_COMMANDS_SRC,
     _TLM_FRAME_SRC,
     _PHYSICS_WORLD_SRC,

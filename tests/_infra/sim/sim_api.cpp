@@ -29,15 +29,21 @@
 // no-op; the statement dispatch, outbox drain, and watchdog check inside
 // devLoopTick() still run normally on every call.
 #include "commands/command_processor.h"
+#include "commands/config_commands.h"
 #include "commands/dev_commands.h"
+#include "commands/motion_commands.h"
+#include "commands/otos_commands.h"
+#include "commands/pose_commands.h"
 #include "commands/system_commands.h"
 #include "commands/telemetry_commands.h"
 #include "dev_loop.h"
 #include "hal/sim/sim_setters.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
+#include "messages/planner.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
+#include "subsystems/planner.h"
 #include "subsystems/pose_estimator.h"
 #include "subsystems/sim_hardware.h"
 #include "types/clock.h"
@@ -119,25 +125,61 @@ msg::DrivetrainConfig defaultSimDrivetrainConfig() {
     return cfg;
 }
 
+// defaultSimPlannerConfig — 084-002: mirrors source/main.cpp's own
+// defaultPlannerConfig() (no Config::defaultPlannerConfig() generator exists
+// for either build — see that function's doc comment); same generous,
+// headroom-above-the-wire-range ramp limits so a sim test's `D`/`T`/`S`
+// converges to its commanded speed in a bounded, predictable number of
+// ticks instead of the ramp being clamped to zero (an all-zero, never-
+// configured msg::PlannerConfig — see tests/sim/unit/planner_harness.cpp's
+// own "a_max == 0 (never configured) means the ramp never leaves zero"
+// scenario).
+msg::PlannerConfig defaultSimPlannerConfig() {
+    msg::PlannerConfig cfg;
+    cfg.a_max = 800.0f;              // [mm/s^2]
+    cfg.a_decel = 800.0f;            // [mm/s^2]
+    cfg.v_body_max = 1000.0f;        // [mm/s]
+    cfg.yaw_rate_max = 6.0f;         // [rad/s]
+    cfg.yaw_acc_max = 20.0f;         // [rad/s^2]
+    cfg.j_max = 0.0f;
+    cfg.yaw_jerk_max = 0.0f;
+    cfg.arrive_tol = 25.0f;          // [mm]
+    cfg.turn_in_place_gate = 35.0f;
+    cfg.min_speed = 0.0f;
+    return cfg;
+}
+
 // ---------------------------------------------------------------------------
 // buildAndWireCommandTable — wires DevLoopState's hardware/drivetrain/
 // watchdog pointers (devCommands()'s own doc comment requires state.watchdog
 // be set before it is called — DEV WD dereferences it), wires
 // TelemetryState's hardware/drivetrain/poseEstimator pointers (082-004,
 // telemetryCommands()'s own doc comment requires the same before any call),
-// and returns the full command table (liveness + DEV + telemetry), mirroring
-// main.cpp's own systemCommands()+devCommands()+telemetryCommands()
-// assembly exactly. Packaged as a function (rather than inline in main.cpp's
-// style) so it can run from SimHandle's member-initializer list, wiring
-// devState/telemetryState as a side effect at the exact point
+// wires MotionLoopState's poseEstimator pointer (084-002, motionCommands()'s
+// own doc comment requires the same before any call), wires PoseCommandState's
+// hardware/drivetrain/poseEstimator pointers (084-007, poseCommands()'s own
+// doc comment requires the same before any call), wires OtosCommandState's
+// hardware pointer (084-008, otosCommands()'s own doc comment requires the
+// same before any call), and returns the full command table (liveness + DEV
+// + telemetry + motion + config + pose-set + OTOS), mirroring main.cpp's own
+// systemCommands()+devCommands()+telemetryCommands()+motionCommands()+
+// configCommands()+poseCommands()+otosCommands() assembly exactly. Packaged
+// as a function (rather than inline in main.cpp's style) so it can run from
+// SimHandle's member-initializer list, wiring devState/telemetryState/
+// motionState/poseState/otosState as a side effect at the exact point
 // CommandProcessor needs the finished table.
 // ---------------------------------------------------------------------------
 std::vector<CommandDescriptor> buildAndWireCommandTable(
     DevLoopState& devState,
     TelemetryState& telemetryState,
+    MotionLoopState& motionState,
+    ConfigCommandState& configState,
+    PoseCommandState& poseState,
+    OtosCommandState& otosState,
     Subsystems::Hardware& hardware,
     Subsystems::Drivetrain& drivetrain,
     Subsystems::PoseEstimator& poseEstimator,
+    Subsystems::Planner& planner,
     SerialSilenceWatchdog& watchdog) {
     devState.hardware = &hardware;
     devState.drivetrain = &drivetrain;
@@ -146,12 +188,49 @@ std::vector<CommandDescriptor> buildAndWireCommandTable(
     telemetryState.hardware = &hardware;
     telemetryState.drivetrain = &drivetrain;
     telemetryState.poseEstimator = &poseEstimator;
+    // 084-005: mode='s sole source (Decision 6) -- see telemetry_commands.h's
+    // file header comment.
+    telemetryState.planner = &planner;
+
+    motionState.poseEstimator = &poseEstimator;
+
+    // 084-006: SET/GET's own config-plane shadow -- an independent struct,
+    // NOT devState's (architecture-update.md (084) Decision 7). Pointer
+    // wiring only here; the shadow fields themselves are seeded from
+    // SimHandle's own boot configs in the constructor below, mirroring
+    // devState.motorConfigShadow[]/drivetrainConfigShadow's seeding.
+    configState.hardware = &hardware;
+    configState.drivetrain = &drivetrain;
+    configState.poseEstimator = &poseEstimator;
+    configState.planner = &planner;
+    configState.sTimeoutWatchdog = &motionState.sTimeout;
+
+    // 084-007: SI/ZERO's own bound-pair + estimator wiring -- an independent
+    // struct, NOT devState's/configState's (pose_commands.h's file header).
+    poseState.hardware = &hardware;
+    poseState.drivetrain = &drivetrain;
+    poseState.poseEstimator = &poseEstimator;
+
+    // 084-008: OI/OZ/OR/OP/OV/OL/OA's own state -- an independent struct,
+    // NOT devState's/configState's/poseState's (otos_commands.h's file
+    // header). odometer() resolves &hardware.simOdometer() through
+    // Subsystems::SimHardware's own override -- every verb acks OK here,
+    // unlike main.cpp's NezhaHardware-backed table.
+    otosState.hardware = &hardware;
 
     std::vector<CommandDescriptor> all = systemCommands();
     std::vector<CommandDescriptor> dev = devCommands(devState);
     all.insert(all.end(), dev.begin(), dev.end());
     std::vector<CommandDescriptor> telemetry = telemetryCommands(telemetryState);
     all.insert(all.end(), telemetry.begin(), telemetry.end());
+    std::vector<CommandDescriptor> motion = motionCommands(motionState);
+    all.insert(all.end(), motion.begin(), motion.end());
+    std::vector<CommandDescriptor> config = configCommands(configState);
+    all.insert(all.end(), config.begin(), config.end());
+    std::vector<CommandDescriptor> pose = poseCommands(poseState);
+    all.insert(all.end(), pose.begin(), pose.end());
+    std::vector<CommandDescriptor> otos = otosCommands(otosState);
+    all.insert(all.end(), otos.begin(), otos.end());
     return all;
 }
 
@@ -169,9 +248,14 @@ struct SimHandle {
     Subsystems::SimHardware hardware;
     Subsystems::Drivetrain drivetrain;
     Subsystems::PoseEstimator poseEstimator;   // 082-003: wired into loop below
+    Subsystems::Planner planner;               // 084-002: wired into loop below
     SerialSilenceWatchdog watchdog;
     DevLoopState devState;
     TelemetryState telemetryState;   // 082-004: wired into loop below
+    MotionLoopState motionState;     // 084-002: wired into loop below
+    ConfigCommandState configState;  // 084-006: SET/GET's own config shadow
+    PoseCommandState poseState;      // 084-007: SI/ZERO's own bound-pair + estimator wiring
+    OtosCommandState otosState;      // 084-008: OI/OZ/OR/OP/OV/OL/OA's own state
     CommandProcessor processor;
     DevLoop loop;
 
@@ -189,8 +273,9 @@ struct SimHandle {
 SimHandle::SimHandle()
     : motorConfigs(defaultMotorConfigSet()),
       hardware(motorConfigs.cfg),
-      processor(buildAndWireCommandTable(devState, telemetryState, hardware, drivetrain,
-                                          poseEstimator, watchdog))
+      processor(buildAndWireCommandTable(devState, telemetryState, motionState, configState,
+                                          poseState, otosState, hardware, drivetrain,
+                                          poseEstimator, planner, watchdog))
 {
     // Primes all four ports' encoders — parity with main.cpp's
     // hardware.begin() call, before the Drivetrain is configured.
@@ -203,6 +288,11 @@ SimHandle::SimHandle()
     // wiring (source/main.cpp).
     poseEstimator.configure(dtConfig);
 
+    // 084-002: Planner configured with defaultSimPlannerConfig() (above) --
+    // mirrors main.cpp's own planner.configure(defaultPlannerConfig()) boot
+    // call.
+    planner.configure(defaultSimPlannerConfig());
+
     // Seed the CFG-delta shadows the same way main.cpp does (DevLoopState's
     // own field comment): the first `DEV M <n> CFG ...`/`DEV DT CFG ...`
     // must merge onto the SAME calibration the motors/drivetrain were
@@ -211,6 +301,17 @@ SimHandle::SimHandle()
         devState.motorConfigShadow[i] = motorConfigs.cfg[i];
     }
     devState.drivetrainConfigShadow = dtConfig;
+
+    // 084-006: seed configState's OWN, independent config-plane shadow the
+    // same way -- SET/GET's first delta must merge onto the SAME
+    // calibration the motors/drivetrain/planner were actually constructed/
+    // configured with, not an all-zero blank (config_commands.h's file
+    // header; mirrors devState's seeding immediately above).
+    for (uint32_t i = 0; i < Subsystems::Hardware::kPortCount; ++i) {
+        configState.motorShadow[i] = motorConfigs.cfg[i];
+    }
+    configState.drivetrainShadow = dtConfig;
+    configState.plannerShadow = defaultSimPlannerConfig();
 
     // Prime the capabilities cache for the default DEV DT PORTS binding —
     // read back via ports() (not a local copy), mirroring main.cpp exactly.
@@ -225,6 +326,8 @@ SimHandle::SimHandle()
     loop.processor = &processor;
     loop.watchdog = &watchdog;
     loop.devState = &devState;
+    loop.planner = &planner;
+    loop.motionState = &motionState;
     // The loop-originated reply sink (Decision 3) — devLoopTick()'s watchdog-
     // fire EVT goes here, never into syncStore (which belongs solely to the
     // statement currently being dispatched by sim_command(), if any).

@@ -1,8 +1,11 @@
 ---
 id: '001'
 title: 'Motion executor core: Planner ramp and stop-condition engine'
-status: open
-use-cases: [SUC-001, SUC-002, SUC-003]
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
 depends-on: []
 github-issue: ''
 issue: firmware-closed-loop-motion-verbs.md
@@ -51,16 +54,16 @@ the "goal request" — a command handler just constructs one directly
 
 ## Acceptance Criteria
 
-- [ ] `protos/planner.proto`'s `DriveMode` gains `TIMED = 2` (fills the
+- [x] `protos/planner.proto`'s `DriveMode` gains `TIMED = 2` (fills the
       reserved gap between `STREAMING=1`/`DISTANCE=3`); `source/messages/
       planner.h` regenerated via `scripts/gen_messages.py`. No other
       `PlannerCommand`/`PlannerState`/`PlannerConfig`/`StopCondition` field
       changes.
-- [ ] New `source/motion/motion_baseline.h`: a plain POD struct (ported
+- [x] New `source/motion/motion_baseline.h`: a plain POD struct (ported
       concept from `source_old/control/StopCondition.h`'s
       `MotionBaseline`) — `t0`, `enc0`, `encDiff0`, `heading0`, `pose0X`,
       `pose0Y`, `vSign`, `omegaSign`.
-- [ ] New `source/motion/stop_condition.{h,cpp}`: `Motion::
+- [x] New `source/motion/stop_condition.{h,cpp}`: `Motion::
       evaluateStopCondition(const msg::StopCondition&, const
       Motion::MotionBaseline&, ...)` ported from `source_old/control/
       StopCondition.cpp`, supporting `STOP_TIME`/`STOP_DISTANCE`/
@@ -68,13 +71,13 @@ the "goal request" — a command handler just constructs one directly
       `STOP_SENSOR`/`STOP_COLOR`/`STOP_LINE_ANY` return a distinct
       "unsupported" result the caller can turn into `ERR badarg` (ticket
       002+) rather than silently never firing.
-- [ ] New `source/motion/velocity_ramp.{h,cpp}`: `Motion::VelocityRamp`
+- [x] New `source/motion/velocity_ramp.{h,cpp}`: `Motion::VelocityRamp`
       ported from `source_old/control/BodyVelocityController.cpp` minus
       the kinematics/saturate/motor-output tail — `setTarget(v, omega)`,
       `advance(dt_s)` (trapezoid; S-curve when `jMax > 0`, matching the
       ported logic), `reset()`, `seedCurrent(v, omega)`, `atTarget()`,
       `currentV()`/`currentOmega()`.
-- [ ] New `source/subsystems/planner.{h,cpp}`: `Subsystems::Planner` with:
+- [x] New `source/subsystems/planner.{h,cpp}`: `Subsystems::Planner` with:
   - `apply(const msg::PlannerCommand& cmd, uint32_t now)` — stages the
     goal (dispatch on `goal_kind`), capturing the reply sink/corr-id
     context needed for later `EVT` emission (mirrors `MotionCommand`'s
@@ -93,10 +96,10 @@ the "goal request" — a command handler just constructs one directly
   - `state() const -> msg::PlannerState`, `configure(const
     msg::PlannerConfig&)`.
   - `hasActiveCommand() const` — mirrors `MotionCommand::active()`.
-- [ ] No existing file changes: `Drivetrain`, `PoseEstimator`, `Hardware`,
+- [x] No existing file changes: `Drivetrain`, `PoseEstimator`, `Hardware`,
       `NezhaHardware`, `SimHardware`, the `DEV` family, `dev_loop.*`,
       `main.cpp` are all untouched by this ticket.
-- [ ] Wire keys stay stable: this ticket introduces no wire verb at all,
+- [x] Wire keys stay stable: this ticket introduces no wire verb at all,
       so there is nothing to keep stable yet — verified by grep showing no
       new `CommandDescriptor` registrations land in this ticket's diff.
 

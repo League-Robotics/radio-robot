@@ -20,10 +20,15 @@ Four acceptance-criteria groups:
   (c) seq= -- shared by STREAM and SNAP, monotonically increasing.
   (d) STREAM <ms> clamp -- STREAM 10 -> OK stream period=20.
 
-mode= (I at rest / S during an active drive) is covered by its own test
-functions below rather than a separate file -- it is a TLM wire field like
-any other in this shape family, per the ticket's own "Files to create"
-list naming only three sim-level files.
+mode= at rest ('I', including across DEV DT drives that never engage
+Subsystems::Planner) is covered by its own test functions below rather than
+a separate file -- it is a TLM wire field like any other in this shape
+family, per the ticket's own "Files to create" list naming only three
+sim-level files. As of 084-005, mode= is derived exclusively from
+Planner::state().mode (see that ticket's own doc comment on the tests
+below); the full I/S/T/D/G vocabulary over the actual Planner-mediated
+motion verbs (S/T/D/R/TURN/RT/G) is covered end to end in
+tests/sim/unit/test_mode_machine.py.
 """
 from __future__ import annotations
 
@@ -186,9 +191,24 @@ def test_stream_period_at_or_above_floor_passes_through_unclamped(sim):
 
 
 # ---------------------------------------------------------------------------
-# mode=: 'I' at rest, 'S' during an active DEV DT VW/WHEELS drive --
-# confirmed over the sim's actual wire surface (SNAP), not just against
-# Subsystems::Drivetrain::active() directly.
+# mode=: 'I' at rest -- confirmed over the sim's actual wire surface (SNAP).
+#
+# 084-005 update (Decision 6): mode= is now derived EXCLUSIVELY from
+# Subsystems::Planner::state().mode (docs/protocol-v2.md §8; architecture-
+# update.md (084) Decision 6), not `drivetrain.active() ? 'S' : 'I'` (082's
+# original, minimal source, extended by this ticket). `DEV DT VW`/`WHEELS`
+# command Subsystems::Drivetrain directly through DevLoopState's own outbox
+# and never stage a msg::PlannerCommand at all, so mode= now correctly reads
+# 'I' throughout a `DEV DT VW`/`WHEELS` drive -- the wheels really are
+# spinning (confirmed below via true_velocity()), but that authority is
+# DEV's bench-diagnostic path, not a `Planner`-mediated production drive, so
+# it is invisible to mode= by design. This is a deliberate consequence of
+# consolidating mode= onto a single source of truth, not a regression: the
+# three tests below used to assert 'S' here (082's `drivetrain.active()`-
+# based source could not tell DEV DT's authority apart from Planner's); they
+# now assert the corrected 'I' behavior and confirm the wheels are still
+# genuinely moving despite it. Full I/S/T/D/G coverage for the actual
+# Planner-mediated verb families lives in test_mode_machine.py.
 # ---------------------------------------------------------------------------
 
 def test_mode_is_idle_at_rest(sim):
@@ -196,31 +216,45 @@ def test_mode_is_idle_at_rest(sim):
     assert _snap(sim)["mode"] == "I"
 
 
-def test_mode_is_active_during_dev_dt_vw_drive(sim):
-    """An active DEV DT VW body-twist drive flips mode= to 'S' over the
-    wire."""
+def test_mode_stays_idle_during_dev_dt_vw_drive_since_planner_not_engaged(sim):
+    """An active `DEV DT VW` body-twist drive never engages `Planner`, so
+    mode= (084-005: Planner-exclusive source) reads 'I' throughout -- even
+    though the wheels are genuinely spinning under DEV's own authority."""
     sim.command("DEV DT PORTS 1 2")
     sim.command("DEV DT VW 100 0 0")
-    assert _snap(sim)["mode"] == "S"
+    assert _snap(sim)["mode"] == "I"
+
+    sim.tick_for(240)
+    vel_l, vel_r = sim.true_velocity()
+    assert vel_l > 10.0 and vel_r > 10.0, (
+        f"expected DEV DT VW to actually be driving the wheels, got vel=({vel_l}, {vel_r})"
+    )
+    assert _snap(sim)["mode"] == "I"
 
 
-def test_mode_is_active_during_dev_dt_wheels_drive(sim):
-    """Same as above for the DEV DT WHEELS per-wheel-velocity verb --
+def test_mode_stays_idle_during_dev_dt_wheels_drive_since_planner_not_engaged(sim):
+    """Same as above for the `DEV DT WHEELS` per-wheel-velocity verb --
     ticket's acceptance criterion names both VW and WHEELS explicitly."""
     sim.command("DEV DT PORTS 1 2")
     sim.command("DEV DT WHEELS 80 80")
-    assert _snap(sim)["mode"] == "S"
+    assert _snap(sim)["mode"] == "I"
+
+    sim.tick_for(240)
+    vel_l, vel_r = sim.true_velocity()
+    assert vel_l > 10.0 and vel_r > 10.0, (
+        f"expected DEV DT WHEELS to actually be driving the wheels, got vel=({vel_l}, {vel_r})"
+    )
+    assert _snap(sim)["mode"] == "I"
 
 
-def test_mode_returns_to_idle_after_dev_dt_stop(sim):
-    """Bookend on "at rest": mode= must also read 'I' again once the
-    drivetrain relinquishes authority (DEV DT STOP), not only before the
-    very first drive command of the session -- the same "at rest" wire
-    property the ticket's acceptance criterion describes, checked on both
-    sides of a drive."""
+def test_mode_stays_idle_across_a_dev_dt_stop_bookend(sim):
+    """Bookend on "at rest": mode= must still read 'I' on both sides of a
+    `DEV DT VW` drive plus its `DEV DT STOP` -- none of these three commands
+    ever stage a msg::PlannerCommand, so `Planner::hasActiveCommand()` (and
+    therefore mode=) never leaves 'I' across the whole sequence."""
     sim.command("DEV DT PORTS 1 2")
     sim.command("DEV DT VW 100 0 0")
-    assert _snap(sim)["mode"] == "S"
+    assert _snap(sim)["mode"] == "I"
 
     sim.command("DEV DT STOP")
     assert _snap(sim)["mode"] == "I"

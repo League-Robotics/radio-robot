@@ -15,6 +15,45 @@
 
 #if ROBOT_DEV_BUILD
 
+#include <cstdio>
+
+namespace {
+
+// motionVerbForMode -- maps the msg::DriveMode a Planner goal was driving to
+// its wire verb, for "EVT done <verb> ..." text (084-002). Sampled from
+// Planner::state().mode BEFORE calling tick() each pass, since a goal that
+// completes THIS pass transitions mode_ back to IDLE INSIDE that same
+// tick() call (planner.cpp) -- reading state() after tick() would always
+// see IDLE for a just-completed goal.
+//
+// DISTANCE/GO_TO each still uniquely identify their own verb (D/G). STREAMING
+// and TIMED, as of 084-005's Decision 6 (planner.cpp's velocityShapedMode()),
+// are each now shared by MORE than one verb: STREAMING is `S` or a bare `R`
+// (no stop=); TIMED is `T`, a stop=-bearing `R`, `TURN`, or `RT`. DriveMode
+// alone cannot disambiguate any of these -- `activeVelocityVerb`
+// (MotionLoopState, set by handleR/handleTURN/handleRT, and CLEARED by
+// handleS/handleT/handleD/handleG -- see motion_commands.h's field doc
+// comment) is the disambiguation mechanism: non-empty means the active goal
+// was staged by R/TURN/RT, so it names the actual wire verb; empty falls
+// back to the mode's own plain verb (S/T). `VELOCITY` itself is no longer
+// ever emitted by planner.cpp (see velocityShapedMode()'s doc comment) --
+// this switch keeps a defensive case for it rather than assuming that
+// invariant holds forever.
+const char* motionVerbForMode(msg::DriveMode mode, const char* activeVelocityVerb) {
+  switch (mode) {
+    case msg::DriveMode::STREAMING:
+      return (activeVelocityVerb[0] != '\0') ? activeVelocityVerb : "S";
+    case msg::DriveMode::TIMED:
+      return (activeVelocityVerb[0] != '\0') ? activeVelocityVerb : "T";
+    case msg::DriveMode::DISTANCE: return "D";
+    case msg::DriveMode::VELOCITY: return activeVelocityVerb;
+    case msg::DriveMode::GO_TO: return "G";
+    default: return "";
+  }
+}
+
+}  // namespace
+
 void devLoopTick(DevLoop& loop, uint32_t now, const DevLoopStatement* statement) {
     Subsystems::Hardware& hardware = *loop.hardware;
     Subsystems::Drivetrain& drivetrain = *loop.drivetrain;
@@ -87,6 +126,107 @@ void devLoopTick(DevLoop& loop, uint32_t now, const DevLoopStatement* statement)
         sampledPose = odometer->pose();
     }
     loop.poseEstimator->tick(now, leftObs, rightObs, odometer != nullptr ? &sampledPose : nullptr);
+
+    // Motion executor (084-002; dev_loop.h's own doc comment has the full
+    // rationale). Placed AFTER pose estimation (needs loop.poseEstimator->
+    // fusedPose(), just produced above) and BEFORE periodic TLM emission
+    // (so a mode/authority change this pass is reflected in the SAME pass's
+    // telemetry, once ticket 005 reads Planner::state().mode there).
+    MotionLoopState& motionState = *loop.motionState;
+
+    // plannerEngagedThisPass -- gates the drivetrain.apply() drain below.
+    // Planner::tick() unconditionally HOLDS a twist command every pass, even
+    // while fully idle (a (0,0,0) hold -- see planner.cpp's holdTwistCommand()
+    // call at the end of tick()), so draining hasCommand()/takeCommand() into
+    // drivetrain.apply() UNCONDITIONALLY every pass would call
+    // Drivetrain::setTwist() -- which ALWAYS (re)activates authority, even
+    // for a zero twist -- forever after the very first devLoopTick() call,
+    // regardless of whether any S/T/D/STOP was ever issued. That would
+    // permanently steal Drivetrain's authority away from DEV DT/DEV M with
+    // no wire command ever asking for it, breaking `mode=I` at rest (082-004)
+    // and any DEV-driven test. The gate is true exactly when Planner has
+    // something ACTUAL to say this pass: a fresh command was just staged
+    // (S/T/D/STOP, including the sTimeout-fired synthetic STOP below), or a
+    // goal was already active going into this tick (still running, or
+    // completing on this very tick -- hasActiveCommand() only flips false
+    // INSIDE tick()/apply(), so sampling it here, before tick() runs, still
+    // catches the final pass). Once a goal goes fully idle with no further
+    // command, this stays false and Planner's held zero-twist is simply
+    // never drained again -- Drivetrain's authority is left exactly where
+    // the last REAL drain (a running goal's last twist, or an explicit
+    // STOP's zero twist) put it, matching Open Question 3's "whichever last
+    // issued a command wins" contract.
+    bool plannerEngagedThisPass = false;
+
+    // Drain motionState's outbox (staged by source/commands/
+    // motion_commands.cpp's S/T/D/STOP handlers) into Planner::apply() --
+    // this file, not a command handler, is the sole per-pass orchestrator,
+    // mirroring DevLoopState's own outbox-drain discipline above.
+    if (motionState.hasCommand) {
+        loop.planner->apply(motionState.command, now);
+        motionState.hasCommand = false;
+        plannerEngagedThisPass = true;
+    }
+
+    // sTimeout (084-002): the streaming-drive watchdog, DISTINCT from
+    // loop.watchdog (SerialSilenceWatchdog, fed by ANY statement regardless
+    // of content) -- sTimeout is fed ONLY by S's own handler and only
+    // matters while a STREAMING goal S/VW itself staged is the one actually
+    // active; a later T/D/STOP simply stops this check from ever running
+    // again until the next S.
+    //
+    // Gating on `mode == STREAMING` ALONE stopped being sufficient once
+    // 084-005's Decision 6 (planner.cpp's velocityShapedMode()) made a bare
+    // `R` (no stop=) ALSO report DriveMode::STREAMING: `R`'s own ticket
+    // (084-003) acceptance is "no stop of its own" -- it must run
+    // open-ended until an explicit STOP or its own stop= clause, NEVER
+    // subject to S's sTimeout (which R's handler never feeds). The extra
+    // `activeVelocityVerb[0] == '\0'` check restores that scoping: `handleS`
+    // clears activeVelocityVerb when it stages a goal (motion_commands.cpp),
+    // so a genuine S/VW-driven STREAMING session always has it empty, while
+    // a bare-R-driven one always has it set to "R" -- excluding exactly the
+    // one case this watchdog must never fire for.
+    if (loop.planner->state().mode == msg::DriveMode::STREAMING &&
+        motionState.activeVelocityVerb[0] == '\0' &&
+        motionState.sTimeout.check(now)) {
+        msg::PlannerCommand stopCmd;
+        stopCmd.setStop(true);
+        loop.planner->apply(stopCmd, now);
+        plannerEngagedThisPass = true;
+        char wbuf[40];
+        CommandProcessor::replyEvt(wbuf, sizeof(wbuf), "safety_stop", "reason=watchdog",
+                                   loop.defaultReply, loop.defaultReplyCtx);
+    }
+
+    plannerEngagedThisPass = plannerEngagedThisPass || loop.planner->hasActiveCommand();
+
+    // mode is sampled BEFORE tick() -- see motionVerbForMode()'s own doc
+    // comment for why (a goal completing THIS pass transitions mode_ to
+    // IDLE inside tick() itself). tick() itself still runs unconditionally
+    // every pass, mirroring PoseEstimator::tick()'s own always-run contract
+    // (planner.h's tick() doc comment: "the caller does not gate this on
+    // hasActiveCommand()") -- only the DRAIN into drivetrain.apply() below
+    // is gated, not the tick() call itself.
+    msg::DriveMode activeModeBeforeTick = loop.planner->state().mode;
+    loop.planner->tick(now, leftObs, rightObs, loop.poseEstimator->fusedPose());
+    if (plannerEngagedThisPass && loop.planner->hasCommand()) {
+        drivetrain.apply(loop.planner->takeCommand());
+    }
+    if (loop.planner->hasEvent()) {
+        Subsystems::Planner::Event ev = loop.planner->takeEvent();
+        char body[64];
+        if (ev.corrId[0] != '\0') {
+            snprintf(body, sizeof(body), "#%s reason=%s", ev.corrId, ev.reason);
+        } else {
+            snprintf(body, sizeof(body), "reason=%s", ev.reason);
+        }
+        char name[16];
+        snprintf(name, sizeof(name), "done %s",
+                 motionVerbForMode(activeModeBeforeTick, motionState.activeVelocityVerb));
+        char wbuf[96];
+        CommandProcessor::replyEvt(wbuf, sizeof(wbuf), name, body, loop.defaultReply,
+                                   loop.defaultReplyCtx);
+    }
 
     // Periodic TLM emission (082-004; dev_loop.h's own doc comment has the
     // full rationale). Gated on periodMs > 0 (STREAM 0 disables this

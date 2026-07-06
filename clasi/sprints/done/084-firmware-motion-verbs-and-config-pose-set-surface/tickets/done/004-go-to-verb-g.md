@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: 'Go-to verb: G'
-status: open
+status: done
 use-cases: [SUC-003]
 depends-on: ['003']
 github-issue: ''
@@ -37,22 +37,55 @@ it.
 
 ## Acceptance Criteria
 
-- [ ] `G <x> <y> <speed>` registered, matching `docs/protocol-v2.md`
+- [x] `G <x> <y> <speed>` registered, matching `docs/protocol-v2.md`
       §10's existing wire shape and range checks exactly.
-- [ ] Pre-rotate phase engages only when the initial bearing error exceeds
+- [x] Pre-rotate phase engages only when the initial bearing error exceeds
       `PlannerConfig.turn_in_place_gate`; otherwise pursue starts
       immediately.
-- [ ] Pursue phase drives toward the relative target using `fusedPose`,
+- [x] Pursue phase drives toward the relative target using `fusedPose`,
       completing (emitting `EVT done G`) when within `PlannerConfig.
       arrive_tol` mm of the goal.
-- [ ] `G 300 0 200` drives to the relative point and emits `EVT done G`
+- [x] `G 300 0 200` drives to the relative point and emits `EVT done G`
       (sim).
-- [ ] `G` accepts no `stop=` clauses beyond what `docs/protocol-v2.md`
+- [x] `G` accepts no `stop=` clauses beyond what `docs/protocol-v2.md`
       already documents for it (none, per the existing §10 text) — no
       scope creep beyond the documented contract.
-- [ ] No `Planner`/`Drivetrain`/`PoseEstimator` signature changes beyond
+- [x] No `Planner`/`Drivetrain`/`PoseEstimator` signature changes beyond
       what tickets 001-003 already established (`G` is the first real
       consumer of `fusedPose`'s position component, not a new argument).
+
+## Implementation Notes (closing)
+
+- Implemented in `source/subsystems/planner.{h,cpp}` (`GPhase` state
+  machine + `enterPursue()`/`pursueSteer()`), `source/commands/
+  motion_commands.{h,cpp}` (`G` verb registration), and
+  `source/dev_loop.cpp` (`motionVerbForMode()` extended to map
+  `DriveMode::GO_TO` -> `"G"`, exactly the extension that function's own
+  084-002 comment already anticipated for this ticket).
+- **Doc discrepancy found, not silently reconciled**: `docs/protocol-v2.md`
+  §10's own `### G` example section shows a bare `EVT done G` with no
+  `reason=` token, but the same section's general "`reason=` field"
+  convention (and its own reason-token table) documents `pos` as G's
+  reason token, and every other verb's own example section (`T`/`D`/`R`/
+  `TURN`/`RT`) *does* show `reason=<token>`. The implementation follows
+  the general/uniform convention (`EVT done G reason=pos`) since
+  `dev_loop.cpp`'s EVT-emission path has no per-verb exception to omit
+  `reason=` for any verb. The `### G` example text itself was left
+  unedited (out of this ticket's scope to rewrite protocol docs) but
+  should be corrected in a follow-up.
+- A real bug was found and fixed during implementation: the PURSUE
+  per-tick re-steer hook (`pursueSteer()`) must be gated on `!stopping_`
+  — without that guard it kept re-targeting the ramp away from zero every
+  tick after the POSITION stop fired, so the robot never actually stopped
+  after "`EVT done G`". Confirmed fixed via the sim library.
+- Measured (sim, 2026-07-06): `G 300 0 200` fires `EVT done G reason=pos`
+  at x≈302 mm (well within the default 25 mm `arrive_tol`), then a
+  pre-existing sprint-081 `velocity_pid.cpp` zero-crossing settle (same
+  mechanism already documented for `TURN`/`RT` in
+  `test_motion_commands_arc_turn.py`) creeps the plant back to a final
+  rest of x≈262 mm by ~6 s — reproduced identically with a plain `D`, so
+  this is not a `G`-specific issue and is out of this ticket's scope to
+  fix.
 
 ## Implementation Plan
 
