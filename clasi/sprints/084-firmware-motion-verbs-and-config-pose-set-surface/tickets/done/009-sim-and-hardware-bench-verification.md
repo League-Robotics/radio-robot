@@ -1,9 +1,19 @@
 ---
-id: '009'
+id: 009
 title: Sim and hardware bench verification
-status: open
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004, SUC-005, SUC-006, SUC-007, SUC-008]
-depends-on: ['005', '008']
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+- SUC-006
+- SUC-007
+- SUC-008
+depends-on:
+- '005'
+- 008
 github-issue: ''
 issue:
 - firmware-closed-loop-motion-verbs.md
@@ -46,56 +56,106 @@ return `ERR nodev`, not to be skipped or silently unverified.
 
 ### Sim geometry / wire verification (against `libfirmware_host`)
 
-- [ ] `D 200 200 500` moves true pose ~500 mm; `EVT done D reason=dist`.
-- [ ] `RT 9000` rotates ~90° (within plant tolerance); `EVT done RT`.
-- [ ] `T`/`S`/`R`/`TURN`/`G`/`STOP` each verified per tickets 002-004's
+- [x] `D 200 200 500` moves true pose ~500 mm; `EVT done D reason=dist`.
+- [x] `RT 9000` rotates ~90° (within plant tolerance); `EVT done RT`.
+- [x] `T`/`S`/`R`/`TURN`/`G`/`STOP` each verified per tickets 002-004's
       own acceptance criteria (this ticket is a consolidated re-run
       across the full verb set, not a re-derivation of new tolerances).
-- [ ] `stop=` clauses (`{t, d, heading, pos, rot}`) honored, OR-combined
+- [x] `stop=` clauses (`{t, d, heading, pos, rot}`) honored, OR-combined
       with each verb's built-in stop; `sensor`/`color`/`line` clauses
       confirmed to reject with `ERR badarg`, not silently ignored or
       crash.
-- [ ] `mode=` returns to `I` at completion of every verb family, polled
+- [x] `mode=` returns to `I` at completion of every verb family, polled
       via `SNAP` with no `EVT` listener (confirms `mode=I` is sufficient
       for tour-completion detection independent of `EVT` delivery, per
       SUC-004 and the issue's own tour-runner motivation).
-- [ ] `SET tw=...` then `GET` round-trips and visibly changes drivetrain/
+- [x] `SET tw=...` then `GET` round-trips and visibly changes drivetrain/
       turn geometry; every dropped key (Decision 2's table) returns
       `ERR badkey`.
-- [ ] `SI x y h` teleports the fused pose (confirmed via `SNAP`); `ZERO
+- [x] `SI x y h` teleports the fused pose (confirmed via `SNAP`); `ZERO
       enc` rezeroes `enc=`/`encpose=` with no phantom-jump discontinuity.
-- [ ] All seven OTOS verbs (`OI`/`OZ`/`OR`/`OP`/`OV`/`OL`/`OA`) ack
+- [x] All seven OTOS verbs (`OI`/`OZ`/`OR`/`OP`/`OV`/`OL`/`OA`) ack
       against the sim.
-- [ ] Full existing test suite (`tests/sim/`, `tests/bench/`,
+- [x] Full existing test suite (`tests/sim/`, `tests/bench/`,
       `tests/playfield/`, `tests/unit/`) stays green — no regression in
       anything sprints 077-083 already shipped.
 
 ### Hardware bench gate (on the stand, per `.claude/rules/
     hardware-bench-testing.md`)
 
-- [ ] Firmware deployed via `mbdeploy deploy --build`.
-- [ ] Sensors alive: encoders (motor controller) respond with plausible,
+- [x] Firmware deployed via `mbdeploy deploy --build`.
+- [x] Sensors alive: encoders (motor controller) respond with plausible,
       changing values while driving.
-- [ ] Closed-loop drive and turn verbs (`D`/`T`/`R`/`TURN`/`RT`/`G`/`S`)
+- [x] Closed-loop drive and turn verbs (`D`/`T`/`R`/`TURN`/`RT`/`G`/`S`)
       commanded on the stand; wheels drive in both directions; encoders
       increment proportionally to commanded speed and in the expected
       direction.
-- [ ] `STOP` halts immediately on the stand.
-- [ ] `SET`/`GET` take visible effect on the physical robot (e.g. a
+- [x] `STOP` halts immediately on the stand.
+- [x] `SET`/`GET` take visible effect on the physical robot (e.g. a
       `tw`/`ml`/`mr` change visibly alters turn/arc behavior on the
       stand).
-- [ ] `SI`/`ZERO enc` take visible effect on the physical robot's
+- [x] `SI`/`ZERO enc` take visible effect on the physical robot's
       reported pose/encoders.
-- [ ] All seven OTOS verbs return `ERR nodev` on the physical robot (no
+- [x] All seven OTOS verbs return `ERR nodev` on the physical robot (no
       real OTOS driver this program) — verified explicitly, not assumed;
       **no crash**.
-- [ ] Round-trip command/reply confirmed over the real serial link (the
+- [x] Round-trip command/reply confirmed over the real serial link (the
       required gate per `.claude/rules/hardware-bench-testing.md`); radio
       is best-effort, checked via `mbdeploy list` at execution time, not
       assumed present.
-- [ ] Bench report explicitly states the OTOS-gap caveat (no real driver
+- [x] Bench report explicitly states the OTOS-gap caveat (no real driver
       this program; `ERR nodev` is the PASSING result for those seven
       verbs on hardware, not a partial failure).
+
+## Verification Results (2026-07-06)
+
+### Sim verification
+Consolidated cross-verb tests added (`tests/sim/unit/test_motion_verbs_full_sequence.py`,
+`test_config_pose_set_otos_surface.py`): full D/T/R/TURN/RT/G/S/STOP sequences,
+`stop=` clauses OR-combined, `sensor/color/line`→`ERR badarg`, `mode=` polled to `I`
+at every verb's completion with NO EVT listener, `SET tw`→`GET`+visible geometry
+change, full 17-key dropped-key `ERR badkey` table, `SI`/`ZERO enc`, all 7 OTOS
+verbs ack. **`uv run pytest tests/sim` → 246 passed; full suite → 383 passed**, no
+regressions. Doc consolidation fix applied to `docs/protocol-v2.md` (`SI` odometer
+re-anchor; `ZERO pose`→`ERR badarg` note).
+
+### Hardware bench gate (robot on stand, wheels free)
+Clean ARM build `v0.20260706.5` (`just build-clean`, since `mbdeploy deploy --build`
+is broken — its venv lacks protobuf) flashed by UID via `mbdeploy deploy <uid> --hex
+MICROBIT.hex`. Transcript (`scratchpad/bench_084.py` + supplementary T/R/G drive):
+
+```
+VER fw=0.20260706.5 proto=2
+D 200 200 500     : enc 0,0 -> 522,515   EVT done D reason=dist
+RT 9000 / RT -9000: turn-in-place (opposite wheel signs)  EVT done RT reason=rot
+TURN 0            : EVT done TURN reason=heading
+T 200 200 1000    : enc +264,+261   EVT done T reason=time
+R 200 500 stop=t: : arc (asymmetric wheels)  EVT done R reason=time
+G 300 0 200       : enc +272,+288   EVT done G reason=pos
+S +200 / S -200   : enc +391,+383 fwd / -506,-496 rev
+STOP              : OK stop (robot halts)
+SET tw=100 -> RT  : visibly different rotation vs nominal; SET badkey -> ERR badkey
+SI 1000 500 900 + ZERO enc: settled SNAP pose=1000,500,900 encpose=1000,500,900
+OTOS OI/OZ/OR/OP/OV/OL/OA : ERR nodev <verb> (no crash)
+```
+
+**All hardware-gate criteria pass**: encoders alive and changing; every closed-loop
+verb family drives both directions with the correct `EVT done ... reason=` token;
+`STOP` halts; `SET`/`GET`/`SI`/`ZERO enc` take visible effect; round-trip confirmed
+over the real USB-serial link.
+
+**OTOS-gap caveat (stated explicitly, per the ticket):** no real-hardware
+`Hal::Odometer` leaf exists in `Subsystems::NezhaHardware` this program (deferred:
+`clasi/issues/nezha-hardware-otos-driver-for-new-source-tree.md`). `ERR nodev` is the
+PASSING result for the seven OTOS verbs on hardware, not a partial failure; OTOS
+behavior is sim-verified only.
+
+**Known fidelity limitations (functional, imprecise — refinement deferred):** the
+closed-loop verbs show a terminal settle-back / turn under-rotation of a few
+mm/degrees from the sprint-081 velocity-PID zero-crossing dwell + reset-guard armor
+during ramp-through-zero (no decel/coast anticipation ported this sprint — Open
+Question 1). Verbs complete and emit their events at the target; terminal precision
+is the deferred refinement. Filed as a follow-up issue at sprint close.
 
 ## Implementation Plan
 
