@@ -35,9 +35,13 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #
 # Present (mirrors the architecture doc's Step 4 dependency graph):
 #   kinematics/*.cpp                        -- pure math, no CODAL deps
+#   motion/*.cpp                            -- 084-001's VelocityRamp/
+#                                               evaluateStopCondition (pure
+#                                               math, no CODAL deps)
 #   subsystems/drivetrain.cpp               -- the Drivetrain faceplate
 #   subsystems/sim_hardware.cpp             -- ticket 003's SimHardware
 #   subsystems/pose_estimator.cpp           -- 082-002/082-003's PoseEstimator
+#   subsystems/planner.cpp                  -- 084-001's goal-closure engine
 #   estimation/ekf_tiny.cpp                 -- 082-001's EkfTiny (PoseEstimator's EKF core)
 #   telemetry/tlm_frame.cpp                 -- 082-004's pure TLM frame formatter
 #   commands/{arg_parse,command_processor,dev_commands,system_commands,
@@ -64,13 +68,16 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #                                      which exist/link host-side)
 # ---------------------------------------------------------------------------
 file(GLOB KINEMATICS_SOURCES "${SOURCE_DIR}/kinematics/*.cpp")
+file(GLOB MOTION_SOURCES     "${SOURCE_DIR}/motion/*.cpp")
 file(GLOB HAL_SIM_SOURCES    "${SOURCE_DIR}/hal/sim/*.cpp")
 
 set(FIRMWARE_SOURCES
     ${KINEMATICS_SOURCES}
+    ${MOTION_SOURCES}
     "${SOURCE_DIR}/subsystems/drivetrain.cpp"
     "${SOURCE_DIR}/subsystems/sim_hardware.cpp"
     "${SOURCE_DIR}/subsystems/pose_estimator.cpp"
+    "${SOURCE_DIR}/subsystems/planner.cpp"
     "${SOURCE_DIR}/estimation/ekf_tiny.cpp"
     "${SOURCE_DIR}/telemetry/tlm_frame.cpp"
     "${SOURCE_DIR}/commands/arg_parse.cpp"

@@ -11,6 +11,7 @@ namespace msg {
 enum class DriveMode : uint8_t {
     IDLE = 0,
     STREAMING = 1,
+    TIMED = 2,
     DISTANCE = 3,
     GO_TO = 4,
     VELOCITY = 5,
