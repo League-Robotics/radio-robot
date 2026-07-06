@@ -1,8 +1,9 @@
 ---
 id: '001'
 title: Port Hal::EkfTiny -- 3-state EKF core
-status: open
-use-cases: [SUC-001]
+status: done
+use-cases:
+- SUC-001
 depends-on: []
 github-issue: ''
 issue: plan-revive-testgui-against-the-new-tree-simulator.md
@@ -58,33 +59,39 @@ methods, no unit-suffixed identifiers, units in `// [unit]` comment tags):**
 
 ## Acceptance Criteria
 
-- [ ] `Hal::EkfTiny` (`source/estimation/ekf_tiny.h` / `.cpp`) compiles with
+- [x] `Hal::EkfTiny` (`source/estimation/ekf_tiny.h` / `.cpp`) compiles with
       no `#include "MicroBit.h"` and no I2C dependency -- includes only
       `<math.h>`, `<stdint.h>`, `<tinyekf.h>`.
-- [ ] State vector is 3-wide (x, y, heading); `EKF_N`/`EKF_M` (or equivalent
+      (Note: `ekf_tiny.cpp` also includes `<string.h>` for `memset()`,
+      mirroring `source_old/state/EKFTiny.cpp`'s own precedent -- a standard
+      C library header, not a device/CODAL dependency. The `.h` itself
+      includes exactly `<math.h>`, `<stdint.h>`, `<tinyekf.h>`.)
+- [x] State vector is 3-wide (x, y, heading); `EKF_N`/`EKF_M` (or equivalent
       TinyEKF macros) reflect a 3-state, 2-observation shape -- no `v`/`omega`
       state, no `updateVelocity()` method exists on this class.
-- [ ] No Mahalanobis/chi-squared gating, rejection-streak counter, or
+- [x] No Mahalanobis/chi-squared gating, rejection-streak counter, or
       P-inflation logic exists on this class (grep-verifiable: no
       `rejStreak`, no `chiSquare`, no gate-recovery constant).
-- [ ] All method and parameter names are lowerCamelCase (never PascalCase),
+- [x] All method and parameter names are lowerCamelCase (never PascalCase),
       no unit-suffixed identifier (`xEntry`/`thetaObs`, not `x_mm`/`theta_rad`)
       -- units live in leading `// [unit]` comment tags per
       `.claude/rules/coding-standards.md`.
-- [ ] A synthetic predict-only unit test sequence (no corrections) matches a
+- [x] A synthetic predict-only unit test sequence (no corrections) matches a
       hand-computed arc-integration reference within floating-point
       tolerance.
-- [ ] A synthetic predict+correct unit test sequence demonstrably pulls the
+- [x] A synthetic predict+correct unit test sequence demonstrably pulls the
       estimate toward a deliberately-offset position/heading observation
       (proves the correction step runs, not a no-op) -- e.g. drive the filter
       several ticks with a constant encoder-derived arc, then apply
       `updatePosition`/`updateHeading` with a synthetic observation offset by
       a known amount, and assert the post-update state moved toward that
       observation (not away from it, not unchanged).
-- [ ] `tests/_infra/sim/CMakeLists.txt`'s source list is noted as needing
+- [x] `tests/_infra/sim/CMakeLists.txt`'s source list is noted as needing
       `source/estimation/ekf_tiny.cpp` added (ticket 003/004 land the actual
       CMakeLists.txt edit once the sim harness's file is touchable per this
       sprint's dependency gate -- see Implementation Plan).
+      (Noted here per this criterion's own text -- no CMakeLists.txt edit
+      made by this ticket.)
 
 ## Implementation Plan
 
