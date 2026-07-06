@@ -811,13 +811,33 @@ def _build_main_window():  # type: ignore[return]
         col_left_layout, "sim_err_otos_ang_scale", "OTOS ang scale err:",
         _sim_error_profile["otos_ang_scale_err"], -0.5, 0.5, 3,
     )
+    # 083-001: sim_set_otos_linear_drift/sim_set_otos_yaw_drift apply a
+    # constant ADDITIVE term once per SimOdometer tick (confirmed by reading
+    # source/hal/sim/sim_odometer.cpp's tick()) -- NOT the old SIMSET wire
+    # protocol's per-SECOND rate (otosLinDriftMmS/otosYawDriftDegS), which no
+    # longer exists.  Labels/ranges below reflect the per-tick unit the
+    # ctypes setter actually takes (see sim_prefs.py's module docstring).
     sim_err_otos_lin_drift = _make_sim_err_spin(
-        col_left_layout, "sim_err_otos_lin_drift", "OTOS lin drift (mm/s):",
-        _sim_error_profile["otos_lin_drift"], -50.0, 50.0, 2,
+        col_left_layout, "sim_err_otos_lin_drift", "OTOS lin drift (mm/tick):",
+        _sim_error_profile["otos_lin_drift"], -5.0, 5.0, 3,
     )
     sim_err_otos_yaw_drift = _make_sim_err_spin(
-        col_left_layout, "sim_err_otos_yaw_drift", "OTOS yaw drift (deg/s):",
-        _sim_error_profile["otos_yaw_drift"], -30.0, 30.0, 2,
+        col_left_layout, "sim_err_otos_yaw_drift", "OTOS yaw drift (rad/tick):",
+        _sim_error_profile["otos_yaw_drift"], -0.05, 0.05, 4,
+    )
+
+    # 083-001: motor_offset_l/r and slip_turn_extra (below) have NO ctypes
+    # ABI entry point at all against the current sim_api.cpp surface
+    # (Hal::PhysicsWorld::setOffsetFactor() is deliberately left unwrapped;
+    # no turn-rate-dependent slip knob is wired -- see SimConnection's module
+    # docstring). Stakeholder decision: these spin boxes stay VISIBLE (not
+    # hidden/removed) so a persisted profile with a non-neutral value is
+    # still visible to the operator; a tooltip flags that setting them has
+    # no effect on a running Sim.
+    _SIM_ERR_NOT_SUPPORTED_TOOLTIP = (
+        "Not supported in sim: no ctypes ABI entry point backs this knob "
+        "against the current sim_api.cpp surface. Setting this has no "
+        "effect on a running Sim."
     )
 
     # -- LEFT column: Geometry & Actuation -----------------------------------
@@ -826,10 +846,12 @@ def _build_main_window():  # type: ignore[return]
         col_left_layout, "sim_err_motor_offset_l", "motor offset L:",
         _sim_error_profile["motor_offset_l"], 0.0, 2.0, 3,
     )
+    sim_err_motor_offset_l.setToolTip(_SIM_ERR_NOT_SUPPORTED_TOOLTIP)
     sim_err_motor_offset_r = _make_sim_err_spin(
         col_left_layout, "sim_err_motor_offset_r", "motor offset R:",
         _sim_error_profile["motor_offset_r"], 0.0, 2.0, 3,
     )
+    sim_err_motor_offset_r.setToolTip(_SIM_ERR_NOT_SUPPORTED_TOOLTIP)
     # trackwidth has NO safe zero default (PhysicsWorld::update() divides
     # by it) — the spinbox range excludes 0 entirely, and the default is the
     # firmware config's trackwidth (128.0mm, what the sim seeds the plant
@@ -862,6 +884,7 @@ def _build_main_window():  # type: ignore[return]
         col_right_layout, "sim_err_slip_turn", "turn slip:",
         _sim_error_profile["slip_turn_extra"], 0.0, 2.0, 3,
     )
+    sim_err_slip_turn.setToolTip(_SIM_ERR_NOT_SUPPORTED_TOOLTIP)
     sim_err_body_rot_scrub = _make_sim_err_spin(
         col_right_layout, "sim_err_body_rot_scrub", "body rot scrub:",
         _sim_error_profile["body_rot_scrub"], 0.0, 1.0, 3,

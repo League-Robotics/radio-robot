@@ -1,8 +1,10 @@
 ---
 id: '001'
 title: Reconcile SimTransport and sim-error injection to the 081/082 ctypes ABI
-status: open
-use-cases: [SUC-001, SUC-004]
+status: done
+use-cases:
+- SUC-001
+- SUC-004
 depends-on: []
 github-issue: ''
 issue: host-testgui-sim-cockpit.md
@@ -43,27 +45,27 @@ fields stay visible with a tooltip rather than being hidden).
 
 ## Acceptance Criteria
 
-- [ ] `SimTransport`'s tick-thread owns a `SimConnection` instance (not a raw
+- [x] `SimTransport`'s tick-thread owns a `SimConnection` instance (not a raw
       `Sim`), constructed/destroyed via its `connect()`/`disconnect()` (it has
       no context-manager protocol).
-- [ ] All one-way drive/stop commands go through `conn.send_fast(line)`
+- [x] All one-way drive/stop commands go through `conn.send_fast(line)`
       (fire-and-forget, no forced time advance).
-- [ ] Synchronous commands needing a reply go through
+- [x] Synchronous commands needing a reply go through
       `conn.send(line, read_timeout=0, stop_token=None)` (zero-time-advance
       synchronous reply) — verified this does not tick sim time as a side
       effect of a query.
-- [ ] The tick-thread's periodic wall-clock advance is one
+- [x] The tick-thread's periodic wall-clock advance is one
       `conn.tick(speed_factor * _SIM_TICK_STEP_DURATION)` call per iteration,
       replacing the old manual `sim.tick_for()` + `sim.get_async_evts()` pair.
-- [ ] `conn.clear_state_log()` is called once per tick-thread iteration so
+- [x] `conn.clear_state_log()` is called once per tick-thread iteration so
       `SimConnection`'s internal `_state_log` (built for bounded pytest runs,
       not an open-ended GUI session) never grows unbounded over a long
       interactive session.
-- [ ] Ground truth is read via `conn.get_true_pose()` (dict `{x,y,h}`) and
+- [x] Ground truth is read via `conn.get_true_pose()` (dict `{x,y,h}`) and
       teleported via `conn.set_true_pose()`/`conn.set_true_wheel_travel()`;
       the dead `set_true_velocity()` call is removed (no ctypes backing
       exists — documented, not silently retried).
-- [ ] `_apply_profile_to_sim()` no longer builds any `SIMSET` wire string. It
+- [x] `_apply_profile_to_sim()` no longer builds any `SIMSET` wire string. It
       calls the ctypes setters directly through a new
       `sim_prefs.PROFILE_TO_SIM_SETTER` map (field name -> `SimConnection`
       setter method name), replacing `sim_prefs.PROFILE_TO_SIMSET_KEY`.
@@ -71,7 +73,7 @@ fields stay visible with a tooltip rather than being hidden).
       one call); `enc_scale_err_l`/`enc_scale_err_r` call
       `set_enc_scale_error(0, ...)`/`set_enc_scale_error(1, ...)`
       independently.
-- [ ] `motor_offset_l`, `motor_offset_r`, and `slip_turn_extra` keep their
+- [x] `motor_offset_l`, `motor_offset_r`, and `slip_turn_extra` keep their
       JSON keys in `sim_prefs.DEFAULT_PROFILE` (existing persisted profile
       files keep loading) but are documented as having no ctypes backing:
       `_apply_profile_to_sim()` skips applying them and logs a one-time
@@ -82,7 +84,7 @@ fields stay visible with a tooltip rather than being hidden).
       **visible** — do not hide or remove them — each gets a tooltip stating
       it is "not supported in sim" / has no effect against the current
       ctypes ABI.
-- [ ] Before finalizing the `otos_lin_drift`/`otos_yaw_drift` mapping, read
+- [x] Before finalizing the `otos_lin_drift`/`otos_yaw_drift` mapping, read
       `source/hal/sim/physics_world.h` (and/or `sim_setters.h`) to confirm
       whether `sim_set_otos_linear_drift`/`sim_set_otos_yaw_drift` apply a
       one-shot bias or a per-tick rate. The old `SIMSET` wire keys
@@ -91,9 +93,9 @@ fields stay visible with a tooltip rather than being hidden).
       `firmware.py`/`sim_conn.py` (a bias). Update `sim_prefs`'s field
       labels/units/scaling to match whatever the implementation actually
       does — do not assume the old unit carries over unchanged.
-- [ ] `SimTransport.connect()`'s existing "Build required" `QMessageBox`
+- [x] `SimTransport.connect()`'s existing "Build required" `QMessageBox`
       warning path (missing `libfirmware_host.*`) is unchanged.
-- [ ] `turn_scrub_factor` (used by the Sim Errors display) is updated to read
+- [x] `turn_scrub_factor` (used by the Sim Errors display) is updated to read
       from whichever field now carries the rotational-scrub concept
       (`body_rot_scrub`), consistent with `slip_turn_extra` no longer having
       a live ctypes effect.
