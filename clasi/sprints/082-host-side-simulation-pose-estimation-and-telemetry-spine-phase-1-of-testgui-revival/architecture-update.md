@@ -40,14 +40,18 @@ shape this document and are not obvious from the sprint brief alone:
    a genuine, pre-existing gap this sprint does not close — see Decision 3
    and the Open Questions.
 
-A third, smaller fact worth naming so it is never re-derived by accident:
-`source/kinematics/pose2d.h` defines its OWN `Pose2D`/`BodyTwist`/`BodyTwist3`
-family with unit-suffixed field names (`v_mmps`, `omega_rads`) — a *different*,
-deliberately-kept-separate type family from `msg::Pose2D`/`msg::BodyTwist3`
-(`source/messages/common.h`, conforming `x`/`y`/`h`, `v_x`/`v_y`/`omega`
-names), per `drivetrain.cpp`'s own call-out of this exact divergence. Every
-new type this sprint introduces uses **only** the `msg::` family — never
-`kinematics/pose2d.h`'s parallel, non-conforming structs.
+A third fact, corrected during this pass so it is not re-derived as
+acceptable: the pose/twist value types live in **one** family, the generated
+`msg::Pose2D`/`msg::BodyTwist3` (`source/messages/common.h`, conforming
+`x`/`y`/`h`, `v_x`/`v_y`/`omega` names). A parallel hand-written
+`source/kinematics/pose2d.h` family with unit-suffixed field names
+(`vx_mmps`, `omega_rads`, …) previously existed — a 071 rename-sweep miss
+carried into the greenfield tree by 077, *not* a deliberate design, despite
+`drivetrain.cpp`'s old comment describing the divergence. That duplicate has
+been removed (its one live type, `BodyTwist3`, was merged onto
+`msg::BodyTwist3`, which the now-deleted `bridges.h` had already proven
+bit-identical; the other four structs were dead). Every new type this sprint
+introduces uses the `msg::` family — which is now the only family.
 
 ## Step 1: Understand the Problem
 
@@ -510,8 +514,10 @@ sprint introduces.
   comment; `Hal::Motor::position()` already returning calibrated mm;
   `libraries/tinyekf` already vendored and on the root `CMakeLists.txt`
   include path; `Subsystems::Hardware::begin()`'s existing defaulted-virtual
-  precedent; `kinematics/pose2d.h`'s separate, non-conforming type family)
-  was verified by direct file read during this planning pass, not assumed.
+  precedent) was verified by direct file read during this planning pass, not
+  assumed. The one non-conforming remnant found during that read —
+  `kinematics/pose2d.h`'s unit-suffixed parallel type family — was removed
+  rather than documented as acceptable (see the "Grounding" third fact).
 - **Design quality**: Cohesion checked module-by-module (Step 3) — every
   one-sentence purpose is single-responsibility, and Decision 1 explicitly
   defends the cohesion argument for keeping `PoseEstimator` separate from

@@ -92,11 +92,9 @@ void Drivetrain::commandedWheelTargets(float* targetLeft, float* targetRight) co
             // (capabilities().holonomic == false this sprint). A future
             // mecanum ticket wires v_y in once holonomic can be true
             // (architecture-update.md Open Question 6) -- this is that
-            // wiring's intended site. Scalar overload per this ticket's
-            // acceptance criteria: kinematics/pose2d.h's BodyTwist3
-            // (vx_mmps/vy_mmps/omega_rads) is a different, old-style-named
-            // type from msg::BodyTwist3 (v_x/v_y/omega) -- the scalar
-            // differential overload sidesteps any conversion between them.
+            // wiring's intended site. This differential path calls the scalar
+            // (v_x, omega) overload directly; BodyKinematics's msg::BodyTwist3
+            // array overload is for the holonomic/mecanum path.
             BodyKinematics::inverse(v_x_, omega_, config_.trackwidth,
                                      *targetLeft, *targetRight);
             break;
