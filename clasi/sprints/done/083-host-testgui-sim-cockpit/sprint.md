@@ -1,9 +1,15 @@
 ---
 id: 083
 title: Host TestGUI sim cockpit
-status: planning-docs
+status: done
 branch: sprint/083-host-testgui-sim-cockpit
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004, SUC-005, SUC-006]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+- SUC-006
 issues:
 - host-testgui-sim-cockpit.md
 ---
