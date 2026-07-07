@@ -40,7 +40,7 @@ void handleStream(const ArgList& args, const char* corrId,
   // channel is whichever channel issued the most recently accepted STREAM
   // command -- rebound unconditionally, even for STREAM 0 (disabling still
   // records "this channel asked last"). Resolved via CommandRouter's
-  // currentChannel() (the statement CommandRouter::route() is currently
+  // currentChannel() (the command CommandRouter::route() is currently
   // dispatching), never a captured ReplyFn/void* pair -- see
   // telemetry_commands.h's file header.
   b.telemetryChannel = router->currentChannel();

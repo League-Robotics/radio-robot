@@ -22,7 +22,7 @@ namespace {
 // systemCommands()+devCommands()+...+otosCommands() assembly exactly (same
 // family order, same table-concatenation shape).
 std::vector<CommandDescriptor> buildTable(CommandRouter& router) {
-  std::vector<CommandDescriptor> all = systemCommands();
+  std::vector<CommandDescriptor> all = systemCommands(router);
 #if ROBOT_DEV_BUILD
   std::vector<CommandDescriptor> dev = devCommands(router);
   all.insert(all.end(), dev.begin(), dev.end());
@@ -53,14 +53,14 @@ void CommandRouter::setReplyChannels(ReplyFn serialReply, void* serialCtx, Reply
   processor_.setSerialReply(serialReply, serialCtx);
 }
 
-void CommandRouter::route(const Subsystems::CommunicatorToCommandProcessorStatement& statement,
+void CommandRouter::route(const Subsystems::CommunicatorToCommandProcessorCommand& command,
                           Blackboard& bb) {
   bb_ = &bb;
-  currentChannel_ = statement.returnPath;
-  bool radio = statement.returnPath == Subsystems::Channel::RADIO;
+  currentChannel_ = command.returnPath;
+  bool radio = command.returnPath == Subsystems::Channel::RADIO;
   ReplyFn replyFn = radio ? radioReply_ : serialReply_;
   void* replyCtx = radio ? radioCtx_ : serialCtx_;
-  processor_.process(statement.line, replyFn, replyCtx);
+  processor_.process(command.line, replyFn, replyCtx);
 }
 
 }  // namespace Rt

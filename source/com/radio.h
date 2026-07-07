@@ -23,7 +23,7 @@
  * consumes the first, the newer one is dropped (commands are processed far
  * faster than they arrive). Send: send() fragments the message and transmits
  * each frame. The relay forwards both directions transparently, so a
- * reassembled message is a host statement line and send() output reaches the host.
+ * reassembled message is a host command line and send() output reaches the host.
  *
  * Only one Radio instance may call begin(). _instance is a static singleton
  * pointer used by the static ISR callback.

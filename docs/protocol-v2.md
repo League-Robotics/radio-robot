@@ -13,9 +13,11 @@ pairs carry named parameters.  Only the first token (the verb) is
 upper-cased; all remaining tokens, keys, and values preserve the case
 as sent.  The protocol identifier is `proto=2`.
 
-v1 commands (`K*`, `ENC`, `SO`, `SSE`, `SSO`, `SSC`, `SSL`, `HELLO`,
-`DEVICE:`, and packed sign-prefix motion verbs) are removed.  Any
-unrecognised verb returns `ERR unknown`.
+v1 commands (`K*`, `ENC`, `SO`, `SSE`, `SSO`, `SSC`, `SSL`, and packed
+sign-prefix motion verbs) are removed.  Any unrecognised verb returns
+`ERR unknown`.  `HELLO` and the `DEVICE:` boot announcement (also v1
+vocabulary) are re-added under v2, in a new `NEZHA2`/`robot` wire format —
+see §6.
 
 Transport: the RadioRelay operates in RAW250 mode (247-byte MTU,
 `[SEQ][FLAGS][LEN]` fragment framing).  Fragmentation and reassembly
@@ -212,6 +214,62 @@ Example:
 ```
 ID
 ID model=Nezha2 name=GUTOV serial=1234567 fw=0.20260602.6 proto=2 caps=otos,line,color,gripper,portio
+```
+
+### DEVICE: Boot Announcement
+
+```
+DEVICE:NEZHA2:robot:<name>:<serial>
+```
+
+Emitted once, unsolicited, as the **first line out on both the serial
+link and the radio link**, immediately after comms bring-up — before the
+main loop starts, before anything else is sent.  Colon-delimited, no
+`#id` correlation (nothing requested it).  Mirrors the microbit-radio-relay
+protocol's own boot announcement (`DEVICE:RADIOBRIDGE:relay:<name>:<serial>`,
+see <https://robots.jointheleague.org/subsystems/microbit-radio-relay/protocol/>
+§3.4) so host tooling that already classifies devices off field 1/field 2
+works unchanged.
+
+| Field      | Value                                                          |
+|------------|-----------------------------------------------------------------|
+| 1          | Literal `NEZHA2` (model — matches `ID`'s `model=` field)        |
+| 2          | Literal `robot` (role — the relay's own boot banner uses `relay`) |
+| `<name>`   | micro:bit friendly name — same source as `ID`'s `name=` field    |
+| `<serial>` | Hardware serial number, decimal `uint32_t` — same source as `ID`'s `serial=` field |
+
+Radio is a fire-and-forget broadcast with no link-up handshake: the boot
+radio banner only reaches a host if a relay is already listening on the
+configured channel when the robot boots.  A missed boot radio banner is
+not a failure — the serial banner reaches a directly-connected host
+reliably, and `HELLO` (below) is the reliable way to re-request the
+banner over either channel, e.g. once a relay attaches after boot.
+
+Example (serial, at boot):
+
+```
+DEVICE:NEZHA2:robot:GUTOV:1234567
+```
+
+### HELLO
+
+```
+HELLO [#id]
+→ DEVICE:NEZHA2:robot:<name>:<serial>
+```
+
+Re-emits the identical banner described above, on whichever channel
+`HELLO` arrived on (serial → serial reply, radio → radio reply) — the
+reliable, on-demand way to (re)request the robot's identity banner.  The
+response tag is `DEVICE:...`, not `OK`: like `ID`, this is its own reply
+taxonomy rather than an `OK`/`ERR` wrapper, and (also like the boot
+banner) it carries no `#id` echo even when the request included one.
+
+Example:
+
+```
+HELLO
+DEVICE:NEZHA2:robot:GUTOV:1234567
 ```
 
 ### VER
@@ -851,7 +909,7 @@ the firmware stops the motors and emits `EVT safety_stop reason=watchdog`.
 
 **`sTimeout` is a live, production watchdog (sprint 084).** It is a
 separate timer from `DEV WD`'s bench-only serial-silence watchdog (which
-resets on *any* statement, on *any* channel, regardless of content):
+resets on *any* command, on *any* channel, regardless of content):
 `sTimeout` is fed *only* by `S`, and only matters while a streaming
 (`S`-driven) goal is the one actually active — conflating the two would
 defeat the point of either. It is not yet `SET`/`GET`-able (still a fixed
@@ -1765,7 +1823,7 @@ watchdog neutral event; it resets only on reboot.
 
 Sprint 079: the binding is now backed by `DrivetrainConfig.left_port`/
 `right_port` (read via `Subsystems::Drivetrain::ports()`) rather than a
-`DevLoopState` field — a config-plane statement like any other `CFG` key,
+`DevLoopState` field — a config-plane command like any other `CFG` key,
 per architecture-update.md's "Config-plane vs. command-plane". The wire
 text is unchanged: `DEV DT PORTS <left> <right>` → `OK DEV DT
 ports=<left>,<right>`.
@@ -2058,7 +2116,7 @@ Sets the serial-silence watchdog's window at runtime. Default at boot:
 
 ### Serial-Silence Watchdog — Non-Negotiable
 
-Every `DEV`/liveness statement line that arrives on either comms channel
+Every `DEV`/liveness command line that arrives on either comms channel
 (serial or radio) resets a wall-clock timer — regardless of the line's
 content or whether it parsed to a known verb. If no line arrives within
 the current window, the firmware:
@@ -2092,7 +2150,8 @@ OK DEV M 1 pos=412.0 vel=0.0 applied=0.00 wedged=0 wsus=0 hrc=0 src=0 conn=1
 ## Appendix: Removed v1 Commands
 
 The following v1 command vocabulary is removed in v2.  Any of these
-verbs returns `ERR unknown <verb>`.
+verbs returns `ERR unknown <verb>`.  (`HELLO` and `DEVICE:` were removed
+under v1->v2 too, but are re-added — see §6.)
 
 | Removed verb / prefix    | v1 meaning                             |
 |--------------------------|----------------------------------------|
@@ -2100,7 +2159,5 @@ verbs returns `ERR unknown <verb>`.
 | `ENC`                    | Encoder query                          |
 | `SO`                     | Sensor output (legacy)                 |
 | `SSE`, `SSO`, `SSC`, `SSL` | Streaming sensor commands             |
-| `HELLO`                  | Legacy identity / handshake            |
-| `DEVICE:`                | Legacy device prefix format            |
 | `X`                      | Legacy stop/reset                      |
 | Packed motion (`S+200-150`) | Sign-prefix packed speed arguments  |

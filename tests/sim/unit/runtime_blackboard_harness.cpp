@@ -1,16 +1,16 @@
 // runtime_blackboard_harness.cpp — off-hardware acceptance harness for
 // ticket 087-002 (SUC-001/SUC-006): default-constructs Rt::Blackboard and
 // exercises a representative post/take round-trip on every command-plane
-// queue/mailbox (driveIn, configIn, poseResetIn, motorIn[0], statementsIn,
+// queue/mailbox (driveIn, configIn, poseResetIn, motorIn[0], commandsIn,
 // otosSetPoseIn), confirms every state cell defaults to zero/default, and
 // confirms each queue's exact vehicle (Mailbox latest-wins vs. WorkQueue
 // FIFO-with-capacity) and capacity per architecture-update-r1.md's
 // Reference code.
 //
-// Folds in the acceptance test for source/subsystems/statement.h (Decision
-// 10's extracted, CODAL-free Channel/CommunicatorToCommandProcessorStatement
-// POD): blackboard.h's statementsIn round-trip below IS that proof --
-// statement.h compiles here with zero CODAL includes (this harness never
+// Folds in the acceptance test for source/subsystems/wire_command.h (Decision
+// 10's extracted, CODAL-free Channel/CommunicatorToCommandProcessorCommand
+// POD): blackboard.h's commandsIn round-trip below IS that proof --
+// wire_command.h compiles here with zero CODAL includes (this harness never
 // touches MicroBit.h/com/radio.h/com/serial_port.h/subsystems/communicator.h)
 // and the value round-trips through Rt::WorkQueue<..., 16> with no aliasing
 // (line[] is copied by value, not pointed-to).
@@ -18,7 +18,7 @@
 // Mirrors runtime_queue_harness.cpp's shape exactly (see that file's header
 // for the pattern): #includes only source/runtime/blackboard.h (which itself
 // includes only messages/*.h, runtime/queue.h, subsystems/hardware.h, and
-// subsystems/statement.h — no MicroBit.h, no I2CBus, no ARM toolchain).
+// subsystems/wire_command.h — no MicroBit.h, no I2CBus, no ARM toolchain).
 // Hand-rolled assertions, prints PASS/FAIL, exits nonzero on any failure.
 // Run by test_runtime_blackboard.py, which compiles and runs this binary via
 // subprocess.
@@ -110,7 +110,7 @@ void scenarioBlackboardCommandPlaneStartsEmpty() {
   beginScenario("Blackboard: command-plane queues/mailboxes start empty");
   Rt::Blackboard bb;
 
-  checkTrue(bb.statementsIn.empty(), "statementsIn starts empty");
+  checkTrue(bb.commandsIn.empty(), "commandsIn starts empty");
   checkTrue(bb.driveIn.empty(), "driveIn starts empty");
   for (uint32_t i = 0; i < Rt::kPortCount; ++i) {
     checkTrue(bb.motorIn[i].empty(), "motorIn[i] starts empty");
@@ -261,33 +261,33 @@ void scenarioOtosSetPoseInMailboxRoundTrip() {
   checkTrue(bb.otosSetPoseIn.empty(), "otosSetPoseIn empty after take()");
 }
 
-// 8. statementsIn (WorkQueue<Subsystems::CommunicatorToCommandProcessorStatement, 16>):
-// post/take a statement with a known line + returnPath, confirm it
+// 8. commandsIn (WorkQueue<Subsystems::CommunicatorToCommandProcessorCommand, 16>):
+// post/take a command with a known line + returnPath, confirm it
 // round-trips BY VALUE with no aliasing -- mutating the source struct (and
 // the local buffer it was built from) after posting must not affect the
 // value already stored in the queue, and the taken copy must be independent
 // of the original (proving the owned char line[256], not an aliasing
-// pointer -- Decision 10). Also confirms statementsIn's exact capacity (16).
-void scenarioStatementsInWorkQueueValueRoundTrip() {
-  beginScenario("Blackboard.statementsIn: WorkQueue<CommunicatorToCommandProcessorStatement,16> "
+// pointer -- Decision 10). Also confirms commandsIn's exact capacity (16).
+void scenarioCommandsInWorkQueueValueRoundTrip() {
+  beginScenario("Blackboard.commandsIn: WorkQueue<CommunicatorToCommandProcessorCommand,16> "
                 "value round-trip, no aliasing, capacity 16");
   Rt::Blackboard bb;
 
-  Subsystems::CommunicatorToCommandProcessorStatement stmt;
-  std::strncpy(stmt.line, "S+150+150", sizeof(stmt.line));
-  stmt.line[sizeof(stmt.line) - 1] = '\0';
-  stmt.returnPath = Subsystems::Channel::RADIO;
+  Subsystems::CommunicatorToCommandProcessorCommand cmd;
+  std::strncpy(cmd.line, "S+150+150", sizeof(cmd.line));
+  cmd.line[sizeof(cmd.line) - 1] = '\0';
+  cmd.returnPath = Subsystems::Channel::RADIO;
 
-  checkTrue(bb.statementsIn.post(stmt), "post() succeeds");
+  checkTrue(bb.commandsIn.post(cmd), "post() succeeds");
 
-  // Mutate the SOURCE struct after posting -- if statementsIn aliased it
+  // Mutate the SOURCE struct after posting -- if commandsIn aliased it
   // (rather than copying by value), this mutation would corrupt the queued
   // entry. It must not.
-  std::strncpy(stmt.line, "CLOBBERED", sizeof(stmt.line));
-  stmt.returnPath = Subsystems::Channel::SERIAL;
+  std::strncpy(cmd.line, "CLOBBERED", sizeof(cmd.line));
+  cmd.returnPath = Subsystems::Channel::SERIAL;
 
-  const Subsystems::CommunicatorToCommandProcessorStatement* peeked = bb.statementsIn.peek(0);
-  checkTrue(peeked != nullptr, "peek(0) is non-null on a non-empty statementsIn");
+  const Subsystems::CommunicatorToCommandProcessorCommand* peeked = bb.commandsIn.peek(0);
+  checkTrue(peeked != nullptr, "peek(0) is non-null on a non-empty commandsIn");
   if (peeked != nullptr) {
     checkTrue(std::strcmp(peeked->line, "S+150+150") == 0,
               "queued entry's line is unaffected by mutating the source struct after post() (no aliasing)");
@@ -295,36 +295,36 @@ void scenarioStatementsInWorkQueueValueRoundTrip() {
               "queued entry's returnPath is unaffected by mutating the source struct after post() (no aliasing)");
   }
 
-  Subsystems::CommunicatorToCommandProcessorStatement taken = bb.statementsIn.take();
+  Subsystems::CommunicatorToCommandProcessorCommand taken = bb.commandsIn.take();
   checkTrue(std::strcmp(taken.line, "S+150+150") == 0, "take() returns the originally posted line, byte-for-byte");
   checkTrue(taken.returnPath == Subsystems::Channel::RADIO, "take() returns the originally posted returnPath");
-  checkTrue(bb.statementsIn.empty(), "statementsIn empty after take()");
+  checkTrue(bb.commandsIn.empty(), "commandsIn empty after take()");
 
   // Mutating the TAKEN copy must not affect a subsequent independent post/take
   // -- proves take() itself returns an independent value, not a reference
   // into internal storage.
   std::strncpy(taken.line, "MUTATED-AFTER-TAKE", sizeof(taken.line));
-  Subsystems::CommunicatorToCommandProcessorStatement stmt2;
-  std::strncpy(stmt2.line, "T+90", sizeof(stmt2.line));
-  stmt2.line[sizeof(stmt2.line) - 1] = '\0';
-  stmt2.returnPath = Subsystems::Channel::SERIAL;
-  bb.statementsIn.post(stmt2);
-  Subsystems::CommunicatorToCommandProcessorStatement taken2 = bb.statementsIn.take();
+  Subsystems::CommunicatorToCommandProcessorCommand cmd2;
+  std::strncpy(cmd2.line, "T+90", sizeof(cmd2.line));
+  cmd2.line[sizeof(cmd2.line) - 1] = '\0';
+  cmd2.returnPath = Subsystems::Channel::SERIAL;
+  bb.commandsIn.post(cmd2);
+  Subsystems::CommunicatorToCommandProcessorCommand taken2 = bb.commandsIn.take();
   checkTrue(std::strcmp(taken2.line, "T+90") == 0,
             "a later independent post/take is unaffected by mutating an earlier taken() copy");
 
   // Exact capacity: 16 (post up to capacity, confirm the 17th is rejected).
   for (int i = 0; i < 16; ++i) {
-    Subsystems::CommunicatorToCommandProcessorStatement d;
+    Subsystems::CommunicatorToCommandProcessorCommand d;
     std::snprintf(d.line, sizeof(d.line), "PING%d", i);
     d.returnPath = Subsystems::Channel::SERIAL;
-    checkTrue(bb.statementsIn.post(d), "post() up to capacity 16 succeeds");
+    checkTrue(bb.commandsIn.post(d), "post() up to capacity 16 succeeds");
   }
-  checkUintEq(bb.statementsIn.size(), 16, "statementsIn holds exactly 16 elements at capacity");
-  Subsystems::CommunicatorToCommandProcessorStatement overflow;
+  checkUintEq(bb.commandsIn.size(), 16, "commandsIn holds exactly 16 elements at capacity");
+  Subsystems::CommunicatorToCommandProcessorCommand overflow;
   std::strncpy(overflow.line, "OVERFLOW", sizeof(overflow.line));
   overflow.returnPath = Subsystems::Channel::NONE;
-  checkFalse(bb.statementsIn.post(overflow), "post() #17 is rejected -- statementsIn capacity is exactly 16");
+  checkFalse(bb.commandsIn.post(overflow), "post() #17 is rejected -- commandsIn capacity is exactly 16");
 }
 
 }  // namespace
@@ -337,7 +337,7 @@ int main() {
   scenarioConfigInWorkQueueCapacity();
   scenarioPoseResetInWorkQueueCapacity();
   scenarioOtosSetPoseInMailboxRoundTrip();
-  scenarioStatementsInWorkQueueValueRoundTrip();
+  scenarioCommandsInWorkQueueValueRoundTrip();
 
   if (g_failureCount == 0) {
     std::printf("OK: all Rt::Blackboard scenarios passed\n");

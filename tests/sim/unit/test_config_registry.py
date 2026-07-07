@@ -92,6 +92,37 @@ def test_set_tw_130_then_get_tw_round_trips_and_visibly_changes_arc_geometry(sim
     assert "vel=35.0,165.0" in after
 
 
+def test_dev_dt_cfg_trackwidth_visibly_changes_arc_geometry(sim):
+    """088-008: the DEV-plane config surface (`DEV DT CFG`,
+    dev_commands.cpp's applyDrivetrainCfgKey/handleDevDtCfg) is a SEPARATE
+    code path from SET's config plane (config_commands.cpp) -- this file's
+    own test_set_tw_130_then_get_tw_round_trips_and_visibly_changes_arc_
+    geometry above only proves the SET path reaches Drivetrain's kinematics.
+    This closes the gap for the bench-diagnostic DEV plane: `DEV DT CFG
+    trackwidth=<n>` must reach the SAME DrivetrainConfig.trackwidth field
+    (confirmed via `GET tw` -- the SET-plane's own read-back -- reflecting
+    the new value) AND visibly split the commanded wheel targets by it,
+    identical to the SET-driven test's own assertions."""
+    reply = sim.command("DEV DT VW 100 0 1.0")
+    assert reply.strip() == "OK DEV DT vx=100.0 vy=0.0 omega=1.000"
+
+    before = sim.command("DEV DT STATE")
+    assert "vel=25.0,175.0" in before
+
+    reply = sim.command("DEV DT CFG trackwidth=130")
+    assert reply.strip() == "OK DEV DT trackwidth=130.0"
+
+    # DEV DT CFG's ConfigDelta lands on the SAME DrivetrainConfig field
+    # SET tw= writes -- GET tw must reflect it too, proving the two config
+    # surfaces converge on one subsystem config, not two independently
+    # shadowed copies.
+    reply = sim.command("GET tw")
+    assert reply.strip() == "CFG tw=130"
+
+    after = sim.command("DEV DT STATE")
+    assert "vel=35.0,165.0" in after
+
+
 def test_set_atomic_failure_applies_neither_key(sim):
     """SET pid.kp=1.5 tw=0 (tw=0 is invalid -- docs/protocol-v2.md §7's own
     documented invariant, division by zero in odometry arc/heading math):

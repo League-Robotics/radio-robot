@@ -14,6 +14,16 @@ resulting binary, assert it exits 0.
 Collected under ``tests/sim/unit/`` alongside the other harness wrappers --
 already within ``pyproject.toml``'s ``testpaths = ["tests/sim"]``, no
 configuration change needed.
+
+088-008 addition: scenario 10 (``scenarioFwdSignNegatesEncoderPositionSign``)
+proves ``msg::MotorConfig::fwd_sign`` genuinely negates the REAL
+``Hal::NezhaMotor``'s reported ``position()`` sign -- the sim-side, real-HAL
+behavioral proof of the mirror-mounted wheel-direction fix (088-002) beyond
+that ticket's own generator/config-value-only check
+(``test_gen_boot_config_fwd_sign.py``), which explicitly could not attempt
+this against ``Hal::SimMotor`` (confirmed by inspection: ``SimMotor`` never
+reads ``config_.fwd_sign`` at all -- only the real ``NezhaMotor`` leaf this
+harness already compiles consumes it).
 """
 
 import pathlib

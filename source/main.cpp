@@ -105,6 +105,18 @@ int main() {
     comm.configure(msg::CommunicatorConfig());
     comm.begin();
 
+    // 088-005: the DEVICE: identity banner is the first line out on BOTH
+    // channels -- before anything else is sent, before the loop starts.
+    // formatDeviceAnnouncement() (commands/system_commands.h) is the same
+    // helper HELLO's handler calls, so a re-request always matches this
+    // boot banner byte-for-byte. Radio is fire-and-forget: a missed boot
+    // radio banner (no relay listening yet) is not a failure -- HELLO is
+    // the reliable re-request path once a relay attaches.
+    char deviceBanner[64];
+    formatDeviceAnnouncement(deviceBanner, sizeof(deviceBanner));
+    comm.sendSerial(deviceBanner);
+    comm.sendRadio(deviceBanner);
+
 #if ROBOT_DEV_BUILD
     // --- HAL: one NezhaMotor per port (1-4) over the shared I2CBus. ---
     static_assert(Config::kMotorConfigCount == Subsystems::NezhaHardware::kPortCount,
@@ -199,16 +211,16 @@ int main() {
         do {
             uBit.sleep(1);   // YIELD: radio delivery + other fibers run
             comm.tick(uBit.systemTime());
-            if (comm.hasStatement()) {
-                // A taken statement is copied into a local
-                // Subsystems::CommunicatorToCommandProcessorStatement (its
-                // line[] is an OWNED buffer -- subsystems/statement.h -- so
+            if (comm.hasCommand()) {
+                // A taken command is copied into a local
+                // Subsystems::CommunicatorToCommandProcessorCommand (its
+                // line[] is an OWNED buffer -- subsystems/wire_command.h -- so
                 // this copy is safe past Communicator's own next tick()).
-                Subsystems::CommunicatorToCommandProcessorStatement statement = comm.takeStatement();
+                Subsystems::CommunicatorToCommandProcessorCommand command = comm.takeCommand();
                 // Feed BEFORE routing -- feeding must never be delayed by
                 // routing/config-priority (the safety-watchdog contract).
                 loop.feedWatchdog(uBit.systemTime());
-                router.route(statement, bb);
+                router.route(command, bb);
             } else if (configurator.pending(bb)) {
                 configurator.applyOne(bb);
             }
@@ -219,15 +231,26 @@ int main() {
     // the file header) -- this minimal liveness-only fallback (no HAL, no
     // DEV, no watchdog) is what proves the ROBOT_DEV_BUILD gate is a real
     // fork rather than a decorative #if 1.
-    static CommandProcessor cmd(systemCommands());
+    //
+    // 088-003: systemCommands() now takes a Rt::CommandRouter& so HELP can
+    // enumerate the live table (see system_commands.h). This fallback has
+    // no Rt::MainLoop/Rt::Blackboard to route through -- `router` exists
+    // solely to bind HELP's handlerCtx; `cmd` (built the same way, from the
+    // same systemCommands(router) table) is what actually dispatches every
+    // line, exactly as before. Since ROBOT_DEV_BUILD is 0 here,
+    // buildTable() (command_router.cpp) registers only the liveness family
+    // for `router` too, so HELP correctly reports just the five liveness
+    // verbs this fallback actually serves.
+    static Rt::CommandRouter router;
+    static CommandProcessor cmd(systemCommands(router));
     cmd.setSerialReply(serialReply, &comm);
 
     while (true) {
         uint32_t now = uBit.systemTime();
 
         comm.tick(now);
-        if (comm.hasStatement()) {
-            Subsystems::CommunicatorToCommandProcessorStatement in = comm.takeStatement();
+        if (comm.hasCommand()) {
+            Subsystems::CommunicatorToCommandProcessorCommand in = comm.takeCommand();
             cmd.process(in.line,
                         in.returnPath == Subsystems::Channel::RADIO ? radioReply
                                                                     : serialReply,

@@ -101,11 +101,11 @@ void checkReply(Rt::CommandRouter& router, Rt::Blackboard& bb, const char* line,
   CaptureReply reply;
   router.setReplyChannels(storeReply, &reply, storeReply, &reply);
 
-  Subsystems::CommunicatorToCommandProcessorStatement stmt;
-  stmt.returnPath = Subsystems::Channel::SERIAL;
-  std::snprintf(stmt.line, sizeof(stmt.line), "%s", line);
+  Subsystems::CommunicatorToCommandProcessorCommand cmd;
+  cmd.returnPath = Subsystems::Channel::SERIAL;
+  std::snprintf(cmd.line, sizeof(cmd.line), "%s", line);
 
-  router.route(stmt, bb);
+  router.route(cmd, bb);
   checkEq(reply.buf, expected, std::string("reply for '") + line + "'");
 }
 

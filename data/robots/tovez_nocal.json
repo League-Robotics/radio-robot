@@ -62,7 +62,8 @@
     "laser_port": 4
   },
   "calibration": {
-
+    "fwd_sign_left": 1,
+    "fwd_sign_right": -1
   },
   "control": {
     "vel_kp": 0.3,

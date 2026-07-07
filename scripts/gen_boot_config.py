@@ -21,6 +21,11 @@ Baked from JSON when present (matching semantics, so no behaviour surprise):
   * geometry.trackwidth               -> DrivetrainConfig.trackwidth
   * calibration.mm_per_wheel_deg_left  -> the left-port motor's travel_calib
   * calibration.mm_per_wheel_deg_right -> the right-port motor's travel_calib
+  * calibration.fwd_sign_left  -> the left-port motor's fwd_sign
+  * calibration.fwd_sign_right -> the right-port motor's fwd_sign
+    (088-002 — the drive pair is mirror-mounted, so these are EXPECTED to
+    differ in sign between the two ports, unlike travel_calib; see
+    fwd_sign_for_ports() and clasi/issues/tovez-drive-motor-reversed-fwd-sign.md)
   * geometry.odometry_offset_mm (x/y/yaw_rad)         -> OtosBootConfig.offsetX/offsetY/offsetYaw
   * calibration.otos_linear_scale/otos_angular_scale  -> OtosBootConfig.linearScale/angularScale
     (086-005 — additive to the mappings above; see otos_boot_config_values()
@@ -34,7 +39,8 @@ MotorConfig would silently break the velocity loop:
   * the velocity PID gains (kp/ki/kff/i_max)
   * vel_filt_alpha (the EMA coefficient — a value of 0 pins reported velocity at
     0 forever regardless of real motion; sprint 077-007 bench story)
-  * fwd_sign, the drive-pair port binding, and the mm/deg PLACEHOLDER
+  * the drive-pair port binding, the FWD_SIGN=1 placeholder for any port the
+    JSON doesn't cover, and the mm/deg PLACEHOLDER
 
 When no robot config is found, everything falls back to these same firmware
 defaults so the build always succeeds.
@@ -69,8 +75,9 @@ VEL_IMAX  = 0.3
 VEL_FILT_ALPHA = 0.3
 
 # fwd_sign multiplies BOTH the drive command and the encoder reading. +1 is the
-# bench placeholder; a specific motor's real sense is set live via `DEV M <n>
-# CFG` (or, later, per-robot JSON).
+# bench placeholder for any port the robot JSON doesn't cover (calibration.
+# fwd_sign_left/fwd_sign_right, 088-002); a specific motor's real sense can
+# still be corrected live via `DEV M <n> CFG`.
 FWD_SIGN = 1
 
 # mm/deg placeholder used for any motor whose travel calibration is not supplied
@@ -194,6 +201,34 @@ def travel_calib_for_ports(cfg: dict):
     return out
 
 
+def fwd_sign_for_ports(cfg: dict):
+    """Return a list of kPortCount fwd_sign values, one per port (1..N).
+
+    Mirrors travel_calib_for_ports()'s exact shape: the left/right drive-pair
+    ports take calibration.fwd_sign_left/right when the robot JSON supplies
+    them; every other port (and the pair, when the JSON omits them) uses the
+    FWD_SIGN placeholder.
+
+    Unlike travel_calib, the drive pair is mirror-mounted (088-002 —
+    clasi/issues/tovez-drive-motor-reversed-fwd-sign.md), so left and right
+    are EXPECTED to differ in sign -- a straight-drive command with equal
+    L/R targets must spin the two wheels in opposite raw-command directions
+    to travel the same physical direction.
+    """
+    cal = cfg.get("calibration", {}) or {}
+    left  = _get(cal, "fwd_sign_left")
+    right = _get(cal, "fwd_sign_right")
+    out = []
+    for port in range(1, K_PORT_COUNT + 1):
+        if port == LEFT_PORT and left is not None:
+            out.append(int(left))
+        elif port == RIGHT_PORT and right is not None:
+            out.append(int(right))
+        else:
+            out.append(FWD_SIGN)
+    return out
+
+
 def otos_boot_config_values(cfg: dict):
     """Return (offsetX, offsetY, offsetYaw, linearScale, angularScale) for the
     OtosBootConfig struct (086-005), reading geometry.odometry_offset_mm's
@@ -219,12 +254,18 @@ def otos_boot_config_values(cfg: dict):
 def generate(cfg: dict, source_path: str) -> str:
     trackwidth   = _get(cfg, "geometry", "trackwidth", default=TRACKWIDTH_DEFAULT)
     travel_calib = travel_calib_for_ports(cfg)
+    fwd_sign     = fwd_sign_for_ports(cfg)
     (otos_offset_x, otos_offset_y, otos_offset_yaw,
      otos_linear_scale, otos_angular_scale) = otos_boot_config_values(cfg)
 
     calib_lines = "\n".join(
         f"    out[{i}].setTravelCalib({_f(v)});   // [mm/deg] port {i + 1}"
         for i, v in enumerate(travel_calib)
+    )
+
+    fwd_sign_lines = "\n".join(
+        f"    out[{i}].setFwdSign({v});   // port {i + 1}"
+        for i, v in enumerate(fwd_sign)
     )
 
     return f"""\
@@ -258,12 +299,19 @@ void defaultMotorConfigs(msg::MotorConfig* out) {{
     for (uint32_t i = 0; i < kMotorConfigCount; ++i) {{
         out[i] = msg::MotorConfig();
         out[i].setPort(i + 1);
-        out[i].setFwdSign({FWD_SIGN});
         out[i].setVelGains(velGains);
         // EMA coeff — see gen_boot_config.py; a=0 would pin reported velocity
         // at 0 forever regardless of real motion.
         out[i].setVelFiltAlpha({_f(VEL_FILT_ALPHA)});
     }}
+
+    // Per-port forward-sign — baked from the robot JSON's calibration.
+    // fwd_sign_{{left,right}} for the drive-pair ports
+    // (ports {LEFT_PORT}/{RIGHT_PORT}); other ports use the bench placeholder
+    // ({FWD_SIGN}). The drive pair is mirror-mounted, so left/right are
+    // expected to differ in sign (088-002 —
+    // clasi/issues/tovez-drive-motor-reversed-fwd-sign.md).
+{fwd_sign_lines}
 
     // Per-port encoder travel calibration — baked from the robot JSON's
     // calibration.mm_per_wheel_deg_{{left,right}} for the drive-pair ports

@@ -2,8 +2,8 @@
 //
 // Sprint 009, Ticket 002: v2 tokenizer, verb-only uppercasing, #id
 // correlation, OK/ERR/EVT/TLM/CFG/ID response taxonomy.
-// Sprint 019, Ticket 011: old Robot& constructor and switch statement removed;
-// all commands now go through the table-dispatch path.
+// Sprint 019, Ticket 011: old Robot& constructor and switch-based dispatch
+// removed; all commands now go through the table-dispatch path.
 
 #include "command_processor.h"
 #include "arg_parse.h"
@@ -358,6 +358,27 @@ void CommandProcessor::replyErrf(char* buf, int size,
     vsnprintf(detail, sizeof(detail), fmt, ap);
     va_end(ap);
     replyErr(buf, size, code, detail, id, fn, ctx);
+}
+
+// ---------------------------------------------------------------------------
+// listVerbs — join every registered descriptor's prefix, space-separated,
+// into buf. See command_processor.h's doc comment (088-003, Decision 2).
+// ---------------------------------------------------------------------------
+
+int CommandProcessor::listVerbs(char* buf, int size) const
+{
+    if (size <= 0) return 0;
+    int pos = 0;
+    for (size_t i = 0; i < _cmds.size(); ++i) {
+        if (i > 0 && pos < size - 1) {
+            buf[pos++] = ' ';
+        }
+        for (const char* c = _cmds[i].prefix; *c != '\0' && pos < size - 1; ++c) {
+            buf[pos++] = *c;
+        }
+    }
+    buf[pos] = '\0';
+    return pos;
 }
 
 // Note: appendKeyValue, handleGet, and handleSet have been moved to

@@ -1,11 +1,12 @@
 // ---------------------------------------------------------------------------
-// system_commands.cpp -- liveness command handlers: PING, VER, HELP, ECHO, ID.
+// system_commands.cpp -- liveness command handlers: PING, VER, HELP, ECHO,
+// ID, HELLO.
 //
 // New file (077-001). Handler bodies ported from
 // source_old/commands/SystemCommands.cpp, with the old Robot*/RobotSysCtx
 // coupling removed -- this firmware has no Robot class. Device identity
 // (microbit_friendly_name() / microbit_serial_number()) is a free CODAL
-// vendor function, so none of the five handlers below need a handlerCtx.
+// vendor function, so none of the six handlers below need a handlerCtx.
 //
 // 081-002: the clock read moved behind Types::systemClockNow()
 // (types/clock.h) -- this was the one remaining direct
@@ -13,6 +14,13 @@
 // identity calls are gated #ifdef HOST_BUILD (fixed host identity strings)
 // so this file can compile host-side ahead of a future sim build; the
 // on-target branch is unchanged.
+//
+// 088-005: re-adds HELLO and the `DEVICE:NEZHA2:robot:<name>:<serial>`
+// identity banner (removed under v1->v2, host still parses/caches it --
+// see clasi/issues/robot-device-announcement-on-connect-and-hello.md).
+// handleId and the new formatDeviceAnnouncement() share one identity-fetch
+// helper (deviceIdentity(), below) instead of duplicating the #ifdef
+// HOST_BUILD branch a second time.
 // ---------------------------------------------------------------------------
 
 #include "system_commands.h"
@@ -26,6 +34,25 @@
 #include <cstdio>
 
 namespace {
+
+// ---------------------------------------------------------------------------
+// deviceIdentity -- the CODAL device-identity pair every identity-bearing
+// reply (ID, the DEVICE: banner, HELLO) reports. #ifdef HOST_BUILD
+// substitutes the same fixed placeholder identity handleId has always used
+// (name/serial below), so the sim build can format an identity reply with
+// no hardware or sim board present. The single place this branch lives --
+// handleId and formatDeviceAnnouncement() both call it, so the two never
+// drift apart.
+// ---------------------------------------------------------------------------
+void deviceIdentity(const char** name, uint32_t* serial) {
+#ifdef HOST_BUILD
+  *name   = "HOST-SIM";
+  *serial = 0;
+#else
+  *name   = microbit_friendly_name();
+  *serial = microbit_serial_number();
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // PING -- clock-sync probe.
@@ -55,14 +82,26 @@ void handleVer(const ArgList& /*args*/, const char* corrId,
 }
 
 // ---------------------------------------------------------------------------
-// HELP -- list all verbs.
+// HELP -- list every registered verb.
 //   prefix "HELP"; parseFn nullptr.
-//   Reply: OK help <verb list>
+//   Reply: OK help <space-separated verbs> [#id]
+//
+// Reads the LIVE registered command table via CommandRouter::listVerbs()
+// (handlerCtx cast to Rt::CommandRouter*, the same pattern every other
+// command family already uses to reach shared runtime state -- see
+// dev_commands.cpp's own `bb(handlerCtx)` helper) -- not a hardcoded
+// string. HELP is the only liveness handler with a non-null handlerCtx
+// (see systemCommands() below); adding or removing a command family
+// changes this reply with no edit here (088-003, Decision 2).
 // ---------------------------------------------------------------------------
 void handleHelp(const ArgList& /*args*/, const char* corrId,
-                 ReplyFn replyFn, void* replyCtx, void* /*handlerCtx*/) {
-  char rbuf[128];
-  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "help", "PING VER HELP ECHO ID",
+                 ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
+  auto* router = static_cast<Rt::CommandRouter*>(handlerCtx);
+  char verbs[256];
+  router->listVerbs(verbs, sizeof(verbs));
+
+  char rbuf[320];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "help", verbs,
                              corrId, replyFn, replyCtx);
 }
 
@@ -101,15 +140,9 @@ void handleEcho(const ArgList& args, const char* corrId,
 // ---------------------------------------------------------------------------
 void handleId(const ArgList& /*args*/, const char* corrId,
               ReplyFn replyFn, void* replyCtx, void* /*handlerCtx*/) {
-#ifdef HOST_BUILD
-  // No CODAL identity to read host-side -- fixed placeholder identity (see
-  // this file's header note and architecture-update.md's Impact table).
-  const char* name   = "HOST-SIM";
-  uint32_t    serial = 0;
-#else
-  const char* name   = microbit_friendly_name();
-  uint32_t    serial = microbit_serial_number();
-#endif
+  const char* name;
+  uint32_t    serial;
+  deviceIdentity(&name, &serial);
 
   char rbuf[160];
   if (corrId && corrId[0] != '\0') {
@@ -124,14 +157,51 @@ void handleId(const ArgList& /*args*/, const char* corrId,
   replyFn(rbuf, replyCtx);
 }
 
+// ---------------------------------------------------------------------------
+// HELLO -- re-request the firmware's own identity banner.
+//   prefix "HELLO"; parseFn nullptr.
+//   Reply: DEVICE:NEZHA2:robot:<name>:<serial> -- a bare reply, like ID's
+//   own "ID ..." tag: no OK/ERR wrapper, DEVICE: is its own reply taxonomy.
+//
+// Re-emits on whichever channel HELLO arrived on: replyFn/replyCtx are
+// already resolved to that channel by the time a handler runs (the same
+// mechanism every other liveness handler's reply already uses), so no
+// channel selection logic belongs here. The banner is byte-identical to
+// main.cpp's boot-time announcement -- both call formatDeviceAnnouncement()
+// (088-005, architecture-update.md Decision 3) -- so no corrId is echoed
+// back into it.
+// ---------------------------------------------------------------------------
+void handleHello(const ArgList& /*args*/, const char* /*corrId*/,
+                  ReplyFn replyFn, void* replyCtx, void* /*handlerCtx*/) {
+  char banner[64];
+  formatDeviceAnnouncement(banner, sizeof(banner));
+  replyFn(banner, replyCtx);
+}
+
 }  // namespace
 
-std::vector<CommandDescriptor> systemCommands() {
+// ---------------------------------------------------------------------------
+// formatDeviceAnnouncement -- see system_commands.h's doc comment. Defined
+// here (external linkage, per the header declaration) rather than inside
+// the anonymous namespace above, but reuses deviceIdentity() -- an
+// anonymous-namespace helper with internal linkage, visible for the rest of
+// this translation unit.
+// ---------------------------------------------------------------------------
+int formatDeviceAnnouncement(char* buf, int size) {
+  const char* name;
+  uint32_t    serial;
+  deviceIdentity(&name, &serial);
+  return snprintf(buf, size, "DEVICE:NEZHA2:robot:%s:%lu",
+                   name, (unsigned long)serial);
+}
+
+std::vector<CommandDescriptor> systemCommands(Rt::CommandRouter& router) {
   std::vector<CommandDescriptor> cmds;
-  cmds.push_back(makeCmd("PING", nullptr, handlePing, nullptr, "badarg"));
-  cmds.push_back(makeCmd("VER",  nullptr, handleVer,  nullptr, "badarg"));
-  cmds.push_back(makeCmd("HELP", nullptr, handleHelp, nullptr, "badarg"));
+  cmds.push_back(makeCmd("PING",  nullptr, handlePing,  nullptr, "badarg"));
+  cmds.push_back(makeCmd("VER",   nullptr, handleVer,   nullptr, "badarg"));
+  cmds.push_back(makeCmd("HELP",  nullptr, handleHelp,  &router, "badarg"));
   cmds.push_back(makeSchemaCmd("ECHO", &kEchoSchema, handleEcho, nullptr, "badarg"));
-  cmds.push_back(makeCmd("ID",   nullptr, handleId,   nullptr, "badarg"));
+  cmds.push_back(makeCmd("ID",    nullptr, handleId,    nullptr, "badarg"));
+  cmds.push_back(makeCmd("HELLO", nullptr, handleHello, nullptr, "badarg"));
   return cmds;
 }

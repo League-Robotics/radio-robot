@@ -32,7 +32,7 @@ public:
     CommandProcessor() = default;
     explicit CommandProcessor(std::vector<CommandDescriptor> cmds);
 
-    // Parse and dispatch one statement line. line must be NUL-terminated.
+    // Parse and dispatch one command line. line must be NUL-terminated.
     // Calls replyFn(msg, ctx) for each response line.
     void process(const char* line, ReplyFn replyFn, void* ctx);
 
@@ -139,6 +139,19 @@ public:
                           ReplyFn fn, void* ctx,
                           const char* fmt, ...)
         __attribute__((format(printf, 7, 8)));
+
+    /**
+     * listVerbs — write every registered descriptor's prefix into
+     * buf[0..size-1], space-separated (e.g. "PING VER HELP ... DEV M ...").
+     *
+     * The sole read path onto the registered command table from outside
+     * this class — keeps _cmds private (088-003, Decision 2). HELP's
+     * handler is the only caller today, via CommandRouter::listVerbs().
+     *
+     * Returns the length written (buffer-writing convention, matching
+     * replyOK/replyErr above). Truncates silently if buf is too small.
+     */
+    int listVerbs(char* buf, int size) const;
 
 private:
     std::vector<CommandDescriptor> _cmds;

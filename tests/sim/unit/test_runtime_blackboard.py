@@ -3,10 +3,10 @@
 Compiles ``runtime_blackboard_harness.cpp`` (default-constructing
 ``Rt::Blackboard`` from ``source/runtime/blackboard.h`` and round-tripping a
 representative post/take on every command-plane queue/mailbox, including
-``statementsIn``'s ``Subsystems::CommunicatorToCommandProcessorStatement``
+``commandsIn``'s ``Subsystems::CommunicatorToCommandProcessorCommand``
 payload from the newly extracted, CODAL-free ``source/subsystems/
-statement.h``) with the system C++ compiler, runs the resulting binary, and
-asserts it exits 0. Both ``blackboard.h`` and ``statement.h`` are
+wire_command.h``) with the system C++ compiler, runs the resulting binary, and
+asserts it exits 0. Both ``blackboard.h`` and ``wire_command.h`` are
 dependency-free beyond ``<cstdint>``/``messages/*.h``/``runtime/queue.h``/
 ``subsystems/hardware.h`` -- no MicroBit.h, no I2CBus, no CMake, no ARM
 toolchain. Mirrors ``test_runtime_queue.py``'s shape exactly (see that

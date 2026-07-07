@@ -2,7 +2,7 @@
 
 This is a stub.  The AprilCam draw tool does not exist yet.  When it
 ships, this is the single place to wire the call: replace the log
-statement in ``preview_polyline`` with the actual MCP/API call.
+call in ``preview_polyline`` with the actual MCP/API call.
 """
 
 from __future__ import annotations

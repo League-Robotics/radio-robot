@@ -274,7 +274,7 @@ void runComparison(uint32_t leftPort, uint32_t rightPort, float leftDuty, float 
   plannerA.configure(msg::PlannerConfig());
   Rt::Blackboard bbA;
   // Never actually dispatched through (this harness never routes a
-  // statement) -- Rt::MainLoop::tick() itself needs no CommandRouter/
+  // command) -- Rt::MainLoop::tick() itself needs no CommandRouter/
   // Configurator reference at all (087-007: those stay top-level objects
   // the SLACK phase alone calls -- see main_loop.h's class comment), unlike
   // ticket 006's transitional LoopContext, which needed both to link.

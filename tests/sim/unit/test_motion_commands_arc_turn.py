@@ -155,6 +155,28 @@ def test_rt_negative_relangle_rotates_the_opposite_direction(sim):
     assert "EVT done RT reason=rot" in evts
 
 
+def test_rt_spin_moves_the_two_wheels_in_opposite_directions(sim):
+    """088-008: closes the same gap test_motion_commands.py's own
+    test_d_straight_drive_moves_both_wheels_the_same_sign closes for D, on
+    the opposite case -- RT's in-place rotation must drive the two wheels'
+    true (ground-truth, unslipped) travel in OPPOSITE directions. Checks
+    only the SIGN relationship, not the converged magnitude -- the exact
+    rotation magnitude is this file's own xfail'd 087-007/009 latency
+    regression (test_rt_rotates_about_90_degrees_and_emits_done_rot, above);
+    the sign relationship asserted here is unaffected by that regression."""
+    reply = sim.command("RT 9000")
+    assert reply.strip() == "OK rt rot=9000"
+
+    sim.tick_for(500)
+    enc_l, enc_r = sim.true_wheel_travel()
+    assert abs(enc_l) > 5.0 and abs(enc_r) > 5.0, (
+        f"expected meaningful wheel travel on both sides mid-rotation, got enc=({enc_l}, {enc_r})"
+    )
+    assert (enc_l > 0) != (enc_r > 0), (
+        f"expected opposite-sign wheel travel for an in-place RT rotation, got enc=({enc_l}, {enc_r})"
+    )
+
+
 def test_rt_stop_clause_time_fires_before_built_in_rotation_stop(sim):
     reply = sim.command("RT 9000 stop=t:100")
     assert reply.strip() == "OK rt rot=9000"
