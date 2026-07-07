@@ -70,6 +70,28 @@ Duty writes happen **at collect time only** — the lazy-timer issue's constrain
 | 2 ports in use | ~11–13 ms (~80–90 Hz) | ~75–80% | ~10 ms, ~8 ms spun |
 | 4 ports in use | ~21–26 ms (~40–47 Hz) | ~75–80% | ~32 ms loop, ~100% blocked; bound pair sampled unevenly |
 
+> **CORRECTION (sprint 086-008/009, measured 2026-07-06, fw `0.20260706.17`).**
+> The 2-port row's **~11–13 ms (~80–90 Hz)** estimate above is OPTIMISTIC and
+> was superseded by the 079-006 TWIM-stall fix, which landed AFTER this
+> sketch. This estimate assumed a per-port slot of ~5.3–6.5 ms with only
+> ~1.3–2.2 ms bus-blocked. In reality, 079-006 added a `preClear=4000` /
+> `postClear=4000` clearance pair on every `0x10` transaction
+> ([nezha_motor.cpp:382-406](../../../../source/hal/nezha/nezha_motor.cpp)) —
+> a mandatory ≥4 ms gap that stops the multi-second CODAL `waitForStop()`
+> stalls the split-phase design would otherwise hit. Each port-visit
+> therefore pays **two** genuinely-separate ~4 ms clearance windows
+> (request→settle→collect, then collect/duty→next-request), ≈ 9.5–10.5 ms per
+> port-visit, so the **real 2-port budget is ~19–21 ms (~48–52 Hz)** — half
+> the estimate. Measured on the stand via pyOCD/gdb reads of `I2CBus::_log`
+> timestamps (086-008 completion notes for the full per-phase table). The
+> two 4 ms clearances are NOT double-counted (`I2CBus`'s
+> `max(readyAt, lastEnd+preClear)` collapses the paired post/preClear on the
+> same device to one window — measured `0x60`→`0x46` gap ~4.97 ms, not ~8 ms);
+> they are simply two distinct, irreducible gaps per port-visit. The embedded
+> PID closes the loop cleanly at ~52 Hz; this is the accepted real budget,
+> not a defect. (The 4-port row's ~21–26 ms was closer but is likewise a
+> lower bound for the same reason.)
+
 Underrated win: **comms get polled every ~1 ms instead of every ~32 ms** — statement latency and watchdog granularity improve ~30×.
 
 PID `dt` is already measured — cadence change absorbed. But `vel_filt_alpha` was bench-tuned at the old cadence — **retune on the stand** (the alpha=0 episode shows this class fails silently).
@@ -171,6 +193,14 @@ Which requires the drivetrain to know its ports: **the port binding moves into D
 | 7–10 | pass | free — an OTOS read fits here (case 5) |
 | 11 | **collectP2** → PID → write | |
 | 12 | **reqP1** — per-motor period ≈ 12 ms (~83 Hz), ~9.5 of every 12 ms free | |
+
+> **CORRECTION (086-008/009):** this timeline assumes a single 4 ms settle per
+> port-visit (`collectP1` at t=5 → `reqP2` at t=6, a ~1 ms gap). Measured
+> reality after the 079-006 clearance fix: the `collect`/duty→next-`request`
+> transition ALSO pays a full ~4 ms clearance (measured ~4.97 ms), so `reqP2`
+> lands at ~t=9.5, `collectP2` at ~t=14, and `reqP1` recurs at **~t=19, not
+> t=12** — per-motor period **≈ 19 ms (~52 Hz)**. See the cadence-table
+> correction above and 086-008's completion notes.
 
 **Case 3 — reversal, the dwell as the deeper flip-flop.** Cruising at VEL +120 (~+60% duty); `DEV M 1 VEL -120` arrives. Processor emits an addressed HAL command; the staged target is **overwritten** (latest-wins). Next collect: PID goes negative → write path sees the sign change → writes 0 immediately, opens the 100 ms dwell. For ~8 collects the PID keeps computing while `writeDuty` suppresses non-zero writes — **neither the processor, the outboxes, nor the Drivetrain knows**. First collect past the dwell: slew from 0 → −25%. "Consume at the right time" is entirely the write layer's internal state.
 
