@@ -19,9 +19,12 @@
 //   - why DevLoopStatement is a plain, caller-owned, single-call-lifetime
 //     pointer rather than a second held/taken state machine mirroring
 //     Subsystems::Communicator's own (Communicator's
-//     CommunicatorToCommandProcessorStatement.line aliases Communicator's
-//     OWN buffer and unconditionally pulls in MicroBit.h -- it cannot be the
-//     shared statement type this file depends on);
+//     CommunicatorToCommandProcessorStatement -- source/subsystems/
+//     statement.h as of sprint 087 -- unconditionally pulls in MicroBit.h
+//     transitively via communicator.h, so it cannot be the shared statement
+//     type this file depends on; its line[] is an owned fixed-size buffer,
+//     not an alias into Communicator's own state, but the type itself is
+//     still off-limits here for the MicroBit.h reason above);
 //   - why DevLoop carries its own defaultReply/defaultReplyCtx pair: the
 //     watchdog-fire `EVT dev_watchdog` reply is not triggered by any inbound
 //     statement, so it has no statement-supplied replyFn/replyCtx to reuse.

@@ -42,26 +42,9 @@
 #include "com/radio.h"
 #include "com/serial_port.h"
 #include "messages/communicator.h"
+#include "subsystems/statement.h"
 
 namespace Subsystems {
-
-// Which comms channel a statement line arrived on -- and therefore where its
-// reply must be sent.
-enum class Channel : uint8_t { NONE, SERIAL, RADIO };
-
-// Command-out edge type, named by its endpoints
-// (<Producer>To<Consumer><Payload> per .claude/rules/naming-and-style.md,
-// payload=Statement): one parsable statement line plus its return path.
-struct CommunicatorToCommandProcessorStatement {
-  // nullptr when takeStatement() is called with nothing held. Otherwise
-  // aliases the Communicator's internal line buffer: valid only until the
-  // next tick() that resumes polling. CONTRACT: the consumer copies the
-  // line before that happens -- today's only consumer,
-  // CommandProcessor::process(), copies it into its own working buffer
-  // synchronously before returning, so this holds.
-  const char* line;
-  Channel returnPath;  // where the reply to this line must be sent
-};
 
 class Communicator {
  public:
@@ -94,8 +77,10 @@ class Communicator {
   bool hasStatement() const { return hasStatement_; }
 
   // Command-out channel, taken half. Clears the held flag so the next
-  // tick() may resume polling. See the struct's own comment for the
-  // aliasing/copy contract on the returned line.
+  // tick() may resume polling. Copies the held line into the returned
+  // struct's own owned buffer (subsystems/statement.h) -- the caller may
+  // hold the result past the next tick() without it being overwritten out
+  // from under them (e.g. once queued by value in an Rt::WorkQueue).
   CommunicatorToCommandProcessorStatement takeStatement();
 
   msg::CommunicatorState state() const;

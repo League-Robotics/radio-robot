@@ -2,6 +2,8 @@
 // communicator.h for the class-level design notes.
 #include "subsystems/communicator.h"
 
+#include <cstring>
+
 #include "com/radio_channel.h"
 
 namespace Subsystems {
@@ -56,8 +58,14 @@ void Communicator::tick(uint32_t now) {
 
 CommunicatorToCommandProcessorStatement Communicator::takeStatement() {
   CommunicatorToCommandProcessorStatement out;
-  out.line = hasStatement_ ? line_ : nullptr;
-  out.returnPath = hasStatement_ ? heldReturnPath_ : Channel::NONE;
+  if (hasStatement_) {
+    std::strncpy(out.line, line_, sizeof(out.line));
+    out.line[sizeof(out.line) - 1] = '\0';
+    out.returnPath = heldReturnPath_;
+  } else {
+    out.line[0] = '\0';
+    out.returnPath = Channel::NONE;
+  }
   hasStatement_ = false;
   heldReturnPath_ = Channel::NONE;
   return out;

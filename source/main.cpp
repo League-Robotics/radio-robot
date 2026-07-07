@@ -319,8 +319,15 @@ int main() {
         comm.tick(now);
         DevLoopStatement stmt;
         const DevLoopStatement* stmtPtr = nullptr;
+        // 'in' is declared at this (loop-iteration) scope, not inside the
+        // if-block below: stmt.line aliases in.line, and since 087-002
+        // in.line is an OWNED buffer (subsystems/statement.h), not a pointer
+        // into Communicator's own persistent line_[] -- it must outlive the
+        // devLoopTick() call that reads through stmtPtr, so it cannot be
+        // scoped to (and destroyed at the end of) the if-block alone.
+        Subsystems::CommunicatorToCommandProcessorStatement in;
         if (comm.hasStatement()) {
-            Subsystems::CommunicatorToCommandProcessorStatement in = comm.takeStatement();
+            in = comm.takeStatement();
             stmt.line = in.line;
             stmt.replyFn = in.returnPath == Subsystems::Channel::RADIO ? radioReply
                                                                         : serialReply;

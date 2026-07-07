@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Rt::Blackboard state and command planes
-status: exception
+status: done
 use-cases:
 - SUC-001
 - SUC-006
@@ -111,41 +111,41 @@ code subsection for the exact header content.
 
 ## Acceptance Criteria
 
-- [ ] `source/subsystems/statement.h` exists, is CODAL-free (only
+- [x] `source/subsystems/statement.h` exists, is CODAL-free (only
       `<cstdint>`), and defines `Subsystems::Channel` and
       `Subsystems::CommunicatorToCommandProcessorStatement` (with an owned
       `char line[256]`, not an aliasing pointer).
-- [ ] `source/subsystems/communicator.h` includes `subsystems/statement.h`
+- [x] `source/subsystems/communicator.h` includes `subsystems/statement.h`
       and no longer defines `Channel`/`CommunicatorToCommandProcessorStatement`
       inline; `communicator.cpp`'s `takeStatement()` copies into the owned
       buffer. `Communicator`'s public faceplate (`configure()`, `begin()`,
       `tick()`, `hasStatement()`, `takeStatement()`, `state()`,
       `capabilities()`, `sendSerial()`, `sendRadio()`) is unchanged in
       signature.
-- [ ] `Rt::Blackboard` compiles and default-constructs with every cell
+- [x] `Rt::Blackboard` compiles and default-constructs with every cell
       zero/default-initialized; the header includes only `messages/*.h`,
       `runtime/queue.h`, `subsystems/hardware.h` (for the `kPortCount`
       constant only), and **`subsystems/statement.h`** (for `statementsIn`'s
       payload type) — per the Reference code in `architecture-update-r1.md`.
-- [ ] Every state cell listed in `architecture-update-r1.md`'s Reference code
+- [x] Every state cell listed in `architecture-update-r1.md`'s Reference code
       is present with the exact `msg::` type named there.
-- [ ] Every command-plane queue is present with the exact vehicle
+- [x] Every command-plane queue is present with the exact vehicle
       (`Mailbox` vs. `WorkQueue`) and capacity named there: `statementsIn`
       (`WorkQueue`, 16), `configIn` (`WorkQueue`, 16), `poseResetIn`
       (`WorkQueue`, 4), `driveIn`/`motorIn[i]`/`otosSetPoseIn` (`Mailbox`,
       capacity 1).
-- [ ] `Rt::PoseResetCommand` (`kind` enum `{kSetPose, kResetBaseline}` +
+- [x] `Rt::PoseResetCommand` (`kind` enum `{kSetPose, kResetBaseline}` +
       `msg::SetPose pose`) and `Rt::ConfigDelta` (`target` enum
       `{kDrivetrain, kMotor, kPlanner, kOdometer}` + `port` + a field-mask
       placeholder) are defined in `source/runtime/blackboard.h` exactly as
       specified.
-- [ ] Grepping `source/runtime/blackboard.h` for any `Subsystems::` type
+- [x] Grepping `source/runtime/blackboard.h` for any `Subsystems::` type
       used as a pointer/reference member (as opposed to the `kPortCount`
       constant reference and the `statementsIn` payload's type name) returns
       nothing — i.e., `Subsystems::CommunicatorToCommandProcessorStatement`
       appearing as a `WorkQueue` template argument is expected and fine; a
       `Subsystems::*` pointer or reference member would not be.
-- [ ] `tests/sim/unit/runtime_blackboard_harness.cpp` (and any harness that
+- [x] `tests/sim/unit/runtime_blackboard_harness.cpp` (and any harness that
       includes `blackboard.h`) compiles and links with the plain host C++
       compiler, no ARM toolchain, no `MicroBit.h` transitively included —
       confirmed by the harness's own build command carrying no CODAL
@@ -188,3 +188,33 @@ block. No `.cpp` for the Blackboard itself — pure aggregate, no logic.
 
 **Documentation updates:** none beyond `architecture-update-r1.md` (already
 written).
+
+## Implementation Notes (post-execution)
+
+- No existing `Communicator`/`takeStatement()` host test existed to update
+  (it is CODAL-only and was never host-tested); nothing needed the
+  aliasing-pointer contract update on the host side.
+- One CODAL-only call site beyond the plan's file list needed a follow-on
+  fix: `source/main.cpp`'s `ROBOT_DEV_BUILD` loop built a `DevLoopStatement`
+  (`source/dev_loop.h`) whose `line` field aliased `in.line` where `in` was
+  a `Subsystems::CommunicatorToCommandProcessorStatement` scoped to the
+  `if (comm.hasStatement())` block. Under the pre-r1 aliasing contract this
+  was safe (`in.line` pointed into `Communicator`'s own persistent buffer,
+  valid past the block). Under the new owned-copy contract, `in.line` is a
+  member of `in` itself, so `stmt.line`'s pointer would have gone dangling
+  the moment `in` went out of scope at the end of the if-block — before
+  `devLoopTick()` (which reads through it) was even called. Fixed by
+  widening `in`'s declaration to loop-iteration scope (same scope as
+  `stmt`/`stmtPtr`), so it stays alive through the `devLoopTick()` call.
+  Also updated a stale comment in `dev_loop.h` that described the old
+  aliasing shape. This is a mechanical lifetime fix, not a scope/design
+  change — flagged here since `main.cpp` wasn't in the plan's file list.
+  Verified by inspection, a standalone host snippet proving the
+  struct-assignment/array-decay pattern compiles and behaves as expected,
+  and `clangd --check` (see the ticket's final report for the CODAL-toolchain
+  caveat: this repo's `compile_commands.json` hits a pre-existing,
+  environment-wide `<cstdint>`/`<vector>` header-resolution mismatch under
+  clangd's ARM-toolchain emulation, reproduced identically on an untouched,
+  unrelated file — so clangd's own diagnostics past that point are
+  inconclusive; no diagnostic specific to the edited lines was found before
+  that cascade).
