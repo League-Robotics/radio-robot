@@ -1,25 +1,15 @@
 ---
-id: "001"
-title: "Command-plane queue primitives (Rt::Mailbox, Rt::WorkQueue)"
-status: open
-use-cases: [SUC-001, SUC-002, SUC-006]
+id: '001'
+title: Command-plane queue primitives (Rt::Mailbox, Rt::WorkQueue)
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-006
 depends-on: []
-github-issue: ""
+github-issue: ''
 issue: plan-file-a-design-issue-blackboard-architecture-state-objects-command-queues.md
-# completes_issue: Controls whether linked issues are archived when this ticket
-# is moved to done. Default: true (archive when all referencing tickets are done).
-# Set to false (scalar) to suppress archival for ALL linked issues on this ticket.
-# Set to a mapping {filename.md: false} to suppress archival per issue filename.
-# Use false for tickets that partially address a multi-sprint umbrella issue.
 completes_issue: true
-# exception: Written by a lower agent when it cannot proceed (see architecture §exception-protocol).
-# exception:
-#   thrown_by: "programmer"          # "programmer" | "sprint-planner"
-#   thrown_at: "2026-05-07T14:23:00Z"
-#   attempted: |
-#     Description of what was attempted before giving up.
-#   conflict: "architecture-update.md §3 — reason the agent is blocked"
-#   surface: "internal"              # "user-visible" | "internal"
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -41,22 +31,22 @@ blackboard/queue-shaped code exists anywhere in `source/` today).
 
 ## Acceptance Criteria
 
-- [ ] `Rt::Mailbox<T>`: `post()` overwrites any unread value; `empty()`
+- [x] `Rt::Mailbox<T>`: `post()` overwrites any unread value; `empty()`
       accurately reflects fill state; `take()` returns the latest posted
       value and clears the full flag; a `take()` on an empty mailbox is
       well-defined (returns a default-constructed `T`, stays empty).
-- [ ] `Rt::WorkQueue<T,N>`: `post()` appends in FIFO order and returns
+- [x] `Rt::WorkQueue<T,N>`: `post()` appends in FIFO order and returns
       `false` when at capacity N (never silently overwrites or drops
       without signaling full); `take()` pops front in FIFO order; `peek(i)`
       is non-destructive and matches `take()`'s eventual order; `size()`/
       `empty()` are accurate after any sequence of `post`/`take`.
-- [ ] Both templates compile with zero dependencies beyond `<cstdint>` (no
+- [x] Both templates compile with zero dependencies beyond `<cstdint>` (no
       `MicroBit.h`, no `I2CBus`, no `msg::` types required to compile the
       template itself) — instantiable with any trivially-copyable payload,
       verified by instantiating with at least one plain POD test type and
       at least one real `msg::` type (e.g. `msg::MotorCommand`) in the test
       harness.
-- [ ] No heap allocation — `WorkQueue` uses a fixed-size array member,
+- [x] No heap allocation — `WorkQueue` uses a fixed-size array member,
       `Mailbox` a single value member — consistent with the project's
       no-heap-in-hot-path constraint (`docs/architecture/architecture-034.md`
       §11).
