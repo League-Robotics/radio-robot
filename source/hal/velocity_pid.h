@@ -43,6 +43,13 @@ class MotorVelocityPid {
 
   // Persistent integrator state — the only state this class owns.
   float integral_ = 0.0f;
+
+  // Edge-detector for the integrator-freeze deadband (086-002 fix — see
+  // compute()'s own comment at the reset site for the invariant this
+  // preserves): true whenever the PREVIOUS call was already inside the
+  // deadband, so compute() can tell a fresh entry (reset the integrator)
+  // apart from continuing to sit in it (stay frozen, as before).
+  bool wasInDeadband_ = false;
 };
 
 }  // namespace Hal

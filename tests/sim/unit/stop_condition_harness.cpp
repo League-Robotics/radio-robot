@@ -12,6 +12,7 @@
 // Run by test_stop_condition.py, which compiles and runs this binary via
 // subprocess.
 
+#include <cmath>
 #include <cstdio>
 #include <string>
 
@@ -247,6 +248,136 @@ void scenarioNoneNeverFires() {
               Motion::StopEvalResult::NOT_FIRED, "STOP_NONE never fires, at any time");
 }
 
+// --- remainingToStop (086-003) ---
+
+void checkFloatNear(float actual, float expected, float tol, const std::string& what) {
+  if (std::fabs(actual - expected) > tol) {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "%s -- expected %g (+/- %g), got %g", what.c_str(),
+                  static_cast<double>(expected), static_cast<double>(tol),
+                  static_cast<double>(actual));
+    fail(buf);
+  }
+}
+
+void scenarioRemainingToStopDistanceShrinksToZero() {
+  beginScenario("remainingToStop(STOP_DISTANCE) shrinks as encoder travel approaches the threshold");
+  msg::StopCondition c;
+  c.kind = msg::StopKind::STOP_DISTANCE;
+  c.a = 100.0f;  // [mm]
+  Motion::MotionBaseline base;
+  base.enc0 = 0.0f;
+  base.vSign = 1.0f;
+  msg::PoseEstimate pose{};
+
+  float remaining = -1.0f;
+  checkResult(Motion::remainingToStop(c, base, obsPosition(50.0f), obsPosition(50.0f), pose, &remaining),
+              Motion::StopEvalResult::NOT_FIRED, "50mm traveled, still short of 100mm");
+  checkFloatNear(remaining, 50.0f, 1e-4f, "50mm remain of the 100mm threshold");
+
+  checkResult(Motion::remainingToStop(c, base, obsPosition(90.0f), obsPosition(90.0f), pose, &remaining),
+              Motion::StopEvalResult::NOT_FIRED, "90mm traveled, still short of 100mm");
+  checkFloatNear(remaining, 10.0f, 1e-4f, "10mm remain of the 100mm threshold");
+
+  checkResult(Motion::remainingToStop(c, base, obsPosition(100.0f), obsPosition(100.0f), pose, &remaining),
+              Motion::StopEvalResult::FIRED, "100mm traveled == the 100mm threshold");
+  checkFloatNear(remaining, 0.0f, 1e-4f, "0mm remain once the threshold is reached");
+
+  // Overshoot past the threshold clamps at 0.0f, never negative.
+  checkResult(Motion::remainingToStop(c, base, obsPosition(150.0f), obsPosition(150.0f), pose, &remaining),
+              Motion::StopEvalResult::FIRED, "150mm traveled, past the 100mm threshold");
+  checkFloatNear(remaining, 0.0f, 1e-4f, "remaining clamps at 0.0f, never negative, past the threshold");
+}
+
+void scenarioRemainingToStopDistanceMissingObservationReportsFullRemaining() {
+  beginScenario("remainingToStop(STOP_DISTANCE) with a missing encoder observation reports the full distance");
+  msg::StopCondition c;
+  c.kind = msg::StopKind::STOP_DISTANCE;
+  c.a = 100.0f;  // [mm]
+  Motion::MotionBaseline base;
+  base.vSign = 1.0f;
+  msg::PoseEstimate pose{};
+
+  float remaining = -1.0f;
+  checkResult(Motion::remainingToStop(c, base, obsNoPosition(), obsPosition(1000.0f), pose, &remaining),
+              Motion::StopEvalResult::NOT_FIRED, "missing left observation never fabricates a phantom delta");
+  checkFloatNear(remaining, 100.0f, 1e-4f,
+                 "conservatively reports the full 100mm threshold as still remaining");
+}
+
+void scenarioRemainingToStopRotationShrinksToZero() {
+  beginScenario("remainingToStop(STOP_ROTATION) shrinks as the per-wheel arc approaches the threshold");
+  msg::StopCondition c;
+  c.kind = msg::StopKind::STOP_ROTATION;
+  c.a = 50.0f;  // [mm] target per-wheel arc
+  Motion::MotionBaseline base;
+  base.encDiff0 = 0.0f;
+  base.omegaSign = 1.0f;  // commanded CCW
+  msg::PoseEstimate pose{};
+
+  // diff = right - left; arc = |diff|/2.
+  float remaining = -1.0f;
+  checkResult(
+      Motion::remainingToStop(c, base, obsPosition(-20.0f), obsPosition(20.0f), pose, &remaining),
+      Motion::StopEvalResult::NOT_FIRED, "arc=20mm, still short of the 50mm threshold");
+  checkFloatNear(remaining, 30.0f, 1e-4f, "30mm of arc remain of the 50mm threshold");
+
+  checkResult(
+      Motion::remainingToStop(c, base, obsPosition(-50.0f), obsPosition(50.0f), pose, &remaining),
+      Motion::StopEvalResult::FIRED, "arc=50mm reaches the threshold");
+  checkFloatNear(remaining, 0.0f, 1e-4f, "0mm of arc remain once the threshold is reached");
+}
+
+void scenarioRemainingToStopHeadingShrinksToZero() {
+  beginScenario("remainingToStop(STOP_HEADING) shrinks as the fused heading approaches the target delta");
+  msg::StopCondition c;
+  c.kind = msg::StopKind::STOP_HEADING;
+  c.a = 1.5707963f;  // [rad] target delta: +90 deg
+  c.b = 0.05f;        // [rad] eps
+  Motion::MotionBaseline base;
+  base.heading0 = 0.0f;
+  msg::MotorState left = obsNoPosition();
+  msg::MotorState right = obsNoPosition();
+
+  float remaining = -1.0f;
+  checkResult(Motion::remainingToStop(c, base, left, right, poseAt(0, 0, 0.0f), &remaining),
+              Motion::StopEvalResult::NOT_FIRED, "still at the starting heading");
+  checkFloatNear(remaining, 1.5707963f, 1e-4f, "full 90 deg of heading error remains at the start");
+
+  checkResult(Motion::remainingToStop(c, base, left, right, poseAt(0, 0, 0.78f), &remaining),
+              Motion::StopEvalResult::NOT_FIRED, "halfway there -- outside eps");
+  checkFloatNear(remaining, 1.5707963f - 0.78f, 1e-4f, "heading error shrinks as the turn progresses");
+
+  checkResult(Motion::remainingToStop(c, base, left, right, poseAt(0, 0, 1.5707963f), &remaining),
+              Motion::StopEvalResult::FIRED, "reached the target heading exactly");
+  checkFloatNear(remaining, 0.0f, 1e-4f, "0 rad of heading error remains once the target is reached");
+}
+
+void scenarioRemainingToStopUnsupportedForOtherKinds() {
+  beginScenario("remainingToStop reports UNSUPPORTED for STOP_TIME/STOP_POSITION/STOP_NONE/etc");
+  Motion::MotionBaseline base;
+  msg::MotorState left = obsNoPosition();
+  msg::MotorState right = obsNoPosition();
+  msg::PoseEstimate pose{};
+  float remaining = -1.0f;
+
+  msg::StopCondition time;
+  time.kind = msg::StopKind::STOP_TIME;
+  checkResult(Motion::remainingToStop(time, base, left, right, pose, &remaining),
+              Motion::StopEvalResult::UNSUPPORTED, "STOP_TIME has no remaining-distance/angle concept");
+
+  msg::StopCondition position;
+  position.kind = msg::StopKind::STOP_POSITION;
+  checkResult(Motion::remainingToStop(position, base, left, right, pose, &remaining),
+              Motion::StopEvalResult::UNSUPPORTED,
+              "STOP_POSITION's remaining is pursueSteer()'s own bespoke dRemaining, not this query's");
+
+  msg::StopCondition none;
+  none.kind = msg::StopKind::STOP_NONE;
+  checkResult(Motion::remainingToStop(none, base, left, right, pose, &remaining),
+              Motion::StopEvalResult::UNSUPPORTED, "STOP_NONE is unsupported by this query");
+}
+
 }  // namespace
 
 int main() {
@@ -260,6 +391,12 @@ int main() {
   scenarioRotationFiresAtArcThreshold();
   scenarioUnsupportedKindsAreDistinctFromNotFired();
   scenarioNoneNeverFires();
+
+  scenarioRemainingToStopDistanceShrinksToZero();
+  scenarioRemainingToStopDistanceMissingObservationReportsFullRemaining();
+  scenarioRemainingToStopRotationShrinksToZero();
+  scenarioRemainingToStopHeadingShrinksToZero();
+  scenarioRemainingToStopUnsupportedForOtherKinds();
 
   if (g_failureCount == 0) {
     std::printf("OK: all evaluateStopCondition scenarios passed\n");

@@ -34,6 +34,10 @@ _HOST_FAKE_SRC = _SOURCE_DIR / "com" / "i2c_bus_host.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "hal" / "nezha" / "nezha_motor.cpp"
 _VELOCITY_PID_SRC = _SOURCE_DIR / "hal" / "velocity_pid.cpp"
 _NEZHA_HARDWARE_SRC = _SOURCE_DIR / "subsystems" / "nezha_hardware.cpp"
+# 086-006: nezha_hardware.cpp now owns a Hal::OtosOdometer member (the real
+# OTOS leaf) alongside its four NezhaMotors -- that translation unit must
+# link in alongside it too.
+_OTOS_ODOMETER_SRC = _SOURCE_DIR / "hal" / "otos" / "otos_odometer.cpp"
 
 _SOURCES = [
     _HARNESS_SRC,
@@ -41,6 +45,7 @@ _SOURCES = [
     _NEZHA_MOTOR_SRC,
     _VELOCITY_PID_SRC,
     _NEZHA_HARDWARE_SRC,
+    _OTOS_ODOMETER_SRC,
 ]
 
 # messages/common.h documents its own target as "CODAL C++11" -- build the

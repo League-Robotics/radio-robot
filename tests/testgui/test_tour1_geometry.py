@@ -49,15 +49,38 @@ Per this ticket's (085-002) own acceptance criteria, the bar here is
 therefore intentionally the SOFTER one the ticket text itself states: each
 tour "runs to completion ... with no step timing out, and the robot's fused
 pose ends near world origin (the tour is a closed geometric loop)" —
-position-only closure, not exact waypoint/heading tracing. Measured (see
-each test below): Tour 1 ends within ~20-40 mm of the origin; Tour 2 within
-~95-175 mm (looser — six-plus RT legs compound more drift than Tour 1's;
-still a small fraction of the tour's own leg lengths, up to 850 mm). No
-production code was changed to reach this — this ticket is a real-firmware
-verification pass that found the tour-completion plumbing (SNAP-poll
-``mode=I``, stale-frame rejection, stop-button reactivation) already correct;
-the residual heading drift above is a pre-existing, already-documented,
-different-ticket's concern.
+position-only closure, not exact waypoint/heading tracing. Measured at the
+time (085-002, pre-086): Tour 1 ends within ~20-40 mm of the origin; Tour 2
+within ~95-175 mm (looser — six-plus RT legs compound more drift than
+Tour 1's; still a small fraction of the tour's own leg lengths, up to
+850 mm). No production code was changed to reach this — this ticket is a
+real-firmware verification pass that found the tour-completion plumbing
+(SNAP-poll ``mode=I``, stale-frame rejection, stop-button reactivation)
+already correct; the residual heading drift above is a pre-existing,
+already-documented, different-ticket's concern.
+
+086-004 retune (post 086-002 motor-loop fix + 086-003 Planner terminal-decel
+anticipation)
+-------------------------------------------------------------------------------
+Re-measured against this same headless GUI path (2026-07-06, three repeat
+runs each, real 1x wall-clock pacing as before): Tour 1's fused pose now
+ends **51-52 mm** from the origin (essentially unchanged from the pre-086
+~20-40 mm range — within run-to-run noise of it); Tour 2's now ends
+**~53 mm** from the origin, a real improvement over the pre-086 ~95-175 mm
+range (086-003's ``STOP_ROTATION`` anticipation helps more, proportionally,
+the more turns a tour chains). Neither number is nearly as tight as
+``tests/sim/system/test_tour_geometry.py``'s own per-leg tolerances (that
+file's whole point is that the endpoint alone cannot distinguish "every leg
+was tight" from "errors happened to cancel") — this file's own per-leg
+geometry is unaffected by 086-002/003 for the same reason
+``test_tour_geometry.py``'s own docstring documents: ``RT``'s ~5-7 deg
+per-turn coast (``handleRT``'s own deliberately-open-loop, no-coast-
+anticipation-bar design) is a distinct, already out-of-scope characteristic
+from the reverse-spin defect 086-002 fixed, and compounds across a
+multi-turn tour regardless. ``_ORIGIN_TOL_MM`` is tightened below from
+300 mm to 100 mm (still ~1.9x headroom over the worst repeat-run value
+observed, 53.2 mm) — a real tightening of the rubber-stamp bound, not a
+claim that the residual itself shrank to near-zero.
 
 Fused pose, not ground truth
 -----------------------------
@@ -150,12 +173,14 @@ _ZERO_ERROR_SPINS: dict[str, float] = {
 
 #: How near the origin the firmware's FUSED pose must end up, in mm, for a
 #: tour to count as "a closed geometric loop" per this ticket's acceptance
-#: criterion. Measured (see module docstring): Tour 1 ~20-40 mm, Tour 2
-#: ~95-175 mm across repeated runs — this tolerance keeps ~1.7x headroom over
-#: the highest observed value while still being a small fraction of the
-#: tour's own leg lengths (up to 850 mm), so it is a meaningful "returned
-#: near the start", not a rubber-stamp.
-_ORIGIN_TOL_MM = 300.0
+#: criterion. Retuned by ticket 086-004 (was 300.0, pre-086 measured range
+#: Tour 1 ~20-40 mm / Tour 2 ~95-175 mm): re-measured post-086-002/003
+#: (module docstring's "086-004 retune" section) Tour 1 now ~51-52 mm, Tour 2
+#: now ~53 mm across repeated runs — 100.0 keeps ~1.9x headroom over the
+#: highest observed value (53.2 mm) while still being a small fraction of
+#: the tour's own leg lengths (up to 850 mm), a real tightening of the old
+#: 300 mm rubber-stamp bound.
+_ORIGIN_TOL_MM = 100.0
 
 #: Wall-clock ceilings (real 1x sim pacing — see module docstring).
 _TOUR_START_DEADLINE_S = 10.0
@@ -391,8 +416,9 @@ def _assert_tour_ran_and_closed_the_loop(trace, fused_pose, tour_name: str) -> N
 def test_tour1_completes_and_fused_pose_returns_near_origin(qapp, monkeypatch, tmp_path):
     """Tour 1 runs to completion (no step timeout) and closes the loop.
 
-    Measured fused-pose distance from origin across repeated runs: ~20-40 mm
-    (see module docstring) — well inside ``_ORIGIN_TOL_MM``.
+    Measured fused-pose distance from origin across repeated runs (086-004
+    retune, post 086-002/003): ~51-52 mm (see module docstring's "086-004
+    retune" section) — well inside the retuned ``_ORIGIN_TOL_MM`` (100 mm).
     """
     trace, fused_pose = _run_tour_headless(
         qapp, monkeypatch, tmp_path, "tour_btn_tour_1"
@@ -403,10 +429,13 @@ def test_tour1_completes_and_fused_pose_returns_near_origin(qapp, monkeypatch, t
 def test_tour2_completes_and_fused_pose_returns_near_origin(qapp, monkeypatch, tmp_path):
     """Tour 2 runs to completion (no step timeout) and closes the loop.
 
-    Tour 2 has more (and larger, mixed-sign) RT legs than Tour 1, so its
-    measured fused-pose distance from origin is looser: ~95-175 mm across
-    repeated runs (see module docstring) — still inside ``_ORIGIN_TOL_MM``
-    and a small fraction of its own leg lengths (up to 850 mm).
+    Tour 2 has more (and larger, mixed-sign) RT legs than Tour 1; pre-086 this
+    made its closure looser (~95-175 mm) than Tour 1's, but 086-003's
+    ``STOP_ROTATION`` terminal-decel anticipation benefits a longer chain of
+    turns proportionally more — measured fused-pose distance from origin
+    across repeated runs (086-004 retune): ~53 mm (see module docstring),
+    now comparable to Tour 1's own residual and well inside the retuned
+    ``_ORIGIN_TOL_MM`` (100 mm).
     """
     trace, fused_pose = _run_tour_headless(
         qapp, monkeypatch, tmp_path, "tour_btn_tour_2"

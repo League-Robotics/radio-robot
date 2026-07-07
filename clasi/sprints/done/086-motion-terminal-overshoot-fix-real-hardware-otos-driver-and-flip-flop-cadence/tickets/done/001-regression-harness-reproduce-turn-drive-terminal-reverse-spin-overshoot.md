@@ -1,12 +1,12 @@
 ---
 id: "001"
 title: "Regression harness: reproduce turn/drive terminal reverse-spin overshoot"
-status: open
+status: done
 use-cases: [SUC-001, SUC-002]
 depends-on: []
 github-issue: ""
 issue: motion-turn-drive-terminal-overshoot.md
-completes_issue: true
+completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -39,7 +39,7 @@ measurable, and to give ticket 002 a concrete regression to flip.
 
 ## Acceptance Criteria
 
-- [ ] A new sim-level test (e.g. `tests/sim/unit/test_motion_overshoot_regression.py`
+- [x] A new sim-level test (e.g. `tests/sim/unit/test_motion_overshoot_regression.py`
       or an addition to an existing motion-commands test file) drives an
       `RT 9000` through `libfirmware_host`, samples per-wheel `vel(L,R)` at
       and after `EVT done rt`, and asserts a **tight** post-completion
@@ -47,13 +47,41 @@ measurable, and to give ticket 002 a concrete regression to flip.
       bound) — written so it currently FAILS against today's code, with the
       measured pre-fix magnitude recorded in the test's own docstring/comment
       for traceability.
-- [ ] A companion case does the same for a `D 200 200 500`, asserting final
+- [x] A companion case does the same for a `D 200 200 500`, asserting final
       traveled distance within a tight tolerance of commanded (materially
       tighter than the pre-fix ~7%) — currently FAILING against today's code.
-- [ ] Both tests reference this ticket and the parent issue in their
+- [x] Both tests reference this ticket and the parent issue in their
       docstrings, and state plainly that they are expected to start passing
       once ticket 002 (and, for full tolerance, ticket 003) lands.
-- [ ] No production code (`source/`) is touched by this ticket.
+- [x] No production code (`source/`) is touched by this ticket.
+
+## Completion Notes (086-001)
+
+Implemented `tests/sim/unit/test_motion_overshoot_regression.py` with two
+`xfail(strict=True)` tests, both driving `libfirmware_host` via the `sim`
+fixture at 24ms tick resolution:
+
+- `test_rt_9000_settles_without_sustained_reverse_spin_residual`: samples
+  `vel(L,R)` via `SNAP` across `RT 9000`'s completion and 800ms after.
+  Measured pre-fix (2026-07-06, this commit): `EVT done RT` fires at
+  t=864ms elapsed with vel(L,R)=(-93,+93) (still spinning), crosses zero at
+  +72ms, then a SUSTAINED reverse-sign residual oscillates ~2-7 mm/s through
+  the whole 800ms window (worst case 7.0 mm/s at +264ms after done, vs a
+  200-800ms-post-done tight bound of 2.0 mm/s) — asserts FAILS today.
+- `test_d_200_200_500_stops_within_tight_tolerance_of_commanded_distance`:
+  measures true-pose distance at `EVT done D`. Measured pre-fix: 532.51mm
+  (+6.50% over the 500mm target) against a 1.5% (7.5mm) tight-tolerance
+  assertion — FAILS today. (Matches the issue's own ~7%/~535mm figure
+  closely; a longer trace also shows the same reverse-spin residual then
+  rolls the robot backward past 500mm again, down to 486.43mm by +1920ms.)
+
+Both tests xfail cleanly (`2 xfailed`); full `tests/sim` suite: `246 passed,
+2 xfailed`. No `source/` changes. `completes_issue: true` on this ticket's
+frontmatter is aspirational for the whole issue — the issue itself is only
+truly resolved once 086-002 (motor-loop fix), 086-003 (terminal decel
+anticipation), and 086-004 land and these two `xfail` markers are removed
+(`strict=True` will hard-fail the suite the moment that's not done, forcing
+the marker's removal rather than a silent unexpected-pass).
 
 ## Implementation Plan
 

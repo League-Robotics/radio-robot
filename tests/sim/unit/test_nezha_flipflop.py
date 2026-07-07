@@ -33,6 +33,10 @@ _NEZHA_MOTOR_SRC = _SOURCE_DIR / "hal" / "nezha" / "nezha_motor.cpp"
 # member — that translation unit must link in alongside it.
 _VELOCITY_PID_SRC = _SOURCE_DIR / "hal" / "velocity_pid.cpp"
 _NEZHA_HARDWARE_SRC = _SOURCE_DIR / "subsystems" / "nezha_hardware.cpp"
+# 086-006: nezha_hardware.cpp now owns a Hal::OtosOdometer member (the real
+# OTOS leaf) alongside its four NezhaMotors -- that translation unit must
+# link in alongside it too.
+_OTOS_ODOMETER_SRC = _SOURCE_DIR / "hal" / "otos" / "otos_odometer.cpp"
 
 # messages/common.h documents its own target as "CODAL C++11" -- build the
 # host harness to the same standard so it exercises exactly the language
@@ -59,6 +63,7 @@ def test_nezha_flipflop_harness_compiles_and_passes(tmp_path):
     assert _NEZHA_MOTOR_SRC.is_file(), f"nezha_motor.cpp missing: {_NEZHA_MOTOR_SRC}"
     assert _VELOCITY_PID_SRC.is_file(), f"velocity_pid.cpp missing: {_VELOCITY_PID_SRC}"
     assert _NEZHA_HARDWARE_SRC.is_file(), f"nezha_hardware.cpp missing: {_NEZHA_HARDWARE_SRC}"
+    assert _OTOS_ODOMETER_SRC.is_file(), f"otos_odometer.cpp missing: {_OTOS_ODOMETER_SRC}"
     assert _SOURCE_DIR.is_dir(), f"source/ tree missing: {_SOURCE_DIR}"
 
     cxx = _find_cxx_compiler()
@@ -80,12 +85,13 @@ def test_nezha_flipflop_harness_compiles_and_passes(tmp_path):
             str(_NEZHA_MOTOR_SRC),
             str(_VELOCITY_PID_SRC),
             str(_NEZHA_HARDWARE_SRC),
+            str(_OTOS_ODOMETER_SRC),
         ],
         capture_output=True,
         text=True,
     )
     assert compile_result.returncode == 0, (
-        "nezha_flipflop_harness.cpp / nezha_motor.cpp / nezha_hardware.cpp failed to compile:\n"
+        "nezha_flipflop_harness.cpp / nezha_motor.cpp / nezha_hardware.cpp / otos_odometer.cpp failed to compile:\n"
         f"stdout:\n{compile_result.stdout}\nstderr:\n{compile_result.stderr}"
     )
 

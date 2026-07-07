@@ -1,19 +1,33 @@
-"""Off-hardware acceptance proof for ticket 084-008 (SUC-007): every one of
-the seven OTOS verbs (``OI``/``OZ``/``OR``/``OP``/``OV``/``OL``/``OA``)
-replies ``ERR nodev <verb>`` against the REAL ``Subsystems::NezhaHardware``
-(whose ``odometer()`` is still ``nullptr`` this program — no real-hardware
-OTOS driver exists, ``clasi/issues/
+"""Off-hardware acceptance proof, originally for ticket 084-008 (SUC-007):
+every one of the seven OTOS verbs (``OI``/``OZ``/``OR``/``OP``/``OV``/``OL``/
+``OA``) replied ``ERR nodev <verb>`` against the REAL
+``Subsystems::NezhaHardware`` (whose ``odometer()`` was ``nullptr`` — no
+real-hardware OTOS driver existed then, ``clasi/issues/
 nezha-hardware-otos-driver-for-new-source-tree.md``).
+
+Ticket 086-006 gave ``NezhaHardware`` a real ``Hal::OtosOdometer`` member and
+an ``odometer()`` override that always returns its address — this file's
+module name is now historical (kept to avoid churn; nothing else in the repo
+references it, see the ticket's own scope note), but the harness it compiles
+(``otos_commands_harness.cpp``) now asserts the CURRENT invariant: all seven
+verbs reach the real dispatch path and reply ``OK`` (that harness's own file
+header has the full rationale, including why no I2C bus scripting is
+involved). This file otherwise still proves what it always did: the SAME
+compile-and-link recipe (``otos_commands.{h,cpp}`` is unchanged by 086-006 —
+it already resolved ``hardware.odometer()`` live on every dispatch) still
+builds and the harness binary still exits 0.
 
 Compiles ``otos_commands_harness.cpp`` together with the REAL
 ``source/hal/nezha/nezha_motor.cpp``, ``source/hal/velocity_pid.cpp``,
 ``source/subsystems/nezha_hardware.cpp`` (the SAME trio
-``test_hardware_seam.py`` compiles), ticket 001's HOST_BUILD scripted-fake
-``source/com/i2c_bus_host.cpp``, PLUS this ticket's own
-``source/commands/otos_commands.cpp``, ``source/commands/
+``test_hardware_seam.py`` compiles), 086-006's real
+``source/hal/otos/otos_odometer.cpp`` (nezha_hardware.cpp now owns a
+``Hal::OtosOdometer`` member, so this translation unit must link in too),
+ticket 001's HOST_BUILD scripted-fake ``source/com/i2c_bus_host.cpp``, PLUS
+this ticket's own ``source/commands/otos_commands.cpp``, ``source/commands/
 command_processor.cpp``, and ``source/commands/arg_parse.cpp`` — the full
-dispatch path from wire text to ``ERR nodev``, not just a bare
-``odometer() == nullptr`` check. ``-DROBOT_DEV_BUILD=1`` is required in
+dispatch path from wire text to the reply, not just a bare
+``odometer() != nullptr`` check. ``-DROBOT_DEV_BUILD=1`` is required in
 addition to ``-DHOST_BUILD`` here (unlike ``test_hardware_seam.py``):
 ``commands/otos_commands.{h,cpp}`` are wrapped in ``#if ROBOT_DEV_BUILD``
 (matching every other command-family file in this tree), while
@@ -50,6 +64,10 @@ _HOST_FAKE_SRC = _SOURCE_DIR / "com" / "i2c_bus_host.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "hal" / "nezha" / "nezha_motor.cpp"
 _VELOCITY_PID_SRC = _SOURCE_DIR / "hal" / "velocity_pid.cpp"
 _NEZHA_HARDWARE_SRC = _SOURCE_DIR / "subsystems" / "nezha_hardware.cpp"
+# 086-006: nezha_hardware.cpp now owns a Hal::OtosOdometer member (the real
+# OTOS leaf) alongside its four NezhaMotors -- that translation unit must
+# link in alongside it too.
+_OTOS_ODOMETER_SRC = _SOURCE_DIR / "hal" / "otos" / "otos_odometer.cpp"
 _OTOS_COMMANDS_SRC = _SOURCE_DIR / "commands" / "otos_commands.cpp"
 _COMMAND_PROCESSOR_SRC = _SOURCE_DIR / "commands" / "command_processor.cpp"
 _ARG_PARSE_SRC = _SOURCE_DIR / "commands" / "arg_parse.cpp"
@@ -60,6 +78,7 @@ _SOURCES = [
     _NEZHA_MOTOR_SRC,
     _VELOCITY_PID_SRC,
     _NEZHA_HARDWARE_SRC,
+    _OTOS_ODOMETER_SRC,
     _OTOS_COMMANDS_SRC,
     _COMMAND_PROCESSOR_SRC,
     _ARG_PARSE_SRC,
@@ -84,7 +103,8 @@ def _find_cxx_compiler() -> str:
 
 
 def test_otos_commands_nodev_harness_compiles_and_passes(tmp_path):
-    """Compile the OTOS nodev harness and assert every one-of-seven scenario passes."""
+    """Compile the OTOS dispatch harness (086-006: now OK, not nodev) and assert
+    every one-of-seven scenario passes."""
     for src in _SOURCES:
         assert src.is_file(), f"required source missing: {src}"
     assert _SOURCE_DIR.is_dir(), f"source/ tree missing: {_SOURCE_DIR}"

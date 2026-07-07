@@ -1,10 +1,10 @@
 ---
-status: in-progress
+status: done
 sprint: 086
 tickets:
-- 086-005
-- 086-006
-- 086-007
+- '005'
+- '006'
+- '007'
 ---
 
 # Real-hardware OTOS driver for NezhaHardware (new source/ tree)

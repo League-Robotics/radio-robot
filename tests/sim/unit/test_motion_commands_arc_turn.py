@@ -23,6 +23,20 @@ measured plant behavior, documented at each assertion.
 import math
 
 
+def _wrap_pi(angle: float) -> float:   # [rad]
+    """Wrap an angle into (-pi, pi] -- 086-002 helper. 180 deg is the
+    heading representation's own branch cut: a converged heading an epsilon
+    PAST it reads back as slightly UNDER -180 deg, so a raw ``h - expected``
+    difference against a target of exactly +180 deg can blow up to ~2*pi
+    even though the true angular distance is tiny. Only
+    ``test_turn_reaches_absolute_heading_from_nonzero_start`` targets
+    exactly +-180 deg (the sole target sitting on the branch cut); every
+    other assertion in this file targets a heading far enough from it that
+    the raw difference was never at risk, so this helper is applied there
+    only rather than rewriting every assertion in the file."""
+    return (angle + math.pi) % (2.0 * math.pi) - math.pi
+
+
 def test_rt_rotates_about_90_degrees_and_emits_done_rot(sim):
     reply = sim.command("RT 9000")
     assert reply.strip() == "OK rt rot=9000"
@@ -30,14 +44,29 @@ def test_rt_rotates_about_90_degrees_and_emits_done_rot(sim):
     sim.tick_for(3000)
 
     _x, _y, h = sim.true_pose()
-    # Measured plant behavior (2026-07-05): the ROTATION stop fires once the
-    # per-wheel arc target is reached (a ">=" threshold, no early-fire
-    # margin), then the SMOOTH stop style ramps yaw rate to zero -- coasting
-    # a further ~4-5 degrees past the target before fully stopping (no
-    # coast-anticipation this ticket -- see handleRT's doc comment). +-10
-    # degrees covers that coast plus ordinary plant/ramp variance.
+    # Measured plant behavior (2026-07-05, pre-086): the ROTATION stop fires
+    # once the per-wheel arc target is reached (a ">=" threshold, no
+    # early-fire margin), then the SMOOTH stop style ramps yaw rate to zero
+    # -- coasting a further ~4-5 degrees past the target before fully
+    # stopping (no coast-anticipation this ticket -- see handleRT's doc
+    # comment).
+    #
+    # 086-004 retune: re-measured against 086-002 (motor-loop reverse-spin
+    # fix) + 086-003 (Planner terminal-decel anticipation, extended to
+    # STOP_ROTATION too) -- this converges to a fully deterministic
+    # 96.3669 deg (+6.37 deg over 90), bit-exact across repeated runs (this
+    # is a pure sim tick loop, no wall-clock jitter). Still the same
+    # already-documented, deliberately-open-loop RT coast characteristic
+    # (086-003's ROTATION anticipation is a documented approximation, per
+    # that ticket's own completion notes, and does not close this residual
+    # to near-zero the way it closed D 200 200 500's) -- not a regression.
+    # tests/sim/system/test_tour_geometry.py's own per-leg tolerance
+    # (+-8 deg, set from the widest RT leg observed across Tour 1/2) uses
+    # the same measured behavior. +-7 degrees here keeps ~1.1x headroom over
+    # the exact 6.37 deg measured, tightened from the old +-10 deg (which
+    # was never measured this precisely).
     expected = math.pi / 2.0
-    assert abs(h - expected) < math.radians(10.0), (
+    assert abs(h - expected) < math.radians(7.0), (
         f"expected heading near {expected:.4f} rad (90 deg), got {h:.4f} rad "
         f"({math.degrees(h):.2f} deg)"
     )
@@ -53,8 +82,12 @@ def test_rt_negative_relangle_rotates_the_opposite_direction(sim):
     sim.tick_for(3000)
 
     _x, _y, h = sim.true_pose()
+    # 086-004 retune: mirrors test_rt_rotates_about_90_degrees_and_emits_
+    # done_rot's own retune above -- measured -96.3669 deg (-6.37 deg over
+    # -90), bit-exact and symmetric with the positive-angle case. Same +-7
+    # deg tightened bound (was +-10 deg).
     expected = -math.pi / 2.0
-    assert abs(h - expected) < math.radians(10.0), (
+    assert abs(h - expected) < math.radians(7.0), (
         f"expected heading near {expected:.4f} rad (-90 deg), got {h:.4f} rad "
         f"({math.degrees(h):.2f} deg)"
     )
@@ -113,20 +146,37 @@ def test_turn_reaches_absolute_heading_from_nonzero_start(sim):
 
     sim.tick_for(3000)
     _x, _y, h = sim.true_pose()
-    expected = math.pi   # 180 degrees
-    # Measured plant behavior (2026-07-05): converges to ~169.6 deg (~10.4
-    # deg short). Traced via per-100ms true_pose()/true_velocity() logging:
-    # the HEADING stop fires and the ramp correctly converges (~181.7 deg,
-    # matching the target + the usual coast), but the wheels then cross
-    # through zero velocity, and the existing Hal::Motor zero-crossing
-    # reset-guard/dwell policy (source/hal/velocity_pid.cpp, sprint 081 --
-    # unrelated to this ticket, and out of this ticket's file scope to
-    # change) produces a further ~600-800ms settle with small opposite-sign
-    # wheel speeds, backing off part of the rotation before finally
-    # settling. +-13 degrees covers this measured settle plus variance.
-    assert abs(h - expected) < math.radians(13.0), (
+    expected = math.pi   # 180 degrees -- exactly on the heading wrap's own branch cut
+    # Measured plant behavior (2026-07-05, pre-086-002): converged to ~169.6
+    # deg (~10.4 deg short) -- the HEADING stop fired and the ramp correctly
+    # converged (~181.7 deg, matching the target + the usual coast), but the
+    # wheels then crossed through zero velocity, and the (then-unfixed)
+    # Hal::Motor zero-crossing reset-guard/dwell interaction with
+    # Hal::MotorVelocityPid's integrator-freeze deadband (086 issue's own
+    # root cause) produced a further ~600-800ms settle with small
+    # opposite-sign wheel speeds, backing off part of the rotation before
+    # finally settling.
+    #
+    # 086-002 update: that interaction is now fixed (velocity_pid.cpp's
+    # deadband-entry integrator reset) -- this converges to ~182.9 deg now
+    # (~2.9 deg over), a tighter residual than before, but on the FAR side
+    # of the +-180 deg branch cut: a raw ``h - expected`` blows up to ~2*pi
+    # even though the true angular distance is small, so the comparison
+    # below wraps the difference into (-pi, pi] first (see this file's
+    # ``_wrap_pi`` helper).
+    #
+    # 086-004 retune: with 086-003 (Planner terminal-decel anticipation for
+    # STOP_HEADING, this TURN's own stop kind) landed on top of 086-002, this
+    # converges even tighter -- a fully deterministic 1.95 deg wrapped
+    # residual (bit-exact across repeated runs, plain sim tick loop). The
+    # +-13 deg bound (never actually re-measured before this ticket, per the
+    # comment above) is tightened here to +-5 deg -- ~2.6x headroom over the
+    # 1.95 deg measured, per architecture-update.md's "Impact on Existing
+    # Components" table entry earmarking this exact test for 086-004.
+    diff = _wrap_pi(h - expected)
+    assert abs(diff) < math.radians(5.0), (
         f"expected heading near {expected:.4f} rad (180 deg), got {h:.4f} rad "
-        f"({math.degrees(h):.2f} deg)"
+        f"({math.degrees(h):.2f} deg), wrapped diff {math.degrees(diff):.2f} deg"
     )
 
     evts = sim.get_async_evts()

@@ -202,6 +202,31 @@ class Planner {
   // Called once per tick, BEFORE ramp_.advance(), while gPhase_ == PURSUE.
   void pursueSteer(const msg::PoseEstimate& fusedPose);
 
+  // applyStopAnticipation -- ticket 086-003: the SAME anticipation pattern
+  // pursueSteer() already applies for GOTO_GOAL's STOP_POSITION, extended to
+  // DISTANCE/TURN/ROTATION via Motion::remainingToStop() (architecture-
+  // update.md (086) Decision 2), so those three goal kinds also arrive at
+  // their stop condition already near-zero speed/rate instead of handing the
+  // motor loop a full-speed "arrest from full speed" problem. For every
+  // currently-active stop condition (stops_[0..stopsCount_)) whose kind is
+  // STOP_DISTANCE, re-derives a linear speed cap (vCap = sqrt(2 * a_decel *
+  // dRemaining)); STOP_ROTATION/STOP_HEADING, the analogous angular-rate cap
+  // (omegaCap = sqrt(2 * yaw_acc_max * angleRemaining)). Re-targets the ramp
+  // to min(staged, cap) (sign-preserved) every tick, the same way
+  // pursueSteer() re-targets every tick regardless of whether the cap
+  // currently binds. Deliberately NOT called for GO_TO (mode_ ==
+  // msg::DriveMode::GO_TO): PURSUE already owns its own STOP_POSITION
+  // anticipation via pursueSteer(), and PRE_ROTATE's own STOP_HEADING is a
+  // phase-handoff bearing gate, not a terminal stop -- capping its spin rate
+  // as it approached the gate would change GOTO_GOAL's own behavior, which
+  // this ticket leaves provably unchanged (see class comment / ticket
+  // acceptance). Called once per tick, BEFORE ramp_.advance(), for every
+  // other goal kind, while the goal is still running (guarded by the caller
+  // on !stopping_ -- once the SMOOTH ramp-down has armed target (0,0), this
+  // must not re-target the ramp away from zero).
+  void applyStopAnticipation(const msg::MotorState& leftObs, const msg::MotorState& rightObs,
+                             const msg::PoseEstimate& fusedPose);
+
   // queueEvent -- hold a completed-goal Event (reason token + the staged
   // goal's corr_id).
   void queueEvent(const char* reason);

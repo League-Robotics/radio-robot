@@ -31,14 +31,26 @@
 // (CommandProcessor's staged DEV M target, Drivetrain's own port binding) —
 // NezhaHardware itself still only knows about ports, never which one is
 // "left."
+//
+// 086-006: also owns the real Hal::OtosOdometer leaf (source/hal/otos/
+// otos_odometer.h) and overrides odometer() (Subsystems::Hardware's base
+// default, previously nullptr on this class) to return its address. The
+// OTOS chip (I2C address 0x17) is NOT folded into the flip-flop sequencer
+// above — that sequencer is purely a Nezha (0x10) concern. dev_loop.cpp
+// drives the OTOS leaf's own tick()/pose() separately, once per pass,
+// exactly as it already does for Subsystems::SimHardware's Hal::SimOdometer
+// (081-003) — this class needed no change to that calling convention,
+// only to start returning a non-null leaf.
 #pragma once
 
 #include <stdint.h>
 
 #include "com/i2c_bus.h"
+#include "config/boot_config.h"
 #include "hal/capability/hal_command.h"
 #include "hal/capability/motor.h"
 #include "hal/nezha/nezha_motor.h"
+#include "hal/otos/otos_odometer.h"
 #include "messages/motor.h"
 #include "subsystems/hardware.h"
 
@@ -49,10 +61,21 @@ class NezhaHardware : public Hardware {
   // configs must supply exactly kPortCount entries; configs[i].port should
   // equal i+1 (1..4) — the constructing caller's (main.cpp, ticket 5's)
   // responsibility. NezhaHardware does not itself validate or force this,
-  // consistent with "no NezhaHardware-level special-casing."
-  NezhaHardware(I2CBus& bus, const msg::MotorConfig configs[kPortCount]);
+  // consistent with "no NezhaHardware-level special-casing." otosConfig
+  // (086-006): ticket 086-005's boot-config values (mounting offset +
+  // linear/angular scale multipliers), forwarded unchanged to the owned
+  // Hal::OtosOdometer leaf's own constructor. Defaulted to
+  // Config::OtosBootConfig()'s identity values (zero offset, 1.0 scale) so
+  // every pre-086-006 two-argument call site (main.cpp aside, several
+  // tests/sim/unit/*_harness.cpp fixtures that construct a NezhaHardware but
+  // never call begin()/odometer() on it) keeps compiling unchanged — none of
+  // those exercise the OTOS leaf at all, so the default is behaviorally
+  // inert for them.
+  NezhaHardware(I2CBus& bus, const msg::MotorConfig configs[kPortCount],
+                const Config::OtosBootConfig& otosConfig = Config::OtosBootConfig());
 
-  // Primes all four ports' encoders (see NezhaMotor::begin()).
+  // Primes all four ports' encoders (see NezhaMotor::begin()) and the OTOS
+  // leaf (product-ID detect + init — see Hal::OtosOdometer::begin()).
   void begin() override;
 
   // The brick flip-flop sequencer (sprint 079-004; architecture-update.md
@@ -94,6 +117,12 @@ class NezhaHardware : public Hardware {
   // governed pair is exactly the ports its own DrivetrainConfig binds.
   void apply(const Hal::DrivetrainToHardwareCommand& cmd) override;
 
+  // 086-006: the real OTOS leaf's address — Subsystems::Hardware's base
+  // default (nullptr) overridden. NOT folded into the flip-flop scheduler
+  // above; dev_loop.cpp drives this leaf's own tick()/pose() separately,
+  // once per pass, entirely outside this class's tick().
+  Hal::Odometer* odometer() override;
+
  private:
   // REQUEST_DUE: the next bus action is a fresh 0x46 request on
   // activePort_. COLLECT_DUE: the next bus action (once
@@ -122,6 +151,7 @@ class NezhaHardware : public Hardware {
   Hal::NezhaMotor motor2_;
   Hal::NezhaMotor motor3_;
   Hal::NezhaMotor motor4_;
+  Hal::OtosOdometer otosOdometer_;   // 086-006 -- I2C address 0x17, a separate device slot from motorN_'s 0x10
 
   uint32_t activePort_ = 1;
   Phase phase_ = Phase::REQUEST_DUE;

@@ -31,6 +31,8 @@
 #include <vector>
 
 #include "hal/capability/motor.h"
+#include "hal/velocity_pid.h"
+#include "messages/common.h"
 #include "messages/motor.h"
 
 namespace {
@@ -115,6 +117,29 @@ class MockMotor : public Hal::Motor {
   // depends only on this pair, never on which call path produced it.
   void requestDuty(float duty, uint32_t now) { armoredWrite(duty, now); }
 
+  // 086-002: drives ONE real Hal::MotorVelocityPid::compute() call, then
+  // forwards its output through armoredWrite() — mirrors NezhaMotor::
+  // tick()'s/SimMotor::tick()'s own Mode::VELOCITY dispatch (feedforward
+  // omitted; neither invariant scenario below needs it) closely enough to
+  // exercise the REAL control law the 086-002 fix lives in, together with
+  // the REAL (unmodified) armor gate, rather than a synthetic duty
+  // standing in for either. Returns the raw compute() output (before
+  // armoredWrite()'s own deadband/dwell gating) so a scenario can inspect
+  // both the control law's own behavior and what actually reached
+  // writeRawDutyCalls.
+  float driveVelocityTick(float target, float measured, float dt,
+                           const msg::Gains& gains, float minDuty,
+                           uint32_t now) {
+    float duty = pid_.compute(target, measured, dt, gains, minDuty);
+    armoredWrite(duty, now);
+    return duty;
+  }
+
+  // Test-only peek at the base's own dwell-in-progress flag — lets a
+  // scenario assert "no dwell left armed" without re-deriving it from the
+  // write sequence.
+  bool isDwelling() const { return dwelling_; }
+
   // Drives the same 5-step call order NezhaMotor::tick() documents
   // (architecture-update.md / nezha_motor.cpp): standstill-guarded reset
   // dispatch, wedge detector (reads last tick's appliedDuty()), a DUTY-mode
@@ -176,6 +201,7 @@ class MockMotor : public Hal::Motor {
   float mockVelocity_ = 0.0f;
   float stagedDuty_ = 0.0f;
   float lastWrittenDuty_ = 0.0f;
+  Hal::MotorVelocityPid pid_;   // 086-002: backs driveVelocityTick()
 };
 
 // Ship-default config (both armor fields left unset — Hal::Motor::configure()
@@ -400,6 +426,155 @@ void scenarioPidIndependence() {
              "identical write sequence regardless of call path");
 }
 
+msg::Gains makeGains(float kp, float ki, float kff, float i_max, float kaw) {
+  msg::Gains gains;
+  gains.kp = kp;
+  gains.ki = ki;
+  gains.kff = kff;
+  gains.i_max = i_max;
+  gains.kaw = kaw;
+  return gains;
+}
+
+// 9. Invariant A (086-002, architecture-update.md Design Rationale 1): a
+//    genuine unrequested reversal — e.g. a stale/glitched command re-
+//    issuing the opposite sign with NO intervening commanded decel-to-zero
+//    — is still caught and dwelled by armoredWrite()'s reversalDwell_
+//    EXACTLY as before the 086-002 fix. Driven through the REAL
+//    Hal::MotorVelocityPid (not a synthetic duty, unlike
+//    scenarioHotSignFlip/scenarioPidIndependence above) so this proves the
+//    fix — which lives entirely in compute()'s deadband-entry handling —
+//    does not weaken this path. |target|=150 stays far above minDuty=20 on
+//    BOTH sides of the flip, so the fix's deadband-entry reset never
+//    engages here (wasInDeadband_ stays false throughout): the write
+//    sequence below must match scenarioHotSignFlip's own proven shape
+//    (immediate 0, suppressed through the dwell, then the new direction) —
+//    not a coincidence, but the direct consequence of the fix's own scope
+//    being confined to the deadband boundary.
+void scenarioInvariantAGenuineReversalStillDwells() {
+  beginScenario("Invariant A: a genuine unrequested reversal (no decel) still dwells identically");
+
+  MockMotor m;
+  m.configure(defaultArmorConfig());   // reversalDwell_=100ms, outputDeadband_=0.03
+
+  msg::Gains gains = makeGains(/*kp=*/0.01f, /*ki=*/0.0f, /*kff=*/0.0f,
+                                /*i_max=*/1.0f, /*kaw=*/0.0f);
+  const float minDuty = 20.0f;   // representative bench-tuned stiction floor
+  const float dt = 0.024f;       // [s]
+  uint32_t now = 20000;
+
+  // Established direction: converging toward +150, well outside the
+  // deadband — err=50 -> duty=kp*50=0.5, forwarded (no prior direction).
+  m.driveVelocityTick(150.0f, 100.0f, dt, gains, minDuty, now);
+  now += 10;
+
+  // A FRESH command re-issues the opposite sign immediately — no ramp, no
+  // intervening decel-to-zero tick. measured hasn't had time to react
+  // (still 100, same as the instant before) — err=-250 -> duty clamps to
+  // -1.0 — a large-magnitude, genuine direction reversal.
+  m.driveVelocityTick(-150.0f, 100.0f, dt, gains, minDuty, now);   // sign flip -> dwell armed, deadline = now+100
+  now += 40;
+  m.driveVelocityTick(-150.0f, 100.0f, dt, gains, minDuty, now);   // still mid-dwell
+  now += 59;
+  m.driveVelocityTick(-150.0f, 100.0f, dt, gains, minDuty, now);   // still mid-dwell (1ms shy of the deadline)
+  now += 1;
+  m.driveVelocityTick(-150.0f, 100.0f, dt, gains, minDuty, now);   // dwell elapsed -- resumes -1.0
+
+  checkVecEq(m.writeRawDutyCalls, {0.5f, 0.0f, 0.0f, 0.0f, -1.0f},
+             "genuine reversal via VELOCITY-mode PID dwells identically to a raw duty flip");
+}
+
+// 10. Invariant B (086-002): a commanded decel-to-zero does NOT produce a
+//     sustained, growing reverse-sign correction. Reproduces, in miniature,
+//     the 086 issue's own captured shape (architecture-update.md Grounding
+//     fact 2): a sustained turn whose feedforward overshoots the target
+//     (building a modest positive integrator trim), followed by the target
+//     dropping straight to 0 while the wheel is still coasting down and
+//     mildly overshoots PAST zero before settling — exactly the
+//     "EVT done RT ... wheel still spinning ... coasts through zero into a
+//     reverse-sign residual" shape the issue measured. Pre-086-002 (the
+//     literal `spAbs < minDuty` condition with the sim's own unconfigured
+//     minDuty=0.0), the freeze branch is dead code (0.0 < 0.0 is always
+//     false) and the integrator carries its turn-sustaining bias straight
+//     through the stop, still trimming the SAME direction well after the
+//     wheel has reversed sign (confirmed against this ticket's own
+//     pre-fix instrumentation — see the ticket's completion notes for the
+//     captured numbers). Post-086-002, entering the deadband (`<=`, so an
+//     exact target==0.0 counts even when minDuty==0.0) resets the stale
+//     bias at the FIRST tick target reaches 0, so the correction shrinks
+//     rather than grows.
+void scenarioInvariantBDecelToZeroNoSustainedResidual() {
+  beginScenario("Invariant B: commanded decel-to-zero settles without a sustained residual");
+
+  MockMotor m;
+  m.configure(defaultArmorConfig());   // reversalDwell_=100ms, outputDeadband_=0.03
+
+  msg::Gains gains = makeGains(/*kp=*/0.002f, /*ki=*/0.002f, /*kff=*/0.0f,
+                                /*i_max=*/1.0f, /*kaw=*/0.0f);
+  const float minDuty = 0.0f;   // matches the sim's own unconfigured default — the
+                                 // exact config the 086 issue's own regression
+                                 // tests (tests/sim/unit/test_motion_overshoot_
+                                 // regression.py) run against.
+  const float dt = 0.024f;      // [s] matches the sim's ~24ms tick convention
+  uint32_t now = 30000;
+
+  // Phase 1 — sustain a turn: target holds at -100 while the plant
+  // overshoots to -120 (the same feedforward-overshoot shape the real RT
+  // 9000 trace shows), building a modest positive integrator trim over 10
+  // ticks, well outside the deadband (|target|=100 >> minDuty=0).
+  for (int i = 0; i < 10; ++i) {
+    m.driveVelocityTick(-100.0f, -120.0f, dt, gains, minDuty, now);
+    now += 24;
+  }
+  checkTrue(m.writeRawDutyCalls.size() == 10, "10 writes recorded across the sustain phase");
+  checkTrue(m.writeRawDutyCalls.back() > 0.0f,
+            "sustain-phase duty is a consistent positive trim (builds the bias this ticket must not let leak through)");
+
+  // Phase 2 — commanded decel-to-zero: target drops straight to 0 (the
+  // Planner's SMOOTH ramp landing on its final value) while the wheel is
+  // still coasting down from the turn and mildly overshoots past zero
+  // before settling (-120 -> ... -> a small positive overshoot -> 0).
+  const float measuredTrace[] = {-120.0f, -60.0f, -20.0f, -5.0f,
+                                   2.0f,     5.0f,   3.0f,   1.0f, 0.0f};
+  std::vector<float> postStopDuties;
+  for (float measured : measuredTrace) {
+    postStopDuties.push_back(m.driveVelocityTick(0.0f, measured, dt, gains, minDuty, now));
+    now += 24;
+  }
+
+  // Invariant B, part 1: the correction that "finally lands" must not be
+  // LARGER than the one computed the instant the stop began — the 086
+  // bug's own signature (a stale, frozen/slowly-decaying integrator
+  // letting the ever-growing coast error swing an oversized correction).
+  // Every subsequent post-stop compute() output stays within the very
+  // first post-stop tick's own magnitude.
+  float firstPostStop = std::fabs(postStopDuties.front());
+  checkTrue(firstPostStop > 0.0f, "first post-stop correction is a real, nonzero braking value");
+  for (float d : postStopDuties) {
+    checkTrue(std::fabs(d) <= firstPostStop + 1e-6f,
+              "no post-stop correction exceeds the first post-stop correction's own magnitude");
+  }
+
+  // Invariant B, part 2: settles to a near-zero correction once the wheel
+  // has visibly overshot past zero (the last three scripted measured
+  // samples: +5, +3, +1 -> 0) — no sustained reverse-sign residual.
+  for (size_t i = postStopDuties.size() - 3; i < postStopDuties.size(); ++i) {
+    checkTrue(std::fabs(postStopDuties[i]) < 0.02f,
+              "settles to a near-zero correction once past the zero-crossing overshoot");
+  }
+
+  // Invariant B, part 3: the actual WRITE sequence (post armoredWrite()'s
+  // own, UNCHANGED deadband/dwell gate) never applies a negative (reverse)
+  // duty to the wheel during this decel-to-zero tail, and never leaves a
+  // dwell armed — the wheel eases off toward zero, it is never driven
+  // further into the overshoot.
+  for (size_t i = m.writeRawDutyCalls.size() - postStopDuties.size(); i < m.writeRawDutyCalls.size(); ++i) {
+    checkTrue(m.writeRawDutyCalls[i] >= 0.0f,
+              "no post-stop WRITE ever reverses sign (the wheel is never driven further into overshoot)");
+  }
+  checkTrue(!m.isDwelling(), "no reversal dwell left armed after settling");
+}
+
 }  // namespace
 
 int main() {
@@ -411,6 +586,8 @@ int main() {
   scenarioStandstillResetIsHard();
   scenarioWedgeUnconditionalVsSuspect();
   scenarioPidIndependence();
+  scenarioInvariantAGenuineReversalStillDwells();
+  scenarioInvariantBDecelToZeroNoSustainedResidual();
 
   if (g_failureCount == 0) {
     std::printf("OK: all motor policy scenarios passed\n");

@@ -1,7 +1,7 @@
 ---
 id: 086
 title: Motion terminal-overshoot fix, real-hardware OTOS driver, and flip-flop cadence
-status: planning-docs
+status: done
 branch: sprint/086-motion-terminal-overshoot-fix-real-hardware-otos-driver-and-flip-flop-cadence
 use-cases:
 - SUC-001

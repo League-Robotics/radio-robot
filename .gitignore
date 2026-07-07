@@ -66,6 +66,10 @@ wedgelab/MICROBIT.bin
 # not committed.
 tests/bench/out/
 
+# tests/sim/system/ rendered-trace PNGs (render_tour_trace.py, ticket 086-004)
+# -- regenerable build artifacts, same rationale as tests/bench/out/ above.
+tests/sim/system/out/
+
 # SQLite WAL-mode sidecar files for the CLASI state DB (.clasi/.clasi.db) --
 # transient; the checkpointed .clasi.db is the tracked source of truth.
 .clasi/*.db-wal

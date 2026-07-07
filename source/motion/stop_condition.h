@@ -62,4 +62,36 @@ StopEvalResult evaluateStopCondition(const msg::StopCondition& cond,
                                      const msg::MotorState& rightObs,
                                      const msg::PoseEstimate& fusedPose);
 
+// remainingToStop -- companion query to evaluateStopCondition(), added by
+// ticket 086-003 (architecture-update.md (086) Decision 2) so
+// Subsystems::Planner can anticipate DISTANCE/TURN/ROTATION stops the same
+// way pursueSteer() already anticipates STOP_POSITION for GOTO_GOAL: reports
+// how much distance (STOP_DISTANCE, mm) / rotation arc (STOP_ROTATION, mm) /
+// heading error (STOP_HEADING, rad) remains before `cond` would fire.
+//
+// Built from the EXACT SAME per-kind geometry evaluateStopCondition() uses
+// (the encAvg/encDiff/heading-delta helpers factored into stop_condition.cpp's
+// anonymous namespace and shared by both functions) -- not a second,
+// independently-derived copy of that geometry. Returns UNSUPPORTED for every
+// StopKind other than STOP_DISTANCE/STOP_ROTATION/STOP_HEADING (STOP_TIME,
+// STOP_POSITION, STOP_SENSOR/STOP_COLOR/STOP_LINE_ANY, STOP_NONE) -- this
+// query exists purely to feed the three anticipatory caps 086-003 adds;
+// STOP_POSITION's own "remaining" is pursueSteer()'s bespoke world-frame
+// dRemaining (planner.cpp), deliberately not unified here (Decision 2's
+// Consequences -- a different-shaped geometry, out of scope this sprint).
+//
+// Returns FIRED/NOT_FIRED matching evaluateStopCondition()'s own verdict for
+// the same three kinds (so a caller already knows whether `*remaining` still
+// describes an open goal). `*remaining` is always written when the return is
+// FIRED or NOT_FIRED, clamped to >= 0.0f (0.0f once the target is reached or
+// passed). When the underlying encoder observation is momentarily absent
+// (STOP_DISTANCE/STOP_ROTATION's leftObs/rightObs.position.has == false),
+// `*remaining` is set to the conservative "nothing traveled yet" value
+// (|cond.a|, the full distance/arc still ahead) and NOT_FIRED is returned --
+// mirroring evaluateStopCondition()'s own never-fabricate-a-phantom-delta
+// guard for the same missing-data case.
+StopEvalResult remainingToStop(const msg::StopCondition& cond, const MotionBaseline& base,
+                               const msg::MotorState& leftObs, const msg::MotorState& rightObs,
+                               const msg::PoseEstimate& fusedPose, float* remaining);
+
 }  // namespace Motion
