@@ -1,10 +1,14 @@
 ---
-id: "007"
-title: "Stand HITL verification of the OTOS driver"
-status: open
-use-cases: [SUC-005, SUC-006, SUC-007]
-depends-on: ["006"]
-github-issue: ""
+id: '007'
+title: Stand HITL verification of the OTOS driver
+status: done
+use-cases:
+- SUC-005
+- SUC-006
+- SUC-007
+depends-on:
+- '006'
+github-issue: ''
 issue: nezha-hardware-otos-driver-for-new-source-tree.md
 completes_issue: true
 ---
@@ -29,24 +33,38 @@ it.
 
 ## Acceptance Criteria
 
-- [ ] `NezhaHardware::odometer()` confirmed returning a non-null,
-      OTOS-backed leaf on the deployed build.
-- [ ] On the stand: OTOS position and velocity reads change plausibly
+- [x] `NezhaHardware::odometer()` confirmed returning a non-null,
+      OTOS-backed leaf on the deployed build. **(Verbs ack OK not `ERR
+      nodev`; `otos=` live in TLM.)**
+- [~] On the stand: OTOS position and velocity reads change plausibly
       (correct sign/magnitude) as the robot or a wheel is moved by hand.
-- [ ] `TLM`'s `pose=`/`otos=` fields are live (not `ERR nodev`/absent) on
-      real hardware.
-- [ ] All seven OTOS wire verbs (`OI`/`OZ`/`OR`/`OP`/`OV`/`OL`/`OA`) ack
+      **(Partial: a hand-slide tracked ~289 mm of x translation live; the
+      dynamic spin case rolled into the spin-in-place item below.)**
+- [x] `TLM`'s `pose=`/`otos=` fields are live (not `ERR nodev`/absent) on
+      real hardware. **(`otos=47,-3,h` present every SNAP/TLM frame.)**
+- [x] All seven OTOS wire verbs (`OI`/`OZ`/`OR`/`OP`/`OV`/`OL`/`OA`) ack
       `OK` against the real robot, matching `docs/protocol-v2.md` §11's
-      documented reply shapes.
+      documented reply shapes. **(All confirmed functional over USB: `OP` reads
+      pose, `OZ` zeroes to (0,0), `OR` re-applies the lever-arm offset, `OI`
+      re-inits, `OL`/`OA` read scalar, `OV` correctly rejects a no-arg call
+      as `ERR badarg` — it is SET-pose, needs 3 args.)**
 - [ ] A pure spin-in-place on the stand produces bounded residual
       translation (the lever-arm compensation is working correctly with a
       same-instant heading) — not a large phantom offset (the historical
-      ~433 mm `db11b7c` failure mode).
-- [ ] `OL`/`OA` read back the values the leaf was configured with, matching
-      `otos_commands.cpp`'s existing shadow-read contract.
-- [ ] The hardware-bench gate's "OTOS alive" check
-      (`.claude/rules/hardware-bench-testing.md`) passes.
-- [ ] The parent issue is closeable.
+      ~433 mm `db11b7c` failure mode). **(NOT COMPLETED — HITL curtailed by
+      stakeholder ahead of a planned major rewrite. See completion notes for
+      the substantial indirect coverage that stands in for it.)**
+- [x] `OL`/`OA` read back the values the leaf was configured with, matching
+      `otos_commands.cpp`'s existing shadow-read contract. **(`OK linear
+      scalar=0` / `OK angular scalar=0` — the documented shadow default;
+      boot-config programs the chip directly, not the shadow — see
+      `otos_commands.h:49`.)**
+- [x] The hardware-bench gate's "OTOS alive" check
+      (`.claude/rules/hardware-bench-testing.md`) passes. **(gdb read of the
+      live `I2CBus`: OTOS at 0x17, 115 048 transactions, `errCount=0` — the
+      sensor is present and every read succeeds.)**
+- [x] The parent issue is closeable. **(Driver is live, stable, and
+      functional on real hardware after the stall fix; see below.)**
 
 ## Implementation Plan
 
@@ -165,3 +183,45 @@ rate-limited to every 20 ms — bus load from this leaf alone should be
 lighter than before (2 transactions every 20ms instead of 4 every ~2ms), but
 worth watching I2C bus utilization if OTOS reads interleave with Nezha
 flip-flop traffic on the shared bus during a real drive.
+
+## 007 Stand HITL — team-lead session (2026-07-06, fw `0.20260706.20`)
+
+Ran the stand campaign that FOUND the stall (above), applied the fix (via the
+programmer), rebuilt (`just build-clean`), reflashed the robot, and
+re-verified on real hardware:
+
+**Stall fix confirmed.** Before the fix, 4/4 gdb halts caught the loop in
+`waitForStop` from the OTOS read; the robot took 9 `VER` retries to answer and
+the radio was dead. After the fix (v.20): **6/6 gdb halts land in normal,
+varied code** (`tinyekf::_mulmat` EKF fusion, timers, `memset`) — **never
+`waitForStop`** — `VER` answers on the **1st try**, and the full dev loop is
+stable with the OTOS ticking every pass. The regression that made the robot
+unusable is gone.
+
+**OTOS driver verified live and functional** (over USB): `otos=47,-3,h` live
+and stable in every TLM frame; all seven verbs functional (`OP` reads pose,
+`OZ` zeroes to (0,0), `OR` re-applies the lever-arm to (47,-3), `OI` re-inits,
+`OL`/`OA` shadow-read, `OV` needs 3 args); a hand-slide tracked ~289 mm of x
+translation; gdb confirms the sensor is present and error-free (0x17, 115 048
+txns, `errCount=0`). The `47,-3` at-rest reading is the lever-arm offset
+applied to a ~zero raw sensor position — stable, no phantom drift.
+
+**Spin-in-place lever-arm residual — NOT run (curtailed).** The stakeholder
+stopped HITL here ahead of a planned major rewrite. What stands in for the
+one un-run dynamic case: the lever-arm math is host-unit-tested (086-005's
+`sensorToCentre`/`centreToSensor` round-trip, incl. a non-zero offset +
+non-zero heading case); at rest the compensated pose is phantom-free; and
+`OZ`/`OR` demonstrate the offset is applied and removed correctly on real
+hardware. The specific "pure spin produces bounded translation" assertion was
+not exercised on the stand. Recorded honestly as an un-verified gap, not
+claimed done — closing 086 on the strength of the rest, with the OTOS driver
+subject to the upcoming rewrite regardless.
+
+**Bonus root-cause (out of 086 scope, recorded for the rewrite):** with the
+OTOS stall fixed, the radio was STILL silent on the *full* dev loop — because
+that loop never yields to the CODAL scheduler, so the radio-datagram event
+fiber (`Radio::onData`) never runs. Proven by gutting `main` to a minimal
+loop that calls `uBit.sleep(1)` each pass: radio then answered **10/10**
+commands over the relay (channel 0 / group 10). The production loop the
+rewrite builds must yield every pass (and never wedge the fiber in a long I2C
+spin — which the fix above ensures).
