@@ -132,6 +132,34 @@ def test_dev_stop_replies_ok(sim):
     assert reply.strip() == "OK DEV STOP"
 
 
+def test_dev_stop_neutralizes_a_driving_motor(sim):
+    """088-008: the smoke test above only checks the ack text -- DEV STOP's
+    actual job (dev_commands.cpp's handleDevStop: a broadcast neutral posted
+    to bb.hardwareBroadcastIn, staged onto every motor's setter at THIS
+    pass's own hardware_.apply() call) is never proven to actually reach the
+    plant. Drives port 1 directly via DEV M VEL (bypassing Drivetrain
+    entirely, mirroring test_velocity_pid_response.py), confirms it is
+    genuinely spinning, then DEV STOP and confirms the plant's raw commanded
+    actuator value (sim.pwm(), ground truth) returns to zero. Unlike the
+    watchdog's own emergencyNeutralize() bypass (test_watchdog_policy.py's
+    own same-pass proof), DEV STOP's broadcast is only STAGED on the pass it
+    is issued (apply(), not tick()) -- one further real tick is needed for
+    the motor's own tick() to execute the now-NEUTRAL mode and actually
+    write the zero duty (armoredWrite()'s own "stop is always immediate,
+    unclamped" contract -- source/hal/capability/motor.h)."""
+    sim.command("DEV M 1 VEL 150")
+    sim.tick_for(600)
+    assert sim.pwm()[0] != 0.0, "expected the motor to be driving before DEV STOP"
+
+    reply = sim.command("DEV STOP")
+    assert reply.strip() == "OK DEV STOP"
+
+    sim.tick_for(24)   # one real tick -- lets the staged NEUTRAL mode execute
+    assert sim.pwm() == (0.0, 0.0), (
+        "expected DEV STOP to neutralize the plant's actuator output"
+    )
+
+
 def test_unknown_verb_replies_err_unknown(sim):
     reply = sim.command("BOGUS")
     assert reply.strip() == "ERR unknown"

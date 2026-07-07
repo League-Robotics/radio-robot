@@ -67,6 +67,7 @@
 #include <string>
 
 #include "com/i2c_bus.h"
+#include "hal/nezha/nezha_motor.h"
 #include "messages/motor.h"
 #include "runtime/queue.h"
 #include "subsystems/nezha_hardware.h"
@@ -554,6 +555,69 @@ void scenarioRequestHonorsClearanceAfterDutyWrite() {
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
 }
 
+// 10. 088-008: MotorConfig::fwd_sign genuinely negates NezhaMotor's own
+//     reported encoder-position sign -- the sim-side, REAL-HAL proof of the
+//     mirror-mounted wheel-direction fix (088-002) that
+//     test_gen_boot_config_fwd_sign.py's own module docstring explicitly
+//     disclaims trying to attempt ("the sim plant does not model physical
+//     wheel mounting"): that file only proves the generator emits the
+//     correct fwd_sign VALUE into the generated boot config, never that any
+//     HAL object actually consumes it. It cannot, either -- confirmed by
+//     inspection of source/hal/sim/sim_motor.cpp, Hal::SimMotor never reads
+//     config_.fwd_sign anywhere (tick()/writeRawDuty()/encoderPosition() all
+//     omit it); only the REAL Hal::NezhaMotor leaf exercised by THIS harness
+//     consumes it, in both writeMotorRun()'s direction-byte selection (not
+//     independently observable here -- the HOST_BUILD I2CBus fake discards
+//     write() payload bytes entirely, see this file's own header note) and
+//     position()'s decode (nezha_motor.cpp's tick(): "pos = (raw/10) *
+//     travel_calib * fwd_sign" -- fully observable via position()).
+//
+//     Constructs two STANDALONE NezhaMotor objects (bypassing
+//     NezhaHardware's flip-flop scheduler entirely -- unneeded for a single
+//     collectEncoder()+tick() call), each on its OWN scripted I2CBus,
+//     differing ONLY in fwd_sign (+1 / -1); scripts the IDENTICAL raw
+//     encoder register bytes (1000 tenths-of-degree) for both. One tick()
+//     each is enough for tick()'s own step-2 collectEncoder()+position()
+//     conversion to run. The two motors must report EXACTLY opposite
+//     position() signs from the identical underlying hardware reading --
+//     proof fwd_sign is not merely a stored, inert config value on the leaf
+//     that actually drives the physical wheels.
+void scenarioFwdSignNegatesEncoderPositionSign() {
+  beginScenario("088-008: fwd_sign negates NezhaMotor's reported encoder-position sign");
+  I2CBus::setClock(1000000);
+
+  I2CBus busPos;
+  I2CBus busNeg;
+
+  msg::MotorConfig cfgPos = msg::MotorConfig{}.setPort(1).setFwdSign(1).setTravelCalib(1.0f);
+  msg::MotorConfig cfgNeg = msg::MotorConfig{}.setPort(1).setFwdSign(-1).setTravelCalib(1.0f);
+
+  Hal::NezhaMotor motorPos(busPos, cfgPos);
+  Hal::NezhaMotor motorNeg(busNeg, cfgNeg);
+
+  // raw = 1000 (tenths of a degree), little-endian int32 -- resp[0] is the
+  // LSB (see nezha_motor.cpp's collectEncoder()). Identical bytes scripted
+  // on BOTH motors' own independent bus.
+  uint8_t rawEnc[4] = {0xE8, 0x03, 0x00, 0x00};   // 1000 == 0x000003E8
+  busPos.scriptRead(kWireAddr, rawEnc, 4, /*status=*/0);
+  busNeg.scriptRead(kWireAddr, rawEnc, 4, /*status=*/0);
+
+  motorPos.tick(1000);
+  motorNeg.tick(1000);
+
+  // mm = (raw/10) * travel_calib * fwd_sign = (1000/10) * 1.0 * fwd_sign = 100 * fwd_sign.
+  checkFloatEq(motorPos.position(), 100.0f,
+               "fwd_sign=+1: raw=1000 tenths-deg -> position=+100mm (same-sign passthrough)");
+  checkFloatEq(motorNeg.position(), -100.0f,
+               "fwd_sign=-1: the IDENTICAL raw encoder reading -> position=-100mm (negated) -- "
+               "proves fwd_sign flips the reported encoder-position sign, the sim-side/real-HAL "
+               "proof of the mirror-mounted wheel-direction fix (088-002) beyond the generator/"
+               "config-value-only check test_gen_boot_config_fwd_sign.py adds");
+
+  checkUintEq(busPos.errCount(kAddr7), 0, "no script under-run on the +1 motor's bus");
+  checkUintEq(busNeg.errCount(kAddr7), 0, "no script under-run on the -1 motor's bus");
+}
+
 }  // namespace
 
 int main() {
@@ -566,6 +630,7 @@ int main() {
   scenarioReversalDwellHoldsAtNewCadence();
   scenarioFirstWriteExemptFromSentinelSlew();
   scenarioRequestHonorsClearanceAfterDutyWrite();
+  scenarioFwdSignNegatesEncoderPositionSign();
 
   if (g_failureCount == 0) {
     std::printf("OK: all NezhaHardware flip-flop scenarios passed\n");
