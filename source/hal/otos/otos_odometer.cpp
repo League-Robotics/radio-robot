@@ -79,15 +79,30 @@ bool OtosOdometer::connected() const { return initialized_ && connected_; }
 // tick() — burst-read position + velocity, transform, cache.
 // ---------------------------------------------------------------------------
 
-void OtosOdometer::tick(uint32_t nowMs)
+void OtosOdometer::tick(uint32_t now)
 {
     if (!initialized_) return;   // never detected at begin() -- no bus traffic
 
+    // 086-007 rate limiting: dev_loop.cpp calls tick() unconditionally every
+    // main-loop pass (~470 Hz observed on hardware) -- the OTOS does not
+    // need reading anywhere near that often. A tick() call that arrives
+    // sooner than kReadPeriod since the last REAL bus read is a no-op on
+    // the bus; mark THIS sample stale so Subsystems::PoseEstimator::tick()
+    // does not re-fuse the same reading every pass (over-weighting the
+    // EKF) -- see tick()'s own doc comment and the file header's "086-007
+    // HITL fix" section for the CODAL NRF52I2C::waitForStop() stall this
+    // (paired with the clearance added below) eliminates.
+    if (hasRead_ && (now - lastReadMs_) < kReadPeriod) {
+        cachedPose_.stamp.valid = false;
+        return;
+    }
+
     int16_t rx = 0, ry = 0, rh = 0;
-    bool posOk = readXYH(kRegPositionXl, rx, ry, rh);
     int16_t rvx = 0, rvy = 0, rvh = 0;
-    bool velOk = readXYH(kRegVelocityXl, rvx, rvy, rvh);
-    bool ok = posOk && velOk;
+    bool ok = readPositionVelocity(rx, ry, rh, rvx, rvy, rvh);
+
+    lastReadMs_ = now;
+    hasRead_ = true;
 
     // Live per-tick bus health -- always re-evaluated (see tick()'s own doc
     // comment for why a transient failure does not latch permanently).
@@ -139,7 +154,7 @@ void OtosOdometer::tick(uint32_t nowMs)
     cachedPose_.twist.v_y = rotVy;
     cachedPose_.twist.omega = whF;
     cachedPose_.stamp.valid = true;
-    cachedPose_.stamp.last_upd = nowMs;
+    cachedPose_.stamp.last_upd = now;
     cachedPose_.stamp.lag = 0;
 }
 
@@ -238,26 +253,53 @@ int8_t OtosOdometer::scaleToRegister(float scale)
 void OtosOdometer::writeReg8(uint8_t reg, uint8_t val)
 {
     uint8_t buf[2] = {reg, val};
-    bus_.write(static_cast<uint16_t>(kOtosDeviceAddr << 1), buf, 2, false);
+    // 086-007: postClear=kBusClearance -- see file header's "086-007 HITL
+    // fix" section and nezha_motor.cpp's writeMotorRun()/requestEncoder()
+    // for the proven precedent this mirrors.
+    bus_.write(static_cast<uint16_t>(kOtosDeviceAddr << 1), buf, 2, false,
+               /*preClear=*/0, /*postClear=*/kBusClearance);
 }
 
 uint8_t OtosOdometer::readReg8(uint8_t reg)
 {
     uint8_t result = 0;
-    bus_.write(static_cast<uint16_t>(kOtosDeviceAddr << 1), &reg, 1, false);
-    bus_.read(static_cast<uint16_t>(kOtosDeviceAddr << 1), &result, 1, false);
+    // 086-007: the register-select write gets postClear=kBusClearance; the
+    // following read gets preClear=kBusClearance so it waits out the
+    // write's own settle window before issuing -- see file header.
+    bus_.write(static_cast<uint16_t>(kOtosDeviceAddr << 1), &reg, 1, false,
+               /*preClear=*/0, /*postClear=*/kBusClearance);
+    bus_.read(static_cast<uint16_t>(kOtosDeviceAddr << 1), &result, 1, false,
+              /*preClear=*/kBusClearance, /*postClear=*/0);
     return result;
 }
 
-bool OtosOdometer::readXYH(uint8_t startReg, int16_t& x, int16_t& y, int16_t& h)
+bool OtosOdometer::readPositionVelocity(int16_t& x, int16_t& y, int16_t& h,
+                                         int16_t& vx, int16_t& vy, int16_t& vh)
 {
-    uint8_t raw[6] = {0, 0, 0, 0, 0, 0};
-    int writeStatus = bus_.write(static_cast<uint16_t>(kOtosDeviceAddr << 1), &startReg, 1, false);
-    int readStatus = bus_.read(static_cast<uint16_t>(kOtosDeviceAddr << 1), raw, 6, false);
+    // 086-007: ONE 12-byte burst read replaces the former two separate
+    // 6-byte readXYH() bursts (position, then velocity) -- kRegPositionXl
+    // (0x20, 6 bytes) and kRegVelocityXl (0x26, 6 bytes) are CONTIGUOUS
+    // registers, so a single register-select write to kRegPositionXl
+    // followed by a 12-byte auto-increment read covers both, halving this
+    // leaf's per-tick transaction count (and thus its clearance cost). The
+    // register-select write gets postClear=kBusClearance; the following
+    // read gets preClear=kBusClearance so it waits out the write's own
+    // settle window before issuing -- see file header's "086-007 HITL fix"
+    // section and nezha_motor.cpp's writeMotorRun()/requestEncoder() for
+    // the proven precedent this mirrors.
+    uint8_t reg = kRegPositionXl;
+    uint8_t raw[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    int writeStatus = bus_.write(static_cast<uint16_t>(kOtosDeviceAddr << 1), &reg, 1, false,
+                                  /*preClear=*/0, /*postClear=*/kBusClearance);
+    int readStatus = bus_.read(static_cast<uint16_t>(kOtosDeviceAddr << 1), raw, 12, false,
+                                /*preClear=*/kBusClearance, /*postClear=*/0);
 
-    x = static_cast<int16_t>(raw[0] | (static_cast<uint16_t>(raw[1]) << 8));
-    y = static_cast<int16_t>(raw[2] | (static_cast<uint16_t>(raw[3]) << 8));
-    h = static_cast<int16_t>(raw[4] | (static_cast<uint16_t>(raw[5]) << 8));
+    x  = static_cast<int16_t>(raw[0]  | (static_cast<uint16_t>(raw[1])  << 8));
+    y  = static_cast<int16_t>(raw[2]  | (static_cast<uint16_t>(raw[3])  << 8));
+    h  = static_cast<int16_t>(raw[4]  | (static_cast<uint16_t>(raw[5])  << 8));
+    vx = static_cast<int16_t>(raw[6]  | (static_cast<uint16_t>(raw[7])  << 8));
+    vy = static_cast<int16_t>(raw[8]  | (static_cast<uint16_t>(raw[9])  << 8));
+    vh = static_cast<int16_t>(raw[10] | (static_cast<uint16_t>(raw[11]) << 8));
 
     return (writeStatus == MICROBIT_OK && readStatus == MICROBIT_OK);
 }
@@ -272,7 +314,9 @@ void OtosOdometer::writeXYH(uint8_t startReg, int16_t x, int16_t y, int16_t h)
     buf[4] = static_cast<uint8_t>((y >> 8) & 0xFF);
     buf[5] = static_cast<uint8_t>(h & 0xFF);
     buf[6] = static_cast<uint8_t>((h >> 8) & 0xFF);
-    bus_.write(static_cast<uint16_t>(kOtosDeviceAddr << 1), buf, 7, false);
+    // 086-007: postClear=kBusClearance -- see writeReg8()'s own comment.
+    bus_.write(static_cast<uint16_t>(kOtosDeviceAddr << 1), buf, 7, false,
+               /*preClear=*/0, /*postClear=*/kBusClearance);
 }
 
 }  // namespace Hal

@@ -23,6 +23,22 @@
 // read-side register-scaling + mounting-rotation + lever-arm math end to
 // end) -- exactly the same split nezha_flipflop_harness.cpp's own header
 // comment documents for the identical fake.
+//
+// --- 086-007 update ---
+// The real-hardware HITL fix (086-007) changed tick()'s bus traffic shape:
+// (1) the former two separate 6-byte readXYH() bursts (position, then
+// velocity) are now ONE combined 12-byte burst read (position+velocity
+// together -- readPositionVelocity()), so scenarios below script that one
+// combined read (scriptPosVel()) instead of two scriptXYH() calls; (2) every
+// bus_.write()/bus_.read() call in the real leaf now carries a non-zero
+// preClear/postClear (kBusClearance = 4000us) -- this fake's write()/read()
+// still don't expose the exact clearance argument passed, but DO enforce it
+// behaviorally via the lastEnd/readyAt entry-spin (see i2c_bus_host.cpp),
+// so a test that wanted to observe it could bracket a call with
+// I2CBus::clock() before/after; these scenarios don't need to (txnCount()/
+// pose() already prove the read sequencing and math), so none do; (3)
+// tick()'s own real bus read is now rate-limited to kReadPeriod (20ms) --
+// scenario 8 below (scenarioTickRateLimitsBusReads) covers this directly.
 
 #include <cmath>
 #include <cstdint>
@@ -111,18 +127,27 @@ void scriptProductId(I2CBus& bus, uint8_t id, int status = 0) {
   bus.scriptRead(kWireAddr, data, 1, status);
 }
 
-// Queues one scripted 6-byte burst read (X_L X_H Y_L Y_H H_L H_H, LE) for
-// the next readXYH() call (position OR velocity -- both use the same 6-byte
-// layout at different start registers, indistinguishable to this fake).
-void scriptXYH(I2CBus& bus, int16_t x, int16_t y, int16_t h, int status = 0) {
-  uint8_t raw[6];
-  raw[0] = static_cast<uint8_t>(x & 0xFF);
-  raw[1] = static_cast<uint8_t>((x >> 8) & 0xFF);
-  raw[2] = static_cast<uint8_t>(y & 0xFF);
-  raw[3] = static_cast<uint8_t>((y >> 8) & 0xFF);
-  raw[4] = static_cast<uint8_t>(h & 0xFF);
-  raw[5] = static_cast<uint8_t>((h >> 8) & 0xFF);
-  bus.scriptRead(kWireAddr, raw, 6, status);
+// Queues one scripted 12-byte burst read (X_L X_H Y_L Y_H H_L H_H, then
+// VX_L VX_H VY_L VY_H VH_L VH_H, all LE) for the next
+// readPositionVelocity() call -- 086-007 combined the former two separate
+// 6-byte position/velocity reads into this one 12-byte burst (the two
+// register blocks are contiguous: kRegPositionXl then kRegVelocityXl).
+void scriptPosVel(I2CBus& bus, int16_t x, int16_t y, int16_t h,
+                   int16_t vx, int16_t vy, int16_t vh, int status = 0) {
+  uint8_t raw[12];
+  raw[0]  = static_cast<uint8_t>(x & 0xFF);
+  raw[1]  = static_cast<uint8_t>((x >> 8) & 0xFF);
+  raw[2]  = static_cast<uint8_t>(y & 0xFF);
+  raw[3]  = static_cast<uint8_t>((y >> 8) & 0xFF);
+  raw[4]  = static_cast<uint8_t>(h & 0xFF);
+  raw[5]  = static_cast<uint8_t>((h >> 8) & 0xFF);
+  raw[6]  = static_cast<uint8_t>(vx & 0xFF);
+  raw[7]  = static_cast<uint8_t>((vx >> 8) & 0xFF);
+  raw[8]  = static_cast<uint8_t>(vy & 0xFF);
+  raw[9]  = static_cast<uint8_t>((vy >> 8) & 0xFF);
+  raw[10] = static_cast<uint8_t>(vh & 0xFF);
+  raw[11] = static_cast<uint8_t>((vh >> 8) & 0xFF);
+  bus.scriptRead(kWireAddr, raw, 12, status);
 }
 
 // begin()'s full successful-detect transaction count: 1 write + 1 read
@@ -216,8 +241,7 @@ void scenarioTickLeverArmOnlyTransform() {
 
   constexpr int16_t kRx = 2000, kRy = 1000, kRh = 5217;      // position burst
   constexpr int16_t kRvx = 300, kRvy = -100, kRvh = 50;      // velocity burst
-  scriptXYH(bus, kRx, kRy, kRh);
-  scriptXYH(bus, kRvx, kRvy, kRvh);
+  scriptPosVel(bus, kRx, kRy, kRh, kRvx, kRvy, kRvh);
 
   odom.tick(2000);
 
@@ -260,8 +284,7 @@ void scenarioTickMountingYawRotationOnlyTransform() {
   odom.begin();
 
   constexpr int16_t kRx = 1500, kRy = -800, kRh = 2000;
-  scriptXYH(bus, kRx, kRy, kRh);
-  scriptXYH(bus, 0, 0, 0);   // velocity burst -- unused by this scenario's assertions
+  scriptPosVel(bus, kRx, kRy, kRh, 0, 0, 0);   // velocity burst -- unused by this scenario's assertions
 
   odom.tick(3000);
 
@@ -295,17 +318,17 @@ void scenarioTickFailureHoldsLastGoodPoseAndRecovers() {
   odom.begin();
 
   // Tick 1: clean burst -- establishes a known-good cached pose.
-  scriptXYH(bus, 1000, 500, 0);
-  scriptXYH(bus, 0, 0, 0);
+  scriptPosVel(bus, 1000, 500, 0, 0, 0, 0);
   odom.tick(1000);
   checkTrue(odom.connected(), "tick 1: clean burst -- connected() true");
   msg::PoseEstimate afterGood = odom.pose();
   checkTrue(afterGood.stamp.valid, "tick 1: stamp.valid true");
 
-  // Tick 2: position read succeeds, velocity read fails (induced status) --
-  // the whole burst is treated as failed.
-  scriptXYH(bus, 9999, 9999, 9999);   // position -- would-be-fresh values, must NOT be adopted
-  scriptXYH(bus, 0, 0, 0, /*status=*/-1);   // velocity -- induced failure
+  // Tick 2: the combined 12-byte burst read fails (induced status) --
+  // 086-007 combined position+velocity into ONE read, so a single induced
+  // failure status now covers what used to be "position ok, velocity
+  // fails" -- the whole burst is treated as failed either way.
+  scriptPosVel(bus, 9999, 9999, 9999, 0, 0, 0, /*status=*/-1);   // would-be-fresh values, must NOT be adopted
   odom.tick(2000);
 
   checkFalse(odom.connected(), "tick 2: induced failure -- connected() false");
@@ -318,8 +341,7 @@ void scenarioTickFailureHoldsLastGoodPoseAndRecovers() {
 
   // Tick 3: clean again -- proves the failure did not permanently latch
   // connected() false (always-retry semantics, mirrors Hal::NezhaMotor).
-  scriptXYH(bus, 1200, 600, 0);
-  scriptXYH(bus, 0, 0, 0);
+  scriptPosVel(bus, 1200, 600, 0, 0, 0, 0);
   odom.tick(3000);
   checkTrue(odom.connected(), "tick 3: a subsequent clean burst recovers connected() -- no permanent latch");
   checkTrue(odom.pose().stamp.valid, "tick 3: stamp.valid recovers true");
@@ -359,6 +381,51 @@ void scenarioSetterTxnCounts() {
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
 }
 
+// 8. tick(): 086-007 rate limiting -- a second tick() call within
+//    kReadPeriod of the last REAL bus read issues NO further bus traffic
+//    and marks the cached sample stale (so PoseEstimator does not re-fuse
+//    the same reading every main-loop pass); a subsequent tick() at/after
+//    the period boundary is due again and issues a fresh real read.
+void scenarioTickRateLimitsBusReads() {
+  beginScenario("tick(): rate-limits real bus reads to kReadPeriod (086-007)");
+  I2CBus::setClock(1000000);
+  I2CBus bus;
+  scriptGenerousWrites(bus, 20);
+  scriptProductId(bus, 0x5F);
+
+  Hal::OtosOdometer odom(bus, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  odom.begin();
+
+  // Mirrors otos_odometer.h's private kReadPeriod (086-007) -- duplicated
+  // here the same way kPosMmPerLsb/kHdgRadPerLsb already are (this file's
+  // own established convention for restating a private leaf constant).
+  constexpr uint32_t kReadPeriodMs = 20;
+
+  // Tick 1 at now=1000: hasRead_ starts false -- always issues a real read
+  // regardless of kReadPeriod.
+  scriptPosVel(bus, 1000, 500, 0, 300, -100, 50);
+  odom.tick(1000);
+  checkTrue(odom.pose().stamp.valid, "tick 1: real read -- stamp.valid true");
+  uint32_t txnAfterTick1 = bus.txnCount(kAddr7);
+
+  // Tick 2 at now=1000+kReadPeriodMs-1 (just inside the window): too soon
+  // -- must issue ZERO further bus traffic and mark the sample stale.
+  odom.tick(1000 + kReadPeriodMs - 1);
+  checkUintEq(bus.txnCount(kAddr7), txnAfterTick1, "tick 2 (too soon): issues NO bus traffic");
+  checkFalse(odom.pose().stamp.valid, "tick 2 (too soon): stamp.valid false -- stale, not re-fused");
+
+  // Tick 3 at now=1000+kReadPeriodMs (exactly at the boundary, not "<"
+  // kReadPeriod): due again -- issues a fresh real read (one write + one
+  // 12-byte read -- txnCount delta of 2).
+  scriptPosVel(bus, 1100, 550, 0, 300, -100, 50);
+  odom.tick(1000 + kReadPeriodMs);
+  checkTrue(odom.pose().stamp.valid, "tick 3 (period elapsed): real read -- stamp.valid true");
+  checkUintEq(bus.txnCount(kAddr7) - txnAfterTick1, 2,
+              "tick 3: issues exactly one write + one read (the combined burst)");
+
+  checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
+}
+
 }  // namespace
 
 int main() {
@@ -369,6 +436,7 @@ int main() {
   scenarioTickMountingYawRotationOnlyTransform();
   scenarioTickFailureHoldsLastGoodPoseAndRecovers();
   scenarioSetterTxnCounts();
+  scenarioTickRateLimitsBusReads();
 
   if (g_failureCount == 0) {
     std::printf("OK: all OtosOdometer scenarios passed\n");
