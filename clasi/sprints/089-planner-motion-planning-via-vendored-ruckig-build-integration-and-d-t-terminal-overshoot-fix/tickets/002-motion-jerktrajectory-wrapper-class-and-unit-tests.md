@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Motion::JerkTrajectory wrapper class and unit tests
-status: open
+status: done
 use-cases:
 - SUC-002
 - SUC-003
@@ -172,43 +172,43 @@ enforced here (architecture-update.md Decision 10).
 
 ## Acceptance Criteria
 
-- [ ] `Motion::JerkTrajectory` compiles under the firmware's exact flags
+- [x] `Motion::JerkTrajectory` compiles under the firmware's exact flags
       (`gnu++20 -fno-exceptions -fno-rtti`) in both the ARM and host-sim
       builds (ticket 001's integration).
-- [ ] Position-control solve-to-rest: sampled velocity never goes negative
+- [x] Position-control solve-to-rest: sampled velocity never goes negative
       across the whole trajectory for a positive target, arrives at rest
       exactly at the target position (mirrors `test_ruckig_smoke.py`'s own
       assertions, against this wrapper class specifically).
-- [ ] Velocity-control solve-to-a-velocity: sampled trajectory reaches and
+- [x] Velocity-control solve-to-a-velocity: sampled trajectory reaches and
       then HOLDS the target velocity past the ramp-up's own duration, with
       no additional bookkeeping in the wrapper beyond `at_time()`.
-- [ ] A second, stop-triggered-style solve (velocity-control, target=0)
+- [x] A second, stop-triggered-style solve (velocity-control, target=0)
       seeded from a mid-cruise state decelerates to rest with no reverse,
       regardless of when it is triggered relative to the first solve's own
       duration.
-- [ ] `j_max`/`yaw_jerk_max == 0` sentinel maps to `max_jerk = +infinity`
+- [x] `j_max`/`yaw_jerk_max == 0` sentinel maps to `max_jerk = +infinity`
       (not literal 0); a positive value produces a measurably
       different (S-curve) profile. No config/wire change.
-- [ ] Per-call `max_velocity` argument is honored independently of the
+- [x] Per-call `max_velocity` argument is honored independently of the
       global `PlannerConfig` ceiling.
-- [ ] Linear-channel `max_acceleration`/`min_acceleration` are correctly
+- [x] Linear-channel `max_acceleration`/`min_acceleration` are correctly
       direction-mirrored for a negative-direction solve (Open Question 2);
       rotational-channel limits are symmetric (`yaw_acc_max` both ways),
       with a test confirming no mirroring logic is needed/applied there.
-- [ ] The class never reads `leftObs`/`rightObs` — its current-state
+- [x] The class never reads `leftObs`/`rightObs` — its current-state
       seeding is exclusively internal (its own last sample) or an explicit
       caller-provided seed, never a measured-observation argument.
-- [ ] **[Revision 2]** `retarget(newRemaining)` re-solves position-control-
+- [x] **[Revision 2]** `retarget(newRemaining)` re-solves position-control-
       to-rest seeded from the channel's own last sampled velocity/
       acceleration (never the position — the call re-baselines to 0), with
       an externally supplied new remaining as target; unit test confirms
       velocity/acceleration continuity across the reseed and no reverse.
-- [ ] **[Revision 2]** `reanchor(position, velocity)` re-solves position-
+- [x] **[Revision 2]** `reanchor(position, velocity)` re-solves position-
       control-to-rest seeded from caller-supplied position/velocity with
       acceleration forced to 0; unit test confirms the resulting trajectory
       is well-formed and non-reversing even though it accepts a velocity
       discontinuity from the prior plan (intentional, Decision 10).
-- [ ] **[Revision 2]** The class doc comment states explicitly that the
+- [x] **[Revision 2]** The class doc comment states explicitly that the
       never-solves-backward guard is Planner-enforced, not wrapper-
       enforced — documented, not silently assumed.
 
