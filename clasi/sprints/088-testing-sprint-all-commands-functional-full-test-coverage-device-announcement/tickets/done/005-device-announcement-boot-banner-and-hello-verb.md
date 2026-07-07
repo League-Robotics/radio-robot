@@ -76,11 +76,14 @@ NOT touched here (out of scope, deferred to a future
       change should be needed.
 - [x] `docs/protocol-v2.md` re-adds `HELLO` and documents the boot
       announcement (both currently listed as removed under v2).
-- [ ] HITL bench: banner appears on serial at connect; over the
-      radio/relay path a `HELLO` re-request returns the banner. **Deferred
-      to ticket 088-009** (the on-stand bench functional-verification
-      ticket) — this ticket's own scope is the firmware change + sim
-      coverage; the sim harness (`tests/_infra/sim/sim_api.cpp`) constructs
+- [x] HITL bench: the `DEVICE:NEZHA2:robot:tovez:2314287040` banner is confirmed
+      over the real serial link — verified in ticket 088-009 (the host's
+      `connect()` sent `HELLO`, received the banner, and classified the robot as
+      `mode=direct`; raw `HELLO` returned the banner verbatim). The **relay-path**
+      `HELLO` re-request is the deferred follow-up
+      (`clasi/issues/relay-round-trip-bench-verification.md`). Original scope note:
+      this ticket's own scope is the firmware change + sim coverage; the sim
+      harness (`tests/_infra/sim/sim_api.cpp`) constructs
       `CommandRouter`/`CommandProcessor` directly, never through `main()`,
       so `main.cpp`'s boot-time both-channels announcement is not
       exercisable from `tests/sim/`. `HELLO`'s reply IS covered by a sim

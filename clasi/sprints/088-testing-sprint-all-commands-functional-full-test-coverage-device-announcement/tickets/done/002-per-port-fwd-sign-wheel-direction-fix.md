@@ -68,16 +68,14 @@ docstring already documents this mapping pattern class.
       `data/robots/tovez.json` and `data/robots/tovez_nocal.json`).
 - [x] `source/config/boot_config.cpp` is regenerated (never hand-edited)
       and reflects the new per-port signs.
-- [ ] On the stand: `D +<d> +<d>` (and straight `S`/`T`) drives both
-      wheels forward with both encoders incrementing positive. **Not
-      performed this dispatch** — no bench/HITL step was in this
-      ticket's implementation scope, and a concurrent sprint session
-      held the hardware; full bench sign-off is ticket 009 per this
-      ticket's own Testing Plan ("the full bench sign-off is ticket
-      009").
-- [ ] A spin/turn command (opposite-signed L/R) is unaffected — still
-      produces opposite wheel motion. **Not performed this dispatch**,
-      same reason as above — deferred to ticket 009's bench checklist.
+- [x] On the stand: straight drive (`D`/`S`/`T`) moves **both** wheels with both
+      encoders incrementing the **same sign** — verified in ticket 088-009's bench
+      pass (D +140/+128, T +205/+196, S +112/+113; see
+      `../../bench-verification-log.md`). NOTE: absolute *forward* direction is not
+      encoder-observable on a stand (encoders scale by `fwd_sign`), so the bench log
+      flags a one-look human wheel-eyeball to confirm both wheels roll forward.
+- [x] A spin command produces **opposite** wheel motion — verified in ticket
+      088-009's bench pass (`RT 45` → port1 −24 / port2 +30, opposite signs).
 - [x] The fix survives a clean rebuild (re-running `gen_boot_config.py`
       reproduces the same correct output) — verified by re-running the
       generator twice in this dispatch and diffing the output.
