@@ -105,6 +105,18 @@ int main() {
     comm.configure(msg::CommunicatorConfig());
     comm.begin();
 
+    // 088-005: the DEVICE: identity banner is the first line out on BOTH
+    // channels -- before anything else is sent, before the loop starts.
+    // formatDeviceAnnouncement() (commands/system_commands.h) is the same
+    // helper HELLO's handler calls, so a re-request always matches this
+    // boot banner byte-for-byte. Radio is fire-and-forget: a missed boot
+    // radio banner (no relay listening yet) is not a failure -- HELLO is
+    // the reliable re-request path once a relay attaches.
+    char deviceBanner[64];
+    formatDeviceAnnouncement(deviceBanner, sizeof(deviceBanner));
+    comm.sendSerial(deviceBanner);
+    comm.sendRadio(deviceBanner);
+
 #if ROBOT_DEV_BUILD
     // --- HAL: one NezhaMotor per port (1-4) over the shared I2CBus. ---
     static_assert(Config::kMotorConfigCount == Subsystems::NezhaHardware::kPortCount,

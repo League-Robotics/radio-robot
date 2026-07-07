@@ -1,9 +1,11 @@
 ---
 id: '005'
 title: 'Device announcement: boot banner and HELLO verb'
-status: open
-use-cases: [SUC-004]
-depends-on: ['003']
+status: done
+use-cases:
+- SUC-004
+depends-on:
+- '003'
 github-issue: ''
 issue: robot-device-announcement-on-connect-and-hello.md
 completes_issue: true
@@ -60,22 +62,30 @@ NOT touched here (out of scope, deferred to a future
 
 ## Acceptance Criteria
 
-- [ ] `DEVICE:NEZHA2:robot:<name>:<serial>` is the first line out on
+- [x] `DEVICE:NEZHA2:robot:<name>:<serial>` is the first line out on
       serial at boot.
-- [ ] `DEVICE:NEZHA2:robot:<name>:<serial>` is the first line out on radio
+- [x] `DEVICE:NEZHA2:robot:<name>:<serial>` is the first line out on radio
       at boot (radio is fire-and-forget — a missed boot radio banner
       because no relay was listening yet is not a failure).
-- [ ] `HELLO` re-emits the same banner on the channel it arrived on.
-- [ ] `<name>`/`<serial>` are exactly `microbit_friendly_name()`/
+- [x] `HELLO` re-emits the same banner on the channel it arrived on.
+- [x] `<name>`/`<serial>` are exactly `microbit_friendly_name()`/
       `microbit_serial_number()` — the same pair `ID` already uses.
-- [ ] The host's existing parsers (`serial_conn.py`, `connection.py`,
+- [x] The host's existing parsers (`serial_conn.py`, `connection.py`,
       `testgui/transport.py`) classify the robot as a direct/robot device
       from the banner unchanged — verify by inspection; no host-side code
       change should be needed.
-- [ ] `docs/protocol-v2.md` re-adds `HELLO` and documents the boot
+- [x] `docs/protocol-v2.md` re-adds `HELLO` and documents the boot
       announcement (both currently listed as removed under v2).
 - [ ] HITL bench: banner appears on serial at connect; over the
-      radio/relay path a `HELLO` re-request returns the banner.
+      radio/relay path a `HELLO` re-request returns the banner. **Deferred
+      to ticket 088-009** (the on-stand bench functional-verification
+      ticket) — this ticket's own scope is the firmware change + sim
+      coverage; the sim harness (`tests/_infra/sim/sim_api.cpp`) constructs
+      `CommandRouter`/`CommandProcessor` directly, never through `main()`,
+      so `main.cpp`'s boot-time both-channels announcement is not
+      exercisable from `tests/sim/`. `HELLO`'s reply IS covered by a sim
+      test (`test_hello_reemits_the_device_identity_banner`,
+      `tests/sim/unit/test_protocol_roundtrips.py`).
 
 ## Testing
 
