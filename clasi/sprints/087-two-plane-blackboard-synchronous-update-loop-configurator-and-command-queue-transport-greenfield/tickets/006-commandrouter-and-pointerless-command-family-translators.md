@@ -25,6 +25,16 @@ completes_issue: true
 
 # CommandRouter and pointerless command-family translators
 
+**Note (architecture-update-r1.md Decision 10):** `CommandRouter::route()`'s
+`statement` parameter is `Subsystems::CommunicatorToCommandProcessorStatement`
+— unchanged in name, but now defined in the new CODAL-free
+`source/subsystems/statement.h` (ticket 002), not `subsystems/communicator.h`.
+`command_router.h` should `#include "subsystems/statement.h"` directly
+(never `subsystems/communicator.h`) to name the type without pulling in
+`MicroBit.h`. The struct's `line` field is now an owned `char line[256]`
+(was an aliasing `const char*`) — reads through it (`.line`) are unaffected
+since the array decays to a pointer in the usual C-string call patterns.
+
 ## Description
 
 Implement `CommandRouter` (`source/runtime/command_router.{h,cpp}`) and

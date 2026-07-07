@@ -36,6 +36,15 @@ completes_issue:
 
 # Cyclic-executive main loop: delete dev_loop, rewire main.cpp and sim_api.cpp, preserve serial-silence watchdog
 
+**Note (architecture-update-r1.md Decision 10):** `comm.takeStatement()`'s
+return type, `Subsystems::CommunicatorToCommandProcessorStatement`, is
+unchanged in name but now defined in `source/subsystems/statement.h`
+(ticket 002), included via `communicator.h` — no change needed at this
+ticket's own call site (`main.cpp`/`sim_api.cpp` just call
+`comm.takeStatement()` and pass the result to `router.route()`, same as
+before); flagged only so the type's new home isn't a surprise if this
+ticket's implementer greps for it.
+
 ## Description
 
 Delete `source/dev_loop.{h,cpp}` entirely and rewrite `source/main.cpp`'s
