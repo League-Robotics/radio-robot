@@ -1,17 +1,24 @@
-"""Off-hardware acceptance proof for ticket 082-004 (SUC-004): Telemetry::
-buildTlmFrame() (source/telemetry/tlm_frame.{h,cpp}) -- the pure, stateless
-TLM frame-formatting function the STREAM/SNAP command family
-(commands/telemetry_commands.{h,cpp}) builds on.
+"""Off-hardware acceptance proof for ticket 082-004 (SUC-004), extended by
+087-008 (SUC-001/SUC-002/SUC-006): Telemetry::buildTlmFrame()
+(source/telemetry/tlm_frame.{h,cpp}) -- the pure, stateless TLM
+frame-formatting function the STREAM/SNAP command family
+(commands/telemetry_commands.{h,cpp}) builds on -- plus, since 087-008,
+Telemetry::tick() (bb -> TlmFrameInput), which reads a bare Rt::Blackboard
+directly with no live subsystem behind any cell.
 
 Compiles ``tlm_frame_harness.cpp`` together with ``source/telemetry/
-tlm_frame.cpp`` using the system C++ compiler, runs the resulting binary,
-and asserts it exits 0. Mirrors ``test_velocity_pid.py``'s compile-and-run
-pattern (081-001): no hardware, no CODAL, no CMake -- just tlm_frame.{h,cpp}
-and messages/common.h (header-only) compiled standalone, since
-Telemetry::buildTlmFrame() has no DevLoop/Hardware/Drivetrain/PoseEstimator
-dependency at all (that impure wiring lives in
-commands/telemetry_commands.cpp instead, exercised end-to-end via the
-ctypes sim harness in ticket 005).
+tlm_frame.cpp`` and ``source/kinematics/body_kinematics.cpp`` (087-008:
+Telemetry::tick()'s one pure-math dependency, for twist=) using the system
+C++ compiler, runs the resulting binary, and asserts it exits 0. Mirrors
+``test_velocity_pid.py``'s compile-and-run pattern (081-001): no hardware,
+no CODAL, no CMake -- tlm_frame.{h,cpp}, body_kinematics.{h,cpp}, and the
+header-only runtime/blackboard.h + messages/*.h it pulls in, compiled
+standalone, since neither Telemetry::buildTlmFrame() nor Telemetry::tick()
+has any DevLoop/Hardware/Drivetrain/PoseEstimator/CommandRouter dependency
+at all (the remaining impure wiring -- reply-channel resolution, the seq=
+counter's mutation -- lives in commands/telemetry_commands.cpp instead,
+exercised end-to-end via the ctypes sim harness in ticket 005 /
+test_tlm_stream_snap.py).
 
 Collected under ``tests/sim/unit/`` alongside the existing
 ``test_velocity_pid.py``/``test_dev_loop_pose_estimator.py`` -- already
@@ -30,6 +37,7 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _SOURCE_DIR = _REPO_ROOT / "source"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "tlm_frame_harness.cpp"
 _TLM_FRAME_SRC = _SOURCE_DIR / "telemetry" / "tlm_frame.cpp"
+_BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
 
 # messages/common.h documents its own target as "CODAL C++11" -- build the
 # host harness to the same standard so it exercises exactly the language
@@ -53,6 +61,7 @@ def test_tlm_frame_harness_compiles_and_passes(tmp_path):
     """Compile the Telemetry::buildTlmFrame() harness and assert every scenario passes."""
     assert _HARNESS_SRC.is_file(), f"harness source missing: {_HARNESS_SRC}"
     assert _TLM_FRAME_SRC.is_file(), f"tlm_frame.cpp missing: {_TLM_FRAME_SRC}"
+    assert _BODY_KINEMATICS_SRC.is_file(), f"body_kinematics.cpp missing: {_BODY_KINEMATICS_SRC}"
     assert _SOURCE_DIR.is_dir(), f"source/ tree missing: {_SOURCE_DIR}"
 
     cxx = _find_cxx_compiler()
@@ -70,6 +79,7 @@ def test_tlm_frame_harness_compiles_and_passes(tmp_path):
             str(binary),
             str(_HARNESS_SRC),
             str(_TLM_FRAME_SRC),
+            str(_BODY_KINEMATICS_SRC),
         ],
         capture_output=True,
         text=True,

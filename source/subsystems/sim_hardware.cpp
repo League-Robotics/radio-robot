@@ -12,6 +12,9 @@ SimHardware::SimHardware(const msg::MotorConfig configs[kPortCount])
       motor4_(configs[3]),
       odometer_(plant_)
 {
+    for (uint32_t i = 0; i < kPortCount; ++i) {
+        config_[i] = configs[i];   // 087-004: config()'s backing store
+    }
 }
 
 void SimHardware::begin()
@@ -25,9 +28,27 @@ void SimHardware::begin()
 // The dt=0 re-entry guard (architecture-update.md (081) Decision 4) — see
 // file header. A call with an unchanged `now` is a complete no-op: no
 // Hal::SimMotor::tick() call, no Hal::PhysicsWorld::update() call, for ANY
-// port.
-void SimHardware::tick(uint32_t now)
+// port. 087-004's motorIn[]/motorResetIn[] consumption (below) runs on
+// EVERY call, including a re-entrant same-now one -- apply()/
+// resetPosition() only stage a command/reset, they do not themselves
+// advance the plant, so there is no double-integration hazard here (unlike
+// the guard below, which exists specifically to protect Hal::PhysicsWorld::
+// update()/Hal::SimMotor::tick() from running twice).
+void SimHardware::tick(uint32_t now, Rt::Mailbox<msg::MotorCommand> motorIn[kPortCount],
+                        bool motorResetIn[kPortCount])
 {
+    // 087-004: uniform per-port consumption, no addressed-dispatch branch,
+    // no in-use bookkeeping (every port ticks every pass regardless).
+    for (uint32_t i = 0; i < kPortCount; ++i) {
+        if (!motorIn[i].empty()) {
+            motorAt(i + 1).apply(motorIn[i].take());
+        }
+        if (motorResetIn[i]) {
+            motorAt(i + 1).resetPosition();
+            motorResetIn[i] = false;   // idempotent -- "reset twice = reset once"
+        }
+    }
+
     if (hasAdvanced_ && now == lastAdvancedNow_) {
         return;
     }
@@ -74,6 +95,26 @@ void SimHardware::apply(const Hal::DrivetrainToHardwareCommand& cmd)
 {
     for (int i = 0; i < 2; ++i) {
         motorAt(cmd.wheel[i].port).apply(cmd.wheel[i].command);
+    }
+}
+
+msg::MotorConfig SimHardware::config(uint32_t port) const
+{
+    switch (port) {
+        case 1: return config_[0];
+        case 2: return config_[1];
+        case 3: return config_[2];
+        default: return config_[3];   // out-of-range clamps to port 4 -- mirrors motorAt()'s own convention
+    }
+}
+
+msg::MotorState SimHardware::state(uint32_t port) const
+{
+    switch (port) {
+        case 1: return motor1_.state();
+        case 2: return motor2_.state();
+        case 3: return motor3_.state();
+        default: return motor4_.state();   // out-of-range clamps to port 4 -- mirrors motorAt()'s own convention
     }
 }
 

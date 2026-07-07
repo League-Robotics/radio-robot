@@ -5,40 +5,43 @@
 // NezhaHardware a real Hal::OtosOdometer member and an odometer() override
 // that always returns its address — hardware.odometer() is NEVER nullptr
 // for NezhaHardware any more, so otosReady()'s nodev guard (otos_commands.cpp,
-// UNCHANGED by 086-006 — it already resolved hardware.odometer() live) can
-// no longer fire against this owner. This harness now proves the opposite,
-// current invariant: all seven verbs reach the real dispatch path and reply
-// OK — driven through the FULL otosCommands()/CommandProcessor path (not
-// just a bare `odometer() != nullptr` check), mirroring
-// hardware_seam_harness.cpp's own "prove it through the real seam, not a
-// mock" discipline.
+// rewritten pointerless 087-006 — reads bb.otosPresent, a boot-time snapshot
+// of hardware.odometer() != nullptr) can no longer fire against this owner.
+// This harness now proves the opposite, current invariant: all seven verbs
+// reach the real dispatch path and reply OK — driven through the FULL
+// Rt::CommandRouter/Rt::Blackboard path (not just a bare
+// `odometer() != nullptr` check), mirroring hardware_seam_harness.cpp's own
+// "prove it through the real seam, not a mock" discipline.
 //
 // No I2C bus scripting is used: hardware.begin() is deliberately never
 // called, so the real OtosOdometer's own product-ID probe never ran and it
 // stays uninitialized (Hal::OtosOdometer::initialized_ == false) — its five
 // primitive setters are then no-ops (see otos_odometer.h's own doc comment),
 // and pose() returns the zero default. This is intentional: the point of
-// this harness is the WIRE-DISPATCH-LEVEL guard (does otosReady() see a
+// this harness is the WIRE-DISPATCH-LEVEL guard (does bb.otosPresent see a
 // non-null Odometer*), not real hardware I/O — that is otos_odometer_harness.cpp's
 // job (086-006's own new host harness, a scripted-I2CBus proof of the leaf's
 // register sequencing).
 //
 // Same HOST_BUILD scripted I2CBus fake + real source/hal/nezha/nezha_motor.cpp
 // + source/subsystems/nezha_hardware.cpp + source/hal/otos/otos_odometer.cpp
-// as hardware_seam_harness.cpp/test_hardware_seam.py (see that file's own doc
-// comment for the recipe this mirrors), plus this ticket's own source/commands/
-// otos_commands.cpp, source/commands/command_processor.cpp, and
-// source/commands/arg_parse.cpp (needed for the full CommandProcessor
-// dispatch table, not just the Subsystems::Hardware seam).
+// as hardware_seam_harness.cpp/test_hardware_seam.py, plus every command
+// family Rt::CommandRouter's constructor registers (087-006: ONE unified
+// table, liveness + all six families -- see command_router.cpp) and their
+// transitive dependencies (subsystems/{drivetrain,pose_estimator,planner}.cpp,
+// kinematics/body_kinematics.cpp, motion/{velocity_ramp,stop_condition}.cpp,
+// estimation/ekf_tiny.cpp, telemetry/tlm_frame.cpp) -- CommandRouter's table
+// is built unconditionally regardless of which family this harness actually
+// dispatches through, so every family's own .cpp must link even though only
+// otos_commands.cpp's own dispatch is exercised here.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
 
 #include "com/i2c_bus.h"
-#include "commands/command_processor.h"
-#include "commands/otos_commands.h"
-#include "messages/motor.h"
+#include "runtime/blackboard.h"
+#include "runtime/command_router.h"
 #include "subsystems/hardware.h"
 #include "subsystems/nezha_hardware.h"
 
@@ -88,12 +91,21 @@ void storeReply(const char* msg, void* ctx) {
   std::snprintf(c->buf, sizeof(c->buf), "%s", msg);
 }
 
-// checkReply — dispatches `line` through the real CommandProcessor and
-// asserts the reply is exactly `expected`.
-void checkReply(CommandProcessor& cmd, const char* line, const char* expected) {
+// checkReply — dispatches `line` through the real Rt::CommandRouter (which
+// unconditionally builds ALL SIX command families plus liveness, per
+// command_router.cpp -- see this file's header) and asserts the reply is
+// exactly `expected`.
+void checkReply(Rt::CommandRouter& router, Rt::Blackboard& bb, const char* line,
+                const char* expected) {
   beginScenario(std::string("dispatch: ") + line);
   CaptureReply reply;
-  cmd.process(line, storeReply, &reply);
+  router.setReplyChannels(storeReply, &reply, storeReply, &reply);
+
+  Subsystems::CommunicatorToCommandProcessorStatement stmt;
+  stmt.returnPath = Subsystems::Channel::SERIAL;
+  std::snprintf(stmt.line, sizeof(stmt.line), "%s", line);
+
+  router.route(stmt, bb);
   checkEq(reply.buf, expected, std::string("reply for '") + line + "'");
 }
 
@@ -106,19 +118,22 @@ int main() {
   Subsystems::NezhaHardware hardware(bus, g_defaultConfigs);
   // hardware.begin() is deliberately never called -- see file header.
 
-  OtosCommandState state;
-  state.hardware = &hardware;   // odometer() now (086-006) always returns
-                                 // the real, if uninitialized, OtosOdometer.
+  Rt::Blackboard bb;
+  // odometer() now (086-006) always returns the real, if uninitialized,
+  // OtosOdometer -- bb.otosPresent is a boot-time snapshot of that fact
+  // (087-006: otos_commands.cpp reads this instead of a Subsystems::Hardware*
+  // -- see otos_commands.h's file header).
+  bb.otosPresent = (hardware.odometer() != nullptr);
 
-  CommandProcessor cmd(otosCommands(state));
+  Rt::CommandRouter router;
 
-  checkReply(cmd, "OI", "OK oi");
-  checkReply(cmd, "OZ", "OK oz");
-  checkReply(cmd, "OR", "OK or");
-  checkReply(cmd, "OP", "OK pos x=0 y=0 h=0");
-  checkReply(cmd, "OV 0 0 0", "OK setpos x=0 y=0 h=0");
-  checkReply(cmd, "OL", "OK linear scalar=0");
-  checkReply(cmd, "OA", "OK angular scalar=0");
+  checkReply(router, bb, "OI", "OK oi");
+  checkReply(router, bb, "OZ", "OK oz");
+  checkReply(router, bb, "OR", "OK or");
+  checkReply(router, bb, "OP", "OK pos x=0 y=0 h=0");
+  checkReply(router, bb, "OV 0 0 0", "OK setpos x=0 y=0 h=0");
+  checkReply(router, bb, "OL", "OK linear scalar=0");
+  checkReply(router, bb, "OA", "OK angular scalar=0");
 
   if (g_failureCount == 0) {
     std::printf(

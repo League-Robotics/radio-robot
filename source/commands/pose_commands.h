@@ -1,53 +1,31 @@
 #pragma once
 
 // ---------------------------------------------------------------------------
-// pose_commands.h -- the pose-set command family (084-007, SUC-006): `SI`
-// (re-anchor the believed world pose) and `ZERO` (rezero the bound pair's
-// encoders -- this ticket implements the already-documented `enc` sub-verb
-// only; docs/protocol-v2.md section 10's "### ZERO"). Both are production
-// protocol-v2 verbs (architecture-update.md (084) Grounding facts 4/5),
-// gated under ROBOT_DEV_BUILD for the same reason motion_commands.*/
-// config_commands.* are: this sprint's new source/ tree IS the dev firmware
-// (no separate production loop exists yet), so every command family that
-// touches Hardware/Drivetrain/PoseEstimator compiles in only under that
-// define -- see dev_commands.h's file header for the full rationale.
+// pose_commands.h -- the pose-set command family (084-007/SUC-006,
+// rewritten pointerless 087-006): `SI` (re-anchor the believed world pose)
+// and `ZERO enc` (rezero the bound pair's encoders).
 //
-// **Decision 1 (architecture-update.md (084)):** `SI` calls
-// `Subsystems::PoseEstimator::setPose()` DIRECTLY -- it does NOT route
-// through `Subsystems::Drivetrain::apply()`'s existing `POSE`/`SetPose`
-// oneof arm, which stays exactly the documented no-op it is today
-// (subsystems/drivetrain.cpp's `POSE` case). `Drivetrain` holds no
-// `PoseEstimator` reference by design (082's cohesion split) and must not
-// gain one just for this. See that decision's own Context/Alternatives/Why/
-// Consequences for the full rationale -- do not re-route `SI` through
-// `Drivetrain` without revisiting that decision.
+// **Decision 7 (architecture-update-r1.md), router-half:** SI/ZERO are
+// one-shot commands whose effects are entangled with PoseEstimator's own
+// integration (the phantom-jump coherence problem) -- so, unlike SET's
+// config-plane deltas (which flow through the Configurator), SI/ZERO POST
+// directly to the target-drained reset queues PoseEstimator/Hardware
+// themselves consume (bb.poseResetIn, bb.motorResetIn[]), plus the
+// odometer-directed fan-out the loop drains directly (bb.otosSetPoseIn):
+//   - SI posts Rt::PoseResetCommand{kind=kSetPose, pose} to bb.poseResetIn
+//     (drained by Subsystems::PoseEstimator::tick(), ticket 004) AND the
+//     SAME pose to bb.otosSetPoseIn (a Mailbox<msg::SetPose>, drained by the
+//     loop directly against hardware.odometer() -- mirrors the pre-087
+//     two-call handleSI(), just posted instead of called).
+//   - `ZERO enc` posts Rt::PoseResetCommand{kind=kResetBaseline} to
+//     bb.poseResetIn AND sets bb.motorResetIn[left-1]/[right-1] = true
+//     (drained by Subsystems::Hardware::tick(), ticket 004) -- the port
+//     binding is read from bb.drivetrainConfig.left_port/right_port (the
+//     published snapshot), never a Drivetrain*.
 //
-// 084-008 gap closure: `SI`'s handler ALSO re-anchors the active
-// `Hal::Odometer` (via `hardware.odometer()`, ticket 008's `apply()`
-// `SET_POSE` arm) in the SAME wire dispatch, so the very next fusion pass
-// reads an odometer sample that already agrees with the freshly-set anchor
-// -- see handleSI()'s own doc comment (pose_commands.cpp) for the "fused
-// `pose=` used to read back only partially re-anchored" hazard this closes.
-// A no-op on `Subsystems::NezhaHardware` (`odometer()` still nullptr).
-//
-// `ZERO enc` reuses the SAME bound-pair-encoder-reset primitive `DEV M <n>
-// RESET` already exercises (`Hal::Motor::resetPosition()` -- a concrete,
-// synchronous-TO-CALL method: it only stages `resetPending_ = true`: see
-// hal/capability/motor.h's own doc comment, "zero encoder (staged, not
-// immediate)" -- the actual hardware effect lands at the top of the leaf's
-// next tick(), not through any outbox this file has to drain), applied to
-// BOTH of `Drivetrain::ports()`'s currently-bound motors, PLUS a new call
-// into `PoseEstimator::resetEncoderBaseline()` so the pose estimator's own
-// encoder-delta baseline is resynced in the SAME wire dispatch -- see that
-// method's doc comment (pose_estimator.h) for the phantom-jump hazard this
-// prevents.
-//
-// SI/ZERO are synchronous, config-plane-shaped verbs, like SET/GET (084-006)
-// -- no outbox, no per-pass drain step (architecture-update.md (084)'s
-// "Consequences" section: "SET/GET/SI/ZERO/OTOS are all synchronous,
-// config-plane, or one-shot, with nothing to hold across a tick boundary").
-// PoseCommandState is therefore NOT added to DevLoop (source/dev_loop.h) --
-// mirrors ConfigCommandState's own placement (config_commands.h).
+// Neither handler holds or dereferences a Subsystems::* pointer (SUC-006).
+// SI/ZERO's own reply text is built directly from the parsed wire input
+// (never a bb read-back), matching today's wire text exactly.
 // ---------------------------------------------------------------------------
 
 #if ROBOT_DEV_BUILD
@@ -55,23 +33,9 @@
 #include <vector>
 
 #include "command_types.h"
-#include "subsystems/drivetrain.h"
-#include "subsystems/hardware.h"
-#include "subsystems/pose_estimator.h"
+#include "runtime/command_router.h"
 
-// ---------------------------------------------------------------------------
-// PoseCommandState -- see this file's header comment. Every pointer must be
-// set before poseCommands()'s handlers are called -- mirrors
-// configCommands()'s/motionCommands()'s own contract.
-// ---------------------------------------------------------------------------
-struct PoseCommandState {
-  Subsystems::Hardware* hardware = nullptr;
-  Subsystems::Drivetrain* drivetrain = nullptr;
-  Subsystems::PoseEstimator* poseEstimator = nullptr;
-};
-
-// Returns the pose-set command table (SI, ZERO), bound to the given shared
-// state.
-std::vector<CommandDescriptor> poseCommands(PoseCommandState& state);
+// Returns the pose-set command table (SI, ZERO), bound to `router`.
+std::vector<CommandDescriptor> poseCommands(Rt::CommandRouter& router);
 
 #endif  // ROBOT_DEV_BUILD

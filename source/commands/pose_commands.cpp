@@ -1,6 +1,6 @@
 // pose_commands.cpp -- SI/ZERO handlers. See pose_commands.h for the
-// file-level design notes (Decision 1's SI-bypasses-Drivetrain rationale,
-// the synchronous/config-plane shape).
+// file-level design notes (Decision 7's router-half fan-out, 087-006's
+// pointerless reshape).
 #include "commands/pose_commands.h"
 
 #if ROBOT_DEV_BUILD
@@ -11,23 +11,19 @@
 #include "commands/arg_parse.h"
 #include "commands/command_processor.h"
 #include "messages/drivetrain.h"
-#include "messages/odometer.h"
 
 namespace {
 
-// kCdegToRad -- centidegrees -> radians. Same conversion factor motion_
-// commands.cpp's own kCdegToRad uses (duplicated here per this codebase's
-// existing per-file convention -- there is no shared conversion-constant
+Rt::Blackboard& bb(void* handlerCtx) { return static_cast<Rt::CommandRouter*>(handlerCtx)->blackboard(); }
+
+// kCdegToRad -- centidegrees -> radians. Duplicated here per this codebase's
+// existing per-file convention (there is no shared conversion-constant
 // header).
 constexpr float kCdegToRad = 3.14159265f / 18000.0f;
 
 // ---------------------------------------------------------------------------
 // SI -- SI <x> <y> <h> (mm, mm, cdeg). 3 mandatory INTs, ranged=false (plain
-// atoi, no range check) -- ported wire shape from source_old/commands/
-// SystemCommands.cpp's siSchema/handleSI, confirmed against
-// host/robot_radio/testgui/operations.py's on_sync_pose()/
-// build_setpose_command() convention (the one host caller this wire shape
-// must match).
+// atoi, no range check) -- unaffected by this rewrite (pure parsing).
 // ---------------------------------------------------------------------------
 const ArgDef kSiDefs[3] = {
     {"x", ArgKind::INT, false, 0, 0},
@@ -37,32 +33,20 @@ const ArgDef kSiDefs[3] = {
 const ArgSchema kSiSchema = {kSiDefs, 3, 3, false, nullptr};
 
 // ---------------------------------------------------------------------------
-// handleSI -- calls Subsystems::PoseEstimator::setPose() DIRECTLY (Decision
-// 1 -- see pose_commands.h's file header); never routes through
-// Drivetrain::apply()'s POSE arm. Does not itself cancel an in-flight
-// Planner command (architecture-update.md (084) Open Question 4) -- a
-// G/TURN in progress keeps pursuing its goal against the newly-anchored
-// fused pose on its very next tick, which may produce a visible course
-// correction rather than a smooth continuation -- observed, not
-// specifically engineered, behavior.
-//
-// 084-008 gap closure: ALSO re-anchors the active Hal::Odometer (if any)
-// via apply()'s SET_POSE arm, in the SAME wire dispatch -- mirrors
-// source_old's own two-call handleSI (PoseEstimator reset + `hal.otos().
-// setWorldPose()`). Before this, SI re-anchored PoseEstimator alone
-// (ticket 007's own documented caveat -- see test_pose_commands.py's module
-// docstring): the very next devLoopTick() pass fused a fresh, un-reanchored
-// OTOS reading into the EKF, pulling the fused `pose=` back toward the
-// odometer's own (unrelated) frame. Re-anchoring both in the same dispatch
-// means that next fusion pass reads an odometer sample that ALREADY agrees
-// with the just-set anchor, so the EKF update's residual is zero and
-// `pose=` reads back exactly `x`,`y`,`h` too, not just `encpose=`.
-// hardware.odometer() is nullptr on Subsystems::NezhaHardware -- a no-op
-// there, unchanged from ticket 007's behavior on that build.
+// handleSI -- posts Rt::PoseResetCommand{kSetPose} to bb.poseResetIn
+// (Decision 1 unchanged: never routes through Drivetrain -- Drivetrain holds
+// no PoseEstimator reference by design and must not gain one just for this)
+// AND the same pose to bb.otosSetPoseIn, in the SAME wire dispatch, so the
+// very next fusion pass reads an odometer sample that already agrees with
+// the freshly-set anchor (mirrors the pre-087 two-call handleSI() -- see
+// pose_commands.h's file header). Both posts are no-ops on their respective
+// drain sides when nothing is actually present to consume them (PoseEstimator
+// always exists; the odometer post is simply never applied when
+// hardware.odometer() is null on the loop's drain side).
 // ---------------------------------------------------------------------------
 void handleSI(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
               void* handlerCtx) {
-  PoseCommandState& state = *static_cast<PoseCommandState*>(handlerCtx);
+  Rt::Blackboard& b = bb(handlerCtx);
   int32_t x = args.args[0].ival;  // [mm]
   int32_t y = args.args[1].ival;  // [mm]
   int32_t h = args.args[2].ival;  // [cdeg]
@@ -71,18 +55,13 @@ void handleSI(const ArgList& args, const char* corrId, ReplyFn replyFn, void* re
   pose.x = static_cast<float>(x);
   pose.y = static_cast<float>(y);
   pose.h = static_cast<float>(h) * kCdegToRad;  // [rad] -- PoseEstimator's internal convention
-  state.poseEstimator->setPose(pose);
 
-  Hal::Odometer* odometer = state.hardware->odometer();
-  if (odometer != nullptr) {
-    msg::Pose2D otosPose;
-    otosPose.x = pose.x;
-    otosPose.y = pose.y;
-    otosPose.h = pose.h;
-    msg::OdometerCommand otosCmd;
-    otosCmd.setSetPose(otosPose);
-    odometer->apply(otosCmd);
-  }
+  Rt::PoseResetCommand reset;
+  reset.kind = Rt::PoseResetCommand::kSetPose;
+  reset.pose = pose;
+  b.poseResetIn.post(reset);
+
+  b.otosSetPoseIn.post(pose);
 
   char body[48];
   snprintf(body, sizeof(body), "x=%d y=%d h=%d", static_cast<int>(x), static_cast<int>(y),
@@ -93,13 +72,10 @@ void handleSI(const ArgList& args, const char* corrId, ReplyFn replyFn, void* re
 
 // ---------------------------------------------------------------------------
 // ZERO -- ZERO enc [#id] -> OK zero enc [#id] (docs/protocol-v2.md section
-// 10's "### ZERO"). This ticket (084-007) implements the `enc` sub-verb
-// only -- its own acceptance criteria and architecture-update.md (084) name
-// no other sub-verb (`pose`/`T`/`D`, present in the pre-rebuild source_old
-// grammar, are out of this ticket's scope); any statement without the
-// literal `enc` token is `ERR badarg`, the same "at least one of enc/pose"
-// shape source_old's own parseZero enforced, narrowed to the one sub-verb
-// this ticket implements.
+// 10's "### ZERO"). This ticket implements the `enc` sub-verb only. Unaffected
+// parsing -- see the original file header note (kept for historical
+// context, no longer duplicated verbatim here since the design is
+// unchanged).
 // ---------------------------------------------------------------------------
 ParseResult parseZero(const char* const* tokens, int ntokens, const KVPair* /*kvs*/,
                        int /*nkv*/) {
@@ -122,22 +98,25 @@ ParseResult parseZero(const char* const* tokens, int ntokens, const KVPair* /*kv
 }
 
 // ---------------------------------------------------------------------------
-// handleZero -- resets the bound pair's encoders (Hal::Motor::
-// resetPosition(), the same primitive DEV M <n> RESET already stages -- see
-// this file's header comment) AND PoseEstimator's encoder-baseline
-// accumulator, in the SAME call, so the next tick's delta is computed
-// against the freshly-zeroed encoders -- no phantom jump (084-007's own
-// acceptance criterion; pose_estimator.h's resetEncoderBaseline() doc
-// comment has the full hazard description).
+// handleZero -- posts Rt::PoseResetCommand{kResetBaseline} to bb.poseResetIn
+// AND sets bb.motorResetIn[left-1]/[right-1] = true (drained by
+// Subsystems::Hardware::tick(), ticket 004) in the SAME wire dispatch, so
+// the next tick's delta is computed against the freshly-zeroed encoders --
+// no phantom jump. The bound pair is read from
+// bb.drivetrainConfig.left_port/right_port -- never a Drivetrain*.
 // ---------------------------------------------------------------------------
 void handleZero(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, void* replyCtx,
                  void* handlerCtx) {
-  PoseCommandState& state = *static_cast<PoseCommandState*>(handlerCtx);
+  Rt::Blackboard& b = bb(handlerCtx);
 
-  Subsystems::DrivetrainPorts ports = state.drivetrain->ports();
-  state.hardware->motor(ports.left).resetPosition();
-  state.hardware->motor(ports.right).resetPosition();
-  state.poseEstimator->resetEncoderBaseline();
+  uint32_t left = b.drivetrainConfig.left_port;
+  uint32_t right = b.drivetrainConfig.right_port;
+  b.motorResetIn[left - 1] = true;
+  b.motorResetIn[right - 1] = true;
+
+  Rt::PoseResetCommand reset;
+  reset.kind = Rt::PoseResetCommand::kResetBaseline;
+  b.poseResetIn.post(reset);
 
   char rbuf[48];
   CommandProcessor::replyOK(rbuf, sizeof(rbuf), "zero", "enc", corrId, replyFn, replyCtx);
@@ -145,11 +124,11 @@ void handleZero(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, vo
 
 }  // namespace
 
-std::vector<CommandDescriptor> poseCommands(PoseCommandState& state) {
+std::vector<CommandDescriptor> poseCommands(Rt::CommandRouter& router) {
   std::vector<CommandDescriptor> cmds;
   cmds.push_back(
-      makeSchemaCmd("SI", &kSiSchema, handleSI, &state, "badarg", ForceReply::NONE, CMD_NONE));
-  cmds.push_back(makeCmd("ZERO", parseZero, handleZero, &state, "badarg", ForceReply::NONE,
+      makeSchemaCmd("SI", &kSiSchema, handleSI, &router, "badarg", ForceReply::NONE, CMD_NONE));
+  cmds.push_back(makeCmd("ZERO", parseZero, handleZero, &router, "badarg", ForceReply::NONE,
                           CMD_ACCESS_HARDWARE));
   return cmds;
 }

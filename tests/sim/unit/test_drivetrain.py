@@ -12,6 +12,13 @@ Collected under ``tests/sim/unit/`` alongside ``test_motor_policy.py``,
 ``test_i2c_bus_clearance.py``, and ``test_placeholder.py`` -- already within
 ``pyproject.toml``'s ``testpaths = ["tests/sim"]``, no configuration change
 needed.
+
+Ticket 087-003 note: ``Drivetrain::tick()`` gained a
+``Rt::Mailbox<msg::DrivetrainCommand>& driveIn`` parameter
+(``source/runtime/queue.h``, itself header-only and dependency-free) --
+``drivetrain_harness.cpp`` now constructs a bare ``Rt::Mailbox`` directly (no
+``Rt::Blackboard`` instance) for every scenario. No change to this compile
+command was needed: ``-I source`` already resolves ``runtime/queue.h``.
 """
 
 import pathlib

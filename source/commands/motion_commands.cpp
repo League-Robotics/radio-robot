@@ -1,13 +1,12 @@
-// motion_commands.cpp -- S/T/D/STOP handlers + stop= clause grammar. See
-// motion_commands.h for the file-level design notes.
+// motion_commands.cpp -- S/T/D/R/TURN/RT/G/STOP handlers + stop= clause
+// grammar. See motion_commands.h for the file-level design notes.
 //
-// Grammar (parseS/parseT/parseD, the "kind:args" stop-clause split, and the
-// stop=/sensor= kv-packing helper) is ported from source_old/commands/
-// MotionCommands.cpp's parseS/parseT/parseD/mc_packStopKVs/
-// mc_parseStopTokenInto -- the WIRE SHAPE only. Every handler body is new:
-// it stages a msg::PlannerCommand into MotionLoopState's outbox instead of
-// calling Superstructure::requestGoal()/Planner::beginX() through the
-// (sprint-079-deleted) CommandQueue.
+// Grammar (parseS/parseT/parseD/mc_packStopKVs/mc_parseStopTokenInto) is
+// ported from source_old/commands/MotionCommands.cpp -- the WIRE SHAPE only,
+// unaffected by this rewrite. Every handler BODY posts a Rt::MotionCommand
+// to bb.motionIn instead of calling Subsystems::Planner::apply()/tick()
+// through the (sprint-079-deleted) CommandQueue or the (087-006-deleted)
+// MotionLoopState outbox.
 #include "commands/motion_commands.h"
 
 #if ROBOT_DEV_BUILD
@@ -20,9 +19,10 @@
 #include "commands/arg_parse.h"
 #include "commands/command_processor.h"
 #include "kinematics/body_kinematics.h"
-#include "types/clock.h"
 
 namespace {
+
+Rt::Blackboard& bb(void* handlerCtx) { return static_cast<Rt::CommandRouter*>(handlerCtx)->blackboard(); }
 
 // kMaxStopConds -- docs/protocol-v2.md §10's "Up to 4 stop= clauses are
 // accepted per command"; matches msg::PlannerCommand::stops_[4]'s capacity
@@ -47,22 +47,9 @@ void copyCorrId(msg::PlannerCommand& cmd, const char* corrId) {
 
 // ---------------------------------------------------------------------------
 // parseStopClauseValue -- parse the value portion of one "stop=<kind>:<args>"
-// token (the string AFTER "stop=") into a msg::StopCondition. Ported concept
-// from source_old/commands/MotionCommands.cpp's mc_parseStopTokenInto(),
-// scoped to the five kinds architecture-update.md (084) Decision 4 keeps this
-// sprint -- t/d/heading/rot fully implemented; sensor/color/line are
-// recognized (their kind prefix matches) but return false here, same as any
-// genuinely malformed clause -- the caller (collectStopClauses) turns EITHER
-// outcome into one `ERR badarg`, never a silent drop (Decision 4's
-// Consequences; docs/protocol-v2.md §10's stop= clause table note this
-// ticket adds).
-//
-// `heading:<cdeg>:<eps_cdeg>` -- unlike source_old's absolute-heading
-// reading, motion/stop_condition.cpp's STOP_HEADING (ticket 001) compares
-// against the DELTA from the goal's OWN starting heading (its `a` field is
-// "target heading delta from baseline, rad" -- see evaluateStopCondition()'s
-// own doc comment), so the wire value here is parsed as that same relative
-// delta, converted cdeg -> rad.
+// token (the string AFTER "stop=") into a msg::StopCondition. Unaffected by
+// this rewrite -- pure parsing, no state.
+// ---------------------------------------------------------------------------
 bool parseStopClauseValue(const char* value, msg::StopCondition& out) {
   char buf[48];
   int vlen = 0;
@@ -121,18 +108,8 @@ bool parseStopClauseValue(const char* value, msg::StopCondition& out) {
 // ---------------------------------------------------------------------------
 // collectStopClauses -- scan args.args[startIdx..count-1] (packed by
 // packStopKVs below) for "stop=<value>"/"sensor=<value>" STR tokens, parsing
-// each into `out[]`. Returns false (out/countOut left in a partial,
-// meaningless state) the instant ANY clause fails to parse, including the
-// always-rejected "sensor=" back-compat alias (docs/protocol-v2.md §10:
-// "sensor=<ch>:<op>:<thr> is accepted as a back-compat alias for
-// stop=sensor:<ch>:<op>:<thr>" -- still a SENSOR-kind clause, still
-// unsupported) -- callers must validate BEFORE staging any goal, matching
-// source_old/commands/MotionCommands.cpp's handleT/handleD precedent of
-// validating sensor= clauses before ever replying OK.
-//
-// Clauses beyond kMaxStopConds are silently dropped (not an error) -- matches
-// Subsystems::Planner::copyCallerStops()'s own cap, which would clamp them
-// right back down anyway.
+// each into `out[]`. Unaffected by this rewrite.
+// ---------------------------------------------------------------------------
 bool collectStopClauses(const ArgList& args, int startIdx, msg::StopCondition* out,
                         uint8_t& countOut) {
   countOut = 0;
@@ -163,8 +140,8 @@ bool collectStopClauses(const ArgList& args, int startIdx, msg::StopCondition* o
 
 // ---------------------------------------------------------------------------
 // packStopKVs -- scan kvs for "stop"/"sensor" keys; pack each as a STR arg
-// "stop=<value>"/"sensor=<value>" into out.args[*idxInOut..]. Ported from
-// source_old/commands/MotionCommands.cpp's mc_packStopKVs().
+// "stop=<value>"/"sensor=<value>" into out.args[*idxInOut..]. Unaffected by
+// this rewrite.
 // ---------------------------------------------------------------------------
 void packStopKVs(const KVPair* kvs, int nkv, ArgList& out, int& idxInOut) {
   for (int i = 0; i < nkv; ++i) {
@@ -191,8 +168,7 @@ void packStopKVs(const KVPair* kvs, int nkv, ArgList& out, int& idxInOut) {
 
 // ---------------------------------------------------------------------------
 // replyStopBadarg -- shared ERR badarg reply for a stop= clause that failed
-// to parse (malformed, or a recognized-but-unsupported sensor/color/line
-// kind) -- see collectStopClauses()'s own doc comment.
+// to parse. Unaffected by this rewrite.
 // ---------------------------------------------------------------------------
 void replyStopBadarg(const char* corrId, ReplyFn replyFn, void* replyCtx) {
   char rbuf[48];
@@ -325,8 +301,7 @@ ParseResult parseTURN(const char* const* tokens, int ntokens, const KVPair* kvs,
   if (heading < -18000 || heading > 18000) {
     res.ok = false; res.err.code = "range"; res.err.detail = "heading"; return res;
   }
-  // Optional eps=<cdeg>; default 300 (docs/protocol-v2.md section 10's
-  // documented default once this ticket's section lands).
+  // Optional eps=<cdeg>; default 300.
   int eps = 300;
   const KVPair* epsKv = kvFind(kvs, nkv, "eps");
   if (epsKv) {
@@ -347,11 +322,6 @@ ParseResult parseTURN(const char* const* tokens, int ntokens, const KVPair* kvs,
 
 // ---------------------------------------------------------------------------
 // parseRT -- RT <relAngle> [stop=...] [sensor=...]
-//
-// relAngle range +-180000 cdeg (+-1800 degrees, up to 5 full turns) --
-// ported verbatim from source_old/commands/MotionCommands.cpp's rtSchema;
-// unlike TURN's absolute-heading target (naturally bounded to +-180 degrees
-// of travel either way), a RELATIVE turn has no such natural bound.
 // ---------------------------------------------------------------------------
 ParseResult parseRT(const char* const* tokens, int ntokens, const KVPair* kvs, int nkv) {
   ParseResult res;
@@ -373,13 +343,14 @@ ParseResult parseRT(const char* const* tokens, int ntokens, const KVPair* kvs, i
 
 // ---------------------------------------------------------------------------
 // handleS -- streams a body twist (converted from wheel speeds l/r via
-// BodyKinematics::forward(), the same conversion telemetry_commands.cpp's
-// twist= field already performs) into a STREAM goal, and feeds sTimeout --
-// the ONE handler that does so (see motion_commands.h's class comment).
+// BodyKinematics::forward(), reading bb.drivetrainConfig.trackwidth the same
+// way telemetry_commands.cpp's twist= field already does) into a STREAM
+// goal, posted to bb.motionIn with feedStreamWatchdog=true -- the loop feeds
+// its own StreamingDriveWatchdog when it drains this (see motion_commands.h).
 // ---------------------------------------------------------------------------
 void handleS(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
             void* handlerCtx) {
-  MotionLoopState& state = *static_cast<MotionLoopState*>(handlerCtx);
+  Rt::Blackboard& b = bb(handlerCtx);
   int l = args.args[0].ival;
   int r = args.args[1].ival;
 
@@ -391,7 +362,7 @@ void handleS(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
   }
 
   float v = 0.0f, omega = 0.0f;
-  BodyKinematics::forward(static_cast<float>(l), static_cast<float>(r), state.poseEstimator->trackwidth(),
+  BodyKinematics::forward(static_cast<float>(l), static_cast<float>(r), b.drivetrainConfig.trackwidth,
                           v, omega);
 
   msg::PlannerCommand cmd;
@@ -404,23 +375,13 @@ void handleS(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
   cmd.stops_count = stopsCount;
   copyCorrId(cmd, corrId);
 
-  state.command = cmd;
-  state.hasCommand = true;
-  // Clear activeVelocityVerb -- 084-005: S stages its own DriveMode::
-  // STREAMING unconditionally, but a bare R also reports STREAMING now
-  // (planner.cpp's velocityShapedMode(), Decision 6); a stale R/TURN/RT
-  // value here must not leak into THIS goal's own "EVT done" text -- see
-  // motion_commands.h's field doc comment.
-  state.activeVelocityVerb[0] = '\0';
-
-  // sTimeout: fed HERE, exactly the way DEV DT VW feeds SerialSilenceWatchdog
-  // today (i.e. the arriving-command's own dispatch beat) -- but only S
-  // feeds this one (see motion_commands.h). `now` for the feed is whatever
-  // dev_loop.cpp's drain step's `now` will be on this SAME pass (the drain
-  // runs later in this identical devLoopTick() call) -- feeding it here at
-  // parse time rather than there keeps the "S's handler feeds it" contract
-  // literal and independent of the outbox-drain step's own placement.
-  state.sTimeout.feed(Types::systemClockNow());
+  Rt::MotionCommand mc;
+  mc.command = cmd;
+  // verb left empty -- S stages its own DriveMode::STREAMING unconditionally;
+  // a stale R/TURN/RT disambiguation must not leak into THIS goal's own "EVT
+  // done" text (see runtime/commands.h's field doc comment).
+  mc.feedStreamWatchdog = true;   // fed HERE -- only S's own post feeds it
+  b.motionIn.post(mc);
 
   char body[32];
   snprintf(body, sizeof(body), "l=%d r=%d", l, r);
@@ -429,13 +390,12 @@ void handleS(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
 }
 
 // ---------------------------------------------------------------------------
-// handleT -- bounded-time drive: converts l/r to (v, omega), stages a TIMED
-// goal (Planner's own apply() adds the implicit STOP_TIME(duration) --
-// planner.cpp's TIMED case).
+// handleT -- bounded-time drive: converts l/r to (v, omega), posts a TIMED
+// goal.
 // ---------------------------------------------------------------------------
 void handleT(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
             void* handlerCtx) {
-  MotionLoopState& state = *static_cast<MotionLoopState*>(handlerCtx);
+  Rt::Blackboard& b = bb(handlerCtx);
   int l = args.args[0].ival;
   int r = args.args[1].ival;
   int ms = args.args[2].ival;
@@ -448,7 +408,7 @@ void handleT(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
   }
 
   float v = 0.0f, omega = 0.0f;
-  BodyKinematics::forward(static_cast<float>(l), static_cast<float>(r), state.poseEstimator->trackwidth(),
+  BodyKinematics::forward(static_cast<float>(l), static_cast<float>(r), b.drivetrainConfig.trackwidth,
                           v, omega);
 
   msg::PlannerCommand cmd;
@@ -461,14 +421,9 @@ void handleT(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
   cmd.stops_count = stopsCount;
   copyCorrId(cmd, corrId);
 
-  state.command = cmd;
-  state.hasCommand = true;
-  // Clear activeVelocityVerb -- 084-005: T stages its own DriveMode::TIMED
-  // unconditionally, but a stop=-bearing R/TURN/RT also report TIMED now
-  // (planner.cpp's velocityShapedMode(), Decision 6); a stale R/TURN/RT
-  // value here must not leak into THIS goal's own "EVT done" text -- see
-  // motion_commands.h's field doc comment.
-  state.activeVelocityVerb[0] = '\0';
+  Rt::MotionCommand mc;
+  mc.command = cmd;   // verb left empty -- T stages its own DriveMode::TIMED
+  b.motionIn.post(mc);
 
   char body[48];
   snprintf(body, sizeof(body), "l=%d r=%d ms=%d", l, r, ms);
@@ -477,19 +432,12 @@ void handleT(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
 }
 
 // ---------------------------------------------------------------------------
-// handleD -- bounded-distance drive: msg::DistanceGoal (ticket 001's
-// Planner) carries only a scalar `speed`/`distance` pair, no omega -- a
-// straight-line-only goal (matching Planner's own GOTO_GOAL placeholder
-// precedent; see planner.h's class comment). l/r are converted via
-// BodyKinematics::forward() the same as S/T so an l==r symmetric D drives
-// correctly (this ticket's acceptance bar); an l!=r D drives straight at
-// the average forward speed with no turning component -- an arced D would
-// need a DistanceGoal schema change, out of this ticket's scope (planner.{h,cpp}
-// are not in its files-to-modify list).
+// handleD -- bounded-distance drive: msg::DistanceGoal carries only a scalar
+// speed/distance pair, no omega -- a straight-line-only goal.
 // ---------------------------------------------------------------------------
 void handleD(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
             void* handlerCtx) {
-  MotionLoopState& state = *static_cast<MotionLoopState*>(handlerCtx);
+  Rt::Blackboard& b = bb(handlerCtx);
   int l = args.args[0].ival;
   int r = args.args[1].ival;
   int mm = args.args[2].ival;
@@ -502,7 +450,7 @@ void handleD(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
   }
 
   float v = 0.0f, omega = 0.0f;
-  BodyKinematics::forward(static_cast<float>(l), static_cast<float>(r), state.poseEstimator->trackwidth(),
+  BodyKinematics::forward(static_cast<float>(l), static_cast<float>(r), b.drivetrainConfig.trackwidth,
                           v, omega);
   (void)omega;   // straight-line only this ticket -- see the doc comment above
 
@@ -517,14 +465,9 @@ void handleD(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
   cmd.stops_count = stopsCount;
   copyCorrId(cmd, corrId);
 
-  state.command = cmd;
-  state.hasCommand = true;
-  // Clear activeVelocityVerb -- 084-005: D's DriveMode::DISTANCE is not
-  // itself shared with R/TURN/RT, but clearing here anyway keeps the
-  // invariant uniform (non-empty iff the active goal is R/TURN/RT) rather
-  // than relying on DISTANCE's own non-collision as an implicit assumption
-  // -- see motion_commands.h's field doc comment.
-  state.activeVelocityVerb[0] = '\0';
+  Rt::MotionCommand mc;
+  mc.command = cmd;   // verb left empty -- see runtime/commands.h's field doc comment
+  b.motionIn.post(mc);
 
   char body[48];
   snprintf(body, sizeof(body), "l=%d r=%d mm=%d", l, r, mm);
@@ -534,44 +477,26 @@ void handleD(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
 
 // ---------------------------------------------------------------------------
 // kCdegToRad -- centidegrees -> radians, shared by handleTURN/handleRT below.
-// Same conversion factor as parseStopClauseValue()'s own inline heading:eps
-// conversion above (duplicated at this scope since C++ has no clean way to
-// share a function-local constant across sibling functions).
 // ---------------------------------------------------------------------------
 constexpr float kCdegToRad = 3.14159265f / 18000.0f;
 
 // kTurnOmega/kRotationOmega -- fixed spin-in-place rates for TURN/RT.
-// Subsystems::Planner exposes no live PlannerConfig getter this ticket (its
-// config is write-only via configure() -- see planner.h), so the wire
-// handler cannot read yaw_rate_max the way source_old/control/
-// PlannerBegin.cpp's beginTurn() read _cfg.yawRateMax. Both constants are
-// fixed wire-layer values, well under defaultPlannerConfig()'s 6.0 rad/s
-// yaw_rate_max (source/main.cpp) so Motion::VelocityRamp's own clamp never
-// kicks in -- deterministic, sim-testable convergence. kTurnOmega mirrors
-// source_old/robot/DefaultConfig.cpp's yawRateMax default (70 deg/s);
-// kRotationOmega matches source_old's own RT-specific kRtRate constant
-// exactly (MotionCommand.cpp's beginRotation, 100 deg/s) -- that ported
-// source deliberately used its own fixed rate rather than yawRateMax, and
-// this port preserves that same distinction.
 constexpr float kTurnOmega = 1.2217f;      // [rad/s] ~70 deg/s
 constexpr float kRotationOmega = 1.7453f;  // [rad/s] ~100 deg/s
 
-// wrapAngle -- wrap x into (-pi, pi]. Same atan2f(sinf, cosf) identity
-// Motion::evaluateStopCondition's own (private) wrapAngle() uses
-// (motion/stop_condition.cpp) -- duplicated here since that helper has no
-// external linkage, mirroring source/subsystems/pose_estimator.h's own
-// documented precedent for this exact kind of independent-copy duplication.
+// wrapAngle -- wrap x into (-pi, pi].
 float wrapAngle(float x) { return atan2f(sinf(x), cosf(x)); }
 
 // ---------------------------------------------------------------------------
-// handleR -- open-loop constant-curvature arc: omega = speed/radius (kappa =
-// 1/radius; 0 when radius == 0), v = speed. Stages a VELOCITY goal exactly
-// like a bare S -- runs until an explicit STOP or a stop= clause fires (no
-// stop of its own -- ticket 084-003's acceptance: "none for R").
+// handleR -- open-loop constant-curvature arc: omega = speed/radius. Posts a
+// VELOCITY goal exactly like a bare S -- runs until an explicit STOP or a
+// stop= clause fires. Sets Rt::MotionCommand::verb="R" -- shared with
+// TURN/RT (planner.cpp's velocityShapedMode()), disambiguated for the
+// loop's "EVT done <verb>" text and the sTimeout exclusion gate.
 // ---------------------------------------------------------------------------
 void handleR(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
             void* handlerCtx) {
-  MotionLoopState& state = *static_cast<MotionLoopState*>(handlerCtx);
+  Rt::Blackboard& b = bb(handlerCtx);
   int speed = args.args[0].ival;
   int radius = args.args[1].ival;
 
@@ -583,8 +508,7 @@ void handleR(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
   }
 
   // omega = speed/radius (kappa = 1/radius); 0 when radius == 0. Positive
-  // radius -> positive omega -> CCW (left) arc -- matches source_old/
-  // commands/MotionCommands.cpp's handleR sign convention exactly.
+  // radius -> positive omega -> CCW (left) arc.
   float omega = (radius != 0) ? (static_cast<float>(speed) / static_cast<float>(radius)) : 0.0f;
 
   msg::PlannerCommand cmd;
@@ -597,12 +521,10 @@ void handleR(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
   cmd.stops_count = stopsCount;
   copyCorrId(cmd, corrId);
 
-  state.command = cmd;
-  state.hasCommand = true;
-  // R stages msg::DriveMode::VELOCITY -- the SAME DriveMode TURN/RT also
-  // stage (planner.cpp's apply()) -- see MotionLoopState::activeVelocityVerb's
-  // own doc comment (motion_commands.h) for why this field exists.
-  snprintf(state.activeVelocityVerb, sizeof(state.activeVelocityVerb), "R");
+  Rt::MotionCommand mc;
+  mc.command = cmd;
+  snprintf(mc.verb, sizeof(mc.verb), "R");
+  b.motionIn.post(mc);
 
   char body[48];
   snprintf(body, sizeof(body), "speed=%d radius=%d", speed, radius);
@@ -612,27 +534,19 @@ void handleR(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
 
 // ---------------------------------------------------------------------------
 // handleTURN -- absolute-heading turn-in-place, closed-loop against
-// Planner::tick()'s fusedPose heading argument (this + RT are the FIRST real
-// consumers of that already-threaded argument -- see subsystems/planner.h's
-// class comment on TurnGoal.speed being an ALREADY-SIGNED rate the caller
-// resolves). Ported concept from source_old/control/PlannerBegin.cpp's
-// beginTurn(): reads the current fused heading, computes the shortest-path
-// signed delta to the absolute target, and stages a fixed-rate spin in that
-// direction plus a HEADING stop at the resolved delta -- the "matching stop
-// condition" ticket 084-003's own architecture-update.md Decision text
-// calls for (singular: no secondary runaway-timeout stop is added here,
-// matching the acceptance criterion's "built-in stop (... heading for
-// TURN)" wording exactly).
+// bb.fusedPose.pose.h (the SAME reading Planner::tick() would receive):
+// reads the current fused heading, computes the shortest-path signed delta
+// to the absolute target, and posts a fixed-rate spin in that direction plus
+// a HEADING stop at the resolved delta.
 // ---------------------------------------------------------------------------
 void handleTURN(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
                 void* handlerCtx) {
-  MotionLoopState& state = *static_cast<MotionLoopState*>(handlerCtx);
+  Rt::Blackboard& b = bb(handlerCtx);
   int heading = args.args[0].ival;   // [cdeg] absolute target heading
   int eps = args.args[1].ival;       // [cdeg]
 
   // Reserve 1 of kMaxStopConds's 4 slots for the built-in HEADING stop; up
-  // to kMaxStopConds - 1 caller stop= clauses are accepted (extras silently
-  // dropped, matching collectStopClauses()'s own cap discipline above).
+  // to kMaxStopConds - 1 caller stop= clauses are accepted.
   msg::StopCondition userStops[kMaxStopConds];
   uint8_t userCount = 0;
   if (!collectStopClauses(args, 2, userStops, userCount)) {
@@ -641,7 +555,7 @@ void handleTURN(const ArgList& args, const char* corrId, ReplyFn replyFn, void* 
   }
   if (userCount > kMaxStopConds - 1) userCount = kMaxStopConds - 1;
 
-  float currentHeading = state.poseEstimator->fusedPose().pose.h;   // [rad]
+  float currentHeading = b.fusedPose.pose.h;   // [rad]
   float diff = static_cast<float>(heading) * kCdegToRad - currentHeading;
   float delta = wrapAngle(diff);   // [rad] shortest-path signed delta, (-pi, pi]
   float omega = (delta >= 0.0f) ? kTurnOmega : -kTurnOmega;
@@ -665,9 +579,10 @@ void handleTURN(const ArgList& args, const char* corrId, ReplyFn replyFn, void* 
   cmd.stops_count = total;
   copyCorrId(cmd, corrId);
 
-  state.command = cmd;
-  state.hasCommand = true;
-  snprintf(state.activeVelocityVerb, sizeof(state.activeVelocityVerb), "TURN");
+  Rt::MotionCommand mc;
+  mc.command = cmd;
+  snprintf(mc.verb, sizeof(mc.verb), "TURN");
+  b.motionIn.post(mc);
 
   char body[48];
   snprintf(body, sizeof(body), "heading=%d eps=%d", heading, eps);
@@ -677,24 +592,16 @@ void handleTURN(const ArgList& args, const char* corrId, ReplyFn replyFn, void* 
 
 // ---------------------------------------------------------------------------
 // handleRT -- relative turn-in-place, closed-loop against the per-wheel
-// encoder arc (a ROTATION stop condition -- ticket 001's Motion::
-// evaluateStopCondition's existing kind), not against fused heading. Ported
-// concept from source_old/control/PlannerBegin.cpp's beginRotation(), minus
-// its rotational-slip/coast-anticipation refinement: Subsystems::
-// PoseEstimator exposes no rotationalSlip getter (only trackwidth()), and
-// coast-anticipation is not part of this ticket's acceptance bar -- the sim
-// test measures and documents the resulting plant tolerance instead (ticket
-// 084-003's own testing note: "RT/TURN accuracy may show small under/over-
-// rotation -- set test tolerances to the plant's actual behavior").
+// encoder arc (a ROTATION stop condition), reading bb.drivetrainConfig.
+// trackwidth for the per-wheel arc computation.
 // ---------------------------------------------------------------------------
 void handleRT(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
               void* handlerCtx) {
-  MotionLoopState& state = *static_cast<MotionLoopState*>(handlerCtx);
+  Rt::Blackboard& b = bb(handlerCtx);
   int relAngle = args.args[0].ival;   // [cdeg]
 
   // Reserve 1 of kMaxStopConds's 4 slots for the built-in ROTATION stop; up
-  // to kMaxStopConds - 1 caller stop= clauses are accepted (extras silently
-  // dropped, matching collectStopClauses()'s own cap discipline above).
+  // to kMaxStopConds - 1 caller stop= clauses are accepted.
   msg::StopCondition userStops[kMaxStopConds];
   uint8_t userCount = 0;
   if (!collectStopClauses(args, 1, userStops, userCount)) {
@@ -703,9 +610,9 @@ void handleRT(const ArgList& args, const char* corrId, ReplyFn replyFn, void* re
   }
   if (userCount > kMaxStopConds - 1) userCount = kMaxStopConds - 1;
 
-  float trackwidth = state.poseEstimator->trackwidth();   // [mm]
+  float trackwidth = b.drivetrainConfig.trackwidth;   // [mm]
   // Per-wheel arc = |relAngle| (rad) * (trackwidth/2) -- the ideal
-  // spin-in-place geometry, no slip correction (see doc comment above).
+  // spin-in-place geometry, no slip correction.
   float arc = fabsf(static_cast<float>(relAngle)) * kCdegToRad * (trackwidth * 0.5f);   // [mm]
   float omega = (relAngle >= 0) ? kRotationOmega : -kRotationOmega;   // + => CCW (left)
 
@@ -727,9 +634,10 @@ void handleRT(const ArgList& args, const char* corrId, ReplyFn replyFn, void* re
   cmd.stops_count = total;
   copyCorrId(cmd, corrId);
 
-  state.command = cmd;
-  state.hasCommand = true;
-  snprintf(state.activeVelocityVerb, sizeof(state.activeVelocityVerb), "RT");
+  Rt::MotionCommand mc;
+  mc.command = cmd;
+  snprintf(mc.verb, sizeof(mc.verb), "RT");
+  b.motionIn.post(mc);
 
   char body[32];
   snprintf(body, sizeof(body), "rot=%d", relAngle);
@@ -738,11 +646,7 @@ void handleRT(const ArgList& args, const char* corrId, ReplyFn replyFn, void* re
 }
 
 // ---------------------------------------------------------------------------
-// parseG -- G <x> <y> <speed>. No stop=/sensor= support -- unlike every
-// other verb in this file, docs/protocol-v2.md section 10's G contract
-// defines no stop= clause for G at all (this ticket's acceptance criterion:
-// "G accepts no stop= clauses beyond what docs/protocol-v2.md already
-// documents for it") -- no packStopKVs()/collectStopClauses() call here.
+// parseG -- G <x> <y> <speed>. No stop=/sensor= support.
 // ---------------------------------------------------------------------------
 ParseResult parseG(const char* const* tokens, int ntokens, const KVPair* kvs, int nkv) {
   ParseResult res;
@@ -773,14 +677,13 @@ ParseResult parseG(const char* const* tokens, int ntokens, const KVPair* kvs, in
 }
 
 // ---------------------------------------------------------------------------
-// handleG -- relative-XY go-to: stages a GOTO_GOAL goal. Subsystems::Planner
-// owns the entire PRE_ROTATE/PURSUE state machine internally (planner.cpp,
-// ticket 084-004) -- this handler only builds the msg::GotoGoal and stages
-// it, mirroring handleD's shape.
+// handleG -- relative-XY go-to: posts a GOTO_GOAL goal. Subsystems::Planner
+// owns the entire PRE_ROTATE/PURSUE state machine internally -- this handler
+// only builds the msg::GotoGoal and posts it, mirroring handleD's shape.
 // ---------------------------------------------------------------------------
 void handleG(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
             void* handlerCtx) {
-  MotionLoopState& state = *static_cast<MotionLoopState*>(handlerCtx);
+  Rt::Blackboard& b = bb(handlerCtx);
   int x = args.args[0].ival;
   int y = args.args[1].ival;
   int speed = args.args[2].ival;
@@ -793,13 +696,9 @@ void handleG(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
   cmd.setGotoGoal(goal);
   copyCorrId(cmd, corrId);
 
-  state.command = cmd;
-  state.hasCommand = true;
-  // Clear activeVelocityVerb -- 084-005: G's DriveMode::GO_TO is not itself
-  // shared with R/TURN/RT, but clearing here anyway keeps the invariant
-  // uniform -- see motion_commands.h's field doc comment (and D's handler
-  // above for the identical reasoning).
-  state.activeVelocityVerb[0] = '\0';
+  Rt::MotionCommand mc;
+  mc.command = cmd;   // verb left empty -- see runtime/commands.h's field doc comment
+  b.motionIn.post(mc);
 
   char body[48];
   snprintf(body, sizeof(body), "x=%d y=%d speed=%d", x, y, speed);
@@ -808,21 +707,21 @@ void handleG(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
 }
 
 // ---------------------------------------------------------------------------
-// handleStop -- STOP: immediate halt, no EVT (docs/protocol-v2.md §10:
-// "Stops motors immediately... No EVT is emitted"). Stages goal_kind=STOP;
+// handleStop -- STOP: immediate halt, no EVT. Posts goal_kind=STOP;
 // Subsystems::Planner::apply()'s STOP case resets the ramp and clears the
 // active goal synchronously, with no held Event queued.
 // ---------------------------------------------------------------------------
 void handleStop(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, void* replyCtx,
                 void* handlerCtx) {
-  MotionLoopState& state = *static_cast<MotionLoopState*>(handlerCtx);
+  Rt::Blackboard& b = bb(handlerCtx);
 
   msg::PlannerCommand cmd;
   cmd.setStop(true);
   copyCorrId(cmd, corrId);
 
-  state.command = cmd;
-  state.hasCommand = true;
+  Rt::MotionCommand mc;
+  mc.command = cmd;   // verb left empty -- no active goal remains after STOP
+  b.motionIn.post(mc);
 
   char rbuf[32];
   CommandProcessor::replyOK(rbuf, sizeof(rbuf), "stop", nullptr, corrId, replyFn, replyCtx);
@@ -830,17 +729,17 @@ void handleStop(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, vo
 
 }  // namespace
 
-std::vector<CommandDescriptor> motionCommands(MotionLoopState& state) {
+std::vector<CommandDescriptor> motionCommands(Rt::CommandRouter& router) {
   std::vector<CommandDescriptor> cmds;
-  cmds.push_back(makeCmd("S", parseS, handleS, &state, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
-  cmds.push_back(makeCmd("T", parseT, handleT, &state, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
-  cmds.push_back(makeCmd("D", parseD, handleD, &state, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
-  cmds.push_back(makeCmd("R", parseR, handleR, &state, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
+  cmds.push_back(makeCmd("S", parseS, handleS, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
+  cmds.push_back(makeCmd("T", parseT, handleT, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
+  cmds.push_back(makeCmd("D", parseD, handleD, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
+  cmds.push_back(makeCmd("R", parseR, handleR, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
   cmds.push_back(
-      makeCmd("TURN", parseTURN, handleTURN, &state, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
-  cmds.push_back(makeCmd("RT", parseRT, handleRT, &state, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
-  cmds.push_back(makeCmd("G", parseG, handleG, &state, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
-  cmds.push_back(makeCmd("STOP", nullptr, handleStop, &state, "badarg", ForceReply::NONE,
+      makeCmd("TURN", parseTURN, handleTURN, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
+  cmds.push_back(makeCmd("RT", parseRT, handleRT, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
+  cmds.push_back(makeCmd("G", parseG, handleG, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
+  cmds.push_back(makeCmd("STOP", nullptr, handleStop, &router, "badarg", ForceReply::NONE,
                          CMD_ACCESS_HARDWARE));
   return cmds;
 }

@@ -152,12 +152,25 @@ void Drivetrain::governRatio(float* targetLeft, float* targetRight,
 
 void Drivetrain::tick(uint32_t now,
                        const msg::MotorState& leftObs,
-                       const msg::MotorState& rightObs) {
+                       const msg::MotorState& rightObs,
+                       Rt::Mailbox<msg::DrivetrainCommand>& driveIn) {
     // now: no clock read happens here -- this ticket's governor is a purely
     // per-tick algebraic correction with no timing-dependent behavior yet.
     // Kept as a parameter per the locked faceplate shape for a future ticket
     // that needs it (e.g. a governor ease-in rate).
     (void)now;
+
+    // 087-003: drain driveIn (pop, latest-wins) BEFORE the setpoint-
+    // governance path below -- replaces however this Drivetrain previously
+    // received its setpoint (a direct external apply() call). Routes
+    // through the SAME apply() this class has always used, so mode_/the
+    // TWIST/WHEELS/NEUTRAL arm state and the standby side-channel all
+    // dispatch exactly as before -- only the delivery mechanism changed. An
+    // empty driveIn is a no-op: whatever setpoint is already staged is
+    // governed unchanged below (see tick()'s doc comment, drivetrain.h).
+    if (!driveIn.empty()) {
+        apply(driveIn.take());
+    }
 
     msg::MotorCommand leftCmd;
     msg::MotorCommand rightCmd;
@@ -197,8 +210,9 @@ Hal::DrivetrainToHardwareCommand Drivetrain::takeCommand() {
 msg::DrivetrainState Drivetrain::state() const {
     msg::DrivetrainState s;
 
-    // Only the two wheel-velocity targets are populated -- pose/EKF/OTOS
-    // fields (fused/encoder/optical, enc[], enc_stamp, otos, wheel_wedged[],
+    // Only the two wheel-velocity targets (plus, as of 087-003, the
+    // authority field below) are populated -- pose/EKF/OTOS fields
+    // (fused/encoder/optical, enc[], enc_stamp, otos, wheel_wedged[],
     // connected, otos_status, otos_fusion_blocked) stay at their zero
     // defaults: this differential dev-bench Drivetrain has no odometry/EKF
     // this sprint (those return in later tickets -- see
@@ -215,6 +229,11 @@ msg::DrivetrainState Drivetrain::state() const {
     s.vel_[0] = left;
     s.vel_[1] = right;
     s.vel_count = 2;
+
+    // 087-003: authority mode, readable from this state cell without a
+    // Drivetrain* -- see tick()'s doc comment (drivetrain.h) and
+    // architecture-update-r1.md Decision 1.
+    s.active = active_;
 
     return s;
 }

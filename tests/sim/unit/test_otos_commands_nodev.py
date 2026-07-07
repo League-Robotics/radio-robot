@@ -59,6 +59,10 @@ import pytest
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _SOURCE_DIR = _REPO_ROOT / "source"
 _TYPES_DIR = _SOURCE_DIR / "types"
+# estimation/ekf_tiny.h's #include <tinyekf.h> needs this on the path (087-006:
+# pulled in transitively now that Rt::CommandRouter's unified table drags in
+# subsystems/pose_estimator.cpp -- see this file's own _SOURCES comment).
+_TINYEKF_DIR = _REPO_ROOT / "libraries" / "tinyekf"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "otos_commands_harness.cpp"
 _HOST_FAKE_SRC = _SOURCE_DIR / "com" / "i2c_bus_host.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "hal" / "nezha" / "nezha_motor.cpp"
@@ -72,6 +76,28 @@ _OTOS_COMMANDS_SRC = _SOURCE_DIR / "commands" / "otos_commands.cpp"
 _COMMAND_PROCESSOR_SRC = _SOURCE_DIR / "commands" / "command_processor.cpp"
 _ARG_PARSE_SRC = _SOURCE_DIR / "commands" / "arg_parse.cpp"
 
+# 087-006: Rt::CommandRouter's constructor unconditionally builds ONE unified
+# table -- liveness + ALL SIX command families (command_router.cpp) --
+# regardless of which family this harness actually dispatches through, so
+# every family's own .cpp (and their transitive subsystem/kinematics/motion/
+# estimation/telemetry dependencies) must link in too.
+_SYSTEM_COMMANDS_SRC = _SOURCE_DIR / "commands" / "system_commands.cpp"
+_DEV_COMMANDS_SRC = _SOURCE_DIR / "commands" / "dev_commands.cpp"
+_TELEMETRY_COMMANDS_SRC = _SOURCE_DIR / "commands" / "telemetry_commands.cpp"
+_MOTION_COMMANDS_SRC = _SOURCE_DIR / "commands" / "motion_commands.cpp"
+_CONFIG_COMMANDS_SRC = _SOURCE_DIR / "commands" / "config_commands.cpp"
+_POSE_COMMANDS_SRC = _SOURCE_DIR / "commands" / "pose_commands.cpp"
+_COMMAND_ROUTER_SRC = _SOURCE_DIR / "runtime" / "command_router.cpp"
+_DRIVETRAIN_SRC = _SOURCE_DIR / "subsystems" / "drivetrain.cpp"
+_POSE_ESTIMATOR_SRC = _SOURCE_DIR / "subsystems" / "pose_estimator.cpp"
+_PLANNER_SRC = _SOURCE_DIR / "subsystems" / "planner.cpp"
+_BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
+_VELOCITY_RAMP_SRC = _SOURCE_DIR / "motion" / "velocity_ramp.cpp"
+_STOP_CONDITION_SRC = _SOURCE_DIR / "motion" / "stop_condition.cpp"
+_EKF_TINY_SRC = _SOURCE_DIR / "estimation" / "ekf_tiny.cpp"
+_TLM_FRAME_SRC = _SOURCE_DIR / "telemetry" / "tlm_frame.cpp"
+_CLOCK_HOST_SRC = _SOURCE_DIR / "types" / "clock_host.cpp"
+
 _SOURCES = [
     _HARNESS_SRC,
     _HOST_FAKE_SRC,
@@ -82,6 +108,22 @@ _SOURCES = [
     _OTOS_COMMANDS_SRC,
     _COMMAND_PROCESSOR_SRC,
     _ARG_PARSE_SRC,
+    _SYSTEM_COMMANDS_SRC,
+    _DEV_COMMANDS_SRC,
+    _TELEMETRY_COMMANDS_SRC,
+    _MOTION_COMMANDS_SRC,
+    _CONFIG_COMMANDS_SRC,
+    _POSE_COMMANDS_SRC,
+    _COMMAND_ROUTER_SRC,
+    _DRIVETRAIN_SRC,
+    _POSE_ESTIMATOR_SRC,
+    _PLANNER_SRC,
+    _BODY_KINEMATICS_SRC,
+    _VELOCITY_RAMP_SRC,
+    _STOP_CONDITION_SRC,
+    _EKF_TINY_SRC,
+    _TLM_FRAME_SRC,
+    _CLOCK_HOST_SRC,
 ]
 
 # messages/common.h documents its own target as "CODAL C++11" -- build the
@@ -124,6 +166,8 @@ def test_otos_commands_nodev_harness_compiles_and_passes(tmp_path):
             str(_SOURCE_DIR),
             "-I",
             str(_TYPES_DIR),
+            "-I",
+            str(_TINYEKF_DIR),
             "-o",
             str(binary),
         ]

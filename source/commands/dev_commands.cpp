@@ -1,13 +1,19 @@
 // dev_commands.cpp -- DEV command family implementation. See dev_commands.h
 // for the full vocabulary, the argument-parsing design decision (Open
 // Question 3), the authority-arbitration rule, the serial-silence watchdog
-// contract, and the ROBOT_DEV_BUILD gating rationale.
+// contract, the ROBOT_DEV_BUILD gating rationale, and (087-006) the
+// pointerless-translator reshape: every handler below reads/posts against
+// Rt::Blackboard only, reached via Rt::CommandRouter::blackboard() --
+// nothing here holds or dereferences a Subsystems::* pointer.
 #include "commands/dev_commands.h"
 
 #if ROBOT_DEV_BUILD
 
 #include "commands/command_processor.h"
 #include "commands/arg_parse.h"
+#include "hal/capability/motor.h"
+#include "messages/drivetrain.h"
+#include "messages/motor.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -15,6 +21,12 @@
 #include <math.h>
 
 namespace {
+
+// bb -- every handler's one and only route into subsystem-observed state and
+// command posting. handlerCtx is always a Rt::CommandRouter* (bound once,
+// at table-construction time, to every descriptor this file registers --
+// see command_router.h's class comment for why it is not &bb directly).
+Rt::Blackboard& bb(void* handlerCtx) { return static_cast<Rt::CommandRouter*>(handlerCtx)->blackboard(); }
 
 // ---------------------------------------------------------------------------
 // formatFixed -- render `value` as a fixed-point decimal string with exactly
@@ -25,13 +37,7 @@ namespace {
 // which would make every DEV reply body carrying a float field (pos=, vel=,
 // applied=, DEV DT vel=/vx=/vy=/omega=, DEV M CFG's kp=/slew=/... ack) come
 // back with an empty value instead of a number. Confirmed live on hardware
-// during this ticket's HITL smoke test. Same constraint, same fix shape as
-// source_old/commands/DebugCommands.cpp's "F1 fix" (034-004) -- that fix
-// switched to integer-scaled fields (mm, centidegrees) instead; this one
-// keeps genuine fixed-point text (matching the issue's locked wire example
-// "OK DEV M 1 applied=0.30") since lroundf()/plain integer math (both
-// available in newlib-nano without float-printf support, per the F1 fix's
-// own note) are enough to build the string by hand.
+// during ticket 077-005's HITL smoke test.
 // ---------------------------------------------------------------------------
 void formatFixed(char* buf, int bufSize, float value, int decimals) {
     if (bufSize <= 0) return;
@@ -114,7 +120,8 @@ bool motorModeFromToken(const char* tok, MotorMode* mode) {
 //                 CommandProcessor::parseKV over the WHOLE line before
 //                 dispatch), re-serialized below into ArgList as STR
 //                 "key=value" entries so the handler (which only sees
-//                 ArgList, not kvs) can recover them.
+//                 ArgList, not kvs) can recover them. Unaffected by this
+//                 rewrite -- pure parsing, no state.
 ParseResult parseDevM(const char* const* tokens, int ntokens,
                       const KVPair* kvs, int nkv) {
     ParseResult res;
@@ -189,70 +196,83 @@ ParseResult parseDevM(const char* const* tokens, int ntokens,
 }
 
 // ---------------------------------------------------------------------------
-// applyMotorCfgKey -- one key=value delta onto a shadow msg::MotorConfig.
-// Returns false (key untouched) for an unrecognized key; the caller reports
-// ERR badkey. appliedOut receives the applied "key=value" text (as actually
+// applyMotorCfgKey -- one key=value delta onto a CANDIDATE msg::MotorConfig,
+// tracking which Rt::MotorConfigField bits it touched in `mask` (087-006:
+// the candidate/mask pair becomes one Rt::ConfigDelta posted to bb.configIn
+// on success, replacing the old direct motor.configure() call). Returns
+// false (key untouched) for an unrecognized key; the caller reports ERR
+// badkey. appliedOut receives the applied "key=value" text (as actually
 // stored, after atof/atoi) for the ack line.
 // ---------------------------------------------------------------------------
-bool applyMotorCfgKey(msg::MotorConfig& cfg, const char* key, const char* value,
+bool applyMotorCfgKey(msg::MotorConfig& cfg, uint64_t& mask, const char* key, const char* value,
                       char* appliedOut, int appliedOutSize) {
     char numStr[16];
     if (strcmp(key, "kp") == 0) {
         cfg.vel_gains.kp = static_cast<float>(atof(value));
+        mask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsKp);
         formatFixed(numStr, sizeof(numStr), cfg.vel_gains.kp, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "kp=%s", numStr);
         return true;
     }
     if (strcmp(key, "ki") == 0) {
         cfg.vel_gains.ki = static_cast<float>(atof(value));
+        mask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsKi);
         formatFixed(numStr, sizeof(numStr), cfg.vel_gains.ki, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "ki=%s", numStr);
         return true;
     }
     if (strcmp(key, "kff") == 0) {
         cfg.vel_gains.kff = static_cast<float>(atof(value));
+        mask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsKff);
         formatFixed(numStr, sizeof(numStr), cfg.vel_gains.kff, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "kff=%s", numStr);
         return true;
     }
     if (strcmp(key, "i_max") == 0) {
         cfg.vel_gains.i_max = static_cast<float>(atof(value));
+        mask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsIMax);
         formatFixed(numStr, sizeof(numStr), cfg.vel_gains.i_max, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "i_max=%s", numStr);
         return true;
     }
     if (strcmp(key, "kaw") == 0) {
         cfg.vel_gains.kaw = static_cast<float>(atof(value));
+        mask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsKaw);
         formatFixed(numStr, sizeof(numStr), cfg.vel_gains.kaw, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "kaw=%s", numStr);
         return true;
     }
     if (strcmp(key, "slew") == 0) {
         cfg.slew_rate = static_cast<float>(atof(value));
+        mask |= Rt::bitOf(Rt::MotorConfigField::kSlewRate);
         formatFixed(numStr, sizeof(numStr), cfg.slew_rate, 1);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "slew=%s", numStr);
         return true;
     }
     if (strcmp(key, "min_duty") == 0) {
         cfg.min_duty = static_cast<float>(atof(value));
+        mask |= Rt::bitOf(Rt::MotorConfigField::kMinDuty);
         formatFixed(numStr, sizeof(numStr), cfg.min_duty, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "min_duty=%s", numStr);
         return true;
     }
     if (strcmp(key, "travel_calib") == 0) {
         cfg.travel_calib = static_cast<float>(atof(value));
+        mask |= Rt::bitOf(Rt::MotorConfigField::kTravelCalib);
         formatFixed(numStr, sizeof(numStr), cfg.travel_calib, 4);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "travel_calib=%s", numStr);
         return true;
     }
     if (strcmp(key, "fwd_sign") == 0) {
         cfg.fwd_sign = atoi(value);
+        mask |= Rt::bitOf(Rt::MotorConfigField::kFwdSign);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "fwd_sign=%d",
                  static_cast<int>(cfg.fwd_sign));
         return true;
     }
     if (strcmp(key, "vel_filt_alpha") == 0) {
         cfg.vel_filt_alpha = static_cast<float>(atof(value));
+        mask |= Rt::bitOf(Rt::MotorConfigField::kVelFiltAlpha);
         formatFixed(numStr, sizeof(numStr), cfg.vel_filt_alpha, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "vel_filt_alpha=%s", numStr);
         return true;
@@ -260,6 +280,7 @@ bool applyMotorCfgKey(msg::MotorConfig& cfg, const char* key, const char* value,
     if (strcmp(key, "dwell") == 0) {
         cfg.reversal_dwell.has = true;
         cfg.reversal_dwell.val = static_cast<float>(atof(value));
+        mask |= Rt::bitOf(Rt::MotorConfigField::kReversalDwell);
         formatFixed(numStr, sizeof(numStr), cfg.reversal_dwell.val, 1);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "dwell=%s", numStr);
         return true;
@@ -267,6 +288,7 @@ bool applyMotorCfgKey(msg::MotorConfig& cfg, const char* key, const char* value,
     if (strcmp(key, "deadband") == 0) {
         cfg.output_deadband.has = true;
         cfg.output_deadband.val = static_cast<float>(atof(value));
+        mask |= Rt::bitOf(Rt::MotorConfigField::kOutputDeadband);
         formatFixed(numStr, sizeof(numStr), cfg.output_deadband.val, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "deadband=%s", numStr);
         return true;
@@ -275,26 +297,25 @@ bool applyMotorCfgKey(msg::MotorConfig& cfg, const char* key, const char* value,
 }
 
 // ---------------------------------------------------------------------------
-// applyDrivetrainCfgKey -- one key=value delta onto a shadow
-// msg::DrivetrainConfig. Mirrors applyMotorCfgKey (DEV M CFG) above, but only
-// recognizes the two keys the bench rig needs live: sync_gain (the ratio
-// governor's gain -- see drivetrain.h's governRatio() doc comment; boots at
-// 0 = OFF, and before this ticket there was no way to change it without a
-// reflash) and trackwidth (the TWIST arm's kinematics input, main.cpp's
-// other dtConfig field). Returns false (key untouched) for an unrecognized
-// key; the caller reports ERR badkey.
+// applyDrivetrainCfgKey -- one key=value delta onto a CANDIDATE
+// msg::DrivetrainConfig, tracking Rt::DrivetrainConfigField bits (mirrors
+// applyMotorCfgKey above). Only recognizes the two keys the bench rig needs
+// live: sync_gain and trackwidth. Returns false (key untouched) for an
+// unrecognized key; the caller reports ERR badkey.
 // ---------------------------------------------------------------------------
-bool applyDrivetrainCfgKey(msg::DrivetrainConfig& cfg, const char* key, const char* value,
-                           char* appliedOut, int appliedOutSize) {
+bool applyDrivetrainCfgKey(msg::DrivetrainConfig& cfg, uint64_t& mask, const char* key,
+                           const char* value, char* appliedOut, int appliedOutSize) {
     char numStr[16];
     if (strcmp(key, "sync_gain") == 0) {
         cfg.sync_gain = static_cast<float>(atof(value));
+        mask |= Rt::bitOf(Rt::DrivetrainConfigField::kSyncGain);
         formatFixed(numStr, sizeof(numStr), cfg.sync_gain, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "sync_gain=%s", numStr);
         return true;
     }
     if (strcmp(key, "trackwidth") == 0) {
         cfg.trackwidth = static_cast<float>(atof(value));
+        mask |= Rt::bitOf(Rt::DrivetrainConfigField::kTrackwidth);
         formatFixed(numStr, sizeof(numStr), cfg.trackwidth, 1);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "trackwidth=%s", numStr);
         return true;
@@ -305,11 +326,12 @@ bool applyDrivetrainCfgKey(msg::DrivetrainConfig& cfg, const char* key, const ch
 // ---------------------------------------------------------------------------
 // emitMotorState / emitDrivetrainState -- shared line-builders. Used both by
 // the per-component STATE handlers (DEV M <n> STATE, DEV DT STATE) and by
-// the aggregate DEV STATE handler (one call per component).
+// the aggregate DEV STATE handler (one call per component). Read directly
+// from bb's committed state cells -- never a Hal::Motor/Drivetrain
+// reference.
 // ---------------------------------------------------------------------------
-void emitMotorState(Hal::Motor& motor, uint32_t port, const char* corrId,
+void emitMotorState(const msg::MotorState& s, uint32_t port, const char* corrId,
                     ReplyFn replyFn, void* replyCtx) {
-    msg::MotorState s = motor.state();
     char verb[16];
     snprintf(verb, sizeof(verb), "DEV M %u", static_cast<unsigned>(port));
 
@@ -329,10 +351,9 @@ void emitMotorState(Hal::Motor& motor, uint32_t port, const char* corrId,
         s.connected ? 1 : 0);
 }
 
-void emitDrivetrainState(DevLoopState& state, const char* corrId,
+void emitDrivetrainState(const Rt::Blackboard& b, const char* corrId,
                          ReplyFn replyFn, void* replyCtx) {
-    msg::DrivetrainState s = state.drivetrain->state();
-    Subsystems::DrivetrainPorts p = state.drivetrain->ports();
+    const msg::DrivetrainState& s = b.drivetrain;
     float vL = (s.vel_count_val() > 0) ? s.vel()[0] : 0.0f;
     float vR = (s.vel_count_val() > 1) ? s.vel()[1] : 0.0f;
 
@@ -343,45 +364,46 @@ void emitDrivetrainState(DevLoopState& state, const char* corrId,
     char rbuf[200];
     CommandProcessor::replyOKf(rbuf, sizeof(rbuf), "DEV DT", corrId, replyFn, replyCtx,
         "active=%d ports=%u,%u vel=%s,%s",
-        state.drivetrain->active() ? 1 : 0,
-        static_cast<unsigned>(p.left), static_cast<unsigned>(p.right),
+        s.active ? 1 : 0,
+        static_cast<unsigned>(b.drivetrainConfig.left_port),
+        static_cast<unsigned>(b.drivetrainConfig.right_port),
         vLStr, vRStr);
 }
 
 // ---------------------------------------------------------------------------
-// stageHalCommand -- stage a single addressed HAL command (DEV M's motion
-// verbs) into the outbox, per architecture-update.md's "Config-plane vs.
-// command-plane" table. Overwrites any previously-staged, un-drained command
-// (latest-wins, matching the outbox's setpoint semantics).
+// stealDrivetrainAuthority -- post {control_kind=NONE, standby=true} to
+// bb.driveIn: authority-steal only, mode_/the last commanded target are left
+// untouched (see drivetrain.h's "Authority arbitration" and dev_commands.h's
+// authority-arbitration note). Called when an ACCEPTED DEV M motion verb
+// targets one of the Drivetrain's currently-bound ports (087-006: shares
+// bb.driveIn with DEV DT's own posts -- Decision 1's coalescing mailbox).
 // ---------------------------------------------------------------------------
-void stageHalCommand(DevLoopState& state, uint32_t port, const msg::MotorCommand& cmd) {
-    state.hardwareCommand.allPorts = false;
-    state.hardwareCommand.count = 1;
-    state.hardwareCommand.addressed[0].port = port;
-    state.hardwareCommand.addressed[0].command = cmd;
-    state.hasHardwareCommand = true;
-}
-
-// ---------------------------------------------------------------------------
-// stealDrivetrainAuthority -- stage {control_kind=NONE, standby=true} into
-// the Drivetrain outbox: authority-steal only, mode_/the last commanded
-// target are left untouched (see drivetrain.h's "Authority arbitration" and
-// dev_commands.h's authority-arbitration note). Called when an ACCEPTED
-// DEV M motion verb targets one of the Drivetrain's currently-bound ports.
-// ---------------------------------------------------------------------------
-void stealDrivetrainAuthority(DevLoopState& state) {
+void stealDrivetrainAuthority(Rt::Blackboard& b) {
     msg::DrivetrainCommand cmd;   // control_kind defaults to NONE
     cmd.setStandby(true);
-    state.drivetrainCommand = cmd;
-    state.hasDrivetrainCommand = true;
+    b.driveIn.post(cmd);
 }
 
-// handleDevMCfg -- CFG delta: apply each supplied key onto the port's shadow
-// MotorConfig, ERR badkey per unrecognized key, one OK ack line listing only
-// the keys that actually applied (if any).
-void handleDevMCfg(DevLoopState& state, uint32_t port, const ArgList& args,
+// isBoundPort -- true if `port` is one of the Drivetrain's currently-bound
+// left/right ports, read from bb.drivetrainConfig.left_port/right_port
+// (087-006: the published snapshot of DrivetrainConfig, replacing a
+// Drivetrain* ports() call -- Decision 7's router-half pattern).
+bool isBoundPort(const Rt::Blackboard& b, uint32_t port) {
+    return port == b.drivetrainConfig.left_port || port == b.drivetrainConfig.right_port;
+}
+
+// handleDevMCfg -- CFG delta: apply each supplied key onto a CANDIDATE
+// msg::MotorConfig seeded from bb.motorConfig[port-1] (087-006: replaces the
+// old motorConfigShadow[] read-modify-write shadow -- bb.motorConfig[] is
+// the Configurator's own published current value), ERR badkey per
+// unrecognized key, one OK ack line listing only the keys that actually
+// applied (if any). On success, posts ONE Rt::ConfigDelta (kMotor) carrying
+// only the touched fields (mask) to bb.configIn -- the Configurator (ticket
+// 005) folds+applies it.
+void handleDevMCfg(Rt::Blackboard& b, uint32_t port, const ArgList& args,
                    const char* corrId, ReplyFn replyFn, void* replyCtx) {
-    msg::MotorConfig& cfg = state.motorConfigShadow[port - 1];
+    msg::MotorConfig cfg = b.motorConfig[port - 1];
+    uint64_t mask = 0;
     char appliedBody[256];
     int bodyLen = 0;
     appliedBody[0] = '\0';
@@ -400,7 +422,7 @@ void handleDevMCfg(DevLoopState& state, uint32_t port, const ArgList& args,
         const char* value = eq + 1;
 
         char oneApplied[40];
-        if (applyMotorCfgKey(cfg, key, value, oneApplied, sizeof(oneApplied))) {
+        if (applyMotorCfgKey(cfg, mask, key, value, oneApplied, sizeof(oneApplied))) {
             anyApplied = true;
             if (bodyLen > 0 && bodyLen < static_cast<int>(sizeof(appliedBody)) - 1) {
                 appliedBody[bodyLen++] = ' ';
@@ -415,7 +437,13 @@ void handleDevMCfg(DevLoopState& state, uint32_t port, const ArgList& args,
     }
 
     if (anyApplied) {
-        state.hardware->motor(port).configure(cfg);
+        Rt::ConfigDelta delta;
+        delta.target = Rt::ConfigDelta::kMotor;
+        delta.port = port;
+        delta.mask = mask;
+        delta.motor = cfg;
+        b.configIn.post(delta);
+
         char verb[16];
         snprintf(verb, sizeof(verb), "DEV M %u", static_cast<unsigned>(port));
         char rbuf[300];
@@ -424,33 +452,15 @@ void handleDevMCfg(DevLoopState& state, uint32_t port, const ArgList& args,
     }
 }
 
-// isBoundPort -- true if `port` is one of the Drivetrain's currently-bound
-// left/right ports, read via `drivetrain->ports()` (sprint 079 moved the
-// binding off DevLoopState and into DrivetrainConfig -- see dev_commands.h).
-// 077-007 fix: a DEV M motion verb must only steal drivetrain authority when
-// it targets a motor the Drivetrain is actually driving -- an independent,
-// unbound motor (e.g. a load knob on a port the Drivetrain never touches,
-// per docs/protocol-v2.md §16's coupled-rig test protocol) has nothing to do
-// with drivetrain authority and must leave it alone (sprint 079: this now
-// means the accepted command never stages a Drivetrain outbox entry at all
-// -- see stealDrivetrainAuthority()). Before the 077-007 fix every accepted
-// DEV M motion verb unconditionally cleared drivetrain authority regardless
-// of port, so driving an unbound motor (e.g. `DEV M 4 DUTY ...` while
-// DEV DT PORTS 2 3 is bound) silently killed the governor mid-test.
-bool isBoundPort(const DevLoopState& state, uint32_t port) {
-    Subsystems::DrivetrainPorts p = state.drivetrain->ports();
-    return port == p.left || port == p.right;
-}
-
 // handleDevM -- dispatches on the mode keyword parseDevM already validated.
 void handleDevM(const ArgList& args, const char* corrId,
                 ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
-    DevLoopState& state = *static_cast<DevLoopState*>(handlerCtx);
+    Rt::Blackboard& b = bb(handlerCtx);
     uint32_t port = static_cast<uint32_t>(args.args[0].ival);
     MotorMode mode;
     motorModeFromToken(args.args[1].sval, &mode);   // already validated by parseDevM
 
-    Hal::Motor& motor = state.hardware->motor(port);
+    const msg::MotorCapabilities& caps = b.motorCaps[port - 1];
     char verb[16];
     snprintf(verb, sizeof(verb), "DEV M %u", static_cast<unsigned>(port));
     char rbuf[200];
@@ -460,12 +470,12 @@ void handleDevM(const ArgList& args, const char* corrId,
             float duty = args.args[2].fval / 100.0f;
             msg::MotorCommand cmd;
             cmd.setDutyCycle(duty);
-            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.control_kind)) {
+            if (!Hal::motorCommandAllowed(caps, cmd.control_kind)) {
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "duty", corrId, replyFn, replyCtx);
                 break;
             }
-            stageHalCommand(state, port, cmd);
-            if (isBoundPort(state, port)) { stealDrivetrainAuthority(state); }
+            b.motorIn[port - 1].post(cmd);
+            if (isBoundPort(b, port)) { stealDrivetrainAuthority(b); }
             char dutyStr[16];
             formatFixed(dutyStr, sizeof(dutyStr), duty, 2);
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
@@ -476,12 +486,12 @@ void handleDevM(const ArgList& args, const char* corrId,
             float velocity = args.args[2].fval;
             msg::MotorCommand cmd;
             cmd.setVelocity(velocity);
-            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.control_kind)) {
+            if (!Hal::motorCommandAllowed(caps, cmd.control_kind)) {
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "vel", corrId, replyFn, replyCtx);
                 break;
             }
-            stageHalCommand(state, port, cmd);
-            if (isBoundPort(state, port)) { stealDrivetrainAuthority(state); }
+            b.motorIn[port - 1].post(cmd);
+            if (isBoundPort(b, port)) { stealDrivetrainAuthority(b); }
             char velStr[16];
             formatFixed(velStr, sizeof(velStr), velocity, 1);
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
@@ -492,12 +502,12 @@ void handleDevM(const ArgList& args, const char* corrId,
             float position = args.args[2].fval;
             msg::MotorCommand cmd;
             cmd.setPosition(position);
-            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.control_kind)) {
+            if (!Hal::motorCommandAllowed(caps, cmd.control_kind)) {
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "pos", corrId, replyFn, replyCtx);
                 break;
             }
-            stageHalCommand(state, port, cmd);
-            if (isBoundPort(state, port)) { stealDrivetrainAuthority(state); }
+            b.motorIn[port - 1].post(cmd);
+            if (isBoundPort(b, port)) { stealDrivetrainAuthority(b); }
             char posStr[16];
             formatFixed(posStr, sizeof(posStr), position, 1);
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
@@ -508,14 +518,14 @@ void handleDevM(const ArgList& args, const char* corrId,
             float voltage = args.args[2].fval;
             msg::MotorCommand cmd;
             cmd.setVoltage(voltage);
-            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.control_kind)) {
+            if (!Hal::motorCommandAllowed(caps, cmd.control_kind)) {
                 // Expected on Nezha: capabilities().voltage == false -- proves
                 // the shared capability gate, not a DEV-layer special case.
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "volt", corrId, replyFn, replyCtx);
                 break;
             }
-            stageHalCommand(state, port, cmd);
-            if (isBoundPort(state, port)) { stealDrivetrainAuthority(state); }
+            b.motorIn[port - 1].post(cmd);
+            if (isBoundPort(b, port)) { stealDrivetrainAuthority(b); }
             char voltStr[16];
             formatFixed(voltStr, sizeof(voltStr), voltage, 2);
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
@@ -530,14 +540,14 @@ void handleDevM(const ArgList& args, const char* corrId,
             cmd.setNeutral(nm);
             // NEUTRAL is never capability-gated -- motorCommandAllowed() always
             // accepts it, but it still runs through the same one path as every
-            // other motion verb (pre-validate, then stage) rather than a
+            // other motion verb (pre-validate, then post) rather than a
             // special case.
-            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.control_kind)) {
+            if (!Hal::motorCommandAllowed(caps, cmd.control_kind)) {
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "neutral", corrId, replyFn, replyCtx);
                 break;
             }
-            stageHalCommand(state, port, cmd);
-            if (isBoundPort(state, port)) { stealDrivetrainAuthority(state); }
+            b.motorIn[port - 1].post(cmd);
+            if (isBoundPort(b, port)) { stealDrivetrainAuthority(b); }
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
                                        "neutral=%s", bc);
             break;
@@ -547,21 +557,20 @@ void handleDevM(const ArgList& args, const char* corrId,
             cmd.setResetPosition(true);
             // RESET's control_kind is NONE (reset_position rides the side
             // channel) -- motorCommandAllowed() always accepts NONE, but this
-            // still goes through the same pre-validate-then-stage path.
-            if (!Hal::motorCommandAllowed(motor.capabilities(), cmd.control_kind)) {
+            // still goes through the same pre-validate-then-post path.
+            if (!Hal::motorCommandAllowed(caps, cmd.control_kind)) {
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "reset", corrId, replyFn, replyCtx);
                 break;
             }
-            stageHalCommand(state, port, cmd);
-            if (isBoundPort(state, port)) { stealDrivetrainAuthority(state); }
+            b.motorIn[port - 1].post(cmd);
+            if (isBoundPort(b, port)) { stealDrivetrainAuthority(b); }
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx, "reset=1");
             break;
         }
         case MotorMode::STATE:
-            emitMotorState(motor, port, corrId, replyFn, replyCtx);
+            emitMotorState(b.motor[port - 1], port, corrId, replyFn, replyCtx);
             break;
         case MotorMode::CAPS: {
-            msg::MotorCapabilities caps = motor.capabilities();
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
                 "duty=%d volt=%d vel=%d pos=%d enc=%d",
                 caps.duty_cycle ? 1 : 0, caps.voltage ? 1 : 0, caps.velocity ? 1 : 0,
@@ -569,7 +578,7 @@ void handleDevM(const ArgList& args, const char* corrId,
             break;
         }
         case MotorMode::CFG:
-            handleDevMCfg(state, port, args, corrId, replyFn, replyCtx);
+            handleDevMCfg(b, port, args, corrId, replyFn, replyCtx);
             break;
     }
 }
@@ -590,14 +599,9 @@ bool dtModeFromToken(const char* tok, DtMode* mode) {
     return false;
 }
 
-// parseDevDt -- argTokens after the "DEV DT" prefix is stripped:
-//   tokens[0] = sub-mode keyword
-//   tokens[1..] = mode-specific positional values (ports/twist/wheels/neutral),
-//                 or nothing here for CFG -- CFG's k=v pairs arrive via kvs
-//                 (already split out by CommandProcessor::parseKV over the
-//                 whole line before dispatch), re-serialized below into
-//                 ArgList as STR "key=value" entries, same mechanism as
-//                 parseDevM's MotorMode::CFG case.
+// parseDevDt -- argTokens after the "DEV DT" prefix is stripped. Unaffected
+// by this rewrite -- pure parsing, no state (see dev_commands.h's Open
+// Question 3 note).
 ParseResult parseDevDt(const char* const* tokens, int ntokens,
                        const KVPair* kvs, int nkv) {
     ParseResult res;
@@ -690,15 +694,15 @@ ParseResult parseDevDt(const char* const* tokens, int ntokens,
     return res;
 }
 
-// handleDevDtCfg -- CFG delta: apply each supplied key onto the shared
-// drivetrainConfigShadow, ERR badkey per unrecognized key, one OK ack line
-// listing only the keys that actually applied (if any). Mirrors
-// handleDevMCfg above, except there is exactly one Drivetrain instance (no
-// per-port indexing) and args[0] is the mode keyword ("CFG") rather than a
-// port number, so kv pairs start at args[1], not args[2].
-void handleDevDtCfg(DevLoopState& state, const ArgList& args,
+// handleDevDtCfg -- CFG delta: apply each supplied key onto a CANDIDATE
+// msg::DrivetrainConfig seeded from bb.drivetrainConfig (087-006: replaces
+// the old drivetrainConfigShadow), ERR badkey per unrecognized key, one OK
+// ack line listing only the keys that actually applied (if any). On
+// success, posts ONE Rt::ConfigDelta (kDrivetrain) to bb.configIn.
+void handleDevDtCfg(Rt::Blackboard& b, const ArgList& args,
                     const char* corrId, ReplyFn replyFn, void* replyCtx) {
-    msg::DrivetrainConfig& cfg = state.drivetrainConfigShadow;
+    msg::DrivetrainConfig cfg = b.drivetrainConfig;
+    uint64_t mask = 0;
     char appliedBody[256];
     int bodyLen = 0;
     appliedBody[0] = '\0';
@@ -717,7 +721,7 @@ void handleDevDtCfg(DevLoopState& state, const ArgList& args,
         const char* value = eq + 1;
 
         char oneApplied[40];
-        if (applyDrivetrainCfgKey(cfg, key, value, oneApplied, sizeof(oneApplied))) {
+        if (applyDrivetrainCfgKey(cfg, mask, key, value, oneApplied, sizeof(oneApplied))) {
             anyApplied = true;
             if (bodyLen > 0 && bodyLen < static_cast<int>(sizeof(appliedBody)) - 1) {
                 appliedBody[bodyLen++] = ' ';
@@ -732,7 +736,12 @@ void handleDevDtCfg(DevLoopState& state, const ArgList& args,
     }
 
     if (anyApplied) {
-        state.drivetrain->configure(cfg);
+        Rt::ConfigDelta delta;
+        delta.target = Rt::ConfigDelta::kDrivetrain;
+        delta.mask = mask;
+        delta.drivetrain = cfg;
+        b.configIn.post(delta);
+
         char rbuf[300];
         CommandProcessor::replyOKf(rbuf, sizeof(rbuf), "DEV DT", corrId, replyFn, replyCtx,
                                    "%s", appliedBody);
@@ -741,29 +750,29 @@ void handleDevDtCfg(DevLoopState& state, const ArgList& args,
 
 void handleDevDt(const ArgList& args, const char* corrId,
                  ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
-    DevLoopState& state = *static_cast<DevLoopState*>(handlerCtx);
+    Rt::Blackboard& b = bb(handlerCtx);
     DtMode mode;
     dtModeFromToken(args.args[0].sval, &mode);   // already validated by parseDevDt
     char rbuf[200];
 
     switch (mode) {
         case DtMode::PORTS: {
-            // Config-plane (architecture-update.md's "Config-plane vs.
-            // command-plane" table): direct call, no outbox. left_port/
-            // right_port merge into the shared drivetrainConfigShadow like
-            // any other CFG key, then configure() applies the full delta --
-            // sprint 079 moved the binding off DevLoopState and into
-            // DrivetrainConfig (decision 8).
+            // Config-plane, like every other CFG-shaped verb (087-006): a
+            // Rt::ConfigDelta (kDrivetrain), field-masked to just left_port/
+            // right_port, posted to bb.configIn for the Configurator to fold
+            // and apply -- replaces the old direct
+            // drivetrainConfigShadow-then-configure() call. The reply still
+            // echoes the REQUESTED values (not a bb read-back), matching
+            // today's wire text exactly.
             uint32_t left = static_cast<uint32_t>(args.args[1].ival);
             uint32_t right = static_cast<uint32_t>(args.args[2].ival);
-            state.drivetrainConfigShadow.setLeftPort(left);
-            state.drivetrainConfigShadow.setRightPort(right);
-            state.drivetrain->configure(state.drivetrainConfigShadow);
-            // Refresh the capabilities cache so DrivetrainCapabilities.
-            // onboard_position stays accurate for the newly-bound pair --
-            // see drivetrain.h's setMotorCapabilities() doc comment.
-            state.drivetrain->setMotorCapabilities(state.hardware->motor(left).capabilities(),
-                                                    state.hardware->motor(right).capabilities());
+            Rt::ConfigDelta delta;
+            delta.target = Rt::ConfigDelta::kDrivetrain;
+            delta.mask = Rt::bitOf(Rt::DrivetrainConfigField::kLeftPort) |
+                         Rt::bitOf(Rt::DrivetrainConfigField::kRightPort);
+            delta.drivetrain.left_port = left;
+            delta.drivetrain.right_port = right;
+            b.configIn.post(delta);
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), "DEV DT", corrId, replyFn, replyCtx,
                                        "ports=%u,%u", static_cast<unsigned>(left), static_cast<unsigned>(right));
             break;
@@ -778,13 +787,16 @@ void handleDevDt(const ArgList& args, const char* corrId,
             twist.omega = omega;
             msg::DrivetrainCommand cmd;
             cmd.setTwist(twist);
-            // Command-plane: stage, do not call drivetrain->apply() directly
-            // -- main.cpp drains the outbox once per pass (see "The Part-2
-            // loop"). Drivetrain::apply()'s TWIST arm sets active_=true
-            // itself once main.cpp applies this, per docs/protocol-v2.md's
-            // "DEV DT verbs (re)activate authority" rule.
-            state.drivetrainCommand = cmd;
-            state.hasDrivetrainCommand = true;
+            // Command-plane: post, do not call drivetrain.apply() directly --
+            // Subsystems::Drivetrain::tick() drains bb.driveIn once per pass
+            // (see drivetrain.h's tick() doc comment). DEV DT ALWAYS posts,
+            // unconditionally -- today's contract is "DEV DT verbs
+            // (re)activate authority" (drivetrain.h's own "Authority
+            // arbitration" section); Decision 1's authority gate belongs to
+            // driveIn's OTHER producer (Planner's own output, drained by the
+            // loop's routeOutputs, ticket 007), not to DEV DT's own posts --
+            // preserved exactly, not changed by this rewrite.
+            b.driveIn.post(cmd);
             char vxStr[16], vyStr[16], omegaStr[16];
             formatFixed(vxStr, sizeof(vxStr), vx, 1);
             formatFixed(vyStr, sizeof(vyStr), vy, 1);
@@ -802,8 +814,7 @@ void handleDevDt(const ArgList& args, const char* corrId,
             wt.w_count = 2;
             msg::DrivetrainCommand cmd;
             cmd.setWheels(wt);
-            state.drivetrainCommand = cmd;
-            state.hasDrivetrainCommand = true;
+            b.driveIn.post(cmd);
             char leftStr[16], rightStr[16];
             formatFixed(leftStr, sizeof(leftStr), left, 1);
             formatFixed(rightStr, sizeof(rightStr), right, 1);
@@ -817,43 +828,38 @@ void handleDevDt(const ArgList& args, const char* corrId,
             neutralModeFromToken(bc, &nm);
             msg::DrivetrainCommand cmd;
             cmd.setNeutral(nm);
-            state.drivetrainCommand = cmd;
-            state.hasDrivetrainCommand = true;
+            b.driveIn.post(cmd);
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), "DEV DT", corrId, replyFn, replyCtx,
                                        "neutral=%s", bc);
             break;
         }
         case DtMode::STATE:
-            emitDrivetrainState(state, corrId, replyFn, replyCtx);
+            emitDrivetrainState(b, corrId, replyFn, replyCtx);
             break;
         case DtMode::STOP: {
-            // The narrower, bound-pair-only stop (decision 4): stage an
-            // ADDRESSED (count=2), non-broadcast HAL command targeting
-            // exactly the bound pair, read via drivetrain->ports() -- an
-            // independent, unbound motor is never placed in the addressed
-            // array and so is untouched. Reuses buildDrivetrainStop() for
+            // The narrower, bound-pair-only stop (decision 4): posts an
+            // ADDRESSED neutral to exactly the bound pair's OWN per-port
+            // mailboxes (bb.motorIn[left-1]/[right-1] -- both DO mark their
+            // port in-use, identical to NezhaHardware::apply()'s addressed
+            // branch, so no separate cell is needed here -- see
+            // dev_commands.h's file header). An independent, unbound motor's
+            // mailbox is never posted to. Reuses buildDrivetrainStop() for
             // the Drivetrain side (identical {NEUTRAL, standby=true} shape
             // as DEV STOP's) -- see dev_commands.h's doc comment.
-            Subsystems::DrivetrainPorts p = state.drivetrain->ports();
+            uint32_t left = b.drivetrainConfig.left_port;
+            uint32_t right = b.drivetrainConfig.right_port;
             msg::MotorCommand neutralCmd;
             neutralCmd.setNeutral(msg::Neutral::BRAKE);
+            b.motorIn[left - 1].post(neutralCmd);
+            b.motorIn[right - 1].post(neutralCmd);
 
-            state.hardwareCommand.allPorts = false;
-            state.hardwareCommand.count = 2;
-            state.hardwareCommand.addressed[0].port = p.left;
-            state.hardwareCommand.addressed[0].command = neutralCmd;
-            state.hardwareCommand.addressed[1].port = p.right;
-            state.hardwareCommand.addressed[1].command = neutralCmd;
-            state.hasHardwareCommand = true;
-
-            state.drivetrainCommand = buildDrivetrainStop(msg::Neutral::BRAKE);
-            state.hasDrivetrainCommand = true;
+            b.driveIn.post(buildDrivetrainStop(msg::Neutral::BRAKE));
 
             CommandProcessor::replyOK(rbuf, sizeof(rbuf), "DEV DT STOP", nullptr, corrId, replyFn, replyCtx);
             break;
         }
         case DtMode::CFG:
-            handleDevDtCfg(state, args, corrId, replyFn, replyCtx);
+            handleDevDtCfg(b, args, corrId, replyFn, replyCtx);
             break;
     }
 }
@@ -864,38 +870,45 @@ void handleDevDt(const ArgList& args, const char* corrId,
 // ---------------------------------------------------------------------------
 void handleDevState(const ArgList& /*args*/, const char* corrId,
                     ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
-    DevLoopState& state = *static_cast<DevLoopState*>(handlerCtx);
-    for (uint32_t port = 1; port <= Subsystems::Hardware::kPortCount; ++port) {
-        emitMotorState(state.hardware->motor(port), port, corrId, replyFn, replyCtx);
+    Rt::Blackboard& b = bb(handlerCtx);
+    for (uint32_t port = 1; port <= Rt::kPortCount; ++port) {
+        emitMotorState(b.motor[port - 1], port, corrId, replyFn, replyCtx);
     }
-    emitDrivetrainState(state, corrId, replyFn, replyCtx);
+    emitDrivetrainState(b, corrId, replyFn, replyCtx);
 }
 
 // ---------------------------------------------------------------------------
 // DEV STOP -- global: all four motors neutral, drivetrain idle, authority
-// dropped. STAGES buildBroadcastNeutral()/buildDrivetrainStop()'s output
-// (the same "one audited path" main.cpp's watchdog-fire path APPLIES
-// immediately -- see dev_commands.h's doc comment on those two functions).
+// dropped. Posts the broadcast HAL neutral to bb.hardwareBroadcastIn (a
+// dedicated Mailbox<msg::MotorCommand> -- NOT bb.motorIn[], since a
+// broadcast deliberately does not mark any port in-use, unlike a per-port
+// motorIn[] post -- see dev_commands.h's file header) and the Drivetrain
+// side to bb.driveIn.
 // ---------------------------------------------------------------------------
 void handleDevStop(const ArgList& /*args*/, const char* corrId,
                    ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
-    DevLoopState& state = *static_cast<DevLoopState*>(handlerCtx);
-    state.hardwareCommand = buildBroadcastNeutral(msg::Neutral::BRAKE);
-    state.hasHardwareCommand = true;
-    state.drivetrainCommand = buildDrivetrainStop(msg::Neutral::BRAKE);
-    state.hasDrivetrainCommand = true;
+    Rt::Blackboard& b = bb(handlerCtx);
+    msg::MotorCommand neutral;
+    neutral.setNeutral(msg::Neutral::BRAKE);
+    b.hardwareBroadcastIn.post(neutral);
+    b.driveIn.post(buildDrivetrainStop(msg::Neutral::BRAKE));
     char rbuf[32];
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "DEV STOP", nullptr, corrId, replyFn, replyCtx);
 }
 
 // ---------------------------------------------------------------------------
-// DEV WD <window> -- set the serial-silence watchdog window.
+// DEV WD <window> -- set the serial-silence watchdog window. Posts the
+// requested window to bb.devWatchdogWindowIn (087-006: the watchdog is
+// loop-owned, not one of the Configurator's four targets -- see
+// dev_commands.h's file header); the loop drains it into its own
+// SerialSilenceWatchdog instance. The reply echoes the requested value
+// directly, matching today's wire text exactly.
 // ---------------------------------------------------------------------------
 void handleDevWd(const ArgList& args, const char* corrId,
                  ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
-    DevLoopState& state = *static_cast<DevLoopState*>(handlerCtx);
+    Rt::Blackboard& b = bb(handlerCtx);
     uint32_t window = static_cast<uint32_t>(args.args[0].ival);
-    state.watchdog->setWindow(window);
+    b.devWatchdogWindowIn.post(window);
     char rbuf[48];
     CommandProcessor::replyOKf(rbuf, sizeof(rbuf), "DEV WD", corrId, replyFn, replyCtx,
                                "window=%u", static_cast<unsigned>(window));
@@ -904,7 +917,10 @@ void handleDevWd(const ArgList& args, const char* corrId,
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// buildBroadcastNeutral / buildDrivetrainStop -- see dev_commands.h.
+// buildBroadcastNeutral / buildDrivetrainStop -- see dev_commands.h. Used by
+// the loop's watchdog-fire path (applies the result IMMEDIATELY, bypassing
+// every bb queue) and, for buildDrivetrainStop() alone, by DEV STOP/DEV DT
+// STOP's own bb.driveIn post above.
 // ---------------------------------------------------------------------------
 Hal::CommandProcessorToHardwareCommand buildBroadcastNeutral(msg::Neutral mode) {
     Hal::CommandProcessorToHardwareCommand cmd;
@@ -924,19 +940,19 @@ msg::DrivetrainCommand buildDrivetrainStop(msg::Neutral mode) {
 }
 
 // ---------------------------------------------------------------------------
-// devCommands -- the DEV command table.
+// devCommands -- the DEV command table, bound to `router`.
 // ---------------------------------------------------------------------------
-std::vector<CommandDescriptor> devCommands(DevLoopState& state) {
+std::vector<CommandDescriptor> devCommands(Rt::CommandRouter& router) {
     std::vector<CommandDescriptor> cmds;
-    cmds.push_back(makeCmd("DEV M", parseDevM, handleDevM, &state,
+    cmds.push_back(makeCmd("DEV M", parseDevM, handleDevM, &router,
                            "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
-    cmds.push_back(makeCmd("DEV DT", parseDevDt, handleDevDt, &state,
+    cmds.push_back(makeCmd("DEV DT", parseDevDt, handleDevDt, &router,
                            "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
-    cmds.push_back(makeCmd("DEV STATE", nullptr, handleDevState, &state,
+    cmds.push_back(makeCmd("DEV STATE", nullptr, handleDevState, &router,
                            "badarg", ForceReply::NONE, CMD_NONE));
-    cmds.push_back(makeCmd("DEV STOP", nullptr, handleDevStop, &state,
+    cmds.push_back(makeCmd("DEV STOP", nullptr, handleDevStop, &router,
                            "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
-    cmds.push_back(makeSchemaCmd("DEV WD", &kDevWdSchema, handleDevWd, &state,
+    cmds.push_back(makeSchemaCmd("DEV WD", &kDevWdSchema, handleDevWd, &router,
                                  "badarg", ForceReply::NONE, CMD_NONE));
     return cmds;
 }

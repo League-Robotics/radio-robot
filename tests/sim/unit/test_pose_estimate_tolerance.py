@@ -9,12 +9,26 @@ tick via ``SNAP``), not just at rest.
 Two different tolerance bands, by design (not sloppiness -- see the two
 constants' own comments below):
 
-  - ``pose=`` (``fusedPose()``) is corrected every tick by a fresh, accurate
-    (zero-error-knob) OTOS observation (``Hal::SimOdometer::tick()`` samples
-    the plant's true pose AFTER this pass's ``Hal::PhysicsWorld::update()``
-    call -- see ``dev_loop.cpp``'s pose-estimation step, which calls
+  - ``pose=`` (``fusedPose()``) was, pre-087, corrected every tick by a
+    fresh, accurate (zero-error-knob) OTOS observation sampled the SAME
+    pass (ticket 006's transitional same-pass ``dev_loop.cpp``, which called
     ``odometer->tick(now)`` right before ``poseEstimator->tick()``) -- so it
-    tracks true tightly.
+    tracked true tightly, one order of magnitude better than ``encpose=``.
+    **(087-007)** The real cyclic executive's synchronous-update discipline
+    (architecture-update-r1.md Decision 6) removes that same-pass
+    advantage: ``PoseEstimator::tick()`` now reads ``bb.otos``/
+    ``bb.otosValid`` as committed at the END of the PREVIOUS pass (x[k]),
+    not a same-pass-fresh sample (see ``source/runtime/main_loop.cpp``) --
+    so ``pose=`` now shares ``encpose=``'s same one-tick-lag-behind-true
+    characteristic during a turn (measured: a ~3.5deg transient spike right
+    at spin-up, settling to ~2.0-2.1deg steady-state -- previously ~0.23deg).
+    This is the SAME uniform one-tick latency Decision 6 deliberately
+    introduces everywhere else in the loop, not a new EKF-wiring defect --
+    the fusion itself is unaffected (confirmed: xy tracking is still tight,
+    ~12mm max, well inside ``_POSE_XY_TOL``); only the OTOS correction's
+    input freshness shifted by one pass. Full control/EKF-cadence retuning
+    for the added latency is ticket 009's scope; this ticket only widens the
+    heading tolerance to the new, correctly-latency-bounded reality.
   - ``encpose=`` (``encoderPose()``) is fed by ``Hal::Motor::position()``,
     which is ``Hal::SimMotor::position()`` -- a CACHED sample taken at the
     START of ``SimMotor::tick()``, i.e. BEFORE this pass's
@@ -24,7 +38,7 @@ constants' own comments below):
     "one-tick sample latency" ``firmware.py``'s own docstring documents for
     ``velocity()`` -- ``position()`` inherits the identical lag by
     construction, since both come from the same ``lastPosition_`` cache.
-    ``encpose=`` therefore lags true by roughly one devLoopTick pass's worth
+    ``encpose=`` therefore lags true by roughly one main-loop pass's worth
     of motion (~24 ms at the current wheel speed), which is a real,
     documented simulation-design artifact, not a defect -- see this file's
     empirically-measured tolerance constants below.
@@ -32,13 +46,14 @@ constants' own comments below):
 Tolerances were derived by running this exact drive script and recording
 the observed max divergence (straight leg: pose xy <= ~3.1 mm, pose h == 0;
 encpose xy <= ~7.1 mm, encpose h == 0 -- no heading change on a straight
-run; turn leg: pose xy <= ~1.3 mm, pose h <= ~0.23 deg; encpose xy <=
-~2.1 mm, encpose h <= ~3.6 deg during the velocity-ramp transient, settling
-to ~2 deg), then applying a >=4x margin so the test is not flaky against
-minor future PID-tuning or plant-default changes while still catching a
-genuine correctness regression (e.g. a EKF wiring break that made ``pose=``
-track as loosely as ``encpose=``, or an ``encpose=`` blow-up well past the
-one-tick-latency order of magnitude).
+run; turn leg: pose xy <= ~1.9 mm, pose h <= ~3.5deg transient/~2.1deg
+steady-state (087-007: was ~0.23 deg pre-cyclic-executive, see above);
+encpose xy <= ~2.1 mm, encpose h <= ~3.6 deg during the velocity-ramp
+transient, settling to ~2 deg), then applying a >=4x margin so the test is
+not flaky against minor future PID-tuning or plant-default changes while
+still catching a genuine correctness regression (e.g. a EKF wiring break
+that made ``pose=`` track far more loosely than ``encpose=``, or either
+blowing up well past the one-tick-latency order of magnitude).
 """
 from __future__ import annotations
 
@@ -49,7 +64,11 @@ CDEG_PER_RAD = 5729.5779513   # kAngleScale, tlm_frame.cpp -- centidegrees per r
 # Empirically-derived, margined tolerances (see file header for the
 # measurements they are based on).
 _POSE_XY_TOL = 15.0     # [mm] fused pose position -- observed max ~3.1mm
-_POSE_H_TOL = math.radians(2.0)     # fused pose heading -- observed max ~0.23deg
+# (087-007) widened from 2.0deg: pose= now shares encpose='s one-tick-lag
+# characteristic (Decision 6) -- observed max ~3.5deg transient, ~2.1deg
+# steady-state during a turn; matches _ENCPOSE_H_TOL's own margin for the
+# same underlying one-tick-lag reason. See file header.
+_POSE_H_TOL = math.radians(8.0)     # fused pose heading -- observed max ~3.5deg (087-007)
 _ENCPOSE_XY_TOL = 25.0  # [mm] encoder-only position -- observed max ~7.1mm
 _ENCPOSE_H_TOL = math.radians(8.0)  # encoder-only heading -- observed max ~3.6deg
 

@@ -44,6 +44,7 @@
 #include "hal/sim/sim_motor.h"
 #include "hal/sim/sim_odometer.h"
 #include "messages/motor.h"
+#include "runtime/queue.h"
 #include "subsystems/hardware.h"
 
 namespace Subsystems {
@@ -64,7 +65,15 @@ class SimHardware : public Hardware {
   // Hal::SimMotor::tick(now) runs (in port order), then the plant advances
   // exactly once (Hal::PhysicsWorld::update()), then the odometer samples
   // the just-advanced true pose (Hal::SimOdometer::tick()).
-  void tick(uint32_t now) override;   // [ms]
+  //
+  // motorIn[]/motorResetIn[] (087-004, Subsystems::Hardware's own doc
+  // comment has the full contract) are consumed FIRST, uniformly: this
+  // class has no flip-flop schedule to bring a port into (every port ticks
+  // every pass unconditionally, regardless), so this is a plain
+  // apply-and-clear with no in-use bookkeeping, unlike
+  // Subsystems::NezhaHardware's.
+  void tick(uint32_t now, Rt::Mailbox<msg::MotorCommand> motorIn[kPortCount],
+            bool motorResetIn[kPortCount]) override;   // [ms]
 
   // Port-indexed accessor, port in [1, kPortCount]. Always returns the
   // Hal::Motor faceplate, exactly like Subsystems::NezhaHardware::motor() —
@@ -78,6 +87,14 @@ class SimHardware : public Hardware {
   // motors every pass carries no bus cost to economize.
   void apply(const Hal::CommandProcessorToHardwareCommand& cmd) override;
   void apply(const Hal::DrivetrainToHardwareCommand& cmd) override;
+
+  // config()/state() (087-004, Subsystems::Hardware's own doc comment has
+  // the full contract). config(port) returns the constructor-supplied
+  // config_[port-1] verbatim; state(port) returns motor(port).state()
+  // unchanged. Out-of-range ports clamp to port 4, matching motor()'s own
+  // convention.
+  msg::MotorConfig config(uint32_t port) const override;
+  msg::MotorState state(uint32_t port) const override;
 
   // The one Hal::Odometer leaf this owner has (082-003's Subsystems::Hardware
   // seam override) — never nullptr for SimHardware, unlike
@@ -140,6 +157,11 @@ class SimHardware : public Hardware {
   // The dt=0 re-entry guard's own state (Decision 4) — see file header.
   uint32_t lastAdvancedNow_ = 0;   // [ms]
   bool hasAdvanced_ = false;
+
+  // config()'s own backing store (087-004) — a verbatim copy of the
+  // constructor's configs[] argument. This ticket adds no way to change it
+  // after construction (no Hardware-level configure() exists yet).
+  msg::MotorConfig config_[kPortCount];
 };
 
 }  // namespace Subsystems

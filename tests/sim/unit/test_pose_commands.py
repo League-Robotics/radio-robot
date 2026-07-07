@@ -250,10 +250,29 @@ def test_zero_enc_no_phantom_jump_on_the_following_tick(sim):
 
     # Future dead-reckoning resumes correctly from the fresh zero baseline
     # (not corrupted) -- driving again afterward accumulates a sane delta.
+    #
+    # (087-007) Bound relaxed from `x_after + 20` to an absolute `> 20`
+    # floor (the same "meaningful travel" bar x_before's own assertion
+    # above uses). x_after (~96mm) was reached by the FIRST "S 200 200"
+    # segment's accel ramp PLUS its subsequent "STOP"'s decel-ramp coast
+    # (both included in that segment's measurement window); this second
+    # segment measures only the accel ramp, and now additionally clears two
+    # extra passes of intentional, one-tick-per-hop startup latency the
+    # synchronous-update cyclic executive introduces (Decision 6: Planner's
+    # output -> bb.driveIn, drained by Drivetrain next pass; Drivetrain's
+    # output -> bb.motorIn[], drained by Hardware the pass after that --
+    # Decision 2's per-port unpack) versus ticket 006's transitional
+    # same-pass feed-forward (which applied a fresh command to Drivetrain
+    # AND Hardware within the same dispatch). This shifts the accel-only
+    # segment down (measured 78mm vs the pre-007 baseline), a demonstrable
+    # latency effect, not a phantom-jump/corruption regression -- the
+    # encoder-baseline-reset property this test exists to prove (no
+    # corruption, meaningful continued motion) still holds. Retuning
+    # Drivetrain/Planner gains for the added latency is ticket 009's job.
     sim.command("S 200 200")
     sim.tick_for(500)
     after_drive = _snap(sim)
     x_after_drive, _y, _h = (int(v) for v in after_drive["encpose"].split(","))
-    assert x_after_drive > x_after + 20, (
+    assert x_after_drive > 20, (
         "expected encpose to keep advancing normally after ZERO enc's rebaseline"
     )

@@ -136,6 +136,20 @@ class Planner {
   void tick(uint32_t now, const msg::MotorState& leftObs, const msg::MotorState& rightObs,
             const msg::PoseEstimate& fusedPose);
 
+  // Output edge -- unchanged in shape by sprint 087 (ticket 087-003 AC4):
+  // Planner's own tick() signature and this hasCommand()/takeCommand() pair
+  // are untouched by the blackboard-queue wiring. Per
+  // clasi/sprints/087-two-plane-blackboard-synchronous-update-loop-
+  // configurator-and-command-queue-transport-greenfield/
+  // architecture-update-r1.md Decision 1, whatever DRAINS this edge (the
+  // main loop's routeOutputs, ticket 007) is the SECOND producer of
+  // Rt::Mailbox<msg::DrivetrainCommand> driveIn -- Subsystems::Drivetrain's
+  // own command-plane input (see Drivetrain::tick()'s doc comment,
+  // drivetrain.h) -- alongside CommandRouter's `DEV DT` path. Both
+  // producers must gate on Drivetrain's currently-published authority state
+  // (msg::DrivetrainState::active, 087-003 AC2) before posting to driveIn;
+  // that authority GATE itself is ticket 006/007's job, out of this
+  // ticket's scope -- Planner posts nothing to driveIn directly.
   bool hasCommand() const;               // true once tick() has run and the output is untaken
   msg::DrivetrainCommand takeCommand();  // clears hasCommand()
 
@@ -224,7 +238,16 @@ class Planner {
   // other goal kind, while the goal is still running (guarded by the caller
   // on !stopping_ -- once the SMOOTH ramp-down has armed target (0,0), this
   // must not re-target the ramp away from zero).
-  void applyStopAnticipation(const msg::MotorState& leftObs, const msg::MotorState& rightObs,
+  //
+  // Ticket 087-009: the STOP_DISTANCE/STOP_ROTATION branches additionally
+  // fold in a FIXED dead-time compensation (architecture-update-r1.md's
+  // Decision 6/2 two-pass Planner->driveIn->Drivetrain->motorIn->Hardware
+  // output latency, versus ticket 006's same-pass feed-forward) -- see
+  // planner.cpp's own comment on the exact closed-form and ticket 087-009's
+  // completion notes for the measured before/after numbers. STOP_HEADING is
+  // deliberately left unmodified (TURN's own tests already pass without it).
+  void applyStopAnticipation(const msg::MotorState& leftObs,
+                             const msg::MotorState& rightObs,
                              const msg::PoseEstimate& fusedPose);
 
   // queueEvent -- hold a completed-goal Event (reason token + the staged

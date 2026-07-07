@@ -16,15 +16,14 @@
 
 namespace {
 
+Rt::Blackboard& bb(void* handlerCtx) { return static_cast<Rt::CommandRouter*>(handlerCtx)->blackboard(); }
+
 // ---------------------------------------------------------------------------
 // formatFixed -- render `value` as a fixed-point decimal string with exactly
 // `decimals` digits after the point, using only integer arithmetic -- NOT
-// "%f"/"%.Nf". CODAL/newlib-nano's printf family has no float-conversion
-// support on this toolchain (no -u _printf_float) -- a "%f" specifier
-// silently emits nothing. Same technique, same rationale as
-// dev_commands.cpp's own formatFixed() (duplicated here, not shared,
-// matching this codebase's existing per-file convention -- there is no
-// shared formatting helper today).
+// "%f"/"%.Nf" (CODAL/newlib-nano has no float-conversion printf support).
+// Duplicated here, not shared, matching this codebase's existing per-file
+// convention (see dev_commands.cpp's own formatFixed()).
 // ---------------------------------------------------------------------------
 void formatFixed(char* buf, int bufSize, float value, int decimals) {
     if (bufSize <= 0) return;
@@ -59,13 +58,8 @@ void formatFixed(char* buf, int bufSize, float value, int decimals) {
 
 // ---------------------------------------------------------------------------
 // parseFloatStrict / parseLongStrict -- docs/protocol-v2.md §7's "SET accepts
-// float text for float keys (strtof with end-pointer validation) and integer
-// text for int and float-as-int keys (strtol base-10 with end-pointer
-// validation). Trailing non-numeric characters or empty values are rejected
-// with ERR badval <key>." Both return false on empty/non-numeric text --
-// the caller reports that as KeyResult::BADVAL with no value shown (a PARSE
-// failure, distinct from an invariant/range failure caught later by
-// validateCandidate(), which DOES show the candidate value).
+// float text for float keys ... Trailing non-numeric characters or empty
+// values are rejected with ERR badval <key>." Unaffected by this rewrite.
 // ---------------------------------------------------------------------------
 bool parseFloatStrict(const char* value, float* out) {
     if (!value || value[0] == '\0') return false;
@@ -86,13 +80,14 @@ bool parseLongStrict(const char* value, long* out) {
 }
 
 // ---------------------------------------------------------------------------
-// ConfigCandidate -- a candidate-config bundle: one copy of every shadow a
-// SET line's keys might touch, plus a touched* flag per shadow so handleSet
-// knows which shadows to copy back and which subsystems'/motors'
-// configure() to call on a successful commit. sTimeoutRaw is a SIGNED long,
-// not the target uint32_t, so a negative parsed value is caught by
-// validateCandidate() below rather than silently wrapping to a huge window
-// the moment it is cast to unsigned.
+// ConfigCandidate -- a candidate-config bundle: one copy of every published
+// bb cell a SET line's keys might touch, plus a touched* flag and a
+// per-target field mask (087-006: replaces the pre-087 shadow's direct
+// motor.configure()/drivetrain.configure() calls -- a mask is now needed so
+// the ACCEPTED path can build one field-masked Rt::ConfigDelta per touched
+// target instead of calling configure() itself). sTimeoutRaw is a SIGNED
+// long, not the target uint32_t, so a negative parsed value is caught by
+// validateCandidate() below rather than silently wrapping to a huge window.
 // ---------------------------------------------------------------------------
 struct ConfigCandidate {
     msg::DrivetrainConfig dt;
@@ -106,6 +101,11 @@ struct ConfigCandidate {
     bool touchedRight = false;
     bool touchedPlanner = false;
     bool touchedSTimeout = false;
+
+    uint64_t dtMask = 0;
+    uint64_t leftMask = 0;
+    uint64_t rightMask = 0;
+    uint64_t plannerMask = 0;
 };
 
 enum class KeyResult : uint8_t { OK, UNKNOWN, BADVAL };
@@ -114,11 +114,9 @@ enum class KeyResult : uint8_t { OK, UNKNOWN, BADVAL };
 // applyConfigKey -- one key=value delta onto a ConfigCandidate. Returns
 // UNKNOWN for an unregistered key (caller replies ERR badkey) or BADVAL for
 // a non-numeric/empty value (caller replies ERR badval <key>, no value
-// shown -- a parse failure, per docs/protocol-v2.md §7). On OK, writes the
-// applied "key=value" text (as actually parsed, matching the wire format
-// each key documents) into appliedOut and sets the matching touched* flag(s)
-// -- pid.* touches BOTH left and right (applied identically to both bound
-// motors' Gains, per the approved key table).
+// shown). On OK, writes the applied "key=value" text into appliedOut and
+// sets the matching touched*/*, *Mask flag(s) -- pid.* touches BOTH left and
+// right identically, per the approved key table.
 // ---------------------------------------------------------------------------
 KeyResult applyConfigKey(ConfigCandidate& cand, const char* key, const char* value,
                          char* appliedOut, int appliedOutSize) {
@@ -129,6 +127,7 @@ KeyResult applyConfigKey(ConfigCandidate& cand, const char* key, const char* val
         if (!parseLongStrict(value, &v)) return KeyResult::BADVAL;
         cand.dt.trackwidth = static_cast<float>(v);
         cand.touchedDt = true;
+        cand.dtMask |= Rt::bitOf(Rt::DrivetrainConfigField::kTrackwidth);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "tw=%ld", v);
         return KeyResult::OK;
     }
@@ -137,6 +136,7 @@ KeyResult applyConfigKey(ConfigCandidate& cand, const char* key, const char* val
         if (!parseFloatStrict(value, &v)) return KeyResult::BADVAL;
         cand.left.travel_calib = v;
         cand.touchedLeft = true;
+        cand.leftMask |= Rt::bitOf(Rt::MotorConfigField::kTravelCalib);
         formatFixed(numStr, sizeof(numStr), v, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "ml=%s", numStr);
         return KeyResult::OK;
@@ -146,6 +146,7 @@ KeyResult applyConfigKey(ConfigCandidate& cand, const char* key, const char* val
         if (!parseFloatStrict(value, &v)) return KeyResult::BADVAL;
         cand.right.travel_calib = v;
         cand.touchedRight = true;
+        cand.rightMask |= Rt::bitOf(Rt::MotorConfigField::kTravelCalib);
         formatFixed(numStr, sizeof(numStr), v, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "mr=%s", numStr);
         return KeyResult::OK;
@@ -157,6 +158,8 @@ KeyResult applyConfigKey(ConfigCandidate& cand, const char* key, const char* val
         cand.right.vel_gains.kp = v;
         cand.touchedLeft = true;
         cand.touchedRight = true;
+        cand.leftMask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsKp);
+        cand.rightMask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsKp);
         formatFixed(numStr, sizeof(numStr), v, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "pid.kp=%s", numStr);
         return KeyResult::OK;
@@ -168,6 +171,8 @@ KeyResult applyConfigKey(ConfigCandidate& cand, const char* key, const char* val
         cand.right.vel_gains.ki = v;
         cand.touchedLeft = true;
         cand.touchedRight = true;
+        cand.leftMask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsKi);
+        cand.rightMask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsKi);
         formatFixed(numStr, sizeof(numStr), v, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "pid.ki=%s", numStr);
         return KeyResult::OK;
@@ -179,6 +184,8 @@ KeyResult applyConfigKey(ConfigCandidate& cand, const char* key, const char* val
         cand.right.vel_gains.kff = v;
         cand.touchedLeft = true;
         cand.touchedRight = true;
+        cand.leftMask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsKff);
+        cand.rightMask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsKff);
         formatFixed(numStr, sizeof(numStr), v, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "pid.kff=%s", numStr);
         return KeyResult::OK;
@@ -190,6 +197,8 @@ KeyResult applyConfigKey(ConfigCandidate& cand, const char* key, const char* val
         cand.right.vel_gains.i_max = v;
         cand.touchedLeft = true;
         cand.touchedRight = true;
+        cand.leftMask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsIMax);
+        cand.rightMask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsIMax);
         formatFixed(numStr, sizeof(numStr), v, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "pid.iMax=%s", numStr);
         return KeyResult::OK;
@@ -201,6 +210,8 @@ KeyResult applyConfigKey(ConfigCandidate& cand, const char* key, const char* val
         cand.right.vel_gains.kaw = v;
         cand.touchedLeft = true;
         cand.touchedRight = true;
+        cand.leftMask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsKaw);
+        cand.rightMask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsKaw);
         formatFixed(numStr, sizeof(numStr), v, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "pid.kaw=%s", numStr);
         return KeyResult::OK;
@@ -210,6 +221,7 @@ KeyResult applyConfigKey(ConfigCandidate& cand, const char* key, const char* val
         if (!parseFloatStrict(value, &v)) return KeyResult::BADVAL;
         cand.dt.rotational_slip = v;
         cand.touchedDt = true;
+        cand.dtMask |= Rt::bitOf(Rt::DrivetrainConfigField::kRotationalSlip);
         formatFixed(numStr, sizeof(numStr), v, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "rotSlip=%s", numStr);
         return KeyResult::OK;
@@ -219,6 +231,7 @@ KeyResult applyConfigKey(ConfigCandidate& cand, const char* key, const char* val
         if (!parseFloatStrict(value, &v)) return KeyResult::BADVAL;
         cand.dt.ekf_q_xy = v;
         cand.touchedDt = true;
+        cand.dtMask |= Rt::bitOf(Rt::DrivetrainConfigField::kEkfQXy);
         formatFixed(numStr, sizeof(numStr), v, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "ekfQxy=%s", numStr);
         return KeyResult::OK;
@@ -228,6 +241,7 @@ KeyResult applyConfigKey(ConfigCandidate& cand, const char* key, const char* val
         if (!parseFloatStrict(value, &v)) return KeyResult::BADVAL;
         cand.dt.ekf_q_theta = v;
         cand.touchedDt = true;
+        cand.dtMask |= Rt::bitOf(Rt::DrivetrainConfigField::kEkfQTheta);
         formatFixed(numStr, sizeof(numStr), v, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "ekfQtheta=%s", numStr);
         return KeyResult::OK;
@@ -237,6 +251,7 @@ KeyResult applyConfigKey(ConfigCandidate& cand, const char* key, const char* val
         if (!parseFloatStrict(value, &v)) return KeyResult::BADVAL;
         cand.dt.ekf_r_otos_xy = v;
         cand.touchedDt = true;
+        cand.dtMask |= Rt::bitOf(Rt::DrivetrainConfigField::kEkfROtosXy);
         formatFixed(numStr, sizeof(numStr), v, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "ekfROtosXy=%s", numStr);
         return KeyResult::OK;
@@ -246,6 +261,7 @@ KeyResult applyConfigKey(ConfigCandidate& cand, const char* key, const char* val
         if (!parseFloatStrict(value, &v)) return KeyResult::BADVAL;
         cand.dt.ekf_r_otos_theta = v;
         cand.touchedDt = true;
+        cand.dtMask |= Rt::bitOf(Rt::DrivetrainConfigField::kEkfROtosTheta);
         formatFixed(numStr, sizeof(numStr), v, 3);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "ekfROtosTheta=%s", numStr);
         return KeyResult::OK;
@@ -255,6 +271,7 @@ KeyResult applyConfigKey(ConfigCandidate& cand, const char* key, const char* val
         if (!parseLongStrict(value, &v)) return KeyResult::BADVAL;
         cand.planner.min_speed = static_cast<float>(v);
         cand.touchedPlanner = true;
+        cand.plannerMask |= Rt::bitOf(Rt::PlannerConfigField::kMinSpeed);
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "minSpeed=%ld", v);
         return KeyResult::OK;
     }
@@ -272,27 +289,8 @@ KeyResult applyConfigKey(ConfigCandidate& cand, const char* key, const char* val
 
 // ---------------------------------------------------------------------------
 // validateCandidate -- invariant checks run ONCE, after every key in a SET
-// line has parsed successfully, against the FULL candidate. Only checks
-// invariants whose violation causes a known downstream failure (docs/
-// protocol-v2.md §7's "Validated invariants" table, scoped to the keys this
-// file actually registers):
-//
-//   tw > 0        -- division by zero in BodyKinematics/odometry arc-heading
-//                    math (Drivetrain::commandedWheelTargets(),
-//                    PoseEstimator's dead-reckoning kinematics).
-//   rotSlip       -- "Nonsensical arc estimates break odometry." 0.0f is the
-//                    documented unset sentinel (PoseEstimator::
-//                    effectiveSlip() maps it to 1.0, no correction);
-//                    [0.5, 1.0] is the calibrated range; negative, (0, 0.5),
-//                    and > 1.0 are all rejected.
-//   sTimeout > 0  -- a non-positive window either wraps to a huge uint32_t
-//                    once cast (negative) or fires on every single tick
-//                    (zero), silently defeating ticket 002's streaming-drive
-//                    watchdog rather than tuning it.
-//
-// On failure, sets *badKeyOut to the failing key and formats "key=value"
-// (the CANDIDATE's value, matching docs/protocol-v2.md §7's `ERR badval
-// tw=0` example) into detailOut.
+// line has parsed successfully, against the FULL candidate. Unaffected by
+// this rewrite.
 // ---------------------------------------------------------------------------
 bool validateCandidate(const ConfigCandidate& cand, const char** badKeyOut,
                         char* detailOut, int detailOutSize) {
@@ -322,15 +320,8 @@ bool validateCandidate(const ConfigCandidate& cand, const char** badKeyOut,
 }
 
 // ---------------------------------------------------------------------------
-// kAllKeys -- the complete, ordered list of this file's registered keys
-// (architecture-update.md (084) Decision 2's approved table), used by GET's
-// "dump all" path (bare `GET`, no args). Keep in sync with applyConfigKey()/
-// formatConfigKeyFromShadow()'s strcmp chains by hand -- this file's closed,
-// 15-key surface is small enough that a generic table-driven mechanism (the
-// old tree's offsetof-based kRegistry[], which needed one monolithic
-// RobotConfig struct to take an offset against) buys nothing here, per
-// architecture-update.md Decision 2's own rationale for why that mechanism
-// has no equivalent in this per-component message tree.
+// kAllKeys -- the complete, ordered list of this file's registered keys, used
+// by GET's "dump all" path. Unaffected by this rewrite.
 // ---------------------------------------------------------------------------
 const char* const kAllKeys[] = {
     "tw", "ml", "mr",
@@ -342,26 +333,26 @@ const char* const kAllKeys[] = {
 const int kAllKeysCount = static_cast<int>(sizeof(kAllKeys) / sizeof(kAllKeys[0]));
 
 // ---------------------------------------------------------------------------
-// formatConfigKeyFromShadow -- format one registered key's CURRENT shadow
-// value as "key=value" into outBuf. `ports` is read ONCE by the caller
+// formatConfigKeyFromBb -- format one registered key's CURRENT PUBLISHED
+// value (bb.drivetrainConfig/bb.motorConfig[]/bb.plannerConfig/
+// bb.streamWatchdogWindow -- 087-006: replaces the pre-087 shadow read)
+// as "key=value" into outBuf. left/right are read ONCE by the caller
 // (handleGet) so every key in one GET line/dump resolves against the SAME
 // bound pair. Returns false for an unrecognized key (caller replies
-// ERR badkey). pid.* reads the LEFT bound motor's shadow -- SET always
-// applies the same value to both bound motors identically (applyConfigKey
-// above), so left/right can only disagree if something OUTSIDE this file's
-// SET (e.g. `DEV M <n> CFG kp=...`) wrote just one side -- an accepted
-// consequence of two independent config-plane shadows (config_commands.h's
-// file header).
+// ERR badkey). pid.* reads the LEFT bound motor's published config -- SET
+// always applies the same value to both bound motors identically
+// (applyConfigKey above), so left/right can only disagree if something
+// OUTSIDE this file's SET (e.g. `DEV M <n> CFG kp=...`) wrote just one side.
 // ---------------------------------------------------------------------------
-bool formatConfigKeyFromShadow(const ConfigCommandState& state, Subsystems::DrivetrainPorts ports,
-                                const char* key, char* outBuf, int outBufSize) {
+bool formatConfigKeyFromBb(const Rt::Blackboard& b, uint32_t leftPort, uint32_t rightPort,
+                            const char* key, char* outBuf, int outBufSize) {
     char numStr[16];
-    const msg::MotorConfig& left = state.motorShadow[ports.left - 1];
-    const msg::MotorConfig& right = state.motorShadow[ports.right - 1];
+    const msg::MotorConfig& left = b.motorConfig[leftPort - 1];
+    const msg::MotorConfig& right = b.motorConfig[rightPort - 1];
 
     if (strcmp(key, "tw") == 0) {
         snprintf(outBuf, static_cast<size_t>(outBufSize), "tw=%d",
-                 static_cast<int>(state.drivetrainShadow.trackwidth));
+                 static_cast<int>(b.drivetrainConfig.trackwidth));
         return true;
     }
     if (strcmp(key, "ml") == 0) {
@@ -400,57 +391,45 @@ bool formatConfigKeyFromShadow(const ConfigCommandState& state, Subsystems::Driv
         return true;
     }
     if (strcmp(key, "rotSlip") == 0) {
-        formatFixed(numStr, sizeof(numStr), state.drivetrainShadow.rotational_slip, 3);
+        formatFixed(numStr, sizeof(numStr), b.drivetrainConfig.rotational_slip, 3);
         snprintf(outBuf, static_cast<size_t>(outBufSize), "rotSlip=%s", numStr);
         return true;
     }
     if (strcmp(key, "ekfQxy") == 0) {
-        formatFixed(numStr, sizeof(numStr), state.drivetrainShadow.ekf_q_xy, 3);
+        formatFixed(numStr, sizeof(numStr), b.drivetrainConfig.ekf_q_xy, 3);
         snprintf(outBuf, static_cast<size_t>(outBufSize), "ekfQxy=%s", numStr);
         return true;
     }
     if (strcmp(key, "ekfQtheta") == 0) {
-        formatFixed(numStr, sizeof(numStr), state.drivetrainShadow.ekf_q_theta, 3);
+        formatFixed(numStr, sizeof(numStr), b.drivetrainConfig.ekf_q_theta, 3);
         snprintf(outBuf, static_cast<size_t>(outBufSize), "ekfQtheta=%s", numStr);
         return true;
     }
     if (strcmp(key, "ekfROtosXy") == 0) {
-        formatFixed(numStr, sizeof(numStr), state.drivetrainShadow.ekf_r_otos_xy, 3);
+        formatFixed(numStr, sizeof(numStr), b.drivetrainConfig.ekf_r_otos_xy, 3);
         snprintf(outBuf, static_cast<size_t>(outBufSize), "ekfROtosXy=%s", numStr);
         return true;
     }
     if (strcmp(key, "ekfROtosTheta") == 0) {
-        formatFixed(numStr, sizeof(numStr), state.drivetrainShadow.ekf_r_otos_theta, 3);
+        formatFixed(numStr, sizeof(numStr), b.drivetrainConfig.ekf_r_otos_theta, 3);
         snprintf(outBuf, static_cast<size_t>(outBufSize), "ekfROtosTheta=%s", numStr);
         return true;
     }
     if (strcmp(key, "minSpeed") == 0) {
         snprintf(outBuf, static_cast<size_t>(outBufSize), "minSpeed=%d",
-                 static_cast<int>(state.plannerShadow.min_speed));
+                 static_cast<int>(b.plannerConfig.min_speed));
         return true;
     }
     if (strcmp(key, "sTimeout") == 0) {
         snprintf(outBuf, static_cast<size_t>(outBufSize), "sTimeout=%u",
-                 static_cast<unsigned>(state.sTimeoutWatchdog->window()));
+                 static_cast<unsigned>(b.streamWatchdogWindow));
         return true;
     }
     return false;
 }
 
 // ---------------------------------------------------------------------------
-// SET -- custom ParseFn reading kvs[] directly (not tokens[]), mirroring
-// source_old/commands/ConfigCommands.cpp's parseSet(): re-serializes each
-// "key=value" kv pair into a STR ArgList entry so handleSet (which only sees
-// ArgList, not kvs) can recover them. `SET` with no key=value pairs at all
-// -> ERR badarg "no key=value pairs" (docs/protocol-v2.md §7's own example),
-// not ERR badkey.
-//
-// MAX_ARGS (10) caps how many key=value pairs one SET line can carry through
-// to handleSet -- a known, project-wide limitation of this ArgList-repacking
-// mechanism every kv-bearing command (DEV M/DEV DT CFG) already shares, not
-// something new here (see .clasi/knowledge/simset-max-args-truncation.md).
-// This file's own approved key table never requires more than a handful of
-// keys in one SET line to satisfy its acceptance criteria.
+// SET -- custom ParseFn reading kvs[] directly. Unaffected by this rewrite.
 // ---------------------------------------------------------------------------
 ParseResult parseSet(const char* const* /*tokens*/, int /*ntokens*/,
                       const KVPair* kvs, int nkv) {
@@ -477,22 +456,23 @@ ParseResult parseSet(const char* const* /*tokens*/, int /*ntokens*/,
 
 // ---------------------------------------------------------------------------
 // handleSet -- see config_commands.h's file header for the full atomic-SET
-// design (candidate-then-commit, per-shadow touched flags).
+// design (candidate-then-commit, per-target field masks).
 // ---------------------------------------------------------------------------
 void handleSet(const ArgList& args, const char* corrId,
                ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
-    ConfigCommandState& state = *static_cast<ConfigCommandState*>(handlerCtx);
+    Rt::Blackboard& b = bb(handlerCtx);
 
     // Read the CURRENTLY bound pair at SET-time, not a hardcoded port --
     // see config_commands.h's file header.
-    Subsystems::DrivetrainPorts ports = state.drivetrain->ports();
+    uint32_t leftPort = b.drivetrainConfig.left_port;
+    uint32_t rightPort = b.drivetrainConfig.right_port;
 
     ConfigCandidate cand;
-    cand.dt = state.drivetrainShadow;
-    cand.left = state.motorShadow[ports.left - 1];
-    cand.right = state.motorShadow[ports.right - 1];
-    cand.planner = state.plannerShadow;
-    cand.sTimeoutRaw = static_cast<long>(state.sTimeoutWatchdog->window());
+    cand.dt = b.drivetrainConfig;
+    cand.left = b.motorConfig[leftPort - 1];
+    cand.right = b.motorConfig[rightPort - 1];
+    cand.planner = b.plannerConfig;
+    cand.sTimeoutRaw = static_cast<long>(b.streamWatchdogWindow);
 
     char applied[300];
     int appliedLen = 0;
@@ -530,10 +510,8 @@ void handleSet(const ArgList& args, const char* corrId,
         }
     }
 
-    // Any unknown key or parse failure -- do not validate, do not commit,
-    // no OK reply (mirrors source_old/robot/ConfigRegistry.cpp's handleSet:
-    // "If any parse / badkey error occurred, do not commit -- cfg is
-    // unchanged").
+    // Any unknown key or parse failure -- do not validate, do not post
+    // anything, no OK reply (atomic all-or-nothing).
     if (anyError) return;
     if (appliedLen == 0) return;   // no "key=value" tokens were ever supplied
 
@@ -545,33 +523,41 @@ void handleSet(const ArgList& args, const char* corrId,
         return;
     }
 
-    // Validation passed -- commit atomically: copy each touched candidate
-    // back into its shadow and re-propagate via the matching subsystem's/
-    // motor's configure().
+    // Validation passed -- post one Rt::ConfigDelta per touched target
+    // (the Configurator folds+applies each); posting is the ONLY effect
+    // (087-006 replaces the old direct configure() calls).
     if (cand.touchedDt) {
-        state.drivetrainShadow = cand.dt;
-        state.drivetrain->configure(cand.dt);
-        // PoseEstimator::configure() takes the SAME msg::DrivetrainConfig
-        // Drivetrain::configure() does -- mirrors main.cpp's/sim_api.cpp's
-        // own boot wiring (one shared config source, both subsystems
-        // configured). See config_commands.h's file header for the known
-        // EKF-reset consequence.
-        state.poseEstimator->configure(cand.dt);
+        Rt::ConfigDelta delta;
+        delta.target = Rt::ConfigDelta::kDrivetrain;
+        delta.mask = cand.dtMask;
+        delta.drivetrain = cand.dt;
+        b.configIn.post(delta);
     }
     if (cand.touchedLeft) {
-        state.motorShadow[ports.left - 1] = cand.left;
-        state.hardware->motor(ports.left).configure(cand.left);
+        Rt::ConfigDelta delta;
+        delta.target = Rt::ConfigDelta::kMotor;
+        delta.port = leftPort;
+        delta.mask = cand.leftMask;
+        delta.motor = cand.left;
+        b.configIn.post(delta);
     }
     if (cand.touchedRight) {
-        state.motorShadow[ports.right - 1] = cand.right;
-        state.hardware->motor(ports.right).configure(cand.right);
+        Rt::ConfigDelta delta;
+        delta.target = Rt::ConfigDelta::kMotor;
+        delta.port = rightPort;
+        delta.mask = cand.rightMask;
+        delta.motor = cand.right;
+        b.configIn.post(delta);
     }
     if (cand.touchedPlanner) {
-        state.plannerShadow = cand.planner;
-        state.planner->configure(cand.planner);
+        Rt::ConfigDelta delta;
+        delta.target = Rt::ConfigDelta::kPlanner;
+        delta.mask = cand.plannerMask;
+        delta.planner = cand.planner;
+        b.configIn.post(delta);
     }
     if (cand.touchedSTimeout) {
-        state.sTimeoutWatchdog->setWindow(static_cast<uint32_t>(cand.sTimeoutRaw));
+        b.streamWatchdogWindowIn.post(static_cast<uint32_t>(cand.sTimeoutRaw));
     }
 
     char rbuf[360];
@@ -581,16 +567,16 @@ void handleSet(const ArgList& args, const char* corrId,
 // ---------------------------------------------------------------------------
 // GET -- variadic ArgSchema: each bare token becomes args[i].sval (a
 // requested key name). No args (bare `GET`) -> dump every registered key.
-// Mirrors source_old/commands/ConfigCommands.cpp's getSchema.
 // ---------------------------------------------------------------------------
 const ArgSchema kGetSchema = { nullptr, 0, 0, true, nullptr };
 
 void handleGet(const ArgList& args, const char* corrId,
                ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
-    ConfigCommandState& state = *static_cast<ConfigCommandState*>(handlerCtx);
+    Rt::Blackboard& b = bb(handlerCtx);
     // Read once, at GET-time, so every key in this one reply resolves
     // against the SAME bound pair -- see config_commands.h's file header.
-    Subsystems::DrivetrainPorts ports = state.drivetrain->ports();
+    uint32_t leftPort = b.drivetrainConfig.left_port;
+    uint32_t rightPort = b.drivetrainConfig.right_port;
 
     char line[400];
     int pos = 0;
@@ -599,13 +585,10 @@ void handleGet(const ArgList& args, const char* corrId,
     if (n > 0 && n < rem) { pos += n; rem -= n; }
 
     if (args.count == 0) {
-        // Dump all registered keys, in kAllKeys order. This file's 15-key
-        // surface totals well under the 255-byte CODAL serial TX buffer
-        // (source_old/robot/ConfigRegistry.cpp's N12 chunking precedent
-        // does not apply at this size) -- a single CFG line is enough.
+        // Dump all registered keys, in kAllKeys order.
         for (int i = 0; i < kAllKeysCount && rem > 2; ++i) {
             char kv[40];
-            formatConfigKeyFromShadow(state, ports, kAllKeys[i], kv, sizeof(kv));
+            formatConfigKeyFromBb(b, leftPort, rightPort, kAllKeys[i], kv, sizeof(kv));
             line[pos++] = ' '; --rem;
             int w = snprintf(line + pos, static_cast<size_t>(rem), "%s", kv);
             if (w > 0 && w < rem) { pos += w; rem -= w; }
@@ -614,7 +597,7 @@ void handleGet(const ArgList& args, const char* corrId,
         for (int t = 0; t < args.count && rem > 2; ++t) {
             const char* reqKey = args.args[t].sval;
             char kv[40];
-            if (formatConfigKeyFromShadow(state, ports, reqKey, kv, sizeof(kv))) {
+            if (formatConfigKeyFromBb(b, leftPort, rightPort, reqKey, kv, sizeof(kv))) {
                 line[pos++] = ' '; --rem;
                 int w = snprintf(line + pos, static_cast<size_t>(rem), "%s", kv);
                 if (w > 0 && w < rem) { pos += w; rem -= w; }
@@ -636,13 +619,13 @@ void handleGet(const ArgList& args, const char* corrId,
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// configCommands -- the SET/GET command table.
+// configCommands -- the SET/GET command table, bound to `router`.
 // ---------------------------------------------------------------------------
-std::vector<CommandDescriptor> configCommands(ConfigCommandState& state) {
+std::vector<CommandDescriptor> configCommands(Rt::CommandRouter& router) {
     std::vector<CommandDescriptor> cmds;
-    cmds.push_back(makeSchemaCmd("GET", &kGetSchema, handleGet, &state,
+    cmds.push_back(makeSchemaCmd("GET", &kGetSchema, handleGet, &router,
                                  "badkey", ForceReply::NONE, CMD_NONE));
-    cmds.push_back(makeCmd("SET", parseSet, handleSet, &state,
+    cmds.push_back(makeCmd("SET", parseSet, handleSet, &router,
                            "badkey", ForceReply::NONE, CMD_ACCESS_HARDWARE));
     return cmds;
 }

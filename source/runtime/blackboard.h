@@ -1,0 +1,159 @@
+// blackboard.h -- Rt::Blackboard: sprint 087's two-plane transport. Owns, as
+// plain members, the committed state-plane snapshot x[k] (current-value
+// cells: motor/drivetrain/pose/planner observations, current config) and
+// every command-plane queue that connects each subsystem (statementsIn,
+// driveIn, motorIn[], configIn, poseResetIn, motorResetIn[],
+// otosSetPoseIn). Pure data -- no method computes anything; holds NO
+// subsystem pointer of any kind (SUC-006). See
+// clasi/sprints/087-two-plane-blackboard-synchronous-update-loop-
+// configurator-and-command-queue-transport-greenfield/
+// architecture-update-r1.md ("The blackboard" Reference code section) for
+// the full design; this header is a direct port of that Reference code.
+//
+// Host-safe by construction (Decision 10). Every member type below is a
+// host-safe POD:
+//   - the eight state-cell msg::* types are auto-generated
+//     (scripts/gen_messages.py) into source/messages/*.h, zero CODAL deps;
+//   - Rt::PoseResetCommand / Rt::ConfigDelta are defined in the lightweight,
+//     CODAL-free source/runtime/commands.h (an enum, a uint32_t, and one
+//     msg::SetPose member -- also generated) -- NOT inline in this header,
+//     since ticket 087-004 moved them out so
+//     Subsystems::PoseEstimator::tick()'s poseResetIn parameter can name
+//     Rt::PoseResetCommand without pose_estimator.h including this file
+//     (the "subsystems never include blackboard.h" boundary rule);
+//   - Subsystems::Hardware::kPortCount is reachable via subsystems/
+//     hardware.h alone, which includes only <stdint.h>, runtime/queue.h,
+//     messages/motor.h, and the CODAL-free hal/capability/*.h interfaces;
+//   - statementsIn's payload, Subsystems::
+//     CommunicatorToCommandProcessorStatement, lives in the CODAL-free
+//     source/subsystems/statement.h -- NOT subsystems/communicator.h, which
+//     pulls in MicroBit.h/com/radio.h/com/serial_port.h.
+// This is what makes Rt::Blackboard instantiable in a host test harness
+// (tests/sim/unit/runtime_blackboard_harness.cpp) with the plain system
+// C++ compiler -- no ARM toolchain, no MicroBit.h transitively included.
+// Any FUTURE addition to Blackboard must be checked against this same
+// host-safe-POD bar before being added (architecture-update-r1.md's
+// Migration Concerns, Decision 10).
+//
+// (087-006) Six cells added beyond architecture-update-r1.md's own Reference
+// code, all host-safe PODs per the same bar, needed so the pointerless
+// command-family translators (source/commands/*.cpp) and the transitional
+// loop (source/dev_loop.cpp/main.cpp/tests/_infra/sim/sim_api.cpp) have a
+// bb-only path to facts/actions that previously required a held
+// Subsystems::Hardware*/Hal::Odometer* reference:
+//   - motorCaps[]/otosPresent -- boot-time, never-changing hardware-identity
+//     facts (a motor's capability set, whether any Hal::Odometer exists at
+//     all) snapshotted ONCE at boot by the loop (mirrors Subsystems::
+//     Drivetrain's own setMotorCapabilities() cache precedent) so DEV M's
+//     capability pre-validation gate and OI/OZ/OR/OV/OL/OA's "ERR nodev"
+//     guard can run in the command family without a Hardware reference.
+//   - devWatchdogWindow/streamWatchdogWindow (state) + devWatchdogWindowIn/
+//     streamWatchdogWindowIn (command) -- the serial-silence watchdog
+//     (`DEV WD`) and the streaming-drive watchdog (`SET sTimeout=`) are
+//     loop-owned (ticket 007's "not one of the four Configurator-managed
+//     subsystems" note on 087-007), so their window is a state cell the
+//     loop publishes and a command mailbox the router posts to, the same
+//     shape as configIn/*Config -- just for a scalar the Configurator does
+//     not own.
+//   - motionIn (command) -- S/T/D/R/TURN/RT/G/STOP's fan-out to the
+//     loop-owned motion-executor step (drains into Subsystems::Planner::
+//     apply(), ticket 007), carrying the msg::PlannerCommand plus the verb
+//     disambiguation string the pre-087 MotionLoopState::activeVelocityVerb
+//     field held (see runtime/commands.h's Rt::MotionCommand).
+//   - otosCommandIn (command) -- OI/OZ/OR/OV's fan-out to the loop's direct
+//     `hardware.odometer()->apply(...)` drain (mirrors otosSetPoseIn's own
+//     "SI re-anchor -> odometer, drained by the loop directly" shape --
+//     Hal::Odometer has no tick()-driven queue parameter of its own).
+#pragma once
+
+#include <cstdint>
+
+#include "messages/common.h"
+#include "messages/drivetrain.h"
+#include "messages/motor.h"
+#include "messages/odometer.h"
+#include "messages/planner.h"
+#include "runtime/commands.h"
+#include "runtime/queue.h"
+#include "subsystems/hardware.h"
+#include "subsystems/statement.h"
+
+namespace Rt {
+
+constexpr uint32_t kPortCount = Subsystems::Hardware::kPortCount;  // 4
+
+// Owned by the loop. Holds NO subsystem pointers -- only the committed
+// snapshot x[k] (state plane) and the command queues (command plane).
+struct Blackboard {
+  // === State plane: committed snapshot x[k]. Written ONLY by the loop's
+  //     commit step (from each subsystem's state()); read-only during a
+  //     pass. ===
+  msg::MotorState motor[kPortCount];  // from Hardware
+  msg::DrivetrainState drivetrain;    // from Drivetrain
+  msg::PoseEstimate encoderPose;      // from PoseEstimator
+  msg::PoseEstimate fusedPose;        // from PoseEstimator
+  msg::PlannerState planner;          // from Planner
+  bool otosValid = false;             // odometer sample present?
+  msg::PoseEstimate otos;             // from Hardware, when valid
+
+  // Current config -- published by the Configurator on apply; read by
+  // GET/telemetry. Replaces every shadow.
+  msg::DrivetrainConfig drivetrainConfig;
+  msg::MotorConfig motorConfig[kPortCount];
+  msg::PlannerConfig plannerConfig;
+  msg::OdometerConfig odometerConfig;
+
+  // (087-006) Boot-time hardware-identity snapshots -- never rewritten after
+  // the loop's one-time boot seed (capabilities/device-presence do not
+  // change at runtime for any current concrete Hardware leaf). See the file
+  // header above.
+  msg::MotorCapabilities motorCaps[kPortCount];
+  bool otosPresent = false;
+
+  // (087-006) Loop-owned watchdog windows -- published every pass by the
+  // loop from its own SerialSilenceWatchdog/StreamingDriveWatchdog
+  // instances (neither watchdog is one of the Configurator's four targets).
+  uint32_t devWatchdogWindow = 0;     // [ms] DEV WD's current window
+  uint32_t streamWatchdogWindow = 0;  // [ms] SET sTimeout='s current window
+
+  // (087-006) STREAM/SNAP's own shared bookkeeping -- mirrors the pre-087
+  // TelemetryState struct's periodMs/seq/replyFn+replyCtx/hasLastEmit/
+  // lastEmitMs fields exactly, moved onto bb (as plain mutable scalars, not
+  // strictly "committed state" in the x[k] sense -- nothing computes FROM
+  // these) so telemetry_commands.cpp's STREAM handler can set them and the
+  // loop's periodic-emission step can read them, neither holding a
+  // Hardware/Drivetrain/PoseEstimator/Planner pointer. telemetryChannel
+  // replaces the old raw ReplyFn/void* pair (a function pointer is not a
+  // Blackboard-appropriate payload) -- the loop resolves it to its own
+  // serial/radio reply sinks at emission time, the same way CommandRouter
+  // resolves a statement's Channel.
+  uint32_t telemetryPeriod = 0;       // [ms] 0 = disabled; set (clamped) by STREAM
+  uint16_t telemetrySeq = 0;          // shared by every STREAM-driven frame AND SNAP
+  Subsystems::Channel telemetryChannel = Subsystems::Channel::NONE;
+  bool telemetryHasLastEmit = false;
+  uint32_t telemetryLastEmitMs = 0;   // [ms]
+
+  // === Command plane: queues. Each drained by exactly ONE consumer
+  //     (driveIn has two producers -- Decision 1's authority-gated
+  //     arbitration). ===
+  WorkQueue<Subsystems::CommunicatorToCommandProcessorStatement, 16>
+      statementsIn;                          // Communicator -> router
+  Mailbox<msg::DrivetrainCommand> driveIn;    // router(DEV DT)/Planner -> Drivetrain
+  Mailbox<msg::MotorCommand> motorIn[kPortCount];  // router/routeOutputs -> Hardware
+  WorkQueue<ConfigDelta, 16> configIn;        // router -> Configurator
+  WorkQueue<PoseResetCommand, 4> poseResetIn;  // router -> PoseEstimator
+  bool motorResetIn[kPortCount] = {};         // ZERO enc -> Hardware
+  Mailbox<msg::SetPose> otosSetPoseIn;        // SI re-anchor -> odometer
+  Mailbox<msg::OdometerCommand> otosCommandIn;  // OI/OZ/OR/OV -> odometer (loop-drained)
+  Mailbox<uint32_t> devWatchdogWindowIn;       // DEV WD -> loop's SerialSilenceWatchdog
+  Mailbox<uint32_t> streamWatchdogWindowIn;    // SET sTimeout= -> loop's StreamingDriveWatchdog
+  Mailbox<MotionCommand> motionIn;             // S/T/D/R/TURN/RT/G/STOP -> Planner::apply()
+  // DEV STOP's broadcast neutral -- deliberately NOT motorIn[] (a broadcast
+  // must not mark any port in-use; see NezhaHardware::apply(const
+  // Hal::CommandProcessorToHardwareCommand&)'s "broadcast never marks a port
+  // in-use" branch, and dev_commands.h's file header). Drained by the loop
+  // directly via Hardware::apply(const Hal::CommandProcessorToHardwareCommand&).
+  Mailbox<msg::MotorCommand> hardwareBroadcastIn;
+};
+
+}  // namespace Rt

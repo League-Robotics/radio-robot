@@ -14,6 +14,18 @@
 // system C++ compiler — no CMake, no ARM toolchain. Hand-rolled assertions,
 // prints PASS/FAIL, exits nonzero on any failure. Run by
 // test_drivetrain.py, which compiles and runs this binary via subprocess.
+//
+// Updated for ticket 087-003 (SUC-001/SUC-002/SUC-006, clasi/sprints/
+// 087-two-plane-blackboard-synchronous-update-loop-configurator-and-
+// command-queue-transport-greenfield/): tick() gained a
+// Rt::Mailbox<msg::DrivetrainCommand>& driveIn parameter (source/runtime/
+// queue.h, itself dependency-free — no Blackboard instance needed here).
+// Scenarios 1-9 pass a bare, never-posted-to Mailbox to every existing
+// tick() call (apply() is still called directly, exactly as before --
+// these scenarios prove the empty-driveIn "otherwise" path leaves the
+// governed-output math byte-for-byte unchanged); scenarios 10-11 exercise
+// driveIn itself (a posted command popped and applied inside tick(), and
+// an empty driveIn with no prior apply() at all).
 
 #include <cmath>
 #include <cstdint>
@@ -23,6 +35,7 @@
 #include "hal/capability/hal_command.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
+#include "runtime/queue.h"
 #include "subsystems/drivetrain.h"
 
 namespace {
@@ -215,7 +228,8 @@ void scenarioHasCommandTakeCommandClears() {
   checkFalse(dt.hasCommand(), "no command held before the first tick()");
 
   dt.apply(wheelsCommand(10.0f, 10.0f));
-  dt.tick(1000, obsVelocity(0.0f), obsVelocity(0.0f));
+  Rt::Mailbox<msg::DrivetrainCommand> noDriveIn;
+  dt.tick(1000, obsVelocity(0.0f), obsVelocity(0.0f), noDriveIn);
   checkTrue(dt.hasCommand(), "tick() unconditionally holds a command");
 
   Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
@@ -232,7 +246,8 @@ void scenarioHeldCommandPortsMatchBindingAndCarryTargets() {
   dt.configure(configWithPorts(3, 4, /*trackwidth=*/100.0f, /*syncGain=*/0.0f));
 
   dt.apply(wheelsCommand(42.0f, -17.0f));
-  dt.tick(2000, obsVelocity(0.0f), obsVelocity(0.0f));
+  Rt::Mailbox<msg::DrivetrainCommand> noDriveIn;
+  dt.tick(2000, obsVelocity(0.0f), obsVelocity(0.0f), noDriveIn);
 
   checkTrue(dt.hasCommand(), "tick() held a command");
   Hal::DrivetrainToHardwareCommand cmd = dt.takeCommand();
@@ -257,7 +272,8 @@ void scenarioHeldCommandReflectsNeutralMode() {
   msg::DrivetrainCommand cmd;
   cmd.setNeutral(msg::Neutral::COAST);
   dt.apply(cmd);
-  dt.tick(3000, obsVelocity(0.0f), obsVelocity(0.0f));
+  Rt::Mailbox<msg::DrivetrainCommand> noDriveIn;
+  dt.tick(3000, obsVelocity(0.0f), obsVelocity(0.0f), noDriveIn);
 
   Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
   checkKindEq(held.wheel[0].command.control_kind,
@@ -286,7 +302,8 @@ void scenarioRatioGovernorTwistRegression() {
   msg::BodyTwist3 t; t.v_x = 100.0f; t.v_y = 0.0f; t.omega = 0.0f;
   cmd.setTwist(t);
   dt.apply(cmd);
-  dt.tick(4000, obsVelocity(80.0f), obsVelocity(100.0f));
+  Rt::Mailbox<msg::DrivetrainCommand> noDriveIn;
+  dt.tick(4000, obsVelocity(80.0f), obsVelocity(100.0f), noDriveIn);
 
   Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
   checkFloatEq(held.wheel[0].command.control.velocity, 90.0f, "governed left target");
@@ -302,11 +319,74 @@ void scenarioRatioGovernorWheelsRegression() {
   dt.configure(configWithPorts(1, 2, /*trackwidth=*/100.0f, /*syncGain=*/0.5f));
 
   dt.apply(wheelsCommand(50.0f, 100.0f));
-  dt.tick(5000, obsVelocity(50.0f), obsVelocity(50.0f));
+  Rt::Mailbox<msg::DrivetrainCommand> noDriveIn;
+  dt.tick(5000, obsVelocity(50.0f), obsVelocity(50.0f), noDriveIn);
 
   Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
   checkFloatEq(held.wheel[0].command.control.velocity, 37.5f, "governed left target");
   checkFloatEq(held.wheel[1].command.control.velocity, 75.0f, "governed right target");
+}
+
+// 10. (087-003) tick()'s driveIn Mailbox: post a WHEELS command directly to
+// a bare Rt::Mailbox<msg::DrivetrainCommand> (no apply() call, no
+// Blackboard) -- tick() must pop it (latest-wins) BEFORE running the
+// setpoint-governance path, dispatching through the SAME apply() logic
+// (activating authority, staging the WHEELS-arm targets) so the governed
+// output matches exactly what a direct apply() + tick() would have
+// produced. Also proves state().active mirrors active() (AC2's readable
+// authority field).
+void scenarioTickPopsDriveInMailboxAndAppliesCommand() {
+  beginScenario("tick() pops a non-empty driveIn and applies it before governance runs");
+  Subsystems::Drivetrain dt;
+  dt.configure(configWithPorts(1, 2, /*trackwidth=*/100.0f, /*syncGain=*/0.0f));
+  checkFalse(dt.active(), "freshly constructed Drivetrain starts inactive");
+  checkFalse(dt.state().active, "state().active mirrors active() == false before any command");
+
+  Rt::Mailbox<msg::DrivetrainCommand> driveIn;
+  checkTrue(driveIn.empty(), "a fresh Mailbox starts empty");
+  driveIn.post(wheelsCommand(60.0f, 60.0f));
+  checkFalse(driveIn.empty(), "post() fills the mailbox");
+
+  dt.tick(1000, obsVelocity(0.0f), obsVelocity(0.0f), driveIn);
+
+  checkTrue(driveIn.empty(), "tick() drained (popped) the posted command");
+  checkTrue(dt.active(), "the popped WHEELS command activated authority, via apply()");
+  checkTrue(dt.state().active, "state().active mirrors active() == true after the popped command");
+  checkTrue(dt.hasCommand(), "tick() held an output command");
+
+  Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
+  checkKindEq(held.wheel[0].command.control_kind,
+              msg::MotorCommand::ControlKind::VELOCITY, "wheel[0] is a VELOCITY command");
+  checkFloatEq(held.wheel[0].command.control.velocity, 60.0f,
+               "wheel[0] velocity == the driveIn-posted target");
+  checkFloatEq(held.wheel[1].command.control.velocity, 60.0f,
+               "wheel[1] velocity == the driveIn-posted target");
+}
+
+// 11. (087-003) tick() with an empty driveIn -- no command ever posted or
+// applied: the "otherwise" branch of AC1 runs the existing
+// setpoint-governance path unchanged, i.e. today's no-new-command
+// behavior (a freshly constructed Drivetrain defaults to NEUTRAL/idle;
+// tick() still unconditionally holds an output, and decays/holds
+// gracefully rather than erroring on the never-posted mailbox).
+void scenarioTickWithEmptyDriveInPreservesNoNewCommandBehavior() {
+  beginScenario("tick() with an empty driveIn: no-new-command behavior, unchanged governance");
+  Subsystems::Drivetrain dt;
+  dt.configure(configWithPorts(1, 2));
+
+  Rt::Mailbox<msg::DrivetrainCommand> driveIn;  // never posted to
+  checkTrue(driveIn.empty(), "driveIn starts (and stays) empty");
+
+  dt.tick(1000, obsVelocity(0.0f), obsVelocity(0.0f), driveIn);
+
+  checkFalse(dt.active(), "empty driveIn: no command applied, authority stays at its default");
+  checkTrue(dt.hasCommand(), "tick() still unconditionally holds an output command");
+
+  Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
+  checkKindEq(held.wheel[0].command.control_kind, msg::MotorCommand::ControlKind::NEUTRAL,
+              "no command ever applied -- default mode_ is NEUTRAL, matching today's idle output");
+  checkKindEq(held.wheel[1].command.control_kind, msg::MotorCommand::ControlKind::NEUTRAL,
+              "no command ever applied -- default mode_ is NEUTRAL, matching today's idle output");
 }
 
 }  // namespace
@@ -321,6 +401,8 @@ int main() {
   scenarioHeldCommandReflectsNeutralMode();
   scenarioRatioGovernorTwistRegression();
   scenarioRatioGovernorWheelsRegression();
+  scenarioTickPopsDriveInMailboxAndAppliesCommand();
+  scenarioTickWithEmptyDriveInPreservesNoNewCommandBehavior();
 
   if (g_failureCount == 0) {
     std::printf("OK: all Drivetrain reshape scenarios passed\n");

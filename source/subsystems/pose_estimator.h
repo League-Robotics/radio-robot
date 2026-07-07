@@ -34,6 +34,8 @@
 #include "estimation/ekf_tiny.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
+#include "runtime/commands.h"
+#include "runtime/queue.h"
 
 namespace Subsystems {
 
@@ -42,19 +44,30 @@ class PoseEstimator {
   // configure — reads trackwidth, rotational_slip, and the four EKF noise
   // fields (ekf_q_xy, ekf_q_theta, ekf_r_otos_xy, ekf_r_otos_theta) from the
   // SAME msg::DrivetrainConfig type Drivetrain::configure() already takes
-  // (no new config message, no proto change).
+  // (no new config message, no proto change). The full incoming config is
+  // ALSO stored verbatim (config_) so config() (below) can round-trip it —
+  // mirrors Subsystems::Drivetrain's own config_ member (087-004).
   //
   // Zero-as-unset sentinel (mirrors the ported Odometry source's
   // effectiveSlip() pattern — see pose_estimator.cpp): a noise field arriving
   // as exactly 0.0f (the proto zero-default, meaning "never configured") is
   // substituted with a small, hardcoded, documented fallback before being
   // passed to EkfTiny::init(). A non-zero configured value passes through
-  // unchanged.
+  // unchanged. This substitution affects only the EKF's own init() call —
+  // config()'s returned value is the RAW config as given to configure(),
+  // unmodified.
   //
   // Calls EkfTiny::init() — per that method's own doc comment, this is
   // BOOT-ONLY (also resets EKF state/covariance to zero); matches
   // Drivetrain::configure()'s own no-nuance direct-copy-in precedent.
   void configure(const msg::DrivetrainConfig& config);
+
+  // config — the current config, as last passed to configure(), verbatim
+  // (087-004, architecture-update-r1.md Step 3: "PoseEstimator (existing,
+  // gains config()/reset-queue drain)"). Kills the config-shadow this
+  // sprint's design removes elsewhere — a caller (the Configurator, ticket
+  // 005) can read back what was configured without a separate cache.
+  msg::DrivetrainConfig config() const { return config_; }
 
   // tick — advance both readings by one control-loop tick.
   //   now      — [ms] robot system clock; used only for stamping outputs and
@@ -66,8 +79,25 @@ class PoseEstimator {
   //   otosObs  — this tick's odometer reading, or nullptr if none is
   //              available. Only consumed when non-null AND
   //              otosObs->stamp.valid is true.
+  //   poseResetIn — (087-004) the blackboard-sourced target-drained reset
+  //              queue (Rt::WorkQueue<Rt::PoseResetCommand,4>, source/
+  //              runtime/commands.h — Decision 7: SI/ZERO resets stay
+  //              owned by THIS class rather than externally applied by the
+  //              Configurator). Drained FIFO, ALL entries, every tick() call
+  //              — BEFORE the sequencing below, so a queued reset is never
+  //              skipped just because this pass's observations happen to be
+  //              absent (see step 1). kSetPose dispatches to the existing
+  //              setPose(); kResetBaseline dispatches to the existing
+  //              resetEncoderBaseline() — neither method's own internals
+  //              change; this is pure routing. An empty poseResetIn is a
+  //              no-op, matching today's behavior when no SI/ZERO command is
+  //              in flight this pass (the wire-level routing of SI/ZERO INTO
+  //              this queue is ticket 006's job, out of this ticket's scope
+  //              — today's handlers still call setPose()/
+  //              resetEncoderBaseline() directly).
   //
   // Sequencing (see pose_estimator.cpp for the full rationale):
+  //   0. Drain poseResetIn completely (see above).
   //   1. If leftObs.position or rightObs.position lacks .has, this tick's
   //      update is skipped entirely — no encoder-accumulator advance, no EKF
   //      predict, no stale-data corruption. The previous-encoder baseline
@@ -81,7 +111,8 @@ class PoseEstimator {
   //      non-null and fresh (stamp.valid).
   void tick(uint32_t now, const msg::MotorState& leftObs,
             const msg::MotorState& rightObs,
-            const msg::PoseEstimate* otosObs);
+            const msg::PoseEstimate* otosObs,
+            Rt::WorkQueue<Rt::PoseResetCommand, 4>& poseResetIn);
 
   // encoderPose — pure dead-reckoning pose (x, y, heading) from wheel
   // encoder deltas only. The EKF never writes here, ever. twist is left at
@@ -182,6 +213,13 @@ class PoseEstimator {
   static float effectiveSlip(float rawSlip);
 
   EkfTiny ekf_;
+
+  // The full config as last passed to configure(), stored verbatim (087-004)
+  // — backs config()'s round-trip, mirrors Subsystems::Drivetrain's own
+  // config_ member. NOT used internally by tick() (trackwidth_/
+  // rotationalSlip_ below remain the fields tick()'s own math reads,
+  // unchanged from before this ticket).
+  msg::DrivetrainConfig config_ = {};
 
   // Kinematics config, set by configure() and read by tick(). Defaults
   // (128mm / 0-unset) mirror the ported Odometry source's own defaults and

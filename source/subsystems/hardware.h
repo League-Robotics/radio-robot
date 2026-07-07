@@ -50,6 +50,8 @@
 #include "hal/capability/hal_command.h"
 #include "hal/capability/motor.h"
 #include "hal/capability/odometer.h"
+#include "messages/motor.h"
+#include "runtime/queue.h"
 
 namespace Subsystems {
 
@@ -76,13 +78,42 @@ class Hardware {
   // Runs one scheduling pass. now: [ms]. See the file header's twice-per-pass,
   // unchanged-now re-entry contract (Decision 4) every concrete owner must
   // satisfy.
-  virtual void tick(uint32_t now) = 0;   // [ms]
+  //
+  // motorIn/motorResetIn (087-004, architecture-update-r1.md Decision 2): the
+  // per-port command-plane inputs, consumed uniformly (no addressed-dispatch
+  // branch — every port is treated identically):
+  //   - motorIn[i] (Rt::Mailbox<msg::MotorCommand>, source/runtime/queue.h):
+  //     when non-empty, popped (latest-wins) and applied to port i+1 via the
+  //     SAME Hal::Motor::apply() the existing apply() overloads below use.
+  //   - motorResetIn[i] (a plain flag, not a queue — "reset twice = reset
+  //     once" is idempotent by nature, so no queue is needed): when true,
+  //     applies port i+1's existing Hal::Motor::resetPosition() (itself
+  //     staged, not immediate — see that method's own doc comment) and
+  //     clears the flag.
+  // Both arrays are the CALLER's own storage (typically Rt::Blackboard's
+  // motorIn[]/motorResetIn[] members) — this method mutates them in place
+  // (draining motorIn[i], clearing a consumed motorResetIn[i]).
+  virtual void tick(uint32_t now, Rt::Mailbox<msg::MotorCommand> motorIn[kPortCount],
+                     bool motorResetIn[kPortCount]) = 0;   // [ms]
 
   // Distribution — see hal/capability/hal_command.h for both edge types'
   // shapes and that file's own doc comment on why they live there rather
   // than beside either producer or this consumer.
   virtual void apply(const Hal::CommandProcessorToHardwareCommand& cmd) = 0;
   virtual void apply(const Hal::DrivetrainToHardwareCommand& cmd) = 0;
+
+  // config()/state() (087-004) — a uniform, port-indexed faceplate at the
+  // Hardware level itself, not only reachable by narrowing through motor(p)
+  // (today's only path, and today there is no config getter at all: Hal::
+  // Motor's configure() has no matching getter). Same [1, kPortCount]
+  // port-indexed convention and out-of-range clamp behavior as motor()/
+  // motorAt() (see each concrete owner's own doc comment). Kills the
+  // per-motor config shadow this sprint's design removes elsewhere — a
+  // caller (the Configurator, ticket 005) can read back the currently
+  // configured/observed value per port without narrowing to a concrete
+  // Hal::Motor reference.
+  virtual msg::MotorConfig config(uint32_t port) const = 0;
+  virtual msg::MotorState state(uint32_t port) const = 0;
 
   // The active owner's Hal::Odometer leaf, or nullptr if it has none — see
   // the file header's "odometer()" section for the defaulted-nullptr

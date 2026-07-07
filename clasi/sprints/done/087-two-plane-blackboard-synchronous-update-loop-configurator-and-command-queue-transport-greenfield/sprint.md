@@ -2,7 +2,7 @@
 id: 087
 title: 'Two-plane blackboard: synchronous-update loop, Configurator, and command-queue
   transport (greenfield)'
-status: planning-docs
+status: done
 branch: sprint/087-two-plane-blackboard-synchronous-update-loop-configurator-and-command-queue-transport-greenfield
 use-cases: []
 issues:
