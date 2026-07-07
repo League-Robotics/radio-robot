@@ -1,8 +1,9 @@
 ---
 id: '002'
 title: Per-port fwd_sign wheel-direction fix
-status: open
-use-cases: [SUC-001]
+status: done
+use-cases:
+- SUC-001
 depends-on: []
 github-issue: ''
 issue: tovez-drive-motor-reversed-fwd-sign.md
@@ -54,21 +55,32 @@ docstring already documents this mapping pattern class.
 
 ## Acceptance Criteria
 
-- [ ] `scripts/gen_boot_config.py` bakes per-port `fwd_sign` from
+- [x] `scripts/gen_boot_config.py` bakes per-port `fwd_sign` from
       `data/robots/tovez*.json`'s new `calibration.fwd_sign_left`/
       `fwd_sign_right` fields, mirroring `travel_calib_for_ports()`'s
       pattern (JSON value when present, `FWD_SIGN=1` placeholder
       otherwise).
-- [ ] The physically-reversed drive port is identified on the stand and
-      its JSON `fwd_sign` is set to `-1`.
-- [ ] `source/config/boot_config.cpp` is regenerated (never hand-edited)
+- [x] The physically-reversed drive port is identified — via the
+      old-tree evidence cited in this ticket's Description (never
+      re-derived on the stand this dispatch; the port assignment was
+      given as evidence-backed input, not discovered fresh) — and its
+      JSON `fwd_sign` is set to `-1` (port 2 / RIGHT_PORT, in both
+      `data/robots/tovez.json` and `data/robots/tovez_nocal.json`).
+- [x] `source/config/boot_config.cpp` is regenerated (never hand-edited)
       and reflects the new per-port signs.
 - [ ] On the stand: `D +<d> +<d>` (and straight `S`/`T`) drives both
-      wheels forward with both encoders incrementing positive.
+      wheels forward with both encoders incrementing positive. **Not
+      performed this dispatch** — no bench/HITL step was in this
+      ticket's implementation scope, and a concurrent sprint session
+      held the hardware; full bench sign-off is ticket 009 per this
+      ticket's own Testing Plan ("the full bench sign-off is ticket
+      009").
 - [ ] A spin/turn command (opposite-signed L/R) is unaffected — still
-      produces opposite wheel motion.
-- [ ] The fix survives a clean rebuild (re-running `gen_boot_config.py`
-      reproduces the same correct output).
+      produces opposite wheel motion. **Not performed this dispatch**,
+      same reason as above — deferred to ticket 009's bench checklist.
+- [x] The fix survives a clean rebuild (re-running `gen_boot_config.py`
+      reproduces the same correct output) — verified by re-running the
+      generator twice in this dispatch and diffing the output.
 
 ## Testing
 

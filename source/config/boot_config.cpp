@@ -28,12 +28,22 @@ void defaultMotorConfigs(msg::MotorConfig* out) {
     for (uint32_t i = 0; i < kMotorConfigCount; ++i) {
         out[i] = msg::MotorConfig();
         out[i].setPort(i + 1);
-        out[i].setFwdSign(1);
         out[i].setVelGains(velGains);
         // EMA coeff — see gen_boot_config.py; a=0 would pin reported velocity
         // at 0 forever regardless of real motion.
         out[i].setVelFiltAlpha(0.3f);
     }
+
+    // Per-port forward-sign — baked from the robot JSON's calibration.
+    // fwd_sign_{left,right} for the drive-pair ports
+    // (ports 1/2); other ports use the bench placeholder
+    // (1). The drive pair is mirror-mounted, so left/right are
+    // expected to differ in sign (088-002 —
+    // clasi/issues/tovez-drive-motor-reversed-fwd-sign.md).
+    out[0].setFwdSign(1);   // port 1
+    out[1].setFwdSign(-1);   // port 2
+    out[2].setFwdSign(1);   // port 3
+    out[3].setFwdSign(1);   // port 4
 
     // Per-port encoder travel calibration — baked from the robot JSON's
     // calibration.mm_per_wheel_deg_{left,right} for the drive-pair ports
