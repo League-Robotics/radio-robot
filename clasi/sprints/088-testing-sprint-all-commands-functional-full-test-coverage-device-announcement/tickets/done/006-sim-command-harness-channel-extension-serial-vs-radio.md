@@ -1,9 +1,11 @@
 ---
 id: '006'
 title: Sim command harness channel extension (SERIAL vs RADIO)
-status: open
-use-cases: [SUC-006]
-depends-on: ['004']
+status: done
+use-cases:
+- SUC-006
+depends-on:
+- '004'
 github-issue: ''
 issue: full-command-smoke-test-suite.md
 completes_issue: true
@@ -54,26 +56,45 @@ each store's reply is well-formed for its own send.
 
 ## Acceptance Criteria
 
-- [ ] `sim_command_on(h, line, channel, reply, size)` exists and lets a
+- [x] `sim_command_on(h, line, channel, reply, size)` exists and lets a
       test select SERIAL or RADIO as the return channel for one command.
-- [ ] `CommandRouter`'s two reply sinks are backed by distinct `ReplyStore`
+- [x] `CommandRouter`'s two reply sinks are backed by distinct `ReplyStore`
       instances in the harness; a reply sent on one channel is NOT
       observable via the other channel's store.
-- [ ] `sim_command()` becomes a thin SERIAL-only wrapper over
+- [x] `sim_command()` becomes a thin SERIAL-only wrapper over
       `sim_command_on()`; every existing test call site is
       source-compatible and requires zero changes.
-- [ ] `host/robot_radio/io/sim_conn.py` exposes the new entry point via
+- [x] `host/robot_radio/io/sim_conn.py` exposes the new entry point via
       ctypes, matching the existing `sim_command()` binding pattern, plus
       `CHANNEL_SERIAL`/`CHANNEL_RADIO` constants.
-- [ ] A new test proves channel selection works end-to-end (send on
+- [x] A new test proves channel selection works end-to-end (send on
       RADIO, assert the SERIAL store is empty; send on SERIAL, assert the
       RADIO store is empty).
 
 ## Testing
 
-- **Existing tests to run**: full `uv run python -m pytest` — must stay
-  green with zero existing test-file edits (proves the wrapper is truly
-  backward compatible).
-- **New tests to write**: `tests/sim/unit/test_sim_command_channel.py`
-  (or similarly named) — the channel-isolation test above.
-- **Verification command**: `uv run python -m pytest`.
+- **Existing tests to run**: `uv run python -m pytest tests/sim -q` — green
+  with zero existing test-file edits (proves the wrapper is truly backward
+  compatible): 264 passed, 4 xfailed (baseline 260 passed/4 xfailed + this
+  ticket's 4 new tests). The repo-wide `uv run python -m pytest` (all
+  `testpaths`, including `tests/testgui`) has 2 pre-existing failures
+  unrelated to this ticket (`test_set_origin.py`/`test_tour1_geometry.py`,
+  multi-leg-motion-via-headless-GUI issues already tracked outside this
+  ticket's scope) — confirmed unchanged by stashing this ticket's diff and
+  re-running those two tests, which fail identically without this ticket's
+  changes.
+- **New tests written**: `tests/sim/unit/test_sim_command_channel.py` — 4
+  tests: RADIO reply lands only in the RADIO store, SERIAL reply lands only
+  in the SERIAL store, `sim_command()` stays SERIAL-only, and back-to-back
+  RADIO/SERIAL calls don't cross-contaminate. Verified via a non-draining
+  peek entry point added for test observability
+  (`sim_get_reply_store_len(h, channel)` / `sim.reply_store_len(channel)`,
+  not itself used by `sim_command()`/`sim_command_on()`).
+- **Verification command**: `uv run python -m pytest tests/sim -q`.
+- **Implementation note**: in addition to the two files named above,
+  `tests/_infra/sim/firmware.py` (the `Sim` wrapper backing the `sim`
+  pytest fixture that `tests/sim/unit/*.py` — including the new test file
+  above — actually runs against) gained the same channel-aware surface
+  (`command_on()`, `reply_store_len()`, `CHANNEL_SERIAL`/`CHANNEL_RADIO`)
+  as `sim_conn.py`, so the new test could be written the normal way (via
+  the `sim` fixture) rather than reaching into ctypes directly.

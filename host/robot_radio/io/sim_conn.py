@@ -101,6 +101,13 @@ _DEFAULT_LIB = (_HERE / "../../../tests/_infra/sim/build" / _LIB_NAME).resolve()
 # fine for the ~25 ms control period.  Smaller = smoother state log, more CPU.
 _DEFAULT_TICK_DURATION = 24
 
+# Subsystems::Channel's own enum values (source/subsystems/wire_command.h:
+# `enum class Channel : uint8_t { NONE, SERIAL, RADIO };`) -- mirrored here
+# so callers of send_on()/sim_command_on() can select a channel without
+# reaching into the C++ enum directly (088-006).
+CHANNEL_SERIAL = 1
+CHANNEL_RADIO = 2
+
 
 class SimConnection:
     """SerialConnection-compatible backend using libfirmware_host.
@@ -222,6 +229,29 @@ class SimConnection:
         if not self.is_open:
             raise ConnectionError("Not connected. Call connect() first.")
         self._raw_command(message)
+
+    def send_on(self, message: str, channel: int,
+                read_timeout: int = 500,  # [ms]
+                stop_token: str | None = "OK") -> dict[str, Any]:
+        """Like send(), but selects the reply channel explicitly (088-006).
+
+        `channel` is CHANNEL_SERIAL or CHANNEL_RADIO (module constants,
+        mirroring Subsystems::Channel). Routes the command with that
+        returnPath and reads the reply back from the MATCHING channel's
+        sim-side ReplyStore (sim_command_on() — tests/_infra/sim/
+        sim_api.cpp) — proves a command dispatches/replies correctly on a
+        specific channel, which the plain send()/SERIAL-only path cannot.
+        """
+        if not self.is_open:
+            return {"error": "Not connected. Call connect() first."}
+
+        sync = self._raw_command_on(message, channel)
+        lines: list[str] = [l for l in sync.strip().split("\n") if l.strip()] if sync else []
+
+        evts = self._advance(read_timeout, stop_token, existing_lines=lines)
+        lines.extend(evts)
+
+        return {"sent": message, "mode": "sim", "channel": channel, "responses": lines}
 
     def read_lines(self, duration: int = 500,  # [ms]
                    stop_token: str | None = None) -> list[str]:
@@ -535,6 +565,16 @@ class SimConnection:
         n = self._lib.sim_command(self._h, line.encode(), buf, 2048)
         return buf.raw[:n].decode(errors="replace") if n > 0 else ""
 
+    def _raw_command_on(self, line: str, channel: int) -> str:
+        """Like _raw_command(), but selects the reply channel (088-006).
+
+        Same 2048-byte buffer convention as _raw_command() — matches
+        sim_command_on()'s C-side ReplyStore capacity.
+        """
+        buf = ctypes.create_string_buffer(2048)
+        n = self._lib.sim_command_on(self._h, line.encode(), ctypes.c_int(channel), buf, 2048)
+        return buf.raw[:n].decode(errors="replace") if n > 0 else ""
+
     def _get_evts(self) -> str:
         """Drain async EVT buffer from the C sim."""
         buf = ctypes.create_string_buffer(2048)
@@ -621,6 +661,12 @@ class SimConnection:
         lib.sim_command.argtypes = [
             ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
         lib.sim_command.restype = ctypes.c_int
+
+        # sim_command_on (088-006) -- sim_command's argtypes plus one
+        # c_int channel selector (CHANNEL_SERIAL/CHANNEL_RADIO, above).
+        lib.sim_command_on.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+        lib.sim_command_on.restype = ctypes.c_int
 
         # --- Async (1) ---
         lib.sim_get_async_evts.argtypes = [

@@ -45,6 +45,13 @@ _REPLY_BUF_SIZE = 2048
 # of this value).
 _DEFAULT_STEP = 24   # [ms]
 
+# Subsystems::Channel's own enum values (source/subsystems/wire_command.h:
+# `enum class Channel : uint8_t { NONE, SERIAL, RADIO };`) -- mirrored here
+# (and in host/robot_radio/io/sim_conn.py) so callers of command_on() can
+# select a channel without reaching into the C++ enum directly (088-006).
+CHANNEL_SERIAL = 1
+CHANNEL_RADIO = 2
+
 
 class Sim:
     """Context manager owning one ``SimHandle`` (sim_api.cpp).
@@ -137,6 +144,34 @@ class Sim:
         if n <= 0:
             return ""
         return buf.raw[:n].decode(errors="replace")
+
+    def command_on(self, line: str, channel: int) -> str:
+        """Like command(), but selects the reply channel explicitly (088-006).
+
+        ``channel`` is CHANNEL_SERIAL or CHANNEL_RADIO (module constants,
+        mirroring Subsystems::Channel). Routes the command with that
+        returnPath and reads the reply back from the MATCHING channel's
+        sim-side ReplyStore (sim_command_on() -- sim_api.cpp) -- proves a
+        command dispatches/replies correctly on a specific channel, which
+        command() (always SERIAL) cannot.
+        """
+        buf = ctypes.create_string_buffer(_REPLY_BUF_SIZE)
+        n = self._lib.sim_command_on(self._h, line.encode(), ctypes.c_int(channel),
+                                      buf, _REPLY_BUF_SIZE)
+        if n <= 0:
+            return ""
+        return buf.raw[:n].decode(errors="replace")
+
+    def reply_store_len(self, channel: int) -> int:
+        """Read a channel's CURRENT reply-store length without draining or
+        routing anything (088-006, test-only -- sim_get_reply_store_len()).
+
+        Lets a test call command_on() on one channel and then confirm the
+        OTHER channel's store is still empty, proving CommandRouter's two
+        reply channels are backed by genuinely distinct ReplyStore
+        instances rather than one shared sink.
+        """
+        return int(self._lib.sim_get_reply_store_len(self._h, ctypes.c_int(channel)))
 
     def get_async_evts(self) -> str:
         """Drain and return any loop-originated async EVT lines (e.g. the
@@ -278,6 +313,17 @@ class Sim:
 
         lib.sim_command.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
         lib.sim_command.restype = ctypes.c_int
+
+        # sim_command_on (088-006) -- sim_command's argtypes plus one c_int
+        # channel selector (CHANNEL_SERIAL/CHANNEL_RADIO, above).
+        lib.sim_command_on.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+        lib.sim_command_on.restype = ctypes.c_int
+
+        # sim_get_reply_store_len (088-006, test-only) -- non-draining peek
+        # at one channel's ReplyStore length.
+        lib.sim_get_reply_store_len.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        lib.sim_get_reply_store_len.restype = ctypes.c_int
 
         lib.sim_get_async_evts.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
         lib.sim_get_async_evts.restype = ctypes.c_int

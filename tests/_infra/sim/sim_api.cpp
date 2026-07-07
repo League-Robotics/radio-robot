@@ -15,18 +15,23 @@
 // in main.cpp -- see each one's own doc comment).
 //
 // Two separate reply sinks (architecture-update.md (081) Decision 3,
-// unchanged in shape by this rewrite):
-//   - syncStore  -- the ONE command's own reply during sim_command():
-//     wired as BOTH of Rt::CommandRouter's reply channels (serial AND
-//     radio -- the sim has no real transport distinction, so both resolve
-//     to the same sink; only Rt::CommandRouter::route() ever picks between
-//     them, and it always sees the same target either way).
+// extended by architecture-update.md (088) Decision 5):
+//   - syncStoreSerial / syncStoreRadio -- the ONE command's own reply during
+//     sim_command()/sim_command_on(): each of Rt::CommandRouter's two reply
+//     channels is wired to its OWN ReplyStore instance (088-006 -- before
+//     this, BOTH channels were wired to the SAME single store, so no test
+//     could prove a command dispatched/replied on RADIO specifically, only
+//     that a Channel::RADIO-tagged field could be set).
+//     Rt::CommandRouter::route() picks exactly one of the two reply
+//     functions from the inbound command's returnPath, so only the
+//     TARGETED channel's store is ever written to by a given call.
 //   - asyncStore -- Rt::MainLoop's own serialReply/serialCtx (and
 //     radioReply/radioCtx), the loop-originated reply sink Rt::MainLoop::
 //     tick() uses for output it generates ITSELF rather than in response to
 //     a command (the watchdog-fire EVT, motion-done EVT, safety_stop EVT,
 //     periodic TLM emission bound to whichever channel issued STREAM) --
-//     drained by sim_get_async_evts().
+//     drained by sim_get_async_evts(). Unaffected by 088-006 -- MainLoop's
+//     async reply sink was never part of the single-store bug.
 //
 // sim_tick(h, now) — advances real (simulated) time: ONE Rt::MainLoop::tick()
 // pass (mandatory + commit), THEN drains bb.configIn to exhaustion. The
@@ -41,24 +46,36 @@
 // timing under ordinary (non-zero-latency) command cadence, not a shortcut
 // around Decision 8's real rationing (which main.cpp alone implements).
 //
-// sim_command(h, line) — the dt=0 synchronous-command trick (Decision 4):
-// feeds the watchdog, routes ONE command (mirrors one slack sub-iteration
-// with a command present), THEN — since a real slack window would keep
-// spinning for ~20ms with no further command, ample time for anything
-// this route() call just posted (bb.motorIn[]/bb.driveIn/bb.motionIn/
-// bb.otosCommandIn/…) to be drained by the NEXT mandatory tick, and for any
-// bb.configIn delta to fully apply — replays Rt::MainLoop::tick() and drains
-// bb.configIn to exhaustion, ALL at the SAME `now` as the most recent
-// sim_tick() call (SimHandle::lastTickNow). Safe ONLY because Subsystems::
-// SimHardware::tick()'s own re-entry guard treats a repeated same-`now`
-// hardware.tick() as a complete no-op for the PLANT integration (it still
-// drains bb.motorIn[]/bb.motorResetIn[] every call, staging any freshly
-// routed command). This keeps a `sim.command("SET …")` immediately followed
-// by a SEPARATE `sim.command("GET …")` (no intervening sim_tick()) wire-
+// sim_command_on(h, line, channel, reply, size) — the dt=0 synchronous-
+// command trick (Decision 4), extended (088-006) so a caller picks which
+// channel (Subsystems::Channel's own enum values: 1=SERIAL, 2=RADIO) the
+// command's returnPath carries, and reads the reply back from THAT
+// channel's own ReplyStore (see "Two separate reply sinks" above): feeds
+// the watchdog, routes ONE command (mirrors one slack sub-iteration with a
+// command present), THEN — since a real slack window would keep spinning
+// for ~20ms with no further command, ample time for anything this route()
+// call just posted (bb.motorIn[]/bb.driveIn/bb.motionIn/bb.otosCommandIn/…)
+// to be drained by the NEXT mandatory tick, and for any bb.configIn delta
+// to fully apply — replays Rt::MainLoop::tick() and drains bb.configIn to
+// exhaustion, ALL at the SAME `now` as the most recent sim_tick() call
+// (SimHandle::lastTickNow). Safe ONLY because Subsystems::SimHardware::
+// tick()'s own re-entry guard treats a repeated same-`now` hardware.tick()
+// as a complete no-op for the PLANT integration (it still drains
+// bb.motorIn[]/bb.motorResetIn[] every call, staging any freshly routed
+// command). This keeps a `sim.command("SET …")` immediately followed by a
+// SEPARATE `sim.command("GET …")` (no intervening sim_tick()) wire-
 // observably equivalent to two real, non-zero-latency serial commands --
 // exactly what today's config/otos/pose command tests already assume, and
 // what ticket 006's own dt=0 trick already established as a sim-only
 // convenience (this ticket extends it, it does not invent the pattern).
+// Both ReplyStores are reset at the start of every call, so the store NOT
+// targeted by `channel` is always left empty for this call (088-006's
+// channel-isolation requirement, verified by
+// tests/sim/unit/test_sim_command_channel.py).
+//
+// sim_command(h, line) — thin SERIAL-only wrapper over sim_command_on()
+// (088-006): every pre-088-006 call site (~183 test functions across
+// tests/sim/unit/) is source-compatible and behaves identically.
 #include "hal/sim/sim_setters.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
@@ -185,8 +202,9 @@ struct SimHandle {
     Rt::CommandRouter router;
     Rt::MainLoop loop;
 
-    ReplyStore syncStore;    // sim_command()'s synchronous reply (see file header)
-    ReplyStore asyncStore;   // Rt::MainLoop::tick()'s loop-originated output (watchdog/motion/telemetry)
+    ReplyStore syncStoreSerial;  // sim_command()/sim_command_on()'s SERIAL-channel reply (see file header)
+    ReplyStore syncStoreRadio;   // sim_command_on()'s RADIO-channel reply (see file header)
+    ReplyStore asyncStore;       // Rt::MainLoop::tick()'s loop-originated output (watchdog/motion/telemetry)
 
     // [ms] the most recent `now` passed to sim_tick(); sim_command() replays
     // Rt::MainLoop::tick() at this SAME now (the dt=0 synchronous-command
@@ -224,10 +242,10 @@ SimHandle::SimHandle()
     // config -- mirrors main.cpp's configurator.publish(bb) call.
     configurator.publish(bb);
 
-    // Rt::CommandRouter (087-006): both reply channels resolve to the SAME
-    // sync store -- the sim has no real serial/radio distinction for a
-    // per-command reply (see file header).
-    router.setReplyChannels(storeReply, &syncStore, storeReply, &syncStore);
+    // Rt::CommandRouter (087-006, channel-distinct since 088-006): each
+    // reply channel resolves to its OWN sync store -- see file header's
+    // "Two separate reply sinks".
+    router.setReplyChannels(storeReply, &syncStoreSerial, storeReply, &syncStoreRadio);
 
     // Boot-time hardware-identity snapshots (blackboard.h's file header):
     // never rewritten after this one-time seed.
@@ -283,23 +301,28 @@ void sim_tick(void* h, uint32_t now) {
     }
 }
 
-// Dispatch one NUL-terminated command line synchronously. Copies `line`
-// into a Subsystems::CommunicatorToCommandProcessorCommand (an OWNED
-// char[256] buffer -- subsystems/wire_command.h) whose returnPath is SERIAL
-// (arbitrary -- Rt::CommandRouter's two reply channels are wired to the
-// same sync store either way, see file header), feeds the watchdog, routes
-// it, then replays Rt::MainLoop::tick() and drains bb.configIn to
-// exhaustion at the SAME `now` as the most recent sim_tick() (the dt=0
-// synchronous-command trick — see file header). Returns the number of
-// reply bytes written into `reply` (not counting the final NUL), matching
+// Dispatch one NUL-terminated command line synchronously on a caller-chosen
+// channel. Copies `line` into a Subsystems::CommunicatorToCommandProcessorCommand
+// (an OWNED char[256] buffer -- subsystems/wire_command.h) whose returnPath
+// is set from `channel` (Subsystems::Channel's own enum values: 1=SERIAL,
+// 2=RADIO -- 0=NONE is accepted too, though no test targets it and it is
+// treated the same as SERIAL for reply-store selection below), feeds the
+// watchdog, routes it, then replays Rt::MainLoop::tick() and drains
+// bb.configIn to exhaustion at the SAME `now` as the most recent sim_tick()
+// (the dt=0 synchronous-command trick — see file header). Both ReplyStores
+// are reset up front, so the reply is read back from the ONE store that
+// matches `channel` -- the other is guaranteed empty for this call (see
+// file header's "Two separate reply sinks"). Returns the number of reply
+// bytes written into `reply` (not counting the final NUL), matching
 // sim_conn.py's ctypes.c_int expectation.
-int sim_command(void* h, const char* line, char* reply, int size) {
+int sim_command_on(void* h, const char* line, int channel, char* reply, int size) {
     SimHandle* s = static_cast<SimHandle*>(h);
 
-    s->syncStore.reset();
+    s->syncStoreSerial.reset();
+    s->syncStoreRadio.reset();
 
     Subsystems::CommunicatorToCommandProcessorCommand cmd;
-    cmd.returnPath = Subsystems::Channel::SERIAL;
+    cmd.returnPath = static_cast<Subsystems::Channel>(channel);
     cmd.line[0] = '\0';
     if (line) {
         std::strncpy(cmd.line, line, sizeof(cmd.line) - 1);
@@ -324,15 +347,42 @@ int sim_command(void* h, const char* line, char* reply, int size) {
     }
     s->loop.tick(s->bb, s->lastTickNow);
 
-    int n = s->syncStore.written;
+    ReplyStore& store = (cmd.returnPath == Subsystems::Channel::RADIO)
+                             ? s->syncStoreRadio
+                             : s->syncStoreSerial;
+
+    int n = store.written;
     if (reply && size > 0) {
         int copy = (n < size - 1) ? n : size - 1;
-        memcpy(reply, s->syncStore.buf, static_cast<size_t>(copy));
+        memcpy(reply, store.buf, static_cast<size_t>(copy));
         reply[copy] = '\0';
         n = copy;
     }
-    s->syncStore.reset();
+    store.reset();
     return n;
+}
+
+// sim_command() -- thin SERIAL-only wrapper over sim_command_on() (088-006):
+// every pre-088-006 call site (~183 test functions across tests/sim/unit/)
+// is source-compatible and behaves identically.
+int sim_command(void* h, const char* line, char* reply, int size) {
+    return sim_command_on(h, line, static_cast<int>(Subsystems::Channel::SERIAL), reply, size);
+}
+
+// ---------------------------------------------------------------------------
+// Reply-store introspection (088-006, test-only) -- read a channel's
+// CURRENT ReplyStore length WITHOUT draining or routing anything, so a test
+// can call sim_command_on() on one channel and then confirm the OTHER
+// channel's store is still empty: proves CommandRouter's two reply channels
+// are backed by genuinely distinct ReplyStore instances, not the pre-
+// 088-006 single shared sink. Not used by sim_command()/sim_command_on()
+// themselves -- test support only.
+// ---------------------------------------------------------------------------
+int sim_get_reply_store_len(void* h, int channel) {
+    SimHandle* s = static_cast<SimHandle*>(h);
+    return (static_cast<Subsystems::Channel>(channel) == Subsystems::Channel::RADIO)
+               ? s->syncStoreRadio.written
+               : s->syncStoreSerial.written;
 }
 
 // ---------------------------------------------------------------------------
