@@ -52,6 +52,7 @@
 #include "hal/nezha/nezha_motor.h"
 #include "hal/otos/otos_odometer.h"
 #include "messages/motor.h"
+#include "runtime/queue.h"
 #include "subsystems/hardware.h"
 
 namespace Subsystems {
@@ -70,7 +71,8 @@ class NezhaHardware : public Hardware {
   // tests/sim/unit/*_harness.cpp fixtures that construct a NezhaHardware but
   // never call begin()/odometer() on it) keeps compiling unchanged — none of
   // those exercise the OTOS leaf at all, so the default is behaviorally
-  // inert for them.
+  // inert for them. Also copies configs[] verbatim into config_[] (087-004)
+  // — config()'s backing store.
   NezhaHardware(I2CBus& bus, const msg::MotorConfig configs[kPortCount],
                 const Config::OtosBootConfig& otosConfig = Config::OtosBootConfig());
 
@@ -91,7 +93,22 @@ class NezhaHardware : public Hardware {
   // "slice 1 collects due, slice 2 requests/writes go out" double call,
   // ticket 005) drive one full request/collect pair per pass under typical
   // timing.
-  void tick(uint32_t now) override;   // [ms]
+  //
+  // 087-004: motorIn[]/motorResetIn[] (Subsystems::Hardware's own doc
+  // comment has the full contract) are consumed FIRST, uniformly, before
+  // the flip-flop's scheduling decision below — applying a motorIn[i]
+  // command marks port i+1 in-use (the SAME side effect the apply()
+  // overloads below already have — Design Rationale 5: sampling turns on
+  // because someone commanded that port), so a port newly brought in-use
+  // by this call's motorIn[]/motorResetIn[] is eligible for the SAME call's
+  // bus action. motorResetIn[i] does NOT mark the port in-use (mirrors
+  // today's direct `hardware->motor(port).resetPosition()` call sites,
+  // e.g. pose_commands.cpp's ZERO handler, which never marked in-use
+  // either) — this method's own resetPosition() call only stages the
+  // reset; landing it still requires the port to already be (or separately
+  // become) in-use.
+  void tick(uint32_t now, Rt::Mailbox<msg::MotorCommand> motorIn[kPortCount],
+            bool motorResetIn[kPortCount]) override;   // [ms]
 
   // Port-indexed accessor, port in [1, kPortCount]. Always returns the
   // Hal::Motor faceplate — callers (DEV commands, Drivetrain; both later
@@ -122,6 +139,15 @@ class NezhaHardware : public Hardware {
   // above; dev_loop.cpp drives this leaf's own tick()/pose() separately,
   // once per pass, entirely outside this class's tick().
   Hal::Odometer* odometer() override;
+
+  // config()/state() (087-004, Subsystems::Hardware's own doc comment has
+  // the full contract). config(port) returns the constructor-supplied
+  // config_[port-1] verbatim (the same value each port's own NezhaMotor
+  // leaf was constructed with — see the constructor); state(port) returns
+  // motor(port).state() unchanged. Out-of-range ports clamp to port 4,
+  // matching motor()'s own convention.
+  msg::MotorConfig config(uint32_t port) const override;
+  msg::MotorState state(uint32_t port) const override;
 
  private:
   // REQUEST_DUE: the next bus action is a fresh 0x46 request on
@@ -156,6 +182,15 @@ class NezhaHardware : public Hardware {
   uint32_t activePort_ = 1;
   Phase phase_ = Phase::REQUEST_DUE;
   bool portInUse_[kPortCount] = {false, false, false, false};
+
+  // config()'s own backing store (087-004) — a verbatim copy of the
+  // constructor's configs[] argument, the SAME per-port config each port's
+  // own NezhaMotor leaf was constructed with. This ticket adds no way to
+  // change it after construction (no Hardware-level configure() exists
+  // yet — see hardware.h's own file header); a future ticket that adds one
+  // must keep this array and each NezhaMotor leaf's own cached config in
+  // sync.
+  msg::MotorConfig config_[kPortCount];
 };
 
 }  // namespace Subsystems

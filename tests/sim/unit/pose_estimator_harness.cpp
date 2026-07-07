@@ -47,6 +47,8 @@
 
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
+#include "runtime/commands.h"
+#include "runtime/queue.h"
 #include "subsystems/pose_estimator.h"
 
 namespace {
@@ -68,6 +70,18 @@ void fail(const std::string& what) {
 
 void checkTrue(bool condition, const std::string& what) {
   if (!condition) fail(what + " — expected true, got false");
+}
+
+// Asserts |actual - expected| <= tol. tol == 0.0f is an exact (bit-for-bit,
+// modulo IEEE754 +/-0) equality check.
+void checkNear(float actual, float expected, float tol, const std::string& what) {
+  if (std::fabs(actual - expected) > tol) {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "%s — expected %.9g (tol %.3g), got %.9g",
+                  what.c_str(), static_cast<double>(expected),
+                  static_cast<double>(tol), static_cast<double>(actual));
+    fail(buf);
+  }
 }
 
 // --- Synthetic observation builders -------------------------------------
@@ -126,6 +140,12 @@ void scenarioNoOtosFusedMatchesEncoderExactly() {
                            /*qXy=*/800.0f, /*qTheta=*/4.0f,
                            /*rOtosXy=*/50.0f, /*rOtosTheta=*/0.01f));
 
+  // 087-004: tick() gained a poseResetIn parameter (Rt::WorkQueue<
+  // Rt::PoseResetCommand,4>, source/runtime/commands.h) -- never posted to
+  // in this scenario, so it is a no-op, matching today's exact behavior
+  // (see the queue-driven scenarios below for coverage of a non-empty one).
+  Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
+
   struct Step {
     float dLeft;
     float dRight;
@@ -146,7 +166,7 @@ void scenarioNoOtosFusedMatchesEncoderExactly() {
     now += 20;
     cumLeft += s.dLeft;
     cumRight += s.dRight;
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr);
+    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn);
 
     msg::PoseEstimate enc = pe.encoderPose();
     msg::PoseEstimate fused = pe.fusedPose();
@@ -183,6 +203,9 @@ void scenarioOtosDivergesFusedFromEncoder() {
   pe.configure(makeConfig(128.0f, 0.92f, /*qXy=*/800.0f, /*qTheta=*/4.0f,
                            /*rOtosXy=*/50.0f, /*rOtosTheta=*/0.01f));
 
+  // 087-004: never posted to in this scenario -- see scenario (a)'s comment.
+  Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
+
   uint32_t now = 0;
   float cumLeft = 0.0f;
   float cumRight = 0.0f;
@@ -194,7 +217,7 @@ void scenarioOtosDivergesFusedFromEncoder() {
     now += 20;
     cumLeft += 40.0f;
     cumRight += 40.0f;
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr);
+    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn);
   }
 
   msg::PoseEstimate encBefore = pe.encoderPose();
@@ -219,7 +242,7 @@ void scenarioOtosDivergesFusedFromEncoder() {
     msg::PoseEstimate otos =
         otosAt(refEnc.pose.x + kOffsetX, refEnc.pose.y, refEnc.pose.h, now);
 
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), &otos);
+    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), &otos, poseResetIn);
   }
 
   msg::PoseEstimate encAfter = pe.encoderPose();
@@ -250,6 +273,9 @@ void scenarioZeroConfigSentinelKeepsFusionFiniteAndCorrected() {
   pe.configure(makeConfig(128.0f, 0.92f, /*qXy=*/0.0f, /*qTheta=*/0.0f,
                            /*rOtosXy=*/0.0f, /*rOtosTheta=*/0.0f));
 
+  // 087-004: never posted to in this scenario -- see scenario (a)'s comment.
+  Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
+
   uint32_t now = 0;
   float cumLeft = 0.0f;
   float cumRight = 0.0f;
@@ -258,7 +284,7 @@ void scenarioZeroConfigSentinelKeepsFusionFiniteAndCorrected() {
     now += 20;
     cumLeft += 40.0f;
     cumRight += 40.0f;
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr);
+    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn);
   }
 
   const float kOffsetX = 150.0f;  // [mm]
@@ -271,7 +297,7 @@ void scenarioZeroConfigSentinelKeepsFusionFiniteAndCorrected() {
     msg::PoseEstimate otos =
         otosAt(refEnc.pose.x + kOffsetX, refEnc.pose.y, refEnc.pose.h, now);
 
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), &otos);
+    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), &otos, poseResetIn);
   }
 
   msg::PoseEstimate enc = pe.encoderPose();
@@ -293,12 +319,192 @@ void scenarioZeroConfigSentinelKeepsFusionFiniteAndCorrected() {
             "correction, leaving fused == encoder)");
 }
 
+// (d) 087-004 AC1: configure()/config() round-trip a DrivetrainConfig value
+// verbatim -- kills the config-shadow this sprint's design removes
+// elsewhere (a caller, e.g. the Configurator, ticket 005, can read back
+// what was configured without a separate cache).
+void scenarioConfigureConfigRoundTrip() {
+  beginScenario("configure()/config() round-trip a DrivetrainConfig value (087-004)");
+
+  Subsystems::PoseEstimator pe;
+  msg::DrivetrainConfig cfg = makeConfig(/*trackwidth=*/150.0f, /*rotationalSlip=*/0.85f,
+                                          /*qXy=*/500.0f, /*qTheta=*/3.0f,
+                                          /*rOtosXy=*/40.0f, /*rOtosTheta=*/0.02f);
+  pe.configure(cfg);
+
+  msg::DrivetrainConfig readBack = pe.config();
+  checkNear(readBack.trackwidth, cfg.trackwidth, 0.0f, "config() returns the configured trackwidth");
+  checkNear(readBack.rotational_slip, cfg.rotational_slip, 0.0f,
+            "config() returns the configured rotational_slip");
+  checkNear(readBack.ekf_q_xy, cfg.ekf_q_xy, 0.0f, "config() returns the configured ekf_q_xy");
+  checkNear(readBack.ekf_q_theta, cfg.ekf_q_theta, 0.0f, "config() returns the configured ekf_q_theta");
+  checkNear(readBack.ekf_r_otos_xy, cfg.ekf_r_otos_xy, 0.0f,
+            "config() returns the configured ekf_r_otos_xy");
+  checkNear(readBack.ekf_r_otos_theta, cfg.ekf_r_otos_theta, 0.0f,
+            "config() returns the configured ekf_r_otos_theta");
+}
+
+// (e) 087-004 AC5: posting a kSetPose Rt::PoseResetCommand to poseResetIn and
+// ticking dispatches to the EXISTING setPose() -- same phantom-jump-free
+// re-anchor contract setPose() already documents (pose_estimator.h): both
+// encoderPose() and fusedPose() jump cleanly to the commanded pose, and
+// prevEncLeft_/prevEncRight_/haveEncBaseline_ (the encoder-delta baseline)
+// are left untouched, so a FOLLOWING tick's motion continues smoothly off
+// the re-anchored pose rather than fabricating a jump of its own.
+void scenarioPoseResetInDrainsKSetPoseMatchesDirectSetPose() {
+  beginScenario(
+      "poseResetIn: kSetPose drains to setPose(), re-anchoring both readings "
+      "with no phantom jump (087-004)");
+
+  Subsystems::PoseEstimator pe;
+  pe.configure(makeConfig(128.0f, 0.92f, 800.0f, 4.0f, 50.0f, 0.01f));
+
+  Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
+
+  uint32_t now = 0;
+  float cumLeft = 0.0f;
+  float cumRight = 0.0f;
+  for (int i = 0; i < 5; ++i) {
+    now += 20;
+    cumLeft += 40.0f;
+    cumRight += 40.0f;
+    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn);
+  }
+
+  // SI arrives: post kSetPose re-anchoring to a known world pose, delivered
+  // at the SAME `now` as the last real tick with the SAME cumulative
+  // encoder reading (no wheel motion between the command's arrival and this
+  // tick) -- setPose() re-anchors ONLY the believed pose, deliberately
+  // leaving prevEncLeft_/prevEncRight_/haveEncBaseline_ untouched (see that
+  // method's own doc comment), so this tick's own encoder delta is exactly
+  // zero regardless.
+  msg::SetPose target;
+  target.x = 500.0f;
+  target.y = -200.0f;
+  target.h = 1.0f;
+  Rt::PoseResetCommand setPoseCmd;
+  setPoseCmd.kind = Rt::PoseResetCommand::kSetPose;
+  setPoseCmd.pose = target;
+  checkTrue(poseResetIn.post(setPoseCmd), "post() succeeds");
+
+  pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn);
+  checkTrue(poseResetIn.empty(), "tick() drained the posted kSetPose command");
+
+  msg::PoseEstimate afterReanchor = pe.encoderPose();
+  checkNear(afterReanchor.pose.x, target.x, 0.0f,
+            "encoderPose().pose.x re-anchored to exactly the commanded SetPose (zero wheel motion this pass)");
+  checkNear(afterReanchor.pose.y, target.y, 0.0f,
+            "encoderPose().pose.y re-anchored to exactly the commanded SetPose");
+  checkNear(afterReanchor.pose.h, target.h, 1e-5f,
+            "encoderPose().pose.h re-anchored to (wrapped) the commanded SetPose");
+
+  msg::PoseEstimate fusedAfterReanchor = pe.fusedPose();
+  checkNear(fusedAfterReanchor.pose.x, target.x, 0.0f,
+            "fusedPose().pose.x re-anchored too (EkfTiny::setPose())");
+  checkNear(fusedAfterReanchor.pose.y, target.y, 0.0f, "fusedPose().pose.y re-anchored too");
+  checkNear(fusedAfterReanchor.pose.h, target.h, 1e-4f, "fusedPose().pose.h re-anchored too");
+
+  // A further tick with real new motion off the RE-ANCHORED pose produces a
+  // normal, bounded delta relative to the commanded pose -- proves
+  // prevEncLeft_/prevEncRight_ were left untouched (continuous tracking)
+  // while encX_/encY_/encTheta_ jumped cleanly to the commanded pose (no
+  // phantom jump on the FOLLOWING tick either).
+  now += 20;
+  cumLeft += 40.0f;
+  cumRight += 40.0f;
+  pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn);
+  msg::PoseEstimate afterFreshMotion = pe.encoderPose();
+  checkTrue(afterFreshMotion.pose.x > afterReanchor.pose.x - 1.0f &&
+                afterFreshMotion.pose.x < afterReanchor.pose.x + 60.0f,
+            "motion off the re-anchored pose advances encoderPose() by a normal, "
+            "bounded delta -- no phantom jump on the tick following the re-anchor");
+}
+
+// (f) 087-004 AC5: posting a kResetBaseline Rt::PoseResetCommand to
+// poseResetIn and ticking dispatches to the EXISTING resetEncoderBaseline()
+// -- preserving that method's deferred dt>0 phantom-jump guard exactly
+// (pose_estimator.h's doc comment): a same-pass (dt==0) tick after posting
+// must NOT apply the reset yet (it stays armed), and the LATER,
+// genuinely-time-advancing tick where a staged hardware encoder zero has
+// landed (the encoder reading snapping from a large cumulative value to 0)
+// must produce ZERO delta, not a large negative phantom jump.
+void scenarioPoseResetInDrainsKResetBaselineNoPhantomJump() {
+  beginScenario(
+      "poseResetIn: kResetBaseline drains to resetEncoderBaseline(), "
+      "preserving the deferred dt>0 phantom-jump guard (087-004)");
+
+  Subsystems::PoseEstimator pe;
+  pe.configure(makeConfig(128.0f, 0.92f, 800.0f, 4.0f, 50.0f, 0.01f));
+
+  Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
+
+  uint32_t now = 0;
+  float cumLeft = 0.0f;
+  float cumRight = 0.0f;
+  // Build up real motion across a few ticks so there's a nonzero baseline
+  // (a large cumulative encoder value) to rebaseline away from.
+  for (int i = 0; i < 5; ++i) {
+    now += 20;
+    cumLeft += 40.0f;
+    cumRight += 40.0f;
+    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn);
+  }
+  msg::PoseEstimate beforeReset = pe.encoderPose();
+
+  // ZERO enc arrives: post kResetBaseline. The hardware encoder zero
+  // (Hal::Motor::resetPosition()) is itself STAGED -- it has not landed
+  // yet, so THIS SAME-PASS tick() (dt == 0, same `now`, encoder reading
+  // still the STALE pre-reset cumulative value) must NOT apply the reset
+  // immediately -- it must stay armed.
+  Rt::PoseResetCommand resetCmd;
+  resetCmd.kind = Rt::PoseResetCommand::kResetBaseline;
+  checkTrue(poseResetIn.post(resetCmd), "post() succeeds");
+
+  pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn);   // dt == 0 (same now)
+  checkTrue(poseResetIn.empty(), "tick() drained the posted kResetBaseline command");
+
+  msg::PoseEstimate afterSamePassTick = pe.encoderPose();
+  checkNear(afterSamePassTick.pose.x, beforeReset.pose.x, 0.0f,
+            "same-pass (dt==0) tick after posting kResetBaseline leaves encoderPose() "
+            "unchanged -- reset still armed, not yet applied");
+  checkNear(afterSamePassTick.pose.y, beforeReset.pose.y, 0.0f, "encoderPose().pose.y unchanged too");
+  checkNear(afterSamePassTick.pose.h, beforeReset.pose.h, 0.0f, "encoderPose().pose.h unchanged too");
+
+  // Next tick: a GENUINELY time-advancing pass (dt > 0) where the staged
+  // hardware reset has now landed -- the encoder reading snaps to 0 (a huge
+  // absolute change from the stale cumulative value). If the reset were
+  // applied eagerly (the bug this mechanism prevents), this pass would diff
+  // the fresh zero against the STALE baseline and fabricate a large phantom
+  // jump. With the deferred guard, this pass's own delta is treated as zero
+  // motion (the first reading after a fresh baseline).
+  now += 20;
+  pe.tick(now, motorStateAt(0.0f), motorStateAt(0.0f), nullptr, poseResetIn);
+  msg::PoseEstimate afterRebaselineTick = pe.encoderPose();
+  checkNear(afterRebaselineTick.pose.x, afterSamePassTick.pose.x, 0.0f,
+            "the rebaseline-landing tick produces ZERO delta -- no phantom jump "
+            "despite the encoder reading jumping from a large cumulative value to 0");
+  checkNear(afterRebaselineTick.pose.y, afterSamePassTick.pose.y, 0.0f, "no phantom jump in y either");
+  checkNear(afterRebaselineTick.pose.h, afterSamePassTick.pose.h, 0.0f, "no phantom jump in heading either");
+
+  // A further tick with real new motion off the FRESH (rezeroed) baseline
+  // produces a normal, bounded delta -- proves the class is still tracking
+  // correctly afterward, not just frozen.
+  now += 20;
+  pe.tick(now, motorStateAt(40.0f), motorStateAt(40.0f), nullptr, poseResetIn);
+  msg::PoseEstimate afterFreshMotion = pe.encoderPose();
+  checkTrue(afterFreshMotion.pose.x > afterRebaselineTick.pose.x,
+            "motion off the fresh rezeroed baseline advances encoderPose() normally");
+}
+
 }  // namespace
 
 int main() {
   scenarioNoOtosFusedMatchesEncoderExactly();
   scenarioOtosDivergesFusedFromEncoder();
   scenarioZeroConfigSentinelKeepsFusionFiniteAndCorrected();
+  scenarioConfigureConfigRoundTrip();
+  scenarioPoseResetInDrainsKSetPoseMatchesDirectSetPose();
+  scenarioPoseResetInDrainsKResetBaselineNoPhantomJump();
 
   if (g_failureCount == 0) {
     std::printf("OK: all PoseEstimator scenarios passed\n");

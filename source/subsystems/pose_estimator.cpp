@@ -22,6 +22,7 @@ float PoseEstimator::effectiveSlip(float rawSlip) {
 }
 
 void PoseEstimator::configure(const msg::DrivetrainConfig& config) {
+  config_ = config;   // verbatim round-trip copy (087-004) -- see config()
   trackwidth_ = config.trackwidth;
   rotationalSlip_ = config.rotational_slip;
 
@@ -42,7 +43,26 @@ void PoseEstimator::configure(const msg::DrivetrainConfig& config) {
 
 void PoseEstimator::tick(uint32_t now, const msg::MotorState& leftObs,
                           const msg::MotorState& rightObs,
-                          const msg::PoseEstimate* otosObs) {
+                          const msg::PoseEstimate* otosObs,
+                          Rt::WorkQueue<Rt::PoseResetCommand, 4>& poseResetIn) {
+  // 087-004: drain poseResetIn completely, FIFO, BEFORE anything else --
+  // even before the "no observation this pass" early return below, so a
+  // queued SI/ZERO reset is never skipped just because this pass's encoder
+  // observations happen to be momentarily absent. Pure routing: neither
+  // setPose() nor resetEncoderBaseline()'s own internals (the phantom-jump-
+  // avoidance mechanism) change here.
+  while (!poseResetIn.empty()) {
+    Rt::PoseResetCommand cmd = poseResetIn.take();
+    switch (cmd.kind) {
+      case Rt::PoseResetCommand::kSetPose:
+        setPose(cmd.pose);
+        break;
+      case Rt::PoseResetCommand::kResetBaseline:
+        resetEncoderBaseline();
+        break;
+    }
+  }
+
   // Encoder delta requires BOTH wheels' position observation this tick. If
   // either is absent, skip this tick's update entirely -- no encoder-
   // accumulator advance, no EKF predict, no stale-data corruption. Leave

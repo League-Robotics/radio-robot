@@ -69,6 +69,7 @@
 #include "dev_loop.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
+#include "runtime/commands.h"
 #include "runtime/queue.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
@@ -170,7 +171,15 @@ msg::DrivetrainConfig makeDtConfig(uint32_t leftPort, uint32_t rightPort) {
 // command, so both are no-ops in the real devLoopTick() too).
 void oneReferencePass(Subsystems::SimHardware& hardware, Subsystems::Drivetrain& drivetrain,
                        Subsystems::PoseEstimator& poseEstimator, uint32_t now) {
-  hardware.tick(now);   // slice 1
+  // 087-004: mirrors dev_loop.cpp's own always-empty/all-false local
+  // motorIn[]/motorResetIn[] pair (see that file's comment at its matching
+  // call site) -- this harness's REF pipeline never stages a motorIn[]/
+  // motorResetIn[] post either, so an empty/all-false pair here keeps REF
+  // byte-identical to dev_loop.cpp's real devLoopTick().
+  Rt::Mailbox<msg::MotorCommand> noMotorInYet[Subsystems::Hardware::kPortCount];
+  bool noMotorResetInYet[Subsystems::Hardware::kPortCount] = {false, false, false, false};
+
+  hardware.tick(now, noMotorInYet, noMotorResetInYet);   // slice 1
 
   if (drivetrain.active()) {
     Subsystems::DrivetrainPorts governedPorts = drivetrain.ports();
@@ -186,7 +195,7 @@ void oneReferencePass(Subsystems::SimHardware& hardware, Subsystems::Drivetrain&
     }
   }
 
-  hardware.tick(now);   // slice 2 (same now -- SimHardware's own dt=0 guard, 081-003)
+  hardware.tick(now, noMotorInYet, noMotorResetInYet);   // slice 2 (same now -- SimHardware's own dt=0 guard, 081-003)
 
   Subsystems::DrivetrainPorts p = drivetrain.ports();
   msg::MotorState leftObs = hardware.motor(p.left).state();
@@ -198,7 +207,11 @@ void oneReferencePass(Subsystems::SimHardware& hardware, Subsystems::Drivetrain&
     odometer->tick(now);
     sampledPose = odometer->pose();
   }
-  poseEstimator.tick(now, leftObs, rightObs, odometer != nullptr ? &sampledPose : nullptr);
+  // 087-004: mirrors dev_loop.cpp's own always-empty local poseResetIn
+  // queue (see that file's comment at its matching call site).
+  Rt::WorkQueue<Rt::PoseResetCommand, 4> noPoseResetInYet;
+  poseEstimator.tick(now, leftObs, rightObs, odometer != nullptr ? &sampledPose : nullptr,
+                      noPoseResetInYet);
 }
 
 // runComparison -- drives instance "A" (the REAL devLoopTick(), via a fully

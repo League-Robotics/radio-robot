@@ -14,11 +14,16 @@
 // host-safe POD:
 //   - the eight state-cell msg::* types are auto-generated
 //     (scripts/gen_messages.py) into source/messages/*.h, zero CODAL deps;
-//   - Rt::PoseResetCommand / Rt::ConfigDelta are defined right here (an
-//     enum, a uint32_t, and one msg::SetPose member -- also generated);
+//   - Rt::PoseResetCommand / Rt::ConfigDelta are defined in the lightweight,
+//     CODAL-free source/runtime/commands.h (an enum, a uint32_t, and one
+//     msg::SetPose member -- also generated) -- NOT inline in this header,
+//     since ticket 087-004 moved them out so
+//     Subsystems::PoseEstimator::tick()'s poseResetIn parameter can name
+//     Rt::PoseResetCommand without pose_estimator.h including this file
+//     (the "subsystems never include blackboard.h" boundary rule);
 //   - Subsystems::Hardware::kPortCount is reachable via subsystems/
-//     hardware.h alone, which includes only <stdint.h> and the CODAL-free
-//     hal/capability/*.h interfaces;
+//     hardware.h alone, which includes only <stdint.h>, runtime/queue.h,
+//     messages/motor.h, and the CODAL-free hal/capability/*.h interfaces;
 //   - statementsIn's payload, Subsystems::
 //     CommunicatorToCommandProcessorStatement, lives in the CODAL-free
 //     source/subsystems/statement.h -- NOT subsystems/communicator.h, which
@@ -38,6 +43,7 @@
 #include "messages/motor.h"
 #include "messages/odometer.h"
 #include "messages/planner.h"
+#include "runtime/commands.h"
 #include "runtime/queue.h"
 #include "subsystems/hardware.h"
 #include "subsystems/statement.h"
@@ -45,21 +51,6 @@
 namespace Rt {
 
 constexpr uint32_t kPortCount = Subsystems::Hardware::kPortCount;  // 4
-
-// SI/ZERO fan-out consumed by PoseEstimator in its own tick (target-drained
-// reset -- Decision 7: entangled-with-integration resets stay owned by the
-// target rather than externally applied by the Configurator).
-struct PoseResetCommand {
-  enum Kind { kSetPose, kResetBaseline } kind;
-  msg::SetPose pose;  // valid when kind == kSetPose
-};
-
-// A target-tagged config delta headed for the Configurator's single queue.
-struct ConfigDelta {
-  enum Target { kDrivetrain, kMotor, kPlanner, kOdometer } target;
-  uint32_t port;  // motor index when target == kMotor
-  // ...changed fields + a field mask (ticket-level detail)...
-};
 
 // Owned by the loop. Holds NO subsystem pointers -- only the committed
 // snapshot x[k] (state plane) and the command queues (command plane).

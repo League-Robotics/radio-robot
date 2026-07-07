@@ -17,6 +17,7 @@
 
 #include <cstdio>
 
+#include "runtime/commands.h"
 #include "runtime/queue.h"
 
 namespace {
@@ -61,7 +62,21 @@ void devLoopTick(DevLoop& loop, uint32_t now, const DevLoopStatement* statement)
     Subsystems::Drivetrain& drivetrain = *loop.drivetrain;
     DevLoopState& devState = *loop.devState;
 
-    hardware.tick(now);   // slice 1: any due collect lands before this pass's dispatch reads state
+    // 087-004: Hardware::tick() gained a per-port Rt::Mailbox<msg::MotorCommand>
+    // motorIn[]/bool motorResetIn[] pair (source/runtime/queue.h; see
+    // hardware.h's tick() doc comment). dev_loop.cpp has no Blackboard-backed
+    // motorIn[]/motorResetIn[] to source real ones from yet (that wiring is
+    // ticket 007's job, which also deletes this whole file -- see
+    // dev_loop.h's file header) -- an always-empty/all-false local pair here
+    // is a mechanical compile fix only, mirroring ticket 087-003's own
+    // noDriveInYet precedent immediately below: both hardware.tick() slices
+    // this pass see an empty motorIn[]/all-false motorResetIn[], so tick()'s
+    // new consumption loop is a no-op and every existing behavior is
+    // unchanged.
+    Rt::Mailbox<msg::MotorCommand> noMotorInYet[Subsystems::Hardware::kPortCount];
+    bool noMotorResetInYet[Subsystems::Hardware::kPortCount] = {false, false, false, false};
+
+    hardware.tick(now, noMotorInYet, noMotorResetInYet);   // slice 1: any due collect lands before this pass's dispatch reads state
 
     if (statement != nullptr) {
         // Feed on any statement, regardless of content or dispatch outcome --
@@ -116,8 +131,9 @@ void devLoopTick(DevLoop& loop, uint32_t now, const DevLoopStatement* statement)
     // Slice 2: whatever request/write this pass's dispatch (or the
     // Drivetrain's own re-governed target) just staged goes out now -- the
     // sanctioned second hardware.tick() call (architecture-update.md (079)
-    // decision 6).
-    hardware.tick(now);
+    // decision 6). Same always-empty/all-false local pair as slice 1 above
+    // (087-004) -- see that call's own comment.
+    hardware.tick(now, noMotorInYet, noMotorResetInYet);
 
     // Pose estimation (082-003; dev_loop.h's own doc comment has the full
     // rationale): ports() is queried UNCONDITIONALLY -- unlike the
@@ -141,7 +157,19 @@ void devLoopTick(DevLoop& loop, uint32_t now, const DevLoopStatement* statement)
         odometer->tick(now);
         sampledPose = odometer->pose();
     }
-    loop.poseEstimator->tick(now, leftObs, rightObs, odometer != nullptr ? &sampledPose : nullptr);
+    // 087-004: PoseEstimator::tick() gained a
+    // Rt::WorkQueue<Rt::PoseResetCommand,4>& poseResetIn parameter (source/
+    // runtime/commands.h; see pose_estimator.h's tick() doc comment).
+    // dev_loop.cpp has no Blackboard-backed poseResetIn to source a real one
+    // from yet (that wiring is ticket 007's job, which also deletes this
+    // whole file) -- an always-empty local queue here is a mechanical
+    // compile fix only, mirroring the noMotorInYet/noDriveInYet precedents
+    // above: SI/ZERO still land via the existing direct
+    // setPose()/resetEncoderBaseline() calls in source/commands/
+    // pose_commands.cpp, unaffected by this ticket.
+    Rt::WorkQueue<Rt::PoseResetCommand, 4> noPoseResetInYet;
+    loop.poseEstimator->tick(now, leftObs, rightObs, odometer != nullptr ? &sampledPose : nullptr,
+                              noPoseResetInYet);
 
     // Motion executor (084-002; dev_loop.h's own doc comment has the full
     // rationale). Placed AFTER pose estimation (needs loop.poseEstimator->
