@@ -1,7 +1,7 @@
 ---
 id: 088
 title: 'Testing sprint: all commands functional + full test coverage + device announcement'
-status: planning-docs
+status: done
 branch: sprint/088-testing-sprint-all-commands-functional-full-test-coverage-device-announcement
 use-cases: []
 issues:
