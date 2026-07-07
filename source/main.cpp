@@ -137,7 +137,12 @@ int main() {
                   "boot_config motor count must match NezhaHardware::kPortCount");
     Config::defaultMotorConfigs(defaultMotorConfigs);
     static I2CBus i2cBus(uBit.i2c);
-    static Subsystems::NezhaHardware hardware(i2cBus, defaultMotorConfigs);
+    // 086-006: the real Hal::OtosOdometer leaf (I2C address 0x17) is
+    // constructed alongside the four NezhaMotors, wired with ticket 086-005's
+    // boot-config values (mounting offset + linear/angular scale
+    // multipliers) -- see Config::defaultOtosBootConfig (boot_config.h).
+    static Subsystems::NezhaHardware hardware(i2cBus, defaultMotorConfigs,
+                                               Config::defaultOtosBootConfig());
     hardware.begin();
 
     // --- Drivetrain: differential (Tovez), bench-placeholder trackwidth. ---
@@ -250,12 +255,14 @@ int main() {
     poseState.drivetrain = &drivetrain;
     poseState.poseEstimator = &poseEstimator;
 
-    // --- OTOS command state (084-008): OI/OZ/OR/OP/OV/OL/OA's own state --
+    // --- OTOS command state (084-008): OI/OZ/OR/OV/OP/OL/OA's own state --
     // an independent struct, NOT DevLoopState's/ConfigCommandState's/
     // PoseCommandState's (architecture-update.md (084) Decision 7's same
-    // reasoning). odometer() resolves nullptr on this build's
-    // Subsystems::NezhaHardware -- every one of the seven verbs replies
-    // ERR nodev (no real-hardware OTOS driver this program).
+    // reasoning). 086-006: hardware.odometer() now resolves the real
+    // Hal::OtosOdometer leaf constructed above (no longer nullptr) -- every
+    // one of the seven verbs reaches real OTOS hardware instead of always
+    // replying ERR nodev, unchanged otos_commands.cpp (that file already
+    // resolved hardware.odometer() live on every dispatch).
     static OtosCommandState otosState;
     otosState.hardware = &hardware;
 

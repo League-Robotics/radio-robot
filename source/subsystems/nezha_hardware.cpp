@@ -2,12 +2,14 @@
 
 namespace Subsystems {
 
-NezhaHardware::NezhaHardware(I2CBus& bus, const msg::MotorConfig configs[kPortCount])
+NezhaHardware::NezhaHardware(I2CBus& bus, const msg::MotorConfig configs[kPortCount],
+                              const Config::OtosBootConfig& otosConfig)
     : bus_(bus),
       motor1_(bus, configs[0]),
       motor2_(bus, configs[1]),
       motor3_(bus, configs[2]),
-      motor4_(bus, configs[3])
+      motor4_(bus, configs[3]),
+      otosOdometer_(bus, otosConfig)
 {
 }
 
@@ -17,6 +19,7 @@ void NezhaHardware::begin()
     motor2_.begin();
     motor3_.begin();
     motor4_.begin();
+    otosOdometer_.begin();
 }
 
 // The brick flip-flop sequencer — implemented exactly per architecture-
@@ -66,6 +69,11 @@ void NezhaHardware::apply(const Hal::DrivetrainToHardwareCommand& cmd)
         portInUse_[cmd.wheel[i].port - 1] = true;
         motorAt(cmd.wheel[i].port).apply(cmd.wheel[i].command);
     }
+}
+
+Hal::Odometer* NezhaHardware::odometer()
+{
+    return &otosOdometer_;
 }
 
 Hal::NezhaMotor& NezhaHardware::motorAt(uint32_t port)

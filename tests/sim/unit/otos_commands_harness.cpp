@@ -1,24 +1,35 @@
-// otos_commands_harness.cpp — off-hardware acceptance harness for ticket
-// 084-008: proves all seven OTOS verbs (OI/OZ/OR/OP/OV/OL/OA) reply
-// "ERR nodev <verb>" against the REAL Subsystems::NezhaHardware (whose
-// odometer() is still nullptr — no real-hardware OTOS driver this program,
-// clasi/issues/nezha-hardware-otos-driver-for-new-source-tree.md), driven
-// through the FULL otosCommands()/CommandProcessor dispatch path (not just
-// a bare `odometer() == nullptr` check) — mirrors hardware_seam_harness.cpp's
-// own "prove it through the real seam, not a mock" discipline. Every one of
-// the seven verbs gets its own scenario, per this ticket's own acceptance
-// criteria ("verified by an explicit test for every one of the seven, not
-// just a subset").
+// otos_commands_harness.cpp — off-hardware acceptance harness, originally
+// for ticket 084-008 (proving all seven OTOS verbs replied "ERR nodev
+// <verb>" against Subsystems::NezhaHardware, whose odometer() was nullptr —
+// no real-hardware OTOS driver existed then). Ticket 086-006 gave
+// NezhaHardware a real Hal::OtosOdometer member and an odometer() override
+// that always returns its address — hardware.odometer() is NEVER nullptr
+// for NezhaHardware any more, so otosReady()'s nodev guard (otos_commands.cpp,
+// UNCHANGED by 086-006 — it already resolved hardware.odometer() live) can
+// no longer fire against this owner. This harness now proves the opposite,
+// current invariant: all seven verbs reach the real dispatch path and reply
+// OK — driven through the FULL otosCommands()/CommandProcessor path (not
+// just a bare `odometer() != nullptr` check), mirroring
+// hardware_seam_harness.cpp's own "prove it through the real seam, not a
+// mock" discipline.
+//
+// No I2C bus scripting is used: hardware.begin() is deliberately never
+// called, so the real OtosOdometer's own product-ID probe never ran and it
+// stays uninitialized (Hal::OtosOdometer::initialized_ == false) — its five
+// primitive setters are then no-ops (see otos_odometer.h's own doc comment),
+// and pose() returns the zero default. This is intentional: the point of
+// this harness is the WIRE-DISPATCH-LEVEL guard (does otosReady() see a
+// non-null Odometer*), not real hardware I/O — that is otos_odometer_harness.cpp's
+// job (086-006's own new host harness, a scripted-I2CBus proof of the leaf's
+// register sequencing).
 //
 // Same HOST_BUILD scripted I2CBus fake + real source/hal/nezha/nezha_motor.cpp
-// + source/subsystems/nezha_hardware.cpp as hardware_seam_harness.cpp/
-// test_hardware_seam.py (see that file's own doc comment for the recipe this
-// mirrors), plus this ticket's own source/commands/otos_commands.cpp,
-// source/commands/command_processor.cpp, and source/commands/arg_parse.cpp
-// (needed for the full CommandProcessor dispatch table, not just the
-// Subsystems::Hardware seam). No I2C bus scripting is required: none of the
-// seven verbs ever reach the motor/I2C layer when odometer() is null (the
-// nodev guard fires before any hardware access is attempted).
+// + source/subsystems/nezha_hardware.cpp + source/hal/otos/otos_odometer.cpp
+// as hardware_seam_harness.cpp/test_hardware_seam.py (see that file's own doc
+// comment for the recipe this mirrors), plus this ticket's own source/commands/
+// otos_commands.cpp, source/commands/command_processor.cpp, and
+// source/commands/arg_parse.cpp (needed for the full CommandProcessor
+// dispatch table, not just the Subsystems::Hardware seam).
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -77,14 +88,12 @@ void storeReply(const char* msg, void* ctx) {
   std::snprintf(c->buf, sizeof(c->buf), "%s", msg);
 }
 
-// checkNodev — dispatches `line` through the real CommandProcessor and
-// asserts the reply is exactly "ERR nodev <verb>".
-void checkNodev(CommandProcessor& cmd, const char* line, const char* verb) {
-  beginScenario(std::string("nodev: ") + line);
+// checkReply — dispatches `line` through the real CommandProcessor and
+// asserts the reply is exactly `expected`.
+void checkReply(CommandProcessor& cmd, const char* line, const char* expected) {
+  beginScenario(std::string("dispatch: ") + line);
   CaptureReply reply;
   cmd.process(line, storeReply, &reply);
-  char expected[32];
-  std::snprintf(expected, sizeof(expected), "ERR nodev %s", verb);
   checkEq(reply.buf, expected, std::string("reply for '") + line + "'");
 }
 
@@ -95,26 +104,27 @@ int main() {
   I2CBus::setClock(1000000);
   I2CBus bus;
   Subsystems::NezhaHardware hardware(bus, g_defaultConfigs);
+  // hardware.begin() is deliberately never called -- see file header.
 
   OtosCommandState state;
-  state.hardware = &hardware;   // odometer() inherits Subsystems::Hardware's
-                                 // defaulted-nullptr override — never set here.
+  state.hardware = &hardware;   // odometer() now (086-006) always returns
+                                 // the real, if uninitialized, OtosOdometer.
 
   CommandProcessor cmd(otosCommands(state));
 
-  checkNodev(cmd, "OI", "oi");
-  checkNodev(cmd, "OZ", "oz");
-  checkNodev(cmd, "OR", "or");
-  checkNodev(cmd, "OP", "op");
-  checkNodev(cmd, "OV 0 0 0", "ov");
-  checkNodev(cmd, "OL", "ol");
-  checkNodev(cmd, "OA", "oa");
+  checkReply(cmd, "OI", "OK oi");
+  checkReply(cmd, "OZ", "OK oz");
+  checkReply(cmd, "OR", "OK or");
+  checkReply(cmd, "OP", "OK pos x=0 y=0 h=0");
+  checkReply(cmd, "OV 0 0 0", "OK setpos x=0 y=0 h=0");
+  checkReply(cmd, "OL", "OK linear scalar=0");
+  checkReply(cmd, "OA", "OK angular scalar=0");
 
   if (g_failureCount == 0) {
     std::printf(
-        "OK: all seven OTOS verbs reply ERR nodev against Subsystems::NezhaHardware\n");
+        "OK: all seven OTOS verbs reply OK against the real (086-006) Subsystems::NezhaHardware\n");
     return 0;
   }
-  std::printf("FAILED: %d assertion(s) across the OTOS nodev scenarios\n", g_failureCount);
+  std::printf("FAILED: %d assertion(s) across the OTOS dispatch scenarios\n", g_failureCount);
   return 1;
 }

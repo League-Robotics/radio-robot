@@ -43,6 +43,10 @@ _NEZHA_MOTOR_SRC = _SOURCE_DIR / "hal" / "nezha" / "nezha_motor.cpp"
 # member — that translation unit must link in alongside it.
 _VELOCITY_PID_SRC = _SOURCE_DIR / "hal" / "velocity_pid.cpp"
 _NEZHA_HARDWARE_SRC = _SOURCE_DIR / "subsystems" / "nezha_hardware.cpp"
+# 086-006: nezha_hardware.cpp now owns a Hal::OtosOdometer member (the real
+# OTOS leaf) alongside its four NezhaMotors -- that translation unit must
+# link in alongside it too.
+_OTOS_ODOMETER_SRC = _SOURCE_DIR / "hal" / "otos" / "otos_odometer.cpp"
 _DRIVETRAIN_SRC = _SOURCE_DIR / "subsystems" / "drivetrain.cpp"
 _BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
 _DEV_COMMANDS_SRC = _SOURCE_DIR / "commands" / "dev_commands.cpp"
@@ -55,6 +59,7 @@ _SOURCES = [
     _NEZHA_MOTOR_SRC,
     _VELOCITY_PID_SRC,
     _NEZHA_HARDWARE_SRC,
+    _OTOS_ODOMETER_SRC,
     _DRIVETRAIN_SRC,
     _BODY_KINEMATICS_SRC,
     _DEV_COMMANDS_SRC,
