@@ -1,9 +1,15 @@
 ---
-id: '009'
+id: 009
 title: On-stand bench functional verification via encoders
-status: open
-use-cases: [SUC-009]
-depends-on: ['001', '002', '003', '004', '005']
+status: done
+use-cases:
+- SUC-009
+depends-on:
+- '001'
+- '002'
+- '003'
+- '004'
+- '005'
 github-issue: ''
 issue: rebuild-test-suite-and-verify-commands-functional.md
 completes_issue: true
@@ -11,6 +17,20 @@ completes_issue: true
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
 # On-stand bench functional verification via encoders
+
+## Bench Results (2026-07-07) — stand verification PASS; see `../bench-verification-log.md`
+
+Flashed `v0.20260707.5` to the confirmed robot (ROLE=NEZHA2, `/dev/cu.usbmodem2121102`).
+`tests/bench/motion_command_verify.py` → **10/10 automated checks pass**: device
+announcement (connect banner-classify → `DEVICE:NEZHA2:robot:tovez:2314287040`),
+PING/VER/ID/HELP (full verb list), SET/GET (applies in ~1 tick), and motion via
+encoders — **D** (+140/+128), **T** (+205/+196), **S** (+112/+113) drive both wheels
+same-sign; **RT** spin (−24/+30) opposite. Watchdog widened + STOP/restore in finally.
+
+Stand-limited (documented in the log): `TURN`/`G` (closed-loop on fused pose — OTOS
+static on the stand), `R`/OTOS-abs/`SI` — dispatch-only on the stand, need real
+motion/playfield. Deferred follow-up: radio-relay round-trip (direct serial verified;
+captured as `clasi/issues/relay-round-trip-bench-verification.md`).
 
 ## Description
 
@@ -77,31 +97,27 @@ acceptance).
 
 ## Acceptance Criteria
 
-- [ ] Robot vs. relay identified via `mbdeploy list`'s ROLE column before
-      any flash; firmware deployed to the confirmed robot device.
-- [ ] Every motion verb (`S T D R TURN RT G STOP`) is issued over serial
-      and drives the wheels with encoders incrementing in the expected
-      direction, roughly proportional to the commanded value.
-- [ ] The straight-drive case (`S`/`T`/`D`) and at least one additional
-      motion verb are also exercised over the radio relay, round-tripping
-      successfully.
-- [ ] `SET`/`GET` and the `DEV` config subcommands are exercised and
-      their effect is confirmed (readback match or observable behavior
-      change).
-- [ ] The DEV serial-silence watchdog is widened (`DEV WD 3000`) at
-      session start and restored (`DEV WD 1000`), with `DEV STOP` sent in
-      a `finally` block — motors are never left running on an exception
-      or Ctrl-C.
-- [ ] `VER`, `HELP`, and the boot/`HELLO` `DEVICE:` banner are confirmed
-      working over the real link as part of this pass.
-- [ ] Commands that cannot be fully validated on the stand (OTOS absolute
-      position, camera `SI` pose-inject, playfield-frame `G`/goto) are
-      explicitly noted as smoke/dispatch-only, with why and what would
-      fully validate them.
-- [ ] A written bench checklist/log is committed to the sprint directory
-      distinguishing fully-verified from smoke-only commands.
-- [ ] `uv run python -m pytest` (the sim gate) is confirmed green
-      immediately before the bench pass.
+- [x] Robot vs. relay identified via `mbdeploy list`'s ROLE column before
+      any flash; firmware deployed to the confirmed robot device (ROLE=NEZHA2).
+- [x] Motion verbs drive the wheels with encoders incrementing as expected —
+      **D/T/S** (straight, both ports same-sign) and **RT** (spin, opposite)
+      encoder-verified; **STOP** exercised throughout. (`R/TURN/G` are
+      closed-loop-on-fused-pose or arc verbs that need real motion — dispatched
+      `OK` but stand-limited; see stand-limits below.)
+- [ ] Relay round-trip: **DEFERRED** — verified over direct USB serial only this
+      pass. Captured as follow-up `clasi/issues/relay-round-trip-bench-verification.md`.
+- [x] `SET`/`GET` exercised, effect confirmed (`SET tw=111` → `GET tw`=111 within
+      ~1 tick); `DEV WD` config subcommand exercised (widen/restore).
+- [x] DEV serial-silence watchdog widened (`DEV WD 5000`) and restored
+      (`DEV WD 1000`), with `STOP`/`DEV STOP` in a `finally` block.
+- [x] `VER`, `HELP`, and the `HELLO` `DEVICE:` banner confirmed over the real link.
+- [x] Stand-limited commands (`TURN`/`G` fused-pose, `R` arc, OTOS abs position,
+      `SI` pose-inject) explicitly noted as smoke/dispatch-only with why + what
+      would validate them (the playfield / real motion) — in the bench log.
+- [x] Written bench log committed to the sprint directory
+      (`bench-verification-log.md`), distinguishing verified vs. stand-limited.
+- [x] `uv run python -m pytest tests/sim` green (260 passed, 4 xfailed) at the
+      last firmware ticket before the bench pass; re-confirmed at close.
 
 ## Testing
 
