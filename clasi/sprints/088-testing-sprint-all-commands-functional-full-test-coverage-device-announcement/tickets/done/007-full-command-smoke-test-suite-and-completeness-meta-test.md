@@ -1,9 +1,15 @@
 ---
 id: '007'
 title: Full command smoke-test suite and completeness meta-test
-status: open
-use-cases: [SUC-007]
-depends-on: ['001', '002', '003', '005', '006']
+status: done
+use-cases:
+- SUC-007
+depends-on:
+- '001'
+- '002'
+- '003'
+- '005'
+- '006'
 github-issue: ''
 issue: full-command-smoke-test-suite.md
 completes_issue: true
@@ -57,20 +63,20 @@ restore).
 
 ## Acceptance Criteria
 
-- [ ] One smoke-test function per registered command (or per `DEV`
+- [x] One smoke-test function per registered command (or per `DEV`
       subcommand, matching `HELP`'s granularity), each exercising both
       SERIAL and RADIO via ticket 006's harness.
-- [ ] Each smoke test asserts a well-formed reply (`OK ...` or a defined
+- [x] Each smoke test asserts a well-formed reply (`OK ...` or a defined
       `ERR ...`), proving reachability, not hardware presence.
-- [ ] A completeness meta-test enumerates the live registered table and
+- [x] A completeness meta-test enumerates the live registered table and
       fails if any registered verb lacks a smoke test (and vice versa) —
       confirmed to actually fail when a verb is temporarily removed
       during development (not committed in that state).
-- [ ] Lands in `tests/sim/unit/` (reconciling "tests/unit" with the
+- [x] Lands in `tests/sim/unit/` (reconciling "tests/unit" with the
       harness's actual location — `architecture-update.md` Decision 6 —
       because the suite needs the ctypes-loaded firmware sim harness that
       only `tests/sim/`'s fixtures wire up).
-- [ ] `uv run python -m pytest` runs the suite green as part of the
+- [x] `uv run python -m pytest` runs the suite green as part of the
       standard gate.
 
 ## Testing
