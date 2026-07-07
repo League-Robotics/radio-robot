@@ -1,11 +1,13 @@
-// tlm_frame.cpp -- Telemetry::buildTlmFrame(). See tlm_frame.h for the full
-// design rationale and the wire-key exclusion note.
+// tlm_frame.cpp -- Telemetry::tick()/buildTlmFrame(). See tlm_frame.h for
+// the full design rationale and the wire-key exclusion note.
 #include "telemetry/tlm_frame.h"
 
 #include <cstdarg>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+
+#include "kinematics/body_kinematics.h"
 
 namespace Telemetry {
 
@@ -15,6 +17,24 @@ namespace {
 // centidegrees. Same constant source_old/robot/RobotTelemetry.cpp's
 // buildTlmFrame() used for pose=/encpose=/otos=.
 constexpr float kAngleScale = 5729.5779513f;   // [cdeg/rad]
+
+// modeChar -- 084-005: maps msg::DriveMode to TLM's single-character `mode=`
+// wire value, per docs/protocol-v2.md §8's I/S/T/D/G vocabulary and
+// architecture-update.md (084) Decision 6. Moved here from
+// commands/telemetry_commands.cpp by 087-008, alongside the rest of
+// Telemetry::tick()'s field-sourcing logic.
+char modeChar(msg::DriveMode mode) {
+  switch (mode) {
+    case msg::DriveMode::IDLE: return 'I';
+    case msg::DriveMode::STREAMING: return 'S';
+    case msg::DriveMode::TIMED: return 'T';
+    case msg::DriveMode::DISTANCE: return 'D';
+    case msg::DriveMode::GO_TO: return 'G';
+    case msg::DriveMode::VELOCITY:
+    default:
+      return 'I';
+  }
+}
 
 // appendField -- format one field into buf+pos (size rem), advancing
 // pos/rem only on a fully-committed (non-truncated) write. Once `truncated`
@@ -45,6 +65,64 @@ void appendField(char* buf, int& pos, int& rem, bool& truncated, const char* fmt
 }
 
 }  // namespace
+
+TlmFrameInput tick(uint32_t now, const Rt::Blackboard& bb) {
+  // enc=/vel= read bb.motor[]'s primitive fields DIRECTLY for the
+  // Drivetrain's bound pair -- never bb.drivetrain's vel_[] (commanded
+  // targets, a different semantic).
+  uint32_t leftPort = bb.drivetrainConfig.left_port;
+  uint32_t rightPort = bb.drivetrainConfig.right_port;
+  const msg::MotorState& left = bb.motor[leftPort - 1];
+  const msg::MotorState& right = bb.motor[rightPort - 1];
+
+  float velLeft = left.velocity.has ? left.velocity.val : 0.0f;
+  float velRight = right.velocity.has ? right.velocity.val : 0.0f;
+
+  TlmFrameInput in;
+  in.now = now;
+  // mode= -- 084-005: bb.planner.mode is the SOLE source (architecture-
+  // update.md (084) Decision 6).
+  in.mode = modeChar(bb.planner.mode);
+  // seq= -- READ ONLY. The shared STREAM/SNAP counter (bb.telemetrySeq) is
+  // advanced by the caller, not here -- see this function's own doc
+  // comment in tlm_frame.h.
+  in.seq = bb.telemetrySeq;
+
+  in.hasEnc = true;
+  in.encLeft = left.position.has ? left.position.val : 0.0f;
+  in.encRight = right.position.has ? right.position.val : 0.0f;
+
+  in.hasVel = true;
+  in.velLeft = velLeft;
+  in.velRight = velRight;
+
+  // pose=/encpose= read bb's two independent pose readings -- never
+  // bb.drivetrain either.
+  in.hasPose = true;
+  in.pose = bb.fusedPose.pose;
+
+  in.hasEncPose = true;
+  in.encPose = bb.encoderPose.pose;
+
+  // otos= -- the raw sampled odometer pose, OMITTED (not zero-filled) when
+  // no odometer device exists at all (bb.otosPresent, a boot-time snapshot).
+  if (bb.otosPresent) {
+    in.hasOtos = true;
+    in.otos = bb.otos.pose;
+  }
+
+  // twist= -- a pure kinematic transform (BodyKinematics::forward()) of the
+  // SAME directly-read wheel velocities vel= uses, plus the SAME trackwidth
+  // PoseEstimator::configure() was given (bb.drivetrainConfig.trackwidth).
+  // Directly-measured/derived, never bb.drivetrain, never EKF
+  // velocity-channel state.
+  in.hasTwist = true;
+  BodyKinematics::forward(velLeft, velRight, bb.drivetrainConfig.trackwidth,
+                           in.twist.v_x, in.twist.omega);
+  in.twist.v_y = 0.0f;   // differential-only this sprint -- see drivetrain.h
+
+  return in;
+}
 
 int buildTlmFrame(char* buf, int len, const TlmFrameInput& in) {
   if (buf == nullptr || len <= 0) return 0;

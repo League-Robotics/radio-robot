@@ -3,27 +3,41 @@
 #include <stdint.h>
 
 #include "messages/common.h"
+#include "runtime/blackboard.h"
 
 // ---------------------------------------------------------------------------
-// tlm_frame.h -- Telemetry::buildTlmFrame(): a pure, stateless TLM
-// frame-formatting function (sprint 082, ticket 004). Ported in CONCEPT
-// (field set, per-field omission, integer scaling) from
+// tlm_frame.h -- Telemetry's own TLM-frame internals (sprint 082 ticket 004;
+// re-pointed at the committed blackboard by sprint 087 ticket 008):
+//
+//   Telemetry::tick()        -- reads every field the frame emits directly
+//                                from the committed Rt::Blackboard snapshot
+//                                bb (x[k+1]) and returns a populated
+//                                TlmFrameInput. Holds no Subsystems::*
+//                                reference (Rt::Blackboard itself holds
+//                                none -- SUC-006).
+//   Telemetry::buildTlmFrame() -- a pure, stateless formatter: TlmFrameInput
+//                                -> one wire line. Unchanged since 082-004.
+//
+// Ported in CONCEPT (field set, per-field omission, integer scaling) from
 // source_old/robot/RobotTelemetry.cpp's Robot::buildTlmFrame(), trimmed to
 // this dev-bench tree's minimal fixed field set (architecture-update.md (082)
 // Decision 5 -- no `STREAM fields=<csv>` subscription bitmask, so there is no
 // per-field gating bit to read here; every field's presence is instead an
-// explicit `has*` flag on TlmFrameInput, set by the CALLER
-// (commands/telemetry_commands.cpp), never by this file).
+// explicit `has*` flag on TlmFrameInput).
 //
-// No I/O, no state: buildTlmFrame() reads only its `in` argument and writes
-// only into the caller-supplied buffer -- the SAME TlmFrameInput always
-// produces the SAME wire line. This is what makes it independently
-// unit-testable (tests/sim/unit/tlm_frame_harness.cpp) with no DevLoop /
-// Hardware / Drivetrain / PoseEstimator dependency at all -- plain scalar
-// and msg:: struct inputs only.
+// Both functions are pure: tick() reads only `bb` (never mutates it -- in
+// particular it does NOT advance bb.telemetrySeq; that shared STREAM/SNAP
+// counter is the CALLER's bookkeeping -- see commands/telemetry_commands.cpp's
+// telemetryEmit()) and buildTlmFrame() reads only its `in` argument and
+// writes only into the caller-supplied buffer. The SAME inputs always
+// produce the SAME outputs. This is what makes both independently
+// unit-testable (tests/sim/unit/tlm_frame_harness.cpp) -- buildTlmFrame()
+// with plain scalar/msg:: struct inputs, tick() with a bare, non-live
+// Rt::Blackboard -- with no DevLoop/Hardware/Drivetrain/PoseEstimator/
+// Planner/CommandRouter dependency at all (087-008, SUC-002).
 //
 // Wire contract (docs/protocol-v2.md §8; see that section's "minimal
-// subset" note added by this ticket): the field tokens (`t=`, `mode=`,
+// subset" note added by 082-004): the field tokens (`t=`, `mode=`,
 // `seq=`, `enc=`, `vel=`, `pose=`, `encpose=`, `otos=`, `twist=`) are wire
 // keys, excluded from the no-units-in-identifiers convention
 // (.claude/rules/coding-standards.md, "Wire/serialized identifiers are
@@ -76,6 +90,32 @@ struct TlmFrameInput {
   bool hasTwist = false;
   msg::BodyTwist3 twist = {};   // v_x [mm/s]; omega [rad/s] -- converted to mrad/s at format time
 };
+
+// tick -- Telemetry's own frame-assembly step (087-008): reads every field
+// the TLM frame emits directly from the committed Rt::Blackboard snapshot
+// `bb` (x[k+1]) and returns the populated TlmFrameInput, ready for
+// buildTlmFrame(). Field sourcing (mirrors the pre-087-008 Decision 7 rules,
+// now enforced here instead of in commands/telemetry_commands.cpp):
+//   enc=/vel=  -- bb.motor[]'s position/velocity DIRECTLY for the
+//                 Drivetrain's bound pair (bb.drivetrainConfig.left_port/
+//                 right_port). NEVER bb.drivetrain's vel_[] (commanded
+//                 targets, a different semantic).
+//   pose=/encpose= -- bb.fusedPose/bb.encoderPose.
+//   otos=      -- bb.otos, OMITTED (not zero-filled) when bb.otosPresent is
+//                 false.
+//   twist=     -- BodyKinematics::forward() applied to the SAME directly-read
+//                 wheel velocities vel= uses, plus bb.drivetrainConfig's
+//                 trackwidth (the SAME value PoseEstimator::configure() was
+//                 given -- both share msg::DrivetrainConfig) -- a pure
+//                 kinematic transform, never bb.drivetrain, never EKF
+//                 velocity-channel state.
+//   mode=      -- bb.planner.mode (msg::DriveMode), mapped to a single wire
+//                 character -- I/S/T/D/G, per docs/protocol-v2.md §8.
+//   seq=       -- bb.telemetrySeq, READ only -- tick() never increments it;
+//                 the caller (telemetryEmit()) advances the shared
+//                 STREAM/SNAP counter itself, immediately after capturing
+//                 this call's return value.
+TlmFrameInput tick(uint32_t now, const Rt::Blackboard& bb);
 
 // buildTlmFrame -- format `in` into one NUL-terminated "TLM ..." wire line in
 // buf[0..len-1]. Writes at most len-1 characters plus the terminating NUL

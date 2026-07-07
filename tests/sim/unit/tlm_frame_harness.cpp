@@ -1,14 +1,22 @@
 // tlm_frame_harness.cpp — off-hardware acceptance harness for ticket 082-004
-// (SUC-004): exercises Telemetry::buildTlmFrame() (source/telemetry/
-// tlm_frame.{h,cpp}) -- the pure, stateless TLM frame-formatting function --
-// in isolation, with no DevLoop/Hardware/Drivetrain/PoseEstimator wiring
-// (that wiring is commands/telemetry_commands.cpp's job, exercised
-// end-to-end via the ctypes sim harness in ticket 005).
+// (SUC-004), extended by ticket 087-008 (SUC-001/SUC-002/SUC-006): exercises
+// Telemetry::buildTlmFrame() (source/telemetry/tlm_frame.{h,cpp}) -- the
+// pure, stateless TLM frame-formatting function -- in isolation, with no
+// DevLoop/Hardware/Drivetrain/PoseEstimator wiring (that wiring is
+// commands/telemetry_commands.cpp's job, exercised end-to-end via the
+// ctypes sim harness in ticket 005); and, since 087-008, Telemetry::tick()
+// (bb -> TlmFrameInput), Telemetry's OWN frame-assembly step, against a
+// bare, non-live Rt::Blackboard -- no CommandRouter/Communicator/Hardware/
+// Drivetrain/PoseEstimator/Planner object of any kind, proving Telemetry's
+// isolated testability (SUC-002) directly.
 //
 // Per ekf_tiny_harness.cpp / velocity_pid_harness.cpp's precedent (082-001 /
-// 081-001), this #includes only telemetry/tlm_frame.h plus its own
-// translation unit (tlm_frame.cpp), so it compiles with the plain system
-// C++ compiler -- no CMake, no ARM toolchain.
+// 081-001), this #includes only telemetry/tlm_frame.h (which itself pulls in
+// runtime/blackboard.h -- host-safe, see that header's own file comment)
+// plus its own translation unit (tlm_frame.cpp) and
+// kinematics/body_kinematics.cpp (Telemetry::tick()'s one pure-math
+// dependency, for twist=), so it compiles with the plain system C++
+// compiler -- no CMake, no ARM toolchain.
 //
 // Required scenarios (ticket 082-004's Testing plan):
 //   (a) all fields present -- exact wire-line match, proving field order,
@@ -27,15 +35,23 @@
 //       safely (no overrun) -- buildTlmFrame() takes a caller-supplied
 //       length like every other frame-builder in this codebase.
 //
+// Added by ticket 087-008's Testing plan:
+//   (f) Telemetry::tick() reads every field directly off a bare,
+//       hand-populated Rt::Blackboard (no live subsystem behind any cell)
+//       and the resulting frame matches hand-computed expected values --
+//       the isolated-testability proof for Telemetry's own frame assembly.
+//
 // Plain C++ program, hand-rolled assertions (mirrors the existing
 // harnesses' shape) -- prints a PASS/FAIL line per scenario and exits
 // nonzero if any assertion failed.
 //
-// Verification command (see ticket 082-004's Testing plan):
+// Verification command (see ticket 082-004's Testing plan, extended by
+// 087-008 for Telemetry::tick()'s body_kinematics.cpp dependency):
 //   c++ -std=c++11 -Wall -Wextra \
 //       -I source \
 //       -o /tmp/tlm_frame_harness \
-//       tests/sim/unit/tlm_frame_harness.cpp source/telemetry/tlm_frame.cpp
+//       tests/sim/unit/tlm_frame_harness.cpp source/telemetry/tlm_frame.cpp \
+//       source/kinematics/body_kinematics.cpp
 //   /tmp/tlm_frame_harness
 
 #include <cstdio>
@@ -303,6 +319,76 @@ void scenarioDeterministic() {
   checkEq(std::string(bufA), std::string(bufB), "two calls with an identical input match exactly");
 }
 
+// (f) 087-008: Telemetry::tick() assembles a TlmFrameInput directly from a
+// bare, hand-populated Rt::Blackboard -- no live subsystem (Hardware,
+// Drivetrain, PoseEstimator, Planner, CommandRouter) behind any cell.
+// Proves Telemetry's OWN frame-assembly internals read exclusively from bb
+// (SUC-006) and are independently unit-testable with no wiring at all
+// (SUC-002) -- the isolated-testability bar every other subsystem
+// (Blackboard itself, runtime_blackboard_harness.cpp; Drivetrain,
+// drivetrain_harness.cpp; etc.) already meets.
+void scenarioTickAssemblesFromBareBlackboard() {
+  beginScenario("Telemetry::tick() assembles a frame from a bare Rt::Blackboard");
+
+  Rt::Blackboard bb;   // default-constructed -- no subsystem behind any cell
+
+  // Drivetrain's bound pair: left=port 1 (bb.motor[0]), right=port 2
+  // (bb.motor[1]) -- enc=/vel= must read THESE two cells directly.
+  bb.drivetrainConfig.left_port = 1;
+  bb.drivetrainConfig.right_port = 2;
+  bb.drivetrainConfig.trackwidth = 100.0f;   // [mm]
+
+  bb.motor[0].position.has = true;
+  bb.motor[0].position.val = 500.0f;
+  bb.motor[0].velocity.has = true;
+  bb.motor[0].velocity.val = 180.0f;
+
+  bb.motor[1].position.has = true;
+  bb.motor[1].position.val = 495.0f;
+  bb.motor[1].velocity.has = true;
+  bb.motor[1].velocity.val = 220.0f;
+
+  // Three independent, distinct headings (reusing baselineInput()'s own
+  // 0.3/0.31/0.32 margin-tested values, so their centidegree truncations
+  // -- 1718/1776/1833 -- are already known-good) with distinct x/y so a
+  // field swap between pose=/encpose=/otos= would still be caught.
+  bb.fusedPose.pose.x = 400.0f;
+  bb.fusedPose.pose.y = -20.0f;
+  bb.fusedPose.pose.h = 0.3f;
+
+  bb.encoderPose.pose.x = 398.0f;
+  bb.encoderPose.pose.y = -19.0f;
+  bb.encoderPose.pose.h = 0.31f;
+
+  bb.otosPresent = true;
+  bb.otos.pose.x = 402.0f;
+  bb.otos.pose.y = -21.0f;
+  bb.otos.pose.h = 0.32f;
+
+  bb.planner.mode = msg::DriveMode::DISTANCE;   // -> mode=D
+  bb.telemetrySeq = 42;
+
+  Telemetry::TlmFrameInput in = Telemetry::tick(99999, bb);
+
+  // bb is untouched by tick() -- confirms the "read only" half of the
+  // contract before checking the assembled frame itself.
+  checkTrue(bb.telemetrySeq == 42, "tick() does not mutate bb.telemetrySeq");
+
+  char buf[300];
+  Telemetry::buildTlmFrame(buf, sizeof(buf), in);
+
+  // enc=/vel= straight off bb.motor[0]/[1] (the bound pair); twist= is a
+  // REAL BodyKinematics::forward() computation over those same velocities
+  // and bb.drivetrainConfig.trackwidth: v=(180+220)/2=200 exactly (both
+  // operands and their sum are exactly representable in float32), and
+  // omega=(220-180)/100=0.4 rad/s -> 400 mrad/s (0.4's float32 rounding
+  // error is ~6e-6, nowhere near the next integer boundary at 401).
+  const std::string expected =
+      "TLM t=99999 mode=D seq=42 enc=500,495 vel=180,220 pose=400,-20,1718"
+      " encpose=398,-19,1776 otos=402,-21,1833 twist=200,400";
+  checkEq(std::string(buf), expected, "frame assembled entirely from bare Rt::Blackboard cells");
+}
+
 }  // namespace
 
 int main() {
@@ -316,6 +402,7 @@ int main() {
   scenarioTwistOmittedIndependently();
   scenarioSmallBufferTruncatesSafely();
   scenarioDeterministic();
+  scenarioTickAssemblesFromBareBlackboard();
 
   if (g_failureCount == 0) {
     std::printf("OK: all tlm_frame scenarios passed\n");

@@ -2,12 +2,14 @@
 
 // ---------------------------------------------------------------------------
 // telemetry_commands.h -- the STREAM/SNAP command family (082-004, rewritten
-// pointerless 087-006): periodic TLM emission plus a synchronous one-shot
-// snapshot, both built on telemetry/tlm_frame.h's pure
-// Telemetry::buildTlmFrame(). This file is the IMPURE glue: it samples
-// Rt::Blackboard's committed state cells, shapes a Telemetry::TlmFrameInput
-// from that, and calls buildTlmFrame() -- never a Hardware/Drivetrain/
-// PoseEstimator/Planner pointer (SUC-006).
+// pointerless 087-006; frame-assembly moved out to Telemetry::tick() by
+// 087-008): periodic TLM emission plus a synchronous one-shot snapshot, both
+// built on telemetry/tlm_frame.h's Telemetry::tick() (bb -> TlmFrameInput)
+// and Telemetry::buildTlmFrame() (TlmFrameInput -> wire line). This file is
+// the IMPURE glue: it resolves the reply channel, calls Telemetry::tick()
+// to sample Rt::Blackboard's committed state cells, advances the shared
+// seq= counter, formats via buildTlmFrame(), and replies -- never a
+// Hardware/Drivetrain/PoseEstimator/Planner pointer (SUC-006).
 //
 //   STREAM <ms>   -- sets the periodic-emission period, clamped to a 20ms
 //                    floor (STREAM 10 -> OK stream period=20). STREAM 0
@@ -28,25 +30,10 @@
 // recipient." These are named, explicit deferrals -- do not reintroduce
 // without a fresh, acceptance-bar-driven reason.
 //
-// Field sourcing (Decision 7, enforced by construction -- see
-// telemetry_commands.cpp's telemetryEmit()), now read from bb:
-//   enc=/vel=  -- bb.motor[port-1]'s position/velocity DIRECTLY for the
-//                 Drivetrain's bound pair (bb.drivetrainConfig.left_port/
-//                 right_port). NEVER bb.drivetrain's vel_[] (commanded
-//                 targets, a different semantic).
-//   pose=/encpose= -- bb.fusedPose/bb.encoderPose.
-//   otos=      -- bb.otos, OMITTED (not zero-filled) when bb.otosPresent is
-//                 false (a boot-time snapshot of whether any Hal::Odometer
-//                 exists at all -- see blackboard.h's file header).
-//   twist=     -- BodyKinematics::forward() applied to the SAME directly-read
-//                 wheel velocities vel= uses, plus bb.drivetrainConfig.
-//                 trackwidth (the SAME value PoseEstimator::configure() was
-//                 given -- both share msg::DrivetrainConfig, ticket
-//                 087-004/005) -- a pure kinematic transform, never
-//                 bb.drivetrain, never EKF velocity-channel state.
-//   mode=      -- bb.planner.mode (msg::DriveMode), mapped to a single wire
-//                 character -- I/S/T/D/G, per docs/protocol-v2.md §8 and
-//                 architecture-update.md (084) Decision 6.
+// Field sourcing (Decision 7) moved to Telemetry::tick() by 087-008 --
+// source/telemetry/tlm_frame.h documents the full per-field rule table
+// (enc=/vel=/pose=/encpose=/otos=/twist=/mode=) at that function's own doc
+// comment. This file no longer contains that logic at all.
 // ---------------------------------------------------------------------------
 
 #include <stdint.h>
@@ -57,15 +44,15 @@
 
 #if ROBOT_DEV_BUILD
 
-// telemetryEmit -- shared frame-assembly + emission path: samples bb's
-// committed state cells for the bound wheel pair, the two pose readings, and
-// the odometer (if present), shapes a Telemetry::TlmFrameInput per the
-// field-sourcing rules above, formats it via Telemetry::buildTlmFrame(),
-// advances bb.telemetrySeq, and calls replyFn(line, replyCtx). Used by BOTH
-// the loop's periodic-emission step (passing the channel resolved from
-// bb.telemetryChannel) and SNAP's handler (passing its own dispatch
-// replyFn/replyCtx). A null replyFn is a silent no-op -- bb.telemetrySeq is
-// NOT advanced in that case, since no frame was actually emitted.
+// telemetryEmit -- shared emission path: calls Telemetry::tick(now, bb) to
+// assemble a TlmFrameInput (the actual field-sourcing logic -- see
+// tlm_frame.h), advances the shared bb.telemetrySeq counter (Telemetry::
+// tick() itself only READS it), formats via Telemetry::buildTlmFrame(), and
+// calls replyFn(line, replyCtx). Used by BOTH the loop's periodic-emission
+// step (passing the channel resolved from bb.telemetryChannel) and SNAP's
+// handler (passing its own dispatch replyFn/replyCtx). A null replyFn is a
+// silent no-op -- bb.telemetrySeq is NOT advanced in that case, since no
+// frame was actually emitted.
 void telemetryEmit(Rt::Blackboard& bb, uint32_t now, ReplyFn replyFn, void* replyCtx);
 
 // Returns the STREAM/SNAP command table, bound to `router`.

@@ -6,7 +6,6 @@
 #if ROBOT_DEV_BUILD
 
 #include "commands/command_processor.h"
-#include "kinematics/body_kinematics.h"
 #include "telemetry/tlm_frame.h"
 #include "types/clock.h"
 
@@ -86,24 +85,6 @@ void handleSnap(const ArgList& /*args*/, const char* /*corrId*/,
   telemetryEmit(b, now, replyFn, replyCtx);
 }
 
-// ---------------------------------------------------------------------------
-// modeChar -- 084-005: maps msg::DriveMode to TLM's single-character `mode=`
-// wire value, per docs/protocol-v2.md §8's I/S/T/D/G vocabulary and
-// architecture-update.md (084) Decision 6.
-// ---------------------------------------------------------------------------
-char modeChar(msg::DriveMode mode) {
-  switch (mode) {
-    case msg::DriveMode::IDLE: return 'I';
-    case msg::DriveMode::STREAMING: return 'S';
-    case msg::DriveMode::TIMED: return 'T';
-    case msg::DriveMode::DISTANCE: return 'D';
-    case msg::DriveMode::GO_TO: return 'G';
-    case msg::DriveMode::VELOCITY:
-    default:
-      return 'I';
-  }
-}
-
 }  // namespace
 
 void telemetryEmit(Rt::Blackboard& b, uint32_t now, ReplyFn replyFn, void* replyCtx) {
@@ -112,58 +93,14 @@ void telemetryEmit(Rt::Blackboard& b, uint32_t now, ReplyFn replyFn, void* reply
   // emitted.
   if (replyFn == nullptr) return;
 
-  // --- Field sourcing (Decision 7) -- see telemetry_commands.h's header
-  // comment for the full rule table. ---
-  uint32_t leftPort = b.drivetrainConfig.left_port;
-  uint32_t rightPort = b.drivetrainConfig.right_port;
-  const msg::MotorState& left = b.motor[leftPort - 1];
-  const msg::MotorState& right = b.motor[rightPort - 1];
-
-  // enc=/vel= read bb.motor[]'s primitive fields DIRECTLY -- never
-  // bb.drivetrain's vel_[] (commanded targets, a different semantic).
-  float velLeft = left.velocity.has ? left.velocity.val : 0.0f;
-  float velRight = right.velocity.has ? right.velocity.val : 0.0f;
-
-  Telemetry::TlmFrameInput in;
-  in.now = now;
-  // mode= -- 084-005: bb.planner.mode is the SOLE source (architecture-
-  // update.md (084) Decision 6; see this file's header comment).
-  in.mode = modeChar(b.planner.mode);
-  in.seq = b.telemetrySeq++;   // shared by every STREAM-driven frame AND SNAP
-
-  in.hasEnc = true;
-  in.encLeft = left.position.has ? left.position.val : 0.0f;
-  in.encRight = right.position.has ? right.position.val : 0.0f;
-
-  in.hasVel = true;
-  in.velLeft = velLeft;
-  in.velRight = velRight;
-
-  // pose=/encpose= read bb's two independent pose readings -- never
-  // bb.drivetrain either.
-  in.hasPose = true;
-  in.pose = b.fusedPose.pose;
-
-  in.hasEncPose = true;
-  in.encPose = b.encoderPose.pose;
-
-  // otos= -- the raw sampled odometer pose, OMITTED (not zero-filled) when
-  // no odometer device exists at all (bb.otosPresent, a boot-time snapshot --
-  // see blackboard.h's file header).
-  if (b.otosPresent) {
-    in.hasOtos = true;
-    in.otos = b.otos.pose;
-  }
-
-  // twist= -- a pure kinematic transform (BodyKinematics::forward()) of the
-  // SAME directly-read wheel velocities vel= uses, plus the SAME trackwidth
-  // PoseEstimator::configure() was given (bb.drivetrainConfig.trackwidth --
-  // both share msg::DrivetrainConfig, tickets 087-004/005). Directly-
-  // measured/derived, never bb.drivetrain, never EKF velocity-channel state.
-  in.hasTwist = true;
-  BodyKinematics::forward(velLeft, velRight, b.drivetrainConfig.trackwidth,
-                           in.twist.v_x, in.twist.omega);
-  in.twist.v_y = 0.0f;   // differential-only this sprint -- see drivetrain.h
+  // Field sourcing (Decision 7) is entirely Telemetry::tick()'s own
+  // internals now (source/telemetry/tlm_frame.{h,cpp}, 087-008) -- this
+  // function's remaining job is just the shared seq= bookkeeping and the
+  // actual wire emission.
+  Telemetry::TlmFrameInput in = Telemetry::tick(now, b);
+  b.telemetrySeq++;   // shared by every STREAM-driven frame AND SNAP --
+                       // advances AFTER this frame captured the
+                       // PRE-increment value via Telemetry::tick().
 
   char buf[300];
   Telemetry::buildTlmFrame(buf, sizeof(buf), in);

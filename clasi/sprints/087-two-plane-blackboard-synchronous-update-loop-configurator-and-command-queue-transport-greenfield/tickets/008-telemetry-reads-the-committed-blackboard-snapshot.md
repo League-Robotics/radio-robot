@@ -1,25 +1,16 @@
 ---
-id: "008"
-title: "Telemetry reads the committed blackboard snapshot"
-status: open
-use-cases: [SUC-001, SUC-006]
-depends-on: ["002", "007"]
-github-issue: ""
+id: 008
+title: Telemetry reads the committed blackboard snapshot
+status: done
+use-cases:
+- SUC-001
+- SUC-006
+depends-on:
+- '002'
+- '007'
+github-issue: ''
 issue: plan-file-a-design-issue-blackboard-architecture-state-objects-command-queues.md
-# completes_issue: Controls whether linked issues are archived when this ticket
-# is moved to done. Default: true (archive when all referencing tickets are done).
-# Set to false (scalar) to suppress archival for ALL linked issues on this ticket.
-# Set to a mapping {filename.md: false} to suppress archival per issue filename.
-# Use false for tickets that partially address a multi-sprint umbrella issue.
 completes_issue: true
-# exception: Written by a lower agent when it cannot proceed (see architecture §exception-protocol).
-# exception:
-#   thrown_by: "programmer"          # "programmer" | "sprint-planner"
-#   thrown_at: "2026-05-07T14:23:00Z"
-#   attempted: |
-#     Description of what was attempted before giving up.
-#   conflict: "architecture-update.md §3 — reason the agent is blocked"
-#   surface: "internal"              # "user-visible" | "internal"
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -39,19 +30,25 @@ verified against the real integration point rather than in isolation only.
 
 ## Acceptance Criteria
 
-- [ ] `Telemetry::tick(uint32_t now, const Rt::Blackboard& bb)` reads every
+- [x] `Telemetry::tick(uint32_t now, const Rt::Blackboard& bb)` reads every
       field its TLM frame emits (`enc`, `pose`, `vel`, `line`, `color`,
       `twist`, `otos`, `ekf_rej` — per `docs/protocol-v2.md`'s TLM field
       bitmask) from `bb`'s state cells, holding no `Subsystems::*`
-      reference.
-- [ ] TLM frame content (`STREAM` and `SNAP`) is byte-identical to today's
+      reference. (Note: `line=`/`color=`/`ekf_rej=` are not implemented in
+      `source/` at all yet — no line/color sensor leaves, no EKF rejection
+      counters exist this sprint, per protocol-v2.md §8's own "minimal
+      subset in source/" note, unchanged since 082. `Telemetry::tick()`
+      emits exactly the field set that already existed pre-ticket:
+      `enc`/`vel`/`pose`/`encpose`/`otos`/`twist`/`mode`/`seq`/`t` — all
+      read from `bb` directly, zero `Subsystems::*` references.)
+- [x] TLM frame content (`STREAM` and `SNAP`) is byte-identical to today's
       for the same underlying subsystem state — confirmed by running the
       existing telemetry/TLM tests (`test_tlm_frame.py`,
       `test_tlm_stream_snap.py`) with unchanged asserted behavior.
-- [ ] `seq=`/`t=` fields and the `STREAM`-channel binding behavior
+- [x] `seq=`/`t=` fields and the `STREAM`-channel binding behavior
       (telemetry binds to whichever channel issued `STREAM`, independent of
       which channel later commands arrive on) are unchanged.
-- [ ] Grepping `source/telemetry/` for `Subsystems::` outside comments
+- [x] Grepping `source/telemetry/` for `Subsystems::` outside comments
       returns nothing.
 
 ## Implementation Plan
