@@ -5,7 +5,8 @@ title: 'Two-plane blackboard: synchronous-update loop, Configurator, and command
 status: planning-docs
 branch: sprint/087-two-plane-blackboard-synchronous-update-loop-configurator-and-command-queue-transport-greenfield
 use-cases: []
-issues: []
+issues:
+- plan-file-a-design-issue-blackboard-architecture-state-objects-command-queues.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

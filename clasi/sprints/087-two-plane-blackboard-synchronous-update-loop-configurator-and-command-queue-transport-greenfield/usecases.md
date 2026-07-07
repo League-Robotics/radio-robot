@@ -139,20 +139,29 @@ sprint brief, and each maps directly to one of the design's locked decisions.
   1. Each pass, the loop runs the mandatory control tick first
      (`Hardware`/`Drivetrain`/`PoseEstimator`/`Planner`, then commit).
   2. In the remaining time before the next period deadline (measured against
-     the wall clock, not budgeted), the loop drains best-effort slack:
-     ingest comms, then route a statement if one is pending, else apply one
+     the wall clock, not budgeted), the loop **yields to the CODAL cooperative
+     scheduler** (`uBit.sleep(1)`) and then drains best-effort slack: ingest
+     comms, then route a statement if one is pending, else apply one
      Configurator delta if one is pending.
   3. If the mandatory portion overruns the period, the pass simply proceeds
      with no slack that pass; control keeps running, config waits.
 - **Postconditions**: A config-write burst never delays a motion command's
   execution; a motion command posted this pass's slack always executes on
-  the very next mandatory pass.
+  the very next mandatory pass; the radio transport keeps receiving datagrams
+  (the yield gives CODAL's `MessageBus` a fiber slice to run `Radio::onData`
+  on every pass, not just when the loop happens to idle).
 - **Acceptance Criteria**:
   - [ ] A 25-`SET`-then-motion burst executes the motion command on the next
         mandatory pass regardless of how many `SET`s preceded it.
   - [ ] The target period (20 ms / 50 Hz) is treated as best-effort pacing —
         an overrun degrades gracefully (slower cadence) rather than
         violating a hard deadline or dropping the mandatory work.
+  - [ ] **The hardware-bench gate round-trips a command over the radio relay
+        specifically, not only serial** — a command sent over serial alone
+        cannot catch a missing slack-loop yield, since serial RX is
+        IRQ-driven and needs no scheduler slice while radio RX (a CODAL
+        `MessageBus` event listener) does; this criterion is the concrete
+        acceptance bar for whichever ticket rewrites the loop.
 
 ## SUC-006: Command handlers are pure translators with zero subsystem pointers
 

@@ -75,6 +75,20 @@ of `dev_loop.*` cannot afford a stale premise:
   branch/tickets do not exist yet (planning stops after this document, per the
   sprint brief); the sequencing consequence is recorded under Migration
   Concerns and is a scheduling fact for the team-lead, not a design change.
+- **The loop's slack phase must yield to CODAL's cooperative fiber scheduler,
+  or radio RX silently stops.** Confirmed by direct read, added during
+  stakeholder review of this document: `source/com/radio.cpp:24` registers
+  `Radio::onData` as a CODAL `MessageBus` listener
+  (`_bus.listen(DEVICE_ID_RADIO, MICROBIT_RADIO_EVT_DATAGRAM, onData)`), and
+  `radio.cpp:36-39` calls `datagram.recv()` **inside that handler** -- a
+  cooperative-fiber event listener that only runs when the main loop yields a
+  fiber slice (e.g. `uBit.sleep()`). By contrast, `source/com/serial_port.h:10`
+  documents that serial RX is IRQ-driven into a ring buffer and explicitly
+  "Never calls `uBit.sleep()`" -- serial keeps working with no yield at all.
+  Net effect: a busy-wait slack loop (the design issue's original reference
+  code) starves **radio only**; every serial-only test would pass while the
+  bug silently kills the radio path. This is folded into the loop's Reference
+  code and Decision 9 below.
 
 ## Step 1: Understand the Problem
 
@@ -370,6 +384,18 @@ unit-testable without a wiring harness -- the sprint's stated goal.
   running fleet with old firmware to interoperate with; the hardware-bench
   gate (`.claude/rules/hardware-bench-testing.md`) is the acceptance bar, to
   be exercised once the rebuild compiles and links, not per-ticket.
+- **The hardware-bench gate must specifically exercise the radio transport,
+  not only serial.** Per Decision 9, a missing/incorrect yield in the loop's
+  slack phase starves radio RX (`Radio::onData`'s `MessageBus` listener never
+  gets a fiber slice) while leaving serial RX (IRQ-driven, no yield needed)
+  completely unaffected -- a serial-only bench pass would give false
+  confidence. The ticket that rewrites the loop must, as part of its
+  acceptance criteria, round-trip at least one command over the **radio
+  relay** (not just serial), matching SUC-005's cadence-protection acceptance
+  criteria and the standing bench gate's "round-trip over the real link"
+  requirement (`.claude/rules/hardware-bench-testing.md` item 3) -- extended
+  here to require it be over radio specifically, not either transport
+  interchangeably.
 - **Control retuning risk (carried from the design issue, not resolved here).**
   Synchronous update adds a uniform one-tick (~20 ms) latency per
   cross-subsystem hop where today's `dev_loop.cpp` reads same-pass. This may
@@ -607,6 +633,44 @@ pass (control keeps running, slower; config waits) -- graceful degradation by
 construction, not a hard-deadline violation. Only control *tuning*, never
 correctness, depends on the achieved rate.
 
+### Decision 9: Cooperative-scheduler yield in the slack loop
+
+**Context.** CODAL's main loop runs on a cooperative fiber scheduler. Radio RX
+is delivered by a `MessageBus` event listener (`Radio::onData`,
+`radio.cpp:24,36-39`) that only gets scheduler time when the current fiber
+yields (e.g. `uBit.sleep()`); serial RX is IRQ-driven straight into a ring
+buffer (`serial_port.h:10`, "Never calls `uBit.sleep()`") and needs no yield
+at all. A slack loop that busy-waits on the wall clock (`while (now() <
+deadline) { ... }` with no yield) never gives the scheduler a slice, so
+`Radio::onData` never runs and radio datagrams are never received --
+silently, because every serial-transport test keeps passing.
+
+**Alternatives considered:** (a) busy-wait the slack loop for lowest command
+latency -- **rejected**: starves radio RX completely, a correctness bug, not
+a latency trade-off; (b) call `uBit.sleep(1)` as the first statement of every
+slack iteration -- **chosen**.
+
+**Why this choice.** A 1 ms yield is small enough to keep command-drain
+latency negligible (~1 ms per queued item, well inside the 20 ms period
+budget) while unconditionally handing the scheduler a slice every iteration
+-- servicing `Radio::onData` (and any other fiber) on every pass, not just
+when the loop happens to idle. It also guarantees **at least one yield per
+pass even under sustained command load**, since the `do/while` always runs
+its body (including the `sleep(1)`) at least once before checking the
+deadline. Sprint 014 already committed to a single cooperative main loop as
+the scheduling model (`architecture-034.md` §4.1's "cooperative loop"); this
+decision is consistent with that commitment, not a new concurrency model.
+
+**Consequences.** Statement/command ingestion in the slack phase is
+`sleep(1)`-paced (effectively ~1 kHz), not a tight spin -- a deliberate,
+radio-safe latency floor, not an oversight. Any future change to the slack
+loop's structure must preserve at least one unconditional yield per pass;
+removing it to chase lower command latency would silently regress radio RX
+exactly as described above. The hardware-bench acceptance gate for whichever
+ticket rewrites the loop must specifically exercise the **radio** transport,
+not only serial (see Migration Concerns) -- serial's IRQ-driven RX cannot
+catch a missing yield.
+
 ## Reference code
 
 Ported from the design issue, with the modeling choices above (Decisions 1-4)
@@ -789,15 +853,18 @@ int main() {
     routeOutputs(bb, drivetrain, planner);      // emitters' output cmds -> next input queue
     telemetry.tick(now, bb);                    // reads x[k+1]; emits if due
 
-    // === SLACK: ingest -> route -> apply config, until the next period.
-    //     Routing wins (Decision 8). ===
+    // === SLACK: yield, then ingest -> route -> apply config, until the next period.
+    //     uBit.sleep() is REQUIRED, not pacing: the radio's RX is delivered by a CODAL
+    //     MessageBus event listener (Radio::onData) that only runs when the loop yields
+    //     a fiber slice. Busy-waiting starves radio while serial (IRQ ring) keeps
+    //     working -- a silent, radio-only failure. Routing still wins (Decision 8). ===
     uint32_t deadline = now + kPeriod;
     do {
+      uBit.sleep(1);                        // YIELD: radio delivery + other fibers run
       comm.tick(uBit.systemTime());
       if (comm.hasStatement())            router.route(comm.takeStatement(), bb);
       else if (configurator.pending(bb))  configurator.applyOne(bb);
-      // else: hard-poll comms until the period elapses
-    } while (uBit.systemTime() < deadline);
+    } while (uBit.systemTime() < deadline); // sleep(1) also guarantees >=1 yield per pass under load
   }
 }
 ```
@@ -810,10 +877,16 @@ packaging, per the Grounding section's confirmed 1:1-mirror invariant.
 
 **Consistency.** The "What Changed" list, the Impact table, and Step 3's
 module table agree on every component (nothing marked changed in one and
-unaffected in another); Decisions 1-8 are referenced by name from the
+unaffected in another); Decisions 1-9 are referenced by name from the
 Reference code's comments and from the Impact/Migration sections rather than
 re-derived, so a reader hits one explanation per decision, not several
-inconsistent ones.
+inconsistent ones. Decision 9 (the slack-loop yield) was folded in during
+stakeholder review of this document, grounded by a direct read of
+`radio.cpp`/`serial_port.h` added to the Grounding section above; the
+Reference code, the Grounding section, Decision 9, and the new Migration
+Concerns bullet on the bench gate all now agree on the same fact (busy-wait
+starves radio, not serial) rather than stating it once and leaving the
+Reference code stale.
 
 **Codebase alignment.** Every claim about current code was checked by direct
 read during this planning pass (Grounding, above): the six `*State` structs'
@@ -855,20 +928,28 @@ a generic pub-sub framework built ahead of need.
 **Risks.** No data/wire migration (Migration Concerns). The sequencing
 dependency on sprint 086 (active on files this sprint's subsystem tier
 wraps) is the most concrete near-term risk and is called out explicitly with
-a recommended gate (don't branch/execute until 086 merges). The control
-retuning question (one-tick added latency) is a real but bounded risk,
-explicitly deferred to implementation-time verification against the sim and
-bench rather than guessed at here. The `SET`-race edge case (Decision 3) is a
-narrow, pre-existing-in-kind risk, explicitly not a new regression.
+a recommended gate (don't branch/execute until 086 merges). **A busy-wait
+slack loop is a real, silent-failure risk this document's original Reference
+code carried** -- a missing `uBit.sleep()` yield starves radio RX while every
+serial-transport test keeps passing (Decision 9); mitigated by making the
+yield explicit in the Reference code and requiring the bench gate to
+exercise radio specifically, not just serial (Migration Concerns). The
+control retuning question (one-tick added latency) is a real but bounded
+risk, explicitly deferred to implementation-time verification against the
+sim and bench rather than guessed at here. The `SET`-race edge case
+(Decision 3) is a narrow, pre-existing-in-kind risk, explicitly not a new
+regression.
 
 **Verdict: APPROVE.** No structural issues: no circular dependency, no god
 component, no broken interface, no inconsistency between the Sprint Changes
 narrative and the document body. The Configurator's fan-out of 4 is at the
 guideline's edge but is the design's own deliberate, single named exception,
 argued for directly (Decision 4) rather than left as an unexamined coupling
-point. Proceed to ticketing once the stakeholder has reviewed the three
-resolved modeling choices (Decisions 1-3 above) and the sprint-086 sequencing
-note.
+point. The stakeholder-surfaced slack-loop yield correction (Decision 9) is
+folded into the Reference code, not left as a latent bug in an "illustrative"
+code sample. Proceed to ticketing once the stakeholder has reviewed the
+three resolved modeling choices (Decisions 1-3 above), the sprint-086
+sequencing note, and Decision 9's radio-yield requirement.
 
 ## Step 7: Open Questions
 
