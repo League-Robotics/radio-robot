@@ -1,0 +1,221 @@
+// configurator.cpp -- see configurator.h for the class-level contract.
+//
+// The four fold*() free functions below are this ticket's concretization of
+// "field-masked, not full-replace" (source/runtime/commands.h's ConfigDelta
+// comment): each copies ONLY the fields whose bit is set in delta.mask from
+// the delta's matching value member onto the caller-supplied persistent
+// config, leaving every other field of that persistent config untouched.
+// Each returns whether the fold actually changed anything (a bitwise
+// before/after compare) -- Configurator::applyOne() uses this to decide
+// whether to call the target's own configure() at all (AC-2: "...calls
+// configure() on that target only when the fold actually changes
+// anything").
+#include "runtime/configurator.h"
+
+#include <cstring>
+
+namespace Rt {
+
+namespace {
+
+bool foldDrivetrain(msg::DrivetrainConfig& cfg, const ConfigDelta& delta) {
+  const msg::DrivetrainConfig before = cfg;
+  const msg::DrivetrainConfig& v = delta.drivetrain;
+  const uint64_t m = delta.mask;
+
+  if (m & bitOf(DrivetrainConfigField::kFwdSignL)) cfg.fwd_sign_l = v.fwd_sign_l;
+  if (m & bitOf(DrivetrainConfigField::kFwdSignR)) cfg.fwd_sign_r = v.fwd_sign_r;
+  if (m & bitOf(DrivetrainConfigField::kTravelCalibL)) cfg.travel_calib_l = v.travel_calib_l;
+  if (m & bitOf(DrivetrainConfigField::kTravelCalibR)) cfg.travel_calib_r = v.travel_calib_r;
+  if (m & bitOf(DrivetrainConfigField::kTrackwidth)) cfg.trackwidth = v.trackwidth;
+  if (m & bitOf(DrivetrainConfigField::kHalfTrack)) cfg.half_track = v.half_track;
+  if (m & bitOf(DrivetrainConfigField::kHalfWheelbase)) cfg.half_wheelbase = v.half_wheelbase;
+  if (m & bitOf(DrivetrainConfigField::kTravelCalibWheel)) {
+    std::memcpy(cfg.travel_calib_wheel_, v.travel_calib_wheel_, sizeof(cfg.travel_calib_wheel_));
+    cfg.travel_calib_wheel_count = v.travel_calib_wheel_count;
+  }
+  if (m & bitOf(DrivetrainConfigField::kFwdSignWheel)) {
+    std::memcpy(cfg.fwd_sign_wheel_, v.fwd_sign_wheel_, sizeof(cfg.fwd_sign_wheel_));
+    cfg.fwd_sign_wheel_count = v.fwd_sign_wheel_count;
+  }
+  if (m & bitOf(DrivetrainConfigField::kVWheelMax)) cfg.v_wheel_max = v.v_wheel_max;
+  if (m & bitOf(DrivetrainConfigField::kSteerHeadroom)) cfg.steer_headroom = v.steer_headroom;
+  if (m & bitOf(DrivetrainConfigField::kVelGains)) cfg.vel_gains = v.vel_gains;
+  if (m & bitOf(DrivetrainConfigField::kVelFiltAlpha)) cfg.vel_filt_alpha = v.vel_filt_alpha;
+  if (m & bitOf(DrivetrainConfigField::kSyncGain)) cfg.sync_gain = v.sync_gain;
+  if (m & bitOf(DrivetrainConfigField::kMinWheel)) cfg.min_wheel = v.min_wheel;
+  if (m & bitOf(DrivetrainConfigField::kAlphaPos)) cfg.alpha_pos = v.alpha_pos;
+  if (m & bitOf(DrivetrainConfigField::kAlphaYaw)) cfg.alpha_yaw = v.alpha_yaw;
+  if (m & bitOf(DrivetrainConfigField::kOtosGate)) cfg.otos_gate = v.otos_gate;
+  if (m & bitOf(DrivetrainConfigField::kOtosLinearScale)) cfg.otos_linear_scale = v.otos_linear_scale;
+  if (m & bitOf(DrivetrainConfigField::kOtosAngularScale)) cfg.otos_angular_scale = v.otos_angular_scale;
+  if (m & bitOf(DrivetrainConfigField::kRotationGainPos)) cfg.rotation_gain_pos = v.rotation_gain_pos;
+  if (m & bitOf(DrivetrainConfigField::kRotationGainNeg)) cfg.rotation_gain_neg = v.rotation_gain_neg;
+  if (m & bitOf(DrivetrainConfigField::kRotationOffset)) cfg.rotation_offset = v.rotation_offset;
+  if (m & bitOf(DrivetrainConfigField::kRotationOffsetNeg)) cfg.rotation_offset_neg = v.rotation_offset_neg;
+  if (m & bitOf(DrivetrainConfigField::kRotationalSlip)) cfg.rotational_slip = v.rotational_slip;
+  if (m & bitOf(DrivetrainConfigField::kOdomOffX)) cfg.odom_off_x = v.odom_off_x;
+  if (m & bitOf(DrivetrainConfigField::kOdomOffY)) cfg.odom_off_y = v.odom_off_y;
+  if (m & bitOf(DrivetrainConfigField::kOdomYaw)) cfg.odom_yaw = v.odom_yaw;
+  if (m & bitOf(DrivetrainConfigField::kOdomUpsideDown)) cfg.odom_upside_down = v.odom_upside_down;
+  if (m & bitOf(DrivetrainConfigField::kEkfQXy)) cfg.ekf_q_xy = v.ekf_q_xy;
+  if (m & bitOf(DrivetrainConfigField::kEkfQTheta)) cfg.ekf_q_theta = v.ekf_q_theta;
+  if (m & bitOf(DrivetrainConfigField::kEkfROtosXy)) cfg.ekf_r_otos_xy = v.ekf_r_otos_xy;
+  if (m & bitOf(DrivetrainConfigField::kEkfROtosTheta)) cfg.ekf_r_otos_theta = v.ekf_r_otos_theta;
+  if (m & bitOf(DrivetrainConfigField::kEkfQV)) cfg.ekf_q_v = v.ekf_q_v;
+  if (m & bitOf(DrivetrainConfigField::kEkfQOmega)) cfg.ekf_q_omega = v.ekf_q_omega;
+  if (m & bitOf(DrivetrainConfigField::kEkfROtosV)) cfg.ekf_r_otos_v = v.ekf_r_otos_v;
+  if (m & bitOf(DrivetrainConfigField::kEkfREncV)) cfg.ekf_r_enc_v = v.ekf_r_enc_v;
+  if (m & bitOf(DrivetrainConfigField::kLagOtos)) cfg.lag_otos = v.lag_otos;
+  if (m & bitOf(DrivetrainConfigField::kDrivetrainType)) cfg.drivetrain_type = v.drivetrain_type;
+  if (m & bitOf(DrivetrainConfigField::kLeftPort)) cfg.left_port = v.left_port;
+  if (m & bitOf(DrivetrainConfigField::kRightPort)) cfg.right_port = v.right_port;
+
+  return std::memcmp(&before, &cfg, sizeof(before)) != 0;
+}
+
+bool foldMotor(msg::MotorConfig& cfg, const ConfigDelta& delta) {
+  const msg::MotorConfig before = cfg;
+  const msg::MotorConfig& v = delta.motor;
+  const uint64_t m = delta.mask;
+
+  if (m & bitOf(MotorConfigField::kTravelCalib)) cfg.travel_calib = v.travel_calib;
+  if (m & bitOf(MotorConfigField::kFwdSign)) cfg.fwd_sign = v.fwd_sign;
+  if (m & bitOf(MotorConfigField::kVelGainsKp)) cfg.vel_gains.kp = v.vel_gains.kp;
+  if (m & bitOf(MotorConfigField::kVelGainsKi)) cfg.vel_gains.ki = v.vel_gains.ki;
+  if (m & bitOf(MotorConfigField::kVelGainsKff)) cfg.vel_gains.kff = v.vel_gains.kff;
+  if (m & bitOf(MotorConfigField::kVelGainsIMax)) cfg.vel_gains.i_max = v.vel_gains.i_max;
+  if (m & bitOf(MotorConfigField::kVelGainsKaw)) cfg.vel_gains.kaw = v.vel_gains.kaw;
+  if (m & bitOf(MotorConfigField::kVelFiltAlpha)) cfg.vel_filt_alpha = v.vel_filt_alpha;
+  if (m & bitOf(MotorConfigField::kMinDuty)) cfg.min_duty = v.min_duty;
+  if (m & bitOf(MotorConfigField::kSlewRate)) cfg.slew_rate = v.slew_rate;
+  if (m & bitOf(MotorConfigField::kReversalDwell)) cfg.reversal_dwell = v.reversal_dwell;
+  if (m & bitOf(MotorConfigField::kOutputDeadband)) cfg.output_deadband = v.output_deadband;
+
+  return std::memcmp(&before, &cfg, sizeof(before)) != 0;
+}
+
+bool foldPlanner(msg::PlannerConfig& cfg, const ConfigDelta& delta) {
+  const msg::PlannerConfig before = cfg;
+  const msg::PlannerConfig& v = delta.planner;
+  const uint64_t m = delta.mask;
+
+  if (m & bitOf(PlannerConfigField::kAMax)) cfg.a_max = v.a_max;
+  if (m & bitOf(PlannerConfigField::kADecel)) cfg.a_decel = v.a_decel;
+  if (m & bitOf(PlannerConfigField::kVBodyMax)) cfg.v_body_max = v.v_body_max;
+  if (m & bitOf(PlannerConfigField::kYawRateMax)) cfg.yaw_rate_max = v.yaw_rate_max;
+  if (m & bitOf(PlannerConfigField::kYawAccMax)) cfg.yaw_acc_max = v.yaw_acc_max;
+  if (m & bitOf(PlannerConfigField::kJMax)) cfg.j_max = v.j_max;
+  if (m & bitOf(PlannerConfigField::kYawJerkMax)) cfg.yaw_jerk_max = v.yaw_jerk_max;
+  if (m & bitOf(PlannerConfigField::kArriveTol)) cfg.arrive_tol = v.arrive_tol;
+  if (m & bitOf(PlannerConfigField::kTurnInPlaceGate)) cfg.turn_in_place_gate = v.turn_in_place_gate;
+  if (m & bitOf(PlannerConfigField::kMinSpeed)) cfg.min_speed = v.min_speed;
+
+  return std::memcmp(&before, &cfg, sizeof(before)) != 0;
+}
+
+bool foldOdometer(msg::OdometerConfig& cfg, const ConfigDelta& delta) {
+  const msg::OdometerConfig before = cfg;
+  const msg::OdometerConfig& v = delta.odometer;
+  const uint64_t m = delta.mask;
+
+  if (m & bitOf(OdometerConfigField::kLinearScalar)) cfg.linear_scalar = v.linear_scalar;
+  if (m & bitOf(OdometerConfigField::kAngularScalar)) cfg.angular_scalar = v.angular_scalar;
+
+  return std::memcmp(&before, &cfg, sizeof(before)) != 0;
+}
+
+}  // namespace
+
+Configurator::Configurator(Subsystems::Drivetrain& drivetrain, Subsystems::PoseEstimator& poseEstimator,
+                           Subsystems::Planner& planner, Subsystems::Hardware& hardware,
+                           const msg::DrivetrainConfig& bootDrivetrainConfig,
+                           const msg::PlannerConfig& bootPlannerConfig)
+    : drivetrain_(drivetrain),
+      poseEstimator_(poseEstimator),
+      planner_(planner),
+      hardware_(hardware),
+      drivetrainConfig_(bootDrivetrainConfig),
+      plannerConfig_(bootPlannerConfig),
+      odometerConfig_() {
+  for (uint32_t port = 1; port <= Subsystems::Hardware::kPortCount; ++port) {
+    motorConfig_[port - 1] = hardware_.config(port);
+  }
+}
+
+void Configurator::applyOne(Blackboard& bb) {
+  if (bb.configIn.empty()) return;
+  const ConfigDelta delta = bb.configIn.take();
+
+  switch (delta.target) {
+    case ConfigDelta::kDrivetrain: {
+      // Drivetrain-scoped config re-propagates to PoseEstimator too --
+      // both share msg::DrivetrainConfig (ticket 087-004) and both must
+      // stay configured from the SAME value, mirroring today's established
+      // behavior (source/commands/config_commands.h's own file header:
+      // "any drivetrain-scoped key... re-propagates the FULL candidate
+      // msg::DrivetrainConfig to BOTH Drivetrain::configure() and
+      // PoseEstimator::configure()").
+      if (foldDrivetrain(drivetrainConfig_, delta)) {
+        drivetrain_.configure(drivetrainConfig_);
+        poseEstimator_.configure(drivetrainConfig_);
+      }
+      bb.drivetrainConfig = drivetrainConfig_;
+      break;
+    }
+    case ConfigDelta::kMotor: {
+      // Hardware::motor()'s own [1, kPortCount] out-of-range convention
+      // (clamp to the last port) -- mirrored here since delta.port is
+      // caller-supplied and this is the one place it gets used as an array
+      // index into motorConfig_[].
+      uint32_t port = delta.port;
+      if (port < 1 || port > Subsystems::Hardware::kPortCount) {
+        port = Subsystems::Hardware::kPortCount;
+      }
+      if (foldMotor(motorConfig_[port - 1], delta)) {
+        // Hardware has no top-level configure() (ticket 087-004's own
+        // Implementation Notes flagged this gap) -- apply through the
+        // per-motor Hal::Motor faceplate instead, exactly as SET/DEV M CFG
+        // already do today.
+        hardware_.motor(port).configure(motorConfig_[port - 1]);
+      }
+      bb.motorConfig[port - 1] = motorConfig_[port - 1];
+      break;
+    }
+    case ConfigDelta::kPlanner: {
+      if (foldPlanner(plannerConfig_, delta)) {
+        planner_.configure(plannerConfig_);
+      }
+      bb.plannerConfig = plannerConfig_;
+      break;
+    }
+    case ConfigDelta::kOdometer: {
+      if (foldOdometer(odometerConfig_, delta)) {
+        // hardware.odometer() is nullptr on this build's NezhaHardware (no
+        // real-hardware OTOS driver yet, hardware.h's own file header) --
+        // still fold+publish so bb.odometerConfig stays a truthful record
+        // of what was asked for, but only call configure() when there is a
+        // real device to apply it to.
+        Hal::Odometer* odometer = hardware_.odometer();
+        if (odometer != nullptr) {
+          odometer->configure(odometerConfig_);
+        }
+      }
+      bb.odometerConfig = odometerConfig_;
+      break;
+    }
+  }
+}
+
+void Configurator::publish(Blackboard& bb) {
+  bb.drivetrainConfig = drivetrainConfig_;
+  for (uint32_t port = 1; port <= Subsystems::Hardware::kPortCount; ++port) {
+    bb.motorConfig[port - 1] = motorConfig_[port - 1];
+  }
+  bb.plannerConfig = plannerConfig_;
+  bb.odometerConfig = odometerConfig_;
+}
+
+bool Configurator::pending(const Blackboard& bb) const { return !bb.configIn.empty(); }
+
+}  // namespace Rt
