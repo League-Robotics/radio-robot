@@ -54,4 +54,21 @@ msg::DrivetrainConfig defaultDrivetrainConfig() {
     return cfg;
 }
 
+OtosBootConfig defaultOtosBootConfig() {
+    // 086-005 — additive to defaultMotorConfigs()/defaultDrivetrainConfig()
+    // above; no existing mapping touched. Baked from the robot JSON's
+    // geometry.odometry_offset_mm (x/y/yaw_rad) and calibration.
+    // otos_linear_scale/otos_angular_scale where present; identity defaults
+    // (zero offset, 1.0 scale) otherwise. Boot-time-baked only -- see
+    // OtosBootConfig's own doc comment (source/config/boot_config.h) for why
+    // this is never a live SET/wire surface.
+    OtosBootConfig cfg;
+    cfg.offsetX = -47.7f;        // [mm]
+    cfg.offsetY = 3.5f;        // [mm]
+    cfg.offsetYaw = 0.0f;    // [rad]
+    cfg.linearScale = 1.0f;
+    cfg.angularScale = 1.0f;
+    return cfg;
+}
+
 }  // namespace Config

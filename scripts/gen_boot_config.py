@@ -21,6 +21,11 @@ Baked from JSON when present (matching semantics, so no behaviour surprise):
   * geometry.trackwidth               -> DrivetrainConfig.trackwidth
   * calibration.mm_per_wheel_deg_left  -> the left-port motor's travel_calib
   * calibration.mm_per_wheel_deg_right -> the right-port motor's travel_calib
+  * geometry.odometry_offset_mm (x/y/yaw_rad)         -> OtosBootConfig.offsetX/offsetY/offsetYaw
+  * calibration.otos_linear_scale/otos_angular_scale  -> OtosBootConfig.linearScale/angularScale
+    (086-005 — additive to the mappings above; see otos_boot_config_values()
+    and OtosBootConfig's own doc comment in source/config/boot_config.h for why
+    this is boot-time-baked only, never a live SET/wire surface)
 
 Held as bench-tuned firmware DEFAULTS below and NOT read from the old-tree JSON
 `control.*` keys — those describe the old RobotConfig velocity loop and are in a
@@ -82,6 +87,21 @@ RIGHT_PORT = 2
 
 # Trackwidth placeholder [mm] when the robot JSON does not supply geometry.
 TRACKWIDTH_DEFAULT = 128.0
+
+# OTOS lever-arm mounting offset defaults (086-005) — zero offset is the
+# identity case (LeverArm::sensorToCentre()/centreToSensor() are no-ops when
+# offsetX == offsetY == 0, source/hal/lever_arm.h), i.e. "no config = no
+# correction", matching every other placeholder default in this file.
+OTOS_OFFSET_X_DEFAULT   = 0.0   # [mm]
+OTOS_OFFSET_Y_DEFAULT   = 0.0   # [mm]
+OTOS_OFFSET_YAW_DEFAULT = 0.0   # [rad]
+
+# OTOS linear/angular scale multiplier defaults (086-005). 1.0 == no
+# correction (the OTOS chip's own scaleToInt8()-style conversion, applied
+# once at Hal::OtosOdometer::begin() — ticket 086-006 — maps a 1.0 multiplier
+# to register scalar 0, i.e. an unmodified chip reading).
+OTOS_LINEAR_SCALE_DEFAULT  = 1.0
+OTOS_ANGULAR_SCALE_DEFAULT = 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -174,9 +194,33 @@ def travel_calib_for_ports(cfg: dict):
     return out
 
 
+def otos_boot_config_values(cfg: dict):
+    """Return (offsetX, offsetY, offsetYaw, linearScale, angularScale) for the
+    OtosBootConfig struct (086-005), reading geometry.odometry_offset_mm's
+    x/y/yaw_rad and calibration.otos_linear_scale/otos_angular_scale, falling
+    back to the identity defaults above when either is absent from the robot
+    JSON (matching every other mapping's fall-back-to-firmware-default
+    behavior in this file).
+    """
+    offset_x   = _get(cfg, "geometry", "odometry_offset_mm", "x",
+                       default=OTOS_OFFSET_X_DEFAULT)
+    offset_y   = _get(cfg, "geometry", "odometry_offset_mm", "y",
+                       default=OTOS_OFFSET_Y_DEFAULT)
+    offset_yaw = _get(cfg, "geometry", "odometry_offset_mm", "yaw_rad",
+                       default=OTOS_OFFSET_YAW_DEFAULT)
+    linear_scale  = _get(cfg, "calibration", "otos_linear_scale",
+                         default=OTOS_LINEAR_SCALE_DEFAULT)
+    angular_scale = _get(cfg, "calibration", "otos_angular_scale",
+                         default=OTOS_ANGULAR_SCALE_DEFAULT)
+    return (float(offset_x), float(offset_y), float(offset_yaw),
+            float(linear_scale), float(angular_scale))
+
+
 def generate(cfg: dict, source_path: str) -> str:
     trackwidth   = _get(cfg, "geometry", "trackwidth", default=TRACKWIDTH_DEFAULT)
     travel_calib = travel_calib_for_ports(cfg)
+    (otos_offset_x, otos_offset_y, otos_offset_yaw,
+     otos_linear_scale, otos_angular_scale) = otos_boot_config_values(cfg)
 
     calib_lines = "\n".join(
         f"    out[{i}].setTravelCalib({_f(v)});   // [mm/deg] port {i + 1}"
@@ -234,6 +278,23 @@ msg::DrivetrainConfig defaultDrivetrainConfig() {{
     // normal drive pair); the coupled bench rig re-binds via `DEV DT PORTS`.
     cfg.setLeftPort({LEFT_PORT});
     cfg.setRightPort({RIGHT_PORT});
+    return cfg;
+}}
+
+OtosBootConfig defaultOtosBootConfig() {{
+    // 086-005 — additive to defaultMotorConfigs()/defaultDrivetrainConfig()
+    // above; no existing mapping touched. Baked from the robot JSON's
+    // geometry.odometry_offset_mm (x/y/yaw_rad) and calibration.
+    // otos_linear_scale/otos_angular_scale where present; identity defaults
+    // (zero offset, 1.0 scale) otherwise. Boot-time-baked only -- see
+    // OtosBootConfig's own doc comment (source/config/boot_config.h) for why
+    // this is never a live SET/wire surface.
+    OtosBootConfig cfg;
+    cfg.offsetX = {_f(otos_offset_x)};        // [mm]
+    cfg.offsetY = {_f(otos_offset_y)};        // [mm]
+    cfg.offsetYaw = {_f(otos_offset_yaw)};    // [rad]
+    cfg.linearScale = {_f(otos_linear_scale)};
+    cfg.angularScale = {_f(otos_angular_scale)};
     return cfg;
 }}
 
