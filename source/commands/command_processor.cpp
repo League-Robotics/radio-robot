@@ -2,8 +2,8 @@
 //
 // Sprint 009, Ticket 002: v2 tokenizer, verb-only uppercasing, #id
 // correlation, OK/ERR/EVT/TLM/CFG/ID response taxonomy.
-// Sprint 019, Ticket 011: old Robot& constructor and switch statement removed;
-// all commands now go through the table-dispatch path.
+// Sprint 019, Ticket 011: old Robot& constructor and switch-based dispatch
+// removed; all commands now go through the table-dispatch path.
 
 #include "command_processor.h"
 #include "arg_parse.h"

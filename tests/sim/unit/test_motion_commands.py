@@ -13,7 +13,7 @@ drain step, ending in the SAME simulated plant ``test_plant_correctness.py``
 et al. already exercise.
 
 ``EVT done <verb> reason=<token>``/``EVT safety_stop reason=watchdog`` are
-loop-originated (never triggered by the inbound statement itself -- they may
+loop-originated (never triggered by the inbound command itself -- they may
 fire many passes later) -- drained via ``Sim.get_async_evts()``, exactly like
 ``test_watchdog_policy.py``'s own ``EVT dev_watchdog`` checks.
 """

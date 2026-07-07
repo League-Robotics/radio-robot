@@ -97,7 +97,7 @@
 // SerialSilenceWatchdog itself is UNCHANGED by this rewrite (still a small,
 // dependency-free value class) -- only its OWNER changes: it is no longer
 // embedded in a deleted DevLoopState, it is a loop-owned instance (main.cpp/
-// sim_api.cpp), fed every pass the loop ingests any statement (regardless of
+// sim_api.cpp), fed every pass the loop ingests any command (regardless of
 // channel/content) and checked every pass; on expiry the loop applies
 // buildBroadcastNeutral()/buildDrivetrainStop() IMMEDIATELY (bypassing
 // bb.driveIn/bb.motorIn/bb.hardwareBroadcastIn entirely -- the loop already
@@ -133,7 +133,7 @@ class SerialSilenceWatchdog {
       : windowMs_(window) {}
 
   // Call once at boot (so the window starts counting from power-on, not from
-  // an uninitialized lastFeedMs_) and again every time a statement line
+  // an uninitialized lastFeedMs_) and again every time a command line
   // arrives on either comms channel -- see the class comment.
   void feed(uint32_t now) { lastFeedMs_ = now; fired_ = false; }
 

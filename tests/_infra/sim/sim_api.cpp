@@ -16,7 +16,7 @@
 //
 // Two separate reply sinks (architecture-update.md (081) Decision 3,
 // unchanged in shape by this rewrite):
-//   - syncStore  -- the ONE statement's own reply during sim_command():
+//   - syncStore  -- the ONE command's own reply during sim_command():
 //     wired as BOTH of Rt::CommandRouter's reply channels (serial AND
 //     radio -- the sim has no real transport distinction, so both resolve
 //     to the same sink; only Rt::CommandRouter::route() ever picks between
@@ -24,7 +24,7 @@
 //   - asyncStore -- Rt::MainLoop's own serialReply/serialCtx (and
 //     radioReply/radioCtx), the loop-originated reply sink Rt::MainLoop::
 //     tick() uses for output it generates ITSELF rather than in response to
-//     a statement (the watchdog-fire EVT, motion-done EVT, safety_stop EVT,
+//     a command (the watchdog-fire EVT, motion-done EVT, safety_stop EVT,
 //     periodic TLM emission bound to whichever channel issued STREAM) --
 //     drained by sim_get_async_evts().
 //
@@ -33,7 +33,7 @@
 // drain-to-exhaustion is deliberately MORE eager than main.cpp's own real
 // slack loop (which rations to one Rt::Configurator::applyOne() per
 // sleep(1) sub-iteration, Decision 8): a real ~20ms slack window spans many
-// such sub-iterations with no competing statement (Decision 9's cadence),
+// such sub-iterations with no competing command (Decision 9's cadence),
 // so ALL pending config genuinely drains well before a human/test could
 // physically issue a FOLLOW-UP wire command — sim_tick()'s own `now` step
 // (tick_for()'s default 24ms) represents exactly that elapsed window, so
@@ -42,9 +42,9 @@
 // around Decision 8's real rationing (which main.cpp alone implements).
 //
 // sim_command(h, line) — the dt=0 synchronous-command trick (Decision 4):
-// feeds the watchdog, routes ONE statement (mirrors one slack sub-iteration
-// with a statement present), THEN — since a real slack window would keep
-// spinning for ~20ms with no further statement, ample time for anything
+// feeds the watchdog, routes ONE command (mirrors one slack sub-iteration
+// with a command present), THEN — since a real slack window would keep
+// spinning for ~20ms with no further command, ample time for anything
 // this route() call just posted (bb.motorIn[]/bb.driveIn/bb.motionIn/
 // bb.otosCommandIn/…) to be drained by the NEXT mandatory tick, and for any
 // bb.configIn delta to fully apply — replays Rt::MainLoop::tick() and drains
@@ -226,7 +226,7 @@ SimHandle::SimHandle()
 
     // Rt::CommandRouter (087-006): both reply channels resolve to the SAME
     // sync store -- the sim has no real serial/radio distinction for a
-    // per-statement reply (see file header).
+    // per-command reply (see file header).
     router.setReplyChannels(storeReply, &syncStore, storeReply, &syncStore);
 
     // Boot-time hardware-identity snapshots (blackboard.h's file header):
@@ -269,7 +269,7 @@ void sim_destroy(void* h) {
 // ---------------------------------------------------------------------------
 
 // Advance the sim by one ordinary pass: one Rt::MainLoop::tick() (mandatory
-// + commit -- no statement, so the watchdog check, subsystem ticks, and
+// + commit -- no command, so the watchdog check, subsystem ticks, and
 // commit/routeOutputs run; no routing since none is being fed), THEN drain
 // bb.configIn to exhaustion -- see file header for why this differs from
 // main.cpp's own real slack-rationed drain.
@@ -284,8 +284,8 @@ void sim_tick(void* h, uint32_t now) {
 }
 
 // Dispatch one NUL-terminated command line synchronously. Copies `line`
-// into a Subsystems::CommunicatorToCommandProcessorStatement (an OWNED
-// char[256] buffer -- subsystems/statement.h) whose returnPath is SERIAL
+// into a Subsystems::CommunicatorToCommandProcessorCommand (an OWNED
+// char[256] buffer -- subsystems/wire_command.h) whose returnPath is SERIAL
 // (arbitrary -- Rt::CommandRouter's two reply channels are wired to the
 // same sync store either way, see file header), feeds the watchdog, routes
 // it, then replays Rt::MainLoop::tick() and drains bb.configIn to
@@ -298,25 +298,25 @@ int sim_command(void* h, const char* line, char* reply, int size) {
 
     s->syncStore.reset();
 
-    Subsystems::CommunicatorToCommandProcessorStatement stmt;
-    stmt.returnPath = Subsystems::Channel::SERIAL;
-    stmt.line[0] = '\0';
+    Subsystems::CommunicatorToCommandProcessorCommand cmd;
+    cmd.returnPath = Subsystems::Channel::SERIAL;
+    cmd.line[0] = '\0';
     if (line) {
-        std::strncpy(stmt.line, line, sizeof(stmt.line) - 1);
-        stmt.line[sizeof(stmt.line) - 1] = '\0';
+        std::strncpy(cmd.line, line, sizeof(cmd.line) - 1);
+        cmd.line[sizeof(cmd.line) - 1] = '\0';
     }
 
     Types::setHostClockNow(s->lastTickNow);
 
-    // Slack-phase statement ingestion (architecture-update-r1.md Reference
+    // Slack-phase command ingestion (architecture-update-r1.md Reference
     // code): feed the watchdog BEFORE routing -- feeding must never be
     // delayed by routing (the safety-watchdog AC), mirroring main.cpp's own
     // ingest step exactly.
     s->loop.feedWatchdog(s->lastTickNow);
-    s->router.route(stmt, s->bb);
+    s->router.route(cmd, s->bb);
 
     // Sim-only synchronous settle (see file header): let whatever this
-    // statement just posted (motorIn/driveIn/motionIn/otosCommandIn/…) be
+    // command just posted (motorIn/driveIn/motionIn/otosCommandIn/…) be
     // consumed by the next mandatory tick, and let any pending config
     // delta fully apply, all at the unchanged `now`.
     while (s->configurator.pending(s->bb)) {

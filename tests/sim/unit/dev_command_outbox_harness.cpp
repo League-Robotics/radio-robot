@@ -1,16 +1,16 @@
 // dev_command_outbox_harness.cpp -- off-hardware acceptance harness,
 // originally for ticket 079-005 (SUC-004/SUC-005/SUC-006/SUC-007): exercises
-// the DEV command family's pure-transformer reshape -- statements in,
+// the DEV command family's pure-transformer reshape -- raw wire commands in,
 // posted commands (+ replies) out, no handler ever calling
 // Hal::Motor::apply()/Subsystems::Drivetrain::apply() directly.
 //
 // Rewritten pointerless for sprint 087 ticket 006: drives the REAL parse
-// path (full ASCII statement lines through Rt::CommandRouter::route(),
+// path (full ASCII command lines through Rt::CommandRouter::route(),
 // built from the REAL devCommands() table via command_router.cpp's unified
 // six-family table) and asserts on Rt::Blackboard's queues (bb.motorIn[]/
 // bb.driveIn/bb.hardwareBroadcastIn/bb.configIn) and the captured reply text
-// afterward -- exactly the "statements in, commands + replies out" contract,
-// now against the Blackboard's command-plane instead of a deleted
+// afterward -- exactly the "wire commands in, posted commands + replies out"
+// contract, now against the Blackboard's command-plane instead of a deleted
 // DevLoopState's outbox fields.
 //
 // None of these scenarios need to script the I2CBus at all: capability
@@ -99,7 +99,7 @@ void initConfigsTemplate() {
 }
 
 // Captures every reply line Rt::CommandRouter::route() emits for one
-// statement (usually one line, occasionally more -- e.g. a CFG badkey ERR
+// command (usually one line, occasionally more -- e.g. a CFG badkey ERR
 // followed by the ack).
 struct ReplyCapture {
   std::vector<std::string> lines;
@@ -132,14 +132,14 @@ struct Fixture {
     router.setReplyChannels(captureReply, nullptr, captureReply, nullptr);
   }
 
-  // dispatch -- builds a statement from `line`, routes it, and captures its
+  // dispatch -- builds a command from `line`, routes it, and captures its
   // reply into `cap`.
   void dispatch(const char* line, ReplyCapture& cap) {
     router.setReplyChannels(captureReply, &cap, captureReply, &cap);
-    Subsystems::CommunicatorToCommandProcessorStatement stmt;
-    stmt.returnPath = Subsystems::Channel::SERIAL;
-    std::snprintf(stmt.line, sizeof(stmt.line), "%s", line);
-    router.route(stmt, bb);
+    Subsystems::CommunicatorToCommandProcessorCommand cmd;
+    cmd.returnPath = Subsystems::Channel::SERIAL;
+    std::snprintf(cmd.line, sizeof(cmd.line), "%s", line);
+    router.route(cmd, bb);
   }
 };
 
@@ -274,12 +274,12 @@ void scenarioQueryProducesReplyNoOutboxTraffic() {
   }
 }
 
-// 7. Config-plane statements (CFG, PORTS) post ONE Rt::ConfigDelta to
+// 7. Config-plane commands (CFG, PORTS) post ONE Rt::ConfigDelta to
 // bb.configIn each (087-006: replaces the pre-087 "takes effect directly"
 // shadow-write -- the Configurator, not this harness, folds+applies it) and
 // never touch bb.motorIn[]/bb.driveIn/bb.hardwareBroadcastIn.
-void scenarioConfigStatementPostsOneDeltaNoOutbox() {
-  beginScenario("CFG/PORTS statements post ONE Rt::ConfigDelta each (config-plane) and never touch any other queue");
+void scenarioConfigCommandPostsOneDeltaNoOutbox() {
+  beginScenario("CFG/PORTS commands post ONE Rt::ConfigDelta each (config-plane) and never touch any other queue");
   Fixture f;
   ReplyCapture cap;
 
@@ -309,10 +309,10 @@ void scenarioConfigStatementPostsOneDeltaNoOutbox() {
             "DEV DT PORTS wire reply is unchanged (echoes the requested values)");
 }
 
-// 8. Latest-wins: two undrained DEV M statements on the same port leave only
+// 8. Latest-wins: two undrained DEV M commands on the same port leave only
 // the SECOND command's value in bb.motorIn[] (Mailbox semantics).
 void scenarioLatestWinsOverwrite() {
-  beginScenario("two undrained DEV M statements: latest-wins, only the second is staged");
+  beginScenario("two undrained DEV M commands: latest-wins, only the second is staged");
   Fixture f;
   ReplyCapture cap;
   f.dispatch("DEV M 1 DUTY 20", cap);
@@ -377,7 +377,7 @@ int main() {
   scenarioDevStopBroadcastShape();
   scenarioDevDtStopAddressedPairShape();
   scenarioQueryProducesReplyNoOutboxTraffic();
-  scenarioConfigStatementPostsOneDeltaNoOutbox();
+  scenarioConfigCommandPostsOneDeltaNoOutbox();
   scenarioLatestWinsOverwrite();
   scenarioNeutralAndResetAlsoStageThroughTheOutbox();
   scenarioBuildBroadcastNeutralAndDrivetrainStopShapes();

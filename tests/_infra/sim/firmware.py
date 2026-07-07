@@ -128,7 +128,7 @@ class Sim:
     def command(self, line: str) -> str:
         """Send one command line synchronously; return the decoded reply.
 
-        Routes the statement then replays Rt::MainLoop::tick() at the SAME
+        Routes the command then replays Rt::MainLoop::tick() at the SAME
         ``now`` as the most recent tick_for() call (sim_api.cpp's dt=0
         synchronous-command trick) -- see sim_command()'s own doc comment.
         """

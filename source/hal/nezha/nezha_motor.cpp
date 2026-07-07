@@ -640,7 +640,7 @@ void NezhaMotor::softRebaseline()
     // softResetCount_ is base-owned (Hal::Motor); this leaf increments it
     // directly (it is protected, inherited) rather than duplicating a
     // counter here — mirrors source_old's rebaselineSoft(), which
-    // increments its own _softResetCount as its last statement.
+    // increments its own _softResetCount as its final step.
     ++softResetCount_;
 }
 

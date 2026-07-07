@@ -18,7 +18,7 @@
 //   - the two reply sinks the loop uses for output it originates ITSELF
 //     (watchdog-fire/motion-done/safety_stop EVTs, periodic telemetry) --
 //     distinct from Rt::CommandRouter's own reply channels (a dispatched
-//     statement's OWN reply), matching ticket 006's Decision-3 split.
+//     command's OWN reply), matching ticket 006's Decision-3 split.
 //
 // tick(bb, now) is the MANDATORY-then-COMMIT half of the cyclic executive:
 // reads the committed snapshot `bb` (x[k]), runs every subsystem's tick(),
@@ -29,7 +29,7 @@
 // main_loop.cpp for the exact sequencing and Decision 1/2/6's rationale at
 // each step.
 //
-// Statement ingestion (CommandRouter::route()) and config application
+// Command ingestion (CommandRouter::route()) and config application
 // (Rt::Configurator::applyOne()/pending()) are deliberately NOT wrapped
 // here: per architecture-update-r1.md's Reference code, `CommandRouter` and
 // `Rt::Configurator` are their OWN top-level objects (declared beside
@@ -82,7 +82,7 @@ class MainLoop {
   // mirrors ticket 081-002's "no hand-mirrored second copy" precedent).
   void tick(Blackboard& bb, uint32_t now);
 
-  // feedWatchdog -- call on arrival of ANY statement, on ANY channel,
+  // feedWatchdog -- call on arrival of ANY command, on ANY channel,
   // regardless of content, BEFORE the caller's slack routing/config-
   // priority branch decides what to do with it (the NON-NEGOTIABLE
   // safety-watchdog contract: feeding must never be delayed by routing).

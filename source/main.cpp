@@ -211,16 +211,16 @@ int main() {
         do {
             uBit.sleep(1);   // YIELD: radio delivery + other fibers run
             comm.tick(uBit.systemTime());
-            if (comm.hasStatement()) {
-                // A taken statement is copied into a local
-                // Subsystems::CommunicatorToCommandProcessorStatement (its
-                // line[] is an OWNED buffer -- subsystems/statement.h -- so
+            if (comm.hasCommand()) {
+                // A taken command is copied into a local
+                // Subsystems::CommunicatorToCommandProcessorCommand (its
+                // line[] is an OWNED buffer -- subsystems/wire_command.h -- so
                 // this copy is safe past Communicator's own next tick()).
-                Subsystems::CommunicatorToCommandProcessorStatement statement = comm.takeStatement();
+                Subsystems::CommunicatorToCommandProcessorCommand command = comm.takeCommand();
                 // Feed BEFORE routing -- feeding must never be delayed by
                 // routing/config-priority (the safety-watchdog contract).
                 loop.feedWatchdog(uBit.systemTime());
-                router.route(statement, bb);
+                router.route(command, bb);
             } else if (configurator.pending(bb)) {
                 configurator.applyOne(bb);
             }
@@ -249,8 +249,8 @@ int main() {
         uint32_t now = uBit.systemTime();
 
         comm.tick(now);
-        if (comm.hasStatement()) {
-            Subsystems::CommunicatorToCommandProcessorStatement in = comm.takeStatement();
+        if (comm.hasCommand()) {
+            Subsystems::CommunicatorToCommandProcessorCommand in = comm.takeCommand();
             cmd.process(in.line,
                         in.returnPath == Subsystems::Channel::RADIO ? radioReply
                                                                     : serialReply,

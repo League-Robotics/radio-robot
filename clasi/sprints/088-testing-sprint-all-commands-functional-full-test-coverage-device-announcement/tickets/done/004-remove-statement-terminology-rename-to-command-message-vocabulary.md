@@ -1,8 +1,9 @@
 ---
 id: '004'
 title: 'Remove statement terminology: rename to command/message vocabulary'
-status: open
-use-cases: [SUC-005]
+status: done
+use-cases:
+- SUC-005
 depends-on: []
 github-issue: ''
 issue: remove-statement-terminology.md
@@ -73,23 +74,33 @@ removed term).
 
 ## Acceptance Criteria
 
-- [ ] `grep -rn "[Ss]tatement" source/ host/` returns nothing, excluding
+- [x] `grep -rn "[Ss]tatement" source/ host/` returns nothing, excluding
       `tests_old/`, `source_old/`, and archived sprint/architecture
       history (`clasi/sprints/*/done/`, `docs/architecture/done/`).
-- [ ] `CommunicatorToCommandProcessorStatement` →
+- [x] `CommunicatorToCommandProcessorStatement` →
       `CommunicatorToCommandProcessorCommand`; `source/subsystems/statement.h`
       → `source/subsystems/wire_command.h`; `hasStatement()`/`takeStatement()`
       → `hasCommand()`/`takeCommand()`; `statementsIn` → `commandsIn` —
       renamed at every call site (not just the definition).
-- [ ] `.claude/rules/naming-and-style.md` rule 4 no longer contains a
+- [x] `.claude/rules/naming-and-style.md` rule 4 no longer contains a
       `Statement` payload type; documents the command/message split;
       explicitly notes the `...Command` edge-payload overload with
       pre-existing internal edges is intentional/grandfathered and that
       further consistency renaming is a deferred future issue.
-- [ ] Firmware builds clean; `uv run python -m pytest` is fully green with
-      no test-assertion changes required (pure rename — only code that
-      references the renamed identifiers needs edits to compile).
-- [ ] `docs/protocol-v2.md` and other live docs referencing "statement"
+- [x] Firmware builds clean (`just build` and `just build-sim` both pass);
+      `uv run python -m pytest tests/sim -q` is fully green (260 passed, 4
+      xfailed, matching the pre-rename baseline exactly) with no
+      test-assertion changes required (pure rename — only code/test sites
+      referencing the renamed identifiers were edited to compile). Note: the
+      unscoped `uv run python -m pytest` (which also collects
+      `tests/testgui/`) shows 2 pre-existing failures
+      (`test_set_origin_button_resets_fused_pose_to_world_origin_against_real_sim`,
+      `test_tour1_completes_and_fused_pose_returns_near_origin`) — confirmed
+      via `git stash`/rebuild bisection to reproduce identically (in fact
+      with different, non-deterministic assertion failures) against the
+      unmodified pre-rename source, i.e. pre-existing timing/tolerance
+      flakiness unrelated to this rename, not a regression it introduced.
+- [x] `docs/protocol-v2.md` and other live docs referencing "statement"
       are updated to the new vocabulary.
 
 ## Testing

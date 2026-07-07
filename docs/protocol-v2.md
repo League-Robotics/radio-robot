@@ -909,7 +909,7 @@ the firmware stops the motors and emits `EVT safety_stop reason=watchdog`.
 
 **`sTimeout` is a live, production watchdog (sprint 084).** It is a
 separate timer from `DEV WD`'s bench-only serial-silence watchdog (which
-resets on *any* statement, on *any* channel, regardless of content):
+resets on *any* command, on *any* channel, regardless of content):
 `sTimeout` is fed *only* by `S`, and only matters while a streaming
 (`S`-driven) goal is the one actually active — conflating the two would
 defeat the point of either. It is not yet `SET`/`GET`-able (still a fixed
@@ -1823,7 +1823,7 @@ watchdog neutral event; it resets only on reboot.
 
 Sprint 079: the binding is now backed by `DrivetrainConfig.left_port`/
 `right_port` (read via `Subsystems::Drivetrain::ports()`) rather than a
-`DevLoopState` field — a config-plane statement like any other `CFG` key,
+`DevLoopState` field — a config-plane command like any other `CFG` key,
 per architecture-update.md's "Config-plane vs. command-plane". The wire
 text is unchanged: `DEV DT PORTS <left> <right>` → `OK DEV DT
 ports=<left>,<right>`.
@@ -2116,7 +2116,7 @@ Sets the serial-silence watchdog's window at runtime. Default at boot:
 
 ### Serial-Silence Watchdog — Non-Negotiable
 
-Every `DEV`/liveness statement line that arrives on either comms channel
+Every `DEV`/liveness command line that arrives on either comms channel
 (serial or radio) resets a wall-clock timer — regardless of the line's
 content or whether it parsed to a known verb. If no line arrives within
 the current window, the firmware:

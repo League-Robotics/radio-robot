@@ -36,8 +36,8 @@ void Communicator::tick(uint32_t now) {
   // faceplate shape (every subsystem tick takes now).
   (void)now;
 
-  if (hasStatement_) {
-    // Backpressure: an untaken statement is still held -- do not poll
+  if (hasCommand_) {
+    // Backpressure: an untaken command is still held -- do not poll
     // either transport, which would overwrite line_[] before the consumer
     // reads it. See the file header's held-output contract.
     return;
@@ -47,18 +47,18 @@ void Communicator::tick(uint32_t now) {
   // Radio driver until the next poll -- see the header's tick() comment.
   if (serial_.readLine(line_, sizeof(line_))) {
     ++serialLines_;
-    hasStatement_ = true;
+    hasCommand_ = true;
     heldReturnPath_ = Channel::SERIAL;
   } else if (radio_.poll(line_, sizeof(line_))) {
     ++radioLines_;
-    hasStatement_ = true;
+    hasCommand_ = true;
     heldReturnPath_ = Channel::RADIO;
   }
 }
 
-CommunicatorToCommandProcessorStatement Communicator::takeStatement() {
-  CommunicatorToCommandProcessorStatement out;
-  if (hasStatement_) {
+CommunicatorToCommandProcessorCommand Communicator::takeCommand() {
+  CommunicatorToCommandProcessorCommand out;
+  if (hasCommand_) {
     std::strncpy(out.line, line_, sizeof(out.line));
     out.line[sizeof(out.line) - 1] = '\0';
     out.returnPath = heldReturnPath_;
@@ -66,7 +66,7 @@ CommunicatorToCommandProcessorStatement Communicator::takeStatement() {
     out.line[0] = '\0';
     out.returnPath = Channel::NONE;
   }
-  hasStatement_ = false;
+  hasCommand_ = false;
   heldReturnPath_ = Channel::NONE;
   return out;
 }

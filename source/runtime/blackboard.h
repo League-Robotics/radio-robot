@@ -1,7 +1,7 @@
 // blackboard.h -- Rt::Blackboard: sprint 087's two-plane transport. Owns, as
 // plain members, the committed state-plane snapshot x[k] (current-value
 // cells: motor/drivetrain/pose/planner observations, current config) and
-// every command-plane queue that connects each subsystem (statementsIn,
+// every command-plane queue that connects each subsystem (commandsIn,
 // driveIn, motorIn[], configIn, poseResetIn, motorResetIn[],
 // otosSetPoseIn). Pure data -- no method computes anything; holds NO
 // subsystem pointer of any kind (SUC-006). See
@@ -24,10 +24,10 @@
 //   - Subsystems::Hardware::kPortCount is reachable via subsystems/
 //     hardware.h alone, which includes only <stdint.h>, runtime/queue.h,
 //     messages/motor.h, and the CODAL-free hal/capability/*.h interfaces;
-//   - statementsIn's payload, Subsystems::
-//     CommunicatorToCommandProcessorStatement, lives in the CODAL-free
-//     source/subsystems/statement.h -- NOT subsystems/communicator.h, which
-//     pulls in MicroBit.h/com/radio.h/com/serial_port.h.
+//   - commandsIn's payload, Subsystems::
+//     CommunicatorToCommandProcessorCommand, lives in the CODAL-free
+//     source/subsystems/wire_command.h -- NOT subsystems/communicator.h,
+//     which pulls in MicroBit.h/com/radio.h/com/serial_port.h.
 // This is what makes Rt::Blackboard instantiable in a host test harness
 // (tests/sim/unit/runtime_blackboard_harness.cpp) with the plain system
 // C++ compiler -- no ARM toolchain, no MicroBit.h transitively included.
@@ -76,7 +76,7 @@
 #include "runtime/commands.h"
 #include "runtime/queue.h"
 #include "subsystems/hardware.h"
-#include "subsystems/statement.h"
+#include "subsystems/wire_command.h"
 
 namespace Rt {
 
@@ -126,7 +126,7 @@ struct Blackboard {
   // replaces the old raw ReplyFn/void* pair (a function pointer is not a
   // Blackboard-appropriate payload) -- the loop resolves it to its own
   // serial/radio reply sinks at emission time, the same way CommandRouter
-  // resolves a statement's Channel.
+  // resolves a command's Channel.
   uint32_t telemetryPeriod = 0;       // [ms] 0 = disabled; set (clamped) by STREAM
   uint16_t telemetrySeq = 0;          // shared by every STREAM-driven frame AND SNAP
   Subsystems::Channel telemetryChannel = Subsystems::Channel::NONE;
@@ -136,8 +136,8 @@ struct Blackboard {
   // === Command plane: queues. Each drained by exactly ONE consumer
   //     (driveIn has two producers -- Decision 1's authority-gated
   //     arbitration). ===
-  WorkQueue<Subsystems::CommunicatorToCommandProcessorStatement, 16>
-      statementsIn;                          // Communicator -> router
+  WorkQueue<Subsystems::CommunicatorToCommandProcessorCommand, 16>
+      commandsIn;                            // Communicator -> router
   Mailbox<msg::DrivetrainCommand> driveIn;    // router(DEV DT)/Planner -> Drivetrain
   Mailbox<msg::MotorCommand> motorIn[kPortCount];  // router/routeOutputs -> Hardware
   WorkQueue<ConfigDelta, 16> configIn;        // router -> Configurator

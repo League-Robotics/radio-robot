@@ -214,7 +214,7 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
     plannerEngagedThisPass = true;
   }
 
-  // sTimeout: DISTINCT from watchdog_ (fed by ANY statement). Gating on
+  // sTimeout: DISTINCT from watchdog_ (fed by ANY command). Gating on
   // `mode == STREAMING` alone is not sufficient once a bare `R` also
   // reports STREAMING -- the `activeVelocityVerb_[0] == '\0'` check
   // excludes an R-driven session (R's handler never sets

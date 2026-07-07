@@ -54,7 +54,7 @@ class StreamingDriveWatchdog {
   explicit StreamingDriveWatchdog(uint32_t window = kDefaultWindow) : windowMs_(window) {}
 
   // Call once every time an `S` command arrives (never for T/D/STOP/any
-  // other statement -- that is dev_commands.h's SerialSilenceWatchdog's job).
+  // other command -- that is dev_commands.h's SerialSilenceWatchdog's job).
   void feed(uint32_t now) { lastFeedMs_ = now; fired_ = false; }
 
   void setWindow(uint32_t window) { windowMs_ = window; }

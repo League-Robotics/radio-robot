@@ -45,7 +45,7 @@ It is therefore **underactuated**, and **nonholonomic**: it cannot translate
 sideways. At any instant it can only move along its current heading and rotate.
 
 **[Validation] "Our only DOF for motion is forward."** Correct as an
-*instantaneous* statement: the velocity space is 2-D (v, ω) and there is a hard
+*instantaneous* claim: the velocity space is 2-D (v, ω) and there is a hard
 constraint `ẏ_body = 0` (no sideways slip). The "3 for pose, 2 for velocity"
 framing is exactly right.
 

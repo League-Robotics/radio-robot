@@ -34,7 +34,7 @@ def test_watchdog_does_not_fire_while_commands_keep_arriving(sim):
     sim.command("DEV M 1 VEL 50")
 
     # Re-feed the watchdog every 60 ms (< the 100 ms window) via a liveness
-    # PING -- any statement line resets the timer, regardless of content.
+    # PING -- any command line resets the timer, regardless of content.
     for _ in range(5):
         sim.tick_for(60)
         sim.command("PING")
