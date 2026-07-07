@@ -70,9 +70,12 @@ namespace Rt {
 
 class MainLoop {
  public:
-  MainLoop(Subsystems::Hardware& hardware, Subsystems::Drivetrain& drivetrain,
-           Subsystems::PoseEstimator& poseEstimator, Subsystems::Planner& planner,
-           ReplyFn serialReply, void* serialCtx, ReplyFn radioReply, void* radioCtx);
+  MainLoop(Subsystems::Hardware& hardware, 
+           Subsystems::Drivetrain& drivetrain,
+           Subsystems::PoseEstimator& poseEstimator, 
+           Subsystems::Planner& planner,
+           ReplyFn serialReply, void* serialCtx, 
+           ReplyFn radioReply, void* radioCtx);
 
   // The mandatory control tick + commit -- see main_loop.cpp for the exact
   // per-subsystem sequencing and the file-header rationale on watchdog
@@ -107,7 +110,7 @@ class MainLoop {
   // methods every OTHER command-plane post eventually reaches, just
   // invoked here without a queue in between. Never touches
   // bb.driveIn/bb.motorIn/bb.hardwareBroadcastIn.
-  void emergencyNeutralize();
+  void emergencyNeutralize(); // FIXME rename to "estop"
 
   Subsystems::Hardware& hardware_;
   Subsystems::Drivetrain& drivetrain_;
