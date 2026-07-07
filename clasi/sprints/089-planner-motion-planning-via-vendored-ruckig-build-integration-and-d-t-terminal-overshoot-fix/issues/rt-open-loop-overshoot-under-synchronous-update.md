@@ -1,5 +1,9 @@
 ---
-status: pending
+status: in-progress
+sprint: 089
+tickets:
+- 089-005
+- 089-007
 ---
 
 # RT open-loop over-rotation under the synchronous-update loop
