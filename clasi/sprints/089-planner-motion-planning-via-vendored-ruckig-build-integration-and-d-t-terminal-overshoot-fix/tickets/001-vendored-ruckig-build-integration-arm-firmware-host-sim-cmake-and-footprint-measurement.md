@@ -2,7 +2,7 @@
 id: '001'
 title: Vendored-Ruckig build integration (ARM firmware + host-sim CMake) and footprint
   measurement
-status: open
+status: done
 use-cases:
 - SUC-001
 depends-on: []
@@ -75,21 +75,89 @@ now integrated into (it currently only mentions the smoke test).
 
 ## Acceptance Criteria
 
-- [ ] Repo-root `CMakeLists.txt` compiles `libraries/ruckig/src/*.cpp` into
+- [x] Repo-root `CMakeLists.txt` compiles `libraries/ruckig/src/*.cpp` into
       the ARM firmware image; a full ARM build (`just build-clean` or
       equivalent) succeeds with no new warnings/errors attributable to
       Ruckig.
-- [ ] `tests/_infra/sim/CMakeLists.txt`'s `firmware_host` target compiles
+- [x] `tests/_infra/sim/CMakeLists.txt`'s `firmware_host` target compiles
       the same sources and links with no errors.
-- [ ] Flash/RAM footprint delta from vendoring Ruckig into the ARM image is
+- [x] Flash/RAM footprint delta from vendoring Ruckig into the ARM image is
       measured and recorded in this ticket's completion notes (nRF52833:
       512 KB flash / 128 KB RAM shared with CODAL — record both the
       absolute delta and whether it is a concern).
-- [ ] `tests/sim/unit/test_ruckig_smoke.py` still passes unmodified.
-- [ ] No `source/` file added or modified — this ticket is build-system
+- [x] `tests/sim/unit/test_ruckig_smoke.py` still passes unmodified.
+- [x] No `source/` file added or modified — this ticket is build-system
       only.
-- [ ] Full sim suite (`uv run pytest`) stays green — no regression from
+- [x] Full sim suite (`uv run pytest`) stays green — no regression from
       the CMake changes.
+
+## Completion Notes (2026-07-07)
+
+**Build integration.** Repo-root `CMakeLists.txt`: added
+`include_directories(${PROJECT_SOURCE_DIR}/libraries/ruckig/include)` next
+to the `cmon-pid`/`tinyekf` calls, plus a `file(GLOB RUCKIG_SOURCES
+"${PROJECT_SOURCE_DIR}/libraries/ruckig/src/*.cpp")` /
+`list(APPEND SOURCE_FILES ${RUCKIG_SOURCES})` immediately before the
+`if("${SOURCE_FILES}" STREQUAL "")` guard. `tests/_infra/sim/CMakeLists.txt`:
+the same `file(GLOB RUCKIG_SOURCES ...)` appended to `FIRMWARE_SOURCES`, and
+`${REPO_ROOT}/libraries/ruckig/include` added to `firmware_host`'s
+`target_include_directories()`. Exactly Decision 7's chosen approach — no
+`add_subdirectory()`, no new CMake target. No `source/` file touched.
+
+Both a clean ARM build (`just build-clean`) and the host-sim
+`firmware_host` target compiled all 11 vendored Ruckig `.cpp` sources and
+linked with **zero** warnings or errors attributable to Ruckig (the build
+log's only "error"-substring hits are pre-existing vendor-SDK filenames like
+`app_error_handler_gcc.c`, not actual diagnostics).
+
+**Flash/RAM footprint (measured 2026-07-07, `arm-none-eabi-size` on
+`build/MICROBIT` after `just build-clean`; nRF52833: 512 KB flash / 128 KB
+RAM shared with CODAL, FLASH partition specifically is 364 KB):**
+
+- **As committed by this ticket** (Ruckig compiled in, but no `source/` call
+  site — ticket 002 is the first consumer): **delta = 0 bytes**, both flash
+  and RAM. Confirmed byte-identical `arm-none-eabi-size` output before vs.
+  after this ticket's CMake change (FLASH 177764 B / 47.69%, RAM 120768 B /
+  98.33%, both builds) and zero Ruckig object code surviving in the linked
+  ELF. Cause: the vendored codal `target.json`'s linker flags already carry
+  `-Wl,--gc-sections` (combined with `-ffunction-sections -fdata-sections`),
+  so with no reachable call site the entire vendored library is discarded at
+  link time. **Not a concern** — this is the true, honest number for what
+  this ticket alone changes.
+- **Worst case once something calls it** — measured via a temporary,
+  uncommitted scratch probe (a `scratch_ruckig_footprint_probe.cpp` calling
+  `Ruckig<1>::calculate()` once, wired into `main()`, both deleted/reverted
+  before this commit, per the ticket's own allowance for a "trivial,
+  temporary … build-verification step"): **+151,512 bytes flash**
+  (177764 B -> 329276 B, 47.69% -> 88.34% of the 364 KB FLASH region),
+  **~0 bytes RAM delta** (120768 B unchanged — `Ruckig<1>`'s working state
+  is fully stack-local via `std::array`, no heap, no added static/global
+  instance). **This IS flagged as a real concern**: linking in *any* single
+  call to `Ruckig<1>::calculate()` pulls in the full quartic/quintic
+  position/velocity step-solver code (e.g. `position_third_step2.cpp` alone
+  is 55 KB of source) rather than just the branch a given input takes, and
+  it leaves only ~43 KB (11.7%) FLASH headroom once ticket 002 lands. This
+  is expected to be a **one-time fixed cost** (the same `Ruckig<1>`
+  instantiation is reused by every later Planner call site, so it should not
+  multiply per call site), but every later ticket in this sprint should
+  budget flash against this number, not against the ticket-001 zero-delta.
+  Documented in `libraries/ruckig/README.vendored.md`'s new "Build
+  integration" section.
+
+**On-target solve-time (Open Question 4):** NOT measured by this ticket —
+not one of this ticket's acceptance criteria (only the footprint delta is),
+and no `source/` call site exists yet to time. Deferred to ticket 002 (the
+first real consumer), which will have an actual call site to instrument.
+
+**Tests.** `tests/sim/unit/test_ruckig_smoke.py` passes unmodified. Full
+`uv run pytest`: 671 passed, 4 xfailed, 1 failed
+(`tests/testgui/test_set_origin.py::test_set_origin_button_resets_fused_pose_to_world_origin_against_real_sim`,
+"D never reached mode=I" within an 8s timeout). Verified this failure is
+**pre-existing and unrelated to this ticket**: reproduced identically
+(same assertion, same timeout) with the CMake changes stashed out and the
+host-sim library rebuilt against the unmodified baseline. It is the exact
+D-drive terminal-overshoot behavior this whole sprint exists to fix
+(tickets 002+), not a regression from build-integration.
 
 ## Testing
 

@@ -87,6 +87,11 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 file(GLOB KINEMATICS_SOURCES "${SOURCE_DIR}/kinematics/*.cpp")
 file(GLOB MOTION_SOURCES     "${SOURCE_DIR}/motion/*.cpp")
 file(GLOB HAL_SIM_SOURCES    "${SOURCE_DIR}/hal/sim/*.cpp")
+# libraries/ruckig (Sprint 089, Decision 7): the vendored solver's 11 core
+# .cpp sources, appended the same way as the ARM build's root CMakeLists.txt
+# (no add_subdirectory() -- Ruckig's own build files were not vendored, see
+# libraries/ruckig/README.vendored.md).
+file(GLOB RUCKIG_SOURCES     "${REPO_ROOT}/libraries/ruckig/src/*.cpp")
 
 set(FIRMWARE_SOURCES
     ${KINEMATICS_SOURCES}
@@ -113,6 +118,7 @@ set(FIRMWARE_SOURCES
     "${SOURCE_DIR}/hal/velocity_pid.cpp"
     "${SOURCE_DIR}/types/clock_host.cpp"
     "${SOURCE_DIR}/com/i2c_bus_host.cpp"
+    ${RUCKIG_SOURCES}
 )
 
 add_library(firmware_host SHARED
@@ -135,8 +141,12 @@ add_library(firmware_host SHARED
 # libraries/tinyekf: header-only EKF linear-algebra backend (mirrors the root
 # CMakeLists.txt's own include_directories() for the ARM build) --
 # estimation/ekf_tiny.h's #include <tinyekf.h> needs this on the path.
+# libraries/ruckig/include: vendored jerk-limited trajectory generator
+# (Sprint 089, Decision 7) -- mirrors the root CMakeLists.txt's
+# include_directories() for the ARM build.
 target_include_directories(firmware_host PRIVATE
     "${SOURCE_DIR}"
     "${SOURCE_DIR}/types"
     "${REPO_ROOT}/libraries/tinyekf"
+    "${REPO_ROOT}/libraries/ruckig/include"
 )

@@ -224,6 +224,12 @@ include_directories(${PROJECT_SOURCE_DIR}/${LIB_DEST})
 include_directories(${PROJECT_SOURCE_DIR}/libraries/cmon-pid)
 # libraries/tinyekf: header-only EKF LA backend (Sprint 050, Phase B).
 include_directories(${PROJECT_SOURCE_DIR}/libraries/tinyekf)
+# libraries/ruckig: vendored jerk-limited trajectory generator (Sprint 089).
+# Header-only include path, same as cmon-pid/tinyekf above; its 11 core .cpp
+# sources are appended into SOURCE_FILES below (Decision 7 -- appended to the
+# flat source list, not a separate static-library target, since no build
+# file was vendored -- see libraries/ruckig/README.vendored.md).
+include_directories(${PROJECT_SOURCE_DIR}/libraries/ruckig/include)
 
 #add_subdirectory("${PROJECT_SOURCE_DIR}/${LIB_DEST}/${dep}")
 
@@ -366,6 +372,15 @@ add_definitions(-DUSE_ORDERED_TICK)
 # ---------------------------------------------------------------------------
 # retained in-tree for future mecanum; excluded from firmware build
 list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/robot/MecanumHAL\\.cpp$")
+
+# libraries/ruckig (Sprint 089, Decision 7): the vendored solver's 11 core
+# .cpp sources are not under source/, so RECURSIVE_FIND_FILE above never
+# reaches them -- append them to the flat source list directly, the same
+# treatment every other source/ translation unit already gets. No
+# add_subdirectory(): Ruckig's own upstream build files were deliberately not
+# vendored (libraries/ruckig/README.vendored.md).
+file(GLOB RUCKIG_SOURCES "${PROJECT_SOURCE_DIR}/libraries/ruckig/src/*.cpp")
+list(APPEND SOURCE_FILES ${RUCKIG_SOURCES})
 
 if("${SOURCE_FILES}" STREQUAL "")
     message(FATAL_ERROR "${BoldRed}No user application to build, please add a main.cpp at: ${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}${ColourReset}")
