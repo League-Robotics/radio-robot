@@ -53,9 +53,18 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #                                               pose-set (SI/ZERO, 084-007) +
 #                                               OTOS (OI/OZ/OR/OP/OV/OL/OA,
 #                                               084-008) families
-#   dev_loop.cpp                            -- ticket 002's shared loop body,
-#                                               082-003's pose-estimation step,
-#                                               082-004's periodic TLM step
+#   dev_loop.cpp                            -- ticket 002's shared loop body
+#                                               (082-003's pose-estimation
+#                                               step, 082-004's periodic TLM
+#                                               step, 087-006's
+#                                               LoopContext/runLoopPass()
+#                                               rewrite onto Rt::Blackboard)
+#   runtime/configurator.cpp                -- 087-005's Configurator (the
+#                                               single config-application
+#                                               authority)
+#   runtime/command_router.cpp              -- 087-006's CommandRouter (the
+#                                               pointerless command-tier
+#                                               translator)
 #   hal/sim/*.cpp                           -- PhysicsWorld/SimMotor/SimOdometer
 #   hal/velocity_pid.cpp                    -- ticket 001's shared PID
 #   types/clock_host.cpp                    -- HOST_BUILD fake clock
@@ -96,6 +105,8 @@ set(FIRMWARE_SOURCES
     "${SOURCE_DIR}/commands/system_commands.cpp"
     "${SOURCE_DIR}/commands/telemetry_commands.cpp"
     "${SOURCE_DIR}/dev_loop.cpp"
+    "${SOURCE_DIR}/runtime/configurator.cpp"
+    "${SOURCE_DIR}/runtime/command_router.cpp"
     ${HAL_SIM_SOURCES}
     "${SOURCE_DIR}/hal/velocity_pid.cpp"
     "${SOURCE_DIR}/types/clock_host.cpp"

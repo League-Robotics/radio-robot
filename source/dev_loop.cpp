@@ -1,47 +1,56 @@
-// dev_loop.cpp -- devLoopTick(): see dev_loop.h for the full rationale.
+// dev_loop.cpp -- runLoopPass(): see dev_loop.h for the full rationale.
 //
-// This is main.cpp's PRE-081-002 loop body, copied verbatim, with exactly
-// two adaptations (both documented at their point of use below):
-//   1. The statement comes from the `statement` parameter (a DevLoopStatement*
-//      the caller already built) instead of reading directly from a
-//      Subsystems::Communicator.
-//   2. The watchdog-fire `EVT dev_watchdog` reply goes out via
-//      `loop.defaultReply`/`loop.defaultReplyCtx` instead of the hardcoded
-//      `serialReply`/`&comm` main.cpp used before this extraction.
-// Every other line -- the two hardware.tick(now) slices, the outbox drain,
-// the Drivetrain governance, and the watchdog check's neutralize-and-emit
-// sequence -- is unchanged.
+// This is main.cpp's PRE-087 loop body (as it existed just before this
+// ticket, itself a direct descendant of the ORIGINAL pre-081-002 inline
+// loop), with every direct subsystem-outbox touch replaced by a
+// Rt::Blackboard queue post/drain:
+//   - the six (087-006-deleted) *State structs' outbox fields are gone;
+//     Rt::CommandRouter::route() posts into bb's queues instead.
+//   - the outbox-drain step becomes: drain bb.hardwareBroadcastIn (DEV
+//     STOP's broadcast neutral -- exempt from motorIn[]'s per-port in-use
+//     marking), bb.devWatchdogWindowIn/bb.streamWatchdogWindowIn (the two
+//     loop-owned watchdogs' windows), bb.otosCommandIn/bb.otosSetPoseIn (the
+//     odometer's one-shot actions -- the loop is the one place besides the
+//     Configurator that legitimately holds Hardware&, so it drains these
+//     directly rather than through any subsystem's own tick()), and ALL
+//     pending bb.configIn deltas (drained to exhaustion, not rationed to
+//     one-per-pass -- see dev_loop.h's file header: this preserves today's
+//     "SET/DEV *CFG takes effect immediately" behavior; ticket 007's real
+//     cyclic executive is what introduces Decision 8's deliberate
+//     multi-pass config-application latency).
+//   - Drivetrain governance is gated on `active() || !bb.driveIn.empty()`,
+//     not `active()` alone: Subsystems::Drivetrain::tick() is now the ONLY
+//     thing that pops bb.driveIn (drivetrain.h's own tick() doc comment), so
+//     a reactivation request (e.g. DEV DT VW posted while standby) must
+//     still get a tick() call to actually take effect, even though `active()`
+//     was false the instant BEFORE this pass's post.
+//   - the motion executor drains bb.motionIn (Rt::MotionCommand) instead of
+//     MotionLoopState's outbox; loop.activeVelocityVerb/loop.streamWatchdog
+//     are the loop's own persistent bookkeeping, fed exactly the way
+//     MotionLoopState's fields were (see runtime/commands.h's doc comment).
+//   - bb's committed state cells (motor[]/drivetrain/encoderPose/fusedPose/
+//     planner) are populated here, at the same relative points a command
+//     handler would have read the LIVE subsystem directly before this
+//     ticket, so a query dispatched mid-pass sees the same freshness it
+//     always did.
 #include "dev_loop.h"
 
 #if ROBOT_DEV_BUILD
 
 #include <cstdio>
+#include <cstring>
 
-#include "runtime/commands.h"
-#include "runtime/queue.h"
+#include "commands/command_processor.h"
+#include "commands/telemetry_commands.h"
+#include "hal/capability/hal_command.h"
 
 namespace {
 
 // motionVerbForMode -- maps the msg::DriveMode a Planner goal was driving to
-// its wire verb, for "EVT done <verb> ..." text (084-002). Sampled from
+// its wire verb, for "EVT done <verb> ..." text. Sampled from
 // Planner::state().mode BEFORE calling tick() each pass, since a goal that
 // completes THIS pass transitions mode_ back to IDLE INSIDE that same
-// tick() call (planner.cpp) -- reading state() after tick() would always
-// see IDLE for a just-completed goal.
-//
-// DISTANCE/GO_TO each still uniquely identify their own verb (D/G). STREAMING
-// and TIMED, as of 084-005's Decision 6 (planner.cpp's velocityShapedMode()),
-// are each now shared by MORE than one verb: STREAMING is `S` or a bare `R`
-// (no stop=); TIMED is `T`, a stop=-bearing `R`, `TURN`, or `RT`. DriveMode
-// alone cannot disambiguate any of these -- `activeVelocityVerb`
-// (MotionLoopState, set by handleR/handleTURN/handleRT, and CLEARED by
-// handleS/handleT/handleD/handleG -- see motion_commands.h's field doc
-// comment) is the disambiguation mechanism: non-empty means the active goal
-// was staged by R/TURN/RT, so it names the actual wire verb; empty falls
-// back to the mode's own plain verb (S/T). `VELOCITY` itself is no longer
-// ever emitted by planner.cpp (see velocityShapedMode()'s doc comment) --
-// this switch keeps a defensive case for it rather than assuming that
-// invariant holds forever.
+// tick() call. Unaffected by this rewrite -- ported verbatim.
 const char* motionVerbForMode(msg::DriveMode mode, const char* activeVelocityVerb) {
   switch (mode) {
     case msg::DriveMode::STREAMING:
@@ -55,202 +64,196 @@ const char* motionVerbForMode(msg::DriveMode mode, const char* activeVelocityVer
   }
 }
 
+// resolveTelemetryReply -- maps bb.telemetryChannel to the loop's own
+// serial/radio reply sink (087-006: replaces the pre-087 captured
+// ReplyFn/void* pair -- see blackboard.h's file header on telemetryChannel).
+void resolveTelemetryReply(const LoopContext& loop, Subsystems::Channel channel,
+                           ReplyFn* replyFn, void** replyCtx) {
+  if (channel == Subsystems::Channel::RADIO) {
+    *replyFn = loop.radioReply;
+    *replyCtx = loop.radioCtx;
+  } else {
+    *replyFn = loop.serialReply;
+    *replyCtx = loop.serialCtx;
+  }
+}
+
 }  // namespace
 
-void devLoopTick(DevLoop& loop, uint32_t now, const DevLoopStatement* statement) {
+void runLoopPass(LoopContext& loop, Rt::Blackboard& bb, uint32_t now,
+                 const Subsystems::CommunicatorToCommandProcessorStatement* statement) {
     Subsystems::Hardware& hardware = *loop.hardware;
     Subsystems::Drivetrain& drivetrain = *loop.drivetrain;
-    DevLoopState& devState = *loop.devState;
 
-    // 087-004: Hardware::tick() gained a per-port Rt::Mailbox<msg::MotorCommand>
-    // motorIn[]/bool motorResetIn[] pair (source/runtime/queue.h; see
-    // hardware.h's tick() doc comment). dev_loop.cpp has no Blackboard-backed
-    // motorIn[]/motorResetIn[] to source real ones from yet (that wiring is
-    // ticket 007's job, which also deletes this whole file -- see
-    // dev_loop.h's file header) -- an always-empty/all-false local pair here
-    // is a mechanical compile fix only, mirroring ticket 087-003's own
-    // noDriveInYet precedent immediately below: both hardware.tick() slices
-    // this pass see an empty motorIn[]/all-false motorResetIn[], so tick()'s
-    // new consumption loop is a no-op and every existing behavior is
-    // unchanged.
-    Rt::Mailbox<msg::MotorCommand> noMotorInYet[Subsystems::Hardware::kPortCount];
-    bool noMotorResetInYet[Subsystems::Hardware::kPortCount] = {false, false, false, false};
-
-    hardware.tick(now, noMotorInYet, noMotorResetInYet);   // slice 1: any due collect lands before this pass's dispatch reads state
+    hardware.tick(now, bb.motorIn, bb.motorResetIn);   // slice 1: any due collect lands before this pass's dispatch reads state
 
     if (statement != nullptr) {
         // Feed on any statement, regardless of content or dispatch outcome --
-        // see dev_commands.h's watchdog contract. (Adaptation 1: statement
-        // comes from the parameter, not directly from a Communicator.)
-        loop.watchdog->feed(now);
-        // Parse happens inside process(): replies go out the statement's own
-        // return path directly (unaffected by this ticket); setpoint-shaped
-        // DEV commands land in devState's outbox instead of calling
-        // Hal/Drivetrain write methods -- see dev_commands.h/.cpp's
-        // pure-transformer reshape.
-        loop.processor->process(statement->line, statement->replyFn, statement->replyCtx);
+        // see dev_commands.h's watchdog contract.
+        loop.watchdog.feed(now);
+        loop.router->route(*statement, bb);
     }
 
-    // Drain the outbox: the caller (main.cpp; a future sim_api.cpp) is the
-    // sole caller of hardware.apply()/drivetrain.apply() for anything
-    // DEV-sourced.
-    if (devState.hasHardwareCommand) {
-        hardware.apply(devState.hardwareCommand);
-        devState.hasHardwareCommand = false;
-    }
-    if (devState.hasDrivetrainCommand) {
-        drivetrain.apply(devState.drivetrainCommand);
-        devState.hasDrivetrainCommand = false;
+    // Drain bb.hardwareBroadcastIn -- DEV STOP's broadcast neutral,
+    // deliberately NOT bb.motorIn[] (a broadcast must not mark any port
+    // in-use -- see dev_commands.h's file header).
+    if (!bb.hardwareBroadcastIn.empty()) {
+        msg::MotorCommand neutral = bb.hardwareBroadcastIn.take();
+        Hal::CommandProcessorToHardwareCommand broadcast;
+        broadcast.allPorts = true;
+        broadcast.count = 0;
+        broadcast.addressed[0].command = neutral;
+        hardware.apply(broadcast);
     }
 
-    if (drivetrain.active()) {
-        // Binding queried, not duplicated -- ports() reads straight from
-        // DrivetrainConfig (sprint 079 decision 8; DevLoopState no longer
-        // holds its own leftPort/rightPort copy).
-        Subsystems::DrivetrainPorts p = drivetrain.ports();
-        // 087-003: Drivetrain::tick() gained a driveIn Mailbox parameter
-        // (source/runtime/queue.h; see drivetrain.h's tick() doc comment)
-        // that it drains before running its setpoint-governance path.
-        // dev_loop.cpp still stages setpoints via the direct
-        // drivetrain.apply(devState.drivetrainCommand) call above (its own
-        // outbox-drain mechanism, unaffected by this ticket) -- it has no
-        // Blackboard-backed driveIn to source a real one from yet (that
-        // wiring is ticket 007's job, which also deletes this whole file --
-        // see dev_loop.h's file header). An always-empty local Mailbox here
-        // is a mechanical compile fix only: it stays empty, so tick() takes
-        // the "no new command" branch and governs the setpoint already
-        // applied above, unchanged.
-        Rt::Mailbox<msg::DrivetrainCommand> noDriveInYet;
-        drivetrain.tick(now, hardware.motor(p.left).state(), hardware.motor(p.right).state(),
-                         noDriveInYet);
-        if (drivetrain.hasCommand()) {
+    // Drain the two loop-owned watchdogs' window mailboxes, then publish
+    // their current windows for GET/DEV WD-adjacent reads.
+    if (!bb.devWatchdogWindowIn.empty()) {
+        loop.watchdog.setWindow(bb.devWatchdogWindowIn.take());
+    }
+    if (!bb.streamWatchdogWindowIn.empty()) {
+        loop.streamWatchdog.setWindow(bb.streamWatchdogWindowIn.take());
+    }
+    bb.devWatchdogWindow = loop.watchdog.window();
+    bb.streamWatchdogWindow = loop.streamWatchdog.window();
+
+    // Drain the odometer's one-shot command queues directly -- the loop
+    // legitimately holds Hardware& (same composition-root status as
+    // Rt::Configurator); Hal::Odometer has no tick()-driven queue parameter
+    // of its own.
+    Hal::Odometer* odometerForCmds = hardware.odometer();
+    if (odometerForCmds != nullptr) {
+        if (!bb.otosCommandIn.empty()) {
+            odometerForCmds->apply(bb.otosCommandIn.take());
+        }
+        if (!bb.otosSetPoseIn.empty()) {
+            msg::SetPose pose = bb.otosSetPoseIn.take();
+            msg::Pose2D otosPose;
+            otosPose.x = pose.x;
+            otosPose.y = pose.y;
+            otosPose.h = pose.h;
+            msg::OdometerCommand cmd;
+            cmd.setSetPose(otosPose);
+            odometerForCmds->apply(cmd);
+        }
+    } else {
+        // No device -- discard rather than let either Mailbox look
+        // perpetually "full" to its next post() (Mailbox::post() overwrites
+        // anyway, but draining keeps behavior obviously inert either way).
+        bb.otosCommandIn.take();
+        bb.otosSetPoseIn.take();
+    }
+
+    // Config-plane drain: apply EVERY pending Rt::ConfigDelta synchronously,
+    // this SAME pass (see this file's header comment and dev_loop.h's own
+    // note on why this is not rationed to one-per-pass in this transitional
+    // loop).
+    while (loop.configurator->pending(bb)) {
+        loop.configurator->applyOne(bb);
+    }
+
+    if (drivetrain.active() || !bb.driveIn.empty()) {
+        // Binding queried fresh -- bb.drivetrainConfig is the Configurator's
+        // own published cell, kept in sync by the config-plane drain above.
+        uint32_t governedLeft = bb.drivetrainConfig.left_port;
+        uint32_t governedRight = bb.drivetrainConfig.right_port;
+        drivetrain.tick(now, hardware.motor(governedLeft).state(),
+                        hardware.motor(governedRight).state(), bb.driveIn);
+        // active() is re-checked AFTER tick() (which may have just popped a
+        // standby-only {NONE, standby=true} steal off bb.driveIn -- DEV M's
+        // authority-steal, dev_commands.cpp) -- Drivetrain::tick() sets
+        // hasCommand() UNCONDITIONALLY whenever it runs (its own doc
+        // comment), so a mere steal (posted so THIS pass's governance
+        // doesn't fight a bound-port DEV M command) would otherwise still
+        // push its now-stale/idle held command out to hardware, clobbering
+        // the very port(s) DEV M just addressed via bb.motorIn[] (which
+        // slice 2, below, has not drained yet this pass). Only a Drivetrain
+        // that is ACTUALLY active after this tick() (a real TWIST/WHEELS/
+        // NEUTRAL command, not a bare steal) gets its output pushed to
+        // hardware -- matches today's pre-087 contract, where the steal was
+        // applied via a direct Drivetrain::apply() call that never invoked
+        // tick()'s governance math at all.
+        if (drivetrain.active() && drivetrain.hasCommand()) {
             hardware.apply(drivetrain.takeCommand());
+        } else if (drivetrain.hasCommand()) {
+            drivetrain.takeCommand();   // discard -- standby; nothing should reach hardware
         }
     }
 
     // Slice 2: whatever request/write this pass's dispatch (or the
-    // Drivetrain's own re-governed target) just staged goes out now -- the
-    // sanctioned second hardware.tick() call (architecture-update.md (079)
-    // decision 6). Same always-empty/all-false local pair as slice 1 above
-    // (087-004) -- see that call's own comment.
-    hardware.tick(now, noMotorInYet, noMotorResetInYet);
+    // Drivetrain's own re-governed target) just staged goes out now.
+    hardware.tick(now, bb.motorIn, bb.motorResetIn);
 
-    // Pose estimation (082-003; dev_loop.h's own doc comment has the full
-    // rationale): ports() is queried UNCONDITIONALLY -- unlike the
-    // drivetrain.active() governance block above, pose estimation is a
-    // passive observer of whatever the bound wheels are doing, never an
-    // authority-gated actor. leftObs/rightObs are this pass's FRESHEST
-    // reads (post-slice-2). hardware.odometer() is nullptr for
-    // Subsystems::NezhaHardware (no real-hardware OTOS driver this sprint)
-    // and non-null for Subsystems::SimHardware -- when non-null, its
-    // tick(now) is called and its pose() sampled before
-    // Subsystems::PoseEstimator::tick() runs, so the fresh sample is ready
-    // the same pass it was produced. Exactly ONE loop.poseEstimator->tick()
-    // call follows, unconditionally -- the single most important
-    // correctness property in this step (see dev_loop_pose_estimator_harness.cpp).
-    Subsystems::DrivetrainPorts p = drivetrain.ports();
-    msg::MotorState leftObs = hardware.motor(p.left).state();
-    msg::MotorState rightObs = hardware.motor(p.right).state();
+    // Commit bb.motor[] a first time here -- a query dispatched mid-pass
+    // (before this point) already saw slice-1-fresh state via the same
+    // Hardware::state(port) reads a translator makes; this second commit is
+    // what pose estimation/the motion executor/telemetry (all later in this
+    // same pass) see, matching this pass's freshest (post-slice-2) reads.
+    for (uint32_t port = 1; port <= Rt::kPortCount; ++port) {
+        bb.motor[port - 1] = hardware.state(port);
+    }
+
+    // Pose estimation: ports() queried UNCONDITIONALLY -- pose estimation
+    // passively OBSERVES the bound wheels rather than requiring authority
+    // over them. leftObs/rightObs are this pass's FRESHEST reads
+    // (post-slice-2).
+    uint32_t left = bb.drivetrainConfig.left_port;
+    uint32_t right = bb.drivetrainConfig.right_port;
+    msg::MotorState leftObs = hardware.motor(left).state();
+    msg::MotorState rightObs = hardware.motor(right).state();
     Hal::Odometer* odometer = hardware.odometer();
     msg::PoseEstimate sampledPose = {};
     if (odometer != nullptr) {
         odometer->tick(now);
         sampledPose = odometer->pose();
+        bb.otos = sampledPose;
+        bb.otosValid = true;
+    } else {
+        bb.otosValid = false;
     }
-    // 087-004: PoseEstimator::tick() gained a
-    // Rt::WorkQueue<Rt::PoseResetCommand,4>& poseResetIn parameter (source/
-    // runtime/commands.h; see pose_estimator.h's tick() doc comment).
-    // dev_loop.cpp has no Blackboard-backed poseResetIn to source a real one
-    // from yet (that wiring is ticket 007's job, which also deletes this
-    // whole file) -- an always-empty local queue here is a mechanical
-    // compile fix only, mirroring the noMotorInYet/noDriveInYet precedents
-    // above: SI/ZERO still land via the existing direct
-    // setPose()/resetEncoderBaseline() calls in source/commands/
-    // pose_commands.cpp, unaffected by this ticket.
-    Rt::WorkQueue<Rt::PoseResetCommand, 4> noPoseResetInYet;
     loop.poseEstimator->tick(now, leftObs, rightObs, odometer != nullptr ? &sampledPose : nullptr,
-                              noPoseResetInYet);
+                             bb.poseResetIn);
 
-    // Motion executor (084-002; dev_loop.h's own doc comment has the full
-    // rationale). Placed AFTER pose estimation (needs loop.poseEstimator->
-    // fusedPose(), just produced above) and BEFORE periodic TLM emission
-    // (so a mode/authority change this pass is reflected in the SAME pass's
-    // telemetry, once ticket 005 reads Planner::state().mode there).
-    MotionLoopState& motionState = *loop.motionState;
-
-    // plannerEngagedThisPass -- gates the drivetrain.apply() drain below.
-    // Planner::tick() unconditionally HOLDS a twist command every pass, even
-    // while fully idle (a (0,0,0) hold -- see planner.cpp's holdTwistCommand()
-    // call at the end of tick()), so draining hasCommand()/takeCommand() into
-    // drivetrain.apply() UNCONDITIONALLY every pass would call
-    // Drivetrain::setTwist() -- which ALWAYS (re)activates authority, even
-    // for a zero twist -- forever after the very first devLoopTick() call,
-    // regardless of whether any S/T/D/STOP was ever issued. That would
-    // permanently steal Drivetrain's authority away from DEV DT/DEV M with
-    // no wire command ever asking for it, breaking `mode=I` at rest (082-004)
-    // and any DEV-driven test. The gate is true exactly when Planner has
-    // something ACTUAL to say this pass: a fresh command was just staged
-    // (S/T/D/STOP, including the sTimeout-fired synthetic STOP below), or a
-    // goal was already active going into this tick (still running, or
-    // completing on this very tick -- hasActiveCommand() only flips false
-    // INSIDE tick()/apply(), so sampling it here, before tick() runs, still
-    // catches the final pass). Once a goal goes fully idle with no further
-    // command, this stays false and Planner's held zero-twist is simply
-    // never drained again -- Drivetrain's authority is left exactly where
-    // the last REAL drain (a running goal's last twist, or an explicit
-    // STOP's zero twist) put it, matching Open Question 3's "whichever last
-    // issued a command wins" contract.
+    // Motion executor: drains bb.motionIn (staged by
+    // source/commands/motion_commands.cpp's S/T/D/R/TURN/RT/G/STOP
+    // handlers) into Planner::apply() -- this file, not a command handler,
+    // is the sole per-pass orchestrator.
     bool plannerEngagedThisPass = false;
-
-    // Drain motionState's outbox (staged by source/commands/
-    // motion_commands.cpp's S/T/D/STOP handlers) into Planner::apply() --
-    // this file, not a command handler, is the sole per-pass orchestrator,
-    // mirroring DevLoopState's own outbox-drain discipline above.
-    if (motionState.hasCommand) {
-        loop.planner->apply(motionState.command, now);
-        motionState.hasCommand = false;
+    if (!bb.motionIn.empty()) {
+        Rt::MotionCommand mc = bb.motionIn.take();
+        loop.planner->apply(mc.command, now);
+        // activeVelocityVerb persists across passes -- updated here exactly
+        // when a fresh command is staged (mirrors the pre-087
+        // MotionLoopState field's own write sites).
+        std::strncpy(loop.activeVelocityVerb, mc.verb, sizeof(loop.activeVelocityVerb) - 1);
+        loop.activeVelocityVerb[sizeof(loop.activeVelocityVerb) - 1] = '\0';
+        if (mc.feedStreamWatchdog) {
+            loop.streamWatchdog.feed(now);
+        }
         plannerEngagedThisPass = true;
     }
 
-    // sTimeout (084-002): the streaming-drive watchdog, DISTINCT from
-    // loop.watchdog (SerialSilenceWatchdog, fed by ANY statement regardless
-    // of content) -- sTimeout is fed ONLY by S's own handler and only
-    // matters while a STREAMING goal S/VW itself staged is the one actually
-    // active; a later T/D/STOP simply stops this check from ever running
-    // again until the next S.
-    //
-    // Gating on `mode == STREAMING` ALONE stopped being sufficient once
-    // 084-005's Decision 6 (planner.cpp's velocityShapedMode()) made a bare
-    // `R` (no stop=) ALSO report DriveMode::STREAMING: `R`'s own ticket
-    // (084-003) acceptance is "no stop of its own" -- it must run
-    // open-ended until an explicit STOP or its own stop= clause, NEVER
-    // subject to S's sTimeout (which R's handler never feeds). The extra
-    // `activeVelocityVerb[0] == '\0'` check restores that scoping: `handleS`
-    // clears activeVelocityVerb when it stages a goal (motion_commands.cpp),
-    // so a genuine S/VW-driven STREAMING session always has it empty, while
-    // a bare-R-driven one always has it set to "R" -- excluding exactly the
-    // one case this watchdog must never fire for.
+    // sTimeout: DISTINCT from loop.watchdog (fed by ANY statement). Gating
+    // on `mode == STREAMING` alone is not sufficient once a bare `R` also
+    // reports STREAMING -- the `activeVelocityVerb[0] == '\0'` check
+    // excludes an R-driven session (R's handler never sets
+    // feedStreamWatchdog).
     if (loop.planner->state().mode == msg::DriveMode::STREAMING &&
-        motionState.activeVelocityVerb[0] == '\0' &&
-        motionState.sTimeout.check(now)) {
+        loop.activeVelocityVerb[0] == '\0' &&
+        loop.streamWatchdog.check(now)) {
         msg::PlannerCommand stopCmd;
         stopCmd.setStop(true);
         loop.planner->apply(stopCmd, now);
         plannerEngagedThisPass = true;
         char wbuf[40];
         CommandProcessor::replyEvt(wbuf, sizeof(wbuf), "safety_stop", "reason=watchdog",
-                                   loop.defaultReply, loop.defaultReplyCtx);
+                                   loop.serialReply, loop.serialCtx);
     }
 
     plannerEngagedThisPass = plannerEngagedThisPass || loop.planner->hasActiveCommand();
 
     // mode is sampled BEFORE tick() -- see motionVerbForMode()'s own doc
-    // comment for why (a goal completing THIS pass transitions mode_ to
-    // IDLE inside tick() itself). tick() itself still runs unconditionally
-    // every pass, mirroring PoseEstimator::tick()'s own always-run contract
-    // (planner.h's tick() doc comment: "the caller does not gate this on
-    // hasActiveCommand()") -- only the DRAIN into drivetrain.apply() below
-    // is gated, not the tick() call itself.
+    // comment for why.
     msg::DriveMode activeModeBeforeTick = loop.planner->state().mode;
     loop.planner->tick(now, leftObs, rightObs, loop.poseEstimator->fusedPose());
     if (plannerEngagedThisPass && loop.planner->hasCommand()) {
@@ -266,46 +269,43 @@ void devLoopTick(DevLoop& loop, uint32_t now, const DevLoopStatement* statement)
         }
         char name[16];
         snprintf(name, sizeof(name), "done %s",
-                 motionVerbForMode(activeModeBeforeTick, motionState.activeVelocityVerb));
+                 motionVerbForMode(activeModeBeforeTick, loop.activeVelocityVerb));
         char wbuf[96];
-        CommandProcessor::replyEvt(wbuf, sizeof(wbuf), name, body, loop.defaultReply,
-                                   loop.defaultReplyCtx);
+        CommandProcessor::replyEvt(wbuf, sizeof(wbuf), name, body, loop.serialReply,
+                                   loop.serialCtx);
     }
 
-    // Periodic TLM emission (082-004; dev_loop.h's own doc comment has the
-    // full rationale). Gated on periodMs > 0 (STREAM 0 disables this
-    // entirely) and on enough time having elapsed since the last emission --
-    // or no emission having happened yet (hasLastEmit), so the very first
-    // pass after a channel issues STREAM emits immediately rather than
-    // waiting a full period. telemetryEmit() itself no-ops on a null
-    // replyFn (no channel has ever issued STREAM), so this is safe to call
-    // unconditionally once the time gate opens.
-    TelemetryState& telemetry = *loop.telemetry;
-    if (telemetry.periodMs > 0 &&
-        (!telemetry.hasLastEmit ||
-         (now - telemetry.lastEmitMs) >= telemetry.periodMs)) {
-        telemetryEmit(telemetry, now, telemetry.replyFn, telemetry.replyCtx);
-        telemetry.lastEmitMs = now;
-        telemetry.hasLastEmit = true;
+    // Commit the remaining observable state cells (motor[] was already
+    // re-committed above, before pose estimation) for GET/telemetry/
+    // CommandRouter reads next pass (and by the periodic-emission step
+    // immediately below, this SAME pass).
+    bb.drivetrain = drivetrain.state();
+    bb.encoderPose = loop.poseEstimator->encoderPose();
+    bb.fusedPose = loop.poseEstimator->fusedPose();
+    bb.planner = loop.planner->state();
+
+    // Periodic TLM emission: gated on bb.telemetryPeriod > 0 and enough time
+    // having elapsed since the last emission (or none yet).
+    if (bb.telemetryPeriod > 0 &&
+        (!bb.telemetryHasLastEmit || (now - bb.telemetryLastEmitMs) >= bb.telemetryPeriod)) {
+        ReplyFn replyFn = nullptr;
+        void* replyCtx = nullptr;
+        resolveTelemetryReply(loop, bb.telemetryChannel, &replyFn, &replyCtx);
+        telemetryEmit(bb, now, replyFn, replyCtx);
+        bb.telemetryLastEmitMs = now;
+        bb.telemetryHasLastEmit = true;
     }
 
-    if (loop.watchdog->check(now)) {
-        // Applied IMMEDIATELY, not staged via the outbox -- the caller is
+    if (loop.watchdog.check(now)) {
+        // Applied IMMEDIATELY, not staged via any bb queue -- the loop is
         // the top of the call tree, already the visible mover of every
         // command; an emergency stop gains nothing from an extra pass of
-        // outbox latency (architecture-update.md's narrow, deliberate
-        // exception to "never call apply() outside main/the HAL"). The SAME
-        // buildBroadcastNeutral()/buildDrivetrainStop() construction path
-        // `DEV STOP`'s handler stages is used here directly.
+        // queue latency.
         hardware.apply(buildBroadcastNeutral(msg::Neutral::BRAKE));
         drivetrain.apply(buildDrivetrainStop(msg::Neutral::BRAKE));
         char wbuf[32];
-        // Adaptation 2: the loop-originated default reply sink
-        // (loop.defaultReply/loop.defaultReplyCtx) replaces main.cpp's
-        // hardcoded serialReply/&comm -- see dev_loop.h's file header and
-        // architecture-update.md Decision 3.
-        CommandProcessor::replyEvt(wbuf, sizeof(wbuf), "dev_watchdog", nullptr,
-                                   loop.defaultReply, loop.defaultReplyCtx);
+        CommandProcessor::replyEvt(wbuf, sizeof(wbuf), "dev_watchdog", nullptr, loop.serialReply,
+                                   loop.serialCtx);
     }
 }
 

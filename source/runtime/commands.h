@@ -43,6 +43,31 @@ struct PoseResetCommand {
   msg::SetPose pose;  // valid when kind == kSetPose
 };
 
+// MotionCommand (087-006) -- S/T/D/R/TURN/RT/G/STOP's fan-out to the
+// loop-owned motion-executor step (drains into Subsystems::Planner::apply(),
+// ticket 007), posted to Rt::Blackboard::motionIn (a latest-wins Mailbox --
+// mirrors the pre-087 MotionLoopState outbox's own "latest-wins, same as
+// every other outbox in this tree" contract exactly). `verb` carries the
+// SAME disambiguation the pre-087 MotionLoopState::activeVelocityVerb field
+// held: empty for S/T/D/G (Planner's own msg::DriveMode already names the
+// verb unambiguously), "R"/"TURN"/"RT" otherwise (all three of which can
+// share a msg::DriveMode value with S/T -- see motion_commands.h's own field
+// doc comment, ported verbatim). Kept as a small wrapper around
+// msg::PlannerCommand (rather than widening that generated type) since verb
+// disambiguation is loop/wire bookkeeping, not a Planner-level concept.
+struct MotionCommand {
+  msg::PlannerCommand command;
+  char verb[8] = "";
+  // Set ONLY by handleS() (motion_commands.cpp) -- the loop feeds its own
+  // loop-owned StreamingDriveWatchdog when it drains a MotionCommand with
+  // this flag set (mirrors the pre-087 contract: "sTimeout: fed ONLY by S's
+  // own handler -- never by any other statement", motion_commands.h). Kept
+  // separate from `verb` (which persists across passes as the "currently
+  // active goal's verb" bookkeeping) since this is a one-shot, this-dispatch-
+  // only signal, true only for the ONE MotionCommand S itself posts.
+  bool feedStreamWatchdog = false;
+};
+
 // ConfigDelta -- concretized 087-005 (was a target+port placeholder left by
 // ticket 087-002/087-004). A target-tagged, FIELD-MASKED PARTIAL config
 // delta headed for the Configurator's single bb.configIn queue.

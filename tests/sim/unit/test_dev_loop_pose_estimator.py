@@ -74,6 +74,22 @@ _VELOCITY_PID_SRC = _SOURCE_DIR / "hal" / "velocity_pid.cpp"
 # definition must link in, same as every other harness that pulls in a TU
 # calling this seam.
 _CLOCK_HOST_SRC = _SOURCE_DIR / "types" / "clock_host.cpp"
+# 087-006: runLoopPass() (renamed from devLoopTick()) unconditionally
+# dereferences LoopContext::configurator every pass (the config-plane
+# drain) -- Rt::Configurator's own .cpp must link in too.
+_CONFIGURATOR_SRC = _SOURCE_DIR / "runtime" / "configurator.cpp"
+# 087-006: runLoopPass()'s `if (statement != nullptr) loop.router->route(...)`
+# call site references Rt::CommandRouter::route() even though this harness's
+# statement is always nullptr (never actually reached at runtime) -- the
+# reference still needs linking. Rt::CommandRouter's constructor
+# unconditionally builds ONE unified table (liveness + all six command
+# families, command_router.cpp), so every family this harness didn't
+# already need (config/pose/otos/system) must link in too.
+_COMMAND_ROUTER_SRC = _SOURCE_DIR / "runtime" / "command_router.cpp"
+_SYSTEM_COMMANDS_SRC = _SOURCE_DIR / "commands" / "system_commands.cpp"
+_CONFIG_COMMANDS_SRC = _SOURCE_DIR / "commands" / "config_commands.cpp"
+_POSE_COMMANDS_SRC = _SOURCE_DIR / "commands" / "pose_commands.cpp"
+_OTOS_COMMANDS_SRC = _SOURCE_DIR / "commands" / "otos_commands.cpp"
 
 _SOURCES = [
     _HARNESS_SRC,
@@ -97,6 +113,12 @@ _SOURCES = [
     _SIM_ODOMETER_SRC,
     _VELOCITY_PID_SRC,
     _CLOCK_HOST_SRC,
+    _CONFIGURATOR_SRC,
+    _COMMAND_ROUTER_SRC,
+    _SYSTEM_COMMANDS_SRC,
+    _CONFIG_COMMANDS_SRC,
+    _POSE_COMMANDS_SRC,
+    _OTOS_COMMANDS_SRC,
 ]
 
 # messages/common.h documents its own target as "CODAL C++11" -- build the

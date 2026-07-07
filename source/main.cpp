@@ -1,41 +1,30 @@
 // ---------------------------------------------------------------------------
 // main.cpp -- the dev loop: sprint 079's three-beat "feed it, tick it, ask
-// it" shape (architecture-update.md "The Part-2 loop"; issue's Part 2).
+// it" shape (architecture-update.md "The Part-2 loop"), rewired for sprint
+// 087 ticket 006's Rt::Blackboard/Rt::Configurator/Rt::CommandRouter
+// transport (architecture-update-r1.md).
 //
-// 081-002: the loop body itself (the "tick it, ask it" beats) is no longer
-// written inline here -- it moved, verbatim, into devLoopTick()
-// (source/dev_loop.{h,cpp}), the shared function a future simulated caller
-// (ticket 081-004's sim_api.cpp) can run too, with no hand-mirrored second
-// copy. main.cpp's own loop now collapses to exactly the "feed it" beat plus
-// one call into the shared body: read the clock, tick the Communicator
-// (comms is Communicator's job ALONE -- it never enters the shared body,
-// see dev_loop.h's file header and architecture-update.md (081) Decision 3),
-// build a DevLoopStatement from whatever statement (if any) Communicator
-// just handed back, and call devLoopTick(). See dev_loop.cpp for the
-// line-by-line shape of what used to live here (the two hardware.tick()
-// slices, the outbox drain, Drivetrain governance, and the watchdog check).
+// 087-006: the six per-family `*State` structs (DevLoopState, TelemetryState,
+// MotionLoopState, ConfigCommandState, PoseCommandState, OtosCommandState)
+// and DevLoop are gone -- every command family now reads/posts against ONE
+// Rt::Blackboard, reached from a command handler via Rt::CommandRouter (see
+// runtime/command_router.h). main.cpp's own construction responsibility
+// grows accordingly: it builds `bb`, the four subsystems, a Rt::Configurator
+// (the one deliberate exception to "no subsystem pointers outside the
+// loop" -- Decision 4), a Rt::CommandRouter, and dev_loop.h's LoopContext
+// (the loop's own remaining subsystem references + the two loop-owned
+// watchdogs), then runs runLoopPass() once per iteration -- the SAME shared
+// function tests/_infra/sim/sim_api.cpp calls (mirrors ticket 081-002's
+// "no hand-mirrored second copy" precedent, applied to the new transport).
 //
-// This supersedes 077-001/003/004's smoke wiring and 079-004's minimal loop
-// adaptation: CommandProcessor/DevLoopState are still a pure transformer
-// (statements in, commands + replies out -- see dev_commands.h) and the
-// SOLE caller of Subsystems::Hardware::apply()/Subsystems::Drivetrain::
-// apply() for anything DEV-sourced is now devLoopTick() itself, draining
-// DevLoopState's outbox once per pass instead of DEV handlers calling
-// either subsystem's write methods directly.
+// This is NOT ticket 007's real cyclic executive (no double-buffer commit,
+// no mandatory/slack split, no uBit.sleep(1) yield) -- see dev_loop.h's file
+// header for the full rationale; main.cpp's own loop shape (feed the
+// Communicator, build a statement, call runLoopPass()) is otherwise
+// unchanged from before this ticket.
 //
-// `p.left`/`p.right` (Subsystems::DrivetrainPorts, from `drivetrain.ports()`)
-// are whichever two NezhaMotors `DEV DT PORTS` last bound -- devLoopTick()
-// never hardcodes which ports they are, and never holds its own copy of the
-// binding (DevLoopState's old leftPort/rightPort fields are gone; the
-// binding lives in DrivetrainConfig -- sprint 079 decision 8).
-//
-// Build gating: the DEV family (and the HAL/Drivetrain/dev_loop wiring it
-// needs) is compiled in only when ROBOT_DEV_BUILD is set (codal.json's
-// "config" object; see dev_commands.h's file header for the full
-// rationale). This sprint's codal.json sets it to 1 for this tree -- there
-// is no production loop yet, so the #else branch below is a minimal
-// liveness-only fallback (PING/VER/HELP/ECHO/ID, no HAL) proving the gate
-// is a real fork, not decoration.
+// Build gating: unchanged -- the DEV family (and the HAL/Drivetrain/
+// dev_loop wiring it needs) compiles in only when ROBOT_DEV_BUILD is set.
 // ---------------------------------------------------------------------------
 
 #include "MicroBit.h"
@@ -50,17 +39,10 @@
 #include "subsystems/drivetrain.h"
 #include "subsystems/planner.h"
 #include "subsystems/pose_estimator.h"
-#include "commands/config_commands.h"
-#include "commands/dev_commands.h"
-#include "commands/motion_commands.h"
-#include "commands/otos_commands.h"
-#include "commands/pose_commands.h"
-#include "commands/telemetry_commands.h"
 #include "dev_loop.h"
 #include "messages/motor.h"
 #include "messages/drivetrain.h"
 #include "messages/planner.h"
-#include <vector>
 #endif
 
 static MicroBit uBit;
@@ -91,14 +73,10 @@ static msg::MotorConfig defaultMotorConfigs[Subsystems::NezhaHardware::kPortCoun
 
 // defaultPlannerConfig -- 084-002: unlike the motor/drivetrain configs above,
 // there is no Config::defaultPlannerConfig() generator yet (no robot-JSON
-// field maps onto msg::PlannerConfig today -- ticket 084-006's SET/GET only
-// wires `minSpeed`, per architecture-update.md (084) Decision 2's key
-// table; a_max/a_decel/v_body_max/yaw_rate_max/yaw_acc_max have no live-tune
-// path this sprint). These are fixed, conservative-but-workable ramp limits
-// -- generous headroom above S/T/D's documented +-1000 mm/s wire range
-// (docs/protocol-v2.md §10) so a max-speed command is never silently
-// clamped, matching the values ticket 084-001's own planner_harness.cpp
-// test fixture (generousConfig()) already exercises this engine against.
+// field maps onto msg::PlannerConfig today). These are fixed, conservative-
+// but-workable ramp limits -- generous headroom above S/T/D's documented
+// +-1000 mm/s wire range (docs/protocol-v2.md §10) so a max-speed command is
+// never silently clamped.
 msg::PlannerConfig defaultPlannerConfig() {
     msg::PlannerConfig cfg;
     cfg.a_max = 800.0f;              // [mm/s^2]
@@ -121,226 +99,113 @@ int main() {
     uBit.i2c.setFrequency(100000);
 
     // Comms: the Communicator subsystem (serial + radio, both enabled).
-    // radio_channel.cpp (persisted boot channel selection, button-edit UI) is
-    // not copied to this tree -- a default CommunicatorConfig's zero
-    // radio_channel == radiochan::kDefault, so the radio simply comes up on
-    // the relay's default channel every boot.
     static Subsystems::Communicator comm(uBit.serial, uBit.radio, uBit.messageBus);
     comm.configure(msg::CommunicatorConfig());
     comm.begin();
 
 #if ROBOT_DEV_BUILD
     // --- HAL: one NezhaMotor per port (1-4) over the shared I2CBus. ---
-    // Boot calibration comes from generated code baked from the active robot
-    // JSON, not from main -- see Config::defaultMotorConfigs (boot_config.h).
     static_assert(Config::kMotorConfigCount == Subsystems::NezhaHardware::kPortCount,
                   "boot_config motor count must match NezhaHardware::kPortCount");
     Config::defaultMotorConfigs(defaultMotorConfigs);
     static I2CBus i2cBus(uBit.i2c);
     // 086-006: the real Hal::OtosOdometer leaf (I2C address 0x17) is
     // constructed alongside the four NezhaMotors, wired with ticket 086-005's
-    // boot-config values (mounting offset + linear/angular scale
-    // multipliers) -- see Config::defaultOtosBootConfig (boot_config.h).
+    // boot-config values.
     static Subsystems::NezhaHardware hardware(i2cBus, defaultMotorConfigs,
                                                Config::defaultOtosBootConfig());
     hardware.begin();
 
     // --- Drivetrain: differential (Tovez), bench-placeholder trackwidth. ---
-    // sync_gain is deliberately left at its zero default here (governor OFF
-    // at boot) -- ticket 7's HITL bench pass found no live way to turn it on
-    // short of a reflash and added `DEV DT CFG sync_gain=...`
-    // (commands/dev_commands.cpp) for exactly that; bench scripts that need
-    // the governor set it explicitly over the wire rather than this getting
-    // a nonzero boot default.
     static Subsystems::Drivetrain drivetrain;
-    // Trackwidth + drive-pair port binding come from generated code baked from
-    // the active robot JSON (Config::defaultDrivetrainConfig, boot_config.h),
-    // not from main. The binding lives in DrivetrainConfig (sprint 079 decision
-    // 8); the coupled bench rig re-binds via `DEV DT PORTS 3 4` at runtime.
     msg::DrivetrainConfig dtConfig = Config::defaultDrivetrainConfig();
     drivetrain.configure(dtConfig);
 
     // --- Pose estimation (082-003): encoder dead-reckoning + OTOS (EkfTiny)
-    // fusion, a Subsystems-tier peer of Drivetrain -- see
-    // source/subsystems/pose_estimator.h's class comment. configure() reads
-    // the SAME dtConfig drivetrain.configure() just took (one shared
-    // boot-config source, no duplicated values) -- trackwidth/
-    // rotational_slip plus the four EKF noise fields.
+    // fusion. configure() reads the SAME dtConfig drivetrain.configure() just
+    // took (one shared boot-config source).
     static Subsystems::PoseEstimator poseEstimator;
     poseEstimator.configure(dtConfig);
 
     // --- Motion executor (084-002): the goal-closure engine S/T/D/STOP
-    // stage a msg::PlannerCommand into -- see source/subsystems/planner.h's
-    // class comment. Configured with defaultPlannerConfig() (above) since no
-    // boot-config generator exists for msg::PlannerConfig yet.
+    // stage a msg::PlannerCommand into.
     static Subsystems::Planner planner;
     planner.configure(defaultPlannerConfig());
 
-    // --- Telemetry (082-004): STREAM/SNAP wiring, a Subsystems-tier
-    // observer alongside Drivetrain/PoseEstimator -- see
-    // source/commands/telemetry_commands.h's class comment for the full
-    // field-sourcing rule table. periodMs/seq/replyFn/replyCtx/lastEmitMs
-    // all start at their zero/null defaults (streaming off, unbound) until
-    // a channel issues its first STREAM command.
-    static TelemetryState telemetryState;
-    telemetryState.hardware = &hardware;
-    telemetryState.drivetrain = &drivetrain;
-    telemetryState.poseEstimator = &poseEstimator;
-    // 084-005: mode='s sole source (Decision 6) -- see telemetry_commands.h's
-    // file header comment.
-    telemetryState.planner = &planner;
+    // --- Rt::Blackboard (087-006): the single two-plane transport every
+    // command family and the loop itself read/post against. Holds NO
+    // subsystem pointers of any kind.
+    static Rt::Blackboard bb;
 
-    // --- Dev loop shared state: watchdog + DEV command wiring. ---
-    static SerialSilenceWatchdog watchdog;
+    // --- Rt::Configurator (087-005): the single config-application
+    // authority -- the ONE deliberate exception to "no subsystem pointers
+    // outside the loop" (Decision 4).
+    static Rt::Configurator configurator(drivetrain, poseEstimator, planner, hardware,
+                                         dtConfig, defaultPlannerConfig());
+    configurator.publish(bb);   // seed bb's current-config cells from boot config
 
-    static DevLoopState devState;
-    devState.hardware = &hardware;
-    devState.drivetrain = &drivetrain;
-    devState.watchdog = &watchdog;
-    // Seed the CFG-delta shadow so the first `DEV M <n> CFG kp=...` merges
-    // onto the SAME calibration the motor was actually constructed with,
-    // rather than an all-zero blank (see DevLoopState's field comment).
-    for (uint32_t i = 0; i < Subsystems::NezhaHardware::kPortCount; ++i) {
-        devState.motorConfigShadow[i] = defaultMotorConfigs[i];
+    // --- Rt::CommandRouter (087-006): the pointerless command-tier
+    // translator. Reply channels wired to the SAME serialReply/radioReply
+    // adapters CommandProcessor used directly before this ticket.
+    static Rt::CommandRouter router;
+    router.setReplyChannels(serialReply, &comm, radioReply, &comm);
+
+    // --- Boot-time hardware-identity snapshots (blackboard.h's file header):
+    // never rewritten after this one-time seed -- capabilities/device
+    // presence do not change at runtime for any current concrete Hardware
+    // leaf.
+    for (uint32_t port = 1; port <= Rt::kPortCount; ++port) {
+        bb.motorCaps[port - 1] = hardware.motor(port).capabilities();
     }
-    // Seed the drivetrain CFG-delta shadow the same way, so the first
-    // `DEV DT CFG sync_gain=...`/`DEV DT PORTS ...` merges onto the SAME
-    // dtConfig the Drivetrain was actually configured with above
-    // (trackwidth=128, ports=1,2), rather than an all-zero blank -- see
-    // DevLoopState's field comment.
-    devState.drivetrainConfigShadow = dtConfig;
+    bb.otosPresent = (hardware.odometer() != nullptr);
+
     // Prime the capabilities cache for the default DEV DT PORTS binding --
-    // read back via ports() (not a local copy) since the binding now lives
-    // in DrivetrainConfig -- see drivetrain.h's setMotorCapabilities() doc
-    // comment.
+    // read back via ports() (not a local copy), matching pre-087 boot wiring.
     Subsystems::DrivetrainPorts bootPorts = drivetrain.ports();
     drivetrain.setMotorCapabilities(hardware.motor(bootPorts.left).capabilities(),
                                      hardware.motor(bootPorts.right).capabilities());
 
-    // --- Motion command state (084-002): S/T/D/STOP's own outbox + sTimeout
-    // watchdog -- an independent struct, NOT DevLoopState (architecture-
-    // update.md (084) Decision 7). poseEstimator is wired so the handlers'
-    // wheel-speed (l, r) -> body-twist (v, omega) conversion (BodyKinematics::
-    // forward()) shares the SAME trackwidth telemetry_commands.cpp's twist=
-    // field already reads, never a second, independently-configured copy.
-    static MotionLoopState motionState;
-    motionState.poseEstimator = &poseEstimator;
-
-    // --- Config command state (084-006): SET/GET's own config-plane shadow
-    // -- an independent struct, NOT DevLoopState's motorConfigShadow[]/
-    // drivetrainConfigShadow (architecture-update.md (084) Decision 7). Seeded
-    // from the SAME boot configs passed to NezhaHardware/Drivetrain/Planner
-    // above, mirroring devState's own seeding contract. sTimeoutWatchdog
-    // points at ticket 002's MotionLoopState::sTimeout -- see
-    // config_commands.h's file header.
-    static ConfigCommandState configState;
-    configState.hardware = &hardware;
-    configState.drivetrain = &drivetrain;
-    configState.poseEstimator = &poseEstimator;
-    configState.planner = &planner;
-    configState.sTimeoutWatchdog = &motionState.sTimeout;
-    for (uint32_t i = 0; i < Subsystems::NezhaHardware::kPortCount; ++i) {
-        configState.motorShadow[i] = defaultMotorConfigs[i];
-    }
-    configState.drivetrainShadow = dtConfig;
-    configState.plannerShadow = defaultPlannerConfig();
-
-    // --- Pose command state (084-007): SI/ZERO's own bound-pair + estimator
-    // wiring -- an independent struct, NOT DevLoopState's/ConfigCommandState's
-    // (architecture-update.md (084) Decision 7's same reasoning: SI/ZERO are
-    // synchronous, one-shot verbs with nothing to hold across a tick
-    // boundary -- see pose_commands.h's file header).
-    static PoseCommandState poseState;
-    poseState.hardware = &hardware;
-    poseState.drivetrain = &drivetrain;
-    poseState.poseEstimator = &poseEstimator;
-
-    // --- OTOS command state (084-008): OI/OZ/OR/OV/OP/OL/OA's own state --
-    // an independent struct, NOT DevLoopState's/ConfigCommandState's/
-    // PoseCommandState's (architecture-update.md (084) Decision 7's same
-    // reasoning). 086-006: hardware.odometer() now resolves the real
-    // Hal::OtosOdometer leaf constructed above (no longer nullptr) -- every
-    // one of the seven verbs reaches real OTOS hardware instead of always
-    // replying ERR nodev, unchanged otos_commands.cpp (that file already
-    // resolved hardware.odometer() live on every dispatch).
-    static OtosCommandState otosState;
-    otosState.hardware = &hardware;
-
-    // --- Command table: liveness (PING/VER/HELP/ECHO/ID) + DEV + telemetry
-    // (STREAM/SNAP) + motion (S/T/D/STOP) + config (SET/GET) + pose-set
-    // (SI/ZERO) + OTOS (OI/OZ/OR/OP/OV/OL/OA). ---
-    std::vector<CommandDescriptor> allCommands = systemCommands();
-    std::vector<CommandDescriptor> dev = devCommands(devState);
-    allCommands.insert(allCommands.end(), dev.begin(), dev.end());
-    std::vector<CommandDescriptor> telemetry = telemetryCommands(telemetryState);
-    allCommands.insert(allCommands.end(), telemetry.begin(), telemetry.end());
-    std::vector<CommandDescriptor> motion = motionCommands(motionState);
-    allCommands.insert(allCommands.end(), motion.begin(), motion.end());
-    std::vector<CommandDescriptor> config = configCommands(configState);
-    allCommands.insert(allCommands.end(), config.begin(), config.end());
-    std::vector<CommandDescriptor> pose = poseCommands(poseState);
-    allCommands.insert(allCommands.end(), pose.begin(), pose.end());
-    std::vector<CommandDescriptor> otos = otosCommands(otosState);
-    allCommands.insert(allCommands.end(), otos.begin(), otos.end());
-    static CommandProcessor cmd(allCommands);
-    cmd.setSerialReply(serialReply, &comm);
-
-    // --- Shared dev-loop wiring (081-002; source/dev_loop.h). defaultReply/
-    // defaultReplyCtx is the loop-originated reply sink devLoopTick() uses
-    // for the watchdog-fire EVT (not triggered by any inbound statement) --
-    // byte-identical to this loop's pre-extraction serialReply/&comm.
-    static DevLoop loop;
+    // --- LoopContext (dev_loop.h): the loop's own remaining subsystem
+    // references + the two loop-owned watchdogs. serialReply/serialCtx
+    // doubles as the loop-originated default reply sink (watchdog-fire EVT,
+    // motion-done EVT), byte-identical to this loop's pre-087
+    // serialReply/&comm.
+    static LoopContext loop;
     loop.hardware = &hardware;
     loop.drivetrain = &drivetrain;
     loop.poseEstimator = &poseEstimator;
-    loop.telemetry = &telemetryState;
-    loop.processor = &cmd;
-    loop.watchdog = &watchdog;
-    loop.devState = &devState;
     loop.planner = &planner;
-    loop.motionState = &motionState;
-    loop.defaultReply = serialReply;
-    loop.defaultReplyCtx = &comm;
+    loop.router = &router;
+    loop.configurator = &configurator;
+    loop.serialReply = serialReply;
+    loop.serialCtx = &comm;
+    loop.radioReply = radioReply;
+    loop.radioCtx = &comm;
 
     // Start the serial-silence watchdog's window counting from boot (see
     // SerialSilenceWatchdog::feed()'s doc comment) rather than from an
     // uninitialized "last command" time.
-    watchdog.feed(uBit.systemTime());
+    loop.watchdog.feed(uBit.systemTime());
 
     while (true) {
         uint32_t now = uBit.systemTime();
 
         // Feed it: comms is Communicator's job alone -- it never enters the
-        // shared body (dev_loop.h's file header; architecture-update.md
-        // (081) Decision 3). A taken statement is copied into a
-        // DevLoopStatement (a plain, caller-owned, single-call-lifetime
-        // pointer -- Communicator's own line buffer is only valid until its
-        // next tick(), so this copy must happen before devLoopTick() runs).
+        // shared body. A taken statement is copied into a local
+        // Subsystems::CommunicatorToCommandProcessorStatement (its line[]
+        // is an OWNED buffer -- subsystems/statement.h -- so this copy is
+        // safe past Communicator's own next tick()).
         comm.tick(now);
-        DevLoopStatement stmt;
-        const DevLoopStatement* stmtPtr = nullptr;
-        // 'in' is declared at this (loop-iteration) scope, not inside the
-        // if-block below: stmt.line aliases in.line, and since 087-002
-        // in.line is an OWNED buffer (subsystems/statement.h), not a pointer
-        // into Communicator's own persistent line_[] -- it must outlive the
-        // devLoopTick() call that reads through stmtPtr, so it cannot be
-        // scoped to (and destroyed at the end of) the if-block alone.
         Subsystems::CommunicatorToCommandProcessorStatement in;
+        const Subsystems::CommunicatorToCommandProcessorStatement* stmtPtr = nullptr;
         if (comm.hasStatement()) {
             in = comm.takeStatement();
-            stmt.line = in.line;
-            stmt.replyFn = in.returnPath == Subsystems::Channel::RADIO ? radioReply
-                                                                        : serialReply;
-            stmt.replyCtx = &comm;
-            stmtPtr = &stmt;
+            stmtPtr = &in;
         }
 
-        // Tick it, ask it: the shared dev-loop body (source/dev_loop.cpp) --
-        // the two hardware.tick() slices, statement dispatch, outbox drain,
-        // Drivetrain governance, pose estimation (082-003), and the
-        // watchdog check, byte-identical to this loop's pre-081-002 inline
-        // body plus 082-003's one addition.
-        devLoopTick(loop, now, stmtPtr);
+        // Tick it, ask it: the shared, transitional loop body (source/
+        // dev_loop.cpp) -- see dev_loop.h's file header.
+        runLoopPass(loop, bb, now, stmtPtr);
     }
 #else
     // ROBOT_DEV_BUILD == 0: no production loop exists yet this sprint (see

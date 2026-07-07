@@ -1,46 +1,46 @@
 // sim_api.cpp — extern "C" C ABI wrapper over the new source/ tree's
-// dev-loop firmware (sprint 081-004), compiled into tests/_infra/sim/'s
-// libfirmware_host by this directory's CMakeLists.txt. Loaded from Python
-// via ctypes (host/robot_radio/io/sim_conn.py; tests/_infra/sim/firmware.py,
-// ticket 081-005).
+// dev-loop firmware (sprint 081-004, rewired for sprint 087 ticket 006's
+// Rt::Blackboard/Rt::Configurator/Rt::CommandRouter transport). Loaded from
+// Python via ctypes (host/robot_radio/io/sim_conn.py;
+// tests/_infra/sim/firmware.py, ticket 081-005).
 //
 // SimHandle owns Subsystems::SimHardware + Subsystems::Drivetrain +
-// CommandProcessor + source/dev_loop.h's DevLoop -- the SAME
-// devLoopTick(loop, now, statement) function main.cpp calls, run here
-// instead of being hand-mirrored (see dev_loop.h's file header and
-// clasi/sprints/081-.../architecture-update.md's Step 2 responsibility
-// table for why a second, drifting copy of the loop body is exactly the
-// risk this design avoids).
+// Subsystems::PoseEstimator + Subsystems::Planner + one Rt::Blackboard, one
+// Rt::Configurator, one Rt::CommandRouter, and dev_loop.h's LoopContext --
+// the SAME runLoopPass(loop, bb, now, statement) function main.cpp calls,
+// run here instead of being hand-mirrored (mirrors ticket 081-004's own
+// "no hand-mirrored second copy" precedent, applied to the new transport).
 //
-// Two separate reply sinks (architecture-update.md (081) Decision 3):
-//   - syncStore  -- the DevLoopStatement's own replyFn/replyCtx during
-//     sim_command(): captures ONLY that command's own OK/ERR/… reply.
-//   - asyncStore -- DevLoop's defaultReply/defaultReplyCtx, the
-//     loop-originated reply sink devLoopTick() uses for output it
-//     generates ITSELF rather than in response to a statement (today, only
-//     the watchdog-fire `EVT dev_watchdog`) -- drained by
-//     sim_get_async_evts().
+// Two separate reply sinks (architecture-update.md (081) Decision 3,
+// unchanged in shape by this rewrite):
+//   - syncStore  -- the ONE statement's own reply during sim_command():
+//     wired as BOTH of Rt::CommandRouter's reply channels (serial AND
+//     radio -- the sim has no real transport distinction, so both resolve
+//     to the same sink; only Rt::CommandRouter::route() ever picks between
+//     them, and it always sees the same target either way).
+//   - asyncStore -- LoopContext's own serialReply/serialCtx (and
+//     radioReply/radioCtx), the loop-originated reply sink runLoopPass()
+//     uses for output it generates ITSELF rather than in response to a
+//     statement (the watchdog-fire EVT, motion-done EVT, safety_stop EVT,
+//     and -- new since this ticket -- periodic TLM emission bound to
+//     whichever channel issued STREAM) -- drained by sim_get_async_evts().
 //
-// The dt=0 synchronous-command trick (Decision 4): sim_command() replays
-// devLoopTick() at the SAME `now` as the most recent sim_tick() call,
-// captured in SimHandle::lastTickNow -- never a fresh timestamp. This is
-// safe ONLY because Subsystems::SimHardware::tick()'s own re-entry guard
-// (ticket 003) treats a repeated same-`now` hardware.tick() as a complete
-// no-op; the statement dispatch, outbox drain, and watchdog check inside
-// devLoopTick() still run normally on every call.
-#include "commands/command_processor.h"
-#include "commands/config_commands.h"
+// The dt=0 synchronous-command trick (Decision 4, unchanged): sim_command()
+// replays runLoopPass() at the SAME `now` as the most recent sim_tick()
+// call, captured in SimHandle::lastTickNow -- never a fresh timestamp. Safe
+// ONLY because Subsystems::SimHardware::tick()'s own re-entry guard treats a
+// repeated same-`now` hardware.tick() as a complete no-op; the statement
+// dispatch, queue drains, and watchdog check inside runLoopPass() still run
+// normally on every call.
 #include "commands/dev_commands.h"
-#include "commands/motion_commands.h"
-#include "commands/otos_commands.h"
-#include "commands/pose_commands.h"
-#include "commands/system_commands.h"
-#include "commands/telemetry_commands.h"
 #include "dev_loop.h"
 #include "hal/sim/sim_setters.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
 #include "messages/planner.h"
+#include "runtime/blackboard.h"
+#include "runtime/command_router.h"
+#include "runtime/configurator.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
 #include "subsystems/planner.h"
@@ -51,15 +51,13 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <vector>
 
 namespace {
 
 // ---------------------------------------------------------------------------
 // ReplyStore — a fixed-size reply accumulator. Two independent instances
 // live in SimHandle (see file header); this struct is intentionally the
-// same shape for both, just as tests_old/_infra/sim/sim_api.cpp's single
-// combined ReplyStore was — sim_conn.py's own comment documents 2048 as the
+// same shape for both. sim_conn.py's own comment documents 2048 as the
 // long-standing convention for this buffer's capacity.
 // ---------------------------------------------------------------------------
 constexpr int kReplyBufSize = 2048;
@@ -86,13 +84,8 @@ void storeReply(const char* msg, void* ctx) {
 // Boot configuration — sim_api.cpp cannot call Config::defaultMotorConfigs()/
 // Config::defaultDrivetrainConfig() (source/config/boot_config.cpp): that
 // generated file is baked from the active robot JSON and is deliberately
-// ABSENT from this ticket's explicit source list (it is a real-robot boot
-// concern, not a build/ABI concern — see the CMakeLists.txt file header's
-// "Absent" list). These are sane, self-contained sim defaults instead: the
-// same bench-tuned velocity-PID gains boot_config.cpp's generator bakes in,
-// and a trackwidth matched to Hal::PhysicsWorld's own default so the
-// Drivetrain's kinematics and the plant's true chassis geometry agree with
-// no artificial calibration mismatch.
+// ABSENT from this ticket's explicit source list. These are sane,
+// self-contained sim defaults instead.
 // ---------------------------------------------------------------------------
 struct MotorConfigSet {
     msg::MotorConfig cfg[Subsystems::Hardware::kPortCount];
@@ -127,13 +120,7 @@ msg::DrivetrainConfig defaultSimDrivetrainConfig() {
 
 // defaultSimPlannerConfig — 084-002: mirrors source/main.cpp's own
 // defaultPlannerConfig() (no Config::defaultPlannerConfig() generator exists
-// for either build — see that function's doc comment); same generous,
-// headroom-above-the-wire-range ramp limits so a sim test's `D`/`T`/`S`
-// converges to its commanded speed in a bounded, predictable number of
-// ticks instead of the ramp being clamped to zero (an all-zero, never-
-// configured msg::PlannerConfig — see tests/sim/unit/planner_harness.cpp's
-// own "a_max == 0 (never configured) means the ramp never leaves zero"
-// scenario).
+// for either build).
 msg::PlannerConfig defaultSimPlannerConfig() {
     msg::PlannerConfig cfg;
     cfg.a_max = 800.0f;              // [mm/s^2]
@@ -150,120 +137,32 @@ msg::PlannerConfig defaultSimPlannerConfig() {
 }
 
 // ---------------------------------------------------------------------------
-// buildAndWireCommandTable — wires DevLoopState's hardware/drivetrain/
-// watchdog pointers (devCommands()'s own doc comment requires state.watchdog
-// be set before it is called — DEV WD dereferences it), wires
-// TelemetryState's hardware/drivetrain/poseEstimator pointers (082-004,
-// telemetryCommands()'s own doc comment requires the same before any call),
-// wires MotionLoopState's poseEstimator pointer (084-002, motionCommands()'s
-// own doc comment requires the same before any call), wires PoseCommandState's
-// hardware/drivetrain/poseEstimator pointers (084-007, poseCommands()'s own
-// doc comment requires the same before any call), wires OtosCommandState's
-// hardware pointer (084-008, otosCommands()'s own doc comment requires the
-// same before any call), and returns the full command table (liveness + DEV
-// + telemetry + motion + config + pose-set + OTOS), mirroring main.cpp's own
-// systemCommands()+devCommands()+telemetryCommands()+motionCommands()+
-// configCommands()+poseCommands()+otosCommands() assembly exactly. Packaged
-// as a function (rather than inline in main.cpp's style) so it can run from
-// SimHandle's member-initializer list, wiring devState/telemetryState/
-// motionState/poseState/otosState as a side effect at the exact point
-// CommandProcessor needs the finished table.
-// ---------------------------------------------------------------------------
-std::vector<CommandDescriptor> buildAndWireCommandTable(
-    DevLoopState& devState,
-    TelemetryState& telemetryState,
-    MotionLoopState& motionState,
-    ConfigCommandState& configState,
-    PoseCommandState& poseState,
-    OtosCommandState& otosState,
-    Subsystems::Hardware& hardware,
-    Subsystems::Drivetrain& drivetrain,
-    Subsystems::PoseEstimator& poseEstimator,
-    Subsystems::Planner& planner,
-    SerialSilenceWatchdog& watchdog) {
-    devState.hardware = &hardware;
-    devState.drivetrain = &drivetrain;
-    devState.watchdog = &watchdog;
-
-    telemetryState.hardware = &hardware;
-    telemetryState.drivetrain = &drivetrain;
-    telemetryState.poseEstimator = &poseEstimator;
-    // 084-005: mode='s sole source (Decision 6) -- see telemetry_commands.h's
-    // file header comment.
-    telemetryState.planner = &planner;
-
-    motionState.poseEstimator = &poseEstimator;
-
-    // 084-006: SET/GET's own config-plane shadow -- an independent struct,
-    // NOT devState's (architecture-update.md (084) Decision 7). Pointer
-    // wiring only here; the shadow fields themselves are seeded from
-    // SimHandle's own boot configs in the constructor below, mirroring
-    // devState.motorConfigShadow[]/drivetrainConfigShadow's seeding.
-    configState.hardware = &hardware;
-    configState.drivetrain = &drivetrain;
-    configState.poseEstimator = &poseEstimator;
-    configState.planner = &planner;
-    configState.sTimeoutWatchdog = &motionState.sTimeout;
-
-    // 084-007: SI/ZERO's own bound-pair + estimator wiring -- an independent
-    // struct, NOT devState's/configState's (pose_commands.h's file header).
-    poseState.hardware = &hardware;
-    poseState.drivetrain = &drivetrain;
-    poseState.poseEstimator = &poseEstimator;
-
-    // 084-008: OI/OZ/OR/OP/OV/OL/OA's own state -- an independent struct,
-    // NOT devState's/configState's/poseState's (otos_commands.h's file
-    // header). odometer() resolves &hardware.simOdometer() through
-    // Subsystems::SimHardware's own override -- every verb acks OK here,
-    // unlike main.cpp's NezhaHardware-backed table.
-    otosState.hardware = &hardware;
-
-    std::vector<CommandDescriptor> all = systemCommands();
-    std::vector<CommandDescriptor> dev = devCommands(devState);
-    all.insert(all.end(), dev.begin(), dev.end());
-    std::vector<CommandDescriptor> telemetry = telemetryCommands(telemetryState);
-    all.insert(all.end(), telemetry.begin(), telemetry.end());
-    std::vector<CommandDescriptor> motion = motionCommands(motionState);
-    all.insert(all.end(), motion.begin(), motion.end());
-    std::vector<CommandDescriptor> config = configCommands(configState);
-    all.insert(all.end(), config.begin(), config.end());
-    std::vector<CommandDescriptor> pose = poseCommands(poseState);
-    all.insert(all.end(), pose.begin(), pose.end());
-    std::vector<CommandDescriptor> otos = otosCommands(otosState);
-    all.insert(all.end(), otos.begin(), otos.end());
-    return all;
-}
-
-// ---------------------------------------------------------------------------
 // SimHandle — one self-contained simulation instance allocated per
 // sim_create() call. Member declaration order IS construction order (C++
 // initializes members in declaration order regardless of the initializer
-// list's own order) — motorConfigs before hardware (which reads it),
-// hardware/drivetrain/watchdog/devState before processor (whose
-// initializer wires devState's pointers and builds the command table that
-// needs them already valid).
+// list's own order) -- motorConfigs before hardware (which reads it),
+// hardware/drivetrain/poseEstimator/planner before configurator (whose
+// constructor reads hardware.config(port) and needs live subsystem
+// references), bb before router (router's own construction is bb-agnostic,
+// but bb must exist before configurator.publish(bb)/router.setReplyChannels()
+// run in the constructor body).
 // ---------------------------------------------------------------------------
 struct SimHandle {
     MotorConfigSet motorConfigs;
     Subsystems::SimHardware hardware;
     Subsystems::Drivetrain drivetrain;
-    Subsystems::PoseEstimator poseEstimator;   // 082-003: wired into loop below
-    Subsystems::Planner planner;               // 084-002: wired into loop below
-    SerialSilenceWatchdog watchdog;
-    DevLoopState devState;
-    TelemetryState telemetryState;   // 082-004: wired into loop below
-    MotionLoopState motionState;     // 084-002: wired into loop below
-    ConfigCommandState configState;  // 084-006: SET/GET's own config shadow
-    PoseCommandState poseState;      // 084-007: SI/ZERO's own bound-pair + estimator wiring
-    OtosCommandState otosState;      // 084-008: OI/OZ/OR/OP/OV/OL/OA's own state
-    CommandProcessor processor;
-    DevLoop loop;
+    Subsystems::PoseEstimator poseEstimator;
+    Subsystems::Planner planner;
+    Rt::Blackboard bb;
+    Rt::Configurator configurator;
+    Rt::CommandRouter router;
+    LoopContext loop;
 
     ReplyStore syncStore;    // sim_command()'s synchronous reply (see file header)
-    ReplyStore asyncStore;   // devLoopTick()'s loop-originated output (watchdog EVT)
+    ReplyStore asyncStore;   // runLoopPass()'s loop-originated output (watchdog/motion/telemetry)
 
     // [ms] the most recent `now` passed to sim_tick(); sim_command() replays
-    // devLoopTick() at this SAME now (the dt=0 synchronous-command trick,
+    // runLoopPass() at this SAME now (the dt=0 synchronous-command trick,
     // Decision 4 — see file header).
     uint32_t lastTickNow = 0;
 
@@ -273,9 +172,8 @@ struct SimHandle {
 SimHandle::SimHandle()
     : motorConfigs(defaultMotorConfigSet()),
       hardware(motorConfigs.cfg),
-      processor(buildAndWireCommandTable(devState, telemetryState, motionState, configState,
-                                          poseState, otosState, hardware, drivetrain,
-                                          poseEstimator, planner, watchdog))
+      configurator(drivetrain, poseEstimator, planner, hardware,
+                   defaultSimDrivetrainConfig(), defaultSimPlannerConfig())
 {
     // Primes all four ports' encoders — parity with main.cpp's
     // hardware.begin() call, before the Drivetrain is configured.
@@ -285,7 +183,7 @@ SimHandle::SimHandle()
     drivetrain.configure(dtConfig);
     // 082-003: PoseEstimator reads the SAME dtConfig drivetrain.configure()
     // just took -- one shared boot-config source, mirroring main.cpp's own
-    // wiring (source/main.cpp).
+    // wiring.
     poseEstimator.configure(dtConfig);
 
     // 084-002: Planner configured with defaultSimPlannerConfig() (above) --
@@ -293,25 +191,21 @@ SimHandle::SimHandle()
     // call.
     planner.configure(defaultSimPlannerConfig());
 
-    // Seed the CFG-delta shadows the same way main.cpp does (DevLoopState's
-    // own field comment): the first `DEV M <n> CFG ...`/`DEV DT CFG ...`
-    // must merge onto the SAME calibration the motors/drivetrain were
-    // actually constructed/configured with, not an all-zero blank.
-    for (uint32_t i = 0; i < Subsystems::Hardware::kPortCount; ++i) {
-        devState.motorConfigShadow[i] = motorConfigs.cfg[i];
-    }
-    devState.drivetrainConfigShadow = dtConfig;
+    // Rt::Configurator (087-005): seed bb's current-config cells from boot
+    // config -- mirrors main.cpp's configurator.publish(bb) call.
+    configurator.publish(bb);
 
-    // 084-006: seed configState's OWN, independent config-plane shadow the
-    // same way -- SET/GET's first delta must merge onto the SAME
-    // calibration the motors/drivetrain/planner were actually constructed/
-    // configured with, not an all-zero blank (config_commands.h's file
-    // header; mirrors devState's seeding immediately above).
-    for (uint32_t i = 0; i < Subsystems::Hardware::kPortCount; ++i) {
-        configState.motorShadow[i] = motorConfigs.cfg[i];
+    // Rt::CommandRouter (087-006): both reply channels resolve to the SAME
+    // sync store -- the sim has no real serial/radio distinction for a
+    // per-statement reply (see file header).
+    router.setReplyChannels(storeReply, &syncStore, storeReply, &syncStore);
+
+    // Boot-time hardware-identity snapshots (blackboard.h's file header):
+    // never rewritten after this one-time seed.
+    for (uint32_t port = 1; port <= Rt::kPortCount; ++port) {
+        bb.motorCaps[port - 1] = hardware.motor(port).capabilities();
     }
-    configState.drivetrainShadow = dtConfig;
-    configState.plannerShadow = defaultSimPlannerConfig();
+    bb.otosPresent = (hardware.odometer() != nullptr);
 
     // Prime the capabilities cache for the default DEV DT PORTS binding —
     // read back via ports() (not a local copy), mirroring main.cpp exactly.
@@ -322,21 +216,22 @@ SimHandle::SimHandle()
     loop.hardware = &hardware;
     loop.drivetrain = &drivetrain;
     loop.poseEstimator = &poseEstimator;
-    loop.telemetry = &telemetryState;
-    loop.processor = &processor;
-    loop.watchdog = &watchdog;
-    loop.devState = &devState;
     loop.planner = &planner;
-    loop.motionState = &motionState;
-    // The loop-originated reply sink (Decision 3) — devLoopTick()'s watchdog-
-    // fire EVT goes here, never into syncStore (which belongs solely to the
-    // statement currently being dispatched by sim_command(), if any).
-    loop.defaultReply = storeReply;
-    loop.defaultReplyCtx = &asyncStore;
+    loop.router = &router;
+    loop.configurator = &configurator;
+    // The loop-originated reply sink (Decision 3) — runLoopPass()'s
+    // watchdog/motion/telemetry EVTs go here, never into syncStore (which
+    // belongs solely to the statement currently being dispatched by
+    // sim_command(), if any). No real radio/serial distinction in the sim,
+    // so both resolve to the same store.
+    loop.serialReply = storeReply;
+    loop.serialCtx = &asyncStore;
+    loop.radioReply = storeReply;
+    loop.radioCtx = &asyncStore;
 
     // Start the watchdog window from sim t=0 and the host fake clock at 0,
     // mirroring main.cpp's watchdog.feed(uBit.systemTime()) boot call.
-    watchdog.feed(0);
+    loop.watchdog.feed(0);
     Types::setHostClockNow(0);
 }
 
@@ -360,34 +255,40 @@ void sim_destroy(void* h) {
 // Tick / command dispatch
 // ---------------------------------------------------------------------------
 
-// Advance the sim by one ordinary pass: devLoopTick(loop, now, nullptr) --
-// no statement, so only the hardware tick, Drivetrain governance (if
+// Advance the sim by one ordinary pass: runLoopPass(loop, bb, now, nullptr)
+// -- no statement, so only the hardware tick, Drivetrain governance (if
 // active), and the watchdog check run this pass.
 void sim_tick(void* h, uint32_t now) {
     SimHandle* s = static_cast<SimHandle*>(h);
     Types::setHostClockNow(now);
     s->lastTickNow = now;
-    devLoopTick(s->loop, now, nullptr);
+    runLoopPass(s->loop, s->bb, now, nullptr);
 }
 
 // Dispatch one NUL-terminated command line synchronously. Copies `line`
-// into a DevLoopStatement whose replyFn/replyCtx point at SimHandle's own
-// syncStore, then calls devLoopTick() at the SAME `now` as the most recent
-// sim_tick() (the dt=0 synchronous-command trick — see file header).
-// Returns the number of reply bytes written into `reply` (not counting the
-// final NUL), matching sim_conn.py's ctypes.c_int expectation.
+// into a Subsystems::CommunicatorToCommandProcessorStatement (an OWNED
+// char[256] buffer -- subsystems/statement.h) whose returnPath is SERIAL
+// (arbitrary -- Rt::CommandRouter's two reply channels are wired to the
+// same sync store either way, see file header), then calls runLoopPass() at
+// the SAME `now` as the most recent sim_tick() (the dt=0 synchronous-command
+// trick — see file header). Returns the number of reply bytes written into
+// `reply` (not counting the final NUL), matching sim_conn.py's ctypes.c_int
+// expectation.
 int sim_command(void* h, const char* line, char* reply, int size) {
     SimHandle* s = static_cast<SimHandle*>(h);
 
     s->syncStore.reset();
 
-    DevLoopStatement stmt;
-    stmt.line = line;
-    stmt.replyFn = storeReply;
-    stmt.replyCtx = &s->syncStore;
+    Subsystems::CommunicatorToCommandProcessorStatement stmt;
+    stmt.returnPath = Subsystems::Channel::SERIAL;
+    stmt.line[0] = '\0';
+    if (line) {
+        std::strncpy(stmt.line, line, sizeof(stmt.line) - 1);
+        stmt.line[sizeof(stmt.line) - 1] = '\0';
+    }
 
     Types::setHostClockNow(s->lastTickNow);
-    devLoopTick(s->loop, s->lastTickNow, &stmt);
+    runLoopPass(s->loop, s->bb, s->lastTickNow, &stmt);
 
     int n = s->syncStore.written;
     if (reply && size > 0) {
@@ -418,18 +319,14 @@ int sim_get_async_evts(void* h, char* evts_buf, int evts_len) {
 // ---------------------------------------------------------------------------
 // Ground-truth reads — Hal::PhysicsWorld's TRUE (unslipped, unerrored)
 // accumulators. Reached through Subsystems::SimHardware's concrete plant()
-// accessor directly, never through the abstract Subsystems::Hardware* base
-// (architecture-update.md (081) Decision 2's Consequences).
+// accessor directly, never through the abstract Subsystems::Hardware* base.
 // ---------------------------------------------------------------------------
 
 float sim_get_true_pose_x(void* h) { return static_cast<SimHandle*>(h)->hardware.plant().truePoseX(); }
 float sim_get_true_pose_y(void* h) { return static_cast<SimHandle*>(h)->hardware.plant().truePoseY(); }
 float sim_get_true_pose_h(void* h) { return static_cast<SimHandle*>(h)->hardware.plant().truePoseH(); }
 
-// exact_pose — legacy aliases for the same true-pose reads (pre-081
-// sim_conn.py names these get_exact_pose_*); kept as a second entry point
-// onto the identical data rather than forcing an immediate host-side rename
-// in this build/ABI-only ticket.
+// exact_pose — legacy aliases for the same true-pose reads.
 float sim_get_exact_pose_x(void* h) { return sim_get_true_pose_x(h); }
 float sim_get_exact_pose_y(void* h) { return sim_get_true_pose_y(h); }
 float sim_get_exact_pose_h(void* h) { return sim_get_true_pose_h(h); }
@@ -456,15 +353,7 @@ void sim_set_true_pose(void* h, float x, float y, float heading) {   // [mm] [mm
 // abstraction, independent of which port happens to be bound to it.
 //
 // sim_get_vel_l/r read the two DEFAULT plant-bound Hal::SimMotor instances'
-// own filtered, encoder-derived velocity() — port 1 = LEFT, port 2 = RIGHT,
-// Subsystems::SimHardware's documented default binding (subsystems/
-// sim_hardware.h's file header) — the errored/filtered observation a real
-// firmware consumer (DEV M STATE, Drivetrain::governRatio) actually reads,
-// as opposed to Hal::PhysicsWorld::trueVelL/R() (already exposed above as
-// ground truth). Subsystems::SimHardware::rebindPlantPorts() is not itself
-// exposed over this ABI (not required by this ticket's acceptance
-// criteria); a future ticket that needs these two reads to track a rebound
-// pair would add that entry point then.
+// own filtered, encoder-derived velocity() — port 1 = LEFT, port 2 = RIGHT.
 //
 // sim_get_pwm_l/r read the plant's own raw commanded actuator value
 // ([-100, 100] — a plant channel, port-independent, like the encoder reads
@@ -490,8 +379,8 @@ float sim_get_otos_h(void* h) { return static_cast<SimHandle*>(h)->hardware.simO
 
 // ---------------------------------------------------------------------------
 // Error-knob setters — each forwards to EXACTLY ONE hal/sim/sim_setters.h
-// free function (ticket 003's canonical call site for that knob); no knob
-// logic is duplicated here beyond the ctypes marshalling itself.
+// free function; no knob logic is duplicated here beyond the ctypes
+// marshalling itself.
 // ---------------------------------------------------------------------------
 
 void sim_set_enc_scale_error(void* h, int side, float err) {

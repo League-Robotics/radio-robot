@@ -1,8 +1,20 @@
 // dev_loop_pose_estimator_harness.cpp — off-hardware acceptance harness for
-// ticket 082-003: proves devLoopTick() (source/dev_loop.{h,cpp}) advances the
-// wired Subsystems::PoseEstimator by EXACTLY one PoseEstimator::tick() call
-// per pass — the ticket's single most important correctness property (see
-// dev_loop.h's own doc comment on the new step).
+// ticket 082-003: proves runLoopPass() (source/dev_loop.{h,cpp}, renamed
+// from devLoopTick()/DevLoop by sprint 087 ticket 006 -- see dev_loop.h's
+// file header) advances the wired Subsystems::PoseEstimator by EXACTLY one
+// PoseEstimator::tick() call per pass — the ticket's single most important
+// correctness property.
+//
+// 087-006: instance "A" is now driven through a real Rt::Blackboard +
+// Rt::Configurator + Rt::CommandRouter + LoopContext. dev_loop.cpp's
+// runLoopPass() unconditionally CALLS Rt::CommandRouter::route() at its
+// `if (statement != nullptr)` call site -- even though this harness's
+// statement is always nullptr (so that call is never actually REACHED at
+// runtime), the reference still needs linking, which pulls in
+// command_router.cpp's own unified six-family table (and therefore every
+// command family + its transitive subsystem/kinematics/motion/estimation/
+// telemetry dependencies) regardless. loop.configurator is ALSO required
+// (runLoopPass() unconditionally drains it every pass, statement or not).
 //
 // --- How "exactly once" is tested here, and what is deliberately NOT
 // attempted ---
@@ -63,13 +75,12 @@
 #include <cstdio>
 #include <string>
 
-#include "commands/command_processor.h"
-#include "commands/dev_commands.h"
-#include "commands/telemetry_commands.h"
 #include "dev_loop.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
+#include "runtime/blackboard.h"
 #include "runtime/commands.h"
+#include "runtime/configurator.h"
 #include "runtime/queue.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
@@ -232,45 +243,47 @@ void runComparison(uint32_t leftPort, uint32_t rightPort, float leftDuty, float 
   fillDefaultConfigs(configs);
   msg::DrivetrainConfig dtConfig = makeDtConfig(leftPort, rightPort);
 
-  // --- Instance A: driven ENTIRELY through the real devLoopTick(). ---
+  // --- Instance A: driven ENTIRELY through the real runLoopPass(). ---
   Subsystems::SimHardware hardwareA(configs);
   hardwareA.begin();
   Subsystems::Drivetrain drivetrainA;
   drivetrainA.configure(dtConfig);
   Subsystems::PoseEstimator poseA;
   poseA.configure(dtConfig);
-  SerialSilenceWatchdog watchdogA;   // default 1000ms window; never fed, never fires (see below)
-  DevLoopState devStateA;
-  // 082-004: TelemetryState's periodMs defaults to 0 (STREAM never issued in
-  // this harness), so devLoopTick()'s periodic-emission step is a no-op --
-  // wired only to satisfy DevLoop::telemetry's non-null contract (dev_loop.h),
-  // never affecting the encoder/fused-pose comparison this harness makes.
-  TelemetryState telemetryA;
-  telemetryA.hardware = &hardwareA;
-  telemetryA.drivetrain = &drivetrainA;
-  telemetryA.poseEstimator = &poseA;
-  // 084-002: devLoopTick() now dereferences DevLoop::planner/motionState
-  // unconditionally every pass (the new motion-executor step) -- wired here
-  // only to satisfy that non-null contract; this harness never stages an
-  // S/T/D/STOP command (statement is always nullptr, see below), so Planner
-  // is never actually engaged and any config is fine.
+  // 084-002: runLoopPass() dereferences LoopContext::planner unconditionally
+  // every pass (the motion-executor step) -- wired here only to satisfy that
+  // non-null contract; this harness never stages an S/T/D/STOP command
+  // (statement is always nullptr, see below), so Planner is never actually
+  // engaged and any config is fine.
   Subsystems::Planner plannerA;
   plannerA.configure(msg::PlannerConfig());
-  MotionLoopState motionStateA;
-  motionStateA.poseEstimator = &poseA;
-  CommandProcessor processorA;   // empty table -- never dispatched (statement is always nullptr)
-  DevLoop loopA;
+  // 087-005/006: Rt::Configurator is dereferenced unconditionally every pass
+  // too (the config-plane drain) -- wired here only to satisfy that
+  // contract; bb.configIn is never posted to in this harness, so
+  // configurator.pending(bb) is always false and applyOne() is never
+  // actually called.
+  Rt::Configurator configuratorA(drivetrainA, poseA, plannerA, hardwareA, dtConfig,
+                                 msg::PlannerConfig());
+  Rt::Blackboard bbA;
+  configuratorA.publish(bbA);   // seeds bbA.drivetrainConfig.left_port/right_port
+  // Constructed but never actually dispatched through (statement is always
+  // nullptr in this harness) -- still required for runLoopPass()'s call
+  // site to link (see this file's header comment).
+  Rt::CommandRouter routerA;
+
+  LoopContext loopA;
   loopA.hardware = &hardwareA;
   loopA.drivetrain = &drivetrainA;
   loopA.poseEstimator = &poseA;
-  loopA.telemetry = &telemetryA;
-  loopA.processor = &processorA;
-  loopA.watchdog = &watchdogA;
-  loopA.devState = &devStateA;
   loopA.planner = &plannerA;
-  loopA.motionState = &motionStateA;
-  loopA.defaultReply = nullptr;   // never invoked -- the watchdog never fires this test
-  loopA.defaultReplyCtx = nullptr;
+  loopA.configurator = &configuratorA;
+  loopA.router = &routerA;
+  // periodMs (bbA.telemetryPeriod) defaults to 0 (STREAM never issued in
+  // this harness), so runLoopPass()'s periodic-emission step is a no-op.
+  loopA.serialReply = nullptr;   // never invoked -- the watchdog never fires this test
+  loopA.serialCtx = nullptr;
+  loopA.radioReply = nullptr;
+  loopA.radioCtx = nullptr;
 
   hardwareA.motor(leftPort).apply(msg::MotorCommand{}.setDutyCycle(leftDuty));
   hardwareA.motor(rightPort).apply(msg::MotorCommand{}.setDutyCycle(rightDuty));
@@ -296,7 +309,7 @@ void runComparison(uint32_t leftPort, uint32_t rightPort, float leftDuty, float 
   for (int i = 0; i < passCount; ++i) {
     now += 20;   // [ms] -- passCount*20 stays well under the watchdog's 1000ms window
 
-    devLoopTick(loopA, now, nullptr);
+    runLoopPass(loopA, bbA, now, nullptr);
     oneReferencePass(hardwareREF, drivetrainREF, poseREF, now);
 
     msg::PoseEstimate encA = poseA.encoderPose();
