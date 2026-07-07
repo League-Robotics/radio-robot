@@ -31,7 +31,7 @@ _STOP_CONDITION_SRC = _SOURCE_DIR / "motion" / "stop_condition.cpp"
 # messages/common.h documents its own target as "CODAL C++11" -- build the
 # host harness to the same standard so it exercises exactly the language
 # subset the firmware itself uses.
-_CXX_STANDARD = "c++11"
+_CXX_STANDARD = "c++20"
 
 
 def _find_cxx_compiler() -> str:

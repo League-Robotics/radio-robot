@@ -1,10 +1,12 @@
 cmake_minimum_required(VERSION 3.16)
 project(radio_robot_host CXX)
 
-# C++ standard matched to the firmware (-std=c++11 -fno-exceptions
-# -fno-rtti -- see source/types/command_types.h's file header, and every
-# tests/sim/unit/*_harness.cpp's own _CXX_STANDARD = "c++11").
-set(CMAKE_CXX_STANDARD 11)
+# C++ standard matched to the firmware, now C++20 (the ARM firmware build's
+# root CMakeLists.txt appends -std=c++20 over the vendored codal target's
+# c++11; this sim build must match so shared source/ code -- and vendored
+# Ruckig -- compile identically here and on hardware). -fno-exceptions /
+# -fno-rtti still mirror the firmware.
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # HOST_BUILD gates the host-only forks (I2CBus, Types::systemClockNow, the

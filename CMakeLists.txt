@@ -175,6 +175,17 @@ if("${device.cpp_flags}" STRGREATER "")
     set(CMAKE_CXX_LINK_FLAGS "${device.cpp_flags}")
 endif()
 
+# Project override: build the whole firmware at C++20 (the vendored codal
+# target.json pins -std=c++11). GCC honors the LAST -std flag, so appending
+# -std=gnu++20 here overrides the c++11 in ${device.cpp_flags} above WITHOUT
+# editing the fetched/vendored libraries/codal-microbit-v2/target.json (which
+# codal re-fetches and would clobber). gnu++20 (not strict c++20): C++20 with
+# GNU extensions, needed because vendored Ruckig's roots.hpp uses M_PI, which
+# newlib hides under strict -std=c++20 (__STRICT_ANSI__). gnu++20 is a strict
+# superset, so nothing that built at c++20 regresses. Motivation: vendoring
+# Ruckig -- see clasi/issues/planner-motion-planning-via-vendored-ruckig.md.
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++20")
+
 # linker opts
 if("${device.linker_flags}" STRGREATER "")
     set(CMAKE_LINKER_FLAGS "${CMAKE_LINKER_FLAGS} ${device.linker_flags}")
