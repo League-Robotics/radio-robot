@@ -1,30 +1,29 @@
 // ---------------------------------------------------------------------------
-// main.cpp -- the dev loop: sprint 079's three-beat "feed it, tick it, ask
-// it" shape (architecture-update.md "The Part-2 loop"), rewired for sprint
-// 087 ticket 006's Rt::Blackboard/Rt::Configurator/Rt::CommandRouter
-// transport (architecture-update-r1.md).
+// main.cpp -- the cyclic executive (sprint 087 ticket 007's real design,
+// architecture-update-r1.md's Reference code): mandatory control tick ->
+// commit (clock edge) -> best-effort slack (ingest -> route -> apply
+// config), replacing ticket 006's TRANSITIONAL same-pass sequential
+// `runLoopPass()` (source/dev_loop.{h,cpp}, deleted by this ticket).
 //
-// 087-006: the six per-family `*State` structs (DevLoopState, TelemetryState,
-// MotionLoopState, ConfigCommandState, PoseCommandState, OtosCommandState)
-// and DevLoop are gone -- every command family now reads/posts against ONE
-// Rt::Blackboard, reached from a command handler via Rt::CommandRouter (see
-// runtime/command_router.h). main.cpp's own construction responsibility
-// grows accordingly: it builds `bb`, the four subsystems, a Rt::Configurator
-// (the one deliberate exception to "no subsystem pointers outside the
-// loop" -- Decision 4), a Rt::CommandRouter, and dev_loop.h's LoopContext
-// (the loop's own remaining subsystem references + the two loop-owned
-// watchdogs), then runs runLoopPass() once per iteration -- the SAME shared
-// function tests/_infra/sim/sim_api.cpp calls (mirrors ticket 081-002's
-// "no hand-mirrored second copy" precedent, applied to the new transport).
+// Construction responsibility: builds one Rt::Blackboard (the two-plane
+// transport every subsystem/command family reads/posts against, holding NO
+// subsystem pointers of any kind), one Rt::Configurator (the ONE deliberate
+// exception to "no subsystem pointers outside the loop" -- Decision 4), one
+// Rt::CommandRouter (the pointerless command-tier translator), and one
+// Rt::MainLoop (this loop's own composition-root state: the four
+// subsystems it ticks every pass, the two loop-owned watchdogs, and the
+// loop-originated reply sinks -- see runtime/main_loop.h).
 //
-// This is NOT ticket 007's real cyclic executive (no double-buffer commit,
-// no mandatory/slack split, no uBit.sleep(1) yield) -- see dev_loop.h's file
-// header for the full rationale; main.cpp's own loop shape (feed the
-// Communicator, build a statement, call runLoopPass()) is otherwise
-// unchanged from before this ticket.
+// The slack loop's uBit.sleep(1) yield is REQUIRED, not pacing (Decision
+// 9): CODAL's cooperative fiber scheduler only delivers a received radio
+// datagram (Radio::onData, a MessageBus listener -- source/com/radio.cpp)
+// when the main loop yields a fiber slice; serial RX is IRQ-driven and
+// needs no yield. A busy-wait slack loop would starve radio ONLY, silently,
+// while every serial-only test kept passing -- see architecture-update-r1.md
+// Decision 9 for the full grounding.
 //
 // Build gating: unchanged -- the DEV family (and the HAL/Drivetrain/
-// dev_loop wiring it needs) compiles in only when ROBOT_DEV_BUILD is set.
+// MainLoop wiring it needs) compiles in only when ROBOT_DEV_BUILD is set.
 // ---------------------------------------------------------------------------
 
 #include "MicroBit.h"
@@ -39,7 +38,10 @@
 #include "subsystems/drivetrain.h"
 #include "subsystems/planner.h"
 #include "subsystems/pose_estimator.h"
-#include "dev_loop.h"
+#include "runtime/blackboard.h"
+#include "runtime/command_router.h"
+#include "runtime/configurator.h"
+#include "runtime/main_loop.h"
 #include "messages/motor.h"
 #include "messages/drivetrain.h"
 #include "messages/planner.h"
@@ -132,7 +134,7 @@ int main() {
     static Subsystems::Planner planner;
     planner.configure(defaultPlannerConfig());
 
-    // --- Rt::Blackboard (087-006): the single two-plane transport every
+    // --- Rt::Blackboard (087-002/006): the single two-plane transport every
     // command family and the loop itself read/post against. Holds NO
     // subsystem pointers of any kind.
     static Rt::Blackboard bb;
@@ -165,47 +167,52 @@ int main() {
     drivetrain.setMotorCapabilities(hardware.motor(bootPorts.left).capabilities(),
                                      hardware.motor(bootPorts.right).capabilities());
 
-    // --- LoopContext (dev_loop.h): the loop's own remaining subsystem
-    // references + the two loop-owned watchdogs. serialReply/serialCtx
-    // doubles as the loop-originated default reply sink (watchdog-fire EVT,
-    // motion-done EVT), byte-identical to this loop's pre-087
-    // serialReply/&comm.
-    static LoopContext loop;
-    loop.hardware = &hardware;
-    loop.drivetrain = &drivetrain;
-    loop.poseEstimator = &poseEstimator;
-    loop.planner = &planner;
-    loop.router = &router;
-    loop.configurator = &configurator;
-    loop.serialReply = serialReply;
-    loop.serialCtx = &comm;
-    loop.radioReply = radioReply;
-    loop.radioCtx = &comm;
+    // --- Rt::MainLoop (087-007): the cyclic executive's own composition-root
+    // state -- the four subsystems above (ticked every mandatory pass), the
+    // two loop-owned watchdogs, and the loop-originated reply sinks.
+    // serialReply/&comm doubles as the loop-originated "default" reply sink
+    // (watchdog-fire EVT, motion-done EVT, safety_stop EVT) AND the periodic-
+    // telemetry-emission channel when bb.telemetryChannel is SERIAL/NONE --
+    // byte-identical to this loop's pre-087 wiring, which was always bound to
+    // serial.
+    static Rt::MainLoop loop(hardware, drivetrain, poseEstimator, planner,
+                             serialReply, &comm, radioReply, &comm);
 
     // Start the serial-silence watchdog's window counting from boot (see
     // SerialSilenceWatchdog::feed()'s doc comment) rather than from an
     // uninitialized "last command" time.
-    loop.watchdog.feed(uBit.systemTime());
+    loop.feedWatchdog(uBit.systemTime());
 
-    while (true) {
+    constexpr uint32_t kPeriod = 20;   // [ms] target cadence -- best-effort, NOT a hard deadline
+
+    for (;;) {
         uint32_t now = uBit.systemTime();
 
-        // Feed it: comms is Communicator's job alone -- it never enters the
-        // shared body. A taken statement is copied into a local
-        // Subsystems::CommunicatorToCommandProcessorStatement (its line[]
-        // is an OWNED buffer -- subsystems/statement.h -- so this copy is
-        // safe past Communicator's own next tick()).
-        comm.tick(now);
-        Subsystems::CommunicatorToCommandProcessorStatement in;
-        const Subsystems::CommunicatorToCommandProcessorStatement* stmtPtr = nullptr;
-        if (comm.hasStatement()) {
-            in = comm.takeStatement();
-            stmtPtr = &in;
-        }
+        // === MANDATORY + COMMIT: the one control pass. ===
+        loop.tick(bb, now);
 
-        // Tick it, ask it: the shared, transitional loop body (source/
-        // dev_loop.cpp) -- see dev_loop.h's file header.
-        runLoopPass(loop, bb, now, stmtPtr);
+        // === SLACK: yield, then ingest -> route -> apply config, until the
+        //     next period. uBit.sleep(1) is REQUIRED, not pacing (Decision 9,
+        //     see this file's header) -- routing still wins over config
+        //     application (Decision 8). ===
+        uint32_t deadline = now + kPeriod;
+        do {
+            uBit.sleep(1);   // YIELD: radio delivery + other fibers run
+            comm.tick(uBit.systemTime());
+            if (comm.hasStatement()) {
+                // A taken statement is copied into a local
+                // Subsystems::CommunicatorToCommandProcessorStatement (its
+                // line[] is an OWNED buffer -- subsystems/statement.h -- so
+                // this copy is safe past Communicator's own next tick()).
+                Subsystems::CommunicatorToCommandProcessorStatement statement = comm.takeStatement();
+                // Feed BEFORE routing -- feeding must never be delayed by
+                // routing/config-priority (the safety-watchdog contract).
+                loop.feedWatchdog(uBit.systemTime());
+                router.route(statement, bb);
+            } else if (configurator.pending(bb)) {
+                configurator.applyOne(bb);
+            }
+        } while (uBit.systemTime() < deadline);
     }
 #else
     // ROBOT_DEV_BUILD == 0: no production loop exists yet this sprint (see

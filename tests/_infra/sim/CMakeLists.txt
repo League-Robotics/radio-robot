@@ -53,12 +53,12 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #                                               pose-set (SI/ZERO, 084-007) +
 #                                               OTOS (OI/OZ/OR/OP/OV/OL/OA,
 #                                               084-008) families
-#   dev_loop.cpp                            -- ticket 002's shared loop body
-#                                               (082-003's pose-estimation
-#                                               step, 082-004's periodic TLM
-#                                               step, 087-006's
-#                                               LoopContext/runLoopPass()
-#                                               rewrite onto Rt::Blackboard)
+#   runtime/main_loop.cpp                   -- 087-007's real cyclic
+#                                               executive (Rt::MainLoop --
+#                                               mandatory tick -> commit,
+#                                               replacing ticket 006's
+#                                               transitional dev_loop.{h,cpp}
+#                                               LoopContext/runLoopPass())
 #   runtime/configurator.cpp                -- 087-005's Configurator (the
 #                                               single config-application
 #                                               authority)
@@ -104,7 +104,7 @@ set(FIRMWARE_SOURCES
     "${SOURCE_DIR}/commands/pose_commands.cpp"
     "${SOURCE_DIR}/commands/system_commands.cpp"
     "${SOURCE_DIR}/commands/telemetry_commands.cpp"
-    "${SOURCE_DIR}/dev_loop.cpp"
+    "${SOURCE_DIR}/runtime/main_loop.cpp"
     "${SOURCE_DIR}/runtime/configurator.cpp"
     "${SOURCE_DIR}/runtime/command_router.cpp"
     ${HAL_SIM_SOURCES}

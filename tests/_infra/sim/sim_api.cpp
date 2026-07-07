@@ -1,15 +1,18 @@
 // sim_api.cpp — extern "C" C ABI wrapper over the new source/ tree's
-// dev-loop firmware (sprint 081-004, rewired for sprint 087 ticket 006's
-// Rt::Blackboard/Rt::Configurator/Rt::CommandRouter transport). Loaded from
+// firmware (sprint 081-004, rewired for sprint 087 ticket 007's real
+// cyclic-executive Rt::MainLoop -- see runtime/main_loop.h). Loaded from
 // Python via ctypes (host/robot_radio/io/sim_conn.py;
 // tests/_infra/sim/firmware.py, ticket 081-005).
 //
 // SimHandle owns Subsystems::SimHardware + Subsystems::Drivetrain +
 // Subsystems::PoseEstimator + Subsystems::Planner + one Rt::Blackboard, one
-// Rt::Configurator, one Rt::CommandRouter, and dev_loop.h's LoopContext --
-// the SAME runLoopPass(loop, bb, now, statement) function main.cpp calls,
-// run here instead of being hand-mirrored (mirrors ticket 081-004's own
-// "no hand-mirrored second copy" precedent, applied to the new transport).
+// Rt::Configurator, one Rt::CommandRouter, and one Rt::MainLoop -- the SAME
+// Rt::MainLoop::tick(bb, now) method main.cpp calls, run here instead of
+// being hand-mirrored (mirrors ticket 081-004's own "no hand-mirrored
+// second copy" precedent, applied to the new transport; the 1:1-mirror
+// invariant covers this shared mandatory+commit pass, not the two entry
+// points below, which are sim-only testing conveniences with no equivalent
+// in main.cpp -- see each one's own doc comment).
 //
 // Two separate reply sinks (architecture-update.md (081) Decision 3,
 // unchanged in shape by this rewrite):
@@ -18,22 +21,44 @@
 //     radio -- the sim has no real transport distinction, so both resolve
 //     to the same sink; only Rt::CommandRouter::route() ever picks between
 //     them, and it always sees the same target either way).
-//   - asyncStore -- LoopContext's own serialReply/serialCtx (and
-//     radioReply/radioCtx), the loop-originated reply sink runLoopPass()
-//     uses for output it generates ITSELF rather than in response to a
-//     statement (the watchdog-fire EVT, motion-done EVT, safety_stop EVT,
-//     and -- new since this ticket -- periodic TLM emission bound to
-//     whichever channel issued STREAM) -- drained by sim_get_async_evts().
+//   - asyncStore -- Rt::MainLoop's own serialReply/serialCtx (and
+//     radioReply/radioCtx), the loop-originated reply sink Rt::MainLoop::
+//     tick() uses for output it generates ITSELF rather than in response to
+//     a statement (the watchdog-fire EVT, motion-done EVT, safety_stop EVT,
+//     periodic TLM emission bound to whichever channel issued STREAM) --
+//     drained by sim_get_async_evts().
 //
-// The dt=0 synchronous-command trick (Decision 4, unchanged): sim_command()
-// replays runLoopPass() at the SAME `now` as the most recent sim_tick()
-// call, captured in SimHandle::lastTickNow -- never a fresh timestamp. Safe
-// ONLY because Subsystems::SimHardware::tick()'s own re-entry guard treats a
-// repeated same-`now` hardware.tick() as a complete no-op; the statement
-// dispatch, queue drains, and watchdog check inside runLoopPass() still run
-// normally on every call.
-#include "commands/dev_commands.h"
-#include "dev_loop.h"
+// sim_tick(h, now) — advances real (simulated) time: ONE Rt::MainLoop::tick()
+// pass (mandatory + commit), THEN drains bb.configIn to exhaustion. The
+// drain-to-exhaustion is deliberately MORE eager than main.cpp's own real
+// slack loop (which rations to one Rt::Configurator::applyOne() per
+// sleep(1) sub-iteration, Decision 8): a real ~20ms slack window spans many
+// such sub-iterations with no competing statement (Decision 9's cadence),
+// so ALL pending config genuinely drains well before a human/test could
+// physically issue a FOLLOW-UP wire command — sim_tick()'s own `now` step
+// (tick_for()'s default 24ms) represents exactly that elapsed window, so
+// draining to exhaustion here reproduces real hardware's own observable
+// timing under ordinary (non-zero-latency) command cadence, not a shortcut
+// around Decision 8's real rationing (which main.cpp alone implements).
+//
+// sim_command(h, line) — the dt=0 synchronous-command trick (Decision 4):
+// feeds the watchdog, routes ONE statement (mirrors one slack sub-iteration
+// with a statement present), THEN — since a real slack window would keep
+// spinning for ~20ms with no further statement, ample time for anything
+// this route() call just posted (bb.motorIn[]/bb.driveIn/bb.motionIn/
+// bb.otosCommandIn/…) to be drained by the NEXT mandatory tick, and for any
+// bb.configIn delta to fully apply — replays Rt::MainLoop::tick() and drains
+// bb.configIn to exhaustion, ALL at the SAME `now` as the most recent
+// sim_tick() call (SimHandle::lastTickNow). Safe ONLY because Subsystems::
+// SimHardware::tick()'s own re-entry guard treats a repeated same-`now`
+// hardware.tick() as a complete no-op for the PLANT integration (it still
+// drains bb.motorIn[]/bb.motorResetIn[] every call, staging any freshly
+// routed command). This keeps a `sim.command("SET …")` immediately followed
+// by a SEPARATE `sim.command("GET …")` (no intervening sim_tick()) wire-
+// observably equivalent to two real, non-zero-latency serial commands --
+// exactly what today's config/otos/pose command tests already assume, and
+// what ticket 006's own dt=0 trick already established as a sim-only
+// convenience (this ticket extends it, it does not invent the pattern).
 #include "hal/sim/sim_setters.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
@@ -41,6 +66,7 @@
 #include "runtime/blackboard.h"
 #include "runtime/command_router.h"
 #include "runtime/configurator.h"
+#include "runtime/main_loop.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
 #include "subsystems/planner.h"
@@ -143,9 +169,10 @@ msg::PlannerConfig defaultSimPlannerConfig() {
 // list's own order) -- motorConfigs before hardware (which reads it),
 // hardware/drivetrain/poseEstimator/planner before configurator (whose
 // constructor reads hardware.config(port) and needs live subsystem
-// references), bb before router (router's own construction is bb-agnostic,
-// but bb must exist before configurator.publish(bb)/router.setReplyChannels()
-// run in the constructor body).
+// references) and before loop (Rt::MainLoop's own constructor takes
+// references to the same four subsystems), bb before router (router's own
+// construction is bb-agnostic, but bb must exist before configurator.
+// publish(bb)/router.setReplyChannels() run in the constructor body).
 // ---------------------------------------------------------------------------
 struct SimHandle {
     MotorConfigSet motorConfigs;
@@ -156,14 +183,14 @@ struct SimHandle {
     Rt::Blackboard bb;
     Rt::Configurator configurator;
     Rt::CommandRouter router;
-    LoopContext loop;
+    Rt::MainLoop loop;
 
     ReplyStore syncStore;    // sim_command()'s synchronous reply (see file header)
-    ReplyStore asyncStore;   // runLoopPass()'s loop-originated output (watchdog/motion/telemetry)
+    ReplyStore asyncStore;   // Rt::MainLoop::tick()'s loop-originated output (watchdog/motion/telemetry)
 
     // [ms] the most recent `now` passed to sim_tick(); sim_command() replays
-    // runLoopPass() at this SAME now (the dt=0 synchronous-command trick,
-    // Decision 4 — see file header).
+    // Rt::MainLoop::tick() at this SAME now (the dt=0 synchronous-command
+    // trick, Decision 4 — see file header).
     uint32_t lastTickNow = 0;
 
     SimHandle();
@@ -173,7 +200,9 @@ SimHandle::SimHandle()
     : motorConfigs(defaultMotorConfigSet()),
       hardware(motorConfigs.cfg),
       configurator(drivetrain, poseEstimator, planner, hardware,
-                   defaultSimDrivetrainConfig(), defaultSimPlannerConfig())
+                   defaultSimDrivetrainConfig(), defaultSimPlannerConfig()),
+      loop(hardware, drivetrain, poseEstimator, planner,
+           storeReply, &asyncStore, storeReply, &asyncStore)
 {
     // Primes all four ports' encoders — parity with main.cpp's
     // hardware.begin() call, before the Drivetrain is configured.
@@ -213,25 +242,9 @@ SimHandle::SimHandle()
     drivetrain.setMotorCapabilities(hardware.motor(bootPorts.left).capabilities(),
                                      hardware.motor(bootPorts.right).capabilities());
 
-    loop.hardware = &hardware;
-    loop.drivetrain = &drivetrain;
-    loop.poseEstimator = &poseEstimator;
-    loop.planner = &planner;
-    loop.router = &router;
-    loop.configurator = &configurator;
-    // The loop-originated reply sink (Decision 3) — runLoopPass()'s
-    // watchdog/motion/telemetry EVTs go here, never into syncStore (which
-    // belongs solely to the statement currently being dispatched by
-    // sim_command(), if any). No real radio/serial distinction in the sim,
-    // so both resolve to the same store.
-    loop.serialReply = storeReply;
-    loop.serialCtx = &asyncStore;
-    loop.radioReply = storeReply;
-    loop.radioCtx = &asyncStore;
-
     // Start the watchdog window from sim t=0 and the host fake clock at 0,
-    // mirroring main.cpp's watchdog.feed(uBit.systemTime()) boot call.
-    loop.watchdog.feed(0);
+    // mirroring main.cpp's loop.feedWatchdog(uBit.systemTime()) boot call.
+    loop.feedWatchdog(0);
     Types::setHostClockNow(0);
 }
 
@@ -255,25 +268,31 @@ void sim_destroy(void* h) {
 // Tick / command dispatch
 // ---------------------------------------------------------------------------
 
-// Advance the sim by one ordinary pass: runLoopPass(loop, bb, now, nullptr)
-// -- no statement, so only the hardware tick, Drivetrain governance (if
-// active), and the watchdog check run this pass.
+// Advance the sim by one ordinary pass: one Rt::MainLoop::tick() (mandatory
+// + commit -- no statement, so the watchdog check, subsystem ticks, and
+// commit/routeOutputs run; no routing since none is being fed), THEN drain
+// bb.configIn to exhaustion -- see file header for why this differs from
+// main.cpp's own real slack-rationed drain.
 void sim_tick(void* h, uint32_t now) {
     SimHandle* s = static_cast<SimHandle*>(h);
     Types::setHostClockNow(now);
     s->lastTickNow = now;
-    runLoopPass(s->loop, s->bb, now, nullptr);
+    s->loop.tick(s->bb, now);
+    while (s->configurator.pending(s->bb)) {
+        s->configurator.applyOne(s->bb);
+    }
 }
 
 // Dispatch one NUL-terminated command line synchronously. Copies `line`
 // into a Subsystems::CommunicatorToCommandProcessorStatement (an OWNED
 // char[256] buffer -- subsystems/statement.h) whose returnPath is SERIAL
 // (arbitrary -- Rt::CommandRouter's two reply channels are wired to the
-// same sync store either way, see file header), then calls runLoopPass() at
-// the SAME `now` as the most recent sim_tick() (the dt=0 synchronous-command
-// trick — see file header). Returns the number of reply bytes written into
-// `reply` (not counting the final NUL), matching sim_conn.py's ctypes.c_int
-// expectation.
+// same sync store either way, see file header), feeds the watchdog, routes
+// it, then replays Rt::MainLoop::tick() and drains bb.configIn to
+// exhaustion at the SAME `now` as the most recent sim_tick() (the dt=0
+// synchronous-command trick — see file header). Returns the number of
+// reply bytes written into `reply` (not counting the final NUL), matching
+// sim_conn.py's ctypes.c_int expectation.
 int sim_command(void* h, const char* line, char* reply, int size) {
     SimHandle* s = static_cast<SimHandle*>(h);
 
@@ -288,7 +307,22 @@ int sim_command(void* h, const char* line, char* reply, int size) {
     }
 
     Types::setHostClockNow(s->lastTickNow);
-    runLoopPass(s->loop, s->bb, s->lastTickNow, &stmt);
+
+    // Slack-phase statement ingestion (architecture-update-r1.md Reference
+    // code): feed the watchdog BEFORE routing -- feeding must never be
+    // delayed by routing (the safety-watchdog AC), mirroring main.cpp's own
+    // ingest step exactly.
+    s->loop.feedWatchdog(s->lastTickNow);
+    s->router.route(stmt, s->bb);
+
+    // Sim-only synchronous settle (see file header): let whatever this
+    // statement just posted (motorIn/driveIn/motionIn/otosCommandIn/…) be
+    // consumed by the next mandatory tick, and let any pending config
+    // delta fully apply, all at the unchanged `now`.
+    while (s->configurator.pending(s->bb)) {
+        s->configurator.applyOne(s->bb);
+    }
+    s->loop.tick(s->bb, s->lastTickNow);
 
     int n = s->syncStore.written;
     if (reply && size > 0) {

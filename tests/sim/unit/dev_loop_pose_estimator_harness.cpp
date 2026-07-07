@@ -1,86 +1,86 @@
 // dev_loop_pose_estimator_harness.cpp — off-hardware acceptance harness for
-// ticket 082-003: proves runLoopPass() (source/dev_loop.{h,cpp}, renamed
-// from devLoopTick()/DevLoop by sprint 087 ticket 006 -- see dev_loop.h's
-// file header) advances the wired Subsystems::PoseEstimator by EXACTLY one
-// PoseEstimator::tick() call per pass — the ticket's single most important
-// correctness property.
+// ticket 082-003, rewired for sprint 087 ticket 007's real cyclic executive
+// (Rt::MainLoop, source/runtime/main_loop.{h,cpp} -- replaces ticket 006's
+// transitional LoopContext/runLoopPass(), source/dev_loop.{h,cpp}, deleted
+// by ticket 007). Proves Rt::MainLoop::tick() advances the wired
+// Subsystems::PoseEstimator by EXACTLY one PoseEstimator::tick() call per
+// pass, with the CORRECT (correctly-bound, correctly-latency-staged)
+// observations — this ticket's single most important correctness property
+// for the pose-estimation step specifically.
 //
-// 087-006: instance "A" is now driven through a real Rt::Blackboard +
-// Rt::Configurator + Rt::CommandRouter + LoopContext. dev_loop.cpp's
-// runLoopPass() unconditionally CALLS Rt::CommandRouter::route() at its
-// `if (statement != nullptr)` call site -- even though this harness's
-// statement is always nullptr (so that call is never actually REACHED at
-// runtime), the reference still needs linking, which pulls in
-// command_router.cpp's own unified six-family table (and therefore every
-// command family + its transitive subsystem/kinematics/motion/estimation/
-// telemetry dependencies) regardless. loop.configurator is ALSO required
-// (runLoopPass() unconditionally drains it every pass, statement or not).
+// --- What changed from the pre-007 version of this harness ---
 //
-// --- How "exactly once" is tested here, and what is deliberately NOT
-// attempted ---
+// The pre-007 harness's REF pipeline read the FRESHEST same-pass
+// hardware/drivetrain state (ticket 006's transitional same-pass
+// feed-forward, matching devLoopTick()'s own same-pass reads). Ticket 007's
+// REAL cyclic executive is synchronous-update (architecture-update-r1.md
+// Decision 6): PoseEstimator::tick() now reads bb.motor[]/bb.otos as
+// COMMITTED at the end of the PREVIOUS pass (x[k]), never a same-pass-fresh
+// read — and Decision 2 adds a SECOND one-pass hop for Drivetrain's own
+// output (Drivetrain::takeCommand() -> bb.motorIn[], drained by
+// Hardware::tick() the NEXT pass, not applied to hardware directly the same
+// pass the way ticket 006's transitional loop did). REF below is rewritten
+// to mirror this exactly: a persistent, committed "x[k]" snapshot (motor
+// state, otos state) carried between calls, and a persistent motorIn[]
+// mailbox pair standing in for bb.motorIn[] — reproducing the SAME
+// one-pass-per-hop latency instance A (driven through the real
+// Rt::MainLoop::tick()) now has, so the two pipelines' PoseEstimator state
+// still matches bit-for-bit every pass IF Rt::MainLoop::tick() calls
+// poseEstimator.tick() correctly.
 //
-// PoseEstimator::tick() is a plain (non-virtual) method and
-// DevLoop::poseEstimator is declared as a concrete `Subsystems::
-// PoseEstimator*` (082-003's own acceptance criterion) — there is no seam to
+// --- How "exactly once, with the right (committed) arguments" is tested
+// here, and what is deliberately NOT attempted ---
+//
+// PoseEstimator::tick() is a plain (non-virtual) method with no seam to
 // intercept a call through (no vtable, no mock). A literal "call tick()
-// twice in immediate succession with the SAME cached (now, leftObs, rightObs,
-// otosObs) arguments" mutant is therefore not just untestable here, it is
-// PROVABLY A MATHEMATICAL NO-OP for this exact implementation: the second
-// call's encoder delta is (left - prevEncLeft_) == 0 and (right -
-// prevEncRight_) == 0 (the first call already rebaselined prevEncLeft_/
-// prevEncRight_ to left/right), so dCenter == dTheta == 0; and its dt is
-// (now - lastTick_) == 0 (the first call already advanced lastTick_ to now).
-// EkfTiny::predict() with dCenter == dTheta == 0 has Jacobian f == the exact
-// identity (f[0][2] = -dCenter*sin(...) == 0, f[1][2] = dCenter*cos(...) ==
-// 0) and qScaled == q_ * dt == 0 (ekf_tiny.cpp's predict()), so the EKF's
-// state AND covariance are left EXACTLY unchanged too. Same-instant repeat
-// calls are inert by construction — not a bug this class can have, so this
-// harness does not chase it.
+// twice in immediate succession with the SAME cached (now, leftObs,
+// rightObs, otosObs) arguments" mutant is therefore not just untestable
+// here, it is PROVABLY A MATHEMATICAL NO-OP for this exact implementation
+// (see the pre-007 version of this comment, still true: zero encoder delta,
+// zero dt, EkfTiny::predict() at identity) — same-instant repeat calls are
+// inert by construction, so this harness does not chase it.
 //
 // What IS a real, observable correctness property — and what this harness
-// proves — is that devLoopTick() invokes poseEstimator->tick() UNCONDITIONALLY
-// once per pass, with the CORRECT (freshest, correctly-bound) observations,
-// regardless of the drivetrain's active()/inactive() state or which port
-// pair is bound. Proven by running the REAL devLoopTick() (instance "A")
-// alongside an independently, manually-driven reference pipeline (instance
-// "REF") that calls the equivalent steps — two hardware.tick(now) calls,
-// drivetrain.ports(), hardware.motor(...).state(), hardware.odometer()->
-// tick()+pose() — and poseEstimator.tick() EXACTLY ONCE, per pass, by
-// construction. Both pipelines are fed byte-identical motor commands and
-// `now` sequences, so their SimHardware/PoseEstimator state is deterministic
-// and must match bit-for-bit at every pass IF devLoopTick() calls tick()
-// exactly once, with the right arguments, every pass:
-//   - if devLoopTick() skipped the call some pass (e.g. gated on
-//     drivetrain.active() the way the OLDER Drivetrain-governance block is),
-//     A would lag REF's accumulated motion — caught (scenario 1: drivetrain
-//     left inactive throughout; scenario 2: drivetrain active throughout).
-//   - if devLoopTick() used the wrong port pair (e.g. hardcoding ports 1/2
-//     instead of querying drivetrain.ports()), A would read the WRONG
-//     motors' state whenever the bound pair is rebound away from {1,2} —
-//     caught (scenario 3: ports rebound to {3,4}).
+// proves — is that Rt::MainLoop::tick() invokes poseEstimator.tick()
+// UNCONDITIONALLY once per pass, with the CORRECT bound-port, CORRECT-
+// latency-staged observations, regardless of the drivetrain's
+// active()/inactive() state or which port pair is bound. Proven by running
+// the REAL Rt::MainLoop (instance "A") alongside an independently,
+// manually-driven reference pipeline (instance "REF") that mirrors
+// Rt::MainLoop::tick()'s own documented sequencing by hand. Both pipelines
+// are fed byte-identical motor commands and `now` sequences, so their
+// SimHardware/PoseEstimator state is deterministic and must match
+// bit-for-bit after every single pass IF Rt::MainLoop::tick() calls
+// PoseEstimator::tick() exactly once, with the right arguments, every pass:
+//   - if Rt::MainLoop::tick() skipped the call some pass, A would lag REF's
+//     accumulated motion — caught (scenario 1: drivetrain left inactive
+//     throughout; scenario 2: drivetrain active throughout).
+//   - if Rt::MainLoop::tick() used the wrong port pair (e.g. hardcoding
+//     ports 1/2 instead of querying drivetrain.ports()), A would read the
+//     WRONG motors' state whenever the bound pair is rebound away from
+//     {1,2} — caught (scenario 3: ports rebound to {3,4}).
 //
 // Same ad hoc-compile convention as the other tests/sim/unit/*_harness.cpp
 // files (hand-rolled assertions, PASS/FAIL per scenario, nonzero exit on any
 // failure) — compiled by test_dev_loop_pose_estimator.py together with the
-// real source/dev_loop.cpp, source/subsystems/{drivetrain,sim_hardware,
-// pose_estimator}.cpp, source/estimation/ekf_tiny.cpp,
+// real source/runtime/main_loop.cpp, source/subsystems/{drivetrain,
+// sim_hardware,pose_estimator}.cpp, source/estimation/ekf_tiny.cpp,
 // source/commands/{arg_parse,command_processor,dev_commands}.cpp,
 // source/kinematics/body_kinematics.cpp, source/hal/sim/*.cpp, and
-// source/hal/velocity_pid.cpp, with -DHOST_BUILD -DROBOT_DEV_BUILD=1 (dev_loop.cpp
-// is gated behind ROBOT_DEV_BUILD — see dev_loop.h's file header) and
-// libraries/tinyekf/ on the include path (ekf_tiny.h's tinyekf.h is
-// header-only).
+// source/hal/velocity_pid.cpp, with -DHOST_BUILD -DROBOT_DEV_BUILD=1
+// (main_loop.cpp is gated behind ROBOT_DEV_BUILD — see main_loop.h's file
+// header) and libraries/tinyekf/ on the include path (ekf_tiny.h's
+// tinyekf.h is header-only).
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <string>
 
-#include "dev_loop.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
 #include "runtime/blackboard.h"
 #include "runtime/commands.h"
-#include "runtime/configurator.h"
+#include "runtime/main_loop.h"
 #include "runtime/queue.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
@@ -169,72 +169,87 @@ msg::DrivetrainConfig makeDtConfig(uint32_t leftPort, uint32_t rightPort) {
   return cfg;
 }
 
-// oneReferencePass -- devLoopTick()'s FULL relevant body, replicated by hand
-// against an INDEPENDENT SimHardware/Drivetrain/PoseEstimator trio: slice 1,
-// the Drivetrain governance block (only when active() -- byte-identical to
-// dev_loop.cpp's own `if (drivetrain.active())` block, so a driveActive
-// scenario's REF motors are governed exactly like A's are), slice 2, then
-// the new pose-estimation step -- ports() queried unconditionally, freshest
-// motor().state() reads, an odometer tick()+pose() sample if one exists, and
-// EXACTLY ONE poseEstimator.tick() call. Every call site here mirrors
-// dev_loop.cpp's own structure 1:1 (statement dispatch/outbox drain are
-// omitted -- this harness never feeds a statement or stages a DevLoopState
-// command, so both are no-ops in the real devLoopTick() too).
-void oneReferencePass(Subsystems::SimHardware& hardware, Subsystems::Drivetrain& drivetrain,
-                       Subsystems::PoseEstimator& poseEstimator, uint32_t now) {
-  // 087-004: mirrors dev_loop.cpp's own always-empty/all-false local
-  // motorIn[]/motorResetIn[] pair (see that file's comment at its matching
-  // call site) -- this harness's REF pipeline never stages a motorIn[]/
-  // motorResetIn[] post either, so an empty/all-false pair here keeps REF
-  // byte-identical to dev_loop.cpp's real devLoopTick().
-  Rt::Mailbox<msg::MotorCommand> noMotorInYet[Subsystems::Hardware::kPortCount];
-  bool noMotorResetInYet[Subsystems::Hardware::kPortCount] = {false, false, false, false};
+// RefPipeline -- the independently, by-hand-driven reference pipeline.
+// Mirrors Rt::MainLoop::tick()'s pose-estimation-relevant sequencing
+// EXACTLY (main_loop.cpp): hardware.tick() draining a persistent motorIn[]
+// (standing in for bb.motorIn[] -- Decision 2's per-port unpack), Drivetrain
+// governance (posting its OWN output back into that SAME motorIn[] --
+// gated on active(), reproducing the routeOutputs discard-when-standby
+// rule), a COMMITTED motor-state snapshot (standing in for bb.motor[]),
+// and a COMMITTED otos snapshot (standing in for bb.otos/bb.otosValid) --
+// both read by poseEstimator.tick() ONE PASS STALE relative to this same
+// pass's own fresh samples (Decision 6), exactly like instance A.
+struct RefPipeline {
+  Subsystems::SimHardware& hardware;
+  Subsystems::Drivetrain& drivetrain;
+  Subsystems::PoseEstimator& poseEstimator;
 
-  hardware.tick(now, noMotorInYet, noMotorResetInYet);   // slice 1
+  Rt::Mailbox<msg::MotorCommand> motorIn[Subsystems::Hardware::kPortCount];
+  msg::MotorState committedLeft;
+  msg::MotorState committedRight;
+  msg::PoseEstimate committedOtos;
+  bool committedOtosValid = false;
 
-  if (drivetrain.active()) {
-    Subsystems::DrivetrainPorts governedPorts = drivetrain.ports();
-    // 087-003: mirrors dev_loop.cpp's own always-empty local driveIn Mailbox
-    // (see that file's comment at its matching call site) -- this harness's
-    // REF pipeline never stages a driveIn post either, so an empty Mailbox
-    // here keeps REF byte-identical to dev_loop.cpp's real devLoopTick().
-    Rt::Mailbox<msg::DrivetrainCommand> noDriveInYet;
-    drivetrain.tick(now, hardware.motor(governedPorts.left).state(),
-                     hardware.motor(governedPorts.right).state(), noDriveInYet);
+  RefPipeline(Subsystems::SimHardware& hw, Subsystems::Drivetrain& dt,
+              Subsystems::PoseEstimator& pe)
+      : hardware(hw), drivetrain(dt), poseEstimator(pe) {}
+
+  void tick(uint32_t now) {
+    bool noMotorResetInYet[Subsystems::Hardware::kPortCount] = {false, false, false, false};
+    hardware.tick(now, motorIn, noMotorResetInYet);
+
+    Subsystems::DrivetrainPorts p = drivetrain.ports();
+    Rt::Mailbox<msg::DrivetrainCommand> noDriveInYet;   // this harness never posts driveIn
+    // Both drivetrain.tick() and poseEstimator.tick() (below) read
+    // committedLeft/committedRight as x[k] -- i.e. whatever was committed at
+    // the END of the PREVIOUS call, BEFORE this pass's own commit (further
+    // down) refreshes them. This mirrors Rt::MainLoop::tick()'s own Decision
+    // 6 ordering exactly (main_loop.cpp commits bb.motor[] only AFTER both
+    // drivetrain_.tick() and poseEstimator_.tick() have already run this
+    // pass) -- committing here BEFORE poseEstimator.tick() would give REF an
+    // extra same-pass freshness instance A does not have, permanently
+    // one-pass-ahead of A (caught empirically while implementing this
+    // ticket: encoderPose()'s pure, unsmoothed accumulator showed an exact,
+    // permanent one-pass divergence until this ordering was corrected).
+    drivetrain.tick(now, committedLeft, committedRight, noDriveInYet);
     if (drivetrain.hasCommand()) {
-      hardware.apply(drivetrain.takeCommand());
+      Hal::DrivetrainToHardwareCommand cmd = drivetrain.takeCommand();
+      if (drivetrain.active()) {
+        motorIn[cmd.wheel[0].port - 1].post(cmd.wheel[0].command);
+        motorIn[cmd.wheel[1].port - 1].post(cmd.wheel[1].command);
+      }
+      // else: discard -- mirrors routeOutputs()'s own standby-discard rule.
+    }
+
+    Hal::Odometer* odometer = hardware.odometer();
+    Rt::WorkQueue<Rt::PoseResetCommand, 4> noPoseResetInYet;
+    poseEstimator.tick(now, committedLeft, committedRight,
+                        committedOtosValid ? &committedOtos : nullptr, noPoseResetInYet);
+
+    // COMMIT x[k+1] -- AFTER both reads above, exactly like
+    // Rt::MainLoop::tick()'s own commit step.
+    committedLeft = hardware.motor(p.left).state();
+    committedRight = hardware.motor(p.right).state();
+    if (odometer != nullptr) {
+      odometer->tick(now);
+      committedOtos = odometer->pose();
+      committedOtosValid = true;
+    } else {
+      committedOtosValid = false;
     }
   }
+};
 
-  hardware.tick(now, noMotorInYet, noMotorResetInYet);   // slice 2 (same now -- SimHardware's own dt=0 guard, 081-003)
-
-  Subsystems::DrivetrainPorts p = drivetrain.ports();
-  msg::MotorState leftObs = hardware.motor(p.left).state();
-  msg::MotorState rightObs = hardware.motor(p.right).state();
-
-  Hal::Odometer* odometer = hardware.odometer();
-  msg::PoseEstimate sampledPose = {};
-  if (odometer != nullptr) {
-    odometer->tick(now);
-    sampledPose = odometer->pose();
-  }
-  // 087-004: mirrors dev_loop.cpp's own always-empty local poseResetIn
-  // queue (see that file's comment at its matching call site).
-  Rt::WorkQueue<Rt::PoseResetCommand, 4> noPoseResetInYet;
-  poseEstimator.tick(now, leftObs, rightObs, odometer != nullptr ? &sampledPose : nullptr,
-                      noPoseResetInYet);
-}
-
-// runComparison -- drives instance "A" (the REAL devLoopTick(), via a fully
-// wired DevLoop) and instance "REF" (oneReferencePass(), called by hand) in
-// lockstep over `passCount` passes, 20ms apart, asserting A's poseEstimator
-// exactly matches REF's after every single pass. leftPort/rightPort bind
-// both drivetrains' pair; leftDuty/rightDuty are applied once, up front, to
-// BOTH pipelines' bound motors (straight or curved motion, asymmetric so
-// dTheta != 0 too); if driveActive, both drivetrains are additionally put
-// into WHEELS-arm active() authority (setWheelTargets) so the governance
-// block that runs BETWEEN the two hardware.tick() slices genuinely executes
-// this pass, proving the new step is unconditional regardless.
+// runComparison -- drives instance "A" (the REAL Rt::MainLoop::tick(), via a
+// fully wired Rt::MainLoop) and instance "REF" (RefPipeline::tick(), by
+// hand) in lockstep over `passCount` passes, 20ms apart, asserting A's
+// poseEstimator exactly matches REF's after every single pass. leftPort/
+// rightPort bind both drivetrains' pair; leftDuty/rightDuty are applied
+// once, up front, to BOTH pipelines' bound motors (straight or curved
+// motion, asymmetric so dTheta != 0 too); if driveActive, both drivetrains
+// are additionally put into WHEELS-arm active() authority
+// (setWheelTargets) so the governance block genuinely executes this pass,
+// proving the pose-estimation step is unconditional regardless.
 void runComparison(uint32_t leftPort, uint32_t rightPort, float leftDuty, float rightDuty,
                     bool driveActive, int passCount, const std::string& scenarioName) {
   beginScenario(scenarioName);
@@ -243,47 +258,29 @@ void runComparison(uint32_t leftPort, uint32_t rightPort, float leftDuty, float 
   fillDefaultConfigs(configs);
   msg::DrivetrainConfig dtConfig = makeDtConfig(leftPort, rightPort);
 
-  // --- Instance A: driven ENTIRELY through the real runLoopPass(). ---
+  // --- Instance A: driven ENTIRELY through the real Rt::MainLoop::tick(). ---
   Subsystems::SimHardware hardwareA(configs);
   hardwareA.begin();
   Subsystems::Drivetrain drivetrainA;
   drivetrainA.configure(dtConfig);
   Subsystems::PoseEstimator poseA;
   poseA.configure(dtConfig);
-  // 084-002: runLoopPass() dereferences LoopContext::planner unconditionally
-  // every pass (the motion-executor step) -- wired here only to satisfy that
-  // non-null contract; this harness never stages an S/T/D/STOP command
-  // (statement is always nullptr, see below), so Planner is never actually
-  // engaged and any config is fine.
+  // 084-002: Rt::MainLoop::tick() dereferences its own Planner reference
+  // unconditionally every pass (the motion-executor step) -- wired here
+  // only to satisfy that non-null contract; this harness never stages an
+  // S/T/D/STOP command (bb.motionIn is never posted to), so Planner is
+  // never actually engaged and any config is fine.
   Subsystems::Planner plannerA;
   plannerA.configure(msg::PlannerConfig());
-  // 087-005/006: Rt::Configurator is dereferenced unconditionally every pass
-  // too (the config-plane drain) -- wired here only to satisfy that
-  // contract; bb.configIn is never posted to in this harness, so
-  // configurator.pending(bb) is always false and applyOne() is never
-  // actually called.
-  Rt::Configurator configuratorA(drivetrainA, poseA, plannerA, hardwareA, dtConfig,
-                                 msg::PlannerConfig());
   Rt::Blackboard bbA;
-  configuratorA.publish(bbA);   // seeds bbA.drivetrainConfig.left_port/right_port
-  // Constructed but never actually dispatched through (statement is always
-  // nullptr in this harness) -- still required for runLoopPass()'s call
-  // site to link (see this file's header comment).
-  Rt::CommandRouter routerA;
-
-  LoopContext loopA;
-  loopA.hardware = &hardwareA;
-  loopA.drivetrain = &drivetrainA;
-  loopA.poseEstimator = &poseA;
-  loopA.planner = &plannerA;
-  loopA.configurator = &configuratorA;
-  loopA.router = &routerA;
-  // periodMs (bbA.telemetryPeriod) defaults to 0 (STREAM never issued in
-  // this harness), so runLoopPass()'s periodic-emission step is a no-op.
-  loopA.serialReply = nullptr;   // never invoked -- the watchdog never fires this test
-  loopA.serialCtx = nullptr;
-  loopA.radioReply = nullptr;
-  loopA.radioCtx = nullptr;
+  // Never actually dispatched through (this harness never routes a
+  // statement) -- Rt::MainLoop::tick() itself needs no CommandRouter/
+  // Configurator reference at all (087-007: those stay top-level objects
+  // the SLACK phase alone calls -- see main_loop.h's class comment), unlike
+  // ticket 006's transitional LoopContext, which needed both to link.
+  Rt::MainLoop loopA(hardwareA, drivetrainA, poseA, plannerA,
+                     /*serialReply=*/nullptr, /*serialCtx=*/nullptr,
+                     /*radioReply=*/nullptr, /*radioCtx=*/nullptr);
 
   hardwareA.motor(leftPort).apply(msg::MotorCommand{}.setDutyCycle(leftDuty));
   hardwareA.motor(rightPort).apply(msg::MotorCommand{}.setDutyCycle(rightDuty));
@@ -291,13 +288,15 @@ void runComparison(uint32_t leftPort, uint32_t rightPort, float leftDuty, float 
     drivetrainA.setWheelTargets(100.0f, 100.0f);   // any nonzero target -- just to flip active()
   }
 
-  // --- Instance REF: driven by hand, ONE poseEstimator.tick() per pass. ---
+  // --- Instance REF: driven by hand, ONE poseEstimator.tick() per pass,
+  // mirroring Rt::MainLoop::tick()'s own one-pass-per-hop latency. ---
   Subsystems::SimHardware hardwareREF(configs);
   hardwareREF.begin();
   Subsystems::Drivetrain drivetrainREF;
   drivetrainREF.configure(dtConfig);
   Subsystems::PoseEstimator poseREF;
   poseREF.configure(dtConfig);
+  RefPipeline ref(hardwareREF, drivetrainREF, poseREF);
 
   hardwareREF.motor(leftPort).apply(msg::MotorCommand{}.setDutyCycle(leftDuty));
   hardwareREF.motor(rightPort).apply(msg::MotorCommand{}.setDutyCycle(rightDuty));
@@ -309,8 +308,8 @@ void runComparison(uint32_t leftPort, uint32_t rightPort, float leftDuty, float 
   for (int i = 0; i < passCount; ++i) {
     now += 20;   // [ms] -- passCount*20 stays well under the watchdog's 1000ms window
 
-    runLoopPass(loopA, bbA, now, nullptr);
-    oneReferencePass(hardwareREF, drivetrainREF, poseREF, now);
+    loopA.tick(bbA, now);
+    ref.tick(now);
 
     msg::PoseEstimate encA = poseA.encoderPose();
     msg::PoseEstimate encREF = poseREF.encoderPose();
@@ -347,7 +346,7 @@ int main() {
   // active() and does NOT run here).
   runComparison(/*leftPort=*/1, /*rightPort=*/2, /*leftDuty=*/0.4f, /*rightDuty=*/0.55f,
                 /*driveActive=*/false, /*passCount=*/20,
-                "devLoopTick() advances PoseEstimator exactly once per pass "
+                "Rt::MainLoop::tick() advances PoseEstimator exactly once per pass "
                 "(drivetrain inactive -- default ports 1/2)");
 
   // Scenario 2: drivetrain ACTIVE throughout (the mid-pass governance block
@@ -356,22 +355,22 @@ int main() {
   // reference trajectory.
   runComparison(/*leftPort=*/1, /*rightPort=*/2, /*leftDuty=*/0.4f, /*rightDuty=*/0.55f,
                 /*driveActive=*/true, /*passCount=*/20,
-                "devLoopTick() advances PoseEstimator exactly once per pass "
+                "Rt::MainLoop::tick() advances PoseEstimator exactly once per pass "
                 "(drivetrain ACTIVE -- governance block runs mid-pass)");
 
   // Scenario 3: the bound pair is rebound away from the default {1, 2} to
-  // {3, 4} -- proving devLoopTick() genuinely QUERIES drivetrain.ports()
-  // rather than hardcoding the default pair.
+  // {3, 4} -- proving Rt::MainLoop::tick() genuinely QUERIES
+  // drivetrain.ports() rather than hardcoding the default pair.
   runComparison(/*leftPort=*/3, /*rightPort=*/4, /*leftDuty=*/0.5f, /*rightDuty=*/0.3f,
                 /*driveActive=*/false, /*passCount=*/20,
-                "devLoopTick() respects a rebound port pair (3/4), not a "
+                "Rt::MainLoop::tick() respects a rebound port pair (3/4), not a "
                 "hardcoded default");
 
   if (g_failureCount == 0) {
-    std::printf("OK: devLoopTick() advances Subsystems::PoseEstimator exactly once per pass\n");
+    std::printf("OK: Rt::MainLoop::tick() advances Subsystems::PoseEstimator exactly once per pass\n");
     return 0;
   }
-  std::printf("FAILED: %d assertion(s) across the devLoopTick()/PoseEstimator scenarios\n",
+  std::printf("FAILED: %d assertion(s) across the Rt::MainLoop/PoseEstimator scenarios\n",
               g_failureCount);
   return 1;
 }
