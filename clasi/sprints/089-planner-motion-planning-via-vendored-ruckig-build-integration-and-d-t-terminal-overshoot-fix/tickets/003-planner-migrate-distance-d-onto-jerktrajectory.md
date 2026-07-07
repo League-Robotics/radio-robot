@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: 'Planner: migrate DISTANCE (D) onto JerkTrajectory'
-status: open
+status: done
 use-cases:
 - SUC-002
 depends-on:
@@ -117,35 +117,35 @@ migrate).
 
 ## Acceptance Criteria
 
-- [ ] `Planner::apply()`'s `DISTANCE` case stages a position-control
+- [x] `Planner::apply()`'s `DISTANCE` case stages a position-control
       Ruckig solve-to-rest on the linear channel instead of
       `ramp_.setTarget()`.
-- [ ] `Planner::tick()` samples the linear channel for `DISTANCE` goals
+- [x] `Planner::tick()` samples the linear channel for `DISTANCE` goals
       each tick; `stops_[]`/`baseline_`/`Motion::evaluateStopCondition()`
       are untouched and remain the authoritative completion signal.
-- [ ] Sim: a Planner-level test samples the full commanded velocity trace
+- [x] Sim: a Planner-level test samples the full commanded velocity trace
       for a `DISTANCE` goal and asserts it is `>= 0` throughout (mirrors
       `test_ruckig_smoke.py`'s own no-reverse assertion, against the real
       goal-staging path).
-- [ ] A stop firing before the plan's own natural convergence re-solves a
+- [x] A stop firing before the plan's own natural convergence re-solves a
       decel-to-rest trajectory seeded from the channel's own last sample
       (never `leftObs`/`rightObs`) and completes with no reverse.
-- [ ] `applyStopAnticipation()` and `Motion::VelocityRamp` are UNCHANGED as
+- [x] `applyStopAnticipation()` and `Motion::VelocityRamp` are UNCHANGED as
       code — still fully intact and still serving `TIMED`/`VELOCITY`/
       `STREAM`/`TURN`/`ROTATION`/`GOTO_GOAL` goal kinds, none of which are
       touched by this ticket.
-- [ ] `test_motion_overshoot_regression.py`'s existing `D` bar is not
+- [x] `test_motion_overshoot_regression.py`'s existing `D` bar is not
       regressed (equal or tighter).
-- [ ] Full sim suite green; no new xfail introduced.
-- [ ] **[Revision 2]** A divergence beyond `kDivergenceThreshold` (with the
+- [x] Full sim suite green; no new xfail introduced.
+- [x] **[Revision 2]** A divergence beyond `kDivergenceThreshold` (with the
       stop condition not yet fired) triggers a `retarget()` (or
       `reanchor()`, if beyond `kGrossDivergenceThreshold`) call seeded per
       Decision 10/Decision 8's revision; the commanded trace still never
       reverses.
-- [ ] **[Revision 2]** The three guards (stop-not-fired, no-reverse-target,
+- [x] **[Revision 2]** The three guards (stop-not-fired, no-reverse-target,
       deadband+rate-limit) are all enforced at the `Planner` call site, not
       inside `JerkTrajectory`.
-- [ ] **[Revision 2]** Under a synthetic tracking-lag scenario that would
+- [x] **[Revision 2]** Under a synthetic tracking-lag scenario that would
       otherwise stall the plan short of the target, `D`'s completion mode is
       `STOP_DISTANCE` firing (`reason=dist`), not the `STOP_TIME` safety net
       (sim-level proof here; the bench-level crisp criterion is ticket

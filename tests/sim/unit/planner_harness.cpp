@@ -22,7 +22,28 @@
 // routeOutputs, ticket 007), not inside Planner itself. No scenario below
 // changes: every existing hasCommand()/takeCommand() assertion still
 // exercises the exact same edge, unmodified.
+//
+// Ticket 089-003 note: DISTANCE migrates onto Motion::JerkTrajectory (see
+// planner.h's own "TWO COEXISTING MOTION-GENERATION MECHANISMS" class
+// comment) -- this file now also links planner.cpp's new
+// motion/jerk_trajectory.{h,cpp} dependency (test_planner.py's own compile
+// command gained the extra source/include entries this pulls in). The
+// DISTANCE-specific scenarios below were updated accordingly:
+// scenarioDistanceGoalAnticipatesStopWithSpeedCap (086-003/087-009's
+// closed-form ramp-anticipation cap test) is RENAMED and REWRITTEN as
+// scenarioDistanceGoalStopFiredBeforeConvergenceForcesFreshDecel -- that old
+// cap is DEAD CODE for DISTANCE now (applyStopAnticipation() itself is
+// UNCHANGED and still serves TIMED/VELOCITY/STREAM/TURN/ROTATION/GOTO_GOAL,
+// see planner.cpp), so its old closed-form expected values no longer apply
+// to this goal kind; the new version tests the JerkTrajectory-equivalent
+// property (a stop firing before the plan's own natural convergence forces
+// a fresh, non-reversing decel-to-rest). Several new scenarios cover
+// 089-003's other acceptance criteria: a full-trace no-reverse proof (AC3),
+// and the Revision 2 divergence-triggered replan (AC7/AC8/AC9) -- normal
+// (lagging-plant) and gross (stalled-plant) divergence, plus a guard-2
+// (no-reverse-target) regression pin.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -258,67 +279,319 @@ void scenarioDistanceGoalFiresImplicitStopAbrupt() {
   checkFalse(planner.hasEvent(), "takeEvent() clears hasEvent()");
 }
 
-// 5b. DISTANCE goal_kind: ticket 086-003's terminal anticipation caps the
-// commanded speed as the implicit DISTANCE stop's remaining distance
-// shrinks -- BEFORE the stop itself fires -- the same pattern pursueSteer()
-// already applies for GOTO_GOAL's STOP_POSITION. generousConfig()'s
-// a_decel=1000mm/s^2 makes the cap bind only in the last few mm of this
-// 100mm goal (vCap < 100mm/s once remaining < 100^2/(2*1000) = 5mm) --
-// distinctly demonstrating "capped, but not yet fired" mid-goal.
-//
-// Ticket 087-009 update: the cap is now the dead-time-compensated closed
-// form `vCap = -reach + sqrt(reach^2 + 2*a_decel*remaining)`, `reach =
-// a_decel*kDeadTime` (kDeadTime = 0.040s, planner.cpp's own fixed constant)
-// -- Tick 3's expected value below is recomputed against that formula
-// (reach = 1000*0.04 = 40 -> vCap = -40 + sqrt(1600 + 4000) = 34.8331),
-// not the un-compensated sqrt(2*1000*2) = 63.2456 086-003 measured. Tick 2's
-// "does not bind" check is unaffected (vCap at remaining=100mm is still
-// ~409.8, far above the 100mm/s commanded speed either way).
-void scenarioDistanceGoalAnticipatesStopWithSpeedCap() {
-  beginScenario("DISTANCE goal_kind: terminal speed cap anticipates the DISTANCE stop (086-003)");
+// 5b. [089-003 REWRITE -- was scenarioDistanceGoalAnticipatesStopWithSpeedCap,
+// 086-003/087-009's closed-form ramp-anticipation cap test] DISTANCE goal_kind
+// now stages a position-control Motion::JerkTrajectory solve-to-rest at
+// apply() time instead of a ramp_ target -- applyStopAnticipation()'s
+// STOP_DISTANCE cap this scenario used to test is DEAD CODE for DISTANCE now
+// (the function itself is UNCHANGED and still serves TIMED/VELOCITY/STREAM/
+// TURN/ROTATION/GOTO_GOAL, planner.cpp). The property this scenario now
+// tests is planner.h's ticket item 4 / AC4: a SMOOTH-style stop firing
+// BEFORE linear_'s own plan has naturally converged to rest forces a fresh,
+// non-reversing decel-to-rest, seeded from the channel's own current state
+// (never leftObs/rightObs). SMOOTH (not ABRUPT, unlike most DISTANCE
+// scenarios here) is used deliberately -- ABRUPT bypasses
+// armDistanceStopDecel() entirely (planner.cpp's tick()), so it cannot
+// exercise this branch.
+void scenarioDistanceGoalStopFiredBeforeConvergenceForcesFreshDecel() {
+  beginScenario(
+      "089-003 AC4: SMOOTH stop firing before linear_'s own convergence forces a "
+      "fresh decel-to-rest, no reverse");
   Subsystems::Planner planner;
-  planner.configure(generousConfig());  // a_decel = 1000 mm/s^2
+  planner.configure(generousConfig());  // a_max=a_decel=1000mm/s^2, v_body_max=1000mm/s, j_max=0
 
   msg::PlannerCommand cmd;
   cmd.goal_kind = msg::PlannerCommand::GoalKind::DISTANCE;
-  cmd.goal.distance.distance = 100.0f;  // [mm]
-  cmd.goal.distance.speed = 100.0f;     // [mm/s]
-  cmd.style = msg::StopStyle::ABRUPT;   // isolate the anticipation cap from the
-                                        // SMOOTH ramp-down (covered elsewhere)
+  cmd.goal.distance.distance = 500.0f;  // [mm]
+  cmd.goal.distance.speed = 200.0f;     // [mm/s] -- undisturbed plan duration ~2.7s
+  // cmd.style left at its default (SMOOTH) -- see comment above on why.
+  std::strncpy(cmd.corr_id, "fast1", sizeof(cmd.corr_id) - 1);
   planner.apply(cmd, 0);
 
-  // Tick 1: baseline captured (enc0 = 0mm).
-  planner.tick(1000, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});
+  planner.tick(0, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});  // baseline
   planner.takeCommand();
 
-  // Tick 2: 0mm traveled, 100mm remaining -- vCap = sqrt(2*1000*100) =
-  // 447mm/s, far above the 100mm/s commanded speed: the cap does not bind,
-  // full commanded speed (large a_max/a_decel + 1s dt converge within this
-  // one tick).
-  planner.tick(2000, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});
-  msg::DrivetrainCommand held = planner.takeCommand();
-  checkFloatNear(held.control.twist.v_x, 100.0f, 0.5f,
-                 "far from the stop -- anticipation cap does not bind, full commanded speed");
+  // Plant "overshoots" the plan: encoder advances at a constant 300mm/s
+  // (faster than the plan's own 200mm/s cruise), reaching the 500mm
+  // STOP_DISTANCE threshold at t=500/300=1.667s -- well before the
+  // undisturbed plan's own ~2.7s natural convergence -- forcing
+  // armDistanceStopDecel()'s REAL re-solve branch (unlike scenario 5's
+  // ABRUPT completion, which never reaches that branch at all).
+  const float kPlantSpeed = 300.0f;  // [mm/s]
+  bool everReversed = false;
+  bool sawSmoothArm = false;
+  bool completedWithDist = false;
+  uint32_t t = 0;
+  for (int i = 0; i < 120; ++i) {  // up to 6s -- comfortably past arming + convergence
+    t += 50;
+    float pos = std::min(500.0f, kPlantSpeed * static_cast<float>(t) * 0.001f);
+    planner.tick(t, obsPosition(pos), obsPosition(pos), msg::PoseEstimate{});
+    msg::DrivetrainCommand held = planner.takeCommand();
+    if (held.control.twist.v_x < -0.5f) everReversed = true;
+    if (planner.hasActiveCommand() && pos >= 500.0f) sawSmoothArm = true;
+    if (!planner.hasActiveCommand()) {
+      completedWithDist = (std::strcmp(planner.takeEvent().reason, "dist") == 0);
+      break;
+    }
+  }
+  checkFalse(everReversed, "the forced decel-to-rest re-solve never reverses");
+  checkTrue(sawSmoothArm,
+            "SMOOTH style does not complete on the same tick the stop fires -- ramp/decel-down observed");
+  checkTrue(completedWithDist, "still completes via reason=dist once the decel-to-rest converges");
+}
 
-  // Tick 3: 98mm traveled, 2mm remaining -- dead-time-compensated vCap =
-  // -40 + sqrt(40^2 + 2*1000*2) = -40 + sqrt(5600) = 34.8331 mm/s (087-009;
-  // see this scenario's own comment above), BELOW the 100mm/s commanded
-  // speed: the cap now binds, well before the DISTANCE stop itself would
-  // fire at 100mm.
-  planner.tick(3000, obsPosition(98.0f), obsPosition(98.0f), msg::PoseEstimate{});
-  held = planner.takeCommand();
-  checkTrue(planner.hasActiveCommand(), "98mm traveled -- short of the 100mm DISTANCE stop, still running");
-  checkFloatNear(held.control.twist.v_x, 34.8331f, 1.0f,
-                 "anticipation caps the commanded speed as the DISTANCE stop's remaining distance shrinks");
-  checkTrue(held.control.twist.v_x < 99.0f,
-            "the anticipatory cap measurably reduces speed BEFORE the stop fires (086-003)");
+// 5c. [089-003, AC3] DISTANCE goal_kind: the full commanded velocity trace,
+// sampled across the REAL apply()+tick() staging path with a closely-tracking
+// (undisturbed) encoder feed, never reverses and completes via the goal's
+// own STOP_DISTANCE (not the STOP_TIME safety net) -- mirrors
+// test_ruckig_smoke.py's/jerk_trajectory_harness.cpp's own no-reverse
+// assertion, now proven against the real goal-staging path (planner.h's
+// class comment; ticket 089-003's own acceptance bar).
+void scenarioDistanceGoalRuckigTraceNeverReverses() {
+  beginScenario(
+      "089-003 AC3: DISTANCE's full commanded velocity trace never reverses "
+      "(real apply()+tick() path)");
+  Subsystems::Planner planner;
+  planner.configure(generousConfig());
 
-  // Finally, reaching the target distance exactly still fires the stop --
-  // anticipation only reshapes the approach, not WHEN the stop itself fires.
-  planner.tick(4000, obsPosition(100.0f), obsPosition(100.0f), msg::PoseEstimate{});
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::DISTANCE;
+  cmd.goal.distance.distance = 500.0f;  // [mm]
+  cmd.goal.distance.speed = 200.0f;     // [mm/s]
+  cmd.style = msg::StopStyle::ABRUPT;   // isolate the trace from the SMOOTH
+                                        // ramp-down (covered by 5b above)
+  std::strncpy(cmd.corr_id, "trace1", sizeof(cmd.corr_id) - 1);
+  planner.apply(cmd, 0);
+
+  // Hand-derived trapezoid (j_max == 0 -> Ruckig's own infinite-jerk
+  // sentinel -> an exact trapezoid, matching this closed form) for a
+  // CLOSELY-TRACKING encoder feed -- exercises the undisturbed case (no
+  // divergence-replan expected; that is covered by the dedicated scenarios
+  // below), the common/expected real-world path.
+  const float kAMax = 1000.0f;   // [mm/s^2]
+  const float kVMax = 200.0f;    // [mm/s]
+  const float kDistance = 500.0f;  // [mm]
+  const float kTAccel = kVMax / kAMax;                       // 0.2s
+  const float kDAccel = 0.5f * kAMax * kTAccel * kTAccel;    // 20mm
+  const float kDCruise = kDistance - 2.0f * kDAccel;          // 460mm
+  const float kTCruise = kDCruise / kVMax;                    // 2.3s
+  const float kTDecelStart = kTAccel + kTCruise;              // 2.5s
+  const float kTTotal = kTDecelStart + kTAccel;               // 2.7s
+
+  auto trapezoidPosition = [&](float time) -> float {
+    if (time <= 0.0f) return 0.0f;
+    if (time < kTAccel) return 0.5f * kAMax * time * time;
+    if (time < kTDecelStart) return kDAccel + kVMax * (time - kTAccel);
+    if (time < kTTotal) {
+      float s = time - kTDecelStart;
+      return kDAccel + kDCruise + kVMax * s - 0.5f * kAMax * s * s;
+    }
+    return kDistance;
+  };
+
+  planner.tick(0, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});  // baseline
   planner.takeCommand();
-  checkFalse(planner.hasActiveCommand(), "DISTANCE stop still fires once the target distance is reached");
-  checkStrEq(planner.takeEvent().reason, "dist", "reason token is \"dist\"");
+
+  bool everReversed = false;
+  bool completedWithDist = false;
+  for (int ms = 100; ms <= 3200; ms += 100) {
+    float pos = trapezoidPosition(static_cast<float>(ms) * 0.001f);
+    planner.tick(static_cast<uint32_t>(ms), obsPosition(pos), obsPosition(pos), msg::PoseEstimate{});
+    msg::DrivetrainCommand held = planner.takeCommand();
+    if (held.control.twist.v_x < -0.5f) everReversed = true;
+    if (!planner.hasActiveCommand()) {
+      completedWithDist = (std::strcmp(planner.takeEvent().reason, "dist") == 0);
+      break;
+    }
+  }
+  checkFalse(everReversed, "commanded v_x never goes negative across the full trace");
+  checkTrue(completedWithDist,
+            "goal completes via STOP_DISTANCE (reason=dist), not the STOP_TIME safety net");
+}
+
+// 5d. [089-003 Revision 2, AC7/AC9] DISTANCE goal_kind: a lagging (slipping)
+// plant -- injected at the test-fixture level (not via the sim plant, which
+// tracks too closely to diverge naturally, per the ticket's own testing
+// plan) -- triggers NORMAL divergence-triggered retarget()s and still
+// completes via the goal's OWN STOP_DISTANCE, not the STOP_TIME safety net
+// (architecture-update.md (089) Decision 10's whole purpose; AC9's crisp
+// sim-level proof). WITHOUT the fix, the undisturbed plan converges to rest
+// at its own fixed ~2.7s having covered only 85% of the commanded distance,
+// then commands 0 forever -- the encoder freezes short and the goal only
+// completes via the 7s STOP_TIME net.
+//
+// The plant model applies the commanded v_x TWO TICKS LATE (kOutputHops, the
+// SAME two-pass output dead time kDeadTime already accounts for) in addition
+// to the 15% slip -- mirroring the real Planner->driveIn->Drivetrain->
+// motorIn->Hardware pipeline latency the dead-time projection is built
+// against (Decision 8's revision). Without this delay, a zero-latency test
+// plant "receives" each replan's own corrected command instantaneously, which
+// makes the projection's deliberate v*tau under-target (the real wheel's
+// own continued coast through that same dead time is meant to close this
+// exact gap) look like a permanent shortfall instead of the correction it
+// is -- an artifact of an unrealistically fast test plant, not of the
+// mechanism itself.
+void scenarioDistanceGoalDivergenceReplanCorrectsLaggingPlant() {
+  beginScenario(
+      "089-003 AC7/AC9: a lagging plant triggers NORMAL retarget()s and still completes via "
+      "dist, not the STOP_TIME safety net");
+  Subsystems::Planner planner;
+  planner.configure(generousConfig());
+
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::DISTANCE;
+  cmd.goal.distance.distance = 500.0f;
+  cmd.goal.distance.speed = 200.0f;
+  cmd.style = msg::StopStyle::ABRUPT;
+  std::strncpy(cmd.corr_id, "lag1", sizeof(cmd.corr_id) - 1);
+  planner.apply(cmd, 0);
+
+  planner.tick(0, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});
+  planner.takeCommand();
+
+  // Closed-loop plant simulation: the plant only achieves kSlip (85%) of
+  // whatever velocity Planner commanded kOutputHops ticks ago -- a bounded,
+  // ROUTINE tracking lag (Decision 10's own "plausibly 5-15mm over a 500mm
+  // D" framing) plus the real output dead time (see comment above).
+  const float kSlip = 0.85f;
+  const float kDt = 0.02f;  // [s] 20ms tick, matches kAssumedPassPeriod exactly
+  const int kOutputHops = 2;
+  float delayBuf[kOutputHops] = {0.0f, 0.0f};
+  int delayHead = 0;
+  float encoderPos = 0.0f;
+  bool everReversed = false;
+  bool completedWithDist = false;
+  uint32_t t = 0;
+  for (int i = 0; i < 750; ++i) {  // up to 15s -- comfortably past the 7s STOP_TIME net
+    t += static_cast<uint32_t>(kDt * 1000.0f);
+    planner.tick(t, obsPosition(encoderPos), obsPosition(encoderPos), msg::PoseEstimate{});
+    msg::DrivetrainCommand held = planner.takeCommand();
+    float vCmd = held.control.twist.v_x;
+    if (vCmd < -0.5f) everReversed = true;
+    float vApplied = delayBuf[delayHead];
+    delayBuf[delayHead] = vCmd;
+    delayHead = (delayHead + 1) % kOutputHops;
+    encoderPos += kSlip * vApplied * kDt;
+    if (!planner.hasActiveCommand()) {
+      completedWithDist = (std::strcmp(planner.takeEvent().reason, "dist") == 0);
+      break;
+    }
+  }
+  checkFalse(everReversed, "the divergence-corrected trace never reverses despite the lagging plant");
+  checkTrue(completedWithDist,
+            "a lagging plant completes via STOP_DISTANCE (reason=dist) thanks to the divergence "
+            "replan, not the STOP_TIME safety net");
+}
+
+// 5e. [089-003 Revision 2, AC7] DISTANCE goal_kind: a stalled-then-freed
+// plant (a genuine departure from the plan, not routine tracking lag)
+// triggers the GROSS divergence path (reanchor(), not retarget()) and still
+// completes via dist, with no reverse. Same output-dead-time plant model as
+// scenario 5d above (see its own comment) -- a later NORMAL retarget can
+// still fire after the initial reanchor (e.g. from residual timing/
+// discretization drift), and that retarget's own dead-time projection needs
+// the matching delay to land on target, exactly like 5d.
+void scenarioDistanceGoalGrossDivergenceReanchorsAfterStall() {
+  beginScenario(
+      "089-003 AC7: a stalled-then-freed plant (gross divergence) triggers reanchor() and "
+      "still completes via dist");
+  Subsystems::Planner planner;
+  planner.configure(generousConfig());
+
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::DISTANCE;
+  cmd.goal.distance.distance = 500.0f;
+  cmd.goal.distance.speed = 200.0f;
+  cmd.style = msg::StopStyle::ABRUPT;
+  std::strncpy(cmd.corr_id, "stall1", sizeof(cmd.corr_id) - 1);
+  planner.apply(cmd, 0);
+
+  planner.tick(0, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});
+  planner.takeCommand();
+
+  // Frozen (wedged) for the first second, then tracks the commanded
+  // velocity normally -- the undisturbed plan would think it has covered
+  // ~180mm by t=1s while the measured encoder shows 0mm, a divergence well
+  // past kGrossDivergenceThreshold.
+  const float kDt = 0.02f;  // [s] matches kAssumedPassPeriod, see 5d's comment
+  const int kOutputHops = 2;
+  float delayBuf[kOutputHops] = {0.0f, 0.0f};
+  int delayHead = 0;
+  float encoderPos = 0.0f;
+  bool everReversed = false;
+  bool completedWithDist = false;
+  uint32_t t = 0;
+  for (int i = 0; i < 750; ++i) {
+    t += static_cast<uint32_t>(kDt * 1000.0f);
+    planner.tick(t, obsPosition(encoderPos), obsPosition(encoderPos), msg::PoseEstimate{});
+    msg::DrivetrainCommand held = planner.takeCommand();
+    float vCmd = held.control.twist.v_x;
+    if (vCmd < -0.5f) everReversed = true;
+    float vApplied = delayBuf[delayHead];
+    delayBuf[delayHead] = vCmd;
+    delayHead = (delayHead + 1) % kOutputHops;
+    if (t >= 1000) {
+      encoderPos += vApplied * kDt;  // freed -- full tracking from here on
+    }
+    // else: stalled -- encoderPos stays frozen at 0 regardless of vCmd.
+    if (!planner.hasActiveCommand()) {
+      completedWithDist = (std::strcmp(planner.takeEvent().reason, "dist") == 0);
+      break;
+    }
+  }
+  checkFalse(everReversed, "the gross-divergence reanchor's trace never reverses");
+  checkTrue(completedWithDist, "a stalled-then-freed plant still completes via dist after the reanchor");
+}
+
+// 5f. [089-003 Revision 2, AC8] DISTANCE goal_kind: guard 2 (no-reverse-
+// target) skips a would-be-backward replan near the target -- a synthetic
+// observation showing 497mm already traveled (still short of the 500mm
+// STOP_DISTANCE threshold -- NOT_FIRED) whose dead-time-projected remaining
+// is <= 0 must NOT trigger a replan, even though the RAW divergence against
+// the plan's own (still-early) position is large. Proven by comparing
+// against an undisturbed control run: if the guard skipped the replan (as
+// required), the commanded v_x at this tick is unaffected by the synthetic
+// observation, matching the control exactly.
+void scenarioDistanceGoalGuardSkipsNearTargetBackwardReplan() {
+  beginScenario(
+      "089-003 AC8: guard 2 (no-reverse-target) skips a would-be-backward replan near the "
+      "target");
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::DISTANCE;
+  cmd.goal.distance.distance = 500.0f;
+  cmd.goal.distance.speed = 200.0f;
+  cmd.style = msg::StopStyle::ABRUPT;
+
+  // Control: an undisturbed, closely-tracking encoder feed (40mm at
+  // t=300ms matches the plan's own trapezoid position exactly -- see
+  // scenario 5c) -- divergence stays ~0, no replan for either planner.
+  Subsystems::Planner control;
+  control.configure(generousConfig());
+  control.apply(cmd, 0);
+  control.tick(0, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});
+  control.takeCommand();
+  control.tick(300, obsPosition(40.0f), obsPosition(40.0f), msg::PoseEstimate{});
+  msg::DrivetrainCommand controlHeld = control.takeCommand();
+
+  Subsystems::Planner test;
+  test.configure(generousConfig());
+  test.apply(cmd, 0);
+  test.tick(0, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});
+  test.takeCommand();
+  // A synthetic observation showing 497mm already traveled at t=300ms --
+  // NOT yet >= 500 (still NOT_FIRED), but its dead-time-projected remaining
+  // (3mm - planSpeed*kDeadTime ~ 3 - 8 = -5mm) is <= 0: guard 2 must skip
+  // the replan entirely, leaving this tick's commanded v_x identical to the
+  // undisturbed control's -- despite a large RAW divergence (~457mm)
+  // against the plan's own still-early position that would otherwise (sans
+  // guard 2) trigger a gross reanchor pointing backward.
+  test.tick(300, obsPosition(497.0f), obsPosition(497.0f), msg::PoseEstimate{});
+  msg::DrivetrainCommand testHeld = test.takeCommand();
+
+  checkTrue(test.hasActiveCommand(), "497mm < 500mm -- STOP_DISTANCE has not fired yet");
+  checkFloatNear(testHeld.control.twist.v_x, controlHeld.control.twist.v_x, 1.0f,
+                 "guard 2 skips the near-target replan -- commanded v_x matches the undisturbed "
+                 "control");
 }
 
 // 6. TIMED goal_kind: Planner synthesizes an implicit TIME stop from
@@ -728,7 +1001,11 @@ int main() {
   scenarioVelocityGoalRampsAndStaysOpenEnded();
   scenarioVelocityGoalWithStopReportsTimed();
   scenarioDistanceGoalFiresImplicitStopAbrupt();
-  scenarioDistanceGoalAnticipatesStopWithSpeedCap();
+  scenarioDistanceGoalStopFiredBeforeConvergenceForcesFreshDecel();
+  scenarioDistanceGoalRuckigTraceNeverReverses();
+  scenarioDistanceGoalDivergenceReplanCorrectsLaggingPlant();
+  scenarioDistanceGoalGrossDivergenceReanchorsAfterStall();
+  scenarioDistanceGoalGuardSkipsNearTargetBackwardReplan();
   scenarioTimedGoalSmoothRampDown();
   scenarioTurnGoalUsesSignedSpeedAndCallerStop();
   scenarioTurnGoalAnticipatesHeadingStopWithRateCap();

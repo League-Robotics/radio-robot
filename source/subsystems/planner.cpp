@@ -75,6 +75,19 @@ msg::DriveMode velocityShapedMode(const msg::PlannerCommand& cmd) {
   return cmd.stops_count_val() > 0 ? msg::DriveMode::TIMED : msg::DriveMode::STREAMING;
 }
 
+// kOutputHops/kAssumedPassPeriod/kDeadTime -- ticket 087-009's fixed
+// two-output-pass dead-time compensation (see applyStopAnticipation()'s own
+// doc comment below for the full derivation/rationale). Hoisted to file
+// scope (089-003) so BOTH applyStopAnticipation() (STOP_DISTANCE/
+// STOP_ROTATION's anticipation cap, still serving TIMED/VELOCITY/STREAM/
+// TURN/ROTATION/GOTO_GOAL) and maybeReplanDistance() (DISTANCE's new
+// divergence-triggered replan, architecture-update.md (089) Decision 10)
+// share the SAME tau definition, per that Decision's own instruction to
+// reuse it rather than redefine one under a new name.
+constexpr float kOutputHops = 2.0f;
+constexpr float kAssumedPassPeriod = 0.020f;  // [s] matches main.cpp's kPeriod
+constexpr float kDeadTime = kOutputHops * kAssumedPassPeriod;  // [s]
+
 }  // namespace
 
 void Planner::copyCallerStops(const msg::PlannerCommand& cmd) {
@@ -95,11 +108,7 @@ void Planner::appendStop(msg::StopKind kind, float a, float b, float ax) {
   stops_[stopsCount_++] = c;
 }
 
-void Planner::stageGoal(float v, float omega, msg::DriveMode mode,
-                        const msg::PlannerCommand& cmd) {
-  ramp_.setTarget(v, omega);
-  stagedV_ = v;
-  stagedOmega_ = omega;
+void Planner::stageCommon(msg::DriveMode mode, const msg::PlannerCommand& cmd) {
   style_ = cmd.style;
   for (int i = 0; i < 64; ++i) corrId_[i] = cmd.corr_id[i];
   stopping_ = false;
@@ -108,11 +117,20 @@ void Planner::stageGoal(float v, float omega, msg::DriveMode mode,
   mode_ = mode;
 }
 
+void Planner::stageGoal(float v, float omega, msg::DriveMode mode,
+                        const msg::PlannerCommand& cmd) {
+  ramp_.setTarget(v, omega);
+  stagedV_ = v;
+  stagedOmega_ = omega;
+  stageCommon(mode, cmd);
+}
+
 void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now) {
-  // apply() captures no MotionBaseline -- see the class comment. `now` is
-  // accepted for the ticket-locked signature and is currently unused; a
-  // future ticket may want a staged-but-not-yet-ticked timestamp.
-  (void)now;
+  // apply() captures no MotionBaseline -- see the class comment. 089-003:
+  // `now` is now used to anchor the linear channel's own elapsed-time clock
+  // for DISTANCE (linearSolveMs_, read back by linearElapsed()) -- the
+  // "future ticket may want a staged-but-not-yet-ticked timestamp" this
+  // comment used to flag.
 
   targetX_ = 0.0f;
   targetY_ = 0.0f;
@@ -195,7 +213,10 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now) {
       // Implicit stops (ported concept from source_old's beginDistance(),
       // which added these itself, not its wire caller): the DISTANCE stop
       // itself, plus a generous TIME safety net (2x nominal travel time +
-      // 2s) computed purely from this goal's own fields.
+      // 2s) computed purely from this goal's own fields. UNCHANGED by
+      // 089-003 (Decision 4): Motion::evaluateStopCondition() stays the
+      // authoritative completion signal regardless of which mechanism
+      // shapes the commanded velocity in between.
       appendStop(msg::StopKind::STOP_DISTANCE, mag);
       float spdMax = fabsf(speed);
       if (spdMax < 1.0f) spdMax = 1.0f;
@@ -203,7 +224,36 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now) {
       appendStop(msg::StopKind::STOP_TIME, nominal * 2.0f + 2000.0f);
 
       distanceTarget_ = distance;
-      stageGoal(v, 0.0f, msg::DriveMode::DISTANCE, cmd);
+
+      // 089-003 (architecture-update.md Decision 2, "Pattern A"): DISTANCE's
+      // target is fully known here, at apply() time -- no live pose/
+      // observation dependency (unlike GOTO_GOAL) -- so, unique among the
+      // still-ramp_-driven goal kinds, the WHOLE position-control solve
+      // happens right here instead of being deferred to a per-tick ramp
+      // target. linear_.reset() unconditionally seeds from rest: this
+      // ticket's own scope is "the target known entirely at apply() time,"
+      // and a fresh D issued while a PRIOR D is still in flight restarting
+      // from a clean (0, 0, 0) seed is a documented, deliberate
+      // simplification (the same "fresh ramp-up" precedent enterPursue()
+      // already established for GOTO_GOAL) -- not an attempt to preserve
+      // velocity continuity across separate D commands, which apply()'s own
+      // no-observations constraint (class comment) makes unobservable
+      // anyway (Decision 8: seed from the channel's OWN state, never a
+      // measurement, and apply() has no live measurement to seed from in
+      // the first place). max_velocity = min(commandedSpeed, v_body_max) --
+      // solveToRest() itself clamps against the configured global ceiling
+      // (jerk_trajectory.cpp), so only the commanded-speed magnitude is
+      // passed here (Decision 2's revision).
+      linear_.reset();
+      linearCeiling_ = fabsf(speed);
+      linear_.solveToRest(distance, linearCeiling_);
+      linearTarget_ = distance;
+      linearSolveMs_ = now;
+      lastReplanMs_ = now;
+
+      stagedV_ = v;        // still latched for captureBaseline()'s vSign
+      stagedOmega_ = 0.0f;  // DISTANCE is turn-in-place-free (omega always 0)
+      stageCommon(msg::DriveMode::DISTANCE, cmd);
       break;
     }
 
@@ -381,9 +431,12 @@ void Planner::applyStopAnticipation(const msg::MotorState& leftObs,
   // fired). The closed-form formula below has no such feedback path: it
   // depends only on `remaining`, which shrinks monotonically, so the cap it
   // produces is monotonic too.
-  constexpr float kOutputHops = 2.0f;
-  constexpr float kAssumedPassPeriod = 0.020f;  // [s] matches main.cpp's kPeriod
-  constexpr float kDeadTime = kOutputHops * kAssumedPassPeriod;  // [s]
+  //
+  // kOutputHops/kAssumedPassPeriod/kDeadTime themselves now live at file
+  // scope (089-003) -- see the anonymous namespace above -- so
+  // maybeReplanDistance()'s divergence-triggered replan (architecture-
+  // update.md (089) Decision 10) can reuse the SAME tau definition rather
+  // than redefining one under a new name; no behavior change here.
 
   for (uint8_t i = 0; i < stopsCount_; ++i) {
     const msg::StopCondition& cond = stops_[i];
@@ -447,6 +500,110 @@ void Planner::applyStopAnticipation(const msg::MotorState& leftObs,
   ramp_.setTarget(v, omega);
 }
 
+float Planner::linearElapsed(uint32_t now) const {
+  return static_cast<float>(static_cast<int32_t>(now - linearSolveMs_)) * 0.001f;
+}
+
+void Planner::maybeReplanDistance(uint32_t now, const msg::MotorState& leftObs,
+                                  const msg::MotorState& rightObs,
+                                  const msg::PoseEstimate& fusedPose) {
+  // Guard 3 (deadband + rate limit, Decision 10): at most one replan per
+  // kMinReplanInterval.
+  if (static_cast<int32_t>(now - lastReplanMs_) < static_cast<int32_t>(kMinReplanInterval)) {
+    return;
+  }
+
+  // DISTANCE always carries its own STOP_DISTANCE (appended in apply()) --
+  // find it the same way applyStopAnticipation() finds its own stops,
+  // rather than assuming stops_[0] (robust against a future stops_[]
+  // ordering change).
+  const msg::StopCondition* distCond = nullptr;
+  for (uint8_t i = 0; i < stopsCount_; ++i) {
+    if (stops_[i].kind == msg::StopKind::STOP_DISTANCE) {
+      distCond = &stops_[i];
+      break;
+    }
+  }
+  if (distCond == nullptr) return;  // defensive -- DISTANCE always appends one
+
+  // vSign: the goal's commanded direction (matches distanceProgress()'s own
+  // convention, motion/stop_condition.cpp). A degenerate speed==0 DISTANCE
+  // goal has no meaningful direction to replan in -- skip.
+  float vSign = baseline_.vSign;
+  if (vSign == 0.0f) return;
+
+  float measuredRemainingMag = 0.0f;
+  Motion::StopEvalResult r = Motion::remainingToStop(*distCond, baseline_, leftObs, rightObs,
+                                                     fusedPose, &measuredRemainingMag);
+  if (r != Motion::StopEvalResult::NOT_FIRED) return;  // FIRED: guard 1 -- the
+  // stop-evaluation loop later this SAME tick owns completion, not a replan.
+  // (UNSUPPORTED cannot happen for STOP_DISTANCE.)
+
+  // Plan's own remaining, in linear_'s CURRENT frame (whatever the most
+  // recent solveToRest()/retarget() established) -- Decision 10's "available
+  // internally -- Decision 8's remembered last sample." fabsf() makes this
+  // directly comparable to measuredRemainingMag (also a nonnegative
+  // magnitude) regardless of which direction/frame linear_ is currently
+  // solving in.
+  Motion::JerkTrajectory::State state = linear_.sample(linearElapsed(now));
+  float planRemainingMag = fabsf(linearTarget_ - state.position);
+
+  float divergence = fabsf(planRemainingMag - measuredRemainingMag);
+  if (divergence < kDivergenceThreshold) return;  // within tolerance -- no replan
+
+  // Guard 2 (no-reverse-target): dead-time-project the MEASURED remaining
+  // ("remaining = target - (measured + v*tau)", Decision 8's revision --
+  // target/measured collapse to measuredRemainingMag - planSpeed*tau here,
+  // since measuredRemainingMag IS target-minus-measured already). `v` is the
+  // PLAN's own last-sampled speed (never a measured velocity -- Decision 8's
+  // "PLAN leads velocity" framing), so this projection cannot reopen
+  // 087-009's measured-velocity-feedback limit-cycle risk.
+  float planSpeedMag = fabsf(state.velocity);
+  float projectedRemainingMag = measuredRemainingMag - planSpeedMag * kDeadTime;
+  if (projectedRemainingMag <= 0.0f) return;  // never solve backward
+
+  if (divergence >= kGrossDivergenceThreshold) {
+    // GROSS case (Decision 8's revision): full re-anchor from measurement,
+    // including velocity. Position: convert the (un-projected)
+    // measuredRemainingMag back into linear_'s current frame the same way
+    // "remaining" is frame-independent (linearTarget_ - remaining, matching
+    // this method's own planRemainingMag derivation above). Velocity: the
+    // measured per-wheel velocity, averaged (straight-driving assumption,
+    // same as distanceProgress()'s own position averaging) -- 0.0f if
+    // either wheel's velocity observation is momentarily absent.
+    float measuredPositionSigned = linearTarget_ - vSign * measuredRemainingMag;
+    float measuredVelocitySigned = 0.0f;
+    if (leftObs.velocity.has && rightObs.velocity.has) {
+      measuredVelocitySigned = (leftObs.velocity.val + rightObs.velocity.val) * 0.5f;
+    }
+    linear_.reanchor(measuredPositionSigned, measuredVelocitySigned);
+    // linearTarget_ is unchanged -- reanchor() reuses linear_'s own
+    // internally remembered target (jerk_trajectory.h's own doc comment).
+  } else {
+    // NORMAL case: retarget() to the dead-time-projected remaining, seeded
+    // (internally, by linear_ itself) from its own last velocity/
+    // acceleration -- never from measurement.
+    float newRemainingSigned = vSign * projectedRemainingMag;
+    linear_.retarget(newRemainingSigned);
+    linearTarget_ = newRemainingSigned;
+  }
+  linearSolveMs_ = now;
+  lastReplanMs_ = now;
+}
+
+void Planner::armDistanceStopDecel(uint32_t now) {
+  // 089-003, ticket item 4: called the instant a SMOOTH-style DISTANCE
+  // goal's stop condition fires. If linear_'s own plan has already
+  // naturally converged to rest (the common case -- Decision 4/9), this is
+  // a no-op: nothing to re-solve. Otherwise, re-solve a fresh
+  // velocity-control decel-to-rest seeded from linear_'s own current state
+  // (already refreshed by this tick's earlier sample() call -- Decision 8,
+  // never leftObs/rightObs).
+  if (linearElapsed(now) >= linear_.duration()) return;
+  linear_.solveToVelocity(0.0f, linearCeiling_);
+  linearSolveMs_ = now;
+}
+
 void Planner::queueEvent(const char* reason) {
   hasEvent_ = true;
   heldEvent_ = Event{};
@@ -457,6 +614,11 @@ void Planner::queueEvent(const char* reason) {
 }
 
 void Planner::holdTwistCommand(float v, float omega) {
+  // Cached so state() can report the SAME value regardless of which
+  // mechanism (ramp_ or a JerkTrajectory channel) produced it -- see
+  // planner.h's currentV_/currentOmega_ doc comment.
+  currentV_ = v;
+  currentOmega_ = omega;
   msg::BodyTwist3 twist;
   twist.v_x = v;
   twist.v_y = 0.0f;
@@ -473,6 +635,17 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
   lastTickMs_ = now;
   haveLastTick_ = true;
 
+  // 089-003 KNOWN INTERMEDIATE STATE (see planner.h's class comment): a
+  // goal-kind-aware (not mode_-aware) check, scoped narrowly to DISTANCE --
+  // captured ONCE, here, since mode_ itself flips to IDLE the instant this
+  // goal completes below, but this tick's OWN output must still route
+  // through the linear channel either way. Tickets 004/005 migrate the
+  // remaining goal kinds the same way, after which this collapses to the
+  // clean `mode_ == GO_TO` vs. not split (Decision 5) -- do not generalize
+  // early.
+  const bool distanceGoal = (mode_ == msg::DriveMode::DISTANCE);
+  float distanceV = 0.0f;  // this tick's sampled linear-channel velocity (DISTANCE only)
+
   if (!activeCmd_) {
     ramp_.reset();
   } else {
@@ -481,7 +654,18 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
       baselineCaptured_ = true;
     }
 
-    if (mode_ == msg::DriveMode::GO_TO && gPhase_ == GPhase::PURSUE && !stopping_) {
+    if (distanceGoal) {
+      // No anticipation cap needed here -- unlike the ramp_ path,
+      // linear_'s position-control plan already decelerates to rest AT the
+      // target as an intrinsic property of the whole-trajectory solve
+      // (Decision 4). The divergence-triggered replan (Decision 10) is the
+      // ONLY per-tick correction, and only while the goal's own stop has
+      // not fired (guard 1).
+      if (!stopping_) {
+        maybeReplanDistance(now, leftObs, rightObs, fusedPose);
+      }
+      distanceV = linear_.sample(linearElapsed(now)).velocity;
+    } else if (mode_ == msg::DriveMode::GO_TO && gPhase_ == GPhase::PURSUE && !stopping_) {
       // Re-steer toward the world-frame anchor from THIS tick's fusedPose,
       // BEFORE the ramp advances -- ported ordering from source_old's
       // driveAdvance() PURSUE hook (recompute (v, omega), THEN tick the
@@ -492,6 +676,7 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
       // converges (the `stopping_` branch below), so without this guard
       // PURSUE would fight its own completion indefinitely.
       pursueSteer(fusedPose);
+      ramp_.advance(dt);
     } else if (mode_ != msg::DriveMode::GO_TO && !stopping_) {
       // 086-003: the same anticipation pattern, extended to DISTANCE/TURN/
       // ROTATION -- GO_TO is excluded (PURSUE's pursueSteer() above already
@@ -500,17 +685,28 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
       // comment on applyStopAnticipation()). Gated on !stopping_ for the
       // same reason pursueSteer()'s own call is: once a stop condition has
       // armed the SMOOTH ramp-down (ramp_.setTarget(0, 0) below), this must
-      // not keep re-targeting the ramp away from zero.
+      // not keep re-targeting the ramp away from zero. 089-003: DISTANCE no
+      // longer reaches this branch (distanceGoal above takes it first) --
+      // applyStopAnticipation()'s STOP_DISTANCE branch is DEAD CODE for
+      // DISTANCE now, but the function/branch itself is UNCHANGED and still
+      // live for TIMED/VELOCITY/STREAM/TURN/ROTATION until tickets 004/005.
       applyStopAnticipation(leftObs, rightObs, fusedPose);
+      ramp_.advance(dt);
+    } else {
+      ramp_.advance(dt);
     }
 
-    ramp_.advance(dt);
-
     if (stopping_) {
-      // SMOOTH ramp-down in progress: terminate once converged or the soft
-      // deadline passes (matches source_old/commands/MotionCommand.cpp's
-      // tick() stopping sub-phase).
-      bool converged = ramp_.atTarget();
+      // SMOOTH ramp-down (or DISTANCE's decel-to-rest re-solve) in
+      // progress: terminate once converged or the soft deadline passes
+      // (matches source_old/commands/MotionCommand.cpp's tick() stopping
+      // sub-phase).
+      bool converged;
+      if (distanceGoal) {
+        converged = linearElapsed(now) >= linear_.duration();
+      } else {
+        converged = ramp_.atTarget();
+      }
       int32_t dtDeadline = static_cast<int32_t>(now - softDeadline_);
       if (converged || dtDeadline >= 0) {
         queueEvent(pendingReason_);
@@ -521,7 +717,9 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
       }
     } else {
       // Normal running sub-phase: evaluate stop conditions, OR-combined --
-      // the first one to fire terminates the goal.
+      // the first one to fire terminates the goal. UNCHANGED by 089-003
+      // (Decision 4) -- Motion::evaluateStopCondition() stays authoritative
+      // regardless of which mechanism is shaping the commanded velocity.
       for (uint8_t i = 0; i < stopsCount_; ++i) {
         Motion::StopEvalResult r =
             Motion::evaluateStopCondition(stops_[i], baseline_, now, leftObs, rightObs, fusedPose);
@@ -537,19 +735,30 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
           }
           const char* reason = reasonTokenFor(stops_[i].kind);
           if (style_ == msg::StopStyle::ABRUPT) {
-            ramp_.reset();
+            if (distanceGoal) {
+              // Immediate halt, no smooth ramp-down, regardless of
+              // mechanism -- this tick's held output is forced to 0.
+              distanceV = 0.0f;
+            } else {
+              ramp_.reset();
+            }
             queueEvent(reason);
             activeCmd_ = false;
             stopping_ = false;
             mode_ = msg::DriveMode::IDLE;
             gPhase_ = GPhase::IDLE;
           } else {
-            // SMOOTH: ramp to (0,0); tick() emits the event once converged
-            // or the soft deadline passes (the `stopping_` branch above).
+            // SMOOTH: ramp/decel to rest; tick() emits the event once
+            // converged or the soft deadline passes (the `stopping_`
+            // branch above).
             stopping_ = true;
             softDeadline_ = now + kSoftDeadlineMs;
             pendingReason_ = reason;
-            ramp_.setTarget(0.0f, 0.0f);
+            if (distanceGoal) {
+              armDistanceStopDecel(now);
+            } else {
+              ramp_.setTarget(0.0f, 0.0f);
+            }
           }
           break;
         }
@@ -559,7 +768,11 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
     }
   }
 
-  holdTwistCommand(ramp_.currentV(), ramp_.currentOmega());
+  if (distanceGoal) {
+    holdTwistCommand(distanceV, 0.0f);
+  } else {
+    holdTwistCommand(ramp_.currentV(), ramp_.currentOmega());
+  }
 }
 
 bool Planner::hasCommand() const { return hasCommand_; }
@@ -584,9 +797,15 @@ msg::PlannerState Planner::state() const {
   s.target_speed = targetSpeed_;
   s.distance_target = distanceTarget_;
   s.deadline = stopping_ ? softDeadline_ : 0;
-  s.body_twist.v_x = ramp_.currentV();
+  // 089-003: currentV_/currentOmega_ (cached by holdTwistCommand(), the
+  // SAME call tick() uses to hold the output takeCommand() returns) rather
+  // than ramp_.currentV()/currentOmega() directly -- ramp_ is untouched for
+  // a JerkTrajectory-driven goal kind like DISTANCE, so reading it here
+  // would report a stale value. See planner.h's currentV_/currentOmega_
+  // doc comment.
+  s.body_twist.v_x = currentV_;
   s.body_twist.v_y = 0.0f;
-  s.body_twist.omega = ramp_.currentOmega();
+  s.body_twist.omega = currentOmega_;
   s.active = activeCmd_;
   return s;
 }
@@ -594,6 +813,13 @@ msg::PlannerState Planner::state() const {
 void Planner::configure(const msg::PlannerConfig& config) {
   config_ = config;
   ramp_.configure(config);
+  // 089-003: both channels configured here even though only linear_ does
+  // real work for DISTANCE this ticket -- rotational_ is unused until
+  // ticket 005 (TURN/ROTATION) but kept ready rather than left silently
+  // unconfigured (planner.h's class comment, architecture-update.md (089)
+  // Decision 1/ticket item 1).
+  linear_.configure(config, /*isRotational=*/false);
+  rotational_.configure(config, /*isRotational=*/true);
 }
 
 bool Planner::hasActiveCommand() const { return activeCmd_; }

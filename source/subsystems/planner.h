@@ -6,6 +6,32 @@
 // hasCommand()/takeCommand() -- the same held/taken discipline Subsystems::
 // Drivetrain/PoseEstimator already use.
 //
+// TWO COEXISTING MOTION-GENERATION MECHANISMS (089-003, architecture-
+// update.md (089) Decision 5): this class currently owns BOTH `ramp_`
+// (Motion::VelocityRamp, a per-tick "step toward whatever the target
+// currently is" chaser) AND `linear_`/`rotational_` (Motion::JerkTrajectory,
+// a "solve the whole jerk-limited plan once, sample many times" profiler,
+// source/motion/jerk_trajectory.h). Which goal kind uses which is currently
+// split as follows -- **KNOWN INTERMEDIATE STATE**, not the sprint's final
+// shape:
+//   - `DISTANCE` (089-003, this ticket): `linear_` only. `apply()` solves a
+//     position-control solve-to-rest once (no live pose/observation
+//     dependency -- the whole plan is knowable at apply() time); `tick()`
+//     samples it every pass instead of calling `ramp_.advance()`/
+//     `applyStopAnticipation()`. `rotational_` is constructed (a class
+//     member, like `linear_`) but does no real work for this goal kind
+//     (`omega` is always 0 for `DISTANCE`).
+//   - `TIMED`/`VELOCITY`/`STREAM`/`TURN`/`ROTATION`/`GOTO_GOAL`: still
+//     `ramp_` + `applyStopAnticipation()`, UNCHANGED, until tickets 004
+//     (`TIMED`/`VELOCITY`/`STREAM`) and 005 (`TURN`/`ROTATION`, which also
+//     retires `applyStopAnticipation()` in full) land.
+// `tick()`'s dispatch therefore needs a goal-kind-aware check scoped
+// narrowly to `DISTANCE` (`mode_ == msg::DriveMode::DISTANCE`), NOT yet the
+// clean `mode_ == GO_TO` vs. not split the architecture doc describes as the
+// sprint's END state -- do not generalize this early; ticket 005 is where
+// the dispatch collapses to that final two-way split, once every other
+// goal kind has migrated too.
+//
 // Ported (concept, not byte-for-byte) from source_old/superstructure/
 // Planner.{h,cpp} + source_old/commands/MotionCommand.{h,cpp}, onto the
 // already-generated msg::PlannerCommand/PlannerState/PlannerConfig/
@@ -100,6 +126,7 @@
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
 #include "messages/planner.h"
+#include "motion/jerk_trajectory.h"
 #include "motion/motion_baseline.h"
 #include "motion/velocity_ramp.h"
 
@@ -165,11 +192,22 @@ class Planner {
   bool hasActiveCommand() const;
 
  private:
-  // stageGoal -- shared tail for every real (non-STOP/NONE) goal_kind case in
-  // apply(): sets the ramp target, latches the staged (v, omega) for the
-  // next baseline capture, captures style/corr_id, and (re)activates the
-  // command. Does NOT touch stops_[]/stopsCount_ -- callers populate those
-  // (via copyCallerStops()/appendStop()) before calling this.
+  // stageCommon -- 089-003: the bookkeeping shared by EVERY goal_kind case in
+  // apply(), factored out of stageGoal() so DISTANCE (which no longer calls
+  // ramp_.setTarget(), see class comment) can reuse it directly: captures
+  // style/corr_id, resets stopping_/baselineCaptured_, (re)activates the
+  // command, and records mode_. Does NOT touch stops_[]/stopsCount_ or
+  // stagedV_/stagedOmega_ -- callers set those themselves (stageGoal() below
+  // sets the latter; DISTANCE's apply() case sets them directly since it has
+  // no single (v, omega) ramp target to derive them from).
+  void stageCommon(msg::DriveMode mode, const msg::PlannerCommand& cmd);
+
+  // stageGoal -- shared tail for every ramp_-driven (non-STOP/NONE) goal_kind
+  // case in apply(): sets the ramp target, latches the staged (v, omega) for
+  // the next baseline capture, then calls stageCommon(). Does NOT touch
+  // stops_[]/stopsCount_ -- callers populate those (via copyCallerStops()/
+  // appendStop()) before calling this. NOT used by DISTANCE (089-003) --
+  // see class comment.
   void stageGoal(float v, float omega, msg::DriveMode mode, const msg::PlannerCommand& cmd);
 
   // copyCallerStops -- reset stops_[]/stopsCount_ to the caller-supplied
@@ -250,6 +288,47 @@ class Planner {
                              const msg::MotorState& rightObs,
                              const msg::PoseEstimate& fusedPose);
 
+  // linearElapsed -- [s] elapsed time since the linear channel's most recent
+  // (re)solve (linearSolveMs_, updated by every solveToRest()/retarget()/
+  // reanchor()/solveToVelocity() call this class makes on linear_). The
+  // sole argument to linear_.sample() -- see class comment's "KNOWN
+  // INTERMEDIATE STATE" note.
+  float linearElapsed(uint32_t now) const;
+
+  // maybeReplanDistance -- 089-003, architecture-update.md Decision 10:
+  // DISTANCE's divergence-triggered replan. Called once per tick, ONLY
+  // while the goal's own stop condition has not fired (guard 1 -- enforced
+  // by the caller, tick(), not here), for the CURRENT tick's `now`/
+  // observations. Compares linear_'s own remembered plan-remaining (its
+  // current target minus its last-sampled position) against
+  // Motion::remainingToStop()'s MEASURED remaining for this goal's
+  // STOP_DISTANCE condition; when they diverge by at least
+  // kDivergenceThreshold, requests a retarget() (normal case) or, past
+  // kGrossDivergenceThreshold, a reanchor() (gross case) -- see planner.cpp
+  // for the exact dead-time-projected target formula (reuses
+  // applyStopAnticipation()'s own kDeadTime, hoisted to file scope so both
+  // methods share one definition). Enforces guard 2 (no-reverse-target: a
+  // replan is skipped if the dead-time-projected measured remaining is <=
+  // 0) and guard 3 (a minimum interval between replans, lastReplanMs_/
+  // kMinReplanInterval) itself -- Motion::JerkTrajectory enforces NEITHER
+  // guard (ticket 002's boundary decision; see jerk_trajectory.h's own
+  // retarget()/reanchor() doc comments).
+  void maybeReplanDistance(uint32_t now, const msg::MotorState& leftObs,
+                           const msg::MotorState& rightObs,
+                           const msg::PoseEstimate& fusedPose);
+
+  // armDistanceStopDecel -- 089-003, ticket item 4: called from tick()'s
+  // stop-evaluation loop exactly once, the instant a SMOOTH-style DISTANCE
+  // goal's stop condition fires (mirrors the ramp_-driven path's
+  // `ramp_.setTarget(0.0f, 0.0f)` call at the same point). If linear_'s
+  // OWN plan has not yet naturally converged to rest (elapsed <
+  // linear_.duration()), re-solves a fresh velocity-control decel-to-rest
+  // (solveToVelocity(0, ...)) seeded from linear_'s own current sampled
+  // state (Decision 8 -- never leftObs/rightObs) and resets linearSolveMs_.
+  // In the common case (the plan has already converged), this is a no-op --
+  // see class comment / ticket description.
+  void armDistanceStopDecel(uint32_t now);
+
   // queueEvent -- hold a completed-goal Event (reason token + the staged
   // goal's corr_id).
   void queueEvent(const char* reason);
@@ -260,6 +339,61 @@ class Planner {
 
   msg::PlannerConfig config_ = {};
   Motion::VelocityRamp ramp_;
+
+  // 089-003: the linear channel driving DISTANCE (see class comment). The
+  // rotational channel is constructed here too (architecture-update.md (089)
+  // Decision 1/ticket item 1) but does no real work until ticket 005
+  // (TURN/ROTATION) -- DISTANCE's omega is always 0, so nothing in this
+  // ticket ever solves or samples it.
+  Motion::JerkTrajectory linear_;
+  Motion::JerkTrajectory rotational_;
+
+  uint32_t linearSolveMs_ = 0;  // [ms] absolute time of linear_'s most recent (re)solve
+  // linear_'s CURRENT target, in whatever frame its most recent (re)solve
+  // established (retarget() rebaselines the frame; reanchor() does not
+  // change the target). Kept in sync with JerkTrajectory's own internal
+  // target_ so maybeReplanDistance() can compute "plan's own remaining"
+  // (fabsf(linearTarget_ - <last sampled position>)) without JerkTrajectory
+  // needing its own public target() accessor (out of this ticket's scope --
+  // Files to modify: planner.h/.cpp only).
+  float linearTarget_ = 0.0f;    // [mm]
+  float linearCeiling_ = 0.0f;   // [mm/s] per-call max_velocity most recently
+                                 // used for a solveToRest() (reused by
+                                 // armDistanceStopDecel()'s solveToVelocity()
+                                 // call -- retarget()/reanchor() reuse their
+                                 // OWN remembered ceiling internally instead).
+
+  // Divergence-replan rate limiting (Decision 10 guard 3) -- shared across
+  // whichever channel currently supports it (DISTANCE this ticket; TURN/
+  // ROTATION, ticket 005).
+  uint32_t lastReplanMs_ = 0;  // [ms] last divergence-triggered replan (or apply()) time
+  // Ticket-owned defaults (architecture-update.md Decision 10: "threshold
+  // values are ticket-owned, not specified [by the architecture doc]") --
+  // characterized on the bench, ticket 007; may be retuned there. Sized
+  // empirically against a closed-loop sim scenario (a 15%-lagging plant,
+  // planner_harness.cpp's scenarioDistanceGoalDivergenceReplanCorrectsLagging
+  // Plant): kMinReplanInterval must be short enough, relative to how fast
+  // planSpeed decays during the terminal decel phase, that the LAST
+  // correcting replan still lands close enough to the goal's true target --
+  // each replan's own dead-time projection intentionally undershoots by
+  // planSpeed*kDeadTime (Decision 8's revision), a gap a REAL wheel's
+  // continued coast through the output dead time is meant to close, so a
+  // replan cadence too coarse to fire again before the plan fully
+  // decelerates leaves that gap permanently uncorrected (confirmed by
+  // direct measurement: the original, more conservative 8mm/200ms pairing
+  // left a goal ~0.6mm short of a 500mm target under that same scenario).
+  static constexpr float kDivergenceThreshold = 3.0f;        // [mm]
+  static constexpr float kGrossDivergenceThreshold = 40.0f;  // [mm]
+  static constexpr uint32_t kMinReplanInterval = 60;         // [ms]
+
+  // currentV_/currentOmega_ -- this tick's held commanded body twist,
+  // regardless of which mechanism produced it (ramp_ or a JerkTrajectory
+  // channel) -- cached by holdTwistCommand() so state() reports the SAME
+  // value handed to takeCommand(), instead of reading ramp_.currentV()/
+  // currentOmega() directly (which would go stale for a JerkTrajectory-
+  // driven goal kind like DISTANCE, since ramp_ is untouched for it).
+  float currentV_ = 0.0f;      // [mm/s] signed
+  float currentOmega_ = 0.0f;  // [rad/s] signed
 
   bool activeCmd_ = false;   // mirrors MotionCommand::_active
   bool stopping_ = false;    // true during a SMOOTH ramp-down to (0,0)
