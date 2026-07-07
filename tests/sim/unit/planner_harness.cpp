@@ -265,6 +265,15 @@ void scenarioDistanceGoalFiresImplicitStopAbrupt() {
 // a_decel=1000mm/s^2 makes the cap bind only in the last few mm of this
 // 100mm goal (vCap < 100mm/s once remaining < 100^2/(2*1000) = 5mm) --
 // distinctly demonstrating "capped, but not yet fired" mid-goal.
+//
+// Ticket 087-009 update: the cap is now the dead-time-compensated closed
+// form `vCap = -reach + sqrt(reach^2 + 2*a_decel*remaining)`, `reach =
+// a_decel*kDeadTime` (kDeadTime = 0.040s, planner.cpp's own fixed constant)
+// -- Tick 3's expected value below is recomputed against that formula
+// (reach = 1000*0.04 = 40 -> vCap = -40 + sqrt(1600 + 4000) = 34.8331),
+// not the un-compensated sqrt(2*1000*2) = 63.2456 086-003 measured. Tick 2's
+// "does not bind" check is unaffected (vCap at remaining=100mm is still
+// ~409.8, far above the 100mm/s commanded speed either way).
 void scenarioDistanceGoalAnticipatesStopWithSpeedCap() {
   beginScenario("DISTANCE goal_kind: terminal speed cap anticipates the DISTANCE stop (086-003)");
   Subsystems::Planner planner;
@@ -291,13 +300,15 @@ void scenarioDistanceGoalAnticipatesStopWithSpeedCap() {
   checkFloatNear(held.control.twist.v_x, 100.0f, 0.5f,
                  "far from the stop -- anticipation cap does not bind, full commanded speed");
 
-  // Tick 3: 98mm traveled, 2mm remaining -- vCap = sqrt(2*1000*2) =
-  // sqrt(4000) mm/s, BELOW the 100mm/s commanded speed: the cap now binds,
-  // well before the DISTANCE stop itself would fire at 100mm.
+  // Tick 3: 98mm traveled, 2mm remaining -- dead-time-compensated vCap =
+  // -40 + sqrt(40^2 + 2*1000*2) = -40 + sqrt(5600) = 34.8331 mm/s (087-009;
+  // see this scenario's own comment above), BELOW the 100mm/s commanded
+  // speed: the cap now binds, well before the DISTANCE stop itself would
+  // fire at 100mm.
   planner.tick(3000, obsPosition(98.0f), obsPosition(98.0f), msg::PoseEstimate{});
   held = planner.takeCommand();
   checkTrue(planner.hasActiveCommand(), "98mm traveled -- short of the 100mm DISTANCE stop, still running");
-  checkFloatNear(held.control.twist.v_x, std::sqrt(4000.0f), 1.0f,
+  checkFloatNear(held.control.twist.v_x, 34.8331f, 1.0f,
                  "anticipation caps the commanded speed as the DISTANCE stop's remaining distance shrinks");
   checkTrue(held.control.twist.v_x < 99.0f,
             "the anticipatory cap measurably reduces speed BEFORE the stop fires (086-003)");
@@ -502,6 +513,16 @@ void scenarioRotationGoalUsesSignedSpeedAndCallerStop() {
 // through). See applyStopAnticipation()'s own comment (planner.cpp) on why
 // STOP_ROTATION's remaining (a per-wheel arc, mm) is applied to this
 // formula as a documented approximation rather than a unit-correct one.
+//
+// Ticket 087-009 update: the cap is now the same dead-time-compensated
+// closed form 5b's own comment above describes, `reach =
+// yaw_acc_max*kDeadTime` (kDeadTime = 0.040s) -- Tick 3's expected value
+// below is recomputed against it (reach = 2.0*0.04 = 0.08 -> omegaCap =
+// -0.08 + sqrt(0.08^2 + 2*2.0*0.3) = -0.08 + sqrt(1.2064) = 1.01836), not
+// the un-compensated sqrt(2*2.0*0.3) = sqrt(1.2) = 1.09545 086-003
+// measured. Tick 2's "does not bind" check is unaffected (omegaCap at
+// remaining=50mm is still ~14.1, far above the 1.5 rad/s commanded rate
+// either way).
 void scenarioRotationGoalAnticipatesStopWithRateCap() {
   beginScenario("ROTATION goal_kind: terminal rate cap anticipates the ROTATION stop (086-003)");
   Subsystems::Planner planner;
@@ -528,13 +549,14 @@ void scenarioRotationGoalAnticipatesStopWithRateCap() {
   checkFloatNear(held.control.twist.omega, 1.5f, 1e-2f,
                  "far from the stop -- anticipation cap does not bind");
 
-  // arc=49.7mm, 0.3mm remaining -- omegaCap = sqrt(2*2.0*0.3) = sqrt(1.2)
-  // rad/s, BELOW the 1.5 rad/s commanded rate: the cap now binds, well
-  // before the ROTATION stop itself would fire at 50mm.
+  // arc=49.7mm, 0.3mm remaining -- dead-time-compensated omegaCap =
+  // -0.08 + sqrt(0.08^2 + 2*2.0*0.3) = 1.01836 rad/s (087-009; see this
+  // scenario's own comment above), BELOW the 1.5 rad/s commanded rate: the
+  // cap now binds, well before the ROTATION stop itself would fire at 50mm.
   planner.tick(3000, obsPosition(-49.7f), obsPosition(49.7f), msg::PoseEstimate{});
   held = planner.takeCommand();
   checkTrue(planner.hasActiveCommand(), "arc=49.7mm -- short of the 50mm ROTATION stop, still running");
-  checkFloatNear(held.control.twist.omega, std::sqrt(1.2f), 1e-2f,
+  checkFloatNear(held.control.twist.omega, 1.01836f, 1e-2f,
                  "anticipation caps the commanded rate as the ROTATION stop's remaining arc shrinks");
   checkTrue(held.control.twist.omega < 1.4f,
             "the anticipatory cap measurably reduces the rate BEFORE the stop fires (086-003)");

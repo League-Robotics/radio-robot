@@ -333,7 +333,8 @@ void Planner::pursueSteer(const msg::PoseEstimate& fusedPose) {
   ramp_.setTarget(v, omega);
 }
 
-void Planner::applyStopAnticipation(const msg::MotorState& leftObs, const msg::MotorState& rightObs,
+void Planner::applyStopAnticipation(const msg::MotorState& leftObs,
+                                    const msg::MotorState& rightObs,
                                     const msg::PoseEstimate& fusedPose) {
   // Start from the staged (v, omega) -- the ramp's own eventual target
   // absent any cap -- and tighten whichever component an active DISTANCE/
@@ -341,6 +342,48 @@ void Planner::applyStopAnticipation(const msg::MotorState& leftObs, const msg::M
   // planner.h's class comment for why GO_TO never reaches this method.
   float v = stagedV_;
   float omega = stagedOmega_;
+
+  // kOutputHops/kAssumedPassPeriod/kDeadTime (ticket 087-009) --
+  // architecture-update-r1.md's Decision 6/2 adds TWO full passes of dead
+  // time between this tick computing a cap and that cap actually reaching
+  // the wheel's commanded PWM: Planner's output -> bb.driveIn, drained by
+  // Drivetrain next pass; Drivetrain's own output -> bb.motorIn[], drained
+  // by Hardware the pass after THAT (see ticket 007's completion notes' own
+  // "TWO passes" accounting) -- versus ticket 006's transitional same-pass
+  // `hardware.apply(drivetrain.takeCommand())`. kAssumedPassPeriod matches
+  // main.cpp's own `kPeriod` (the loop's target best-effort cadence) --
+  // deliberately a FIXED constant, NOT this tick's own measured `now` delta:
+  // an earlier version of this fix used the measured delta, which is a
+  // reasonable proxy in the real loop (where Planner ticks exactly once per
+  // mandatory pass) but silently breaks in planner_harness.cpp's own
+  // scenarios, which deliberately advance `now` by large, non-representative
+  // steps (e.g. a full simulated second) to force ramp convergence within a
+  // single call -- caught by that harness's own tight, hand-derived
+  // expected-value assertions failing once this fix used the measured delta.
+  // A fixed constant sidesteps that fragility entirely.
+  //
+  // Below, the STOP_DISTANCE/STOP_ROTATION branches fold that dead time into
+  // the cap using the closed-form "stopping distance with a reaction time"
+  // solution (the same shape as the highway stopping-sight-distance formula,
+  // d = v*T + v^2/(2a)) -- solved for v given d = remaining:
+  //   v = -a*T + sqrt((a*T)^2 + 2*a*remaining)
+  // which reduces exactly to the un-compensated sqrt(2*a*remaining) when
+  // T == 0. This is a PURE FUNCTION of `remaining` (the encoder-derived
+  // geometry) and constants (a_decel/yaw_acc_max, kDeadTime) -- deliberately
+  // NOT a function of the CURRENTLY MEASURED wheel speed. An earlier version
+  // of this fix subtracted `measuredSpeed * deadTime` from `remaining`
+  // directly, which closes a loop through the plant's own (delayed)
+  // velocity response: as the cap drives speed down, the measured-speed
+  // term shrinks, which relaxes the cap, which lets speed climb back up --
+  // a genuine limit-cycle oscillation, caught by tracing a dense per-tick
+  // velocity trace through D 200 200 700's terminal approach (velocity
+  // dipped to ~0 mid-approach, then rebounded to 72mm/s just before the stop
+  // fired). The closed-form formula below has no such feedback path: it
+  // depends only on `remaining`, which shrinks monotonically, so the cap it
+  // produces is monotonic too.
+  constexpr float kOutputHops = 2.0f;
+  constexpr float kAssumedPassPeriod = 0.020f;  // [s] matches main.cpp's kPeriod
+  constexpr float kDeadTime = kOutputHops * kAssumedPassPeriod;  // [s]
 
   for (uint8_t i = 0; i < stopsCount_; ++i) {
     const msg::StopCondition& cond = stops_[i];
@@ -350,8 +393,10 @@ void Planner::applyStopAnticipation(const msg::MotorState& leftObs, const msg::M
     if (r == Motion::StopEvalResult::UNSUPPORTED) continue;  // STOP_TIME etc -- no geometry here
 
     if (cond.kind == msg::StopKind::STOP_DISTANCE) {
-      // pursueSteer()-style linear terminal decel cap.
-      float vCap = sqrtf(fmaxf(0.0f, 2.0f * config_.a_decel * remaining));
+      // pursueSteer()-style linear terminal decel cap, dead-time-compensated
+      // (see this method's own comment above).
+      float reach = config_.a_decel * kDeadTime;
+      float vCap = -reach + sqrtf(reach * reach + 2.0f * config_.a_decel * remaining);
       float mag = fminf(fabsf(v), vCap);
       v = (stagedV_ < 0.0f) ? -mag : mag;
     } else if (cond.kind == msg::StopKind::STOP_HEADING) {
@@ -375,7 +420,25 @@ void Planner::applyStopAnticipation(const msg::MotorState& leftObs, const msg::M
       // yaw_acc_max) -- the same concept-not-byte-for-byte simplification
       // precedent already established for RT's coast-anticipation/
       // rotational-slip (planner.h's GOTO_GOAL class comment).
-      float omegaCap = sqrtf(fmaxf(0.0f, 2.0f * config_.yaw_acc_max * remaining));
+      //
+      // Dead-time compensation (087-009): same closed-form reaction-time cap
+      // as STOP_DISTANCE above (see this method's own comment), applied in
+      // this same already-approximated per-wheel-ARC-mm domain. Kept for
+      // consistency/future-proofing even though it is provably a NO-OP at
+      // today's config values: RT's omega (kRotationOmega, motion_commands.
+      // cpp, ~1.745 rad/s) vs. yaw_acc_max (20 rad/s^2) only cross at
+      // remaining = omega^2/(2*yaw_acc_max) =~ 0.076mm -- out of a ~100mm
+      // total arc (90deg at the default 128mm trackwidth) -- far below one
+      // tick's own arc travel (~2.7mm at this omega), so the cap never binds
+      // in practice, before OR after this ticket's dead-time term (a min()
+      // against a bound that high above the staged omega never changes the
+      // result). This matches 086-003's own completion notes ("does not
+      // close RT's own overshoot to near-zero the way it closed D 200 200
+      // 500's"): RT's terminal overshoot is dominated by the SMOOTH
+      // ramp-down's post-fire coast, not this pre-fire cap -- see ticket
+      // 087-009's completion notes for why that coast is left un-recovered.
+      float reach = config_.yaw_acc_max * kDeadTime;
+      float omegaCap = -reach + sqrtf(reach * reach + 2.0f * config_.yaw_acc_max * remaining);
       float mag = fminf(fabsf(omega), omegaCap);
       omega = (stagedOmega_ < 0.0f) ? -mag : mag;
     }

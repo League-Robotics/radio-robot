@@ -238,7 +238,16 @@ class Planner {
   // other goal kind, while the goal is still running (guarded by the caller
   // on !stopping_ -- once the SMOOTH ramp-down has armed target (0,0), this
   // must not re-target the ramp away from zero).
-  void applyStopAnticipation(const msg::MotorState& leftObs, const msg::MotorState& rightObs,
+  //
+  // Ticket 087-009: the STOP_DISTANCE/STOP_ROTATION branches additionally
+  // fold in a FIXED dead-time compensation (architecture-update-r1.md's
+  // Decision 6/2 two-pass Planner->driveIn->Drivetrain->motorIn->Hardware
+  // output latency, versus ticket 006's same-pass feed-forward) -- see
+  // planner.cpp's own comment on the exact closed-form and ticket 087-009's
+  // completion notes for the measured before/after numbers. STOP_HEADING is
+  // deliberately left unmodified (TURN's own tests already pass without it).
+  void applyStopAnticipation(const msg::MotorState& leftObs,
+                             const msg::MotorState& rightObs,
                              const msg::PoseEstimate& fusedPose);
 
   // queueEvent -- hold a completed-goal Event (reason token + the staged

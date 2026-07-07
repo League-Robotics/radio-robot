@@ -27,6 +27,24 @@ test's xfail marker stays -- 086-002 alone does not close its distance
 tolerance; ticket 086-003 (terminal decel/coast anticipation) is expected to
 remove it next.
 
+**087-007/009 update:** ticket 087-007's synchronous-update rearchitecture
+added a two-pass Planner->Drivetrain->Hardware output dead time that
+re-broke the D 200 200 500 case (505.73mm/+1.15% -> 511.10mm/+2.22%,
+xfail'd again by 087-007). Ticket 087-009 recovers it: ``Planner::
+applyStopAnticipation()``'s STOP_DISTANCE cap now solves the closed-form
+"stopping distance with a reaction time" formula (``v = -a*T + sqrt((a*T)^2
++ 2*a*remaining)``, T = 2 passes) instead of the plain ``sqrt(2*a*
+remaining)`` -- folding the known two-pass dead time into the cap itself, as
+a pure function of the encoder-derived ``remaining`` (no plant-velocity
+feedback). Measured 502.27mm/+0.45% -- better than 086-003's own 505.73mm
+baseline -- so the xfail marker is REMOVED again below. See planner.cpp's
+own comment on this formula, and ticket 087-009's completion notes, for the
+full derivation and for why an earlier (reverted) attempt that fed the
+CURRENTLY MEASURED wheel velocity into the cap was a genuine bug: it closed
+a loop through the plant's own delayed response and rang (velocity dipping
+to ~0 then rebounding to 72mm/s right before the stop fired, caught via a
+dense per-tick trace of a longer leg).
+
 Drives ``libfirmware_host`` through the full wire dispatch (``Sim.command()``
 via the ``sim`` fixture, ``tests/sim/conftest.py``) exactly like
 ``test_motion_commands_arc_turn.py``/``test_planner.py`` -- ``vel(L,R)`` is
@@ -38,8 +56,6 @@ tick-step resolution across the stop transition, per the ticket's own
 from __future__ import annotations
 
 import math
-
-import pytest
 
 # Matches the sim's own ~24 ms control-period tick convention (firmware.py's
 # _DEFAULT_STEP) -- fine enough to resolve the reverse-spin shape tick by
@@ -181,31 +197,6 @@ _DRIVE_TOLERANCE_FRACTION = 0.015   # 1.5% of the commanded 500 mm (7.5 mm)
 _D_BUDGET = 4000   # [ms] ample for the drive itself plus completion
 
 
-@pytest.mark.xfail(
-    reason=(
-        "087-007: the real cyclic executive's synchronous-update discipline "
-        "(architecture-update-r1.md Decision 6) adds a uniform one-tick-per-"
-        "hop latency to the Planner->Drivetrain->Hardware command path "
-        "(Planner's output -> bb.driveIn, drained by Drivetrain next pass; "
-        "Drivetrain's output -> bb.motorIn[], drained by Hardware the pass "
-        "after that -- Decision 2's per-port unpack), versus ticket 006's "
-        "transitional same-pass feed-forward. This test is the 086 issue's "
-        "own regression proof for D-mode's terminal velocity-loop overshoot "
-        "(086-003's terminal-decel anticipation tightened it to +1.15%/"
-        "505.73mm); measured now at +2.22%/511.10mm -- comfortably better "
-        "than the pre-086 ~+6.5%/532.5mm blowup, but genuinely over this "
-        "test's deliberately tight 1.5%/7.5mm bar, caused by the added "
-        "latency giving the anticipation math a slightly later view of the "
-        "remaining distance. Loosening the tolerance here would silently "
-        "erode the exact regression bar 086 fought to establish. Control "
-        "retuning for the added latency (Motion::remainingToStop()'s "
-        "anticipation cap, or an equivalent fix) is ticket 009's scope -- "
-        "this xfail must be lifted once 009 restores this tolerance (or "
-        "the tolerance is re-measured and re-tightened against the new "
-        "latency, with the 086 issue re-confirmed non-regressed)."
-    ),
-    strict=True,
-)
 def test_d_200_200_500_stops_within_tight_tolerance_of_commanded_distance(sim):
     """D 200 200 500 (500 mm straight-line drive) must stop within a tight
     tolerance of the commanded 500 mm, measured (ground-truth pose) at the
@@ -240,6 +231,20 @@ def test_d_200_200_500_stops_within_tight_tolerance_of_commanded_distance(sim):
     505.73mm at 'EVT done D reason=dist' (t=2376ms elapsed), +1.15% over the
     500mm target -- comfortably inside this test's 1.5% (7.5mm) tolerance,
     down from the pre-086-003 +6.50%/532.51mm.
+
+    **087-007 update:** re-broken by the synchronous-update cyclic executive's
+    added two-pass Planner->Drivetrain->Hardware output dead time -- measured
+    511.10mm/+2.22%, over this test's 1.5%/7.5mm bar; xfail'd again (see
+    module docstring).
+
+    **087-009 update:** the xfail marker is REMOVED again below --
+    ``Planner::applyStopAnticipation()``'s STOP_DISTANCE cap now solves the
+    closed-form "stopping distance with a reaction time" formula instead of
+    the plain sqrt(2*a_decel*remaining) (see planner.cpp's own comment on
+    the exact derivation): measured true x = 502.27mm at 'EVT done D
+    reason=dist' (t=2352ms elapsed), +0.45% over the 500mm target --
+    comfortably inside the 1.5% tolerance and better than 086-003's own
+    505.73mm/+1.15%.
     """
     reply = sim.command("D 200 200 500")
     assert reply.strip() == "OK drive l=200 r=200 mm=500"
