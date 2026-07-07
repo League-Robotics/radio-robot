@@ -1,11 +1,11 @@
 ---
-status: in-progress
+status: done
 sprint: 086
 tickets:
-- 086-001
-- 086-002
-- 086-003
-- 086-004
+- '001'
+- '002'
+- '003'
+- '004'
 ---
 
 # Turn/drive terminal overshoot: motor velocity-loop reverse-spin makes turns backtrack and tours wreck

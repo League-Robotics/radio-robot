@@ -1,10 +1,16 @@
 ---
-id: "004"
-title: "Per-leg geometry + rendered-trace verification and stand HITL pass"
-status: open
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004]
-depends-on: ["002", "003"]
-github-issue: ""
+id: '004'
+title: Per-leg geometry + rendered-trace verification and stand HITL pass
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+depends-on:
+- '002'
+- '003'
+github-issue: ''
 issue: motion-turn-drive-terminal-overshoot.md
 completes_issue: true
 ---
@@ -68,15 +74,14 @@ masked this bug:
       closed.
 - [x] `tests/sim/unit/test_motion_commands_arc_turn.py`'s `RT 9000` ±10°
       tolerance is tightened to match the fixed behavior.
-- [ ] Stand HITL pass completed and recorded: wheel spin-up/turn/stop in
+- [x] Stand HITL pass completed and recorded: wheel spin-up/turn/stop in
       both directions on the stand; turns land accurately (no backtrack/
       wander); drives stop at commanded distance without overshoot; `STOP`
       halts immediately; `wedged()`/`wedgeSuspect()` show no runaway/
-      persistent-latch behavior across the session. **(Not done by this
-      session — the software half only. Team-lead runs this separately on
-      the real robot.)**
-- [ ] The parent issue (`motion-turn-drive-terminal-overshoot.md`) is
-      closeable. **(Blocked on the stand HITL pass above.)**
+      persistent-latch behavior across the session. **(Done — team-lead
+      stand HITL session 2026-07-06, fw `0.20260706.17`. See notes below.)**
+- [x] The parent issue (`motion-turn-drive-terminal-overshoot.md`) is
+      closeable. **(Unblocked — HITL passed.)**
 
 ## Completion Notes (software half — 086-004 programmer session)
 
@@ -172,6 +177,43 @@ tests/testgui -q` — 364 passed, no regressions.
 `tests/testgui/test_tour1_geometry.py` (retuned),
 `tests/sim/unit/test_motion_commands_arc_turn.py` (retuned), `.gitignore`
 (added `tests/sim/system/out/`).
+
+## Stand HITL Pass (team-lead session, 2026-07-06, fw `0.20260706.17`)
+
+Robot on the stand (wheels free), direct USB serial (`/dev/cu.usbmodem2121102`),
+`DEV WD 5000` watchdog fed with `PING` throughout, `DEV DT PORTS 1 2`.
+Instrumented script sampled per-wheel `vel` and `encpose` heading through and
+1.3 s past each turn's completion. This is the check the sim structurally CANNOT
+make: sim `min_duty=0`, so `armoredWrite()`'s reversal path never fires there —
+only real hardware (`min_duty>0`) exercises the zero-crossing armor the
+backtrack/reverse-spin defect lived behind.
+
+Results (all criteria met):
+- **`RT +90` (`RT 9000`)**: completed `EVT done RT reason=rot` at 99.9°;
+  **post-completion heading spread 0.0° — NO backtrack**; **reverse-spin
+  samples 0 — NO reverse spin**. This is the exact behavior the user reported
+  as broken ("completes the turn and then backtracks... wanders around") — now
+  clean on hardware.
+- **`RT -90` (`RT -9000`)**: completed, returned to 0.2°; 0.0° backtrack,
+  0 reverse-spin samples.
+- **`D 200 200 500`**: settled `encpose` x = **501 mm** (commanded 500) —
+  **NO overshoot** (pre-fix this family overshot to ~535 mm). `EVT done D
+  reason=dist`.
+- **`STOP`**: halts; encoders hold.
+- **Armor intact**: at rest after a motion, `wedged=1` briefly latches
+  (`wsus=0`); a follow-up run confirmed it is the documented transient
+  raw-latch — a fresh `DEV M 1 STATE` read `wedged=0`, the very next `RT 9000`
+  drove and completed normally, and both `RT +90`/`RT -90` in the main run ran
+  back-to-back (the second after the first had latched). Self-heals on the next
+  drive, `wsus` never qualified, no runaway (everything stopped on `STOP`), no
+  persistent latch. The 086 fix did not touch the wedge detector (086-002),
+  consistent with this being pre-existing benign behavior.
+
+Both directions drive, encoders increment in proportion/direction, round-trip
+over the real link works — the standing verification gate
+(`.claude/rules/hardware-bench-testing.md`) is satisfied. The parent issue
+`motion-turn-drive-terminal-overshoot.md` is confirmed fixed on real hardware
+and is now closeable.
 
 ## Implementation Plan
 
