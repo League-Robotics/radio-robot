@@ -96,6 +96,7 @@ struct DrivetrainState {
     bool connected = false;
     uint32_t otos_status = 0;
     bool otos_fusion_blocked = false;
+    bool active = false;
 
     // --- array / optional-string accessors ---
     const float* enc() const { return enc_; }

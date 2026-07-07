@@ -136,6 +136,20 @@ class Planner {
   void tick(uint32_t now, const msg::MotorState& leftObs, const msg::MotorState& rightObs,
             const msg::PoseEstimate& fusedPose);
 
+  // Output edge -- unchanged in shape by sprint 087 (ticket 087-003 AC4):
+  // Planner's own tick() signature and this hasCommand()/takeCommand() pair
+  // are untouched by the blackboard-queue wiring. Per
+  // clasi/sprints/087-two-plane-blackboard-synchronous-update-loop-
+  // configurator-and-command-queue-transport-greenfield/
+  // architecture-update-r1.md Decision 1, whatever DRAINS this edge (the
+  // main loop's routeOutputs, ticket 007) is the SECOND producer of
+  // Rt::Mailbox<msg::DrivetrainCommand> driveIn -- Subsystems::Drivetrain's
+  // own command-plane input (see Drivetrain::tick()'s doc comment,
+  // drivetrain.h) -- alongside CommandRouter's `DEV DT` path. Both
+  // producers must gate on Drivetrain's currently-published authority state
+  // (msg::DrivetrainState::active, 087-003 AC2) before posting to driveIn;
+  // that authority GATE itself is ticket 006/007's job, out of this
+  // ticket's scope -- Planner posts nothing to driveIn directly.
   bool hasCommand() const;               // true once tick() has run and the output is untaken
   msg::DrivetrainCommand takeCommand();  // clears hasCommand()
 

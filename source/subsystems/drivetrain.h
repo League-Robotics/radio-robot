@@ -62,6 +62,7 @@
 #include "hal/capability/hal_command.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
+#include "runtime/queue.h"
 
 namespace Subsystems {
 
@@ -110,19 +111,45 @@ class Drivetrain {
 
   // now: [ms]. leftObs/rightObs: this tick's sampled MotorState for the two
   // bound wheels -- arguments only, never stored, never read from a clock or
-  // a Motor reference. See the class comment. HOLDS its output (a
-  // Hal::DrivetrainToHardwareCommand, addressed via ports()) rather than
-  // returning it -- see hasCommand()/takeCommand() below. Sets hasCommand()
-  // unconditionally whenever it runs; main.cpp (ticket 079-005) only calls
-  // tick() when active().
+  // a Motor reference. See the class comment.
+  //
+  // driveIn (087-003, clasi/sprints/087-two-plane-blackboard-synchronous-
+  // update-loop-configurator-and-command-queue-transport-greenfield/
+  // architecture-update-r1.md, "The Faceplate -- concrete example"): the
+  // blackboard-sourced command transport (Rt::Mailbox, source/runtime/
+  // queue.h) this Drivetrain now drains INSTEAD OF however it previously
+  // received its setpoint. tick() pops driveIn (latest-wins) when
+  // non-empty, at the top of the call, applying the popped
+  // msg::DrivetrainCommand through the SAME apply() this class has always
+  // used -- THEN the setpoint-governance math below runs exactly as before,
+  // unchanged. An empty driveIn is a no-op: whatever setpoint is already
+  // staged (mode_/targets, set by a previous apply()/driveIn post) is
+  // governed unchanged -- today's "no new command" behavior. driveIn is the
+  // single coalescing Mailbox<DrivetrainCommand> shared with
+  // CommandRouter's `DEV DT` path and Planner's own output edge (Decision
+  // 1's authority-gated arbitration -- see Planner::takeCommand()'s own doc
+  // comment); the authority GATE itself (who is allowed to post) is ticket
+  // 006/007's job, out of this ticket's scope. state().active exposes
+  // active()/standby() from a state cell so a would-be poster can check
+  // authority without holding a Drivetrain* (see state() below).
+  //
+  // HOLDS its output (a Hal::DrivetrainToHardwareCommand, addressed via
+  // ports()) rather than returning it -- see hasCommand()/takeCommand()
+  // below. Sets hasCommand() unconditionally whenever it runs; main.cpp
+  // (ticket 079-005) only calls tick() when active().
   void tick(uint32_t now,
             const msg::MotorState& leftObs,
-            const msg::MotorState& rightObs);
+            const msg::MotorState& rightObs,
+            Rt::Mailbox<msg::DrivetrainCommand>& driveIn);
 
   bool hasCommand() const;                      // true once tick() has run and the output is untaken
   Hal::DrivetrainToHardwareCommand takeCommand();     // clears hasCommand()
 
-  msg::DrivetrainState state() const;          // assembled from getters
+  // Assembled from getters. state().active mirrors active() (087-003) --
+  // the authority-mode field a driveIn producer reads to check "who
+  // currently has authority" without holding a Drivetrain* (see tick()'s
+  // doc comment above).
+  msg::DrivetrainState state() const;
   msg::DrivetrainCapabilities capabilities() const;
 
   // Records the two bound wheel motors' capabilities, needed only so

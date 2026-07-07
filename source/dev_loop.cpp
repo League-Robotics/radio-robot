@@ -17,6 +17,8 @@
 
 #include <cstdio>
 
+#include "runtime/queue.h"
+
 namespace {
 
 // motionVerbForMode -- maps the msg::DriveMode a Planner goal was driving to
@@ -91,7 +93,21 @@ void devLoopTick(DevLoop& loop, uint32_t now, const DevLoopStatement* statement)
         // DrivetrainConfig (sprint 079 decision 8; DevLoopState no longer
         // holds its own leftPort/rightPort copy).
         Subsystems::DrivetrainPorts p = drivetrain.ports();
-        drivetrain.tick(now, hardware.motor(p.left).state(), hardware.motor(p.right).state());
+        // 087-003: Drivetrain::tick() gained a driveIn Mailbox parameter
+        // (source/runtime/queue.h; see drivetrain.h's tick() doc comment)
+        // that it drains before running its setpoint-governance path.
+        // dev_loop.cpp still stages setpoints via the direct
+        // drivetrain.apply(devState.drivetrainCommand) call above (its own
+        // outbox-drain mechanism, unaffected by this ticket) -- it has no
+        // Blackboard-backed driveIn to source a real one from yet (that
+        // wiring is ticket 007's job, which also deletes this whole file --
+        // see dev_loop.h's file header). An always-empty local Mailbox here
+        // is a mechanical compile fix only: it stays empty, so tick() takes
+        // the "no new command" branch and governs the setpoint already
+        // applied above, unchanged.
+        Rt::Mailbox<msg::DrivetrainCommand> noDriveInYet;
+        drivetrain.tick(now, hardware.motor(p.left).state(), hardware.motor(p.right).state(),
+                         noDriveInYet);
         if (drivetrain.hasCommand()) {
             hardware.apply(drivetrain.takeCommand());
         }

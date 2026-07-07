@@ -69,6 +69,7 @@
 #include "dev_loop.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
+#include "runtime/queue.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
 #include "subsystems/pose_estimator.h"
@@ -173,8 +174,13 @@ void oneReferencePass(Subsystems::SimHardware& hardware, Subsystems::Drivetrain&
 
   if (drivetrain.active()) {
     Subsystems::DrivetrainPorts governedPorts = drivetrain.ports();
+    // 087-003: mirrors dev_loop.cpp's own always-empty local driveIn Mailbox
+    // (see that file's comment at its matching call site) -- this harness's
+    // REF pipeline never stages a driveIn post either, so an empty Mailbox
+    // here keeps REF byte-identical to dev_loop.cpp's real devLoopTick().
+    Rt::Mailbox<msg::DrivetrainCommand> noDriveInYet;
     drivetrain.tick(now, hardware.motor(governedPorts.left).state(),
-                     hardware.motor(governedPorts.right).state());
+                     hardware.motor(governedPorts.right).state(), noDriveInYet);
     if (drivetrain.hasCommand()) {
       hardware.apply(drivetrain.takeCommand());
     }

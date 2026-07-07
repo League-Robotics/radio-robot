@@ -12,6 +12,16 @@
 // the plain system C++ compiler -- no CMake, no ARM toolchain. Hand-rolled
 // assertions, prints PASS/FAIL, exits nonzero on any failure. Run by
 // test_planner.py, which compiles and runs this binary via subprocess.
+//
+// Ticket 087-003 note: Planner's own tick() signature and its output edge
+// (hasCommand()/takeCommand() -> msg::DrivetrainCommand) are UNCHANGED in
+// shape by sprint 087's blackboard wiring (see planner.h's doc comment on
+// that edge) -- Planner is documented as the second producer of
+// Rt::Mailbox<msg::DrivetrainCommand> driveIn (Decision 1), but the actual
+// post into driveIn happens in the DRAINING caller (the loop's
+// routeOutputs, ticket 007), not inside Planner itself. No scenario below
+// changes: every existing hasCommand()/takeCommand() assertion still
+// exercises the exact same edge, unmodified.
 
 #include <cmath>
 #include <cstdio>

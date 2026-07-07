@@ -146,6 +146,7 @@ _INVENTORY_MAP: dict = {
     ("DrivetrainState", "connected"):    "(new field — drivetrain connected flag, not in ActualState)",
     ("DrivetrainState", "otos_status"):         "Drive::_lastOtosStatus (subsystems/drive/Drive.h, 074-004)",
     ("DrivetrainState", "otos_fusion_blocked"):  "Drive::_otosFusionBlocked (subsystems/drive/Drive.h, 074-004)",
+    ("DrivetrainState", "active"):        "Subsystems::Drivetrain::active_ (subsystems/drivetrain.h, 087-003)",
 
     # DrivetrainConfig: maps to RobotConfig members
     ("DrivetrainConfig", "fwd_sign_l"):           "RobotConfig::fwdSignL",

@@ -1,25 +1,16 @@
 ---
-id: "003"
-title: "Faceplate regularization: Drivetrain and Planner blackboard wiring"
-status: open
-use-cases: [SUC-001, SUC-002, SUC-006]
-depends-on: ["002"]
-github-issue: ""
+id: '003'
+title: 'Faceplate regularization: Drivetrain and Planner blackboard wiring'
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-006
+depends-on:
+- '002'
+github-issue: ''
 issue: plan-file-a-design-issue-blackboard-architecture-state-objects-command-queues.md
-# completes_issue: Controls whether linked issues are archived when this ticket
-# is moved to done. Default: true (archive when all referencing tickets are done).
-# Set to false (scalar) to suppress archival for ALL linked issues on this ticket.
-# Set to a mapping {filename.md: false} to suppress archival per issue filename.
-# Use false for tickets that partially address a multi-sprint umbrella issue.
 completes_issue: true
-# exception: Written by a lower agent when it cannot proceed (see architecture §exception-protocol).
-# exception:
-#   thrown_by: "programmer"          # "programmer" | "sprint-planner"
-#   thrown_at: "2026-05-07T14:23:00Z"
-#   attempted: |
-#     Description of what was attempted before giving up.
-#   conflict: "architecture-update.md §3 — reason the agent is blocked"
-#   surface: "internal"              # "user-visible" | "internal"
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -47,31 +38,31 @@ it only needs to make `Drivetrain`'s authority mode (`active()`/
 
 ## Acceptance Criteria
 
-- [ ] `Drivetrain::tick(uint32_t now, const msg::MotorState& leftObs, const
+- [x] `Drivetrain::tick(uint32_t now, const msg::MotorState& leftObs, const
       msg::MotorState& rightObs, Rt::Mailbox<msg::DrivetrainCommand>&
       driveIn)` compiles, pops `driveIn` when non-empty, and drives the
       existing setpoint-governance logic unchanged otherwise — no change to
       the governed-output math itself.
-- [ ] `msg::DrivetrainState` (or another architecturally-appropriate state
+- [x] `msg::DrivetrainState` (or another architecturally-appropriate state
       message, confirmed during implementation) exposes the current
       `active()`/`standby()` authority mode as a plain readable field, so a
       producer can decide whether it is allowed to post `driveIn` without
       holding a `Drivetrain*`.
-- [ ] `Drivetrain`'s output edge (`hasCommand()`/`takeCommand()` ->
+- [x] `Drivetrain`'s output edge (`hasCommand()`/`takeCommand()` ->
       `Hal::DrivetrainToHardwareCommand`) is unchanged in shape (Decision 2
       defers the `motorIn[]` unpack to the loop's `routeOutputs`, ticket
       007).
-- [ ] `Planner`'s `tick()` signature and its own output edge
+- [x] `Planner`'s `tick()` signature and its own output edge
       (`hasCommand()`/`takeCommand()` -> `msg::DrivetrainCommand`) are
       unchanged in shape; documented in-code (a comment on the output edge)
       as the second producer of `driveIn` per Decision 1, cross-referencing
       `architecture-update.md`.
-- [ ] `source/subsystems/drivetrain.h` and `planner.h` include only
+- [x] `source/subsystems/drivetrain.h` and `planner.h` include only
       `messages/*.h` and `runtime/queue.h` (the generic `Mailbox`/
       `WorkQueue` templates) — never `blackboard.h`, never each other's
       header (the "subsystems never include `blackboard.h`" boundary rule
       from the architecture's self-review).
-- [ ] Existing `tests/sim/unit/test_drivetrain.py` and `test_planner.py`
+- [x] Existing `tests/sim/unit/test_drivetrain.py` and `test_planner.py`
       (and the harnesses they drive) pass with the new signature, updated
       to construct a bare `Rt::Mailbox<msg::DrivetrainCommand>` directly —
       no `Blackboard` instance required (SUC-002's enumerable-dependency
@@ -105,3 +96,29 @@ subsystems' own tests and harnesses to match.
 - **Verification command**: `uv run pytest tests/sim/unit/test_drivetrain.py tests/sim/unit/test_planner.py`
 
 **Documentation updates:** none beyond `architecture-update.md`.
+
+## Implementation Notes (post-execution)
+
+- The authority-mode field was added at the proto source
+  (`protos/drivetrain.proto`'s `DrivetrainState.active`, field 12) and
+  `source/messages/drivetrain.h` was regenerated via `uv run python3
+  scripts/gen_messages.py` (never hand-edited) — the regen touched only that
+  one header, adding exactly `bool active = false;`. An inventory-map entry
+  was also added in `scripts/gen_messages.py` (`_INVENTORY_MAP`) for
+  traceability parity with every other field.
+- Changing `Drivetrain::tick()`'s signature broke two call sites this
+  ticket's own scope did not originally list, both still calling the OLD
+  3-arg `tick()`: `source/dev_loop.cpp` (the pre-ticket-007 shared loop body,
+  slated for wholesale deletion in ticket 007) and
+  `tests/sim/unit/dev_loop_pose_estimator_harness.cpp`'s `oneReferencePass()`
+  (a hand-written mirror of `dev_loop.cpp`'s structure). Both were fixed
+  with a minimal, mechanical patch: a local, never-posted-to
+  `Rt::Mailbox<msg::DrivetrainCommand>` passed as `driveIn`, preserving
+  today's exact behavior (empty `driveIn` -> the "otherwise" governance path
+  runs unchanged, exactly as AC1 requires) without implementing any of
+  Decision 1's arbitration. This is a compile-fix only, not new wiring;
+  ticket 007 replaces both call sites for real.
+- Full verification: `tests/sim/unit/test_drivetrain.py` +
+  `tests/sim/unit/test_planner.py` (2 passed), then `tests/sim -q` (254
+  passed — identical to the pre-ticket baseline, no regressions, no golden
+  shifts needed).

@@ -57,6 +57,13 @@ message DrivetrainState {
   bool       connected          = 9;
   uint32     otos_status        = 10;  // raw OTOS STATUS byte (074-004)
   bool       otos_fusion_blocked = 11; // Drive::_otosFusionBlocked (074-004)
+  // 087-003: Drivetrain's authority mode (active()/standby()), readable from
+  // this state cell without holding a Drivetrain* -- lets a driveIn producer
+  // (CommandRouter's DEV DT path, Planner's output edge) check "who
+  // currently has authority" before posting (architecture-update-r1.md
+  // Decision 1). true == active() (this Drivetrain currently governs its
+  // bound wheel pair); false == standby()/never-yet-activated.
+  bool       active             = 12;
 }
 
 // Full drive configuration slice: geometry, PID gains, OTOS fusion, EKF noise.

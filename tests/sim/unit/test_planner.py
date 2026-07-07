@@ -23,6 +23,11 @@ compiler, run the resulting binary, assert it exits 0.
 
 Collected under ``tests/sim/unit/`` -- already within ``pyproject.toml``'s
 ``testpaths``, no configuration change needed.
+
+Ticket 087-003 note: Planner's own ``tick()`` signature and output edge are
+unchanged in shape by sprint 087's blackboard wiring (see
+``planner_harness.cpp``'s own updated header comment) -- no compile-command
+or scenario change was needed here.
 """
 
 import pathlib
