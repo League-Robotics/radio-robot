@@ -22,7 +22,7 @@ namespace {
 // systemCommands()+devCommands()+...+otosCommands() assembly exactly (same
 // family order, same table-concatenation shape).
 std::vector<CommandDescriptor> buildTable(CommandRouter& router) {
-  std::vector<CommandDescriptor> all = systemCommands();
+  std::vector<CommandDescriptor> all = systemCommands(router);
 #if ROBOT_DEV_BUILD
   std::vector<CommandDescriptor> dev = devCommands(router);
   all.insert(all.end(), dev.begin(), dev.end());

@@ -219,7 +219,18 @@ int main() {
     // the file header) -- this minimal liveness-only fallback (no HAL, no
     // DEV, no watchdog) is what proves the ROBOT_DEV_BUILD gate is a real
     // fork rather than a decorative #if 1.
-    static CommandProcessor cmd(systemCommands());
+    //
+    // 088-003: systemCommands() now takes a Rt::CommandRouter& so HELP can
+    // enumerate the live table (see system_commands.h). This fallback has
+    // no Rt::MainLoop/Rt::Blackboard to route through -- `router` exists
+    // solely to bind HELP's handlerCtx; `cmd` (built the same way, from the
+    // same systemCommands(router) table) is what actually dispatches every
+    // line, exactly as before. Since ROBOT_DEV_BUILD is 0 here,
+    // buildTable() (command_router.cpp) registers only the liveness family
+    // for `router` too, so HELP correctly reports just the five liveness
+    // verbs this fallback actually serves.
+    static Rt::CommandRouter router;
+    static CommandProcessor cmd(systemCommands(router));
     cmd.setSerialReply(serialReply, &comm);
 
     while (true) {

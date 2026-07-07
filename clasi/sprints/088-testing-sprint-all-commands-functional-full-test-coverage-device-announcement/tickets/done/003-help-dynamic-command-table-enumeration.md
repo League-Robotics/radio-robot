@@ -1,8 +1,9 @@
 ---
 id: '003'
 title: HELP dynamic command-table enumeration
-status: open
-use-cases: [SUC-003]
+status: done
+use-cases:
+- SUC-003
 depends-on: []
 github-issue: ''
 issue: help-should-reflect-registered-commands.md
@@ -54,16 +55,26 @@ firmware match it.
 
 ## Acceptance Criteria
 
-- [ ] In the dev build, `HELP` lists every registered verb (system + dev +
+- [x] In the dev build, `HELP` lists every registered verb (system + dev +
       telemetry + motion + config + pose + otos), not just the five
       liveness verbs.
-- [ ] `CommandProcessor::_cmds` stays private; the new `listVerbs()`
+- [x] `CommandProcessor::_cmds` stays private; the new `listVerbs()`
       accessor is the only way `HELP` reaches it.
-- [ ] Adding or removing a command family changes `HELP`'s output with no
+- [x] Adding or removing a command family changes `HELP`'s output with no
       edit to the `HELP` handler itself.
-- [ ] Reply shape stays `OK help <space-separated verbs> [#id]`.
-- [ ] HITL bench: `HELP` over the real link returns the full, accurate
-      verb set.
+- [x] Reply shape stays `OK help <space-separated verbs> [#id]`.
+- [x] HITL bench: `HELP` over the real link returns the full, accurate
+      verb set. Verified 2026-07-07 over serial against the confirmed
+      robot device (`mbdeploy list` ROLE=NEZHA2, UID
+      `9906360200052820a8fdb5e413abb276...`, `/dev/cu.usbmodem2121102`),
+      firmware built via `just build-clean` (v0.20260707.1) and flashed via
+      `mbdeploy deploy <UID> --hex MICROBIT.hex`:
+      `OK help PING VER HELP ECHO ID DEV M DEV DT DEV STATE DEV STOP DEV WD
+      STREAM SNAP S T D R TURN RT G STOP GET SET SI ZERO OI OZ OR OP OV OL
+      OA` — byte-identical to the sim harness's output. `PING`/`VER`/`ID`
+      spot-checked on the same link and unaffected. (The full on-stand
+      motion/config exercise remains ticket 009's scope, per its own
+      dependency on this ticket.)
 
 ## Testing
 

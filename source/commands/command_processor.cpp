@@ -360,6 +360,27 @@ void CommandProcessor::replyErrf(char* buf, int size,
     replyErr(buf, size, code, detail, id, fn, ctx);
 }
 
+// ---------------------------------------------------------------------------
+// listVerbs — join every registered descriptor's prefix, space-separated,
+// into buf. See command_processor.h's doc comment (088-003, Decision 2).
+// ---------------------------------------------------------------------------
+
+int CommandProcessor::listVerbs(char* buf, int size) const
+{
+    if (size <= 0) return 0;
+    int pos = 0;
+    for (size_t i = 0; i < _cmds.size(); ++i) {
+        if (i > 0 && pos < size - 1) {
+            buf[pos++] = ' ';
+        }
+        for (const char* c = _cmds[i].prefix; *c != '\0' && pos < size - 1; ++c) {
+            buf[pos++] = *c;
+        }
+    }
+    buf[pos] = '\0';
+    return pos;
+}
+
 // Note: appendKeyValue, handleGet, and handleSet have been moved to
 // source/robot/ConfigRegistry.cpp (Sprint 019, Ticket 002).
 

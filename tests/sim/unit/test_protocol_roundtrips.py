@@ -13,6 +13,57 @@ def test_ping_replies_with_pong_and_a_timestamp(sim):
     assert "t=" in reply
 
 
+def test_help_enumerates_the_live_registered_command_table(sim):
+    """088-003: HELP used to reply with a hardcoded "PING VER HELP ECHO ID"
+    regardless of what was actually registered. It must now enumerate the
+    live table CommandRouter::buildTable() assembles -- every family, not
+    just the five liveness verbs."""
+    reply = sim.command("HELP").strip()
+    assert reply.startswith("OK help ")
+    body = reply[len("OK help "):]
+    tokens = body.split()
+
+    # Liveness family (system_commands.cpp) -- still registered, still present.
+    for verb in ("PING", "VER", "HELP", "ECHO", "ID"):
+        assert verb in tokens
+
+    # Motion family (motion_commands.cpp) -- this is the whole point of the
+    # fix: these never appeared under the old hardcoded string.
+    for verb in ("S", "T", "D", "R", "TURN", "RT", "G", "STOP"):
+        assert verb in tokens
+
+    # Config family (config_commands.cpp).
+    assert "SET" in tokens
+    assert "GET" in tokens
+
+    # Telemetry family (telemetry_commands.cpp).
+    assert "STREAM" in tokens
+    assert "SNAP" in tokens
+
+    # Pose family (pose_commands.cpp).
+    assert "SI" in tokens
+    assert "ZERO" in tokens
+
+    # OTOS family (otos_commands.cpp).
+    for verb in ("OI", "OZ", "OR", "OP", "OV", "OL", "OA"):
+        assert verb in tokens
+
+    # DEV family (dev_commands.cpp) -- multi-token prefixes ("DEV M", "DEV
+    # DT", ...) are joined as their literal registered prefix string, so
+    # check them as substrings rather than single tokens.
+    for prefix in ("DEV M", "DEV DT", "DEV STATE", "DEV STOP", "DEV WD"):
+        assert prefix in body
+
+
+def test_help_reply_is_not_truncated(sim):
+    """Regression check: HELP's reply buffers (system_commands.cpp) must be
+    sized to hold the full live table without snprintf silently truncating
+    the tail. otos_commands.cpp's OA is the last verb CommandRouter::
+    buildTable() registers, so it is the canary for a truncated reply."""
+    reply = sim.command("HELP").strip()
+    assert reply.endswith("OA")
+
+
 def test_dev_m_duty_replies_with_applied_fraction(sim):
     reply = sim.command("DEV M 1 DUTY 50")
     assert reply.strip() == "OK DEV M 1 applied=0.50"

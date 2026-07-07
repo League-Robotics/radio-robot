@@ -63,6 +63,13 @@ class CommandRouter {
   // telemetryChannel). Only meaningful during a route() call.
   Subsystems::Channel currentChannel() const { return currentChannel_; }
 
+  // Forwards to CommandProcessor::listVerbs() -- the live registered verb
+  // table HELP's handler reads (088-003, Decision 2: reuses this class's
+  // existing "reach shared runtime state from handlerCtx" pattern instead
+  // of a second, separately-maintained verb list). Keeps processor_
+  // private; this accessor is the only read path onto it beyond route().
+  int listVerbs(char* buf, int size) const { return processor_.listVerbs(buf, size); }
+
  private:
   CommandProcessor processor_;
   Blackboard* bb_ = nullptr;

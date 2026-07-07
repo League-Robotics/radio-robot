@@ -55,14 +55,26 @@ void handleVer(const ArgList& /*args*/, const char* corrId,
 }
 
 // ---------------------------------------------------------------------------
-// HELP -- list all verbs.
+// HELP -- list every registered verb.
 //   prefix "HELP"; parseFn nullptr.
-//   Reply: OK help <verb list>
+//   Reply: OK help <space-separated verbs> [#id]
+//
+// Reads the LIVE registered command table via CommandRouter::listVerbs()
+// (handlerCtx cast to Rt::CommandRouter*, the same pattern every other
+// command family already uses to reach shared runtime state -- see
+// dev_commands.cpp's own `bb(handlerCtx)` helper) -- not a hardcoded
+// string. HELP is the only liveness handler with a non-null handlerCtx
+// (see systemCommands() below); adding or removing a command family
+// changes this reply with no edit here (088-003, Decision 2).
 // ---------------------------------------------------------------------------
 void handleHelp(const ArgList& /*args*/, const char* corrId,
-                 ReplyFn replyFn, void* replyCtx, void* /*handlerCtx*/) {
-  char rbuf[128];
-  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "help", "PING VER HELP ECHO ID",
+                 ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
+  auto* router = static_cast<Rt::CommandRouter*>(handlerCtx);
+  char verbs[256];
+  router->listVerbs(verbs, sizeof(verbs));
+
+  char rbuf[320];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "help", verbs,
                              corrId, replyFn, replyCtx);
 }
 
@@ -126,11 +138,11 @@ void handleId(const ArgList& /*args*/, const char* corrId,
 
 }  // namespace
 
-std::vector<CommandDescriptor> systemCommands() {
+std::vector<CommandDescriptor> systemCommands(Rt::CommandRouter& router) {
   std::vector<CommandDescriptor> cmds;
   cmds.push_back(makeCmd("PING", nullptr, handlePing, nullptr, "badarg"));
   cmds.push_back(makeCmd("VER",  nullptr, handleVer,  nullptr, "badarg"));
-  cmds.push_back(makeCmd("HELP", nullptr, handleHelp, nullptr, "badarg"));
+  cmds.push_back(makeCmd("HELP", nullptr, handleHelp, &router, "badarg"));
   cmds.push_back(makeSchemaCmd("ECHO", &kEchoSchema, handleEcho, nullptr, "badarg"));
   cmds.push_back(makeCmd("ID",   nullptr, handleId,   nullptr, "badarg"));
   return cmds;
