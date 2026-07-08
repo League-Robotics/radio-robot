@@ -2,9 +2,13 @@
 id: '002'
 title: 'Configured poll-set: replace NezhaHardware''s portInUse_ with polled_ + a
   DEV M CFG polled= escape hatch'
-status: open
-use-cases: [SUC-002, SUC-003, SUC-004]
-depends-on: ['001']
+status: in-progress
+use-cases:
+- SUC-002
+- SUC-003
+- SUC-004
+depends-on:
+- '001'
 github-issue: ''
 issue: replace-portinuse-with-configured-poll-set.md
 completes_issue: true
