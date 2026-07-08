@@ -13,6 +13,7 @@ NezhaHardware::NezhaHardware(I2CBus& bus, const msg::MotorConfig configs[kPortCo
 {
     for (uint32_t i = 0; i < kPortCount; ++i) {
         config_[i] = configs[i];   // 087-004: config()'s backing store
+        polled_[i] = configs[i].polled;   // 091-002: the configured poll-set, established ONCE here
     }
 }
 
@@ -41,7 +42,6 @@ void NezhaHardware::tick(uint32_t now, Rt::Mailbox<msg::MotorCommand> motorIn[kP
         if (!motorIn[i].empty()) {
             uint32_t port = i + 1;
             motorAt(port).apply(motorIn[i].take());
-            portInUse_[i] = true;   // brings the port into the flip-flop schedule (decision 1)
         }
         if (motorResetIn[i]) {
             motorAt(i + 1).resetPosition();
@@ -49,9 +49,9 @@ void NezhaHardware::tick(uint32_t now, Rt::Mailbox<msg::MotorCommand> motorIn[kP
         }
     }
 
-    if (!anyPortInUse()) return;                    // idle schedule (decision 1)
-    if (!portInUse_[activePort_ - 1]) {
-        activePort_ = nextPortInUse(activePort_);    // defensive resync
+    if (!anyPolled()) return;                    // idle schedule (decision 1)
+    if (!polled_[activePort_ - 1]) {
+        activePort_ = nextPolled(activePort_);    // defensive resync
     }
     switch (phase_) {
         case Phase::REQUEST_DUE:
@@ -61,7 +61,7 @@ void NezhaHardware::tick(uint32_t now, Rt::Mailbox<msg::MotorCommand> motorIn[kP
         case Phase::COLLECT_DUE:
             if (!bus_.clear(Hal::kNezhaDeviceAddr)) return;   // settle window still open -- pass
             motorAt(activePort_).tick(now);              // the 5-step contract (base/leaf split)
-            activePort_ = nextPortInUse(activePort_);
+            activePort_ = nextPolled(activePort_);
             phase_ = Phase::REQUEST_DUE;
             break;
     }
@@ -78,10 +78,9 @@ void NezhaHardware::apply(const Hal::CommandProcessorToHardwareCommand& cmd)
         for (uint32_t p = 1; p <= kPortCount; ++p) {
             motorAt(p).apply(cmd.addressed[0].command);
         }
-        return;   // broadcast never marks a port in-use -- see Design Rationale 5
+        return;
     }
     for (uint8_t i = 0; i < cmd.count; ++i) {
-        portInUse_[cmd.addressed[i].port - 1] = true;
         motorAt(cmd.addressed[i].port).apply(cmd.addressed[i].command);
     }
 }
@@ -89,7 +88,6 @@ void NezhaHardware::apply(const Hal::CommandProcessorToHardwareCommand& cmd)
 void NezhaHardware::apply(const Hal::DrivetrainToHardwareCommand& cmd)
 {
     for (int i = 0; i < 2; ++i) {
-        portInUse_[cmd.wheel[i].port - 1] = true;
         motorAt(cmd.wheel[i].port).apply(cmd.wheel[i].command);
     }
 }
@@ -129,21 +127,31 @@ Hal::NezhaMotor& NezhaHardware::motorAt(uint32_t port)
     }
 }
 
-uint32_t NezhaHardware::nextPortInUse(uint32_t cur) const
+uint32_t NezhaHardware::nextPolled(uint32_t cur) const
 {
     for (uint32_t i = 1; i <= kPortCount; ++i) {
         uint32_t candidate = ((cur - 1 + i) % kPortCount) + 1;
-        if (portInUse_[candidate - 1]) return candidate;
+        if (polled_[candidate - 1]) return candidate;
     }
-    return cur;   // no in-use port found -- defensive only, see header comment
+    return cur;   // no polled port found -- defensive only, see header comment
 }
 
-bool NezhaHardware::anyPortInUse() const
+bool NezhaHardware::anyPolled() const
 {
     for (uint32_t i = 0; i < kPortCount; ++i) {
-        if (portInUse_[i]) return true;
+        if (polled_[i]) return true;
     }
     return false;
+}
+
+void NezhaHardware::setPolled(uint32_t port, bool polled)
+{
+    switch (port) {
+        case 1: polled_[0] = polled; return;
+        case 2: polled_[1] = polled; return;
+        case 3: polled_[2] = polled; return;
+        default: polled_[3] = polled; return;   // out-of-range clamps to port 4 -- mirrors motorAt()'s own convention
+    }
 }
 
 }  // namespace Subsystems

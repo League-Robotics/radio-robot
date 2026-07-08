@@ -52,7 +52,14 @@
 //     never change at runtime for any current concrete leaf -- see
 //     blackboard.h's file header), so a capability-rejected command (e.g.
 //     VOLT on Nezha) never posts anything and so never steals authority,
-//     exactly as before.
+//     exactly as before. 091-002: DUTY/VEL/POS are ALSO pre-validated
+//     against bb.motorConfig[port-1].polled (the Configurator's published
+//     NezhaHardware poll-set snapshot) BEFORE the capability gate --
+//     `portIsPolled()` in dev_commands.cpp -- rejecting an unpolled port's
+//     motion verb `ERR nodev <mode>` (mirrors OI/OZ/OR/OV's device-presence
+//     convention). NEUTRAL/RESET/STATE/CAPS/CFG are never gated by poll
+//     membership; a port opts into the poll set via `DEV M <n> CFG
+//     polled=true` (see applyMotorCfgKey() in dev_commands.cpp).
 //   - A bound-port DEV M motion verb ALSO posts a standby-only
 //     msg::DrivetrainCommand ({control_kind=NONE, standby=true}) to
 //     bb.driveIn (shared with DEV DT's own posts -- Decision 1's coalescing
@@ -67,17 +74,17 @@
 //     drivetrain.h's own "Authority arbitration" section) and this rewrite
 //     preserves that contract exactly.
 //   - DEV STOP's broadcast HAL neutral posts to bb.hardwareBroadcastIn (a
-//     dedicated Mailbox<msg::MotorCommand> -- NOT bb.motorIn[], since a
-//     broadcast deliberately does NOT mark any port in-use, a semantic
-//     bb.motorIn[]'s per-port drain does NOT preserve -- see
-//     NezhaHardware::apply(const Hal::CommandProcessorToHardwareCommand&)'s
-//     own "broadcast never marks a port in-use" branch); its Drivetrain-side
-//     {NEUTRAL,standby=true} posts to bb.driveIn like any other DEV DT-shaped
-//     command. DEV DT STOP's narrower, addressed (bound-pair-only) neutral
-//     posts to bb.motorIn[left-1]/bb.motorIn[right-1] directly (both ports
-//     ARE marked in-use for an addressed, non-broadcast neutral -- identical
-//     to bb.motorIn[]'s own marking -- see NezhaHardware::apply()'s addressed
-//     branch), so no separate cell is needed for that case.
+//     dedicated Mailbox<msg::MotorCommand> -- NOT bb.motorIn[], since
+//     bb.motorIn[]'s per-port drain (NezhaHardware::tick()) has no
+//     "broadcast to every port in one shot" shape at all -- a true
+//     broadcast needs the allPorts=true Hal::CommandProcessorToHardwareCommand
+//     forwarded through Hardware::apply(), a structurally different
+//     distribution path than posting into 4 separate per-port mailboxes);
+//     its Drivetrain-side {NEUTRAL,standby=true} posts to bb.driveIn like
+//     any other DEV DT-shaped command. DEV DT STOP's narrower, addressed
+//     (bound-pair-only) neutral posts to bb.motorIn[left-1]/
+//     bb.motorIn[right-1] directly (the SAME per-port shape bb.motorIn[]'s
+//     drain already handles), so no separate cell is needed for that case.
 //   - DEV M <n> CFG / DEV DT CFG / DEV DT PORTS post one Rt::ConfigDelta
 //     (kMotor / kDrivetrain) to bb.configIn -- the Configurator (ticket 005)
 //     folds+applies it, exactly the same "config-plane, not command-plane"

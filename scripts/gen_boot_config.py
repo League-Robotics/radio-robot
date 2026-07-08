@@ -41,6 +41,9 @@ MotorConfig would silently break the velocity loop:
     0 forever regardless of real motion; sprint 077-007 bench story)
   * the drive-pair port binding, the FWD_SIGN=1 placeholder for any port the
     JSON doesn't cover, and the mm/deg PLACEHOLDER
+  * the per-port `polled` I2C flip-flop poll-schedule membership (091-002):
+    true for the drive-pair ports, false otherwise -- a firmware-scheduling
+    fact, never robot-JSON-configurable; see polled_for_ports()
 
 When no robot config is found, everything falls back to these same firmware
 defaults so the build always succeeds.
@@ -201,6 +204,21 @@ def travel_calib_for_ports(cfg: dict):
     return out
 
 
+def polled_for_ports():
+    """Return a list of kPortCount `polled` bools, one per port (1..N).
+
+    091-002: the I2C flip-flop poll-schedule membership fact -- which ports
+    Subsystems::NezhaHardware's brick flip-flop sequencer samples/dispatches
+    each tick(). True for the drive-pair ports (LEFT_PORT/RIGHT_PORT);
+    false for every other port, mirroring travel_calib_for_ports()'s/
+    fwd_sign_for_ports()'s own LEFT_PORT/RIGHT_PORT-vs-"every other port"
+    specialization pattern exactly -- unlike those two, there is no robot-JSON
+    override: poll membership is a firmware-scheduling fact, not a
+    per-robot calibration value, so this is the same for every robot.
+    """
+    return [port in (LEFT_PORT, RIGHT_PORT) for port in range(1, K_PORT_COUNT + 1)]
+
+
 def fwd_sign_for_ports(cfg: dict):
     """Return a list of kPortCount fwd_sign values, one per port (1..N).
 
@@ -255,6 +273,7 @@ def generate(cfg: dict, source_path: str) -> str:
     trackwidth   = _get(cfg, "geometry", "trackwidth", default=TRACKWIDTH_DEFAULT)
     travel_calib = travel_calib_for_ports(cfg)
     fwd_sign     = fwd_sign_for_ports(cfg)
+    polled       = polled_for_ports()
     (otos_offset_x, otos_offset_y, otos_offset_yaw,
      otos_linear_scale, otos_angular_scale) = otos_boot_config_values(cfg)
 
@@ -266,6 +285,11 @@ def generate(cfg: dict, source_path: str) -> str:
     fwd_sign_lines = "\n".join(
         f"    out[{i}].setFwdSign({v});   // port {i + 1}"
         for i, v in enumerate(fwd_sign)
+    )
+
+    polled_lines = "\n".join(
+        f"    out[{i}].setPolled({'true' if v else 'false'});   // port {i + 1}"
+        for i, v in enumerate(polled)
     )
 
     return f"""\
@@ -317,6 +341,13 @@ void defaultMotorConfigs(msg::MotorConfig* out) {{
     // calibration.mm_per_wheel_deg_{{left,right}} for the drive-pair ports
     // (ports {LEFT_PORT}/{RIGHT_PORT}); other ports use the bench placeholder.
 {calib_lines}
+
+    // Per-port I2C flip-flop poll-schedule membership (091-002) — true for
+    // the drive-pair ports ({LEFT_PORT}/{RIGHT_PORT}), false otherwise. Not
+    // robot-JSON-configurable (a firmware-scheduling fact, not per-robot
+    // calibration); live-adjustable via `DEV M <n> CFG polled=true` for a
+    // bench rig's own non-drive-pair port (docs/protocol-v2.md §16).
+{polled_lines}
 }}
 
 msg::DrivetrainConfig defaultDrivetrainConfig() {{

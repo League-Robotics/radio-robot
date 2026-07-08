@@ -35,6 +35,18 @@ message MotorState {
       // (encoder-zeroing) resets; testability/bench verification
   optional uint32 soft_reset_count  = 8;  // cumulative count of soft
       // (non-zeroing) rebaseline resets; testability/bench verification
+  bool active = 9;  // commanded (never measured) running/neutral state:
+      // true while this motor is under a non-neutral control mode
+      // (DUTY_CYCLE/VOLTAGE/VELOCITY/POSITION), false on NEUTRAL. Always
+      // populated (unlike position/velocity/wedged, needs no has_encoder
+      // gate -- every leaf can answer "am I under a non-neutral command"
+      // regardless of encoder capability). Mirrors DrivetrainState.active
+      // one tier down (091-003: architecture-update.md Decision 3) --
+      // Rt::MainLoop::serviceWatchdogs() reads bb.motors[i].active as part
+      // of its fire-gate, alongside bb.drivetrain.active, since a
+      // bound-port authority-steal (isBoundPort() in dev_commands.cpp)
+      // drives DrivetrainState.active false while the port itself keeps
+      // spinning under a standalone DEV M command.
 }
 
 // Configuration parameters for a motor.
@@ -55,6 +67,15 @@ message MotorConfig {
       // writes 0 instead of a signed value. Unset (.has == false) -> ship
       // default (0.03, applied in Hal::Motor::configure()). An explicit 0
       // is a valid, meaningful value (deadband disabled).
+  bool   polled = 10;  // I2C flip-flop poll-schedule membership (091-002):
+      // does this port's encoder get sampled/dispatched by
+      // Subsystems::NezhaHardware's brick flip-flop sequencer each tick()?
+      // Established once at construction from the boot config (true for
+      // the drive pair, false otherwise -- gen_boot_config.py), mutable
+      // thereafter ONLY through `DEV M <n> CFG polled=<bool>` (the
+      // Configurator's kMotor ConfigDelta path, NezhaHardware::setPolled())
+      // -- never a side effect of an ordinary motion command. Default
+      // false, matching every other placeholder default in this schema.
 }
 
 // Declared motor capabilities.

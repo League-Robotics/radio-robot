@@ -293,6 +293,21 @@ bool applyMotorCfgKey(msg::MotorConfig& cfg, uint64_t& mask, const char* key, co
         snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "deadband=%s", numStr);
         return true;
     }
+    if (strcmp(key, "polled") == 0) {
+        // 091-002: the config-plane poll-set escape hatch (architecture-
+        // update.md Decision 1) -- opts a port into (or out of) NezhaHardware's
+        // I2C flip-flop schedule. No existing bool-valued CFG key exists to
+        // mirror, so this accepts "true"/"1" as true and anything else
+        // (including "false"/"0") as false -- the same lenient,
+        // no-strict-validation convention atof()/atoi() already apply to
+        // every numeric key above (a malformed token silently becomes the
+        // zero value, never an ERR).
+        bool polled = (strcmp(value, "true") == 0) || (strcmp(value, "1") == 0);
+        cfg.polled = polled;
+        mask |= Rt::bitOf(Rt::MotorConfigField::kPolled);
+        snprintf(appliedOut, static_cast<size_t>(appliedOutSize), "polled=%d", polled ? 1 : 0);
+        return true;
+    }
     return false;
 }
 
@@ -392,6 +407,17 @@ bool isBoundPort(const Rt::Blackboard& b, uint32_t port) {
     return port == b.drivetrainConfig.left_port || port == b.drivetrainConfig.right_port;
 }
 
+// portIsPolled -- true if `port`'s current bb.motorConfig[] snapshot (the
+// Configurator's own published value) marks it a member of NezhaHardware's
+// I2C flip-flop poll-set (091-002: architecture-update.md Decision 2).
+// DUTY/VEL/POS pre-validate against this BEFORE the existing capability
+// gate -- see handleDevM() below. NEUTRAL/RESET/STATE/CAPS/CFG never
+// consult it; a port's poll membership is orthogonal to whether it can be
+// neutralized/reset/queried/reconfigured.
+bool portIsPolled(const Rt::Blackboard& b, uint32_t port) {
+    return b.motorConfig[port - 1].polled;
+}
+
 // handleDevMCfg -- CFG delta: apply each supplied key onto a CANDIDATE
 // msg::MotorConfig seeded from bb.motorConfig[port-1] (087-006: replaces the
 // old motorConfigShadow[] read-modify-write shadow -- bb.motorConfig[] is
@@ -467,6 +493,10 @@ void handleDevM(const ArgList& args, const char* corrId,
 
     switch (mode) {
         case MotorMode::DUTY: {
+            if (!portIsPolled(b, port)) {
+                CommandProcessor::replyErr(rbuf, sizeof(rbuf), "nodev", "duty", corrId, replyFn, replyCtx);
+                break;
+            }
             float duty = args.args[2].fval / 100.0f;
             msg::MotorCommand cmd;
             cmd.setDutyCycle(duty);
@@ -483,6 +513,10 @@ void handleDevM(const ArgList& args, const char* corrId,
             break;
         }
         case MotorMode::VEL: {
+            if (!portIsPolled(b, port)) {
+                CommandProcessor::replyErr(rbuf, sizeof(rbuf), "nodev", "vel", corrId, replyFn, replyCtx);
+                break;
+            }
             float velocity = args.args[2].fval;
             msg::MotorCommand cmd;
             cmd.setVelocity(velocity);
@@ -499,6 +533,10 @@ void handleDevM(const ArgList& args, const char* corrId,
             break;
         }
         case MotorMode::POS: {
+            if (!portIsPolled(b, port)) {
+                CommandProcessor::replyErr(rbuf, sizeof(rbuf), "nodev", "pos", corrId, replyFn, replyCtx);
+                break;
+            }
             float position = args.args[2].fval;
             msg::MotorCommand cmd;
             cmd.setPosition(position);
@@ -880,10 +918,9 @@ void handleDevState(const ArgList& /*args*/, const char* corrId,
 // ---------------------------------------------------------------------------
 // DEV STOP -- global: all four motors neutral, drivetrain idle, authority
 // dropped. Posts the broadcast HAL neutral to bb.hardwareBroadcastIn (a
-// dedicated Mailbox<msg::MotorCommand> -- NOT bb.motorIn[], since a
-// broadcast deliberately does not mark any port in-use, unlike a per-port
-// motorIn[] post -- see dev_commands.h's file header) and the Drivetrain
-// side to bb.driveIn.
+// dedicated Mailbox<msg::MotorCommand> -- NOT bb.motorIn[], a structurally
+// different distribution shape; see dev_commands.h's file header) and the
+// Drivetrain side to bb.driveIn.
 // ---------------------------------------------------------------------------
 void handleDevStop(const ArgList& /*args*/, const char* corrId,
                    ReplyFn replyFn, void* replyCtx, void* handlerCtx) {

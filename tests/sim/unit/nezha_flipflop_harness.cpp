@@ -124,10 +124,18 @@ constexpr uint16_t kWireAddr = static_cast<uint16_t>(kAddr7 << 1);  // 0x20 (wri
 
 msg::MotorConfig defaultConfigs[Subsystems::NezhaHardware::kPortCount];
 
-void resetDefaultConfigs() {
+// resetDefaultConfigs -- 091-002: `polled` is now the CONFIGURED poll-set
+// fed to NezhaHardware's constructor (polled_[], replacing the old
+// command-derived portInUse_ flag) -- each scenario must therefore declare,
+// up front, which port(s) it wants scheduled, rather than relying on a
+// command to bring a port in (apply() no longer marks anything). `polledMask`
+// bit i (0-based) means port i+1 starts polled=true; every other port
+// defaults false -- mirrors gen_boot_config.py's own boot-config shape.
+void resetDefaultConfigs(uint8_t polledMask = 0) {
   for (uint32_t i = 0; i < Subsystems::NezhaHardware::kPortCount; ++i) {
     defaultConfigs[i] = msg::MotorConfig{};
     defaultConfigs[i].setPort(i + 1).setFwdSign(1).setTravelCalib(1.0f);
+    defaultConfigs[i].setPolled((polledMask & (1u << i)) != 0);
   }
 }
 
@@ -198,14 +206,16 @@ void runOneCycle(Subsystems::NezhaHardware& hal, uint32_t nowRequestMs,
 
 // --- Scenarios ----------------------------------------------------------
 
-// 1. Idle schedule (no port ever addressed): tick() performs ZERO bus
-//    actions, no matter how many times it's called (decision 1).
+// 1. Idle schedule (no port ever polled): tick() performs ZERO bus
+//    actions, no matter how many times it's called (decision 1). 091-002:
+//    constructed with polled=false for every port (the default) -- there is
+//    no command that could bring a port into the schedule any more.
 void scenarioIdleScheduleNoBusActions() {
-  beginScenario("idle schedule (no port in-use): tick() never touches the bus");
-  resetDefaultConfigs();
+  beginScenario("idle schedule (no port polled): tick() never touches the bus");
+  resetDefaultConfigs(/*polledMask=*/0);
   I2CBus::setClock(1000000);
   I2CBus bus;
-  Subsystems::NezhaHardware hal(bus, defaultConfigs);   // no apply() calls at all -- nothing ever in-use
+  Subsystems::NezhaHardware hal(bus, defaultConfigs);   // no port polled_ -- nothing ever scheduled
 
   // 087-004: never posted to in this scenario -- a no-op consumption loop.
   Rt::Mailbox<msg::MotorCommand> motorIn[Subsystems::Hardware::kPortCount];
@@ -233,13 +243,13 @@ void scenarioIdleScheduleNoBusActions() {
 //    transaction this scenario's txnCount assertion below would catch.
 void scenarioFlipFlopSequencingAndClearConvention() {
   beginScenario("flip-flop: request -> pass-while-unclear -> collect (7-bit clear() guard)");
-  resetDefaultConfigs();
+  resetDefaultConfigs(/*polledMask=*/0b0001);   // 091-002: port 1 pre-polled -- no command brings it in any more
   I2CBus::setClock(1000000);
   I2CBus bus;
   Subsystems::NezhaHardware hal(bus, defaultConfigs);
   scriptGenerousPool(bus, 20);
 
-  hal.apply(addressedOne(1, neutralCommand()));   // marks port 1 in-use
+  hal.apply(addressedOne(1, neutralCommand()));   // stages NEUTRAL on port 1's own setter (already polled)
 
   checkUintEq(bus.txnCount(kAddr7), 0, "apply() alone issues no bus traffic");
 
@@ -276,28 +286,30 @@ void scenarioFlipFlopSequencingAndClearConvention() {
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run across the whole sequence");
 }
 
-// 3. Two in-use ports (addressed via ONE count=2 CommandProcessorToHardwareCommand
-//    -- the `DEV DT STOP`-shaped call): the flip-flop alternates strictly
-//    between them in ascending-then-wrapping order, and the two UNADDRESSED
-//    ports are never touched at all (in-use tracking).
+// 3. Two polled ports (091-002: pre-configured at construction, no longer
+//    brought in by the addressed apply() call below), addressed via ONE
+//    count=2 CommandProcessorToHardwareCommand (the `DEV DT STOP`-shaped
+//    call): the flip-flop alternates strictly between them in
+//    ascending-then-wrapping order, and the two UNPOLLED ports are never
+//    touched at all.
 void scenarioInUseTrackingAndRotation() {
-  beginScenario("count=2 addressed: strict rotation among in-use ports only");
-  resetDefaultConfigs();
+  beginScenario("two pre-polled ports: strict rotation among polled ports only");
+  resetDefaultConfigs(/*polledMask=*/0b0101);   // 091-002: ports 1 and 3 pre-polled -- the ports under test
   I2CBus::setClock(1000000);
   I2CBus bus;
   Subsystems::NezhaHardware hal(bus, defaultConfigs);
   scriptGenerousPool(bus, 40);
 
-  hal.apply(addressedTwo(1, neutralCommand(), 3, neutralCommand()));
+  hal.apply(addressedTwo(1, neutralCommand(), 3, neutralCommand()));   // stages NEUTRAL; ports already polled
 
   runOneCycle(hal, /*req=*/1, /*collect=*/2);
   checkTrue(hal.motor(1).connected(), "cycle A: port 1 (activePort_ defaults to 1) collects first");
   checkFalse(hal.motor(3).connected(), "cycle A: port 3 has not been reached yet");
-  checkFalse(hal.motor(2).connected(), "port 2 was never addressed -- untouched");
-  checkFalse(hal.motor(4).connected(), "port 4 was never addressed -- untouched");
+  checkFalse(hal.motor(2).connected(), "port 2 is not polled -- untouched");
+  checkFalse(hal.motor(4).connected(), "port 4 is not polled -- untouched");
 
   runOneCycle(hal, /*req=*/3, /*collect=*/4);
-  checkTrue(hal.motor(3).connected(), "cycle B: rotation reached port 3 next (wrapping past unaddressed port 2)");
+  checkTrue(hal.motor(3).connected(), "cycle B: rotation reached port 3 next (wrapping past unpolled port 2)");
   checkFalse(hal.motor(2).connected(), "port 2 still untouched");
   checkFalse(hal.motor(4).connected(), "port 4 still untouched");
 
@@ -312,16 +324,19 @@ void scenarioInUseTrackingAndRotation() {
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
 }
 
-// 4. Broadcast (allPorts=true, the `DEV STOP`/watchdog shape) NEVER marks a
-//    port in-use -- Design Rationale 5 -- proven by zero bus activity across
-//    many hal.tick() calls, even though the command WAS forwarded to every
-//    motor's setter (proven separately by directly ticking one motor,
-//    bypassing the HAL's own scheduler -- motor(port).tick() is part of the
-//    public Motor faceplate and is not gated by in-use tracking, which is
-//    purely the HAL's own internal scheduling concern).
+// 4. Broadcast (allPorts=true, the `DEV STOP`/watchdog shape) leaves
+//    polled_[] completely unaffected (091-002: apply() no longer touches
+//    poll state in ANY branch, so there is nothing left to exempt broadcast
+//    from) -- proven by zero bus activity across many hal.tick() calls
+//    (every port still defaults unpolled), even though the command WAS
+//    forwarded to every motor's setter (proven separately by directly
+//    ticking one motor, bypassing the HAL's own scheduler entirely --
+//    motor(port).tick() is part of the public Motor faceplate and is not
+//    gated by poll-schedule membership, which is purely the HAL's own
+//    internal scheduling concern).
 void scenarioBroadcastNeverMarksInUse() {
-  beginScenario("apply() broadcast: forwards to every setter, marks NO port in-use");
-  resetDefaultConfigs();
+  beginScenario("apply() broadcast: forwards to every setter, leaves polled_[] unaffected");
+  resetDefaultConfigs(/*polledMask=*/0);
   I2CBus::setClock(1000000);
   I2CBus bus;
   Subsystems::NezhaHardware hal(bus, defaultConfigs);
@@ -339,43 +354,62 @@ void scenarioBroadcastNeverMarksInUse() {
     hal.tick(100 + i, motorIn, motorResetIn);
   }
   checkUintEq(bus.txnCount(kAddr7), 0,
-              "broadcast never schedules ANY port -- 20 tick() calls, zero bus activity");
+              "broadcast leaves polled_[] at its constructed (all-false) state -- "
+              "20 tick() calls, zero bus activity");
 
   // Prove the broadcast's command really reached motor 1's setter: tick it
-  // DIRECTLY (bypassing the HAL's scheduler entirely -- in-use tracking
-  // gates only the HAL's OWN flip-flop, never the public Motor faceplate).
+  // DIRECTLY (bypassing the HAL's scheduler entirely -- poll-schedule
+  // membership gates only the HAL's OWN flip-flop, never the public Motor
+  // faceplate).
   scriptGenerousPool(bus, 4);
   hal.motor(1).tick(200);
   checkFloatEq(hal.motor(1).appliedDuty(), 0.0f,
                "direct tick() proves the broadcast staged NEUTRAL on motor 1's setter");
 }
 
-// 5. DrivetrainToHardwareCommand (wheel[0]=left, wheel[1]=right): both wheels are
-//    ALWAYS addressed (never a broadcast) -- both get marked in-use and
-//    forwarded, cycling between exactly those two ports.
+// 5. DrivetrainToHardwareCommand (wheel[0]=left, wheel[1]=right): both wheels
+//    are ALWAYS addressed (never a broadcast) and forwarded to their OWN
+//    Hal::Motor setter. 091-002: this no longer has anything to do with
+//    poll-schedule membership (apply() touches no poll state at all any
+//    more) -- proven with BOTH ports left unpolled (constructed with
+//    polledMask=0) and a DIRECT tick() on each motor (bypassing the HAL's
+//    own scheduler entirely, exactly like scenarioBroadcastNeverMarksInUse's
+//    own direct-tick() proof, above), which keeps this scenario's assertion
+//    to forwarding alone -- whether/when the flip-flop schedules a port is
+//    scenarioInUseTrackingAndRotation's concern, not this one's.
 void scenarioDrivetrainToHardwareCommandForwarding() {
-  beginScenario("apply(DrivetrainToHardwareCommand): both wheels marked in-use and forwarded");
-  resetDefaultConfigs();
+  beginScenario("apply(DrivetrainToHardwareCommand): both wheels' commands forwarded to their own setter");
+  resetDefaultConfigs(/*polledMask=*/0);   // 091-002: forwarding is independent of polled_[]
   I2CBus::setClock(1000000);
   I2CBus bus;
   Subsystems::NezhaHardware hal(bus, defaultConfigs);
-  scriptGenerousPool(bus, 40);
+  scriptGenerousPool(bus, 8);
 
   Hal::DrivetrainToHardwareCommand dtCmd;
   dtCmd.wheel[0].port = 1;
-  dtCmd.wheel[0].command = neutralCommand();
+  dtCmd.wheel[0].command = msg::MotorCommand{}.setDutyCycle(0.4f);
   dtCmd.wheel[1].port = 2;
-  dtCmd.wheel[1].command = neutralCommand();
+  dtCmd.wheel[1].command = msg::MotorCommand{}.setDutyCycle(-0.4f);
   hal.apply(dtCmd);
 
-  for (int cycle = 0; cycle < 4; ++cycle) {
-    runOneCycle(hal, 10 * static_cast<uint32_t>(cycle), 10 * static_cast<uint32_t>(cycle) + 1);
-  }
+  hal.motor(1).tick(200);
+  hal.motor(2).tick(200);
+  checkFloatEq(hal.motor(1).appliedDuty(), 0.4f, "left wheel (port 1) received its own forwarded command");
+  checkFloatEq(hal.motor(2).appliedDuty(), -0.4f, "right wheel (port 2) received its own forwarded command");
 
-  checkTrue(hal.motor(1).connected(), "left wheel (port 1) was scheduled and collected");
-  checkTrue(hal.motor(2).connected(), "right wheel (port 2) was scheduled and collected");
-  checkFalse(hal.motor(3).connected(), "port 3 (not a bound wheel) never touched");
-  checkFalse(hal.motor(4).connected(), "port 4 (not a bound wheel) never touched");
+  // Now prove apply() itself never touched polled_[]: the HAL's OWN
+  // scheduler (hal.tick(), never called above -- only the direct
+  // motor(port).tick() calls were) still performs zero bus actions for
+  // EITHER wheel, even though both were just apply()'d.
+  uint32_t txnBefore = bus.txnCount(kAddr7);
+  Rt::Mailbox<msg::MotorCommand> motorIn[Subsystems::Hardware::kPortCount];
+  bool motorResetIn[Subsystems::Hardware::kPortCount] = {false, false, false, false};
+  for (uint32_t i = 0; i < 20; ++i) {
+    hal.tick(300 + i, motorIn, motorResetIn);
+  }
+  checkUintEq(bus.txnCount(kAddr7) - txnBefore, 0,
+              "apply(DrivetrainToHardwareCommand) left polled_[] unaffected -- the HAL's own "
+              "flip-flop still performs zero bus actions for either wheel");
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
 }
 
@@ -397,7 +431,7 @@ void scenarioDrivetrainToHardwareCommandForwarding() {
 // intact and independent of scenario 8's fix.
 void scenarioWriteThrottleInteraction() {
   beginScenario("40ms write-rate throttle gates collect-time duty writes, not requests");
-  resetDefaultConfigs();
+  resetDefaultConfigs(/*polledMask=*/0b0001);   // 091-002: port 1 pre-polled -- needed for the flip-flop to schedule it
   uint64_t t0 = 1000000;
   I2CBus::setClock(t0);
   I2CBus bus;
@@ -449,7 +483,7 @@ void scenarioWriteThrottleInteraction() {
 //    incidentally gates the dwell's own release write.
 void scenarioReversalDwellHoldsAtNewCadence() {
   beginScenario("078's reversal dwell holds through the flip-flop's new collect cadence");
-  resetDefaultConfigs();
+  resetDefaultConfigs(/*polledMask=*/0b0001);   // 091-002: port 1 pre-polled
   I2CBus::setClock(10000000);
   I2CBus bus;
   Subsystems::NezhaHardware hal(bus, defaultConfigs);
@@ -494,7 +528,7 @@ void scenarioReversalDwellHoldsAtNewCadence() {
 //    asserts the actual value.
 void scenarioFirstWriteExemptFromSentinelSlew() {
   beginScenario("first-ever duty write skips the -128 sentinel's slew clamp (079-006 root cause)");
-  resetDefaultConfigs();
+  resetDefaultConfigs(/*polledMask=*/0b0001);   // 091-002: port 1 pre-polled
   I2CBus::setClock(1000000);
   I2CBus bus;
   Subsystems::NezhaHardware hal(bus, defaultConfigs);
@@ -526,7 +560,7 @@ void scenarioFirstWriteExemptFromSentinelSlew() {
 //    actually driven with DUTY, not just addressed with a no-op command.
 void scenarioRequestHonorsClearanceAfterDutyWrite() {
   beginScenario("079-006 root-cause fix: request/duty writes keep >=4ms real clearance around 0x10");
-  resetDefaultConfigs();
+  resetDefaultConfigs(/*polledMask=*/0b0001);   // 091-002: port 1 pre-polled
   I2CBus::setClock(1000000);
   I2CBus bus;
   Subsystems::NezhaHardware hal(bus, defaultConfigs);

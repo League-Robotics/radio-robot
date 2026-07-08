@@ -189,6 +189,15 @@ enum class DrivetrainConfigField : uint8_t {
 // (addressing metadata, not a configurable value -- ConfigDelta::port
 // already carries the addressed motor index). vel_gains is split into its
 // five members -- see ConfigDelta's class comment on why.
+//
+// kPolled (091-002): the I2C flip-flop poll-schedule membership fact --
+// see msg::MotorConfig.polled's own doc comment (source/messages/motor.h,
+// generated from protos/motor.proto). Folded like every other field
+// (configurator.cpp's foldMotor()), but ALSO drives one extra side effect
+// no other MotorConfigField bit does: when set, Configurator::applyOne()
+// additionally calls Subsystems::Hardware::setPolled() (the Configurator's
+// kMotor apply path, source/runtime/configurator.cpp) -- the one door
+// through which NezhaHardware's polled_[] mask changes after construction.
 enum class MotorConfigField : uint8_t {
   kTravelCalib,
   kFwdSign,
@@ -202,6 +211,7 @@ enum class MotorConfigField : uint8_t {
   kSlewRate,
   kReversalDwell,
   kOutputDeadband,
+  kPolled,
 };
 
 // One bit position per top-level field of msg::PlannerConfig.

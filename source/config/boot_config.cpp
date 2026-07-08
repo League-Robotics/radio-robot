@@ -52,6 +52,16 @@ void defaultMotorConfigs(msg::MotorConfig* out) {
     out[1].setTravelCalib(0.487f);   // [mm/deg] port 2
     out[2].setTravelCalib(0.487f);   // [mm/deg] port 3
     out[3].setTravelCalib(0.487f);   // [mm/deg] port 4
+
+    // Per-port I2C flip-flop poll-schedule membership (091-002) — true for
+    // the drive-pair ports (1/2), false otherwise. Not
+    // robot-JSON-configurable (a firmware-scheduling fact, not per-robot
+    // calibration); live-adjustable via `DEV M <n> CFG polled=true` for a
+    // bench rig's own non-drive-pair port (docs/protocol-v2.md §16).
+    out[0].setPolled(true);   // port 1
+    out[1].setPolled(true);   // port 2
+    out[2].setPolled(false);   // port 3
+    out[3].setPolled(false);   // port 4
 }
 
 msg::DrivetrainConfig defaultDrivetrainConfig() {

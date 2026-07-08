@@ -96,6 +96,13 @@ void initConfigsTemplate() {
     g_configsTemplate[i] = msg::MotorConfig{};
     g_configsTemplate[i].setPort(i + 1).setFwdSign(1).setTravelCalib(1.0f);
   }
+  // 091-002: boot-equivalent I2C flip-flop poll-set -- ports 1/2 (the
+  // default drive pair, matching the Fixture's own bb.drivetrainConfig.
+  // left_port/right_port below) start polled; every other port defaults
+  // false, mirroring scripts/gen_boot_config.py's own LEFT_PORT/RIGHT_PORT
+  // specialization exactly.
+  g_configsTemplate[0].setPolled(true);
+  g_configsTemplate[1].setPolled(true);
 }
 
 // Captures every reply line Rt::CommandRouter::route() emits for one
@@ -124,9 +131,15 @@ struct Fixture {
 
     // Boot-time capability snapshot (blackboard.h's file header) -- DEV M's
     // capability pre-validation gate (dev_commands.cpp) reads this instead
-    // of a live Hal::Motor::capabilities() call.
+    // of a live Hal::Motor::capabilities() call. 091-002: bb.motorConfig[]
+    // is ALSO seeded here (from hal.config(port), the constructor-supplied
+    // g_configsTemplate verbatim) so its .polled bit is available for
+    // dev_commands.cpp's portIsPolled() gate -- mirrors how
+    // Rt::Configurator's own constructor seeds motorConfig_[] from
+    // hardware_.config(port).
     for (uint32_t port = 1; port <= Rt::kPortCount; ++port) {
       bb.motorCaps[port - 1] = hal.motor(port).capabilities();
+      bb.motorConfig[port - 1] = hal.config(port);
     }
 
     router.setReplyChannels(captureReply, nullptr, captureReply, nullptr);
@@ -184,21 +197,69 @@ void scenarioBoundPortStagesHalAndDrivetrainSteal() {
   checkTrue(dtCmd.standby.has && dtCmd.standby.val, "authority steal sets standby=true");
 }
 
-// 3. An unbound-port motion verb posts to that port's bb.motorIn[] but
-// leaves bb.driveIn completely untouched.
-void scenarioUnboundPortLeavesDrivetrainUntouched() {
-  beginScenario("DEV M <unbound port> posts to bb.motorIn[] but never touches bb.driveIn");
-  Fixture f;   // bound pair defaults to 1,2
+// 3. 091-002 (architecture-update.md Decision 2, the ticket's own deliberate
+// behavior change): a motion verb (DUTY/VEL/POS) addressed at a port NOT in
+// NezhaHardware's configured poll-set is rejected ERR nodev <mode> --
+// posts nothing to bb.motorIn[], never touches bb.driveIn either. Port 3
+// is unbound (Drivetrain defaults to 1,2) AND unpolled (only 1/2 are
+// boot-polled -- see initConfigsTemplate()), so this also supersedes this
+// scenario's pre-091-002 "unbound port still accepted" proof -- the SAME
+// wire command that used to succeed now fails, on the SAME port, for a
+// documented reason.
+void scenarioUnpolledPortRejectedNodev() {
+  beginScenario("DEV M <unpolled port> DUTY is rejected ERR nodev, posts nothing");
+  Fixture f;   // port 3 defaults unpolled (only ports 1/2 are boot-polled)
   ReplyCapture cap;
   f.dispatch("DEV M 3 DUTY 40", cap);
 
-  checkFalse(f.bb.motorIn[2].empty(), "accepted DUTY on an unbound port still posts to bb.motorIn[2]");
-  checkTrue(f.bb.driveIn.empty(), "an unbound port's motion verb must not touch bb.driveIn");
+  checkTrue(f.bb.motorIn[2].empty(), "a poll-gate-rejected DUTY must not post to bb.motorIn[2]");
+  checkTrue(f.bb.driveIn.empty(), "a poll-gate-rejected DUTY must not touch bb.driveIn either");
+  checkTrue(!cap.lines.empty() && cap.lines.back() == "ERR nodev duty",
+            "wire reply is ERR nodev duty");
+}
+
+// 3b. The config-plane escape hatch (architecture-update.md Decision 1):
+// `DEV M <n> CFG polled=true` posts a Rt::ConfigDelta (kMotor) carrying the
+// new kPolled bit; folding its effect onto bb.motorConfig[] (this harness's
+// stand-in for Rt::Configurator::applyOne(), which is not linked in here --
+// see configurator.cpp's own kMotor branch for the real fold+
+// Hardware::setPolled() call) flips the SAME port DUTY the previous
+// scenario proved rejected to now succeed and post to bb.motorIn[].
+void scenarioCfgPolledTrueUnlocksMotionVerbs() {
+  beginScenario("DEV M <n> CFG polled=true flips an unpolled port to accepted");
+  Fixture f;
+  ReplyCapture cap;
+
+  f.dispatch("DEV M 3 CFG polled=true", cap);
+  checkUintEq(f.bb.configIn.size(), 1, "CFG polled=true posts exactly one Rt::ConfigDelta");
+  Rt::ConfigDelta delta = f.bb.configIn.take();
+  checkTrue(delta.target == Rt::ConfigDelta::kMotor, "CFG polled=true's delta targets kMotor");
+  checkUintEq(delta.port, 3, "CFG polled=true's delta addresses port 3");
+  checkTrue((delta.mask & Rt::bitOf(Rt::MotorConfigField::kPolled)) != 0,
+            "CFG polled=true's delta mask carries the polled bit");
+  checkTrue(delta.motor.polled, "CFG polled=true's delta carries polled=true");
+  checkTrue(f.bb.motorIn[2].empty(), "CFG never posts a HAL command");
+
+  // Harness-level stand-in for the Configurator's own fold+publish (no
+  // Rt::Configurator is linked into this harness -- see this scenario's
+  // own header comment): publish the delta's effect directly onto
+  // bb.motorConfig[], the SAME cell Configurator::applyOne()'s kMotor
+  // branch publishes it into.
+  f.bb.motorConfig[2].polled = true;
+
+  f.dispatch("DEV M 3 DUTY 40", cap);
+  checkFalse(f.bb.motorIn[2].empty(), "DUTY now posts to bb.motorIn[2] once port 3 is polled");
+  msg::MotorCommand motorCmd = f.bb.motorIn[2].take();
+  checkFloatEq(motorCmd.control.duty_cycle, 0.40f, "posted duty matches the request");
+  checkTrue(!cap.lines.empty() && cap.lines.back() == "OK DEV M 3 applied=0.40",
+            "wire reply is the ordinary DUTY ack once polled");
 }
 
 // 4. DEV STOP posts a broadcast neutral to bb.hardwareBroadcastIn (NOT
-// bb.motorIn[] -- a broadcast must not mark any port in-use) plus a
-// Drivetrain {NEUTRAL, standby=true} to bb.driveIn -- the global stop shape.
+// bb.motorIn[] -- a broadcast needs the allPorts=true
+// Hal::CommandProcessorToHardwareCommand shape, a structurally different
+// distribution path than bb.motorIn[]'s per-port drain) plus a Drivetrain
+// {NEUTRAL, standby=true} to bb.driveIn -- the global stop shape.
 void scenarioDevStopBroadcastShape() {
   beginScenario("DEV STOP posts a broadcast neutral to bb.hardwareBroadcastIn + a Drivetrain NEUTRAL/standby");
   Fixture f;
@@ -373,7 +434,8 @@ int main() {
 
   scenarioCapabilityRejectionBlocksStaging();
   scenarioBoundPortStagesHalAndDrivetrainSteal();
-  scenarioUnboundPortLeavesDrivetrainUntouched();
+  scenarioUnpolledPortRejectedNodev();
+  scenarioCfgPolledTrueUnlocksMotionVerbs();
   scenarioDevStopBroadcastShape();
   scenarioDevDtStopAddressedPairShape();
   scenarioQueryProducesReplyNoOutboxTraffic();

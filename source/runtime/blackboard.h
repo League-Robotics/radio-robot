@@ -153,11 +153,12 @@ struct Blackboard {
   Mailbox<uint32_t> devWatchdogWindowIn;       // DEV WD -> loop's SerialSilenceWatchdog
   Mailbox<uint32_t> streamWatchdogWindowIn;    // SET sTimeout= -> loop's StreamingDriveWatchdog
   Mailbox<MotionCommand> motionIn;             // S/T/D/R/TURN/RT/G/STOP -> Planner::apply()
-  // DEV STOP's broadcast neutral -- deliberately NOT motorIn[] (a broadcast
-  // must not mark any port in-use; see NezhaHardware::apply(const
-  // Hal::CommandProcessorToHardwareCommand&)'s "broadcast never marks a port
-  // in-use" branch, and dev_commands.h's file header). Drained by the loop
-  // directly via Hardware::apply(const Hal::CommandProcessorToHardwareCommand&).
+  // DEV STOP's broadcast neutral -- deliberately NOT motorIn[] (motorIn[]'s
+  // per-port drain, NezhaHardware::tick(), has no "broadcast to every port
+  // in one shot" shape; a true broadcast needs the allPorts=true
+  // Hal::CommandProcessorToHardwareCommand forwarded through
+  // Hardware::apply() instead -- see dev_commands.h's file header). Drained
+  // by the loop directly via Hardware::apply(const Hal::CommandProcessorToHardwareCommand&).
   Mailbox<msg::MotorCommand> hardwareBroadcastIn;
 };
 

@@ -2,7 +2,7 @@
 id: 091
 title: 'Hardware-leaf and safety cleanups: estop rename, configured poll-set, motors-running
   watchdog gate'
-status: ticketing
+status: done
 branch: sprint/091-hardware-leaf-and-safety-cleanups-estop-rename-configured-poll-set-motors-running-watchdog-gate
 use-cases:
 - SUC-001

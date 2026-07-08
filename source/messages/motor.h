@@ -78,6 +78,7 @@ struct MotorState {
     Opt<bool> wedge_suspect = {};
     Opt<uint32_t> hard_reset_count = {};
     Opt<uint32_t> soft_reset_count = {};
+    bool active = false;
 
     // --- array / optional-string accessors ---
 };
@@ -93,6 +94,7 @@ struct MotorConfig {
     uint32_t port = 0;
     Opt<float> reversal_dwell = {};
     Opt<float> output_deadband = {};
+    bool polled = false;
 
     // --- array / optional-string accessors ---
 
@@ -112,6 +114,7 @@ struct MotorConfig {
         output_deadband.has = true; output_deadband.val = v;
         return *this;
     }
+    MotorConfig& setPolled(bool v) { polled = v; return *this; }
 };
 
 // MotorCapabilities

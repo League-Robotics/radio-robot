@@ -1,8 +1,9 @@
 ---
 id: '001'
 title: Rename Rt::MainLoop::emergencyNeutralize() to estop()
-status: open
-use-cases: [SUC-001]
+status: done
+use-cases:
+- SUC-001
 depends-on: []
 github-issue: ''
 issue: rename-emergencyneutralize-to-estop.md
@@ -27,22 +28,47 @@ motors-running gate) edits the SAME call site inside `serviceWatchdogs()`
 again — better to land under the final name once than touch the old name
 a second time.
 
-## Acceptance Criteria
-
-- [ ] `grep -rn emergencyNeutralize` across `source/`, `tests/`, and `docs/`
+- [x] `grep -rn emergencyNeutralize` across `source/`, `tests/`, and `docs/`
       returns nothing.
-- [ ] `Rt::MainLoop::estop()` exists with the exact same signature, body,
+- [x] `Rt::MainLoop::estop()` exists with the exact same signature, body,
       and doc comment content as the old `emergencyNeutralize()` (only the
       name changes; update the doc comment's own self-reference too).
-- [ ] The one call site inside `serviceWatchdogs()`'s watchdog-fire branch
+- [x] The one call site inside `serviceWatchdogs()`'s watchdog-fire branch
       (`main_loop.cpp`) calls `estop()`.
-- [ ] `tests/sim/unit/test_watchdog_policy.py` and
+- [x] `tests/sim/unit/test_watchdog_policy.py` and
       `tests/sim/unit/test_protocol_roundtrips.py` (both reference the old
       name in comments/docstrings only, not in asserted strings) are
       updated to say `estop()` instead of `emergencyNeutralize()`.
-- [ ] `uv run python -m pytest tests/sim` stays green at the existing
+- [x] `uv run python -m pytest tests/sim` stays green at the existing
       baseline (309 passed / 2 xfailed) — this ticket changes no test
       assertions, only comments/identifiers.
+
+## Completion Notes
+
+Pure rename, no behavior change. Sites changed (4 files, 8 total edits):
+
+- `source/runtime/main_loop.h`: file-header cross-reference comment (line
+  60, "See emergencyNeutralize()'s doc comment" → "See estop()'s doc
+  comment"), the method's own doc comment self-reference (line 140,
+  "emergencyNeutralize --" → "estop --"), and the declaration itself (line
+  146: `void emergencyNeutralize(); // FIXME rename to "estop"` → `void
+  estop();` — FIXME marker removed as instructed).
+- `source/runtime/main_loop.cpp`: the definition (`MainLoop::
+  emergencyNeutralize()` → `MainLoop::estop()`) and the one call site
+  inside `serviceWatchdogs()`'s watchdog-fire branch (`emergencyNeutralize();`
+  → `estop();`).
+- `tests/sim/unit/test_watchdog_policy.py`: docstring reference
+  (`` ``Rt::MainLoop::emergencyNeutralize()`` `` → `` ``Rt::MainLoop::estop()`` ``)
+  in `test_watchdog_neutralizes_within_the_same_pass_it_fires_in`.
+- `tests/sim/unit/test_protocol_roundtrips.py`: docstring reference
+  ("the watchdog's own emergencyNeutralize() bypass" → "the watchdog's own
+  estop() bypass").
+
+`grep -rn emergencyNeutralize source/ tests/` returns zero hits (confirmed
+via exit code 1 / empty output after the edits).
+
+`uv run python -m pytest tests/sim` → `309 passed, 2 xfailed in 98.43s` —
+byte-identical to the ticket's stated baseline; no test assertions changed.
 
 ## Implementation Plan
 
