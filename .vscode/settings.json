@@ -19,7 +19,13 @@
         "--compile-commands-dir=/Users/eric/.cache/clangd-cdb/radio-robot-elite",
         // Let clangd run the ARM GCC driver to import its newlib + libstdc++
         // system include paths (so cross-target headers resolve correctly).
-        "--query-driver=/opt/homebrew/bin/arm-none-eabi-*",
+        // /opt/homebrew/bin/arm-none-eabi-g++ is a SYMLINK into the ARM GNU
+        // Toolchain; clangd canonicalizes it to its real target before matching
+        // this allowlist, so the Applications path MUST be listed too — without
+        // it clangd refuses to run the driver and falls back to a bogus
+        // .../c++/v1 (libc++) path, making <algorithm>/<array>/<limits> and
+        // every symbol below them squiggle.
+        "--query-driver=/opt/homebrew/bin/arm-none-eabi-*,/Applications/ArmGNUToolchain/**/arm-none-eabi-*",
         "--background-index",
         "--header-insertion=never",
         "--pch-storage=memory"
