@@ -42,6 +42,21 @@
 // and the Revision 2 divergence-triggered replan (AC7/AC8/AC9) -- normal
 // (lagging-plant) and gross (stalled-plant) divergence, plus a guard-2
 // (no-reverse-target) regression pin.
+//
+// Ticket 089-004 note: TIMED/VELOCITY/STREAM migrate onto Motion::
+// JerkTrajectory too (Decision 2's velocity-control "Pattern B", both
+// linear_ AND rotational_ -- see planner.h's updated class comment).
+// applyStopAnticipation() itself is UNCHANGED (089-003's own comment above
+// is now stale on that point) but these three goal kinds no longer reach it
+// -- only TURN/ROTATION still do, until ticket 005. New scenarios cover this
+// ticket's own acceptance criteria: scenarioTimedGoalBothChannelsRuckigTrace
+// NeverReverseAndCompleteViaTime (AC3/AC4, both channels sampled through
+// cruise + the stop-triggered decel), scenarioTimedGoalStopFiresDuringRampUp
+// ForcesFreshDecelNoReverse (AC3, a stop firing before cruise is reached),
+// scenarioVelocityGoalCruiseSustainsPastRampDurationWithNoBookkeeping (AC2,
+// sparse/irregular ticks proving pure extrapolation), and
+// scenarioStreamGoalMidProfilePreemptionIsSeamlessNoReverse (the ticket's
+// own STREAM re-target/preemption semantics).
 
 #include <algorithm>
 #include <cmath>
@@ -231,6 +246,56 @@ void scenarioVelocityGoalWithStopReportsTimed() {
 
   checkTrue(planner.state().mode == msg::DriveMode::TIMED,
             "state().mode == TIMED (084-005: a caller stop => self-terminating)");
+}
+
+// 4c. [089-004, AC2] VELOCITY goal_kind: cruise SUSTAINS past the ramp-up
+// trajectory's own duration with NO Planner-side "sustain" bookkeeping --
+// Ruckig's own past-duration hold-at-final-state (jerk_trajectory.h's class
+// comment; architecture-update.md (089) Decision 2) is what makes this work.
+// Proven with deliberately SPARSE, unevenly-spaced ticks (unlike scenario 4
+// above's steady 100ms cadence) reaching far past the ramp-up's own short
+// duration -- if a Planner-side bookkeeping bug re-solved or decayed the
+// cruise between ticks, an irregular tick cadence would be exactly the kind
+// of case that exposes it; a pure sample() of one never-touched-since-
+// apply() trajectory cannot fail this regardless of tick spacing.
+void scenarioVelocityGoalCruiseSustainsPastRampDurationWithNoBookkeeping() {
+  beginScenario(
+      "089-004 AC2: VELOCITY goal's cruise sustains past its own ramp-up duration, "
+      "sparsely-spaced ticks, no reverse/decay");
+  Subsystems::Planner planner;
+  planner.configure(generousConfig());  // a_max = 1000 mm/s^2
+
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::VELOCITY;
+  cmd.goal.velocity.v_x = 50.0f;  // [mm/s] -- ramp-up duration: 50/1000 = 0.05s
+  cmd.goal.velocity.omega = 0.0f;
+  planner.apply(cmd, 0);
+
+  planner.tick(0, msg::MotorState{}, msg::MotorState{}, msg::PoseEstimate{});  // baseline, elapsed=0
+  planner.takeCommand();
+
+  // Well past the 0.05s ramp-up -- the cruise should already be fully held.
+  planner.tick(100, msg::MotorState{}, msg::MotorState{}, msg::PoseEstimate{});
+  msg::DrivetrainCommand first = planner.takeCommand();
+  checkFloatNear(first.control.twist.v_x, 50.0f, 1e-2f, "cruise reached shortly after ramp-up");
+
+  // A LARGE, irregular gap (no intervening ticks at all) well past the
+  // ramp-up's own duration -- the extrapolated hold must read EXACTLY the
+  // same cruise value, proving there is no per-tick decay/re-solve.
+  planner.tick(5000, msg::MotorState{}, msg::MotorState{}, msg::PoseEstimate{});
+  msg::DrivetrainCommand second = planner.takeCommand();
+  checkFloatNear(second.control.twist.v_x, 50.0f, 1e-2f,
+                 "cruise still holds exactly at 50mm/s after a 4.9s gap with no intervening ticks");
+
+  // Another large, DIFFERENT-sized gap -- same result again.
+  planner.tick(19000, msg::MotorState{}, msg::MotorState{}, msg::PoseEstimate{});
+  msg::DrivetrainCommand third = planner.takeCommand();
+  checkFloatNear(third.control.twist.v_x, 50.0f, 1e-2f,
+                 "cruise still holds exactly at 50mm/s after a 14s gap -- pure extrapolation, "
+                 "no Planner-side sustain bookkeeping");
+
+  checkTrue(planner.hasActiveCommand(), "VELOCITY with no stops_[] never self-terminates");
+  checkFalse(planner.hasEvent(), "no event queued across the whole sparse-tick trace");
 }
 
 // 5. DISTANCE goal_kind: Planner synthesizes the DISTANCE stop itself from
@@ -639,6 +704,104 @@ void scenarioTimedGoalSmoothRampDown() {
   checkStrEq(evt.corrId, "t1", "corrId round-trips from the staged PlannerCommand");
 }
 
+// 6b. [089-004, AC3/AC4] TIMED goal_kind: both channels (`v_x` AND `omega`
+// simultaneously, architecture-update.md (089) Decision 1 -- two independent
+// velocity-control Ruckig solves that may converge at slightly different
+// times) sampled across the FULL apply()+tick() staging path -- cruise, then
+// the stop-triggered decel-to-zero re-solve -- never reverses sign on either
+// channel, and completes via the implicit STOP_TIME (reason="time"), not the
+// SMOOTH soft deadline. Mirrors 089-003's scenarioDistanceGoalRuckigTrace
+// NeverReverses (planner_harness.cpp, ticket 003) but for the velocity-
+// control "Pattern B" this ticket adds.
+void scenarioTimedGoalBothChannelsRuckigTraceNeverReverseAndCompleteViaTime() {
+  beginScenario(
+      "089-004 AC3/AC4: TIMED goal's full (v_x, omega) trace never reverses through "
+      "cruise + stop-triggered decel, completes via reason=time");
+  Subsystems::Planner planner;
+  planner.configure(generousConfig());  // a_max=a_decel=1000mm/s^2, yaw_acc_max=100rad/s^2
+
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::TIMED;
+  cmd.goal.timed.v_x = 200.0f;   // [mm/s] linear ramp-up: 200/1000 = 0.2s
+  cmd.goal.timed.omega = 1.5f;   // [rad/s] rotational ramp-up: 1.5/100 = 0.015s -- deliberately a
+                                 // MUCH shorter ramp than the linear channel's, so the two
+                                 // channels' own decel-to-zero re-solves finish at different times
+                                 // (Decision 1's own "may finish at slightly different times" note).
+  cmd.goal.timed.duration = 400;  // [ms] -- implicit STOP_TIME; fires well after BOTH channels
+                                  // have already reached cruise and are holding via extrapolation.
+  std::strncpy(cmd.corr_id, "bothchan1", sizeof(cmd.corr_id) - 1);
+  planner.apply(cmd, 0);
+
+  planner.tick(0, msg::MotorState{}, msg::MotorState{}, msg::PoseEstimate{});  // baseline, elapsed=0
+  planner.takeCommand();
+
+  bool everReversedV = false;
+  bool everReversedOmega = false;
+  bool completedWithTime = false;
+  uint32_t t = 0;
+  for (int i = 0; i < 60; ++i) {  // up to 1200ms -- comfortably past the 400ms fire + both decels
+    t += 20;
+    planner.tick(t, msg::MotorState{}, msg::MotorState{}, msg::PoseEstimate{});
+    msg::DrivetrainCommand held = planner.takeCommand();
+    if (held.control.twist.v_x < -0.5f) everReversedV = true;
+    if (held.control.twist.omega < -0.5f) everReversedOmega = true;
+    if (!planner.hasActiveCommand()) {
+      completedWithTime = (std::strcmp(planner.takeEvent().reason, "time") == 0);
+      break;
+    }
+  }
+  checkFalse(everReversedV, "the linear channel's commanded v_x never goes negative");
+  checkFalse(everReversedOmega, "the rotational channel's commanded omega never goes negative");
+  checkTrue(completedWithTime, "still completes via reason=time once both decels converge");
+}
+
+// 6c. [089-004, AC3] TIMED goal_kind: a stop firing WHILE the linear
+// channel's own ramp-up is still in progress (not yet at cruise, nonzero
+// acceleration) forces a fresh decel-to-zero re-solve from that PARTIAL
+// state -- proving Decision 2's "regardless of whether it fires early,
+// exactly on plan, or late... converges safely" claim for the velocity-
+// control mode, the same property 5b (planner_harness.cpp, ticket 003)
+// proved for DISTANCE's position-control mode. A caller-supplied `stop=t:`
+// clause (not the implicit duration stop) fires at 100ms, well inside the
+// commanded 1000 mm/s target's own 1.0s ramp-up window (a_max=1000mm/s^2).
+void scenarioTimedGoalStopFiresDuringRampUpForcesFreshDecelNoReverse() {
+  beginScenario(
+      "089-004 AC3: a stop firing mid-ramp-up (not yet at cruise) still forces a "
+      "non-reversing decel-to-zero");
+  Subsystems::Planner planner;
+  planner.configure(generousConfig());
+
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::TIMED;
+  cmd.goal.timed.v_x = 1000.0f;  // [mm/s] -- at v_body_max; ramp-up takes a full 1.0s
+  cmd.goal.timed.omega = 0.0f;
+  cmd.goal.timed.duration = 0;  // no implicit STOP_TIME -- the caller stop below fires first
+  cmd.stops_count = 1;
+  cmd.stops_[0].kind = msg::StopKind::STOP_TIME;
+  cmd.stops_[0].a = 100.0f;  // [ms] -- fires at 1/10th of the ramp-up's own duration
+  std::strncpy(cmd.corr_id, "midramp1", sizeof(cmd.corr_id) - 1);
+  planner.apply(cmd, 0);
+
+  planner.tick(0, msg::MotorState{}, msg::MotorState{}, msg::PoseEstimate{});  // baseline, elapsed=0
+  planner.takeCommand();
+
+  bool everReversed = false;
+  bool completedWithTime = false;
+  uint32_t t = 0;
+  for (int i = 0; i < 60; ++i) {  // up to 1200ms
+    t += 20;
+    planner.tick(t, msg::MotorState{}, msg::MotorState{}, msg::PoseEstimate{});
+    msg::DrivetrainCommand held = planner.takeCommand();
+    if (held.control.twist.v_x < -0.5f) everReversed = true;
+    if (!planner.hasActiveCommand()) {
+      completedWithTime = (std::strcmp(planner.takeEvent().reason, "time") == 0);
+      break;
+    }
+  }
+  checkFalse(everReversed, "a stop fired mid-ramp-up still decelerates to zero with no reverse");
+  checkTrue(completedWithTime, "completes via reason=time once the forced decel converges");
+}
+
 // 7. TURN goal_kind: TurnGoal.speed is treated as an already-signed omega
 // (no v); relies entirely on caller-supplied stops_[] (a HEADING stop here)
 // -- Planner synthesizes nothing for this goal kind.
@@ -992,6 +1155,64 @@ void scenarioStreamGoalIsOpenEnded() {
   checkFalse(planner.hasEvent(), "no event queued for an open-ended STREAM goal");
 }
 
+// 11b. [089-004] STREAM goal_kind: a fresh STREAM command arriving WHILE a
+// prior one is still active is a RE-TARGET of the SAME linear_/rotational_
+// channels (stageVelocityGoal()'s own no-reset() design, planner.h) --
+// seamless preemption, seeded from the channel's own current sampled state
+// (Decision 8), never an instant discontinuous jump. Drives to a cruise,
+// re-targets DOWN to a lower speed mid-stream, and proves the commanded
+// v_x (a) never goes negative across the whole transition and (b) settles
+// at the NEW target -- the ticket's own "STREAM semantics" requirement.
+void scenarioStreamGoalMidProfilePreemptionIsSeamlessNoReverse() {
+  beginScenario(
+      "089-004: a fresh STREAM command mid-goal re-targets the SAME channels seamlessly, "
+      "no reverse");
+  Subsystems::Planner planner;
+  planner.configure(generousConfig());  // a_max = 1000 mm/s^2
+
+  msg::PlannerCommand first;
+  first.goal_kind = msg::PlannerCommand::GoalKind::STREAM;
+  first.goal.stream.v_x = 150.0f;  // [mm/s] -- ramp-up duration: 150/1000 = 0.15s
+  first.goal.stream.omega = 0.0f;
+  planner.apply(first, 0);
+
+  planner.tick(0, msg::MotorState{}, msg::MotorState{}, msg::PoseEstimate{});  // baseline
+  planner.takeCommand();
+
+  bool everReversed = false;
+  uint32_t t = 0;
+  msg::DrivetrainCommand atCruise;
+  for (int i = 0; i < 10; ++i) {  // up to 200ms -- past the 0.15s ramp-up, cruise reached
+    t += 20;
+    planner.tick(t, msg::MotorState{}, msg::MotorState{}, msg::PoseEstimate{});
+    atCruise = planner.takeCommand();
+    if (atCruise.control.twist.v_x < -0.5f) everReversed = true;
+  }
+  checkFloatNear(atCruise.control.twist.v_x, 150.0f, 1.0f, "reached the first STREAM's cruise");
+
+  // A second STREAM command, WHILE the first is still active (no stop ever
+  // fired) -- re-targets DOWN to a lower speed, seeded from the current
+  // ~150mm/s state (Decision 8), not from rest.
+  msg::PlannerCommand second;
+  second.goal_kind = msg::PlannerCommand::GoalKind::STREAM;
+  second.goal.stream.v_x = 50.0f;  // [mm/s] -- lower than the current ~150mm/s cruise
+  second.goal.stream.omega = 0.0f;
+  planner.apply(second, t);
+  checkTrue(planner.hasActiveCommand(), "the re-target keeps the goal active (STREAM never stops)");
+
+  float lastV = -1.0f;
+  for (int i = 0; i < 20; ++i) {  // up to 400ms more -- ample for the decel to the new target
+    t += 20;
+    planner.tick(t, msg::MotorState{}, msg::MotorState{}, msg::PoseEstimate{});
+    msg::DrivetrainCommand held = planner.takeCommand();
+    if (held.control.twist.v_x < -0.5f) everReversed = true;
+    lastV = held.control.twist.v_x;
+  }
+  checkFalse(everReversed, "the re-target transition from 150 to 50 mm/s never reverses sign");
+  checkFloatNear(lastV, 50.0f, 1.0f, "settles at the SECOND STREAM command's target speed");
+  checkTrue(planner.hasActiveCommand(), "STREAM still never self-terminates after the re-target");
+}
+
 }  // namespace
 
 int main() {
@@ -1000,6 +1221,7 @@ int main() {
   scenarioConfigureReachesOwnedRamp();
   scenarioVelocityGoalRampsAndStaysOpenEnded();
   scenarioVelocityGoalWithStopReportsTimed();
+  scenarioVelocityGoalCruiseSustainsPastRampDurationWithNoBookkeeping();
   scenarioDistanceGoalFiresImplicitStopAbrupt();
   scenarioDistanceGoalStopFiredBeforeConvergenceForcesFreshDecel();
   scenarioDistanceGoalRuckigTraceNeverReverses();
@@ -1007,6 +1229,8 @@ int main() {
   scenarioDistanceGoalGrossDivergenceReanchorsAfterStall();
   scenarioDistanceGoalGuardSkipsNearTargetBackwardReplan();
   scenarioTimedGoalSmoothRampDown();
+  scenarioTimedGoalBothChannelsRuckigTraceNeverReverseAndCompleteViaTime();
+  scenarioTimedGoalStopFiresDuringRampUpForcesFreshDecelNoReverse();
   scenarioTurnGoalUsesSignedSpeedAndCallerStop();
   scenarioTurnGoalAnticipatesHeadingStopWithRateCap();
   scenarioRotationGoalUsesSignedSpeedAndCallerStop();
@@ -1015,6 +1239,7 @@ int main() {
   scenarioGotoGoalPreRotatesThenPursuesAndArrives();
   scenarioStopGoalKindHaltsSilently();
   scenarioStreamGoalIsOpenEnded();
+  scenarioStreamGoalMidProfilePreemptionIsSeamlessNoReverse();
 
   if (g_failureCount == 0) {
     std::printf("OK: all Planner scenarios passed\n");

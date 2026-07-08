@@ -79,11 +79,13 @@ msg::DriveMode velocityShapedMode(const msg::PlannerCommand& cmd) {
 // two-output-pass dead-time compensation (see applyStopAnticipation()'s own
 // doc comment below for the full derivation/rationale). Hoisted to file
 // scope (089-003) so BOTH applyStopAnticipation() (STOP_DISTANCE/
-// STOP_ROTATION's anticipation cap, still serving TIMED/VELOCITY/STREAM/
-// TURN/ROTATION/GOTO_GOAL) and maybeReplanDistance() (DISTANCE's new
-// divergence-triggered replan, architecture-update.md (089) Decision 10)
-// share the SAME tau definition, per that Decision's own instruction to
-// reuse it rather than redefine one under a new name.
+// STOP_ROTATION's anticipation cap -- STOP_DISTANCE has been dead code since
+// 089-003, STOP_HEADING/STOP_ROTATION still serving TURN/ROTATION until
+// ticket 005; TIMED/VELOCITY/STREAM no longer reach this function as of
+// 089-004) and maybeReplanDistance() (DISTANCE's new divergence-triggered
+// replan, architecture-update.md (089) Decision 10) share the SAME tau
+// definition, per that Decision's own instruction to reuse it rather than
+// redefine one under a new name.
 constexpr float kOutputHops = 2.0f;
 constexpr float kAssumedPassPeriod = 0.020f;  // [s] matches main.cpp's kPeriod
 constexpr float kDeadTime = kOutputHops * kAssumedPassPeriod;  // [s]
@@ -125,6 +127,36 @@ void Planner::stageGoal(float v, float omega, msg::DriveMode mode,
   stageCommon(mode, cmd);
 }
 
+void Planner::stageVelocityGoal(float v, float omega, msg::DriveMode mode,
+                                const msg::PlannerCommand& cmd, uint32_t now) {
+  // 089-004 (architecture-update.md Decision 2, "Pattern B"): both channels
+  // solve velocity-control-to-cruise right here, at apply() time -- no
+  // reset() first (see this method's own doc comment, planner.h): every
+  // solveToVelocity() call seeds from the channel's own remembered last
+  // sample (Decision 8), which is exactly right whether that memory is
+  // "at rest" (a fresh goal after any prior goal has fully idled -- tick()'s
+  // own !activeCmd_ branch keeps both channels pinned at rest while idle)
+  // or "mid-cruise" (a STREAM command preempting a still-active one -- the
+  // continuity this goal kind's own semantics require). max_velocity = this
+  // channel's own commanded magnitude; each solve call clamps against
+  // configure()'s global ceiling underneath regardless (Decision 2's
+  // revision) -- a channel commanded 0 for the whole goal (e.g. a straight
+  // T's omega) still gets the identical call, no special-casing (Decision
+  // 1).
+  linearCeiling_ = fabsf(v);
+  linear_.solveToVelocity(v, linearCeiling_);
+  linearSolveMs_ = now;
+
+  rotationalCeiling_ = fabsf(omega);
+  rotational_.solveToVelocity(omega, rotationalCeiling_);
+  rotationalSolveMs_ = now;
+
+  stagedV_ = v;
+  stagedOmega_ = omega;
+  jerkVelocityGoal_ = true;
+  stageCommon(mode, cmd);
+}
+
 void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now) {
   // apply() captures no MotionBaseline -- see the class comment. 089-003:
   // `now` is now used to anchor the linear channel's own elapsed-time clock
@@ -141,14 +173,23 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now) {
   // ever consulted while mode_ == GO_TO, so this matters for hygiene/
   // debuggability more than correctness -- see class comment).
   gPhase_ = GPhase::IDLE;
+  // 089-004: reset unconditionally, same reasoning as gPhase_ above --
+  // stageVelocityGoal() (TIMED/VELOCITY/STREAM cases only, below) is the
+  // ONLY place that sets this back to true; every other goal_kind case
+  // (including TURN/ROTATION, which also stage mode_ == TIMED) leaves it
+  // false, which is exactly the discrimination tick() needs (class comment).
+  jerkVelocityGoal_ = false;
 
   switch (cmd.goal_kind) {
     case msg::PlannerCommand::GoalKind::VELOCITY: {
       // v_y is intentionally ignored -- mirrors Drivetrain::setTwist()'s own
-      // v_y-ignored precedent (differential-only this sprint).
+      // v_y-ignored precedent (differential-only this sprint). 089-004:
+      // stages onto linear_/rotational_ via stageVelocityGoal() instead of
+      // ramp_.setTarget() -- see planner.h's class comment.
       copyCallerStops(cmd);
       targetSpeed_ = cmd.goal.velocity.v_x;
-      stageGoal(cmd.goal.velocity.v_x, cmd.goal.velocity.omega, velocityShapedMode(cmd), cmd);
+      stageVelocityGoal(cmd.goal.velocity.v_x, cmd.goal.velocity.omega, velocityShapedMode(cmd), cmd,
+                        now);
       break;
     }
 
@@ -264,7 +305,9 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now) {
         // concept from source_old's beginTimed()).
         appendStop(msg::StopKind::STOP_TIME, static_cast<float>(cmd.goal.timed.duration));
       }
-      stageGoal(cmd.goal.timed.v_x, cmd.goal.timed.omega, msg::DriveMode::TIMED, cmd);
+      // 089-004: stages onto linear_/rotational_ via stageVelocityGoal()
+      // instead of ramp_.setTarget() -- see planner.h's class comment.
+      stageVelocityGoal(cmd.goal.timed.v_x, cmd.goal.timed.omega, msg::DriveMode::TIMED, cmd, now);
       break;
     }
 
@@ -282,9 +325,15 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now) {
     }
 
     case msg::PlannerCommand::GoalKind::STREAM: {
-      // v_y is intentionally ignored -- see the VELOCITY case above.
+      // v_y is intentionally ignored -- see the VELOCITY case above. 089-004:
+      // each fresh STREAM command is a RE-TARGET of the SAME linear_/
+      // rotational_ channels (stageVelocityGoal()'s own no-reset() design) --
+      // seamless preemption of a still-active prior STREAM command falls out
+      // of Decision 8's seeding contract for free, with no special-casing
+      // here (see planner.h's doc comment on stageVelocityGoal()).
       copyCallerStops(cmd);
-      stageGoal(cmd.goal.stream.v_x, cmd.goal.stream.omega, msg::DriveMode::STREAMING, cmd);
+      stageVelocityGoal(cmd.goal.stream.v_x, cmd.goal.stream.omega, msg::DriveMode::STREAMING, cmd,
+                        now);
       break;
     }
 
@@ -504,6 +553,10 @@ float Planner::linearElapsed(uint32_t now) const {
   return static_cast<float>(static_cast<int32_t>(now - linearSolveMs_)) * 0.001f;
 }
 
+float Planner::rotationalElapsed(uint32_t now) const {
+  return static_cast<float>(static_cast<int32_t>(now - rotationalSolveMs_)) * 0.001f;
+}
+
 void Planner::maybeReplanDistance(uint32_t now, const msg::MotorState& leftObs,
                                   const msg::MotorState& rightObs,
                                   const msg::PoseEstimate& fusedPose) {
@@ -604,6 +657,23 @@ void Planner::armDistanceStopDecel(uint32_t now) {
   linearSolveMs_ = now;
 }
 
+void Planner::armVelocityStopDecel(uint32_t now) {
+  // 089-004: unlike armDistanceStopDecel() above, this does NOT guard on
+  // "elapsed >= duration()" first -- see planner.h's own doc comment on
+  // why that guard's meaning does not carry over from a position-control
+  // plan (where "converged" means "at rest") to a velocity-control cruise
+  // (where "converged" means "at cruise speed," very much NOT at rest).
+  // Always re-solve both channels' decel-to-zero, seeded from each
+  // channel's own current sampled state (Decision 8) -- a channel already
+  // at rest (e.g. a straight T's omega == 0 rotational channel) collapses
+  // to a trivial, ~zero-duration no-op trajectory on its own, no guard
+  // needed.
+  linear_.solveToVelocity(0.0f, linearCeiling_);
+  linearSolveMs_ = now;
+  rotational_.solveToVelocity(0.0f, rotationalCeiling_);
+  rotationalSolveMs_ = now;
+}
+
 void Planner::queueEvent(const char* reason) {
   hasEvent_ = true;
   heldEvent_ = Event{};
@@ -635,19 +705,37 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
   lastTickMs_ = now;
   haveLastTick_ = true;
 
-  // 089-003 KNOWN INTERMEDIATE STATE (see planner.h's class comment): a
-  // goal-kind-aware (not mode_-aware) check, scoped narrowly to DISTANCE --
-  // captured ONCE, here, since mode_ itself flips to IDLE the instant this
+  // 089-003/004 KNOWN INTERMEDIATE STATE (see planner.h's class comment):
+  // goal-kind-aware checks -- `mode_ == DISTANCE` (unique, no latch needed)
+  // and the `jerkVelocityGoal_` latch (needed because mode_ == TIMED is
+  // shared with TURN/ROTATION, velocityShapedMode()'s own collapse) --
+  // captured ONCE, here, since mode_ itself flips to IDLE the instant a
   // goal completes below, but this tick's OWN output must still route
-  // through the linear channel either way. Tickets 004/005 migrate the
-  // remaining goal kinds the same way, after which this collapses to the
-  // clean `mode_ == GO_TO` vs. not split (Decision 5) -- do not generalize
-  // early.
+  // through the right channel(s) either way. Ticket 005 migrates TURN/
+  // ROTATION the same way, after which this collapses to the clean
+  // `mode_ == GO_TO` vs. not split (Decision 5) -- do not generalize early.
   const bool distanceGoal = (mode_ == msg::DriveMode::DISTANCE);
-  float distanceV = 0.0f;  // this tick's sampled linear-channel velocity (DISTANCE only)
+  const bool velocityGoal = jerkVelocityGoal_;
+  float distanceV = 0.0f;      // this tick's sampled linear-channel velocity (DISTANCE only)
+  float velocityV = 0.0f;      // this tick's sampled linear-channel velocity (TIMED/VELOCITY/STREAM)
+  float velocityOmega = 0.0f;  // this tick's sampled rotational-channel velocity (ditto)
 
   if (!activeCmd_) {
     ramp_.reset();
+    // 089-004: keep linear_/rotational_ pinned at a clean rest baseline
+    // while idle too -- the SAME "zero everything while idle" contract
+    // ramp_.reset() already has. Without this, a goal ending via STOP or an
+    // ABRUPT-fired stop (both force THIS tick's OUTPUT to zero without
+    // ever decelerating either channel's own remembered last-sample state)
+    // would leave a stale, still-cruising velocity behind for
+    // stageVelocityGoal()'s NEXT solveToVelocity() call to seed from --
+    // producing a bogus "already at speed" trajectory (a zero-duration
+    // jump straight to cruise) instead of a real ramp-up. A no-op for
+    // DISTANCE (whose apply() always calls linear_.reset() itself
+    // unconditionally already) and for TURN/ROTATION/GOTO_GOAL (which never
+    // touch these two channels).
+    linear_.reset();
+    rotational_.reset();
   } else {
     if (!baselineCaptured_) {
       captureBaseline(now, leftObs, rightObs, fusedPose);
@@ -665,6 +753,17 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
         maybeReplanDistance(now, leftObs, rightObs, fusedPose);
       }
       distanceV = linear_.sample(linearElapsed(now)).velocity;
+    } else if (velocityGoal) {
+      // 089-004: no per-tick anticipation cap needed here either -- exactly
+      // like DISTANCE above, Ruckig's own velocity-control plan (the
+      // cruise ramp-up, or the stop-triggered decel-to-zero re-solve below)
+      // already produces the commanded shape as an intrinsic property of
+      // the solve. Sampled every tick regardless of stopping_: the
+      // re-solved decel trajectory armVelocityStopDecel() installs IS what
+      // this same sample() call reads once stopping_ is armed -- one
+      // mechanism, no separate ramp_.advance()-style branch needed.
+      velocityV = linear_.sample(linearElapsed(now)).velocity;
+      velocityOmega = rotational_.sample(rotationalElapsed(now)).velocity;
     } else if (mode_ == msg::DriveMode::GO_TO && gPhase_ == GPhase::PURSUE && !stopping_) {
       // Re-steer toward the world-frame anchor from THIS tick's fusedPose,
       // BEFORE the ramp advances -- ported ordering from source_old's
@@ -687,9 +786,12 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
       // armed the SMOOTH ramp-down (ramp_.setTarget(0, 0) below), this must
       // not keep re-targeting the ramp away from zero. 089-003: DISTANCE no
       // longer reaches this branch (distanceGoal above takes it first) --
-      // applyStopAnticipation()'s STOP_DISTANCE branch is DEAD CODE for
-      // DISTANCE now, but the function/branch itself is UNCHANGED and still
-      // live for TIMED/VELOCITY/STREAM/TURN/ROTATION until tickets 004/005.
+      // applyStopAnticipation()'s STOP_DISTANCE branch has been DEAD CODE
+      // for DISTANCE since then. 089-004: TIMED/VELOCITY/STREAM no longer
+      // reach this branch either (velocityGoal above takes them first) --
+      // applyStopAnticipation() itself is UNCHANGED and still live only for
+      // TURN/ROTATION's STOP_HEADING/STOP_ROTATION branches, until ticket
+      // 005.
       applyStopAnticipation(leftObs, rightObs, fusedPose);
       ramp_.advance(dt);
     } else {
@@ -704,6 +806,14 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
       bool converged;
       if (distanceGoal) {
         converged = linearElapsed(now) >= linear_.duration();
+      } else if (velocityGoal) {
+        // 089-004: both channels must have converged on their own
+        // (possibly different-duration, Decision 1) decel-to-zero re-solve
+        // -- e.g. a T with unequal l/r targets may finish rotating before
+        // (or after) it finishes translating, same as VelocityRamp's own
+        // independent-channel advance() already exhibited.
+        converged = linearElapsed(now) >= linear_.duration() &&
+                    rotationalElapsed(now) >= rotational_.duration();
       } else {
         converged = ramp_.atTarget();
       }
@@ -713,6 +823,7 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
         activeCmd_ = false;
         stopping_ = false;
         mode_ = msg::DriveMode::IDLE;
+        jerkVelocityGoal_ = false;
         gPhase_ = GPhase::IDLE;
       }
     } else {
@@ -739,6 +850,9 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
               // Immediate halt, no smooth ramp-down, regardless of
               // mechanism -- this tick's held output is forced to 0.
               distanceV = 0.0f;
+            } else if (velocityGoal) {
+              velocityV = 0.0f;
+              velocityOmega = 0.0f;
             } else {
               ramp_.reset();
             }
@@ -746,6 +860,7 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
             activeCmd_ = false;
             stopping_ = false;
             mode_ = msg::DriveMode::IDLE;
+            jerkVelocityGoal_ = false;
             gPhase_ = GPhase::IDLE;
           } else {
             // SMOOTH: ramp/decel to rest; tick() emits the event once
@@ -756,6 +871,8 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
             pendingReason_ = reason;
             if (distanceGoal) {
               armDistanceStopDecel(now);
+            } else if (velocityGoal) {
+              armVelocityStopDecel(now);
             } else {
               ramp_.setTarget(0.0f, 0.0f);
             }
@@ -770,6 +887,8 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
 
   if (distanceGoal) {
     holdTwistCommand(distanceV, 0.0f);
+  } else if (velocityGoal) {
+    holdTwistCommand(velocityV, velocityOmega);
   } else {
     holdTwistCommand(ramp_.currentV(), ramp_.currentOmega());
   }
@@ -813,11 +932,11 @@ msg::PlannerState Planner::state() const {
 void Planner::configure(const msg::PlannerConfig& config) {
   config_ = config;
   ramp_.configure(config);
-  // 089-003: both channels configured here even though only linear_ does
-  // real work for DISTANCE this ticket -- rotational_ is unused until
-  // ticket 005 (TURN/ROTATION) but kept ready rather than left silently
-  // unconfigured (planner.h's class comment, architecture-update.md (089)
-  // Decision 1/ticket item 1).
+  // 089-003/004: both channels configured here. linear_ does real work for
+  // DISTANCE (089-003) and TIMED/VELOCITY/STREAM (089-004, both channels);
+  // rotational_ is unused by TURN/ROTATION until ticket 005 but is kept
+  // configured regardless rather than left silently unready (planner.h's
+  // class comment, architecture-update.md (089) Decision 1/ticket item 1).
   linear_.configure(config, /*isRotational=*/false);
   rotational_.configure(config, /*isRotational=*/true);
 }

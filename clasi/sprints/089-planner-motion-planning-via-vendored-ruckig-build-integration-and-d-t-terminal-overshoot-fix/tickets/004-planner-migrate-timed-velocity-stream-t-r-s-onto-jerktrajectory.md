@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: 'Planner: migrate TIMED/VELOCITY/STREAM (T/R/S) onto JerkTrajectory'
-status: open
+status: done
 use-cases:
 - SUC-003
 depends-on:
@@ -78,24 +78,24 @@ mechanism.
 
 ## Acceptance Criteria
 
-- [ ] `Planner::apply()`'s `TIMED`/`VELOCITY`/`STREAM` cases stage a
+- [x] `Planner::apply()`'s `TIMED`/`VELOCITY`/`STREAM` cases stage a
       velocity-control Ruckig cruise solve on both channels instead of
       `ramp_.setTarget()`.
-- [ ] Cruise sustains correctly past the ramp-up trajectory's own duration
+- [x] Cruise sustains correctly past the ramp-up trajectory's own duration
       (Ruckig's past-duration hold), with no Planner-side "sustain"
       bookkeeping added.
-- [ ] A stop condition firing (time-based, user `stop=`, or `T`'s
+- [x] A stop condition firing (time-based, user `stop=`, or `T`'s
       `duration`) triggers a re-solve to rest on both channels, seeded from
       each channel's own last sample, converging with no reverse.
-- [ ] Sim: a Planner-level test drives a `T` goal through cruise and the
+- [x] Sim: a Planner-level test drives a `T` goal through cruise and the
       stop-triggered re-solve, sampling the full commanded velocity trace
       and asserting it is `>= 0` throughout (matching ticket 003's
       assertion style for `D`).
-- [ ] `test_motion_overshoot_regression.py`'s existing `D`/`T` bars are not
+- [x] `test_motion_overshoot_regression.py`'s existing `D`/`T` bars are not
       regressed (equal or tighter than before this sprint).
-- [ ] `TURN`/`ROTATION`/`GOTO_GOAL` code paths and `applyStopAnticipation()`
+- [x] `TURN`/`ROTATION`/`GOTO_GOAL` code paths and `applyStopAnticipation()`
       remain fully intact and unmodified by this ticket.
-- [ ] Full sim suite green; no new xfail introduced.
+- [x] Full sim suite green; no new xfail introduced.
 
 ## Testing
 
