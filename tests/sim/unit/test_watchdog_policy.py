@@ -45,7 +45,7 @@ def test_watchdog_does_not_fire_while_commands_keep_arriving(sim):
 def test_watchdog_neutralizes_within_the_same_pass_it_fires_in(sim):
     """Ticket 087-007's own safety-critical acceptance: the emergency
     neutralize is a narrow bypass straight to ``Hardware::apply()``/
-    ``Drivetrain::apply()`` (``Rt::MainLoop::emergencyNeutralize()``, called
+    ``Drivetrain::apply()`` (``Rt::MainLoop::estop()``, called
     as the FIRST action of ``Rt::MainLoop::tick()`` -- see main_loop.h's file
     header) -- it never posts to ``bb.motorIn[]``/``bb.driveIn`` and so never
     waits an extra pass for those one-tick queues to be drained. Placing the

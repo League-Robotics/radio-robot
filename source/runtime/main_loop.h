@@ -57,7 +57,7 @@
 // "mandatory, every pass, same-pass deterministic" for the watchdog's OWN
 // correctness -- but "first" is what gives genuine same-pass PWM
 // visibility once the emergency neutral reaches the motor's own next
-// tick() call. See emergencyNeutralize()'s doc comment for the bypass
+// tick() call. See estop()'s doc comment for the bypass
 // mechanism itself.
 #pragma once
 
@@ -137,13 +137,13 @@ class MainLoop {
   // exact rationale.
   void routeOutputs(Blackboard& bb, bool plannerEngagedThisPass);
 
-  // emergencyNeutralize -- the sanctioned bypass (Decision 6's one
+  // estop -- the sanctioned bypass (Decision 6's one
   // exception to synchronous update): calls Hardware::apply()/
   // Drivetrain::apply() DIRECTLY -- the SAME narrow, immediate-write
   // methods every OTHER command-plane post eventually reaches, just
   // invoked here without a queue in between. Never touches
   // bb.driveIn/bb.motorIn/bb.hardwareBroadcastIn.
-  void emergencyNeutralize(); // FIXME rename to "estop"
+  void estop();
 
   Subsystems::Hardware& hardware_;
   Subsystems::Drivetrain& drivetrain_;

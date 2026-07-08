@@ -30,7 +30,7 @@ MainLoop::MainLoop(Subsystems::Hardware& hardware, Subsystems::Drivetrain& drive
       radioReply_(radioReply),
       radioCtx_(radioCtx) {}
 
-void MainLoop::emergencyNeutralize() {
+void MainLoop::estop() {
   // The sanctioned bypass (Decision 6): Hardware::apply()/Drivetrain::
   // apply() are the SAME narrow, immediate-write methods every OTHER
   // command-plane post eventually reaches via a subsystem's own tick() --
@@ -81,7 +81,7 @@ void MainLoop::serviceWatchdogs(Blackboard& bb, uint32_t now) {
   // === SAFETY WATCHDOG -- mandatory, first, same-pass deterministic. ===
   // See main_loop.h's file header for why this runs before hardware_.tick().
   if (watchdog_.check(now)) {
-    emergencyNeutralize();
+    estop();
     // 090-004: a loop-originated NAMED event -- routed through the SAME
     // emitEvent() a Planner-produced GOAL_DONE event uses (main_loop.h's own
     // "distinct from Rt::CommandRouter's own reply channels" doc comment) --

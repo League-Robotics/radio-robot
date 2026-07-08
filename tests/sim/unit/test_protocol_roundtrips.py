@@ -141,7 +141,7 @@ def test_dev_stop_neutralizes_a_driving_motor(sim):
     entirely, mirroring test_velocity_pid_response.py), confirms it is
     genuinely spinning, then DEV STOP and confirms the plant's raw commanded
     actuator value (sim.pwm(), ground truth) returns to zero. Unlike the
-    watchdog's own emergencyNeutralize() bypass (test_watchdog_policy.py's
+    watchdog's own estop() bypass (test_watchdog_policy.py's
     own same-pass proof), DEV STOP's broadcast is only STAGED on the pass it
     is issued (apply(), not tick()) -- one further real tick is needed for
     the motor's own tick() to execute the now-NEUTRAL mode and actually
