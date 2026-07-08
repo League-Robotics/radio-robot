@@ -1,7 +1,7 @@
 ---
 id: '007'
 title: 'Bench verification on the stand: D/T/TURN/RT motion accuracy and G spot-check'
-status: open
+status: in-progress
 use-cases:
 - SUC-002
 - SUC-003
@@ -139,43 +139,76 @@ own acceptance.
 
 ## Acceptance Criteria
 
-- [ ] Robot vs. relay identified via `mbdeploy list`'s ROLE column before
+- [x] Robot vs. relay identified via `mbdeploy list`'s ROLE column before
       any flash; firmware deployed to the confirmed robot device.
-- [ ] DEV serial-silence watchdog widened for the session and fed/restored
+- [x] DEV serial-silence watchdog widened for the session and fed/restored
       correctly; `DEV STOP` (and watchdog restore) executed in a
       `finally`-equivalent for the entire exercise — motors never left
       running.
-- [ ] `D 200 200 1000`: NO reverse encoder motion measured after `EVT
-      done`; peak commanded/measured wheel speed within the existing
-      ratio-governor/PID tolerance of the commanded 200 mm/s (no
-      292-vs-200-style overshoot).
-- [ ] `T 200 200 1000`: NO reverse encoder motion measured after `EVT
-      done`.
-- [ ] `TURN <heading>` (~90°): NO reverse encoder motion after `EVT done`
-      AND heading accuracy within 086/087's existing tolerance bar (bar
-      value pulled from those sprints' artifacts/existing test
-      assertions, not guessed).
-- [ ] `RT <relAngle>`: NO reverse encoder motion after `EVT done` AND
-      rotation accuracy within 086/087's existing tolerance bar.
-- [ ] `G <x> <y> <speed>`: dispatches and settles (reaches target region,
-      emits completion) — smoke-checked, not fully re-verified.
-- [ ] On-target Ruckig solve time characterized for at least one linear
+- [ ] **FAILS.** `D 200 200 1000`: NO reverse encoder motion measured
+      after `EVT done`; peak commanded/measured wheel speed within the
+      existing ratio-governor/PID tolerance of the commanded 200 mm/s (no
+      292-vs-200-style overshoot). Measured 11-21mm of post-done reverse
+      motion across 3 runs (two independent measurement paths) — see
+      `bench-verification-log.md` §1 for the root-caused mechanism.
+- [ ] **FAILS.** `T 200 200 1000`: NO reverse encoder motion measured
+      after `EVT done`. Measured 19-23mm — see `bench-verification-log.md`
+      §2.
+- [ ] **FAILS.** `TURN <heading>` (~90°): NO reverse encoder motion after
+      `EVT done` AND heading accuracy within 086/087's existing tolerance
+      bar. TURN never completes at all on this hardware/session (its
+      `STOP_HEADING` never fires because `PoseEstimator`'s fused pose is
+      frozen — see `bench-verification-log.md` §3; likely a pre-existing
+      defect outside this sprint's own scope, but it still blocks this
+      criterion).
+- [~] **PARTIAL.** `RT <relAngle>`: NO reverse encoder motion after
+      `EVT done` AND rotation accuracy within 086/087's existing tolerance
+      bar. Completion mechanism verified correct (`reason=rot`, encoder-
+      arc-based, independent of the broken fused pose); accuracy could NOT
+      be reliably measured this session (the intended `pose=`-based check
+      is invalid per the §3 finding); one run showed 13mm of post-done
+      reverse motion. See `bench-verification-log.md` §4.
+- [ ] **FAILS.** `G <x> <y> <speed>`: dispatches and settles (reaches
+      target region, emits completion) — smoke-checked, not fully
+      re-verified. Dispatched and ran the full exercise (1.3+ m of real
+      wheel travel) but never arrived, ending via the TIME safety net —
+      same root cause as TURN's finding. See `bench-verification-log.md`
+      §5.
+- [x] On-target Ruckig solve time characterized for at least one linear
       and one rotational solve; headroom within the control loop period
-      assessed and recorded.
-- [ ] At least one motion verb exercised over the radio relay path in
-      addition to direct serial.
-- [ ] Written bench log committed to the sprint directory, distinguishing
+      assessed and recorded. Precise DWT-cycle-counter timing was blocked
+      by pyOCD/gdb tooling friction this session (documented, not silently
+      dropped); an indirect, zero-instrumentation TLM-tick-gap method
+      gives a rough ~12ms one-time cost for both channels, well within the
+      20ms tick budget. See `bench-verification-log.md` §7.
+- [ ] **NOT VERIFIED.** At least one motion verb exercised over the radio
+      relay path in addition to direct serial. The relay dongle was not
+      physically connected during this bench session (this agent cannot
+      plug in hardware) — see `bench-verification-log.md` §8. Needs a
+      follow-up pass once the dongle is attached.
+- [x] Written bench log committed to the sprint directory, distinguishing
       verified results from any stand-limited or deferred items.
-- [ ] `uv run pytest tests/sim` green (ticket 006's consolidated suite) at
+      (`bench-verification-log.md`).
+- [x] `uv run pytest tests/sim` green (ticket 006's consolidated suite) at
       the last firmware ticket before the bench pass, re-confirmed at
-      close.
-- [ ] **[Revision 2]** `D`/`TURN`/`RT` each complete via their OWN stop
-      condition (`EVT done reason=dist` / heading / rotation), never via
-      the `STOP_TIME` safety net — verified from captured telemetry, not
-      assumed.
-- [ ] **[Revision 2]** Terminal near-rest replan-chatter behavior is
-      characterized (present/absent, frequency, self-resolving or not) and
-      recorded in the bench log; no mitigation is pre-built.
+      close. 308 passed, 2 xfailed, both times (no `source/` edits made
+      during this ticket).
+- [~] **PARTIAL.** **[Revision 2]** `D`/`TURN`/`RT` each complete via their
+      OWN stop condition (`EVT done reason=dist` / heading / rotation),
+      never via the `STOP_TIME` safety net — verified from captured
+      telemetry, not assumed. D: PASS (`reason=dist`). RT: PASS
+      (`reason=rot`). TURN: N/A — it never completes at all, an even more
+      severe form of the exact stall-short symptom Decision 10 exists to
+      close (SPRINT-BLOCKING on its own terms, though root-caused to a
+      different mechanism than Decision 10 addresses — see
+      `bench-verification-log.md` §3).
+- [~] **PARTIAL.** **[Revision 2]** Terminal near-rest replan-chatter
+      behavior is characterized (present/absent, frequency, self-
+      resolving or not) and recorded in the bench log; no mitigation is
+      pre-built. D/T: no chatter observed (clean single settle). TURN/RT:
+      could not be characterized (TURN never reaches near-rest; RT's
+      completion window was too short to isolate a distinct near-rest
+      phase). See `bench-verification-log.md` §6.
 
 ## Testing
 
@@ -190,3 +223,59 @@ own acceptance.
   instrumentation pass needed.
 - **Verification command**: N/A (HITL) — the deliverable is the bench log,
   cross-checked against a green `uv run pytest`.
+
+## Completion Notes (2026-07-07, bench pass)
+
+**Status left `in-progress`, NOT `done` — this bench pass found two
+SPRINT-BLOCKING issues.** Full detail, raw traces, and root-cause analysis
+in `../bench-verification-log.md`. Summary:
+
+1. **D/T terminal reverse-motion is still present** (11-23mm, essentially
+   the same magnitude as the originally-confirmed 16mm/23mm bug this
+   sprint exists to fix). Root-caused to a real interaction between
+   Decision 8's "seed the stop-triggered decel from the channel's own
+   theoretical state" contract and the (unchanged, out-of-scope) velocity
+   PID's own tracking looseness on real hardware: when the real plant
+   runs measurably faster than the plan believes (confirmed via
+   `DEV M n STATE`'s direct per-motor register, independent of the fused
+   TLM telemetry), the real encoder crosses `STOP_DISTANCE` before the
+   plan's own internal decel would start, and the freshly-armed decel
+   re-solve is seeded from the plan's (lower) belief rather than the
+   plant's (higher) real speed — reproducing a smaller version of the
+   exact bug this sprint targeted, via a different specific mechanism.
+   This is a genuine design gap, not a sim-vs-bench measurement artifact
+   (confirmed via two independent measurement paths) and not something I
+   patched mid-bench, per this ticket's own instruction.
+2. **TURN cannot complete at all**, and **G never arrives**, because
+   `PoseEstimator`'s fused pose (`pose=`) does not accumulate from real
+   wheel motion on this hardware/session (confirmed: 1.3+ meters of real
+   encoder travel during a `G` run, `pose=` never left `(0,0,-7)`).
+   `PoseEstimator` is explicitly unchanged by this sprint
+   (architecture-update.md Decision 9) — this looks like a pre-existing
+   defect, surfaced here for the first time because this is the first
+   sustained real bench TURN/G run against this exact firmware. RT is
+   unaffected (its own completion signal is the raw encoder-arc
+   differential, independent of `pose=`) and does complete correctly.
+3. Everything else in this ticket's own scope was completed: robot/relay
+   identification, safety wrapping, the completion-mode criterion (PASS
+   for D/RT; TURN is N/A since it never completes), solve-time
+   characterization (indirect method, ~12ms one-time cost, adequate
+   headroom), terminal-chatter characterization (none observed where
+   measurable), and the pre/post sim-gate sanity check (308 passed, 2
+   xfailed, unchanged).
+4. **Not completed**: the radio-relay verification — the relay dongle was
+   not physically connected during this session. Needs a follow-up pass.
+5. A real dispatch-reliability bug in the bench harness itself (not
+   firmware) was found and fixed: `RT`/`TURN`/`G` intermittently failed
+   to dispatch when sent immediately after a blocking `STREAM` reply on
+   this USB-CDC link; a settle gap + switching to `send()`'s retry-
+   capable dispatch fixed it. Kept in
+   `tests/bench/bench_ruckig_motion_verify.py` for future runs.
+
+**Recommendation**: do not close sprint 089 on this bench pass. The D/T
+finding needs either a design revisit or an explicit stakeholder-accepted
+tolerance decision. The `PoseEstimator` finding should be raised as its
+own follow-on issue (not filed here — this session's scope excludes
+touching `clasi/issues/`) and re-verified once fixed, since it currently
+blocks TURN's and `G`'s own criteria independent of anything this sprint
+changed.
