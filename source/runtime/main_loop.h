@@ -40,7 +40,8 @@
 //
 // SAFETY WATCHDOG -- non-negotiable (preserve-serial-silence-safety-
 // watchdog-in-greenfield-loop.md). `check()` is the FIRST action tick()
-// takes, before `Hardware::tick()` even runs THIS pass: this is what lets a
+// takes (inside serviceWatchdogs(), tick()'s first call), before
+// `Hardware::tick()` even runs THIS pass: this is what lets a
 // fire's neutralize be visible in the SAME control pass the window expired
 // in (a queue-routed neutralize -- via bb.motorIn[]/bb.driveIn -- would
 // need this pass's OWN hardware.tick() to have already drained the post,
@@ -96,6 +97,19 @@ class MainLoop {
   void feedWatchdog(uint32_t now) { watchdog_.feed(now); }
 
  private:
+  // serviceWatchdogs -- tick()'s FIRST call: the safety watchdog's
+  // check-and-estop (the file header's same-pass rationale), then both
+  // loop-owned watchdogs' config-plane upkeep -- drain the window
+  // mailboxes (DEV WD / SET sTimeout=, posted last slack; neither
+  // watchdog is one of the Configurator's four targets), then publish
+  // both windows to bb for GET/telemetry reads. Ordering within: check
+  // BEFORE drain, so a window posted last slack governs the NEXT pass's
+  // check, never the pass it drains in. The whole block has no data
+  // dependency on anything else tick() does: setWindow() is a bare field
+  // write on both watchdog classes (no feed/re-arm), and no subsystem
+  // tick reads the windows.
+  void serviceWatchdogs(Blackboard& bb, uint32_t now);
+
   // routeOutputs -- drains Drivetrain's and Planner's OWN output edges
   // (hasCommand()/takeCommand()) into their next consumer's input queue,
   // per Decision 1 (Planner's authority-gated arbitration with DEV DT for
