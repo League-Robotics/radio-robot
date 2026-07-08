@@ -38,11 +38,11 @@
 //
 // Wire contract (docs/protocol-v2.md §8; see that section's "minimal
 // subset" note added by 082-004): the field tokens (`t=`, `mode=`,
-// `seq=`, `enc=`, `vel=`, `pose=`, `encpose=`, `otos=`, `twist=`) are wire
-// keys, excluded from the no-units-in-identifiers convention
-// (.claude/rules/coding-standards.md, "Wire/serialized identifiers are
-// excluded") -- they are never renamed here even though some read like
-// unit-suffixed names.
+// `seq=`, `enc=`, `vel=`, `pose=`, `encpose=`, `otos=`, `otosconn=`
+// (092-002), `twist=`) are wire keys, excluded from the
+// no-units-in-identifiers convention (.claude/rules/coding-standards.md,
+// "Wire/serialized identifiers are excluded") -- they are never renamed
+// here even though some read like unit-suffixed names.
 // ---------------------------------------------------------------------------
 
 namespace Telemetry {
@@ -84,6 +84,20 @@ struct TlmFrameInput {
   bool hasOtos = false;
   msg::Pose2D otos = {};
 
+  // otosconn=0|1 (092-002) -- a SEPARATE token, sharing hasOtos's own
+  // omission gate: Hal::Odometer::connected() this pass (bb.otosConnected)
+  // -- "does a real device exist and answer at all," distinct from
+  // otosValid (fusableThisPass()'s reset-tracking flag, not itself
+  // surfaced over the wire) and from otos='s own per-pass freshness
+  // (which this trimmed EkfTiny/telemetry surface does not expose
+  // either). Added as a diagnostic for the frozen-fused-pose
+  // investigation (clasi/issues/poseestimator-fused-pose-frozen-on-
+  // hardware.md) -- see ticket 092-002's completion notes for why: no
+  // existing wire verb told a bench session whether Hal::OtosOdometer
+  // had ever detected a chip. A separate token (not a 4th otos= value)
+  // so the existing, host-parsed otos= 3-tuple shape never changes.
+  bool otosConnected = false;
+
   // twist=<v>,<omega> -- directly-measured/derived body twist (never EKF
   // velocity-channel state -- see commands/telemetry_commands.cpp for how
   // the caller derives this from directly-read wheel velocities).
@@ -103,6 +117,8 @@ struct TlmFrameInput {
 //   pose=/encpose= -- bb.fusedPose/bb.encoderPose.
 //   otos=      -- bb.otos, OMITTED (not zero-filled) when bb.otosPresent is
 //                 false.
+//   otosconn=  -- (092-002) bb.otosConnected, gated on the SAME
+//                 bb.otosPresent condition as otos= (never emitted alone).
 //   twist=     -- BodyKinematics::forward() applied to the SAME directly-read
 //                 wheel velocities vel= uses, plus bb.drivetrainConfig's
 //                 trackwidth (the SAME value PoseEstimator::configure() was

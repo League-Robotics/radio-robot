@@ -41,6 +41,13 @@
 //       and the resulting frame matches hand-computed expected values --
 //       the isolated-testability proof for Telemetry's own frame assembly.
 //
+// Added by ticket 092-002 (frozen-fused-pose investigation, diagnostic
+// telemetry -- clasi/issues/poseestimator-fused-pose-frozen-on-hardware.md):
+//   (g) otosconn= (Hal::Odometer::connected() this pass) is a SEPARATE
+//       token sharing otos='s own omission gate, independent of otos='s own
+//       pose values -- proven both in isolation (buildTlmFrame()) and
+//       through Telemetry::tick()'s bb.otosConnected wiring.
+//
 // Plain C++ program, hand-rolled assertions (mirrors the existing
 // harnesses' shape) -- prints a PASS/FAIL line per scenario and exits
 // nonzero if any assertion failed.
@@ -131,6 +138,7 @@ Telemetry::TlmFrameInput baselineInput() {
   in.otos.x = 351.0f;
   in.otos.y = -13.0f;
   in.otos.h = 0.32f;   // -> 1833 centidegrees
+  in.otosConnected = true;
 
   in.hasTwist = true;
   in.twist.v_x = 200.0f;
@@ -155,7 +163,7 @@ void scenarioAllFieldsPresentExactMatch() {
 
   const std::string expected =
       "TLM t=12345 mode=S seq=7 enc=1024,1019 vel=198,201 pose=350,-12,1718"
-      " encpose=349,-11,1776 otos=351,-13,1833 twist=200,500";
+      " encpose=349,-11,1776 otos=351,-13,1833 otosconn=1 twist=200,500";
   checkEq(std::string(buf), expected, "exact formatted line");
   checkTrue(n == static_cast<int>(expected.size()), "return value equals formatted length");
   checkTrue(std::strlen(buf) == expected.size(), "NUL terminator lands exactly at the formatted length");
@@ -179,6 +187,7 @@ void scenarioNoOptionalFields() {
   checkTrue(!contains(buf, "pose="), "pose= absent (encpose= substring check below disambiguates)");
   checkTrue(!contains(buf, "encpose="), "encpose= absent");
   checkTrue(!contains(buf, "otos="), "otos= absent");
+  checkTrue(!contains(buf, "otosconn="), "otosconn= absent");
   checkTrue(!contains(buf, "twist="), "twist= absent");
 }
 
@@ -263,8 +272,27 @@ void scenarioOtosOmittedNotZeroFilled() {
 
   checkTrue(!contains(buf, "otos="), "otos= entirely absent (not emitted at all)");
   checkTrue(!contains(buf, "otos=0,0,0"), "otos= is not a zero-filled placeholder");
+  checkTrue(!contains(buf, "otosconn="), "otosconn= absent too -- shares otos='s own omission gate");
   checkTrue(contains(buf, "pose=350,-12,1718"), "pose= still present and correct");
   checkTrue(contains(buf, "twist=200,500"), "twist= still present and correct");
+}
+
+// (092-002) otosconn= reflects otosConnected independently of otos='s own
+// pose values -- a present-but-disconnected reading (e.g. Hal::OtosOdometer
+// never detected a chip) must show otosconn=0 while otos= itself still
+// prints its (stale/zero) cached pose, never conflating the two signals.
+void scenarioOtosConnFalseWhilePosePresent() {
+  beginScenario("otosconn=0 while otos= itself is still present");
+
+  Telemetry::TlmFrameInput in = baselineInput();
+  in.otosConnected = false;
+
+  char buf[300];
+  Telemetry::buildTlmFrame(buf, sizeof(buf), in);
+
+  checkTrue(contains(buf, "otos=351,-13,1833"), "otos= pose still present and correct");
+  checkTrue(contains(buf, "otosconn=0"), "otosconn=0 when otosConnected is false");
+  checkTrue(!contains(buf, "otosconn=1"), "otosconn=1 must not also appear");
 }
 
 // (b) twist= independently omitted.
@@ -364,6 +392,7 @@ void scenarioTickAssemblesFromBareBlackboard() {
   bb.otos.pose.x = 402.0f;
   bb.otos.pose.y = -21.0f;
   bb.otos.pose.h = 0.32f;
+  bb.otosConnected = true;   // 092-002: proves tick() copies bb.otosConnected too
 
   bb.planner.mode = msg::DriveMode::DISTANCE;   // -> mode=D
   bb.telemetrySeq = 42;
@@ -385,7 +414,7 @@ void scenarioTickAssemblesFromBareBlackboard() {
   // error is ~6e-6, nowhere near the next integer boundary at 401).
   const std::string expected =
       "TLM t=99999 mode=D seq=42 enc=500,495 vel=180,220 pose=400,-20,1718"
-      " encpose=398,-19,1776 otos=402,-21,1833 twist=200,400";
+      " encpose=398,-19,1776 otos=402,-21,1833 otosconn=1 twist=200,400";
   checkEq(std::string(buf), expected, "frame assembled entirely from bare Rt::Blackboard cells");
 }
 
@@ -399,6 +428,7 @@ int main() {
   scenarioPoseOmittedIndependently();
   scenarioEncPoseOmittedIndependently();
   scenarioOtosOmittedNotZeroFilled();
+  scenarioOtosConnFalseWhilePosePresent();
   scenarioTwistOmittedIndependently();
   scenarioSmallBufferTruncatesSafely();
   scenarioDeterministic();

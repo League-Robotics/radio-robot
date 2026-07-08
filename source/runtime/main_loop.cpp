@@ -154,6 +154,13 @@ void MainLoop::commit(Blackboard& bb, uint32_t now, bool otosFusableThisPass) {
   // collapses to "false" exactly when there is no device, folding in the
   // same fact the old `!= nullptr` branch encoded, without a pointer check.
   bb.otosValid = otosFusableThisPass;
+  // otosConnected (092-002 diagnostic) -- connected() is a cheap, stateless
+  // accessor (no bus traffic of its own -- see Hal::OtosOdometer::
+  // connected()'s doc comment), safe to call every pass right after tick()
+  // just refreshed the leaf's own connected_ flag. See blackboard.h's own
+  // doc comment for why this is a THIRD, distinct signal from otosValid/
+  // otos.stamp.valid.
+  bb.otosConnected = odometer->connected();
 }
 
 void MainLoop::tick(Blackboard& bb, uint32_t now) {
