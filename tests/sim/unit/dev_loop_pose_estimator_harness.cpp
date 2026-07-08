@@ -14,7 +14,7 @@
 // hardware/drivetrain state (ticket 006's transitional same-pass
 // feed-forward, matching devLoopTick()'s own same-pass reads). Ticket 007's
 // REAL cyclic executive is synchronous-update (architecture-update-r1.md
-// Decision 6): PoseEstimator::tick() now reads bb.motor[]/bb.otos as
+// Decision 6): PoseEstimator::tick() now reads bb.motors[]/bb.otos as
 // COMMITTED at the end of the PREVIOUS pass (x[k]), never a same-pass-fresh
 // read — and Decision 2 adds a SECOND one-pass hop for Drivetrain's own
 // output (Drivetrain::takeCommand() -> bb.motorIn[], drained by
@@ -175,7 +175,7 @@ msg::DrivetrainConfig makeDtConfig(uint32_t leftPort, uint32_t rightPort) {
 // (standing in for bb.motorIn[] -- Decision 2's per-port unpack), Drivetrain
 // governance (posting its OWN output back into that SAME motorIn[] --
 // gated on active(), reproducing the routeOutputs discard-when-standby
-// rule), a COMMITTED motor-state snapshot (standing in for bb.motor[]),
+// rule), a COMMITTED motor-state snapshot (standing in for bb.motors[]),
 // and a COMMITTED otos snapshot (standing in for bb.otos/bb.otosValid) --
 // both read by poseEstimator.tick() ONE PASS STALE relative to this same
 // pass's own fresh samples (Decision 6), exactly like instance A.
@@ -204,14 +204,22 @@ struct RefPipeline {
     // committedLeft/committedRight as x[k] -- i.e. whatever was committed at
     // the END of the PREVIOUS call, BEFORE this pass's own commit (further
     // down) refreshes them. This mirrors Rt::MainLoop::tick()'s own Decision
-    // 6 ordering exactly (main_loop.cpp commits bb.motor[] only AFTER both
+    // 6 ordering exactly (main_loop.cpp commits bb.motors[] only AFTER both
     // drivetrain_.tick() and poseEstimator_.tick() have already run this
     // pass) -- committing here BEFORE poseEstimator.tick() would give REF an
     // extra same-pass freshness instance A does not have, permanently
     // one-pass-ahead of A (caught empirically while implementing this
     // ticket: encoderPose()'s pure, unsmoothed accumulator showed an exact,
     // permanent one-pass divergence until this ordering was corrected).
-    drivetrain.tick(now, committedLeft, committedRight, noDriveInYet);
+    //
+    // 090-001: Drivetrain::tick() now takes the FULL per-port array
+    // (standing in for bb.motors[]) and resolves its own bound pair (p)
+    // internally -- only the two bound-pair slots need real data, since
+    // Drivetrain never reads any other slot.
+    msg::MotorState motors[Subsystems::Hardware::kPortCount] = {};
+    motors[p.left - 1] = committedLeft;
+    motors[p.right - 1] = committedRight;
+    drivetrain.tick(now, motors, Subsystems::Hardware::kPortCount, noDriveInYet);
     if (drivetrain.hasCommand()) {
       Hal::DrivetrainToHardwareCommand cmd = drivetrain.takeCommand();
       if (drivetrain.active()) {

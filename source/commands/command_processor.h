@@ -1,6 +1,7 @@
 #pragma once
 #include "protocol.h"
 #include "command_types.h"
+#include "messages/event.h"
 
 /**
  * CommandProcessor — protocol v2 wire-protocol parser and dispatcher.
@@ -114,6 +115,25 @@ public:
     static void replyEvt(char* buf, int size,
                          const char* name, const char* body,
                          ReplyFn fn, void* ctx);
+
+    /**
+     * emitEvent — the ONE place ALL "EVT ..." wire text is assembled
+     * (090-004): the single wire-layer authority a subsystem or the main
+     * loop hands a typed msg::Event to instead of ever snprintf-ing wire
+     * text itself (source/messages/event.h's own doc comment; the
+     * command(wire-inbound)/message(internal) boundary,
+     * .claude/rules/naming-and-style.md sec 4). Built on replyEvt() above,
+     * the same way replyOKf/replyErrf are built on replyOK/replyErr.
+     *
+     * ev.kind == GOAL_DONE: composes the wire name as "done <ev.verb>" and
+     * the body as "[#<ev.corrId> ]reason=<ev.reason>" (corrId prefix omitted
+     * when empty).
+     *
+     * ev.kind == NAMED: uses ev.name verbatim as the wire name; body is
+     * "reason=<ev.reason>" when ev.reason is non-empty, otherwise no body
+     * at all (e.g. dev_watchdog's bare "EVT dev_watchdog").
+     */
+    static void emitEvent(const msg::Event& ev, ReplyFn fn, void* ctx);
 
     /**
      * replyOKf — variadic form of replyOK.

@@ -2,6 +2,8 @@
 // for the class-level design notes.
 #include "subsystems/drivetrain.h"
 
+#include <cassert>
+
 #include "kinematics/body_kinematics.h"
 
 namespace Subsystems {
@@ -151,8 +153,8 @@ void Drivetrain::governRatio(float* targetLeft, float* targetRight,
 }
 
 void Drivetrain::tick(uint32_t now,
-                       const msg::MotorState& leftObs,
-                       const msg::MotorState& rightObs,
+                       const msg::MotorState* motors,
+                       uint32_t motorCount,
                        Rt::Mailbox<msg::DrivetrainCommand>& driveIn) {
     // now: no clock read happens here -- this ticket's governor is a purely
     // per-tick algebraic correction with no timing-dependent behavior yet.
@@ -171,6 +173,19 @@ void Drivetrain::tick(uint32_t now,
     if (!driveIn.empty()) {
         apply(driveIn.take());
     }
+
+    // 090-001: resolve this Drivetrain's OWN bound wheel pair against the
+    // full per-port observation array -- the `- 1` base conversion (Nezha
+    // ports are 1-based; motors[] is 0-based) exists exactly once, here,
+    // with the object that owns the port binding (ports()). The range
+    // assert guards against a misconfigured (out-of-range) bound port
+    // silently walking off the array -- see drivetrain.h's tick() doc
+    // comment and architecture-update.md Decision 1.
+    DrivetrainPorts bound = ports();
+    assert(bound.left >= 1 && bound.left <= motorCount);
+    assert(bound.right >= 1 && bound.right <= motorCount);
+    const msg::MotorState& leftObs = motors[bound.left - 1];
+    const msg::MotorState& rightObs = motors[bound.right - 1];
 
     msg::MotorCommand leftCmd;
     msg::MotorCommand rightCmd;

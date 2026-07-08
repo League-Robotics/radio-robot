@@ -127,17 +127,19 @@
 // "Reply sink" capture: apply()'s locked signature takes no ReplyFn/ctx (a
 // wire message cannot carry a function pointer), so the only "reply sink"
 // context this class captures is corr_id -- copied verbatim from
-// msg::PlannerCommand.corr_id into the held Event a completed goal produces
-// (hasEvent()/takeEvent()). Routing that Event to an actual reply channel is
-// the DRAINING caller's job (ticket 084-002's dev_loop.cpp step), the same
-// division dev_loop.h's own DevLoop::defaultReply documents for the
-// watchdog-fire EVT.
+// msg::PlannerCommand.corr_id into the held msg::Event a completed goal
+// produces (hasEvent()/takeEvent()). Routing that Event to an actual reply
+// channel -- and formatting its wire text -- is the DRAINING caller's job
+// (CommandProcessor::emitEvent(), called from the loop's own drain step,
+// 090-004): this class never formats wire text itself, only data (see
+// hasEvent()/takeEvent()'s own doc comment below).
 #pragma once
 
 #include <stdint.h>
 
 #include "messages/common.h"
 #include "messages/drivetrain.h"
+#include "messages/event.h"
 #include "messages/motor.h"
 #include "messages/planner.h"
 #include "motion/jerk_trajectory.h"
@@ -148,19 +150,6 @@ namespace Subsystems {
 
 class Planner {
  public:
-  // Event -- a held/taken descriptor for one pending "goal completed" signal.
-  // reason is one of the tokens Motion::evaluateStopCondition's five
-  // supported kinds map to ("time"/"dist"/"heading"/"pos"/"rot"), matching
-  // source_old/commands/MotionCommand.cpp's mc_reasonToken() vocabulary for
-  // those same five kinds. corrId is copied verbatim from the
-  // msg::PlannerCommand.corr_id that staged the completed goal. Formatting
-  // the final wire text ("EVT done <verb> reason=<token> #<corrId>") is the
-  // draining caller's job -- see the class comment above.
-  struct Event {
-    char reason[16] = {};
-    char corrId[64] = {};
-  };
-
   // apply -- stage the goal (dispatch on goal_kind); captures the reply
   // sink/corr-id context needed for later EVT emission (mirrors
   // source_old/commands/MotionCommand.cpp's setReplySink()). No hardware
@@ -194,8 +183,26 @@ class Planner {
   bool hasCommand() const;               // true once tick() has run and the output is untaken
   msg::DrivetrainCommand takeCommand();  // clears hasCommand()
 
+  // hasEvent()/takeEvent() -- a held/taken descriptor for one pending
+  // "goal completed" signal, ALWAYS kind == GOAL_DONE (this class produces
+  // no NAMED events -- see main_loop.cpp for the loop's own NAMED events).
+  // reason is one of the tokens Motion::evaluateStopCondition's five
+  // supported kinds map to ("time"/"dist"/"heading"/"pos"/"rot"), matching
+  // source_old/commands/MotionCommand.cpp's mc_reasonToken() vocabulary for
+  // those same five kinds. corrId is copied verbatim from the
+  // msg::PlannerCommand.corr_id that staged the completed goal. verb is
+  // copied verbatim from the persisted verb_ field (090-004, mirroring
+  // corrId_'s own persistence -- see stageCommon()), which already resolves
+  // to the goal's own final wire verb by stage time (never empty in
+  // practice -- see stageCommon()'s and verbFallbackFor()'s own doc
+  // comments in planner.cpp for how "" cmd.verb, S/T/D/G, is resolved to
+  // its DriveMode-implied letter). Formatting the final wire text
+  // ("EVT done <verb> [#<corrId> ]reason=<token>") is the draining caller's
+  // job -- CommandProcessor::emitEvent() (command_processor.h) -- this class
+  // never assembles wire text (see the class comment above and
+  // .claude/rules/naming-and-style.md sec 4's command/message boundary).
   bool hasEvent() const;  // true when a completed goal's Event is untaken
-  Event takeEvent();      // clears hasEvent()
+  msg::Event takeEvent();  // clears hasEvent()
 
   msg::PlannerState state() const;
   void configure(const msg::PlannerConfig& config);
@@ -209,11 +216,18 @@ class Planner {
   // stageCommon -- 089-003: the bookkeeping shared by EVERY goal_kind case in
   // apply(), factored out of stageGoal() so DISTANCE (which no longer calls
   // ramp_.setTarget(), see class comment) can reuse it directly: captures
-  // style/corr_id, resets stopping_/baselineCaptured_, (re)activates the
-  // command, and records mode_. Does NOT touch stops_[]/stopsCount_ or
-  // stagedV_/stagedOmega_ -- callers set those themselves (stageGoal() below
-  // sets the latter; DISTANCE's apply() case sets them directly since it has
-  // no single (v, omega) ramp target to derive them from).
+  // style/corr_id/verb (090-004: verb_ persists the staging command's own
+  // cmd.verb the same way corrId_ persists cmd.corr_id, so a completed
+  // goal's Event can self-describe its "done <verb>" wire name -- when
+  // cmd.verb arrives empty, S/T/D/G's own convention, planner.cpp's
+  // verbFallbackFor() resolves it to this goal's own `mode` parameter's
+  // implied letter right here, so verb_ never ends up empty in practice and
+  // queueEvent() needs no further resolution), resets
+  // stopping_/baselineCaptured_, (re)activates the command, and records
+  // mode_. Does NOT touch stops_[]/stopsCount_ or stagedV_/stagedOmega_ --
+  // callers set those themselves (stageGoal() below sets the latter;
+  // DISTANCE's apply() case sets them directly since it has no single (v,
+  // omega) ramp target to derive them from).
   void stageCommon(msg::DriveMode mode, const msg::PlannerCommand& cmd);
 
   // stageGoal -- shared tail for every ramp_-driven (non-STOP/NONE) goal_kind
@@ -444,8 +458,8 @@ class Planner {
   // stop fires -- no linear_ call needed here.
   void armRotationalStopDecel(uint32_t now);
 
-  // queueEvent -- hold a completed-goal Event (reason token + the staged
-  // goal's corr_id).
+  // queueEvent -- hold a completed-goal msg::Event (kind = GOAL_DONE; reason
+  // token + the staged goal's persisted verb_/corrId_ -- 090-004).
   void queueEvent(const char* reason);
 
   // holdTwistCommand -- pack (v, omega) into a msg::DrivetrainCommand{TWIST}
@@ -574,6 +588,16 @@ class Planner {
   uint8_t stopsCount_ = 0;
   msg::StopStyle style_ = msg::StopStyle::SMOOTH;
   char corrId_[64] = {};
+  // verb_ -- 090-004: persists the staging command's own cmd.verb (bounded
+  // copy, mirroring Rt::MotionCommand::verb's own char[8]), the same way
+  // corrId_ above persists cmd.corr_id -- EXCEPT that stageCommon() resolves
+  // an empty cmd.verb (S/T/D/G) to this goal's own DriveMode-implied letter
+  // before storing it (verbFallbackFor(), planner.cpp), so verb_ never ends
+  // up empty in practice. Read back by queueEvent() into the held
+  // msg::Event's verb field so a completed goal's "done <verb>" wire name
+  // can be composed by the draining caller (CommandProcessor::emitEvent())
+  // with no Planner dependency on wire text.
+  char verb_[8] = {};
 
   // The (v, omega) staged by the most recent apply() call, latched BEFORE
   // any ramping -- read by captureBaseline() to compute MotionBaseline::
@@ -628,7 +652,7 @@ class Planner {
   msg::DrivetrainCommand heldCommand_ = {};
 
   bool hasEvent_ = false;
-  Event heldEvent_ = {};
+  msg::Event heldEvent_ = {};
 
   // dt tracking for VelocityRamp::advance(), independent of goal boundaries
   // (mirrors PoseEstimator's own haveLastTick_/lastTick_ pattern).

@@ -10,7 +10,6 @@
 
 #if ROBOT_DEV_BUILD
 
-#include <cstdio>
 #include <cstring>
 
 #include "commands/command_processor.h"
@@ -18,28 +17,6 @@
 #include "hal/capability/hal_command.h"
 
 namespace Rt {
-
-namespace {
-
-// motionVerbForMode -- maps the msg::DriveMode a Planner goal was driving to
-// its wire verb, for "EVT done <verb> ..." text. Sampled from
-// Planner::state().mode BEFORE calling tick() each pass, since a goal that
-// completes THIS pass transitions mode_ back to IDLE INSIDE that same
-// tick() call. Ported verbatim from ticket 006's transitional dev_loop.cpp.
-const char* motionVerbForMode(msg::DriveMode mode, const char* activeVelocityVerb) {
-  switch (mode) {
-    case msg::DriveMode::STREAMING:
-      return (activeVelocityVerb[0] != '\0') ? activeVelocityVerb : "S";
-    case msg::DriveMode::TIMED:
-      return (activeVelocityVerb[0] != '\0') ? activeVelocityVerb : "T";
-    case msg::DriveMode::DISTANCE: return "D";
-    case msg::DriveMode::VELOCITY: return activeVelocityVerb;
-    case msg::DriveMode::GO_TO: return "G";
-    default: return "";
-  }
-}
-
-}  // namespace
 
 MainLoop::MainLoop(Subsystems::Hardware& hardware, Subsystems::Drivetrain& drivetrain,
                     Subsystems::PoseEstimator& poseEstimator, Subsystems::Planner& planner,
@@ -105,9 +82,15 @@ void MainLoop::serviceWatchdogs(Blackboard& bb, uint32_t now) {
   // See main_loop.h's file header for why this runs before hardware_.tick().
   if (watchdog_.check(now)) {
     emergencyNeutralize();
-    char wbuf[32];
-    CommandProcessor::replyEvt(wbuf, sizeof(wbuf), "dev_watchdog", nullptr, serialReply_,
-                               serialCtx_);
+    // 090-004: a loop-originated NAMED event -- routed through the SAME
+    // emitEvent() a Planner-produced GOAL_DONE event uses (main_loop.h's own
+    // "distinct from Rt::CommandRouter's own reply channels" doc comment) --
+    // no snprintf/wire text assembled here (CommandProcessor::emitEvent()'s
+    // own doc comment owns 100% of the "EVT ..." grammar).
+    msg::Event ev;
+    ev.kind = msg::Event::Kind::NAMED;
+    std::strncpy(ev.name, "dev_watchdog", sizeof(ev.name) - 1);
+    CommandProcessor::emitEvent(ev, serialReply_, serialCtx_);
   }
 
   // The two loop-owned watchdogs' window mailboxes (DEV WD / SET sTimeout=,
@@ -123,6 +106,28 @@ void MainLoop::serviceWatchdogs(Blackboard& bb, uint32_t now) {
   }
   bb.devWatchdogWindow = watchdog_.window();
   bb.streamWatchdogWindow = streamWatchdog_.window();
+}
+
+void MainLoop::commit(Blackboard& bb, uint32_t now, bool otosFusableThisPass) {
+  // === COMMIT (clock edge): copy each subsystem cell into bb -> x[k+1]. ===
+  for (uint32_t port = 1; port <= kPortCount; ++port) {
+    bb.motors[port - 1] = hardware_.state(port);
+  }
+  bb.drivetrain = drivetrain_.state();
+  bb.encoderPose = poseEstimator_.encoderPose();
+  bb.fusedPose = poseEstimator_.fusedPose();
+  bb.planner = planner_.state();
+  Hal::Odometer* odometer = hardware_.odometer();
+  odometer->tick(now);
+  bb.otos = odometer->pose();
+  // (090-003) Reuses THIS PASS's one fusableThisPass() call (captured by
+  // tick(), at the poseEstimator_.tick() read site, and threaded through
+  // here as a parameter) rather than calling it again -- see that call
+  // site's own comment for why a second call would be wrong.
+  // A NullOdometer's override always returns false, so bb.otosValid
+  // collapses to "false" exactly when there is no device, folding in the
+  // same fact the old `!= nullptr` branch encoded, without a pointer check.
+  bb.otosValid = otosFusableThisPass;
 }
 
 void MainLoop::tick(Blackboard& bb, uint32_t now) {
@@ -149,57 +154,65 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
 
   Subsystems::DrivetrainPorts p = drivetrain_.ports();   // bound pair, from config
 
-  drivetrain_.tick(now, bb.motor[p.left - 1], bb.motor[p.right - 1], bb.driveIn);
+  // 090-001: the loop does no port-cell indexing of its own -- it passes
+  // the whole committed per-port observation array (bb.motors) and lets
+  // Drivetrain resolve its own bound pair (ports()) internally, with its own
+  // range assert. `p` above is still needed for THIS function's other two
+  // call sites below (poseEstimator_.tick()/planner_.tick()).
+  drivetrain_.tick(now, bb.motors, kPortCount, bb.driveIn);
 
   // Odometer one-shot actions (OI/OZ/OR/OV, SI's re-anchor) -- the loop
   // legitimately holds Hardware& (composition-root status, same as
   // Rt::Configurator's own exception -- Decision 4); Hal::Odometer has no
-  // tick()-driven queue parameter of its own.
+  // tick()-driven queue parameter of its own. The loop still drains and
+  // applies these -- it legitimately knows a reset happened because it just
+  // applied one -- but (090-002) the SetPose -> Pose2D -> OdometerCommand
+  // translation and the "is OTOS fusable this pass" decision now live on the
+  // odometer itself (Hal::Odometer::applySetPose()/fusableThisPass()) rather
+  // than as loop-local plumbing.
+  //
+  // (090-003) hardware_.odometer() is NEVER null (Hal::NullOdometer default,
+  // subsystems/hardware.h) -- both drain arms below now run unconditionally;
+  // the former "no device" else-arm (which existed only to keep either
+  // Mailbox from looking perpetually "full" to its next post()) is
+  // redundant now: a NullOdometer's apply()/applySetPose() already discard
+  // inertly, and the mailboxes are drained by the `if (!empty())` guards
+  // below either way.
   Hal::Odometer* odometer = hardware_.odometer();
-  // odometerResetThisPass -- true when OI/OZ/OR/OV/SI's one-shot odometer
-  // action was JUST drained (below) this SAME pass. bb.otos/bb.otosValid
-  // are state-plane cells refreshed only at THIS pass's own COMMIT step
-  // (Decision 6, x[k] semantics) -- so on the exact pass a reset lands,
-  // bb.otos still holds the STALE, pre-reset reading. Feeding that stale
-  // value into poseEstimator_.tick() as if it were a fresh OTOS measurement
-  // would fabricate a large false innovation against the fresh pose
-  // setPose() (poseResetIn) just re-anchored the EKF to THIS SAME pass --
-  // reproduced live via SI: encoderPose() landed exactly on the requested
-  // pose while fusedPose() was dragged back toward the pre-SI reading. The
-  // fix: skip OTOS fusion for exactly the one pass a reset was applied;
-  // bb.otos is correct again (matching the reset) by the very next pass,
-  // once COMMIT has refreshed it, so fusion resumes with zero innovation.
-  bool odometerResetThisPass = false;
-  if (odometer != nullptr) {
-    if (!bb.otosCommandIn.empty()) {
-      odometer->apply(bb.otosCommandIn.take());
-      odometerResetThisPass = true;
-    }
-    if (!bb.otosSetPoseIn.empty()) {
-      msg::SetPose pose = bb.otosSetPoseIn.take();
-      msg::Pose2D otosPose;
-      otosPose.x = pose.x;
-      otosPose.y = pose.y;
-      otosPose.h = pose.h;
-      msg::OdometerCommand cmd;
-      cmd.setSetPose(otosPose);
-      odometer->apply(cmd);
-      odometerResetThisPass = true;
-    }
-  } else {
-    // No device -- discard rather than let either Mailbox look
-    // perpetually "full" to its next post() (Mailbox::post() overwrites
-    // anyway, but draining keeps behavior obviously inert either way).
-    bb.otosCommandIn.take();
-    bb.otosSetPoseIn.take();
+  if (!bb.otosCommandIn.empty()) {
+    odometer->apply(bb.otosCommandIn.take());
+  }
+  if (!bb.otosSetPoseIn.empty()) {
+    odometer->applySetPose(bb.otosSetPoseIn.take());
   }
 
-  // Pose estimation reads bb.otos/bb.otosValid as committed LAST pass
-  // (x[k]) -- this pass's fresh sample is taken during COMMIT, below
-  // (Decision 6: no same-pass read of a value this SAME pass will refresh)
-  // -- EXCEPT when odometerResetThisPass, per this block's own comment.
-  poseEstimator_.tick(now, bb.motor[p.left - 1], bb.motor[p.right - 1],
-                      (bb.otosValid && !odometerResetThisPass) ? &bb.otos : nullptr,
+  // Pose estimation reads bb.otos as committed LAST pass (x[k]) -- this
+  // pass's fresh sample is taken during COMMIT, below (Decision 6: no
+  // same-pass read of a value this SAME pass will refresh) -- EXCEPT on the
+  // exact pass a reset was JUST applied above, per Hal::Odometer::
+  // fusableThisPass()'s own doc comment: bb.otos is an x[k] cell refreshed
+  // only at COMMIT, so on a reset pass it still holds the STALE, pre-reset
+  // reading, and fusing it against the freshly setPose'd EKF would fabricate
+  // a large false innovation (reproduced live via SI -- see
+  // fusableThisPass()'s doc comment for the full history).
+  //
+  // (090-003) This is fusableThisPass()'s ONE sanctioned call site this pass
+  // -- see its own doc comment for why it must never be polled twice. The
+  // result is captured ONCE, here, and reused verbatim at COMMIT below for
+  // bb.otosValid rather than calling fusableThisPass() a second time. This
+  // also replaces the former `bb.otosValid &&` short-circuit guard at this
+  // read site -- that guard existed only to avoid dereferencing a null
+  // odometer (dead code even before this ticket, since both concrete owners
+  // already override odometer() to non-null), never as a deliberate
+  // "otos not populated yet" check -- Subsystems::PoseEstimator::tick()
+  // already re-checks `otosObs->stamp.valid` internally
+  // (source/subsystems/pose_estimator.cpp) before actually fusing, so
+  // passing `&bb.otos` here whenever fusableThisPass() is true is safe even
+  // on the very first pass, before COMMIT has ever populated bb.otos (its
+  // default-constructed stamp.valid is already false).
+  bool otosFusableThisPass = odometer->fusableThisPass();
+  poseEstimator_.tick(now, bb.motors[p.left - 1], bb.motors[p.right - 1],
+                      otosFusableThisPass ? &bb.otos : nullptr,
                       bb.poseResetIn);
 
   // Motion executor: drain bb.motionIn (staged by source/commands/
@@ -233,47 +246,32 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
     stopCmd.setStop(true);
     planner_.apply(stopCmd, now);
     plannerEngagedThisPass = true;
-    char wbuf[40];
-    CommandProcessor::replyEvt(wbuf, sizeof(wbuf), "safety_stop", "reason=watchdog", serialReply_,
-                               serialCtx_);
+    // 090-004: loop-originated NAMED event -- see the dev_watchdog site
+    // above for why this is zero wire-text assembly, routed through the
+    // SAME emitEvent() a Planner-produced GOAL_DONE event uses.
+    msg::Event ev;
+    ev.kind = msg::Event::Kind::NAMED;
+    std::strncpy(ev.name, "safety_stop", sizeof(ev.name) - 1);
+    std::strncpy(ev.reason, "watchdog", sizeof(ev.reason) - 1);
+    CommandProcessor::emitEvent(ev, serialReply_, serialCtx_);
   }
 
   plannerEngagedThisPass = plannerEngagedThisPass || planner_.hasActiveCommand();
 
-  // mode is sampled BEFORE tick() -- see motionVerbForMode()'s own doc
-  // comment for why.
-  msg::DriveMode activeModeBeforeTick = planner_.state().mode;
-  planner_.tick(now, bb.motor[p.left - 1], bb.motor[p.right - 1], bb.fusedPose);
+  planner_.tick(now, bb.motors[p.left - 1], bb.motors[p.right - 1], bb.fusedPose);
   if (planner_.hasEvent()) {
-    Subsystems::Planner::Event ev = planner_.takeEvent();
-    char body[64];
-    if (ev.corrId[0] != '\0') {
-      snprintf(body, sizeof(body), "#%s reason=%s", ev.corrId, ev.reason);
-    } else {
-      snprintf(body, sizeof(body), "reason=%s", ev.reason);
-    }
-    char name[16];
-    snprintf(name, sizeof(name), "done %s", motionVerbForMode(activeModeBeforeTick,
-                                                              activeVelocityVerb_));
-    char wbuf[96];
-    CommandProcessor::replyEvt(wbuf, sizeof(wbuf), name, body, serialReply_, serialCtx_);
+    // 090-004: Planner's own event is ALREADY a fully-formed msg::Event
+    // (kind = GOAL_DONE, verb/reason/corrId all resolved by Planner itself
+    // -- see planner.h's hasEvent()/takeEvent() doc comment) -- the loop
+    // only routes it to emitEvent(), the SAME wire-layer authority the
+    // loop's own NAMED events above use. Zero EVT formatting here.
+    CommandProcessor::emitEvent(planner_.takeEvent(), serialReply_, serialCtx_);
   }
 
-  // === COMMIT (clock edge): copy each subsystem cell into bb -> x[k+1]. ===
-  for (uint32_t port = 1; port <= kPortCount; ++port) {
-    bb.motor[port - 1] = hardware_.state(port);
-  }
-  bb.drivetrain = drivetrain_.state();
-  bb.encoderPose = poseEstimator_.encoderPose();
-  bb.fusedPose = poseEstimator_.fusedPose();
-  bb.planner = planner_.state();
-  if (odometer != nullptr) {
-    odometer->tick(now);
-    bb.otos = odometer->pose();
-    bb.otosValid = true;
-  } else {
-    bb.otosValid = false;
-  }
+  // === COMMIT (clock edge): x[k] -> x[k+1] -- see commit()'s own doc
+  //     comment (main_loop.h) for exactly what it copies and why
+  //     otosFusableThisPass is threaded in rather than recomputed. ===
+  commit(bb, now, otosFusableThisPass);
 
   routeOutputs(bb, plannerEngagedThisPass);
 

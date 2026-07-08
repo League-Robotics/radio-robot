@@ -96,7 +96,7 @@ struct TlmFrameInput {
 // `bb` (x[k+1]) and returns the populated TlmFrameInput, ready for
 // buildTlmFrame(). Field sourcing (mirrors the pre-087-008 Decision 7 rules,
 // now enforced here instead of in commands/telemetry_commands.cpp):
-//   enc=/vel=  -- bb.motor[]'s position/velocity DIRECTLY for the
+//   enc=/vel=  -- bb.motors[]'s position/velocity DIRECTLY for the
 //                 Drivetrain's bound pair (bb.drivetrainConfig.left_port/
 //                 right_port). NEVER bb.drivetrain's vel_[] (commanded
 //                 targets, a different semantic).

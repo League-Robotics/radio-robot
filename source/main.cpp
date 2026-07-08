@@ -171,7 +171,16 @@ int main() {
     for (uint32_t port = 1; port <= Rt::kPortCount; ++port) {
         bb.motorCaps[port - 1] = hardware.motor(port).capabilities();
     }
-    bb.otosPresent = (hardware.odometer() != nullptr);
+    // (090-003) hardware.odometer() is NEVER null (Hal::NullOdometer
+    // default, subsystems/hardware.h) -- a `!= nullptr` test would always be
+    // true regardless of whether a REAL device backs it, so it can no
+    // longer answer "is there a device" at all. Every currently-constructed
+    // Hardware owner (NezhaHardware since 086-006, SimHardware since
+    // 081-003) already has a real Hal::Odometer leaf of its own, so this
+    // simplifies to its unconditional form (architecture-update.md
+    // Decision 3) -- the computed value is unchanged from before in every
+    // build this tree produces.
+    bb.otosPresent = true;
 
     // Prime the capabilities cache for the default DEV DT PORTS binding --
     // read back via ports() (not a local copy), matching pre-087 boot wiring.

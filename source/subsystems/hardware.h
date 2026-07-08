@@ -29,15 +29,27 @@
 // own same-now re-entry guard, ticket 003).
 //
 // odometer() (082-003): a SECOND, independent seam alongside motor()/tick() —
-// the active owner's Hal::Odometer leaf, if it has one at all. Defaulted to
-// nullptr (a virtual no-op default, NOT pure) rather than every owner having
-// to implement it, for the same reason begin() is a no-op default (Open
-// Question 1, above): Subsystems::NezhaHardware has no real-hardware OTOS
-// driver this sprint (stakeholder-approved, 2026-07-05 — sim-only fused pose
-// for 082; a real-hardware Hal::Odometer leaf is deferred to its own later
-// sprint) and must compile/link unchanged inheriting this default.
-// Subsystems::SimHardware (ticket 081-003's Hal::SimOdometer member) is the
-// only override this sprint.
+// the active owner's Hal::Odometer leaf, if it has one at all. Originally
+// defaulted to nullptr (a virtual no-op default, NOT pure) rather than every
+// owner having to implement it, for the same reason begin() is a no-op
+// default (Open Question 1, above): at the time, Subsystems::NezhaHardware
+// had no real-hardware OTOS driver (stakeholder-approved, 2026-07-05 —
+// sim-only fused pose for 082) and had to compile/link unchanged inheriting
+// this default.
+//
+// (090-003) The default is now Hal::NullOdometer (hal/capability/
+// null_odometer.h) instead of nullptr — an inert Null Object, never a real
+// per-call allocation (one shared static instance, below) — so
+// `hardware_.odometer()` NEVER returns null and every caller's former
+// `if (odometer != nullptr)` guard (main_loop.cpp's three branches,
+// main.cpp's bb.otosPresent snapshot, configurator.cpp's config guard) drops
+// to its unconditional form. Both concrete owners keep overriding odometer()
+// unchanged: Subsystems::NezhaHardware (its real Hal::OtosOdometer member,
+// since ticket 086-006) and Subsystems::SimHardware (ticket 081-003's
+// Hal::SimOdometer member) — this base default is reachable only by a
+// hypothetical THIRD owner that supplies no odometer of its own (exercised
+// directly by tests/sim/unit/null_odometer_harness.cpp's bare stub owner,
+// since no currently-constructed owner takes this path).
 //
 // Headers-only — no hardware.cpp: a pure interface, matching
 // hal/capability/*.h's own headers-only convention (see e.g.
@@ -49,6 +61,7 @@
 
 #include "hal/capability/hal_command.h"
 #include "hal/capability/motor.h"
+#include "hal/capability/null_odometer.h"
 #include "hal/capability/odometer.h"
 #include "messages/motor.h"
 #include "runtime/queue.h"
@@ -115,12 +128,17 @@ class Hardware {
   virtual msg::MotorConfig config(uint32_t port) const = 0;
   virtual msg::MotorState state(uint32_t port) const = 0;
 
-  // The active owner's Hal::Odometer leaf, or nullptr if it has none — see
-  // the file header's "odometer()" section for the defaulted-nullptr
-  // rationale. devLoopTick() (source/dev_loop.cpp) is this seam's one
-  // caller: it queries this every pass and, when non-null, feeds the
-  // sample into Subsystems::PoseEstimator.
-  virtual Hal::Odometer* odometer() { return nullptr; }
+  // The active owner's Hal::Odometer leaf, or a shared Hal::NullOdometer
+  // instance if it has none — NEVER nullptr (090-003) — see the file
+  // header's "odometer()" section for the NullOdometer default's rationale.
+  // Rt::MainLoop::tick() (source/runtime/main_loop.cpp) is this seam's one
+  // production caller: it queries this every pass and feeds the sample into
+  // Subsystems::PoseEstimator, unconditionally now that there is always a
+  // (possibly inert) Hal::Odometer to feed it from.
+  virtual Hal::Odometer* odometer() {
+    static Hal::NullOdometer nullOdometer;   // one shared instance, no per-call allocation
+    return &nullOdometer;
+  }
 };
 
 }  // namespace Subsystems

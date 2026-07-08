@@ -332,6 +332,36 @@ void CommandProcessor::replyEvt(char* buf, int size,
     fn(buf, ctx);
 }
 
+void CommandProcessor::emitEvent(const msg::Event& ev, ReplyFn fn, void* ctx)
+{
+    // 090-004: the ONE place this class (in turn, the ONE place in the whole
+    // tree) assembles "EVT ..." wire text -- see this method's own header
+    // doc comment for the two ev.kind shapes. Buffer sizes below are
+    // unchanged from the call sites this method replaces (main_loop.cpp's
+    // former inline snprintfs) so truncation behavior -- and therefore the
+    // exact wire bytes emitted -- is byte-identical to before this ticket.
+    char wbuf[96];
+    if (ev.kind == msg::Event::Kind::GOAL_DONE) {
+        char body[64];
+        if (ev.corrId[0] != '\0') {
+            snprintf(body, sizeof(body), "#%s reason=%s", ev.corrId, ev.reason);
+        } else {
+            snprintf(body, sizeof(body), "reason=%s", ev.reason);
+        }
+        char name[16];
+        snprintf(name, sizeof(name), "done %s", ev.verb);
+        replyEvt(wbuf, sizeof(wbuf), name, body, fn, ctx);
+    } else {  // NAMED
+        if (ev.reason[0] != '\0') {
+            char body[32];
+            snprintf(body, sizeof(body), "reason=%s", ev.reason);
+            replyEvt(wbuf, sizeof(wbuf), ev.name, body, fn, ctx);
+        } else {
+            replyEvt(wbuf, sizeof(wbuf), ev.name, nullptr, fn, ctx);
+        }
+    }
+}
+
 void CommandProcessor::replyOKf(char* buf, int size,
                                 const char* verb, const char* id,
                                 ReplyFn fn, void* ctx,

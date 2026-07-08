@@ -27,7 +27,12 @@
 // TURN/RT/G/STOP's motionIn fan-out), THEN commits x[k+1] (bulk subsystem-
 // state copy, routeOutputs, the periodic-telemetry call site) -- see
 // main_loop.cpp for the exact sequencing and Decision 1/2/6's rationale at
-// each step.
+// each step. As of 090-005, tick()'s body reads as a sequence of named
+// private phases -- serviceWatchdogs() -> [control/plan, inline] ->
+// commit() -> routeOutputs() -- each declared below beside this class's
+// other members, with tick()'s own inline control/plan section (hardware/
+// drivetrain/pose-estimator/planner ticks and the motion-executor drain)
+// left in place per that ticket's scope.
 //
 // Command ingestion (CommandRouter::route()) and config application
 // (Rt::Configurator::applyOne()/pending()) are deliberately NOT wrapped
@@ -109,6 +114,20 @@ class MainLoop {
   // write on both watchdog classes (no feed/re-arm), and no subsystem
   // tick reads the windows.
   void serviceWatchdogs(Blackboard& bb, uint32_t now);
+
+  // commit -- the COMMIT clock edge (090-005): copies each subsystem's
+  // freshly-ticked state into bb -> x[k+1] (bb.motors[]/bb.drivetrain/
+  // bb.encoderPose/bb.fusedPose/bb.planner), ticks the odometer and
+  // publishes its sample (bb.otos), and folds THIS pass's one sanctioned
+  // Hal::Odometer::fusableThisPass() read (see that method's own doc
+  // comment -- it may be called AT MOST ONCE per pass) into bb.otosValid.
+  // `otosFusableThisPass` is threaded in as a parameter rather than
+  // recomputed here for exactly that reason -- tick()'s earlier
+  // poseEstimator_.tick() fusion gate is fusableThisPass()'s one sanctioned
+  // caller, so commit() reuses that same call's result instead of polling
+  // it again. Called from tick() at the exact point the inline COMMIT
+  // block used to run, immediately before routeOutputs().
+  void commit(Blackboard& bb, uint32_t now, bool otosFusableThisPass);
 
   // routeOutputs -- drains Drivetrain's and Planner's OWN output edges
   // (hasCommand()/takeCommand()) into their next consumer's input queue,

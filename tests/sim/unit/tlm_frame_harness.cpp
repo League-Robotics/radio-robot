@@ -332,21 +332,21 @@ void scenarioTickAssemblesFromBareBlackboard() {
 
   Rt::Blackboard bb;   // default-constructed -- no subsystem behind any cell
 
-  // Drivetrain's bound pair: left=port 1 (bb.motor[0]), right=port 2
-  // (bb.motor[1]) -- enc=/vel= must read THESE two cells directly.
+  // Drivetrain's bound pair: left=port 1 (bb.motors[0]), right=port 2
+  // (bb.motors[1]) -- enc=/vel= must read THESE two cells directly.
   bb.drivetrainConfig.left_port = 1;
   bb.drivetrainConfig.right_port = 2;
   bb.drivetrainConfig.trackwidth = 100.0f;   // [mm]
 
-  bb.motor[0].position.has = true;
-  bb.motor[0].position.val = 500.0f;
-  bb.motor[0].velocity.has = true;
-  bb.motor[0].velocity.val = 180.0f;
+  bb.motors[0].position.has = true;
+  bb.motors[0].position.val = 500.0f;
+  bb.motors[0].velocity.has = true;
+  bb.motors[0].velocity.val = 180.0f;
 
-  bb.motor[1].position.has = true;
-  bb.motor[1].position.val = 495.0f;
-  bb.motor[1].velocity.has = true;
-  bb.motor[1].velocity.val = 220.0f;
+  bb.motors[1].position.has = true;
+  bb.motors[1].position.val = 495.0f;
+  bb.motors[1].velocity.has = true;
+  bb.motors[1].velocity.val = 220.0f;
 
   // Three independent, distinct headings (reusing baselineInput()'s own
   // 0.3/0.31/0.32 margin-tested values, so their centidegree truncations
@@ -377,7 +377,7 @@ void scenarioTickAssemblesFromBareBlackboard() {
   char buf[300];
   Telemetry::buildTlmFrame(buf, sizeof(buf), in);
 
-  // enc=/vel= straight off bb.motor[0]/[1] (the bound pair); twist= is a
+  // enc=/vel= straight off bb.motors[0]/[1] (the bound pair); twist= is a
   // REAL BodyKinematics::forward() computation over those same velocities
   // and bb.drivetrainConfig.trackwidth: v=(180+220)/2=200 exactly (both
   // operands and their sum are exactly representable in float32), and

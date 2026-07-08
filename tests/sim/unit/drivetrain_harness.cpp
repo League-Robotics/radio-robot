@@ -109,6 +109,29 @@ msg::MotorState obsVelocity(float velocity) {
   return s;
 }
 
+// 090-001: Drivetrain::tick() now takes the WHOLE per-port observation array
+// (standing in for bb.motors[]) and resolves its own bound pair internally,
+// instead of two direct MotorState references -- every scenario below must
+// place its left/right observations at the SAME 1-based port indices it
+// configured via configWithPorts() above. kTestMotorCount is a small,
+// dependency-free stand-in for Rt::kPortCount -- large enough for every
+// port pair this harness configures (up to 3/4) -- so this file keeps its
+// "no Blackboard, no subsystems/hardware.h" dependency-free shape (see the
+// file header).
+constexpr uint32_t kTestMotorCount = 4;
+
+struct MotorObservations {
+  msg::MotorState motors[kTestMotorCount];
+};
+
+MotorObservations motorsAt(uint32_t leftPort, float leftVelocity, uint32_t rightPort,
+                           float rightVelocity) {
+  MotorObservations obs;
+  obs.motors[leftPort - 1] = obsVelocity(leftVelocity);
+  obs.motors[rightPort - 1] = obsVelocity(rightVelocity);
+  return obs;
+}
+
 msg::DrivetrainCommand wheelsCommand(float left, float right) {
   msg::WheelTargets wt;
   wt.w_count = 2;
@@ -229,7 +252,8 @@ void scenarioHasCommandTakeCommandClears() {
 
   dt.apply(wheelsCommand(10.0f, 10.0f));
   Rt::Mailbox<msg::DrivetrainCommand> noDriveIn;
-  dt.tick(1000, obsVelocity(0.0f), obsVelocity(0.0f), noDriveIn);
+  MotorObservations obs = motorsAt(1, 0.0f, 2, 0.0f);
+  dt.tick(1000, obs.motors, kTestMotorCount, noDriveIn);
   checkTrue(dt.hasCommand(), "tick() unconditionally holds a command");
 
   Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
@@ -247,7 +271,8 @@ void scenarioHeldCommandPortsMatchBindingAndCarryTargets() {
 
   dt.apply(wheelsCommand(42.0f, -17.0f));
   Rt::Mailbox<msg::DrivetrainCommand> noDriveIn;
-  dt.tick(2000, obsVelocity(0.0f), obsVelocity(0.0f), noDriveIn);
+  MotorObservations obs = motorsAt(3, 0.0f, 4, 0.0f);
+  dt.tick(2000, obs.motors, kTestMotorCount, noDriveIn);
 
   checkTrue(dt.hasCommand(), "tick() held a command");
   Hal::DrivetrainToHardwareCommand cmd = dt.takeCommand();
@@ -273,7 +298,8 @@ void scenarioHeldCommandReflectsNeutralMode() {
   cmd.setNeutral(msg::Neutral::COAST);
   dt.apply(cmd);
   Rt::Mailbox<msg::DrivetrainCommand> noDriveIn;
-  dt.tick(3000, obsVelocity(0.0f), obsVelocity(0.0f), noDriveIn);
+  MotorObservations obs = motorsAt(1, 0.0f, 2, 0.0f);
+  dt.tick(3000, obs.motors, kTestMotorCount, noDriveIn);
 
   Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
   checkKindEq(held.wheel[0].command.control_kind,
@@ -303,7 +329,8 @@ void scenarioRatioGovernorTwistRegression() {
   cmd.setTwist(t);
   dt.apply(cmd);
   Rt::Mailbox<msg::DrivetrainCommand> noDriveIn;
-  dt.tick(4000, obsVelocity(80.0f), obsVelocity(100.0f), noDriveIn);
+  MotorObservations obs = motorsAt(1, 80.0f, 2, 100.0f);
+  dt.tick(4000, obs.motors, kTestMotorCount, noDriveIn);
 
   Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
   checkFloatEq(held.wheel[0].command.control.velocity, 90.0f, "governed left target");
@@ -320,7 +347,8 @@ void scenarioRatioGovernorWheelsRegression() {
 
   dt.apply(wheelsCommand(50.0f, 100.0f));
   Rt::Mailbox<msg::DrivetrainCommand> noDriveIn;
-  dt.tick(5000, obsVelocity(50.0f), obsVelocity(50.0f), noDriveIn);
+  MotorObservations obs = motorsAt(1, 50.0f, 2, 50.0f);
+  dt.tick(5000, obs.motors, kTestMotorCount, noDriveIn);
 
   Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
   checkFloatEq(held.wheel[0].command.control.velocity, 37.5f, "governed left target");
@@ -347,7 +375,8 @@ void scenarioTickPopsDriveInMailboxAndAppliesCommand() {
   driveIn.post(wheelsCommand(60.0f, 60.0f));
   checkFalse(driveIn.empty(), "post() fills the mailbox");
 
-  dt.tick(1000, obsVelocity(0.0f), obsVelocity(0.0f), driveIn);
+  MotorObservations obs = motorsAt(1, 0.0f, 2, 0.0f);
+  dt.tick(1000, obs.motors, kTestMotorCount, driveIn);
 
   checkTrue(driveIn.empty(), "tick() drained (popped) the posted command");
   checkTrue(dt.active(), "the popped WHEELS command activated authority, via apply()");
@@ -377,7 +406,8 @@ void scenarioTickWithEmptyDriveInPreservesNoNewCommandBehavior() {
   Rt::Mailbox<msg::DrivetrainCommand> driveIn;  // never posted to
   checkTrue(driveIn.empty(), "driveIn starts (and stays) empty");
 
-  dt.tick(1000, obsVelocity(0.0f), obsVelocity(0.0f), driveIn);
+  MotorObservations obs = motorsAt(1, 0.0f, 2, 0.0f);
+  dt.tick(1000, obs.motors, kTestMotorCount, driveIn);
 
   checkFalse(dt.active(), "empty driveIn: no command applied, authority stays at its default");
   checkTrue(dt.hasCommand(), "tick() still unconditionally holds an output command");

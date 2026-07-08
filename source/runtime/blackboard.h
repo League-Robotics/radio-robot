@@ -1,6 +1,6 @@
 // blackboard.h -- Rt::Blackboard: sprint 087's two-plane transport. Owns, as
 // plain members, the committed state-plane snapshot x[k] (current-value
-// cells: motor/drivetrain/pose/planner observations, current config) and
+// cells: motors/drivetrain/pose/planner observations, current config) and
 // every command-plane queue that connects each subsystem (commandsIn,
 // driveIn, motorIn[], configIn, poseResetIn, motorResetIn[],
 // otosSetPoseIn). Pure data -- no method computes anything; holds NO
@@ -88,12 +88,17 @@ struct Blackboard {
   // === State plane: committed snapshot x[k]. Written ONLY by the loop's
   //     commit step (from each subsystem's state()); read-only during a
   //     pass. ===
-  msg::MotorState motor[kPortCount];  // from Hardware
+  msg::MotorState motors[kPortCount];  // from Hardware
   msg::DrivetrainState drivetrain;    // from Drivetrain
   msg::PoseEstimate encoderPose;      // from PoseEstimator
   msg::PoseEstimate fusedPose;        // from PoseEstimator
   msg::PlannerState planner;          // from Planner
-  bool otosValid = false;             // odometer sample present?
+  // (090-003) odometer sample fusable -- derived from Hal::Odometer::
+  // fusableThisPass(), never a device-presence (`!= nullptr`) test; always
+  // false for a Hal::NullOdometer (no device). See main_loop.cpp's COMMIT
+  // step for the exact derivation (reuses the SAME pass's one sanctioned
+  // fusableThisPass() call, never a second one).
+  bool otosValid = false;
   msg::PoseEstimate otos;             // from Hardware, when valid
 
   // Current config -- published by the Configurator on apply; read by

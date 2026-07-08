@@ -42,7 +42,7 @@
 //
 // --- 087-006 reshape: pointerless translators against Rt::Blackboard ---
 // Every handler below is now a pure translator: it reads the bb state cells
-// it needs (bb.motor[]/bb.motorCaps[]/bb.drivetrain/bb.drivetrainConfig) and
+// it needs (bb.motors[]/bb.motorCaps[]/bb.drivetrain/bb.drivetrainConfig) and
 // posts a typed command onto the matching bb queue -- never calling
 // Hal::Motor/Subsystems::Drivetrain/Subsystems::Hardware directly:
 //   - DUTY/VEL/POS/VOLT/NEUTRAL/RESET post one msg::MotorCommand to
@@ -90,7 +90,7 @@
 //     loop-owned SerialSilenceWatchdog instance -- the watchdog is not one of
 //     the Configurator's four targets, architecture-update-r1.md/ticket
 //     087-007's own note).
-//   - STATE/CAPS/DEV STATE are pure reads against bb.motor[]/bb.motorCaps[]/
+//   - STATE/CAPS/DEV STATE are pure reads against bb.motors[]/bb.motorCaps[]/
 //     bb.drivetrain/bb.drivetrainConfig -- never touch any queue.
 //
 // --- Serial-silence watchdog -- NON-NEGOTIABLE (runaway history) ---

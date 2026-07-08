@@ -85,8 +85,8 @@ void scenarioBlackboardStateCellsDefaultZero() {
   checkUintEq(Rt::kPortCount, 4, "Rt::kPortCount mirrors Subsystems::Hardware::kPortCount (4)");
 
   for (uint32_t i = 0; i < Rt::kPortCount; ++i) {
-    checkFalse(bb.motor[i].connected, "motor[i].connected defaults false");
-    checkFalse(bb.motor[i].position.has, "motor[i].position defaults unset (Opt.has == false)");
+    checkFalse(bb.motors[i].connected, "motors[i].connected defaults false");
+    checkFalse(bb.motors[i].position.has, "motors[i].position defaults unset (Opt.has == false)");
   }
   checkFalse(bb.drivetrain.connected, "drivetrain.connected defaults false");
   checkFloatEq(bb.encoderPose.pose.x, 0.0f, "encoderPose.pose.x defaults 0");

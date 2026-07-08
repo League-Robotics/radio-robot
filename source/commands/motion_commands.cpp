@@ -520,6 +520,11 @@ void handleR(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
   for (uint8_t i = 0; i < stopsCount; ++i) cmd.stops_[i] = stops[i];
   cmd.stops_count = stopsCount;
   copyCorrId(cmd, corrId);
+  // 090-004: threaded through to Planner's own persisted verb_ (stageCommon())
+  // so a completed goal's msg::Event can self-describe its "done R" wire
+  // name -- mirrors mc.verb below exactly (motion_commands.h's field doc
+  // comment).
+  snprintf(cmd.verb, sizeof(cmd.verb), "R");
 
   Rt::MotionCommand mc;
   mc.command = cmd;
@@ -578,6 +583,8 @@ void handleTURN(const ArgList& args, const char* corrId, ReplyFn replyFn, void* 
   for (uint8_t i = 0; i < userCount; ++i) cmd.stops_[total++] = userStops[i];
   cmd.stops_count = total;
   copyCorrId(cmd, corrId);
+  // 090-004: see handleR()'s own comment on why this mirrors mc.verb below.
+  snprintf(cmd.verb, sizeof(cmd.verb), "TURN");
 
   Rt::MotionCommand mc;
   mc.command = cmd;
@@ -633,6 +640,8 @@ void handleRT(const ArgList& args, const char* corrId, ReplyFn replyFn, void* re
   for (uint8_t i = 0; i < userCount; ++i) cmd.stops_[total++] = userStops[i];
   cmd.stops_count = total;
   copyCorrId(cmd, corrId);
+  // 090-004: see handleR()'s own comment on why this mirrors mc.verb below.
+  snprintf(cmd.verb, sizeof(cmd.verb), "RT");
 
   Rt::MotionCommand mc;
   mc.command = cmd;

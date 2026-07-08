@@ -2,7 +2,7 @@
 id: 090
 title: 'MainLoop cohesion cleanup: Drivetrain port resolution, odometer reset/fusability
   + NullOdometer, subsystem events to replies, commit-phase extraction'
-status: ticketing
+status: done
 branch: sprint/090-mainloop-cohesion-cleanup-drivetrain-port-resolution-odometer-reset-fusability-nullodometer-subsystem-events-to-replies-commit-phase-extraction
 use-cases: []
 issues:

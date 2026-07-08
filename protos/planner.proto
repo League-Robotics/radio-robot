@@ -134,6 +134,14 @@ message PlannerCommand {
   StopStyle style              = 10;
   Origin    origin             = 11;
   string    corr_id            = 12;  // correlation ID for reply tracking
+  // verb -- 090-004: the wire verb that staged this goal, empty for S/T/D/G
+  // (Planner's own msg::DriveMode already names the verb unambiguously),
+  // "R"/"TURN"/"RT" otherwise (all three of which can share a DriveMode value
+  // with S/T -- see motion_commands.h). Threaded straight through to the
+  // Planner's own persisted verb_ (mirrors corr_id -> corrId_) so a completed
+  // goal's msg::Event can self-describe its "done <verb>" wire name without
+  // Planner depending on CommandProcessor or any wire text.
+  string    verb                = 13;
 }
 
 // Read-only snapshot of the planner's internal state.
