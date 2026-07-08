@@ -1,9 +1,11 @@
 ---
 id: '003'
 title: "NullOdometer \u2014 collapse the nullable Hardware::odometer() contract"
-status: open
-use-cases: [SUC-003]
-depends-on: ['002']
+status: in-progress
+use-cases:
+- SUC-003
+depends-on:
+- '002'
 github-issue: ''
 issue: null-odometer-object.md
 completes_issue: true
