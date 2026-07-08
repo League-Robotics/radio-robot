@@ -1,9 +1,11 @@
 ---
 id: '005'
 title: Extract MainLoop::commit(bb, now)
-status: open
-use-cases: [SUC-005]
-depends-on: ['004']
+status: in-progress
+use-cases:
+- SUC-005
+depends-on:
+- '004'
 github-issue: ''
 issue: mainloop-commit-phase-extract.md
 completes_issue: true
