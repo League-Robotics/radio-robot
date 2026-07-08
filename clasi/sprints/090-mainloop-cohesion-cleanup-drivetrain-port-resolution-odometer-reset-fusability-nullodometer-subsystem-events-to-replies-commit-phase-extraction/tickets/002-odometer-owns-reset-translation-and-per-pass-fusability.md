@@ -1,9 +1,11 @@
 ---
 id: '002'
 title: Odometer owns reset translation and per-pass fusability
-status: open
-use-cases: [SUC-002]
-depends-on: ['001']
+status: in-progress
+use-cases:
+- SUC-002
+depends-on:
+- '001'
 github-issue: ''
 issue: odometer-owns-reset-and-fusability.md
 completes_issue: true
