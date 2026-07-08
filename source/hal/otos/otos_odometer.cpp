@@ -46,15 +46,18 @@ void OtosOdometer::begin()
     // calibration (fire-and-forget — see file header).
     init();
 
-    // Mounting offset (lever-arm) is applied HOST-SIDE (source/hal/
-    // lever_arm.h), never via the chip's own REG_OFFSET (silently
-    // unwritable on this hardware — see file header). The linear/angular
-    // SCALE MULTIPLIERS from the boot config, however, DO go to the chip's
-    // own registers, converted to its raw int8 domain once here — matching
-    // OtosSensor::begin()'s scaleToInt8() conversion. OL/OA's own live wire
-    // calls (setLinearScalar()/setAngularScalar() below) operate on that
-    // same raw register domain directly, never re-deriving from a
-    // multiplier.
+    // Mounting offset (lever-arm) is STILL applied HOST-SIDE today
+    // (source/hal/lever_arm.h), not via the chip's own REG_OFFSET — 092-003
+    // ports setOffset()/getOffset() (below) but does not itself switch
+    // begin() to chip-native offset compensation; whether this project
+    // ever does depends on a real bench re-test of whether THIS chip
+    // honors the write (ticket 004's job, not this one's — see file
+    // header). The linear/angular SCALE MULTIPLIERS from the boot config,
+    // however, DO go to the chip's own registers, converted to its raw
+    // int8 domain once here — matching OtosSensor::begin()'s scaleToInt8()
+    // conversion. OL/OA's own live wire calls (setLinearScalar()/
+    // setAngularScalar() below) operate on that same raw register domain
+    // directly, never re-deriving from a multiplier.
     setLinearScalar(static_cast<float>(scaleToRegister(config_.linearScale)));
     setAngularScalar(static_cast<float>(scaleToRegister(config_.angularScale)));
 
@@ -120,6 +123,12 @@ void OtosOdometer::tick(uint32_t now)
     float yF = static_cast<float>(ry) * kPosMmPerLsb;    // [mm]
     float hF = static_cast<float>(rh) * kHdgRadPerLsb;   // [rad]
 
+    // 092-003 finding: upstream scales the VELOCITY registers with a
+    // DIFFERENT LSB constant than position/offset (see kPosMmPerLsb's own
+    // declaration comment, otos_odometer.h) -- this pre-existing use of
+    // kPosMmPerLsb/kHdgRadPerLsb for velocity is left unchanged here
+    // (out of this ticket's scope; a live twist-scaling change needs its
+    // own bench-verifiable ticket, not a sim-only port pass).
     float vxF = static_cast<float>(rvx) * kPosMmPerLsb;    // [mm/s]
     float vyF = static_cast<float>(rvy) * kPosMmPerLsb;    // [mm/s]
     float whF = static_cast<float>(rvh) * kHdgRadPerLsb;   // [rad/s]
@@ -166,7 +175,7 @@ void OtosOdometer::init()
 {
     if (!initialized_) return;
     // Enable all signal processing: LUT | Accel | Rotation | Variance = 0x0F.
-    writeReg8(kRegSignalProcessCfg, 0x0F);
+    setSignalProcessConfig(0x0F);
     // Reset Kalman tracking (bit 0 = 1) -- the SAME write resetTracking() performs.
     writeReg8(kRegReset, 0x01);
     // Kick off IMU bias calibration -- fire-and-forget, no blocking poll for
@@ -205,17 +214,63 @@ void OtosOdometer::setPose(const msg::Pose2D& pose)
     float yF = -s * sensorX + c * sensorY;
     float hF = pose.h;   // heading takes no mounting offset (tick()'s own convention)
 
-    long rx = lroundf(xF / kPosMmPerLsb);
-    long ry = lroundf(yF / kPosMmPerLsb);
-    long rh = lroundf(hF / kHdgRadPerLsb);
-    if (rx >  32767) rx =  32767;
-    if (rx < -32767) rx = -32767;
-    if (ry >  32767) ry =  32767;
-    if (ry < -32767) ry = -32767;
-    if (rh >  32767) rh =  32767;
-    if (rh < -32767) rh = -32767;
-    writeXYH(kRegPositionXl, static_cast<int16_t>(rx), static_cast<int16_t>(ry),
-             static_cast<int16_t>(rh));
+    writePoseMm(kRegPositionXl, xF, yF, hF);
+}
+
+// ---------------------------------------------------------------------------
+// setOffset()/getOffset() -- REG_OFFSET (0x10-0x15), 092-003 (SUC-003).
+// ---------------------------------------------------------------------------
+
+void OtosOdometer::setOffset(const msg::Pose2D& offset)
+{
+    if (!initialized_) return;
+    // Direct write -- REG_OFFSET holds the mounting-offset VALUE ITSELF
+    // (config_.offsetX/offsetY/offsetYaw's own domain), not a world/
+    // chassis-centre pose to be converted THROUGH the lever arm the way
+    // setPose() converts one -- see this method's own header comment.
+    writePoseMm(kRegOffsetXl, offset.x, offset.y, offset.h);
+}
+
+msg::Pose2D OtosOdometer::getOffset()
+{
+    msg::Pose2D result{};
+    if (!initialized_) return result;
+
+    int16_t rx = 0, ry = 0, rh = 0;
+    readXYH(kRegOffsetXl, rx, ry, rh);
+
+    result.x = static_cast<float>(rx) * kPosMmPerLsb;   // [mm]
+    result.y = static_cast<float>(ry) * kPosMmPerLsb;   // [mm]
+    result.h = static_cast<float>(rh) * kHdgRadPerLsb;  // [rad]
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// setSignalProcessConfig()/signalProcessConfig() -- REG_SIGNAL_PROCESS_CFG
+// (0x0E), 092-003 (SUC-003).
+// ---------------------------------------------------------------------------
+
+void OtosOdometer::setSignalProcessConfig(uint8_t config)
+{
+    if (!initialized_) return;
+    writeReg8(kRegSignalProcessCfg, config);
+}
+
+uint8_t OtosOdometer::signalProcessConfig()
+{
+    if (!initialized_) return 0;
+    return readReg8(kRegSignalProcessCfg);
+}
+
+// ---------------------------------------------------------------------------
+// imuCalibrationSamplesRemaining() -- REG_IMU_CALIBRATION (0x06) read-back,
+// 092-003 (SUC-003).
+// ---------------------------------------------------------------------------
+
+uint8_t OtosOdometer::imuCalibrationSamplesRemaining()
+{
+    if (!initialized_) return 0;
+    return readReg8(kRegImuCalibration);
 }
 
 void OtosOdometer::setLinearScalar(float scalar)
@@ -317,6 +372,49 @@ void OtosOdometer::writeXYH(uint8_t startReg, int16_t x, int16_t y, int16_t h)
     // 086-007: postClear=kBusClearance -- see writeReg8()'s own comment.
     bus_.write(static_cast<uint16_t>(kOtosDeviceAddr << 1), buf, 7, false,
                /*preClear=*/0, /*postClear=*/kBusClearance);
+}
+
+bool OtosOdometer::readXYH(uint8_t startReg, int16_t& x, int16_t& y, int16_t& h)
+{
+    // 092-003: same register-select-write + burst-read shape (and the same
+    // 086-007 kBusClearance discipline) as readPositionVelocity(), just
+    // narrower -- one plain 6-byte int16 triple, for a register block
+    // (kRegOffsetXl) tick()'s own hot path never touches. See this method's
+    // own declaration comment (otos_odometer.h) for why this stays separate
+    // from readPositionVelocity() rather than folding into it.
+    uint8_t reg = startReg;
+    uint8_t raw[6] = {0, 0, 0, 0, 0, 0};
+    int writeStatus = bus_.write(static_cast<uint16_t>(kOtosDeviceAddr << 1), &reg, 1, false,
+                                  /*preClear=*/0, /*postClear=*/kBusClearance);
+    int readStatus = bus_.read(static_cast<uint16_t>(kOtosDeviceAddr << 1), raw, 6, false,
+                                /*preClear=*/kBusClearance, /*postClear=*/0);
+
+    x = static_cast<int16_t>(raw[0] | (static_cast<uint16_t>(raw[1]) << 8));
+    y = static_cast<int16_t>(raw[2] | (static_cast<uint16_t>(raw[3]) << 8));
+    h = static_cast<int16_t>(raw[4] | (static_cast<uint16_t>(raw[5]) << 8));
+
+    return (writeStatus == MICROBIT_OK && readStatus == MICROBIT_OK);
+}
+
+void OtosOdometer::writePoseMm(uint8_t startReg, float xF, float yF, float hF)
+{
+    // 092-003: factored out of setPose()'s former inline tail so
+    // setOffset() (kRegOffsetXl) can share the EXACT SAME clamp+scale+write
+    // path setPose() (kRegPositionXl) already uses -- mirrors upstream's own
+    // shared writePoseRegs() helper (sfDevOTOS.cpp), which backs
+    // setOffset()/setPosition() alike through one function (Decision 6:
+    // same helpers, same scale, no second I/O path).
+    long rx = lroundf(xF / kPosMmPerLsb);
+    long ry = lroundf(yF / kPosMmPerLsb);
+    long rh = lroundf(hF / kHdgRadPerLsb);
+    if (rx >  32767) rx =  32767;
+    if (rx < -32767) rx = -32767;
+    if (ry >  32767) ry =  32767;
+    if (ry < -32767) ry = -32767;
+    if (rh >  32767) rh =  32767;
+    if (rh < -32767) rh = -32767;
+    writeXYH(startReg, static_cast<int16_t>(rx), static_cast<int16_t>(ry),
+             static_cast<int16_t>(rh));
 }
 
 }  // namespace Hal

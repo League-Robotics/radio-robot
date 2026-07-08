@@ -196,10 +196,13 @@ void scenarioBeginProductIdMismatchStaysUninitialized() {
 
 // 3. Never begin()'d (or begin() never detected the chip): every primitive
 //    setter AND tick() is a no-op -- zero bus traffic, matching the
-//    never-detected gate every one of them shares.
+//    never-detected gate every one of them shares. 092-003 extends this to
+//    the new setOffset()/getOffset()/setSignalProcessConfig()/
+//    signalProcessConfig()/imuCalibrationSamplesRemaining() primitives too.
 void scenarioNeverInitializedEverySetterIsNoop() {
   beginScenario("never initialized: init/resetTracking/setPose/setLinearScalar/"
-                "setAngularScalar/tick() are all no-ops");
+                "setAngularScalar/setOffset/getOffset/setSignalProcessConfig/"
+                "signalProcessConfig/imuCalibrationSamplesRemaining/tick() are all no-ops");
   I2CBus::setClock(1000000);
   I2CBus bus;
   // No scripts queued at all -- any bus traffic would immediately surface as
@@ -213,11 +216,22 @@ void scenarioNeverInitializedEverySetterIsNoop() {
   odom.setPose(msg::Pose2D{});
   odom.setLinearScalar(50.0f);
   odom.setAngularScalar(-13.0f);
+  odom.setOffset(msg::Pose2D{});
+  msg::Pose2D offset = odom.getOffset();
+  odom.setSignalProcessConfig(0x0F);
+  uint8_t signalCfg = odom.signalProcessConfig();
+  uint8_t imuRemaining = odom.imuCalibrationSamplesRemaining();
   odom.tick(1000);
 
   checkFalse(odom.connected(), "never initialized -- connected() stays false");
   checkUintEq(bus.txnCount(kAddr7), 0, "zero bus traffic from any primitive when never initialized");
   checkUintEq(bus.errCount(kAddr7), 0, "zero bus traffic means zero script-mismatch errors too");
+
+  checkNear(offset.x, 0.0f, 1e-6f, "getOffset() returns a zero Pose2D when never initialized");
+  checkNear(offset.y, 0.0f, 1e-6f, "getOffset() returns a zero Pose2D when never initialized");
+  checkNear(offset.h, 0.0f, 1e-6f, "getOffset() returns a zero Pose2D when never initialized");
+  checkUintEq(signalCfg, 0, "signalProcessConfig() returns 0 when never initialized");
+  checkUintEq(imuRemaining, 0, "imuCalibrationSamplesRemaining() returns 0 when never initialized");
 
   msg::PoseEstimate pose = odom.pose();
   checkFalse(pose.stamp.valid, "pose().stamp.valid stays false with no successful tick() ever");
@@ -349,11 +363,13 @@ void scenarioTickFailureHoldsLastGoodPoseAndRecovers() {
   checkUintEq(bus.errCount(kAddr7), 1, "exactly the one induced failure in tick 2");
 }
 
-// 7. setPose()/setLinearScalar()/setAngularScalar()/resetTracking(): each
-//    issues exactly one write when initialized (txnCount delta), zero when
-//    not (already covered by scenario 3 for the not-initialized side).
+// 7. setPose()/setLinearScalar()/setAngularScalar()/resetTracking()/
+//    setOffset()/setSignalProcessConfig(): each issues exactly one write
+//    when initialized (txnCount delta), zero when not (already covered by
+//    scenario 3 for the not-initialized side).
 void scenarioSetterTxnCounts() {
-  beginScenario("setPose()/setLinearScalar()/setAngularScalar()/resetTracking(): one write each");
+  beginScenario("setPose()/setLinearScalar()/setAngularScalar()/resetTracking()/"
+                "setOffset()/setSignalProcessConfig(): one write each");
   I2CBus::setClock(1000000);
   I2CBus bus;
   scriptGenerousWrites(bus, 20);
@@ -377,6 +393,14 @@ void scenarioSetterTxnCounts() {
 
   odom.resetTracking();
   checkUintEq(bus.txnCount(kAddr7) - base, 1, "resetTracking() issues exactly one write");
+  base = bus.txnCount(kAddr7);
+
+  odom.setOffset(msg::Pose2D{});
+  checkUintEq(bus.txnCount(kAddr7) - base, 1, "setOffset() issues exactly one write");
+  base = bus.txnCount(kAddr7);
+
+  odom.setSignalProcessConfig(0x0F);
+  checkUintEq(bus.txnCount(kAddr7) - base, 1, "setSignalProcessConfig() issues exactly one write");
 
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
 }
@@ -426,6 +450,89 @@ void scenarioTickRateLimitsBusReads() {
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
 }
 
+// 9. setOffset()/getOffset() (092-003, SUC-003): register scaling round
+//    trip -- setOffset() writes a known offset, a scripted read-back
+//    (encoded with the SAME kPosMmPerLsb/kHdgRadPerLsb math setOffset()
+//    itself uses) proves getOffset() correctly inverts it. Also proves the
+//    expected txn shape: setOffset() is one write; getOffset() is one
+//    write (register-select) + one 6-byte read.
+void scenarioSetOffsetGetOffsetScalingRoundTrip() {
+  beginScenario("setOffset()/getOffset(): REG_OFFSET register scaling round-trip");
+  I2CBus::setClock(1000000);
+  I2CBus bus;
+  scriptGenerousWrites(bus, 20);
+  scriptProductId(bus, 0x5F);
+
+  Hal::OtosOdometer odom(bus, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  odom.begin();
+  uint32_t base = bus.txnCount(kAddr7);
+
+  msg::Pose2D offset;
+  offset.x = 42.7f;    // [mm]
+  offset.y = -13.2f;   // [mm]
+  offset.h = 0.15f;    // [rad]
+
+  odom.setOffset(offset);
+  checkUintEq(bus.txnCount(kAddr7) - base, 1, "setOffset() issues exactly one write");
+  base = bus.txnCount(kAddr7);
+
+  // Script a read-back encoded with the EXACT SAME round-to-nearest-LSB math
+  // setOffset() itself performs (kPosMmPerLsb/kHdgRadPerLsb) -- proves
+  // getOffset() decodes REG_OFFSET's int16 triple with the inverse of that
+  // SAME scaling (Decision 6: same helpers, same scale as position).
+  int16_t rx = static_cast<int16_t>(lroundf(offset.x / kPosMmPerLsb));
+  int16_t ry = static_cast<int16_t>(lroundf(offset.y / kPosMmPerLsb));
+  int16_t rh = static_cast<int16_t>(lroundf(offset.h / kHdgRadPerLsb));
+  uint8_t raw[6] = {
+      static_cast<uint8_t>(rx & 0xFF), static_cast<uint8_t>((rx >> 8) & 0xFF),
+      static_cast<uint8_t>(ry & 0xFF), static_cast<uint8_t>((ry >> 8) & 0xFF),
+      static_cast<uint8_t>(rh & 0xFF), static_cast<uint8_t>((rh >> 8) & 0xFF),
+  };
+  bus.scriptRead(kWireAddr, raw, 6, /*status=*/0);
+
+  msg::Pose2D readBack = odom.getOffset();
+  checkUintEq(bus.txnCount(kAddr7) - base, 2, "getOffset() issues exactly one write + one 6-byte read");
+
+  checkNear(readBack.x, offset.x, 0.5f, "getOffset().x round-trips within one LSB (~0.3mm)");
+  checkNear(readBack.y, offset.y, 0.5f, "getOffset().y round-trips within one LSB");
+  checkNear(readBack.h, offset.h, 1e-4f, "getOffset().h round-trips within one LSB");
+
+  checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
+}
+
+// 10. signalProcessConfig()/imuCalibrationSamplesRemaining() (092-003,
+//     SUC-003): each is a plain one-write + one-read register access
+//     (register-select then a single-byte read), returning the raw byte
+//     the fake scripts back -- no scaling, so this proves the pass-through
+//     is exact, not just the txn shape.
+void scenarioSignalProcessConfigAndImuCalibrationProgressReads() {
+  beginScenario("signalProcessConfig()/imuCalibrationSamplesRemaining(): raw register read-back");
+  I2CBus::setClock(1000000);
+  I2CBus bus;
+  scriptGenerousWrites(bus, 20);
+  scriptProductId(bus, 0x5F);
+
+  Hal::OtosOdometer odom(bus, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  odom.begin();
+  uint32_t base = bus.txnCount(kAddr7);
+
+  uint8_t signalRaw[1] = {0x0F};
+  bus.scriptRead(kWireAddr, signalRaw, 1, /*status=*/0);
+  uint8_t signalCfg = odom.signalProcessConfig();
+  checkUintEq(bus.txnCount(kAddr7) - base, 2, "signalProcessConfig() issues exactly one write + one read");
+  checkUintEq(signalCfg, 0x0F, "signalProcessConfig() returns the raw scripted byte unmodified");
+  base = bus.txnCount(kAddr7);
+
+  uint8_t imuRaw[1] = {37};
+  bus.scriptRead(kWireAddr, imuRaw, 1, /*status=*/0);
+  uint8_t imuRemaining = odom.imuCalibrationSamplesRemaining();
+  checkUintEq(bus.txnCount(kAddr7) - base, 2,
+              "imuCalibrationSamplesRemaining() issues exactly one write + one read");
+  checkUintEq(imuRemaining, 37, "imuCalibrationSamplesRemaining() returns the raw scripted byte unmodified");
+
+  checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
+}
+
 }  // namespace
 
 int main() {
@@ -437,6 +544,8 @@ int main() {
   scenarioTickFailureHoldsLastGoodPoseAndRecovers();
   scenarioSetterTxnCounts();
   scenarioTickRateLimitsBusReads();
+  scenarioSetOffsetGetOffsetScalingRoundTrip();
+  scenarioSignalProcessConfigAndImuCalibrationProgressReads();
 
   if (g_failureCount == 0) {
     std::printf("OK: all OtosOdometer scenarios passed\n");
