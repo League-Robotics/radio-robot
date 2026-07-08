@@ -100,7 +100,7 @@ void MainLoop::routeOutputs(Blackboard& bb, bool plannerEngagedThisPass) {
   }
 }
 
-void MainLoop::tick(Blackboard& bb, uint32_t now) {
+void MainLoop::serviceWatchdogs(Blackboard& bb, uint32_t now) {
   // === SAFETY WATCHDOG -- mandatory, first, same-pass deterministic. ===
   // See main_loop.h's file header for why this runs before hardware_.tick().
   if (watchdog_.check(now)) {
@@ -109,6 +109,26 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
     CommandProcessor::replyEvt(wbuf, sizeof(wbuf), "dev_watchdog", nullptr, serialReply_,
                                serialCtx_);
   }
+
+  // The two loop-owned watchdogs' window mailboxes (DEV WD / SET sTimeout=,
+  // posted last slack) -- drained directly (neither watchdog is one of the
+  // Configurator's four targets), then published for GET/telemetry reads.
+  // Drained AFTER the check above, so a window posted last slack governs
+  // the NEXT pass's check -- see this method's main_loop.h doc comment.
+  if (!bb.devWatchdogWindowIn.empty()) {
+    watchdog_.setWindow(bb.devWatchdogWindowIn.take());
+  }
+  if (!bb.streamWatchdogWindowIn.empty()) {
+    streamWatchdog_.setWindow(bb.streamWatchdogWindowIn.take());
+  }
+  bb.devWatchdogWindow = watchdog_.window();
+  bb.streamWatchdogWindow = streamWatchdog_.window();
+}
+
+void MainLoop::tick(Blackboard& bb, uint32_t now) {
+  // SAFETY WATCHDOG check + estop, then watchdog-window config upkeep --
+  // FIRST, before hardware_.tick(), per main_loop.h's file header.
+  serviceWatchdogs(bb, now);
 
   // === MANDATORY: control. Reads bb (x[k]); consumes commands routed
   //     during the previous slack; each subsystem writes its OWN cell. ===
@@ -126,18 +146,6 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
     broadcast.addressed[0].command = neutral;
     hardware_.apply(broadcast);
   }
-
-  // The two loop-owned watchdogs' window mailboxes (DEV WD / SET sTimeout=,
-  // posted last slack) -- drained directly (neither watchdog is one of the
-  // Configurator's four targets), then published for GET/telemetry reads.
-  if (!bb.devWatchdogWindowIn.empty()) {
-    watchdog_.setWindow(bb.devWatchdogWindowIn.take());
-  }
-  if (!bb.streamWatchdogWindowIn.empty()) {
-    streamWatchdog_.setWindow(bb.streamWatchdogWindowIn.take());
-  }
-  bb.devWatchdogWindow = watchdog_.window();
-  bb.streamWatchdogWindow = streamWatchdog_.window();
 
   Subsystems::DrivetrainPorts p = drivetrain_.ports();   // bound pair, from config
 

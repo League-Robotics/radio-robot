@@ -1,5 +1,14 @@
 ---
-status: pending
+status: done
+sprint: 089
+tickets:
+- 089-001
+- 089-002
+- 089-003
+- 089-004
+- 089-005
+- 089-006
+- 089-007
 ---
 
 # Planner motion planning via vendored Ruckig (jerk-limited online trajectory generation; stop-at-zero by construction)

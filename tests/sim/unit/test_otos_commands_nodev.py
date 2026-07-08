@@ -94,6 +94,12 @@ _PLANNER_SRC = _SOURCE_DIR / "subsystems" / "planner.cpp"
 _BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
 _VELOCITY_RAMP_SRC = _SOURCE_DIR / "motion" / "velocity_ramp.cpp"
 _STOP_CONDITION_SRC = _SOURCE_DIR / "motion" / "stop_condition.cpp"
+# 089-003: planner.h now #includes motion/jerk_trajectory.h (DISTANCE's new
+# linear channel), which in turn #includes the vendored Ruckig headers --
+# mirrors test_planner.py's own identical addition.
+_JERK_TRAJECTORY_SRC = _SOURCE_DIR / "motion" / "jerk_trajectory.cpp"
+_RUCKIG_INCLUDE = _REPO_ROOT / "libraries" / "ruckig" / "include"
+_RUCKIG_SRC_DIR = _REPO_ROOT / "libraries" / "ruckig" / "src"
 _EKF_TINY_SRC = _SOURCE_DIR / "estimation" / "ekf_tiny.cpp"
 _TLM_FRAME_SRC = _SOURCE_DIR / "telemetry" / "tlm_frame.cpp"
 _CLOCK_HOST_SRC = _SOURCE_DIR / "types" / "clock_host.cpp"
@@ -121,15 +127,19 @@ _SOURCES = [
     _BODY_KINEMATICS_SRC,
     _VELOCITY_RAMP_SRC,
     _STOP_CONDITION_SRC,
+    _JERK_TRAJECTORY_SRC,
     _EKF_TINY_SRC,
     _TLM_FRAME_SRC,
     _CLOCK_HOST_SRC,
 ]
 
-# messages/common.h documents its own target as "CODAL C++11" -- build the
-# host harness to the same standard so it exercises exactly the language
-# subset the firmware itself uses.
-_CXX_STANDARD = "c++20"
+# 089-003: gnu++20 (GNU extensions -- newlib exposes M_PI, which Ruckig's
+# roots.hpp needs) plus -fno-exceptions/-fno-rtti, matching
+# test_jerk_trajectory.py's/test_ruckig_smoke.py's own precedent -- Planner
+# now transitively compiles Ruckig, so every harness that links planner.cpp
+# must build under the SAME constraints the firmware itself imposes.
+_CXX_STANDARD = "gnu++20"
+_CONSTRAINT_FLAGS = ["-fno-exceptions", "-fno-rtti"]
 
 
 def _find_cxx_compiler() -> str:
@@ -150,6 +160,9 @@ def test_otos_commands_nodev_harness_compiles_and_passes(tmp_path):
     for src in _SOURCES:
         assert src.is_file(), f"required source missing: {src}"
     assert _SOURCE_DIR.is_dir(), f"source/ tree missing: {_SOURCE_DIR}"
+    assert _RUCKIG_INCLUDE.is_dir(), f"ruckig include missing: {_RUCKIG_INCLUDE}"
+    ruckig_srcs = sorted(_RUCKIG_SRC_DIR.glob("*.cpp"))
+    assert ruckig_srcs, f"no vendored ruckig sources under {_RUCKIG_SRC_DIR}"
 
     cxx = _find_cxx_compiler()
     binary = tmp_path / "otos_commands_harness"
@@ -158,6 +171,7 @@ def test_otos_commands_nodev_harness_compiles_and_passes(tmp_path):
         [
             cxx,
             f"-std={_CXX_STANDARD}",
+            *_CONSTRAINT_FLAGS,
             "-Wall",
             "-Wextra",
             "-DHOST_BUILD",
@@ -168,10 +182,13 @@ def test_otos_commands_nodev_harness_compiles_and_passes(tmp_path):
             str(_TYPES_DIR),
             "-I",
             str(_TINYEKF_DIR),
+            "-I",
+            str(_RUCKIG_INCLUDE),
             "-o",
             str(binary),
         ]
-        + [str(src) for src in _SOURCES],
+        + [str(src) for src in _SOURCES]
+        + [str(s) for s in ruckig_srcs],
         capture_output=True,
         text=True,
     )

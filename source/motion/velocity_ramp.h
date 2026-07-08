@@ -12,6 +12,14 @@
 // `DEV DT VW` already does. Duplicating kinematics/saturation here would be
 // the shotgun-surgery risk Decision 3 explicitly rejects.
 //
+// Sole caller's own goal-kind usage narrowed by 089-005 (architecture-
+// update.md (089) Decision 5, Step 5): DISTANCE/TIMED/VELOCITY/STREAM/TURN/
+// ROTATION all migrated onto Motion::JerkTrajectory over tickets 003-005;
+// as of 089-005 this class is called ONLY for `GOTO_GOAL`'s PRE_ROTATE and
+// PURSUE sub-phases (Subsystems::Planner::tick()'s own `mode_ == GO_TO`
+// dispatch, planner.h). No code change here -- this is a doc-comment-only
+// update; this class's own behavior is unaffected either way.
+//
 // Unit note: msg::PlannerConfig's yaw_rate_max/yaw_acc_max/yaw_jerk_max carry
 // no unit annotation in protos/planner.proto -- unlike source_old's
 // RobotConfig, which stored the same three quantities in deg/s, deg/s^2,
