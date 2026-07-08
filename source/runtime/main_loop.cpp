@@ -108,6 +108,28 @@ void MainLoop::serviceWatchdogs(Blackboard& bb, uint32_t now) {
   bb.streamWatchdogWindow = streamWatchdog_.window();
 }
 
+void MainLoop::commit(Blackboard& bb, uint32_t now, bool otosFusableThisPass) {
+  // === COMMIT (clock edge): copy each subsystem cell into bb -> x[k+1]. ===
+  for (uint32_t port = 1; port <= kPortCount; ++port) {
+    bb.motors[port - 1] = hardware_.state(port);
+  }
+  bb.drivetrain = drivetrain_.state();
+  bb.encoderPose = poseEstimator_.encoderPose();
+  bb.fusedPose = poseEstimator_.fusedPose();
+  bb.planner = planner_.state();
+  Hal::Odometer* odometer = hardware_.odometer();
+  odometer->tick(now);
+  bb.otos = odometer->pose();
+  // (090-003) Reuses THIS PASS's one fusableThisPass() call (captured by
+  // tick(), at the poseEstimator_.tick() read site, and threaded through
+  // here as a parameter) rather than calling it again -- see that call
+  // site's own comment for why a second call would be wrong.
+  // A NullOdometer's override always returns false, so bb.otosValid
+  // collapses to "false" exactly when there is no device, folding in the
+  // same fact the old `!= nullptr` branch encoded, without a pointer check.
+  bb.otosValid = otosFusableThisPass;
+}
+
 void MainLoop::tick(Blackboard& bb, uint32_t now) {
   // SAFETY WATCHDOG check + estop, then watchdog-window config upkeep --
   // FIRST, before hardware_.tick(), per main_loop.h's file header.
@@ -246,23 +268,10 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
     CommandProcessor::emitEvent(planner_.takeEvent(), serialReply_, serialCtx_);
   }
 
-  // === COMMIT (clock edge): copy each subsystem cell into bb -> x[k+1]. ===
-  for (uint32_t port = 1; port <= kPortCount; ++port) {
-    bb.motors[port - 1] = hardware_.state(port);
-  }
-  bb.drivetrain = drivetrain_.state();
-  bb.encoderPose = poseEstimator_.encoderPose();
-  bb.fusedPose = poseEstimator_.fusedPose();
-  bb.planner = planner_.state();
-  odometer->tick(now);
-  bb.otos = odometer->pose();
-  // (090-003) Reuses THIS PASS's one fusableThisPass() call (captured above,
-  // at the poseEstimator_.tick() read site) rather than calling it again --
-  // see that call site's own comment for why a second call would be wrong.
-  // A NullOdometer's override always returns false, so bb.otosValid
-  // collapses to "false" exactly when there is no device, folding in the
-  // same fact the old `!= nullptr` branch encoded, without a pointer check.
-  bb.otosValid = otosFusableThisPass;
+  // === COMMIT (clock edge): x[k] -> x[k+1] -- see commit()'s own doc
+  //     comment (main_loop.h) for exactly what it copies and why
+  //     otosFusableThisPass is threaded in rather than recomputed. ===
+  commit(bb, now, otosFusableThisPass);
 
   routeOutputs(bb, plannerEngagedThisPass);
 
