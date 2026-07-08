@@ -159,37 +159,19 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
   // Odometer one-shot actions (OI/OZ/OR/OV, SI's re-anchor) -- the loop
   // legitimately holds Hardware& (composition-root status, same as
   // Rt::Configurator's own exception -- Decision 4); Hal::Odometer has no
-  // tick()-driven queue parameter of its own.
+  // tick()-driven queue parameter of its own. The loop still drains and
+  // applies these -- it legitimately knows a reset happened because it just
+  // applied one -- but (090-002) the SetPose -> Pose2D -> OdometerCommand
+  // translation and the "is OTOS fusable this pass" decision now live on the
+  // odometer itself (Hal::Odometer::applySetPose()/fusableThisPass()) rather
+  // than as loop-local plumbing.
   Hal::Odometer* odometer = hardware_.odometer();
-  // odometerResetThisPass -- true when OI/OZ/OR/OV/SI's one-shot odometer
-  // action was JUST drained (below) this SAME pass. bb.otos/bb.otosValid
-  // are state-plane cells refreshed only at THIS pass's own COMMIT step
-  // (Decision 6, x[k] semantics) -- so on the exact pass a reset lands,
-  // bb.otos still holds the STALE, pre-reset reading. Feeding that stale
-  // value into poseEstimator_.tick() as if it were a fresh OTOS measurement
-  // would fabricate a large false innovation against the fresh pose
-  // setPose() (poseResetIn) just re-anchored the EKF to THIS SAME pass --
-  // reproduced live via SI: encoderPose() landed exactly on the requested
-  // pose while fusedPose() was dragged back toward the pre-SI reading. The
-  // fix: skip OTOS fusion for exactly the one pass a reset was applied;
-  // bb.otos is correct again (matching the reset) by the very next pass,
-  // once COMMIT has refreshed it, so fusion resumes with zero innovation.
-  bool odometerResetThisPass = false;
   if (odometer != nullptr) {
     if (!bb.otosCommandIn.empty()) {
       odometer->apply(bb.otosCommandIn.take());
-      odometerResetThisPass = true;
     }
     if (!bb.otosSetPoseIn.empty()) {
-      msg::SetPose pose = bb.otosSetPoseIn.take();
-      msg::Pose2D otosPose;
-      otosPose.x = pose.x;
-      otosPose.y = pose.y;
-      otosPose.h = pose.h;
-      msg::OdometerCommand cmd;
-      cmd.setSetPose(otosPose);
-      odometer->apply(cmd);
-      odometerResetThisPass = true;
+      odometer->applySetPose(bb.otosSetPoseIn.take());
     }
   } else {
     // No device -- discard rather than let either Mailbox look
@@ -202,9 +184,16 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
   // Pose estimation reads bb.otos/bb.otosValid as committed LAST pass
   // (x[k]) -- this pass's fresh sample is taken during COMMIT, below
   // (Decision 6: no same-pass read of a value this SAME pass will refresh)
-  // -- EXCEPT when odometerResetThisPass, per this block's own comment.
+  // -- EXCEPT on the exact pass a reset was JUST applied above, per
+  // Hal::Odometer::fusableThisPass()'s own doc comment: bb.otos is an x[k]
+  // cell refreshed only at COMMIT, so on a reset pass it still holds the
+  // STALE, pre-reset reading, and fusing it against the freshly setPose'd
+  // EKF would fabricate a large false innovation (reproduced live via SI --
+  // see fusableThisPass()'s doc comment for the full history). This is
+  // fusableThisPass()'s ONE sanctioned call site this pass -- see its own
+  // doc comment for why it must never be polled twice.
   poseEstimator_.tick(now, bb.motors[p.left - 1], bb.motors[p.right - 1],
-                      (bb.otosValid && !odometerResetThisPass) ? &bb.otos : nullptr,
+                      (bb.otosValid && odometer->fusableThisPass()) ? &bb.otos : nullptr,
                       bb.poseResetIn);
 
   // Motion executor: drain bb.motionIn (staged by source/commands/

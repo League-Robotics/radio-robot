@@ -23,6 +23,7 @@
 #include <stdint.h>
 
 #include "messages/common.h"
+#include "messages/drivetrain.h"
 #include "messages/odometer.h"
 
 namespace Hal {
@@ -54,11 +55,48 @@ class Odometer {
   void apply(const msg::OdometerCommand& command);
   void configure(const msg::OdometerConfig& config);
 
+  // applySetPose() (090-002) — the SetPose -> Pose2D -> OdometerCommand
+  // translation that used to be inlined at main_loop.cpp's SI/otosSetPoseIn
+  // drain site. Concrete, built on apply()'s existing SET_POSE dispatch
+  // (never duplicates the reset-flag bookkeeping apply() already does) —
+  // same "built on primitives, not on leaf storage" discipline as apply()/
+  // configure() above.
+  void applySetPose(const msg::SetPose& pose);
+
+  // fusableThisPass() (090-002) — READ-AND-CLEAR, SINGLE-CALLER query.
+  // Mirrors this codebase's hasEvent()/takeEvent() one-shot-signal
+  // convention (e.g. Subsystems::Planner) rather than a plain getter: the
+  // very act of calling this method clears the transient it reports, so it
+  // may be called AT MOST ONCE per pass. Its one sanctioned caller is
+  // Rt::MainLoop::tick()'s poseEstimator_.tick() fusion gate — calling it a
+  // second time in the same pass would wrongly consume the signal and make
+  // the second caller (or the first, if called again next pass before a new
+  // reset) see a stale `true` that hides a still-pending skip, or a
+  // spuriously-cleared `false` that should have been reported. Do NOT poll
+  // this from more than one call site.
+  //
+  // Returns false for exactly the one call immediately following a reset
+  // applied THIS pass via applySetPose() or apply(const msg::OdometerCommand&)
+  // (covering all four reset actions — INIT/ZERO/RESET_TRACKING/SET_POSE);
+  // true otherwise. See apply()'s own reset-flag bookkeeping below for why
+  // all four actions participate, not only SET_POSE.
+  virtual bool fusableThisPass();
+
   // Message plane — declared, not defined (no caller needs this yet;
   // dev_loop.cpp/telemetry_commands.cpp both read pose() directly instead —
   // see capability/gripper.h's file header for the "declared, not defined"
   // mechanism this relies on).
   msg::PoseEstimate state() const;
+
+ private:
+  // resetAppliedThisPass_ (090-002) — set true by apply()'s dispatch for
+  // every one of the four reset actions (INIT/ZERO/RESET_TRACKING/SET_POSE)
+  // and cleared by fusableThisPass()'s read-and-clear. Private: only this
+  // base class's own apply()/fusableThisPass() bodies ever touch it — no
+  // leaf needs (or is allowed) to set or clear it directly, so there is
+  // nothing for a leaf override to bypass (apply() itself is not virtual;
+  // see this class's own file header).
+  bool resetAppliedThisPass_ = false;
 };
 
 // --- apply()/configure(): the shared message plane, defined once here (same
@@ -66,21 +104,32 @@ class Odometer {
 // capability/odometer.cpp exists). ---
 
 inline void Odometer::apply(const msg::OdometerCommand& command) {
+  // 090-002: every action arm below sets resetAppliedThisPass_ = true — all
+  // four OdometerCommand actions (INIT/ZERO/RESET_TRACKING/SET_POSE) are
+  // one-shot odometer resets that main_loop.cpp's odometerResetThisPass used
+  // to track by hand; see fusableThisPass()'s own doc comment for the
+  // consumer side of this flag. This runs in the BASE class's own (non-
+  // virtual) apply(), so it fires regardless of what a leaf's setPose()/
+  // init()/resetTracking() override does — no leaf can bypass it.
   switch (command.action_kind) {
     case msg::OdometerCommand::ActionKind::INIT:
       init();
+      resetAppliedThisPass_ = true;
       break;
     case msg::OdometerCommand::ActionKind::ZERO:
       // Real-hardware effect is setPositionRaw(0, 0, 0) (docs/protocol-v2.md
       // §11's "OZ" section) — the SAME primitive SET_POSE uses, just with an
       // all-zero Pose2D rather than the caller-supplied one.
       setPose(msg::Pose2D());
+      resetAppliedThisPass_ = true;
       break;
     case msg::OdometerCommand::ActionKind::RESET_TRACKING:
       resetTracking();
+      resetAppliedThisPass_ = true;
       break;
     case msg::OdometerCommand::ActionKind::SET_POSE:
       setPose(command.action.set_pose);
+      resetAppliedThisPass_ = true;
       break;
     case msg::OdometerCommand::ActionKind::NONE:
     default:
@@ -91,6 +140,27 @@ inline void Odometer::apply(const msg::OdometerCommand& command) {
 inline void Odometer::configure(const msg::OdometerConfig& config) {
   setLinearScalar(config.linear_scalar);
   setAngularScalar(config.angular_scalar);
+}
+
+inline void Odometer::applySetPose(const msg::SetPose& pose) {
+  // SetPose -> Pose2D -> OdometerCommand translation, ported verbatim from
+  // main_loop.cpp's former inline otosSetPoseIn drain (090-002). Dispatches
+  // through apply() rather than calling setPose() directly so the SET_POSE
+  // arm's resetAppliedThisPass_ bookkeeping above runs exactly once, from
+  // exactly one place.
+  msg::Pose2D otosPose;
+  otosPose.x = pose.x;
+  otosPose.y = pose.y;
+  otosPose.h = pose.h;
+  msg::OdometerCommand cmd;
+  cmd.setSetPose(otosPose);
+  apply(cmd);
+}
+
+inline bool Odometer::fusableThisPass() {
+  bool wasReset = resetAppliedThisPass_;
+  resetAppliedThisPass_ = false;
+  return !wasReset;
 }
 
 }  // namespace Hal
