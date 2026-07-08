@@ -1,7 +1,7 @@
 ---
 id: '007'
 title: 'Bench verification on the stand: D/T/TURN/RT motion accuracy and G spot-check'
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 - SUC-003
@@ -279,3 +279,35 @@ own follow-on issue (not filed here — this session's scope excludes
 touching `clasi/issues/`) and re-verified once fixed, since it currently
 blocks TURN's and `G`'s own criteria independent of anything this sprint
 changed.
+
+---
+
+## Team-lead closure record (2026-07-07)
+
+This ticket is marked **done as DESCOPED**, not as passed. The two failing
+acceptance criteria (D/T reverse motion; TURN/G blocked by frozen pose) are
+**NOT met** and are left unchecked deliberately — do not read this ticket
+as "the D/T terminal-overshoot fix is validated on hardware." It is not.
+
+Per stakeholder decision (2026-07-07): skip the remaining bench testing
+(radio-relay round-trip) and close the sprint, deferring both findings to
+fresh pool issues for a future sprint:
+
+- **Finding 1 — D/T terminal reverse persists** →
+  `clasi/issues/d-t-terminal-reverse-persists-decel-reseed-from-plan-velocity.md`
+  (decel re-solve seeds from the plan's believed velocity while the loose
+  bench-tuned PID runs the real wheel faster; 11–21 mm on D, 19–23 mm on T).
+- **Finding 2 — PoseEstimator fused pose frozen on hardware** →
+  `clasi/issues/poseestimator-fused-pose-frozen-on-hardware.md`
+  (pre-existing, unchanged by this sprint; blocks TURN completion and G
+  arrival).
+- **Relay round-trip** — not run (dongle unconnected); the transport gap is
+  already tracked by `clasi/issues/relay-round-trip-bench-verification.md`.
+
+What this sprint DID land and is validated: the vendored-Ruckig build
+integration, the `Motion::JerkTrajectory` wrapper, the D/T/R/S/TURN/RT
+migration onto it, the consolidated no-reverse sim proof (308 passed, 2
+xfailed), the working Decision-10 divergence-replan machinery (D/RT complete
+via their own stop conditions, never the STOP_TIME net), and the ~12 ms
+on-target solve-time headroom characterization. The remaining hardware
+terminal-accuracy gap is carried forward in the two issues above.
