@@ -96,6 +96,18 @@ TlmFrameInput tick(uint32_t now, const Rt::Blackboard& bb) {
   in.velLeft = velLeft;
   in.velRight = velRight;
 
+  // cmd= -- the drivetrain's commanded per-wheel velocity (vel_[0]=left,
+  // vel_[1]=right; drivetrain.cpp state()), i.e. the velocity PID's setpoint.
+  // Present whenever the drivetrain reports its two wheel targets (vel_count
+  // >= 2); omitted (like every optional field) when it does not. Read from
+  // bb.drivetrain here deliberately -- unlike vel=/enc= (measured, from
+  // bb.motors[]), cmd= IS the commanded-target semantic bb.drivetrain owns.
+  if (bb.drivetrain.vel_count_val() >= 2) {
+    in.hasCmdVel = true;
+    in.cmdVelLeft = bb.drivetrain.vel()[0];
+    in.cmdVelRight = bb.drivetrain.vel()[1];
+  }
+
   // pose=/encpose= read bb's two independent pose readings -- never
   // bb.drivetrain either.
   in.hasPose = true;
@@ -144,6 +156,11 @@ int buildTlmFrame(char* buf, int len, const TlmFrameInput& in) {
   if (in.hasVel) {
     appendField(buf, pos, rem, truncated, " vel=%d,%d",
                 static_cast<int>(in.velLeft), static_cast<int>(in.velRight));
+  }
+
+  if (in.hasCmdVel) {
+    appendField(buf, pos, rem, truncated, " cmd=%d,%d",
+                static_cast<int>(in.cmdVelLeft), static_cast<int>(in.cmdVelRight));
   }
 
   if (in.hasPose) {

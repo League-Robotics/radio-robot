@@ -119,6 +119,12 @@ Telemetry::TlmFrameInput baselineInput() {
   in.velLeft = 198.0f;
   in.velRight = 201.0f;
 
+  // cmd= (commanded/setpoint) uses values distinct from vel= (measured) so a
+  // formatter that swapped the two tokens would be caught by the exact match.
+  in.hasCmdVel = true;
+  in.cmdVelLeft = 205.0f;
+  in.cmdVelRight = 195.0f;
+
   // Heading values are chosen with a comfortable fractional margin (>0.1)
   // away from any centidegree integer boundary -- e.g. 0.3 rad * kAngleScale
   // ~= 1718.87 -- so float32 rounding noise can never flip the truncated
@@ -162,8 +168,9 @@ void scenarioAllFieldsPresentExactMatch() {
   int n = Telemetry::buildTlmFrame(buf, sizeof(buf), in);
 
   const std::string expected =
-      "TLM t=12345 mode=S seq=7 enc=1024,1019 vel=198,201 pose=350,-12,1718"
-      " encpose=349,-11,1776 otos=351,-13,1833 otosconn=1 twist=200,500";
+      "TLM t=12345 mode=S seq=7 enc=1024,1019 vel=198,201 cmd=205,195"
+      " pose=350,-12,1718 encpose=349,-11,1776 otos=351,-13,1833 otosconn=1"
+      " twist=200,500";
   checkEq(std::string(buf), expected, "exact formatted line");
   checkTrue(n == static_cast<int>(expected.size()), "return value equals formatted length");
   checkTrue(std::strlen(buf) == expected.size(), "NUL terminator lands exactly at the formatted length");
@@ -184,6 +191,7 @@ void scenarioNoOptionalFields() {
   checkEq(std::string(buf), "TLM t=500 mode=I seq=0", "prefix-only line");
   checkTrue(!contains(buf, "enc="), "enc= absent");
   checkTrue(!contains(buf, "vel="), "vel= absent");
+  checkTrue(!contains(buf, "cmd="), "cmd= absent");
   checkTrue(!contains(buf, "pose="), "pose= absent (encpose= substring check below disambiguates)");
   checkTrue(!contains(buf, "encpose="), "encpose= absent");
   checkTrue(!contains(buf, "otos="), "otos= absent");
@@ -221,8 +229,25 @@ void scenarioVelOmittedIndependently() {
 
   checkTrue(contains(buf, "enc=1024,1019"), "enc= still present and correct");
   checkTrue(!contains(buf, "vel="), "vel= absent when hasVel is false");
+  checkTrue(contains(buf, "cmd=205,195"), "cmd= still present and correct (independent of vel=)");
   checkTrue(contains(buf, "pose=350,-12,1718"), "pose= still present and correct");
   checkTrue(contains(buf, "twist=200,500"), "twist= still present and correct");
+}
+
+// (b) cmd= independently omitted -- the commanded-velocity token is absent
+// while measured vel= (and every other field) is unaffected.
+void scenarioCmdVelOmittedIndependently() {
+  beginScenario("cmd= omitted independently");
+
+  Telemetry::TlmFrameInput in = baselineInput();
+  in.hasCmdVel = false;
+
+  char buf[300];
+  Telemetry::buildTlmFrame(buf, sizeof(buf), in);
+
+  checkTrue(!contains(buf, "cmd="), "cmd= absent when hasCmdVel is false");
+  checkTrue(contains(buf, "vel=198,201"), "vel= (measured) still present and correct");
+  checkTrue(contains(buf, "pose=350,-12,1718"), "pose= still present and correct");
 }
 
 // (b) pose= independently omitted -- must not also remove encpose= (which
@@ -376,6 +401,14 @@ void scenarioTickAssemblesFromBareBlackboard() {
   bb.motors[1].velocity.has = true;
   bb.motors[1].velocity.val = 220.0f;
 
+  // Commanded per-wheel velocity (the PID setpoints) live on bb.drivetrain,
+  // vel_[0]=left, vel_[1]=right -- distinct from the measured bb.motors[]
+  // velocities above so a source mix-up (cmd= reading bb.motors, or vel=
+  // reading bb.drivetrain) would be caught by the exact match below.
+  bb.drivetrain.vel_[0] = 190.0f;
+  bb.drivetrain.vel_[1] = 210.0f;
+  bb.drivetrain.vel_count = 2;
+
   // Three independent, distinct headings (reusing baselineInput()'s own
   // 0.3/0.31/0.32 margin-tested values, so their centidegree truncations
   // -- 1718/1776/1833 -- are already known-good) with distinct x/y so a
@@ -413,8 +446,9 @@ void scenarioTickAssemblesFromBareBlackboard() {
   // omega=(220-180)/100=0.4 rad/s -> 400 mrad/s (0.4's float32 rounding
   // error is ~6e-6, nowhere near the next integer boundary at 401).
   const std::string expected =
-      "TLM t=99999 mode=D seq=42 enc=500,495 vel=180,220 pose=400,-20,1718"
-      " encpose=398,-19,1776 otos=402,-21,1833 otosconn=1 twist=200,400";
+      "TLM t=99999 mode=D seq=42 enc=500,495 vel=180,220 cmd=190,210"
+      " pose=400,-20,1718 encpose=398,-19,1776 otos=402,-21,1833 otosconn=1"
+      " twist=200,400";
   checkEq(std::string(buf), expected, "frame assembled entirely from bare Rt::Blackboard cells");
 }
 
@@ -425,6 +459,7 @@ int main() {
   scenarioNoOptionalFields();
   scenarioEncOmittedIndependently();
   scenarioVelOmittedIndependently();
+  scenarioCmdVelOmittedIndependently();
   scenarioPoseOmittedIndependently();
   scenarioEncPoseOmittedIndependently();
   scenarioOtosOmittedNotZeroFilled();
