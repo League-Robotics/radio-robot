@@ -217,8 +217,17 @@ int main() {
         //     see this file's header) -- routing still wins over config
         //     application (Decision 8). ===
         uint32_t deadline = now + kPeriod;
+        // 093: yield to the CODAL scheduler at most ONCE per slack window
+        // instead of every pass. The per-pass uBit.sleep(1) added by 087-007
+        // churns the scheduler ~1000x/s, and its brief IRQ-masked context
+        // switches starve the DMA serial RX -- tripling serial command drops
+        // (the 087-006 -> 087-007 regression, bisected). One yield per ~20ms
+        // slack still lets CODAL deliver radio datagrams (Decision 9: radio RX
+        // only runs when the loop yields a fiber slice) at ~50 Hz, far above
+        // the radio's ~12 msg/s rate, while the rest of the slack busy-reads
+        // serial so an inbound command is drained immediately.
+        bool yieldedThisSlack = false;
         do {
-            uBit.sleep(1);   // YIELD: radio delivery + other fibers run
             comm.tick(uBit.systemTime());
             if (comm.hasCommand()) {
                 // A taken command is copied into a local
@@ -232,6 +241,9 @@ int main() {
                 router.route(command, bb);
             } else if (configurator.pending(bb)) {
                 configurator.applyOne(bb);
+            } else if (!yieldedThisSlack) {
+                uBit.sleep(1);   // YIELD once/slack: radio delivery + other fibers
+                yieldedThisSlack = true;
             }
         } while (uBit.systemTime() < deadline);
     }
