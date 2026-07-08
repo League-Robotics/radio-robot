@@ -149,6 +149,7 @@ struct PlannerCommand {
     StopStyle style = static_cast<StopStyle>(0);
     Origin origin = static_cast<Origin>(0);
     char corr_id[64] = {};
+    char verb[64] = {};
 
     // --- array / optional-string accessors ---
     const StopCondition* stops() const { return stops_; }
@@ -199,6 +200,7 @@ struct PlannerCommand {
     PlannerCommand& setStyle(StopStyle v) { style = v; return *this; }
     PlannerCommand& setOrigin(Origin v) { origin = v; return *this; }
     // setCorrId: set corr_id[] directly (char array)
+    // setVerb: set verb[] directly (char array)
 };
 
 // PlannerState

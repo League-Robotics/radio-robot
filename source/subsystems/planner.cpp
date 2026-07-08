@@ -32,6 +32,37 @@ const char* reasonTokenFor(msg::StopKind kind) {
   }
 }
 
+// verbFallbackFor -- 090-004: the wire verb implied by a goal's own
+// DriveMode, for the goal kinds whose msg::PlannerCommand.verb arrives
+// empty (S/T/D/G -- mirrors Rt::MotionCommand::verb's own "empty for
+// S/T/D/G, disambiguating letter otherwise" convention,
+// source/commands/motion_commands.cpp). Ported from main_loop.cpp's former
+// motionVerbForMode(): that function needed the SAME two inputs (a
+// DriveMode plus a disambiguating override) to name a completed goal's "done
+// <verb>" wire text, but read them from loop-local state sampled around
+// tick(); this class already has both at STAGE time -- stageCommon()'s own
+// `mode` parameter is exactly the resolved DriveMode motionVerbForMode()
+// used to dispatch on, so the fallback resolves right there (see
+// stageCommon()) instead of needing a second, later read of loop state that
+// no longer exists. Purely a short data token -- the same category as
+// reasonTokenFor()'s reason strings above -- never wire text;
+// CommandProcessor::emitEvent() still owns 100% of the "EVT ..." grammar
+// (planner.h's class comment; .claude/rules/naming-and-style.md sec 4).
+const char* verbFallbackFor(msg::DriveMode mode) {
+  switch (mode) {
+    case msg::DriveMode::STREAMING:
+      return "S";
+    case msg::DriveMode::TIMED:
+      return "T";
+    case msg::DriveMode::DISTANCE:
+      return "D";
+    case msg::DriveMode::GO_TO:
+      return "G";
+    default:
+      return "";
+  }
+}
+
 // kDegToRad -- degrees -> radians, for PlannerConfig.turn_in_place_gate
 // (stored in DEGREES, not radians -- main.cpp's defaultPlannerConfig()'s own
 // comment: "matches docs/protocol-v2.md sec 10's G default", 35 deg).
@@ -114,6 +145,24 @@ void Planner::appendStop(msg::StopKind kind, float a, float b, float ax) {
 void Planner::stageCommon(msg::DriveMode mode, const msg::PlannerCommand& cmd) {
   style_ = cmd.style;
   for (int i = 0; i < 64; ++i) corrId_[i] = cmd.corr_id[i];
+  // 090-004: bounded copy (cmd.verb is a generated char[64]; verb_ mirrors
+  // Rt::MotionCommand::verb's own char[8] -- see planner.h's field comment)
+  // -- every wire verb this field ever carries ("R"/"TURN"/"RT") is well
+  // under 7 characters, so this never truncates in practice. Empty for
+  // S/T/D/G (motion_commands.cpp never sets cmd.verb for those) -- the
+  // fallback below fills in THIS goal's own DriveMode-implied letter for
+  // exactly those cases (verbFallbackFor()'s own doc comment), so
+  // queueEvent() can always just read verb_ verbatim with no further
+  // resolution needed at completion time.
+  int vi = 0;
+  for (; cmd.verb[vi] != '\0' && vi < 7; ++vi) verb_[vi] = cmd.verb[vi];
+  verb_[vi] = '\0';
+  if (verb_[0] == '\0') {
+    const char* fallback = verbFallbackFor(mode);
+    int fi = 0;
+    for (; fallback[fi] != '\0' && fi < 7; ++fi) verb_[fi] = fallback[fi];
+    verb_[fi] = '\0';
+  }
   stopping_ = false;
   baselineCaptured_ = false;
   activeCmd_ = true;
@@ -722,7 +771,11 @@ void Planner::armRotationalStopDecel(uint32_t now) {
 
 void Planner::queueEvent(const char* reason) {
   hasEvent_ = true;
-  heldEvent_ = Event{};
+  heldEvent_ = msg::Event{};
+  heldEvent_.kind = msg::Event::Kind::GOAL_DONE;
+  int v = 0;
+  for (; verb_[v] != '\0' && v < 7; ++v) heldEvent_.verb[v] = verb_[v];
+  heldEvent_.verb[v] = '\0';
   int i = 0;
   for (; reason[i] != '\0' && i < 15; ++i) heldEvent_.reason[i] = reason[i];
   heldEvent_.reason[i] = '\0';
@@ -998,7 +1051,7 @@ msg::DrivetrainCommand Planner::takeCommand() {
 
 bool Planner::hasEvent() const { return hasEvent_; }
 
-Planner::Event Planner::takeEvent() {
+msg::Event Planner::takeEvent() {
   hasEvent_ = false;
   return heldEvent_;
 }

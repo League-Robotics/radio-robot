@@ -10,7 +10,6 @@
 
 #if ROBOT_DEV_BUILD
 
-#include <cstdio>
 #include <cstring>
 
 #include "commands/command_processor.h"
@@ -18,28 +17,6 @@
 #include "hal/capability/hal_command.h"
 
 namespace Rt {
-
-namespace {
-
-// motionVerbForMode -- maps the msg::DriveMode a Planner goal was driving to
-// its wire verb, for "EVT done <verb> ..." text. Sampled from
-// Planner::state().mode BEFORE calling tick() each pass, since a goal that
-// completes THIS pass transitions mode_ back to IDLE INSIDE that same
-// tick() call. Ported verbatim from ticket 006's transitional dev_loop.cpp.
-const char* motionVerbForMode(msg::DriveMode mode, const char* activeVelocityVerb) {
-  switch (mode) {
-    case msg::DriveMode::STREAMING:
-      return (activeVelocityVerb[0] != '\0') ? activeVelocityVerb : "S";
-    case msg::DriveMode::TIMED:
-      return (activeVelocityVerb[0] != '\0') ? activeVelocityVerb : "T";
-    case msg::DriveMode::DISTANCE: return "D";
-    case msg::DriveMode::VELOCITY: return activeVelocityVerb;
-    case msg::DriveMode::GO_TO: return "G";
-    default: return "";
-  }
-}
-
-}  // namespace
 
 MainLoop::MainLoop(Subsystems::Hardware& hardware, Subsystems::Drivetrain& drivetrain,
                     Subsystems::PoseEstimator& poseEstimator, Subsystems::Planner& planner,
@@ -105,9 +82,15 @@ void MainLoop::serviceWatchdogs(Blackboard& bb, uint32_t now) {
   // See main_loop.h's file header for why this runs before hardware_.tick().
   if (watchdog_.check(now)) {
     emergencyNeutralize();
-    char wbuf[32];
-    CommandProcessor::replyEvt(wbuf, sizeof(wbuf), "dev_watchdog", nullptr, serialReply_,
-                               serialCtx_);
+    // 090-004: a loop-originated NAMED event -- routed through the SAME
+    // emitEvent() a Planner-produced GOAL_DONE event uses (main_loop.h's own
+    // "distinct from Rt::CommandRouter's own reply channels" doc comment) --
+    // no snprintf/wire text assembled here (CommandProcessor::emitEvent()'s
+    // own doc comment owns 100% of the "EVT ..." grammar).
+    msg::Event ev;
+    ev.kind = msg::Event::Kind::NAMED;
+    std::strncpy(ev.name, "dev_watchdog", sizeof(ev.name) - 1);
+    CommandProcessor::emitEvent(ev, serialReply_, serialCtx_);
   }
 
   // The two loop-owned watchdogs' window mailboxes (DEV WD / SET sTimeout=,
@@ -241,30 +224,26 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
     stopCmd.setStop(true);
     planner_.apply(stopCmd, now);
     plannerEngagedThisPass = true;
-    char wbuf[40];
-    CommandProcessor::replyEvt(wbuf, sizeof(wbuf), "safety_stop", "reason=watchdog", serialReply_,
-                               serialCtx_);
+    // 090-004: loop-originated NAMED event -- see the dev_watchdog site
+    // above for why this is zero wire-text assembly, routed through the
+    // SAME emitEvent() a Planner-produced GOAL_DONE event uses.
+    msg::Event ev;
+    ev.kind = msg::Event::Kind::NAMED;
+    std::strncpy(ev.name, "safety_stop", sizeof(ev.name) - 1);
+    std::strncpy(ev.reason, "watchdog", sizeof(ev.reason) - 1);
+    CommandProcessor::emitEvent(ev, serialReply_, serialCtx_);
   }
 
   plannerEngagedThisPass = plannerEngagedThisPass || planner_.hasActiveCommand();
 
-  // mode is sampled BEFORE tick() -- see motionVerbForMode()'s own doc
-  // comment for why.
-  msg::DriveMode activeModeBeforeTick = planner_.state().mode;
   planner_.tick(now, bb.motors[p.left - 1], bb.motors[p.right - 1], bb.fusedPose);
   if (planner_.hasEvent()) {
-    Subsystems::Planner::Event ev = planner_.takeEvent();
-    char body[64];
-    if (ev.corrId[0] != '\0') {
-      snprintf(body, sizeof(body), "#%s reason=%s", ev.corrId, ev.reason);
-    } else {
-      snprintf(body, sizeof(body), "reason=%s", ev.reason);
-    }
-    char name[16];
-    snprintf(name, sizeof(name), "done %s", motionVerbForMode(activeModeBeforeTick,
-                                                              activeVelocityVerb_));
-    char wbuf[96];
-    CommandProcessor::replyEvt(wbuf, sizeof(wbuf), name, body, serialReply_, serialCtx_);
+    // 090-004: Planner's own event is ALREADY a fully-formed msg::Event
+    // (kind = GOAL_DONE, verb/reason/corrId all resolved by Planner itself
+    // -- see planner.h's hasEvent()/takeEvent() doc comment) -- the loop
+    // only routes it to emitEvent(), the SAME wire-layer authority the
+    // loop's own NAMED events above use. Zero EVT formatting here.
+    CommandProcessor::emitEvent(planner_.takeEvent(), serialReply_, serialCtx_);
   }
 
   // === COMMIT (clock edge): copy each subsystem cell into bb -> x[k+1]. ===

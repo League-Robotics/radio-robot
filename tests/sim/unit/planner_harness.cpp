@@ -439,7 +439,7 @@ void scenarioDistanceGoalFiresImplicitStopAbrupt() {
   checkFloatNear(held.control.twist.v_x, 0.0f, 1e-6f, "ABRUPT reset zeroes the held twist immediately");
 
   checkTrue(planner.hasEvent(), "DISTANCE stop firing queues an event");
-  Subsystems::Planner::Event evt = planner.takeEvent();
+  msg::Event evt = planner.takeEvent();
   checkStrEq(evt.reason, "dist", "reason token is \"dist\" for a fired STOP_DISTANCE");
   checkStrEq(evt.corrId, "dist1", "corrId round-trips from the staged PlannerCommand");
   checkFalse(planner.hasEvent(), "takeEvent() clears hasEvent()");
@@ -866,7 +866,7 @@ void scenarioTimedGoalSmoothRampDown() {
   checkFalse(planner.hasActiveCommand(), "converged -- goal is now complete");
   checkTrue(planner.hasEvent(), "convergence queues the completion event");
 
-  Subsystems::Planner::Event evt = planner.takeEvent();
+  msg::Event evt = planner.takeEvent();
   checkStrEq(evt.reason, "time", "reason token is \"time\" for a fired STOP_TIME");
   checkStrEq(evt.corrId, "t1", "corrId round-trips from the staged PlannerCommand");
 }
