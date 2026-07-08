@@ -181,6 +181,14 @@ class PhysicsWorld {
     if (side == 1 || side > 1) motorLagR_ = tauMs;
   }
 
+  // Per-wheel Coulomb (dry) friction: a constant velocity-opposing
+  // deceleration [mm/s^2], applied after the lag stage. decel <= 0 (default)
+  // skips the step so the output velocity is bit-exact. side: 0=L, 1=R, 2=both.
+  void setCoulombFriction(int side, float decel) {  // [mm/s^2]
+    if (side == 0 || side > 1) coulombDecelL_ = decel;
+    if (side == 1 || side > 1) coulombDecelR_ = decel;
+  }
+
   // Per-tick turn rate (set by Subsystems::SimHardware before update());
   // used only by the reported-encoder slip term (sub-step A').
   void setTurnRate(float r) { turnRate_ = r; }
@@ -305,6 +313,13 @@ class PhysicsWorld {
   float motorLagR_    = 0.0f;  // [ms]
   float lagVelL_      = 0.0f;  // [mm/s] persistent lag-filter state
   float lagVelR_      = 0.0f;  // [mm/s] persistent lag-filter state
+  // coulombDecelL_/R_: constant velocity-opposing deceleration [mm/s^2],
+  // default 0 => no-op (branch skipped, output velocity bit-exact). Models
+  // Coulomb (dry) friction: it drags the achieved velocity toward rest each
+  // tick and can never flip its sign, so it damps the terminal reverse-creep
+  // the real drivetrain's friction limits but a frictionless plant does not.
+  float coulombDecelL_ = 0.0f;  // [mm/s^2]
+  float coulombDecelR_ = 0.0f;  // [mm/s^2]
 
 #ifdef HOST_BUILD
   // Two independent generators so the LEFT/RIGHT encoder-noise draw streams

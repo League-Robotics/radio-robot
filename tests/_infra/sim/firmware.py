@@ -268,6 +268,12 @@ class Sim:
     def set_motor_lag(self, side: int, tau: float) -> None:  # [ms]
         self._lib.sim_set_motor_lag(self._h, ctypes.c_int(side), ctypes.c_float(tau))
 
+    def set_nominal_max_speed(self, speed: float) -> None:  # [mm/s]
+        self._lib.sim_set_nominal_max_speed(self._h, ctypes.c_float(speed))
+
+    def set_coulomb_friction(self, side: int, decel: float) -> None:  # [mm/s^2]
+        self._lib.sim_set_coulomb_friction(self._h, ctypes.c_int(side), ctypes.c_float(decel))
+
     def set_trackwidth(self, trackwidth: float) -> None:  # [mm]
         self._lib.sim_set_trackwidth(self._h, ctypes.c_float(trackwidth))
 
@@ -361,7 +367,7 @@ class Sim:
         # Error-knob setters (14).
         for name in (
             "sim_set_enc_scale_error", "sim_set_enc_slip", "sim_set_enc_noise",
-            "sim_set_stiction", "sim_set_motor_lag",
+            "sim_set_stiction", "sim_set_motor_lag", "sim_set_coulomb_friction",
         ):
             fn = getattr(lib, name)
             fn.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_float]
@@ -369,6 +375,9 @@ class Sim:
 
         lib.sim_set_trackwidth.argtypes = [ctypes.c_void_p, ctypes.c_float]
         lib.sim_set_trackwidth.restype = None
+
+        lib.sim_set_nominal_max_speed.argtypes = [ctypes.c_void_p, ctypes.c_float]
+        lib.sim_set_nominal_max_speed.restype = None
 
         for name in ("sim_set_body_rotational_scrub", "sim_set_body_linear_scrub"):
             fn = getattr(lib, name)

@@ -498,6 +498,14 @@ void sim_set_motor_lag(void* h, int side, float tau) {   // [ms]
     Hal::setSimMotorLag(static_cast<SimHandle*>(h)->hardware.plant(), side, tau);
 }
 
+void sim_set_nominal_max_speed(void* h, float speed) {   // [mm/s]
+    Hal::setSimNominalMaxSpeed(static_cast<SimHandle*>(h)->hardware.plant(), speed);
+}
+
+void sim_set_coulomb_friction(void* h, int side, float decel) {   // [mm/s^2]
+    Hal::setSimCoulombFriction(static_cast<SimHandle*>(h)->hardware.plant(), side, decel);
+}
+
 void sim_set_trackwidth(void* h, float trackwidth) {
     Hal::setSimTrackwidth(static_cast<SimHandle*>(h)->hardware.plant(), trackwidth);
 }

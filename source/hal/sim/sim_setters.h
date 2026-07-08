@@ -72,6 +72,19 @@ inline void setSimMotorLag(PhysicsWorld& plant, int side, float tauMs) {  // [ms
   plant.setMotorLag(side, tauMs);
 }
 
+// Mutates PhysicsWorld's nominalMaxSpeed_ (the duty->velocity plant gain:
+// velocity at full duty). The real robot's effective gain differs from the
+// compiled 400 mm/s default; exposing it lets a fit match measured cruise.
+inline void setSimNominalMaxSpeed(PhysicsWorld& plant, float speed) {  // [mm/s]
+  plant.setNominalMaxSpeed(speed);
+}
+
+// Mutates PhysicsWorld's coulombDecelL_/R_ (constant velocity-opposing dry
+// friction [mm/s^2]; <= 0 = no-op). Damps the terminal reverse-creep.
+inline void setSimCoulombFriction(PhysicsWorld& plant, int side, float decel) {  // [mm/s^2]
+  plant.setCoulombFriction(side, decel);
+}
+
 // --- Chassis-level plant knobs. ---
 
 // Mutates PhysicsWorld's trackwidth_.
