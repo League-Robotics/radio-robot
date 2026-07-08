@@ -35,6 +35,18 @@ message MotorState {
       // (encoder-zeroing) resets; testability/bench verification
   optional uint32 soft_reset_count  = 8;  // cumulative count of soft
       // (non-zeroing) rebaseline resets; testability/bench verification
+  bool active = 9;  // commanded (never measured) running/neutral state:
+      // true while this motor is under a non-neutral control mode
+      // (DUTY_CYCLE/VOLTAGE/VELOCITY/POSITION), false on NEUTRAL. Always
+      // populated (unlike position/velocity/wedged, needs no has_encoder
+      // gate -- every leaf can answer "am I under a non-neutral command"
+      // regardless of encoder capability). Mirrors DrivetrainState.active
+      // one tier down (091-003: architecture-update.md Decision 3) --
+      // Rt::MainLoop::serviceWatchdogs() reads bb.motors[i].active as part
+      // of its fire-gate, alongside bb.drivetrain.active, since a
+      // bound-port authority-steal (isBoundPort() in dev_commands.cpp)
+      // drives DrivetrainState.active false while the port itself keeps
+      // spinning under a standalone DEV M command.
 }
 
 // Configuration parameters for a motor.

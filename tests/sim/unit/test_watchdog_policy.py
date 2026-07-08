@@ -3,6 +3,17 @@ serial-silence watchdog window below the ``sim`` fixture's wide default and
 then going quiet for longer than that window fires exactly one
 ``EVT dev_watchdog``, drained via ``Sim.get_async_evts()`` -- and
 neutralizes the commanded motor.
+
+091-003 (architecture-update.md Decision 3) adds the fire-GATE: comms
+silence past the window only fires while motors are actually commanded to
+run (``bb.drivetrain.active || any(bb.motors[i].active)``). The three
+tests above (unmodified per this ticket's acceptance) already command a
+motor before going silent, so ``bb.motors[0].active`` stays true
+throughout and their outcome is unchanged. The two tests below cover the
+NEW idle case: motors stopped/neutral + silence past the window must NOT
+fire, whether never commanded at all, or driven and then explicitly
+neutralized before going silent (proving the gate reads CURRENT state, not
+"was ever commanded").
 """
 
 _NARROW_WINDOW = 100   # [ms] -- above dev_commands.cpp's kDevWdArgs floor (50)
@@ -87,3 +98,49 @@ def test_watchdog_neutralizes_within_the_same_pass_it_fires_in(sim):
         "motor neutralized (ground-truth pwm=0) -- no additional pass of "
         "bb.motorIn[]/bb.driveIn queue latency"
     )
+
+
+def test_watchdog_does_not_fire_when_idle(sim):
+    """091-003 (architecture-update.md Decision 3): the robot is completely
+    idle -- no ``DEV M``/``DEV DT`` motion verb has EVER been issued -- so
+    ``bb.drivetrain.active`` and every ``bb.motors[i].active`` are false.
+    Comms silence past the (narrowed) window must NOT fire: no neutralize,
+    no ``EVT dev_watchdog``. This is the spurious-fire case the issue
+    (watchdog-arm-only-while-motors-running.md) exists to fix.
+    """
+    reply = sim.command(f"DEV WD {_NARROW_WINDOW}")
+    assert reply.strip() == f"OK DEV WD window={_NARROW_WINDOW}"
+
+    # No motion verb ever issued. Push well past the window with no further
+    # command arriving.
+    sim.tick_for(200)
+
+    evts = sim.get_async_evts()
+    assert "dev_watchdog" not in evts
+
+    # The (already-neutral) motor state is unaffected -- no spurious estop.
+    assert sim.pwm() == (0.0, 0.0)
+
+
+def test_watchdog_does_not_fire_after_explicit_neutralize(sim):
+    """091-003: a port WAS driven, then explicitly neutralized
+    (``DEV M <n> NEUTRAL B``) before comms go silent past the window --
+    still no fire. Proves the fire-gate reads bb's CURRENT commanded state
+    each pass, not a "was this port ever commanded" latch -- the exact
+    one-way-latch anti-pattern Decision 3 rejects (architecture-update.md's
+    Decision 3 alternative (c)).
+    """
+    sim.command(f"DEV WD {_NARROW_WINDOW}")
+    sim.command("DEV M 1 VEL 50")
+
+    sim.tick_for(60)
+    assert sim.pwm()[0] != 0.0, "expected the motor to be driving before neutralizing"
+
+    sim.command("DEV M 1 NEUTRAL B")
+
+    # Silence past the window, with the port already explicitly neutral.
+    sim.tick_for(200)
+
+    evts = sim.get_async_evts()
+    assert "dev_watchdog" not in evts
+    assert sim.pwm() == (0.0, 0.0)

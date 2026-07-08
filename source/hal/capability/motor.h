@@ -78,6 +78,14 @@ class Motor {
   uint32_t hardResetCount() const;   // cumulative hard (encoder-zeroing) resets
   uint32_t softResetCount() const;   // cumulative soft (non-zeroing) rebaselines
 
+  // active() -- sprint 091 ticket 003 (architecture-update.md Decision 3):
+  // commanded (never measured) running/neutral state, toggled by apply()'s
+  // dispatch switch below (true on DUTY_CYCLE/VOLTAGE/VELOCITY/POSITION,
+  // false on NEUTRAL, untouched on NONE/a rejected command). Read by
+  // Rt::MainLoop::serviceWatchdogs()'s fire-gate via bb.motors[i].active,
+  // alongside bb.drivetrain.active -- see that method's own doc comment.
+  bool active() const;
+
   // Faceplate verbs.
   // configure() is concrete (sprint 078 armor policy): caches
   // reversalDwell_/outputDeadband_ from the two new optional MotorConfig
@@ -132,6 +140,8 @@ class Motor {
   uint8_t movingStuckCount_ = 0;          // same test, gated by |appliedDuty()| > outputDeadband_
   bool wedgeLatched_ = false;
   bool wedgeSuspect_ = false;
+
+  bool active_ = false;                   // commanded running/neutral state (never measured)
 
  private:
   // Ship defaults substituted by configure() when MotorConfig's two new
@@ -189,6 +199,7 @@ inline bool Motor::wedged() const { return wedgeLatched_; }
 inline bool Motor::wedgeSuspect() const { return wedgeSuspect_; }
 inline uint32_t Motor::hardResetCount() const { return hardResetCount_; }
 inline uint32_t Motor::softResetCount() const { return softResetCount_; }
+inline bool Motor::active() const { return active_; }
 
 inline void Motor::configure(const msg::MotorConfig& config) {
   reversalDwell_ = config.reversal_dwell.has ? config.reversal_dwell.val
@@ -212,26 +223,32 @@ inline bool Motor::apply(const msg::MotorCommand& command) {
   switch (kind) {
     case msg::MotorCommand::ControlKind::DUTY_CYCLE:
       setDutyCycle(command.control.duty_cycle);
+      active_ = true;
       break;
     case msg::MotorCommand::ControlKind::VOLTAGE:
       setVoltage(command.control.voltage);
+      active_ = true;
       break;
     case msg::MotorCommand::ControlKind::VELOCITY:
       setVelocity(command.control.velocity);
+      active_ = true;
       break;
     case msg::MotorCommand::ControlKind::POSITION:
       setPosition(command.control.position);
+      active_ = true;
       break;
     case msg::MotorCommand::ControlKind::NEUTRAL:
       // Neutral is always accepted — every motor must be able to go
       // neutral regardless of which drive modes it otherwise supports.
       setNeutral(command.control.neutral);
+      active_ = false;
       break;
     case msg::MotorCommand::ControlKind::NONE:
     default:
       // No control arm set — e.g. a command whose only payload is
       // reset_position (DEV M <n> RESET). Nothing to dispatch here; the
-      // reset/feedforward side-channels below still apply.
+      // reset/feedforward side-channels below still apply. active_ is
+      // deliberately left untouched (091-003: this is not a mode change).
       break;
   }
 
@@ -253,6 +270,7 @@ inline msg::MotorState Motor::state() const {
   const msg::MotorCapabilities caps = capabilities();
 
   s.connected = connected();
+  s.active = active();
   s.applied.has = true;
   s.applied.val = appliedDuty();
 

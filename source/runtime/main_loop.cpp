@@ -77,10 +77,36 @@ void MainLoop::routeOutputs(Blackboard& bb, bool plannerEngagedThisPass) {
   }
 }
 
+namespace {
+
+// motorsRunning -- 091-003 fire-gate predicate (architecture-update.md
+// Decision 3): true iff bb's last-committed snapshot shows either the
+// Drivetrain's own bound-pair output active, or any individual motor port
+// under a non-neutral commanded mode. Reads only bb -- computes nothing
+// new. `DrivetrainState.active` alone is NOT sufficient: isBoundPort()'s
+// authority-steal in dev_commands.cpp drives it false the instant a
+// bound-port DEV M motion verb lands, even though that port keeps
+// spinning under the now-standalone command (see msg::MotorState.active's
+// own proto doc comment) -- hence the OR across bb.motors[] too.
+bool motorsRunning(const Blackboard& bb) {
+  if (bb.drivetrain.active) return true;
+  for (uint32_t port = 0; port < kPortCount; ++port) {
+    if (bb.motors[port].active) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
 void MainLoop::serviceWatchdogs(Blackboard& bb, uint32_t now) {
   // === SAFETY WATCHDOG -- mandatory, first, same-pass deterministic. ===
   // See main_loop.h's file header for why this runs before hardware_.tick().
-  if (watchdog_.check(now)) {
+  // check() is called UNCONDITIONALLY every pass regardless of
+  // motorsRunning(bb) -- only the ACTION (estop + EVT) is gated, so
+  // SerialSilenceWatchdog's own fire-once/re-arm-on-feed bookkeeping is
+  // never skipped (091-003: architecture-update.md Decision 3's "why gate
+  // the action, not the check()").
+  if (watchdog_.check(now) && motorsRunning(bb)) {
     estop();
     // 090-004: a loop-originated NAMED event -- routed through the SAME
     // emitEvent() a Planner-produced GOAL_DONE event uses (main_loop.h's own

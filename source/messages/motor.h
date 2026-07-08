@@ -78,6 +78,7 @@ struct MotorState {
     Opt<bool> wedge_suspect = {};
     Opt<uint32_t> hard_reset_count = {};
     Opt<uint32_t> soft_reset_count = {};
+    bool active = false;
 
     // --- array / optional-string accessors ---
 };

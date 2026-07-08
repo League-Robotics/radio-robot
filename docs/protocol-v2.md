@@ -2178,14 +2178,29 @@ Sets the serial-silence watchdog's window at runtime. Default at boot:
 
 Every `DEV`/liveness command line that arrives on either comms channel
 (serial or radio) resets a wall-clock timer — regardless of the line's
-content or whether it parsed to a known verb. If no line arrives within
-the current window, the firmware:
+content or whether it parsed to a known verb. This feed/reset behavior is
+unconditional and runs every pass, whether or not anything is currently
+driving.
+
+**The FIRE action is gated on motors actually being commanded to run**
+(sprint 091 ticket 003): if no line arrives within the current window AND
+at least one motor is currently under a non-neutral commanded mode (the
+Drivetrain's own bound-pair output, or any individual port driven
+standalone, e.g. via `DEV M <n> VEL`/`DUTY`/`POS`), the firmware:
 
 1. Commands **all four** motors to neutral (`Neutral::BRAKE`), regardless
    of which family (`DEV M` or `DEV DT`) was last authoritative.
 2. Idles the Drivetrain and drops drivetrain authority.
 3. Emits `EVT dev_watchdog` (no body, no `#id` — this is not tied to any
    single originating command) on the serial channel.
+
+If the window expires while the robot is genuinely idle (no motor under a
+non-neutral commanded mode), none of the above happens — no neutralize, no
+`EVT dev_watchdog` — since there is no runaway to prevent. This gate
+covers the standalone-bench-motor case too, not just Drivetrain-bound
+driving: a bound-port `DEV M` motion verb steals Drivetrain authority
+(putting it into standby) the moment it lands, so the fire condition also
+checks each motor's own commanded state, not the Drivetrain's alone.
 
 This is deliberately **not** the legacy motion-watchdog flag mechanism
 (only certain command kinds reset that one) — a silent host is a silent
