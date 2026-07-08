@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: Extract MainLoop::commit(bb, now)
-status: in-progress
+status: done
 use-cases:
 - SUC-005
 depends-on:
