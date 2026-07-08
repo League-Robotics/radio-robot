@@ -149,6 +149,17 @@ MotorConfigSet defaultMotorConfigSet() {
         set.cfg[i].setFwdSign(1);
         set.cfg[i].setVelGains(velGains);
         set.cfg[i].setVelFiltAlpha(0.3f);
+        // 091-002: I2C flip-flop poll-schedule membership -- true for the
+        // drive pair (ports 1/2, matching defaultSimDrivetrainConfig()'s
+        // left_port=1/right_port=2), false otherwise. Subsystems::SimHardware
+        // itself ignores this (it ticks all four ports every pass
+        // unconditionally -- sim_hardware.h's own file header), but
+        // dev_commands.cpp's DUTY/VEL/POS `ERR nodev` gate reads
+        // bb.motorConfig[port-1].polled regardless of which Hardware owner
+        // is behind it -- this is the config every pytest-collected sim test
+        // actually runs against, so getting it right here keeps every
+        // existing `DEV M 1|2 DUTY/VEL/POS` sim test passing unchanged.
+        set.cfg[i].setPolled(i + 1 == 1 || i + 1 == 2);
     }
     return set;
 }

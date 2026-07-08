@@ -22,15 +22,30 @@
 // clasi/sprints/079-.../architecture-update.md): it is the BRICK FLIP-FLOP
 // SEQUENCER — a small activePort_/phase_ state machine that issues at most one
 // bus action (a 0x46 encoder request OR a settled collect) per tick() slice,
-// cycling only the ports some command has actually addressed ("in-use" — see
-// apply() below) — and the hardware DISTRIBUTION POINT — the two apply()
-// overloads that mark ports in-use and forward an addressed msg::MotorCommand
-// to the right concrete Hal::NezhaMotor(s), expanding broadcasts to every
-// port. Neither role reintroduces left/right pairing or port-role
-// special-casing: apply()'s addressing comes entirely from the caller
-// (CommandProcessor's staged DEV M target, Drivetrain's own port binding) —
-// NezhaHardware itself still only knows about ports, never which one is
-// "left."
+// cycling only the ports the CONFIGURED poll-set marks polled_ (091-002: a
+// constant mask read from configs[].polled at construction, mutable
+// thereafter only through setPolled() — see that method's own doc comment)
+// — and the hardware DISTRIBUTION POINT — the two apply() overloads that
+// forward an addressed msg::MotorCommand to the right concrete
+// Hal::NezhaMotor(s), expanding broadcasts to every port. Neither role
+// reintroduces left/right pairing or port-role special-casing: apply()'s
+// addressing comes entirely from the caller (CommandProcessor's staged DEV M
+// target, Drivetrain's own port binding) — NezhaHardware itself still only
+// knows about ports, never which one is "left."
+//
+// 091-002: `apply()`/`tick()` no longer mutate poll-schedule membership as a
+// side effect of ordinary command flow — that command-derived, latch-forever
+// "in-use" flag (never released, invisible to `SimHardware`) is gone.
+// Schedule membership is now a fact fed in from config (`msg::MotorConfig.
+// polled`, baked at boot for the drive pair by `gen_boot_config.py`) and
+// changed only through the explicit `setPolled()` config-plane door (`DEV M
+// <n> CFG polled=<bool>`, reached via `Rt::Configurator`'s `kMotor`
+// `ConfigDelta` apply path) — never as a side effect of `DEV M <n> DUTY/VEL/
+// POS` or any other motion command. See
+// clasi/sprints/091-.../architecture-update.md Decision 1/2 for the full
+// rationale (why a config-plane door, not a purely boot-fixed mask; why an
+// unpolled port's motion verb is rejected `ERR nodev` rather than silently
+// accepted-but-unsampled).
 //
 // 086-006: also owns the real Hal::OtosOdometer leaf (source/hal/otos/
 // otos_odometer.h) and overrides odometer() (Subsystems::Hardware's base
@@ -82,13 +97,13 @@ class NezhaHardware : public Hardware {
 
   // The brick flip-flop sequencer (sprint 079-004; architecture-update.md
   // "The flip-flop and the 078 base-class contract"). Idle (no port
-  // in-use): returns immediately, zero bus actions (decision 1). Otherwise
+  // polled_): returns immediately, zero bus actions (decision 1). Otherwise
   // issues exactly one bus-facing action per call: REQUEST_DUE fires the
-  // active in-use port's 0x46 encoder request (requestSample()) and
+  // active polled port's 0x46 encoder request (requestSample()) and
   // advances to COLLECT_DUE; COLLECT_DUE checks bus_.clear(Hal::kNezhaDeviceAddr)
   // — if the settle window has not yet elapsed, this call is a no-op pass;
   // once clear, it collects (the active port's full NezhaMotor::tick(),
-  // the 078 base/leaf 5-step contract) and advances to the next in-use
+  // the 078 base/leaf 5-step contract) and advances to the next polled
   // port's REQUEST_DUE. Two calls per main-loop pass (the sanctioned
   // "slice 1 collects due, slice 2 requests/writes go out" double call,
   // ticket 005) drive one full request/collect pair per pass under typical
@@ -97,16 +112,14 @@ class NezhaHardware : public Hardware {
   // 087-004: motorIn[]/motorResetIn[] (Subsystems::Hardware's own doc
   // comment has the full contract) are consumed FIRST, uniformly, before
   // the flip-flop's scheduling decision below — applying a motorIn[i]
-  // command marks port i+1 in-use (the SAME side effect the apply()
-  // overloads below already have — Design Rationale 5: sampling turns on
-  // because someone commanded that port), so a port newly brought in-use
-  // by this call's motorIn[]/motorResetIn[] is eligible for the SAME call's
-  // bus action. motorResetIn[i] does NOT mark the port in-use (mirrors
-  // today's direct `hardware->motor(port).resetPosition()` call sites,
-  // e.g. pose_commands.cpp's ZERO handler, which never marked in-use
-  // either) — this method's own resetPosition() call only stages the
-  // reset; landing it still requires the port to already be (or separately
-  // become) in-use.
+  // command stages it onto port i+1's own Hal::Motor setter exactly like
+  // either apply() overload below, but (091-002) no longer changes
+  // poll-schedule membership as a side effect: whether port i+1 is eligible
+  // for THIS call's bus action depends solely on polled_[i], the constant
+  // (except via setPolled()) mask established at construction. motorIn[i]/
+  // motorResetIn[i] never marks a port polled — mirrors today's direct
+  // `hardware->motor(port).resetPosition()` call sites, e.g.
+  // pose_commands.cpp's ZERO handler, which never did either.
   void tick(uint32_t now, Rt::Mailbox<msg::MotorCommand> motorIn[kPortCount],
             bool motorResetIn[kPortCount]) override;   // [ms]
 
@@ -120,14 +133,13 @@ class NezhaHardware : public Hardware {
 
   // Distribution (sprint 079-004; architecture-update.md "The command-edge
   // types"). Both overloads forward the addressed msg::MotorCommand(s) to
-  // the target NezhaMotor(s) via their own apply(); addressed (non-
-  // broadcast) targets are also marked in-use, which is what brings them
-  // into tick()'s cycling schedule (decision 1: sampling turns on because
-  // someone commanded that port, never as a side effect of a broadcast —
-  // see Design Rationale 5).
-  //
-  // allPorts==true never marks any port in-use, even though it still
-  // forwards addressed[0].command to every port's setter.
+  // the target NezhaMotor(s) via their own apply(). 091-002: neither
+  // overload touches poll-schedule membership at all any more — a target's
+  // eligibility for tick()'s cycling schedule depends solely on the
+  // constant polled_[] mask (config-established, setPolled()-mutable),
+  // never on whether apply() was ever called for it. allPorts==true
+  // forwards addressed[0].command to every port's setter unconditionally,
+  // regardless of each port's own polled_ state.
   void apply(const Hal::CommandProcessorToHardwareCommand& cmd) override;
 
   // Both wheels are always addressed (never a broadcast) — the Drivetrain's
@@ -149,6 +161,13 @@ class NezhaHardware : public Hardware {
   msg::MotorConfig config(uint32_t port) const override;
   msg::MotorState state(uint32_t port) const override;
 
+  // setPolled() (091-002, Subsystems::Hardware's own doc comment has the
+  // full contract) — the ONE way polled_[] changes after construction.
+  // Reached exclusively via Rt::Configurator's kMotor ConfigDelta apply
+  // path (`DEV M <n> CFG polled=<bool>`). Out-of-range ports clamp to port
+  // 4, matching motor()'s own convention.
+  void setPolled(uint32_t port, bool polled) override;
+
  private:
   // REQUEST_DUE: the next bus action is a fresh 0x46 request on
   // activePort_. COLLECT_DUE: the next bus action (once
@@ -162,15 +181,15 @@ class NezhaHardware : public Hardware {
   // terms of this so the port-indexing switch exists exactly once.
   Hal::NezhaMotor& motorAt(uint32_t port);
 
-  // The next in-use port at or after cur, wrapping 1..kPortCount. Only
-  // ever called when anyPortInUse() is true (tick()'s idle-schedule guard),
-  // so a match always exists; if none did, cur is returned unchanged
+  // The next polled port at or after cur, wrapping 1..kPortCount. Only
+  // ever called when anyPolled() is true (tick()'s idle-schedule guard), so
+  // a match always exists; if none did, cur is returned unchanged
   // (defensive — should not be reached).
-  uint32_t nextPortInUse(uint32_t cur) const;
+  uint32_t nextPolled(uint32_t cur) const;
 
-  // True if at least one port has ever been individually addressed (see
-  // apply()'s in-use marking) — the idle-schedule gate (decision 1).
-  bool anyPortInUse() const;
+  // True if at least one port is currently polled_ — the idle-schedule gate
+  // (decision 1).
+  bool anyPolled() const;
 
   I2CBus& bus_;
   Hal::NezhaMotor motor1_;
@@ -181,7 +200,13 @@ class NezhaHardware : public Hardware {
 
   uint32_t activePort_ = 1;
   Phase phase_ = Phase::REQUEST_DUE;
-  bool portInUse_[kPortCount] = {false, false, false, false};
+
+  // 091-002: the configured poll-set — which ports the flip-flop schedules.
+  // Established once at construction from configs[].polled (constant
+  // thereafter except through setPolled(), above); never mutated by
+  // tick()/apply() as a side effect of ordinary command flow (that was
+  // the old "in-use" flag's bug — see this file's own header comment).
+  bool polled_[kPortCount] = {false, false, false, false};
 
   // config()'s own backing store (087-004) — a verbatim copy of the
   // constructor's configs[] argument, the SAME per-port config each port's

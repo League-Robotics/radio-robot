@@ -128,6 +128,20 @@ class Hardware {
   virtual msg::MotorConfig config(uint32_t port) const = 0;
   virtual msg::MotorState state(uint32_t port) const = 0;
 
+  // setPolled() (091-002) -- the ONE config-plane door through which a
+  // port's I2C flip-flop poll-schedule membership changes after
+  // construction (msg::MotorConfig.polled, source/messages/motor.h).
+  // Reached exclusively through Rt::Configurator's kMotor ConfigDelta apply
+  // path (source/runtime/configurator.cpp), itself reached only via `DEV M
+  // <n> CFG polled=<bool>` (source/commands/dev_commands.cpp) -- never
+  // called directly by a command handler, and never a side effect of an
+  // ordinary motion command (that latching anti-pattern is exactly what
+  // this ticket deletes -- see nezha_hardware.h's own file header).
+  // Virtual no-op default: Subsystems::SimHardware has no poll schedule to
+  // extend (every port ticks every pass unconditionally -- sim_hardware.h's
+  // own file header) and does not override this.
+  virtual void setPolled(uint32_t /*port*/, bool /*polled*/) {}
+
   // The active owner's Hal::Odometer leaf, or a shared Hal::NullOdometer
   // instance if it has none — NEVER nullptr (090-003) — see the file
   // header's "odometer()" section for the NullOdometer default's rationale.

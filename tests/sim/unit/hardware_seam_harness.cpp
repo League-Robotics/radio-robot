@@ -71,10 +71,16 @@ constexpr uint16_t kWireAddr = static_cast<uint16_t>(kAddr7 << 1);  // 0x20 (wri
 
 msg::MotorConfig g_defaultConfigs[Subsystems::Hardware::kPortCount];
 
-void resetDefaultConfigs() {
+// resetDefaultConfigs -- 091-002: `polled` is now the CONFIGURED poll-set
+// fed to NezhaHardware's constructor, mirroring nezha_flipflop_harness.cpp's
+// own identical update: each scenario must declare, up front, which port(s)
+// it wants scheduled (apply()/motorIn[] no longer bring a port in as a side
+// effect). `polledMask` bit i (0-based) means port i+1 starts polled=true.
+void resetDefaultConfigs(uint8_t polledMask = 0) {
   for (uint32_t i = 0; i < Subsystems::Hardware::kPortCount; ++i) {
     g_defaultConfigs[i] = msg::MotorConfig{};
     g_defaultConfigs[i].setPort(i + 1).setFwdSign(1).setTravelCalib(1.0f);
+    g_defaultConfigs[i].setPolled((polledMask & (1u << i)) != 0);
   }
 }
 
@@ -105,7 +111,7 @@ msg::MotorCommand neutralCommand() {
 //    both are real, callable virtual dispatch, not just declared.
 void scenarioBeginAndMotorThroughBasePointer() {
   beginScenario("Subsystems::Hardware*: begin() + motor() dispatch through the abstract base pointer");
-  resetDefaultConfigs();
+  resetDefaultConfigs(/*polledMask=*/0);   // begin() bypasses the flip-flop entirely -- unaffected by polled_[]
   I2CBus::setClock(1000000);
   I2CBus bus;
   Subsystems::NezhaHardware concreteHardware(bus, g_defaultConfigs);
@@ -129,7 +135,7 @@ void scenarioBeginAndMotorThroughBasePointer() {
 //    contract — driven entirely through Subsystems::Hardware::tick().
 void scenarioTickThroughBasePointerIdleSchedule() {
   beginScenario("Subsystems::Hardware*: tick() idle schedule performs zero bus actions");
-  resetDefaultConfigs();
+  resetDefaultConfigs(/*polledMask=*/0);   // 091-002: no port polled -- idle schedule
   I2CBus::setClock(2000000);
   I2CBus bus;
   Subsystems::NezhaHardware concreteHardware(bus, g_defaultConfigs);
@@ -154,7 +160,7 @@ void scenarioTickThroughBasePointerIdleSchedule() {
 //    drives it to connected() — the unaddressed port 2 stays untouched.
 void scenarioApplyCommandProcessorCommandThroughBasePointer() {
   beginScenario("Subsystems::Hardware*: apply(CommandProcessorToHardwareCommand) addresses and schedules a port");
-  resetDefaultConfigs();
+  resetDefaultConfigs(/*polledMask=*/0b0001);   // 091-002: port 1 pre-polled -- addressed apply() no longer schedules it
   I2CBus::setClock(3000000);
   I2CBus bus;
   Subsystems::NezhaHardware concreteHardware(bus, g_defaultConfigs);
@@ -187,7 +193,7 @@ void scenarioApplyCommandProcessorCommandThroughBasePointer() {
 //    touched.
 void scenarioApplyDrivetrainCommandThroughBasePointer() {
   beginScenario("Subsystems::Hardware*: apply(DrivetrainToHardwareCommand) addresses both wheels");
-  resetDefaultConfigs();
+  resetDefaultConfigs(/*polledMask=*/0b1100);   // 091-002: ports 3/4 (the wheel pair under test) pre-polled
   I2CBus::setClock(4000000);
   I2CBus bus;
   Subsystems::NezhaHardware concreteHardware(bus, g_defaultConfigs);
@@ -228,7 +234,7 @@ void scenarioConfigStateAndTickMotorInMotorResetInThroughBasePointer() {
   beginScenario(
       "Subsystems::Hardware*: config()/state() + tick()'s motorIn[]/motorResetIn[] "
       "through the base pointer");
-  resetDefaultConfigs();
+  resetDefaultConfigs(/*polledMask=*/0b0011);   // 091-002: ports 1/2 pre-polled -- motorIn[]/motorResetIn[] no longer schedule
   I2CBus::setClock(5000000);
   I2CBus bus;
   Subsystems::NezhaHardware concreteHardware(bus, g_defaultConfigs);

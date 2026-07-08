@@ -140,9 +140,10 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
   hardware_.tick(now, bb.motorIn, bb.motorResetIn);
 
   // DEV STOP's broadcast neutral (posted last slack) -- deliberately NOT
-  // bb.motorIn[] (a broadcast must not mark any port in-use -- see
-  // blackboard.h's file header / NezhaHardware::apply()'s own "broadcast
-  // never marks a port in-use" branch).
+  // bb.motorIn[] (a broadcast needs the allPorts=true
+  // Hal::CommandProcessorToHardwareCommand shape, applied through
+  // Hardware::apply() below -- a structurally different distribution path
+  // than bb.motorIn[]'s per-port drain; see blackboard.h's file header).
   if (!bb.hardwareBroadcastIn.empty()) {
     msg::MotorCommand neutral = bb.hardwareBroadcastIn.take();
     Hal::CommandProcessorToHardwareCommand broadcast;

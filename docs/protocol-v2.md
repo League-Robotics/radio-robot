@@ -1828,6 +1828,39 @@ per architecture-update.md's "Config-plane vs. command-plane". The wire
 text is unchanged: `DEV DT PORTS <left> <right>` → `OK DEV DT
 ports=<left>,<right>`.
 
+### Poll-schedule membership: `DEV M <n> CFG polled=<bool>`
+
+Sprint 091: `NezhaHardware`'s I2C flip-flop sequencer only samples/dispatches
+ports in a **configured poll-set** — `msg::MotorConfig.polled`, established
+once at boot (`true` for the drive-pair ports, `false` for every other port
+— never robot-JSON-configurable, a firmware-scheduling fact) and mutable
+thereafter ONLY through `DEV M <n> CFG polled=<bool>`, one more key on the
+existing `DEV M <n> CFG` verb (below). This replaced an earlier,
+command-derived scheme where simply addressing a port with any `DEV M`
+verb silently and permanently added it to the round-robin for the rest of
+the session, with no way back short of reboot.
+
+- `polled=true` / `polled=1` sets it; `polled=false` / `polled=0` (or any
+  other token) clears it — the same lenient, no-strict-validation
+  convention every other `CFG` key already applies (a malformed token
+  silently becomes the zero value, never an `ERR`).
+- **This is the door the coupled PID/governor bench rig needs.**
+  `tests/bench/pid_hold_speed.py` drives ports 3/4 standalone (no
+  `DEV DT` at all); `tests/bench/ratio_governor_curve.py`'s primary
+  protocol binds the `Drivetrain` to ports 2/3 and drives port 4
+  standalone. Since only the boot drive pair (`1`/`2`) starts polled and
+  `DEV DT PORTS` does **not** auto-follow the poll-set (a rebind alone does
+  not opt the newly-bound pair in), every non-default port either script
+  touches needs its own `DEV M <n> CFG polled=true` line in its setup
+  preamble, alongside its existing `DEV WD 3000` line — both scripts do
+  this.
+- Unpolled ↔ never sampled/dispatched: on **real hardware**, a motor
+  whose port is not in the poll-set never gets its embedded PID closed or
+  its encoder read (`NezhaMotor::tick()` never runs for it) — see the
+  `ERR nodev` behavior below, which exists precisely so a bench operator
+  gets an immediate, loud signal instead of a command that "succeeds" but
+  silently never converges.
+
 ### `DEV M <n> …` — Single-Motor Control
 
 ```
@@ -1843,6 +1876,15 @@ DEV M <n> CFG k=v ...                          → OK DEV M <n> <applied k=v ...
 ```
 
 `<n>` is the motor port, `1..4`.
+
+`DUTY`/`VEL`/`POS` are additionally gated on **poll-schedule membership**
+(sprint 091, see above): if `<n>` is not in `NezhaHardware`'s configured
+poll-set (`bb.motorConfig[<n>-1].polled == false` — the default for every
+port except the boot drive pair, `1`/`2`), the verb is rejected `ERR nodev
+<mode>` (`<mode>` is `duty`/`vel`/`pos`) BEFORE anything is posted —
+mirrors `OI`/`OZ`/`OR`/`OV`'s device-presence convention (§11). Extend the
+poll set explicitly with `DEV M <n> CFG polled=true` first. `NEUTRAL`/
+`RESET`/`STATE`/`CAPS`/`CFG` are never gated by poll membership.
 
 - `DUTY <duty>` — open-loop duty cycle as a percentage (`-100..100`);
   converted to the `[-1, 1]` fraction `Motor::setDutyCycle()` takes before
@@ -1930,6 +1972,7 @@ DEV M <n> CFG k=v ...                          → OK DEV M <n> <applied k=v ...
   | `vel_filt_alpha` | `vel_filt_alpha`               | `%.3f`      |
   | `dwell`          | `reversal_dwell`               | `%.1f`      |
   | `deadband`       | `output_deadband`              | `%.3f`      |
+  | `polled`         | `polled`                       | `0`/`1`     |
 
   An unrecognized key emits `ERR badkey <key>` (does not prevent the
   other, valid keys in the same command from applying — mirrors `SET`'s
@@ -1968,6 +2011,14 @@ DEV M <n> CFG k=v ...                          → OK DEV M <n> <applied k=v ...
     "the deadband" via `DEV M <n> CFG` must pick the correct key for the
     layer they actually mean to affect.
 
+  - `polled` — I2C flip-flop poll-schedule membership (see "Poll-schedule
+    membership" above). Accepts `true`/`1` (sets it) or anything else,
+    including `false`/`0` (clears it) — the same lenient, no-strict-
+    validation convention every other key on this table already applies.
+    Echoed back as `0`/`1` in the `OK` ack. Not persisted anywhere but the
+    live config — a reboot resets every port to its boot-baked value (the
+    drive pair `true`, everything else `false`).
+
 Examples:
 
 ```
@@ -1991,6 +2042,15 @@ OK DEV M 3 kp=0.800 slew=400.0
 
 DEV M 1 CFG dwell=0
 OK DEV M 1 dwell=0.0
+
+DEV M 4 DUTY 30
+ERR nodev duty
+
+DEV M 4 CFG polled=true
+OK DEV M 4 polled=1
+
+DEV M 4 DUTY 30
+OK DEV M 4 applied=0.30
 ```
 
 ### `DEV DT …` — Drivetrain Control

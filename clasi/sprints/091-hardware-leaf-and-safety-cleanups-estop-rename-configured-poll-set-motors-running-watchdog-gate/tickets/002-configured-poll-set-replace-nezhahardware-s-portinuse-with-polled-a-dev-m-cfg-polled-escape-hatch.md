@@ -2,7 +2,7 @@
 id: '002'
 title: 'Configured poll-set: replace NezhaHardware''s portInUse_ with polled_ + a
   DEV M CFG polled= escape hatch'
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 - SUC-003
@@ -45,17 +45,17 @@ default, not a purely static mask.
 
 ### Poll-set mechanism
 
-- [ ] `NezhaHardware::portInUse_` and its three side-effect write sites
+- [x] `NezhaHardware::portInUse_` and its three side-effect write sites
       (in `tick()`'s `motorIn[]` drain and both `apply()` overloads) are
       gone.
-- [ ] `NezhaHardware` owns `polled_[kPortCount]`, established once at
+- [x] `NezhaHardware` owns `polled_[kPortCount]`, established once at
       construction from `configs[i].polled` (a new `msg::MotorConfig`
       field), and mutated ONLY through a new `setPolled(uint32_t port,
       bool polled)` method.
-- [ ] `anyPortInUse()`/`nextPortInUse()` are renamed `anyPolled()`/
+- [x] `anyPortInUse()`/`nextPortInUse()` are renamed `anyPolled()`/
       `nextPolled()`, reading `polled_[]` (no other behavior change to the
       flip-flop sequencing itself).
-- [ ] The broadcast-exemption branch/comment in
+- [x] The broadcast-exemption branch/comment in
       `apply(const Hal::CommandProcessorToHardwareCommand&)` ("broadcast
       never marks a port in-use") is deleted — `apply()` no longer writes
       to poll state in any branch, so there is nothing to exempt.
@@ -64,15 +64,15 @@ default, not a purely static mask.
 
 ### Boot defaults
 
-- [ ] `msg::MotorConfig` gains `polled` (bool, default `false`) —
+- [x] `msg::MotorConfig` gains `polled` (bool, default `false`) —
       `protos/motor.proto` + regenerate via `scripts/gen_messages.py`.
-- [ ] `scripts/gen_boot_config.py` bakes `polled=true` for
+- [x] `scripts/gen_boot_config.py` bakes `polled=true` for
       `LEFT_PORT`/`RIGHT_PORT` (mirroring the existing
       `travel_calib_for_ports()`/`fwd_sign_for_ports()` per-port
       specialization pattern already in that file), `false` for every
       other port. `source/config/boot_config.cpp` is regenerated, not
       hand-edited.
-- [ ] `tests/_infra/sim/sim_api.cpp`'s own `defaultMotorConfigSet()` bakes
+- [x] `tests/_infra/sim/sim_api.cpp`'s own `defaultMotorConfigSet()` bakes
       `polled=true` for ports 1/2 (matching `defaultSimDrivetrainConfig()`'s
       `left_port=1`/`right_port=2`), `false` for ports 3/4 — this is the
       config every pytest-collected sim test actually runs against, so
@@ -80,37 +80,37 @@ default, not a purely static mask.
 
 ### Config-plane escape hatch
 
-- [ ] `DEV M <n> CFG polled=<bool>` is a new accepted key on the existing
+- [x] `DEV M <n> CFG polled=<bool>` is a new accepted key on the existing
       `DEV M <n> CFG` verb (routed through the existing
       `applyMotorCfgKey()`/`Rt::ConfigDelta(kMotor)` mechanism — no new
       command verb). Applying it calls `NezhaHardware::setPolled()` via
       the Configurator's existing `kMotor`-target apply path.
-- [ ] `docs/protocol-v2.md` §16 documents the new key.
+- [x] `docs/protocol-v2.md` §16 documents the new key.
 
 ### Unpolled-port rejection (the deliberate behavior change)
 
-- [ ] `DEV M <n> DUTY|VEL|POS` addressed at a port with
+- [x] `DEV M <n> DUTY|VEL|POS` addressed at a port with
       `bb.motorConfig[port-1].polled == false` is rejected `ERR nodev
       <mode>` (mirroring the existing `ERR nodev` convention used by
       `OI`/`OZ`/`OR`/`OV` with no odometer, and the existing `ERR
       unsupported <mode>` capability-rejection shape) — posts nothing to
       `bb.motorIn[]`, steals no Drivetrain authority.
-- [ ] `NEUTRAL`/`RESET`/`STATE`/`CAPS`/`CFG` on the same port are
+- [x] `NEUTRAL`/`RESET`/`STATE`/`CAPS`/`CFG` on the same port are
       unaffected by poll state — never gated.
-- [ ] `test_dev_command_outbox.py`'s `scenarioUnboundPortLeavesDrivetrain
+- [x] `test_dev_command_outbox.py`'s `scenarioUnboundPortLeavesDrivetrain
       Untouched` is updated to prove the `ERR nodev` rejection (its new,
       intentional meaning) instead of acceptance.
-- [ ] A new scenario in the same harness proves `DEV M <n> CFG
+- [x] A new scenario in the same harness proves `DEV M <n> CFG
       polled=true` on that same port, followed by the identical `DUTY`
       command, now succeeds and posts to `bb.motorIn[]`.
 
 ### Bench script + test updates
 
-- [ ] `tests/bench/pid_hold_speed.py` and `tests/bench/
+- [x] `tests/bench/pid_hold_speed.py` and `tests/bench/
       ratio_governor_curve.py` gain one `DEV M <n> CFG polled=true` setup
       line per non-default port they drive standalone (beside their
       existing `DEV WD 3000` preamble line).
-- [ ] `tests/sim/unit/test_nezha_flipflop.py`'s harness
+- [x] `tests/sim/unit/test_nezha_flipflop.py`'s harness
       (`nezha_flipflop_harness.cpp`) scenarios are updated: the local
       config-builder gains a per-scenario `polled` parameter;
       `scenarioIdleScheduleNoBusActions` constructs with `polled=false`
@@ -122,7 +122,7 @@ default, not a purely static mask.
       happen); `scenarioDrivetrainToHardwareCommandForwarding` similarly
       drops its "marks in-use" assertion, keeping only the forwarding
       assertion.
-- [ ] `uv run python -m pytest tests/sim` green, including the new/updated
+- [x] `uv run python -m pytest tests/sim` green, including the new/updated
       scenarios above.
 
 ## Implementation Plan
@@ -188,3 +188,60 @@ default, not a purely static mask.
 
 - `docs/protocol-v2.md` §16: document `DEV M <n> CFG polled=<bool>` and
   the `ERR nodev` reply for an unpolled port's motion verb.
+
+## Completion Notes
+
+- **Grep-zero confirmation**: `grep -rn "portInUse_" source/` returns
+  **zero** hits (the only two prior hits, both prose mentions inside
+  `nezha_hardware.h`'s own doc comments explaining the deleted flag's
+  history, were reworded to avoid the literal token).
+- **Test summary**: `uv run python -m pytest tests/sim` → **309 passed, 2
+  xfailed** (matches the stated 309/2 baseline exactly — the new/updated
+  scenarios below all live INSIDE existing harness `.cpp` binaries each
+  already counted as one pytest test, so the pytest-level count is
+  unchanged; the underlying C++ scenario count went up, independently
+  verified by compiling and running each harness binary directly).
+- **New/updated test names**:
+  - `tests/sim/unit/dev_command_outbox_harness.cpp`:
+    `scenarioUnpolledPortRejectedNodev` (renamed from/replaces
+    `scenarioUnboundPortLeavesDrivetrainUntouched` — now proves `DEV M 3
+    DUTY 40` → `ERR nodev duty`, posts nothing) and the new
+    `scenarioCfgPolledTrueUnlocksMotionVerbs` (proves `DEV M 3 CFG
+    polled=true` posts the `kMotor`/`kPolled` `ConfigDelta`, and that the
+    identical `DUTY` command then succeeds and posts to `bb.motorIn[2]`).
+  - `tests/sim/unit/nezha_flipflop_harness.cpp`: `resetDefaultConfigs()`
+    gained a `polledMask` parameter; every scenario updated per the
+    ticket's own scenario-by-scenario spec (idle=all-unpolled,
+    in-use-tracking/rotation pre-polled at construction,
+    broadcast/DrivetrainToHardwareCommand scenarios re-proved without any
+    "marks in-use" assertion — the latter now proves forwarding via a
+    direct `motor(port).tick()` bypass, plus a follow-up assertion that the
+    HAL's OWN flip-flop still performs zero bus actions for the
+    apply()'d-but-unpolled wheels).
+- **Deviation 1 (mechanically required, not in the ticket's file list)**:
+  `tests/sim/unit/hardware_seam_harness.cpp` (backing
+  `test_hardware_seam.py`, ticket 081-002's `Subsystems::Hardware*`
+  abstract-seam proof) also drove its scenarios through the OLD
+  command-derived in-use marking (`apply()`/`motorIn[]` bringing a port
+  into schedule) and broke identically to the two ticket-named harnesses.
+  Updated the same way (`resetDefaultConfigs(polledMask)`), verified
+  standalone and via the full suite.
+- **Deviation 2 (scope judgment call on the bench scripts)**: the ticket's
+  own acceptance text says "per non-default port they drive **standalone**".
+  For `ratio_governor_curve.py`'s primary protocol, the Drivetrain-bound
+  pair (`--dt-left`/`--dt-right`, default `2 3`) is driven via `DEV DT
+  WHEELS`, not standalone `DEV M`. However, since `DEV DT PORTS` does NOT
+  auto-follow the poll-set (architecture-update.md Open Question 2) and
+  port 3 is not boot-polled, leaving it out would silently strand that
+  wheel unsampled/undispatched by the REAL flip-flop on hardware (SimHardware
+  is unaffected — it ticks all four ports unconditionally, which is why
+  this does not show up as a sim-test failure). Opted to also send `DEV M
+  <n> CFG polled=true` for `--dt-left`/`--dt-right` (not just
+  `--disturb-port`), for both scripts, so the coupled bench rig keeps
+  working exactly as documented on real hardware, not just at the wire.
+  Flagging this judgment call explicitly since it goes slightly beyond the
+  acceptance text's literal wording, in the direction the architecture's
+  own stated goal (Decision 1) requires.
+- No deviations from the architecture's Decision 1/Decision 2 shape itself
+  (config-plane escape hatch + `ERR nodev` rejection) or from any other
+  acceptance criterion.

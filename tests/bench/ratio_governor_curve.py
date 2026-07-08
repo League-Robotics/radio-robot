@@ -224,6 +224,20 @@ def main() -> int:
 
         dev_send(proto, f"DEV WD {SESSION_WATCHDOG_WINDOW}")
 
+        # 091-002: NezhaHardware's I2C flip-flop only samples/dispatches
+        # ports in its configured poll-set (boot default: the drive pair,
+        # ports 1/2 -- see clasi/sprints/091-.../architecture-update.md
+        # Decision 1). This rig drives non-default ports both via a DEV DT
+        # PORTS rebind (--dt-left/--dt-right) and standalone (DEV M
+        # --disturb-port, primary protocol only) -- DEV DT PORTS does NOT
+        # auto-follow the poll-set (Open Question 2), so every port this
+        # run actually uses needs the door opened explicitly, or an unpolled
+        # bound wheel silently never gets ticked (no encoder readback, no
+        # embedded PID close) even though DEV DT WHEELS still "succeeds" at
+        # the wire. Idempotent: harmless if a port is already polled.
+        for port in {args.dt_left, args.dt_right} | ({args.disturb_port} if primary_mode else set()):
+            dev_send(proto, f"DEV M {port} CFG polled=true")
+
         # Live sync_gain control (077-007): DEV DT CFG did not exist when this
         # script was first written — now it does, so --sync-gain actually
         # sets the governor instead of merely labeling the run. Sent before

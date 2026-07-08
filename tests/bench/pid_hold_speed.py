@@ -196,6 +196,17 @@ def main() -> int:
 
         dev_send(proto, f"DEV WD {SESSION_WATCHDOG_WINDOW}")
 
+        # 091-002: NezhaHardware's I2C flip-flop only samples/dispatches
+        # ports in its configured poll-set (boot default: the drive pair,
+        # ports 1/2 -- see clasi/sprints/091-.../architecture-update.md
+        # Decision 1). This rig drives BOTH --pid-port and --load-port
+        # standalone (DEV M, never DEV DT) -- opt each into the poll set
+        # explicitly, or an unpolled port's DUTY/VEL now comes back `ERR
+        # nodev` instead of silently self-scheduling like it used to.
+        # Idempotent: harmless if a port is already polled (e.g. 1 or 2).
+        for port in {args.pid_port, args.load_port}:
+            dev_send(proto, f"DEV M {port} CFG polled=true")
+
         csv_file = open(csv_path, "w", newline="")
         writer = csv.writer(csv_file)
         writer.writerow(["t", "target", "velocity", "applied", "load_duty"])

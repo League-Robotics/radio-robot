@@ -246,6 +246,7 @@ _INVENTORY_MAP: dict = {
     ("MotorConfig", "port"):           "(new field — Nezha motor port 1..4, identity moved from class to Config, 077-002)",
     ("MotorConfig", "reversal_dwell"): "(new field — sprint 078: reversal-dwell hold time, Opt<float> unset -> ship default 100 ms applied in Hal::Motor::configure(), ticket 078-002)",
     ("MotorConfig", "output_deadband"): "(new field — sprint 078: write-path output deadband fraction, Opt<float> unset -> ship default 0.03 applied in Hal::Motor::configure(), ticket 078-002)",
+    ("MotorConfig", "polled"): "(new field — sprint 091: I2C flip-flop poll-schedule membership, moved off command-derived NezhaHardware::portInUse_ onto a configured, config-plane-only mask, ticket 091-002)",
 
     # MotorCapabilities: capability declaration (077-002: one bool per control mode)
     ("MotorCapabilities", "duty_cycle"): "(new field — duty-cycle control mode capability flag)",

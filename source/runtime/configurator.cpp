@@ -91,6 +91,7 @@ bool foldMotor(msg::MotorConfig& cfg, const ConfigDelta& delta) {
   if (m & bitOf(MotorConfigField::kSlewRate)) cfg.slew_rate = v.slew_rate;
   if (m & bitOf(MotorConfigField::kReversalDwell)) cfg.reversal_dwell = v.reversal_dwell;
   if (m & bitOf(MotorConfigField::kOutputDeadband)) cfg.output_deadband = v.output_deadband;
+  if (m & bitOf(MotorConfigField::kPolled)) cfg.polled = v.polled;
 
   return std::memcmp(&before, &cfg, sizeof(before)) != 0;
 }
@@ -178,6 +179,15 @@ void Configurator::applyOne(Blackboard& bb) {
         // per-motor Hal::Motor faceplate instead, exactly as SET/DEV M CFG
         // already do today.
         hardware_.motor(port).configure(motorConfig_[port - 1]);
+        // 091-002: `polled` is a Hardware-level (poll-schedule) fact, not a
+        // per-motor Hal::Motor one -- Hal::Motor::configure() above has no
+        // concept of it. Route it through the ONE door that does
+        // (Hardware::setPolled(), a no-op default for SimHardware) --
+        // ONLY when this delta actually touched the bit, mirroring every
+        // other field's own mask-gated application above.
+        if (delta.mask & bitOf(MotorConfigField::kPolled)) {
+          hardware_.setPolled(port, motorConfig_[port - 1].polled);
+        }
       }
       bb.motorConfig[port - 1] = motorConfig_[port - 1];
       break;

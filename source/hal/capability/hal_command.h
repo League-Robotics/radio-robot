@@ -51,8 +51,10 @@ struct AddressedMotorCommand {
 // pair, addressed -- NOT the same as allPorts); `DEV STOP` / the watchdog
 // use allPorts (count ignored, addressed[0].command applied to every port
 // NezhaHardware owns; the port field is unused for a broadcast). A broadcast
-// does NOT mark any port in-use (NezhaHardware::apply() — see
-// architecture-update.md Design Rationale on why broadcast is exempt).
+// reaches every port's Hal::Motor setter unconditionally, regardless of that
+// port's own I2C flip-flop poll-schedule membership (091-002:
+// NezhaHardware::apply() no longer touches poll state in any branch — see
+// nezha_hardware.h's own file header).
 struct CommandProcessorToHardwareCommand {
   bool allPorts = false;
   uint8_t count = 0;
