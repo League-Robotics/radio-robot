@@ -1,9 +1,12 @@
 ---
 id: '003'
 title: Gate the serial-silence watchdog's fire on commanded motors-running state
-status: open
-use-cases: [SUC-005]
-depends-on: ['001', '002']
+status: in-progress
+use-cases:
+- SUC-005
+depends-on:
+- '001'
+- '002'
 github-issue: ''
 issue: watchdog-arm-only-while-motors-running.md
 completes_issue: true
