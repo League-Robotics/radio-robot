@@ -83,7 +83,13 @@ _RUCKIG_SRC_DIR = _REPO_ROOT / "libraries" / "ruckig" / "src"
 # now transitively compiles Ruckig, so it must build under the SAME
 # constraints the firmware itself imposes.
 _CXX_STANDARD = "gnu++20"
-_CONSTRAINT_FLAGS = ["-fno-exceptions", "-fno-rtti"]
+# -DHOST_BUILD=1 marks this as a host build, exactly as the sim CMake does
+# (tests/_infra/sim/CMakeLists.txt) -- without it planner.cpp would resolve
+# its plant-specific kOutputHops dead-time to the REAL-BRICK value (the
+# flip-flop's measured ~80 ms actuation lag), over-compensating a near-zero-
+# lag host plant and stalling the harness's DISTANCE scenarios short. A host
+# harness is a host build; this makes the two agree (sprint 093).
+_CONSTRAINT_FLAGS = ["-fno-exceptions", "-fno-rtti", "-DHOST_BUILD=1"]
 
 
 def _find_cxx_compiler() -> str:
