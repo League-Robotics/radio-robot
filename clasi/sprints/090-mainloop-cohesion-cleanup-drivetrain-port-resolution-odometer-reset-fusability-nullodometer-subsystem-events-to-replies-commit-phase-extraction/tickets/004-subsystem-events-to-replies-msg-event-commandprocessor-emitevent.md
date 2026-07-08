@@ -1,9 +1,11 @@
 ---
 id: '004'
 title: "Subsystem events to replies \u2014 msg::Event + CommandProcessor::emitEvent"
-status: open
-use-cases: [SUC-004]
-depends-on: ['003']
+status: in-progress
+use-cases:
+- SUC-004
+depends-on:
+- '003'
 github-issue: ''
 issue: subsystem-events-to-replies.md
 completes_issue: true
