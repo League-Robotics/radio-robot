@@ -1,6 +1,8 @@
 ---
-status: pending
+status: in-progress
 sprint: 090
+tickets:
+- 090-003
 ---
 
 # NullOdometer: replace `odometer != nullptr` checks with a Null Object

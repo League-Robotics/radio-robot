@@ -1,6 +1,8 @@
 ---
-status: pending
+status: in-progress
 sprint: 090
+tickets:
+- 090-002
 ---
 
 # Odometer owns reset translation and fusability (remove reset plumbing from the main loop)

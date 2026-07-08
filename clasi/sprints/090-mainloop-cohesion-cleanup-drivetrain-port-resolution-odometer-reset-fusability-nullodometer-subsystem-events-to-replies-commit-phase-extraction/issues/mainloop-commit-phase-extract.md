@@ -1,6 +1,8 @@
 ---
-status: pending
+status: in-progress
 sprint: 090
+tickets:
+- 090-005
 ---
 
 # Extract the COMMIT block into a private MainLoop::commit(bb, now)

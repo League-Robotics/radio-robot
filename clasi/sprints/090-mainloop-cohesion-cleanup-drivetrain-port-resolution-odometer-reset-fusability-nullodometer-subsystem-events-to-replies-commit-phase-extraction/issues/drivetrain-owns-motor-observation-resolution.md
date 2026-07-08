@@ -1,6 +1,8 @@
 ---
-status: pending
+status: in-progress
 sprint: 090
+tickets:
+- 090-001
 ---
 
 # Drivetrain owns motor-observation port resolution (remove `p.left - 1` from the main loop)

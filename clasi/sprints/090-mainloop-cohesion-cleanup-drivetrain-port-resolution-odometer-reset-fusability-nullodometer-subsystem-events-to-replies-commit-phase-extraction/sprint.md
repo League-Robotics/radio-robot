@@ -2,7 +2,7 @@
 id: 090
 title: 'MainLoop cohesion cleanup: Drivetrain port resolution, odometer reset/fusability
   + NullOdometer, subsystem events to replies, commit-phase extraction'
-status: planning-docs
+status: ticketing
 branch: sprint/090-mainloop-cohesion-cleanup-drivetrain-port-resolution-odometer-reset-fusability-nullodometer-subsystem-events-to-replies-commit-phase-extraction
 use-cases: []
 issues:
@@ -148,16 +148,20 @@ Before tickets can be created, all of the following must be true:
 - [x] Sprint planning documents are complete (sprint.md, use cases, architecture)
 - [x] Architecture review passed (self-review verdict: APPROVE WITH CHANGES — see
       architecture-review gate notes)
-- [ ] Stakeholder has approved the sprint plan — **BLOCKING**: sprint phase is
-      `stakeholder-review`; `advance_sprint_phase` returns "Cannot advance from
-      'stakeholder-review': gate 'stakeholder_approval' has not passed." The
-      team-lead must review architecture-update.md and record this gate
-      (`record_gate_result(sprint_id="090", gate="stakeholder_approval",
-      result="passed", notes="NONE")`) before ticketing can proceed.
+- [x] Stakeholder has approved the sprint plan (gate recorded 2026-07-08:
+      "Auto-approved under stakeholder-directed autonomous mode... Proceed
+      to ticketing.")
 
 ## Tickets
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 001 | Drivetrain owns motor-observation port resolution | — |
+| 002 | Odometer owns reset translation and per-pass fusability | 001 |
+| 003 | NullOdometer — collapse the nullable Hardware::odometer() contract | 002 |
+| 004 | Subsystem events to replies — msg::Event + CommandProcessor::emitEvent | 003 |
+| 005 | Extract MainLoop::commit(bb, now) | 004 |
 
-Tickets execute serially in the order listed.
+Tickets execute serially in the order listed (all five touch
+`source/runtime/main_loop.cpp`, so they must land one at a time regardless
+of how independent their underlying concerns are).

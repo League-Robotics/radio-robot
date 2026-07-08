@@ -1,6 +1,8 @@
 ---
-status: pending
+status: in-progress
 sprint: 090
+tickets:
+- 090-004
 ---
 
 # General subsystem event → reply mechanism (remove EVT formatting from the main loop)
