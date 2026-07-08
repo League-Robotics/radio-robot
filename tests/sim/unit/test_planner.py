@@ -47,6 +47,17 @@ this sprint, so ``Planner::tick()``'s dispatch collapses to the clean
 state, and ``applyStopAnticipation()`` is deleted in full. No compile-command
 change here (still the same source list) -- see ``planner_harness.cpp``'s
 own updated header comment for the new/rewritten TURN/ROTATION scenarios.
+
+Ticket 089-006 update: the CONSOLIDATION pass -- no compile-command change
+(same source list) -- see ``planner_harness.cpp``'s own updated header
+comment for the two genuinely new scenarios this ticket adds (a VELOCITY/
+bare-R cruise+decel spot-check, and the guard-1/stop-not-fired proof for
+DISTANCE and TURN) on top of what tickets 003-005 already built. This
+file's own compiled-and-passes assertion is also this ticket's SUC-004
+verification point: ``test_jerk_trajectory.py``'s
+``scenarioJerkSentinelMapsToInfinity`` (ticket 002) is the actual j_max/
+yaw_jerk_max sentinel-mapping coverage AC4 asks to confirm -- re-run, not
+re-implemented, by the full-suite pass this ticket records.
 """
 
 import pathlib

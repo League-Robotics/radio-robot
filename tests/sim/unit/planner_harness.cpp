@@ -84,6 +84,25 @@
 // arc-mm<->rad conversion -- the one genuinely new risk this ticket's RT
 // migration introduces over TURN's, since RT's STOP_ROTATION threshold and
 // its Ruckig target are NOT the same number, unlike TURN's).
+//
+// Ticket 089-006 note: the CONSOLIDATION pass -- tickets 003-005 already
+// built essentially all of this ticket's own acceptance bar into this file
+// (the full no-reverse trace proofs for D/T/TURN/RT, plus the Revision 2
+// divergence-replan coverage via option (b), synthetic-observation
+// Planner-tier calls, not a sim-plant-lag knob) -- so this ticket adds only
+// the two genuinely NEW scenarios the consolidation review found missing,
+// rather than re-deriving what already existed: (1)
+// scenarioVelocityGoalWithStopRuckigTraceNeverReversesThroughCruiseAndDecel
+// (4d) -- AC2's own "at minimum, a spot-check for bare S/R" clause, a
+// VELOCITY goal_kind (bare R's own goal kind) driven through cruise AND a
+// stop-triggered decel, mirroring 6b's TIMED assertion style; (2)
+// scenarioDistanceGoalGuardSkipsReplanOnceStopHasFired (5g) and
+// scenarioTurnGoalGuardSkipsReplanOnceStopHasFired (7g) -- guard 1
+// (stop-not-fired) had ONLY code-level enforcement (tick()'s own `if
+// (!stopping_)` gate, planner.cpp) and no dedicated scenario proving it
+// externally the way guard 2 (near-target no-reverse) already had via 5f/
+// 7f; these two new scenarios close that gap using the SAME
+// control-vs-test comparison technique 5f/7f established.
 
 #include <algorithm>
 #include <cmath>
@@ -323,6 +342,61 @@ void scenarioVelocityGoalCruiseSustainsPastRampDurationWithNoBookkeeping() {
 
   checkTrue(planner.hasActiveCommand(), "VELOCITY with no stops_[] never self-terminates");
   checkFalse(planner.hasEvent(), "no event queued across the whole sparse-tick trace");
+}
+
+// 4d. [089-006, AC2] VELOCITY goal_kind (the SAME internal goal kind bare
+// `R` stages -- motion_commands.cpp's handleR: "Posts a VELOCITY goal
+// exactly like a bare S") WITH a caller-supplied stop=: this ticket's own
+// "at minimum, a spot-check for bare S/R" half of AC2 (SUC-003), applied to
+// the one non-TIMED goal kind 6b's own full-trace test below does not
+// directly exercise (STREAM/bare-S's own analogous spot-check is 11b's
+// mid-profile-preemption scenario further down). Samples the full commanded
+// (v_x, omega) trace across cruise AND the stop-triggered re-solve,
+// asserting >= 0 on BOTH channels throughout -- mirrors 6b's own assertion
+// style exactly, for VELOCITY instead of TIMED.
+void scenarioVelocityGoalWithStopRuckigTraceNeverReversesThroughCruiseAndDecel() {
+  beginScenario(
+      "089-006 AC2: VELOCITY goal (bare R's own goal kind) with a caller stop -- full "
+      "(v_x, omega) trace across cruise + stop-triggered decel never reverses");
+  Subsystems::Planner planner;
+  planner.configure(generousConfig());  // a_max=a_decel=1000mm/s^2, yaw_acc_max=100rad/s^2
+
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::VELOCITY;
+  cmd.goal.velocity.v_x = 150.0f;  // [mm/s] -- ramp-up: 150/1000 = 0.15s
+  cmd.goal.velocity.omega = 1.0f;  // [rad/s] -- ramp-up: 1.0/100 = 0.01s
+  cmd.stops_count = 1;
+  cmd.stops_[0].kind = msg::StopKind::STOP_TIME;
+  cmd.stops_[0].a = 300.0f;  // [ms] -- mirrors a bounded `R 150 <radius> stop=t:300`
+  std::strncpy(cmd.corr_id, "rspot1", sizeof(cmd.corr_id) - 1);
+  planner.apply(cmd, 0);
+
+  checkTrue(planner.state().mode == msg::DriveMode::TIMED,
+            "a caller stop makes VELOCITY self-terminating (084-005 velocityShapedMode())");
+
+  planner.tick(0, msg::MotorState{}, msg::MotorState{}, msg::PoseEstimate{});  // baseline, elapsed=0
+  planner.takeCommand();
+
+  bool everReversedV = false;
+  bool everReversedOmega = false;
+  bool completedWithTime = false;
+  uint32_t t = 0;
+  for (int i = 0; i < 60; ++i) {  // up to 1200ms -- comfortably past the 300ms fire + both decels
+    t += 20;
+    planner.tick(t, msg::MotorState{}, msg::MotorState{}, msg::PoseEstimate{});
+    msg::DrivetrainCommand held = planner.takeCommand();
+    if (held.control.twist.v_x < -0.5f) everReversedV = true;
+    if (held.control.twist.omega < -0.5f) everReversedOmega = true;
+    if (!planner.hasActiveCommand()) {
+      completedWithTime = (std::strcmp(planner.takeEvent().reason, "time") == 0);
+      break;
+    }
+  }
+  checkFalse(everReversedV,
+             "the linear channel's commanded v_x never goes negative (bare R spot check)");
+  checkFalse(everReversedOmega,
+             "the rotational channel's commanded omega never goes negative (bare R spot check)");
+  checkTrue(completedWithTime, "still completes via reason=time once both decels converge");
 }
 
 // 5. DISTANCE goal_kind: Planner synthesizes the DISTANCE stop itself from
@@ -684,6 +758,72 @@ void scenarioDistanceGoalGuardSkipsNearTargetBackwardReplan() {
   checkFloatNear(testHeld.control.twist.v_x, controlHeld.control.twist.v_x, 1.0f,
                  "guard 2 skips the near-target replan -- commanded v_x matches the undisturbed "
                  "control");
+}
+
+// 5g. [089-006 Revision 2 AC] DISTANCE goal_kind: guard 1 (stop-not-fired)
+// blocks the divergence-triggered replan entirely once the goal's own
+// SMOOTH stop-triggered decel has armed (stopping_ == true) -- even a
+// wildly divergent synthetic observation fed AFTER that point must not
+// perturb the commanded decel-to-rest trace, since maybeReplanDistance()
+// is called ONLY while !stopping_ (planner.cpp's tick(), "guard 1"
+// comment). Proven the SAME way guard 2 is (scenario 5f above): compare
+// against an undisturbed control run at the identical tick -- if guard 1
+// held, the commanded v_x is unaffected by the synthetic observation.
+void scenarioDistanceGoalGuardSkipsReplanOnceStopHasFired() {
+  beginScenario(
+      "089-006 Revision 2 AC: guard 1 (stop-not-fired) blocks any replan once the SMOOTH "
+      "stop-triggered decel has armed (DISTANCE)");
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::DISTANCE;
+  cmd.goal.distance.distance = 500.0f;
+  cmd.goal.distance.speed = 200.0f;
+  // cmd.style left at its default (SMOOTH) -- ABRUPT never arms stopping_.
+  std::strncpy(cmd.corr_id, "guard1d", sizeof(cmd.corr_id) - 1);
+
+  // Control: an undisturbed encoder feed that reaches the 500mm
+  // STOP_DISTANCE threshold at t=2.5s (before the undisturbed plan's own
+  // ~2.7s natural convergence, see scenario 5c -- arms stopping_ via
+  // armDistanceStopDecel()), then continues tracking normally one more tick
+  // into the decel.
+  Subsystems::Planner control;
+  control.configure(generousConfig());
+  control.apply(cmd, 0);
+  control.tick(0, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});
+  control.takeCommand();
+  control.tick(2500, obsPosition(500.0f), obsPosition(500.0f), msg::PoseEstimate{});
+  control.takeCommand();
+  control.tick(2600, obsPosition(500.0f), obsPosition(500.0f), msg::PoseEstimate{});
+  msg::DrivetrainCommand controlHeld = control.takeCommand();
+
+  Subsystems::Planner test;
+  test.configure(generousConfig());
+  test.apply(cmd, 0);
+  test.tick(0, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});
+  test.takeCommand();
+  test.tick(2500, obsPosition(500.0f), obsPosition(500.0f), msg::PoseEstimate{});
+  test.takeCommand();
+  checkTrue(test.hasActiveCommand(),
+            "precondition: SMOOTH stop armed stopping_, goal not yet complete");
+  // A synthetic observation showing only 300mm traveled -- as if the plant
+  // had snapped backward from the 500mm the stop already fired at, a
+  // divergence well past kGrossDivergenceThreshold -- fed AFTER the stop
+  // has already fired. Guard 1 must skip any replan regardless of this
+  // observation. (Confirmed by direct mutation testing during this
+  // scenario's own authoring: with tick()'s `if (!stopping_)` gate
+  // deliberately removed, this exact observation flips the commanded v_x
+  // from 100mm/s to 0mm/s -- proving this scenario has real detection
+  // power, not just a vacuously-passing assertion; a smaller snap, e.g.
+  // 50mm, does NOT discriminate here, since armDistanceStopDecel()'s own
+  // velocity-control re-solve does not track a meaningful position, making
+  // maybeReplanDistance()'s plan-remaining estimate large regardless of the
+  // observation -- only a larger, mid-range snap reliably crosses the GROSS
+  // threshold.)
+  test.tick(2600, obsPosition(300.0f), obsPosition(300.0f), msg::PoseEstimate{});
+  msg::DrivetrainCommand testHeld = test.takeCommand();
+
+  checkFloatNear(testHeld.control.twist.v_x, controlHeld.control.twist.v_x, 1.0f,
+                 "guard 1 blocks the replan once stopping_ is armed -- commanded v_x matches the "
+                 "undisturbed control despite a huge synthetic divergence");
 }
 
 // 6. TIMED goal_kind: Planner synthesizes an implicit TIME stop from
@@ -1192,6 +1332,79 @@ void scenarioTurnGoalGuardSkipsNearTargetBackwardReplan() {
                  "control");
 }
 
+// 7g. [089-006 Revision 2 AC] TURN goal_kind: guard 1 (stop-not-fired)
+// blocks the divergence-triggered replan on the rotational channel too,
+// once the SMOOTH stop-triggered decel has armed -- mirrors
+// scenarioDistanceGoalGuardSkipsReplanOnceStopHasFired() above (5g), for
+// the rotational channel/TURN's own goal kind.
+void scenarioTurnGoalGuardSkipsReplanOnceStopHasFired() {
+  beginScenario(
+      "089-006 Revision 2 AC: guard 1 (stop-not-fired) blocks any replan once the SMOOTH "
+      "stop-triggered decel has armed (TURN)");
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::TURN;
+  cmd.goal.turn.speed = -2.0f;  // [rad/s] -- undisturbed plan duration ~0.805s (see scenario 7b)
+  cmd.stops_count = 1;
+  cmd.stops_[0].kind = msg::StopKind::STOP_HEADING;
+  cmd.stops_[0].a = -1.5707963f;  // [rad]
+  cmd.stops_[0].b = 0.02f;        // [rad] eps
+  // cmd.style left at its default (SMOOTH) -- ABRUPT never arms stopping_.
+  std::strncpy(cmd.corr_id, "guard1t", sizeof(cmd.corr_id) - 1);
+
+  // Control: an undisturbed fused-heading feed that reaches the -90deg
+  // target at t=524ms (mirrors 7c's own kPlantRate=3.0rad/s overshoot-plant
+  // framing: 1.5707963/3.0 = 0.5236s -- before the undisturbed plan's own
+  // ~0.805s natural convergence, arming stopping_ via
+  // armRotationalStopDecel()), then continues tracking normally 10ms into
+  // the decel -- yaw_acc_max=100rad/s^2 makes this decel very fast (from
+  // ~2rad/s to 0 in ~20ms), so the probe must land WELL inside that short
+  // window (unlike DISTANCE's 100ms-later probe in 5g above) to catch the
+  // channel still actively decelerating rather than already converged.
+  Subsystems::Planner control;
+  control.configure(generousConfig());
+  control.apply(cmd, 0);
+  control.tick(0, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, 0.0f));
+  control.takeCommand();
+  control.tick(524, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, -1.5707963f));
+  control.takeCommand();
+  control.tick(534, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, -1.5707963f));
+  msg::DrivetrainCommand controlHeld = control.takeCommand();
+
+  Subsystems::Planner test;
+  test.configure(generousConfig());
+  test.apply(cmd, 0);
+  test.tick(0, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, 0.0f));
+  test.takeCommand();
+  test.tick(524, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, -1.5707963f));
+  test.takeCommand();
+  checkTrue(test.hasActiveCommand(),
+            "precondition: SMOOTH stop armed stopping_, goal not yet complete");
+  // A synthetic observation showing the heading only -0.5rad along -- as if
+  // the plant had fallen well behind the -90deg (-1.5707963rad) target
+  // already reached, a divergence well past kRotGrossDivergenceThreshold --
+  // fed AFTER the stop has already fired. Guard 1 must skip any replan
+  // regardless of this observation. (Confirmed by direct mutation testing
+  // during this scenario's own authoring: with tick()'s `if (!stopping_)`
+  // gate deliberately removed, this exact observation flips the commanded
+  // omega from -1.0rad/s (control) to a fully-converged 0rad/s (test) at
+  // this probe offset -- a 1.0rad/s gap, proving this scenario has real
+  // detection power; the tolerance below is deliberately tightened to
+  // 0.3rad/s (rather than reusing 5g's 1.0mm/s-scaled tolerance verbatim) so
+  // that exact 1.0rad/s gap cannot land ON the tolerance boundary and go
+  // undetected. A probe 100ms after arming, mirroring 5g's own DISTANCE
+  // timing, does NOT discriminate here: yaw_acc_max=100's decel is so fast
+  // (~20ms) that BOTH the guarded and unguarded builds have already fully
+  // converged to omega=0 by then, regardless of guard 1 -- only a probe well
+  // inside that short decel window catches the channel still actively
+  // decelerating.)
+  test.tick(534, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, -0.5f));
+  msg::DrivetrainCommand testHeld = test.takeCommand();
+
+  checkFloatNear(testHeld.control.twist.omega, controlHeld.control.twist.omega, 0.3f,
+                 "guard 1 blocks the replan once stopping_ is armed -- commanded omega matches "
+                 "the undisturbed control despite a huge synthetic divergence");
+}
+
 // 8. ROTATION goal_kind: RotationGoal.speed is an already-signed omega;
 // relies on a caller-supplied ROTATION stop (encoder-arc based).
 // 089-005: RotationGoal.angle (previously informational only) is now
@@ -1603,12 +1816,14 @@ int main() {
   scenarioVelocityGoalRampsAndStaysOpenEnded();
   scenarioVelocityGoalWithStopReportsTimed();
   scenarioVelocityGoalCruiseSustainsPastRampDurationWithNoBookkeeping();
+  scenarioVelocityGoalWithStopRuckigTraceNeverReversesThroughCruiseAndDecel();
   scenarioDistanceGoalFiresImplicitStopAbrupt();
   scenarioDistanceGoalStopFiredBeforeConvergenceForcesFreshDecel();
   scenarioDistanceGoalRuckigTraceNeverReverses();
   scenarioDistanceGoalDivergenceReplanCorrectsLaggingPlant();
   scenarioDistanceGoalGrossDivergenceReanchorsAfterStall();
   scenarioDistanceGoalGuardSkipsNearTargetBackwardReplan();
+  scenarioDistanceGoalGuardSkipsReplanOnceStopHasFired();
   scenarioTimedGoalSmoothRampDown();
   scenarioTimedGoalBothChannelsRuckigTraceNeverReverseAndCompleteViaTime();
   scenarioTimedGoalStopFiresDuringRampUpForcesFreshDecelNoReverse();
@@ -1618,6 +1833,7 @@ int main() {
   scenarioTurnGoalDivergenceReplanCorrectsLaggingPlant();
   scenarioTurnGoalGrossDivergenceReanchorsAfterStall();
   scenarioTurnGoalGuardSkipsNearTargetBackwardReplan();
+  scenarioTurnGoalGuardSkipsReplanOnceStopHasFired();
   scenarioRotationGoalUsesSignedSpeedAndCallerStop();
   scenarioRotationGoalRuckigTraceNeverReverses();
   scenarioRotationGoalDivergenceReplanCorrectsLaggingPlant();
