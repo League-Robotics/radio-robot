@@ -6,44 +6,45 @@
 // hasCommand()/takeCommand() -- the same held/taken discipline Subsystems::
 // Drivetrain/PoseEstimator already use.
 //
-// TWO COEXISTING MOTION-GENERATION MECHANISMS (089-003/004, architecture-
-// update.md (089) Decision 5): this class currently owns BOTH `ramp_`
-// (Motion::VelocityRamp, a per-tick "step toward whatever the target
+// TWO MOTION-GENERATION MECHANISMS, FINAL SPLIT (089-003/004/005,
+// architecture-update.md (089) Decision 5, revised): this class owns BOTH
+// `ramp_` (Motion::VelocityRamp, a per-tick "step toward whatever the target
 // currently is" chaser) AND `linear_`/`rotational_` (Motion::JerkTrajectory,
 // a "solve the whole jerk-limited plan once, sample many times" profiler,
-// source/motion/jerk_trajectory.h). Which goal kind uses which is currently
-// split as follows -- **KNOWN INTERMEDIATE STATE**, not the sprint's final
-// shape:
-//   - `DISTANCE` (089-003): `linear_` only (Decision 2's position-control
-//     "Pattern A"). `apply()` solves a position-control solve-to-rest once
-//     (no live pose/observation dependency -- the whole plan is knowable at
-//     apply() time); `tick()` samples it every pass instead of calling
-//     `ramp_.advance()`/`applyStopAnticipation()`. Its own divergence-
-//     triggered replan (Decision 10, `maybeReplanDistance()`) is DISTANCE-
-//     only -- `TIMED`/`VELOCITY`/`STREAM` have no target position to
-//     diverge against (Decision 10's own text).
-//   - `TIMED`/`VELOCITY`/`STREAM` (089-004): BOTH `linear_` AND
-//     `rotational_` (Decision 2's velocity-control "Pattern B"). `apply()`
-//     (via `stageVelocityGoal()`) solves BOTH channels' velocity-control-
-//     to-cruise once; `tick()` samples both every pass; a fired stop
-//     condition re-solves both channels' velocity-control-to-zero
-//     (`armVelocityStopDecel()`), reusing ticket 003's stop-fire re-solve
-//     PATTERN (not the same method -- DISTANCE's is position-control,
-//     this is velocity-control, per Decision 2). Discriminated from
-//     `TURN`/`ROTATION`, which ALSO stage `mode_ == msg::DriveMode::TIMED`
-//     (`velocityShapedMode()`'s own shared collapse, below), by the
-//     `jerkVelocityGoal_` latch -- set ONLY by `stageVelocityGoal()` --
-//     rather than by `mode_`, which cannot tell the two apart.
-//   - `TURN`/`ROTATION`/`GOTO_GOAL`: still `ramp_` + (for `TURN`/`ROTATION`)
-//     `applyStopAnticipation()`, UNCHANGED, until ticket 005 migrates
-//     `TURN`/`ROTATION` too (`GOTO_GOAL` stays on `ramp_`/`pursueSteer()`
-//     for the whole sprint -- Decision 5).
-// `tick()`'s dispatch therefore needs goal-kind-aware checks (`mode_ ==
-// DISTANCE`, and the `jerkVelocityGoal_` latch) rather than the clean
-// `mode_ == GO_TO` vs. not split the architecture doc describes as the
-// sprint's END state -- do not generalize this early; ticket 005 is where
-// the dispatch collapses to that final two-way split, once `TURN`/
-// `ROTATION` migrate too.
+// source/motion/jerk_trajectory.h). As of ticket 005 (the last goal-kind
+// migration), the split between them is a clean, STABLE two-way dispatch on
+// `mode_` -- not a staged/intermediate shape:
+//   - `mode_ == GO_TO`: `ramp_`/`pursueSteer()`, UNCHANGED for the whole
+//     sprint (Decision 5) -- PRE_ROTATE and PURSUE both still chase a
+//     per-tick (v, omega) target the ramp advances toward.
+//   - Every other goal kind (`DISTANCE`/`TIMED`/`VELOCITY`/`STREAM`/`TURN`/
+//     `ROTATION`): `linear_`/`rotational_`, in one of two solve patterns
+//     (Decision 2):
+//     - Position-control ("Pattern A" -- solve-to-rest once, at apply()
+//       time): `DISTANCE` (089-003, `linear_` only) and `TURN`/`ROTATION`
+//       (089-005, Decision 9 -- `rotational_` carries the real
+//       turn-in-place solve; `linear_` carries a trivial solve-to-0 since
+//       v=0 always for a turn-in-place goal). Each also gets a
+//       divergence-triggered replan (Decision 10) while its own stop
+//       condition has not fired: `maybeReplanDistance()`/
+//       `maybeReplanRotational()`.
+//     - Velocity-control ("Pattern B" -- solve-to-cruise once, re-solved to
+//       zero when a stop fires): `TIMED`/`VELOCITY`/`STREAM` (089-004, BOTH
+//       channels, `stageVelocityGoal()`).
+//   - `jerkVelocityGoal_` (Pattern B) and `jerkRotationGoal_` (089-005,
+//     Pattern A on the rotational channel) are the two internal
+//     discriminators `tick()` needs ALONGSIDE `mode_ == DISTANCE` (Pattern
+//     A, linear channel only, unique -- no latch needed) -- `mode_` alone
+//     cannot tell `TURN`/`ROTATION`/plain `T` apart, since
+//     `velocityShapedMode()` collapses all three onto the SAME
+//     `DriveMode::TIMED` wire bucket (see that function's own doc comment,
+//     planner.cpp). These are bookkeeping WITHIN the "not GO_TO" branch,
+//     not a third leg of the top-level dispatch -- Decision 5's own "clean
+//     two-way split" describes the OUTER ramp_-vs-Ruckig choice, which
+//     `tick()` realizes as a single `mode_ == GO_TO` if/else; which
+//     Ruckig sub-pattern a given non-GO_TO goal uses is an implementation
+//     detail inside the "else" branch, the same way GO_TO's own
+//     PRE_ROTATE/PURSUE sub-dispatch is inside the "if".
 //
 // Ported (concept, not byte-for-byte) from source_old/superstructure/
 // Planner.{h,cpp} + source_old/commands/MotionCommand.{h,cpp}, onto the
@@ -219,9 +220,10 @@ class Planner {
   // case in apply(): sets the ramp target, latches the staged (v, omega) for
   // the next baseline capture, then calls stageCommon(). Does NOT touch
   // stops_[]/stopsCount_ -- callers populate those (via copyCallerStops()/
-  // appendStop()) before calling this. NOT used by DISTANCE (089-003) or
-  // TIMED/VELOCITY/STREAM (089-004, stageVelocityGoal() below) -- see class
-  // comment. Still used by TURN/ROTATION/GOTO_GOAL.
+  // appendStop()) before calling this. NOT used by DISTANCE (089-003),
+  // TIMED/VELOCITY/STREAM (089-004, stageVelocityGoal() below), or TURN/
+  // ROTATION (089-005, stageRotationalGoal() below) -- see class comment.
+  // Still used by GOTO_GOAL only.
   void stageGoal(float v, float omega, msg::DriveMode mode, const msg::PlannerCommand& cmd);
 
   // stageVelocityGoal -- 089-004: the TIMED/VELOCITY/STREAM analog of
@@ -245,6 +247,34 @@ class Planner {
   // exists) -- callers populate stops_[] themselves first.
   void stageVelocityGoal(float v, float omega, msg::DriveMode mode, const msg::PlannerCommand& cmd,
                         uint32_t now);
+
+  // stageRotationalGoal -- 089-005: the TURN/ROTATION analog of
+  // stageVelocityGoal() above, for the two turn-in-place goal kinds now
+  // driven by `linear_`/`rotational_` too, but via Decision 2's
+  // POSITION-control "Pattern A" (DISTANCE's own pattern, ticket 003) rather
+  // than Pattern B -- both are a single whole-trajectory solve-to-rest,
+  // knowable entirely at apply() time (Decision 9). `targetAngle` is the
+  // already-resolved rotational-channel target in RADIANS (`cmd.stops_[0].a`
+  // for TURN, `cmd.goal.rotation.angle` for RT -- callers resolve which,
+  // apply() just reads it, see the class comment on why); `omega` is the
+  // caller's own already-resolved signed rate (`cmd.goal.turn.speed`/
+  // `cmd.goal.rotation.speed`, magnitude == kTurnOmega/kRotationOmega,
+  // motion_commands.cpp) -- its magnitude becomes the rotational channel's
+  // per-call `max_velocity` ceiling (Decision 9's revision: NOT
+  // config_.yaw_rate_max directly; solveToRest() clamps against that global
+  // ceiling underneath regardless). `arcScale` converts RT's STOP_ROTATION
+  // stop (a per-wheel ARC in mm, a different unit domain from the
+  // rotational channel's radians) into the SAME radian domain for
+  // maybeReplanRotational()'s divergence comparison -- a ratio derived ONCE,
+  // by the caller, from this goal's own two already-resolved target fields
+  // (arc mm / angle rad), NOT a new DrivetrainConfig.trackwidth dependency
+  // (class comment on why Planner cannot gain one). TURN passes 1.0f (its
+  // own stop threshold and rotational-channel target are literally the SAME
+  // number, `cmd.stops_[0].a` -- no conversion needed). Linear channel: a
+  // trivial solve-to-rest at 0 (turn-in-place, v = 0 always; ticket item 3)
+  // -- solved and sampled like any other channel, never specially skipped.
+  void stageRotationalGoal(float targetAngle, float omega, float arcScale, msg::DriveMode mode,
+                          const msg::PlannerCommand& cmd, uint32_t now);
 
   // copyCallerStops -- reset stops_[]/stopsCount_ to the caller-supplied
   // cmd.stops_[] verbatim (bounded to the 4-slot cap already enforced by the
@@ -290,55 +320,20 @@ class Planner {
   // Called once per tick, BEFORE ramp_.advance(), while gPhase_ == PURSUE.
   void pursueSteer(const msg::PoseEstimate& fusedPose);
 
-  // applyStopAnticipation -- ticket 086-003: the SAME anticipation pattern
-  // pursueSteer() already applies for GOTO_GOAL's STOP_POSITION, extended to
-  // DISTANCE/TURN/ROTATION via Motion::remainingToStop() (architecture-
-  // update.md (086) Decision 2), so those three goal kinds also arrive at
-  // their stop condition already near-zero speed/rate instead of handing the
-  // motor loop a full-speed "arrest from full speed" problem. For every
-  // currently-active stop condition (stops_[0..stopsCount_)) whose kind is
-  // STOP_DISTANCE, re-derives a linear speed cap (vCap = sqrt(2 * a_decel *
-  // dRemaining)); STOP_ROTATION/STOP_HEADING, the analogous angular-rate cap
-  // (omegaCap = sqrt(2 * yaw_acc_max * angleRemaining)). Re-targets the ramp
-  // to min(staged, cap) (sign-preserved) every tick, the same way
-  // pursueSteer() re-targets every tick regardless of whether the cap
-  // currently binds. Deliberately NOT called for GO_TO (mode_ ==
-  // msg::DriveMode::GO_TO): PURSUE already owns its own STOP_POSITION
-  // anticipation via pursueSteer(), and PRE_ROTATE's own STOP_HEADING is a
-  // phase-handoff bearing gate, not a terminal stop -- capping its spin rate
-  // as it approached the gate would change GOTO_GOAL's own behavior, which
-  // this ticket leaves provably unchanged (see class comment / ticket
-  // acceptance). Called once per tick, BEFORE ramp_.advance(), for every
-  // other goal kind, while the goal is still running (guarded by the caller
-  // on !stopping_ -- once the SMOOTH ramp-down has armed target (0,0), this
-  // must not re-target the ramp away from zero).
-  //
-  // Ticket 087-009: the STOP_DISTANCE/STOP_ROTATION branches additionally
-  // fold in a FIXED dead-time compensation (architecture-update-r1.md's
-  // Decision 6/2 two-pass Planner->driveIn->Drivetrain->motorIn->Hardware
-  // output latency, versus ticket 006's same-pass feed-forward) -- see
-  // planner.cpp's own comment on the exact closed-form and ticket 087-009's
-  // completion notes for the measured before/after numbers. STOP_HEADING is
-  // deliberately left unmodified (TURN's own tests already pass without it).
-  void applyStopAnticipation(const msg::MotorState& leftObs,
-                             const msg::MotorState& rightObs,
-                             const msg::PoseEstimate& fusedPose);
-
   // linearElapsed -- [s] elapsed time since the linear channel's most recent
   // (re)solve (linearSolveMs_, updated by every solveToRest()/retarget()/
   // reanchor()/solveToVelocity() call this class makes on linear_). The
-  // sole argument to linear_.sample() -- see class comment's "KNOWN
-  // INTERMEDIATE STATE" note.
+  // sole argument to linear_.sample().
   float linearElapsed(uint32_t now) const;
 
-  // rotationalElapsed -- 089-004: the rotational channel's own analog of
+  // rotationalElapsed -- the rotational channel's own analog of
   // linearElapsed() above (rotationalSolveMs_, updated by every
-  // solveToVelocity() call this class makes on rotational_ -- TIMED/
-  // VELOCITY/STREAM only; TURN/ROTATION do not touch rotational_ until
-  // ticket 005). A separate timestamp from linearSolveMs_ is needed because
-  // armVelocityStopDecel() below may re-solve one channel without the other
-  // (whichever has not yet naturally converged), so the two channels' own
-  // solve times can genuinely diverge.
+  // solveToVelocity()/solveToRest()/retarget()/reanchor() call this class
+  // makes on rotational_ -- 089-004's TIMED/VELOCITY/STREAM and 089-005's
+  // TURN/ROTATION alike). A separate timestamp from linearSolveMs_ is
+  // needed because armVelocityStopDecel() may re-solve one channel without
+  // the other (whichever has not yet naturally converged), so the two
+  // channels' own solve times can genuinely diverge.
   float rotationalElapsed(uint32_t now) const;
 
   // maybeReplanDistance -- 089-003, architecture-update.md Decision 10:
@@ -351,9 +346,9 @@ class Planner {
   // STOP_DISTANCE condition; when they diverge by at least
   // kDivergenceThreshold, requests a retarget() (normal case) or, past
   // kGrossDivergenceThreshold, a reanchor() (gross case) -- see planner.cpp
-  // for the exact dead-time-projected target formula (reuses
-  // applyStopAnticipation()'s own kDeadTime, hoisted to file scope so both
-  // methods share one definition). Enforces guard 2 (no-reverse-target: a
+  // for the exact dead-time-projected target formula (reuses the file-scope
+  // kDeadTime constant maybeReplanRotational() also shares). Enforces
+  // guard 2 (no-reverse-target: a
   // replan is skipped if the dead-time-projected measured remaining is <=
   // 0) and guard 3 (a minimum interval between replans, lastReplanMs_/
   // kMinReplanInterval) itself -- Motion::JerkTrajectory enforces NEITHER
@@ -362,6 +357,43 @@ class Planner {
   void maybeReplanDistance(uint32_t now, const msg::MotorState& leftObs,
                            const msg::MotorState& rightObs,
                            const msg::PoseEstimate& fusedPose);
+
+  // maybeReplanRotational -- 089-005, architecture-update.md Decision 10
+  // (extended by this ticket to the rotational channel): TURN/ROTATION's
+  // own divergence-triggered replan, mirroring maybeReplanDistance()'s
+  // structure exactly (same three guards -- stop-not-fired enforced by the
+  // caller, no-reverse-target, deadband+rate-limit via the SHARED
+  // lastReplanMs_/kMinReplanInterval, since DISTANCE and TURN/ROTATION are
+  // never active at once) but for rotational_ instead of linear_, and with
+  // ONE extra step RT needs that TURN does not: the measured-remaining
+  // source (Motion::remainingToStop(), Decision 9's existing split --
+  // headingError() for TURN, rotationProgress() for RT) reports in the
+  // stop condition's OWN domain -- radians for TURN's STOP_HEADING
+  // (literally the same number as rotational_'s own target, no conversion
+  // needed), but a per-wheel ARC in mm for RT's STOP_ROTATION (a genuinely
+  // different unit domain from rotational_'s radians, Decision 9). Rather
+  // than gain a new DrivetrainConfig.trackwidth dependency to convert
+  // between them (see class comment on why Planner cannot), this method
+  // divides the measured value by rotationalArcScale_ -- a ratio the
+  // caller (stageRotationalGoal()) already derived once, at goal start,
+  // from this goal's own two already-resolved target fields (1.0f for
+  // TURN, a no-op) -- converting straight to radians so every downstream
+  // comparison/projection/retarget() call happens in rotational_'s own
+  // native domain, exactly like maybeReplanDistance()'s mm-domain math.
+  // kRotDivergenceThreshold/kRotGrossDivergenceThreshold are separate,
+  // radian-valued constants (ticket-owned/bench-tunable, see their own
+  // comments) -- DISTANCE's kDivergenceThreshold/kGrossDivergenceThreshold
+  // are mm-valued and not meaningful here. The GROSS (reanchor()) case
+  // always seeds velocity 0.0f rather than a measured rate: no reliable
+  // measured angular-rate signal exists for either goal kind
+  // (msg::PoseEstimate.twist is never populated by PoseEstimator, so
+  // there is no fused omega for TURN; deriving one from wheel-differential
+  // velocity for RT only would treat the two goal kinds asymmetrically for
+  // no real benefit) -- reanchor()'s own contract already accepts a
+  // velocity discontinuity at the reseed by design (jerk_trajectory.h).
+  void maybeReplanRotational(uint32_t now, const msg::MotorState& leftObs,
+                             const msg::MotorState& rightObs,
+                             const msg::PoseEstimate& fusedPose);
 
   // armDistanceStopDecel -- 089-003, ticket item 4: called from tick()'s
   // stop-evaluation loop exactly once, the instant a SMOOTH-style DISTANCE
@@ -402,6 +434,16 @@ class Planner {
   // (linearCeiling_/rotationalCeiling_).
   void armVelocityStopDecel(uint32_t now);
 
+  // armRotationalStopDecel -- 089-005: the TURN/ROTATION analog of
+  // armDistanceStopDecel() above (position-control -- reuses that method's
+  // "skip if already converged" guard, unlike armVelocityStopDecel()'s
+  // velocity-control one, since TURN/ROTATION are Pattern A like DISTANCE).
+  // Only the rotational channel needs a re-solve: the linear channel's
+  // trivial solve-to-0 (stageRotationalGoal()) is already at rest with a
+  // ~zero duration, so it is always already "converged" by the time any
+  // stop fires -- no linear_ call needed here.
+  void armRotationalStopDecel(uint32_t now);
+
   // queueEvent -- hold a completed-goal Event (reason token + the staged
   // goal's corr_id).
   void queueEvent(const char* reason);
@@ -413,22 +455,23 @@ class Planner {
   msg::PlannerConfig config_ = {};
   Motion::VelocityRamp ramp_;
 
-  // 089-003/004: the linear channel drives DISTANCE (position-control) AND
+  // 089-003/004/005: the linear channel drives DISTANCE (position-control),
+  // TURN/ROTATION's own trivial zero-target (position-control, 089-005), AND
   // TIMED/VELOCITY/STREAM (velocity-control, via stageVelocityGoal() --
-  // 089-004); the rotational channel drives ONLY TIMED/VELOCITY/STREAM's
-  // omega component this sprint -- TURN/ROTATION still don't touch it until
-  // ticket 005 (architecture-update.md (089) Decision 1/ticket item 1).
-  // Both fields are SHARED across whichever of those goal kinds is
-  // currently active (mode_/jerkVelocityGoal_ is single-valued at a time --
-  // see class comment) -- there is no per-goal-kind copy.
+  // 089-004); the rotational channel drives TURN/ROTATION's real
+  // turn-in-place solve (089-005) AND TIMED/VELOCITY/STREAM's omega
+  // component (089-004). Both fields are SHARED across whichever of those
+  // goal kinds is currently active (mode_/jerkVelocityGoal_/
+  // jerkRotationGoal_ is single-valued at a time -- see class comment) --
+  // there is no per-goal-kind copy.
   Motion::JerkTrajectory linear_;
   Motion::JerkTrajectory rotational_;
 
   uint32_t linearSolveMs_ = 0;  // [ms] absolute time of linear_'s most recent (re)solve
-  // rotationalSolveMs_ -- 089-004: rotational_'s own analog of
-  // linearSolveMs_ above (TIMED/VELOCITY/STREAM only -- see
-  // rotationalElapsed()'s own doc comment on why a separate timestamp is
-  // needed rather than reusing linearSolveMs_ for both channels).
+  // rotationalSolveMs_ -- rotational_'s own analog of linearSolveMs_ above
+  // (089-004's TIMED/VELOCITY/STREAM and 089-005's TURN/ROTATION alike --
+  // see rotationalElapsed()'s own doc comment on why a separate timestamp
+  // is needed rather than reusing linearSolveMs_ for both channels).
   uint32_t rotationalSolveMs_ = 0;  // [ms] absolute time of rotational_'s most recent (re)solve
   // linear_'s CURRENT target, in whatever frame its most recent (re)solve
   // established (retarget() rebaselines the frame; reanchor() does not
@@ -438,27 +481,46 @@ class Planner {
   // needing its own public target() accessor (out of this ticket's scope --
   // Files to modify: planner.h/.cpp only). DISTANCE-only -- TIMED/VELOCITY/
   // STREAM never touch this (Decision 10 divergence replan does not apply
-  // to them -- no target position exists).
+  // to them -- no target position exists), and TURN/ROTATION's own trivial
+  // zero-target linear solve has nothing to diverge either (089-005) -- the
+  // rotational channel's analogous bookkeeping is rotationalTarget_ below.
   float linearTarget_ = 0.0f;    // [mm]
   float linearCeiling_ = 0.0f;   // [mm/s] per-call max_velocity most recently
-                                 // used for a solveToRest() (DISTANCE) or
-                                 // solveToVelocity() cruise solve (TIMED/
-                                 // VELOCITY/STREAM, 089-004) -- reused by
-                                 // armDistanceStopDecel()'s/
+                                 // used for a solveToRest() (DISTANCE, or
+                                 // TURN/ROTATION's trivial 0 target,
+                                 // 089-005) or solveToVelocity() cruise
+                                 // solve (TIMED/VELOCITY/STREAM, 089-004) --
+                                 // reused by armDistanceStopDecel()'s/
                                  // armVelocityStopDecel()'s own
                                  // solveToVelocity() re-solve call
                                  // (retarget()/reanchor() reuse their OWN
                                  // remembered ceiling internally instead).
-  // rotationalCeiling_ -- 089-004: rotational_'s own analog of
-  // linearCeiling_ above, TIMED/VELOCITY/STREAM only.
+  // rotationalCeiling_ -- rotational_'s own analog of linearCeiling_ above:
+  // 089-004's TIMED/VELOCITY/STREAM cruise ceiling, or 089-005's TURN/
+  // ROTATION per-call ceiling (kTurnOmega/kRotationOmega, clamped by
+  // yaw_rate_max -- Decision 9's revision); reused by
+  // armVelocityStopDecel()'s/armRotationalStopDecel()'s own
+  // solveToVelocity() re-solve call.
   float rotationalCeiling_ = 0.0f;  // [rad/s] per-call max_velocity most
                                      // recently used for rotational_'s
-                                     // cruise solve; reused by
-                                     // armVelocityStopDecel().
+                                     // cruise or solve-to-rest solve.
+  // rotationalTarget_ -- 089-005: rotational_'s own analog of linearTarget_
+  // above, TURN/ROTATION only (kept in sync with rotational_'s own internal
+  // target_ the same way linearTarget_ tracks linear_'s, for
+  // maybeReplanRotational()'s "plan's own remaining" computation).
+  float rotationalTarget_ = 0.0f;  // [rad]
+  // rotationalArcScale_ -- 089-005: converts RT's STOP_ROTATION measured
+  // remaining (a per-wheel ARC, mm) into rotational_'s own radian domain
+  // for maybeReplanRotational()'s divergence comparison -- see that
+  // method's and stageRotationalGoal()'s own doc comments. 1.0f for TURN
+  // (no conversion needed: its STOP_HEADING threshold and rotational_'s
+  // target are literally the same number). [mm/rad] for RT, [dimensionless]
+  // for TURN.
+  float rotationalArcScale_ = 1.0f;
 
   // Divergence-replan rate limiting (Decision 10 guard 3) -- shared across
-  // whichever channel currently supports it (DISTANCE this ticket; TURN/
-  // ROTATION, ticket 005).
+  // every position-control goal kind (DISTANCE, ticket 003; TURN/ROTATION,
+  // ticket 005) since at most one is ever active at a time.
   uint32_t lastReplanMs_ = 0;  // [ms] last divergence-triggered replan (or apply()) time
   // Ticket-owned defaults (architecture-update.md Decision 10: "threshold
   // values are ticket-owned, not specified [by the architecture doc]") --
@@ -477,7 +539,20 @@ class Planner {
   // left a goal ~0.6mm short of a 500mm target under that same scenario).
   static constexpr float kDivergenceThreshold = 3.0f;        // [mm]
   static constexpr float kGrossDivergenceThreshold = 40.0f;  // [mm]
-  static constexpr uint32_t kMinReplanInterval = 60;         // [ms]
+  static constexpr uint32_t kMinReplanInterval = 60;         // [ms] shared,
+                                                              // linear+rotational
+  // kRotDivergenceThreshold/kRotGrossDivergenceThreshold -- 089-005: the
+  // rotational channel's own analogs of kDivergenceThreshold/
+  // kGrossDivergenceThreshold above, in RADIANS rather than mm (a shared mm
+  // constant would not be meaningful against a radian-valued comparison --
+  // see maybeReplanRotational()'s own doc comment). Ticket-owned/
+  // bench-tunable (Decision 10), sized the same proportionally as the
+  // linear pair (roughly a 10x normal-to-gross ratio) against a typical
+  // tens-of-degrees-to-180-degree turn target: ~1.7 deg / ~17 deg.
+  // kMinReplanInterval above is reused unchanged (a time constant, not a
+  // distance/angle one -- equally applicable to either channel).
+  static constexpr float kRotDivergenceThreshold = 0.03f;      // [rad]
+  static constexpr float kRotGrossDivergenceThreshold = 0.3f;  // [rad]
 
   // currentV_/currentOmega_ -- this tick's held commanded body twist,
   // regardless of which mechanism produced it (ramp_ or a JerkTrajectory
@@ -515,14 +590,24 @@ class Planner {
   // jerkVelocityGoal_ -- 089-004: latched true ONLY by stageVelocityGoal()
   // (TIMED/VELOCITY/STREAM's own apply()-time staging helper), reset to
   // false at the top of every apply() call (alongside gPhase_ below) --
-  // the discriminator tick() reads to route these three goal kinds onto
-  // linear_/rotational_ instead of ramp_. Needed because mode_ alone cannot
-  // tell them apart from TURN/ROTATION: velocityShapedMode() collapses BOTH
-  // families onto the SAME msg::DriveMode::TIMED value once a stop
-  // condition is present (see that function's own doc comment, planner.cpp)
-  // -- unlike DISTANCE, whose mode_ == msg::DriveMode::DISTANCE value is
-  // unique and needs no separate latch (class comment).
+  // one of the two internal discriminators tick() reads to pick which
+  // Ruckig sub-pattern a non-GO_TO goal uses. Needed because mode_ alone
+  // cannot tell TIMED/VELOCITY/STREAM apart from TURN/ROTATION:
+  // velocityShapedMode() collapses BOTH families onto the SAME
+  // msg::DriveMode::TIMED value once a stop condition is present (see that
+  // function's own doc comment, planner.cpp) -- unlike DISTANCE, whose
+  // mode_ == msg::DriveMode::DISTANCE value is unique and needs no separate
+  // latch (class comment).
   bool jerkVelocityGoal_ = false;
+
+  // jerkRotationGoal_ -- 089-005: TURN/ROTATION's own analog of
+  // jerkVelocityGoal_ above, latched true ONLY by stageRotationalGoal(),
+  // reset to false at the top of every apply() call the same way. Needed
+  // for the identical reason: mode_ == msg::DriveMode::TIMED is shared with
+  // both plain T (jerkVelocityGoal_) and TURN/ROTATION (this latch) --
+  // mode_ alone cannot distinguish them (velocityShapedMode()'s own
+  // collapse, planner.cpp).
+  bool jerkRotationGoal_ = false;
 
   // GOTO_GOAL (G) state machine (ticket 084-004) -- ported concept from
   // source_old/superstructure/Planner.h's GPhase/_gTargetXWorld/

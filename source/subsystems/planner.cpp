@@ -76,16 +76,17 @@ msg::DriveMode velocityShapedMode(const msg::PlannerCommand& cmd) {
 }
 
 // kOutputHops/kAssumedPassPeriod/kDeadTime -- ticket 087-009's fixed
-// two-output-pass dead-time compensation (see applyStopAnticipation()'s own
-// doc comment below for the full derivation/rationale). Hoisted to file
-// scope (089-003) so BOTH applyStopAnticipation() (STOP_DISTANCE/
-// STOP_ROTATION's anticipation cap -- STOP_DISTANCE has been dead code since
-// 089-003, STOP_HEADING/STOP_ROTATION still serving TURN/ROTATION until
-// ticket 005; TIMED/VELOCITY/STREAM no longer reach this function as of
-// 089-004) and maybeReplanDistance() (DISTANCE's new divergence-triggered
-// replan, architecture-update.md (089) Decision 10) share the SAME tau
-// definition, per that Decision's own instruction to reuse it rather than
-// redefine one under a new name.
+// two-output-pass dead-time compensation, originally derived for the
+// now-deleted applyStopAnticipation() (STOP_DISTANCE/STOP_HEADING/
+// STOP_ROTATION's pre-Ruckig anticipation cap -- removed in full by ticket
+// 089-005, its last remaining callers (TURN/ROTATION) having migrated onto
+// Motion::JerkTrajectory, whose whole-trajectory solve already produces the
+// equivalent anticipation as an intrinsic property of the plan). Hoisted to
+// file scope (089-003) and now shared by maybeReplanDistance() (DISTANCE's
+// divergence-triggered replan) and maybeReplanRotational() (TURN/ROTATION's
+// own, 089-005) -- architecture-update.md (089) Decision 10's own
+// instruction to reuse one tau definition rather than redefine one under a
+// new name.
 constexpr float kOutputHops = 2.0f;
 constexpr float kAssumedPassPeriod = 0.020f;  // [s] matches main.cpp's kPeriod
 constexpr float kDeadTime = kOutputHops * kAssumedPassPeriod;  // [s]
@@ -124,6 +125,39 @@ void Planner::stageGoal(float v, float omega, msg::DriveMode mode,
   ramp_.setTarget(v, omega);
   stagedV_ = v;
   stagedOmega_ = omega;
+  stageCommon(mode, cmd);
+}
+
+void Planner::stageRotationalGoal(float targetAngle, float omega, float arcScale,
+                                  msg::DriveMode mode, const msg::PlannerCommand& cmd,
+                                  uint32_t now) {
+  // Linear channel: TURN/ROTATION are turn-in-place (v = 0 always) -- a
+  // trivial position-control solve-to-rest at 0 (ticket item 3; mirrors
+  // DISTANCE's own solveToRest() pattern rather than inventing a separate
+  // v=0 special case). Already at rest (reset()), so this is a ~zero-
+  // duration solve -- sampled every tick like any other channel, never
+  // silently skipped (see class comment).
+  linear_.reset();
+  linearCeiling_ = 0.0f;
+  linear_.solveToRest(0.0f, 0.0f);
+  linearSolveMs_ = now;
+
+  // Rotational channel: position-control solve-to-rest at targetAngle
+  // (Decision 9). max_velocity is the caller's own already-resolved rate
+  // magnitude (kTurnOmega/kRotationOmega, motion_commands.cpp) -- NOT
+  // config_.yaw_rate_max directly; solveToRest() clamps against that
+  // global ceiling underneath regardless (Decision 9's revision).
+  rotational_.reset();
+  rotationalCeiling_ = fabsf(omega);
+  rotational_.solveToRest(targetAngle, rotationalCeiling_);
+  rotationalTarget_ = targetAngle;
+  rotationalArcScale_ = arcScale;
+  rotationalSolveMs_ = now;
+  lastReplanMs_ = now;
+
+  stagedV_ = 0.0f;
+  stagedOmega_ = omega;
+  jerkRotationGoal_ = true;
   stageCommon(mode, cmd);
 }
 
@@ -173,12 +207,15 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now) {
   // ever consulted while mode_ == GO_TO, so this matters for hygiene/
   // debuggability more than correctness -- see class comment).
   gPhase_ = GPhase::IDLE;
-  // 089-004: reset unconditionally, same reasoning as gPhase_ above --
-  // stageVelocityGoal() (TIMED/VELOCITY/STREAM cases only, below) is the
-  // ONLY place that sets this back to true; every other goal_kind case
-  // (including TURN/ROTATION, which also stage mode_ == TIMED) leaves it
-  // false, which is exactly the discrimination tick() needs (class comment).
+  // 089-004/005: reset unconditionally, same reasoning as gPhase_ above --
+  // stageVelocityGoal() (TIMED/VELOCITY/STREAM, below) is the ONLY place
+  // that sets jerkVelocityGoal_ back to true; stageRotationalGoal() (TURN/
+  // ROTATION, below) is the ONLY place that sets jerkRotationGoal_ back to
+  // true. Every other goal_kind case leaves both false, which is exactly
+  // the discrimination tick() needs (class comment) -- mode_ == TIMED alone
+  // is shared by plain T, TURN, and ROTATION alike.
   jerkVelocityGoal_ = false;
+  jerkRotationGoal_ = false;
 
   switch (cmd.goal_kind) {
     case msg::PlannerCommand::GoalKind::VELOCITY: {
@@ -239,8 +276,19 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now) {
       // appends its own built-in HEADING stop before staging, so
       // cmd.stops_count_val() is never 0 (see velocityShapedMode()'s own
       // doc comment above).
+      //
+      // 089-005 (Decision 9): the rotational channel's Ruckig target is
+      // cmd.stops_[0].a -- the ALREADY-RESOLVED, signed, shortest-path
+      // heading delta handleTURN computes from LIVE fused heading at
+      // command time (unchanged division of labor: apply() still has no
+      // pose argument and still does not resolve this itself, it just
+      // reads the resolved value, now from the stop condition's own `a`
+      // field instead of only using it as a stop threshold). copyCallerStops()
+      // must run FIRST so stops_[0] is populated before this reads it.
       copyCallerStops(cmd);
-      stageGoal(0.0f, cmd.goal.turn.speed, velocityShapedMode(cmd), cmd);
+      float target = stops_[0].a;  // [rad] signed heading delta
+      stageRotationalGoal(target, cmd.goal.turn.speed, /*arcScale=*/1.0f,
+                          velocityShapedMode(cmd), cmd, now);
       break;
     }
 
@@ -319,8 +367,26 @@ void Planner::apply(const msg::PlannerCommand& cmd, uint32_t now) {
       // TIMED here -- handleRT (motion_commands.cpp) unconditionally
       // appends its own built-in ROTATION stop before staging (same
       // reasoning as the TURN case above).
+      //
+      // 089-005 (Decision 9): the rotational channel's Ruckig target is
+      // cmd.goal.rotation.angle -- an EXISTING msg::RotationGoal field
+      // handleRT already populates (relAngle * kCdegToRad, signed) but this
+      // class previously only treated as informational. RT's built-in
+      // ROTATION stop threshold (stops_[0].a, a per-wheel ARC in mm) is a
+      // DIFFERENT number from this radian target (a trackwidth-dependent
+      // conversion) -- rotationalArcScale_ (mm per rad) is derived once,
+      // here, from these same two already-resolved fields, so
+      // maybeReplanRotational() can compare its divergence in one
+      // consistent domain without Planner gaining a new
+      // DrivetrainConfig.trackwidth dependency (class comment).
       copyCallerStops(cmd);
-      stageGoal(0.0f, cmd.goal.rotation.speed, velocityShapedMode(cmd), cmd);
+      float target = cmd.goal.rotation.angle;  // [rad] signed relative rotation
+      float arcScale = 1.0f;                   // [mm/rad] degenerate-target fallback
+      if (fabsf(target) > 1e-6f) {
+        arcScale = stops_[0].a / fabsf(target);
+      }
+      stageRotationalGoal(target, cmd.goal.rotation.speed, arcScale, velocityShapedMode(cmd), cmd,
+                          now);
       break;
     }
 
@@ -432,123 +498,6 @@ void Planner::pursueSteer(const msg::PoseEstimate& fusedPose) {
   ramp_.setTarget(v, omega);
 }
 
-void Planner::applyStopAnticipation(const msg::MotorState& leftObs,
-                                    const msg::MotorState& rightObs,
-                                    const msg::PoseEstimate& fusedPose) {
-  // Start from the staged (v, omega) -- the ramp's own eventual target
-  // absent any cap -- and tighten whichever component an active DISTANCE/
-  // ROTATION/HEADING stop's remaining-to-go geometry says to tighten. See
-  // planner.h's class comment for why GO_TO never reaches this method.
-  float v = stagedV_;
-  float omega = stagedOmega_;
-
-  // kOutputHops/kAssumedPassPeriod/kDeadTime (ticket 087-009) --
-  // architecture-update-r1.md's Decision 6/2 adds TWO full passes of dead
-  // time between this tick computing a cap and that cap actually reaching
-  // the wheel's commanded PWM: Planner's output -> bb.driveIn, drained by
-  // Drivetrain next pass; Drivetrain's own output -> bb.motorIn[], drained
-  // by Hardware the pass after THAT (see ticket 007's completion notes' own
-  // "TWO passes" accounting) -- versus ticket 006's transitional same-pass
-  // `hardware.apply(drivetrain.takeCommand())`. kAssumedPassPeriod matches
-  // main.cpp's own `kPeriod` (the loop's target best-effort cadence) --
-  // deliberately a FIXED constant, NOT this tick's own measured `now` delta:
-  // an earlier version of this fix used the measured delta, which is a
-  // reasonable proxy in the real loop (where Planner ticks exactly once per
-  // mandatory pass) but silently breaks in planner_harness.cpp's own
-  // scenarios, which deliberately advance `now` by large, non-representative
-  // steps (e.g. a full simulated second) to force ramp convergence within a
-  // single call -- caught by that harness's own tight, hand-derived
-  // expected-value assertions failing once this fix used the measured delta.
-  // A fixed constant sidesteps that fragility entirely.
-  //
-  // Below, the STOP_DISTANCE/STOP_ROTATION branches fold that dead time into
-  // the cap using the closed-form "stopping distance with a reaction time"
-  // solution (the same shape as the highway stopping-sight-distance formula,
-  // d = v*T + v^2/(2a)) -- solved for v given d = remaining:
-  //   v = -a*T + sqrt((a*T)^2 + 2*a*remaining)
-  // which reduces exactly to the un-compensated sqrt(2*a*remaining) when
-  // T == 0. This is a PURE FUNCTION of `remaining` (the encoder-derived
-  // geometry) and constants (a_decel/yaw_acc_max, kDeadTime) -- deliberately
-  // NOT a function of the CURRENTLY MEASURED wheel speed. An earlier version
-  // of this fix subtracted `measuredSpeed * deadTime` from `remaining`
-  // directly, which closes a loop through the plant's own (delayed)
-  // velocity response: as the cap drives speed down, the measured-speed
-  // term shrinks, which relaxes the cap, which lets speed climb back up --
-  // a genuine limit-cycle oscillation, caught by tracing a dense per-tick
-  // velocity trace through D 200 200 700's terminal approach (velocity
-  // dipped to ~0 mid-approach, then rebounded to 72mm/s just before the stop
-  // fired). The closed-form formula below has no such feedback path: it
-  // depends only on `remaining`, which shrinks monotonically, so the cap it
-  // produces is monotonic too.
-  //
-  // kOutputHops/kAssumedPassPeriod/kDeadTime themselves now live at file
-  // scope (089-003) -- see the anonymous namespace above -- so
-  // maybeReplanDistance()'s divergence-triggered replan (architecture-
-  // update.md (089) Decision 10) can reuse the SAME tau definition rather
-  // than redefining one under a new name; no behavior change here.
-
-  for (uint8_t i = 0; i < stopsCount_; ++i) {
-    const msg::StopCondition& cond = stops_[i];
-    float remaining = 0.0f;
-    Motion::StopEvalResult r =
-        Motion::remainingToStop(cond, baseline_, leftObs, rightObs, fusedPose, &remaining);
-    if (r == Motion::StopEvalResult::UNSUPPORTED) continue;  // STOP_TIME etc -- no geometry here
-
-    if (cond.kind == msg::StopKind::STOP_DISTANCE) {
-      // pursueSteer()-style linear terminal decel cap, dead-time-compensated
-      // (see this method's own comment above).
-      float reach = config_.a_decel * kDeadTime;
-      float vCap = -reach + sqrtf(reach * reach + 2.0f * config_.a_decel * remaining);
-      float mag = fminf(fabsf(v), vCap);
-      v = (stagedV_ < 0.0f) ? -mag : mag;
-    } else if (cond.kind == msg::StopKind::STOP_HEADING) {
-      // TURN's angular-rate cap: remaining is a genuine heading error (rad),
-      // dimensionally consistent with yaw_acc_max (rad/s^2) -- exact analog
-      // of the DISTANCE cap above.
-      float omegaCap = sqrtf(fmaxf(0.0f, 2.0f * config_.yaw_acc_max * remaining));
-      float mag = fminf(fabsf(omega), omegaCap);
-      omega = (stagedOmega_ < 0.0f) ? -mag : mag;
-    } else if (cond.kind == msg::StopKind::STOP_ROTATION) {
-      // ROTATION's angular-rate cap: remaining here is a per-wheel ARC (mm,
-      // see evaluateStopCondition()'s own STOP_ROTATION comment), not an
-      // angle -- Planner has no DrivetrainConfig.trackwidth to convert arc
-      // mm <-> rad with (see class comment on why RotationGoal.speed is
-      // accepted pre-signed instead). Applying yaw_acc_max (rad/s^2)
-      // directly to an mm-valued remaining is therefore a deliberate,
-      // documented approximation, not a unit-correct derivation: it still
-      // gives the right SHAPE of cap (0 at remaining==0, growing with
-      // remaining, so it never binds far from the stop and always binds at
-      // it) using the only two numbers this class actually has (omega,
-      // yaw_acc_max) -- the same concept-not-byte-for-byte simplification
-      // precedent already established for RT's coast-anticipation/
-      // rotational-slip (planner.h's GOTO_GOAL class comment).
-      //
-      // Dead-time compensation (087-009): same closed-form reaction-time cap
-      // as STOP_DISTANCE above (see this method's own comment), applied in
-      // this same already-approximated per-wheel-ARC-mm domain. Kept for
-      // consistency/future-proofing even though it is provably a NO-OP at
-      // today's config values: RT's omega (kRotationOmega, motion_commands.
-      // cpp, ~1.745 rad/s) vs. yaw_acc_max (20 rad/s^2) only cross at
-      // remaining = omega^2/(2*yaw_acc_max) =~ 0.076mm -- out of a ~100mm
-      // total arc (90deg at the default 128mm trackwidth) -- far below one
-      // tick's own arc travel (~2.7mm at this omega), so the cap never binds
-      // in practice, before OR after this ticket's dead-time term (a min()
-      // against a bound that high above the staged omega never changes the
-      // result). This matches 086-003's own completion notes ("does not
-      // close RT's own overshoot to near-zero the way it closed D 200 200
-      // 500's"): RT's terminal overshoot is dominated by the SMOOTH
-      // ramp-down's post-fire coast, not this pre-fire cap -- see ticket
-      // 087-009's completion notes for why that coast is left un-recovered.
-      float reach = config_.yaw_acc_max * kDeadTime;
-      float omegaCap = -reach + sqrtf(reach * reach + 2.0f * config_.yaw_acc_max * remaining);
-      float mag = fminf(fabsf(omega), omegaCap);
-      omega = (stagedOmega_ < 0.0f) ? -mag : mag;
-    }
-  }
-
-  ramp_.setTarget(v, omega);
-}
-
 float Planner::linearElapsed(uint32_t now) const {
   return static_cast<float>(static_cast<int32_t>(now - linearSolveMs_)) * 0.001f;
 }
@@ -567,9 +516,9 @@ void Planner::maybeReplanDistance(uint32_t now, const msg::MotorState& leftObs,
   }
 
   // DISTANCE always carries its own STOP_DISTANCE (appended in apply()) --
-  // find it the same way applyStopAnticipation() finds its own stops,
-  // rather than assuming stops_[0] (robust against a future stops_[]
-  // ordering change).
+  // find it by kind (the same defensive search maybeReplanRotational() uses
+  // below), rather than assuming stops_[0] (robust against a future
+  // stops_[] ordering change).
   const msg::StopCondition* distCond = nullptr;
   for (uint8_t i = 0; i < stopsCount_; ++i) {
     if (stops_[i].kind == msg::StopKind::STOP_DISTANCE) {
@@ -644,6 +593,91 @@ void Planner::maybeReplanDistance(uint32_t now, const msg::MotorState& leftObs,
   lastReplanMs_ = now;
 }
 
+void Planner::maybeReplanRotational(uint32_t now, const msg::MotorState& leftObs,
+                                    const msg::MotorState& rightObs,
+                                    const msg::PoseEstimate& fusedPose) {
+  // Guard 3 (deadband + rate limit, Decision 10) -- lastReplanMs_/
+  // kMinReplanInterval are SHARED with maybeReplanDistance() (planner.h's
+  // own comment on why: at most one position-control goal is ever active).
+  if (static_cast<int32_t>(now - lastReplanMs_) < static_cast<int32_t>(kMinReplanInterval)) {
+    return;
+  }
+
+  // TURN always carries its own built-in STOP_HEADING; RT its own built-in
+  // STOP_ROTATION (both appended first, before any caller stop=, by
+  // handleTURN/handleRT) -- find whichever is present the same defensive
+  // way maybeReplanDistance() finds its own STOP_DISTANCE, rather than
+  // assuming stops_[0].
+  const msg::StopCondition* rotCond = nullptr;
+  for (uint8_t i = 0; i < stopsCount_; ++i) {
+    if (stops_[i].kind == msg::StopKind::STOP_HEADING ||
+        stops_[i].kind == msg::StopKind::STOP_ROTATION) {
+      rotCond = &stops_[i];
+      break;
+    }
+  }
+  if (rotCond == nullptr) return;  // defensive -- TURN/ROTATION always append one
+
+  // omegaSign: the goal's commanded turn direction (matches
+  // rotationProgress()'s own convention, motion/stop_condition.cpp). A
+  // degenerate omega==0 goal has no meaningful direction to replan in --
+  // skip (mirrors maybeReplanDistance()'s own vSign guard).
+  float omegaSign = baseline_.omegaSign;
+  if (omegaSign == 0.0f) return;
+
+  float measuredRemainingNative = 0.0f;
+  Motion::StopEvalResult r = Motion::remainingToStop(*rotCond, baseline_, leftObs, rightObs,
+                                                     fusedPose, &measuredRemainingNative);
+  if (r != Motion::StopEvalResult::NOT_FIRED) return;  // FIRED: guard 1 -- the
+  // stop-evaluation loop later this SAME tick owns completion, not a replan.
+
+  // rotationalArcScale_ converts RT's per-wheel-ARC-mm measured remaining
+  // into rotational_'s own radian domain (1.0f, a no-op, for TURN -- see
+  // stageRotationalGoal()'s and this method's own doc comments, planner.h).
+  // Every comparison/projection/retarget below then happens in radians,
+  // exactly mirroring maybeReplanDistance()'s mm-domain math.
+  float measuredRemainingRad = measuredRemainingNative / rotationalArcScale_;
+
+  // Plan's own remaining, in rotational_'s CURRENT frame (whatever the most
+  // recent solveToRest()/retarget() established) -- same derivation as
+  // maybeReplanDistance()'s planRemainingMag, for the rotational channel.
+  Motion::JerkTrajectory::State state = rotational_.sample(rotationalElapsed(now));
+  float planRemainingRad = fabsf(rotationalTarget_ - state.position);
+
+  float divergence = fabsf(planRemainingRad - measuredRemainingRad);
+  if (divergence < kRotDivergenceThreshold) return;  // within tolerance -- no replan
+
+  // Guard 2 (no-reverse-target): dead-time-project the measured remaining,
+  // using the PLAN's own last-sampled rate (never a measured one -- same
+  // reasoning as maybeReplanDistance()'s own comment).
+  float planSpeedMagRad = fabsf(state.velocity);
+  float projectedRemainingRad = measuredRemainingRad - planSpeedMagRad * kDeadTime;
+  if (projectedRemainingRad <= 0.0f) return;  // never solve backward
+
+  if (divergence >= kRotGrossDivergenceThreshold) {
+    // GROSS case: full re-anchor from measurement. Position: convert the
+    // (un-projected) measuredRemainingRad back into rotational_'s current
+    // frame, matching this method's own planRemainingRad derivation above.
+    // Velocity: always 0.0f -- see this method's own declaration comment
+    // (planner.h) on why no reliable measured angular-rate signal exists
+    // for either goal kind; reanchor() already accepts a velocity
+    // discontinuity at the reseed by design (jerk_trajectory.h).
+    float measuredPositionSigned = rotationalTarget_ - omegaSign * measuredRemainingRad;
+    rotational_.reanchor(measuredPositionSigned, 0.0f);
+    // rotationalTarget_ is unchanged -- reanchor() reuses rotational_'s own
+    // internally remembered target (jerk_trajectory.h's own doc comment).
+  } else {
+    // NORMAL case: retarget() to the dead-time-projected remaining, seeded
+    // (internally, by rotational_ itself) from its own last velocity/
+    // acceleration -- never from measurement.
+    float newRemainingSigned = omegaSign * projectedRemainingRad;
+    rotational_.retarget(newRemainingSigned);
+    rotationalTarget_ = newRemainingSigned;
+  }
+  rotationalSolveMs_ = now;
+  lastReplanMs_ = now;
+}
+
 void Planner::armDistanceStopDecel(uint32_t now) {
   // 089-003, ticket item 4: called the instant a SMOOTH-style DISTANCE
   // goal's stop condition fires. If linear_'s own plan has already
@@ -670,6 +704,18 @@ void Planner::armVelocityStopDecel(uint32_t now) {
   // needed.
   linear_.solveToVelocity(0.0f, linearCeiling_);
   linearSolveMs_ = now;
+  rotational_.solveToVelocity(0.0f, rotationalCeiling_);
+  rotationalSolveMs_ = now;
+}
+
+void Planner::armRotationalStopDecel(uint32_t now) {
+  // 089-005: TURN/ROTATION's own analog of armDistanceStopDecel() above --
+  // reuses ITS "skip if already converged" guard (Pattern A, position-
+  // control, like DISTANCE), not armVelocityStopDecel()'s unconditional
+  // one. Only the rotational channel needs a re-solve: the linear channel's
+  // trivial zero-target solve (stageRotationalGoal()) is always already
+  // converged (a ~zero-duration trajectory) by the time any stop fires.
+  if (rotationalElapsed(now) >= rotational_.duration()) return;
   rotational_.solveToVelocity(0.0f, rotationalCeiling_);
   rotationalSolveMs_ = now;
 }
@@ -705,35 +751,39 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
   lastTickMs_ = now;
   haveLastTick_ = true;
 
-  // 089-003/004 KNOWN INTERMEDIATE STATE (see planner.h's class comment):
-  // goal-kind-aware checks -- `mode_ == DISTANCE` (unique, no latch needed)
-  // and the `jerkVelocityGoal_` latch (needed because mode_ == TIMED is
-  // shared with TURN/ROTATION, velocityShapedMode()'s own collapse) --
-  // captured ONCE, here, since mode_ itself flips to IDLE the instant a
-  // goal completes below, but this tick's OWN output must still route
-  // through the right channel(s) either way. Ticket 005 migrates TURN/
-  // ROTATION the same way, after which this collapses to the clean
-  // `mode_ == GO_TO` vs. not split (Decision 5) -- do not generalize early.
+  // 089-005: the FINAL, stable dispatch (Decision 5, revised) -- a clean
+  // `mode_ == GO_TO` binary: GO_TO stays on `ramp_`/`pursueSteer()`
+  // (UNCHANGED for the whole sprint); every other goal kind samples the
+  // Ruckig channels. `distanceGoal`/`velocityGoal`/`rotationalGoal` are
+  // internal bookkeeping WITHIN the "not GO_TO" side (which Ruckig
+  // sub-pattern owns this goal -- `mode_ == DISTANCE` is unique, no latch
+  // needed; `jerkVelocityGoal_`/`jerkRotationGoal_` disambiguate `T` from
+  // `TURN`/`ROTATION`, all three sharing `mode_ == TIMED` via
+  // velocityShapedMode()'s own collapse) -- captured ONCE, here, since
+  // mode_ itself flips to IDLE the instant a goal completes below, but this
+  // tick's OWN output must still route through the right channel(s) either
+  // way.
   const bool distanceGoal = (mode_ == msg::DriveMode::DISTANCE);
   const bool velocityGoal = jerkVelocityGoal_;
+  const bool rotationalGoal = jerkRotationGoal_;
   float distanceV = 0.0f;      // this tick's sampled linear-channel velocity (DISTANCE only)
   float velocityV = 0.0f;      // this tick's sampled linear-channel velocity (TIMED/VELOCITY/STREAM)
   float velocityOmega = 0.0f;  // this tick's sampled rotational-channel velocity (ditto)
+  float rotationalOmega = 0.0f;  // this tick's sampled rotational-channel velocity (TURN/ROTATION)
 
   if (!activeCmd_) {
     ramp_.reset();
-    // 089-004: keep linear_/rotational_ pinned at a clean rest baseline
-    // while idle too -- the SAME "zero everything while idle" contract
-    // ramp_.reset() already has. Without this, a goal ending via STOP or an
-    // ABRUPT-fired stop (both force THIS tick's OUTPUT to zero without
-    // ever decelerating either channel's own remembered last-sample state)
-    // would leave a stale, still-cruising velocity behind for
-    // stageVelocityGoal()'s NEXT solveToVelocity() call to seed from --
-    // producing a bogus "already at speed" trajectory (a zero-duration
-    // jump straight to cruise) instead of a real ramp-up. A no-op for
-    // DISTANCE (whose apply() always calls linear_.reset() itself
-    // unconditionally already) and for TURN/ROTATION/GOTO_GOAL (which never
-    // touch these two channels).
+    // Keep linear_/rotational_ pinned at a clean rest baseline while idle
+    // too -- the SAME "zero everything while idle" contract ramp_.reset()
+    // already has. Without this, a goal ending via STOP or an ABRUPT-fired
+    // stop (both force THIS tick's OUTPUT to zero without ever
+    // decelerating either channel's own remembered last-sample state)
+    // would leave a stale, still-cruising velocity behind for the NEXT
+    // goal's staging helper to seed from -- producing a bogus "already at
+    // speed" trajectory (a zero-duration jump straight to cruise) instead
+    // of a real ramp-up. A no-op for DISTANCE/TURN/ROTATION (whose apply()
+    // always calls reset() itself unconditionally already) and for
+    // GOTO_GOAL (which never touches these two channels).
     linear_.reset();
     rotational_.reset();
   } else {
@@ -742,7 +792,22 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
       baselineCaptured_ = true;
     }
 
-    if (distanceGoal) {
+    if (mode_ == msg::DriveMode::GO_TO) {
+      if (gPhase_ == GPhase::PURSUE && !stopping_) {
+        // Re-steer toward the world-frame anchor from THIS tick's
+        // fusedPose, BEFORE the ramp advances -- ported ordering from
+        // source_old's driveAdvance() PURSUE hook (recompute (v, omega),
+        // THEN tick the profiler). Gated on !stopping_: once a stop
+        // condition has armed the SMOOTH ramp-down (ramp_.setTarget(0, 0)
+        // below), this hook must NOT keep re-targeting the ramp away from
+        // zero every subsequent tick -- mode_/gPhase_ only flip back to
+        // IDLE once the ramp-down actually converges (the `stopping_`
+        // branch below), so without this guard PURSUE would fight its own
+        // completion indefinitely.
+        pursueSteer(fusedPose);
+      }
+      ramp_.advance(dt);
+    } else if (distanceGoal) {
       // No anticipation cap needed here -- unlike the ramp_ path,
       // linear_'s position-control plan already decelerates to rest AT the
       // target as an intrinsic property of the whole-trajectory solve
@@ -764,45 +829,62 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
       // mechanism, no separate ramp_.advance()-style branch needed.
       velocityV = linear_.sample(linearElapsed(now)).velocity;
       velocityOmega = rotational_.sample(rotationalElapsed(now)).velocity;
-    } else if (mode_ == msg::DriveMode::GO_TO && gPhase_ == GPhase::PURSUE && !stopping_) {
-      // Re-steer toward the world-frame anchor from THIS tick's fusedPose,
-      // BEFORE the ramp advances -- ported ordering from source_old's
-      // driveAdvance() PURSUE hook (recompute (v, omega), THEN tick the
-      // profiler). Gated on !stopping_: once a stop condition has armed the
-      // SMOOTH ramp-down (ramp_.setTarget(0, 0) below), this hook must NOT
-      // keep re-targeting the ramp away from zero every subsequent tick --
-      // mode_/gPhase_ only flip back to IDLE once the ramp-down actually
-      // converges (the `stopping_` branch below), so without this guard
-      // PURSUE would fight its own completion indefinitely.
-      pursueSteer(fusedPose);
-      ramp_.advance(dt);
-    } else if (mode_ != msg::DriveMode::GO_TO && !stopping_) {
-      // 086-003: the same anticipation pattern, extended to DISTANCE/TURN/
-      // ROTATION -- GO_TO is excluded (PURSUE's pursueSteer() above already
-      // owns its own anticipation; PRE_ROTATE's STOP_HEADING is a
-      // phase-handoff gate, not a terminal stop -- see planner.h's class
-      // comment on applyStopAnticipation()). Gated on !stopping_ for the
-      // same reason pursueSteer()'s own call is: once a stop condition has
-      // armed the SMOOTH ramp-down (ramp_.setTarget(0, 0) below), this must
-      // not keep re-targeting the ramp away from zero. 089-003: DISTANCE no
-      // longer reaches this branch (distanceGoal above takes it first) --
-      // applyStopAnticipation()'s STOP_DISTANCE branch has been DEAD CODE
-      // for DISTANCE since then. 089-004: TIMED/VELOCITY/STREAM no longer
-      // reach this branch either (velocityGoal above takes them first) --
-      // applyStopAnticipation() itself is UNCHANGED and still live only for
-      // TURN/ROTATION's STOP_HEADING/STOP_ROTATION branches, until ticket
-      // 005.
-      applyStopAnticipation(leftObs, rightObs, fusedPose);
-      ramp_.advance(dt);
-    } else {
-      ramp_.advance(dt);
+    } else if (rotationalGoal) {
+      // 089-005: TURN/ROTATION's own position-control plan, mirroring
+      // DISTANCE's branch above -- the divergence-triggered replan
+      // (Decision 10) is the only per-tick correction, only while the
+      // goal's own stop has not fired (guard 1). The linear channel's
+      // trivial zero-target solve is sampled too (never specially
+      // skipped -- ticket item 3) but its value is not needed for the
+      // held twist (v = 0 always for a turn-in-place goal).
+      if (!stopping_) {
+        maybeReplanRotational(now, leftObs, rightObs, fusedPose);
+      }
+      linear_.sample(linearElapsed(now));
+      float rotElapsed = rotationalElapsed(now);
+      rotationalOmega = rotational_.sample(rotElapsed).velocity;
+      // Snap to a LITERAL 0.0f once the STOP-TRIGGERED decel-to-zero
+      // (armRotationalStopDecel()) has fully converged (elapsed >=
+      // duration(), only while stopping_) instead of trusting the raw
+      // sampled value. Gated on stopping_ specifically -- NOT applied to
+      // the ONGOING (not-yet-stopped) position-control solve, where
+      // reaching elapsed >= duration() naturally (the plan's own target
+      // converges) must keep sampling the real value: the divergence-
+      // triggered replan (maybeReplanRotational()) is what is supposed to
+      // keep re-extending that plan against a lagging real plant, and
+      // forcing a hard 0 here would fight it, stalling the goal short
+      // (confirmed by direct regression: planner_harness.cpp's own lagging-
+      // plant scenario stopped completing via reason=rot once this snap was
+      // applied unconditionally). Once stopping_, though, every solve
+      // armRotationalStopDecel() makes targets EXACTLY 0 rad/s at its own
+      // terminal state -- so "converged" here always, unconditionally,
+      // means the TRUE omega is 0. Ruckig's own past-duration "hold at
+      // final state" (jerk_trajectory.h) does not guarantee this is
+      // BIT-EXACT the way Motion::VelocityRamp's own approach() did
+      // (`cur + (tgt - cur)` cancels to EXACTLY tgt when tgt == 0, by IEEE
+      // 754 construction, once |tgt - cur| <= one tick's step) -- the
+      // polynomial `at_time()` evaluation behind Ruckig's own solve can
+      // leave a ~1e-15-scale residual instead. That residual is
+      // functionally negligible on its own, but it defeats Hal::
+      // MotorVelocityPid's own zero-threshold deadband (`spAbs <= minDuty`,
+      // minDuty == 0.0f for an unconfigured stiction floor): the
+      // integrator-freeze fix (086-002) never engages for a target that
+      // never reaches a LITERAL 0.0f, so the (otherwise correctly frozen)
+      // integrator keeps actively chasing ordinary wheel-coast/
+      // quantization noise, producing a sustained, slowly-decaying
+      // reverse-spin residual -- confirmed by direct measurement (a dense
+      // post-completion PID trace) during this ticket's own debugging of
+      // test_motion_overshoot_regression.py's RT 9000 settle check.
+      if (stopping_ && rotElapsed >= rotational_.duration()) {
+        rotationalOmega = 0.0f;
+      }
     }
 
     if (stopping_) {
-      // SMOOTH ramp-down (or DISTANCE's decel-to-rest re-solve) in
-      // progress: terminate once converged or the soft deadline passes
-      // (matches source_old/commands/MotionCommand.cpp's tick() stopping
-      // sub-phase).
+      // SMOOTH ramp-down (or a position-control plan's decel-to-rest
+      // re-solve) in progress: terminate once converged or the soft
+      // deadline passes (matches source_old/commands/MotionCommand.cpp's
+      // tick() stopping sub-phase).
       bool converged;
       if (distanceGoal) {
         converged = linearElapsed(now) >= linear_.duration();
@@ -814,6 +896,11 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
         // independent-channel advance() already exhibited.
         converged = linearElapsed(now) >= linear_.duration() &&
                     rotationalElapsed(now) >= rotational_.duration();
+      } else if (rotationalGoal) {
+        // 089-005: only the rotational channel's own convergence matters --
+        // the linear channel's trivial zero-target solve is always already
+        // converged (armRotationalStopDecel()'s own doc comment).
+        converged = rotationalElapsed(now) >= rotational_.duration();
       } else {
         converged = ramp_.atTarget();
       }
@@ -824,6 +911,7 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
         stopping_ = false;
         mode_ = msg::DriveMode::IDLE;
         jerkVelocityGoal_ = false;
+        jerkRotationGoal_ = false;
         gPhase_ = GPhase::IDLE;
       }
     } else {
@@ -853,6 +941,8 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
             } else if (velocityGoal) {
               velocityV = 0.0f;
               velocityOmega = 0.0f;
+            } else if (rotationalGoal) {
+              rotationalOmega = 0.0f;
             } else {
               ramp_.reset();
             }
@@ -861,6 +951,7 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
             stopping_ = false;
             mode_ = msg::DriveMode::IDLE;
             jerkVelocityGoal_ = false;
+            jerkRotationGoal_ = false;
             gPhase_ = GPhase::IDLE;
           } else {
             // SMOOTH: ramp/decel to rest; tick() emits the event once
@@ -873,6 +964,8 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
               armDistanceStopDecel(now);
             } else if (velocityGoal) {
               armVelocityStopDecel(now);
+            } else if (rotationalGoal) {
+              armRotationalStopDecel(now);
             } else {
               ramp_.setTarget(0.0f, 0.0f);
             }
@@ -889,6 +982,8 @@ void Planner::tick(uint32_t now, const msg::MotorState& leftObs, const msg::Moto
     holdTwistCommand(distanceV, 0.0f);
   } else if (velocityGoal) {
     holdTwistCommand(velocityV, velocityOmega);
+  } else if (rotationalGoal) {
+    holdTwistCommand(0.0f, rotationalOmega);
   } else {
     holdTwistCommand(ramp_.currentV(), ramp_.currentOmega());
   }

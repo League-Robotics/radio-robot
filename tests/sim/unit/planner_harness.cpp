@@ -57,6 +57,33 @@
 // sparse/irregular ticks proving pure extrapolation), and
 // scenarioStreamGoalMidProfilePreemptionIsSeamlessNoReverse (the ticket's
 // own STREAM re-target/preemption semantics).
+//
+// Ticket 089-005 note: TURN/ROTATION migrate onto the rotational
+// Motion::JerkTrajectory channel too (Decision 9's position-control
+// "Pattern A" -- DISTANCE's own pattern, ticket 003 -- not Pattern B),
+// completing the sprint's goal-kind migration: `Planner::tick()`'s dispatch
+// collapses to the clean `mode_ == GO_TO` binary (Decision 5's END state),
+// and `applyStopAnticipation()` -- the 089-003/089-004 comments above's own
+// "still serves TURN/ROTATION" note -- is DELETED in full (its last
+// remaining callers migrated). The old rate-cap scenarios are RENAMED and
+// REWRITTEN the same way 089-003 rewrote DISTANCE's:
+// scenarioTurnGoalAnticipatesHeadingStopWithRateCap ->
+// scenarioTurnGoalRuckigTraceNeverReverses (full trace, no reverse,
+// completes via reason=heading) plus scenarioTurnGoalStopFiredBeforeConverg
+// enceForcesFreshDecel (SMOOTH stop firing before rotational_'s own
+// convergence -- mirrors 089-003's own scenario 5b); ditto for
+// scenarioRotationGoalAnticipatesStopWithRateCap ->
+// scenarioRotationGoalRuckigTraceNeverReverses. New scenarios also cover
+// the Revision 2 divergence-triggered replan extended to the rotational
+// channel: scenarioTurnGoalDivergenceReplanCorrectsLaggingPlant/
+// scenarioTurnGoalGrossDivergenceReanchorsAfterStall/
+// scenarioTurnGoalGuardSkipsNearTargetBackwardReplan (TURN's full
+// normal/gross/guard-2 trio, fused-heading domain, mirroring 089-003's own
+// D scenarios 5d/5e/5f) and scenarioRotationGoalDivergenceReplanCorrects
+// LaggingPlant (RT's own normal case, proving rotationalArcScale_'s
+// arc-mm<->rad conversion -- the one genuinely new risk this ticket's RT
+// migration introduces over TURN's, since RT's STOP_ROTATION threshold and
+// its Ruckig target are NOT the same number, unlike TURN's).
 
 #include <algorithm>
 #include <cmath>
@@ -845,71 +872,346 @@ void scenarioTurnGoalUsesSignedSpeedAndCallerStop() {
   checkStrEq(planner.takeEvent().reason, "heading", "reason token is \"heading\"");
 }
 
-// 7b. TURN goal_kind: ticket 086-003's terminal anticipation caps the
-// commanded turn rate as the HEADING stop's remaining heading error shrinks
-// -- BEFORE the stop itself fires -- the angular-rate analog of 5b's linear
-// cap. Uses generousConfig()'s yaw_acc_max=100 rad/s^2 UNCHANGED (needed so
-// the 0.1s ticks below still converge the ramp to target within a single
-// tick, exactly like scenario 7 above) with a tighter eps (0.01 rad instead
-// of scenario 7's 0.05) so the cap's binding window (remaining <
-// omega^2/(2*yaw_acc_max) = 0.02 rad here) sits comfortably OUTSIDE eps --
-// distinguishing "capped, but not yet fired" mid-turn.
-void scenarioTurnGoalAnticipatesHeadingStopWithRateCap() {
-  beginScenario("TURN goal_kind: terminal rate cap anticipates the HEADING stop (086-003)");
+// 7b. [089-005 REWRITE -- was scenarioTurnGoalAnticipatesHeadingStopWithRateCap,
+// 086-003's closed-form rate-anticipation cap test] TURN goal_kind now
+// stages a position-control Motion::JerkTrajectory solve-to-rest on the
+// rotational channel at apply() time instead of a ramp_ target --
+// applyStopAnticipation()'s STOP_HEADING cap this scenario used to test is
+// DELETED (the function itself is gone in full, planner.cpp). The property
+// this scenario now tests mirrors 089-003's own
+// scenarioDistanceGoalRuckigTraceNeverReverses (AC3/AC7 for this ticket's
+// own TURN/ROTATION migration): the full commanded omega trace, sampled
+// across the REAL apply()+tick() staging path with a closely-tracking
+// (undisturbed) fused-heading feed, never reverses relative to the
+// commanded turn direction and completes via the goal's own STOP_HEADING
+// (not any safety net).
+void scenarioTurnGoalRuckigTraceNeverReverses() {
+  beginScenario(
+      "089-005 AC (full trace): TURN's full commanded omega trace never reverses "
+      "(real apply()+tick() path)");
+  Subsystems::Planner planner;
+  planner.configure(generousConfig());  // yaw_acc_max = 100 rad/s^2, yaw_rate_max = 10 rad/s
+
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::TURN;
+  cmd.goal.turn.speed = -2.0f;  // already-signed: CW -- becomes rotational_'s max_velocity
+  cmd.stops_count = 1;
+  cmd.stops_[0].kind = msg::StopKind::STOP_HEADING;
+  cmd.stops_[0].a = -1.5707963f;  // [rad] target delta: -90 deg -- rotational_'s Ruckig target
+  cmd.stops_[0].b = 0.02f;        // [rad] eps
+  cmd.style = msg::StopStyle::ABRUPT;  // isolate the trace from the SMOOTH
+                                        // ramp-down (covered by the scenario below)
+  std::strncpy(cmd.corr_id, "turntrace1", sizeof(cmd.corr_id) - 1);
+  planner.apply(cmd, 0);
+
+  // Hand-derived trapezoid (j_max == 0 -> Ruckig's own infinite-jerk
+  // sentinel -> an exact trapezoid, matching 089-003's own closed form) for
+  // a CLOSELY-TRACKING fused-heading feed -- the undisturbed case (no
+  // divergence-replan expected; covered separately below).
+  const float kAMax = 100.0f;         // [rad/s^2]
+  const float kOmegaMax = 2.0f;       // [rad/s]
+  const float kAngle = 1.5707963f;    // [rad]
+  const float kTAccel = kOmegaMax / kAMax;                      // 0.02s
+  const float kDAccel = 0.5f * kAMax * kTAccel * kTAccel;       // 0.02 rad
+  const float kDCruise = kAngle - 2.0f * kDAccel;               // 1.5307963 rad
+  const float kTCruise = kDCruise / kOmegaMax;                  // 0.76539815s
+  const float kTDecelStart = kTAccel + kTCruise;                // 0.78539815s
+  const float kTTotal = kTDecelStart + kTAccel;                 // 0.80539815s
+
+  auto trapezoidAngle = [&](float time) -> float {
+    if (time <= 0.0f) return 0.0f;
+    if (time < kTAccel) return 0.5f * kAMax * time * time;
+    if (time < kTDecelStart) return kDAccel + kOmegaMax * (time - kTAccel);
+    if (time < kTTotal) {
+      float s = time - kTDecelStart;
+      return kDAccel + kDCruise + kOmegaMax * s - 0.5f * kAMax * s * s;
+    }
+    return kAngle;
+  };
+
+  planner.tick(0, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, 0.0f));  // baseline
+  planner.takeCommand();
+
+  bool everReversed = false;
+  bool completedWithHeading = false;
+  for (int ms = 20; ms <= 1500; ms += 20) {
+    float h = -trapezoidAngle(static_cast<float>(ms) * 0.001f);  // target is negative (CW)
+    planner.tick(static_cast<uint32_t>(ms), msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, h));
+    msg::DrivetrainCommand held = planner.takeCommand();
+    if (held.control.twist.omega > 0.5f) everReversed = true;
+    if (!planner.hasActiveCommand()) {
+      completedWithHeading = (std::strcmp(planner.takeEvent().reason, "heading") == 0);
+      break;
+    }
+  }
+  checkFalse(everReversed, "commanded omega never goes positive (reverse of the commanded CW turn)");
+  checkTrue(completedWithHeading,
+            "goal completes via STOP_HEADING (reason=heading), not any safety net");
+}
+
+// 7c. [089-005, ticket item 4 analog] TURN goal_kind: a SMOOTH-style stop
+// firing BEFORE rotational_'s own plan has naturally converged to rest
+// forces a fresh, non-reversing decel-to-rest (armRotationalStopDecel()),
+// seeded from the channel's own current state (never a measured
+// observation) -- mirrors 089-003's own
+// scenarioDistanceGoalStopFiredBeforeConvergenceForcesFreshDecel. SMOOTH
+// (not ABRUPT, unlike the trace scenario above) is used deliberately --
+// ABRUPT bypasses armRotationalStopDecel() entirely (planner.cpp's tick()).
+void scenarioTurnGoalStopFiredBeforeConvergenceForcesFreshDecel() {
+  beginScenario(
+      "089-005: SMOOTH stop firing before rotational_'s own convergence forces a "
+      "fresh decel-to-rest, no reverse");
   Subsystems::Planner planner;
   planner.configure(generousConfig());  // yaw_acc_max = 100 rad/s^2
 
   msg::PlannerCommand cmd;
   cmd.goal_kind = msg::PlannerCommand::GoalKind::TURN;
-  cmd.goal.turn.speed = -2.0f;  // already-signed: CW
+  cmd.goal.turn.speed = -2.0f;  // [rad/s] -- undisturbed plan duration ~0.805s
   cmd.stops_count = 1;
   cmd.stops_[0].kind = msg::StopKind::STOP_HEADING;
-  cmd.stops_[0].a = -1.5707963f;  // target delta: -90 deg
-  cmd.stops_[0].b = 0.01f;        // tight eps -- see comment above on why
-  cmd.style = msg::StopStyle::ABRUPT;
+  cmd.stops_[0].a = -1.5707963f;  // [rad]
+  cmd.stops_[0].b = 0.02f;        // [rad] eps
+  // cmd.style left at its default (SMOOTH) -- see comment above on why.
+  std::strncpy(cmd.corr_id, "turnfast1", sizeof(cmd.corr_id) - 1);
   planner.apply(cmd, 0);
 
-  planner.tick(1000, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, 0.0f));  // baseline
+  planner.tick(0, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, 0.0f));  // baseline
   planner.takeCommand();
 
-  // Far from the target heading (90 deg of error remains) -- omegaCap =
-  // sqrt(2*100*1.5708) = 17.7 rad/s, way above the 2.0 rad/s commanded
-  // rate: the cap does not bind (a_max/yaw_acc_max=100 + 0.1s dt converge
-  // within this one tick, exactly like scenario 7).
-  planner.tick(1100, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, 0.0f));
-  msg::DrivetrainCommand held = planner.takeCommand();
-  checkFloatNear(held.control.twist.omega, -2.0f, 1e-3f,
-                 "far from the target heading -- anticipation cap does not bind");
-
-  // 0.015 rad (~0.86 deg) of heading error remains -- omegaCap =
-  // sqrt(2*100*0.015) = sqrt(3) rad/s, BELOW the 2.0 rad/s commanded rate,
-  // but still outside the 0.01 rad eps -- the goal is still running.
-  planner.tick(1200, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, -1.5557963f));
-  held = planner.takeCommand();
-  checkTrue(planner.hasActiveCommand(),
-            "0.015rad of heading error remains -- still outside eps, still running");
-  checkFloatNear(held.control.twist.omega, -std::sqrt(3.0f), 1e-2f,
-                 "anticipation caps the commanded rate as the HEADING stop's remaining angle shrinks");
-  checkTrue(held.control.twist.omega > -1.9f,
-            "the anticipatory cap measurably reduces the rate BEFORE the stop fires (086-003)");
-
-  // Finally, reaching the target heading exactly still fires the stop.
-  planner.tick(1300, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, -1.5707963f));
-  planner.takeCommand();
-  checkFalse(planner.hasActiveCommand(), "HEADING stop still fires once the target heading is reached");
-  checkStrEq(planner.takeEvent().reason, "heading", "reason token is \"heading\"");
+  // Real heading "overshoots" the plan: it advances at a constant 3.0
+  // rad/s (faster than the plan's own 2.0 rad/s cruise), reaching the
+  // -90deg target at t=1.5707963/3.0=0.524s -- well before the undisturbed
+  // plan's own ~0.805s natural convergence -- forcing
+  // armRotationalStopDecel()'s REAL re-solve branch.
+  const float kPlantRate = 3.0f;  // [rad/s]
+  bool everReversed = false;
+  bool sawSmoothArm = false;
+  bool completedWithHeading = false;
+  uint32_t t = 0;
+  for (int i = 0; i < 120; ++i) {  // up to 6s -- comfortably past arming + convergence
+    t += 50;
+    float h = std::max(-1.5707963f, -kPlantRate * static_cast<float>(t) * 0.001f);
+    planner.tick(t, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, h));
+    msg::DrivetrainCommand held = planner.takeCommand();
+    if (held.control.twist.omega > 0.5f) everReversed = true;
+    if (planner.hasActiveCommand() && h <= -1.5707963f) sawSmoothArm = true;
+    if (!planner.hasActiveCommand()) {
+      completedWithHeading = (std::strcmp(planner.takeEvent().reason, "heading") == 0);
+      break;
+    }
+  }
+  checkFalse(everReversed, "the forced decel-to-rest re-solve never reverses");
+  checkTrue(sawSmoothArm,
+            "SMOOTH style does not complete on the same tick the stop fires -- ramp/decel-down observed");
+  checkTrue(completedWithHeading, "still completes via reason=heading once the decel-to-rest converges");
 }
 
-// 8. ROTATION goal_kind: RotationGoal.speed is an already-signed omega;
-// relies on a caller-supplied ROTATION stop (encoder-arc based).
-void scenarioRotationGoalUsesSignedSpeedAndCallerStop() {
-  beginScenario("ROTATION goal_kind: signed omega pass-through, caller-supplied ROTATION stop");
+// 7d. [089-005 Revision 2] TURN goal_kind: a lagging (slipping) plant --
+// injected at the test-fixture level, mirroring 089-003's own
+// scenarioDistanceGoalDivergenceReplanCorrectsLaggingPlant -- triggers
+// NORMAL divergence-triggered retarget()s on the rotational channel and
+// still completes via the goal's OWN STOP_HEADING, not a safety net
+// (architecture-update.md (089) Decision 10, extended to TURN/ROTATION by
+// this ticket; AC's crisp sim-level proof). Unlike DISTANCE, TURN has no
+// IMPLICIT time net of its own (planner.h's class comment -- only
+// caller-supplied stops_[] apply) -- a caller-supplied STOP_TIME stop is
+// added here purely as the test's own safety bound, standing in for what
+// would otherwise be "never completes" if the fix did not work.
+//
+// Same output-dead-time plant model as 089-003's own scenario (kOutputHops
+// == kDeadTime's own 2 hops) -- the real Planner->driveIn->Drivetrain->
+// motorIn->Hardware pipeline latency the dead-time projection is built
+// against.
+void scenarioTurnGoalDivergenceReplanCorrectsLaggingPlant() {
+  beginScenario(
+      "089-005 AC: a lagging plant triggers NORMAL retarget()s on the rotational channel "
+      "and still completes via heading, not a safety net");
   Subsystems::Planner planner;
   planner.configure(generousConfig());
 
   msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::TURN;
+  cmd.goal.turn.speed = -2.0f;  // [rad/s]
+  cmd.stops_count = 2;
+  cmd.stops_[0].kind = msg::StopKind::STOP_HEADING;
+  cmd.stops_[0].a = -1.5707963f;  // [rad]
+  cmd.stops_[0].b = 0.05f;        // [rad] eps
+  cmd.stops_[1].kind = msg::StopKind::STOP_TIME;
+  cmd.stops_[1].a = 10000.0f;  // [ms] test-owned safety bound -- see comment above
+  cmd.style = msg::StopStyle::ABRUPT;
+  std::strncpy(cmd.corr_id, "turnlag1", sizeof(cmd.corr_id) - 1);
+  planner.apply(cmd, 0);
+
+  planner.tick(0, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, 0.0f));
+  planner.takeCommand();
+
+  // Closed-loop plant simulation: the plant only achieves kSlip (85%) of
+  // whatever omega Planner commanded kOutputHops ticks ago.
+  const float kSlip = 0.85f;
+  const float kDt = 0.02f;  // [s] 20ms tick
+  const int kOutputHops = 2;
+  float delayBuf[kOutputHops] = {0.0f, 0.0f};
+  int delayHead = 0;
+  float heading = 0.0f;
+  bool everReversed = false;
+  bool completedWithHeading = false;
+  uint32_t t = 0;
+  for (int i = 0; i < 750; ++i) {  // up to 15s -- comfortably past the test's own 10s time net
+    t += static_cast<uint32_t>(kDt * 1000.0f);
+    planner.tick(t, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, heading));
+    msg::DrivetrainCommand held = planner.takeCommand();
+    float omegaCmd = held.control.twist.omega;
+    if (omegaCmd > 0.5f) everReversed = true;
+    float omegaApplied = delayBuf[delayHead];
+    delayBuf[delayHead] = omegaCmd;
+    delayHead = (delayHead + 1) % kOutputHops;
+    heading += kSlip * omegaApplied * kDt;
+    if (!planner.hasActiveCommand()) {
+      completedWithHeading = (std::strcmp(planner.takeEvent().reason, "heading") == 0);
+      break;
+    }
+  }
+  checkFalse(everReversed, "the divergence-corrected trace never reverses despite the lagging plant");
+  checkTrue(completedWithHeading,
+            "a lagging plant completes via STOP_HEADING (reason=heading) thanks to the divergence "
+            "replan, not the test's own STOP_TIME safety bound");
+}
+
+// 7e. [089-005 Revision 2] TURN goal_kind: a stalled-then-freed plant (a
+// genuine departure from the plan) triggers the GROSS divergence path
+// (reanchor(), not retarget()) on the rotational channel and still
+// completes via heading, with no reverse -- mirrors 089-003's own
+// scenarioDistanceGoalGrossDivergenceReanchorsAfterStall.
+void scenarioTurnGoalGrossDivergenceReanchorsAfterStall() {
+  beginScenario(
+      "089-005 AC: a stalled-then-freed plant (gross divergence) triggers reanchor() on the "
+      "rotational channel and still completes via heading");
+  Subsystems::Planner planner;
+  planner.configure(generousConfig());
+
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::TURN;
+  cmd.goal.turn.speed = -2.0f;  // [rad/s]
+  cmd.stops_count = 2;
+  cmd.stops_[0].kind = msg::StopKind::STOP_HEADING;
+  cmd.stops_[0].a = -1.5707963f;  // [rad]
+  cmd.stops_[0].b = 0.05f;        // [rad] eps
+  cmd.stops_[1].kind = msg::StopKind::STOP_TIME;
+  cmd.stops_[1].a = 10000.0f;  // [ms] test-owned safety bound
+  cmd.style = msg::StopStyle::ABRUPT;
+  std::strncpy(cmd.corr_id, "turnstall1", sizeof(cmd.corr_id) - 1);
+  planner.apply(cmd, 0);
+
+  planner.tick(0, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, 0.0f));
+  planner.takeCommand();
+
+  // Frozen (wedged) for the first second, then tracks the commanded omega
+  // normally -- the undisturbed plan would think it has covered a large
+  // fraction of the turn by t=1s while the measured heading shows 0, a
+  // divergence well past kRotGrossDivergenceThreshold.
+  const float kDt = 0.02f;  // [s]
+  const int kOutputHops = 2;
+  float delayBuf[kOutputHops] = {0.0f, 0.0f};
+  int delayHead = 0;
+  float heading = 0.0f;
+  bool everReversed = false;
+  bool completedWithHeading = false;
+  uint32_t t = 0;
+  for (int i = 0; i < 750; ++i) {
+    t += static_cast<uint32_t>(kDt * 1000.0f);
+    planner.tick(t, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, heading));
+    msg::DrivetrainCommand held = planner.takeCommand();
+    float omegaCmd = held.control.twist.omega;
+    if (omegaCmd > 0.5f) everReversed = true;
+    float omegaApplied = delayBuf[delayHead];
+    delayBuf[delayHead] = omegaCmd;
+    delayHead = (delayHead + 1) % kOutputHops;
+    if (t >= 1000) {
+      heading += omegaApplied * kDt;  // freed -- full tracking from here on
+    }
+    // else: stalled -- heading stays frozen at 0 regardless of omegaCmd.
+    if (!planner.hasActiveCommand()) {
+      completedWithHeading = (std::strcmp(planner.takeEvent().reason, "heading") == 0);
+      break;
+    }
+  }
+  checkFalse(everReversed, "the gross-divergence reanchor's trace never reverses");
+  checkTrue(completedWithHeading, "a stalled-then-freed plant still completes via heading after the reanchor");
+}
+
+// 7f. [089-005 Revision 2] TURN goal_kind: guard 2 (no-reverse-target) skips
+// a would-be-backward replan near the target -- mirrors 089-003's own
+// scenarioDistanceGoalGuardSkipsNearTargetBackwardReplan.
+void scenarioTurnGoalGuardSkipsNearTargetBackwardReplan() {
+  beginScenario(
+      "089-005 AC: guard 2 (no-reverse-target) skips a would-be-backward replan near the "
+      "target, rotational channel");
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::TURN;
+  cmd.goal.turn.speed = -2.0f;
+  cmd.stops_count = 1;
+  cmd.stops_[0].kind = msg::StopKind::STOP_HEADING;
+  cmd.stops_[0].a = -1.5707963f;
+  cmd.stops_[0].b = 0.001f;  // tight eps -- keeps the goal running at t=300ms below
+  cmd.style = msg::StopStyle::ABRUPT;
+
+  // Control: an undisturbed, closely-tracking fused-heading feed (matching
+  // the plan's own trapezoid position exactly at t=300ms, well inside the
+  // ~0.805s undisturbed duration) -- divergence stays ~0, no replan for
+  // either planner.
+  Subsystems::Planner control;
+  control.configure(generousConfig());
+  control.apply(cmd, 0);
+  control.tick(0, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, 0.0f));
+  control.takeCommand();
+  // t=300ms is inside the cruise phase (0.02s accel, 0.7654s cruise) --
+  // position = 0.02 + 2.0*(0.3-0.02) = 0.58 rad.
+  control.tick(300, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, -0.58f));
+  msg::DrivetrainCommand controlHeld = control.takeCommand();
+
+  Subsystems::Planner test;
+  test.configure(generousConfig());
+  test.apply(cmd, 0);
+  test.tick(0, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, 0.0f));
+  test.takeCommand();
+  // A synthetic observation showing the heading already 1.57rad into the
+  // turn at t=300ms -- NOT yet past the 1.5707963rad target (still
+  // NOT_FIRED, |error| = 0.0007963 > eps=0.001? actually within eps -- use
+  // a value just short of firing but whose dead-time-projected remaining is
+  // <= 0: guard 2 must skip the replan entirely, leaving this tick's
+  // commanded omega identical to the undisturbed control's -- despite a
+  // large RAW divergence against the plan's own still-early position that
+  // would otherwise (sans guard 2) trigger a gross reanchor pointing
+  // backward (positive omega, reversing the commanded CW turn).
+  test.tick(300, msg::MotorState{}, msg::MotorState{}, poseAt(0, 0, -1.5637963f));
+  msg::DrivetrainCommand testHeld = test.takeCommand();
+
+  checkTrue(test.hasActiveCommand(), "0.007rad short of target -- STOP_HEADING has not fired yet");
+  checkFloatNear(testHeld.control.twist.omega, controlHeld.control.twist.omega, 1.0f,
+                 "guard 2 skips the near-target replan -- commanded omega matches the undisturbed "
+                 "control");
+}
+
+// 8. ROTATION goal_kind: RotationGoal.speed is an already-signed omega;
+// relies on a caller-supplied ROTATION stop (encoder-arc based).
+// 089-005: RotationGoal.angle (previously informational only) is now
+// rotational_'s own Ruckig target (Decision 9) -- set here to 0.8 rad,
+// consistent with the 50mm arc threshold below via an assumed 62.5mm/rad
+// trackwidth-derived scale (arbitrary but internally consistent; Planner
+// itself never reads a trackwidth -- see class comment). Adds a mid-run
+// omega assertion (absent from the pre-089-005 version of this scenario)
+// so this test actually exercises the new Ruckig-driven pass-through, not
+// just the ROTATION stop's own (encoder-driven, Ruckig-independent)
+// completion signal.
+void scenarioRotationGoalUsesSignedSpeedAndCallerStop() {
+  beginScenario("ROTATION goal_kind: signed omega pass-through, caller-supplied ROTATION stop");
+  Subsystems::Planner planner;
+  planner.configure(generousConfig());  // yaw_acc_max = 100 rad/s^2, yaw_rate_max = 10 rad/s
+
+  msg::PlannerCommand cmd;
   cmd.goal_kind = msg::PlannerCommand::GoalKind::ROTATION;
-  cmd.goal.rotation.speed = 1.5f;  // already-signed: CCW
+  cmd.goal.rotation.speed = 1.5f;   // already-signed: CCW -- rotational_'s max_velocity
+  cmd.goal.rotation.angle = 0.8f;   // [rad] rotational_'s Ruckig target (089-005)
   cmd.stops_count = 1;
   cmd.stops_[0].kind = msg::StopKind::STOP_ROTATION;
   cmd.stops_[0].a = 50.0f;  // [mm] target per-wheel arc
@@ -927,9 +1229,14 @@ void scenarioRotationGoalUsesSignedSpeedAndCallerStop() {
   planner.tick(1000, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});  // baseline
   planner.takeCommand();
 
+  // Rotational channel: target=0.8rad, maxVelocity=1.5rad/s, aMax=100 ->
+  // ramp-up takes 0.015s -- fully at cruise (1.5 rad/s) well before this
+  // 100ms tick.
   planner.tick(1100, obsPosition(-20.0f), obsPosition(20.0f), msg::PoseEstimate{});
-  planner.takeCommand();
+  msg::DrivetrainCommand held = planner.takeCommand();
   checkTrue(planner.hasActiveCommand(), "arc=20mm < 50mm threshold -- not yet");
+  checkFloatNear(held.control.twist.omega, 1.5f, 1e-2f,
+                 "rotational channel reaches the commanded cruise rate (089-005)");
 
   planner.tick(1200, obsPosition(-50.0f), obsPosition(50.0f), msg::PoseEstimate{});
   planner.takeCommand();
@@ -937,71 +1244,145 @@ void scenarioRotationGoalUsesSignedSpeedAndCallerStop() {
   checkStrEq(planner.takeEvent().reason, "rot", "reason token is \"rot\"");
 }
 
-// 8b. ROTATION goal_kind: ticket 086-003's terminal anticipation caps the
-// commanded turn rate as the ROTATION stop's remaining per-wheel arc
-// shrinks -- BEFORE the stop itself fires. yaw_acc_max is overridden down
-// to 2.0 rad/s^2 (from generousConfig()'s 100 rad/s^2 default) so the cap's
-// binding window (remaining < omega^2/(2*yaw_acc_max) = 0.5625mm here) is
-// comfortably sized against round encoder-arc fixture values, and 1s ticks
-// (mirroring 5b's own cadence choice) keep the ramp converging to each new
-// target within a single tick despite the smaller yaw_acc_max (domegaMax =
-// yaw_acc_max*dt = 2.0 rad/s, >= the 1.5 rad/s omega magnitude ramped
-// through). See applyStopAnticipation()'s own comment (planner.cpp) on why
-// STOP_ROTATION's remaining (a per-wheel arc, mm) is applied to this
-// formula as a documented approximation rather than a unit-correct one.
-//
-// Ticket 087-009 update: the cap is now the same dead-time-compensated
-// closed form 5b's own comment above describes, `reach =
-// yaw_acc_max*kDeadTime` (kDeadTime = 0.040s) -- Tick 3's expected value
-// below is recomputed against it (reach = 2.0*0.04 = 0.08 -> omegaCap =
-// -0.08 + sqrt(0.08^2 + 2*2.0*0.3) = -0.08 + sqrt(1.2064) = 1.01836), not
-// the un-compensated sqrt(2*2.0*0.3) = sqrt(1.2) = 1.09545 086-003
-// measured. Tick 2's "does not bind" check is unaffected (omegaCap at
-// remaining=50mm is still ~14.1, far above the 1.5 rad/s commanded rate
-// either way).
-void scenarioRotationGoalAnticipatesStopWithRateCap() {
-  beginScenario("ROTATION goal_kind: terminal rate cap anticipates the ROTATION stop (086-003)");
+// 8b. [089-005 REWRITE -- was scenarioRotationGoalAnticipatesStopWithRateCap,
+// 086-003's closed-form rate-anticipation cap test] ROTATION goal_kind now
+// stages a position-control Motion::JerkTrajectory solve-to-rest on the
+// rotational channel at apply() time instead of a ramp_ target --
+// applyStopAnticipation()'s STOP_ROTATION cap this scenario used to test is
+// DELETED. Mirrors scenarioTurnGoalRuckigTraceNeverReverses (7b above): the
+// full commanded omega trace, sampled across the REAL apply()+tick()
+// staging path with a closely-tracking (undisturbed) encoder-arc feed,
+// never reverses and completes via the goal's own STOP_ROTATION.
+void scenarioRotationGoalRuckigTraceNeverReverses() {
+  beginScenario(
+      "089-005 AC (full trace): ROTATION's full commanded omega trace never reverses "
+      "(real apply()+tick() path)");
   Subsystems::Planner planner;
-  msg::PlannerConfig cfg = generousConfig();
-  cfg.yaw_acc_max = 2.0f;  // [rad/s^2] -- see comment above on why
-  planner.configure(cfg);
+  planner.configure(generousConfig());  // yaw_acc_max = 100 rad/s^2
 
   msg::PlannerCommand cmd;
   cmd.goal_kind = msg::PlannerCommand::GoalKind::ROTATION;
-  cmd.goal.rotation.speed = 1.5f;  // already-signed: CCW
+  cmd.goal.rotation.speed = 1.5f;   // already-signed: CCW -- becomes rotational_'s max_velocity
+  cmd.goal.rotation.angle = 0.8f;   // [rad] rotational_'s Ruckig target
   cmd.stops_count = 1;
   cmd.stops_[0].kind = msg::StopKind::STOP_ROTATION;
-  cmd.stops_[0].a = 50.0f;  // [mm] target per-wheel arc
+  cmd.stops_[0].a = 50.0f;  // [mm] target per-wheel arc (arcScale_ = 50/0.8 = 62.5mm/rad)
   cmd.style = msg::StopStyle::ABRUPT;
+  std::strncpy(cmd.corr_id, "rottrace1", sizeof(cmd.corr_id) - 1);
   planner.apply(cmd, 0);
 
-  planner.tick(1000, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});  // baseline
+  // Hand-derived trapezoid, same shape as 7b's own -- CCW (positive), target
+  // 0.8 rad, ceiling 1.5 rad/s, yaw_acc_max=100 rad/s^2.
+  const float kAMax = 100.0f;      // [rad/s^2]
+  const float kOmegaMax = 1.5f;    // [rad/s]
+  const float kAngle = 0.8f;       // [rad]
+  const float kTAccel = kOmegaMax / kAMax;                  // 0.015s
+  const float kDAccel = 0.5f * kAMax * kTAccel * kTAccel;   // 0.01125 rad
+  const float kDCruise = kAngle - 2.0f * kDAccel;           // 0.7775 rad
+  const float kTCruise = kDCruise / kOmegaMax;              // 0.518333s
+  const float kTDecelStart = kTAccel + kTCruise;            // 0.533333s
+  const float kTTotal = kTDecelStart + kTAccel;             // 0.548333s
+  const float kArcScale = 62.5f;  // [mm/rad] == stops_[0].a / goal.rotation.angle
+
+  auto trapezoidAngle = [&](float time) -> float {
+    if (time <= 0.0f) return 0.0f;
+    if (time < kTAccel) return 0.5f * kAMax * time * time;
+    if (time < kTDecelStart) return kDAccel + kOmegaMax * (time - kTAccel);
+    if (time < kTTotal) {
+      float s = time - kTDecelStart;
+      return kDAccel + kDCruise + kOmegaMax * s - 0.5f * kAMax * s * s;
+    }
+    return kAngle;
+  };
+
+  planner.tick(0, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});  // baseline
   planner.takeCommand();
 
-  // arc=0mm, 50mm remaining -- omegaCap = sqrt(2*2.0*50) = sqrt(200) rad/s,
-  // way above the 1.5 rad/s commanded rate: the cap does not bind.
-  planner.tick(2000, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});
-  msg::DrivetrainCommand held = planner.takeCommand();
-  checkFloatNear(held.control.twist.omega, 1.5f, 1e-2f,
-                 "far from the stop -- anticipation cap does not bind");
+  bool everReversed = false;
+  bool completedWithRot = false;
+  for (int ms = 20; ms <= 1500; ms += 20) {
+    // Feed the per-wheel encoder ARC (mm) matching the SAME trapezoid,
+    // scaled by the goal's own arc-per-rad ratio -- the "closely tracking"
+    // undisturbed case (no divergence-replan expected here).
+    float arc = trapezoidAngle(static_cast<float>(ms) * 0.001f) * kArcScale;
+    planner.tick(static_cast<uint32_t>(ms), obsPosition(-arc), obsPosition(arc), msg::PoseEstimate{});
+    msg::DrivetrainCommand held = planner.takeCommand();
+    if (held.control.twist.omega < -0.5f) everReversed = true;
+    if (!planner.hasActiveCommand()) {
+      completedWithRot = (std::strcmp(planner.takeEvent().reason, "rot") == 0);
+      break;
+    }
+  }
+  checkFalse(everReversed, "commanded omega never goes negative (reverse of the commanded CCW turn)");
+  checkTrue(completedWithRot, "goal completes via STOP_ROTATION (reason=rot), not any safety net");
+}
 
-  // arc=49.7mm, 0.3mm remaining -- dead-time-compensated omegaCap =
-  // -0.08 + sqrt(0.08^2 + 2*2.0*0.3) = 1.01836 rad/s (087-009; see this
-  // scenario's own comment above), BELOW the 1.5 rad/s commanded rate: the
-  // cap now binds, well before the ROTATION stop itself would fire at 50mm.
-  planner.tick(3000, obsPosition(-49.7f), obsPosition(49.7f), msg::PoseEstimate{});
-  held = planner.takeCommand();
-  checkTrue(planner.hasActiveCommand(), "arc=49.7mm -- short of the 50mm ROTATION stop, still running");
-  checkFloatNear(held.control.twist.omega, 1.01836f, 1e-2f,
-                 "anticipation caps the commanded rate as the ROTATION stop's remaining arc shrinks");
-  checkTrue(held.control.twist.omega < 1.4f,
-            "the anticipatory cap measurably reduces the rate BEFORE the stop fires (086-003)");
+// 8c. [089-005 Revision 2] ROTATION goal_kind: a lagging (slipping) plant
+// triggers NORMAL divergence-triggered retarget()s on the rotational
+// channel and still completes via the goal's OWN STOP_ROTATION, not a
+// safety net -- mirrors 7d's TURN version above, but exercises the harder
+// unit-conversion path (rotationalArcScale_, Decision 9): RT's measured
+// remaining is an mm-valued per-wheel arc (rotationProgress()), converted
+// to rotational_'s own radian domain before comparison. Same output-dead-
+// time plant model as 7d/089-003's own scenarios.
+void scenarioRotationGoalDivergenceReplanCorrectsLaggingPlant() {
+  beginScenario(
+      "089-005 AC: a lagging plant triggers NORMAL retarget()s on the rotational channel "
+      "(RT's arc-mm<->rad conversion) and still completes via rot, not a safety net");
+  Subsystems::Planner planner;
+  planner.configure(generousConfig());
 
-  // Finally, reaching the target arc exactly still fires the stop.
-  planner.tick(4000, obsPosition(-50.0f), obsPosition(50.0f), msg::PoseEstimate{});
+  msg::PlannerCommand cmd;
+  cmd.goal_kind = msg::PlannerCommand::GoalKind::ROTATION;
+  cmd.goal.rotation.speed = 1.5f;  // [rad/s]
+  cmd.goal.rotation.angle = 0.8f;  // [rad]
+  cmd.stops_count = 2;
+  cmd.stops_[0].kind = msg::StopKind::STOP_ROTATION;
+  cmd.stops_[0].a = 50.0f;  // [mm] arcScale_ = 50/0.8 = 62.5mm/rad
+  cmd.stops_[1].kind = msg::StopKind::STOP_TIME;
+  cmd.stops_[1].a = 10000.0f;  // [ms] test-owned safety bound (RT has no implicit time net)
+  cmd.style = msg::StopStyle::ABRUPT;
+  std::strncpy(cmd.corr_id, "rotlag1", sizeof(cmd.corr_id) - 1);
+  planner.apply(cmd, 0);
+
+  planner.tick(0, obsPosition(0.0f), obsPosition(0.0f), msg::PoseEstimate{});
   planner.takeCommand();
-  checkFalse(planner.hasActiveCommand(), "ROTATION stop still fires once the target arc is reached");
-  checkStrEq(planner.takeEvent().reason, "rot", "reason token is \"rot\"");
+
+  // Closed-loop plant simulation: the plant only achieves kSlip (85%) of
+  // whatever omega Planner commanded kOutputHops ticks ago -- the encoder
+  // differential (right - left) integrates the resulting arc, matching
+  // rotationProgress()'s own geometry (STOP_ROTATION's arc = |diff|/2).
+  const float kSlip = 0.85f;
+  const float kDt = 0.02f;  // [s]
+  const int kOutputHops = 2;
+  float delayBuf[kOutputHops] = {0.0f, 0.0f};
+  int delayHead = 0;
+  float encDiff = 0.0f;  // right - left, [mm]
+  bool everReversed = false;
+  bool completedWithRot = false;
+  uint32_t t = 0;
+  for (int i = 0; i < 750; ++i) {  // up to 15s -- comfortably past the test's own 10s time net
+    t += static_cast<uint32_t>(kDt * 1000.0f);
+    float halfDiff = encDiff * 0.5f;
+    planner.tick(t, obsPosition(-halfDiff), obsPosition(halfDiff), msg::PoseEstimate{});
+    msg::DrivetrainCommand held = planner.takeCommand();
+    float omegaCmd = held.control.twist.omega;
+    if (omegaCmd < -0.5f) everReversed = true;
+    float omegaApplied = delayBuf[delayHead];
+    delayBuf[delayHead] = omegaCmd;
+    delayHead = (delayHead + 1) % kOutputHops;
+    // omega [rad/s] -> arc rate [mm/s] via the SAME 62.5mm/rad scale;
+    // encDiff accumulates 2x the per-wheel arc (right - left).
+    encDiff += 2.0f * 62.5f * kSlip * omegaApplied * kDt;
+    if (!planner.hasActiveCommand()) {
+      completedWithRot = (std::strcmp(planner.takeEvent().reason, "rot") == 0);
+      break;
+    }
+  }
+  checkFalse(everReversed, "the divergence-corrected trace never reverses despite the lagging plant");
+  checkTrue(completedWithRot,
+            "a lagging plant completes via STOP_ROTATION (reason=rot) thanks to the divergence "
+            "replan, not the test's own STOP_TIME safety bound");
 }
 
 // 9. GOTO_GOAL goal_kind, PURSUE-only path (ticket 084-004): when the
@@ -1232,9 +1613,14 @@ int main() {
   scenarioTimedGoalBothChannelsRuckigTraceNeverReverseAndCompleteViaTime();
   scenarioTimedGoalStopFiresDuringRampUpForcesFreshDecelNoReverse();
   scenarioTurnGoalUsesSignedSpeedAndCallerStop();
-  scenarioTurnGoalAnticipatesHeadingStopWithRateCap();
+  scenarioTurnGoalRuckigTraceNeverReverses();
+  scenarioTurnGoalStopFiredBeforeConvergenceForcesFreshDecel();
+  scenarioTurnGoalDivergenceReplanCorrectsLaggingPlant();
+  scenarioTurnGoalGrossDivergenceReanchorsAfterStall();
+  scenarioTurnGoalGuardSkipsNearTargetBackwardReplan();
   scenarioRotationGoalUsesSignedSpeedAndCallerStop();
-  scenarioRotationGoalAnticipatesStopWithRateCap();
+  scenarioRotationGoalRuckigTraceNeverReverses();
+  scenarioRotationGoalDivergenceReplanCorrectsLaggingPlant();
   scenarioGotoGoalPursuesDirectlyWhenBearingWithinGate();
   scenarioGotoGoalPreRotatesThenPursuesAndArrives();
   scenarioStopGoalKindHaltsSilently();

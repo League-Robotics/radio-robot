@@ -39,6 +39,14 @@ Ticket 089-003 update: ``planner.h``/``planner.cpp`` now ``#include
 ``gnu++20``/``-fno-exceptions``/``-fno-rtti`` flags Ruckig's own build
 requires (``roots.hpp``'s ``M_PI`` usage under GNU extensions -- see
 ``test_jerk_trajectory.py``'s own comment).
+
+Ticket 089-005 update: TURN/ROTATION migrate onto the SAME rotational
+Motion::JerkTrajectory channel (Decision 9) -- the last goal-kind migration
+this sprint, so ``Planner::tick()``'s dispatch collapses to the clean
+``mode_ == GO_TO`` binary the architecture doc describes as the sprint's end
+state, and ``applyStopAnticipation()`` is deleted in full. No compile-command
+change here (still the same source list) -- see ``planner_harness.cpp``'s
+own updated header comment for the new/rewritten TURN/ROTATION scenarios.
 """
 
 import pathlib
