@@ -1,12 +1,90 @@
 ---
 id: '001'
 title: D/T/TURN/RT bounded stop-decel seed correction
-status: open
-use-cases: [SUC-001]
+status: done
+use-cases:
+- SUC-001
 depends-on: []
 github-issue: ''
 issue: d-t-terminal-reverse-persists-decel-reseed-from-plan-velocity.md
-completes_issue: true
+completes_issue: false
+exception:
+  thrown_by: programmer
+  thrown_at: '2026-07-08T11:20:57.110166+00:00'
+  attempted: 'Implemented architecture-update.md Decisions 1-4 exactly as specified.
+    Added Motion::JerkTrajectory::solveToVelocityWithSeedCorrection(targetVelocity,
+    maxVelocity, measuredVelocity, cap) -- a new, narrow entry point that nudges lastVelocity_
+    by clamp(measuredVelocity-lastVelocity_,-cap,+cap) (a symmetric clamp, Decision
+    2) then delegates to the existing solveToVelocity(), mirroring retarget()/reanchor()''s
+    precedent (Decision 1). Wired it into armDistanceStopDecel()/armVelocityStopDecel()/armRotationalStopDecel()
+    via two new Planner helpers -- measuredLinearVelocity() (sum-average of leftObs/rightObs.velocity,
+    mirroring maybeReplanDistance()''s own reanchor()-velocity averaging) and measuredRotationalVelocity()
+    (differential-average converted via rotationalArcScale_, mirroring maybeReplanRotational()''s
+    own position-domain conversion) -- both falling back to the plain, uncorrected
+    solveToVelocity() when velocity.has is false, so no existing sim scenario (none
+    populate velocity.has) is touched. Added kStopDecelSeedCorrectionCap=100mm/s /
+    kRotStopDecelSeedCorrectionCap=0.6rad/s as ticket-owned constants sized from the
+    089-007 bench numbers (Decision 4). Wrote and ran 9 new sim tests across two tiers:
+    jerk_trajectory_harness.cpp unit-level (bounded/capped/rotational-channel mechanism
+    proofs) and planner_harness.cpp Planner-tier (D/T/RT synthetic-observation scenarios
+    proving no-reverse + strictly monotonic post-correction convergence, explicitly
+    isolating the new mechanism from the pre-existing Decision-10 divergence-replan
+    for the D scenario) -- all pass cleanly, satisfying the ticket''s three blocking
+    sim bullets in isolation. But the ticket''s own overarching gate, `uv run python
+    -m pytest tests/sim`, then surfaced 3 regressions in PRE-EXISTING, already-tuned
+    tests: test_motion_overshoot_regression.py''s D-200-200-500 tolerance test (087-009''s
+    own tuned baseline 502.27mm/+0.45% -> 516.29mm/+3.26%, over its 1.5% bar) and
+    two test_motion_commands_arc_turn.py TURN absolute-heading tests (~98deg vs 90deg
+    commanded, over a 6deg bar). Root-caused both via temporary instrumentation (reverted
+    before leaving the tree): (1) armDistanceStopDecel()/armRotationalStopDecel()
+    fire, by 087-009/Decision-10''s own design, very close to the plan''s own natural
+    convergence, so linear_/rotational_''s remembered lastVelocity_ is already low
+    at that exact tick (measured e.g. believed=60mm/s for D, believed=1.22rad/s --
+    still full cruise -- for TURN); the sim''s own realistic (non-ideal) PID/motor
+    lag reads a meaningfully higher instantaneous velocity at that SAME tick as ordinary
+    end-of-decel tracking noise (e.g. measured=164mm/s for D), not genuine sustained
+    cruise-speed divergence -- correcting toward it adds real, unwanted extra travel/heading
+    on top of a decel Decision 10 + 087-009 had already correctly converged. A cap-sensitivity
+    sweep (20/40/60/80/100mm/s) showed the D test passes at cap<=40mm/s and fails
+    at cap>=60mm/s, while the confirmed hardware divergence needing correction (089-007)
+    is 50-110mm/s -- no single cap value is both large enough to meaningfully address
+    the hardware bug and small enough to avoid this sim regression. (2) Independently
+    for TURN, rotationalArcScale_ defaults to 1.0f (089-005''s own documented placeholder
+    -- TURN''s STOP_HEADING threshold and rotational target are literally the same
+    number, no physical trackwidth/2 meaning), so measuredRotationalVelocity()''s
+    division by it produced a wildly inflated "rad/s" value (measured=111rad/s against
+    believed=1.22rad/s) that saturates the cap unconditionally whenever the wheels
+    are moving -- an always-on bias, not a measurement-informed correction. RT (a
+    genuine trackwidth/2 conversion, confirmed measured=2.14rad/s against believed=0.36rad/s
+    in the same instrumented run) does not exhibit this, and its own full-sim tests
+    stayed green.'
+  conflict: 'architecture-update.md (092) Decisions 1-3 (a bounded, one-shot correction
+    fired at every stop-arm event, no additional gate specified) and this ticket''s
+    own blocking acceptance bullet "Full uv run python -m pytest tests/sim is green"
+    are mutually unsatisfiable as currently specified: a cap sized to meaningfully
+    address the confirmed hardware divergence (50-110mm/s, the issue''s own 089-007
+    bench numbers) necessarily also fires on the sim''s own ordinary end-of-decel
+    PID/plant noise at the identical stop-arm instant, because the correction as specified
+    has no way to structurally distinguish "plan still cruising, the real bug" from
+    "plan already converged via Decision 10''s replan + 087-009''s dead-time projection,
+    ordinary plant lag" -- both present as "measured > believed at the arm tick."
+    Additionally, Decision 1''s implicit reuse of rotationalArcScale_ (mirroring maybeReplanRotational()''s
+    position-domain conversion) does not hold in the velocity domain for TURN specifically:
+    089-005''s own arcScale=1.0f placeholder (its Grounding: "no conversion needed"
+    because TURN''s STOP_HEADING threshold and rotational target are literally the
+    same number in the POSITION domain) is not a physical trackwidth/2 conversion,
+    so reusing it for a velocity conversion produces an unconditional, always-cap-saturated
+    bias rather than a genuine measurement-informed correction. Neither issue is resolvable
+    within Decisions 1-4''s own specified scope (a magnitude clamp + a ticket-owned
+    cap + one-shot timing) without inventing a new, unauthorized guard (e.g. "only
+    correct while the plan is still substantially below its own cruise/decel-start
+    point" or "skip the rotational correction whenever rotationalArcScale_ is not
+    a validated physical conversion") that would itself need its own sim-validated
+    design -- exactly the kind of unproven refinement the ticket''s own Open Question
+    1 / exception protocol anticipated needing a stakeholder call on, between this
+    approach, issue option (b) (retune the velocity PID), or option (c) (an accepted
+    terminal-tolerance bar).'
+  surface: user-visible
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -144,3 +222,25 @@ value(s) and their justification.
   scenarios for `D` (linear) and at least one of `TURN`/`RT` (rotational),
   plus a bounded-correction-cap scenario.
 - **Verification command**: `uv run python -m pytest tests/sim`.
+
+## Team-lead disposition (2026-07-08) — DESCOPED, no fix shipped
+
+The programmer hit this ticket's own stakeholder-decision trigger: the
+bounded stop-decel seed correction (option (a)) is **proven infeasible in
+sim** — no cap value both fixes the real 50–110 mm/s hardware divergence and
+avoids regressing 087-009's overshoot bar (passes only at cap ≤ 40 mm/s), and
+TURN separately saturates because `rotationalArcScale_` is a 1.0 placeholder,
+not a trackwidth/2 conversion. Per the trigger, **no control change was
+shipped** — the exception WIP was reverted; master's motion behavior is
+unchanged. `completes_issue` set to **false**: the D/T reverse-creep bug is
+NOT fixed.
+
+This ticket's investigative deliverable (determine feasibility of option (a),
+escalate if infeasible) is complete; it is marked done as **descoped**, not as
+a fix. The decision between (a-variant) / PID retune / accepted-tolerance is
+escalated to the stakeholder via the fresh pool issue
+`clasi/issues/d-t-turn-terminal-reverse-stakeholder-decision.md`. The approach
+and its 9 passing monotonic-convergence sim tests are preserved on branch
+`spike/092-001-infeasible-bounded-seed-correction` (commit 3559d28e). The
+`rotationalArcScale_` placeholder is flagged in that issue as a real latent
+defect worth fixing regardless of the linear-channel choice.
