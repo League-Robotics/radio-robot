@@ -1,9 +1,11 @@
 ---
 id: '004'
 title: OTOS REG_OFFSET bench re-test and lever-arm disposition
-status: open
-use-cases: [SUC-004]
-depends-on: ['003']
+status: in-progress
+use-cases:
+- SUC-004
+depends-on:
+- '003'
 github-issue: ''
 issue: otos-lever-arm-necessity-and-library-port.md
 completes_issue: true
