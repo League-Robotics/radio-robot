@@ -7,7 +7,7 @@ use-cases:
 depends-on: []
 github-issue: ''
 issue: poseestimator-fused-pose-frozen-on-hardware.md
-completes_issue: true
+completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

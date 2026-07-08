@@ -1,8 +1,9 @@
 ---
 id: '003'
 title: 'OTOS driver: faithful SparkFun library port'
-status: open
-use-cases: [SUC-003]
+status: in-progress
+use-cases:
+- SUC-003
 depends-on: []
 github-issue: ''
 issue: otos-lever-arm-necessity-and-library-port.md
