@@ -2,7 +2,7 @@
 id: 089
 title: "Planner motion planning via vendored Ruckig \u2014 build integration and D/T\
   \ terminal-overshoot fix"
-status: planning-docs
+status: done
 branch: sprint/089-planner-motion-planning-via-vendored-ruckig-build-integration-and-d-t-terminal-overshoot-fix
 use-cases: []
 issues:
