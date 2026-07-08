@@ -1,5 +1,6 @@
 ---
 status: pending
+sprint: 090
 ---
 
 # General subsystem event → reply mechanism (remove EVT formatting from the main loop)

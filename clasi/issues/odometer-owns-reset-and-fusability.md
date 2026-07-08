@@ -1,5 +1,6 @@
 ---
 status: pending
+sprint: 090
 ---
 
 # Odometer owns reset translation and fusability (remove reset plumbing from the main loop)
