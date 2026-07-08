@@ -514,6 +514,20 @@ Value conventions:
 > - **No `STREAM fields=<csv>` subscription.** Every frame always carries
 >   the full fixed field set below (`enc= vel= pose= encpose= otos= twist=`);
 >   there is no second, smaller field set to select between yet.
+> - **`otosconn=<0|1>` (sprint 092, ticket 002) is a field this section's
+>   legacy table below does NOT document** -- it is new to `source/`, not
+>   carried over from `source_old/`. Emitted as a standalone token
+>   immediately after `otos=`, sharing that field's own omission gate (both
+>   present or both absent together, never one without the other): `1` iff
+>   `Hal::Odometer::connected()` was true this pass (a real device detected
+>   and answering), `0` otherwise (matches `Hal::NullOdometer` and a
+>   `Hal::OtosOdometer` that never detected its chip's product ID at
+>   `begin()`). Added as a diagnostic for the frozen-fused-pose
+>   investigation (`clasi/issues/poseestimator-fused-pose-frozen-on-
+>   hardware.md`) -- see that ticket's completion notes: no existing wire
+>   verb told a bench session whether a real OTOS chip was ever detected,
+>   as opposed to `otos=` merely holding its all-zero boot-default because
+>   no odometer ever wrote it.
 > - **No D10 idle-rate refinement.** The periodic emission period is
 >   exactly `periodMs` (clamped to the 20ms floor) at all times — it does
 >   NOT relax to `max(period, 500ms)` when idle.

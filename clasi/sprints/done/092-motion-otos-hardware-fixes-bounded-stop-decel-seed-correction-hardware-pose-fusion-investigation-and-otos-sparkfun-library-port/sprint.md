@@ -2,9 +2,13 @@
 id: 092
 title: 'Motion & OTOS hardware fixes: bounded stop-decel seed correction, hardware
   pose-fusion investigation, and OTOS SparkFun library port'
-status: planning-docs
+status: done
 branch: sprint/092-motion-otos-hardware-fixes-bounded-stop-decel-seed-correction-hardware-pose-fusion-investigation-and-otos-sparkfun-library-port
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
 issues:
 - d-t-terminal-reverse-persists-decel-reseed-from-plan-velocity.md
 - poseestimator-fused-pose-frozen-on-hardware.md

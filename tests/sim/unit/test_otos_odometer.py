@@ -5,12 +5,19 @@ Hal::Odometer leaf for the SparkFun OTOS sensor.
 Compiles ``otos_odometer_harness.cpp`` together with the REAL
 ``source/hal/otos/otos_odometer.cpp`` plus ticket 001's HOST_BUILD
 scripted-fake ``source/com/i2c_bus_host.cpp``, against the SAME
-``source/hal/otos/otos_odometer.h`` / ``source/hal/lever_arm.h`` every ARM
-build compiles, with ``-DHOST_BUILD`` so otos_odometer.cpp's own
-``#ifndef HOST_BUILD`` guard sheds its MicroBit.h dependency. Mirrors
-``test_nezha_flipflop.py``'s shape exactly (that file's own docstring is
-this ticket's explicit test precedent): compile with the system C++
-compiler, run the resulting binary, assert it exits 0.
+``source/hal/otos/otos_odometer.h`` every ARM build compiles, with
+``-DHOST_BUILD`` so otos_odometer.cpp's own ``#ifndef HOST_BUILD`` guard
+sheds its MicroBit.h dependency. Mirrors ``test_nezha_flipflop.py``'s shape
+exactly (that file's own docstring is this ticket's explicit test
+precedent): compile with the system C++ compiler, run the resulting binary,
+assert it exits 0.
+
+092-004: the former standalone ``source/hal/lever_arm.h`` (and its own
+``lever_arm_harness.cpp``/``test_lever_arm.py``) no longer exist -- its two
+functions were folded into ``Hal::OtosOdometer`` as private
+``sensorToCentre()``/``centreToSensor()`` methods, so their coverage now
+lives inside ``otos_odometer_harness.cpp`` itself (see that file's own
+header comment).
 
 Collected under ``tests/sim/unit/`` -- already within ``pyproject.toml``'s
 ``testpaths``, no configuration change needed.

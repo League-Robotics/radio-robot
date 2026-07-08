@@ -101,6 +101,22 @@ struct Blackboard {
   bool otosValid = false;
   msg::PoseEstimate otos;             // from Hardware, when valid
 
+  // otosConnected (092-002) -- Hal::Odometer::connected()'s live, per-pass
+  // value, refreshed every pass in the loop's COMMIT step (main_loop.cpp),
+  // straight off the SAME odometer pointer bb.otos/otosValid are sourced
+  // from. Deliberately DISTINCT from otosValid (fusableThisPass()'s
+  // reset-tracking flag) and from otos.stamp.valid (this ONE pass's read
+  // freshness): this is "does a real device exist and answer at all" --
+  // sticky/stable across many passes, unlike stamp.valid which flips on
+  // Hal::OtosOdometer's own kReadPeriod rate-limit. Added as a diagnostic
+  // surface for the frozen-fused-pose investigation
+  // (clasi/issues/poseestimator-fused-pose-frozen-on-hardware.md): a bench
+  // session could not previously tell, from the wire alone, whether
+  // Hal::OtosOdometer had actually detected a chip (see otos_commands.cpp --
+  // no existing verb surfaces connected()). Always false for a
+  // Hal::NullOdometer/never-detected Hal::OtosOdometer.
+  bool otosConnected = false;
+
   // Current config -- published by the Configurator on apply; read by
   // GET/telemetry. Replaces every shadow.
   msg::DrivetrainConfig drivetrainConfig;

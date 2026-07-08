@@ -109,6 +109,7 @@ TlmFrameInput tick(uint32_t now, const Rt::Blackboard& bb) {
   if (bb.otosPresent) {
     in.hasOtos = true;
     in.otos = bb.otos.pose;
+    in.otosConnected = bb.otosConnected;
   }
 
   // twist= -- a pure kinematic transform (BodyKinematics::forward()) of the
@@ -161,6 +162,14 @@ int buildTlmFrame(char* buf, int len, const TlmFrameInput& in) {
     appendField(buf, pos, rem, truncated, " otos=%d,%d,%d",
                 static_cast<int>(in.otos.x), static_cast<int>(in.otos.y),
                 static_cast<int>(in.otos.h * kAngleScale));
+    // otosconn= (092-002) -- a SEPARATE token, not a 4th otos= value: the
+    // existing otos= wire shape is a fixed 3-tuple already consumed by
+    // host parsers (host/robot_radio/robot/protocol.py's parse_tlm() only
+    // accepts len(parts) == 3) -- growing its arity would silently break
+    // that strict check rather than extend it. A standalone token shares
+    // otos='s own omission gate (in.hasOtos) but leaves otos= itself
+    // byte-for-byte unchanged.
+    appendField(buf, pos, rem, truncated, " otosconn=%d", in.otosConnected ? 1 : 0);
   }
 
   if (in.hasTwist) {
