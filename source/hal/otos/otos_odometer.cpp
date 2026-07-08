@@ -1,7 +1,5 @@
 #include "hal/otos/otos_odometer.h"
 
-#include "hal/lever_arm.h"
-
 #ifndef HOST_BUILD
 #include "MicroBit.h"   // MICROBIT_OK (vendor SDK; excluded from the no-units-in-identifiers
                         // rename per .claude/rules/coding-standards.md)
@@ -149,12 +147,13 @@ void OtosOdometer::tick(uint32_t now)
     float rotVx = c * vxF - s * vyF;
     float rotVy = s * vxF + c * vyF;
 
-    // Lever-arm compensation (source/hal/lever_arm.h) using hF -- the
-    // SAME-INSTANT heading from THIS burst, never a heading left over from
-    // a previous tick (the same-instant-heading contract; see lever_arm.h
-    // and this method's own doc comment).
+    // Lever-arm compensation (this class's own private sensorToCentre(),
+    // 092-004 -- folded from the former standalone source/hal/lever_arm.h)
+    // using hF -- the SAME-INSTANT heading from THIS burst, never a heading
+    // left over from a previous tick (the same-instant-heading contract;
+    // see sensorToCentre()'s own doc comment, otos_odometer.h).
     float centreX = 0.0f, centreY = 0.0f;
-    LeverArm::sensorToCentre(rotX, rotY, hF, config_.offsetX, config_.offsetY, centreX, centreY);
+    sensorToCentre(rotX, rotY, hF, config_.offsetX, config_.offsetY, centreX, centreY);
 
     cachedPose_.pose.x = centreX;
     cachedPose_.pose.y = centreY;
@@ -201,8 +200,8 @@ void OtosOdometer::setPose(const msg::Pose2D& pose)
     // the controller pose instead of dragging the EKF toward the boot
     // frame. Ported from OtosSensor::setWorldPose().
     float sensorX = 0.0f, sensorY = 0.0f;
-    LeverArm::centreToSensor(pose.x, pose.y, pose.h, config_.offsetX, config_.offsetY,
-                              sensorX, sensorY);
+    centreToSensor(pose.x, pose.y, pose.h, config_.offsetX, config_.offsetY,
+                    sensorX, sensorY);
 
     // Undo the mounting-yaw rotation tick() applies going the other way:
     // tick() computes (rotX,rotY) = R(ang)*(xF,yF) with ang = -offsetYaw, so
@@ -299,6 +298,35 @@ int8_t OtosOdometer::scaleToRegister(float scale)
     if (raw >  127.0f) raw =  127.0f;
     if (raw < -127.0f) raw = -127.0f;
     return static_cast<int8_t>(raw);
+}
+
+// ---------------------------------------------------------------------------
+// sensorToCentre()/centreToSensor() -- OTOS lever-arm compensation, 092-004:
+// folded here (verbatim math) from the former standalone source/hal/
+// lever_arm.h -- see otos_odometer.h's declaration comments for the full
+// same-instant-heading contract this relies on.
+// ---------------------------------------------------------------------------
+
+void OtosOdometer::sensorToCentre(float sensorX, float sensorY, float sensorHeading,
+                                   float offsetX, float offsetY,
+                                   float& centreXOut, float& centreYOut)
+{
+    float c = cosf(sensorHeading);
+    float s = sinf(sensorHeading);
+    float offsetXWorld = c * offsetX - s * offsetY;
+    float offsetYWorld = s * offsetX + c * offsetY;
+    centreXOut = sensorX - offsetXWorld;
+    centreYOut = sensorY - offsetYWorld;
+}
+
+void OtosOdometer::centreToSensor(float centreX, float centreY, float centreHeading,
+                                   float offsetX, float offsetY,
+                                   float& sensorXOut, float& sensorYOut)
+{
+    float c = cosf(centreHeading);
+    float s = sinf(centreHeading);
+    sensorXOut = centreX + (c * offsetX - s * offsetY);
+    sensorYOut = centreY + (s * offsetX + c * offsetY);
 }
 
 // ---------------------------------------------------------------------------

@@ -47,8 +47,9 @@ msg::DrivetrainConfig defaultDrivetrainConfig();
 // (architecture-update.md Design Rationale 4; sprint 085-005 removed a dead
 // `SET odomOffX/Y/Yaw` push because no such wire key exists). Ticket 086-006's
 // Hal::OtosOdometer leaf is constructed directly with these values (main.cpp)
-// — the offset feeds source/hal/lever_arm.h's LeverArm::sensorToCentre()/
-// centreToSensor(); the scale multipliers are converted to the OTOS chip's
+// — the offset feeds Hal::OtosOdometer's own private sensorToCentre()/
+// centreToSensor() methods (092-004 — folded from the former standalone
+// source/hal/lever_arm.h); the scale multipliers are converted to the OTOS chip's
 // raw int8 register scalar once at Hal::OtosOdometer::begin() (the same
 // scaleToInt8()-style conversion source_old/hal/real/OtosSensor.cpp::begin()
 // applied), NOT re-derived at every OL/OA wire call (those operate on the

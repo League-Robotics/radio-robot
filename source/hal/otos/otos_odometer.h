@@ -42,15 +42,34 @@
 // ticket ports that primitive faithfully (setOffset()/getOffset() below,
 // sharing writeXYH()/kPosMmPerLsb/kHdgRadPerLsb with the position path —
 // see those methods' own comments). Mounting-offset (lever-arm)
-// compensation is STILL applied HOST-SIDE today via source/hal/
-// lever_arm.h's LeverArm::sensorToCentre()/centreToSensor() (see tick()'s
-// own comment for the same-instant-heading contract that math relies on)
-// — whether this project actually SWITCHES to chip-native REG_OFFSET
-// compensation (retiring the host-side lever arm) depends on a real bench
-// re-test of whether THIS chip honors the write, which is ticket 004's job,
-// not this one's. This ticket only proves the register I/O primitive
-// itself works correctly (sim-testable register scaling), not what the
-// physical chip does with it.
+// compensation was, at the time this paragraph was written, STILL applied
+// HOST-SIDE via a standalone source/hal/lever_arm.h — whether this project
+// would switch to chip-native REG_OFFSET compensation (retiring the
+// host-side lever arm) depended on a real bench re-test of whether THIS
+// chip honors the write. Ticket 004 (below) is that re-test and its
+// outcome.
+//
+// 092-004 update (SUC-004, bench re-test + lever-arm disposition): the
+// REG_OFFSET bench re-test above could NOT be run this sprint — the
+// robot's serial port was held by an unrelated process and the radio relay
+// was unavailable, so no bench evidence either way exists yet. Per
+// architecture-update.md Decision 7, the default disposition when the
+// bench cannot be run or is inconclusive is FOLD, never DELETE — deleting
+// a possibly-still-needed compensation on an unconfirmed assumption risks
+// a live-hardware regression (the db11b7c phantom-translation signature,
+// see sensorToCentre()'s own comment below), while folding on an
+// inconclusive result costs only a small amount of code a later sprint can
+// clean up once the bench is achievable again. So: source/hal/lever_arm.h
+// no longer exists as a standalone file — its two functions
+// (LeverArm::sensorToCentre()/centreToSensor()) are folded directly into
+// this class as the private sensorToCentre()/centreToSensor() methods
+// below (its one production consumer, tick()/setPose()). This is a pure
+// relocation, not a behavior change: the host-side compensation still
+// happens exactly as before, on every tick()/setPose() call, with the
+// same same-instant-heading contract. Whether THIS chip actually honors a
+// REG_OFFSET write remains UNCONFIRMED — carried forward by a fresh
+// clasi/issues/ follow-on (see that issue for the re-test this ticket
+// deferred) rather than left unresolved.
 //
 // Deliberate deviation from source_old: OtosSensor::init() BLOCK-POLLED
 // (fiber_sleep-based busy-wait, up to ~0.77s) for the IMU bias calibration
@@ -153,10 +172,12 @@ class OtosOdometer : public Odometer {
   // read (086-007 — see readPositionVelocity()'s own comment: the two
   // registers are contiguous, so one read replaces the former two), applies
   // the mounting-yaw rotation (config's offsetYaw) and the lever-arm
-  // compensation (source/hal/lever_arm.h) using the SAME-INSTANT heading
-  // from THIS burst — never a heading left over from a previous tick (see
-  // lever_arm.h's own same-instant-heading contract; a stale heading here is
-  // the exact db11b7c phantom-translation failure mode). Caches the result
+  // compensation (this class's own private sensorToCentre(), 092-004 —
+  // folded from the former standalone source/hal/lever_arm.h) using the
+  // SAME-INSTANT heading from THIS burst — never a heading left over from a
+  // previous tick (see sensorToCentre()'s own comment below for the
+  // same-instant-heading contract; a stale heading here is the exact
+  // db11b7c phantom-translation failure mode). Caches the result
   // for pose(); a burst failure holds the previously-cached pose but marks
   // it stale (stamp.valid = false) so Subsystems::PoseEstimator::tick()
   // skips fusion this pass (pose_estimator.cpp checks otosObs->stamp.valid).
@@ -195,8 +216,12 @@ class OtosOdometer : public Odometer {
 
   // --- 092-003 (SUC-003) additions: faithful port of upstream primitives
   // beyond the Hal::Odometer virtual interface above — OTOS-specific, no
-  // wire command dispatches to these yet (ticket 004 decides whether/how
-  // setOffset()/getOffset() get used from begin()). Each a no-op / zero
+  // wire command dispatches to these yet. 092-004's bench re-test could not
+  // run this sprint (see this file's own header, "092-004 update"), so
+  // begin() does NOT call setOffset() — host-side compensation
+  // (sensorToCentre()/centreToSensor() below) remains the live path;
+  // setOffset()/getOffset() stay available, tested primitives for the
+  // deferred bench re-test and any future wire surface. Each a no-op / zero
   // return if begin() never detected the chip, matching every primitive
   // above. ---
 
@@ -315,6 +340,64 @@ class OtosOdometer : public Odometer {
   // int8 register scalar (0.1% per LSB), clamped to [-127, 127]. Ported
   // from OtosSensor::scaleToInt8().
   static int8_t scaleToRegister(float scale);
+
+  // --- sensorToCentre()/centreToSensor() -- OTOS lever-arm (mounting-offset)
+  // compensation math, 092-004: folded here (private, pure, stateless) from
+  // the former standalone source/hal/lever_arm.h -- this class was always
+  // its one production consumer (tick()/setPose()), and the standalone
+  // file's original "future shared sim leaf" rationale never materialized
+  // (YAGNI). This is a pure relocation, NOT a behavior change: the same two
+  // formulas, called from the same two call sites, with the same
+  // same-instant-heading contract below. See otos_odometer_harness.cpp for
+  // this math's dedicated coverage (folded from the former
+  // lever_arm_harness.cpp/test_lever_arm.py, since these are now private
+  // and no longer independently unit-testable from outside this class).
+  //
+  // The chip reports the SENSOR's own pose (its physical position on the
+  // chassis, offset from the robot's centre of rotation by offsetX/
+  // offsetY); these two pure functions convert between that sensor pose and
+  // the chassis CENTRE pose the rest of the firmware (and the EKF) actually
+  // wants:
+  //
+  //   sensor = centre + R(centreHeading) * offset
+  //   centre = sensor  - R(sensorHeading) * offset   (exact inverse, SAME-
+  //                                                     INSTANT heading --
+  //                                                     see below)
+  //
+  // *** SAME-INSTANT-HEADING CONTRACT -- READ BEFORE CALLING ***
+  // sensorToCentre()'s sensorHeading parameter MUST be the heading read in
+  // the SAME I2C burst/sample as sensorX/sensorY -- never a heading left
+  // over from a previous tick or a separately-fused estimate. A past
+  // regression (commit db11b7c, pre-rebuild tree) produced ~433 mm of
+  // phantom translation on a pure spin on hardware because the offset
+  // rotation used a heading that lagged the live spin by a constant
+  // ~omega*dt: the residual is a lever-arm circle proportional to spin
+  // rate, invisible at rest and severe during a fast turn. Passing the
+  // same-instant heading makes the arc cancel exactly, regardless of spin
+  // rate. Do not reintroduce this bug -- tick() (above) and setPose()
+  // (below) both already honor this; any NEW call site must too.
+
+  // sensor -> centre. sensorX/sensorY: the sensor's own reported position
+  // (already mount-yaw-rotated / upside-down-flip corrected into a world-
+  // oriented frame, but NOT yet lever-arm-compensated). sensorHeading: the
+  // SAME-INSTANT heading [rad] the sensor reading was taken at -- see the
+  // same-instant-heading contract above. offsetX/offsetY: mounting offset
+  // from the chassis centre to the sensor [mm] (config_.offsetX/offsetY).
+  static void sensorToCentre(float sensorX, float sensorY, float sensorHeading,
+                              float offsetX, float offsetY,
+                              float& centreXOut, float& centreYOut);
+  // centre -> sensor (the exact inverse of sensorToCentre() -- same rotation
+  // angle, offset added instead of subtracted). centreX/centreY/
+  // centreHeading: the chassis centre pose (world frame); centreHeading
+  // [rad] and sensorToCentre()'s sensorHeading are the SAME value (the
+  // mounting offset never affects heading, only position), so a caller
+  // round-tripping through both functions passes one heading reading
+  // straight through both calls. offsetX/offsetY: same mounting offset as
+  // sensorToCentre(). Returns the sensor's own world-frame position at that
+  // centre pose/heading.
+  static void centreToSensor(float centreX, float centreY, float centreHeading,
+                              float offsetX, float offsetY,
+                              float& sensorXOut, float& sensorYOut);
 
   // Standalone register writes/reads below each carry kBusClearance
   // (086-007): the register-address write gets postClear=kBusClearance so

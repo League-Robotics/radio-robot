@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: OTOS REG_OFFSET bench re-test and lever-arm disposition
-status: in-progress
+status: done
 use-cases:
 - SUC-004
 depends-on:
@@ -37,7 +37,7 @@ symmetric -- do not treat an unreachable bench as license to delete.
 
 ## Acceptance Criteria
 
-- [ ] **Bench, BEST-EFFORT**: on the stand (wheels off the ground, safe to
+- [~] **Bench, BEST-EFFORT**: on the stand (wheels off the ground, safe to
       spin -- `.claude/rules/hardware-bench-testing.md`), write
       `REG_OFFSET` with the real mounting offset via the new
       `setOffset()`, read it back via `getOffset()`, then drive a pure
@@ -47,7 +47,10 @@ symmetric -- do not treat an unreachable bench as license to delete.
       chip honors it; register reads back zero, or the phantom arc is
       still present = chip does not honor it) explicitly in this ticket's
       completion notes.
-- [ ] **Code, BLOCKING, either bench outcome:**
+      **DESCOPED to a follow-on issue this sprint** -- the bench was
+      physically unreachable this session (see completion notes and the
+      last acceptance item below). Best-effort, not blocking.
+- [x] **Code, BLOCKING, either bench outcome:**
       - If the chip HONORS `REG_OFFSET` (clean positive confirmation):
         delete `source/hal/lever_arm.h` and all host-side lever-arm
         compensation; the offset becomes a one-time device write in
@@ -62,13 +65,15 @@ symmetric -- do not treat an unreachable bench as license to delete.
         compensation itself).
       - Either way, `source/hal/lever_arm.h` does NOT exist standalone at
         the end of this ticket.
-- [ ] `tests/sim/unit/lever_arm_harness.cpp`/`test_lever_arm.py` are
+      **FOLD path taken** (bench unreachable -- Decision 7 default). See
+      completion notes.
+- [x] `tests/sim/unit/lever_arm_harness.cpp`/`test_lever_arm.py` are
       removed; their coverage is either subsumed by the chip-native path
       (if deleted) or folded into `otos_odometer_harness.cpp`'s own
       assertions (if folded) -- not simply dropped.
-- [ ] **Sim, BLOCKING**: full `uv run python -m pytest tests/sim` is
+- [x] **Sim, BLOCKING**: full `uv run python -m pytest tests/sim` is
       green.
-- [ ] If the bench step cannot be completed this sprint (hardware
+- [x] If the bench step cannot be completed this sprint (hardware
       unavailable, robot wedges/latches, or the re-test cannot be
       completed cleanly), record that explicitly, apply the FOLD default
       (per Decision 7 -- do NOT leave the decision unresolved), and file a
@@ -116,3 +121,93 @@ evidence (or its absence) plainly.
 - **New tests to write**: folded lever-arm assertions (if the FOLD path is
   taken) inside `otos_odometer_harness.cpp`.
 - **Verification command**: `uv run python -m pytest tests/sim`.
+
+## Completion Notes
+
+**Bench: could not be run this session (best-effort, descoped).** The
+robot's serial port (`/dev/tty.usbmodem2121102`) was held open by an
+unrelated local process (a VS Code extension-host — the same blocker
+ticket 092-002 hit independently the same session, see
+`clasi/issues/poseestimator-fused-pose-fix-pending-otos-connected-bench-confirmation.md`),
+and the radio relay dongle was unplugged. Per the team-lead's own
+pre-dispatch check, neither path was reachable, so no flash/drive/serial
+attempt was made this ticket (per instruction, to avoid interfering with a
+possible concurrent session on that port). **No bench evidence either way
+exists for whether this chip honors `REG_OFFSET`.**
+
+**Disposition: FOLD (Decision 7's default for an unreachable/inconclusive
+bench).** `source/hal/lever_arm.h` is deleted as a standalone file.
+`LeverArm::sensorToCentre()`/`centreToSensor()` are folded, verbatim
+(same formulas, same call sites, same same-instant-heading contract), into
+`Hal::OtosOdometer` as new **private static methods**
+`sensorToCentre()`/`centreToSensor()` (`source/hal/otos/otos_odometer.h`/
+`.cpp`). `tick()`'s and `setPose()`'s calls were repointed from
+`LeverArm::sensorToCentre(...)`/`LeverArm::centreToSensor(...)` to the
+unqualified (in-class) `sensorToCentre(...)`/`centreToSensor(...)` — no
+other change to either method. This is a pure relocation: host-side
+compensation still runs on every `tick()`/`setPose()` call, identically to
+before. `setOffset()`/`getOffset()` (ticket 003) remain available, tested
+primitives not called from `begin()` — the FOLD path does not switch to
+chip-native compensation.
+
+`source/config/boot_config.h`'s `OtosBootConfig` doc comment and
+`otos_odometer.h`'s file header (both 092-003 paragraphs referencing the
+then-still-standalone `lever_arm.h` and "ticket 004's job, not this one's")
+are updated with a fresh "092-004 update" paragraph stating the actual
+outcome plainly: bench unreachable, FOLD applied per Decision 7, chip's
+honoring of `REG_OFFSET` remains UNCONFIRMED, carried forward by a fresh
+issue rather than left unresolved.
+
+**Tests migrated, not dropped.** `tests/sim/unit/lever_arm_harness.cpp` and
+`test_lever_arm.py` are deleted. Their four scenarios (zero-offset
+identity, non-degenerate round-trip, round-trip across a spread of
+headings/offsets, and the `db11b7c` lagged-heading regression guard) are
+ported into `tests/sim/unit/otos_odometer_harness.cpp` as
+`scenarioLeverArmZeroOffsetIsIdentity()` /
+`scenarioLeverArmRoundTripNonDegenerate()` /
+`scenarioLeverArmRoundTripAcrossHeadings()` /
+`scenarioLeverArmLaggedHeadingLeavesResidual()`, checked against a local
+`testSensorToCentre()`/`testCentreToSensor()` oracle (an independent
+re-implementation of the exact same two formulas) — because the folded
+methods are now `private`, and the harness compiles as a separate
+translation unit from `otos_odometer.cpp` (it links the real
+`otos_odometer.cpp` object, it does not `#include` it), so they are no
+longer callable directly from outside the class. This mirrors this same
+harness file's own pre-existing convention of duplicating `kPosMmPerLsb`/
+`kHdgRadPerLsb` as an independent test oracle. The pre-existing
+`scenarioTickLeverArmOnlyTransform()` / `scenarioTickMountingYawRotationOnlyTransform()`
+scenarios (unchanged in intent, only repointed from `LeverArm::` to
+`testSensorToCentre()`) independently prove the real, private, folded
+method is correctly wired into `tick()`'s end-to-end path. `test_otos_odometer.py`'s
+docstring updated to drop the stale `lever_arm.h` mention and note the
+092-004 fold.
+
+**Sim: green.** `uv run python -m pytest tests/sim` — 310 passed, 2
+xfailed (baseline was 311 passed/2 xfailed; the one test lost is
+`test_lever_arm.py`'s single collected test, deleted along with the file
+it tested — no coverage was dropped, it moved into
+`otos_odometer_harness.cpp`, one C++ binary run per `test_otos_odometer.py`
+as before). The harness itself (14 scenarios, up from 10) was also
+compiled and run standalone (`c++ -std=c++20 -Wall -Wextra -DHOST_BUILD`)
+with zero warnings and all scenarios passing, before running it through
+pytest.
+
+**ARM build: clean link.** `just build` — MICROBIT.hex built successfully
+(FLASH 90.96%, RAM 98.33% used, unchanged from before this ticket's
+change), `libfirmware_host` (HOST_BUILD sim lib) also built clean. No new
+warnings from the fold.
+
+**Follow-on issue filed**: `clasi/issues/otos-reg-offset-bench-retest-deferred.md`
+— carries the `REG_OFFSET` bench re-test forward (write/readback +
+phantom-arc spin test), references this ticket, ticket 003's `setOffset()`/
+`getOffset()` primitives, and records that FOLD was chosen as the safe
+default (Decision 7) because the bench was unreachable this sprint, not
+because the chip was shown not to honor the register.
+
+**Deviations from the plan**: none of substance. The plan's "Documentation
+updates" step (update `otos_odometer.h`'s file header) also touched
+`boot_config.h`'s `OtosBootConfig` doc comment, `tick()`'s and the
+092-003-additions doc comments, and `otos_odometer.cpp`'s two call-site
+comments — all one coherent sweep of every remaining `lever_arm.h`/
+`LeverArm::` reference in `source/`, not scope creep (a stale doc pointer
+to a deleted file is worse than no pointer at all).

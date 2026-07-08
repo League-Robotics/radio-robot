@@ -39,6 +39,27 @@
 // pose() already prove the read sequencing and math), so none do; (3)
 // tick()'s own real bus read is now rate-limited to kReadPeriod (20ms) --
 // scenario 8 below (scenarioTickRateLimitsBusReads) covers this directly.
+//
+// --- 092-004 update: former lever_arm_harness.cpp coverage folded in here ---
+// The standalone source/hal/lever_arm.h (LeverArm::sensorToCentre()/
+// centreToSensor()) no longer exists -- its math was folded into
+// Hal::OtosOdometer as PRIVATE sensorToCentre()/centreToSensor() methods
+// (092-004, Decision 7's default FOLD disposition -- the REG_OFFSET bench
+// re-test that would have justified deleting the compensation entirely
+// could not be run this sprint). Being private, they are no longer directly
+// callable from this separate-translation-unit harness. Scenarios 4/5 below
+// already exercised this math end to end through the real tick()/
+// readPositionVelocity() path (unaffected by the fold -- same call, same
+// math, different spelling); the four scenarios ported from the former
+// lever_arm_harness.cpp (kZeroOffsetIsIdentity through
+// kLaggedHeadingLeavesResidual, below) instead check the math's own
+// properties (identity at zero offset, exact round-trip inverse across a
+// spread of headings/offsets, and the db11b7c lagged-heading regression
+// signature) against a LOCAL re-implementation of the exact same two
+// formulas -- the same "duplicate the constant/formula in the test oracle"
+// convention this file already uses for kPosMmPerLsb/kHdgRadPerLsb above
+// (and, before them, source_old's own precedent). See
+// testSensorToCentre()/testCentreToSensor() below.
 
 #include <cmath>
 #include <cstdint>
@@ -47,7 +68,6 @@
 
 #include "com/i2c_bus.h"
 #include "config/boot_config.h"
-#include "hal/lever_arm.h"
 #include "hal/otos/otos_odometer.h"
 
 namespace {
@@ -94,6 +114,11 @@ void checkNear(float actual, float expected, float tol, const std::string& what)
   }
 }
 
+// 092-004: tolerance for the lever-arm math scenarios ported from the former
+// lever_arm_harness.cpp (mm/rad -- float round-trip tolerance; same value
+// that file used).
+constexpr float kTol = 1e-3f;
+
 // --- Fixture helpers ---------------------------------------------------
 
 constexpr uint16_t kAddr7 = Hal::kOtosDeviceAddr;                         // 0x17
@@ -106,6 +131,37 @@ constexpr uint16_t kWireAddr = static_cast<uint16_t>(kAddr7 << 1);        // 0x2
 // own kCdegToRad comment).
 constexpr float kPosMmPerLsb = 0.305f;
 constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);
+
+// testSensorToCentre()/testCentreToSensor() -- 092-004: a LOCAL, independent
+// re-implementation of Hal::OtosOdometer's now-PRIVATE sensorToCentre()/
+// centreToSensor() methods (folded from the former source/hal/lever_arm.h),
+// duplicated here the same way kPosMmPerLsb/kHdgRadPerLsb above already are
+// -- this file's own established convention for a test oracle that can't
+// reach a production symbol directly. Used only by the
+// scenarioLeverArm*() scenarios below to check the MATH's own properties
+// (identity, exact round-trip inverse, the db11b7c lagged-heading
+// signature); scenarios 4/5 (tick() lever-arm/mounting-yaw transforms)
+// separately prove the REAL leaf's tick() is wired to this same math
+// correctly, end to end through the real (private) methods.
+void testSensorToCentre(float sensorX, float sensorY, float sensorHeading,
+                         float offsetX, float offsetY,
+                         float& centreXOut, float& centreYOut) {
+  float c = cosf(sensorHeading);
+  float s = sinf(sensorHeading);
+  float offsetXWorld = c * offsetX - s * offsetY;
+  float offsetYWorld = s * offsetX + c * offsetY;
+  centreXOut = sensorX - offsetXWorld;
+  centreYOut = sensorY - offsetYWorld;
+}
+
+void testCentreToSensor(float centreX, float centreY, float centreHeading,
+                         float offsetX, float offsetY,
+                         float& sensorXOut, float& sensorYOut) {
+  float c = cosf(centreHeading);
+  float s = sinf(centreHeading);
+  sensorXOut = centreX + (c * offsetX - s * offsetY);
+  sensorYOut = centreY + (s * offsetX + c * offsetY);
+}
 
 Config::OtosBootConfig makeConfig(float offsetX, float offsetY, float offsetYaw,
                                    float linearScale, float angularScale) {
@@ -238,11 +294,11 @@ void scenarioNeverInitializedEverySetterIsNoop() {
 }
 
 // 4. tick(): lever-arm-only transform (offsetYaw == 0, non-zero mounting
-//    offset) -- the read-side position/velocity scaling plus
-//    LeverArm::sensorToCentre() wiring, isolated from the mounting-yaw
-//    rotation step (scenario 5 isolates that one instead).
+//    offset) -- the read-side position/velocity scaling plus the (now
+//    private, 092-004-folded) sensorToCentre() wiring, isolated from the
+//    mounting-yaw rotation step (scenario 5 isolates that one instead).
 void scenarioTickLeverArmOnlyTransform() {
-  beginScenario("tick(): lever-arm-only transform matches LeverArm::sensorToCentre() directly");
+  beginScenario("tick(): lever-arm-only transform matches testSensorToCentre() directly");
   I2CBus::setClock(1000000);
   I2CBus bus;
   scriptGenerousWrites(bus, 20);
@@ -265,13 +321,13 @@ void scenarioTickLeverArmOnlyTransform() {
   float yF = static_cast<float>(kRy) * kPosMmPerLsb;
   float hF = static_cast<float>(kRh) * kHdgRadPerLsb;
   float expectedCentreX = 0.0f, expectedCentreY = 0.0f;
-  LeverArm::sensorToCentre(xF, yF, hF, kOffsetX, kOffsetY, expectedCentreX, expectedCentreY);
+  testSensorToCentre(xF, yF, hF, kOffsetX, kOffsetY, expectedCentreX, expectedCentreY);
 
   msg::PoseEstimate pose = odom.pose();
   checkTrue(pose.stamp.valid, "pose().stamp.valid true after a clean tick()");
   checkUintEq(pose.stamp.last_upd, 2000, "pose().stamp.last_upd is this tick()'s now");
-  checkNear(pose.pose.x, expectedCentreX, 1e-2f, "pose().pose.x matches LeverArm::sensorToCentre()");
-  checkNear(pose.pose.y, expectedCentreY, 1e-2f, "pose().pose.y matches LeverArm::sensorToCentre()");
+  checkNear(pose.pose.x, expectedCentreX, 1e-2f, "pose().pose.x matches testSensorToCentre()");
+  checkNear(pose.pose.y, expectedCentreY, 1e-2f, "pose().pose.y matches testSensorToCentre()");
   checkNear(pose.pose.h, hF, 1e-5f, "pose().pose.h passes the raw heading through unmodified");
 
   float vxF = static_cast<float>(kRvx) * kPosMmPerLsb;
@@ -315,6 +371,123 @@ void scenarioTickMountingYawRotationOnlyTransform() {
   checkNear(pose.pose.h, hF, 1e-5f, "pose().pose.h still takes no mounting-rotation adjustment");
 
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
+}
+
+// --- Lever-arm math coverage (092-004, ported from the former
+// lever_arm_harness.cpp/test_lever_arm.py -- see this file's own header
+// comment, "092-004 update", for why these check testSensorToCentre()/
+// testCentreToSensor() rather than the now-private production methods
+// directly) ---
+
+// A. Degenerate case: zero mounting offset is a no-op in both directions,
+//    regardless of heading -- the trivial case that must still hold.
+void scenarioLeverArmZeroOffsetIsIdentity() {
+  beginScenario("lever-arm math: zero offset -- testSensorToCentre/testCentreToSensor are both no-ops");
+  float cx = 0.0f, cy = 0.0f, sx = 0.0f, sy = 0.0f;
+
+  testCentreToSensor(123.0f, -45.0f, 0.7f, 0.0f, 0.0f, sx, sy);
+  checkNear(sx, 123.0f, kTol, "testCentreToSensor: x unchanged with zero offset");
+  checkNear(sy, -45.0f, kTol, "testCentreToSensor: y unchanged with zero offset");
+
+  testSensorToCentre(200.0f, 300.0f, -1.1f, 0.0f, 0.0f, cx, cy);
+  checkNear(cx, 200.0f, kTol, "testSensorToCentre: x unchanged with zero offset");
+  checkNear(cy, 300.0f, kTol, "testSensorToCentre: y unchanged with zero offset");
+}
+
+// B. Non-degenerate round-trip: a real tovez.json-shaped mounting offset and
+//    a non-zero heading. Compute the sensor pose for a given centre pose via
+//    testCentreToSensor(), then recover the centre pose via
+//    testSensorToCentre() using the SAME-INSTANT heading -- the two
+//    functions must be exact inverses.
+void scenarioLeverArmRoundTripNonDegenerate() {
+  beginScenario("lever-arm math: non-zero offset + non-zero heading -- exact inverse round-trip");
+  constexpr float kOffsetX = -47.7f;   // [mm] tovez.json geometry.odometry_offset_mm.x
+  constexpr float kOffsetY = 3.5f;     // [mm] tovez.json geometry.odometry_offset_mm.y
+
+  constexpr float centreX = 512.0f;    // [mm]
+  constexpr float centreY = -238.0f;   // [mm]
+  constexpr float heading = 0.9f;      // [rad] ~51.6 degrees -- deliberately not a multiple of pi/2
+
+  float sensorX = 0.0f, sensorY = 0.0f;
+  testCentreToSensor(centreX, centreY, heading, kOffsetX, kOffsetY, sensorX, sensorY);
+
+  // Sanity: the sensor pose must actually differ from the centre pose (the
+  // offset is non-zero) -- otherwise this "non-degenerate" scenario would
+  // silently degrade into scenario A's trivial case.
+  bool moved = (std::fabs(static_cast<double>(sensorX - centreX)) > 1.0) ||
+               (std::fabs(static_cast<double>(sensorY - centreY)) > 1.0);
+  if (!moved) fail("testCentreToSensor did not actually displace the pose -- scenario is degenerate");
+
+  float recoveredX = 0.0f, recoveredY = 0.0f;
+  testSensorToCentre(sensorX, sensorY, heading, kOffsetX, kOffsetY, recoveredX, recoveredY);
+
+  checkNear(recoveredX, centreX, kTol, "round-trip recovers the original centre X");
+  checkNear(recoveredY, centreY, kTol, "round-trip recovers the original centre Y");
+}
+
+// C. Round-trip holds across a spread of headings (including negative and
+//    beyond-pi/2 values) and a second, differently-signed offset pair --
+//    proves the inverse relationship isn't an accident of one particular
+//    angle or offset sign combination.
+void scenarioLeverArmRoundTripAcrossHeadings() {
+  beginScenario("lever-arm math: round-trip holds across a spread of headings and offsets");
+  const float offsets[2][2] = {{35.0f, -12.0f}, {-8.0f, 60.0f}};
+  const float headings[5] = {0.0f, 0.3f, -1.57f, 2.4f, -3.0f};
+
+  for (const auto& offset : offsets) {
+    for (float heading : headings) {
+      float sensorX = 0.0f, sensorY = 0.0f;
+      testCentreToSensor(10.0f, -20.0f, heading, offset[0], offset[1], sensorX, sensorY);
+
+      float recoveredX = 0.0f, recoveredY = 0.0f;
+      testSensorToCentre(sensorX, sensorY, heading, offset[0], offset[1], recoveredX, recoveredY);
+
+      char label[160];
+      std::snprintf(label, sizeof(label),
+                    "round-trip at heading=%.3f offset=(%.1f,%.1f)",
+                    static_cast<double>(heading), static_cast<double>(offset[0]),
+                    static_cast<double>(offset[1]));
+      checkNear(recoveredX, 10.0f, kTol, std::string(label) + " -- x");
+      checkNear(recoveredY, -20.0f, kTol, std::string(label) + " -- y");
+    }
+  }
+}
+
+// D. Regression guard for the exact db11b7c failure mode: feeding
+//    testSensorToCentre() a LAGGED heading (not the same-instant one used by
+//    testCentreToSensor()) must NOT round-trip -- it must leave a residual
+//    error proportional to the heading discrepancy. This documents *why*
+//    the same-instant contract matters (see otos_odometer.h's
+//    sensorToCentre() doc comment), rather than merely asserting it in a
+//    comment -- a future change that silently threads a stale heading
+//    through the real leaf would still pass every other scenario in this
+//    file (which always use one shared, correct heading) but this
+//    documents the exact mathematical signature such a regression produces.
+void scenarioLeverArmLaggedHeadingLeavesResidual() {
+  beginScenario("lever-arm math: db11b7c regression guard -- a LAGGED heading breaks the round-trip");
+  constexpr float kOffsetX = -47.7f;
+  constexpr float kOffsetY = 3.5f;
+  constexpr float centreX = 0.0f;
+  constexpr float centreY = 0.0f;
+  constexpr float trueHeading = 1.2f;    // [rad] the same-instant heading
+  constexpr float laggedHeading = 0.8f;  // [rad] a stale heading from an earlier sample
+
+  float sensorX = 0.0f, sensorY = 0.0f;
+  testCentreToSensor(centreX, centreY, trueHeading, kOffsetX, kOffsetY, sensorX, sensorY);
+
+  float recoveredX = 0.0f, recoveredY = 0.0f;
+  testSensorToCentre(sensorX, sensorY, laggedHeading, kOffsetX, kOffsetY, recoveredX, recoveredY);
+
+  double residual = std::sqrt(static_cast<double>((recoveredX - centreX) * (recoveredX - centreX) +
+                                                    (recoveredY - centreY) * (recoveredY - centreY)));
+  if (residual < 1.0) {
+    char buf[192];
+    std::snprintf(buf, sizeof(buf),
+                  "expected a real (>1mm) residual from the mismatched heading, got %g mm -- "
+                  "the same-instant-heading contract would be unenforceable if this passed",
+                  residual);
+    fail(buf);
+  }
 }
 
 // 6. tick(): a burst-read failure holds the previously-cached pose but
@@ -541,6 +714,10 @@ int main() {
   scenarioNeverInitializedEverySetterIsNoop();
   scenarioTickLeverArmOnlyTransform();
   scenarioTickMountingYawRotationOnlyTransform();
+  scenarioLeverArmZeroOffsetIsIdentity();
+  scenarioLeverArmRoundTripNonDegenerate();
+  scenarioLeverArmRoundTripAcrossHeadings();
+  scenarioLeverArmLaggedHeadingLeavesResidual();
   scenarioTickFailureHoldsLastGoodPoseAndRecovers();
   scenarioSetterTxnCounts();
   scenarioTickRateLimitsBusReads();
