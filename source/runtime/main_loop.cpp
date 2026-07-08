@@ -165,35 +165,49 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
   // translation and the "is OTOS fusable this pass" decision now live on the
   // odometer itself (Hal::Odometer::applySetPose()/fusableThisPass()) rather
   // than as loop-local plumbing.
+  //
+  // (090-003) hardware_.odometer() is NEVER null (Hal::NullOdometer default,
+  // subsystems/hardware.h) -- both drain arms below now run unconditionally;
+  // the former "no device" else-arm (which existed only to keep either
+  // Mailbox from looking perpetually "full" to its next post()) is
+  // redundant now: a NullOdometer's apply()/applySetPose() already discard
+  // inertly, and the mailboxes are drained by the `if (!empty())` guards
+  // below either way.
   Hal::Odometer* odometer = hardware_.odometer();
-  if (odometer != nullptr) {
-    if (!bb.otosCommandIn.empty()) {
-      odometer->apply(bb.otosCommandIn.take());
-    }
-    if (!bb.otosSetPoseIn.empty()) {
-      odometer->applySetPose(bb.otosSetPoseIn.take());
-    }
-  } else {
-    // No device -- discard rather than let either Mailbox look
-    // perpetually "full" to its next post() (Mailbox::post() overwrites
-    // anyway, but draining keeps behavior obviously inert either way).
-    bb.otosCommandIn.take();
-    bb.otosSetPoseIn.take();
+  if (!bb.otosCommandIn.empty()) {
+    odometer->apply(bb.otosCommandIn.take());
+  }
+  if (!bb.otosSetPoseIn.empty()) {
+    odometer->applySetPose(bb.otosSetPoseIn.take());
   }
 
-  // Pose estimation reads bb.otos/bb.otosValid as committed LAST pass
-  // (x[k]) -- this pass's fresh sample is taken during COMMIT, below
-  // (Decision 6: no same-pass read of a value this SAME pass will refresh)
-  // -- EXCEPT on the exact pass a reset was JUST applied above, per
-  // Hal::Odometer::fusableThisPass()'s own doc comment: bb.otos is an x[k]
-  // cell refreshed only at COMMIT, so on a reset pass it still holds the
-  // STALE, pre-reset reading, and fusing it against the freshly setPose'd
-  // EKF would fabricate a large false innovation (reproduced live via SI --
-  // see fusableThisPass()'s doc comment for the full history). This is
-  // fusableThisPass()'s ONE sanctioned call site this pass -- see its own
-  // doc comment for why it must never be polled twice.
+  // Pose estimation reads bb.otos as committed LAST pass (x[k]) -- this
+  // pass's fresh sample is taken during COMMIT, below (Decision 6: no
+  // same-pass read of a value this SAME pass will refresh) -- EXCEPT on the
+  // exact pass a reset was JUST applied above, per Hal::Odometer::
+  // fusableThisPass()'s own doc comment: bb.otos is an x[k] cell refreshed
+  // only at COMMIT, so on a reset pass it still holds the STALE, pre-reset
+  // reading, and fusing it against the freshly setPose'd EKF would fabricate
+  // a large false innovation (reproduced live via SI -- see
+  // fusableThisPass()'s doc comment for the full history).
+  //
+  // (090-003) This is fusableThisPass()'s ONE sanctioned call site this pass
+  // -- see its own doc comment for why it must never be polled twice. The
+  // result is captured ONCE, here, and reused verbatim at COMMIT below for
+  // bb.otosValid rather than calling fusableThisPass() a second time. This
+  // also replaces the former `bb.otosValid &&` short-circuit guard at this
+  // read site -- that guard existed only to avoid dereferencing a null
+  // odometer (dead code even before this ticket, since both concrete owners
+  // already override odometer() to non-null), never as a deliberate
+  // "otos not populated yet" check -- Subsystems::PoseEstimator::tick()
+  // already re-checks `otosObs->stamp.valid` internally
+  // (source/subsystems/pose_estimator.cpp) before actually fusing, so
+  // passing `&bb.otos` here whenever fusableThisPass() is true is safe even
+  // on the very first pass, before COMMIT has ever populated bb.otos (its
+  // default-constructed stamp.valid is already false).
+  bool otosFusableThisPass = odometer->fusableThisPass();
   poseEstimator_.tick(now, bb.motors[p.left - 1], bb.motors[p.right - 1],
-                      (bb.otosValid && odometer->fusableThisPass()) ? &bb.otos : nullptr,
+                      otosFusableThisPass ? &bb.otos : nullptr,
                       bb.poseResetIn);
 
   // Motion executor: drain bb.motionIn (staged by source/commands/
@@ -261,13 +275,15 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
   bb.encoderPose = poseEstimator_.encoderPose();
   bb.fusedPose = poseEstimator_.fusedPose();
   bb.planner = planner_.state();
-  if (odometer != nullptr) {
-    odometer->tick(now);
-    bb.otos = odometer->pose();
-    bb.otosValid = true;
-  } else {
-    bb.otosValid = false;
-  }
+  odometer->tick(now);
+  bb.otos = odometer->pose();
+  // (090-003) Reuses THIS PASS's one fusableThisPass() call (captured above,
+  // at the poseEstimator_.tick() read site) rather than calling it again --
+  // see that call site's own comment for why a second call would be wrong.
+  // A NullOdometer's override always returns false, so bb.otosValid
+  // collapses to "false" exactly when there is no device, folding in the
+  // same fact the old `!= nullptr` branch encoded, without a pointer check.
+  bb.otosValid = otosFusableThisPass;
 
   routeOutputs(bb, plannerEngagedThisPass);
 

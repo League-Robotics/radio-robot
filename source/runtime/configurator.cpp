@@ -191,15 +191,13 @@ void Configurator::applyOne(Blackboard& bb) {
     }
     case ConfigDelta::kOdometer: {
       if (foldOdometer(odometerConfig_, delta)) {
-        // hardware.odometer() is nullptr on this build's NezhaHardware (no
-        // real-hardware OTOS driver yet, hardware.h's own file header) --
-        // still fold+publish so bb.odometerConfig stays a truthful record
-        // of what was asked for, but only call configure() when there is a
-        // real device to apply it to.
-        Hal::Odometer* odometer = hardware_.odometer();
-        if (odometer != nullptr) {
-          odometer->configure(odometerConfig_);
-        }
+        // (090-003) hardware_.odometer() is NEVER null (Hal::NullOdometer
+        // default, subsystems/hardware.h) -- configure() is safe to call
+        // unconditionally: a real device applies it, a NullOdometer
+        // discards it inertly. bb.odometerConfig is still folded+published
+        // below regardless, so it stays a truthful record of what was asked
+        // for either way.
+        hardware_.odometer()->configure(odometerConfig_);
       }
       bb.odometerConfig = odometerConfig_;
       break;

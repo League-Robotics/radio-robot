@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: "NullOdometer \u2014 collapse the nullable Hardware::odometer() contract"
-status: in-progress
+status: done
 use-cases:
 - SUC-003
 depends-on:
@@ -46,7 +46,7 @@ value — it removes dead defensive branches.
 
 ## Acceptance Criteria
 
-- [ ] `Hal::NullOdometer` (new, `source/hal/capability/null_odometer.h` —
+- [x] `Hal::NullOdometer` (new, `source/hal/capability/null_odometer.h` —
       headers-only, zero `HOST_BUILD`/`PhysicsWorld` dependency, NOT under
       `hal/sim/`) implements every `Hal::Odometer` primitive inertly:
       `tick()` no-ops, `pose()` returns an identity/zero
@@ -55,12 +55,12 @@ value — it removes dead defensive branches.
       `setAngularScalar`) discards, `fusableThisPass()` unconditionally
       returns `false` (overriding ticket 002's base flag-based logic
       entirely).
-- [ ] `Subsystems::Hardware::odometer()`'s base-class default changes from
+- [x] `Subsystems::Hardware::odometer()`'s base-class default changes from
       `return nullptr;` to returning a valid `NullOdometer` (e.g. a
       static/shared instance, no per-call allocation) — every existing
       owner (`NezhaHardware`, `SimHardware`) keeps its own override
       unchanged.
-- [ ] `main_loop.cpp`'s three `if (odometer != nullptr)` branches (the
+- [x] `main_loop.cpp`'s three `if (odometer != nullptr)` branches (the
       reset-drain guard + its discard-else-branch, and the COMMIT block's
       `bb.otosValid` branch) collapse to their unconditional form;
       `bb.otosValid` derives from `odometer->fusableThisPass()` directly
@@ -72,19 +72,19 @@ value — it removes dead defensive branches.
       would incorrectly report "fusable" on the second read regardless of
       the first). Resolve this by deriving both values from ONE call this
       pass (e.g. capture the result once and reuse it), not two.
-- [ ] `source/main.cpp:174`'s `bb.otosPresent = (hardware.odometer() !=
+- [x] `source/main.cpp:174`'s `bb.otosPresent = (hardware.odometer() !=
       nullptr)` is updated to reflect the non-nullable contract (the
       computed value does not change in practice — both concrete owners
       already override to non-null — but the code must no longer read as
       if null were possible).
-- [ ] `source/runtime/configurator.cpp`'s `if (odometer != nullptr)
+- [x] `source/runtime/configurator.cpp`'s `if (odometer != nullptr)
       odometer->configure(odometerConfig_)` guard (~line 199-202)
       collapses to an unconditional call.
-- [ ] `uv run python -m pytest tests/sim` is green, including
+- [x] `uv run python -m pytest tests/sim` is green, including
       `otos_commands_harness.cpp`/`test_otos_commands_nodev.py` (already
       assert "OK, not ERR nodev" against real `NezhaHardware` — must still
       pass unchanged).
-- [ ] No wire-observable behavior change: `bb.otosPresent`/`bb.otosValid`'s
+- [x] No wire-observable behavior change: `bb.otosPresent`/`bb.otosValid`'s
       computed values are identical to pre-ticket behavior for every
       existing test scenario (verified, not assumed).
 
@@ -138,3 +138,78 @@ value — it removes dead defensive branches.
   (mirrors `configurator_harness.cpp`'s existing
   `checkTrue(hardware.odometer() != nullptr, ...)` sanity-check pattern).
 - **Verification command**: `uv run python -m pytest tests/sim`
+
+## Completion Notes
+
+**Implemented as planned**, plus the widened scope (`main.cpp`,
+`configurator.cpp`) per architecture-update.md Decision 3.
+
+- `source/hal/capability/null_odometer.h` (new): `Hal::NullOdometer`,
+  headers-only, zero `HOST_BUILD`/`PhysicsWorld` dependency. `pose()` returns
+  a default-constructed `msg::PoseEstimate` (identity pose,
+  `stamp.valid == false` for free, since `ValueSet`'s own default is
+  `valid = false`) — this also means `Subsystems::PoseEstimator::tick()`'s
+  own internal `otosObs->stamp.valid` gate (`pose_estimator.cpp:135`) makes a
+  `NullOdometer` inert at the fusion step too, belt-and-suspenders with
+  `fusableThisPass()`.
+- `source/subsystems/hardware.h`: base `odometer()` now returns
+  `&nullOdometer` from a function-local `static Hal::NullOdometer` (Meyers
+  singleton — one shared instance, no per-call allocation, no out-of-line
+  `.cpp` needed since this header stays headers-only). Both `NezhaHardware`
+  and `SimHardware` overrides untouched.
+- `source/runtime/main_loop.cpp`: all three `if (odometer != nullptr)`
+  branches collapsed. **Sequencing resolution** (recorded here per the
+  Implementation Plan's own instruction): `fusableThisPass()` is called
+  EXACTLY ONCE per pass, at the pre-existing `poseEstimator_.tick()` read
+  site, captured into a local `bool otosFusableThisPass`; the COMMIT block
+  reuses that same captured value for `bb.otosValid` rather than calling
+  `fusableThisPass()` again. This also drops the old `bb.otosValid &&`
+  short-circuit prefix at the read site — that prefix existed only to avoid
+  dereferencing a null odometer (already-dead code pre-ticket, since both
+  owners override to non-null), never as a deliberate "otos not fresh yet"
+  gate, so removing it changes nothing observable (verified: full
+  `tests/sim` green, see below, and separately confirmed
+  `PoseEstimator::tick()` already internally gates on
+  `otosObs->stamp.valid` before fusing, so a first-pass `&bb.otos` argument
+  built from a zero-initialized, `stamp.valid == false` blackboard cell is
+  inert regardless).
+- `source/main.cpp:174`: `bb.otosPresent = (hardware.odometer() !=
+  nullptr)` → `bb.otosPresent = true;` (unconditional form, per
+  architecture-update.md Decision 3 — a `!= nullptr` test is no longer
+  meaningful once `odometer()` never returns null, and every
+  currently-constructed owner has always had a real device, so the computed
+  value is unchanged).
+- `source/runtime/configurator.cpp`: the `kOdometer` case's `if (odometer !=
+  nullptr) odometer->configure(...)` guard collapses to an unconditional
+  `hardware_.odometer()->configure(odometerConfig_);`.
+- `source/runtime/blackboard.h`: updated `otosValid`'s doc comment to
+  describe its new derivation (fusable-this-pass, not device-presence).
+- New test: `tests/sim/unit/null_odometer_harness.cpp` +
+  `test_null_odometer.py` — a from-scratch, dependency-free harness (mirrors
+  `runtime_blackboard_harness.cpp`'s shape: no I2CBus, no CMake, no ARM
+  toolchain) with a local `StubMotor`/`StubHardware` pair that implements
+  only the required pure virtuals and deliberately does NOT override
+  `odometer()`, proving the base-class default is non-null, shared across
+  calls (no per-call allocation), and that every `Hal::NullOdometer`
+  primitive (including `apply()`/`applySetPose()` routed through the base
+  class's own concrete dispatch) is inert.
+
+**Verification**:
+- `just build-sim` clean (host `libfirmware_host` rebuild, no errors).
+- `uv run python -m pytest tests/sim` → **309 passed, 2 xfailed** (baseline
+  308 passed / 2 xfailed + 1 new test file = 309; xfail count unchanged).
+- Single-call-site grep confirmation (the ticket's own required check):
+  ```
+  $ grep -rn "fusableThisPass()" source/ | grep -v "^source/hal/capability/odometer.h"
+  source/hal/capability/null_odometer.h:65:  bool fusableThisPass() override { return false; }
+  source/runtime/main_loop.cpp:208:  bool otosFusableThisPass = odometer->fusableThisPass();
+  ```
+  (all other hits in that grep are comments) — exactly ONE executed call
+  site in `source/`, at `main_loop.cpp:208`.
+- Additionally syntax-checked `null_odometer.h`/`hardware.h` under
+  `arm-none-eabi-g++ -fsyntax-only` (no errors) since both are compiled into
+  the real ARM firmware, not just the host sim build.
+
+**Deviations from the plan**: none. The plan's Step 3 explicitly left the
+COMMIT-block/read-site restructuring "resolve[d] at implementation time" —
+resolved as described above (single captured local, reused).

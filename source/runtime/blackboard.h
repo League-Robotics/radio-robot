@@ -93,7 +93,12 @@ struct Blackboard {
   msg::PoseEstimate encoderPose;      // from PoseEstimator
   msg::PoseEstimate fusedPose;        // from PoseEstimator
   msg::PlannerState planner;          // from Planner
-  bool otosValid = false;             // odometer sample present?
+  // (090-003) odometer sample fusable -- derived from Hal::Odometer::
+  // fusableThisPass(), never a device-presence (`!= nullptr`) test; always
+  // false for a Hal::NullOdometer (no device). See main_loop.cpp's COMMIT
+  // step for the exact derivation (reuses the SAME pass's one sanctioned
+  // fusableThisPass() call, never a second one).
+  bool otosValid = false;
   msg::PoseEstimate otos;             // from Hardware, when valid
 
   // Current config -- published by the Configurator on apply; read by
