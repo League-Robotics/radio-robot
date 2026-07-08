@@ -1,6 +1,6 @@
 // blackboard.h -- Rt::Blackboard: sprint 087's two-plane transport. Owns, as
 // plain members, the committed state-plane snapshot x[k] (current-value
-// cells: motor/drivetrain/pose/planner observations, current config) and
+// cells: motors/drivetrain/pose/planner observations, current config) and
 // every command-plane queue that connects each subsystem (commandsIn,
 // driveIn, motorIn[], configIn, poseResetIn, motorResetIn[],
 // otosSetPoseIn). Pure data -- no method computes anything; holds NO
@@ -88,7 +88,7 @@ struct Blackboard {
   // === State plane: committed snapshot x[k]. Written ONLY by the loop's
   //     commit step (from each subsystem's state()); read-only during a
   //     pass. ===
-  msg::MotorState motor[kPortCount];  // from Hardware
+  msg::MotorState motors[kPortCount];  // from Hardware
   msg::DrivetrainState drivetrain;    // from Drivetrain
   msg::PoseEstimate encoderPose;      // from PoseEstimator
   msg::PoseEstimate fusedPose;        // from PoseEstimator

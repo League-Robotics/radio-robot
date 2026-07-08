@@ -109,9 +109,18 @@ class Drivetrain {
   // -- both effects compose from one call.
   void apply(const msg::DrivetrainCommand& command);
 
-  // now: [ms]. leftObs/rightObs: this tick's sampled MotorState for the two
-  // bound wheels -- arguments only, never stored, never read from a clock or
-  // a Motor reference. See the class comment.
+  // now: [ms]. motors/motorCount: the FULL per-port committed observation
+  // array this pass (bb.motors/its length, e.g. Rt::kPortCount) -- arguments
+  // only, never stored, never read from a clock or a Motor reference. See
+  // the class comment. Drivetrain resolves its OWN bound wheel pair
+  // (ports()) against this array internally -- the `- 1` base conversion
+  // (Nezha ports are 1-based; motors[] is 0-based) lives here exactly once,
+  // with the object that owns the port binding, guarded by a range assert
+  // against motorCount so a misconfigured (out-of-range) bound port cannot
+  // silently walk off the array (090-001, clasi/sprints/090-mainloop-
+  // cohesion-cleanup-.../architecture-update.md Decision 1). The caller
+  // (MainLoop::tick()) does no port-cell indexing of its own -- it passes
+  // the whole array and lets the port-owner resolve it.
   //
   // driveIn (087-003, clasi/sprints/087-two-plane-blackboard-synchronous-
   // update-loop-configurator-and-command-queue-transport-greenfield/
@@ -138,8 +147,8 @@ class Drivetrain {
   // below. Sets hasCommand() unconditionally whenever it runs; main.cpp
   // (ticket 079-005) only calls tick() when active().
   void tick(uint32_t now,
-            const msg::MotorState& leftObs,
-            const msg::MotorState& rightObs,
+            const msg::MotorState* motors,
+            uint32_t motorCount,
             Rt::Mailbox<msg::DrivetrainCommand>& driveIn);
 
   bool hasCommand() const;                      // true once tick() has run and the output is untaken

@@ -568,7 +568,7 @@ void handleDevM(const ArgList& args, const char* corrId,
             break;
         }
         case MotorMode::STATE:
-            emitMotorState(b.motor[port - 1], port, corrId, replyFn, replyCtx);
+            emitMotorState(b.motors[port - 1], port, corrId, replyFn, replyCtx);
             break;
         case MotorMode::CAPS: {
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
@@ -872,7 +872,7 @@ void handleDevState(const ArgList& /*args*/, const char* corrId,
                     ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
     Rt::Blackboard& b = bb(handlerCtx);
     for (uint32_t port = 1; port <= Rt::kPortCount; ++port) {
-        emitMotorState(b.motor[port - 1], port, corrId, replyFn, replyCtx);
+        emitMotorState(b.motors[port - 1], port, corrId, replyFn, replyCtx);
     }
     emitDrivetrainState(b, corrId, replyFn, replyCtx);
 }

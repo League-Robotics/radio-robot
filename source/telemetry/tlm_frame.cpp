@@ -67,13 +67,13 @@ void appendField(char* buf, int& pos, int& rem, bool& truncated, const char* fmt
 }  // namespace
 
 TlmFrameInput tick(uint32_t now, const Rt::Blackboard& bb) {
-  // enc=/vel= read bb.motor[]'s primitive fields DIRECTLY for the
+  // enc=/vel= read bb.motors[]'s primitive fields DIRECTLY for the
   // Drivetrain's bound pair -- never bb.drivetrain's vel_[] (commanded
   // targets, a different semantic).
   uint32_t leftPort = bb.drivetrainConfig.left_port;
   uint32_t rightPort = bb.drivetrainConfig.right_port;
-  const msg::MotorState& left = bb.motor[leftPort - 1];
-  const msg::MotorState& right = bb.motor[rightPort - 1];
+  const msg::MotorState& left = bb.motors[leftPort - 1];
+  const msg::MotorState& right = bb.motors[rightPort - 1];
 
   float velLeft = left.velocity.has ? left.velocity.val : 0.0f;
   float velRight = right.velocity.has ? right.velocity.val : 0.0f;

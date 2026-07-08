@@ -149,7 +149,12 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
 
   Subsystems::DrivetrainPorts p = drivetrain_.ports();   // bound pair, from config
 
-  drivetrain_.tick(now, bb.motor[p.left - 1], bb.motor[p.right - 1], bb.driveIn);
+  // 090-001: the loop does no port-cell indexing of its own -- it passes
+  // the whole committed per-port observation array (bb.motors) and lets
+  // Drivetrain resolve its own bound pair (ports()) internally, with its own
+  // range assert. `p` above is still needed for THIS function's other two
+  // call sites below (poseEstimator_.tick()/planner_.tick()).
+  drivetrain_.tick(now, bb.motors, kPortCount, bb.driveIn);
 
   // Odometer one-shot actions (OI/OZ/OR/OV, SI's re-anchor) -- the loop
   // legitimately holds Hardware& (composition-root status, same as
@@ -198,7 +203,7 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
   // (x[k]) -- this pass's fresh sample is taken during COMMIT, below
   // (Decision 6: no same-pass read of a value this SAME pass will refresh)
   // -- EXCEPT when odometerResetThisPass, per this block's own comment.
-  poseEstimator_.tick(now, bb.motor[p.left - 1], bb.motor[p.right - 1],
+  poseEstimator_.tick(now, bb.motors[p.left - 1], bb.motors[p.right - 1],
                       (bb.otosValid && !odometerResetThisPass) ? &bb.otos : nullptr,
                       bb.poseResetIn);
 
@@ -243,7 +248,7 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
   // mode is sampled BEFORE tick() -- see motionVerbForMode()'s own doc
   // comment for why.
   msg::DriveMode activeModeBeforeTick = planner_.state().mode;
-  planner_.tick(now, bb.motor[p.left - 1], bb.motor[p.right - 1], bb.fusedPose);
+  planner_.tick(now, bb.motors[p.left - 1], bb.motors[p.right - 1], bb.fusedPose);
   if (planner_.hasEvent()) {
     Subsystems::Planner::Event ev = planner_.takeEvent();
     char body[64];
@@ -261,7 +266,7 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
 
   // === COMMIT (clock edge): copy each subsystem cell into bb -> x[k+1]. ===
   for (uint32_t port = 1; port <= kPortCount; ++port) {
-    bb.motor[port - 1] = hardware_.state(port);
+    bb.motors[port - 1] = hardware_.state(port);
   }
   bb.drivetrain = drivetrain_.state();
   bb.encoderPose = poseEstimator_.encoderPose();

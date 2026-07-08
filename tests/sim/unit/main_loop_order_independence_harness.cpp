@@ -161,7 +161,7 @@ struct OrderedPipeline {
   bool motorResetIn[Subsystems::Hardware::kPortCount] = {false, false, false, false};
   Rt::Mailbox<msg::DrivetrainCommand> driveIn;
 
-  // Committed x[k] -- exactly what bb.motor[]/bb.fusedPose/bb.otos* would
+  // Committed x[k] -- exactly what bb.motors[]/bb.fusedPose/bb.otos* would
   // hold: refreshed ONLY at this pipeline's own commit step, below.
   msg::MotorState committedLeft;
   msg::MotorState committedRight;
@@ -184,7 +184,14 @@ struct OrderedPipeline {
 
     auto tickHardware = [&]() { hardware.tick(now, motorIn, motorResetIn); };
     auto tickDrivetrain = [&]() {
-      drivetrain.tick(now, committedLeft, committedRight, driveIn);
+      // 090-001: Drivetrain::tick() now takes the FULL per-port array
+      // (standing in for bb.motors[]) and resolves its own bound pair (p)
+      // internally -- only the two bound-pair slots need real data, since
+      // Drivetrain never reads any other slot.
+      msg::MotorState motors[Subsystems::Hardware::kPortCount] = {};
+      motors[p.left - 1] = committedLeft;
+      motors[p.right - 1] = committedRight;
+      drivetrain.tick(now, motors, Subsystems::Hardware::kPortCount, driveIn);
     };
     auto tickPose = [&]() {
       poseEstimator.tick(now, committedLeft, committedRight,
