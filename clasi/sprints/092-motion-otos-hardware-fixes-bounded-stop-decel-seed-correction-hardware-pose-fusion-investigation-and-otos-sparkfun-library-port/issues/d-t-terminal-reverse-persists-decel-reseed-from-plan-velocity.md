@@ -1,5 +1,9 @@
 ---
-status: pending
+status: in-progress
+sprint: 092
+tickets:
+- 092-001
+- 092-004
 ---
 
 # D/T terminal reverse-motion persists on hardware — decel re-solve seeded from plan-believed velocity, not measured

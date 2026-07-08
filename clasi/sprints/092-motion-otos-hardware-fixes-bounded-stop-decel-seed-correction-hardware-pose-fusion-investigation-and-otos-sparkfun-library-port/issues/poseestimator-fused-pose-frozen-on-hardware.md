@@ -1,5 +1,9 @@
 ---
-status: pending
+status: in-progress
+sprint: 092
+tickets:
+- 092-002
+- 092-004
 ---
 
 # PoseEstimator fused pose frozen on real hardware — blocks TURN completion and G arrival

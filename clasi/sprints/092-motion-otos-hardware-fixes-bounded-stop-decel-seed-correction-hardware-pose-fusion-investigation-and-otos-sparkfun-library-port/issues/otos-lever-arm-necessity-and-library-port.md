@@ -1,5 +1,9 @@
 ---
-status: pending
+status: in-progress
+sprint: 092
+tickets:
+- 092-003
+- 092-004
 ---
 
 # Re-test whether the OTOS host-side lever-arm is necessary, and faithfully port the SparkFun OTOS library
