@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: 091
+tickets:
+- 091-002
 ---
 
 # Replace command-derived `portInUse_` with a configured poll-set

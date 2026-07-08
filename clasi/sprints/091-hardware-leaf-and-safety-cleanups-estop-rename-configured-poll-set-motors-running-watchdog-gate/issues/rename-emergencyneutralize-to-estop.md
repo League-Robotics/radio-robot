@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: 091
+tickets:
+- 091-001
 ---
 
 # Rename `MainLoop::emergencyNeutralize()` to `estop()`

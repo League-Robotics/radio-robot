@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: 091
+tickets:
+- 091-003
 ---
 
 # Serial-silence watchdog: arm only while motors are running (+ bench verification)
