@@ -1,9 +1,13 @@
 ---
 id: 093
-title: "Simplify the main loop — bare wheel-driving executive"
-status: ticketing
+title: "Simplify the main loop \u2014 bare wheel-driving executive"
+status: done
 branch: sprint/093-simplify-the-main-loop-bare-wheel-driving-executive
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
 issues:
 - simplify-the-main-loop-strip-it-to-bare-wheel-driving.md
 - get-wire-output-events-telemetry-out-of-the-main-loop.md
