@@ -27,28 +27,12 @@ void NezhaHardware::begin()
 }
 
 // The brick flip-flop sequencer — implemented exactly per architecture-
-// update.md's "The flip-flop and the 078 base-class contract" code block,
-// with 087-004's motorIn[]/motorResetIn[] consumption folded in at the top
-// (see hardware.h's own tick() doc comment and this class's own tick() doc
-// comment for the full contract).
-void NezhaHardware::tick(uint32_t now, Rt::Mailbox<msg::MotorCommand> motorIn[kPortCount],
-                          bool motorResetIn[kPortCount])
+// update.md's "The flip-flop and the 078 base-class contract" code block.
+// (093/094 teardown) motorIn[]/motorResetIn[] consumption is gone -- see
+// hardware.h's own tick() doc comment for the full contract; this class's
+// tick() now runs ONLY the flip-flop's own scheduling decision below.
+void NezhaHardware::tick(uint32_t now)
 {
-    // 087-004: uniform per-port consumption, no addressed-dispatch branch --
-    // drained BEFORE the flip-flop's own scheduling decision below, so a
-    // port newly brought in-use by this call's motorIn[] is eligible for
-    // the SAME call's bus action.
-    for (uint32_t i = 0; i < kPortCount; ++i) {
-        if (!motorIn[i].empty()) {
-            uint32_t port = i + 1;
-            motorAt(port).apply(motorIn[i].take());
-        }
-        if (motorResetIn[i]) {
-            motorAt(i + 1).resetPosition();
-            motorResetIn[i] = false;   // idempotent -- "reset twice = reset once"
-        }
-    }
-
     if (!anyPolled()) return;                    // idle schedule (decision 1)
     if (!polled_[activePort_ - 1]) {
         activePort_ = nextPolled(activePort_);    // defensive resync

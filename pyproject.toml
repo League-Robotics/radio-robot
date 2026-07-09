@@ -117,9 +117,17 @@ aprilcam = { path = "../AprilTags", editable = true }
 # living several directories deep from wherever pytest starts collecting --
 # so the bare leaf name "parked-093" is sufficient here too, no path prefix
 # needed.
+#
+# tests/sim/parked-094/ is the matching leaf for the 093/094 motor/hardware-
+# inbound-queue teardown (Rt::Blackboard's motorIn[]/motorResetIn[]/
+# hardwareBroadcastIn removed -- see blackboard.h's file header): the S/STOP
+# drive path is now severed (Drivetrain's output has nowhere to be routed
+# until sprint 094 gives it its own motors), so tests that assert wheels
+# physically move are parked here rather than deleted (see
+# tests/sim/parked-094/README.md), mirroring parked-093's own scheme.
 testpaths = ["tests/sim", "tests/unit", "tests/testgui"]
 norecursedirs = [
-    "tests_old", "source_old", "parked-093",
+    "tests_old", "source_old", "parked-093", "parked-094",
     "vendor", "build", ".venv", "node_modules",
     "*.egg", ".*", "dist", "{arch}", "__pycache__",
 ]

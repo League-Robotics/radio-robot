@@ -35,8 +35,11 @@
 //
 // Deliberately exercises real inter-subsystem coupling, not an inert setup:
 // Drivetrain is put into WHEELS authority (setWheelTargets) so its own
-// output populates motorIn[] every pass (Decision 2's per-port unpack,
-// gated on active()); Planner is staged with a real DISTANCE goal so its
+// output reaches Hardware every pass ((093/094 teardown) via direct
+// Hardware::apply(const Hal::DrivetrainToHardwareCommand&), gated on
+// active(), NOT bb.motorIn[] -- that per-port queue is gone; see this
+// file's OrderedPipeline::tick()); Planner is staged with a real DISTANCE
+// goal so its
 // own output competes for driveIn (Decision 1's plannerEngagedThisPass
 // gate) and its STOP_DISTANCE terminal-decel anticipation (ticket 086-003,
 // dead-time-compensated by ticket 087-009) runs every pass too -- the same
@@ -157,8 +160,16 @@ struct OrderedPipeline {
   Subsystems::Planner planner;
   Order order;
 
-  Rt::Mailbox<msg::MotorCommand> motorIn[Subsystems::Hardware::kPortCount];
-  bool motorResetIn[Subsystems::Hardware::kPortCount] = {false, false, false, false};
+  // (093/094 teardown) No local motorIn[]/motorResetIn[] any more --
+  // Rt::Blackboard's own matching members are gone (blackboard.h's file
+  // header) and Subsystems::Hardware::tick() no longer takes them. This
+  // pipeline's own "routeOutputs equivalent" below now forwards Drivetrain's
+  // output straight to Hardware::apply(const Hal::DrivetrainToHardwareCommand&)
+  // -- a distribution path that is unaffected by this teardown (see
+  // hardware.h) -- instead of posting to a per-port motorIn[] queue that no
+  // longer exists, so the scenario's underlying determinism proof (does
+  // FORWARD vs. REVERSE tick order still produce bit-identical committed
+  // state on a pipeline that genuinely moves?) stays intact.
   Rt::Mailbox<msg::DrivetrainCommand> driveIn;
 
   // Committed x[k] -- exactly what bb.motors[]/bb.fusedPose/bb.otos* would
@@ -182,7 +193,7 @@ struct OrderedPipeline {
   void tick(uint32_t now) {
     Subsystems::DrivetrainPorts p = drivetrain.ports();
 
-    auto tickHardware = [&]() { hardware.tick(now, motorIn, motorResetIn); };
+    auto tickHardware = [&]() { hardware.tick(now); };
     auto tickDrivetrain = [&]() {
       // 090-001: Drivetrain::tick() now takes the FULL per-port array
       // (standing in for bb.motors[]) and resolves its own bound pair (p)
@@ -214,14 +225,16 @@ struct OrderedPipeline {
     }
 
     // routeOutputs equivalent -- strictly AFTER all four ticks, same as
-    // Rt::MainLoop::tick(); mirrors main_loop.cpp's own routeOutputs() rules
-    // (Decision 2's active()-gated discard; Decision 1's plannerEngaged
-    // gate) exactly, regardless of `order`.
+    // Rt::MainLoop::tick() used to. (093/094 teardown) There is no
+    // bb.motorIn[] to post into any more -- forwards straight to
+    // Hardware::apply(const Hal::DrivetrainToHardwareCommand&) instead (a
+    // distribution path this teardown leaves untouched, see hardware.h),
+    // still gated on drivetrain.active() exactly like the old motorIn[]
+    // post was (Decision 2's active()-gated discard), regardless of `order`.
     if (drivetrain.hasCommand()) {
       Hal::DrivetrainToHardwareCommand cmd = drivetrain.takeCommand();
       if (drivetrain.active()) {
-        motorIn[cmd.wheel[0].port - 1].post(cmd.wheel[0].command);
-        motorIn[cmd.wheel[1].port - 1].post(cmd.wheel[1].command);
+        hardware.apply(cmd);
       }
     }
     if (planner.hasCommand()) {

@@ -741,20 +741,20 @@ void handleStop(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, vo
 // a bench operator can SEE a routed command land on its target queue while the
 // control loop is disabled (nothing drains these, so a posted command
 // accumulates instead of being consumed). Mailbox cells report 0/1
-// (latest-wins); WorkQueues report size().
+// (latest-wins); WorkQueues report size(). (093/094 teardown) The m1..m4
+// motorIn[] fields are gone -- those per-port queues no longer exist on
+// Rt::Blackboard (blackboard.h's file header).
 void handleQlen(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, void* replyCtx,
                 void* handlerCtx) {
   Rt::Blackboard& b = bb(handlerCtx);
   char body[192];
   snprintf(body, sizeof(body),
-           "cmd=%u drive=%d motion=%d cfg=%u pose=%u m1=%d m2=%d m3=%d m4=%d",
+           "cmd=%u drive=%d motion=%d cfg=%u pose=%u",
            static_cast<unsigned>(b.commandsIn.size()),
            b.driveIn.empty() ? 0 : 1,
            b.motionIn.empty() ? 0 : 1,
            static_cast<unsigned>(b.configIn.size()),
-           static_cast<unsigned>(b.poseResetIn.size()),
-           b.motorIn[0].empty() ? 0 : 1, b.motorIn[1].empty() ? 0 : 1,
-           b.motorIn[2].empty() ? 0 : 1, b.motorIn[3].empty() ? 0 : 1);
+           static_cast<unsigned>(b.poseResetIn.size()));
   char rbuf[240];
   CommandProcessor::replyOK(rbuf, sizeof(rbuf), "qlen", body, corrId, replyFn, replyCtx);
 }

@@ -2,8 +2,8 @@
 // plain members, the committed state-plane snapshot x[k] (current-value
 // cells: motors/drivetrain/pose/planner observations, current config) and
 // every command-plane queue that connects each subsystem (commandsIn,
-// driveIn, motorIn[], configIn, poseResetIn, motorResetIn[],
-// otosSetPoseIn). Pure data -- no method computes anything; holds NO
+// driveIn, configIn, poseResetIn, otosSetPoseIn). Pure data -- no method
+// computes anything; holds NO
 // subsystem pointer of any kind (SUC-006). See
 // clasi/sprints/087-two-plane-blackboard-synchronous-update-loop-
 // configurator-and-command-queue-transport-greenfield/
@@ -160,22 +160,13 @@ struct Blackboard {
   WorkQueue<Subsystems::CommunicatorToCommandProcessorCommand, 16>
       commandsIn;                            // Communicator -> router
   Mailbox<msg::DrivetrainCommand> driveIn;    // router(DEV DT)/Planner -> Drivetrain
-  Mailbox<msg::MotorCommand> motorIn[kPortCount];  // router/routeOutputs -> Hardware
   WorkQueue<ConfigDelta, 16> configIn;        // router -> Configurator
   WorkQueue<PoseResetCommand, 4> poseResetIn;  // router -> PoseEstimator
-  bool motorResetIn[kPortCount] = {};         // ZERO enc -> Hardware
   Mailbox<msg::SetPose> otosSetPoseIn;        // SI re-anchor -> odometer
   Mailbox<msg::OdometerCommand> otosCommandIn;  // OI/OZ/OR/OV -> odometer (loop-drained)
   Mailbox<uint32_t> devWatchdogWindowIn;       // DEV WD -> loop's SerialSilenceWatchdog
   Mailbox<uint32_t> streamWatchdogWindowIn;    // SET sTimeout= -> loop's StreamingDriveWatchdog
   Mailbox<MotionCommand> motionIn;             // S/T/D/R/TURN/RT/G/STOP -> Planner::apply()
-  // DEV STOP's broadcast neutral -- deliberately NOT motorIn[] (motorIn[]'s
-  // per-port drain, NezhaHardware::tick(), has no "broadcast to every port
-  // in one shot" shape; a true broadcast needs the allPorts=true
-  // Hal::CommandProcessorToHardwareCommand forwarded through
-  // Hardware::apply() instead -- see dev_commands.h's file header). Drained
-  // by the loop directly via Hardware::apply(const Hal::CommandProcessorToHardwareCommand&).
-  Mailbox<msg::MotorCommand> hardwareBroadcastIn;
 };
 
 }  // namespace Rt

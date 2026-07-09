@@ -64,7 +64,6 @@
 #include "hal/capability/null_odometer.h"
 #include "hal/capability/odometer.h"
 #include "messages/motor.h"
-#include "runtime/queue.h"
 
 namespace Subsystems {
 
@@ -92,22 +91,16 @@ class Hardware {
   // unchanged-now re-entry contract (Decision 4) every concrete owner must
   // satisfy.
   //
-  // motorIn/motorResetIn (087-004, architecture-update-r1.md Decision 2): the
-  // per-port command-plane inputs, consumed uniformly (no addressed-dispatch
-  // branch — every port is treated identically):
-  //   - motorIn[i] (Rt::Mailbox<msg::MotorCommand>, source/runtime/queue.h):
-  //     when non-empty, popped (latest-wins) and applied to port i+1 via the
-  //     SAME Hal::Motor::apply() the existing apply() overloads below use.
-  //   - motorResetIn[i] (a plain flag, not a queue — "reset twice = reset
-  //     once" is idempotent by nature, so no queue is needed): when true,
-  //     applies port i+1's existing Hal::Motor::resetPosition() (itself
-  //     staged, not immediate — see that method's own doc comment) and
-  //     clears the flag.
-  // Both arrays are the CALLER's own storage (typically Rt::Blackboard's
-  // motorIn[]/motorResetIn[] members) — this method mutates them in place
-  // (draining motorIn[i], clearing a consumed motorResetIn[i]).
-  virtual void tick(uint32_t now, Rt::Mailbox<msg::MotorCommand> motorIn[kPortCount],
-                     bool motorResetIn[kPortCount]) = 0;   // [ms]
+  // (093/094 teardown) Hardware no longer receives commands of its own —
+  // the per-port motorIn[]/motorResetIn[] command-plane inputs (087-004,
+  // architecture-update-r1.md Decision 2) are gone along with
+  // Rt::Blackboard's matching members (see blackboard.h's file header). A
+  // concrete owner's tick() now does exactly what its OWN doc comment says
+  // beyond that — run its scheduling/sampling pass and nothing else; no
+  // command drain of any kind happens here any more. Motors receiving
+  // commands directly (rather than through this seam) is a later change
+  // (the Drivetrain owning its motors, sprint 094).
+  virtual void tick(uint32_t now) = 0;   // [ms]
 
   // Distribution — see hal/capability/hal_command.h for both edge types'
   // shapes and that file's own doc comment on why they live there rather

@@ -47,13 +47,14 @@
 // ONE command (mirrors one slack sub-iteration with a command present),
 // THEN — since a real slack window would keep spinning for ~20ms with no
 // further command, ample time for anything this route() call just posted
-// (bb.motorIn[]/bb.driveIn/…) to be drained by the NEXT mandatory tick --
-// replays Rt::MainLoop::tick() at the SAME `now` as the most recent
-// sim_tick() call (SimHandle::lastTickNow). Safe ONLY because Subsystems::
-// SimHardware::tick()'s own re-entry guard treats a repeated same-`now`
-// hardware.tick() as a complete no-op for the PLANT integration (it still
-// drains bb.motorIn[]/bb.motorResetIn[] every call, staging any freshly
-// routed command). This keeps a `sim.command("S …")` immediately followed
+// (bb.driveIn/…) to be drained by the NEXT mandatory tick -- replays
+// Rt::MainLoop::tick() at the SAME `now` as the most recent sim_tick() call
+// (SimHandle::lastTickNow). Safe ONLY because Subsystems::SimHardware::
+// tick()'s own re-entry guard treats a repeated same-`now` hardware.tick()
+// as a complete no-op for the PLANT integration. (093/094 teardown) There
+// is no motorIn[]/motorResetIn[] drain here any more -- Hardware no longer
+// receives commands through the Blackboard at all (blackboard.h's file
+// header). This keeps a `sim.command("S …")` immediately followed
 // by a SEPARATE `sim.command("STOP")` (no intervening sim_tick()) wire-
 // observably equivalent to two real, non-zero-latency serial commands --
 // exactly what ticket 006's own dt=0 trick already established as a
@@ -281,8 +282,8 @@ int sim_command_on(void* h, const char* line, int channel, char* reply, int size
     s->router.route(cmd, s->bb);
 
     // Sim-only synchronous settle (see file header): let whatever this
-    // command just posted (motorIn[]/driveIn) be consumed by the next
-    // mandatory tick, at the unchanged `now`.
+    // command just posted (driveIn/…) be consumed by the next mandatory
+    // tick, at the unchanged `now`.
     s->loop.tick(s->bb, s->lastTickNow);
 
     ReplyStore& store = (cmd.returnPath == Subsystems::Channel::RADIO)

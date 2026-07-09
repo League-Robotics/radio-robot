@@ -13,10 +13,15 @@
 // classes remain parked, un-wired, on disk; see the architecture update's
 // "Parked" list).
 //
-// tick(bb, now) is now a four-step, one-pass sequence with no branching
+// tick(bb, now) is now a three-step, one-pass sequence with no branching
 // bookkeeping between steps: tick `Hardware`, tick `Drivetrain`, commit
-// their fresh state into `bb`, then route `Drivetrain`'s own output back
-// into `bb.motorIn[]`. See main_loop.cpp for the exact sequencing.
+// their fresh state into `bb`. (093/094 teardown) There is no fourth
+// "route Drivetrain's output back to Hardware" step any more -- the
+// motor/hardware inbound queues (`bb.motorIn[]`/`bb.motorResetIn[]`) are
+// gone from `Rt::Blackboard` entirely (see blackboard.h's file header), so
+// `Drivetrain`'s held output currently goes nowhere. That is expected here,
+// not a bug: the Drivetrain writing its motors directly is a LATER change
+// (sprint 094). See main_loop.cpp for the exact sequencing.
 //
 // Command ingestion (`CommandRouter::route()`) is, as before, NOT wrapped
 // here -- `CommandRouter` is its own top-level object (declared beside
@@ -55,17 +60,8 @@ class MainLoop {
  private:
   // commit -- copies each subsystem's freshly-ticked state into bb ->
   // x[k+1] (bb.motors[]/bb.drivetrain only, post-093 -- no pose/planner/
-  // otos cells remain to copy). Called from tick() immediately before
-  // routeOutputs().
+  // otos cells remain to copy). Called from tick() as its last step.
   void commit(Blackboard& bb, uint32_t now);
-
-  // routeOutputs -- drains Drivetrain's OWN output edge (hasCommand()/
-  // takeCommand()) into bb.motorIn[], gated on drivetrain_.active() (queried
-  // AFTER drivetrain_.tick() ran this pass): a bare authority-steal/standby
-  // output must never reach hardware. Planner's half of this method (091-
-  // era) is deleted along with Planner itself being unwired -- Drivetrain's
-  // output is the only edge left to route.
-  void routeOutputs(Blackboard& bb);
 
   Subsystems::Hardware& hardware_;
   Subsystems::Drivetrain& drivetrain_;

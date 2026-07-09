@@ -64,8 +64,7 @@ int main() {
         uint32_t now = uBit.systemTime();
         comm.tick(now);
         if (comm.hasCommand()) {
-            Subsystems::CommunicatorToCommandProcessorCommand command = comm.takeCommand();
-            router.route(command, bb);
+            router.route(comm.takeCommand(), bb);
         }
         uBit.sleep(1);   // yield: radio RX delivery + other fibers
     }

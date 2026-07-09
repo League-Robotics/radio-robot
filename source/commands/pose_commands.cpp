@@ -97,21 +97,15 @@ ParseResult parseZero(const char* const* tokens, int ntokens, const KVPair* /*kv
 }
 
 // ---------------------------------------------------------------------------
-// handleZero -- posts Rt::PoseResetCommand{kResetBaseline} to bb.poseResetIn
-// AND sets bb.motorResetIn[left-1]/[right-1] = true (drained by
-// Subsystems::Hardware::tick(), ticket 004) in the SAME wire dispatch, so
-// the next tick's delta is computed against the freshly-zeroed encoders --
-// no phantom jump. The bound pair is read from
-// bb.drivetrainConfig.left_port/right_port -- never a Drivetrain*.
+// handleZero -- posts Rt::PoseResetCommand{kResetBaseline} to bb.poseResetIn.
+// (093/094 teardown) No longer also sets bb.motorResetIn[left-1]/[right-1] --
+// that per-port reset flag is gone along with the rest of Rt::Blackboard's
+// motor/hardware inbound queues (blackboard.h's file header); Hardware no
+// longer receives commands of any kind through the Blackboard.
 // ---------------------------------------------------------------------------
 void handleZero(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, void* replyCtx,
                  void* handlerCtx) {
   Rt::Blackboard& b = bb(handlerCtx);
-
-  uint32_t left = b.drivetrainConfig.left_port;
-  uint32_t right = b.drivetrainConfig.right_port;
-  b.motorResetIn[left - 1] = true;
-  b.motorResetIn[right - 1] = true;
 
   Rt::PoseResetCommand reset;
   reset.kind = Rt::PoseResetCommand::kResetBaseline;

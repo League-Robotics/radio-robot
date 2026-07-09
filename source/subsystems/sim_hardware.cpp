@@ -28,27 +28,10 @@ void SimHardware::begin()
 // The dt=0 re-entry guard (architecture-update.md (081) Decision 4) — see
 // file header. A call with an unchanged `now` is a complete no-op: no
 // Hal::SimMotor::tick() call, no Hal::PhysicsWorld::update() call, for ANY
-// port. 087-004's motorIn[]/motorResetIn[] consumption (below) runs on
-// EVERY call, including a re-entrant same-now one -- apply()/
-// resetPosition() only stage a command/reset, they do not themselves
-// advance the plant, so there is no double-integration hazard here (unlike
-// the guard below, which exists specifically to protect Hal::PhysicsWorld::
-// update()/Hal::SimMotor::tick() from running twice).
-void SimHardware::tick(uint32_t now, Rt::Mailbox<msg::MotorCommand> motorIn[kPortCount],
-                        bool motorResetIn[kPortCount])
+// port. (093/094 teardown) motorIn[]/motorResetIn[] consumption is gone --
+// see hardware.h's own tick() doc comment for the full contract.
+void SimHardware::tick(uint32_t now)
 {
-    // 087-004: uniform per-port consumption, no addressed-dispatch branch,
-    // no in-use bookkeeping (every port ticks every pass regardless).
-    for (uint32_t i = 0; i < kPortCount; ++i) {
-        if (!motorIn[i].empty()) {
-            motorAt(i + 1).apply(motorIn[i].take());
-        }
-        if (motorResetIn[i]) {
-            motorAt(i + 1).resetPosition();
-            motorResetIn[i] = false;   // idempotent -- "reset twice = reset once"
-        }
-    }
-
     if (hasAdvanced_ && now == lastAdvancedNow_) {
         return;
     }

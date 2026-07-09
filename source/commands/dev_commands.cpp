@@ -503,7 +503,6 @@ void handleDevM(const ArgList& args, const char* corrId,
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "duty", corrId, replyFn, replyCtx);
                 break;
             }
-            b.motorIn[port - 1].post(cmd);
             if (isBoundPort(b, port)) { stealDrivetrainAuthority(b); }
             char dutyStr[16];
             formatFixed(dutyStr, sizeof(dutyStr), duty, 2);
@@ -523,7 +522,6 @@ void handleDevM(const ArgList& args, const char* corrId,
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "vel", corrId, replyFn, replyCtx);
                 break;
             }
-            b.motorIn[port - 1].post(cmd);
             if (isBoundPort(b, port)) { stealDrivetrainAuthority(b); }
             char velStr[16];
             formatFixed(velStr, sizeof(velStr), velocity, 1);
@@ -543,7 +541,6 @@ void handleDevM(const ArgList& args, const char* corrId,
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "pos", corrId, replyFn, replyCtx);
                 break;
             }
-            b.motorIn[port - 1].post(cmd);
             if (isBoundPort(b, port)) { stealDrivetrainAuthority(b); }
             char posStr[16];
             formatFixed(posStr, sizeof(posStr), position, 1);
@@ -561,7 +558,6 @@ void handleDevM(const ArgList& args, const char* corrId,
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "volt", corrId, replyFn, replyCtx);
                 break;
             }
-            b.motorIn[port - 1].post(cmd);
             if (isBoundPort(b, port)) { stealDrivetrainAuthority(b); }
             char voltStr[16];
             formatFixed(voltStr, sizeof(voltStr), voltage, 2);
@@ -583,7 +579,6 @@ void handleDevM(const ArgList& args, const char* corrId,
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "neutral", corrId, replyFn, replyCtx);
                 break;
             }
-            b.motorIn[port - 1].post(cmd);
             if (isBoundPort(b, port)) { stealDrivetrainAuthority(b); }
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
                                        "neutral=%s", bc);
@@ -599,7 +594,6 @@ void handleDevM(const ArgList& args, const char* corrId,
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "unsupported", "reset", corrId, replyFn, replyCtx);
                 break;
             }
-            b.motorIn[port - 1].post(cmd);
             if (isBoundPort(b, port)) { stealDrivetrainAuthority(b); }
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx, "reset=1");
             break;
@@ -874,22 +868,12 @@ void handleDevDt(const ArgList& args, const char* corrId,
             emitDrivetrainState(b, corrId, replyFn, replyCtx);
             break;
         case DtMode::STOP: {
-            // The narrower, bound-pair-only stop (decision 4): posts an
-            // ADDRESSED neutral to exactly the bound pair's OWN per-port
-            // mailboxes (bb.motorIn[left-1]/[right-1] -- both DO mark their
-            // port in-use, identical to NezhaHardware::apply()'s addressed
-            // branch, so no separate cell is needed here -- see
-            // dev_commands.h's file header). An independent, unbound motor's
-            // mailbox is never posted to. Reuses buildDrivetrainStop() for
-            // the Drivetrain side (identical {NEUTRAL, standby=true} shape
-            // as DEV STOP's) -- see dev_commands.h's doc comment.
-            uint32_t left = b.drivetrainConfig.left_port;
-            uint32_t right = b.drivetrainConfig.right_port;
-            msg::MotorCommand neutralCmd;
-            neutralCmd.setNeutral(msg::Neutral::BRAKE);
-            b.motorIn[left - 1].post(neutralCmd);
-            b.motorIn[right - 1].post(neutralCmd);
-
+            // (093/094 teardown) This family is unregistered/parked (see
+            // dev_commands.h's file header) and no longer posts to a
+            // hardware queue -- Rt::Blackboard's motorIn[]/motorResetIn[]
+            // are gone (blackboard.h's file header). Only the Drivetrain
+            // side remains: buildDrivetrainStop() (identical
+            // {NEUTRAL, standby=true} shape as DEV STOP's).
             b.driveIn.post(buildDrivetrainStop(msg::Neutral::BRAKE));
 
             CommandProcessor::replyOK(rbuf, sizeof(rbuf), "DEV DT STOP", nullptr, corrId, replyFn, replyCtx);
@@ -915,18 +899,15 @@ void handleDevState(const ArgList& /*args*/, const char* corrId,
 }
 
 // ---------------------------------------------------------------------------
-// DEV STOP -- global: all four motors neutral, drivetrain idle, authority
-// dropped. Posts the broadcast HAL neutral to bb.hardwareBroadcastIn (a
-// dedicated Mailbox<msg::MotorCommand> -- NOT bb.motorIn[], a structurally
-// different distribution shape; see dev_commands.h's file header) and the
-// Drivetrain side to bb.driveIn.
+// DEV STOP -- global: drivetrain idle, authority dropped. (093/094 teardown)
+// This family is unregistered/parked (see dev_commands.h's file header) and
+// no longer posts a broadcast neutral to hardware -- bb.hardwareBroadcastIn
+// is gone along with the rest of Rt::Blackboard's motor/hardware inbound
+// queues (blackboard.h's file header). Only the Drivetrain side remains.
 // ---------------------------------------------------------------------------
 void handleDevStop(const ArgList& /*args*/, const char* corrId,
                    ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
     Rt::Blackboard& b = bb(handlerCtx);
-    msg::MotorCommand neutral;
-    neutral.setNeutral(msg::Neutral::BRAKE);
-    b.hardwareBroadcastIn.post(neutral);
     b.driveIn.post(buildDrivetrainStop(msg::Neutral::BRAKE));
     char rbuf[32];
     CommandProcessor::replyOK(rbuf, sizeof(rbuf), "DEV STOP", nullptr, corrId, replyFn, replyCtx);

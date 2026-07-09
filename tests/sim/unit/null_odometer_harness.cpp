@@ -13,7 +13,7 @@
 // Subsystems::Hardware/Hal::Motor require, and deliberately leaves
 // odometer() untouched to exercise the inherited base default. Mirrors
 // runtime_blackboard_harness.cpp's dependency-free shape (only
-// <cstdint>/messages/*.h/runtime/queue.h/subsystems/hardware.h -- no
+// <cstdint>/messages/*.h/subsystems/hardware.h -- no
 // MicroBit.h, no I2CBus, no CMake, no ARM toolchain): headers-only, no
 // additional .cpp compiled in. Hand-rolled assertions, prints PASS/FAIL,
 // exits nonzero on any failure. Run by test_null_odometer.py, which compiles
@@ -26,7 +26,6 @@
 #include "messages/common.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
-#include "runtime/queue.h"
 #include "subsystems/hardware.h"
 
 namespace {
@@ -93,7 +92,7 @@ class StubMotor : public Hal::Motor {
 class StubHardware : public Subsystems::Hardware {
  public:
   Hal::Motor& motor(uint32_t) override { return motor_; }
-  void tick(uint32_t, Rt::Mailbox<msg::MotorCommand>[kPortCount], bool[kPortCount]) override {}
+  void tick(uint32_t) override {}
   void apply(const Hal::CommandProcessorToHardwareCommand&) override {}
   void apply(const Hal::DrivetrainToHardwareCommand&) override {}
   msg::MotorConfig config(uint32_t) const override { return msg::MotorConfig{}; }
