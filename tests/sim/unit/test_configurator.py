@@ -1,19 +1,29 @@
 """Off-hardware acceptance proof for ticket 087-005 (SUC-002/SUC-003/
 SUC-005): Rt::Configurator (source/runtime/configurator.{h,cpp}) -- the
 single config-application authority, constructed with references to
-Subsystems::Drivetrain/PoseEstimator/Planner/Hardware (the one deliberate
+Subsystems::Drivetrain/PoseEstimator/Hardware (the one deliberate
 exception to "no subsystem pointers", architecture-update-r1.md Decision 4).
+
+Ticket 094-002 update: Subsystems::Planner was relocated out of source/
+entirely (see source_parked/094/subsystems/planner.h); Rt::Configurator no
+longer takes a Planner& (source/runtime/configurator.h's own header note),
+so this compile list no longer links planner.cpp/velocity_ramp.cpp/
+stop_condition.cpp/jerk_trajectory.cpp or the vendored Ruckig sources --
+none of Configurator's remaining three subsystems (Drivetrain, PoseEstimator,
+Hardware) depend on them. Standard/flags dropped back to this project's
+plain host-harness default (``c++20``, no Ruckig-driven gnu++20/
+-fno-exceptions/-fno-rtti need) to match ``test_drivetrain.py``/
+``test_pose_estimator.py``'s own precedent.
 
 Compiles ``configurator_harness.cpp`` together with the REAL
 ``source/runtime/configurator.cpp`` and every real subsystem it exercises
-(Drivetrain, PoseEstimator, Planner, SimHardware and their own real
-dependencies) using the system C++ compiler, runs the resulting binary, and
-asserts it exits 0. Mirrors ``test_sim_hardware.py``'s ``-DHOST_BUILD``
-compile-and-run pattern (SimHardware/PhysicsWorld need it for their
-``std::mt19937`` members) plus ``test_pose_estimator.py``'s/
-``test_planner.py``'s own real-source lists, combined -- Configurator's own
-test is the first harness in this sprint to need all four subsystems live
-at once.
+(Drivetrain, PoseEstimator, SimHardware and their own real dependencies)
+using the system C++ compiler, runs the resulting binary, and asserts it
+exits 0. Mirrors ``test_sim_hardware.py``'s ``-DHOST_BUILD`` compile-and-run
+pattern (SimHardware/PhysicsWorld need it for their ``std::mt19937``
+members) plus ``test_pose_estimator.py``'s own real-source list, combined --
+Configurator's own test is the first harness in this sprint to need three
+subsystems live at once.
 
 Collected under ``tests/sim/unit/`` -- already within ``pyproject.toml``'s
 ``testpaths``, no configuration change needed.
@@ -36,15 +46,6 @@ _DRIVETRAIN_SRC = _SOURCE_DIR / "subsystems" / "drivetrain.cpp"
 _BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
 _POSE_ESTIMATOR_SRC = _SOURCE_DIR / "subsystems" / "pose_estimator.cpp"
 _EKF_TINY_SRC = _SOURCE_DIR / "estimation" / "ekf_tiny.cpp"
-_PLANNER_SRC = _SOURCE_DIR / "subsystems" / "planner.cpp"
-_VELOCITY_RAMP_SRC = _SOURCE_DIR / "motion" / "velocity_ramp.cpp"
-_STOP_CONDITION_SRC = _SOURCE_DIR / "motion" / "stop_condition.cpp"
-# 089-003: planner.h now #includes motion/jerk_trajectory.h (DISTANCE's new
-# linear channel), which in turn #includes the vendored Ruckig headers --
-# mirrors test_planner.py's own identical addition.
-_JERK_TRAJECTORY_SRC = _SOURCE_DIR / "motion" / "jerk_trajectory.cpp"
-_RUCKIG_INCLUDE = _REPO_ROOT / "libraries" / "ruckig" / "include"
-_RUCKIG_SRC_DIR = _REPO_ROOT / "libraries" / "ruckig" / "src"
 _SIM_HARDWARE_SRC = _SOURCE_DIR / "subsystems" / "sim_hardware.cpp"
 _PHYSICS_WORLD_SRC = _SOURCE_DIR / "hal" / "sim" / "physics_world.cpp"
 _SIM_MOTOR_SRC = _SOURCE_DIR / "hal" / "sim" / "sim_motor.cpp"
@@ -58,10 +59,6 @@ _SOURCES = [
     _BODY_KINEMATICS_SRC,
     _POSE_ESTIMATOR_SRC,
     _EKF_TINY_SRC,
-    _PLANNER_SRC,
-    _VELOCITY_RAMP_SRC,
-    _STOP_CONDITION_SRC,
-    _JERK_TRAJECTORY_SRC,
     _SIM_HARDWARE_SRC,
     _PHYSICS_WORLD_SRC,
     _SIM_MOTOR_SRC,
@@ -69,13 +66,10 @@ _SOURCES = [
     _VELOCITY_PID_SRC,
 ]
 
-# 089-003: gnu++20 (GNU extensions -- newlib exposes M_PI, which Ruckig's
-# roots.hpp needs) plus -fno-exceptions/-fno-rtti, matching
-# test_jerk_trajectory.py's/test_ruckig_smoke.py's own precedent -- Planner
-# now transitively compiles Ruckig, so every harness that links planner.cpp
-# must build under the SAME constraints the firmware itself imposes.
-_CXX_STANDARD = "gnu++20"
-_CONSTRAINT_FLAGS = ["-fno-exceptions", "-fno-rtti"]
+# 094-002: Planner (and with it, the Ruckig-driven gnu++20/-fno-exceptions/
+# -fno-rtti need) is gone from this compile list -- plain c++20 matches
+# test_drivetrain.py's/test_pose_estimator.py's own precedent.
+_CXX_STANDARD = "c++20"
 
 
 def _find_cxx_compiler() -> str:
@@ -96,9 +90,6 @@ def test_configurator_harness_compiles_and_passes(tmp_path):
         assert src.is_file(), f"required source missing: {src}"
     assert _SOURCE_DIR.is_dir(), f"source/ tree missing: {_SOURCE_DIR}"
     assert _TINYEKF_DIR.is_dir(), f"libraries/tinyekf missing: {_TINYEKF_DIR}"
-    assert _RUCKIG_INCLUDE.is_dir(), f"ruckig include missing: {_RUCKIG_INCLUDE}"
-    ruckig_srcs = sorted(_RUCKIG_SRC_DIR.glob("*.cpp"))
-    assert ruckig_srcs, f"no vendored ruckig sources under {_RUCKIG_SRC_DIR}"
 
     cxx = _find_cxx_compiler()
     binary = tmp_path / "configurator_harness"
@@ -107,7 +98,6 @@ def test_configurator_harness_compiles_and_passes(tmp_path):
         [
             cxx,
             f"-std={_CXX_STANDARD}",
-            *_CONSTRAINT_FLAGS,
             "-Wall",
             "-Wextra",
             "-DHOST_BUILD",
@@ -115,13 +105,10 @@ def test_configurator_harness_compiles_and_passes(tmp_path):
             str(_SOURCE_DIR),
             "-I",
             str(_TINYEKF_DIR),
-            "-I",
-            str(_RUCKIG_INCLUDE),
             "-o",
             str(binary),
         ]
-        + [str(src) for src in _SOURCES]
-        + [str(s) for s in ruckig_srcs],
+        + [str(src) for src in _SOURCES],
         capture_output=True,
         text=True,
     )

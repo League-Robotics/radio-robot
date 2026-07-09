@@ -118,13 +118,18 @@ aprilcam = { path = "../AprilTags", editable = true }
 # so the bare leaf name "parked-093" is sufficient here too, no path prefix
 # needed.
 #
-# tests/sim/parked-094/ is the matching leaf for the 093/094 motor/hardware-
-# inbound-queue teardown (Rt::Blackboard's motorIn[]/motorResetIn[]/
-# hardwareBroadcastIn removed -- see blackboard.h's file header): the S/STOP
-# drive path is now severed (Drivetrain's output has nowhere to be routed
-# until sprint 094 gives it its own motors), so tests that assert wheels
-# physically move are parked here rather than deleted (see
-# tests/sim/parked-094/README.md), mirroring parked-093's own scheme.
+# tests/sim/parked-094/ holds two sets of sprint-094-era parked tests:
+#   (a) the 093/094 motor/hardware-inbound-queue teardown's drive-severed
+#       tests (Rt::Blackboard's motorIn[]/motorResetIn[]/hardwareBroadcastIn
+#       removed -- see blackboard.h's file header) -- come BACK once sprint
+#       094 gives the Drivetrain its own motors and the S/STOP drive path is
+#       restored;
+#   (b) ticket 094-002's isolated Subsystems::Planner/Motion::VelocityRamp
+#       coverage (+ a stale 4-subsystem order-independence harness that
+#       depends on Planner), parked alongside Planner's relocation out of
+#       source/.
+# Both are parked, not deleted (see tests/sim/parked-094/README.md), with the
+# same bare-name basename-fnmatch exclusion as parked-093.
 testpaths = ["tests/sim", "tests/unit", "tests/testgui"]
 norecursedirs = [
     "tests_old", "source_old", "parked-093", "parked-094",

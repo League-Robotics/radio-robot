@@ -37,13 +37,15 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #
 # Present (mirrors the architecture doc's Step 4 dependency graph):
 #   kinematics/*.cpp                        -- pure math, no CODAL deps
-#   motion/*.cpp                            -- 084-001's VelocityRamp/
-#                                               evaluateStopCondition (pure
-#                                               math, no CODAL deps)
+#   motion/*.cpp                            -- StopCondition/JerkTrajectory/
+#                                               Segment/SegmentExecutor (pure
+#                                               math, no CODAL deps).
+#                                               Motion::VelocityRamp deleted
+#                                               (ticket 094-002 -- consolidated
+#                                               on Ruckig/JerkTrajectory).
 #   subsystems/drivetrain.cpp               -- the Drivetrain faceplate
 #   subsystems/sim_hardware.cpp             -- ticket 003's SimHardware
 #   subsystems/pose_estimator.cpp           -- 082-002/082-003's PoseEstimator
-#   subsystems/planner.cpp                  -- 084-001's goal-closure engine
 #   estimation/ekf_tiny.cpp                 -- 082-001's EkfTiny (PoseEstimator's EKF core)
 #   telemetry/tlm_frame.cpp                 -- 082-004's pure TLM frame formatter
 #   commands/{arg_parse,command_processor,config_commands,dev_commands,
@@ -83,6 +85,13 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #   main.cpp                        -- the ARM entry point (constructs uBit,
 #                                      Communicator, NezhaHardware -- none of
 #                                      which exist/link host-side)
+#   subsystems/planner.cpp          -- Subsystems::Planner: relocated out of
+#                                      source/ entirely (ticket 094-002, see
+#                                      source_parked/094/subsystems/) -- not a
+#                                      host-vs-ARM split like the entries
+#                                      above, a real sprint-094 architecture
+#                                      change (architecture-update.md
+#                                      Decision 3).
 # ---------------------------------------------------------------------------
 file(GLOB KINEMATICS_SOURCES "${SOURCE_DIR}/kinematics/*.cpp")
 file(GLOB MOTION_SOURCES     "${SOURCE_DIR}/motion/*.cpp")
@@ -99,7 +108,6 @@ set(FIRMWARE_SOURCES
     "${SOURCE_DIR}/subsystems/drivetrain.cpp"
     "${SOURCE_DIR}/subsystems/sim_hardware.cpp"
     "${SOURCE_DIR}/subsystems/pose_estimator.cpp"
-    "${SOURCE_DIR}/subsystems/planner.cpp"
     "${SOURCE_DIR}/estimation/ekf_tiny.cpp"
     "${SOURCE_DIR}/telemetry/tlm_frame.cpp"
     "${SOURCE_DIR}/commands/arg_parse.cpp"

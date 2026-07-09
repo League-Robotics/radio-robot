@@ -1,3 +1,10 @@
+// PARKED (sprint 094, ticket 094-002): hand-drives a stale FOUR-subsystem
+// pipeline (Hardware, Drivetrain, PoseEstimator, Planner) predating sprint
+// 093's MainLoop gut; Subsystems::Planner is central to the property under
+// test, so this cannot be trivially un-parked without a rewrite. See
+// tests/sim/parked-094/README.md and clasi/issues/restore-goto-pursuit-
+// with-pose-estimator.md.
+//
 // main_loop_order_independence_harness.cpp -- off-hardware acceptance proof
 // for ticket 087-009 (SUC-001, re-confirmed against the FULL rebuilt loop
 // per that ticket's own Acceptance Criteria -- not just the isolated

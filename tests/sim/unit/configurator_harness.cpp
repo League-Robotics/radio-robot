@@ -1,21 +1,28 @@
 // configurator_harness.cpp — off-hardware acceptance harness for ticket
 // 087-005 (SUC-002/SUC-003/SUC-005): exercises Rt::Configurator
 // (source/runtime/configurator.{h,cpp}) against REAL (not mocked)
-// Subsystems::Drivetrain/PoseEstimator/Planner/SimHardware instances plus a
+// Subsystems::Drivetrain/PoseEstimator/SimHardware instances plus a
 // real Rt::Blackboard — no fakes, per the ticket's own testability goal.
+//
+// 094-002: Subsystems::Planner was relocated out of source/ entirely (see
+// source_parked/094/subsystems/planner.h); Rt::Configurator no longer takes
+// a Planner& (source/runtime/configurator.h's own header note), so this
+// harness no longer constructs one either. The kPlanner ConfigDelta target
+// (scenario 3 below) still folds onto msg::PlannerConfig and still publishes
+// bb.plannerConfig — only the (now-removed) live subsystem call is gone.
 //
 // Compiles with the plain system C++ compiler (-DHOST_BUILD, needed for
 // SimHardware/PhysicsWorld's std::mt19937 members — see
 // test_sim_hardware.py's own precedent) together with every REAL source it
-// exercises: subsystems/{drivetrain,pose_estimator,planner,sim_hardware}.cpp,
+// exercises: subsystems/{drivetrain,pose_estimator,sim_hardware}.cpp,
 // kinematics/body_kinematics.cpp, estimation/ekf_tiny.cpp,
-// motion/{velocity_ramp,stop_condition}.cpp, hal/sim/{physics_world,
-// sim_motor,sim_odometer}.cpp, hal/velocity_pid.cpp, and
-// runtime/configurator.cpp itself — no CMake, no ARM toolchain. Hand-rolled
-// assertions, prints PASS/FAIL, exits nonzero on any failure. Run by
-// test_configurator.py, which compiles and runs this binary via subprocess.
+// hal/sim/{physics_world, sim_motor,sim_odometer}.cpp, hal/velocity_pid.cpp,
+// and runtime/configurator.cpp itself — no CMake, no ARM toolchain.
+// Hand-rolled assertions, prints PASS/FAIL, exits nonzero on any failure.
+// Run by test_configurator.py, which compiles and runs this binary via
+// subprocess.
 //
-// Each scenario constructs its own local Drivetrain/PoseEstimator/Planner/
+// Each scenario constructs its own local Drivetrain/PoseEstimator/
 // SimHardware/Blackboard set (cheap, stack-allocated) rather than sharing a
 // fixture — mirrors this project's other *_harness.cpp files (e.g.
 // sim_hardware_harness.cpp), avoiding any member-initializer-order
@@ -29,8 +36,8 @@
 //   2. kMotor delta (one port) -> Hardware::config(port) (087-004's getter)
 //      AND bb.motorConfig[port-1] both reflect the change; the other port
 //      is unaffected.
-//   3. kPlanner delta -> bb.plannerConfig published (Planner has no
-//      config() getter either).
+//   3. kPlanner delta -> bb.plannerConfig published (folded only — no live
+//      Subsystems::Planner to configure() since 094-002's relocation).
 //   4. kOdometer delta on SimHardware (which HAS a real Hal::SimOdometer
 //      via odometer()) -> bb.odometerConfig published.
 //   5. publish(bb) before any delta seeds all four bb.*Config cells from
@@ -59,7 +66,6 @@
 #include "runtime/configurator.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
-#include "subsystems/planner.h"
 #include "subsystems/pose_estimator.h"
 #include "subsystems/sim_hardware.h"
 
@@ -125,10 +131,9 @@ void scenarioDrivetrainDeltaApplies() {
   Subsystems::SimHardware hardware(motorConfigs);
   Subsystems::Drivetrain drivetrain;
   Subsystems::PoseEstimator poseEstimator;
-  Subsystems::Planner planner;
   Rt::Blackboard bb;
 
-  Rt::Configurator configurator(drivetrain, poseEstimator, planner, hardware,
+  Rt::Configurator configurator(drivetrain, poseEstimator, hardware,
                                  msg::DrivetrainConfig{}, msg::PlannerConfig{});
 
   Rt::ConfigDelta delta;
@@ -176,10 +181,9 @@ void scenarioMotorDeltaApplies() {
   Subsystems::SimHardware hardware(motorConfigs);
   Subsystems::Drivetrain drivetrain;
   Subsystems::PoseEstimator poseEstimator;
-  Subsystems::Planner planner;
   Rt::Blackboard bb;
 
-  Rt::Configurator configurator(drivetrain, poseEstimator, planner, hardware,
+  Rt::Configurator configurator(drivetrain, poseEstimator, hardware,
                                  msg::DrivetrainConfig{}, msg::PlannerConfig{});
 
   Rt::ConfigDelta delta;
@@ -203,19 +207,18 @@ void scenarioMotorDeltaApplies() {
   checkFloatEq(bb.motorConfig[0].slew_rate, 0.0f, "port 1 (untouched) bb.motorConfig[0].slew_rate stays default");
 }
 
-// 3. kPlanner delta -> Planner::configure() called, bb.plannerConfig
-//    published.
+// 3. kPlanner delta -> folds onto msg::PlannerConfig, bb.plannerConfig
+//    published (094-002: no live Subsystems::Planner left to configure()).
 void scenarioPlannerDeltaApplies() {
-  beginScenario("kPlanner delta: folds, configures, publishes");
+  beginScenario("kPlanner delta: folds, publishes (no live Planner to configure)");
   msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
   Subsystems::Drivetrain drivetrain;
   Subsystems::PoseEstimator poseEstimator;
-  Subsystems::Planner planner;
   Rt::Blackboard bb;
 
-  Rt::Configurator configurator(drivetrain, poseEstimator, planner, hardware,
+  Rt::Configurator configurator(drivetrain, poseEstimator, hardware,
                                  msg::DrivetrainConfig{}, msg::PlannerConfig{});
 
   Rt::ConfigDelta delta;
@@ -238,12 +241,11 @@ void scenarioOdometerDeltaApplies() {
   Subsystems::SimHardware hardware(motorConfigs);
   Subsystems::Drivetrain drivetrain;
   Subsystems::PoseEstimator poseEstimator;
-  Subsystems::Planner planner;
   Rt::Blackboard bb;
 
   checkTrue(hardware.odometer() != nullptr, "sanity: SimHardware::odometer() is non-null");
 
-  Rt::Configurator configurator(drivetrain, poseEstimator, planner, hardware,
+  Rt::Configurator configurator(drivetrain, poseEstimator, hardware,
                                  msg::DrivetrainConfig{}, msg::PlannerConfig{});
 
   Rt::ConfigDelta delta;
@@ -269,7 +271,6 @@ void scenarioPublishSeedsAllFourCells() {
   Subsystems::SimHardware hardware(motorConfigs);
   Subsystems::Drivetrain drivetrain;
   Subsystems::PoseEstimator poseEstimator;
-  Subsystems::Planner planner;
   Rt::Blackboard bb;
 
   msg::DrivetrainConfig bootDt;
@@ -277,7 +278,7 @@ void scenarioPublishSeedsAllFourCells() {
   msg::PlannerConfig bootPlanner;
   bootPlanner.min_speed = 5.0f;
 
-  Rt::Configurator configurator(drivetrain, poseEstimator, planner, hardware, bootDt, bootPlanner);
+  Rt::Configurator configurator(drivetrain, poseEstimator, hardware, bootDt, bootPlanner);
 
   checkTrue(bb.configIn.empty(), "sanity: configIn empty, publish() must not need a delta");
   configurator.publish(bb);
@@ -302,10 +303,9 @@ void scenarioPendingMirrorsConfigInEmpty() {
   Subsystems::SimHardware hardware(motorConfigs);
   Subsystems::Drivetrain drivetrain;
   Subsystems::PoseEstimator poseEstimator;
-  Subsystems::Planner planner;
   Rt::Blackboard bb;
 
-  Rt::Configurator configurator(drivetrain, poseEstimator, planner, hardware,
+  Rt::Configurator configurator(drivetrain, poseEstimator, hardware,
                                  msg::DrivetrainConfig{}, msg::PlannerConfig{});
 
   checkFalse(configurator.pending(bb), "pending() false on a fresh Blackboard");
@@ -329,10 +329,9 @@ void scenarioSameTargetDisjointFieldsDoNotClobber() {
   Subsystems::SimHardware hardware(motorConfigs);
   Subsystems::Drivetrain drivetrain;
   Subsystems::PoseEstimator poseEstimator;
-  Subsystems::Planner planner;
   Rt::Blackboard bb;
 
-  Rt::Configurator configurator(drivetrain, poseEstimator, planner, hardware,
+  Rt::Configurator configurator(drivetrain, poseEstimator, hardware,
                                  msg::DrivetrainConfig{}, msg::PlannerConfig{});
 
   Rt::ConfigDelta first;
@@ -374,10 +373,9 @@ void scenarioApplyOneDrainsExactlyOnePerCall() {
   Subsystems::SimHardware hardware(motorConfigs);
   Subsystems::Drivetrain drivetrain;
   Subsystems::PoseEstimator poseEstimator;
-  Subsystems::Planner planner;
   Rt::Blackboard bb;
 
-  Rt::Configurator configurator(drivetrain, poseEstimator, planner, hardware,
+  Rt::Configurator configurator(drivetrain, poseEstimator, hardware,
                                  msg::DrivetrainConfig{}, msg::PlannerConfig{});
 
   Rt::ConfigDelta a;
@@ -412,10 +410,9 @@ void scenarioApplyOneOnEmptyQueueIsNoop() {
   Subsystems::SimHardware hardware(motorConfigs);
   Subsystems::Drivetrain drivetrain;
   Subsystems::PoseEstimator poseEstimator;
-  Subsystems::Planner planner;
   Rt::Blackboard bb;
 
-  Rt::Configurator configurator(drivetrain, poseEstimator, planner, hardware,
+  Rt::Configurator configurator(drivetrain, poseEstimator, hardware,
                                  msg::DrivetrainConfig{}, msg::PlannerConfig{});
 
   configurator.publish(bb);

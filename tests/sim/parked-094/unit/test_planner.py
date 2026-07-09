@@ -1,4 +1,15 @@
-"""Off-hardware acceptance proof for ticket 084-001 (SUC-001/SUC-002/SUC-003):
+"""PARKED (sprint 094, ticket 094-002): Subsystems::Planner was relocated
+out of source/ entirely to source_parked/094/subsystems/ (codal.json's
+recursive source/ glob forced the move once Motion::VelocityRamp -- this
+file's/planner_harness.cpp's own real compile dependency -- was deleted; see
+tests/sim/parked-094/README.md and clasi/sprints/094-.../architecture-
+update.md Decisions 3/4). This file is excluded from pytest collection via
+pyproject.toml's norecursedirs ("parked-094"), so its hardcoded
+source/subsystems/planner.cpp path below is stale by design -- do not "fix"
+it without un-parking. Must return alongside Subsystems::Planner itself
+(see clasi/issues/restore-goto-pursuit-with-pose-estimator.md).
+
+Off-hardware acceptance proof for ticket 084-001 (SUC-001/SUC-002/SUC-003):
 Subsystems::Planner (source/subsystems/planner.{h,cpp}) -- the goal-closure
 engine ported (concept) from source_old/superstructure/Planner.{h,cpp} +
 source_old/commands/MotionCommand.{h,cpp} onto the already-generated

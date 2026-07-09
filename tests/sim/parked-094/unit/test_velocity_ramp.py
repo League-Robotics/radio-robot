@@ -1,4 +1,15 @@
-"""Off-hardware acceptance proof for ticket 084-001 (SUC-001/SUC-002/SUC-003):
+"""PARKED (sprint 094, ticket 094-002): Motion::VelocityRamp was DELETED
+outright (not relocated -- per the issue's own locked "consolidate on
+Ruckig... retire Motion::VelocityRamp" decision; source/motion/
+velocity_ramp.{h,cpp} no longer exist anywhere in the tree). This file is
+parked, not deleted, purely as a historical record and is excluded from
+pytest collection via pyproject.toml's norecursedirs ("parked-094") -- its
+hardcoded source/motion/velocity_ramp.cpp path below is permanently stale.
+A revival must PORT this coverage onto whatever profiler replaces
+VelocityRamp (Motion::JerkTrajectory) rather than resurrect this file --
+see clasi/issues/restore-goto-pursuit-with-pose-estimator.md.
+
+Off-hardware acceptance proof for ticket 084-001 (SUC-001/SUC-002/SUC-003):
 Motion::VelocityRamp (source/motion/velocity_ramp.{h,cpp}) -- the body-level
 (v, omega) motion profiler ported from source_old/control/
 BodyVelocityController.{h,cpp} minus its kinematics/saturate/motor-output

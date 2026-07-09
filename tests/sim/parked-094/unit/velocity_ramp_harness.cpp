@@ -1,3 +1,10 @@
+// PARKED (sprint 094, ticket 094-002): Motion::VelocityRamp was DELETED
+// outright (source/motion/velocity_ramp.{h,cpp} no longer exist -- see
+// tests/sim/parked-094/README.md). Kept as a historical record only; a
+// revival must port this coverage onto Motion::JerkTrajectory, not
+// resurrect VelocityRamp -- clasi/issues/restore-goto-pursuit-with-pose-
+// estimator.md.
+//
 // velocity_ramp_harness.cpp -- off-hardware acceptance harness for ticket
 // 084-001 (SUC-001/SUC-002/SUC-003): exercises Motion::VelocityRamp
 // (source/motion/velocity_ramp.{h,cpp}) in isolation against plain

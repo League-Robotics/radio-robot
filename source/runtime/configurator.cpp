@@ -129,12 +129,11 @@ bool foldOdometer(msg::OdometerConfig& cfg, const ConfigDelta& delta) {
 }  // namespace
 
 Configurator::Configurator(Subsystems::Drivetrain& drivetrain, Subsystems::PoseEstimator& poseEstimator,
-                           Subsystems::Planner& planner, Subsystems::Hardware& hardware,
+                           Subsystems::Hardware& hardware,
                            const msg::DrivetrainConfig& bootDrivetrainConfig,
                            const msg::PlannerConfig& bootPlannerConfig)
     : drivetrain_(drivetrain),
       poseEstimator_(poseEstimator),
-      planner_(planner),
       hardware_(hardware),
       drivetrainConfig_(bootDrivetrainConfig),
       plannerConfig_(bootPlannerConfig),
@@ -193,9 +192,11 @@ void Configurator::applyOne(Blackboard& bb) {
       break;
     }
     case ConfigDelta::kPlanner: {
-      if (foldPlanner(plannerConfig_, delta)) {
-        planner_.configure(plannerConfig_);
-      }
+      // 094-002: Subsystems::Planner was relocated out of source/ -- there
+      // is no live subsystem left to call configure() on. Still fold +
+      // publish so bb.plannerConfig stays a truthful record of what was
+      // asked for (mirrors kOdometer's own "always fold+publish" shape).
+      foldPlanner(plannerConfig_, delta);
       bb.plannerConfig = plannerConfig_;
       break;
     }

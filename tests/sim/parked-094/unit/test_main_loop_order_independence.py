@@ -1,4 +1,18 @@
-"""Off-hardware acceptance proof for ticket 087-009 (SUC-001, re-confirmed
+"""PARKED (sprint 094, ticket 094-002): this harness hand-drives a FOUR-
+subsystem pipeline (Hardware, Drivetrain, PoseEstimator, Planner) that
+already predates sprint 093's MainLoop gut (Hardware+Drivetrain only) --
+Subsystems::Planner is central to the very property under test (tick-order
+independence INCLUDING Planner's own DISTANCE-goal stop anticipation), so it
+cannot be salvaged by simply dropping Planner from the pipeline without
+rewriting the scenario from scratch. Parked alongside Planner's relocation
+(source_parked/094/subsystems/); excluded from pytest collection via
+pyproject.toml's norecursedirs ("parked-094"). A revival needs BOTH Planner
+restored AND a decision on whether order-independence should be re-proven
+against today's real (2-subsystem) Rt::MainLoop::tick() shape instead of
+this file's own stale 4-subsystem hand-rolled pipeline -- see
+clasi/issues/restore-goto-pursuit-with-pose-estimator.md.
+
+Off-hardware acceptance proof for ticket 087-009 (SUC-001, re-confirmed
 against the FULL rebuilt loop -- see main_loop_order_independence_harness.
 cpp's own file header for exactly why the existing ticket 002/007 proofs are
 narrower and why this one is needed).

@@ -1,3 +1,24 @@
+// PARKED (sprint 094, ticket 094-002): relocated out of source/ verbatim --
+// NOT deleted, NOT recompiled. codal.json's "application": "source" setting
+// makes CODAL compile every .cpp recursively under source/, so this class
+// could not be left "unregistered in place" the way 093 left other unused
+// subsystems (Rt::Configurator, the dev/telemetry command families) --
+// deleting its one real dependency, Motion::VelocityRamp (this same ticket,
+// per the issue's own locked "consolidate on Ruckig" decision), would have
+// broken source/'s build the moment this file stayed put. See
+// clasi/sprints/094-.../architecture-update.md Decisions 3/4 for the full
+// reasoning, and clasi/issues/restore-goto-pursuit-with-pose-estimator.md
+// for the revival tracking issue.
+//
+// A future revival needs: (1) Subsystems::PoseEstimator restored (parked by
+// sprint 093), (2) this file moved back into source/subsystems/, and (3) its
+// GOTO_GOAL PRE_ROTATE/PURSUE sub-phases RE-PROFILED onto Motion::
+// JerkTrajectory (source/motion/jerk_trajectory.h) -- every other goal kind
+// already migrated off `ramp_` in prior sprints (089); do NOT resurrect
+// Motion::VelocityRamp (deleted, not parked, this same ticket) to unblock
+// GOTO_GOAL -- that would reintroduce the two-motion-generation-mechanism
+// duplication the issue's locked decision 3 closed off project-wide.
+//
 // planner.h -- Subsystems::Planner: the goal-closure engine every motion
 // verb (S/T/D/R/TURN/RT/G, tickets 084-002..004) stages a msg::PlannerCommand
 // into. Owns one Motion::VelocityRamp and the active goal's stop-condition

@@ -1,10 +1,18 @@
 // configurator.h -- Rt::Configurator: sprint 087's single config-application
 // authority (architecture-update-r1.md Step 3/Decision 4). Constructed with
-// references to Subsystems::Drivetrain/PoseEstimator/Planner/Hardware -- the
-// ONE deliberate exception to "no subsystem pointers outside the loop" this
+// references to Subsystems::Drivetrain/PoseEstimator/Hardware -- the ONE
+// deliberate exception to "no subsystem pointers outside the loop" this
 // design is organized around (every other runtime/subsystems component
 // depends only on Rt::Blackboard's queue/state types, never a concrete
 // subsystem reference).
+//
+// 094-002: Subsystems::Planner was relocated out of source/ entirely (see
+// source_parked/094/subsystems/planner.h's own header note) -- this class no
+// longer holds a Planner& or calls its configure(). The kPlanner
+// ConfigDelta target still folds onto plannerConfig_ and still publishes
+// bb.plannerConfig (msg::PlannerConfig, a wire message type, untouched by
+// the class relocation) so a future revival's Configurator wiring has
+// somewhere to resume from -- it just never reaches a live subsystem today.
 //
 // Owns ITS OWN persistent per-target desired-config copy (drivetrainConfig_/
 // motorConfig_[]/plannerConfig_/odometerConfig_) -- never re-derives a fold
@@ -41,7 +49,6 @@
 #include "runtime/blackboard.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
-#include "subsystems/planner.h"
 #include "subsystems/pose_estimator.h"
 
 namespace Rt {
@@ -49,10 +56,12 @@ namespace Rt {
 class Configurator {
  public:
   // bootDrivetrainConfig/bootPlannerConfig -- the two boot-default configs
-  // architecture-update-r1.md's Reference code passes to this constructor
-  // (`Configurator configurator(drivetrain, poseEstimator, planner,
-  // hardware, Config::defaultDrivetrainConfig(), defaultPlannerConfig());`
-  // -- no separate boot MotorConfig/OdometerConfig argument, by design:
+  // architecture-update-r1.md's Reference code originally passed to this
+  // constructor (`Configurator configurator(drivetrain, poseEstimator,
+  // planner, hardware, Config::defaultDrivetrainConfig(),
+  // defaultPlannerConfig());` -- the `planner` argument is gone as of
+  // 094-002, see this file's own header note) -- no separate boot
+  // MotorConfig/OdometerConfig argument, by design:
   //   - Per-port MotorConfig is seeded by READING BACK `hardware.config(p)`
   //     for each port (ticket 087-004's Hardware::config() getter already
   //     holds exactly the same array NezhaHardware/SimHardware's own
@@ -64,7 +73,7 @@ class Configurator {
   //     odometerConfig_ defaults to a zero-valued msg::OdometerConfig{},
   //     matching that established convention exactly.
   Configurator(Subsystems::Drivetrain& drivetrain, Subsystems::PoseEstimator& poseEstimator,
-               Subsystems::Planner& planner, Subsystems::Hardware& hardware,
+               Subsystems::Hardware& hardware,
                const msg::DrivetrainConfig& bootDrivetrainConfig,
                const msg::PlannerConfig& bootPlannerConfig);
 
@@ -82,7 +91,6 @@ class Configurator {
  private:
   Subsystems::Drivetrain& drivetrain_;
   Subsystems::PoseEstimator& poseEstimator_;
-  Subsystems::Planner& planner_;
   Subsystems::Hardware& hardware_;
 
   // This Configurator's OWN persistent per-target desired-config copies --

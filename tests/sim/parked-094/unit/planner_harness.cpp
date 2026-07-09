@@ -1,3 +1,8 @@
+// PARKED (sprint 094, ticket 094-002): Subsystems::Planner was relocated out
+// of source/ to source_parked/094/subsystems/ (see that file's own header
+// note + tests/sim/parked-094/README.md). Must return alongside Planner
+// itself -- clasi/issues/restore-goto-pursuit-with-pose-estimator.md.
+//
 // planner_harness.cpp -- off-hardware acceptance harness for ticket 084-001
 // (SUC-001/SUC-002/SUC-003): exercises Subsystems::Planner
 // (source/subsystems/planner.{h,cpp}) in isolation against hand-built
