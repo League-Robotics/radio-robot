@@ -1,11 +1,16 @@
 // runtime_blackboard_harness.cpp — off-hardware acceptance harness for
 // ticket 087-002 (SUC-001/SUC-006): default-constructs Rt::Blackboard and
 // exercises a representative post/take round-trip on every command-plane
-// queue/mailbox (driveIn, configIn, poseResetIn, motorIn[0], commandsIn,
-// otosSetPoseIn), confirms every state cell defaults to zero/default, and
-// confirms each queue's exact vehicle (Mailbox latest-wins vs. WorkQueue
+// queue/mailbox (driveIn, configIn, poseResetIn, commandsIn, otosSetPoseIn),
+// confirms every state cell defaults to zero/default, and confirms each
+// queue's exact vehicle (Mailbox latest-wins vs. WorkQueue
 // FIFO-with-capacity) and capacity per architecture-update-r1.md's
 // Reference code.
+//
+// (093/094 teardown) motorIn[]/motorResetIn[] are gone from Rt::Blackboard
+// entirely (see blackboard.h's file header) -- this harness's own former
+// motorIn[0] round-trip scenario and the motorIn[]/motorResetIn[]
+// default-empty checks are DELETED along with them.
 //
 // Folds in the acceptance test for source/subsystems/wire_command.h (Decision
 // 10's extracted, CODAL-free Channel/CommunicatorToCommandProcessorCommand
@@ -104,28 +109,22 @@ void scenarioBlackboardStateCellsDefaultZero() {
 }
 
 // 2. A freshly constructed Blackboard's command-plane queues/mailboxes all
-// start empty, and motorResetIn[] (a plain flag array, not a queue) starts
-// all-false.
+// start empty.
 void scenarioBlackboardCommandPlaneStartsEmpty() {
   beginScenario("Blackboard: command-plane queues/mailboxes start empty");
   Rt::Blackboard bb;
 
   checkTrue(bb.commandsIn.empty(), "commandsIn starts empty");
   checkTrue(bb.driveIn.empty(), "driveIn starts empty");
-  for (uint32_t i = 0; i < Rt::kPortCount; ++i) {
-    checkTrue(bb.motorIn[i].empty(), "motorIn[i] starts empty");
-    checkFalse(bb.motorResetIn[i], "motorResetIn[i] starts false");
-  }
   checkTrue(bb.configIn.empty(), "configIn starts empty");
   checkTrue(bb.poseResetIn.empty(), "poseResetIn starts empty");
   checkTrue(bb.otosSetPoseIn.empty(), "otosSetPoseIn starts empty");
 }
 
-// 3. driveIn (Mailbox<msg::DrivetrainCommand>): capacity-1, latest-wins
-// round-trip -- the vehicle Decision 1's authority-gated arbitration is
-// built on.
+// 3. driveIn (WorkQueue<msg::DrivetrainCommand, 8>): FIFO, commands accumulate
+// -- the vehicle the Drivetrain's growing command/segment queue is built on.
 void scenarioDriveInMailboxRoundTrip() {
-  beginScenario("Blackboard.driveIn: Mailbox<msg::DrivetrainCommand> post/take round-trip");
+  beginScenario("Blackboard.driveIn: WorkQueue<msg::DrivetrainCommand, 8> FIFO post/take round-trip");
   Rt::Blackboard bb;
 
   msg::DrivetrainCommand cmd;
@@ -133,37 +132,20 @@ void scenarioDriveInMailboxRoundTrip() {
   bb.driveIn.post(cmd);
   checkFalse(bb.driveIn.empty(), "post() marks driveIn non-empty");
 
-  // Latest-wins: a second post() before any take() replaces the first.
+  // FIFO, accumulates: a second post() before any take() queues BEHIND the first.
   msg::DrivetrainCommand cmd2;
   cmd2.setStandby(false);
   bb.driveIn.post(cmd2);
+  checkTrue(bb.driveIn.size() == 2, "two posts accumulate (size == 2)");
 
-  msg::DrivetrainCommand taken = bb.driveIn.take();
-  checkTrue(taken.standby.has, "taken command retains the standby field");
-  checkFalse(taken.standby.val, "take() returns only the latest posted value (standby=false)");
-  checkTrue(bb.driveIn.empty(), "driveIn empty after take()");
-}
+  msg::DrivetrainCommand first = bb.driveIn.take();
+  checkTrue(first.standby.has, "taken command retains the standby field");
+  checkTrue(first.standby.val, "take() returns the FIRST posted value (FIFO, standby=true)");
+  checkFalse(bb.driveIn.empty(), "the second command is still queued after one take()");
 
-// 4. motorIn[0] (Mailbox<msg::MotorCommand>): independent per-port mailbox
-// -- posting to port 0 leaves every other port's mailbox untouched
-// (Decision 2's per-port independence).
-void scenarioMotorInMailboxRoundTrip() {
-  beginScenario("Blackboard.motorIn[0]: Mailbox<msg::MotorCommand> post/take round-trip, per-port independence");
-  Rt::Blackboard bb;
-
-  msg::MotorCommand cmd;
-  cmd.setVelocity(123.0f);
-  bb.motorIn[0].post(cmd);
-  checkFalse(bb.motorIn[0].empty(), "post() marks motorIn[0] non-empty");
-  for (uint32_t i = 1; i < Rt::kPortCount; ++i) {
-    checkTrue(bb.motorIn[i].empty(), "motorIn[i] (i != 0) is untouched by motorIn[0]'s post()");
-  }
-
-  msg::MotorCommand taken = bb.motorIn[0].take();
-  checkTrue(taken.control_kind == msg::MotorCommand::ControlKind::VELOCITY,
-            "taken motorIn[0] command retains its VELOCITY control_kind");
-  checkFloatEq(taken.control.velocity, 123.0f, "taken motorIn[0] command retains its velocity value");
-  checkTrue(bb.motorIn[0].empty(), "motorIn[0] empty after take()");
+  msg::DrivetrainCommand second = bb.driveIn.take();
+  checkFalse(second.standby.val, "the next take() returns the second (standby=false)");
+  checkTrue(bb.driveIn.empty(), "driveIn empty after draining both");
 }
 
 // 5. configIn (WorkQueue<ConfigDelta, 16>): FIFO order preserved, and
@@ -333,7 +315,6 @@ int main() {
   scenarioBlackboardStateCellsDefaultZero();
   scenarioBlackboardCommandPlaneStartsEmpty();
   scenarioDriveInMailboxRoundTrip();
-  scenarioMotorInMailboxRoundTrip();
   scenarioConfigInWorkQueueCapacity();
   scenarioPoseResetInWorkQueueCapacity();
   scenarioOtosSetPoseInMailboxRoundTrip();

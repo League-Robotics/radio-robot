@@ -25,7 +25,6 @@
 
 #include "com/i2c_bus.h"
 #include "messages/motor.h"
-#include "runtime/queue.h"
 #include "subsystems/hardware.h"
 #include "subsystems/nezha_hardware.h"
 
@@ -141,14 +140,9 @@ void scenarioTickThroughBasePointerIdleSchedule() {
   Subsystems::NezhaHardware concreteHardware(bus, g_defaultConfigs);
   Subsystems::Hardware* hardware = &concreteHardware;
 
-  // 087-004: tick() gained a per-port motorIn[]/motorResetIn[] pair (never
-  // posted to here -- a no-op consumption loop, see hardware.h's tick() doc
-  // comment).
-  Rt::Mailbox<msg::MotorCommand> motorIn[Subsystems::Hardware::kPortCount];
-  bool motorResetIn[Subsystems::Hardware::kPortCount] = {false, false, false, false};
 
   for (uint32_t i = 0; i < 10; ++i) {
-    hardware->tick(100 + i, motorIn, motorResetIn);
+    hardware->tick(100 + i);
   }
 
   checkUintEq(bus.txnCount(kAddr7), 0, "10 idle Hardware::tick() calls performed zero I2C transactions");
@@ -174,13 +168,10 @@ void scenarioApplyCommandProcessorCommandThroughBasePointer() {
   cmd.addressed[0].command = neutralCommand();
   hardware->apply(cmd);
 
-  // 087-004: never posted to in this scenario -- a no-op consumption loop.
-  Rt::Mailbox<msg::MotorCommand> motorIn[Subsystems::Hardware::kPortCount];
-  bool motorResetIn[Subsystems::Hardware::kPortCount] = {false, false, false, false};
 
-  hardware->tick(1000, motorIn, motorResetIn);            // REQUEST_DUE
+  hardware->tick(1000);            // REQUEST_DUE
   I2CBus::advanceClock(4000);      // satisfy the request's own postClear
-  hardware->tick(1010, motorIn, motorResetIn);            // COLLECT_DUE
+  hardware->tick(1010);            // COLLECT_DUE
 
   checkTrue(hardware->motor(1).connected(), "port 1 collected via base-pointer apply()/tick()");
   checkFalse(hardware->motor(2).connected(), "port 2 was never addressed — untouched");
@@ -207,14 +198,11 @@ void scenarioApplyDrivetrainCommandThroughBasePointer() {
   dtCmd.wheel[1].command = neutralCommand();
   hardware->apply(dtCmd);
 
-  // 087-004: never posted to in this scenario -- a no-op consumption loop.
-  Rt::Mailbox<msg::MotorCommand> motorIn[Subsystems::Hardware::kPortCount];
-  bool motorResetIn[Subsystems::Hardware::kPortCount] = {false, false, false, false};
 
   for (int cycle = 0; cycle < 4; ++cycle) {
-    hardware->tick(10 * static_cast<uint32_t>(cycle), motorIn, motorResetIn);
+    hardware->tick(10 * static_cast<uint32_t>(cycle));
     I2CBus::advanceClock(4000);
-    hardware->tick(10 * static_cast<uint32_t>(cycle) + 1, motorIn, motorResetIn);
+    hardware->tick(10 * static_cast<uint32_t>(cycle) + 1);
   }
 
   checkTrue(hardware->motor(3).connected(), "left wheel (port 3) scheduled via base-pointer apply()/tick()");
@@ -226,15 +214,16 @@ void scenarioApplyDrivetrainCommandThroughBasePointer() {
 
 // 5. (087-004) config()/state() through the base pointer -- a uniform,
 //    port-indexed faceplate that does not require narrowing to a concrete
-//    NezhaHardware& -- plus tick()'s motorIn[]/motorResetIn[] (Decision 2):
-//    posting to one port's own Mailbox schedules that port ALONE (no
-//    addressed-dispatch branch), and a motorResetIn flag is applied and
-//    cleared, idempotently.
-void scenarioConfigStateAndTickMotorInMotorResetInThroughBasePointer() {
-  beginScenario(
-      "Subsystems::Hardware*: config()/state() + tick()'s motorIn[]/motorResetIn[] "
-      "through the base pointer");
-  resetDefaultConfigs(/*polledMask=*/0b0011);   // 091-002: ports 1/2 pre-polled -- motorIn[]/motorResetIn[] no longer schedule
+//    NezhaHardware&. (093/094 teardown) This scenario's own tick()
+//    motorIn[]/motorResetIn[] scheduling assertions are DELETED --
+//    Rt::Blackboard no longer has those members and Hardware::tick() no
+//    longer takes them (see blackboard.h's and hardware.h's file headers);
+//    port 1 is instead scheduled the same way scenario 3 above proves,
+//    via apply(CommandProcessorToHardwareCommand) + tick(), so this
+//    scenario's state() assertion still has a connected() port to read.
+void scenarioConfigAndStateThroughBasePointer() {
+  beginScenario("Subsystems::Hardware*: config()/state() through the base pointer");
+  resetDefaultConfigs(/*polledMask=*/0b0001);   // port 1 pre-polled
   I2CBus::setClock(5000000);
   I2CBus bus;
   Subsystems::NezhaHardware concreteHardware(bus, g_defaultConfigs);
@@ -249,32 +238,18 @@ void scenarioConfigStateAndTickMotorInMotorResetInThroughBasePointer() {
               "config(port) returns the constructed config verbatim (fwd_sign)");
   }
 
-  // Post independently to ports 1 and 2's own Mailbox -- Decision 2's
-  // per-port independence, no addressed-dispatch branch -- plus a pending
-  // reset on port 2, all consumed uniformly by tick().
-  Rt::Mailbox<msg::MotorCommand> motorIn[Subsystems::Hardware::kPortCount];
-  bool motorResetIn[Subsystems::Hardware::kPortCount] = {false, false, false, false};
-  motorIn[0].post(neutralCommand());
-  motorIn[1].post(neutralCommand());
-  motorResetIn[1] = true;
+  Hal::CommandProcessorToHardwareCommand cmd;
+  cmd.allPorts = false;
+  cmd.count = 1;
+  cmd.addressed[0].port = 1;
+  cmd.addressed[0].command = neutralCommand();
+  hardware->apply(cmd);
 
-  for (int cycle = 0; cycle < 4; ++cycle) {
-    hardware->tick(10 * static_cast<uint32_t>(cycle), motorIn, motorResetIn);
-    I2CBus::advanceClock(4000);
-    hardware->tick(10 * static_cast<uint32_t>(cycle) + 1, motorIn, motorResetIn);
-  }
+  hardware->tick(1000);            // REQUEST_DUE
+  I2CBus::advanceClock(4000);      // satisfy the request's own postClear
+  hardware->tick(1010);            // COLLECT_DUE
 
-  checkTrue(motorIn[0].empty(), "tick() drained motorIn[0]");
-  checkTrue(motorIn[1].empty(), "tick() drained motorIn[1]");
-  checkFalse(motorResetIn[1], "tick() cleared the consumed motorResetIn[1] flag");
-  checkTrue(hardware->motor(1).connected(), "port 1 scheduled via motorIn[0] alone -- through the base pointer");
-  checkTrue(hardware->motor(2).connected(), "port 2 scheduled via motorIn[1] -- through the base pointer");
-  checkFalse(hardware->motor(3).connected(),
-             "port 3 untouched -- neither motorIn[2] nor motorResetIn[2] was ever set");
-  checkTrue(hardware->motor(2).softResetCount() >= 1,
-            "port 2's motorResetIn flag really staged+applied a resetPosition() "
-            "(observable via softResetCount, since port 2 was never at rest long "
-            "enough for a hard reset)");
+  checkTrue(hardware->motor(1).connected(), "port 1 scheduled via base-pointer apply()/tick()");
 
   msg::MotorState st = hardware->state(1);
   checkTrue(st.connected == hardware->motor(1).state().connected,
@@ -290,7 +265,7 @@ int main() {
   scenarioTickThroughBasePointerIdleSchedule();
   scenarioApplyCommandProcessorCommandThroughBasePointer();
   scenarioApplyDrivetrainCommandThroughBasePointer();
-  scenarioConfigStateAndTickMotorInMotorResetInThroughBasePointer();
+  scenarioConfigAndStateThroughBasePointer();
 
   if (g_failureCount == 0) {
     std::printf("OK: Subsystems::Hardware abstract seam proven real via Subsystems::NezhaHardware\n");

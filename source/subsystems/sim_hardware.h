@@ -44,7 +44,6 @@
 #include "hal/sim/sim_motor.h"
 #include "hal/sim/sim_odometer.h"
 #include "messages/motor.h"
-#include "runtime/queue.h"
 #include "subsystems/hardware.h"
 
 namespace Subsystems {
@@ -66,14 +65,9 @@ class SimHardware : public Hardware {
   // exactly once (Hal::PhysicsWorld::update()), then the odometer samples
   // the just-advanced true pose (Hal::SimOdometer::tick()).
   //
-  // motorIn[]/motorResetIn[] (087-004, Subsystems::Hardware's own doc
-  // comment has the full contract) are consumed FIRST, uniformly: this
-  // class has no flip-flop schedule to bring a port into (every port ticks
-  // every pass unconditionally, regardless), so this is a plain
-  // apply-and-clear with no in-use bookkeeping, unlike
-  // Subsystems::NezhaHardware's.
-  void tick(uint32_t now, Rt::Mailbox<msg::MotorCommand> motorIn[kPortCount],
-            bool motorResetIn[kPortCount]) override;   // [ms]
+  // (093/094 teardown) motorIn[]/motorResetIn[] consumption is gone --
+  // Subsystems::Hardware's own tick() doc comment has the full contract.
+  void tick(uint32_t now) override;   // [ms]
 
   // Port-indexed accessor, port in [1, kPortCount]. Always returns the
   // Hal::Motor faceplate, exactly like Subsystems::NezhaHardware::motor() —

@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "com/radio_channel.h"
+#include "commands/system_commands.h"   // formatDeviceAnnouncement()
 
 namespace Subsystems {
 
@@ -29,6 +30,17 @@ void Communicator::begin() {
   serial_.begin();
   radio_.begin(channel_);
   begun_ = true;
+
+  // Emit the DEVICE: identity banner on BOTH channels as the first line out,
+  // immediately after bring-up. The announcement is the Communicator's own
+  // responsibility (moved here from main.cpp). Radio is fire-and-forget: a
+  // missed boot banner (no relay listening yet) is not a failure -- HELLO
+  // re-requests it, and HELLO's handler uses this same formatDeviceAnnouncement()
+  // so the banner matches byte-for-byte.
+  char banner[64];
+  formatDeviceAnnouncement(banner, sizeof(banner));
+  sendSerial(banner);
+  sendRadio(banner);
 }
 
 void Communicator::tick(uint32_t now) {

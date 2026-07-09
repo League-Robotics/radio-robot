@@ -69,7 +69,6 @@
 #include "com/i2c_bus.h"
 #include "hal/nezha/nezha_motor.h"
 #include "messages/motor.h"
-#include "runtime/queue.h"
 #include "subsystems/nezha_hardware.h"
 
 namespace {
@@ -193,15 +192,12 @@ msg::MotorCommand neutralCommand() {
 // armoredWrite()/dwell timing.
 void runOneCycle(Subsystems::NezhaHardware& hal, uint32_t nowRequestMs,
                   uint32_t nowCollectMs, uint64_t postClearUs = 4000) {
-  // 087-004: tick() gained a per-port motorIn[]/motorResetIn[] pair (never
-  // posted to here -- a no-op consumption loop, see hardware.h's tick() doc
-  // comment). This harness exercises the flip-flop scheduler purely via
-  // apply(), unaffected by this ticket.
-  Rt::Mailbox<msg::MotorCommand> motorIn[Subsystems::Hardware::kPortCount];
-  bool motorResetIn[Subsystems::Hardware::kPortCount] = {false, false, false, false};
-  hal.tick(nowRequestMs, motorIn, motorResetIn);
+  // (093/094 teardown) tick(now) no longer takes a motorIn[]/motorResetIn[]
+  // pair -- see hardware.h's tick() doc comment. This harness exercises
+  // the flip-flop scheduler purely via apply(), unaffected by this change.
+  hal.tick(nowRequestMs);
   I2CBus::advanceClock(postClearUs);
-  hal.tick(nowCollectMs, motorIn, motorResetIn);
+  hal.tick(nowCollectMs);
 }
 
 // --- Scenarios ----------------------------------------------------------
@@ -217,12 +213,9 @@ void scenarioIdleScheduleNoBusActions() {
   I2CBus bus;
   Subsystems::NezhaHardware hal(bus, defaultConfigs);   // no port polled_ -- nothing ever scheduled
 
-  // 087-004: never posted to in this scenario -- a no-op consumption loop.
-  Rt::Mailbox<msg::MotorCommand> motorIn[Subsystems::Hardware::kPortCount];
-  bool motorResetIn[Subsystems::Hardware::kPortCount] = {false, false, false, false};
 
   for (uint32_t i = 0; i < 20; ++i) {
-    hal.tick(100 + i, motorIn, motorResetIn);
+    hal.tick(100 + i);
   }
 
   checkUintEq(bus.txnCount(kAddr7), 0,
@@ -253,32 +246,29 @@ void scenarioFlipFlopSequencingAndClearConvention() {
 
   checkUintEq(bus.txnCount(kAddr7), 0, "apply() alone issues no bus traffic");
 
-  // 087-004: never posted to in this scenario -- a no-op consumption loop.
-  Rt::Mailbox<msg::MotorCommand> motorIn[Subsystems::Hardware::kPortCount];
-  bool motorResetIn[Subsystems::Hardware::kPortCount] = {false, false, false, false};
 
-  hal.tick(1000, motorIn, motorResetIn);   // REQUEST_DUE: fires the 0x46 request
+  hal.tick(1000);   // REQUEST_DUE: fires the 0x46 request
   checkUintEq(bus.txnCount(kAddr7), 1, "REQUEST_DUE issued exactly one transaction");
 
-  hal.tick(1010, motorIn, motorResetIn);   // COLLECT_DUE attempt, clock NOT advanced -- must pass (no-op)
+  hal.tick(1010);   // COLLECT_DUE attempt, clock NOT advanced -- must pass (no-op)
   checkUintEq(bus.txnCount(kAddr7), 1,
               "COLLECT_DUE before the settle window elapses performs zero additional "
               "transactions (also proves bus_.clear() uses the bare 7-bit address -- "
               "see this scenario's header comment)");
 
   I2CBus::advanceClock(4000);   // exactly the request's postClear
-  hal.tick(1020, motorIn, motorResetIn);   // COLLECT_DUE, now clear: collects + dispatches (first NEUTRAL write)
+  hal.tick(1020);   // COLLECT_DUE, now clear: collects + dispatches (first NEUTRAL write)
   checkUintEq(bus.txnCount(kAddr7), 3,
               "collect landed: +1 read (collectEncoder) +1 write (first NEUTRAL "
               "dispatch, write-on-change never having seen this value before)");
   checkTrue(hal.motor(1).connected(), "port 1 reports connected() after a clean collect");
   checkFloatEq(hal.motor(1).appliedDuty(), 0.0f, "NEUTRAL dispatch wrote duty 0");
 
-  hal.tick(1030, motorIn, motorResetIn);   // REQUEST_DUE again
+  hal.tick(1030);   // REQUEST_DUE again
   checkUintEq(bus.txnCount(kAddr7), 4, "second REQUEST_DUE issued one more transaction");
 
   I2CBus::advanceClock(4000);
-  hal.tick(1040, motorIn, motorResetIn);   // COLLECT_DUE: collects, but NEUTRAL is unchanged -> no duty write
+  hal.tick(1040);   // COLLECT_DUE: collects, but NEUTRAL is unchanged -> no duty write
   checkUintEq(bus.txnCount(kAddr7), 5,
               "second collect: +1 read only -- the repeat NEUTRAL command is "
               "write-on-change-suppressed (write-at-collect-only, not write-every-collect)");
@@ -346,12 +336,9 @@ void scenarioBroadcastNeverMarksInUse() {
   broadcast.addressed[0].command = neutralCommand();
   hal.apply(broadcast);
 
-  // 087-004: never posted to in this scenario -- a no-op consumption loop.
-  Rt::Mailbox<msg::MotorCommand> motorIn[Subsystems::Hardware::kPortCount];
-  bool motorResetIn[Subsystems::Hardware::kPortCount] = {false, false, false, false};
 
   for (uint32_t i = 0; i < 20; ++i) {
-    hal.tick(100 + i, motorIn, motorResetIn);
+    hal.tick(100 + i);
   }
   checkUintEq(bus.txnCount(kAddr7), 0,
               "broadcast leaves polled_[] at its constructed (all-false) state -- "
@@ -402,10 +389,8 @@ void scenarioDrivetrainToHardwareCommandForwarding() {
   // motor(port).tick() calls were) still performs zero bus actions for
   // EITHER wheel, even though both were just apply()'d.
   uint32_t txnBefore = bus.txnCount(kAddr7);
-  Rt::Mailbox<msg::MotorCommand> motorIn[Subsystems::Hardware::kPortCount];
-  bool motorResetIn[Subsystems::Hardware::kPortCount] = {false, false, false, false};
   for (uint32_t i = 0; i < 20; ++i) {
-    hal.tick(300 + i, motorIn, motorResetIn);
+    hal.tick(300 + i);
   }
   checkUintEq(bus.txnCount(kAddr7) - txnBefore, 0,
               "apply(DrivetrainToHardwareCommand) left polled_[] unaffected -- the HAL's own "
@@ -568,17 +553,14 @@ void scenarioRequestHonorsClearanceAfterDutyWrite() {
 
   hal.apply(addressedOne(1, msg::MotorCommand{}.setDutyCycle(0.30f)));
 
-  // 087-004: never posted to in this scenario -- a no-op consumption loop.
-  Rt::Mailbox<msg::MotorCommand> motorIn[Subsystems::Hardware::kPortCount];
-  bool motorResetIn[Subsystems::Hardware::kPortCount] = {false, false, false, false};
 
-  hal.tick(1000, motorIn, motorResetIn);                // REQUEST_DUE
+  hal.tick(1000);                // REQUEST_DUE
   I2CBus::advanceClock(4000);    // satisfy the request's own postClear
-  hal.tick(1010, motorIn, motorResetIn);                // COLLECT_DUE: collects + dispatches the first duty write
+  hal.tick(1010);                // COLLECT_DUE: collects + dispatches the first duty write
   checkTrue(hal.motor(1).appliedDuty() != 0.0f, "duty write landed at collect");
 
   uint64_t clockBefore = I2CBus::clock();
-  hal.tick(1020, motorIn, motorResetIn);                // next REQUEST_DUE -- deliberately NO manual clock advance
+  hal.tick(1020);                // next REQUEST_DUE -- deliberately NO manual clock advance
   uint64_t clockAfter = I2CBus::clock();
 
   checkTrue(clockAfter - clockBefore >= 4000,

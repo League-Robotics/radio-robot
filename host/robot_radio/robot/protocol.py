@@ -80,6 +80,7 @@ class TLMFrame:
     enc: tuple[int, int] | None = None          # (left, right) [mm]
     pose: tuple[int, int, int] | None = None    # (x, y, heading) [mm, mm, cdeg]
     vel: tuple[int, ...] | None = None          # differential: (vL, vR); mecanum: (vFR, vFL, vBR, vBL) mm/s
+    cmd_vel: tuple[int, int] | None = None      # (left, right) COMMANDED per-wheel velocity (PID setpoint) mm/s
     twist: tuple[int, ...] | None = None        # differential: (v, omega_mrad); mecanum: (vx, vy, omega_mrad)
     otos: tuple[int, int, int] | None = None    # (x, y, heading) [mm, mm, cdeg] — raw OTOS pose
     line: tuple[int, int, int, int] | None = None   # (g1, g2, g3, g4)
@@ -292,6 +293,15 @@ def parse_tlm(line: str) -> TLMFrame | None:
                 # Mecanum: (vFR_mmps, vFL_mmps, vBR_mmps, vBL_mmps)
                 frame.vel = (int(parts[0]), int(parts[1]),
                              int(parts[2]), int(parts[3]))
+        except ValueError:
+            pass
+
+    if "cmd" in kv:
+        try:
+            parts = kv["cmd"].split(",")
+            if len(parts) == 2:
+                # Commanded per-wheel velocity (PID setpoint): (vL, vR) [mm/s]
+                frame.cmd_vel = (int(parts[0]), int(parts[1]))
         except ValueError:
             pass
 

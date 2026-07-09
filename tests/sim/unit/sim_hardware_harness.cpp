@@ -24,7 +24,6 @@
 #include "hal/velocity_pid.h"
 #include "messages/common.h"
 #include "messages/motor.h"
-#include "runtime/queue.h"
 #include "subsystems/hardware.h"
 #include "subsystems/sim_hardware.h"
 
@@ -48,10 +47,6 @@ void fail(const std::string& what) {
 
 void checkTrue(bool condition, const std::string& what) {
   if (!condition) fail(what + " — expected true, got false");
-}
-
-void checkFalse(bool condition, const std::string& what) {
-  if (condition) fail(what + " — expected false, got true");
 }
 
 // Asserts |actual - expected| <= tol. tol == 0.0f is an exact (bit-for-bit,
@@ -117,23 +112,16 @@ void scenarioDtZeroReentryGuard() {
   msg::MotorConfig configs[Subsystems::Hardware::kPortCount];
   fillDefaultConfigs(configs, gains, /*minDuty=*/0.0f);
 
-  // 087-004: tick() gained a per-port motorIn[]/motorResetIn[] pair (never
-  // posted to here -- a no-op consumption loop, see hardware.h's tick() doc
-  // comment). One never-posted pair per instance, reused across that
-  // instance's own calls below.
-  Rt::Mailbox<msg::MotorCommand> motorInA[Subsystems::Hardware::kPortCount];
-  bool motorResetInA[Subsystems::Hardware::kPortCount] = {false, false, false, false};
-
   // Instance A: ticked once at now=1000, then ticked AGAIN at the SAME
   // now=1000 — exactly devLoopTick()'s two-slice pattern.
   Subsystems::SimHardware hwA(configs);
   hwA.motor(1).apply(msg::MotorCommand{}.setVelocity(300.0f));
-  hwA.tick(1000, motorInA, motorResetInA);
+  hwA.tick(1000);
   float dutyAfterFirst = hwA.motor(1).appliedDuty();
   float posAfterFirst  = hwA.motor(1).position();
   float velAfterFirst  = hwA.motor(1).velocity();
 
-  hwA.tick(1000, motorInA, motorResetInA);   // re-entrant, unchanged now -- must be a complete no-op
+  hwA.tick(1000);   // re-entrant, unchanged now -- must be a complete no-op
 
   checkNear(hwA.motor(1).appliedDuty(), dutyAfterFirst, 0.0f,
             "appliedDuty unchanged across the re-entrant same-now call");
@@ -142,12 +130,9 @@ void scenarioDtZeroReentryGuard() {
   checkNear(hwA.motor(1).velocity(), velAfterFirst, 0.0f,
             "velocity unchanged across the re-entrant same-now call");
 
-  // Instance B (the control): ticked ONCE only, at now=1000.
-  Rt::Mailbox<msg::MotorCommand> motorInB[Subsystems::Hardware::kPortCount];
-  bool motorResetInB[Subsystems::Hardware::kPortCount] = {false, false, false, false};
   Subsystems::SimHardware hwB(configs);
   hwB.motor(1).apply(msg::MotorCommand{}.setVelocity(300.0f));
-  hwB.tick(1000, motorInB, motorResetInB);
+  hwB.tick(1000);
 
   checkNear(hwA.motor(1).appliedDuty(), hwB.motor(1).appliedDuty(), 0.0f,
             "double-ticked instance's duty matches the single-ticked control");
@@ -160,25 +145,22 @@ void scenarioDtZeroReentryGuard() {
   // must continue to match exactly, proving the guard left no stray
   // internal divergence (e.g. a wrongly-advanced lastAdvancedNow_, or a
   // PID integral that silently drifted apart during the re-entrant call).
-  hwA.tick(1024, motorInA, motorResetInA);
-  hwB.tick(1024, motorInB, motorResetInB);
+  hwA.tick(1024);
+  hwB.tick(1024);
   checkNear(hwA.motor(1).appliedDuty(), hwB.motor(1).appliedDuty(), 0.0f,
             "instances still match after a subsequent genuine tick (duty)");
   checkNear(hwA.motor(1).position(), hwB.motor(1).position(), 0.0f,
             "instances still match after a subsequent genuine tick (position)");
 
   // Direct proof at the plant layer too: the SHARED PhysicsWorld's own
-  // accumulators and staged actuator must be untouched by a re-entrant call.
-  Rt::Mailbox<msg::MotorCommand> motorInC[Subsystems::Hardware::kPortCount];
-  bool motorResetInC[Subsystems::Hardware::kPortCount] = {false, false, false, false};
   Subsystems::SimHardware hwC(configs);
   hwC.motor(1).apply(msg::MotorCommand{}.setVelocity(300.0f));
-  hwC.tick(2000, motorInC, motorResetInC);
+  hwC.tick(2000);
   float trueEncBefore     = hwC.plant().trueEncL();
   float reportedEncBefore = hwC.plant().reportedEncL();
   int8_t pwmBefore        = hwC.plant().pwmL();
 
-  hwC.tick(2000, motorInC, motorResetInC);   // re-entrant
+  hwC.tick(2000);   // re-entrant
 
   checkNear(hwC.plant().trueEncL(), trueEncBefore, 0.0f,
             "plant trueEncL unchanged across the re-entrant call — no double PhysicsWorld::update()");
@@ -217,13 +199,10 @@ void scenarioZeroErrorDeterminism() {
   hw.motor(1).apply(msg::MotorCommand{}.setDutyCycle(0.5f));
   hw.motor(2).apply(msg::MotorCommand{}.setDutyCycle(0.5f));
 
-  // 087-004: never posted to in this scenario -- a no-op consumption loop.
-  Rt::Mailbox<msg::MotorCommand> motorIn[Subsystems::Hardware::kPortCount];
-  bool motorResetIn[Subsystems::Hardware::kPortCount] = {false, false, false, false};
 
   uint32_t now = 0;
   for (int i = 0; i < 6; ++i) {
-    hw.tick(now, motorIn, motorResetIn);
+    hw.tick(now);
     now += 125;
   }
 
@@ -300,14 +279,16 @@ void scenarioSimMotorVelocityMatchesSharedPid() {
   }
 }
 
-// (d) 087-004: Subsystems::Hardware's new uniform per-port config()/state()
+// (d) 087-004: Subsystems::Hardware's uniform per-port config()/state()
 // faceplate -- config(port) returns exactly the constructor-supplied
-// MotorConfig, state(port) matches motor(port).state() exactly -- plus
-// tick()'s motorIn[]/motorResetIn[] (Decision 2): posting to one port's own
-// Mailbox applies to that port alone, no addressed-dispatch branch; a
-// motorResetIn flag applies resetPosition() and clears itself (idempotent).
-void scenarioConfigStateAndMotorInMotorResetIn() {
-  beginScenario("Subsystems::SimHardware: uniform config()/state() + motorIn[]/motorResetIn[] (087-004)");
+// MotorConfig, state(port) matches motor(port).state() exactly.
+// (093/094 teardown) This scenario's own motorIn[]/motorResetIn[]
+// consumption assertions are DELETED -- Rt::Blackboard no longer has those
+// members and Hardware::tick() no longer takes them (see blackboard.h's and
+// hardware.h's file headers); the config()/state() coverage below is
+// unaffected and kept.
+void scenarioConfigAndState() {
+  beginScenario("Subsystems::SimHardware: uniform config()/state() (087-004)");
 
   msg::Gains gains = makeGains(/*kp=*/0.01f, /*ki=*/0.05f, /*kff=*/0.002f,
                                 /*i_max=*/1.0f, /*kaw=*/2.0f);
@@ -326,16 +307,8 @@ void scenarioConfigStateAndMotorInMotorResetIn() {
               "config(port) returns the constructed min_duty");
   }
 
-  Rt::Mailbox<msg::MotorCommand> motorIn[Subsystems::Hardware::kPortCount];
-  bool motorResetIn[Subsystems::Hardware::kPortCount] = {false, false, false, false};
-
-  // Post to port 1's own Mailbox only -- Decision 2's per-port independence,
-  // no addressed-dispatch branch.
-  motorIn[0].post(msg::MotorCommand{}.setVelocity(150.0f));
-  hw.tick(0, motorIn, motorResetIn);
-
-  checkTrue(motorIn[0].empty(), "tick() drained motorIn[0]");
-  checkTrue(motorIn[1].empty(), "motorIn[1] (never posted to) is untouched");
+  hw.motor(1).apply(msg::MotorCommand{}.setVelocity(150.0f));
+  hw.tick(0);
 
   msg::MotorState st1 = hw.state(1);
   checkTrue(st1.connected == hw.motor(1).state().connected,
@@ -344,17 +317,6 @@ void scenarioConfigStateAndMotorInMotorResetIn() {
             "state(port) matches motor(port).state() exactly (applied)");
   checkNear(st1.velocity.val, hw.motor(1).state().velocity.val, 0.0f,
             "state(port) matches motor(port).state() exactly (velocity)");
-
-  // motorResetIn[1]: apply + clear, idempotent -- "reset twice = reset once".
-  checkFalse(motorResetIn[1], "motorResetIn[1] starts false");
-  motorResetIn[1] = true;
-  hw.tick(20, motorIn, motorResetIn);
-  checkFalse(motorResetIn[1], "tick() cleared the consumed motorResetIn[1] flag");
-
-  // A second tick with the (now-false) flag is a no-op -- the flag itself
-  // does not get set again by tick() (idempotent consumption, not a latch).
-  hw.tick(40, motorIn, motorResetIn);
-  checkFalse(motorResetIn[1], "motorResetIn[1] stays false -- tick() does not re-arm it");
 }
 
 }  // namespace
@@ -363,7 +325,7 @@ int main() {
   scenarioDtZeroReentryGuard();
   scenarioZeroErrorDeterminism();
   scenarioSimMotorVelocityMatchesSharedPid();
-  scenarioConfigStateAndMotorInMotorResetIn();
+  scenarioConfigAndState();
 
   if (g_failureCount == 0) {
     std::printf("OK: all Subsystems::SimHardware / Hal::PhysicsWorld / Hal::SimMotor scenarios passed\n");

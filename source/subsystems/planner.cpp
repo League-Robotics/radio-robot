@@ -118,7 +118,40 @@ msg::DriveMode velocityShapedMode(const msg::PlannerCommand& cmd) {
 // own, 089-005) -- architecture-update.md (089) Decision 10's own
 // instruction to reuse one tau definition rather than redefine one under a
 // new name.
-constexpr float kOutputHops = 2.0f;
+// kOutputHops -- how many 20 ms output passes late the commanded twist
+// reaches the wheel, i.e. the coast dead-time the terminal decel must lead
+// by so the lagging plant settles ON target rather than overshooting and
+// then reverse-correcting (the reverse-creep). This is a PLANT-SPECIFIC
+// physical quantity, so it is compile-time split, NOT a single shared
+// constant:
+//
+//   * Real firmware (the Nezha brick): sprint 093 MEASURED the true
+//     command->motion delay in the wheel_motion_trace notebook at
+//     ~120-140 ms. Its dominant, plan-relevant component is the brick
+//     flip-flop sequencer's own worst-case alignment -- 2 polled ports x
+//     2 phases (REQUEST/COLLECT) x 20 ms = 4 passes = 80 ms -- before a
+//     fresh duty write even goes out (see
+//     clasi/issues/motor-actuation-latency-flipflop-coupling.md). 4.0
+//     builds that measured delay into the plan. It is deliberately BELOW
+//     the full 120-140 ms so the lead stays conservative (under- rather
+//     than over-compensating).
+//
+//   * Sim (SimMotor/SimHardware): the sim leaf applies duty immediately --
+//     there is NO flip-flop and no transport lag to compensate. Modeling
+//     an 80 ms lead there over-compensates a plant that does not lag,
+//     making DISTANCE stop short and stall (empirically: 3-4 hops times
+//     the D-200-200-500 overshoot regression out). So sim keeps the
+//     original pre-measurement 2.0 (40 ms) -- correct for a near-zero-lag
+//     plant and unchanged behavior for every sim test.
+//
+// The underlying flip-flop coupling that forces this compensation at all is
+// the follow-up issue above; this is the interim "build the delay into the
+// plan" mitigation (stakeholder direction, sprint 093).
+#ifdef HOST_BUILD
+constexpr float kOutputHops = 2.0f;  // sim: no flip-flop, no transport lag
+#else
+constexpr float kOutputHops = 4.0f;  // real brick: measured ~80 ms flip-flop actuation dead-time
+#endif
 constexpr float kAssumedPassPeriod = 0.020f;  // [s] matches main.cpp's kPeriod
 constexpr float kDeadTime = kOutputHops * kAssumedPassPeriod;  // [s]
 

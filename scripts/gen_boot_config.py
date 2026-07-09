@@ -269,8 +269,29 @@ def otos_boot_config_values(cfg: dict):
             float(linear_scale), float(angular_scale))
 
 
+def vel_gains_for_config(cfg: dict):
+    """Return (kp, ki, kff, i_max, filt_alpha) for the velocity PID.
+
+    Read from the robot JSON's ``control`` block when present, falling back to
+    the bench-tuned firmware defaults above. NOTE: these keys must be expressed
+    in the NEW NezhaMotor duty [-1,1] plant scale (kp ~ 0.002, kff ~ 0.0015),
+    NOT the old RobotConfig PWM-percent scale (kp ~ 0.3) — the robot JSON's
+    ``control._vel_gains_domain`` marker documents this. A JSON still carrying
+    old-scale values would silently break the loop, so a robot config that has
+    not been migrated should simply omit these keys and inherit the defaults.
+    """
+    ctrl = cfg.get("control", {}) or {}
+    kp   = _get(ctrl, "vel_kp",   default=VEL_KP)
+    ki   = _get(ctrl, "vel_ki",   default=VEL_KI)
+    kff  = _get(ctrl, "vel_kff",  default=VEL_KFF)
+    imax = _get(ctrl, "vel_imax", default=VEL_IMAX)
+    filt = _get(ctrl, "vel_filt", default=VEL_FILT_ALPHA)
+    return float(kp), float(ki), float(kff), float(imax), float(filt)
+
+
 def generate(cfg: dict, source_path: str) -> str:
     trackwidth   = _get(cfg, "geometry", "trackwidth", default=TRACKWIDTH_DEFAULT)
+    vel_kp, vel_ki, vel_kff, vel_imax, vel_filt = vel_gains_for_config(cfg)
     travel_calib = travel_calib_for_ports(cfg)
     fwd_sign     = fwd_sign_for_ports(cfg)
     polled       = polled_for_ports()
@@ -307,14 +328,15 @@ def generate(cfg: dict, source_path: str) -> str:
 namespace Config {{
 
 void defaultMotorConfigs(msg::MotorConfig* out) {{
-    // Velocity PID gains — bench-tuned firmware defaults (sprint 077-007), not
-    // from the robot JSON (the old-tree control.vel_* keys are a different
-    // plant scale). Live-correctable per motor via `DEV M <n> CFG`.
+    // Velocity PID gains — baked from the robot JSON's control.vel_* keys
+    // (093: now in the NezhaMotor duty [-1,1] plant scale, see the JSON's
+    // control._vel_gains_domain marker), falling back to bench-tuned firmware
+    // defaults when absent. Live-correctable per motor via `DEV M <n> CFG`.
     msg::Gains velGains;
-    velGains.kp = {_f(VEL_KP)};
-    velGains.ki = {_f(VEL_KI)};
-    velGains.kff = {_f(VEL_KFF)};
-    velGains.i_max = {_f(VEL_IMAX)};
+    velGains.kp = {_f(vel_kp)};
+    velGains.ki = {_f(vel_ki)};
+    velGains.kff = {_f(vel_kff)};
+    velGains.i_max = {_f(vel_imax)};
 
     // reversal_dwell / output_deadband are left unset (.has == false) on
     // purpose — Hal::Motor::configure() applies the real ship defaults (100 ms
@@ -324,9 +346,9 @@ void defaultMotorConfigs(msg::MotorConfig* out) {{
         out[i] = msg::MotorConfig();
         out[i].setPort(i + 1);
         out[i].setVelGains(velGains);
-        // EMA coeff — see gen_boot_config.py; a=0 would pin reported velocity
-        // at 0 forever regardless of real motion.
-        out[i].setVelFiltAlpha({_f(VEL_FILT_ALPHA)});
+        // EMA coeff — from control.vel_filt (fallback default); a=0 would pin
+        // reported velocity at 0 forever regardless of real motion.
+        out[i].setVelFiltAlpha({_f(vel_filt)});
     }}
 
     // Per-port forward-sign — baked from the robot JSON's calibration.

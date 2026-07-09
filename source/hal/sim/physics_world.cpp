@@ -127,6 +127,27 @@ void PhysicsWorld::update(uint32_t dt) {  // [ms]
     }
     lagVelR_ = velR;
 
+    // Coulomb (dry) friction: drag the achieved velocity toward rest by a
+    // constant decel this tick, clamped so it never flips the wheel's sign.
+    // Default (decel <= 0) skips the branch entirely, leaving velL/velR
+    // bit-exact for the golden-TLM zero-error determinism gate. lagVel*_ is
+    // re-synced to the post-friction velocity so the inertia the lag filter
+    // carries forward is the wheel's ACTUAL velocity, not the pre-friction one.
+    if (coulombDecelL_ > 0.0f) {
+        float step = coulombDecelL_ * dt_s;
+        if (velL > step)        velL -= step;
+        else if (velL < -step)  velL += step;
+        else                    velL = 0.0f;
+        lagVelL_ = velL;
+    }
+    if (coulombDecelR_ > 0.0f) {
+        float step = coulombDecelR_ * dt_s;
+        if (velR > step)        velR -= step;
+        else if (velR < -step)  velR += step;
+        else                    velR = 0.0f;
+        lagVelR_ = velR;
+    }
+
     trueEncL_ += velL * dt_s;
     trueEncR_ += velR * dt_s;
     trueVelL_ = velL;

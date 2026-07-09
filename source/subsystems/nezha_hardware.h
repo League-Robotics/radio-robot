@@ -67,7 +67,6 @@
 #include "hal/nezha/nezha_motor.h"
 #include "hal/otos/otos_odometer.h"
 #include "messages/motor.h"
-#include "runtime/queue.h"
 #include "subsystems/hardware.h"
 
 namespace Subsystems {
@@ -109,19 +108,13 @@ class NezhaHardware : public Hardware {
   // ticket 005) drive one full request/collect pair per pass under typical
   // timing.
   //
-  // 087-004: motorIn[]/motorResetIn[] (Subsystems::Hardware's own doc
-  // comment has the full contract) are consumed FIRST, uniformly, before
-  // the flip-flop's scheduling decision below — applying a motorIn[i]
-  // command stages it onto port i+1's own Hal::Motor setter exactly like
-  // either apply() overload below, but (091-002) no longer changes
-  // poll-schedule membership as a side effect: whether port i+1 is eligible
-  // for THIS call's bus action depends solely on polled_[i], the constant
-  // (except via setPolled()) mask established at construction. motorIn[i]/
-  // motorResetIn[i] never marks a port polled — mirrors today's direct
-  // `hardware->motor(port).resetPosition()` call sites, e.g.
-  // pose_commands.cpp's ZERO handler, which never did either.
-  void tick(uint32_t now, Rt::Mailbox<msg::MotorCommand> motorIn[kPortCount],
-            bool motorResetIn[kPortCount]) override;   // [ms]
+  // (093/094 teardown) motorIn[]/motorResetIn[] consumption is gone —
+  // Subsystems::Hardware's own tick() doc comment has the full contract.
+  // tick() now runs ONLY the flip-flop's scheduling decision below;
+  // whether port i+1 is eligible for THIS call's bus action depends
+  // solely on polled_[i], the constant (except via setPolled()) mask
+  // established at construction.
+  void tick(uint32_t now) override;   // [ms]
 
   // Port-indexed accessor, port in [1, kPortCount]. Always returns the
   // Hal::Motor faceplate — callers (DEV commands, Drivetrain; both later

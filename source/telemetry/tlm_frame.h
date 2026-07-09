@@ -64,10 +64,19 @@ struct TlmFrameInput {
   float encLeft = 0.0f;    // [mm]
   float encRight = 0.0f;   // [mm]
 
-  // vel=<l>,<r> -- per-wheel actual velocity.
+  // vel=<l>,<r> -- per-wheel actual (measured) velocity.
   bool hasVel = false;
   float velLeft = 0.0f;    // [mm/s] signed
   float velRight = 0.0f;   // [mm/s] signed
+
+  // cmd=<l>,<r> -- per-wheel COMMANDED velocity: the velocity PID's own
+  // setpoint (bb.drivetrain.vel_[], == each motor's velocityTarget_, set
+  // directly with no slew on the setpoint -- nezha_motor.cpp). Distinct from
+  // vel= (measured): plotting cmd= against vel= exposes the velocity loop's
+  // tracking error and terminal overshoot, which vel= alone cannot show.
+  bool hasCmdVel = false;
+  float cmdVelLeft = 0.0f;    // [mm/s] signed
+  float cmdVelRight = 0.0f;   // [mm/s] signed
 
   // pose=<x>,<y>,<h> -- fused world pose (EKF belief).
   bool hasPose = false;
