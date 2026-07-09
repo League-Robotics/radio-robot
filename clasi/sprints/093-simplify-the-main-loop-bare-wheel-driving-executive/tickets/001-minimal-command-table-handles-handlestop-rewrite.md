@@ -91,10 +91,31 @@ sprint's "removed code is left un-wired, not deleted" decision
       `collectStopClauses()`/`replyStopBadarg()` themselves are untouched —
       `T`/`D`/`R`/`TURN`/`RT` still call them.
 - [x] `handleStop` rewritten: drops the `msg::PlannerCommand`/`bb.motionIn`
-      post; posts `buildDrivetrainStop(msg::Neutral::BRAKE)` (declared in
-      `source/commands/dev_commands.h`, `#include`d here even though the
-      `DEV` family stays unregistered from the table) to `bb.driveIn`.
-      Reply stays `OK stop`.
+      post; posts a NEUTRAL `msg::DrivetrainCommand` to `bb.driveIn`. Reply
+      stays `OK stop`.
+
+      **Reopened/corrected (2026-07-09): `buildDrivetrainStop()` was the
+      wrong shape.** The originally-implemented version posted
+      `buildDrivetrainStop(msg::Neutral::BRAKE)` (dev_commands.h's
+      `{NEUTRAL, standby=true}` helper) — this compiled and passed the
+      manual sim check below (`STOP` → `OK stop`) but did **not** physically
+      neutralize the wheels: `Subsystems::Drivetrain::apply()` processes
+      `standby=true` AFTER the NEUTRAL arm, flipping `active_` back to
+      `false` in the same call, and `Rt::MainLoop::routeOutputs()` only
+      posts the computed wheel command to `bb.motorIn[]` when
+      `drivetrain_.active()` — so the neutral command was silently dropped
+      and the motors kept spinning at their last commanded speed. Fixed by
+      building the `msg::DrivetrainCommand{NEUTRAL}` inline in `handleStop`
+      WITHOUT setting `standby` (default `Opt<bool>{has=false}`), so the
+      drivetrain stays active and `routeOutputs()` passes the neutral
+      through to `bb.motorIn[]`. `buildDrivetrainStop()` itself is
+      unchanged — `DEV STOP`/`DEV DT STOP`/the loop's watchdog-fire path
+      still use its `standby=true` shape and are unaffected. Verified live
+      in sim: `S 200 200` → pwm/vel ≈ (62, 250 mm/s) both wheels; `STOP` →
+      pwm instantly (0.0, 0.0), vel decays 250 → ~0.29 mm/s over the next
+      480 ms (never re-driven); a subsequent `S 200 200` re-spins both
+      wheels (pwm/vel ≈ (61, 245) again) — the drivetrain was not wedged
+      inactive.
 - [x] `just build-sim` compiles cleanly (compile-level proof the rewrite is
       wired correctly; the full `tests/sim/` suite is NOT expected green
       after this ticket — see architecture-update.md's Impact section and

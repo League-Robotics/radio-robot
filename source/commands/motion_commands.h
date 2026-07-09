@@ -12,8 +12,12 @@
 // S/STOP (093-001): direct wheel-drive translators, no Planner involvement.
 // `handleS` builds a msg::WheelTargets from the parsed l/r ints and posts a
 // msg::DrivetrainCommand{WHEELS} to Rt::Blackboard::driveIn; `handleStop`
-// posts buildDrivetrainStop() (dev_commands.h) to the same mailbox. Neither
-// touches bb.motionIn, msg::PlannerCommand, or Subsystems::Planner.
+// builds a msg::DrivetrainCommand{NEUTRAL} inline (deliberately WITHOUT the
+// standby side-channel -- see handleStop's own doc comment in
+// motion_commands.cpp for why dev_commands.h's buildDrivetrainStop(), which
+// sets standby=true, silently dropped the neutral instead of stopping the
+// wheels) to the same mailbox. Neither touches bb.motionIn, msg::
+// PlannerCommand, or Subsystems::Planner.
 //
 // T/D/R/TURN/RT/G (unaffected by 093-001, parked/unregistered): still a thin
 // wire-parsing layer over Subsystems::Planner (source/subsystems/planner.h)

@@ -18,7 +18,6 @@
 
 #include "commands/arg_parse.h"
 #include "commands/command_processor.h"
-#include "commands/dev_commands.h"
 #include "kinematics/body_kinematics.h"
 #include "messages/drivetrain.h"
 
@@ -708,17 +707,32 @@ void handleG(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
 }
 
 // ---------------------------------------------------------------------------
-// handleStop -- 093-001: STOP posts buildDrivetrainStop() (dev_commands.h's
-// canonical {NEUTRAL, standby=true} command) straight to bb.driveIn --
-// Subsystems::Drivetrain::apply()'s NEUTRAL case neutralizes and drops
-// authority synchronously; no bb.motionIn/Planner involvement remains. No
-// EVT. Reply stays `OK stop`.
+// handleStop -- 093-001 (fixed): STOP posts a NEUTRAL msg::DrivetrainCommand
+// straight to bb.driveIn, built inline WITHOUT the standby side-channel --
+// deliberately NOT dev_commands.h's buildDrivetrainStop() helper, which sets
+// {NEUTRAL, standby=true}. That shape was found to be a correctness bug: in
+// Rt::MainLoop::routeOutputs(), the computed NEUTRAL wheel command is only
+// posted to bb.motorIn[] when drivetrain_.active() is true, and
+// Subsystems::Drivetrain::apply() processes standby=true AFTER the NEUTRAL
+// arm, immediately flipping active_ back to false in the same apply() call --
+// so the neutral command was silently dropped and the wheels kept spinning
+// at their last commanded speed. Leaving standby unset keeps the drivetrain
+// active, so routeOutputs() passes the neutral through to bb.motorIn[] and
+// Hal::Hardware::tick() actually neutralizes both motors. In this four-verb
+// loop there is no authority-steal producer for the standby gate to protect
+// against (DEV M et al. are unregistered), and a subsequent `S` re-activates
+// via setWheelTargets() regardless, so an active-neutral STOP is correct and
+// simplest. buildDrivetrainStop() itself is left unchanged -- other/parked
+// callers (DEV STOP, DEV DT STOP, the loop's watchdog-fire path) still rely
+// on its standby=true shape. No EVT. Reply stays `OK stop`.
 // ---------------------------------------------------------------------------
 void handleStop(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, void* replyCtx,
                 void* handlerCtx) {
   Rt::Blackboard& b = bb(handlerCtx);
 
-  b.driveIn.post(buildDrivetrainStop(msg::Neutral::BRAKE));
+  msg::DrivetrainCommand cmd;
+  cmd.setNeutral(msg::Neutral::BRAKE);
+  b.driveIn.post(cmd);
 
   char rbuf[32];
   CommandProcessor::replyOK(rbuf, sizeof(rbuf), "stop", nullptr, corrId, replyFn, replyCtx);
