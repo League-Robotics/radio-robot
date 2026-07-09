@@ -1,7 +1,7 @@
 ---
 id: "094"
 title: "Drivetrain becomes the motion planner — segment executor + MOVE command"
-status: planning-docs
+status: stakeholder-review
 branch: sprint/094-drivetrain-becomes-the-motion-planner-segment-executor-move-command
 use-cases: ["SUC-001", "SUC-002", "SUC-003", "SUC-004", "SUC-005"]
 issues:
