@@ -2,16 +2,30 @@
 
 // ---------------------------------------------------------------------------
 // motion_commands.h -- the S/T/D/R/TURN/RT/G/STOP wire family (084-002..005,
-// rewritten pointerless 087-006): top-level production protocol-v2 verbs.
+// rewritten pointerless 087-006). 093-001: `motionCommands()` now registers
+// only S/STOP at the wire (see motion_commands.cpp's registration comment);
+// T/D/R/TURN/RT/G's parser/handler functions below are left source-unchanged
+// but unregistered -- same "removed code is left un-wired, not deleted"
+// treatment as the other command families (clasi/sprints/093-.../
+// architecture-update.md Step 5/Migration Concerns).
 //
-// Thin wire-parsing layer over Subsystems::Planner (source/subsystems/
-// planner.h): every handler here parses its verb's wire shape, builds a
+// S/STOP (093-001): direct wheel-drive translators, no Planner involvement.
+// `handleS` builds a msg::WheelTargets from the parsed l/r ints and posts a
+// msg::DrivetrainCommand{WHEELS} to Rt::Blackboard::driveIn; `handleStop`
+// posts buildDrivetrainStop() (dev_commands.h) to the same mailbox. Neither
+// touches bb.motionIn, msg::PlannerCommand, or Subsystems::Planner.
+//
+// T/D/R/TURN/RT/G (unaffected by 093-001, parked/unregistered): still a thin
+// wire-parsing layer over Subsystems::Planner (source/subsystems/planner.h)
+// -- each handler parses its verb's wire shape, builds a
 // msg::PlannerCommand, and POSTS it (wrapped in a Rt::MotionCommand, source/
 // runtime/commands.h) to Rt::Blackboard::motionIn -- never calling
 // Subsystems::Planner::apply()/tick() itself, never holding a
-// Subsystems::PoseEstimator*/Subsystems::Planner* (SUC-006). The loop's
-// motion-executor step (ticket 007) drains bb.motionIn into
-// Planner::apply().
+// Subsystems::PoseEstimator*/Subsystems::Planner* (SUC-006). Since
+// `buildTable()` no longer calls `motionCommands()`'s wholesale eight-verb
+// output for these six, they are unreachable at the wire; the loop's own
+// motion-executor drain of bb.motionIn is untouched by this ticket (that is
+// ticket 002's concern).
 //
 // Rt::MotionCommand's `verb` field replaces the pre-087
 // MotionLoopState::activeVelocityVerb field's SEMANTICS exactly (empty for

@@ -18,7 +18,9 @@
 
 #include "commands/arg_parse.h"
 #include "commands/command_processor.h"
+#include "commands/dev_commands.h"
 #include "kinematics/body_kinematics.h"
+#include "messages/drivetrain.h"
 
 namespace {
 
@@ -176,7 +178,12 @@ void replyStopBadarg(const char* corrId, ReplyFn replyFn, void* replyCtx) {
 }
 
 // ---------------------------------------------------------------------------
-// parseS -- S <l> <r> [stop=...] [sensor=...]
+// parseS -- S <l> <r>. No stop=/sensor= support: 093-001 removed stop-
+// condition evaluation from handleS's path entirely (the Planner that used
+// to evaluate stop clauses is no longer wired to this verb), so a stop=/
+// sensor= kv token is rejected outright as `badarg` rather than silently
+// accepted and ignored -- an ignored wire argument the caller believes will
+// be honored is confusing (093-001 ticket decision).
 // ---------------------------------------------------------------------------
 ParseResult parseS(const char* const* tokens, int ntokens, const KVPair* kvs, int nkv) {
   ParseResult res;
@@ -191,12 +198,16 @@ ParseResult parseS(const char* const* tokens, int ntokens, const KVPair* kvs, in
   if (r < -1000 || r > 1000) {
     res.ok = false; res.err.code = "range"; res.err.detail = "r"; return res;
   }
+  if (kvFind(kvs, nkv, "stop") != nullptr) {
+    res.ok = false; res.err.code = "badarg"; res.err.detail = "stop"; return res;
+  }
+  if (kvFind(kvs, nkv, "sensor") != nullptr) {
+    res.ok = false; res.err.code = "badarg"; res.err.detail = "sensor"; return res;
+  }
   res.ok = true;
   res.args.count = 2;
   argInt(res.args.args[0], l);
   argInt(res.args.args[1], r);
-  int idx = 2;
-  packStopKVs(kvs, nkv, res.args, idx);
   res.args.suppliedCount = res.args.count;
   return res;
 }
@@ -342,11 +353,13 @@ ParseResult parseRT(const char* const* tokens, int ntokens, const KVPair* kvs, i
 }
 
 // ---------------------------------------------------------------------------
-// handleS -- streams a body twist (converted from wheel speeds l/r via
-// BodyKinematics::forward(), reading bb.drivetrainConfig.trackwidth the same
-// way telemetry_commands.cpp's twist= field already does) into a STREAM
-// goal, posted to bb.motionIn with feedStreamWatchdog=true -- the loop feeds
-// its own StreamingDriveWatchdog when it drains this (see motion_commands.h).
+// handleS -- 093-001: direct wheel drive, no kinematics/ramp/stop-condition
+// closure. Builds a msg::WheelTargets straight from the parsed l/r ints and
+// posts a msg::DrivetrainCommand{WHEELS} to bb.driveIn, mirroring DEV DT
+// WHEELS's own construction idiom exactly (dev_commands.cpp's
+// DtMode::WHEELS case) -- Subsystems::Drivetrain::apply() maps WHEELS to
+// setWheelTargets(left, right) directly (drivetrain.cpp), bypassing the
+// (now-unwired) Planner entirely. Reply stays `OK drive l=.. r=..`.
 // ---------------------------------------------------------------------------
 void handleS(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
             void* handlerCtx) {
@@ -354,34 +367,13 @@ void handleS(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
   int l = args.args[0].ival;
   int r = args.args[1].ival;
 
-  msg::StopCondition stops[kMaxStopConds];
-  uint8_t stopsCount = 0;
-  if (!collectStopClauses(args, 2, stops, stopsCount)) {
-    replyStopBadarg(corrId, replyFn, replyCtx);
-    return;
-  }
-
-  float v = 0.0f, omega = 0.0f;
-  BodyKinematics::forward(static_cast<float>(l), static_cast<float>(r), b.drivetrainConfig.trackwidth,
-                          v, omega);
-
-  msg::PlannerCommand cmd;
-  msg::StreamGoal goal;
-  goal.v_x = v;
-  goal.v_y = 0.0f;
-  goal.omega = omega;
-  cmd.setStream(goal);
-  for (uint8_t i = 0; i < stopsCount; ++i) cmd.stops_[i] = stops[i];
-  cmd.stops_count = stopsCount;
-  copyCorrId(cmd, corrId);
-
-  Rt::MotionCommand mc;
-  mc.command = cmd;
-  // verb left empty -- S stages its own DriveMode::STREAMING unconditionally;
-  // a stale R/TURN/RT disambiguation must not leak into THIS goal's own "EVT
-  // done" text (see runtime/commands.h's field doc comment).
-  mc.feedStreamWatchdog = true;   // fed HERE -- only S's own post feeds it
-  b.motionIn.post(mc);
+  msg::WheelTargets wt;
+  wt.w_[0].speed.has = true; wt.w_[0].speed.val = static_cast<float>(l);
+  wt.w_[1].speed.has = true; wt.w_[1].speed.val = static_cast<float>(r);
+  wt.w_count = 2;
+  msg::DrivetrainCommand cmd;
+  cmd.setWheels(wt);
+  b.driveIn.post(cmd);
 
   char body[32];
   snprintf(body, sizeof(body), "l=%d r=%d", l, r);
@@ -716,21 +708,17 @@ void handleG(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
 }
 
 // ---------------------------------------------------------------------------
-// handleStop -- STOP: immediate halt, no EVT. Posts goal_kind=STOP;
-// Subsystems::Planner::apply()'s STOP case resets the ramp and clears the
-// active goal synchronously, with no held Event queued.
+// handleStop -- 093-001: STOP posts buildDrivetrainStop() (dev_commands.h's
+// canonical {NEUTRAL, standby=true} command) straight to bb.driveIn --
+// Subsystems::Drivetrain::apply()'s NEUTRAL case neutralizes and drops
+// authority synchronously; no bb.motionIn/Planner involvement remains. No
+// EVT. Reply stays `OK stop`.
 // ---------------------------------------------------------------------------
 void handleStop(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, void* replyCtx,
                 void* handlerCtx) {
   Rt::Blackboard& b = bb(handlerCtx);
 
-  msg::PlannerCommand cmd;
-  cmd.setStop(true);
-  copyCorrId(cmd, corrId);
-
-  Rt::MotionCommand mc;
-  mc.command = cmd;   // verb left empty -- no active goal remains after STOP
-  b.motionIn.post(mc);
+  b.driveIn.post(buildDrivetrainStop(msg::Neutral::BRAKE));
 
   char rbuf[32];
   CommandProcessor::replyOK(rbuf, sizeof(rbuf), "stop", nullptr, corrId, replyFn, replyCtx);
@@ -738,16 +726,16 @@ void handleStop(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, vo
 
 }  // namespace
 
+// 093-001: pruned to the sprint's four live verbs' motion half (S/STOP) --
+// the "four live verbs" decision (issue simplify-the-main-loop-strip-it-to-
+// bare-wheel-driving.md) applies literally to this table, not just to
+// buildTable()'s family-level selection. T/D/R/TURN/RT/G's parse/handle
+// functions above are left source-unchanged and simply uncalled here --
+// same "unregistered not deleted" treatment as the other command families
+// (architecture-update.md Step 5/Migration Concerns).
 std::vector<CommandDescriptor> motionCommands(Rt::CommandRouter& router) {
   std::vector<CommandDescriptor> cmds;
   cmds.push_back(makeCmd("S", parseS, handleS, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
-  cmds.push_back(makeCmd("T", parseT, handleT, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
-  cmds.push_back(makeCmd("D", parseD, handleD, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
-  cmds.push_back(makeCmd("R", parseR, handleR, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
-  cmds.push_back(
-      makeCmd("TURN", parseTURN, handleTURN, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
-  cmds.push_back(makeCmd("RT", parseRT, handleRT, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
-  cmds.push_back(makeCmd("G", parseG, handleG, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
   cmds.push_back(makeCmd("STOP", nullptr, handleStop, &router, "badarg", ForceReply::NONE,
                          CMD_ACCESS_HARDWARE));
   return cmds;
