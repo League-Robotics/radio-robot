@@ -1,7 +1,7 @@
 ---
 id: "094-001"
 title: "Segment type + SegmentExecutor (the lift)"
-status: open
+status: done
 use-cases: ["SUC-001"]
 depends-on: []
 issue: drivetrain-becomes-the-motion-planner-segment-executing-subsystem.md
@@ -33,12 +33,12 @@ them.
 
 ## Acceptance Criteria
 
-- [ ] `source/motion/segment.h` defines `Motion::Segment` exactly per the
+- [x] `source/motion/segment.h` defines `Motion::Segment` exactly per the
       architecture doc's field list (`distance`, `direction`,
       `finalHeading` + `speedMax`/`accelMax`/`jerkMax`/`yawRateMax`/
       `yawAccelMax`/`yawJerkMax`, all `// [unit]`-tagged, no unit suffixes
       in any field name) — no `duration` field.
-- [ ] `source/motion/segment_executor.{h,cpp}` defines `Motion::
+- [x] `source/motion/segment_executor.{h,cpp}` defines `Motion::
       SegmentExecutor`: `configure(const msg::PlannerConfig&)`,
       `start(const Motion::Segment&, now, trackwidth)` (or equivalent —
       trackwidth is needed to convert PRE_PIVOT/TERMINAL_PIVOT's
@@ -49,28 +49,28 @@ them.
       the executor has no motor/blackboard/CODAL dependency), `active()`/
       `idle()`, and a way to query whether the whole segment (including its
       trailing graceful stop) has converged.
-- [ ] The 3-phase sequencer: PRE_PIVOT (skipped if `|direction| ≈ 0`) →
+- [x] The 3-phase sequencer: PRE_PIVOT (skipped if `|direction| ≈ 0`) →
       TRANSLATE (skipped if `|distance| ≈ 0`) → TERMINAL_PIVOT (skipped if
       `finalHeading ≈ direction`), each phase a fresh `MotionBaseline` +
       Ruckig solve on the linear or rotational channel per the
       architecture doc's phase table.
-- [ ] Degenerate cases verified: a pure in-place turn (`distance=0`) skips
+- [x] Degenerate cases verified: a pure in-place turn (`distance=0`) skips
       TRANSLATE; a plain straight (`direction=0, finalHeading=0`) skips
       both pivots.
-- [ ] The compile-split dead-time (`kOutputHops`/`kDeadTime`, sim `2.0`=40ms
+- [x] The compile-split dead-time (`kOutputHops`/`kDeadTime`, sim `2.0`=40ms
       / firmware `4.0`=80ms via `#ifdef HOST_BUILD`) is preserved verbatim
       — same values, same `#ifdef` split, ported from `planner.cpp:150-156`.
-- [ ] The divergence replan (`maybeReplanDistance`/`maybeReplanRotational`
+- [x] The divergence replan (`maybeReplanDistance`/`maybeReplanRotational`
       equivalents) is preserved with the same thresholds
       (`kDivergenceThreshold`/`kGrossDivergenceThreshold`/
       `kRotDivergenceThreshold`/`kRotGrossDivergenceThreshold`/
       `kMinReplanInterval`) ported from `planner.cpp:554-569`.
-- [ ] The presolved graceful decel-to-zero (`armDistanceStopDecel`/
+- [x] The presolved graceful decel-to-zero (`armDistanceStopDecel`/
       `armRotationalStopDecel`/`armVelocityStopDecel` equivalents,
       `planner.cpp:763-803`) is preserved, including the literal-`0.0f` snap
       on rotational convergence (`planner.cpp:964-966`) and its documented
       rationale (defeats the PID zero-deadband residual reverse-spin).
-- [ ] Host unit tests (new, alongside the existing `planner_harness.cpp`/
+- [x] Host unit tests (new, alongside the existing `planner_harness.cpp`/
       `jerk_trajectory_harness.cpp` precedent) cover: a straight segment (no
       terminal pivot), a translate-then-terminal-pivot segment, a pure
       in-place turn (`distance=0`), auto decel-to-zero once the segment's
@@ -79,8 +79,51 @@ them.
       the terminal decel trace (assert the sampled velocity never changes
       sign after the stop condition fires and before it settles to
       literal 0).
-- [ ] `just build-sim` succeeds; `uv run python -m pytest` stays green
+- [x] `just build-sim` succeeds; `uv run python -m pytest` stays green
       (no existing test is broken by this purely-additive ticket).
+
+## Completion Note
+
+Implemented as planned — copy-and-adapt from `planner.h`/`planner.cpp`, no
+modification to either.
+
+**Created**:
+- `source/motion/segment.h` — `Motion::Segment` POD (9 floats, all
+  `// [unit]`-tagged, no `duration` field).
+- `source/motion/segment_executor.h`/`.cpp` — `Motion::SegmentExecutor`:
+  `configure()`, `start(segment, now, trackwidth)`, `stop(now)` (forced
+  graceful decel abandoning any remaining phases), `tick(now, encLeft,
+  encRight) -> msg::BodyTwist3`, `active()`/`idle()`/`converged()`. Two
+  `Motion::JerkTrajectory` channels; per-phase `MotionBaseline` capture
+  (pose fields left dead/0, pose-free); `maybeReplanTranslate()`/
+  `maybeReplanPivot()` (same 5 thresholds/guards as Planner's divergence
+  replan); `kOutputHops`/`kDeadTime` ported verbatim including the
+  `#ifdef HOST_BUILD` split; `armTranslateStopDecel()`/`armPivotStopDecel()`
+  (presolved decel-to-zero) with the literal-`0.0f` snap on rotational
+  convergence, same rationale comment ported. New 3-phase sequencer
+  (PRE_PIVOT → TRANSLATE → TERMINAL_PIVOT) with degenerate-phase skipping;
+  arc/angle conversion via `arcScale_ = trackwidth/2` (constant by
+  construction, since this executor derives its own arc from its own
+  angle target — unlike Planner's RT, which took an independently supplied
+  arc).
+- `tests/sim/unit/segment_executor_harness.cpp` + `test_segment_executor.py`
+  — 6 scenarios (straight/no-pivot, translate-then-terminal-pivot, pure
+  in-place turn, auto decel-to-zero stays idle, forced stop mid-TRANSLATE
+  abandons the pending TERMINAL_PIVOT, and the named no-reverse-creep
+  regression with an explicit literal-0.0f assertion), driven by a
+  self-consistent zero-lag/zero-slip encoder-integrator plant (not a
+  hand-derived closed form) to close the loop against the executor's own
+  commanded twist.
+
+**Verification**: `just build-sim` succeeds (the new files are picked up
+automatically by `source/`'s recursive CODAL glob, no build-file edit
+needed). `uv run python -m pytest tests/sim` — 38 passed (0 failed),
+including the new harness. Full `uv run python -m pytest` — 306 passed, 10
+failed + 90 errors, all pre-existing and confined to `tests/testgui/`
+(`PySide6` not installed in this worktree's venv — a `uv sync --group gui`
+gap, unrelated to this ticket); no `tests/sim` regression.
+
+No AC could not be satisfied.
 
 ## Implementation Plan
 
