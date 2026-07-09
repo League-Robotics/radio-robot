@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Sim-test parking + focused S/STOP/PING/HELLO suite
-status: exception
+status: done
 use-cases:
 - SUC-001
 - SUC-002
@@ -110,33 +110,33 @@ widen call and its surrounding comment; there is no watchdog left to widen.
 
 ## Acceptance Criteria
 
-- [ ] Run the full `tests/sim/` suite post-002, and produce a triage: for
+- [x] Run the full `tests/sim/` suite post-002, and produce a triage: for
       each of the 49 `tests/sim/unit/*.py` files + `tests/sim/system/
       test_tour_geometry.py`, classify PARK or KEEP per the criterion
       above (verified by actually running each, not assumed from the file
       name).
-- [ ] Create `tests/sim/parked-093/` (a new leaf directory inside the
+- [x] Create `tests/sim/parked-093/` (a new leaf directory inside the
       `sim/` domain, alongside `unit/`/`system/`) and `git mv` every PARKed
       file into it, preserving its original relative structure (e.g.
       `tests/sim/unit/test_tlm_stream_snap.py` →
       `tests/sim/parked-093/unit/test_tlm_stream_snap.py`).
-- [ ] Add a short `tests/sim/parked-093/README.md` (mirroring
+- [x] Add a short `tests/sim/parked-093/README.md` (mirroring
       `tests_old/`'s own documentation precedent): names the sprint (093),
       the reason (four-verb gut removed `Planner`/`PoseEstimator`/
       `Configurator`/telemetry/config/pose/otos from the live wire
       surface), and what would need to be re-wired (which classes need a
       live command family again) before a given parked file could return.
-- [ ] `pyproject.toml`'s `[tool.pytest.ini_options]` `norecursedirs` gains
+- [x] `pyproject.toml`'s `[tool.pytest.ini_options]` `norecursedirs` gains
       `"tests/sim/parked-093"` (or the bare leaf name if `norecursedirs`
       matches by directory name rather than path — verify against the
       existing `tests_old`/`source_old` entries' own matching behavior)
       so `pytest` never collects it.
-- [ ] `tests/sim/conftest.py`'s `sim` fixture no longer issues
+- [x] `tests/sim/conftest.py`'s `sim` fixture no longer issues
       `DEV WD ...`; its docstring/comments referencing the watchdog-widen
       rationale are updated to say why it's gone (not silently deleted
       with no trace, so a future reader isn't confused about why the
       fixture looks unusually bare compared to its own doc comment).
-- [ ] A focused suite exists and is green, covering (at minimum, may live
+- [x] A focused suite exists and is green, covering (at minimum, may live
       in existing KEPT files if they already fit, or a new
       `tests/sim/unit/test_bare_loop_commands.py`):
       - `S <l> <r>` drives both wheels to the commanded targets in the
@@ -150,8 +150,13 @@ widen call and its surrounding comment; there is no watchdog left to widen.
       - A wire verb outside the four (e.g. `GET drivetrainConfig` or
         `DEV WD 100`) → `ERR unknown` (proves the table reduction from
         ticket 001, not just that the four verbs work).
-- [ ] `uv run python -m pytest` (full scoped run, matching
-      `pyproject.toml`'s `testpaths`) is 100% green.
+- [x] The sim close-gate — `uv run python -m pytest tests/sim tests/unit` — is
+      100% green (37/37 sim + 4/4 unit). **[DESCOPED by team-lead, see resolution
+      below.]** `tests/testgui/`'s 16 failures are accepted host-tooling fallout
+      of the deliberate wire-surface gut (architecture-update.md Step 5; proven
+      new vs the pre-093 worktree which passes 364/364) and are tracked in the
+      follow-up issue `realign-host-tooling-to-gutted-four-verb-wire-surface.md`
+      — out of this sprint's scope.
 
 ## Implementation Plan
 
@@ -176,3 +181,23 @@ ticket 002 bug to fix, not a test to park).
 **Documentation updates**: `tests/sim/parked-093/README.md` (new, required
 by acceptance criteria above). No changes to `docs/protocol-v2.md` (deferred
 per architecture-update.md Step 7 item 2).
+
+## Team-lead resolution (exception disposition)
+
+The programmer threw a `surface: internal` exception (recorded in the
+frontmatter above): the ticket's literal final acceptance bullet said "full
+`uv run python -m pytest` green", but `pyproject.toml`'s `testpaths` also
+collects `tests/testgui/`, which the deliberate wire-surface gut breaks (16
+failures, proven new vs the pre-093 worktree). The programmer correctly
+refused to either silently expand into host-side scope or report a dishonest
+green.
+
+**Disposition (team-lead):** the testgui failures are **accepted host-tooling
+fallout** — architecture-update.md Step 5 explicitly scopes host-side code out
+of this sprint, and the stakeholder's recorded approval accepts it (bench
+verification uses a bare script, not TestGUI/robot_radio). The real sim
+close-gate — `tests/sim` (37/37) + `tests/unit` (4/4) — is honestly green with
+a real focused suite. The final acceptance bullet is **descoped** to that gate;
+the testgui realignment is tracked in the new follow-up issue
+`clasi/issues/realign-host-tooling-to-gutted-four-verb-wire-surface.md`. Ticket
+resolved and marked done.
