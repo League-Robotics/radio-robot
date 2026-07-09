@@ -1,5 +1,5 @@
 // drivetrain.cpp -- Subsystems::Drivetrain implementation. See drivetrain.h
-// for the class-level design notes.
+// for the class-level design notes (the 094-004 motion-planner rewrite).
 #include "subsystems/drivetrain.h"
 
 #include <cassert>
@@ -7,6 +7,8 @@
 #include "kinematics/body_kinematics.h"
 
 namespace Subsystems {
+
+Drivetrain::Drivetrain(Hardware& hardware) : hardware_(hardware) {}
 
 void Drivetrain::setTwist(float v_x, float v_y, float omega) {
     mode_ = Mode::TWIST;
@@ -33,6 +35,10 @@ void Drivetrain::configure(const msg::DrivetrainConfig& config) {
     config_ = config;
 }
 
+void Drivetrain::configureMotion(const msg::PlannerConfig& config) {
+    executor_.configure(config);
+}
+
 void Drivetrain::apply(const msg::DrivetrainCommand& command) {
     switch (command.control_kind) {
         case msg::DrivetrainCommand::ControlKind::TWIST: {
@@ -43,10 +49,9 @@ void Drivetrain::apply(const msg::DrivetrainCommand& command) {
         case msg::DrivetrainCommand::ControlKind::WHEELS: {
             const msg::WheelTargets& wheels = command.control.wheels;
             // This Drivetrain has exactly two wheels (capabilities().wheel_count
-            // == 2): index 0 is left, index 1 is right, matching
-            // Hal::DrivetrainToHardwareCommand's wheel[0]/wheel[1] fields. A
-            // WheelTargets with fewer than 2 entries leaves the missing side
-            // at 0 rather than reading past w_count.
+            // == 2): index 0 is left, index 1 is right. A WheelTargets with
+            // fewer than 2 entries leaves the missing side at 0 rather than
+            // reading past w_count.
             float left = 0.0f;
             float right = 0.0f;
             if (wheels.w_count_val() > 0 && wheels.w()[0].speed.has) {
@@ -64,10 +69,9 @@ void Drivetrain::apply(const msg::DrivetrainCommand& command) {
         case msg::DrivetrainCommand::ControlKind::POSE:
             // The pose (imperative re-anchor) arm is ignored this sprint:
             // this differential dev-bench Drivetrain has no odometry/EKF to
-            // re-anchor (those return in later tickets -- see
-            // architecture-update.md "Later tickets"). Explicitly a
-            // documented no-op, not a silent drop: apply() takes no action
-            // for this arm rather than touching any setter above.
+            // re-anchor. Explicitly a documented no-op, not a silent drop:
+            // apply() takes no action for this arm rather than touching any
+            // setter above.
             break;
         case msg::DrivetrainCommand::ControlKind::NONE:
         default:
@@ -87,16 +91,52 @@ void Drivetrain::apply(const msg::DrivetrainCommand& command) {
     }
 }
 
+void Drivetrain::clearRing() {
+    while (!ring_.empty()) {
+        ring_.take();
+    }
+}
+
+bool Drivetrain::dispatchEscapeHatch(const msg::DrivetrainCommand& command, uint32_t now) {
+    using Kind = msg::DrivetrainCommand::ControlKind;
+    bool preempted = (command.control_kind == Kind::TWIST ||
+                      command.control_kind == Kind::WHEELS ||
+                      command.control_kind == Kind::NEUTRAL);
+
+    if (preempted) {
+        clearRing();
+
+        if (command.control_kind == Kind::NEUTRAL && segmentMode_ && executor_.active()) {
+            // A segment is actively executing (or already mid-graceful-stop)
+            // -- NEUTRAL arms the executor's OWN presolved graceful
+            // decel-to-zero instead of an instant zero-velocity command
+            // (architecture-update.md Section 6's "STOP triggers the
+            // graceful decel-to-zero"). segmentMode_ stays true: tick()
+            // keeps riding executor_'s decel down to a literal 0.0f twist
+            // over subsequent ticks, then idles.
+            executor_.stop(now);
+        } else {
+            // Nothing in-flight to gracefully decelerate (DIRECT mode was
+            // already active, or the executor was already idle) -- fall
+            // through to the instant DIRECT-mode zero/target this command
+            // sets below (apply()'s setNeutral()/setWheelTargets()/
+            // setTwist()).
+            segmentMode_ = false;
+        }
+    }
+
+    apply(command);
+    return preempted;
+}
+
 void Drivetrain::commandedWheelTargets(float* targetLeft, float* targetRight) const {
     switch (mode_) {
         case Mode::TWIST:
             // v_y_ is never read here: this Drivetrain is differential-only
-            // (capabilities().holonomic == false this sprint). A future
-            // mecanum ticket wires v_y in once holonomic can be true
-            // (architecture-update.md Open Question 6) -- this is that
-            // wiring's intended site. This differential path calls the scalar
-            // (v_x, omega) overload directly; BodyKinematics's msg::BodyTwist3
-            // array overload is for the holonomic/mecanum path.
+            // (capabilities().holonomic == false this sprint). This
+            // differential path calls the scalar (v_x, omega) overload
+            // directly; BodyKinematics's msg::BodyTwist3 array overload is
+            // for the holonomic/mecanum path.
             BodyKinematics::inverse(v_x_, omega_, config_.trackwidth,
                                      *targetLeft, *targetRight);
             break;
@@ -153,44 +193,69 @@ void Drivetrain::governRatio(float* targetLeft, float* targetRight,
 }
 
 void Drivetrain::tick(uint32_t now,
-                       const msg::MotorState* motors,
-                       uint32_t motorCount,
+                       Rt::WorkQueue<Motion::Segment, 8>& segmentIn,
                        Rt::WorkQueue<msg::DrivetrainCommand, 8>& driveIn) {
-    // now: no clock read happens here -- this ticket's governor is a purely
-    // per-tick algebraic correction with no timing-dependent behavior yet.
-    // Kept as a parameter per the locked faceplate shape for a future ticket
-    // that needs it (e.g. a governor ease-in rate).
-    (void)now;
-
-    // 087-003: drain driveIn (pop FIFO, one command per tick) BEFORE the setpoint-
-    // governance path below -- replaces however this Drivetrain previously
-    // received its setpoint (a direct external apply() call). Routes
-    // through the SAME apply() this class has always used, so mode_/the
-    // TWIST/WHEELS/NEUTRAL arm state and the standby side-channel all
-    // dispatch exactly as before -- only the delivery mechanism changed. An
-    // empty driveIn is a no-op: whatever setpoint is already staged is
-    // governed unchanged below (see tick()'s doc comment, drivetrain.h).
+    // 1. driveIn drained FIRST -- one command per tick (FIFO pop, matching
+    // this class's pre-094 drain cadence), applied via the escape-hatch
+    // dispatcher (see the class comment's precedence rules).
+    bool preempted = false;
     if (!driveIn.empty()) {
-        apply(driveIn.take());
+        preempted = dispatchEscapeHatch(driveIn.take(), now);
     }
 
-    // 090-001: resolve this Drivetrain's OWN bound wheel pair against the
-    // full per-port observation array -- the `- 1` base conversion (Nezha
-    // ports are 1-based; motors[] is 0-based) exists exactly once, here,
-    // with the object that owns the port binding (ports()). The range
-    // assert guards against a misconfigured (out-of-range) bound port
-    // silently walking off the array -- see drivetrain.h's tick() doc
-    // comment and architecture-update.md Decision 1.
+    // 2. Otherwise, drain segmentIn IN FULL into ring_ this tick -- queuing
+    // at least one fresh segment (re)claims SEGMENT mode (see the class
+    // comment).
+    if (!preempted) {
+        bool queuedAny = false;
+        while (!segmentIn.empty()) {
+            if (ring_.post(segmentIn.take())) {
+                queuedAny = true;
+            }
+            // A post() failure (ring_ already at its 8-slot cap) silently
+            // drops the excess -- should not occur in ordinary operation,
+            // since segmentIn itself caps at the same depth and is drained
+            // every tick.
+        }
+        if (queuedAny) {
+            segmentMode_ = true;
+        }
+    }
+
+    // 090-001 (moved, 094-004): resolve this Drivetrain's OWN bound wheel
+    // pair -- Hardware::state()/motor() already take a 1-based port and do
+    // their own out-of-range clamping (see drivetrain.h's tick() doc
+    // comment), so there is no `- 1` conversion left to perform; the range
+    // assert below is kept as a defensive guard against a misconfigured
+    // bound port.
     DrivetrainPorts bound = ports();
-    assert(bound.left >= 1 && bound.left <= motorCount);
-    assert(bound.right >= 1 && bound.right <= motorCount);
-    const msg::MotorState& leftObs = motors[bound.left - 1];
-    const msg::MotorState& rightObs = motors[bound.right - 1];
+    assert(bound.left >= 1 && bound.left <= Hardware::kPortCount);
+    assert(bound.right >= 1 && bound.right <= Hardware::kPortCount);
+    const msg::MotorState leftObs = hardware_.state(bound.left);
+    const msg::MotorState rightObs = hardware_.state(bound.right);
 
     msg::MotorCommand leftCmd;
     msg::MotorCommand rightCmd;
 
-    if (mode_ == Mode::NEUTRAL) {
+    if (segmentMode_) {
+        // Pop-on-completion, start-next: once the executor is idle (never
+        // started, or the previous segment -- including its own trailing
+        // graceful stop -- fully converged) and the ring is non-empty, hand
+        // it the next queued segment.
+        if (!executor_.active() && !ring_.empty()) {
+            Motion::Segment seg = ring_.take();
+            executor_.start(seg, now, config_.trackwidth);
+        }
+
+        msg::BodyTwist3 twist = executor_.tick(now, leftObs, rightObs);
+        float targetLeft = 0.0f;
+        float targetRight = 0.0f;
+        BodyKinematics::inverse(twist.v_x, twist.omega, config_.trackwidth,
+                                 targetLeft, targetRight);
+        governRatio(&targetLeft, &targetRight, leftObs, rightObs);
+        leftCmd.setVelocity(targetLeft);
+        rightCmd.setVelocity(targetRight);
+    } else if (mode_ == Mode::NEUTRAL) {
         leftCmd.setNeutral(neutralMode_);
         rightCmd.setNeutral(neutralMode_);
     } else {
@@ -203,51 +268,39 @@ void Drivetrain::tick(uint32_t now,
         rightCmd.setVelocity(targetRight);
     }
 
-    // Held, not returned (architecture-update.md "The command-edge types"):
-    // addressed via ports() so the wiring layer (ticket 079-005) can dispatch
-    // straight through Subsystems::NezhaHardware::apply(const Hal::DrivetrainToHardwareCommand&)
-    // without ever naming a port itself. Set unconditionally whenever tick()
-    // runs -- see the class comment and hasCommand()'s doc comment.
-    heldCommand_.wheel[0].port = config_.left_port;
-    heldCommand_.wheel[0].command = leftCmd;
-    heldCommand_.wheel[1].port = config_.right_port;
-    heldCommand_.wheel[1].command = rightCmd;
-    hasCommand_ = true;
-}
-
-bool Drivetrain::hasCommand() const { return hasCommand_; }
-
-Hal::DrivetrainToHardwareCommand Drivetrain::takeCommand() {
-    hasCommand_ = false;
-    return heldCommand_;
+    // Staged, not held -- flushed at hardware_'s own tick() cadence (see
+    // drivetrain.h's class comment and architecture-update.md Section 5).
+    // Nothing left to route.
+    hardware_.motor(bound.left).apply(leftCmd);
+    hardware_.motor(bound.right).apply(rightCmd);
 }
 
 msg::DrivetrainState Drivetrain::state() const {
     msg::DrivetrainState s;
 
-    // Only the two wheel-velocity targets (plus, as of 087-003, the
-    // authority field below) are populated -- pose/EKF/OTOS fields
-    // (fused/encoder/optical, enc[], enc_stamp, otos, wheel_wedged[],
-    // connected, otos_status, otos_fusion_blocked) stay at their zero
-    // defaults: this differential dev-bench Drivetrain has no odometry/EKF
-    // this sprint (those return in later tickets -- see
-    // architecture-update.md "Later tickets"), and Drivetrain never retains
-    // a Motor reference to ask about connectivity/wedge directly (see class
-    // comment). vel_[]/vel_count report the CURRENT commanded (pre-governor)
-    // targets, since the governor's live-observation-dependent output only
-    // exists transiently inside tick().
-    float left = 0.0f;
-    float right = 0.0f;
-    if (mode_ != Mode::NEUTRAL) {
-        commandedWheelTargets(&left, &right);
-    }
-    s.vel_[0] = left;
-    s.vel_[1] = right;
-    s.vel_count = 2;
+    // enc_[]/vel_[] are sourced from hardware_.state(port) -- MEASURED, not
+    // commanded (094-004: replaces the pre-094 "reports the pre-governor
+    // commanded target" behavior entirely). Pose/EKF fields (fused/encoder/
+    // optical, otos, wheel_wedged[], connected, otos_status,
+    // otos_fusion_blocked) stay at their zero defaults -- this differential
+    // dev-bench Drivetrain has no odometry/EKF this sprint.
+    DrivetrainPorts bound = ports();
+    if (bound.left >= 1 && bound.left <= Hardware::kPortCount &&
+        bound.right >= 1 && bound.right <= Hardware::kPortCount) {
+        msg::MotorState leftObs = hardware_.state(bound.left);
+        msg::MotorState rightObs = hardware_.state(bound.right);
 
-    // 087-003: authority mode, readable from this state cell without a
-    // Drivetrain* -- see tick()'s doc comment (drivetrain.h) and
-    // architecture-update-r1.md Decision 1.
+        s.enc_[0] = leftObs.position.has ? leftObs.position.val : 0.0f;
+        s.enc_[1] = rightObs.position.has ? rightObs.position.val : 0.0f;
+        s.enc_count = 2;
+
+        s.vel_[0] = leftObs.velocity.has ? leftObs.velocity.val : 0.0f;
+        s.vel_[1] = rightObs.velocity.has ? rightObs.velocity.val : 0.0f;
+        s.vel_count = 2;
+    }
+
+    // Authority mode, readable from this state cell without a Drivetrain*
+    // (unchanged this ticket).
     s.active = active_;
 
     return s;

@@ -7,13 +7,20 @@ exception to "no subsystem pointers", architecture-update-r1.md Decision 4).
 Ticket 094-002 update: Subsystems::Planner was relocated out of source/
 entirely (see source_parked/094/subsystems/planner.h); Rt::Configurator no
 longer takes a Planner& (source/runtime/configurator.h's own header note),
-so this compile list no longer links planner.cpp/velocity_ramp.cpp/
-stop_condition.cpp/jerk_trajectory.cpp or the vendored Ruckig sources --
-none of Configurator's remaining three subsystems (Drivetrain, PoseEstimator,
-Hardware) depend on them. Standard/flags dropped back to this project's
-plain host-harness default (``c++20``, no Ruckig-driven gnu++20/
--fno-exceptions/-fno-rtti need) to match ``test_drivetrain.py``/
-``test_pose_estimator.py``'s own precedent.
+so at that point this compile list no longer needed planner.cpp/
+velocity_ramp.cpp/stop_condition.cpp/jerk_trajectory.cpp or the vendored
+Ruckig sources.
+
+Ticket 094-004 update: the Ruckig-driven dependency is BACK, via a different
+path -- Subsystems::Drivetrain (still one of Configurator's three live
+subsystem references) now owns a Motion::SegmentExecutor
+(subsystems/drivetrain.h -> motion/segment_executor.h ->
+motion/jerk_trajectory.h -> "ruckig/ruckig.hpp"), so this harness once again
+needs stop_condition.cpp/jerk_trajectory.cpp/segment_executor.cpp + the
+vendored Ruckig sources + the gnu++20/-fno-exceptions/-fno-rtti/
+-DHOST_BUILD=1 constraints test_segment_executor.py's own precedent
+established -- Configurator itself did not grow a new dependency; Drivetrain
+did, and Configurator holds a Drivetrain&.
 
 Compiles ``configurator_harness.cpp`` together with the REAL
 ``source/runtime/configurator.cpp`` and every real subsystem it exercises
@@ -51,6 +58,9 @@ _PHYSICS_WORLD_SRC = _SOURCE_DIR / "hal" / "sim" / "physics_world.cpp"
 _SIM_MOTOR_SRC = _SOURCE_DIR / "hal" / "sim" / "sim_motor.cpp"
 _SIM_ODOMETER_SRC = _SOURCE_DIR / "hal" / "sim" / "sim_odometer.cpp"
 _VELOCITY_PID_SRC = _SOURCE_DIR / "hal" / "velocity_pid.cpp"
+_SEGMENT_EXECUTOR_SRC = _SOURCE_DIR / "motion" / "segment_executor.cpp"
+_JERK_TRAJECTORY_SRC = _SOURCE_DIR / "motion" / "jerk_trajectory.cpp"
+_STOP_CONDITION_SRC = _SOURCE_DIR / "motion" / "stop_condition.cpp"
 
 _SOURCES = [
     _HARNESS_SRC,
@@ -64,12 +74,19 @@ _SOURCES = [
     _SIM_MOTOR_SRC,
     _SIM_ODOMETER_SRC,
     _VELOCITY_PID_SRC,
+    _SEGMENT_EXECUTOR_SRC,
+    _JERK_TRAJECTORY_SRC,
+    _STOP_CONDITION_SRC,
 ]
 
-# 094-002: Planner (and with it, the Ruckig-driven gnu++20/-fno-exceptions/
-# -fno-rtti need) is gone from this compile list -- plain c++20 matches
-# test_drivetrain.py's/test_pose_estimator.py's own precedent.
-_CXX_STANDARD = "c++20"
+_RUCKIG_INCLUDE = _REPO_ROOT / "libraries" / "ruckig" / "include"
+_RUCKIG_SRC_DIR = _REPO_ROOT / "libraries" / "ruckig" / "src"
+
+# 094-004: gnu++20 (GNU extensions -- newlib exposes M_PI, which Ruckig's
+# roots.hpp needs) plus -fno-exceptions/-fno-rtti, matching
+# test_segment_executor.py's own precedent -- this harness transitively
+# compiles Ruckig again via Drivetrain -> Motion::SegmentExecutor.
+_CXX_STANDARD = "gnu++20"
 
 
 def _find_cxx_compiler() -> str:
@@ -90,6 +107,9 @@ def test_configurator_harness_compiles_and_passes(tmp_path):
         assert src.is_file(), f"required source missing: {src}"
     assert _SOURCE_DIR.is_dir(), f"source/ tree missing: {_SOURCE_DIR}"
     assert _TINYEKF_DIR.is_dir(), f"libraries/tinyekf missing: {_TINYEKF_DIR}"
+    assert _RUCKIG_INCLUDE.is_dir(), f"ruckig include missing: {_RUCKIG_INCLUDE}"
+    ruckig_srcs = sorted(_RUCKIG_SRC_DIR.glob("*.cpp"))
+    assert ruckig_srcs, f"no vendored ruckig sources under {_RUCKIG_SRC_DIR}"
 
     cxx = _find_cxx_compiler()
     binary = tmp_path / "configurator_harness"
@@ -98,17 +118,22 @@ def test_configurator_harness_compiles_and_passes(tmp_path):
         [
             cxx,
             f"-std={_CXX_STANDARD}",
+            "-fno-exceptions",
+            "-fno-rtti",
             "-Wall",
             "-Wextra",
-            "-DHOST_BUILD",
+            "-DHOST_BUILD=1",
             "-I",
             str(_SOURCE_DIR),
             "-I",
             str(_TINYEKF_DIR),
+            "-I",
+            str(_RUCKIG_INCLUDE),
             "-o",
             str(binary),
         ]
-        + [str(src) for src in _SOURCES],
+        + [str(src) for src in _SOURCES]
+        + [str(s) for s in ruckig_srcs],
         capture_output=True,
         text=True,
     )

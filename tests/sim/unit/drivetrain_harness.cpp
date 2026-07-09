@@ -1,48 +1,43 @@
 // drivetrain_harness.cpp — off-hardware acceptance harness for ticket
-// 079-003 (SUC-004/SUC-005/SUC-006): exercises Subsystems::Drivetrain's
-// held-output reshape (tick() void + hasCommand()/takeCommand()) and its new
-// port-binding/authority-arbitration surface (ports()/active()/standby(),
-// the DrivetrainCommand.standby side-channel) directly against plain
-// msg::* structs — no fakes needed, per the ticket's Testing plan
-// ("Drivetrain has no hardware dependency").
+// 094-004 (SUC-001/SUC-002/SUC-004): exercises the REWRITTEN
+// Subsystems::Drivetrain -- now holding a Hardware& and owning a
+// Motion::SegmentExecutor + an 8-slot segment ring -- against a REAL
+// Subsystems::SimHardware plant (the ticket's own "test double or a real
+// SimHardware instance" testing-plan note) for the ring/executor/
+// escape-hatch/graceful-stop scenarios, and against a REAL
+// Subsystems::NezhaHardware + the HOST_BUILD scripted I2CBus fake for the
+// sprint's mandatory staging-only verification.
 //
-// Mirrors motor_policy_harness.cpp's shape exactly (see that file's header
-// for the pattern): #includes only subsystems/drivetrain.h and messages/*.h
-// (both dependency-free — no MicroBit.h, no I2CBus), links against
-// subsystems/drivetrain.cpp and kinematics/body_kinematics.cpp (Drivetrain's
-// one real dependency, itself dependency-free), compiles with the plain
-// system C++ compiler — no CMake, no ARM toolchain. Hand-rolled assertions,
-// prints PASS/FAIL, exits nonzero on any failure. Run by
-// test_drivetrain.py, which compiles and runs this binary via subprocess.
-//
-// Updated for ticket 087-003 (SUC-001/SUC-002/SUC-006, clasi/sprints/
-// 087-two-plane-blackboard-synchronous-update-loop-configurator-and-
-// command-queue-transport-greenfield/): tick() gained a
-// Rt::Mailbox<msg::DrivetrainCommand>& driveIn parameter (source/runtime/
-// queue.h, itself dependency-free — no Blackboard instance needed here).
-// Scenarios 1-9 pass a bare, never-posted-to Mailbox to every existing
-// tick() call (apply() is still called directly, exactly as before --
-// these scenarios prove the empty-driveIn "otherwise" path leaves the
-// governed-output math byte-for-byte unchanged); scenarios 10-11 exercise
-// driveIn itself (a posted command popped and applied inside tick(), and
-// an empty driveIn with no prior apply() at all).
-
+// Mirrors segment_executor_harness.cpp's/nezha_flipflop_harness.cpp's own
+// shape: #includes the real headers (no mocks beyond the confined,
+// sanctioned HOST_BUILD I2CBus fake), links against the real .cpp sources
+// (drivetrain.cpp, sim_hardware.cpp, nezha_hardware.cpp, nezha_motor.cpp,
+// body_kinematics.cpp, motion/{segment_executor,jerk_trajectory,
+// stop_condition}.cpp, hal/sim/*.cpp, hal/velocity_pid.cpp,
+// com/i2c_bus_host.cpp, plus vendored Ruckig), compiles with the plain
+// system C++ compiler under -DHOST_BUILD=1 (segment_executor.cpp's
+// kDeadTime compile split resolves to the sim value). Hand-rolled
+// assertions, prints PASS/FAIL, exits nonzero on any failure.
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <string>
 
-#include "hal/capability/hal_command.h"
+#include "com/i2c_bus.h"
+#include "hal/nezha/nezha_motor.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
+#include "messages/planner.h"
+#include "motion/segment.h"
 #include "runtime/queue.h"
 #include "subsystems/drivetrain.h"
+#include "subsystems/nezha_hardware.h"
+#include "subsystems/sim_hardware.h"
 
 namespace {
 
-// --- Hand-rolled assertion plumbing (same tiny shape as
-// motor_policy_harness.cpp -- a handful of scenarios do not warrant a test
-// framework dependency for a dependency-free host harness). ---
+// --- Hand-rolled assertion plumbing (mirrors drivetrain_harness.cpp's
+// pre-094 shape / segment_executor_harness.cpp / nezha_flipflop_harness.cpp) ---
 
 int g_failureCount = 0;
 std::string g_scenarioName;
@@ -61,19 +56,6 @@ void checkTrue(bool condition, const std::string& what) {
   if (!condition) fail(what + " -- expected true, got false");
 }
 
-void checkFalse(bool condition, const std::string& what) {
-  if (condition) fail(what + " -- expected false, got true");
-}
-
-void checkFloatEq(float actual, float expected, const std::string& what) {
-  if (std::fabs(actual - expected) > 1e-4f) {
-    char buf[256];
-    std::snprintf(buf, sizeof(buf), "%s -- expected %g, got %g", what.c_str(),
-                  static_cast<double>(expected), static_cast<double>(actual));
-    fail(buf);
-  }
-}
-
 void checkUintEq(uint32_t actual, uint32_t expected, const std::string& what) {
   if (actual != expected) {
     char buf[256];
@@ -83,53 +65,53 @@ void checkUintEq(uint32_t actual, uint32_t expected, const std::string& what) {
   }
 }
 
-void checkKindEq(msg::MotorCommand::ControlKind actual,
-                  msg::MotorCommand::ControlKind expected, const std::string& what) {
-  if (actual != expected) {
-    fail(what + " -- MotorCommand::ControlKind mismatch");
+// --- SimHardware fixture helpers (mirrors sim_api.cpp's
+// defaultMotorConfigSet()/defaultSimDrivetrainConfig() -- the same sane,
+// self-contained sim defaults, kept independent so this harness needs no
+// dependency on sim_api.cpp itself). ---
+
+constexpr uint32_t kPortCount = Subsystems::Hardware::kPortCount;
+
+struct MotorConfigSet {
+  msg::MotorConfig cfg[kPortCount];
+};
+
+MotorConfigSet defaultMotorConfigSet() {
+  MotorConfigSet set;
+  msg::Gains velGains;
+  velGains.kp = 0.0022f;
+  velGains.ki = 0.0018f;
+  velGains.kff = 0.0038f;
+  velGains.i_max = 0.3f;
+  for (uint32_t i = 0; i < kPortCount; ++i) {
+    set.cfg[i] = msg::MotorConfig();
+    set.cfg[i].setPort(i + 1);
+    set.cfg[i].setFwdSign(1);
+    set.cfg[i].setVelGains(velGains);
+    set.cfg[i].setVelFiltAlpha(0.3f);
+    set.cfg[i].setPolled(i + 1 == 1 || i + 1 == 2);
   }
+  return set;
 }
 
-// --- Fixture helpers ---
-
-msg::DrivetrainConfig configWithPorts(uint32_t left, uint32_t right,
-                                       float trackwidth = 100.0f, float syncGain = 0.0f) {
+msg::DrivetrainConfig defaultDrivetrainConfig() {
   msg::DrivetrainConfig cfg;
-  cfg.setLeftPort(left);
-  cfg.setRightPort(right);
-  cfg.setTrackwidth(trackwidth);
-  cfg.setSyncGain(syncGain);
+  cfg.setTrackwidth(Hal::PhysicsWorld::kDefaultTrackwidth);
+  cfg.setLeftPort(1);
+  cfg.setRightPort(2);
   return cfg;
 }
 
-msg::MotorState obsVelocity(float velocity) {
-  msg::MotorState s;
-  s.velocity.has = true;
-  s.velocity.val = velocity;
-  return s;
-}
-
-// 090-001: Drivetrain::tick() now takes the WHOLE per-port observation array
-// (standing in for bb.motors[]) and resolves its own bound pair internally,
-// instead of two direct MotorState references -- every scenario below must
-// place its left/right observations at the SAME 1-based port indices it
-// configured via configWithPorts() above. kTestMotorCount is a small,
-// dependency-free stand-in for Rt::kPortCount -- large enough for every
-// port pair this harness configures (up to 3/4) -- so this file keeps its
-// "no Blackboard, no subsystems/hardware.h" dependency-free shape (see the
-// file header).
-constexpr uint32_t kTestMotorCount = 4;
-
-struct MotorObservations {
-  msg::MotorState motors[kTestMotorCount];
-};
-
-MotorObservations motorsAt(uint32_t leftPort, float leftVelocity, uint32_t rightPort,
-                           float rightVelocity) {
-  MotorObservations obs;
-  obs.motors[leftPort - 1] = obsVelocity(leftVelocity);
-  obs.motors[rightPort - 1] = obsVelocity(rightVelocity);
-  return obs;
+msg::PlannerConfig generousMotionConfig() {
+  msg::PlannerConfig cfg;
+  cfg.a_max = 1000.0f;
+  cfg.a_decel = 1000.0f;
+  cfg.v_body_max = 400.0f;
+  cfg.yaw_rate_max = 3.0f;
+  cfg.yaw_acc_max = 15.0f;
+  cfg.j_max = 0.0f;       // trapezoid -- exercised elsewhere (test_jerk_trajectory.py)
+  cfg.yaw_jerk_max = 0.0f;
+  return cfg;
 }
 
 msg::DrivetrainCommand wheelsCommand(float left, float right) {
@@ -144,301 +126,229 @@ msg::DrivetrainCommand wheelsCommand(float left, float right) {
   return cmd;
 }
 
-// --- Scenarios ---
-
-// 1. ports() reflects whatever left_port/right_port configure() was given --
-// the binding moved into DrivetrainConfig per sprint 079 decision 8.
-void scenarioPortsReflectConfig() {
-  beginScenario("ports() reflects the configured left_port/right_port binding");
-  Subsystems::Drivetrain dt;
-  dt.configure(configWithPorts(3, 4));
-
-  Subsystems::DrivetrainPorts p = dt.ports();
-  checkUintEq(p.left, 3, "ports().left");
-  checkUintEq(p.right, 4, "ports().right");
-}
-
-// 2. Each of the three command-arm setters (via apply()'s oneof dispatch)
-// (re)activates drivetrain authority, matching docs/protocol-v2.md's
-// existing rule.
-void scenarioCommandArmsActivateAuthority() {
-  beginScenario("TWIST/WHEELS/NEUTRAL each activate authority");
-  Subsystems::Drivetrain dt;
-  dt.configure(configWithPorts(1, 2));
-  checkFalse(dt.active(), "freshly constructed Drivetrain starts inactive");
-
-  msg::DrivetrainCommand twist;
-  msg::BodyTwist3 t; t.v_x = 50.0f; t.v_y = 0.0f; t.omega = 0.0f;
-  twist.setTwist(t);
-  dt.apply(twist);
-  checkTrue(dt.active(), "TWIST activates authority");
-
-  dt.standby();
-  checkFalse(dt.active(), "standby() drops authority (setup for next check)");
-
-  dt.apply(wheelsCommand(10.0f, 20.0f));
-  checkTrue(dt.active(), "WHEELS activates authority");
-
-  dt.standby();
-  msg::DrivetrainCommand neutral;
-  neutral.setNeutral(msg::Neutral::BRAKE);
-  dt.apply(neutral);
-  checkTrue(dt.active(), "NEUTRAL activates authority");
-}
-
-// 3. Acceptance criterion: {control_kind=NEUTRAL(mode), standby=true} ->
-// mode_==NEUTRAL && active_==false after apply() -- setNeutral() sets
-// mode_=NEUTRAL, active_=true, then the standby side-channel immediately
-// drops active_ back to false. mode_==NEUTRAL is observed indirectly via
-// state().vel == {0, 0} (state()'s NEUTRAL-mode zero report).
-void scenarioNeutralWithStandbyDropsAuthorityKeepsMode() {
-  beginScenario("{NEUTRAL, standby=true}: mode_==NEUTRAL, active_==false");
-  Subsystems::Drivetrain dt;
-  dt.configure(configWithPorts(1, 2));
-
-  // Start from an active WHEELS command so activation is a real transition,
-  // not a no-op against the default-false state.
-  dt.apply(wheelsCommand(80.0f, 80.0f));
-  checkTrue(dt.active(), "precondition: WHEELS left the Drivetrain active");
-
+msg::DrivetrainCommand neutralCommand() {
   msg::DrivetrainCommand cmd;
   cmd.setNeutral(msg::Neutral::BRAKE);
-  cmd.setStandby(true);
-  dt.apply(cmd);
-
-  checkFalse(dt.active(), "standby=true dropped authority");
-  msg::DrivetrainState s = dt.state();
-  checkFloatEq(s.vel_[0], 0.0f, "mode_==NEUTRAL: state().vel[0] reports 0");
-  checkFloatEq(s.vel_[1], 0.0f, "mode_==NEUTRAL: state().vel[1] reports 0");
+  return cmd;
 }
 
-// 4. Acceptance criterion: {control_kind=NONE, standby=true} -> active_==false
-// with mode_/targets UNCHANGED (the authority-steal case) -- the oneof
-// switch's NONE/default case takes no action, so the LAST commanded WHEELS
-// target must still be what state() reports after the steal, matching
-// today's exact quirk (a stolen Drivetrain's STATE still reports its
-// pre-steal target until the next real command).
-void scenarioNoneWithStandbyStealsAuthorityOnly() {
-  beginScenario("{NONE, standby=true}: active_==false, mode_/targets untouched");
-  Subsystems::Drivetrain dt;
-  dt.configure(configWithPorts(1, 2));
-
-  dt.apply(wheelsCommand(100.0f, 50.0f));
-  checkTrue(dt.active(), "precondition: WHEELS left the Drivetrain active");
-  msg::DrivetrainState before = dt.state();
-  checkFloatEq(before.vel_[0], 100.0f, "precondition: state().vel[0] == 100");
-  checkFloatEq(before.vel_[1], 50.0f, "precondition: state().vel[1] == 50");
-
-  msg::DrivetrainCommand steal;   // control_kind defaults to NONE
-  steal.setStandby(true);
-  dt.apply(steal);
-
-  checkFalse(dt.active(), "standby=true (alone) dropped authority");
-  msg::DrivetrainState after = dt.state();
-  checkFloatEq(after.vel_[0], 100.0f,
-               "authority steal did NOT reset the last commanded target (left)");
-  checkFloatEq(after.vel_[1], 50.0f,
-               "authority steal did NOT reset the last commanded target (right)");
+// runPasses -- ticks `hardware` then `dt` `n` times at a fixed 20ms cadence,
+// starting from `*now`, mirroring the bare loop's own ordering (hardware
+// FIRST, so a setpoint staged last pass flushes this pass -- see
+// main_loop.cpp/main.cpp). Advances `*now` in place.
+void runPasses(Subsystems::SimHardware& hardware, Subsystems::Drivetrain& dt,
+              Rt::WorkQueue<Motion::Segment, 8>& segmentIn,
+              Rt::WorkQueue<msg::DrivetrainCommand, 8>& driveIn, uint32_t* now, int n) {
+  for (int i = 0; i < n; ++i) {
+    *now += 20;
+    hardware.tick(*now);
+    dt.tick(*now, segmentIn, driveIn);
+  }
 }
 
-// 5. hasCommand()/takeCommand(): false before any tick(), true after tick()
-// runs (unconditionally, per tick()'s doc comment), false again immediately
-// after takeCommand() drains it.
-void scenarioHasCommandTakeCommandClears() {
-  beginScenario("hasCommand()/takeCommand(): set by tick(), cleared by takeCommand()");
-  Subsystems::Drivetrain dt;
-  dt.configure(configWithPorts(1, 2));
-  checkFalse(dt.hasCommand(), "no command held before the first tick()");
+// --- Scenarios (SimHardware-backed) ---
 
-  dt.apply(wheelsCommand(10.0f, 10.0f));
-  Rt::WorkQueue<msg::DrivetrainCommand, 8> noDriveIn;
-  MotorObservations obs = motorsAt(1, 0.0f, 2, 0.0f);
-  dt.tick(1000, obs.motors, kTestMotorCount, noDriveIn);
-  checkTrue(dt.hasCommand(), "tick() unconditionally holds a command");
+// 1. Single-segment enqueue -> execute -> pop: a straight segment posted to
+// segmentIn is drained into the ring, executed by the owned executor, and
+// the plant's average encoder travel converges on the commanded distance.
+void scenarioSingleSegmentEnqueueExecutePop() {
+  beginScenario("single segment: enqueue via segmentIn, executes, average encoder converges");
+  MotorConfigSet motorConfigs = defaultMotorConfigSet();
+  Subsystems::SimHardware hardware(motorConfigs.cfg);
+  hardware.begin();
+  Subsystems::Drivetrain dt(hardware);
+  dt.configure(defaultDrivetrainConfig());
+  dt.configureMotion(generousMotionConfig());
 
-  Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
-  (void)held;
-  checkFalse(dt.hasCommand(), "takeCommand() clears hasCommand()");
-}
-
-// 6. The held Hal::DrivetrainToHardwareCommand's wheel[].port matches the
-// configured binding, and (with sync_gain==0, the governor a no-op) the
-// commanded velocities pass through exactly.
-void scenarioHeldCommandPortsMatchBindingAndCarryTargets() {
-  beginScenario("held command: wheel[].port == configured binding, targets pass through");
-  Subsystems::Drivetrain dt;
-  dt.configure(configWithPorts(3, 4, /*trackwidth=*/100.0f, /*syncGain=*/0.0f));
-
-  dt.apply(wheelsCommand(42.0f, -17.0f));
-  Rt::WorkQueue<msg::DrivetrainCommand, 8> noDriveIn;
-  MotorObservations obs = motorsAt(3, 0.0f, 4, 0.0f);
-  dt.tick(2000, obs.motors, kTestMotorCount, noDriveIn);
-
-  checkTrue(dt.hasCommand(), "tick() held a command");
-  Hal::DrivetrainToHardwareCommand cmd = dt.takeCommand();
-
-  checkUintEq(cmd.wheel[0].port, 3, "held command wheel[0].port == left_port");
-  checkUintEq(cmd.wheel[1].port, 4, "held command wheel[1].port == right_port");
-  checkKindEq(cmd.wheel[0].command.control_kind,
-              msg::MotorCommand::ControlKind::VELOCITY, "wheel[0] is a VELOCITY command");
-  checkKindEq(cmd.wheel[1].command.control_kind,
-              msg::MotorCommand::ControlKind::VELOCITY, "wheel[1] is a VELOCITY command");
-  checkFloatEq(cmd.wheel[0].command.control.velocity, 42.0f, "wheel[0] velocity target");
-  checkFloatEq(cmd.wheel[1].command.control.velocity, -17.0f, "wheel[1] velocity target");
-}
-
-// 7. NEUTRAL mode's held command carries a NEUTRAL MotorCommand for both
-// wheels (matching neutralMode_), not a stale VELOCITY target.
-void scenarioHeldCommandReflectsNeutralMode() {
-  beginScenario("held command reflects NEUTRAL mode as a NEUTRAL MotorCommand pair");
-  Subsystems::Drivetrain dt;
-  dt.configure(configWithPorts(1, 2));
-
-  msg::DrivetrainCommand cmd;
-  cmd.setNeutral(msg::Neutral::COAST);
-  dt.apply(cmd);
-  Rt::WorkQueue<msg::DrivetrainCommand, 8> noDriveIn;
-  MotorObservations obs = motorsAt(1, 0.0f, 2, 0.0f);
-  dt.tick(3000, obs.motors, kTestMotorCount, noDriveIn);
-
-  Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
-  checkKindEq(held.wheel[0].command.control_kind,
-              msg::MotorCommand::ControlKind::NEUTRAL, "wheel[0] is a NEUTRAL command");
-  checkKindEq(held.wheel[1].command.control_kind,
-              msg::MotorCommand::ControlKind::NEUTRAL, "wheel[1] is a NEUTRAL command");
-  checkTrue(held.wheel[0].command.control.neutral == msg::Neutral::COAST,
-            "wheel[0] neutral mode matches setNeutral(COAST)");
-  checkTrue(held.wheel[1].command.control.neutral == msg::Neutral::COAST,
-            "wheel[1] neutral mode matches setNeutral(COAST)");
-}
-
-// 8. Ratio-governor regression guard (TWIST arm): the governor's math is
-// UNCHANGED by this ticket's reshape (only the output plumbing changed) --
-// pin the exact pre-ticket numeric result for a representative bogged-down
-// case. trackwidth=100 -> inverse(v_x=100, omega=0, b=100) -> targetLeft ==
-// targetRight == 100. leftObs=80 (achievedLeft=0.8), rightObs=100
-// (achievedRight=1.0) -> achievedMin=0.8. sync_gain=0.5 ->
-// scale = 1 - 0.5*(1-0.8) = 0.9 -> both targets *= 0.9 -> 90.0.
-void scenarioRatioGovernorTwistRegression() {
-  beginScenario("ratio governor TWIST regression: unchanged numeric output");
-  Subsystems::Drivetrain dt;
-  dt.configure(configWithPorts(1, 2, /*trackwidth=*/100.0f, /*syncGain=*/0.5f));
-
-  msg::DrivetrainCommand cmd;
-  msg::BodyTwist3 t; t.v_x = 100.0f; t.v_y = 0.0f; t.omega = 0.0f;
-  cmd.setTwist(t);
-  dt.apply(cmd);
-  Rt::WorkQueue<msg::DrivetrainCommand, 8> noDriveIn;
-  MotorObservations obs = motorsAt(1, 80.0f, 2, 100.0f);
-  dt.tick(4000, obs.motors, kTestMotorCount, noDriveIn);
-
-  Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
-  checkFloatEq(held.wheel[0].command.control.velocity, 90.0f, "governed left target");
-  checkFloatEq(held.wheel[1].command.control.velocity, 90.0f, "governed right target");
-}
-
-// 9. Ratio-governor regression guard (WHEELS arm): left=50 (obs 50,
-// achieved=1.0), right=100 (obs 50, achieved=0.5) -> achievedMin=0.5.
-// sync_gain=0.5 -> scale = 1 - 0.5*(1-0.5) = 0.75 -> left=37.5, right=75.0.
-void scenarioRatioGovernorWheelsRegression() {
-  beginScenario("ratio governor WHEELS regression: unchanged numeric output");
-  Subsystems::Drivetrain dt;
-  dt.configure(configWithPorts(1, 2, /*trackwidth=*/100.0f, /*syncGain=*/0.5f));
-
-  dt.apply(wheelsCommand(50.0f, 100.0f));
-  Rt::WorkQueue<msg::DrivetrainCommand, 8> noDriveIn;
-  MotorObservations obs = motorsAt(1, 50.0f, 2, 50.0f);
-  dt.tick(5000, obs.motors, kTestMotorCount, noDriveIn);
-
-  Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
-  checkFloatEq(held.wheel[0].command.control.velocity, 37.5f, "governed left target");
-  checkFloatEq(held.wheel[1].command.control.velocity, 75.0f, "governed right target");
-}
-
-// 10. (087-003) tick()'s driveIn Mailbox: post a WHEELS command directly to
-// a bare Rt::Mailbox<msg::DrivetrainCommand> (no apply() call, no
-// Blackboard) -- tick() must pop it (latest-wins) BEFORE running the
-// setpoint-governance path, dispatching through the SAME apply() logic
-// (activating authority, staging the WHEELS-arm targets) so the governed
-// output matches exactly what a direct apply() + tick() would have
-// produced. Also proves state().active mirrors active() (AC2's readable
-// authority field).
-void scenarioTickPopsDriveInMailboxAndAppliesCommand() {
-  beginScenario("tick() pops a non-empty driveIn and applies it before governance runs");
-  Subsystems::Drivetrain dt;
-  dt.configure(configWithPorts(1, 2, /*trackwidth=*/100.0f, /*syncGain=*/0.0f));
-  checkFalse(dt.active(), "freshly constructed Drivetrain starts inactive");
-  checkFalse(dt.state().active, "state().active mirrors active() == false before any command");
-
+  Rt::WorkQueue<Motion::Segment, 8> segmentIn;
   Rt::WorkQueue<msg::DrivetrainCommand, 8> driveIn;
-  checkTrue(driveIn.empty(), "a fresh queue starts empty");
-  driveIn.post(wheelsCommand(60.0f, 60.0f));
-  checkFalse(driveIn.empty(), "post() fills the queue");
 
-  MotorObservations obs = motorsAt(1, 0.0f, 2, 0.0f);
-  dt.tick(1000, obs.motors, kTestMotorCount, driveIn);
+  Motion::Segment seg;
+  seg.distance = 300.0f;   // [mm]
+  checkTrue(segmentIn.post(seg), "segmentIn accepts the posted segment");
 
-  checkTrue(driveIn.empty(), "tick() drained (popped) the posted command");
-  checkTrue(dt.active(), "the popped WHEELS command activated authority, via apply()");
-  checkTrue(dt.state().active, "state().active mirrors active() == true after the popped command");
-  checkTrue(dt.hasCommand(), "tick() held an output command");
+  uint32_t now = 0;
+  runPasses(hardware, dt, segmentIn, driveIn, &now, 400);   // 8s -- ample settle time
 
-  Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
-  checkKindEq(held.wheel[0].command.control_kind,
-              msg::MotorCommand::ControlKind::VELOCITY, "wheel[0] is a VELOCITY command");
-  checkFloatEq(held.wheel[0].command.control.velocity, 60.0f,
-               "wheel[0] velocity == the driveIn-posted target");
-  checkFloatEq(held.wheel[1].command.control.velocity, 60.0f,
-               "wheel[1] velocity == the driveIn-posted target");
+  msg::DrivetrainState s = dt.state();
+  float avg = (s.enc()[0] + s.enc()[1]) * 0.5f;
+  checkTrue(std::fabs(avg - 300.0f) < 15.0f, "average encoder travel converges near 300mm");
+  checkTrue(std::fabs(s.vel()[0]) < 10.0f && std::fabs(s.vel()[1]) < 10.0f,
+            "measured velocity has settled back near zero -- the segment converged and idled");
 }
 
-// 11. (087-003) tick() with an empty driveIn -- no command ever posted or
-// applied: the "otherwise" branch of AC1 runs the existing
-// setpoint-governance path unchanged, i.e. today's no-new-command
-// behavior (a freshly constructed Drivetrain defaults to NEUTRAL/idle;
-// tick() still unconditionally holds an output, and decays/holds
-// gracefully rather than erroring on the never-posted mailbox).
-void scenarioTickWithEmptyDriveInPreservesNoNewCommandBehavior() {
-  beginScenario("tick() with an empty driveIn: no-new-command behavior, unchanged governance");
-  Subsystems::Drivetrain dt;
-  dt.configure(configWithPorts(1, 2));
+// 2. Escape-hatch preemption: `S` (WHEELS) posted mid-segment via driveIn
+// clears the ring IMMEDIATELY -- the plant's steady-state velocity ends up
+// matching the DIRECT WHEELS target, never the (much larger, still
+// in-flight) segment's cruise target.
+void scenarioEscapeHatchPreemptionClearsRingImmediately() {
+  beginScenario("S mid-segment: escape hatch preempts, plant settles to the DIRECT target");
+  MotorConfigSet motorConfigs = defaultMotorConfigSet();
+  Subsystems::SimHardware hardware(motorConfigs.cfg);
+  hardware.begin();
+  Subsystems::Drivetrain dt(hardware);
+  dt.configure(defaultDrivetrainConfig());
+  dt.configureMotion(generousMotionConfig());
 
-  Rt::WorkQueue<msg::DrivetrainCommand, 8> driveIn;  // never posted to
-  checkTrue(driveIn.empty(), "driveIn starts (and stays) empty");
+  Rt::WorkQueue<Motion::Segment, 8> segmentIn;
+  Rt::WorkQueue<msg::DrivetrainCommand, 8> driveIn;
 
-  MotorObservations obs = motorsAt(1, 0.0f, 2, 0.0f);
-  dt.tick(1000, obs.motors, kTestMotorCount, driveIn);
+  Motion::Segment seg;
+  seg.distance = 5000.0f;   // [mm] -- deliberately long; must never complete in this scenario
+  checkTrue(segmentIn.post(seg), "segmentIn accepts the long segment");
 
-  checkFalse(dt.active(), "empty driveIn: no command applied, authority stays at its default");
-  checkTrue(dt.hasCommand(), "tick() still unconditionally holds an output command");
+  uint32_t now = 0;
+  runPasses(hardware, dt, segmentIn, driveIn, &now, 50);   // 1s -- segment underway, well short of 5000mm
 
-  Hal::DrivetrainToHardwareCommand held = dt.takeCommand();
-  checkKindEq(held.wheel[0].command.control_kind, msg::MotorCommand::ControlKind::NEUTRAL,
-              "no command ever applied -- default mode_ is NEUTRAL, matching today's idle output");
-  checkKindEq(held.wheel[1].command.control_kind, msg::MotorCommand::ControlKind::NEUTRAL,
-              "no command ever applied -- default mode_ is NEUTRAL, matching today's idle output");
+  msg::DrivetrainState mid = dt.state();
+  checkTrue(mid.vel()[0] > 20.0f && mid.vel()[1] > 20.0f,
+            "precondition: the segment is genuinely driving forward before preemption");
+
+  checkTrue(driveIn.post(wheelsCommand(60.0f, -60.0f)),
+            "driveIn accepts the escape-hatch WHEELS command (a spin -- distinct sign "
+            "pattern from the segment's straight-line drive)");
+
+  runPasses(hardware, dt, segmentIn, driveIn, &now, 150);   // 3s -- settle onto the DIRECT target
+
+  msg::DrivetrainState after = dt.state();
+  checkTrue(after.vel()[0] > 20.0f, "left wheel settles positive -- the DIRECT WHEELS target, "
+                                    "not the abandoned segment's straight-drive target");
+  checkTrue(after.vel()[1] < -20.0f, "right wheel settles negative -- proves the escape hatch "
+                                     "preempted the ring (a straight segment never commands "
+                                     "opposite-signed wheels)");
+}
+
+// 3. STOP (NEUTRAL) mid-segment triggers the executor's OWN graceful
+// decel-to-zero -- the measured velocity decays toward zero and never
+// reverses sign (no reverse-creep), rather than an instant zero-velocity
+// command.
+void scenarioStopMidSegmentGracefulDecelNoReverseCreep() {
+  beginScenario("STOP mid-segment: graceful decel-to-zero, measured velocity never reverses sign");
+  MotorConfigSet motorConfigs = defaultMotorConfigSet();
+  Subsystems::SimHardware hardware(motorConfigs.cfg);
+  hardware.begin();
+  Subsystems::Drivetrain dt(hardware);
+  dt.configure(defaultDrivetrainConfig());
+  dt.configureMotion(generousMotionConfig());
+
+  Rt::WorkQueue<Motion::Segment, 8> segmentIn;
+  Rt::WorkQueue<msg::DrivetrainCommand, 8> driveIn;
+
+  Motion::Segment seg;
+  seg.distance = 2000.0f;   // [mm] -- long enough that STOP fires well before natural completion
+  checkTrue(segmentIn.post(seg), "segmentIn accepts the segment");
+
+  uint32_t now = 0;
+  runPasses(hardware, dt, segmentIn, driveIn, &now, 50);   // 1s -- underway
+
+  msg::DrivetrainState mid = dt.state();
+  checkTrue(mid.vel()[0] > 20.0f && mid.vel()[1] > 20.0f,
+            "precondition: genuinely driving forward before STOP");
+
+  checkTrue(driveIn.post(neutralCommand()), "driveIn accepts NEUTRAL (STOP)");
+
+  bool everNegative = false;
+  float minVel = 1e9f;
+  for (int i = 0; i < 250; ++i) {   // up to 5s to settle
+    now += 20;
+    hardware.tick(now);
+    dt.tick(now, segmentIn, driveIn);
+    msg::DrivetrainState s = dt.state();
+    float v = (s.vel()[0] + s.vel()[1]) * 0.5f;
+    if (v < minVel) minVel = v;
+    // A small negative floor absorbs PID/plant settle noise around a
+    // literal-0.0f commanded twist -- the ACTUAL no-reverse-creep contract
+    // (segment_executor.h's own literal-0.0f snap) is proven at the
+    // Motion::SegmentExecutor level by segment_executor_harness.cpp's own
+    // regression scenario; this measured-plant check is the integration
+    // proof that STOP reaches the executor's graceful path at all (not an
+    // instant zero) rather than a bit-exact re-proof of the snap.
+    if (v < -5.0f) everNegative = true;
+  }
+
+  checkTrue(!everNegative, "measured velocity never reverses sign while decelerating to STOP");
+  msg::DrivetrainState final = dt.state();
+  checkTrue(std::fabs(final.vel()[0]) < 10.0f && std::fabs(final.vel()[1]) < 10.0f,
+            "measured velocity settles near zero after STOP's graceful decel");
+}
+
+// --- Scenario 4 (NezhaHardware + HOST_BUILD scripted I2CBus fake): the
+// sprint's mandatory staging-only verification. ---
+
+constexpr uint16_t kAddr7 = 0x10;
+constexpr uint16_t kWireAddr = static_cast<uint16_t>(kAddr7 << 1);
+
+void scriptGenerousPool(I2CBus& bus, int count) {
+  static uint8_t canned[4] = {0, 0, 0, 0};
+  for (int i = 0; i < count; ++i) {
+    bus.scriptWrite(kWireAddr, /*status=*/0);
+    bus.scriptRead(kWireAddr, canned, 4, /*status=*/0);
+  }
+}
+
+void scenarioStagingOnlyNoI2CWriteUntilExplicitHardwareTick() {
+  beginScenario(
+      "staging-only: Drivetrain::tick() alone issues ZERO I2C writes -- only an explicit "
+      "hardware.tick() flushes them");
+  msg::MotorConfig configs[Subsystems::NezhaHardware::kPortCount];
+  for (uint32_t i = 0; i < Subsystems::NezhaHardware::kPortCount; ++i) {
+    configs[i] = msg::MotorConfig();
+    configs[i].setPort(i + 1).setFwdSign(1).setTravelCalib(1.0f);
+    configs[i].setPolled(i + 1 == 1 || i + 1 == 2);   // the drive pair
+  }
+
+  I2CBus::setClock(1000000);
+  I2CBus bus;
+  Subsystems::NezhaHardware hardware(bus, configs);
+  scriptGenerousPool(bus, 40);
+
+  Subsystems::Drivetrain dt(hardware);
+  msg::DrivetrainConfig dtConfig;
+  dtConfig.setTrackwidth(150.0f);
+  dtConfig.setLeftPort(1);
+  dtConfig.setRightPort(2);
+  dt.configure(dtConfig);
+  dt.configureMotion(generousMotionConfig());
+
+  Rt::WorkQueue<Motion::Segment, 8> segmentIn;
+  Rt::WorkQueue<msg::DrivetrainCommand, 8> driveIn;
+  checkTrue(driveIn.post(wheelsCommand(150.0f, 150.0f)), "driveIn accepts the WHEELS command");
+
+  uint32_t before = bus.txnCount(kAddr7);
+  checkUintEq(before, 0, "precondition: no I2C traffic before any tick() at all");
+
+  // Drivetrain::tick() alone -- drains driveIn, computes the governed
+  // targets, and STAGES them via hardware.motor(port).apply(cmd)
+  // (Hal::Motor::apply() -> the leaf's setVelocity(), itself staging-only:
+  // NezhaMotor::setVelocity() only writes mode_/velocityTarget_, per
+  // motor.h/nezha_motor.cpp's own contract). This must issue NO bus
+  // transaction of any kind.
+  dt.tick(1000, segmentIn, driveIn);
+  checkUintEq(bus.txnCount(kAddr7), before,
+              "Drivetrain::tick() (stage-only) issued ZERO I2C transactions");
+
+  // Only an EXPLICIT hardware.tick() (the flip-flop's own REQUEST_DUE/
+  // COLLECT_DUE schedule, unchanged by this sprint -- Subsystems::Hardware
+  // keeps the name tick(), the 094-003 serviceBus() rename was dropped in
+  // harmonization) ever touches the bus.
+  hardware.tick(1010);   // REQUEST_DUE
+  checkTrue(bus.txnCount(kAddr7) > before,
+            "an explicit hardware.tick() call is what finally issues the I2C transaction");
 }
 
 }  // namespace
 
 int main() {
-  scenarioPortsReflectConfig();
-  scenarioCommandArmsActivateAuthority();
-  scenarioNeutralWithStandbyDropsAuthorityKeepsMode();
-  scenarioNoneWithStandbyStealsAuthorityOnly();
-  scenarioHasCommandTakeCommandClears();
-  scenarioHeldCommandPortsMatchBindingAndCarryTargets();
-  scenarioHeldCommandReflectsNeutralMode();
-  scenarioRatioGovernorTwistRegression();
-  scenarioRatioGovernorWheelsRegression();
-  scenarioTickPopsDriveInMailboxAndAppliesCommand();
-  scenarioTickWithEmptyDriveInPreservesNoNewCommandBehavior();
+  scenarioSingleSegmentEnqueueExecutePop();
+  scenarioEscapeHatchPreemptionClearsRingImmediately();
+  scenarioStopMidSegmentGracefulDecelNoReverseCreep();
+  scenarioStagingOnlyNoI2CWriteUntilExplicitHardwareTick();
 
   if (g_failureCount == 0) {
-    std::printf("OK: all Drivetrain reshape scenarios passed\n");
+    std::printf("OK: all Drivetrain 094-004 scenarios passed\n");
     return 0;
   }
-  std::printf("FAILED: %d assertion(s) across the Drivetrain reshape scenarios\n",
+  std::printf("FAILED: %d assertion(s) across the Drivetrain 094-004 scenarios\n",
               g_failureCount);
   return 1;
 }

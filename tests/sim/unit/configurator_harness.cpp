@@ -129,7 +129,7 @@ void scenarioDrivetrainDeltaApplies() {
   msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
-  Subsystems::Drivetrain drivetrain;
+  Subsystems::Drivetrain drivetrain(hardware);
   Subsystems::PoseEstimator poseEstimator;
   Rt::Blackboard bb;
 
@@ -179,7 +179,7 @@ void scenarioMotorDeltaApplies() {
   msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
-  Subsystems::Drivetrain drivetrain;
+  Subsystems::Drivetrain drivetrain(hardware);
   Subsystems::PoseEstimator poseEstimator;
   Rt::Blackboard bb;
 
@@ -214,7 +214,7 @@ void scenarioPlannerDeltaApplies() {
   msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
-  Subsystems::Drivetrain drivetrain;
+  Subsystems::Drivetrain drivetrain(hardware);
   Subsystems::PoseEstimator poseEstimator;
   Rt::Blackboard bb;
 
@@ -239,7 +239,7 @@ void scenarioOdometerDeltaApplies() {
   msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
-  Subsystems::Drivetrain drivetrain;
+  Subsystems::Drivetrain drivetrain(hardware);
   Subsystems::PoseEstimator poseEstimator;
   Rt::Blackboard bb;
 
@@ -269,7 +269,7 @@ void scenarioPublishSeedsAllFourCells() {
   msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
-  Subsystems::Drivetrain drivetrain;
+  Subsystems::Drivetrain drivetrain(hardware);
   Subsystems::PoseEstimator poseEstimator;
   Rt::Blackboard bb;
 
@@ -301,7 +301,7 @@ void scenarioPendingMirrorsConfigInEmpty() {
   msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
-  Subsystems::Drivetrain drivetrain;
+  Subsystems::Drivetrain drivetrain(hardware);
   Subsystems::PoseEstimator poseEstimator;
   Rt::Blackboard bb;
 
@@ -327,7 +327,7 @@ void scenarioSameTargetDisjointFieldsDoNotClobber() {
   msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
-  Subsystems::Drivetrain drivetrain;
+  Subsystems::Drivetrain drivetrain(hardware);
   Subsystems::PoseEstimator poseEstimator;
   Rt::Blackboard bb;
 
@@ -371,7 +371,7 @@ void scenarioApplyOneDrainsExactlyOnePerCall() {
   msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
-  Subsystems::Drivetrain drivetrain;
+  Subsystems::Drivetrain drivetrain(hardware);
   Subsystems::PoseEstimator poseEstimator;
   Rt::Blackboard bb;
 
@@ -408,7 +408,7 @@ void scenarioApplyOneOnEmptyQueueIsNoop() {
   msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
-  Subsystems::Drivetrain drivetrain;
+  Subsystems::Drivetrain drivetrain(hardware);
   Subsystems::PoseEstimator poseEstimator;
   Rt::Blackboard bb;
 
