@@ -749,9 +749,9 @@ void handleQlen(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, vo
   Rt::Blackboard& b = bb(handlerCtx);
   char body[192];
   snprintf(body, sizeof(body),
-           "cmd=%u drive=%d motion=%d cfg=%u pose=%u",
+           "cmd=%u drive=%u motion=%d cfg=%u pose=%u",
            static_cast<unsigned>(b.commandsIn.size()),
-           b.driveIn.empty() ? 0 : 1,
+           static_cast<unsigned>(b.driveIn.size()),
            b.motionIn.empty() ? 0 : 1,
            static_cast<unsigned>(b.configIn.size()),
            static_cast<unsigned>(b.poseResetIn.size()));

@@ -125,16 +125,16 @@ class Drivetrain {
   // driveIn (087-003, clasi/sprints/087-two-plane-blackboard-synchronous-
   // update-loop-configurator-and-command-queue-transport-greenfield/
   // architecture-update-r1.md, "The Faceplate -- concrete example"): the
-  // blackboard-sourced command transport (Rt::Mailbox, source/runtime/
+  // blackboard-sourced command transport (Rt::WorkQueue, source/runtime/
   // queue.h) this Drivetrain now drains INSTEAD OF however it previously
-  // received its setpoint. tick() pops driveIn (latest-wins) when
-  // non-empty, at the top of the call, applying the popped
+  // received its setpoint. tick() pops driveIn (FIFO, one command per tick)
+  // when non-empty, at the top of the call, applying the popped
   // msg::DrivetrainCommand through the SAME apply() this class has always
   // used -- THEN the setpoint-governance math below runs exactly as before,
   // unchanged. An empty driveIn is a no-op: whatever setpoint is already
   // staged (mode_/targets, set by a previous apply()/driveIn post) is
   // governed unchanged -- today's "no new command" behavior. driveIn is the
-  // single coalescing Mailbox<DrivetrainCommand> shared with
+  // FIFO WorkQueue<DrivetrainCommand> shared with
   // CommandRouter's `DEV DT` path and Planner's own output edge (Decision
   // 1's authority-gated arbitration -- see Planner::takeCommand()'s own doc
   // comment); the authority GATE itself (who is allowed to post) is ticket
@@ -149,7 +149,7 @@ class Drivetrain {
   void tick(uint32_t now,
             const msg::MotorState* motors,
             uint32_t motorCount,
-            Rt::Mailbox<msg::DrivetrainCommand>& driveIn);
+            Rt::WorkQueue<msg::DrivetrainCommand, 8>& driveIn);
 
   bool hasCommand() const;                      // true once tick() has run and the output is untaken
   Hal::DrivetrainToHardwareCommand takeCommand();     // clears hasCommand()

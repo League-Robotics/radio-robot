@@ -155,14 +155,14 @@ void Drivetrain::governRatio(float* targetLeft, float* targetRight,
 void Drivetrain::tick(uint32_t now,
                        const msg::MotorState* motors,
                        uint32_t motorCount,
-                       Rt::Mailbox<msg::DrivetrainCommand>& driveIn) {
+                       Rt::WorkQueue<msg::DrivetrainCommand, 8>& driveIn) {
     // now: no clock read happens here -- this ticket's governor is a purely
     // per-tick algebraic correction with no timing-dependent behavior yet.
     // Kept as a parameter per the locked faceplate shape for a future ticket
     // that needs it (e.g. a governor ease-in rate).
     (void)now;
 
-    // 087-003: drain driveIn (pop, latest-wins) BEFORE the setpoint-
+    // 087-003: drain driveIn (pop FIFO, one command per tick) BEFORE the setpoint-
     // governance path below -- replaces however this Drivetrain previously
     // received its setpoint (a direct external apply() call). Routes
     // through the SAME apply() this class has always used, so mode_/the

@@ -121,11 +121,10 @@ void scenarioBlackboardCommandPlaneStartsEmpty() {
   checkTrue(bb.otosSetPoseIn.empty(), "otosSetPoseIn starts empty");
 }
 
-// 3. driveIn (Mailbox<msg::DrivetrainCommand>): capacity-1, latest-wins
-// round-trip -- the vehicle Decision 1's authority-gated arbitration is
-// built on.
+// 3. driveIn (WorkQueue<msg::DrivetrainCommand, 8>): FIFO, commands accumulate
+// -- the vehicle the Drivetrain's growing command/segment queue is built on.
 void scenarioDriveInMailboxRoundTrip() {
-  beginScenario("Blackboard.driveIn: Mailbox<msg::DrivetrainCommand> post/take round-trip");
+  beginScenario("Blackboard.driveIn: WorkQueue<msg::DrivetrainCommand, 8> FIFO post/take round-trip");
   Rt::Blackboard bb;
 
   msg::DrivetrainCommand cmd;
@@ -133,15 +132,20 @@ void scenarioDriveInMailboxRoundTrip() {
   bb.driveIn.post(cmd);
   checkFalse(bb.driveIn.empty(), "post() marks driveIn non-empty");
 
-  // Latest-wins: a second post() before any take() replaces the first.
+  // FIFO, accumulates: a second post() before any take() queues BEHIND the first.
   msg::DrivetrainCommand cmd2;
   cmd2.setStandby(false);
   bb.driveIn.post(cmd2);
+  checkTrue(bb.driveIn.size() == 2, "two posts accumulate (size == 2)");
 
-  msg::DrivetrainCommand taken = bb.driveIn.take();
-  checkTrue(taken.standby.has, "taken command retains the standby field");
-  checkFalse(taken.standby.val, "take() returns only the latest posted value (standby=false)");
-  checkTrue(bb.driveIn.empty(), "driveIn empty after take()");
+  msg::DrivetrainCommand first = bb.driveIn.take();
+  checkTrue(first.standby.has, "taken command retains the standby field");
+  checkTrue(first.standby.val, "take() returns the FIRST posted value (FIFO, standby=true)");
+  checkFalse(bb.driveIn.empty(), "the second command is still queued after one take()");
+
+  msg::DrivetrainCommand second = bb.driveIn.take();
+  checkFalse(second.standby.val, "the next take() returns the second (standby=false)");
+  checkTrue(bb.driveIn.empty(), "driveIn empty after draining both");
 }
 
 // 5. configIn (WorkQueue<ConfigDelta, 16>): FIFO order preserved, and

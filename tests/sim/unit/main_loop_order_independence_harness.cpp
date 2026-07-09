@@ -170,7 +170,7 @@ struct OrderedPipeline {
   // longer exists, so the scenario's underlying determinism proof (does
   // FORWARD vs. REVERSE tick order still produce bit-identical committed
   // state on a pipeline that genuinely moves?) stays intact.
-  Rt::Mailbox<msg::DrivetrainCommand> driveIn;
+  Rt::WorkQueue<msg::DrivetrainCommand, 8> driveIn;
 
   // Committed x[k] -- exactly what bb.motors[]/bb.fusedPose/bb.otos* would
   // hold: refreshed ONLY at this pipeline's own commit step, below.

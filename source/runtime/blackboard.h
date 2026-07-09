@@ -159,7 +159,7 @@ struct Blackboard {
   //     arbitration). ===
   WorkQueue<Subsystems::CommunicatorToCommandProcessorCommand, 16>
       commandsIn;                            // Communicator -> router
-  Mailbox<msg::DrivetrainCommand> driveIn;    // router(DEV DT)/Planner -> Drivetrain
+  WorkQueue<msg::DrivetrainCommand, 8> driveIn;  // router(DEV DT)/Planner -> Drivetrain (FIFO; commands accumulate)
   WorkQueue<ConfigDelta, 16> configIn;        // router -> Configurator
   WorkQueue<PoseResetCommand, 4> poseResetIn;  // router -> PoseEstimator
   Mailbox<msg::SetPose> otosSetPoseIn;        // SI re-anchor -> odometer

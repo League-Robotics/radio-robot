@@ -251,7 +251,7 @@ void scenarioHasCommandTakeCommandClears() {
   checkFalse(dt.hasCommand(), "no command held before the first tick()");
 
   dt.apply(wheelsCommand(10.0f, 10.0f));
-  Rt::Mailbox<msg::DrivetrainCommand> noDriveIn;
+  Rt::WorkQueue<msg::DrivetrainCommand, 8> noDriveIn;
   MotorObservations obs = motorsAt(1, 0.0f, 2, 0.0f);
   dt.tick(1000, obs.motors, kTestMotorCount, noDriveIn);
   checkTrue(dt.hasCommand(), "tick() unconditionally holds a command");
@@ -270,7 +270,7 @@ void scenarioHeldCommandPortsMatchBindingAndCarryTargets() {
   dt.configure(configWithPorts(3, 4, /*trackwidth=*/100.0f, /*syncGain=*/0.0f));
 
   dt.apply(wheelsCommand(42.0f, -17.0f));
-  Rt::Mailbox<msg::DrivetrainCommand> noDriveIn;
+  Rt::WorkQueue<msg::DrivetrainCommand, 8> noDriveIn;
   MotorObservations obs = motorsAt(3, 0.0f, 4, 0.0f);
   dt.tick(2000, obs.motors, kTestMotorCount, noDriveIn);
 
@@ -297,7 +297,7 @@ void scenarioHeldCommandReflectsNeutralMode() {
   msg::DrivetrainCommand cmd;
   cmd.setNeutral(msg::Neutral::COAST);
   dt.apply(cmd);
-  Rt::Mailbox<msg::DrivetrainCommand> noDriveIn;
+  Rt::WorkQueue<msg::DrivetrainCommand, 8> noDriveIn;
   MotorObservations obs = motorsAt(1, 0.0f, 2, 0.0f);
   dt.tick(3000, obs.motors, kTestMotorCount, noDriveIn);
 
@@ -328,7 +328,7 @@ void scenarioRatioGovernorTwistRegression() {
   msg::BodyTwist3 t; t.v_x = 100.0f; t.v_y = 0.0f; t.omega = 0.0f;
   cmd.setTwist(t);
   dt.apply(cmd);
-  Rt::Mailbox<msg::DrivetrainCommand> noDriveIn;
+  Rt::WorkQueue<msg::DrivetrainCommand, 8> noDriveIn;
   MotorObservations obs = motorsAt(1, 80.0f, 2, 100.0f);
   dt.tick(4000, obs.motors, kTestMotorCount, noDriveIn);
 
@@ -346,7 +346,7 @@ void scenarioRatioGovernorWheelsRegression() {
   dt.configure(configWithPorts(1, 2, /*trackwidth=*/100.0f, /*syncGain=*/0.5f));
 
   dt.apply(wheelsCommand(50.0f, 100.0f));
-  Rt::Mailbox<msg::DrivetrainCommand> noDriveIn;
+  Rt::WorkQueue<msg::DrivetrainCommand, 8> noDriveIn;
   MotorObservations obs = motorsAt(1, 50.0f, 2, 50.0f);
   dt.tick(5000, obs.motors, kTestMotorCount, noDriveIn);
 
@@ -370,10 +370,10 @@ void scenarioTickPopsDriveInMailboxAndAppliesCommand() {
   checkFalse(dt.active(), "freshly constructed Drivetrain starts inactive");
   checkFalse(dt.state().active, "state().active mirrors active() == false before any command");
 
-  Rt::Mailbox<msg::DrivetrainCommand> driveIn;
-  checkTrue(driveIn.empty(), "a fresh Mailbox starts empty");
+  Rt::WorkQueue<msg::DrivetrainCommand, 8> driveIn;
+  checkTrue(driveIn.empty(), "a fresh queue starts empty");
   driveIn.post(wheelsCommand(60.0f, 60.0f));
-  checkFalse(driveIn.empty(), "post() fills the mailbox");
+  checkFalse(driveIn.empty(), "post() fills the queue");
 
   MotorObservations obs = motorsAt(1, 0.0f, 2, 0.0f);
   dt.tick(1000, obs.motors, kTestMotorCount, driveIn);
@@ -403,7 +403,7 @@ void scenarioTickWithEmptyDriveInPreservesNoNewCommandBehavior() {
   Subsystems::Drivetrain dt;
   dt.configure(configWithPorts(1, 2));
 
-  Rt::Mailbox<msg::DrivetrainCommand> driveIn;  // never posted to
+  Rt::WorkQueue<msg::DrivetrainCommand, 8> driveIn;  // never posted to
   checkTrue(driveIn.empty(), "driveIn starts (and stays) empty");
 
   MotorObservations obs = motorsAt(1, 0.0f, 2, 0.0f);
