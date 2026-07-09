@@ -398,36 +398,45 @@ void stealDrivetrainAuthority(Rt::Blackboard& b) {
     b.driveIn.post(cmd);
 }
 
-// isBoundPort -- true if `port` is one of the Drivetrain's currently-bound
-// left/right ports, read from bb.drivetrainConfig.left_port/right_port
-// (087-006: the published snapshot of DrivetrainConfig, replacing a
-// Drivetrain* ports() call -- Decision 7's router-half pattern).
+// isBoundPort -- true if `port` (the WIRE, 1-based label) is one of the
+// Drivetrain's currently-bound left/right ports, read from
+// bb.drivetrainConfig.left_port/right_port (087-006: the published
+// snapshot of DrivetrainConfig, replacing a Drivetrain* ports() call --
+// Decision 7's router-half pattern). Both sides of this comparison are the
+// wire-shaped 1-based label (msg::DrivetrainConfig.left_port/right_port is
+// a wire/serialized key, unchanged) -- no index is derived here, so there
+// is nothing to convert.
 bool isBoundPort(const Rt::Blackboard& b, uint32_t port) {
     return port == b.drivetrainConfig.left_port || port == b.drivetrainConfig.right_port;
 }
 
-// portIsPolled -- true if `port`'s current bb.motorConfig[] snapshot (the
-// Configurator's own published value) marks it a member of NezhaHardware's
-// I2C flip-flop poll-set (091-002: architecture-update.md Decision 2).
-// DUTY/VEL/POS pre-validate against this BEFORE the existing capability
-// gate -- see handleDevM() below. NEUTRAL/RESET/STATE/CAPS/CFG never
-// consult it; a port's poll membership is orthogonal to whether it can be
-// neutralized/reset/queried/reconfigured.
-bool portIsPolled(const Rt::Blackboard& b, uint32_t port) {
-    return b.motorConfig[port - 1].polled;
+// portIsPolled -- true if motor index `idx`'s current bb.motorConfig[]
+// snapshot (the Configurator's own published value) marks it a member of
+// NezhaHardware's I2C flip-flop poll-set (091-002: architecture-update.md
+// Decision 2). DUTY/VEL/POS pre-validate against this BEFORE the existing
+// capability gate -- see handleDevM() below. NEUTRAL/RESET/STATE/CAPS/CFG
+// never consult it; a motor's poll membership is orthogonal to whether it
+// can be neutralized/reset/queried/reconfigured. `idx` is the 0-based
+// Hardware motor index -- the caller (handleDevM) has already converted
+// the wire `<n>` at its own handler boundary.
+bool portIsPolled(const Rt::Blackboard& b, uint32_t idx) {
+    return b.motorConfig[idx].polled;
 }
 
 // handleDevMCfg -- CFG delta: apply each supplied key onto a CANDIDATE
-// msg::MotorConfig seeded from bb.motorConfig[port-1] (087-006: replaces the
+// msg::MotorConfig seeded from bb.motorConfig[idx] (087-006: replaces the
 // old motorConfigShadow[] read-modify-write shadow -- bb.motorConfig[] is
 // the Configurator's own published current value), ERR badkey per
 // unrecognized key, one OK ack line listing only the keys that actually
 // applied (if any). On success, posts ONE Rt::ConfigDelta (kMotor) carrying
 // only the touched fields (mask) to bb.configIn -- the Configurator (ticket
-// 005) folds+applies it.
-void handleDevMCfg(Rt::Blackboard& b, uint32_t port, const ArgList& args,
+// 005) folds+applies it. `idx` is the 0-based Hardware motor index --
+// handleDevM() has already converted the wire `<n>` at its own handler
+// boundary; the reply's verb text converts back to the wire label (idx+1)
+// purely for display.
+void handleDevMCfg(Rt::Blackboard& b, uint32_t idx, const ArgList& args,
                    const char* corrId, ReplyFn replyFn, void* replyCtx) {
-    msg::MotorConfig cfg = b.motorConfig[port - 1];
+    msg::MotorConfig cfg = b.motorConfig[idx];
     uint64_t mask = 0;
     char appliedBody[256];
     int bodyLen = 0;
@@ -464,13 +473,13 @@ void handleDevMCfg(Rt::Blackboard& b, uint32_t port, const ArgList& args,
     if (anyApplied) {
         Rt::ConfigDelta delta;
         delta.target = Rt::ConfigDelta::kMotor;
-        delta.port = port;
+        delta.port = idx;   // 0-based index (commands.h's ConfigDelta::port contract)
         delta.mask = mask;
         delta.motor = cfg;
         b.configIn.post(delta);
 
         char verb[16];
-        snprintf(verb, sizeof(verb), "DEV M %u", static_cast<unsigned>(port));
+        snprintf(verb, sizeof(verb), "DEV M %u", static_cast<unsigned>(idx + 1));   // idx -> wire label, display only
         char rbuf[300];
         CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
                                    "%s", appliedBody);
@@ -481,18 +490,24 @@ void handleDevMCfg(Rt::Blackboard& b, uint32_t port, const ArgList& args,
 void handleDevM(const ArgList& args, const char* corrId,
                 ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
     Rt::Blackboard& b = bb(handlerCtx);
-    uint32_t port = static_cast<uint32_t>(args.args[0].ival);
+    uint32_t port = static_cast<uint32_t>(args.args[0].ival);   // wire 1-based brick label
+    // THE conversion boundary (0-based motor indices, OOP refactor): `port`
+    // is the wire-visible `<n>` (parseDevM already range-validated it to
+    // [1,4]); converted to a 0-based Hardware motor index EXACTLY ONCE,
+    // here. Every bb array access below uses `idx`; `port`/`verb` survive
+    // only for the wire-visible reply text.
+    uint32_t idx = port - 1;
     MotorMode mode;
     motorModeFromToken(args.args[1].sval, &mode);   // already validated by parseDevM
 
-    const msg::MotorCapabilities& caps = b.motorCaps[port - 1];
+    const msg::MotorCapabilities& caps = b.motorCaps[idx];
     char verb[16];
     snprintf(verb, sizeof(verb), "DEV M %u", static_cast<unsigned>(port));
     char rbuf[200];
 
     switch (mode) {
         case MotorMode::DUTY: {
-            if (!portIsPolled(b, port)) {
+            if (!portIsPolled(b, idx)) {
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "nodev", "duty", corrId, replyFn, replyCtx);
                 break;
             }
@@ -511,7 +526,7 @@ void handleDevM(const ArgList& args, const char* corrId,
             break;
         }
         case MotorMode::VEL: {
-            if (!portIsPolled(b, port)) {
+            if (!portIsPolled(b, idx)) {
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "nodev", "vel", corrId, replyFn, replyCtx);
                 break;
             }
@@ -530,7 +545,7 @@ void handleDevM(const ArgList& args, const char* corrId,
             break;
         }
         case MotorMode::POS: {
-            if (!portIsPolled(b, port)) {
+            if (!portIsPolled(b, idx)) {
                 CommandProcessor::replyErr(rbuf, sizeof(rbuf), "nodev", "pos", corrId, replyFn, replyCtx);
                 break;
             }
@@ -599,7 +614,7 @@ void handleDevM(const ArgList& args, const char* corrId,
             break;
         }
         case MotorMode::STATE:
-            emitMotorState(b.motors[port - 1], port, corrId, replyFn, replyCtx);
+            emitMotorState(b.motors[idx], port, corrId, replyFn, replyCtx);
             break;
         case MotorMode::CAPS: {
             CommandProcessor::replyOKf(rbuf, sizeof(rbuf), verb, corrId, replyFn, replyCtx,
@@ -609,7 +624,7 @@ void handleDevM(const ArgList& args, const char* corrId,
             break;
         }
         case MotorMode::CFG:
-            handleDevMCfg(b, port, args, corrId, replyFn, replyCtx);
+            handleDevMCfg(b, idx, args, corrId, replyFn, replyCtx);
             break;
     }
 }
@@ -892,8 +907,8 @@ void handleDevDt(const ArgList& args, const char* corrId,
 void handleDevState(const ArgList& /*args*/, const char* corrId,
                     ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
     Rt::Blackboard& b = bb(handlerCtx);
-    for (uint32_t port = 1; port <= Rt::kPortCount; ++port) {
-        emitMotorState(b.motors[port - 1], port, corrId, replyFn, replyCtx);
+    for (uint32_t idx = 0; idx < Rt::kMotorCount; ++idx) {
+        emitMotorState(b.motors[idx], idx + 1, corrId, replyFn, replyCtx);   // idx -> wire label, display only
     }
     emitDrivetrainState(b, corrId, replyFn, replyCtx);
 }

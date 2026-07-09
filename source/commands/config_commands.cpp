@@ -335,19 +335,21 @@ const int kAllKeysCount = static_cast<int>(sizeof(kAllKeys) / sizeof(kAllKeys[0]
 // formatConfigKeyFromBb -- format one registered key's CURRENT PUBLISHED
 // value (bb.drivetrainConfig/bb.motorConfig[]/bb.plannerConfig/
 // bb.streamWatchdogWindow -- 087-006: replaces the pre-087 shadow read)
-// as "key=value" into outBuf. left/right are read ONCE by the caller
-// (handleGet) so every key in one GET line/dump resolves against the SAME
-// bound pair. Returns false for an unrecognized key (caller replies
-// ERR badkey). pid.* reads the LEFT bound motor's published config -- SET
-// always applies the same value to both bound motors identically
+// as "key=value" into outBuf. leftIdx/rightIdx (0-based Hardware motor
+// indices) are read ONCE by the caller (handleGet), converted from the
+// bound pair's wire-shaped bb.drivetrainConfig.left_port/right_port at that
+// caller's own boundary, so every key in one GET line/dump resolves against
+// the SAME bound pair. Returns false for an unrecognized key (caller
+// replies ERR badkey). pid.* reads the LEFT bound motor's published config
+// -- SET always applies the same value to both bound motors identically
 // (applyConfigKey above), so left/right can only disagree if something
 // OUTSIDE this file's SET (e.g. `DEV M <n> CFG kp=...`) wrote just one side.
 // ---------------------------------------------------------------------------
-bool formatConfigKeyFromBb(const Rt::Blackboard& b, uint32_t leftPort, uint32_t rightPort,
+bool formatConfigKeyFromBb(const Rt::Blackboard& b, uint32_t leftIdx, uint32_t rightIdx,
                             const char* key, char* outBuf, int outBufSize) {
     char numStr[16];
-    const msg::MotorConfig& left = b.motorConfig[leftPort - 1];
-    const msg::MotorConfig& right = b.motorConfig[rightPort - 1];
+    const msg::MotorConfig& left = b.motorConfig[leftIdx];
+    const msg::MotorConfig& right = b.motorConfig[rightIdx];
 
     if (strcmp(key, "tw") == 0) {
         snprintf(outBuf, static_cast<size_t>(outBufSize), "tw=%d",
@@ -462,14 +464,21 @@ void handleSet(const ArgList& args, const char* corrId,
     Rt::Blackboard& b = bb(handlerCtx);
 
     // Read the CURRENTLY bound pair at SET-time, not a hardcoded port --
-    // see config_commands.h's file header.
+    // see config_commands.h's file header. THE conversion boundary
+    // (0-based motor indices, OOP refactor): bb.drivetrainConfig.left_port/
+    // right_port are wire/serialized 1-based labels (msg::DrivetrainConfig,
+    // unchanged) -- converted to 0-based Hardware motor indices here, once,
+    // for this handler's own use; every bb.motorConfig[]/ConfigDelta::port
+    // access below uses leftIdx/rightIdx, never leftPort/rightPort.
     uint32_t leftPort = b.drivetrainConfig.left_port;
     uint32_t rightPort = b.drivetrainConfig.right_port;
+    uint32_t leftIdx = leftPort - 1;
+    uint32_t rightIdx = rightPort - 1;
 
     ConfigCandidate cand;
     cand.dt = b.drivetrainConfig;
-    cand.left = b.motorConfig[leftPort - 1];
-    cand.right = b.motorConfig[rightPort - 1];
+    cand.left = b.motorConfig[leftIdx];
+    cand.right = b.motorConfig[rightIdx];
     cand.planner = b.plannerConfig;
     cand.sTimeoutRaw = static_cast<long>(b.streamWatchdogWindow);
 
@@ -535,7 +544,7 @@ void handleSet(const ArgList& args, const char* corrId,
     if (cand.touchedLeft) {
         Rt::ConfigDelta delta;
         delta.target = Rt::ConfigDelta::kMotor;
-        delta.port = leftPort;
+        delta.port = leftIdx;   // 0-based index (commands.h's ConfigDelta::port contract)
         delta.mask = cand.leftMask;
         delta.motor = cand.left;
         b.configIn.post(delta);
@@ -543,7 +552,7 @@ void handleSet(const ArgList& args, const char* corrId,
     if (cand.touchedRight) {
         Rt::ConfigDelta delta;
         delta.target = Rt::ConfigDelta::kMotor;
-        delta.port = rightPort;
+        delta.port = rightIdx;   // 0-based index (commands.h's ConfigDelta::port contract)
         delta.mask = cand.rightMask;
         delta.motor = cand.right;
         b.configIn.post(delta);
@@ -574,8 +583,12 @@ void handleGet(const ArgList& args, const char* corrId,
     Rt::Blackboard& b = bb(handlerCtx);
     // Read once, at GET-time, so every key in this one reply resolves
     // against the SAME bound pair -- see config_commands.h's file header.
-    uint32_t leftPort = b.drivetrainConfig.left_port;
-    uint32_t rightPort = b.drivetrainConfig.right_port;
+    // THE conversion boundary (0-based motor indices, OOP refactor):
+    // bb.drivetrainConfig.left_port/right_port are wire/serialized 1-based
+    // labels -- converted to 0-based Hardware motor indices here, once;
+    // formatConfigKeyFromBb() below takes the already-converted indices.
+    uint32_t leftIdx = b.drivetrainConfig.left_port - 1;
+    uint32_t rightIdx = b.drivetrainConfig.right_port - 1;
 
     char line[400];
     int pos = 0;
@@ -587,7 +600,7 @@ void handleGet(const ArgList& args, const char* corrId,
         // Dump all registered keys, in kAllKeys order.
         for (int i = 0; i < kAllKeysCount && rem > 2; ++i) {
             char kv[40];
-            formatConfigKeyFromBb(b, leftPort, rightPort, kAllKeys[i], kv, sizeof(kv));
+            formatConfigKeyFromBb(b, leftIdx, rightIdx, kAllKeys[i], kv, sizeof(kv));
             line[pos++] = ' '; --rem;
             int w = snprintf(line + pos, static_cast<size_t>(rem), "%s", kv);
             if (w > 0 && w < rem) { pos += w; rem -= w; }
@@ -596,7 +609,7 @@ void handleGet(const ArgList& args, const char* corrId,
         for (int t = 0; t < args.count && rem > 2; ++t) {
             const char* reqKey = args.args[t].sval;
             char kv[40];
-            if (formatConfigKeyFromBb(b, leftPort, rightPort, reqKey, kv, sizeof(kv))) {
+            if (formatConfigKeyFromBb(b, leftIdx, rightIdx, reqKey, kv, sizeof(kv))) {
                 line[pos++] = ' '; --rem;
                 int w = snprintf(line + pos, static_cast<size_t>(rem), "%s", kv);
                 if (w > 0 && w < rem) { pos += w; rem -= w; }

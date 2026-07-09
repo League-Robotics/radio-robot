@@ -68,15 +68,15 @@ void checkUintEq(uint32_t actual, uint32_t expected, const std::string& what) {
 constexpr uint16_t kAddr7 = 0x10;                                   // bare 7-bit (clear()'s convention)
 constexpr uint16_t kWireAddr = static_cast<uint16_t>(kAddr7 << 1);  // 0x20 (write()/read()'s convention)
 
-msg::MotorConfig g_defaultConfigs[Subsystems::Hardware::kPortCount];
+msg::MotorConfig g_defaultConfigs[Subsystems::Hardware::kMotorCount];
 
 // resetDefaultConfigs -- 091-002: `polled` is now the CONFIGURED poll-set
 // fed to NezhaHardware's constructor, mirroring nezha_flipflop_harness.cpp's
-// own identical update: each scenario must declare, up front, which port(s)
-// it wants scheduled (apply()/motorIn[] no longer bring a port in as a side
-// effect). `polledMask` bit i (0-based) means port i+1 starts polled=true.
+// own identical update: each scenario must declare, up front, which motor(s)
+// it wants scheduled (apply()/motorIn[] no longer bring a motor in as a side
+// effect). `polledMask` bit i means motor index i starts polled=true.
 void resetDefaultConfigs(uint8_t polledMask = 0) {
-  for (uint32_t i = 0; i < Subsystems::Hardware::kPortCount; ++i) {
+  for (uint32_t i = 0; i < Subsystems::Hardware::kMotorCount; ++i) {
     g_defaultConfigs[i] = msg::MotorConfig{};
     g_defaultConfigs[i].setPort(i + 1).setFwdSign(1).setTravelCalib(1.0f);
     g_defaultConfigs[i].setPolled((polledMask & (1u << i)) != 0);
@@ -119,11 +119,11 @@ void scenarioBeginAndMotorThroughBasePointer() {
 
   hardware->begin();
 
-  for (uint32_t port = 1; port <= Subsystems::Hardware::kPortCount; ++port) {
+  for (uint32_t idx = 0; idx < Subsystems::Hardware::kMotorCount; ++idx) {
     char what[96];
-    std::snprintf(what, sizeof(what), "port %u reports connected() after begin() through the base pointer",
-                  static_cast<unsigned>(port));
-    checkTrue(hardware->motor(port).connected(), what);
+    std::snprintf(what, sizeof(what), "motor index %u reports connected() after begin() through the base pointer",
+                  static_cast<unsigned>(idx));
+    checkTrue(hardware->motor(idx).connected(), what);
   }
   checkUintEq(bus.errCount(kAddr7), 0,
               "no script under-run across begin()'s direct per-port encoder priming");
@@ -164,7 +164,7 @@ void scenarioApplyCommandProcessorCommandThroughBasePointer() {
   Hal::CommandProcessorToHardwareCommand cmd;
   cmd.allPorts = false;
   cmd.count = 1;
-  cmd.addressed[0].port = 1;
+  cmd.addressed[0].port = 0;   // 0-based motor index -- physical port 1
   cmd.addressed[0].command = neutralCommand();
   hardware->apply(cmd);
 
@@ -173,8 +173,8 @@ void scenarioApplyCommandProcessorCommandThroughBasePointer() {
   I2CBus::advanceClock(4000);      // satisfy the request's own postClear
   hardware->tick(1010);            // COLLECT_DUE
 
-  checkTrue(hardware->motor(1).connected(), "port 1 collected via base-pointer apply()/tick()");
-  checkFalse(hardware->motor(2).connected(), "port 2 was never addressed — untouched");
+  checkTrue(hardware->motor(0).connected(), "port 1 (index 0) collected via base-pointer apply()/tick()");
+  checkFalse(hardware->motor(1).connected(), "port 2 (index 1) was never addressed — untouched");
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
 }
 
@@ -192,9 +192,9 @@ void scenarioApplyDrivetrainCommandThroughBasePointer() {
   scriptGenerousPool(bus, 40);
 
   Hal::DrivetrainToHardwareCommand dtCmd;
-  dtCmd.wheel[0].port = 3;
+  dtCmd.wheel[0].port = 2;   // 0-based motor index -- physical port 3
   dtCmd.wheel[0].command = neutralCommand();
-  dtCmd.wheel[1].port = 4;
+  dtCmd.wheel[1].port = 3;   // 0-based motor index -- physical port 4
   dtCmd.wheel[1].command = neutralCommand();
   hardware->apply(dtCmd);
 
@@ -205,10 +205,10 @@ void scenarioApplyDrivetrainCommandThroughBasePointer() {
     hardware->tick(10 * static_cast<uint32_t>(cycle) + 1);
   }
 
-  checkTrue(hardware->motor(3).connected(), "left wheel (port 3) scheduled via base-pointer apply()/tick()");
-  checkTrue(hardware->motor(4).connected(), "right wheel (port 4) scheduled via base-pointer apply()/tick()");
-  checkFalse(hardware->motor(1).connected(), "port 1 (not a bound wheel) never touched");
-  checkFalse(hardware->motor(2).connected(), "port 2 (not a bound wheel) never touched");
+  checkTrue(hardware->motor(2).connected(), "left wheel (port 3, index 2) scheduled via base-pointer apply()/tick()");
+  checkTrue(hardware->motor(3).connected(), "right wheel (port 4, index 3) scheduled via base-pointer apply()/tick()");
+  checkFalse(hardware->motor(0).connected(), "port 1 (index 0, not a bound wheel) never touched");
+  checkFalse(hardware->motor(1).connected(), "port 2 (index 1, not a bound wheel) never touched");
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
 }
 
@@ -230,18 +230,18 @@ void scenarioConfigAndStateThroughBasePointer() {
   Subsystems::Hardware* hardware = &concreteHardware;
   scriptGenerousPool(bus, 60);
 
-  for (uint32_t port = 1; port <= Subsystems::Hardware::kPortCount; ++port) {
-    msg::MotorConfig readBack = hardware->config(port);
-    checkTrue(readBack.port == g_defaultConfigs[port - 1].port,
-              "config(port) returns the constructed config verbatim (port field)");
-    checkTrue(readBack.fwd_sign == g_defaultConfigs[port - 1].fwd_sign,
-              "config(port) returns the constructed config verbatim (fwd_sign)");
+  for (uint32_t idx = 0; idx < Subsystems::Hardware::kMotorCount; ++idx) {
+    msg::MotorConfig readBack = hardware->config(idx);
+    checkTrue(readBack.port == g_defaultConfigs[idx].port,
+              "config(i) returns the constructed config verbatim (port field)");
+    checkTrue(readBack.fwd_sign == g_defaultConfigs[idx].fwd_sign,
+              "config(i) returns the constructed config verbatim (fwd_sign)");
   }
 
   Hal::CommandProcessorToHardwareCommand cmd;
   cmd.allPorts = false;
   cmd.count = 1;
-  cmd.addressed[0].port = 1;
+  cmd.addressed[0].port = 0;   // 0-based motor index -- physical port 1
   cmd.addressed[0].command = neutralCommand();
   hardware->apply(cmd);
 
@@ -249,11 +249,11 @@ void scenarioConfigAndStateThroughBasePointer() {
   I2CBus::advanceClock(4000);      // satisfy the request's own postClear
   hardware->tick(1010);            // COLLECT_DUE
 
-  checkTrue(hardware->motor(1).connected(), "port 1 scheduled via base-pointer apply()/tick()");
+  checkTrue(hardware->motor(0).connected(), "port 1 (index 0) scheduled via base-pointer apply()/tick()");
 
-  msg::MotorState st = hardware->state(1);
-  checkTrue(st.connected == hardware->motor(1).state().connected,
-            "state(port) matches motor(port).state() exactly -- through the base pointer");
+  msg::MotorState st = hardware->state(0);
+  checkTrue(st.connected == hardware->motor(0).state().connected,
+            "state(i) matches motor(i).state() exactly -- through the base pointer");
 
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
 }

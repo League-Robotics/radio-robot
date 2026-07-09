@@ -70,10 +70,10 @@ void checkUintEq(uint32_t actual, uint32_t expected, const std::string& what) {
 // self-contained sim defaults, kept independent so this harness needs no
 // dependency on sim_api.cpp itself). ---
 
-constexpr uint32_t kPortCount = Subsystems::Hardware::kPortCount;
+constexpr uint32_t kMotorCount = Subsystems::Hardware::kMotorCount;
 
 struct MotorConfigSet {
-  msg::MotorConfig cfg[kPortCount];
+  msg::MotorConfig cfg[kMotorCount];
 };
 
 MotorConfigSet defaultMotorConfigSet() {
@@ -83,7 +83,7 @@ MotorConfigSet defaultMotorConfigSet() {
   velGains.ki = 0.0018f;
   velGains.kff = 0.0038f;
   velGains.i_max = 0.3f;
-  for (uint32_t i = 0; i < kPortCount; ++i) {
+  for (uint32_t i = 0; i < kMotorCount; ++i) {
     set.cfg[i] = msg::MotorConfig();
     set.cfg[i].setPort(i + 1);
     set.cfg[i].setFwdSign(1);
@@ -290,8 +290,8 @@ void scenarioStagingOnlyNoI2CWriteUntilExplicitHardwareTick() {
   beginScenario(
       "staging-only: Drivetrain::tick() alone issues ZERO I2C writes -- only an explicit "
       "hardware.tick() flushes them");
-  msg::MotorConfig configs[Subsystems::NezhaHardware::kPortCount];
-  for (uint32_t i = 0; i < Subsystems::NezhaHardware::kPortCount; ++i) {
+  msg::MotorConfig configs[Subsystems::NezhaHardware::kMotorCount];
+  for (uint32_t i = 0; i < Subsystems::NezhaHardware::kMotorCount; ++i) {
     configs[i] = msg::MotorConfig();
     configs[i].setPort(i + 1).setFwdSign(1).setTravelCalib(1.0f);
     configs[i].setPolled(i + 1 == 1 || i + 1 == 2);   // the drive pair

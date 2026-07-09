@@ -115,8 +115,8 @@ void checkUintEq(uint32_t actual, uint32_t expected, const std::string& what) {
 
 // fillDefaultConfigs -- mirrors sim_hardware_harness.cpp's own helper
 // exactly (SimHardware's constructor contract: configs[i].port == i+1).
-void fillDefaultConfigs(msg::MotorConfig configs[Subsystems::Hardware::kPortCount]) {
-  for (uint32_t i = 0; i < Subsystems::Hardware::kPortCount; ++i) {
+void fillDefaultConfigs(msg::MotorConfig configs[Subsystems::Hardware::kMotorCount]) {
+  for (uint32_t i = 0; i < Subsystems::Hardware::kMotorCount; ++i) {
     configs[i] = msg::MotorConfig{};
     configs[i].setPort(i + 1).setFwdSign(1).setTravelCalib(1.0f);
   }
@@ -126,7 +126,7 @@ void fillDefaultConfigs(msg::MotorConfig configs[Subsystems::Hardware::kPortCoun
 //    published with the new value.
 void scenarioDrivetrainDeltaApplies() {
   beginScenario("kDrivetrain delta: folds, configures, publishes");
-  msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
+  msg::MotorConfig motorConfigs[Subsystems::Hardware::kMotorCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
   Subsystems::Drivetrain drivetrain(hardware);
@@ -157,16 +157,16 @@ void scenarioDrivetrainDeltaApplies() {
                "PoseEstimator::config().trackwidth also updated (drivetrain-scoped re-propagation)");
 }
 
-// 2. kMotor delta (port 2) -> Hal::Motor::configure() called through
-//    Hardware::motor(port); bb.motorConfig[1] reflects it; bb.motorConfig[0]
-//    (untouched port) is unaffected.
+// 2. kMotor delta (index 1, physical port 2) -> Hal::Motor::configure()
+//    called through Hardware::motor(i); bb.motorConfig[1] reflects it;
+//    bb.motorConfig[0] (untouched motor) is unaffected.
 //
-// Note: Hardware::config(port) (087-004) is a boot-time snapshot only --
+// Note: Hardware::config(i) (087-004) is a boot-time snapshot only --
 // ticket 087-004's own Implementation Notes confirm neither NezhaHardware
 // nor SimHardware writes back into their config_[] cache after
 // construction (there is no Hardware::configure() setter at all yet, only
 // the per-motor Hal::Motor::configure() this Configurator calls through).
-// It would therefore be WRONG to assert hardware.config(2) reflects a
+// It would therefore be WRONG to assert hardware.config(1) reflects a
 // post-construction configure() call -- it never will, by the current
 // codebase's own design. The published bb.motorConfig[] cell (populated
 // from THIS Configurator's own persistent motorConfig_[] copy, which IS
@@ -176,7 +176,7 @@ void scenarioDrivetrainDeltaApplies() {
 // port's current config" post-087.
 void scenarioMotorDeltaApplies() {
   beginScenario("kMotor delta: folds, configures port 2, publishes");
-  msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
+  msg::MotorConfig motorConfigs[Subsystems::Hardware::kMotorCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
   Subsystems::Drivetrain drivetrain(hardware);
@@ -188,7 +188,7 @@ void scenarioMotorDeltaApplies() {
 
   Rt::ConfigDelta delta;
   delta.target = Rt::ConfigDelta::kMotor;
-  delta.port = 2;
+  delta.port = 1;   // 0-based motor index -- physical port 2
   delta.mask = Rt::bitOf(Rt::MotorConfigField::kSlewRate) |
                Rt::bitOf(Rt::MotorConfigField::kVelGainsKp);
   delta.motor.slew_rate = 555.0f;
@@ -211,7 +211,7 @@ void scenarioMotorDeltaApplies() {
 //    published (094-002: no live Subsystems::Planner left to configure()).
 void scenarioPlannerDeltaApplies() {
   beginScenario("kPlanner delta: folds, publishes (no live Planner to configure)");
-  msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
+  msg::MotorConfig motorConfigs[Subsystems::Hardware::kMotorCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
   Subsystems::Drivetrain drivetrain(hardware);
@@ -236,7 +236,7 @@ void scenarioPlannerDeltaApplies() {
 //    odometer()) -> bb.odometerConfig published.
 void scenarioOdometerDeltaApplies() {
   beginScenario("kOdometer delta: folds, publishes (odometer() present on SimHardware)");
-  msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
+  msg::MotorConfig motorConfigs[Subsystems::Hardware::kMotorCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
   Subsystems::Drivetrain drivetrain(hardware);
@@ -266,7 +266,7 @@ void scenarioOdometerDeltaApplies() {
 //    configs/Hardware::config(port) read-back, with no delta posted.
 void scenarioPublishSeedsAllFourCells() {
   beginScenario("publish(bb): seeds all four cells at boot, no delta needed");
-  msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
+  msg::MotorConfig motorConfigs[Subsystems::Hardware::kMotorCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
   Subsystems::Drivetrain drivetrain(hardware);
@@ -285,11 +285,11 @@ void scenarioPublishSeedsAllFourCells() {
 
   checkFloatEq(bb.drivetrainConfig.trackwidth, 128.0f, "bb.drivetrainConfig seeded from boot config");
   checkFloatEq(bb.plannerConfig.min_speed, 5.0f, "bb.plannerConfig seeded from boot config");
-  for (uint32_t port = 1; port <= Subsystems::Hardware::kPortCount; ++port) {
+  for (uint32_t idx = 0; idx < Subsystems::Hardware::kMotorCount; ++idx) {
     char what[96];
-    std::snprintf(what, sizeof(what), "bb.motorConfig[%u].travel_calib seeded from Hardware::config(port)",
-                  static_cast<unsigned>(port - 1));
-    checkFloatEq(bb.motorConfig[port - 1].travel_calib, 1.0f, what);
+    std::snprintf(what, sizeof(what), "bb.motorConfig[%u].travel_calib seeded from Hardware::config(i)",
+                  static_cast<unsigned>(idx));
+    checkFloatEq(bb.motorConfig[idx].travel_calib, 1.0f, what);
   }
   checkFloatEq(bb.odometerConfig.linear_scalar, 0.0f,
                "bb.odometerConfig seeded zero-default (no boot-config source, per otos_commands.h)");
@@ -298,7 +298,7 @@ void scenarioPublishSeedsAllFourCells() {
 // 6. pending(bb) mirrors bb.configIn.empty() exactly.
 void scenarioPendingMirrorsConfigInEmpty() {
   beginScenario("pending(bb) mirrors !bb.configIn.empty()");
-  msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
+  msg::MotorConfig motorConfigs[Subsystems::Hardware::kMotorCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
   Subsystems::Drivetrain drivetrain(hardware);
@@ -324,7 +324,7 @@ void scenarioPendingMirrorsConfigInEmpty() {
 //    "field-masked, not full-replace" proof, AC-7).
 void scenarioSameTargetDisjointFieldsDoNotClobber() {
   beginScenario("Two kDrivetrain deltas, disjoint fields, FIFO fold -- no clobber");
-  msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
+  msg::MotorConfig motorConfigs[Subsystems::Hardware::kMotorCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
   Subsystems::Drivetrain drivetrain(hardware);
@@ -368,7 +368,7 @@ void scenarioSameTargetDisjointFieldsDoNotClobber() {
 // 8. applyOne() pops AT MOST one delta per call.
 void scenarioApplyOneDrainsExactlyOnePerCall() {
   beginScenario("applyOne() pops exactly one delta per call, never more");
-  msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
+  msg::MotorConfig motorConfigs[Subsystems::Hardware::kMotorCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
   Subsystems::Drivetrain drivetrain(hardware);
@@ -405,7 +405,7 @@ void scenarioApplyOneDrainsExactlyOnePerCall() {
 // 9. applyOne() called on an EMPTY configIn is a well-defined no-op.
 void scenarioApplyOneOnEmptyQueueIsNoop() {
   beginScenario("applyOne() on an empty configIn is a no-op");
-  msg::MotorConfig motorConfigs[Subsystems::Hardware::kPortCount];
+  msg::MotorConfig motorConfigs[Subsystems::Hardware::kMotorCount];
   fillDefaultConfigs(motorConfigs);
   Subsystems::SimHardware hardware(motorConfigs);
   Subsystems::Drivetrain drivetrain(hardware);

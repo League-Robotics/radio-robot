@@ -77,9 +77,9 @@ msg::Gains makeGains(float kp, float ki, float kff, float i_max, float kaw) {
 // Default configs for a 4-port Subsystems::SimHardware: fwd_sign=1,
 // travel_calib=1.0, no dwell/deadband (so armoredWrite() forwards the
 // commanded duty unchanged — see scenario comments for why this matters).
-void fillDefaultConfigs(msg::MotorConfig configs[Subsystems::Hardware::kPortCount],
+void fillDefaultConfigs(msg::MotorConfig configs[Subsystems::Hardware::kMotorCount],
                          const msg::Gains& gains, float minDuty) {
-  for (uint32_t i = 0; i < Subsystems::Hardware::kPortCount; ++i) {
+  for (uint32_t i = 0; i < Subsystems::Hardware::kMotorCount; ++i) {
     configs[i] = msg::MotorConfig{};
     configs[i].setPort(i + 1)
         .setFwdSign(1)
@@ -109,36 +109,36 @@ void scenarioDtZeroReentryGuard() {
 
   msg::Gains gains = makeGains(/*kp=*/0.01f, /*ki=*/0.05f, /*kff=*/0.002f,
                                 /*i_max=*/1.0f, /*kaw=*/2.0f);
-  msg::MotorConfig configs[Subsystems::Hardware::kPortCount];
+  msg::MotorConfig configs[Subsystems::Hardware::kMotorCount];
   fillDefaultConfigs(configs, gains, /*minDuty=*/0.0f);
 
   // Instance A: ticked once at now=1000, then ticked AGAIN at the SAME
   // now=1000 — exactly devLoopTick()'s two-slice pattern.
   Subsystems::SimHardware hwA(configs);
-  hwA.motor(1).apply(msg::MotorCommand{}.setVelocity(300.0f));
+  hwA.motor(0).apply(msg::MotorCommand{}.setVelocity(300.0f));
   hwA.tick(1000);
-  float dutyAfterFirst = hwA.motor(1).appliedDuty();
-  float posAfterFirst  = hwA.motor(1).position();
-  float velAfterFirst  = hwA.motor(1).velocity();
+  float dutyAfterFirst = hwA.motor(0).appliedDuty();
+  float posAfterFirst  = hwA.motor(0).position();
+  float velAfterFirst  = hwA.motor(0).velocity();
 
   hwA.tick(1000);   // re-entrant, unchanged now -- must be a complete no-op
 
-  checkNear(hwA.motor(1).appliedDuty(), dutyAfterFirst, 0.0f,
+  checkNear(hwA.motor(0).appliedDuty(), dutyAfterFirst, 0.0f,
             "appliedDuty unchanged across the re-entrant same-now call");
-  checkNear(hwA.motor(1).position(), posAfterFirst, 0.0f,
+  checkNear(hwA.motor(0).position(), posAfterFirst, 0.0f,
             "position unchanged across the re-entrant same-now call");
-  checkNear(hwA.motor(1).velocity(), velAfterFirst, 0.0f,
+  checkNear(hwA.motor(0).velocity(), velAfterFirst, 0.0f,
             "velocity unchanged across the re-entrant same-now call");
 
   Subsystems::SimHardware hwB(configs);
-  hwB.motor(1).apply(msg::MotorCommand{}.setVelocity(300.0f));
+  hwB.motor(0).apply(msg::MotorCommand{}.setVelocity(300.0f));
   hwB.tick(1000);
 
-  checkNear(hwA.motor(1).appliedDuty(), hwB.motor(1).appliedDuty(), 0.0f,
+  checkNear(hwA.motor(0).appliedDuty(), hwB.motor(0).appliedDuty(), 0.0f,
             "double-ticked instance's duty matches the single-ticked control");
-  checkNear(hwA.motor(1).position(), hwB.motor(1).position(), 0.0f,
+  checkNear(hwA.motor(0).position(), hwB.motor(0).position(), 0.0f,
             "double-ticked instance's position matches the single-ticked control");
-  checkNear(hwA.motor(1).velocity(), hwB.motor(1).velocity(), 0.0f,
+  checkNear(hwA.motor(0).velocity(), hwB.motor(0).velocity(), 0.0f,
             "double-ticked instance's velocity matches the single-ticked control");
 
   // Both instances then advance identically at a genuinely NEW now — they
@@ -147,14 +147,14 @@ void scenarioDtZeroReentryGuard() {
   // PID integral that silently drifted apart during the re-entrant call).
   hwA.tick(1024);
   hwB.tick(1024);
-  checkNear(hwA.motor(1).appliedDuty(), hwB.motor(1).appliedDuty(), 0.0f,
+  checkNear(hwA.motor(0).appliedDuty(), hwB.motor(0).appliedDuty(), 0.0f,
             "instances still match after a subsequent genuine tick (duty)");
-  checkNear(hwA.motor(1).position(), hwB.motor(1).position(), 0.0f,
+  checkNear(hwA.motor(0).position(), hwB.motor(0).position(), 0.0f,
             "instances still match after a subsequent genuine tick (position)");
 
   // Direct proof at the plant layer too: the SHARED PhysicsWorld's own
   Subsystems::SimHardware hwC(configs);
-  hwC.motor(1).apply(msg::MotorCommand{}.setVelocity(300.0f));
+  hwC.motor(0).apply(msg::MotorCommand{}.setVelocity(300.0f));
   hwC.tick(2000);
   float trueEncBefore     = hwC.plant().trueEncL();
   float reportedEncBefore = hwC.plant().reportedEncL();
@@ -184,8 +184,8 @@ void scenarioDtZeroReentryGuard() {
 void scenarioZeroErrorDeterminism() {
   beginScenario("zero-error determinism gate: true encoder == reported encoder == OTOS accumulator, bit-for-bit");
 
-  msg::MotorConfig configs[Subsystems::Hardware::kPortCount];
-  for (uint32_t i = 0; i < Subsystems::Hardware::kPortCount; ++i) {
+  msg::MotorConfig configs[Subsystems::Hardware::kMotorCount];
+  for (uint32_t i = 0; i < Subsystems::Hardware::kMotorCount; ++i) {
     configs[i] = msg::MotorConfig{};
     configs[i].setPort(i + 1).setFwdSign(1).setTravelCalib(1.0f);
   }
@@ -196,8 +196,8 @@ void scenarioZeroErrorDeterminism() {
   // sub-step B: dTh == ((dR-dL)/trackwidth)*slip == 0 exactly whenever
   // dR == dL bit-for-bit, which holds here since both wheels are commanded
   // the identical duty against identical configs).
+  hw.motor(0).apply(msg::MotorCommand{}.setDutyCycle(0.5f));
   hw.motor(1).apply(msg::MotorCommand{}.setDutyCycle(0.5f));
-  hw.motor(2).apply(msg::MotorCommand{}.setDutyCycle(0.5f));
 
 
   uint32_t now = 0;
@@ -292,13 +292,13 @@ void scenarioConfigAndState() {
 
   msg::Gains gains = makeGains(/*kp=*/0.01f, /*ki=*/0.05f, /*kff=*/0.002f,
                                 /*i_max=*/1.0f, /*kaw=*/2.0f);
-  msg::MotorConfig configs[Subsystems::Hardware::kPortCount];
+  msg::MotorConfig configs[Subsystems::Hardware::kMotorCount];
   fillDefaultConfigs(configs, gains, /*minDuty=*/0.0f);
 
   Subsystems::SimHardware hw(configs);
 
-  for (uint32_t i = 0; i < Subsystems::Hardware::kPortCount; ++i) {
-    msg::MotorConfig readBack = hw.config(i + 1);
+  for (uint32_t i = 0; i < Subsystems::Hardware::kMotorCount; ++i) {
+    msg::MotorConfig readBack = hw.config(i);
     checkNear(readBack.travel_calib, configs[i].travel_calib, 0.0f,
               "config(port) returns the constructed travel_calib");
     checkTrue(readBack.fwd_sign == configs[i].fwd_sign,
@@ -307,15 +307,15 @@ void scenarioConfigAndState() {
               "config(port) returns the constructed min_duty");
   }
 
-  hw.motor(1).apply(msg::MotorCommand{}.setVelocity(150.0f));
+  hw.motor(0).apply(msg::MotorCommand{}.setVelocity(150.0f));
   hw.tick(0);
 
-  msg::MotorState st1 = hw.state(1);
-  checkTrue(st1.connected == hw.motor(1).state().connected,
+  msg::MotorState st1 = hw.state(0);
+  checkTrue(st1.connected == hw.motor(0).state().connected,
             "state(port) matches motor(port).state() exactly (connected)");
-  checkNear(st1.applied.val, hw.motor(1).state().applied.val, 0.0f,
+  checkNear(st1.applied.val, hw.motor(0).state().applied.val, 0.0f,
             "state(port) matches motor(port).state() exactly (applied)");
-  checkNear(st1.velocity.val, hw.motor(1).state().velocity.val, 0.0f,
+  checkNear(st1.velocity.val, hw.motor(0).state().velocity.val, 0.0f,
             "state(port) matches motor(port).state() exactly (velocity)");
 }
 

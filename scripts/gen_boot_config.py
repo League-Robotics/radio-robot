@@ -58,9 +58,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 OUT_FILE  = REPO_ROOT / "source" / "config" / "boot_config.cpp"
 
 # --- Bench-tuned firmware defaults (NOT from the robot JSON) ----------------
-# Ports 1..kPortCount; matches Subsystems::NezhaHardware::kPortCount, asserted
+# Ports 1..kMotorCount; matches Subsystems::NezhaHardware::kMotorCount, asserted
 # in main.cpp. Keep in sync if the port count ever changes.
-K_PORT_COUNT = 4
+K_MOTOR_COUNT = 4
 
 # Velocity PID gains, bench-tuned on the stand (Tovez, ports 1/3, targets
 # 120/150/-100 mm/s): converges within ~1.5 s, small (~10%) overshoot, holds
@@ -184,7 +184,7 @@ def _f(v) -> str:
 # ---------------------------------------------------------------------------
 
 def travel_calib_for_ports(cfg: dict):
-    """Return a list of kPortCount mm/deg values, one per port (1..N).
+    """Return a list of kMotorCount mm/deg values, one per port (1..N).
 
     The left/right drive-pair ports take calibration.mm_per_wheel_deg_left/right
     when the robot JSON supplies them; every other port (and the pair, when the
@@ -194,7 +194,7 @@ def travel_calib_for_ports(cfg: dict):
     left  = _get(cal, "mm_per_wheel_deg_left")
     right = _get(cal, "mm_per_wheel_deg_right")
     out = []
-    for port in range(1, K_PORT_COUNT + 1):
+    for port in range(1, K_MOTOR_COUNT + 1):
         if port == LEFT_PORT and left is not None:
             out.append(float(left))
         elif port == RIGHT_PORT and right is not None:
@@ -205,7 +205,7 @@ def travel_calib_for_ports(cfg: dict):
 
 
 def polled_for_ports():
-    """Return a list of kPortCount `polled` bools, one per port (1..N).
+    """Return a list of kMotorCount `polled` bools, one per port (1..N).
 
     091-002: the I2C flip-flop poll-schedule membership fact -- which ports
     Subsystems::NezhaHardware's brick flip-flop sequencer samples/dispatches
@@ -216,11 +216,11 @@ def polled_for_ports():
     override: poll membership is a firmware-scheduling fact, not a
     per-robot calibration value, so this is the same for every robot.
     """
-    return [port in (LEFT_PORT, RIGHT_PORT) for port in range(1, K_PORT_COUNT + 1)]
+    return [port in (LEFT_PORT, RIGHT_PORT) for port in range(1, K_MOTOR_COUNT + 1)]
 
 
 def fwd_sign_for_ports(cfg: dict):
-    """Return a list of kPortCount fwd_sign values, one per port (1..N).
+    """Return a list of kMotorCount fwd_sign values, one per port (1..N).
 
     Mirrors travel_calib_for_ports()'s exact shape: the left/right drive-pair
     ports take calibration.fwd_sign_left/right when the robot JSON supplies
@@ -237,7 +237,7 @@ def fwd_sign_for_ports(cfg: dict):
     left  = _get(cal, "fwd_sign_left")
     right = _get(cal, "fwd_sign_right")
     out = []
-    for port in range(1, K_PORT_COUNT + 1):
+    for port in range(1, K_MOTOR_COUNT + 1):
         if port == LEFT_PORT and left is not None:
             out.append(int(left))
         elif port == RIGHT_PORT and right is not None:

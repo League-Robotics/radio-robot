@@ -138,8 +138,8 @@ Configurator::Configurator(Subsystems::Drivetrain& drivetrain, Subsystems::PoseE
       drivetrainConfig_(bootDrivetrainConfig),
       plannerConfig_(bootPlannerConfig),
       odometerConfig_() {
-  for (uint32_t port = 1; port <= Subsystems::Hardware::kPortCount; ++port) {
-    motorConfig_[port - 1] = hardware_.config(port);
+  for (uint32_t i = 0; i < Subsystems::Hardware::kMotorCount; ++i) {
+    motorConfig_[i] = hardware_.config(i);
   }
 }
 
@@ -164,20 +164,21 @@ void Configurator::applyOne(Blackboard& bb) {
       break;
     }
     case ConfigDelta::kMotor: {
-      // Hardware::motor()'s own [1, kPortCount] out-of-range convention
-      // (clamp to the last port) -- mirrored here since delta.port is
-      // caller-supplied and this is the one place it gets used as an array
-      // index into motorConfig_[].
-      uint32_t port = delta.port;
-      if (port < 1 || port > Subsystems::Hardware::kPortCount) {
-        port = Subsystems::Hardware::kPortCount;
+      // Hardware::motor()'s own [0, kMotorCount) out-of-range convention
+      // (clamp to the last index) -- mirrored here since delta.port is
+      // caller-supplied (already a 0-based index -- see commands.h's own
+      // doc comment on ConfigDelta::port) and this is the one place it gets
+      // used as an array index into motorConfig_[].
+      uint32_t idx = delta.port;
+      if (idx >= Subsystems::Hardware::kMotorCount) {
+        idx = Subsystems::Hardware::kMotorCount - 1;
       }
-      if (foldMotor(motorConfig_[port - 1], delta)) {
+      if (foldMotor(motorConfig_[idx], delta)) {
         // Hardware has no top-level configure() (ticket 087-004's own
         // Implementation Notes flagged this gap) -- apply through the
         // per-motor Hal::Motor faceplate instead, exactly as SET/DEV M CFG
         // already do today.
-        hardware_.motor(port).configure(motorConfig_[port - 1]);
+        hardware_.motor(idx).configure(motorConfig_[idx]);
         // 091-002: `polled` is a Hardware-level (poll-schedule) fact, not a
         // per-motor Hal::Motor one -- Hal::Motor::configure() above has no
         // concept of it. Route it through the ONE door that does
@@ -185,10 +186,10 @@ void Configurator::applyOne(Blackboard& bb) {
         // ONLY when this delta actually touched the bit, mirroring every
         // other field's own mask-gated application above.
         if (delta.mask & bitOf(MotorConfigField::kPolled)) {
-          hardware_.setPolled(port, motorConfig_[port - 1].polled);
+          hardware_.setPolled(idx, motorConfig_[idx].polled);
         }
       }
-      bb.motorConfig[port - 1] = motorConfig_[port - 1];
+      bb.motorConfig[idx] = motorConfig_[idx];
       break;
     }
     case ConfigDelta::kPlanner: {
@@ -218,8 +219,8 @@ void Configurator::applyOne(Blackboard& bb) {
 
 void Configurator::publish(Blackboard& bb) {
   bb.drivetrainConfig = drivetrainConfig_;
-  for (uint32_t port = 1; port <= Subsystems::Hardware::kPortCount; ++port) {
-    bb.motorConfig[port - 1] = motorConfig_[port - 1];
+  for (uint32_t i = 0; i < Subsystems::Hardware::kMotorCount; ++i) {
+    bb.motorConfig[i] = motorConfig_[i];
   }
   bb.plannerConfig = plannerConfig_;
   bb.odometerConfig = odometerConfig_;

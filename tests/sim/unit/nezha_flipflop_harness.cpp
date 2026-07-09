@@ -121,7 +121,7 @@ void checkFloatEq(float actual, float expected, const std::string& what) {
 constexpr uint16_t kAddr7 = 0x10;                                   // bare 7-bit (clear()'s convention)
 constexpr uint16_t kWireAddr = static_cast<uint16_t>(kAddr7 << 1);  // 0x20 (write()/read()'s convention)
 
-msg::MotorConfig defaultConfigs[Subsystems::NezhaHardware::kPortCount];
+msg::MotorConfig defaultConfigs[Subsystems::NezhaHardware::kMotorCount];
 
 // resetDefaultConfigs -- 091-002: `polled` is now the CONFIGURED poll-set
 // fed to NezhaHardware's constructor (polled_[], replacing the old
@@ -131,7 +131,7 @@ msg::MotorConfig defaultConfigs[Subsystems::NezhaHardware::kPortCount];
 // bit i (0-based) means port i+1 starts polled=true; every other port
 // defaults false -- mirrors gen_boot_config.py's own boot-config shape.
 void resetDefaultConfigs(uint8_t polledMask = 0) {
-  for (uint32_t i = 0; i < Subsystems::NezhaHardware::kPortCount; ++i) {
+  for (uint32_t i = 0; i < Subsystems::NezhaHardware::kMotorCount; ++i) {
     defaultConfigs[i] = msg::MotorConfig{};
     defaultConfigs[i].setPort(i + 1).setFwdSign(1).setTravelCalib(1.0f);
     defaultConfigs[i].setPolled((polledMask & (1u << i)) != 0);
@@ -242,7 +242,7 @@ void scenarioFlipFlopSequencingAndClearConvention() {
   Subsystems::NezhaHardware hal(bus, defaultConfigs);
   scriptGenerousPool(bus, 20);
 
-  hal.apply(addressedOne(1, neutralCommand()));   // stages NEUTRAL on port 1's own setter (already polled)
+  hal.apply(addressedOne(0, neutralCommand()));   // stages NEUTRAL on port 1's own setter (already polled)
 
   checkUintEq(bus.txnCount(kAddr7), 0, "apply() alone issues no bus traffic");
 
@@ -261,8 +261,8 @@ void scenarioFlipFlopSequencingAndClearConvention() {
   checkUintEq(bus.txnCount(kAddr7), 3,
               "collect landed: +1 read (collectEncoder) +1 write (first NEUTRAL "
               "dispatch, write-on-change never having seen this value before)");
-  checkTrue(hal.motor(1).connected(), "port 1 reports connected() after a clean collect");
-  checkFloatEq(hal.motor(1).appliedDuty(), 0.0f, "NEUTRAL dispatch wrote duty 0");
+  checkTrue(hal.motor(0).connected(), "port 1 reports connected() after a clean collect");
+  checkFloatEq(hal.motor(0).appliedDuty(), 0.0f, "NEUTRAL dispatch wrote duty 0");
 
   hal.tick(1030);   // REQUEST_DUE again
   checkUintEq(bus.txnCount(kAddr7), 4, "second REQUEST_DUE issued one more transaction");
@@ -290,18 +290,18 @@ void scenarioInUseTrackingAndRotation() {
   Subsystems::NezhaHardware hal(bus, defaultConfigs);
   scriptGenerousPool(bus, 40);
 
-  hal.apply(addressedTwo(1, neutralCommand(), 3, neutralCommand()));   // stages NEUTRAL; ports already polled
+  hal.apply(addressedTwo(0, neutralCommand(), 2, neutralCommand()));   // stages NEUTRAL; ports already polled
 
   runOneCycle(hal, /*req=*/1, /*collect=*/2);
-  checkTrue(hal.motor(1).connected(), "cycle A: port 1 (activePort_ defaults to 1) collects first");
-  checkFalse(hal.motor(3).connected(), "cycle A: port 3 has not been reached yet");
-  checkFalse(hal.motor(2).connected(), "port 2 is not polled -- untouched");
-  checkFalse(hal.motor(4).connected(), "port 4 is not polled -- untouched");
+  checkTrue(hal.motor(0).connected(), "cycle A: port 1 (activePort_ defaults to 1) collects first");
+  checkFalse(hal.motor(2).connected(), "cycle A: port 3 has not been reached yet");
+  checkFalse(hal.motor(1).connected(), "port 2 is not polled -- untouched");
+  checkFalse(hal.motor(3).connected(), "port 4 is not polled -- untouched");
 
   runOneCycle(hal, /*req=*/3, /*collect=*/4);
-  checkTrue(hal.motor(3).connected(), "cycle B: rotation reached port 3 next (wrapping past unpolled port 2)");
-  checkFalse(hal.motor(2).connected(), "port 2 still untouched");
-  checkFalse(hal.motor(4).connected(), "port 4 still untouched");
+  checkTrue(hal.motor(2).connected(), "cycle B: rotation reached port 3 next (wrapping past unpolled port 2)");
+  checkFalse(hal.motor(1).connected(), "port 2 still untouched");
+  checkFalse(hal.motor(3).connected(), "port 4 still untouched");
 
   uint32_t txnBeforeC = bus.txnCount(kAddr7);
   runOneCycle(hal, /*req=*/5, /*collect=*/6);
@@ -309,8 +309,8 @@ void scenarioInUseTrackingAndRotation() {
               "cycle C: rotation wrapped back to port 1 -- request+collect (no duty "
               "write, NEUTRAL unchanged) -- proves the cycle is 1,3,1,... not 1,2,3,4,...");
 
-  checkFalse(hal.motor(2).connected(), "port 2 STILL never scheduled after 3 full cycles");
-  checkFalse(hal.motor(4).connected(), "port 4 STILL never scheduled after 3 full cycles");
+  checkFalse(hal.motor(1).connected(), "port 2 STILL never scheduled after 3 full cycles");
+  checkFalse(hal.motor(3).connected(), "port 4 STILL never scheduled after 3 full cycles");
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
 }
 
@@ -349,8 +349,8 @@ void scenarioBroadcastNeverMarksInUse() {
   // membership gates only the HAL's OWN flip-flop, never the public Motor
   // faceplate).
   scriptGenerousPool(bus, 4);
-  hal.motor(1).tick(200);
-  checkFloatEq(hal.motor(1).appliedDuty(), 0.0f,
+  hal.motor(0).tick(200);
+  checkFloatEq(hal.motor(0).appliedDuty(), 0.0f,
                "direct tick() proves the broadcast staged NEUTRAL on motor 1's setter");
 }
 
@@ -373,16 +373,16 @@ void scenarioDrivetrainToHardwareCommandForwarding() {
   scriptGenerousPool(bus, 8);
 
   Hal::DrivetrainToHardwareCommand dtCmd;
-  dtCmd.wheel[0].port = 1;
+  dtCmd.wheel[0].port = 0;
   dtCmd.wheel[0].command = msg::MotorCommand{}.setDutyCycle(0.4f);
-  dtCmd.wheel[1].port = 2;
+  dtCmd.wheel[1].port = 1;
   dtCmd.wheel[1].command = msg::MotorCommand{}.setDutyCycle(-0.4f);
   hal.apply(dtCmd);
 
+  hal.motor(0).tick(200);
   hal.motor(1).tick(200);
-  hal.motor(2).tick(200);
-  checkFloatEq(hal.motor(1).appliedDuty(), 0.4f, "left wheel (port 1) received its own forwarded command");
-  checkFloatEq(hal.motor(2).appliedDuty(), -0.4f, "right wheel (port 2) received its own forwarded command");
+  checkFloatEq(hal.motor(0).appliedDuty(), 0.4f, "left wheel (port 1) received its own forwarded command");
+  checkFloatEq(hal.motor(1).appliedDuty(), -0.4f, "right wheel (port 2) received its own forwarded command");
 
   // Now prove apply() itself never touched polled_[]: the HAL's OWN
   // scheduler (hal.tick(), never called above -- only the direct
@@ -423,27 +423,27 @@ void scenarioWriteThrottleInteraction() {
   Subsystems::NezhaHardware hal(bus, defaultConfigs);
   scriptGenerousPool(bus, 40);
 
-  hal.apply(addressedOne(1, msg::MotorCommand{}.setDutyCycle(0.5f)));
+  hal.apply(addressedOne(0, msg::MotorCommand{}.setDutyCycle(0.5f)));
 
   // Cycle 1: lastWriteTimeUs_ defaults to 0, so "now - 0" is astronomically
   // over 40ms regardless of the fake clock's absolute value -- the first
   // write always goes through, landing exactly at the requested 0.5 (the
   // -128 sentinel is exempted from the slew clamp -- scenario 8).
   runOneCycle(hal, 0, 1);
-  float afterCycle1 = hal.motor(1).appliedDuty();
+  float afterCycle1 = hal.motor(0).appliedDuty();
   checkFloatEq(afterCycle1, 0.5f, "cycle 1: first-ever write reaches the full requested duty");
 
   // Retarget to 0.9 -- no longer the first write, so THIS one is genuinely
   // slew-clamped (|0.9-0.5| step of 40 > the 25 maxDelta), giving cycles 2/3
   // a real not-yet-converged value to test the throttle against.
-  hal.apply(addressedOne(1, msg::MotorCommand{}.setDutyCycle(0.9f)));
+  hal.apply(addressedOne(0, msg::MotorCommand{}.setDutyCycle(0.9f)));
 
   // Cycle 2: only the request/collect's own postClear (4000us) elapses
   // since cycle 1's write -- well under 40000us -- so the throttle
   // suppresses this collect's write even though the target hasn't
   // converged yet (write-on-change would otherwise allow it).
   runOneCycle(hal, 2, 3, /*postClearUs=*/4000);
-  float afterCycle2 = hal.motor(1).appliedDuty();
+  float afterCycle2 = hal.motor(0).appliedDuty();
   checkFloatEq(afterCycle2, afterCycle1,
                "cycle 2 (only ~4ms since the last write): throttled -- appliedDuty() unchanged");
 
@@ -451,7 +451,7 @@ void scenarioWriteThrottleInteraction() {
   // write -- the still-unconverged 0.9 target now gets through (slew-capped
   // toward it, not landing exactly at 0.9 yet).
   runOneCycle(hal, 4, 5, /*postClearUs=*/50000);
-  float afterCycle3 = hal.motor(1).appliedDuty();
+  float afterCycle3 = hal.motor(0).appliedDuty();
   checkTrue(afterCycle3 != afterCycle2,
             "cycle 3 (>=40ms since the last write): throttle cleared -- a new write landed");
 
@@ -475,22 +475,22 @@ void scenarioReversalDwellHoldsAtNewCadence() {
   scriptGenerousPool(bus, 40);
   const uint64_t kUsGap = 50000;   // >> 40ms throttle, >> 4ms postClear -- isolates the dwell
 
-  hal.apply(addressedOne(1, msg::MotorCommand{}.setDutyCycle(0.5f)));
+  hal.apply(addressedOne(0, msg::MotorCommand{}.setDutyCycle(0.5f)));
   runOneCycle(hal, 500, 1000, kUsGap);
-  checkTrue(hal.motor(1).appliedDuty() != 0.0f, "cycle 1 (ms=1000): initial direction forwarded");
+  checkTrue(hal.motor(0).appliedDuty() != 0.0f, "cycle 1 (ms=1000): initial direction forwarded");
 
-  hal.apply(addressedOne(1, msg::MotorCommand{}.setDutyCycle(-0.5f)));   // sign flip
+  hal.apply(addressedOne(0, msg::MotorCommand{}.setDutyCycle(-0.5f)));   // sign flip
   runOneCycle(hal, 1005, 1010, kUsGap);
-  checkFloatEq(hal.motor(1).appliedDuty(), 0.0f, "cycle 2 (ms=1010): reversal writes 0 immediately, arms the dwell");
+  checkFloatEq(hal.motor(0).appliedDuty(), 0.0f, "cycle 2 (ms=1010): reversal writes 0 immediately, arms the dwell");
 
   runOneCycle(hal, 1040, 1050, kUsGap);
-  checkFloatEq(hal.motor(1).appliedDuty(), 0.0f, "cycle 3 (ms=1050): still mid-dwell, held at 0");
+  checkFloatEq(hal.motor(0).appliedDuty(), 0.0f, "cycle 3 (ms=1050): still mid-dwell, held at 0");
 
   runOneCycle(hal, 1100, 1109, kUsGap);
-  checkFloatEq(hal.motor(1).appliedDuty(), 0.0f, "cycle 4 (ms=1109, one ms short of the 100ms deadline): still held at 0");
+  checkFloatEq(hal.motor(0).appliedDuty(), 0.0f, "cycle 4 (ms=1109, one ms short of the 100ms deadline): still held at 0");
 
   runOneCycle(hal, 1109, 1110, kUsGap);
-  checkTrue(hal.motor(1).appliedDuty() < 0.0f,
+  checkTrue(hal.motor(0).appliedDuty() < 0.0f,
             "cycle 5 (ms=1110, dwell elapsed): new (negative) direction finally forwarded");
 
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
@@ -519,10 +519,10 @@ void scenarioFirstWriteExemptFromSentinelSlew() {
   Subsystems::NezhaHardware hal(bus, defaultConfigs);
   scriptGenerousPool(bus, 20);
 
-  hal.apply(addressedOne(1, msg::MotorCommand{}.setDutyCycle(0.30f)));
+  hal.apply(addressedOne(0, msg::MotorCommand{}.setDutyCycle(0.30f)));
   runOneCycle(hal, 1000, 1010, /*postClearUs=*/50000);
 
-  checkFloatEq(hal.motor(1).appliedDuty(), 0.30f,
+  checkFloatEq(hal.motor(0).appliedDuty(), 0.30f,
                "first-ever write reaches the FULL requested duty directly -- before the "
                "fix this computed clampStep(-128, 30, 25) = -103 (appliedDuty() = -1.03): "
                "wrong sign, magnitude > 1.0");
@@ -551,13 +551,13 @@ void scenarioRequestHonorsClearanceAfterDutyWrite() {
   Subsystems::NezhaHardware hal(bus, defaultConfigs);
   scriptGenerousPool(bus, 40);
 
-  hal.apply(addressedOne(1, msg::MotorCommand{}.setDutyCycle(0.30f)));
+  hal.apply(addressedOne(0, msg::MotorCommand{}.setDutyCycle(0.30f)));
 
 
   hal.tick(1000);                // REQUEST_DUE
   I2CBus::advanceClock(4000);    // satisfy the request's own postClear
   hal.tick(1010);                // COLLECT_DUE: collects + dispatches the first duty write
-  checkTrue(hal.motor(1).appliedDuty() != 0.0f, "duty write landed at collect");
+  checkTrue(hal.motor(0).appliedDuty() != 0.0f, "duty write landed at collect");
 
   uint64_t clockBefore = I2CBus::clock();
   hal.tick(1020);                // next REQUEST_DUE -- deliberately NO manual clock advance

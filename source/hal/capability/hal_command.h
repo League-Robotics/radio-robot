@@ -42,7 +42,11 @@ namespace Hal {
 // wheel pair (DrivetrainToHardwareCommand) both address NezhaHardware's ports
 // through this same pair.
 struct AddressedMotorCommand {
-  uint32_t port = 0;   // 1..Subsystems::NezhaHardware::kPortCount
+  uint32_t port = 0;   // 0-based motor index, [0, Subsystems::Hardware::kMotorCount)
+                       // -- NOT the wire-visible 1-based brick label; a
+                       // producer converts a wire `<n>` to this index at
+                       // ingest (naming kept as `port` for this struct's
+                       // established field name; the VALUE is an index).
   msg::MotorCommand command;
 };
 

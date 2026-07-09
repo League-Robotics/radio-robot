@@ -57,12 +57,12 @@ def test_fwd_sign_for_ports_reads_tovez_json_mirror_mounted_signs():
 
     signs = gbc.fwd_sign_for_ports(cfg)
 
-    assert len(signs) == gbc.K_PORT_COUNT
+    assert len(signs) == gbc.K_MOTOR_COUNT
     assert signs[gbc.LEFT_PORT - 1] == 1
     assert signs[gbc.RIGHT_PORT - 1] == -1
     # Non-drive ports keep the placeholder -- unaffected by the drive pair's
     # mirror-mount correction.
-    for port in range(1, gbc.K_PORT_COUNT + 1):
+    for port in range(1, gbc.K_MOTOR_COUNT + 1):
         if port not in (gbc.LEFT_PORT, gbc.RIGHT_PORT):
             assert signs[port - 1] == gbc.FWD_SIGN
 
@@ -75,7 +75,7 @@ def test_fwd_sign_for_ports_falls_back_to_placeholder_for_every_port():
     output for a robot JSON that hasn't been calibrated yet."""
     signs = gbc.fwd_sign_for_ports({})
 
-    assert signs == [gbc.FWD_SIGN] * gbc.K_PORT_COUNT
+    assert signs == [gbc.FWD_SIGN] * gbc.K_MOTOR_COUNT
 
 
 def test_generate_emits_per_port_fwd_sign_mirror_mounted_drive_pair():

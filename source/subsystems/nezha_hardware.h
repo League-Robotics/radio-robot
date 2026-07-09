@@ -15,8 +15,17 @@
 // 081-002: implements the abstract Subsystems::Hardware owner base
 // (subsystems/hardware.h) — see that file's header and
 // architecture-update.md (081) Decision 1 for why the seam lives here, not
-// in namespace Hal. kPortCount is now inherited from Hardware, not
+// in namespace Hal. kMotorCount is now inherited from Hardware, not
 // redeclared here.
+//
+// (0-based motor indices, OOP refactor) motors_ is addressed by a 0-based
+// index [0, kMotorCount) — the index IS the motor's identity everywhere in
+// this class. The 1-based number printed on the Nezha brick is a config
+// input only (configs[i].port, a wire/serialized key — msg::MotorConfig.port
+// stays 1-based by convention, unchanged): index i's motor was constructed
+// from configs[i], whose own .port field happens to read i+1. No port math
+// (`- 1`/`+ 1`/a port-keyed switch) remains anywhere in this class; the
+// flip-flop's activeIndex_ cycles the same 0-based range.
 //
 // This class has two roles on top of its 077 shape (Design Rationale 3,
 // clasi/sprints/079-.../architecture-update.md): it is the BRICK FLIP-FLOP
@@ -63,6 +72,8 @@
 #include "com/i2c_bus.h"
 #include "config/boot_config.h"
 #include "hal/capability/hal_command.h"
+#include <array>
+
 #include "hal/capability/motor.h"
 #include "hal/nezha/nezha_motor.h"
 #include "hal/otos/otos_odometer.h"
@@ -73,8 +84,9 @@ namespace Subsystems {
 
 class NezhaHardware : public Hardware {
  public:
-  // configs must supply exactly kPortCount entries; configs[i].port should
-  // equal i+1 (1..4) — the constructing caller's (main.cpp, ticket 5's)
+  // configs must supply exactly kMotorCount entries; configs[i].port (a
+  // wire/serialized key, msg::MotorConfig.port — unchanged, still 1-based)
+  // should equal i+1 — the constructing caller's (main.cpp, ticket 5's)
   // responsibility. NezhaHardware does not itself validate or force this,
   // consistent with "no NezhaHardware-level special-casing." otosConfig
   // (086-006): ticket 086-005's boot-config values (mounting offset +
@@ -87,23 +99,23 @@ class NezhaHardware : public Hardware {
   // those exercise the OTOS leaf at all, so the default is behaviorally
   // inert for them. Also copies configs[] verbatim into config_[] (087-004)
   // — config()'s backing store.
-  NezhaHardware(I2CBus& bus, const msg::MotorConfig configs[kPortCount],
+  NezhaHardware(I2CBus& bus, const msg::MotorConfig configs[kMotorCount],
                 const Config::OtosBootConfig& otosConfig = Config::OtosBootConfig());
 
-  // Primes all four ports' encoders (see NezhaMotor::begin()) and the OTOS
+  // Primes all four motors' encoders (see NezhaMotor::begin()) and the OTOS
   // leaf (product-ID detect + init — see Hal::OtosOdometer::begin()).
   void begin() override;
 
   // The brick flip-flop sequencer (sprint 079-004; architecture-update.md
-  // "The flip-flop and the 078 base-class contract"). Idle (no port
+  // "The flip-flop and the 078 base-class contract"). Idle (no motor
   // polled_): returns immediately, zero bus actions (decision 1). Otherwise
   // issues exactly one bus-facing action per call: REQUEST_DUE fires the
-  // active polled port's 0x46 encoder request (requestSample()) and
+  // active polled motor's 0x46 encoder request (requestSample()) and
   // advances to COLLECT_DUE; COLLECT_DUE checks bus_.clear(Hal::kNezhaDeviceAddr)
   // — if the settle window has not yet elapsed, this call is a no-op pass;
-  // once clear, it collects (the active port's full NezhaMotor::tick(),
+  // once clear, it collects (the active motor's full NezhaMotor::tick(),
   // the 078 base/leaf 5-step contract) and advances to the next polled
-  // port's REQUEST_DUE. Two calls per main-loop pass (the sanctioned
+  // motor's REQUEST_DUE. Two calls per main-loop pass (the sanctioned
   // "slice 1 collects due, slice 2 requests/writes go out" double call,
   // ticket 005) drive one full request/collect pair per pass under typical
   // timing.
@@ -111,18 +123,18 @@ class NezhaHardware : public Hardware {
   // (093/094 teardown) motorIn[]/motorResetIn[] consumption is gone —
   // Subsystems::Hardware's own tick() doc comment has the full contract.
   // tick() now runs ONLY the flip-flop's scheduling decision below;
-  // whether port i+1 is eligible for THIS call's bus action depends
+  // whether motor i is eligible for THIS call's bus action depends
   // solely on polled_[i], the constant (except via setPolled()) mask
   // established at construction.
   void tick(uint32_t now) override;   // [ms]
 
-  // Port-indexed accessor, port in [1, kPortCount]. Always returns the
+  // Index-addressed accessor, i in [0, kMotorCount). Always returns the
   // Hal::Motor faceplate — callers (DEV commands, Drivetrain; both later
-  // tickets) never see NezhaMotor's raw register verbs. Out-of-range ports
-  // clamp to port 4 rather than trapping, since a bad port from a DEV
-  // command should surface as ERR at the command layer, not crash the
-  // firmware.
-  Hal::Motor& motor(uint32_t port) override;
+  // tickets) never see NezhaMotor's raw register verbs. Out-of-range
+  // indices clamp to kMotorCount-1 rather than trapping, since a bad index
+  // derived from a DEV command should surface as ERR at the command layer,
+  // not crash the firmware.
+  Hal::Motor& motor(uint32_t i) override;
 
   // Distribution (sprint 079-004; architecture-update.md "The command-edge
   // types"). Both overloads forward the addressed msg::MotorCommand(s) to
@@ -131,12 +143,12 @@ class NezhaHardware : public Hardware {
   // eligibility for tick()'s cycling schedule depends solely on the
   // constant polled_[] mask (config-established, setPolled()-mutable),
   // never on whether apply() was ever called for it. allPorts==true
-  // forwards addressed[0].command to every port's setter unconditionally,
-  // regardless of each port's own polled_ state.
+  // forwards addressed[0].command to every motor's setter unconditionally,
+  // regardless of each motor's own polled_ state.
   void apply(const Hal::CommandProcessorToHardwareCommand& cmd) override;
 
   // Both wheels are always addressed (never a broadcast) — the Drivetrain's
-  // governed pair is exactly the ports its own DrivetrainConfig binds.
+  // governed pair is exactly the motors its own DrivetrainConfig binds.
   void apply(const Hal::DrivetrainToHardwareCommand& cmd) override;
 
   // 086-006: the real OTOS leaf's address — Subsystems::Hardware's base
@@ -146,69 +158,71 @@ class NezhaHardware : public Hardware {
   Hal::Odometer* odometer() override;
 
   // config()/state() (087-004, Subsystems::Hardware's own doc comment has
-  // the full contract). config(port) returns the constructor-supplied
-  // config_[port-1] verbatim (the same value each port's own NezhaMotor
-  // leaf was constructed with — see the constructor); state(port) returns
-  // motor(port).state() unchanged. Out-of-range ports clamp to port 4,
-  // matching motor()'s own convention.
-  msg::MotorConfig config(uint32_t port) const override;
-  msg::MotorState state(uint32_t port) const override;
+  // the full contract). config(i) returns the constructor-supplied
+  // config_[i] verbatim (the same value motor i's own NezhaMotor leaf was
+  // constructed with — see the constructor); state(i) returns
+  // motor(i).state() unchanged. Out-of-range indices clamp to
+  // kMotorCount-1, matching motor()'s own convention.
+  msg::MotorConfig config(uint32_t i) const override;
+  msg::MotorState state(uint32_t i) const override;
 
   // setPolled() (091-002, Subsystems::Hardware's own doc comment has the
   // full contract) — the ONE way polled_[] changes after construction.
   // Reached exclusively via Rt::Configurator's kMotor ConfigDelta apply
-  // path (`DEV M <n> CFG polled=<bool>`). Out-of-range ports clamp to port
-  // 4, matching motor()'s own convention.
-  void setPolled(uint32_t port, bool polled) override;
+  // path (`DEV M <n> CFG polled=<bool>`). Out-of-range indices clamp to
+  // kMotorCount-1, matching motor()'s own convention.
+  void setPolled(uint32_t i, bool polled) override;
 
  private:
   // REQUEST_DUE: the next bus action is a fresh 0x46 request on
-  // activePort_. COLLECT_DUE: the next bus action (once
+  // activeIndex_. COLLECT_DUE: the next bus action (once
   // bus_.clear(Hal::kNezhaDeviceAddr) confirms the settle window elapsed) is
-  // that same port's collect + full tick().
+  // that same motor's collect + full tick().
   enum class Phase : uint8_t { REQUEST_DUE, COLLECT_DUE };
 
-  // motorAt(): the concrete Hal::NezhaMotor& behind a port, for the
-  // scheduler's and apply()'s internal use. motor() (public, above) returns
-  // the same object narrowed to the Hal::Motor faceplate — implemented in
-  // terms of this so the port-indexing switch exists exactly once.
-  Hal::NezhaMotor& motorAt(uint32_t port);
-
-  // The next polled port at or after cur, wrapping 1..kPortCount. Only
+  // The next polled index at or after cur, wrapping [0, kMotorCount). Only
   // ever called when anyPolled() is true (tick()'s idle-schedule guard), so
   // a match always exists; if none did, cur is returned unchanged
   // (defensive — should not be reached).
   uint32_t nextPolled(uint32_t cur) const;
 
-  // True if at least one port is currently polled_ — the idle-schedule gate
+  // True if at least one motor is currently polled_ — the idle-schedule gate
   // (decision 1).
   bool anyPolled() const;
 
-  I2CBus& bus_;
-  Hal::NezhaMotor motor1_;
-  Hal::NezhaMotor motor2_;
-  Hal::NezhaMotor motor3_;
-  Hal::NezhaMotor motor4_;
-  Hal::OtosOdometer otosOdometer_;   // 086-006 -- I2C address 0x17, a separate device slot from motorN_'s 0x10
+  // clampIndex() — the ONE place an out-of-range index clamps to
+  // kMotorCount-1 (mirrors the pre-refactor motorAt()'s port-4 clamp,
+  // preserved behavior, now expressed once instead of once per switch).
+  static uint32_t clampIndex(uint32_t i) { return (i < kMotorCount) ? i : kMotorCount - 1; }
 
-  uint32_t activePort_ = 1;
+  I2CBus& bus_;
+
+  // motors_[i] is motor index i's leaf — the index IS its identity. Index 0
+  // is physical port 1 (the flip-flop's traditional first collect target),
+  // index 1 is physical port 2 (the drive pair, same physical motors/order
+  // as before this class stored motor1_.. motor4_ separately) — configs[]
+  // is unchanged (already 0-based; configs[i].port is the wire label i+1).
+  std::array<Hal::NezhaMotor, kMotorCount> motors_;
+  Hal::OtosOdometer otosOdometer_;   // 086-006 -- I2C address 0x17, a separate device slot from motors_'s 0x10
+
+  uint32_t activeIndex_ = 0;
   Phase phase_ = Phase::REQUEST_DUE;
 
-  // 091-002: the configured poll-set — which ports the flip-flop schedules.
+  // 091-002: the configured poll-set — which motors the flip-flop schedules.
   // Established once at construction from configs[].polled (constant
   // thereafter except through setPolled(), above); never mutated by
   // tick()/apply() as a side effect of ordinary command flow (that was
   // the old "in-use" flag's bug — see this file's own header comment).
-  bool polled_[kPortCount] = {false, false, false, false};
+  bool polled_[kMotorCount] = {false, false, false, false};
 
   // config()'s own backing store (087-004) — a verbatim copy of the
-  // constructor's configs[] argument, the SAME per-port config each port's
-  // own NezhaMotor leaf was constructed with. This ticket adds no way to
-  // change it after construction (no Hardware-level configure() exists
-  // yet — see hardware.h's own file header); a future ticket that adds one
-  // must keep this array and each NezhaMotor leaf's own cached config in
-  // sync.
-  msg::MotorConfig config_[kPortCount];
+  // constructor's configs[] argument, the SAME per-motor config each
+  // motor's own NezhaMotor leaf was constructed with. This ticket adds no
+  // way to change it after construction (no Hardware-level configure()
+  // exists yet — see hardware.h's own file header); a future ticket that
+  // adds one must keep this array and each NezhaMotor leaf's own cached
+  // config in sync.
+  msg::MotorConfig config_[kMotorCount];
 };
 
 }  // namespace Subsystems

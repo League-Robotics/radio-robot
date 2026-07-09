@@ -87,9 +87,9 @@ void scenarioBlackboardStateCellsDefaultZero() {
   beginScenario("Blackboard: state-plane cells default to zero/default");
   Rt::Blackboard bb;
 
-  checkUintEq(Rt::kPortCount, 4, "Rt::kPortCount mirrors Subsystems::Hardware::kPortCount (4)");
+  checkUintEq(Rt::kMotorCount, 4, "Rt::kMotorCount mirrors Subsystems::Hardware::kMotorCount (4)");
 
-  for (uint32_t i = 0; i < Rt::kPortCount; ++i) {
+  for (uint32_t i = 0; i < Rt::kMotorCount; ++i) {
     checkFalse(bb.motors[i].connected, "motors[i].connected defaults false");
     checkFalse(bb.motors[i].position.has, "motors[i].position defaults unset (Opt.has == false)");
   }
@@ -101,7 +101,7 @@ void scenarioBlackboardStateCellsDefaultZero() {
   checkFloatEq(bb.otos.pose.x, 0.0f, "otos.pose.x defaults 0");
 
   checkFloatEq(bb.drivetrainConfig.trackwidth, 0.0f, "drivetrainConfig.trackwidth defaults 0");
-  for (uint32_t i = 0; i < Rt::kPortCount; ++i) {
+  for (uint32_t i = 0; i < Rt::kMotorCount; ++i) {
     checkFloatEq(bb.motorConfig[i].travel_calib, 0.0f, "motorConfig[i].travel_calib defaults 0");
   }
   checkFloatEq(bb.plannerConfig.a_max, 0.0f, "plannerConfig.a_max defaults 0");

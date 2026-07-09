@@ -22,15 +22,17 @@
 
 namespace Config {
 
-// Number of per-port MotorConfig entries defaultMotorConfigs() fills. Must
-// equal Subsystems::NezhaHardware::kPortCount — main.cpp static_asserts the two
-// agree so a port-count change forces this generator to be re-run.
+// Number of per-motor MotorConfig entries defaultMotorConfigs() fills. Must
+// equal Subsystems::NezhaHardware::kMotorCount — main.cpp static_asserts the
+// two agree so a motor-count change forces this generator to be re-run.
 constexpr uint32_t kMotorConfigCount = 4;
 
-// Fill out[0 .. kMotorConfigCount-1] with the per-port boot MotorConfig
-// defaults (out[i].port == i+1). Calibration is baked from the active robot
-// JSON where a matching key exists; otherwise the bench-tuned firmware
-// defaults are used (see boot_config.cpp / gen_boot_config.py).
+// Fill out[0 .. kMotorConfigCount-1] with the per-motor boot MotorConfig
+// defaults, indexed 0-based (out[i].port == i+1 -- .port is a
+// wire/serialized key, the 1-based brick label, unchanged). Calibration is
+// baked from the active robot JSON where a matching key exists; otherwise
+// the bench-tuned firmware defaults are used (see boot_config.cpp /
+// gen_boot_config.py).
 void defaultMotorConfigs(msg::MotorConfig* out);
 
 // The boot DrivetrainConfig default — trackwidth (baked from the robot JSON)

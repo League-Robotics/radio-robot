@@ -13,9 +13,7 @@ MainLoop::MainLoop(Subsystems::Hardware& hardware, Subsystems::Drivetrain& drive
 
 void MainLoop::commit(Blackboard& bb, uint32_t now) {
   // === COMMIT (clock edge): copy each subsystem cell into bb -> x[k+1]. ===
-  for (uint32_t port = 1; port <= kPortCount; ++port) {
-    bb.motors[port - 1] = hardware_.state(port);
-  }
+  bb.motors = hardware_.states();
   bb.drivetrain = drivetrain_.state();
 }
 

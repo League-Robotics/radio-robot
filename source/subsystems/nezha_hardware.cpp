@@ -2,16 +2,13 @@
 
 namespace Subsystems {
 
-NezhaHardware::NezhaHardware(I2CBus& bus, const msg::MotorConfig configs[kPortCount],
+NezhaHardware::NezhaHardware(I2CBus& bus, const msg::MotorConfig configs[kMotorCount],
                               const Config::OtosBootConfig& otosConfig)
     : bus_(bus),
-      motor1_(bus, configs[0]),
-      motor2_(bus, configs[1]),
-      motor3_(bus, configs[2]),
-      motor4_(bus, configs[3]),
+      motors_{{ {bus, configs[0]}, {bus, configs[1]}, {bus, configs[2]}, {bus, configs[3]} }},
       otosOdometer_(bus, otosConfig)
 {
-    for (uint32_t i = 0; i < kPortCount; ++i) {
+    for (uint32_t i = 0; i < kMotorCount; ++i) {
         config_[i] = configs[i];   // 087-004: config()'s backing store
         polled_[i] = configs[i].polled;   // 091-002: the configured poll-set, established ONCE here
     }
@@ -19,10 +16,9 @@ NezhaHardware::NezhaHardware(I2CBus& bus, const msg::MotorConfig configs[kPortCo
 
 void NezhaHardware::begin()
 {
-    motor1_.begin();
-    motor2_.begin();
-    motor3_.begin();
-    motor4_.begin();
+    for (uint32_t i = 0; i < kMotorCount; ++i) {
+        motors_[i].begin();
+    }
     otosOdometer_.begin();
 }
 
@@ -34,66 +30,56 @@ void NezhaHardware::begin()
 void NezhaHardware::tick(uint32_t now)
 {
     if (!anyPolled()) return;                    // idle schedule (decision 1)
-    if (!polled_[activePort_ - 1]) {
-        activePort_ = nextPolled(activePort_);    // defensive resync
+    if (!polled_[activeIndex_]) {
+        activeIndex_ = nextPolled(activeIndex_);  // defensive resync
     }
     switch (phase_) {
         case Phase::REQUEST_DUE:
-            motorAt(activePort_).requestSample();    // 0x46 write, postClear=4000 [us]
+            motors_[activeIndex_].requestSample();    // 0x46 write, postClear=4000 [us]
             phase_ = Phase::COLLECT_DUE;
             break;
         case Phase::COLLECT_DUE:
             if (!bus_.clear(Hal::kNezhaDeviceAddr)) return;   // settle window still open -- pass
-            motorAt(activePort_).tick(now);              // the 5-step contract (base/leaf split)
-            activePort_ = nextPolled(activePort_);
+            motors_[activeIndex_].tick(now);              // the 5-step contract (base/leaf split)
+            activeIndex_ = nextPolled(activeIndex_);
             phase_ = Phase::REQUEST_DUE;
             break;
     }
 }
 
-Hal::Motor& NezhaHardware::motor(uint32_t port)
+Hal::Motor& NezhaHardware::motor(uint32_t i)
 {
-    return motorAt(port);
+    return motors_[clampIndex(i)];
 }
 
 void NezhaHardware::apply(const Hal::CommandProcessorToHardwareCommand& cmd)
 {
     if (cmd.allPorts) {
-        for (uint32_t p = 1; p <= kPortCount; ++p) {
-            motorAt(p).apply(cmd.addressed[0].command);
+        for (uint32_t i = 0; i < kMotorCount; ++i) {
+            motors_[i].apply(cmd.addressed[0].command);
         }
         return;
     }
     for (uint8_t i = 0; i < cmd.count; ++i) {
-        motorAt(cmd.addressed[i].port).apply(cmd.addressed[i].command);
+        motors_[clampIndex(cmd.addressed[i].port)].apply(cmd.addressed[i].command);
     }
 }
 
 void NezhaHardware::apply(const Hal::DrivetrainToHardwareCommand& cmd)
 {
     for (int i = 0; i < 2; ++i) {
-        motorAt(cmd.wheel[i].port).apply(cmd.wheel[i].command);
+        motors_[clampIndex(cmd.wheel[i].port)].apply(cmd.wheel[i].command);
     }
 }
 
-msg::MotorConfig NezhaHardware::config(uint32_t port) const
+msg::MotorConfig NezhaHardware::config(uint32_t i) const
 {
-    switch (port) {
-        case 1: return config_[0];
-        case 2: return config_[1];
-        case 3: return config_[2];
-        default: return config_[3];   // out-of-range clamps to port 4 -- mirrors motorAt()'s own convention
-    }
+    return config_[clampIndex(i)];
 }
 
-msg::MotorState NezhaHardware::state(uint32_t port) const
+msg::MotorState NezhaHardware::state(uint32_t i) const
 {
-    switch (port) {
-        case 1: return motor1_.state();
-        case 2: return motor2_.state();
-        case 3: return motor3_.state();
-        default: return motor4_.state();   // out-of-range clamps to port 4 -- mirrors motorAt()'s own convention
-    }
+    return motors_[clampIndex(i)].state();
 }
 
 Hal::Odometer* NezhaHardware::odometer()
@@ -101,41 +87,26 @@ Hal::Odometer* NezhaHardware::odometer()
     return &otosOdometer_;
 }
 
-Hal::NezhaMotor& NezhaHardware::motorAt(uint32_t port)
-{
-    switch (port) {
-        case 1: return motor1_;
-        case 2: return motor2_;
-        case 3: return motor3_;
-        default: return motor4_;
-    }
-}
-
 uint32_t NezhaHardware::nextPolled(uint32_t cur) const
 {
-    for (uint32_t i = 1; i <= kPortCount; ++i) {
-        uint32_t candidate = ((cur - 1 + i) % kPortCount) + 1;
-        if (polled_[candidate - 1]) return candidate;
+    for (uint32_t step = 1; step <= kMotorCount; ++step) {
+        uint32_t candidate = (cur + step) % kMotorCount;
+        if (polled_[candidate]) return candidate;
     }
-    return cur;   // no polled port found -- defensive only, see header comment
+    return cur;   // no polled motor found -- defensive only, see header comment
 }
 
 bool NezhaHardware::anyPolled() const
 {
-    for (uint32_t i = 0; i < kPortCount; ++i) {
+    for (uint32_t i = 0; i < kMotorCount; ++i) {
         if (polled_[i]) return true;
     }
     return false;
 }
 
-void NezhaHardware::setPolled(uint32_t port, bool polled)
+void NezhaHardware::setPolled(uint32_t i, bool polled)
 {
-    switch (port) {
-        case 1: polled_[0] = polled; return;
-        case 2: polled_[1] = polled; return;
-        case 3: polled_[2] = polled; return;
-        default: polled_[3] = polled; return;   // out-of-range clamps to port 4 -- mirrors motorAt()'s own convention
-    }
+    polled_[clampIndex(i)] = polled;
 }
 
 }  // namespace Subsystems

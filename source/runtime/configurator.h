@@ -97,7 +97,7 @@ class Configurator {
   // the single source of truth folded onto and published from. Never read
   // back from bb (see class comment).
   msg::DrivetrainConfig drivetrainConfig_ = {};
-  msg::MotorConfig motorConfig_[Subsystems::Hardware::kPortCount] = {};
+  msg::MotorConfig motorConfig_[Subsystems::Hardware::kMotorCount] = {};
   msg::PlannerConfig plannerConfig_ = {};
   msg::OdometerConfig odometerConfig_ = {};
 };

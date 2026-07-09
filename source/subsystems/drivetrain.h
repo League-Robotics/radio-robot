@@ -117,12 +117,19 @@
 
 namespace Subsystems {
 
-// The Drivetrain's bound wheel-motor port pair -- read from
-// msg::DrivetrainConfig via ports() (`DEV DT PORTS` -> DrivetrainConfig.
+// The Drivetrain's bound wheel-motor pair, as 0-based Hardware motor
+// indices -- read via ports() (`DEV DT PORTS` -> DrivetrainConfig.
 // left_port/right_port, per sprint 079 decision 8; unchanged this ticket).
+// (0-based motor indices, OOP refactor) msg::DrivetrainConfig.left_port/
+// right_port are wire/serialized keys and stay 1-based (the brick label);
+// configure() converts them to 0-based indices EXACTLY ONCE, the moment a
+// DrivetrainConfig arrives -- see configure()'s own doc comment, the single
+// conversion point for this Drivetrain. ports() returns those already-
+// converted indices; every other member uses them directly, with no
+// further `- 1`/`+ 1` anywhere in this class.
 struct DrivetrainPorts {
-  uint32_t left;
-  uint32_t right;
+  uint32_t left;   // 0-based Hardware motor index
+  uint32_t right;  // 0-based Hardware motor index
 };
 
 class Drivetrain {
@@ -155,6 +162,14 @@ class Drivetrain {
 
   // --- Faceplate verbs. ---
 
+  // configure() -- THE single conversion point (0-based motor indices, OOP
+  // refactor) where this Drivetrain's bound wheel pair, carried on the wire
+  // as msg::DrivetrainConfig.left_port/right_port (1-based brick labels,
+  // unchanged -- a wire/serialized key), is converted to 0-based Hardware
+  // motor indices EXACTLY ONCE: `boundLeft_ = config.left_port - 1;`
+  // `boundRight_ = config.right_port - 1;`. Every other member of this
+  // class (tick()/state()/ports()) uses boundLeft_/boundRight_ directly --
+  // no further port math anywhere else in this Drivetrain.
   void configure(const msg::DrivetrainConfig& config);
 
   // configureMotion -- boot-only motion-limit defaults for the owned
@@ -183,15 +198,13 @@ class Drivetrain {
   // fan-in (drained into ring_ -- see the class comment). driveIn: the
   // S/STOP escape-hatch fan-in (drained FIRST, one command per tick, per
   // the class comment's precedence rules). Resolves this Drivetrain's OWN
-  // bound wheel pair via `hardware_.state(port)`/`hardware_.motor(port)`
-  // internally -- Hardware::state()/motor() already take a 1-based port and
-  // do their own out-of-range clamping (each concrete owner's own doc
-  // comment), so there is no `- 1` base conversion left to perform here
-  // (090-001's conversion existed only because the old signature indexed a
-  // caller-supplied 0-based motors[] array directly; that array is gone).
-  // The range assert below is kept as a defensive guard against a
-  // misconfigured (out-of-range) bound port, mirroring 090-001's original
-  // intent at the new call site.
+  // bound wheel pair via `hardware_.state(i)`/`hardware_.motor(i)`
+  // internally, using boundLeft_/boundRight_ (already-converted 0-based
+  // indices -- see configure()'s own doc comment, the ONE place a `- 1`
+  // exists in this class) -- Hardware::state()/motor() take a 0-based index
+  // and do their own out-of-range clamping (each concrete owner's own doc
+  // comment). The range assert below is kept as a defensive guard against a
+  // misconfigured (out-of-range) bound index.
   void tick(uint32_t now,
             Rt::WorkQueue<Motion::Segment, 8>& segmentIn,
             Rt::WorkQueue<msg::DrivetrainCommand, 8>& driveIn);
@@ -283,6 +296,14 @@ class Drivetrain {
 
   msg::DrivetrainConfig config_ = {};
   Mode mode_ = Mode::NEUTRAL;
+
+  // The bound wheel pair, as 0-based Hardware motor indices -- converted
+  // from config_.left_port/right_port (1-based wire labels) EXACTLY ONCE,
+  // in configure() (this class's single conversion point). ports() returns
+  // these verbatim; tick()/state() resolve hardware_.motor(i)/state(i)
+  // through these, never through config_.left_port/right_port directly.
+  uint32_t boundLeft_ = 0;
+  uint32_t boundRight_ = 1;
 
   // DIRECT/TWIST-arm state.
   float v_x_ = 0.0f;      // [mm/s]

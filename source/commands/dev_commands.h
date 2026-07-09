@@ -46,14 +46,16 @@
 // posts a typed command onto the matching bb queue -- never calling
 // Hal::Motor/Subsystems::Drivetrain/Subsystems::Hardware directly:
 //   - DUTY/VEL/POS/VOLT/NEUTRAL/RESET post one msg::MotorCommand to
-//     bb.motorIn[port-1] (a per-port Mailbox, Decision 2) ON ACCEPTANCE --
-//     acceptance is still pre-validated against bb.motorCaps[port-1] (a
-//     boot-time snapshot of Hal::Motor::capabilities(), since capabilities
-//     never change at runtime for any current concrete leaf -- see
-//     blackboard.h's file header), so a capability-rejected command (e.g.
-//     VOLT on Nezha) never posts anything and so never steals authority,
-//     exactly as before. 091-002: DUTY/VEL/POS are ALSO pre-validated
-//     against bb.motorConfig[port-1].polled (the Configurator's published
+//     bb.motorIn[idx] (a per-port Mailbox, Decision 2, `idx` the 0-based
+//     Hardware motor index converted from the wire `<n>` at handleDevM()'s
+//     own handler boundary) ON ACCEPTANCE -- acceptance is still
+//     pre-validated against bb.motorCaps[idx] (a boot-time snapshot of
+//     Hal::Motor::capabilities(), since capabilities never change at
+//     runtime for any current concrete leaf -- see blackboard.h's file
+//     header), so a capability-rejected command (e.g. VOLT on Nezha) never
+//     posts anything and so never steals authority, exactly as before.
+//     091-002: DUTY/VEL/POS are ALSO pre-validated against
+//     bb.motorConfig[idx].polled (the Configurator's published
 //     NezhaHardware poll-set snapshot) BEFORE the capability gate --
 //     `portIsPolled()` in dev_commands.cpp -- rejecting an unpolled port's
 //     motion verb `ERR nodev <mode>` (mirrors OI/OZ/OR/OV's device-presence

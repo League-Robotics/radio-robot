@@ -120,7 +120,7 @@ void storeReply(const char* msg, void* ctx) {
 // self-contained sim defaults instead.
 // ---------------------------------------------------------------------------
 struct MotorConfigSet {
-    msg::MotorConfig cfg[Subsystems::Hardware::kPortCount];
+    msg::MotorConfig cfg[Subsystems::Hardware::kMotorCount];
 };
 
 MotorConfigSet defaultMotorConfigSet() {
@@ -132,23 +132,24 @@ MotorConfigSet defaultMotorConfigSet() {
     velGains.kff = 0.0038f;
     velGains.i_max = 0.3f;
 
-    for (uint32_t i = 0; i < Subsystems::Hardware::kPortCount; ++i) {
+    for (uint32_t i = 0; i < Subsystems::Hardware::kMotorCount; ++i) {
         set.cfg[i] = msg::MotorConfig();
         set.cfg[i].setPort(i + 1);
         set.cfg[i].setFwdSign(1);
         set.cfg[i].setVelGains(velGains);
         set.cfg[i].setVelFiltAlpha(0.3f);
         // 091-002: I2C flip-flop poll-schedule membership -- true for the
-        // drive pair (ports 1/2, matching defaultSimDrivetrainConfig()'s
-        // left_port=1/right_port=2), false otherwise. Subsystems::SimHardware
-        // itself ignores this (it ticks all four ports every pass
-        // unconditionally -- sim_hardware.h's own file header), but
-        // dev_commands.cpp's DUTY/VEL/POS `ERR nodev` gate reads
-        // bb.motorConfig[port-1].polled regardless of which Hardware owner
-        // is behind it -- this is the config every pytest-collected sim test
-        // actually runs against, so getting it right here keeps every
-        // existing `DEV M 1|2 DUTY/VEL/POS` sim test passing unchanged.
-        set.cfg[i].setPolled(i + 1 == 1 || i + 1 == 2);
+        // drive pair (indices 0/1, physical ports 1/2, matching
+        // defaultSimDrivetrainConfig()'s left_port=1/right_port=2), false
+        // otherwise. Subsystems::SimHardware itself ignores this (it ticks
+        // all four motors every pass unconditionally -- sim_hardware.h's
+        // own file header), but dev_commands.cpp's DUTY/VEL/POS `ERR nodev`
+        // gate reads bb.motorConfig[idx].polled regardless of which
+        // Hardware owner is behind it -- this is the config every
+        // pytest-collected sim test actually runs against, so getting it
+        // right here keeps every existing `DEV M 1|2 DUTY/VEL/POS` sim test
+        // passing unchanged.
+        set.cfg[i].setPolled(i == 0 || i == 1);
     }
     return set;
 }
@@ -444,8 +445,10 @@ void sim_set_true_pose(void* h, float x, float y, float heading) {   // [mm] [mm
 float sim_get_enc_l(void* h) { return static_cast<SimHandle*>(h)->hardware.plant().reportedEncL(); }
 float sim_get_enc_r(void* h) { return static_cast<SimHandle*>(h)->hardware.plant().reportedEncR(); }
 
-float sim_get_vel_l(void* h) { return static_cast<SimHandle*>(h)->hardware.simMotor(1).velocity(); }
-float sim_get_vel_r(void* h) { return static_cast<SimHandle*>(h)->hardware.simMotor(2).velocity(); }
+// index 0 = LEFT, index 1 = RIGHT (the default plant-bound drive pair,
+// physical ports 1/2 -- 0-based motor indices, OOP refactor).
+float sim_get_vel_l(void* h) { return static_cast<SimHandle*>(h)->hardware.simMotor(0).velocity(); }
+float sim_get_vel_r(void* h) { return static_cast<SimHandle*>(h)->hardware.simMotor(1).velocity(); }
 
 float sim_get_pwm_l(void* h) {
     return static_cast<float>(static_cast<SimHandle*>(h)->hardware.plant().pwmL());

@@ -33,6 +33,14 @@ void Drivetrain::setNeutral(msg::Neutral mode) {
 
 void Drivetrain::configure(const msg::DrivetrainConfig& config) {
     config_ = config;
+    // THE single conversion point (0-based motor indices, OOP refactor):
+    // config.left_port/right_port are wire/serialized 1-based brick labels
+    // (msg::DrivetrainConfig, unchanged) -- converted to 0-based Hardware
+    // motor indices here, exactly once, and never again anywhere else in
+    // this class (see drivetrain.h's own doc comments on configure()/
+    // boundLeft_/boundRight_).
+    boundLeft_ = config.left_port - 1;
+    boundRight_ = config.right_port - 1;
 }
 
 void Drivetrain::configureMotion(const msg::PlannerConfig& config) {
@@ -223,14 +231,15 @@ void Drivetrain::tick(uint32_t now,
     }
 
     // 090-001 (moved, 094-004): resolve this Drivetrain's OWN bound wheel
-    // pair -- Hardware::state()/motor() already take a 1-based port and do
-    // their own out-of-range clamping (see drivetrain.h's tick() doc
-    // comment), so there is no `- 1` conversion left to perform; the range
-    // assert below is kept as a defensive guard against a misconfigured
-    // bound port.
+    // pair -- boundLeft_/boundRight_ are already-converted 0-based indices
+    // (configure()'s own single conversion point), and Hardware::state()/
+    // motor() take a 0-based index and do their own out-of-range clamping
+    // (see drivetrain.h's tick() doc comment), so there is no further `- 1`
+    // conversion to perform here; the range assert below is kept as a
+    // defensive guard against a misconfigured bound index.
     DrivetrainPorts bound = ports();
-    assert(bound.left >= 1 && bound.left <= Hardware::kPortCount);
-    assert(bound.right >= 1 && bound.right <= Hardware::kPortCount);
+    assert(bound.left < Hardware::kMotorCount);
+    assert(bound.right < Hardware::kMotorCount);
     const msg::MotorState leftObs = hardware_.state(bound.left);
     const msg::MotorState rightObs = hardware_.state(bound.right);
 
@@ -278,15 +287,14 @@ void Drivetrain::tick(uint32_t now,
 msg::DrivetrainState Drivetrain::state() const {
     msg::DrivetrainState s;
 
-    // enc_[]/vel_[] are sourced from hardware_.state(port) -- MEASURED, not
+    // enc_[]/vel_[] are sourced from hardware_.state(i) -- MEASURED, not
     // commanded (094-004: replaces the pre-094 "reports the pre-governor
     // commanded target" behavior entirely). Pose/EKF fields (fused/encoder/
     // optical, otos, wheel_wedged[], connected, otos_status,
     // otos_fusion_blocked) stay at their zero defaults -- this differential
     // dev-bench Drivetrain has no odometry/EKF this sprint.
     DrivetrainPorts bound = ports();
-    if (bound.left >= 1 && bound.left <= Hardware::kPortCount &&
-        bound.right >= 1 && bound.right <= Hardware::kPortCount) {
+    if (bound.left < Hardware::kMotorCount && bound.right < Hardware::kMotorCount) {
         msg::MotorState leftObs = hardware_.state(bound.left);
         msg::MotorState rightObs = hardware_.state(bound.right);
 
@@ -331,7 +339,10 @@ void Drivetrain::setMotorCapabilities(const msg::MotorCapabilities& left,
 }
 
 DrivetrainPorts Drivetrain::ports() const {
-    return {config_.left_port, config_.right_port};
+    // Already-converted 0-based indices (configure()'s single conversion
+    // point) -- NOT config_.left_port/right_port (the 1-based wire labels)
+    // directly.
+    return {boundLeft_, boundRight_};
 }
 
 bool Drivetrain::active() const { return active_; }

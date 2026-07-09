@@ -21,7 +21,7 @@
 //     Subsystems::PoseEstimator::tick()'s poseResetIn parameter can name
 //     Rt::PoseResetCommand without pose_estimator.h including this file
 //     (the "subsystems never include blackboard.h" boundary rule);
-//   - Subsystems::Hardware::kPortCount is reachable via subsystems/
+//   - Subsystems::Hardware::kMotorCount is reachable via subsystems/
 //     hardware.h alone, which includes only <stdint.h>, runtime/queue.h,
 //     messages/motor.h, and the CODAL-free hal/capability/*.h interfaces;
 //   - commandsIn's payload, Subsystems::
@@ -69,6 +69,7 @@
 //     Hal::Odometer has no tick()-driven queue parameter of its own).
 #pragma once
 
+#include <array>
 #include <cstdint>
 
 #include "messages/common.h"
@@ -84,7 +85,7 @@
 
 namespace Rt {
 
-constexpr uint32_t kPortCount = Subsystems::Hardware::kPortCount;  // 4
+constexpr uint32_t kMotorCount = Subsystems::Hardware::kMotorCount;  // 4
 
 // Owned by the loop. Holds NO subsystem pointers -- only the committed
 // snapshot x[k] (state plane) and the command queues (command plane).
@@ -92,7 +93,12 @@ struct Blackboard {
   // === State plane: committed snapshot x[k]. Written ONLY by the loop's
   //     commit step (from each subsystem's state()); read-only during a
   //     pass. ===
-  msg::MotorState motors[kPortCount];  // from Hardware
+  //
+  // (0-based motor indices, OOP refactor) motors[i] is motor index i's
+  // state -- a std::array so a composition root can commit it in one shot,
+  // `bb.motors = hardware.states();` (Subsystems::Hardware::states()),
+  // instead of a per-index copy loop.
+  std::array<msg::MotorState, kMotorCount> motors;  // from Hardware
   msg::DrivetrainState drivetrain;    // from Drivetrain
   msg::PoseEstimate encoderPose;      // from PoseEstimator
   msg::PoseEstimate fusedPose;        // from PoseEstimator
@@ -124,7 +130,7 @@ struct Blackboard {
   // Current config -- published by the Configurator on apply; read by
   // GET/telemetry. Replaces every shadow.
   msg::DrivetrainConfig drivetrainConfig;
-  msg::MotorConfig motorConfig[kPortCount];
+  msg::MotorConfig motorConfig[kMotorCount];
   msg::PlannerConfig plannerConfig;
   msg::OdometerConfig odometerConfig;
 
@@ -132,7 +138,7 @@ struct Blackboard {
   // the loop's one-time boot seed (capabilities/device-presence do not
   // change at runtime for any current concrete Hardware leaf). See the file
   // header above.
-  msg::MotorCapabilities motorCaps[kPortCount];
+  msg::MotorCapabilities motorCaps[kMotorCount];
   bool otosPresent = false;
 
   // (087-006) Loop-owned watchdog windows -- published every pass by the

@@ -99,7 +99,7 @@ int main() {
 
     // --- Hardware: the I2C brick flip-flop container (NezhaHardware). ---
     static I2CBus bus(uBit.i2c);
-    static msg::MotorConfig motorConfigs[Subsystems::NezhaHardware::kPortCount];
+    static msg::MotorConfig motorConfigs[Subsystems::NezhaHardware::kMotorCount];
     Config::defaultMotorConfigs(motorConfigs);
     static Subsystems::NezhaHardware hardware(bus, motorConfigs,
                                                Config::defaultOtosBootConfig());
@@ -133,10 +133,10 @@ int main() {
         }
         hardware.tick(now);                                    // pump the I2C flip-flop (timing unchanged)
         drivetrain.tick(now, bb.segmentIn, bb.driveIn);         // the Drivetrain connection
-        for (uint32_t p = 1; p <= Subsystems::NezhaHardware::kPortCount; ++p) {
-            bb.motors[p - 1] = hardware.state(p);              // commit measured motor state (incl. I2C connected)
-        }
+
+        bb.motors = hardware.states();                          // commit measured motor state (incl. I2C connected)
         bb.drivetrain = drivetrain.state();                     // commit measured state for TLM (094-006)
+        
         uBit.sleep(1);   // yield: radio RX delivery + other fibers
     }
 

@@ -57,6 +57,7 @@
 // virtual or a virtual no-op default.
 #pragma once
 
+#include <array>
 #include <stdint.h>
 
 #include "hal/capability/hal_command.h"
@@ -69,7 +70,7 @@ namespace Subsystems {
 
 class Hardware {
  public:
-  static constexpr uint32_t kPortCount = 4;
+  static constexpr uint32_t kMotorCount = 4;
 
   virtual ~Hardware() = default;
 
@@ -80,12 +81,17 @@ class Hardware {
   // completeness only.
   virtual void begin() {}
 
-  // Port-indexed accessor, port in [1, kPortCount]. Always returns the
+  // Index-addressed accessor, i in [0, kMotorCount). Always returns the
   // Hal::Motor faceplate — callers (DEV commands, Drivetrain, devLoopTick)
   // never see a concrete leaf's raw register verbs. Out-of-range handling is
   // each concrete owner's own business (see Subsystems::NezhaHardware::motor()'s
-  // doc comment for its clamp-to-port-4 convention).
-  virtual Hal::Motor& motor(uint32_t port) = 0;
+  // doc comment for its clamp-to-last-index convention). The motor's index
+  // IS its identity — the 1-based number printed on the Nezha brick is a
+  // config input only, converted to this 0-based index exactly once, at
+  // ingest (Subsystems::Drivetrain::configure() for the drive pair; a wire
+  // command handler's own `<n> - 1` for an addressed single motor) — see
+  // clasi's 0-based-motor-indices refactor notes for the full rationale.
+  virtual Hal::Motor& motor(uint32_t i) = 0;
 
   // Runs one scheduling pass. now: [ms]. See the file header's twice-per-pass,
   // unchanged-now re-entry contract (Decision 4) every concrete owner must
@@ -108,21 +114,34 @@ class Hardware {
   virtual void apply(const Hal::CommandProcessorToHardwareCommand& cmd) = 0;
   virtual void apply(const Hal::DrivetrainToHardwareCommand& cmd) = 0;
 
-  // config()/state() (087-004) — a uniform, port-indexed faceplate at the
-  // Hardware level itself, not only reachable by narrowing through motor(p)
+  // config()/state() (087-004) — a uniform, index-addressed faceplate at the
+  // Hardware level itself, not only reachable by narrowing through motor(i)
   // (today's only path, and today there is no config getter at all: Hal::
-  // Motor's configure() has no matching getter). Same [1, kPortCount]
-  // port-indexed convention and out-of-range clamp behavior as motor()/
-  // motorAt() (see each concrete owner's own doc comment). Kills the
-  // per-motor config shadow this sprint's design removes elsewhere — a
-  // caller (the Configurator, ticket 005) can read back the currently
-  // configured/observed value per port without narrowing to a concrete
-  // Hal::Motor reference.
-  virtual msg::MotorConfig config(uint32_t port) const = 0;
-  virtual msg::MotorState state(uint32_t port) const = 0;
+  // Motor's configure() has no matching getter). Same [0, kMotorCount)
+  // index convention and out-of-range clamp behavior as motor() (see each
+  // concrete owner's own doc comment). Kills the per-motor config shadow
+  // this sprint's design removes elsewhere — a caller (the Configurator,
+  // ticket 005) can read back the currently configured/observed value per
+  // motor without narrowing to a concrete Hal::Motor reference.
+  virtual msg::MotorConfig config(uint32_t i) const = 0;
+  virtual msg::MotorState state(uint32_t i) const = 0;
+
+  // states() -- the committed-snapshot convenience every composition root
+  // (main.cpp, main_loop.cpp) commits onto Rt::Blackboard::motors with one
+  // assignment (`bb.motors = hardware.states();`) instead of a per-index
+  // copy loop. Non-virtual: a thin loop over this class's OWN state(i)
+  // seam, not a per-owner override (the loop itself is not something a
+  // concrete owner needs to customize).
+  std::array<msg::MotorState, kMotorCount> states() const {
+    std::array<msg::MotorState, kMotorCount> out;
+    for (uint32_t i = 0; i < kMotorCount; ++i) {
+      out[i] = state(i);
+    }
+    return out;
+  }
 
   // setPolled() (091-002) -- the ONE config-plane door through which a
-  // port's I2C flip-flop poll-schedule membership changes after
+  // motor's I2C flip-flop poll-schedule membership changes after
   // construction (msg::MotorConfig.polled, source/messages/motor.h).
   // Reached exclusively through Rt::Configurator's kMotor ConfigDelta apply
   // path (source/runtime/configurator.cpp), itself reached only via `DEV M
@@ -131,9 +150,9 @@ class Hardware {
   // ordinary motion command (that latching anti-pattern is exactly what
   // this ticket deletes -- see nezha_hardware.h's own file header).
   // Virtual no-op default: Subsystems::SimHardware has no poll schedule to
-  // extend (every port ticks every pass unconditionally -- sim_hardware.h's
+  // extend (every motor ticks every pass unconditionally -- sim_hardware.h's
   // own file header) and does not override this.
-  virtual void setPolled(uint32_t /*port*/, bool /*polled*/) {}
+  virtual void setPolled(uint32_t /*i*/, bool /*polled*/) {}
 
   // The active owner's Hal::Odometer leaf, or a shared Hal::NullOdometer
   // instance if it has none — NEVER nullptr (090-003) — see the file

@@ -4,31 +4,30 @@
 
 namespace Subsystems {
 
-SimHardware::SimHardware(const msg::MotorConfig configs[kPortCount])
+SimHardware::SimHardware(const msg::MotorConfig configs[kMotorCount])
     : plant_(),
-      motor1_(plant_, Hal::SimMotor::Side::LEFT, configs[0]),
-      motor2_(plant_, Hal::SimMotor::Side::RIGHT, configs[1]),
-      motor3_(configs[2]),
-      motor4_(configs[3]),
+      motors_{{ {plant_, Hal::SimMotor::Side::LEFT, configs[0]},
+                {plant_, Hal::SimMotor::Side::RIGHT, configs[1]},
+                Hal::SimMotor(configs[2]),
+                Hal::SimMotor(configs[3]) }},
       odometer_(plant_)
 {
-    for (uint32_t i = 0; i < kPortCount; ++i) {
+    for (uint32_t i = 0; i < kMotorCount; ++i) {
         config_[i] = configs[i];   // 087-004: config()'s backing store
     }
 }
 
 void SimHardware::begin()
 {
-    motor1_.begin();
-    motor2_.begin();
-    motor3_.begin();
-    motor4_.begin();
+    for (uint32_t i = 0; i < kMotorCount; ++i) {
+        motors_[i].begin();
+    }
 }
 
 // The dt=0 re-entry guard (architecture-update.md (081) Decision 4) — see
 // file header. A call with an unchanged `now` is a complete no-op: no
 // Hal::SimMotor::tick() call, no Hal::PhysicsWorld::update() call, for ANY
-// port. (093/094 teardown) motorIn[]/motorResetIn[] consumption is gone --
+// motor. (093/094 teardown) motorIn[]/motorResetIn[] consumption is gone --
 // see hardware.h's own tick() doc comment for the full contract.
 void SimHardware::tick(uint32_t now)
 {
@@ -37,17 +36,16 @@ void SimHardware::tick(uint32_t now)
     }
     uint32_t dt = hasAdvanced_ ? (now - lastAdvancedNow_) : 0;   // [ms]
 
-    // Every port ticks first (each Hal::SimMotor samples the plant's STILL-
+    // Every motor ticks first (each Hal::SimMotor samples the plant's STILL-
     // stale reported encoder from the previous pass, decides its new
     // command, and stages it via writeRawDuty()) — THEN the plant advances
     // exactly once with the freshly-staged actuators, and the odometer
     // samples the just-advanced true pose. This one-tick latency mirrors
     // real hardware's own request/collect split (NezhaHardware's brick
     // flip-flop).
-    motor1_.tick(now);
-    motor2_.tick(now);
-    motor3_.tick(now);
-    motor4_.tick(now);
+    for (uint32_t i = 0; i < kMotorCount; ++i) {
+        motors_[i].tick(now);
+    }
 
     plant_.update(dt);
     odometer_.tick(now);
@@ -56,87 +54,67 @@ void SimHardware::tick(uint32_t now)
     hasAdvanced_ = true;
 }
 
-Hal::Motor& SimHardware::motor(uint32_t port)
+Hal::Motor& SimHardware::motor(uint32_t i)
 {
-    return motorAt(port);
+    return motors_[clampIndex(i)];
 }
 
 void SimHardware::apply(const Hal::CommandProcessorToHardwareCommand& cmd)
 {
     if (cmd.allPorts) {
-        for (uint32_t p = 1; p <= kPortCount; ++p) {
-            motorAt(p).apply(cmd.addressed[0].command);
+        for (uint32_t i = 0; i < kMotorCount; ++i) {
+            motors_[i].apply(cmd.addressed[0].command);
         }
         return;
     }
     for (uint8_t i = 0; i < cmd.count; ++i) {
-        motorAt(cmd.addressed[i].port).apply(cmd.addressed[i].command);
+        motors_[clampIndex(cmd.addressed[i].port)].apply(cmd.addressed[i].command);
     }
 }
 
 void SimHardware::apply(const Hal::DrivetrainToHardwareCommand& cmd)
 {
     for (int i = 0; i < 2; ++i) {
-        motorAt(cmd.wheel[i].port).apply(cmd.wheel[i].command);
+        motors_[clampIndex(cmd.wheel[i].port)].apply(cmd.wheel[i].command);
     }
 }
 
-msg::MotorConfig SimHardware::config(uint32_t port) const
+msg::MotorConfig SimHardware::config(uint32_t i) const
 {
-    switch (port) {
-        case 1: return config_[0];
-        case 2: return config_[1];
-        case 3: return config_[2];
-        default: return config_[3];   // out-of-range clamps to port 4 -- mirrors motorAt()'s own convention
-    }
+    return config_[clampIndex(i)];
 }
 
-msg::MotorState SimHardware::state(uint32_t port) const
+msg::MotorState SimHardware::state(uint32_t i) const
 {
-    switch (port) {
-        case 1: return motor1_.state();
-        case 2: return motor2_.state();
-        case 3: return motor3_.state();
-        default: return motor4_.state();   // out-of-range clamps to port 4 -- mirrors motorAt()'s own convention
-    }
+    return motors_[clampIndex(i)].state();
 }
 
-Hal::SimMotor& SimHardware::simMotor(uint32_t port)
+Hal::SimMotor& SimHardware::simMotor(uint32_t i)
 {
-    return motorAt(port);
+    return motors_[clampIndex(i)];
 }
 
-void SimHardware::rebindPlantPorts(uint32_t leftPort, uint32_t rightPort)
+void SimHardware::rebindPlantPorts(uint32_t leftIndex, uint32_t rightIndex)
 {
-    if (leftPort == leftPort_ && rightPort == rightPort_) {
+    if (leftIndex == leftIndex_ && rightIndex == rightIndex_) {
         return;   // already bound this way -- no-op
     }
-    // Unbind whichever ports currently hold the plant channels, then bind
-    // the new pair. If the new pair happens to reuse one of the old ports,
-    // that motor's tick cache is rebaselined too (Hal::SimMotor::
+    // Unbind whichever indices currently hold the plant channels, then bind
+    // the new pair. If the new pair happens to reuse one of the old
+    // indices, that motor's tick cache is rebaselined too (Hal::SimMotor::
     // bindToPlant()'s documented behavior) -- a harmless one-tick velocity-
     // read blip on this rare administrative operation, not a correctness
     // issue (the alternative, skipping the rebaseline for an "unchanged"
-    // port, risks a spurious velocity spike whenever the OTHER port's
+    // index, risks a spurious velocity spike whenever the OTHER index's
     // change alone would otherwise warrant one).
-    Hal::unbindSimMotorFromPlant(motorAt(leftPort_));
-    Hal::unbindSimMotorFromPlant(motorAt(rightPort_));
+    Hal::unbindSimMotorFromPlant(motors_[leftIndex_]);
+    Hal::unbindSimMotorFromPlant(motors_[rightIndex_]);
 
-    Hal::bindSimMotorToPlant(motorAt(leftPort), plant_, Hal::SimMotor::Side::LEFT);
-    Hal::bindSimMotorToPlant(motorAt(rightPort), plant_, Hal::SimMotor::Side::RIGHT);
+    Hal::bindSimMotorToPlant(motors_[leftIndex], plant_, Hal::SimMotor::Side::LEFT);
+    Hal::bindSimMotorToPlant(motors_[rightIndex], plant_, Hal::SimMotor::Side::RIGHT);
 
-    leftPort_ = leftPort;
-    rightPort_ = rightPort;
-}
-
-Hal::SimMotor& SimHardware::motorAt(uint32_t port)
-{
-    switch (port) {
-        case 1: return motor1_;
-        case 2: return motor2_;
-        case 3: return motor3_;
-        default: return motor4_;
-    }
+    leftIndex_ = leftIndex;
+    rightIndex_ = rightIndex;
 }
 
 }  // namespace Subsystems

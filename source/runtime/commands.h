@@ -124,8 +124,14 @@ struct ConfigDelta {
   enum Target { kDrivetrain, kMotor, kPlanner, kOdometer };
 
   Target target = kDrivetrain;
-  uint32_t port = 0;   // motor index (Hardware's [1, kPortCount] port
-                       // convention) when target == kMotor; ignored otherwise
+  uint32_t port = 0;   // 0-based Hardware motor index (Hardware's
+                       // [0, kMotorCount) convention) when target ==
+                       // kMotor; ignored otherwise. NOT the wire-visible
+                       // 1-based brick label -- a caller building this
+                       // delta (dev_commands.cpp/config_commands.cpp)
+                       // converts a wire `<n>` (or a wire-shaped published
+                       // config field) to this index at its own handler
+                       // boundary.
   uint64_t mask = 0;   // bit i -> field i of the *ConfigField enum matching
                        // `target` is present in the matching value member
 
