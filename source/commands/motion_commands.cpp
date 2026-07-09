@@ -19,6 +19,7 @@
 #include "commands/command_processor.h"
 #include "kinematics/body_kinematics.h"
 #include "messages/drivetrain.h"
+#include "motion/segment.h"
 
 namespace {
 
@@ -351,6 +352,115 @@ ParseResult parseRT(const char* const* tokens, int ntokens, const KVPair* kvs, i
 }
 
 // ---------------------------------------------------------------------------
+// Per-segment motion-limit override bounds (094-006) -- generous ceilings
+// above the boot Motion::SegmentExecutor defaults (source/main.cpp's/
+// tests/_infra/sim/sim_api.cpp's defaultMotionConfig(): a_max=800 mm/s^2,
+// v_body_max=1000 mm/s, yaw_rate_max=6 rad/s (~34400 cdeg/s),
+// yaw_acc_max=20 rad/s^2 (~114600 cdeg/s^2), j_max=5000 mm/s^3,
+// yaw_jerk_max=100 rad/s^3 (~572960 cdeg/s^3)), NOT the executor's own hard
+// physical limit -- these only reject an obviously-malformed override, the
+// same "sanity ceiling, not a physics model" role D's mm/T's ms/TURN's eps
+// bounds already play above.
+// ---------------------------------------------------------------------------
+constexpr float kMoveMaxSpeedMax = 3000.0f;         // [mm/s]
+constexpr float kMoveMaxAccelMax = 6000.0f;         // [mm/s^2]
+constexpr float kMoveMaxJerkMax = 60000.0f;         // [mm/s^3]
+constexpr float kMoveMaxYawRateMaxCdeg = 72000.0f;      // [cdeg/s]    (~720 deg/s)
+constexpr float kMoveMaxYawAccelMaxCdeg = 500000.0f;    // [cdeg/s^2]  (~5000 deg/s^2)
+constexpr float kMoveMaxYawJerkMaxCdeg = 2000000.0f;    // [cdeg/s^3]  (~20000 deg/s^3)
+
+// ---------------------------------------------------------------------------
+// parseMove -- MOVE <distance_mm> <direction_cdeg> <finalHeading_cdeg>
+//              [v=<mm/s>] [a=<mm/s^2>] [j=<mm/s^3>]
+//              [w=<cdeg/s>] [wa=<cdeg/s^2>] [wj=<cdeg/s^3>]
+//
+// Packs 9 args in a FIXED order: [0]=distance(INT mm), [1]=direction(INT
+// cdeg), [2]=finalHeading(INT cdeg), [3..8]=v/a/j/w/wa/wj (FLOAT, still WIRE
+// units -- handleMove does the cdeg->rad conversion for direction/
+// finalHeading/w/wa/wj, matching handleTURN's/handleRT's own split of
+// "parse in wire units, convert in the handler" via the shared kCdegToRad
+// constant declared below, near handleD).
+//
+// distance/direction/finalHeading are all SIGNED and may be 0 (Motion::
+// Segment's own pose-free geometry -- architecture-update.md Section 5:
+// distance==0 is a pure in-place turn, direction==finalHeading==0 is a
+// plain straight). direction/finalHeading use RT's own wider relative-angle
+// bound (+-180000 cdeg, i.e. +-1800 degrees) rather than TURN's absolute-
+// heading +-18000 bound -- both fields here are RELATIVE deltas, the same
+// idiom RT's relAngle already uses, not an absolute heading.
+//
+// v=/a=/j=/w=/wa=/wj= are optional per-segment overrides of the executor's
+// boot config; an absent kv defaults to 0.0f via kvFloat -- exactly
+// Motion::Segment's own 0-sentinel ("fall back to the executor's configured
+// default"), so no separate "was this key supplied" bookkeeping is needed
+// here the way parseTURN's `eps` needed one.
+// ---------------------------------------------------------------------------
+ParseResult parseMove(const char* const* tokens, int ntokens, const KVPair* kvs, int nkv) {
+  ParseResult res;
+  if (ntokens < 3) {
+    res.ok = false; res.err.code = nullptr; res.err.detail = nullptr; return res;
+  }
+  int distance = atoi(tokens[0]);
+  int direction = atoi(tokens[1]);
+  int finalHeading = atoi(tokens[2]);
+
+  if (distance < -10000 || distance > 10000) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "distance"; return res;
+  }
+  if (direction < -180000 || direction > 180000) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "direction"; return res;
+  }
+  if (finalHeading < -180000 || finalHeading > 180000) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "finalHeading"; return res;
+  }
+
+  float v = kvFloat(kvs, nkv, "v", 0.0f);
+  float a = kvFloat(kvs, nkv, "a", 0.0f);
+  float j = kvFloat(kvs, nkv, "j", 0.0f);
+  float w = kvFloat(kvs, nkv, "w", 0.0f);
+  float wa = kvFloat(kvs, nkv, "wa", 0.0f);
+  float wj = kvFloat(kvs, nkv, "wj", 0.0f);
+
+  if (v < 0.0f || v > kMoveMaxSpeedMax) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "v"; return res;
+  }
+  if (a < 0.0f || a > kMoveMaxAccelMax) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "a"; return res;
+  }
+  if (j < 0.0f || j > kMoveMaxJerkMax) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "j"; return res;
+  }
+  if (w < 0.0f || w > kMoveMaxYawRateMaxCdeg) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "w"; return res;
+  }
+  if (wa < 0.0f || wa > kMoveMaxYawAccelMaxCdeg) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "wa"; return res;
+  }
+  if (wj < 0.0f || wj > kMoveMaxYawJerkMaxCdeg) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "wj"; return res;
+  }
+
+  res.ok = true;
+  res.args.count = 9;
+  argInt(res.args.args[0], distance);
+  argInt(res.args.args[1], direction);
+  argInt(res.args.args[2], finalHeading);
+  argFloat(res.args.args[3], v);
+  argFloat(res.args.args[4], a);
+  argFloat(res.args.args[5], j);
+  argFloat(res.args.args[6], w);
+  argFloat(res.args.args[7], wa);
+  argFloat(res.args.args[8], wj);
+  // Only the 3 required positional tokens count toward suppliedCount -- the
+  // 6 kv overrides' "was this supplied" question is already answered by
+  // their own 0-sentinel value (see this function's own doc comment), the
+  // same reason parseD/parseT/parseR never widen suppliedCount for their
+  // packed stop=/sensor= tail either.
+  res.args.suppliedCount = 3;
+  return res;
+}
+
+// ---------------------------------------------------------------------------
 // handleS -- 093-001: direct wheel drive, no kinematics/ramp/stop-condition
 // closure. Builds a msg::WheelTargets straight from the parsed l/r ints and
 // posts a msg::DrivetrainCommand{WHEELS} to bb.driveIn, mirroring DEV DT
@@ -645,6 +755,57 @@ void handleRT(const ArgList& args, const char* corrId, ReplyFn replyFn, void* re
 }
 
 // ---------------------------------------------------------------------------
+// handleMove -- 094-006: the sprint's one new wire verb. Converts
+// direction_cdeg/finalHeading_cdeg/w=/wa=/wj= from wire centidegrees to
+// radians via the shared kCdegToRad constant (declared above, near
+// handleD), builds a Motion::Segment 1:1 from parseMove's packed args, and
+// posts it to bb.segmentIn -- Subsystems::Drivetrain::tick() drains that
+// queue into its own internal ring_ every pass (drivetrain.h's class
+// comment) and executes the ring's head segment via its owned
+// Motion::SegmentExecutor. No kinematics/goal/stop-condition machinery
+// here at all -- unlike every other handler above, this one does not touch
+// bb.motionIn/msg::PlannerCommand (that whole path stays Planner-only,
+// parked -- 094-002).
+// ---------------------------------------------------------------------------
+void handleMove(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
+                void* handlerCtx) {
+  Rt::Blackboard& b = bb(handlerCtx);
+  int distance = args.args[0].ival;       // [mm]
+  int direction = args.args[1].ival;      // [cdeg]
+  int finalHeading = args.args[2].ival;   // [cdeg]
+  float v = args.args[3].fval;    // [mm/s]
+  float a = args.args[4].fval;    // [mm/s^2]
+  float j = args.args[5].fval;    // [mm/s^3]
+  float w = args.args[6].fval;    // [cdeg/s]
+  float wa = args.args[7].fval;   // [cdeg/s^2]
+  float wj = args.args[8].fval;   // [cdeg/s^3]
+
+  Motion::Segment seg;
+  seg.distance = static_cast<float>(distance);
+  seg.direction = static_cast<float>(direction) * kCdegToRad;
+  seg.finalHeading = static_cast<float>(finalHeading) * kCdegToRad;
+  seg.speedMax = v;
+  seg.accelMax = a;
+  seg.jerkMax = j;
+  seg.yawRateMax = w * kCdegToRad;
+  seg.yawAccelMax = wa * kCdegToRad;
+  seg.yawJerkMax = wj * kCdegToRad;
+
+  // A post() failure (bb.segmentIn already at its 8-slot cap) is silently
+  // dropped -- same "should not occur in ordinary operation" treatment
+  // Drivetrain::tick()'s own ring_.post() failure gets (drivetrain.cpp);
+  // no live handler in this file checks a driveIn/segmentIn/motionIn post()
+  // return value today (handleS's b.driveIn.post(cmd) above is the existing
+  // precedent).
+  b.segmentIn.post(seg);
+
+  char body[64];
+  snprintf(body, sizeof(body), "dist=%d dir=%d fh=%d", distance, direction, finalHeading);
+  char rbuf[96];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "move", body, corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
 // parseG -- G <x> <y> <speed>. No stop=/sensor= support.
 // ---------------------------------------------------------------------------
 ParseResult parseG(const char* const* tokens, int ntokens, const KVPair* kvs, int nkv) {
@@ -706,24 +867,46 @@ void handleG(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
 }
 
 // ---------------------------------------------------------------------------
-// handleStop -- 093-001 (fixed): STOP posts a NEUTRAL msg::DrivetrainCommand
-// straight to bb.driveIn, built inline WITHOUT the standby side-channel --
-// deliberately NOT dev_commands.h's buildDrivetrainStop() helper, which sets
-// {NEUTRAL, standby=true}. That shape was found to be a correctness bug: in
-// Rt::MainLoop::routeOutputs(), the computed NEUTRAL wheel command is only
-// posted to bb.motorIn[] when drivetrain_.active() is true, and
-// Subsystems::Drivetrain::apply() processes standby=true AFTER the NEUTRAL
-// arm, immediately flipping active_ back to false in the same apply() call --
-// so the neutral command was silently dropped and the wheels kept spinning
-// at their last commanded speed. Leaving standby unset keeps the drivetrain
-// active, so routeOutputs() passes the neutral through to bb.motorIn[] and
-// Hal::Hardware::tick() actually neutralizes both motors. In this four-verb
-// loop there is no authority-steal producer for the standby gate to protect
-// against (DEV M et al. are unregistered), and a subsequent `S` re-activates
-// via setWheelTargets() regardless, so an active-neutral STOP is correct and
-// simplest. buildDrivetrainStop() itself is left unchanged -- other/parked
-// callers (DEV STOP, DEV DT STOP, the loop's watchdog-fire path) still rely
-// on its standby=true shape. No EVT. Reply stays `OK stop`.
+// handleStop -- 093-001 (fixed), physical behavior updated by 094-004/006:
+// STOP posts a NEUTRAL msg::DrivetrainCommand straight to bb.driveIn, built
+// inline WITHOUT the standby side-channel -- deliberately NOT
+// dev_commands.h's buildDrivetrainStop() helper, which sets {NEUTRAL,
+// standby=true}. That shape was found to be a correctness bug (093-001):
+// the pre-094 routeOutputs() step posted the computed NEUTRAL wheel command
+// to bb.motorIn[] only when drivetrain_.active() was true, and
+// Subsystems::Drivetrain::apply() processed standby=true AFTER the NEUTRAL
+// arm, immediately flipping active_ back to false in the same apply() call
+// -- so the neutral command was silently dropped and the wheels kept
+// spinning at their last commanded speed. Leaving standby unset keeps the
+// drivetrain active, so the neutral reaches the motors. That
+// routeOutputs()/bb.motorIn[] plumbing is itself gone now (094-005 --
+// Drivetrain stages its own wheel writes directly through hardware_'s
+// motor refs), but the underlying reason to leave standby unset (a
+// subsequent `S` re-activates via setWheelTargets() regardless, and there
+// is still no authority-steal producer in this trimmed table for the
+// standby gate to protect against) is unchanged, so this handler's own
+// NEUTRAL construction is unchanged.
+//
+// PHYSICAL EFFECT changed with 094-004's Drivetrain rewrite, though: this
+// same NEUTRAL command no longer means "instant brake" in every case.
+// Subsystems::Drivetrain::dispatchEscapeHatch() (drivetrain.cpp) inspects
+// whether a Motion::Segment is actively executing (SEGMENT mode AND
+// executor_.active()) when a NEUTRAL arrives -- if so, it arms the owned
+// Motion::SegmentExecutor's OWN presolved graceful decel-to-zero
+// (executor_.stop(now)) instead of zeroing the wheels instantly, and this
+// Drivetrain keeps riding that decel down to a literal 0.0f twist over
+// subsequent ticks (architecture-update.md Section 6, "STOP triggers the
+// graceful decel-to-zero" -- the communicator issue's own fix request).
+// Only when there is nothing in-flight to decelerate (a plain `S` then
+// `STOP`, no segment ever queued, or the executor was already idle) does
+// STOP fall straight through to the pre-094 instant-neutral behavior --
+// see test_bare_loop_commands.py's own DIRECT-mode STOP test, still green
+// unchanged, and test_bare_loop_move_and_tlm.py's SEGMENT-mode STOP test
+// (094-006) for the graceful path, both exercised over this SAME handler.
+// This handler itself needed no code change for that behavior switch --
+// entirely a Drivetrain-level (094-004) decision on the SAME NEUTRAL
+// command shape this handler already built. No EVT. Reply stays `OK stop`
+// unchanged, even though the physical effect it describes changed.
 // ---------------------------------------------------------------------------
 void handleStop(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, void* replyCtx,
                 void* handlerCtx) {
@@ -735,6 +918,47 @@ void handleStop(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, vo
 
   char rbuf[32];
   CommandProcessor::replyOK(rbuf, sizeof(rbuf), "stop", nullptr, corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
+// handleTlm -- 094-006: one-shot, SNAP-style synchronous read of
+// bb.drivetrain (itself sourced from Subsystems::Drivetrain::state(),
+// populated every pass by Rt::MainLoop::commit()/main.cpp's own commit
+// line -- MEASURED per-wheel encoder position/velocity, not a commanded
+// target, since 094-004's rewrite of Drivetrain::state()). Replies through
+// the command's own ReplyFn/ctx, exactly like PING/STOP above -- no
+// blackboard post (the simplest handler in this file), no EVT, no periodic
+// timer, no loop-output queue: architecture-update.md Section 7 Decision 2
+// explicitly rules out reviving the pre-093 STREAM/SNAP drain seam for a
+// single one-shot producer. Reply shape is this ticket's own choice --
+// `OK tlm ...`, wrapped like every other verb in this trimmed table,
+// deliberately NOT the pre-093 SNAP verb's unwrapped raw `TLM t=...` line
+// (docs/protocol-v2.md section 8) -- see this ticket's completion notes for
+// the docs/protocol-v2.md reconciliation this implies (that update itself
+// is deferred, per architecture-update.md Step 7 Open Question 1).
+// `active=` reports msg::DrivetrainState.active, which 094-006 also widened
+// (drivetrain.cpp's state()) to OR in the owned Motion::SegmentExecutor's
+// own active/idle status alongside the pre-079 authority flag -- see that
+// method's own doc comment for why the authority flag alone would report
+// `active=0` throughout a MOVE-only session.
+// ---------------------------------------------------------------------------
+void handleTlm(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, void* replyCtx,
+              void* handlerCtx) {
+  Rt::Blackboard& b = bb(handlerCtx);
+  const msg::DrivetrainState& dt = b.drivetrain;
+
+  float encL = dt.enc_count_val() >= 1 ? dt.enc()[0] : 0.0f;
+  float encR = dt.enc_count_val() >= 2 ? dt.enc()[1] : 0.0f;
+  float velL = dt.vel_count_val() >= 1 ? dt.vel()[0] : 0.0f;
+  float velR = dt.vel_count_val() >= 2 ? dt.vel()[1] : 0.0f;
+
+  char body[80];
+  snprintf(body, sizeof(body), "enc=%d,%d vel=%d,%d active=%d",
+           static_cast<int>(encL), static_cast<int>(encR),
+           static_cast<int>(velL), static_cast<int>(velR),
+           dt.active ? 1 : 0);
+  char rbuf[112];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "tlm", body, corrId, replyFn, replyCtx);
 }
 
 // handleQlen -- sprint 093 debug: report current Blackboard queue occupancy so
@@ -761,18 +985,29 @@ void handleQlen(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, vo
 
 }  // namespace
 
-// 093-001: pruned to the sprint's four live verbs' motion half (S/STOP) --
-// the "four live verbs" decision (issue simplify-the-main-loop-strip-it-to-
+// 093-001: pruned to the sprint's live verbs' motion half (S/STOP) -- the
+// "four live verbs" decision (issue simplify-the-main-loop-strip-it-to-
 // bare-wheel-driving.md) applies literally to this table, not just to
 // buildTable()'s family-level selection. T/D/R/TURN/RT/G's parse/handle
 // functions above are left source-unchanged and simply uncalled here --
 // same "unregistered not deleted" treatment as the other command families
-// (architecture-update.md Step 5/Migration Concerns).
+// (architecture-update.md Step 5/Migration Concerns). 094-006 adds the
+// sprint's one new verb, MOVE (parseMove/handleMove above), plus the
+// minimal pull-based TLM (handleTlm above, nullptr parseFn -- TLM takes no
+// args, the same `nullptr`-parseFn precedent STOP/QLEN already use).
 std::vector<CommandDescriptor> motionCommands(Rt::CommandRouter& router) {
   std::vector<CommandDescriptor> cmds;
   cmds.push_back(makeCmd("S", parseS, handleS, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
   cmds.push_back(makeCmd("STOP", nullptr, handleStop, &router, "badarg", ForceReply::NONE,
                          CMD_ACCESS_HARDWARE));
+  // 094-006: MOVE -- parses into a Motion::Segment, posts to bb.segmentIn.
+  // CMD_ACCESS_HARDWARE like S/STOP -- it (eventually) drives the motors.
+  cmds.push_back(makeCmd("MOVE", parseMove, handleMove, &router, "badarg", ForceReply::NONE,
+                         CMD_ACCESS_HARDWARE));
+  // 094-006: TLM -- one-shot synchronous read of bb.drivetrain; no
+  // CMD_ACCESS_HARDWARE flag (mirrors QLEN below -- it reads the ALREADY-
+  // committed blackboard cell, not hardware directly, at dispatch time).
+  cmds.push_back(makeCmd("TLM", nullptr, handleTlm, &router, "badarg"));
   // 093 debug: QLEN -- read-only Blackboard queue-occupancy probe (handlerCtx
   // = &router so it can reach the blackboard via bb()).
   cmds.push_back(makeCmd("QLEN", nullptr, handleQlen, &router, "badarg"));

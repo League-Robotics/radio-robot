@@ -10,12 +10,13 @@ namespace Rt {
 namespace {
 
 // buildTable -- sprint 093's minimal command table: liveness
-// (systemCommands(): PING/HELLO) + the four-verb motion family
-// (motionCommands(): S/STOP -- see motion_commands.cpp's own trimmed
-// registration). The `dev`/`telemetry`/`config`/`pose`/`otos` families are
-// left un-wired here -- their files, handlers, and includes are untouched on
-// disk (clasi/sprints/093-.../architecture-update.md Step 5/Migration
-// Concerns); buildTable() simply stops calling them.
+// (systemCommands(): PING/HELLO) + the motion family (motionCommands():
+// S/STOP, plus 094-006's MOVE/TLM -- see motion_commands.cpp's own trimmed
+// registration for the full, current list). The `dev`/`telemetry`/
+// `config`/`pose`/`otos` families are left un-wired here -- their files,
+// handlers, and includes are untouched on disk (clasi/sprints/093-.../
+// architecture-update.md Step 5/Migration Concerns); buildTable() simply
+// stops calling them.
 std::vector<CommandDescriptor> buildTable(CommandRouter& router) {
   std::vector<CommandDescriptor> all = systemCommands(router);
   std::vector<CommandDescriptor> motion = motionCommands(router);

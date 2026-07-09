@@ -299,9 +299,19 @@ msg::DrivetrainState Drivetrain::state() const {
         s.vel_count = 2;
     }
 
-    // Authority mode, readable from this state cell without a Drivetrain*
-    // (unchanged this ticket).
-    s.active = active_;
+    // Authority mode, readable from this state cell without a Drivetrain*,
+    // OR'd with the owned Motion::SegmentExecutor's own active/idle status
+    // (094-006): `active_` alone (the pre-079 authority-arbitration flag)
+    // is set ONLY by setTwist()/setWheelTargets()/setNeutral() -- i.e. only
+    // by a driveIn (S/STOP) escape-hatch command -- so a session driven
+    // entirely by `MOVE`/segmentIn would report `active=false` throughout
+    // even while a segment is actively executing (or riding its own
+    // graceful decel-to-zero), which is useless for `TLM`'s active/idle
+    // poll (architecture-update.md Section 7, "Telemetry and the deferred
+    // completion event"). `segmentMode_ && executor_.active()` covers that
+    // case without changing `active_`'s own pre-existing meaning for the
+    // DIRECT-mode/authority path.
+    s.active = active_ || (segmentMode_ && executor_.active());
 
     return s;
 }
