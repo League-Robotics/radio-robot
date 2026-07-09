@@ -173,6 +173,24 @@ class Sim:
         """
         return int(self._lib.sim_get_reply_store_len(self._h, ctypes.c_int(channel)))
 
+    def post_segment(self, distance: float, direction: float, final_heading: float,
+                      speed_max: float = 0.0, accel_max: float = 0.0, jerk_max: float = 0.0,
+                      yaw_rate_max: float = 0.0, yaw_accel_max: float = 0.0,
+                      yaw_jerk_max: float = 0.0) -> bool:
+        """Post one Motion::Segment directly to bb.segmentIn (094-005,
+        test-only -- sim_post_segment()), bypassing the wire entirely ahead
+        of 094-006's `MOVE` verb. Angle args (direction/final_heading) are
+        RADIANS -- Motion::Segment's own native unit (segment.h), not the
+        wire's eventual centidegrees. Returns True if segmentIn accepted it
+        (False only if segmentIn is already at its 8-slot cap)."""
+        accepted = self._lib.sim_post_segment(
+            self._h,
+            ctypes.c_float(distance), ctypes.c_float(direction), ctypes.c_float(final_heading),
+            ctypes.c_float(speed_max), ctypes.c_float(accel_max), ctypes.c_float(jerk_max),
+            ctypes.c_float(yaw_rate_max), ctypes.c_float(yaw_accel_max), ctypes.c_float(yaw_jerk_max),
+        )
+        return bool(accepted)
+
     def get_async_evts(self) -> str:
         """Drain and return any loop-originated async EVT lines (e.g. the
         watchdog-fire ``EVT dev_watchdog``) accumulated since the last call."""
@@ -333,6 +351,10 @@ class Sim:
 
         lib.sim_get_async_evts.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
         lib.sim_get_async_evts.restype = ctypes.c_int
+
+        # sim_post_segment (094-005, test-only) -- direct bb.segmentIn producer.
+        lib.sim_post_segment.argtypes = [ctypes.c_void_p] + [ctypes.c_float] * 9
+        lib.sim_post_segment.restype = ctypes.c_int
 
         # Ground truth (12) -- all no-arg float getters, plus two setters.
         for name in (

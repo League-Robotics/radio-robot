@@ -70,6 +70,8 @@
 #include "hal/sim/sim_setters.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
+#include "messages/planner.h"
+#include "motion/segment.h"
 #include "runtime/blackboard.h"
 #include "runtime/command_router.h"
 #include "runtime/main_loop.h"
@@ -159,6 +161,24 @@ msg::DrivetrainConfig defaultSimDrivetrainConfig() {
     return cfg;
 }
 
+// defaultSimMotionConfig -- 094-005: mirrors source/main.cpp's own
+// defaultMotionConfig() exactly (no Config::defaultPlannerConfig()
+// generator exists for either build -- sim_api.cpp cannot call
+// Config::defaultMotorConfigs()/Config::defaultDrivetrainConfig() either,
+// see defaultMotorConfigSet()'s own comment above). Applied once, at
+// construction, via drivetrain.configureMotion() below.
+msg::PlannerConfig defaultSimMotionConfig() {
+    msg::PlannerConfig cfg;
+    cfg.a_max = 800.0f;         // [mm/s^2]
+    cfg.a_decel = 800.0f;       // [mm/s^2]
+    cfg.v_body_max = 1000.0f;   // [mm/s]
+    cfg.yaw_rate_max = 6.0f;    // [rad/s]
+    cfg.yaw_acc_max = 20.0f;    // [rad/s^2]
+    cfg.j_max = 5000.0f;        // [mm/s^3]
+    cfg.yaw_jerk_max = 100.0f;  // [rad/s^3]
+    return cfg;
+}
+
 // ---------------------------------------------------------------------------
 // SimHandle — one self-contained simulation instance allocated per
 // sim_create() call. Member declaration order IS construction order (C++
@@ -191,6 +211,8 @@ struct SimHandle {
 SimHandle::SimHandle()
     : motorConfigs(defaultMotorConfigSet()),
       hardware(motorConfigs.cfg),
+      drivetrain(hardware),   // 094-005: Drivetrain now HOLDS a Hardware& -- hardware above
+                               // must (and does) construct first.
       loop(hardware, drivetrain)
 {
     // Primes all four ports' encoders — parity with main.cpp's
@@ -199,6 +221,11 @@ SimHandle::SimHandle()
 
     msg::DrivetrainConfig dtConfig = defaultSimDrivetrainConfig();
     drivetrain.configure(dtConfig);
+    // 094-005: boot-only jerk-limit defaults for the Drivetrain-owned
+    // Motion::SegmentExecutor -- mirrors main.cpp's own
+    // drivetrain.configureMotion(defaultMotionConfig()) call exactly (the
+    // 1:1-mirror invariant).
+    drivetrain.configureMotion(defaultSimMotionConfig());
 
     // Rt::CommandRouter (087-006, channel-distinct since 088-006): each
     // reply channel resolves to its OWN sync store -- see file header's
@@ -237,9 +264,10 @@ void sim_destroy(void* h) {
 // ---------------------------------------------------------------------------
 
 // Advance the sim by one ordinary pass: one Rt::MainLoop::tick() (hardware
-// tick, drivetrain tick, commit, routeOutputs -- no command, so no routing
-// happens since none is being fed). No config-drain loop remains (093:
-// there is no runtime config-application authority left to drain).
+// tick, drivetrain tick, commit -- 094-005 deletes the former routeOutputs()
+// step; Drivetrain now stages its own wheel writes directly through
+// hardware's motor refs). No config-drain loop remains (093: there is no
+// runtime config-application authority left to drain).
 void sim_tick(void* h, uint32_t now) {
     SimHandle* s = static_cast<SimHandle*>(h);
     Types::setHostClockNow(now);
@@ -306,6 +334,38 @@ int sim_command_on(void* h, const char* line, int channel, char* reply, int size
 // is source-compatible and behaves identically.
 int sim_command(void* h, const char* line, char* reply, int size) {
     return sim_command_on(h, line, static_cast<int>(Subsystems::Channel::SERIAL), reply, size);
+}
+
+// ---------------------------------------------------------------------------
+// sim_post_segment (094-005, TEST-ONLY) -- posts one Motion::Segment
+// directly to bb.segmentIn, bypassing the wire entirely. `MOVE` (094-006)
+// is not wired yet this ticket; this is the direct producer 094-005's own
+// acceptance criteria call for ("a direct bb.segmentIn.post(...)") to prove
+// the loop reorder (main_loop.cpp: hardware.tick -> drivetrain.tick ->
+// commit) + this blackboard wiring work end to end, ahead of the wire verb.
+// Returns 1 if segmentIn accepted it (Rt::WorkQueue<T,8>::post()'s own
+// true/false contract -- false only if segmentIn is already at its 8-slot
+// cap), 0 otherwise. Angle fields (direction/finalHeading) are RADIANS here
+// (Motion::Segment's own native unit, segment.h) -- unlike the eventual
+// `MOVE` wire verb, which will take centidegrees; this entry point is a
+// direct struct-field producer, not a wire-grammar parser, so it uses
+// Motion::Segment's own units throughout.
+// ---------------------------------------------------------------------------
+int sim_post_segment(void* h, float distance, float direction, float finalHeading,
+                      float speedMax, float accelMax, float jerkMax,
+                      float yawRateMax, float yawAccelMax, float yawJerkMax) {
+    SimHandle* s = static_cast<SimHandle*>(h);
+    Motion::Segment seg;
+    seg.distance = distance;
+    seg.direction = direction;
+    seg.finalHeading = finalHeading;
+    seg.speedMax = speedMax;
+    seg.accelMax = accelMax;
+    seg.jerkMax = jerkMax;
+    seg.yawRateMax = yawRateMax;
+    seg.yawAccelMax = yawAccelMax;
+    seg.yawJerkMax = yawJerkMax;
+    return s->bb.segmentIn.post(seg) ? 1 : 0;
 }
 
 // ---------------------------------------------------------------------------

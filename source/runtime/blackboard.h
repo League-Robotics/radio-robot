@@ -28,6 +28,9 @@
 //     CommunicatorToCommandProcessorCommand, lives in the CODAL-free
 //     source/subsystems/wire_command.h -- NOT subsystems/communicator.h,
 //     which pulls in MicroBit.h/com/radio.h/com/serial_port.h.
+//   - segmentIn's payload, Motion::Segment (source/motion/segment.h, ticket
+//     094-001), is a plain POD with zero CODAL dependency -- added 094-005
+//     (see "Command plane" below).
 // This is what makes Rt::Blackboard instantiable in a host test harness
 // (tests/sim/unit/runtime_blackboard_harness.cpp) with the plain system
 // C++ compiler -- no ARM toolchain, no MicroBit.h transitively included.
@@ -73,6 +76,7 @@
 #include "messages/motor.h"
 #include "messages/odometer.h"
 #include "messages/planner.h"
+#include "motion/segment.h"
 #include "runtime/commands.h"
 #include "runtime/queue.h"
 #include "subsystems/hardware.h"
@@ -154,12 +158,28 @@ struct Blackboard {
   bool telemetryHasLastEmit = false;
   uint32_t telemetryLastEmitMs = 0;   // [ms]
 
-  // === Command plane: queues. Each drained by exactly ONE consumer
-  //     (driveIn has two producers -- Decision 1's authority-gated
-  //     arbitration). ===
+  // === Command plane: queues. Each drained by exactly ONE consumer. ===
   WorkQueue<Subsystems::CommunicatorToCommandProcessorCommand, 16>
       commandsIn;                            // Communicator -> router
-  WorkQueue<msg::DrivetrainCommand, 8> driveIn;  // router(DEV DT)/Planner -> Drivetrain (FIFO; commands accumulate)
+  // driveIn (094-005): now the S/STOP ESCAPE-HATCH input to
+  // Subsystems::Drivetrain ONLY -- drained (one command per tick, FIFO) and
+  // applied FIRST, ahead of segmentIn (below), inside Drivetrain::tick()
+  // (see drivetrain.h's class comment for the full precedence rules).
+  // There is no more Planner producer (Planner is parked, ticket 094-002)
+  // and no more Rt::MainLoop routeOutputs() consumer (deleted, 094-005 --
+  // Drivetrain stages its own output directly through
+  // hardware_.motor(port).apply(), nothing left to route).
+  WorkQueue<msg::DrivetrainCommand, 8> driveIn;
+  // segmentIn (094-005, new): `MOVE`'s fan-in (094-006's wire handler is
+  // this queue's eventual producer -- not wired yet this ticket; a direct
+  // test-only bb.segmentIn.post()/sim_post_segment() proves the loop
+  // reorder + this wiring end to end ahead of 094-006's wire verb). An
+  // Rt::WorkQueue, NOT a latest-wins Mailbox: multiple MOVEs can arrive
+  // between mandatory ticks and must ALL apply, in order (the communicator
+  // issue's "no dropped commands" requirement) -- a Mailbox would silently
+  // drop all but the last. Drained by Subsystems::Drivetrain::tick() into
+  // its own internal ring_ every pass (see drivetrain.h).
+  WorkQueue<Motion::Segment, 8> segmentIn;
   WorkQueue<ConfigDelta, 16> configIn;        // router -> Configurator
   WorkQueue<PoseResetCommand, 4> poseResetIn;  // router -> PoseEstimator
   Mailbox<msg::SetPose> otosSetPoseIn;        // SI re-anchor -> odometer

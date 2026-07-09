@@ -1,29 +1,24 @@
 # tests/sim/parked-094/ — sprint-094-era parking leaf
 
-This leaf holds two sets of parked tests, both stemming from the sprint
-093→094 transition (Drivetrain becoming the motion planner that owns its
-motors). Per this project's greenfield-rebuild precedent (`source_old/`,
-`tests/sim/parked-093/`): **parked, not deleted.** `pyproject.toml`'s
-`norecursedirs` excludes the whole `parked-094/` leaf from pytest collection
-(bare name `parked-094`, matching `parked-093`'s basename-fnmatch behavior).
+This leaf holds one set of parked tests, stemming from ticket 094-002's
+Planner/VelocityRamp relocation. Per this project's greenfield-rebuild
+precedent (`source_old/`, `tests/sim/parked-093/`): **parked, not deleted.**
+`pyproject.toml`'s `norecursedirs` excludes the whole `parked-094/` leaf from
+pytest collection (bare name `parked-094`, matching `parked-093`'s
+basename-fnmatch behavior).
 
-## Set A — drive-severed tests (from 093's queue teardown)
+## [RESTORED] Set A — drive-severed tests (from 093's queue teardown)
 
 Prep work toward "Drivetrain owns its motors" removed the motor/hardware
 inbound message queues from `Rt::Blackboard` (`motorIn[]`, `motorResetIn[]`,
 `hardwareBroadcastIn`), so a Drivetrain's commanded wheel targets no longer
-reach `Subsystems::Hardware`/the simulated plant. `S`/`STOP` still parse and
-reply (they post to `bb.driveIn`), but the plant-motion half of the
-four-verb suite tests a severed path.
-
-- `unit/test_bare_loop_drive_severed.py` — the plant-motion assertions split
-  out of `tests/sim/unit/test_bare_loop_commands.py` (093-003's four-verb
-  suite). The command-reply-only tests (`PING`, `HELLO`, `ERR unknown`) stay
-  live in `test_bare_loop_commands.py`.
-
-**Comes back:** once sprint 094 gives the Drivetrain its own motors and the
-S/STOP path drives the plant again (tickets 094-004/005/006), move this back
-to `tests/sim/unit/` (folding into `test_bare_loop_commands.py` if cleaner).
+reached `Subsystems::Hardware`/the simulated plant for a while. Ticket
+094-004 gave `Subsystems::Drivetrain` its own `Hardware&` and ticket 094-005
+wired `hardware.tick(now)` -> `drivetrain.tick(now, bb.segmentIn,
+bb.driveIn)` -> commit into both composition roots, so `S`/`STOP` reach the
+plant again. The plant-motion assertions (`unit/test_bare_loop_drive_severed.py`)
+have been folded back into `tests/sim/unit/test_bare_loop_commands.py`
+(094-005) — this set is EMPTY now, kept as a historical marker only.
 
 ## Set B — Planner / VelocityRamp isolation tests (ticket 094-002)
 
