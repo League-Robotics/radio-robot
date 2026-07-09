@@ -123,19 +123,20 @@ class Hardware {
   // this sprint's design removes elsewhere — a caller (the Configurator,
   // ticket 005) can read back the currently configured/observed value per
   // motor without narrowing to a concrete Hal::Motor reference.
-  virtual msg::MotorConfig config(uint32_t i) const = 0;
-  virtual msg::MotorState state(uint32_t i) const = 0;
+  virtual msg::MotorConfig motorConfig(uint32_t i) const = 0;
+  virtual msg::MotorState motorState(uint32_t i) const = 0;
 
-  // states() -- the committed-snapshot convenience every composition root
-  // (main.cpp, main_loop.cpp) commits onto Rt::Blackboard::motors with one
-  // assignment (`bb.motors = hardware.states();`) instead of a per-index
-  // copy loop. Non-virtual: a thin loop over this class's OWN state(i)
-  // seam, not a per-owner override (the loop itself is not something a
-  // concrete owner needs to customize).
-  std::array<msg::MotorState, kMotorCount> states() const {
+  // motorStates() -- the committed-snapshot convenience every composition
+  // root (main.cpp, main_loop.cpp) commits onto Rt::Blackboard::motors with
+  // one assignment (`bb.motors = hardware.motorStates();`) instead of a
+  // per-index copy loop. Named for what it returns -- the MOTOR states, one
+  // facet of this device container (which also owns an odometer, and may own
+  // other devices) -- not "the hardware state". Non-virtual: a thin loop over
+  // this class's OWN motorState(i) seam, not a per-owner override.
+  std::array<msg::MotorState, kMotorCount> motorStates() const {
     std::array<msg::MotorState, kMotorCount> out;
     for (uint32_t i = 0; i < kMotorCount; ++i) {
-      out[i] = state(i);
+      out[i] = motorState(i);
     }
     return out;
   }
@@ -152,7 +153,7 @@ class Hardware {
   // Virtual no-op default: Subsystems::SimHardware has no poll schedule to
   // extend (every motor ticks every pass unconditionally -- sim_hardware.h's
   // own file header) and does not override this.
-  virtual void setPolled(uint32_t /*i*/, bool /*polled*/) {}
+  virtual void setMotorPolled(uint32_t /*i*/, bool /*polled*/) {}
 
   // The active owner's Hal::Odometer leaf, or a shared Hal::NullOdometer
   // instance if it has none — NEVER nullptr (090-003) — see the file

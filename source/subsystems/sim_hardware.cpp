@@ -13,7 +13,7 @@ SimHardware::SimHardware(const msg::MotorConfig configs[kMotorCount])
       odometer_(plant_)
 {
     for (uint32_t i = 0; i < kMotorCount; ++i) {
-        config_[i] = configs[i];   // 087-004: config()'s backing store
+        motorConfigs_[i] = configs[i];   // 087-004: config()'s backing store
     }
 }
 
@@ -79,12 +79,12 @@ void SimHardware::apply(const Hal::DrivetrainToHardwareCommand& cmd)
     }
 }
 
-msg::MotorConfig SimHardware::config(uint32_t i) const
+msg::MotorConfig SimHardware::motorConfig(uint32_t i) const
 {
-    return config_[clampIndex(i)];
+    return motorConfigs_[clampIndex(i)];
 }
 
-msg::MotorState SimHardware::state(uint32_t i) const
+msg::MotorState SimHardware::motorState(uint32_t i) const
 {
     return motors_[clampIndex(i)].state();
 }

@@ -198,7 +198,7 @@ class Drivetrain {
   // fan-in (drained into ring_ -- see the class comment). driveIn: the
   // S/STOP escape-hatch fan-in (drained FIRST, one command per tick, per
   // the class comment's precedence rules). Resolves this Drivetrain's OWN
-  // bound wheel pair via `hardware_.state(i)`/`hardware_.motor(i)`
+  // bound wheel pair via `hardware_.motorState(i)`/`hardware_.motor(i)`
   // internally, using boundLeft_/boundRight_ (already-converted 0-based
   // indices -- see configure()'s own doc comment, the ONE place a `- 1`
   // exists in this class) -- Hardware::state()/motor() take a 0-based index
@@ -210,7 +210,7 @@ class Drivetrain {
             Rt::WorkQueue<msg::DrivetrainCommand, 8>& driveIn);
 
   // Assembled from getters. enc_[]/vel_[] are sourced from
-  // hardware_.state(port) -- MEASURED, not commanded (replaces the pre-094
+  // hardware_.motorState(port) -- MEASURED, not commanded (replaces the pre-094
   // "reports the pre-governor commanded target" behavior entirely: this is
   // a genuinely different, measured source, not a preserved one -- see
   // architecture-update.md Section 3's Drivetrain boundary and ticket

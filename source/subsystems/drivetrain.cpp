@@ -240,8 +240,8 @@ void Drivetrain::tick(uint32_t now,
     DrivetrainPorts bound = ports();
     assert(bound.left < Hardware::kMotorCount);
     assert(bound.right < Hardware::kMotorCount);
-    const msg::MotorState leftObs = hardware_.state(bound.left);
-    const msg::MotorState rightObs = hardware_.state(bound.right);
+    const msg::MotorState leftObs = hardware_.motorState(bound.left);
+    const msg::MotorState rightObs = hardware_.motorState(bound.right);
 
     msg::MotorCommand leftCmd;
     msg::MotorCommand rightCmd;
@@ -287,7 +287,7 @@ void Drivetrain::tick(uint32_t now,
 msg::DrivetrainState Drivetrain::state() const {
     msg::DrivetrainState s;
 
-    // enc_[]/vel_[] are sourced from hardware_.state(i) -- MEASURED, not
+    // enc_[]/vel_[] are sourced from hardware_.motorState(i) -- MEASURED, not
     // commanded (094-004: replaces the pre-094 "reports the pre-governor
     // commanded target" behavior entirely). Pose/EKF fields (fused/encoder/
     // optical, otos, wheel_wedged[], connected, otos_status,
@@ -295,8 +295,8 @@ msg::DrivetrainState Drivetrain::state() const {
     // dev-bench Drivetrain has no odometry/EKF this sprint.
     DrivetrainPorts bound = ports();
     if (bound.left < Hardware::kMotorCount && bound.right < Hardware::kMotorCount) {
-        msg::MotorState leftObs = hardware_.state(bound.left);
-        msg::MotorState rightObs = hardware_.state(bound.right);
+        msg::MotorState leftObs = hardware_.motorState(bound.left);
+        msg::MotorState rightObs = hardware_.motorState(bound.right);
 
         s.enc_[0] = leftObs.position.has ? leftObs.position.val : 0.0f;
         s.enc_[1] = rightObs.position.has ? rightObs.position.val : 0.0f;

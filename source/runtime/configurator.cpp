@@ -139,7 +139,7 @@ Configurator::Configurator(Subsystems::Drivetrain& drivetrain, Subsystems::PoseE
       plannerConfig_(bootPlannerConfig),
       odometerConfig_() {
   for (uint32_t i = 0; i < Subsystems::Hardware::kMotorCount; ++i) {
-    motorConfig_[i] = hardware_.config(i);
+    motorConfig_[i] = hardware_.motorConfig(i);
   }
 }
 
@@ -186,7 +186,7 @@ void Configurator::applyOne(Blackboard& bb) {
         // ONLY when this delta actually touched the bit, mirroring every
         // other field's own mask-gated application above.
         if (delta.mask & bitOf(MotorConfigField::kPolled)) {
-          hardware_.setPolled(idx, motorConfig_[idx].polled);
+          hardware_.setMotorPolled(idx, motorConfig_[idx].polled);
         }
       }
       bb.motorConfig[idx] = motorConfig_[idx];

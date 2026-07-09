@@ -9,8 +9,8 @@ NezhaHardware::NezhaHardware(I2CBus& bus, const msg::MotorConfig configs[kMotorC
       otosOdometer_(bus, otosConfig)
 {
     for (uint32_t i = 0; i < kMotorCount; ++i) {
-        config_[i] = configs[i];   // 087-004: config()'s backing store
-        polled_[i] = configs[i].polled;   // 091-002: the configured poll-set, established ONCE here
+        motorConfigs_[i] = configs[i];   // 087-004: config()'s backing store
+        motorPolled_[i] = configs[i].polled;   // 091-002: the configured poll-set, established ONCE here
     }
 }
 
@@ -30,7 +30,7 @@ void NezhaHardware::begin()
 void NezhaHardware::tick(uint32_t now)
 {
     if (!anyPolled()) return;                    // idle schedule (decision 1)
-    if (!polled_[activeIndex_]) {
+    if (!motorPolled_[activeIndex_]) {
         activeIndex_ = nextPolled(activeIndex_);  // defensive resync
     }
     switch (phase_) {
@@ -72,12 +72,12 @@ void NezhaHardware::apply(const Hal::DrivetrainToHardwareCommand& cmd)
     }
 }
 
-msg::MotorConfig NezhaHardware::config(uint32_t i) const
+msg::MotorConfig NezhaHardware::motorConfig(uint32_t i) const
 {
-    return config_[clampIndex(i)];
+    return motorConfigs_[clampIndex(i)];
 }
 
-msg::MotorState NezhaHardware::state(uint32_t i) const
+msg::MotorState NezhaHardware::motorState(uint32_t i) const
 {
     return motors_[clampIndex(i)].state();
 }
@@ -91,7 +91,7 @@ uint32_t NezhaHardware::nextPolled(uint32_t cur) const
 {
     for (uint32_t step = 1; step <= kMotorCount; ++step) {
         uint32_t candidate = (cur + step) % kMotorCount;
-        if (polled_[candidate]) return candidate;
+        if (motorPolled_[candidate]) return candidate;
     }
     return cur;   // no polled motor found -- defensive only, see header comment
 }
@@ -99,14 +99,14 @@ uint32_t NezhaHardware::nextPolled(uint32_t cur) const
 bool NezhaHardware::anyPolled() const
 {
     for (uint32_t i = 0; i < kMotorCount; ++i) {
-        if (polled_[i]) return true;
+        if (motorPolled_[i]) return true;
     }
     return false;
 }
 
-void NezhaHardware::setPolled(uint32_t i, bool polled)
+void NezhaHardware::setMotorPolled(uint32_t i, bool polled)
 {
-    polled_[clampIndex(i)] = polled;
+    motorPolled_[clampIndex(i)] = polled;
 }
 
 }  // namespace Subsystems

@@ -86,11 +86,11 @@ class SimHardware : public Hardware {
 
   // config()/state() (087-004, Subsystems::Hardware's own doc comment has
   // the full contract). config(i) returns the constructor-supplied
-  // config_[i] verbatim; state(i) returns motor(i).state() unchanged.
+  // motorConfigs_[i] verbatim; state(i) returns motor(i).state() unchanged.
   // Out-of-range indices clamp to kMotorCount-1, matching motor()'s own
   // convention.
-  msg::MotorConfig config(uint32_t i) const override;
-  msg::MotorState state(uint32_t i) const override;
+  msg::MotorConfig motorConfig(uint32_t i) const override;
+  msg::MotorState motorState(uint32_t i) const override;
 
   // The one Hal::Odometer leaf this owner has (082-003's Subsystems::Hardware
   // seam override) — never nullptr for SimHardware, unlike
@@ -155,7 +155,7 @@ class SimHardware : public Hardware {
   // config()'s own backing store (087-004) — a verbatim copy of the
   // constructor's configs[] argument. This ticket adds no way to change it
   // after construction (no Hardware-level configure() exists yet).
-  msg::MotorConfig config_[kMotorCount];
+  msg::MotorConfig motorConfigs_[kMotorCount];
 };
 
 }  // namespace Subsystems

@@ -298,7 +298,7 @@ void scenarioConfigAndState() {
   Subsystems::SimHardware hw(configs);
 
   for (uint32_t i = 0; i < Subsystems::Hardware::kMotorCount; ++i) {
-    msg::MotorConfig readBack = hw.config(i);
+    msg::MotorConfig readBack = hw.motorConfig(i);
     checkNear(readBack.travel_calib, configs[i].travel_calib, 0.0f,
               "config(port) returns the constructed travel_calib");
     checkTrue(readBack.fwd_sign == configs[i].fwd_sign,
@@ -310,7 +310,7 @@ void scenarioConfigAndState() {
   hw.motor(0).apply(msg::MotorCommand{}.setVelocity(150.0f));
   hw.tick(0);
 
-  msg::MotorState st1 = hw.state(0);
+  msg::MotorState st1 = hw.motorState(0);
   checkTrue(st1.connected == hw.motor(0).state().connected,
             "state(port) matches motor(port).state() exactly (connected)");
   checkNear(st1.applied.val, hw.motor(0).state().applied.val, 0.0f,

@@ -163,7 +163,7 @@ void scenarioDrivetrainDeltaApplies() {
 //
 // Note: Hardware::config(i) (087-004) is a boot-time snapshot only --
 // ticket 087-004's own Implementation Notes confirm neither NezhaHardware
-// nor SimHardware writes back into their config_[] cache after
+// nor SimHardware writes back into their motorConfigs_[] cache after
 // construction (there is no Hardware::configure() setter at all yet, only
 // the per-motor Hal::Motor::configure() this Configurator calls through).
 // It would therefore be WRONG to assert hardware.config(1) reflects a

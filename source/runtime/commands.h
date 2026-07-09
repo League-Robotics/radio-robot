@@ -203,7 +203,7 @@ enum class DrivetrainConfigField : uint8_t {
 // no other MotorConfigField bit does: when set, Configurator::applyOne()
 // additionally calls Subsystems::Hardware::setPolled() (the Configurator's
 // kMotor apply path, source/runtime/configurator.cpp) -- the one door
-// through which NezhaHardware's polled_[] mask changes after construction.
+// through which NezhaHardware's motorPolled_[] mask changes after construction.
 enum class MotorConfigField : uint8_t {
   kTravelCalib,
   kFwdSign,

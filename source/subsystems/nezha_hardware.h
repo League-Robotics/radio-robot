@@ -97,7 +97,7 @@ class NezhaHardware : public Hardware {
   // tests/sim/unit/*_harness.cpp fixtures that construct a NezhaHardware but
   // never call begin()/odometer() on it) keeps compiling unchanged — none of
   // those exercise the OTOS leaf at all, so the default is behaviorally
-  // inert for them. Also copies configs[] verbatim into config_[] (087-004)
+  // inert for them. Also copies configs[] verbatim into motorConfigs_[] (087-004)
   // — config()'s backing store.
   NezhaHardware(I2CBus& bus, const msg::MotorConfig configs[kMotorCount],
                 const Config::OtosBootConfig& otosConfig = Config::OtosBootConfig());
@@ -124,7 +124,7 @@ class NezhaHardware : public Hardware {
   // Subsystems::Hardware's own tick() doc comment has the full contract.
   // tick() now runs ONLY the flip-flop's scheduling decision below;
   // whether motor i is eligible for THIS call's bus action depends
-  // solely on polled_[i], the constant (except via setPolled()) mask
+  // solely on motorPolled_[i], the constant (except via setPolled()) mask
   // established at construction.
   void tick(uint32_t now) override;   // [ms]
 
@@ -141,7 +141,7 @@ class NezhaHardware : public Hardware {
   // the target NezhaMotor(s) via their own apply(). 091-002: neither
   // overload touches poll-schedule membership at all any more — a target's
   // eligibility for tick()'s cycling schedule depends solely on the
-  // constant polled_[] mask (config-established, setPolled()-mutable),
+  // constant motorPolled_[] mask (config-established, setPolled()-mutable),
   // never on whether apply() was ever called for it. allPorts==true
   // forwards addressed[0].command to every motor's setter unconditionally,
   // regardless of each motor's own polled_ state.
@@ -159,19 +159,19 @@ class NezhaHardware : public Hardware {
 
   // config()/state() (087-004, Subsystems::Hardware's own doc comment has
   // the full contract). config(i) returns the constructor-supplied
-  // config_[i] verbatim (the same value motor i's own NezhaMotor leaf was
+  // motorConfigs_[i] verbatim (the same value motor i's own NezhaMotor leaf was
   // constructed with — see the constructor); state(i) returns
   // motor(i).state() unchanged. Out-of-range indices clamp to
   // kMotorCount-1, matching motor()'s own convention.
-  msg::MotorConfig config(uint32_t i) const override;
-  msg::MotorState state(uint32_t i) const override;
+  msg::MotorConfig motorConfig(uint32_t i) const override;
+  msg::MotorState motorState(uint32_t i) const override;
 
   // setPolled() (091-002, Subsystems::Hardware's own doc comment has the
-  // full contract) — the ONE way polled_[] changes after construction.
+  // full contract) — the ONE way motorPolled_[] changes after construction.
   // Reached exclusively via Rt::Configurator's kMotor ConfigDelta apply
   // path (`DEV M <n> CFG polled=<bool>`). Out-of-range indices clamp to
   // kMotorCount-1, matching motor()'s own convention.
-  void setPolled(uint32_t i, bool polled) override;
+  void setMotorPolled(uint32_t i, bool polled) override;
 
  private:
   // REQUEST_DUE: the next bus action is a fresh 0x46 request on
@@ -213,7 +213,7 @@ class NezhaHardware : public Hardware {
   // thereafter except through setPolled(), above); never mutated by
   // tick()/apply() as a side effect of ordinary command flow (that was
   // the old "in-use" flag's bug — see this file's own header comment).
-  bool polled_[kMotorCount] = {false, false, false, false};
+  bool motorPolled_[kMotorCount] = {false, false, false, false};
 
   // config()'s own backing store (087-004) — a verbatim copy of the
   // constructor's configs[] argument, the SAME per-motor config each
@@ -222,7 +222,7 @@ class NezhaHardware : public Hardware {
   // exists yet — see hardware.h's own file header); a future ticket that
   // adds one must keep this array and each NezhaMotor leaf's own cached
   // config in sync.
-  msg::MotorConfig config_[kMotorCount];
+  msg::MotorConfig motorConfigs_[kMotorCount];
 };
 
 }  // namespace Subsystems

@@ -96,7 +96,7 @@ struct Blackboard {
   //
   // (0-based motor indices, OOP refactor) motors[i] is motor index i's
   // state -- a std::array so a composition root can commit it in one shot,
-  // `bb.motors = hardware.states();` (Subsystems::Hardware::states()),
+  // `bb.motors = hardware.motorStates();` (Subsystems::Hardware::states()),
   // instead of a per-index copy loop.
   std::array<msg::MotorState, kMotorCount> motors;  // from Hardware
   msg::DrivetrainState drivetrain;    // from Drivetrain

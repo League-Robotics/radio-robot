@@ -13,7 +13,7 @@ MainLoop::MainLoop(Subsystems::Hardware& hardware, Subsystems::Drivetrain& drive
 
 void MainLoop::commit(Blackboard& bb, uint32_t now) {
   // === COMMIT (clock edge): copy each subsystem cell into bb -> x[k+1]. ===
-  bb.motors = hardware_.states();
+  bb.motors = hardware_.motorStates();
   bb.drivetrain = drivetrain_.state();
 }
 
@@ -28,7 +28,7 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
   // `routeOutputs() -> bb.motorIn[] -> next-pass drain` chain (the
   // load-bearing sequencing decision -- architecture-update.md Section 5,
   // "Loop order"). drivetrain_.tick() then reads FRESH encoders via
-  // hardware_.state(), runs its own SegmentExecutor/escape-hatch dispatch,
+  // hardware_.motorState(), runs its own SegmentExecutor/escape-hatch dispatch,
   // and stages THIS pass's setpoints (flushed next pass by the step
   // above).
   hardware_.tick(now);

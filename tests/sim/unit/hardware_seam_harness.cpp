@@ -110,7 +110,7 @@ msg::MotorCommand neutralCommand() {
 //    both are real, callable virtual dispatch, not just declared.
 void scenarioBeginAndMotorThroughBasePointer() {
   beginScenario("Subsystems::Hardware*: begin() + motor() dispatch through the abstract base pointer");
-  resetDefaultConfigs(/*polledMask=*/0);   // begin() bypasses the flip-flop entirely -- unaffected by polled_[]
+  resetDefaultConfigs(/*polledMask=*/0);   // begin() bypasses the flip-flop entirely -- unaffected by motorPolled_[]
   I2CBus::setClock(1000000);
   I2CBus bus;
   Subsystems::NezhaHardware concreteHardware(bus, g_defaultConfigs);
@@ -231,7 +231,7 @@ void scenarioConfigAndStateThroughBasePointer() {
   scriptGenerousPool(bus, 60);
 
   for (uint32_t idx = 0; idx < Subsystems::Hardware::kMotorCount; ++idx) {
-    msg::MotorConfig readBack = hardware->config(idx);
+    msg::MotorConfig readBack = hardware->motorConfig(idx);
     checkTrue(readBack.port == g_defaultConfigs[idx].port,
               "config(i) returns the constructed config verbatim (port field)");
     checkTrue(readBack.fwd_sign == g_defaultConfigs[idx].fwd_sign,
@@ -251,7 +251,7 @@ void scenarioConfigAndStateThroughBasePointer() {
 
   checkTrue(hardware->motor(0).connected(), "port 1 (index 0) scheduled via base-pointer apply()/tick()");
 
-  msg::MotorState st = hardware->state(0);
+  msg::MotorState st = hardware->motorState(0);
   checkTrue(st.connected == hardware->motor(0).state().connected,
             "state(i) matches motor(i).state() exactly -- through the base pointer");
 

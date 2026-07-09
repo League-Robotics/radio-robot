@@ -95,8 +95,8 @@ class StubHardware : public Subsystems::Hardware {
   void tick(uint32_t) override {}
   void apply(const Hal::CommandProcessorToHardwareCommand&) override {}
   void apply(const Hal::DrivetrainToHardwareCommand&) override {}
-  msg::MotorConfig config(uint32_t) const override { return msg::MotorConfig{}; }
-  msg::MotorState state(uint32_t) const override { return msg::MotorState{}; }
+  msg::MotorConfig motorConfig(uint32_t) const override { return msg::MotorConfig{}; }
+  msg::MotorState motorState(uint32_t) const override { return msg::MotorState{}; }
   // odometer() deliberately NOT overridden here -- this is the whole point:
   // exercise Subsystems::Hardware's own inherited base default.
 
