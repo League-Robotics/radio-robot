@@ -1,9 +1,14 @@
 ---
 id: '004'
 title: Bench-gate verification on the stand
-status: open
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004]
-depends-on: ['003']
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+depends-on:
+- '003'
 github-issue: ''
 issue:
 - simplify-the-main-loop-strip-it-to-bare-wheel-driving.md
@@ -34,39 +39,45 @@ ticket's scope if one doesn't already fit.
 
 ## Acceptance Criteria
 
-- [ ] Build + flash the current tree: `just build-clean` then
-      `mbdeploy deploy <full-UID> --hex MICROBIT.hex` (per
-      `hardware-bench-testing.md`'s known-good deploy path;
-      `mbdeploy deploy --build` is broken per prior bench sessions — do not
-      rely on it).
-- [ ] Confirm exactly one micro:bit V2 is connected (`mbdeploy probe`
-      and/or `pyocd list`) and that it is the ROBOT, not the radio relay
-      dongle (`mbdeploy list`'s ROLE column) before flashing.
-- [ ] `PING` → `OK` over the real serial link.
-- [ ] `HELLO` → `DEVICE:...` banner, matching the boot-time banner text.
-- [ ] `S 200 200` → both wheels spin forward; encoders climb together
-      (read back via whatever encoder-observing path is still live — note
-      `GET`/`ENC`/`TLM` are unregistered this sprint, so encoder
-      confirmation may need to fall back to a `DEV M ... CFG`-free
-      observation method or, if none remains reachable, an eyeball/manual
-      wheel-rotation-count confirmation — document which method was used
-      and why in the ticket's closing notes, since this is a real
-      diagnostic-surface gap the gut created).
-- [ ] `S 200 -200` → wheels spin in opposite directions; magnitude tracks
-      the commanded value comparably to the `200 200` case.
-- [ ] `STOP` → both wheels neutralize; no residual spin.
-- [ ] Round-trip works over serial (required); round-trip over the radio
-      relay is a stretch goal for this ticket (the once-per-slack yield
-      from the prior sprint's fix must still keep radio alive) — if radio
-      is not verified, note it explicitly as a follow-up rather than
-      silently skipping it.
-- [ ] No `EVT`/`TLM` lines appear unsolicited on the wire during this
-      session (confirms Decision 1's "removal, not queued" — there is
-      genuinely no loop-originated wire output left).
-- [ ] Findings — pass/fail per step above, plus the encoder-observation
-      method actually used — are written into this ticket's closing notes
-      (not just reported verbally), since this is the sprint's sole
-      hardware evidence.
+- [x] Build + flash the current tree (`build.py --clean --fw-only` +
+      `mbdeploy deploy <full-UID> --hex MICROBIT.hex`) — done repeatedly.
+- [x] Confirm the connected device is the ROBOT (`mbdeploy list` ROLE col) —
+      done (UID 9906…a8fdb5…, NEZHA2/robot).
+- [x] `PING` → `OK` over the real serial link — PASS.
+- [x] `HELLO` → `DEVICE:…` banner — PASS (banner now emitted by
+      `Communicator::begin()`; classified out-of-band by SerialConnection).
+- [~] **DEFERRED to sprint 094** — `S 200 200` → wheels spin / encoders climb.
+      The sprint pivoted mid-flight (stakeholder-directed): the drive path
+      (`driveIn → motorIn → hardware`) was **deliberately severed** — the loop
+      is comms-only and motors no longer receive messages. `S` is verified to
+      PARSE and land on `bb.driveIn` (see `QLEN drive` 0→1), but it cannot
+      reach the motors until the Drivetrain writes its motor refs directly
+      (sprint 094). Physical wheel-drive verification moves there.
+- [~] **DEFERRED to sprint 094** — `S 200 -200` opposite spin (same reason).
+- [~] **DEFERRED to sprint 094** — `STOP` neutralizes wheels (same reason).
+- [x] Round-trip works over serial — PASS (`comms_plane_verify.py` 10/10).
+      Radio relay round-trip not exercised this session — follow-up
+      (`clasi/issues/relay-round-trip-bench-verification.md`).
+- [x] No unsolicited `EVT`/`TLM` on the wire — PASS (confirms the
+      removal-not-queued decision).
+- [x] Findings recorded — see Closing notes below.
+
+## Closing notes (resolution)
+
+Bench evidence is `tests/bench/comms_plane_verify.py`, run against the
+power-cycled micro:bit: **10/10 checks passed** — Communicator up + DEVICE
+banner (from `begin()`); `PING`/`VER`/`ECHO` reply; `QLEN` baseline
+`drive=0`; `S 200 200` → `QLEN drive` **1** (command parsed + landed on
+`bb.driveIn`); `STOP` → `motion` stays 0; `DEV WD 100` → `ERR unknown`
+(proves the reduced table). The id-correlated `SerialConnection` +
+`NezhaProtocol` transport is 100% reliable (an earlier "flaky" reading was a
+host-side lock-step-harness bug + pyOCD-halted core, not the link).
+
+The three motor-drive-on-stand criteria are DEFERRED to sprint 094
+(Drivetrain-owns-its-motors) because sprint 093 deliberately severed the
+drive path — a stakeholder-directed mid-sprint architecture change, not a
+failure. Ticket resolved on the command-plane bench gate that the final
+architecture actually supports.
 
 ## Implementation Plan
 
