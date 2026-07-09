@@ -1,12 +1,75 @@
 ---
 id: '003'
 title: Sim-test parking + focused S/STOP/PING/HELLO suite
-status: open
-use-cases: [SUC-001, SUC-002, SUC-003]
-depends-on: ['002']
+status: exception
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+depends-on:
+- '002'
 github-issue: ''
 issue: simplify-the-main-loop-strip-it-to-bare-wheel-driving.md
 completes_issue: true
+exception:
+  thrown_by: programmer
+  thrown_at: '2026-07-09T13:42:02.489914+00:00'
+  attempted: 'Completed the ticket''s own explicitly-scoped work in full: triaged
+    all 49 tests/sim/unit/*.py files + tests/sim/system/test_tour_geometry.py by actually
+    running each (not assuming from filename); confirmed every failure traces to a
+    genuine "ERR unknown" removed-surface reply (spot-checked test_mode_machine.py,
+    test_watchdog_policy.py, test_stiction_and_motor_lag.py, test_otos_commands.py,
+    test_protocol_roundtrips.py tracebacks), not a ticket-002 regression; git mv''d
+    26 unit files + 3 harness .cpp siblings + 1 system file into tests/sim/parked-093/{unit,system}/,
+    wrote parked-093/README.md naming what must be re-wired per file; added "parked-093"
+    to pyproject.toml''s norecursedirs (verified empirically via pytest --collect-only
+    that the bare basename form, matching tests_old/source_old''s own convention,
+    excludes it); removed conftest.py''s dead `DEV WD` widen call with an explanatory
+    docstring; wrote tests/sim/unit/test_bare_loop_commands.py (7 tests) asserting
+    S drives both wheels to commanded targets/direction via vel()/true_velocity(),
+    S with opposite-sign l/r spins wheels oppositely, STOP neutralizes regardless
+    of prior S state (checked hard across 5 subsequent ticks), PING/HELLO reply correctly,
+    and an out-of-surface verb (DEV WD 100, GET drivetrainConfig) replies exactly
+    "ERR unknown". `uv run python -m pytest tests/sim` is 37/37 green. Then ran the
+    ticket''s literal acceptance-bullet command, full `uv run python -m pytest` (which
+    pyproject.toml''s testpaths actually scopes to tests/sim + tests/unit + tests/testgui,
+    not just tests/sim as tests/CLAUDE.md''s stale doc claims) and found 16 failures,
+    all in tests/testgui/ (tests/unit is 4/4 green). To rule out a ticket-093 regression
+    vs. pre-existing breakage, built a clean git worktree at the sprint''s own merge-base
+    commit (3f788090, pre-093 master tip) and ran tests/testgui there in isolation:
+    364/364 pass. This proves the 16 failures are new fallout specifically caused
+    by sprint 093''s wire-surface gutting (TestGUI/robot_radio host-side code driving
+    DEV/SET/GET/OTOS/telemetry verbs that now reply ERR unknown), not a defect in
+    this ticket''s own tests/sim work.'
+  conflict: "architecture-update.md Step 5 (\"Impact on Existing Components\") explicitly\
+    \ states: \"no EVT, no TLM, no GET/SET, no STREAM/SNAP, no pose/OTOS verbs. Any\
+    \ host tool (TestGUI, robot_radio) that depends on those verbs will get ERR unknown\
+    \ \u2014 this sprint does not touch host-side code; that fallout is explicitly\
+    \ accepted for the bench-bring-up phase this sprint targets.\" Ticket 003's own\
+    \ Description, Acceptance Criteria, and Implementation Plan \"Files to create/modify\"\
+    \ list are scoped exclusively to tests/sim/ (parked-093/, conftest.py, pyproject.toml\
+    \ norecursedirs, a new tests/sim/unit/ focused suite) \u2014 tests/testgui/ never\
+    \ appears anywhere in the ticket's scope, sizing, or triage criterion (which is\
+    \ itself framed only in terms of tests/sim/unit's 49 files + 1 system file). Yet\
+    \ the ticket's final acceptance bullet reads \"`uv run python -m pytest` (full\
+    \ scoped run, matching pyproject.toml's testpaths) is 100% green\" \u2014 and\
+    \ pyproject.toml's testpaths is `[\"tests/sim\", \"tests/unit\", \"tests/testgui\"\
+    ]`, not tests/sim alone. Satisfying that bullet literally requires either (a)\
+    \ triaging and parking/fixing 16 tests/testgui failures across 7 files (test_calibration_push_on_connect.py,\
+    \ test_error_divergence.py, test_goto.py, test_set_origin.py, test_sim_errors_panel.py,\
+    \ test_tour1_geometry.py, test_traces.py, test_transport.py) \u2014 a testgui-domain\
+    \ undertaking this ticket never scoped, sized, or authorized, and which architecture-update.md\
+    \ frames as a DIFFERENT sprint's problem (\"this sprint does not touch host-side\
+    \ code\") \u2014 or (b) restoring some host-facing wire commands, which would\
+    \ directly reverse architecture-update.md's Decision 2/Step-5 removal. Either\
+    \ path overrides an explicit upstream architecture decision; I did neither, to\
+    \ avoid unauthorized scope expansion or unilaterally reversing a stakeholder-owned\
+    \ decision. Recommend: either descope/reword this ticket's final acceptance bullet\
+    \ to \"uv run python -m pytest tests/sim\" (matching the ticket's own actual scope\
+    \ and tests/CLAUDE.md's \u2014 stale but directionally intended \u2014 description\
+    \ of the close gate), or spin up a follow-up ticket to triage/park tests/testgui/\
+    \ fallout the same way this ticket did for tests/sim/."
+  surface: internal
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

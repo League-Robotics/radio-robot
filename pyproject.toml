@@ -108,9 +108,18 @@ aprilcam = { path = "../AprilTags", editable = true }
 # tests_old/ and source_old/ are the parked pre-rebuild trees (rollback =
 # codal.json application flip back to source_old) — never collected, never
 # descended into. vendor/ sims are excluded below too.
+#
+# tests/sim/parked-093/ is sprint 093's own parking leaf (Decision 3): sim
+# tests obsoleted by the main-loop gut to {PING, HELLO, S, STOP}, moved
+# rather than deleted (see tests/sim/parked-093/README.md). norecursedirs
+# matches by directory basename (fnmatch), the same way the top-level
+# "tests_old"/"source_old" bare names already exclude those trees despite
+# living several directories deep from wherever pytest starts collecting --
+# so the bare leaf name "parked-093" is sufficient here too, no path prefix
+# needed.
 testpaths = ["tests/sim", "tests/unit", "tests/testgui"]
 norecursedirs = [
-    "tests_old", "source_old",
+    "tests_old", "source_old", "parked-093",
     "vendor", "build", ".venv", "node_modules",
     "*.egg", ".*", "dist", "{arch}", "__pycache__",
 ]
