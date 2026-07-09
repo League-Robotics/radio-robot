@@ -42,7 +42,6 @@
 #include "command_types.h"
 #include "runtime/command_router.h"
 
-#if ROBOT_DEV_BUILD
 
 // telemetryEmit -- shared emission path: calls Telemetry::tick(now, bb) to
 // assemble a TlmFrameInput (the actual field-sourcing logic -- see
@@ -58,4 +57,3 @@ void telemetryEmit(Rt::Blackboard& bb, uint32_t now, ReplyFn replyFn, void* repl
 // Returns the STREAM/SNAP command table, bound to `router`.
 std::vector<CommandDescriptor> telemetryCommands(Rt::CommandRouter& router);
 
-#endif  // ROBOT_DEV_BUILD

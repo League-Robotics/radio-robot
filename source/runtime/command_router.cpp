@@ -3,9 +3,7 @@
 
 #include "commands/system_commands.h"
 
-#if ROBOT_DEV_BUILD
 #include "commands/motion_commands.h"
-#endif  // ROBOT_DEV_BUILD
 
 namespace Rt {
 
@@ -20,10 +18,8 @@ namespace {
 // Concerns); buildTable() simply stops calling them.
 std::vector<CommandDescriptor> buildTable(CommandRouter& router) {
   std::vector<CommandDescriptor> all = systemCommands(router);
-#if ROBOT_DEV_BUILD
   std::vector<CommandDescriptor> motion = motionCommands(router);
   all.insert(all.end(), motion.begin(), motion.end());
-#endif  // ROBOT_DEV_BUILD
   return all;
 }
 

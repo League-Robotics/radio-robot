@@ -4,7 +4,6 @@
 // tick() -> commit -> routeOutputs, in that order, every pass.
 #include "runtime/main_loop.h"
 
-#if ROBOT_DEV_BUILD
 
 #include "hal/capability/hal_command.h"
 
@@ -50,4 +49,3 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
 
 }  // namespace Rt
 
-#endif  // ROBOT_DEV_BUILD

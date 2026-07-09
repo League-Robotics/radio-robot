@@ -35,7 +35,6 @@
 // the other five one-shot verbs.
 // ---------------------------------------------------------------------------
 
-#if ROBOT_DEV_BUILD
 
 #include <vector>
 
@@ -46,4 +45,3 @@
 // `router`.
 std::vector<CommandDescriptor> otosCommands(Rt::CommandRouter& router);
 
-#endif  // ROBOT_DEV_BUILD

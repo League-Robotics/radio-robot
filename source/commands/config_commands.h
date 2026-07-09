@@ -50,7 +50,6 @@
 // never reads/writes any OTHER motion_commands.h symbol.
 // ---------------------------------------------------------------------------
 
-#if ROBOT_DEV_BUILD
 
 #include <stdint.h>
 #include <vector>
@@ -62,4 +61,3 @@
 // Returns the SET/GET command table, bound to `router`.
 std::vector<CommandDescriptor> configCommands(Rt::CommandRouter& router);
 
-#endif  // ROBOT_DEV_BUILD

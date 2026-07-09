@@ -3,7 +3,6 @@
 // rules (Decision 7), and the ROBOT_DEV_BUILD gating rationale.
 #include "commands/telemetry_commands.h"
 
-#if ROBOT_DEV_BUILD
 
 #include "commands/command_processor.h"
 #include "telemetry/tlm_frame.h"
@@ -116,4 +115,3 @@ std::vector<CommandDescriptor> telemetryCommands(Rt::CommandRouter& router) {
   return cmds;
 }
 
-#endif  // ROBOT_DEV_BUILD

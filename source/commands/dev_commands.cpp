@@ -7,7 +7,6 @@
 // nothing here holds or dereferences a Subsystems::* pointer.
 #include "commands/dev_commands.h"
 
-#if ROBOT_DEV_BUILD
 
 #include "commands/command_processor.h"
 #include "commands/arg_parse.h"
@@ -994,4 +993,3 @@ std::vector<CommandDescriptor> devCommands(Rt::CommandRouter& router) {
     return cmds;
 }
 
-#endif  // ROBOT_DEV_BUILD

@@ -4,7 +4,6 @@
 // ROBOT_DEV_BUILD gating rationale.
 #include "commands/config_commands.h"
 
-#if ROBOT_DEV_BUILD
 
 #include "commands/command_processor.h"
 #include "commands/arg_parse.h"
@@ -630,4 +629,3 @@ std::vector<CommandDescriptor> configCommands(Rt::CommandRouter& router) {
     return cmds;
 }
 
-#endif  // ROBOT_DEV_BUILD

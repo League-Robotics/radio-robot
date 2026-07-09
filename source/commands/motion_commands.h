@@ -49,7 +49,6 @@
 // runtime/commands.h's own field doc comment.
 // ---------------------------------------------------------------------------
 
-#if ROBOT_DEV_BUILD
 
 #include <stdint.h>
 #include <vector>
@@ -99,4 +98,3 @@ class StreamingDriveWatchdog {
 // Returns the S/T/D/R/TURN/RT/G/STOP command table, bound to `router`.
 std::vector<CommandDescriptor> motionCommands(Rt::CommandRouter& router);
 
-#endif  // ROBOT_DEV_BUILD

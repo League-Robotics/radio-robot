@@ -4,7 +4,6 @@
 // read-modify-write).
 #include "commands/otos_commands.h"
 
-#if ROBOT_DEV_BUILD
 
 #include <cstdint>
 #include <cstdio>
@@ -238,4 +237,3 @@ std::vector<CommandDescriptor> otosCommands(Rt::CommandRouter& router) {
   return cmds;
 }
 
-#endif  // ROBOT_DEV_BUILD

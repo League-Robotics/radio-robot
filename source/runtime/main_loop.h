@@ -39,7 +39,6 @@
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
 
-#if ROBOT_DEV_BUILD
 
 namespace Rt {
 
@@ -74,4 +73,3 @@ class MainLoop {
 
 }  // namespace Rt
 
-#endif  // ROBOT_DEV_BUILD

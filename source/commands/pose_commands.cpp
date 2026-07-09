@@ -3,7 +3,6 @@
 // pointerless reshape).
 #include "commands/pose_commands.h"
 
-#if ROBOT_DEV_BUILD
 
 #include <cstdio>
 #include <cstring>
@@ -133,4 +132,3 @@ std::vector<CommandDescriptor> poseCommands(Rt::CommandRouter& router) {
   return cmds;
 }
 
-#endif  // ROBOT_DEV_BUILD

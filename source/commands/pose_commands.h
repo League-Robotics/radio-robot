@@ -28,7 +28,6 @@
 // (never a bb read-back), matching today's wire text exactly.
 // ---------------------------------------------------------------------------
 
-#if ROBOT_DEV_BUILD
 
 #include <vector>
 
@@ -38,4 +37,3 @@
 // Returns the pose-set command table (SI, ZERO), bound to `router`.
 std::vector<CommandDescriptor> poseCommands(Rt::CommandRouter& router);
 
-#endif  // ROBOT_DEV_BUILD

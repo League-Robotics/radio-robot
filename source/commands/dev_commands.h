@@ -118,7 +118,6 @@
 // it) compiles only under ROBOT_DEV_BUILD.
 // ---------------------------------------------------------------------------
 
-#if ROBOT_DEV_BUILD
 
 #include <stdint.h>
 #include <vector>
@@ -190,4 +189,3 @@ msg::DrivetrainCommand buildDrivetrainStop(msg::Neutral mode = msg::Neutral::BRA
 // systemCommands()'s free-function shape (system_commands.h).
 std::vector<CommandDescriptor> devCommands(Rt::CommandRouter& router);
 
-#endif  // ROBOT_DEV_BUILD

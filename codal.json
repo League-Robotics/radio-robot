@@ -8,8 +8,7 @@
     "config": {
         "MICROBIT_BLE_ENABLED": 0,
         "MICROBIT_BLE_PAIRING_MODE": 0,
-        "MICROBIT_RADIO_MAX_PACKET_SIZE": 250,
-        "ROBOT_DEV_BUILD": 1
+        "MICROBIT_RADIO_MAX_PACKET_SIZE": 250
     },
     "application": "source"
 }

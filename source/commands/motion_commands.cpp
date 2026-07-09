@@ -9,7 +9,6 @@
 // MotionLoopState outbox.
 #include "commands/motion_commands.h"
 
-#if ROBOT_DEV_BUILD
 
 #include <cstdio>
 #include <cstdlib>
@@ -738,6 +737,28 @@ void handleStop(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, vo
   CommandProcessor::replyOK(rbuf, sizeof(rbuf), "stop", nullptr, corrId, replyFn, replyCtx);
 }
 
+// handleQlen -- sprint 093 debug: report current Blackboard queue occupancy so
+// a bench operator can SEE a routed command land on its target queue while the
+// control loop is disabled (nothing drains these, so a posted command
+// accumulates instead of being consumed). Mailbox cells report 0/1
+// (latest-wins); WorkQueues report size().
+void handleQlen(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, void* replyCtx,
+                void* handlerCtx) {
+  Rt::Blackboard& b = bb(handlerCtx);
+  char body[192];
+  snprintf(body, sizeof(body),
+           "cmd=%u drive=%d motion=%d cfg=%u pose=%u m1=%d m2=%d m3=%d m4=%d",
+           static_cast<unsigned>(b.commandsIn.size()),
+           b.driveIn.empty() ? 0 : 1,
+           b.motionIn.empty() ? 0 : 1,
+           static_cast<unsigned>(b.configIn.size()),
+           static_cast<unsigned>(b.poseResetIn.size()),
+           b.motorIn[0].empty() ? 0 : 1, b.motorIn[1].empty() ? 0 : 1,
+           b.motorIn[2].empty() ? 0 : 1, b.motorIn[3].empty() ? 0 : 1);
+  char rbuf[240];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "qlen", body, corrId, replyFn, replyCtx);
+}
+
 }  // namespace
 
 // 093-001: pruned to the sprint's four live verbs' motion half (S/STOP) --
@@ -752,7 +773,9 @@ std::vector<CommandDescriptor> motionCommands(Rt::CommandRouter& router) {
   cmds.push_back(makeCmd("S", parseS, handleS, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
   cmds.push_back(makeCmd("STOP", nullptr, handleStop, &router, "badarg", ForceReply::NONE,
                          CMD_ACCESS_HARDWARE));
+  // 093 debug: QLEN -- read-only Blackboard queue-occupancy probe (handlerCtx
+  // = &router so it can reach the blackboard via bb()).
+  cmds.push_back(makeCmd("QLEN", nullptr, handleQlen, &router, "badarg"));
   return cmds;
 }
 
-#endif  // ROBOT_DEV_BUILD
