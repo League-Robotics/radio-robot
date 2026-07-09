@@ -1,18 +1,20 @@
 // ---------------------------------------------------------------------------
 // main.cpp -- the cyclic executive (sprint 087 ticket 007's real design,
-// architecture-update-r1.md's Reference code): mandatory control tick ->
-// commit (clock edge) -> best-effort slack (ingest -> route -> apply
-// config), replacing ticket 006's TRANSITIONAL same-pass sequential
-// `runLoopPass()` (source/dev_loop.{h,cpp}, deleted by this ticket).
+// architecture-update-r1.md's Reference code, gutted per sprint 093's
+// architecture-update.md Step 5): mandatory control tick -> commit (clock
+// edge) -> best-effort slack (ingest -> route), replacing ticket 006's
+// TRANSITIONAL same-pass sequential `runLoopPass()` (source/dev_loop.{h,cpp},
+// deleted by that ticket).
 //
 // Construction responsibility: builds one Rt::Blackboard (the two-plane
 // transport every subsystem/command family reads/posts against, holding NO
-// subsystem pointers of any kind), one Rt::Configurator (the ONE deliberate
-// exception to "no subsystem pointers outside the loop" -- Decision 4), one
-// Rt::CommandRouter (the pointerless command-tier translator), and one
-// Rt::MainLoop (this loop's own composition-root state: the four
-// subsystems it ticks every pass, the two loop-owned watchdogs, and the
-// loop-originated reply sinks -- see runtime/main_loop.h).
+// subsystem pointers of any kind), one Rt::CommandRouter (the pointerless
+// command-tier translator), and one Rt::MainLoop (this loop's own
+// composition-root state: the two subsystems -- Hardware, Drivetrain -- it
+// ticks every pass; see runtime/main_loop.h). Boot config is applied once,
+// directly, at construction (`drivetrain.configure(dtConfig)`) -- there is
+// no runtime config-application authority left to wire in (093: the
+// `SET`/`GET` runtime-config path it served is unregistered).
 //
 // The slack loop's uBit.sleep(1) yield is REQUIRED, not pacing (Decision
 // 9): CODAL's cooperative fiber scheduler only delivers a received radio
@@ -36,15 +38,11 @@
 #include "config/boot_config.h"
 #include "subsystems/nezha_hardware.h"
 #include "subsystems/drivetrain.h"
-#include "subsystems/planner.h"
-#include "subsystems/pose_estimator.h"
 #include "runtime/blackboard.h"
 #include "runtime/command_router.h"
-#include "runtime/configurator.h"
 #include "runtime/main_loop.h"
 #include "messages/motor.h"
 #include "messages/drivetrain.h"
-#include "messages/planner.h"
 #endif
 
 static MicroBit uBit;
@@ -72,27 +70,6 @@ static void radioReply(const char* msg, void* ctx) {
 // fill this array below. `DEV M <n> CFG` remains the live-correction mechanism
 // for a specific motor's real tuning.
 static msg::MotorConfig defaultMotorConfigs[Subsystems::NezhaHardware::kPortCount];
-
-// defaultPlannerConfig -- 084-002: unlike the motor/drivetrain configs above,
-// there is no Config::defaultPlannerConfig() generator yet (no robot-JSON
-// field maps onto msg::PlannerConfig today). These are fixed, conservative-
-// but-workable ramp limits -- generous headroom above S/T/D's documented
-// +-1000 mm/s wire range (docs/protocol-v2.md §10) so a max-speed command is
-// never silently clamped.
-msg::PlannerConfig defaultPlannerConfig() {
-    msg::PlannerConfig cfg;
-    cfg.a_max = 800.0f;              // [mm/s^2]
-    cfg.a_decel = 800.0f;            // [mm/s^2]
-    cfg.v_body_max = 1000.0f;        // [mm/s]
-    cfg.yaw_rate_max = 6.0f;         // [rad/s]
-    cfg.yaw_acc_max = 20.0f;         // [rad/s^2]
-    cfg.j_max = 0.0f;                // trapezoid ramp, no S-curve, this sprint
-    cfg.yaw_jerk_max = 0.0f;
-    cfg.arrive_tol = 25.0f;          // [mm] matches docs/protocol-v2.md §10's G default
-    cfg.turn_in_place_gate = 35.0f;  // matches docs/protocol-v2.md §10's G default
-    cfg.min_speed = 0.0f;
-    return cfg;
-}
 
 #endif  // ROBOT_DEV_BUILD
 
@@ -135,28 +112,10 @@ int main() {
     msg::DrivetrainConfig dtConfig = Config::defaultDrivetrainConfig();
     drivetrain.configure(dtConfig);
 
-    // --- Pose estimation (082-003): encoder dead-reckoning + OTOS (EkfTiny)
-    // fusion. configure() reads the SAME dtConfig drivetrain.configure() just
-    // took (one shared boot-config source).
-    static Subsystems::PoseEstimator poseEstimator;
-    poseEstimator.configure(dtConfig);
-
-    // --- Motion executor (084-002): the goal-closure engine S/T/D/STOP
-    // stage a msg::PlannerCommand into.
-    static Subsystems::Planner planner;
-    planner.configure(defaultPlannerConfig());
-
     // --- Rt::Blackboard (087-002/006): the single two-plane transport every
     // command family and the loop itself read/post against. Holds NO
     // subsystem pointers of any kind.
     static Rt::Blackboard bb;
-
-    // --- Rt::Configurator (087-005): the single config-application
-    // authority -- the ONE deliberate exception to "no subsystem pointers
-    // outside the loop" (Decision 4).
-    static Rt::Configurator configurator(drivetrain, poseEstimator, planner, hardware,
-                                         dtConfig, defaultPlannerConfig());
-    configurator.publish(bb);   // seed bb's current-config cells from boot config
 
     // --- Rt::CommandRouter (087-006): the pointerless command-tier
     // translator. Reply channels wired to the SAME serialReply/radioReply
@@ -164,45 +123,16 @@ int main() {
     static Rt::CommandRouter router;
     router.setReplyChannels(serialReply, &comm, radioReply, &comm);
 
-    // --- Boot-time hardware-identity snapshots (blackboard.h's file header):
-    // never rewritten after this one-time seed -- capabilities/device
-    // presence do not change at runtime for any current concrete Hardware
-    // leaf.
-    for (uint32_t port = 1; port <= Rt::kPortCount; ++port) {
-        bb.motorCaps[port - 1] = hardware.motor(port).capabilities();
-    }
-    // (090-003) hardware.odometer() is NEVER null (Hal::NullOdometer
-    // default, subsystems/hardware.h) -- a `!= nullptr` test would always be
-    // true regardless of whether a REAL device backs it, so it can no
-    // longer answer "is there a device" at all. Every currently-constructed
-    // Hardware owner (NezhaHardware since 086-006, SimHardware since
-    // 081-003) already has a real Hal::Odometer leaf of its own, so this
-    // simplifies to its unconditional form (architecture-update.md
-    // Decision 3) -- the computed value is unchanged from before in every
-    // build this tree produces.
-    bb.otosPresent = true;
-
     // Prime the capabilities cache for the default DEV DT PORTS binding --
     // read back via ports() (not a local copy), matching pre-087 boot wiring.
     Subsystems::DrivetrainPorts bootPorts = drivetrain.ports();
     drivetrain.setMotorCapabilities(hardware.motor(bootPorts.left).capabilities(),
                                      hardware.motor(bootPorts.right).capabilities());
 
-    // --- Rt::MainLoop (087-007): the cyclic executive's own composition-root
-    // state -- the four subsystems above (ticked every mandatory pass), the
-    // two loop-owned watchdogs, and the loop-originated reply sinks.
-    // serialReply/&comm doubles as the loop-originated "default" reply sink
-    // (watchdog-fire EVT, motion-done EVT, safety_stop EVT) AND the periodic-
-    // telemetry-emission channel when bb.telemetryChannel is SERIAL/NONE --
-    // byte-identical to this loop's pre-087 wiring, which was always bound to
-    // serial.
-    static Rt::MainLoop loop(hardware, drivetrain, poseEstimator, planner,
-                             serialReply, &comm, radioReply, &comm);
-
-    // Start the serial-silence watchdog's window counting from boot (see
-    // SerialSilenceWatchdog::feed()'s doc comment) rather than from an
-    // uninitialized "last command" time.
-    loop.feedWatchdog(uBit.systemTime());
+    // --- Rt::MainLoop (093 gut): the cyclic executive's own composition-root
+    // state -- just the two subsystems above, ticked every mandatory pass.
+    // No watchdogs, no reply sinks, no pose/planner references left to wire.
+    static Rt::MainLoop loop(hardware, drivetrain);
 
     constexpr uint32_t kPeriod = 20;   // [ms] target cadence -- best-effort, NOT a hard deadline
 
@@ -212,10 +142,9 @@ int main() {
         // === MANDATORY + COMMIT: the one control pass. ===
         loop.tick(bb, now);
 
-        // === SLACK: yield, then ingest -> route -> apply config, until the
-        //     next period. uBit.sleep(1) is REQUIRED, not pacing (Decision 9,
-        //     see this file's header) -- routing still wins over config
-        //     application (Decision 8). ===
+        // === SLACK: yield, then ingest -> route, until the next period.
+        //     uBit.sleep(1) is REQUIRED, not pacing (Decision 9, see this
+        //     file's header). ===
         uint32_t deadline = now + kPeriod;
         // 093: yield to the CODAL scheduler at most ONCE per slack window
         // instead of every pass. The per-pass uBit.sleep(1) added by 087-007
@@ -235,12 +164,7 @@ int main() {
                 // line[] is an OWNED buffer -- subsystems/wire_command.h -- so
                 // this copy is safe past Communicator's own next tick()).
                 Subsystems::CommunicatorToCommandProcessorCommand command = comm.takeCommand();
-                // Feed BEFORE routing -- feeding must never be delayed by
-                // routing/config-priority (the safety-watchdog contract).
-                loop.feedWatchdog(uBit.systemTime());
                 router.route(command, bb);
-            } else if (configurator.pending(bb)) {
-                configurator.applyOne(bb);
             } else if (!yieldedThisSlack) {
                 uBit.sleep(1);   // YIELD once/slack: radio delivery + other fibers
                 yieldedThisSlack = true;
