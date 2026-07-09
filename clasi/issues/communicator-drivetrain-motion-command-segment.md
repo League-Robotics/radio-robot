@@ -1,5 +1,6 @@
 ---
 status: pending
+sprint: 094
 ---
 
 # Communicator-issued drivetrain motion command (drive the motion planner directly)
