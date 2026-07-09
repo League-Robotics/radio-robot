@@ -1,13 +1,30 @@
 ---
 id: "094-003"
 title: "Hardware container: tick() → serviceBus()"
-status: open
+status: done
 use-cases: ["SUC-004"]
 depends-on: []
 issue: drivetrain-becomes-the-motion-planner-segment-executing-subsystem.md
 ---
 
 # 094-003: Hardware container: tick() → serviceBus()
+
+## RESOLUTION — DESCOPED during master-harmonization (2026-07-09)
+
+The `serviceBus()` rename was **dropped, not implemented.** When `sprint/094`
+was rebased onto master (after sprint 093 closed and merged), master had kept
+`Subsystems::Hardware::tick(now)` and reshaped `main()` into a comms-only bare
+loop. Re-applying the rename produced 12 conflicts across the hardware files
+for a purely cosmetic change; the stakeholder's steer was "minimal / harmonize
+with master," so the rename commit was skipped in the rebase.
+
+**The ticket's actual PURPOSE is still met** — Hardware is now a pumped
+container that `Drivetrain` writes through (via `hardware.motor(port).apply()`),
+not a controlling subsystem — but that role is realized by **094-005's**
+bare-loop integration (`hardware.tick(now)` pumps the flip-flop once per pass;
+`Drivetrain` owns the wheels), NOT by a method rename. Hardware keeps its
+`tick(now)` name. No AC below was implemented; they are moot. Closed as
+descoped, its intent absorbed into 094-004/005.
 
 ## Description
 
