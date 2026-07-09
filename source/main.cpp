@@ -133,6 +133,9 @@ int main() {
         }
         hardware.tick(now);                                    // pump the I2C flip-flop (timing unchanged)
         drivetrain.tick(now, bb.segmentIn, bb.driveIn);         // the Drivetrain connection
+        for (uint32_t p = 1; p <= Subsystems::NezhaHardware::kPortCount; ++p) {
+            bb.motors[p - 1] = hardware.state(p);              // commit measured motor state (incl. I2C connected)
+        }
         bb.drivetrain = drivetrain.state();                     // commit measured state for TLM (094-006)
         uBit.sleep(1);   // yield: radio RX delivery + other fibers
     }

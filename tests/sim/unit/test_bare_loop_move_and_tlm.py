@@ -44,7 +44,8 @@ import re
 import pytest
 
 _TLM_RE = re.compile(
-    r"^OK tlm enc=(-?\d+),(-?\d+) vel=(-?\d+),(-?\d+) active=([01])$"
+    r"^OK tlm enc=(-?\d+),(-?\d+) vel=(-?\d+),(-?\d+) active=([01])"
+    r"(?: conn=[01],[01])?$"   # conn= appended post-094 (OOP I2C-health field)
 )
 
 

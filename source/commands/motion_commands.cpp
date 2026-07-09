@@ -500,30 +500,20 @@ void handleT(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
   int r = args.args[1].ival;
   int ms = args.args[2].ival;
 
-  msg::StopCondition stops[kMaxStopConds];
-  uint8_t stopsCount = 0;
-  if (!collectStopClauses(args, 3, stops, stopsCount)) {
-    replyStopBadarg(corrId, replyFn, replyCtx);
-    return;
-  }
-
+  // T -> one straight Motion::Segment: drive the distance the commanded wheel
+  // speeds would cover in `ms` (motion planning, not path planning). Ruckig
+  // profiles it; the segment self-terminates at that distance. Posted to
+  // bb.segmentIn exactly like MOVE (handleMove) -- the Planner path is parked.
   float v = 0.0f, omega = 0.0f;
-  BodyKinematics::forward(static_cast<float>(l), static_cast<float>(r), b.drivetrainConfig.trackwidth,
-                          v, omega);
-
-  msg::PlannerCommand cmd;
-  msg::TimedGoal goal;
-  goal.v_x = v;
-  goal.omega = omega;
-  goal.duration = static_cast<uint32_t>(ms);
-  cmd.setTimed(goal);
-  for (uint8_t i = 0; i < stopsCount; ++i) cmd.stops_[i] = stops[i];
-  cmd.stops_count = stopsCount;
-  copyCorrId(cmd, corrId);
-
-  Rt::MotionCommand mc;
-  mc.command = cmd;   // verb left empty -- T stages its own DriveMode::TIMED
-  b.motionIn.post(mc);
+  BodyKinematics::forward(static_cast<float>(l), static_cast<float>(r),
+                          b.drivetrainConfig.trackwidth, v, omega);
+  (void)omega;   // straight only -- T maps to a distance-bounded segment
+  Motion::Segment seg;
+  seg.distance = v * (static_cast<float>(ms) / 1000.0f);   // [mm] signed by v
+  // speedMax left 0 -> executor's default profile (proven no-reverse-creep);
+  // the commanded l/r only sizes/signs the distance, not the speed cap (a low
+  // per-segment speedMax induces a small terminal decel overshoot).
+  b.segmentIn.post(seg);
 
   char body[48];
   snprintf(body, sizeof(body), "l=%d r=%d ms=%d", l, r, ms);
@@ -542,32 +532,19 @@ void handleD(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
   int r = args.args[1].ival;
   int mm = args.args[2].ival;
 
-  msg::StopCondition stops[kMaxStopConds];
-  uint8_t stopsCount = 0;
-  if (!collectStopClauses(args, 3, stops, stopsCount)) {
-    replyStopBadarg(corrId, replyFn, replyCtx);
-    return;
-  }
-
+  // D -> one straight Motion::Segment of `mm`, signed by the drive direction.
+  // Ruckig profiles it (trapezoid/S-curve); the segment self-terminates at
+  // the commanded distance. Posted to bb.segmentIn like MOVE -- Planner parked.
   float v = 0.0f, omega = 0.0f;
-  BodyKinematics::forward(static_cast<float>(l), static_cast<float>(r), b.drivetrainConfig.trackwidth,
-                          v, omega);
-  (void)omega;   // straight-line only this ticket -- see the doc comment above
-
-  float direction = (v < 0.0f) ? -1.0f : 1.0f;
-
-  msg::PlannerCommand cmd;
-  msg::DistanceGoal goal;
-  goal.speed = fabsf(v);
-  goal.distance = direction * static_cast<float>(mm);
-  cmd.setDistance(goal);
-  for (uint8_t i = 0; i < stopsCount; ++i) cmd.stops_[i] = stops[i];
-  cmd.stops_count = stopsCount;
-  copyCorrId(cmd, corrId);
-
-  Rt::MotionCommand mc;
-  mc.command = cmd;   // verb left empty -- see runtime/commands.h's field doc comment
-  b.motionIn.post(mc);
+  BodyKinematics::forward(static_cast<float>(l), static_cast<float>(r),
+                          b.drivetrainConfig.trackwidth, v, omega);
+  (void)omega;   // straight-line only
+  float sign = (v < 0.0f) ? -1.0f : 1.0f;
+  Motion::Segment seg;
+  seg.distance = sign * static_cast<float>(mm);   // [mm]
+  // speedMax left 0 -> executor's default profile (proven no-reverse-creep);
+  // the commanded l/r only signs the distance, not the speed cap.
+  b.segmentIn.post(seg);
 
   char body[48];
   snprintf(body, sizeof(body), "l=%d r=%d mm=%d", l, r, mm);
@@ -580,9 +557,10 @@ void handleD(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
 // ---------------------------------------------------------------------------
 constexpr float kCdegToRad = 3.14159265f / 18000.0f;
 
-// kTurnOmega/kRotationOmega -- fixed spin-in-place rates for TURN/RT.
+// kTurnOmega -- fixed spin-in-place rate for the (unregistered) absolute TURN
+// handler. RT no longer uses a fixed rate: it builds a Motion::Segment and the
+// SegmentExecutor's Ruckig pivot owns the rate.
 constexpr float kTurnOmega = 1.2217f;      // [rad/s] ~70 deg/s
-constexpr float kRotationOmega = 1.7453f;  // [rad/s] ~100 deg/s
 
 // wrapAngle -- wrap x into (-pi, pi].
 float wrapAngle(float x) { return atan2f(sinf(x), cosf(x)); }
@@ -707,46 +685,14 @@ void handleRT(const ArgList& args, const char* corrId, ReplyFn replyFn, void* re
   Rt::Blackboard& b = bb(handlerCtx);
   int relAngle = args.args[0].ival;   // [cdeg]
 
-  // Reserve 1 of kMaxStopConds's 4 slots for the built-in ROTATION stop; up
-  // to kMaxStopConds - 1 caller stop= clauses are accepted.
-  msg::StopCondition userStops[kMaxStopConds];
-  uint8_t userCount = 0;
-  if (!collectStopClauses(args, 1, userStops, userCount)) {
-    replyStopBadarg(corrId, replyFn, replyCtx);
-    return;
-  }
-  if (userCount > kMaxStopConds - 1) userCount = kMaxStopConds - 1;
-
-  float trackwidth = b.drivetrainConfig.trackwidth;   // [mm]
-  // Per-wheel arc = |relAngle| (rad) * (trackwidth/2) -- the ideal
-  // spin-in-place geometry, no slip correction.
-  float arc = fabsf(static_cast<float>(relAngle)) * kCdegToRad * (trackwidth * 0.5f);   // [mm]
-  float omega = (relAngle >= 0) ? kRotationOmega : -kRotationOmega;   // + => CCW (left)
-
-  msg::PlannerCommand cmd;
-  msg::RotationGoal goal;
-  // angle: informational only -- planner.cpp's ROTATION case reads only
-  // goal.rotation.speed (the already-signed rate); see planner.h's class comment.
-  goal.angle = static_cast<float>(relAngle) * kCdegToRad;
-  goal.speed = omega;
-  cmd.setRotation(goal);
-
-  msg::StopCondition rotStop;
-  rotStop.kind = msg::StopKind::STOP_ROTATION;
-  rotStop.a = arc;
-
-  uint8_t total = 0;
-  cmd.stops_[total++] = rotStop;
-  for (uint8_t i = 0; i < userCount; ++i) cmd.stops_[total++] = userStops[i];
-  cmd.stops_count = total;
-  copyCorrId(cmd, corrId);
-  // 090-004: see handleR()'s own comment on why this mirrors mc.verb below.
-  snprintf(cmd.verb, sizeof(cmd.verb), "RT");
-
-  Rt::MotionCommand mc;
-  mc.command = cmd;
-  snprintf(mc.verb, sizeof(mc.verb), "RT");
-  b.motionIn.post(mc);
+  // RT -> one pure in-place turn Motion::Segment: distance 0, finalHeading =
+  // relAngle (relative, CCW+). The SegmentExecutor's TERMINAL_PIVOT phase
+  // profiles the rotation with Ruckig and self-terminates on the encoder
+  // ROTATION stop it derives from trackwidth. Posted to bb.segmentIn like
+  // MOVE -- the Planner path is parked.
+  Motion::Segment seg;
+  seg.finalHeading = static_cast<float>(relAngle) * kCdegToRad;   // [rad] relative
+  b.segmentIn.post(seg);
 
   char body[32];
   snprintf(body, sizeof(body), "rot=%d", relAngle);
@@ -952,12 +898,18 @@ void handleTlm(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, voi
   float velL = dt.vel_count_val() >= 1 ? dt.vel()[0] : 0.0f;
   float velR = dt.vel_count_val() >= 2 ? dt.vel()[1] : 0.0f;
 
-  char body[80];
-  snprintf(body, sizeof(body), "enc=%d,%d vel=%d,%d active=%d",
+  // conn= surfaces per-drive-motor I2C health (NezhaMotor::connected(), via
+  // bb.motors[] which main.cpp now commits each pass). conn=0,0 with
+  // everything else ACKing = the Nezha brick is off the bus (unplugged /
+  // unpowered) -- the diagnostic that was missing when a disconnected bus
+  // looked identical to "no motion". Drive pair = ports 1/2 -> motors[0]/[1].
+  char body[96];
+  snprintf(body, sizeof(body), "enc=%d,%d vel=%d,%d active=%d conn=%d,%d",
            static_cast<int>(encL), static_cast<int>(encR),
            static_cast<int>(velL), static_cast<int>(velR),
-           dt.active ? 1 : 0);
-  char rbuf[112];
+           dt.active ? 1 : 0,
+           b.motors[0].connected ? 1 : 0, b.motors[1].connected ? 1 : 0);
+  char rbuf[128];
   CommandProcessor::replyOK(rbuf, sizeof(rbuf), "tlm", body, corrId, replyFn, replyCtx);
 }
 
@@ -1000,6 +952,15 @@ std::vector<CommandDescriptor> motionCommands(Rt::CommandRouter& router) {
   cmds.push_back(makeCmd("S", parseS, handleS, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
   cmds.push_back(makeCmd("STOP", nullptr, handleStop, &router, "badarg", ForceReply::NONE,
                          CMD_ACCESS_HARDWARE));
+  // Post-094 (OOP): D/T/RT each re-parse into ONE Motion::Segment posted to
+  // bb.segmentIn, exactly like MOVE -- the Drivetrain's SegmentExecutor
+  // profiles them with Ruckig. D = straight `mm`; T = straight over `ms`
+  // (distance = v*t); RT = pure relative turn. (R arc + absolute TURN stay
+  // unregistered: an arc needs a sweep angle and absolute TURN needs the
+  // parked pose estimator -- neither is a single pose-free segment.)
+  cmds.push_back(makeCmd("D", parseD, handleD, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
+  cmds.push_back(makeCmd("T", parseT, handleT, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
+  cmds.push_back(makeCmd("RT", parseRT, handleRT, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
   // 094-006: MOVE -- parses into a Motion::Segment, posts to bb.segmentIn.
   // CMD_ACCESS_HARDWARE like S/STOP -- it (eventually) drives the motors.
   cmds.push_back(makeCmd("MOVE", parseMove, handleMove, &router, "badarg", ForceReply::NONE,
