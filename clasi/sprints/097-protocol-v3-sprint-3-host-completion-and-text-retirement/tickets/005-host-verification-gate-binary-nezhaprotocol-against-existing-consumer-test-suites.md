@@ -1,9 +1,15 @@
 ---
 id: '005'
-title: 'Light end-to-end verification: binary command plane + rogo proxy in sim; testgui baseline'
-status: open
-use-cases: [SUC-005]
-depends-on: ['001', '002', '003', '004']
+title: 'Light end-to-end verification: binary command plane + rogo proxy in sim; testgui
+  baseline'
+status: in-progress
+use-cases:
+- SUC-005
+depends-on:
+- '001'
+- '002'
+- '003'
+- '004'
 github-issue: ''
 issue: protocol-v3-schema-driven-binary-command-plane-protobuf.md
 completes_issue: false
