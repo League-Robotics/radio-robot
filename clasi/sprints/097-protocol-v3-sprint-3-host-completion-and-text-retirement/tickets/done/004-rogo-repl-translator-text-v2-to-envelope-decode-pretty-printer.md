@@ -329,3 +329,29 @@ surface.md`, whose scope this revision narrows from "migrate to
   and the EVT-synthesis caveat (`EVT safety_stop` not synthesizable).
 - Module docstrings in `proxy.py` state the single-client contract
   plainly.
+
+## Bench gate report (team-lead, 2026-07-10, robot tovez on stand, post-gut fw v0.20260710.5)
+
+**Proxy translation: PROVEN on hardware.** Through the PTY with a plain
+pyserial client against binary-only firmware: PING/VER/ID/HELLO all correct
+(VER/ID answered from the binary id arm; HELLO from the cached banner); full
+`GET` renders one wire-exact CFG line; typed `ERR unsupported` for
+QLEN/TURN; `!GO` swallowed with a `# ok` comment; `STREAM 100` → 21
+correctly-formatted TLM lines at 10 Hz, `STREAM 0` silences, `SNAP` → exactly
+one frame. In-process handler timing <10 ms per verb including motion and
+EVT arming.
+
+**Bench checkbox left UNCHECKED — blocked by a firmware regression, not a
+proxy defect.** Binary replies are lost in bursts on hardware (16/60 pings =
+27% at idle, 8 consecutive; text rump on the same boot: 1/60), so motion
+acks vanish nondeterministically and EVT synthesis cannot arm reliably. The
+proxy's TX envelopes were captured and decoded byte-correct. Evidence and
+suspects: `clasi/issues/binary-plane-bursty-reply-loss-on-hardware-post-gut-
+regression.md`. Secondary finding filed as `clasi/issues/watchdog-
+configdelta-acks-ok-but-value-does-not-stick.md` (SET watchdog acks ok,
+reads back 0).
+
+**Flagship `calibration/linear.py` run deferred**: doubly blocked — the
+reply-loss regression above, plus its `ZERO`/`OL` preamble needs the pose/
+otos binary arms (sprint 098; proxy correctly answers `ERR unsupported`
+until then). Re-run both after the regression fix and 098.
