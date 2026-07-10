@@ -913,11 +913,32 @@ void handleTlm(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, voi
   // pair = bound indices 0/1 -> motors[0]/[1].
   unsigned glitchL = b.motors[0].enc_glitch_count.has ? b.motors[0].enc_glitch_count.val : 0;
   unsigned glitchR = b.motors[1].enc_glitch_count.has ? b.motors[1].enc_glitch_count.val : 0;
-  char body[176];
+  // ts= -- each wheel's OWN sample instant (firmware loop clock): the
+  // flip-flop samples the two motors on different ~40-80ms slots, so a host
+  // plotting both at poll-receive time renders an aliasing staircase; these
+  // stamps let it place every reading at its true time (2026-07-09
+  // smooth-telemetry fix). enc=/vel= gain 0.1 resolution for the same
+  // reason -- integer truncation was adding artificial texture.
+  unsigned tsL = b.motors[0].sampled_at.has ? b.motors[0].sampled_at.val : 0;
+  unsigned tsR = b.motors[1].sampled_at.has ? b.motors[1].sampled_at.val : 0;
+  // Tenths rendered with integer math: the firmware's newlib-nano snprintf
+  // has no float support linked (%f silently emits NOTHING -- verified on
+  // the bench: `enc=, vel=,`), and pulling in _printf_float costs flash.
+  auto formatTenths = [](char* out, size_t n, float v) {
+    long t = lroundf(v * 10.0f);
+    const char* sign = (t < 0) ? "-" : "";
+    if (t < 0) t = -t;
+    snprintf(out, n, "%s%ld.%ld", sign, t / 10, t % 10);
+  };
+  char encLs[16], encRs[16], velLs[16], velRs[16];
+  formatTenths(encLs, sizeof(encLs), encL);
+  formatTenths(encRs, sizeof(encRs), encR);
+  formatTenths(velLs, sizeof(velLs), velL);
+  formatTenths(velRs, sizeof(velRs), velR);
+  char body[224];
   snprintf(body, sizeof(body),
-           "enc=%d,%d vel=%d,%d cmd=%d,%d acc=%d,%d active=%d conn=%d,%d glitch=%u,%u",
-           static_cast<int>(encL), static_cast<int>(encR),
-           static_cast<int>(velL), static_cast<int>(velR),
+           "enc=%s,%s vel=%s,%s cmd=%d,%d acc=%d,%d active=%d conn=%d,%d glitch=%u,%u ts=%u,%u",
+           encLs, encRs, velLs, velRs,
            static_cast<int>(cmdL), static_cast<int>(cmdR),
            static_cast<int>(accL), static_cast<int>(accR),
            // active= reports BUSY (motion in progress), not the authority
@@ -926,8 +947,8 @@ void handleTlm(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, voi
            // STOP and can never mean "idle". See DrivetrainState.busy.
            dt.busy ? 1 : 0,
            b.motors[0].connected ? 1 : 0, b.motors[1].connected ? 1 : 0,
-           glitchL, glitchR);
-  char rbuf[224];
+           glitchL, glitchR, tsL, tsR);
+  char rbuf[272];
   CommandProcessor::replyOK(rbuf, sizeof(rbuf), "tlm", body, corrId, replyFn, replyCtx);
 }
 

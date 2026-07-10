@@ -131,7 +131,7 @@ int main() {
 
         comm.tick(now);
         if (comm.hasCommand()) {
-            router.route(comm.takeCommand(), bb);
+            router.route(comm.takeCommand(), bb); // Add the command to the router, which will parse and dispatch it, posting any command args onto the blackboard and replying through the appropriate channel.
         }
 
         hardware.tick(now);                                // pump the I2C flip-flop (timing unchanged)

@@ -210,10 +210,17 @@ void NezhaMotor::tick(uint32_t nowMs)
     float pos = (static_cast<float>(raw) / 10.0f)
               * config_.travel_calib * static_cast<float>(config_.fwd_sign);
 
-    float elapsedTime = 0.0f;
+    // Elapsed time from the us clock, NOT the ms loop clock (2026-07-09
+    // smooth-telemetry fix): sample intervals are 20-50ms, so the ms clock's
+    // +/-1ms quantization alone injects up to ~4% per-sample velocity noise
+    // (~+/-17 mm/s at cruise) into rawVel below -- and into the PID's dt.
+    // The wheel is a smooth physical plant; the estimator shouldn't be the
+    // noisy one.
+    uint64_t nowUs = system_timer_current_time_us();   // [us]
+    float elapsedTime = 0.0f;   // [s]
     bool haveElapsed = false;
     if (hasLastTick_) {
-        elapsedTime = static_cast<float>(nowMs - lastTick_) / 1000.0f;
+        elapsedTime = static_cast<float>(nowUs - lastTickUs_) / 1e6f;
         if (elapsedTime > 0.0f) haveElapsed = true;
     } else {
         hasLastTick_ = true;
@@ -257,6 +264,7 @@ void NezhaMotor::tick(uint32_t nowMs)
         lastPosition_ = pos;
     }
     lastTick_ = nowMs;
+    lastTickUs_ = nowUs;
 
     // 3. Wedge detector — reads position() (== pos, just cached above) and
     // appliedDuty() (last tick's write; this tick's mode dispatch has not

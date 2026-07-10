@@ -47,6 +47,13 @@ message MotorState {
       // bound-port authority-steal (isBoundPort() in dev_commands.cpp)
       // drives DrivetrainState.active false while the port itself keeps
       // spinning under a standalone DEV M command.
+  optional uint32 sampled_at = 11;  // [ms] firmware loop-clock time of this
+      // motor's LAST accepted encoder sample. The flip-flop samples each
+      // motor on its own ~40-80ms slot, so any snapshot holds per-motor
+      // values captured at DIFFERENT instants -- a host plotting them at
+      // poll-receive time gets an aliasing staircase (62% of ~19ms polls
+      // return a stale cache). Plotting each point at ITS OWN sampled_at
+      // recovers the true, smooth trajectory.
   optional uint32 enc_glitch_count = 10;  // cumulative count of encoder
       // samples rejected at the source by the leaf's plausibility gate (a
       // single-sample position step implying a physically-impossible speed

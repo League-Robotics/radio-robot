@@ -79,6 +79,7 @@ struct MotorState {
     Opt<uint32_t> hard_reset_count = {};
     Opt<uint32_t> soft_reset_count = {};
     bool active = false;
+    Opt<uint32_t> sampled_at = {};
     Opt<uint32_t> enc_glitch_count = {};
 
     // --- array / optional-string accessors ---

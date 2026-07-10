@@ -45,32 +45,35 @@ import pytest
 
 # Full post-094 TLM shape (OOP additions): cmd= (post-governor commanded
 # wheel velocity), acc= (firmware-EMA measured acceleration), conn= (per-motor
-# I2C health), glitch= (source-side rejected encoder samples).
+# I2C health), glitch= (source-side rejected encoder samples), ts= (per-wheel
+# sample instants, firmware ms -- smooth-telemetry fix). enc=/vel= carry 0.1
+# resolution (one decimal).
 _TLM_RE = re.compile(
-    r"^OK tlm enc=(?P<enc_l>-?\d+),(?P<enc_r>-?\d+)"
-    r" vel=(?P<vel_l>-?\d+),(?P<vel_r>-?\d+)"
+    r"^OK tlm enc=(?P<enc_l>-?\d+\.\d),(?P<enc_r>-?\d+\.\d)"
+    r" vel=(?P<vel_l>-?\d+\.\d),(?P<vel_r>-?\d+\.\d)"
     r" cmd=(?P<cmd_l>-?\d+),(?P<cmd_r>-?\d+)"
     r" acc=(?P<acc_l>-?\d+),(?P<acc_r>-?\d+)"
     r" active=(?P<active>[01])"
     r" conn=(?P<conn_l>[01]),(?P<conn_r>[01])"
-    r" glitch=(?P<glitch_l>\d+),(?P<glitch_r>\d+)$"
+    r" glitch=(?P<glitch_l>\d+),(?P<glitch_r>\d+)"
+    r" ts=(?P<ts_l>\d+),(?P<ts_r>\d+)$"
 )
 
 
-def _parse_tlm(reply: str) -> tuple[int, int, int, int, int]:
+def _parse_tlm(reply: str) -> tuple[float, float, float, float, int]:
     """Returns the historical 5-tuple (enc_l, enc_r, vel_l, vel_r, active) --
     the extra fields are validated by the regex match itself; tests that need
     them use _parse_tlm_full()."""
     m = _TLM_RE.match(reply.strip())
     assert m is not None, f"TLM reply did not match the expected shape: {reply!r}"
-    return (int(m["enc_l"]), int(m["enc_r"]),
-            int(m["vel_l"]), int(m["vel_r"]), int(m["active"]))
+    return (float(m["enc_l"]), float(m["enc_r"]),
+            float(m["vel_l"]), float(m["vel_r"]), int(m["active"]))
 
 
 def _parse_tlm_full(reply: str) -> dict:
     m = _TLM_RE.match(reply.strip())
     assert m is not None, f"TLM reply did not match the expected shape: {reply!r}"
-    return {k: int(v) for k, v in m.groupdict().items()}
+    return {k: float(v) for k, v in m.groupdict().items()}
 
 
 def _run_and_check_no_reverse_creep(sim, seconds: float = 6.0, step: int = 24):

@@ -89,6 +89,7 @@ class SimMotor : public Motor {
   float velocity() const override;     // [mm/s] signed, filtered
   float appliedDuty() const override;  // [-1, 1]
   bool connected() const override;     // always true — no I2C link to fail
+  uint32_t sampleTime() const override { return lastTick_; }   // [ms]
 
   // --- Faceplate verbs (Hal::Motor) ---
   void tick(uint32_t now) override;    // [ms]

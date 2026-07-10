@@ -84,6 +84,7 @@ class NezhaMotor : public Motor {
   float appliedDuty() const override;    // [-1, 1]
   bool connected() const override;
   uint32_t encGlitchCount() const override { return encGlitchCount_; }
+  uint32_t sampleTime() const override { return lastTick_; }   // [ms]
 
   // --- Faceplate verbs (Hal::Motor) ---
   void tick(uint32_t now) override;      // [ms]
@@ -116,7 +117,10 @@ class NezhaMotor : public Motor {
   // _lastPosition/_lastVelocityMmps) ----
   float lastPosition_ = 0.0f;          // [mm]
   float filteredVelocity_ = 0.0f;      // [mm/s] EMA-filtered (vel_filt_alpha); fed to the embedded PID and velocity()
-  uint32_t lastTick_ = 0;            // [ms]
+  uint32_t lastTick_ = 0;            // [ms] loop clock; exposed via sampleTime()
+  uint64_t lastTickUs_ = 0;          // [us] us clock; velocity/PID dt derives from THIS
+                                     // (the ms clock's +/-1ms quantization over 20-50ms
+                                     // intervals is ~4% per-sample velocity noise)
   bool hasLastTick_ = false;
   bool connected_ = false;
 

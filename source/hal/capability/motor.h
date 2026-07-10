@@ -77,6 +77,13 @@ class Motor {
   // (NezhaMotor) override; SimMotor's samples cannot glitch.
   virtual uint32_t encGlitchCount() const { return 0; }
 
+  // sampleTime() -- loop-clock time of this motor's last accepted encoder
+  // sample. Motors are sampled on their own flip-flop slots (different
+  // instants per motor); surfacing the stamp lets a telemetry consumer place
+  // each reading at its TRUE time instead of poll-receive time (which
+  // renders an aliasing staircase). 0 = never sampled.
+  virtual uint32_t sampleTime() const { return 0; }   // [ms]
+
   // wedged()/wedgeSuspect()/hardResetCount()/softResetCount() are concrete
   // (sprint 078 armor policy): they read base-tracked state maintained by
   // updateWedgeDetector()/processResetIfPending().
@@ -300,6 +307,8 @@ inline msg::MotorState Motor::state() const {
     s.soft_reset_count.val = softResetCount();
     s.enc_glitch_count.has = true;
     s.enc_glitch_count.val = encGlitchCount();
+    s.sampled_at.has = true;
+    s.sampled_at.val = sampleTime();
   }
 
   return s;

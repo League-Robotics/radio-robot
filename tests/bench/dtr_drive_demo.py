@@ -24,24 +24,25 @@ import time
 from robot_radio.io.serial_conn import SerialConnection
 
 _TLM = re.compile(
-    r"enc=(?P<enc_l>-?\d+),(?P<enc_r>-?\d+)"
-    r"\s+vel=(?P<vel_l>-?\d+),(?P<vel_r>-?\d+)"
+    r"enc=(?P<enc_l>-?\d+(?:\.\d+)?),(?P<enc_r>-?\d+(?:\.\d+)?)"
+    r"\s+vel=(?P<vel_l>-?\d+(?:\.\d+)?),(?P<vel_r>-?\d+(?:\.\d+)?)"
     r"\s+cmd=(?P<cmd_l>-?\d+),(?P<cmd_r>-?\d+)"
     r"\s+acc=(?P<acc_l>-?\d+),(?P<acc_r>-?\d+)"
     r"\s+active=(?P<active>[01])"
     r"\s+conn=(?P<conn_l>[01]),(?P<conn_r>[01])"
     r"\s+glitch=(?P<glitch_l>\d+),(?P<glitch_r>\d+)"
+    r"\s+ts=(?P<ts_l>\d+),(?P<ts_r>\d+)"
 )
 
 
 def read_tlm(conn):
-    """Returns a dict of TLM fields (enc_l, ..., glitch_r) or None."""
+    """Returns a dict of TLM fields (enc_l, ..., ts_r) or None."""
     for _ in range(3):
         r = conn.send("TLM", read_timeout=600)
         text = " ".join(r.get("responses", [])) if isinstance(r, dict) else str(r)
         m = _TLM.search(text)
         if m:
-            return {k: int(v) for k, v in m.groupdict().items()}
+            return {k: float(v) for k, v in m.groupdict().items()}
     return None
 
 
@@ -73,10 +74,10 @@ def do(conn, line: str, settle_s: float) -> None:
     if before and after:
         dL = after["enc_l"] - before["enc_l"]
         dR = after["enc_r"] - before["enc_r"]
-        print(f"    enc delta: L={dL:+d}  R={dR:+d}   "
+        print(f"    enc delta: L={dL:+.1f}  R={dR:+.1f}   "
               f"(before=({before['enc_l']}, {before['enc_r']}) "
               f"after=({after['enc_l']}, {after['enc_r']})  "
-              f"glitch={after['glitch_l']},{after['glitch_r']})")
+              f"glitch={after['glitch_l']:.0f},{after['glitch_r']:.0f})")
         if abs(dL) < 3 and abs(dR) < 3:
             print("    !! NO MOTION DETECTED")
         else:
