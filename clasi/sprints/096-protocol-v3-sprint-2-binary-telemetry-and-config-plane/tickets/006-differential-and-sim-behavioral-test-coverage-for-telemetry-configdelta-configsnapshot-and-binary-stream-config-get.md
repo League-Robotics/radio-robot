@@ -2,9 +2,13 @@
 id: '006'
 title: Differential and sim behavioral test coverage for Telemetry, ConfigDelta, ConfigSnapshot,
   and binary stream/config/get
-status: open
-use-cases: [SUC-005]
-depends-on: ['003', '004', '005']
+status: in-progress
+use-cases:
+- SUC-005
+depends-on:
+- '003'
+- '004'
+- '005'
 github-issue: ''
 issue: protocol-v3-schema-driven-binary-command-plane-protobuf.md
 completes_issue: false
