@@ -1,5 +1,9 @@
 """tests/unit/test_serial_conn_binary_plane.py — 095-002 (M7 Host Codec Mirror).
 
+Extended by 096-007 (M6 Host Config/Telemetry Client) with two more
+``_reader_loop`` demux tests (``tlm``/``cfg`` body arms) -- see that
+ticket's own file-header note below, just above the two new tests.
+
 Covers the three things ticket 095-002 asks for, none of which need live
 hardware:
 
@@ -27,7 +31,7 @@ import queue
 import pytest
 
 from robot_radio.io.serial_conn import SerialConnection
-from robot_radio.robot.pb2 import envelope_pb2
+from robot_radio.robot.pb2 import config_pb2, envelope_pb2
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +165,63 @@ def test_reader_loop_binary_branch_coexists_with_every_existing_branch():
     assert reply.corr_id == 42
     assert reply.WhichOneof("body") == "err"
     assert reply.err.code == envelope_pb2.ERR_RANGE
+
+
+def test_reader_loop_routes_binary_tlm_reply_by_corr_id():
+    """096-007 (M6 Host Config/Telemetry Client, ticket acceptance criterion
+    "serial_conn.py's ReplyEnvelope demux correctly routes tlm/cfg body arms
+    through the existing _reply_queues/_tlm_queue machinery with zero code
+    changes to that file"): a synthetic `*B<base64>` ReplyEnvelope{tlm=
+    Telemetry{...}} line -- 096's NEW body oneof arm, not exercised by any
+    095-002 test above -- demuxes through the SAME corr-id-keyed
+    _reply_queues machinery the ok/err arms already prove out above. No new
+    branch was added to _reader_loop()/_handle_binary_reply() to make this
+    pass (see this file's own diff for 096-007 -- zero lines changed in
+    serial_conn.py itself)."""
+    conn = _new_conn()
+    reply_q: queue.Queue = queue.Queue()
+    conn._reply_queues["7"] = reply_q
+
+    envelope = envelope_pb2.ReplyEnvelope(corr_id=7)
+    envelope.tlm.now = 12345
+    envelope.tlm.seq = 3
+    armored = "*B" + base64.b64encode(envelope.SerializeToString()).decode("ascii")
+
+    conn._ser = _FakeSerial([(armored + "\n").encode("ascii")])
+    conn._reader_loop()
+
+    reply = reply_q.get_nowait()
+    assert isinstance(reply, envelope_pb2.ReplyEnvelope)
+    assert reply.corr_id == 7
+    assert reply.WhichOneof("body") == "tlm"
+    assert reply.tlm.now == 12345
+    assert reply.tlm.seq == 3
+
+
+def test_reader_loop_routes_binary_cfg_reply_by_corr_id():
+    """096-007: a synthetic `*B<base64>` ReplyEnvelope{cfg=ConfigSnapshot{...}}
+    line -- 096's other NEW body oneof arm -- demuxes the same way, proving
+    095's generic corr-id routing covers 096's additions with zero
+    serial_conn.py changes (this ticket's own acceptance criterion)."""
+    conn = _new_conn()
+    reply_q: queue.Queue = queue.Queue()
+    conn._reply_queues["8"] = reply_q
+
+    envelope = envelope_pb2.ReplyEnvelope(corr_id=8)
+    envelope.cfg.target = config_pb2.CONFIG_PLANNER
+    envelope.cfg.planner.min_speed = 42.0
+    armored = "*B" + base64.b64encode(envelope.SerializeToString()).decode("ascii")
+
+    conn._ser = _FakeSerial([(armored + "\n").encode("ascii")])
+    conn._reader_loop()
+
+    reply = reply_q.get_nowait()
+    assert isinstance(reply, envelope_pb2.ReplyEnvelope)
+    assert reply.corr_id == 8
+    assert reply.WhichOneof("body") == "cfg"
+    assert reply.cfg.target == config_pb2.CONFIG_PLANNER
+    assert reply.cfg.WhichOneof("patch") == "planner"
+    assert reply.cfg.planner.min_speed == pytest.approx(42.0)
 
 
 def test_reader_loop_binary_reply_with_no_registered_queue_is_dropped():
