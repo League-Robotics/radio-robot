@@ -4,6 +4,10 @@
 #pragma once
 
 #include "messages/common.h"
+#include "messages/drivetrain.h"
+#include "messages/motion.h"
+#include "messages/odometer.h"
+#include "messages/planner.h"
 
 
 namespace msg {
