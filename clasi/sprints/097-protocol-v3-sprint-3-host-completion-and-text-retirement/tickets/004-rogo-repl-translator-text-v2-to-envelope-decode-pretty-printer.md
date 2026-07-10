@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: 'rogo translator proxy: text-v2 PTY bridge fronting the real binary robot connection'
-status: in-progress
+status: done
 use-cases:
 - SUC-004
 depends-on:
@@ -121,18 +121,19 @@ are UNAFFECTED — `proxy` is a new, additive mode, not a replacement.
 **Explicitly deferred, NOT this ticket's job** (Eric: "worry about the
 consumer later"): pointing TestGUI, `robot_mcp.py`, `calibration/
 linear.py`/`angular.py`, `gamepad_teleop.py`, or any bench script AT the
-proxy socket. This ticket only BUILDS the proxy and PROVES it translates
-correctly with a test client. Wiring real consumers to it is a follow-up
-(tracked by `realign-host-tooling-to-gutted-four-verb-wire-surface.md`,
-whose scope this revision narrows from "migrate to `NezhaProtocol`
-directly" to "point at the proxy socket").
+proxy's PTY path. This ticket only BUILDS the proxy and PROVES it
+translates correctly with a test client. Wiring real consumers to it is a
+follow-up (tracked by `realign-host-tooling-to-gutted-four-verb-wire-
+surface.md`, whose scope this revision narrows from "migrate to
+`NezhaProtocol` directly" to "point at the proxy's PTY path
+(`~/.rogo/robot-pty`)").
 
 ## Acceptance Criteria
 
-- [ ] `rogo proxy` creates a PTY (`os.openpty()`), publishes a symlink at
+- [x] `rogo proxy` creates a PTY (`os.openpty()`), publishes a symlink at
       `~/.rogo/robot-pty` by default (`--link` to override), and serves
       exactly one connected client at a time (documented, not policed).
-- [ ] `legacy_verbs.py` tokenizes and dispatches EVERY verb in the issue
+- [x] `legacy_verbs.py` tokenizes and dispatches EVERY verb in the issue
       spec's verb-routing table to its `CommandEnvelope` oneof arm or
       local handler — including the additions beyond the original
       step-4 list: `TLM` one-shot; `QLEN`/`G`/`R`/`TURN`/`GRIP`/`DEV *`/
@@ -142,7 +143,7 @@ directly" to "point at the proxy socket").
       from a startup-cached binary `DeviceId`; `HELP` answered locally;
       pose/otos verbs gated behind `_POSE_OTOS_BINARY=False` →
       `ERR unsupported` until sprint 098.
-- [ ] A TEST CLIENT opens `serial.Serial(<pty-slave-path>)` (pyserial)
+- [x] A TEST CLIENT opens `serial.Serial(<pty-slave-path>)` (pyserial)
       against the proxy's PTY — NOT `nc -U` (superseded by the PTY
       transport decision) — writes a text line for EACH covered verb,
       and receives the correct translated text reply, while the proxy
@@ -150,14 +151,14 @@ directly" to "point at the proxy socket").
       connection underneath — verified by asserting on the bytes the
       proxy's OWN `SerialConnection` writes, not just the client-visible
       reply.
-- [ ] A test exercises unsolicited `TLM` forwarding to the single
+- [x] A test exercises unsolicited `TLM` forwarding to the single
       connected client: arm binary streaming on the underlying
       (fake/sim) connection, confirm the client receives text
       `TLM ...` lines when a stream is armed (client `STREAM n`, or the
       internal watch-period stream while an EVT watch is pending). This
       replaces the old multi-client TLM fan-out criterion, dropped by
       the PTY (single-client) transport decision.
-- [ ] `_EvtWatcher` synthesizes `EVT done <VERB> [#id] reason=idle` off
+- [x] `_EvtWatcher` synthesizes `EVT done <VERB> [#id] reason=idle` off
       the binary `Telemetry.active` flag: a test exercises
       WAIT_BUSY→BUSY→idle (event fires once), the 2 s WAIT_BUSY cap
       firing anyway, `STOP` clearing the pending watch silently, and a
@@ -165,15 +166,15 @@ directly" to "point at the proxy socket").
       plainly that `EVT safety_stop` is not synthesizable (no binary
       signal) and this is not a regression (firmware emits no EVT
       today).
-- [ ] The committed-but-RED `tests/unit/test_cli_send_translator.py`
+- [x] The committed-but-RED `tests/unit/test_cli_send_translator.py`
       (pins `cli._tokenize_send_line`/`cli._SEND_RUMP_VERBS`/
       `cli._decode_reply_body`/`cmd_send`) goes GREEN via thin `cli.py`
       aliases over `legacy_verbs.py` — delivering the ticket's original
       `rogo send` REPL scope at near-zero incremental cost.
-- [ ] `rogo binary <arm>` and every other existing `rogo` subcommand are
+- [x] `rogo binary <arm>` and every other existing `rogo` subcommand are
       byte-for-byte unaffected by this ticket's diff.
-- [ ] `tests/sim` stays green (host-only ticket; sanity check).
-- [ ] `tests/unit` is green, including all new
+- [x] `tests/sim` stays green (host-only ticket; sanity check).
+- [x] `tests/unit` is green, including all new
       `legacy_verbs`/`legacy_render`/proxy tests.
 - [ ] Hardware bench gate (per `.claude/rules/hardware-bench-testing.md`,
       robot on stand): flagship test is the unmodified
@@ -184,10 +185,59 @@ directly" to "point at the proxy socket").
       (ticket 008, running in parallel) lands — tracked as this
       ticket's bench-gate step, not blocking the ticket's own
       code-complete state.
-- [ ] Completion notes state plainly: consumer rewiring (TestGUI, MCP,
+- [x] Completion notes state plainly: consumer rewiring (TestGUI, MCP,
       calibration scripts, bench/demo scripts) to point at this proxy is
       OUT of this ticket's scope, deferred to
       `realign-host-tooling-to-gutted-four-verb-wire-surface.md`.
+
+## Completion Notes (programmer, 2026-07-10)
+
+- Code-complete: `legacy_verbs.py`, `legacy_render.py`, `io/proxy.py`
+  (`ProtocolBridge` + `_EvtWatcher`), and the `cli.py` `proxy`
+  subcommand + `cmd_send`/alias rewrite are implemented and committed.
+  `tests/unit` (239 tests, including 27 in the previously-RED
+  `test_cli_send_translator.py`, 52 in `test_legacy_render.py`, 48 in
+  `test_bridge_routing.py`, 6 in `test_bridge_pty_e2e.py`) and
+  `tests/sim` (597 tests) are both green.
+- **Hardware bench gate NOT run by this ticket.** Per this ticket's own
+  acceptance criterion, the flagship bench test
+  (`calibration/linear.py --port ~/.rogo/robot-pty --direct` +
+  `gamepad_teleop.py` at 20 Hz) is the team-lead's step, executed after
+  the firmware-gut lane (ticket 008, now landed) — tracked here, not
+  blocking this ticket's code-complete state. The corresponding
+  checkbox above is left unchecked until that bench run happens.
+- **`EVT safety_stop` is NOT synthesizable** by `_EvtWatcher` — there is
+  no binary watchdog-stop signal on the wire to observe. This is not a
+  regression: current firmware emits no EVT at all today either
+  (`CommandProcessor::emitEvent` has zero producers, verified against
+  the pre-097-006 source). Only `EVT done <VERB>` (off `Telemetry.active`)
+  is synthesized.
+- **Consumer rewiring is explicitly OUT of this ticket's scope** —
+  TestGUI's command panel, `robot_mcp.py`'s calibration push, the
+  raw-pyserial calibration scripts (`calibration/linear.py`/
+  `angular.py`), `gamepad_teleop.py`, and bench/demo scripts are NOT
+  repointed at the proxy by this ticket. That rewiring is tracked by
+  `realign-host-tooling-to-gutted-four-verb-wire-surface.md`, whose
+  scope this ticket narrows from "migrate to `NezhaProtocol` directly"
+  to "point at the proxy's PTY symlink."
+- **Deliberate deviation, flagged**: `_raw_config_snapshot_value()`
+  (`io/proxy.py`) duplicates ~15 lines of `protocol.py`'s own
+  `_read_config_snapshot_value()` attribute-lookup logic rather than
+  reusing that function directly — `protocol.py`'s version always
+  applies `_format_config_value()`'s 6-significant-digit formatting,
+  but this ticket's own acceptance criterion requires the firmware's
+  EXACT wire format (fixed-3-decimal/int/uint per key, transcribed as
+  `legacy_render.format_config_value()`). The duplication is cited
+  in-place in both functions' docstrings so a future change to
+  `protocol.py`'s key-target maps is easy to notice needs a matching
+  edit here.
+- **Threading model**: two daemon threads (`_reader_loop` sole reader of
+  the PTY master fd, processing client lines serially; `_pump_loop` the
+  SOLE owner of arming/disarming the underlying telemetry stream, guarded
+  by `_stream_lock` so a client's own `SNAP`/one-shot `TLM` request never
+  races the pump thread's own period reconciliation) plus the caller's
+  `run_forever()` loop — documented in full in `io/proxy.py`'s module
+  docstring.
 
 ## Implementation Plan
 
