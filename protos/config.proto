@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package robot;
+
+// ---------------------------------------------------------------------------
+// Config plane wire types (096-001, M1). Curated to mirror ONLY the 15 keys
+// `config_commands.cpp`'s `kAllKeys` already registers
+// (architecture-update.md (096) Decision 2) -- never the full generated
+// `DrivetrainConfig` (41 fields) / `MotorConfig` (10) / `PlannerConfig` (10)
+// messages directly, which cannot fit the 186-byte envelope budget
+// individually (Step 1), and marking every one of THEIR fields `optional`
+// would ripple `Opt<T>` into every existing `configure()` call site (Risk
+// 4, resolved structurally by never doing that). Reused by envelope.proto's
+// `ConfigDelta`/`ConfigSnapshot` oneofs -- this file declares only the
+// PIECES (the target enum + the three curated Patch messages); the
+// envelope-level oneof wrappers themselves stay declared in envelope.proto,
+// mirroring how DrivetrainCommand/MotionSegment/SetPose/OdometerCommand are
+// each declared in their OWN subsystem proto file and only referenced (not
+// redeclared) from CommandEnvelope/ReplyEnvelope's oneof arms.
+//
+// Validation note (traceability gap, flagged not silently reconciled --
+// same posture as this document's own Decision 3/6): `config_commands.cpp`'s
+// `validateCandidate()` additionally enforces three business-rule
+// invariants beyond plain per-key parsing -- `trackwidth > 0`,
+// `rotational_slip` in the SET `{0} ∪ [0.5, 1.0]` (a non-contiguous
+// domain no single `(min)`/`(max)`/`(abs_max)` pair can express), and
+// `sTimeout > 0`. This ticket does NOT attach `(min)`/`(max)`/`(abs_max)`
+// options to the fields below: no existing config-plane proto message
+// (drivetrain.proto/motor.proto/planner.proto, including the FULL
+// generated messages these Patch types curate from) uses those options
+// anywhere today -- in this tree they are reserved for motion-COMMAND
+// fields (motion.proto's distance/speed_max/accel_max/etc., directly
+// actuating hardware in real time), not general config-value bounds, and
+// `config_commands.cpp`'s own validation has always lived in hand-written
+// per-key checks, not a wire-level schema. Ticket 004 (BinaryChannel config
+// arm) inherits this gap: its own stated design (Decision 3) is to rely on
+// "the generated decoder's min/max/abs_max/req validation" for FIELD
+// PARSING (replacing `parseFloatStrict`/`parseLongStrict`'s string
+// parsing), not a claim that every `validateCandidate()` business rule is
+// wire-enforced -- if closing this specific gap turns out to matter, ticket
+// 004 (or a follow-up) adds either options here or a small hand-written
+// check in `binary_channel.cpp`, neither of which this ticket's own
+// acceptance criteria require.
+// ---------------------------------------------------------------------------
+
+// Which config slice a `get`/`ConfigSnapshot` names (envelope.proto).
+// CONFIG_DRIVETRAIN/CONFIG_PLANNER mirror `Rt::ConfigDelta::Target`'s
+// `kDrivetrain`/`kPlanner` directly. CONFIG_MOTOR_LEFT/CONFIG_MOTOR_RIGHT
+// split `Rt::ConfigDelta`'s single `kMotor`+`port` target into the two
+// independently-addressable bound motors `config_commands.cpp`'s existing
+// `ml`/`mr` keys already read/write per-side -- a `ConfigSnapshot` reply
+// needs to self-identify WHICH side's snapshot it carries, not just
+// "motor" (Decision 4). CONFIG_WATCHDOG (`sTimeout`) is NOT one of the
+// Configurator's four fold targets at all (Open Question 4): it routes to
+// `bb.streamWatchdogWindowIn` directly at the `BinaryChannel` boundary
+// (ticket 004), never `bb.configIn` -- see `config_commands.h`'s own
+// file-header note about `sTimeout` being "the one key that is NOT one of
+// the Configurator's four targets."
+enum ConfigTarget {
+  CONFIG_DRIVETRAIN  = 0;
+  CONFIG_MOTOR_LEFT  = 1;
+  CONFIG_MOTOR_RIGHT = 2;
+  CONFIG_PLANNER     = 3;
+  CONFIG_WATCHDOG    = 4;  // routes to bb.streamWatchdogWindowIn, not bb.configIn
+}
+
+// Which of the drivetrain's two bound motors `MotorConfigPatch.side`
+// selects for `travel_calib` ONLY (Decision 5) -- mirrors
+// `config_commands.cpp`'s `ml` (left)/`mr` (right) key pair. Deliberately a
+// SEPARATE type from `ConfigTarget` above: `ConfigTarget` addresses a whole
+// GET/`ConfigSnapshot` SLICE and has no drivetrain/planner/watchdog
+// counterpart here, while `BoundMotorSide` addresses only WHICH bound
+// motor a single field (`travel_calib`) inside one `MotorConfigPatch`
+// applies to.
+enum BoundMotorSide {
+  LEFT  = 0;
+  RIGHT = 1;
+}
+
+// Curated patch of DrivetrainConfig's 6 registered keys
+// (config_commands.cpp kAllKeys: tw, rotSlip, ekfQxy, ekfQtheta,
+// ekfROtosXy, ekfROtosTheta). `optional` (Opt<float>) presence signals
+// "this field is being set" on a ConfigDelta, or "this field is
+// populated" on a ConfigSnapshot reply. `Opt<T>` never reaches
+// msg::DrivetrainConfig's own (non-optional) fields directly (Decision 2,
+// Risk 4) -- BinaryChannel (ticket 004) is the one translation boundary
+// between this patch and a Rt::ConfigDelta.
+message DrivetrainConfigPatch {
+  optional float trackwidth       = 1;  // [mm] tw
+  optional float rotational_slip  = 2;  // rotSlip
+  optional float ekf_q_xy         = 3;  // ekfQxy
+  optional float ekf_q_theta      = 4;  // ekfQtheta
+  optional float ekf_r_otos_xy    = 5;  // ekfROtosXy
+  optional float ekf_r_otos_theta = 6;  // ekfROtosTheta
+}
+
+// Curated patch of MotorConfig's 6 registered keys (config_commands.cpp
+// kAllKeys: ml/mr -> travel_calib, pid.kp/ki/kff/iMax/kaw -> the 5 Gains
+// members). `side` disambiguates `travel_calib` ONLY (Decision 5) -- the
+// five Gains fields below carry NO per-side selector of their own:
+// BinaryChannel's translation (ticket 004) applies any present
+// kp/ki/kff/i_max/kaw field to BOTH bound motors unconditionally,
+// mirroring `applyConfigKey()`'s exact both-sides behavior for `pid.*`
+// keys -- inventing an independently-addressable per-side PID surface
+// would be new capability beyond what config_commands.cpp exposes today.
+message MotorConfigPatch {
+  BoundMotorSide side          = 1;  // selects travel_calib's target ONLY;
+                                      // meaningless for kp/ki/kff/i_max/kaw
+  optional float travel_calib  = 2;  // [mm/deg] ml (side=LEFT) / mr (side=RIGHT)
+  optional float kp    = 3;  // pid.kp   -- applied to BOTH bound motors
+  optional float ki    = 4;  // pid.ki   -- applied to BOTH bound motors
+  optional float kff   = 5;  // pid.kff  -- applied to BOTH bound motors
+  optional float i_max = 6;  // pid.iMax -- applied to BOTH bound motors
+  optional float kaw   = 7;  // pid.kaw  -- applied to BOTH bound motors
+}
+
+// Curated patch of PlannerConfig's 1 registered key (config_commands.cpp
+// kAllKeys: minSpeed).
+message PlannerConfigPatch {
+  optional float min_speed = 1;  // [mm/s] minSpeed
+}

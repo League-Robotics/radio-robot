@@ -4,9 +4,11 @@
 #pragma once
 
 #include "messages/common.h"
+#include "messages/config.h"
 #include "messages/drivetrain.h"
 #include "messages/motion.h"
 #include "messages/odometer.h"
+#include "messages/telemetry.h"
 
 
 namespace msg {
@@ -57,7 +59,7 @@ struct Echo {
 
 // ConfigGet
 struct ConfigGet {
-    Opt<uint32_t> target = {};
+    Opt<ConfigTarget> target = {};
 
     // --- array / optional-string accessors ---
 };
@@ -89,18 +91,43 @@ struct DeviceId {
 
 // ConfigDelta
 struct ConfigDelta {
+    enum class PatchKind : uint8_t {
+        NONE = 0,
+        DRIVETRAIN = 1,
+        MOTOR = 2,
+        PLANNER = 3,
+        WATCHDOG = 4,
+    };
+    PatchKind patch_kind = PatchKind::NONE;
+    union {
+        DrivetrainConfigPatch drivetrain;
+        MotorConfigPatch motor;
+        PlannerConfigPatch planner;
+        uint32_t watchdog;
+    } patch = {};
 
-    // --- array / optional-string accessors ---
-};
-
-// Telemetry
-struct Telemetry {
 
     // --- array / optional-string accessors ---
 };
 
 // ConfigSnapshot
 struct ConfigSnapshot {
+    enum class PatchKind : uint8_t {
+        NONE = 0,
+        DRIVETRAIN = 1,
+        MOTOR = 2,
+        PLANNER = 3,
+        WATCHDOG = 4,
+    };
+    PatchKind patch_kind = PatchKind::NONE;
+    union {
+        DrivetrainConfigPatch drivetrain;
+        MotorConfigPatch motor;
+        PlannerConfigPatch planner;
+        uint32_t watchdog;
+    } patch = {};
+
+    ConfigTarget target = static_cast<ConfigTarget>(0);
 
     // --- array / optional-string accessors ---
 };

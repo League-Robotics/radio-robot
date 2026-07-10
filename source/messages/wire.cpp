@@ -360,7 +360,13 @@ constexpr FieldDesc kFields_MotionSegment[] = {
 };
 constexpr MessageTable kTable_MotionSegment = { kFields_MotionSegment, 13 };
 
-constexpr MessageTable kTable_ConfigDelta = { nullptr, 0 };
+constexpr FieldDesc kFields_ConfigDelta[] = {
+    { .number = 1, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kOneofMessage, .scalarType = ScalarType::kNone, .offset = offsetof(ConfigDelta, patch.drivetrain), .offset2 = offsetof(ConfigDelta, patch_kind), .oneofKindValue = static_cast<uint16_t>(ConfigDelta::PatchKind::DRIVETRAIN), .cap = 0, .tableIndex = 20, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // drivetrain
+    { .number = 2, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kOneofMessage, .scalarType = ScalarType::kNone, .offset = offsetof(ConfigDelta, patch.motor), .offset2 = offsetof(ConfigDelta, patch_kind), .oneofKindValue = static_cast<uint16_t>(ConfigDelta::PatchKind::MOTOR), .cap = 0, .tableIndex = 21, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // motor
+    { .number = 3, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kOneofMessage, .scalarType = ScalarType::kNone, .offset = offsetof(ConfigDelta, patch.planner), .offset2 = offsetof(ConfigDelta, patch_kind), .oneofKindValue = static_cast<uint16_t>(ConfigDelta::PatchKind::PLANNER), .cap = 0, .tableIndex = 22, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // planner
+    { .number = 4, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kOneofScalar, .scalarType = ScalarType::kUint32, .offset = offsetof(ConfigDelta, patch.watchdog), .offset2 = offsetof(ConfigDelta, patch_kind), .oneofKindValue = static_cast<uint16_t>(ConfigDelta::PatchKind::WATCHDOG), .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // watchdog
+};
+constexpr MessageTable kTable_ConfigDelta = { kFields_ConfigDelta, 4 };
 
 constexpr FieldDesc kFields_SetPose[] = {
     { .number = 1, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(SetPose, x), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // x
@@ -373,7 +379,7 @@ constexpr FieldDesc kFields_OdometerCommand[] = {
     { .number = 1, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kOneofScalar, .scalarType = ScalarType::kBool, .offset = offsetof(OdometerCommand, action.init_v), .offset2 = offsetof(OdometerCommand, action_kind), .oneofKindValue = static_cast<uint16_t>(OdometerCommand::ActionKind::INIT), .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // init
     { .number = 2, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kOneofScalar, .scalarType = ScalarType::kBool, .offset = offsetof(OdometerCommand, action.zero_v), .offset2 = offsetof(OdometerCommand, action_kind), .oneofKindValue = static_cast<uint16_t>(OdometerCommand::ActionKind::ZERO), .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // zero
     { .number = 3, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kOneofScalar, .scalarType = ScalarType::kBool, .offset = offsetof(OdometerCommand, action.reset_tracking_v), .offset2 = offsetof(OdometerCommand, action_kind), .oneofKindValue = static_cast<uint16_t>(OdometerCommand::ActionKind::RESET_TRACKING), .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // reset_tracking
-    { .number = 4, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kOneofMessage, .scalarType = ScalarType::kNone, .offset = offsetof(OdometerCommand, action.set_pose), .offset2 = offsetof(OdometerCommand, action_kind), .oneofKindValue = static_cast<uint16_t>(OdometerCommand::ActionKind::SET_POSE), .cap = 0, .tableIndex = 20, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // set_pose
+    { .number = 4, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kOneofMessage, .scalarType = ScalarType::kNone, .offset = offsetof(OdometerCommand, action.set_pose), .offset2 = offsetof(OdometerCommand, action_kind), .oneofKindValue = static_cast<uint16_t>(OdometerCommand::ActionKind::SET_POSE), .cap = 0, .tableIndex = 23, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // set_pose
 };
 constexpr MessageTable kTable_OdometerCommand = { kFields_OdometerCommand, 4 };
 
@@ -385,7 +391,7 @@ constexpr FieldDesc kFields_Echo[] = {
 constexpr MessageTable kTable_Echo = { kFields_Echo, 1 };
 
 constexpr FieldDesc kFields_ConfigGet[] = {
-    { .number = 1, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kOpt, .scalarType = ScalarType::kUint32, .offset = offsetof(ConfigGet, target.has), .offset2 = offsetof(ConfigGet, target.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kIsReq, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // target
+    { .number = 1, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kOpt, .scalarType = ScalarType::kEnum, .offset = offsetof(ConfigGet, target.has), .offset2 = offsetof(ConfigGet, target.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kIsReq, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // target
 };
 constexpr MessageTable kTable_ConfigGet = { kFields_ConfigGet, 1 };
 
@@ -419,9 +425,46 @@ constexpr FieldDesc kFields_Error[] = {
 };
 constexpr MessageTable kTable_Error = { kFields_Error, 2 };
 
-constexpr MessageTable kTable_Telemetry = { nullptr, 0 };
+constexpr FieldDesc kFields_Telemetry[] = {
+    { .number = 1, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kUint32, .offset = offsetof(Telemetry, now), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // now
+    { .number = 2, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kEnum, .offset = offsetof(Telemetry, mode), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // mode
+    { .number = 3, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kUint32, .offset = offsetof(Telemetry, seq), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // seq
+    { .number = 4, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kBool, .offset = offsetof(Telemetry, has_enc), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // has_enc
+    { .number = 5, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Telemetry, enc_left), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // enc_left
+    { .number = 6, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Telemetry, enc_right), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // enc_right
+    { .number = 7, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kBool, .offset = offsetof(Telemetry, has_vel), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // has_vel
+    { .number = 8, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Telemetry, vel_left), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // vel_left
+    { .number = 9, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Telemetry, vel_right), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // vel_right
+    { .number = 10, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kBool, .offset = offsetof(Telemetry, has_cmd_vel), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // has_cmd_vel
+    { .number = 11, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Telemetry, cmd_vel_left), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // cmd_vel_left
+    { .number = 12, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Telemetry, cmd_vel_right), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // cmd_vel_right
+    { .number = 13, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kBool, .offset = offsetof(Telemetry, has_pose), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // has_pose
+    { .number = 14, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kMessage, .scalarType = ScalarType::kNone, .offset = offsetof(Telemetry, pose), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 23, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // pose
+    { .number = 15, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kBool, .offset = offsetof(Telemetry, has_otos), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // has_otos
+    { .number = 16, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kMessage, .scalarType = ScalarType::kNone, .offset = offsetof(Telemetry, otos), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 23, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // otos
+    { .number = 17, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kBool, .offset = offsetof(Telemetry, otos_connected), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // otos_connected
+    { .number = 18, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kBool, .offset = offsetof(Telemetry, has_twist), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // has_twist
+    { .number = 19, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kMessage, .scalarType = ScalarType::kNone, .offset = offsetof(Telemetry, twist), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 18, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // twist
+    { .number = 20, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Telemetry, acc_left), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // acc_left
+    { .number = 21, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Telemetry, acc_right), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // acc_right
+    { .number = 22, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kBool, .offset = offsetof(Telemetry, active), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // active
+    { .number = 23, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kBool, .offset = offsetof(Telemetry, conn_left), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // conn_left
+    { .number = 24, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kBool, .offset = offsetof(Telemetry, conn_right), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // conn_right
+    { .number = 25, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kUint32, .offset = offsetof(Telemetry, glitch_left), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // glitch_left
+    { .number = 26, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kUint32, .offset = offsetof(Telemetry, glitch_right), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // glitch_right
+    { .number = 27, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kUint32, .offset = offsetof(Telemetry, ts_left), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // ts_left
+    { .number = 28, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kUint32, .offset = offsetof(Telemetry, ts_right), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // ts_right
+};
+constexpr MessageTable kTable_Telemetry = { kFields_Telemetry, 28 };
 
-constexpr MessageTable kTable_ConfigSnapshot = { nullptr, 0 };
+constexpr FieldDesc kFields_ConfigSnapshot[] = {
+    { .number = 1, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kEnum, .offset = offsetof(ConfigSnapshot, target), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // target
+    { .number = 2, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kOneofMessage, .scalarType = ScalarType::kNone, .offset = offsetof(ConfigSnapshot, patch.drivetrain), .offset2 = offsetof(ConfigSnapshot, patch_kind), .oneofKindValue = static_cast<uint16_t>(ConfigSnapshot::PatchKind::DRIVETRAIN), .cap = 0, .tableIndex = 20, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // drivetrain
+    { .number = 3, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kOneofMessage, .scalarType = ScalarType::kNone, .offset = offsetof(ConfigSnapshot, patch.motor), .offset2 = offsetof(ConfigSnapshot, patch_kind), .oneofKindValue = static_cast<uint16_t>(ConfigSnapshot::PatchKind::MOTOR), .cap = 0, .tableIndex = 21, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // motor
+    { .number = 4, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kOneofMessage, .scalarType = ScalarType::kNone, .offset = offsetof(ConfigSnapshot, patch.planner), .offset2 = offsetof(ConfigSnapshot, patch_kind), .oneofKindValue = static_cast<uint16_t>(ConfigSnapshot::PatchKind::PLANNER), .cap = 0, .tableIndex = 22, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // planner
+    { .number = 5, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kOneofScalar, .scalarType = ScalarType::kUint32, .offset = offsetof(ConfigSnapshot, patch.watchdog), .offset2 = offsetof(ConfigSnapshot, patch_kind), .oneofKindValue = static_cast<uint16_t>(ConfigSnapshot::PatchKind::WATCHDOG), .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // watchdog
+};
+constexpr MessageTable kTable_ConfigSnapshot = { kFields_ConfigSnapshot, 5 };
 
 constexpr MessageTable kTable_EventNotify = { nullptr, 0 };
 
@@ -433,9 +476,35 @@ constexpr FieldDesc kFields_BodyTwist3[] = {
 constexpr MessageTable kTable_BodyTwist3 = { kFields_BodyTwist3, 3 };
 
 constexpr FieldDesc kFields_WheelTargets[] = {
-    { .number = 1, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kRepeatedMessage, .scalarType = ScalarType::kNone, .offset = offsetof(WheelTargets, w_), .offset2 = offsetof(WheelTargets, w_count), .oneofKindValue = 0, .cap = 4, .tableIndex = 21, .elemStride = sizeof(WheelTarget), .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // w
+    { .number = 1, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kRepeatedMessage, .scalarType = ScalarType::kNone, .offset = offsetof(WheelTargets, w_), .offset2 = offsetof(WheelTargets, w_count), .oneofKindValue = 0, .cap = 4, .tableIndex = 24, .elemStride = sizeof(WheelTarget), .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // w
 };
 constexpr MessageTable kTable_WheelTargets = { kFields_WheelTargets, 1 };
+
+constexpr FieldDesc kFields_DrivetrainConfigPatch[] = {
+    { .number = 1, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kOpt, .scalarType = ScalarType::kFloat, .offset = offsetof(DrivetrainConfigPatch, trackwidth.has), .offset2 = offsetof(DrivetrainConfigPatch, trackwidth.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // trackwidth
+    { .number = 2, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kOpt, .scalarType = ScalarType::kFloat, .offset = offsetof(DrivetrainConfigPatch, rotational_slip.has), .offset2 = offsetof(DrivetrainConfigPatch, rotational_slip.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // rotational_slip
+    { .number = 3, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kOpt, .scalarType = ScalarType::kFloat, .offset = offsetof(DrivetrainConfigPatch, ekf_q_xy.has), .offset2 = offsetof(DrivetrainConfigPatch, ekf_q_xy.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // ekf_q_xy
+    { .number = 4, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kOpt, .scalarType = ScalarType::kFloat, .offset = offsetof(DrivetrainConfigPatch, ekf_q_theta.has), .offset2 = offsetof(DrivetrainConfigPatch, ekf_q_theta.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // ekf_q_theta
+    { .number = 5, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kOpt, .scalarType = ScalarType::kFloat, .offset = offsetof(DrivetrainConfigPatch, ekf_r_otos_xy.has), .offset2 = offsetof(DrivetrainConfigPatch, ekf_r_otos_xy.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // ekf_r_otos_xy
+    { .number = 6, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kOpt, .scalarType = ScalarType::kFloat, .offset = offsetof(DrivetrainConfigPatch, ekf_r_otos_theta.has), .offset2 = offsetof(DrivetrainConfigPatch, ekf_r_otos_theta.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // ekf_r_otos_theta
+};
+constexpr MessageTable kTable_DrivetrainConfigPatch = { kFields_DrivetrainConfigPatch, 6 };
+
+constexpr FieldDesc kFields_MotorConfigPatch[] = {
+    { .number = 1, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kEnum, .offset = offsetof(MotorConfigPatch, side), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // side
+    { .number = 2, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kOpt, .scalarType = ScalarType::kFloat, .offset = offsetof(MotorConfigPatch, travel_calib.has), .offset2 = offsetof(MotorConfigPatch, travel_calib.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // travel_calib
+    { .number = 3, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kOpt, .scalarType = ScalarType::kFloat, .offset = offsetof(MotorConfigPatch, kp.has), .offset2 = offsetof(MotorConfigPatch, kp.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // kp
+    { .number = 4, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kOpt, .scalarType = ScalarType::kFloat, .offset = offsetof(MotorConfigPatch, ki.has), .offset2 = offsetof(MotorConfigPatch, ki.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // ki
+    { .number = 5, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kOpt, .scalarType = ScalarType::kFloat, .offset = offsetof(MotorConfigPatch, kff.has), .offset2 = offsetof(MotorConfigPatch, kff.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // kff
+    { .number = 6, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kOpt, .scalarType = ScalarType::kFloat, .offset = offsetof(MotorConfigPatch, i_max.has), .offset2 = offsetof(MotorConfigPatch, i_max.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // i_max
+    { .number = 7, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kOpt, .scalarType = ScalarType::kFloat, .offset = offsetof(MotorConfigPatch, kaw.has), .offset2 = offsetof(MotorConfigPatch, kaw.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // kaw
+};
+constexpr MessageTable kTable_MotorConfigPatch = { kFields_MotorConfigPatch, 7 };
+
+constexpr FieldDesc kFields_PlannerConfigPatch[] = {
+    { .number = 1, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kOpt, .scalarType = ScalarType::kFloat, .offset = offsetof(PlannerConfigPatch, min_speed.has), .offset2 = offsetof(PlannerConfigPatch, min_speed.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // min_speed
+};
+constexpr MessageTable kTable_PlannerConfigPatch = { kFields_PlannerConfigPatch, 1 };
 
 constexpr FieldDesc kFields_Pose2D[] = {
     { .number = 1, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Pose2D, x), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // x
@@ -471,8 +540,11 @@ constexpr MessageTable kMessageTables[] = {
     kTable_EventNotify,  // 17
     kTable_BodyTwist3,  // 18
     kTable_WheelTargets,  // 19
-    kTable_Pose2D,  // 20
-    kTable_WheelTarget,  // 21
+    kTable_DrivetrainConfigPatch,  // 20
+    kTable_MotorConfigPatch,  // 21
+    kTable_PlannerConfigPatch,  // 22
+    kTable_Pose2D,  // 23
+    kTable_WheelTarget,  // 24
 };
 
 // --- Generic recursive decode/encode walkers ------------------------------

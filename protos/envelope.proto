@@ -6,6 +6,8 @@ import "options.proto";
 import "drivetrain.proto";
 import "motion.proto";
 import "odometer.proto";
+import "telemetry.proto";
+import "config.proto";
 
 // ---------------------------------------------------------------------------
 // Binary command-plane envelope (095-001, SUC-001). The wire contract for
@@ -22,6 +24,12 @@ import "odometer.proto";
 // without a later schema break; `BinaryChannel` replies
 // `Error{ERR_UNIMPLEMENTED}` for these until their owning sprint lands):
 // config/get/stream (096), pose/otos (098).
+//
+// 096-001 gives config/get/stream a REAL schema (`Telemetry`/`ConfigDelta`/
+// `ConfigSnapshot` are no longer empty placeholders -- see below and
+// telemetry.proto/config.proto), but `BinaryChannel` runtime behavior for
+// these three arms still lands later this sprint (tickets 002-005); until
+// then they still reply `Error{ERR_UNIMPLEMENTED}` exactly as before.
 //
 // `motion` (field 5, `PlannerCommand`) is NOT declared this sprint --
 // architecture-update-r1.md Decision 6 (095, revising this document's
@@ -127,24 +135,24 @@ message Echo {
   bytes payload = 1 [(max_count) = 64];
 }
 
-// target: which config slice to fetch (096 defines the target enum/
-// numbering; declared-only this sprint, kept minimal per architecture-
-// update.md (095) Step 6).
+// target: which config slice to fetch. Retyped `uint32` -> `ConfigTarget`
+// (096-001, config.proto) -- the enum 095 anticipated but left undefined
+// ("096 defines the target enum/numbering").
 //
 // `target` is `optional` + `(req) = true` (095-005 Step 1-4 testing need:
 // the schema had no field exercising the generated decoder's `req`
 // validation path -- see ticket 005's completion notes). `optional` gives
 // this field real protobuf explicit-presence semantics (a synthetic oneof,
-// `Opt<uint32>` in the generated struct) rather than proto3's default
+// `Opt<ConfigTarget>` in the generated struct) rather than proto3's default
 // implicit presence, which is required for `(req)` to be meaningful: a
-// plain (non-optional) scalar field's zero value is indistinguishable from
-// "never sent" once a real protobuf encoder omits it, so marking a
+// plain (non-optional) scalar/enum field's zero value is indistinguishable
+// from "never sent" once a real protobuf encoder omits it, so marking a
 // non-optional field `req` would spuriously reject a legitimate
-// `target = 0`. `optional` forces every encoder (including the host's real
-// `google.protobuf` bindings, M7) to serialize the field whenever it is
-// explicitly set, zero value or not.
+// `target = CONFIG_DRIVETRAIN` (enum value 0). `optional` forces every
+// encoder (including the host's real `google.protobuf` bindings, M7) to
+// serialize the field whenever it is explicitly set, zero value or not.
 message ConfigGet {
-  optional uint32 target = 1 [(req) = true];
+  optional ConfigTarget target = 1 [(req) = true];
 }
 
 // binary: true selects the binary telemetry emitter over the text one.
@@ -183,33 +191,66 @@ message DeviceId {
   uint32 proto_version = 5;
 }
 
-// --- Forward-compat placeholders (096/097-owned; NOT part of this
-// ticket's six "leaf messages" -- see completion notes) -----------------
+// --- Config plane (096-001; replaces 095's empty placeholders) ---------
 //
 // architecture-update.md (095)'s own envelope.proto sketch (echoing the
-// driving issue's sketch) names `ConfigDelta`, `Telemetry`, and
+// driving issue's sketch) named `ConfigDelta`, `Telemetry`, and
 // `ConfigSnapshot` as the payload types for the config/tlm/cfg arms below,
-// but NONE of the three exists anywhere in protos/*.proto today:
-//   - `ConfigDelta` exists ONLY as `Rt::ConfigDelta`, a hand-written,
+// but none of the three existed anywhere in protos/*.proto at the time:
+//   - `ConfigDelta` existed ONLY as `Rt::ConfigDelta`, a hand-written,
 //     field-masked C++ struct in source/runtime/commands.h (Rt::, not
 //     msg::; a completely different shape -- target+port+field-mask, not
 //     a wire-friendly value message). No collision risk (different
-//     namespace), but no reusable shape either.
-//   - `Telemetry` / `ConfigSnapshot` have no existing definition anywhere
-//     in this tree (proto or hand-written).
-// Since these three oneof arms are explicitly "declared only... unused
-// this sprint" (096 owns their real design), minimal EMPTY placeholder
-// messages are declared here so the oneof arms this ticket's own
-// acceptance criteria require can exist at all, without this ticket
-// inventing a config-delta/telemetry/config-snapshot wire shape it has no
-// mandate to design. 096 replaces these bodies (not just decorates them)
-// when it builds the real config/telemetry planes -- this is intentionally
-// throwaway shape, flagged per Decision 5's "record the discrepancy, don't
-// silently reconcile" precedent (the same pattern protos/odometer.proto's
-// own header comment already uses for its Pose2D-vs-SetPose reuse call).
-message ConfigDelta {}
-message Telemetry {}
-message ConfigSnapshot {}
+//     namespace), but no reusable shape either -- `robot.ConfigDelta`
+//     below is a NEW, purpose-built wire message, not a mirror of
+//     `Rt::ConfigDelta`'s own internal shape.
+//   - `Telemetry` / `ConfigSnapshot` had no existing definition anywhere in
+//     this tree (proto or hand-written).
+// 095 declared minimal EMPTY placeholder messages here so the oneof arms
+// its own acceptance criteria required could exist at all, without 095
+// inventing a config-delta/telemetry/config-snapshot wire shape it had no
+// mandate to design -- flagged per that ticket's own Decision 5 "record
+// the discrepancy, don't silently reconcile" precedent (the same pattern
+// protos/odometer.proto's own header comment uses for its Pose2D-vs-SetPose
+// reuse call).
+//
+// 096-001 replaces those placeholder BODIES (Decision 2/4, config.proto):
+// `ConfigDelta`/`ConfigSnapshot` are each a `oneof` over config.proto's
+// three curated Patch types plus a bare `uint32` watchdog-window case
+// (`CONFIG_WATCHDOG`, `sTimeout` -- Open Question 4, NOT one of the
+// Configurator's four fold targets; routes to `bb.streamWatchdogWindowIn`,
+// never `bb.configIn`, at the `BinaryChannel` boundary, ticket 004) -- the
+// SAME oneof idiom `CommandEnvelope.cmd` itself already uses.
+// `ConfigSnapshot` additionally carries a `ConfigTarget target` field so a
+// reply self-identifies which slice it is (Decision 4). `Telemetry`
+// itself is no longer declared here at all -- its real body now lives in
+// telemetry.proto (imported above), the SAME "declare the leaf type in its
+// own subsystem proto file, reference it bare from the envelope oneof"
+// pattern DrivetrainCommand/MotionSegment/SetPose/OdometerCommand already
+// established; `ReplyEnvelope.body.tlm` below references it directly.
+message ConfigDelta {
+  oneof patch {
+    DrivetrainConfigPatch drivetrain = 1;
+    MotorConfigPatch      motor      = 2;
+    PlannerConfigPatch    planner    = 3;
+    uint32                watchdog   = 4;  // [ms] sTimeout -- StreamingDriveWatchdog
+                                            // window; NOT one of the Configurator's
+                                            // four fold targets (Open Question 4) --
+                                            // BinaryChannel (ticket 004) posts this
+                                            // straight to bb.streamWatchdogWindowIn,
+                                            // never bb.configIn.
+  }
+}
+
+message ConfigSnapshot {
+  ConfigTarget target = 1;
+  oneof patch {
+    DrivetrainConfigPatch drivetrain = 2;
+    MotorConfigPatch      motor      = 3;
+    PlannerConfigPatch    planner    = 4;
+    uint32                watchdog   = 5;  // [ms] sTimeout -- see ConfigDelta.watchdog above
+  }
+}
 
 // `Event` is NOT reused here: source/messages/event.h already hand-
 // authors `msg::Event` (explicitly NOT scripts/gen_messages.py-generated
@@ -245,13 +286,16 @@ message CommandEnvelope {
     // re-declares `motion` at field 5 with a new, deliberately-bounded
     // wire payload type once Subsystems::Planner un-parks -- never
     // reassign 5 to a different field.
-    ConfigDelta       config  = 6;   // -> bb.configIn (declared only, 096)
+    ConfigDelta       config  = 6;   // -> bb.configIn (096-001: real schema;
+                                      // BinaryChannel handling lands ticket 004)
     SetPose           pose    = 7;   // -> bb.poseResetIn (declared only, 098)
     OdometerCommand   otos    = 8;   // -> bb.otosCommandIn (declared only, 098)
     Ping              ping    = 9;
     Echo              echo    = 10;
-    ConfigGet         get     = 11;  // declared only, 096
-    StreamControl     stream  = 12;  // declared only, 096
+    ConfigGet         get     = 11;  // 096-001: real schema (target now ConfigTarget);
+                                      // BinaryChannel handling lands ticket 004
+    StreamControl     stream  = 12;  // 096-001: schema unchanged (095); periodic
+                                      // wiring lands tickets 002/003/005
     Stop              stop    = 13;
     DeviceId          id      = 14;  // Decision 4 -- empty request
   }
@@ -265,8 +309,11 @@ message ReplyEnvelope {
   oneof body {
     Ack             ok   = 2;
     Error           err  = 3;
-    Telemetry       tlm  = 4;   // declared only, 096
-    ConfigSnapshot  cfg  = 5;   // declared only, 096
+    Telemetry       tlm  = 4;   // 096-001: real schema (telemetry.proto);
+                                 // binary formatter + tick wiring land
+                                 // tickets 002/003/005
+    ConfigSnapshot  cfg  = 5;   // 096-001: real schema; BinaryChannel `get`
+                                 // handling lands ticket 004
     EventNotify     evt  = 6;   // declared only, 096/097 (see EventNotify's own comment)
     DeviceId        id   = 7;
     // echo (095-007, schema-gap closure): the issue's own envelope sketch
