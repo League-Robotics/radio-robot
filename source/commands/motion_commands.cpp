@@ -920,7 +920,11 @@ void handleTlm(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, voi
            static_cast<int>(velL), static_cast<int>(velR),
            static_cast<int>(cmdL), static_cast<int>(cmdR),
            static_cast<int>(accL), static_cast<int>(accR),
-           dt.active ? 1 : 0,
+           // active= reports BUSY (motion in progress), not the authority
+           // flag -- setNeutral() sets the authority flag TRUE (holding
+           // neutral IS governing), so dt.active latches 1 after the first
+           // STOP and can never mean "idle". See DrivetrainState.busy.
+           dt.busy ? 1 : 0,
            b.motors[0].connected ? 1 : 0, b.motors[1].connected ? 1 : 0,
            glitchL, glitchR);
   char rbuf[224];

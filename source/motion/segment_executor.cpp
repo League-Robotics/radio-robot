@@ -36,6 +36,15 @@ constexpr float kDeadTime = kOutputHops * kAssumedPassPeriod;  // [s]
 constexpr float kAngleEps = 1e-4f;  // [rad] ~ 0.0057 deg
 constexpr float kDistEps = 0.5f;    // [mm]
 
+// kReplanWindowFraction -- the divergence replan only acts during this
+// leading fraction of the active plan. In the tail the plant's lag
+// legitimately exceeds the modeled kDeadTime (decel + stiction, worst for
+// counter-rotating pivots), so a tail comparison reads divergent and
+// re-solves one last small trapezoid -- the residual-hump defect. The
+// terminal path (dead-time-projected stop firing + exhaustion completion)
+// owns the endgame instead.
+constexpr float kReplanWindowFraction = 0.75f;
+
 }  // namespace
 
 void SegmentExecutor::configure(const msg::PlannerConfig& config) { config_ = config; }
@@ -109,6 +118,8 @@ void SegmentExecutor::beginPrePivot(uint32_t now) {
   rotationalTarget_ = preRotateTarget_;
   rotationalSolveMs_ = now;
   lastReplanMs_ = now;
+  phaseReplanDeadline_ = now + static_cast<uint32_t>(
+      kReplanWindowFraction * rotational_.duration() * 1000.0f);
 
   stopsCount_ = 0;
   float arc = fabsf(preRotateTarget_) * arcScale_;  // [mm]
@@ -126,6 +137,8 @@ void SegmentExecutor::beginTranslate(uint32_t now) {
   linearTarget_ = translateTarget_;
   linearSolveMs_ = now;
   lastReplanMs_ = now;
+  phaseReplanDeadline_ = now + static_cast<uint32_t>(
+      kReplanWindowFraction * linear_.duration() * 1000.0f);
 
   stopsCount_ = 0;
   float mag = fabsf(translateTarget_);
@@ -144,6 +157,8 @@ void SegmentExecutor::beginTerminalPivot(uint32_t now) {
   rotationalTarget_ = terminalPivotTarget_;
   rotationalSolveMs_ = now;
   lastReplanMs_ = now;
+  phaseReplanDeadline_ = now + static_cast<uint32_t>(
+      kReplanWindowFraction * rotational_.duration() * 1000.0f);
 
   stopsCount_ = 0;
   float arc = fabsf(terminalPivotTarget_) * arcScale_;  // [mm]
@@ -234,6 +249,16 @@ float SegmentExecutor::rotationalElapsed(uint32_t now) const {
 
 void SegmentExecutor::maybeReplanTranslate(uint32_t now, const msg::MotorState& encLeft,
                                            const msg::MotorState& encRight) {
+  // Replan is a MID-plan divergence correction only -- permitted only inside
+  // the PHASE-anchored window (kReplanWindowFraction of the phase's ORIGINAL
+  // solve, set in begin*()). Anchoring to the phase, not the current plan,
+  // terminates the cascade: each retarget/reanchor would otherwise re-open a
+  // fresh window whose own tail reads divergent and re-solves the next
+  // decaying trapezoid (the multi-hump defect). Past the deadline, the
+  // terminal path (dead-time-projected stop firing + exhaustion completion
+  // in tick()) owns the endgame; terminal accuracy is calibration work.
+  if (static_cast<int32_t>(now - phaseReplanDeadline_) >= 0) return;
+  if (linearElapsed(now) >= linear_.duration()) return;  // current plan exhausted
   if (static_cast<int32_t>(now - lastReplanMs_) < static_cast<int32_t>(kMinReplanInterval)) {
     return;
   }
@@ -259,7 +284,16 @@ void SegmentExecutor::maybeReplanTranslate(uint32_t now, const msg::MotorState& 
   Motion::JerkTrajectory::State state = linear_.sample(linearElapsed(now));
   float planRemainingMag = fabsf(linearTarget_ - state.position);
 
-  float divergence = fabsf(planRemainingMag - measuredRemainingMag);
+  // Model the actuation dead-time INTO the comparison: the plant
+  // legitimately lags the plan by kDeadTime, so the measured remaining is
+  // EXPECTED to read planRemaining + planSpeed*kDeadTime. Only divergence
+  // BEYOND that modeled lag is real (093's "delay in the plan", applied to
+  // the replan trigger) -- without this, the tail of every solve reads as
+  // divergent and re-solves a fresh decaying trapezoid: the multi-hump
+  // terminal defect.
+  float expectedRemainingMag =
+      planRemainingMag + fabsf(state.velocity) * kDeadTime;
+  float divergence = fabsf(expectedRemainingMag - measuredRemainingMag);
   if (divergence < kDivergenceThreshold) return;  // within tolerance -- no replan
 
   float planSpeedMag = fabsf(state.velocity);
@@ -284,6 +318,11 @@ void SegmentExecutor::maybeReplanTranslate(uint32_t now, const msg::MotorState& 
 
 void SegmentExecutor::maybeReplanPivot(uint32_t now, const msg::MotorState& encLeft,
                                        const msg::MotorState& encRight) {
+  // Mid-plan divergence correction only, inside the PHASE-anchored window --
+  // see maybeReplanTranslate()'s matching gate for the full cascade
+  // rationale (worst for pivots: counter-rotating wheels + stiction).
+  if (static_cast<int32_t>(now - phaseReplanDeadline_) >= 0) return;
+  if (rotationalElapsed(now) >= rotational_.duration()) return;  // current plan exhausted
   if (static_cast<int32_t>(now - lastReplanMs_) < static_cast<int32_t>(kMinReplanInterval)) {
     return;
   }
@@ -312,7 +351,11 @@ void SegmentExecutor::maybeReplanPivot(uint32_t now, const msg::MotorState& encL
   Motion::JerkTrajectory::State state = rotational_.sample(rotationalElapsed(now));
   float planRemainingRad = fabsf(rotationalTarget_ - state.position);
 
-  float divergence = fabsf(planRemainingRad - measuredRemainingRad);
+  // Dead-time lag modeled into the comparison -- see maybeReplanTranslate()'s
+  // matching block for the full rationale.
+  float expectedRemainingRad =
+      planRemainingRad + fabsf(state.velocity) * kDeadTime;
+  float divergence = fabsf(expectedRemainingRad - measuredRemainingRad);
   if (divergence < kRotDivergenceThreshold) return;  // within tolerance -- no replan
 
   float planSpeedMagRad = fabsf(state.velocity);
@@ -399,17 +442,53 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
     }
   } else {
     bool fired = false;
-    for (uint8_t i = 0; i < stopsCount_; ++i) {
-      Motion::StopEvalResult r = Motion::evaluateStopCondition(stops_[i], baseline_, now, encLeft,
-                                                               encRight, msg::PoseEstimate{});
-      if (r == Motion::StopEvalResult::FIRED) {
+    // Dead-time-projected firing for the encoder stops (the 093 spike's
+    // "delay in the plan", applied to the terminal edge): the plant lags the
+    // plan by kDeadTime, so a raw-threshold stop is systematically reached
+    // ~plannedSpeed*kDeadTime SHORT of target -- the old behavior was to let
+    // the plan exhaust undershot and have the divergence replan launch a
+    // fresh (decaying) trapezoid, over and over: the multi-hump pivot
+    // defect. Instead, fire once the MEASURED remaining is within what the
+    // plant covers during the actuation lag (remaining <= plannedSpeed *
+    // kDeadTime) -- the in-flight motion carries it home.
+    for (uint8_t i = 0; i < stopsCount_ && !fired; ++i) {
+      const msg::StopCondition& cond = stops_[i];
+      if (cond.kind == msg::StopKind::STOP_DISTANCE ||
+          cond.kind == msg::StopKind::STOP_ROTATION) {
+        float remainingNative = 0.0f;   // [mm] (per-wheel arc mm for ROTATION)
+        Motion::StopEvalResult r = Motion::remainingToStop(
+            cond, baseline_, encLeft, encRight, msg::PoseEstimate{}, &remainingNative);
+        if (r == Motion::StopEvalResult::FIRED) {
+          fired = true;
+        } else if (r == Motion::StopEvalResult::NOT_FIRED) {
+          float plannedSpeedNative =   // [mm/s] plan speed in the stop's own native units
+              (phase_ == Phase::TRANSLATE)
+                  ? fabsf(linear_.sample(linearElapsed(now)).velocity)
+                  : fabsf(rotational_.sample(rotationalElapsed(now)).velocity) * arcScale_;
+          if (remainingNative <= plannedSpeedNative * kDeadTime) fired = true;
+        }
+        // UNSUPPORTED falls through as NOT_FIRED (defensive; these two kinds
+        // are always supported by remainingToStop()).
+      } else if (Motion::evaluateStopCondition(cond, baseline_, now, encLeft, encRight,
+                                               msg::PoseEstimate{}) ==
+                 Motion::StopEvalResult::FIRED) {
         fired = true;
-        break;
       }
-      // UNSUPPORTED is treated identically to NOT_FIRED (mirrors Planner's
-      // own stop-eval loop; this executor only ever appends STOP_ROTATION/
-      // STOP_DISTANCE/STOP_TIME, which are always SUPPORTED, but the
-      // defensive handling costs nothing).
+    }
+    // Plan exhaustion also completes the phase: if the profile has fully
+    // played out (plus one dead-time of grace for the plant to finish
+    // arriving) and the encoder stop STILL hasn't fired, the residual is
+    // terminal undershoot -- the exact thing the old code hunted after with
+    // fresh decaying re-solves (and, failing that, sat out the STOP_TIME
+    // net, stalling multi-segment sequences ~2.5s per pivot). Accept it and
+    // complete; residual accuracy is calibration work, not something a
+    // second trapezoid can fix.
+    if (!fired) {
+      float elapsed = (phase_ == Phase::TRANSLATE) ? linearElapsed(now)
+                                                    : rotationalElapsed(now);
+      float duration = (phase_ == Phase::TRANSLATE) ? linear_.duration()
+                                                     : rotational_.duration();
+      if (duration > 0.0f && elapsed >= duration + kDeadTime) fired = true;
     }
     if (fired) {
       stopping_ = true;

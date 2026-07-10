@@ -66,6 +66,12 @@ message DrivetrainState {
   bool       active             = 12;
   repeated float cmd            = 13  [(max_count) = 4];  // per-wheel post-governor commanded velocity mm/s (diagnostic: measured vel= vs commanded cmd=)
   repeated float acc            = 14  [(max_count) = 4];  // per-wheel measured acceleration mm/s^2, EMA-filtered in Drivetrain (raw d(vel)/dt is quantization noise -- see Drivetrain::updateAccelEma)
+  // busy: MOTION-in-progress (segment executing / direct drive commanded),
+  // distinct from `active` (the authority flag, which setNeutral() also sets
+  // TRUE -- holding neutral IS governing the pair, so `active` latches 1
+  // after the first STOP and can never mean "idle"). TLM's active= token
+  // reports THIS field.
+  bool       busy               = 15;
 }
 
 // Full drive configuration slice: geometry, PID gains, OTOS fusion, EKF noise.

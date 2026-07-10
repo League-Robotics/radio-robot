@@ -219,6 +219,14 @@ class SegmentExecutor {
   // whichever single phase is active at a time, exactly like Planner's
   // lastReplanMs_.
   uint32_t lastReplanMs_ = 0;  // [ms] last divergence-triggered replan (or phase-start) time
+
+  // Phase-anchored replan window (2026-07-09 multi-hump fix): replans are
+  // permitted only until this absolute deadline, set ONCE per phase from the
+  // ORIGINAL solve's duration (kReplanWindowFraction of it). Anchoring to
+  // the phase -- not the latest re-solve -- is what terminates the cascade:
+  // a per-plan window re-opens with every retarget/reanchor, so the tail of
+  // each re-solve could keep spawning the next (the decaying-hump defect).
+  uint32_t phaseReplanDeadline_ = 0;  // [ms] absolute
   static constexpr float kDivergenceThreshold = 3.0f;        // [mm]
   static constexpr float kGrossDivergenceThreshold = 40.0f;  // [mm]
   static constexpr uint32_t kMinReplanInterval = 60;         // [ms] shared, linear+rotational

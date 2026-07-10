@@ -298,6 +298,51 @@ def test_tlm_active_flag_is_zero_when_idle(sim):
     assert active == 0
 
 
+def test_tlm_active_clears_after_stop_settles(sim):
+    """REGRESSION (busy-vs-authority latch, 2026-07-09): `STOP` -> NEUTRAL
+    sets the AUTHORITY flag true (holding neutral IS governing the pair), so
+    a TLM active= sourced from it latched 1 after the first STOP ever sent
+    and could never mean "idle" again -- every hardware completion poll
+    (notebook, bench demos) ran to timeout. active= now reports
+    DrivetrainState.busy: it must return to 0 once the post-STOP decel has
+    settled."""
+    assert sim.command("S 150 150").strip() == "OK drive l=150 r=150"
+    sim.tick_for(500)
+    assert sim.command("STOP").strip() == "OK stop"
+    sim.tick_for(2000)   # ample settle for the graceful decel
+    _, _, _, _, active = _parse_tlm(sim.command("TLM"))
+    assert active == 0, "TLM active= stayed 1 after STOP settled (authority-flag latch)"
+
+
+def test_pivot_completes_promptly_single_peaked(sim):
+    """REGRESSION (multi-hump pivot + STOP_TIME stall, 2026-07-09): an
+    in-place turn must execute as ONE velocity peak (no decaying re-solve
+    humps) and report idle promptly after its plan exhausts -- not sit out
+    the ~2.5s STOP_TIME net. Single-peak check: once |vel_r| has exceeded
+    60 mm/s and then fallen below 20 mm/s, it must never rise above 40 mm/s
+    again."""
+    assert sim.command("MOVE 0 0 9000").strip() == "OK move dist=0 dir=0 fh=9000"
+    peaked = fallen = False
+    idle_at = None
+    for i in range(160):   # 3.84 s at 24 ms
+        sim.tick_for(24)
+        _, vel_r = sim.vel()
+        if abs(vel_r) > 60.0:
+            assert not fallen, f"second velocity hump at t={(i+1)*0.024:.2f}s (|vel_r|={vel_r})"
+            peaked = True
+        elif peaked and abs(vel_r) < 20.0:
+            fallen = True
+        if fallen and abs(vel_r) > 40.0:
+            raise AssertionError(f"pivot re-accelerated after settling (|vel_r|={vel_r})")
+        if idle_at is None and fallen:
+            _, _, _, _, active = _parse_tlm(sim.command("TLM"))
+            if active == 0:
+                idle_at = (i + 1) * 0.024
+    assert peaked, "pivot never drove"
+    assert idle_at is not None and idle_at < 3.0, \
+        f"pivot did not report idle promptly (idle_at={idle_at})"
+
+
 # ---------------------------------------------------------------------------
 # Timing/ordering guarantees (architecture-update.md Section 5).
 # ---------------------------------------------------------------------------

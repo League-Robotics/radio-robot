@@ -372,6 +372,17 @@ msg::DrivetrainState Drivetrain::state() const {
     // DIRECT-mode/authority path.
     s.active = active_ || (segmentMode_ && executor_.active());
 
+    // busy -- MOTION in progress, the flag TLM's active= token actually
+    // reports (094 OOP fix). `active_` is the pre-079 AUTHORITY flag:
+    // setNeutral() sets it TRUE too (holding neutral IS governing the bound
+    // pair), so it latches 1 after the first STOP ever sent and can never
+    // mean "idle" -- the notebook/bench completion polls were reading a
+    // permanently-1 flag. Segment mode: busy while the executor has a phase
+    // in flight (incl. its trailing graceful decel). Direct mode: busy while
+    // a WHEELS/TWIST drive command is the standing mode (S...STOP window).
+    s.busy = segmentMode_ ? executor_.active()
+                          : (mode_ == Mode::WHEELS || mode_ == Mode::TWIST);
+
     return s;
 }
 

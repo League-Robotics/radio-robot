@@ -162,8 +162,14 @@ void scenarioStraightSegmentSkipsBothPivots() {
   checkFalse(everReversedOmega, "commanded omega never leaves ~0 (no pivot phases ran)");
   checkFloatNear(last.v_x, 0.0f, 1e-3f, "final commanded v_x settles to 0");
   checkFloatNear(last.omega, 0.0f, 1e-6f, "final commanded omega stays exactly 0");
-  checkFloatNear(plant.encL, 500.0f, 5.0f, "left encoder travels ~500mm");
-  checkFloatNear(plant.encR, 500.0f, 5.0f, "right encoder travels ~500mm");
+  // Tolerance widened 5 -> 15 (dead-time-projected terminal firing,
+  // 2026-07-09): the stop now fires when remaining <= plannedSpeed*kDeadTime
+  // so a REAL plant's in-flight actuation lag carries it home -- this
+  // harness's ZERO-lag plant therefore lands up to ~v_tail*kDeadTime short
+  // by design. The terminal contract is single-profile/no-reverse/prompt
+  // completion; absolute travel accuracy is calibration work.
+  checkFloatNear(plant.encL, 500.0f, 15.0f, "left encoder travels ~500mm");
+  checkFloatNear(plant.encR, 500.0f, 15.0f, "right encoder travels ~500mm");
   checkTrue(ticks < 400, "converges before the safety net exhausts all 400 ticks");
 }
 
@@ -202,8 +208,10 @@ void scenarioTranslateThenTerminalPivot() {
   // (the TERMINAL_PIVOT phase, 1.0 rad * 150mm = 150mm).
   float avg = (plant.encL + plant.encR) * 0.5f;
   float diff = plant.encR - plant.encL;
-  checkFloatNear(avg, 300.0f, 8.0f, "average encoder travel matches the 300mm TRANSLATE distance");
-  checkFloatNear(diff, 150.0f, 8.0f, "encoder differential matches the 1.0rad TERMINAL_PIVOT arc");
+  // Tolerances widened 8 -> 15 (dead-time-projected terminal firing) -- see
+  // the straight-segment scenario's matching comment.
+  checkFloatNear(avg, 300.0f, 15.0f, "average encoder travel matches the 300mm TRANSLATE distance");
+  checkFloatNear(diff, 150.0f, 15.0f, "encoder differential matches the 1.0rad TERMINAL_PIVOT arc");
   checkTrue(ticks < 600, "converges before the safety net exhausts all 600 ticks");
 }
 
@@ -240,7 +248,9 @@ void scenarioPureInPlaceTurnSkipsTranslate() {
   float avg = (plant.encL + plant.encR) * 0.5f;
   float diff = plant.encR - plant.encL;
   checkFloatNear(avg, 0.0f, 3.0f, "average encoder travel stays ~0 -- no TRANSLATE occurred");
-  checkFloatNear(diff, 0.8f * kTrackwidth, 8.0f, "encoder differential matches the 0.8rad PRE_PIVOT arc");
+  // Tolerance widened 8 -> 15 (dead-time-projected terminal firing) -- see
+  // the straight-segment scenario's matching comment.
+  checkFloatNear(diff, 0.8f * kTrackwidth, 15.0f, "encoder differential matches the 0.8rad PRE_PIVOT arc");
   checkTrue(ticks < 400, "converges before the safety net exhausts all 400 ticks");
 }
 
