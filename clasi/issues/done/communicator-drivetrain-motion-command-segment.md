@@ -1,6 +1,9 @@
 ---
-status: pending
+status: done
 sprint: 094
+tickets:
+- 094-006
+- 094-007
 ---
 
 # Communicator-issued drivetrain motion command (drive the motion planner directly)
@@ -78,6 +81,16 @@ internals). Specifically:
 - `simplify-the-main-loop-strip-it-to-bare-wheel-driving.md` +
   `get-wire-output-events-telemetry-out-of-the-main-loop.md` (the gutted loop and
   the wire-output drain seam this command's completion event uses).
+
+## Closed 2026-07-09 — delivered by sprint 094 (+ teleop OOP follow-on)
+
+`MOVE` (parse → `Motion::Segment` → `bb.segmentIn`, ticket 094-006) and
+`MOVER` (REPLACE-semantics deadman-velocity segment, stakeholder-designed
+OOP follow-on, commit `8306edf6`) are live, alongside re-parsed `D`/`T`/`RT`
+and the preserved `S`/`STOP` escape hatch. Bench-verified on the stand via
+extended stakeholder teleop sessions (see ticket 094-007 completion notes);
+sprint 094 closed at v0.20260709.17. Completion events remain pull-based
+(`TLM`), per the sprint's deferred-decision record.
 
 ## Verification (bench, on the stand)
 

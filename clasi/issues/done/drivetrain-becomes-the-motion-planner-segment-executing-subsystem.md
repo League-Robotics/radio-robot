@@ -1,6 +1,14 @@
 ---
-status: pending
+status: done
 sprint: 094
+tickets:
+- 094-001
+- 094-002
+- 094-003
+- 094-004
+- 094-005
+- 094-006
+- 094-007
 ---
 
 # Drivetrain becomes the motion planner (segment-executing subsystem)
@@ -114,8 +122,8 @@ current TLM semantic that `enc=`/`vel=` are *measured*, not the commanded
 "publishes its state" goal. Populate via the loop-output drain seam from the
 gut-the-loop issue, not synchronous emit.
 
-> **Status note 2026-07-09 (triage):** implemented by sprint 094 (in
-> stakeholder review) — close this issue when 094 closes. One loose end:
+> **Closed 2026-07-09:** delivered by sprint 094 (tickets 001–007), closed at
+> v0.20260709.17 after the stakeholder's bench verdict. One loose end:
 > the §7 jerk **wire keys** (`SET jmax`/`yawjmax`) cannot be live because the
 > whole `SET`/`GET` config family is unregistered on the gutted surface
 > (`buildTable()`, `source/runtime/command_router.cpp`). Whether the config
