@@ -42,6 +42,7 @@ it.
 from __future__ import annotations
 
 import base64
+import contextlib
 import queue
 
 import pytest
@@ -183,9 +184,14 @@ class _ConfigLoopbackSerial:
     def __init__(self, snapshot_by_target: dict[int, "envelope_pb2.ConfigSnapshot"] | None = None):
         self._pending: queue.Queue = queue.Queue()
         self.sent_envelopes: list[envelope_pb2.CommandEnvelope] = []
+        # 097-002: raw armored lines actually written, for tests that assert
+        # the literal wire bytes (not just the decoded envelope) -- see e.g.
+        # test_set_config_single_drivetrain_key_sends_binary_and_returns_applied.
+        self.raw_writes: list[bytes] = []
         self._snapshot_by_target = snapshot_by_target or {}
 
     def write(self, data: bytes) -> int:
+        self.raw_writes.append(data)
         text = data.decode("ascii").strip()
         if text.startswith("*B"):
             raw = base64.b64decode(text[2:])
@@ -383,6 +389,471 @@ def test_set_config_binary_not_connected_returns_none():
     ack = proto.set_config_binary(envelope_pb2.ConfigDelta(watchdog=1000), read_timeout=50)
 
     assert ack is None
+
+
+# ---------------------------------------------------------------------------
+# 3. NezhaProtocol's ten-method core conversion (097-002, M2)
+#
+# ping/echo/get_id/get_ver/stop/drive/timed/distance/get_config/set_config:
+# each now builds a CommandEnvelope and round-trips it via
+# SerialConnection.send_envelope(), same no-hardware pattern as section 2
+# above. get_config()/set_config() reuse _ConfigLoopbackSerial (already
+# established above); the other eight need a broader per-arm fake since they
+# touch ping/echo/id/stop/drive/segment, not just config/get.
+# ---------------------------------------------------------------------------
+
+class _UniversalLoopbackSerial:
+    """Generic mock transport for the ten-method conversion tests.
+
+    Records every raw `*B<base64>` LINE actually written (``raw_writes`` --
+    the literal bytes handed to write(), what this ticket's own acceptance
+    criterion asks a test to assert against) and every decoded
+    CommandEnvelope (``sent_envelopes``), then synthesizes a reply keyed off
+    the request's own oneof arm -- mirroring BinaryChannel's per-arm handlers
+    (source/commands/binary_channel.cpp: handlePing/handleEcho/handleId/
+    handleStop/handleDrive/handleSegment) closely enough to exercise
+    NezhaProtocol's full envelope round trip with no real serial port.
+    """
+
+    is_open = True
+
+    def __init__(self, *, ping_t: int = 0,
+                id_reply: "envelope_pb2.DeviceId | None" = None,
+                ack_q: int = 0, ack_rem: float = 0.0):
+        self._pending: queue.Queue = queue.Queue()
+        self.raw_writes: list[bytes] = []
+        self.sent_envelopes: list[envelope_pb2.CommandEnvelope] = []
+        self._ping_t = ping_t
+        self._id_reply = id_reply if id_reply is not None else envelope_pb2.DeviceId(
+            model="NEZHA2", name="TESTBOT", serial=99,
+            fw_version="v0.0.0-test", proto_version=3)
+        self._ack_q = ack_q
+        self._ack_rem = ack_rem
+
+    def write(self, data: bytes) -> int:
+        self.raw_writes.append(data)
+        text = data.decode("ascii").strip()
+        if not text.startswith("*B"):
+            return len(data)
+        raw = base64.b64decode(text[2:])
+        cmd = envelope_pb2.CommandEnvelope.FromString(raw)
+        self.sent_envelopes.append(cmd)
+
+        reply = envelope_pb2.ReplyEnvelope(corr_id=cmd.corr_id)
+        which = cmd.WhichOneof("cmd")
+        if which == "ping":
+            reply.ok.q = 0
+            reply.ok.rem = 0.0
+            reply.ok.t = self._ping_t
+        elif which == "echo":
+            reply.echo.payload = cmd.echo.payload
+        elif which == "id":
+            reply.id.CopyFrom(self._id_reply)
+        elif which in ("stop", "drive", "segment", "replace"):
+            reply.ok.q = self._ack_q
+            reply.ok.rem = self._ack_rem
+            reply.ok.t = 0
+        else:
+            reply.err.code = envelope_pb2.ERR_UNIMPLEMENTED
+        armored = "*B" + base64.b64encode(reply.SerializeToString()).decode("ascii")
+        self._pending.put((armored + "\n").encode("ascii"))
+        return len(data)
+
+    def flush(self) -> None:
+        pass
+
+    def readline(self) -> bytes:
+        try:
+            return self._pending.get(timeout=0.2)
+        except queue.Empty:
+            return b""
+
+
+@contextlib.contextmanager
+def _connected_proto(fake):
+    """A NezhaProtocol wired to `fake` with the real reader thread running
+    (torn down on exit) -- the shared setup every test below needs."""
+    conn = SerialConnection()
+    conn._ser = fake
+    conn._start_reader()
+    try:
+        yield NezhaProtocol(conn)
+    finally:
+        conn._stop_reader()
+
+
+def _assert_wire_bytes_match(fake, index: int, reference: "envelope_pb2.CommandEnvelope") -> None:
+    """Assert the `index`-th raw line actually written to `fake` is the
+    `*B<base64>` armoring of `reference` (corr_id already matched by the
+    caller) -- the literal wire bytes, not just a decoded-field comparison."""
+    expected = ("*B" + base64.b64encode(reference.SerializeToString()).decode("ascii") + "\n")
+    assert fake.raw_writes[index] == expected.encode("ascii")
+
+
+def test_ping_sends_binary_envelope_and_returns_t_and_rtt():
+    fake = _UniversalLoopbackSerial(ping_t=54321)
+    with _connected_proto(fake) as proto:
+        result = proto.ping()
+
+    assert result is not None
+    t_robot, rtt = result
+    assert t_robot == 54321
+    assert rtt >= 0.0
+
+    assert len(fake.sent_envelopes) == 1
+    sent = fake.sent_envelopes[0]
+    assert sent.WhichOneof("cmd") == "ping"
+    reference = envelope_pb2.CommandEnvelope(corr_id=sent.corr_id, ping=envelope_pb2.Ping())
+    assert sent.SerializeToString() == reference.SerializeToString()
+    _assert_wire_bytes_match(fake, 0, reference)
+
+
+def test_ping_returns_none_on_timeout():
+    fake = _NoReplySerial()
+    with _connected_proto(fake) as proto:
+        result = proto.ping()
+    assert result is None
+
+
+def test_echo_sends_binary_envelope_and_returns_payload():
+    fake = _UniversalLoopbackSerial()
+    with _connected_proto(fake) as proto:
+        result = proto.echo("hello robot")
+
+    assert result == "hello robot"
+    sent = fake.sent_envelopes[0]
+    assert sent.WhichOneof("cmd") == "echo"
+    assert sent.echo.payload == b"hello robot"
+    reference = envelope_pb2.CommandEnvelope(
+        corr_id=sent.corr_id, echo=envelope_pb2.Echo(payload=b"hello robot"))
+    assert sent.SerializeToString() == reference.SerializeToString()
+    _assert_wire_bytes_match(fake, 0, reference)
+
+
+def test_get_id_sends_binary_envelope_and_returns_dict():
+    id_reply = envelope_pb2.DeviceId(
+        model="NEZHA2", name="GUTOV", serial=2121102,
+        fw_version="v0.20260710.1", proto_version=3)
+    fake = _UniversalLoopbackSerial(id_reply=id_reply)
+    with _connected_proto(fake) as proto:
+        result = proto.get_id()
+
+    assert result == {
+        "model": "NEZHA2",
+        "name": "GUTOV",
+        "serial": "2121102",
+        "fw": "v0.20260710.1",
+        "proto": "3",
+    }
+    sent = fake.sent_envelopes[0]
+    assert sent.WhichOneof("cmd") == "id"
+    reference = envelope_pb2.CommandEnvelope(corr_id=sent.corr_id, id=envelope_pb2.DeviceId())
+    assert sent.SerializeToString() == reference.SerializeToString()
+    _assert_wire_bytes_match(fake, 0, reference)
+
+
+def test_get_ver_sends_the_same_id_arm_and_returns_fw_proto_subset():
+    """097-002 acceptance criterion: get_ver()'s fw/proto keys come from the
+    binary `id` arm's DeviceId.fw_version/.proto_version -- no independent
+    binary `ver` arm exists."""
+    id_reply = envelope_pb2.DeviceId(
+        model="NEZHA2", name="GUTOV", serial=1,
+        fw_version="v0.20260710.1", proto_version=3)
+    fake = _UniversalLoopbackSerial(id_reply=id_reply)
+    with _connected_proto(fake) as proto:
+        result = proto.get_ver()
+
+    assert result == {"fw": "v0.20260710.1", "proto": "3"}
+    sent = fake.sent_envelopes[0]
+    assert sent.WhichOneof("cmd") == "id"  # NOT a separate "ver" arm
+
+
+def test_stop_sends_binary_envelope():
+    fake = _UniversalLoopbackSerial()
+    with _connected_proto(fake) as proto:
+        result = proto.stop()
+
+    assert result is None
+    sent = fake.sent_envelopes[0]
+    assert sent.WhichOneof("cmd") == "stop"
+    reference = envelope_pb2.CommandEnvelope(corr_id=sent.corr_id, stop=envelope_pb2.Stop())
+    assert sent.SerializeToString() == reference.SerializeToString()
+    _assert_wire_bytes_match(fake, 0, reference)
+
+
+def test_drive_sends_binary_envelope_with_wheel_targets():
+    fake = _UniversalLoopbackSerial()
+    with _connected_proto(fake) as proto:
+        result = proto.drive(200, -150)
+
+    assert result is None
+    sent = fake.sent_envelopes[0]
+    assert sent.WhichOneof("cmd") == "drive"
+    assert sent.drive.WhichOneof("control") == "wheels"
+    assert len(sent.drive.wheels.w) == 2
+    assert sent.drive.wheels.w[0].speed == pytest.approx(200.0)
+    assert sent.drive.wheels.w[1].speed == pytest.approx(-150.0)
+
+    reference = envelope_pb2.CommandEnvelope(corr_id=sent.corr_id)
+    reference.drive.wheels.w.add(speed=200.0)
+    reference.drive.wheels.w.add(speed=-150.0)
+    assert sent.SerializeToString() == reference.SerializeToString()
+    _assert_wire_bytes_match(fake, 0, reference)
+
+
+def test_drive_with_stop_arg_sends_no_wire_traffic():
+    """drive()'s `stop` kwarg has no binary wire home (093-001 already made
+    S reject stop=/sensor= with no motor effect on the text plane) -- the
+    binary implementation preserves "no motor effect" by sending nothing."""
+    fake = _UniversalLoopbackSerial()
+    with _connected_proto(fake) as proto:
+        result = proto.drive(200, 200, stop=["stop=t:100"])
+
+    assert result is None
+    assert fake.sent_envelopes == []
+    assert fake.raw_writes == []
+
+
+def test_timed_sends_segment_envelope_matching_legacy_translate():
+    fake = _UniversalLoopbackSerial(ack_q=2, ack_rem=50.0)
+    with _connected_proto(fake) as proto:
+        result = proto.timed(200, 200, 1000)
+
+    # handleT() transcription (legacy_translate.segment_for_timed): v=200,
+    # distance = 200 * (1000/1000) = 200.
+    assert result == ["OK drive l=200 r=200 ms=1000 q=2 rem=50.0"]
+    sent = fake.sent_envelopes[0]
+    assert sent.WhichOneof("cmd") == "segment"
+    assert sent.segment.distance == pytest.approx(200.0)
+    reference = envelope_pb2.CommandEnvelope(corr_id=sent.corr_id)
+    reference.segment.distance = 200.0
+    assert sent.SerializeToString() == reference.SerializeToString()
+    _assert_wire_bytes_match(fake, 0, reference)
+
+
+def test_timed_returns_empty_list_on_timeout():
+    fake = _NoReplySerial()
+    with _connected_proto(fake) as proto:
+        result = proto.timed(200, 200, 1000)
+    assert result == []
+
+
+def test_distance_sends_segment_envelope_matching_legacy_translate():
+    fake = _UniversalLoopbackSerial(ack_q=1, ack_rem=0.0)
+    with _connected_proto(fake) as proto:
+        result = proto.distance(-200, -200, 500)
+
+    # handleD() transcription (legacy_translate.segment_for_distance): v=-200
+    # (< 0) -> sign=-1, distance = -1 * 500 = -500.
+    assert result == ["OK drive l=-200 r=-200 mm=500 q=1 rem=0.0"]
+    sent = fake.sent_envelopes[0]
+    assert sent.WhichOneof("cmd") == "segment"
+    assert sent.segment.distance == pytest.approx(-500.0)
+    reference = envelope_pb2.CommandEnvelope(corr_id=sent.corr_id)
+    reference.segment.distance = -500.0
+    assert sent.SerializeToString() == reference.SerializeToString()
+    _assert_wire_bytes_match(fake, 0, reference)
+
+
+def test_distance_returns_empty_list_on_timeout():
+    fake = _NoReplySerial()
+    with _connected_proto(fake) as proto:
+        result = proto.distance(200, 200, 500)
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# 4. NezhaProtocol.get_config()/.set_config() (097-002) -- thin wrappers over
+# get_config_binary()/set_config_binary() (096-007); reuse
+# _ConfigLoopbackSerial (section 2 above) rather than inventing a new fake.
+# ---------------------------------------------------------------------------
+
+
+def test_set_config_single_drivetrain_key_sends_binary_and_returns_applied():
+    fake = _ConfigLoopbackSerial()
+    with _connected_proto(fake) as proto:
+        result = proto.set_config(tw=128)
+
+    assert result == {"tw": "128"}
+    assert len(fake.sent_envelopes) == 1
+    sent = fake.sent_envelopes[0]
+    assert sent.WhichOneof("cmd") == "config"
+    assert sent.config.WhichOneof("patch") == "drivetrain"
+    assert sent.config.drivetrain.trackwidth == pytest.approx(128.0)
+
+    reference = envelope_pb2.CommandEnvelope(
+        corr_id=sent.corr_id,
+        config=envelope_pb2.ConfigDelta(
+            drivetrain=config_pb2.DrivetrainConfigPatch(trackwidth=128.0)))
+    assert sent.SerializeToString() == reference.SerializeToString()
+    _assert_wire_bytes_match(fake, 0, reference)
+
+
+def test_set_config_watchdog_key_sends_binary_and_returns_applied():
+    fake = _ConfigLoopbackSerial()
+    with _connected_proto(fake) as proto:
+        result = proto.set_config(sTimeout=500)
+
+    assert result == {"sTimeout": "500"}
+    sent = fake.sent_envelopes[0]
+    assert sent.config.WhichOneof("patch") == "watchdog"
+    assert sent.config.watchdog == 500
+
+
+def test_set_config_motor_pid_key_applies_once_on_left_envelope():
+    """pid.* is applied to BOTH bound motors server-side from ONE patch
+    (handleConfigMotor(), binary_channel.cpp) -- set_config() must send only
+    ONE envelope for a pid.*-only call, not two."""
+    fake = _ConfigLoopbackSerial()
+    with _connected_proto(fake) as proto:
+        result = proto.set_config(**{"pid.kp": 1.5})
+
+    assert result == {"pid.kp": "1.5"}
+    assert len(fake.sent_envelopes) == 1
+    sent = fake.sent_envelopes[0]
+    assert sent.config.WhichOneof("patch") == "motor"
+    assert sent.config.motor.side == config_pb2.LEFT
+    assert sent.config.motor.kp == pytest.approx(1.5)
+
+
+def test_set_config_ml_and_mr_together_sends_two_motor_envelopes():
+    """ml/mr both patch MotorConfigPatch.travel_calib, disambiguated by
+    `side` -- a single MotorConfigPatch cannot carry both at once, so this
+    needs two envelopes (unlike the pid.* case above)."""
+    fake = _ConfigLoopbackSerial()
+    with _connected_proto(fake) as proto:
+        result = proto.set_config(ml=0.487, mr=0.481)
+
+    assert result == {"ml": "0.487", "mr": "0.481"}
+    assert len(fake.sent_envelopes) == 2
+    left, right = fake.sent_envelopes
+    assert left.config.motor.side == config_pb2.LEFT
+    assert left.config.motor.travel_calib == pytest.approx(0.487)
+    assert right.config.motor.side == config_pb2.RIGHT
+    assert right.config.motor.travel_calib == pytest.approx(0.481)
+
+
+def test_set_config_spans_multiple_targets_sends_one_envelope_per_target():
+    fake = _ConfigLoopbackSerial()
+    with _connected_proto(fake) as proto:
+        result = proto.set_config(tw=128, sTimeout=500)
+
+    assert result == {"tw": "128", "sTimeout": "500"}
+    assert len(fake.sent_envelopes) == 2
+    patches = {e.config.WhichOneof("patch") for e in fake.sent_envelopes}
+    assert patches == {"drivetrain", "watchdog"}
+
+
+def test_set_config_unknown_key_returns_none_with_no_wire_traffic():
+    fake = _ConfigLoopbackSerial()
+    with _connected_proto(fake) as proto:
+        result = proto.set_config(bogusKey=1)
+
+    assert result is None
+    assert fake.sent_envelopes == []
+
+
+def test_set_config_returns_none_when_a_target_times_out():
+    fake = _NoReplySerial()
+    with _connected_proto(fake) as proto:
+        result = proto.set_config(tw=128)
+    assert result is None
+
+
+def test_get_config_single_key_sends_one_envelope_and_returns_value():
+    canned = envelope_pb2.ConfigSnapshot(
+        target=config_pb2.CONFIG_DRIVETRAIN,
+        drivetrain=config_pb2.DrivetrainConfigPatch(trackwidth=128.0, rotational_slip=0.92))
+    fake = _ConfigLoopbackSerial(snapshot_by_target={config_pb2.CONFIG_DRIVETRAIN: canned})
+    with _connected_proto(fake) as proto:
+        result = proto.get_config("tw")
+
+    assert result == {"tw": "128"}
+    assert len(fake.sent_envelopes) == 1
+    sent = fake.sent_envelopes[0]
+    assert sent.WhichOneof("cmd") == "get"
+    assert sent.get.target == config_pb2.CONFIG_DRIVETRAIN
+    reference = envelope_pb2.CommandEnvelope(
+        corr_id=sent.corr_id, get=envelope_pb2.ConfigGet(target=config_pb2.CONFIG_DRIVETRAIN))
+    assert sent.SerializeToString() == reference.SerializeToString()
+    _assert_wire_bytes_match(fake, 0, reference)
+
+
+def test_get_config_multiple_keys_across_targets_sends_one_envelope_per_target():
+    dt_snap = envelope_pb2.ConfigSnapshot(
+        target=config_pb2.CONFIG_DRIVETRAIN,
+        drivetrain=config_pb2.DrivetrainConfigPatch(trackwidth=128.0))
+    wd_snap = envelope_pb2.ConfigSnapshot(target=config_pb2.CONFIG_WATCHDOG, watchdog=750)
+    fake = _ConfigLoopbackSerial(snapshot_by_target={
+        config_pb2.CONFIG_DRIVETRAIN: dt_snap,
+        config_pb2.CONFIG_WATCHDOG: wd_snap,
+    })
+    with _connected_proto(fake) as proto:
+        result = proto.get_config("tw", "sTimeout")
+
+    assert result == {"tw": "128", "sTimeout": "750"}
+    assert len(fake.sent_envelopes) == 2
+
+
+def test_get_config_no_keys_dumps_all_five_targets():
+    dt_snap = envelope_pb2.ConfigSnapshot(
+        target=config_pb2.CONFIG_DRIVETRAIN,
+        drivetrain=config_pb2.DrivetrainConfigPatch(
+            trackwidth=128.0, rotational_slip=0.92, ekf_q_xy=1.0, ekf_q_theta=2.0,
+            ekf_r_otos_xy=3.0, ekf_r_otos_theta=4.0))
+    left_snap = envelope_pb2.ConfigSnapshot(
+        target=config_pb2.CONFIG_MOTOR_LEFT,
+        motor=config_pb2.MotorConfigPatch(
+            side=config_pb2.LEFT, travel_calib=0.487, kp=1.5, ki=0.1, kff=0.05,
+            i_max=10.0, kaw=0.2))
+    right_snap = envelope_pb2.ConfigSnapshot(
+        target=config_pb2.CONFIG_MOTOR_RIGHT,
+        motor=config_pb2.MotorConfigPatch(side=config_pb2.RIGHT, travel_calib=0.481))
+    planner_snap = envelope_pb2.ConfigSnapshot(
+        target=config_pb2.CONFIG_PLANNER,
+        planner=config_pb2.PlannerConfigPatch(min_speed=50.0))
+    wd_snap = envelope_pb2.ConfigSnapshot(target=config_pb2.CONFIG_WATCHDOG, watchdog=500)
+    fake = _ConfigLoopbackSerial(snapshot_by_target={
+        config_pb2.CONFIG_DRIVETRAIN: dt_snap,
+        config_pb2.CONFIG_MOTOR_LEFT: left_snap,
+        config_pb2.CONFIG_MOTOR_RIGHT: right_snap,
+        config_pb2.CONFIG_PLANNER: planner_snap,
+        config_pb2.CONFIG_WATCHDOG: wd_snap,
+    })
+    with _connected_proto(fake) as proto:
+        result = proto.get_config()
+
+    assert len(fake.sent_envelopes) == 5
+    assert {e.get.target for e in fake.sent_envelopes} == {
+        config_pb2.CONFIG_DRIVETRAIN, config_pb2.CONFIG_MOTOR_LEFT,
+        config_pb2.CONFIG_MOTOR_RIGHT, config_pb2.CONFIG_PLANNER, config_pb2.CONFIG_WATCHDOG,
+    }
+    assert result == {
+        "tw": "128",
+        "ml": "0.487",
+        "mr": "0.481",
+        "pid.kp": "1.5",
+        "pid.ki": "0.1",
+        "pid.kff": "0.05",
+        "pid.iMax": "10",
+        "pid.kaw": "0.2",
+        "rotSlip": "0.92",
+        "ekfQxy": "1",
+        "ekfQtheta": "2",
+        "ekfROtosXy": "3",
+        "ekfROtosTheta": "4",
+        "minSpeed": "50",
+        "sTimeout": "500",
+    }
+
+
+def test_get_config_unknown_key_returns_none_with_no_wire_traffic():
+    fake = _ConfigLoopbackSerial()
+    with _connected_proto(fake) as proto:
+        result = proto.get_config("bogusKey")
+
+    assert result is None
+    assert fake.sent_envelopes == []
 
 
 if __name__ == "__main__":

@@ -42,7 +42,14 @@ from robot_radio.io.serial_conn import SerialConnection
 # robot_radio.robot's own __init__.py is still mid-execution (which is
 # always the case when this module is first loaded -- __init__.py imports
 # this module itself) never re-enters a partially-initialized module.
-from robot_radio.robot.pb2 import envelope_pb2, planner_pb2, telemetry_pb2
+from robot_radio.robot.pb2 import config_pb2, drivetrain_pb2, envelope_pb2, planner_pb2, telemetry_pb2
+
+# legacy_translate (097-002, M4 Legacy Verb Translator): pure/stateless
+# verb -> pb2-message functions, no SerialConnection/I/O reference. Same
+# "no circular-import hazard" reasoning as the robot.pb2 import above --
+# robot_radio.robot.legacy_translate depends only on robot_radio.robot.pb2,
+# never back onto robot_radio.robot's own __init__.py or this module.
+from robot_radio.robot import legacy_translate
 
 
 # ---------------------------------------------------------------------------
@@ -525,6 +532,114 @@ def parse_cfg(line: str) -> dict[str, str] | None:
 
 
 # ---------------------------------------------------------------------------
+# Config key <-> binary target/field mapping (097-002, M2 NezhaProtocol Core
+# Conversion). NezhaProtocol.get_config()/.set_config() keep their text-plane
+# **kwargs/*keys signature -- a flat "wire key" vocabulary -- but the binary
+# plane's ConfigDelta/ConfigGet/ConfigSnapshot (config.proto, 096-001) are
+# typed, per-SLICE Patch messages, not a generic key/value map. This table is
+# the translation between the two: it curates the SAME 15 keys
+# config_commands.cpp's kAllKeys registers on the text plane (that file's own
+# list, transcribed here -- config.proto's own header comment already
+# establishes the 1:1 correspondence between kAllKeys and the three curated
+# Patch messages, so this map does not invent anything new). A key not in
+# this table has no binary wire target at all (mirrors the text plane's own
+# ERR badkey -- see get_config()/set_config()'s own docstrings for the
+# resulting behavior).
+# ---------------------------------------------------------------------------
+
+# tw/rotSlip/ekfQxy/ekfQtheta/ekfROtosXy/ekfROtosTheta -> DrivetrainConfigPatch
+# field, config_pb2.CONFIG_DRIVETRAIN.
+_DRIVETRAIN_KEYS = {
+    "tw": "trackwidth",
+    "rotSlip": "rotational_slip",
+    "ekfQxy": "ekf_q_xy",
+    "ekfQtheta": "ekf_q_theta",
+    "ekfROtosXy": "ekf_r_otos_xy",
+    "ekfROtosTheta": "ekf_r_otos_theta",
+}
+
+# pid.kp/ki/kff/iMax/kaw -> MotorConfigPatch Gains field. Applied to BOTH
+# bound motors from a SINGLE patch server-side (handleConfigMotor(),
+# binary_channel.cpp -- "any present Gains field applies to BOTH bound
+# motors unconditionally... never a per-side Gains split"), so a set_config()
+# call needs only ONE motor envelope carrying these, never two. Read back
+# from the LEFT motor's snapshot (config_commands.cpp's own
+# formatConfigKeyFromBb() comment: "pid.* reads the LEFT bound motor's
+# published config").
+_MOTOR_PID_KEYS = {
+    "pid.kp": "kp",
+    "pid.ki": "ki",
+    "pid.kff": "kff",
+    "pid.iMax": "i_max",
+    "pid.kaw": "kaw",
+}
+
+# minSpeed -> PlannerConfigPatch.min_speed, config_pb2.CONFIG_PLANNER.
+_PLANNER_KEYS = {"minSpeed": "min_speed"}
+
+# ml/mr and sTimeout are handled specially, not via a plain field-name map:
+#   - ml/mr both patch MotorConfigPatch.travel_calib, disambiguated by
+#     `side` (Decision 5, config.proto) -- ml=LEFT, mr=RIGHT.
+#   - sTimeout is ConfigDelta's bare `watchdog` oneof arm (uint32, NOT a
+#     message-typed Patch -- Open Question 4, config.proto), routed
+#     straight to bb.streamWatchdogWindowIn, never bb.configIn.
+_ALL_SET_KEYS = frozenset(
+    set(_DRIVETRAIN_KEYS) | set(_MOTOR_PID_KEYS) | set(_PLANNER_KEYS)
+    | {"ml", "mr", "sTimeout"})
+
+# get_config()'s target-per-key lookup (which ConfigGet.target a given key's
+# CURRENT value is read from). pid.* reads LEFT (see _MOTOR_PID_KEYS above).
+_TARGET_FOR_KEY: dict[str, int] = {}
+_TARGET_FOR_KEY.update({k: config_pb2.CONFIG_DRIVETRAIN for k in _DRIVETRAIN_KEYS})
+_TARGET_FOR_KEY.update({k: config_pb2.CONFIG_MOTOR_LEFT for k in _MOTOR_PID_KEYS})
+_TARGET_FOR_KEY["ml"] = config_pb2.CONFIG_MOTOR_LEFT
+_TARGET_FOR_KEY["mr"] = config_pb2.CONFIG_MOTOR_RIGHT
+_TARGET_FOR_KEY.update({k: config_pb2.CONFIG_PLANNER for k in _PLANNER_KEYS})
+_TARGET_FOR_KEY["sTimeout"] = config_pb2.CONFIG_WATCHDOG
+
+# get_config() with no keys: the full dump, in kAllKeys' own order
+# (config_commands.cpp) -- not required for correctness (dict order is not a
+# documented part of get_config()'s contract) but keeps a printed/iterated
+# result stable and diffable against the text plane's own dump order.
+_ALL_GET_KEYS = (
+    "tw", "ml", "mr",
+    "pid.kp", "pid.ki", "pid.kff", "pid.iMax", "pid.kaw",
+    "rotSlip",
+    "ekfQxy", "ekfQtheta", "ekfROtosXy", "ekfROtosTheta",
+    "minSpeed", "sTimeout",
+)
+
+
+def _format_config_value(value: Any) -> str:
+    """Format a set_config() kwarg value into the SAME string shape the
+    text plane's set_config() already produced -- floats to 6 significant
+    digits, everything else via str(). Reused as-is from the pre-097-002
+    text implementation (the formatting rule itself did not change)."""
+    if isinstance(value, float):
+        return f"{value:.6g}"
+    return str(value)
+
+
+def _read_config_snapshot_value(key: str, snapshot: "envelope_pb2.ConfigSnapshot") -> str | None:
+    """Read one get_config() key's current value out of the ConfigSnapshot
+    for the target _TARGET_FOR_KEY[key] names. BinaryChannel's handleGet()
+    (binary_channel.cpp) always populates EVERY field of a target's Patch on
+    a GET reply (no partial-presence case to handle here -- unlike a SET
+    delta, a GET snapshot is a full read of the target's current state)."""
+    if key in _DRIVETRAIN_KEYS:
+        return _format_config_value(getattr(snapshot.drivetrain, _DRIVETRAIN_KEYS[key]))
+    if key in ("ml", "mr"):
+        return _format_config_value(snapshot.motor.travel_calib)
+    if key in _MOTOR_PID_KEYS:
+        return _format_config_value(getattr(snapshot.motor, _MOTOR_PID_KEYS[key]))
+    if key in _PLANNER_KEYS:
+        return _format_config_value(snapshot.planner.min_speed)
+    if key == "sTimeout":
+        return str(snapshot.watchdog)
+    return None
+
+
+# ---------------------------------------------------------------------------
 # NezhaProtocol
 # ---------------------------------------------------------------------------
 
@@ -597,56 +712,88 @@ class NezhaProtocol:
     # ------------------------------------------------------------------
 
     def ping(self, corr_id: str | None = None) -> tuple[int, float] | None:
-        """Send PING, parse OK pong t=<t_robot> (ms).
+        """Send PING, parse the reply's robot-clock timestamp (ms).
 
         Returns (t_robot, rtt) or None if no valid response, both in ms.
         rtt is the round-trip time measured by this call.
+
+        Binary implementation (097-002, M2 NezhaProtocol Core Conversion):
+        CommandEnvelope{ping: Ping{}} via send_envelope() -- the Ack reply's
+        `t` field (set only by BinaryChannel's ping arm, mirroring text
+        PING's `OK pong t=<ms>`) is `t_robot`. `corr_id` is accepted for
+        signature compatibility but has no binary wire home -- the
+        envelope's own corr_id field is fully owned/overwritten by
+        SerialConnection.send_envelope() for reply routing, unlike the text
+        plane's independent trailing '#<id>' token. No caller in this tree
+        passes it today (grep-verified); contract (return type/shape)
+        unchanged.
         """
-        cmd = "PING" if corr_id is None else f"PING #{corr_id}"
+        envelope = envelope_pb2.CommandEnvelope(ping=envelope_pb2.Ping())
         t0 = time.monotonic()
-        resp_dict = self._conn.send(cmd, read_timeout=500)
+        result = self._conn.send_envelope(envelope, read_timeout=500)
         t1 = time.monotonic()
         rtt = (t1 - t0) * 1000.0  # [ms]
 
-        for raw_line in resp_dict.get("responses", []):
-            r = parse_response(raw_line)
-            if r and r.tag == "OK" and r.tokens and r.tokens[0] == "pong":
-                if "t" in r.kv:
-                    try:
-                        return (int(r.kv["t"]), rtt)
-                    except ValueError:
-                        pass
+        reply = result.get("reply")
+        if reply is not None and reply.WhichOneof("body") == "ok":
+            return (int(reply.ok.t), rtt)
         return None
 
     def echo(self, payload: str) -> str | None:
-        """Send ECHO <payload>, return echoed payload string or None."""
-        resp_dict = self._conn.send(f"ECHO {payload}", read_timeout=500)
-        for raw_line in resp_dict.get("responses", []):
-            r = parse_response(raw_line)
-            if r and r.tag == "OK" and r.tokens and r.tokens[0] == "echo":
-                # Payload follows "OK echo " in the stripped line.
-                prefix = "OK echo "
-                s = _strip_relay(raw_line)
-                if s.startswith(prefix):
-                    return s[len(prefix):].rstrip()
+        """Send ECHO <payload>, return echoed payload string or None.
+
+        Binary implementation (097-002): CommandEnvelope{echo: Echo{payload}}
+        via send_envelope(); the reply's echo arm carries the payload back
+        verbatim (envelope.proto's own "reuse the request-side message on
+        the reply side" pattern). Contract (return type/shape) unchanged.
+        """
+        envelope = envelope_pb2.CommandEnvelope(
+            echo=envelope_pb2.Echo(payload=payload.encode("utf-8")))
+        result = self._conn.send_envelope(envelope, read_timeout=500)
+        reply = result.get("reply")
+        if reply is not None and reply.WhichOneof("body") == "echo":
+            return reply.echo.payload.decode("utf-8")
         return None
 
     def get_id(self) -> dict[str, str] | None:
-        """Send ID command. Returns kv dict (model, name, serial, fw, proto, caps) or None."""
-        resp_dict = self._conn.send("ID", read_timeout=500)
-        for raw_line in resp_dict.get("responses", []):
-            r = parse_response(raw_line)
-            if r and r.tag == "ID":
-                return dict(r.kv)
+        """Send ID command. Returns kv dict (model, name, serial, fw, proto, caps) or None.
+
+        Binary implementation (097-002): CommandEnvelope{id: DeviceId{}}
+        (empty request, envelope.proto Decision 4) via send_envelope(); the
+        reply's DeviceId fields (model/name/serial/fw_version/proto_version)
+        map onto the SAME kv keys the text ID reply's `handleId()`
+        (system_commands.cpp) emits today -- `caps=` is not emitted by
+        either plane (that field was dropped pre-097; see handleId()'s own
+        comment). Contract (return type/shape) unchanged.
+        """
+        envelope = envelope_pb2.CommandEnvelope(id=envelope_pb2.DeviceId())
+        result = self._conn.send_envelope(envelope, read_timeout=500)
+        reply = result.get("reply")
+        if reply is not None and reply.WhichOneof("body") == "id":
+            d = reply.id
+            return {
+                "model": d.model,
+                "name": d.name,
+                "serial": str(d.serial),
+                "fw": d.fw_version,
+                "proto": str(d.proto_version),
+            }
         return None
 
     def get_ver(self) -> dict[str, str] | None:
-        """Send VER command. Returns kv dict (fw, proto) or None."""
-        resp_dict = self._conn.send("VER", read_timeout=500)
-        for raw_line in resp_dict.get("responses", []):
-            r = parse_response(raw_line)
-            if r and r.tag == "OK" and r.tokens and r.tokens[0] == "ver":
-                return dict(r.kv)
+        """Send VER command. Returns kv dict (fw, proto) or None.
+
+        Binary implementation (097-002): VER's content is a strict SUBSET of
+        ID's reply -- no independent binary `ver` arm exists or is added
+        (architecture-update.md (097) M2). Sends the SAME CommandEnvelope{id:
+        DeviceId{}} get_id() does and reads only fw_version/proto_version off
+        the reply. Contract (return type/shape) unchanged.
+        """
+        envelope = envelope_pb2.CommandEnvelope(id=envelope_pb2.DeviceId())
+        result = self._conn.send_envelope(envelope, read_timeout=500)
+        reply = result.get("reply")
+        if reply is not None and reply.WhichOneof("body") == "id":
+            return {"fw": reply.id.fw_version, "proto": str(reply.id.proto_version)}
         return None
 
     def get_help(self) -> str | None:
@@ -667,14 +814,40 @@ class NezhaProtocol:
 
         With no keys, returns the full config dump (all registered keys).
         Returns None if no CFG line was received.
+
+        Binary implementation (097-002): thin wrapper over get_config_binary()
+        (096-007). The text plane's single "GET [keys]" line becomes one
+        get_config_binary() round trip PER DISTINCT ConfigTarget the
+        requested keys span (module-level _TARGET_FOR_KEY) -- ConfigGet only
+        names one target per request (config.proto), unlike the text plane's
+        single free-form key list, so a multi-target request (or the full,
+        no-args dump, which spans all 5 targets) costs multiple round trips.
+        A key outside the module-level _ALL_SET_KEYS vocabulary has no
+        binary wire target -- returns None (mirrors the text plane's own ERR
+        badkey producing no CFG line). A target whose round trip times out
+        contributes no keys to the result (best-effort merge, matching the
+        text plane's own "merge every CFG line received" behavior across a
+        multi-line dump) rather than failing the whole call.
         """
-        cmd = ("GET " + " ".join(keys)) if keys else "GET"
-        resp_dict = self._conn.send(cmd, read_timeout=500)
+        requested = keys if keys else _ALL_GET_KEYS
+        if any(k not in _TARGET_FOR_KEY for k in requested):
+            return None
+
+        targets = sorted({_TARGET_FOR_KEY[k] for k in requested})
+        snapshots: dict[int, envelope_pb2.ConfigSnapshot] = {}
+        for target in targets:
+            snapshot = self.get_config_binary(target)
+            if snapshot is not None:
+                snapshots[target] = snapshot
+
         result: dict[str, str] = {}
-        for raw_line in resp_dict.get("responses", []):
-            r = parse_response(raw_line)
-            if r and r.tag == "CFG":
-                result.update(r.kv)
+        for key in requested:
+            snapshot = snapshots.get(_TARGET_FOR_KEY[key])
+            if snapshot is None:
+                continue
+            value = _read_config_snapshot_value(key, snapshot)
+            if value is not None:
+                result[key] = value
         return result if result else None
 
     def set_config(self, **kwargs: Any) -> dict[str, str] | None:
@@ -682,23 +855,84 @@ class NezhaProtocol:
 
         Returns dict of applied keys (from OK set response) or None.
         Floats are formatted with up to 6 significant digits.
+
+        Binary implementation (097-002): thin wrapper over set_config_binary()
+        (096-007). Unlike the text plane's single atomic SET line, a
+        ConfigDelta's oneof carries only ONE Patch at a time (config.proto),
+        so kwargs spanning multiple targets (e.g. tw= + sTimeout=) become
+        MULTIPLE set_config_binary() round trips, one per touched target --
+        NOT atomic across targets the way the single text SET line was
+        (flagged, not silently reconciled, per this project's "transcribe,
+        never re-derive; flag genuine gaps" discipline: a true cross-target
+        atomic SET is not achievable without new binary wire capability,
+        out of this sprint's scope). Any kwarg key outside the module-level
+        _ALL_SET_KEYS vocabulary fails the WHOLE call (returns None, no wire
+        traffic at all) -- mirrors the text plane's own atomic-SET "one bad
+        key rejects the whole line" posture (config_commands.cpp's own file
+        header). If every touched target's round trip Acks, the returned
+        dict echoes the kwargs actually sent (formatted the same way the
+        pre-097-002 text implementation formatted them) -- the binary Ack
+        carries no per-key echo the way the text "OK set ..." reply did, so
+        this is the closest same-shape substitute, not a wire round trip of
+        the applied value.
         """
         if not kwargs:
             return None
-        pairs = []
-        for k, v in kwargs.items():
-            if isinstance(v, float):
-                pairs.append(f"{k}={v:.6g}")
-            else:
-                pairs.append(f"{k}={v}")
-        cmd = "SET " + " ".join(pairs)
-        resp_dict = self._conn.send(cmd, read_timeout=500)
-        result: dict[str, str] = {}
-        for raw_line in resp_dict.get("responses", []):
-            r = parse_response(raw_line)
-            if r and r.tag == "OK" and r.tokens and r.tokens[0] == "set":
-                result.update(r.kv)
-        return result if result else None
+        if any(k not in _ALL_SET_KEYS for k in kwargs):
+            return None
+
+        drivetrain_patch: dict[str, float] = {}
+        motor_left_patch: dict[str, float] = {}
+        motor_right_patch: dict[str, float] = {}
+        planner_patch: dict[str, float] = {}
+        watchdog_value: int | None = None
+
+        for key, value in kwargs.items():
+            if key in _DRIVETRAIN_KEYS:
+                drivetrain_patch[_DRIVETRAIN_KEYS[key]] = float(value)
+            elif key == "ml":
+                motor_left_patch["travel_calib"] = float(value)
+            elif key == "mr":
+                motor_right_patch["travel_calib"] = float(value)
+            elif key in _MOTOR_PID_KEYS:
+                # Applied to BOTH bound motors server-side from ONE patch
+                # (handleConfigMotor(), binary_channel.cpp) -- carried on the
+                # LEFT envelope only; see _MOTOR_PID_KEYS' own comment.
+                motor_left_patch[_MOTOR_PID_KEYS[key]] = float(value)
+            elif key in _PLANNER_KEYS:
+                planner_patch[_PLANNER_KEYS[key]] = float(value)
+            elif key == "sTimeout":
+                watchdog_value = int(value)
+
+        ok = True
+        if drivetrain_patch:
+            delta = envelope_pb2.ConfigDelta(
+                drivetrain=config_pb2.DrivetrainConfigPatch(**drivetrain_patch))
+            if self.set_config_binary(delta) is None:
+                ok = False
+        if motor_left_patch:
+            delta = envelope_pb2.ConfigDelta(motor=config_pb2.MotorConfigPatch(
+                side=config_pb2.LEFT, **motor_left_patch))
+            if self.set_config_binary(delta) is None:
+                ok = False
+        if motor_right_patch:
+            delta = envelope_pb2.ConfigDelta(motor=config_pb2.MotorConfigPatch(
+                side=config_pb2.RIGHT, **motor_right_patch))
+            if self.set_config_binary(delta) is None:
+                ok = False
+        if planner_patch:
+            delta = envelope_pb2.ConfigDelta(
+                planner=config_pb2.PlannerConfigPatch(**planner_patch))
+            if self.set_config_binary(delta) is None:
+                ok = False
+        if watchdog_value is not None:
+            delta = envelope_pb2.ConfigDelta(watchdog=watchdog_value)
+            if self.set_config_binary(delta) is None:
+                ok = False
+
+        if not ok:
+            return None
+        return {key: _format_config_value(value) for key, value in kwargs.items()}
 
     # ------------------------------------------------------------------
     # Config: binary GET / SET (096-007, M6 Host Config/Telemetry Client)
@@ -760,8 +994,20 @@ class NezhaProtocol:
     # ------------------------------------------------------------------
 
     def stop(self) -> None:
-        """Stop motors immediately (STOP command)."""
-        self._conn.send_fast("STOP")
+        """Stop motors immediately (STOP command).
+
+        Binary implementation (097-002): CommandEnvelope{stop: Stop{}} via
+        send_envelope() -- a zero-field oneof arm that "cannot be
+        malformed" (envelope.proto Decision 3), byte-identical in spirit to
+        the text handleStop()'s own NEUTRAL/BRAKE construction. The STOP
+        bytes reach the wire immediately (send_envelope()'s write happens
+        before it blocks on the reply queue) -- no less safety-responsive
+        than the prior fire-and-forget send_fast("STOP"); only the Python
+        call itself now blocks briefly (<=300ms) for the discarded Ack.
+        Return type (None) unchanged.
+        """
+        envelope = envelope_pb2.CommandEnvelope(stop=envelope_pb2.Stop())
+        self._conn.send_envelope(envelope, read_timeout=300)
 
     def cancel(self) -> None:
         """Cancel the active motion command (hard stop). Sends X."""
@@ -838,11 +1084,28 @@ class NezhaProtocol:
         027-003 the firmware detects an active non-VW command and replies
         ``OK vw busy=<origin>`` without updating the command target.  Non-VW
         commands have a built-in TIME stop net and do not require keepalives.
+
+        Binary implementation (097-002): CommandEnvelope{drive:
+        DrivetrainCommand{wheels}} via send_envelope(), the per-wheel-speed
+        target legacy_translate.wheel_targets_for_drive() builds (handleS()'s
+        own construction, transcribed). ``stop`` has no binary wire home --
+        WheelTargets/DrivetrainCommand carry no stop-clause capability, and
+        the CURRENT text S handler (parseS(), motion_commands.cpp, 093-001)
+        already rejects any stop=/sensor= kv outright with ERR badarg (no
+        motor effect) -- and drive()'s prior fire-and-forget send_fast()
+        never read that ERR reply either, so passing ``stop`` was ALREADY a
+        silent no-motor-effect call before this conversion. This binary
+        implementation preserves that "no motor effect" outcome by sending
+        no envelope at all when ``stop`` is given, rather than silently
+        starting to drive (which the old text-plane behavior never did
+        either) -- kept as an unused-but-signature-compatible parameter.
         """
-        cmd = f"S {left} {right}"
         if stop:
-            cmd += " " + " ".join(stop)
-        self._conn.send_fast(cmd)
+            return
+        wheels = legacy_translate.wheel_targets_for_drive(left, right)
+        envelope = envelope_pb2.CommandEnvelope(
+            drive=drivetrain_pb2.DrivetrainCommand(wheels=wheels))
+        self._conn.send_envelope(envelope, read_timeout=300)
 
     def timed(self, left: int, right: int,  # [mm/s]
              duration: int,  # [ms]
@@ -860,14 +1123,29 @@ class NezhaProtocol:
 
         Optional ``stop`` is a list of stop= clause strings from the Stop builder.
         Multiple conditions are appended space-separated before any '#id'.
+
+        Binary implementation (097-002): CommandEnvelope{segment:
+        MotionSegment} via send_envelope(), built by
+        legacy_translate.segment_for_timed() (handleT()'s own l/r-sign-then-
+        distance computation via BodyKinematics::forward(), transcribed).
+        ``sensor``/``stop`` are accepted but inert on BOTH planes today --
+        the CURRENT handleT() (motion_commands.cpp, post-093/094) never
+        reads past args[0..2] (l/r/ms), so a text-plane sensor=/stop= token
+        was already silently ignored before this conversion; MotionSegment
+        has no matching field either. Returns a synthesized single-line list
+        (``["OK drive ..."]`` on Ack, ``[]`` on timeout/error) reproducing
+        the pre-conversion contract's SHAPE (a list of response-line
+        strings) -- no caller in this tree inspects the actual line text
+        (grep-verified).
         """
-        cmd = f"T {left} {right} {duration}"
-        if sensor is not None:
-            cmd += f" sensor={sensor}"
-        if stop:
-            cmd += " " + " ".join(stop)
-        resp = self._conn.send(cmd, read_timeout=300)
-        return resp.get("responses", [])
+        seg = legacy_translate.segment_for_timed(left, right, duration)
+        envelope = envelope_pb2.CommandEnvelope(segment=seg)
+        result = self._conn.send_envelope(envelope, read_timeout=300)
+        reply = result.get("reply")
+        if reply is not None and reply.WhichOneof("body") == "ok":
+            return [f"OK drive l={left} r={right} ms={duration} "
+                    f"q={reply.ok.q} rem={reply.ok.rem:.1f}"]
+        return []
 
     def distance(self, left: int, right: int,  # [mm/s]
                 travel: int,  # [mm]
@@ -883,14 +1161,24 @@ class NezhaProtocol:
         Example: sensor="colorC:ge:800"
 
         Optional ``stop`` is a list of stop= clause strings from the Stop builder.
+
+        Binary implementation (097-002): CommandEnvelope{segment:
+        MotionSegment} via send_envelope(), built by
+        legacy_translate.segment_for_distance() (handleD()'s own
+        sign-then-distance computation via BodyKinematics::forward(),
+        transcribed). ``sensor``/``stop`` are accepted but inert on BOTH
+        planes today, same reasoning as timed() above. Return-value shape
+        unchanged (synthesized single-line list on Ack, [] on timeout/error;
+        same "no caller inspects the text" note as timed()).
         """
-        cmd = f"D {left} {right} {travel}"
-        if sensor is not None:
-            cmd += f" sensor={sensor}"
-        if stop:
-            cmd += " " + " ".join(stop)
-        resp = self._conn.send(cmd, read_timeout=300)
-        return resp.get("responses", [])
+        seg = legacy_translate.segment_for_distance(left, right, travel)
+        envelope = envelope_pb2.CommandEnvelope(segment=seg)
+        result = self._conn.send_envelope(envelope, read_timeout=300)
+        reply = result.get("reply")
+        if reply is not None and reply.WhichOneof("body") == "ok":
+            return [f"OK drive l={left} r={right} mm={travel} "
+                    f"q={reply.ok.q} rem={reply.ok.rem:.1f}"]
+        return []
 
     def go_to(self, x: int, y: int,  # [mm]
               speed: int) -> list[str]:  # [mm/s]
