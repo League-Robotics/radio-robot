@@ -1,9 +1,11 @@
 ---
 id: '004'
 title: BinaryChannel config and get arms
-status: open
-use-cases: [SUC-004]
-depends-on: ['001']
+status: in-progress
+use-cases:
+- SUC-004
+depends-on:
+- '001'
 github-issue: ''
 issue: protocol-v3-schema-driven-binary-command-plane-protobuf.md
 completes_issue: false
