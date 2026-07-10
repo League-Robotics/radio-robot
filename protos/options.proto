@@ -10,8 +10,21 @@ import "google/protobuf/descriptor.proto";
 //               (e.g., "mm/s^2", "rad/s"). Informational only; not used at runtime.
 // (max_count) — declares the maximum number of elements in a repeated field.
 //               Used by gen_messages.py to emit fixed-capacity C++ arrays.
+// (min)       — inclusive lower bound. Validated by the generated binary-wire
+//               decoder (095, ticket 004); informational only until then.
+// (max)       — inclusive upper bound. Same status as (min).
+// (abs_max)   — |v| <= abs_max (speed/twist idiom) -- a symmetric bound
+//               without having to spell out (min)=-N/(max)=N separately.
+//               Same generated-validator status as (min)/(max).
+// (req)       — field must be present on the wire (binary decode fails the
+//               command if absent). Same generated-validator status as
+//               (min)/(max)/(abs_max).
 
 extend google.protobuf.FieldOptions {
   optional string units     = 50000;
   optional uint32 max_count = 50001;
+  optional double min       = 50002;
+  optional double max       = 50003;
+  optional double abs_max   = 50004;
+  optional bool   req       = 50005;
 }
