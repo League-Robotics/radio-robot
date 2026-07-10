@@ -220,8 +220,13 @@ class SerialConnection:
     After ``connect()`` returns, a background reader thread is the sole owner
     of ``_ser.readline()``.  It demultiplexes incoming lines into:
 
-    - ``_reply_queues[corr_id]`` for ``OK``/``ERR``/``CFG`` replies.
-    - ``_tlm_queue`` for ``TLM`` frames.
+    - ``_reply_queues[corr_id]`` for ``OK``/``ERR``/``CFG`` replies (also the
+      corr-id-keyed binary ``ok``/``err``/``cfg``/``id``/``echo`` replies --
+      see ``_handle_binary_reply()``).
+    - ``_tlm_queue`` for text-plane ``TLM`` frames.
+    - ``_binary_tlm_queue`` for binary-plane ``*B`` replies whose body is
+      ``tlm`` (097-001) -- unsolicited push frames, always ``corr_id=0``,
+      routed BEFORE the corr-id lookup above; see ``_handle_binary_reply()``.
     - ``_evt_queue`` for ``EVT`` lines.
 
     ``send()`` appends ``#<corr_id>`` to every command and blocks on the
@@ -263,6 +268,16 @@ class SerialConnection:
         # Bounded TLM queue: drop oldest frame on overflow rather than blocking
         # the reader thread.
         self._tlm_queue: queue.Queue = queue.Queue(maxsize=_TLM_QUEUE_DEPTH)
+
+        # Bounded binary-plane TLM queue (097-001): holds decoded
+        # pb2.ReplyEnvelope objects whose body is `tlm` -- the binary
+        # counterpart of _tlm_queue above, same depth constant and same
+        # drop-oldest-on-overflow policy.  See _handle_binary_reply().
+        # No dedicated drain/read accessor yet -- deferred to ticket 003
+        # (NezhaProtocol.stream()/.snap() conversion), which is this queue's
+        # first real caller and best positioned to shape the accessor around
+        # its actual needs (per this ticket's implementation plan item 4).
+        self._binary_tlm_queue: queue.Queue = queue.Queue(maxsize=_TLM_QUEUE_DEPTH)
 
         # EVT queue: unbounded — EVT lines must not be dropped.
         self._evt_queue: queue.Queue = queue.Queue()
@@ -592,8 +607,14 @@ class SerialConnection:
         - ``OK keepalive`` / lines containing ``keepalive`` → dropped silently
         - Lines beginning with ``#`` → relay status/comment lines, dropped
         - ``*B<base64>`` (binary plane, 095-002) → dearmored, parsed as a
-          ``pb2.ReplyEnvelope``, routed to ``_reply_queues[envelope.corr_id]``
-          exactly like an ``OK``/``ERR``/``CFG``/``ID`` reply above.
+          ``pb2.ReplyEnvelope``. A ``tlm`` body (096's ``telemetryEmitBinary()``
+          push frames, always ``corr_id=0``) routes to ``_binary_tlm_queue``
+          (drop oldest if full) BEFORE the corr-id lookup below (097-001) --
+          these are unsolicited pushes, never a reply a blocked ``send()``/
+          ``send_envelope()`` call is waiting on. Every other body
+          (``ok``/``err``/``cfg``/``id``/``echo``) routes to
+          ``_reply_queues[envelope.corr_id]`` exactly like an
+          ``OK``/``ERR``/``CFG``/``ID`` reply above.
         - Anything else → dropped silently
         """
         while not self._reader_stop.is_set():
@@ -682,12 +703,26 @@ class SerialConnection:
 
         Called only from ``_reader_loop`` (see its docstring). Strips the
         ``*B`` armor prefix, base64-decodes, and parses the result as a
-        ``pb2.ReplyEnvelope`` -- then routes it to
-        ``_reply_queues[str(envelope.corr_id)]``, the SAME queue lookup the
-        text plane's ``OK``/``ERR``/``CFG``/``ID`` branch performs, keyed by
-        the envelope's own ``corr_id`` field instead of a parsed ``#<id>``
-        suffix. If no queue is registered for that id, the reply is dropped
-        silently (same "no listener" semantics as the text plane).
+        ``pb2.ReplyEnvelope``.
+
+        097-001: a ``tlm`` body is checked FIRST, before the corr-id lookup,
+        and routed unconditionally to the bounded, drop-oldest
+        ``_binary_tlm_queue`` -- mirroring how ``_reader_loop``'s own
+        ``text.startswith("TLM")`` branch is checked before its
+        ``OK``/``ERR``/``CFG``/``ID`` corr-id branch. Binary telemetry push
+        frames (firmware's ``telemetryEmitBinary()``, sprint 096) always
+        carry ``corr_id=0``, and no ``send()``/``send_envelope()`` call ever
+        registers a queue under ``"0"`` -- routing them through the corr-id
+        table silently dropped every one of them (the bug this ticket
+        fixes).
+
+        Every other body (``ok``/``err``/``cfg``/``id``/``echo``) keeps
+        routing to ``_reply_queues[str(envelope.corr_id)]``, the SAME queue
+        lookup the text plane's ``OK``/``ERR``/``CFG``/``ID`` branch
+        performs, keyed by the envelope's own ``corr_id`` field instead of a
+        parsed ``#<id>`` suffix. If no queue is registered for that id, the
+        reply is dropped silently (same "no listener" semantics as the text
+        plane).
 
         Any decode/parse failure (malformed base64, malformed protobuf
         bytes) is swallowed and the line dropped -- a single corrupted
@@ -700,6 +735,20 @@ class SerialConnection:
             raw_bytes = base64.b64decode(armored)
             reply = _get_envelope_pb2().ReplyEnvelope.FromString(raw_bytes)
         except Exception:
+            return
+
+        if reply.WhichOneof("body") == "tlm":
+            # Bounded binary TLM queue: drop oldest frame on overflow,
+            # mirroring _tlm_queue's own policy in _reader_loop's TLM branch.
+            if self._binary_tlm_queue.full():
+                try:
+                    self._binary_tlm_queue.get_nowait()
+                except queue.Empty:
+                    pass
+            try:
+                self._binary_tlm_queue.put_nowait(reply)
+            except queue.Full:
+                pass  # extremely unlikely race; drop
             return
 
         corr_id = str(reply.corr_id)

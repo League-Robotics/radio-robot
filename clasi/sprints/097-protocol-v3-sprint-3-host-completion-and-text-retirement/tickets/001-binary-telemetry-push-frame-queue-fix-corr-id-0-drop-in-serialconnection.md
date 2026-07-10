@@ -1,8 +1,9 @@
 ---
 id: '001'
 title: Binary telemetry push-frame queue (fix corr_id=0 drop in SerialConnection)
-status: open
-use-cases: [SUC-001]
+status: done
+use-cases:
+- SUC-001
 depends-on: []
 github-issue: ''
 issue: protocol-v3-schema-driven-binary-command-plane-protobuf.md
@@ -42,30 +43,30 @@ working delivery path instead of discovering the gap mid-ticket.
 
 ## Acceptance Criteria
 
-- [ ] A new `_binary_tlm_queue` (or equivalently named) exists on
+- [x] A new `_binary_tlm_queue` (or equivalently named) exists on
       `SerialConnection`, matching `_tlm_queue`'s existing bounded/
       drop-oldest-on-overflow policy (same depth constant or a documented,
       deliberate choice of a different one).
-- [ ] `_handle_binary_reply()` (or `_reader_loop()`, whichever is the
+- [x] `_handle_binary_reply()` (or `_reader_loop()`, whichever is the
       cleaner insertion point) special-cases `WhichOneof("body") == "tlm"`
       and routes to `_binary_tlm_queue`, checked BEFORE the corr-id
       `_reply_queues` lookup — the same ordering the text plane's
       `text.startswith("TLM")` branch already has relative to its
       `OK`/`ERR`/`CFG`/`ID` corr-id branch.
-- [ ] Every other binary reply body (`ok`/`err`/`cfg`/`id`/`echo`) keeps
+- [x] Every other binary reply body (`ok`/`err`/`cfg`/`id`/`echo`) keeps
       routing through the unchanged corr-id path — verified by a host
       unit test that exercises BOTH a corr-id-keyed direct reply (e.g. a
       simulated `Ack`) and a `corr_id=0` push frame (`Telemetry`) in the
       same reader-thread session and asserts each lands in the correct
       queue.
-- [ ] No text-plane behavior changes (this ticket touches only the binary
+- [x] No text-plane behavior changes (this ticket touches only the binary
       reply-routing branch — `_tlm_queue`, `text.startswith("TLM")`, and
       every other existing branch in `_reader_loop()`/
       `_handle_binary_reply()` are untouched).
-- [ ] `tests/sim` stays green (this is a host-only Python change with no
+- [x] `tests/sim` stays green (this is a host-only Python change with no
       firmware/sim surface, so this is a no-op check confirming no
       accidental cross-contamination).
-- [ ] `tests/unit` is green, including the new test(s) this ticket adds.
+- [x] `tests/unit` is green, including the new test(s) this ticket adds.
 
 ## Implementation Plan
 
@@ -120,3 +121,44 @@ working delivery path instead of discovering the gap mid-ticket.
   (ticket 009) will describe the binary telemetry push-frame mechanism at
   the wire level; this ticket's host-internal queue is an implementation
   detail below that level.
+
+## Resolution
+
+Implemented exactly per the plan: `_binary_tlm_queue` added in
+`SerialConnection.__init__` (`queue.Queue(maxsize=_TLM_QUEUE_DEPTH)`,
+reusing the existing depth constant — no separate bound needed).
+`_handle_binary_reply()` now checks `reply.WhichOneof("body") == "tlm"`
+immediately after the `ReplyEnvelope.FromString` parse, BEFORE the
+`corr_id`/`_reply_queues` lookup, and routes unconditionally (not gated on
+`corr_id == 0`) to `_binary_tlm_queue` with the same drop-oldest-on-overflow
+pattern `_tlm_queue`'s text-plane branch already uses; every other body
+(`ok`/`err`/`cfg`/`id`/`echo`) falls through to the unchanged corr-id path.
+Docstrings updated on the class, `_reader_loop()`, and `_handle_binary_reply()`.
+
+Drain accessor (plan item 4): deferred to ticket 003
+(`NezhaProtocol.stream()`/`.snap()` conversion), documented inline at the
+`_binary_tlm_queue` declaration — it is that ticket's first real caller and
+best positioned to shape the accessor (blocking-with-duration vs.
+non-blocking drain, parsed-object vs. `TLMFrame` shape) around its actual
+need, per the plan's own stated option.
+
+One pre-existing test needed updating, not just new tests added: 096-007's
+`test_reader_loop_routes_binary_tlm_reply_by_corr_id` asserted the OLD
+(corr-id-keyed) routing for a `tlm` body — exactly the routing this ticket
+changes. Renamed to `test_reader_loop_routes_binary_tlm_reply_to_binary_tlm_queue`,
+content updated to assert the new `_binary_tlm_queue` destination, and its
+docstring documents the supersession (architecture-update.md Decision 2
+frames the bug in terms of `corr_id=0`, but the fix implemented per this
+ticket's own plan step 2 gates on the body oneof, not on `corr_id`, since
+firmware never emits a `tlm` body any other way). Three new tests added:
+`corr_id=0` push-frame routing, coexistence of a corr-id-keyed `ok` reply
+and a `corr_id=0` `tlm` push frame in one reader-thread session (the
+ticket's required "both queues, one session" proof), and a drop-oldest
+overflow test (monkey-patches a depth-3 queue directly onto the connection
+so the test stays fast — the drop-oldest logic itself is depth-agnostic).
+
+**Verification**: `uv run python -m pytest tests/unit -q` — 42 passed
+(38 pre-existing/updated + 4 new/renamed in
+`test_serial_conn_binary_plane.py`; no other host test file touched).
+`uv run python -m pytest tests/sim -q` — 600 passed, unaffected (host-only
+change, no firmware/sim surface touched).

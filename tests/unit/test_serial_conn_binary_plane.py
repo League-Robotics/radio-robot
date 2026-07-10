@@ -4,6 +4,18 @@ Extended by 096-007 (M6 Host Config/Telemetry Client) with two more
 ``_reader_loop`` demux tests (``tlm``/``cfg`` body arms) -- see that
 ticket's own file-header note below, just above the two new tests.
 
+Extended again by 097-001 (Binary telemetry push-frame queue): fixes a
+real bug 096-007's own `tlm`-body test exposed but didn't catch --
+firmware's `telemetryEmitBinary()` push frames always carry `corr_id=0`,
+and no `_reply_queues` entry is ever registered under `"0"`, so every
+binary telemetry push frame was silently dropped. `_handle_binary_reply()`
+now special-cases a `tlm` body BEFORE the corr-id lookup and routes it,
+unconditionally, to a new bounded `_binary_tlm_queue`. The 096-007 test
+that asserted the OLD (corr-id) routing for a `tlm` body is updated in
+place (see its docstring for the supersession note); three new tests cover
+the ticket's specific acceptance criteria (corr_id=0 routing, coexistence
+with a corr-id-keyed reply in one session, overflow drop-oldest).
+
 Covers the three things ticket 095-002 asks for, none of which need live
 hardware:
 
@@ -167,20 +179,29 @@ def test_reader_loop_binary_branch_coexists_with_every_existing_branch():
     assert reply.err.code == envelope_pb2.ERR_RANGE
 
 
-def test_reader_loop_routes_binary_tlm_reply_by_corr_id():
-    """096-007 (M6 Host Config/Telemetry Client, ticket acceptance criterion
-    "serial_conn.py's ReplyEnvelope demux correctly routes tlm/cfg body arms
-    through the existing _reply_queues/_tlm_queue machinery with zero code
-    changes to that file"): a synthetic `*B<base64>` ReplyEnvelope{tlm=
-    Telemetry{...}} line -- 096's NEW body oneof arm, not exercised by any
-    095-002 test above -- demuxes through the SAME corr-id-keyed
-    _reply_queues machinery the ok/err arms already prove out above. No new
-    branch was added to _reader_loop()/_handle_binary_reply() to make this
-    pass (see this file's own diff for 096-007 -- zero lines changed in
-    serial_conn.py itself)."""
+def test_reader_loop_routes_binary_tlm_reply_to_binary_tlm_queue():
+    """SUPERSEDED by 097-001 (ticket 001 of this sprint, "Binary telemetry
+    push-frame queue"): 096-007 originally asserted that a `tlm` body
+    demuxed through the SAME corr-id-keyed _reply_queues machinery as
+    ok/err/cfg (see architecture-update.md Decision 2). That was correct as
+    written but exposed a real host bug: firmware's telemetryEmitBinary()
+    (096) sends every `tlm` body as an unsolicited push frame with
+    `corr_id=0`, and no send()/send_envelope() call ever registers a queue
+    under "0" -- so every real binary telemetry push frame was silently
+    dropped. 097-001 fixes this by special-casing `WhichOneof("body") ==
+    "tlm"` in `_handle_binary_reply()`, routing it unconditionally (BEFORE
+    the corr-id lookup) to the new bounded `_binary_tlm_queue` instead.
+    This test is updated to assert the NEW routing; it still uses a
+    nonzero corr_id (7) to prove the tlm branch does not even look at
+    corr_id -- see test_reader_loop_routes_binary_tlm_corr_id_zero below
+    for the realistic corr_id=0 push-frame case, and
+    test_reader_loop_binary_tlm_and_corr_id_reply_coexist_in_one_session
+    for the AC's "both in the same reader-thread session" scenario."""
     conn = _new_conn()
-    reply_q: queue.Queue = queue.Queue()
-    conn._reply_queues["7"] = reply_q
+    # No queue registered under "7" -- if the tlm branch fell through to the
+    # corr-id lookup (the pre-097-001 behavior) this reply would be silently
+    # dropped, not delivered.  The absence of _reply_queues["7"] is itself
+    # part of the proof that routing no longer depends on corr_id.
 
     envelope = envelope_pb2.ReplyEnvelope(corr_id=7)
     envelope.tlm.now = 12345
@@ -190,12 +211,100 @@ def test_reader_loop_routes_binary_tlm_reply_by_corr_id():
     conn._ser = _FakeSerial([(armored + "\n").encode("ascii")])
     conn._reader_loop()
 
-    reply = reply_q.get_nowait()
+    assert conn._reply_queues == {}  # never touched -- tlm skips corr-id routing
+    reply = conn._binary_tlm_queue.get_nowait()
     assert isinstance(reply, envelope_pb2.ReplyEnvelope)
     assert reply.corr_id == 7
     assert reply.WhichOneof("body") == "tlm"
     assert reply.tlm.now == 12345
     assert reply.tlm.seq == 3
+
+
+def test_reader_loop_routes_binary_tlm_corr_id_zero_to_binary_tlm_queue():
+    """097-001's realistic case: firmware's telemetryEmitBinary() always
+    sets corr_id=0 on push frames.  A `*B`-armored ReplyEnvelope{tlm,
+    corr_id: 0} lands in `_binary_tlm_queue`, not `_reply_queues` -- the
+    ticket's first required test."""
+    conn = _new_conn()
+
+    envelope = envelope_pb2.ReplyEnvelope(corr_id=0)
+    envelope.tlm.now = 999
+    envelope.tlm.seq = 1
+    armored = "*B" + base64.b64encode(envelope.SerializeToString()).decode("ascii")
+
+    conn._ser = _FakeSerial([(armored + "\n").encode("ascii")])
+    conn._reader_loop()
+
+    assert conn._reply_queues == {}
+    assert "0" not in conn._reply_queues
+    reply = conn._binary_tlm_queue.get_nowait()
+    assert reply.corr_id == 0
+    assert reply.WhichOneof("body") == "tlm"
+    assert reply.tlm.now == 999
+
+
+def test_reader_loop_binary_tlm_and_corr_id_reply_coexist_in_one_session():
+    """097-001 acceptance criterion: a corr-id-keyed direct reply (a
+    simulated Ack) and a corr_id=0 push frame (Telemetry) fed in the SAME
+    reader-thread session each land in the correct queue -- the tlm branch
+    added ahead of the corr-id lookup must not disturb ok/err/cfg/id/echo
+    routing, and vice versa."""
+    conn = _new_conn()
+    reply_q: queue.Queue = queue.Queue()
+    conn._reply_queues["9"] = reply_q
+
+    ack = envelope_pb2.ReplyEnvelope(corr_id=9)
+    ack.ok.q = 2
+    ack.ok.rem = 5.0
+    ack_armored = "*B" + base64.b64encode(ack.SerializeToString()).decode("ascii")
+
+    push = envelope_pb2.ReplyEnvelope(corr_id=0)
+    push.tlm.now = 42
+    push.tlm.seq = 8
+    push_armored = "*B" + base64.b64encode(push.SerializeToString()).decode("ascii")
+
+    conn._ser = _FakeSerial([
+        (push_armored + "\n").encode("ascii"),
+        (ack_armored + "\n").encode("ascii"),
+    ])
+    conn._reader_loop()
+
+    ack_reply = reply_q.get_nowait()
+    assert ack_reply.corr_id == 9
+    assert ack_reply.WhichOneof("body") == "ok"
+    assert ack_reply.ok.q == 2
+
+    tlm_reply = conn._binary_tlm_queue.get_nowait()
+    assert tlm_reply.corr_id == 0
+    assert tlm_reply.WhichOneof("body") == "tlm"
+    assert tlm_reply.tlm.now == 42
+    assert tlm_reply.tlm.seq == 8
+
+
+def test_binary_tlm_queue_drops_oldest_on_overflow():
+    """097-001 acceptance criterion: pushing more frames than the queue
+    depth drops the OLDEST frame, matching _tlm_queue's documented
+    drop-oldest-on-overflow policy.  Uses a small monkey-patched queue
+    depth (3) instead of the real _TLM_QUEUE_DEPTH (256) so the test stays
+    fast; the overflow logic itself is depth-agnostic."""
+    conn = _new_conn()
+    conn._binary_tlm_queue = queue.Queue(maxsize=3)
+
+    def _armored_tlm(seq: int) -> str:
+        envelope = envelope_pb2.ReplyEnvelope(corr_id=0)
+        envelope.tlm.seq = seq
+        return "*B" + base64.b64encode(envelope.SerializeToString()).decode("ascii")
+
+    # Push 5 frames (seq 0..4) through a depth-3 queue directly via
+    # _handle_binary_reply -- oldest (0, 1) must be dropped, leaving (2, 3, 4).
+    for seq in range(5):
+        conn._handle_binary_reply(_armored_tlm(seq))
+
+    remaining = []
+    while not conn._binary_tlm_queue.empty():
+        remaining.append(conn._binary_tlm_queue.get_nowait())
+
+    assert [r.tlm.seq for r in remaining] == [2, 3, 4]
 
 
 def test_reader_loop_routes_binary_cfg_reply_by_corr_id():
