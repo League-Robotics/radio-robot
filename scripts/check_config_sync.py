@@ -1,36 +1,112 @@
 #!/usr/bin/env python3
-"""check_config_sync.py — Config registry sync lint.
+"""check_config_sync.py — binary config-plane sync lint (096-008 rewrite).
 
-Checks that the three sets that define "config" stay consistent:
+Full rewrite. The PREVIOUS implementation compared `struct RobotConfig` in
+`source/types/Config.h` against `CFG_F`/`CFG_I`/`CFG_FI` macro calls in
+`source/robot/ConfigRegistry.cpp` — both `source_old`-era files that do not
+exist anywhere in the post-077-rebuild `source/` tree. That comparison had
+been silently non-functional (crashing with a bare ``RuntimeError`` the
+moment anyone ran it) since the greenfield rebuild; see
+`clasi/sprints/096-.../architecture-update.md` Decision 6.
 
-  Set A — struct fields : every field declared inside `struct RobotConfig {}`
-           in source/types/Config.h.
+New comparison model
+---------------------
+Protocol v3's binary config plane (096) exposes exactly three curated
+"Patch" messages on the wire — `DrivetrainConfigPatch`, `MotorConfigPatch`,
+`PlannerConfigPatch` (`protos/config.proto`, generated to
+`host/robot_radio/robot/pb2/config_pb2.py` by ticket 096-001). Each `Patch`
+field is a `proto3 optional` scalar; presence signals "this field is being
+set/was populated". These three messages are a CURATED SUBSET of a much
+larger config surface — they mirror only the ~15 keys
+`source/commands/config_commands.cpp`'s `kAllKeys` registers for the
+text SET/GET verb (config.proto's own file header explains why: the full
+generated `DrivetrainConfig`/`MotorConfig`/`PlannerConfig` messages don't
+fit the envelope budget and most of their fields have no wire-config verb
+at all).
 
-  Set B — registered keys : every key that appears in a CFG_F(, CFG_I(, or
-           CFG_FI( macro call in source/robot/ConfigRegistry.cpp. The macro's
-           second argument (the struct field name) is compared against Set A.
-           The macro's first argument (the wire key name) drives Set C.
+`host/robot_radio/config/robot_config.py`'s `RobotConfig` pydantic model is
+the host's per-robot JSON config — identity, connection, vision, geometry,
+wheels, encoders, drive, gripper, peripherals, calibration, and PID/control
+tuning. It is intentionally NOT a 1:1 mirror of the wire Patch surface: most
+of it (robot identity, camera/vision geometry, host-only crawl-mode tuning,
+...) has no wire config verb and never will. Only a SMALL slice of it is
+the host-side representation of a value that can also be pushed over the
+binary config plane.
 
-  Set C — firmware usage : every *registered* key (Set B wire key OR field
-           name) that appears in a source file outside ConfigRegistry.cpp and
-           DefaultConfig.cpp.  A key is "used" when the firmware actually reads
-           or writes it — i.e. it has observable effect.
+This script therefore:
 
-Three mismatches are reported:
+  1. Flattens `RobotConfig`'s nested pydantic fields to dotted paths
+     (e.g. ``geometry.trackwidth``, ``control.vel_kp``).
+  2. Reads the three curated `Patch` messages' fields straight from the
+     generated `pb2` descriptors (never re-derives them from `.proto`
+     source text — the descriptor IS the wire truth).
+  3. Diffs the two via `PATCH_TO_PYDANTIC`, a hand-curated map below from
+     every `(PatchMessage, field)` pair to the dotted pydantic path(s) that
+     represent it host-side (or `[]` when no host-side field exists yet).
+     This map is itself part of what this script checks: a `Patch` field
+     the map has no entry for AT ALL (not even a documented `[]`) is a
+     forced failure, not an allowlist candidate — it means ticket 096-001
+     (or a future ticket) added/renamed a wire field and nobody updated
+     this script, which is exactly the "real skew" this lint exists to
+     catch.
 
-  in-struct-not-registered
-      Fields in Set A that have no corresponding entry in Set B.
-      These fields are invisible to the host — SET/GET can never reach them.
+Reported categories
+--------------------
+  patch-field-no-pydantic
+      A `Patch` descriptor field has no pydantic counterpart (`[]` in
+      `PATCH_TO_PYDANTIC`). The binary config plane can set/get a value the
+      host has nowhere to keep. Allowlistable — this is expected for a
+      handful of fields today (the EKF covariances, the `min_speed` planner
+      floor, and `MotorConfigPatch.side`, which is a selector enum, not a
+      settable value).
 
-  registered-not-in-struct
-      Set B field names that do not exist in Set A.
-      These entries are broken (offsetof of a nonexistent field would fail
-      at compile time, but the check guards against copy-paste drift).
+  pydantic-field-no-patch
+      A pydantic leaf field is not any `PATCH_TO_PYDANTIC` mapping target.
+      By the curated-subset design (architecture-update.md (096) Decision
+      2) this is true for MOST of `RobotConfig` — identity, vision,
+      geometry offsets, drive/crawl tuning, and several stale pre-096
+      `control.*` fields that reference wire keys
+      (`vel.kP`/`sync`/`minWheelMms`/`turnGate`/`yawRateMax`) that no longer
+      exist in `config_commands.cpp`'s current key table at all. Every one
+      of these is enumerated and requires an explicit
+      `config_sync_allowlist.json` entry (wildcard prefixes like
+      `"identity.*"` are supported) — nothing is silently skipped.
 
-  registered-not-used
-      Set B entries whose wire key or field name is not referenced in any
-      source file other than ConfigRegistry.cpp and DefaultConfig.cpp.
-      These entries accept SET commands but change nothing.
+  type-mismatch
+      A mapped pair exists on both sides, but the pydantic leaf's Python
+      type is not what the `Patch` field's protobuf `cpp_type` implies
+      (e.g. a `CPPTYPE_FLOAT` field mapped to a pydantic `str` field).
+      Allowlistable, though none exist on the current tree.
+
+  unmapped-patch-field / stale-map-target
+      Internal-consistency failures in `PATCH_TO_PYDANTIC` itself (a wire
+      field this script has never seen, or a mapping target that no longer
+      exists in the pydantic model). NEVER allowlistable — these mean the
+      map above must be edited (a code change), not the JSON escape hatch.
+
+Bound/option checking: `protos/config.proto`'s own header note records that
+no `Patch` field carries a `(min)`/`(max)`/`(abs_max)` option today (096-001
+Decision 6's validation-note) — `validateCandidate()`'s business rules
+(`trackwidth > 0`, `rotational_slip`'s non-contiguous domain, `sTimeout >
+0`) live in hand-written C++, not the wire schema. `CPP_TYPE_TO_PY` below
+still reads `field.GetOptions()` so this check activates automatically the
+day any `Patch` field gains one, without needing another rewrite.
+
+Mapping from the OLD Set-A/B/C language, for a reader who remembers it
+------------------------------------------------------------------------
+  Set A (struct fields)     → pydantic model, flattened to dotted paths.
+  Set B (registered keys)   → `Patch` descriptor fields (the wire surface).
+  Set C (firmware usage)    → dropped entirely. There is no host-side
+                               equivalent of "grep the firmware source for
+                               this key" left to check — `Patch` fields ARE
+                               the registered/usable wire surface by
+                               construction (unlike the old free-text
+                               `CFG_F(...)` table, a field that exists in
+                               the generated descriptor is, by definition,
+                               reachable by `BinaryChannel`, ticket 004).
+  in-struct-not-registered  → `pydantic-field-no-patch`.
+  registered-not-in-struct  → `patch-field-no-pydantic`.
+  registered-not-used       → dropped (no Set-C equivalent — see above).
 
 Usage
 -----
@@ -38,143 +114,177 @@ Run from the repository root::
 
     python scripts/check_config_sync.py
 
-Exit 0 when all three categories are empty (or all non-empty entries are
-covered by the allowlist).  Exit 1 otherwise, printing the offending names.
+Exit 0 when every category is empty or every non-empty entry is covered by
+the allowlist (`unmapped-patch-field`/`stale-map-target` excepted — see
+above). Exit 1 otherwise, printing the offending names. Never raises an
+uncaught exception — a missing/unimportable input (e.g. `robot_radio` not
+on `sys.path`) is reported as a clean failure, not a traceback.
 
 Allowlist
 ---------
 Create ``scripts/config_sync_allowlist.json`` to exempt known-intentional
-exceptions.  Format::
+exceptions. Format::
 
     {
-      "in-struct-not-registered": {
-        "fieldName": "human-readable justification"
+      "pydantic-field-no-patch": {
+        "identity.*": "human-readable justification (wildcard prefix ok)"
       },
-      "registered-not-in-struct": {
-        "fieldName": "human-readable justification"
+      "patch-field-no-pydantic": {
+        "DrivetrainConfigPatch.ekf_q_xy": "human-readable justification"
       },
-      "registered-not-used": {
-        "keyName": "human-readable justification"
+      "type-mismatch": {
+        "DrivetrainConfigPatch.trackwidth->geometry.trackwidth": "..."
       }
     }
 
 Any category key may be omitted; missing means no exemptions for that
-category.  Each entry's value is the required justification string (must
-be a non-empty string — the script refuses blank justifications so the
-allowlist stays meaningful).
+category. Each entry's value must be a non-empty justification string. A
+key ending in ``".*"`` matches any item sharing that dotted-path prefix
+(``"identity.*"`` matches ``"identity.robot_name"``, etc.) — only
+`pydantic-field-no-patch` entries use dotted paths, so only that category
+honors the wildcard form.
 """
 
 from __future__ import annotations
 
 import json
-import re
 import sys
+import typing
 from pathlib import Path
+from typing import Optional
+
+from google.protobuf.descriptor import FieldDescriptor
 
 # ---------------------------------------------------------------------------
-# Repo root resolution
+# Repo root / import setup
 # ---------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_H   = REPO_ROOT / "source" / "types" / "Config.h"
-REGISTRY_CPP = REPO_ROOT / "source" / "robot" / "ConfigRegistry.cpp"
-SOURCE_DIR   = REPO_ROOT / "source"
+HOST_DIR = REPO_ROOT / "host"
 ALLOWLIST_FILE = REPO_ROOT / "scripts" / "config_sync_allowlist.json"
 
-# Files excluded from the "firmware usage" grep (these are the definition
-# sites, not use sites).
-EXCLUDED_FROM_USAGE = {
-    REGISTRY_CPP.resolve(),
-    (SOURCE_DIR / "robot" / "DefaultConfig.cpp").resolve(),
+if str(HOST_DIR) not in sys.path:
+    sys.path.insert(0, str(HOST_DIR))
+
+
+# ---------------------------------------------------------------------------
+# The curated wire<->host mapping. See the module docstring for what each
+# category means and why unmapped/stale entries are never allowlistable.
+# ---------------------------------------------------------------------------
+
+PatchKey = tuple[str, str]  # (message_name, field_name)
+
+PATCH_TO_PYDANTIC: dict[PatchKey, list[str]] = {
+    # -- DrivetrainConfigPatch ------------------------------------------------
+    ("DrivetrainConfigPatch", "trackwidth"): ["geometry.trackwidth"],
+    ("DrivetrainConfigPatch", "rotational_slip"): ["calibration.rotational_slip"],
+    # EKF covariances: no host-side pydantic field yet. Carried over from the
+    # pre-096 Config.h-era allowlist's ekfQxy/ekfQtheta/ekfROtosXy entries
+    # ("register as tunable in a future sprint") — still true today.
+    ("DrivetrainConfigPatch", "ekf_q_xy"): [],
+    ("DrivetrainConfigPatch", "ekf_q_theta"): [],
+    ("DrivetrainConfigPatch", "ekf_r_otos_xy"): [],
+    ("DrivetrainConfigPatch", "ekf_r_otos_theta"): [],
+    # -- MotorConfigPatch -------------------------------------------------------
+    # `side` is a selector enum (which bound motor `travel_calib` targets),
+    # not a settable config value — it has no pydantic counterpart by design.
+    ("MotorConfigPatch", "side"): [],
+    # travel_calib is side-selected: LEFT -> mm_per_wheel_deg_left, RIGHT ->
+    # mm_per_wheel_deg_right. Both targets are listed; either existing in the
+    # pydantic model is sufficient (see compute_findings()).
+    ("MotorConfigPatch", "travel_calib"): [
+        "calibration.mm_per_wheel_deg_left",
+        "calibration.mm_per_wheel_deg_right",
+    ],
+    ("MotorConfigPatch", "kp"): ["control.vel_kp"],
+    ("MotorConfigPatch", "ki"): ["control.vel_ki"],
+    ("MotorConfigPatch", "kff"): ["control.vel_kff"],
+    ("MotorConfigPatch", "i_max"): ["control.vel_imax"],
+    ("MotorConfigPatch", "kaw"): ["control.vel_kaw"],
+    # -- PlannerConfigPatch -----------------------------------------------------
+    # No host-side pydantic field. DriveConfig.min_drive_mm_s is a DIFFERENT
+    # quantity (rogo's host-only crawl-mode fallback floor), not the
+    # firmware planner's trapezoidal-profile min_speed — do not conflate them.
+    ("PlannerConfigPatch", "min_speed"): [],
 }
 
+# proto3 scalar cpp_type -> the Python type a pydantic leaf representing it
+# should have. CPPTYPE_ENUM/CPPTYPE_MESSAGE are deliberately absent: an enum
+# selector (MotorConfigPatch.side) and any nested message have no single
+# scalar Python type to compare against.
+CPP_TYPE_TO_PY: dict[int, type] = {
+    FieldDescriptor.CPPTYPE_INT32: int,
+    FieldDescriptor.CPPTYPE_INT64: int,
+    FieldDescriptor.CPPTYPE_UINT32: int,
+    FieldDescriptor.CPPTYPE_UINT64: int,
+    FieldDescriptor.CPPTYPE_DOUBLE: float,
+    FieldDescriptor.CPPTYPE_FLOAT: float,
+    FieldDescriptor.CPPTYPE_BOOL: bool,
+    FieldDescriptor.CPPTYPE_STRING: str,
+}
+
+PATCH_MESSAGE_NAMES = ("DrivetrainConfigPatch", "MotorConfigPatch", "PlannerConfigPatch")
+
+ALLOWLIST_CATEGORIES = ("pydantic-field-no-patch", "patch-field-no-pydantic", "type-mismatch")
+FORCED_FAIL_CATEGORIES = ("unmapped-patch-field", "stale-map-target")
+ALL_CATEGORIES = ALLOWLIST_CATEGORIES + FORCED_FAIL_CATEGORIES
+
 
 # ---------------------------------------------------------------------------
-# Set A: parse struct RobotConfig fields from Config.h
+# Pydantic model flattening
 # ---------------------------------------------------------------------------
 
-def parse_struct_fields(path: Path) -> list[str]:
-    """Return field names declared inside `struct RobotConfig { ... }`."""
-    text = path.read_text()
+def _unwrap_optional(annotation: object) -> object:
+    """Return the non-None arm of `Optional[T]`, or `annotation` unchanged."""
+    if typing.get_origin(annotation) is typing.Union:
+        args = [a for a in typing.get_args(annotation) if a is not type(None)]
+        if len(args) == 1:
+            return args[0]
+    return annotation
 
-    # Extract the struct body.
-    m = re.search(r'\bstruct\s+RobotConfig\s*\{(.*?)\}', text, re.DOTALL)
-    if not m:
-        raise RuntimeError(f"Could not find 'struct RobotConfig' in {path}")
 
-    body = m.group(1)
-    fields: list[str] = []
+def _is_basemodel(annotation: object) -> bool:
+    try:
+        from pydantic import BaseModel
+    except ImportError:
+        return False
+    return isinstance(annotation, type) and issubclass(annotation, BaseModel)
 
-    for line in body.splitlines():
-        # Strip line comments.
-        line = re.sub(r'//.*', '', line).strip()
-        if not line or line.startswith('/*') or line.startswith('*'):
-            continue
-        # Match a field declaration: <type> <name> [= init] ;
-        # Type may be: int8_t, uint8_t, int32_t, uint32_t, float, bool, ...
-        # We capture the last identifier before the optional initialiser and ';'.
-        m2 = re.match(
-            r'^(?:const\s+)?(?:unsigned\s+)?'
-            r'(?:int8_t|uint8_t|int16_t|uint16_t|int32_t|uint32_t|'
-            r'int64_t|uint64_t|float|double|bool|int|unsigned|char)\s+'
-            r'(\w+)'           # field name
-            r'(?:\s*=\s*[^;]+)?'  # optional initialiser
-            r'\s*;',
-            line,
-        )
-        if m2:
-            fields.append(m2.group(1))
 
+def flatten_pydantic_fields(model_cls: type, prefix: str = "") -> dict[str, type]:
+    """Recursively flatten a pydantic BaseModel's fields to dotted-path -> leaf type.
+
+    Nested BaseModel fields (e.g. `geometry: GeometryConfig`) are expanded
+    in place (`geometry.trackwidth`, ...) rather than kept as one opaque
+    entry, so every scalar leaf is individually checkable.
+    """
+    fields: dict[str, type] = {}
+    for name, field_info in model_cls.model_fields.items():
+        path = f"{prefix}{name}"
+        leaf = _unwrap_optional(field_info.annotation)
+        if _is_basemodel(leaf):
+            fields.update(flatten_pydantic_fields(leaf, prefix=f"{path}."))
+        else:
+            fields[path] = leaf
     return fields
 
 
 # ---------------------------------------------------------------------------
-# Set B: parse CFG macro calls from ConfigRegistry.cpp
+# pb2 descriptor collection
 # ---------------------------------------------------------------------------
 
-# Each entry is (wire_key, field_name).
-def parse_registry_entries(path: Path) -> list[tuple[str, str]]:
-    """Return (wire_key, field_name) pairs from CFG_F/CFG_I/CFG_FI macros."""
-    text = path.read_text()
-    # Match: CFG_F("key", fieldName)  or CFG_I(...) or CFG_FI(...)
-    pattern = re.compile(
-        r'CFG_(?:F|I|FI|B)\s*\(\s*"([^"]+)"\s*,\s*(\w+)\s*\)'
-    )
-    return pattern.findall(text)
-
-
-# ---------------------------------------------------------------------------
-# Set C: firmware usage grep
-# ---------------------------------------------------------------------------
-
-def build_usage_set(source_dir: Path, entries: list[tuple[str, str]]) -> set[str]:
-    """Return the set of (wire_key or field_name) that appear in firmware source."""
-    # Collect all .cpp and .h files, excluding definition sites.
-    source_files = [
-        f for f in source_dir.rglob('*')
-        if f.suffix in ('.cpp', '.h') and f.resolve() not in EXCLUDED_FROM_USAGE
-    ]
-
-    # Build a combined corpus of all source text (annotated by file for
-    # diagnostics, but here we just check presence).
-    corpus = '\n'.join(f.read_text(errors='replace') for f in source_files)
-
-    used: set[str] = set()
-    for wire_key, field_name in entries:
-        # A field name is "used" if it appears as a whole word anywhere in the
-        # filtered source (cfg.fieldName, cfg->fieldName, etc.).
-        if re.search(r'\b' + re.escape(field_name) + r'\b', corpus):
-            used.add(wire_key)
-        # Also accept if the wire key itself appears (unlikely outside registry,
-        # but possible in comments or string literals we want to catch).
-        elif re.search(r'\b' + re.escape(wire_key) + r'\b', corpus):
-            used.add(wire_key)
-
-    return used
+def collect_patch_fields(config_pb2_module: object) -> dict[PatchKey, int]:
+    """Return {(message_name, field_name): cpp_type} for the three curated Patch messages."""
+    fields: dict[PatchKey, int] = {}
+    for msg_name in PATCH_MESSAGE_NAMES:
+        msg_cls = getattr(config_pb2_module, msg_name)
+        for field in msg_cls.DESCRIPTOR.fields:
+            fields[(msg_name, field.name)] = field.cpp_type
+    return fields
 
 
 # ---------------------------------------------------------------------------
-# Allowlist loader
+# Allowlist loader (same shape/contract as the pre-rewrite script)
 # ---------------------------------------------------------------------------
 
 def load_allowlist(path: Path) -> dict[str, dict[str, str]]:
@@ -182,7 +292,6 @@ def load_allowlist(path: Path) -> dict[str, dict[str, str]]:
     if not path.exists():
         return {}
     data = json.loads(path.read_text())
-    # Validate: each value must be a non-empty string justification.
     for category, entries in data.items():
         for name, justification in entries.items():
             if not isinstance(justification, str) or not justification.strip():
@@ -193,72 +302,125 @@ def load_allowlist(path: Path) -> dict[str, dict[str, str]]:
     return data
 
 
+def _allowlist_match(item: str, allowed: dict[str, str]) -> Optional[str]:
+    """Return the justification for `item`, honoring `"prefix.*"` wildcard keys."""
+    if item in allowed:
+        return allowed[item]
+    for key, justification in allowed.items():
+        if key.endswith(".*") and item.startswith(key[:-1]):
+            return justification
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Core diff — pure function, no I/O, directly unit-testable with synthetic
+# pydantic_fields/patch_fields/mapping.
+# ---------------------------------------------------------------------------
+
+def compute_findings(
+    pydantic_fields: dict[str, type],
+    patch_fields: dict[PatchKey, int],
+    mapping: dict[PatchKey, list[str]],
+) -> dict[str, set[str]]:
+    """Diff pydantic leaf fields against Patch descriptor fields via `mapping`.
+
+    Returns one `set[str]` per category in `ALL_CATEGORIES` (see module
+    docstring for what each category means and its item-string format).
+    """
+    findings: dict[str, set[str]] = {c: set() for c in ALL_CATEGORIES}
+
+    mapped_pydantic_targets: set[str] = set()
+
+    for key, cpp_type in patch_fields.items():
+        msg_name, field_name = key
+        label = f"{msg_name}.{field_name}"
+
+        if key not in mapping:
+            findings["unmapped-patch-field"].add(label)
+            continue
+
+        targets = mapping[key]
+        if not targets:
+            findings["patch-field-no-pydantic"].add(label)
+            continue
+
+        expected_py_type = CPP_TYPE_TO_PY.get(cpp_type)
+        for target in targets:
+            mapped_pydantic_targets.add(target)
+            if target not in pydantic_fields:
+                findings["stale-map-target"].add(f"{label}->{target}")
+                continue
+            actual_type = pydantic_fields[target]
+            if expected_py_type is not None and actual_type is not expected_py_type:
+                findings["type-mismatch"].add(f"{label}->{target}")
+
+    for pydantic_path in pydantic_fields:
+        if pydantic_path not in mapped_pydantic_targets:
+            findings["pydantic-field-no-patch"].add(pydantic_path)
+
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# Reporting + allowlist application
+# ---------------------------------------------------------------------------
+
+def apply_allowlist_and_report(findings: dict[str, set[str]], allowlist: dict[str, dict[str, str]]) -> bool:
+    """Print the report. Returns True (clean) or False (offenders remain)."""
+    clean = True
+
+    for category in ALLOWLIST_CATEGORIES:
+        allowed = allowlist.get(category, {})
+        items = findings[category]
+        exempt = {item: _allowlist_match(item, allowed) for item in items if _allowlist_match(item, allowed)}
+        offenders = items - set(exempt)
+
+        if exempt:
+            print(f"\n[OK]   {category} (allowlisted):")
+            for name in sorted(exempt):
+                print(f"  - {name}: {exempt[name]}")
+        if offenders:
+            clean = False
+            print(f"\n[FAIL] {category}:")
+            for name in sorted(offenders):
+                print(f"  - {name}")
+
+    for category in FORCED_FAIL_CATEGORIES:
+        items = findings[category]
+        if items:
+            clean = False
+            print(f"\n[FAIL] {category} (not allowlistable — edit PATCH_TO_PYDANTIC in "
+                  f"scripts/check_config_sync.py instead):")
+            for name in sorted(items):
+                print(f"  - {name}")
+
+    return clean
+
+
 # ---------------------------------------------------------------------------
 # Main lint logic
 # ---------------------------------------------------------------------------
 
 def run_lint() -> int:
-    """Perform the lint.  Returns 0 (clean) or 1 (drift detected)."""
+    """Perform the lint. Returns 0 (clean) or 1 (drift detected / inputs unavailable)."""
+    try:
+        from robot_radio.config.robot_config import RobotConfig
+        from robot_radio.robot.pb2 import config_pb2
+    except ImportError as exc:
+        print(f"check_config_sync: SKIP-FAIL — could not import host inputs: {exc}")
+        print("  Run from the repository root with `robot_radio` importable, "
+              "e.g. `uv run python scripts/check_config_sync.py`.")
+        return 1
 
-    # Parse.
-    struct_fields: list[str] = parse_struct_fields(CONFIG_H)
-    registry_entries: list[tuple[str, str]] = parse_registry_entries(REGISTRY_CPP)
-
-    struct_set = set(struct_fields)
-    reg_field_set = {field for _, field in registry_entries}
-    reg_key_set   = {key   for key, _ in registry_entries}
-    # Map wire_key -> field_name for usage reporting.
-    key_to_field  = {key: field for key, field in registry_entries}
-
-    used_keys = build_usage_set(SOURCE_DIR, registry_entries)
-
-    # Compute the three mismatch categories.
-    in_struct_not_registered  = struct_set - reg_field_set
-    registered_not_in_struct  = reg_field_set - struct_set
-    registered_not_used       = reg_key_set - used_keys
-
-    # Load allowlist.
-    allowlist = load_allowlist(ALLOWLIST_FILE)
-
-    al_not_registered = allowlist.get("in-struct-not-registered", {})
-    al_not_in_struct  = allowlist.get("registered-not-in-struct", {})
-    al_not_used       = allowlist.get("registered-not-used", {})
-
-    # Apply allowlist.
-    offenders_a = in_struct_not_registered - set(al_not_registered)
-    offenders_b = registered_not_in_struct - set(al_not_in_struct)
-    # registered-not-used is keyed by wire_key in the allowlist.
-    offenders_c = registered_not_used - set(al_not_used)
-
-    # Report.
-    clean = True
-
-    def _report(category: str, items: set[str]) -> None:
-        nonlocal clean
-        if items:
-            clean = False
-            print(f"\n[FAIL] {category}:")
-            for name in sorted(items):
-                print(f"  - {name}")
-
-    def _report_ok(category: str, items: set[str], allowlisted: dict) -> None:
-        exempt = {k: v for k, v in allowlisted.items() if k in items}
-        if exempt:
-            print(f"\n[OK]   {category} (allowlisted):")
-            for name, reason in sorted(exempt.items()):
-                print(f"  - {name}: {reason}")
-
-    # Show allowlisted entries so the output is fully transparent.
-    _report_ok("in-struct-not-registered",
-               in_struct_not_registered, al_not_registered)
-    _report_ok("registered-not-in-struct",
-               registered_not_in_struct, al_not_in_struct)
-    # For registered-not-used, al_not_used is keyed by wire_key.
-    _report_ok("registered-not-used", registered_not_used, al_not_used)
-
-    _report("in-struct-not-registered",  offenders_a)
-    _report("registered-not-in-struct",  offenders_b)
-    _report("registered-not-used",       offenders_c)
+    try:
+        pydantic_fields = flatten_pydantic_fields(RobotConfig)
+        patch_fields = collect_patch_fields(config_pb2)
+        allowlist = load_allowlist(ALLOWLIST_FILE)
+        findings = compute_findings(pydantic_fields, patch_fields, PATCH_TO_PYDANTIC)
+        clean = apply_allowlist_and_report(findings, allowlist)
+    except Exception as exc:  # noqa: BLE001 — never let this script crash the caller
+        print(f"check_config_sync: SKIP-FAIL — unexpected error: {exc!r}")
+        return 1
 
     if clean:
         print("check_config_sync: OK — no drift detected.")

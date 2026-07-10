@@ -1,9 +1,11 @@
 ---
-id: '008'
+id: 008
 title: check_config_sync.py rewrite against pb2 descriptors vs pydantic
-status: open
-use-cases: [SUC-007]
-depends-on: ['001']
+status: done
+use-cases:
+- SUC-007
+depends-on:
+- '001'
 github-issue: ''
 issue: protocol-v3-schema-driven-binary-command-plane-protobuf.md
 completes_issue: false
@@ -52,17 +54,17 @@ descriptors for the curated Patch messages must exist).
 
 ## Acceptance Criteria
 
-- [ ] `python scripts/check_config_sync.py` exits 0 against the current
+- [x] `python scripts/check_config_sync.py` exits 0 against the current
       tree (or reports genuine, fixable drift — never a crash from a
       missing input file, which is the CURRENT broken behavior).
-- [ ] A field present in the pydantic model but absent from the curated
+- [x] A field present in the pydantic model but absent from the curated
       pb2 Patch descriptors (or vice versa) is reported, not silently
       ignored.
-- [ ] The allowlist mechanism (`scripts/config_sync_allowlist.json`) is
+- [x] The allowlist mechanism (`scripts/config_sync_allowlist.json`) is
       preserved in spirit (an escape hatch for known-intentional
       exceptions) with its new category names documented in the script's
       own module docstring.
-- [ ] The script's module docstring no longer references
+- [x] The script's module docstring no longer references
       `source/types/Config.h` or `source/robot/ConfigRegistry.cpp`.
 
 ## Testing
