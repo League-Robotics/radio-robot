@@ -131,21 +131,27 @@ Before tickets can be created, all of the following must be true:
 
 ## Tickets
 
+**r2 note (Eric, 2026-07-10 — see `architecture-update-r2.md` Decision
+9): the firmware text plane is gutted unconditionally this sprint; a
+`rogo` translator proxy is the host's own text-compatibility story.**
+006/007/008 no longer depend on 005 — see r2 for the full model change.
+
 | # | Title | Depends On |
 |---|-------|------------|
 | 001 | Binary telemetry push-frame queue (fix corr_id=0 drop in SerialConnection) | — |
 | 002 | NezhaProtocol core conversion (liveness/drive/config) + Legacy Verb Translator | — |
 | 003 | NezhaProtocol telemetry conversion (stream/snap) + 9-file consumer sweep + delete parse_tlm/parse_cfg | 001 |
-| 004 | rogo REPL translator: text-v2-to-envelope + --decode pretty-printer | 002, 003 |
-| 005 | Host verification gate: binary NezhaProtocol against existing consumer test suites | 001, 002, 003, 004 |
-| 006 | Firmware: retire migrated motion + liveness text families (S/D/T/RT/MOVE/MOVER, ECHO/VER, ParsedCommand) | 005 |
-| 007 | Firmware: retire text config family (delete config_commands.cpp SET/GET) | 005 |
-| 008 | Firmware: retire text telemetry family (STREAM/SNAP text handlers + text TLM formatter) | 005 |
-| 009 | Protocol documentation: rewrite docs/protocol-v2.md as docs/protocol-v3.md | 006, 007, 008 |
-| 010 | Migration closure: grep-clean verification, line-count and flash/RAM report, close the v3 issue (`completes_issue: true`) | 009 |
+| 004 | rogo translator proxy: text-v2 socket server fronting the real binary robot connection | 002, 003 |
+| 005 | Light end-to-end verification: binary command plane + rogo proxy in sim; testgui baseline | 001, 002, 003, 004 |
+| 006 | Firmware: gut the migrated motion + liveness text families | — |
+| 007 | Firmware: gut the text config family | — |
+| 008 | Firmware: gut the text telemetry family | — |
+| 009 | Protocol documentation: pure-binary wire + rump + rogo proxy | 004, 006, 007, 008 |
+| 010 | Migration closure: grep-clean verification, line-count and flash/RAM report | 009 |
 
-Tickets execute serially in the order listed. 001/002 have no
-inter-ticket dependency and could in principle run in either order, but
-are sequenced 001-then-002 as listed since 003 (telemetry) depends on
-001 and comes before 004; keeping strict numeric/table order avoids any
-ambiguity for serial execution.
+Tickets execute serially in the order listed for a coherent build-up
+(host completion 001-005, firmware gut 006-008, docs 009, closure 010),
+even though 006/007/008 have no formal `depends-on` edge on 001-005 —
+their deletion is unconditional under Decision 9, not gated on host
+readiness. `completes_issue` is `false` on all tickets this sprint
+(team-lead's own explicit call on 010, unchanged by r2).
