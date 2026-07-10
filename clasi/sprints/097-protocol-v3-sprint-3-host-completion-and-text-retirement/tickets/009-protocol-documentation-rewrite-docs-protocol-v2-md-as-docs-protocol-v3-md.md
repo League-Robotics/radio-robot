@@ -1,9 +1,14 @@
 ---
-id: '009'
+id: 009
 title: 'Protocol documentation: pure-binary wire + rump + rogo proxy'
-status: open
-use-cases: [SUC-010]
-depends-on: ['004', '006', '007', '008']
+status: done
+use-cases:
+- SUC-010
+depends-on:
+- '004'
+- '006'
+- '007'
+- 008
 github-issue: ''
 issue: protocol-v3-schema-driven-binary-command-plane-protobuf.md
 completes_issue: false
@@ -61,26 +66,26 @@ reachable.
 
 ## Acceptance Criteria
 
-- [ ] `docs/protocol-v3.md` exists and documents every implemented binary
+- [x] `docs/protocol-v3.md` exists and documents every implemented binary
       arm (drive/segment/replace/stop/ping/echo/id/config/get/stream).
-- [ ] `docs/protocol-v3.md` documents the FINAL rump size exactly as
+- [x] `docs/protocol-v3.md` documents the FINAL rump size exactly as
       ticket 006 shipped it (not the stale 5-verb or the stated 2-verb
       default — the actual outcome), and the `rogo` proxy as the primary
       text-compatibility path.
-- [ ] `docs/protocol-v3.md` explicitly names and explains
+- [x] `docs/protocol-v3.md` explicitly names and explains
       `otos_commands.cpp`/`pose_commands.cpp`/`dev_commands.cpp` as
       off-the-wire-entirely (never gutted, never proxied, different
       category from the rump/proxy-covered families).
-- [ ] `docs/protocol-v3.md` explicitly states which currently-live host
+- [x] `docs/protocol-v3.md` explicitly states which currently-live host
       tools break against this firmware and are not yet rewired to the
       proxy (per ticket 006/007/008's own completion notes).
-- [ ] `docs/protocol-v2.md` carries a clear, prominent superseded-by
+- [x] `docs/protocol-v2.md` carries a clear, prominent superseded-by
       pointer to `docs/protocol-v3.md` at the top of the file; the file is
       NOT deleted.
-- [ ] No section of `docs/protocol-v3.md` describes a verb tickets 006/
+- [x] No section of `docs/protocol-v3.md` describes a verb tickets 006/
       007/008 deleted as if it were still live on the firmware TEXT
       plane (it may of course describe it as available via the proxy).
-- [ ] `tests/sim` stays green (documentation-only ticket; sanity check).
+- [x] `tests/sim` stays green (documentation-only ticket; sanity check).
 
 ## Implementation Plan
 
@@ -113,3 +118,47 @@ reachable.
 ### Documentation updates
 
 - This ticket IS the documentation update.
+
+## Completion Notes
+
+- `docs/protocol-v3.md` written (11 sections + appendix): overview,
+  envelope framing (§2), every `CommandEnvelope`/`ReplyEnvelope` arm
+  (§3/§4, cites `protos/*.proto` rather than restating bounds), error
+  taxonomy (§5), the confirmed 3-verb rump `STOP`/`PING`/`HELLO` (§6,
+  grep-verified against `buildTable()`/`systemCommands()`/
+  `motionCommands()`/`telemetryCommands()`), the `rogo proxy` PTY bridge
+  as primary compatibility path incl. verb routing table and EVT
+  synthesis (§7), the off-the-wire-entirely OTOS/pose/DEV families (§8),
+  the accepted host-tooling breakage window (§9), and a v2-section →
+  v3-status cross-reference table (§10).
+- `docs/protocol-v2.md` got a superseded-by banner at the top; file not
+  deleted.
+- **Correction found during grep-cross-check** (this ticket's own
+  acceptance criterion 6): the ticket's own description text (line ~50)
+  groups `QLEN` with the "gutted-but-proxied" families
+  (S/D/T/RT/MOVE/MOVER/ECHO/VER/QLEN/handleTlm/SET/GET/STREAM/SNAP).
+  Reading `host/robot_radio/io/proxy.py` directly shows this is wrong:
+  `QLEN` is in `_ALWAYS_UNSUPPORTED_VERBS` alongside `G`/`R`/`TURN`/`GRIP`
+  — no binary `qlen` arm exists in `envelope.proto`, so the proxy answers
+  it with a typed `ERR unsupported`, not a translation. `docs/protocol-v3.md`
+  documents the verified behavior (QLEN alongside G/R/TURN/GRIP, §7.4/§7.6),
+  not the ticket description's original grouping — flagged here per this
+  ticket's own "grep-cross-check every verb you claim is live" instruction,
+  not silently reconciled.
+- Also verified and corrected while drafting: `docs/protocol-v2.md` §8's
+  historical `TLM Frame Format` table (`line=`/`color=`/`wedge=`/
+  `otos_health=`/`ekf_rej=`) describes an older `source_old/`-era wire
+  format. This rebuilt tree's `source/telemetry/tlm_frame.cpp` never
+  emitted `line=`/`color=` at all (line/color sensor HAL leaves are
+  declared but never ticked — see
+  `clasi/issues/restore-line-and-color-sensors-as-ticked-blackboard-devices.md`)
+  and never had a `wedge=` token either — `docs/protocol-v3.md` §4/§7.6
+  state this precisely rather than implying those fields were ever live
+  on this tree's text wire before 097 gutted it.
+- Verification: `uv run python -m pytest tests/sim -q` → **597 passed**
+  in 83.52s (sanity, unaffected by a docs-only ticket). Every verb named
+  in `docs/protocol-v3.md` was grep-confirmed against
+  `source/runtime/command_router.cpp` (`buildTable()`),
+  `source/commands/{system_commands,motion_commands,telemetry_commands}.{h,cpp}`,
+  `source/commands/binary_channel.cpp`, `protos/envelope.proto`, and
+  `host/robot_radio/io/proxy.py`/`robot/{legacy_verbs,legacy_render}.py`.

@@ -1,5 +1,18 @@
 # Protocol v2 Wire Specification
 
+> **SUPERSEDED by [`docs/protocol-v3.md`](protocol-v3.md).** Sprint 097
+> ("Protocol v3 Sprint 3: host completion and text retirement") replaced
+> the firmware's text command plane described below with a schema-driven
+> binary envelope plane (`*B<base64(protobuf)>`), a 3-verb text safety
+> rump (`STOP`/`PING`/`HELLO`), and a host-side `rogo proxy` PTY bridge
+> for legacy text clients. Most of §6–§10 and §13 below now describe
+> verbs that are **no longer live on the firmware text plane** — this
+> file is kept for history, not deleted, but `docs/protocol-v3.md` is the
+> current wire reference. §11 (OTOS/Port I/O) and §16 (Development
+> Commands) still describe those two families' text grammar accurately,
+> but that grammar has been off the wire (unregistered) since before
+> sprint 097 started — see protocol-v3.md §8.
+
 Version 2 of the Nezha firmware command/telemetry protocol.
 Hard break from v1 — no backward compatibility.
 
