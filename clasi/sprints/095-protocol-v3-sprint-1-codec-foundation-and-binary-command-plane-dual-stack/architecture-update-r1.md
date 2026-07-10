@@ -1,6 +1,6 @@
 ---
 sprint: "095"
-status: draft
+status: done
 revises: architecture-update.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
