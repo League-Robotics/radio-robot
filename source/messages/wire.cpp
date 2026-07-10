@@ -671,8 +671,31 @@ bool encodeInto(const void* base, const MessageTable& table, uint8_t* buf, size_
         break;
       }
       case FieldKind::kString: {
+        // 095-006 (SUC-005, differential-suite finding): scan strictly up to
+        // `fd.cap - 1`, NEVER `fd.cap` -- the LAST byte of a char[cap] field
+        // is reserved for the null terminator by the SAME convention
+        // decodeInto()'s own kString case documents and enforces ("fd->cap
+        // is the array's FULL capacity, including room for the null
+        // terminator"). Scanning through `fd.cap` (the pre-fix bound) reads
+        // that reserved byte too: for a MAX-LENGTH string (content ==
+        // cap - 1 bytes, e.g. a 47-char DeviceId.model at str_len=48) there
+        // is no guaranteed '\0' anywhere in [0, cap), so the scan fell
+        // through to the reserved byte and used ITS value -- for a struct
+        // that was never round-tripped through decode() (every
+        // ReplyEnvelope this sprint IS hand-constructed by firmware code,
+        // never decoded; decode() is CommandEnvelope-only per wire.h's own
+        // asymmetric API, Decision 4), that reserved byte can be
+        // uninitialized (a default-constructed message only zero-initializes
+        // the ACTIVE union alternative's own bytes, not a not-yet-active
+        // alternative's tail past a smaller sibling -- see decode()'s own
+        // 095-006 fix comment above for the general shape of this hazard),
+        // leaking 1 byte of stack/heap garbage onto the wire and reporting a
+        // length one byte longer than the field's own documented maximum
+        // content length. Confirmed via the differential harness: encoding
+        // DeviceId{model: 47 'M' characters} emitted a 48-byte string field
+        // instead of 47.
         size_t slen = 0;
-        while (slen < fd.cap && reinterpret_cast<const char*>(fieldPtr)[slen] != '\0') ++slen;
+        while (slen < static_cast<size_t>(fd.cap) - 1 && reinterpret_cast<const char*>(fieldPtr)[slen] != '\0') ++slen;
         if (slen == 0) break;  // proto3 implicit presence
         if (!WireRuntime::encodeTag(fd.number, fd.wireType, buf, cap, pos)) return false;
         if (!WireRuntime::encodeVarint(slen, buf, cap, pos)) return false;
@@ -726,7 +749,37 @@ bool encodeInto(const void* base, const MessageTable& table, uint8_t* buf, size_
 }  // namespace
 
 Result decode(CommandEnvelope& out, const uint8_t* buf, uint16_t len) {
-  out = CommandEnvelope{};
+  // 095-006 (SUC-005, differential-suite finding, fixed at the generator so
+  // every regeneration carries the fix): `out = CommandEnvelope{}` does NOT
+  // zero the whole object. Per the C++ aggregate-init rules for a union
+  // data member, `= {}` value-initializes only the union's FIRST named
+  // alternative (`cmd.drive`, and recursively `control.twist` inside IT);
+  // any union alternative that is not first AND is larger than the first
+  // alternative's own size (e.g. `cmd.drive.control.wheels`, a WheelTargets,
+  // is far larger than `control`'s first alternative BodyTwist3) has its
+  // extra bytes left INDETERMINATE. decodeInto()'s repeated-message clamp
+  // (`kRepeatedMessage`) reads that indeterminate byte as the field's
+  // starting element COUNT before ever writing to it -- confirmed by the
+  // differential harness (095-006) reproducing a decode of a valid 2-element
+  // `drive.wheels` envelope that came back with a garbage element count and
+  // uninitialized element data, an uninitialized-memory read, not merely a
+  // stale-value cosmetic bug. `std::memset` zeroes every byte of `out`
+  // (well-defined: CommandEnvelope is standard-layout AND trivially
+  // copyable -- ticket 003's day-one gate -- so a full-object memset is the
+  // same "zero it all, unconditionally" idiom nanopb/protobuf-c use for the
+  // identical union-of-message-types shape), independent of which union
+  // alternative ends up decoded. Destination cast to `void*` explicitly:
+  // GCC's `-Wclass-memaccess` (part of `-Wall`/`-Wextra`) flags a
+  // `memset()`/`memcpy()` whose destination argument's OWN declared type is
+  // a non-trivial class -- exactly what CommandEnvelope is, for the same
+  // "has default member initializers" reason noted above (ticket 003's own
+  // day-one gate: standard-layout AND trivially copyable, but NOT trivial).
+  // The warning's usual concern (memset-ing a type with vtables/virtual
+  // bases/non-POD members) does not apply here -- ticket 003 already proved
+  // this exact property -- but the diagnostic can't see that, only the
+  // static type; casting to `void*` states the intent explicitly instead of
+  // leaving an unexplained warning at every regeneration.
+  std::memset(static_cast<void*>(&out), 0, sizeof(out));
   if (buf == nullptr && len != 0) return Result{false, 0, ErrCode::ERR_DECODE};
   return decodeInto(&out, kTable_CommandEnvelope, buf, static_cast<size_t>(len), 0);
 }
