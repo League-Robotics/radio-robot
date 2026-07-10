@@ -19,6 +19,12 @@ import "google/protobuf/descriptor.proto";
 // (req)       — field must be present on the wire (binary decode fails the
 //               command if absent). Same generated-validator status as
 //               (min)/(max)/(abs_max).
+// (str_len)   — overrides gen_messages.py's default `char[64]` width for a
+//               `string` field. Added 095-005 (Step 0b), scoped to this one
+//               need (shrinking DeviceId's three strings to fit the 186-byte
+//               envelope budget) rather than a general per-field-width
+//               scheme — do not extend this option's meaning beyond string
+//               capacity without revisiting its scope.
 
 extend google.protobuf.FieldOptions {
   optional string units     = 50000;
@@ -27,4 +33,5 @@ extend google.protobuf.FieldOptions {
   optional double max       = 50003;
   optional double abs_max   = 50004;
   optional bool   req       = 50005;
+  optional uint32 str_len   = 50006;
 }

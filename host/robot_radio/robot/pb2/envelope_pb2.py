@@ -25,11 +25,10 @@ _sym_db = _symbol_database.Default()
 import options_pb2 as options__pb2
 import drivetrain_pb2 as drivetrain__pb2
 import motion_pb2 as motion__pb2
-import planner_pb2 as planner__pb2
 import odometer_pb2 as odometer__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0e\x65nvelope.proto\x12\x05robot\x1a\roptions.proto\x1a\x10\x64rivetrain.proto\x1a\x0cmotion.proto\x1a\rplanner.proto\x1a\x0eodometer.proto\"\x1d\n\x03\x41\x63k\x12\t\n\x01q\x18\x01 \x01(\r\x12\x0b\n\x03rem\x18\x02 \x01(\x02\"4\n\x05\x45rror\x12\x1c\n\x04\x63ode\x18\x01 \x01(\x0e\x32\x0e.robot.ErrCode\x12\r\n\x05\x66ield\x18\x02 \x01(\r\"\x06\n\x04Ping\"\x1d\n\x04\x45\x63ho\x12\x15\n\x07payload\x18\x01 \x01(\x0c\x42\x04\x88\xb5\x18@\"\x1b\n\tConfigGet\x12\x0e\n\x06target\x18\x01 \x01(\r\"/\n\rStreamControl\x12\x0e\n\x06\x62inary\x18\x01 \x01(\x08\x12\x0e\n\x06period\x18\x02 \x01(\r\"\x06\n\x04Stop\"b\n\x08\x44\x65viceId\x12\r\n\x05model\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x0e\n\x06serial\x18\x03 \x01(\r\x12\x12\n\nfw_version\x18\x04 \x01(\t\x12\x15\n\rproto_version\x18\x05 \x01(\r\"\r\n\x0b\x43onfigDelta\"\x0b\n\tTelemetry\"\x10\n\x0e\x43onfigSnapshot\"\r\n\x0b\x45ventNotify\"\xfc\x03\n\x0f\x43ommandEnvelope\x12\x0f\n\x07\x63orr_id\x18\x01 \x01(\r\x12)\n\x05\x64rive\x18\x02 \x01(\x0b\x32\x18.robot.DrivetrainCommandH\x00\x12\'\n\x07segment\x18\x03 \x01(\x0b\x32\x14.robot.MotionSegmentH\x00\x12\'\n\x07replace\x18\x04 \x01(\x0b\x32\x14.robot.MotionSegmentH\x00\x12\'\n\x06motion\x18\x05 \x01(\x0b\x32\x15.robot.PlannerCommandH\x00\x12$\n\x06\x63onfig\x18\x06 \x01(\x0b\x32\x12.robot.ConfigDeltaH\x00\x12\x1e\n\x04pose\x18\x07 \x01(\x0b\x32\x0e.robot.SetPoseH\x00\x12&\n\x04otos\x18\x08 \x01(\x0b\x32\x16.robot.OdometerCommandH\x00\x12\x1b\n\x04ping\x18\t \x01(\x0b\x32\x0b.robot.PingH\x00\x12\x1b\n\x04\x65\x63ho\x18\n \x01(\x0b\x32\x0b.robot.EchoH\x00\x12\x1f\n\x03get\x18\x0b \x01(\x0b\x32\x10.robot.ConfigGetH\x00\x12&\n\x06stream\x18\x0c \x01(\x0b\x32\x14.robot.StreamControlH\x00\x12\x1b\n\x04stop\x18\r \x01(\x0b\x32\x0b.robot.StopH\x00\x12\x1d\n\x02id\x18\x0e \x01(\x0b\x32\x0f.robot.DeviceIdH\x00\x42\x05\n\x03\x63md\"\xe8\x01\n\rReplyEnvelope\x12\x0f\n\x07\x63orr_id\x18\x01 \x01(\r\x12\x18\n\x02ok\x18\x02 \x01(\x0b\x32\n.robot.AckH\x00\x12\x1b\n\x03\x65rr\x18\x03 \x01(\x0b\x32\x0c.robot.ErrorH\x00\x12\x1f\n\x03tlm\x18\x04 \x01(\x0b\x32\x10.robot.TelemetryH\x00\x12$\n\x03\x63\x66g\x18\x05 \x01(\x0b\x32\x15.robot.ConfigSnapshotH\x00\x12!\n\x03\x65vt\x18\x06 \x01(\x0b\x32\x12.robot.EventNotifyH\x00\x12\x1d\n\x02id\x18\x07 \x01(\x0b\x32\x0f.robot.DeviceIdH\x00\x42\x06\n\x04\x62ody*\x8e\x01\n\x07\x45rrCode\x12\x0c\n\x08\x45RR_NONE\x10\x00\x12\x0f\n\x0b\x45RR_UNKNOWN\x10\x01\x12\x0e\n\nERR_BADARG\x10\x02\x12\r\n\tERR_RANGE\x10\x03\x12\x0c\n\x08\x45RR_FULL\x10\x04\x12\x0e\n\nERR_DECODE\x10\x05\x12\x15\n\x11\x45RR_UNIMPLEMENTED\x10\x06\x12\x10\n\x0c\x45RR_OVERSIZE\x10\x07\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0e\x65nvelope.proto\x12\x05robot\x1a\roptions.proto\x1a\x10\x64rivetrain.proto\x1a\x0cmotion.proto\x1a\x0eodometer.proto\"\x1d\n\x03\x41\x63k\x12\t\n\x01q\x18\x01 \x01(\r\x12\x0b\n\x03rem\x18\x02 \x01(\x02\"4\n\x05\x45rror\x12\x1c\n\x04\x63ode\x18\x01 \x01(\x0e\x32\x0e.robot.ErrCode\x12\r\n\x05\x66ield\x18\x02 \x01(\r\"\x06\n\x04Ping\"\x1d\n\x04\x45\x63ho\x12\x15\n\x07payload\x18\x01 \x01(\x0c\x42\x04\x88\xb5\x18@\"1\n\tConfigGet\x12\x19\n\x06target\x18\x01 \x01(\rB\x04\xa8\xb5\x18\x01H\x00\x88\x01\x01\x42\t\n\x07_target\"/\n\rStreamControl\x12\x0e\n\x06\x62inary\x18\x01 \x01(\x08\x12\x0e\n\x06period\x18\x02 \x01(\r\"\x06\n\x04Stop\"t\n\x08\x44\x65viceId\x12\x13\n\x05model\x18\x01 \x01(\tB\x04\xb0\xb5\x18\x30\x12\x12\n\x04name\x18\x02 \x01(\tB\x04\xb0\xb5\x18\x30\x12\x0e\n\x06serial\x18\x03 \x01(\r\x12\x18\n\nfw_version\x18\x04 \x01(\tB\x04\xb0\xb5\x18\x30\x12\x15\n\rproto_version\x18\x05 \x01(\r\"\r\n\x0b\x43onfigDelta\"\x0b\n\tTelemetry\"\x10\n\x0e\x43onfigSnapshot\"\r\n\x0b\x45ventNotify\"\xd9\x03\n\x0f\x43ommandEnvelope\x12\x0f\n\x07\x63orr_id\x18\x01 \x01(\r\x12)\n\x05\x64rive\x18\x02 \x01(\x0b\x32\x18.robot.DrivetrainCommandH\x00\x12\'\n\x07segment\x18\x03 \x01(\x0b\x32\x14.robot.MotionSegmentH\x00\x12\'\n\x07replace\x18\x04 \x01(\x0b\x32\x14.robot.MotionSegmentH\x00\x12$\n\x06\x63onfig\x18\x06 \x01(\x0b\x32\x12.robot.ConfigDeltaH\x00\x12\x1e\n\x04pose\x18\x07 \x01(\x0b\x32\x0e.robot.SetPoseH\x00\x12&\n\x04otos\x18\x08 \x01(\x0b\x32\x16.robot.OdometerCommandH\x00\x12\x1b\n\x04ping\x18\t \x01(\x0b\x32\x0b.robot.PingH\x00\x12\x1b\n\x04\x65\x63ho\x18\n \x01(\x0b\x32\x0b.robot.EchoH\x00\x12\x1f\n\x03get\x18\x0b \x01(\x0b\x32\x10.robot.ConfigGetH\x00\x12&\n\x06stream\x18\x0c \x01(\x0b\x32\x14.robot.StreamControlH\x00\x12\x1b\n\x04stop\x18\r \x01(\x0b\x32\x0b.robot.StopH\x00\x12\x1d\n\x02id\x18\x0e \x01(\x0b\x32\x0f.robot.DeviceIdH\x00\x42\x05\n\x03\x63mdJ\x04\x08\x05\x10\x06\"\xe8\x01\n\rReplyEnvelope\x12\x0f\n\x07\x63orr_id\x18\x01 \x01(\r\x12\x18\n\x02ok\x18\x02 \x01(\x0b\x32\n.robot.AckH\x00\x12\x1b\n\x03\x65rr\x18\x03 \x01(\x0b\x32\x0c.robot.ErrorH\x00\x12\x1f\n\x03tlm\x18\x04 \x01(\x0b\x32\x10.robot.TelemetryH\x00\x12$\n\x03\x63\x66g\x18\x05 \x01(\x0b\x32\x15.robot.ConfigSnapshotH\x00\x12!\n\x03\x65vt\x18\x06 \x01(\x0b\x32\x12.robot.EventNotifyH\x00\x12\x1d\n\x02id\x18\x07 \x01(\x0b\x32\x0f.robot.DeviceIdH\x00\x42\x06\n\x04\x62ody*\x8e\x01\n\x07\x45rrCode\x12\x0c\n\x08\x45RR_NONE\x10\x00\x12\x0f\n\x0b\x45RR_UNKNOWN\x10\x01\x12\x0e\n\nERR_BADARG\x10\x02\x12\r\n\tERR_RANGE\x10\x03\x12\x0c\n\x08\x45RR_FULL\x10\x04\x12\x0e\n\nERR_DECODE\x10\x05\x12\x15\n\x11\x45RR_UNIMPLEMENTED\x10\x06\x12\x10\n\x0c\x45RR_OVERSIZE\x10\x07\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -38,34 +37,42 @@ if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_ECHO'].fields_by_name['payload']._loaded_options = None
   _globals['_ECHO'].fields_by_name['payload']._serialized_options = b'\210\265\030@'
-  _globals['_ERRCODE']._serialized_start=1221
-  _globals['_ERRCODE']._serialized_end=1363
-  _globals['_ACK']._serialized_start=103
-  _globals['_ACK']._serialized_end=132
-  _globals['_ERROR']._serialized_start=134
-  _globals['_ERROR']._serialized_end=186
-  _globals['_PING']._serialized_start=188
-  _globals['_PING']._serialized_end=194
-  _globals['_ECHO']._serialized_start=196
-  _globals['_ECHO']._serialized_end=225
-  _globals['_CONFIGGET']._serialized_start=227
-  _globals['_CONFIGGET']._serialized_end=254
-  _globals['_STREAMCONTROL']._serialized_start=256
-  _globals['_STREAMCONTROL']._serialized_end=303
-  _globals['_STOP']._serialized_start=305
-  _globals['_STOP']._serialized_end=311
-  _globals['_DEVICEID']._serialized_start=313
-  _globals['_DEVICEID']._serialized_end=411
-  _globals['_CONFIGDELTA']._serialized_start=413
-  _globals['_CONFIGDELTA']._serialized_end=426
-  _globals['_TELEMETRY']._serialized_start=428
-  _globals['_TELEMETRY']._serialized_end=439
-  _globals['_CONFIGSNAPSHOT']._serialized_start=441
-  _globals['_CONFIGSNAPSHOT']._serialized_end=457
-  _globals['_EVENTNOTIFY']._serialized_start=459
-  _globals['_EVENTNOTIFY']._serialized_end=472
-  _globals['_COMMANDENVELOPE']._serialized_start=475
-  _globals['_COMMANDENVELOPE']._serialized_end=983
-  _globals['_REPLYENVELOPE']._serialized_start=986
-  _globals['_REPLYENVELOPE']._serialized_end=1218
+  _globals['_CONFIGGET'].fields_by_name['target']._loaded_options = None
+  _globals['_CONFIGGET'].fields_by_name['target']._serialized_options = b'\250\265\030\001'
+  _globals['_DEVICEID'].fields_by_name['model']._loaded_options = None
+  _globals['_DEVICEID'].fields_by_name['model']._serialized_options = b'\260\265\0300'
+  _globals['_DEVICEID'].fields_by_name['name']._loaded_options = None
+  _globals['_DEVICEID'].fields_by_name['name']._serialized_options = b'\260\265\0300'
+  _globals['_DEVICEID'].fields_by_name['fw_version']._loaded_options = None
+  _globals['_DEVICEID'].fields_by_name['fw_version']._serialized_options = b'\260\265\0300'
+  _globals['_ERRCODE']._serialized_start=1211
+  _globals['_ERRCODE']._serialized_end=1353
+  _globals['_ACK']._serialized_start=88
+  _globals['_ACK']._serialized_end=117
+  _globals['_ERROR']._serialized_start=119
+  _globals['_ERROR']._serialized_end=171
+  _globals['_PING']._serialized_start=173
+  _globals['_PING']._serialized_end=179
+  _globals['_ECHO']._serialized_start=181
+  _globals['_ECHO']._serialized_end=210
+  _globals['_CONFIGGET']._serialized_start=212
+  _globals['_CONFIGGET']._serialized_end=261
+  _globals['_STREAMCONTROL']._serialized_start=263
+  _globals['_STREAMCONTROL']._serialized_end=310
+  _globals['_STOP']._serialized_start=312
+  _globals['_STOP']._serialized_end=318
+  _globals['_DEVICEID']._serialized_start=320
+  _globals['_DEVICEID']._serialized_end=436
+  _globals['_CONFIGDELTA']._serialized_start=438
+  _globals['_CONFIGDELTA']._serialized_end=451
+  _globals['_TELEMETRY']._serialized_start=453
+  _globals['_TELEMETRY']._serialized_end=464
+  _globals['_CONFIGSNAPSHOT']._serialized_start=466
+  _globals['_CONFIGSNAPSHOT']._serialized_end=482
+  _globals['_EVENTNOTIFY']._serialized_start=484
+  _globals['_EVENTNOTIFY']._serialized_end=497
+  _globals['_COMMANDENVELOPE']._serialized_start=500
+  _globals['_COMMANDENVELOPE']._serialized_end=973
+  _globals['_REPLYENVELOPE']._serialized_start=976
+  _globals['_REPLYENVELOPE']._serialized_end=1208
 # @@protoc_insertion_point(module_scope)

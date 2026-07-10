@@ -84,15 +84,19 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #                                               schema-agnostic byte-level
 #                                               codec primitives (varint/
 #                                               zigzag/fixed32/length-
-#                                               delimited/base64). Listed
+#                                               delimited/base64).
+#   messages/wire.cpp                       -- 095-005's GENERATED FieldDesc
+#                                               tables + msg::wire::decode()/
+#                                               encode() (M4). Listed
 #                                               explicitly (not yet called by
 #                                               any other TU in this build --
-#                                               tickets 005/007 wire it up)
-#                                               so `just build-sim` proves it
-#                                               compiles under this build's
-#                                               own flags, the same TU-anchor
-#                                               treatment layout_checks.cpp
-#                                               above already gets.
+#                                               ticket 007 wires BinaryChannel
+#                                               up to it) so `just build-sim`
+#                                               proves it compiles under this
+#                                               build's own flags, the same
+#                                               TU-anchor treatment
+#                                               layout_checks.cpp above
+#                                               already gets.
 #   sim_api.cpp                             -- this ticket's C ABI
 #
 # Absent (deliberately, per this ticket's acceptance criteria):
@@ -148,6 +152,7 @@ set(FIRMWARE_SOURCES
     "${SOURCE_DIR}/com/i2c_bus_host.cpp"
     "${SOURCE_DIR}/messages/layout_checks.cpp"
     "${SOURCE_DIR}/messages/wire_runtime.cpp"
+    "${SOURCE_DIR}/messages/wire.cpp"
     ${RUCKIG_SOURCES}
 )
 

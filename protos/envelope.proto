@@ -5,7 +5,6 @@ package robot;
 import "options.proto";
 import "drivetrain.proto";
 import "motion.proto";
-import "planner.proto";
 import "odometer.proto";
 
 // ---------------------------------------------------------------------------
@@ -19,27 +18,39 @@ import "odometer.proto";
 //
 // **Implemented this sprint** (095, tickets 003-007 build runtime behavior
 // on these arms): drive, segment, replace, stop, ping, echo, id.
-// **Declared only** this sprint (schema exists now so 096/097/098 slot in
+// **Declared only** this sprint (schema exists now so 096/098 slot in
 // without a later schema break; `BinaryChannel` replies
 // `Error{ERR_UNIMPLEMENTED}` for these until their owning sprint lands):
-// motion (096/097 — Subsystems::Planner is currently parked, no live
-// consumer), config/get/stream (096), pose/otos (098).
+// config/get/stream (096), pose/otos (098).
+//
+// `motion` (field 5, `PlannerCommand`) is NOT declared this sprint --
+// architecture-update-r1.md Decision 6 (095, revising this document's
+// original "declare all arms now" framing): `PlannerCommand`'s own
+// worst-case encoded size is 327B, over the 186B envelope budget on its
+// own (dominated by `repeated StopCondition stops = 9 [(max_count) = 4]`
+// = 160B, never packed since it's repeated-message), and it has a live
+// text-plane consumer (`motion_commands.cpp`'s R/TURN/G handlers) that
+// makes shrinking it out of this ticket's scope. Field number 5 is
+// RESERVED, not reused -- a future sprint that un-parks
+// `Subsystems::Planner` defines a new, deliberately-bounded wire payload
+// type for `motion` first (the same move Decision 2 already made for
+// `segment`/`replace`: a purpose-built `MotionSegment` rather than
+// `Motion::Segment` directly), then declares it at field 5. Adding a new
+// oneof arm later is non-breaking in protobuf (ticket 004's unknown-
+// field-skip means older builds simply skip a field number they don't
+// recognize yet) -- there is no cost to reserving field 5 for later and
+// no benefit to declaring it now, unbounded.
 //
 // Cross-file message references (drive->DrivetrainCommand, segment/
-// replace->MotionSegment, motion->PlannerCommand, pose->SetPose,
-// otos->OdometerCommand): this is the FIRST protos/*.proto file in this
-// tree to import a subsystem-specific proto file other than common.proto/
-// options.proto (verified by grepping every other file's `import` lines).
-// scripts/gen_messages.py's `_emit_file()` unconditionally emits exactly one
-// `#include "messages/common.h"` for every non-common generated header
-// (`_OTHER_INCLUDE`) — it does not yet track PER-FILE cross-references to
-// emit `#include "messages/drivetrain.h"` etc. for the other imported
-// files. This is a real, verified generator gap (ticket 001's own
-// instruction: "verify the EXISTING rules already produce correct output
-// for these new messages; if they don't... flag and stop rather than
-// hand-patch generated output" — not fixed here; see ticket 001's
-// completion notes for the precise verification and the follow-up this
-// creates for ticket 005 / gen_messages.py's next extension).
+// replace->MotionSegment, pose->SetPose, otos->OdometerCommand): this was
+// the FIRST protos/*.proto file in this tree to import a subsystem-specific
+// proto file other than common.proto/options.proto (ticket 001). The
+// resulting generator gap (scripts/gen_messages.py's `_emit_file()`
+// emitting only a fixed `#include "messages/common.h"`, no per-file
+// cross-reference tracking) was fixed in ticket 003 --
+// `_cross_file_include_block()` now emits one additional `#include` per
+// OTHER proto file this file's own `import` lines name; see ticket 003's
+// completion notes for the fix and verification.
 // ---------------------------------------------------------------------------
 
 // Binary reply/error taxonomy (Open Question 4, resolved this ticket).
@@ -108,8 +119,21 @@ message Echo {
 // target: which config slice to fetch (096 defines the target enum/
 // numbering; declared-only this sprint, kept minimal per architecture-
 // update.md (095) Step 6).
+//
+// `target` is `optional` + `(req) = true` (095-005 Step 1-4 testing need:
+// the schema had no field exercising the generated decoder's `req`
+// validation path -- see ticket 005's completion notes). `optional` gives
+// this field real protobuf explicit-presence semantics (a synthetic oneof,
+// `Opt<uint32>` in the generated struct) rather than proto3's default
+// implicit presence, which is required for `(req)` to be meaningful: a
+// plain (non-optional) scalar field's zero value is indistinguishable from
+// "never sent" once a real protobuf encoder omits it, so marking a
+// non-optional field `req` would spuriously reject a legitimate
+// `target = 0`. `optional` forces every encoder (including the host's real
+// `google.protobuf` bindings, M7) to serialize the field whenever it is
+// explicitly set, zero value or not.
 message ConfigGet {
-  uint32 target = 1;
+  optional uint32 target = 1 [(req) = true];
 }
 
 // binary: true selects the binary telemetry emitter over the text one.
@@ -135,10 +159,16 @@ message Stop {}
 // its zero-value default (the request carries no payload of its own --
 // same "cannot be malformed" shape Stop gets above).
 message DeviceId {
-  string model         = 1;
-  string name          = 2;
+  // (str_len)=48 (095-005 Step 0b, architecture-update-r1.md Decision 6):
+  // shrunk from the generator's default char[64] so
+  // `ReplyEnvelope{DeviceId}`'s worst-case kMaxEncodedSize fits the 186-byte
+  // envelope budget (~171B after this shrink; see ticket 005's completion
+  // notes for the full computation) -- Open Question 3's already-sanctioned
+  // latitude.
+  string model         = 1 [(str_len) = 48];
+  string name          = 2 [(str_len) = 48];
   uint32 serial        = 3;
-  string fw_version    = 4;
+  string fw_version    = 4 [(str_len) = 48];
   uint32 proto_version = 5;
 }
 
@@ -191,12 +221,19 @@ message EventNotify {}
 // One command in. corr_id is echoed back on ReplyEnvelope so a pipelined
 // client can correlate replies out of order.
 message CommandEnvelope {
+  reserved 5;  // PlannerCommand motion -- see the oneof's own comment below
   uint32 corr_id = 1;
   oneof cmd {
     DrivetrainCommand drive   = 2;   // -> bb.driveIn
     MotionSegment     segment = 3;   // -> bb.segmentIn   (MOVE)
     MotionSegment     replace = 4;   // -> bb.replaceIn   (MOVER)
-    PlannerCommand    motion  = 5;   // -> bb.motionIn (declared only -- Planner parked)
+    // 5 reserved -- `PlannerCommand motion`, removed 095-005 Step 0a
+    // (architecture-update-r1.md Decision 6): PlannerCommand's 327B
+    // worst-case size can't fit the 186B budget and has a live text-plane
+    // consumer out of this ticket's scope to shrink. A future sprint
+    // re-declares `motion` at field 5 with a new, deliberately-bounded
+    // wire payload type once Subsystems::Planner un-parks -- never
+    // reassign 5 to a different field.
     ConfigDelta       config  = 6;   // -> bb.configIn (declared only, 096)
     SetPose           pose    = 7;   // -> bb.poseResetIn (declared only, 098)
     OdometerCommand   otos    = 8;   // -> bb.otosCommandIn (declared only, 098)

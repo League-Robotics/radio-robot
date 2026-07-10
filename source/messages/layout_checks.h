@@ -38,8 +38,6 @@ static_assert(std::is_standard_layout<DrivetrainCommand>::value,
               "msg::DrivetrainCommand must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<MotionSegment>::value,
               "msg::MotionSegment must be standard-layout for offsetof-based field tables");
-static_assert(std::is_standard_layout<PlannerCommand>::value,
-              "msg::PlannerCommand must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<ConfigDelta>::value,
               "msg::ConfigDelta must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<SetPose>::value,
@@ -72,22 +70,6 @@ static_assert(std::is_standard_layout<BodyTwist3>::value,
               "msg::BodyTwist3 must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<WheelTargets>::value,
               "msg::WheelTargets must be standard-layout for offsetof-based field tables");
-static_assert(std::is_standard_layout<VelocityGoal>::value,
-              "msg::VelocityGoal must be standard-layout for offsetof-based field tables");
-static_assert(std::is_standard_layout<GotoGoal>::value,
-              "msg::GotoGoal must be standard-layout for offsetof-based field tables");
-static_assert(std::is_standard_layout<TurnGoal>::value,
-              "msg::TurnGoal must be standard-layout for offsetof-based field tables");
-static_assert(std::is_standard_layout<DistanceGoal>::value,
-              "msg::DistanceGoal must be standard-layout for offsetof-based field tables");
-static_assert(std::is_standard_layout<TimedGoal>::value,
-              "msg::TimedGoal must be standard-layout for offsetof-based field tables");
-static_assert(std::is_standard_layout<RotationGoal>::value,
-              "msg::RotationGoal must be standard-layout for offsetof-based field tables");
-static_assert(std::is_standard_layout<StreamGoal>::value,
-              "msg::StreamGoal must be standard-layout for offsetof-based field tables");
-static_assert(std::is_standard_layout<StopCondition>::value,
-              "msg::StopCondition must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Pose2D>::value,
               "msg::Pose2D must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<WheelTarget>::value,

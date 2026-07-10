@@ -7,7 +7,6 @@
 #include "messages/drivetrain.h"
 #include "messages/motion.h"
 #include "messages/odometer.h"
-#include "messages/planner.h"
 
 
 namespace msg {
@@ -47,14 +46,17 @@ struct Ping {
 
 // Echo
 struct Echo {
-    uint8_t payload = 0;
+    uint8_t payload_[64] = {};
+    uint8_t payload_count = 0;
 
     // --- array / optional-string accessors ---
+    const uint8_t* payload() const { return payload_; }
+    uint8_t payload_count_val() const { return payload_count; }
 };
 
 // ConfigGet
 struct ConfigGet {
-    uint32_t target = 0;
+    Opt<uint32_t> target = {};
 
     // --- array / optional-string accessors ---
 };
@@ -75,10 +77,10 @@ struct Stop {
 
 // DeviceId
 struct DeviceId {
-    char model[64] = {};
-    char name[64] = {};
+    char model[48] = {};
+    char name[48] = {};
     uint32_t serial = 0;
-    char fw_version[64] = {};
+    char fw_version[48] = {};
     uint32_t proto_version = 0;
 
     // --- array / optional-string accessors ---
@@ -115,23 +117,21 @@ struct CommandEnvelope {
         DRIVE = 1,
         SEGMENT = 2,
         REPLACE = 3,
-        MOTION = 4,
-        CONFIG = 5,
-        POSE = 6,
-        OTOS = 7,
-        PING = 8,
-        ECHO = 9,
-        GET = 10,
-        STREAM = 11,
-        STOP = 12,
-        ID = 13,
+        CONFIG = 4,
+        POSE = 5,
+        OTOS = 6,
+        PING = 7,
+        ECHO = 8,
+        GET = 9,
+        STREAM = 10,
+        STOP = 11,
+        ID = 12,
     };
     CmdKind cmd_kind = CmdKind::NONE;
     union {
         DrivetrainCommand drive;
         MotionSegment segment;
         MotionSegment replace;
-        PlannerCommand motion;
         ConfigDelta config;
         SetPose pose;
         OdometerCommand otos;

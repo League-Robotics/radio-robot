@@ -25,7 +25,7 @@ _sym_db = _symbol_database.Default()
 from google.protobuf import descriptor_pb2 as google_dot_protobuf_dot_descriptor__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\roptions.proto\x12\x05robot\x1a google/protobuf/descriptor.proto:1\n\x05units\x12\x1d.google.protobuf.FieldOptions\x18\xd0\x86\x03 \x01(\t\x88\x01\x01:5\n\tmax_count\x12\x1d.google.protobuf.FieldOptions\x18\xd1\x86\x03 \x01(\r\x88\x01\x01:/\n\x03min\x12\x1d.google.protobuf.FieldOptions\x18\xd2\x86\x03 \x01(\x01\x88\x01\x01:/\n\x03max\x12\x1d.google.protobuf.FieldOptions\x18\xd3\x86\x03 \x01(\x01\x88\x01\x01:3\n\x07\x61\x62s_max\x12\x1d.google.protobuf.FieldOptions\x18\xd4\x86\x03 \x01(\x01\x88\x01\x01:/\n\x03req\x12\x1d.google.protobuf.FieldOptions\x18\xd5\x86\x03 \x01(\x08\x88\x01\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\roptions.proto\x12\x05robot\x1a google/protobuf/descriptor.proto:1\n\x05units\x12\x1d.google.protobuf.FieldOptions\x18\xd0\x86\x03 \x01(\t\x88\x01\x01:5\n\tmax_count\x12\x1d.google.protobuf.FieldOptions\x18\xd1\x86\x03 \x01(\r\x88\x01\x01:/\n\x03min\x12\x1d.google.protobuf.FieldOptions\x18\xd2\x86\x03 \x01(\x01\x88\x01\x01:/\n\x03max\x12\x1d.google.protobuf.FieldOptions\x18\xd3\x86\x03 \x01(\x01\x88\x01\x01:3\n\x07\x61\x62s_max\x12\x1d.google.protobuf.FieldOptions\x18\xd4\x86\x03 \x01(\x01\x88\x01\x01:/\n\x03req\x12\x1d.google.protobuf.FieldOptions\x18\xd5\x86\x03 \x01(\x08\x88\x01\x01:3\n\x07str_len\x12\x1d.google.protobuf.FieldOptions\x18\xd6\x86\x03 \x01(\r\x88\x01\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
