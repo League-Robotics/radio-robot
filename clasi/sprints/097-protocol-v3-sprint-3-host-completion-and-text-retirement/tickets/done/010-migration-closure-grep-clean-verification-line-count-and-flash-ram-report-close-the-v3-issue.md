@@ -378,3 +378,12 @@ devices.md`), timestamped during this session's work window. These are
 unrelated to protocol-v3/sprint 097 and were NOT created by this ticket —
 left untouched, not staged, not committed. Flagged for the team-lead's
 awareness (possible concurrent session on the same working tree).
+
+## Post-011 reconciliation (team-lead, 2026-07-10)
+
+Ticket 011 (text_channel consolidation) landed AFTER this ticket's original run, so per 011's sequencing note the figures are re-run here against the FINAL post-011 state:
+
+- **`source/commands/` = 4 file pairs** (arg_parse, binary_channel, command_processor, text_channel) — down from 9. Line count **3,722** (vs pre-095 4,927 = **−1,205 / −24.5%**). The figure stays well above the issue's ~1,000-1,300 estimate because `text_channel.{h,cpp}` deliberately absorbs the ~1,639 lines of preserved-but-unregistered pose/otos/dev families (sprint-098 transcription reference + DEV bench diagnostics), verbatim with all doc comments.
+- **Flash**: final ARM `text=316696` (post-011 dedup shaved ~636 B off 010's original figure). Net vs the pre-095 baseline remains a small INCREASE (~+4 KB) — the schema-driven protobuf command plane costs more flash than the hand-rolled text it replaced; the value is validation + a single codec + no dual hand-written parsers, not byte savings. Flash headroom ample (~85% used). RAM `.bss` unchanged.
+- **Grep-clean**: no LIVE `#include`/symbol reference to any deleted `*_commands.h` header remains (build is green; the only literal hits are labeled historical citations in comments/docs + files outside scope + architecture-history snapshots + parked tests). Registered text table provably unchanged: STOP / PING / HELLO.
+- tests/sim 597, tests/unit 239, `just build-clean` both targets green.
