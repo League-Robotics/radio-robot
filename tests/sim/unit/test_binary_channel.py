@@ -20,7 +20,10 @@ Covers every one of ticket 007's acceptance criteria:
   - `stop` posts `msg::DrivetrainCommand{NEUTRAL=BRAKE}` to `bb.driveIn`.
   - `ping`/`echo`/`id` reply inline (no Blackboard post), matching their
     text counterparts' information content.
-  - `config`/`pose`/`otos`/`get`/`stream` reply `Error{ERR_UNIMPLEMENTED}`.
+  - `pose`/`otos` reply `Error{ERR_UNIMPLEMENTED}` (098 lands these).
+  - `config`/`get` (096-004) apply/read `Rt::ConfigDelta`/`bb.*Config`.
+  - `stream` (096-005) sets `bb.telemetryPeriod`/`telemetryChannel`/
+    `telemetryBinary`, wiring into `tickTelemetry()`'s periodic emission.
   - Malformed/out-of-range input yields a typed `Error{code, field}`.
   - A mixed text+binary session in ONE test proves dual-stack coexistence.
 """
@@ -256,17 +259,16 @@ def test_binary_id_replies_with_device_identity(sim):
 
 # ===========================================================================
 # Declared-only arms -- ERR_UNIMPLEMENTED, never a crash, never silent.
-# `config`/`get` are no longer declared-only as of 096-004 (see the
-# dedicated section below) -- only `pose`/`otos`/`stream` remain stubs
-# (098/096-005 land those).
+# `config`/`get` are no longer declared-only as of 096-004, and `stream` is
+# no longer declared-only as of 096-005 (see the dedicated sections below)
+# -- only `pose`/`otos` remain stubs (098 lands those).
 # ===========================================================================
 
 
 @pytest.mark.parametrize("kwargs,expected_field", [
     (dict(pose=pb_drivetrain.SetPose()), 7),
     (dict(otos=pb_odometer.OdometerCommand()), 8),
-    (dict(stream=pb_envelope.StreamControl()), 12),
-], ids=["pose", "otos", "stream"])
+], ids=["pose", "otos"])
 def test_binary_declared_only_arms_reply_err_unimplemented(sim, kwargs, expected_field):
     env = pb_envelope.CommandEnvelope(corr_id=9, **kwargs)
     reply = send(sim, env)
@@ -426,6 +428,173 @@ def test_binary_get_replies_exactly_one_config_snapshot(sim, target):
     # criterion's own wording, asserted explicitly rather than only relying
     # on protobuf's oneof invariant.
     assert reply.cfg.WhichOneof("patch") is not None
+
+
+# ===========================================================================
+# stream -- 096-005: BinaryChannel's `stream` arm, wiring
+# msg::StreamControl{binary, period} into tickTelemetry()'s periodic
+# emission path. Mirrors test_telemetry_periodic_tick.py's own text-STREAM
+# sim harness pattern exactly (sim.peek_reply_store(), never
+# sim.command()/send()/sim.command_on() to OBSERVE periodic output -- both
+# reset the target channel's ReplyStore before routing, which would wipe
+# out whatever tickTelemetry() had already accumulated across the
+# preceding tick_for() calls).
+# ===========================================================================
+
+
+def _parse_tlm_text_lines(text: str) -> list[dict[str, str]]:
+    """Parse zero or more plain-text "TLM t=... mode=... ..." wire lines
+    (newline separated -- ReplyStore::append()'s own convention) into a
+    list of key->value dicts -- the SAME shape
+    test_telemetry_periodic_tick.py's own _parse_tlm_lines() produces,
+    duplicated here (this file already duplicates armor()/dearmor() rather
+    than importing across test files)."""
+    frames = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split()
+        assert parts[0] == "TLM", f"not a text TLM line: {line!r}"
+        frames.append(dict(p.split("=", 1) for p in parts[1:]))
+    return frames
+
+
+def _parse_binary_tlm_frames(text: str) -> list["pb_envelope.ReplyEnvelope"]:
+    """Parse zero or more "*B<base64>"-armored ReplyEnvelope lines (newline
+    separated, ReplyStore::append()'s own convention) into decoded
+    ReplyEnvelope messages, in the order tickTelemetry() appended them."""
+    frames = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        frames.append(dearmor(line))
+    return frames
+
+
+def test_binary_stream_ack_reply_carries_no_immediate_frame(sim):
+    """Open Question 5 (mirrors text STREAM's own
+    test_stream_ack_reply_carries_no_immediate_frame): the binary `stream`
+    arm's own ack is exactly one OK reply -- no concatenated first TLM
+    frame. send()/command_on() never calls tickTelemetry() at all, so this
+    also confirms that boundary still holds for the binary arm."""
+    reply = send(sim, pb_envelope.CommandEnvelope(
+        corr_id=60, stream=pb_envelope.StreamControl(binary=True, period=50)))
+    assert reply.WhichOneof("body") == "ok"
+    assert sim.peek_reply_store(CHANNEL_SERIAL) == "", (
+        "stream's own ACK should carry no concatenated frame"
+    )
+
+
+def test_binary_stream_periodic_emission_monotonic_seq_over_200ms(sim):
+    """binary `stream{binary:true, period:50}` armed, then >= 200ms of
+    ticking (tick_for()'s default 24ms step) must yield >= 3 periodic
+    ReplyEnvelope{tlm} frames on the SERIAL sync store, corr_id=0
+    (unsolicited push -- envelope.proto's own doc comment) and strictly
+    increasing seq=."""
+    reply = send(sim, pb_envelope.CommandEnvelope(
+        corr_id=61, stream=pb_envelope.StreamControl(binary=True, period=50)))
+    assert reply.WhichOneof("body") == "ok"
+    assert sim.peek_reply_store(CHANNEL_SERIAL) == "", (
+        "no periodic frame should exist yet -- tickTelemetry() has not run "
+        "a single pass since stream armed the period"
+    )
+
+    sim.tick_for(240)   # [ms] >= 200ms of ticking, 10 x 24ms passes
+
+    frames = _parse_binary_tlm_frames(sim.peek_reply_store(CHANNEL_SERIAL))
+    assert len(frames) >= 3, f"expected >= 3 periodic binary frames, got {len(frames)}"
+    for frame in frames:
+        assert frame.WhichOneof("body") == "tlm"
+        assert frame.corr_id == 0, "unsolicited push TLM frames must carry corr_id=0"
+
+    seqs = [frame.tlm.seq for frame in frames]
+    assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs), (
+        f"seq= must strictly increase across periodic binary frames, got {seqs}"
+    )
+
+
+def test_binary_stream_toggle_binary_false_reverts_to_text_with_shared_seq(sim):
+    """`stream{binary:false, ...}` behaves exactly like text STREAM's own
+    on/off semantics (acceptance criterion 2): with period left non-zero,
+    periodic emission keeps running, but the wire framing reverts to the
+    pre-existing plain-text TLM line -- SAME `seq=` counter, continuing
+    (not resetting) across the binary->text transition, and the text
+    frame's own wire shape stays byte-identical to ticket 003's guarantee
+    (same "TLM " prefix, same key set) even once `stream` can actually
+    toggle bb.telemetryBinary at runtime (acceptance criterion 4)."""
+    send(sim, pb_envelope.CommandEnvelope(
+        corr_id=62, stream=pb_envelope.StreamControl(binary=True, period=50)))
+    sim.tick_for(120)   # a couple of binary frames land on the SERIAL store
+    binary_frames = _parse_binary_tlm_frames(sim.peek_reply_store(CHANNEL_SERIAL))
+    assert len(binary_frames) >= 2, "sanity: binary periodic emission must be active first"
+    last_binary_seq = binary_frames[-1].tlm.seq
+
+    # Switching binary off (same period) must NOT disable periodic emission
+    # -- only bb.telemetryPeriod == 0 does that (tickTelemetry()'s own
+    # guard); this exercises the OTHER half of criterion 2.
+    reply = send(sim, pb_envelope.CommandEnvelope(
+        corr_id=63, stream=pb_envelope.StreamControl(binary=False, period=50)))
+    assert reply.WhichOneof("body") == "ok"
+    assert sim.peek_reply_store(CHANNEL_SERIAL) == ""
+
+    sim.tick_for(120)
+    text_frames = _parse_tlm_text_lines(sim.peek_reply_store(CHANNEL_SERIAL))
+    assert len(text_frames) >= 2, f"expected periodic text frames after binary=false, got {text_frames}"
+
+    text_seqs = [int(f["seq"]) for f in text_frames]
+    assert text_seqs == sorted(text_seqs) and len(set(text_seqs)) == len(text_seqs)
+    assert text_seqs[0] > last_binary_seq, (
+        "bb.telemetrySeq must be the SAME shared/monotonic counter across "
+        "the binary -> text transition, not reset"
+    )
+    # Wire shape unchanged by this ticket -- same mandatory prefix keys
+    # every text TLM frame has always carried (082-004/087-008).
+    for frame in text_frames:
+        assert {"t", "mode", "seq"}.issubset(frame.keys())
+
+
+def test_binary_stream_period_zero_stops_periodic_emission(sim):
+    """`stream{..., period:0}` behaves exactly like text STREAM 0
+    (acceptance criterion 2) -- disables periodic emission outright via
+    tickTelemetry()'s own `bb.telemetryPeriod == 0` guard, regardless of
+    `binary`. bb.telemetryBinary is still recorded (bookkeeping symmetry)
+    but has no visible effect once period is 0."""
+    send(sim, pb_envelope.CommandEnvelope(
+        corr_id=64, stream=pb_envelope.StreamControl(binary=True, period=50)))
+    sim.tick_for(240)
+    frames_before = _parse_binary_tlm_frames(sim.peek_reply_store(CHANNEL_SERIAL))
+    assert len(frames_before) >= 3, (
+        "sanity: periodic emission must be active before disabling it"
+    )
+
+    reply = send(sim, pb_envelope.CommandEnvelope(
+        corr_id=65, stream=pb_envelope.StreamControl(binary=True, period=0)))
+    assert reply.WhichOneof("body") == "ok"
+    assert sim.peek_reply_store(CHANNEL_SERIAL) == ""
+
+    sim.tick_for(240)
+    assert sim.peek_reply_store(CHANNEL_SERIAL) == "", (
+        "stream{period:0} must prevent any further periodic frame from being emitted"
+    )
+
+
+def test_binary_snap_still_works_standalone_while_binary_stream_is_active(sim):
+    """SNAP (text-only, unaffected by bb.telemetryBinary -- telemetry_commands.h's
+    own file header: SNAP always uses telemetryEmit(), never
+    telemetryEmitBinary(), regardless of bb.telemetryBinary) still works
+    standalone with a binary stream armed and periodic frames already
+    emitted -- proves the two paths do not interfere with each other."""
+    send(sim, pb_envelope.CommandEnvelope(
+        corr_id=66, stream=pb_envelope.StreamControl(binary=True, period=50)))
+    sim.tick_for(120)   # a couple of binary periodic frames land on the SERIAL store
+
+    reply = sim.command("SNAP").strip()   # resets the store first, then SNAP's own one-shot reply
+    lines = reply.splitlines()
+    assert len(lines) == 1, f"expected exactly one TLM line from SNAP, got: {reply!r}"
+    frame = _parse_tlm_text_lines(reply)[0]
+    assert {"seq", "t", "mode"}.issubset(frame.keys())
 
 
 # ===========================================================================

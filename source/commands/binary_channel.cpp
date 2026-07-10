@@ -491,13 +491,38 @@ void handle(const char* line, ReplyFn replyFn, void* replyCtx, void* routerCtx) 
       break;
     }
 
-    // Declared-only arms (this sprint): the schema accepts and validates
-    // them, but no Blackboard queue/consumer exists yet (098 lands these).
-    // Never silently drop, never crash -- a typed error naming the arm's
-    // own CommandEnvelope.cmd oneof field number.
-    case msg::CommandEnvelope::CmdKind::STREAM:
-      sendError(msg::ErrCode::ERR_UNIMPLEMENTED, 12, env.corr_id, replyFn, replyCtx);
+    case msg::CommandEnvelope::CmdKind::STREAM: {
+      // 096-005: mirrors handleStream()'s own state-setting exactly
+      // (telemetry_commands.cpp) -- minus the text ArgSchema/ArgList
+      // parsing layer, which the generated decoder's own (min)/(max)
+      // validation already replaced (StreamControl.period is wire-bounded
+      // [0, 60000], same range as kStreamArgs). kStreamFloorMs is
+      // duplicated here rather than shared: telemetry_commands.cpp keeps
+      // it TU-local (unnamed namespace), and this file already hand-mirrors
+      // handleStream()'s state-setting rather than reaching across TUs for
+      // it (same pattern as toSegment()'s own field-by-field copy).
+      constexpr uint32_t kStreamFloorMs = 20;  // [ms] docs/protocol-v2.md §8
+      const msg::StreamControl& sc = env.cmd.stream;
+      b.telemetryPeriod = (sc.period == 0) ? 0
+                           : (sc.period < kStreamFloorMs ? kStreamFloorMs : sc.period);
+      // Channel binding (docs/protocol-v2.md §8): the SAME routerCtx idiom
+      // every other arm in this file uses to reach the Blackboard
+      // (Decision 1) -- resolved from the CommandRouter currently
+      // dispatching this envelope (currentChannel()), never a captured
+      // ReplyFn/void* pair, mirroring handleStream()'s own comment on why.
+      // Rebound unconditionally, even for period 0 (disabling still records
+      // "this channel asked last").
+      b.telemetryChannel = static_cast<Rt::CommandRouter*>(routerCtx)->currentChannel();
+      b.telemetryBinary = sc.binary;
+      // Deliberately NOT reproducing handleStream()'s old same-reply
+      // "immediate first frame" concatenation (Open Question 5, ticket
+      // 002's own note) -- the first frame arrives one pass later via
+      // tickTelemetry()'s normal !telemetryHasLastEmit trigger, uniformly
+      // for text and binary. sendAck mirrors drive/segment/replace/stop's
+      // own ack shape; stream does not get a bespoke reply shape.
+      sendAck(b, env.corr_id, replyFn, replyCtx);
       break;
+    }
 
     case msg::CommandEnvelope::CmdKind::NONE:
     default:
