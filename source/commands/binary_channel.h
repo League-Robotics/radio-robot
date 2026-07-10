@@ -1,11 +1,12 @@
 // binary_channel.h -- BinaryChannel::handle(): the M5 "BinaryChannel"
 // module (095-007, architecture-update.md). Translates one armored
 // `*B<base64>` binary wire line into a Blackboard post (drive/segment/
-// replace/stop) or an inline system-verb reply (ping/echo/id), or a typed
-// `Error{ERR_UNIMPLEMENTED}` for the declared-only arms (config/pose/otos/
-// get/stream). A malformed line or an out-of-bound field value (caught by
-// ticket 005's generated decode() validation) yields a typed
-// `Error{code, field}` reply -- never a crash, never a silent drop.
+// replace/stop/config/stream -- config and stream since 096-004/005) or an
+// inline reply (ping/echo/id/get), or a typed `Error{ERR_UNIMPLEMENTED}`
+// for the still-declared-only arms (pose/otos). A malformed line or an
+// out-of-bound field value (caught by ticket 005's generated decode()
+// validation) yields a typed `Error{code, field}` reply -- never a crash,
+// never a silent drop.
 //
 // Reaches the Blackboard ONLY through the same opaque
 // handlerCtx-cast-to-Rt::CommandRouter* idiom every text command family
