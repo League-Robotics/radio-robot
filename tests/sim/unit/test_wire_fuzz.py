@@ -53,18 +53,26 @@ from _wire_diff_driver import (  # noqa: E402
     build_motion_segment,
     compile_harness,
     decode,
+    encode_cfg_drivetrain,
+    encode_cfg_motor,
+    encode_cfg_planner,
+    encode_cfg_watchdog,
+    encode_telemetry,
+    env_config_drivetrain,
     env_drive_twist,
     env_drive_wheels,
     env_echo,
     env_segment,
     parse_decode_line,
+    pb_config,
     unknown_varint_field,
 )
 
 # ---------------------------------------------------------------------------
 # Representative valid CommandEnvelope encodings the truncated/oversized/
 # salted categories are built from -- span drive (twist + wheels), segment,
-# and echo, so the corpus isn't skewed toward a single arm's byte shape.
+# echo, and (096-006) config, so the corpus isn't skewed toward a single
+# arm's byte shape.
 # ---------------------------------------------------------------------------
 
 _VALID_SEGMENT = env_segment(100, build_motion_segment(
@@ -74,12 +82,19 @@ _VALID_SEGMENT = env_segment(100, build_motion_segment(
 _VALID_DRIVE_WHEELS = env_drive_wheels(101, [(100.0, -5.0), (200.0, 10.0), (300.0, None), (None, 400.0)])
 _VALID_DRIVE_TWIST = env_drive_twist(102, 500.0, 600.0, 700.0, seed=True, standby=True)
 _VALID_ECHO = env_echo(103, bytes(range(40)))
+# 096-006: ConfigDelta{drivetrain} -- exercises the new CONFIG decode-side
+# printing this ticket added to wire_differential_harness.cpp's cmdDecode()
+# under truncation/salting the same way every other arm already is.
+_VALID_CONFIG_DRIVETRAIN = env_config_drivetrain(
+    104, trackwidth=321.0, rotational_slip=0.75, ekf_q_xy=1.5, ekf_q_theta=2.5, ekf_r_otos_xy=3.5,
+    ekf_r_otos_theta=4.5)
 
 _VALID_MESSAGES = {
     "segment": (_VALID_SEGMENT, 100, "SEGMENT"),
     "drive_wheels": (_VALID_DRIVE_WHEELS, 101, "DRIVE"),
     "drive_twist": (_VALID_DRIVE_TWIST, 102, "DRIVE"),
     "echo": (_VALID_ECHO, 103, "ECHO"),
+    "config_drivetrain": (_VALID_CONFIG_DRIVETRAIN, 104, "CONFIG"),
 }
 
 
@@ -176,6 +191,73 @@ def test_fuzz_case(asan_harness, case_id, raw, kind, expected_corr_id, expected_
             # truncated print here would itself be a signal of a corrupted
             # output path.
             assert "field" in fields and "code" in fields, f"malformed ERR line for {case_id!r}: {run.stdout}"
+
+
+# ---------------------------------------------------------------------------
+# 096-006: ASan/UBSan encode-side check for Telemetry/ConfigSnapshot, this
+# ticket's two new REPLY-only (encode-only) messages. The categories above
+# all target decode() (adversarial raw BYTES); encode() instead takes a
+# fully-typed, harness-constructed C++ struct, so there is no "malformed
+# input" surface to fuzz the same way -- what CAN still go wrong is a
+# buffer-sizing bug in encodeInto()/encodeNestedMessage()'s fixed-size
+# scratch buffers (wire.cpp's kEncodeScratchCap) once a message grows this
+# large: Telemetry is the single biggest oneof arm in ReplyEnvelope
+# (~165B, wire.h's own kReplyEncodedSize breakdown), with THREE nested
+# messages (pose/otos/twist) and 28 fields total -- the most encode() field-
+# table walking any single call in this schema does. Extreme scalar values
+# (glitch_left/right/ts_left/ts_right at UINT32_MAX, every float at its
+# IEEE-754 extreme, mode past its declared enum range) exercise every
+# encodeScalarValue() branch at its own type's boundary under ASan/UBSan.
+# ---------------------------------------------------------------------------
+
+_UINT32_MAX = 4294967295
+_FLOAT_EXTREMES = [3.4028235e38, -3.4028235e38, 1.1754944e-38, 0.0, float("nan"), float("inf"), float("-inf")]
+
+
+@pytest.mark.parametrize("value", _FLOAT_EXTREMES, ids=[f"f{i}" for i in range(len(_FLOAT_EXTREMES))])
+def test_fuzz_encode_telemetry_float_extremes(asan_harness, value):
+    r = encode_telemetry(asan_harness, 1, now=_UINT32_MAX, mode=255, seq=_UINT32_MAX, has_enc=True,
+                          enc_left=value, enc_right=value, has_vel=True, vel_left=value, vel_right=value,
+                          has_cmd_vel=True, cmd_vel_left=value, cmd_vel_right=value, has_pose=True, pose_x=value,
+                          pose_y=value, pose_h=value, has_otos=True, otos_x=value, otos_y=value, otos_h=value,
+                          otos_connected=True, has_twist=True, twist_vx=value, twist_vy=value, twist_omega=value,
+                          acc_left=value, acc_right=value, active=True, conn_left=True, conn_right=True,
+                          glitch_left=_UINT32_MAX, glitch_right=_UINT32_MAX, ts_left=_UINT32_MAX,
+                          ts_right=_UINT32_MAX)
+    # No ASan/UBSan finding is the only bar here (encode_telemetry() itself
+    # already asserts !crashed and a well-formed "B64 .../ZERO" line via
+    # run_harness()'s own crashed-detection -- calling it at all under the
+    # ASan-built binary IS the test).
+    assert r is None or len(r) > 0
+
+
+@pytest.mark.parametrize("target", [0, 1, 2, 3, 4, 255])
+def test_fuzz_encode_cfg_snapshot_extremes(asan_harness, target):
+    """Every ConfigSnapshot `patch` arm, extreme field values, plus an
+    out-of-declared-range `target`/`side` enum value (255 -- the generated
+    encoder has no enum-range validation on ITS OWN output, only decode()
+    validates incoming enums; encoding an out-of-range value must still
+    never crash, matching decode()'s own "well-formed but semantically
+    invalid" tolerance elsewhere in this schema)."""
+    assert encode_cfg_drivetrain(asan_harness, 1, target, 3.4e38, -3.4e38, float("nan"), float("inf"),
+                                  float("-inf"), 0.0) is not None
+    assert encode_cfg_motor(asan_harness, 1, target, 255, 3.4e38, -3.4e38, float("nan"), float("inf"),
+                             float("-inf"), 0.0) is not None
+    assert encode_cfg_planner(asan_harness, 1, target, float("nan")) is not None
+    assert encode_cfg_watchdog(asan_harness, 1, target, _UINT32_MAX) is not None
+
+
+def test_fuzz_encode_cfg_snapshot_every_target_and_side(asan_harness):
+    """Sanity companion to the extremes case above -- every DECLARED
+    ConfigTarget/BoundMotorSide value, ordinary in-range field values, under
+    ASan/UBSan."""
+    for target in (pb_config.CONFIG_DRIVETRAIN, pb_config.CONFIG_MOTOR_LEFT, pb_config.CONFIG_MOTOR_RIGHT,
+                   pb_config.CONFIG_PLANNER, pb_config.CONFIG_WATCHDOG):
+        assert encode_cfg_drivetrain(asan_harness, 1, target, 321.0, 0.75, 1.5, 2.5, 3.5, 4.5) is not None
+        for side in (pb_config.LEFT, pb_config.RIGHT):
+            assert encode_cfg_motor(asan_harness, 1, target, side, 1.111, 9.5, 8.5, 7.5, 6.5, 5.5) is not None
+        assert encode_cfg_planner(asan_harness, 1, target, 42.0) is not None
+        assert encode_cfg_watchdog(asan_harness, 1, target, 4242) is not None
 
 
 if __name__ == "__main__":

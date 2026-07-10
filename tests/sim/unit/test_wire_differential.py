@@ -59,10 +59,19 @@ from _wire_diff_driver import (  # noqa: E402
     build_motion_segment,
     compile_harness,
     decode,
+    encode_cfg_drivetrain,
+    encode_cfg_motor,
+    encode_cfg_planner,
+    encode_cfg_watchdog,
     encode_echo_reply,
     encode_err,
     encode_id,
     encode_ok,
+    encode_telemetry,
+    env_config_drivetrain,
+    env_config_motor,
+    env_config_planner,
+    env_config_watchdog,
     env_drive_neutral,
     env_drive_twist,
     env_drive_wheels,
@@ -75,7 +84,10 @@ from _wire_diff_driver import (  # noqa: E402
     f32,
     float_eq,
     parse_decode_line,
+    pb_config,
     pb_envelope,
+    pb_planner,
+    pb_telemetry,
 )
 
 pytestmark = pytest.mark.filterwarnings("ignore")
@@ -147,6 +159,75 @@ def test_field_numbers_match_pb2_descriptors():
         name: v.number for name, v in pb_envelope.DESCRIPTOR.enum_types_by_name["ErrCode"].values_by_name.items()
     }
     assert actual_err_codes == expected_err_codes
+
+
+def test_field_numbers_match_pb2_descriptors_096_006_new_messages():
+    """096-006's own extension of the field-number-correspondence gate above,
+    for the three messages this ticket adds differential coverage for
+    (Telemetry/ConfigDelta/ConfigSnapshot) plus the three curated Patch
+    types and the two new enums they reference -- every number transcribed
+    by hand into wire_differential_harness.cpp's encode_telemetry/
+    encode_cfg_*/decode-CONFIG-case when this ticket was implemented,
+    cross-checked here against the SAME protos/*.proto-generated pb2
+    descriptors, catching a stale/out-of-sync regeneration on either side."""
+    expected_telemetry_numbers = {
+        "now": 1, "mode": 2, "seq": 3, "has_enc": 4, "enc_left": 5, "enc_right": 6, "has_vel": 7,
+        "vel_left": 8, "vel_right": 9, "has_cmd_vel": 10, "cmd_vel_left": 11, "cmd_vel_right": 12,
+        "has_pose": 13, "pose": 14, "has_otos": 15, "otos": 16, "otos_connected": 17, "has_twist": 18,
+        "twist": 19, "acc_left": 20, "acc_right": 21, "active": 22, "conn_left": 23, "conn_right": 24,
+        "glitch_left": 25, "glitch_right": 26, "ts_left": 27, "ts_right": 28,
+    }
+    actual_telemetry_numbers = {f.name: f.number for f in pb_telemetry.Telemetry.DESCRIPTOR.fields}
+    assert actual_telemetry_numbers == expected_telemetry_numbers
+
+    expected_config_delta_patch = {"drivetrain": 1, "motor": 2, "planner": 3, "watchdog": 4}
+    actual_config_delta_patch = {
+        f.name: f.number for f in pb_envelope.ConfigDelta.DESCRIPTOR.oneofs_by_name["patch"].fields
+    }
+    assert actual_config_delta_patch == expected_config_delta_patch
+
+    expected_config_snapshot_patch = {"drivetrain": 2, "motor": 3, "planner": 4, "watchdog": 5}
+    actual_config_snapshot_patch = {
+        f.name: f.number for f in pb_envelope.ConfigSnapshot.DESCRIPTOR.oneofs_by_name["patch"].fields
+    }
+    assert actual_config_snapshot_patch == expected_config_snapshot_patch
+    assert pb_envelope.ConfigSnapshot.DESCRIPTOR.fields_by_name["target"].number == 1
+
+    expected_drivetrain_patch = {
+        "trackwidth": 1, "rotational_slip": 2, "ekf_q_xy": 3, "ekf_q_theta": 4, "ekf_r_otos_xy": 5,
+        "ekf_r_otos_theta": 6,
+    }
+    actual_drivetrain_patch = {f.name: f.number for f in pb_config.DrivetrainConfigPatch.DESCRIPTOR.fields}
+    assert actual_drivetrain_patch == expected_drivetrain_patch
+
+    expected_motor_patch = {"side": 1, "travel_calib": 2, "kp": 3, "ki": 4, "kff": 5, "i_max": 6, "kaw": 7}
+    actual_motor_patch = {f.name: f.number for f in pb_config.MotorConfigPatch.DESCRIPTOR.fields}
+    assert actual_motor_patch == expected_motor_patch
+
+    expected_planner_patch = {"min_speed": 1}
+    actual_planner_patch = {f.name: f.number for f in pb_config.PlannerConfigPatch.DESCRIPTOR.fields}
+    assert actual_planner_patch == expected_planner_patch
+
+    expected_config_target = {
+        "CONFIG_DRIVETRAIN": 0, "CONFIG_MOTOR_LEFT": 1, "CONFIG_MOTOR_RIGHT": 2, "CONFIG_PLANNER": 3,
+        "CONFIG_WATCHDOG": 4,
+    }
+    actual_config_target = {
+        n: v.number for n, v in pb_config.DESCRIPTOR.enum_types_by_name["ConfigTarget"].values_by_name.items()
+    }
+    assert actual_config_target == expected_config_target
+
+    expected_bound_motor_side = {"LEFT": 0, "RIGHT": 1}
+    actual_bound_motor_side = {
+        n: v.number for n, v in pb_config.DESCRIPTOR.enum_types_by_name["BoundMotorSide"].values_by_name.items()
+    }
+    assert actual_bound_motor_side == expected_bound_motor_side
+
+    expected_drive_mode = {"IDLE": 0, "STREAMING": 1, "TIMED": 2, "DISTANCE": 3, "GO_TO": 4, "VELOCITY": 5}
+    actual_drive_mode = {
+        n: v.number for n, v in pb_planner.DESCRIPTOR.enum_types_by_name["DriveMode"].values_by_name.items()
+    }
+    assert actual_drive_mode == expected_drive_mode
 
 
 # ===========================================================================
@@ -264,6 +345,95 @@ def test_direction_a_id_request(harness):
     assert fields["corr_id"] == "9"
 
 
+# ---------------------------------------------------------------------------
+# ConfigDelta (096-006) -- COMMAND-only (never appears in ReplyEnvelope.body,
+# see envelope.proto's own oneof list): its differential coverage is
+# Direction A ONLY (host-encode -> firmware-decode). There is no Direction B
+# counterpart to write for this message -- confirmed structurally (msg::
+# ReplyEnvelope's body union has no ConfigDelta arm at all, envelope.h), not
+# just by the schema's doc comments.
+# ---------------------------------------------------------------------------
+
+
+def test_direction_a_config_drivetrain(harness):
+    raw = env_config_drivetrain(20, trackwidth=321.0, rotational_slip=0.75, ekf_q_xy=1.5, ekf_q_theta=2.5,
+                                 ekf_r_otos_xy=3.5, ekf_r_otos_theta=4.5)
+    fields = _assert_ok(harness, raw)
+    assert fields["cmd_kind"] == "CONFIG"
+    assert fields["patch_kind"] == "DRIVETRAIN"
+    for key, expected in [("trackwidth", 321.0), ("rotational_slip", 0.75), ("ekf_q_xy", 1.5),
+                           ("ekf_q_theta", 2.5), ("ekf_r_otos_xy", 3.5), ("ekf_r_otos_theta", 4.5)]:
+        assert fields[f"{key}_has"] == "1"
+        assert float_eq(fields[key], expected)
+
+
+def test_direction_a_config_drivetrain_partial_fields(harness):
+    """Only the fields actually SET on the wire (proto3 `optional` explicit
+    presence) come back `_has=1` -- the rest stay `_has=0`, proving the
+    generated decoder's Opt<T> presence tracking (not just the values) is
+    byte-for-byte faithful to what google.protobuf serialized."""
+    raw = env_config_drivetrain(21, trackwidth=100.0)
+    fields = _assert_ok(harness, raw)
+    assert fields["trackwidth_has"] == "1"
+    assert float_eq(fields["trackwidth"], 100.0)
+    for key in ("rotational_slip", "ekf_q_xy", "ekf_q_theta", "ekf_r_otos_xy", "ekf_r_otos_theta"):
+        assert fields[f"{key}_has"] == "0"
+
+
+@pytest.mark.parametrize("side,name", [(pb_config.LEFT, "LEFT"), (pb_config.RIGHT, "RIGHT")])
+def test_direction_a_config_motor(harness, side, name):
+    raw = env_config_motor(22, side=side, travel_calib=1.111, kp=9.5, ki=8.5, kff=7.5, i_max=6.5, kaw=5.5)
+    fields = _assert_ok(harness, raw)
+    assert fields["cmd_kind"] == "CONFIG"
+    assert fields["patch_kind"] == "MOTOR"
+    assert fields["side"] == name
+    for key, expected in [("travel_calib", 1.111), ("kp", 9.5), ("ki", 8.5), ("kff", 7.5), ("i_max", 6.5),
+                           ("kaw", 5.5)]:
+        assert fields[f"{key}_has"] == "1"
+        assert float_eq(fields[key], expected)
+
+
+def test_direction_a_config_motor_only_travel_calib(harness):
+    """ml/mr (Decision 5) -- travel_calib alone, no Gains fields present."""
+    raw = env_config_motor(23, side=pb_config.RIGHT, travel_calib=2.222)
+    fields = _assert_ok(harness, raw)
+    assert fields["side"] == "RIGHT"
+    assert fields["travel_calib_has"] == "1"
+    assert float_eq(fields["travel_calib"], 2.222)
+    for key in ("kp", "ki", "kff", "i_max", "kaw"):
+        assert fields[f"{key}_has"] == "0"
+
+
+def test_direction_a_config_planner(harness):
+    raw = env_config_planner(24, min_speed=42.0)
+    fields = _assert_ok(harness, raw)
+    assert fields["cmd_kind"] == "CONFIG"
+    assert fields["patch_kind"] == "PLANNER"
+    assert fields["min_speed_has"] == "1"
+    assert float_eq(fields["min_speed"], 42.0)
+
+
+@pytest.mark.parametrize("watchdog", [0, 1, 4242, 4294967295])
+def test_direction_a_config_watchdog(harness, watchdog):
+    raw = env_config_watchdog(25, watchdog)
+    fields = _assert_ok(harness, raw)
+    assert fields["cmd_kind"] == "CONFIG"
+    assert fields["patch_kind"] == "WATCHDOG"
+    assert fields["watchdog"] == str(watchdog)
+
+
+def test_direction_a_config_empty_patch(harness):
+    """A well-formed ConfigDelta with no oneof `patch` arm set at all decodes
+    OK (patch_kind == NONE) -- BinaryChannel's own behavioral handling of
+    this case (ERR_UNKNOWN field=6) is tested at the sim level
+    (test_binary_channel.py's test_binary_config_empty_patch_replies_err_unknown);
+    the wire codec itself must still decode it cleanly, never reject it."""
+    raw = pb_envelope.CommandEnvelope(corr_id=26, config=pb_envelope.ConfigDelta()).SerializeToString()
+    fields = _assert_ok(harness, raw)
+    assert fields["cmd_kind"] == "CONFIG"
+    assert fields["patch_kind"] == "NONE"
+
+
 # ===========================================================================
 # Direction B: firmware-encode (harness) -> host-decode (pb2.ParseFromString)
 # ===========================================================================
@@ -334,6 +504,184 @@ def test_direction_b_echo_reply(harness, payload):
     assert reply.corr_id == 4
     assert reply.WhichOneof("body") == "echo"
     assert reply.echo.payload == payload
+
+
+# ---------------------------------------------------------------------------
+# Telemetry (096-006) -- REPLY-only (never appears in CommandEnvelope.cmd,
+# see envelope.proto's own oneof list): its differential coverage is
+# Direction B ONLY (firmware-encode -> host-decode). There is no Direction A
+# counterpart -- confirmed structurally (msg::CommandEnvelope's cmd union has
+# no Telemetry arm at all, envelope.h), not just by the schema's doc
+# comments.
+# ---------------------------------------------------------------------------
+
+_TELEMETRY_FULL_SHAPE = dict(
+    now=123456, mode=2, seq=99, has_enc=True, enc_left=100.5, enc_right=-200.25, has_vel=True, vel_left=-50.0,
+    vel_right=60.5, has_cmd_vel=True, cmd_vel_left=10.0, cmd_vel_right=20.0, has_pose=True, pose_x=1.5,
+    pose_y=-2.5, pose_h=3.25, has_otos=True, otos_x=4.5, otos_y=5.5, otos_h=6.5, otos_connected=True,
+    has_twist=True, twist_vx=-100.5, twist_vy=0.5, twist_omega=1.75, acc_left=10.25, acc_right=-20.25,
+    active=True, conn_left=True, conn_right=False, glitch_left=3, glitch_right=4294967295, ts_left=5,
+    ts_right=4294967295,
+)
+
+
+def _assert_telemetry_matches_shape(tlm, shape: dict) -> None:
+    assert tlm.now == shape["now"]
+    assert tlm.mode == shape["mode"]
+    assert tlm.seq == shape["seq"]
+    assert tlm.has_enc == shape["has_enc"]
+    assert tlm.enc_left == f32(shape["enc_left"])
+    assert tlm.enc_right == f32(shape["enc_right"])
+    assert tlm.has_vel == shape["has_vel"]
+    assert tlm.vel_left == f32(shape["vel_left"])
+    assert tlm.vel_right == f32(shape["vel_right"])
+    assert tlm.has_cmd_vel == shape["has_cmd_vel"]
+    assert tlm.cmd_vel_left == f32(shape["cmd_vel_left"])
+    assert tlm.cmd_vel_right == f32(shape["cmd_vel_right"])
+    assert tlm.has_pose == shape["has_pose"]
+    assert tlm.pose.x == f32(shape["pose_x"])
+    assert tlm.pose.y == f32(shape["pose_y"])
+    assert tlm.pose.h == f32(shape["pose_h"])
+    assert tlm.has_otos == shape["has_otos"]
+    assert tlm.otos.x == f32(shape["otos_x"])
+    assert tlm.otos.y == f32(shape["otos_y"])
+    assert tlm.otos.h == f32(shape["otos_h"])
+    assert tlm.otos_connected == shape["otos_connected"]
+    assert tlm.has_twist == shape["has_twist"]
+    assert tlm.twist.v_x == f32(shape["twist_vx"])
+    assert tlm.twist.v_y == f32(shape["twist_vy"])
+    assert tlm.twist.omega == f32(shape["twist_omega"])
+    assert tlm.acc_left == f32(shape["acc_left"])
+    assert tlm.acc_right == f32(shape["acc_right"])
+    assert tlm.active == shape["active"]
+    assert tlm.conn_left == shape["conn_left"]
+    assert tlm.conn_right == shape["conn_right"]
+    assert tlm.glitch_left == shape["glitch_left"]
+    assert tlm.glitch_right == shape["glitch_right"]
+    assert tlm.ts_left == shape["ts_left"]
+    assert tlm.ts_right == shape["ts_right"]
+
+
+def test_direction_b_telemetry_full_shape(harness):
+    """Every one of Telemetry's 28 fields, all `has_*` flags true -- the
+    STREAM/SNAP-plus-bench-diagnostics union shape (telemetry.proto's own
+    file header)."""
+    raw = encode_telemetry(harness, 30, **_TELEMETRY_FULL_SHAPE)
+    assert raw is not None, "encode_telemetry returned ZERO for a well-under-budget Telemetry reply"
+    reply = pb_envelope.ReplyEnvelope.FromString(raw)
+    assert reply.corr_id == 30
+    assert reply.WhichOneof("body") == "tlm"
+    _assert_telemetry_matches_shape(reply.tlm, _TELEMETRY_FULL_SHAPE)
+
+
+def test_direction_b_telemetry_all_has_flags_false(harness):
+    """The CURRENT tick()'s own conditionally-absent groups (has_cmd_vel/
+    has_otos) plus every other has_* flag at once, proving `has_*=0` is
+    encoded/decoded faithfully too, not just the all-present shape above --
+    values behind a false has_* flag still round-trip (proto3 has no way to
+    omit a nested message's own zero-valued scalar sub-fields once the
+    message itself is present on the wire; `has_*` is this schema's OWN
+    presence signal, not proto3 implicit presence, per telemetry.proto's
+    file header)."""
+    shape = dict(_TELEMETRY_FULL_SHAPE)
+    for key in ("has_enc", "has_vel", "has_cmd_vel", "has_pose", "has_otos", "has_twist"):
+        shape[key] = False
+    raw = encode_telemetry(harness, 31, **shape)
+    reply = pb_envelope.ReplyEnvelope.FromString(raw)
+    _assert_telemetry_matches_shape(reply.tlm, shape)
+
+
+@pytest.mark.parametrize("mode_value,mode_name", [(0, "IDLE"), (1, "STREAMING"), (2, "TIMED"), (3, "DISTANCE"),
+                                                   (4, "GO_TO"), (5, "VELOCITY")])
+def test_direction_b_telemetry_every_drive_mode(harness, mode_value, mode_name):
+    raw = encode_telemetry(harness, 32, mode=mode_value)
+    reply = pb_envelope.ReplyEnvelope.FromString(raw)
+    assert reply.tlm.mode == pb_planner.DESCRIPTOR.enum_types_by_name["DriveMode"].values_by_name[mode_name].number
+
+
+def test_direction_b_telemetry_all_zero_defaults(harness):
+    """Every field at its proto zero default still round-trips to the SAME
+    zero value.
+
+    FINDING (not a bug -- documented here so it isn't re-discovered as one):
+    `pose`/`otos`/`twist` are plain (non-oneof, non-`optional`) EMBEDDED
+    MESSAGE fields (`FieldKind::kMessage` in wire.cpp's generated table) --
+    `encodeInto()`'s `kMessage` case (wire.cpp) emits them UNCONDITIONALLY,
+    with no zero-value skip, unlike every SCALAR field (`kScalar`'s own
+    `scalarIsDefault()` guard) or `kOpt`/`kOneofMessage` field (gated by
+    their own has/oneof-kind check). So a from-scratch `pb_telemetry.
+    Telemetry()` (which never touches `.pose`/`.otos`/`.twist` and so never
+    marks them present) is NOT byte-identical to this round-trip -- the
+    firmware always sends `pose {}`/`otos {}`/`twist {}` as PRESENT
+    (possibly all-zero) submessages, regardless of `has_pose`/`has_otos`/
+    `has_twist`, which are separate, semantic-only bool fields. This
+    matches real `google.protobuf`: an embedded message field explicitly
+    constructed with `Message()` (even with every sub-field left at its
+    default) IS wire-present, distinct from never touching the field at
+    all -- proto3's one exception to scalar implicit presence. Compared
+    field-by-field via `_assert_telemetry_matches_shape()` (which does not
+    care about presence, only value) rather than whole-message `==`
+    against a from-scratch default, which WOULD fail on this presence
+    difference alone."""
+    raw = encode_telemetry(harness, 33)
+    reply = pb_envelope.ReplyEnvelope.FromString(raw)
+    assert reply.corr_id == 33
+    assert reply.WhichOneof("body") == "tlm"
+    zero_shape = {key: (False if key.startswith("has_") or key in ("active", "conn_left", "conn_right",
+                                                                     "otos_connected") else 0)
+                  for key in _TELEMETRY_FULL_SHAPE}
+    _assert_telemetry_matches_shape(reply.tlm, zero_shape)
+
+
+# ---------------------------------------------------------------------------
+# ConfigSnapshot (096-006) -- REPLY-only (never appears in CommandEnvelope.
+# cmd, see envelope.proto's own oneof list): Direction B ONLY, mirroring
+# Telemetry's own posture above. Confirmed structurally the same way.
+# ---------------------------------------------------------------------------
+
+
+def test_direction_b_config_snapshot_drivetrain(harness):
+    raw = encode_cfg_drivetrain(harness, 40, pb_config.CONFIG_DRIVETRAIN, 321.0, 0.75, 1.5, 2.5, 3.5, 4.5)
+    assert raw is not None
+    reply = pb_envelope.ReplyEnvelope.FromString(raw)
+    assert reply.corr_id == 40
+    assert reply.WhichOneof("body") == "cfg"
+    assert reply.cfg.target == pb_config.CONFIG_DRIVETRAIN
+    assert reply.cfg.WhichOneof("patch") == "drivetrain"
+    p = reply.cfg.drivetrain
+    assert (p.trackwidth, p.rotational_slip, p.ekf_q_xy, p.ekf_q_theta, p.ekf_r_otos_xy, p.ekf_r_otos_theta) == (
+        f32(321.0), f32(0.75), f32(1.5), f32(2.5), f32(3.5), f32(4.5))
+
+
+@pytest.mark.parametrize("target,side,side_name", [
+    (pb_config.CONFIG_MOTOR_LEFT, 0, "LEFT"), (pb_config.CONFIG_MOTOR_RIGHT, 1, "RIGHT"),
+])
+def test_direction_b_config_snapshot_motor(harness, target, side, side_name):
+    raw = encode_cfg_motor(harness, 41, target, side, 1.111, 9.5, 8.5, 7.5, 6.5, 5.5)
+    reply = pb_envelope.ReplyEnvelope.FromString(raw)
+    assert reply.cfg.target == target
+    assert reply.cfg.WhichOneof("patch") == "motor"
+    p = reply.cfg.motor
+    assert p.side == pb_config.DESCRIPTOR.enum_types_by_name["BoundMotorSide"].values_by_name[side_name].number
+    assert (p.travel_calib, p.kp, p.ki, p.kff, p.i_max, p.kaw) == (
+        f32(1.111), f32(9.5), f32(8.5), f32(7.5), f32(6.5), f32(5.5))
+
+
+def test_direction_b_config_snapshot_planner(harness):
+    raw = encode_cfg_planner(harness, 42, pb_config.CONFIG_PLANNER, 42.0)
+    reply = pb_envelope.ReplyEnvelope.FromString(raw)
+    assert reply.cfg.target == pb_config.CONFIG_PLANNER
+    assert reply.cfg.WhichOneof("patch") == "planner"
+    assert reply.cfg.planner.min_speed == f32(42.0)
+
+
+@pytest.mark.parametrize("watchdog", [0, 1, 4242, 4294967295])
+def test_direction_b_config_snapshot_watchdog(harness, watchdog):
+    raw = encode_cfg_watchdog(harness, 43, pb_config.CONFIG_WATCHDOG, watchdog)
+    reply = pb_envelope.ReplyEnvelope.FromString(raw)
+    assert reply.cfg.target == pb_config.CONFIG_WATCHDOG
+    assert reply.cfg.WhichOneof("patch") == "watchdog"
+    assert reply.cfg.watchdog == watchdog
 
 
 # ===========================================================================
@@ -407,6 +755,103 @@ def test_boundary_motion_segment_via_replace(harness, field_name, field_num, val
         fields = _assert_err(harness, raw)
         assert fields["field"] == str(field_num)
         assert fields["code"] == "ERR_RANGE"
+
+
+# ===========================================================================
+# 096-006's own boundary corpus for the config-plane messages this ticket
+# adds (DrivetrainConfigPatch/MotorConfigPatch/PlannerConfigPatch/watchdog).
+#
+# REALITY CHECK (documented, not silently patched -- config.proto's own file
+# header, "Validation note" section, transcribed here): unlike
+# MotionSegment's 11 fields above, NONE of these new Patch messages' fields
+# carry a `(min)`/`(max)`/`(abs_max)` proto option -- confirmed directly
+# against wire.cpp's generated `kFields_DrivetrainConfigPatch[]`/
+# `kFields_MotorConfigPatch[]`/`kFields_PlannerConfigPatch[]`/
+# `kFields_ConfigDelta[]` tables, every one of which has `flags = 0` (no
+# kHasMin/kHasMax/kHasAbsMax bit set) for these fields. wire.cpp's own range
+# check (`validateRange()`) short-circuits to `return true` the instant
+# `flags & (kHasMin|kHasMax|kHasAbsMax) == 0` -- so THE WIRE CODEC ACCEPTS
+# ANY float/uint32 value for tw/rotSlip/ekf*/minSpeed/sTimeout over the
+# binary plane, including values `config_commands.cpp`'s OWN
+# `validateCandidate()` rejects on the text SET path (`tw <= 0`, `rotSlip`
+# outside `{0} ∪ [0.5, 1.0]`, `sTimeout <= 0`) -- `binary_channel.cpp`'s
+# `CONFIG` arm never calls `validateCandidate()` at all (confirmed by
+# reading binary_channel.cpp's CONFIG case directly: it posts straight to
+# `bb.configIn`/`bb.streamWatchdogWindowIn` once `Opt<T>.has` is true, no
+# invariant check anywhere on that path).
+#
+# This is a pre-existing, ALREADY-FLAGGED gap (config.proto's own comment:
+# "Ticket 004 (BinaryChannel config arm) inherits this gap... if closing
+# this specific gap turns out to matter, ticket 004 (or a follow-up) adds
+# either options here or a small hand-written check in binary_channel.cpp,
+# neither of which this ticket's own acceptance criteria require") --
+# ticket 006's job is to TEST reality, not silently invent wire-level
+# bounds or a validateCandidate() call that no prior ticket's acceptance
+# criteria asked for. The cases below therefore all `expect_accept=True`,
+# including the values validateCandidate() itself would reject on the text
+# plane -- this is the ACTUAL, CURRENT, documented behavior, verified
+# directly rather than assumed. See this ticket's completion notes for the
+# same finding, flagged for a possible follow-up issue.
+# ===========================================================================
+
+# (harness verb, target field within the Patch, the "transcribed bound"
+# value(s) validateCandidate() itself uses as its own invariant boundary --
+# NOT a wire-enforced bound, see the REALITY CHECK above).
+_CONFIG_INVARIANT_BOUNDARY_CASES = [
+    # tw > 0 (validateCandidate) -- 0 and negative are text-SET-rejected,
+    # but ALWAYS wire-accepted over the binary plane (no (min) on this field).
+    ("drivetrain_tw_zero", dict(trackwidth=0.0)),
+    ("drivetrain_tw_negative", dict(trackwidth=-1.0)),
+    ("drivetrain_tw_large_negative", dict(trackwidth=-1.0e9)),
+    ("drivetrain_tw_positive", dict(trackwidth=1.0)),
+    # rotSlip == 0 || [0.5, 1.0] (validateCandidate) -- 0.3/0.49/1.01/-1 are
+    # ALL text-SET-rejected (outside the non-contiguous domain), but ALWAYS
+    # wire-accepted (no (min)/(max) on this field either).
+    ("drivetrain_rotslip_zero", dict(rotational_slip=0.0)),
+    ("drivetrain_rotslip_half", dict(rotational_slip=0.5)),
+    ("drivetrain_rotslip_one", dict(rotational_slip=1.0)),
+    ("drivetrain_rotslip_just_below_half", dict(rotational_slip=0.49)),
+    ("drivetrain_rotslip_just_above_one", dict(rotational_slip=1.01)),
+    ("drivetrain_rotslip_negative", dict(rotational_slip=-1.0)),
+    ("drivetrain_rotslip_between_zero_and_half", dict(rotational_slip=0.3)),
+]
+
+
+@pytest.mark.parametrize("case_id,patch_kwargs", _CONFIG_INVARIANT_BOUNDARY_CASES,
+                         ids=[c[0] for c in _CONFIG_INVARIANT_BOUNDARY_CASES])
+def test_boundary_config_drivetrain_no_wire_level_enforcement(harness, case_id, patch_kwargs):
+    raw = env_config_drivetrain(50, **patch_kwargs)
+    fields = _assert_ok(harness, raw)
+    assert fields["cmd_kind"] == "CONFIG"
+    assert fields["patch_kind"] == "DRIVETRAIN"
+    for key, expected in patch_kwargs.items():
+        assert fields[f"{key}_has"] == "1"
+        assert float_eq(fields[key], expected)
+
+
+@pytest.mark.parametrize("min_speed", [-1.0e9, -1.0, 0.0, 1.0])
+def test_boundary_config_planner_min_speed_no_wire_level_enforcement(harness, min_speed):
+    """minSpeed has no validateCandidate() invariant at all (only tw/
+    rotSlip/sTimeout do) -- included for completeness against the SAME
+    "no (min)/(max)/(abs_max) on this field" reality."""
+    raw = env_config_planner(51, min_speed=min_speed)
+    fields = _assert_ok(harness, raw)
+    assert fields["patch_kind"] == "PLANNER"
+    assert float_eq(fields["min_speed"], min_speed)
+
+
+@pytest.mark.parametrize("watchdog", [0, 1])
+def test_boundary_config_watchdog_no_wire_level_enforcement(harness, watchdog):
+    """sTimeout > 0 (validateCandidate) -- 0 is text-SET-rejected
+    (parseLongStrict's signed long catches negative input server-side
+    before this invariant even runs; watchdog itself is a wire `uint32`, so
+    a negative value cannot be represented on the wire at all), but ALWAYS
+    wire-accepted over the binary plane (no (min) on ConfigDelta.watchdog
+    either)."""
+    raw = env_config_watchdog(52, watchdog)
+    fields = _assert_ok(harness, raw)
+    assert fields["patch_kind"] == "WATCHDOG"
+    assert fields["watchdog"] == str(watchdog)
 
 
 if __name__ == "__main__":

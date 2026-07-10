@@ -49,6 +49,46 @@
 //     wire_codec_harness.cpp (095-005) scenario's job, not this ticket's.
 //     -> "B64 <base64 bytes>" or "ZERO".
 //
+//   -- 096-006 additions below: Telemetry/ConfigSnapshot are reply-only
+//      messages (never decoded by firmware -- neither appears in
+//      CommandEnvelope.cmd), so their differential coverage is encode-only
+//      (firmware-encode -> host-decode); ConfigDelta is command-only
+//      (never appears in ReplyEnvelope.body), so its coverage is
+//      decode-only (host-encode -> firmware-decode) and needs no new
+//      encode_* verb -- `decode`'s CONFIG case above now prints its
+//      fields the same way DRIVE/SEGMENT/ECHO already do.
+//
+//   encode_telemetry <corr_id> <now> <mode> <seq> <has_enc> <enc_left>
+//     <enc_right> <has_vel> <vel_left> <vel_right> <has_cmd_vel>
+//     <cmd_vel_left> <cmd_vel_right> <has_pose> <pose_x> <pose_y> <pose_h>
+//     <has_otos> <otos_x> <otos_y> <otos_h> <otos_connected> <has_twist>
+//     <twist_vx> <twist_vy> <twist_omega> <acc_left> <acc_right> <active>
+//     <conn_left> <conn_right> <glitch_left> <glitch_right> <ts_left>
+//     <ts_right>
+//     Builds ReplyEnvelope{tlm=Telemetry{...}}, every field positional in
+//     telemetry.proto's own field-number order -- Telemetry is a flat
+//     28-field message with no oneof arm of its own, so (unlike encode_ok/
+//     encode_id) there is no "shape" choice, just one long positional
+//     list. bool-typed args are "0"/"1"; `mode` is DriveMode's numeric
+//     value (0=IDLE..5=VELOCITY, planner.proto).
+//     -> "B64 <base64 bytes>" or "ZERO".
+//
+//   encode_cfg_drivetrain <corr_id> <target> <trackwidth> <rotational_slip>
+//     <ekf_q_xy> <ekf_q_theta> <ekf_r_otos_xy> <ekf_r_otos_theta>
+//   encode_cfg_motor <corr_id> <target> <side> <travel_calib> <kp> <ki>
+//     <kff> <i_max> <kaw>
+//   encode_cfg_planner <corr_id> <target> <min_speed>
+//   encode_cfg_watchdog <corr_id> <target> <watchdog>
+//     Builds ReplyEnvelope{cfg=ConfigSnapshot{target, patch=<arm>}} -- one
+//     verb per `patch` oneof arm, each populating EVERY field of its own
+//     Patch with {has=true, val} (mirrors BinaryChannel's `get` handler,
+//     which always populates every field of the selected slice; a
+//     ConfigSnapshot reply never carries an absent/has=false field in
+//     practice). `target` is ConfigTarget's numeric value
+//     (0=CONFIG_DRIVETRAIN..4=CONFIG_WATCHDOG, config.proto); `side` is
+//     BoundMotorSide's numeric value (0=LEFT, 1=RIGHT).
+//     -> "B64 <base64 bytes>" or "ZERO".
+//
 // Float formatting: `%.9g` on both the encode-input parse (strtof) and the
 // decode-output print -- 9 significant decimal digits is the proven
 // sufficient precision to round-trip any IEEE-754 binary32 value through a
@@ -167,6 +207,30 @@ const char* controlKindName(msg::DrivetrainCommand::ControlKind k) {
   return "UNKNOWN";
 }
 
+// configDeltaPatchKindName -- 096-006: prints ConfigDelta's own oneof
+// discriminant the same way cmdKindName()/controlKindName() print the
+// other generated oneofs above.
+const char* configDeltaPatchKindName(msg::ConfigDelta::PatchKind k) {
+  switch (k) {
+    case msg::ConfigDelta::PatchKind::NONE: return "NONE";
+    case msg::ConfigDelta::PatchKind::DRIVETRAIN: return "DRIVETRAIN";
+    case msg::ConfigDelta::PatchKind::MOTOR: return "MOTOR";
+    case msg::ConfigDelta::PatchKind::PLANNER: return "PLANNER";
+    case msg::ConfigDelta::PatchKind::WATCHDOG: return "WATCHDOG";
+  }
+  return "UNKNOWN";
+}
+
+// printOpt -- 096-006: one `<name>_has=<0|1> <name>=<val>` pair for an
+// `Opt<float>` field, the SAME shape every WHEELS-arm `w%u_speed_has=...`
+// pair above already prints (wheel targets are ALSO Opt<float>) -- reused
+// here for DrivetrainConfigPatch/MotorConfigPatch/PlannerConfigPatch's own
+// Opt<float> fields rather than hand-duplicating the two-printf pattern
+// once per field.
+void printOpt(const char* name, const msg::Opt<float>& o) {
+  std::printf(" %s_has=%d %s=%s", name, o.has ? 1 : 0, name, fmtFloat(o.val).c_str());
+}
+
 void printMotionSegment(const msg::MotionSegment& seg) {
   std::printf(
       " distance=%s direction=%s final_heading=%s speed_max=%s accel_max=%s jerk_max=%s"
@@ -242,20 +306,65 @@ int cmdDecode(const std::string& b64) {
       std::printf(" payload_count=%u payload_hex=%s", static_cast<unsigned>(out.cmd.echo.payload_count),
                   toHex(out.cmd.echo.payload_, out.cmd.echo.payload_count).c_str());
       break;
+    case msg::CommandEnvelope::CmdKind::CONFIG: {
+      // 096-006: ConfigDelta is command-only (never appears in
+      // ReplyEnvelope.body), so this decode-side print IS its whole
+      // differential surface (Direction A, host-encode -> firmware-decode
+      // -- see test_wire_differential.py's ConfigDelta section). Prints
+      // EVERY field of whichever Patch oneof arm decoded, the same
+      // has/val-pair shape the WHEELS arm above already uses for its own
+      // Opt<float> fields (printOpt()).
+      const msg::ConfigDelta& cfg = out.cmd.config;
+      std::printf(" patch_kind=%s", configDeltaPatchKindName(cfg.patch_kind));
+      switch (cfg.patch_kind) {
+        case msg::ConfigDelta::PatchKind::DRIVETRAIN: {
+          const msg::DrivetrainConfigPatch& p = cfg.patch.drivetrain;
+          printOpt("trackwidth", p.trackwidth);
+          printOpt("rotational_slip", p.rotational_slip);
+          printOpt("ekf_q_xy", p.ekf_q_xy);
+          printOpt("ekf_q_theta", p.ekf_q_theta);
+          printOpt("ekf_r_otos_xy", p.ekf_r_otos_xy);
+          printOpt("ekf_r_otos_theta", p.ekf_r_otos_theta);
+          break;
+        }
+        case msg::ConfigDelta::PatchKind::MOTOR: {
+          const msg::MotorConfigPatch& p = cfg.patch.motor;
+          std::printf(" side=%s", p.side == msg::BoundMotorSide::RIGHT ? "RIGHT" : "LEFT");
+          printOpt("travel_calib", p.travel_calib);
+          printOpt("kp", p.kp);
+          printOpt("ki", p.ki);
+          printOpt("kff", p.kff);
+          printOpt("i_max", p.i_max);
+          printOpt("kaw", p.kaw);
+          break;
+        }
+        case msg::ConfigDelta::PatchKind::PLANNER:
+          printOpt("min_speed", cfg.patch.planner.min_speed);
+          break;
+        case msg::ConfigDelta::PatchKind::WATCHDOG:
+          std::printf(" watchdog=%u", static_cast<unsigned>(cfg.patch.watchdog));
+          break;
+        case msg::ConfigDelta::PatchKind::NONE:
+        default:
+          break;
+      }
+      break;
+    }
     case msg::CommandEnvelope::CmdKind::STOP:
     case msg::CommandEnvelope::CmdKind::PING:
     case msg::CommandEnvelope::CmdKind::ID:
-    case msg::CommandEnvelope::CmdKind::CONFIG:
     case msg::CommandEnvelope::CmdKind::POSE:
     case msg::CommandEnvelope::CmdKind::OTOS:
     case msg::CommandEnvelope::CmdKind::GET:
     case msg::CommandEnvelope::CmdKind::STREAM:
     case msg::CommandEnvelope::CmdKind::NONE:
       // No arm-specific fields to print: zero-field arms (stop/ping/id
-      // request) and declared-only arms outside this ticket's differential
-      // scope (config/pose/otos/get/stream -- ticket 006 scopes coverage to
-      // the sprint's IMPLEMENTED arms; decode() itself still handles these
-      // generically, exercised by ticket 005's own harness).
+      // request) and declared-only arms outside this sprint's implemented
+      // scope (pose/otos land 098; get/stream have their OWN sim-level
+      // behavioral coverage in test_binary_channel.py, ticket 006's own
+      // instruction -- they carry no (min)/(max)/(abs_max)-validated
+      // fields of their own beyond ConfigGet.target's (req), already
+      // exercised by 095's wire_codec_harness.cpp).
       break;
   }
   std::printf("\n");
@@ -349,6 +458,140 @@ int cmdEncodeEchoReply(int argc, char** argv) {
   return 0;
 }
 
+// encode_telemetry -- 096-006: ReplyEnvelope{tlm=Telemetry{...}}, every
+// field positional in telemetry.proto's own field-number order (see this
+// file's header comment for the full argv list). Telemetry is reply-only
+// (never decoded by firmware), so this is its entire differential surface
+// (Direction B, firmware-encode -> host-decode).
+int cmdEncodeTelemetry(int argc, char** argv) {
+  if (argc < 37) {
+    std::printf("USAGE_ERROR\n");
+    return 1;
+  }
+  int i = 2;
+  msg::ReplyEnvelope reply;
+  reply.corr_id = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  reply.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
+  msg::Telemetry& t = reply.body.tlm;
+  t.now = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  t.mode = static_cast<msg::DriveMode>(std::strtoul(argv[i++], nullptr, 10));
+  t.seq = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  t.has_enc = std::strtoul(argv[i++], nullptr, 10) != 0;
+  t.enc_left = std::strtof(argv[i++], nullptr);
+  t.enc_right = std::strtof(argv[i++], nullptr);
+  t.has_vel = std::strtoul(argv[i++], nullptr, 10) != 0;
+  t.vel_left = std::strtof(argv[i++], nullptr);
+  t.vel_right = std::strtof(argv[i++], nullptr);
+  t.has_cmd_vel = std::strtoul(argv[i++], nullptr, 10) != 0;
+  t.cmd_vel_left = std::strtof(argv[i++], nullptr);
+  t.cmd_vel_right = std::strtof(argv[i++], nullptr);
+  t.has_pose = std::strtoul(argv[i++], nullptr, 10) != 0;
+  t.pose.x = std::strtof(argv[i++], nullptr);
+  t.pose.y = std::strtof(argv[i++], nullptr);
+  t.pose.h = std::strtof(argv[i++], nullptr);
+  t.has_otos = std::strtoul(argv[i++], nullptr, 10) != 0;
+  t.otos.x = std::strtof(argv[i++], nullptr);
+  t.otos.y = std::strtof(argv[i++], nullptr);
+  t.otos.h = std::strtof(argv[i++], nullptr);
+  t.otos_connected = std::strtoul(argv[i++], nullptr, 10) != 0;
+  t.has_twist = std::strtoul(argv[i++], nullptr, 10) != 0;
+  t.twist.v_x = std::strtof(argv[i++], nullptr);
+  t.twist.v_y = std::strtof(argv[i++], nullptr);
+  t.twist.omega = std::strtof(argv[i++], nullptr);
+  t.acc_left = std::strtof(argv[i++], nullptr);
+  t.acc_right = std::strtof(argv[i++], nullptr);
+  t.active = std::strtoul(argv[i++], nullptr, 10) != 0;
+  t.conn_left = std::strtoul(argv[i++], nullptr, 10) != 0;
+  t.conn_right = std::strtoul(argv[i++], nullptr, 10) != 0;
+  t.glitch_left = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  t.glitch_right = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  t.ts_left = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  t.ts_right = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  printEncodedOrZero(reply);
+  return 0;
+}
+
+// encode_cfg_drivetrain/motor/planner/watchdog -- 096-006: ReplyEnvelope{
+// cfg=ConfigSnapshot{target, patch=<arm>}}, one verb per `patch` oneof arm.
+// Every field of the selected Patch is populated {has=true, val} (mirrors
+// BinaryChannel's `get` handler -- see this file's header comment).
+int cmdEncodeCfgDrivetrain(int argc, char** argv) {
+  if (argc < 10) {
+    std::printf("USAGE_ERROR\n");
+    return 1;
+  }
+  msg::ReplyEnvelope reply;
+  reply.corr_id = static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10));
+  reply.body_kind = msg::ReplyEnvelope::BodyKind::CFG;
+  msg::ConfigSnapshot& cfg = reply.body.cfg;
+  cfg.target = static_cast<msg::ConfigTarget>(std::strtoul(argv[3], nullptr, 10));
+  cfg.patch_kind = msg::ConfigSnapshot::PatchKind::DRIVETRAIN;
+  msg::DrivetrainConfigPatch& p = cfg.patch.drivetrain;
+  p.trackwidth = {true, std::strtof(argv[4], nullptr)};
+  p.rotational_slip = {true, std::strtof(argv[5], nullptr)};
+  p.ekf_q_xy = {true, std::strtof(argv[6], nullptr)};
+  p.ekf_q_theta = {true, std::strtof(argv[7], nullptr)};
+  p.ekf_r_otos_xy = {true, std::strtof(argv[8], nullptr)};
+  p.ekf_r_otos_theta = {true, std::strtof(argv[9], nullptr)};
+  printEncodedOrZero(reply);
+  return 0;
+}
+
+int cmdEncodeCfgMotor(int argc, char** argv) {
+  if (argc < 11) {
+    std::printf("USAGE_ERROR\n");
+    return 1;
+  }
+  msg::ReplyEnvelope reply;
+  reply.corr_id = static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10));
+  reply.body_kind = msg::ReplyEnvelope::BodyKind::CFG;
+  msg::ConfigSnapshot& cfg = reply.body.cfg;
+  cfg.target = static_cast<msg::ConfigTarget>(std::strtoul(argv[3], nullptr, 10));
+  cfg.patch_kind = msg::ConfigSnapshot::PatchKind::MOTOR;
+  msg::MotorConfigPatch& p = cfg.patch.motor;
+  p.side = (std::strtoul(argv[4], nullptr, 10) != 0) ? msg::BoundMotorSide::RIGHT : msg::BoundMotorSide::LEFT;
+  p.travel_calib = {true, std::strtof(argv[5], nullptr)};
+  p.kp = {true, std::strtof(argv[6], nullptr)};
+  p.ki = {true, std::strtof(argv[7], nullptr)};
+  p.kff = {true, std::strtof(argv[8], nullptr)};
+  p.i_max = {true, std::strtof(argv[9], nullptr)};
+  p.kaw = {true, std::strtof(argv[10], nullptr)};
+  printEncodedOrZero(reply);
+  return 0;
+}
+
+int cmdEncodeCfgPlanner(int argc, char** argv) {
+  if (argc < 5) {
+    std::printf("USAGE_ERROR\n");
+    return 1;
+  }
+  msg::ReplyEnvelope reply;
+  reply.corr_id = static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10));
+  reply.body_kind = msg::ReplyEnvelope::BodyKind::CFG;
+  msg::ConfigSnapshot& cfg = reply.body.cfg;
+  cfg.target = static_cast<msg::ConfigTarget>(std::strtoul(argv[3], nullptr, 10));
+  cfg.patch_kind = msg::ConfigSnapshot::PatchKind::PLANNER;
+  cfg.patch.planner.min_speed = {true, std::strtof(argv[4], nullptr)};
+  printEncodedOrZero(reply);
+  return 0;
+}
+
+int cmdEncodeCfgWatchdog(int argc, char** argv) {
+  if (argc < 5) {
+    std::printf("USAGE_ERROR\n");
+    return 1;
+  }
+  msg::ReplyEnvelope reply;
+  reply.corr_id = static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10));
+  reply.body_kind = msg::ReplyEnvelope::BodyKind::CFG;
+  msg::ConfigSnapshot& cfg = reply.body.cfg;
+  cfg.target = static_cast<msg::ConfigTarget>(std::strtoul(argv[3], nullptr, 10));
+  cfg.patch_kind = msg::ConfigSnapshot::PatchKind::WATCHDOG;
+  cfg.patch.watchdog = static_cast<uint32_t>(std::strtoul(argv[4], nullptr, 10));
+  printEncodedOrZero(reply);
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -368,6 +611,11 @@ int main(int argc, char** argv) {
   if (op == "encode_err") return cmdEncodeErr(argc, argv);
   if (op == "encode_id") return cmdEncodeId(argc, argv);
   if (op == "encode_echo_reply") return cmdEncodeEchoReply(argc, argv);
+  if (op == "encode_telemetry") return cmdEncodeTelemetry(argc, argv);
+  if (op == "encode_cfg_drivetrain") return cmdEncodeCfgDrivetrain(argc, argv);
+  if (op == "encode_cfg_motor") return cmdEncodeCfgMotor(argc, argv);
+  if (op == "encode_cfg_planner") return cmdEncodeCfgPlanner(argc, argv);
+  if (op == "encode_cfg_watchdog") return cmdEncodeCfgWatchdog(argc, argv);
 
   std::printf("USAGE_ERROR\n");
   return 1;

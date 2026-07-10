@@ -55,7 +55,7 @@ pytestmark = pytest.mark.filterwarnings("ignore")
 _SIM_INFRA_DIR = _REPO_ROOT / "tests" / "_infra" / "sim"
 if str(_SIM_INFRA_DIR) not in sys.path:
     sys.path.insert(0, str(_SIM_INFRA_DIR))
-from firmware import CHANNEL_SERIAL  # noqa: E402
+from firmware import CHANNEL_RADIO, CHANNEL_SERIAL  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -577,6 +577,36 @@ def test_binary_stream_period_zero_stops_periodic_emission(sim):
     sim.tick_for(240)
     assert sim.peek_reply_store(CHANNEL_SERIAL) == "", (
         "stream{period:0} must prevent any further periodic frame from being emitted"
+    )
+
+
+def test_binary_stream_binds_periodic_emission_to_the_requesting_channel(sim):
+    """096-006 (genuine behavioral gap, 004/005's own test coverage never
+    exercised a second channel): `bb.telemetryChannel` is bound to
+    `CommandRouter::currentChannel()` -- the channel the `stream` REQUEST
+    itself arrived on (binary_channel.cpp's STREAM case) -- mirroring
+    `handleStream()`'s own text-plane channel binding. Every other stream
+    test in this file only ever sends on CHANNEL_SERIAL (the `send()`
+    helper's own default), which never distinguishes "always emits on
+    SERIAL" from "emits on whichever channel armed it". Arming on
+    CHANNEL_RADIO and observing periodic frames land THERE (and nowhere on
+    CHANNEL_SERIAL) proves the binding is real, not a hardcoded default."""
+    reply = send(sim, pb_envelope.CommandEnvelope(
+        corr_id=70, stream=pb_envelope.StreamControl(binary=True, period=50)), channel=CHANNEL_RADIO)
+    assert reply.WhichOneof("body") == "ok"
+    assert sim.peek_reply_store(CHANNEL_RADIO) == ""
+    assert sim.peek_reply_store(CHANNEL_SERIAL) == ""
+
+    sim.tick_for(240)
+
+    radio_frames = _parse_binary_tlm_frames(sim.peek_reply_store(CHANNEL_RADIO))
+    assert len(radio_frames) >= 3, f"expected >= 3 periodic binary frames on CHANNEL_RADIO, got {len(radio_frames)}"
+    for frame in radio_frames:
+        assert frame.WhichOneof("body") == "tlm"
+        assert frame.corr_id == 0
+
+    assert sim.peek_reply_store(CHANNEL_SERIAL) == "", (
+        "a stream armed on CHANNEL_RADIO must never emit periodic frames on CHANNEL_SERIAL"
     )
 
 
