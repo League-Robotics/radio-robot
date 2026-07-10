@@ -268,3 +268,18 @@ explicit instruction). Tickets 004/005/006/007/008/009/010 are rewritten
 to carry out Decision 9; none have been executed. Tickets 001/002/003
 remain unaffected (already done, and 002's Legacy Verb Translator is
 extended, not replaced, by ticket 004).
+
+## Addendum (2026-07-10, stakeholder): M5 transport revised to PTY
+
+Decision 9's M5 sketch chose `AF_UNIX`. Later the same day, Eric revised
+the transport to a **PTY** (`os.openpty()` + a stable symlink, default
+`~/.rogo/robot-pty`): every legacy consumer already opens its port as a
+device path (pyserial/`SerialConnection`), so a PTY is a zero-code-change
+drop-in, where a socket would force a code change into every consumer —
+recreating the migration problem the proxy exists to avoid. Cost:
+single-client, documented not policed; `nc -U` pokability replaced by
+`screen <pty>`. EVT synthesis (`EVT done <verb>`, off the binary
+`Telemetry.active` flag) is also newly in scope. Full spec:
+`clasi/issues/rogo-translator-proxy-text-v2-binary-bridge-on-a-pty.md`.
+Ticket 004 is revised accordingly; the body above is left as originally
+written.
