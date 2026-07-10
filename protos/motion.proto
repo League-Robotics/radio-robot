@@ -1,0 +1,126 @@
+syntax = "proto3";
+
+package robot;
+
+import "options.proto";
+
+// ---------------------------------------------------------------------------
+// Motion subsystem wire messages (095-001, SUC-001).
+//
+// MotionSegment mirrors source/motion/segment.h's Motion::Segment field-for-
+// field, in Motion::Segment's OWN native units (mm, rad, mm/s, mm/s^2,
+// mm/s^3, rad/s, rad/s^2, rad/s^3, ms) -- NOT the text plane's centidegree-
+// integer wire convention. Motion::Segment itself stays a hand-owned,
+// non-generated struct (architecture-update.md (095) Decision 2 -- 094-005's
+// reasoning still holds: it is the SegmentExecutor's own internal
+// representation, evolved alongside its Ruckig phase machinery). This is a
+// SEPARATE message; source/commands/binary_channel.{h,cpp} (ticket 007)
+// performs a one-directional, field-by-field copy at the wire boundary --
+// the SAME shape handleMove/handleMover (motion_commands.cpp) already
+// perform going the other direction (parsed wire args -> Motion::Segment).
+//
+// Every (min)/(max)/(abs_max) bound below is TRANSCRIBED from the matching
+// text-handler constant in source/commands/motion_commands.cpp (Decision 5),
+// converted from that constant's own wire unit (mm, cdeg, cdeg/s, cdeg/s^2,
+// cdeg/s^3) to this message's native unit (mm, rad, rad/s, rad/s^2,
+// rad/s^3) -- never re-derived from first principles. cdeg -> rad conversion
+// factor: rad = cdeg * (pi / 18000) (cdeg -> deg is /100, deg -> rad is
+// *pi/180; the two combine to *pi/18000). Each field cites its source
+// constant so a future reviewer can re-verify the transcription without
+// re-deriving it.
+// ---------------------------------------------------------------------------
+message MotionSegment {
+  // --- geometry (all RELATIVE to the segment's start pose; pose-free) ---
+
+  // [mm] signed straight-line translation. abs_max=10000 from parseMove's/
+  // parseD's distance/mm range check (motion_commands.cpp parseMove:
+  // `distance < -10000 || distance > 10000`; parseD: `mm < 1 || mm > 10000`).
+  float distance = 1 [(units) = "mm", (abs_max) = 10000];
+
+  // [rad] pre-pivot heading change, CCW+ (0 = straight ahead). abs_max=
+  // 31.416 rad (== 1800 deg == 180000 cdeg * pi/18000) from parseMove's/
+  // parseMover's direction bound (RT's own wider relative-angle bound,
+  // motion_commands.cpp: `direction < -180000 || direction > 180000`, cdeg).
+  float direction = 2 [(units) = "rad", (abs_max) = 31.416];
+
+  // [rad] final heading relative to start, CCW+. Same bound and source
+  // constant as `direction` above (parseMove's/parseMover's finalHeading
+  // range check, +-180000 cdeg -> +-31.416 rad).
+  float final_heading = 3 [(units) = "rad", (abs_max) = 31.416];
+
+  // --- per-segment motion limits (0 => fall back to the executor's
+  //     configured default; see Motion::Segment's own doc comment) ---
+
+  // [mm/s] translation speed ceiling. min=0, max=3000 from kMoveMaxSpeedMax
+  // (motion_commands.cpp `constexpr float kMoveMaxSpeedMax = 3000.0f;`).
+  float speed_max = 4 [(units) = "mm/s", (min) = 0, (max) = 3000];
+
+  // [mm/s^2] translation accel. min=0, max=6000 from kMoveMaxAccelMax
+  // (motion_commands.cpp `constexpr float kMoveMaxAccelMax = 6000.0f;`).
+  float accel_max = 5 [(units) = "mm/s^2", (min) = 0, (max) = 6000];
+
+  // [mm/s^3] translation jerk (0 => trapezoid). min=0, max=60000 from
+  // kMoveMaxJerkMax (motion_commands.cpp
+  // `constexpr float kMoveMaxJerkMax = 60000.0f;`).
+  float jerk_max = 6 [(units) = "mm/s^3", (min) = 0, (max) = 60000];
+
+  // [rad/s] pivot angular-speed ceiling. min=0, max=12.566 rad/s
+  // (~720 deg/s) from kMoveMaxYawRateMaxCdeg (motion_commands.cpp
+  // `constexpr float kMoveMaxYawRateMaxCdeg = 72000.0f;` cdeg/s ->
+  // 72000 * pi/18000 = 12.566 rad/s).
+  float yaw_rate_max = 7 [(units) = "rad/s", (min) = 0, (max) = 12.566];
+
+  // [rad/s^2] pivot angular accel. min=0, max=87.266 rad/s^2 from
+  // kMoveMaxYawAccelMaxCdeg (motion_commands.cpp
+  // `constexpr float kMoveMaxYawAccelMaxCdeg = 500000.0f;` cdeg/s^2 ->
+  // 500000 * pi/18000 = 87.266 rad/s^2).
+  //
+  // DEVIATION from ticket 001's own text (Decision 5 list): the ticket cites
+  // 8.727 rad/s^2 for this bound. Re-deriving from the cited source constant
+  // (kMoveMaxYawAccelMaxCdeg = 500000 cdeg/s^2, matching the constant's own
+  // "(~5000 deg/s^2)" comment) gives 500000 * pi/18000 = 87.266 rad/s^2, a
+  // factor of 10 larger -- the same cdeg->rad conversion factor used for
+  // yaw_rate_max above (72000 cdeg/s -> 12.566 rad/s, which DOES match the
+  // ticket) applied here gives 87.266, not 8.727. Per Decision 5 ("every
+  // bound is TRANSCRIBED from the matching text constant... never
+  // re-derived from first principles") the constant, not the ticket's own
+  // restated value, is authoritative -- 87.266 is transcribed here; the
+  // ticket's 8.727 appears to be an arithmetic slip. Flagged in ticket
+  // 001's completion notes, not silently reconciled.
+  float yaw_accel_max = 8 [(units) = "rad/s^2", (min) = 0, (max) = 87.266];
+
+  // [rad/s^3] pivot angular jerk. min=0, max=349.066 rad/s^3 from
+  // kMoveMaxYawJerkMaxCdeg (motion_commands.cpp
+  // `constexpr float kMoveMaxYawJerkMaxCdeg = 2000000.0f;` cdeg/s^3 ->
+  // 2000000 * pi/18000 = 349.066 rad/s^3).
+  //
+  // DEVIATION from ticket 001's own text: same class of discrepancy as
+  // yaw_accel_max above -- the ticket cites 34.907 rad/s^3; the correct
+  // transcription of kMoveMaxYawJerkMaxCdeg = 2000000 cdeg/s^3 (matching the
+  // constant's own "(~20000 deg/s^3)" comment) is 349.066 rad/s^3, a factor
+  // of 10 larger. 349.066 is transcribed here per the same Decision 5
+  // reasoning; flagged, not silently reconciled.
+  float yaw_jerk_max = 9 [(units) = "rad/s^3", (min) = 0, (max) = 349.066];
+
+  // --- time/velocity arm (MOVER teleop primitive) ---
+
+  // [ms] 0 = distance-bounded. min=0, max=5000 from parseMover's `t` bound
+  // (motion_commands.cpp: `t < 0.0f || t > 5000.0f`).
+  float time = 10 [(units) = "ms", (min) = 0, (max) = 5000];
+
+  // [mm/s] SIGNED target velocity (time mode). abs_max=3000 from
+  // parseMover's `v` bound -- SIGNED, unlike MOVE's unsigned speed_max
+  // (motion_commands.cpp: `v < -kMoveMaxSpeedMax || v > kMoveMaxSpeedMax`).
+  float v = 11 [(units) = "mm/s", (abs_max) = 3000];
+
+  // [rad/s] SIGNED target yaw rate (time mode). abs_max=12.566 rad/s from
+  // parseMover's `w` bound converted (motion_commands.cpp:
+  // `w < -kMoveMaxYawRateMaxCdeg || w > kMoveMaxYawRateMaxCdeg`, cdeg/s ->
+  // rad/s, same 72000 cdeg/s -> 12.566 rad/s conversion as yaw_rate_max).
+  float omega = 12 [(units) = "rad/s", (abs_max) = 12.566];
+
+  // Marks a STREAMING segment (wire MOVE ... s=1) -- merges into the
+  // in-flight plan rather than executing sequentially. Dimensionless; no
+  // bound.
+  bool stream = 13;
+}

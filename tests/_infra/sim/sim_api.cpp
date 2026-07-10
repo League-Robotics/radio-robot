@@ -338,6 +338,100 @@ int sim_command(void* h, const char* line, char* reply, int size) {
 }
 
 // ---------------------------------------------------------------------------
+// sim_route_no_tick (095-007, TEST-ONLY) -- identical to sim_command_on()
+// EXCEPT it skips the trailing Rt::MainLoop::tick() replay. Lets
+// test_binary_channel.py peek bb.segmentIn/bb.replaceIn's raw just-posted
+// Motion::Segment (via sim_peek_segment_in()/sim_peek_replace_in() below)
+// BEFORE Drivetrain::tick() drains it into its own ring_/executor_ --
+// proving BinaryChannel's segment/replace translation field-by-field,
+// independent of any physics/timing inference. A caller that also wants
+// the drive-through-tick behavior test_bare_loop_move_and_tlm.py's own
+// suite exercises can still call sim_tick()/tick_for() afterward -- this
+// entry point only omits the ONE tick sim_command_on() replays inline.
+// ---------------------------------------------------------------------------
+int sim_route_no_tick(void* h, const char* line, int channel, char* reply, int size) {
+    SimHandle* s = static_cast<SimHandle*>(h);
+
+    s->syncStoreSerial.reset();
+    s->syncStoreRadio.reset();
+
+    Subsystems::CommunicatorToCommandProcessorCommand cmd;
+    cmd.returnPath = static_cast<Subsystems::Channel>(channel);
+    cmd.line[0] = '\0';
+    if (line) {
+        std::strncpy(cmd.line, line, sizeof(cmd.line) - 1);
+        cmd.line[sizeof(cmd.line) - 1] = '\0';
+    }
+
+    Types::setHostClockNow(s->lastTickNow);
+    s->router.route(cmd, s->bb);
+
+    ReplyStore& store = (cmd.returnPath == Subsystems::Channel::RADIO)
+                             ? s->syncStoreRadio
+                             : s->syncStoreSerial;
+
+    int n = store.written;
+    if (reply && size > 0) {
+        int copy = (n < size - 1) ? n : size - 1;
+        memcpy(reply, store.buf, static_cast<size_t>(copy));
+        reply[copy] = '\0';
+        n = copy;
+    }
+    store.reset();
+    return n;
+}
+
+// ---------------------------------------------------------------------------
+// sim_peek_segment_in / sim_peek_replace_in (095-007, TEST-ONLY) --
+// non-destructive reads of a just-posted Motion::Segment (bb.segmentIn's
+// WorkQueue::peek(idx) / bb.replaceIn's Mailbox::peek(), both already
+// non-destructive by design -- queue.h). Writes the 12 float fields into
+// out12[] in Motion::Segment's own declared order (segment.h): distance,
+// direction, finalHeading, speedMax, accelMax, jerkMax, yawRateMax,
+// yawAccelMax, yawJerkMax, time, v, omega -- `stream` (bool) is written
+// separately via *streamOut since it is not a float. *presentOut is set to
+// 1 if a segment was found at that position, 0 otherwise (out12_/streamOut
+// left untouched when absent -- caller must check presentOut first).
+// ---------------------------------------------------------------------------
+void writeSegmentOut(const Motion::Segment& seg, float* out12, int* streamOut) {
+    out12[0] = seg.distance;
+    out12[1] = seg.direction;
+    out12[2] = seg.finalHeading;
+    out12[3] = seg.speedMax;
+    out12[4] = seg.accelMax;
+    out12[5] = seg.jerkMax;
+    out12[6] = seg.yawRateMax;
+    out12[7] = seg.yawAccelMax;
+    out12[8] = seg.yawJerkMax;
+    out12[9] = seg.time;
+    out12[10] = seg.v;
+    out12[11] = seg.omega;
+    *streamOut = seg.stream ? 1 : 0;
+}
+
+void sim_peek_segment_in(void* h, int idx, float* out12, int* streamOut, int* presentOut) {
+    SimHandle* s = static_cast<SimHandle*>(h);
+    const Motion::Segment* seg = s->bb.segmentIn.peek(static_cast<uint32_t>(idx));
+    if (!seg) {
+        *presentOut = 0;
+        return;
+    }
+    writeSegmentOut(*seg, out12, streamOut);
+    *presentOut = 1;
+}
+
+void sim_peek_replace_in(void* h, float* out12, int* streamOut, int* presentOut) {
+    SimHandle* s = static_cast<SimHandle*>(h);
+    const Motion::Segment* seg = s->bb.replaceIn.peek();
+    if (!seg) {
+        *presentOut = 0;
+        return;
+    }
+    writeSegmentOut(*seg, out12, streamOut);
+    *presentOut = 1;
+}
+
+// ---------------------------------------------------------------------------
 // sim_post_segment (094-005, TEST-ONLY) -- posts one Motion::Segment
 // directly to bb.segmentIn, bypassing the wire entirely. `MOVE` (094-006)
 // is not wired yet this ticket; this is the direct producer 094-005's own

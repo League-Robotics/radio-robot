@@ -1,0 +1,282 @@
+syntax = "proto3";
+
+package robot;
+
+import "options.proto";
+import "drivetrain.proto";
+import "motion.proto";
+import "odometer.proto";
+
+// ---------------------------------------------------------------------------
+// Binary command-plane envelope (095-001, SUC-001). The wire contract for
+// the `*B<base64(envelope_bytes)>` armored binary framing (see
+// architecture-update.md (095) "Framing"). `CommandEnvelope` carries one
+// command in; `ReplyEnvelope` carries one reply out. Rule: one `cmd` oneof
+// arm per Rt::Blackboard command-plane queue plus system verbs — the
+// firmware dispatcher (source/commands/binary_channel.{h,cpp}, ticket 007)
+// becomes a switch, not a verb table.
+//
+// **Implemented this sprint** (095, tickets 003-007 build runtime behavior
+// on these arms): drive, segment, replace, stop, ping, echo, id.
+// **Declared only** this sprint (schema exists now so 096/098 slot in
+// without a later schema break; `BinaryChannel` replies
+// `Error{ERR_UNIMPLEMENTED}` for these until their owning sprint lands):
+// config/get/stream (096), pose/otos (098).
+//
+// `motion` (field 5, `PlannerCommand`) is NOT declared this sprint --
+// architecture-update-r1.md Decision 6 (095, revising this document's
+// original "declare all arms now" framing): `PlannerCommand`'s own
+// worst-case encoded size is 327B, over the 186B envelope budget on its
+// own (dominated by `repeated StopCondition stops = 9 [(max_count) = 4]`
+// = 160B, never packed since it's repeated-message), and it has a live
+// text-plane consumer (`motion_commands.cpp`'s R/TURN/G handlers) that
+// makes shrinking it out of this ticket's scope. Field number 5 is
+// RESERVED, not reused -- a future sprint that un-parks
+// `Subsystems::Planner` defines a new, deliberately-bounded wire payload
+// type for `motion` first (the same move Decision 2 already made for
+// `segment`/`replace`: a purpose-built `MotionSegment` rather than
+// `Motion::Segment` directly), then declares it at field 5. Adding a new
+// oneof arm later is non-breaking in protobuf (ticket 004's unknown-
+// field-skip means older builds simply skip a field number they don't
+// recognize yet) -- there is no cost to reserving field 5 for later and
+// no benefit to declaring it now, unbounded.
+//
+// Cross-file message references (drive->DrivetrainCommand, segment/
+// replace->MotionSegment, pose->SetPose, otos->OdometerCommand): this was
+// the FIRST protos/*.proto file in this tree to import a subsystem-specific
+// proto file other than common.proto/options.proto (ticket 001). The
+// resulting generator gap (scripts/gen_messages.py's `_emit_file()`
+// emitting only a fixed `#include "messages/common.h"`, no per-file
+// cross-reference tracking) was fixed in ticket 003 --
+// `_cross_file_include_block()` now emits one additional `#include` per
+// OTHER proto file this file's own `import` lines name; see ticket 003's
+// completion notes for the fix and verification.
+// ---------------------------------------------------------------------------
+
+// Binary reply/error taxonomy (Open Question 4, resolved this ticket).
+// Mirrors the text plane's existing "unknown"/"badarg"/"range"/"full" reply
+// codes (see e.g. motion_commands.cpp's res.err.code string literals) plus
+// binary-specific additions (DECODE/UNIMPLEMENTED/OVERSIZE have no text-
+// plane equivalent — the text plane's hand-tokenizer never needed a
+// generic "malformed bytes" or "arm not wired yet" code). Numeric values
+// are wire-stable once wire.cpp/tests (later tickets) depend on them; only
+// the C++ enum name follows normal CamelCase naming
+// (.claude/rules/naming-and-style.md) -- the enumerator VALUES are
+// wire-key-adjacent constants, not renamed by that convention.
+enum ErrCode {
+  ERR_NONE          = 0;
+  ERR_UNKNOWN        = 1;  // no such oneof arm / unknown target
+  ERR_BADARG         = 2;  // malformed argument (mirrors text "badarg")
+  ERR_RANGE          = 3;  // (min)/(max)/(abs_max) bound violated (mirrors text "range")
+  ERR_FULL           = 4;  // destination queue full (mirrors text "full")
+  ERR_DECODE         = 5;  // malformed wire bytes (protobuf decode failure)
+  ERR_UNIMPLEMENTED  = 6;  // declared-only arm, no live consumer this sprint
+  ERR_OVERSIZE       = 7;  // encoded reply would exceed the envelope cap
+}
+
+// Flow-control ack. Mirrors the q=/rem= fields of the text plane's MOVE/
+// MOVER acks exactly (motion_commands.cpp handleMove/handleMover) -- a
+// streaming teleop client reads q (queue depth) / rem (remaining
+// translation, mm) off this ack the same way it does off the text OK reply.
+//
+// t (095-007, schema-gap closure -- same "cheap, downstream-critical,
+// closed rather than silently dropped" treatment Decision 4 gave the `id`
+// request arm): robot-clock timestamp, set ONLY by BinaryChannel's `ping`
+// reply -- mirrors text PING's `OK pong t=<ms>` reply exactly (Types::
+// systemClockNow()). Every other Ack producer (drive/segment/replace/stop)
+// leaves it at its zero default. Sprint 098's pose-estimation work
+// (Decision 6, camera-fix clock-sync) depends on a binary PING carrying a
+// timestamp for parity with the text plane -- ticket 007's own completion
+// notes.
+message Ack {
+  uint32 q   = 1;
+  float  rem = 2;  // [mm]
+  uint32 t   = 3;  // [ms]
+}
+
+// field: the field number that failed validation (0 if not field-specific,
+// e.g. ERR_UNKNOWN/ERR_DECODE); host maps it back to a field name via the
+// same schema.
+message Error {
+  ErrCode code  = 1;
+  uint32  field = 2;
+}
+
+// --- Leaf messages (six new types this ticket adds) -------------------
+
+message Ping {}
+
+// payload: up to 64 raw bytes, echoed back verbatim.
+//
+// DEVIATION (flagged, not hand-patched): scripts/gen_messages.py's
+// `_emit_message()` only special-cases `(max_count)` for REPEATED fields
+// (`is_repeated` branch -> fixed C array + `_count`). `bytes` is a
+// proto3 SCALAR type (like `string`), not inherently repeated, so a
+// singular `bytes` field with `(max_count)` falls through to the generic
+// scalar branch and is emitted as a single `uint8_t payload = 0;` --  a
+// ONE-byte field, not the intended fixed 64-byte buffer. Verified against
+// the real `gen_messages.py` run for this ticket (see completion notes).
+// Writing `repeated uint32 payload` instead would dodge the gap but
+// silently change the wire representation from a raw byte string to a
+// packed varint list -- a different wire format than specified, not a
+// schema-authoring decision this ticket may make silently. The proto
+// stays exactly `bytes payload = 1 [(max_count) = 64]` as specified;
+// ticket 004/005 (codegen extension) must special-case TYPE_BYTES +
+// (max_count) the same way it special-cases repeated + (max_count).
+message Echo {
+  bytes payload = 1 [(max_count) = 64];
+}
+
+// target: which config slice to fetch (096 defines the target enum/
+// numbering; declared-only this sprint, kept minimal per architecture-
+// update.md (095) Step 6).
+//
+// `target` is `optional` + `(req) = true` (095-005 Step 1-4 testing need:
+// the schema had no field exercising the generated decoder's `req`
+// validation path -- see ticket 005's completion notes). `optional` gives
+// this field real protobuf explicit-presence semantics (a synthetic oneof,
+// `Opt<uint32>` in the generated struct) rather than proto3's default
+// implicit presence, which is required for `(req)` to be meaningful: a
+// plain (non-optional) scalar field's zero value is indistinguishable from
+// "never sent" once a real protobuf encoder omits it, so marking a
+// non-optional field `req` would spuriously reject a legitimate
+// `target = 0`. `optional` forces every encoder (including the host's real
+// `google.protobuf` bindings, M7) to serialize the field whenever it is
+// explicitly set, zero value or not.
+message ConfigGet {
+  optional uint32 target = 1 [(req) = true];
+}
+
+// binary: true selects the binary telemetry emitter over the text one.
+// period: telemetry emission period. Declared-only this sprint (096 owns
+// StreamControl.binary's actual wiring), kept minimal.
+message StreamControl {
+  bool   binary = 1;
+  uint32 period = 2;  // [ms]
+}
+
+// Zero-field oneof arm (Decision 3): a panic-stop must have zero ways to
+// be malformed. BinaryChannel (ticket 007) handles this by constructing
+// msg::DrivetrainCommand{NEUTRAL=BRAKE} itself and posting to driveIn --
+// byte-identical to handleStop()'s own construction (motion_commands.cpp).
+message Stop {}
+
+// Used BOTH as the empty-bodied CommandEnvelope.cmd.id request (Decision 4
+// -- sprint.md's Scope commits to binary `id` this sprint even though the
+// issue's own envelope sketch only showed DeviceId on the reply side) AND
+// the populated ReplyEnvelope.body.id reply, mirroring handleId()'s text
+// reply fields in system_commands.cpp exactly: `model=NEZHA2 name=<n>
+// serial=<s> fw=<ver> proto=<n>`. On the request arm every field stays at
+// its zero-value default (the request carries no payload of its own --
+// same "cannot be malformed" shape Stop gets above).
+message DeviceId {
+  // (str_len)=48 (095-005 Step 0b, architecture-update-r1.md Decision 6):
+  // shrunk from the generator's default char[64] so
+  // `ReplyEnvelope{DeviceId}`'s worst-case kMaxEncodedSize fits the 186-byte
+  // envelope budget (~171B after this shrink; see ticket 005's completion
+  // notes for the full computation) -- Open Question 3's already-sanctioned
+  // latitude.
+  string model         = 1 [(str_len) = 48];
+  string name          = 2 [(str_len) = 48];
+  uint32 serial        = 3;
+  string fw_version    = 4 [(str_len) = 48];
+  uint32 proto_version = 5;
+}
+
+// --- Forward-compat placeholders (096/097-owned; NOT part of this
+// ticket's six "leaf messages" -- see completion notes) -----------------
+//
+// architecture-update.md (095)'s own envelope.proto sketch (echoing the
+// driving issue's sketch) names `ConfigDelta`, `Telemetry`, and
+// `ConfigSnapshot` as the payload types for the config/tlm/cfg arms below,
+// but NONE of the three exists anywhere in protos/*.proto today:
+//   - `ConfigDelta` exists ONLY as `Rt::ConfigDelta`, a hand-written,
+//     field-masked C++ struct in source/runtime/commands.h (Rt::, not
+//     msg::; a completely different shape -- target+port+field-mask, not
+//     a wire-friendly value message). No collision risk (different
+//     namespace), but no reusable shape either.
+//   - `Telemetry` / `ConfigSnapshot` have no existing definition anywhere
+//     in this tree (proto or hand-written).
+// Since these three oneof arms are explicitly "declared only... unused
+// this sprint" (096 owns their real design), minimal EMPTY placeholder
+// messages are declared here so the oneof arms this ticket's own
+// acceptance criteria require can exist at all, without this ticket
+// inventing a config-delta/telemetry/config-snapshot wire shape it has no
+// mandate to design. 096 replaces these bodies (not just decorates them)
+// when it builds the real config/telemetry planes -- this is intentionally
+// throwaway shape, flagged per Decision 5's "record the discrepancy, don't
+// silently reconcile" precedent (the same pattern protos/odometer.proto's
+// own header comment already uses for its Pose2D-vs-SetPose reuse call).
+message ConfigDelta {}
+message Telemetry {}
+message ConfigSnapshot {}
+
+// `Event` is NOT reused here: source/messages/event.h already hand-
+// authors `msg::Event` (explicitly NOT scripts/gen_messages.py-generated
+// -- its own header comment rejects a proto round-trip because it needs
+// four DIFFERENTLY-sized char arrays, a shape gen_messages.py's flat
+// `char[64]`-per-string rule cannot produce). Declaring `message Event`
+// here would generate a SECOND `struct Event` inside the SAME `namespace
+// msg` (every generated header's types live in `namespace msg` --
+// _emit_file()) -- an ODR violation the moment one translation unit
+// includes both source/messages/event.h and source/messages/envelope.h,
+// which is inevitable once BinaryChannel (ticket 006+) needs both. Named
+// `EventNotify` here instead, as a minimal declared-only placeholder;
+// 096/097 must decide how to reconcile it with the hand-authored
+// msg::Event (retire the hand-authored type in favor of a real
+// event.proto round-trip once gen_messages.py can express per-field
+// char-array sizes, or some other resolution) -- flagged, not resolved,
+// per the same Decision 5 precedent cited above.
+message EventNotify {}
+
+// One command in. corr_id is echoed back on ReplyEnvelope so a pipelined
+// client can correlate replies out of order.
+message CommandEnvelope {
+  reserved 5;  // PlannerCommand motion -- see the oneof's own comment below
+  uint32 corr_id = 1;
+  oneof cmd {
+    DrivetrainCommand drive   = 2;   // -> bb.driveIn
+    MotionSegment     segment = 3;   // -> bb.segmentIn   (MOVE)
+    MotionSegment     replace = 4;   // -> bb.replaceIn   (MOVER)
+    // 5 reserved -- `PlannerCommand motion`, removed 095-005 Step 0a
+    // (architecture-update-r1.md Decision 6): PlannerCommand's 327B
+    // worst-case size can't fit the 186B budget and has a live text-plane
+    // consumer out of this ticket's scope to shrink. A future sprint
+    // re-declares `motion` at field 5 with a new, deliberately-bounded
+    // wire payload type once Subsystems::Planner un-parks -- never
+    // reassign 5 to a different field.
+    ConfigDelta       config  = 6;   // -> bb.configIn (declared only, 096)
+    SetPose           pose    = 7;   // -> bb.poseResetIn (declared only, 098)
+    OdometerCommand   otos    = 8;   // -> bb.otosCommandIn (declared only, 098)
+    Ping              ping    = 9;
+    Echo              echo    = 10;
+    ConfigGet         get     = 11;  // declared only, 096
+    StreamControl     stream  = 12;  // declared only, 096
+    Stop              stop    = 13;
+    DeviceId          id      = 14;  // Decision 4 -- empty request
+  }
+}
+
+// One reply out. corr_id echoes the CommandEnvelope's corr_id that
+// triggered this reply (0 for an unsolicited reply, e.g. a future async
+// EVT/TLM push once 096/097 wire those arms live).
+message ReplyEnvelope {
+  uint32 corr_id = 1;
+  oneof body {
+    Ack             ok   = 2;
+    Error           err  = 3;
+    Telemetry       tlm  = 4;   // declared only, 096
+    ConfigSnapshot  cfg  = 5;   // declared only, 096
+    EventNotify     evt  = 6;   // declared only, 096/097 (see EventNotify's own comment)
+    DeviceId        id   = 7;
+    // echo (095-007, schema-gap closure): the issue's own envelope sketch
+    // declared CommandEnvelope.cmd.echo (field 10) but never gave
+    // ReplyEnvelope.body a matching arm to carry the payload back on --
+    // handleEcho()'s text behavior ("OK echo <payload>") echoes the
+    // payload verbatim, so a binary ECHO reply needs somewhere to put it.
+    // Reuses the EXISTING Echo leaf message (no new message type) on a NEW
+    // oneof arm, the same "reuse the request-side message on the reply
+    // side" move Decision 4 already made for DeviceId/id.
+    Echo            echo = 8;
+  }
+}

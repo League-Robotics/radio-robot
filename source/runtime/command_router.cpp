@@ -26,7 +26,15 @@ std::vector<CommandDescriptor> buildTable(CommandRouter& router) {
 
 }  // namespace
 
-CommandRouter::CommandRouter() : processor_(buildTable(*this)) {}
+CommandRouter::CommandRouter() : processor_(buildTable(*this)) {
+  // 095-007 (M6 Dispatcher Integration, architecture-update.md Decision 1):
+  // wires BinaryChannel's path to the Blackboard the SAME way every
+  // motionCommands(router)/systemCommands(router) call already threads
+  // `&router` through as handlerCtx -- CommandProcessor forwards this
+  // opaque pointer verbatim to BinaryChannel::handle(), never
+  // dereferencing it itself.
+  processor_.setBinaryContext(this);
+}
 
 void CommandRouter::setReplyChannels(ReplyFn serialReply, void* serialCtx, ReplyFn radioReply,
                                      void* radioCtx) {

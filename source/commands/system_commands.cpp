@@ -33,8 +33,6 @@
 
 #include <cstdio>
 
-namespace {
-
 // ---------------------------------------------------------------------------
 // deviceIdentity -- the CODAL device-identity pair every identity-bearing
 // reply (ID, the DEVICE: banner, HELLO) reports. #ifdef HOST_BUILD
@@ -43,6 +41,14 @@ namespace {
 // no hardware or sim board present. The single place this branch lives --
 // handleId and formatDeviceAnnouncement() both call it, so the two never
 // drift apart.
+//
+// External linkage (095-007, declared in system_commands.h): moved out of
+// the anonymous namespace below so BinaryChannel's binary `id` handler
+// (source/commands/binary_channel.cpp) can reuse it too -- see the header
+// declaration's own doc comment. Defined here, ahead of the anonymous
+// namespace, the same way formatDeviceAnnouncement() is defined below it --
+// both are this translation unit's two external-linkage identity entry
+// points.
 // ---------------------------------------------------------------------------
 void deviceIdentity(const char** name, uint32_t* serial) {
 #ifdef HOST_BUILD
@@ -53,6 +59,8 @@ void deviceIdentity(const char** name, uint32_t* serial) {
   *serial = microbit_serial_number();
 #endif
 }
+
+namespace {
 
 // ---------------------------------------------------------------------------
 // PING -- clock-sync probe.

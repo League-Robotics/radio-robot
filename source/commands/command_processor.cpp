@@ -7,6 +7,7 @@
 
 #include "command_processor.h"
 #include "arg_parse.h"
+#include "commands/binary_channel.h"
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -420,6 +421,15 @@ int CommandProcessor::listVerbs(char* buf, int size) const
 
 void CommandProcessor::process(const char* line, ReplyFn replyFn, void* ctx)
 {
+    // 095-007 (M6 Dispatcher Integration, architecture-update.md Decision 1):
+    // the `*`-discriminator, checked BEFORE parseTokens() runs -- base64
+    // must never be tokenized/uppercased. Zero other changes to process()
+    // below this branch.
+    if (line[0] == '*') {
+        BinaryChannel::handle(line, replyFn, ctx, _binaryCtx);
+        return;
+    }
+
     // Working buffer for tokenization. parseTokens() copies into this.
     char workBuf[512];
     char* tokens[MAX_TOKENS];

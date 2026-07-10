@@ -93,6 +93,12 @@ else:
 _gen_msgs = os.path.join(os.path.dirname(__file__), "scripts", "gen_messages.py")
 _sp.run([sys.executable, _gen_msgs], check=True)
 
+# Regenerate host/robot_radio/robot/pb2/*_pb2.py from the SAME protos/*.proto
+# (095-002, M7 Host Codec Mirror) via grpc_tools.protoc --python_out, so
+# device tables (above) and host pb2 bindings can never skew independently.
+_gen_pb2 = os.path.join(os.path.dirname(__file__), "scripts", "gen_pb2.py")
+_sp.run([sys.executable, _gen_pb2], check=True)
+
 # Regenerate source/config/boot_config.cpp from the active robot JSON so the
 # subsystems tree's boot MotorConfig/DrivetrainConfig defaults are baked in at
 # compile time -- main.cpp no longer hardcodes calibration.

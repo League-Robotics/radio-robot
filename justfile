@@ -41,6 +41,10 @@ build-sim:
     # reappears.
     if [ -d source/robot ]; then uv run python3 scripts/gen_default_config.py; fi
     uv run python3 scripts/gen_messages.py
+    # 095-002: regenerate the host's compiled pb2 bindings from the SAME
+    # protos/*.proto (M7 Host Codec Mirror) so they never skew from the
+    # firmware tables gen_messages.py just wrote.
+    uv run python3 scripts/gen_pb2.py
     uv run python3 scripts/gen_boot_config.py
     cmake -S tests/_infra/sim -B tests/_infra/sim/build -DROBOT_RUN_MODE=SIM
     cmake --build tests/_infra/sim/build --parallel
