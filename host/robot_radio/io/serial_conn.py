@@ -273,10 +273,8 @@ class SerialConnection:
         # pb2.ReplyEnvelope objects whose body is `tlm` -- the binary
         # counterpart of _tlm_queue above, same depth constant and same
         # drop-oldest-on-overflow policy.  See _handle_binary_reply().
-        # No dedicated drain/read accessor yet -- deferred to ticket 003
-        # (NezhaProtocol.stream()/.snap() conversion), which is this queue's
-        # first real caller and best positioned to shape the accessor around
-        # its actual needs (per this ticket's implementation plan item 4).
+        # Drain/read accessors added 097-003 (drain_binary_tlm()/
+        # read_binary_tlm()) -- see those methods below.
         self._binary_tlm_queue: queue.Queue = queue.Queue(maxsize=_TLM_QUEUE_DEPTH)
 
         # EVT queue: unbounded — EVT lines must not be dropped.
@@ -1132,6 +1130,56 @@ class SerialConnection:
                 except queue.Empty:
                     break
         return lines
+
+    def drain_binary_tlm(self) -> list["envelope_pb2.ReplyEnvelope"]:
+        """Non-blocking drain of ``_binary_tlm_queue`` (097-003).
+
+        The binary-plane counterpart of ``read_pending_lines()``: returns
+        every currently-queued binary telemetry push frame (raw
+        ``pb2.ReplyEnvelope`` objects, body ``tlm`` -- see
+        ``_handle_binary_reply()``) without blocking. Callers build a
+        ``TLMFrame`` via ``TLMFrame.from_pb2(reply.tlm)`` (``protocol.py``);
+        this method stays at the raw-envelope layer, matching
+        ``read_pending_lines()``'s own "raw text, caller parses" split.
+        """
+        frames: list = []
+        while True:
+            try:
+                frames.append(self._binary_tlm_queue.get_nowait())
+            except queue.Empty:
+                break
+        return frames
+
+    def read_binary_tlm(self, duration: int) -> list["envelope_pb2.ReplyEnvelope"]:  # [ms]
+        """Block for up to ``duration`` ms, draining ``_binary_tlm_queue``
+        (097-003).
+
+        The binary-plane counterpart of ``read_lines()`` for ``_tlm_queue``:
+        does NOT call ``_ser.readline()`` -- the reader thread already feeds
+        ``_binary_tlm_queue`` independently, this just polls it. Returns
+        every ``pb2.ReplyEnvelope`` (body ``tlm``) received during the
+        window, in arrival order; may be empty if none arrived.
+        """
+        if not self.is_open:
+            return []
+
+        frames: list = []
+        deadline = time.time() + (duration / 1000.0)
+        _sleep = 0.005  # 5 ms between drain attempts
+
+        while time.time() < deadline:
+            drained_this_pass = False
+            while True:
+                try:
+                    frames.append(self._binary_tlm_queue.get_nowait())
+                except queue.Empty:
+                    break
+                drained_this_pass = True
+
+            if not drained_this_pass:
+                time.sleep(_sleep)
+
+        return frames
 
     def handshake(self, line: bytes) -> None:
         """Write a raw line to the serial port, no relay prefix, no corr-id.

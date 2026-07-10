@@ -16,6 +16,12 @@ place (see its docstring for the supersession note); three new tests cover
 the ticket's specific acceptance criteria (corr_id=0 routing, coexistence
 with a corr-id-keyed reply in one session, overflow drop-oldest).
 
+Extended again by 097-003 (NezhaProtocol Telemetry Conversion): adds tests
+for `drain_binary_tlm()`/`read_binary_tlm()` -- the drain/read accessors
+097-001 deferred to this ticket (its own first real caller,
+`NezhaProtocol.snap()`/`.read_binary_tlm_frames()`/
+`.read_pending_binary_tlm_frames()`, `protocol.py`).
+
 Covers the three things ticket 095-002 asks for, none of which need live
 hardware:
 
@@ -431,6 +437,65 @@ def test_send_envelope_not_connected_returns_error():
     result = conn.send_envelope(env, read_timeout=100)
 
     assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# 4. drain_binary_tlm() / read_binary_tlm() (097-003)
+# ---------------------------------------------------------------------------
+
+
+class _StaticOpenSerial:
+    """A fake `_ser` that only needs to answer `is_open` truthfully -- these
+    two accessors never touch `_ser.readline()`/`write()` (they poll
+    `_binary_tlm_queue`, which the reader thread fills independently), so a
+    minimal stand-in is enough."""
+
+    is_open = True
+
+
+def _armored_tlm_reply(seq: int, corr_id: int = 0) -> envelope_pb2.ReplyEnvelope:
+    envelope = envelope_pb2.ReplyEnvelope(corr_id=corr_id)
+    envelope.tlm.seq = seq
+    return envelope
+
+
+def test_drain_binary_tlm_returns_all_queued_frames_and_empties_queue():
+    conn = _new_conn()
+    for seq in range(3):
+        conn._binary_tlm_queue.put_nowait(_armored_tlm_reply(seq))
+
+    frames = conn.drain_binary_tlm()
+
+    assert [f.tlm.seq for f in frames] == [0, 1, 2]
+    assert conn._binary_tlm_queue.empty()
+
+
+def test_drain_binary_tlm_on_empty_queue_returns_empty_list():
+    conn = _new_conn()
+    assert conn.drain_binary_tlm() == []
+
+
+def test_read_binary_tlm_returns_frames_already_queued():
+    conn = _new_conn()
+    conn._ser = _StaticOpenSerial()
+    for seq in range(2):
+        conn._binary_tlm_queue.put_nowait(_armored_tlm_reply(seq))
+
+    frames = conn.read_binary_tlm(duration=30)
+
+    assert [f.tlm.seq for f in frames] == [0, 1]
+    assert conn._binary_tlm_queue.empty()
+
+
+def test_read_binary_tlm_not_connected_returns_empty_list_immediately():
+    conn = _new_conn()  # _ser stays None -- never connected
+    assert conn.read_binary_tlm(duration=500) == []
+
+
+def test_read_binary_tlm_times_out_with_empty_list_when_nothing_arrives():
+    conn = _new_conn()
+    conn._ser = _StaticOpenSerial()
+    assert conn.read_binary_tlm(duration=30) == []
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ import time
 from robot_radio.io.serial_conn import SerialConnection, list_serial_ports, DEFAULT_PORT
 from robot_radio.robot import QBotPro, Nezha, NezhaProtocol, Cutebot
 from robot_radio.robot.pb2 import envelope_pb2
-from robot_radio.robot.protocol import parse_tlm
+from robot_radio.robot.protocol import TLMFrame
 from robot_radio.robot.connection import (
     make_robot as _connection_make_robot,
     get_port as _connection_get_port,
@@ -723,7 +723,9 @@ def cmd_drive(args):
             for resp in robot.stream_drive(speeds, period=40, watchdog=watchdog):
                 if deadline is not None and time.monotonic() >= deadline:
                     break
-                tlm = parse_tlm(resp.raw) if resp.tag == "TLM" else None
+                # 097-003: binary telemetry frames arrive already parsed, on
+                # resp.tlm -- see ParsedResponse.tlm's own docstring.
+                tlm = resp.tlm if resp.tag == "TLM" else None
                 if tlm and tlm.enc:
                     left_enc, right_enc = tlm.enc
                     vl = tlm.vel[0] if tlm.vel else 0
@@ -1363,27 +1365,23 @@ def _find_response(responses: list[str], prefix: str) -> str | None:
     return None
 
 
-def _snap_tlm(conn: SerialConnection):
-    """Send SNAP and return the parsed TLMFrame, or None if not received.
+def _snap_tlm(conn: SerialConnection) -> "TLMFrame | None":
+    """Request one telemetry frame and return the parsed TLMFrame, or None.
 
-    v2 firmware responds to SNAP with an immediate TLM frame.  This helper
-    sends SNAP and reads the TLM frame from the response window.
+    Binary implementation (097-003): delegates to
+    ``NezhaProtocol(conn).snap()`` (arm-wait-disarm synthesis over the
+    binary ``stream`` arm -- see that method's own docstring). Over the
+    lossy radio relay a frame can be dropped entirely, so this helper
+    RETRIES a few times, same intent as the pre-097-003 text-plane
+    implementation's own retry loop (that one retried because a binary
+    ``*B`` line can fail to decode / never arrive, same failure mode as a
+    dropped text ``TLM`` line).
     """
-    from robot_radio.robot.protocol import parse_tlm as _parse_tlm
-    # SNAP makes the firmware emit one TLM frame on its NEXT tick; over the lossy
-    # radio relay that frame can take >0.5 s to arrive (the "OK snap" ack comes
-    # first, the TLM after) and is sometimes dropped entirely. Read a generous
-    # window and RETRY a few times until a frame with data arrives.
+    proto = NezhaProtocol(conn)
     for _attempt in range(4):
-        result = conn.send("SNAP", read_timeout=700)
-        for raw in result.get("responses", []):
-            frame = _parse_tlm(raw)
-            if frame is None and "TLM" in raw:
-                # The RAW250 relay can concatenate replies WITHOUT newline
-                # separators ("OK snapTLM t=..."); re-parse from "TLM".
-                frame = _parse_tlm(raw[raw.index("TLM"):])
-            if frame is not None:
-                return frame
+        frame = proto.snap()
+        if frame is not None:
+            return frame
     return None
 
 

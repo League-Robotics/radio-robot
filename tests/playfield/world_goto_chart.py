@@ -391,7 +391,6 @@ def preflight_nudge(proto, dc, cam, fence, nudge_cm, pump, record):
 def run_cycle(args, dc, cam, proto, nezha, playfield, *, avoid_slug=None,
               image_path: str | None = None):
     """Execute one sync→drive→chart cycle. Returns the chosen target slug."""
-    from robot_radio.robot.protocol import parse_tlm
     from wpimath.geometry import Pose2d, Rotation2d, Translation2d
     from wpimath.kinematics import DifferentialDriveOdometry
 
@@ -475,17 +474,18 @@ def run_cycle(args, dc, cam, proto, nezha, playfield, *, avoid_slug=None,
     cur_enc: tuple[float, float] | None = None
 
     def pump_telemetry() -> str:
-        """Drain serial; update OTOS + WPILib encoder odometry. Return EVT or ''."""
+        """Drain serial; update OTOS + WPILib encoder odometry. Return EVT or ''.
+
+        097-003: telemetry arrives over the binary plane now (``proto.stream()``
+        is binary-only -- see its own docstring), drained non-blocking via
+        ``read_pending_binary_tlm_frames()`` (already-parsed ``TLMFrame``
+        objects). EVT lines are unaffected by that conversion -- still text,
+        read via the existing ``read_lines(duration=20)`` call, which also
+        keeps this function's ~20ms per-call pacing.
+        """
         nonlocal cur_otos, cur_enc, enc_off
         evt = ""
-        for line in proto.read_lines(duration=20):
-            if "EVT done G" in line:
-                evt = "DONE"
-            elif "EVT safety_stop" in line:
-                evt = "SAFETY_STOP"
-            tlm = parse_tlm(line)
-            if tlm is None:
-                continue
+        for tlm in proto.read_pending_binary_tlm_frames():
             if tlm.pose is not None:
                 cur_otos = (tlm.pose[0] / 10.0, tlm.pose[1] / 10.0)
             if tlm.enc is not None and tlm.pose is not None:
@@ -496,6 +496,11 @@ def run_cycle(args, dc, cam, proto, nezha, playfield, *, avoid_slug=None,
                            lt_m - enc_off[0], rt_m - enc_off[1])
                 tr = odo.getPose().translation()
                 cur_enc = (tr.x * 100.0, tr.y * 100.0)
+        for line in proto.read_lines(duration=20):
+            if "EVT done G" in line:
+                evt = "DONE"
+            elif "EVT safety_stop" in line:
+                evt = "SAFETY_STOP"
         return evt
 
     def record_and_draw(cxx: float, cyy: float, fwdd: float, ttl: float = 0.6) -> None:

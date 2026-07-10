@@ -184,8 +184,9 @@ class TraceModel:
         Parameters
         ----------
         frame:
-            Parsed telemetry frame from ``parse_tlm()``.  Missing sensors
-            (``None`` fields) are silently skipped.
+            Parsed telemetry frame (``TLMFrame``, from ``NezhaProtocol``'s
+            telemetry delivery).  Missing sensors (``None`` fields) are
+            silently skipped.
         """
         if not self._anchor_set:
             self.anchor(0.0, 0.0, 0.0)

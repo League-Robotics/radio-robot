@@ -1,8 +1,8 @@
 """robot_radio.robot — hardware driver subpackage (protocol v2).
 
 Core exports (no optional dependencies):
-  Robot, NezhaProtocol, TLMFrame, ParsedResponse, parse_response, parse_tlm,
-  parse_cfg, Nezha, NezhaState.
+  Robot, NezhaProtocol, TLMFrame, ParsedResponse, parse_response,
+  Nezha, NezhaState.
 
 Optional exports (require wpimath):
   NezhaKinematic
@@ -17,8 +17,6 @@ from robot_radio.robot.protocol import (
     TLMFrame,
     ParsedResponse,
     parse_response,
-    parse_tlm,
-    parse_cfg,
 )
 from robot_radio.robot.nezha import Nezha
 from robot_radio.robot.nezha_state import NezhaState
@@ -42,8 +40,6 @@ __all__ = [
     "TLMFrame",
     "ParsedResponse",
     "parse_response",
-    "parse_tlm",
-    "parse_cfg",
     "Nezha",
     "NezhaState",
     "ClockSync",

@@ -58,18 +58,29 @@ from robot_radio.robot import legacy_translate
 
 # kAngleScale mirror (source/telemetry/tlm_frame.cpp): 18000/pi, converting
 # radians (telemetry.proto's Pose2D.h, common.proto) to centidegrees (the
-# int this dataclass's pose/otos fields carry, matching parse_tlm()'s own
-# text-plane units). Same scale factor, same truncate-toward-zero int()
-# cast the firmware's static_cast<int> applies -- see TLMFrame.from_pb2().
+# int this dataclass's pose/otos fields carry, matching the historical
+# text-plane TLM parser's own units -- see TLMFrame.from_pb2()'s docstring).
+# Same scale factor, same truncate-toward-zero int() cast the firmware's
+# static_cast<int> applies -- see TLMFrame.from_pb2().
 _ANGLE_SCALE = 5729.5779513  # [cdeg/rad]
+
+# kStreamFloorMs mirror (source/commands/telemetry_commands.cpp /
+# binary_channel.cpp): the firmware's own minimum non-zero STREAM period --
+# handleStream() clamps any 1..19 request up to this floor. snap()'s
+# arm-wait-disarm synthesis (097-003, M3, architecture-update.md Decision 4)
+# arms at this floor so its one-shot wait is as short as the firmware allows;
+# no host-side clamping semantics are implied beyond "this is what the
+# firmware will actually use".
+_STREAM_FLOOR_MS = 20  # [ms]
 
 # modeChar() mirror (source/telemetry/tlm_frame.cpp): maps msg::DriveMode
 # (telemetry.mode, planner.proto) to the SAME single-character mode= wire
-# value parse_tlm() reads off a text STREAM/SNAP frame's "mode=" token.
-# VELOCITY has no dedicated character (modeChar()'s own `default: return
-# 'I';` case) -- mirrored here via .get()'s fallback in from_pb2(), not a
-# dict entry, so a future DriveMode value added to planner.proto without a
-# matching modeChar() case falls back the same way on both sides.
+# value the historical text-plane TLM parser read off a text STREAM/SNAP
+# frame's "mode=" token. VELOCITY has no dedicated character (modeChar()'s
+# own `default: return 'I';` case) -- mirrored here via .get()'s fallback in
+# from_pb2(), not a dict entry, so a future DriveMode value added to
+# planner.proto without a matching modeChar() case falls back the same way
+# on both sides.
 _DRIVE_MODE_CHAR = {
     planner_pb2.IDLE: "I",
     planner_pb2.STREAMING: "S",
@@ -136,9 +147,12 @@ class TLMFrame:
         (``ReplyEnvelope.body.tlm``, envelope.proto/telemetry.proto).
 
         Adapts telemetry.proto's wire shape onto this SAME dataclass shape
-        ``parse_tlm()`` already produces from a text STREAM/SNAP line — for
-        every field the two formats share, ``from_pb2(telemetry)`` is
-        field-for-field equal to ``parse_tlm(<the matching text line>)``.
+        the historical text-plane TLM parser (retired 097-003; see
+        ``tests/unit/test_protocol_binary_client.py`` for the frozen
+        reference copy used to verify field-for-field parity) already
+        produced from a text STREAM/SNAP line — for every field the two
+        formats share, ``from_pb2(telemetry)`` is field-for-field equal to
+        what that historical parser produced from the matching text line.
         This is an ADAPTER, not a redesign: TLMFrame's existing fields/shape
         are unchanged; pb2's shape bends to fit them, never the reverse.
 
@@ -149,29 +163,35 @@ class TLMFrame:
         wire format.
 
         Fields left at this dataclass's own default (``None``) because
-        telemetry.proto and TLMFrame/``parse_tlm()`` do not share them:
-          - ``wedge``, ``encpose``, ``otos_health`` — parsed by
-            ``parse_tlm()`` from the text plane's ``wedge=``/``encpose=``/
-            ``otos_health=`` tokens, but telemetry.proto declares no
-            matching field (``encpose`` was trimmed at 096-001 — see
-            telemetry.proto's own file header; ``wedge``/``otos_health``
-            were never part of the STREAM/SNAP field union telemetry.proto
-            curates).
+        telemetry.proto and TLMFrame do not share them:
+          - ``wedge``, ``encpose``, ``otos_health`` — parsed by the
+            historical text-plane parser from the text plane's
+            ``wedge=``/``encpose=``/``otos_health=`` tokens, but
+            telemetry.proto declares no matching field (``encpose`` was
+            trimmed at 096-001 — see telemetry.proto's own file header;
+            ``wedge``/``otos_health`` were never part of the STREAM/SNAP
+            field union telemetry.proto curates). NOTE (097-003): this is a
+            genuine, permanent gap for any consumer that needs ``encpose``
+            from a LIVE binary telemetry stream — see
+            ``host/robot_radio/calibration/fit_sim_error_model.py``'s
+            module docstring for the one consumer this ticket found that
+            structurally depends on it, and why that consumer stays on the
+            text plane rather than silently losing the field.
           - OTOS connectivity — telemetry.proto DOES carry
-            ``has_otos``/``otos``/``otos_connected``, but ``parse_tlm()``
-            has never parsed the text plane's own ``otosconn=`` token into
-            any TLMFrame field either, so ``otos_connected`` is dropped
-            here too, for parity with the text path this dataclass already
-            models.
+            ``has_otos``/``otos``/``otos_connected``, but the historical
+            text-plane parser never parsed the text plane's own
+            ``otosconn=`` token into any TLMFrame field either, so
+            ``otos_connected`` is dropped here too, for parity with the
+            text path this dataclass already models.
           - ``acc_left``/``acc_right``/``active``/``conn_left``/
             ``conn_right``/``glitch_left``/``glitch_right``/``ts_left``/
             ``ts_right`` — telemetry.proto ALSO curates these from the
             separate one-shot ``TLM`` verb's ``OK tlm ...`` reply
             (``handleTlm()``, motion_commands.cpp) — a DIFFERENT text wire
-            shape than the STREAM/SNAP ``TLM t=... mode=...`` line
-            TLMFrame/``parse_tlm()`` model. TLMFrame has no slot for these;
-            they are silently dropped here, like any other field this
-            dataclass does not declare.
+            shape than the STREAM/SNAP ``TLM t=... mode=...`` line this
+            dataclass models. TLMFrame has no slot for these; they are
+            silently dropped here, like any other field this dataclass does
+            not declare.
 
         ``vel``/``cmd_vel``/``twist`` are always built as the DIFFERENTIAL
         tuple shape (matching this build's differential-only drivetrain and
@@ -220,12 +240,23 @@ class TLMFrame:
 
 @dataclass
 class ParsedResponse:
-    """Structured representation of a single response line from the firmware."""
+    """Structured representation of a single response line from the firmware.
+
+    ``tlm`` (097-003): populated only when this ``ParsedResponse`` was
+    synthesized by ``NezhaProtocol.stream_drive()`` from a binary-plane
+    telemetry push frame (``tag="TLM"``, every other field at its default) --
+    ``stream_drive()`` arms streaming via ``stream()``, which is binary-only
+    after this ticket, so no text ``TLM ...`` line is ever produced for it to
+    parse (``raw``/``tokens``/``kv`` stay empty for a binary-sourced frame).
+    Every text-sourced ``ParsedResponse`` (``OK``/``ERR``/``EVT``/...) leaves
+    ``tlm`` at its default ``None``.
+    """
     tag: str          # "OK", "ERR", "EVT", "TLM", "CFG", "ID"
     tokens: list[str] = field(default_factory=list)  # plain tokens after tag
     kv: dict[str, str] = field(default_factory=dict) # key=value pairs
     corr_id: str | None = None                       # trailing #<id>, if any
     raw: str = ""                                    # original stripped line
+    tlm: "TLMFrame | None" = None                     # 097-003: binary-sourced frame, if any
 
 
 # ---------------------------------------------------------------------------
@@ -354,139 +385,6 @@ def parse_response(line: str) -> ParsedResponse | None:
     )
 
 
-def parse_tlm(line: str) -> TLMFrame | None:
-    """Parse a TLM frame line into a TLMFrame dataclass, or None if not TLM."""
-    resp = parse_response(line)
-    if resp is None or resp.tag != "TLM":
-        return None
-
-    frame = TLMFrame()
-    kv = resp.kv
-
-    if "t" in kv:
-        try:
-            frame.t = int(kv["t"])
-        except ValueError:
-            pass
-
-    if "mode" in kv:
-        frame.mode = kv["mode"]
-
-    if "seq" in kv:
-        try:
-            frame.seq = int(kv["seq"])
-        except ValueError:
-            pass
-
-    if "wedge" in kv:
-        try:
-            parts = kv["wedge"].split(",")
-            if len(parts) == 2:
-                frame.wedge = (int(parts[0]), int(parts[1]))
-        except ValueError:
-            pass
-
-    if "enc" in kv:
-        try:
-            parts = kv["enc"].split(",")
-            if len(parts) == 2:
-                frame.enc = (int(parts[0]), int(parts[1]))
-        except ValueError:
-            pass
-
-    if "pose" in kv:
-        try:
-            parts = kv["pose"].split(",")
-            if len(parts) == 3:
-                frame.pose = (int(parts[0]), int(parts[1]), int(parts[2]))
-        except ValueError:
-            pass
-
-    if "encpose" in kv:
-        try:
-            parts = kv["encpose"].split(",")
-            if len(parts) == 3:
-                frame.encpose = (int(parts[0]), int(parts[1]), int(parts[2]))
-        except ValueError:
-            pass
-
-    if "vel" in kv:
-        try:
-            parts = kv["vel"].split(",")
-            if len(parts) == 2:
-                # Differential: (vL_mmps, vR_mmps)
-                frame.vel = (int(parts[0]), int(parts[1]))
-            elif len(parts) == 4:
-                # Mecanum: (vFR_mmps, vFL_mmps, vBR_mmps, vBL_mmps)
-                frame.vel = (int(parts[0]), int(parts[1]),
-                             int(parts[2]), int(parts[3]))
-        except ValueError:
-            pass
-
-    if "cmd" in kv:
-        try:
-            parts = kv["cmd"].split(",")
-            if len(parts) == 2:
-                # Commanded per-wheel velocity (PID setpoint): (vL, vR) [mm/s]
-                frame.cmd_vel = (int(parts[0]), int(parts[1]))
-        except ValueError:
-            pass
-
-    if "twist" in kv:
-        try:
-            parts = kv["twist"].split(",")
-            if len(parts) == 2:
-                # Differential: (v_mmps, omega_mradps)
-                frame.twist = (int(parts[0]), int(parts[1]))
-            elif len(parts) == 3:
-                # Mecanum: (vx_mmps, vy_mmps, omega_mradps)
-                frame.twist = (int(parts[0]), int(parts[1]), int(parts[2]))
-        except ValueError:
-            pass
-
-    if "otos" in kv:
-        try:
-            parts = kv["otos"].split(",")
-            if len(parts) == 3:
-                frame.otos = (int(parts[0]), int(parts[1]), int(parts[2]))
-        except ValueError:
-            pass
-
-    if "line" in kv:
-        try:
-            parts = kv["line"].split(",")
-            if len(parts) == 4:
-                frame.line = (int(parts[0]), int(parts[1]),
-                              int(parts[2]), int(parts[3]))
-        except ValueError:
-            pass
-
-    if "color" in kv:
-        try:
-            parts = kv["color"].split(",")
-            if len(parts) == 4:
-                frame.color = (int(parts[0]), int(parts[1]),
-                               int(parts[2]), int(parts[3]))
-        except ValueError:
-            pass
-
-    if "ekf_rej" in kv:
-        try:
-            frame.ekf_rej = int(kv["ekf_rej"])
-        except ValueError:
-            pass
-
-    if "otos_health" in kv:
-        try:
-            parts = kv["otos_health"].split(",")
-            if len(parts) == 2:
-                frame.otos_health = (int(parts[0]), bool(int(parts[1])))
-        except ValueError:
-            pass
-
-    return frame
-
-
 def tlm_drop_rate(frames: "list[TLMFrame]") -> float:
     """Estimate the TLM frame drop rate from a sequence of TLMFrame objects.
 
@@ -521,14 +419,6 @@ def tlm_drop_rate(frames: "list[TLMFrame]") -> float:
     if expected_span == 0:
         return 0.0
     return drops / expected_span
-
-
-def parse_cfg(line: str) -> dict[str, str] | None:
-    """Parse a CFG response line into a key->value dict, or None if not CFG."""
-    resp = parse_response(line)
-    if resp is None or resp.tag != "CFG":
-        return None
-    return dict(resp.kv)
 
 
 # ---------------------------------------------------------------------------
@@ -696,16 +586,6 @@ class NezhaProtocol:
     def parse_response(line: str) -> ParsedResponse | None:
         """Parse a v2 response line. Delegates to module-level parse_response()."""
         return parse_response(line)
-
-    @staticmethod
-    def parse_tlm(line: str) -> TLMFrame | None:
-        """Parse a TLM line into a TLMFrame. Delegates to module-level parse_tlm()."""
-        return parse_tlm(line)
-
-    @staticmethod
-    def parse_cfg(line: str) -> dict[str, str] | None:
-        """Parse a CFG line into a key->value dict. Delegates to parse_cfg()."""
-        return parse_cfg(line)
 
     # ------------------------------------------------------------------
     # Liveness / identity
@@ -1296,9 +1176,22 @@ class NezhaProtocol:
     def stream(self, period: int) -> None:  # [ms]
         """Set TLM streaming period in ms (0 = off).
 
-        Format: STREAM <ms>
+        Binary implementation (097-003, M3 NezhaProtocol Telemetry
+        Conversion): ``period`` maps 1:1 onto ``CommandEnvelope{stream:
+        StreamControl{period, binary: true}}`` via ``send_envelope()`` --
+        handleStream()'s own 20ms floor (``binary_channel.cpp``, mirrored
+        from ``kStreamFloorMs``) applies firmware-side exactly as it did for
+        the text plane, so no host-side clamping is needed here.
+        ``binary=true`` selects ``telemetryEmitBinary()`` over the text
+        emitter for every periodic frame this stream produces from now on
+        -- the only telemetry plane ``stream()``/``snap()`` speak after this
+        ticket. The Ack reply is read and discarded (return type ``None``
+        unchanged), matching ``stop()``'s "block briefly for the Ack, but
+        return nothing" posture.
         """
-        self._conn.send(f"STREAM {period}", read_timeout=300)
+        envelope = envelope_pb2.CommandEnvelope(
+            stream=envelope_pb2.StreamControl(period=period, binary=True))
+        self._conn.send_envelope(envelope, read_timeout=300)
 
     def stream_fields(self, fields: str) -> None:
         """Set TLM streaming with a field subset.
@@ -1308,31 +1201,60 @@ class NezhaProtocol:
         """
         self._conn.send(f"STREAM fields={fields}", read_timeout=300)
 
+    def read_binary_tlm_frames(self, duration: int) -> "list[TLMFrame]":  # [ms]
+        """Block for up to ``duration`` ms, returning every binary telemetry
+        frame received during that window as ``TLMFrame`` objects (097-003).
+
+        The binary-plane counterpart of the pre-097-003 text-plane idiom of
+        reading ``read_lines(duration)`` and parsing each ``TLM`` line into a
+        ``TLMFrame`` -- reads ``SerialConnection.read_binary_tlm()``
+        (``_binary_tlm_queue``) instead of ``_tlm_queue``, and adapts each
+        raw ``pb2.ReplyEnvelope`` via ``TLMFrame.from_pb2()``.
+        """
+        return [TLMFrame.from_pb2(reply.tlm)
+                for reply in self._conn.read_binary_tlm(duration)]
+
+    def read_pending_binary_tlm_frames(self) -> "list[TLMFrame]":
+        """Non-blocking drain of every currently-queued binary telemetry
+        frame as ``TLMFrame`` objects (097-003) -- the binary-plane
+        counterpart of ``read_pending_lines()``.
+        """
+        return [TLMFrame.from_pb2(reply.tlm)
+                for reply in self._conn.drain_binary_tlm()]
+
     def snap(self) -> "TLMFrame | None":
         """Request ONE telemetry frame synchronously and return it (parsed).
 
-        SNAP returns the reply as a TLM frame (corr-id-less) routed to the
-        TLM queue — NOT to the corr-id reply queue.  The old send()-based
-        implementation waited on the corr-id queue and always timed out.
+        Binary implementation (097-003, M3, architecture-update.md Decision
+        4): SYNTHESIZED host-side from the existing binary ``stream`` arm --
+        no new firmware wire capability is added (096 Open Question 2
+        deferred exactly this resolution to 097). There is no binary
+        one-shot SNAP arm; instead:
 
-        Implementation:
-        1. Drain any stale TLM frames already queued (to avoid returning a
-           stale snapshot from a previous SNAP or stream burst).
-        2. Fire SNAP via send_fast() — no corr-id wait.
-        3. Poll read_lines() for up to 400 ms, which drains _tlm_queue, and
-           return the first line that parse_tlm() accepts.
+        1. Drain any stale frames already queued in ``_binary_tlm_queue``
+           (leftovers from a previous ``stream()``/``snap()`` session), so a
+           stale snapshot is never returned.
+        2. Arm streaming at the firmware's own 20ms floor via ``stream()``
+           (``StreamControl{period=_STREAM_FLOOR_MS, binary=true}``).
+        3. Block on ``_binary_tlm_queue`` for up to 400 ms for exactly ONE
+           frame.
+        4. Disarm via ``stream(0)`` (``StreamControl{period=0,
+           binary=true}``), regardless of whether step 3 timed out.
+
+        This costs a two-round-trip latency profile (arm ack, then wait for
+        a frame) instead of a true single request/reply -- a documented,
+        accepted trade (architecture-update.md (097) Decision 4
+        Consequences). Contract (``TLMFrame | None``) unchanged.
         """
-        # Step 1: drain stale frames so we get a fresh snapshot.
-        self._conn.read_pending_lines()
-        # Step 2: fire SNAP with no corr-id reply wait.
-        self._conn.send_fast("SNAP")
-        # Step 3: read from the TLM queue path until we get a parseable frame.
-        lines = self._conn.read_lines(duration=400)
-        for ln in lines:
-            f = parse_tlm(ln)
-            if f is not None:
-                return f
-        return None
+        self._conn.drain_binary_tlm()
+        self.stream(_STREAM_FLOOR_MS)
+        try:
+            frames = self._conn.read_binary_tlm(duration=400)
+        finally:
+            self.stream(0)
+        if not frames:
+            return None
+        return TLMFrame.from_pb2(frames[0].tlm)
 
     # ------------------------------------------------------------------
     # OTOS sensor
@@ -1528,6 +1450,15 @@ class NezhaProtocol:
             period: TLM streaming period in ms.
             watchdog: S keepalive deadline (ms); must re-send within firmware
                 watchdog timeout or motors stop.
+
+        097-003: ``stream()`` is binary-only now, so telemetry no longer
+        arrives as text ``TLM ...`` lines through ``read_lines()`` -- EVT
+        lines (``safety_stop``) still do, unaffected. Each pass also drains
+        ``_binary_tlm_queue`` and yields one ``ParsedResponse(tag="TLM",
+        tlm=<TLMFrame>)`` per frame (see ``ParsedResponse.tlm``'s own
+        docstring) -- callers that used to text-parse ``resp.raw`` when
+        ``resp.tag == "TLM"`` now read ``resp.tlm`` instead; the frame is
+        already parsed, not re-derived from text.
         """
         self.stream(period)
         keepalive_s = watchdog * 0.30 / 1000.0
@@ -1550,6 +1481,9 @@ class NezhaProtocol:
                     if r.tag == "EVT" and r.tokens and r.tokens[0] == "safety_stop":
                         return
                     yield r
+                    last_send = _resend_if_due(last_send)
+                for reply in self._conn.drain_binary_tlm():
+                    yield ParsedResponse(tag="TLM", tlm=TLMFrame.from_pb2(reply.tlm))
                     last_send = _resend_if_due(last_send)
                 last_send = _resend_if_due(last_send)
         except GeneratorExit:

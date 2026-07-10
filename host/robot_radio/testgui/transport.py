@@ -47,9 +47,9 @@ RelayTransport(port: str)
     internally by SerialConnection.
 
 Both concrete hardware backends:
-- Start a TLM reader thread on connect() that reads lines from the serial
-  connection's TLM/EVT queues, parses them via parse_tlm(), and invokes
-  on_telemetry.
+- Start a TLM reader thread on connect() that drains the serial
+  connection's binary telemetry queue (097-003), adapts each frame via
+  TLMFrame.from_pb2(), and invokes on_telemetry.
 - Start a camera-truth polling thread on connect() that calls
   read_camera_pose() for tag 100 and invokes on_truth.  The aprilcam
   dependency is lazy / optional: if the daemon is not available the thread
@@ -128,7 +128,8 @@ from typing import Callable
 
 from robot_radio.io.serial_conn import SerialConnection, list_serial_ports
 from robot_radio.io.sim_conn import SimConnection
-from robot_radio.robot.protocol import TLMFrame, parse_tlm
+from robot_radio.robot.protocol import TLMFrame
+from robot_radio.robot._legacy_tlm_text import parse_historical_tlm_line
 from robot_radio.testgui import sim_prefs
 
 _log = logging.getLogger(__name__)
@@ -529,25 +530,26 @@ class _HardwareTransport(Transport):
     # ------------------------------------------------------------------
 
     def _reader_loop(self) -> None:
-        """Drain TLM queue and deliver TLMFrame objects to on_telemetry.
+        """Drain the binary TLM queue and deliver TLMFrame objects to on_telemetry.
 
-        The SerialConnection already has its own internal reader thread
-        that fills the TLM queue.  This thread drains that queue and
-        calls parse_tlm() on each line, forwarding results to
+        097-003: telemetry is binary-only now (``NezhaProtocol.stream()``/
+        ``.snap()``, whichever a caller uses to arm it, always send
+        ``StreamControl{binary: true}``). The SerialConnection already has
+        its own internal reader thread that fills ``_binary_tlm_queue``;
+        this thread drains that queue (``drain_binary_tlm()``) and adapts
+        each frame via ``TLMFrame.from_pb2()``, forwarding results to
         on_telemetry.
         """
         while not self._stop_event.is_set():
             if self._conn is None or not self._conn.is_open:
                 break
             try:
-                lines = self._conn.read_pending_lines()
+                replies = self._conn.drain_binary_tlm()
             except Exception:
                 break
 
-            for raw in lines:
-                frame = parse_tlm(raw)
-                if frame is not None:
-                    self._deliver_tlm(frame)
+            for reply in replies:
+                self._deliver_tlm(TLMFrame.from_pb2(reply.tlm))
 
             # Wait a short interval before draining again.
             self._stop_event.wait(timeout=_TLM_DRAIN_INTERVAL_S)
@@ -1078,7 +1080,14 @@ class SimTransport(Transport):
                     if not raw_line:
                         continue
                     self._log(f"< {raw_line}")
-                    frame = parse_tlm(raw_line)
+                    # 097-003: SimTransport talks to SimConnection (a ctypes
+                    # ABI, not SerialConnection) via plain text commands --
+                    # no _binary_tlm_queue exists on this path. Stays on the
+                    # text plane deliberately; see
+                    # robot_radio.robot._legacy_tlm_text's own module
+                    # docstring for why this is a flagged, conservative
+                    # exception rather than an oversight.
+                    frame = parse_historical_tlm_line(raw_line)
                     if frame is not None:
                         self._deliver_tlm(frame)
         except queue.Empty:
@@ -1091,13 +1100,16 @@ class SimTransport(Transport):
         raw wire line unconditionally.  The background ``STREAM 50`` started
         in ``_tick_loop`` is what actually feeds the canvas pose trace, and it
         must be visible in the console like any other traffic.
+
+        097-003: stays on the text plane (see ``_drain_cmd_queue``'s own
+        comment above -- same reasoning, same ``SimConnection`` transport).
         """
         for line in lines:
             line = line.strip()
             if not line:
                 continue
             self._log(f"< {line}")
-            frame = parse_tlm(line)
+            frame = parse_historical_tlm_line(line)
             if frame is not None:
                 self._deliver_tlm(frame)
 

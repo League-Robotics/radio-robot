@@ -1,16 +1,21 @@
 """tests/unit/test_protocol_binary_client.py — 096-007 (M6 Host Config/
-Telemetry Client).
+Telemetry Client) + 097-002/097-003 (M2/M3 NezhaProtocol conversion).
 
 Covers this ticket's two additions to ``host/robot_radio/robot/protocol.py``,
 none of which need live hardware:
 
 1. ``TLMFrame.from_pb2()`` — an alternate constructor adapting a binary-plane
-   ``pb2.Telemetry`` message onto the SAME ``TLMFrame`` dataclass shape
-   ``parse_tlm()`` already produces from a text STREAM/SNAP line. Tested by
-   comparing ``from_pb2(telemetry)`` against ``parse_tlm(<the matching text
-   line>)`` field-for-field, for every field the two wire formats share, and
-   confirming the fields they do NOT share stay at this dataclass's own
-   default.
+   ``pb2.Telemetry`` message onto the SAME ``TLMFrame`` dataclass shape the
+   retired text-plane TLM parser used to produce from a text STREAM/SNAP
+   line. Tested by comparing ``from_pb2(telemetry)`` against
+   ``parse_historical_tlm_line(<the matching text line>)`` field-for-field
+   (``parse_historical_tlm_line`` — ``robot_radio.robot._legacy_tlm_text`` —
+   is a frozen, private copy of the module-level parser 097-003 deleted from
+   ``protocol.py``, kept ONLY for this historical-parity check and the
+   narrow set of non-``SerialConnection``/wire-schema-gap consumers that
+   module's own docstring names; see that module for the full rationale),
+   for every field the two wire formats share, and confirming the fields
+   they do NOT share stay at this dataclass's own default.
 
 2. ``NezhaProtocol.set_config_binary()``/``get_config_binary()`` — binary
    config set/get built on ``SerialConnection.send_envelope()``. Round-
@@ -49,14 +54,17 @@ import pytest
 
 from robot_radio.io.serial_conn import SerialConnection
 from robot_radio.robot.pb2 import common_pb2, config_pb2, envelope_pb2, planner_pb2, telemetry_pb2
-from robot_radio.robot.protocol import NezhaProtocol, TLMFrame, parse_tlm
+from robot_radio.robot import protocol
+from robot_radio.robot.protocol import NezhaProtocol, TLMFrame
+from robot_radio.robot._legacy_tlm_text import parse_historical_tlm_line
 
 # ---------------------------------------------------------------------------
 # 1. TLMFrame.from_pb2()
 # ---------------------------------------------------------------------------
 
 # Fields both wire formats carry -- compared directly, field-for-field,
-# between from_pb2(telemetry) and parse_tlm(<the matching text line>).
+# between from_pb2(telemetry) and parse_historical_tlm_line(<the matching
+# text line>).
 _SHARED_FIELDS = ("t", "mode", "seq", "enc", "vel", "cmd_vel", "pose", "otos", "twist")
 
 
@@ -89,7 +97,7 @@ def test_from_pb2_matches_text_parse_for_every_shared_field():
         f"TLM t=12345 mode=D seq=7 enc=100,-50 vel=200,-199 cmd=210,-190 "
         f"pose=350,-12,{pose_h_cdeg} otos=1,2,{otos_h_cdeg} twist=150,300"
     )
-    text_frame = parse_tlm(line)
+    text_frame = parse_historical_tlm_line(line)
     assert text_frame is not None
 
     for name in _SHARED_FIELDS:
@@ -104,7 +112,7 @@ def test_from_pb2_matches_text_parse_for_every_shared_field():
 
 def test_from_pb2_absent_optional_fields_stay_none():
     """No has_* flag set (beyond the always-present now/mode/seq) -> every
-    gated field stays None, matching parse_tlm() on a line with no
+    gated field stays None, matching parse_historical_tlm_line() on a line with no
     matching key=value token."""
     telemetry = telemetry_pb2.Telemetry(now=1, mode=planner_pb2.IDLE, seq=0)
 
@@ -120,7 +128,7 @@ def test_from_pb2_absent_optional_fields_stay_none():
     assert frame.otos is None
     assert frame.twist is None
 
-    text_frame = parse_tlm("TLM t=1 mode=I seq=0")
+    text_frame = parse_historical_tlm_line("TLM t=1 mode=I seq=0")
     assert text_frame is not None
     for name in _SHARED_FIELDS:
         assert getattr(frame, name) == getattr(text_frame, name), name
@@ -854,6 +862,158 @@ def test_get_config_unknown_key_returns_none_with_no_wire_traffic():
 
     assert result is None
     assert fake.sent_envelopes == []
+
+
+# ---------------------------------------------------------------------------
+# 5. NezhaProtocol telemetry conversion (097-003, M3): stream()/snap()
+#
+# stream(): a direct 1:1 mapping onto CommandEnvelope{stream: StreamControl{
+# period, binary: true}} -- reuses _UniversalLoopbackSerial (its "stream" arm
+# falls through to its default ERR_UNIMPLEMENTED reply, which stream() never
+# inspects -- it discards send_envelope()'s result entirely, matching
+# stop()'s "block briefly for the Ack, but return nothing" posture).
+#
+# snap(): synthesized from the SAME binary stream arm (architecture-update.md
+# (097) Decision 4) -- arm, wait for one push frame, disarm. _StreamLoopbackSerial
+# below models the firmware side closely enough to exercise this: every
+# stream request gets an Ack, and an ARMING request (period != 0) ALSO
+# queues one unsolicited corr_id=0 ReplyEnvelope{tlm} right behind its Ack,
+# mirroring tickTelemetry()'s next-pass emission once bb.telemetryPeriod is
+# set (collapsed to "immediately after the Ack" -- this fake does not model
+# firmware tick timing).
+# ---------------------------------------------------------------------------
+
+
+class _StreamLoopbackSerial:
+    """Mock transport for stream()/snap() round-trip tests.
+
+    On write() of a `*B<base64>` CommandEnvelope, decodes it, records it,
+    and replies with an Ack. If `push_frame` is given and the request is an
+    ARMING `stream` request (StreamControl.period != 0), also queues ONE
+    unsolicited corr_id=0 ReplyEnvelope{tlm: push_frame} right after the Ack.
+    """
+
+    is_open = True
+
+    def __init__(self, push_frame: "telemetry_pb2.Telemetry | None" = None):
+        self._pending: queue.Queue = queue.Queue()
+        self.sent_envelopes: list[envelope_pb2.CommandEnvelope] = []
+        self._push_frame = push_frame
+
+    def write(self, data: bytes) -> int:
+        text = data.decode("ascii").strip()
+        if not text.startswith("*B"):
+            return len(data)
+        raw = base64.b64decode(text[2:])
+        cmd = envelope_pb2.CommandEnvelope.FromString(raw)
+        self.sent_envelopes.append(cmd)
+
+        reply = envelope_pb2.ReplyEnvelope(corr_id=cmd.corr_id)
+        reply.ok.q = 0
+        reply.ok.rem = 0.0
+        armored = "*B" + base64.b64encode(reply.SerializeToString()).decode("ascii")
+        self._pending.put((armored + "\n").encode("ascii"))
+
+        if (self._push_frame is not None and cmd.WhichOneof("cmd") == "stream"
+                and cmd.stream.period != 0):
+            push = envelope_pb2.ReplyEnvelope(corr_id=0)
+            push.tlm.CopyFrom(self._push_frame)
+            push_armored = "*B" + base64.b64encode(push.SerializeToString()).decode("ascii")
+            self._pending.put((push_armored + "\n").encode("ascii"))
+        return len(data)
+
+    def flush(self) -> None:
+        pass
+
+    def readline(self) -> bytes:
+        try:
+            return self._pending.get(timeout=0.2)
+        except queue.Empty:
+            return b""
+
+
+def test_stream_sends_binary_envelope_with_period_and_binary_true():
+    fake = _UniversalLoopbackSerial()
+    with _connected_proto(fake) as proto:
+        result = proto.stream(80)
+
+    assert result is None
+    sent = fake.sent_envelopes[0]
+    assert sent.WhichOneof("cmd") == "stream"
+    assert sent.stream.period == 80
+    assert sent.stream.binary is True
+    reference = envelope_pb2.CommandEnvelope(
+        corr_id=sent.corr_id,
+        stream=envelope_pb2.StreamControl(period=80, binary=True))
+    assert sent.SerializeToString() == reference.SerializeToString()
+    _assert_wire_bytes_match(fake, 0, reference)
+
+
+def test_stream_zero_disarms_with_binary_true_still_set():
+    fake = _UniversalLoopbackSerial()
+    with _connected_proto(fake) as proto:
+        proto.stream(0)
+
+    sent = fake.sent_envelopes[0]
+    assert sent.stream.period == 0
+    assert sent.stream.binary is True
+
+
+def test_snap_arms_waits_for_one_frame_disarms_and_returns_tlmframe():
+    telemetry = telemetry_pb2.Telemetry(
+        now=555, mode=planner_pb2.IDLE, seq=2,
+        has_enc=True, enc_left=10.0, enc_right=-5.0,
+    )
+    fake = _StreamLoopbackSerial(push_frame=telemetry)
+    with _connected_proto(fake) as proto:
+        result = proto.snap()
+
+    assert result is not None
+    assert result.t == 555
+    assert result.enc == (10, -5)
+
+    # arm-wait-disarm: two stream envelopes, floor period then 0, both binary.
+    stream_envelopes = [e for e in fake.sent_envelopes if e.WhichOneof("cmd") == "stream"]
+    assert len(stream_envelopes) == 2
+    assert stream_envelopes[0].stream.period == protocol._STREAM_FLOOR_MS
+    assert stream_envelopes[0].stream.binary is True
+    assert stream_envelopes[1].stream.period == 0
+    assert stream_envelopes[1].stream.binary is True
+
+
+def test_snap_returns_none_on_timeout_and_still_disarms():
+    # No push_frame configured -- every stream request Acks, but no
+    # unsolicited tlm frame is ever queued, so the wait times out.
+    fake = _StreamLoopbackSerial(push_frame=None)
+    with _connected_proto(fake) as proto:
+        result = proto.snap()
+
+    assert result is None
+    stream_envelopes = [e for e in fake.sent_envelopes if e.WhichOneof("cmd") == "stream"]
+    # Arm still happened, and disarm still ran (the `finally` clause) even
+    # though no frame ever arrived.
+    assert len(stream_envelopes) == 2
+    assert stream_envelopes[0].stream.period == protocol._STREAM_FLOOR_MS
+    assert stream_envelopes[1].stream.period == 0
+
+
+def test_snap_drains_stale_frames_before_arming():
+    """A stale frame already sitting in _binary_tlm_queue (e.g. left over
+    from a previous stream()/snap() session) must not be returned -- snap()
+    drains it first, per its own documented step 1."""
+    telemetry = telemetry_pb2.Telemetry(now=1, mode=planner_pb2.IDLE, seq=0)
+    fake = _StreamLoopbackSerial(push_frame=None)
+    with _connected_proto(fake) as proto:
+        stale = envelope_pb2.ReplyEnvelope(corr_id=0)
+        stale.tlm.CopyFrom(telemetry)
+        proto._conn._binary_tlm_queue.put_nowait(stale)
+
+        result = proto.snap()
+
+    # The stale frame was drained, and no fresh one was ever queued (this
+    # fake never pushes one) -- snap() must time out, not return the stale
+    # frame.
+    assert result is None
 
 
 if __name__ == "__main__":

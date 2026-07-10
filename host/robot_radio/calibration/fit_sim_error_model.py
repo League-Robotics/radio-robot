@@ -8,8 +8,26 @@ Decision 5). Regresses the deterministic/bias-shaped subset of the
 against a recorded trajectory using ``scipy.optimize.least_squares``
 (bounded, Trust Region Reflective), minimizing summed squared position +
 wrapped-heading residual across the three TLM poses (``pose=``, ``otos=``,
-``encpose=`` — see ``host/robot_radio/robot/protocol.py``'s ``TLMFrame``/
-``parse_tlm()``, reused here verbatim, never re-implemented).
+``encpose=`` — see ``host/robot_radio/robot/protocol.py``'s ``TLMFrame``).
+
+097-003 NOTE (flagged, not silently patched): this module's ``_iter_run()``
+reads ``encpose`` from ``sim.send_command("SNAP")``'s TEXT reply via
+``robot_radio.robot._legacy_tlm_text.parse_historical_tlm_line()`` (a
+frozen copy of the text-plane TLM parser 097-003 retired from
+``protocol.py``), NOT via ``NezhaProtocol``'s binary telemetry delivery
+that ticket converted every other internal consumer onto. Two independent,
+structural reasons block the binary move for this file specifically: (1)
+``_iter_run()`` drives an in-process ``Sim()`` ctypes wrapper
+(``tests/_infra/sim/firmware.py``), never a ``SerialConnection`` — there is
+no ``_binary_tlm_queue`` on this path; (2) even if there were, ``encpose``
+is structurally ABSENT from ``telemetry.proto``'s ``Telemetry`` message
+(096-001 Decision 6 trimmed it to fit the binary envelope's 186-byte
+budget), so ``TLMFrame.from_pb2()`` can never populate it regardless of
+transport — this is the ONE consumer 097-003's architecture research found
+that structurally depends on the field the binary plane dropped. See
+``robot_radio.robot._legacy_tlm_text``'s own module docstring for the full
+reasoning and the other three consumers sharing this same conservative
+treatment.
 
 Recording format
 -----------------
@@ -236,8 +254,12 @@ def _iter_run(
     Shared by ``record_sim_run`` (keeps the ``cmd``/pose JSONL records) and
     ``replay_samples`` (keeps only the pose samples) so the two can never
     drift apart on tick/command timing.
+
+    097-003: stays on the text-plane SNAP reply, via a frozen local copy of
+    the retired parser -- see this module's own header note for why.
     """
-    from robot_radio.robot.protocol import parse_tlm  # local: keep import graph shallow
+    # local: keep import graph shallow, matches the pre-097-003 import style.
+    from robot_radio.robot._legacy_tlm_text import parse_historical_tlm_line
 
     pending = sorted(commands, key=lambda c: c[0])
     idx = 0
@@ -249,7 +271,7 @@ def _iter_run(
             sent.append(pending[idx][1])
             idx += 1
         reply = sim.send_command("SNAP")
-        frame = parse_tlm(reply)
+        frame = parse_historical_tlm_line(reply)
         yield t, sent, frame
         if t >= total_duration:
             break
@@ -341,9 +363,9 @@ def split_recording(
     is ``{t: TLMFrame}`` (t [ms]) — reconstructed directly onto the canonical
     ``TLMFrame`` dataclass (``host/robot_radio/robot/protocol.py``), not a
     second hand-rolled parser: the JSONL pose records already carry
-    structured ``[x, y, h]`` lists (they were produced by ``parse_tlm()`` in
-    the first place, see ``record_sim_run``), so there is no wire text left
-    to re-parse here.
+    structured ``[x, y, h]`` lists (they were produced by the text-plane TLM
+    parser in the first place, see ``record_sim_run``/``_iter_run``), so
+    there is no wire text left to re-parse here.
     """
     commands: list[tuple[int, str]] = []
     pose_samples: dict[int, TLMFrame] = {}
