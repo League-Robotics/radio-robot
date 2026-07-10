@@ -88,7 +88,7 @@ static msg::PlannerConfig defaultMotionConfig() {
     return cfg;
 }
 
-int main() {
+int hardware_main() {
     uBit.init();
 
     // Comms: the Communicator subsystem (serial + radio, both enabled).
@@ -129,6 +129,9 @@ int main() {
     for (;;) {
         uint32_t now = uBit.systemTime();
 
+        // Ticks
+        ///
+
         comm.tick(now);
         if (comm.hasCommand()) {
             router.route(comm.takeCommand(), bb); // Add the command to the router, which will parse and dispatch it, posting any command args onto the blackboard and replying through the appropriate channel.
@@ -140,6 +143,10 @@ int main() {
             bb.replaceIn,
             bb.driveIn);
 
+        //
+        // Commit state to the blackboard 
+        // 
+
         bb.motors = hardware.motorStates();                // commit measured motor state (incl. I2C connected)
         bb.drivetrain = drivetrain.state();                // commit measured state for TLM (094-006)
         bb.loopNow = now;                                  // commit stamp for TLM now= (cmd='s true time)
@@ -148,4 +155,8 @@ int main() {
     }
 
     return 0;
+}
+
+int main(){
+    hardware_main();
 }
