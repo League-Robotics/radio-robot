@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: BinaryChannel config and get arms
-status: in-progress
+status: done
 use-cases:
 - SUC-004
 depends-on:
@@ -78,24 +78,24 @@ and are indifferent to which command family posts to them.
 
 ## Acceptance Criteria
 
-- [ ] Every one of the 15 keys in `config_commands.cpp`'s `kAllKeys`
+- [x] Every one of the 15 keys in `config_commands.cpp`'s `kAllKeys`
       round-trips (`config` then `get` on the matching target) correctly
       over the binary path.
-- [ ] `ml`/`mr` (per-side `travel_calib`) address the correct bound motor
+- [x] `ml`/`mr` (per-side `travel_calib`) address the correct bound motor
       independently; `pid.kp`/`ki`/`kff`/`iMax`/`kaw` apply to BOTH bound
       motors identically, mirroring `applyConfigKey()`'s existing
       both-sides behavior (Decision 5).
-- [ ] `sTimeout` posts to `bb.streamWatchdogWindowIn`, not `bb.configIn`
+- [x] `sTimeout` posts to `bb.streamWatchdogWindowIn`, not `bb.configIn`
       (Open Question 4) — verified by a test that sets it over binary and
       confirms the watchdog window changed, not any `Rt::ConfigDelta`
       target.
-- [ ] An out-of-range or malformed field yields a typed `Error{code,
+- [x] An out-of-range or malformed field yields a typed `Error{code,
       field}`, never a crash, never a silent drop — via the generated
       decoder's `min`/`max`/`abs_max`/`req` checks, not hand-written range
       checks.
-- [ ] `get{target}` replies exactly one `ConfigSnapshot` for that target;
+- [x] `get{target}` replies exactly one `ConfigSnapshot` for that target;
       no multi-reply behavior is introduced.
-- [ ] Full sim suite (~469 tests) stays green; 095's differential codec
+- [x] Full sim suite (~469 tests) stays green; 095's differential codec
       gate (`test_wire_differential.py`) does not regress.
 
 ## Testing
@@ -110,3 +110,53 @@ and are indifferent to which command family posts to them.
   by running the unregistered text handler).
 - **Verification command**: `just build-sim && uv run python -m pytest
   tests/sim`
+
+## Completion Notes
+
+**Implementation**: `source/commands/binary_channel.cpp`'s `CONFIG`/`GET`
+arms replace the two `ERR_UNIMPLEMENTED` stubs exactly per the Approach
+above -- one hand-written `if (patch.field.has) { ...; mask |= bitOf(...); }`
+per field per Patch type, `MotorConfigPatch.side` disambiguating
+`travel_calib` only (two `Rt::ConfigDelta{kMotor}` posts for any present
+Gains field), `watchdog` posted to `bb.streamWatchdogWindowIn` (never
+`bb.configIn`). `GET` reads `bb.drivetrainConfig`/`bb.motorConfig[leftIdx|
+rightIdx]`/`bb.plannerConfig`/`bb.streamWatchdogWindow` and replies exactly
+one `ConfigSnapshot`. `b.configIn.post()`/two-post failures reply
+`ERR_FULL`; an empty `ConfigDelta.patch` replies `ERR_UNKNOWN` field=6; an
+out-of-range `ConfigGet.target` enum (no wire-level bound exists for it,
+per config.proto's own note) replies `ERR_UNKNOWN` field=1; a missing
+`ConfigGet.target` is caught by the generated decoder's `(req)` check
+(`ERR_BADARG` field=1) before dispatch ever reaches this file.
+
+**Test-infrastructure finding (flagged, not silently patched)**: neither
+`main.cpp` nor `tests/_infra/sim/sim_api.cpp`'s `SimHandle` instantiates a
+live `Rt::Configurator` (dormant since sprint 093/094's loop rewrite --
+`bb.configIn`'s only consumer, `Configurator::applyOne()`, is never called
+anywhere in the runtime; `bb.streamWatchdogWindowIn` likewise has zero
+consumers anywhere in `source/`). architecture-update.md's own "Rt::
+Configurator: zero changes... it already folds whatever lands on
+bb.configIn" language assumes a live Configurator exists; it does not, in
+either the real firmware or the previous `sim` test fixture. Without a
+drain, `config` then `get` cannot round-trip: `get` reads the published
+`bb.*Config` cell, which nothing ever updates. Resolved via a TEST-ONLY
+addition to `tests/_infra/sim/sim_api.cpp`'s `SimHandle` (`configurator`/
+`poseEstimator` members, both already-linked-but-previously-unused in this
+shared library; a `drainConfig()` helper called after `sim_tick()`'s and
+`sim_command_on()`'s existing tick, never in `sim_route_no_tick()`) that
+instantiates the real, unmodified `Rt::Configurator` class -- rather than
+duplicate its field-masked fold logic a third time, or have `BinaryChannel`
+write `bb.*Config` cells directly (which would bypass `Drivetrain::
+configure()`/`Hal::Motor::configure()`/`PoseEstimator::configure()` and
+ship a `config` arm that updates what `get` reports without ever reaching
+the simulated hardware). `main.cpp` and `runtime/configurator.{h,cpp}` are
+untouched -- production Configurator wiring remains a future ticket's
+decision, unchanged by this one. See `sim_api.cpp`'s own `SimHandle` class
+comment and `drainConfig()`'s doc comment for the full rationale. No
+`gen_messages.py`/`config_commands.cpp`/`command_router.cpp` changes.
+
+**Verification**: `just build` (ARM) -- FLASH 326084 B / 364 KB = 87.48%,
+RAM 98.33% (expected per project convention, not a regression signal).
+`just build-sim` clean. `tests/sim/unit/test_binary_channel.py`: 41 passed
+(20 pre-existing + 21 new/updated). Full `tests/sim`: 492 passed (up from
+~469 pre-ticket, consistent with 002/003/004's additions).
+`test_wire_differential.py`: 132 passed, unregressed.

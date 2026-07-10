@@ -39,6 +39,7 @@ if str(_HOST_DIR) not in sys.path:
     sys.path.insert(0, str(_HOST_DIR))
 
 from robot_radio.robot.pb2 import common_pb2 as pb_common  # noqa: E402
+from robot_radio.robot.pb2 import config_pb2 as pb_config  # noqa: E402
 from robot_radio.robot.pb2 import drivetrain_pb2 as pb_drivetrain  # noqa: E402
 from robot_radio.robot.pb2 import envelope_pb2 as pb_envelope  # noqa: E402
 from robot_radio.robot.pb2 import motion_pb2 as pb_motion  # noqa: E402
@@ -255,22 +256,176 @@ def test_binary_id_replies_with_device_identity(sim):
 
 # ===========================================================================
 # Declared-only arms -- ERR_UNIMPLEMENTED, never a crash, never silent.
+# `config`/`get` are no longer declared-only as of 096-004 (see the
+# dedicated section below) -- only `pose`/`otos`/`stream` remain stubs
+# (098/096-005 land those).
 # ===========================================================================
 
 
 @pytest.mark.parametrize("kwargs,expected_field", [
-    (dict(config=pb_envelope.ConfigDelta()), 6),
     (dict(pose=pb_drivetrain.SetPose()), 7),
     (dict(otos=pb_odometer.OdometerCommand()), 8),
-    (dict(get=pb_envelope.ConfigGet(target=1)), 11),
     (dict(stream=pb_envelope.StreamControl()), 12),
-], ids=["config", "pose", "otos", "get", "stream"])
+], ids=["pose", "otos", "stream"])
 def test_binary_declared_only_arms_reply_err_unimplemented(sim, kwargs, expected_field):
     env = pb_envelope.CommandEnvelope(corr_id=9, **kwargs)
     reply = send(sim, env)
     assert reply.WhichOneof("body") == "err"
     assert reply.err.code == pb_envelope.ERR_UNIMPLEMENTED
     assert reply.err.field == expected_field
+
+
+# ===========================================================================
+# config / get -- 096-004: BinaryChannel's config/get arms. Every one of
+# config_commands.cpp's 15 kAllKeys keys round-trips (`config` then `get` on
+# the matching target). Expected values mirror applyConfigKey()'s known
+# behavior -- never by running the unregistered text SET handler.
+# ===========================================================================
+
+
+def config_send(sim, corr_id, **patch_kwargs):
+    return send(sim, pb_envelope.CommandEnvelope(corr_id=corr_id,
+                                                  config=pb_envelope.ConfigDelta(**patch_kwargs)))
+
+
+def get_send(sim, corr_id, target):
+    return send(sim, pb_envelope.CommandEnvelope(corr_id=corr_id, get=pb_envelope.ConfigGet(target=target)))
+
+
+# (key, DrivetrainConfigPatch field, test value) -- covers 6 of the 15
+# kAllKeys keys (tw, rotSlip, ekfQxy, ekfQtheta, ekfROtosXy, ekfROtosTheta).
+_DRIVETRAIN_KEYS = [
+    ("tw", "trackwidth", 321.0),
+    ("rotSlip", "rotational_slip", 0.75),
+    ("ekfQxy", "ekf_q_xy", 1.5),
+    ("ekfQtheta", "ekf_q_theta", 2.5),
+    ("ekfROtosXy", "ekf_r_otos_xy", 3.5),
+    ("ekfROtosTheta", "ekf_r_otos_theta", 4.5),
+]
+
+
+@pytest.mark.parametrize("key,field,value", _DRIVETRAIN_KEYS, ids=[k for k, _, _ in _DRIVETRAIN_KEYS])
+def test_binary_config_drivetrain_keys_round_trip(sim, key, field, value):
+    reply = config_send(sim, 30, drivetrain=pb_config.DrivetrainConfigPatch(**{field: value}))
+    assert reply.WhichOneof("body") == "ok", f"{key}: config post rejected"
+
+    reply = get_send(sim, 31, pb_config.CONFIG_DRIVETRAIN)
+    assert reply.WhichOneof("body") == "cfg"
+    assert reply.cfg.target == pb_config.CONFIG_DRIVETRAIN
+    assert reply.cfg.WhichOneof("patch") == "drivetrain"
+    assert getattr(reply.cfg.drivetrain, field) == pytest.approx(value)
+
+
+def test_binary_config_min_speed_round_trips_on_planner_target(sim):
+    # 7th of the 15 kAllKeys keys: minSpeed -> PlannerConfigPatch.min_speed.
+    reply = config_send(sim, 32, planner=pb_config.PlannerConfigPatch(min_speed=42.0))
+    assert reply.WhichOneof("body") == "ok"
+
+    reply = get_send(sim, 33, pb_config.CONFIG_PLANNER)
+    assert reply.WhichOneof("body") == "cfg"
+    assert reply.cfg.target == pb_config.CONFIG_PLANNER
+    assert reply.cfg.WhichOneof("patch") == "planner"
+    assert reply.cfg.planner.min_speed == pytest.approx(42.0)
+
+
+def test_binary_config_ml_mr_address_correct_bound_motor_independently(sim):
+    """ml (side=LEFT) / mr (side=RIGHT) -- 2 of the 15 kAllKeys keys. Each
+    touches ONLY its own bound motor's travel_calib -- config_commands.cpp's
+    applyConfigKey() never lets `ml` touch the right motor or vice versa."""
+    reply = config_send(sim, 34, motor=pb_config.MotorConfigPatch(side=pb_config.LEFT, travel_calib=1.111))
+    assert reply.WhichOneof("body") == "ok"
+    reply = config_send(sim, 35, motor=pb_config.MotorConfigPatch(side=pb_config.RIGHT, travel_calib=2.222))
+    assert reply.WhichOneof("body") == "ok"
+
+    left = get_send(sim, 36, pb_config.CONFIG_MOTOR_LEFT)
+    right = get_send(sim, 37, pb_config.CONFIG_MOTOR_RIGHT)
+    assert left.cfg.WhichOneof("patch") == "motor"
+    assert right.cfg.WhichOneof("patch") == "motor"
+    assert left.cfg.motor.travel_calib == pytest.approx(1.111)
+    assert right.cfg.motor.travel_calib == pytest.approx(2.222)
+    assert left.cfg.motor.side == pb_config.LEFT
+    assert right.cfg.motor.side == pb_config.RIGHT
+
+
+@pytest.mark.parametrize("field", ["kp", "ki", "kff", "i_max", "kaw"], ids=["kp", "ki", "kff", "iMax", "kaw"])
+def test_binary_config_pid_gains_apply_to_both_bound_motors(sim, field):
+    """pid.kp/ki/kff/iMax/kaw -- the remaining 5 of the 15 kAllKeys keys.
+    Always write BOTH bound motors identically (Decision 5) -- mirrors
+    applyConfigKey()'s own hard-coded both-sides behavior exactly; NOT
+    disambiguated by `side` (side selects travel_calib ONLY)."""
+    reply = config_send(sim, 38, motor=pb_config.MotorConfigPatch(**{field: 9.5}))
+    assert reply.WhichOneof("body") == "ok"
+
+    left = get_send(sim, 39, pb_config.CONFIG_MOTOR_LEFT)
+    right = get_send(sim, 40, pb_config.CONFIG_MOTOR_RIGHT)
+    assert getattr(left.cfg.motor, field) == pytest.approx(9.5)
+    assert getattr(right.cfg.motor, field) == pytest.approx(9.5)
+
+
+def test_binary_config_stimeout_posts_to_watchdog_window_not_a_config_target(sim):
+    """sTimeout (Open Question 4, the 15th kAllKeys key) posts straight to
+    bb.streamWatchdogWindowIn -- NOT one of the Configurator's four fold
+    targets. Verified two ways: get(CONFIG_WATCHDOG) reflects it, AND every
+    other target's snapshot is byte-identical to its pre-post baseline
+    (proving sTimeout never routed through bb.configIn/the Configurator)."""
+    baseline_dt = get_send(sim, 41, pb_config.CONFIG_DRIVETRAIN)
+    baseline_planner = get_send(sim, 42, pb_config.CONFIG_PLANNER)
+    baseline_left = get_send(sim, 43, pb_config.CONFIG_MOTOR_LEFT)
+    baseline_right = get_send(sim, 44, pb_config.CONFIG_MOTOR_RIGHT)
+
+    reply = config_send(sim, 45, watchdog=4242)
+    assert reply.WhichOneof("body") == "ok"
+
+    watchdog_reply = get_send(sim, 46, pb_config.CONFIG_WATCHDOG)
+    assert watchdog_reply.WhichOneof("body") == "cfg"
+    assert watchdog_reply.cfg.target == pb_config.CONFIG_WATCHDOG
+    assert watchdog_reply.cfg.WhichOneof("patch") == "watchdog"
+    assert watchdog_reply.cfg.watchdog == 4242
+
+    after_dt = get_send(sim, 47, pb_config.CONFIG_DRIVETRAIN)
+    after_planner = get_send(sim, 48, pb_config.CONFIG_PLANNER)
+    after_left = get_send(sim, 49, pb_config.CONFIG_MOTOR_LEFT)
+    after_right = get_send(sim, 50, pb_config.CONFIG_MOTOR_RIGHT)
+    assert after_dt.cfg.drivetrain == baseline_dt.cfg.drivetrain
+    assert after_planner.cfg.planner == baseline_planner.cfg.planner
+    assert after_left.cfg.motor == baseline_left.cfg.motor
+    assert after_right.cfg.motor == baseline_right.cfg.motor
+
+
+def test_binary_config_empty_patch_replies_err_unknown(sim):
+    """A well-formed-but-empty ConfigDelta (no oneof `patch` arm set at all)
+    decodes cleanly (patch_kind == NONE) -- must still reply, never silently
+    drop, never crash."""
+    reply = config_send(sim, 53)
+    assert reply.WhichOneof("body") == "err"
+    assert reply.err.code == pb_envelope.ERR_UNKNOWN
+    assert reply.err.field == 6   # CommandEnvelope.cmd.config's own field number
+
+
+def test_binary_get_missing_target_replies_err_badarg_field_1(sim):
+    """ConfigGet.target is `optional` + `(req)=true` (ticket 001) -- an
+    envelope that never sets it is caught by the generated decoder's own
+    req validation, never a hand-written check in BinaryChannel."""
+    reply = send(sim, pb_envelope.CommandEnvelope(corr_id=51, get=pb_envelope.ConfigGet()))
+    assert reply.WhichOneof("body") == "err"
+    assert reply.err.code == pb_envelope.ERR_BADARG
+    assert reply.err.field == 1
+
+
+@pytest.mark.parametrize("target", [
+    pb_config.CONFIG_DRIVETRAIN, pb_config.CONFIG_MOTOR_LEFT, pb_config.CONFIG_MOTOR_RIGHT,
+    pb_config.CONFIG_PLANNER, pb_config.CONFIG_WATCHDOG,
+], ids=["drivetrain", "motor_left", "motor_right", "planner", "watchdog"])
+def test_binary_get_replies_exactly_one_config_snapshot(sim, target):
+    """get{target} replies exactly one ConfigSnapshot for that target -- no
+    multi-reply behavior is introduced (Decision 4)."""
+    reply = get_send(sim, 52, target)
+    assert reply.WhichOneof("body") == "cfg"
+    assert reply.cfg.target == target
+    # Exactly one `patch` oneof arm is populated -- the acceptance
+    # criterion's own wording, asserted explicitly rather than only relying
+    # on protobuf's oneof invariant.
+    assert reply.cfg.WhichOneof("patch") is not None
 
 
 # ===========================================================================

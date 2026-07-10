@@ -75,6 +75,7 @@
 #include "motion/segment.h"
 #include "runtime/blackboard.h"
 #include "runtime/command_router.h"
+#include "runtime/configurator.h"
 #include "runtime/main_loop.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
@@ -186,15 +187,49 @@ msg::PlannerConfig defaultSimMotionConfig() {
 // sim_create() call. Member declaration order IS construction order (C++
 // initializes members in declaration order regardless of the initializer
 // list's own order) -- motorConfigs before hardware (which reads it),
-// hardware/drivetrain before loop (Rt::MainLoop's own constructor takes
-// references to the same two subsystems), bb before router (router's own
-// construction is bb-agnostic, but bb must exist before router.
-// setReplyChannels() runs in the constructor body).
+// hardware/drivetrain/poseEstimator before configurator (Rt::Configurator's
+// own constructor takes references to all three, plus reads back
+// hardware.motorConfig(i) for its per-port boot seed), hardware/drivetrain
+// before loop (Rt::MainLoop's own constructor takes references to the same
+// two subsystems), bb before router (router's own construction is
+// bb-agnostic, but bb must exist before router. setReplyChannels() runs in
+// the constructor body).
+//
+// poseEstimator/configurator (096-004, TEST-ONLY): main.cpp/this file's own
+// mandatory tick (Rt::MainLoop::tick()) still have "no runtime
+// config-application authority" (093/094's own established design,
+// unchanged by this ticket -- see main.cpp's matching comment and
+// runtime/configurator.h's class comment, neither of which this ticket
+// edits). Ticket 096-004 is the FIRST thing since then that can ever reach
+// bb.configIn/bb.streamWatchdogWindowIn at all (BinaryChannel's new binary
+// `config` arm) -- without a drain, bb.configIn's posted Rt::ConfigDelta
+// entries would sit forever and `get` would only ever read boot-time
+// defaults, so the ticket's own round-trip acceptance criterion (`config`
+// then `get` on the matching target) would be untestable. Rather than
+// duplicate Configurator::applyOne()'s field-masked fold logic a THIRD time
+// (config_commands.cpp's ConfigCandidate and configurator.cpp's foldXXX()
+// are the other two) or have BinaryChannel write bb.*Config cells directly
+// (bypassing Drivetrain::configure()/Hal::Motor::configure()/
+// PoseEstimator::configure() -- silently shipping a `config` arm that
+// updates what `get` reports without ever reaching the simulated hardware),
+// this instantiates the SAME, unmodified Rt::Configurator class
+// runtime/configurator.cpp/subsystems/pose_estimator.cpp are ALREADY
+// compiled into this exact shared library for (CMakeLists.txt) --
+// previously linked-but-unused here, exercised end to end by its own
+// separate tests/sim/unit/configurator_harness.cpp harness. This does NOT
+// revive Configurator wiring in the real firmware (main.cpp is untouched);
+// it only lets THIS test harness prove BinaryChannel's translation is
+// correct using the real fold+apply+publish machinery, drained after every
+// sim_tick()/sim_command_on() call (see drainConfig() below) -- never in
+// sim_route_no_tick(), which keeps peeking bb.segmentIn/bb.replaceIn before
+// any drain, unaffected by this addition.
 // ---------------------------------------------------------------------------
 struct SimHandle {
     MotorConfigSet motorConfigs;
     Subsystems::SimHardware hardware;
     Subsystems::Drivetrain drivetrain;
+    Subsystems::PoseEstimator poseEstimator;
+    Rt::Configurator configurator;
     Rt::Blackboard bb;
     Rt::CommandRouter router;
     Rt::MainLoop loop;
@@ -215,6 +250,8 @@ SimHandle::SimHandle()
       hardware(motorConfigs.cfg),
       drivetrain(hardware),   // 094-005: Drivetrain now HOLDS a Hardware& -- hardware above
                                // must (and does) construct first.
+      configurator(drivetrain, poseEstimator, hardware,
+                   defaultSimDrivetrainConfig(), defaultSimMotionConfig()),
       loop(hardware, drivetrain)
 {
     // Primes all four ports' encoders — parity with main.cpp's
@@ -230,6 +267,14 @@ SimHandle::SimHandle()
     // bb.motors[] index underflows to UINT32_MAX and reads wildly out of
     // bounds the moment STREAM/SNAP first actually emits a frame.
     bb.drivetrainConfig = dtConfig;
+    // 096-004 (TEST-ONLY): seeds bb.motorConfig[]/bb.plannerConfig/
+    // bb.odometerConfig too (both previously always zero -- nothing else in
+    // this file ever set them), from the SAME `configurator` instance the
+    // new binary `config`/`get` round-trip test drains into below. Also
+    // re-writes bb.drivetrainConfig with the identical value the line above
+    // already set (harmless -- configurator's own boot copy is built from
+    // the SAME defaultSimDrivetrainConfig() call).
+    configurator.publish(bb);
     // 094-005: boot-only jerk-limit defaults for the Drivetrain-owned
     // Motion::SegmentExecutor -- mirrors main.cpp's own
     // drivetrain.configureMotion(defaultMotionConfig()) call exactly (the
@@ -250,6 +295,28 @@ SimHandle::SimHandle()
     // Start the host fake clock at 0, mirroring main.cpp's boot moment (093:
     // there is no watchdog left to feed here).
     Types::setHostClockNow(0);
+}
+
+// drainConfig (096-004, TEST-ONLY) -- see SimHandle's own class comment for
+// the full rationale. Drains every currently-pending bb.configIn entry
+// through the real (unmodified) Rt::Configurator::applyOne() -- fold,
+// conditionally call the target subsystem's own configure(), publish onto
+// the matching bb.*Config cell -- exactly what a future main.cpp Configurator
+// wiring will do per pass, just run to exhaustion here rather than
+// one-per-pass (a test harness has no per-pass CPU budget to protect).
+// Also drains bb.streamWatchdogWindowIn -> bb.streamWatchdogWindow directly
+// (sTimeout is NOT one of the Configurator's four targets, Open Question 4 --
+// there is no live StreamingDriveWatchdog instance here to feed, so this
+// mirrors only the "publish the window" half of what that class's owner
+// would do, matching commands/motion_commands.h's own StreamingDriveWatchdog::
+// setWindow()/window() shape without instantiating the class itself).
+void drainConfig(SimHandle& s) {
+    while (s.configurator.pending(s.bb)) {
+        s.configurator.applyOne(s.bb);
+    }
+    if (!s.bb.streamWatchdogWindowIn.empty()) {
+        s.bb.streamWatchdogWindow = s.bb.streamWatchdogWindowIn.take();
+    }
 }
 
 }  // namespace
@@ -278,15 +345,17 @@ void sim_destroy(void* h) {
 // hardware's motor refs), plus tickTelemetry() (096-002's loop-owned
 // periodic STREAM emission -- a no-op unless STREAM has armed
 // bb.telemetryPeriod), mirroring main.cpp's own peer call exactly (the
-// "hardware and sim call the identical function" invariant). No
-// config-drain loop remains (093: there is no runtime config-application
-// authority left to drain).
+// "hardware and sim call the identical function" invariant). The REAL
+// firmware (main.cpp) still has no config-drain loop (093: no runtime
+// config-application authority left to drain) -- drainConfig() below is
+// TEST-ONLY (096-004, see SimHandle's own class comment).
 void sim_tick(void* h, uint32_t now) {
     SimHandle* s = static_cast<SimHandle*>(h);
     Types::setHostClockNow(now);
     s->lastTickNow = now;
     s->loop.tick(s->bb, now);
     tickTelemetry(s->bb, s->router, now);
+    drainConfig(*s);
 }
 
 // Dispatch one NUL-terminated command line synchronously on a caller-chosen
@@ -327,6 +396,12 @@ int sim_command_on(void* h, const char* line, int channel, char* reply, int size
     // command just posted (driveIn/…) be consumed by the next mandatory
     // tick, at the unchanged `now`.
     s->loop.tick(s->bb, s->lastTickNow);
+    // 096-004 (TEST-ONLY): drain any bb.configIn/bb.streamWatchdogWindowIn
+    // entry the routed command just posted (BinaryChannel's new binary
+    // `config` arm) -- see SimHandle's own class comment and drainConfig()'s
+    // above. A same-call `get` (a SEPARATE sim_command_on()) then reads the
+    // just-published bb.*Config cell.
+    drainConfig(*s);
 
     ReplyStore& store = (cmd.returnPath == Subsystems::Channel::RADIO)
                              ? s->syncStoreRadio
