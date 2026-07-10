@@ -1,6 +1,6 @@
 ---
 status: in-progress
-sprint: 095
+sprint: 096
 tickets:
 - 095-001
 - 095-002
@@ -9,6 +9,14 @@ tickets:
 - 095-005
 - 095-006
 - 095-007
+- 096-001
+- 096-002
+- 096-003
+- 096-004
+- 096-005
+- 096-006
+- 096-007
+- 096-008
 ---
 
 # Protocol v3: Schema-Driven Binary Command Plane (protobuf)

@@ -1,7 +1,7 @@
 ---
-id: "096"
-title: "Protocol v3 Sprint 2: Binary telemetry and config plane"
-status: roadmap
+id: 096
+title: 'Protocol v3 Sprint 2: Binary telemetry and config plane'
+status: planning-docs
 branch: sprint/096-protocol-v3-sprint-2-binary-telemetry-and-config-plane
 use-cases: []
 issues:
@@ -123,13 +123,21 @@ parked (not yet deleted) until Sprint 097.
 
 Before tickets can be created, all of the following must be true:
 
-- [ ] Sprint planning documents are complete (sprint.md, use cases, architecture)
-- [ ] Architecture review passed
-- [ ] Stakeholder has approved the sprint plan
+- [x] Sprint planning documents are complete (sprint.md, use cases, architecture)
+- [x] Architecture review passed
+- [x] Stakeholder has approved the sprint plan
 
 ## Tickets
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 001 | Config and telemetry wire schema (config.proto, telemetry.proto, envelope.proto edits) | — |
+| 002 | Restore periodic telemetry infrastructure (buildTable STREAM/SNAP + loop-owned tickTelemetry + CommandRouter channel accessor) | — |
+| 003 | Telemetry frame assembly extension and binary formatter (tlm_frame.h/.cpp) | 001, 002 |
+| 004 | BinaryChannel config and get arms | 001 |
+| 005 | BinaryChannel stream arm and StreamControl.binary wiring into periodic tick | 001, 002, 003 |
+| 006 | Differential and sim behavioral test coverage for Telemetry, ConfigDelta, ConfigSnapshot, and binary stream/config/get | 003, 004, 005 |
+| 007 | Host binary telemetry and config client (TLMFrame-from-pb2, NezhaProtocol binary set/get) | 001, 004, 005 |
+| 008 | check_config_sync.py rewrite against pb2 descriptors vs pydantic | 001 |
 
 Tickets execute serially in the order listed.
