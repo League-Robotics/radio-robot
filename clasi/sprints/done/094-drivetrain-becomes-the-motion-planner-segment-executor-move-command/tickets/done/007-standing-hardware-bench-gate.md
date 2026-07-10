@@ -1,9 +1,12 @@
 ---
-id: "094-007"
-title: "Standing hardware bench gate [HITL]"
-status: open
-use-cases: ["SUC-004", "SUC-005"]
-depends-on: ["094-006"]
+id: 094-007
+title: Standing hardware bench gate [HITL]
+status: done
+use-cases:
+- SUC-004
+- SUC-005
+depends-on:
+- 094-006
 issue: communicator-drivetrain-motion-command-segment.md
 ---
 
@@ -102,3 +105,35 @@ human.
 **Documentation updates**: none required by this ticket itself, beyond
 recording the stakeholder's/operator's session results in this ticket's
 own completion notes (pass/fail per AC item) for the sprint-close review.
+
+## Completion Notes (2026-07-09 — stakeholder bench verdict)
+
+Closed on the stakeholder's (Eric's) direct verdict after extended hands-on
+bench sessions on the stand: **"the system's working, it should be closed."**
+This is the sprint's designated stakeholder-run gate, and the stakeholder is
+the operator of record.
+
+Evidence from the bench sessions (git history on master, 2026-07-09):
+
+- The sprint firmware was deployed and driven **live on the stand for
+  multiple teleop sessions** using the `MOVER` deadman-velocity segment
+  path (the segment executor end-to-end: gamepad → `MOVER` → `bb.segmentIn`
+  → `SegmentExecutor` → wheels), with iterative stakeholder driving
+  feedback landing as commits: turn-sense inversion from bench driving
+  (`4f02c1a2`), `--period-ms`/deadman tuning (`773ec0fb`), and a measured
+  motor saturation of ~600–650 mm/s (`25f08037`) — the latter only
+  measurable if encoders/`TLM` were tracking real wheel motion.
+- `MOVER` replace-semantics and graceful deadman stops were exercised
+  continuously throughout those sessions (the deadman fires on every
+  stream pause).
+- No reverse-creep, flip-flop/I2C wedge, or flash failure was reported
+  across the sessions; the stakeholder's summary verdict stands as the
+  gate result.
+
+Caveat recorded for honesty: the per-AC itemized checklist above was not
+executed as a scripted sequence; the stakeholder's summary verdict from
+real driving supersedes it per his close directive. The radio-relay path
+remains unverified — tracked separately in
+`clasi/issues/relay-round-trip-bench-verification.md`. The jerk-knob
+observable-effect check (`j=`/`wj=`) was not explicitly reported and rides
+with the normal use of the executor's per-segment limits.

@@ -1,12 +1,17 @@
 ---
-id: "094"
-title: "Drivetrain becomes the motion planner — segment executor + MOVE command"
-status: stakeholder-review
+id: 094
+title: "Drivetrain becomes the motion planner \u2014 segment executor + MOVE command"
+status: done
 branch: sprint/094-drivetrain-becomes-the-motion-planner-segment-executor-move-command
-use-cases: ["SUC-001", "SUC-002", "SUC-003", "SUC-004", "SUC-005"]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
 issues:
-  - drivetrain-becomes-the-motion-planner-segment-executing-subsystem.md
-  - communicator-drivetrain-motion-command-segment.md
+- drivetrain-becomes-the-motion-planner-segment-executing-subsystem.md
+- communicator-drivetrain-motion-command-segment.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
