@@ -59,6 +59,7 @@ from _wire_diff_driver import (  # noqa: E402
     build_motion_segment,
     compile_harness,
     decode,
+    encode_echo_reply,
     encode_err,
     encode_id,
     encode_ok,
@@ -124,7 +125,7 @@ def test_field_numbers_match_pb2_descriptors():
     }
     assert actual_cmd_numbers == expected_cmd_numbers
 
-    expected_body_numbers = {"ok": 2, "err": 3, "tlm": 4, "cfg": 5, "evt": 6, "id": 7}
+    expected_body_numbers = {"ok": 2, "err": 3, "tlm": 4, "cfg": 5, "evt": 6, "id": 7, "echo": 8}
     actual_body_numbers = {
         f.name: f.number for f in pb_envelope.ReplyEnvelope.DESCRIPTOR.oneofs_by_name["body"].fields
     }
@@ -268,15 +269,23 @@ def test_direction_a_id_request(harness):
 # ===========================================================================
 
 
-@pytest.mark.parametrize("corr_id,q,rem", [(0, 0, 0.0), (9, 5, 12.5), (65535, 4294967295, -3.25)])
-def test_direction_b_ack(harness, corr_id, q, rem):
-    raw = encode_ok(harness, corr_id, q, rem)
+@pytest.mark.parametrize("corr_id,q,rem,t", [
+    (0, 0, 0.0, 0), (9, 5, 12.5, 0), (65535, 4294967295, -3.25, 0),
+    # t (095-007, Ack schema-gap closure): PING's binary reply sets t to a
+    # robot-clock timestamp (Ack{q=0,rem=0,t=<ms>}) -- these cases prove the
+    # NEW field round-trips byte-for-byte against google.protobuf the same
+    # way q/rem already do.
+    (1, 0, 0.0, 12345), (2, 0, 0.0, 4294967295),
+])
+def test_direction_b_ack(harness, corr_id, q, rem, t):
+    raw = encode_ok(harness, corr_id, q, rem, t)
     assert raw is not None, "encode_ok returned ZERO for a well-under-budget Ack reply"
     reply = pb_envelope.ReplyEnvelope.FromString(raw)
     assert reply.corr_id == corr_id
     assert reply.WhichOneof("body") == "ok"
     assert reply.ok.q == q
     assert reply.ok.rem == f32(rem)
+    assert reply.ok.t == t
 
 
 @pytest.mark.parametrize("code_name,field_num", [
@@ -309,6 +318,22 @@ def test_direction_b_device_id(harness, model, name, serial, fw, proto_version):
     assert reply.id.serial == serial
     assert reply.id.fw_version == fw
     assert reply.id.proto_version == proto_version
+
+
+@pytest.mark.parametrize("payload", [b"", b"\x00", b"hello", bytes(range(64))],
+                         ids=["empty", "nul", "ascii", "max64"])
+def test_direction_b_echo_reply(harness, payload):
+    """ReplyEnvelope.echo (095-007, schema-gap closure): BinaryChannel's
+    ECHO reply carries `cmd.echo.payload` back verbatim -- mirrors
+    handleEcho()'s text behavior. Direction B (firmware-encode ->
+    host-decode) proof for the NEW oneof arm, same shape as
+    test_direction_b_ack/test_direction_b_device_id above."""
+    raw = encode_echo_reply(harness, 4, payload)
+    assert raw is not None, "encode_echo_reply returned ZERO for a well-under-budget Echo reply"
+    reply = pb_envelope.ReplyEnvelope.FromString(raw)
+    assert reply.corr_id == 4
+    assert reply.WhichOneof("body") == "echo"
+    assert reply.echo.payload == payload
 
 
 # ===========================================================================

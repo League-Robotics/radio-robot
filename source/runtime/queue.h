@@ -52,6 +52,13 @@ class Mailbox {
     return value_;
   }
 
+  // Non-destructive read: the currently-held value, or nullptr if empty.
+  // Mirrors WorkQueue::peek()'s own non-destructive-inspection precedent
+  // (095-007, test-support addition -- lets a test observe a just-posted
+  // value before the next tick's take() drains it, without altering the
+  // mailbox's own single-consumer contract for every other caller).
+  const T* peek() const { return full_ ? &value_ : nullptr; }
+
  private:
   T value_ = {};
   bool full_ = false;

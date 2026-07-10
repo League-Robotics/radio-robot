@@ -145,8 +145,12 @@ def parse_decode_line(line: str) -> tuple[str, dict[str, str]]:
     return status, fields
 
 
-def encode_ok(binary: pathlib.Path, corr_id: int, q: int, rem: float) -> bytes | None:
-    r = run_harness(binary, "encode_ok", str(corr_id), str(q), repr(rem))
+def encode_ok(binary: pathlib.Path, corr_id: int, q: int, rem: float, t: int = 0) -> bytes | None:
+    # t (095-007, Ack schema-gap closure -- see envelope.proto's own Ack.t
+    # doc comment): optional 5th argv, defaulting to 0 so every pre-existing
+    # call site (which never passed a 4th value to the harness) keeps
+    # constructing the identical Ack{q,rem,t=0} it always has.
+    r = run_harness(binary, "encode_ok", str(corr_id), str(q), repr(rem), str(t))
     assert not r.crashed, f"encode_ok crashed: {r.stdout}\n{r.stderr}"
     line = r.stdout.strip()
     if line == "ZERO":
@@ -173,6 +177,21 @@ def encode_id(binary: pathlib.Path, corr_id: int, model: str, name: str, serial:
     if line == "ZERO":
         return None
     assert line.startswith("B64 "), f"unexpected encode_id output: {line!r}"
+    return base64.b64decode(line[len("B64 "):])
+
+
+def encode_echo_reply(binary: pathlib.Path, corr_id: int, payload: bytes) -> bytes | None:
+    """Builds ReplyEnvelope{echo=Echo{payload}} (095-007, ReplyEnvelope
+    schema-gap closure -- see envelope.proto's own ReplyEnvelope.echo doc
+    comment). payload is hex-encoded for argv passing (mirrors decode()'s
+    own payload_hex= output field) so arbitrary bytes (embedded NUL, the
+    full 0-255 range) survive process argv boundaries intact."""
+    r = run_harness(binary, "encode_echo_reply", str(corr_id), payload.hex())
+    assert not r.crashed, f"encode_echo_reply crashed: {r.stdout}\n{r.stderr}"
+    line = r.stdout.strip()
+    if line == "ZERO":
+        return None
+    assert line.startswith("B64 "), f"unexpected encode_echo_reply output: {line!r}"
     return base64.b64decode(line[len("B64 "):])
 
 
@@ -318,7 +337,7 @@ def env_id_request(corr_id: int) -> bytes:
 __all__ = [
     "pb_common", "pb_drivetrain", "pb_envelope", "pb_motion",
     "compile_harness", "run_harness", "decode", "parse_decode_line",
-    "encode_ok", "encode_err", "encode_id", "f32", "float_eq",
+    "encode_ok", "encode_err", "encode_id", "encode_echo_reply", "f32", "float_eq",
     "unknown_varint_field",
     "env_drive_twist", "env_drive_wheels", "env_drive_neutral",
     "build_motion_segment", "env_segment", "env_replace",

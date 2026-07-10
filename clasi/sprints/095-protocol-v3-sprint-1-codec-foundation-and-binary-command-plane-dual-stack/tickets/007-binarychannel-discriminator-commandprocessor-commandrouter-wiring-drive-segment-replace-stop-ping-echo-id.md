@@ -1,9 +1,12 @@
 ---
 id: '007'
 title: BinaryChannel + * discriminator + CommandProcessor/CommandRouter wiring (drive/segment/replace/stop/ping/echo/id)
-status: open
-use-cases: [SUC-006]
-depends-on: ['005', '006']
+status: done
+use-cases:
+- SUC-006
+depends-on:
+- '005'
+- '006'
 github-issue: ''
 issue: protocol-v3-schema-driven-binary-command-plane-protobuf.md
 completes_issue: false
@@ -84,37 +87,115 @@ text-dispatch files (in exactly two small, localized places).
 
 ## Acceptance Criteria
 
-- [ ] A binary `drive` command posts the exact `msg::DrivetrainCommand`
+- [x] A binary `drive` command posts the exact `msg::DrivetrainCommand`
       payload decoded from the wire to `bb.driveIn`, unmodified.
-- [ ] A binary `segment`/`replace` command translates the decoded
+- [x] A binary `segment`/`replace` command translates the decoded
       `msg::MotionSegment` into a `Motion::Segment` with every field
       correctly mapped (verify each of the 13 fields individually, not
       just "it compiles") and posts to `bb.segmentIn`/`bb.replaceIn`
       respectively, matching `handleMove()`'s/`handleMover()`'s posted
       shape for equivalent input.
-- [ ] A binary `stop` command posts `msg::DrivetrainCommand{NEUTRAL=BRAKE}`
+- [x] A binary `stop` command posts `msg::DrivetrainCommand{NEUTRAL=BRAKE}`
       to `bb.driveIn`, byte-identical to `handleStop()`'s own
       construction.
-- [ ] A binary `ping`/`echo`/`id` command replies inline (no Blackboard
+- [x] A binary `ping`/`echo`/`id` command replies inline (no Blackboard
       post) with information content matching its text counterpart.
-- [ ] A binary `motion`/`config`/`pose`/`otos`/`get`/`stream` command
+- [x] A binary `motion`/`config`/`pose`/`otos`/`get`/`stream` command
       replies `Error{ERR_UNIMPLEMENTED, ...}` — never crashes, never
       silently drops.
-- [ ] A malformed or out-of-range binary command (decode failure or a
+- [x] A malformed or out-of-range binary command (decode failure or a
       validation-bound violation from ticket 005) yields a typed
       `Error{code, field}` reply, never a crash, never a silent drop.
-- [ ] `CommandProcessor::process()`'s text branch (`dispatchTable()` and
+- [x] `CommandProcessor::process()`'s text branch (`dispatchTable()` and
       everything it calls) is verified UNCHANGED — diff
       `command_processor.cpp` and confirm the only edits are the new
       member/setter/one branch at the top of `process()`.
-- [ ] The full existing text-plane sim suite passes byte-for-byte
+- [x] The full existing text-plane sim suite passes byte-for-byte
       unmodified (58-test baseline, per `sprint.md`).
-- [ ] New sim tests cover: each implemented arm posting to the correct
+- [x] New sim tests cover: each implemented arm posting to the correct
       Blackboard queue with correctly-translated fields; the
       `ERR_UNIMPLEMENTED` arms; malformed/out-of-range rejection; a mixed
       text+binary session in the same test (proves dual-stack coexistence
       at the dispatch level, not just "each plane works alone").
-- [ ] `just build` (ARM) and `just build-sim` succeed.
+- [x] `just build` (ARM) and `just build-sim` succeed.
+
+## Completion Notes (2026-07-10)
+
+**Files changed** (beyond the ticket's own 3-part plan):
+- New: `source/commands/binary_channel.{h,cpp}` (M5), `tests/sim/unit/test_binary_channel.py`.
+- Text-dispatch (as scoped): `source/commands/command_processor.{h,cpp}`
+  (member+setter+branch), `source/runtime/command_router.cpp` (ctor line).
+- **`motion` (field 5) confirmed ALREADY REMOVED** by architecture-update-r1.md
+  Decision 6 before this ticket started — `CommandEnvelope::CmdKind` has no
+  `MOTION` value; the binary_channel.cpp switch correctly has no case for it
+  (matches the ticket description text's own list minus `motion`, which the
+  Description still names but Decision 6 supersedes).
+- **`system_commands.{h,cpp}`**: `deviceIdentity()` moved out of the
+  anonymous namespace (external linkage) and declared in
+  `system_commands.h`, per the ticket's own explicit "reuse it, do not
+  duplicate" instruction for the `id` arm — zero behavior change to any
+  existing caller (`handleId()`/`formatDeviceAnnouncement()` both call the
+  exact same function, now just via external rather than internal linkage).
+- **Two schema-gap closures** (protos/envelope.proto), same "cheap,
+  downstream-critical, closed not silently dropped" treatment the ticket's
+  own PING-timestamp instruction authorized, extended by analogy to a
+  second, equally real gap found during implementation:
+  1. **PING timestamp**: `Ack` gained a `uint32 t = 3` field ([ms]). Binary
+     `ping` replies `Ack{q=0,rem=0,t=Types::systemClockNow()}` — parity
+     with text PING's `OK pong t=<ms>`, per the ticket's own explicit
+     instruction (sprint 098 clock-sync dependency, Decision 6).
+  2. **ECHO reply arm**: `ReplyEnvelope.body` had NO `echo` variant at all
+     (`CommandEnvelope.cmd.echo` existed request-side only) — the ticket's
+     own text ("reply inline, echoing `env.cmd.echo.payload` back") is
+     unsatisfiable against the schema as originally written. Added
+     `Echo echo = 8;` to `ReplyEnvelope.body`, reusing the existing `Echo`
+     message (no new type) — the same "reuse the request-side message on
+     the reply side" move Decision 4 already made for `DeviceId`/`id`.
+  Both regenerated via `gen_messages.py`/`gen_pb2.py`; both envelopes stay
+  at 168B total (well under the 186B cap — see wire.h's own updated
+  `kMaxEncodedSize` comment). Ticket 006's differential suite was extended
+  (not just kept passing) to cover both new fields byte-for-byte against
+  `google.protobuf`: `wire_differential_harness.cpp` gained an optional 5th
+  `encode_ok` argv (`t`, backward-compatible default 0) and a new
+  `encode_echo_reply` verb; `test_wire_differential.py` gained `t`-bearing
+  `Ack` cases and a full `test_direction_b_echo_reply` (+6 tests total).
+- **Test-support additions** (`tests/_infra/sim/`, `source/runtime/queue.h`):
+  to verify all 13 `Motion::Segment` fields INDIVIDUALLY (not just
+  behaviorally) per this ticket's own acceptance criterion, added
+  `Mailbox<T>::peek()` (non-destructive read, mirrors `WorkQueue::peek()`'s
+  existing precedent), and three `sim_api.cpp` test-only C ABI entry points:
+  `sim_route_no_tick()` (routes one command without the trailing
+  `MainLoop::tick()` sim_command_on() replays, so a posted segment can be
+  peeked before Drivetrain drains it), `sim_peek_segment_in()`,
+  `sim_peek_replace_in()`. Wrapped in `firmware.py` as
+  `Sim.route_no_tick()`/`peek_segment_in()`/`peek_replace_in()`.
+- **`corr_id` echoing bug found and fixed during test-writing**: the first
+  draft of `binary_channel.cpp` never set `ReplyEnvelope.corr_id` on any
+  reply path (violates envelope.proto's own documented contract — "corr_id
+  is echoed back... so a pipelined client can correlate replies out of
+  order"). Caught by `test_binary_channel.py`'s own `corr_id` assertions
+  before this ticket was called done; fixed by threading `env.corr_id`
+  through every `sendAck`/`sendError`/inline-reply call site.
+
+**ARM flash delta** (measured via `git stash` isolating this ticket's
+ARM-affecting files, rebuilding both sides with `just build`):
+  - Before: `FLASH: 311868 B / 364 KB = 83.67%` (matches architecture-
+    update.md's stated baseline), `RAM: 120768 B / 122816 B = 98.33%`.
+  - After: `FLASH: 319988 B / 364 KB = 85.85%`, `RAM: 120768 B / 122816 B
+    = 98.33%` (unchanged, per `.clasi/knowledge` — never a regression
+    signal on its own).
+  - **Delta: +8120 B (+2.18 percentage points)** — this is `wire.cpp`'s/
+    `wire_runtime.cpp`'s field tables + `BinaryChannel` + base64/envelope
+    glue getting their first live caller and surviving `--gc-sections`, per
+    the ticket's own prediction. Comfortably under the architecture doc's
+    budgeted +12-15 KB estimate.
+
+**Verification**: `just build` (ARM, 85.85% flash) + `just build-sim`
+succeed; `uv run python -m pytest tests/sim/unit/test_binary_channel.py -q`
+— 22 passed; `uv run python -m pytest tests/sim -q` — 469 passed (441
+baseline + 22 new binary-channel tests + 6 differential-suite additions for
+the two schema-gap closures). Text-plane diff confirmed minimal (see diffs
+above/git history for `command_processor.{h,cpp}`, `command_router.cpp`).
 
 ## Testing
 

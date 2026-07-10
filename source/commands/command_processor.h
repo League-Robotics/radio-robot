@@ -41,6 +41,17 @@ public:
     // Optional — if unset, ForceReply::SERIAL uses the incoming replyFn/ctx.
     void setSerialReply(ReplyFn fn, void* ctx) { _serialFn = fn; _serialCtx = ctx; }
 
+    // Wires the opaque context BinaryChannel::handle() reaches the
+    // Blackboard through (095-007, M6 Dispatcher Integration,
+    // architecture-update.md Decision 1). Set once, at construction time,
+    // by Rt::CommandRouter's constructor (`processor_.setBinaryContext(this)`)
+    // -- mirrors setSerialReply()'s own "wire it once after construction"
+    // shape. CommandProcessor never dereferences this pointer itself; it is
+    // forwarded verbatim to BinaryChannel::handle(), which casts it back to
+    // Rt::CommandRouter* exactly the way every commands/*.cpp handler
+    // already casts its own handlerCtx.
+    void setBinaryContext(void* ctx) { _binaryCtx = ctx; }
+
     // Returns true if the most recently parsed command's descriptor is
     // flagged CMD_MOTION_WATCHDOG (keepalive '+' or a motion verb). Callers
     // (LoopScheduler::runCommsIn/run_test, the sim's sim_command()) use this
@@ -177,6 +188,9 @@ private:
     std::vector<CommandDescriptor> _cmds;
     ReplyFn                        _serialFn  = nullptr;
     void*                          _serialCtx = nullptr;
+    // Opaque context BinaryChannel::handle() reaches the Blackboard
+    // through — see setBinaryContext()'s own doc comment above.
+    void*                          _binaryCtx = nullptr;
     // Flags of the most recently successfully-parsed command's descriptor.
     // Set in dispatchTable() right after a successful parse (schema or
     // parseFn), before handlerFn is called. See lastCommandResetsWatchdog().

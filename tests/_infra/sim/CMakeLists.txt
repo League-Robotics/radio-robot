@@ -48,15 +48,19 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #   subsystems/pose_estimator.cpp           -- 082-002/082-003's PoseEstimator
 #   estimation/ekf_tiny.cpp                 -- 082-001's EkfTiny (PoseEstimator's EKF core)
 #   telemetry/tlm_frame.cpp                 -- 082-004's pure TLM frame formatter
-#   commands/{arg_parse,command_processor,config_commands,dev_commands,
-#             motion_commands,otos_commands,pose_commands,system_commands,
-#             telemetry_commands}.cpp -- the command dispatch + DEV +
+#   commands/{arg_parse,binary_channel,command_processor,config_commands,
+#             dev_commands,motion_commands,otos_commands,pose_commands,
+#             system_commands,telemetry_commands}.cpp -- the command
+#                                               dispatch + DEV +
 #                                               motion (S/T/D/STOP, 084-002)
 #                                               + telemetry (STREAM/SNAP) +
 #                                               config (SET/GET, 084-006) +
 #                                               pose-set (SI/ZERO, 084-007) +
 #                                               OTOS (OI/OZ/OR/OP/OV/OL/OA,
-#                                               084-008) families
+#                                               084-008) families + the
+#                                               binary command plane's
+#                                               oneof-arm dispatcher
+#                                               (095-007, M5 BinaryChannel)
 #   runtime/main_loop.cpp                   -- 087-007's real cyclic
 #                                               executive (Rt::MainLoop --
 #                                               mandatory tick -> commit,
@@ -87,16 +91,15 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #                                               delimited/base64).
 #   messages/wire.cpp                       -- 095-005's GENERATED FieldDesc
 #                                               tables + msg::wire::decode()/
-#                                               encode() (M4). Listed
-#                                               explicitly (not yet called by
-#                                               any other TU in this build --
-#                                               ticket 007 wires BinaryChannel
-#                                               up to it) so `just build-sim`
-#                                               proves it compiles under this
-#                                               build's own flags, the same
-#                                               TU-anchor treatment
-#                                               layout_checks.cpp above
-#                                               already gets.
+#                                               encode() (M4). Its first live
+#                                               caller is commands/
+#                                               binary_channel.cpp (095-007,
+#                                               M5) -- listed explicitly here
+#                                               (as it was before ticket 007
+#                                               wired it up) so `just
+#                                               build-sim` keeps proving it
+#                                               compiles under this build's
+#                                               own flags regardless.
 #   sim_api.cpp                             -- this ticket's C ABI
 #
 # Absent (deliberately, per this ticket's acceptance criteria):
@@ -135,6 +138,7 @@ set(FIRMWARE_SOURCES
     "${SOURCE_DIR}/estimation/ekf_tiny.cpp"
     "${SOURCE_DIR}/telemetry/tlm_frame.cpp"
     "${SOURCE_DIR}/commands/arg_parse.cpp"
+    "${SOURCE_DIR}/commands/binary_channel.cpp"
     "${SOURCE_DIR}/commands/command_processor.cpp"
     "${SOURCE_DIR}/commands/config_commands.cpp"
     "${SOURCE_DIR}/commands/dev_commands.cpp"

@@ -78,9 +78,20 @@ enum ErrCode {
 // MOVER acks exactly (motion_commands.cpp handleMove/handleMover) -- a
 // streaming teleop client reads q (queue depth) / rem (remaining
 // translation, mm) off this ack the same way it does off the text OK reply.
+//
+// t (095-007, schema-gap closure -- same "cheap, downstream-critical,
+// closed rather than silently dropped" treatment Decision 4 gave the `id`
+// request arm): robot-clock timestamp, set ONLY by BinaryChannel's `ping`
+// reply -- mirrors text PING's `OK pong t=<ms>` reply exactly (Types::
+// systemClockNow()). Every other Ack producer (drive/segment/replace/stop)
+// leaves it at its zero default. Sprint 098's pose-estimation work
+// (Decision 6, camera-fix clock-sync) depends on a binary PING carrying a
+// timestamp for parity with the text plane -- ticket 007's own completion
+// notes.
 message Ack {
   uint32 q   = 1;
   float  rem = 2;  // [mm]
+  uint32 t   = 3;  // [ms]
 }
 
 // field: the field number that failed validation (0 if not field-specific,
@@ -252,11 +263,20 @@ message CommandEnvelope {
 message ReplyEnvelope {
   uint32 corr_id = 1;
   oneof body {
-    Ack             ok  = 2;
-    Error           err = 3;
-    Telemetry       tlm = 4;   // declared only, 096
-    ConfigSnapshot  cfg = 5;   // declared only, 096
-    EventNotify     evt = 6;   // declared only, 096/097 (see EventNotify's own comment)
-    DeviceId        id  = 7;
+    Ack             ok   = 2;
+    Error           err  = 3;
+    Telemetry       tlm  = 4;   // declared only, 096
+    ConfigSnapshot  cfg  = 5;   // declared only, 096
+    EventNotify     evt  = 6;   // declared only, 096/097 (see EventNotify's own comment)
+    DeviceId        id   = 7;
+    // echo (095-007, schema-gap closure): the issue's own envelope sketch
+    // declared CommandEnvelope.cmd.echo (field 10) but never gave
+    // ReplyEnvelope.body a matching arm to carry the payload back on --
+    // handleEcho()'s text behavior ("OK echo <payload>") echoes the
+    // payload verbatim, so a binary ECHO reply needs somewhere to put it.
+    // Reuses the EXISTING Echo leaf message (no new message type) on a NEW
+    // oneof arm, the same "reuse the request-side message on the reply
+    // side" move Decision 4 already made for DeviceId/id.
+    Echo            echo = 8;
   }
 }

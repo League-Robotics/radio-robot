@@ -162,6 +162,56 @@ class Sim:
             return ""
         return buf.raw[:n].decode(errors="replace")
 
+    def route_no_tick(self, line: str, channel: int = CHANNEL_SERIAL) -> str:
+        """Like command_on(), but skips the trailing Rt::MainLoop::tick()
+        replay (095-007, test-only -- sim_route_no_tick()). Lets a test peek
+        bb.segmentIn/bb.replaceIn's raw just-posted Motion::Segment (via
+        peek_segment_in()/peek_replace_in() below) BEFORE Drivetrain::tick()
+        drains it into its own ring_/executor_."""
+        buf = ctypes.create_string_buffer(_REPLY_BUF_SIZE)
+        n = self._lib.sim_route_no_tick(self._h, line.encode(), ctypes.c_int(channel),
+                                         buf, _REPLY_BUF_SIZE)
+        if n <= 0:
+            return ""
+        return buf.raw[:n].decode(errors="replace")
+
+    _SEGMENT_FIELDS = (
+        "distance", "direction", "final_heading", "speed_max", "accel_max", "jerk_max",
+        "yaw_rate_max", "yaw_accel_max", "yaw_jerk_max", "time", "v", "omega",
+    )
+
+    def peek_segment_in(self, idx: int = 0) -> dict | None:
+        """Non-destructive read of bb.segmentIn[idx] (095-007, test-only --
+        sim_peek_segment_in()). Returns a dict keyed by Motion::Segment's
+        own field names (Motion::Segment's OWN spelling, e.g. `final_heading`
+        not `finalHeading`, to match the wire message's field names 1:1 for
+        a direct field-by-field translation check) plus `stream`, or None if
+        no segment is queued at that position."""
+        out12 = (ctypes.c_float * 12)()
+        stream_out = ctypes.c_int()
+        present_out = ctypes.c_int()
+        self._lib.sim_peek_segment_in(self._h, ctypes.c_int(idx), out12,
+                                       ctypes.byref(stream_out), ctypes.byref(present_out))
+        if not present_out.value:
+            return None
+        result = dict(zip(self._SEGMENT_FIELDS, (float(v) for v in out12)))
+        result["stream"] = bool(stream_out.value)
+        return result
+
+    def peek_replace_in(self) -> dict | None:
+        """Non-destructive read of bb.replaceIn (095-007, test-only --
+        sim_peek_replace_in()). Same shape as peek_segment_in()."""
+        out12 = (ctypes.c_float * 12)()
+        stream_out = ctypes.c_int()
+        present_out = ctypes.c_int()
+        self._lib.sim_peek_replace_in(self._h, out12,
+                                       ctypes.byref(stream_out), ctypes.byref(present_out))
+        if not present_out.value:
+            return None
+        result = dict(zip(self._SEGMENT_FIELDS, (float(v) for v in out12)))
+        result["stream"] = bool(stream_out.value)
+        return result
+
     def reply_store_len(self, channel: int) -> int:
         """Read a channel's CURRENT reply-store length without draining or
         routing anything (088-006, test-only -- sim_get_reply_store_len()).
@@ -348,6 +398,24 @@ class Sim:
         # at one channel's ReplyStore length.
         lib.sim_get_reply_store_len.argtypes = [ctypes.c_void_p, ctypes.c_int]
         lib.sim_get_reply_store_len.restype = ctypes.c_int
+
+        # sim_route_no_tick (095-007, test-only) -- sim_command_on()'s
+        # argtypes exactly (same signature, different behavior).
+        lib.sim_route_no_tick.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+        lib.sim_route_no_tick.restype = ctypes.c_int
+
+        # sim_peek_segment_in / sim_peek_replace_in (095-007, test-only) --
+        # non-destructive Motion::Segment reads.
+        lib.sim_peek_segment_in.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_float),
+            ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)]
+        lib.sim_peek_segment_in.restype = None
+
+        lib.sim_peek_replace_in.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_float),
+            ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)]
+        lib.sim_peek_replace_in.restype = None
 
         lib.sim_get_async_evts.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
         lib.sim_get_async_evts.restype = ctypes.c_int

@@ -89,6 +89,28 @@ std::string toHex(const uint8_t* data, size_t len) {
   return out;
 }
 
+// fromHex -- inverse of toHex() above (095-007's encode_echo_reply verb):
+// decodes a lowercase-hex argv token (Python's bytes.hex()) into raw bytes,
+// clamped to `cap`. Malformed/odd-length input yields 0 bytes (this is a
+// test-harness convenience, not a wire-facing decoder -- the differential
+// suite's own Python side always emits well-formed hex).
+size_t fromHex(const std::string& hex, uint8_t* out, size_t cap) {
+  auto nibble = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+  size_t n = 0;
+  for (size_t i = 0; i + 1 < hex.size(); i += 2) {
+    int hi = nibble(hex[i]);
+    int lo = nibble(hex[i + 1]);
+    if (hi < 0 || lo < 0 || n >= cap) break;
+    out[n++] = static_cast<uint8_t>((hi << 4) | lo);
+  }
+  return n;
+}
+
 const char* errCodeName(msg::ErrCode c) {
   switch (c) {
     case msg::ErrCode::ERR_NONE: return "ERR_NONE";
@@ -269,6 +291,11 @@ int cmdEncodeOk(int argc, char** argv) {
   reply.body_kind = msg::ReplyEnvelope::BodyKind::OK;
   reply.body.ok.q = static_cast<uint32_t>(std::strtoul(argv[3], nullptr, 10));
   reply.body.ok.rem = std::strtof(argv[4], nullptr);
+  // t (095-007, Ack schema-gap closure): optional 5th argv, defaulting to 0
+  // -- every pre-existing call (argc==5) keeps building the identical
+  // Ack{q,rem,t=0} it always has; the differential suite's new t-coverage
+  // cases pass argv[5] explicitly.
+  reply.body.ok.t = (argc >= 6) ? static_cast<uint32_t>(std::strtoul(argv[5], nullptr, 10)) : 0;
   printEncodedOrZero(reply);
   return 0;
 }
@@ -304,6 +331,24 @@ int cmdEncodeId(int argc, char** argv) {
   return 0;
 }
 
+// encode_echo_reply <corr_id> <hex payload> (095-007, ReplyEnvelope schema-
+// gap closure -- see envelope.proto's own ReplyEnvelope.echo doc comment).
+// Builds ReplyEnvelope{echo=Echo{payload}}; payload arrives hex-encoded
+// (Python's bytes.hex()) so arbitrary byte values survive argv.
+int cmdEncodeEchoReply(int argc, char** argv) {
+  if (argc < 4) {
+    std::printf("USAGE_ERROR\n");
+    return 1;
+  }
+  msg::ReplyEnvelope reply;
+  reply.corr_id = static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10));
+  reply.body_kind = msg::ReplyEnvelope::BodyKind::ECHO;
+  reply.body.echo.payload_count = static_cast<uint8_t>(
+      fromHex(argv[3], reply.body.echo.payload_, sizeof(reply.body.echo.payload_)));
+  printEncodedOrZero(reply);
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -322,6 +367,7 @@ int main(int argc, char** argv) {
   if (op == "encode_ok") return cmdEncodeOk(argc, argv);
   if (op == "encode_err") return cmdEncodeErr(argc, argv);
   if (op == "encode_id") return cmdEncodeId(argc, argv);
+  if (op == "encode_echo_reply") return cmdEncodeEchoReply(argc, argv);
 
   std::printf("USAGE_ERROR\n");
   return 1;

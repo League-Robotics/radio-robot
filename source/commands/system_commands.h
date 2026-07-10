@@ -32,6 +32,14 @@
 // main.cpp's boot-time announcement and handleHello call it, so the two
 // call sites can never format the banner differently (architecture-update.md
 // Decision 3: a shared free function here, not a revived Announcer class).
+//
+// 095-007: deviceIdentity() gains external linkage (moved out of
+// system_commands.cpp's anonymous namespace, declared here) so
+// BinaryChannel's binary `id` reply (source/commands/binary_channel.cpp)
+// can source model/name/serial/fw/proto from the SAME identity pair
+// handleId()/formatDeviceAnnouncement() already use, instead of duplicating
+// the #ifdef HOST_BUILD branch a second time (architecture-update.md
+// Decision 4). Zero behavior change to any existing caller.
 // ---------------------------------------------------------------------------
 
 // Formats the `DEVICE:NEZHA2:robot:<name>:<serial>` identity banner into
@@ -43,6 +51,14 @@
 // semantics), truncates silently if buf is too small. Called once by
 // main.cpp at boot (both channels) and once per HELLO request.
 int formatDeviceAnnouncement(char* buf, int size);
+
+// The raw identity pair formatDeviceAnnouncement()/handleId() both format
+// from: *name/*serial are exactly microbit_friendly_name()/
+// microbit_serial_number() on-target, or the fixed "HOST-SIM"/0 placeholder
+// under HOST_BUILD. Exposed (095-007) so BinaryChannel's binary `id`
+// handler can build a msg::DeviceId from the SAME source, never a second
+// #ifdef HOST_BUILD branch.
+void deviceIdentity(const char** name, uint32_t* serial);
 
 // Returns the liveness command table: PING, VER, HELP, ECHO, ID, HELLO.
 // HELP's descriptor is bound to `router` so it can enumerate the live table

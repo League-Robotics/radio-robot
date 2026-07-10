@@ -50,7 +50,7 @@ struct Result {
 // 186-byte budget fails one of the two static_asserts below at build time,
 // not at runtime on a truncated wire line.
 //   CommandEnvelope: drive=56B, segment=64B, replace=64B, config=2B, pose=17B, otos=19B, ping=2B, echo=68B, get=8B, stream=10B, stop=2B, id=162B (worst=id=162B) + non-oneof=6B => total=168B
-//   ReplyEnvelope: ok=13B, err=10B, tlm=2B, cfg=2B, evt=2B, id=162B (worst=id=162B) + non-oneof=6B => total=168B
+//   ReplyEnvelope: ok=19B, err=10B, tlm=2B, cfg=2B, evt=2B, id=162B, echo=68B (worst=id=162B) + non-oneof=6B => total=168B
 constexpr uint16_t kCommandEnvelopeMaxEncodedSize = 168;
 constexpr uint16_t kReplyEnvelopeMaxEncodedSize = 168;
 static_assert(kCommandEnvelopeMaxEncodedSize <= 186,

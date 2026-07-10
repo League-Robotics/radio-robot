@@ -26,6 +26,7 @@ enum class ErrCode : uint8_t {
 struct Ack {
     uint32_t q = 0;
     float rem = 0.0f;
+    uint32_t t = 0;
 
     // --- array / optional-string accessors ---
 };
@@ -158,6 +159,7 @@ struct ReplyEnvelope {
         CFG = 4,
         EVT = 5,
         ID = 6,
+        ECHO = 7,
     };
     BodyKind body_kind = BodyKind::NONE;
     union {
@@ -167,6 +169,7 @@ struct ReplyEnvelope {
         ConfigSnapshot cfg;
         EventNotify evt;
         DeviceId id;
+        Echo echo;
     } body = {};
 
     uint32_t corr_id = 0;
