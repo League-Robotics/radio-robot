@@ -349,6 +349,45 @@ def test_move_streaming_chains_at_speed(sim):
     assert active == 0
 
 
+def test_mover_deadman_velocity(sim):
+    """MOVER (deadman-velocity teleop, OOP 2026-07-09): time-bounded
+    velocity segments REPLACE the in-flight motion, replanned from the
+    current velocity. While refreshed before each t= window expires the
+    robot cruises at the commanded velocity; when refreshes stop, the
+    deadman fires and it decels gracefully (no reverse)."""
+    r = sim.command("MOVER 0 0 0 t=800 v=250 w=0")
+    assert r.strip().startswith("OK mover t=800 v=250"), r
+    sim.tick_for(500)
+    vel_l, vel_r = sim.vel()
+    assert (vel_l + vel_r) / 2.0 > 180.0, f"never reached commanded velocity ({vel_l},{vel_r})"
+
+    # Keep refreshing: velocity sustained well past the first window.
+    for _ in range(4):
+        sim.command("MOVER 0 0 0 t=800 v=250 w=0")
+        sim.tick_for(400)
+        vel_l, vel_r = sim.vel()
+        assert (vel_l + vel_r) / 2.0 > 180.0, "velocity sagged between refreshes"
+
+    # Stop refreshing: deadman fires within t= + decel; graceful, no reverse.
+    went_negative = False
+    for _ in range(120):   # 2.9s
+        sim.tick_for(24)
+        vel_l, vel_r = sim.vel()
+        if (vel_l + vel_r) / 2.0 < -8.0:
+            went_negative = True
+    assert not went_negative, "deadman decel reversed direction"
+    vel_l, vel_r = sim.vel()
+    assert abs(vel_l) < 10.0 and abs(vel_r) < 10.0, "deadman never stopped the robot"
+
+    _, _, _, _, active = _parse_tlm(sim.command("TLM"))
+    assert active == 0
+
+
+def test_mover_rejects_time_plus_distance(sim):
+    reply = sim.command("MOVER 100 0 0 t=500 v=200")
+    assert reply.strip() == "ERR badarg t+distance"
+
+
 def test_pivot_completes_promptly_single_peaked(sim):
     """REGRESSION (multi-hump pivot + STOP_TIME stall, 2026-07-09): an
     in-place turn must execute as ONE velocity peak (no decaying re-solve

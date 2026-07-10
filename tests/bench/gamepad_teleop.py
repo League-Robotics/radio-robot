@@ -41,81 +41,61 @@ from robot_radio.io.serial_conn import SerialConnection
 MAX_SPEED = 400.0        # [mm/s] stick fully forward
 MAX_YAW_RATE = 120.0     # [deg/s] stick fully sideways
 DEADZONE = 0.12          # stick fraction ignored around center
-PERIOD = 0.200           # [s] send cadence -- one message per ~200ms (5 msg/s,
-                         #     well inside the radio's ~12 msg/s budget)
-REM_TARGET_S = 0.400     # [s] buffer depth held in the plan, as TIME of motion
-                         #     at the current stick speed. Deep enough that the
-                         #     plan CRUISES between messages (a shallow buffer
-                         #     puts the to-rest tail mid-stream = 5Hz pulsing);
-                         #     also the stick-release overrun bound.
-REM_GAIN = 0.8           # fraction of the buffer error corrected per message
+PERIOD = 0.400           # [s] send cadence (2.5 msg/s -- trivial radio load)
+DEADMAN_MS = 600         # [ms] each MOVER's authority window: motion continues
+                         #      at most this long after the last message, so a
+                         #      dropped message or released stick stops the
+                         #      robot within ~DEADMAN_MS.
 QUEUE_HARD_MAX = 5       # backlog panic threshold -> skip sends until it drains
 
-_MOVE_ACK = re.compile(r"OK move .*q=(\d+) rem=(-?\d+)")
+_MOVER_ACK = re.compile(r"OK mover .*q=(\d+)")
 _ERR_FULL = re.compile(r"ERR full")
 
 
 class Teleop:
-    """Fire-and-forget MOVE streamer. Sends are send_fast() (never blocking
-    on the reply); acks are collected asynchronously by on_recv() off the
-    connection's reader thread.
-
-    Control law (anti-pulsing, 2026-07-09): fixed ~200ms cadence; each
-    message carries (a) `v=` -- the STICK speed as the segment's speed
-    ceiling, so the plan cruises at what the driver asked instead of running
-    each buffer time-optimally (surge/brake), and (b) a distance that covers
-    one period's consumption PLUS a closed-loop correction holding the
-    plan's remaining distance (`rem=` from the ack) at ~REM_TARGET_S of
-    motion -- deep enough that the to-rest decel tail never starts while
-    the stick is deflected. Release the stick -> nothing more is sent -> the
-    plan's own tail is the graceful stop (~REM_TARGET_S of overrun)."""
+    """Deadman-velocity teleop (stakeholder design, 2026-07-09): every
+    PERIOD, send `MOVER 0 0 0 t=DEADMAN_MS v=<signed> w=<signed>` -- a
+    REPLACE-semantics command. The firmware replans from its CURRENT
+    velocity toward the stick's velocity every time one arrives (no queue to
+    manage, no buffer bookkeeping); if messages stop (stick released, link
+    dropped), the last segment's t= window expires and the robot decels
+    gracefully. Sends are fire-and-forget (send_fast); acks are collected
+    asynchronously for the status line."""
 
     def __init__(self):
         self.conn = None      # set after SerialConnection(on_recv=self.on_recv)
         self.drive_axis = 1   # left stick Y (see --probe if your mapping differs)
         self.turn_axis = 0    # left stick X
-        self.period = PERIOD  # [s] fixed cadence (kept as attr for status/selftest)
+        self.period = PERIOD  # [s] fixed cadence (attr kept for status/selftest)
         self.sent = 0
         self.acked = 0
         self.full = 0
         self.q_last = 0
-        self.rem = 0.0        # [mm] plan's remaining translation, from the ack
+        self._was_driving = False
 
     def on_recv(self, line):
-        m = _MOVE_ACK.search(line)
+        m = _MOVER_ACK.search(line)
         if m:
             self.acked += 1
             self.q_last = int(m.group(1))
-            self.rem = float(m.group(2))
         elif _ERR_FULL.search(line):
             self.full += 1
 
     def send_segment(self, drive, turn):
-        """One stick sample -> one MOVE message. drive/turn are [-1, 1].
+        """One stick sample -> one MOVER message. drive/turn are [-1, 1].
         Returns True if motion commanded."""
         if abs(drive) < DEADZONE and abs(turn) < DEADZONE:
-            self.rem = 0.0   # stream over; next press re-primes the buffer
-            return False     # centered: send nothing; plan tail = graceful stop
-        if self.q_last >= QUEUE_HARD_MAX:
-            return False     # backlog panic: skip this slot, let it drain
-
-        speed = abs(drive) * MAX_SPEED                     # [mm/s] stick speed
-        yaw = abs(turn) * MAX_YAW_RATE                     # [deg/s]
-        # Distance: one period of consumption + buffer-depth correction.
-        target_rem = speed * REM_TARGET_S                  # [mm]
-        correction = REM_GAIN * (target_rem - self.rem)    # [mm]
-        magnitude = max(0.0, speed * self.period + correction)
-        distance = int(round(magnitude if drive > 0 else -magnitude))  # [mm]
-        heading_cdeg = int(round(turn * MAX_YAW_RATE * self.period * 100))  # [cdeg]
-        if distance == 0 and heading_cdeg == 0:
+            if self._was_driving:
+                # Snappier stop than waiting out the deadman: replace with a
+                # zero-velocity, short-window MOVER once on release.
+                self.conn.send_fast("MOVER 0 0 0 t=50 v=0 w=0")
+                self._was_driving = False
             return False
+        self._was_driving = True
+        v = int(round(drive * MAX_SPEED))                    # [mm/s] signed
+        w = int(round(turn * MAX_YAW_RATE * 100))            # [cdeg/s] signed
         self.sent += 1
-        # s=1 streaming merge; v=/w= cap the plan at the STICK's own speed so
-        # it cruises there (segments without caps run time-optimally: surge).
-        v_cap = max(20, int(round(speed)))                 # [mm/s]
-        w_cap = max(500, int(round(yaw * 100)))            # [cdeg/s]
-        self.conn.send_fast(
-            f"MOVE {distance} 0 {heading_cdeg} v={v_cap} w={w_cap} s=1")
+        self.conn.send_fast(f"MOVER 0 0 0 t={DEADMAN_MS} v={v} w={w}")
         return True
 
     def stop(self):
@@ -123,7 +103,7 @@ class Teleop:
 
     def status(self):
         lost = self.sent - self.acked - self.full
-        return (f"period={self.period*1000:5.0f}ms q={self.q_last} rem={self.rem:.0f}mm "
+        return (f"period={self.period*1000:5.0f}ms q={self.q_last} "
                 f"sent={self.sent} acked={self.acked} full={self.full} lost~={lost}")
 
 

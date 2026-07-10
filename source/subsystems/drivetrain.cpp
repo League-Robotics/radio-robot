@@ -202,6 +202,7 @@ void Drivetrain::governRatio(float* targetLeft, float* targetRight,
 
 void Drivetrain::tick(uint32_t now,
                        Rt::WorkQueue<Motion::Segment, 8>& segmentIn,
+                       Rt::Mailbox<Motion::Segment>& replaceIn,
                        Rt::WorkQueue<msg::DrivetrainCommand, 8>& driveIn) {
     // 1. driveIn drained FIRST -- one command per tick (FIFO pop, matching
     // this class's pre-094 drain cadence), applied via the escape-hatch
@@ -209,6 +210,17 @@ void Drivetrain::tick(uint32_t now,
     bool preempted = false;
     if (!driveIn.empty()) {
         preempted = dispatchEscapeHatch(driveIn.take(), now);
+    }
+
+    // 1b. replaceIn (MOVER): REPLACE whatever motion is in flight --
+    // latest-wins by construction (a Mailbox), replanned from the current
+    // velocity by the executor. Clears the ring: replace semantics
+    // supersede anything queued.
+    if (!preempted && !replaceIn.empty()) {
+        Motion::Segment seg = replaceIn.take();
+        clearRing();
+        executor_.replaceStream(seg, now, config_.trackwidth);
+        segmentMode_ = true;
     }
 
     // 2. Otherwise, drain segmentIn IN FULL into ring_ this tick -- queuing

@@ -136,13 +136,17 @@ msg::DrivetrainCommand neutralCommand() {
 // starting from `*now`, mirroring the bare loop's own ordering (hardware
 // FIRST, so a setpoint staged last pass flushes this pass -- see
 // main_loop.cpp/main.cpp). Advances `*now` in place.
+// Shared REPLACE mailbox (MOVER) -- unused by these scenarios, but the
+// tick() signature requires it (mirrors bb.replaceIn).
+Rt::Mailbox<Motion::Segment> g_replaceIn;
+
 void runPasses(Subsystems::SimHardware& hardware, Subsystems::Drivetrain& dt,
               Rt::WorkQueue<Motion::Segment, 8>& segmentIn,
               Rt::WorkQueue<msg::DrivetrainCommand, 8>& driveIn, uint32_t* now, int n) {
   for (int i = 0; i < n; ++i) {
     *now += 20;
     hardware.tick(*now);
-    dt.tick(*now, segmentIn, driveIn);
+    dt.tick(*now, segmentIn, g_replaceIn, driveIn);
   }
 }
 
@@ -252,7 +256,7 @@ void scenarioStopMidSegmentGracefulDecelNoReverseCreep() {
   for (int i = 0; i < 250; ++i) {   // up to 5s to settle
     now += 20;
     hardware.tick(now);
-    dt.tick(now, segmentIn, driveIn);
+    dt.tick(now, segmentIn, g_replaceIn, driveIn);
     msg::DrivetrainState s = dt.state();
     float v = (s.vel()[0] + s.vel()[1]) * 0.5f;
     if (v < minVel) minVel = v;
@@ -323,7 +327,7 @@ void scenarioStagingOnlyNoI2CWriteUntilExplicitHardwareTick() {
   // NezhaMotor::setVelocity() only writes mode_/velocityTarget_, per
   // motor.h/nezha_motor.cpp's own contract). This must issue NO bus
   // transaction of any kind.
-  dt.tick(1000, segmentIn, driveIn);
+  dt.tick(1000, segmentIn, g_replaceIn, driveIn);
   checkUintEq(bus.txnCount(kAddr7), before,
               "Drivetrain::tick() (stage-only) issued ZERO I2C transactions");
 

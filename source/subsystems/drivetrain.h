@@ -205,8 +205,12 @@ class Drivetrain {
   // and do their own out-of-range clamping (each concrete owner's own doc
   // comment). The range assert below is kept as a defensive guard against a
   // misconfigured (out-of-range) bound index.
+  // (MOVER, OOP 2026-07-09) replaceIn is drained between the escape hatch
+  // and segmentIn: a replace supersedes the ring and replans from the
+  // current velocity (SegmentExecutor::replaceStream).
   void tick(uint32_t now,
             Rt::WorkQueue<Motion::Segment, 8>& segmentIn,
+            Rt::Mailbox<Motion::Segment>& replaceIn,
             Rt::WorkQueue<msg::DrivetrainCommand, 8>& driveIn);
 
   // Assembled from getters. enc_[]/vel_[] are sourced from

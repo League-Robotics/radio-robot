@@ -194,6 +194,13 @@ struct Blackboard {
   // drop all but the last. Drained by Subsystems::Drivetrain::tick() into
   // its own internal ring_ every pass (see drivetrain.h).
   WorkQueue<Motion::Segment, 8> segmentIn;
+  // replaceIn (MOVER, OOP 2026-07-09): the REPLACE-semantics segment slot --
+  // a latest-wins Mailbox ON PURPOSE, the exact dual of segmentIn's
+  // no-dropped-commands WorkQueue: a joystick's deadman-velocity command
+  // stream WANTS "only the newest matters" (two MOVERs in one pass = the
+  // second replaces the first). Drained by Drivetrain::tick() ahead of
+  // segmentIn; the executor replans from its CURRENT velocity.
+  Mailbox<Motion::Segment> replaceIn;
   WorkQueue<ConfigDelta, 16> configIn;        // router -> Configurator
   WorkQueue<PoseResetCommand, 4> poseResetIn;  // router -> PoseEstimator
   Mailbox<msg::SetPose> otosSetPoseIn;        // SI re-anchor -> odometer

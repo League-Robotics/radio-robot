@@ -101,6 +101,7 @@ void SegmentExecutor::start(const Segment& segment, uint32_t now, float trackwid
   baselineCaptured_ = false;
   forceStopArmed_ = false;
   hasPending_ = false;   // a fresh start abandons any stale merge slot
+  velocityMode_ = false;
   currentStream_ = segment.stream;
 
   if (currentStream_) {
@@ -136,6 +137,74 @@ bool SegmentExecutor::offerNext(const Segment& segment) {
   pending_ = segment;
   hasPending_ = true;
   return true;
+}
+
+void SegmentExecutor::replaceStream(const Segment& segment, uint32_t now,
+                                    float trackwidth) {
+  trackwidth_ = trackwidth;
+  arcScale_ = trackwidth_ * 0.5f;
+  hasPending_ = false;     // replace semantics: anything pending is superseded
+  forceStopArmed_ = false;
+  stopping_ = false;
+  currentStream_ = true;
+
+  msg::PlannerConfig linCfg = effectiveLinearConfig(segment);
+  msg::PlannerConfig rotCfg = effectiveRotationalConfig(segment);
+  linear_.configure(linCfg, /*isRotational=*/false);
+  rotational_.configure(rotCfg, /*isRotational=*/true);
+  linearCeiling_ = linCfg.v_body_max;
+  rotationalCeiling_ = rotCfg.yaw_rate_max;
+
+  if (segment.time > 0.0f) {
+    // Deadman-velocity mode: velocity control toward the SIGNED targets,
+    // seeded from each channel's CURRENT state (solveToVelocity's own
+    // contract) -- this IS "replan from the current velocity". No encoder
+    // stops; the deadline is the only terminal, and a replacement arriving
+    // before it simply re-solves (the deadman keeps getting re-primed).
+    velocityMode_ = true;
+    float vCeil = fabsf(segment.v) > 1.0f ? fabsf(segment.v) : 1.0f;
+    float wCeil = fabsf(segment.omega) > 1e-3f ? fabsf(segment.omega) : 1e-3f;
+    linear_.solveToVelocity(segment.v, vCeil);
+    rotational_.solveToVelocity(segment.omega, wCeil);
+    linearSolveMs_ = now;
+    rotationalSolveMs_ = now;
+    velDeadline_ = now + static_cast<uint32_t>(segment.time);
+    stopsCount_ = 0;   // no encoder stops in velocity mode
+    linearTarget_ = 0.0f;   // meaningless in velocity mode (remainingLinear -> 0-ish)
+    rotationalTarget_ = 0.0f;
+  } else {
+    // Position-mode replace: swap in the new targets (NOT accumulated --
+    // that is mergePending()'s job) and retarget() from the moving state.
+    velocityMode_ = false;
+    translateTarget_ = segment.distance;
+    terminalPivotTarget_ = segment.finalHeading;
+    preRotateTarget_ = 0.0f;
+    needPrePivot_ = false;
+    needTranslate_ = fabsf(translateTarget_) > kDistEps;
+    needTerminalPivot_ = fabsf(terminalPivotTarget_) > kAngleEps;
+    if (linear_.duration() > 0.0f) {
+      linear_.retarget(translateTarget_);
+    } else if (needTranslate_) {
+      linear_.reset();
+      linear_.solveToRest(translateTarget_, linearCeiling_);
+    }
+    linearTarget_ = translateTarget_;
+    linearSolveMs_ = now;
+    if (rotational_.duration() > 0.0f) {
+      rotational_.retarget(terminalPivotTarget_);
+    } else if (needTerminalPivot_) {
+      rotational_.reset();
+      rotational_.solveToRest(terminalPivotTarget_, rotationalCeiling_);
+    }
+    rotationalTarget_ = terminalPivotTarget_;
+    rotationalSolveMs_ = now;
+    buildBlendStops();
+  }
+
+  lastReplanMs_ = now;
+  phaseReplanDeadline_ = now;   // BLEND: divergence replans disabled
+  phase_ = Phase::BLEND;
+  baselineCaptured_ = false;    // next tick's obs rebase the encoder stops
 }
 
 // buildBlendStops -- (re)build the BLEND phase's stop set for the current
@@ -532,7 +601,7 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
   // current moving state. Merging must not wait for the stop to fire: each
   // plan is solved to-rest, so a fire-time chain would re-launch from ~zero
   // velocity every segment and the stream would crawl.
-  if (!stopping_ && hasPending_ && currentStream_) {
+  if (!stopping_ && hasPending_ && currentStream_ && !velocityMode_) {
     mergePending(now, encLeft, encRight);
   }
 
@@ -597,6 +666,16 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
         captureBaseline(now, encLeft, encRight);
         baselineCaptured_ = true;
       }
+    }
+  } else if (phase_ == Phase::BLEND && velocityMode_) {
+    // Deadman-velocity mode: the deadline is the ONLY terminal. A
+    // replaceStream() arriving before it re-solves and pushes it out; past
+    // it, decel gracefully to rest (the deadman firing).
+    if (static_cast<int32_t>(now - velDeadline_) >= 0) {
+      stopping_ = true;
+      softDeadline_ = now + kSoftDeadlineMs;
+      armTranslateStopDecel(now);
+      armPivotStopDecel(now);
     }
   } else {
     bool fired = false;
@@ -681,7 +760,7 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
 bool SegmentExecutor::active() const { return phase_ != Phase::IDLE; }
 
 float SegmentExecutor::remainingLinear(uint32_t now) const {
-  if (phase_ == Phase::IDLE) return 0.0f;
+  if (phase_ == Phase::IDLE || velocityMode_) return 0.0f;   // no position target
   // Plan-frame remaining translation. Const-cast: JerkTrajectory::sample()
   // is logically const (pure evaluation at an elapsed time) but not marked
   // so; this accessor must stay const for Drivetrain::state().

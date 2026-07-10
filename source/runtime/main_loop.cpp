@@ -33,7 +33,7 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
   // and stages THIS pass's setpoints (flushed next pass by the step
   // above).
   hardware_.tick(now);
-  drivetrain_.tick(now, bb.segmentIn, bb.driveIn);
+  drivetrain_.tick(now, bb.segmentIn, bb.replaceIn, bb.driveIn);
 
   // === COMMIT (clock edge): x[k] -> x[k+1]. Nothing left to route --
   // Drivetrain already staged its own wheel writes above. ===

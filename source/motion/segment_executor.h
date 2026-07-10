@@ -134,6 +134,16 @@ class SegmentExecutor {
   bool hasPending() const { return hasPending_; }
   bool streaming() const { return phase_ != Phase::IDLE && currentStream_; }
 
+  // replaceStream (MOVER, OOP 2026-07-09) -- the deadman-velocity teleop
+  // primitive: REPLACE whatever is executing with this segment, replanned
+  // from the channels' CURRENT velocity (solveToVelocity's own seeding).
+  // time > 0 (the teleop form): velocity control toward segment.v/.omega,
+  // with a deadline of `time` ms -- if no further replacement arrives, the
+  // executor decels gracefully to rest (the deadman). time == 0: a
+  // position-mode replace (targets swapped in, retarget()ed from the moving
+  // state). Works from IDLE (starts fresh) or mid-anything.
+  void replaceStream(const Segment& segment, uint32_t now, float trackwidth);
+
   // remainingLinear -- plan-frame remaining translation [mm] (0 when idle).
   // The streaming teleop's flow-control signal: the host holds this near a
   // target (~0.4s of motion) so the plan's to-rest tail never bites
@@ -302,6 +312,11 @@ class SegmentExecutor {
   Segment pending_ = {};
   bool hasPending_ = false;
   bool currentStream_ = false;   // the segment in flight is a streaming one
+
+  // Deadman-velocity mode (replaceStream with time > 0): velocity control
+  // toward the segment's v/omega until velDeadline_, then graceful decel.
+  bool velocityMode_ = false;
+  uint32_t velDeadline_ = 0;   // [ms] absolute
 };
 
 }  // namespace Motion

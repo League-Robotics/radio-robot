@@ -453,6 +453,87 @@ ParseResult parseMove(const char* const* tokens, int ntokens, const KVPair* kvs,
   argFloat(res.args.args[7], wa);
   argFloat(res.args.args[8], wj);
   argFloat(res.args.args[9], s);
+  // Only the 3 required positional tokens count toward suppliedCount (see
+  // the trailing doc comment below).
+  res.args.suppliedCount = 3;
+  return res;
+}
+
+// ---------------------------------------------------------------------------
+// parseMover -- MOVER <distance_mm> <direction_cdeg> <finalHeading_cdeg>
+//               [t=<ms>] [v=<mm/s SIGNED>] [w=<cdeg/s SIGNED>]
+//               [a=][j=][wa=][wj=]
+// The REPLACE-semantics segment (deadman-velocity teleop): t > 0 makes it
+// TIME-bounded (velocity control toward signed v/w for t ms, then graceful
+// stop unless replaced); t == 0 is a position-mode replace. distance and t
+// both nonzero is an ERROR (a segment is bounded by one or the other, never
+// both). v/w are SIGNED here (they carry direction in time mode), unlike
+// MOVE's unsigned ceilings.
+// ---------------------------------------------------------------------------
+ParseResult parseMover(const char* const* tokens, int ntokens, const KVPair* kvs, int nkv) {
+  ParseResult res;
+  if (ntokens < 3) {
+    res.ok = false; res.err.code = nullptr; res.err.detail = nullptr; return res;
+  }
+  int distance = atoi(tokens[0]);
+  int direction = atoi(tokens[1]);
+  int finalHeading = atoi(tokens[2]);
+  if (distance < -10000 || distance > 10000) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "distance"; return res;
+  }
+  if (direction < -180000 || direction > 180000) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "direction"; return res;
+  }
+  if (finalHeading < -180000 || finalHeading > 180000) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "finalHeading"; return res;
+  }
+
+  float t = kvFloat(kvs, nkv, "t", 0.0f);    // [ms] deadman window
+  float v = kvFloat(kvs, nkv, "v", 0.0f);    // [mm/s] SIGNED
+  float a = kvFloat(kvs, nkv, "a", 0.0f);
+  float j = kvFloat(kvs, nkv, "j", 0.0f);
+  float w = kvFloat(kvs, nkv, "w", 0.0f);    // [cdeg/s] SIGNED
+  float wa = kvFloat(kvs, nkv, "wa", 0.0f);
+  float wj = kvFloat(kvs, nkv, "wj", 0.0f);
+
+  if (t < 0.0f || t > 5000.0f) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "t"; return res;
+  }
+  if (t > 0.0f && distance != 0) {
+    // Time-bounded OR distance-bounded, never both.
+    res.ok = false; res.err.code = "badarg"; res.err.detail = "t+distance"; return res;
+  }
+  if (v < -kMoveMaxSpeedMax || v > kMoveMaxSpeedMax) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "v"; return res;
+  }
+  if (w < -kMoveMaxYawRateMaxCdeg || w > kMoveMaxYawRateMaxCdeg) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "w"; return res;
+  }
+  if (a < 0.0f || a > kMoveMaxAccelMax) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "a"; return res;
+  }
+  if (j < 0.0f || j > kMoveMaxJerkMax) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "j"; return res;
+  }
+  if (wa < 0.0f || wa > kMoveMaxYawAccelMaxCdeg) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "wa"; return res;
+  }
+  if (wj < 0.0f || wj > kMoveMaxYawJerkMaxCdeg) {
+    res.ok = false; res.err.code = "range"; res.err.detail = "wj"; return res;
+  }
+
+  res.ok = true;
+  res.args.count = 10;
+  argInt(res.args.args[0], distance);
+  argInt(res.args.args[1], direction);
+  argInt(res.args.args[2], finalHeading);
+  argFloat(res.args.args[3], t);
+  argFloat(res.args.args[4], v);
+  argFloat(res.args.args[5], a);
+  argFloat(res.args.args[6], j);
+  argFloat(res.args.args[7], w);
+  argFloat(res.args.args[8], wa);
+  argFloat(res.args.args[9], wj);
   // Only the 3 required positional tokens count toward suppliedCount -- the
   // 6 kv overrides' "was this supplied" question is already answered by
   // their own 0-sentinel value (see this function's own doc comment), the
@@ -826,6 +907,55 @@ void handleG(const ArgList& args, const char* corrId, ReplyFn replyFn, void* rep
 }
 
 // ---------------------------------------------------------------------------
+// handleMover -- the REPLACE-semantics segment (deadman-velocity teleop,
+// OOP 2026-07-09). Posts to bb.replaceIn -- a latest-wins Mailbox, so two
+// MOVERs in one pass leave only the newest (replace semantics on the wire
+// itself). The Drivetrain drains it ahead of segmentIn, clears the ring,
+// and the executor replans from its CURRENT velocity
+// (SegmentExecutor::replaceStream). t > 0: velocity control toward the
+// SIGNED v/w for t ms, then a graceful stop unless replaced first -- the
+// joystick deadman. t == 0: position-mode replace.
+// ---------------------------------------------------------------------------
+void handleMover(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
+                 void* handlerCtx) {
+  Rt::Blackboard& b = bb(handlerCtx);
+  int distance = args.args[0].ival;       // [mm]
+  int direction = args.args[1].ival;      // [cdeg]
+  int finalHeading = args.args[2].ival;   // [cdeg]
+  float t = args.args[3].fval;    // [ms]
+  float v = args.args[4].fval;    // [mm/s] SIGNED
+  float a = args.args[5].fval;    // [mm/s^2]
+  float j = args.args[6].fval;    // [mm/s^3]
+  float w = args.args[7].fval;    // [cdeg/s] SIGNED
+  float wa = args.args[8].fval;   // [cdeg/s^2]
+  float wj = args.args[9].fval;   // [cdeg/s^3]
+
+  Motion::Segment seg;
+  seg.stream = true;
+  seg.time = t;                                         // [ms]
+  seg.distance = static_cast<float>(distance);
+  seg.direction = static_cast<float>(direction) * kCdegToRad;
+  seg.finalHeading = static_cast<float>(finalHeading) * kCdegToRad;
+  seg.v = v;                                            // [mm/s] signed
+  seg.omega = w * kCdegToRad;                           // [rad/s] signed
+  seg.speedMax = fabsf(v);                              // ceiling = |target|
+  seg.yawRateMax = fabsf(w) * kCdegToRad;
+  seg.accelMax = a;
+  seg.jerkMax = j;
+  seg.yawAccelMax = wa * kCdegToRad;
+  seg.yawJerkMax = wj * kCdegToRad;
+
+  b.replaceIn.post(seg);
+
+  unsigned q = b.segmentIn.size() + b.drivetrain.queue;
+  char body[80];
+  snprintf(body, sizeof(body), "t=%d v=%d w=%d q=%u",
+           static_cast<int>(t), static_cast<int>(v), static_cast<int>(w), q);
+  char rbuf[112];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "mover", body, corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
 // handleStop -- 093-001 (fixed), physical behavior updated by 094-004/006:
 // STOP posts a NEUTRAL msg::DrivetrainCommand straight to bb.driveIn, built
 // inline WITHOUT the standby side-channel -- deliberately NOT
@@ -1016,6 +1146,9 @@ std::vector<CommandDescriptor> motionCommands(Rt::CommandRouter& router) {
   // 094-006: MOVE -- parses into a Motion::Segment, posts to bb.segmentIn.
   // CMD_ACCESS_HARDWARE like S/STOP -- it (eventually) drives the motors.
   cmds.push_back(makeCmd("MOVE", parseMove, handleMove, &router, "badarg", ForceReply::NONE,
+                         CMD_ACCESS_HARDWARE));
+  // MOVER (OOP): the REPLACE-semantics / deadman-velocity segment (teleop).
+  cmds.push_back(makeCmd("MOVER", parseMover, handleMover, &router, "badarg", ForceReply::NONE,
                          CMD_ACCESS_HARDWARE));
   // 094-006: TLM -- one-shot synchronous read of bb.drivetrain; no
   // CMD_ACCESS_HARDWARE flag (mirrors QLEN below -- it reads the ALREADY-

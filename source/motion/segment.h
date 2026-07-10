@@ -35,6 +35,17 @@ struct Segment {
   float yawAccelMax = 0.0f;   // [rad/s^2]  pivot angular accel
   float yawJerkMax = 0.0f;    // [rad/s^3]  pivot angular jerk
 
+  // --- time/velocity arm (MOVER, OOP 2026-07-09) -- the deadman-velocity
+  // teleop primitive. time > 0 makes this a TIME-BOUNDED segment: the
+  // executor runs velocity control toward `v`/`omega` (accelerating from its
+  // CURRENT state, jerk-limited) and, if no replacement arrives before
+  // `time` elapses, decels gracefully to rest -- the built-in deadman. A
+  // segment may be distance-bounded (distance != 0, time == 0) or
+  // time-bounded (time > 0, distance == 0), never both (wire-validated).
+  float time = 0.0f;    // [ms] 0 = distance-bounded
+  float v = 0.0f;       // [mm/s]  SIGNED target velocity (time mode)
+  float omega = 0.0f;   // [rad/s] SIGNED target yaw rate (time mode)
+
   // stream (OOP 2026-07-09, teleop): marks a STREAMING segment (wire
   // `MOVE ... s=1`). Streaming segments MERGE into the in-flight plan --
   // remaining distance/heading accumulate and both channels retarget() from
