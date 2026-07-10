@@ -3,11 +3,14 @@
 #include <stdint.h>
 
 #include "messages/common.h"
+#include "messages/telemetry.h"
 #include "runtime/blackboard.h"
 
 // ---------------------------------------------------------------------------
 // tlm_frame.h -- Telemetry's own TLM-frame internals (sprint 082 ticket 004;
-// re-pointed at the committed blackboard by sprint 087 ticket 008):
+// re-pointed at the committed blackboard by sprint 087 ticket 008; extended
+// with the bench-diagnostic fields and a binary formatter by 096-003,
+// architecture-update.md (096) M3/Decision 6):
 //
 //   Telemetry::tick()        -- reads every field the frame emits directly
 //                                from the committed Rt::Blackboard snapshot
@@ -16,7 +19,18 @@
 //                                reference (Rt::Blackboard itself holds
 //                                none -- SUC-006).
 //   Telemetry::buildTlmFrame() -- a pure, stateless formatter: TlmFrameInput
-//                                -> one wire line. Unchanged since 082-004.
+//                                -> one wire line. Unchanged since 082-004 --
+//                                096-003 added fields to TlmFrameInput but
+//                                did not touch this function's code, and it
+//                                does not read any of the new fields, so its
+//                                text output is byte-identical to before.
+//   Telemetry::buildTelemetryMessage() -- (096-003) a second pure, stateless
+//                                formatter, peer to buildTlmFrame(): the SAME
+//                                TlmFrameInput -> a populated msg::Telemetry
+//                                POD instead of a text line. Used by the
+//                                binary STREAM/SNAP path (commands/
+//                                telemetry_commands.cpp's tickTelemetry(),
+//                                when bb.telemetryBinary is true).
 //
 // Ported in CONCEPT (field set, per-field omission, integer scaling) from
 // source_old/robot/RobotTelemetry.cpp's Robot::buildTlmFrame(), trimmed to
@@ -56,7 +70,16 @@ namespace Telemetry {
 // parallel optional type.
 struct TlmFrameInput {
   uint32_t now = 0;   // [ms] t= -- always present
-  char mode = 'I';    // 'I' or 'S' -- mode= -- always present
+  char mode = 'I';    // 'I' or 'S' -- mode= -- always present (buildTlmFrame()'s own field)
+  // driveMode (096-003) -- the RAW msg::DriveMode `mode` above was already
+  // converted FROM (tick()'s modeChar()), for buildTelemetryMessage()'s
+  // exclusive use: protos/telemetry.proto's own doc comment is explicit
+  // that the binary formatter "carries the enum itself" rather than going
+  // through the text formatter's lossy char mapping (IDLE and VELOCITY
+  // both map to 'I' -- reversing that would not recover the original
+  // enum). Sourced from the SAME bb.planner.mode `mode` is, never derived
+  // from `mode`.
+  msg::DriveMode driveMode = msg::DriveMode::IDLE;
   uint16_t seq = 0;   // seq= -- always present
 
   // enc=<l>,<r> -- per-wheel accumulated encoder distance.
@@ -112,6 +135,24 @@ struct TlmFrameInput {
   // the caller derives this from directly-read wheel velocities).
   bool hasTwist = false;
   msg::BodyTwist3 twist = {};   // v_x [mm/s]; omega [rad/s] -- converted to mrad/s at format time
+
+  // --- Bench-diagnostic fields (096-003; transcribed, not re-derived, from
+  // handleTlm()'s own computation, source/commands/motion_commands.cpp --
+  // see that function's own doc comment for the full field-by-field
+  // rationale). Unconditionally present, no `has*` flag: handleTlm()'s own
+  // text reply never omits them, and buildTlmFrame() never reads them at
+  // all (they exist on TlmFrameInput solely for buildTelemetryMessage()'s
+  // use) -- see this struct's own file header for why the text formatter's
+  // output stays byte-identical despite this extension.
+  float accLeft = 0.0f;    // [mm/s^2] bb.drivetrain.acc()[0], EMA-filtered
+  float accRight = 0.0f;   // [mm/s^2] bb.drivetrain.acc()[1], EMA-filtered
+  bool active = false;     // bb.drivetrain.busy -- motion in progress
+  bool connLeft = false;   // bb.motors[0].connected
+  bool connRight = false;  // bb.motors[1].connected
+  uint32_t glitchLeft = 0;    // bb.motors[0].enc_glitch_count
+  uint32_t glitchRight = 0;   // bb.motors[1].enc_glitch_count
+  uint32_t tsLeft = 0;    // [ms] bb.motors[0].sampled_at
+  uint32_t tsRight = 0;   // [ms] bb.motors[1].sampled_at
 };
 
 // tick -- Telemetry's own frame-assembly step (087-008): reads every field
@@ -136,10 +177,19 @@ struct TlmFrameInput {
 //                 velocity-channel state.
 //   mode=      -- bb.planner.mode (msg::DriveMode), mapped to a single wire
 //                 character -- I/S/T/D/G, per docs/protocol-v2.md §8.
+//                 driveMode (096-003) carries the SAME bb.planner.mode
+//                 value unmapped, for buildTelemetryMessage()'s use.
 //   seq=       -- bb.telemetrySeq, READ only -- tick() never increments it;
 //                 the caller (telemetryEmit()) advances the shared
 //                 STREAM/SNAP counter itself, immediately after capturing
 //                 this call's return value.
+//   acc=/active=/conn=/glitch=/ts= (096-003) -- transcribed EXACTLY from
+//                 handleTlm()'s own computation (motion_commands.cpp):
+//                 bb.drivetrain.acc()/.busy for acc=/active=; bb.motors[0]/
+//                 bb.motors[1] (the SAME hardcoded bound-pair indices
+//                 handleTlm() itself uses -- NOT the leftIdx/rightIdx
+//                 bb.drivetrainConfig-derived indices enc=/vel= use above)
+//                 for conn=/glitch=/ts=.
 TlmFrameInput tick(uint32_t now, const Rt::Blackboard& bb);
 
 // buildTlmFrame -- format `in` into one NUL-terminated "TLM ..." wire line in
@@ -148,5 +198,17 @@ TlmFrameInput tick(uint32_t now, const Rt::Blackboard& bb);
 // the NUL -- the same convention snprintf()/this codebase's other
 // frame-builders use (see commands/dev_commands.cpp's emitMotorState()).
 int buildTlmFrame(char* buf, int len, const TlmFrameInput& in);
+
+// buildTelemetryMessage -- (096-003) populate `out` (a generated
+// msg::Telemetry POD) from `in`, mirroring buildTlmFrame() field-for-field
+// but writing typed struct fields instead of a formatted wire line. Pure
+// and stateless, like buildTlmFrame(): reads only `in`, writes only `out`
+// (always starting from a fresh msg::Telemetry{}, never assuming the
+// caller pre-cleared it). `encpose`/`hasEncPose` have no counterpart on
+// msg::Telemetry (096-001's trim, architecture-update.md (096) Decision
+// 6) and are not copied; every other TlmFrameInput field, plus the five
+// bench-diagnostic field groups, maps 1:1 onto msg::Telemetry's own
+// field/`has_*`-flag pairs (protos/telemetry.proto).
+void buildTelemetryMessage(msg::Telemetry& out, const TlmFrameInput& in);
 
 }  // namespace Telemetry

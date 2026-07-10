@@ -77,11 +77,13 @@ void telemetryEmit(Rt::Blackboard& bb, uint32_t now, ReplyFn replyFn, void* repl
 // bb.telemetryHasLastEmit, the SAME fields handleStream() already
 // maintains for its own immediate-first-frame emission); if a frame is due,
 // resolves bb.telemetryChannel to a live ReplyFn/void* pair via
-// router.replySink() (command_router.h) and calls telemetryEmit(). For THIS
-// ticket's scope the emission is unconditionally the text path
-// (telemetryEmit()/Telemetry::buildTlmFrame()) -- bb.telemetryBinary
-// (blackboard.h) is the branch point a later ticket wires the binary
-// formatter onto; nothing sets it true yet, so it never diverts here. A
+// router.replySink() (command_router.h) and emits one frame. bb.telemetryBinary
+// (blackboard.h) is the branch point (096-003): true selects the binary
+// path (telemetryEmitBinary()/Telemetry::buildTelemetryMessage(), .cpp-local),
+// false (the default) selects the pre-existing text path
+// (telemetryEmit()/Telemetry::buildTlmFrame()). Nothing sets
+// bb.telemetryBinary true until ticket 005 (the binary `stream` arm), so
+// this ticket's own observable behavior is still unconditionally text. A
 // no-op when no frame is due (bb.telemetryPeriod == 0, or not enough time
 // has elapsed since the last emission).
 void tickTelemetry(Rt::Blackboard& bb, Rt::CommandRouter& router, uint32_t now);
