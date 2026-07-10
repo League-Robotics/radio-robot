@@ -56,7 +56,8 @@ _TLM_RE = re.compile(
     r" active=(?P<active>[01])"
     r" conn=(?P<conn_l>[01]),(?P<conn_r>[01])"
     r" glitch=(?P<glitch_l>\d+),(?P<glitch_r>\d+)"
-    r" ts=(?P<ts_l>\d+),(?P<ts_r>\d+)$"
+    r" ts=(?P<ts_l>\d+),(?P<ts_r>\d+)"
+    r" now=(?P<now>\d+)$"
 )
 
 

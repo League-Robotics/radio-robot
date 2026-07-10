@@ -15,6 +15,7 @@ void MainLoop::commit(Blackboard& bb, uint32_t now) {
   // === COMMIT (clock edge): copy each subsystem cell into bb -> x[k+1]. ===
   bb.motors = hardware_.motorStates();
   bb.drivetrain = drivetrain_.state();
+  bb.loopNow = now;   // commit stamp for TLM now= (cmd='s true time)
 }
 
 void MainLoop::tick(Blackboard& bb, uint32_t now) {

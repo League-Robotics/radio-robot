@@ -32,6 +32,7 @@ _TLM = re.compile(
     r"\s+conn=(?P<conn_l>[01]),(?P<conn_r>[01])"
     r"\s+glitch=(?P<glitch_l>\d+),(?P<glitch_r>\d+)"
     r"\s+ts=(?P<ts_l>\d+),(?P<ts_r>\d+)"
+    r"\s+now=(?P<now>\d+)"
 )
 
 

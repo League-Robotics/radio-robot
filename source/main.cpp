@@ -141,6 +141,7 @@ int main() {
 
         bb.motors = hardware.motorStates();                // commit measured motor state (incl. I2C connected)
         bb.drivetrain = drivetrain.state();                // commit measured state for TLM (094-006)
+        bb.loopNow = now;                                  // commit stamp for TLM now= (cmd='s true time)
         
         uBit.sleep(1);   // yield: radio RX delivery + other fibers
     }

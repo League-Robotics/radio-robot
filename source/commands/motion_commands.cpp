@@ -935,9 +935,9 @@ void handleTlm(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, voi
   formatTenths(encRs, sizeof(encRs), encR);
   formatTenths(velLs, sizeof(velLs), velL);
   formatTenths(velRs, sizeof(velRs), velR);
-  char body[224];
+  char body[240];
   snprintf(body, sizeof(body),
-           "enc=%s,%s vel=%s,%s cmd=%d,%d acc=%d,%d active=%d conn=%d,%d glitch=%u,%u ts=%u,%u",
+           "enc=%s,%s vel=%s,%s cmd=%d,%d acc=%d,%d active=%d conn=%d,%d glitch=%u,%u ts=%u,%u now=%u",
            encLs, encRs, velLs, velRs,
            static_cast<int>(cmdL), static_cast<int>(cmdR),
            static_cast<int>(accL), static_cast<int>(accR),
@@ -947,7 +947,7 @@ void handleTlm(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, voi
            // STOP and can never mean "idle". See DrivetrainState.busy.
            dt.busy ? 1 : 0,
            b.motors[0].connected ? 1 : 0, b.motors[1].connected ? 1 : 0,
-           glitchL, glitchR, tsL, tsR);
+           glitchL, glitchR, tsL, tsR, b.loopNow);
   char rbuf[272];
   CommandProcessor::replyOK(rbuf, sizeof(rbuf), "tlm", body, corrId, replyFn, replyCtx);
 }

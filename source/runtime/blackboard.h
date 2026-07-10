@@ -147,6 +147,14 @@ struct Blackboard {
   uint32_t devWatchdogWindow = 0;     // [ms] DEV WD's current window
   uint32_t streamWatchdogWindow = 0;  // [ms] SET sTimeout='s current window
 
+  // loopNow (2026-07-09 smooth-telemetry) -- the loop-pass time at which
+  // this snapshot (bb.drivetrain, bb.motors) was committed, published by the
+  // composition roots' commit step every pass. TLM surfaces it as `now=` so
+  // per-pass values (cmd=) can be plotted at the instant they were COMPUTED
+  // rather than at USB-CDC receive time, which batches/jitters replies by
+  // tens of ms and renders a smooth commanded ramp as kinks.
+  uint32_t loopNow = 0;               // [ms]
+
   // (087-006) STREAM/SNAP's own shared bookkeeping -- mirrors the pre-087
   // TelemetryState struct's periodMs/seq/replyFn+replyCtx/hasLastEmit/
   // lastEmitMs fields exactly, moved onto bb (as plain mutable scalars, not
