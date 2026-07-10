@@ -2,9 +2,11 @@
 id: '004'
 title: 'wire_runtime.{h,cpp}: hand-written varint/zigzag/fixed32/length-delimited/base64
   primitives'
-status: open
-use-cases: [SUC-003]
-depends-on: ['001']
+status: done
+use-cases:
+- SUC-003
+depends-on:
+- '001'
 github-issue: ''
 issue: protocol-v3-schema-driven-binary-command-plane-protobuf.md
 completes_issue: false
@@ -65,40 +67,124 @@ sneaks in a `snprintf("%f", ...)`).
 
 ## Acceptance Criteria
 
-- [ ] Varint encode/decode round-trips correctly for `0`, `1`, small
+- [x] Varint encode/decode round-trips correctly for `0`, `1`, small
       positive values, `UINT32_MAX`, and multi-byte boundary values (127,
       128, 16383, 16384).
-- [ ] Zigzag encode/decode round-trips correctly for `0`, small positive/
+- [x] Zigzag encode/decode round-trips correctly for `0`, small positive/
       negative values, `INT32_MIN`, `INT32_MAX`.
-- [ ] Fixed32 encode/decode round-trips correctly for `0.0f`, negative
+- [x] Fixed32 encode/decode round-trips correctly for `0.0f`, negative
       values, the smallest/largest representable `float` magnitudes this
       schema's bounds actually use (e.g. ±31.416 for angle fields,
       ±10000 for distance).
-- [ ] Base64 encode/decode round-trips correctly for empty input, a
+- [x] Base64 encode/decode round-trips correctly for empty input, a
       single byte, and a full 186-byte envelope-sized buffer; the chosen
       alphabet is documented as the first line of `wire_runtime.h`'s doc
       comment.
-- [ ] A truncated buffer (varint missing its continuation byte,
+- [x] A truncated buffer (varint missing its continuation byte,
       length-delimited field claiming more bytes than remain, base64
       string with invalid padding) is rejected with a clean failure
       return — never reads past the buffer end (verify under ASan on the
       host build), never crashes.
-- [ ] Length-delimited recursion has an enforced depth bound (documented
+- [x] Length-delimited recursion has an enforced depth bound (documented
       constant); a maliciously/accidentally over-nested input is rejected
       cleanly rather than overflowing the stack (verify with a
       synthetic-nesting test case).
-- [ ] The packed-repeated reader clamps at the caller-supplied
+- [x] The packed-repeated reader clamps at the caller-supplied
       `max_count` and does not overflow a fixed-size output array when
       fed more elements than the cap.
-- [ ] The unknown-field skip correctly advances past an unrecognized
+- [x] The unknown-field skip correctly advances past an unrecognized
       field number of each wire type (varint, fixed32, fixed64,
       length-delimited) without corrupting the read position for
       subsequent known fields.
-- [ ] No heap allocation (verify by inspection — no `new`/`malloc`
+- [x] No heap allocation (verify by inspection — no `new`/`malloc`
       anywhere in `wire_runtime.{h,cpp}`); compiles clean under
       `-fno-exceptions -fno-rtti`; no `%f`/float `snprintf`.
-- [ ] `just build` (ARM) and `just build-sim` both succeed; the full
+- [x] `just build` (ARM) and `just build-sim` both succeed; the full
       existing sim suite stays green.
+
+## Completion Notes (2026-07-10)
+
+**Files**: `source/messages/wire_runtime.{h,cpp}` (new, hand-written, the
+ONE never-regenerated file in the codec stack), `tests/sim/unit/
+wire_runtime_harness.cpp` + `tests/sim/unit/test_wire_runtime.py` (new,
+mirror `runtime_blackboard_harness.cpp`/`test_runtime_blackboard.py`'s
+exact pattern), `tests/_infra/sim/CMakeLists.txt` (one-line addition of
+`messages/wire_runtime.cpp` to `FIRMWARE_SOURCES`, same TU-anchor
+treatment `messages/layout_checks.cpp` already gets, so `just build-sim`
+proves this file compiles clean under that build's own flags too — the ARM
+build needed no CMakeLists edit since the root `CMakeLists.txt` discovers
+`source/**/*.cpp` via `RECURSIVE_FIND_FILE`, so `wire_runtime.cpp` was
+picked up automatically).
+
+**API shape**: a flat `namespace WireRuntime` of free functions, all
+`(buf, len/cap, size_t* pos, ...)` cursor-style (encode and decode
+symmetric) — no classes, no heap, no exceptions. Beyond the ticket's 7
+named primitives, two small supporting functions are exposed:
+`encodeTag`/`decodeTag` (field_number<<3|wire_type, varint-encoded) --
+needed by both "length-delimited framing" and "unknown-field skip" to
+learn a field's wire type, so factored out once rather than duplicated.
+
+**Zigzag (item 2)**: confirmed unused by this sprint's actual schema —
+read every field in `protos/motion.proto`/`protos/envelope.proto`
+directly; every signed/bounded field is a protobuf `float` (fixed32 wire
+type), not `sint32`/`sint64`. Implemented anyway per the ticket's own
+instruction, for both 32- and 64-bit widths (protobuf's sint32 AND
+sint64), at negligible cost.
+
+**Base64 alphabet (item 7 / Open Question 2)**: **standard `+/`**, as
+recommended. Confirmed against ticket 002's actual shipped host code, not
+assumed: `grep -n "base64" host/robot_radio/io/serial_conn.py` shows
+`import base64` and calls to `base64.b64encode(...)`/
+`base64.b64decode(...)` (both `send_envelope()`'s encode path and the
+`*B<base64>` reply-decode path) — Python stdlib defaults, i.e. the
+standard alphabet. No mismatch to flag; firmware and host agree. Pinned as
+the bold first line of `wire_runtime.h`'s doc comment per the ticket's
+instruction, and the harness's malformed-base64 scenario explicitly proves
+url-safe `-`/`_` characters are REJECTED (not silently accepted as a second
+valid alphabet).
+
+**Length-delimited depth bound (item 4)**: `kMaxNestingDepth = 8`. This
+schema's actual max nesting is shallow (`CommandEnvelope` -> e.g.
+`DrivetrainCommand` -> `WheelTargets` -> repeated `WheelTarget` is the
+deepest chain today, 3 levels) — 8 is small-constant headroom over that,
+matching the ticket's own "e.g. 8" guidance. `beginLengthDelimited(buf,
+len, pos, depth, payloadLen)` checks the bound before parsing anything and
+leaves `*pos` unchanged on rejection; the depth-increment contract (only
+increment when recursing into a NESTED MESSAGE, not for leaf bytes/
+string/packed payloads) is documented in `wire_runtime.h` for ticket 005's
+generated decoder to follow.
+
+**Packed-repeated clamp (item 5)**: two concrete variants,
+`decodePackedVarint`/`decodePackedFixed32`, covering the only two packable
+scalar wire shapes this tree's generated arrays actually use (uint32_t and
+float, per `messages/common.h`'s `command_modes_[8]`/`args_[4]`). Every
+element in the payload is parsed (so a malformed trailing element past
+`max_count` is still caught) but only the first `maxCount` are written;
+the harness's clamp scenario sizes the output array to EXACTLY `maxCount`
+and runs under ASan so a real overflow would abort, not just fail an
+equality check.
+
+**Verification performed**: standalone host compile
+(`c++ -std=c++20 -Wall -Wextra -fno-exceptions -fno-rtti`) → clean, zero
+warnings. `uv run python -m pytest tests/sim/unit/test_wire_runtime.py -q`
+→ **2 passed** (normal build + a second full recompile/rerun under
+`-fsanitize=address,undefined`, both green — the ASan/UBSan run covers
+every scenario including all malformed-input and packed-clamp cases, not
+a separate subset). `just build` (ARM) → green;
+`source/messages/wire_runtime.cpp.obj` compiles with no warnings under the
+project's real `-fno-exceptions -fno-rtti -std=gnu++20` flags (confirmed
+by grepping `build/compile_commands.json` for `-fno-rtti`/`-fno-exceptions`
+before relying on it); flash 83.67% used (comfortably within budget), RAM
+98.33% (expected/by-design on this target, not a regression signal — see
+project knowledge on CODAL RAM headroom). `just build-sim` → green,
+`wire_runtime.cpp` links into `libfirmware_host`. `uv run python -m
+pytest tests/sim -q` → **60 passed** (the pre-existing 58 plus this
+ticket's 2 new tests, zero regressions).
+
+**No heap / no `%f`**: verified by inspection — `wire_runtime.{h,cpp}`
+contain no `new`, no `malloc`, no `std::vector`/`std::string`, and no
+`snprintf`/format-string call of any kind (pure binary encode/decode, no
+text formatting).
 
 ## Testing
 
