@@ -663,6 +663,29 @@ float sim_get_enc_r(void* h) { return static_cast<SimHandle*>(h)->hardware.plant
 float sim_get_vel_l(void* h) { return static_cast<SimHandle*>(h)->hardware.simMotor(0).velocity(); }
 float sim_get_vel_r(void* h) { return static_cast<SimHandle*>(h)->hardware.simMotor(1).velocity(); }
 
+// sim_get_active (097-008, TEST-ONLY) -- bb.drivetrain.busy directly,
+// bypassing the telemetry wire entirely. Added when the deleted one-shot
+// text TLM verb's own tests (tests/sim/unit/test_bare_loop_move_and_tlm.py)
+// were re-pointed at the binary `stream` arm: most of those tests tolerate
+// the one extra tick_for() pass a wire read now costs (there is no more
+// dt=0 one-shot TLM -- tickTelemetry() only ever runs from a real
+// sim_tick() pass), but test_pivot_completes_promptly_single_peaked polls
+// "is it idle yet" on nearly every iteration of a tight per-tick loop -- an
+// extra tick per read would silently double the plant's effective
+// simulated time per iteration there, corrupting the single-peak/
+// prompt-idle timing that test exists to verify (and the ReplyStore the
+// wire path writes into is a small fixed-size buffer with no wraparound,
+// so polling it every iteration over a multi-second test would also
+// silently overflow and freeze it -- see _binary_envelope.py's
+// read_tlm_now() for the full rationale). bb.drivetrain.busy is exactly
+// the value Telemetry::tick() copies into TlmFrameInput.active
+// (source/telemetry/tlm_frame.cpp) -- this is the SAME value, read
+// directly, with the same zero-cost-peek posture sim_get_vel_l()/
+// sim_get_enc_l() above already established for exactly this reason.
+int sim_get_active(void* h) {
+    return static_cast<SimHandle*>(h)->bb.drivetrain.busy ? 1 : 0;
+}
+
 float sim_get_pwm_l(void* h) {
     return static_cast<float>(static_cast<SimHandle*>(h)->hardware.plant().pwmL());
 }

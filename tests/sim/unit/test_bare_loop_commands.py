@@ -1,5 +1,5 @@
-"""093-003/094-005/097-006: focused STOP-plus-binary-drive suite for the
-bare wheel-driving executive.
+"""093-003/094-005/097-006/097-008: focused STOP-plus-binary-drive suite for
+the bare wheel-driving executive.
 
 Sprint 093 gutted `Rt::MainLoop`/`Rt::CommandRouter::buildTable()` down to a
 liveness family plus a small motion family. 097-006 (architecture-update-r2.md
@@ -9,10 +9,11 @@ its binary parity is the `drive` arm (`source/commands/binary_channel.cpp`,
 095, hardware-bench-smoke-tested), exercised below via
 `_binary_envelope.send_drive()`. `systemCommands()` now registers only
 `PING`/`HELLO` (VER/HELP/ECHO/ID deleted); `motionCommands()` now registers
-only `STOP`/`TLM` (S/D/T/RT/MOVE/MOVER/QLEN deleted). Every other command
-family (`dev`/`telemetry`/`config`/`pose`/`otos`) stays unregistered as
-before -- see `tests/sim/parked-093/README.md` for the full inventory of
-tests this obsoleted originally.
+only `STOP` (S/D/T/RT/MOVE/MOVER/QLEN deleted by 097-006, TLM deleted by
+097-008); `telemetryCommands()` now registers nothing at all (STREAM/SNAP
+deleted by 097-008). Every other command family (`dev`/`config`/`pose`/
+`otos`) stays unregistered as before -- see `tests/sim/parked-093/README.md`
+for the full inventory of tests this obsoleted originally.
 
 This file is the small, currently-green replacement for that lost coverage:
 `PING`/`HELLO` still work as text, `STOP` still works as text, `S`'s own
@@ -58,11 +59,20 @@ def test_hello_replies_device_shaped(sim):
     assert reply.strip().startswith("DEVICE:")
 
 
-@pytest.mark.parametrize("line", ["DEV WD 100", "GET drivetrainConfig"])
+@pytest.mark.parametrize("line", [
+    "DEV WD 100", "GET drivetrainConfig",
+    # 097-008: STREAM/SNAP/TLM are DELETED (not merely left unregistered
+    # the way DEV/GET always were) -- proving acceptance criterion 1
+    # ("STREAM/SNAP are no longer registered as text verbs") at the wire
+    # level, alongside the C++-level proof that their handler functions no
+    # longer exist at all (telemetry_commands.cpp/motion_commands.cpp).
+    "STREAM 50", "SNAP", "TLM",
+])
 def test_verb_outside_the_live_surface_replies_err_unknown(sim, line):
-    """A wire verb belonging to an un-wired command family (`dev`, `config`)
-    replies exactly `ERR unknown` -- proving `buildTable()`'s family
-    reduction (ticket 093-001), not merely that `S`/`STOP`/`PING`/`HELLO`
+    """A wire verb belonging to an un-wired or deleted command family
+    (`dev`, `config`, the retired text telemetry family) replies exactly
+    `ERR unknown` -- proving `buildTable()`'s family reduction (ticket
+    093-001, extended by 097-008), not merely that `S`/`STOP`/`PING`/`HELLO`
     themselves happen to work."""
     reply = sim.command(line)
     assert reply.strip() == "ERR unknown"

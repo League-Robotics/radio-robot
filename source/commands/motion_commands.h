@@ -38,10 +38,13 @@
 // rump verbs (architecture-update-r2.md's 3-verb default: STOP/PING/HELLO)
 // -- see system_commands.h for PING/HELLO's own rationale.
 //
-// TLM (094-006's one-shot pull-based telemetry read) is UNTOUCHED by this
-// ticket -- its deletion is ticket 008's scope (the text telemetry family),
-// not this one's, even though its source lives in this file; see ticket
-// 008's own Description for why and for the file-edit coordination note.
+// TLM (094-006's one-shot pull-based telemetry read) was UNTOUCHED by
+// ticket 006 -- its deletion was ticket 008's own scope (the text telemetry
+// family), even though its source lived in this file. 097-008 has since
+// deleted handleTlm/TLM outright (Decision 9's "no consumer-gating, no
+// preservation" ethos, same as every other verb this file names above --
+// see that ticket's own Description for why and for the file-edit
+// coordination note with this ticket).
 //
 // StreamingDriveWatchdog -- DELETED (097-006): already-dead code, fed by
 // nothing (confirmed in the 097 architecture research before this ticket
@@ -60,7 +63,7 @@
 #include "command_types.h"
 #include "runtime/command_router.h"
 
-// Returns the STOP/TLM command table, bound to `router`. TLM's registration
-// is carried here unmodified pending ticket 008 (see this file's header
-// comment) -- STOP is this file's own live verb.
+// Returns the STOP command table, bound to `router`. TLM (094-006's
+// one-shot pull-based telemetry read) was deleted by 097-008 (see this
+// file's header comment) -- STOP is this file's own sole live verb.
 std::vector<CommandDescriptor> motionCommands(Rt::CommandRouter& router);

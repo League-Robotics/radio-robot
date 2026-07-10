@@ -9,6 +9,46 @@ translators (097-002/004) -- the SAME translation `rogo`'s proxy (ticket
 helper exercises the identical wire shape a real legacy-text client now
 gets via the proxy, not a bespoke test-only shape.
 
+097-008 adds arm_stream()/latest_tlm()/read_tlm_now(): the one-shot text
+`TLM` verb (handleTlm, motion_commands.cpp) is deleted along with STREAM/
+SNAP -- there is no binary one-shot TLM arm (096 Open Question 2 / 097
+Decision 4's own finding, which is why NezhaProtocol.snap() -- host/
+robot_radio/robot/protocol.py -- synthesizes a one-shot read from the
+binary `stream` arm instead: arm, wait for a periodic frame, disarm).
+
+read_tlm_now() is the primary entry point most migrated tests use: it
+re-arms (which also RESETS the target channel's reply store, a send()/
+command_on() side effect) and ticks exactly one pass so `tickTelemetry()`
+-- which only ever runs from a real `sim_tick()`/`tick_for()` pass, never
+from `sim.command()`/`command_on()`'s own dt=0 synchronous-command replay,
+see sim_api.cpp's own `sim_command_on()` doc comment -- gets a chance to
+emit exactly one fresh frame, then reads it. This costs one extra
+`step`-ms tick versus the deleted text TLM's own dt=0 read, which is fine
+for a point-in-time "what does it report right now" check (every migrated
+test in this file except one).
+
+An EARLIER version of this helper tried "arm once at the top of a test,
+then peek many times for free" (no per-read tick cost at all) reasoning
+that `sim.peek_reply_store()` is non-destructive. That is true but
+insufficient: `tests/_infra/sim/sim_api.cpp`'s `ReplyStore` is a small
+FIXED-size buffer with NO wraparound (`append()`'s own guard: once full,
+every further append silently no-ops) -- arming once and then ticking a
+multi-second test (as several of these tests do) fills it within roughly
+the first 10-14 periodic frames and FREEZES it there, so a "latest" read
+taken later in the test silently returns a STALE mid-motion frame, not the
+current state. This is why read_tlm_now() re-arms (resets the store)
+immediately before every read, so at most one frame is ever buffered.
+
+The one exception, test_pivot_completes_promptly_single_peaked, polls "is
+it idle yet" on nearly every iteration of a tight per-tick loop where an
+extra tick per read would silently double the plant's effective simulated
+time per iteration, corrupting the exact single-peak/prompt-idle timing
+that test exists to verify -- it uses `sim.active()` (a direct,
+zero-cost `bb.drivetrain.busy` peek, `tests/_infra/sim/sim_api.cpp`'s
+`sim_get_active()`) instead of the telemetry wire at all. arm_stream()/
+latest_tlm() are kept as the lower-level building blocks read_tlm_now()
+itself composes, in case a future test needs the two steps split apart.
+
 Not a test module itself (leading underscore, same convention as
 _wire_diff_driver.py -- neither is pytest-collected). Imported by
 test_bare_loop_commands.py, test_bare_loop_move_and_tlm.py,
@@ -104,3 +144,46 @@ def send_replace(sim, seg: "pb_motion.MotionSegment", corr_id: int = 1,
     bb.replaceIn; the binary `replace` arm is the SAME destination."""
     env = pb_envelope.CommandEnvelope(corr_id=corr_id, replace=seg)
     return send(sim, env, channel)
+
+
+# ---------------------------------------------------------------------------
+# arm_stream() / latest_tlm() / read_tlm_now() -- binary parity for the
+# deleted one-shot text `TLM` verb (097-008). See this module's own header
+# comment for the full rationale.
+# ---------------------------------------------------------------------------
+
+
+def arm_stream(sim, period: int = 20, channel: int = CHANNEL_SERIAL,
+                corr_id: int = 9000) -> "pb_envelope.ReplyEnvelope":
+    """Arm (or re-arm) binary periodic telemetry at `period` (20ms floor).
+    A `send()` call, so it ALSO resets `channel`'s reply store as a side
+    effect -- read_tlm_now() below relies on that to keep the store from
+    ever accumulating more than one pass's worth of frames."""
+    return send(sim, pb_envelope.CommandEnvelope(
+        corr_id=corr_id, stream=pb_envelope.StreamControl(binary=True, period=period)), channel)
+
+
+def latest_tlm(sim, channel: int = CHANNEL_SERIAL):
+    """Non-destructively read the MOST RECENT binary periodic TLM frame
+    tickTelemetry() has appended to `channel`'s reply store -- a
+    msg::Telemetry (pb2), or None if none has landed yet."""
+    text = sim.peek_reply_store(channel)
+    frames = [dearmor(line) for line in text.splitlines() if line.strip()]
+    return frames[-1].tlm if frames else None
+
+
+def read_tlm_now(sim, channel: int = CHANNEL_SERIAL, step: int = 24, corr_id: int = 9000):
+    """Point-in-time binary TLM read: re-arm (which resets the store),
+    tick exactly one `step`-ms pass so tickTelemetry() gets a chance to
+    emit, then read the (necessarily singular, so necessarily freshest)
+    frame. Costs one extra `step`-ms tick versus the deleted one-shot text
+    TLM's own dt=0 read -- see this module's own header comment for why
+    that is fine for a point-in-time check but NOT for a per-iteration
+    precision loop (use sim.active() there instead)."""
+    arm_stream(sim, channel=channel, corr_id=corr_id)
+    sim.tick_for(step)
+    frame = latest_tlm(sim, channel)
+    assert frame is not None, (
+        "read_tlm_now(): no periodic binary TLM frame landed after one tick post-arm"
+    )
+    return frame

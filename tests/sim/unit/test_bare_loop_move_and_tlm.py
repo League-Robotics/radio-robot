@@ -1,5 +1,5 @@
-"""094-006/097-006: MOVE/MOVER + graceful STOP + pull-TLM, exercised end to
-end over the wire, extending `test_bare_loop_commands.py`'s
+"""094-006/097-006/097-008: MOVE/MOVER + graceful STOP + pull-TLM, exercised
+end to end over the wire, extending `test_bare_loop_commands.py`'s
 093/094-005/097-006 STOP-plus-binary-drive suite rather than replacing it.
 
 097-006 (architecture-update-r2.md Decision 9, pure-binary firmware):
@@ -11,9 +11,25 @@ goes through the binary `segment`/`replace`/`drive` arm instead
 `host/robot_radio/robot/legacy_translate.py`'s `segment_for_move()`/
 `segment_for_mover()`/`wheel_targets_for_drive()` -- the identical
 translation `rogo`'s proxy (ticket 004) and `NezhaProtocol` (ticket 002)
-use. `STOP`/`TLM`/`PING` are untouched text verbs throughout this file
-(STOP/TLM are this sprint's own confirmed-live rump; TLM's deletion is
-ticket 008's separate scope).
+use. `STOP`/`PING` remain untouched text verbs throughout this file (this
+sprint's own confirmed-live rump).
+
+097-008 additionally deletes the one-shot text `TLM` verb (`handleTlm`,
+untouched by 097-006, deleted by this ticket) -- there is no binary
+one-shot TLM arm (096 Open Question 2 / 097 Decision 4's own finding), so
+every `sim.command("TLM")` call below is re-pointed at
+`_binary_envelope.read_tlm_now()` (arm/reset the binary `stream` arm, tick
+one pass, read the resulting frame) for a point-in-time "what does it
+report right now" check -- see `_binary_envelope.py`'s own header comment
+for the full rationale, including why an EARLIER "arm once, peek many"
+design was unsound (the sim's reply store is a small fixed-size buffer
+that silently overflows and freezes after ~10-14 accumulated frames).
+`test_pivot_completes_promptly_single_peaked` is the one exception: it
+polls "is it idle" on nearly every iteration of a tight per-tick loop,
+where `read_tlm_now()`'s own extra tick would corrupt the exact timing the
+test exists to verify -- it uses `sim.active()` (a direct, zero-cost
+`bb.drivetrain.busy` peek, `tests/_infra/sim/sim_api.cpp`'s own
+`sim_get_active()`) instead of the telemetry wire at all.
 
 Covers:
   - `MOVE <mm> <dir_cdeg> <fh_cdeg> [v=][a=][j=][w=][wa=][wj=]`'s binary
@@ -30,8 +46,8 @@ Covers:
   - `STOP`, sent over the wire mid-`MOVE`, triggers the SAME graceful
     decel-to-zero `NEUTRAL` gets at the `Drivetrain` level (094-004) --
     `STOP`'s own wire reply text is unchanged (`OK stop`).
-  - `TLM` (one-shot synchronous read -- `handleTlm`, untouched text verb)
-    reports measured `enc=`/`vel=` that track real (simulated) wheel
+  - TLM (097-008: read via the binary `stream` arm, see above) reports
+    measured `enc_left`/`vel_left`/etc. that track real (simulated) wheel
     motion, plus the executor's active/idle flag
     (`msg::DrivetrainState.active`, widened by 094-006 -- see
     `drivetrain.cpp`'s `state()`).
@@ -48,49 +64,15 @@ Covers:
 `test_bare_loop_commands.py` -- this file only adds the MOVE/MOVER/TLM
 surface plus one wire-level graceful-STOP confirmation, per 094-006's
 original "extended, not replaced" instruction (097-006 re-points the
-drive/segment/replace halves at their binary arms, in place).
+drive/segment/replace halves at their binary arms, in place; 097-008
+re-points the TLM reads).
 """
 from __future__ import annotations
 
-import re
-
 import pytest
 
-from _binary_envelope import ERR_RANGE, send_drive, send_replace, send_segment
+from _binary_envelope import ERR_RANGE, read_tlm_now, send_drive, send_replace, send_segment
 from robot_radio.robot import legacy_translate
-
-# Full post-094 TLM shape (OOP additions): cmd= (post-governor commanded
-# wheel velocity), acc= (firmware-EMA measured acceleration), conn= (per-motor
-# I2C health), glitch= (source-side rejected encoder samples), ts= (per-wheel
-# sample instants, firmware ms -- smooth-telemetry fix). enc=/vel= carry 0.1
-# resolution (one decimal).
-_TLM_RE = re.compile(
-    r"^OK tlm enc=(?P<enc_l>-?\d+\.\d),(?P<enc_r>-?\d+\.\d)"
-    r" vel=(?P<vel_l>-?\d+\.\d),(?P<vel_r>-?\d+\.\d)"
-    r" cmd=(?P<cmd_l>-?\d+),(?P<cmd_r>-?\d+)"
-    r" acc=(?P<acc_l>-?\d+),(?P<acc_r>-?\d+)"
-    r" active=(?P<active>[01])"
-    r" conn=(?P<conn_l>[01]),(?P<conn_r>[01])"
-    r" glitch=(?P<glitch_l>\d+),(?P<glitch_r>\d+)"
-    r" ts=(?P<ts_l>\d+),(?P<ts_r>\d+)"
-    r" now=(?P<now>\d+)$"
-)
-
-
-def _parse_tlm(reply: str) -> tuple[float, float, float, float, int]:
-    """Returns the historical 5-tuple (enc_l, enc_r, vel_l, vel_r, active) --
-    the extra fields are validated by the regex match itself; tests that need
-    them use _parse_tlm_full()."""
-    m = _TLM_RE.match(reply.strip())
-    assert m is not None, f"TLM reply did not match the expected shape: {reply!r}"
-    return (float(m["enc_l"]), float(m["enc_r"]),
-            float(m["vel_l"]), float(m["vel_r"]), int(m["active"]))
-
-
-def _parse_tlm_full(reply: str) -> dict:
-    m = _TLM_RE.match(reply.strip())
-    assert m is not None, f"TLM reply did not match the expected shape: {reply!r}"
-    return {k: float(v) for k, v in m.groupdict().items()}
 
 
 def _run_and_check_no_reverse_creep(sim, seconds: float = 6.0, step: int = 24):
@@ -147,8 +129,7 @@ def test_move_straight_executes_and_settles_no_reverse_creep(sim):
     assert vel_l == pytest.approx(0.0, abs=10.0)
     assert vel_r == pytest.approx(0.0, abs=10.0)
 
-    _, _, _, _, active = _parse_tlm(sim.command("TLM"))
-    assert active == 0
+    assert int(read_tlm_now(sim).active) == 0
 
 
 def test_move_pure_in_place_turn_executes_and_settles_no_reverse_creep(sim):
@@ -165,8 +146,7 @@ def test_move_pure_in_place_turn_executes_and_settles_no_reverse_creep(sim):
     assert vel_l == pytest.approx(0.0, abs=10.0)
     assert vel_r == pytest.approx(0.0, abs=10.0)
 
-    _, _, _, _, active = _parse_tlm(sim.command("TLM"))
-    assert active == 0
+    assert int(read_tlm_now(sim).active) == 0
 
 
 def test_move_translate_then_terminal_pivot_executes_and_settles_no_reverse_creep(sim):
@@ -206,8 +186,7 @@ def test_move_translate_then_terminal_pivot_executes_and_settles_no_reverse_cree
     assert vel_l == pytest.approx(0.0, abs=10.0)
     assert vel_r == pytest.approx(0.0, abs=10.0)
 
-    _, _, _, _, active = _parse_tlm(sim.command("TLM"))
-    assert active == 0
+    assert int(read_tlm_now(sim).active) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -297,8 +276,7 @@ def test_binary_drive_and_stop_still_work_together_over_the_wire(sim):
     see test_bare_loop_commands.py's own header comment); `STOP` is
     untouched, still text. Full coverage lives in
     `test_bare_loop_commands.py`; this is a light smoke check that the SAME
-    table still carries `STOP`/`TLM` alongside `MOVE`/`MOVER`'s binary
-    arms."""
+    table still carries `STOP` alongside `MOVE`/`MOVER`'s binary arms."""
     reply = send_drive(sim, 150, 150)
     assert reply.WhichOneof("body") == "ok"
     sim.tick_for(1000)
@@ -314,37 +292,39 @@ def test_binary_drive_and_stop_still_work_together_over_the_wire(sim):
 
 
 # ---------------------------------------------------------------------------
-# TLM: measured, not commanded; active/idle flag.
+# TLM: measured, not commanded; active/idle flag. 097-008: read via the
+# binary `stream` arm (`_binary_envelope.read_tlm_now()`, see this file's
+# own header comment) -- there is no more one-shot text TLM verb.
 # ---------------------------------------------------------------------------
 
 def test_tlm_reports_measured_enc_and_vel_tracking_real_motion(sim):
-    """`TLM` reads `bb.drivetrain` -- MEASURED per-wheel encoder position/
+    """TLM reads `bb.drivetrain` -- MEASURED per-wheel encoder position/
     velocity (094-004's rewrite of `Drivetrain::state()`), not a commanded
     target -- and tracks the plant's own reported `sim.enc()`/`sim.vel()`
     reads closely. 097-006: the precondition drive is now the binary
-    `drive` arm (text `S` is deleted)."""
+    `drive` arm (text `S` is deleted). 097-008: `sim.enc()`/`sim.vel()` are
+    sampled AFTER `read_tlm_now()`'s own extra tick (not before), so both
+    sides of the comparison reflect the exact same instant."""
     reply = send_drive(sim, 150, 150)
     assert reply.WhichOneof("body") == "ok"
     sim.tick_for(3000)
 
+    frame = read_tlm_now(sim)
     enc_l, enc_r = sim.enc()
     vel_l, vel_r = sim.vel()
 
-    t_enc_l, t_enc_r, t_vel_l, t_vel_r, active = _parse_tlm(sim.command("TLM"))
-
-    assert t_enc_l == pytest.approx(enc_l, abs=5.0)
-    assert t_enc_r == pytest.approx(enc_r, abs=5.0)
-    assert t_vel_l == pytest.approx(vel_l, abs=15.0)
-    assert t_vel_r == pytest.approx(vel_r, abs=15.0)
-    assert active == 1   # a live S drive is DIRECT-mode active
+    assert frame.enc_left == pytest.approx(enc_l, abs=5.0)
+    assert frame.enc_right == pytest.approx(enc_r, abs=5.0)
+    assert frame.vel_left == pytest.approx(vel_l, abs=15.0)
+    assert frame.vel_right == pytest.approx(vel_r, abs=15.0)
+    assert int(frame.active) == 1   # a live S drive is DIRECT-mode active
 
 
 def test_tlm_active_flag_is_zero_when_idle(sim):
     """A fresh sim (nothing ever commanded) reports `active=0` -- neither
     the DIRECT-mode authority flag nor the segment executor has ever been
     engaged."""
-    _, _, _, _, active = _parse_tlm(sim.command("TLM"))
-    assert active == 0
+    assert int(read_tlm_now(sim).active) == 0
 
 
 def test_tlm_active_clears_after_stop_settles(sim):
@@ -360,8 +340,8 @@ def test_tlm_active_clears_after_stop_settles(sim):
     sim.tick_for(500)
     assert sim.command("STOP").strip() == "OK stop"
     sim.tick_for(2000)   # ample settle for the graceful decel
-    _, _, _, _, active = _parse_tlm(sim.command("TLM"))
-    assert active == 0, "TLM active= stayed 1 after STOP settled (authority-flag latch)"
+    assert int(read_tlm_now(sim).active) == 0, \
+        "TLM active= stayed 1 after STOP settled (authority-flag latch)"
 
 
 def test_move_streaming_chains_at_speed(sim):
@@ -393,8 +373,7 @@ def test_move_streaming_chains_at_speed(sim):
     vel_l, vel_r = sim.vel()
     assert abs(vel_l) < 10.0 and abs(vel_r) < 10.0
 
-    _, _, _, _, active = _parse_tlm(sim.command("TLM"))
-    assert active == 0
+    assert int(read_tlm_now(sim).active) == 0
 
 
 def test_mover_deadman_velocity(sim):
@@ -430,8 +409,7 @@ def test_mover_deadman_velocity(sim):
     vel_l, vel_r = sim.vel()
     assert abs(vel_l) < 10.0 and abs(vel_r) < 10.0, "deadman never stopped the robot"
 
-    _, _, _, _, active = _parse_tlm(sim.command("TLM"))
-    assert active == 0
+    assert int(read_tlm_now(sim).active) == 0
 
 
 # test_mover_rejects_time_plus_distance -- DELETED (097-006): no binary
@@ -455,7 +433,17 @@ def test_pivot_completes_promptly_single_peaked(sim):
     humps) and report idle promptly after its plan exhausts -- not sit out
     the ~2.5s STOP_TIME net. Single-peak check: once |vel_r| has exceeded
     60 mm/s and then fallen below 20 mm/s, it must never rise above 40 mm/s
-    again. 097-006: binary `segment`."""
+    again. 097-006: binary `segment`.
+
+    097-008: this test polls "is it idle" on nearly every iteration of a
+    tight per-tick loop -- `_binary_envelope.read_tlm_now()`'s own extra
+    tick per read would silently double the plant's effective simulated
+    time per iteration here, corrupting `idle_at`'s `(i + 1) * 0.024`
+    computation (keyed to this loop's own iteration count) as well as the
+    single-peak physics itself. Uses `sim.active()` instead -- a direct,
+    zero-cost `bb.drivetrain.busy` peek (`tests/_infra/sim/sim_api.cpp`'s
+    `sim_get_active()`) that bypasses the telemetry wire entirely -- see
+    `_binary_envelope.py`'s own header comment for the full rationale."""
     reply = send_segment(sim, legacy_translate.segment_for_move(0, 0, 9000))
     assert reply.WhichOneof("body") == "ok"
     peaked = fallen = False
@@ -471,8 +459,7 @@ def test_pivot_completes_promptly_single_peaked(sim):
         if fallen and abs(vel_r) > 40.0:
             raise AssertionError(f"pivot re-accelerated after settling (|vel_r|={vel_r})")
         if idle_at is None and fallen:
-            _, _, _, _, active = _parse_tlm(sim.command("TLM"))
-            if active == 0:
+            if not sim.active():
                 idle_at = (i + 1) * 0.024
     assert peaked, "pivot never drove"
     assert idle_at is not None and idle_at < 3.0, \
@@ -486,17 +473,25 @@ def test_pivot_completes_promptly_single_peaked(sim):
 def test_move_sent_mid_slack_takes_effect_on_next_mandatory_tick(sim):
     """`_binary_envelope.send()`'s own dt=0 synchronous-command trick
     already replays exactly one `Rt::MainLoop::tick()` at the unchanged
-    `now` immediately after routing (`sim_api.cpp`'s file header) -- so a
-    `TLM` read taken IMMEDIATELY after `MOVE`, with no separate
-    `sim.tick_for()` call in between, already shows the segment claimed
-    SEGMENT mode. Proves `segmentIn -> ring_ -> executor` happens within
-    that one mandatory tick, not a multi-hop mailbox latency. 097-006:
-    binary `segment`."""
+    `now` immediately after routing (`sim_api.cpp`'s file header) -- so the
+    segment claims SEGMENT mode within that one mandatory tick, not a
+    multi-hop mailbox latency. 097-006: binary `segment`.
+
+    097-008: the deleted one-shot text TLM verb could read this
+    IMMEDIATELY (its own dt=0 replay observed the just-posted state with no
+    separate `sim.tick_for()` in between); `tickTelemetry()` (the binary
+    replacement's own periodic-emission mechanism) only ever runs from a
+    REAL `sim_tick()` pass, never from that dt=0 replay (`sim_command_on()`'s
+    own doc comment, `sim_api.cpp`) -- so `read_tlm_now()`'s own one-tick
+    cost is, if anything, a MORE literal proof of "next mandatory tick"
+    than the original dt=0 trick was (a full `sim_tick()` pass -- hardware
+    tick, drivetrain tick, commit, tickTelemetry() -- at an incremented
+    `now`, not just a same-`now` replay) -- see this file's own header
+    comment for the full rationale."""
     reply = send_segment(sim, legacy_translate.segment_for_move(300, 0, 0))
     assert reply.WhichOneof("body") == "ok"
 
-    _, _, _, _, active = _parse_tlm(sim.command("TLM"))
-    assert active == 1
+    assert int(read_tlm_now(sim).active) == 1   # the "next mandatory tick" this test is named for
 
 
 def test_two_moves_queued_back_to_back_both_execute_in_order(sim):
@@ -525,5 +520,4 @@ def test_two_moves_queued_back_to_back_both_execute_in_order(sim):
     assert true_enc_r == pytest.approx(462.0, abs=60.0)
     assert true_enc_l > 350.0, "second MOVE never ran -- looks like only one segment executed"
 
-    _, _, _, _, active = _parse_tlm(sim.command("TLM"))
-    assert active == 0
+    assert int(read_tlm_now(sim).active) == 0
