@@ -1,7 +1,7 @@
 ---
-id: "097"
-title: "Protocol v3 Sprint 3: Host completion and text retirement"
-status: roadmap
+id: 097
+title: 'Protocol v3 Sprint 3: Host completion and text retirement'
+status: planning-docs
 branch: sprint/097-protocol-v3-sprint-3-host-completion-and-text-retirement
 use-cases: []
 issues:
@@ -133,5 +133,19 @@ Before tickets can be created, all of the following must be true:
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 001 | Binary telemetry push-frame queue (fix corr_id=0 drop in SerialConnection) | — |
+| 002 | NezhaProtocol core conversion (liveness/drive/config) + Legacy Verb Translator | — |
+| 003 | NezhaProtocol telemetry conversion (stream/snap) + 9-file consumer sweep + delete parse_tlm/parse_cfg | 001 |
+| 004 | rogo REPL translator: text-v2-to-envelope + --decode pretty-printer | 002, 003 |
+| 005 | Host verification gate: binary NezhaProtocol against existing consumer test suites | 001, 002, 003, 004 |
+| 006 | Firmware: retire migrated motion + liveness text families (S/D/T/RT/MOVE/MOVER, ECHO/VER, ParsedCommand) | 005 |
+| 007 | Firmware: retire text config family (delete config_commands.cpp SET/GET) | 005 |
+| 008 | Firmware: retire text telemetry family (STREAM/SNAP text handlers + text TLM formatter) | 005 |
+| 009 | Protocol documentation: rewrite docs/protocol-v2.md as docs/protocol-v3.md | 006, 007, 008 |
+| 010 | Migration closure: grep-clean verification, line-count and flash/RAM report, close the v3 issue (`completes_issue: true`) | 009 |
 
-Tickets execute serially in the order listed.
+Tickets execute serially in the order listed. 001/002 have no
+inter-ticket dependency and could in principle run in either order, but
+are sequenced 001-then-002 as listed since 003 (telemetry) depends on
+001 and comes before 004; keeping strict numeric/table order avoids any
+ambiguity for serial execution.
