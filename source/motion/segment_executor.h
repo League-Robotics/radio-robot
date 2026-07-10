@@ -110,10 +110,29 @@ class SegmentExecutor {
   msg::BodyTwist3 tick(uint32_t now, const msg::MotorState& encLeft,
                        const msg::MotorState& encRight);
 
-  // active -- true while a phase (PRE_PIVOT/TRANSLATE/TERMINAL_PIVOT) or its
-  // trailing graceful decel-to-zero is still running.
+  // active -- true while a phase (PRE_PIVOT/TRANSLATE/TERMINAL_PIVOT/BLEND)
+  // or its trailing graceful decel-to-zero is still running.
   bool active() const;
   bool idle() const { return !active(); }
+
+  // offerNext/hasPending/streaming -- streaming merge support (OOP
+  // 2026-07-09, realizing the 094 issue's original "decel-to-zero only when
+  // the queue empties" semantic). While a STREAMING segment (segment.stream,
+  // wire `MOVE ... s=1`) is executing, the Drivetrain pre-loads ONE pending
+  // stream segment; on the executor's next tick it MERGES: remaining
+  // distance/heading ACCUMULATE and both channels retarget() from their
+  // current moving state (Phase::BLEND -- translate+pivot simultaneous, a
+  // differential arc). Merging is what makes joystick micro-segment
+  // streaming drivable: each plan is solved to-rest, so waiting for its stop
+  // to fire chains from ~zero velocity, and a from-rest segment of duration
+  // T covers only ~a*T^2/4 -- unchained/late-chained streams cap at a
+  // crawl. The merged plan's own to-rest tail IS the graceful stop when the
+  // stream runs dry. Merging is stream-only by design: discrete segments
+  // would corrupt (fwd 300 + back 300 merges to net 0). offerNext returns
+  // false while idle, already holding a pending, or force-stopping.
+  bool offerNext(const Segment& segment);
+  bool hasPending() const { return hasPending_; }
+  bool streaming() const { return phase_ != Phase::IDLE && currentStream_; }
 
   // converged -- true once the WHOLE segment -- every phase it needed, plus
   // each phase's own trailing graceful stop -- has settled to a literal-zero
@@ -123,7 +142,7 @@ class SegmentExecutor {
   bool converged() const { return !active(); }
 
  private:
-  enum class Phase : uint8_t { IDLE, PRE_PIVOT, TRANSLATE, TERMINAL_PIVOT };
+  enum class Phase : uint8_t { IDLE, PRE_PIVOT, TRANSLATE, TERMINAL_PIVOT, BLEND };
 
   // effectiveLinearConfig/effectiveRotationalConfig -- fold a Segment's own
   // per-segment limit overrides (0 => fall back to config_) onto config_,
@@ -141,6 +160,22 @@ class SegmentExecutor {
   void beginPrePivot(uint32_t now);
   void beginTranslate(uint32_t now);
   void beginTerminalPivot(uint32_t now);
+
+  // beginStreamFresh -- start a STREAMING segment from idle: single-phase
+  // BLEND, both channels solved from rest toward the segment's targets.
+  void beginStreamFresh(uint32_t now);
+
+  // buildBlendStops -- (re)build the BLEND stop set for the current merged
+  // targets (encoder stops + STOP_TIME net).
+  void buildBlendStops();
+
+  // mergePending -- consume pending_ MID-plan: sample each channel's current
+  // remaining, ACCUMULATE the pending segment's distance/heading onto it,
+  // retarget() both channels from their moving state, rebase the baseline
+  // from this tick's observations, and rebuild the stops for the merged
+  // targets. No replans in BLEND (the next merge IS the correction).
+  void mergePending(uint32_t now, const msg::MotorState& encLeft,
+                    const msg::MotorState& encRight);
 
   // advancePhase -- called once the active phase's trailing graceful decel
   // has converged (or forceStopArmed_ is set): moves to the next
@@ -256,6 +291,11 @@ class SegmentExecutor {
   bool needTranslate_ = false;
   bool needTerminalPivot_ = false;
   float trackwidth_ = 0.0f;  // [mm]
+
+  // Streaming merge slot -- see offerNext()'s doc comment.
+  Segment pending_ = {};
+  bool hasPending_ = false;
+  bool currentStream_ = false;   // the segment in flight is a streaming one
 };
 
 }  // namespace Motion

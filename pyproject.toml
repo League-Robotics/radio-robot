@@ -46,6 +46,7 @@ codegen = [
 # root-level sync kept pruning pytest — folding the group here fixes that.)
 dev = [
     "jsonschema>=4.26.0",
+    "pygame>=2.6.1",
     "pytest>=8.0",
 ]
 # The Robot Test GUI needs both PySide6 (widgets) and the aprilcam camera

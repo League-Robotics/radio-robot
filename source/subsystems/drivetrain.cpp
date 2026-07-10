@@ -262,6 +262,15 @@ void Drivetrain::tick(uint32_t now,
         if (!executor_.active() && !ring_.empty()) {
             Motion::Segment seg = ring_.take();
             executor_.start(seg, now, config_.trackwidth);
+        } else if (executor_.streaming() && !executor_.hasPending() && !ring_.empty() &&
+                   ring_.peek(0) != nullptr && ring_.peek(0)->stream) {
+            // Streaming merge feed: while a STREAM segment executes and the
+            // next queued segment is also a stream one, top up the executor's
+            // one-deep pending slot -- it merges mid-plan on the executor's
+            // next tick (SegmentExecutor::offerNext()'s contract). Discrete
+            // segments never enter this path: they wait for idle and execute
+            // fully sequentially, exactly as before.
+            executor_.offerNext(ring_.take());
         }
 
         msg::BodyTwist3 twist = executor_.tick(now, leftObs, rightObs);
@@ -382,6 +391,11 @@ msg::DrivetrainState Drivetrain::state() const {
     // a WHEELS/TWIST drive command is the standing mode (S...STOP window).
     s.busy = segmentMode_ ? executor_.active()
                           : (mode_ == Mode::WHEELS || mode_ == Mode::TWIST);
+
+    // Motion-queue depth: segments waiting in the ring PLUS the one
+    // currently executing. Surfaced in the MOVE ack (`q=`) so a streaming
+    // teleop client can flow-control its send rate against the real backlog.
+    s.queue = ring_.size() + ((segmentMode_ && executor_.active()) ? 1u : 0u);
 
     return s;
 }

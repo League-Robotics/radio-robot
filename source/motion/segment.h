@@ -34,6 +34,18 @@ struct Segment {
   float yawRateMax = 0.0f;    // [rad/s]    pivot angular-speed ceiling
   float yawAccelMax = 0.0f;   // [rad/s^2]  pivot angular accel
   float yawJerkMax = 0.0f;    // [rad/s^3]  pivot angular jerk
+
+  // stream (OOP 2026-07-09, teleop): marks a STREAMING segment (wire
+  // `MOVE ... s=1`). Streaming segments MERGE into the in-flight plan --
+  // remaining distance/heading accumulate and both channels retarget() from
+  // their current moving state (Phase::BLEND: translate+pivot simultaneous,
+  // i.e. a differential arc) -- so a joystick's micro-segments chain at
+  // speed instead of each solving from rest (a from-rest segment of duration
+  // T covers only ~a*T^2/4: unchained streams cap at a crawl). The built-in
+  // to-rest tail of the merged plan IS the graceful stop when the stream
+  // runs dry. Discrete segments (stream=false, the default) keep the exact
+  // sequential execute-each-fully semantics.
+  bool stream = false;
 };
 
 }  // namespace Motion

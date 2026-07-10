@@ -120,7 +120,7 @@ def test_move_straight_executes_and_settles_no_reverse_creep(sim):
     """`MOVE <mm> 0 0` -- a plain straight (TRANSLATE-only, both pivots
     degenerate)."""
     reply = sim.command("MOVE 300 0 0")
-    assert reply.strip() == "OK move dist=300 dir=0 fh=0"
+    assert reply.strip().startswith("OK move dist=300 dir=0 fh=0") and " q=" in reply.strip()
 
     max_l, max_r = _run_and_check_no_reverse_creep(sim)
     assert max_l > 50.0 and max_r > 50.0, "segment never genuinely drove"
@@ -137,7 +137,7 @@ def test_move_pure_in_place_turn_executes_and_settles_no_reverse_creep(sim):
     """`MOVE 0 0 <heading>` -- distance and direction both 0, so only the
     TERMINAL_PIVOT phase fires (a pure in-place turn)."""
     reply = sim.command("MOVE 0 0 9000")
-    assert reply.strip() == "OK move dist=0 dir=0 fh=9000"
+    assert reply.strip().startswith("OK move dist=0 dir=0 fh=9000") and " q=" in reply.strip()
 
     max_l, max_r = _run_and_check_no_reverse_creep(sim)
     assert max_l > 20.0 and max_r > 20.0, "segment never genuinely drove"
@@ -167,7 +167,7 @@ def test_move_translate_then_terminal_pivot_executes_and_settles_no_reverse_cree
     which is exactly the natural-completion contract this ticket's
     acceptance criteria ask for."""
     reply = sim.command("MOVE 300 0 9000")
-    assert reply.strip() == "OK move dist=300 dir=0 fh=9000"
+    assert reply.strip().startswith("OK move dist=300 dir=0 fh=9000") and " q=" in reply.strip()
 
     max_l = max_r = 0.0
     for _ in range(150):   # 3.6s -- covers both TRANSLATE's and TERMINAL_
@@ -227,7 +227,7 @@ def test_stop_over_wire_mid_move_triggers_graceful_decel_no_reverse_creep(sim):
     reply text is unchanged (`OK stop`) even though its physical effect
     changed from 093's instant brake."""
     reply = sim.command("MOVE 2000 0 0")   # long: never completes naturally in this window
-    assert reply.strip() == "OK move dist=2000 dir=0 fh=0"
+    assert reply.strip().startswith("OK move dist=2000 dir=0 fh=0") and " q=" in reply.strip()
 
     sim.tick_for(1000)   # 1s -- underway
     vel_l, vel_r = sim.vel()
@@ -318,6 +318,37 @@ def test_tlm_active_clears_after_stop_settles(sim):
     assert active == 0, "TLM active= stayed 1 after STOP settled (authority-flag latch)"
 
 
+def test_move_streaming_chains_at_speed(sim):
+    """REGRESSION (streaming chain, OOP 2026-07-09): micro-MOVE segments
+    streamed while the previous one executes must CHAIN at speed -- an
+    unchained from-rest-to-rest 15mm segment caps peak speed at
+    sqrt(a*d) ~= 110 mm/s regardless of send rate, so a sustained stream
+    exceeding ~150 mm/s proves the executor retarget()s from its moving
+    state. Draining the stream must still end in the graceful decel
+    (settled, no reverse)."""
+    peak = 0.0
+    for _ in range(20):
+        r = sim.command("MOVE 15 0 0 s=1")
+        assert r.strip().startswith("OK move")
+        sim.tick_for(60)
+        vel_l, vel_r = sim.vel()
+        peak = max(peak, (vel_l + vel_r) / 2.0)
+    assert peak > 150.0, f"streamed micro-segments did not chain (peak {peak:.0f} mm/s)"
+
+    went_negative = False
+    for _ in range(150):   # 3.6s drain window
+        sim.tick_for(24)
+        vel_l, vel_r = sim.vel()
+        if (vel_l + vel_r) / 2.0 < -8.0:
+            went_negative = True
+    assert not went_negative, "stream drain reversed direction (not a graceful decel)"
+    vel_l, vel_r = sim.vel()
+    assert abs(vel_l) < 10.0 and abs(vel_r) < 10.0
+
+    _, _, _, _, active = _parse_tlm(sim.command("TLM"))
+    assert active == 0
+
+
 def test_pivot_completes_promptly_single_peaked(sim):
     """REGRESSION (multi-hump pivot + STOP_TIME stall, 2026-07-09): an
     in-place turn must execute as ONE velocity peak (no decaying re-solve
@@ -325,7 +356,8 @@ def test_pivot_completes_promptly_single_peaked(sim):
     the ~2.5s STOP_TIME net. Single-peak check: once |vel_r| has exceeded
     60 mm/s and then fallen below 20 mm/s, it must never rise above 40 mm/s
     again."""
-    assert sim.command("MOVE 0 0 9000").strip() == "OK move dist=0 dir=0 fh=9000"
+    reply = sim.command("MOVE 0 0 9000").strip()
+    assert reply.startswith("OK move dist=0 dir=0 fh=9000") and " q=" in reply
     peaked = fallen = False
     idle_at = None
     for i in range(160):   # 3.84 s at 24 ms
@@ -360,7 +392,7 @@ def test_move_sent_mid_slack_takes_effect_on_next_mandatory_tick(sim):
     `segmentIn -> ring_ -> executor` happens within that one mandatory
     tick, not a multi-hop mailbox latency."""
     reply = sim.command("MOVE 300 0 0")
-    assert reply.strip() == "OK move dist=300 dir=0 fh=0"
+    assert reply.strip().startswith("OK move dist=300 dir=0 fh=0") and " q=" in reply.strip()
 
     _, _, _, _, active = _parse_tlm(sim.command("TLM"))
     assert active == 1
@@ -373,9 +405,9 @@ def test_two_moves_queued_back_to_back_both_execute_in_order(sim):
     latest-wins `Mailbox` would (architecture-update.md Section 5,
     "Command precedence and the 'no hiccups' requirement")."""
     reply1 = sim.command("MOVE 200 0 0")
-    assert reply1.strip() == "OK move dist=200 dir=0 fh=0"
+    assert reply1.strip().startswith("OK move dist=200 dir=0 fh=0") and " q=" in reply1.strip()
     reply2 = sim.command("MOVE 200 0 0")
-    assert reply2.strip() == "OK move dist=200 dir=0 fh=0"
+    assert reply2.strip().startswith("OK move dist=200 dir=0 fh=0") and " q=" in reply2.strip()
 
     # Ample settle window for TWO 200mm straight segments run back to back.
     for _ in range(500):   # up to 12s

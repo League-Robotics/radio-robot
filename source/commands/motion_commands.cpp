@@ -420,6 +420,7 @@ ParseResult parseMove(const char* const* tokens, int ntokens, const KVPair* kvs,
   float w = kvFloat(kvs, nkv, "w", 0.0f);
   float wa = kvFloat(kvs, nkv, "wa", 0.0f);
   float wj = kvFloat(kvs, nkv, "wj", 0.0f);
+  float s = kvFloat(kvs, nkv, "s", 0.0f);   // s=1 -> STREAMING segment (merge-chain)
 
   if (v < 0.0f || v > kMoveMaxSpeedMax) {
     res.ok = false; res.err.code = "range"; res.err.detail = "v"; return res;
@@ -441,7 +442,7 @@ ParseResult parseMove(const char* const* tokens, int ntokens, const KVPair* kvs,
   }
 
   res.ok = true;
-  res.args.count = 9;
+  res.args.count = 10;
   argInt(res.args.args[0], distance);
   argInt(res.args.args[1], direction);
   argInt(res.args.args[2], finalHeading);
@@ -451,6 +452,7 @@ ParseResult parseMove(const char* const* tokens, int ntokens, const KVPair* kvs,
   argFloat(res.args.args[6], w);
   argFloat(res.args.args[7], wa);
   argFloat(res.args.args[8], wj);
+  argFloat(res.args.args[9], s);
   // Only the 3 required positional tokens count toward suppliedCount -- the
   // 6 kv overrides' "was this supplied" question is already answered by
   // their own 0-sentinel value (see this function's own doc comment), the
@@ -736,18 +738,25 @@ void handleMove(const ArgList& args, const char* corrId, ReplyFn replyFn, void* 
   seg.yawRateMax = w * kCdegToRad;
   seg.yawAccelMax = wa * kCdegToRad;
   seg.yawJerkMax = wj * kCdegToRad;
+  seg.stream = args.args[9].fval > 0.5f;   // s=1 -> merge-chain into the live plan
 
-  // A post() failure (bb.segmentIn already at its 8-slot cap) is silently
-  // dropped -- same "should not occur in ordinary operation" treatment
-  // Drivetrain::tick()'s own ring_.post() failure gets (drivetrain.cpp);
-  // no live handler in this file checks a driveIn/segmentIn/motionIn post()
-  // return value today (handleS's b.driveIn.post(cmd) above is the existing
-  // precedent).
-  b.segmentIn.post(seg);
+  // Streaming teleop flow control (OOP 2026-07-09): a full segmentIn now
+  // replies `ERR full` instead of dropping silently -- a streamer treats it
+  // as "back off hard". Every accepted MOVE's ack carries q=<depth>: the
+  // segments still in segmentIn (undrained this pass) plus the Drivetrain's
+  // committed ring+executing depth (bb.drivetrain.queue, one pass stale --
+  // fine for rate control). The client aims to hold q ~= 3.
+  if (!b.segmentIn.post(seg)) {
+    char ebuf[48];
+    CommandProcessor::replyErr(ebuf, sizeof(ebuf), "full", nullptr, corrId, replyFn, replyCtx);
+    return;
+  }
 
-  char body[64];
-  snprintf(body, sizeof(body), "dist=%d dir=%d fh=%d", distance, direction, finalHeading);
-  char rbuf[96];
+  unsigned q = b.segmentIn.size() + b.drivetrain.queue;
+  char body[80];
+  snprintf(body, sizeof(body), "dist=%d dir=%d fh=%d q=%u",
+           distance, direction, finalHeading, q);
+  char rbuf[112];
   CommandProcessor::replyOK(rbuf, sizeof(rbuf), "move", body, corrId, replyFn, replyCtx);
 }
 

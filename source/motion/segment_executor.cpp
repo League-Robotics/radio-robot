@@ -100,6 +100,25 @@ void SegmentExecutor::start(const Segment& segment, uint32_t now, float trackwid
   stopping_ = false;
   baselineCaptured_ = false;
   forceStopArmed_ = false;
+  hasPending_ = false;   // a fresh start abandons any stale merge slot
+  currentStream_ = segment.stream;
+
+  if (currentStream_) {
+    // Streaming segment from idle: single-phase BLEND, both channels from
+    // rest. `direction` is folded into finalHeading (streamers send dir=0).
+    translateTarget_ = segment.distance;
+    terminalPivotTarget_ = segment.finalHeading;
+    preRotateTarget_ = 0.0f;
+    needPrePivot_ = false;
+    needTranslate_ = fabsf(translateTarget_) > kDistEps;
+    needTerminalPivot_ = fabsf(terminalPivotTarget_) > kAngleEps;
+    if (!needTranslate_ && !needTerminalPivot_) {
+      phase_ = Phase::IDLE;
+      return;
+    }
+    beginStreamFresh(now);
+    return;
+  }
 
   if (needPrePivot_) {
     beginPrePivot(now);
@@ -110,6 +129,106 @@ void SegmentExecutor::start(const Segment& segment, uint32_t now, float trackwid
   } else {
     phase_ = Phase::IDLE;  // fully degenerate segment -- nothing to do
   }
+}
+
+bool SegmentExecutor::offerNext(const Segment& segment) {
+  if (phase_ == Phase::IDLE || hasPending_ || forceStopArmed_) return false;
+  pending_ = segment;
+  hasPending_ = true;
+  return true;
+}
+
+// buildBlendStops -- (re)build the BLEND phase's stop set for the current
+// translateTarget_/terminalPivotTarget_: the segment's own encoder stops +
+// the STOP_TIME net.
+void SegmentExecutor::buildBlendStops() {
+  stopsCount_ = 0;
+  if (needTranslate_) {
+    appendStop(msg::StopKind::STOP_DISTANCE, fabsf(translateTarget_));
+  }
+  if (needTerminalPivot_) {
+    appendStop(msg::StopKind::STOP_ROTATION, fabsf(terminalPivotTarget_) * arcScale_);
+  }
+  float speedMag = (fabsf(linearCeiling_) < 1.0f) ? 1.0f : fabsf(linearCeiling_);
+  float omegaMag = (fabsf(rotationalCeiling_) < 1e-3f) ? 1e-3f : fabsf(rotationalCeiling_);
+  float nominal = fabsf(translateTarget_) / speedMag * 1000.0f;         // [ms]
+  float nominalRot = fabsf(terminalPivotTarget_) / omegaMag * 1000.0f;  // [ms]
+  if (nominalRot > nominal) nominal = nominalRot;
+  appendStop(msg::StopKind::STOP_TIME, nominal * 2.0f + 2000.0f);
+}
+
+void SegmentExecutor::beginStreamFresh(uint32_t now) {
+  linear_.reset();
+  rotational_.reset();
+  if (needTranslate_) linear_.solveToRest(translateTarget_, linearCeiling_);
+  if (needTerminalPivot_) rotational_.solveToRest(terminalPivotTarget_, rotationalCeiling_);
+  linearTarget_ = translateTarget_;
+  rotationalTarget_ = terminalPivotTarget_;
+  linearSolveMs_ = now;
+  rotationalSolveMs_ = now;
+
+  buildBlendStops();
+  lastReplanMs_ = now;
+  phaseReplanDeadline_ = now;   // BLEND: divergence replans disabled
+  phase_ = Phase::BLEND;
+}
+
+void SegmentExecutor::mergePending(uint32_t now, const msg::MotorState& encLeft,
+                                   const msg::MotorState& encRight) {
+  Segment seg = pending_;
+  hasPending_ = false;
+
+  // Each channel's remaining, in its own (post-retarget-rebased) frame,
+  // sampled from the LIVE plan -- then the pending segment's contribution
+  // ACCUMULATES onto it. This is the whole trick: the plan keeps moving and
+  // its rest-point keeps being pushed ahead; the to-rest tail only ever
+  // plays out when the stream stops feeding it.
+  float linRemaining = linearTarget_ - linear_.sample(linearElapsed(now)).position;
+  float rotRemaining = rotationalTarget_ - rotational_.sample(rotationalElapsed(now)).position;
+  translateTarget_ = linRemaining + seg.distance;
+  terminalPivotTarget_ = rotRemaining + seg.finalHeading;
+  preRotateTarget_ = 0.0f;
+  needPrePivot_ = false;
+  needTranslate_ = fabsf(translateTarget_) > kDistEps;
+  needTerminalPivot_ = fabsf(terminalPivotTarget_) > kAngleEps;
+
+  msg::PlannerConfig linCfg = effectiveLinearConfig(seg);
+  msg::PlannerConfig rotCfg = effectiveRotationalConfig(seg);
+  linear_.configure(linCfg, /*isRotational=*/false);
+  rotational_.configure(rotCfg, /*isRotational=*/true);
+  linearCeiling_ = linCfg.v_body_max;
+  rotationalCeiling_ = rotCfg.yaw_rate_max;
+
+  // retarget() continues from the channel's CURRENT velocity/accel
+  // (jerk_trajectory.h's chaining contract) -- including retarget(0) to
+  // smoothly shed a channel the merged stream no longer drives. A channel
+  // with no plan yet this life (duration 0) solves fresh from rest.
+  if (linear_.duration() > 0.0f) {
+    linear_.retarget(translateTarget_);
+  } else if (needTranslate_) {
+    linear_.reset();
+    linear_.solveToRest(translateTarget_, linearCeiling_);
+  }
+  linearTarget_ = translateTarget_;
+  linearSolveMs_ = now;
+
+  if (rotational_.duration() > 0.0f) {
+    rotational_.retarget(terminalPivotTarget_);
+  } else if (needTerminalPivot_) {
+    rotational_.reset();
+    rotational_.solveToRest(terminalPivotTarget_, rotationalCeiling_);
+  }
+  rotationalTarget_ = terminalPivotTarget_;
+  rotationalSolveMs_ = now;
+
+  buildBlendStops();
+  stopping_ = false;
+  currentStream_ = true;
+  lastReplanMs_ = now;
+  phaseReplanDeadline_ = now;   // BLEND: divergence replans disabled
+  phase_ = Phase::BLEND;
+  captureBaseline(now, encLeft, encRight);
+  baselineCaptured_ = true;
 }
 
 void SegmentExecutor::beginPrePivot(uint32_t now) {
@@ -196,21 +315,27 @@ void SegmentExecutor::advancePhase(uint32_t now) {
       }
       return;
     case Phase::TERMINAL_PIVOT:
+    case Phase::BLEND:
     case Phase::IDLE:
     default:
       phase_ = Phase::IDLE;
+      hasPending_ = false;   // defensive: never strand a chain slot at idle
       return;
   }
 }
 
 void SegmentExecutor::stop(uint32_t now) {
   if (phase_ == Phase::IDLE) return;
+  hasPending_ = false;   // STOP abandons the chain slot along with the phases
   forceStopArmed_ = true;
   if (!stopping_) {
     stopping_ = true;
     softDeadline_ = now + kSoftDeadlineMs;
     if (phase_ == Phase::TRANSLATE) {
       armTranslateStopDecel(now);
+    } else if (phase_ == Phase::BLEND) {
+      armTranslateStopDecel(now);
+      armPivotStopDecel(now);
     } else {
       armPivotStopDecel(now);
     }
@@ -232,6 +357,12 @@ void SegmentExecutor::captureBaseline(uint32_t now, const msg::MotorState& encLe
     baseline_.vSign =
         (translateTarget_ > 0.0f) ? 1.0f : (translateTarget_ < 0.0f ? -1.0f : 0.0f);
     baseline_.omegaSign = 0.0f;
+  } else if (phase_ == Phase::BLEND) {
+    baseline_.vSign =
+        (translateTarget_ > 0.0f) ? 1.0f : (translateTarget_ < 0.0f ? -1.0f : 0.0f);
+    baseline_.omegaSign = (terminalPivotTarget_ > 0.0f)
+                              ? 1.0f
+                              : (terminalPivotTarget_ < 0.0f ? -1.0f : 0.0f);
   } else {
     float target = (phase_ == Phase::PRE_PIVOT) ? preRotateTarget_ : terminalPivotTarget_;
     baseline_.omegaSign = (target > 0.0f) ? 1.0f : (target < 0.0f ? -1.0f : 0.0f);
@@ -396,6 +527,15 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
     baselineCaptured_ = true;
   }
 
+  // Streaming merge: consume the pending segment IMMEDIATELY (mid-plan) --
+  // remaining targets accumulate and the channels retarget() from their
+  // current moving state. Merging must not wait for the stop to fire: each
+  // plan is solved to-rest, so a fire-time chain would re-launch from ~zero
+  // velocity every segment and the stream would crawl.
+  if (!stopping_ && hasPending_ && currentStream_) {
+    mergePending(now, encLeft, encRight);
+  }
+
   float v = 0.0f;
   float omega = 0.0f;
   bool rotElapsedPastDuration = false;
@@ -403,6 +543,21 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
   if (phase_ == Phase::TRANSLATE) {
     if (!stopping_) maybeReplanTranslate(now, encLeft, encRight);
     v = linear_.sample(linearElapsed(now)).velocity;
+  } else if (phase_ == Phase::BLEND) {
+    // BLEND (chained streaming segment): both channels run simultaneously --
+    // on a differential that is an arc. No divergence replans here
+    // (phaseReplanDeadline_ == chain instant): micro-segments arrive faster
+    // than a replan could help; the next chain IS the correction.
+    v = linear_.sample(linearElapsed(now)).velocity;
+    float rotElapsed = rotationalElapsed(now);
+    omega = rotational_.sample(rotElapsed).velocity;
+    rotElapsedPastDuration = rotElapsed >= rotational_.duration();
+    if (stopping_) {
+      // Literal-0.0f snaps once each channel's stop-decel has fully played
+      // out -- same PID zero-deadband rationale as the pivot branch below.
+      if (rotElapsedPastDuration) omega = 0.0f;
+      if (linearElapsed(now) >= linear_.duration()) v = 0.0f;
+    }
   } else {
     if (!stopping_) maybeReplanPivot(now, encLeft, encRight);
     float rotElapsed = rotationalElapsed(now);
@@ -424,8 +579,11 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
   }
 
   if (stopping_) {
-    bool converged = (phase_ == Phase::TRANSLATE) ? (linearElapsed(now) >= linear_.duration())
-                                                   : rotElapsedPastDuration;
+    bool linConv = linearElapsed(now) >= linear_.duration();
+    bool converged = (phase_ == Phase::TRANSLATE)
+                         ? linConv
+                         : (phase_ == Phase::BLEND ? (linConv && rotElapsedPastDuration)
+                                                    : rotElapsedPastDuration);
     int32_t dtDeadline = static_cast<int32_t>(now - softDeadline_);
     if (converged || dtDeadline >= 0) {
       advancePhase(now);
@@ -462,7 +620,7 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
           fired = true;
         } else if (r == Motion::StopEvalResult::NOT_FIRED) {
           float plannedSpeedNative =   // [mm/s] plan speed in the stop's own native units
-              (phase_ == Phase::TRANSLATE)
+              (cond.kind == msg::StopKind::STOP_DISTANCE)
                   ? fabsf(linear_.sample(linearElapsed(now)).velocity)
                   : fabsf(rotational_.sample(rotationalElapsed(now)).velocity) * arcScale_;
           if (remainingNative <= plannedSpeedNative * kDeadTime) fired = true;
@@ -484,17 +642,31 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
     // complete; residual accuracy is calibration work, not something a
     // second trapezoid can fix.
     if (!fired) {
-      float elapsed = (phase_ == Phase::TRANSLATE) ? linearElapsed(now)
-                                                    : rotationalElapsed(now);
-      float duration = (phase_ == Phase::TRANSLATE) ? linear_.duration()
-                                                     : rotational_.duration();
-      if (duration > 0.0f && elapsed >= duration + kDeadTime) fired = true;
+      if (phase_ == Phase::BLEND) {
+        bool linDone = linear_.duration() <= 0.0f ||
+                       linearElapsed(now) >= linear_.duration() + kDeadTime;
+        bool rotDone = rotational_.duration() <= 0.0f ||
+                       rotationalElapsed(now) >= rotational_.duration() + kDeadTime;
+        fired = linDone && rotDone;
+      } else {
+        float elapsed = (phase_ == Phase::TRANSLATE) ? linearElapsed(now)
+                                                      : rotationalElapsed(now);
+        float duration = (phase_ == Phase::TRANSLATE) ? linear_.duration()
+                                                       : rotational_.duration();
+        if (duration > 0.0f && elapsed >= duration + kDeadTime) fired = true;
+      }
     }
     if (fired) {
+      // (Streaming note: a pending stream segment never reaches this point --
+      // it merges at the TOP of tick(), mid-plan. By fire time the queue was
+      // dry, so the decel below IS the stream's graceful stop.)
       stopping_ = true;
       softDeadline_ = now + kSoftDeadlineMs;
       if (phase_ == Phase::TRANSLATE) {
         armTranslateStopDecel(now);
+      } else if (phase_ == Phase::BLEND) {
+        armTranslateStopDecel(now);
+        armPivotStopDecel(now);
       } else {
         armPivotStopDecel(now);
       }

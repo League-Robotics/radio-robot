@@ -72,6 +72,11 @@ message DrivetrainState {
   // after the first STOP and can never mean "idle"). TLM's active= token
   // reports THIS field.
   bool       busy               = 15;
+  // queue: motion-queue depth -- segments waiting in the Drivetrain's
+  // internal ring PLUS the one currently executing (0 = idle). Surfaced in
+  // the MOVE ack (`q=`) so a streaming teleop client can flow-control its
+  // send rate against the actual backlog.
+  uint32     queue              = 16;
 }
 
 // Full drive configuration slice: geometry, PID gains, OTOS fusion, EKF noise.

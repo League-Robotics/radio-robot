@@ -102,6 +102,7 @@ struct DrivetrainState {
     float acc_[4] = {};
     uint8_t acc_count = 0;
     bool busy = false;
+    uint32_t queue = 0;
 
     // --- array / optional-string accessors ---
     const float* enc() const { return enc_; }
