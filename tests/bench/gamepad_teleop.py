@@ -66,6 +66,8 @@ class Teleop:
         self.conn = None      # set after SerialConnection(on_recv=self.on_recv)
         self.drive_axis = 1   # left stick Y (see --probe if your mapping differs)
         self.turn_axis = 0    # left stick X
+        self.drive_sign = -1.0   # stick pushes forward -> +drive
+        self.turn_sign = 1.0     # bench-set 2026-07-09 ("invert the X axis")
         self.period = PERIOD  # [s] fixed cadence (attr kept for status/selftest)
         self.sent = 0
         self.acked = 0
@@ -142,8 +144,10 @@ def run_gamepad(tele):
             pygame.event.pump()
             # Default F310/Dual Action: axis 0 = left X (right +), axis 1 =
             # left Y (down +) -- but macOS mappings vary; --probe to verify.
-            drive = -js.get_axis(tele.drive_axis)   # push forward -> +drive
-            turn = -js.get_axis(tele.turn_axis)     # push left -> +turn (CCW+)
+            # Turn sign +1 per bench driving 2026-07-09 ("invert the X axis");
+            # flip either at runtime with --invert-drive/--invert-turn.
+            drive = tele.drive_sign * js.get_axis(tele.drive_axis)
+            turn = tele.turn_sign * js.get_axis(tele.turn_axis)
             if any(js.get_button(b) for b in range(js.get_numbuttons())
                    if js.get_button(b) and b == 6):   # BACK
                 print("BACK pressed -- stopping")
@@ -247,6 +251,10 @@ def main():
                     help="joystick axis index for fwd/back (default 1)")
     ap.add_argument("--turn-axis", type=int, default=0,
                     help="joystick axis index for left/right (default 0)")
+    ap.add_argument("--invert-drive", action="store_true",
+                    help="flip the fwd/back sense")
+    ap.add_argument("--invert-turn", action="store_true",
+                    help="flip the left/right sense")
     args = ap.parse_args()
 
     if args.probe:
@@ -255,6 +263,10 @@ def main():
     tele = Teleop()
     tele.drive_axis = args.drive_axis
     tele.turn_axis = args.turn_axis
+    if args.invert_drive:
+        tele.drive_sign = -tele.drive_sign
+    if args.invert_turn:
+        tele.turn_sign = -tele.turn_sign
     conn = SerialConnection(args.port, mode=("relay" if args.relay else "direct"),
                             on_recv=tele.on_recv)
     info = conn.connect(skip_ping=False)
