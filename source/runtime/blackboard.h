@@ -141,11 +141,16 @@ struct Blackboard {
   msg::MotorCapabilities motorCaps[kMotorCount];
   bool otosPresent = false;
 
-  // (087-006) Loop-owned watchdog windows -- published every pass by the
-  // loop from its own SerialSilenceWatchdog/StreamingDriveWatchdog
-  // instances (neither watchdog is one of the Configurator's four targets).
+  // (087-006) Loop-owned watchdog windows -- devWatchdogWindow is published
+  // every pass by the loop from its own SerialSilenceWatchdog instance
+  // (dev_commands.h; not one of the Configurator's four fold targets).
+  // streamWatchdogWindow's own StreamingDriveWatchdog consumer was
+  // already-dead code and was deleted outright (097-006, see
+  // motion_commands.h's file header) -- the field below is still written
+  // (by the binary config WATCHDOG patch, handleConfigWatchdog in
+  // binary_channel.cpp) but has no live consumer.
   uint32_t devWatchdogWindow = 0;     // [ms] DEV WD's current window
-  uint32_t streamWatchdogWindow = 0;  // [ms] SET sTimeout='s current window
+  uint32_t streamWatchdogWindow = 0;  // [ms] binary config WATCHDOG patch's window (see above)
 
   // loopNow (2026-07-09 smooth-telemetry) -- the loop-pass time at which
   // this snapshot (bb.drivetrain, bb.motors) was committed, published by the
@@ -213,7 +218,7 @@ struct Blackboard {
   Mailbox<msg::SetPose> otosSetPoseIn;        // SI re-anchor -> odometer
   Mailbox<msg::OdometerCommand> otosCommandIn;  // OI/OZ/OR/OV -> odometer (loop-drained)
   Mailbox<uint32_t> devWatchdogWindowIn;       // DEV WD -> loop's SerialSilenceWatchdog
-  Mailbox<uint32_t> streamWatchdogWindowIn;    // SET sTimeout= -> loop's StreamingDriveWatchdog
+  Mailbox<uint32_t> streamWatchdogWindowIn;    // binary config WATCHDOG patch -> streamWatchdogWindow (StreamingDriveWatchdog deleted 097-006, no live consumer)
   Mailbox<MotionCommand> motionIn;             // S/T/D/R/TURN/RT/G/STOP -> Planner::apply()
 };
 

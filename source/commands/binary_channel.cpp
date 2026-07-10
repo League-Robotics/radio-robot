@@ -351,11 +351,14 @@ void handleConfigPlanner(const msg::PlannerConfigPatch& p, Rt::Blackboard& b, ui
 
 // handleConfigWatchdog -- Open Question 4 (096): sTimeout is NOT one of the
 // Configurator's four fold targets -- posts straight to
-// bb.streamWatchdogWindowIn (the loop-owned StreamingDriveWatchdog's
-// window), never bb.configIn, mirroring the now-deleted text handler's own
-// sTimeout special-case and file-header note that sTimeout is "the one key
-// that is NOT one of the Configurator's four targets" (config_commands.cpp/
-// .h, removed 097-007).
+// bb.streamWatchdogWindowIn (bb.streamWatchdogWindow's producer mailbox --
+// the StreamingDriveWatchdog class this comment used to name as its
+// consumer was itself already-dead code and was deleted outright, 097-006;
+// see motion_commands.h's own file header. Nothing currently drains this
+// mailbox into a live watchdog), never bb.configIn, mirroring the
+// now-deleted text handler's own sTimeout special-case and file-header note
+// that sTimeout is "the one key that is NOT one of the Configurator's four
+// targets" (config_commands.cpp/.h, removed 097-007).
 void handleConfigWatchdog(uint32_t window,  // [ms]
                           Rt::Blackboard& b, uint32_t corrId, ReplyFn replyFn,
                           void* replyCtx) {
