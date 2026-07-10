@@ -74,14 +74,25 @@ Reader loop:
    drops them silently; they do not generate protocol errors.
 """
 
+import base64
 import glob
 import queue
 import re
 import threading
 import time
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import serial
+
+if TYPE_CHECKING:
+    # Type-checking only: importing robot_radio.robot.pb2.envelope_pb2 at
+    # RUNTIME module-load time would be circular -- robot_radio.robot's own
+    # __init__.py imports robot_radio.robot.protocol, which imports
+    # SerialConnection from THIS module, so importing anything under
+    # robot_radio.robot (pb2 included) from serial_conn.py's top level would
+    # re-enter this partially-initialized module. See _get_envelope_pb2()
+    # below for the runtime (lazy, deferred-past-module-load) equivalent.
+    from robot_radio.robot.pb2 import envelope_pb2
 
 BAUD_RATE = 115200
 DEFAULT_PORT = "/dev/cu.usbmodem21431202"
@@ -133,6 +144,35 @@ _TLM_QUEUE_DEPTH = 256
 
 # Corr-id pattern: ``#<digits>`` at the end of a reply line.
 _CORR_ID_RE = re.compile(r"#(\d+)$")
+
+# Binary-plane armor prefix (095-002, M7 Host Codec Mirror): a `*B<base64>`
+# line carries one base64-encoded, serialized pb2.ReplyEnvelope. See
+# architecture-update.md (095) Risk 5 for why `*` cannot collide with any
+# text verb, `OK/ERR/...` reply prefix, or the relay's `#`-line convention.
+_BINARY_ARMOR_PREFIX = "*B"
+
+# Module-level cache for the lazily-imported envelope_pb2 module (see
+# _get_envelope_pb2()'s docstring for why this cannot be a top-level import).
+_envelope_pb2_module = None
+
+
+def _get_envelope_pb2():
+    """Lazily import and cache robot_radio.robot.pb2.envelope_pb2.
+
+    Deferred past module-load time to break a circular import:
+    robot_radio.robot's own __init__.py imports robot_radio.robot.protocol,
+    which imports SerialConnection from THIS module -- so a top-level
+    ``from robot_radio.robot.pb2 import envelope_pb2`` here would re-enter
+    serial_conn.py while it is still being initialized (SerialConnection
+    not yet defined) whenever something imports robot_radio.io.serial_conn
+    before robot_radio.robot. Calling this from inside a method (after all
+    modules have finished loading) has no such ordering constraint.
+    """
+    global _envelope_pb2_module
+    if _envelope_pb2_module is None:
+        from robot_radio.robot.pb2 import envelope_pb2 as _mod
+        _envelope_pb2_module = _mod
+    return _envelope_pb2_module
 
 
 def _disable_hupcl(ser) -> None:
@@ -551,6 +591,9 @@ class SerialConnection:
         - ``OK``/``ERR``/``CFG`` with no corr-id → ``_reply_queues[""]``
         - ``OK keepalive`` / lines containing ``keepalive`` → dropped silently
         - Lines beginning with ``#`` → relay status/comment lines, dropped
+        - ``*B<base64>`` (binary plane, 095-002) → dearmored, parsed as a
+          ``pb2.ReplyEnvelope``, routed to ``_reply_queues[envelope.corr_id]``
+          exactly like an ``OK``/``ERR``/``CFG``/``ID`` reply above.
         - Anything else → dropped silently
         """
         while not self._reader_stop.is_set():
@@ -621,7 +664,50 @@ class SerialConnection:
                 # If no queue is registered for this id, drop silently.
                 continue
 
+            # Binary plane (095-002, M7): `*B<base64>` carries one
+            # serialized pb2.ReplyEnvelope. Routed by the envelope's own
+            # `corr_id` field -- the binary-plane equivalent of the
+            # `#<digits>` suffix the text plane's OK/ERR/CFG/ID branch above
+            # parses out of the line. A pure addition: this branch cannot be
+            # reached by any text-plane reply (no existing reply prefix
+            # starts with `*`).
+            if text.startswith(_BINARY_ARMOR_PREFIX):
+                self._handle_binary_reply(text)
+                continue
+
             # All other lines: drop silently (diagnostics, unknown, etc.)
+
+    def _handle_binary_reply(self, text: str) -> None:
+        """Dearmor, decode, and route one ``*B<base64>`` binary reply line.
+
+        Called only from ``_reader_loop`` (see its docstring). Strips the
+        ``*B`` armor prefix, base64-decodes, and parses the result as a
+        ``pb2.ReplyEnvelope`` -- then routes it to
+        ``_reply_queues[str(envelope.corr_id)]``, the SAME queue lookup the
+        text plane's ``OK``/``ERR``/``CFG``/``ID`` branch performs, keyed by
+        the envelope's own ``corr_id`` field instead of a parsed ``#<id>``
+        suffix. If no queue is registered for that id, the reply is dropped
+        silently (same "no listener" semantics as the text plane).
+
+        Any decode/parse failure (malformed base64, malformed protobuf
+        bytes) is swallowed and the line dropped -- a single corrupted
+        binary reply must not crash the reader thread, matching this loop's
+        existing tolerance for undecodable bytes elsewhere (e.g. the
+        UTF-8-decode ``except Exception: continue`` above).
+        """
+        armored = text[len(_BINARY_ARMOR_PREFIX):]
+        try:
+            raw_bytes = base64.b64decode(armored)
+            reply = _get_envelope_pb2().ReplyEnvelope.FromString(raw_bytes)
+        except Exception:
+            return
+
+        corr_id = str(reply.corr_id)
+        with self._reply_lock:
+            q = self._reply_queues.get(corr_id)
+        if q is not None:
+            q.put(reply)
+        # If no queue is registered for this id, drop silently.
 
     def _poll_ready(self, total_timeout_s: float = _POLL_TOTAL_NORMAL_S) -> list[str]:
         """Poll PING until the device responds or total_timeout_s is exceeded.
@@ -823,6 +909,88 @@ class SerialConnection:
             break
 
         return {"sent": message, "mode": self._mode, "responses": lines}
+
+    def send_envelope(self, envelope: "envelope_pb2.CommandEnvelope",
+                      read_timeout: int = 500,  # [ms]
+                      ) -> dict[str, Any]:
+        """Send a binary ``pb2.CommandEnvelope``, block for its reply envelope.
+
+        The binary-plane counterpart of ``send()``: serializes ``envelope``,
+        base64-armors it as ``*B<base64>\\n``, writes it, and blocks on the
+        corr-id-keyed reply queue exactly like ``send()`` does today -- the
+        envelope's own ``corr_id`` field takes the place of ``send()``'s
+        ``#<corr_id>`` text suffix. ``envelope.corr_id`` is assigned here
+        (overwriting whatever the caller set) from the same
+        ``_corr_counter`` sequence ``send()`` uses, so text and binary
+        corr-ids never collide.
+
+        Does NOT reuse ``send()``'s corrupted-command ERR-unknown retry: that
+        retry keys off a TEXT reply's literal ``"ERR unknown"`` substring
+        signalling relay-framing corruption ate the command. The binary
+        plane has no equivalent signal defined yet -- a corrupted/malformed
+        binary line fails to decode server-side and produces no reply at
+        all, so there is nothing to pattern-match and retry against without
+        a NAK the schema does not (yet) define. Ships as a single-attempt
+        send; noted here per the ticket's instruction to flag rather than
+        silently drop the retry behavior.
+
+        Args:
+            envelope: A populated ``pb2.CommandEnvelope``. Its ``corr_id``
+                field is overwritten by this call.
+            read_timeout: Maximum time to wait for the reply, in
+                milliseconds. An extra 500 ms grace is added, matching
+                ``send()``.
+
+        Returns:
+            ``{"sent": envelope, "mode": self._mode, "reply": ReplyEnvelope
+            or None}`` on a send that reached the wire (``reply`` is
+            ``None`` on timeout); ``{"error": str, ...}`` if the port isn't
+            open or the write itself failed.
+        """
+        if not self.is_open:
+            return {"error": "Not connected. Call connect first."}
+
+        with self._reply_lock:
+            self._corr_counter += 1
+            corr_id = self._corr_counter
+            reply_q: queue.Queue = queue.Queue()
+            self._reply_queues[str(corr_id)] = reply_q
+
+        envelope.corr_id = corr_id
+        armored = base64.b64encode(envelope.SerializeToString()).decode("ascii")
+        line = f"{_BINARY_ARMOR_PREFIX}{armored}\n"
+
+        if self.on_send:
+            self.on_send(line.rstrip())
+
+        try:
+            with self._write_lock:
+                self._ser.write(line.encode("ascii"))
+                self._ser.flush()
+                self._last_write_s = time.monotonic()  # defer the next "+"
+        except Exception as exc:
+            with self._reply_lock:
+                self._reply_queues.pop(str(corr_id), None)
+            return {"error": str(exc), "sent": envelope}
+
+        timeout_s = (read_timeout / 1000.0) + 0.5
+        reply = None
+        deadline = time.time() + timeout_s
+        try:
+            while True:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                try:
+                    reply = reply_q.get(timeout=min(remaining, 0.05))
+                    break
+                except queue.Empty:
+                    continue
+        finally:
+            with self._reply_lock:
+                self._reply_queues.pop(str(corr_id), None)
+
+        return {"sent": envelope, "mode": self._mode, "reply": reply}
 
     def send_fast(self, message: str) -> None:
         """Fire-and-forget: send plain command, no response reading.

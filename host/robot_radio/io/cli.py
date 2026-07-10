@@ -12,6 +12,7 @@ import time
 
 from robot_radio.io.serial_conn import SerialConnection, list_serial_ports, DEFAULT_PORT
 from robot_radio.robot import QBotPro, Nezha, NezhaProtocol, Cutebot
+from robot_radio.robot.pb2 import envelope_pb2
 from robot_radio.robot.protocol import parse_tlm
 from robot_radio.robot.connection import (
     make_robot as _connection_make_robot,
@@ -1219,6 +1220,141 @@ def cmd_send(args):
     conn.disconnect()
 
 
+# ── Binary command plane (095-002, M7 Host Codec Mirror) ────────────────────
+#
+# `rogo binary <arm>` builds a pb2.CommandEnvelope for one of this sprint's
+# seven implemented oneof arms (drive/segment/replace/stop/ping/echo/id) and
+# sends it via SerialConnection.send_envelope() -- the *B<base64> binary
+# plane, parallel to (never replacing) every text-plane command above.
+
+
+def _print_binary_reply(result: dict) -> None:
+    """Print a send_envelope() result dict: the reply envelope's text-format
+    dump, a timeout notice, or a send-time error (with nonzero exit)."""
+    if "error" in result:
+        print(f"Error: {result['error']}", file=sys.stderr)
+        sys.exit(1)
+    reply = result.get("reply")
+    if reply is None:
+        print("(no reply received -- timeout)")
+        return
+    print(str(reply).strip() or f"corr_id: {reply.corr_id}")
+
+
+def cmd_binary_ping(args):
+    """Binary-plane PING: CommandEnvelope{ping: Ping{}} -> ReplyEnvelope."""
+    robot, conn, _ = _make_robot(args)
+    env = envelope_pb2.CommandEnvelope()
+    env.ping.SetInParent()
+    result = conn.send_envelope(env, read_timeout=args.read_timeout)
+    _print_binary_reply(result)
+    conn.disconnect()
+
+
+def cmd_binary_echo(args):
+    """Binary-plane ECHO: CommandEnvelope{echo: Echo{payload}} -> ReplyEnvelope.
+
+    payload is UTF-8-encoded text, capped at 64 bytes (max_count) -- the
+    firmware enforces the cap; this just sends whatever the caller passed.
+    """
+    robot, conn, _ = _make_robot(args)
+    env = envelope_pb2.CommandEnvelope()
+    env.echo.payload = args.text.encode("utf-8")
+    result = conn.send_envelope(env, read_timeout=args.read_timeout)
+    _print_binary_reply(result)
+    conn.disconnect()
+
+
+def cmd_binary_id(args):
+    """Binary-plane ID: CommandEnvelope{id: DeviceId{}} (empty request,
+    Decision 4) -> ReplyEnvelope{id: DeviceId{model,name,serial,fw_version,
+    proto_version}}."""
+    robot, conn, _ = _make_robot(args)
+    env = envelope_pb2.CommandEnvelope()
+    env.id.SetInParent()
+    result = conn.send_envelope(env, read_timeout=args.read_timeout)
+    _print_binary_reply(result)
+    conn.disconnect()
+
+
+def cmd_binary_stop(args):
+    """Binary-plane STOP: CommandEnvelope{stop: Stop{}} -> ReplyEnvelope.
+
+    Zero-field oneof arm (Decision 3) -- BinaryChannel constructs
+    msg::DrivetrainCommand{NEUTRAL=BRAKE} itself from this, the same
+    "cannot be malformed" safety-affordance shape as text-plane STOP.
+    """
+    robot, conn, _ = _make_robot(args)
+    env = envelope_pb2.CommandEnvelope()
+    env.stop.SetInParent()
+    result = conn.send_envelope(env, read_timeout=args.read_timeout)
+    _print_binary_reply(result)
+    conn.disconnect()
+
+
+def cmd_binary_drive(args):
+    """Binary-plane DRIVE: CommandEnvelope{drive: DrivetrainCommand{wheels}}.
+
+    Maps to the text plane's ``S <left> <right>`` semantics: one
+    WheelTarget per wheel, speed-only (position left uncommanded).
+    """
+    robot, conn, _ = _make_robot(args)
+    env = envelope_pb2.CommandEnvelope()
+    env.drive.wheels.w.add(speed=float(args.left))
+    env.drive.wheels.w.add(speed=float(args.right))
+    result = conn.send_envelope(env, read_timeout=args.read_timeout)
+    _print_binary_reply(result)
+    conn.disconnect()
+
+
+def _build_motion_segment(mseg, args) -> None:
+    """Populate a pb2.MotionSegment from parsed 'binary segment'/'binary
+    replace' args -- both subcommands send the identical MotionSegment
+    shape, just into a different CommandEnvelope oneof arm (segment=MOVE
+    semantics, replace=MOVER semantics; see architecture-update.md (095)
+    Decision 2).
+
+    MotionSegment's own native units are mm/rad/mm/s/... (protos/motion.proto);
+    the CLI accepts angles in degrees (matching every other rogo subcommand's
+    convention, e.g. 'rogo turn') and converts to radians here.
+    """
+    mseg.distance = args.distance
+    mseg.direction = math.radians(args.direction)
+    mseg.final_heading = math.radians(args.final_heading)
+    mseg.speed_max = args.speed_max
+    mseg.accel_max = args.accel_max
+    mseg.jerk_max = args.jerk_max
+    mseg.yaw_rate_max = math.radians(args.yaw_rate_max)
+    mseg.yaw_accel_max = math.radians(args.yaw_accel_max)
+    mseg.yaw_jerk_max = math.radians(args.yaw_jerk_max)
+    mseg.time = args.time
+    mseg.v = args.v
+    mseg.omega = math.radians(args.omega)
+    mseg.stream = args.stream
+
+
+def cmd_binary_segment(args):
+    """Binary-plane SEGMENT (MOVE): CommandEnvelope{segment: MotionSegment}
+    -> bb.segmentIn (WorkQueue, no-drop)."""
+    robot, conn, _ = _make_robot(args)
+    env = envelope_pb2.CommandEnvelope()
+    _build_motion_segment(env.segment, args)
+    result = conn.send_envelope(env, read_timeout=args.read_timeout)
+    _print_binary_reply(result)
+    conn.disconnect()
+
+
+def cmd_binary_replace(args):
+    """Binary-plane REPLACE (MOVER): CommandEnvelope{replace: MotionSegment}
+    -> bb.replaceIn (latest-wins Mailbox)."""
+    robot, conn, _ = _make_robot(args)
+    env = envelope_pb2.CommandEnvelope()
+    _build_motion_segment(env.replace, args)
+    result = conn.send_envelope(env, read_timeout=args.read_timeout)
+    _print_binary_reply(result)
+    conn.disconnect()
+
+
 def _find_response(responses: list[str], prefix: str) -> str | None:
     """Return the first response line starting with `prefix`, or None."""
     for line in responses:
@@ -1621,6 +1757,63 @@ def main():
     p_send.add_argument("message", help="Command string to send")
     p_send.add_argument("--read-timeout", type=int, default=500, help="Response read timeout (ms)")
 
+    # binary: 095-002 binary command-plane (*B<base64> pb2.CommandEnvelope)
+    # send path -- one subcommand per this sprint's seven implemented arms.
+    p_binary = sub.add_parser(
+        "binary",
+        help="Binary command plane (095): *B<base64> pb2.CommandEnvelope send "
+             "path for drive/segment/replace/stop/ping/echo/id.",
+    )
+    p_binary.add_argument("--read-timeout", type=int, default=500,
+                          help="Reply read timeout (ms, default 500)")
+    binary_sub = p_binary.add_subparsers(dest="binary_cmd", required=True)
+
+    binary_sub.add_parser("ping", help="Binary PING")
+
+    b_echo = binary_sub.add_parser("echo", help="Binary ECHO <text>")
+    b_echo.add_argument("text", help="Text payload to echo (UTF-8, max 64 bytes)")
+
+    binary_sub.add_parser("id", help="Binary ID (empty request)")
+    binary_sub.add_parser("stop", help="Binary STOP")
+
+    b_drive = binary_sub.add_parser(
+        "drive", help="Binary DRIVE <left> <right> (per-wheel speed targets, mm/s)")
+    b_drive.add_argument("left", type=int, help="Left wheel speed (mm/s)")
+    b_drive.add_argument("right", type=int, help="Right wheel speed (mm/s)")
+
+    def _add_binary_segment_args(p):
+        p.add_argument("distance", type=float,
+                       help="[mm] signed straight-line translation")
+        p.add_argument("direction", type=float, nargs="?", default=0.0,
+                       help="[deg] pre-pivot heading change, CCW+ (default 0)")
+        p.add_argument("final_heading", type=float, nargs="?", default=0.0,
+                       help="[deg] final heading relative to start, CCW+ (default 0)")
+        p.add_argument("--speed-max", dest="speed_max", type=float, default=0.0,
+                       help="[mm/s] speed ceiling (0 = executor default)")
+        p.add_argument("--accel-max", dest="accel_max", type=float, default=0.0,
+                       help="[mm/s^2] accel ceiling (0 = executor default)")
+        p.add_argument("--jerk-max", dest="jerk_max", type=float, default=0.0,
+                       help="[mm/s^3] jerk ceiling (0 = trapezoid)")
+        p.add_argument("--yaw-rate-max", dest="yaw_rate_max", type=float, default=0.0,
+                       help="[deg/s] pivot angular-speed ceiling (0 = executor default)")
+        p.add_argument("--yaw-accel-max", dest="yaw_accel_max", type=float, default=0.0,
+                       help="[deg/s^2] pivot angular accel ceiling (0 = executor default)")
+        p.add_argument("--yaw-jerk-max", dest="yaw_jerk_max", type=float, default=0.0,
+                       help="[deg/s^3] pivot angular jerk ceiling (0 = executor default)")
+        p.add_argument("--time", type=float, default=0.0,
+                       help="[ms] time-mode duration, 0 = distance-bounded (MOVER)")
+        p.add_argument("--v", type=float, default=0.0,
+                       help="[mm/s] signed target velocity, time mode (MOVER)")
+        p.add_argument("--omega", type=float, default=0.0,
+                       help="[deg/s] signed target yaw rate, time mode (MOVER)")
+        p.add_argument("--stream", action="store_true",
+                       help="Mark as a STREAMING segment (merges into the in-flight plan)")
+
+    b_segment = binary_sub.add_parser("segment", help="Binary SEGMENT (MOVE)")
+    _add_binary_segment_args(b_segment)
+    b_replace = binary_sub.add_parser("replace", help="Binary REPLACE (MOVER)")
+    _add_binary_segment_args(b_replace)
+
     p_pose = sub.add_parser(
         "pose",
         help="Report x, y, angle for a tag (world cm by default, --pixels for px)",
@@ -1753,6 +1946,23 @@ def main():
         }
         try:
             sync_commands[args.sync_cmd](args)
+        except ConnectionError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        return
+
+    if args.command == "binary":
+        binary_commands = {
+            "ping": cmd_binary_ping,
+            "echo": cmd_binary_echo,
+            "id": cmd_binary_id,
+            "stop": cmd_binary_stop,
+            "drive": cmd_binary_drive,
+            "segment": cmd_binary_segment,
+            "replace": cmd_binary_replace,
+        }
+        try:
+            binary_commands[args.binary_cmd](args)
         except ConnectionError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
