@@ -110,28 +110,24 @@ class Teleop:
 
 
 def run_gamepad(tele):
-    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")   # no window needed
+    # NOTE: no SDL_VIDEODRIVER=dummy. On macOS the headless/dummy video
+    # driver breaks INITIAL joystick enumeration (only the hot-plug event
+    # path works) -- that was the "unplug/replug every launch" bug. With the
+    # normal driver an already-plugged pad is simply there, like every other
+    # joystick app. (F310 one-time setup: rear switch on 'D'; a native
+    # Dual Action has no switch and just works.)
     os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
     import pygame
     pygame.init()
     pygame.joystick.init()
-    # Wait for the pad (hot-plug arrives via events, so pump). NOTE macOS +
-    # F310: the rear switch MUST be on 'D' (DirectInput = standard HID).
-    # In 'X' mode the pad is an XInput/vendor-class device -- macOS binds no
-    # HID driver and SDL cannot see it at all. The switch only takes effect
-    # on re-enumeration: flip to D, then unplug/replug.
-    deadline = time.monotonic() + 20.0
-    warned = False
-    while pygame.joystick.get_count() == 0:
+    for _ in range(10):          # brief settle for enumeration callbacks
         pygame.event.pump()
-        if not warned:
-            print("waiting for gamepad... (F310: rear switch on 'D', then unplug/replug)")
-            warned = True
-        if time.monotonic() > deadline:
-            print("!! no gamepad after 20s -- is the switch on 'D'? (X mode is"
-                  " invisible to macOS: no HID driver binds to XInput devices)")
-            return 2
-        time.sleep(0.25)
+        if pygame.joystick.get_count() > 0:
+            break
+        time.sleep(0.1)
+    if pygame.joystick.get_count() == 0:
+        print("!! no gamepad detected")
+        return 2
     js = pygame.joystick.Joystick(0)
     js.init()
     print(f"gamepad: {js.get_name()}  ({js.get_numaxes()} axes)")
@@ -208,18 +204,18 @@ def run_probe():
     """No robot needed: print every axis/hat/button live so the stick's axis
     indices can be identified. Push the LEFT stick around and read off which
     axis index moves for forward/back vs left/right."""
-    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
     import pygame
     pygame.init()
     pygame.joystick.init()
-    deadline = time.monotonic() + 20.0
-    while pygame.joystick.get_count() == 0:
+    for _ in range(10):
         pygame.event.pump()
-        if time.monotonic() > deadline:
-            print("!! no gamepad (D mode? replugged? Input Monitoring granted + app restarted?)")
-            return 2
-        time.sleep(0.25)
+        if pygame.joystick.get_count() > 0:
+            break
+        time.sleep(0.1)
+    if pygame.joystick.get_count() == 0:
+        print("!! no gamepad detected")
+        return 2
     js = pygame.joystick.Joystick(0)
     js.init()
     print(f"gamepad: {js.get_name()}  axes={js.get_numaxes()} "
