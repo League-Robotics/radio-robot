@@ -1,7 +1,7 @@
 ---
 id: 096
 title: 'Protocol v3 Sprint 2: Binary telemetry and config plane'
-status: planning-docs
+status: done
 branch: sprint/096-protocol-v3-sprint-2-binary-telemetry-and-config-plane
 use-cases: []
 issues:
