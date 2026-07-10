@@ -673,10 +673,17 @@ def test_mixed_text_and_binary_session(sim):
     """Proves the text plane and the binary plane share the SAME
     CommandRouter/CommandProcessor/Blackboard instance correctly within one
     session -- not just that each plane works alone (every other test in
-    this file only ever sends binary; test_bare_loop_move_and_tlm.py/
-    test_bare_loop_commands.py only ever send text)."""
-    # Text S starts direct-mode driving.
-    assert sim.command("S 150 150").strip() == "OK drive l=150 r=150"
+    this file only ever sends binary). 097-006: text `S` is deleted, so the
+    opening drive below is now ALSO binary -- this test's remaining
+    "mixed" proof is the binary-drive/binary-stop/binary-drive sequence
+    coexisting correctly with the text `STOP`/`PING` calls further down,
+    the SAME CommandRouter instance serving both."""
+    # Binary drive starts direct-mode driving.
+    wheels = pb_drivetrain.WheelTargets(w=[
+        pb_common.WheelTarget(speed=150.0), pb_common.WheelTarget(speed=150.0),
+    ])
+    reply = send(sim, pb_envelope.CommandEnvelope(corr_id=19, drive=pb_drivetrain.DrivetrainCommand(wheels=wheels)))
+    assert reply.WhichOneof("body") == "ok"
     sim.tick_for(500)
     vel_l, vel_r = sim.vel()
     assert vel_l > 50.0 and vel_r > 50.0

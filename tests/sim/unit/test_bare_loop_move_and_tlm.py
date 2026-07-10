@@ -1,47 +1,63 @@
-"""094-006: MOVE + graceful STOP + pull-TLM, exercised end to end over the
-wire (`sim.command()`/`sim.command_on()`), extending
-`test_bare_loop_commands.py`'s 093/094-005 four-verb suite rather than
-replacing it.
+"""094-006/097-006: MOVE/MOVER + graceful STOP + pull-TLM, exercised end to
+end over the wire, extending `test_bare_loop_commands.py`'s
+093/094-005/097-006 STOP-plus-binary-drive suite rather than replacing it.
+
+097-006 (architecture-update-r2.md Decision 9, pure-binary firmware):
+`MOVE`/`MOVER`/`S` are DELETED from the text plane outright (not merely
+unregistered) -- every send below that used to be a text verb line now
+goes through the binary `segment`/`replace`/`drive` arm instead
+(`source/commands/binary_channel.cpp`, 096, sim-exhaustive), fed the SAME
+`Motion::Segment`/`WheelTargets` shape each text handler used to build, via
+`host/robot_radio/robot/legacy_translate.py`'s `segment_for_move()`/
+`segment_for_mover()`/`wheel_targets_for_drive()` -- the identical
+translation `rogo`'s proxy (ticket 004) and `NezhaProtocol` (ticket 002)
+use. `STOP`/`TLM`/`PING` are untouched text verbs throughout this file
+(STOP/TLM are this sprint's own confirmed-live rump; TLM's deletion is
+ticket 008's separate scope).
 
 Covers:
-  - `MOVE <mm> <dir_cdeg> <fh_cdeg> [v=][a=][j=][w=][wa=][wj=]` parses into a
-    `Motion::Segment` and posts it to `bb.segmentIn` (`source/commands/
-    motion_commands.cpp`'s `parseMove`/`handleMove`) -- all three shapes the
-    ticket's acceptance criteria name: straight (`MOVE <mm> 0 0`), pure
-    in-place turn (`MOVE 0 0 <heading>`), and translate-then-terminal-pivot
+  - `MOVE <mm> <dir_cdeg> <fh_cdeg> [v=][a=][j=][w=][wa=][wj=]`'s binary
+    parity (`segment`) -- all three shapes the ticket's acceptance criteria
+    name: straight (`MOVE <mm> 0 0`), pure in-place turn
+    (`MOVE 0 0 <heading>`), and translate-then-terminal-pivot
     (`MOVE <mm> 0 <heading>`).
   - Each drains to a graceful stop with no reverse-creep (measured velocity
     never flips sign, beyond a small settle-noise floor, after it first
     becomes substantial).
-  - `MOVE`'s out-of-range/missing-argument error replies
-    (`ERR range`/`ERR badarg`), following the existing verbs' own
-    convention.
+  - `MOVE`'s out-of-range error replies (binary `Error{ERR_RANGE, field}`),
+    following the existing binary-arm tests' own convention
+    (`test_binary_channel.py`).
   - `STOP`, sent over the wire mid-`MOVE`, triggers the SAME graceful
     decel-to-zero `NEUTRAL` gets at the `Drivetrain` level (094-004) --
     `STOP`'s own wire reply text is unchanged (`OK stop`).
-  - `TLM` (new, one-shot synchronous read -- `handleTlm`) reports measured
-    `enc=`/`vel=` that track real (simulated) wheel motion, plus the
-    executor's active/idle flag (`msg::DrivetrainState.active`, widened by
-    this ticket -- see `drivetrain.cpp`'s `state()`).
+  - `TLM` (one-shot synchronous read -- `handleTlm`, untouched text verb)
+    reports measured `enc=`/`vel=` that track real (simulated) wheel
+    motion, plus the executor's active/idle flag
+    (`msg::DrivetrainState.active`, widened by 094-006 -- see
+    `drivetrain.cpp`'s `state()`).
   - A `MOVE` posted during slack takes effect on the very next mandatory
-    tick (`sim.command()`'s own dt=0 synchronous-command trick already
-    replays one `Rt::MainLoop::tick()` immediately after routing --
-    `tests/_infra/sim/sim_api.cpp`'s own file header).
+    tick (`_binary_envelope.send()`'s own dt=0 synchronous-command trick,
+    the same one `sim.command()` already used for text -- `tests/_infra/
+    sim/sim_api.cpp`'s own file header).
   - Two `MOVE`s posted back-to-back, with no intervening `sim.tick_for()`
     call, BOTH execute (in order) -- proves `bb.segmentIn`'s
     `Rt::WorkQueue<Motion::Segment, 8>` shape does not silently drop the
     first one the way a latest-wins `Mailbox` would.
 
 `S`/`STOP`'s own pre-existing DIRECT-mode assertions stay in
-`test_bare_loop_commands.py`, unmodified -- this file only adds the new
-MOVE/TLM surface plus one wire-level graceful-STOP confirmation, per the
-ticket's "extended, not replaced" instruction.
+`test_bare_loop_commands.py` -- this file only adds the MOVE/MOVER/TLM
+surface plus one wire-level graceful-STOP confirmation, per 094-006's
+original "extended, not replaced" instruction (097-006 re-points the
+drive/segment/replace halves at their binary arms, in place).
 """
 from __future__ import annotations
 
 import re
 
 import pytest
+
+from _binary_envelope import ERR_RANGE, send_drive, send_replace, send_segment
+from robot_radio.robot import legacy_translate
 
 # Full post-094 TLM shape (OOP additions): cmd= (post-governor commanded
 # wheel velocity), acc= (firmware-EMA measured acceleration), conn= (per-motor
@@ -118,9 +134,11 @@ def _run_and_check_no_reverse_creep(sim, seconds: float = 6.0, step: int = 24):
 
 def test_move_straight_executes_and_settles_no_reverse_creep(sim):
     """`MOVE <mm> 0 0` -- a plain straight (TRANSLATE-only, both pivots
-    degenerate)."""
-    reply = sim.command("MOVE 300 0 0")
-    assert reply.strip().startswith("OK move dist=300 dir=0 fh=0") and " q=" in reply.strip()
+    degenerate). 097-006: sent as a binary `segment` (legacy_translate.
+    segment_for_move() builds the SAME Motion::Segment shape handleMove()
+    used to)."""
+    reply = send_segment(sim, legacy_translate.segment_for_move(300, 0, 0))
+    assert reply.WhichOneof("body") == "ok"
 
     max_l, max_r = _run_and_check_no_reverse_creep(sim)
     assert max_l > 50.0 and max_r > 50.0, "segment never genuinely drove"
@@ -135,9 +153,10 @@ def test_move_straight_executes_and_settles_no_reverse_creep(sim):
 
 def test_move_pure_in_place_turn_executes_and_settles_no_reverse_creep(sim):
     """`MOVE 0 0 <heading>` -- distance and direction both 0, so only the
-    TERMINAL_PIVOT phase fires (a pure in-place turn)."""
-    reply = sim.command("MOVE 0 0 9000")
-    assert reply.strip().startswith("OK move dist=0 dir=0 fh=9000") and " q=" in reply.strip()
+    TERMINAL_PIVOT phase fires (a pure in-place turn). 097-006: binary
+    `segment`."""
+    reply = send_segment(sim, legacy_translate.segment_for_move(0, 0, 9000))
+    assert reply.WhichOneof("body") == "ok"
 
     max_l, max_r = _run_and_check_no_reverse_creep(sim)
     assert max_l > 20.0 and max_r > 20.0, "segment never genuinely drove"
@@ -153,6 +172,7 @@ def test_move_pure_in_place_turn_executes_and_settles_no_reverse_creep(sim):
 def test_move_translate_then_terminal_pivot_executes_and_settles_no_reverse_creep(sim):
     """`MOVE <mm> 0 <heading>` -- direction 0 (PRE_PIVOT degenerate), so
     TRANSLATE runs first, then TERMINAL_PIVOT rotates to `finalHeading`.
+    097-006: binary `segment`.
 
     Unlike the straight/pure-turn tests above, this segment has TWO phases
     with genuinely different (and, for TERMINAL_PIVOT, opposite-signed)
@@ -166,8 +186,8 @@ def test_move_translate_then_terminal_pivot_executes_and_settles_no_reverse_cree
     SEGMENT's own final settle tail (already at/near zero throughout),
     which is exactly the natural-completion contract this ticket's
     acceptance criteria ask for."""
-    reply = sim.command("MOVE 300 0 9000")
-    assert reply.strip().startswith("OK move dist=300 dir=0 fh=9000") and " q=" in reply.strip()
+    reply = send_segment(sim, legacy_translate.segment_for_move(300, 0, 9000))
+    assert reply.WhichOneof("body") == "ok"
 
     max_l = max_r = 0.0
     for _ in range(150):   # 3.6s -- covers both TRANSLATE's and TERMINAL_
@@ -191,27 +211,47 @@ def test_move_translate_then_terminal_pivot_executes_and_settles_no_reverse_cree
 
 
 # ---------------------------------------------------------------------------
-# MOVE's argument-error convention.
+# MOVE's argument-error convention -- binary Error{ERR_RANGE, field}
+# (097-006: re-pointed off the text ERR range/badarg reply strings).
 # ---------------------------------------------------------------------------
 
 def test_move_out_of_range_distance_replies_err_range(sim):
-    reply = sim.command("MOVE 99999 0 0")
-    assert reply.strip() == "ERR range distance"
+    reply = send_segment(sim, legacy_translate.segment_for_move(99999, 0, 0))
+    assert reply.WhichOneof("body") == "err"
+    assert reply.err.code == ERR_RANGE
+    assert reply.err.field == 1   # MotionSegment.distance's own field number
 
 
 def test_move_out_of_range_direction_replies_err_range(sim):
-    reply = sim.command("MOVE 100 999999 0")
-    assert reply.strip() == "ERR range direction"
+    reply = send_segment(sim, legacy_translate.segment_for_move(100, 999999, 0))
+    assert reply.WhichOneof("body") == "err"
+    assert reply.err.code == ERR_RANGE
+    assert reply.err.field == 2   # MotionSegment.direction's own field number
 
 
-def test_move_missing_required_tokens_replies_err_badarg(sim):
-    reply = sim.command("MOVE 300 0")
-    assert reply.strip() == "ERR badarg"
+# test_move_missing_required_tokens_replies_err_badarg -- DELETED (097-006):
+# no binary equivalent. The deleted text scenario was parseMove() rejecting
+# a line with fewer than 3 positional tokens (`MOVE 300 0`) with
+# `ERR badarg`; MotionSegment's proto3 scalar fields have no "omitted"
+# wire state distinct from an explicit 0 (binary_channel.cpp's own comment:
+# "no hand parsing/range checks... the generated decoder's own bound
+# checks"), so there is nothing a binary send could do to reproduce
+# "argument never supplied" -- it is a text-grammar-only concept, not a
+# semantic behavior with a binary parity arm to re-point to (per this
+# ticket's own "no binary arm -> delete, don't force a mapping" instruction,
+# applied here at the validation-behavior level for MOVE's badarg case
+# specifically, even though MOVE the verb otherwise has a binary arm).
 
 
 def test_move_out_of_range_kv_override_replies_err_range(sim):
-    reply = sim.command("MOVE 300 0 0 v=999999")
-    assert reply.strip() == "ERR range v"
+    """097-006: the deleted text `v=` kv override maps onto MotionSegment's
+    `speed_max` field (parseMove()'s own `v` -> `Motion::Segment.speedMax`
+    assignment, motion_commands.cpp -- see protos/motion.proto's own field
+    doc comment citing kMoveMaxSpeedMax)."""
+    reply = send_segment(sim, legacy_translate.segment_for_move(300, 0, 0, speed_max=999999))
+    assert reply.WhichOneof("body") == "err"
+    assert reply.err.code == ERR_RANGE
+    assert reply.err.field == 4   # MotionSegment.speed_max's own field number
 
 
 # ---------------------------------------------------------------------------
@@ -226,8 +266,9 @@ def test_stop_over_wire_mid_move_triggers_graceful_decel_no_reverse_creep(sim):
     velocity decays toward zero and never reverses sign. `STOP`'s own wire
     reply text is unchanged (`OK stop`) even though its physical effect
     changed from 093's instant brake."""
-    reply = sim.command("MOVE 2000 0 0")   # long: never completes naturally in this window
-    assert reply.strip().startswith("OK move dist=2000 dir=0 fh=0") and " q=" in reply.strip()
+    # long: never completes naturally in this window. 097-006: binary segment.
+    reply = send_segment(sim, legacy_translate.segment_for_move(2000, 0, 0))
+    assert reply.WhichOneof("body") == "ok"
 
     sim.tick_for(1000)   # 1s -- underway
     vel_l, vel_r = sim.vel()
@@ -250,13 +291,16 @@ def test_stop_over_wire_mid_move_triggers_graceful_decel_no_reverse_creep(sim):
     assert vel_r == pytest.approx(0.0, abs=10.0)
 
 
-def test_s_and_stop_still_work_unchanged_over_the_wire(sim):
-    """093/094-005's `S`/`STOP` DIRECT-mode contract stays green, extended
-    (not replaced) by this ticket -- full coverage lives in
+def test_binary_drive_and_stop_still_work_together_over_the_wire(sim):
+    """097-006: 093/094-005's `S`/`STOP` DIRECT-mode contract stays green,
+    with `S` re-pointed to its binary `drive` parity (text `S` is deleted --
+    see test_bare_loop_commands.py's own header comment); `STOP` is
+    untouched, still text. Full coverage lives in
     `test_bare_loop_commands.py`; this is a light smoke check that the SAME
-    table still carries both verbs alongside the new `MOVE`/`TLM`."""
-    reply = sim.command("S 150 150")
-    assert reply.strip() == "OK drive l=150 r=150"
+    table still carries `STOP`/`TLM` alongside `MOVE`/`MOVER`'s binary
+    arms."""
+    reply = send_drive(sim, 150, 150)
+    assert reply.WhichOneof("body") == "ok"
     sim.tick_for(1000)
     vel_l, vel_r = sim.vel()
     assert vel_l > 50.0 and vel_r > 50.0
@@ -277,9 +321,10 @@ def test_tlm_reports_measured_enc_and_vel_tracking_real_motion(sim):
     """`TLM` reads `bb.drivetrain` -- MEASURED per-wheel encoder position/
     velocity (094-004's rewrite of `Drivetrain::state()`), not a commanded
     target -- and tracks the plant's own reported `sim.enc()`/`sim.vel()`
-    reads closely."""
-    reply = sim.command("S 150 150")
-    assert reply.strip() == "OK drive l=150 r=150"
+    reads closely. 097-006: the precondition drive is now the binary
+    `drive` arm (text `S` is deleted)."""
+    reply = send_drive(sim, 150, 150)
+    assert reply.WhichOneof("body") == "ok"
     sim.tick_for(3000)
 
     enc_l, enc_r = sim.enc()
@@ -309,8 +354,9 @@ def test_tlm_active_clears_after_stop_settles(sim):
     and could never mean "idle" again -- every hardware completion poll
     (notebook, bench demos) ran to timeout. active= now reports
     DrivetrainState.busy: it must return to 0 once the post-STOP decel has
-    settled."""
-    assert sim.command("S 150 150").strip() == "OK drive l=150 r=150"
+    settled. 097-006: the precondition drive is now the binary `drive` arm
+    (text `S` is deleted)."""
+    assert send_drive(sim, 150, 150).WhichOneof("body") == "ok"
     sim.tick_for(500)
     assert sim.command("STOP").strip() == "OK stop"
     sim.tick_for(2000)   # ample settle for the graceful decel
@@ -325,11 +371,13 @@ def test_move_streaming_chains_at_speed(sim):
     sqrt(a*d) ~= 110 mm/s regardless of send rate, so a sustained stream
     exceeding ~150 mm/s proves the executor retarget()s from its moving
     state. Draining the stream must still end in the graceful decel
-    (settled, no reverse)."""
+    (settled, no reverse). 097-006: binary `segment`, `stream=True` (the
+    `s=1` kv override's own binary parity)."""
     peak = 0.0
     for _ in range(20):
-        r = sim.command("MOVE 15 0 0 s=1")
-        assert r.strip().startswith("OK move")
+        seg = legacy_translate.segment_for_move(15, 0, 0, stream=True)
+        r = send_segment(sim, seg)
+        assert r.WhichOneof("body") == "ok"
         sim.tick_for(60)
         vel_l, vel_r = sim.vel()
         peak = max(peak, (vel_l + vel_r) / 2.0)
@@ -354,16 +402,19 @@ def test_mover_deadman_velocity(sim):
     velocity segments REPLACE the in-flight motion, replanned from the
     current velocity. While refreshed before each t= window expires the
     robot cruises at the commanded velocity; when refreshes stop, the
-    deadman fires and it decels gracefully (no reverse)."""
-    r = sim.command("MOVER 0 0 0 t=800 v=250 w=0")
-    assert r.strip().startswith("OK mover t=800 v=250"), r
+    deadman fires and it decels gracefully (no reverse). 097-006: binary
+    `replace` (legacy_translate.segment_for_mover() builds the SAME
+    Motion::Segment shape handleMover() used to)."""
+    mover_seg = legacy_translate.segment_for_mover(0, 0, 0, time=800, v=250, omega=0)
+    r = send_replace(sim, mover_seg)
+    assert r.WhichOneof("body") == "ok", r
     sim.tick_for(500)
     vel_l, vel_r = sim.vel()
     assert (vel_l + vel_r) / 2.0 > 180.0, f"never reached commanded velocity ({vel_l},{vel_r})"
 
     # Keep refreshing: velocity sustained well past the first window.
     for _ in range(4):
-        sim.command("MOVER 0 0 0 t=800 v=250 w=0")
+        send_replace(sim, legacy_translate.segment_for_mover(0, 0, 0, time=800, v=250, omega=0))
         sim.tick_for(400)
         vel_l, vel_r = sim.vel()
         assert (vel_l + vel_r) / 2.0 > 180.0, "velocity sagged between refreshes"
@@ -383,9 +434,19 @@ def test_mover_deadman_velocity(sim):
     assert active == 0
 
 
-def test_mover_rejects_time_plus_distance(sim):
-    reply = sim.command("MOVER 100 0 0 t=500 v=200")
-    assert reply.strip() == "ERR badarg t+distance"
+# test_mover_rejects_time_plus_distance -- DELETED (097-006): no binary
+# equivalent. The deleted text scenario was parseMover()'s own
+# `t > 0.0f && distance != 0` mutual-exclusivity guard
+# (motion_commands.cpp), rejected with `ERR badarg t+distance` -- a
+# text-parse-time-only convenience. binary_channel.cpp's `replace` handler
+# (`handleReplace()`) posts `toSegment(src)` to `bb.replaceIn`
+# UNCONDITIONALLY (that function's own comment: "no hand parsing/range
+# checks... the generated decoder's own bound checks") -- it never
+# replicated this specific guard, so there is nothing on the binary path
+# this test could re-point to; deleted per this ticket's "no binary
+# behavior -> delete, don't force a mapping" instruction, applied here at
+# the validation-behavior level (MOVER the verb otherwise has a binary
+# `replace` arm, exercised by test_mover_deadman_velocity above).
 
 
 def test_pivot_completes_promptly_single_peaked(sim):
@@ -394,9 +455,9 @@ def test_pivot_completes_promptly_single_peaked(sim):
     humps) and report idle promptly after its plan exhausts -- not sit out
     the ~2.5s STOP_TIME net. Single-peak check: once |vel_r| has exceeded
     60 mm/s and then fallen below 20 mm/s, it must never rise above 40 mm/s
-    again."""
-    reply = sim.command("MOVE 0 0 9000").strip()
-    assert reply.startswith("OK move dist=0 dir=0 fh=9000") and " q=" in reply
+    again. 097-006: binary `segment`."""
+    reply = send_segment(sim, legacy_translate.segment_for_move(0, 0, 9000))
+    assert reply.WhichOneof("body") == "ok"
     peaked = fallen = False
     idle_at = None
     for i in range(160):   # 3.84 s at 24 ms
@@ -423,15 +484,16 @@ def test_pivot_completes_promptly_single_peaked(sim):
 # ---------------------------------------------------------------------------
 
 def test_move_sent_mid_slack_takes_effect_on_next_mandatory_tick(sim):
-    """`sim.command()`'s own dt=0 synchronous-command trick already replays
-    exactly one `Rt::MainLoop::tick()` at the unchanged `now` immediately
-    after routing (`sim_api.cpp`'s file header) -- so a `TLM` read taken
-    IMMEDIATELY after `MOVE`, with no separate `sim.tick_for()` call in
-    between, already shows the segment claimed SEGMENT mode. Proves
-    `segmentIn -> ring_ -> executor` happens within that one mandatory
-    tick, not a multi-hop mailbox latency."""
-    reply = sim.command("MOVE 300 0 0")
-    assert reply.strip().startswith("OK move dist=300 dir=0 fh=0") and " q=" in reply.strip()
+    """`_binary_envelope.send()`'s own dt=0 synchronous-command trick
+    already replays exactly one `Rt::MainLoop::tick()` at the unchanged
+    `now` immediately after routing (`sim_api.cpp`'s file header) -- so a
+    `TLM` read taken IMMEDIATELY after `MOVE`, with no separate
+    `sim.tick_for()` call in between, already shows the segment claimed
+    SEGMENT mode. Proves `segmentIn -> ring_ -> executor` happens within
+    that one mandatory tick, not a multi-hop mailbox latency. 097-006:
+    binary `segment`."""
+    reply = send_segment(sim, legacy_translate.segment_for_move(300, 0, 0))
+    assert reply.WhichOneof("body") == "ok"
 
     _, _, _, _, active = _parse_tlm(sim.command("TLM"))
     assert active == 1
@@ -442,11 +504,12 @@ def test_two_moves_queued_back_to_back_both_execute_in_order(sim):
     execute (in order) -- proves `bb.segmentIn`'s `Rt::WorkQueue<
     Motion::Segment, 8>` shape does not silently drop the first the way a
     latest-wins `Mailbox` would (architecture-update.md Section 5,
-    "Command precedence and the 'no hiccups' requirement")."""
-    reply1 = sim.command("MOVE 200 0 0")
-    assert reply1.strip().startswith("OK move dist=200 dir=0 fh=0") and " q=" in reply1.strip()
-    reply2 = sim.command("MOVE 200 0 0")
-    assert reply2.strip().startswith("OK move dist=200 dir=0 fh=0") and " q=" in reply2.strip()
+    "Command precedence and the 'no hiccups' requirement"). 097-006: binary
+    `segment`."""
+    reply1 = send_segment(sim, legacy_translate.segment_for_move(200, 0, 0))
+    assert reply1.WhichOneof("body") == "ok"
+    reply2 = send_segment(sim, legacy_translate.segment_for_move(200, 0, 0))
+    assert reply2.WhichOneof("body") == "ok"
 
     # Ample settle window for TWO 200mm straight segments run back to back.
     for _ in range(500):   # up to 12s

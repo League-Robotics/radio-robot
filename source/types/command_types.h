@@ -180,24 +180,8 @@ inline CommandDescriptor makeSchemaCmd(const char* prefix, const ArgSchema* sche
     return d;
 }
 
-// ---------------------------------------------------------------------------
-// ParsedCommand — a fully parsed command ready for dispatch or queuing.
-//   desc      — points to the registered CommandDescriptor
-//   args      — parsed argument list (from parseFn, or empty)
-//   replyFn   — reply callback to call for each response line
-//   replyCtx  — opaque context forwarded to replyFn
-//   corrId    — correlation id string (up to 15 chars + NUL, N14 fix)
-//
-// N14: widened from char[8] to char[16] to match MotionCommand._corrId[16]
-//      and the tokenizer/TargetState corrId fields.  This prevents silent
-//      truncation of >7-char correlation ids (e.g. ms-timestamp strings)
-//      on the queue path.  ParsedCommand is stack-allocated per dispatch —
-//      +8 bytes per call, no heap impact.
-// ---------------------------------------------------------------------------
-struct ParsedCommand {
-    const CommandDescriptor* desc;
-    ArgList  args;
-    ReplyFn  replyFn;
-    void*    replyCtx;
-    char     corrId[16];
-};
+// ParsedCommand — deleted (097-006, architecture-update-r2.md Decision 9):
+// zero references anywhere in the tree at the time of deletion. Nothing
+// in the dispatch path (CommandProcessor::process()) ever constructed one
+// — every handler is called directly off the parsed ArgList, never through
+// an intermediate queued/dispatched ParsedCommand value.

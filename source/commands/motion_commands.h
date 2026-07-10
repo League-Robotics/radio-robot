@@ -1,100 +1,67 @@
 #pragma once
 
 // ---------------------------------------------------------------------------
-// motion_commands.h -- the S/T/D/R/TURN/RT/G/STOP wire family (084-002..005,
-// rewritten pointerless 087-006). 093-001: `motionCommands()` now registers
-// only S/STOP at the wire (see motion_commands.cpp's registration comment);
-// T/D/R/TURN/RT/G's parser/handler functions below are left source-unchanged
-// but unregistered -- same "removed code is left un-wired, not deleted"
-// treatment as the other command families (clasi/sprints/093-.../
-// architecture-update.md Step 5/Migration Concerns).
+// motion_commands.h -- the STOP/TLM wire family (084-002..005, rewritten
+// pointerless 087-006).
 //
-// S/STOP (093-001): direct wheel-drive translators, no Planner involvement.
-// `handleS` builds a msg::WheelTargets from the parsed l/r ints and posts a
-// msg::DrivetrainCommand{WHEELS} to Rt::Blackboard::driveIn; `handleStop`
-// builds a msg::DrivetrainCommand{NEUTRAL} inline (deliberately WITHOUT the
-// standby side-channel -- see handleStop's own doc comment in
+// 097-006 (architecture-update-r2.md Decision 9, Eric's 2026-07-10 redirect
+// to a pure-binary firmware): DELETES the S/T/D/R/TURN/RT/G/MOVE/MOVER
+// parser/handler pairs and QLEN outright -- unconditionally, not merely
+// unregistered the way 093-001 left T/D/R/TURN/RT/G "source-unchanged but
+// unwired" (see this file's git history for that prior state; 094-006
+// un-registered D/T/RT into the segment path and added MOVE/MOVER on top of
+// that same table). Every deleted verb's binary-plane parity
+// (`drive`/`segment`/`replace` arms, source/commands/binary_channel.cpp)
+// already carries its runtime behavior forward -- hardware-bench-smoke-
+// tested (095, drive/stop) and sim-exhaustive (096, segment/replace) -- so
+// no behavior is lost, only the SECOND (text) implementation of it. R/TURN/
+// G had no binary arm at all and are deleted with no replacement --
+// Decision 9's "no consumer-gating, no preservation" ethos explicitly
+// overrides r1's earlier "keep until something proven replaces it"
+// reasoning for exactly these three (see architecture-update-r2.md's own
+// "forced consequence" note). The shared stop-clause text grammar
+// (`parseStopClauseValue`/`collectStopClauses`/`packStopKVs`/
+// `kMaxStopConds`/`replyStopBadarg`) and `copyCorrId()` had no callers left
+// once those six/three handlers were gone and were deleted alongside them.
+// `bb.motionIn`/`Rt::MotionCommand` (runtime/commands.h/blackboard.h) are
+// now fully unreferenced plumbing as a result -- flagged as a future
+// cleanup, explicitly OUT of this ticket's file scope (architecture-
+// update-r2.md Open Question 1).
+//
+// STOP survives (093-001's fix, physical behavior updated by 094-004/006):
+// `handleStop` builds a msg::DrivetrainCommand{NEUTRAL} inline (deliberately
+// WITHOUT the standby side-channel -- see handleStop's own doc comment in
 // motion_commands.cpp for why dev_commands.h's buildDrivetrainStop(), which
 // sets standby=true, silently dropped the neutral instead of stopping the
-// wheels) to the same mailbox. Neither touches bb.motionIn, msg::
-// PlannerCommand, or Subsystems::Planner.
+// wheels) and posts it to the same bb.driveIn mailbox the binary `stop` arm
+// also targets. STOP is one of this sprint's confirmed liveness-adjacent
+// rump verbs (architecture-update-r2.md's 3-verb default: STOP/PING/HELLO)
+// -- see system_commands.h for PING/HELLO's own rationale.
 //
-// T/D/R/TURN/RT/G (unaffected by 093-001, parked/unregistered): still a thin
-// wire-parsing layer over Subsystems::Planner (source/subsystems/planner.h)
-// -- each handler parses its verb's wire shape, builds a
-// msg::PlannerCommand, and POSTS it (wrapped in a Rt::MotionCommand, source/
-// runtime/commands.h) to Rt::Blackboard::motionIn -- never calling
-// Subsystems::Planner::apply()/tick() itself, never holding a
-// Subsystems::PoseEstimator*/Subsystems::Planner* (SUC-006). Since
-// `buildTable()` no longer calls `motionCommands()`'s wholesale eight-verb
-// output for these six, they are unreachable at the wire; the loop's own
-// motion-executor drain of bb.motionIn is untouched by this ticket (that is
-// ticket 002's concern).
+// TLM (094-006's one-shot pull-based telemetry read) is UNTOUCHED by this
+// ticket -- its deletion is ticket 008's scope (the text telemetry family),
+// not this one's, even though its source lives in this file; see ticket
+// 008's own Description for why and for the file-edit coordination note.
 //
-// Rt::MotionCommand's `verb` field replaces the pre-087
-// MotionLoopState::activeVelocityVerb field's SEMANTICS exactly (empty for
-// S/T/D/G -- Planner's own msg::DriveMode already names the verb
-// unambiguously; "R"/"TURN"/"RT" otherwise, since all three can share a
-// DriveMode value with S/T -- planner.cpp's velocityShapedMode()) but not
-// its STORAGE: the loop, not this file, is what remembers "which verb staged
-// the CURRENTLY ACTIVE goal" across passes (this file only ever posts a
-// FRESH command; persisting the disambiguation across passes with no new
-// command staged is the loop's own bookkeeping, ticket 007).
-//
-// Rt::MotionCommand's `feedStreamWatchdog` flag replaces the pre-087
-// MotionLoopState::sTimeout.feed() call inside handleS() -- fed ONLY by S's
-// own handler (never T/D/G/R/TURN/RT/STOP), checked once per pass by the
-// loop against its OWN loop-owned StreamingDriveWatchdog instance (DISTINCT
-// from dev_commands.h's SerialSilenceWatchdog, `DEV WD`) -- see
-// runtime/commands.h's own field doc comment.
+// StreamingDriveWatchdog -- DELETED (097-006): already-dead code, fed by
+// nothing (confirmed in the 097 architecture research before this ticket
+// ran; it fed the S-only streaming-drive-silence timeout, and S no longer
+// exists). config_commands.h's own `#include "commands/motion_commands.h"`
+// predates this deletion and referenced this type in a doc comment only --
+// never an actual type use (config_commands.{h,cpp} touch only
+// `bb.streamWatchdogWindow`/`bb.streamWatchdogWindowIn`, both plain
+// `uint32_t`/`Mailbox<uint32_t>`, not this class) -- so config_commands.h,
+// untouched by this ticket (ticket 007's scope), still compiles unmodified
+// with this class gone.
 // ---------------------------------------------------------------------------
 
 
-#include <stdint.h>
 #include <vector>
 
 #include "command_types.h"
 #include "runtime/command_router.h"
 
-// ---------------------------------------------------------------------------
-// StreamingDriveWatchdog -- fire-once-per-silence-episode timer, the same
-// feed()/check()/setWindow() contract as dev_commands.h's
-// SerialSilenceWatchdog, but an independent TYPE (not just a second
-// instance) so this file has no compile-time dependency on dev_commands.h.
-// Loop-owned (087-006: no longer embedded in a deleted MotionLoopState) --
-// see runtime/commands.h's Rt::MotionCommand::feedStreamWatchdog.
-// ---------------------------------------------------------------------------
-class StreamingDriveWatchdog {
- public:
-  static constexpr uint32_t kDefaultWindow = 500;   // [ms] docs/protocol-v2.md §10's sTimeout default
-
-  explicit StreamingDriveWatchdog(uint32_t window = kDefaultWindow) : windowMs_(window) {}
-
-  // Call once every time an `S` command arrives (never for T/D/STOP/any
-  // other command -- that is dev_commands.h's SerialSilenceWatchdog's job).
-  void feed(uint32_t now) { lastFeedMs_ = now; fired_ = false; }
-
-  void setWindow(uint32_t window) { windowMs_ = window; }
-  uint32_t window() const { return windowMs_; }
-
-  // Returns true exactly once per silence episode: the first check() call at
-  // or after the window has elapsed since the last feed(). Subsequent calls
-  // return false until the next feed() re-arms it.
-  bool check(uint32_t now) {
-    if (fired_) return false;
-    if (now - lastFeedMs_ >= windowMs_) {
-      fired_ = true;
-      return true;
-    }
-    return false;
-  }
-
- private:
-  uint32_t windowMs_;
-  uint32_t lastFeedMs_ = 0;
-  bool fired_ = false;
-};
-
-// Returns the S/T/D/R/TURN/RT/G/STOP command table, bound to `router`.
+// Returns the STOP/TLM command table, bound to `router`. TLM's registration
+// is carried here unmodified pending ticket 008 (see this file's header
+// comment) -- STOP is this file's own live verb.
 std::vector<CommandDescriptor> motionCommands(Rt::CommandRouter& router);
-
