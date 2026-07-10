@@ -41,11 +41,13 @@ from robot_radio.io.serial_conn import SerialConnection
 MAX_SPEED = 400.0        # [mm/s] stick fully forward
 MAX_YAW_RATE = 120.0     # [deg/s] stick fully sideways
 DEADZONE = 0.12          # stick fraction ignored around center
-PERIOD = 0.400           # [s] send cadence (2.5 msg/s -- trivial radio load)
-DEADMAN_MS = 600         # [ms] each MOVER's authority window: motion continues
-                         #      at most this long after the last message, so a
-                         #      dropped message or released stick stops the
-                         #      robot within ~DEADMAN_MS.
+PERIOD = 0.150           # [s] send cadence default; --period-ms to experiment
+                         #     (100ms = 10 msg/s, near the radio's ~12/s
+                         #     budget; 200ms = comfortable 5/s)
+DEADMAN_FACTOR = 3       # deadman window = 3x the period: rides through two
+                         #     dropped messages, still stops promptly on loss
+                         #     (stick release sends an explicit t=50 v=0 stop,
+                         #     so the deadman only covers link drops)
 QUEUE_HARD_MAX = 5       # backlog panic threshold -> skip sends until it drains
 
 _MOVER_ACK = re.compile(r"OK mover .*q=(\d+)")
@@ -54,7 +56,7 @@ _ERR_FULL = re.compile(r"ERR full")
 
 class Teleop:
     """Deadman-velocity teleop (stakeholder design, 2026-07-09): every
-    PERIOD, send `MOVER 0 0 0 t=DEADMAN_MS v=<signed> w=<signed>` -- a
+    period, send `MOVER 0 0 0 t=<3x period> v=<signed> w=<signed>` -- a
     REPLACE-semantics command. The firmware replans from its CURRENT
     velocity toward the stick's velocity every time one arrives (no queue to
     manage, no buffer bookkeeping); if messages stop (stick released, link
@@ -96,8 +98,9 @@ class Teleop:
         self._was_driving = True
         v = int(round(drive * MAX_SPEED))                    # [mm/s] signed
         w = int(round(turn * MAX_YAW_RATE * 100))            # [cdeg/s] signed
+        deadman_ms = int(self.period * 1000 * DEADMAN_FACTOR)
         self.sent += 1
-        self.conn.send_fast(f"MOVER 0 0 0 t={DEADMAN_MS} v={v} w={w}")
+        self.conn.send_fast(f"MOVER 0 0 0 t={deadman_ms} v={v} w={w}")
         return True
 
     def stop(self):
@@ -251,6 +254,8 @@ def main():
                     help="flip the fwd/back sense")
     ap.add_argument("--invert-turn", action="store_true",
                     help="flip the left/right sense")
+    ap.add_argument("--period-ms", type=int, default=int(PERIOD * 1000),
+                    help="MOVER send cadence [ms] (deadman = 3x this)")
     args = ap.parse_args()
 
     if args.probe:
@@ -263,6 +268,7 @@ def main():
         tele.drive_sign = -tele.drive_sign
     if args.invert_turn:
         tele.turn_sign = -tele.turn_sign
+    tele.period = max(0.05, args.period_ms / 1000.0)
     conn = SerialConnection(args.port, mode=("relay" if args.relay else "direct"),
                             on_recv=tele.on_recv)
     info = conn.connect(skip_ping=False)
